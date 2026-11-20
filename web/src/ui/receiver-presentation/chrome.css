@@ -49,6 +49,21 @@
   max-width: 100%;
   margin-left: auto;
 }
+.receiver-language {
+  max-width: 100%;
+  min-height: 36px;
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  border-radius: var(--receiver-radius-control);
+  background-color: transparent;
+  color: var(--receiver-muted);
+  font: inherit;
+  font-size: .875rem;
+  cursor: pointer;
+}
+.receiver-language:hover { background-color: var(--receiver-wash); color: var(--receiver-ink); }
+.receiver-language:focus-visible { outline: 2px solid var(--receiver-accent); outline-offset: 2px; }
+.receiver-language option { background: var(--receiver-paper); color: var(--receiver-ink); }
 .share-report-link {
   display: inline-flex;
   align-items: center;
@@ -323,5 +338,6 @@
 @media (pointer: coarse) {
   .receiver-shell .share-metadata button,
   .receiver-shell .downloads-entry,
-  .receiver-shell .appearance-toggle { min-height: 44px; }
+  .receiver-shell .appearance-toggle,
+  .receiver-language { min-height: 44px; }
 }

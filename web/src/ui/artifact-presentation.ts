@@ -1,3 +1,5 @@
+import type { Language } from './preferences/model'
+import { receiverCopy } from './locales/receiver'
 import { activationOwnsChoice } from '../application/receive/activation/model'
 import type { ArtifactChoice, ArtifactOperation, OfferedArtifactChoice } from '../output/model/artifacts/choices'
 import type { ArtifactOffers, OfferUnavailableReason, ZipRouteGroup } from '../output/model/artifacts/offers'
@@ -20,7 +22,7 @@ export interface PresentedArtifactChoice {
 export type ZipModePresentation =
   | Readonly<{
       kind: 'routes'
-      title: 'ZIP package'
+      title: string
       description: string
       primary: PresentedArtifactChoice
       secondary: PresentedArtifactChoice | null
@@ -28,7 +30,7 @@ export type ZipModePresentation =
     }>
   | Readonly<{
       kind: 'native-fallback'
-      title: 'ZIP package'
+      title: string
       description: string
     }>
 
@@ -45,7 +47,7 @@ export type ArtifactOfferPresentation =
       interactive: true
       title: string
       description: string
-      label: 'Retry confirmation'
+      label: string
     }>
   | Readonly<{
       kind: 'choices'
@@ -66,7 +68,7 @@ export type ArtifactActivationPresentation =
       choice: PresentedArtifactChoice
       title: string
       description: string
-      label: 'Retry confirmation'
+      label: string
     }>
   | Readonly<{
       kind: 'committing'
@@ -75,54 +77,49 @@ export type ArtifactActivationPresentation =
       description: string
     }>
 
-const ZIP_PACKAGE_EXPLANATION =
-  'Package only: creates one ZIP package and stores files without compression. The ZIP is usable only after closing and verification finish.'
-
-const NATIVE_ZIP_FALLBACK =
-  'This browser has no safe ZIP route for the selection. Use the native receiver for this ZIP.'
-
-export function presentArtifactOffers(offers: ArtifactOffers): ArtifactOfferPresentation {
+export function presentArtifactOffers(offers: ArtifactOffers, language: Language = 'en'): ArtifactOfferPresentation {
+  const t = receiverCopy[language].artifacts
   switch (offers.kind) {
     case 'confirming-selected-content':
       return Object.freeze({
         kind: 'status',
         interactive: false,
-        title: 'Confirming selected content…',
-        description: 'WindShare is determining the final result. No save dialog will open automatically.',
+        title: t.confirming,
+        description: t.confirmingHint,
         nativeFallback: null,
       })
     case 'retry-confirmation':
       return Object.freeze({
         kind: 'retry',
         interactive: true,
-        title: 'The selection could not be confirmed yet.',
-        description: 'Authenticated progress was kept. Retry to continue confirming the same selection.',
-        label: 'Retry confirmation',
+        title: t.unableToConfirm,
+        description: t.retryHint,
+        label: t.retry,
       })
     case 'selection-empty':
       return Object.freeze({
         kind: 'status',
         interactive: false,
-        title: 'Nothing is selected.',
-        description: 'Select a file or folder before receiving.',
+        title: t.nothingSelected,
+        description: t.selectFirst,
         nativeFallback: null,
       })
     case 'no-safe-destination':
       return Object.freeze({
         kind: 'status',
         interactive: false,
-        title: unavailableTitle(offers.reason),
-        description: unavailableDescription(offers.reason),
+        title: unavailableTitle(offers.reason, language),
+        description: unavailableDescription(offers.reason, language),
         nativeFallback: offers.fallback.kind === 'native-recommended'
-          ? NATIVE_ZIP_FALLBACK
+          ? t.nativeFallback
           : null,
       })
     case 'artifact-actions': {
       const choices = [offers.primary, ...offers.alternatives]
       const defaultChoices = choices
         .filter(candidate => candidate.choice.artifactKind !== 'zip-archive')
-        .map(presentArtifactChoice)
-      const zipMode = presentZipMode(offers.zip, choices)
+        .map(candidate => presentArtifactChoice(candidate, language))
+      const zipMode = presentZipMode(offers.zip, choices, language)
       return Object.freeze({
         kind: 'choices',
         interactive: true,
@@ -133,62 +130,64 @@ export function presentArtifactOffers(offers: ArtifactOffers): ArtifactOfferPres
   }
 }
 
-export function presentArtifactChoice(offered: OfferedArtifactChoice): PresentedArtifactChoice {
-  return presentChoice(offered.choice, offered.importance, offered.suggestedName, offered)
+export function presentArtifactChoice(offered: OfferedArtifactChoice, language: Language = 'en'): PresentedArtifactChoice {
+  return presentChoice(offered.choice, offered.importance, offered.suggestedName, offered, language)
 }
 
 export function presentArtifactActivation(
   activation: AuthorityActivationSnapshot,
   offered: OfferedArtifactChoice | null,
+  language: Language = 'en',
 ): ArtifactActivationPresentation | null {
+  const t = receiverCopy[language].artifacts
   if (!activationOwnsChoice(activation)) return null
   const choice = presentChoice(
     activation.choice,
     offered?.importance ?? 'primary',
     offered?.suggestedName ?? null,
-    offered,
+    offered, language,
   )
   switch (activation.kind) {
     case 'waiting-authority':
       return Object.freeze({
         kind: 'waiting',
         choice,
-        title: 'Waiting for the save location…',
+        title: t.waitingLocation,
         description: activation.resolution.kind === 'resolved'
-          ? 'The result is ready. Complete the open browser prompt to continue.'
-          : 'Keep the browser prompt open while WindShare confirms the selected content.',
+          ? t.completePrompt
+          : t.keepPrompt,
       })
     case 'waiting-resolution':
       return Object.freeze({
         kind: 'waiting',
         choice,
-        title: 'Confirming selected content…',
-        description: 'Your save choice is kept while authenticated discovery finishes.',
+        title: t.confirming,
+        description: t.retainingChoice,
       })
     case 'retry-required':
       return Object.freeze({
         kind: 'retry',
         choice,
-        title: 'Selection confirmation paused.',
-        description: 'Your save choice and any completed browser prompt are kept. Retry confirmation to continue.',
-        label: 'Retry confirmation',
+        title: t.confirmationPaused,
+        description: t.retryPaused,
+        label: t.retry,
       })
     case 'cleanup-required':
       return Object.freeze({
         kind: 'retry',
         choice,
-        title: 'Output cleanup needs attention.',
+        title: t.cleanupNeeded,
         description: activation.failedStage === 'settlement'
-          ? 'Retry to record a durable disposition for the interrupted output.'
-          : 'The interrupted output was settled. Retry to release its local authority.',
-        label: 'Retry confirmation',
+          ? t.retrySettlement
+          : t.retryRelease,
+        label: t.retry,
       })
     case 'committing':
       return Object.freeze({
         kind: 'committing',
         choice,
-        title: 'Preparing the selected result…',
-        description: 'WindShare is binding the confirmed result to the save location.',
+        title: t.preparing,
+        description: t.bindingLocation,
       })
   }
 }
@@ -207,29 +206,32 @@ function presentChoice(
   importance: OfferedArtifactChoice['importance'],
   suggestedName: string | null,
   offeredChoice: OfferedArtifactChoice | null,
+  language: Language,
 ): PresentedArtifactChoice {
+  const t = receiverCopy[language].artifacts
   return Object.freeze({
     offeredChoice,
     choice,
     operation: choice.operation,
-    label: artifactChoiceLabel(choice, suggestedName),
-    description: artifactChoiceDescription(choice),
+    label: artifactChoiceLabel(choice, suggestedName, language),
+    description: artifactChoiceDescription(choice, language),
     importance,
-    packageExplanation: choice.artifactKind === 'zip-archive' ? ZIP_PACKAGE_EXPLANATION : null,
-    selectedBytes: projectedBytes('Selected content', offeredChoice?.sizeProjection.raw),
+    packageExplanation: choice.artifactKind === 'zip-archive' ? t.zipDescription : null,
+    selectedBytes: projectedBytes(t.selection, offeredChoice?.sizeProjection.raw, language),
     resultBytes: projectedBytes(
-      choice.artifactKind === 'zip-archive' ? 'ZIP package' : 'Result',
-      offeredChoice?.sizeProjection.artifact,
+      choice.artifactKind === 'zip-archive' ? t.zip : t.result,
+      offeredChoice?.sizeProjection.artifact, language,
     ),
   })
 }
 
-function artifactChoiceLabel(choice: ArtifactChoice, suggestedName: string | null): string {
+function artifactChoiceLabel(choice: ArtifactChoice, suggestedName: string | null, language: Language): string {
+  const t = receiverCopy[language].artifacts
   if (choice.artifactKind === 'zip-archive') {
     switch (choice.plan.kind) {
-      case 'direct-resumable-zip': return 'Save ZIP to a folder'
-      case 'workspace-then-publish': return 'Save ZIP after receiving completes'
-      case 'portable-handoff': return 'Check then download ZIP'
+      case 'direct-resumable-zip': return t.zipToFolder
+      case 'workspace-then-publish': return t.zipAfterReceive
+      case 'portable-handoff': return t.checkZip
       case 'direct-tree':
       case 'direct-atomic':
         break
@@ -237,128 +239,135 @@ function artifactChoiceLabel(choice: ArtifactChoice, suggestedName: string | nul
   }
   switch (choice.operation) {
     case 'download-original':
-      return suggestedName === null ? 'Download selected file' : `Download ${suggestedName}`
+      return suggestedName === null ? t.downloadFile : t.downloadNamed(suggestedName)
     case 'save-single-to-folder':
-      return 'Save to folder'
+      return t.saveFolder
     case 'save-directory-tree':
-      return 'Save using original folder hierarchy'
+      return t.preserveHierarchy
     case 'download-zip':
-      return suggestedName === null ? 'Download ZIP' : `Download ${suggestedName}`
+      return suggestedName === null ? t.downloadZip : t.downloadNamed(suggestedName)
     case 'check-then-download':
-      return 'Check then download'
+      return t.checkDownload
   }
 }
 
-function artifactChoiceDescription(choice: ArtifactChoice): string {
+function artifactChoiceDescription(choice: ArtifactChoice, language: Language): string {
+  const t = receiverCopy[language].artifacts
   if (choice.operation === 'save-single-to-folder') {
-    return 'Saves the file directly in the folder you choose. The file may be visible before it finishes, and retained progress can continue later.'
+    return t.fileToFolderHint
   }
   if (choice.operation === 'save-directory-tree') {
-    return 'Keeps the selected folder hierarchy. Completed files remain visible, and retained progress can continue later.'
+    return t.folderHint
   }
   if (choice.operation === 'check-then-download') {
     return choice.artifactKind === 'zip-archive'
-      ? 'Checks that the complete ZIP fits before receiving any file content. The browser takes over when the package is ready.'
-      : 'Checks that the complete file fits before receiving it. The browser takes over when the file is ready.'
+      ? t.checkZipHint
+      : t.checkFileHint
   }
   if (choice.artifactKind === 'zip-archive') {
     if (choice.plan.kind === 'direct-resumable-zip') {
-      return 'Creates the named ZIP in the folder you choose. An incomplete target is visible until closing and verification finish; do not move or modify it meanwhile.'
+      return t.directZipHint
     }
     return choice.recovery === 'workspace-resumable'
-      ? 'Suited to long-running downloads: browser storage preserves recoverable progress. Saving the complete ZIP takes an additional copy, time, and space for both copies.'
-      : 'Hands off one complete ZIP only after every selected item succeeds.'
+      ? t.workspaceZipHint
+      : t.handoffZipHint
   }
   return choice.recovery === 'workspace-resumable'
-    ? 'Browser storage preserves recoverable progress for long-running downloads. Saving the complete file takes an additional copy, time, and space for both copies.'
-    : 'Saves the complete file without publishing an incomplete result.'
+    ? t.workspaceFileHint
+    : t.completeFileHint
 }
 
 function presentZipMode(
   group: ZipRouteGroup | null,
   choices: readonly OfferedArtifactChoice[],
+  language: Language,
 ): ZipModePresentation | null {
+  const t = receiverCopy[language].artifacts
   if (group !== null) {
     return Object.freeze({
       kind: 'routes',
-      title: 'ZIP package',
-      description: ZIP_PACKAGE_EXPLANATION,
-      primary: presentArtifactChoice(group.primary),
-      secondary: group.secondary === null ? null : presentArtifactChoice(group.secondary),
-      recommendation: zipRecommendationCopy(group),
+      title: t.zip,
+      description: t.zipDescription,
+      primary: presentArtifactChoice(group.primary, language),
+      secondary: group.secondary === null ? null : presentArtifactChoice(group.secondary, language),
+      recommendation: zipRecommendationCopy(group, language),
     })
   }
   return choices.some(choice => choice.choice.artifactKind === 'directory-tree')
     ? Object.freeze({
         kind: 'native-fallback',
-        title: 'ZIP package',
-        description: NATIVE_ZIP_FALLBACK,
+        title: t.zip,
+        description: t.nativeFallback,
       })
     : null
 }
 
-function zipRecommendationCopy(group: ZipRouteGroup): string {
+function zipRecommendationCopy(group: ZipRouteGroup, language: Language): string {
+  const t = receiverCopy[language].artifacts
   if (group.recommendation.kind === 'recommended') {
     if (group.recommendation.reason === 'workspace-within-discovered-budget') {
-      return 'Known ZIP content currently fits the staging budget. You can start now; discovering more content may change the recommendation.'
+      return t.zipEstimate
     }
     return group.recommendation.reason === 'workspace-within-policy-budget'
-      ? 'Recommended: receive completely first because the checked local cost is within the workspace budget.'
-      : 'Recommended: save to a folder because complete-first cost is unknown or exceeds the workspace budget.'
+      ? t.recommendWorkspace
+      : t.recommendFolder
   }
   switch (group.recommendation.reason) {
-    case 'only-one-route-available': return 'This is the only safe browser ZIP route currently available.'
-    case 'no-browser-zip-route': return NATIVE_ZIP_FALLBACK
-    case 'discovery-incomplete': return 'You can start now. More content is still being discovered; saving alternatives remain available.'
-    case 'workspace-cost-unavailable': return 'No route is recommended because complete-first cost is unavailable.'
-    case 'recommendation-policy-unavailable': return 'No route is recommended because measured comparison data is unavailable.'
+    case 'only-one-route-available': return t.onlyRoute
+    case 'no-browser-zip-route': return t.nativeFallback
+    case 'discovery-incomplete': return t.stillDiscovering
+    case 'workspace-cost-unavailable': return t.unknownWorkspace
+    case 'recommendation-policy-unavailable': return t.unknownComparison
   }
 }
 
-function projectedBytes(label: string, value: ProjectedByteCount | undefined): string {
-  if (value === undefined) return `${label}: size unavailable`
-  const exactness = value.kind === 'exact' ? 'exact' : 'estimated lower bound'
-  return `${label}: ${formatBytes(value.bytes)} (${exactness})`
+function projectedBytes(label: string, value: ProjectedByteCount | undefined, language: Language): string {
+  const t = receiverCopy[language].artifacts
+  if (value === undefined) return t.sizeUnavailable(label)
+  const exactness = value.kind === t.exact ? t.exact : t.estimated
+  return t.projection(label, formatBytes(value.bytes), exactness)
 }
 
-function unavailableTitle(reason: OfferUnavailableReason): string {
+function unavailableTitle(reason: OfferUnavailableReason, language: Language): string {
+  const t = receiverCopy[language].artifacts
   switch (reason) {
     case 'portable-limit-exceeded':
-      return 'The selection is too large for the available download option.'
+      return t.sizeLimit
     case 'workspace-limit-exceeded':
-      return 'There is not enough browser storage for this complete result.'
+      return t.storageLimit
     case 'permission-denied':
-      return 'Permission is required to save this result.'
+      return t.permission
     case 'capability-changed':
-      return 'The available save options changed.'
+      return t.changed
     case 'selection-empty':
-      return 'Nothing is selected.'
+      return t.nothingSelected
     case 'shape-unsettled':
-      return 'The selected content is still being confirmed.'
+      return t.unsettled
     case 'discovery-retry-required':
-      return 'Selection confirmation must be retried.'
+      return t.retryRequired
     case 'no-safe-destination':
-      return 'This browser cannot safely create the selected result.'
+      return t.noDestination
   }
 }
 
-function unavailableDescription(reason: OfferUnavailableReason): string {
+function unavailableDescription(reason: OfferUnavailableReason, language: Language): string {
+  const t = receiverCopy[language].artifacts
   switch (reason) {
     case 'portable-limit-exceeded':
-      return 'Choose a smaller selection or use a browser that can save the complete result another way.'
+      return t.sizeLimitHint
     case 'workspace-limit-exceeded':
-      return 'Free browser storage or choose the original folder hierarchy when that action is available.'
+      return t.storageLimitHint
     case 'permission-denied':
-      return 'Grant access and choose the artifact action again.'
+      return t.permissionHint
     case 'capability-changed':
-      return 'Review the available artifact actions and choose again.'
+      return t.changedHint
     case 'selection-empty':
-      return 'Select a file or folder before receiving.'
+      return t.selectFirst
     case 'shape-unsettled':
-      return 'Wait for confirmation before choosing the final result.'
+      return t.unsettledHint
     case 'discovery-retry-required':
-      return 'Retry confirmation to keep the authenticated progress already collected.'
+      return t.retryRequiredHint
     case 'no-safe-destination':
-      return 'Use another supported browser or change the selection.'
+      return t.noDestinationHint
   }
 }

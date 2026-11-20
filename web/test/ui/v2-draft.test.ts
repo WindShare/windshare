@@ -5,7 +5,7 @@ import { projectDraft, scopeSelection, shareIdentityFromRoot } from '../../src/u
 import type { BrowsePage } from '../../src/application/browser-share/gateway'
 
 const id = (value: number) => new Uint8Array(16).fill(value)
-const root = { id: id(1), idText: encodeBase64Url(id(1)), name: 'Shared files', path: [], ancestry: [encodeBase64Url(id(1))] }
+const root = { id: id(1), idText: encodeBase64Url(id(1)), path: [], ancestry: [encodeBase64Url(id(1))] }
 const folder = { kind: 'directory' as const, id: id(2), idText: encodeBase64Url(id(2)), name: 'Photos' }
 const photo = { kind: 'file' as const, id: id(3), idText: encodeBase64Url(id(3)), name: 'portrait.jpg', expectedSize: 512n }
 const page = (entries: BrowsePage['entries'], facts: Partial<BrowsePage> = {}): BrowsePage =>
@@ -39,11 +39,11 @@ describe('authenticated share identity and selection draft', () => {
     selection.set(folder, root.ancestry, true)
     selection.set(photo, [...root.ancestry, folder.idText], false)
     expect(projectDraft('selection', root, selection, null)).toMatchObject({
-      summary: '1 folder selected, excluding 1 item', empty: false,
+      label: { kind: 'selection', folders: 1, files: 0 }, excludedItems: 1, empty: false,
     })
     selection.set(folder, root.ancestry, false)
     expect(projectDraft('selection', root, selection, null)).toMatchObject({
-      scope: 'selected', empty: true, summary: 'Select items to download',
+      scope: 'selected', empty: true, excludedItems: 0,
     })
   })
 })

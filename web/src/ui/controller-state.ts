@@ -71,7 +71,6 @@ export function projectBrowsePage(
       phase: 'browsing',
       browse: Object.freeze({
         kind: 'ready' as const,
-        status: page.entryCount === 0 ? 'This directory is empty.' : '',
         error: null,
       }),
       rows: Object.freeze(rows),
@@ -90,7 +89,7 @@ export function projectBrowsePage(
 export function breadcrumbsFor(route: readonly BrowseDirectory[]) {
   return Object.freeze(route.map((directory) => Object.freeze({
     id: directory.idText,
-    name: directory.name,
+    name: directory.path.at(-1) ?? null,
   })))
 }
 
@@ -131,14 +130,14 @@ export function joiningReceiverSnapshot(snapshot: ReceiverSnapshot): ReceiverSna
   return Object.freeze({
     ...snapshot,
     phase: 'joining',
-    status: 'Connecting to the share…',
+    status: 'connecting',
     pathActivity: { lanes: [] },
     error: null,
     rows: Object.freeze([]),
     connection: { kind: 'idle' as const },
     share: null,
     draft: EMPTY_SELECTION_DRAFT,
-    browse: { kind: 'idle' as const, status: '', error: null },
+    browse: { kind: 'idle' as const, error: null },
     taskDisplay: null,
     preview: EMPTY_PREVIEW,
     progress: EMPTY_PROGRESS,
@@ -200,13 +199,13 @@ export function initialReceiverSnapshot(): ReceiverSnapshot {
   return Object.freeze({
     connection: { kind: 'idle' as const },
     share: null,
-    browse: { kind: 'idle' as const, status: '', error: null },
+    browse: { kind: 'idle' as const, error: null },
     draft: EMPTY_SELECTION_DRAFT,
-    startAdmission: { allowed: false, reason: 'Connect to the share first.', canReleaseCurrent: false },
+    startAdmission: { allowed: false, reason: 'connectFirst' as const, canReleaseCurrent: false },
     activeReceiveOperationId: null,
     taskDisplay: null,
     phase: 'awaiting-key',
-    status: 'Enter a share key to open.',
+    status: 'enter-key',
     pathActivity: { lanes: [] },
     error: null,
     rows: Object.freeze([]),

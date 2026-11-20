@@ -309,7 +309,6 @@ describe('retained inventory incident ownership', () => {
 
     expect(harness.publications.at(-1)).toMatchObject({
       kind: 'failed',
-      error: 'Stored receive tasks could not be loaded.',
     })
     expect(harness.incidents.decisions[0]?.decision).toMatchObject({
       kind: 'incident',
@@ -554,7 +553,6 @@ describe('retained inventory incident ownership', () => {
     expect(harness.publications.at(-1)).toMatchObject({
       kind: 'failed',
       operations: [],
-      error: 'Stored receive tasks could not be loaded.',
     })
   })
 

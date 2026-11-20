@@ -1,3 +1,7 @@
+import type { Language } from '../preferences/model'
+import { receiverCopy } from '../locales/receiver'
+import { destinationLabel } from './display'
+import { objectLabel } from '../draft/presentation'
 import type { TaskAction, TaskFacts, TaskPresentation, TaskPresentationTransition, TaskStage } from './model'
 import { presentTaskProgress } from './progress'
 import { receiveElapsedMilliseconds } from '../../transfer/lifecycle/timing'
@@ -6,41 +10,40 @@ import type { ReceiveContentWarning } from '../../transfer/lifecycle/content-war
 import { resolveTaskStage, type StageCopy } from './stage'
 
 const FALLBACK_OPERATION_LABEL_LENGTH = 8
-const MISSING_FILE_DESCRIPTIONS = {
-  'source-changed': 'The source file changed or was deleted.',
-  'source-unavailable': 'The source file is unavailable or was deleted.',
-  'file-failed': 'The file could not be received.',
-} as const
 
-export function presentTask(facts: TaskFacts): TaskPresentation {
-  const copy = resolveTaskStage(facts)
+export function presentTask(facts: TaskFacts, language: Language = 'en'): TaskPresentation {
+  const t = receiverCopy[language].progress
+  const copy = resolveTaskStage(facts, language)
   const fidelityPending = facts.fidelity?.actionMode === 'catch-up-required'
-  const usableActions = facts.actions.filter(action => !action.destructive)
+  const actions: readonly TaskAction[] = facts.actions.map(action => action.disabledReason === null ? action :
+    Object.freeze({ ...action, disabledReason: receiverCopy[language].admission[action.disabledReason] }))
+  const usableActions = actions.filter(action => !action.destructive)
   const primaryAction = facts.execution.kind === 'local-finalization' ? null : preferredAction(usableActions, copy.stage)
   const attention = copy.stage === 'needs-action' || copy.stage === 'ready-to-save' || fidelityPending ||
     facts.completeness === 'partial'
   const details = [...facts.details]
-  const progress = presentTaskProgress(facts)
+  const progress = presentTaskProgress(facts, language)
   const showProgress = ['preparing', 'downloading', 'waiting', 'paused', 'finishing'].includes(copy.stage)
   if (!showProgress && progress !== null) details.push(progress.label, ...progress.details)
   if (facts.lifecycle.contentWarning !== undefined) {
-    details.unshift(...contentWarningDetails(facts.lifecycle.contentWarning, facts.lifecycle.kind === 'resumable-receive'))
-  } else if (facts.completeness === 'partial') details.unshift('Partial result: some selected items are missing or unfinished.')
+    details.unshift(...contentWarningDetails(facts.lifecycle.contentWarning, facts.lifecycle.kind === 'resumable-receive', language))
+  } else if (facts.completeness === 'partial') details.unshift(t.partial)
   if (facts.fidelity !== null) {
     const count = facts.fidelity.replacementCount
-    details.push(`${count} ${count === 1 ? 'filename was' : 'filenames were'} adjusted for this device.`)
-    details.push('Adjusted paths may affect projects or scripts that expect the original names.')
-    if (fidelityPending) details.push('Finish local filename restoration setup before running the restoration tool.')
+    details.push(receiverCopy[language].downloads.adjustedCount(count))
+    details.push(t.adjustedHint)
+    if (fidelityPending) details.push(t.setupBeforeRestore)
   }
   if (facts.lifecycle.kind === 'published' && facts.lifecycle.cleanupState === 'cleanup-pending') {
-    details.push('The result is saved. Cleanup of owned temporary data is still pending.')
+    details.push(t.pendingCleanup)
   }
   const transition = transitionFor(facts, copy, attention)
   return Object.freeze({
     operationId: facts.lifecycle.operationId,
     generation: facts.lifecycle.generation,
-    objectLabel: facts.display?.objectLabel ?? `Download ${facts.lifecycle.operationId.slice(0, FALLBACK_OPERATION_LABEL_LENGTH)}`,
-    destinationLabel: facts.display?.destinationLabel ?? null,
+    objectLabel: facts.display === null ? receiverCopy[language].downloads.unnamedTask(facts.lifecycle.operationId.slice(0, FALLBACK_OPERATION_LABEL_LENGTH))
+      : objectLabel(facts.display.objectLabel, receiverCopy[language].browse),
+    destinationLabel: facts.display?.destinationLabel === undefined ? null : destinationLabel(facts.display.destinationLabel, language),
     createdAtMilliseconds: facts.display?.createdAtMilliseconds ?? null,
     elapsedMilliseconds: receiveElapsedMilliseconds(facts.lifecycle.timing),
     stage: copy.stage,
@@ -51,7 +54,7 @@ export function presentTask(facts: TaskFacts): TaskPresentation {
     progress: showProgress ? progress : null,
     primaryAction,
     secondaryActions: Object.freeze(usableActions.filter(action => action !== primaryAction)),
-    destructiveActions: Object.freeze(facts.actions.filter(action => action.destructive)),
+    destructiveActions: Object.freeze(actions.filter(action => action.destructive)),
     details: Object.freeze(details),
     fidelity: facts.fidelity,
     completeness: facts.completeness,
@@ -60,23 +63,16 @@ export function presentTask(facts: TaskFacts): TaskPresentation {
   })
 }
 
-function contentWarningDetails(warning: ReceiveContentWarning, paused: boolean): readonly string[] {
+function contentWarningDetails(warning: ReceiveContentWarning, paused: boolean, language: Language): readonly string[] {
+  const t = receiverCopy[language].progress
   const missing = warning.selectedFileCount - warning.completedFileCount
-  const details = [paused
-    ? `${warning.completedFileCount}/${warning.selectedFileCount} files received; ${missing} unfinished.`
-    : `Partial result: ${warning.completedFileCount}/${warning.selectedFileCount} files received; ${missing} not included in the ZIP.`]
+  const details = [t.missingFileCount(warning.completedFileCount, warning.selectedFileCount, missing, paused)]
+  const reasons = { 'source-changed': t.sourceChanged, 'source-unavailable': t.sourceUnavailable, 'file-failed': t.fileFailed }
   for (const file of warning.missingFiles) {
-    const reason = MISSING_FILE_DESCRIPTIONS[file.reason]
-    details.push(paused
-      ? `${file.path.join('/')}: ${reason}`
-      : `${file.path.join('/')}: ${reason} Not included in the ZIP.`)
+    details.push(t.missingFile(file.path.join('/'), reasons[file.reason], paused))
   }
   const additional = missing - BigInt(warning.missingFiles.length)
-  if (additional > 0n) {
-    const noun = additional === 1n ? 'file is' : 'files are'
-    const label = paused ? 'unfinished' : 'missing'
-    details.push(`${additional} additional ${label} ${noun} not listed.`)
-  }
+  if (additional > 0n) details.push(t.moreMissing(additional, paused))
   return details
 }
 

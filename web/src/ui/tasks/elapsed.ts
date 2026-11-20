@@ -1,22 +1,21 @@
+import { receiverCopy } from '../locales/receiver'
+
 const MILLISECONDS_PER_SECOND = 1000
 const SECONDS_PER_MINUTE = 60
 const MINUTES_PER_HOUR = 60
 const HOURS_PER_DAY = 24
 
-export const ELAPSED_DESCRIPTION = 'From starting the download until the result is ready, including pauses and reconnecting. Excludes waiting to save and browser-managed saving.'
-
-export function formatElapsedTime(milliseconds: number): string {
-  if (milliseconds < MILLISECONDS_PER_SECOND) return 'Less than 1 sec'
+export function formatElapsedTime(milliseconds: number, t = receiverCopy.en.downloads): string {
+  if (milliseconds < MILLISECONDS_PER_SECOND) return t.lessSecond
   const seconds = Math.floor(milliseconds / MILLISECONDS_PER_SECOND)
   const minutes = Math.floor(seconds / SECONDS_PER_MINUTE)
   const hours = Math.floor(minutes / MINUTES_PER_HOUR)
   const days = Math.floor(hours / HOURS_PER_DAY)
-  const dayUnit = days === 1 ? 'day' : 'days'
   const parts = [
-    days > 0 ? `${days} ${dayUnit}` : '',
-    hours > 0 ? `${hours % HOURS_PER_DAY} hr` : '',
-    minutes > 0 ? `${minutes % MINUTES_PER_HOUR} min` : '',
-    `${seconds % SECONDS_PER_MINUTE} sec`,
+    days > 0 ? t.days(days) : '',
+    hours > 0 ? t.hours(hours % HOURS_PER_DAY) : '',
+    minutes > 0 ? t.minutes(minutes % MINUTES_PER_HOUR) : '',
+    t.seconds(seconds % SECONDS_PER_MINUTE),
   ]
   return parts.filter(Boolean).join(' ')
 }

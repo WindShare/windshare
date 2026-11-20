@@ -4,7 +4,7 @@ function readSavedPreferences(): string | null {
   try { return window.localStorage.getItem(PREFERENCES_KEY) } catch { return null }
 }
 
-const browserLanguages = typeof navigator === 'undefined' ? ['en'] : navigator.languages
+const browserLanguages = typeof window === 'undefined' ? [] : window.navigator.languages
 export const browserPreferences = createPreferencesStore(
   parsePreferences(null, browserLanguages),
   next => {

@@ -1,3 +1,4 @@
+import type { ReceiveAdmission, ReceiveBlockReason } from '../admission'
 import type {
   FailureFactRef,
   PresentationExclusionReason,
@@ -64,7 +65,7 @@ export interface RetainedInventoryCoordinatorOptions {
   readonly currentJoinedShare: () => ReceiveJoinedShare | undefined
   readonly continuationBlocked: () => boolean
   readonly localFinalizationBlocked?: () => boolean
-  readonly remoteContinuationUnavailable?: () => string | null
+  readonly remoteContinuationUnavailable?: () => ReceiveBlockReason | null
   readonly adoptContinuation: (input: RetainedContinuationAdoption) => Promise<void>
   readonly ownsRuntime: (runtime: BoundReceiveOperation) => boolean
   readonly publish: (retained: RetainedReceiveInventorySnapshot) => void
@@ -119,28 +120,28 @@ export class RetainedInventoryCoordinator {
   actionAdmission(
     operation: RetainedReceiveOperationSnapshot,
     action: RetainedReceiveAction,
-  ): Readonly<{ allowed: boolean; reason: string | null }> {
+  ): ReceiveAdmission {
     const source = this.#inventory?.sourceOperations.get(operation)
     if (this.#options.isDisposed() || source === undefined || !operation.actions.includes(action)) {
-      return Object.freeze({ allowed: false, reason: 'This download action is no longer available.' })
+      return Object.freeze({ allowed: false, reason: 'actionUnavailable' })
     }
     if (this.#pending !== undefined) {
-      return Object.freeze({ allowed: false, reason: 'Another download action is in progress.' })
+      return Object.freeze({ allowed: false, reason: 'anotherAction' })
     }
     if (retainedActionNeedsShare(operation, action)) {
       const joined = this.#options.currentJoinedShare()
       if (joined === undefined || (source.shareInstance !== undefined &&
           source.shareInstance !== joined.descriptor.shareInstanceId)) {
-        return Object.freeze({ allowed: false, reason: 'Open the matching share before continuing this receive task.' })
+        return Object.freeze({ allowed: false, reason: 'matchingShare' })
       }
       const unavailable = this.#options.remoteContinuationUnavailable?.()
       if (unavailable) return Object.freeze({ allowed: false, reason: unavailable })
       if (this.#options.continuationBlocked()) {
-        return Object.freeze({ allowed: false, reason: 'Another download is using the receiver. Pause or finish it before continuing this task.' })
+        return Object.freeze({ allowed: false, reason: 'receiverBusy' })
       }
     } else if ((action === 'continue' || action === 'save-staged-files') &&
         this.#options.localFinalizationBlocked?.()) {
-      return Object.freeze({ allowed: false, reason: 'Another download is using the output. Pause or finish it before continuing this task.' })
+      return Object.freeze({ allowed: false, reason: 'outputBusy' })
     }
     return Object.freeze({ allowed: true, reason: null })
   }
@@ -291,7 +292,7 @@ export class RetainedInventoryCoordinator {
     }
     this.#load = pending
     try {
-      this.#publish(Object.freeze({ kind: 'loading', operations: this.#snapshot.operations, error: null, pending: null }))
+      this.#publish(Object.freeze({ kind: 'loading', operations: this.#snapshot.operations, pending: null }))
       this.#trace(() => Object.freeze({
         name: 'receive.inventory.load.started',
       }))
@@ -373,7 +374,6 @@ export class RetainedInventoryCoordinator {
     this.#publish(Object.freeze({
       kind: inventory.operations.length === 0 ? 'empty' : 'available',
       operations: inventory.operations,
-      error: null,
       pending: pending === undefined
         ? null
         : Object.freeze({
@@ -421,7 +421,6 @@ export class RetainedInventoryCoordinator {
     this.#publish(Object.freeze({
       kind: 'failed',
       operations: this.#inventory?.operations ?? Object.freeze([]),
-      error: 'Stored receive tasks could not be loaded.',
       pending: null,
     }))
     this.#trace(() => Object.freeze({

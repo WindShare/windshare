@@ -1,3 +1,5 @@
+import { diagnosticsCopy } from '../locales/diagnostics'
+import { useCopy } from '../preferences/use-preferences'
 import { useRef, useState, useSyncExternalStore, type ReactNode, type ComponentType } from 'react'
 import type { BrowserDiagnosticsSession, BrowserDiagnosticsSnapshot } from '../../diagnostics/browser/session'
 import type { DiagnosticsDelivery } from '../../diagnostics/browser/delivery'
@@ -11,6 +13,7 @@ export function DiagnosticsProvider({ session, delivery, children }: {
   readonly delivery: DiagnosticsDelivery
   readonly children: ReactNode
 }) {
+  const t = useCopy(diagnosticsCopy)
   const snapshot = useSyncExternalStore(session.subscribe, session.getSnapshot, session.getSnapshot)
   const [open, setOpen] = useState(false)
   const [panel, setPanel] = useState<ComponentType<{ snapshot: BrowserDiagnosticsSnapshot; session: BrowserDiagnosticsSession; delivery: DiagnosticsDelivery }> | null>(null)
@@ -29,15 +32,15 @@ export function DiagnosticsProvider({ session, delivery, children }: {
   }
   const Panel = panel
   const pendingPanel = loadFailed
-    ? <p role="alert">Unable to open diagnostics. <button type="button" onClick={preparePanel}>Retry</button></p>
-    : <p role="status">Opening diagnostics&hellip;</p>
+    ? <p role="alert">{t.openFailure} <button type="button" onClick={preparePanel}>{t.retry}</button></p>
+    : <p role="status">{t.opening}</p>
 
   return <DiagnosticsPanelContext value={openPanel}>
     <DiagnosticsNotice snapshot={snapshot} onOpen={openPanel} onStop={() => session.disable()} />
     {children}
     {open && <div className="diagnostics-surface">
-      <DetailSheet title="Diagnostics" onClose={() => setOpen(false)} returnFocus={invoker}
-        returnLabel="Close diagnostics" className="diagnostics-sheet">
+      <DetailSheet title={t.title} onClose={() => setOpen(false)} returnFocus={invoker}
+        returnLabel={t.close} className="diagnostics-sheet">
         {Panel !== null ? <Panel snapshot={snapshot} session={session} delivery={delivery} />
           : pendingPanel}
       </DetailSheet>
@@ -50,6 +53,7 @@ function DiagnosticsNotice({ snapshot, onOpen, onStop }: {
   readonly onOpen: (element: HTMLElement) => void
   readonly onStop: () => void
 }) {
+  const t = useCopy(diagnosticsCopy)
   const [dismissed, setDismissed] = useState<string | null>(null)
   const { capture, activation, previousCaptures, hasCurrentEvidence } = snapshot
   const currentRecording = capture.state !== 'idle' && hasCurrentEvidence
@@ -59,12 +63,12 @@ function DiagnosticsNotice({ snapshot, onOpen, onStop }: {
   const active = activation.kind === 'active'
   // Automatically recovered failures remain available in the panel without announcing a recording.
   if (!active && ((!currentRecording && savedRecording === undefined) || dismissed === notice)) return null
-  return <aside className="diagnostics-surface diagnostics-bar" aria-label="Diagnostics">
+  return <aside className="diagnostics-surface diagnostics-bar" aria-label={t.title}>
     <span role="status">{!active && !currentRecording && savedRecording !== undefined
-      ? 'Saved diagnostics available' : diagnosticsCaptureLabel(capture)}</span>
-    <button type="button" onClick={event => onOpen(event.currentTarget)}>Export diagnostics</button>
+      ? t.savedAvailable : diagnosticsCaptureLabel(capture, t)}</span>
+    <button type="button" onClick={event => onOpen(event.currentTarget)}>{t.export}</button>
     {active
-      ? <button type="button" onClick={onStop}>Stop recording</button>
-      : <button type="button" onClick={() => setDismissed(notice)}>Hide notification</button>}
+      ? <button type="button" onClick={onStop}>{t.stop}</button>
+      : <button type="button" onClick={() => setDismissed(notice)}>{t.hide}</button>}
   </aside>
 }

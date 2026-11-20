@@ -1,3 +1,5 @@
+import type { Language } from './preferences/model'
+import { receiverCopy } from './locales/receiver'
 import { availableReceiveActions, receiveLifecycleCategory, newReceiveOperationKind, type ReceiveActionFacts } from '../application/receive/policy'
 import type { LifecycleUserAction, PersistentWriterOpenPauseFact, ActiveReceiveControl, ReceiveSettlementWait, WorkspaceUsage } from '../application/receive/actions'
 import { artifactRequestedName } from '../output/model/artifact-name'
@@ -22,9 +24,6 @@ import {
 import { formatBytes } from './progress-presentation'
 import type { DirectZipProgressSnapshot } from '../application/receive/contracts'
 
-export const SOURCE_INVALIDATED_DESCRIPTION =
-  'The source file changed and this download cannot continue. Ask the sender to share it again and open the new link. You can discard this task to remove its retained data.'
-
 export interface WorkspaceUsagePresentation {
   readonly ownedBytes: bigint
   readonly maximumBytes?: bigint
@@ -48,26 +47,27 @@ export interface NewReceiveOperationPresentation {
 export function presentNewReceiveOperation(input: Readonly<{
   lifecycle: ReceiveLifecycleState | null
   plan: MaterializationPlan | null
-}>): NewReceiveOperationPresentation | null {
+}>, language: Language = 'en'): NewReceiveOperationPresentation | null {
+  const t = receiverCopy[language].lifecycle
   const { lifecycle, plan } = input
   if (lifecycle === null || plan === null) return null
   const kind = newReceiveOperationKind(lifecycle, plan)
   if (kind === 'direct-tree-to-zip') {
     return Object.freeze({
       kind: 'direct-tree-to-zip',
-      ariaLabel: 'Receive again as ZIP',
-      title: 'Receive this selection as a ZIP',
-      description: 'This starts a new receive operation. Files already received in the folder stay where they are, but their bytes are not reused for the ZIP.',
-      actionLabel: 'Choose a ZIP route for a new operation',
+      ariaLabel: t.receiveZip,
+      title: t.selectionAsZip,
+      description: t.selectionAsZipHint,
+      actionLabel: t.chooseZip,
     })
   }
   if (kind === 'deleted-direct-zip-target') {
     return Object.freeze({
       kind: 'deleted-direct-zip-target',
-      ariaLabel: 'Start a new receive operation',
-      title: 'Choose a new save route',
-      description: 'The previous ZIP target is gone and will not be recreated. Start a new receive operation for the same selection; bytes from the old operation are not reused.',
-      actionLabel: 'Choose a route for a new operation',
+      ariaLabel: t.newReceive,
+      title: t.chooseRoute,
+      description: t.chooseRouteHint,
+      actionLabel: t.chooseNewRoute,
     })
   }
   return null
@@ -108,29 +108,29 @@ export function presentReceiveLifecycle(input: Readonly<{
   writerOpenPause?: PersistentWriterOpenPauseFact | null
   directZipProgress?: DirectZipProgressSnapshot | null
   browserDelivery?: import('../output/model/browser-delivery').BrowserDeliverySummary | null
-}>): ReceiveLifecyclePresentation {
+}>, language: Language = 'en'): ReceiveLifecyclePresentation {
   const compatibleNameRepair = input.repairSummary === undefined || input.repairSummary === null
     ? null
-    : presentCompatibleNameRepair({ state: input.state, summary: input.repairSummary })
+    : presentCompatibleNameRepair({ state: input.state, summary: input.repairSummary }, language)
   const copy = input.interruption === undefined || input.interruption === null
-    ? lifecycleCopy(
+    ? describeLifecycle(
         input.state,
         input.artifact,
         input.plan,
         input.directZipProgress ?? null,
         compatibleNameRepair,
-        input.recoverySummary ?? null,
+        input.recoverySummary ?? null, language,
       )
-    : interruptionCopy(input.interruption)
-  const actions = Object.freeze(availableReceiveActions(input).map(kind => presentLifecycleAction(kind, input)))
-  const writerOpenPause = presentPersistentWriterOpenPause(input)
+    : interruptionCopy(input.interruption, language)
+  const actions = Object.freeze(availableReceiveActions(input).map(kind => presentLifecycleAction(kind, input, language)))
+  const writerOpenPause = presentPersistentWriterOpenPause(input, language)
   return Object.freeze({
     stateKind: input.state.kind,
     category: receiveLifecycleCategory(input.state),
     title: copy.title,
     description: copy.description,
     tone: copy.tone,
-    usage: workspaceUsagePresentation(input),
+    usage: workspaceUsagePresentation(input, language),
     actions,
     compatibleNameRepair,
     writerOpenPause,
@@ -141,175 +141,178 @@ function presentPersistentWriterOpenPause(input: Readonly<{
   state: ReceiveLifecycleState
   plan: MaterializationPlan
   writerOpenPause?: PersistentWriterOpenPauseFact | null
-}>): PersistentWriterOpenPausePresentation | null {
+}>, language: Language): PersistentWriterOpenPausePresentation | null {
+  const t = receiverCopy[language].lifecycle
   const fact = input.writerOpenPause
   if (fact === undefined || fact === null || input.plan.kind !== 'direct-tree' ||
       input.state.kind !== 'resumable-receive' || input.state.payloadKind !== 'file-set') return null
   const materializationPath = fact.materializationRelativePath.join('/')
   const context = fact.purpose === 'automatic-checkpoint'
-    ? 'The automatic checkpoint replacement failed.'
-    : 'The preserving recovery writer failed to open.'
+    ? t.checkpointFailed
+    : t.writerFailed
   return Object.freeze({
     materializationPath,
-    title: `Could not reopen ${materializationPath}`,
-    description: `${context} The durable checkpoint is safe. Reopening this file would copy ` +
-      `${formatBytes(fact.cost.prefixCopyBytes)}, add ` +
-      `${formatBytes(fact.cost.writeAmplificationBytes)} of write amplification, and may use up to ` +
-      `${formatBytes(fact.cost.temporaryBytes)} of temporary destination space.`,
+    title: t.reopenFile(materializationPath),
+    description: t.reopenCost(context, formatBytes(fact.cost.prefixCopyBytes),
+      formatBytes(fact.cost.writeAmplificationBytes), formatBytes(fact.cost.temporaryBytes)),
   })
 }
 
 function interruptionCopy(
   interruption: ReceiveSettlementWait,
+  language: Language,
 ): Readonly<{
   title: string
   description: string
   tone: ReceiveLifecyclePresentation['tone']
 }> {
+  const t = receiverCopy[language].lifecycle
   if (interruption.operation === 'finish') {
     return copy(
-      'Finishing is taking longer than expected',
-      'WindShare is waiting for current save operations to finish safely. Keep this page open; you can continue browsing.',
+      t.slowFinish,
+      t.slowFinishHint,
       'warning',
     )
   }
   if (interruption.operation === 'pause') {
     return interruption.phase === 'waiting'
       ? copy(
-          'Pausing',
-          'WindShare is stopping new transfers and making accepted file data safe to continue.',
+          t.pausing,
+          t.pausingHint,
           'neutral',
         )
       : copy(
-          'Pausing in the background',
-          'The wait was detached, but WindShare still owns the save location until native writes and recovery records finish.',
+          t.pausingBackground,
+          t.pausingBackgroundHint,
           'warning',
         )
   }
   return interruption.phase === 'waiting'
     ? copy(
-        'Stopping',
-        'WindShare is stopping new transfers and closing accepted output work.',
+        t.stopping,
+        t.stoppingHint,
         'neutral',
       )
     : copy(
-        'Stopping in the background',
-        'The wait was detached, but WindShare still owns the save location until native writes and task records finish.',
+        t.stoppingBackground,
+        t.stoppingBackgroundHint,
         'warning',
       )
 }
 
-function lifecycleCopy(
+function describeLifecycle(
   state: ReceiveLifecycleState,
   artifact: ArtifactSpec,
   plan: MaterializationPlan,
   directZipProgress: DirectZipProgressSnapshot | null,
   compatibleNameRepair: CompatibleNameRepairPresentation | null,
   recoverySummary: RecoverySummary | null,
+  language: Language,
 ): Readonly<{
   title: string
   description: string
   tone: ReceiveLifecyclePresentation['tone']
 }> {
+  const t = receiverCopy[language].lifecycle
   const override = lifecycleOverrideCopy(
     state,
     plan,
     directZipProgress,
-    compatibleNameRepair,
+    compatibleNameRepair, language,
   )
   if (override !== null) return override
   const name = browserArtifactName(artifact)
   switch (state.kind) {
     case 'intent-frozen':
-      return copy('Ready to receive', 'The selected result and its save semantics are fixed.', 'neutral')
+      return copy(t.ready, t.readyHint, 'neutral')
     case 'resumable-start':
-      return copy(state.reason === 'paused' ? 'Paused before downloading' : 'Download could not start',
-        'The selected download is retained. Try again when you are ready.', 'warning')
+      return copy(state.reason === 'paused' ? t.pausedBeforeStart : t.startFailed,
+        t.retryHint, 'warning')
     case 'preparing':
       return copy(
-        'Checking selected content',
-        'WindShare is confirming the complete selection before requesting file content.',
+        t.checking,
+        t.checkingHint,
         'neutral',
       )
     case 'receiving':
-      return copy('Receiving files', receivingDescription(artifact, plan), 'neutral')
-    case 'resumable-receive': return resumableReceiveCopy(state, plan, recoverySummary)
+      return copy(t.receiving, receivingDescription(artifact, plan, language), 'neutral')
+    case 'resumable-receive': return resumableReceiveCopy(state, plan, recoverySummary, language)
     case 'finalizing-tree':
       return copy(
-        'Finishing the folder hierarchy',
-        'WindShare is verifying every selected item and the saved folder result.',
+        t.finishingFolder,
+        t.finishingFolderHint,
         'neutral',
       )
     case 'committing-atomic':
-      return copy(`Saving ${name}`, 'The complete result is being committed.', 'neutral')
+      return copy(t.savingName(name), t.committing, 'neutral')
     case 'materialization-sealed':
-      return copy('Receiving complete', 'The received content is sealed and ready for final packaging.', 'neutral')
+      return copy(t.received, t.receivedHint, 'neutral')
     case 'packaging':
       return artifact.kind === 'zip-archive'
         ? copy(
-            'Finalizing ZIP',
-            'All selected content is received. WindShare is finishing the ZIP directory locally; the sender can go offline.',
+            t.finalizingZip,
+            t.finalizingZipHint,
             'neutral',
           )
-        : copy('Preparing the complete file', 'WindShare is sealing the file for saving.', 'neutral')
+        : copy(t.preparingFile, t.preparingFileHint, 'neutral')
     case 'resumable-package':
       return copy(
-        artifact.kind === 'zip-archive' ? 'Ready to continue generating ZIP' : 'Ready to continue preparing the file',
-        'Received content was retained. Continuing does not receive completed files again.',
+        artifact.kind === 'zip-archive' ? t.resumeZip : t.resumeFile,
+        t.resumeHint,
         'warning',
       )
     case 'artifact-sealed':
-      return copy('Final result sealed', `${name} is complete and is being made ready to save.`, 'neutral')
+      return copy(t.sealed, t.completeName(name), 'neutral')
     case 'waiting-to-save':
-      return copy('Ready to save', `${name} is complete and retained in browser storage. Save it now or return later; delete the task when you no longer need its retained copy.`, 'positive')
+      return copy(t.readyToSave, t.retainedName(name), 'positive')
     case 'publishing-managed':
-      return copy(`Saving ${name}`, 'The complete result is being published to the chosen location.', 'neutral')
+      return copy(t.savingName(name), t.publishingHint, 'neutral')
     case 'handing-off':
-      return copy('Starting browser download', 'The complete result is being handed to the browser.', 'neutral')
+      return copy(t.startingBrowser, t.handoffHint, 'neutral')
     case 'published':
       return copy(
-        'Saved',
+        t.saved,
         state.cleanupState === 'cleanup-pending'
-          ? 'The complete result was saved. WindShare is finishing task cleanup.'
-          : 'The complete result was saved and task cleanup is complete.',
+          ? t.pendingCleanup
+          : t.cleaned,
         'positive',
       )
     case 'download-started':
       return copy(
-        'Download started',
-        'The browser took over the download. WindShare cannot confirm where or whether it was saved.',
+        t.downloadStarted,
+        t.browserHint,
         'positive',
       )
     case 'partial-directory':
       return copy(
-        state.reason === 'stopped' ? 'Receiving stopped' : 'Some files were saved',
-        partialDirectoryDescription(state),
+        state.reason === 'stopped' ? t.stopped : t.partialFolder,
+        partialDirectoryDescription(state, language),
         'warning',
       )
     case 'restart-required':
-      return copy('Start again required', restartRequiredDescription(state.reason), 'warning')
+      return copy(t.restart, restartRequiredDescription(state.reason, language), 'warning')
     case 'source-invalidated':
-      return copy('Source file changed', SOURCE_INVALIDATED_DESCRIPTION, 'warning')
+      return copy(t.sourceChanged, t.sourceChangedHint, 'warning')
     case 'discarded':
-      return copy('Task discarded', 'Owned unfinished data and task records were removed.', 'neutral')
+      return copy(t.discarded, t.discardedHint, 'neutral')
     case 'needs-attention':
-      return copy('Needs attention', needsAttentionDescription(state.reason), 'critical')
+      return copy(t.needsAttention, needsAttentionDescription(state.reason, language), 'critical')
     case 'authorization-required':
       return copy(
-        'Save authorization required',
-        'Choose Continue to authorize the same saved target. WindShare will not create or switch to another target.',
+        t.authorization,
+        t.authorizationHint,
         'warning',
       )
     case 'target-verification-required':
       return copy(
-        'Saved target must be verified',
-        'WindShare needs a slower ownership check before it can safely continue or change the incomplete ZIP.',
+        t.verify,
+        t.verifyHint,
         'warning',
       )
     case 'destination-space-required':
       return copy(
-        'More destination space is required',
-        'Free space at the selected destination, then retry. The last verified resume position is retained.',
+        t.space,
+        t.spaceHint,
         'warning',
       )
   }
@@ -320,40 +323,43 @@ function lifecycleOverrideCopy(
   plan: MaterializationPlan,
   directZipProgress: DirectZipProgressSnapshot | null,
   compatibleNameRepair: CompatibleNameRepairPresentation | null,
+  language: Language,
 ): ReturnType<typeof copy> | null {
-  const repair = compatibleNameLifecycleCopy(state, compatibleNameRepair)
+  const repair = compatibleNameLifecycleCopy(state, compatibleNameRepair, language)
   if (repair !== null) return repair
-  return state.kind === 'published' ? null : directZipProgressCopy(plan, directZipProgress)
+  return state.kind === 'published' ? null : directZipProgressCopy(plan, directZipProgress, language)
 }
 
 function compatibleNameLifecycleCopy(
   state: ReceiveLifecycleState,
   repair: CompatibleNameRepairPresentation | null,
+  language: Language,
 ): Readonly<{
   title: string
   description: string
   tone: ReceiveLifecyclePresentation['tone']
 }> | null {
+  const t = receiverCopy[language].lifecycle
   if (repair === null || (state.kind !== 'published' && state.kind !== 'partial-directory')) {
     return null
   }
   if (repair.actionMode !== 'routine-restoration') {
     return copy(
-      'Restoration tool catch-up required',
-      'WindShare has not validated a complete terminal sidecar checkpoint, so this result is not presented as complete yet.',
+      t.repairNeeded,
+      t.repairNeededHint,
       'warning',
     )
   }
   if (state.kind === 'published') {
     return copy(
-      'Completed with compatible names',
-      'The complete result was saved under compatible names. Run the restoration tool to restore the logical names.',
+      t.compatibleComplete,
+      t.compatibleCompleteHint,
       'positive',
     )
   }
   return copy(
-    'Partial with compatible names',
-    `${partialDirectoryDescription(state)} Saved entries still use compatible names until the restoration tool runs.`,
+    t.compatiblePartial,
+    t.partialCompatible(partialDirectoryDescription(state, language)),
     'warning',
   )
 }
@@ -362,76 +368,80 @@ function resumableReceiveCopy(
   state: Extract<ReceiveLifecycleState, { kind: 'resumable-receive' }>,
   plan: MaterializationPlan,
   recoverySummary: RecoverySummary | null,
+  language: Language,
 ) {
+  const t = receiverCopy[language].lifecycle
   if (state.payloadKind === 'direct-zip') {
     return copy(
-      'Ready to continue the ZIP',
-      `${formatBytes(state.safeSelectedPayloadBytes)} can be resumed safely. ` +
-        `Continuing may require up to ${formatBytes(state.committedArchiveLength)} of additional temporary space.`,
+      t.continueZip,
+      t.zipSpace(formatBytes(state.safeSelectedPayloadBytes), formatBytes(state.committedArchiveLength)),
       'warning',
     )
   }
   if (state.payloadKind === 'workspace-archive') {
     if (state.pauseReason === 'storage-pressure') {
-      return copy('Browser storage is full',
-        `${formatBytes(state.completedBytes)} of received content is retained. Free browser storage, then choose Continue.`, 'warning')
+      return copy(t.storageFull,
+        t.retainedSpace(formatBytes(state.completedBytes)), 'warning')
     }
-    return copy('ZIP progress retained',
-      `${state.completedFileCount.toString()} complete files (${formatBytes(state.completedBytes)}) are retained. ` +
-        (state.discoveryComplete ? 'The saved checkpoint preserves received content for continuation.' :
-          'Selection discovery is unfinished; continue when the sender is available.'), 'warning')
+    return copy(t.zipRetained,
+      t.retainedFiles(state.completedFileCount, formatBytes(state.completedBytes), state.discoveryComplete ? t.checkpointComplete :
+          t.incompleteDiscovery), 'warning')
   }
   return copy(
-    'Ready to continue receiving',
-    resumableFileSetDescription(state, plan.kind, recoverySummary),
+    t.continueReceiving,
+    resumableFileSetDescription(state, plan.kind, recoverySummary, language),
     'warning',
   )
 }
 
-function presentLifecycleAction(kind: LifecycleUserAction, input: ReceiveActionFacts & { readonly artifact: ArtifactSpec }): LifecycleActionPresentation {
+function presentLifecycleAction(kind: LifecycleUserAction, input: ReceiveActionFacts & { readonly artifact: ArtifactSpec }, language: Language): LifecycleActionPresentation {
+  const t = receiverCopy[language].lifecycle
   const { state, plan, artifact } = input
   switch (kind) {
-    case 'pause': return action(kind, 'Pause and keep verified progress')
+    case 'pause': return action(kind, t.pauseAction)
     case 'stop': return plan.kind === 'direct-resumable-zip'
-      ? action(kind, 'Stop and retain the unfinished ZIP') : action(kind, 'Stop receiving', true)
-    case 'continue': return action(kind, continueActionLabel(state, artifact, plan.kind))
-    case 'save': return action(kind, 'Save ' + browserArtifactName(artifact))
-    case 'save-staged-files': return action(kind, 'Save received files to folder')
-    case 'cleanup-staging': return action(kind, 'Retry staging cleanup')
-    case 'discard-incomplete-staging': return action(kind, 'Discard incomplete browser data', true)
+      ? action(kind, t.stopZip) : action(kind, t.stopAction, true)
+    case 'continue': return action(kind, continueActionLabel(state, artifact, plan.kind, language))
+    case 'save': return action(kind, t.saveNamed(browserArtifactName(artifact)))
+    case 'save-staged-files': return action(kind, t.saveStaged)
+    case 'cleanup-staging': return action(kind, t.cleanupStaging)
+    case 'discard-incomplete-staging': return action(kind, t.discardStaging, true)
     case 'redownload': return state.kind === 'resumable-receive'
-      ? action(kind, 'Restart incomplete files', true) : action(kind, 'Download again')
-    case 'change-location': return action(kind, 'Change save location')
-    case 'discard': return action(kind, discardActionLabel(state), true)
-    case 'delete': return action(kind, deleteActionLabel(state), true)
+      ? action(kind, t.restartIncomplete, true) : action(kind, t.downloadAgain)
+    case 'change-location': return action(kind, t.changeLocation)
+    case 'discard': return action(kind, discardActionLabel(state, language), true)
+    case 'delete': return action(kind, deleteActionLabel(state, language), true)
   }
 }
 
-function continueActionLabel(state: ReceiveLifecycleState, artifact: ArtifactSpec, plan: MaterializationPlan['kind']): string {
+function continueActionLabel(state: ReceiveLifecycleState, artifact: ArtifactSpec, plan: MaterializationPlan['kind'], language: Language): string {
+  const t = receiverCopy[language].lifecycle
   switch (state.kind) {
-    case 'resumable-start': return state.reason === 'paused' ? 'Continue' : 'Retry download'
+    case 'resumable-start': return state.reason === 'paused' ? t.resumeAction : t.retryDownload
     case 'resumable-receive':
-      if (state.payloadKind === 'direct-zip') return 'Continue ZIP'
-      return plan === 'workspace-then-publish' ? 'Continue receiving' : 'Continue and preserve partial files'
-    case 'resumable-package': return artifact.kind === 'zip-archive' ? 'Continue generating ZIP' : 'Continue preparing file'
-    case 'authorization-required': return 'Authorize and continue'
-    case 'target-verification-required': return 'Verify target and continue'
-    case 'destination-space-required': return 'Retry after freeing space'
-    default: return 'Continue'
+      if (state.payloadKind === 'direct-zip') return t.continueZipAction
+      return plan === 'workspace-then-publish' ? t.continueReceiveAction : t.resumePartial
+    case 'resumable-package': return artifact.kind === 'zip-archive' ? t.continuePackaging : t.continueFile
+    case 'authorization-required': return t.authorizeContinue
+    case 'target-verification-required': return t.verifyContinue
+    case 'destination-space-required': return t.retrySpace
+    default: return t.resumeAction
   }
 }
 
-function discardActionLabel(state: ReceiveLifecycleState): string {
-  if (state.kind === 'resumable-start') return 'Discard download'
-  if (state.kind === 'resumable-receive') return 'Discard task and clean unfinished content'
-  return 'Discard task and delete retained content'
+function discardActionLabel(state: ReceiveLifecycleState, language: Language): string {
+  const t = receiverCopy[language].lifecycle
+  if (state.kind === 'resumable-start') return t.discardDownload
+  if (state.kind === 'resumable-receive') return t.discardUnfinished
+  return t.discardRetained
 }
 
-function deleteActionLabel(state: ReceiveLifecycleState): string {
-  if (state.kind === 'resumable-receive') return 'Delete only after ownership is verified'
+function deleteActionLabel(state: ReceiveLifecycleState, language: Language): string {
+  const t = receiverCopy[language].lifecycle
+  if (state.kind === 'resumable-receive') return t.deleteAfterVerify
   if (state.kind === 'authorization-required' || state.kind === 'target-verification-required' ||
-      state.kind === 'destination-space-required') return 'Verify ownership and delete unfinished ZIP'
-  return 'Delete retained result'
+      state.kind === 'destination-space-required') return t.verifyDelete
+  return t.deleteRetained
 }
 
 function action(
@@ -446,7 +456,8 @@ function workspaceUsagePresentation(input: Readonly<{
   state: ReceiveLifecycleState
   plan: MaterializationPlan
   workspaceUsage?: WorkspaceUsage | null
-}>): WorkspaceUsagePresentation | null {
+}>, language: Language): WorkspaceUsagePresentation | null {
+  const t = receiverCopy[language].lifecycle
   const usage = input.workspaceUsage
   if (usage === undefined || usage === null || input.plan.kind !== 'workspace-then-publish' ||
       !lifecycleOwnsWorkspaceData(input.state)) return null
@@ -454,8 +465,8 @@ function workspaceUsagePresentation(input: Readonly<{
     throw new RangeError('workspace usage must use non-negative owned bytes and a positive limit')
   }
   const label = usage.maximumBytes === undefined
-    ? `${formatBytes(usage.ownedBytes)} stored by this task`
-    : `${formatBytes(usage.ownedBytes)} of ${formatBytes(usage.maximumBytes)} used by this task`
+    ? t.stored(formatBytes(usage.ownedBytes))
+    : t.used(formatBytes(usage.ownedBytes), formatBytes(usage.maximumBytes))
   return Object.freeze({
     ownedBytes: usage.ownedBytes,
     ...(usage.maximumBytes === undefined ? {} : { maximumBytes: usage.maximumBytes }),
@@ -470,24 +481,27 @@ function lifecycleOwnsWorkspaceData(state: ReceiveLifecycleState): boolean {
   return state.kind !== 'download-started' || state.attemptKind === 'workspace'
 }
 
-function receivingDescription(artifact: ArtifactSpec, plan: MaterializationPlan): string {
+function receivingDescription(artifact: ArtifactSpec, plan: MaterializationPlan, language: Language): string {
+  const t = receiverCopy[language].lifecycle
   switch (artifact.kind) {
     case 'directory-tree':
-      return 'Files are being saved with their selected folder hierarchy. Completed files may already be visible.'
+      return t.treeHint
     case 'original-file':
-      return 'The complete file is being received. An incomplete file will not be published.'
+      return t.fileHint
     case 'zip-archive':
       return plan.kind === 'direct-resumable-zip'
-        ? `${plan.binding.stableName} is an incomplete target until closing and verification finish. Do not move or modify it meanwhile.`
-        : 'Selected files are being received for one complete ZIP without compression.'
+        ? t.incompleteZip(plan.binding.stableName)
+        : t.zipHint
   }
 }
 
 function partialDirectoryDescription(
   state: Extract<ReceiveLifecycleState, { kind: 'partial-directory' }>,
+  language: Language,
 ): string {
-  if (state.failureCount === 0n) return `${state.successCount} file(s) remain saved.`
-  return `${state.successCount} file(s) remain saved; ${state.failureCount} item(s) did not finish.`
+  const t = receiverCopy[language].lifecycle
+  if (state.failureCount === 0n) return t.folderSaved(state.successCount)
+  return t.folderPartial(state.successCount, state.failureCount)
 }
 
 function browserArtifactName(artifact: ArtifactSpec): string {
@@ -496,46 +510,50 @@ function browserArtifactName(artifact: ArtifactSpec): string {
 
 function restartRequiredDescription(
   reason: Extract<ReceiveLifecycleState, { kind: 'restart-required' }>['reason'],
+  language: Language,
 ): string {
+  const t = receiverCopy[language].lifecycle
   switch (reason) {
     case 'direct-atomic-rolled-back':
-      return 'The incomplete result was rolled back. Start a new receive operation.'
+      return t.rolledBack
     case 'portable-aborted':
-      return 'The browser download did not start and no resumable copy was retained.'
+      return t.aborted
     case 'source-revision-changed':
-      return 'The shared file changed, so the complete result must be received again.'
+      return t.changedHint
     case 'preparation-invalidated':
-      return 'The confirmed selection changed before completion. Start again with fresh evidence.'
+      return t.invalidated
     case 'content-session-ended':
-      return 'The non-resumable receive session ended before the complete result was ready.'
+      return t.ended
     case 'target-deleted':
-      return 'The owned ZIP target is missing. WindShare will not recreate it under the old operation; start a new receive operation.'
+      return t.targetDeleted
   }
 }
 
 function directZipProgressCopy(
   plan: MaterializationPlan,
   progress: DirectZipProgressSnapshot | null,
+  language: Language,
 ): ReturnType<typeof copy> | null {
+  const t = receiverCopy[language].lifecycle
   if (plan.kind !== 'direct-resumable-zip' || progress === null) return null
   switch (progress.phase) {
     case 'receiving': return null
     case 'saving-resume-position':
       return copy(
-        'Saving a safe resume position',
-        `${plan.binding.stableName} is being closed at a verified cut. Keep this page open until the safe position is recorded.`,
+        t.checkpoint,
+        t.savingCheckpoint(plan.binding.stableName),
         'neutral',
       )
     case 'closing':
       return copy(
-        `Closing ${plan.binding.stableName}`,
-        'All selected bytes were received, but the ZIP is still incomplete until closing records are written and verified.',
+        t.closing(plan.binding.stableName),
+        t.closingHint,
         'neutral',
       )
     case 'verifying':
       return copy(
-        'Confirming saved content',
-        `WindShare is verifying ${plan.binding.stableName}. Do not move or modify the target until this check finishes.`,
+        t.verifying,
+        t.verifyingName(plan.binding.stableName),
         'neutral',
       )
   }
@@ -543,14 +561,16 @@ function directZipProgressCopy(
 
 function needsAttentionDescription(
   reason: Extract<ReceiveLifecycleState, { kind: 'needs-attention' }>['reason'],
+  language: Language,
 ): string {
+  const t = receiverCopy[language].lifecycle
   switch (reason) {
     case 'target-ownership-unknown':
-      return 'WindShare cannot safely determine whether the selected destination still belongs to this task. No automatic change was made.'
+      return t.unknownOwner
     case 'publication-unknown':
-      return 'WindShare cannot safely determine whether the final save operation completed. It will not retry automatically.'
+      return t.unknownPublication
     case 'cleanup-unknown':
-      return 'WindShare cannot safely confirm ownership while cleaning up retained data. It will not remove anything automatically.'
+      return t.unknownCleanup
   }
 }
 

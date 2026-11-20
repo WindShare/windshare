@@ -1,3 +1,4 @@
+import { receiverCopy } from '../locales/receiver'
 import type { ReceiverIconName } from '../receiver-presentation/ReceiverIcon'
 
 const IMAGE_EXTENSIONS = new Set(['avif', 'bmp', 'gif', 'heic', 'heif', 'ico', 'jpeg', 'jpg', 'png', 'svg', 'tif', 'tiff', 'webp'])
@@ -26,15 +27,15 @@ function fileExtension(name: string): string | null {
  * Purely decorative display metadata for icons and human-readable file kinds.
  * Never grants preview support or asserts decoded media format.
  */
-export function fileDisplayInfo(name: string): FileDisplayInfo {
+export function fileDisplayInfo(name: string, t = receiverCopy.en.browse): FileDisplayInfo {
   const ext = fileExtension(name)
   const badge = ext !== null && ext.length <= MAX_EXTENSION_BADGE_LENGTH ? ext.toUpperCase() : null
-  if (ext === null) return { icon: 'file', typeLabel: 'File', badge: null }
-  if (IMAGE_EXTENSIONS.has(ext)) return { icon: 'image', typeLabel: `${ext.toUpperCase()} image`, badge }
-  if (VIDEO_EXTENSIONS.has(ext)) return { icon: 'video', typeLabel: `${ext.toUpperCase()} video`, badge }
-  if (ARCHIVE_EXTENSIONS.has(ext)) return { icon: 'archive', typeLabel: `${ext.toUpperCase()} archive`, badge }
-  if (AUDIO_EXTENSIONS.has(ext)) return { icon: 'audio', typeLabel: `${ext.toUpperCase()} audio`, badge }
-  if (DOCUMENT_EXTENSIONS.has(ext)) return { icon: 'document', typeLabel: ext === 'pdf' ? 'PDF document' : `${ext.toUpperCase()} file`, badge }
-  if (CODE_EXTENSIONS.has(ext)) return { icon: 'code', typeLabel: `${ext.toUpperCase()} file`, badge }
-  return { icon: 'file', typeLabel: `${ext.toUpperCase()} file`, badge }
+  if (ext === null) return { icon: 'file', typeLabel: t.file, badge: null }
+  if (IMAGE_EXTENSIONS.has(ext)) return { icon: 'image', typeLabel: t.imageType(ext.toUpperCase()), badge }
+  if (VIDEO_EXTENSIONS.has(ext)) return { icon: 'video', typeLabel: t.videoType(ext.toUpperCase()), badge }
+  if (ARCHIVE_EXTENSIONS.has(ext)) return { icon: 'archive', typeLabel: t.archiveType(ext.toUpperCase()), badge }
+  if (AUDIO_EXTENSIONS.has(ext)) return { icon: 'audio', typeLabel: t.audioType(ext.toUpperCase()), badge }
+  if (DOCUMENT_EXTENSIONS.has(ext)) return { icon: 'document', typeLabel: ext === 'pdf' ? t.pdf : t.fileType(ext.toUpperCase()), badge }
+  if (CODE_EXTENSIONS.has(ext)) return { icon: 'code', typeLabel: t.fileType(ext.toUpperCase()), badge }
+  return { icon: 'file', typeLabel: t.fileType(ext.toUpperCase()), badge }
 }

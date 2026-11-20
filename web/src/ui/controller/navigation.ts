@@ -101,7 +101,7 @@ export class BrowserNavigationCoordinator {
         this.#recordFailure(attempt, false, error)
         this.#options.publish({
           ...this.#options.snapshot(),
-          browse: { kind: 'failed', status: 'This directory cannot be opened safely.',
+          browse: { kind: 'failed',
             error: this.#options.publicError(error) },
           directoryRetryable: false,
         })
@@ -228,7 +228,7 @@ export class BrowserNavigationCoordinator {
     try {
       this.#options.publish({
         ...this.#options.snapshot(),
-        browse: { kind: 'loading', status: `Loading ${directory.name}…`, error: null },
+        browse: { kind: 'loading', directoryName: directory.path.at(-1) ?? null, error: null },
         directoryRetryable: false,
       })
     } catch (error) {
@@ -286,7 +286,7 @@ export class BrowserNavigationCoordinator {
     this.#options.publish({
       ...this.#options.snapshot(),
       phase: 'browsing',
-      browse: { kind: 'failed', status: 'This directory could not be listed.',
+      browse: { kind: 'failed',
         error: this.#options.publicError(error) },
       breadcrumbs: breadcrumbsFor(this.#directories),
       directoryRetryable: retryable,
@@ -319,7 +319,7 @@ export class BrowserNavigationCoordinator {
     this.#options.publish({
       ...this.#options.snapshot(),
       browse: { kind: 'loading', error: null,
-        status: `Scanning ${directory.name}… ${progress.discoveredEntries} entries discovered; total still unknown.` },
+        directoryName: directory.path.at(-1) ?? null, discoveredEntries: progress.discoveredEntries },
     })
   }
 

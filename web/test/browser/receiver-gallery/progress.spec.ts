@@ -24,7 +24,7 @@ test('task progress counts written bytes while discovery is open and uses an exa
     await page.clock.runFor(1000)
   }
   await expect(task.getByText(/(?:KiB|MiB)\/s/)).toBeVisible()
-  await expect(task.getByText(/About .* left/)).toHaveCount(0)
+  await expect(task.getByText(/ left/)).toHaveCount(0)
   await update({ discovery: 'complete', discoveredBytes: 16n * MIB, discoveredFiles: 20 })
   await page.clock.runFor(1000)
   await expect(task.getByRole('progressbar')).toHaveAttribute('value', '25')
@@ -34,7 +34,7 @@ test('task progress counts written bytes while discovery is open and uses an exa
     await update({ receivedObjectBytes: BigInt(second) * MIB, writtenBytes: BigInt(second) * MIB, materializedBytes: BigInt(second) * MIB })
     await page.clock.runFor(1000)
   }
-  await expect(task.getByText(/1.0 MiB\/s · About/)).toBeVisible()
+  await expect(task.getByText(/1\.0 MiB\/s · .* left/)).toBeVisible()
   await task.scrollIntoViewIfNeeded()
   await capture(page, 'progress-exact')
   await page.setViewportSize({ width: 320, height: 568 })
@@ -43,5 +43,5 @@ test('task progress counts written bytes while discovery is open and uses an exa
   await capture(page, 'progress-narrow', true)
   await page.clock.runFor(6000)
   await expect(task.getByText(/0 B\/s/)).toBeVisible()
-  await expect(task.getByText(/About .* left/)).toHaveCount(0)
+  await expect(task.getByText(/ left/)).toHaveCount(0)
 })

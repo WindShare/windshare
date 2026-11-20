@@ -10,12 +10,12 @@ describe('receiver experience', () => {
       share: { kind: 'browser', shareInstance: 'share', name: 'Holiday photos', homeDirectoryId: 'root', singleFolder: true },
       breadcrumbs: [{ id: 'root', name: 'Holiday photos' }, { id: 'child', name: 'Day one' }],
       rows: [{ id: 'album', kind: 'directory', name: 'Album', selection: 'mixed' }],
-      draft: { mode: 'selection', scope: 'selected', label: 'Album', summary: '1 folder selected, excluding 1 item', empty: false },
-      startAdmission: { allowed: false, reason: 'Finish saving the current result first.', canReleaseCurrent: false },
-      retained: { kind: 'available', operations: [], error: null, pending: { operationId: 'task', action: 'save' } },
+      draft: { mode: 'selection', scope: 'selected', label: 'Album', excludedItems: 1, empty: false },
+      startAdmission: { allowed: false, reason: 'savePrepared', canReleaseCurrent: false },
+      retained: { kind: 'available', operations: [], pending: { operationId: 'task', action: 'save' } },
     }))} />)
     expect(html).toContain('Holiday photos</h1>')
-    expect(html).toContain('Finish saving the current result first.')
+    expect(html).toContain('Save or discard the prepared result')
     expect(html).toMatch(/<button[^>]*title="Holiday photos"[^>]*>Holiday photos<\/button>/)
     expect(html).not.toMatch(/<button[^>]*disabled[^>]*>Album<\/button>/)
     expect(html).not.toMatch(/<input[^>]*disabled/)
@@ -25,7 +25,7 @@ describe('receiver experience', () => {
   it('keeps empty explicit selection distinct from Download all', () => {
     const html = renderToString(<App controller={experienceController(experienceSnapshot({
       phase: 'browsing', breadcrumbs: [{ id: 'root', name: 'Shared files' }],
-      draft: { mode: 'selection', scope: 'selected', label: 'Selected items', summary: 'No items selected', empty: true },
+      draft: { mode: 'selection', scope: 'selected', label: 'Selected items', excludedItems: 0, empty: true },
     }))} />)
     expect(html.replace(/<svg\b[^>]*>[\s\S]*?<\/svg>/g, '')).toMatch(/<button[^>]*disabled[^>]*>Download selected<\/button>/)
     expect(html).toContain('Select items to download')
@@ -35,7 +35,7 @@ describe('receiver experience', () => {
   it('keeps admitted local finalization visible as the current task without duplicating its history row', () => {
     const html = renderToString(<App controller={experienceController(experienceSnapshot({
       phase: 'browsing', breadcrumbs: [{ id: 'root', name: 'Shared files' }],
-      retained: { kind: 'available', error: null, pending: { operationId: 'local-task', action: 'continue' }, operations: [{
+      retained: { kind: 'available', pending: { operationId: 'local-task', action: 'continue' }, operations: [{
         operationId: 'local-task', receiveIntentDigest: 'intent', lifecycleGeneration: 1n,
         display: { objectLabel: 'Summer photos', createdAtMilliseconds: 1000 },
         lifecycle: { kind: 'resumable-package', operationId: 'local-task', receiveIntentDigest: 'intent', generation: 1n,

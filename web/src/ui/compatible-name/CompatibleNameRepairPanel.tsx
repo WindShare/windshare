@@ -1,3 +1,5 @@
+import { receiverCopy } from '../locales/receiver'
+import { useCopy } from '../preferences/use-preferences'
 import { useState } from 'react'
 import type { CompatibleNameRepairPresentation } from '../compatible-name-repair-presentation'
 
@@ -7,12 +9,13 @@ export function CompatibleNameRepairPanel(props: {
   readonly busy?: boolean
   readonly writeClipboard?: (text: string) => Promise<void>
 }) {
+  const t = useCopy(receiverCopy).restoration
   const repair = props.repair
   if (repair === null || repair.replacementCount === 0) return null
   return (
     <section
       className={`compatible-name-repair compatible-name-repair-${repair.actionMode}`}
-      aria-label="Compatible-name restoration"
+      aria-label={t.panel}
     >
       <div role="status">
         <strong>{repair.noticeTitle}</strong>
@@ -22,7 +25,7 @@ export function CompatibleNameRepairPanel(props: {
       {repair.visibility === 'notice' && <p>{repair.actionDescription}</p>}
       {repair.visibility === 'secondary' && (
           <details>
-            <summary>{repair.scriptName === null ? 'Original name mappings' : 'Restore names after stopping'}</summary>
+            <summary>{repair.scriptName === null ? t.mappings : t.restoreAfterStop}</summary>
             <RestorationAction {...props} repair={repair} />
           </details>
         )}
@@ -37,6 +40,7 @@ function RestorationAction(props: {
   readonly busy?: boolean
   readonly writeClipboard?: (text: string) => Promise<void>
 }) {
+  const t = useCopy(receiverCopy).restoration
   const { repair } = props
   return (
     <>
@@ -44,7 +48,7 @@ function RestorationAction(props: {
       <p>{repair.actionDescription}</p>
       {repair.actionMode === 'catch-up-required' && props.catchUp !== undefined && (
         <button type="button" disabled={props.busy} onClick={props.catchUp}>
-          Finish local restoration catch-up
+          {t.finishSetup}
         </button>
       )}
       {repair.runCommand !== null && repair.shortCommand !== null && (
@@ -56,17 +60,17 @@ function RestorationAction(props: {
         />
       )}
       <details>
-        <summary>Affected names and restoration files</summary>
+        <summary>{t.affected}</summary>
         {repair.logicalPathSample.length > 0 && (
           <ul>{repair.logicalPathSample.map(path => <li key={path}><code>{path}</code></li>)}</ul>
         )}
         {repair.omittedLogicalPathCount > 0 && (
-          <p>{repair.omittedLogicalPathCount} more replacement(s) are not shown.</p>
+          <p>{t.omitted(repair.omittedLogicalPathCount)}</p>
         )}
         <dl>
-          {repair.scriptName !== null && <><dt>Restoration script</dt><dd><code>{repair.scriptName}</code></dd></>}
-          <dt>Name mapping report</dt><dd><code>{repair.sidecarName}</code></dd>
-          <dt>Location</dt><dd>{repair.placementLabel}</dd>
+          {repair.scriptName !== null && <><dt>{t.script}</dt><dd><code>{repair.scriptName}</code></dd></>}
+          <dt>{t.report}</dt><dd><code>{repair.sidecarName}</code></dd>
+          <dt>{t.location}</dt><dd>{repair.placementLabel}</dd>
         </dl>
       </details>
     </>
@@ -78,6 +82,7 @@ function RestorationCommand(props: {
   readonly shortCommand: string
   readonly writeClipboard?: (text: string) => Promise<void>
 }) {
+  const t = useCopy(receiverCopy).restoration
   const [copyState, setCopyState] = useState<'idle' | 'copying' | 'copied' | 'failed'>('idle')
   const copy = async () => {
     setCopyState('copying')
@@ -90,27 +95,24 @@ function RestorationCommand(props: {
   }
   return (
     <>
-      <p>Open PowerShell in the folder containing the restoration files and paste the command.
-        Keep both paired files together and preserve their position relative to the downloaded content.</p>
+      <p>{t.runHint}</p>
       <button type="button" disabled={copyState === 'copying'} onClick={() => { void copy() }}>
-        {copyState === 'copying' ? 'Copying…' : 'Copy restoration command'}
+        {copyState === 'copying' ? t.copying : t.copy}
       </button>
       <p role="status" aria-live="polite">
-        {copyState === 'copied' && 'Restoration command copied.'}
-        {copyState === 'failed' && 'Could not copy. Select and copy the command from the details below.'}
+        {copyState === 'copied' && t.copied}
+        {copyState === 'failed' && t.copyFailed}
       </p>
       <details open={copyState === 'failed' ? true : undefined}>
-        <summary>Command details</summary>
+        <summary>{t.command}</summary>
         <pre><code>{props.command}</code></pre>
-        <p>The launch options apply only to this PowerShell process. No permanent execution-policy change is needed.</p>
-        <p>If your environment already permits scripts, you can use this short command:</p>
+        <p>{t.policy}</p>
+        <p>{t.shortCommand}</p>
         <pre><code>{props.shortCommand}</code></pre>
       </details>
       <details>
-        <summary>Unable to run?</summary>
-        <p>Use the complete command above in PowerShell from the restoration files' folder.
-          Check that the matching .ps1 and .data files are both present.
-          For an unfinished receive, the script asks you to confirm before restoring names.</p>
+        <summary>{t.trouble}</summary>
+        <p>{t.troubleHint}</p>
       </details>
     </>
   )

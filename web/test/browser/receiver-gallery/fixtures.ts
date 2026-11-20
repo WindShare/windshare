@@ -1,13 +1,13 @@
 import { offerArtifacts } from '../../../src/output/planning/offers'
 import { createSelectionSpec, createZipArchiveArtifact, createCompleteDirectoryResultRoot, createWorkspaceBinding, createWorkspaceThenPublishPlan } from '../../../src/transfer/intent'
-import { EMPTY_OUTPUT_PRESENTATION } from '../../../src/ui/output'
+import { EMPTY_RECEIVE_RUNTIME, type ReceiveRuntimeSnapshot } from '../../../src/application/receive/state'
 import { EMPTY_PREVIEW, EMPTY_PROGRESS, type BrowseRow, type PreviewSnapshot, type ReceiverSnapshot } from '../../../src/ui/model'
-import { presentReceiveLifecycle } from '../../../src/ui/lifecycle-presentation'
 import { TASK_FIXTURES } from '../../../src/ui/tasks/fixtures'
 import { COMPLETE_DISCOVERY, environment, fsaTarget, handoffTarget, identity, portableOffer, projection, singleFileProof, treeProof, workspaceOffer } from '../../output/planning/fixture'
 
 export const SCENARIOS = ['portal', 'portal-empty', 'portal-loading', 'portal-failed', 'portal-saved', 'folder', 'exact-progress', 'long-names', 'full-directory', 'portrait', 'landscape', 'video', 'unsupported', 'reconnecting', 'capacity', 'verifying', 'partial-ready', 'browser-handoff', 'saved-cleanup'] as const
 export type Scenario = typeof SCENARIOS[number]
+export type GallerySnapshot = Omit<ReceiverSnapshot, 'output'> & { readonly output: ReceiveRuntimeSnapshot }
 export type CompletedDownloadScenario = 'published' | 'download-started' | 'workspace'
 
 export const ROOT_ROWS: readonly BrowseRow[] = [
@@ -57,16 +57,35 @@ export function photoPreview(portrait: boolean, fileId = 'photo'): PreviewSnapsh
     url: syntheticPhoto(width, height), presentationId: 1, mimeType: 'image/png', width, height }
 }
 
-async function portalInventorySnapshot(scenario: Scenario): Promise<ReceiverSnapshot> {
+async function portalInventorySnapshot(scenario: Scenario): Promise<GallerySnapshot> {
   const snapshot = await gallerySnapshot(scenario === 'portal-saved' ? 'saved-cleanup' : 'folder')
-  let retained: ReceiverSnapshot['retained'] = { kind: 'empty', operations: [], pending: null, error: null }
+  let retained: ReceiverSnapshot['retained'] = { kind: 'empty', operations: [], pending: null }
   if (scenario === 'portal-saved') return { ...snapshot, retained }
-  if (scenario === 'portal-loading') retained = { ...retained, kind: 'loading', error: null, pending: null }
-  if (scenario === 'portal-failed') retained = { ...retained, kind: 'failed', pending: null, error: 'Stored receive tasks could not be loaded.' }
-  return { ...snapshot, retained, output: EMPTY_OUTPUT_PRESENTATION, taskDisplay: null, progress: EMPTY_PROGRESS }
+  if (scenario === 'portal-loading') retained = { ...retained, kind: 'loading', pending: null }
+  if (scenario === 'portal-failed') retained = { ...retained, kind: 'failed', pending: null }
+  return { ...snapshot, retained, output: EMPTY_RECEIVE_RUNTIME, taskDisplay: null, progress: EMPTY_PROGRESS }
 }
 
-export async function gallerySnapshot(scenario: Scenario): Promise<ReceiverSnapshot> {
+async function galleryTaskOutput(
+  scenario: Scenario, offers: ReceiveRuntimeSnapshot['offers'], facts: (typeof TASK_FIXTURES)[string],
+): Promise<ReceiveRuntimeSnapshot> {
+  const artifact = await createZipArchiveArtifact(createCompleteDirectoryResultRoot(identity(30), 'Summer photos'))
+  const binding = await createWorkspaceBinding({ operationId: identity(40), workspaceId: identity(41),
+    repositoryRef: identity(42, 32), artifact })
+  const plan = await createWorkspaceThenPublishPlan(artifact, binding)
+  return {
+    ...EMPTY_RECEIVE_RUNTIME, offers, lifecycle: facts.lifecycle, directZipProgress: facts.directZipProgress,
+    plan, resolvedArtifact: artifact, activeControls: facts.lifecycle.kind === 'receiving' ? ['pause', 'stop'] : [],
+    repairSummary: scenario === 'saved-cleanup' ? {
+      committedCount: 1, logicalPathSample: [['project', 'settings.cfg']],
+      pairDisplayNames: { script: 'restore.windshare-abc234.ps1', sidecar: 'restore.windshare-abc234.data' },
+      placement: 'inside-logical-root', sidecarSync: 'current', terminalSettlement: 'complete',
+      latestObservedFooter: { committedCount: 1, state: 'completed' },
+    } : null,
+  }
+}
+
+export async function gallerySnapshot(scenario: Scenario): Promise<GallerySnapshot> {
   if (scenario.startsWith('portal-')) return portalInventorySnapshot(scenario)
   const single = ['portrait', 'landscape', 'video', 'unsupported'].includes(scenario)
   const selection = await createSelectionSpec({
@@ -83,23 +102,7 @@ export async function gallerySnapshot(scenario: Scenario): Promise<ReceiverSnaps
   const file: BrowseRow = { id: 'photo', kind: 'file',
     name,
     expectedSize: 524_288n, selection: 'selected' }
-  const artifact = await createZipArchiveArtifact(createCompleteDirectoryResultRoot(identity(30), 'Summer photos'))
-  const binding = await createWorkspaceBinding({ operationId: identity(40), workspaceId: identity(41),
-    repositoryRef: identity(42, 32), artifact })
-  const plan = await createWorkspaceThenPublishPlan(artifact, binding)
-  const lifecyclePresentation = presentReceiveLifecycle({
-    state: facts.lifecycle, artifact, plan, activeControls: facts.lifecycle.kind === 'receiving' ? ['pause', 'stop'] : [],
-    repairSummary: scenario === 'saved-cleanup' ? {
-      committedCount: 1, logicalPathSample: [['project', 'settings.cfg']],
-      pairDisplayNames: { script: 'restore.windshare-abc234.ps1', sidecar: 'restore.windshare-abc234.data' },
-      placement: 'inside-logical-root', sidecarSync: 'current', terminalSettlement: 'complete',
-      latestObservedFooter: { committedCount: 1, state: 'completed' },
-    } : null,
-  })
-  const output = single ? { ...EMPTY_OUTPUT_PRESENTATION, offers } : {
-    ...EMPTY_OUTPUT_PRESENTATION, offers, lifecycle: facts.lifecycle, directZipProgress: facts.directZipProgress,
-    plan, resolvedArtifact: artifact, lifecyclePresentation,
-  }
+  const output = single ? { ...EMPTY_RECEIVE_RUNTIME, offers } : await galleryTaskOutput(scenario, offers, facts)
   const regularRows = scenario === 'long-names' ? ROOT_ROWS.map(row => row.id === 'notes' ? { ...row, name: LONG_NAME } : row) : ROOT_ROWS
   const directoryRows = scenario === 'full-directory' ? FULL_DIRECTORY_ROWS : regularRows
   const directoryEntryCount = scenario === 'full-directory' ? CATALOG_PAGE_ENTRY_LIMIT : 18
@@ -107,14 +110,14 @@ export async function gallerySnapshot(scenario: Scenario): Promise<ReceiverSnaps
     share: single ? { kind: scenario === 'unsupported' ? 'file' : kind,
       shareInstance: identity(1), name: file.name, file }
       : { kind: 'browser', shareInstance: identity(1), name: 'Summer photos', homeDirectoryId: 'root', singleFolder: true },
-    browse: { kind: 'ready', status: 'Ready', error: null },
-    draft: { mode: 'scope', scope: 'current-folder', label: 'Summer photos', summary: '1 folder selected, excluding 2 items', empty: false },
+    browse: { kind: 'ready', error: null },
+    draft: { mode: 'scope', scope: 'current-folder', label: 'Summer photos', excludedItems: 2, empty: false },
     activeReceiveOperationId: output.lifecycle?.operationId ?? null,
-    startAdmission: { allowed: single, reason: single ? null : 'Pause the current download before starting another.', canReleaseCurrent: false },
+    startAdmission: { allowed: single, reason: single ? null : 'downloading', canReleaseCurrent: false },
     taskDisplay: single ? null : facts.display,
     connection: scenario === 'reconnecting'
       ? { kind: 'reconnecting', activity: { kind: 'connecting' } } : { kind: 'connected' },
-    phase: 'browsing', status: 'Sender connected', error: null,
+    phase: 'browsing', status: null, error: null,
     pathActivity: { lanes: scenario === 'reconnecting' ? [] : [
       { laneId: 1, laneEpoch: 0, route: 'application-relay', recentContent: false },
       { laneId: 3, laneEpoch: 1, route: 'direct', recentContent: !single },
@@ -130,7 +133,7 @@ export async function gallerySnapshot(scenario: Scenario): Promise<ReceiverSnaps
       ...(scenario === 'partial-ready' ? { fileErrors: 1 } : {}) },
     preview: scenario === 'portrait' || scenario === 'landscape' ? photoPreview(scenario === 'portrait') : EMPTY_PREVIEW,
     output,
-    retained: { kind: 'available', pending: null, error: null, operations: [0, 1].map(index => ({
+    retained: { kind: 'available', pending: null, operations: [0, 1].map(index => ({
       operationId: 'saved-gallery-' + index, receiveIntentDigest: 'fixture-intent', lifecycleGeneration: 1n,
       lifecycle: { kind: 'waiting-to-save', operationId: 'saved-gallery-' + index,
         receiveIntentDigest: 'fixture-intent', generation: 1n, packageDigest: 'fixture-package' },

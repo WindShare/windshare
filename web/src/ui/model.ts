@@ -1,3 +1,4 @@
+import type { ReceiveBlockReason } from '../application/receive/admission'
 import type { RetainedReceiveInventorySnapshot } from '../application/receive/retained/model'
 import type { OutputPresentationSnapshot } from './output'
 
@@ -14,7 +15,7 @@ export interface BrowseRow {
 
 export interface Breadcrumb {
   readonly id: string
-  readonly name: string
+  readonly name: string | null
 }
 
 export interface ReceiverProgress {
@@ -88,21 +89,27 @@ export type PreviewSnapshot =
 
 export type ShareIdentity =
   | Readonly<{ kind: 'photo' | 'video' | 'file'; shareInstance: string; name: string; file: BrowseRow }>
-  | Readonly<{ kind: 'browser'; shareInstance: string; name: string; homeDirectoryId: string; singleFolder: boolean }>
+  | Readonly<{ kind: 'browser'; shareInstance: string; name: string | null; homeDirectoryId: string; singleFolder: boolean }>
 
-export interface BrowseState {
-  readonly kind: 'idle' | 'loading' | 'ready' | 'failed'
-  readonly status: string
-  readonly error: string | null
-}
+export type BrowseState =
+  | Readonly<{ kind: 'idle' | 'ready'; error: null }>
+  | Readonly<{ kind: 'loading'; directoryName: string | null; discoveredEntries?: bigint; error: null }>
+  | Readonly<{ kind: 'failed'; error: string }>
+
+export type ReceiverStatus = 'enter-key' | 'connecting' | 'cancelled' | 'stopped' | 'replacement-selected' |
+  Readonly<{ kind: 'finding-replacement'; path: string }> | null
 
 export interface SelectionDraft {
   readonly mode: 'scope' | 'selection'
   readonly scope: 'whole-share' | 'current-folder' | 'selected'
-  readonly label: string
-  readonly summary: string
+  readonly label: import('../output/model/operation-display').ReceiveObjectLabel
+  readonly excludedItems: number
   readonly empty: boolean
 }
+
+/** Raw provider details have already passed through the capability redactor. */
+export type ReceiverFailure = string | Readonly<{ kind: 'blocked'; reason: ReceiveBlockReason }> |
+  Readonly<{ kind: 'source-changed' }> | Readonly<{ kind: 'invalidLink' | 'secureContext'; detail: string }>
 
 export interface ReceiverSnapshot {
   readonly connection: import('../receiver/connection-state').ReceiverConnectionSnapshot |
@@ -110,13 +117,13 @@ export interface ReceiverSnapshot {
   readonly share: ShareIdentity | null
   readonly browse: BrowseState
   readonly draft: SelectionDraft
-  readonly startAdmission: Readonly<{ allowed: boolean; reason: string | null; canReleaseCurrent: boolean }>
+  readonly startAdmission: Readonly<{ allowed: boolean; reason: ReceiveBlockReason | null; canReleaseCurrent: boolean }>
   readonly activeReceiveOperationId: string | null
   readonly taskDisplay: import('../output/model/operation-display').ReceiveOperationDisplay | null
   readonly pathActivity: import('../receiver/path-activity').ReceiverPathActivitySnapshot
   readonly phase: ReceiverPhase
-  readonly status: string
-  readonly error: string | null
+  readonly status: ReceiverStatus
+  readonly error: ReceiverFailure | null
   readonly rows: readonly BrowseRow[]
   readonly breadcrumbs: readonly Breadcrumb[]
   readonly pageIndex: number

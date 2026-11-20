@@ -1,3 +1,4 @@
+import type { ReceiveBlockReason } from './admission'
 import type { ReceiveOperationDisplay } from '../../output/model/operation-display'
 import type { FailureFact } from '../../diagnostics/incident'
 import type {
@@ -179,7 +180,7 @@ export interface RetainedReceiveOperation {
   readonly sourceRevisionFailures?: import('../../transfer/lifecycle/source-revision').SourceRevisionFailures
   readonly browserDelivery?: import('../../output/model/browser-delivery').BrowserDeliverySummary
   readonly recoverySummary?: RecoverySummary
-  readonly unavailableReason?: string
+  readonly unavailableReason?: ReceiveBlockReason
 }
 
 export interface RetainedReceiveInventory {

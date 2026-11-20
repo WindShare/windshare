@@ -364,7 +364,6 @@ export class FakeJoinedShare {
     return Object.freeze({
       id: identityBytes(1),
       idText: ROOT_ID,
-      name: 'Shared files',
       path: Object.freeze([]),
       ancestry: Object.freeze([ROOT_ID]),
     })
@@ -783,7 +782,7 @@ export function retainedOperation(): RetainedReceiveOperation {
     lifecycle,
     continuation: 'needs-attention',
     actions: Object.freeze([]),
-    unavailableReason: 'Ownership needs attention; no automatic action is safe.',
+    unavailableReason: 'ownershipUnknown',
   })
 }
 

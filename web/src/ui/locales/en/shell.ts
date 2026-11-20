@@ -1,0 +1,16 @@
+export const shell = {
+  language: 'Language',
+  home: 'WindShare home',
+  sharedFiles: 'Shared files',
+  openYourShare: 'Open your share',
+  openingShare: 'Opening your share',
+  openFailed: 'WindShare could not open. Try again, or reopen the original sharing link.',
+  retry: 'Try again',
+  loading: 'Loading…',
+  backToShare: 'Back to share',
+  closeDownloads: 'Close downloads',
+  reportShare: 'Report share',
+  appearanceSystem: 'Appearance: System',
+  appearanceLight: 'Appearance: Light',
+  appearanceDark: 'Appearance: Dark',
+}

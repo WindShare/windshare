@@ -29,7 +29,7 @@ export class ReceiverExperienceObservability {
       }
       this.#tasks = tasks
       const current = presentSavingActions({ offers: snapshot.output.offers,
-        disabledReason: snapshot.startAdmission.reason }).transition
+        blockedBy: snapshot.startAdmission.reason }).transition
       if (compareSavingTransition(this.#saving, current) !== null) {
         observer(Object.freeze({ name: 'receiver_experience', transition: 'saving',
           projectionEpoch: current.projection_epoch, choiceId: current.choice_id,

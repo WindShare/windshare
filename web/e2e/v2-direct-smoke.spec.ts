@@ -151,7 +151,7 @@ test('receives and recovers downloads through the real sender and relay', async 
     await expect(page.getByRole('dialog').getByText('Elapsed', { exact: true })).toBeVisible()
     await expect(page.getByText('Ready to save', { exact: true })).toHaveCount(0)
     await expect(page.getByText('Saved', { exact: true })).toHaveCount(0)
-    await expect(page.getByRole('dialog').getByText(/1 files \u00b7 .* total/u)).toBeVisible()
+    await expect(page.getByRole('dialog').getByText(/1 file \u00b7 .* total/u)).toBeVisible()
     await assertDirectoryDownload(download)
 
     const browserDiagnostics = await page.evaluate(() => {

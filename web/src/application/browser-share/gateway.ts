@@ -52,7 +52,6 @@ import { JoinedProjectionSource } from './discovery/source'
 export interface BrowseDirectory {
   readonly id: Uint8Array<ArrayBuffer>
   readonly idText: string
-  readonly name: string
   readonly path: readonly string[]
   readonly ancestry: readonly string[]
 }
@@ -120,7 +119,6 @@ export class JoinedBrowserShare {
     return Object.freeze({
       id: this.descriptor.syntheticRoot.slice(),
       idText: this.descriptor.syntheticRootId,
-      name: 'Shared files',
       path: Object.freeze([]),
       ancestry: Object.freeze([this.descriptor.syntheticRootId]),
     })
@@ -144,7 +142,6 @@ export class JoinedBrowserShare {
     return Object.freeze({
       id: entry.id.slice(),
       idText: entry.idText,
-      name: entry.name,
       path,
       ancestry: Object.freeze([...parent.ancestry, entry.idText]),
     })

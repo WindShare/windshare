@@ -1,3 +1,5 @@
+import { receiverCopy } from '../locales/receiver'
+import { useCopy } from '../preferences/use-preferences'
 import { useId } from 'react'
 import type { ReceiverReconnectActivity } from '../../receiver/connection-state'
 import { useCountdownSeconds } from './countdown'
@@ -6,16 +8,17 @@ export function ConnectionRecovery({ activity, retry }: {
   readonly activity: ReceiverReconnectActivity
   readonly retry: () => void
 }) {
+  const t = useCopy(receiverCopy).connection
   const descriptionId = useId()
   const canRetry = activity.kind === 'waiting' && activity.reason === 'backoff'
-  let buttonLabel = 'Please wait'
-  if (activity.kind === 'connecting') buttonLabel = 'Connecting…'
-  else if (canRetry) buttonLabel = 'Retry now'
-  return <section className="connection-recovery" aria-label="Connection recovery">
+  let buttonLabel = t.pleaseWait
+  if (activity.kind === 'connecting') buttonLabel = t.connecting
+  else if (canRetry) buttonLabel = t.retryNow
+  return <section className="connection-recovery" aria-label={t.connectionRecovery}>
     <div className="connection-recovery-copy">
-      <p className="connection-recovery-status" role="status" id={descriptionId}>{recoveryMessage(activity)}</p>
+      <p className="connection-recovery-status" role="status" id={descriptionId}>{recoveryMessage(activity, t)}</p>
       {activity.kind === 'waiting' && <RetryCountdown key={activity.retryAt} retryAt={activity.retryAt} />}
-      <p>Keep this page open to preserve your download progress.</p>
+      <p>{t.keepOpen}</p>
     </div>
     <button type="button" disabled={!canRetry} aria-describedby={descriptionId} onClick={retry}>
       {buttonLabel}
@@ -23,21 +26,22 @@ export function ConnectionRecovery({ activity, retry }: {
   </section>
 }
 
-function recoveryMessage(activity: ReceiverReconnectActivity): string {
-  if (activity.kind === 'connecting') return 'Reconnecting to the sender…'
+function recoveryMessage(activity: ReceiverReconnectActivity, t: typeof receiverCopy.en.connection): string {
+  if (activity.kind === 'connecting') return t.reconnecting
   switch (activity.reason) {
-    case 'backoff': return 'Waiting to reconnect. You can retry now.'
-    case 'authorization': return 'Official relay access is restricted for this share.'
-    case 'bandwidth': return 'Relay bandwidth is busy. Your download will resume automatically.'
-    case 'capacity': return 'Taking a short pause after repeated connection attempts.'
-    case 'server': return 'The connection service asked us to wait before retrying.'
+    case 'backoff': return t.backoff
+    case 'authorization': return t.authorization
+    case 'bandwidth': return t.bandwidth
+    case 'capacity': return t.capacity
+    case 'server': return t.server
   }
 }
 
 function RetryCountdown({ retryAt }: { readonly retryAt: number }) {
+  const t = useCopy(receiverCopy).connection
   const seconds = useCountdownSeconds(retryAt)
   // Countdown ticks must not repeatedly interrupt screen reader announcements.
   return <p className="connection-recovery-countdown" role="timer" aria-live="off">
-    {seconds > 0 ? `Retrying automatically in ${seconds} s.` : 'Retrying shortly…'}
+    {seconds > 0 ? t.retryIn(seconds) : t.retryShortly}
   </p>
 }

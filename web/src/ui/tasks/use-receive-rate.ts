@@ -1,3 +1,5 @@
+import { receiverCopy } from '../locales/receiver'
+import { useCopy } from '../preferences/use-preferences'
 import { useEffect, useEffectEvent, useState } from 'react'
 import { formatBytes } from '../progress-presentation'
 import type { TaskPresentation } from './model'
@@ -8,6 +10,7 @@ const SECONDS_PER_MINUTE = 60
 const MINUTES_PER_HOUR = 60
 
 export function useReceiveRate(task: TaskPresentation): string | null {
+  const t = useCopy(receiverCopy).downloads
   const active = task.stage === 'downloading'
   const identity = `${task.operationId}:${task.progress?.sampleIdentity ?? ''}`
   const [sample, setSample] = useState<Readonly<{ identity: string; rate: ReceiveRate | null }> | null>(null)
@@ -31,15 +34,15 @@ export function useReceiveRate(task: TaskPresentation): string | null {
   }, [active, identity])
   if (!active || sample?.identity !== identity || sample.rate === null) return null
   const rate = sample.rate
-  const remaining = rate.remainingSeconds === null ? '' : ` · About ${formatRemainingTime(rate.remainingSeconds)} left`
+  const remaining = rate.remainingSeconds === null ? '' : ` · ${formatRemainingTime(rate.remainingSeconds, t)}`
   return `${formatBytes(rate.bytesPerSecond)}/s${remaining}`
 }
 
-function formatRemainingTime(seconds: number): string {
-  if (seconds < SECONDS_PER_MINUTE) return 'less than a minute'
+function formatRemainingTime(seconds: number, t: typeof receiverCopy.en.downloads): string {
+  if (seconds < SECONDS_PER_MINUTE) return t.underMinuteRemaining
   const minutes = Math.ceil(seconds / SECONDS_PER_MINUTE)
-  if (minutes < MINUTES_PER_HOUR) return `${minutes} min`
+  if (minutes < MINUTES_PER_HOUR) return t.remaining(t.minutes(minutes))
   const hours = Math.floor(minutes / MINUTES_PER_HOUR)
   const rest = minutes % MINUTES_PER_HOUR
-  return rest === 0 ? `${hours} hr` : `${hours} hr ${rest} min`
+  return t.remaining(rest === 0 ? t.hours(hours) : `${t.hours(hours)} ${t.minutes(rest)}`)
 }

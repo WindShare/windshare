@@ -1,6 +1,8 @@
+import { receiverCopy } from '../../../src/ui/locales/receiver'
 import { expect, test } from '@playwright/test'
 import { capture, galleryEvidence, GALLERY_PATH, showScenario } from './assertions'
 
+const { actions, downloads, failures, stage } = receiverCopy['zh-CN']
 const MINIMUM_TOUCH_TARGET_HEIGHT = 44
 
 test.beforeEach(async ({ page }) => {
@@ -38,31 +40,31 @@ test('explicit dark preference applies to Downloads and nested confirmations wit
     await expect(trigger.locator('.attention-count')).toHaveText('2')
     const before = await galleryEvidence(page)
     await trigger.click()
-    const dialog = page.getByRole('dialog', { name: 'Downloads', exact: true })
+    const dialog = page.getByRole('dialog', { name: downloads.downloads, exact: true })
     await expect(dialog).toHaveCSS('color-scheme', 'dark')
     const background = await dialog.evaluate(element => getComputedStyle(element).backgroundColor)
     await expect(dialog.locator('.task-card')).toHaveCount(3)
     await capture(page, 'portal-downloads-' + width + '-os-light')
-    await dialog.getByRole('button', { name: 'Details', exact: true }).last().click()
+    await dialog.getByRole('button', { name: downloads.details, exact: true }).last().click()
     const details = page.locator('.downloads-sheet')
-    await expect(details.getByRole('button', { name: 'All downloads', exact: true })).toBeFocused()
+    await expect(details.getByRole('button', { name: downloads.allDownloads, exact: true })).toBeFocused()
     await capture(page, 'portal-task-details-' + width + '-os-light')
-    await details.getByText('Remove task or retained data', { exact: true }).click()
-    const remove = details.getByRole('button', { name: 'Delete retained result', exact: true })
+    await details.getByText(downloads.remove, { exact: true }).click()
+    const remove = details.getByRole('button', { name: actions.deleteRetained, exact: true })
     await remove.click()
-    const confirmation = page.getByRole('dialog', { name: 'Delete retained result', exact: true })
+    const confirmation = page.getByRole('dialog', { name: actions.deleteRetained, exact: true })
     await expect(confirmation).toHaveCSS('color-scheme', 'dark')
     await capture(page, 'portal-confirmation-' + width + '-os-light')
     await page.keyboard.press('Escape')
     await expect(remove).toBeFocused()
     await expect(details).toBeVisible()
-    await page.getByRole('button', { name: 'All downloads', exact: true }).click()
-    await expect(dialog.getByRole('button', { name: 'Details', exact: true }).last()).toBeFocused()
+    await page.getByRole('button', { name: downloads.allDownloads, exact: true }).click()
+    await expect(dialog.getByRole('button', { name: downloads.details, exact: true }).last()).toBeFocused()
     for (const colorScheme of ['dark', 'light'] as const) {
       await page.emulateMedia({ colorScheme })
       await expect(dialog).toHaveCSS('background-color', background)
     }
-    await dialog.getByRole('button', { name: 'Close downloads', exact: true }).click()
+    await dialog.getByRole('button', { name: downloads.closeDownloads, exact: true }).click()
     await expect(trigger).toBeFocused()
     expect(await galleryEvidence(page)).toMatchObject({ taskId: before.taskId, taskLabel: before.taskLabel, taskBytes: before.taskBytes })
     expect((await galleryEvidence(page)).intents.slice(before.intents.length))
@@ -81,14 +83,14 @@ test('stable quiet entry distinguishes empty, loading, failed and saved inventor
     await expect(page.getByRole('dialog')).toHaveCount(0)
     await trigger.click()
     const dialog = page.getByRole('dialog')
-    await expect(dialog.getByText('No downloads yet.', { exact: true })).toHaveCount(scenario === 'portal-empty' ? 1 : 0)
-    await expect(dialog.getByText('Loading downloads…', { exact: true })).toHaveCount(scenario === 'portal-loading' ? 1 : 0)
+    await expect(dialog.getByText(downloads.empty, { exact: true })).toHaveCount(scenario === 'portal-empty' ? 1 : 0)
+    await expect(dialog.getByText(downloads.loading, { exact: true })).toHaveCount(scenario === 'portal-loading' ? 1 : 0)
     await expect(dialog.getByRole('alert')).toHaveCount(scenario === 'portal-failed' ? 1 : 0)
-    if (scenario === 'portal-failed') await expect(dialog).toContainText('Stored receive tasks could not be loaded.')
+    if (scenario === 'portal-failed') await expect(dialog).toContainText(failures.history)
     if (scenario === 'portal-saved') {
       await expect(dialog.locator('.task-card')).toHaveCount(1)
-      await expect(dialog.locator('.task-stage')).toHaveText('Saved')
-      await expect(dialog).toContainText('1 filename')
+      await expect(dialog.locator('.task-stage')).toHaveText(stage.saved)
+      await expect(dialog).toContainText(downloads.adjustedCount(1))
     }
     await capture(page, scenario)
     await page.keyboard.press('Escape')

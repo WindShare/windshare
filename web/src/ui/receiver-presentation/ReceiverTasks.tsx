@@ -1,3 +1,5 @@
+import { receiverCopy } from '../locales/receiver'
+import { useCopy } from '../preferences/use-preferences'
 import { useRef, useState, useSyncExternalStore } from 'react'
 import type { ReceiverController } from '../controller'
 import { taskActions } from '../experience/task-actions'
@@ -24,13 +26,14 @@ function isSingleFileResult(snapshot: TaskSnapshot): boolean {
 
 function renderSavingControls(controller: ReceiverController, snapshot: TaskSnapshot, actionLabel: string) {
   const { current, draft, output, startAdmission } = snapshot
+  const language = output.language
   const saving = presentSavingActions({
     offers: output.offers, actionLabel,
-    disabledReason: draft.empty ? 'Select items to download' : startAdmission.reason,
-  })
+    blockedBy: draft.empty ? 'emptySelection' : startAdmission.reason,
+  }, language)
   return <SavingControls model={saving} activation={output.activationPresentation}
-    currentTaskContext={current !== null && !draft.empty && !startAdmission.allowed && startAdmission.reason !== null
-      ? { operationId: current.operationId, reason: startAdmission.reason } : null}
+    currentTaskContext={current !== null && !draft.empty && !startAdmission.allowed && saving.disabledReason !== null
+      ? { operationId: current.operationId, reason: saving.disabledReason } : null}
     actionLabel={actionLabel}
     choose={choice => controller.chooseArtifact(choice.offered.choice.choiceId, choice.recoveryPreference)}
     retry={() => controller.retryOutputConfirmation()} cancel={() => controller.cancelPreparing()}
@@ -52,10 +55,11 @@ export function ReceiverDownloads({ controller, open, onOpenChange, ...entry }: 
 export function ReceiverPrimarySaving({ controller }: { readonly controller: ReceiverController }) {
   const source = controller.presentation.task
   const snapshot = useSyncExternalStore(source.subscribe, source.getSnapshot, source.getSnapshot)
+  const t = useCopy(receiverCopy).saving
   const singleResult = isSingleFileResult(snapshot)
   const additionalReceive = singleResult && snapshot.current !== null && snapshot.current.primaryAction !== null
   if (!snapshot.hasContent || additionalReceive) return null
-  const actionLabel = singleResult ? 'Download from sender again' : downloadScopeLabel(snapshot.share, snapshot.draft)
+  const actionLabel = singleResult ? t.downloadAgain : downloadScopeLabel(snapshot.share, snapshot.draft, t)
   return renderSavingControls(controller, snapshot, actionLabel)
 }
 
@@ -69,18 +73,19 @@ export function ReceiverActivity({ controller, openDownloads }: {
   const [details, setDetails] = useState(false)
   const invoker = useRef<HTMLButtonElement>(null)
   const actions = taskActions(controller, snapshot)
+  const t = useCopy(receiverCopy).saving
   const closeDetails = () => { controller.recordExperienceIntent('close-details'); setDetails(false) }
   const singleResult = isSingleFileResult(snapshot)
-  const actionLabel = singleResult ? 'Download from sender again' : downloadScopeLabel(share, snapshot.draft)
+  const actionLabel = singleResult ? t.downloadAgain : downloadScopeLabel(share, snapshot.draft, t)
   const delivered = isReceiveOutputDelivered(snapshot.output.lifecycle)
-  const newOperation = delivered ? null : presentNewReceiveOperation({ plan: snapshot.output.plan, lifecycle: snapshot.output.lifecycle })
+  const newOperation = delivered ? null : presentNewReceiveOperation({ plan: snapshot.output.plan, lifecycle: snapshot.output.lifecycle }, snapshot.output.language)
   const matching = current === null && share !== null ? tasks.find(task => snapshot.retained.operations.some(operation =>
     operation.operationId === task.operationId && operation.shareInstance === share.shareInstance && task.primaryAction !== null)) : undefined
   const additionalReceive = singleResult && current !== null && current.primaryAction !== null
   return <>
     {hasContent && <InAppBrowserHint />}
     {matching !== undefined && <div className="continuation-suggestion">
-      <span>Continue {matching.objectLabel}</span>
+      <span>{t.continueObject(matching.objectLabel)}</span>
       <button type="button" onClick={() => { if (matching.primaryAction !== null) actions.perform(matching.primaryAction) }}>{matching.primaryAction?.label}</button>
     </div>}
     {current !== null && <TaskCard task={current} actions={actions} busy={snapshot.retained.pending !== null} onDetails={element => {
@@ -90,17 +95,17 @@ export function ReceiverActivity({ controller, openDownloads }: {
       <summary>{actionLabel}</summary>
       {renderSavingControls(controller, snapshot, actionLabel)}
     </details>}
-    {snapshot.startAdmission.canReleaseCurrent && <p className="new-operation"><button type="button" onClick={() => controller.startNewReceiveOperation()}>Start another download</button></p>}
+    {snapshot.startAdmission.canReleaseCurrent && <p className="new-operation"><button type="button" onClick={() => controller.startNewReceiveOperation()}>{t.startAnother}</button></p>}
     {newOperation !== null && <details className="new-operation"><summary>{newOperation.title}</summary><p>{newOperation.description}</p>
       <button type="button" onClick={() => controller.startNewReceiveOperation()}>{newOperation.actionLabel}</button></details>}
     {details && current !== null && <DetailSheet title={current.objectLabel} onClose={closeDetails} returnFocus={invoker}>
       <TaskDetails task={current} actions={actions} busy={snapshot.retained.pending !== null}>
         <TaskSourceDetails operationId={current.operationId} snapshot={snapshot} controller={controller} />
         {controller.canRetainCurrentOperation && <div className="retained-handoff">
-          <p>Keep this paused download in Downloads to resume later or save completed files.</p>
+          <p>{t.keepHint}</p>
           <button type="button" onClick={async () => {
             if (await controller.retainCurrentOperation()) { closeDetails(); openDownloads() }
-          }}>Keep progress in Downloads</button>
+          }}>{t.keepProgress}</button>
         </div>}
       </TaskDetails>
     </DetailSheet>}

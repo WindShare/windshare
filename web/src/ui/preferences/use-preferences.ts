@@ -1,3 +1,4 @@
+import type { Language } from './model'
 import { useSyncExternalStore } from 'react'
 import { browserPreferences } from './browser'
 
@@ -6,4 +7,8 @@ export function usePreferences() {
     browserPreferences.subscribe, browserPreferences.getSnapshot, browserPreferences.getSnapshot,
   )
   return { ...preferences, update: browserPreferences.update }
+}
+
+export function useCopy<T>(catalog: Readonly<Record<Language, T>>): T {
+  return catalog[usePreferences().language]
 }

@@ -8,6 +8,15 @@ export interface UIPreferences {
 
 export const PREFERENCES_KEY = 'windshare.ui.preferences'
 
+function preferredLanguage(languages: readonly string[]): Language {
+  for (const tag of languages) {
+    const primary = tag.toLowerCase().split('-')[0]
+    if (primary === 'zh') return 'zh-CN'
+    if (primary === 'en') return 'en'
+  }
+  return 'en'
+}
+
 export function parsePreferences(raw: string | null, languages: readonly string[]): UIPreferences {
   let saved: Partial<UIPreferences> = {}
   try {
@@ -16,9 +25,8 @@ export function parsePreferences(raw: string | null, languages: readonly string[
   } catch {
     // A stale or damaged preference must never block access to a share.
   }
-  const fallbackLanguage = languages[0]?.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en'
   const language = saved.language === 'zh-CN' || saved.language === 'en'
-    ? saved.language : fallbackLanguage
+    ? saved.language : preferredLanguage(languages)
   return {
     language,
     appearance: saved.appearance === 'light' || saved.appearance === 'dark' ? saved.appearance : 'system',

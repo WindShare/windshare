@@ -36,7 +36,7 @@ class BrowsableTransferShare extends FakeJoinedShare {
   }
 
   childDirectory(parent: BrowseDirectory, entry: CatalogEntry): BrowseDirectory {
-    return { id: entry.id, idText: entry.idText, name: entry.name,
+    return { id: entry.id, idText: entry.idText,
       path: [...parent.path, entry.name], ancestry: [...parent.ancestry, entry.idText] }
   }
 
@@ -76,7 +76,7 @@ describe('draft, browsing and committed output ownership', () => {
     await startTransfer(controller, joined)
     const committed = controller.getSnapshot().output
     const label = controller.getSnapshot().taskDisplay
-    expect(label?.objectLabel).toBe('1 file')
+    expect(label?.objectLabel).toEqual({ kind: 'selection', folders: 0, files: 1 })
     joined.onProgress?.({ ...EMPTY_PROGRESS, writtenBytes: 64n, discoveredBytes: 128n,
       discoveredFiles: 1, transferJobId: identityText(76) } as TransferProgress)
     const progress = controller.getSnapshot().progress

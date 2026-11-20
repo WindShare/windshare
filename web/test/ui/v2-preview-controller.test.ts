@@ -174,9 +174,11 @@ describe('v2 preview click controller boundary', () => {
     } as unknown as BrowserReceiverGateway
     const controller = new ReceiverController(gateway, { receive: INERT_TEST_RECEIVE_COMPOSITION })
     controller.initialize({ capabilityInput: 'key', pageUrl: 'https://receiver.invalid/s/share' })
-    await waitFor(() => controller.getSnapshot().browse.status.includes('257 entries discovered'))
-    expect(controller.getSnapshot().browse.status).toContain('257 entries discovered')
-    expect(controller.getSnapshot().browse.status).toContain('total still unknown')
+    await waitFor(() => {
+      const browse = controller.getSnapshot().browse
+      return browse.kind === 'loading' && browse.discoveredEntries === 257n
+    })
+    expect(controller.getSnapshot().entryCount).toBe(0)
     releasePage()
     await turn()
     expect(controller.getSnapshot().phase).toBe('browsing')

@@ -111,8 +111,8 @@ describe('saving action presenter over eligible offers', () => {
       projection(spec, treeProof(), 1n), COMPLETE_DISCOVERY,
       environment({ targets: [fsaTarget()] }),
     )
-    const reason = 'Finish the current download before starting another.'
-    const blocked = presentSavingActions({ offers, disabledReason: reason })
+    const reason = 'A download is in progress.'
+    const blocked = presentSavingActions({ offers, blockedBy: 'downloading' })
     expect(blocked.primary?.disabledReason).toBe(reason)
     expect(blocked.alternatives.every(group => group.primary.disabledReason === reason)).toBe(true)
   })

@@ -50,6 +50,15 @@ describe('ReceiveOperation V2', () => {
     expect(restored.digest).toBe(baseline.digest)
     expect(restored.receiveIntent.canonicalBytes).toEqual(receiveIntent.canonicalBytes)
     expect(Object.isFrozen(restored.display)).toBe(true)
+    const selection = { kind: 'selection' as const, folders: 2, files: 1 }
+    const generatedDisplay = { objectLabel: selection, destinationLabel: { kind: 'browser-downloads' as const }, createdAtMilliseconds: 123456 }
+    const selected = await createReceiveOperationV2({ receiveIntent, preClickRanking: [choice.id], display: generatedDisplay })
+    selection.files = 3
+    const history = await decodeStoredReceiveOperation(structuredClone(storedReceiveOperationRecord(selected)))
+    expect(history.display).toEqual({ ...generatedDisplay, objectLabel: { ...selection, files: 1 } })
+    expect(history.digest).toBe(baseline.digest)
+    expect(Object.isFrozen(history.display?.objectLabel)).toBe(true)
+
     const invalid = { ...storedReceiveOperationRecord(operation), display: { objectLabel: '', createdAtMilliseconds: -1 } }
     const repaired = await decodeStoredReceiveOperation(invalid)
     expect(repaired.display).toBeUndefined()

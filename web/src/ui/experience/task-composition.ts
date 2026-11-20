@@ -1,3 +1,4 @@
+import type { ReceiveAdmission } from '../../application/receive/admission'
 import type { ReceiverSnapshot } from '../model'
 import type { RetainedReceiveAction } from '../../application/receive/contracts'
 import type { LifecycleUserAction } from '../../application/receive/actions'
@@ -9,8 +10,8 @@ import { taskConnectionBlocking } from './share-presentation'
 export type TaskInputs = Pick<ReceiverSnapshot, 'output' | 'progress' | 'taskDisplay' | 'connection' |
   'share' | 'retained' | 'activeReceiveOperationId' | 'startAdmission'>
 export type RetainedAdmission = (operation: ReceiverSnapshot['retained']['operations'][number],
-  action: RetainedReceiveAction) => Readonly<{ allowed: boolean; reason: string | null }>
-export type ActiveAdmission = (action: LifecycleUserAction) => Readonly<{ allowed: boolean; reason: string | null }>
+  action: RetainedReceiveAction) => ReceiveAdmission
+export type ActiveAdmission = (action: LifecycleUserAction) => ReceiveAdmission
 export interface TaskComposition {
   readonly current: TaskPresentation | null
   readonly tasks: readonly TaskPresentation[]
@@ -27,6 +28,7 @@ export class TaskComposer {
   #result: TaskComposition = { current: null, tasks: [], history: [] }
 
   compose(snapshot: TaskInputs, admission?: RetainedAdmission, activeAdmission?: ActiveAdmission): TaskComposition {
+    const { language } = snapshot.output
     const blocking = taskConnectionBlocking(snapshot.connection)
     const activeInputs = [snapshot.output, snapshot.progress, snapshot.taskDisplay, blocking,
       snapshot.retained.pending, snapshot.startAdmission.allowed, snapshot.startAdmission.reason, activeAdmission]
@@ -36,10 +38,10 @@ export class TaskComposer {
       this.#currentFacts = activeTaskFacts({
         output: snapshot.output, progress: snapshot.progress, display: snapshot.taskDisplay, blocking,
         ...(activeAdmission === undefined ? {} : { actionAdmission: activeAdmission }),
-      })
-      this.#active = this.#currentFacts === null ? null : presentTask(this.#currentFacts)
+      }, language)
+      this.#active = this.#currentFacts === null ? null : presentTask(this.#currentFacts, language)
     }
-    const historyInputs = [snapshot.retained, snapshot.share?.shareInstance, blocking,
+    const historyInputs = [language, snapshot.retained, snapshot.share?.shareInstance, blocking,
       snapshot.activeReceiveOperationId, snapshot.output.lifecycle, snapshot.output.activation,
       snapshot.output.activeControls, snapshot.output.receiveInterruption,
       snapshot.startAdmission.allowed, snapshot.startAdmission.reason, admission,
@@ -53,8 +55,8 @@ export class TaskComposer {
           pending: snapshot.retained.pending,
           blocking: snapshot.share !== null && operation.shareInstance === snapshot.share.shareInstance ? blocking : null,
           ...(admission === undefined ? {} : { admission: action => admission(operation, action) }),
-        },
-      ), this.#currentFacts, snapshot.activeReceiveOperationId)))
+        }, language,
+      ), this.#currentFacts, snapshot.activeReceiveOperationId), language))
         .sort((left, right) => (right.createdAtMilliseconds ?? 0) - (left.createdAtMilliseconds ?? 0))
     }
     const current = chooseCurrentTask(this.#active, this.#retained, snapshot)

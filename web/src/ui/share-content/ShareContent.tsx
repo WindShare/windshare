@@ -1,3 +1,5 @@
+import { receiverCopy } from '../locales/receiver'
+import { useCopy } from '../preferences/use-preferences'
 import type { ComponentProps } from 'react'
 import type { ReceiverSnapshot, ShareIdentity } from '../model'
 import { formatBytes } from '../progress-presentation'
@@ -12,12 +14,13 @@ function SingleFile({ share, preview, actions, openPreview }: {
   readonly actions: PreviewActions
   readonly openPreview: (id: string, invoker: HTMLButtonElement) => void
 }) {
-  const display = fileDisplayInfo(share.file.name)
-  const size = share.file.expectedSize === undefined ? 'Size unknown' : formatBytes(share.file.expectedSize)
+  const t = useCopy(receiverCopy).browse
+  const display = fileDisplayInfo(share.file.name, t)
+  const size = share.file.expectedSize === undefined ? t.sizeUnknown : formatBytes(share.file.expectedSize)
   const previewable = share.kind === 'photo' || share.kind === 'video'
 
   if (!previewable && preview.state === 'idle') {
-    return <section className="single-file single-file-static" aria-label="Shared file">
+    return <section className="single-file single-file-static" aria-label={t.sharedFile}>
       <div className="single-file-card">
         <div className="single-file-hero">
           <div className={`single-file-emblem entry-icon-${display.icon}`}>
@@ -34,23 +37,23 @@ function SingleFile({ share, preview, actions, openPreview }: {
         </div>
         <dl className="single-file-facts">
           <div className="single-file-fact">
-            <dt>Size</dt>
+            <dt>{t.size}</dt>
             <dd>{size}</dd>
           </div>
           <div className="single-file-fact">
-            <dt>Format</dt>
+            <dt>{t.format}</dt>
             <dd>{display.typeLabel}</dd>
           </div>
           <div className="single-file-fact">
-            <dt>Protection</dt>
-            <dd>End-to-end encrypted</dd>
+            <dt>{t.protection}</dt>
+            <dd>{t.encrypted}</dd>
           </div>
         </dl>
       </div>
     </section>
   }
 
-  return <section className={`single-file single-file-${share.kind}`} aria-label="Shared file">
+  return <section className={`single-file single-file-${share.kind}`} aria-label={t.sharedFile}>
     <div className="single-file-stage">
       <div className="single-file-stage-bar">
         <p className="single-file-metadata">{size}{' · '}{display.typeLabel}</p>
@@ -63,7 +66,7 @@ function SingleFile({ share, preview, actions, openPreview }: {
         <button type="button" className="preview-trigger-action"
           onClick={event => openPreview(share.file.id, event.currentTarget)}>
           <ReceiverIcon name={share.kind === 'video' ? 'play' : 'eye'} />
-          {share.kind === 'video' ? 'Preview a frame' : 'Preview'}
+          {share.kind === 'video' ? t.previewFrame : t.preview}
         </button>
       </div> : <MediaPreview preview={preview} actions={actions} inline />}
     </div>

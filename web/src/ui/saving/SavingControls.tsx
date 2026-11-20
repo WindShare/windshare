@@ -1,3 +1,5 @@
+import { receiverCopy } from '../locales/receiver'
+import { useCopy } from '../preferences/use-preferences'
 import { useRef, useState } from 'react'
 import type { SavingActionPresentation, SavingChoice, SavingOutcome } from './index'
 import type { ArtifactActivationPresentation } from '../artifact-presentation'
@@ -32,6 +34,7 @@ function Choice({ choice, recommended, sharedDisabledReason, choose }: {
   readonly sharedDisabledReason: string | null
   readonly choose: (choice: SavingChoice) => void
 }) {
+  const t = useCopy(receiverCopy).saving
   const uniqueReason = choice.disabledReason !== null && choice.disabledReason !== sharedDisabledReason
     ? choice.disabledReason : null
   return <div className="saving-choice-wrap">
@@ -42,7 +45,7 @@ function Choice({ choice, recommended, sharedDisabledReason, choose }: {
       <span className="saving-choice-copy">
         <span className="saving-choice-header">
           <strong className="saving-choice-title">{choice.label}</strong>
-          {recommended && <span className="saving-badge saving-badge-accent">Recommended</span>}
+          {recommended && <span className="saving-badge saving-badge-accent">{t.recommended}</span>}
           {choice.badges.map(badge => <span className="saving-badge" key={badge}>{badge}</span>)}
         </span>
         <span className="saving-choice-summary">{choice.summary}</span>
@@ -65,6 +68,7 @@ export function SavingControls({ model, activation, currentTaskContext, actionLa
   readonly cancel: () => void
   readonly onIntent: (action: string) => void
 }) {
+  const t = useCopy(receiverCopy).saving
   const [alternatives, setAlternatives] = useState(false)
   const alternativesButton = useRef<HTMLButtonElement>(null)
   const deferSummary = currentTaskContext !== null && model.primary !== null && model.primary.disabledReason !== null
@@ -76,17 +80,17 @@ export function SavingControls({ model, activation, currentTaskContext, actionLa
     choose(choice)
     setAlternatives(false)
   }
-  return <section className="saving-controls" aria-label="Download action"
+  return <section className="saving-controls" aria-label={t.downloadAction}
     data-saving-state={isBlocked ? 'blocked' : 'ready'}
     data-current-operation-id={deferSummary ? currentTaskContext.operationId : undefined}>
     {activation !== null ? <div className="preparing-task">
       <div className="saving-context">
-        <strong className="saving-heading" role="status"><ReceiverIcon name="clock" />Preparing · {activation.title}</strong>
+        <strong className="saving-heading" role="status"><ReceiverIcon name="clock" />{t.preparing(activation.title)}</strong>
         <p>{activation.description}</p>
       </div>
       <div className="task-actions">
         {activation.kind === 'retry' && <button className="primary-action" type="button" onClick={retry}>{activation.label}</button>}
-        {activation.kind !== 'committing' && <button className="quiet-action" type="button" onClick={cancel}>Cancel</button>}
+        {activation.kind !== 'committing' && <button className="quiet-action" type="button" onClick={cancel}>{t.cancel}</button>}
       </div>
     </div> : <div className="saving-decision">
       <div className="saving-actions-row">
@@ -96,19 +100,19 @@ export function SavingControls({ model, activation, currentTaskContext, actionLa
             <ReceiverIcon name="download" />{model.primary?.label ?? actionLabel}
           </button>
           {model.hasAlternatives && <button ref={alternativesButton} className="saving-alternatives-trigger" type="button"
-            aria-label="Other ways to save" title="Other ways to save" aria-haspopup="dialog"
+            aria-label={t.otherWays} title={t.otherWays} aria-haspopup="dialog"
             onClick={() => { onIntent('open-saving-alternatives'); setAlternatives(true) }}>
             <ReceiverIcon name="chevron-down" />
           </button>}
         </div>
-        {model.retry && <button className="quiet-action" type="button" onClick={retry}>Retry confirmation</button>}
+        {model.retry && <button className="quiet-action" type="button" onClick={retry}>{t.retryConfirmation}</button>}
       </div>
       {disabledReason !== null && <p className="saving-note action-reason" role="status">{disabledReason}</p>}
       {deferSummary && currentTaskContext.reason !== disabledReason && <p className="saving-note saving-summary">{currentTaskContext.reason}</p>}
       {!deferSummary && disabledReason === null && model.primary !== null && <p className="saving-note saving-summary">{model.primary.summary}</p>}
       {model.desktopGuidance !== null && <p className="saving-note saving-summary">{model.desktopGuidance}</p>}
     </div>}
-    {alternatives && <DetailSheet returnFocus={alternativesButton} title="Other ways to save"
+    {alternatives && <DetailSheet returnFocus={alternativesButton} title={t.otherWays}
       onClose={() => { onIntent('close-saving-alternatives'); setAlternatives(false) }}>
       {disabledReason !== null && <p className="saving-sheet-notice" role="status">{disabledReason}</p>}
       {model.recommendation !== null && <p className="saving-recommendation">{model.recommendation}</p>}
@@ -117,7 +121,7 @@ export function SavingControls({ model, activation, currentTaskContext, actionLa
         <Choice choice={outcome.primary} recommended={isSameChoice(model.primary, outcome.primary)}
           sharedDisabledReason={disabledReason} choose={commit} />
         {outcome.alternatives.length > 0 && <details className="saving-advanced">
-          <summary>More options</summary>
+          <summary>{t.moreOptions}</summary>
           {outcome.alternatives.map(choice => <Choice
             key={`${choice.offered.choice.choiceId}:${choice.recoveryPreference ?? ''}`}
             choice={choice} recommended={isSameChoice(model.primary, choice)}
@@ -125,7 +129,7 @@ export function SavingControls({ model, activation, currentTaskContext, actionLa
         </details>}
       </section>)}
       {notes.length > 0 && <details className="saving-notes">
-        <summary>Good to know</summary>
+        <summary>{t.goodToKnow}</summary>
         <ul>{notes.map(note => <li key={note}>{note}</li>)}</ul>
       </details>}
     </DetailSheet>}

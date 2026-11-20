@@ -238,7 +238,7 @@ export async function listBrowserRetainedOperations(
           ? routeActions.filter(action => action !== 'catch-up') : routeActions
         const availableActions = retainedBrowserDeliveryActions(descriptor.lifecycle, browserDelivery, ordinaryActions)
         const unavailableReason = descriptor.recoveryUnavailable === 'native-checkpoint-unavailable'
-          ? 'Retained ZIP recovery is unavailable. Start a new download; the retained data has not been changed.'
+          ? 'zipUnavailable'
           : presentation.unavailableReason
         const operation: RetainedReceiveOperation = Object.freeze({
           operationId: descriptor.operationId,

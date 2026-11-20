@@ -1,10 +1,11 @@
+import type { ReceiveBlockReason } from '../../receive/admission'
 import type {
   RetainedReceiveAction,
   RetainedReceiveOperation,
 } from '../../receive/contracts'
 
 const RESUME_AUTHORITY_UNAVAILABLE =
-  'Saved actions are unavailable because this browser has no persisted-operation authority.'
+  'noSavedAuthority'
 
 function retainedActions(
   ...actions: RetainedReceiveAction[]
@@ -19,7 +20,7 @@ export function retainedOperationAuthority(
   hasDirectTreeRecoverySummary: boolean,
 ): Readonly<{
   actions: readonly RetainedReceiveAction[]
-  unavailableReason?: string
+  unavailableReason?: ReceiveBlockReason
 }> {
   if (!hasMutationAuthority) {
     return Object.freeze({
@@ -54,7 +55,7 @@ export function retainedOperationAuthority(
         ? Object.freeze({ actions: retainedActions('continue', 'delete') })
         : Object.freeze({
             actions: retainedActions(),
-            unavailableReason: 'Direct ZIP recovery authority is not installed.',
+            unavailableReason: 'noZipAuthority',
           })
     case 'save-artifact':
       return Object.freeze({ actions: retainedActions('save', 'discard') })
@@ -65,7 +66,7 @@ export function retainedOperationAuthority(
     case 'needs-attention':
       return Object.freeze({
         actions: retainedActions(),
-        unavailableReason: 'Ownership needs attention; no automatic action is safe.',
+        unavailableReason: 'ownershipUnknown',
       })
   }
 }

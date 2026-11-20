@@ -1,11 +1,12 @@
+import { diagnosticsCopy } from '../locales/diagnostics'
 import type { DiagnosticsStatusV2 } from '../../diagnostics/export/diagnostic-bundle-v2'
 
-export function diagnosticsCaptureLabel(status: DiagnosticsStatusV2): string {
-  if (status.enabled) return 'Recording diagnostics'
-  if (status.state === 'idle') return 'Diagnostics are off'
+export function diagnosticsCaptureLabel(status: DiagnosticsStatusV2, t = diagnosticsCopy.en): string {
+  if (status.enabled) return t.recording
+  if (status.state === 'idle') return t.off
   switch (status.seal_reason) {
-    case 'manual_disable': return 'Recording stopped'
-    case 'expired': return 'Recording time limit reached'
-    default: return 'Diagnostics retained'
+    case 'manual_disable': return t.stopped
+    case 'expired': return t.expired
+    default: return t.retained
   }
 }

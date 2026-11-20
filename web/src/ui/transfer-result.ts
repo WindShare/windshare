@@ -1,3 +1,5 @@
+import type { Language } from './preferences/model'
+import { receiverCopy } from './locales/receiver'
 import { compatibleNameRepairSummary } from '../transfer/lifecycle/name-repair'
 import {
   type CompatibleNameRepairSummary,
@@ -18,8 +20,10 @@ export function presentTransferResult(
   worker: TransferWorkerSettlement,
   repairSummary?: CompatibleNameRepairSummary | null,
   lifecycle?: ReceiveLifecycleState,
+  language: Language = 'en',
 ): TransferResultPresentation {
-  const ordinary = presentOrdinaryTransferResult(worker, lifecycle)
+  const t = receiverCopy[language].result
+  const ordinary = presentOrdinaryTransferResult(worker, lifecycle, language)
   if (repairSummary === undefined || repairSummary === null) return ordinary
 
   const repair = compatibleNameRepairSummary(repairSummary)
@@ -29,61 +33,51 @@ export function presentTransferResult(
   }
   lines.push(
     repair.pairDisplayNames.script === undefined
-      ? `Original names are recorded in "${repair.pairDisplayNames.sidecar}". The saved files use compatible names.`
-      : `Saved names remain compatible until the restoration script "${repair.pairDisplayNames.script}" runs.`,
+      ? t.nameReport(repair.pairDisplayNames.sidecar)
+      : t.nameScript(repair.pairDisplayNames.script),
   )
 
   if (worker.status === 'Paused' &&
       !(lifecycle?.kind === 'partial-directory' && lifecycle.reason === 'stopped')) {
-    return result('Paused with compatible names', 'warning', lines)
+    return result(t.pausedCompatible, 'warning', lines)
   }
   if (!hasValidatedTerminalCompatibleNameRepair(repair)) {
-    return result('Compatible-name restoration catch-up required', 'warning', lines)
+    return result(t.setupNeeded, 'warning', lines)
   }
   return worker.status === 'Succeeded'
-    ? result('Completed with compatible names', 'success', lines)
-    : result('Partial with compatible names', 'warning', lines)
+    ? result(t.compatible, 'success', lines)
+    : result(t.partialCompatible, 'warning', lines)
 }
 
 function presentOrdinaryTransferResult(
   worker: TransferWorkerSettlement,
   lifecycle?: ReceiveLifecycleState,
+  language: Language = 'en',
 ): TransferResultPresentation {
+  const t = receiverCopy[language].result
   if (worker.status === 'Succeeded') {
-    return result('Transfer completed', 'success', [])
+    return result(t.completed, 'success', [])
   }
 
   const counts = worker.fileOutcomes
   const lines: string[] = []
-  appendCount(lines, counts.sourceDriftFiles,
-    'file stopped because authenticated source content changed',
-    'files stopped because authenticated source content changed')
-  appendCount(lines, counts.revisionConflictFiles,
-    'file was blocked because local resume data belongs to another source revision',
-    'files were blocked because local resume data belongs to another source revision')
-  appendCount(lines, counts.checkpointInvalidFiles,
-    'file was blocked by an invalid local resume checkpoint binding',
-    'files were blocked by invalid local resume checkpoint bindings')
-  appendCount(lines, counts.ownedObjectUnknownFiles,
-    'file was blocked because local resume data disagrees about the owned destination object',
-    'files were blocked because local resume data disagrees about the owned destination object')
-  appendCount(lines, counts.collisionFiles,
-    'existing destination prevented a file from completing',
-    'existing destinations prevented files from completing')
-  appendCount(lines, counts.failedFiles,
-    'file failed for another reason',
-    'files failed for another reason')
+  appendCount(lines, counts.sourceDriftFiles, t.drift)
+  appendCount(lines, counts.revisionConflictFiles, t.revision)
+  appendCount(lines, counts.checkpointInvalidFiles, t.checkpoint)
+  appendCount(lines, counts.ownedObjectUnknownFiles, t.ownership)
+  appendCount(lines, counts.collisionFiles, t.exists)
+  appendCount(lines, counts.failedFiles, t.failed)
 
   const directoryFailures = worker.failureCount - worker.fileFailureCount
-  appendCount(lines, directoryFailures, 'directory did not finish', 'directories did not finish')
+  appendCount(lines, directoryFailures, t.directory)
   if (lines.length === 0 && worker.status === 'Paused') {
-    lines.push('The transfer paused before completion.')
+    lines.push(t.pausedHint)
   }
 
   return result(
     lifecycle?.kind === 'partial-directory' && lifecycle.reason === 'stopped'
-      ? 'Transfer stopped'
-      : resultTitle(worker),
+      ? t.stopped
+      : resultTitle(worker, language),
     'warning',
     lines,
   )
@@ -101,17 +95,18 @@ function result(
   })
 }
 
-function resultTitle(worker: TransferWorkerSettlement): string {
+function resultTitle(worker: TransferWorkerSettlement, language: Language): string {
+  const t = receiverCopy[language].result
   const counts = worker.fileOutcomes
-  if (counts.sourceDriftFiles > 0) return 'Source content changed'
-  if (counts.revisionConflictFiles > 0) return 'Resume revision conflict'
-  if (counts.checkpointInvalidFiles > 0) return 'Invalid resume checkpoint'
-  if (counts.ownedObjectUnknownFiles > 0) return 'Resume ownership conflict'
-  if (counts.collisionFiles > 0) return 'Existing destinations prevented completion'
-  return worker.status === 'Paused' ? 'Transfer paused' : 'Some items did not finish'
+  if (counts.sourceDriftFiles > 0) return t.sourceChanged
+  if (counts.revisionConflictFiles > 0) return t.revisionConflict
+  if (counts.checkpointInvalidFiles > 0) return t.invalidCheckpoint
+  if (counts.ownedObjectUnknownFiles > 0) return t.ownershipConflict
+  if (counts.collisionFiles > 0) return t.collision
+  return worker.status === 'Paused' ? t.paused : t.partial
 }
 
-function appendCount(lines: string[], count: number, singular: string, plural: string): void {
+function appendCount(lines: string[], count: number, format: (count: number) => string): void {
   if (count === 0) return
-  lines.push(`${count} ${count === 1 ? singular : plural}.`)
+  lines.push(format(count))
 }

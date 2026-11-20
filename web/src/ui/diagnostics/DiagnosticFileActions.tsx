@@ -1,18 +1,24 @@
+import { diagnosticsCopy } from '../locales/diagnostics'
+import { useCopy } from '../preferences/use-preferences'
 import { useState } from 'react'
 import type { DiagnosticFile } from '../../diagnostics/browser/file'
 import type { DiagnosticsDelivery } from '../../diagnostics/browser/delivery'
+
+type DiagnosticFileMessage = 'exportUnavailable' | 'shared' | 'shareFailed' | 'downloadStarted' |
+  'downloadFailed' | 'copied' | 'manualCopy'
 
 export function DiagnosticFileActions({ readFile, delivery }: {
   readonly readFile: () => DiagnosticFile
   readonly delivery: DiagnosticsDelivery
 }) {
-  const [message, setMessage] = useState<string | null>(null)
+  const t = useCopy(diagnosticsCopy)
+  const [message, setMessage] = useState<DiagnosticFileMessage | null>(null)
   const [manualCopy, setManualCopy] = useState<string | null>(null)
   const [sharing, setSharing] = useState(false)
   const canShare = delivery.supportsFileSharing()
   const read = (): DiagnosticFile | undefined => {
     try { return readFile() } catch {
-      setMessage('This diagnostic export is unavailable. Try a previously saved file.')
+      setMessage('exportUnavailable')
       return undefined
     }
   }
@@ -22,9 +28,9 @@ export function DiagnosticFileActions({ readFile, delivery }: {
     setSharing(true)
     try {
       const outcome = await delivery.share(file)
-      setMessage(outcome === 'shared' ? 'File handed to your sharing app.' : null)
+      setMessage(outcome === 'shared' ? 'shared' : null)
     } catch {
-      setMessage('Sharing is unavailable. Save the file or copy the log instead.')
+      setMessage('shareFailed')
     } finally {
       setSharing(false)
     }
@@ -34,9 +40,9 @@ export function DiagnosticFileActions({ readFile, delivery }: {
     if (file === undefined) return
     try {
       delivery.save(file)
-      setMessage('Diagnostic download started.')
+      setMessage('downloadStarted')
     } catch {
-      setMessage('The download could not start. Copy the log instead.')
+      setMessage('downloadFailed')
     }
   }
   const copy = async () => {
@@ -44,21 +50,21 @@ export function DiagnosticFileActions({ readFile, delivery }: {
     if (file === undefined) return
     try {
       await delivery.copy(file)
-      setMessage('Diagnostic log copied.')
+      setMessage('copied')
       setManualCopy(null)
     } catch {
       setManualCopy(file.text)
-      setMessage('Select the log below and copy it.')
+      setMessage('manualCopy')
     }
   }
   return <>
     <div className="diagnostics-actions">
-      {canShare && <button type="button" disabled={sharing} onClick={() => { void share() }}>Share file</button>}
-      <button type="button" onClick={save}>Save file</button>
-      <button type="button" onClick={() => { void copy() }}>Copy log</button>
+      {canShare && <button type="button" disabled={sharing} onClick={() => { void share() }}>{t.shareFile}</button>}
+      <button type="button" onClick={save}>{t.saveFile}</button>
+      <button type="button" onClick={() => { void copy() }}>{t.copyLog}</button>
     </div>
-    {message !== null && <p role="status">{message}</p>}
-    {manualCopy !== null && <label className="diagnostics-copy">Diagnostic log
+    {message !== null && <p role="status">{t[message]}</p>}
+    {manualCopy !== null && <label className="diagnostics-copy">{t.log}
       <textarea readOnly value={manualCopy} onFocus={event => event.currentTarget.select()} />
     </label>}
   </>

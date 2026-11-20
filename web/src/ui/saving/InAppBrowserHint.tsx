@@ -1,11 +1,14 @@
+import { receiverCopy } from '../locales/receiver'
+import { useCopy } from '../preferences/use-preferences'
 export function InAppBrowserHint() {
+  const t = useCopy(receiverCopy).saving
   const agent = typeof navigator === 'undefined' ? '' : navigator.userAgent
   let browser: string | undefined
-  if (/MicroMessenger\//i.test(agent)) browser = 'WeChat'
+  if (/MicroMessenger\//i.test(agent)) browser = t.wechat
   else if (/\bQQ\//i.test(agent)) browser = 'QQ'
   if (browser === undefined) return null
   return <aside className="in-app-browser-hint" role="note">
-    <strong>Open in your browser to save files</strong>
-    <p>Use the {browser} menu to open this same link in Safari, Chrome, or your system browser.</p>
+    <strong>{t.openBrowser}</strong>
+    <p>{t.browserMenu(browser)}</p>
   </aside>
 }

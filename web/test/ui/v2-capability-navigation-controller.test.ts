@@ -72,7 +72,7 @@ describe('receiver capability navigation', () => {
     const other = await shareLocation(3)
     controller.openLocation(other.location)
     await waitFor(() => decisions.includes('share-navigation-blocked'))
-    expect(controller.getSnapshot().error).toContain('keep it in Downloads')
+    expect(controller.getSnapshot().error).toEqual({ kind: 'blocked', reason: 'navigationOccupied' })
     expect(controller.getSnapshot().output.receiveIntent).toBe(intent)
     expect(joined.transferRuns[0]?.signal?.aborted).toBe(false)
     expect(receive.startedAuthorities[0]?.runtime?.detachments).toEqual([])
