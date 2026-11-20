@@ -19,7 +19,9 @@ The narrow patches in `patches/` add:
   admission and signaling, including dynamic active TCP; repeated candidates keep unique scores.
 - Explicit STUN cache-bypassing refresh; upstream owns response transaction validation.
 - Late packets for an already closed shared-socket connection are dropped at trace level,
-  not logged as errors, while its address mapping awaits removal.
+  not logged as errors, while its address mapping awaits removal (one-off upstream
+  candidate; do not add further log-suppression patches here—route Pion logging through
+  WindShare instead).
 - Mapped candidates and TURN routes retain their gathering generation; stale
   results release their sockets instead of entering a newer generation.
 - Idle STUN refresh interrupts blocked writes immediately before socket handoff,

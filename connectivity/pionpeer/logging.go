@@ -8,6 +8,8 @@ import (
 
 // Pion's process-level console logger loses attempt identity. Retain its normal
 // output while also recording actionable ICE/TURN failures in the path trace.
+// Do not suppress further Pion console noise by adding patches under
+// third_party/pion; route or filter it through WindShare's logger wiring instead.
 type providerLoggerFactory struct {
 	logging.LoggerFactory
 	observe func(Diagnostic)

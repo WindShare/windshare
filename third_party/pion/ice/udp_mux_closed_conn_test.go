@@ -13,15 +13,18 @@ import (
 	"github.com/pion/logging"
 )
 
-// recordingLogger captures mux errors and signals when the trace message for a
-// dropped packet from dropFrom has been logged. It implements every
-// logging.LeveledLogger method, so no call can panic on a nil embedded logger.
+// recordingLogger captures mux errors, records the closed-connection trace drop
+// for closedFrom, and signals when the probe drop from dropFrom has been logged.
+// It implements every logging.LeveledLogger method, so no call can panic on a
+// nil embedded logger.
 type recordingLogger struct {
-	mu       sync.Mutex
-	errors   []string
-	dropped  chan struct{}
-	dropOnce sync.Once
-	dropFrom string
+	mu            sync.Mutex
+	errors        []string
+	closedFrom    string
+	closedDropped bool
+	dropped       chan struct{}
+	dropOnce      sync.Once
+	dropFrom      string
 }
 
 func (l *recordingLogger) Errorf(format string, args ...any) {
@@ -31,7 +34,13 @@ func (l *recordingLogger) Errorf(format string, args ...any) {
 }
 
 func (l *recordingLogger) Tracef(format string, args ...any) {
-	if fmt.Sprintf(format, args...) == "Dropping packet from "+l.dropFrom {
+	msg := fmt.Sprintf(format, args...)
+	if msg == "Dropping packet from "+l.closedFrom+" for closed connection" {
+		l.mu.Lock()
+		l.closedDropped = true
+		l.mu.Unlock()
+	}
+	if msg == "Dropping packet from "+l.dropFrom {
 		l.dropOnce.Do(func() { close(l.dropped) })
 	}
 }
@@ -65,9 +74,11 @@ func TestUDPMuxDropsPacketsForClosedConnWithoutError(t *testing.T) {
 		return peer
 	}
 	closingPeer, probePeer := newPeer(), newPeer()
+	closingAddr := closingPeer.LocalAddr().(*net.UDPAddr).AddrPort()
 	log := &recordingLogger{
-		dropped:  make(chan struct{}),
-		dropFrom: probePeer.LocalAddr().(*net.UDPAddr).AddrPort().String(),
+		closedFrom: closingAddr.String(),
+		dropped:    make(chan struct{}),
+		dropFrom:   probePeer.LocalAddr().(*net.UDPAddr).AddrPort().String(),
 	}
 	mux := NewUDPMuxDefault(UDPMuxParams{Logger: log, UDPConn: listener})
 	defer func() { _ = mux.Close() }()
@@ -80,26 +91,38 @@ func TestUDPMuxDropsPacketsForClosedConnWithoutError(t *testing.T) {
 	mux.mu.Lock()
 	conn := mux.connsIPv4["closing"]
 	mux.mu.Unlock()
-	conn.addAddress(closingPeer.LocalAddr().(*net.UDPAddr).AddrPort())
+	conn.addAddress(closingAddr)
 
 	// Holding the registry lock keeps the removal that Close triggers pending,
 	// which is the window a fast sender hits.
-	mux.mu.Lock()
-	_ = conn.Close()
-	_, _ = closingPeer.Write([]byte("late media"))
-	// The worker reads datagrams in order, so the probe being dropped proves the
-	// late packet has already been handled.
-	_, _ = probePeer.Write([]byte("probe"))
-	select {
-	case <-log.dropped:
-	case <-time.After(5 * time.Second):
-		t.Error("mux did not process the probe packet")
-	}
-	mux.mu.Unlock()
+	func() {
+		mux.mu.Lock()
+		defer mux.mu.Unlock()
+
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Fatalf("close muxed conn: %v", closeErr)
+		}
+		if _, writeErr := closingPeer.Write([]byte("late media")); writeErr != nil {
+			t.Fatalf("write late packet: %v", writeErr)
+		}
+		// The worker reads datagrams in order, so the probe being dropped proves
+		// the late packet has already been handled.
+		if _, writeErr := probePeer.Write([]byte("probe")); writeErr != nil {
+			t.Fatalf("write probe packet: %v", writeErr)
+		}
+		select {
+		case <-log.dropped:
+		case <-time.After(5 * time.Second):
+			t.Fatal("mux did not process the probe packet")
+		}
+	}()
 
 	log.mu.Lock()
 	defer log.mu.Unlock()
 	if len(log.errors) != 0 {
 		t.Fatalf("closing a connection reported errors for routine late packets: %q", log.errors)
+	}
+	if !log.closedDropped {
+		t.Fatalf("expected trace drop for closed connection from %s", closingAddr)
 	}
 }
