@@ -401,7 +401,10 @@ func rangeSetByteCount(ranges content.RangeSet) (uint64, bool) {
 // acknowledged, so its bytes may or may not have reached the output. The
 // operation tracker therefore never becomes a second file/range manifest.
 type fileTransferProgress struct {
-	initial        content.RangeSet
+	initial content.RangeSet
+	// recovered tracks the subset of trusted ranges not newly verified in this
+	// task, keeping readmission progress reconciliation exact across 2+ reopens.
+	recovered      content.RangeSet
 	persisted      VerifiedRanges
 	persistedBytes uint64
 	retainsRanges  bool
@@ -425,7 +428,8 @@ func newFileTransferProgress(
 		return fileTransferProgress{}, 0, false
 	}
 	progress := fileTransferProgress{
-		initial: checkpoint.Ranges(), retainsRanges: checkpoint.Retention() != RangesTransient, trusted: checkpoint,
+		initial: checkpoint.Ranges(), recovered: checkpoint.Ranges(),
+		retainsRanges: checkpoint.Retention() != RangesTransient, trusted: checkpoint,
 	}
 	if restart {
 		progress.persisted, progress.persistedBytes = checkpoint, bytes

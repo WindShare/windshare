@@ -102,7 +102,8 @@ export interface FileRevisionReadmission {
   readonly comparison: RevisionComparison
   readonly started: number
   readonly paused: VerifiedDurableRanges
-  readonly initialDurable: ByteRangeSet
+  /** Subset of `paused` ranges newly persisted during this task, across prior attempts. */
+  readonly newlyDurable: ByteRangeSet
   readonly beginFile: OutputSession['beginFile']
   readonly stalledReopens: number
 }
@@ -125,17 +126,24 @@ export function observeRevisionReadmission(
   })
 }
 
+/**
+ * Reconciles task-level recoverable progress on readmission and returns the
+ * subset of `admitted` ranges not yet newly persisted by this task.
+ */
 export function observeReadmittedCoverage(
   options: ReadmissionReporting, previous: FileRevisionReadmission, current: FileRevisionReadmission['current'],
   admitted: ByteRangeSet,
-): void {
+): ByteRangeSet {
   const retained = previous.paused.asRangeSet()
   const retainedBytes = rangeBytes(retained)
   const reusedBytes = retainedBytes - rangeBytes(admitted.missingFrom(retained))
-  const lostNewBytes = rangeBytes(admitted.missingFrom(previous.initialDurable.missingFrom(retained)))
+  const lostNew = admitted.missingFrom(previous.newlyDurable)
+  const lostNewBytes = rangeBytes(lostNew)
   if (lostNewBytes !== 0n) options.onRecoverableAcknowledged?.(-lostNewBytes, 'readmission')
   observeRevisionReadmission(options, previous.previous, current, compareRevisionDescriptors(previous.previous, current),
     'readmitted', retainedBytes, reusedBytes, previous.started)
+  const keptNew = lostNew.missingFrom(previous.newlyDurable)
+  return keptNew.missingFrom(admitted)
 }
 
 export function rangeBytes(ranges: ByteRangeSet): bigint {

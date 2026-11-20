@@ -56,7 +56,9 @@ const MAX_STALLED_REVISION_READMISSIONS = 1
 
 export async function settleReopenedFile(
   options: FileSettlementOptions, transaction: OutputFileTransaction,
-  error: RevisionReopenedDuringRecoveryError, initialDurable: ByteRangeSet, started: number, priorStalledReopens: number,
+  error: RevisionReopenedDuringRecoveryError,
+  initialDurable: ByteRangeSet, recoveredDurable: ByteRangeSet,
+  started: number, priorStalledReopens: number,
 ): Promise<FileAttemptInterruption> {
   const { previous, current, comparison } = error
   const readmit = options.output.readmitFile?.bind(options.output)
@@ -93,7 +95,9 @@ export async function settleReopenedFile(
       kind: 'readmit',
       settlement,
       readmission: {
-        previous, current, comparison, started, paused, initialDurable, stalledReopens,
+        previous, current, comparison, started, paused,
+        newlyDurable: recoveredDurable.missingFrom(paused.asRangeSet()),
+        stalledReopens,
         beginFile: (request, signal) => readmit(request, paused, signal),
       },
     }
