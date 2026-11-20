@@ -5,7 +5,7 @@ use crate::{
         COPY_FEEDBACK_MS, CopyFeedback, CopyTarget, LinkFeedback, RECEIVE_OPEN_MS, RECEIVE_SAVE_MS,
         ReceiveFlow, SampleBundle, ShareFlow,
     },
-    model::{Action, Overlay, Page, SettingsSection, ShareState, TransferState},
+    model::{Action, Overlay, Page, ShareState, TransferState},
     sharing::LinkKind,
 };
 use gpui::{BorrowAppContext, ClipboardItem, Context, Focusable, Window};
@@ -76,9 +76,7 @@ impl Desktop {
                 self.repeat_native_share(id, window, cx);
             }
             Action::ConfigureShare(id) => self.configure_share(id, window, cx),
-            Action::OpenAccount => {
-                self.select_settings_section(SettingsSection::Account, window, cx);
-            }
+            Action::OpenAccount => self.open_account(window, cx),
             Action::OpenAccountModal(page) => self.open_account_modal(page, window, cx),
             Action::CopyAccountUid => self.copy_account_uid(cx),
             Action::Account(action) => self.account_action(action, window, cx),

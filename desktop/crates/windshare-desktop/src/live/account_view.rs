@@ -4,12 +4,59 @@ use super::{
 };
 use crate::{
     desktop::Desktop,
+    flow_state::ShareFlow,
     localization::{Language, Text, language},
-    model::{Action, Overlay, Page, SettingsSection, ShareState},
+    model::{Action, Overlay, Page, SettingsSection, Share, ShareState},
 };
 use gpui::{Div, Entity, Role, prelude::*, px};
-use windshare_host::{AccountState, AccountView, Allowance};
+use windshare_host::{AccountState, AccountStatus, AccountView, Allowance, ShareAuthorization};
 use windshare_ui::{ButtonStyle, Icon, Input, Theme, Tone, column, row};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AccountNoticeSurface {
+    AccountSettings,
+    OfficialAuthorizationCard,
+    Ambient,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct ActiveShareDemand {
+    preparing: bool,
+    official_auth_wait: bool,
+}
+
+const fn is_official_authorization_wait(share: &Share) -> bool {
+    matches!(share.state, ShareState::AwaitingAuthorization)
+        && matches!(share.authorization, Some(ShareAuthorization::Official))
+}
+
+const fn should_show_account_notice(
+    status: &AccountStatus,
+    surface: AccountNoticeSurface,
+    active_shares: Option<ActiveShareDemand>,
+) -> bool {
+    if !status.active || !matches!(surface, AccountNoticeSurface::Ambient) {
+        return false;
+    }
+    let Some(demand) = active_shares else {
+        return false;
+    };
+    match status.state {
+        // Silent background setup and routine ticket/allowance renewal settle
+        // quickly on their own; flashing an in-flow notice jolts the share stage.
+        AccountState::PendingSetup | AccountState::RefreshRequired | AccountState::Refreshing => {
+            false
+        }
+        AccountState::Ready => matches!(status.allowance, Allowance::Spent),
+        // Anonymous or independent relays may already publish the share; only
+        // surface a registration or email prompt while a share is blocked on it.
+        AccountState::RegistrationRequired | AccountState::EmailRequired => {
+            demand.official_auth_wait
+        }
+        AccountState::Registering { .. } => demand.preparing,
+        AccountState::TemporarilyUnavailable | AccountState::Denied => true,
+    }
+}
 
 impl AccountPage {
     pub(crate) const fn title(self, view: &AccountView) -> Text {
@@ -57,26 +104,43 @@ impl Desktop {
         locale.text(text).into()
     }
 
+    fn account_notice_surface(&self) -> AccountNoticeSurface {
+        if self.page == Page::Settings && self.settings_section == SettingsSection::Account {
+            return AccountNoticeSurface::AccountSettings;
+        }
+        if self.page == Page::Share
+            && matches!(self.share_flow, ShareFlow::Running(run) if self
+                .shares
+                .iter()
+                .find(|share| share.id == run.share_id)
+                .is_some_and(is_official_authorization_wait))
+        {
+            return AccountNoticeSurface::OfficialAuthorizationCard;
+        }
+        AccountNoticeSurface::Ambient
+    }
+
+    fn active_share_demand(&self) -> Option<ActiveShareDemand> {
+        let mut any_unfinished = false;
+        let mut demand = ActiveShareDemand::default();
+        for share in &self.shares {
+            if share.finished() {
+                continue;
+            }
+            any_unfinished = true;
+            demand.preparing |= matches!(share.state, ShareState::Preparing);
+            demand.official_auth_wait |= is_official_authorization_wait(share);
+        }
+        any_unfinished.then_some(demand)
+    }
+
     pub fn account_notice(&self, theme: Theme, cx: &Context<Self>) -> Option<Div> {
         let view = self.account_view()?;
-        if (self.page == Page::Settings && self.settings_section == SettingsSection::Account)
-            || !view.status.active
-            || !self.shares.iter().any(|s| !s.finished())
-            || view.status.state == AccountState::Ready
-                && view.status.allowance == Allowance::Available
-        {
-            return None;
-        }
-        if matches!(
-            view.status.state,
-            AccountState::PendingSetup
-                | AccountState::RegistrationRequired
-                | AccountState::Registering { .. }
-        ) && !self
-            .shares
-            .iter()
-            .any(|s| matches!(s.state, ShareState::Preparing))
-        {
+        if !should_show_account_notice(
+            &view.status,
+            self.account_notice_surface(),
+            self.active_share_demand(),
+        ) {
             return None;
         }
         let locale = language(cx);
@@ -358,3 +422,7 @@ impl Desktop {
         )
     }
 }
+
+#[cfg(test)]
+#[path = "account_view_tests.rs"]
+mod tests;
