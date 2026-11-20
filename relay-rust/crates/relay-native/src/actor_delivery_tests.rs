@@ -40,18 +40,21 @@ async fn join(host: &Harness, id: u64) -> (Writer, RelaySessionId) {
 }
 
 async fn joined(host: &mut Harness, id: u64) -> (Writer, RelaySessionId) {
-    // The vector declares 16 frames: 14 ordinary plus this flow's startup
-    // allowance, leaving one protected startup slot for a later receiver.
-    const INITIAL_GRANTED_FRAMES: u64 = 15;
+    // The vector declares 16 frames. Toward the receiver, 14 ordinary plus this
+    // flow's startup allowance leave one protected startup slot for a later
+    // session. Toward the shared sender, the window is bounded so siblings fit.
     let (mut receiver, session) = join(host, id).await;
-    for writer in [&mut receiver, &mut host.sender] {
+    for (writer, granted) in [
+        (&mut receiver, crate::config::SENDER_DELIVERY_WINDOW.frames),
+        (&mut host.sender, 15),
+    ] {
         let mut frames = 0;
         for _ in 0..2 {
             let grant = read(writer).await;
             assert_eq!(&grant[..4], b"WS2W");
             frames += u32::from_be_bytes(grant[16..20].try_into().unwrap());
         }
-        assert_eq!(u64::from(frames), INITIAL_GRANTED_FRAMES);
+        assert_eq!(u64::from(frames), granted);
     }
     (receiver, session)
 }
@@ -363,5 +366,43 @@ async fn full_control_writer_defers_credit_and_readiness_resumes_without_double_
     // These tiny envelopes have not exhausted their startup byte allowance.
     assert_eq!(u32::from_be_bytes(grant[20..24].try_into().unwrap()), 0);
     assert!(host.sender.try_recv().is_err());
+    drop(host);
+}
+
+#[tokio::test]
+async fn idle_receiver_windows_leave_sender_capacity_for_concurrent_joins() {
+    // Receivers send small envelopes and then idle, for example after a
+    // direct path takes over. Their unused windows on the shared sender
+    // connection must not exhaust admission for the rest of the share.
+    const RECEIVERS: u64 = 6;
+    let mut host = published().await;
+    let mut receivers = Vec::new();
+    for id in 3..3 + RECEIVERS {
+        let (receiver, session) = join(&host, id).await;
+        let request = opaque(session);
+        host.tx
+            .send(Event::Frame(connection(id), request.clone()))
+            .await
+            .unwrap();
+        loop {
+            let frame = read(&mut host.sender).await;
+            if frame == request {
+                break;
+            }
+            assert!(frame.starts_with(b"WS2W"));
+        }
+        let consumed =
+            DeliveryConsumed::new(session, Counts::new(1, request.len() as u64)).unwrap();
+        host.tx
+            .send(Event::Control(connection(1), consumed.encode().to_vec()))
+            .await
+            .unwrap();
+        receivers.push(receiver);
+    }
+    // Every admitted receiver was offered credit toward the shared sender.
+    for receiver in &mut receivers {
+        assert_eq!(&read(receiver).await[..4], b"WS2W");
+    }
+    drop(receivers);
     drop(host);
 }

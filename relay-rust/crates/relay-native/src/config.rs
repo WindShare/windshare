@@ -12,6 +12,15 @@ pub const DATA_QUEUE_BYTES: usize = DATA_QUEUE_FRAMES * MAX_DATA_BYTES;
 pub const SUBMITTED_DATA_FRAMES: usize = 2;
 pub const SUBMITTED_DATA_BYTES: usize = 2 * MAX_DATA_BYTES;
 pub const DELIVERY_WINDOW: flow::Counts = flow::Counts::new(16, 16 * MAX_DATA_BYTES as u64);
+// Every receiver's ToSender window shares the sender connection's ordinary pool,
+// and an idle window keeps its credit. Two envelopes still batch feedback while
+// every business receiver holds one, so concurrent JOINs keep startup headroom.
+pub const SENDER_DELIVERY_WINDOW: flow::Counts = flow::Counts::new(2, 2 * MAX_DATA_BYTES as u64);
+const _: () = assert!(
+    (SHARE_BUSINESS_CONNECTIONS as u64 - 1) * SENDER_DELIVERY_WINDOW.frames
+        <= DATA_QUEUE_FRAMES as u64 - STARTUP_RESERVE_FRAMES
+);
+const STARTUP_RESERVE_FRAMES: u64 = 2;
 const MAX_DATA_BYTES: usize =
     windshare_relay_core::sessions::OpaqueHeader::MAX_ENCODED_BYTES as usize;
 pub const MAX_HTTP_REQUESTS: usize = 64;
@@ -151,7 +160,7 @@ pub fn limits() -> share::Limits {
         retirement: share::RetirementPolicy::PhysicalRelease,
         delivery: flow::Limits::new(
             flow::Counts::new(DATA_QUEUE_FRAMES as u64, DATA_QUEUE_BYTES as u64),
-            capacity(2),
+            capacity(STARTUP_RESERVE_FRAMES),
             capacity(1),
             Duration::from_secs(5),
         )
