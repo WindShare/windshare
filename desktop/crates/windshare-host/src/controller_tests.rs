@@ -7,7 +7,7 @@ fn controller() -> (Controller, mpsc::Receiver<Command>) {
     (
         Controller {
             shared: Arc::new(Shared {
-                model: Mutex::new(Model::default()),
+                model: Mutex::new(Arc::new(Model::default())),
                 closing: AtomicBool::new(false),
                 account_view_visible: AtomicBool::new(false),
                 updates,
@@ -106,7 +106,8 @@ fn unsupported_native_paths_remain_visible_without_unicode_replacement() {
     controller
         .create(ShareIntent::new(EntrySource::Explorer, vec![path.clone()]))
         .unwrap();
-    let operation = controller.model().operations.remove(0);
+    let model = controller.model();
+    let operation = &model.operations[0];
     assert_eq!(operation.paths, vec![path]);
     assert!(operation.error().unwrap().contains("Unicode"));
     assert!(receiver.try_recv().is_err());
@@ -166,17 +167,35 @@ fn retry_after_a_full_local_queue_creates_from_the_retained_selection() {
 
 #[test]
 fn model_notifications_coalesce_and_unchanged_state_does_not_wake() {
-    let (controller, _) = controller();
+    let (controller, _receiver) = controller();
+    let initial = controller.model();
     controller
         .shared
-        .update(|model| model.connection = Connection::Connected);
+        .update(|draft| draft.set_connection(Connection::Connected));
     controller
         .shared
-        .update(|model| model.connection = Connection::Reconnecting("lost".into()));
+        .update(|draft| draft.set_connection(Connection::Reconnecting("lost".into())));
     assert_eq!(controller.updates.len(), 1);
     controller.updates.try_recv().unwrap();
+    let latest = controller.model();
+    assert!(!Arc::ptr_eq(&initial, &latest));
     controller
         .shared
-        .update(|model| model.connection = Connection::Reconnecting("lost".into()));
+        .update(|draft| draft.set_connection(Connection::Reconnecting("lost".into())));
     assert!(controller.updates.try_recv().is_err());
+    assert!(Arc::ptr_eq(&latest, &controller.model()));
+    controller.refresh_preferences();
+    assert!(controller.updates.try_recv().is_err());
+    assert!(Arc::ptr_eq(&latest, &controller.model()));
+}
+
+#[test]
+fn submission_publishes_a_distinct_snapshot_when_previous_is_retained() {
+    let (controller, _receiver) = controller();
+    let before = controller.model();
+    controller.create(intent("file.txt")).unwrap();
+    let after = controller.model();
+    assert!(!Arc::ptr_eq(&before, &after));
+    assert_eq!(before.operations.len(), 0);
+    assert_eq!(after.operations.len(), 1);
 }

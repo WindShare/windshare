@@ -1,6 +1,6 @@
 use crate::localization::{LanguageSettings, Text, language};
 use crate::{
-    flow_state::{CopyFeedback, ReceiveFlow, ShareFlow},
+    flow_state::{CopyFeedback, LinkFeedback, ReceiveFlow, ShareFlow},
     layout::{FlowLayout, MAX_PAGE_WIDTH, page_gutter},
     live::Runtime,
     model::{
@@ -88,14 +88,21 @@ impl Desktop {
                 this.account_form.localize(cx);
                 cx.notify();
             }),
-            cx.subscribe(&search, |_, _, _, cx| cx.notify()),
+            cx.subscribe(&search, |this, _, _, cx| {
+                if this.page == Page::Shares {
+                    cx.notify();
+                }
+            }),
             cx.subscribe_in(&link_input, window, |this, _, event, window, cx| {
                 if matches!(event, InputEvent::Submit) {
                     this.dispatch(Action::OpenPreview, window, cx);
-                } else {
-                    if matches!(this.receive_flow, ReceiveFlow::Link { .. }) {
-                        this.receive_flow = ReceiveFlow::default();
+                } else if matches!(
+                    this.receive_flow,
+                    ReceiveFlow::Link {
+                        feedback: LinkFeedback::Invalid
                     }
+                ) {
+                    this.receive_flow = ReceiveFlow::default();
                     cx.notify();
                 }
             }),

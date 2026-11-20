@@ -49,19 +49,53 @@ const COMMAND_QUEUE_CAPACITY: usize = 32;
 const MAXIMUM_OPERATIONS: usize = 1024;
 
 struct Shared {
-    model: Mutex<Model>,
+    model: Mutex<Arc<Model>>,
     closing: AtomicBool,
     account_view_visible: AtomicBool,
     updates: async_channel::Sender<()>,
     wake: polling::Poller,
 }
 
+/// Defers copy-on-write cloning until a state transition actually mutates the model.
+struct ModelDraft<'a> {
+    slot: &'a mut Arc<Model>,
+    dirty: bool,
+}
+
+impl ModelDraft<'_> {
+    fn read(&self) -> &Model {
+        self.slot
+    }
+
+    fn write(&mut self) -> &mut Model {
+        self.dirty = true;
+        Arc::make_mut(self.slot)
+    }
+
+    fn set_connection(&mut self, connection: Connection) {
+        if self.read().connection != connection {
+            self.write().connection = connection;
+        }
+    }
+
+    fn set_command_error(&mut self, error: Option<String>) {
+        if self.read().command_error != error {
+            self.write().command_error = error;
+        }
+    }
+}
+
 impl Shared {
-    fn update(&self, change: impl FnOnce(&mut Model)) {
-        let mut model = self.model.lock().expect("model lock");
-        let before = model.clone();
-        change(&mut model);
-        if *model != before {
+    fn update(&self, change: impl FnOnce(&mut ModelDraft<'_>)) {
+        let mut slot = self.model.lock().expect("model lock");
+        let mut draft = ModelDraft {
+            slot: &mut slot,
+            dirty: false,
+        };
+        change(&mut draft);
+        let dirty = draft.dirty;
+        drop(slot);
+        if dirty {
             let _ = self.updates.try_send(());
         }
     }
@@ -90,7 +124,7 @@ impl Controller {
     pub fn start() -> std::io::Result<Self> {
         let (updates, receiver_updates) = async_channel::bounded(1);
         let shared = Arc::new(Shared {
-            model: Mutex::new(Model::default()),
+            model: Mutex::new(Arc::new(Model::default())),
             closing: AtomicBool::new(false),
             account_view_visible: AtomicBool::new(false),
             updates,
@@ -103,7 +137,7 @@ impl Controller {
             .spawn(move || {
                 let result =
                     connection::run(&state, &receiver).map_err(|error| format!("{error:#}"));
-                state.update(|model| model.connection = Connection::Closed(result));
+                state.update(|draft| draft.set_connection(Connection::Closed(result)));
             })?;
         Ok(Self {
             shared,
@@ -114,10 +148,11 @@ impl Controller {
         })
     }
 
+    /// Returns a shared immutable snapshot of the current host model.
     /// # Panics
     /// Panics if the application model mutex is poisoned.
-    pub fn model(&self) -> Model {
-        self.shared.model.lock().expect("model lock").clone()
+    pub fn model(&self) -> Arc<Model> {
+        Arc::clone(&self.shared.model.lock().expect("model lock"))
     }
 
     /// Coalesced model invalidation for the GUI executor. Subscribe before reading.
@@ -138,7 +173,7 @@ impl Controller {
     fn command(&self, command: Command) -> bool {
         let error = self.enqueue(command).err();
         let queued = error.is_none();
-        self.shared.update(|model| model.command_error = error);
+        self.shared.update(|draft| draft.set_command_error(error));
         let _ = self.shared.wake.notify();
         queued
     }
@@ -153,8 +188,11 @@ impl Controller {
     }
 
     pub fn set_account_view_visible(&self, visible: bool) {
-        // A reconnect needs the latest view, even if the command queue was full
-        // when the window changed.
+        // Avoid an atomic read-modify-write on steady-state renders while still
+        // guaranteeing reconnects observe the latest visibility flag.
+        if self.shared.account_view_visible.load(Ordering::Acquire) == visible {
+            return;
+        }
         if self
             .shared
             .account_view_visible
@@ -191,7 +229,8 @@ impl Controller {
     }
 
     pub fn set_sender_trace(&self, enabled: bool) {
-        self.shared.update(|model| {
+        self.shared.update(|draft| {
+            let model = draft.read();
             if model.connection != Connection::Connected
                 || model.sender_trace == SenderTrace::Unavailable
                 || model.sender_trace_change == SenderTraceChange::Applying
@@ -201,7 +240,7 @@ impl Controller {
             }
             // Keep the model lock until the pending state is installed so an
             // acknowledgement cannot arrive first and leave the control stuck.
-            model.sender_trace_change = match self.enqueue(Command::SetSenderTrace {
+            let next = match self.enqueue(Command::SetSenderTrace {
                 sender_trace: enabled,
             }) {
                 Ok(()) => SenderTraceChange::Applying,
@@ -211,6 +250,9 @@ impl Controller {
                     SenderTraceChange::Failed
                 }
             };
+            if model.sender_trace_change != next {
+                draft.write().sender_trace_change = next;
+            }
         });
         let _ = self.shared.wake.notify();
     }
@@ -299,8 +341,8 @@ impl Controller {
         let failed = guard.take().is_some_and(|worker| worker.join().is_err());
         drop(guard);
         if failed {
-            self.shared.update(|model| {
-                model.connection = Connection::Closed(Err("host worker panicked".into()));
+            self.shared.update(|draft| {
+                draft.set_connection(Connection::Closed(Err("host worker panicked".into())));
             });
         }
         match &self.model().connection {

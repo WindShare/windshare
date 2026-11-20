@@ -76,10 +76,15 @@ pub fn run(shared: &Shared, commands: &Receiver<Command>) -> Result<()> {
     let host = Host::start().context("start local engine host")?;
     tracing::info!(event = "desktop.host_started", session_id = %host.endpoint.session_id,
         log_directory = %host.endpoint.log_directory);
-    shared.update(|model| {
-        model.session_id = Some(host.endpoint.session_id.clone());
-        model.log_directory = (!host.endpoint.log_directory.is_empty())
+    shared.update(|draft| {
+        let session_id = Some(host.endpoint.session_id.clone());
+        let log_directory = (!host.endpoint.log_directory.is_empty())
             .then(|| host.endpoint.log_directory.as_str().into());
+        if draft.read().session_id != session_id || draft.read().log_directory != log_directory {
+            let model = draft.write();
+            model.session_id = session_id;
+            model.log_directory = log_directory;
+        }
     });
     let mut sequence = 0_u64;
     let mut pending = BTreeMap::new();
@@ -97,13 +102,13 @@ pub fn run(shared: &Shared, commands: &Receiver<Command>) -> Result<()> {
         let error = result
             .err()
             .map_or_else(|| "control connection closed".into(), |e| format!("{e:#}"));
-        shared.update(|model| model.connection = Connection::Reconnecting(error.clone()));
+        shared.update(|draft| draft.set_connection(Connection::Reconnecting(error.clone())));
         tracing::warn!(event = "desktop.control_reconnecting", session_id = %host.endpoint.session_id, %error);
         shared
             .wake
             .wait(&mut polling::Events::new(), Some(RETRY_INTERVAL))?;
     }
-    shared.update(|model| model.connection = Connection::Closing);
+    shared.update(|draft| draft.set_connection(Connection::Closing));
     let session_id = host.endpoint.session_id.clone();
     let started = Instant::now();
     tracing::info!(event = "desktop.host_shutdown_started", %session_id);
@@ -143,7 +148,7 @@ fn pump(
     for command in pending.values() {
         send(socket, command)?;
     }
-    shared.update(|model| model.connection = Connection::Connected);
+    shared.update(|draft| draft.set_connection(Connection::Connected));
     let mut visible = false;
     while !shared.closing.load(Ordering::Acquire) {
         while pending.len() < MAX_PENDING {
@@ -223,33 +228,55 @@ fn receive(shared: &Shared, pending: &mut BTreeMap<u64, Request>, text: &str) ->
     if message.error.is_none() && message.snapshot.is_none() {
         return Ok(());
     }
-    shared.update(|model| {
-        let command = acknowledged.map(|request| request.command);
-        if matches!(command, Some(Command::SetSenderTrace { .. })) {
-            model.sender_trace_change = if message.error.is_some() {
-                SenderTraceChange::Failed
-            } else {
-                SenderTraceChange::Idle
-            };
-        } else if let Some(error) = message.error {
-            match command {
-                Some(
-                    Command::Create { operation_id, .. } | Command::Repeat { operation_id, .. },
-                ) => {
-                    model.reject(&operation_id, error);
-                }
-                Some(Command::Account { operation_id, .. }) => {
-                    model.rejected_account = Some((operation_id, error));
-                }
-                Some(Command::Configure { setup, .. }) => {
-                    model.rejected_setup = Some((setup.id, error));
-                }
-                _ => model.command_error = Some(error.message),
-            }
-        }
-        if let Some(snapshot) = message.snapshot {
-            model.reconcile(snapshot);
-        }
+    shared.update(|draft| {
+        apply_reply(draft, acknowledged.map(|request| request.command), message);
     });
     Ok(())
+}
+
+fn apply_reply(draft: &mut crate::ModelDraft<'_>, command: Option<Command>, message: Envelope) {
+    if matches!(command, Some(Command::SetSenderTrace { .. })) {
+        let next = if message.error.is_some() {
+            SenderTraceChange::Failed
+        } else {
+            SenderTraceChange::Idle
+        };
+        if draft.read().sender_trace_change != next {
+            draft.write().sender_trace_change = next;
+        }
+    } else if let Some(error) = message.error {
+        apply_command_error(draft, command, error);
+    }
+    if let Some(snapshot) = message.snapshot
+        && draft.read().accepts_snapshot(&snapshot)
+    {
+        draft.write().reconcile(snapshot);
+    }
+}
+
+fn apply_command_error(
+    draft: &mut crate::ModelDraft<'_>,
+    command: Option<Command>,
+    error: crate::Failure,
+) {
+    match command {
+        Some(Command::Create { operation_id, .. } | Command::Repeat { operation_id, .. }) => {
+            if draft.read().can_reject(&operation_id, &error) {
+                draft.write().reject(&operation_id, error);
+            }
+        }
+        Some(Command::Account { operation_id, .. }) => {
+            let entry = Some((operation_id, error));
+            if draft.read().rejected_account != entry {
+                draft.write().rejected_account = entry;
+            }
+        }
+        Some(Command::Configure { setup, .. }) => {
+            let entry = Some((setup.id, error));
+            if draft.read().rejected_setup != entry {
+                draft.write().rejected_setup = entry;
+            }
+        }
+        _ => draft.set_command_error(Some(error.message)),
+    }
 }

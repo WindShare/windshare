@@ -5,7 +5,11 @@ use crate::{
     model::{Overlay, Page, ShareSource, SharingSetupTarget},
 };
 use gpui::{Context, Window};
-use std::time::{Duration, SystemTime};
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
 use windshare_host::{
     AccountProfile, AccountState, AccountStatus, AccountView, Allowance, Connection, Controller,
     Model, Nickname, RelayMode, RelayPreferences, SavedRelay,
@@ -41,7 +45,7 @@ pub enum QuitState {
 
 pub struct Session {
     pub controller: Controller,
-    pub model: Model,
+    pub model: Arc<Model>,
     pub picking: bool,
     #[cfg(windows)]
     pub picker: Option<windshare_activation::windows::picker::Picker>,
@@ -125,7 +129,7 @@ impl Runtime {
         matches!(self, Self::Preview(_))
     }
 
-    pub const fn selection_disabled(&self) -> bool {
+    pub fn selection_disabled(&self) -> bool {
         match self {
             Self::Preview(_) => false,
             Self::Native(session) => {
@@ -165,7 +169,7 @@ impl Runtime {
         }
     }
 
-    pub const fn status(&self) -> Text {
+    pub fn status(&self) -> Text {
         let Self::Native(session) = self else {
             return Text::PreviewStatus;
         };
@@ -206,30 +210,38 @@ impl Desktop {
             return;
         };
         let model = session.controller.model();
-        if model != session.model {
-            let previous_page = self.setup_form.page;
-            let previous_setup_pending = self.setup_form.pending.clone();
-            let previous_account_page = self.account_form.page();
-            let previous_field = self.account_form.field_focus(&session.model, cx);
-            self.setup_form.reconcile(&model, cx);
-            self.account_form.reconcile(&model, cx);
-            let close_completed = Self::reconcile_settings_overlay(
-                &self.overlays,
-                &mut self.setup_form,
-                &mut self.account_form,
-                &model,
-                previous_page,
-                previous_setup_pending.is_some(),
-                previous_account_page,
-                previous_field.as_ref(),
-                window,
-                cx,
-            );
+        if Arc::ptr_eq(&model, &session.model) {
+            return;
+        }
+        let previous_page = self.setup_form.page;
+        let previous_setup_pending = self.setup_form.pending.clone();
+        let previous_account_page = self.account_form.page();
+        let previous_field = self.account_form.field_focus(&session.model, cx);
+        self.setup_form.reconcile(&model, cx);
+        self.account_form.reconcile(&model, cx);
+        let close_completed = Self::reconcile_settings_overlay(
+            &self.overlays,
+            &mut self.setup_form,
+            &mut self.account_form,
+            &model,
+            previous_page,
+            previous_setup_pending.is_some(),
+            previous_account_page,
+            previous_field.as_ref(),
+            window,
+            cx,
+        );
+        if !self.shares.is_empty() && !model.operations.is_empty() {
+            let operations: HashMap<&str, &windshare_host::Operation> = model
+                .operations
+                .iter()
+                .map(|op| (op.id.as_str(), op))
+                .collect();
             for share in &mut self.shares {
                 let ShareSource::Native { operation_id } = &share.source else {
                     continue;
                 };
-                if let Some(operation) = model.operations.iter().find(|op| &op.id == operation_id) {
+                if let Some(operation) = operations.get(operation_id.as_str()) {
                     let was_ready = share.live_publication().is_some();
                     super::projection::update_share(share, operation);
                     if !was_ready && share.live_publication().is_some() {
@@ -238,29 +250,31 @@ impl Desktop {
                     }
                 }
             }
-            // This timer only re-enables presentation at the host's deadline.
-            // It never refreshes the directory or retries an operation.
-            let mut deadlines: Vec<_> = model
-                .operations
-                .iter()
-                .filter_map(|op| op.share())
-                .filter_map(|share| match share.state {
-                    windshare_host::ShareState::AwaitingNetwork { blocking } => {
-                        super::blocking::retry_deadline(blocking)
-                    }
-                    _ => None,
-                })
-                .chain(
-                    model
-                        .account
-                        .as_ref()
-                        .and_then(windshare_host::AccountView::nickname_deadline),
-                )
-                .filter(|at| *at > SystemTime::now())
-                .collect();
-            deadlines.sort_unstable();
-            deadlines.dedup();
-            session.retry_wakeup = Some(cx.spawn(async move |view, cx| {
+        }
+        // This timer only re-enables presentation at the host's deadline.
+        // It never refreshes the directory or retries an operation.
+        let mut deadlines: Vec<_> = model
+            .operations
+            .iter()
+            .filter_map(|op| op.share())
+            .filter_map(|share| match share.state {
+                windshare_host::ShareState::AwaitingNetwork { blocking } => {
+                    super::blocking::retry_deadline(blocking)
+                }
+                _ => None,
+            })
+            .chain(
+                model
+                    .account
+                    .as_ref()
+                    .and_then(windshare_host::AccountView::nickname_deadline),
+            )
+            .filter(|at| *at > SystemTime::now())
+            .collect();
+        deadlines.sort_unstable();
+        deadlines.dedup();
+        session.retry_wakeup = (!deadlines.is_empty()).then(|| {
+            cx.spawn(async move |view, cx| {
                 for at in deadlines {
                     let delay = at.duration_since(SystemTime::now()).unwrap_or_default();
                     cx.background_executor().timer(delay).await;
@@ -268,28 +282,28 @@ impl Desktop {
                         break;
                     }
                 }
-            }));
-            if let windshare_host::Setup::Running {
-                verification_url,
-                service_login: None,
-                ..
-            } = &model.setup
-                && !verification_url.is_empty()
-                && !matches!(&session.model.setup, windshare_host::Setup::Running { verification_url: previous, .. } if previous == verification_url)
-            {
-                cx.open_url(verification_url);
-            }
-            session.model = model;
-            match close_completed {
-                OverlayCompletion::Keep => {}
-                OverlayCompletion::Close => self.close_overlay(window, cx),
-                OverlayCompletion::CloseWithToast(text) => {
-                    self.close_overlay(window, cx);
-                    self.notify(text, cx);
-                }
-            }
-            cx.notify();
+            })
+        });
+        if let windshare_host::Setup::Running {
+            verification_url,
+            service_login: None,
+            ..
+        } = &model.setup
+            && !verification_url.is_empty()
+            && !matches!(&session.model.setup, windshare_host::Setup::Running { verification_url: previous, .. } if previous == verification_url)
+        {
+            cx.open_url(verification_url);
         }
+        session.model = model;
+        match close_completed {
+            OverlayCompletion::Keep => {}
+            OverlayCompletion::Close => self.close_overlay(window, cx),
+            OverlayCompletion::CloseWithToast(text) => {
+                self.close_overlay(window, cx);
+                self.notify(text, cx);
+            }
+        }
+        cx.notify();
     }
 
     #[allow(clippy::too_many_arguments)]

@@ -139,6 +139,8 @@ impl Desktop {
     ) -> Div {
         let form = &self.setup_form;
         let locale = language(cx);
+        let input_ready = form.input_submittable("", cx);
+        form.rendered_input_ready.set(Some(input_ready));
         column()
             .gap(px(16.))
             .child(
@@ -166,7 +168,7 @@ impl Desktop {
                             Action::SaveSharingSetup(id),
                             cx,
                         )
-                        .disabled(blocked || form.relay.read(cx).value().trim().is_empty()),
+                        .disabled(blocked || !input_ready),
                     )
                     .child(Self::back_to_relays(busy, close_on_back, cx)),
             )
@@ -183,7 +185,8 @@ impl Desktop {
     ) -> Div {
         let locale = language(cx);
         let input = &self.setup_form.frontend;
-        let url = input.read(cx).value().trim();
+        let input_ready = self.setup_form.input_submittable(&prefs.frontend, cx);
+        self.setup_form.rendered_input_ready.set(Some(input_ready));
         let mut panel = column()
             .gap(px(16.))
             .child(theme.caption(locale.text(Text::ReceiverSiteDetail)))
@@ -206,7 +209,7 @@ impl Desktop {
                             Action::SaveSharingSetup(id),
                             cx,
                         )
-                        .disabled(busy || url.is_empty() || url == prefs.frontend),
+                        .disabled(busy || !input_ready),
                     )
                     .child(Self::back_to_relays(busy, close_on_back, cx)),
             );

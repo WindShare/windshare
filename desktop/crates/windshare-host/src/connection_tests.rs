@@ -1,6 +1,6 @@
 use super::*;
 use crate::{Model, Operation, OperationState};
-use std::sync::{Mutex, atomic::AtomicBool};
+use std::sync::{Arc, Mutex, atomic::AtomicBool};
 
 fn pending_create() -> (Shared, BTreeMap<u64, Request>) {
     let mut model = Model::default();
@@ -10,7 +10,7 @@ fn pending_create() -> (Shared, BTreeMap<u64, Request>) {
         state: OperationState::Submitting,
     });
     let shared = Shared {
-        model: Mutex::new(model),
+        model: Mutex::new(Arc::new(model)),
         closing: AtomicBool::new(false),
         account_view_visible: AtomicBool::new(false),
         updates: async_channel::bounded(1).0,
@@ -46,7 +46,15 @@ fn observations_never_acknowledge_unanswered_commands() {
     )
     .unwrap();
     assert!(pending.is_empty());
-    assert_eq!(shared.model.lock().unwrap().revision, 1);
+    let accepted = Arc::clone(&shared.model.lock().unwrap());
+    assert_eq!(accepted.revision, 1);
+    receive(
+        &shared,
+        &mut pending,
+        r#"{"version":1,"snapshot":{"session_id":"session","revision":1,"shares":[]}}"#,
+    )
+    .unwrap();
+    assert!(Arc::ptr_eq(&accepted, &shared.model.lock().unwrap()));
 }
 
 #[test]

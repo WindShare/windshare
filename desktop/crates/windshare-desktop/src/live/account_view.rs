@@ -257,6 +257,8 @@ impl Desktop {
             Text::SaveSettings | Text::AccountVerify => Icon::Check,
             _ => Icon::Arrow,
         };
+        let can_submit = form.can_submit(view, cx);
+        form.rendered_can_submit.set(Some(can_submit));
         let mut actions = row().gap(px(8.)).flex_wrap().child(
             Self::button(
                 "account-submit",
@@ -270,7 +272,7 @@ impl Desktop {
                 Action::Account(AccountAction::Submit),
                 cx,
             )
-            .disabled(!form.can_submit(view, cx)),
+            .disabled(!can_submit),
         );
         if let AccountPage::Email(purpose, EmailStep::Code) = form.page() {
             actions = actions.child(

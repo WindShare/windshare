@@ -33,7 +33,7 @@ pub fn setting_row(theme: Theme, title: &str, detail: String, action: Button) ->
 }
 
 impl Desktop {
-    pub(crate) const fn relay_preferences_view(&self) -> &RelayPreferences {
+    pub(crate) fn relay_preferences_view(&self) -> &RelayPreferences {
         match &self.runtime {
             Runtime::Native(session) => &session.model.preferences,
             Runtime::Preview(preview) => &preview.preferences,

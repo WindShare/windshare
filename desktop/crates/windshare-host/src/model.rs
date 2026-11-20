@@ -1,6 +1,9 @@
 use crate::Setup;
 use serde::Deserialize;
-use std::path::PathBuf;
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+};
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct Snapshot {
@@ -326,13 +329,24 @@ impl Model {
                 })
     }
 
-    pub fn reconcile(&mut self, snapshot: Snapshot) {
-        if self
-            .session_id
+    pub(crate) fn accepts_snapshot(&self, snapshot: &Snapshot) -> bool {
+        self.session_id
             .as_ref()
-            .is_some_and(|session| session != &snapshot.session_id)
-            || snapshot.revision <= self.revision
-        {
+            .is_none_or(|session| session == &snapshot.session_id)
+            && snapshot.revision > self.revision
+    }
+
+    pub(crate) fn can_reject(&self, operation_id: &str, error: &Failure) -> bool {
+        self.operations
+            .iter()
+            .find(|op| op.id == operation_id)
+            .is_some_and(
+                |op| !matches!(&op.state, OperationState::Rejected(existing) if existing == error),
+            )
+    }
+
+    pub fn reconcile(&mut self, snapshot: Snapshot) {
+        if !self.accepts_snapshot(&snapshot) {
             return;
         }
         self.session_id = Some(snapshot.session_id);
@@ -343,19 +357,25 @@ impl Model {
         self.sender_trace = snapshot.sender_trace;
         // A full snapshot replaces accepted state, but cannot erase unsent local
         // intents whose commands have not yet reached the host.
+        let present: HashSet<&str> = snapshot
+            .shares
+            .iter()
+            .map(|share| share.operation_id.as_str())
+            .collect();
         self.operations.retain(|operation| {
             !matches!(operation.state, OperationState::Accepted(_))
-                || snapshot
-                    .shares
-                    .iter()
-                    .any(|share| share.operation_id == operation.id)
+                || present.contains(operation.id.as_str())
         });
+        drop(present);
+        let mut index_by_id: HashMap<String, usize> = self
+            .operations
+            .iter()
+            .enumerate()
+            .map(|(index, op)| (op.id.clone(), index))
+            .collect();
         for share in snapshot.shares {
-            if let Some(operation) = self
-                .operations
-                .iter_mut()
-                .find(|op| op.id == share.operation_id)
-            {
+            if let Some(&index) = index_by_id.get(&share.operation_id) {
+                let operation = &mut self.operations[index];
                 if share.startup == Startup::Ready
                     && operation
                         .share()
@@ -367,6 +387,7 @@ impl Model {
                 }
                 operation.state = OperationState::Accepted(Box::new(share));
             } else {
+                index_by_id.insert(share.operation_id.clone(), self.operations.len());
                 self.operations.push(Operation {
                     id: share.operation_id.clone(),
                     paths: Vec::new(),

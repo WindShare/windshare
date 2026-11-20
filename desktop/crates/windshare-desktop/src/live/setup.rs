@@ -5,6 +5,7 @@ use crate::{
     model::{Overlay, ShareSource, SharingSetupTarget},
 };
 use gpui::{Entity, Focusable, Subscription, Window, prelude::*};
+use std::cell::Cell;
 use windshare_host::{Model, PreferenceEdit, RelayOperation, Setup, ShareAuthorization};
 use windshare_ui::{Input, InputEvent};
 
@@ -33,6 +34,7 @@ pub struct SetupForm {
     pub(super) frontend: Entity<Input>,
     pub(super) pending: Option<String>,
     pub(super) feedback: Option<Result<Text, String>>,
+    pub(super) rendered_input_ready: Cell<Option<bool>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -50,13 +52,25 @@ impl SetupForm {
             .into_iter()
             .map(|input| {
                 cx.subscribe_in(input, window, |this, _, event, window, cx| {
-                    if matches!(event, InputEvent::Submit)
-                        && let Some(frame) = this.overlays.last()
-                        && let Overlay::SharingSetup(target) = frame.content
-                    {
-                        this.save_sharing_setup(target.share_id(), window, cx);
+                    let Some(target) = this.overlays.last().and_then(|frame| match frame.content {
+                        Overlay::SharingSetup(target) => Some(target),
+                        _ => None,
+                    }) else {
+                        return;
+                    };
+                    match event {
+                        InputEvent::Submit => {
+                            this.save_sharing_setup(target.share_id(), window, cx);
+                            cx.notify();
+                        }
+                        InputEvent::Changed => {
+                            let frontend = &this.relay_preferences_view().frontend;
+                            let ready = this.setup_form.input_submittable(frontend, cx);
+                            if this.setup_form.rendered_input_ready.get() != Some(ready) {
+                                cx.notify();
+                            }
+                        }
                     }
-                    cx.notify();
                 })
             })
             .collect();
@@ -67,7 +81,19 @@ impl SetupForm {
             frontend,
             pending: None,
             feedback: None,
+            rendered_input_ready: Cell::new(None),
             _subscriptions: subscriptions,
+        }
+    }
+
+    pub(super) fn input_submittable(&self, frontend: &str, cx: &Context<Desktop>) -> bool {
+        match self.page {
+            SetupPage::Selection => false,
+            SetupPage::Relay(_) => !self.relay.read(cx).value().trim().is_empty(),
+            SetupPage::ReceiverSite => {
+                let url = self.frontend.read(cx).value().trim();
+                !url.is_empty() && url != frontend
+            }
         }
     }
 

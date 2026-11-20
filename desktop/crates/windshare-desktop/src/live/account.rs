@@ -5,6 +5,7 @@ use crate::{
     model::{Overlay, Page, SettingsSection},
 };
 use gpui::{Entity, FocusHandle, Focusable, Subscription, Window, prelude::*};
+use std::cell::Cell;
 use windshare_host::{AccountCommand, AccountOutcome, AccountState, AccountView, Failure, Model};
 use windshare_ui::{Input, InputEvent};
 
@@ -135,6 +136,7 @@ pub struct AccountForm {
     page: AccountScreen<String>,
     pending: Option<String>,
     pub(super) feedback: Option<Result<Text, AccountFormError>>,
+    pub(super) rendered_can_submit: Cell<Option<bool>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -151,15 +153,27 @@ impl AccountForm {
             .into_iter()
             .map(|input| {
                 cx.subscribe_in(input, window, |this, _, event, window, cx| {
-                    if matches!(event, InputEvent::Submit)
-                        && this
-                            .overlays
-                            .last()
-                            .is_some_and(|frame| matches!(frame.content, Overlay::Account))
-                    {
-                        this.submit_account(window, cx);
+                    let account_open = this
+                        .overlays
+                        .last()
+                        .is_some_and(|frame| matches!(frame.content, Overlay::Account));
+                    if !account_open {
+                        return;
                     }
-                    cx.notify();
+                    match event {
+                        InputEvent::Submit => {
+                            this.submit_account(window, cx);
+                            cx.notify();
+                        }
+                        InputEvent::Changed => {
+                            let can_submit = this
+                                .account_view()
+                                .is_some_and(|view| this.account_form.can_submit(view, cx));
+                            if this.account_form.rendered_can_submit.get() != Some(can_submit) {
+                                cx.notify();
+                            }
+                        }
+                    }
                 })
             })
             .collect();
@@ -172,6 +186,7 @@ impl AccountForm {
             page: AccountScreen::Overview,
             pending: None,
             feedback: None,
+            rendered_can_submit: Cell::new(None),
             _subscriptions: subscriptions,
         }
     }
@@ -663,6 +678,7 @@ impl Desktop {
                 .controller
                 .model()
                 .command_error
+                .clone()
                 .map(|error| Err(Failure::from(error).into()))
         };
     }

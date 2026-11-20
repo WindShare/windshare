@@ -1,7 +1,10 @@
 use crate::{
     Command, Connection, Controller, Failure, MAXIMUM_OPERATIONS, Operation, OperationState,
 };
-use std::{path::PathBuf, sync::atomic::Ordering};
+use std::{
+    path::PathBuf,
+    sync::{Arc, atomic::Ordering},
+};
 use windshare_activation::{IntentId, ShareIntent};
 
 impl Controller {
@@ -69,23 +72,20 @@ impl Controller {
         paths: Vec<PathBuf>,
         make_command: impl FnOnce(String, &[PathBuf]) -> Result<Command, String>,
     ) -> Result<String, String> {
-        let mut model = self.shared.model.lock().expect("model lock");
+        let mut slot = self.shared.model.lock().expect("model lock");
         if self.shared.closing.load(Ordering::Acquire)
-            || matches!(
-                model.connection,
-                Connection::Closing | Connection::Closed(_)
-            )
+            || matches!(slot.connection, Connection::Closing | Connection::Closed(_))
         {
             return Err("WindShare is closing".into());
         }
-        if let Some(existing) = model.operations.iter().find(|op| op.id == id) {
+        if let Some(existing) = slot.operations.iter().find(|op| op.id == id) {
             return if existing.paths == paths {
                 Ok(id)
             } else {
                 Err("This share intent was already used for a different selection".into())
             };
         }
-        if model.operations.len() >= MAXIMUM_OPERATIONS {
+        if slot.operations.len() >= MAXIMUM_OPERATIONS {
             return Err("Share limit reached; restart after stopping shares".into());
         }
         let state = match make_command(id.clone(), &paths).and_then(|command| {
@@ -107,13 +107,14 @@ impl Controller {
         }
         // Reconciliation takes the same lock; a reply cannot outrun ownership.
         // Even an unsupported path remains visible, without lossy conversion.
+        let model = Arc::make_mut(&mut slot);
         model.operations.push(Operation {
             id: id.clone(),
             paths,
             state,
         });
         model.command_error = None;
-        drop(model);
+        drop(slot);
         self.shared.notify();
         if submitted {
             tracing::info!(event = "desktop.share_submitted", operation_id = %id);

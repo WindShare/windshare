@@ -8,10 +8,10 @@ use std::{
 
 fn shared() -> Arc<Shared> {
     Arc::new(Shared {
-        model: Mutex::new(Model {
+        model: Mutex::new(Arc::new(Model {
             session_id: Some("fixture".into()),
             ..Model::default()
-        }),
+        })),
         closing: AtomicBool::new(false),
         account_view_visible: AtomicBool::new(false),
         updates: async_channel::bounded(1).0,
