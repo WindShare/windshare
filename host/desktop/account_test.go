@@ -46,9 +46,9 @@ func (*controlledAccount) RequestProfileEmail(context.Context, string, string) e
 func (*controlledAccount) ConfirmProfileEmail(context.Context, string, string, string) error {
 	return nil
 }
-func (*controlledAccount) RequestEmail(context.Context, string) error       { return nil }
-func (*controlledAccount) VerifyEmail(context.Context, string) error        { return nil }
-func (*controlledAccount) RevokeCredential(context.Context, [16]byte) error { return nil }
+func (*controlledAccount) RequestEmail(context.Context, string) error               { return nil }
+func (*controlledAccount) VerifyEmail(context.Context, string) error                { return nil }
+func (*controlledAccount) RevokeCredential(context.Context, string, [16]byte) error { return nil }
 
 func TestAccountSelectionReloadCoalescesOpenings(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {

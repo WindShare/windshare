@@ -215,12 +215,13 @@ func TestRevokeCredentialSerializesWithOperationAndLocalGates(t *testing.T) {
 			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{}`))}, nil
 		})
 		service := testService(t, config)
+		active, _ := service.Snapshot()
 
 		if err := service.lockOperation(t.Context()); err != nil {
 			t.Fatal(err)
 		}
 		done := make(chan error, 1)
-		go func() { done <- service.RevokeCredential(t.Context(), issued.Credential) }()
+		go func() { done <- service.RevokeCredential(t.Context(), active.Account, issued.Credential) }()
 		synctest.Wait()
 		select {
 		case <-revoked:

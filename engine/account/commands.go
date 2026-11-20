@@ -184,34 +184,21 @@ func (service *Service) VerifyEmail(ctx context.Context, code string) error {
 	return errors.New("registration requirements changed; retry account setup")
 }
 
-func (service *Service) RevokeCredential(ctx context.Context, credential [16]byte) error {
-	if service == nil {
-		return ErrNotConfigured
-	}
-	if err := service.lockOperation(ctx); err != nil {
-		return err
-	}
-	defer func() { <-service.operation }()
-	previous, err := service.load(ctx)
-	if err != nil {
-		return err
-	}
-	if previous.Credential == nil {
-		return errors.New("account setup is still pending")
-	}
-	var result struct{}
-	err = service.call(ctx, "/v1/accounts/credentials/revoke", previous.Credential.Secret,
-		struct {
-			Credential [16]byte `json:"credential"`
-		}{credential}, &result)
-	if err != nil {
-		return err
-	}
-	target := Record{Credential: &Credential{ID: credential, Account: previous.Credential.Account}}
-	return service.recordDenial(ctx, target, "credential_revoked", func(current Record) (Record, error) {
-		if current.Credential != nil && current.Credential.ID == credential {
-			current.Denial = "credential_revoked"
+func (service *Service) RevokeCredential(ctx context.Context, accountID string, credential [16]byte) error {
+	return service.editAccount(ctx, accountID, func(previous Record) error {
+		var result struct{}
+		if err := service.call(ctx, "/v1/accounts/credentials/revoke", previous.Credential.Secret,
+			struct {
+				Credential [16]byte `json:"credential"`
+			}{credential}, &result); err != nil {
+			return err
 		}
-		return current, nil
+		target := Record{Credential: &Credential{ID: credential, Account: previous.Credential.Account}}
+		return service.recordDenial(ctx, target, "credential_revoked", func(current Record) (Record, error) {
+			if current.Credential != nil && current.Credential.ID == credential {
+				current.Denial = "credential_revoked"
+			}
+			return current, nil
+		})
 	})
 }

@@ -125,6 +125,43 @@ func TestPasswordEditRejectsAnAccountSwitchBeforeSending(t *testing.T) {
 	}
 }
 
+func TestRevokeCredentialRejectsAnAccountSwitchBeforeSending(t *testing.T) {
+	config, selected := accountFixture(t)
+	replacement := otherAccount(t, config, selected)
+	store := &MemoryStore{record: cachedRecord(selected)}
+	config.Store = store
+	calls := 0
+	config.Client = clientFunc(func(request *http.Request) (*http.Response, error) {
+		calls++
+		if request.URL.Path != "/v1/accounts/credentials/revoke" || request.Header.Get("Authorization") != "Bearer "+replacement.Secret {
+			t.Fatalf("unexpected revoke request: %s", request.URL.Path)
+		}
+		return accountReply(t, http.StatusOK, struct{}{}), nil
+	})
+	service := testService(t, config)
+	opened, _ := service.Snapshot()
+
+	// Another process switches the selected account while this process still shows the old one.
+	if _, err := store.Update(t.Context(), func(Record) (Record, error) {
+		return cachedRecord(replacement), nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	err := service.RevokeCredential(t.Context(), opened.Account, selected.Credential)
+	if !errors.Is(err, ErrSuperseded) || CommandErrorCode(err) != "account_changed" || calls != 0 {
+		t.Fatalf("stale revoke contacted the authority: err = %v, requests = %d", err, calls)
+	}
+
+	current, _ := testService(t, config).Snapshot()
+	if err := service.RevokeCredential(t.Context(), current.Account, replacement.Credential); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := service.load(t.Context())
+	if err != nil || calls != 1 || stored.Denial != "credential_revoked" {
+		t.Fatalf("revoke did not persist denial: calls = %d, denial = %q, err = %v", calls, stored.Denial, err)
+	}
+}
+
 func TestNicknameCooldownSynchronizesAuthorityProfileWithoutSwitchingAccount(t *testing.T) {
 	config, issued := accountFixture(t)
 	config.Store = &MemoryStore{record: cachedRecord(issued)}

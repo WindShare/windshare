@@ -42,7 +42,7 @@ type accountService interface {
 	ConfirmProfileEmail(context.Context, string, string, string) error
 	RequestEmail(context.Context, string) error
 	VerifyEmail(context.Context, string) error
-	RevokeCredential(context.Context, [16]byte) error
+	RevokeCredential(context.Context, string, [16]byte) error
 }
 
 type dependencies struct {

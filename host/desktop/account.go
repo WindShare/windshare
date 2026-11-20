@@ -208,7 +208,7 @@ func (a *Application) runAccountCommand(input AccountInput) error {
 		if err != nil || len(raw) != 16 {
 			return errors.New("invalid credential ID")
 		}
-		return service.RevokeCredential(ctx, [16]byte(raw))
+		return service.RevokeCredential(ctx, input.AccountID, [16]byte(raw))
 	default:
 		return errors.New("unknown account action")
 	}
