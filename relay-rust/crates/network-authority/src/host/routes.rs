@@ -14,6 +14,7 @@ pub struct Context {
     pub(super) path: String,
     if_none_match: Option<String>,
     admin_after: Option<String>,
+    account_query: Option<String>,
     pub(super) method: Method,
     pub(super) source: String,
     pub(super) bearer: String,
@@ -33,11 +34,18 @@ impl Context {
             .unwrap_or_default()
             .to_owned();
         let path = request.path();
-        let admin_after = if matches!(path.as_str(), "/v1/admin/reports" | "/v1/admin/nodes") {
-            request
+        let parameter = |name: &str| -> worker::Result<Option<String>> {
+            Ok(request
                 .url()?
                 .query_pairs()
-                .find_map(|(name, value)| (name == "after").then(|| value.into_owned()))
+                .find_map(|(key, value)| (key == name).then(|| value.into_owned())))
+        };
+        let admin_after = match path.as_str() {
+            "/v1/admin/reports" | "/v1/admin/nodes" | "/v1/admin/accounts" => parameter("after")?,
+            _ => None,
+        };
+        let account_query = if path == "/v1/admin/accounts/lookup" {
+            parameter("q")?
         } else {
             None
         };
@@ -50,6 +58,7 @@ impl Context {
             path,
             if_none_match,
             admin_after,
+            account_query,
             method: request.method(),
             source: request
                 .headers()
@@ -221,6 +230,7 @@ fn admin_routes(
     let Context {
         path,
         admin_after,
+        account_query,
         method,
         session,
         csrf: provided,
@@ -268,6 +278,15 @@ fn admin_routes(
                 authority.update_settings(&session, &parse::<SettingsChanges>(bytes)?)?;
             serde_json::json!({"settings": settings, "registration_mode": mode})
         }
+        (Method::Get, "/v1/admin/accounts") => {
+            serde_json::to_value(authority.accounts(&session, admin_after.as_deref())?)?
+        }
+        (Method::Get, "/v1/admin/accounts/lookup") => serde_json::to_value(
+            authority.lookup_account(&session, account_query.as_deref().unwrap_or_default())?,
+        )?,
+        (Method::Get, path) if path.starts_with("/v1/admin/accounts/") => serde_json::to_value(
+            authority.account_by_id(&session, &path["/v1/admin/accounts/".len()..])?,
+        )?,
         (Method::Get, "/v1/admin/nodes") => {
             let after = admin_after.as_deref().map(node_key).transpose()?;
             serde_json::to_value(authority.nodes(&session, after)?)?
@@ -346,7 +365,7 @@ pub fn fault(fault: &Fault) -> Result<Response> {
         | Fault::UnsupportedEmail
         | Fault::EmailCodeRejected => 400,
         Fault::Denied { .. } => 403,
-        Fault::ReportNotFound | Fault::NodeNotFound => 404,
+        Fault::ReportNotFound | Fault::NodeNotFound | Fault::AccountNotFound => 404,
         Fault::RateLimited { .. } | Fault::NicknameCooldown { .. } => 429,
         Fault::Verification { .. } => 428,
         Fault::EmailDeliveryUnavailable => 503,

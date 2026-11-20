@@ -1,4 +1,6 @@
 use super::*;
+#[path = "account_admin_tests.rs"]
+mod account_admin;
 #[path = "contract_vectors_tests.rs"]
 mod contract_vectors;
 #[path = "device_login_tests.rs"]
