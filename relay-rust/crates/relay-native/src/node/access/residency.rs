@@ -80,7 +80,7 @@ impl Service {
             if shares >= state.policy.shares_per_principal
                 || state.residents.len() >= state.share_limit(priority)
             {
-                return Err(RegistrationDecision::Unavailable);
+                return Err(RegistrationDecision::SERVICE_UNAVAILABLE);
             }
             state.residents.insert(share, (attribution, 1));
         }

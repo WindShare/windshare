@@ -280,7 +280,7 @@ impl State {
             installed_generation,
             direction,
         );
-        RegistrationDecision::Unavailable
+        RegistrationDecision::SERVICE_UNAVAILABLE
     }
 
     fn local_attribution(&self, entry: &CredentialEntry) -> Option<Attribution> {

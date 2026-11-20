@@ -3,7 +3,10 @@ package relayset
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/windshare/windshare/connectivity/relayplan"
 	"github.com/windshare/windshare/connectivity/senderrelay"
@@ -33,7 +36,7 @@ func beginCandidates(t *testing.T, a *NetworkAdmissions, plan relayplan.Plan) []
 
 func TestAdmissionsUseActualPrimaryAndParkSurplus(t *testing.T) {
 	plan := admissionFixture()
-	a := NewNetworkAdmissions(plan)
+	a := NewNetworkAdmissions(plan, time.Now, nil)
 	permits := beginCandidates(t, a, plan)
 	if !permits[2].Admit() {
 		t.Fatal("first successful candidate was not primary")
@@ -75,7 +78,7 @@ func TestAdmissionsUseActualPrimaryAndParkSurplus(t *testing.T) {
 
 func TestFailedPreferredBackupReleasesAttemptForFallback(t *testing.T) {
 	plan := admissionFixture()
-	a := NewNetworkAdmissions(plan)
+	a := NewNetworkAdmissions(plan, time.Now, nil)
 	permits := beginCandidates(t, a, plan)
 	if !permits[0].Admit() {
 		t.Fatal("primary")
@@ -96,4 +99,119 @@ func TestFailedPreferredBackupReleasesAttemptForFallback(t *testing.T) {
 	if a.Control("https://private.example") != nil {
 		t.Fatal("configured endpoint was gated")
 	}
+}
+
+func TestDeferredRegistrationHonorsSoftAndServerDeadlines(t *testing.T) {
+	const (
+		active = iota
+		failed
+		disconnected
+	)
+	for _, tc := range []struct {
+		name         string
+		fallback     bool
+		primary      int
+		server, want time.Duration
+	}{
+		{"ready primary", false, active, 0, time.Minute},
+		{"published primary disconnected", false, disconnected, 0, 0},
+		{"published primary lost with server deadline", false, disconnected, 12 * time.Second, 12 * time.Second},
+		{"preferred failed or waiting for authorization", false, failed, 0, 0},
+		{"released primary with server deadline", false, failed, 12 * time.Second, 12 * time.Second},
+		{"all locally cooled", true, active, 0, 0},
+		{"all cooled with explicit deadline", true, active, 15 * time.Second, 15 * time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				plan := admissionFixture()
+				plan.Network = plan.Network[:2]
+				start := time.Now()
+				plan.Decision.CooldownFallback = tc.fallback
+				plan.Network[1].CooldownUntil = start.Add(time.Minute)
+				if tc.server > 0 {
+					plan.Network[1].ServerRetryAt = start.Add(tc.server)
+				}
+				a := NewNetworkAdmissions(plan, time.Now, nil)
+				primary, err := a.Control(plan.Network[0].URL).Begin(t.Context())
+				if err != nil {
+					t.Fatal(err)
+				}
+				expectWaiting := func(inflight int) {
+					t.Helper()
+					a.mu.Lock()
+					defer a.mu.Unlock()
+					if a.inflight != inflight || a.states[1].eligible {
+						t.Fatal("waiting backup entered the race", a.inflight, a.states[1])
+					}
+				}
+				backup := make(chan senderrelay.AttemptPermit, 1)
+				go func() {
+					p, _ := a.Control(plan.Network[1].URL).Begin(t.Context())
+					backup <- p
+				}()
+				synctest.Wait()
+				if !tc.fallback || tc.server > 0 {
+					expectWaiting(1)
+				}
+				if tc.primary != failed && !primary.Admit() {
+					t.Fatal("primary admission failed")
+				}
+				primary.Release()
+				if tc.primary == disconnected {
+					a.Control(plan.Network[0].URL).Unavailable()
+				}
+				synctest.Wait()
+				if tc.want > 0 {
+					time.Sleep(tc.want - time.Nanosecond)
+					synctest.Wait()
+					expectWaiting(0)
+					time.Sleep(time.Nanosecond)
+				}
+				p := <-backup
+				if p == nil || !p.Admit() || time.Since(start) != tc.want {
+					t.Fatal("backup failed to thaw", time.Since(start))
+				}
+				p.Release()
+			})
+		})
+	}
+}
+
+func TestPendingDialRechecksConcurrentHTTPDeadline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		plan := admissionFixture()
+		start := time.Now()
+		first := start.Add(time.Second)
+		plan.Network[1].ServerRetryAt = first
+		plan.Network[1].Identity = "delayed"
+		var latest atomic.Int64
+		lookup := func(identity string) time.Time {
+			if identity == "delayed" {
+				return time.Unix(0, latest.Load())
+			}
+			return time.Time{}
+		}
+		a := NewNetworkAdmissions(plan, time.Now, lookup)
+		done := make(chan senderrelay.AttemptPermit, 1)
+		go func() { p, _ := a.Control(plan.Network[1].URL).Begin(t.Context()); done <- p }()
+		synctest.Wait()
+		latest.Store(first.Add(time.Second).UnixNano())
+		p, err := a.Control(plan.Network[0].URL).Begin(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		p.Release()
+		time.Sleep(time.Second)
+		synctest.Wait()
+		select {
+		case <-done:
+			t.Fatal("dialed at superseded server deadline")
+		default:
+		}
+		p = <-done
+		if time.Since(start) != 2*time.Second {
+			t.Fatal("delayed dial", time.Since(start))
+		}
+		p.Release()
+	})
 }

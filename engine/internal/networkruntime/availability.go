@@ -23,7 +23,7 @@ func (r *Runtime) Unavailability() *networkdirectory.UnavailableError {
 	if failure := r.directory.Unavailability(); failure != nil {
 		return failure
 	}
-	plan, err := r.buildPlan(nil, false, r.generation())
+	plan, err := r.buildPlan(nil, false)
 	if err != nil || len(plan.Network) == 0 {
 		failure := unavailable(err, NoRelayCandidates)
 		failure.RetryAt = r.directory.RetryAt()

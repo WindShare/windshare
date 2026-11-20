@@ -148,7 +148,8 @@ func New(config Config) (*Engine, error) {
 	if config.RelaySetup.Cache == nil {
 		config.RelaySetup.Cache = turnDependencies.Cache
 	}
-	network, err := networkruntime.New(config.Network, config.Now)
+	engineID := hex.EncodeToString(identity[:])
+	network, err := networkruntime.New(config.Network, config.Now, engineID)
 	if err != nil {
 		_ = turn.Close()
 		_ = receiveCapacity.Close()
@@ -159,7 +160,7 @@ func New(config Config) (*Engine, error) {
 		network:    network,
 		turn:       turn,
 		relaySetup: relaysetup.New(config.RelaySetup),
-		config:     config, random: random, identity: hex.EncodeToString(identity[:]),
+		config:     config, random: random, identity: engineID,
 		revisions: revisions, catalog: catalogBudget, cache: cacheBudget, connectivity: connectivity,
 		receiveCapacity: receiveCapacity,
 		tasks:           make(map[task.ID]managedTask), closed: make(chan struct{}),

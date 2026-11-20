@@ -32,6 +32,8 @@ use std::{
 };
 use tokio::sync::watch;
 
+pub(crate) const SERVICE_RETRY_SECONDS: u32 = 30;
+
 struct State {
     settings: Settings,
     identity: Option<Identity>,

@@ -43,7 +43,7 @@ fn policy_refusals_keep_connection_identity_and_wire_retry_semantics() {
     for (decision, refusal) in [
         (RegistrationDecision::Denied, ErrorFrame::AccessDenied),
         (
-            RegistrationDecision::Unavailable,
+            RegistrationDecision::SERVICE_UNAVAILABLE,
             ErrorFrame::AccessUnavailable(RetryAfter::from_millis(ACCESS_RETRY_MS).unwrap()),
         ),
     ] {

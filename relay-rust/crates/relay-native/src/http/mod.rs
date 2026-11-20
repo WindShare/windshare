@@ -186,10 +186,7 @@ impl RequestService<'_> {
             .public_budget_refuses(share, bearer.as_ref())
         {
             tracing::debug!(event = "public_relay_admission_refused", ?share, connection = ?self.connection);
-            return reply(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "public daily relay budget exhausted\n",
-            );
+            return route::unavailable("public daily relay budget exhausted\n");
         }
         self.ingress
             .capacity

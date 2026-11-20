@@ -3,8 +3,6 @@ package relayplan
 
 import (
 	"errors"
-	"slices"
-	"sort"
 	"time"
 
 	"github.com/windshare/windshare/core/networkendpoint"
@@ -22,17 +20,37 @@ const (
 var ErrConfiguration = errors.New("invalid relay plan")
 
 type Candidate struct {
-	URL          string
-	Identity     string
-	Alias        string
-	Zone         string
-	Region       string
-	Provider     string
-	Operator     string
-	CapacityMbps uint32
-	Canary       bool
-	Configured   bool
+	URL           string
+	Identity      string
+	Alias         string
+	Zone          string
+	Region        string
+	Provider      string
+	Operator      string
+	history       registrationHistory
+	CapacityMbps  uint32
+	Canary        bool
+	Configured    bool
+	CooldownUntil time.Time
+	ServerRetryAt time.Time
 }
+
+type registrationHistory int8
+
+const (
+	recentlyFailed   registrationHistory = -1
+	unmeasured       registrationHistory = 0
+	recentlyAdmitted registrationHistory = 1
+)
+
+type CooldownReason string
+
+const (
+	CooldownNone             CooldownReason = ""
+	CooldownServerBackoff    CooldownReason = "server_backoff"
+	CooldownNodeRejected     CooldownReason = "node_rejected"
+	CooldownTransportFailure CooldownReason = "transport_failure"
+)
 
 type Observation struct {
 	Identity          string
@@ -41,6 +59,8 @@ type Observation struct {
 	Admitted          bool
 	Duration          time.Duration
 	CooldownUntil     time.Time
+	CooldownReason    CooldownReason
+	ServerRetryAt     time.Time
 }
 
 type Policy struct {
@@ -54,6 +74,7 @@ type Policy struct {
 type Input struct {
 	Configured        []string
 	Directory         nodedirectory.Payload
+	SelectionSeed     string
 	Observations      []Observation
 	NetworkGeneration string
 	Now               time.Time
@@ -68,6 +89,7 @@ type Decision struct {
 	ConfiguredOnly      bool
 	Candidates          []string
 	Filters             []Filter
+	CooldownFallback    bool
 }
 
 type Plan struct {
@@ -99,8 +121,8 @@ func Build(input Input) (Plan, error) {
 	if input.Policy.ConfiguredOnly || available == 0 {
 		return finish(plan), nil
 	}
-	observations := recent(input)
-	var candidates []Candidate
+	order := newSelectionOrder(input)
+	var ready, cooled []Candidate
 	for _, node := range input.Directory.Nodes {
 		endpoint, err := networkendpoint.NormalizeRelay(node.Relay)
 		if err != nil {
@@ -116,42 +138,29 @@ func Build(input Input) (Plan, error) {
 			reason = "draining"
 		case input.Policy.Admit != nil && !input.Policy.Admit(node):
 			reason = "admission_policy"
-		case input.Now.Before(observations[endpoint.IdentityURL].CooldownUntil):
-			reason = "cooldown"
 		}
 		if reason != "" {
 			plan.Decision.Filters = append(plan.Decision.Filters, Filter{Endpoint: node.Relay, Reason: reason})
 			continue
 		}
 		seen[endpoint.IdentityURL] = true
-		candidates = append(candidates, Candidate{URL: node.Relay, Identity: endpoint.IdentityURL, Alias: node.Alias, Zone: node.Zone,
-			Region: node.Region, Provider: node.Provider, Operator: node.Operator, CapacityMbps: node.CapacityMbps, Canary: node.Status == nodedirectory.Canary})
-	}
-	sort.SliceStable(candidates, func(i, j int) bool { return less(candidates[i], candidates[j], observations) })
-	if len(candidates) == 0 {
-		return finish(plan), nil
-	}
-	plan.Network = append(plan.Network, candidates[0])
-	candidates = candidates[1:]
-	// Reserve diversity before racing; a fast, homogeneous prefix must not fill
-	// every published fallback slot as the directory grows.
-	if available > 1 && len(candidates) > 0 {
-		index := BackupIndex(plan.Network[0], candidates, input.Policy)
-		plan.Network = append(plan.Network, candidates[index])
-		candidates = append(candidates[:index], candidates[index+1:]...)
-	}
-	if len(plan.Network) < available {
-		if index := slices.IndexFunc(candidates, func(candidate Candidate) bool { _, measured := observations[candidate.Identity]; return !measured }); index >= 0 {
-			plan.Network = append(plan.Network, candidates[index])
-			candidates = append(candidates[:index], candidates[index+1:]...)
+		candidate := Candidate{URL: node.Relay, Identity: endpoint.IdentityURL, Alias: node.Alias, Zone: node.Zone,
+			Region: node.Region, Provider: node.Provider, Operator: node.Operator, CapacityMbps: node.CapacityMbps, Canary: node.Status == nodedirectory.Canary}
+		fact, measured := order.facts[candidate.Identity]
+		if measured {
+			candidate.history = recentlyFailed
+			if fact.Admitted {
+				candidate.history = recentlyAdmitted
+			}
+		}
+		if input.Now.Before(fact.CooldownUntil) || input.Now.Before(fact.ServerRetryAt) {
+			candidate.CooldownUntil, candidate.ServerRetryAt = fact.CooldownUntil, fact.ServerRetryAt
+			cooled = append(cooled, candidate)
+		} else {
+			ready = append(ready, candidate)
 		}
 	}
-	for _, candidate := range candidates {
-		if len(plan.Network) == available {
-			break
-		}
-		plan.Network = append(plan.Network, candidate)
-	}
+	order.selectNetwork(&plan, available, ready, cooled)
 	return finish(plan), nil
 }
 
@@ -165,47 +174,15 @@ func finish(plan Plan) Plan {
 	return plan
 }
 
-func recent(input Input) map[string]Observation {
-	result := map[string]Observation{}
-	for _, observation := range input.Observations {
-		if observation.NetworkGeneration != input.NetworkGeneration || observation.At.After(input.Now) || input.Now.Sub(observation.At) > ObservationAge {
-			continue
-		}
-		if previous, ok := result[observation.Identity]; !ok || observation.At.After(previous.At) {
-			result[observation.Identity] = observation
-		}
-	}
-	return result
-}
-
-func less(a, b Candidate, facts map[string]Observation) bool {
-	left, lok := facts[a.Identity]
-	right, rok := facts[b.Identity]
-	rank := func(known bool, fact Observation) int {
-		if !known {
-			return 1
-		}
-		if fact.Admitted {
-			return 2
-		}
-		return 0
-	}
-	if l, r := rank(lok, left), rank(rok, right); l != r {
-		return l > r
-	}
-	if a.Canary != b.Canary {
-		return !a.Canary
-	}
-	if a.CapacityMbps != b.CapacityMbps {
-		return a.CapacityMbps > b.CapacityMbps
-	}
-	if lok && rok && left.Admitted && right.Admitted && left.Duration != right.Duration {
-		return left.Duration < right.Duration
-	}
-	return a.Identity < b.Identity
-}
-
 func BackupIndex(primary Candidate, candidates []Candidate, policy Policy) int {
+	// A healthy or unmeasured backup outranks a recent failure even if that
+	// failure has a better zone. Admission reuses the same decision after racing.
+	const (
+		otherOperator = 1 << iota
+		otherProvider
+		pairZone
+		withoutFailure
+	)
 	best, score := 0, -1
 	preferredZone := "global"
 	if primary.Zone == "global" && !policy.GlobalPairCoversMainland {
@@ -213,14 +190,17 @@ func BackupIndex(primary Candidate, candidates []Candidate, policy Policy) int {
 	}
 	for index, candidate := range candidates {
 		value := 0
+		if candidate.history != recentlyFailed {
+			value += withoutFailure
+		}
 		if candidate.Zone == preferredZone {
-			value += 4
+			value += pairZone
 		}
 		if candidate.Provider != "" && candidate.Provider != primary.Provider {
-			value += 2
+			value += otherProvider
 		}
 		if candidate.Operator != "" && candidate.Operator != primary.Operator {
-			value++
+			value += otherOperator
 		}
 		if value > score {
 			best, score = index, value

@@ -63,7 +63,7 @@ func (engine *Engine) StartShare(ctx context.Context, request ShareRequest) (*Sh
 	}
 	controller := share.NewController()
 	execution := share.Request{Source: request.Source, Relays: selection.Relays, ChunkSize: request.ChunkSize, Diagnostics: request.Diagnostics}
-	admissions := relayset.NewNetworkAdmissions(selection.Plan)
+	admissions := relayset.NewNetworkAdmissions(selection.Plan, engine.config.Now, engine.network.ServerRetryAt)
 	injected := engine.config.Share
 	dependencies := share.Dependencies{
 		Controller: controller, RevisionCapacity: engine.revisions.Coordinator(),
@@ -83,7 +83,7 @@ func (engine *Engine) StartShare(ctx context.Context, request ShareRequest) (*Sh
 	current, err := startWorkflow(engine, ctx, appobs.WorkflowShare, request.Diagnostics, func(ctx context.Context, control task.Control) task.Completion[share.Result] {
 		defer selection.ReleaseAuthorization()
 		control.Diagnostics.Record(selection)
-		dependencies.ObserveAttempt = engine.network.Observer(control.Diagnostics)
+		dependencies.ObserveAttempt = engine.network.Observer(selection, control.Diagnostics)
 		admissions.Observe(func(value relayset.Admission) { control.Diagnostics.Emit(networkruntime.AdmissionRecord(value)) })
 		var stopDiscovery func()
 		dependencies.TURN, stopDiscovery = engine.turn.ForShare(ctx, request.RelayIntent.Candidates())

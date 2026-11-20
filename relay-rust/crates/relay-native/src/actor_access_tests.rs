@@ -216,7 +216,7 @@ async fn public_daily_budget_exhaustion_refuses_new_public_registrations_and_dis
     use crate::node::{ContributionLimits, Settings};
     use windshare_relay_core::error_frame::RetryAfter;
 
-    const ACCESS_RETRY_MS: u32 = 1_000;
+    const BUDGET_RETRY_MS: u32 = 30_000;
     let fixture = Fixture::new();
     let (_generation, account_bearer, policy) = access_fixture(fixture.now(false).0 / 1000);
     let base_settings = Settings {
@@ -269,7 +269,7 @@ async fn public_daily_budget_exhaustion_refuses_new_public_registrations_and_dis
         let persisted = with_sender(&public_node, &fixture, bearer, async |sender| {
             assert_eq!(
                 read(&mut sender.writer).await,
-                ErrorFrame::AccessUnavailable(RetryAfter::from_millis(ACCESS_RETRY_MS).unwrap())
+                ErrorFrame::AccessUnavailable(RetryAfter::from_millis(BUDGET_RETRY_MS).unwrap())
                     .encode()
             );
         })

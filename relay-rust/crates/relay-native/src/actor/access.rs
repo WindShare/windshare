@@ -2,6 +2,7 @@ use super::{Actor, Environment, Persistence};
 use anyhow::{Result, anyhow};
 use windshare_relay_core::{
     access::{Attribution, RegistrationDecision, RegistrationRequest},
+    error_frame::RetryAfter,
     lifecycle::Record,
     share::Input,
 };
@@ -47,7 +48,10 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
             // Stop non-owner registrations before reserving residency or writing SQLite
             // when the daily public contribution budget is already spent.
             if self.node.public_budget_refuses_attribution(attribution) {
-                decision = RegistrationDecision::Unavailable;
+                decision = RegistrationDecision::Unavailable(
+                    RetryAfter::from_millis(crate::node::SERVICE_RETRY_SECONDS * 1000)
+                        .expect("bounded node retry"),
+                );
             } else if let Some(residency) = &self.residency {
                 if residency.attribution() != attribution {
                     decision = RegistrationDecision::Denied;

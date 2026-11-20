@@ -2,6 +2,8 @@
 package networkconfig
 
 import (
+	"time"
+
 	"github.com/windshare/windshare/engine/account"
 	"github.com/windshare/windshare/engine/networkdirectory"
 )
@@ -15,9 +17,11 @@ type Config struct {
 }
 
 type Candidate struct {
-	URL        string
-	Alias      string
-	Configured bool
+	URL           string
+	Alias         string
+	Configured    bool
+	CooldownUntil time.Time
+	ServerRetryAt time.Time
 }
 
 type Filter struct{ Endpoint, Reason string }
@@ -26,6 +30,7 @@ type Decision struct {
 	DirectorySerial     uint64
 	NetworkGeneration   string
 	ConfiguredOnly      bool
+	CooldownFallback    bool
 	Candidates          []Candidate
 	Filters             []Filter
 	FrontendReason      string

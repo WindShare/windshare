@@ -68,7 +68,7 @@ type Observation struct {
 }
 ```
 
-3. **健康表**。存储从 `relayplan` 迁入 `engine/internal/networkruntime/health.go`，删除原存储文件。`RecordAttempt` 与 `Snapshot` 按代次、端点原子读写，沿用 `ObservationAge` 与 `nodedirectory.MaximumNodes` 上限。[原观测存储](../../../connectivity/relayplan/observations.go)
+3. **健康表**。存储从 `relayplan` 迁入 `engine/internal/networkruntime/health.go`，删除原存储文件。`RecordAttempt` 与 `Snapshot` 按代次、端点原子读写，沿用 `ObservationAge` 与 `nodedirectory.MaximumNodes` 上限。[节点健康表](../../../engine/internal/networkruntime/health.go)
 
 | 观测 | 跨分享处理 |
 |---|---|
@@ -151,3 +151,14 @@ const (
 | 全部旧节点退役 | 全冷却规划异步唤醒目录刷新，更新后的目录用于后续分享。 |
 | Windows 右键冷启动 / CLI 冷启动 | 首次网络快照保留握手样本。CLI 以进程种子打散同级平局。 |
 | 自建中转或 `ConfiguredOnly` | 显式中转独立注册。仅配置模式的规划跳过账号读取和目录刷新。 |
+
+## 6. 本地对照测量
+
+在 Windows 回环网络上，用同一套原生中转和 Chromium 前端对比基线 `e16a108e` 与本次实现。发送进程跨分享保留观测，每次打开使用新的浏览器上下文并关闭 WebRTC。每个版本、每种场景预热 2 次，再交替采集各 24 次。
+
+| 目录场景 | 发起分享到链接可用 P95，毫秒 | 打开链接到首个目录项可见 P95，毫秒 | 每次打开的平均 WebSocket 握手数 |
+|---|---:|---:|---:|
+| 两台健康中转 | 51.6 → 53.4 | 169.9 → 174.6 | 3 → 3 |
+| 两台健康，另有一台返回 503 并要求等待 30 秒 | 50.5 → 50.9 | 164.7 → 171.6 | 5 → 3 |
+
+箭头左侧为基线，右侧为本次实现。分享计时从调用 `Engine.StartShare` 到链接生成。浏览器握手统计截至首个目录项可见。503 场景每次少发起 2 次握手，两种场景的本机 P95 均略有上升。

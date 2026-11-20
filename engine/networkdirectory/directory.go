@@ -37,17 +37,19 @@ type Config struct {
 }
 
 type Directory struct {
-	config      Config
-	mu          sync.Mutex
-	current     nodedirectory.Snapshot
-	highest     nodedirectory.Cursor
-	refreshing  chan struct{}
-	nextRefresh time.Time
-	failures    uint
-	lastError   error
-	ctx         context.Context
-	cancel      context.CancelFunc
-	done        chan struct{}
+	config          Config
+	mu              sync.Mutex
+	current         nodedirectory.Snapshot
+	highest         nodedirectory.Cursor
+	refreshing      chan struct{}
+	nextRefresh     time.Time
+	earliestTrigger time.Time
+	scheduleChanged chan struct{}
+	failures        uint
+	lastError       error
+	ctx             context.Context
+	cancel          context.CancelFunc
+	done            chan struct{}
 }
 
 func New(config Config) (*Directory, error) {
@@ -79,7 +81,7 @@ func New(config Config) (*Directory, error) {
 		config.Order = rand.Perm
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	directory := &Directory{config: config, ctx: ctx, cancel: cancel, done: make(chan struct{})}
+	directory := &Directory{config: config, ctx: ctx, cancel: cancel, done: make(chan struct{}), scheduleChanged: make(chan struct{}, 1)}
 	record, err := config.Cache.Load(ctx)
 	if err != nil {
 		cancel()
@@ -158,12 +160,39 @@ func (directory *Directory) commit(ctx context.Context, next nodedirectory.Snaps
 // Refresh coalesces user retries, unknown-alias resolution and periodic refresh.
 // Caller cancellation stops waiting, not an update another task also needs.
 func (directory *Directory) Refresh(ctx context.Context) error {
+	return directory.requestRefresh(ctx, false)
+}
+
+// TriggerRefresh advances periodic maintenance after an all-cooled plan. A
+// burst of shares coalesces into one fetch, including during success cooldown.
+func (directory *Directory) TriggerRefresh() {
+	directory.mu.Lock()
+	defer directory.mu.Unlock()
+	if directory.refreshing != nil || directory.failures != 0 || !directory.earliestTrigger.Before(directory.nextRefresh) {
+		return
+	}
+	directory.nextRefresh = directory.earliestTrigger
+	directory.notifySchedule()
+}
+
+func (directory *Directory) notifySchedule() {
+	select {
+	case directory.scheduleChanged <- struct{}{}:
+	default:
+	}
+}
+
+func (directory *Directory) requestRefresh(ctx context.Context, scheduled bool) error {
 	if err := directory.ctx.Err(); err != nil {
 		return err
 	}
 	directory.mu.Lock()
 	done := directory.refreshing
-	if done == nil && directory.failures > 0 && directory.config.Now().Before(directory.nextRefresh) {
+	if done == nil && directory.config.Now().Before(directory.nextRefresh) && (directory.failures > 0 || scheduled) {
+		if directory.failures == 0 {
+			directory.mu.Unlock()
+			return nil
+		}
 		err := directory.unavailableLocked()
 		directory.mu.Unlock()
 		slog.Debug("network_directory_refresh_deferred", "network", directory.config.Network, "reason", err.Reason, "retry_at", err.RetryAt)
@@ -197,17 +226,20 @@ func (directory *Directory) refresh(done chan struct{}) {
 	directory.mu.Lock()
 	defer directory.mu.Unlock()
 	directory.lastError = err
+	now := directory.config.Now()
 	if err == nil {
 		directory.failures = 0
-		directory.nextRefresh = directory.config.Now().Add(RefreshInterval)
+		directory.nextRefresh = now.Add(RefreshInterval)
+		directory.earliestTrigger = now.Add(MinimumBackoff)
 	} else {
 		directory.failures = min(directory.failures+1, 10)
 		backoff := min(MinimumBackoff*time.Duration(1<<(directory.failures-1)), MaximumBackoff)
-		directory.nextRefresh = directory.config.Now().Add(backoff)
+		directory.nextRefresh = now.Add(backoff)
 	}
 	slog.Debug("network_directory_refresh_completed", "network", directory.config.Network, "generation", directory.highest.Generation,
 		"serial", directory.highest.Serial, "failures", directory.failures, "next_refresh", directory.nextRefresh, "error", err)
 	directory.refreshing = nil
+	directory.notifySchedule()
 	close(done)
 }
 
@@ -259,10 +291,11 @@ func (directory *Directory) run() {
 		case <-directory.ctx.Done():
 			return
 		case <-timer.C:
+		case <-directory.scheduleChanged:
 		}
-		_ = directory.Refresh(directory.ctx)
+		_ = directory.requestRefresh(directory.ctx, true)
 		directory.mu.Lock()
-		delay := max(MinimumBackoff, directory.nextRefresh.Sub(directory.config.Now()))
+		delay := max(0, directory.nextRefresh.Sub(directory.config.Now()))
 		directory.mu.Unlock()
 		timer.Reset(delay)
 	}

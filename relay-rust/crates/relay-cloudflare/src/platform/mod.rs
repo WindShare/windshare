@@ -202,7 +202,7 @@ impl ShareRelayObject {
                 return Ok(RegistrationDecision::Denied);
             }
             if response.status_code() != 200 {
-                return Ok(RegistrationDecision::Unavailable);
+                return Ok(RegistrationDecision::SERVICE_UNAVAILABLE);
             }
             let value: serde_json::Value = response.json().await?;
             let attribution =
@@ -217,7 +217,7 @@ impl ShareRelayObject {
                     json!({"event":"registration_access_unavailable",
                     "operation_id":persistence::tag(connection),"share_id":access::text_id(request.registration().route().share_id().as_bytes()),"reason":error.to_string()})
                 );
-                RegistrationDecision::Unavailable
+                RegistrationDecision::SERVICE_UNAVAILABLE
             }
         }
     }

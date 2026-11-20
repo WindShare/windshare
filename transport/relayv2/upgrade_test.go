@@ -3,10 +3,12 @@ package relayv2
 import (
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/coder/websocket"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
@@ -14,16 +16,21 @@ import (
 
 func TestDialWrapsHTTPUpgradeRejection(t *testing.T) {
 	fixture := newClientFixture(t)
-	for _, status := range []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUpgradeRequired, http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable} {
+	for _, status := range []int{http.StatusTooManyRequests, http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUpgradeRequired, http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Retry-After", "30")
 				http.Error(w, "nope", status)
 			}))
 			t.Cleanup(server.Close)
 			assertDialError(t, fixture, server.URL, true, func(t *testing.T, err error) {
 				t.Helper()
 				var dialErr *WebSocketDialError
-				if !errors.As(err, &dialErr) || strings.Contains(err.Error(), "101") || strings.Contains(err.Error(), "nope") {
+				var wait time.Duration
+				if status == http.StatusTooManyRequests || status == http.StatusServiceUnavailable {
+					wait = 30 * time.Second
+				}
+				if !errors.As(err, &dialErr) || dialErr.StatusCode != status || dialErr.RetryAfter != wait || strings.Contains(err.Error(), "101") || strings.Contains(err.Error(), "nope") {
 					t.Fatalf("upgrade rejection = %v", err)
 				}
 			})
@@ -95,4 +102,22 @@ func assertDialError(t *testing.T, fixture clientFixture, base string, registrat
 func routeHintIs(err error, want string) bool {
 	hint, ok := errors.AsType[*WebSocketRouteError](err)
 	return ok && hint.BaseHint.URL() == want
+}
+
+func TestRetryAfterSecondsAndHTTPDates(t *testing.T) {
+	now := time.Date(2026, 11, 20, 8, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		header string
+		want   time.Duration
+	}{
+		{" 30 ", 30 * time.Second}, {"0", 0}, {"-1", 0}, {"+1", 0}, {"1.5", 0}, {"", 0},
+		{strings.Repeat("9", 90), time.Duration(math.MaxInt64/int64(time.Second)) * time.Second},
+		{strings.Repeat("9", 90) + "x", 0},
+		{now.Add(45 * time.Second).Format(http.TimeFormat), 45 * time.Second},
+		{now.Add(-time.Second).Format(http.TimeFormat), 0},
+	} {
+		if got := parseRetryAfter(tc.header, now); got != tc.want {
+			t.Errorf("%q = %v, want %v", tc.header, got, tc.want)
+		}
+	}
 }

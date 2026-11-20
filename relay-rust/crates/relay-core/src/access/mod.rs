@@ -16,7 +16,12 @@ const ACCESS_RETRY_MS: u32 = 1_000;
 pub enum RegistrationDecision {
     Granted(Attribution),
     Denied,
-    Unavailable,
+    Unavailable(RetryAfter),
+}
+
+impl RegistrationDecision {
+    pub const SERVICE_UNAVAILABLE: Self =
+        Self::Unavailable(RetryAfter::from_millis(ACCESS_RETRY_MS).expect("bounded access retry"));
 }
 
 /// Only a validated fresh registration asks the host to resolve service policy.
@@ -55,8 +60,8 @@ impl RegistrationRequest {
                 }))
             }
             RegistrationDecision::Denied => RegistrationAuthorization::Denied(self.connection),
-            RegistrationDecision::Unavailable => {
-                RegistrationAuthorization::Unavailable(self.connection)
+            RegistrationDecision::Unavailable(retry) => {
+                RegistrationAuthorization::Unavailable(self.connection, retry)
             }
         }
     }
@@ -67,7 +72,7 @@ impl RegistrationRequest {
 pub enum RegistrationAuthorization {
     Granted(alloc::boxed::Box<RegistrationGrant>),
     Denied(ConnectionRef),
-    Unavailable(ConnectionRef),
+    Unavailable(ConnectionRef, RetryAfter),
 }
 
 #[derive(Debug)]
@@ -81,7 +86,7 @@ impl RegistrationAuthorization {
     pub const fn connection(&self) -> ConnectionRef {
         match self {
             Self::Granted(grant) => grant.request.connection,
-            Self::Denied(connection) | Self::Unavailable(connection) => *connection,
+            Self::Denied(connection) | Self::Unavailable(connection, _) => *connection,
         }
     }
 
@@ -94,9 +99,7 @@ impl RegistrationAuthorization {
                 Ok((grant.request.init, grant.attribution))
             }
             Self::Granted(_) | Self::Denied(_) => Err(ErrorFrame::AccessDenied),
-            Self::Unavailable(_) => Err(ErrorFrame::AccessUnavailable(
-                RetryAfter::from_millis(ACCESS_RETRY_MS).expect("bounded access retry"),
-            )),
+            Self::Unavailable(_, retry) => Err(ErrorFrame::AccessUnavailable(retry)),
         }
     }
 }

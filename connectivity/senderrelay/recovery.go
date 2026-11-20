@@ -75,7 +75,7 @@ func (lifecycle *Lifecycle) recoverRegistration(callerContext, recoveryContext c
 	slow := false
 	waitingAnnounced := false
 	for {
-		if err := lifecycle.recoveryCause(callerContext, recoveryContext); err != nil {
+		if err := lifecycle.waitForServerRetry(callerContext, recoveryContext); err != nil {
 			return err
 		}
 		resume := lifecycle.resumeNext
@@ -86,7 +86,7 @@ func (lifecycle *Lifecycle) recoverRegistration(callerContext, recoveryContext c
 		started := lifecycle.config.Clock.Now()
 		event := Attempt{ShareInstance: lifecycle.config.Fresh.ShareInstance, Number: attempt, State: AttemptStarted, Generation: lifecycle.generation, Slow: slow, Resume: resume}
 		lifecycle.observeRecoveryAttempt(event)
-		dialErr := lifecycle.connectAttempt(callerContext, recoveryContext, resume, permit, event, authorization)
+		dialErr := lifecycle.connectAttempt(callerContext, recoveryContext, resume, permit, &event, authorization)
 		if permit != nil {
 			permit.Release()
 		}
@@ -113,7 +113,7 @@ func (lifecycle *Lifecycle) recoverRegistration(callerContext, recoveryContext c
 		if !lifecycle.config.Clock.Now().Add(delay).Before(deadline) {
 			slow = true
 		}
-		wait := lifecycle.retryDelay(delay, slow, dialErr)
+		wait := max(lifecycle.retryDelay(delay, slow), event.ServerRetryAt.Sub(lifecycle.config.Clock.Now()))
 		event.NextDelay = wait
 		lifecycle.observeRecoveryAttempt(event)
 		if slow && !waitingAnnounced {
@@ -121,7 +121,7 @@ func (lifecycle *Lifecycle) recoverRegistration(callerContext, recoveryContext c
 			lifecycle.observeRecoveryAttempt(event)
 			waitingAnnounced = true
 		}
-		if err := lifecycle.wait(callerContext, recoveryContext, wait); err != nil {
+		if err := lifecycle.waitLocalRetry(callerContext, recoveryContext, wait); err != nil {
 			return err
 		}
 		delay = min(delay*2, senderRelayRetryMaximum)
@@ -156,7 +156,27 @@ func (lifecycle *Lifecycle) registrationFailed(event *Attempt, failure error) bo
 	return event.Terminal
 }
 
-func (lifecycle *Lifecycle) wait(caller, ctx context.Context, delay time.Duration) error {
+// A server deadline belongs to the registration, so it survives a local wake
+// and cancellation of the caller that first received the refusal.
+func (lifecycle *Lifecycle) waitForServerRetry(caller, recovery context.Context) error {
+	for {
+		if err := lifecycle.recoveryCause(caller, recovery); err != nil {
+			return err
+		}
+		remaining := lifecycle.serverRetryAt.Sub(lifecycle.config.Clock.Now())
+		if remaining <= 0 {
+			return nil
+		}
+		if err := lifecycle.config.Clock.Wait(recovery, remaining); err != nil {
+			if cause := lifecycle.recoveryCause(caller, recovery); cause != nil {
+				return cause
+			}
+			return err
+		}
+	}
+}
+
+func (lifecycle *Lifecycle) waitLocalRetry(caller, ctx context.Context, delay time.Duration) error {
 	waitContext, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() {
@@ -181,7 +201,7 @@ func (lifecycle *Lifecycle) wait(caller, ctx context.Context, delay time.Duratio
 
 // connectAttempt contains ownership arbitration around one bounded handshake.
 // A success observed after cancellation is retired before it can advertise readiness.
-func (lifecycle *Lifecycle) connectAttempt(caller, recovery context.Context, resume bool, permit AttemptPermit, attempt Attempt, authorization Authorization) error {
+func (lifecycle *Lifecycle) connectAttempt(caller, recovery context.Context, resume bool, permit AttemptPermit, attempt *Attempt, authorization Authorization) error {
 	init := lifecycle.config.Fresh
 	var descriptor []byte
 	if resume {
@@ -191,16 +211,24 @@ func (lifecycle *Lifecycle) connectAttempt(caller, recovery context.Context, res
 	}
 	dialContext, cancel := context.WithTimeout(recovery, senderRelayAttemptTimeout)
 	dialOptions := registrationDialOptions(lifecycle.config.LifecycleObservationCapacity, resume, authorization)
+	stageAttempt := *attempt
 	dialOptions.ObserveStage = func(stage relayv2.DialStage) {
-		event := attempt
+		event := stageAttempt
 		event.State, event.Stage, event.Duration, event.Failure = AttemptStage, stage.Stage, stage.Duration, stage.Failure
 		lifecycle.observeRecoveryAttempt(event)
 	}
+	started := lifecycle.config.Clock.Now()
 	connection, err := lifecycle.config.Dialer.Dial(dialContext, relayv2.SenderConfig{
 		RelayBaseURL: lifecycle.config.Candidate.PublicURL, Init: init, SenderPrivateKey: lifecycle.config.PrivateKey,
 		ResumeToken: lifecycle.config.ResumeToken, Descriptor: descriptor,
 		Dial: dialOptions,
 	})
+	finished := lifecycle.config.Clock.Now()
+	attempt.HandshakeDuration = finished.Sub(started)
+	if delay := explicitRetryAfter(err); delay > 0 {
+		lifecycle.serverRetryAt = finished.Add(delay)
+		attempt.ServerRetryAt = lifecycle.serverRetryAt
+	}
 	// Delivery uncertainty survives later failures: a lost acknowledgement can
 	// leave a registration that must be resumed and permanently revoked on stop.
 	delivery := serviceauthority.RegistrationNotSent
@@ -266,16 +294,21 @@ func classifyRegistrationFailure(resume bool, failure error) (resumeNext, termin
 	}
 }
 
-func (lifecycle *Lifecycle) retryDelay(fast time.Duration, slow bool, failure error) time.Duration {
-	delay := fast
-	if slow {
-		delay = lifecycle.config.Jitter(senderRelaySlowRetry)
-		// Bound injected jitter as well, so scheduler defects cannot cause a hot loop.
-		delay = max(senderRelaySlowRetry/2, min(delay, senderRelaySlowRetry*3/2))
+func (lifecycle *Lifecycle) retryDelay(fast time.Duration, slow bool) time.Duration {
+	if !slow {
+		return fast
 	}
-	var relayError *relayv2.RelayError
-	if errors.As(failure, &relayError) && relayError.RetryAfter > delay {
-		delay = min(relayError.RetryAfter, senderRelaySlowRetry*2)
+	// Bound injected jitter so scheduler defects cannot cause a hot loop.
+	return max(senderRelaySlowRetry/2, min(lifecycle.config.Jitter(senderRelaySlowRetry), senderRelaySlowRetry*3/2))
+}
+
+func explicitRetryAfter(failure error) time.Duration {
+	const limit = 2 * senderRelaySlowRetry
+	if upgrade, ok := errors.AsType[*relayv2.WebSocketDialError](failure); ok {
+		return min(upgrade.RetryAfter, limit)
 	}
-	return delay
+	if rejection, ok := errors.AsType[*relayv2.RelayError](failure); ok {
+		return min(rejection.RetryAfter, limit)
+	}
+	return 0
 }

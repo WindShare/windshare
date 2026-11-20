@@ -28,7 +28,8 @@ type Runtime struct {
 	directoryError  error
 	now             func() time.Time
 	monitor         *networkstate.Monitor
-	observations    relayplan.Observations
+	health          nodeHealth
+	selectionSeed   string
 	mu              sync.Mutex
 	linkUnreachable bool
 	backupReachable bool
@@ -37,9 +38,9 @@ type Runtime struct {
 	done            chan struct{}
 }
 
-func New(config *networkconfig.Config, now func() time.Time) (*Runtime, error) {
+func New(config *networkconfig.Config, now func() time.Time, selectionSeed string) (*Runtime, error) {
 	ctx, cancel := context.WithCancel(context.Background())
-	r := &Runtime{now: now, monitor: networkstate.NewMonitor(nil, networkstate.DefaultDebounce), ctx: ctx, cancel: cancel, done: make(chan struct{})}
+	r := &Runtime{now: now, selectionSeed: selectionSeed, monitor: networkstate.NewMonitor(nil, networkstate.DefaultDebounce), ctx: ctx, cancel: cancel, done: make(chan struct{})}
 	if config == nil {
 		close(r.done)
 		return r, nil
@@ -110,13 +111,12 @@ func (r *Runtime) Plan(ctx context.Context, intent relayprofile.Intent, frontend
 		urls = append(urls, candidate.PublicURL)
 	}
 	only := intent.Mode() != relayprofile.Planned
-	generation := r.generation()
-	plan, err := r.buildPlan(urls, only, generation)
+	plan, err := r.buildPlan(urls, only)
 	if err == nil && len(plan.Configured)+len(plan.Network) == 0 && !only && r.directory != nil {
 		if err := r.directory.Refresh(ctx); err != nil {
 			return Selection{}, unavailable(err, networkdirectory.SnapshotUnavailable)
 		}
-		plan, err = r.buildPlan(urls, only, generation)
+		plan, err = r.buildPlan(urls, only)
 	}
 	if err != nil {
 		return Selection{}, err
@@ -124,9 +124,12 @@ func (r *Runtime) Plan(ctx context.Context, intent relayprofile.Intent, frontend
 	if len(plan.Configured)+len(plan.Network) == 0 {
 		return Selection{}, r.noCandidates(NoRelayCandidates)
 	}
+	if plan.Decision.CooldownFallback {
+		r.directory.TriggerRefresh()
+	}
 	result := Selection{Plan: plan, Relays: relayprofile.Registrations(configured)}
 	result.Decision = networkconfig.Decision{DirectoryGeneration: plan.Decision.DirectoryGeneration, DirectorySerial: plan.Decision.DirectorySerial,
-		NetworkGeneration: generation, ConfiguredOnly: only}
+		NetworkGeneration: plan.Decision.NetworkGeneration, ConfiguredOnly: only, CooldownFallback: plan.Decision.CooldownFallback}
 	front := r.frontend(frontend)
 	result.Frontend, result.AlternateFrontend, result.Decision.FrontendReason = front.primary, front.alternate, front.reason
 	// Only these release frontends are built against this directory's trust roots.
@@ -144,7 +147,7 @@ func (r *Runtime) Plan(ctx context.Context, intent relayprofile.Intent, frontend
 	}
 	for _, candidate := range plan.Network {
 		result.Relays = append(result.Relays, relayprofile.Registration{PublicURL: candidate.URL, Authorization: result.authorization.Source(candidate.URL)})
-		result.Decision.Candidates = append(result.Decision.Candidates, networkconfig.Candidate{URL: candidate.URL, Alias: candidate.Alias})
+		result.Decision.Candidates = append(result.Decision.Candidates, networkconfig.Candidate{URL: candidate.URL, Alias: candidate.Alias, CooldownUntil: candidate.CooldownUntil, ServerRetryAt: candidate.ServerRetryAt})
 	}
 	for _, filter := range plan.Decision.Filters {
 		result.Decision.Filters = append(result.Decision.Filters, networkconfig.Filter{Endpoint: filter.Endpoint, Reason: filter.Reason})
@@ -152,15 +155,16 @@ func (r *Runtime) Plan(ctx context.Context, intent relayprofile.Intent, frontend
 	return result, nil
 }
 
-func (r *Runtime) buildPlan(configured []string, only bool, generation string) (relayplan.Plan, error) {
+func (r *Runtime) buildPlan(configured []string, only bool) (relayplan.Plan, error) {
 	var payload nodedirectory.Payload
 	if !only && r.directory != nil {
 		if snapshot, usable := r.directory.Snapshot(); usable {
 			payload = snapshot.Payload()
 		}
 	}
-	return relayplan.Build(relayplan.Input{Configured: configured, Directory: payload, NetworkGeneration: generation, Now: r.now(),
-		Observations: r.observations.Snapshot(generation, r.now()), Policy: relayplan.Policy{ConfiguredOnly: only, GlobalPairCoversMainland: r.config.GlobalPairCoversMainland}})
+	generation, now := r.generation(), r.now()
+	return relayplan.Build(relayplan.Input{Configured: configured, Directory: payload, NetworkGeneration: strconv.FormatUint(generation, 10), Now: now,
+		SelectionSeed: r.selectionSeed, Observations: r.health.Snapshot(generation, now), Policy: relayplan.Policy{ConfiguredOnly: only, GlobalPairCoversMainland: r.config.GlobalPairCoversMainland}})
 }
 
 func (r *Runtime) Accounts() *account.Service { return r.accounts }
@@ -187,6 +191,7 @@ func (r *Runtime) officialNode(address string) (account.Node, bool) {
 	return account.Node{}, false
 }
 
-func (r *Runtime) generation() string {
-	return strconv.FormatUint(r.monitor.Current().GenerationID(), 10)
+func (r *Runtime) generation() uint64 {
+	// The first snapshot describes the same network as a cold-start handshake.
+	return max(1, r.monitor.Current().GenerationID())
 }
