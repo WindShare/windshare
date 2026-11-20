@@ -64,6 +64,9 @@ impl<R: Store, E: Environment> Authority<R, E> {
 mod host;
 #[cfg(target_arch = "wasm32")]
 pub use host::NetworkAuthority;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "host/telemetry.rs"]
+mod telemetry;
 #[cfg(test)]
 #[path = "authority_tests.rs"]
 mod tests;

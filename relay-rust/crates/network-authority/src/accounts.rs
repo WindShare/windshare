@@ -14,13 +14,23 @@ use windshare_relay_access::{
 
 impl<R: Store, E: Environment> Authority<R, E> {
     pub(crate) fn ensure_account(&self, id: AccountId) -> Result<Account> {
-        ensure!(
-            !self.restricted(Restriction::Account(id))?,
-            Fault::Denied {
-                reason: "account_blocked".into()
+        if self.restricted(Restriction::Account(id))? {
+            tracing::debug!(
+                event = "account_auth_refused",
+                account = ?id,
+                reason = "account_blocked",
+            );
+            return Err(Fault::Denied {
+                reason: "account_blocked".into(),
             }
-        );
+            .into());
+        }
         load(&self.store, &key("account", &id))?.ok_or_else(|| {
+            tracing::debug!(
+                event = "account_auth_refused",
+                account = ?id,
+                reason = "unknown_account",
+            );
             Fault::Denied {
                 reason: "unknown_account".into(),
             }
@@ -29,16 +39,27 @@ impl<R: Store, E: Environment> Authority<R, E> {
     }
     pub(crate) fn authenticate(&self, secret: &str) -> Result<(Credential, Account)> {
         ensure!(secret.len() <= 128, Fault::Invalid);
-        let credential = load::<Credential>(&self.store, &key("credential", &digest(secret)))?
-            .ok_or_else(|| Fault::Denied {
+        let Some(credential) =
+            load::<Credential>(&self.store, &key("credential", &digest(secret)))?
+        else {
+            tracing::debug!(event = "account_auth_refused", reason = "credentials");
+            return Err(Fault::Denied {
                 reason: "credentials".into(),
-            })?;
-        ensure!(
-            !credential.revoked && !self.restricted(Restriction::Credential(credential.id))?,
-            Fault::Denied {
-                reason: "credential_revoked".into()
             }
-        );
+            .into());
+        };
+        if credential.revoked || self.restricted(Restriction::Credential(credential.id))? {
+            tracing::debug!(
+                event = "account_auth_refused",
+                account = ?credential.account,
+                credential = ?credential.id,
+                reason = "credential_revoked",
+            );
+            return Err(Fault::Denied {
+                reason: "credential_revoked".into(),
+            }
+            .into());
+        }
         let account = self.ensure_account(credential.account)?;
         Ok((credential, account))
     }

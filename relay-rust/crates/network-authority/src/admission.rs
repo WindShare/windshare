@@ -71,10 +71,15 @@ pub struct CreationAdmission {
     source_key: String,
     source: SourceCreation,
     global: TokenBucket,
+    mode: RegistrationMode,
     proof: Option<AcceptedProof>,
 }
 
 impl CreationAdmission {
+    pub(crate) const fn mode(&self) -> RegistrationMode {
+        self.mode
+    }
+
     pub(crate) const fn verified_email(&self) -> Option<(&str, &str)> {
         match &self.proof {
             Some(proof) => proof.verified_email(),
@@ -186,58 +191,78 @@ impl<R: Store, E: Environment> Authority<R, E> {
             local.bursts = 0;
         }
         if local.bucket.credit == 0 || global.credit == 0 {
+            let reason = creation_rate_reason(local.bucket.credit == 0, global.credit == 0);
+            let retry_after = settings
+                .source_rate
+                .refill_seconds
+                .max(settings.global_rate.refill_seconds);
             local.bursts = local.bursts.saturating_add(1);
             save(&mut self.store, &source_key, &local)?;
-            return Err(Fault::RateLimited {
-                retry_after: settings
-                    .source_rate
-                    .refill_seconds
-                    .max(settings.global_rate.refill_seconds),
-            }
-            .into());
+            tracing::debug!(
+                event = "registration_rate_limited",
+                attempt = %attempt.fingerprint(),
+                source,
+                reason,
+                bursts = local.bursts,
+                retry_after,
+            );
+            return Err(Fault::RateLimited { retry_after }.into());
         }
         let policy_mode = settings.registration.mode(
             account_count,
             self.environment.registration_email_configured(),
         );
-        let mode = if policy_mode == RegistrationMode::Automatic
-            && local.bursts >= SOURCE_BURSTS_FOR_WORK
-        {
+        let escalated =
+            policy_mode == RegistrationMode::Automatic && local.bursts >= SOURCE_BURSTS_FOR_WORK;
+        let mode = if escalated {
             RegistrationMode::ProofOfWork
         } else {
             policy_mode
         };
-        let kind = match mode {
+        let proof = match mode {
             RegistrationMode::Automatic => None,
-            RegistrationMode::ProofOfWork => Some(ProofKind::Work),
-            RegistrationMode::Email => Some(ProofKind::Email),
-        };
-        let proof = if let Some(kind) = kind {
-            match self.check_registration_proof(attempt, kind, proof.challenge, proof.solution)? {
-                ProofCheck::Accepted(proof) => Some(proof),
-                ProofCheck::Retry(challenge) if kind == ProofKind::Email => {
-                    return Err(Fault::Verification { challenge }.into());
-                }
-                ProofCheck::Retry(_) | ProofCheck::Unavailable => {
-                    let challenge = match kind {
-                        ProofKind::Email => Challenge {
-                            id: String::new(),
-                            mode,
-                            bits: 0,
-                            expires_at: now + CHALLENGE_SECONDS,
-                        },
-                        ProofKind::Work => self.work_challenge(attempt, &source_id, settings)?,
-                    };
-                    return Err(Fault::Verification { challenge }.into());
+            RegistrationMode::ProofOfWork | RegistrationMode::Email => {
+                let kind = if mode == RegistrationMode::Email {
+                    ProofKind::Email
+                } else {
+                    ProofKind::Work
+                };
+                match self.check_registration_proof(
+                    attempt,
+                    kind,
+                    proof.challenge,
+                    proof.solution,
+                )? {
+                    ProofCheck::Accepted(proof) => Some(proof),
+                    ProofCheck::Retry(challenge) if kind == ProofKind::Email => {
+                        return Err(verification_required(
+                            attempt, source, mode, escalated, challenge,
+                        ));
+                    }
+                    ProofCheck::Retry(_) | ProofCheck::Unavailable => {
+                        let challenge = match kind {
+                            ProofKind::Email => Challenge {
+                                id: String::new(),
+                                mode,
+                                bits: 0,
+                                expires_at: now + CHALLENGE_SECONDS,
+                            },
+                            ProofKind::Work => {
+                                self.work_challenge(attempt, &source_id, settings)?
+                            }
+                        };
+                        return Err(verification_required(
+                            attempt, source, mode, escalated, challenge,
+                        ));
+                    }
                 }
             }
-        } else {
-            None
         };
         Ok(CreationAdmission {
             source_key,
             source: local,
             global,
+            mode,
             proof,
         })
     }
@@ -272,6 +297,31 @@ impl<R: Store, E: Environment> Authority<R, E> {
         save(&mut self.store, &source_key, &local)?;
         save(&mut self.store, GLOBAL_WORK_ISSUANCE_KEY, &global)
     }
+}
+
+const fn creation_rate_reason(local_empty: bool, global_empty: bool) -> &'static str {
+    match (local_empty, global_empty) {
+        (true, true) => "source_and_global_rate_limited",
+        (true, false) => "source_rate_limited",
+        (false, _) => "global_rate_limited",
+    }
+}
+
+fn verification_required(
+    attempt: RegistrationAttempt,
+    source: &str,
+    mode: RegistrationMode,
+    escalated: bool,
+    challenge: Challenge,
+) -> anyhow::Error {
+    tracing::debug!(
+        event = "registration_verification_required",
+        attempt = %attempt.fingerprint(),
+        source,
+        ?mode,
+        reason = if escalated { "source_burst" } else { "policy" },
+    );
+    Fault::Verification { challenge }.into()
 }
 
 const fn work_issuance_rate(rate: &Rate) -> Rate {

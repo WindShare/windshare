@@ -7,6 +7,8 @@ mod contract_vectors;
 mod device_login;
 #[path = "governance_tests.rs"]
 mod governance;
+#[path = "observability_tests.rs"]
+mod observability;
 #[path = "password_flow_tests.rs"]
 mod password_flow;
 #[path = "profile_tests.rs"]

@@ -126,12 +126,19 @@ impl Service {
     }
 
     pub(crate) fn apply_access_update(&self, update: AccessUpdate, now: u64) -> Result<()> {
+        let trace_quotas = tracing::enabled!(tracing::Level::TRACE);
+        let mut traced = Vec::new();
         let mut state = self.state.lock().expect("node access state");
         let changed = state.authorities.apply(update.authority)?;
         state.quotas.retire_before(update.quota_day_floor, now);
         let mut advanced = 0;
         for (key, quota) in update.quotas {
-            advanced += usize::from(state.quotas.advance(key, quota, now));
+            if state.quotas.advance(key, quota, now) {
+                advanced += 1;
+                if trace_quotas {
+                    traced.push((key, quota));
+                }
+            }
         }
         drop(state);
         if changed || advanced != 0 {
@@ -142,6 +149,19 @@ impl Service {
                 generation = update.authority.generation.number,
                 advanced,
             );
+            // Keep per-account entitlement details opt-in at TRACE and outside
+            // the state lock so 1-minute status syncs cannot flood INFO logs.
+            for ((issuer, account), quota) in traced {
+                tracing::trace!(
+                    event = "entitlement_synced",
+                    ?issuer,
+                    ?account,
+                    version = quota.version,
+                    day = quota.day,
+                    valid_until = quota.grant.map(|grant| grant.valid_until),
+                    remaining_bytes = quota.grant.map(|grant| grant.remaining_bytes),
+                );
+            }
         }
         Ok(())
     }

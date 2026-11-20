@@ -64,6 +64,16 @@ impl RegistrationAttempt {
     pub(crate) const fn digest(&self) -> &[u8; 32] {
         &self.0
     }
+
+    /// Domain-separated secondary digest for diagnostics so traces correlate
+    /// retries without exposing the stored `credential/<digest>` lookup key.
+    pub(crate) fn fingerprint(&self) -> String {
+        let hash = Sha256::new()
+            .chain_update(b"registration-attempt-log/")
+            .chain_update(self.0)
+            .finalize();
+        URL_SAFE_NO_PAD.encode(&hash[..16])
+    }
 }
 
 pub fn digest(secret: &str) -> [u8; 32] {
@@ -179,6 +189,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
             &settings,
             account_count,
         )?;
+        let mode = admission.mode();
         let existing_owner = admission
             .verified_email()
             .map(|(_, canonical)| self.email_owner(canonical))
@@ -200,8 +211,10 @@ impl<R: Store, E: Environment> Authority<R, E> {
             let account = self.ensure_account(existing_id)?;
             tracing::info!(
                 event = "account_recovered_by_email",
+                attempt = %attempt.fingerprint(),
                 account = ?account.id,
-                source
+                source,
+                ?mode,
             );
             return self.new_credential(account.id, request.client_secret);
         }
@@ -244,7 +257,14 @@ impl<R: Store, E: Environment> Authority<R, E> {
             tracing::info!(event = "account_registration_milestone", count, policy = ?settings.registration,
                 next_mode = ?settings.registration.mode(count, email_configured), email_configured);
         }
-        tracing::info!(event="account_created",account=?id,source,count);
+        tracing::info!(
+            event = "account_created",
+            attempt = %attempt.fingerprint(),
+            account = ?id,
+            source,
+            ?mode,
+            count,
+        );
         self.new_credential(id, request.client_secret)
     }
 

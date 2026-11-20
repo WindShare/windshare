@@ -25,6 +25,7 @@ impl CachePolicy {
 
 #[event(fetch)]
 pub async fn fetch(request: Request, env: Env, _context: Context) -> Result<Response> {
+    super::telemetry::install(&env);
     if request.path().starts_with("/internal/") {
         return Response::error("not found", 404);
     }

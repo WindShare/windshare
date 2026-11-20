@@ -118,11 +118,24 @@ impl Capacity {
     ) -> Result<Arc<Admission>, Refusal> {
         let source = source.to_canonical();
         let mut state = self.state.lock().expect("admission lock");
-        state.accept(self.limits, source, now, priority).inspect_err(|reason| {
-            tracing::debug!(event = "connection_admission_refused", ?connection, %source, %reason);
-        })?;
+        state
+            .accept(self.limits, source, now, priority)
+            .inspect_err(|reason| {
+                tracing::debug!(
+                    event = "connection_admission_refused",
+                    ?connection,
+                    %source,
+                    ?priority,
+                    %reason
+                );
+            })?;
         drop(state);
-        tracing::debug!(event = "control_connection_admitted", ?connection, %source);
+        tracing::debug!(
+            event = "control_connection_admitted",
+            ?connection,
+            %source,
+            ?priority
+        );
         Ok(Arc::new(Admission {
             usage: crate::node::usage::Meter::default(),
             priority,
@@ -233,13 +246,22 @@ impl Admission {
             .expect("admission lock")
             .promote(self.capacity.limits, self.source, self.priority)
             .inspect_err(|reason| {
-                tracing::debug!(event = "connection_admission_refused",
-                    connection = ?self.connection, source = %self.source, %reason);
+                tracing::debug!(
+                    event = "connection_admission_refused",
+                    connection = ?self.connection,
+                    source = %self.source,
+                    priority = ?self.priority,
+                    %reason
+                );
             })?;
         *slot = Slot::Business;
         drop(slot);
-        tracing::debug!(event = "business_connection_admitted",
-            connection = ?self.connection, source = %self.source);
+        tracing::debug!(
+            event = "business_connection_admitted",
+            connection = ?self.connection,
+            source = %self.source,
+            priority = ?self.priority
+        );
         Ok(())
     }
 }
@@ -252,8 +274,13 @@ impl Drop for Admission {
             .lock()
             .expect("admission lock")
             .release(self.source, slot);
-        tracing::debug!(event = "connection_admission_released",
-            connection = ?self.connection, source = %self.source, ?slot);
+        tracing::debug!(
+            event = "connection_admission_released",
+            connection = ?self.connection,
+            source = %self.source,
+            priority = ?self.priority,
+            ?slot
+        );
     }
 }
 

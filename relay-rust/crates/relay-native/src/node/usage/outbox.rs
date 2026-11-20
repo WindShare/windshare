@@ -96,6 +96,7 @@ impl Reporter {
                 }),
             "invalid node status"
         );
+        let entitlement_count = entitlements.len();
         self.persist_status(generation, policy, entitlements)
             .await?;
         versions.send_if_modified(|current| {
@@ -106,8 +107,14 @@ impl Reporter {
             true
         });
         self.node.access.observe_device_login(issuer, login);
-        tracing::debug!(event="authority_status_refreshed", node=?batch.node, batch=?batch.id,
-            restriction_version, policy_version=policy.version);
+        tracing::debug!(
+            event = "authority_status_refreshed",
+            node = ?batch.node,
+            batch = ?batch.id,
+            entitlements = entitlement_count,
+            restriction_version,
+            policy_version = policy.version
+        );
         Ok(())
     }
 

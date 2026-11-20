@@ -170,9 +170,18 @@ impl<R: Store, E: Environment> Authority<R, E> {
                 });
             }
         }
+        let restriction_version = self.restriction_version()?;
+        tracing::debug!(
+            event = "node_status_served",
+            node = ?batch.node,
+            batch = ?batch.id,
+            entitlements = entitlements.len(),
+            restriction_version,
+            policy_version = node.version,
+        );
         Ok(ReportResult::Status {
             entitlements,
-            restriction_version: self.restriction_version()?,
+            restriction_version,
             policy: NodePolicy {
                 version: node.version,
                 enabled: node.enabled,
