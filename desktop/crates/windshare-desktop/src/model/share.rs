@@ -1,9 +1,8 @@
 use super::{Action, ShareAge, ShareContents};
 use crate::{
     localization::{Language, Text},
-    sharing::{LinkKind, ShareLink, SharePublication},
+    sharing::{ShareLink, SharePublication},
 };
-use gpui::SharedString;
 use windshare_ui::{Icon, Tone};
 
 #[derive(Clone, Debug)]
@@ -67,18 +66,14 @@ impl Share {
         self.link.as_ref().filter(|_| self.live())
     }
 
-    pub fn usable_link(&self) -> Option<&ShareLink> {
-        self.live_publication().map(SharePublication::standard)
+    pub fn usable_link(&self, browser_trace: bool) -> Option<&ShareLink> {
+        self.live_publication()
+            .map(|publication| publication.primary(browser_trace))
     }
 
-    pub fn diagnostic_link(&self) -> Option<&ShareLink> {
+    pub fn is_traced(&self, browser_trace: bool) -> bool {
         self.live_publication()
-            .and_then(SharePublication::diagnostic)
-    }
-
-    pub fn url_for(&self, kind: LinkKind) -> Option<SharedString> {
-        self.live_publication()
-            .and_then(|publication| publication.url(kind))
+            .is_some_and(|publication| publication.is_traced(browser_trace))
     }
 
     pub fn description(&self, locale: Language) -> String {

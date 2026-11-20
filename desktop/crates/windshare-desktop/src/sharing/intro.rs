@@ -195,7 +195,7 @@ impl Desktop {
                         return;
                     }
                     let link_ready = this.shares.iter().any(|share| {
-                        share.id == run.share_id && share.usable_link().is_some()
+                        share.id == run.share_id && share.live_publication().is_some()
                     });
                     tracing::info!(
                         event = "share.intro_finished",

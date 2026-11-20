@@ -8,10 +8,11 @@ use gpui::{Div, Stateful, div, prelude::*, px};
 use windshare_ui::{ButtonStyle, Icon, Theme, Tone, column, row};
 
 impl Desktop {
-    pub fn share_card(theme: Theme, share: &Share, cx: &Context<Self>) -> Stateful<Div> {
+    pub fn share_card(&self, theme: Theme, share: &Share, cx: &Context<Self>) -> Stateful<Div> {
         let locale = language(cx);
         let id = share.id;
         let status = share.status_description(locale);
+        let traced = share.is_traced(self.browser_trace);
         theme
             .card()
             .id(("share-card", id))
@@ -69,12 +70,16 @@ impl Desktop {
                             "",
                             Icon::Link,
                             ButtonStyle::Ghost,
-                            Action::CopyLink(id, LinkKind::Standard),
+                            Action::CopyLink(id, LinkKind::Primary),
                             cx,
                         )
                         .compact()
-                        .tooltip(locale.text(Text::CopyShareLink))
-                        .disabled(share.usable_link().is_none()),
+                        .tooltip(locale.text(if traced {
+                            Text::CopyDiagnosticLink
+                        } else {
+                            Text::CopyShareLink
+                        }))
+                        .disabled(share.live_publication().is_none()),
                     ),
             )
     }
@@ -137,7 +142,7 @@ impl Desktop {
                 el.children(shares.chunks(columns).map(|chunk| {
                     let mut cards = row().gap(px(18.)).items_stretch();
                     for share in chunk {
-                        cards = cards.child(Self::share_card(theme, share, cx));
+                        cards = cards.child(self.share_card(theme, share, cx));
                     }
                     for _ in chunk.len()..columns {
                         cards = cards.child(div().flex_1());
@@ -150,7 +155,7 @@ impl Desktop {
                     theme.card().overflow_hidden().children(
                         shares
                             .iter()
-                            .map(|share| Self::share_list_row(theme, share, cx)),
+                            .map(|share| self.share_list_row(theme, share, cx)),
                     ),
                 )
             })
@@ -199,8 +204,9 @@ impl Desktop {
                 }),
             )
     }
-    fn share_list_row(theme: Theme, share: &Share, cx: &Context<Self>) -> Div {
+    fn share_list_row(&self, theme: Theme, share: &Share, cx: &Context<Self>) -> Div {
         let locale = language(cx);
+        let traced = share.is_traced(self.browser_trace);
         row()
             .gap(px(12.))
             .p(px(20.))
@@ -218,14 +224,22 @@ impl Desktop {
             .child(
                 Self::button(
                     ("list-link", share.id),
-                    locale.text(Text::CopyLink),
+                    locale.text(if traced {
+                        Text::CopyDiagnosticLink
+                    } else {
+                        Text::CopyLink
+                    }),
                     Icon::Link,
-                    ButtonStyle::Secondary,
-                    Action::CopyLink(share.id, LinkKind::Standard),
+                    if traced {
+                        ButtonStyle::Tinted(Tone::Lavender)
+                    } else {
+                        ButtonStyle::Secondary
+                    },
+                    Action::CopyLink(share.id, LinkKind::Primary),
                     cx,
                 )
                 .compact()
-                .disabled(share.usable_link().is_none()),
+                .disabled(share.live_publication().is_none()),
             )
             .child(
                 Self::button(

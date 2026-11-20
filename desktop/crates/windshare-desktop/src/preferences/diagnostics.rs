@@ -1,5 +1,6 @@
 use crate::{
     desktop::Desktop,
+    flow_state::CopyFeedback,
     live::Runtime,
     localization::{Text, language},
     model::Action,
@@ -10,52 +11,85 @@ use windshare_host::{Connection, Model, SenderTrace, SenderTraceChange};
 use windshare_ui::{ButtonStyle, Icon, Theme, Tone, column, row};
 
 impl Desktop {
-    pub(crate) fn diagnostics_card(&self, theme: Theme, cx: &Context<Self>) -> Option<Div> {
-        let Runtime::Native(session) = &self.runtime else {
-            return None;
-        };
+    pub(crate) fn diagnostics_attention_tone(&self) -> Option<Tone> {
+        let sender_on = matches!(
+            &self.runtime,
+            Runtime::Native(session) if session.model.sender_trace == SenderTrace::On
+        );
+        (self.browser_trace || sender_on).then_some(Tone::Lavender)
+    }
+
+    pub(crate) fn diagnostics_card(&self, theme: Theme, cx: &Context<Self>) -> Div {
         let locale = language(cx);
+        let card = theme
+            .card()
+            .p(px(28.))
+            .gap(px(16.))
+            .child(
+                row()
+                    .gap(px(14.))
+                    .child(theme.icon_tile(Icon::Activity, Tone::Lavender, 44.))
+                    .child(theme.heading(locale.text(Text::Diagnostics), 22.)),
+            )
+            .child(self.browser_trace_setting(theme, cx));
+        let Runtime::Native(session) = &self.runtime else {
+            return card;
+        };
         let logs_available = self.log_directory().is_some();
-        Some(
-            theme
-                .card()
-                .p(px(28.))
-                .gap(px(16.))
-                .child(
-                    row()
-                        .gap(px(14.))
-                        .child(theme.icon_tile(Icon::Activity, Tone::Lavender, 44.))
-                        .child(theme.heading(locale.text(Text::Diagnostics), 22.)),
+        card.child(theme.separator())
+            .child(Self::sender_trace_setting(theme, &session.model, cx))
+            .child(theme.separator())
+            .child(Self::local_logs_row(theme, logs_available, cx))
+    }
+
+    fn browser_trace_setting(&self, theme: Theme, cx: &Context<Self>) -> Div {
+        let locale = language(cx);
+        row()
+            .gap(px(18.))
+            .child(
+                column()
+                    .flex_1()
+                    .min_w_0()
+                    .gap(px(5.))
+                    .child(theme.heading(locale.text(Text::BrowserTrace), 16.))
+                    .child(theme.caption(locale.text(Text::BrowserTraceDetail))),
+            )
+            .child(Self::setting_switch(
+                theme,
+                "browser-trace",
+                locale.text(Text::BrowserTrace),
+                self.browser_trace,
+                Some(Action::SetBrowserTrace(!self.browser_trace)),
+                cx,
+            ))
+    }
+
+    fn local_logs_row(theme: Theme, logs_available: bool, cx: &Context<Self>) -> Div {
+        let locale = language(cx);
+        row()
+            .gap(px(18.))
+            .child(
+                column()
+                    .flex_1()
+                    .min_w_0()
+                    .gap(px(5.))
+                    .child(theme.heading(locale.text(Text::LocalLogs), 16.))
+                    .when(!logs_available, |el| {
+                        el.child(theme.caption(locale.text(Text::LogFolderUnavailable)))
+                    }),
+            )
+            .child(
+                Self::button(
+                    "open-log-folder",
+                    locale.text(Text::OpenLogFolder),
+                    Icon::Folder,
+                    ButtonStyle::Secondary,
+                    Action::OpenLogs,
+                    cx,
                 )
-                .child(Self::sender_trace_setting(theme, &session.model, cx))
-                .child(theme.separator())
-                .child(
-                    row()
-                        .gap(px(18.))
-                        .child(
-                            column()
-                                .flex_1()
-                                .min_w_0()
-                                .gap(px(5.))
-                                .child(theme.heading(locale.text(Text::LocalLogs), 16.))
-                                .when(!logs_available, |el| {
-                                    el.child(theme.caption(locale.text(Text::LogFolderUnavailable)))
-                                }),
-                        )
-                        .child(
-                            Self::button(
-                                "open-log-folder",
-                                locale.text(Text::OpenLogFolder),
-                                Icon::Folder,
-                                ButtonStyle::Secondary,
-                                Action::OpenLogs,
-                                cx,
-                            )
-                            .compact()
-                            .disabled(!logs_available),
-                        ),
-                ),
-        )
+                .compact()
+                .disabled(!logs_available),
+            )
     }
 
     fn sender_trace_setting(theme: Theme, model: &Model, cx: &Context<Self>) -> Div {
@@ -105,6 +139,21 @@ impl Desktop {
                 can_change.then_some(Action::SetSenderTrace(!enabled)),
                 cx,
             ))
+    }
+
+    pub(crate) fn set_browser_trace(&mut self, enabled: bool) {
+        if self.browser_trace == enabled {
+            return;
+        }
+        // Keep browser diagnostics session-scoped (matching sender trace) so a
+        // forgotten toggle never adds recording banners to future routine shares.
+        self.browser_trace = enabled;
+        self.copy_feedback = CopyFeedback::Idle;
+        tracing::info!(
+            event = "desktop.browser_trace_changed",
+            session = std::process::id(),
+            enabled,
+        );
     }
 
     pub(crate) fn set_sender_trace(&self, enabled: bool) {

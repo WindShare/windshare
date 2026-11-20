@@ -53,21 +53,22 @@ impl Desktop {
                 detail_width(window),
                 self.share_detail(theme, *id, window, cx),
             ),
-            Overlay::ShareQr(id) => (
-                locale.text(Text::ScanToReceive),
-                self.shares
-                    .iter()
-                    .find(|share| share.id == *id)
-                    .map_or(DEFAULT_OVERLAY_WIDTH, |share| {
-                        OVERLAY_PADDING.mul_add(2., enlarged_qr_side(share, window))
+            Overlay::ShareQr(id) => {
+                let share = self.shares.iter().find(|share| share.id == *id);
+                let title = if share.is_some_and(|share| share.is_traced(self.browser_trace)) {
+                    locale.text(Text::ScanDiagnosticQr)
+                } else {
+                    locale.text(Text::ScanToReceive)
+                };
+                (
+                    title,
+                    share.map_or(DEFAULT_OVERLAY_WIDTH, |share| {
+                        OVERLAY_PADDING
+                            .mul_add(2., enlarged_qr_side(share, self.browser_trace, window))
                     }),
-                self.share_qr_detail(theme, *id, window, cx),
-            ),
-            Overlay::ShareDiagnostics(id) => (
-                locale.text(Text::ShareDiagnostics),
-                DEFAULT_OVERLAY_WIDTH,
-                self.share_diagnostics(theme, *id, cx),
-            ),
+                    self.share_qr_detail(theme, *id, window, cx),
+                )
+            }
             Overlay::SharingSetup(target) => (
                 locale.text(self.setup_form.page.title()),
                 DEFAULT_OVERLAY_WIDTH,

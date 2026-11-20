@@ -40,41 +40,27 @@ impl Desktop {
         // the beat the entrance finishes instead of trickling in under the flight.
         let revealed = intro.revealed();
         let publication = share.live_publication().filter(|_| revealed);
-        let link = publication.map(SharePublication::standard);
+        let link = publication.map(|pub_| pub_.primary(self.browser_trace));
+        let traced = publication.is_some_and(|pub_| pub_.is_traced(self.browser_trace));
         let pending = !revealed || matches!(share.state, ShareState::Preparing);
         let playback = if intro.still || !window.is_visible() || !window.is_window_active() {
             SpringPlayback::Completed
         } else {
             SpringPlayback::Running
         };
-        let readiness = |ready| {
-            SpringAnimation::new(READINESS_FADE)
-                .to(if ready { 1. } else { 0. })
-                .playback(playback)
+        let settled = if link.is_some() {
+            ResultStatus::Ready { traced }
+        } else {
+            ResultStatus::Other
         };
-        let settled_status = result_status(theme, share, link.is_some(), false, locale);
-        let preparing_status = result_status(theme, share, false, true, locale);
-        let status = column().relative().with_spring(
-            ("result-status-reveal", share.id),
-            readiness(!pending),
-            move |el, presence| {
-                // Only the changing status crossfades; the filename and its
-                // geometry stay fixed, including when the link arrives late.
-                el.child(settled_status.opacity(presence)).child(
-                    preparing_status
-                        .absolute()
-                        .top_0()
-                        .left_0()
-                        .opacity(1. - presence),
-                )
-            },
-        );
         let information = column()
             .flex_1()
             .min_w_0()
             .gap(px(RESULT_SECTION_GAP))
             .opacity(intro.information_presence())
-            .child(status)
+            .child(result_status_reveal(
+                theme, share, settled, pending, playback, locale,
+            ))
             .child(file_summary(theme, share, locale))
             .when(
                 revealed && (share.error.is_some() || share.relay_notice().is_some()),
@@ -84,7 +70,7 @@ impl Desktop {
                 self.result_action(theme, share.id, publication, cx)
                     .with_spring(
                         ("result-action-reveal", share.id),
-                        readiness(link.is_some()),
+                        readiness_spring(link.is_some(), playback),
                         gpui::Styled::opacity,
                     ),
             );
@@ -118,7 +104,7 @@ impl Desktop {
                         column()
                             .items_center()
                             .flex_shrink_0()
-                            .child(Self::share_qr(theme, share.id, slot, cx)),
+                            .child(Self::share_qr(theme, share.id, slot, traced, cx)),
                     ),
             )
             .child(self.result_footer(theme, share, pending, cx));
@@ -197,13 +183,12 @@ impl Desktop {
         publication: Option<&SharePublication>,
         cx: &Context<Self>,
     ) -> Div {
-        let link = publication.map(SharePublication::standard);
         column()
             .w_full()
             .min_w_0()
             .gap(px(8.))
             .child(
-                self.share_copy_button(id, link, cx)
+                self.share_copy_button(id, publication, cx)
                     .focus_handle(&self.primary_focus),
             )
             .child(
@@ -233,25 +218,67 @@ impl Desktop {
     }
 }
 
-fn result_status(
+fn readiness_spring(ready: bool, playback: SpringPlayback) -> SpringAnimation<f32> {
+    SpringAnimation::new(READINESS_FADE)
+        .to(if ready { 1. } else { 0. })
+        .playback(playback)
+}
+
+fn result_status_reveal(
     theme: Theme,
     share: &Share,
-    link_ready: bool,
+    settled: ResultStatus,
     pending: bool,
+    playback: SpringPlayback,
     locale: Language,
-) -> Div {
+) -> impl IntoElement {
+    let settled_status = result_status(theme, share, settled, locale);
+    let preparing_status = result_status(theme, share, ResultStatus::Preparing, locale);
+    column().relative().with_spring(
+        ("result-status-reveal", share.id),
+        readiness_spring(!pending, playback),
+        move |el, presence| {
+            // Only the changing status crossfades; the filename and its
+            // geometry stay fixed, including when the link arrives late.
+            el.child(settled_status.opacity(presence)).child(
+                preparing_status
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .opacity(1. - presence),
+            )
+        },
+    )
+}
+
+#[derive(Clone, Copy)]
+enum ResultStatus {
+    Preparing,
+    Ready { traced: bool },
+    Other,
+}
+
+fn result_status(theme: Theme, share: &Share, state: ResultStatus, locale: Language) -> Div {
     let (status, tone) = share.status();
-    let (symbol, text, color) = if link_ready {
-        (Icon::Check, Text::LinkReady, tone.text(theme))
-    } else if pending {
-        (Icon::Link, Text::PreparingLink, theme.muted_text())
-    } else {
-        (Icon::Link, status, tone.text(theme))
+    let (symbol, text, color, traced) = match state {
+        ResultStatus::Ready { traced } => (Icon::Check, Text::LinkReady, tone.text(theme), traced),
+        ResultStatus::Preparing => (Icon::Link, Text::PreparingLink, theme.muted_text(), false),
+        ResultStatus::Other => (Icon::Link, status, tone.text(theme), false),
     };
+    let trace_color = Tone::Lavender.text(theme);
     row()
         .gap(px(7.))
         .child(icon(symbol, 16.).text_color(color))
         .child(theme.caption(locale.text(text)).text_color(color))
+        .when(traced, |el| {
+            el.child(theme.caption("·"))
+                .child(icon(Icon::Activity, 14.).text_color(trace_color))
+                .child(
+                    theme
+                        .caption(locale.text(Text::BrowserTrace))
+                        .text_color(trace_color),
+                )
+        })
 }
 
 fn file_summary(theme: Theme, share: &Share, locale: Language) -> Div {

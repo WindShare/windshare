@@ -46,6 +46,7 @@ pub struct Desktop {
     pub link_disclosure: LinkDisclosure,
     pub toast: Option<(usize, Text)>,
     pub settings: [bool; 2],
+    pub browser_trace: bool,
     pub dialog_sequence: usize,
     toast_sequence: usize,
     pub focus: FocusHandle,
@@ -140,6 +141,7 @@ impl Desktop {
             link_disclosure: LinkDisclosure::default(),
             toast: None,
             settings: [true, true],
+            browser_trace: false,
             dialog_sequence: 0,
             toast_sequence: 0,
             focus,
@@ -253,9 +255,10 @@ impl Desktop {
 
     pub fn settings_section_available(&self, section: SettingsSection) -> bool {
         match section {
-            SettingsSection::General | SettingsSection::Network => true,
+            SettingsSection::General | SettingsSection::Network | SettingsSection::Diagnostics => {
+                true
+            }
             SettingsSection::Account => self.account_view().is_some(),
-            SettingsSection::Diagnostics => matches!(self.runtime, Runtime::Native(_)),
         }
     }
 

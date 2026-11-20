@@ -67,9 +67,7 @@ impl Desktop {
             Action::Close => self.close_overlay(window, cx),
             Action::CopyLink(id, kind) => self.copy_link(id, kind, cx),
             Action::ToggleLink(id) => self.toggle_link(id),
-            Action::OpenShareDiagnostics(id) => {
-                self.open_overlay(Overlay::ShareDiagnostics(id), window, cx);
-            }
+            Action::SetBrowserTrace(enabled) => self.set_browser_trace(enabled),
             Action::SetSenderTrace(enabled) => self.set_sender_trace(enabled),
             Action::OpenLogs => self.open_logs(cx),
             Action::EnlargeQr(id) => self.enlarge_qr(id, window, cx),
@@ -168,8 +166,16 @@ impl Desktop {
         let Some(share) = self.shares.iter().find(|share| share.id == id) else {
             return;
         };
-        let Some(url) = share.url_for(kind) else {
+        let Some(publication) = share.live_publication() else {
             return;
+        };
+        let browser_trace = self.browser_trace;
+        let Some(url) = publication.url(kind, browser_trace) else {
+            return;
+        };
+        let traced = match kind {
+            LinkKind::Primary => publication.is_traced(browser_trace),
+            LinkKind::Backup => publication.is_backup_traced(browser_trace),
         };
         cx.write_to_clipboard(ClipboardItem::new_string(url.to_string()));
         let revision = self.next_operation();
@@ -187,20 +193,18 @@ impl Desktop {
             _ => false,
         };
         let inline_feedback = match kind {
-            LinkKind::Standard => on_share_surface,
+            LinkKind::Primary => on_share_surface,
             LinkKind::Backup => on_share_surface && self.link_disclosure.expanded(id),
-            LinkKind::Diagnostic => {
-                matches!(overlay, Some(Overlay::ShareDiagnostics(share_id)) if *share_id == id)
-            }
         };
         // The result button acknowledges its own action; other surfaces still
         // need a toast because they have no inline confirmation.
         if !inline_feedback {
             self.notify(
-                match kind {
-                    LinkKind::Standard => Text::LinkCopied,
-                    LinkKind::Backup => Text::BackupLinkCopied,
-                    LinkKind::Diagnostic => Text::DiagnosticLinkCopied,
+                match (kind, traced) {
+                    (LinkKind::Primary, false) => Text::LinkCopied,
+                    (LinkKind::Primary, true) => Text::DiagnosticLinkCopied,
+                    (LinkKind::Backup, false) => Text::BackupLinkCopied,
+                    (LinkKind::Backup, true) => Text::DiagnosticBackupLinkCopied,
                 },
                 cx,
             );
@@ -211,6 +215,7 @@ impl Desktop {
             operation = revision,
             share_id = id,
             link_kind = ?kind,
+            browser_trace = traced,
             inline_feedback
         );
         Self::schedule_copy_feedback_reset(revision, cx);

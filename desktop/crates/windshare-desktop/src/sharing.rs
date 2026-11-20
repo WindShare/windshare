@@ -1,5 +1,4 @@
 mod detail;
-mod diagnostics;
 mod intro;
 mod link;
 mod link_views;

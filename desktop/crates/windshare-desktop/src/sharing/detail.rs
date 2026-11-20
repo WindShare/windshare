@@ -1,5 +1,4 @@
 use super::{
-    SharePublication,
     link_views::{LINK_COLUMN_GAP, LINK_PANEL_WIDTH, link_columns_fit},
     qr_slot::QrSlot,
 };
@@ -10,7 +9,7 @@ use crate::{
     overlays::{OVERLAY_MARGIN, OVERLAY_PADDING},
 };
 use gpui::{Div, Window, div, prelude::*, px};
-use windshare_ui::{ButtonStyle, Icon, Theme, column, icon, row};
+use windshare_ui::{ButtonStyle, Icon, Theme, Tone, column, icon, row};
 
 const QR_LARGE_MIN_SIDE: f32 = 352.;
 const QR_LARGE_MODULE_SIDE: f32 = 6.;
@@ -20,15 +19,14 @@ pub fn detail_width(window: &Window) -> f32 {
     LINK_PANEL_WIDTH.min(OVERLAY_MARGIN.mul_add(-2., f32::from(window.viewport_size().width)))
 }
 
-pub fn enlarged_qr_side(share: &Share, window: &Window) -> f32 {
-    let desired =
-        share
-            .usable_link()
-            .and_then(|link| link.qr().ok())
-            .map_or(QR_LARGE_MIN_SIDE, |code| {
-                code.side_for_modules(QR_LARGE_MODULE_SIDE)
-                    .max(QR_LARGE_MIN_SIDE)
-            });
+pub fn enlarged_qr_side(share: &Share, browser_trace: bool, window: &Window) -> f32 {
+    let desired = share
+        .usable_link(browser_trace)
+        .and_then(|link| link.qr().ok())
+        .map_or(QR_LARGE_MIN_SIDE, |code| {
+            code.side_for_modules(QR_LARGE_MODULE_SIDE)
+                .max(QR_LARGE_MIN_SIDE)
+        });
     desired
         .min(
             (OVERLAY_MARGIN + OVERLAY_PADDING)
@@ -50,7 +48,8 @@ impl Desktop {
             return column();
         };
         let publication = share.live_publication();
-        let link = publication.map(SharePublication::standard);
+        let link = publication.map(|pub_| pub_.primary(self.browser_trace));
+        let traced = publication.is_some_and(|pub_| pub_.is_traced(self.browser_trace));
         // No run arrives in a dialog: its slot raises a whirl of its own while
         // the link is pending and opens the moment the link exists.
         let slot = QrSlot::new(
@@ -71,7 +70,16 @@ impl Desktop {
                     .flex_wrap()
                     .gap(px(8.))
                     .child(theme.caption(locale.created(&share.age.description(locale))))
-                    .child(theme.badge(locale.text(share.status().0), share.status().1)),
+                    .child(
+                        row()
+                            .gap(px(8.))
+                            .when(traced, |el| {
+                                el.child(
+                                    theme.badge(locale.text(Text::BrowserTrace), Tone::Lavender),
+                                )
+                            })
+                            .child(theme.badge(locale.text(share.status().0), share.status().1)),
+                    ),
             )
             .when(
                 share.error.is_some() || share.relay_notice().is_some(),
@@ -80,7 +88,7 @@ impl Desktop {
             .child(
                 column()
                     .gap(px(8.))
-                    .child(self.share_copy_button(id, link, cx))
+                    .child(self.share_copy_button(id, publication, cx))
                     .child(self.share_link_disclosure(theme, id, publication, cx)),
             );
         column()
@@ -98,7 +106,7 @@ impl Desktop {
                     .child(
                         column()
                             .items_center()
-                            .child(Self::share_qr(theme, id, slot, cx)),
+                            .child(Self::share_qr(theme, id, slot, traced, cx)),
                     ),
             )
             .child(
@@ -117,23 +125,16 @@ impl Desktop {
                             .child(theme.caption(locale.text(Text::KeepOpenToReceive))),
                     )
                     .child(
-                        row()
-                            .gap(px(8.))
-                            .when(link.is_some(), |el| {
-                                el.child(Self::share_diagnostics_button(id, cx))
-                            })
-                            .child(
-                                Self::button(
-                                    "detail-toggle",
-                                    locale.text(share.control().0),
-                                    share.control().1,
-                                    ButtonStyle::Quiet,
-                                    share.control().2,
-                                    cx,
-                                )
-                                .compact()
-                                .disabled(matches!(share.state, ShareState::Stopping)),
-                            ),
+                        Self::button(
+                            "detail-toggle",
+                            locale.text(share.control().0),
+                            share.control().1,
+                            ButtonStyle::Quiet,
+                            share.control().2,
+                            cx,
+                        )
+                        .compact()
+                        .disabled(matches!(share.state, ShareState::Stopping)),
                     ),
             )
     }
@@ -161,11 +162,17 @@ impl Desktop {
             )
             .child(
                 share
-                    .usable_link()
+                    .usable_link(self.browser_trace)
                     .and_then(|link| link.qr().ok())
                     .map_or_else(
                         || column().child(theme.caption(locale.text(Text::QrUnavailable))),
-                        |code| column().child(code.view(enlarged_qr_side(share, window))),
+                        |code| {
+                            column().child(code.view(enlarged_qr_side(
+                                share,
+                                self.browser_trace,
+                                window,
+                            )))
+                        },
                     ),
             )
             .child(

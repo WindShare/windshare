@@ -55,9 +55,9 @@ even during a local stop. For peer stops, correlate with `receiver_termination.l
 
 ## Desktop Diagnostics
 
-Open a live share from **My shares** and choose **Diagnostics** in the **Share details** footer. Copy the diagnostic link or scan its QR code to start recording in the recipient’s browser. Use **Copy link** on the share card for everyday sharing.
+Use **Preferences → Diagnostics** to turn on **Browser trace** or **Sender trace** for the current desktop session (both reset to off on restart).
 
-Use **Preferences → Diagnostics** to turn on **Sender trace** before starting a share. Turning it off ends sender capture and keeps the logs already recorded. **Open folder** reveals the rotating desktop and host logs.
+With **Browser trace** on, share links, QR codes, and backup links include `trace=1` so the recipient’s browser starts recording automatically when opened. Turning **Sender trace** on records detailed host events for shares started while it is enabled; turning it off ends sender capture and keeps the logs already recorded. **Open folder** reveals the rotating desktop and host logs.
 
 ## Browser Diagnostics
 

@@ -230,9 +230,9 @@ impl Desktop {
                     continue;
                 };
                 if let Some(operation) = model.operations.iter().find(|op| &op.id == operation_id) {
-                    let was_ready = share.usable_link().is_some();
+                    let was_ready = share.live_publication().is_some();
                     super::projection::update_share(share, operation);
-                    if !was_ready && share.usable_link().is_some() {
+                    if !was_ready && share.live_publication().is_some() {
                         tracing::info!(event = "share.ready", operation = %operation.id,
                             share_id = share.id, preview = false);
                     }

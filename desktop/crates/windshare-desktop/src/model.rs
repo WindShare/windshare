@@ -93,7 +93,6 @@ pub struct Transfer {
 pub enum Overlay {
     Detail(usize),
     ShareQr(usize),
-    ShareDiagnostics(usize),
     Help,
     SharingSetup(SharingSetupTarget),
     Account,
@@ -131,7 +130,7 @@ pub enum Action {
     Detail(usize),
     CopyLink(usize, LinkKind),
     ToggleLink(usize),
-    OpenShareDiagnostics(usize),
+    SetBrowserTrace(bool),
     SetSenderTrace(bool),
     OpenLogs,
     EnlargeQr(usize),

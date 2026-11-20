@@ -29,9 +29,7 @@ impl Desktop {
             SettingsSection::General => self.general_settings(theme, cx),
             SettingsSection::Network => self.network_settings_page(theme, compact, cx),
             SettingsSection::Account => self.account_settings_page(theme, cx),
-            SettingsSection::Diagnostics => {
-                column().when_some(self.diagnostics_card(theme, cx), gpui::ParentElement::child)
-            }
+            SettingsSection::Diagnostics => self.diagnostics_card(theme, cx),
         };
         body.with_animation(
             ("settings-section", active as usize),
@@ -82,7 +80,8 @@ impl Desktop {
         let attention = match section {
             SettingsSection::Network => self.network_attention_tone(),
             SettingsSection::Account => self.account_attention_tone(),
-            SettingsSection::General | SettingsSection::Diagnostics => None,
+            SettingsSection::Diagnostics => self.diagnostics_attention_tone(),
+            SettingsSection::General => None,
         };
         let icon_color = if selected {
             theme.text()
