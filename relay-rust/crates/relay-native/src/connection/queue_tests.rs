@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     Database,
-    config::limits,
+    config::{DATA_QUEUE_FRAMES, limits},
     environment::Trace,
     node::{
         Runtime, Settings,

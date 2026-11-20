@@ -12,15 +12,24 @@ pub const DATA_QUEUE_BYTES: usize = DATA_QUEUE_FRAMES * MAX_DATA_BYTES;
 pub const SUBMITTED_DATA_FRAMES: usize = 2;
 pub const SUBMITTED_DATA_BYTES: usize = 2 * MAX_DATA_BYTES;
 pub const DELIVERY_WINDOW: flow::Counts = flow::Counts::new(16, 16 * MAX_DATA_BYTES as u64);
-// Every receiver's ToSender window shares the sender connection's ordinary pool,
-// and an idle window keeps its credit. Two envelopes still batch feedback while
-// every business receiver holds one, so concurrent JOINs keep startup headroom.
-pub const SENDER_DELIVERY_WINDOW: flow::Counts = flow::Counts::new(2, 2 * MAX_DATA_BYTES as u64);
-const _: () = assert!(
-    (SHARE_BUSINESS_CONNECTIONS as u64 - 1) * SENDER_DELIVERY_WINDOW.frames
-        <= DATA_QUEUE_FRAMES as u64 - STARTUP_RESERVE_FRAMES
-);
+// Every receiver's ToSender flow shares the sender connection's ledger, and an
+// idle window keeps its credit. Each may refill to two envelopes and one full
+// frame of bytes, while that floor stays reserved for every business receiver
+// that has not joined yet. Early receivers keep the full DELIVERY_WINDOW.
+pub const SENDER_WINDOW_SHARE: flow::WindowShare = flow::WindowShare {
+    floor: flow::Counts::new(2, MAX_DATA_BYTES as u64),
+    flows: SHARE_BUSINESS_CONNECTIONS as u64 - 1,
+};
+// Those envelopes are small, so a connection may hold more frames than full
+// frames of bytes. Bytes still bound memory. This matches the Go default.
+pub const CONNECTION_DATA_FRAMES: usize = 256;
 const STARTUP_RESERVE_FRAMES: u64 = 2;
+const _: () = assert!(
+    SENDER_WINDOW_SHARE.floor.frames * SENDER_WINDOW_SHARE.flows
+        <= CONNECTION_DATA_FRAMES as u64 - STARTUP_RESERVE_FRAMES
+        && SENDER_WINDOW_SHARE.floor.encoded_bytes * SENDER_WINDOW_SHARE.flows
+            <= DATA_QUEUE_BYTES as u64 - STARTUP_RESERVE_FRAMES * MAX_DATA_BYTES as u64
+);
 const MAX_DATA_BYTES: usize =
     windshare_relay_core::sessions::OpaqueHeader::MAX_ENCODED_BYTES as usize;
 pub const MAX_HTTP_REQUESTS: usize = 64;
@@ -159,7 +168,7 @@ pub fn limits() -> share::Limits {
         retained_flows_per_connection: 64,
         retirement: share::RetirementPolicy::PhysicalRelease,
         delivery: flow::Limits::new(
-            flow::Counts::new(DATA_QUEUE_FRAMES as u64, DATA_QUEUE_BYTES as u64),
+            flow::Counts::new(CONNECTION_DATA_FRAMES as u64, DATA_QUEUE_BYTES as u64),
             capacity(STARTUP_RESERVE_FRAMES),
             capacity(1),
             Duration::from_secs(5),

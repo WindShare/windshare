@@ -40,14 +40,12 @@ async fn join(host: &Harness, id: u64) -> (Writer, RelaySessionId) {
 }
 
 async fn joined(host: &mut Harness, id: u64) -> (Writer, RelaySessionId) {
-    // The vector declares 16 frames. Toward the receiver, 14 ordinary plus this
+    // The vectors declare 16 frames. Toward the receiver, 14 ordinary plus this
     // flow's startup allowance leave one protected startup slot for a later
-    // session. Toward the shared sender, the window is bounded so siblings fit.
+    // session. The shared sender's small declaration cannot also hold floors
+    // for every future receiver, so it is split evenly: startup plus two.
     let (mut receiver, session) = join(host, id).await;
-    for (writer, granted) in [
-        (&mut receiver, crate::config::SENDER_DELIVERY_WINDOW.frames),
-        (&mut host.sender, 15),
-    ] {
+    for (writer, granted) in [(&mut receiver, 3), (&mut host.sender, 15)] {
         let mut frames = 0;
         for _ in 0..2 {
             let grant = read(writer).await;
@@ -57,6 +55,16 @@ async fn joined(host: &mut Harness, id: u64) -> (Writer, RelaySessionId) {
         assert_eq!(u64::from(frames), granted);
     }
     (receiver, session)
+}
+
+/// Credit toward a shared sender may be offered whenever siblings change.
+async fn next_payload(writer: &mut Writer) -> Vec<u8> {
+    loop {
+        let frame = read(writer).await;
+        if !frame.starts_with(b"WS2W") {
+            return frame;
+        }
+    }
 }
 
 fn opaque(session: RelaySessionId) -> Vec<u8> {
@@ -289,7 +297,7 @@ async fn full_capacity_notice_budget_preserves_settlement_and_sibling_delivery()
         .send(Event::Frame(connection(1), healthy_frame.clone()))
         .await
         .unwrap();
-    assert_eq!(read(&mut healthy).await, healthy_frame);
+    assert_eq!(next_payload(&mut healthy).await, healthy_frame);
     tokio::time::advance(Duration::from_secs(2)).await;
 
     // Observe the reporting tick at every receiver while the sender stays blocked.
@@ -316,7 +324,7 @@ async fn full_capacity_notice_budget_preserves_settlement_and_sibling_delivery()
 
     // The actor must process the disconnect before this payload, with no writer
     // release at the shared sender to make room for the required settlement.
-    assert_eq!(read(&mut healthy).await, healthy_frame);
+    assert_eq!(next_payload(&mut healthy).await, healthy_frame);
     for _ in 0..CAPACITY_NOTICE_QUEUE_FRAMES {
         assert!(read(&mut host.sender).await.starts_with(b"WS2Z"));
     }

@@ -4,7 +4,7 @@
 //! bytes to the writer, while the caller exclusively owns the share kernel.
 
 use crate::config::{
-    CAPACITY_NOTICE_QUEUE_FRAMES, CONTROL_QUEUE_FRAMES, DATA_QUEUE_BYTES, DATA_QUEUE_FRAMES,
+    CAPACITY_NOTICE_QUEUE_FRAMES, CONNECTION_DATA_FRAMES, CONTROL_QUEUE_FRAMES, DATA_QUEUE_BYTES,
     MAX_CONTROL_BYTES, SUBMITTED_DATA_FRAMES,
 };
 use crate::node::{Runtime, access::Bearer};
@@ -73,7 +73,7 @@ pub fn channel(
         pending: pending::Queues::default(),
         node,
         pending_bytes: 0,
-        pending_limit: Counts::new(DATA_QUEUE_FRAMES as u64, DATA_QUEUE_BYTES as u64),
+        pending_limit: Counts::new(CONNECTION_DATA_FRAMES as u64, DATA_QUEUE_BYTES as u64),
         ordered,
         probe,
         closure,
