@@ -1,5 +1,9 @@
 import type { DirectZipRequiredFeatureFactsV1 } from '../session'
-import type { BrowserReceiveWindow } from '../../browser/environment'
+import {
+  readBrowserIndexedDb,
+  readBrowserLocks,
+  type BrowserReceiveWindow,
+} from '../../browser/environment'
 
 export function observeBrowserDirectZipFeatureFacts(
   windowPort: BrowserReceiveWindow,
@@ -12,14 +16,16 @@ export function observeBrowserDirectZipFeatureFacts(
   const base = constructors.FileSystemHandle?.prototype
   const file = constructors.FileSystemFileHandle?.prototype
   const directory = constructors.FileSystemDirectoryHandle?.prototype
+  const indexedDB = readBrowserIndexedDb(windowPort)
+  const locks = readBrowserLocks(windowPort)
   return Object.freeze({
     createWritable: fact(file?.createWritable),
     handleIsSameEntry: fact(base?.isSameEntry ?? directory?.isSameEntry ?? file?.isSameEntry),
     handleQueryPermission: fact(base?.queryPermission ?? directory?.queryPermission),
     handleRequestPermission: fact(base?.requestPermission ?? directory?.requestPermission),
-    indexedDB: typeof windowPort.indexedDB === 'object' ? 'object' : 'missing',
+    indexedDB: typeof indexedDB === 'object' ? 'object' : 'missing',
     isSecureContext: windowPort.isSecureContext === true,
-    locks: typeof windowPort.navigator.locks === 'object' ? 'object' : 'missing',
+    locks: typeof locks === 'object' ? 'object' : 'missing',
     showDirectoryPicker: fact(windowPort.showDirectoryPicker),
   })
 }

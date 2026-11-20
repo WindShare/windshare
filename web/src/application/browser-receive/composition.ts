@@ -39,7 +39,12 @@ import type {
   RouteCommitResult,
 } from '../receive/contracts'
 import { PresentationSourceError } from '../receive/contracts'
-import type { BrowserReceiveWindow } from '../../output/browser/environment'
+import {
+  readBrowserIndexedDb,
+  readBrowserLocks,
+  readBrowserStorage,
+  type BrowserReceiveWindow,
+} from '../../output/browser/environment'
 import type { BrowserRetainedCompositionOptions } from './retained/inventory'
 import { deferArtifactAuthority } from './deferred-authority'
 import { portableEnvironmentOffer, quotaAvailability, workspaceEnvironmentOffer } from './environment-offers'
@@ -139,10 +144,8 @@ async function inspectBrowserRouteRegistry(
   signal: AbortSignal,
 ): Promise<InstalledBrowserRouteRegistry> {
   signal.throwIfAborted()
-  const hasRepository = typeof windowPort.indexedDB?.open === 'function'
-  const hasLocks = typeof windowPort.navigator.locks?.request === 'function'
-  const hasWorkspaceDirectory =
-    typeof windowPort.navigator.storage?.getDirectory === 'function'
+  const { hasRepository, hasLocks, hasWorkspaceDirectory, storage } =
+    probeBrowserStorageCapabilities(windowPort)
   const handoffFacts = probeBrowserHandoffCapabilities(
     windowPort as unknown as BrowserHandoffCapabilityRuntime,
   )
@@ -156,8 +159,8 @@ async function inspectBrowserRouteRegistry(
     browserHandoff: windowPort as unknown as BrowserHandoffCapabilityRuntime,
   })
   const initial = probeBrowserEnvironment(runtime)
-  const workspaceOffer = hasWorkspaceRoute
-    ? workspaceEnvironmentOffer(await quotaAvailability(windowPort.navigator.storage, signal))
+  const workspaceOffer = hasWorkspaceRoute && storage !== undefined
+    ? workspaceEnvironmentOffer(await quotaAvailability(storage, signal))
     : null
   const portableOffer = hasPortableRoute ? portableEnvironmentOffer() : null
   const directZipContribution = await inspectBrowserDirectZipEnvironment(
@@ -189,10 +192,8 @@ function inspectBrowserRouteRegistrySynchronously(
   windowPort: BrowserReceiveWindow,
   nativeObjectSupported: boolean,
 ): InstalledBrowserRouteRegistry {
-  const hasRepository = typeof windowPort.indexedDB?.open === 'function'
-  const hasLocks = typeof windowPort.navigator.locks?.request === 'function'
-  const hasWorkspaceDirectory =
-    typeof windowPort.navigator.storage?.getDirectory === 'function'
+  const { hasRepository, hasLocks, hasWorkspaceDirectory } =
+    probeBrowserStorageCapabilities(windowPort)
   const handoffFacts = probeBrowserHandoffCapabilities(
     windowPort as unknown as BrowserHandoffCapabilityRuntime,
   )
@@ -223,6 +224,16 @@ function inspectBrowserRouteRegistrySynchronously(
     }),
     zipRecommendationPolicy: null,
     installedDirectZip: undefined,
+  })
+}
+
+function probeBrowserStorageCapabilities(windowPort: BrowserReceiveWindow) {
+  const storage = readBrowserStorage(windowPort)
+  return Object.freeze({
+    hasRepository: typeof readBrowserIndexedDb(windowPort)?.open === 'function',
+    hasLocks: typeof readBrowserLocks(windowPort)?.request === 'function',
+    hasWorkspaceDirectory: typeof storage?.getDirectory === 'function',
+    storage,
   })
 }
 

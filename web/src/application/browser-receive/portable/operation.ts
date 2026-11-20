@@ -41,7 +41,10 @@ import type {
   BoundReceiveOperation,
   LifecycleMutation,
 } from '../../receive/contracts'
-import type { BrowserReceiveWindow } from '../../../output/browser/environment'
+import {
+  readBrowserIndexedDb,
+  type BrowserReceiveWindow,
+} from '../../../output/browser/environment'
 import { operationDigest } from '../../../output/workspace/operation-digest'
 import { requireSameIntent, unavailableRoute } from '../route-contract'
 
@@ -116,7 +119,13 @@ ExecutionAdmissionLifecycle {
     display?: ReceiveOperationDisplay,
     preClickRanking?: readonly ArtifactChoiceID[],
   ): Promise<PortableReceiveOperation> {
-    const owner = new PortableReceiveOperation(intent, typeof windowPort.indexedDB?.open === 'function', diagnostics, display, preClickRanking)
+    const owner = new PortableReceiveOperation(
+      intent,
+      typeof readBrowserIndexedDb(windowPort)?.open === 'function',
+      diagnostics,
+      display,
+      preClickRanking,
+    )
     owner.#plans = await portablePlanAuthority(
       windowPort,
       action,

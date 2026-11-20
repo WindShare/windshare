@@ -38,7 +38,12 @@ import type {
   RetainedReceiveInventory,
   RetainedReceiveOperation,
 } from '../../receive/contracts'
-import type { BrowserReceiveWindow } from '../../../output/browser/environment'
+import {
+  isBrowserStoragePolicyDenial,
+  readBrowserIndexedDb,
+  readBrowserLocks,
+  type BrowserReceiveWindow,
+} from '../../../output/browser/environment'
 import { unavailableRoute } from '../route-contract'
 import type { BrowserDirectZipCompositionPort } from '../direct-zip'
 import { bindRuntimeOutputFailures, diagnosticsFor } from './diagnostics'
@@ -174,11 +179,18 @@ export async function listBrowserRetainedOperations(
   signal: AbortSignal,
 ): Promise<RetainedReceiveInventory> {
   signal.throwIfAborted()
-  if (typeof windowPort.indexedDB?.open !== 'function') return emptyRetainedInventory()
+  if (typeof readBrowserIndexedDb(windowPort)?.open !== 'function') return emptyRetainedInventory()
 
-  await repairWorkspaceInventory(windowPort, options, signal)
+  if (!await repairWorkspaceInventory(windowPort, options, signal)) return emptyRetainedInventory()
 
-  const source = await (options.openResumeSource ?? (() => IndexedDbReceiveResumeSource.open()))()
+  let source: ReceiveOperationResumeSource & { close(): void }
+  try {
+    source = await (options.openResumeSource ?? (() => IndexedDbReceiveResumeSource.open()))()
+  } catch (error) {
+    signal.throwIfAborted()
+    if (isBrowserStoragePolicyDenial(error)) return emptyRetainedInventory()
+    throw error
+  }
   let inventoryClosed = false
   const closeSource = () => {
     if (inventoryClosed) return
@@ -199,7 +211,7 @@ export async function listBrowserRetainedOperations(
         ? await readRetainedBrowserDeliveries(inventory.operations.map(reference => reference.descriptor),
             signal, options.openBrowserDeliveryRepository)
         : new Map<string, import('../../../output/model/browser-delivery').BrowserDeliverySummary>()
-      const locks = windowPort.navigator?.locks
+      const locks = readBrowserLocks(windowPort)
       const activities = locks === undefined
         ? inventory.operations.map(() => 'inactive' as const)
         : await Promise.all(inventory.operations.map(reference => observeBrowserReceiveOperationActivity(
@@ -583,12 +595,23 @@ function sourceWithoutBootstrapCandidates(
   })
 }
 
-async function repairWorkspaceInventory(windowPort: BrowserReceiveWindow, options: BrowserRetainedCompositionOptions, signal: AbortSignal): Promise<void> {
+async function repairWorkspaceInventory(
+  windowPort: BrowserReceiveWindow,
+  options: BrowserRetainedCompositionOptions,
+  signal: AbortSignal,
+): Promise<boolean> {
   if (options.openResumeSource === undefined || options.openActivationRepository !== undefined ||
       options.recoverWorkspaceActivations !== undefined) {
-    const activationRepository = await (
-      options.openActivationRepository ?? (() => IndexedDbReceiveOperationRepository.open())
-    )()
+    let activationRepository: WorkspaceActivationJournalRepository
+    try {
+      activationRepository = await (
+        options.openActivationRepository ?? (() => IndexedDbReceiveOperationRepository.open())
+      )()
+    } catch (error) {
+      signal.throwIfAborted()
+      if (isBrowserStoragePolicyDenial(error)) return false
+      throw error
+    }
     try {
       // Opening an empty inventory must not load the workspace repair engine.
       const needsRepair = options.recoverWorkspaceActivations !== undefined ||
@@ -606,5 +629,5 @@ async function repairWorkspaceInventory(windowPort: BrowserReceiveWindow, option
     }
   }
   signal.throwIfAborted()
-
+  return true
 }

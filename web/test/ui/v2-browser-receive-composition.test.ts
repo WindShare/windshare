@@ -29,6 +29,7 @@ import { createSelectionSpec } from '../../src/transfer/intent'
 import {
   createBrowserReceiveComposition,
 } from '../../src/application/browser-receive/composition'
+import { createLazyBrowserDirectZipComposition } from '../../src/application/browser-receive/direct-zip/loading'
 import {
   COMPLETE_DISCOVERY,
   projection,
@@ -782,5 +783,135 @@ describe('browser output attempt ownership', () => {
     }
     expect(publishedArtifact.size).toBe(3)
     await runtime.detach()
+  })
+})
+
+describe('browser receive storage policy probing', () => {
+  it('treats SecurityError from storage getters as unavailable capabilities across routes', async () => {
+    const denial = new DOMException('Storage access denied', 'SecurityError')
+    const deniedIdbWindow = capableWindow(vi.fn(async () => directoryHandle()))
+    Object.defineProperty(deniedIdbWindow, 'indexedDB', {
+      configurable: true,
+      get() { throw denial },
+    })
+    const deniedIdbEnvironment = await createBrowserReceiveComposition(deniedIdbWindow, {
+      directZip: createLazyBrowserDirectZipComposition(deniedIdbWindow, {
+        openJournal: async () => { throw denial },
+      }),
+    }).environment(new AbortController().signal)
+
+    expect(deniedIdbEnvironment.targets.map(target => target.kind)).toEqual(['browser-handoff'])
+    expect(deniedIdbEnvironment.workspace).toBeNull()
+    expect(deniedIdbEnvironment.portable).toBeNull()
+    expect(deniedIdbEnvironment.directZipSupport.kind).toBe('unavailable')
+
+    const deniedLocksWindow = capableWindow(vi.fn(async () => directoryHandle()))
+    Object.defineProperty(deniedLocksWindow.navigator, 'locks', {
+      configurable: true,
+      get() { throw denial },
+    })
+    const deniedLocksEnvironment = await createBrowserReceiveComposition(deniedLocksWindow, {
+      directZip: createLazyBrowserDirectZipComposition(deniedLocksWindow, {
+        openJournal: async () => { throw denial },
+      }),
+    }).environment(new AbortController().signal)
+
+    expect(deniedLocksEnvironment.targets.map(target => target.kind)).toEqual(['browser-handoff'])
+    expect(deniedLocksEnvironment.workspace).toBeNull()
+    expect(deniedLocksEnvironment.portable?.kind).toBe('portable-memory')
+    expect(deniedLocksEnvironment.directZipSupport.kind).toBe('unavailable')
+
+    const deniedStorageWindow = capableWindow(vi.fn(async () => directoryHandle()))
+    Object.defineProperty(deniedStorageWindow.navigator, 'storage', {
+      configurable: true,
+      get() { throw denial },
+    })
+    const deniedStorageEnvironment = await createBrowserReceiveComposition(deniedStorageWindow)
+      .environment(new AbortController().signal)
+
+    expect(deniedStorageEnvironment.targets.map(target => target.kind)).toEqual([
+      'fsa-parent-directory',
+      'browser-handoff',
+    ])
+    expect(deniedStorageEnvironment.workspace).toBeNull()
+    expect(deniedStorageEnvironment.portable?.kind).toBe('portable-memory')
+  })
+
+  it.each([
+    ['UnknownError', new DOMException('Backing store failed', 'UnknownError')],
+    ['InvalidStateError', new DOMException('Database state invalid', 'InvalidStateError')],
+  ])('propagates non-policy %s from storage getters during environment probing', async (_name, failure) => {
+    const windowPort = capableWindow(vi.fn(async () => directoryHandle()))
+    Object.defineProperty(windowPort, 'indexedDB', {
+      configurable: true,
+      get() { throw failure },
+    })
+    const composition = createBrowserReceiveComposition(windowPort)
+
+    await expect(composition.environment(new AbortController().signal)).rejects.toBe(failure)
+  })
+
+  it('returns an empty retained inventory on storage policy denial and preserves non-policy failures', async () => {
+    const denial = new DOMException('Storage access denied', 'SecurityError')
+    const deniedGetterWindow = capableWindow(vi.fn(async () => directoryHandle()))
+    Object.defineProperty(deniedGetterWindow, 'indexedDB', {
+      configurable: true,
+      get() { throw denial },
+    })
+    const openResumeSource = vi.fn()
+    const fromGetter = await createBrowserReceiveComposition(deniedGetterWindow, {
+      openResumeSource,
+    }).retained.list(new AbortController().signal)
+    expect(fromGetter.operations).toEqual([])
+    expect(fromGetter.presentationFailures).toEqual([])
+    expect(openResumeSource).not.toHaveBeenCalled()
+    fromGetter.close()
+
+    const fromActivationOpen = await createBrowserReceiveComposition(
+      capableWindow(vi.fn(async () => directoryHandle())),
+      {
+        openActivationRepository: async () => { throw denial },
+        openResumeSource,
+      },
+    ).retained.list(new AbortController().signal)
+    expect(fromActivationOpen.operations).toEqual([])
+    expect(openResumeSource).not.toHaveBeenCalled()
+    fromActivationOpen.close()
+
+    const fromResumeOpen = await createBrowserReceiveComposition(
+      capableWindow(vi.fn(async () => directoryHandle())),
+      {
+        openResumeSource: async () => { throw denial },
+      },
+    ).retained.list(new AbortController().signal)
+    expect(fromResumeOpen.operations).toEqual([])
+    fromResumeOpen.close()
+
+    const deniedLocksWindow = capableWindow(vi.fn(async () => directoryHandle()))
+    Object.defineProperty(deniedLocksWindow.navigator, 'locks', {
+      configurable: true,
+      get() { throw denial },
+    })
+    const source = new FakeResumeSource([receiveLifecycle(31, {
+      kind: 'waiting-to-save',
+      packageDigest: identity(32, 32),
+    })])
+    const fromDeniedLocks = await createBrowserReceiveComposition(deniedLocksWindow, {
+      openResumeSource: async () => source,
+    }).retained.list(new AbortController().signal)
+    expect(fromDeniedLocks.operations).toHaveLength(1)
+    fromDeniedLocks.close()
+
+    const unknownFailure = new DOMException('Backing store failed', 'UnknownError')
+    await expect(createBrowserReceiveComposition(
+      capableWindow(vi.fn(async () => directoryHandle())),
+      { openResumeSource: async () => { throw unknownFailure } },
+    ).retained.list(new AbortController().signal)).rejects.toBe(unknownFailure)
+
+    const invalidStateFailure = new DOMException('Database state invalid', 'InvalidStateError')
+    await expect(createBrowserReceiveComposition(
+      capableWindow(vi.fn(async () => directoryHandle())),
+      { openActivationRepository: async () => { throw invalidStateFailure } },
+    ).retained.list(new AbortController().signal)).rejects.toBe(invalidStateFailure)
   })
 })
