@@ -103,8 +103,10 @@ Account admission and fair relaying enable mainland service and public promotion
   Stale state falls back to lowest while authorized transfers continue within node budgets.
   Old tickets and reconnects cannot refresh entitlement validity.
   Revocation is a separate access decision, never cleared by timeouts or daily resets.
-  Include P0's node-load aggregates without account/share identifiers alongside usage records;
-  collection and upload never block transfers.
+  Include a lightweight node-health summary (`active_sessions`, `wire_bytes`, `forwarded_bytes`,
+  `admission_refusals`) without account/share identifiers alongside usage records while keeping
+  detailed forwarding-write timing and throughput buckets in node-local logs; collection and upload
+  never block transfers.
 - Reports: the receiver offers a report link for manual review. The console can disable a share by
   ShareID or block an account from official relaying. Distribute share/account blocks to web entrypoints
   and relays; relays also receive credential revocations. Enforce these locally on registration, join,

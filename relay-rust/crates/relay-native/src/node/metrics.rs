@@ -11,6 +11,10 @@ use windshare_relay_core::{identifiers::ShareId, sessions::SessionKey};
 
 const THROUGHPUT_BOUNDS: [u64; 6] = [64_000, 256_000, 1_000_000, 4_000_000, 16_000_000, u64::MAX];
 
+/// Node-local cumulative load summary logged periodically by `wsrelay`.
+///
+/// Detailed forwarding-write timing and throughput buckets stay in per-node
+/// logs; only a lightweight subset is exported to the authority control plane.
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct Snapshot {
     pub active_sessions: u64,
@@ -28,7 +32,7 @@ struct Session {
     key: SessionKey,
     bytes: u64,
     active: Duration,
-    last_end: Instant,
+    last_end: Option<Instant>,
 }
 
 #[derive(Default)]
@@ -57,7 +61,7 @@ impl Metrics {
             key,
             bytes: 0,
             active: Duration::ZERO,
-            last_end: Instant::now(),
+            last_end: None,
         });
         state.totals.active_sessions += 1;
     }
@@ -97,10 +101,13 @@ impl Metrics {
             .and_then(|sessions| sessions.iter_mut().find(|entry| entry.key == key))
         {
             // Concurrent directions belong to one session's active-time union.
-            let active = end.saturating_duration_since(start.max(session.last_end));
+            let interval_start = session
+                .last_end
+                .map_or(start, |last_end| start.max(last_end));
+            let active = end.saturating_duration_since(interval_start);
             session.active += active;
             session.bytes = session.bytes.saturating_add(bytes);
-            session.last_end = session.last_end.max(end);
+            session.last_end = Some(session.last_end.map_or(end, |last_end| last_end.max(end)));
             state.totals.forwarding_nanoseconds = state
                 .totals
                 .forwarding_nanoseconds
@@ -137,3 +144,7 @@ impl Metrics {
         snapshot
     }
 }
+
+#[cfg(test)]
+#[path = "metrics_tests.rs"]
+mod tests;
