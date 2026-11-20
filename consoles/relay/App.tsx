@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react'
-import { useAction, useResource } from '../ui/activity'
-import { Login } from '../ui/forms'
+import { useAction, useResource, type Feedback } from '../ui/activity'
+import { ChangePasswordDialog, Login } from '../ui/forms'
 import { Icon } from '../ui/Icon'
 import { WorkspaceNav } from '../ui/chrome/WorkspaceNav'
 import './relay.css'
 import { Frame, Notice, SessionWait } from '../ui/layout'
+import { message } from '../ui/locale'
 import { useCopy } from '../ui/use-locale'
 import { sharedCopy } from '../ui/locales'
 import { relayCopy } from './locales'
@@ -16,12 +17,13 @@ import { useServiceKeyCreation } from './use-service-key-creation'
 import { CodeEntry, Pairing } from './pairing'
 import { ManagedTurn } from './turn'
 
-function RelayContent({ api, session, capabilities, code, token, clearToken, resetSession }: {
+function RelayContent({ api, session, capabilities, code, token, expired, clearToken, resetSession }: {
   api: RelayClient
   session: ReturnType<typeof useResource<Capabilities | null>>
   capabilities: Capabilities | null | undefined
   code: string
   token: string | null
+  expired: boolean
   clearToken: () => void
   resetSession: () => void
 }) {
@@ -31,7 +33,7 @@ function RelayContent({ api, session, capabilities, code, token, clearToken, res
   const keyCreation = useServiceKeyCreation(api)
   if (capabilities === undefined) return <SessionWait error={session.error} retry={session.reload} />
   if (capabilities === null) {
-    return <Login area={code ? t.pairing : t.owner} initialize={!!token} cancelSetup={clearToken}
+    return <Login area={code ? t.pairing : t.owner} initialize={!!token} expired={expired} cancelSetup={clearToken}
       submit={async password => { await api.signIn(password, token); resetSession() }} />
   }
   if (code) return <Pairing api={api} code={code} />
@@ -50,26 +52,45 @@ function RelayContent({ api, session, capabilities, code, token, clearToken, res
   </div>
 }
 
-function Console({ api, code, token, clearToken, resetSession }: {
-  api: RelayClient; code: string; token: string | null; clearToken: () => void; resetSession: () => void
+function Console({ api, code, token, expired, clearToken, resetSession }: {
+  api: RelayClient; code: string; token: string | null; expired: boolean; clearToken: () => void; resetSession: () => void
 }) {
   const session = useResource(api.session)
   const logout = useAction()
+  const [changingPassword, setChangingPassword] = useState(false)
+  const [passwordNotice, setPasswordNotice] = useState<Feedback | null>(null)
   const t = useCopy(relayCopy)
   const shared = useCopy(sharedCopy)
   const capabilities = session.value
-  return <Frame area={t.title} tools={capabilities && <button className="quiet sign-out" aria-label={shared.signOut} title={shared.signOut} disabled={logout.busy}
-    onClick={() => void logout.run(async () => { await api.signOut(); resetSession() })}><Icon name="logout" size={16} /><span>{shared.signOut}</span></button>}>
-    <Notice feedback={logout.feedback} />
+  const tools = capabilities && <div className="mast-account">
+    {capabilities.password_change && <button type="button" className="quiet" aria-label={shared.changePassword}
+      title={shared.changePassword} disabled={logout.busy} onClick={() => { setPasswordNotice(null); setChangingPassword(true) }}>
+      <Icon name="key" size={16} /><span>{shared.changePassword}</span></button>}
+    <button type="button" className="quiet" aria-label={shared.signOut} title={shared.signOut} disabled={logout.busy}
+      onClick={() => { setPasswordNotice(null); void logout.run(async () => { await api.signOut(); resetSession() }) }}>
+      <Icon name="logout" size={16} /><span>{shared.signOut}</span></button>
+  </div>
+  return <Frame area={t.title} tools={tools}>
+    <Notice feedback={logout.feedback ?? passwordNotice} />
     <RelayContent api={api} session={session} capabilities={capabilities} code={code}
-      token={token} clearToken={clearToken} resetSession={resetSession} />
+      token={token} expired={expired} clearToken={clearToken} resetSession={resetSession} />
+    {changingPassword && <ChangePasswordDialog onCancel={() => setChangingPassword(false)}
+      onSubmit={async (current, next) => {
+        await api.changePassword(current, next)
+        setChangingPassword(false)
+        setPasswordNotice({ kind: 'success', message: message(sharedCopy, 'passwordUpdated') })
+      }} />}
   </Frame>
 }
 
 export function App({ initialToken, code }: { initialToken: string | null; code: string }) {
   const [epoch, setEpoch] = useState(0)
   const [token, setToken] = useState(initialToken)
-  const api = useMemo(() => new RelayClient(() => setEpoch(current => current === epoch ? current + 1 : current)), [epoch])
-  return <Console key={epoch} api={api} code={code} token={token} clearToken={() => setToken(null)}
-    resetSession={() => { setToken(null); setEpoch(epoch + 1) }} />
+  const [sessionExpired, setSessionExpired] = useState(false)
+  const api = useMemo(() => new RelayClient(() => {
+    setSessionExpired(true)
+    setEpoch(current => current === epoch ? current + 1 : current)
+  }), [epoch])
+  return <Console key={epoch} api={api} code={code} token={token} expired={sessionExpired} clearToken={() => setToken(null)}
+    resetSession={() => { setSessionExpired(false); setToken(null); setEpoch(current => current + 1) }} />
 }

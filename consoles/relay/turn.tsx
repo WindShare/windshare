@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useAction, useResource } from '../ui/activity'
-import { Badge, Notice, ReadError } from '../ui/layout'
+import { Badge, Bytes, Notice, ReadError } from '../ui/layout'
 import { Icon } from '../ui/Icon'
 import { message } from '../ui/locale'
 import { useLocale } from '../ui/use-locale'
@@ -27,11 +27,12 @@ function describeTurnStatus(current: TurnStatus, t: typeof relayCopy.en): { labe
 
 function UsageEstimate({ estimate }: { estimate: TurnUsage }) {
   const { locale } = useLocale()
+  const t = relayCopy[locale]
   // Analytics covers whole UTC days, including for administrators west of UTC.
   const dates = new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeZone: 'UTC' })
   const range = dates.formatRange(new Date(estimate.first_date), new Date(estimate.last_date))
   return <p>{range} UTC<br />
-    {relayCopy[locale].traffic(estimate.egress_bytes.toLocaleString(locale), estimate.ingress_bytes.toLocaleString(locale))}</p>
+    {t.egress} <Bytes value={estimate.egress_bytes} /> · {t.ingress} <Bytes value={estimate.ingress_bytes} /></p>
 }
 
 export function ManagedTurn({ api }: { api: RelayClient }) {
@@ -53,11 +54,11 @@ export function ManagedTurn({ api }: { api: RelayClient }) {
         <div className="service-title"><h2>{t.service}</h2>
           <Badge tone={current.ready && current.enabled ? 'good' : 'neutral'}>{summary.label}</Badge></div>
         <p>{summary.description}</p></div>
-        <button className="secondary" disabled={action.busy} onClick={() => void action.run(async () => {
+        {current.ready && <button className="secondary" disabled={action.busy} onClick={() => void action.run(async () => {
           const next = await api.setTurn(!current.enabled)
           status.update(() => next)
           return message(relayCopy, 'turnSaved')
-        })}>{current.enabled ? t.disableTurn : t.enableTurn}</button></div>
+        })}>{current.enabled ? t.disableTurn : t.enableTurn}</button>}</div>
         <Notice feedback={action.feedback} />
       </section>
       <section className="panel padded"><h2>{t.leases}</h2><dl className="metrics">

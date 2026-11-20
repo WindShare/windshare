@@ -189,8 +189,9 @@ impl Console {
                 Err(Rejected(StatusCode::UNAUTHORIZED, "login_required", 0).into())
             }
             (&Method::POST, "/api/logout") => Self::logout(&tx.db, session),
+            (&Method::POST, "/api/password") => Self::change_password(&tx.db, body, now),
             (&Method::GET, "/api/session") => Ok(Reply::ok(
-                json!({"authenticated":true,"capabilities":{"revocation_stops_shares":true}}),
+                json!({"authenticated":true,"capabilities":{"revocation_stops_shares":true,"password_change":true}}),
             )),
             _ => self.manage(&mut tx, method, path, query, body, now),
         };

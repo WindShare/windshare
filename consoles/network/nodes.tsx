@@ -6,11 +6,11 @@ import { useCopy, useLocale } from '../ui/use-locale'
 import { sharedCopy } from '../ui/locales'
 import { networkCopy } from './locales'
 import { Confirm } from '../ui/forms'
-import { BackLink, Badge, DateStamp, EmptyState, Notice, ReadError } from '../ui/layout'
+import { BackLink, Badge, Bytes, DateStamp, EmptyState, Notice, ReadError } from '../ui/layout'
 import { Icon, type IconName } from '../ui/Icon'
 import type { AuthorityClient } from './api'
 import { encode, requireIdentity } from './identity'
-import { GIB, type LoadReport, type NodeDetails, type NodePage, type PolicyField, type Publication, type RelayNode, type Zone } from './model'
+import type { LoadReport, NodeDetails, NodePage, PolicyField, Publication, RelayNode, Zone } from './model'
 
 type Directory = Publication | null | undefined
 
@@ -31,7 +31,7 @@ function ReportTime({ report }: { report: LoadReport }) {
 function Latest({ report }: { report: LoadReport | null }) {
   const t = useCopy(networkCopy)
   if (!report) return <span>{t.awaitingReport}</span>
-  return <><ReportTime report={report} /><small>{t.recentLoad(report.load.active_sessions, report.load.forwarded_bytes / GIB)}</small></>
+  return <><ReportTime report={report} /><small>{t.sessions(report.load.active_sessions)} · {t.relayed} <Bytes value={report.load.forwarded_bytes} /></small></>
 }
 
 function NodeOverview({ nodes, complete, directory }: {
@@ -146,7 +146,7 @@ export function NodeDetail({ node, directory, api, saved }: NodeDetailActions & 
         <dt>{t.directory}</dt><dd><Listing directory={directory} id={id} /></dd>
         <dt>{t.lastReport}</dt><dd>{report ? <ReportTime report={report} /> : t.awaitingReport}</dd>
         {report && <><dt>{t.loadSnapshot} · <DateStamp millis={report.created_at * 1000} /></dt><dd>
-          {t.detailedLoad(report.load.active_sessions, report.load.forwarded_bytes, report.load.admission_refusals)}</dd></>}
+          {t.sessions(report.load.active_sessions)} · {t.relayed} <Bytes value={report.load.forwarded_bytes} /> · {t.refusals(report.load.admission_refusals)}</dd></>}
       </dl></section>
     <section className="panel padded"><div className="section-title"><h2>{t.savedNodePolicy}</h2><Badge>v{node.version}</Badge></div>
       <div className="setting-row"><div><h3>{t.publicRelay}</h3><p>{node.enabled ? t.enabled : t.paused}</p></div>

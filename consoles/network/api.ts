@@ -1,11 +1,12 @@
-import { message } from '../ui/locale'
+import { message, type Message } from '../ui/locale'
 import { networkCopy } from './locales'
 import { request, RequestError } from '../ui/request'
 import { decode, encode } from './identity'
-import type { AccountDetails, AccountPage, AccountSummary, Enrollment, NodeDetails, NodePage, PolicyField, PolicySnapshot, RelayNode, Report, ReportPage, Restrictions, SettingsChanges, Snapshot, Target } from './model'
+import type { AccountDetails, AccountPage, AccountSummary, Enrollment, MilestoneReview, NodeDetails, NodePage, PolicyField, PolicySnapshot, RelayNode, Report, ReportPage, Restrictions, SettingsChanges, Snapshot, Target } from './model'
 
 const messages = {
   credentials: message(networkCopy, 'invalidCredentials'),
+  credentials_changed: message(networkCopy, 'sessionChanged'),
   initialization_consumed: message(networkCopy, 'setupLinkUsed'),
   rate_limited: message(networkCopy, 'rateLimited'),
   account_not_found: message(networkCopy, 'accountNotFound'),
@@ -82,10 +83,11 @@ export class AuthorityClient {
     }
   }
 
-  private async write<T>(route: string, data: unknown, method = 'POST') {
+  private async write<T>(route: string, data: unknown, method = 'POST', overrides?: Readonly<Record<string, Message>>) {
     try {
       return await request<T>('/v1/admin/' + route, {
-        method, data, messages, headers: { 'X-CSRF-Token': this.csrf },
+        method, data, messages: overrides ? { ...messages, ...overrides } : messages,
+        headers: { 'X-CSRF-Token': this.csrf },
       })
     } catch (error) {
       if (error instanceof RequestError && error.code === 'administrator_session') this.expired()
@@ -93,8 +95,16 @@ export class AuthorityClient {
     }
   }
   signOut = () => this.write('logout', {})
+  changePassword = async (currentPassword: string, newPassword: string) => {
+    const result = await this.write<{ csrf: string }>('password', {
+      current_password: currentPassword,
+      new_password: newPassword,
+    }, 'POST', { credentials: message(networkCopy, 'invalidCurrentPassword') })
+    this.csrf = result.csrf
+  }
   enroll = (node: Enrollment) => this.write<NodeDetails>('nodes', node)
   policy = (key: number[], field: PolicyField, value: boolean) => this.write<RelayNode>('nodes/policy', { key, change: { field, value } }, 'PUT')
   updateSettings = (changes: SettingsChanges) => this.write<PolicySnapshot>('settings', changes, 'PATCH')
+  dismissReview = (count: number) => this.write<MilestoneReview[]>('reviews/dismiss', { count })
   restrict = (target: Target, blocked: boolean) => this.write<Restrictions>('blocks', { ...target, blocked })
 }

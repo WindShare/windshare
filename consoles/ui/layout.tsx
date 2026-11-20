@@ -25,12 +25,15 @@ export function Frame({ area, tools, children }: { area: string; tools?: ReactNo
   </>
 }
 
+const BYTE_UNITS = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB']
+const NOTICE_ICONS = { success: 'check', warning: 'clock', error: 'alert' } as const
+
 export function Notice({ feedback }: { feedback: Feedback | null }) {
   const { locale } = useLocale()
   if (!feedback) return null
   const failed = feedback.kind === 'error'
   return <p className={'notice ' + feedback.kind} role={failed ? 'alert' : 'status'}>
-    <Icon name={failed ? 'alert' : 'check'} /><span>{feedback.message.format(locale)}</span>
+    <Icon name={NOTICE_ICONS[feedback.kind]} /><span>{feedback.message.format(locale)}</span>
   </p>
 }
 
@@ -58,6 +61,20 @@ export function DateStamp({ millis }: { millis: number }) {
   const { locale } = useLocale()
   const date = new Date(millis)
   return <time dateTime={date.toISOString()}>{date.toLocaleString(locale, { dateStyle: 'medium', timeStyle: 'short' })}</time>
+}
+
+export function Bytes({ value }: { value: number }) {
+  const { locale } = useLocale()
+  const decimals = 2
+  const precision = 10 ** decimals
+  let scaled = value
+  let unit = 0
+  while (unit + 1 < BYTE_UNITS.length && Math.round(scaled * precision) >= 1024 * precision) {
+    scaled /= 1024
+    unit++
+  }
+  const amount = scaled.toLocaleString(locale, { maximumFractionDigits: decimals })
+  return <span className="byte-value" title={sharedCopy[locale].exactBytes(value)}>{amount} {BYTE_UNITS[unit]}</span>
 }
 
 export function EmptyState({ icon, title, children }: { icon: IconName; title: string; children?: ReactNode }) {

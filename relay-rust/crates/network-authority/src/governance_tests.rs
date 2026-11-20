@@ -356,3 +356,85 @@ fn node_details_and_load_remain_reachable_beyond_the_console_page() {
         Some(Fault::NodeNotFound)
     ));
 }
+
+#[test]
+fn admin_password_change_invalidates_prior_sessions_and_rejects_stale_verifiers() {
+    let mut authority = fixture();
+    let first = authority
+        .initialize("once", "once", "admin", "correct horse battery")
+        .unwrap();
+    let second = authority
+        .admin_login("source", "admin", "correct horse battery")
+        .unwrap();
+    assert!(
+        authority
+            .prepare_admin_password_change("source", &first, 4)
+            .unwrap_err()
+            .downcast_ref::<Fault>()
+            .is_some_and(|fault| matches!(fault, Fault::Invalid))
+    );
+    let verifier = authority
+        .prepare_admin_password_change("source", &first, "updated-admin-password".len())
+        .unwrap();
+    assert!(verifier.verify("correct horse battery"));
+    let updated = authority.hash_password("updated-admin-password").unwrap();
+    assert!(
+        authority
+            .commit_admin_password_change(&first, updated.clone(), [0; 32])
+            .unwrap_err()
+            .downcast_ref::<Fault>()
+            .is_some_and(
+                |fault| matches!(fault, Fault::Denied { reason } if reason == "credentials_changed")
+            )
+    );
+    let replacement = authority
+        .commit_admin_password_change(&first, updated, verifier.fingerprint())
+        .unwrap();
+    assert!(authority.require_admin(&first).is_err());
+    assert!(authority.require_admin(&second).is_err());
+    authority.require_admin(&replacement).unwrap();
+    assert!(
+        authority
+            .admin_login("source", "admin", "correct horse battery")
+            .is_err()
+    );
+    let signed_in = authority
+        .admin_login("source", "admin", "updated-admin-password")
+        .unwrap();
+    authority.require_admin(&signed_in).unwrap();
+}
+
+#[test]
+fn milestone_reviews_include_thresholds_and_can_be_dismissed() {
+    let mut authority = fixture();
+    let admin = authority
+        .initialize("once", "once", "admin", "correct horse battery")
+        .unwrap();
+    authority
+        .update_settings(
+            &admin,
+            &SettingsChanges {
+                registration: Some(RegistrationPolicy::Automatic),
+                ..SettingsChanges::default()
+            },
+        )
+        .unwrap();
+    save(&mut authority.store, "account-count", &999u64).unwrap();
+    authority.register("source-a", registration(1)).unwrap();
+    authority.environment.now += 10;
+    save(&mut authority.store, "account-count", &3_999u64).unwrap();
+    authority.register("source-b", registration(2)).unwrap();
+
+    let reviews: Vec<MilestoneReview> =
+        serde_json::from_value(authority.console(&admin).unwrap()["reviews"].clone()).unwrap();
+    assert_eq!(reviews.len(), 2);
+    assert_eq!(reviews[0].count, 1_000);
+    assert_eq!(reviews[1].count, 4_000);
+    assert_eq!(reviews[1].reached_at, reviews[0].reached_at + 10);
+
+    let remaining = authority.dismiss_review(&admin, 1_000).unwrap();
+    assert_eq!(remaining, vec![reviews[1]]);
+    assert_eq!(authority.dismiss_review(&admin, 4_000).unwrap(), Vec::new());
+    assert!(authority.dismiss_review(&admin, 0).is_err());
+    assert!(authority.dismiss_review("", 1_000).is_err());
+}

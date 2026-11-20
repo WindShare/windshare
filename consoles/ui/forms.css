@@ -44,9 +44,10 @@ fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
 .check { display: flex; gap: .65rem; align-items: baseline; padding-block: .45rem; font-weight: 500; }
 input:is([type="checkbox"], [type="radio"]) { accent-color: var(--accent); }
 dialog { width: min(28rem, calc(100% - 2rem)); padding: clamp(1.25rem, 3vw, 1.85rem); color: var(--ink); max-height: calc(100dvh - 2rem); overscroll-behavior: contain; }
-dialog p, dialog .check { margin-top: .9rem; }
+dialog p, dialog .check, dialog .dialog-form { margin-top: .9rem; }
 dialog::backdrop { background: var(--backdrop); }
 .dialog-actions { margin-top: 1.6rem; justify-content: flex-end; }
+.dialog-form .dialog-actions { margin-top: .35rem; }
 @media (max-width: 40rem), (pointer: coarse) {
   button, .button { min-height: 2.75rem; }
 }

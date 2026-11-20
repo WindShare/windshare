@@ -53,6 +53,30 @@ const badCsrf = await call('/v1/admin/settings', {}, {
   admin: true, method: 'PATCH', headers: { 'X-CSRF-Token': 'invalid' }, status: 403,
 });
 assert.equal(badCsrf.value.reason, 'csrf');
+const badPasswordChange = await call('/v1/admin/password', {
+  current_password: 'wrong-password-attempt', new_password: 'Rotated-P2-validation-2026',
+}, { admin: true, status: 403 });
+assert.equal(badPasswordChange.value.reason, 'credentials');
+const oldCookie = cookie;
+const oldCsrf = csrf;
+const changedPassword = await call('/v1/admin/password', {
+  current_password: administrator.password, new_password: 'Rotated-P2-validation-2026',
+}, { admin: true });
+cookie = changedPassword.response.headers.get('set-cookie').split(';')[0];
+csrf = changedPassword.value.csrf;
+await call('/v1/admin/console', undefined, {
+  method: 'GET', headers: { Cookie: oldCookie, 'X-CSRF-Token': oldCsrf }, status: 403,
+});
+await call('/v1/admin/login', administrator, { status: 403 });
+await call('/v1/admin/login', { ...administrator, password: 'Rotated-P2-validation-2026' });
+const restoredPassword = await call('/v1/admin/password', {
+  current_password: 'Rotated-P2-validation-2026', new_password: administrator.password,
+}, { admin: true });
+cookie = restoredPassword.response.headers.get('set-cookie').split(';')[0];
+csrf = restoredPassword.value.csrf;
+const dismissedReviews = await call('/v1/admin/reviews/dismiss', { count: 1000 }, { admin: true });
+assert.deepEqual(dismissedReviews.value, []);
+await call('/v1/admin/reviews/dismiss', { count: 0 }, { admin: true, status: 400 });
 const missingCookie = await call('/v1/admin/logout', {}, {
   admin: true, headers: { Cookie: '' }, status: 403,
 });

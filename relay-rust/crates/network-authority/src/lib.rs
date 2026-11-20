@@ -24,7 +24,7 @@ use anyhow::Result;
 pub use challenges::{EmailDelivery, ProofKind};
 #[cfg(any(test, target_arch = "wasm32"))]
 pub use device_login::DeviceApproval;
-pub use governance::{Block, Report, ReportPage, ReportPosition};
+pub use governance::{Block, MilestoneReview, Report, ReportPage, ReportPosition};
 pub use model::*;
 pub use nodes::{
     Node, NodeDetails, NodeEnrollment, NodeLoadReport, NodePage, NodePolicyChange, Zone,

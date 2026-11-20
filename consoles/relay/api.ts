@@ -5,6 +5,7 @@ import { request, RequestError } from '../ui/request'
 export interface Capabilities {
   revocation_stops_shares?: boolean
   managed_turn?: boolean
+  password_change?: boolean
 }
 export interface Enrollment {
   enrollment_id: string
@@ -37,6 +38,7 @@ const messages = {
   credential_capacity: message(relayCopy, 'credentialLimit'),
   invalid_name: message(relayCopy, 'invalidName'),
   analytics_unavailable: message(relayCopy, 'analyticsUnavailable'),
+  turn_not_ready: message(relayCopy, 'turnNotReady'),
 }
 
 export class RelayClient {
@@ -64,6 +66,8 @@ export class RelayClient {
     return this.call(token ? 'initialize' : 'login', token ? { password, token } : { password })
   }
   signOut = () => this.call('logout', {})
+  changePassword = (currentPassword: string, newPassword: string) =>
+    this.call('password', { current_password: currentPassword, new_password: newPassword })
   enrollments = async (signal: AbortSignal) => (await this.call<{ enrollments: Enrollment[] }>('enrollments', undefined, signal)).enrollments
   approve = (device: Enrollment) => this.call('enrollments/approve', { enrollment_id: device.enrollment_id, user_code: device.user_code })
   activeCredentials = async (signal: AbortSignal): Promise<CredentialPage> => ({

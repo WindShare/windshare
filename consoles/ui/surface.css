@@ -54,11 +54,13 @@ main:focus, h1[tabindex="-1"]:focus { outline: 0; }
 .metrics > div { background: var(--surface-hover); padding: 1rem 1.15rem; border-radius: .65rem; }
 .metrics dt, .facts dt { font-size: .84rem; }
 .metrics dd { margin-top: .25rem; font-size: 1.75rem; font-weight: 550; }
-.metrics dd, time, .badge { font-variant-numeric: tabular-nums; }
+.metrics dd, time, .badge, .byte-value { font-variant-numeric: tabular-nums; }
+.byte-value { white-space: nowrap; }
 .facts { display: grid; grid-template-columns: minmax(6rem, auto) minmax(0, 1fr); gap: .8rem 1.4rem; align-items: baseline; }
 .facts dd { min-width: 0; overflow-wrap: anywhere; }
 .notice, .read-error { display: flex; align-items: flex-start; gap: .65rem; padding: .85rem 1rem; border-radius: .65rem; font-size: .9rem; }
 .notice > .icon, .read-error > .icon { margin-top: .17rem; }
+.notice.warning { background: var(--warning-surface); color: var(--warning-ink); }
 .error, .read-error { background: var(--error-surface); color: var(--error-ink); }
 .read-error { align-items: center; }
 .read-error > span { flex: 1; }

@@ -55,7 +55,7 @@ export function useResource<T>(read: Read<T>) {
 }
 
 export interface Feedback {
-  kind: 'success' | 'error'
+  kind: 'success' | 'warning' | 'error'
   message: Message
 }
 

@@ -50,20 +50,39 @@ fn sign_in(db: &Connection, now: u64) -> Result<Reply> {
     })
 }
 
+fn hash_password(password: &str) -> Result<String> {
+    if !(MIN_PASSWORD..=MAX_PASSWORD).contains(&password.len()) {
+        return Err(invalid().into());
+    }
+    let salt = SaltString::encode_b64(&random::<16>()?).map_err(|_| invalid())?;
+    Ok(Argon2::default()
+        .hash_password(password.as_bytes(), &salt)
+        .map_err(|_| invalid())?
+        .to_string())
+}
+
+fn verify_stored_password(db: &Connection, password: &str) -> Result<bool> {
+    let stored: Option<String> = db
+        .query_row("SELECT password FROM console_owner WHERE id=1", [], |r| {
+            r.get(0)
+        })
+        .optional()?;
+    Ok(password.len() <= MAX_PASSWORD
+        && stored.as_ref().is_some_and(|s| {
+            PasswordHash::new(s).is_ok_and(|hash| {
+                Argon2::default()
+                    .verify_password(password.as_bytes(), &hash)
+                    .is_ok()
+            })
+        }))
+}
+
 impl Console {
     pub(super) fn initialize(&self, db: &Connection, body: &Value, now: u64) -> Result<Reply> {
         if initialized(db)? || Digest::of(field(body, "token")?.as_bytes()) != self.0.bootstrap {
             return Err(Rejected(StatusCode::FORBIDDEN, "initialization_consumed", 0).into());
         }
-        let password = field(body, "password")?;
-        if !(MIN_PASSWORD..=MAX_PASSWORD).contains(&password.len()) {
-            return Err(invalid().into());
-        }
-        let salt = SaltString::encode_b64(&random::<16>()?).map_err(|_| invalid())?;
-        let hash = Argon2::default()
-            .hash_password(password.as_bytes(), &salt)
-            .map_err(|_| invalid())?
-            .to_string();
+        let hash = hash_password(field(body, "password")?)?;
         db.execute("INSERT INTO console_owner VALUES(1,?1)", [hash])?;
         tracing::info!(event = "node_administrator_initialized");
         sign_in(db, now)
@@ -71,23 +90,29 @@ impl Console {
 
     pub(super) fn login(db: &Connection, body: &Value, now: u64) -> Result<Reply> {
         database::throttle(db, "login", MAX_LOGIN_ATTEMPTS, now)?;
-        let password = field(body, "password")?;
-        let stored: Option<String> = db
-            .query_row("SELECT password FROM console_owner WHERE id=1", [], |r| {
-                r.get(0)
-            })
-            .optional()?;
-        if password.len() > MAX_PASSWORD
-            || !stored.as_ref().is_some_and(|s| {
-                PasswordHash::new(s).is_ok_and(|hash| {
-                    Argon2::default()
-                        .verify_password(password.as_bytes(), &hash)
-                        .is_ok()
-                })
-            })
-        {
+        if !verify_stored_password(db, field(body, "password")?)? {
             return Err(Rejected(StatusCode::UNAUTHORIZED, "invalid_password", 0).into());
         }
+        sign_in(db, now)
+    }
+
+    pub(super) fn change_password(db: &Connection, body: &Value, now: u64) -> Result<Reply> {
+        database::throttle(db, "password_change", MAX_LOGIN_ATTEMPTS, now)?;
+        let current = field(body, "current_password")?;
+        let next = field(body, "new_password")?;
+        if !(MIN_PASSWORD..=MAX_PASSWORD).contains(&next.len()) {
+            return Err(invalid().into());
+        }
+        if !verify_stored_password(db, current)? {
+            return Err(Rejected(StatusCode::FORBIDDEN, "invalid_password", 0).into());
+        }
+        let hash = hash_password(next)?;
+        db.execute("UPDATE console_owner SET password=?1 WHERE id=1", [hash])?;
+        let invalidated = db.execute("DELETE FROM console_sessions", [])?;
+        tracing::info!(
+            event = "node_administrator_password_changed",
+            invalidated_sessions = invalidated
+        );
         sign_in(db, now)
     }
 

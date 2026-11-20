@@ -1,16 +1,39 @@
+import { useAction } from '../ui/activity'
 import type { NumberField, usePolicyEditor } from './policy-editor'
 import { ValidatedForm } from '../ui/ValidatedForm'
 import { message, MessageError } from '../ui/locale'
-import { useLocale } from '../ui/use-locale'
+import { useCopy, useLocale } from '../ui/use-locale'
 import { networkCopy } from './locales'
 import { Notice } from '../ui/layout'
 import { Icon } from '../ui/Icon'
 import type { AuthorityClient } from './api'
-import { GIB, type PolicySnapshot, type Settings, type Snapshot } from './model'
+import { GIB, type MilestoneReview, type PolicySnapshot, type Settings, type Snapshot } from './model'
 
-export function PolicySettings({ snapshot, api, saved, editor }: {
+function MilestoneReviews({ reviews, api, saved }: {
+  reviews: MilestoneReview[]
+  api: AuthorityClient
+  saved: (reviews: MilestoneReview[]) => void
+}) {
+  const t = useCopy(networkCopy)
+  const action = useAction()
+  if (reviews.length === 0) return null
+  return <div className="milestone-list">
+    {reviews.map(review => <div key={review.count} className="milestone" role="status">
+      <div className="milestone-body"><Icon name="alert" size={17} /><span>{t.milestone(review.count)}</span></div>
+      <button type="button" className="quiet" disabled={action.busy} onClick={() => void action.run(async () => {
+        saved(await api.dismissReview(review.count))
+      })}>{t.dismissMilestone}</button>
+    </div>)}
+    <Notice feedback={action.feedback} />
+  </div>
+}
+
+export function PolicySettings({ snapshot, api, saved, reviewsSaved, editor }: {
   editor: ReturnType<typeof usePolicyEditor>
-  snapshot: Snapshot; api: AuthorityClient; saved: (policy: PolicySnapshot) => void
+  snapshot: Snapshot
+  api: AuthorityClient
+  saved: (policy: PolicySnapshot) => void
+  reviewsSaved: (reviews: MilestoneReview[]) => void
 }) {
   const { locale } = useLocale()
   const t = networkCopy[locale]
@@ -25,7 +48,7 @@ export function PolicySettings({ snapshot, api, saved, editor }: {
   return <div className="view"><div className="page-title"><h1>{t.networkPolicy}</h1>
     <dl className="account-count"><dt><Icon name="user" size={17} />{t.registeredAccounts}</dt>
       <dd>{snapshot.account_count.toLocaleString(locale)}</dd></dl></div>
-    {snapshot.reviews.length > 0 && <p className="milestone">{t.milestone}</p>}
+    <MilestoneReviews reviews={snapshot.reviews} api={api} saved={reviewsSaved} />
     <ValidatedForm className="panel padded" onSubmit={event => {
       event.preventDefault()
       void action.run(async () => {

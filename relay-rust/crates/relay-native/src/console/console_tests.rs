@@ -235,3 +235,92 @@ fn revocation_survives_reload_and_restart_without_affecting_other_owner_devices(
         manual.body["access_key"].as_str().unwrap()
     ));
 }
+
+#[test]
+fn password_change_rotates_sessions_and_advertises_capability() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("node.sqlite");
+    let identity = Identity::generate().unwrap();
+    let console = open(&db, &identity, &Policy::default());
+    let setup =
+        json!({"token":identity.initialization_token(),"password":"initial-owner-password"});
+    let first = post(&console, "/api/initialize", &setup, "")
+        .cookie
+        .unwrap();
+    let second = post(
+        &console,
+        "/api/login",
+        &json!({"password":"initial-owner-password"}),
+        "",
+    )
+    .cookie
+    .unwrap();
+    let session_info = console
+        .dispatch(&Method::GET, "/api/session", &json!({}), &first, 100)
+        .unwrap();
+    assert_eq!(session_info.body["capabilities"]["password_change"], true);
+    assert_eq!(
+        post(
+            &console,
+            "/api/password",
+            &json!({"current_password":"wrong-password","new_password":"rotated-owner-password"}),
+            &first,
+        )
+        .status,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        post(
+            &console,
+            "/api/password",
+            &json!({"current_password":"initial-owner-password","new_password":"short"}),
+            &first,
+        )
+        .status,
+        StatusCode::BAD_REQUEST
+    );
+    let changed = post(
+        &console,
+        "/api/password",
+        &json!({"current_password":"initial-owner-password","new_password":"rotated-owner-password"}),
+        &first,
+    );
+    assert_eq!(changed.status, StatusCode::OK);
+    let replacement = changed.cookie.unwrap();
+    for stale in [&first, &second] {
+        assert_eq!(
+            console
+                .dispatch(&Method::GET, "/api/session", &json!({}), stale, 100)
+                .unwrap()
+                .status,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+    assert_eq!(
+        console
+            .dispatch(&Method::GET, "/api/session", &json!({}), &replacement, 100)
+            .unwrap()
+            .status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        post(
+            &console,
+            "/api/login",
+            &json!({"password":"initial-owner-password"}),
+            "",
+        )
+        .status,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        post(
+            &console,
+            "/api/login",
+            &json!({"password":"rotated-owner-password"}),
+            "",
+        )
+        .status,
+        StatusCode::OK
+    );
+}

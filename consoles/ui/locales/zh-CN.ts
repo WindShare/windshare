@@ -1,5 +1,7 @@
 import type { en } from './en'
 
+const integer = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 })
+
 export const zhCN = {
   language: '语言',
   appearance: '外观',
@@ -12,8 +14,16 @@ export const zhCN = {
   createAdmin: '创建管理员账号',
   ownerSetupTitle: '设置节点所有者密码',
   username: '用户名',
+  currentPassword: '当前密码',
   newPassword: '新密码',
+  confirmPassword: '确认密码',
   password: '密码',
+  confirmationMismatch: '两次输入的密码不一致。',
+  changePassword: '修改密码',
+  savePassword: '更新密码',
+  updating: '正在更新…',
+  passwordUpdated: '密码已更新。',
+  sessionExpired: '登录会话已过期，请重新登录。',
   hidePassword: '隐藏密码',
   showPassword: '显示密码',
   requiredField: '请填写此字段。',
@@ -24,6 +34,7 @@ export const zhCN = {
   minValue: (value: string) => `请输入大于或等于 ${value} 的数值。`,
   maxValue: (value: string) => `请输入小于或等于 ${value} 的数值。`,
   stepValue: (step: string) => `请以 ${step} 为步长输入数值。`,
+  exactBytes: (bytes: number) => `${integer.format(bytes)} 字节`,
   signingIn: '正在登录…',
   usePassword: '使用已有密码登录',
   cancel: '取消',
