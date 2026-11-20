@@ -13,6 +13,7 @@ const ICON_PATHS = {
   close: 'm6 6 12 12M6 18 18 6',
   'chevron-right': 'm9 5 7 7-7 7',
   'chevron-left': 'm15 5-7 7 7 7',
+  'chevron-down': 'm6 9 6 6 6-6',
   check: 'm5 12 4 4L19 6',
   pause: 'M8 5v14M16 5v14',
   play: 'm7 4 14 8-14 8Z',
@@ -22,6 +23,11 @@ const ICON_PATHS = {
   connection: 'M5 9a10 10 0 0 1 14 0M8 12a6 6 0 0 1 8 0m-5 4a1 1 0 1 0 2 0 1 1 0 0 0-2 0',
   more: 'M5 12h.01M12 12h.01M19 12h.01',
   info: 'M12 11v6m0-10h.01m9 5a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z',
+  sun: 'M12 4v2m0 12v2M4 12h2m12 0h2M6.34 6.34l1.42 1.42m8.48 8.48 1.42 1.42M17.66 6.34l-1.42 1.42m-8.48 8.48-1.42 1.42M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z',
+  moon: 'M20.5 14.5A8.5 8.5 0 1 1 9.5 3.5a6.5 6.5 0 0 0 11 11Z',
+  monitor: 'M4 5h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1Zm5 15h6m-3-3v3',
+  'view-list': 'M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01',
+  'view-grid': 'M4 5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1Zm10 0a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1h-4a1 1 0 0 1-1-1ZM4 15a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1Zm10 0a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1h-4a1 1 0 0 1-1-1Z',
 } as const
 
 export type ReceiverIconName = keyof typeof ICON_PATHS

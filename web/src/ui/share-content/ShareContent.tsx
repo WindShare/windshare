@@ -19,17 +19,33 @@ function SingleFile({ share, preview, actions, openPreview }: {
   if (!previewable && preview.state === 'idle') {
     return <section className="single-file single-file-static" aria-label="Shared file">
       <div className="single-file-card">
-        <div className={`single-file-emblem entry-icon-${display.icon}`}>
-          <ReceiverIcon name={display.icon} className="single-file-emblem-icon" />
-        </div>
-        <div className="single-file-summary">
-          <div className="single-file-meta-row">
-            <span className="single-file-size">{size}</span>
-            <span className="single-file-dot" aria-hidden="true">·</span>
-            <span className="single-file-type">{display.typeLabel}</span>
+        <div className="single-file-hero">
+          <div className={`single-file-emblem entry-icon-${display.icon}`}>
+            <ReceiverIcon name={display.icon} className="single-file-emblem-icon" />
           </div>
-          {display.badge !== null && <span className="single-file-ext">{display.badge}</span>}
+          <div className="single-file-summary">
+            <div className="single-file-meta-row">
+              <span className="single-file-size">{size}</span>
+              <span className="single-file-dot" aria-hidden="true">·</span>
+              <span className="single-file-type">{display.typeLabel}</span>
+            </div>
+            {display.badge !== null && <span className="single-file-ext">{display.badge}</span>}
+          </div>
         </div>
+        <dl className="single-file-facts">
+          <div className="single-file-fact">
+            <dt>Size</dt>
+            <dd>{size}</dd>
+          </div>
+          <div className="single-file-fact">
+            <dt>Format</dt>
+            <dd>{display.typeLabel}</dd>
+          </div>
+          <div className="single-file-fact">
+            <dt>Protection</dt>
+            <dd>End-to-end encrypted</dd>
+          </div>
+        </dl>
       </div>
     </section>
   }
@@ -38,6 +54,7 @@ function SingleFile({ share, preview, actions, openPreview }: {
     <div className="single-file-stage">
       <div className="single-file-stage-bar">
         <p className="single-file-metadata">{size}{' · '}{display.typeLabel}</p>
+        {display.badge !== null && <span className="single-file-ext">{display.badge}</span>}
       </div>
       {preview.state === 'idle' ? <div className="single-file-placeholder">
         <div className={`single-file-emblem entry-icon-${display.icon}`}>

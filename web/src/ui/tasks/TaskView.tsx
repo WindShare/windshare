@@ -12,6 +12,9 @@ const STAGE_ICONS: Readonly<Record<TaskPresentation['stage'], ReceiverIconName>>
   saved: 'check', 'needs-action': 'alert', cancelled: 'close', failed: 'alert',
 }
 
+// Routine controls speak for themselves; avoid dumping explanatory prose beneath them.
+const SELF_EXPLANATORY_ACTIONS = new Set(['pause', 'continue', 'save'])
+
 export interface TaskViewActions {
   readonly perform: (action: TaskAction) => void
   readonly catchUp: (operationId: string) => void
@@ -31,14 +34,16 @@ export function TaskActionButton({ action, perform, primary = false, busy = fals
     if (action.destructive) setConfirm(true)
     else perform(action)
   }
+  const showConsequence = !action.destructive && action.consequence !== null &&
+    !SELF_EXPLANATORY_ACTIONS.has(action.target.action) && (detailed || action.target.action !== 'pause')
   const buttonClass = action.destructive ? 'danger-action' : ''
   return <div className="task-action">
     <button ref={actionButton} type="button" className={primary ? 'primary-action' : buttonClass}
-      disabled={busy || action.disabledReason !== null} title={action.disabledReason ?? undefined}
+      disabled={busy || action.disabledReason !== null}
+      title={action.disabledReason ?? (showConsequence ? undefined : action.consequence ?? undefined)}
       onClick={dispatch}>{action.label}</button>
     {action.disabledReason !== null && <small className="action-reason">{action.disabledReason}</small>}
-    {!action.destructive && action.consequence !== null && (detailed || action.target.action !== 'pause') &&
-      <small className="action-reason">{action.consequence}</small>}
+    {showConsequence && <small className="action-reason">{action.consequence}</small>}
     {confirm && <DetailSheet title={action.label} onClose={() => setConfirm(false)} returnFocus={actionButton} returnLabel="Keep task">
       <p>{action.consequence ?? 'This removes this task’s owned retained data. Files already exported remain separate.'}</p>
       <button type="button" className="danger-action" onClick={() => { setConfirm(false); perform(action) }}>
@@ -95,40 +100,76 @@ export function TaskCard({ task, actions, onDetails, detailsRef, busy = false, s
   </section>
 }
 
+function TaskDetailHero({ task, rate }: { readonly task: TaskPresentation; readonly rate: string | null }) {
+  const headlineMetric = task.progress?.percentage !== null && task.progress?.percentage !== undefined
+    ? `${task.progress.percentage}%` : rate
+  return <div className="task-detail-hero">
+    <div className="task-detail-hero-head">
+      <span className="task-stage" role="status">
+        <ReceiverIcon name={STAGE_ICONS[task.stage]} />{task.headline}
+      </span>
+      {headlineMetric !== null && <span className="task-detail-metric">{headlineMetric}</span>}
+    </div>
+    {task.progress !== null && <div className="task-progress" data-progress-mode={task.progress.mode}>
+      <progress aria-label="Download progress" {...(task.progress.percentage === null
+        ? {} : { max: 100, value: task.progress.percentage })} />
+      <div className="task-progress-copy">
+        <span>{task.progress.label}{rate === null || headlineMetric === rate ? '' : ` · ${rate}`}</span>
+        {task.progress.status !== null && <span>{task.progress.status}</span>}
+      </div>
+    </div>}
+    <p className="task-detail-summary">{task.description}</p>
+  </div>
+}
+
+function TaskDetailFacts({ task }: { readonly task: TaskPresentation }) {
+  const hasFacts = task.destinationLabel !== null || task.elapsedMilliseconds !== null || task.createdAtMilliseconds !== null
+  if (!hasFacts) return null
+  return <dl className="detail-inspector task-facts">
+    {task.destinationLabel !== null && <div className="detail-fact-row">
+      <dt>Destination</dt><dd>{task.destinationLabel}</dd>
+    </div>}
+    {task.elapsedMilliseconds !== null && <div className="detail-fact-row" title={ELAPSED_DESCRIPTION}>
+      <dt>Elapsed</dt><dd>{formatElapsedTime(task.elapsedMilliseconds)}</dd>
+    </div>}
+    {task.createdAtMilliseconds !== null && <div className="detail-fact-row">
+      <dt>Created</dt><dd><time dateTime={new Date(task.createdAtMilliseconds).toISOString()}>{new Date(task.createdAtMilliseconds).toLocaleString()}</time></dd>
+    </div>}
+  </dl>
+}
+
 export function TaskDetails({ task, actions, busy = false, children }: {
   readonly task: TaskPresentation
   readonly actions: TaskViewActions
   readonly busy?: boolean
   readonly children?: ReactNode
 }) {
+  const rate = useReceiveRate(task)
+  const hasActions = task.primaryAction !== null || task.secondaryActions.length > 0
+  const technicalLines = task.progress?.details ?? []
   return <div className={`task-details task-tone-${task.tone}`} data-task-stage={task.stage}>
-    <p className="task-detail-stage" role="status"><ReceiverIcon name={STAGE_ICONS[task.stage]} />{task.headline}</p>
-    <p>{task.description}</p>
-    <dl className="task-facts">
-      <dt>Result</dt><dd>{task.objectLabel}</dd>
-      {task.elapsedMilliseconds !== null && <><dt>Elapsed</dt><dd>{formatElapsedTime(task.elapsedMilliseconds)}
-        <small className="action-reason">{ELAPSED_DESCRIPTION}</small></dd></>}
-      {task.destinationLabel !== null && <><dt>Destination</dt><dd>{task.destinationLabel}</dd></>}
-      {task.createdAtMilliseconds !== null && <><dt>Created</dt><dd><time
-        dateTime={new Date(task.createdAtMilliseconds).toISOString()}>{new Date(task.createdAtMilliseconds).toLocaleString()}</time></dd></>}
-    </dl>
-    {task.progress !== null && <>
-      <p>{task.progress.label}</p>
-      {task.progress.status !== null && <p>{task.progress.status}</p>}
-    </>}
-    <ul className="task-detail-list">{[...task.details, ...(task.progress?.details ?? [])].map((line, index) =>
-      <li key={`${index}-${line}`}>{line}</li>)}</ul>
-    <div className="task-actions">
+    <TaskDetailHero task={task} rate={rate} />
+    {hasActions && <div className="task-actions task-detail-actions">
       {task.primaryAction !== null && <TaskActionButton action={task.primaryAction} perform={actions.perform} primary busy={busy} detailed />}
       {task.secondaryActions.map(action => <TaskActionButton key={action.id} action={action} perform={actions.perform} busy={busy} detailed />)}
-    </div>
+    </div>}
+    <TaskDetailFacts task={task} />
+    {task.details.length > 0 && <ul className="task-detail-notices">
+      {task.details.map((line, index) => <li key={`${index}-${line}`}>{line}</li>)}
+    </ul>}
     <CompatibleNameRepairPanel repair={task.fidelity} busy={busy} catchUp={() => actions.catchUp(task.operationId)} />
     {children}
-    {task.destructiveActions.length > 0 && <details className="task-removal">
-      <summary>Remove task or retained data</summary>
-      <p>Removing retained data does not remove files already exported to your device.</p>
-      <div className="task-actions">{task.destructiveActions.map(action =>
-        <TaskActionButton key={action.id} action={action} perform={actions.perform} busy={busy} detailed />)}</div>
-    </details>}
+    {(technicalLines.length > 0 || task.destructiveActions.length > 0) && <div className="detail-disclosures">
+      {technicalLines.length > 0 && <details className="detail-disclosure">
+        <summary>Transfer details</summary>
+        <ul className="task-detail-list">{technicalLines.map((line, index) => <li key={`${index}-${line}`}>{line}</li>)}</ul>
+      </details>}
+      {task.destructiveActions.length > 0 && <details className="detail-disclosure task-removal">
+        <summary>Remove task or retained data</summary>
+        <p>Removing retained data does not remove files already exported to your device.</p>
+        <div className="task-actions">{task.destructiveActions.map(action =>
+          <TaskActionButton key={action.id} action={action} perform={actions.perform} busy={busy} detailed />)}</div>
+      </details>}
+    </div>}
   </div>
 }

@@ -46,7 +46,6 @@ export function Downloads({ tasks, actions, loading, error, busy, details, entry
     {entryDescription !== undefined && <span id={descriptionId} hidden>{entryDescription}</span>}
     {open && <DetailSheet title={selected?.objectLabel ?? 'Downloads'} onClose={close} returnFocus={entryButton}
       returnLabel="Close downloads" className="downloads-sheet"
-      {...(selected === undefined ? { subtitle: 'Saved progress and history in this browser.' } : {})}
       navigation={selected === undefined ? undefined : <button ref={backButton} className="quiet-action downloads-back" type="button"
         onClick={() => { onIntent('close-download-task-details'); setExpanded(null) }}><ReceiverIcon name="chevron-left" />All downloads</button>}>
       {selected !== undefined ?

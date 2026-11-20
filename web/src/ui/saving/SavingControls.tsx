@@ -26,11 +26,14 @@ function collectSheetNotes(outcomes: readonly SavingOutcome[]): readonly string[
   return result
 }
 
-function Choice({ choice, recommended, choose }: {
+function Choice({ choice, recommended, sharedDisabledReason, choose }: {
   readonly choice: SavingChoice
   readonly recommended: boolean
+  readonly sharedDisabledReason: string | null
   readonly choose: (choice: SavingChoice) => void
 }) {
+  const uniqueReason = choice.disabledReason !== null && choice.disabledReason !== sharedDisabledReason
+    ? choice.disabledReason : null
   return <div className="saving-choice-wrap">
     <button type="button"
       className={`saving-choice${recommended ? ' saving-choice-recommended' : ''}`}
@@ -48,16 +51,15 @@ function Choice({ choice, recommended, choose }: {
         <ReceiverIcon name="download" />
       </span>
     </button>
-    {choice.disabledReason !== null && <p className="action-reason" role="status">{choice.disabledReason}</p>}
+    {uniqueReason !== null && <p className="action-reason" role="status">{uniqueReason}</p>}
   </div>
 }
 
-export function SavingControls({ model, activation, currentTaskContext, actionLabel, scopeLabel, choose, retry, cancel, onIntent }: {
+export function SavingControls({ model, activation, currentTaskContext, actionLabel, choose, retry, cancel, onIntent }: {
   readonly model: SavingActionPresentation
   readonly activation: ArtifactActivationPresentation | null
   readonly currentTaskContext: Readonly<{ operationId: string; reason: string }> | null
   readonly actionLabel: string
-  readonly scopeLabel?: string
   readonly choose: (choice: SavingChoice) => void
   readonly retry: () => void
   readonly cancel: () => void
@@ -67,7 +69,7 @@ export function SavingControls({ model, activation, currentTaskContext, actionLa
   const alternativesButton = useRef<HTMLButtonElement>(null)
   const deferSummary = currentTaskContext !== null && model.primary !== null && model.primary.disabledReason !== null
   const disabledReason = model.disabledReason
-  const heading = scopeLabel ?? actionLabel
+  const isBlocked = model.primary === null || model.primary.disabledReason !== null
   const notes = alternatives ? collectSheetNotes(model.alternatives) : []
   const commit = (choice: SavingChoice) => {
     // The destination picker must run synchronously inside this trusted click.
@@ -75,6 +77,7 @@ export function SavingControls({ model, activation, currentTaskContext, actionLa
     setAlternatives(false)
   }
   return <section className="saving-controls" aria-label="Download action"
+    data-saving-state={isBlocked ? 'blocked' : 'ready'}
     data-current-operation-id={deferSummary ? currentTaskContext.operationId : undefined}>
     {activation !== null ? <div className="preparing-task">
       <div className="saving-context">
@@ -86,32 +89,39 @@ export function SavingControls({ model, activation, currentTaskContext, actionLa
         {activation.kind !== 'committing' && <button className="quiet-action" type="button" onClick={cancel}>Cancel</button>}
       </div>
     </div> : <div className="saving-decision">
-      <div className="saving-context">
-        <strong className="saving-heading">{heading}</strong>
-        {disabledReason !== null && <p className="action-reason" role="status">{disabledReason}</p>}
-        {deferSummary && currentTaskContext.reason !== disabledReason && <p className="saving-summary">{currentTaskContext.reason}</p>}
-        {!deferSummary && disabledReason === null && model.primary !== null && <p className="saving-summary">{model.primary.summary}</p>}
-        {model.desktopGuidance !== null && <p className="saving-summary">{model.desktopGuidance}</p>}
-      </div>
-      <div className="saving-primary-row">
-        <button className="primary-action" type="button" disabled={model.primary === null || model.primary.disabledReason !== null}
-          onClick={() => { if (model.primary !== null) commit(model.primary) }}><ReceiverIcon name="download" />{model.primary?.label ?? actionLabel}</button>
-        {model.hasAlternatives && <button ref={alternativesButton} className="quiet-action" type="button"
-          onClick={() => { onIntent('open-saving-alternatives'); setAlternatives(true) }}>Other ways to save<ReceiverIcon name="chevron-right" /></button>}
+      <div className="saving-actions-row">
+        <div className={`saving-split-group${model.hasAlternatives ? ' saving-split-has-menu' : ''}`}>
+          <button className="primary-action" type="button" disabled={isBlocked}
+            onClick={() => { if (model.primary !== null) commit(model.primary) }}>
+            <ReceiverIcon name="download" />{model.primary?.label ?? actionLabel}
+          </button>
+          {model.hasAlternatives && <button ref={alternativesButton} className="saving-alternatives-trigger" type="button"
+            aria-label="Other ways to save" title="Other ways to save" aria-haspopup="dialog"
+            onClick={() => { onIntent('open-saving-alternatives'); setAlternatives(true) }}>
+            <ReceiverIcon name="chevron-down" />
+          </button>}
+        </div>
         {model.retry && <button className="quiet-action" type="button" onClick={retry}>Retry confirmation</button>}
       </div>
+      {disabledReason !== null && <p className="saving-note action-reason" role="status">{disabledReason}</p>}
+      {deferSummary && currentTaskContext.reason !== disabledReason && <p className="saving-note saving-summary">{currentTaskContext.reason}</p>}
+      {!deferSummary && disabledReason === null && model.primary !== null && <p className="saving-note saving-summary">{model.primary.summary}</p>}
+      {model.desktopGuidance !== null && <p className="saving-note saving-summary">{model.desktopGuidance}</p>}
     </div>}
     {alternatives && <DetailSheet returnFocus={alternativesButton} title="Other ways to save"
       onClose={() => { onIntent('close-saving-alternatives'); setAlternatives(false) }}>
+      {disabledReason !== null && <p className="saving-sheet-notice" role="status">{disabledReason}</p>}
       {model.recommendation !== null && <p className="saving-recommendation">{model.recommendation}</p>}
       {model.alternatives.map(outcome => <section className="saving-outcome" key={outcome.kind}>
         <h3>{outcome.label}</h3>
-        <Choice choice={outcome.primary} recommended={isSameChoice(model.primary, outcome.primary)} choose={commit} />
+        <Choice choice={outcome.primary} recommended={isSameChoice(model.primary, outcome.primary)}
+          sharedDisabledReason={disabledReason} choose={commit} />
         {outcome.alternatives.length > 0 && <details className="saving-advanced">
           <summary>More options</summary>
           {outcome.alternatives.map(choice => <Choice
             key={`${choice.offered.choice.choiceId}:${choice.recoveryPreference ?? ''}`}
-            choice={choice} recommended={isSameChoice(model.primary, choice)} choose={commit} />)}
+            choice={choice} recommended={isSameChoice(model.primary, choice)}
+            sharedDisabledReason={disabledReason} choose={commit} />)}
         </details>}
       </section>)}
       {notes.length > 0 && <details className="saving-notes">

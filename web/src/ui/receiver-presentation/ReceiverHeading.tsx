@@ -1,4 +1,4 @@
-import { useRef, useState, useSyncExternalStore, type FormEvent } from 'react'
+import { useRef, useState, useSyncExternalStore, type FormEvent, type ReactNode } from 'react'
 import type { InitialJoinState } from '../../receiver/initial-join'
 import type { ReceiverController } from '../controller'
 import { shareConnectionLabel } from '../experience/share-presentation'
@@ -9,9 +9,11 @@ import { connectedChannelCount } from '../connection/path-presentation'
 import { DetailSheet } from '../controls/DetailSheet'
 import { DiagnosticsEntry } from '../diagnostics/DiagnosticsEntry'
 import { ReceiverIcon } from './ReceiverIcon'
-import { ReceiverFold } from './ReceiverFold'
 
-export function ReceiverHeading({ controller }: { readonly controller: ReceiverController }) {
+export function ReceiverHeading({ controller, actions }: {
+  readonly controller: ReceiverController
+  readonly actions?: ReactNode
+}) {
   const source = controller.presentation.connection
   const browsing = controller.presentation.browsing
   const snapshot = useSyncExternalStore(source.subscribe, source.getSnapshot, source.getSnapshot)
@@ -28,8 +30,8 @@ export function ReceiverHeading({ controller }: { readonly controller: ReceiverC
   const join = snapshot.connection.kind === 'idle' ? snapshot.connection.join : undefined
   const joinRetryAt = join?.kind === 'paused' || join?.kind === 'waiting' ? join.retryAt : undefined
   return <>
-    <div className="share-heading">
-      <div className="share-heading-copy">
+    <div className="share-hero">
+      <div className="share-heading">
         <h1 title={share?.name}>{share?.name ?? (snapshot.phase === 'awaiting-key' ? 'Open your share' : 'Shared files')}</h1>
         <div className="share-metadata">
           <button className={`connection-status connection-${snapshot.connection.kind}`} type="button" onClick={event => openDetails(event.currentTarget)}>
@@ -42,9 +44,9 @@ export function ReceiverHeading({ controller }: { readonly controller: ReceiverC
           </button>
         </div>
       </div>
-      <ReceiverFold compact />
+      {actions}
     </div>
-    {snapshot.error !== null && <div className="share-error" role="alert">{snapshot.error} <DiagnosticsEntry label="Export diagnostics" /></div>}
+    {snapshot.error !== null && <div className="share-error" role="alert"><span>{snapshot.error}</span><DiagnosticsEntry label="Export diagnostics" /></div>}
     {snapshot.phase === 'awaiting-key' && <KeyForm controller={controller} />}
     {share === null && breadcrumbs.length === 0 && snapshot.phase === 'joining' &&
       <InitialJoinLoading key={joinRetryAt ?? 'none'} status={snapshot.status} join={join} controller={controller} />}

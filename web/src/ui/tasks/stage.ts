@@ -164,7 +164,7 @@ function startupStage(facts: TaskFacts): StageCopy {
 function receivingStage(facts: TaskFacts): StageCopy {
   const direct = facts.directZipProgress
   if (direct === null || direct.phase === 'receiving') {
-    return stage('downloading', 'Downloading', 'Receiving the selected content. You can keep browsing this share.', 'receiving')
+    return stage('downloading', 'Downloading', 'Receiving the selected content.', 'receiving')
   }
   if (direct.phase === 'saving-resume-position') {
     return stage('downloading', 'Saving resume progress', 'Writing a verified checkpoint while the download remains active.', direct.phase)

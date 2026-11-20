@@ -2,33 +2,48 @@
 .receiver-shell,
 .portal-root,
 .diagnostics-surface {
-  --receiver-page: light-dark(#f8f9f3, #0d1713);
-  --receiver-paper: light-dark(#ffffff, #14231c);
-  --receiver-ink: light-dark(#17362c, #edf5ef);
-  --receiver-muted: light-dark(#566e62, #9db3a6);
-  --receiver-rule: light-dark(#dce6dc, #273e33);
-  --receiver-rule-soft: light-dark(#e7efe6, #1d3127);
-  --receiver-accent: light-dark(#247253, #34c78a);
-  --receiver-on-accent: light-dark(#ffffff, #062519);
-  --receiver-wash: light-dark(#eaf4ec, #1b3629);
-  --receiver-stage: light-dark(#f1f6ef, #101e17);
-  --receiver-accent-hover: light-dark(#1c5c43, #4ed89d);
-  --receiver-secondary: light-dark(#0b7f8c, #38c0ce);
-  --receiver-disabled: light-dark(#e7eee8, #21342b);
-  --receiver-disabled-ink: light-dark(#64786d, #8da397);
-  --receiver-success: light-dark(#1c6f46, #70dfa0);
-  --receiver-success-wash: light-dark(#e7f4ec, #183929);
-  --receiver-warning: light-dark(#8a5a14, #f0cf82);
-  --receiver-warning-wash: light-dark(#fef4dc, #392e1d);
-  --receiver-error: light-dark(#b0383c, #ffa2a7);
-  --receiver-error-wash: light-dark(#fdeced, #402227);
-  --receiver-shadow: light-dark(rgba(23, 54, 44, 0.14), rgba(0, 0, 0, 0.55));
-  --receiver-card-shadow: light-dark(0 1px 2px rgba(23, 54, 44, 0.04), 0 1px 2px rgba(0, 0, 0, 0.25));
-  --receiver-backdrop: light-dark(rgba(18, 38, 31, 0.36), rgba(0, 0, 0, 0.65));
-  --receiver-highlight: light-dark(#ffffff88, #ffffff44);
-  --receiver-radius-card: 12px;
-  --receiver-radius-control: 8px;
-  --receiver-radius-pill: 999px;
+  --receiver-page: light-dark(#f6f8f7, #0f1613);
+  --receiver-header: light-dark(rgba(246, 248, 247, 0.84), rgba(15, 22, 19, 0.84));
+  --receiver-paper: light-dark(#ffffff, #151f1b);
+  --receiver-surface-subtle: light-dark(#f7faf8, #1a2621);
+  --receiver-stage: light-dark(#f0f4f2, #121b17);
+  --receiver-hover: light-dark(#f4f8f6, #1b2823);
+  --receiver-wash: light-dark(#e7f4ed, #1d3328);
+  --receiver-ink: light-dark(#152822, #eaf2ee);
+  --receiver-muted: light-dark(#54665f, #96aba0);
+  --receiver-subtle: light-dark(#74867f, #758a7f);
+  --receiver-rule: light-dark(rgba(18, 44, 35, 0.09), rgba(218, 240, 228, 0.1));
+  --receiver-rule-strong: light-dark(rgba(18, 44, 35, 0.16), rgba(218, 240, 228, 0.18));
+  --receiver-rule-soft: light-dark(rgba(18, 44, 35, 0.055), rgba(218, 240, 228, 0.06));
+  --receiver-scrollbar-thumb: light-dark(rgba(18, 44, 35, 0.18), rgba(218, 240, 228, 0.2));
+  --receiver-accent: light-dark(#226b50, #7dd6a9);
+  --receiver-accent-hover: light-dark(#1b5740, #95e0ba);
+  --receiver-on-accent: light-dark(#ffffff, #0c261b);
+  --receiver-on-accent-divider: light-dark(rgba(255, 255, 255, 0.24), rgba(12, 38, 27, 0.22));
+  --receiver-secondary: light-dark(#356185, #9ac4e2);
+  --receiver-disabled: light-dark(#edf2ef, #1b2722);
+  --receiver-disabled-ink: light-dark(#7c8e86, #73887d);
+  --receiver-success: light-dark(#1f6b47, #8bd6ac);
+  --receiver-success-wash: light-dark(#e8f6ee, rgba(125, 214, 169, 0.12));
+  --receiver-warning: light-dark(#8f5b14, #e8c484);
+  --receiver-warning-wash: light-dark(#fdf7ea, rgba(232, 196, 132, 0.1));
+  --receiver-warning-rule: light-dark(rgba(176, 118, 28, 0.2), rgba(232, 196, 132, 0.22));
+  --receiver-error: light-dark(#b03a45, #f09ea5);
+  --receiver-error-wash: light-dark(#fdf0f1, rgba(240, 158, 165, 0.12));
+  --receiver-shadow: light-dark(rgba(16, 38, 30, 0.1), rgba(0, 0, 0, 0.48));
+  --receiver-shadow-key: light-dark(rgba(16, 38, 30, 0.035), rgba(0, 0, 0, 0.26));
+  --receiver-shadow-ambient: light-dark(rgba(16, 38, 30, 0.045), rgba(0, 0, 0, 0.34));
+  --receiver-shadow-control: light-dark(rgba(16, 38, 30, 0.045), rgba(0, 0, 0, 0.24));
+  --receiver-card-shadow: 0 1px 2px var(--receiver-shadow-key), 0 4px 16px -4px var(--receiver-shadow-ambient);
+  --receiver-control-shadow: 0 1px 2px var(--receiver-shadow-control);
+  --receiver-backdrop: light-dark(rgba(18, 34, 28, 0.26), rgba(4, 10, 7, 0.62));
+  --receiver-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --receiver-max-width: 1160px;
+  --receiver-gutter: clamp(18px, 3vw, 40px);
+  --receiver-radius-card: 16px;
+  --receiver-radius-control: 10px;
+  --receiver-radius-chip: 8px;
+  --receiver-radius-tag: 6px;
 }
 .receiver-shell, .portal-root { color-scheme: inherit; }
 .receiver-shell,
@@ -36,6 +51,7 @@
   color: var(--receiver-ink);
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   -webkit-font-smoothing: antialiased;
-  scrollbar-color: var(--receiver-muted) var(--receiver-stage);
+  scrollbar-width: thin;
+  scrollbar-color: var(--receiver-scrollbar-thumb) transparent;
 }
 .detail-sheet { color-scheme: inherit; }
