@@ -10,7 +10,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
+
+	"github.com/windshare/windshare/core/catalog/internal/dirpublish"
 )
 
 type fileCatalogMeta struct {
@@ -303,19 +304,11 @@ func directoryTreeBytes(root string) (uint64, error) {
 	return total, err
 }
 
-func syncCatalogDirectory(path string) error {
-	directory, err := os.Open(path)
-	if err != nil {
-		return err
+func (b *FileCatalogBackend) syncDirectory(path string) error {
+	if b != nil && b.syncDir != nil {
+		return b.syncDir(path)
 	}
-	syncErr := directory.Sync()
-	closeErr := directory.Close()
-	// Windows cannot provide a portable unprivileged directory-flush contract;
-	// files and atomic rename still provide the documented process-restart level.
-	if runtime.GOOS == "windows" {
-		syncErr = nil
-	}
-	return errors.Join(syncErr, closeErr)
+	return dirpublish.SyncDir(path)
 }
 
 type failureDirectoryVisitor func(DirectoryID, string) error
@@ -402,7 +395,7 @@ func (b *FileCatalogBackend) cleanEmptyFailureDirectoriesLocked(ctx context.Cont
 		return err
 	}
 	if cleaner.removed {
-		return syncCatalogDirectory(b.failuresDir)
+		return b.syncDirectory(b.failuresDir)
 	}
 	return nil
 }

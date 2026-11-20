@@ -584,9 +584,17 @@ func TestFileFailureNamespaceHelpersRollbackEveryUnpublishedRename(t *testing.T)
 		t.Fatal(err)
 	}
 	target := filepath.Join(root, "published")
-	if err := backend.publishFailureLocked(t.Context(), transaction, target, filepath.Join(root, "missing-sync-directory")); err == nil {
-		t.Fatal("unsynced failure rename was reported as published")
+	syncFault := errors.New("injected failure directory sync failure")
+	backend.syncDir = func(path string) error {
+		if path == root {
+			return syncFault
+		}
+		return nil
 	}
+	if err := backend.publishFailureLocked(t.Context(), transaction, target, root); !errors.Is(err, syncFault) {
+		t.Fatalf("unsynced failure rename returned %v, want %v", err, syncFault)
+	}
+	backend.syncDir = nil
 	if _, err := os.Stat(transaction); err != nil {
 		t.Fatalf("failed publication was not rolled back: %v", err)
 	}

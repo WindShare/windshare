@@ -219,7 +219,7 @@ func (b *FileCatalogBackend) stageFailureLocked(
 	if err := stageFailureFile(filepath.Join(path, failurePayloadName), payload.Bytes(), meter); err != nil {
 		return "", fileFailureMeta{}, err
 	}
-	if err := syncCatalogDirectory(path); err != nil {
+	if err := b.syncDirectory(path); err != nil {
 		return "", fileFailureMeta{}, err
 	}
 	return path, meta, nil
@@ -228,9 +228,9 @@ func (b *FileCatalogBackend) stageFailureLocked(
 func (b *FileCatalogBackend) ensureFailureDirectoryLocked(directory DirectoryID) (string, bool, error) {
 	path := filepath.Join(b.failuresDir, hex.EncodeToString(directory[:]))
 	if err := os.Mkdir(path, 0o700); err == nil {
-		if err := syncCatalogDirectory(b.failuresDir); err != nil {
+		if err := b.syncDirectory(b.failuresDir); err != nil {
 			_ = os.Remove(path)
-			_ = syncCatalogDirectory(b.failuresDir)
+			_ = b.syncDirectory(b.failuresDir)
 			return "", false, err
 		}
 		return path, true, nil
@@ -247,7 +247,7 @@ func (b *FileCatalogBackend) ensureFailureDirectoryLocked(directory DirectoryID)
 func (b *FileCatalogBackend) cleanUnpublishedFailureDirectory(path string, created bool, committed *bool) {
 	if !*committed && created {
 		_ = os.Remove(path)
-		_ = syncCatalogDirectory(b.failuresDir)
+		_ = b.syncDirectory(b.failuresDir)
 	}
 }
 
@@ -260,9 +260,9 @@ func (b *FileCatalogBackend) publishFailureLocked(ctx context.Context, transacti
 	if err := dirpublish.Rename(ctx, transactionPath, target); err != nil {
 		return err
 	}
-	if err := syncCatalogDirectory(directoryPath); err != nil {
+	if err := b.syncDirectory(directoryPath); err != nil {
 		if rollbackErr := os.Rename(target, transactionPath); rollbackErr == nil {
-			_ = syncCatalogDirectory(directoryPath)
+			_ = b.syncDirectory(directoryPath)
 			return err
 		}
 	}
