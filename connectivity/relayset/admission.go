@@ -20,7 +20,7 @@ type NetworkAdmissions struct {
 	primary       int
 	inflight      int
 	active        int
-	now           func() time.Time
+	clock         senderrelay.Clock
 	serverRetryAt func(string) time.Time
 	observe       func(Admission)
 }
@@ -60,10 +60,13 @@ type admissionPermit struct {
 	released bool
 }
 
-func NewNetworkAdmissions(plan relayplan.Plan, now func() time.Time, serverRetryAt func(string) time.Time) *NetworkAdmissions {
-	a := &NetworkAdmissions{now: now, serverRetryAt: serverRetryAt, candidates: append([]relayplan.Candidate(nil), plan.Network...), policy: plan.Policy,
+func NewNetworkAdmissions(plan relayplan.Plan, clock senderrelay.Clock, serverRetryAt func(string) time.Time) *NetworkAdmissions {
+	if clock == nil {
+		clock = senderrelay.SystemClock{}
+	}
+	a := &NetworkAdmissions{clock: clock, serverRetryAt: serverRetryAt, candidates: append([]relayplan.Candidate(nil), plan.Network...), policy: plan.Policy,
 		states: make([]admissionState, len(plan.Network)), changed: make(chan struct{}), primary: -1}
-	started := now()
+	started := clock.Now()
 	for i, candidate := range a.candidates {
 		at := candidate.ServerRetryAt
 		if !plan.Decision.CooldownFallback && candidate.CooldownUntil.After(at) {
@@ -102,7 +105,7 @@ func (c admissionControl) Begin(ctx context.Context) (senderrelay.AttemptPermit,
 				at = latest
 			}
 		}
-		delay := at.Sub(a.now())
+		delay := at.Sub(a.clock.Now())
 		if eligible := delay <= 0; state.eligible != eligible {
 			state.eligible = eligible
 			a.notify()
@@ -115,22 +118,22 @@ func (c admissionControl) Begin(ctx context.Context) (senderrelay.AttemptPermit,
 		}
 		changed := a.changed
 		a.mu.Unlock()
-		waitForAdmission(ctx, changed, delay)
+		var err error
+		if delay > 0 {
+			err = a.clock.Wait(ctx, delay, changed)
+		} else {
+			select {
+			case <-ctx.Done():
+			case <-changed:
+			}
+		}
 		a.mu.Lock()
-	}
-}
-
-func waitForAdmission(ctx context.Context, changed <-chan struct{}, delay time.Duration) {
-	var expiry <-chan time.Time
-	if delay > 0 {
-		timer := time.NewTimer(delay)
-		defer timer.Stop()
-		expiry = timer.C
-	}
-	select {
-	case <-ctx.Done():
-	case <-changed:
-	case <-expiry:
+		if err != nil {
+			state.eligible = false
+			a.notify()
+			a.mu.Unlock()
+			return nil, err
+		}
 	}
 }
 

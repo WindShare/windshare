@@ -3,6 +3,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"time"
@@ -19,7 +20,12 @@ func main() {
 	deploymentPhase := flag.String("deployment-phase", "", "prepare or verify a real deployment")
 	deploymentState := flag.String("deployment-state", "", "private fixture file spanning a deployment")
 	accessConsole := flag.String("access-console", "", "console origin for credential lifecycle scenario")
+	budgetNode := flag.String("budget-node", "", "owner-enabled native settings with exhausted public budget")
 	flag.Parse()
+	if *budgetNode != "" {
+		verifyBudgetRecovery(*binary, *database, json.RawMessage(*budgetNode))
+		return
+	}
 	if *accessConsole != "" {
 		accessScenario(*external, *accessConsole)
 		return

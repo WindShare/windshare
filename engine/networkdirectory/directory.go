@@ -183,10 +183,11 @@ func (directory *Directory) notifySchedule() {
 }
 
 func (directory *Directory) requestRefresh(ctx context.Context, scheduled bool) error {
+	directory.mu.Lock()
 	if err := directory.ctx.Err(); err != nil {
+		directory.mu.Unlock()
 		return err
 	}
-	directory.mu.Lock()
 	done := directory.refreshing
 	if done == nil && directory.config.Now().Before(directory.nextRefresh) && (directory.failures > 0 || scheduled) {
 		if directory.failures == 0 {
@@ -295,6 +296,11 @@ func (directory *Directory) run() {
 		}
 		_ = directory.requestRefresh(directory.ctx, true)
 		directory.mu.Lock()
+		// Reading the schedule consumes all changes published before this lock.
+		select {
+		case <-directory.scheduleChanged:
+		default:
+		}
 		delay := max(0, directory.nextRefresh.Sub(directory.config.Now()))
 		directory.mu.Unlock()
 		timer.Reset(delay)
@@ -302,11 +308,11 @@ func (directory *Directory) run() {
 }
 
 func (directory *Directory) Close() {
-	directory.cancel()
-	<-directory.done
 	directory.mu.Lock()
+	directory.cancel()
 	refreshing := directory.refreshing
 	directory.mu.Unlock()
+	<-directory.done
 	if refreshing != nil {
 		<-refreshing
 	}

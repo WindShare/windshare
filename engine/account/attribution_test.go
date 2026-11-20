@@ -108,7 +108,7 @@ func TestFirstShareUsesNewTicketAfterAnonymousUpgradeFailure(t *testing.T) {
 	registration := testRegistrationConfig(t)
 	admissions := relayset.NewNetworkAdmissions(relayplan.Plan{Network: []relayplan.Candidate{
 		{URL: anonymous.URL}, {URL: backup.URL},
-	}}, time.Now, nil)
+	}}, nil, nil)
 	waiting := make(chan struct{}, 1)
 	set, err := relayset.NewSender(ctx, []string{anonymous.URL, backup.URL}, func(_ context.Context, address string) (relayset.SenderEndpoint, error) {
 		candidate := registration

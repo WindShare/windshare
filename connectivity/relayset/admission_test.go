@@ -36,7 +36,7 @@ func beginCandidates(t *testing.T, a *NetworkAdmissions, plan relayplan.Plan) []
 
 func TestAdmissionsUseActualPrimaryAndParkSurplus(t *testing.T) {
 	plan := admissionFixture()
-	a := NewNetworkAdmissions(plan, time.Now, nil)
+	a := NewNetworkAdmissions(plan, nil, nil)
 	permits := beginCandidates(t, a, plan)
 	if !permits[2].Admit() {
 		t.Fatal("first successful candidate was not primary")
@@ -78,7 +78,7 @@ func TestAdmissionsUseActualPrimaryAndParkSurplus(t *testing.T) {
 
 func TestFailedPreferredBackupReleasesAttemptForFallback(t *testing.T) {
 	plan := admissionFixture()
-	a := NewNetworkAdmissions(plan, time.Now, nil)
+	a := NewNetworkAdmissions(plan, nil, nil)
 	permits := beginCandidates(t, a, plan)
 	if !permits[0].Admit() {
 		t.Fatal("primary")
@@ -131,7 +131,7 @@ func TestDeferredRegistrationHonorsSoftAndServerDeadlines(t *testing.T) {
 				if tc.server > 0 {
 					plan.Network[1].ServerRetryAt = start.Add(tc.server)
 				}
-				a := NewNetworkAdmissions(plan, time.Now, nil)
+				a := NewNetworkAdmissions(plan, nil, nil)
 				primary, err := a.Control(plan.Network[0].URL).Begin(t.Context())
 				if err != nil {
 					t.Fatal(err)
@@ -191,7 +191,7 @@ func TestPendingDialRechecksConcurrentHTTPDeadline(t *testing.T) {
 			}
 			return time.Time{}
 		}
-		a := NewNetworkAdmissions(plan, time.Now, lookup)
+		a := NewNetworkAdmissions(plan, nil, lookup)
 		done := make(chan senderrelay.AttemptPermit, 1)
 		go func() { p, _ := a.Control(plan.Network[1].URL).Begin(t.Context()); done <- p }()
 		synctest.Wait()

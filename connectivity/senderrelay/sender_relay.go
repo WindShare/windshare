@@ -114,7 +114,7 @@ func New(config Config) (*Lifecycle, error) {
 		config.Dialer = relayV2SenderDialer{}
 	}
 	if config.Clock == nil {
-		config.Clock = wallSenderRelayRecoveryClock{}
+		config.Clock = SystemClock{}
 	}
 	if config.Jitter == nil {
 		config.Jitter = func(delay time.Duration) time.Duration {

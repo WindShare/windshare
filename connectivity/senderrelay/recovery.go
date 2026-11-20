@@ -23,22 +23,24 @@ var errParked = errors.New("network registration parked")
 
 type Clock interface {
 	Now() time.Time
-	Wait(context.Context, time.Duration) error
+	// A wake signal ends local backoff. A nil wake leaves only elapsed time or cancellation.
+	Wait(context.Context, time.Duration, <-chan struct{}) error
 }
 
-type wallSenderRelayRecoveryClock struct{}
+type SystemClock struct{}
 
-func (wallSenderRelayRecoveryClock) Now() time.Time { return time.Now() }
+func (SystemClock) Now() time.Time { return time.Now() }
 
-func (wallSenderRelayRecoveryClock) Wait(ctx context.Context, delay time.Duration) error {
+func (SystemClock) Wait(ctx context.Context, delay time.Duration, wake <-chan struct{}) error {
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
+	case <-wake:
 	case <-timer.C:
-		return nil
 	}
+	return nil
 }
 
 func (lifecycle *Lifecycle) recover(ctx context.Context) error {
@@ -81,7 +83,7 @@ func (lifecycle *Lifecycle) recoverRegistration(callerContext, recoveryContext c
 		resume := lifecycle.resumeNext
 		permit, authorization, err := lifecycle.acquireRegistrationAttempt(recoveryContext, resume, attempt)
 		if err != nil {
-			return err
+			return lifecycle.attemptCause(callerContext, recoveryContext, err)
 		}
 		started := lifecycle.config.Clock.Now()
 		event := Attempt{ShareInstance: lifecycle.config.Fresh.ShareInstance, Number: attempt, State: AttemptStarted, Generation: lifecycle.generation, Slow: slow, Resume: resume}
@@ -95,6 +97,7 @@ func (lifecycle *Lifecycle) recoverRegistration(callerContext, recoveryContext c
 			return cause
 		}
 		if dialErr == nil {
+			lifecycle.serverRetryAt = time.Time{}
 			event.State, event.Generation = AttemptSucceeded, lifecycle.generation
 			lifecycle.observeRecoveryAttempt(event)
 			return nil
@@ -110,10 +113,11 @@ func (lifecycle *Lifecycle) recoverRegistration(callerContext, recoveryContext c
 		if lifecycle.registrationFailed(&event, dialErr) {
 			return dialErr
 		}
-		if !lifecycle.config.Clock.Now().Add(delay).Before(deadline) {
-			slow = true
-		}
-		wait := max(lifecycle.retryDelay(delay, slow), event.ServerRetryAt.Sub(lifecycle.config.Clock.Now()))
+		now := lifecycle.config.Clock.Now()
+		slow = slow || !now.Add(delay).Before(deadline)
+		wait := max(lifecycle.retryDelay(delay, slow), event.ServerRetryAt.Sub(now))
+		// Announce the actual wait crossing the fast window without delaying this retry further.
+		slow = slow || !now.Add(wait).Before(deadline)
 		event.NextDelay = wait
 		lifecycle.observeRecoveryAttempt(event)
 		if slow && !waitingAnnounced {
@@ -121,8 +125,8 @@ func (lifecycle *Lifecycle) recoverRegistration(callerContext, recoveryContext c
 			lifecycle.observeRecoveryAttempt(event)
 			waitingAnnounced = true
 		}
-		if err := lifecycle.waitLocalRetry(callerContext, recoveryContext, wait); err != nil {
-			return err
+		if err := lifecycle.config.Clock.Wait(recoveryContext, wait, lifecycle.wake); err != nil {
+			return lifecycle.attemptCause(callerContext, recoveryContext, err)
 		}
 		delay = min(delay*2, senderRelayRetryMaximum)
 		if attempt != ^uint32(0) {
@@ -167,34 +171,15 @@ func (lifecycle *Lifecycle) waitForServerRetry(caller, recovery context.Context)
 		if remaining <= 0 {
 			return nil
 		}
-		if err := lifecycle.config.Clock.Wait(recovery, remaining); err != nil {
-			if cause := lifecycle.recoveryCause(caller, recovery); cause != nil {
-				return cause
-			}
-			return err
+		if err := lifecycle.config.Clock.Wait(recovery, remaining, nil); err != nil {
+			return lifecycle.attemptCause(caller, recovery, err)
 		}
 	}
 }
 
-func (lifecycle *Lifecycle) waitLocalRetry(caller, ctx context.Context, delay time.Duration) error {
-	waitContext, cancel := context.WithCancel(ctx)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		select {
-		case <-lifecycle.wake:
-			cancel()
-		case <-waitContext.Done():
-		}
-	}()
-	err := lifecycle.config.Clock.Wait(waitContext, delay)
-	cancel()
-	<-done
-	if cause := lifecycle.recoveryCause(caller, ctx); cause != nil {
+func (lifecycle *Lifecycle) attemptCause(caller, recovery context.Context, err error) error {
+	if cause := lifecycle.recoveryCause(caller, recovery); cause != nil {
 		return cause
-	}
-	if errors.Is(err, context.Canceled) {
-		return nil
 	}
 	return err
 }
@@ -225,8 +210,10 @@ func (lifecycle *Lifecycle) connectAttempt(caller, recovery context.Context, res
 	})
 	finished := lifecycle.config.Clock.Now()
 	attempt.HandshakeDuration = finished.Sub(started)
-	if delay := explicitRetryAfter(err); delay > 0 {
-		lifecycle.serverRetryAt = finished.Add(delay)
+	if delay := min(relayv2.RetryAfter(err), 2*senderRelaySlowRetry); delay > 0 {
+		if until := finished.Add(delay); until.After(lifecycle.serverRetryAt) {
+			lifecycle.serverRetryAt = until
+		}
 		attempt.ServerRetryAt = lifecycle.serverRetryAt
 	}
 	// Delivery uncertainty survives later failures: a lost acknowledgement can
@@ -300,15 +287,4 @@ func (lifecycle *Lifecycle) retryDelay(fast time.Duration, slow bool) time.Durat
 	}
 	// Bound injected jitter so scheduler defects cannot cause a hot loop.
 	return max(senderRelaySlowRetry/2, min(lifecycle.config.Jitter(senderRelaySlowRetry), senderRelaySlowRetry*3/2))
-}
-
-func explicitRetryAfter(failure error) time.Duration {
-	const limit = 2 * senderRelaySlowRetry
-	if upgrade, ok := errors.AsType[*relayv2.WebSocketDialError](failure); ok {
-		return min(upgrade.RetryAfter, limit)
-	}
-	if rejection, ok := errors.AsType[*relayv2.RelayError](failure); ok {
-		return min(rejection.RetryAfter, limit)
-	}
-	return 0
 }

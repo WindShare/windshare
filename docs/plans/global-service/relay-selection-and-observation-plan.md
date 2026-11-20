@@ -2,27 +2,27 @@
 
 ## 1. 背景与现状分析
 
-发送端从签名目录选出最多 4 个候选并行注册，首个成功即可发布链接，后台目标是维持 2 个注册并兼顾区域、厂商多样性。链接发布后，恢复只能使用已写入的中转。见 [relayplan](../../../connectivity/relayplan/plan.go)、[relayset](../../../connectivity/relayset/admission.go) 和 [链接发布](../../../engine/internal/networkruntime/resolve.go#L14-L34)。
+发送端从签名目录选出最多 4 个候选并行注册，首个成功即可发布链接，后台目标是维持 2 个注册并兼顾区域、厂商多样性。链接发布后，恢复只能使用已写入的中转。见 [relayplan](../../../connectivity/relayplan/plan.go)、[relayset](../../../connectivity/relayset/admission.go) 和 [链接发布](../../../engine/internal/networkruntime/resolve.go)。
 
 ### 1.1 冷却与失败归因
 
-- 规划器会硬过滤 `CooldownUntil`，运行时却从未为它赋值。当前目录只有 `cn1`、`us1`，WAN 或代理恢复也未必改变网络代次。直接补写冷却会让已发布链接在整个分享期间少一个备选，两台都被过滤时还可能返回 `NoRelayCandidates`。[规划过滤](../../../connectivity/relayplan/plan.go#L109-L125) · [观测写入](../../../engine/internal/networkruntime/diagnostics.go#L52-L64)
-- HTTP 握手丢失状态码与 `Retry-After`，普通网络唤醒还能提前结束重试等待。服务端停服、预算耗尽和瞬时满载需要不同的重试行为。[握手错误](../../../transport/relayv2/upgrade.go#L40-L53) · [重试等待](../../../connectivity/senderrelay/recovery.go#L159-L179)
-- `ErrorAccessDenied` 也可由单个 `ShareID` 被封禁引起，`ErrorInvalidProof` 可由本次分享的恢复凭据不匹配引起。将这些拒绝写入节点健康表会影响同账号的其他分享。[拒载范围](../../../relay-rust/crates/relay-access/src/restrictions.rs#L63-L69) · [恢复拒绝](../../../relay-rust/crates/relay-core/src/lifecycle/effect.rs#L151-L164)
-- 首次网络快照的代次 `0 → 1` 会丢弃跨越该时刻的注册观测。预留多样性备选时，`BackupIndex` 也可能挑中刚失败的节点。[网络代次](../../../connectivity/networkstate/snapshot.go#L120-L125) · [备选选择](../../../connectivity/relayplan/plan.go#L138-L142)
+- 规划器会硬过滤 `CooldownUntil`，运行时却从未为它赋值。当前目录只有 `cn1`、`us1`，WAN 或代理恢复也未必改变网络代次。直接补写冷却会让已发布链接在整个分享期间少一个备选，两台都被过滤时还可能返回 `NoRelayCandidates`。[规划过滤](../../../connectivity/relayplan/plan.go) · [观测写入](../../../engine/internal/networkruntime/diagnostics.go)
+- HTTP 握手丢失状态码与 `Retry-After`，普通网络唤醒还能提前结束重试等待。服务端停服、预算耗尽和瞬时满载需要不同的重试行为。[握手错误](../../../transport/relayv2/upgrade.go) · [重试等待](../../../connectivity/senderrelay/recovery.go)
+- `ErrorAccessDenied` 也可由单个 `ShareID` 被封禁引起，`ErrorInvalidProof` 可由本次分享的恢复凭据不匹配引起。将这些拒绝写入节点健康表会影响同账号的其他分享。[拒载范围](../../../relay-rust/crates/relay-access/src/restrictions.rs) · [恢复拒绝](../../../relay-rust/crates/relay-core/src/lifecycle/effect.rs)
+- 首次网络快照的代次 `0 → 1` 会丢弃跨越该时刻的注册观测。预留多样性备选时，`BackupIndex` 也可能挑中刚失败的节点。[网络代次](../../../connectivity/networkstate/snapshot.go) · [备选选择](../../../connectivity/relayplan/plan.go)
 
 ### 1.2 `CapacityMbps` 与实测 `Duration` 优先级失衡，冷启动平局退化为字典序
 
-- 两个节点均有成功样本时，现有比较器先看标称带宽。即使 `us1`（100 Mbps）注册耗时为 130 ms、`cn1`（200 Mbps）为 950 ms，`cn1` 仍排第一。[现有排序](../../../connectivity/relayplan/plan.go#L193-L205)
-- 5–10 Mbps 和 50–200 Mbps 节点适合不同负载。同档内可用实测注册耗时排序，但当前 `AttemptParked.Duration` 还包含退场时关闭连接的时间。[容量设计](global-network.md#L180-L201) · [注册计时](../../../connectivity/senderrelay/recovery.go#L86-L104) · [停放连接](../../../connectivity/senderrelay/recovery.go#L225-L239)
-- 同级节点以 `Identity` 字典序打破平局，目录超出候选上限后，冷启动客户端会反复选中相同端点。[比较器](../../../connectivity/relayplan/plan.go#L199-L205)
+- 两个节点均有成功样本时，现有比较器先看标称带宽。即使 `us1`（100 Mbps）注册耗时为 130 ms、`cn1`（200 Mbps）为 950 ms，`cn1` 仍排第一。[现有排序](../../../connectivity/relayplan/plan.go)
+- 5–10 Mbps 和 50–200 Mbps 节点适合不同负载。同档内可用实测注册耗时排序，但当前 `AttemptParked.Duration` 还包含退场时关闭连接的时间。[容量设计](global-network.md#L180-L201) · [注册计时](../../../connectivity/senderrelay/recovery.go) · [停放连接](../../../connectivity/senderrelay/recovery.go)
+- 同级节点以 `Identity` 字典序打破平局，目录超出候选上限后，冷启动客户端会反复选中相同端点。[比较器](../../../connectivity/relayplan/plan.go)
 
 ### 1.3 明确延后的低 ROI 项（不纳入本计划）
 
 遵循 [global-network.md](global-network.md#L125-L128) 的测量原则，以下两项延后。
 
 - **冷启动出口提示（`ExitHint` / `/.well-known/windshare-edge`）**。当前两台目录节点均可参加竞速。待 `>=50 Mbps` 主力节点超过 4 台且实测跨洲首连偏慢，再在桌面端规划模式评估非阻塞探测。届时统一 `region` 格式，大陆出口返回 `zone=cn, region=as`。
-- **逐节点 P0 先验权重**。签名目录严格校验字段，Go、Rust 和 TypeScript 共用契约。待有晚高峰实测数据再引入静态权重。[目录校验](../../../core/nodedirectory/verify.go#L119)
+- **逐节点 P0 先验权重**。签名目录严格校验字段，Go、Rust 和 TypeScript 共用契约。待有晚高峰实测数据再引入静态权重。[目录校验](../../../core/nodedirectory/verify.go)
 
 ---
 
@@ -41,8 +41,8 @@
 1. **显式 `Retry-After`**
 
    - `WebSocketDialError` 保留 `StatusCode`，仅对 `429`/`503` 解析 `RetryAfter`。支持秒数和 HTTP-date，过去日期归零，秒数在换算前钳制以防溢出。[upgrade.go](../../../transport/relayv2/upgrade.go)
-   - `senderrelay` 统一处理 HTTP 和 WS2E 的显式期限，沿用 `2 * senderRelaySlowRetry` 上限。普通 `Wake()` 可提前结束本地等待，重拨前仍须检查该端点的服务端截止。无提示的 503 沿用现有快慢重试节奏。[recovery.go](../../../connectivity/senderrelay/recovery.go#L159-L179)
-   - 原生中转停服或在 HTTP 层确认公共日预算耗尽时返回 `503` 和 `Retry-After: 30`。无 bearer 且归属待定的连接继续升级，以便恢复 owner 的既有分享。升级后确认的预算拒绝走 WS2E `AccessUnavailable` 的显式退避。若硬限额使拒绝帧无法送达，客户端按实际断连处理。[HTTP 入口](../../../relay-rust/crates/relay-native/src/http/mod.rs#L183-L213) · [预算归属](../../../relay-rust/crates/relay-native/src/node/budget/egress.rs#L37-L55) · [注册授权](../../../relay-rust/crates/relay-native/src/actor/access.rs#L36-L65)
+   - `senderrelay` 统一处理 HTTP 和 WS2E 的显式期限，沿用 `2 * senderRelaySlowRetry` 上限。普通 `Wake()` 可提前结束本地等待，重拨前仍须检查该端点的服务端截止。无提示的 503 沿用现有快慢重试节奏。分享注册、节点健康和准入共用引擎时钟，显式等待跨过 55 秒时进入等待状态。原生接收端按端点保留 HTTP/WS2E 截止，其他端点可继续重连。[recovery.go](../../../connectivity/senderrelay/recovery.go)
+   - 原生中转停服或公共日预算用尽时，在升级前向公共请求返回 `503` 和 `Retry-After: 30`。仅在预算耗尽且归属未知时查持久化的分享记录，以便重启后的 owner 分享仍能无 bearer 恢复和接收。若预算在升级之后耗尽，WS2E 拒绝帧也受硬限额约束，客户端按实际收到的响应或断连处理。[HTTP 入口](../../../relay-rust/crates/relay-native/src/http/mod.rs) · [预算归属](../../../relay-rust/crates/relay-native/src/node/budget/egress.rs) · [注册授权](../../../relay-rust/crates/relay-native/src/actor/access.rs)
 
 2. **规划输入**。`CooldownUntil` 是本地避让截止，`ServerRetryAt` 是目录端点通过 HTTP 明示的最早重试时间。规划器只读取事实，计数器留在运行时。
 
@@ -77,7 +77,7 @@ type Observation struct {
 | 其余传输失败（DNS、TCP、TLS、套接字、拨号超时等） | `transport_failure`，首次只降序，从第二个计数窗口起按 15 / 30 / 60 / 120 秒避让。 |
 | WS2E 拒绝（含 `ErrorAccessDenied`、`ErrorInvalidProof`、`ErrorAdmission`、`ErrorAccessUnavailable`）、归因不明的 HTTP 403/404 或 `ErrProtocol`、用户取消 | 保留本次注册的错误与恢复语义。WS2E 明示的等待由当前注册执行，这些结果不写入节点健康表。 |
 
-每 10 秒最多计一次失败。只有计数递增才更新 `lastCountedAt` 并计算本档冷却，同窗重复失败只可延长服务端明示的截止。从 `lastCountedAt`、`CooldownUntil`、`ServerRetryAt` 中最晚的时刻起算，静默 3 分钟后重置连败数。
+每 10 秒最多计一次失败。只有计数递增才更新 `lastCountedAt` 并计算本档冷却，同窗重复失败只可延长服务端明示的截止。从 `lastCountedAt`、`CooldownUntil`、`ServerRetryAt` 中最晚的时刻起算，静默 3 分钟后重置连败数。内部保留衰减起点，规划和诊断分别投影尚有效的软、硬截止。
 
 4. **成功与代次**。握手耗时从实际拨号计到 `Dial` 成功返回。之后的 `Admit()`、停放与关闭耗时只计入整次尝试。`AttemptSucceeded` 和 `AttemptParked` 均写入这次成功样本并清除本地连败与软冷却。
    `Observer()` 只为 `Selection.Plan.Network` 写健康表。按 `AttemptStarted` 的网络代次归属结果，首次快照 `0 → 1` 视为同一代，真实切网时清空表并忽略迟到的旧回调。配置中转仍输出注册诊断。
@@ -92,13 +92,13 @@ type Observation struct {
 | 只有 1 个 `ready`，`target == 2` | 立即拨这个节点，从 `cooled` 最多补 1 个延迟备选写入同一链接。备选到期后可注册。若首选失败、退避或等待授权，可提前越过本地软冷却。 |
 | 没有 `ready`，但有 `cooled` 且有名额 | 置 `Decision.CooldownFallback = true`。本地软冷却允许立即有限并发竞速。若全部带有效的服务端期限，保留候选，在最早期限到达时自动拨号。 |
 
-- 补位和兜底先选允许立即拨号的节点。若都须等待，先选 `ServerRetryAt` 最早者。同组内优先 `transport_failure` / `server_backoff`，再按 `CooldownUntil` 和常规顺序选择。多样性备选从同一优先组中挑选。
-- 保留 `BackupIndex(primary, candidates, policy)`。常规备选优先从 `rank > 0` 的节点选择，其余名额保留现有的未测节点探索。补入的冷却备选随链接发布，只有因冷却跳过的节点才记 `reason: "cooldown"`。[链接发布](../../../engine/internal/networkruntime/resolve.go#L14-L34) · [浏览器首次连接](../../../web/src/receiver/relay-selection/race.ts#L56-L61)
-- 等待中的备选暂不占拨号名额，也不参与活跃备选的准入竞争。只有全冷却兜底才调用 `directory.TriggerRefresh()` 唤醒后台循环。失败沿用目录退避，成功后的自动唤醒至少间隔 `MinimumBackoff`（30 秒）。未知别名仍可显式 `Refresh()`。[注册准入](../../../connectivity/relayset/admission.go#L75-L99) · [目录刷新](../../../engine/networkdirectory/directory.go#L253-L269)
+- 补位和兜底先选允许立即拨号的节点。若都须等待，先选 `ServerRetryAt` 最早者。同组内优先 `transport_failure` / `server_backoff`，再按 `CooldownUntil` 和常规顺序选择。备选在同类节点中预留区域、厂商多样性，允许 1 秒以内的到期偏差。全冷却兜底忽略本地截止之间的偏差，实际拨号仍遵守各端点的服务端期限。
+- 保留 `BackupIndex(primary, candidates, policy)`。常规备选优先从 `rank > 0` 的节点选择，其余名额保留现有的未测节点探索。补入的冷却备选随链接发布，只有因冷却跳过的节点才记 `reason: "cooldown"`。[链接发布](../../../engine/internal/networkruntime/resolve.go) · [浏览器首次连接](../../../web/src/receiver/relay-selection/race.ts)
+- 等待中的备选暂不占拨号名额，也不参与活跃备选的准入竞争。只有全冷却兜底才调用 `directory.TriggerRefresh()` 唤醒后台循环。失败沿用目录退避，成功后的自动唤醒至少间隔 `MinimumBackoff`（30 秒）。未知别名仍可显式 `Refresh()`。[注册准入](../../../connectivity/relayset/admission.go) · [目录刷新](../../../engine/networkdirectory/directory.go)
 
 ### 3.3 带宽分档 + 实测耗时分桶 + 冷启动哈希打散
 
-调整 [connectivity/relayplan/plan.go](../../../connectivity/relayplan/plan.go) 的 `less()` 比较链，并用命名常量定义阈值：
+调整 [connectivity/relayplan/selection.go](../../../connectivity/relayplan/selection.go) 的 `less()` 比较链，并用命名常量定义阈值：
 
 ```go
 const (
@@ -130,13 +130,13 @@ const (
 
 ### 步骤 1：重构 `connectivity/relayplan` 核心规划与排序策略
 
-- `relayplan.Build()` 实现 §3.2 的槽位规则和 §3.3 的比较链，`networkruntime.New` 接收引擎已生成的随机身份作为 `SelectionSeed`。将延迟备选及其拨号条件传给目录注册协调器。[规划器](../../../connectivity/relayplan/plan.go) · [引擎装配](../../../engine/engine.go#L131-L162) · [目录注册协调器](../../../connectivity/relayset/admission.go)
+- `relayplan.Build()` 实现 §3.2 的槽位规则和 §3.3 的比较链，`networkruntime.New` 接收引擎已生成的随机身份作为 `SelectionSeed`。将延迟备选及其拨号条件传给目录注册协调器。[规划器](../../../connectivity/relayplan/plan.go) · [引擎装配](../../../engine/engine.go) · [目录注册协调器](../../../connectivity/relayset/admission.go)
 - 规划和准入测试覆盖健康候选充足、只剩一个、全冷却、共享槽位上限及备选解冻。排序测试覆盖多样性、耗时桶与同级种子打散。
 
 ### 步骤 2：接入握手退避与 `networkruntime` 健康表
 
 - `transport/relayv2`、`connectivity/senderrelay` 和原生中转接通 §3.1 的两条拒载路径。用现有假时钟验证 `Wake()`、显式期限和无头 503，覆盖匿名预算与 owner 恢复，以及停放耗时剔除。
-- `networkruntime` 接管观测存储，通过 `engine/share.go` 将 `Selection` 交给 `Observer()`，接入目录唤醒并透传 §3.4 的决策字段。回归覆盖固定计数窗口、显式期限延长、衰减、成功重置、拒载作用域、网络代次和目录刷新节流。[分享装配](../../../engine/share.go#L83-L87) · [诊断投影](../../../engine/internal/networkruntime/diagnostics.go) · [决策结构](../../../engine/networkconfig/config.go)
+- `networkruntime` 接管观测存储，通过 `engine/share.go` 将 `Selection` 交给 `Observer()`，接入目录唤醒并透传 §3.4 的决策字段。回归覆盖固定计数窗口、显式期限延长、衰减、成功重置、拒载作用域、网络代次和目录刷新节流。[分享装配](../../../engine/share.go) · [诊断投影](../../../engine/internal/networkruntime/diagnostics.go) · [决策结构](../../../engine/networkconfig/config.go)
 
 ---
 
@@ -154,11 +154,20 @@ const (
 
 ## 6. 本地对照测量
 
-在 Windows 回环网络上，用同一套原生中转和 Chromium 前端对比基线 `e16a108e` 与本次实现。发送进程跨分享保留观测，每次打开使用新的浏览器上下文并关闭 WebRTC。每个版本、每种场景预热 2 次，再交替采集各 24 次。
+在 Windows 回环网络上，用同一套原生中转和 Chromium 前端对比基线 `e16a108e` 与初次实现 `a3ae8762`。发送进程跨分享保留观测，每次打开使用新的浏览器上下文并关闭 WebRTC。每个版本、每种场景预热 2 次，再交替采集各 24 次。
 
 | 目录场景 | 发起分享到链接可用 P95，毫秒 | 打开链接到首个目录项可见 P95，毫秒 | 每次打开的平均 WebSocket 握手数 |
 |---|---:|---:|---:|
 | 两台健康中转 | 51.6 → 53.4 | 169.9 → 174.6 | 3 → 3 |
 | 两台健康，另有一台返回 503 并要求等待 30 秒 | 50.5 → 50.9 | 164.7 → 171.6 | 5 → 3 |
 
-箭头左侧为基线，右侧为本次实现。分享计时从调用 `Engine.StartShare` 到链接生成。浏览器握手统计截至首个目录项可见。503 场景每次少发起 2 次握手，两种场景的本机 P95 均略有上升。
+箭头左侧为基线，右侧为初次实现。分享计时从调用 `Engine.StartShare` 到链接生成。浏览器握手统计截至首个目录项可见。503 场景每次少发起 2 次握手，两种场景的本机 P95 均略有上升。
+
+随后以 `a3ae8762` 为基线复测本次修复。每个版本使用对应的 Go 发送端和 Rust 中转，共用浏览器前端。两轮分别预热后交替采样 24 和 72 次，下表按每个场景、每个版本的全部 96 次计算。
+
+| 目录场景 | 分享到链接 P95，毫秒 | 打开到首个目录项 P95，毫秒 | 每次打开的平均 WebSocket 握手数 |
+|---|---:|---:|---:|
+| 两台健康中转 | 47.7 → 50.2 | 157.1 → 162.0 | 3.00 → 3.00 |
+| 两台健康，另有一台返回 503 并要求等待 30 秒 | 49.9 → 48.0 | 160.1 → 161.1 | 3.02 → 3.01 |
+
+这些是本机回环数据。健康场景的 P95 分别增加 2.6 和 4.9 毫秒，握手数相同。

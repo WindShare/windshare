@@ -28,6 +28,7 @@ type nodeHealth struct {
 type healthEntry struct {
 	relayplan.Observation
 	lastCountedAt time.Time
+	decayAnchor   time.Time
 	failures      int
 }
 
@@ -43,11 +44,15 @@ func (h *nodeHealth) advanceLocked(generation uint64) bool {
 func (r *Runtime) ServerRetryAt(identity string) time.Time {
 	generation := r.generation()
 	r.health.mu.Lock()
-	defer r.health.mu.Unlock()
-	if r.health.generation != generation {
-		return time.Time{}
+	var until time.Time
+	if r.health.generation == generation {
+		until = r.health.entries[identity].ServerRetryAt
 	}
-	return r.health.entries[identity].ServerRetryAt
+	r.health.mu.Unlock()
+	if !until.IsZero() && until.After(r.now()) {
+		return until
+	}
+	return time.Time{}
 }
 
 func (h *nodeHealth) Snapshot(generation uint64, now time.Time) []relayplan.Observation {
@@ -61,61 +66,57 @@ func (h *nodeHealth) Snapshot(generation uint64, now time.Time) []relayplan.Obse
 		if now.Sub(entry.At) > relayplan.ObservationAge {
 			delete(h.entries, identity)
 		} else {
-			facts = append(facts, entry.Observation)
+			facts = append(facts, entry.ActiveAt(now))
 		}
 	}
 	return facts
 }
 
 // RecordAttempt returns a diagnostic update only when a local or server
-// deadline changed. Each share owns its own retry clock even without a sink.
-func (h *nodeHealth) RecordAttempt(identity string, started, generation uint64, now time.Time, attempt senderrelay.Attempt) (healthEntry, bool) {
+// deadline changed. The newer sample remains authoritative for late callbacks.
+func (h *nodeHealth) RecordAttempt(identity string, started, generation uint64, now time.Time, attempt senderrelay.Attempt) (healthEntry, relayplan.CooldownReason) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if !h.advanceLocked(generation) || started != generation {
-		return healthEntry{}, false
+		return healthEntry{}, relayplan.CooldownNone
 	}
 	entry := h.entries[identity]
 	if entry.At.After(now) {
-		// Out-of-order completion cannot overwrite a newer sample, but its
-		// explicit node deadline still binds concurrent registrations.
-		if attempt.State == senderrelay.AttemptFailed && attempt.ServerRetryAt.After(entry.ServerRetryAt) &&
-			failureReason(attempt.Failure) == relayplan.CooldownServerBackoff {
-			entry.ServerRetryAt = attempt.ServerRetryAt
+		entry.Observation = entry.ActiveAt(entry.At)
+		// A late sample may extend the deadline still binding the newer sample.
+		if attempt.State == senderrelay.AttemptFailed && failureReason(attempt.Failure) == relayplan.CooldownServerBackoff && entry.extendServerRetry(attempt.ServerRetryAt, entry.At) {
 			h.entries[identity] = entry
-			return entry, true
+			return entry, relayplan.CooldownServerBackoff
 		}
-		return healthEntry{}, false
+		return entry, relayplan.CooldownNone
 	}
-	changed := false
+	entry.Observation = entry.ActiveAt(now)
+	change := relayplan.CooldownNone
 	switch attempt.State {
 	case senderrelay.AttemptSucceeded, senderrelay.AttemptParked:
 		// A concurrent success clears soft avoidance but cannot revoke an
 		// explicit HTTP deadline received by another registration.
-		server := entry.ServerRetryAt
-		entry = healthEntry{}
-		if server.After(now) {
-			entry.ServerRetryAt = server
-		}
+		entry = healthEntry{Observation: relayplan.Observation{ServerRetryAt: entry.ServerRetryAt}, decayAnchor: entry.ServerRetryAt}
 		entry.Admitted, entry.Duration = true, attempt.HandshakeDuration
 	case senderrelay.AttemptFailed:
 		reason := failureReason(attempt.Failure)
 		if reason == relayplan.CooldownNone {
-			return healthEntry{}, false
+			return healthEntry{}, relayplan.CooldownNone
 		}
 		previousCooldown := entry.CooldownUntil
 		counted := entry.countFailure(now, reason)
-		changed = entry.CooldownUntil.After(previousCooldown)
-		if reason == relayplan.CooldownServerBackoff && attempt.ServerRetryAt.After(entry.ServerRetryAt) {
-			entry.ServerRetryAt = attempt.ServerRetryAt
-			changed = true
+		if entry.CooldownUntil.After(previousCooldown) {
+			change = reason
 		}
-		if !counted && !changed {
-			return healthEntry{}, false
+		if reason == relayplan.CooldownServerBackoff && entry.extendServerRetry(attempt.ServerRetryAt, now) {
+			change = reason
+		}
+		if !counted && change == relayplan.CooldownNone {
+			return healthEntry{}, relayplan.CooldownNone
 		}
 		entry.Admitted, entry.Duration = false, 0
 	default:
-		return healthEntry{}, false
+		return healthEntry{}, relayplan.CooldownNone
 	}
 	entry.Identity, entry.NetworkGeneration, entry.At = identity, strconv.FormatUint(generation, 10), now
 	if _, known := h.entries[identity]; !known && len(h.entries) >= nodedirectory.MaximumNodes {
@@ -128,21 +129,23 @@ func (h *nodeHealth) RecordAttempt(identity string, started, generation uint64, 
 		delete(h.entries, oldest)
 	}
 	h.entries[identity] = entry
-	return entry, changed
+	return entry, change
+}
+
+func (e *healthEntry) extendServerRetry(until, now time.Time) bool {
+	if !until.After(now) || !until.After(e.ServerRetryAt) {
+		return false
+	}
+	e.ServerRetryAt = until
+	if until.After(e.decayAnchor) {
+		e.decayAnchor = until
+	}
+	return true
 }
 
 func (e *healthEntry) countFailure(now time.Time, reason relayplan.CooldownReason) bool {
-	latest := e.lastCountedAt
-	if e.CooldownUntil.After(latest) {
-		latest = e.CooldownUntil
-	}
-	if e.ServerRetryAt.After(latest) {
-		latest = e.ServerRetryAt
-	}
-	if now.Sub(latest) >= failureDecay {
+	if now.Sub(e.decayAnchor) >= failureDecay {
 		e.failures = 0
-		e.CooldownUntil, e.ServerRetryAt = time.Time{}, time.Time{}
-		e.CooldownReason = relayplan.CooldownNone
 	}
 	if e.failures > 0 && now.Sub(e.lastCountedAt) < failureCountWindow {
 		return false
@@ -152,6 +155,9 @@ func (e *healthEntry) countFailure(now time.Time, reason relayplan.CooldownReaso
 	delay := cooldownDelay(reason, e.failures)
 	if delay > 0 && now.Add(delay).After(e.CooldownUntil) {
 		e.CooldownReason, e.CooldownUntil = reason, now.Add(delay)
+	}
+	if until := now.Add(delay); until.After(e.decayAnchor) {
+		e.decayAnchor = until
 	}
 	return true
 }

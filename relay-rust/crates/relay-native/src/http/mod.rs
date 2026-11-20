@@ -17,12 +17,14 @@ use hyper::{
     Request, Response, StatusCode,
     body::{Bytes, Incoming},
     server::conn::http1,
-    service::Service,
+    service::service_fn,
 };
 use hyper_util::rt::TokioIo;
 use route::{Route, reply};
 use std::{
-    cell::RefCell, convert::Infallible, future::Future, net::SocketAddr, pin::Pin, sync::Arc,
+    convert::Infallible,
+    net::SocketAddr,
+    sync::{Arc, Mutex},
 };
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use windshare_relay_core::{identifiers::ShareId, lifecycle::ConnectionRef};
@@ -101,7 +103,7 @@ impl Ingress {
             ingress: self,
             peer,
             connection,
-            upgrade: RefCell::new(None),
+            upgrade: Mutex::new(None),
         };
         // One bounded HTTP exchange precedes ownership by the connection runtime.
         // Taking the transport back avoids detached upgrade tasks and preserves
@@ -113,14 +115,22 @@ impl Ingress {
             .header_read_timeout(None)
             .max_headers(MAX_HTTP_HEADERS)
             .max_buf_size(MAX_HTTP_HEADER_BYTES)
-            .serve_connection(TokioIo::new(stream), service)
+            .serve_connection(
+                TokioIo::new(stream),
+                service_fn(|request| service.handle(request)),
+            )
             .without_shutdown()
             .await?;
         let mut stream = parts.io.into_inner();
-        if let Some((share, admission)) = parts.service.upgrade.into_inner() {
+        let buffered = parts.read_buf;
+        if let Some((share, admission)) = service
+            .upgrade
+            .into_inner()
+            .expect("HTTP exchange finished")
+        {
             return Ok(Some(Upgrade {
                 stream,
-                buffered: parts.read_buf.to_vec(),
+                buffered: buffered.to_vec(),
                 share,
                 admission,
             }));
@@ -134,11 +144,11 @@ struct RequestService<'a> {
     ingress: &'a Ingress,
     peer: SocketAddr,
     connection: ConnectionRef,
-    upgrade: RefCell<Option<(ShareId, Arc<Admission>)>>,
+    upgrade: Mutex<Option<(ShareId, Arc<Admission>)>>,
 }
 
 impl RequestService<'_> {
-    fn upgrade(
+    async fn upgrade(
         &self,
         request: &Request<Incoming>,
         share: ShareId,
@@ -180,13 +190,21 @@ impl RequestService<'_> {
             },
             _ => return reply(StatusCode::BAD_REQUEST, "duplicate authorization header\n"),
         };
-        if self
+        match self
             .ingress
             .node
             .public_budget_refuses(share, bearer.as_ref())
+            .await
         {
-            tracing::debug!(event = "public_relay_admission_refused", ?share, connection = ?self.connection);
-            return route::unavailable("public daily relay budget exhausted\n");
+            Ok(false) => {}
+            Ok(true) => {
+                tracing::debug!(event = "public_relay_admission_refused", ?share, connection = ?self.connection);
+                return route::unavailable("public daily relay budget exhausted\n");
+            }
+            Err(error) => {
+                tracing::warn!(event = "public_relay_attribution_unavailable", ?share, connection = ?self.connection, %error);
+                return route::unavailable("relay attribution unavailable\n");
+            }
         }
         self.ingress
             .capacity
@@ -212,36 +230,34 @@ impl RequestService<'_> {
                     if let Some(bearer) = bearer {
                         admission.set_bearer(bearer);
                     }
-                    *self.upgrade.borrow_mut() = Some((share, admission));
+                    *self.upgrade.lock().expect("HTTP upgrade") = Some((share, admission));
                     response
                 },
             )
     }
 }
 
-impl Service<Request<Incoming>> for RequestService<'_> {
-    type Response = Response<ResponseBody>;
-    type Error = Infallible;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
-
-    fn call(&self, request: Request<Incoming>) -> Self::Future {
+impl RequestService<'_> {
+    async fn handle(
+        &self,
+        request: Request<Incoming>,
+    ) -> Result<Response<ResponseBody>, Infallible> {
         let path = request.uri().path();
         // A configured relay mount can share the console's /api/ prefix.
         if let Some(console) = self.ingress.node.console.get()
             && path != self.ingress.endpoint.path
             && crate::console::Console::handles(path)
         {
-            let console = console.clone();
-            return Box::pin(async move { Ok(console.handle(request).await) });
+            return Ok(console.handle(request).await);
         }
         let response = match self.ingress.route(&request) {
             Route::Reply(response) => response,
-            Route::Upgrade { share, response } => self.upgrade(&request, share, response),
+            Route::Upgrade { share, response } => self.upgrade(&request, share, response).await,
         };
         tracing::debug!(event = "http_request", connection = ?self.connection, peer = %self.peer,
             method = %request.method(), path,
             origin = ?request.headers().get_all(hyper::header::ORIGIN), status = response.status().as_u16());
-        Box::pin(std::future::ready(Ok(response)))
+        Ok(response)
     }
 }
 

@@ -63,6 +63,18 @@ type Observation struct {
 	ServerRetryAt     time.Time
 }
 
+// ActiveAt projects historical deadlines into the current scheduling decision.
+func (o Observation) ActiveAt(now time.Time) Observation {
+	if !o.CooldownUntil.After(now) {
+		o.CooldownUntil = time.Time{}
+		o.CooldownReason = CooldownNone
+	}
+	if !o.ServerRetryAt.After(now) {
+		o.ServerRetryAt = time.Time{}
+	}
+	return o
+}
+
 type Policy struct {
 	ConfiguredOnly bool
 	// Only measured pair coverage permits preferring two global nodes for a
@@ -153,7 +165,7 @@ func Build(input Input) (Plan, error) {
 				candidate.history = recentlyAdmitted
 			}
 		}
-		if input.Now.Before(fact.CooldownUntil) || input.Now.Before(fact.ServerRetryAt) {
+		if !fact.CooldownUntil.IsZero() || !fact.ServerRetryAt.IsZero() {
 			candidate.CooldownUntil, candidate.ServerRetryAt = fact.CooldownUntil, fact.ServerRetryAt
 			cooled = append(cooled, candidate)
 		} else {
@@ -175,6 +187,10 @@ func finish(plan Plan) Plan {
 }
 
 func BackupIndex(primary Candidate, candidates []Candidate, policy Policy) int {
+	return backupIndex(primary, candidates, policy, nil)
+}
+
+func backupIndex(primary Candidate, candidates []Candidate, policy Policy, eligible func(Candidate) bool) int {
 	// A healthy or unmeasured backup outranks a recent failure even if that
 	// failure has a better zone. Admission reuses the same decision after racing.
 	const (
@@ -189,6 +205,9 @@ func BackupIndex(primary Candidate, candidates []Candidate, policy Policy) int {
 		preferredZone = "cn"
 	}
 	for index, candidate := range candidates {
+		if eligible != nil && !eligible(candidate) {
+			continue
+		}
 		value := 0
 		if candidate.history != recentlyFailed {
 			value += withoutFailure

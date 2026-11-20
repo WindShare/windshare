@@ -63,13 +63,23 @@ type ReceiverRecoveryObservation struct {
 }
 
 type ReceiverRecovery struct {
-	options     ReceiverRecoveryOptions
-	mu          sync.Mutex
-	disabled    map[string]error
-	descriptor  []byte
-	terminal    error
-	attempts    map[string]uint32
-	generations map[string]uint64
+	options    ReceiverRecoveryOptions
+	mu         sync.Mutex
+	routes     map[string]*endpointRecovery
+	descriptor []byte
+	terminal   error
+}
+
+type endpointRecovery struct {
+	attempts   uint32
+	generation uint64
+	disabled   error
+	backoff    endpointBackoff
+}
+
+type endpointBackoff struct {
+	until time.Time
+	cause error
 }
 
 func NewReceiverRecovery(options ReceiverRecoveryOptions) (*ReceiverRecovery, error) {
@@ -94,7 +104,7 @@ func NewReceiverRecovery(options ReceiverRecoveryOptions) (*ReceiverRecovery, er
 			return delay - delay/spread + time.Duration(rand.Int64N(int64(2*delay/spread)+1))
 		}
 	}
-	return &ReceiverRecovery{options: options, disabled: make(map[string]error), attempts: make(map[string]uint32), generations: make(map[string]uint64)}, nil
+	return &ReceiverRecovery{options: options, routes: make(map[string]*endpointRecovery)}, nil
 }
 
 // Join has a finite default window. An explicit caller wait limit also selects
@@ -157,8 +167,8 @@ func (recovery *ReceiverRecovery) open(ctx context.Context, config ReceiverConfi
 		if err != nil {
 			return nil, err
 		}
-		delay, phase := recovery.delay(started, attempt, last)
-		recovery.observeRetry(eligible, phase, delay, last)
+		delay, phase := recovery.localRetryDelay(started, attempt, last)
+		delay = recovery.scheduleWave(eligible, phase, delay, last)
 		if window > 0 {
 			delay = min(delay, max(0, started.Add(window).Sub(recovery.options.Clock.Now())))
 		}
@@ -199,6 +209,15 @@ func (recovery *ReceiverRecovery) joinOnce(ctx, waitCtx context.Context, config 
 	return set, nil
 }
 
+func (recovery *ReceiverRecovery) routeLocked(endpoint string) *endpointRecovery {
+	route := recovery.routes[endpoint]
+	if route == nil {
+		route = &endpointRecovery{}
+		recovery.routes[endpoint] = route
+	}
+	return route
+}
+
 func (recovery *ReceiverRecovery) endpoints(endpoints []string) ([]string, error) {
 	recovery.mu.Lock()
 	defer recovery.mu.Unlock()
@@ -208,7 +227,7 @@ func (recovery *ReceiverRecovery) endpoints(endpoints []string) ([]string, error
 	eligible := make([]string, 0, len(endpoints))
 	var rejected []error
 	for _, endpoint := range endpoints {
-		if err := recovery.disabled[endpoint]; err != nil {
+		if err := recovery.routeLocked(endpoint).disabled; err != nil {
 			rejected = append(rejected, err)
 		} else {
 			eligible = append(eligible, endpoint)
@@ -224,7 +243,7 @@ func (recovery *ReceiverRecovery) allRelaysStopped(candidates []string) bool {
 	recovery.mu.Lock()
 	defer recovery.mu.Unlock()
 	for _, endpoint := range candidates {
-		rejection, ok := errors.AsType[*relayv2.RelayError](recovery.disabled[endpoint])
+		rejection, ok := errors.AsType[*relayv2.RelayError](recovery.routeLocked(endpoint).disabled)
 		if !ok || rejection == nil || rejection.Code != v2.ErrorStopped {
 			return false
 		}
@@ -249,37 +268,73 @@ func (recovery *ReceiverRecovery) validateDescriptor(object []byte) error {
 	return nil
 }
 
-func (recovery *ReceiverRecovery) rejected(endpoint string, err error) {
-	if err == nil || receiverEndpointRetryable(err) {
+func (recovery *ReceiverRecovery) recordFailure(endpoint string, err error) {
+	if err == nil {
 		return
 	}
 	recovery.mu.Lock()
-	recovery.disabled[endpoint] = err
-	recovery.mu.Unlock()
+	defer recovery.mu.Unlock()
+	route := recovery.routeLocked(endpoint)
+	if !receiverEndpointRetryable(err) {
+		route.disabled = err
+		return
+	}
+	if delay := min(relayv2.RetryAfter(err), receiverMaximumRetryDelay); delay > 0 {
+		if until := recovery.options.Clock.Now().Add(delay); until.After(route.backoff.until) {
+			route.backoff = endpointBackoff{until: until, cause: err}
+		}
+	}
 }
 
-func (recovery *ReceiverRecovery) begin(endpoint string) uint32 {
+func (recovery *ReceiverRecovery) begin(endpoint string) (uint32, error) {
 	recovery.mu.Lock()
 	defer recovery.mu.Unlock()
-	recovery.attempts[endpoint]++
-	return recovery.attempts[endpoint]
+	route := recovery.routeLocked(endpoint)
+	if route.disabled != nil {
+		return route.attempts, route.disabled
+	}
+	if route.backoff.cause != nil {
+		if route.backoff.until.After(recovery.options.Clock.Now()) {
+			return route.attempts, route.backoff.cause
+		}
+		route.backoff = endpointBackoff{}
+	}
+	route.attempts++
+	return route.attempts, nil
 }
 
-func (recovery *ReceiverRecovery) observeRetry(endpoints []string, phase ReceiverRecoveryPhase, delay time.Duration, cause error) {
+// A wave can retry as soon as any eligible route can dial. Its siblings keep
+// their own absolute deadlines across initial races and session replacement.
+func (recovery *ReceiverRecovery) scheduleWave(endpoints []string, phase ReceiverRecoveryPhase, delay time.Duration, cause error) time.Duration {
+	earliest := receiverMaximumRetryDelay
 	for _, endpoint := range endpoints {
-		recovery.mu.Lock()
-		ordinal := recovery.attempts[endpoint]
-		recovery.mu.Unlock()
-		recovery.observe(endpoint, ordinal, phase, delay, nil, cause)
+		wait := recovery.scheduleEndpointRetry(endpoint, phase, delay, nil, cause)
+		earliest = min(earliest, wait)
 	}
+	return earliest
+}
+
+func (recovery *ReceiverRecovery) scheduleEndpointRetry(endpoint string, phase ReceiverRecoveryPhase, delay time.Duration, runtime *receiversession.Runtime, cause error) time.Duration {
+	recovery.mu.Lock()
+	route := recovery.routeLocked(endpoint)
+	ordinal := route.attempts
+	if backoff := route.backoff; backoff.cause != nil {
+		if remaining := backoff.until.Sub(recovery.options.Clock.Now()); remaining > 0 {
+			delay, cause = max(delay, remaining), backoff.cause
+		}
+	}
+	recovery.mu.Unlock()
+	recovery.observe(endpoint, ordinal, phase, delay, runtime, cause)
+	return delay
 }
 
 func (recovery *ReceiverRecovery) observe(endpoint string, attempt uint32, phase ReceiverRecoveryPhase, delay time.Duration, runtime *receiversession.Runtime, err error) {
 	recovery.mu.Lock()
+	route := recovery.routeLocked(endpoint)
 	if phase == ReceiverRecoveryConnected {
-		recovery.generations[endpoint]++
+		route.generation++
 	}
-	generation := recovery.generations[endpoint]
+	generation := route.generation
 	recovery.mu.Unlock()
 	if recovery.options.Observe == nil {
 		return
@@ -292,15 +347,12 @@ func (recovery *ReceiverRecovery) observe(endpoint string, attempt uint32, phase
 	recovery.options.Observe(observation)
 }
 
-func (recovery *ReceiverRecovery) delay(started time.Time, attempt uint32, cause error) (time.Duration, ReceiverRecoveryPhase) {
+func (recovery *ReceiverRecovery) localRetryDelay(started time.Time, attempt uint32, cause error) (time.Duration, ReceiverRecoveryPhase) {
 	phase := ReceiverRecoveryRetrying
 	delay := min(receiverRetryDelay*time.Duration(uint64(1)<<min(attempt, 5)), receiverMaximumFastDelay)
 	if !recovery.options.Clock.Now().Before(started.Add(recovery.options.FastWindow)) {
 		phase = ReceiverRecoveryWaiting
 		delay = receiverSlowRetryDelay
-	}
-	if rejection, ok := errors.AsType[*relayv2.RelayError](cause); ok {
-		delay = max(delay, rejection.RetryAfter)
 	}
 	if pressure, ok := errors.AsType[*framechannel.BandwidthWaitError](cause); ok {
 		phase = ReceiverRecoveryWaiting

@@ -450,7 +450,7 @@ async fn direct_upgrade_uses_socket_ip_without_port_or_forwarded_header_bypass()
 }
 
 #[tokio::test]
-async fn exhausted_public_budget_defers_only_attributed_upgrades() {
+async fn exhausted_public_budget_refuses_unowned_upgrades() {
     use crate::node::{ContributionLimits, Settings};
     let ingress = ingress(16);
     let directory = tempfile::tempdir().unwrap();
@@ -475,8 +475,8 @@ async fn exhausted_public_budget_defers_only_attributed_upgrades() {
     assert!(response.starts_with("HTTP/1.1 503 "), "{response}");
     assert!(response.contains("retry-after: 30\r\n"), "{response}");
     assert!(refused.unwrap().is_none());
-    // The actor may still restore a persisted owner's attribution after upgrade.
     let (response, unknown) = exchange(&ingress, &format!("{UPGRADE_REQUEST}\r\n")).await;
-    assert!(response.starts_with("HTTP/1.1 101 "), "{response}");
-    assert!(unknown.unwrap().is_some());
+    assert!(response.starts_with("HTTP/1.1 503 "), "{response}");
+    assert!(response.contains("retry-after: 30\r\n"), "{response}");
+    assert!(unknown.unwrap().is_none());
 }

@@ -63,14 +63,14 @@ func (engine *Engine) StartShare(ctx context.Context, request ShareRequest) (*Sh
 	}
 	controller := share.NewController()
 	execution := share.Request{Source: request.Source, Relays: selection.Relays, ChunkSize: request.ChunkSize, Diagnostics: request.Diagnostics}
-	admissions := relayset.NewNetworkAdmissions(selection.Plan, engine.config.Now, engine.network.ServerRetryAt)
+	admissions := relayset.NewNetworkAdmissions(selection.Plan, engine.config.Clock, engine.network.ServerRetryAt)
 	injected := engine.config.Share
 	dependencies := share.Dependencies{
 		Controller: controller, RevisionCapacity: engine.revisions.Coordinator(),
 		CatalogBudget: engine.catalog, CacheBudget: engine.cache, Connectivity: engine.connectivity,
 		Prepare: injected.Prepare, PollNetwork: injected.PollNetwork,
-		Attempts: admissions.Control,
-		ICEPool:  engine.network.ICEPool,
+		Attempts: admissions.Control, Clock: engine.config.Clock,
+		ICEPool: engine.network.ICEPool,
 	}
 	if injected.Relays != nil {
 		dependencies.Relays = func(ctx context.Context, _ []string, _ relayset.SenderFactory) (share.Relays, error) {

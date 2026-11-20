@@ -31,6 +31,7 @@ func (err *WebSocketRouteError) Unwrap() error { return err.cause }
 type WebSocketDialError struct {
 	Cause      error
 	StatusCode int
+	// RetryAfter is the raw server delay. Each recovery policy bounds its own wait.
 	RetryAfter time.Duration
 }
 
@@ -41,6 +42,17 @@ func (err *WebSocketDialError) Unwrap() error {
 		return nil
 	}
 	return err.Cause
+}
+
+// RetryAfter returns the server's explicit delay for one endpoint's failed handshake.
+func RetryAfter(failure error) time.Duration {
+	if upgrade, ok := errors.AsType[*WebSocketDialError](failure); ok {
+		return upgrade.RetryAfter
+	}
+	if rejection, ok := errors.AsType[*RelayError](failure); ok {
+		return rejection.RetryAfter
+	}
+	return 0
 }
 
 func dialFailure(address string, response *http.Response, err error) error {

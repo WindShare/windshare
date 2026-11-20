@@ -187,3 +187,51 @@ func TestColdStartSeedIsStableAndExploresBeyondTheLimit(t *testing.T) {
 		t.Fatal("seed failed to spread candidate sets", visited)
 	}
 }
+
+func TestCooledBackupPreservesDiversityAcrossStaggeredFailures(t *testing.T) {
+	for _, mode := range []string{"one ready", "all soft", "all hard"} {
+		t.Run(mode, func(t *testing.T) {
+			input := Input{Now: time.Now(), NetworkGeneration: "1"}
+			for i := range MaximumNetworkCandidates + 1 {
+				node := planNode(i, "global")
+				if i == MaximumNetworkCandidates {
+					node.Zone = "cn"
+				}
+				input.Directory.Nodes = append(input.Directory.Nodes, node)
+				if mode == "one ready" && i == 0 {
+					continue
+				}
+				fact := observed(t, input, node)
+				fact.CooldownUntil = input.Now.Add(time.Minute + time.Duration(i)*time.Millisecond)
+				fact.CooldownReason = CooldownTransportFailure
+				if mode == "all hard" {
+					fact.ServerRetryAt = fact.CooldownUntil
+				}
+				input.Observations = append(input.Observations, fact)
+			}
+			plan := selected(t, input)
+			if len(plan.Network) < 2 || plan.Network[0].Alias != input.Directory.Nodes[0].Alias || plan.Network[1].Zone != "cn" {
+				t.Fatal(plan.Network)
+			}
+		})
+	}
+}
+
+func TestCandidateDeadlinesExpireIndependently(t *testing.T) {
+	input := Input{Now: time.Now(), NetworkGeneration: "1"}
+	for i := range 2 {
+		node := planNode(i, "global")
+		input.Directory.Nodes = append(input.Directory.Nodes, node)
+		fact := observed(t, input, node)
+		fact.CooldownUntil, fact.ServerRetryAt = input.Now, input.Now.Add(time.Minute)
+		if i == 1 {
+			fact.CooldownUntil, fact.ServerRetryAt = fact.ServerRetryAt, fact.CooldownUntil
+		}
+		input.Observations = append(input.Observations, fact)
+	}
+	candidates := selected(t, input).Network
+	if len(candidates) != 2 || !candidates[0].ServerRetryAt.IsZero() || !candidates[0].CooldownUntil.After(input.Now) ||
+		!candidates[1].CooldownUntil.IsZero() || !candidates[1].ServerRetryAt.After(input.Now) {
+		t.Fatal(candidates)
+	}
+}

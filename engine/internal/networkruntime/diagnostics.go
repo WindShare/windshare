@@ -52,7 +52,7 @@ func (r *Runtime) Observer(selection Selection, sink diagnostics.Sink) func(stri
 	return func(url string, attempt senderrelay.Attempt) {
 		var started uint64
 		var entry healthEntry
-		var changed bool
+		var change relayplan.CooldownReason
 		now := r.now()
 		if identity, directory := identities[url]; directory {
 			mu.Lock()
@@ -63,23 +63,29 @@ func (r *Runtime) Observer(selection Selection, sink diagnostics.Sink) func(stri
 			mu.Unlock()
 			switch attempt.State {
 			case senderrelay.AttemptSucceeded, senderrelay.AttemptParked, senderrelay.AttemptFailed:
-				entry, changed = r.health.RecordAttempt(identity, started, r.generation(), now, attempt)
+				entry, change = r.health.RecordAttempt(identity, started, r.generation(), now, attempt)
 			}
 		}
 		if !sink.Enabled() {
 			return
 		}
-		fields := attemptFields(url, attempt)
+		if entry.At.After(now) {
+			now = entry.At
+		}
+		fields := attemptFields(url, attempt, now)
 		if started != 0 {
 			fields["network_generation"] = diagnostics.Uint(started)
 		}
-		if changed {
-			reason := entry.CooldownReason
-			if !entry.CooldownUntil.After(now) {
-				reason = relayplan.CooldownServerBackoff
+		if change != relayplan.CooldownNone {
+			var delay time.Duration
+			if entry.CooldownReason == change {
+				delay = entry.CooldownUntil.Sub(now)
 			}
-			fields["cooldown_ms"] = diagnostics.Millis(max(0, entry.CooldownUntil.Sub(now)))
-			fields["cooldown_reason"] = diagnostics.Text(string(reason))
+			if change == relayplan.CooldownServerBackoff {
+				delay = max(delay, entry.ServerRetryAt.Sub(now))
+			}
+			fields["cooldown_ms"] = diagnostics.Millis(delay)
+			fields["cooldown_reason"] = diagnostics.Text(string(change))
 			fields["consecutive_failures"] = diagnostics.Int(int64(entry.failures))
 			deadlineField(fields, "server_retry_at", entry.ServerRetryAt)
 		}
@@ -87,7 +93,7 @@ func (r *Runtime) Observer(selection Selection, sink diagnostics.Sink) func(stri
 	}
 }
 
-func attemptFields(url string, attempt senderrelay.Attempt) diagnostics.Fields {
+func attemptFields(url string, attempt senderrelay.Attempt, now time.Time) diagnostics.Fields {
 	fields := diagnostics.Fields{"endpoint": diagnostics.Text(url), "attempt": diagnostics.Uint(uint64(attempt.Number)), "state": diagnostics.Uint(uint64(attempt.State)),
 		"registration_generation": diagnostics.Uint(attempt.Generation), "timeout": diagnostics.Bool(errors.Is(attempt.Failure, context.DeadlineExceeded)),
 		"stage": diagnostics.Text(attempt.Stage), "duration_ms": diagnostics.Millis(attempt.Duration), "resume": diagnostics.Bool(attempt.Resume),
@@ -98,7 +104,9 @@ func attemptFields(url string, attempt senderrelay.Attempt) diagnostics.Fields {
 	if upgrade, ok := errors.AsType[*relayv2.WebSocketDialError](attempt.Failure); ok && upgrade.StatusCode != 0 {
 		fields["http_status"] = diagnostics.Int(int64(upgrade.StatusCode))
 	}
-	deadlineField(fields, "server_retry_at", attempt.ServerRetryAt)
+	if attempt.ServerRetryAt.After(now) {
+		deadlineField(fields, "server_retry_at", attempt.ServerRetryAt)
+	}
 	if attempt.State == senderrelay.AttemptSucceeded || attempt.State == senderrelay.AttemptParked {
 		fields["handshake_ms"] = diagnostics.Millis(attempt.HandshakeDuration)
 	}

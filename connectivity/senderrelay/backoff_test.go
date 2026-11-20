@@ -113,3 +113,65 @@ func TestParkedSampleMeasuresOnlyTheSuccessfulDial(t *testing.T) {
 		}
 	})
 }
+
+func TestRecoveryAdmissionCancellationPreservesCause(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		want error
+	}{{"caller deadline", context.DeadlineExceeded}, {"stopped", ErrStopped}} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				l := newSenderRelayTestLifecycle(t, nil, nil, nil)
+				defer l.StopRecovery()
+				entered := make(chan struct{})
+				l.config.Attempts = attemptControlFunc(func(ctx context.Context) (AttemptPermit, error) {
+					close(entered)
+					<-ctx.Done()
+					return nil, ctx.Err()
+				})
+				ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+				defer cancel()
+				done := make(chan error, 1)
+				go func() { done <- l.WaitReady(ctx) }()
+				<-entered
+				if tc.want == ErrStopped {
+					l.StopRecovery()
+				}
+				if err := <-done; !errors.Is(err, tc.want) {
+					t.Fatalf("admission returned %v, want %v", err, tc.want)
+				}
+			})
+		})
+	}
+}
+
+func TestServerDelayCrossingFastWindowAnnouncesWaiting(t *testing.T) {
+	for _, hints := range [][]time.Duration{{time.Minute}, {30 * time.Second, 30 * time.Second}} {
+		synctest.Test(t, func(t *testing.T) {
+			var calls int
+			dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (Connection, error) {
+				calls++
+				if calls <= len(hints) {
+					return Connection{}, &relayv2.WebSocketDialError{StatusCode: 503, RetryAfter: hints[calls-1]}
+				}
+				return NewConnection(&senderRelayTestEndpoint{}), nil
+			}}
+			l := newSenderRelayTestLifecycle(t, nil, dialer, nil)
+			defer l.StopRecovery()
+			var waiting []Attempt
+			l.config.ObserveAttempt = func(a Attempt) {
+				if a.State == AttemptWaiting {
+					waiting = append(waiting, a)
+				}
+			}
+			start := time.Now()
+			if err := l.WaitReady(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if time.Since(start) != time.Minute || len(waiting) != 1 || !waiting[0].Slow ||
+				int(waiting[0].Number) != len(hints) || waiting[0].NextDelay != hints[len(hints)-1] || !l.serverRetryAt.IsZero() {
+				t.Fatalf("hints=%v elapsed=%v waiting=%+v deadline=%v", hints, time.Since(start), waiting, l.serverRetryAt)
+			}
+		})
+	}
+}

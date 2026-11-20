@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,7 +23,7 @@ import (
 func TestNodeHealthCountsFixedWindowsAndHonorsExplicitExtensions(t *testing.T) {
 	var health nodeHealth
 	start := time.Now()
-	fail := func(elapsed, retry time.Duration) (healthEntry, bool) {
+	fail := func(elapsed, retry time.Duration) (healthEntry, relayplan.CooldownReason) {
 		now := start.Add(elapsed)
 		a := senderrelay.Attempt{State: senderrelay.AttemptFailed, Failure: &relayv2.WebSocketDialError{StatusCode: http.StatusServiceUnavailable}}
 		if retry > 0 {
@@ -31,18 +32,18 @@ func TestNodeHealthCountsFixedWindowsAndHonorsExplicitExtensions(t *testing.T) {
 		return health.RecordAttempt("a", 1, 1, now, a)
 	}
 	first, changed := fail(0, time.Minute)
-	if !changed || first.failures != 1 || first.CooldownUntil.Sub(start) != 15*time.Second {
+	if changed != relayplan.CooldownServerBackoff || first.failures != 1 || first.CooldownUntil.Sub(start) != 15*time.Second {
 		t.Fatal(first)
 	}
 	extension, changed := fail(9*time.Second, time.Minute)
-	if !changed || extension.failures != 1 || extension.lastCountedAt != start || extension.CooldownUntil != first.CooldownUntil {
+	if changed != relayplan.CooldownServerBackoff || extension.failures != 1 || extension.lastCountedAt != start || extension.CooldownUntil != first.CooldownUntil {
 		t.Fatal(extension)
 	}
-	if _, changed = fail(9*time.Second, 30*time.Second); changed {
+	if _, changed = fail(9*time.Second, 30*time.Second); changed != relayplan.CooldownNone {
 		t.Fatal("duplicate extended local backoff")
 	}
 	second, changed := fail(10*time.Second, 0)
-	if !changed || second.failures != 2 || second.CooldownUntil.Sub(start) != 40*time.Second || second.ServerRetryAt != extension.ServerRetryAt {
+	if changed != relayplan.CooldownServerBackoff || second.failures != 2 || second.CooldownUntil.Sub(start) != 40*time.Second || second.ServerRetryAt != extension.ServerRetryAt {
 		t.Fatal(second)
 	}
 	// The server deadline is later than both the last count and local cooldown.
@@ -72,7 +73,7 @@ func TestHealthBackoffLaddersAndSuccessfulPark(t *testing.T) {
 		for i, seconds := range tc.seconds {
 			at := now.Add(time.Duration(i) * failureCountWindow)
 			e, changed := h.RecordAttempt("node", 1, 1, at, senderrelay.Attempt{State: senderrelay.AttemptFailed, Failure: tc.failure})
-			if e.failures != i+1 || changed != (seconds > 0) || e.Admitted {
+			if e.failures != i+1 || (changed == tc.reason) != (seconds > 0) || e.Admitted {
 				t.Fatal(e)
 			}
 			if seconds > 0 && (e.CooldownUntil.Sub(at) != time.Duration(seconds)*time.Second || e.CooldownReason != tc.reason) {
@@ -175,5 +176,70 @@ func TestObserverProjectsOnlyDirectoryAttemptsAcrossNetworkChanges(t *testing.T)
 	r.health.Snapshot(1, now)
 	if newFacts := r.health.Snapshot(2, now); len(newFacts) != 1 || newFacts[0].Duration != time.Millisecond {
 		t.Fatal(newFacts)
+	}
+}
+
+func TestDelayedCallbacksOnlyExtendDeadlinesBeyondTheLatestSample(t *testing.T) {
+	var h nodeHealth
+	start := time.Now()
+	latest := start.Add(time.Second)
+	h.RecordAttempt("node", 1, 1, latest, senderrelay.Attempt{State: senderrelay.AttemptSucceeded})
+	fail := senderrelay.Attempt{State: senderrelay.AttemptFailed, Failure: &relayv2.WebSocketDialError{StatusCode: 503}}
+	for _, elapsed := range []time.Duration{-time.Second, time.Millisecond, time.Second} {
+		fail.ServerRetryAt = start.Add(elapsed)
+		if _, change := h.RecordAttempt("node", 1, 1, start, fail); change != relayplan.CooldownNone {
+			t.Fatalf("expired hint changed a newer success: %+v", fail)
+		}
+	}
+	fail.ServerRetryAt = latest.Add(time.Minute)
+	var workers sync.WaitGroup
+	for i := range 16 {
+		workers.Go(func() {
+			attempt := fail
+			attempt.ServerRetryAt = attempt.ServerRetryAt.Add(-time.Duration(i) * time.Millisecond)
+			h.RecordAttempt("node", 1, 1, start, attempt)
+			h.Snapshot(1, latest)
+		})
+	}
+	workers.Wait()
+	entry := h.Snapshot(1, latest)[0]
+	if !entry.Admitted || entry.At != latest || entry.ServerRetryAt != fail.ServerRetryAt {
+		t.Fatal(entry)
+	}
+	if fact := h.Snapshot(1, fail.ServerRetryAt)[0]; !fact.ServerRetryAt.IsZero() {
+		t.Fatal(fact)
+	}
+}
+
+func TestAttemptDiagnosticsDistinguishLocalReasonFromServerExtension(t *testing.T) {
+	r := fixtureRuntime(t)
+	now := r.now()
+	r.now = func() time.Time { return now }
+	selection, err := r.Plan(t.Context(), relayprofile.Plan(nil), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	node := selection.Plan.Network[0]
+	stream, _ := diagnostics.NewStream(8, nil)
+	defer stream.Close()
+	observe := r.Observer(selection, stream.Sink())
+	observe(node.URL, senderrelay.Attempt{State: senderrelay.AttemptStarted})
+	<-stream.Records()
+	hint, _ := networkendpoint.WebSocketBaseHint("https://relay.example/v2/ws")
+	observe(node.URL, senderrelay.Attempt{State: senderrelay.AttemptFailed, Failure: &relayv2.WebSocketRouteError{BaseHint: hint}})
+	<-stream.Records()
+	now = now.Add(time.Second)
+	hard := now.Add(30 * time.Second)
+	observe(node.URL, senderrelay.Attempt{State: senderrelay.AttemptFailed, Failure: &relayv2.WebSocketDialError{StatusCode: 503}, ServerRetryAt: hard})
+	if fields := (<-stream.Records()).Payload(); fields.Get("cooldown_reason").Text() != "server_backoff" || fields.Get("cooldown_ms").Uint() != 30000 {
+		t.Fatal(fields)
+	}
+	now = hard
+	if !r.ServerRetryAt(node.Identity).IsZero() {
+		t.Fatal("admission retained an expired server deadline")
+	}
+	observe(node.URL, senderrelay.Attempt{State: senderrelay.AttemptFailed, Failure: context.DeadlineExceeded})
+	if fields := (<-stream.Records()).Payload(); fields.Get("server_retry_at").Present() {
+		t.Fatal(fields)
 	}
 }

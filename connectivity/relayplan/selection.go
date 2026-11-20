@@ -15,11 +15,10 @@ const (
 type selectionOrder struct {
 	facts      map[string]Observation
 	seedPrefix string
-	now        time.Time
 }
 
 func newSelectionOrder(input Input) selectionOrder {
-	order := selectionOrder{facts: make(map[string]Observation), now: input.Now}
+	order := selectionOrder{facts: make(map[string]Observation)}
 	if input.SelectionSeed != "" {
 		order.seedPrefix = input.SelectionSeed + "|" + input.NetworkGeneration + "|"
 	}
@@ -28,7 +27,7 @@ func newSelectionOrder(input Input) selectionOrder {
 			continue
 		}
 		if previous, ok := order.facts[fact.Identity]; !ok || fact.At.After(previous.At) {
-			order.facts[fact.Identity] = fact
+			order.facts[fact.Identity] = fact.ActiveAt(input.Now)
 		}
 	}
 	return order
@@ -68,7 +67,7 @@ func (o selectionOrder) less(a, b Candidate) bool {
 // A diversity reservation may break a tie within one retry priority. It must
 // never displace a dialable fallback in favor of a server that asked us to wait.
 func (o selectionOrder) retryPriority(a, b Candidate) int {
-	left, right := a.ServerRetryAt.After(o.now), b.ServerRetryAt.After(o.now)
+	left, right := !a.ServerRetryAt.IsZero(), !b.ServerRetryAt.IsZero()
 	switch {
 	case left && !right:
 		return 1
@@ -104,11 +103,7 @@ func (o selectionOrder) selectNetwork(plan *Plan, available int, ready, cooled [
 		cooled = cooled[1:]
 	}
 	if len(plan.Network) > 0 && len(plan.Network) < target && len(cooled) > 0 {
-		n := 1
-		for n < len(cooled) && o.retryPriority(cooled[0], cooled[n]) == 0 {
-			n++
-		}
-		index := BackupIndex(plan.Network[0], cooled[:n], plan.Policy)
+		index := o.cooledBackup(plan.Network[0], cooled, plan.Policy, plan.Decision.CooldownFallback)
 		plan.Network = append(plan.Network, cooled[index])
 		cooled = slices.Delete(cooled, index, index+1)
 	}
@@ -123,9 +118,30 @@ func (o selectionOrder) selectNetwork(plan *Plan, available int, ready, cooled [
 	}
 }
 
+// Local expiry jitter of less than one retry second does not justify losing
+// an independent route. In all-soft fallback those local deadlines do not gate any dial.
+const backupExpiryTolerance = time.Second
+
+func (o selectionOrder) cooledBackup(primary Candidate, cooled []Candidate, policy Policy, fallback bool) int {
+	if len(cooled) == 1 {
+		return 0
+	}
+	first := cooled[0]
+	rejected := o.facts[first.Identity].CooldownReason == CooldownNodeRejected
+	return backupIndex(primary, cooled, policy, func(candidate Candidate) bool {
+		return candidate.ServerRetryAt.IsZero() == first.ServerRetryAt.IsZero() &&
+			(o.facts[candidate.Identity].CooldownReason == CooldownNodeRejected) == rejected &&
+			candidate.ServerRetryAt.Sub(first.ServerRetryAt) <= backupExpiryTolerance &&
+			(fallback || candidate.CooldownUntil.Sub(first.CooldownUntil) <= backupExpiryTolerance)
+	})
+}
+
 func selectReady(ready []Candidate, available int, policy Policy) []Candidate {
-	if len(ready) <= 1 || available == 1 {
-		return ready[:min(available, len(ready))]
+	if len(ready) <= 1 {
+		return ready
+	}
+	if available == 1 {
+		return slices.Clone(ready[:1])
 	}
 	primary, rest := ready[0], ready[1:]
 	backup := BackupIndex(primary, rest, policy)

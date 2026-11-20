@@ -13,6 +13,7 @@ import (
 	"github.com/windshare/windshare/core/diagnostics"
 
 	"github.com/windshare/windshare/connectivity/nativepeer"
+	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/core/liveshare"
@@ -80,8 +81,8 @@ type Engine struct {
 
 func New(config Config) (*Engine, error) {
 	config.TURN = config.TURN.Clone()
-	if config.Now == nil {
-		config.Now = time.Now
+	if config.Clock == nil {
+		config.Clock = senderrelay.SystemClock{}
 	}
 	if config.Random == nil {
 		config.Random = rand.Reader
@@ -107,7 +108,7 @@ func New(config Config) (*Engine, error) {
 	if config.CacheBytes == 0 {
 		config.CacheBytes = contentflow.DefaultProcessBlockCacheBytes
 	}
-	connectivity, err := nativeconnectivity.NewCapacity(nativepeer.AdmissionClock{Now: config.Now})
+	connectivity, err := nativeconnectivity.NewCapacity(nativepeer.AdmissionClock{Now: config.Clock.Now})
 	if err != nil {
 		return nil, err
 	}
@@ -137,7 +138,7 @@ func New(config Config) (*Engine, error) {
 	}
 	turnDependencies := config.TURNDependencies
 	if turnDependencies.Now == nil {
-		turnDependencies.Now = config.Now
+		turnDependencies.Now = config.Clock.Now
 	}
 	turn, err := turnruntime.New(config.TURN, turnDependencies)
 	if err != nil {
@@ -149,7 +150,7 @@ func New(config Config) (*Engine, error) {
 		config.RelaySetup.Cache = turnDependencies.Cache
 	}
 	engineID := hex.EncodeToString(identity[:])
-	network, err := networkruntime.New(config.Network, config.Now, engineID)
+	network, err := networkruntime.New(config.Network, config.Clock.Now, engineID)
 	if err != nil {
 		_ = turn.Close()
 		_ = receiveCapacity.Close()
@@ -192,7 +193,7 @@ func startWorkflow[T any](engine *Engine, ctx context.Context, workflow appobs.W
 	}
 	workflowName, _ := workflow.Name()
 	current, err := task.Start(ctx, task.Config[T]{
-		ID: id, Now: engine.config.Now, Random: engine.random,
+		ID: id, Now: engine.config.Clock.Now, Random: engine.random,
 		Diagnostics:         diagnosticSink.Bind(diagnostics.Scope{EngineID: engine.identity, TaskID: string(id), Workflow: workflowName}),
 		CleanupTimeout:      engine.config.CleanupTimeout,
 		ObservationCapacity: engine.config.ObservationCapacity,

@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -245,5 +246,44 @@ func TestAutomaticRefreshCoalescesAndRetainsFailureBackoff(t *testing.T) {
 		offline.Store(false)
 		time.Sleep(time.Nanosecond)
 		expect(6)
+	})
+}
+
+func TestCloseJoinsRefreshDuringConcurrentRequests(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		config := signing().config()
+		config.Mirrors = []string{"https://mirror.example/network"}
+		entered, release := make(chan struct{}), make(chan struct{})
+		var calls atomic.Int32
+		config.Fetch = func(ctx context.Context, _ string) ([]byte, error) {
+			calls.Add(1)
+			close(entered)
+			<-ctx.Done()
+			<-release
+			return nil, ctx.Err()
+		}
+		d, err := New(config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		<-entered
+		var callers sync.WaitGroup
+		for range 16 {
+			callers.Go(func() { _ = d.Refresh(t.Context()) })
+		}
+		closed := make(chan struct{})
+		go func() { d.Close(); close(closed) }()
+		synctest.Wait()
+		select {
+		case <-closed:
+			t.Fatal("Close returned before the fetch released its resources")
+		default:
+		}
+		close(release)
+		<-closed
+		callers.Wait()
+		if err := d.Refresh(t.Context()); !errors.Is(err, context.Canceled) || calls.Load() != 1 {
+			t.Fatalf("post-close refresh=%v calls=%d", err, calls.Load())
+		}
 	})
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/windshare/windshare/connectivity/senderrelay"
 	"io"
 	"strings"
 	"sync"
@@ -33,7 +34,7 @@ func newTestEngine(t *testing.T, config Config) *Engine {
 }
 
 func TestApplicationCloseJoinsTasksWithIndependentCleanup(t *testing.T) {
-	application := newTestEngine(t, Config{Now: func() time.Time { return time.Unix(123, 0) }})
+	application := newTestEngine(t, Config{Clock: engineTestClock{now: func() time.Time { return time.Unix(123, 0) }}})
 	const count = 3
 	started := make(chan struct{}, count)
 	cleaning := make(chan struct{}, count)
@@ -243,3 +244,10 @@ func TestReceiveFacadeSettlesInvalidRequestAndClosesAdmission(t *testing.T) {
 		t.Fatalf("closed relay cancellation = %v", err)
 	}
 }
+
+type engineTestClock struct {
+	senderrelay.SystemClock
+	now func() time.Time
+}
+
+func (c engineTestClock) Now() time.Time { return c.now() }

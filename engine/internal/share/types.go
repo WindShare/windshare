@@ -93,6 +93,7 @@ type Relay interface {
 }
 
 type Dependencies struct {
+	Clock            senderrelay.Clock
 	TURN             turnpath.Accounts
 	Control          task.Control
 	Controller       *Controller
