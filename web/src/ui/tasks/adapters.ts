@@ -100,9 +100,9 @@ export function retainedTaskFacts(
 }
 
 function completenessFromFacts(state: ReceiveLifecycleState, progress: ReceiverProgress | null): TaskCompleteness {
-  if (state.kind === 'resumable-start') return 'incomplete'
+  // Paused receives remain resumable rather than finalized partial archives.
+  if (state.kind === 'resumable-start' || state.kind === 'resumable-receive') return 'incomplete'
   if (state.contentWarning !== undefined || state.kind === 'partial-directory') return 'partial'
-  if (state.kind === 'resumable-receive') return 'incomplete'
   if (progress !== null && (progress.fileErrors > 0 || progress.selectionErrors > 0 ||
       progress.failedDirectories > 0 || progress.discovery === 'failed')) return 'partial'
   // Publication proves that an artifact is ready. Its retained warning separately records selection omissions.

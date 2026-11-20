@@ -25,7 +25,7 @@ import {
 } from '../../transfer/checkpoint-schedule'
 import { ZipCapacityWindow } from './capacity-window'
 import { completeZipEntryCrc } from './crc-ranges'
-import type { ProgressiveZipArchive } from './archive'
+import { isTerminalSourceRevisionFaultCode, type ProgressiveZipArchive } from './archive'
 
 const CONCURRENT_FILE_PIPELINES = 4
 const WRITE_BUDGET_BYTES = 8n * 1024n * 1024n
@@ -195,11 +195,18 @@ function createZipFileOutput(input: {
             if (completeZipEntryCrc(current.ranges, revision.exactSize) === undefined) {
               throw new Error('ZIP final checkpoint does not cover the opened revision')
             }
+            missingFiles.delete(entryId)
             finish()
             return new VerifiedFinalOutputFile(ownership, revision, revision.exactSize)
           },
           recordSourceFailure: async fault => {
-            await archive.markRevisionFailure(entryId, fault.code)
+            if (isTerminalSourceRevisionFaultCode(fault.code)) {
+              await archive.markRevisionFailure(entryId, fault.code)
+            } else {
+              // Persist already-written ranges without tainting the entry when recovery only
+              // hit a retry limit, expired a lease, or lacked comparison metadata.
+              await archive.checkpoint('zip-source-unavailable')
+            }
             recordMissingFile(missingFiles, entryId, request.logicalArtifactPath, fault)
           },
           retire: async () => {
@@ -250,13 +257,17 @@ function requirePausedZipEntry(
 }
 
 function recordMissingFile(files: Map<string, MissingContentFile>, entryId: string, path: readonly string[], error: unknown): void {
-  if (files.size >= MAX_CONTENT_WARNING_FILES) return
+  if (!files.has(entryId) && files.size >= MAX_CONTENT_WARNING_FILES) return
   const failure = normalizeFileTransferFailure(error)
-  const fault = failure.kind === 'fault' ? failure.fault : undefined
+  if (failure.kind === 'canceled') return
+  const fault = failure.fault
   let reason: MissingContentFile['reason'] = 'file-failed'
-  if (fault?.domain === FaultDomain.Source) {
-    reason = fault.code === SourceFaultCode.RevisionChanged || fault.code === SourceFaultCode.RevisionInvalidated
-      ? 'source-changed' : 'source-unavailable'
+  if (fault.domain === FaultDomain.Source) {
+    if (fault.code === SourceFaultCode.RevisionChanged || fault.code === SourceFaultCode.RevisionInvalidated) {
+      reason = 'source-changed'
+    } else if (fault.code === SourceFaultCode.Permanent) {
+      reason = 'source-unavailable'
+    }
   }
   files.set(entryId, { path, reason })
 }
@@ -288,6 +299,7 @@ async function openZipRevision(
   } catch (error) {
     const failure = normalizeFileTransferFailure(error)
     if (failure.kind === 'fault' && failure.fault.domain === FaultDomain.Source &&
+        isTerminalSourceRevisionFaultCode(failure.fault.code) &&
         await archive.findCommittedEntry(entryId) !== undefined) {
       await archive.markRevisionFailure(entryId, failure.fault.code)
     }

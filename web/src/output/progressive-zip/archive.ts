@@ -27,6 +27,18 @@ const ZIP_LAYOUT_FROZEN = 'ZIP entry layout is frozen for finalization'
 
 export type ZipObjectCapacity = ObjectWriteBatchCapacity
 
+export type TerminalSourceRevisionFaultCode =
+  | typeof SourceFaultCode.RevisionChanged
+  | typeof SourceFaultCode.RevisionInvalidated
+  | typeof SourceFaultCode.Permanent
+
+/** Transient availability or missing comparison evidence must not taint retained entries as unusable revisions. */
+export function isTerminalSourceRevisionFaultCode(code: SourceFaultCode): code is TerminalSourceRevisionFaultCode {
+  return code === SourceFaultCode.RevisionChanged ||
+    code === SourceFaultCode.RevisionInvalidated ||
+    code === SourceFaultCode.Permanent
+}
+
 export interface ProgressiveZipInput {
   readonly store: TaskCheckpointStore
   readonly coordinator: ObjectCheckpointCoordinator
@@ -333,14 +345,14 @@ export class ProgressiveZipArchive {
     })
   }
 
-  markRevisionFailure(entryId: string, reason: SourceFaultCode): Promise<void> {
+  markRevisionFailure(entryId: string, reason: TerminalSourceRevisionFaultCode): Promise<void> {
     return this.#input.coordinator.checkpointFromPlan(() => this.#checkpoint.artifactState === 'receiving'
       ? { kind: 'commit', reason: REVISION_FAILURE_CHECKPOINT,
           commit: async () => this.#commitRevisionFailure(await this.entry(entryId), reason) }
       : { kind: 'rejected', cause: new Error(ZIP_LAYOUT_FROZEN) })
   }
 
-  async #commitRevisionFailure(entry: TaskEntry, reason: SourceFaultCode): Promise<void> {
+  async #commitRevisionFailure(entry: TaskEntry, reason: TerminalSourceRevisionFaultCode): Promise<void> {
     await this.#commit({}, [{ ...entry, revisionFailure: reason }])
     this.#trace('zip_revision_unavailable', { entryId: entry.entryId, path: entry.path.join('/'), reason })
   }

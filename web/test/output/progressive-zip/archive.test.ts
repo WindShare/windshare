@@ -258,7 +258,8 @@ describe('progressive ZIP settlement and cancellation', () => {
 describe('progressive native ZIP missing-file results', () => {
   it.each([
     { code: SourceFaultCode.RevisionChanged, reason: 'source-changed', rejectWarning: false },
-    { code: SourceFaultCode.Unavailable, reason: 'source-unavailable', rejectWarning: false },
+    { code: SourceFaultCode.Permanent, reason: 'source-unavailable', rejectWarning: false },
+    { code: SourceFaultCode.Unavailable, reason: 'file-failed', rejectWarning: false },
     { code: SourceFaultCode.RevisionChanged, reason: 'source-changed', rejectWarning: true },
   ] as const)('keeps discovery open and retains warning for unallocated $code failures across recovery (rejected commit: $rejectWarning)', async test => {
     const files = [fileEntry(identity(61), 'a.txt', 3n), fileEntry(identity(62), 'b.txt', 4n),
@@ -397,7 +398,7 @@ describe('progressive native ZIP missing-file results', () => {
       kind: 'partial-zip', completedFileCount: 1n, selectedFileCount: 3n,
       missingFiles: [
         { path: ['windshare', partial.name], reason: 'source-changed' },
-        { path: ['windshare', unallocated.name], reason: 'source-unavailable' },
+        { path: ['windshare', unallocated.name], reason: 'file-failed' },
       ],
     })
     const recovered = await verifyProgressiveZipRecovery(f.store, firstArchive.state.object, first.lifecycle)
@@ -509,7 +510,7 @@ describe('progressive native ZIP missing-file results', () => {
     await scanning.promise
     const lateNew = expect(admit(archive, 'late', 1n)).rejects.toThrow('frozen')
     const lateExisting = expect(admit(archive, 'a', 2n)).rejects.toThrow('frozen')
-    const lateFailure = expect(archive.markRevisionFailure('a', SourceFaultCode.Unavailable)).rejects.toThrow('frozen')
+    const lateFailure = expect(archive.markRevisionFailure('a', SourceFaultCode.Permanent)).rejects.toThrow('frozen')
     release.resolve()
     const [sealed] = await Promise.all([finishing, lateNew, lateExisting, lateFailure])
     expect(sealed.artifactState).toBe('sealed')
@@ -652,7 +653,7 @@ describe('progressive ZIP readmission', () => {
     })
     expect(await archive.committedEntry(blockedId)).toEqual(retained)
     expect(archive.state.contentWarning).toMatchObject({
-      missingFiles: [{ path: ['windshare', blocked.name], reason: 'source-unavailable' }],
+      missingFiles: [{ path: ['windshare', blocked.name], reason: 'file-failed' }],
     })
   })
 
@@ -920,7 +921,7 @@ describe('progressive native ZIP archive', () => {
     }).run()
     expect(first.worker.status).not.toBe('Succeeded')
     const retainedB = await archive.committedEntry(`file:${b.idText}`)
-    expect(retainedB.revisionFailure).toBe(code)
+    expect(retainedB.revisionFailure).toBe(code === SourceFaultCode.Unavailable ? undefined : code)
     expect(retainedB.ranges.map(r => [r.start, r.end])).toEqual([[0n, 2n]])
     expect((await archive.committedEntry(`file:${a.idText}`)).revisionFailure).toBeUndefined()
     await archive.close()

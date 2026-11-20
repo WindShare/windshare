@@ -23,8 +23,9 @@ export function presentTask(facts: TaskFacts): TaskPresentation {
   const progress = presentTaskProgress(facts)
   const showProgress = ['preparing', 'downloading', 'waiting', 'paused', 'finishing'].includes(copy.stage)
   if (!showProgress && progress !== null) details.push(progress.label, ...progress.details)
-  if (facts.lifecycle.contentWarning !== undefined) details.unshift(...contentWarningDetails(facts.lifecycle.contentWarning))
-  else if (facts.completeness === 'partial') details.unshift('Partial result: some selected items are missing or unfinished.')
+  if (facts.lifecycle.contentWarning !== undefined) {
+    details.unshift(...contentWarningDetails(facts.lifecycle.contentWarning, facts.lifecycle.kind === 'resumable-receive'))
+  } else if (facts.completeness === 'partial') details.unshift('Partial result: some selected items are missing or unfinished.')
   if (facts.fidelity !== null) {
     const count = facts.fidelity.replacementCount
     details.push(`${count} ${count === 1 ? 'filename was' : 'filenames were'} adjusted for this device.`)
@@ -59,15 +60,23 @@ export function presentTask(facts: TaskFacts): TaskPresentation {
   })
 }
 
-function contentWarningDetails(warning: ReceiveContentWarning): readonly string[] {
+function contentWarningDetails(warning: ReceiveContentWarning, paused: boolean): readonly string[] {
   const missing = warning.selectedFileCount - warning.completedFileCount
-  const details = [`Partial result: ${warning.completedFileCount}/${warning.selectedFileCount} files received; ${missing} not included in the ZIP.`]
+  const details = [paused
+    ? `${warning.completedFileCount}/${warning.selectedFileCount} files received; ${missing} unfinished.`
+    : `Partial result: ${warning.completedFileCount}/${warning.selectedFileCount} files received; ${missing} not included in the ZIP.`]
   for (const file of warning.missingFiles) {
     const reason = MISSING_FILE_DESCRIPTIONS[file.reason]
-    details.push(`${file.path.join('/')}: ${reason} Not included in the ZIP.`)
+    details.push(paused
+      ? `${file.path.join('/')}: ${reason}`
+      : `${file.path.join('/')}: ${reason} Not included in the ZIP.`)
   }
   const additional = missing - BigInt(warning.missingFiles.length)
-  if (additional > 0n) details.push(`${additional} additional missing ${additional === 1n ? 'file is' : 'files are'} not listed.`)
+  if (additional > 0n) {
+    const noun = additional === 1n ? 'file is' : 'files are'
+    const label = paused ? 'unfinished' : 'missing'
+    details.push(`${additional} additional ${label} ${noun} not listed.`)
+  }
   return details
 }
 
