@@ -26,7 +26,7 @@ func Describe(value account.Snapshot) string {
 		}
 		return "Setting up official-service access…"
 	case account.RefreshRequired:
-		return "Official-service access needs renewal. Run wind account retry to renew now."
+		return "Official-service access needs renewal. Run wind account refresh to renew now."
 	case account.Refreshing:
 		return "Refreshing account access…"
 	case account.Unavailable:
@@ -36,15 +36,42 @@ func Describe(value account.Snapshot) string {
 	case account.Ready:
 		switch value.Allowance {
 		case serviceauthority.AllowanceSpent:
+			if value.ResetAt.IsZero() {
+				return "Daily relay allowance used; transfers continue at lower priority."
+			}
 			return "Daily relay allowance used; lower priority until " + value.ResetAt.Local().Format("Jan 2 15:04 MST") + "."
 		case serviceauthority.AllowanceStale:
 			return "Relay allowance is updating; transfers continue at lower priority."
 		default:
+			if value.ResetAt.IsZero() {
+				return humanoutput.FormatBytes(value.RemainingBytes) + " relay allowance remaining."
+			}
 			return humanoutput.FormatBytes(value.RemainingBytes) + " relay allowance remaining · resets " + value.ResetAt.Local().Format("Jan 2 15:04 MST")
 		}
 	default:
 		return "Account access unavailable."
 	}
+}
+
+func IdentityLines(value account.Snapshot) []string {
+	if value.Account == "" {
+		return nil
+	}
+	lines := make([]string, 0, 6)
+	if value.Profile.Nickname.Value != "" {
+		lines = append(lines, "Nickname: "+value.Profile.Nickname.Value)
+	}
+	if value.Username != "" {
+		lines = append(lines, "Username: "+value.Username)
+	}
+	if value.Profile.Email != "" {
+		lines = append(lines, "Email: "+value.Profile.Email)
+	}
+	if value.PendingEmail.Address != "" {
+		lines = append(lines, "Pending email: "+value.PendingEmail.Address)
+	}
+	lines = append(lines, "Account: "+value.Account, "Credential: "+value.Credential)
+	return lines
 }
 
 // Watch owns the progress row only until initial publication, so transfer

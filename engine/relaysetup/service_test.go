@@ -114,7 +114,8 @@ func TestFirstRelayDoesNotAcquireFrontendAuthorityFromDiscovery(t *testing.T) {
 		return response(200, map[string]any{"version": 1, "access": "open", "relay_url": "https://open.example", "frontend_url": "https://suggested.example"})
 	})})
 	result, err := service.Run(t.Context(), Request{URL: "https://open.example", Operation: AddProfile}, nil)
-	if err != nil || result.FrontURL != "" || store.saved.FrontURL != "" || !store.saved.ConfiguredOnly || len(result.ActiveRelays) != 0 || result.Enabled {
+	if err != nil || result.FrontURL != "" || store.saved.FrontURL != "" || !store.saved.ConfiguredOnly ||
+		!slices.Equal(result.ActiveRelays, []string{"https://open.example"}) || !result.Enabled {
 		t.Fatal(result, store.saved.Config, err)
 	}
 }

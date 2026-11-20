@@ -181,3 +181,22 @@ func TestProofOfWorkAndCancellation(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestUnissuedEntitlementOmitsResetAndValidityTimestamps(t *testing.T) {
+	config, _ := accountFixture(t)
+	service := testService(t, config)
+	snapshot, _ := service.Snapshot()
+	if !snapshot.ResetAt.IsZero() || !snapshot.ValidUntil.IsZero() || !snapshot.TicketExpires.IsZero() || !snapshot.RetryAt.IsZero() {
+		t.Fatalf("unissued snapshot fabricated timestamps: %+v", snapshot)
+	}
+	encoded, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(encoded)
+	for _, field := range []string{"reset_at", "valid_until", "ticket_expires", "retry_at", "1970-01-0"} {
+		if strings.Contains(text, field) {
+			t.Fatalf("unissued snapshot JSON emitted %q: %s", field, text)
+		}
+	}
+}

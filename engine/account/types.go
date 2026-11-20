@@ -84,10 +84,10 @@ type Snapshot struct {
 	PendingEmail         PendingEmail               `json:"pending_email,omitzero"`
 	Allowance            serviceauthority.Allowance `json:"allowance"`
 	RemainingBytes       uint64                     `json:"remaining_bytes"`
-	ResetAt              time.Time                  `json:"reset_at"`
-	ValidUntil           time.Time                  `json:"valid_until"`
-	TicketExpires        time.Time                  `json:"ticket_expires"`
-	RetryAt              time.Time                  `json:"retry_at"`
+	ResetAt              time.Time                  `json:"reset_at,omitzero"`
+	ValidUntil           time.Time                  `json:"valid_until,omitzero"`
+	TicketExpires        time.Time                  `json:"ticket_expires,omitzero"`
+	RetryAt              time.Time                  `json:"retry_at,omitzero"`
 	RegistrationPermille uint16                     `json:"registration_permille,omitempty"`
 	Reason               string                     `json:"reason,omitempty"`
 }

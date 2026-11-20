@@ -11,6 +11,7 @@ import (
 	"github.com/windshare/windshare/cmd/wind/internal/networkcommand"
 	"github.com/windshare/windshare/cmd/wind/internal/observationbridge"
 	"github.com/windshare/windshare/engine"
+	"github.com/windshare/windshare/engine/account"
 	appobs "github.com/windshare/windshare/engine/observation"
 )
 
@@ -63,10 +64,10 @@ func (a *App) runShare(ctx context.Context, args []string) int {
 
 	finishAccountProgress := accountcommand.Watch(ctx, a.application.Accounts(), a.terminalOutput().canvas)
 	defer finishAccountProgress()
-	ready, readyErr := current.Ready(context.Background())
+	ready, readyErr, authRequired := awaitShareStartup(current)
 	finishAccountProgress()
 	var publicationErr error
-	if readyErr == nil {
+	if !authRequired && readyErr == nil {
 		publicationErr = a.publishEngineShare(ready, request.link, runtime, observations)
 		if publicationErr != nil {
 			// Service readiness precedes presentation. Even a partial output failure
@@ -85,7 +86,44 @@ func (a *App) runShare(ctx context.Context, args []string) int {
 		emitShareCommandFailure(runtime, ExitFailure, waitErr)
 		return ExitFailure
 	}
+	if authRequired {
+		if accounts := a.application.Accounts(); accounts != nil {
+			if snapshot, _ := accounts.Snapshot(); snapshot.State == account.RegistrationRequired || snapshot.State == account.EmailRequired {
+				a.writeCompleteLine("%s", accountcommand.Describe(snapshot))
+			}
+		}
+		emitShareKnownFailure(runtime, ExitNetwork, appobs.FailureRelayAccessDenied)
+		return ExitNetwork
+	}
 	return reportShareResult(runtime, result, publicationErr)
+}
+
+// awaitShareStartup resolves initial publication for the CLI. Unlike the
+// desktop host, a foreground terminal command cannot complete account setup
+// concurrently, so waiting when every candidate relay requires user action
+// would block the prompt indefinitely.
+func awaitShareStartup(current *engine.ShareTask) (engine.ShareReady, error, bool) {
+	for {
+		changed := current.Changes()
+		snapshot := current.Snapshot()
+		switch snapshot.Startup {
+		case engine.ShareReadyReached:
+			return snapshot.Ready, nil, false
+		case engine.ShareStartupFailed:
+			return engine.ShareReady{}, snapshot.StartupError, false
+		case engine.ShareAwaitingAuthorization:
+			if current.CancelBeforeReady() {
+				return engine.ShareReady{}, nil, true
+			}
+			// Publication or failure won the race against cancellation; return it.
+			ready, err := current.Ready(context.Background())
+			return ready, err, false
+		}
+		select {
+		case <-changed:
+		case <-current.Done():
+		}
+	}
 }
 
 func (a *App) engineShareRequest(request shareRequest, runtime *commandRuntime) engine.ShareRequest {

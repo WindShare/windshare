@@ -377,11 +377,11 @@ impl Desktop {
                     )
                     .child(
                         Self::button(
-                            "retry-account",
+                            "refresh-account",
                             locale.text(Text::RetryConnection),
                             Icon::Refresh,
                             ButtonStyle::Secondary,
-                            Action::Account(AccountAction::Retry),
+                            Action::Account(AccountAction::Refresh),
                             cx,
                         )
                         .compact()

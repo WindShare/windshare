@@ -13,7 +13,7 @@ import (
 	"github.com/windshare/windshare/engine/relaysetup"
 )
 
-func TestNativeSetupPreservesSavedRelaySelectionAndDisabledDefaults(t *testing.T) {
+func TestNativeSetupEnablesNewRelaysWhilePreservingSavedChoices(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
 		t.Run(map[bool]string{false: "disabled", true: "explicit"}[enabled], func(t *testing.T) {
 			t.Setenv(relayconfig.PathEnvironment, filepath.Join(t.TempDir(), "settings.json"))
@@ -46,11 +46,29 @@ func TestNativeSetupPreservesSavedRelaySelectionAndDisabledDefaults(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !slices.Equal(saved.ActiveRelays, initial.ActiveRelays) || saved.FrontURL != initial.FrontURL {
-				t.Fatal("setup replaced saved selection or frontend")
+			expectedActive := append(slices.Clone(initial.ActiveRelays), server.URL)
+			if !slices.Equal(saved.ActiveRelays, expectedActive) || saved.FrontURL != initial.FrontURL {
+				t.Fatalf("selection = %v (want %v), front = %q", saved.ActiveRelays, expectedActive, saved.FrontURL)
 			}
 			if len(saved.Profiles) != 2 || saved.Profiles[1].PublicURL != server.URL {
 				t.Fatal("setup did not retain the newly configured relay")
+			}
+			// Disabling the added relay and running setup again keeps it disabled.
+			if err := saved.SetEnabled(server.URL, false); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Save(saved); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := newNativeSetup(store).run(t.Context(), SetupInput{RelayURL: server.URL, RelayOperation: relaysetup.AddProfile}, nil); err != nil {
+				t.Fatal(err)
+			}
+			remerged, err := store.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(remerged.ActiveRelays, initial.ActiveRelays) || remerged.FrontURL != initial.FrontURL {
+				t.Fatalf("rediscovery re-enabled disabled relay or changed frontend: %+v", remerged)
 			}
 		})
 	}
