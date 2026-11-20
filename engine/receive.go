@@ -30,6 +30,7 @@ const (
 	ReceiveShareStopUnconfirmed     = receive.ShareStopUnconfirmed
 	ReceiveShareStopSender          = receive.ShareStopSender
 	ReceiveShareStopRelays          = receive.ShareStopRelays
+	ReceiveShareStopRecorded        = receive.ShareStopRecorded
 	ReceiveRetentionNone            = receive.RetentionNone
 	ReceiveRetentionCheckpoints     = receive.RetentionCheckpoints
 	ReceiveRetentionLiveReleased    = receive.RetentionLiveReleased

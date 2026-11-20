@@ -160,17 +160,12 @@ func Settle(input SettlementInput) (task.Completion[Result], error) {
 		// The typed reason keeps application precedence while the error tree retains
 		// diagnostic causes that may not have decided the user-visible outcome.
 		stop := shareStopSource(input.RuntimeError, input.ConnectionError, r.TerminationCause, r.SettlementFailure, r.SelectionResolutionFailure)
-		failure := resultFailure(input, class, stop)
+		failure := resultFailure(input, class)
 		if failure.Local == LocalSourceOmitted {
 			stop = ShareStopUnconfirmed
 		}
 		if stop != ShareStopUnconfirmed {
-			switch {
-			case failure.Code == FailureShareStopped:
-				class = task.FailureNetwork
-			case failure.Fault.Domain() == transferfault.DomainOutput:
-				class = task.FailureLocal
-			}
+			failure, class = stoppedShareFailure(input, failure, class)
 			result.FailureClass = class
 			if outcome == task.OutcomePaused {
 				result.Outcome = task.OutcomeFailed
@@ -223,21 +218,29 @@ func shareStopSource(causes ...error) ShareStopSource {
 	return source
 }
 
-func resultFailure(input SettlementInput, class task.FailureClass, stop ShareStopSource) Failure {
+// A stop explains a network failure. Independent usage, source and output
+// faults still tell the user why this particular attempt could not finish.
+func stoppedShareFailure(input SettlementInput, primary Failure, class task.FailureClass) (Failure, task.FailureClass) {
+	r := input.Result
+	if class == task.FailureUsage || r.SourceDriftFault.Valid() || input.CleanupError != nil {
+		return primary, class
+	}
+	if r.TerminationFault.Domain() == transferfault.DomainOutput {
+		return Failure{Fault: r.TerminationFault}, task.FailureLocal
+	}
+	if code, ok := r.SettlementFault.OutputCode(); ok && code == transferfault.OutputContract {
+		return Failure{Fault: r.SettlementFault}, task.FailureLocal
+	}
+	if class == task.FailureNetwork || r.TerminationFault.Domain() == transferfault.DomainSession {
+		return Failure{Code: FailureShareStopped}, task.FailureNetwork
+	}
+	return primary, class
+}
+
+func resultFailure(input SettlementInput, class task.FailureClass) Failure {
 	r := input.Result
 	if class == task.FailureUsage {
 		return Failure{Local: LocalSelectionMissing}
-	}
-	if stop != ShareStopUnconfirmed && !r.SourceDriftFault.Valid() && input.CleanupError == nil {
-		if r.TerminationFault.Domain() == transferfault.DomainOutput {
-			return Failure{Fault: r.TerminationFault}
-		}
-		if code, ok := r.SettlementFault.OutputCode(); ok && code == transferfault.OutputContract {
-			return Failure{Fault: r.SettlementFault}
-		}
-		if class == task.FailureNetwork || r.TerminationFault.Domain() == transferfault.DomainSession {
-			return Failure{Code: FailureShareStopped}
-		}
 	}
 	for _, f := range []transferfault.Fault{r.SourceDriftFault, r.TerminationFault, r.SettlementFault} {
 		if f.Valid() {

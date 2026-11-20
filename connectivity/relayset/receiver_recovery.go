@@ -124,11 +124,7 @@ func (recovery *ReceiverRecovery) open(ctx context.Context, config ReceiverConfi
 		return nil, err
 	}
 	started := recovery.options.Clock.Now()
-	waitCtx, cancel := context.WithCancel(ctx)
-	if window > 0 {
-		cancel()
-		waitCtx, cancel = recovery.options.TimeoutContext(ctx, window)
-	}
+	waitCtx, cancel := recovery.joinWaitContext(ctx, window)
 	defer cancel()
 	config.recovery = recovery
 	config.Clock = recovery.options.Clock
@@ -173,6 +169,13 @@ func (recovery *ReceiverRecovery) open(ctx context.Context, config ReceiverConfi
 			return nil, errors.Join(expiry, last)
 		}
 	}
+}
+
+func (recovery *ReceiverRecovery) joinWaitContext(ctx context.Context, window time.Duration) (context.Context, context.CancelFunc) {
+	if window > 0 {
+		return recovery.options.TimeoutContext(ctx, window)
+	}
+	return context.WithCancel(ctx)
 }
 
 func (recovery *ReceiverRecovery) joinOnce(ctx, waitCtx context.Context, config *ReceiverConfig) (*Receiver, error) {

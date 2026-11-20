@@ -75,32 +75,34 @@ func (r *Runtime) Resolve(capability link.Link) ([]string, func(context.Context)
 	var expanded []string
 	var failure error
 	expand := func(ctx context.Context) ([]string, error) {
-		once.Do(func() {
-			if err := r.directory.Refresh(ctx); err != nil {
-				failure = unavailable(err, networkdirectory.SnapshotUnavailable)
-				return
-			}
-			snapshot, usable := r.directory.Snapshot()
-			if !usable {
-				failure = r.noCandidates(AliasUnavailable)
-				return
-			}
-			unresolved := false
-			for _, alias := range unknown {
-				if endpoint, found := snapshot.Resolve(alias); found {
-					expanded = append(expanded, endpoint)
-				} else {
-					unresolved = true
-				}
-			}
-			expanded, failure = uniqueEndpoints(expanded)
-			if failure == nil && unresolved {
-				failure = r.noCandidates(AliasUnavailable)
-			}
-		})
+		once.Do(func() { expanded, failure = r.refreshAliases(ctx, unknown) })
 		return slices.Clone(expanded), failure
 	}
 	return known, expand, nil
+}
+
+func (r *Runtime) refreshAliases(ctx context.Context, aliases []string) ([]string, error) {
+	if err := r.directory.Refresh(ctx); err != nil {
+		return nil, unavailable(err, networkdirectory.SnapshotUnavailable)
+	}
+	snapshot, usable := r.directory.Snapshot()
+	if !usable {
+		return nil, r.noCandidates(AliasUnavailable)
+	}
+	var expanded []string
+	unresolved := false
+	for _, alias := range aliases {
+		if endpoint, found := snapshot.Resolve(alias); found {
+			expanded = append(expanded, endpoint)
+		} else {
+			unresolved = true
+		}
+	}
+	endpoints, err := uniqueEndpoints(expanded)
+	if err == nil && unresolved {
+		err = r.noCandidates(AliasUnavailable)
+	}
+	return endpoints, err
 }
 
 func uniqueEndpoints(endpoints []string) ([]string, error) {

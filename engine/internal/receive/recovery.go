@@ -10,6 +10,7 @@ import (
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/engine/internal/task"
+	"github.com/windshare/windshare/engine/output"
 )
 
 type RecoveryAction uint8
@@ -139,32 +140,16 @@ func runOperation(ctx context.Context, request Request, deps Dependencies, attem
 			retained.operation == nil || !retained.operation.Valid() {
 			return
 		}
-		completed.Value.Operation = retained.operation.Intent.OperationID()
-		switch retained.mode {
-		case OutputResumable:
-			completed.Value.Recovery.Retention = RetentionCheckpoints
-		case OutputLiveOnly:
-			completed.Value.Recovery.Retention = RetentionLiveReleased
-		}
-		control := retained.operation.Control
-		idle := control != nil && control.Idle()
-		if idle && completed.Value.Recovery.ShareStopped() && retained.mode == OutputResumable {
-			settlementCtx, cancel := deps.Control.CleanupContext()
-			err := control.RecordShareStopped(settlementCtx)
-			cancel()
-			if err != nil {
-				requireOutputInspection(&completed, err)
-			}
-		}
+		control := settleRetainedOutput(&completed, &retained, deps.Control)
 		recovery := completed.Value.Recovery
-		actions := pauseActions(recovery, idle)
+		actions := pauseActions(recovery, control != nil)
 		deps.Control.Diagnostics.Emit(diagnostics.New("receive.output_recovery_evaluated", diagnostics.Fields{
 			"operation": diagnostics.Identity(completed.Value.Operation.Bytes()), "attempt": diagnostics.Uint(attemptNumber),
 			"failure_class": diagnostics.Uint(uint64(completed.FailureClass)),
 			"reason":        diagnostics.Uint(uint64(recovery.Reason)),
 			"retention":     diagnostics.Uint(uint64(recovery.Retention)),
 			"share_stop":    diagnostics.Text(recovery.ShareStop.String()),
-			"output_idle":   diagnostics.Bool(idle), "retry_allowed": diagnostics.Bool(slices.Contains(actions, RecoveryRetry)),
+			"output_idle":   diagnostics.Bool(control != nil), "retry_allowed": diagnostics.Bool(slices.Contains(actions, RecoveryRetry)),
 		}))
 		if ctx.Err() != nil || request.OnPause == nil || len(actions) == 0 {
 			return
@@ -198,6 +183,29 @@ func runOperation(ctx context.Context, request Request, deps Dependencies, attem
 			return
 		}
 	}
+}
+
+func settleRetainedOutput(completed *task.Completion[Result], retained *getOutputPreparation, taskControl task.Control) output.OperationControl {
+	result := &completed.Value
+	result.Operation = retained.operation.Intent.OperationID()
+	switch retained.mode {
+	case OutputResumable:
+		result.Recovery.Retention = RetentionCheckpoints
+	case OutputLiveOnly:
+		result.Recovery.Retention = RetentionLiveReleased
+	}
+	control := retained.operation.Control
+	if control == nil || !control.Idle() {
+		return nil
+	}
+	if result.Recovery.ShareStopped() && retained.mode == OutputResumable {
+		ctx, cancel := taskControl.CleanupContext()
+		defer cancel()
+		if err := control.RecordShareStopped(ctx); err != nil {
+			requireOutputInspection(completed, err)
+		}
+	}
+	return control
 }
 
 func requireOutputInspection(completed *task.Completion[Result], err error) {
