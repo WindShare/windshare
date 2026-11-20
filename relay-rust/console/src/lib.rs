@@ -6,6 +6,8 @@ use windshare_relay_access::{Credential, CredentialState, Digest, Enrollment, PO
 pub mod credentials;
 
 pub const POLICY: &str = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
+pub const IMMUTABLE_CACHE_CONTROL: &str = "public, max-age=31536000, immutable";
+pub const NO_STORE_CACHE_CONTROL: &str = "no-store";
 pub const MAX_BODY_BYTES: usize = 4096;
 pub const MAX_RECORDS: usize = 1000;
 pub const MAX_ACTIVE_CREDENTIALS: usize = 1000;
@@ -18,6 +20,16 @@ const KEY_DOMAIN: &[u8] = b"windshare/access-key/v1\0";
 
 pub fn asset(path: &str) -> Option<(&'static str, &'static str)> {
     include!("../console-dist/routes.rs")
+}
+
+// Vite content-hashes every emitted file under /assets/; HTML entrypoints and
+// unhashed text documents stay uncached so deployments take effect immediately.
+pub fn asset_cache_control(path: &str) -> &'static str {
+    if path.starts_with("/assets/") {
+        IMMUTABLE_CACHE_CONTROL
+    } else {
+        NO_STORE_CACHE_CONTROL
+    }
 }
 
 pub fn text_id(bytes: &[u8]) -> String {

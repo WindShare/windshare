@@ -6,9 +6,12 @@ export { default } from '../entry.mjs';
 const TURN_HISTORY_RETENTION_MS = 3_600_000;
 
 export class AccessObject extends DurableObject {
-  constructor(ctx, env) { super(ctx, env); this.rust = new RustAccess(ctx, env); }
+  constructor(ctx, env) { super(ctx, env); this.rust = new RustAccess(ctx, env); this.fetches = 0; }
   async fetch(request) {
     const path = new URL(request.url).pathname;
+    if (path === '/__test/fetches') {
+      return Response.json({ fetches: this.fetches });
+    }
     if (path === '/__test/queue') {
       return Response.json([...this.ctx.storage.sql.exec(
         'SELECT credential,share,next_attempt FROM termination_queue ORDER BY next_attempt,credential,share')]);
@@ -51,6 +54,7 @@ export class AccessObject extends DurableObject {
         "SELECT value FROM access_entries WHERE key GLOB 'turn_lease:*' ORDER BY key")]
         .map(row => JSON.parse(row.value)));
     }
+    this.fetches++;
     const response = await this.rust.fetch(request);
     if (this.env.TURN_TEST_LIFETIME_MS && response.status === 201 &&
         (path === '/api/turn/issue' || path === '/api/turn/renew')) {

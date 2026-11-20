@@ -30,6 +30,15 @@ async function call(path, body, options = {}) {
   assert.equal(response.status, options.status ?? 200, JSON.stringify(value));
   return { response, value };
 }
+const consolePage = await fetch(new URL('/console', url), { signal: AbortSignal.timeout(20_000) });
+assert.equal(consolePage.status, 200);
+assert.equal(consolePage.headers.get('cache-control'), 'no-store');
+const consoleHtml = await consolePage.text();
+const assetPath = consoleHtml.match(/src="(\/assets\/[^"]+)"/)?.[1];
+assert(assetPath, 'expected hashed console asset in /console HTML');
+const consoleAsset = await fetch(new URL(assetPath, url), { signal: AbortSignal.timeout(20_000) });
+assert.equal(consoleAsset.status, 200);
+assert.equal(consoleAsset.headers.get('cache-control'), 'public, max-age=31536000, immutable');
 const initialized = await fetch(new URL('/v1/admin/initialize', url), {
   method: 'POST', headers: { Origin: url.origin, 'Content-Type': 'application/json' },
   body: JSON.stringify({ ...administrator, token: initialization }),

@@ -17,6 +17,17 @@ pub async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         return access::fetch(&env, req).await;
     }
     if console.as_deref() == Some(origin.as_str()) && !req.path().starts_with("/internal/") {
+        let path = req.path();
+        if !path.starts_with("/api/") {
+            // Serve embedded console pages and hashed bundles directly from the
+            // stateless edge Worker so static traffic and probes never wake the
+            // singleton AccessObject Durable Object or open SQLite.
+            return if req.method() == Method::Get {
+                console_asset(&path)
+            } else {
+                Response::error("method not allowed", 405)
+            };
+        }
         return access::fetch(&env, req).await;
     }
     if req.method() == Method::Get && req.path() == "/.well-known/windshare" {
@@ -25,7 +36,10 @@ pub async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             "relay_url":env.var("RELAY_URL").map_or(origin,|value| value.to_string()),
             "console_url":console,"frontend_url":env.var("FRONTEND_URL").ok().map(|value| value.to_string()),
         }))?;
-        response.headers_mut().set("Cache-Control", "no-store")?;
+        response.headers_mut().set(
+            "Cache-Control",
+            windshare_relay_console::NO_STORE_CACHE_CONTROL,
+        )?;
         return Ok(response);
     }
     if req.method() != Method::Get {
@@ -60,4 +74,25 @@ pub async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .get_stub()?
         .fetch_with_request(forwarded)
         .await
+}
+
+fn console_asset(path: &str) -> Result<Response> {
+    let Some((content, kind)) = windshare_relay_console::asset(path) else {
+        return Response::error("not found", 404);
+    };
+    let mut response = Response::ok(content)?;
+    for (name, value) in [
+        ("Content-Type", kind),
+        (
+            "Cache-Control",
+            windshare_relay_console::asset_cache_control(path),
+        ),
+        ("X-Content-Type-Options", "nosniff"),
+        ("Content-Security-Policy", windshare_relay_console::POLICY),
+        ("Referrer-Policy", "no-referrer"),
+        ("Cross-Origin-Opener-Policy", "same-origin"),
+    ] {
+        response.headers_mut().set(name, value)?;
+    }
+    Ok(response)
 }

@@ -107,7 +107,7 @@ export class ProductionDeployment {
       name: this.workerName + '-console', main: join(PACKAGE, 'console-entry.mjs'),
       compatibility_date: host.compatibility_date, workers_dev: true, preview_urls: false,
       vars: { CONSOLE_ORIGIN: consoleUrl },
-      durable_objects: { bindings: [{ name: 'ACCESS', class_name: 'AccessObject', script_name: this.workerName }] },
+      services: [{ binding: 'RELAY', service: this.workerName }],
     })
     this.#consoleAttempted = true
     await this.#wrangler('console', ['deploy'], this.#consoleConfig)

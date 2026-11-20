@@ -2,6 +2,27 @@ use serde_json::json;
 use worker::{Context, Env, Method, Request, Response, Result, event};
 
 const POLICY: &str = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+const IMMUTABLE_CACHE_CONTROL: &str = "public, max-age=31536000, immutable";
+const PRIVATE_REVALIDATE_CACHE_CONTROL: &str = "private, no-cache";
+const NO_STORE_CACHE_CONTROL: &str = "no-store";
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CachePolicy {
+    Immutable,
+    PrivateRevalidate,
+    NoStore,
+}
+
+impl CachePolicy {
+    const fn header(self) -> &'static str {
+        match self {
+            Self::Immutable => IMMUTABLE_CACHE_CONTROL,
+            Self::PrivateRevalidate => PRIVATE_REVALIDATE_CACHE_CONTROL,
+            Self::NoStore => NO_STORE_CACHE_CONTROL,
+        }
+    }
+}
+
 #[event(fetch)]
 pub async fn fetch(request: Request, env: Env, _context: Context) -> Result<Response> {
     if request.path().starts_with("/internal/") {
@@ -15,11 +36,15 @@ pub async fn fetch(request: Request, env: Env, _context: Context) -> Result<Resp
     if !allowed_origin(&request.path(), origin.as_deref(), &own, &env) {
         return Response::error("origin refused", 403);
     }
-    let mut response = if request.method() == Method::Options {
+    let mut cache_policy = CachePolicy::NoStore;
+    let response = if request.method() == Method::Options {
         Response::empty()?.with_status(204)
     } else if request.method() == Method::Get {
         let path = request.path();
         if let Some((body, kind)) = console_asset(&path) {
+            if path.starts_with("/assets/") {
+                cache_policy = CachePolicy::Immutable;
+            }
             asset(body, kind)?
         } else if path == "/healthz" {
             Response::from_json(&json!({"status":"ok"}))?
@@ -48,23 +73,39 @@ pub async fn fetch(request: Request, env: Env, _context: Context) -> Result<Resp
             forward(request, &env).await?
         }
     };
+    if public_blocks && matches!(response.status_code(), 200 | 304) {
+        // Revalidate on each poll so normal browser caching adds no delay to blocks.
+        cache_policy = CachePolicy::PrivateRevalidate;
+    }
+    apply_response_headers(
+        response,
+        &env,
+        origin.as_deref(),
+        cache_policy,
+        usage_report,
+    )
+}
+
+fn apply_response_headers(
+    response: Response,
+    env: &Env,
+    origin: Option<&str>,
+    cache_policy: CachePolicy,
+    usage_report: bool,
+) -> Result<Response> {
     // Durable Object fetch responses have immutable headers; preserve the body
     // and cookies while taking ownership of the edge response policy.
     let headers = response.headers().clone();
-    response = response.with_headers(headers);
+    let mut response = response.with_headers(headers);
     if usage_report && response.status_code() == 200 {
         response.headers_mut().set(
             windshare_relay_access::device_login::CAPABILITY_HEADER,
             windshare_relay_access::device_login::CAPABILITY_VERSION,
         )?;
     }
-    let cache_control = if public_blocks && matches!(response.status_code(), 200 | 304) {
-        // Revalidate on each poll so normal browser caching adds no delay to blocks.
-        "private, no-cache"
-    } else {
-        "no-store"
-    };
-    response.headers_mut().set("Cache-Control", cache_control)?;
+    response
+        .headers_mut()
+        .set("Cache-Control", cache_policy.header())?;
     let policy = env.var("DIRECTORY_ORIGIN").map_or_else(
         |_| POLICY.to_owned(),
         |origin| {
@@ -86,7 +127,7 @@ pub async fn fetch(request: Request, env: Env, _context: Context) -> Result<Resp
     if let Some(origin) = origin {
         response
             .headers_mut()
-            .set("Access-Control-Allow-Origin", &origin)?;
+            .set("Access-Control-Allow-Origin", origin)?;
         response
             .headers_mut()
             .set("Access-Control-Allow-Credentials", "true")?;
@@ -98,6 +139,8 @@ pub async fn fetch(request: Request, env: Env, _context: Context) -> Result<Resp
             "Access-Control-Allow-Methods",
             "GET, POST, PUT, PATCH, OPTIONS",
         )?;
+        response.headers_mut().set("Vary", "Origin")?;
+    } else if cache_policy == CachePolicy::Immutable {
         response.headers_mut().set("Vary", "Origin")?;
     }
     Ok(response)

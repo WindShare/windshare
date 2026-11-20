@@ -193,6 +193,62 @@ async fn configured_relay_endpoint_takes_precedence_over_console_api_prefix() {
 }
 
 #[tokio::test]
+async fn console_static_assets_cache_only_hashed_bundles() {
+    let directory = tempfile::tempdir().unwrap();
+    let ingress = Ingress {
+        endpoint: Endpoint::parse("wss://relay.test/v2/ws").unwrap(),
+        ..ingress(32)
+    };
+    let store = crate::Database::open(
+        &directory.path().join("node.sqlite"),
+        ingress.endpoint.identity,
+    )
+    .unwrap();
+    ingress
+        .node
+        .identify(crate::node::Identity::generate().unwrap())
+        .unwrap();
+    ingress
+        .node
+        .open_console(&ingress.endpoint, &store)
+        .unwrap();
+
+    let (page, upgraded) = exchange(&ingress, "GET / HTTP/1.1\r\nHost: relay.test\r\n\r\n").await;
+    assert!(page.starts_with("HTTP/1.1 200 "), "{page}");
+    assert!(page.contains("cache-control: no-store\r\n"), "{page}");
+    assert!(page.contains("connection: close\r\n"), "{page}");
+    assert!(upgraded.unwrap().is_none());
+
+    let asset_path = page
+        .split("src=\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .expect("console entry script");
+    assert!(asset_path.starts_with("/assets/"), "{asset_path}");
+    let (bundle, upgraded) = exchange(
+        &ingress,
+        &format!("GET {asset_path} HTTP/1.1\r\nHost: relay.test\r\n\r\n"),
+    )
+    .await;
+    assert!(bundle.starts_with("HTTP/1.1 200 "), "{bundle}");
+    assert!(
+        bundle.contains("cache-control: public, max-age=31536000, immutable\r\n"),
+        "{bundle}"
+    );
+    assert!(bundle.contains("connection: close\r\n"), "{bundle}");
+    assert!(upgraded.unwrap().is_none());
+
+    let (api, upgraded) = exchange(
+        &ingress,
+        "GET /api/session HTTP/1.1\r\nHost: relay.test\r\n\r\n",
+    )
+    .await;
+    assert!(api.starts_with("HTTP/1.1 401 "), "{api}");
+    assert!(api.contains("cache-control: no-store\r\n"), "{api}");
+    assert!(upgraded.unwrap().is_none());
+}
+
+#[tokio::test]
 async fn health_and_rejections_do_not_consume_upgrade_attempts() {
     let ingress = ingress(1);
     for request in [

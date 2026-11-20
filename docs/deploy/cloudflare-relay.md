@@ -37,7 +37,7 @@ to publish one build to Cloudflare and mainland hosts. The steps below cover pri
 
 3. Enable Actions and run the deployment workflow on `main`. Find the addresses in
    the Cloudflare dashboard under the Worker's **Domains & Routes**. For workers.dev,
-   the workflow creates `<name>-console`, bound to the relay's access storage.
+   the workflow creates `<name>-console`, bound to the relay Worker.
    Custom domains route both hostnames to one Worker with managed DNS/TLS.
    Check the run's summary for **Managed TURN is available automatically when enabled
    in the console**, and confirm TURN is enabled in the console. A green check alone

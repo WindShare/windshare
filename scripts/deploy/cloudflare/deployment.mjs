@@ -7,6 +7,7 @@ export const SHARE_BINDING = 'SHARES';
 export const SHARE_CLASS = 'ShareRelayObject';
 export const ACCESS_BINDING = 'ACCESS';
 export const ACCESS_CLASS = 'AccessObject';
+export const RELAY_BINDING = 'RELAY';
 const STATE_FORMAT = 'windshare-cloudflare-deployment-v2';
 const MAX_STATE_BYTES = 5 * 1024;
 const WORKER_NAME = /^[a-z0-9](?:[a-z0-9-]{0,53}[a-z0-9])?$/;
@@ -78,11 +79,13 @@ export function validateHostConfig(config) {
     requireValue(!Object.hasOwn(config.vars ?? {}, name), `Source configuration cannot supply ${name}.`);
   }
 }
-function verifyConsole(settings, state, accessNamespaceId) {
+function verifyConsole(settings, state) {
   requireValue(JSON.stringify(stateFrom(settings)) === JSON.stringify(state), 'Companion console belongs to another deployment.');
-  const access = binding(settings, ACCESS_BINDING, 'durable_object_namespace');
-  requireValue(access.class_name === ACCESS_CLASS && access.script_name === state.workerName &&
-    (!accessNamespaceId || access.namespace_id === accessNamespaceId), 'Companion console must use the authoritative access namespace.');
+  const relay = binding(settings, RELAY_BINDING, 'service');
+  requireValue(
+    relay.service === state.workerName && (!relay.environment || relay.environment === 'production') && !relay.entrypoint,
+    'Companion console must bind the authoritative relay Worker.',
+  );
 }
 export async function deployRelay({ inputs, cloudflare, consoleCloudflare, deploy, deployConsole, log = () => {}, newId = randomUUID }) {
   const endpoint = await prepareRoute(inputs, cloudflare);
@@ -100,7 +103,7 @@ export async function deployRelay({ inputs, cloudflare, consoleCloudflare, deplo
     const existingConsole = await consoleCloudflare.settings();
     if (existingConsole !== null) {
       requireValue(retained !== null, 'Companion console name is already in use.');
-      verifyConsole(existingConsole, state, retained.accessNamespaceId);
+      verifyConsole(existingConsole, state);
     }
   }
   log('deployment_prepared', { kind: plan.kind, deploymentId: state.deploymentId, endpoint, consoleEndpoint });
@@ -112,7 +115,7 @@ export async function deployRelay({ inputs, cloudflare, consoleCloudflare, deplo
   await verifyRoute(inputs, cloudflare);
   if (inputs.route.kind === 'workers-dev') {
     await deployConsole(plan);
-    verifyConsole(await consoleCloudflare.settings(), state, confirmed.accessNamespaceId);
+    verifyConsole(await consoleCloudflare.settings(), state);
     const route = await consoleCloudflare.route();
     requireValue(route.enabled === true && route.previews_enabled === false, 'Companion console route did not match.');
   }

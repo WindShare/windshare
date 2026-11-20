@@ -26,9 +26,36 @@ function options(ownerPassword = password, consoleOrigin = origin, relayOrigin =
       durableObjects: { SHARES: { className: 'ShareRelayObject', useSQLite: true },
         ACCESS: { className: 'AccessObject', useSQLite: true } } },
     { ...shared, name: 'console', modules: [module('console-entry.mjs')], bindings: { CONSOLE_ORIGIN: consoleOrigin },
-      durableObjects: { ACCESS: { className: 'AccessObject', scriptName: 'relay' } } },
+      serviceBindings: { RELAY: 'relay' } },
   ] });
 }
+
+test('console static assets and non-API routes bypass AccessObject and cache only hashed bundles', { timeout: 30_000 }, async t => {
+  const mf = new Miniflare(options(password, origin, 'https://127.0.0.1', true));
+  t.after(() => mf.dispose());
+  const consoleWorker = await mf.getWorker('console');
+  const relayWorker = await mf.getWorker('relay');
+  for (const worker of [consoleWorker, relayWorker]) {
+    const page = await worker.fetch(origin + '/');
+    assert.equal(page.status, 200);
+    assert.equal(page.headers.get('Cache-Control'), 'no-store');
+    assert.match(page.headers.get('Content-Security-Policy'), /frame-ancestors 'none'/);
+    assert.equal(page.headers.get('X-Content-Type-Options'), 'nosniff');
+    assert.equal(page.headers.get('Referrer-Policy'), 'no-referrer');
+    assert.equal(page.headers.get('Cross-Origin-Opener-Policy'), 'same-origin');
+    const html = await page.text();
+    const assetPath = html.match(/src="(\/assets\/[^"]+)"/)?.[1];
+    assert(assetPath, 'expected hashed asset path in console HTML');
+    const bundle = await worker.fetch(origin + assetPath);
+    assert.equal(bundle.status, 200);
+    assert.equal(bundle.headers.get('Cache-Control'), 'public, max-age=31536000, immutable');
+    assert.equal((await worker.fetch(origin + '/missing')).status, 404);
+    assert.equal((await worker.fetch(origin + '/', { method: 'POST' })).status, 405);
+  }
+  const authority = (await mf.getBindings('relay')).ACCESS.getByName('authority');
+  assert.deepEqual(await (await authority.fetch('https://internal/__test/fetches')).json(), { fetches: 0 });
+  assert.equal((await authority.fetch(origin + '/')).status, 404);
+});
 
 test('SQLite access authority survives restart, approval retry, cancellation and password rotation', { timeout: 60_000 }, async () => {
   const mf = new Miniflare(options());

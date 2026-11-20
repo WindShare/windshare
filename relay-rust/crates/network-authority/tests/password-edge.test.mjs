@@ -36,6 +36,17 @@ test('the Worker runs password hashing and rate limits across edge and Durable O
   t.after(() => mf.dispose());
   const worker = await mf.getWorker('authority');
 
+  // Hashed console bundles are immutable while HTML entrypoints remain uncached.
+  const consolePage = await worker.fetch('https://localhost/console');
+  assert.equal(consolePage.status, 200);
+  assert.equal(consolePage.headers.get('cache-control'), 'no-store');
+  const assetPath = (await consolePage.text()).match(/src="(\/assets\/[^"]+)"/)?.[1];
+  assert(assetPath, 'expected hashed asset path in /console HTML');
+  const consoleAsset = await worker.fetch('https://localhost' + assetPath);
+  assert.equal(consoleAsset.status, 200);
+  assert.equal(consoleAsset.headers.get('cache-control'), 'public, max-age=31536000, immutable');
+  assert.equal(consoleAsset.headers.get('vary'), 'Origin');
+
   // External callers can never invoke internal DO orchestration routes.
   for (const internalPath of [
     '/internal/accounts/login/complete',

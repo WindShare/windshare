@@ -6,16 +6,18 @@ use hyper::{
     header,
 };
 use serde_json::json;
-use windshare_relay_console::{MAX_BODY_BYTES, POLICY, asset};
+use windshare_relay_console::{
+    MAX_BODY_BYTES, NO_STORE_CACHE_CONTROL, POLICY, asset, asset_cache_control,
+};
 
 const COOKIE: &str = "windshare_node_admin";
 type HttpResponse = Response<Full<Bytes>>;
 
-fn response(status: StatusCode, kind: &str, body: Bytes) -> HttpResponse {
+fn response(status: StatusCode, kind: &str, cache_control: &str, body: Bytes) -> HttpResponse {
     Response::builder()
         .status(status)
         .header(header::CONTENT_TYPE, kind)
-        .header(header::CACHE_CONTROL, "no-store")
+        .header(header::CACHE_CONTROL, cache_control)
         .header(header::CONTENT_SECURITY_POLICY, POLICY)
         .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
         .header(header::REFERRER_POLICY, "no-referrer")
@@ -33,6 +35,7 @@ impl Console {
         let mut res = response(
             reply.status,
             "application/json",
+            NO_STORE_CACHE_CONTROL,
             Bytes::from(reply.body.to_string()),
         );
         if let Some(secret) = reply.cookie {
@@ -56,7 +59,12 @@ impl Console {
         if parts.method == Method::GET
             && let Some((body, kind)) = asset(path)
         {
-            return response(StatusCode::OK, kind, Bytes::from_static(body.as_bytes()));
+            return response(
+                StatusCode::OK,
+                kind,
+                asset_cache_control(path),
+                Bytes::from_static(body.as_bytes()),
+            );
         }
         let h = &parts.headers;
         let value = if parts.method == Method::POST {

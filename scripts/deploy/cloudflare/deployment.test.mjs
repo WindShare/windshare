@@ -1,18 +1,19 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { deployRelay, readInputs, SECRET_BINDING, SHARE_BINDING, SHARE_CLASS, STATE_BINDING, ACCESS_BINDING, ACCESS_CLASS } from './deployment.mjs';
+import { deployRelay, readInputs, RELAY_BINDING, SECRET_BINDING, SHARE_BINDING, SHARE_CLASS, STATE_BINDING, ACCESS_BINDING, ACCESS_CLASS } from './deployment.mjs';
 
 const inputs = { accountId: 'a'.repeat(32), workerName: 'private-relay', route: { kind: 'workers-dev' }, ownerPassword: 'owner-password-test-value' };
 const namespaceId = 'b'.repeat(32), accessNamespaceId = 'c'.repeat(32);
 function settingsFor(state, console = false) {
   return { bindings: [
     { name: STATE_BINDING, type: 'plain_text', text: JSON.stringify(state) },
-    ...(console ? [] : [
-      { name: SECRET_BINDING, type: 'secret_text' },
-      { name: SHARE_BINDING, type: 'durable_object_namespace', class_name: SHARE_CLASS, namespace_id: namespaceId },
-    ]),
-    { name: ACCESS_BINDING, type: 'durable_object_namespace', class_name: ACCESS_CLASS, namespace_id: accessNamespaceId,
-      ...(console ? { script_name: inputs.workerName } : {}) },
+    ...(console
+      ? [{ name: RELAY_BINDING, type: 'service', service: inputs.workerName, environment: 'production' }]
+      : [
+          { name: SECRET_BINDING, type: 'secret_text' },
+          { name: SHARE_BINDING, type: 'durable_object_namespace', class_name: SHARE_CLASS, namespace_id: namespaceId },
+          { name: ACCESS_BINDING, type: 'durable_object_namespace', class_name: ACCESS_CLASS, namespace_id: accessNamespaceId },
+        ]),
   ] };
 }
 function harness() {
@@ -38,7 +39,7 @@ test('initial deployment establishes separate origins with one authoritative acc
   assert.equal(result.state.consoleEndpoint, 'https://private-relay-console.owner.workers.dev');
   assert.equal(result.namespaceId, namespaceId);
   assert.equal(result.accessNamespaceId, accessNamespaceId);
-  assert.equal(h.consoleRemote.bindings[1].script_name, inputs.workerName);
+  assert.equal(h.consoleRemote.bindings[1].service, inputs.workerName);
   for (const value of [result, h.plans, h.events, h.remote, h.consoleRemote]) assert.ok(!JSON.stringify(value).includes(inputs.ownerPassword));
 });
 test('password rotation preserves deployment identity and both storage namespaces', async () => {
@@ -68,7 +69,8 @@ for (const [name, mutate] of [
   ['foreign access namespace', h => { h.remote.bindings[3].script_name = 'other'; }],
   ['missing access namespace', h => { h.remote.bindings.pop(); }],
   ['unmanaged companion', h => { h.consoleRemote = { bindings: [] }; }],
-  ['foreign companion access service', h => { h.consoleRemote.bindings[1].script_name = 'other'; }],
+  ['foreign companion relay service', h => { h.consoleRemote.bindings[1].service = 'other'; }],
+  ['foreign companion relay environment', h => { h.consoleRemote.bindings[1].environment = 'staging'; }],
   ['changed public address', h => { h.options.cloudflare.subdomain = async () => 'other'; }],
 ]) {
   test(name + ' refuses updates before mutation', async () => {

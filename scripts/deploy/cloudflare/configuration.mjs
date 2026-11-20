@@ -45,7 +45,7 @@ export function consoleConfig(host, inputs, state) {
     name: inputs.workerName + '-console', account_id: inputs.accountId, main: 'console-entry.mjs',
     compatibility_date: host.compatibility_date, workers_dev: true, preview_urls: false,
     vars: { CONSOLE_ORIGIN: state.consoleEndpoint },
-    durable_objects: { bindings: [{ name: 'ACCESS', class_name: 'AccessObject', script_name: inputs.workerName }] },
+    services: [{ binding: 'RELAY', service: inputs.workerName }],
     observability: { enabled: true },
   };
 }

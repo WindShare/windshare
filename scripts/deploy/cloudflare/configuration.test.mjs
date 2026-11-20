@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { deploymentConfig, FULL_DEPLOYMENT, readDeploymentMode, RELAY_ONLY_DEPLOYMENT } from './configuration.mjs';
+import { consoleConfig, deploymentConfig, FULL_DEPLOYMENT, readDeploymentMode, RELAY_ONLY_DEPLOYMENT } from './configuration.mjs';
 
 const inputs = {
   accountId: 'a'.repeat(32), workerName: 'private-relay',
@@ -65,4 +65,16 @@ test('relay-only deployments remove frontend assets even when the previous confi
   assert.deepEqual(relayOnly.migrations, full.migrations);
   assert.ok(full.assets);
   assert.deepEqual(deploymentConfig(relayOnly, inputs), full);
+});
+
+test('companion console binds the relay Worker service instead of bypassing the edge into AccessObject', () => {
+  const config = consoleConfig(
+    { ...host, compatibility_date: '2026-10-17' },
+    { ...inputs, route: { kind: 'workers-dev' } },
+    { consoleEndpoint: 'https://private-relay-console.owner.workers.dev' },
+  );
+  assert.equal(config.name, 'private-relay-console');
+  assert.equal(config.main, 'console-entry.mjs');
+  assert.deepEqual(config.services, [{ binding: 'RELAY', service: inputs.workerName }]);
+  assert.equal(Object.hasOwn(config, 'durable_objects'), false);
 });

@@ -43,3 +43,22 @@ fn manual_export_is_scoped_to_one_relay_and_public_inventory_excludes_its_secret
         json!({"url":"https://relay.example", "access_key":key})
     );
 }
+
+#[test]
+fn asset_cache_control_marks_only_hashed_bundles_immutable() {
+    assert_eq!(
+        asset_cache_control("/assets/index-1234.js"),
+        IMMUTABLE_CACHE_CONTROL
+    );
+    assert_eq!(
+        asset_cache_control("/assets/layout-1234.css"),
+        IMMUTABLE_CACHE_CONTROL
+    );
+    for path in ["/", "/device/complete", "/third-party-licenses.txt"] {
+        assert!(
+            asset(path).is_some(),
+            "expected embedded console asset {path}"
+        );
+        assert_eq!(asset_cache_control(path), NO_STORE_CACHE_CONTROL);
+    }
+}

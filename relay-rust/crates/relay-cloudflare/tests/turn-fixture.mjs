@@ -42,7 +42,7 @@ export async function turnFixture({ provider, lifetimeMs, analytics } = {}) {
           ACCESS: { className: 'AccessObject', useSQLite: true } } },
       { ...shared, name: 'console', modules: [module('console-entry.mjs')],
         bindings: { CONSOLE_ORIGIN: consoleOrigin },
-        durableObjects: { ACCESS: { className: 'AccessObject', scriptName: 'relay' } } },
+        serviceBindings: { RELAY: 'relay' } },
     ] });
   };
   const mf = new Miniflare(options());

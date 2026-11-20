@@ -67,7 +67,10 @@ fn trace(event: &str, fields: &Value) {
 }
 fn reply(value: &Value, status: u16) -> Result<Response> {
     let mut response = Response::from_json(value)?.with_status(status);
-    response.headers_mut().set("Cache-Control", "no-store")?;
+    response.headers_mut().set(
+        "Cache-Control",
+        windshare_relay_console::NO_STORE_CACHE_CONTROL,
+    )?;
     response
         .headers_mut()
         .set("X-Content-Type-Options", "nosniff")?;
@@ -95,20 +98,22 @@ impl AccessObject {
     }
 
     async fn route(&self, mut req: Request) -> Result<Response> {
-        if turn_endpoint(&req.path()) {
+        let path = req.path();
+        if turn_endpoint(&path) {
             return self.turn_device(req).await;
+        }
+        if path != "/internal/authorize" {
+            if req.url()?.origin().ascii_serialization() != self.console_origin()? {
+                return reply(&json!({"error":"console_origin_required"}), 403);
+            }
+            if !path.starts_with("/api/") {
+                return reply(&json!({"error":"not_found"}), 404);
+            }
         }
         let db = Database::open(&self.state)?;
         let now = io::now().0;
-        let path = req.path();
         if path == "/internal/authorize" {
             return Self::authorize(&db, &req.json().await?, now);
-        }
-        if req.url()?.origin().ascii_serialization() != self.console_origin()? {
-            return reply(&json!({"error":"console_origin_required"}), 403);
-        }
-        if req.method() == Method::Get && !path.starts_with("/api/") {
-            return Self::asset(&path);
         }
         if req.method() != Method::Get {
             if req
@@ -213,24 +218,6 @@ impl AccessObject {
                 .await?;
         }
         Ok(())
-    }
-
-    fn asset(path: &str) -> Result<Response> {
-        let Some((content, kind)) = windshare_relay_console::asset(path) else {
-            return Response::error("not found", 404);
-        };
-        let mut response = Response::ok(content)?;
-        for (name, value) in [
-            ("Content-Type", kind),
-            ("Cache-Control", "no-store"),
-            ("X-Content-Type-Options", "nosniff"),
-            ("Content-Security-Policy", windshare_relay_console::POLICY),
-            ("Referrer-Policy", "no-referrer"),
-            ("Cross-Origin-Opener-Policy", "same-origin"),
-        ] {
-            response.headers_mut().set(name, value)?;
-        }
-        Ok(response)
     }
 }
 

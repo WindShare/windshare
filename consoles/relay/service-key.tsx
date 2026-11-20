@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { ValidatedForm } from '../ui/ValidatedForm'
 import { useAction } from '../ui/activity'
 import { message, MessageError } from '../ui/locale'
@@ -6,7 +7,19 @@ import { BackLink, Notice } from '../ui/layout'
 import { FocusPage } from '../ui/FocusPage'
 import { Icon } from '../ui/Icon'
 import { relayCopy } from './locales'
+import { formatRelayAddCommand } from './service-key-command'
 import type { ServiceKeyPhase, useServiceKeyCreation } from './use-service-key-creation'
+
+type CopyFieldId = 'url' | 'key' | 'cli'
+type CopyFeedbackKey = 'relayAddressCopied' | 'accessKeyCopied' | 'cliCommandCopied'
+
+interface CopyItem {
+  id: CopyFieldId
+  label: string
+  value: string
+  copyLabel: string
+  copiedMessage: CopyFeedbackKey
+}
 
 export function ServiceKeyEntry({ phase }: { phase: ServiceKeyPhase }) {
   const t = useCopy(relayCopy)
@@ -24,24 +37,64 @@ export function ServiceKeyEntry({ phase }: { phase: ServiceKeyPhase }) {
 export function ServiceKey({ creation }: { creation: ReturnType<typeof useServiceKeyCreation> }) {
   const t = useCopy(relayCopy)
   const copy = useAction()
+  const [copied, setCopied] = useState<CopyFieldId | null>(null)
   const { state } = creation
   if (state.phase === 'ready') {
     const { credential } = state
+    const items: CopyItem[] = [
+      {
+        id: 'url',
+        label: t.relayAddress,
+        value: credential.url,
+        copyLabel: t.copyRelayAddress,
+        copiedMessage: 'relayAddressCopied',
+      },
+      {
+        id: 'key',
+        label: t.accessKey,
+        value: credential.access_key,
+        copyLabel: t.copyAccessKey,
+        copiedMessage: 'accessKeyCopied',
+      },
+      {
+        id: 'cli',
+        label: t.cliCommand,
+        value: formatRelayAddCommand(credential),
+        copyLabel: t.copyCLICommand,
+        copiedMessage: 'cliCommandCopied',
+      },
+    ]
+    const copyValue = (item: CopyItem) => void copy.run(async () => {
+      try {
+        await navigator.clipboard.writeText(item.value)
+      } catch {
+        setCopied(null)
+        throw new MessageError(message(relayCopy, 'copyFailed'))
+      }
+      setCopied(item.id)
+      return message(relayCopy, item.copiedMessage)
+    })
     return <FocusPage icon="check" label={t.access} title={t.keyCreated}>
       <p className="lead">{t.saveKeyBeforeFinishing}</p>
-      <dl className="facts"><dt>{t.relayAddress}</dt><dd><code>{credential.url}</code></dd>
-        <dt>{t.accessKey}</dt><dd><code>{credential.access_key}</code></dd></dl>
-      <button type="button" disabled={copy.busy} onClick={() => void copy.run(async () => {
-        try {
-          await navigator.clipboard.writeText(JSON.stringify(credential, null, 2))
-        } catch {
-          throw new MessageError(message(relayCopy, 'copyFailed'))
-        }
-        return message(relayCopy, 'relayCredentialCopied')
-      })}><Icon name="copy" size={16} />{t.copyRelayCredential}</button>
-      <p>{t.installWithCLI}<br /><code>{'wind relay add <url> --access-key <key>'}</code></p>
+      <div className="copy-fields">
+        {items.map(item => {
+          const active = copied === item.id
+          return <div className="copy-field" key={item.id}>
+            <div className="copy-field-head">
+              <span className="copy-field-label">{item.label}</span>
+              <button type="button" className="secondary copy-button" aria-label={item.copyLabel}
+                disabled={copy.busy} onClick={() => copyValue(item)}>
+                <Icon name={active ? 'check' : 'copy'} size={15} />
+                <span>{active ? t.copied : t.copy}</span>
+              </button>
+            </div>
+            <code className="copy-field-value">{item.value}</code>
+          </div>
+        })}
+      </div>
       <Notice feedback={copy.feedback} />
       <button type="button" className="secondary" onClick={() => {
+        setCopied(null)
         creation.finish()
         location.hash = 'access'
       }}>{t.finishKeyCreation}</button>
