@@ -7,6 +7,7 @@ import (
 	"github.com/windshare/windshare/engine/recovery"
 	"time"
 
+	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/downloadmetrics"
 	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/transfer"
@@ -78,9 +79,6 @@ type SettlementInput struct {
 	Operation                                                                 receivecontract.OperationID
 	Job                                                                       transfer.TransferJobID
 	Connectivity                                                              downloadmetrics.Snapshot
-	// ShareStopped records a terminal relay STOPPED rejection seen by relay
-	// recovery during this attempt; the share no longer exists on the relay.
-	ShareStopped bool
 }
 
 func settlePreparationFailure(step stepOutcome, failure Failure, contextErr, cleanupErr error) task.Completion[Result] {
@@ -95,11 +93,16 @@ func settlePreparationFailure(step stepOutcome, failure Failure, contextErr, cle
 		failure.Cause = contextErr
 	}
 	cause := failure.Cause
+	stop := shareStopSource(cause)
+	if stop != ShareStopUnconfirmed && failure.Code == 0 && class != task.FailureUsage {
+		failure.Code = FailureShareStopped
+		class = task.FailureNetwork
+	}
 	if cleanupErr != nil {
 		failure = Failure{Cause: cleanupErr}
 		class = task.FailureLocal
 	}
-	value := Result{Recovery: RecoveryOutcome{Reason: recoveryReason(class, failure, transfer.JobResult{}, cleanupErr)}}
+	value := Result{Recovery: RecoveryOutcome{Reason: recoveryReason(class, failure, transfer.JobResult{}, cleanupErr), ShareStop: stop}}
 	if attention, ok := errors.AsType[*output.AttentionError](cause); ok {
 		value.OutputAttention = attention.Reason
 	}
@@ -156,8 +159,24 @@ func Settle(input SettlementInput) (task.Completion[Result], error) {
 	if outcome != task.OutcomeSuccess {
 		// The typed reason keeps application precedence while the error tree retains
 		// diagnostic causes that may not have decided the user-visible outcome.
-		failure := resultFailure(input, class)
-		result.Value.Recovery.Reason = recoveryReason(class, failure, r, input.CleanupError)
+		stop := shareStopSource(input.RuntimeError, input.ConnectionError, r.TerminationCause, r.SettlementFailure, r.SelectionResolutionFailure)
+		failure := resultFailure(input, class, stop)
+		if failure.Local == LocalSourceOmitted {
+			stop = ShareStopUnconfirmed
+		}
+		if stop != ShareStopUnconfirmed {
+			switch {
+			case failure.Code == FailureShareStopped:
+				class = task.FailureNetwork
+			case failure.Fault.Domain() == transferfault.DomainOutput:
+				class = task.FailureLocal
+			}
+			result.FailureClass = class
+			if outcome == task.OutcomePaused {
+				result.Outcome = task.OutcomeFailed
+			}
+		}
+		result.Value.Recovery = RecoveryOutcome{Reason: recoveryReason(class, failure, r, input.CleanupError), ShareStop: stop}
 		result.Err = errors.Join(failure, input.diagnosticCauses())
 	}
 	return result, nil
@@ -189,34 +208,36 @@ func resultHasTerminalNetworkFault(r transfer.JobResult) bool {
 	return r.TerminationFault.Domain() == transferfault.DomainSession && r.TerminationFault.Scope() == transferfault.ScopeSessionTerminal
 }
 
-// shareStopped reports whether the attempt ended because the share itself
-// stopped: the sender's authenticated stop terminal or a relay STOPPED rejection.
-// Retrying the same link cannot succeed after either. Source drift, contract
-// faults and cleanup failures keep precedence so they remain visible.
-func shareStopped(input SettlementInput, class task.FailureClass) bool {
-	r := input.Result
-	if !input.ShareStopped && !session.PeerStopped(input.RuntimeError) {
-		return false
+func shareStopSource(causes ...error) ShareStopSource {
+	source := ShareStopUnconfirmed
+	for _, cause := range causes {
+		if session.PeerStopped(cause) {
+			return ShareStopSender
+		}
+		if errors.Is(cause, relayset.ErrReceiverShareStopped) {
+			source = ShareStopRelays
+		} else if source == ShareStopUnconfirmed && errors.Is(cause, output.ErrShareStopped) {
+			source = ShareStopRecorded
+		}
 	}
-	if r.SourceDriftFault.Valid() || input.CleanupError != nil ||
-		outputContractFault(r.TerminationFault) || outputContractFault(r.SettlementFault) {
-		return false
-	}
-	return class == task.FailureNetwork || r.TerminationFault.Domain() == transferfault.DomainSession
+	return source
 }
 
-func outputContractFault(f transferfault.Fault) bool {
-	code, ok := f.OutputCode()
-	return ok && code == transferfault.OutputContract
-}
-
-func resultFailure(input SettlementInput, class task.FailureClass) Failure {
+func resultFailure(input SettlementInput, class task.FailureClass, stop ShareStopSource) Failure {
 	r := input.Result
 	if class == task.FailureUsage {
 		return Failure{Local: LocalSelectionMissing}
 	}
-	if shareStopped(input, class) {
-		return Failure{Code: FailureShareStopped}
+	if stop != ShareStopUnconfirmed && !r.SourceDriftFault.Valid() && input.CleanupError == nil {
+		if r.TerminationFault.Domain() == transferfault.DomainOutput {
+			return Failure{Fault: r.TerminationFault}
+		}
+		if code, ok := r.SettlementFault.OutputCode(); ok && code == transferfault.OutputContract {
+			return Failure{Fault: r.SettlementFault}
+		}
+		if class == task.FailureNetwork || r.TerminationFault.Domain() == transferfault.DomainSession {
+			return Failure{Code: FailureShareStopped}
+		}
 	}
 	for _, f := range []transferfault.Fault{r.SourceDriftFault, r.TerminationFault, r.SettlementFault} {
 		if f.Valid() {

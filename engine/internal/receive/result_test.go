@@ -200,7 +200,7 @@ func peerSessionTerminalError(t *testing.T, code uint16) error {
 	return fmt.Errorf("pump failed: %w", protocolsession.NewPeerSessionTerminalError(message))
 }
 
-func TestReceiveSettlementReportsSenderStopAsStoppedShare(t *testing.T) {
+func TestReceiveSettlementSeparatesStopEvidenceFromPrimaryFailure(t *testing.T) {
 	sessionTerminal, err := transferfault.NewSession(transferfault.ScopeSessionTerminal, transferfault.SessionTransport)
 	if err != nil {
 		t.Fatal(err)
@@ -217,43 +217,50 @@ func TestReceiveSettlementReportsSenderStopAsStoppedShare(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	outputIO, err := transferfault.NewOutput(transferfault.ScopeOutputPause, transferfault.OutputStateIO)
+	if err != nil {
+		t.Fatal(err)
+	}
 	peerStop := peerSessionTerminalError(t, session.SessionStoppedCode)
 	tests := []struct {
-		name       string
-		mutate     func(*SettlementInput)
-		wantCode   FailureCode
-		wantReason RecoveryReason
-		wantRetry  bool
+		name      string
+		mutate    func(*SettlementInput)
+		wantStop  ShareStopSource
+		wantCode  FailureCode
+		wantFault transferfault.Fault
 	}{
-		{"sender stop terminal", func(input *SettlementInput) {
+		{"sender terminal", func(input *SettlementInput) {
 			input.RuntimeError = peerStop
-		}, FailureShareStopped, RecoveryShareStopped, false},
-		{"relay STOPPED without a runtime error", func(input *SettlementInput) {
-			input.ShareStopped = true
-		}, FailureShareStopped, RecoveryShareStopped, false},
-		{"relay STOPPED during an output pause", func(input *SettlementInput) {
+		}, ShareStopSender, FailureShareStopped, transferfault.Fault{}},
+		{"aggregate relay stop during an output pause", func(input *SettlementInput) {
 			input.Result.TerminationFault = outputPause
-			input.ShareStopped = true
-		}, FailureShareStopped, RecoveryShareStopped, false},
+			input.Result.TerminationCause = relayset.ErrReceiverShareStopped
+		}, ShareStopRelays, FailureShareStopped, transferfault.Fault{}},
 		{"sender stop surfacing as a dependency contract", func(input *SettlementInput) {
 			input.Result.TerminationFault = transferfault.DependencyContractFault()
 			input.RuntimeError = peerStop
-		}, FailureShareStopped, RecoveryShareStopped, false},
+		}, ShareStopSender, FailureShareStopped, transferfault.Fault{}},
 		{"output contract keeps precedence", func(input *SettlementInput) {
-			input.Result.TerminationFault = outputContract
+			input.Result.SettlementFault = outputContract
 			input.RuntimeError = peerStop
-			input.ShareStopped = true
-		}, 0, RecoveryNeedsInspection, false},
+		}, ShareStopSender, 0, outputContract},
+		{"output interruption keeps precedence", func(input *SettlementInput) {
+			input.Result.TerminationFault = outputIO
+			input.ConnectionError = relayset.ErrReceiverShareStopped
+		}, ShareStopRelays, 0, outputIO},
 		{"source drift keeps precedence", func(input *SettlementInput) {
 			input.Result.SourceDriftFault = sourceDrift
 			input.RuntimeError = peerStop
-		}, 0, RecoveryTransferFailure, true},
-		{"other peer terminal stays retryable", func(input *SettlementInput) {
+		}, ShareStopSender, 0, sourceDrift},
+		{"one stopped relay", func(input *SettlementInput) {
+			input.ConnectionError = &relayv2.RelayError{Code: v2.ErrorStopped}
+		}, ShareStopUnconfirmed, 0, sessionTerminal},
+		{"other peer terminal", func(input *SettlementInput) {
 			input.RuntimeError = peerSessionTerminalError(t, protocolsession.SessionTerminalCodeLast-1)
-		}, 0, RecoveryTransferFailure, true},
-		{"plain transport failure stays retryable", func(input *SettlementInput) {
+		}, ShareStopUnconfirmed, 0, sessionTerminal},
+		{"transport failure", func(input *SettlementInput) {
 			input.RuntimeError = opaqueCanaryError{"relay-token-canary"}
-		}, 0, RecoveryTransferFailure, true},
+		}, ShareStopUnconfirmed, 0, sessionTerminal},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -266,11 +273,14 @@ func TestReceiveSettlementReportsSenderStopAsStoppedShare(t *testing.T) {
 				t.Fatal(err)
 			}
 			failure, ok := errors.AsType[Failure](result.Err)
-			if !ok || failure.Code != test.wantCode {
-				t.Fatalf("failure = %+v class %d, want code %d", failure, result.FailureClass, test.wantCode)
+			if !ok || failure.Code != test.wantCode || failure.Fault != test.wantFault {
+				t.Fatalf("failure = %+v, want code %d fault %v", failure, test.wantCode, test.wantFault)
 			}
-			if reason := result.Value.Recovery.Reason; reason != test.wantReason || reason.Retryable() != test.wantRetry {
-				t.Fatalf("recovery reason = %d retryable %t, want %d retryable %t", reason, reason.Retryable(), test.wantReason, test.wantRetry)
+			wantRetry := test.wantStop == ShareStopUnconfirmed
+			recovery := result.Value.Recovery
+			if recovery.ShareStop != test.wantStop || recovery.Retryable() != wantRetry ||
+				(result.Outcome == task.OutcomePaused) != wantRetry {
+				t.Fatalf("recovery = %+v outcome=%d, want stop %v retryable %t", recovery, result.Outcome, test.wantStop, wantRetry)
 			}
 			if input.RuntimeError != nil && !errors.Is(result.Err, input.RuntimeError) {
 				t.Fatal("settlement dropped the diagnostic runtime cause")
@@ -279,42 +289,19 @@ func TestReceiveSettlementReportsSenderStopAsStoppedShare(t *testing.T) {
 	}
 }
 
-func TestRelayStoppedRecoveryMarksTheAttemptShareStopped(t *testing.T) {
-	stopped := fmt.Errorf("join: %w", &relayv2.RelayError{Code: v2.ErrorStopped})
-	for _, test := range []struct {
-		name  string
-		value relayset.ReceiverRecoveryObservation
-		want  bool
-	}{
-		{"terminal STOPPED", relayset.ReceiverRecoveryObservation{Phase: relayset.ReceiverRecoveryTerminal, Err: stopped}, true},
-		{"retrying is not terminal", relayset.ReceiverRecoveryObservation{Phase: relayset.ReceiverRecoveryRetrying, Err: stopped}, false},
-		{"terminal for another reason", relayset.ReceiverRecoveryObservation{Phase: relayset.ReceiverRecoveryTerminal, Err: &relayv2.RelayError{Code: v2.ErrorInvalidProof}}, false},
-		{"terminal without cause", relayset.ReceiverRecoveryObservation{Phase: relayset.ReceiverRecoveryTerminal}, false},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			observation := newObservation(task.Control{}, false, nil)
-			observation.receiverRecovery(test.value)
-			if got := observation.relayReportedShareStopped(); got != test.want {
-				t.Fatalf("share stopped = %t, want %t", got, test.want)
-			}
-		})
-	}
-}
-
-func TestPreparationFailureAfterRelayStoppedIsNotRetryable(t *testing.T) {
-	cause := fmt.Errorf("join: %w", &relayv2.RelayError{Code: v2.ErrorStopped})
-	observation := newObservation(task.Control{}, false, nil)
-	observation.receiverRecovery(relayset.ReceiverRecoveryObservation{Phase: relayset.ReceiverRecoveryTerminal, Err: cause})
-	observation.fail(stepNetworkFailure, cause)
-	failure := observation.preparationFailure(nil)
-	if failure.Code != FailureShareStopped || !errors.Is(failure, cause) {
-		t.Fatalf("preparation failure = %+v", failure)
-	}
-	completed := settlePreparationFailure(stepNetworkFailure, failure, nil, nil)
-	if reason := completed.Value.Recovery.Reason; reason != RecoveryShareStopped || reason.Retryable() {
-		t.Fatalf("recovery reason = %d", reason)
-	}
-	if failure := observation.preparationFailure(errors.New("lease release failed")); failure.Code != 0 {
-		t.Fatalf("cleanup failure lost precedence: %+v", failure)
+func TestPreparationFailureAfterConfirmedRelayStop(t *testing.T) {
+	cause := fmt.Errorf("join: %w", relayset.ErrReceiverShareStopped)
+	cleanupErr := errors.New("lease release failed")
+	for _, cleanup := range []error{nil, cleanupErr} {
+		completed := settlePreparationFailure(stepNetworkFailure, Failure{Cause: cause}, nil, cleanup)
+		failure, ok := errors.AsType[Failure](completed.Err)
+		if recovery := completed.Value.Recovery; !ok || recovery.ShareStop != ShareStopRelays ||
+			recovery.Retryable() || !errors.Is(completed.Err, cause) {
+			t.Fatalf("settled preparation = %+v", completed)
+		}
+		if cleanup == nil && failure.Code != FailureShareStopped ||
+			cleanup != nil && (!errors.Is(failure, cleanup) || completed.Value.Recovery.Reason != RecoveryNeedsInspection) {
+			t.Fatalf("primary failure = %+v, cleanup=%v", failure, cleanup)
+		}
 	}
 }

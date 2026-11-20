@@ -65,10 +65,11 @@ func (r *Runtime) Resolve(capability link.Link) ([]string, func(context.Context)
 		return known, nil, nil
 	}
 	if r.directory == nil {
+		failure := r.noCandidates(AliasUnavailable)
 		if len(known) > 0 {
-			return known, nil, nil
+			return known, func(context.Context) ([]string, error) { return nil, failure }, nil
 		}
-		return nil, nil, r.noCandidates(AliasUnavailable)
+		return nil, nil, failure
 	}
 	var once sync.Once
 	var expanded []string
@@ -84,13 +85,16 @@ func (r *Runtime) Resolve(capability link.Link) ([]string, func(context.Context)
 				failure = r.noCandidates(AliasUnavailable)
 				return
 			}
+			unresolved := false
 			for _, alias := range unknown {
 				if endpoint, found := snapshot.Resolve(alias); found {
 					expanded = append(expanded, endpoint)
+				} else {
+					unresolved = true
 				}
 			}
 			expanded, failure = uniqueEndpoints(expanded)
-			if len(expanded) == 0 {
+			if failure == nil && unresolved {
 				failure = r.noCandidates(AliasUnavailable)
 			}
 		})

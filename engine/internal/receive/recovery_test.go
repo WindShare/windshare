@@ -16,10 +16,19 @@ type retainedAttemptAuthority struct {
 	getOutputAuthority
 	closes   int
 	discards int
+	stops    int
+	stopErr  error
+	busy     bool
 }
 
-func (authority *retainedAttemptAuthority) Close() error          { authority.closes++; return nil }
-func (authority *retainedAttemptAuthority) CanStartAttempt() bool { return authority.closes == 0 }
+func (authority *retainedAttemptAuthority) Close() error { authority.closes++; return nil }
+func (authority *retainedAttemptAuthority) Idle() bool {
+	return authority.closes == 0 && !authority.busy
+}
+func (authority *retainedAttemptAuthority) RecordShareStopped(context.Context) error {
+	authority.stops++
+	return authority.stopErr
+}
 func (authority *retainedAttemptAuthority) Discard(context.Context) error {
 	authority.discards++
 	return nil

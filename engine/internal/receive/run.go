@@ -9,6 +9,7 @@ import (
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/connectivity/v2peer/peerset"
 	"github.com/windshare/windshare/core/downloadmetrics"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/receivercontinuation"
 
 	receiversession "github.com/windshare/windshare/core/session/receiversession"
@@ -80,7 +81,7 @@ func runAttempt(ctx context.Context, input preparedRequest, deps Dependencies, r
 		connectionErr = nil
 	}
 	active.execution.CloseWithReason(getSettlementStopReason(ctx.Err(), admissionErr, runtimeErr, connectionErr))
-	settlement = &SettlementInput{Result: result, AdmissionError: admissionErr, RuntimeError: runtimeErr, ConnectionError: connectionErr, ContextError: ctx.Err(), Destination: prepared.destination, DestinationAdjusted: prepared.destinationAdjusted, Operation: prepared.job.ReceiveIntent().OperationID(), Job: prepared.job.JobID(), ShareStopped: observation.relayReportedShareStopped()}
+	settlement = &SettlementInput{Result: result, AdmissionError: admissionErr, RuntimeError: runtimeErr, ConnectionError: connectionErr, ContextError: ctx.Err(), Destination: prepared.destination, DestinationAdjusted: prepared.destinationAdjusted, Operation: prepared.job.ReceiveIntent().OperationID(), Job: prepared.job.JobID()}
 	return
 }
 
@@ -90,7 +91,22 @@ func (active *receiveOperation) settleAttempt(ctx context.Context, settlement *S
 	cleanupErr := active.close()
 	elapsed := max(active.runner.clock.Now().Sub(startedAt), 0)
 	connectivity := active.metrics.Snapshot(true)
+	var peerStop, relayStop error
+	if active.session != nil {
+		if err := active.session.runtime.Err(); session.PeerStopped(err) {
+			peerStop = err
+		}
+		if active.session.relays.AllRelaysStopped() {
+			relayStop = relayset.ErrReceiverShareStopped
+		}
+	}
 	if settlement != nil {
+		if peerStop != nil {
+			settlement.RuntimeError = peerStop
+		}
+		if relayStop != nil {
+			settlement.ConnectionError = errors.Join(settlement.ConnectionError, relayStop)
+		}
 		settlement.CleanupError = cleanupErr
 		settlement.Elapsed = elapsed
 		settlement.Connectivity = connectivity
@@ -101,7 +117,9 @@ func (active *receiveOperation) settleAttempt(ctx context.Context, settlement *S
 		}
 		return completed
 	}
-	completed := settlePreparationFailure(step, active.observation.preparationFailure(cleanupErr), ctx.Err(), cleanupErr)
+	failure := active.observation.failureSnapshot()
+	failure.Cause = errors.Join(failure.Cause, peerStop, relayStop)
+	completed := settlePreparationFailure(step, failure, ctx.Err(), cleanupErr)
 	completed.Value.Destination = active.input.outDir
 	completed.Value.Elapsed = elapsed
 	completed.Value.Connectivity = connectivity

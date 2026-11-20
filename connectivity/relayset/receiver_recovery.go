@@ -11,6 +11,7 @@ import (
 	"github.com/windshare/windshare/core/framechannel"
 
 	receiversession "github.com/windshare/windshare/core/session/receiversession"
+	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
 )
 
@@ -26,6 +27,7 @@ var (
 	ErrReceiverUnavailable  = errors.New("share is temporarily unavailable")
 	ErrReceiverWaitExpired  = errors.New("receiver connection waiting deadline expired")
 	ErrReceiverShareChanged = errors.New("receiver authenticated share descriptor changed")
+	ErrReceiverShareStopped = errors.New("all relay routes for the share are stopped")
 )
 
 type ReceiverRecoveryPhase string
@@ -138,14 +140,16 @@ func (recovery *ReceiverRecovery) open(ctx context.Context, config ReceiverConfi
 		if waitCtx.Err() != nil || (window > 0 && !recovery.options.Clock.Now().Before(started.Add(window))) {
 			return nil, errors.Join(expiry, last)
 		}
-		set, err := recovery.joinOnce(ctx, waitCtx, config)
+		set, err := recovery.joinOnce(ctx, waitCtx, &config)
 		if err == nil {
 			return set, nil
 		}
 		last = err
-		retainResolvedEndpoints(waitCtx, &config)
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
+		}
+		if errors.Is(err, ErrReceiverShareStopped) {
+			return nil, err
 		}
 		if _, joined := errors.AsType[*ReceiverJoinFailure](err); !joined {
 			if waitCtx.Err() != nil {
@@ -171,20 +175,22 @@ func (recovery *ReceiverRecovery) open(ctx context.Context, config ReceiverConfi
 	}
 }
 
-func (recovery *ReceiverRecovery) joinOnce(ctx, waitCtx context.Context, config ReceiverConfig) (*Receiver, error) {
-	var err error
-	config.Receiver.Capability.Relays, err = recovery.endpoints(config.Receiver.Capability.Relays)
-	if err != nil && config.ResolveEndpoints == nil {
-		return nil, err
-	}
+func (recovery *ReceiverRecovery) joinOnce(ctx, waitCtx context.Context, config *ReceiverConfig) (*Receiver, error) {
 	// A successful session borrows the caller lifetime, never the waiting
 	// deadline. Failed candidates are joined before another one is created.
-	set, err := NewReceiver(ctx, config)
+	set, err := NewReceiver(ctx, *config)
 	if err != nil {
 		return nil, err
 	}
 	if _, _, err = set.WaitReady(waitCtx); err != nil {
 		set.Close()
+		if set.AllRelaysStopped() {
+			return nil, errors.Join(ErrReceiverShareStopped, err)
+		}
+		// Keep the first bounded expansion across recovery waves. Its omissions
+		// still matter when deciding whether every route rejected the share.
+		config.Receiver.Capability.Relays, config.incompleteCandidates = set.candidateSnapshot()
+		config.ResolveEndpoints = nil
 		return nil, err
 	}
 	return set, nil
@@ -209,6 +215,18 @@ func (recovery *ReceiverRecovery) endpoints(endpoints []string) ([]string, error
 		return nil, &ReceiverJoinFailure{causes: rejected}
 	}
 	return eligible, nil
+}
+
+func (recovery *ReceiverRecovery) allRelaysStopped(candidates []string) bool {
+	recovery.mu.Lock()
+	defer recovery.mu.Unlock()
+	for _, endpoint := range candidates {
+		rejection, ok := errors.AsType[*relayv2.RelayError](recovery.disabled[endpoint])
+		if !ok || rejection == nil || rejection.Code != v2.ErrorStopped {
+			return false
+		}
+	}
+	return len(candidates) != 0 && recovery.terminal == nil
 }
 
 func (recovery *ReceiverRecovery) validateDescriptor(object []byte) error {

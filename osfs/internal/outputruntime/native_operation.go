@@ -154,6 +154,13 @@ func (authority *Authority) SelectOperation(ctx context.Context, selection trans
 		}
 		authority.operation, authority.stage = operation, authorityStageOperationReady
 		return ActiveLookup{authority: authority, kind: ActiveLookupReopened, operation: operation}, nil
+	case checkpointstore.ActiveLookupShareStopped:
+		authority.stage = authorityStageLookupStopped
+		intent, err := registryLookup.Record().VerifyIntent(transfer.DecodeReceiveIntent)
+		if err != nil || !sameSelection(intent.SelectionSpec(), selection) {
+			return ActiveLookup{}, errors.Join(transfer.ErrInvalidOutputBinding, err)
+		}
+		return ActiveLookup{}, ErrOutputShareStopped
 	case checkpointstore.ActiveLookupAlreadyRunning:
 		authority.stage = authorityStageLookupStopped
 		return ActiveLookup{authority: authority, kind: ActiveLookupAlreadyRunning}, nil
@@ -260,12 +267,16 @@ func requireOperationAttention(
 	lease *checkpointstore.OperationRegistryLease,
 	reason checkpointmodel.OrdinaryClosedReason,
 ) error {
+	return transitionOutputOperation(lease, checkpointmodel.OrdinaryLifecycleRequireAttention, reason)
+}
+
+func transitionOutputOperation(lease *checkpointstore.OperationRegistryLease, event checkpointmodel.OrdinaryLifecycleEvent, reason checkpointmodel.OrdinaryClosedReason) error {
 	if lease == nil {
 		return transfer.ErrInvalidOutputBinding
 	}
 	previous := lease.Record()
 	lifecycle, closedReason, err := checkpointmodel.ReduceOrdinaryOperationLifecycle(
-		previous.Lifecycle(), checkpointmodel.OrdinaryLifecycleRequireAttention, reason,
+		previous.Lifecycle(), event, reason,
 	)
 	if err != nil {
 		return err
@@ -472,6 +483,10 @@ func (authority *Authority) OpenOperation(
 		authority.operation != operation || operation.opened {
 		authority.mu.Unlock()
 		return nil, transfer.ErrInvalidOutputBinding
+	}
+	if operation.lease != nil && operation.lease.Record().Lifecycle() == checkpointmodel.OrdinaryOperationShareStopped {
+		authority.mu.Unlock()
+		return nil, ErrOutputShareStopped
 	}
 	if err := operation.validate(authority); err != nil {
 		var stateErr error

@@ -87,13 +87,14 @@ func (receiverClock) Wait(ctx context.Context, delay time.Duration) error {
 }
 
 type ReceiverConfig struct {
-	recovery         *ReceiverRecovery
-	Clock            ReceiverClock
-	Receiver         liveshare.ReceiverConfig
-	Dial             func(context.Context, relayv2.ReceiverConfig) (ReceiverConnection, error)
-	DialOptions      relayv2.DialOptions
-	Connected        func(ReceiverConnection)
-	ResolveEndpoints func(context.Context) ([]string, error)
+	recovery             *ReceiverRecovery
+	incompleteCandidates bool
+	Clock                ReceiverClock
+	Receiver             liveshare.ReceiverConfig
+	Dial                 func(context.Context, relayv2.ReceiverConfig) (ReceiverConnection, error)
+	DialOptions          relayv2.DialOptions
+	Connected            func(ReceiverConnection)
+	ResolveEndpoints     func(context.Context) ([]string, error)
 }
 
 // Receiver owns relay connections for one cryptographic session. Competing
@@ -114,6 +115,8 @@ type Receiver struct {
 	workers          sync.WaitGroup
 	closeOnce        sync.Once
 	stopRuntimeWatch func() bool
+	candidates       []string
+	incomplete       bool
 }
 
 func validateReceiverEndpoints(endpoints []string) error {
@@ -154,14 +157,24 @@ func NewReceiver(ctx context.Context, config ReceiverConfig) (*Receiver, error) 
 	if config.recovery == nil {
 		config.recovery, _ = NewReceiverRecovery(ReceiverRecoveryOptions{Clock: config.Clock})
 	}
+	candidates := config.Receiver.Capability.Relays
+	eligible, err := config.recovery.endpoints(candidates)
+	if err != nil && config.ResolveEndpoints == nil {
+		if !config.incompleteCandidates && config.recovery.allRelaysStopped(candidates) {
+			err = errors.Join(ErrReceiverShareStopped, err)
+		}
+		return nil, err
+	}
 	lifetime, cancel := context.WithCancel(ctx)
-	receiver := &Receiver{ctx: lifetime, cancel: cancel, config: config, shareID: share, remaining: len(config.Receiver.Capability.Relays), ready: make(chan struct{})}
+	receiver := &Receiver{ctx: lifetime, cancel: cancel, config: config, shareID: share, remaining: len(eligible), ready: make(chan struct{})}
+	receiver.candidates = append([]string(nil), candidates...)
+	receiver.incomplete = config.ResolveEndpoints != nil || config.incompleteCandidates
 	if config.ResolveEndpoints != nil {
 		receiver.remaining++
 		receiver.workers.Add(1)
 		go receiver.expandCandidates()
 	}
-	for _, url := range config.Receiver.Capability.Relays {
+	for _, url := range eligible {
 		receiver.workers.Add(1)
 		go receiver.run(url)
 	}
@@ -177,6 +190,14 @@ func (receiver *Receiver) WaitReady(ctx context.Context) (*receiversession.Runti
 	receiver.mu.Lock()
 	defer receiver.mu.Unlock()
 	return receiver.runtime, receiver.first, receiver.failure
+}
+
+// AllRelaysStopped requires an explicit stop from every route in the link's
+// resolved candidate set. Missing directory results and temporary failures
+// leave open the possibility of joining the same share again.
+func (receiver *Receiver) AllRelaysStopped() bool {
+	candidates, incomplete := receiver.candidateSnapshot()
+	return !incomplete && receiver.config.recovery.allRelaysStopped(candidates)
 }
 
 func (receiver *Receiver) Close() {

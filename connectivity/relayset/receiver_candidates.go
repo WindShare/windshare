@@ -34,42 +34,36 @@ func validateReceiverCandidates(config ReceiverConfig) error {
 	return validateReceiverEndpoints(config.Receiver.Capability.Relays)
 }
 
-func retainResolvedEndpoints(ctx context.Context, config *ReceiverConfig) {
-	if config.ResolveEndpoints == nil {
-		return
-	}
-	// Each recovery wave keeps the first bounded expansion, including endpoints
-	// whose first handshake failed, without scheduling another directory request.
-	additional, _ := config.ResolveEndpoints(ctx)
-	if expanded, err := mergeEndpoints(config.Receiver.Capability.Relays, additional); err == nil {
-		config.Receiver.Capability.Relays = expanded
-	}
-	config.ResolveEndpoints = nil
+func (receiver *Receiver) candidateSnapshot() ([]string, bool) {
+	receiver.mu.Lock()
+	defer receiver.mu.Unlock()
+	return receiver.candidates, receiver.incomplete
 }
 
 func (receiver *Receiver) expandCandidates() {
 	defer receiver.workers.Done()
-	additional, err := receiver.config.ResolveEndpoints(receiver.ctx)
+	additional, resolveErr := receiver.config.ResolveEndpoints(receiver.ctx)
+	known := receiver.config.Receiver.Capability.Relays
+	endpoints, err := mergeEndpoints(known, additional)
 	if err == nil {
-		var endpoints []string
-		endpoints, err = mergeEndpoints(receiver.config.Receiver.Capability.Relays, additional)
-		if err == nil {
-			endpoints, err = receiver.config.recovery.endpoints(endpoints)
-		}
-		if err == nil {
-			for _, endpoint := range endpoints {
-				if slices.Contains(receiver.config.Receiver.Capability.Relays, endpoint) {
-					continue
-				}
-				receiver.mu.Lock()
-				receiver.remaining++
-				receiver.workers.Add(1)
-				receiver.mu.Unlock()
-				go receiver.run(endpoint)
+		receiver.mu.Lock()
+		receiver.candidates = endpoints
+		receiver.incomplete = resolveErr != nil
+		receiver.mu.Unlock()
+		var eligible []string
+		eligible, err = receiver.config.recovery.endpoints(endpoints)
+		for _, endpoint := range eligible {
+			if slices.Contains(known, endpoint) {
+				continue
 			}
+			receiver.mu.Lock()
+			receiver.remaining++
+			receiver.workers.Add(1)
+			receiver.mu.Unlock()
+			go receiver.run(endpoint)
 		}
 	}
-	receiver.finishInitial("", err)
+	receiver.finishInitial("", errors.Join(resolveErr, err))
 }
 
 // Park only retries, preserving initial races and every admitted lane. Network

@@ -33,6 +33,7 @@ const (
 
 	RecoveryIncomplete                = recovery.OperationIncomplete
 	RecoveryResumable                 = recovery.OperationResumable
+	RecoveryShareStopped              = recovery.OperationShareStopped
 	RecoveryCleanupPending            = recovery.OperationCleanupPending
 	RecoveryNeedsAttention            = recovery.OperationNeedsAttention
 	RecoveryBlockedPublicationUnknown = recovery.BlockedPublicationUnknown

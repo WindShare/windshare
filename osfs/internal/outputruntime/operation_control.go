@@ -5,22 +5,47 @@ import (
 	"errors"
 
 	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/osfs/internal/outputcap"
 	"github.com/windshare/windshare/osfs/internal/resumeauthority"
 )
 
-func (operation *Operation) CanStartAttempt() bool {
+var ErrOutputShareStopped = errors.New("retained output belongs to a stopped share")
+
+func (operation *Operation) Idle() bool {
 	if operation == nil || operation.authority == nil {
 		return false
 	}
 	authority := operation.authority
 	authority.mu.Lock()
 	defer authority.mu.Unlock()
-	return !authority.closed && authority.operation == operation && !operation.closed && !operation.opened
+	return operation.idleLocked()
+}
+
+func (operation *Operation) idleLocked() bool {
+	return !operation.authority.closed && operation.authority.operation == operation && !operation.closed && !operation.opened
+}
+
+func (operation *Operation) RecordShareStopped(ctx context.Context) error {
+	if operation == nil || operation.authority == nil || ctx == nil {
+		return transfer.ErrInvalidOutputBinding
+	}
+	operation.authority.mu.Lock()
+	defer operation.authority.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !operation.idleLocked() || operation.mode != outputcap.ExecutionResumable || operation.lease == nil {
+		return transfer.ErrInvalidOutputBinding
+	}
+	if operation.lease.Record().Lifecycle() == checkpointmodel.OrdinaryOperationShareStopped {
+		return nil
+	}
+	return transitionOutputOperation(operation.lease, checkpointmodel.OrdinaryLifecycleStopShare, checkpointmodel.OrdinaryReasonNone)
 }
 
 func (operation *Operation) Discard(ctx context.Context) error {
-	if ctx == nil || !operation.CanStartAttempt() {
+	if ctx == nil || !operation.Idle() {
 		return transfer.ErrInvalidOutputBinding
 	}
 	if err := ctx.Err(); err != nil {

@@ -63,6 +63,9 @@ func (a *filesystemOutputAuthority) BindDestination(ctx context.Context) (output
 }
 func (a *filesystemOutputAuthority) SelectOperation(ctx context.Context, s transfer.SelectionSpec, selector receivecontract.OperationSelection) (output.Lookup, error) {
 	native, err := a.native.SelectOperation(ctx, s, selector)
+	if errors.Is(err, osfs.ErrFilesystemOutputShareStopped) {
+		return output.Lookup{}, output.ErrShareStopped
+	}
 	if err != nil {
 		return output.Lookup{}, sealFilesystemOutputFailure(err)
 	}

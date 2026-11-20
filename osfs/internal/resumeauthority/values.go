@@ -29,10 +29,11 @@ const (
 	OperationNeedsAttention
 	OperationDiscarded
 	OperationRecoveryUnavailable
+	OperationShareStopped
 )
 
 func (state OperationState) Valid() bool {
-	return state >= OperationIncomplete && state <= OperationRecoveryUnavailable
+	return state >= OperationIncomplete && state <= OperationShareStopped
 }
 
 func (state OperationState) String() string {
@@ -47,6 +48,8 @@ func (state OperationState) String() string {
 		return "operation-needs-attention"
 	case OperationRecoveryUnavailable:
 		return "recovery-unavailable"
+	case OperationShareStopped:
+		return "share-stopped"
 	case OperationDiscarded:
 		return "discarded"
 	default:

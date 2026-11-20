@@ -42,7 +42,6 @@ type observationState struct {
 	failure      error
 	failureCode  FailureCode
 	cleanupError error
-	shareStopped bool
 }
 type getObservation struct {
 	*observationState
@@ -144,36 +143,7 @@ func (o getObservation) warning(cause error) {
 func (o getObservation) warningCode(code FailureCode)      { o.emit(Warning{Code: code}) }
 func (o getObservation) relayConnected(v v2.RelayEndpoint) { o.emit(RelayConnected{Endpoint: v}) }
 func (o getObservation) receiverRecovery(v relayset.ReceiverRecoveryObservation) {
-	if v.Phase == relayset.ReceiverRecoveryTerminal && relayShareStopped(v.Err) {
-		o.mu.Lock()
-		o.shareStopped = true
-		o.mu.Unlock()
-	}
 	o.emit(RecoveryObserved{Value: v})
-}
-
-// relayReportedShareStopped is the relay's authoritative statement that the
-// sender stopped this share; replacement sessions cannot resume it.
-func (o getObservation) relayReportedShareStopped() bool {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	return o.shareStopped
-}
-
-// preparationFailure keeps the recorded cause for diagnostics but names a relay
-// STOPPED rejection as the reason, so a join or replacement after the sender
-// stopped is not offered as a same-link retry.
-func (o getObservation) preparationFailure(cleanupErr error) Failure {
-	failure := o.failureSnapshot()
-	if failure.Code == 0 && cleanupErr == nil && o.relayReportedShareStopped() {
-		failure.Code = FailureShareStopped
-	}
-	return failure
-}
-
-func relayShareStopped(err error) bool {
-	rejection, ok := errors.AsType[*relayv2.RelayError](err)
-	return ok && rejection != nil && rejection.Code == v2.ErrorStopped
 }
 func (o getObservation) transferLifecycle(v transfer.TransferLifecycleTrace) {
 	o.control.Diagnostics.Record(v)

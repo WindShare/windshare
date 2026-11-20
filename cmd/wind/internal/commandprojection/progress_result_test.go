@@ -145,6 +145,27 @@ func TestCapacityBudgetPauseProjectsAsResumableJobWithoutFileFailure(t *testing.
 	}
 }
 
+func TestConfirmedStopProjectsTerminalStatusWithoutReplacingPrimaryFailure(t *testing.T) {
+	failure, err := appobs.NewFailure(appobs.FailureSourceRevisionChanged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projected, err := ProjectReceiveResult(engine.TaskCompletion[engine.ReceiveResult]{
+		Outcome: engine.OutcomeFailed, FailureClass: engine.FailureSourceDrift, Failure: failure,
+		Value: engine.ReceiveResult{
+			Destination: "out",
+			Recovery:    engine.ReceiveRecoveryOutcome{ShareStop: engine.ReceiveShareStopSender},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotFailure, ok := projected.Failure()
+	if projected.Status() != clievent.ResultStopped || projected.ExitCode() != clievent.ExitDrift || !ok || gotFailure.Code() != failure.Code() {
+		t.Fatalf("stopped projection = %+v failure=%+v", projected, gotFailure)
+	}
+}
+
 func TestGetResultProjectsClosedCallerCancellationBeforeCleanupDiagnostics(t *testing.T) {
 	result := successfulJobResult(t)
 	result.Outcome = transfer.DirectTreeOutcomePaused

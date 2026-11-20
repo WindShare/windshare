@@ -53,6 +53,8 @@ func operationState(
 		return OperationIncomplete, nil
 	case checkpointmodel.OrdinaryOperationNeedsAttention:
 		return OperationNeedsAttention, nil
+	case checkpointmodel.OrdinaryOperationShareStopped:
+		return OperationShareStopped, nil
 	case checkpointmodel.OrdinaryOperationCompleted,
 		checkpointmodel.OrdinaryOperationDiscarded,
 		checkpointmodel.OrdinaryOperationCleanupPending:
@@ -70,7 +72,8 @@ func ReduceDiscard(record checkpointmodel.OrdinaryOperationRecord) (DiscardActio
 	}
 	switch record.Lifecycle() {
 	case checkpointmodel.OrdinaryOperationActive,
-		checkpointmodel.OrdinaryOperationNeedsAttention:
+		checkpointmodel.OrdinaryOperationNeedsAttention,
+		checkpointmodel.OrdinaryOperationShareStopped:
 		return DiscardTransitionAndCleanup, nil
 	case checkpointmodel.OrdinaryOperationCompleted,
 		checkpointmodel.OrdinaryOperationDiscarded,

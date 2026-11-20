@@ -113,11 +113,17 @@ func (a *App) reportReceiveRecovery(result engine.ReceiveResult, selection recei
 	recovery := result.Recovery
 	switch recovery.Retention {
 	case engine.ReceiveRetentionCheckpoints:
-		a.writeCompleteLine("Saved partials: %d bytes. Previously delivered: %d files (%d bytes).", result.Transfer.Progress.RestartReusableBytes, result.Transfer.Progress.FileOutcomes.PreviouslyPublishedFiles, result.Transfer.Progress.PreviouslyPublishedBytes)
+		if !recovery.ShareStopped() {
+			a.writeCompleteLine("Saved partials: %d bytes. Previously delivered: %d files (%d bytes).", result.Transfer.Progress.RestartReusableBytes, result.Transfer.Progress.FileOutcomes.PreviouslyPublishedFiles, result.Transfer.Progress.PreviouslyPublishedBytes)
+		}
 	case engine.ReceiveRetentionLiveReleased:
 		a.writeCompleteLine("Download stopped; unfinished progress could not be retained after exit.")
 	case engine.ReceiveRetentionDiscarded:
 		a.writeCompleteLine("Unfinished owned output was discarded; completed files were kept.")
+		return
+	}
+	if recovery.ShareStopped() {
+		a.reportStoppedReceiveRecovery(result)
 		return
 	}
 	switch recovery.Reason {
@@ -128,16 +134,23 @@ func (a *App) reportReceiveRecovery(result engine.ReceiveResult, selection recei
 		a.writeCompleteLine("Correct the request before starting another download.")
 	case engine.ReceiveRecoveryNeedsInspection:
 		a.writeCompleteLine("Inspect the reported failure before retrying.")
-	case engine.ReceiveRecoveryShareStopped:
-		if recovery.Retention == engine.ReceiveRetentionCheckpoints {
-			a.writeCompleteLine("Saved partials cannot be resumed because the share was stopped, and a new link does not reuse them.")
-			a.writeCompleteLine("Find the operation with wind resume list -o <original-directory>, then remove it with wind resume discard -o <original-directory> --item <N>.")
-		}
 	default:
-		if recovery.Retention == engine.ReceiveRetentionCheckpoints && recovery.Reason.Retryable() {
+		if recovery.Retention == engine.ReceiveRetentionCheckpoints && recovery.Retryable() {
 			a.writeCompleteLine("Retry with wind resume retry -o <original-directory> --operation %x and the same link and selection.", result.Operation.Bytes())
 		}
 	}
+}
+
+func (a *App) reportStoppedReceiveRecovery(result engine.ReceiveResult) {
+	if result.Recovery.Reason == engine.ReceiveRecoveryNeedsInspection {
+		a.writeCompleteLine("The share has stopped. Inspect the reported failure before removing saved progress.")
+		return
+	}
+	if result.Recovery.Retention != engine.ReceiveRetentionCheckpoints || result.Operation.IsZero() {
+		return
+	}
+	a.writeCompleteLine("Look for operation ID %x in wind resume list -o <original-directory>.", result.Operation.Bytes())
+	a.writeCompleteLine("To remove its unfinished output, run wind resume discard -o <original-directory> --item <N> in an interactive terminal.")
 }
 
 // maxReportedMissingSelections keeps a long mistyped selection from flooding
@@ -222,20 +235,22 @@ func (a *App) receivePauseHandler() func(context.Context, engine.ReceivePause) (
 }
 
 func (a *App) promptReceiveRecovery(ctx context.Context, reader *bufio.Reader, pause engine.ReceivePause) (engine.ReceiveRecoveryAction, error) {
-	heading, reason := "Download paused", "a transfer or output failure"
-	switch pause.Reason {
+	reason := "a transfer or output failure"
+	switch pause.Recovery.Reason {
 	case engine.ReceiveRecoveryCollision:
 		reason = "a destination collision; move the conflicting entry before retrying"
 	case engine.ReceiveRecoveryOwnershipUnknown:
 		reason = "blocked output ownership; unknown objects will remain untouched"
 	case engine.ReceiveRecoveryRevisionChanged:
 		reason = "a changed source revision; prior verified progress remains isolated"
-	case engine.ReceiveRecoveryShareStopped:
-		heading, reason = "Download stopped", "the sender stopped this share; saved partials cannot be resumed from it or reused by a new link"
 	}
-	a.writeCompleteLine("%s: %s. Saved partials: %d bytes. Previously delivered: %d files (%d bytes).", heading, reason, pause.Transfer.Progress.RestartReusableBytes, pause.Transfer.Progress.FileOutcomes.PreviouslyPublishedFiles, pause.Transfer.Progress.PreviouslyPublishedBytes)
+	if pause.Recovery.ShareStopped() {
+		a.writeCompleteLine("Download stopped. The share has ended. Discard unfinished output or keep it for manual cleanup.")
+	} else {
+		a.writeCompleteLine("Download paused: %s. Saved partials: %d bytes. Previously delivered: %d files (%d bytes).", reason, pause.Transfer.Progress.RestartReusableBytes, pause.Transfer.Progress.FileOutcomes.PreviouslyPublishedFiles, pause.Transfer.Progress.PreviouslyPublishedBytes)
+	}
 	a.reportBlockedReceiveItems(pause.Transfer)
-	if pause.Mode == engine.OutputLiveOnly {
+	if pause.Recovery.Retention == engine.ReceiveRetentionLiveReleased {
 		a.writeCompleteLine("Exit releases unfinished progress on this destination.")
 	}
 	for {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
@@ -93,7 +94,7 @@ func TestRecoveryDistinguishesRequestAndContractFailuresFromRepairableFailures(t
 			attempts, prompts := 0, 0
 			request := Request{Capability: link.Link{Suite: link.SuiteSenderAuthenticated}, Connectivity: ConnectivityRelayOnly, OnPause: func(_ context.Context, pause Pause) (RecoveryAction, error) {
 				prompts++
-				if !test.retry || pause.Reason != test.reason || !pause.Allows(RecoveryRetry) || authority.closes != 0 {
+				if !test.retry || pause.Recovery.Reason != test.reason || !pause.Allows(RecoveryRetry) || authority.closes != 0 {
 					t.Fatalf("inappropriate pause: %+v", pause)
 				}
 				return RecoveryRetry, nil
@@ -130,7 +131,7 @@ func TestRecoveryDistinguishesRequestAndContractFailuresFromRepairableFailures(t
 					t.Fatalf("repairable failure was not retried: %+v attempts=%d prompts=%d", completed, attempts, prompts)
 				}
 			} else if attempts != 1 || prompts != 0 || completed.Value.Recovery.Reason != test.reason ||
-				completed.Value.Recovery.Reason.Retryable() || completed.Value.Recovery.Retention != RetentionCheckpoints {
+				completed.Value.Recovery.Retryable() || completed.Value.Recovery.Retention != RetentionCheckpoints {
 				t.Fatalf("terminal failure recovery=%+v attempts=%d prompts=%d", completed, attempts, prompts)
 			}
 			if authority.closes != 1 || authority.discards != 0 {
@@ -159,28 +160,35 @@ func recoveryTestPreparation(t *testing.T, mode OutputMode) (getOutputPreparatio
 	return getOutputPreparation{authority: authority, operation: &operation, mode: mode}, authority
 }
 
-func TestStoppedShareOffersOnlyDiscardOrExit(t *testing.T) {
+func TestStoppedShareRecoveryUsesRetainedOutputAuthority(t *testing.T) {
 	for _, test := range []struct {
-		name        string
-		interactive bool
-		action      RecoveryAction
-		retention   ProgressRetention
-		discards    int
+		name      string
+		mode      OutputMode
+		busy      bool
+		stopErr   error
+		action    RecoveryAction
+		retention ProgressRetention
+		stops     int
+		discards  int
 	}{
-		{"unattended keeps partials without retry", false, 0, RetentionCheckpoints, 0},
-		{"exit keeps partials", true, RecoveryExit, RetentionCheckpoints, 0},
-		{"discard removes unfinished output", true, RecoveryDiscard, RetentionDiscarded, 1},
+		{name: "unattended", mode: OutputResumable, retention: RetentionCheckpoints, stops: 1},
+		{name: "exit keeps partials", mode: OutputResumable, action: RecoveryExit, retention: RetentionCheckpoints, stops: 1},
+		{name: "discard", mode: OutputResumable, action: RecoveryDiscard, retention: RetentionDiscarded, stops: 1, discards: 1},
+		{name: "live only", mode: OutputLiveOnly, action: RecoveryExit, retention: RetentionLiveReleased},
+		{name: "busy", mode: OutputResumable, busy: true, action: RecoveryExit, retention: RetentionCheckpoints},
+		{name: "recording failed", mode: OutputResumable, stopErr: errors.New("registry write failed"), action: RecoveryExit, retention: RetentionCheckpoints, stops: 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			prepared, authority := recoveryTestPreparation(t, OutputResumable)
+			prepared, authority := recoveryTestPreparation(t, test.mode)
+			authority.busy, authority.stopErr = test.busy, test.stopErr
 			attempts, prompts := 0, 0
 			request := Request{Capability: link.Link{Suite: link.SuiteSenderAuthenticated}, Connectivity: ConnectivityRelayOnly}
-			if test.interactive {
+			if test.action != 0 {
 				request.OnPause = func(_ context.Context, pause Pause) (RecoveryAction, error) {
 					prompts++
-					if pause.Reason != RecoveryShareStopped || pause.Allows(RecoveryRetry) ||
-						!pause.Allows(RecoveryDiscard) || !pause.Allows(RecoveryExit) {
-						t.Fatalf("stopped share pause = %+v", pause)
+					if pause.Recovery.ShareStop != ShareStopRelays || pause.Allows(RecoveryRetry) ||
+						!pause.Allows(RecoveryDiscard) || !pause.Allows(RecoveryExit) || authority.stops != 1 {
+						t.Fatalf("stopped share pause = %+v, stops=%d", pause, authority.stops)
 					}
 					return test.action, nil
 				}
@@ -188,15 +196,19 @@ func TestStoppedShareOffersOnlyDiscardOrExit(t *testing.T) {
 			completed := runOperation(t.Context(), request, Dependencies{}, func(_ context.Context, _ preparedRequest, _ Dependencies, retained *getOutputPreparation) task.Completion[Result] {
 				attempts++
 				*retained = prepared
-				return settlePreparationFailure(stepNetworkFailure, Failure{Code: FailureShareStopped}, nil, nil)
+				return settlePreparationFailure(stepNetworkFailure, Failure{Cause: relayset.ErrReceiverShareStopped}, nil, nil)
 			})
 			wantPrompts := 0
-			if test.interactive {
+			if test.action != 0 && test.mode == OutputResumable && !test.busy && test.stopErr == nil {
 				wantPrompts = 1
 			}
-			if attempts != 1 || prompts != wantPrompts || authority.discards != test.discards ||
-				completed.Value.Recovery != (RecoveryOutcome{Retention: test.retention, Reason: RecoveryShareStopped}) {
-				t.Fatalf("recovery=%+v attempts=%d prompts=%d discards=%d", completed.Value.Recovery, attempts, prompts, authority.discards)
+			recovery := completed.Value.Recovery
+			if attempts != 1 || prompts != wantPrompts || authority.stops != test.stops || authority.discards != test.discards ||
+				recovery.ShareStop != ShareStopRelays || recovery.Retryable() || recovery.Retention != test.retention {
+				t.Fatalf("recovery=%+v attempts=%d prompts=%d stops=%d discards=%d", recovery, attempts, prompts, authority.stops, authority.discards)
+			}
+			if test.stopErr != nil && (!errors.Is(completed.Err, test.stopErr) || recovery.Reason != RecoveryNeedsInspection) {
+				t.Fatalf("missing output failure: recovery=%+v err=%v", recovery, completed.Err)
 			}
 		})
 	}

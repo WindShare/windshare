@@ -64,7 +64,7 @@ func TestReceiverRecoveryLongOutagePreservesEndpointDecisions(t *testing.T) {
 		before := availableCalls.Load()
 		started := clock.Now()
 		set, err := recovery.Replace(t.Context(), config)
-		if set != nil || !errors.Is(err, ErrReceiverWaitExpired) {
+		if set != nil || !errors.Is(err, ErrReceiverWaitExpired) || errors.Is(err, ErrReceiverShareStopped) {
 			t.Fatal(set, err)
 		}
 		if clock.Now().Sub(started) != outageWindow || availableCalls.Load()-before < 4 || stoppedCalls.Load() != 1 {
@@ -163,6 +163,58 @@ func TestReceiverRecoveryTerminalErrorsNeverWait(t *testing.T) {
 			set, err := recovery.Replace(context.Background(), config)
 			if set != nil || !errors.Is(err, rejected) || len(clock.waits) != 0 || terminalCount.Load() != 1 {
 				t.Fatal(set, err, clock.waits, terminalCount.Load())
+			}
+		})
+	}
+}
+
+func TestReceiverRecoveryRequiresStopsFromEveryResolvedRoute(t *testing.T) {
+	const known = "https://known.example"
+	const alternate = "https://alternate.example"
+	unresolved := errors.New("one relay alias is unresolved")
+	for _, test := range []struct {
+		name       string
+		additional []string
+		resolveErr error
+		alternate  v2.ErrorCode
+		wantStop   bool
+	}{
+		{name: "every advertised route stopped", additional: []string{alternate}, alternate: v2.ErrorStopped, wantStop: true},
+		{name: "another route timed out", additional: []string{alternate}, alternate: v2.ErrorNotFound},
+		{name: "another route refused proof", additional: []string{alternate}, alternate: v2.ErrorInvalidProof},
+		{name: "incomplete discovery", additional: []string{alternate}, alternate: v2.ErrorStopped, resolveErr: unresolved},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			clock := &receiverFakeClock{now: time.Unix(1, 0)}
+			recovery, err := NewReceiverRecovery(ReceiverRecoveryOptions{
+				Clock: clock, WaitTimeout: time.Second,
+				Jitter: func(delay time.Duration) time.Duration { return delay },
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var resolutions, alternateDials atomic.Int32
+			config := receiverUnavailableConfig(known)
+			config.ResolveEndpoints = func(context.Context) ([]string, error) {
+				resolutions.Add(1)
+				return test.additional, test.resolveErr
+			}
+			config.Dial = func(_ context.Context, dial relayv2.ReceiverConfig) (ReceiverConnection, error) {
+				if dial.RelayBaseURL == alternate {
+					alternateDials.Add(1)
+					return nil, &relayv2.RelayError{Code: test.alternate}
+				}
+				return nil, &relayv2.RelayError{Code: v2.ErrorStopped}
+			}
+			set, err := recovery.Join(t.Context(), config)
+			if set != nil || err == nil || errors.Is(err, ErrReceiverShareStopped) != test.wantStop {
+				t.Fatalf("set=%v err=%v, confirmed stop=%t", set, err, test.wantStop)
+			}
+			if resolutions.Load() != 1 || alternateDials.Load() == 0 {
+				t.Fatalf("resolutions=%d alternate dials=%d", resolutions.Load(), alternateDials.Load())
+			}
+			if test.alternate == v2.ErrorNotFound && alternateDials.Load() < 2 {
+				t.Fatal("temporarily unavailable alternate lost its retry")
 			}
 		})
 	}

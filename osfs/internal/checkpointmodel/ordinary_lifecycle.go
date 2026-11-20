@@ -12,10 +12,11 @@ const (
 	OrdinaryOperationCompleted
 	OrdinaryOperationDiscarded
 	OrdinaryOperationCleanupPending
+	OrdinaryOperationShareStopped
 )
 
 func (state OrdinaryOperationLifecycle) Valid() bool {
-	return state >= OrdinaryOperationActive && state <= OrdinaryOperationCleanupPending
+	return state >= OrdinaryOperationActive && state <= OrdinaryOperationShareStopped
 }
 
 func (state OrdinaryOperationLifecycle) String() string {
@@ -30,13 +31,16 @@ func (state OrdinaryOperationLifecycle) String() string {
 		return "discarded"
 	case OrdinaryOperationCleanupPending:
 		return "cleanup-pending"
+	case OrdinaryOperationShareStopped:
+		return "share-stopped"
 	default:
 		return ""
 	}
 }
 
+// Retained stopped output keeps its selection binding until it is discarded.
 func (state OrdinaryOperationLifecycle) ParticipatesInActiveLookup() bool {
-	return state == OrdinaryOperationActive || state == OrdinaryOperationNeedsAttention
+	return state == OrdinaryOperationActive || state == OrdinaryOperationNeedsAttention || state == OrdinaryOperationShareStopped
 }
 
 type OrdinaryLeaseState uint8
@@ -102,13 +106,14 @@ const (
 	OrdinaryLifecycleDiscard
 	OrdinaryLifecycleCleanupFailed
 	OrdinaryLifecycleCleanupFinished
+	OrdinaryLifecycleStopShare
 )
 
 func (event OrdinaryLifecycleEvent) Valid() bool {
-	return event >= OrdinaryLifecycleContinue && event <= OrdinaryLifecycleCleanupFinished
+	return event >= OrdinaryLifecycleContinue && event <= OrdinaryLifecycleStopShare
 }
 
-// ReduceOrdinaryOperationLifecycle owns the five-state persistent vocabulary.
+// ReduceOrdinaryOperationLifecycle keeps retained ownership until explicit discard or completion.
 // Item collisions, permission failures, blocked files, and session pauses emit
 // Continue; only authority uncertainty may emit RequireAttention.
 func ReduceOrdinaryOperationLifecycle(
@@ -135,8 +140,13 @@ func ReduceOrdinaryOperationLifecycle(
 			return 0, 0, ErrInvalidOrdinaryLifecycle
 		}
 		return OrdinaryOperationCompleted, OrdinaryReasonNone, nil
+	case OrdinaryLifecycleStopShare:
+		if current != OrdinaryOperationActive || reason != OrdinaryReasonNone {
+			return 0, 0, ErrInvalidOrdinaryLifecycle
+		}
+		return OrdinaryOperationShareStopped, OrdinaryReasonNone, nil
 	case OrdinaryLifecycleDiscard:
-		if current != OrdinaryOperationActive && current != OrdinaryOperationNeedsAttention || reason != OrdinaryReasonNone {
+		if !current.ParticipatesInActiveLookup() || reason != OrdinaryReasonNone {
 			return 0, 0, ErrInvalidOrdinaryLifecycle
 		}
 		return OrdinaryOperationDiscarded, OrdinaryReasonNone, nil

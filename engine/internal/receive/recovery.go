@@ -31,17 +31,29 @@ const (
 	RecoverySourceOmitted
 	RecoveryInvalidRequest
 	RecoveryNeedsInspection
-	RecoveryShareStopped
 )
 
-// Retryable describes replaying the same request, possibly after repairing its
-// environment. Output ownership separately decides whether another attempt can start.
-func (reason RecoveryReason) Retryable() bool {
-	switch reason {
-	case RecoveryTransferFailure, RecoveryCollision, RecoveryOwnershipUnknown, RecoveryRevisionChanged:
-		return true
+type ShareStopSource uint8
+
+const (
+	ShareStopUnconfirmed ShareStopSource = iota
+	ShareStopSender
+	ShareStopRelays
+	ShareStopRecorded
+)
+
+func (source ShareStopSource) String() string {
+	switch source {
+	case ShareStopUnconfirmed:
+		return "unconfirmed"
+	case ShareStopSender:
+		return "sender"
+	case ShareStopRelays:
+		return "relay_set"
+	case ShareStopRecorded:
+		return "recorded"
 	default:
-		return false
+		return ""
 	}
 }
 
@@ -59,14 +71,30 @@ const (
 type RecoveryOutcome struct {
 	Retention ProgressRetention
 	Reason    RecoveryReason
+	ShareStop ShareStopSource
+}
+
+func (outcome RecoveryOutcome) ShareStopped() bool { return outcome.ShareStop != ShareStopUnconfirmed }
+
+// Retryable describes replaying the same request after any local remediation.
+// Link viability and the primary fault are independent of output ownership.
+func (outcome RecoveryOutcome) Retryable() bool {
+	if outcome.ShareStopped() {
+		return false
+	}
+	switch outcome.Reason {
+	case RecoveryTransferFailure, RecoveryCollision, RecoveryOwnershipUnknown, RecoveryRevisionChanged:
+		return true
+	default:
+		return false
+	}
 }
 
 // Pause is a settled attempt while the operation still owns its output. The
 // decision port is optional; unattended callers always get an explicit result.
 type Pause struct {
 	Operation receivecontract.OperationID
-	Mode      OutputMode
-	Reason    RecoveryReason
+	Recovery  RecoveryOutcome
 	Actions   []RecoveryAction
 	Transfer  transfer.JobResult
 }
@@ -102,10 +130,7 @@ func runOperation(ctx context.Context, request Request, deps Dependencies, attem
 			return
 		}
 		if err := retained.authority.Close(); err != nil {
-			completed.Err = errors.Join(completed.Err, err)
-			completed.CleanupError = errors.Join(completed.CleanupError, err)
-			completed.Outcome, completed.FailureClass = task.OutcomeFailed, task.FailureLocal
-			completed.Value.Recovery.Reason = RecoveryNeedsInspection
+			requireOutputInspection(&completed, err)
 		}
 	}()
 	for attemptNumber := uint64(1); ; attemptNumber++ {
@@ -122,22 +147,30 @@ func runOperation(ctx context.Context, request Request, deps Dependencies, attem
 			completed.Value.Recovery.Retention = RetentionLiveReleased
 		}
 		control := retained.operation.Control
-		attemptAvailable := control != nil && control.CanStartAttempt()
-		retryAllowed := completed.Value.Recovery.Reason.Retryable() && attemptAvailable
+		idle := control != nil && control.Idle()
+		if idle && completed.Value.Recovery.ShareStopped() && retained.mode == OutputResumable {
+			settlementCtx, cancel := deps.Control.CleanupContext()
+			err := control.RecordShareStopped(settlementCtx)
+			cancel()
+			if err != nil {
+				requireOutputInspection(&completed, err)
+			}
+		}
+		recovery := completed.Value.Recovery
+		actions := pauseActions(recovery, idle)
 		deps.Control.Diagnostics.Emit(diagnostics.New("receive.output_recovery_evaluated", diagnostics.Fields{
 			"operation": diagnostics.Identity(completed.Value.Operation.Bytes()), "attempt": diagnostics.Uint(attemptNumber),
-			"failure_class":     diagnostics.Uint(uint64(completed.FailureClass)),
-			"reason":            diagnostics.Uint(uint64(completed.Value.Recovery.Reason)),
-			"retention":         diagnostics.Uint(uint64(completed.Value.Recovery.Retention)),
-			"attempt_available": diagnostics.Bool(attemptAvailable), "retry_allowed": diagnostics.Bool(retryAllowed),
+			"failure_class": diagnostics.Uint(uint64(completed.FailureClass)),
+			"reason":        diagnostics.Uint(uint64(recovery.Reason)),
+			"retention":     diagnostics.Uint(uint64(recovery.Retention)),
+			"share_stop":    diagnostics.Text(recovery.ShareStop.String()),
+			"output_idle":   diagnostics.Bool(idle), "retry_allowed": diagnostics.Bool(slices.Contains(actions, RecoveryRetry)),
 		}))
-		actions := pauseActions(completed.Value.Recovery.Reason, retryAllowed, control != nil)
 		if ctx.Err() != nil || request.OnPause == nil || len(actions) == 0 {
 			return
 		}
-		paused := Pause{Operation: completed.Value.Operation, Mode: retained.mode,
-			Reason: completed.Value.Recovery.Reason, Actions: actions,
-			Transfer: completed.Value.Transfer}
+		paused := Pause{Operation: completed.Value.Operation, Recovery: recovery,
+			Actions: actions, Transfer: completed.Value.Transfer}
 		action, err := request.OnPause(ctx, paused)
 		if ctx.Err() != nil {
 			return
@@ -148,7 +181,7 @@ func runOperation(ctx context.Context, request Request, deps Dependencies, attem
 		}
 		deps.Control.Diagnostics.Emit(diagnostics.New("receive.output_recovery_decision", diagnostics.Fields{
 			"operation": diagnostics.Identity(paused.Operation.Bytes()), "action": diagnostics.Uint(uint64(action)),
-			"reason": diagnostics.Uint(uint64(paused.Reason)), "mode": diagnostics.Uint(uint64(paused.Mode)),
+			"reason": diagnostics.Uint(uint64(recovery.Reason)), "retention": diagnostics.Uint(uint64(recovery.Retention)),
 			"verified_bytes": diagnostics.Uint(paused.Transfer.Progress.VerifiedBytes),
 		}))
 		switch action {
@@ -158,9 +191,7 @@ func runOperation(ctx context.Context, request Request, deps Dependencies, attem
 			continue
 		case RecoveryDiscard:
 			if err := control.Discard(ctx); err != nil {
-				completed.Err = errors.Join(completed.Err, err)
-				completed.FailureClass = task.FailureLocal
-				completed.Value.Recovery.Reason = RecoveryNeedsInspection
+				requireOutputInspection(&completed, err)
 			} else {
 				completed.Value.Recovery.Retention = RetentionDiscarded
 			}
@@ -169,14 +200,20 @@ func runOperation(ctx context.Context, request Request, deps Dependencies, attem
 	}
 }
 
-// pauseActions lists the choices offered after a settled attempt. A stopped
-// share can never be retried, but its unfinished output can still be discarded
-// while this operation owns it.
-func pauseActions(reason RecoveryReason, retryAllowed, canDiscard bool) []RecoveryAction {
+func requireOutputInspection(completed *task.Completion[Result], err error) {
+	completed.Err = errors.Join(Failure{Cause: err}, completed.Err)
+	completed.CleanupError = errors.Join(completed.CleanupError, err)
+	completed.Outcome, completed.FailureClass = task.OutcomeFailed, task.FailureLocal
+	completed.Value.Recovery.Reason = RecoveryNeedsInspection
+}
+
+func pauseActions(recovery RecoveryOutcome, idle bool) []RecoveryAction {
 	switch {
-	case retryAllowed:
+	case !idle || recovery.Reason == RecoveryNeedsInspection:
+		return nil
+	case recovery.Retryable():
 		return []RecoveryAction{RecoveryRetry, RecoveryDiscard, RecoveryExit}
-	case reason == RecoveryShareStopped && canDiscard:
+	case recovery.ShareStopped() && recovery.Retention == RetentionCheckpoints:
 		return []RecoveryAction{RecoveryDiscard, RecoveryExit}
 	default:
 		return nil
@@ -197,9 +234,6 @@ func recoveryReason(class task.FailureClass, failure Failure, result transfer.Jo
 	}
 	if class == task.FailureUsage || failure.Code == FailureInvalidInput {
 		return RecoveryInvalidRequest
-	}
-	if failure.Code == FailureShareStopped {
-		return RecoveryShareStopped
 	}
 	switch failure.Code {
 	case FailureOutputContract, FailurePeerConfiguration:
