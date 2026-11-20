@@ -38,6 +38,7 @@ type Service struct {
 	wake                 chan struct{}
 	workers              sync.WaitGroup
 	nodes                map[string]*nodeState
+	verifiedCertificate  string
 }
 
 func New(config Config) (*Service, error) {

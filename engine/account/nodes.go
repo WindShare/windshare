@@ -17,37 +17,82 @@ type nodeState struct {
 	expires   time.Time
 	anonymous bool
 	available bool
+	refs      int
+	cancel    context.CancelFunc
 }
 
-func (service *Service) startNode(address string) {
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	if service.ctx.Err() != nil || service.nodes[address] != nil {
+func (service *Service) retainNodeLocked(address string) {
+	if service.ctx.Err() != nil {
 		return
 	}
-	service.nodes[address] = &nodeState{}
+	state := service.nodes[address]
+	if state == nil {
+		state = &nodeState{}
+		service.nodes[address] = state
+	}
+	state.refs++
+	if state.cancel != nil {
+		return
+	}
+	nodeCtx, cancel := context.WithCancel(service.ctx)
+	state.cancel = cancel
 	service.workers.Go(func() {
-		for {
-			if service.config.ResolveNode != nil {
-				if node, official := service.config.ResolveNode(address); official {
-					if descriptor, err := service.discover(service.ctx, address, node.Key); err == nil {
-						service.mu.Lock()
-						service.nodes[address] = &nodeState{key: node.Key, expires: time.Unix(int64(descriptor.ExpiresAt), 0),
-							anonymous: descriptor.Anonymous, available: descriptor.Available && descriptor.Services.Relay}
-						service.notifyLocked()
-						service.mu.Unlock()
-					}
-				}
-			}
-			timer := time.NewTimer(RefreshInterval)
-			select {
-			case <-service.ctx.Done():
-				timer.Stop()
-				return
-			case <-timer.C:
-			}
-		}
+		service.pollNode(nodeCtx, address, state)
 	})
+}
+
+func (service *Service) releaseNodeLocked(address string) {
+	state := service.nodes[address]
+	if state == nil {
+		return
+	}
+	if state.refs > 0 {
+		state.refs--
+	}
+	if state.refs > 0 {
+		return
+	}
+	if state.cancel != nil {
+		state.cancel()
+		state.cancel = nil
+	}
+	delete(service.nodes, address)
+}
+
+func (service *Service) pollNode(ctx context.Context, address string, state *nodeState) {
+	for {
+		service.refreshNode(ctx, address, state)
+		timer := time.NewTimer(RefreshInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+	}
+}
+
+func (service *Service) refreshNode(ctx context.Context, address string, state *nodeState) {
+	if service.config.ResolveNode == nil {
+		return
+	}
+	node, official := service.config.ResolveNode(address)
+	if !official {
+		return
+	}
+	descriptor, err := service.discover(ctx, address, node.Key)
+	if err != nil {
+		return
+	}
+	service.mu.Lock()
+	if service.nodes[address] == state && ctx.Err() == nil {
+		state.key = node.Key
+		state.expires = time.Unix(int64(descriptor.ExpiresAt), 0)
+		state.anonymous = descriptor.Anonymous
+		state.available = descriptor.Available && descriptor.Services.Relay
+		service.notifyLocked()
+	}
+	service.mu.Unlock()
 }
 
 func (service *Service) discover(ctx context.Context, address string, key [32]byte) (serviceauthority.Descriptor, error) {
