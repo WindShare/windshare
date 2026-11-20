@@ -191,3 +191,43 @@ async fn paced_governor_shares_public_capacity_weighted_while_keeping_owner_stri
     assert_eq!(standard_grants, 38);
     assert_eq!(lowest_grants, 2);
 }
+
+#[tokio::test(start_paused = true)]
+async fn disabling_pacing_wakes_waiting_lanes_and_switches_to_unpaced_fast_path() {
+    use futures_util::FutureExt;
+
+    let access = Service::default();
+    let governor = Governor::new(access);
+    governor.publish_capacity(Some(MAX_FRAME), None, || {});
+
+    let wake = Arc::new(Notify::new());
+    {
+        let mut state = governor.state.lock().unwrap();
+        let key = Key([1; 12], [2; 16], 1);
+        state.lanes.insert(
+            1,
+            Lane {
+                session: key,
+                attribution: Attribution::Anonymous,
+                wake: Arc::clone(&wake),
+                demand: None,
+                granted: false,
+            },
+        );
+        *state.references.entry(key).or_default() += 1;
+    }
+    let lease = LaneLease {
+        id: 1,
+        governor: governor.clone(),
+    };
+
+    assert!(lease.try_take(MAX_FRAME));
+    let _ = wake.notified().now_or_never();
+    assert!(!lease.try_take(MAX_FRAME));
+
+    // Disabling pacing immediately releases throttled lanes and bypasses queueing.
+    governor.publish_capacity(None, None, || {});
+    assert!(wake.notified().now_or_never().is_some());
+    assert!(lease.try_take(MAX_FRAME));
+    assert!(lease.try_take(MAX_FRAME));
+}

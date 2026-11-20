@@ -1,8 +1,12 @@
-use super::{Identity, Runtime, Settings, State, access::PreparedPolicy, now, usage::Authority};
+use super::{
+    Configuration, Identity, Runtime, Settings, State, access::PreparedPolicy, now,
+    usage::Authority,
+};
 use crate::storage::budget::BudgetRecords;
 use anyhow::{Context, Result, anyhow, ensure};
 use std::{
     path::{Path, PathBuf},
+    sync::atomic::Ordering,
     time::{Duration, Instant},
 };
 use windshare_relay_access::{Issuer, trust::Generation};
@@ -110,6 +114,15 @@ impl Runtime {
                 state.settings = settings;
                 let publication = self.access.publish_policy(controller, access);
                 self.refresh_availability(&mut state, timestamp);
+                self.has_budgets.store(
+                    state.settings.relay_budget.is_some()
+                        || state.settings.contribution.daily_bytes.is_some(),
+                    Ordering::Release,
+                );
+                self.next_rollover.store(
+                    state.budgets.next_rollover(&state.settings),
+                    Ordering::Release,
+                );
                 publication
             },
         );
@@ -170,33 +183,87 @@ impl Runtime {
             );
         } else if state.unavailable {
             state.unavailable = false;
+            self.unavailable.store(false, Ordering::Release);
             tracing::info!(event = "relay_service_available", timestamp);
         }
     }
 
-    fn refresh_current_settings(&self, timestamp: i64) -> Result<()> {
+    // Rolls over active billing/daily windows without re-verifying issuer
+    // certificates or locking the governor when settings have not changed.
+    fn rollover_budgets(&self, timestamp: i64) -> Result<()> {
+        if timestamp < self.next_rollover.load(Ordering::Acquire) {
+            return Ok(());
+        }
         let writer = self.lock_control()?;
-        let settings = self
-            .state
-            .lock()
-            .map_err(|_| anyhow!("node state poisoned"))?
-            .settings
-            .clone();
-        let generations = settings.validate()?;
-        let result = self.apply_settings(settings, &generations, timestamp);
+        let (budgets, store) = {
+            let state = self
+                .state
+                .lock()
+                .map_err(|_| anyhow!("node state poisoned"))?;
+            let budgets = state.budgets.rollover(&state.settings, timestamp)?;
+            if budgets.is_empty() {
+                self.next_rollover.store(
+                    state.budgets.next_rollover(&state.settings),
+                    Ordering::Release,
+                );
+                return Ok(());
+            }
+            ensure!(state.control.is_some(), "missing persistent relay ledger");
+            (budgets, state.control.clone())
+        };
+        if let Some(store) = store {
+            store
+                .persist_node_settings(budgets, &[], |_| Ok(()))
+                .context("persisting rolled-over relay budgets")?;
+        }
+        let mut state = self.state.lock().expect("node state");
+        let was_public_exhausted = state.budgets.public_exhausted(&state.settings, timestamp);
+        state.budgets.advance(budgets);
+        self.refresh_availability(&mut state, timestamp);
+        self.next_rollover.store(
+            state.budgets.next_rollover(&state.settings),
+            Ordering::Release,
+        );
+        let public_just_exhausted =
+            !was_public_exhausted && state.budgets.public_exhausted(&state.settings, timestamp);
+        drop(state);
         drop(writer);
-        result
+        if public_just_exhausted {
+            self.access.notify_policy_changed();
+        }
+        Ok(())
     }
 
     fn refresh_settings(&self, path: Option<&Path>, timestamp: i64) -> Result<()> {
         let Some(path) = path else {
-            return self.refresh_current_settings(timestamp);
+            return self.rollover_budgets(timestamp);
         };
-        let result = Settings::read(path).and_then(|settings| self.update(settings, timestamp));
+        let raw = match std::fs::read(path) {
+            Ok(raw) => raw,
+            Err(error) => {
+                if let Err(rollover) = self.rollover_budgets(timestamp) {
+                    tracing::warn!(event = "node_active_settings_refresh_failed", timestamp, %rollover);
+                }
+                return Err(error.into());
+            }
+        };
+        let unchanged = self
+            .last_config_bytes
+            .lock()
+            .expect("config cache")
+            .as_deref()
+            == Some(raw.as_slice());
+        if unchanged {
+            return self.rollover_budgets(timestamp);
+        }
+        let result = Configuration::read_bytes(path, &raw)
+            .and_then(|config| self.update(config.node, timestamp));
+        if result.is_ok() {
+            *self.last_config_bytes.lock().expect("config cache") = Some(raw);
+            return Ok(());
+        }
         // A rejected file must not freeze the active ledger at the end of its month.
-        if result.is_err()
-            && let Err(error) = self.refresh_current_settings(timestamp)
-        {
+        if let Err(error) = self.rollover_budgets(timestamp) {
             tracing::warn!(event = "node_active_settings_refresh_failed", timestamp, %error);
         }
         result
@@ -207,15 +274,21 @@ impl Runtime {
         let mut summary = Instant::now();
         loop {
             tick.tick().await;
+            let timestamp = now();
             if summary.elapsed() >= SUMMARY_INTERVAL {
+                // Prune expired quota entries periodically even while the governor sleeps idle.
+                self.access.expire_quotas(timestamp.unsigned_abs());
                 let snapshot = self.snapshot();
                 tracing::info!(event = "node_load_summary", summary = ?snapshot);
                 summary = Instant::now();
             }
+            if path.is_none() && timestamp < self.next_rollover.load(Ordering::Acquire) {
+                continue;
+            }
             let runtime = self.clone();
             let path = path.clone();
             let result = tokio::task::spawn_blocking(move || {
-                runtime.refresh_settings(path.as_deref(), now())
+                runtime.refresh_settings(path.as_deref(), timestamp)
             })
             .await;
             if !matches!(result, Ok(Ok(()))) {

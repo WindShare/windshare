@@ -1,7 +1,10 @@
 use serde::Serialize;
 use std::{
     collections::BTreeMap,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 use windshare_relay_core::{identifiers::ShareId, sessions::SessionKey};
@@ -34,12 +37,18 @@ struct State {
     totals: Snapshot,
 }
 
+#[derive(Default)]
+struct Inner {
+    state: Mutex<State>,
+    wire_bytes: AtomicU64,
+}
+
 #[derive(Clone, Default)]
-pub struct Metrics(Arc<Mutex<State>>);
+pub struct Metrics(Arc<Inner>);
 
 impl Metrics {
     pub fn begin(&self, key: SessionKey) {
-        let mut state = self.0.lock().expect("node metrics");
+        let mut state = self.0.state.lock().expect("node metrics");
         let sessions = state.sessions.entry(key.share()).or_default();
         if sessions.iter().any(|entry| entry.key == key) {
             return;
@@ -54,7 +63,7 @@ impl Metrics {
     }
 
     pub fn end(&self, key: SessionKey) {
-        let mut state = self.0.lock().expect("node metrics");
+        let mut state = self.0.state.lock().expect("node metrics");
         let Some(sessions) = state.sessions.get_mut(&key.share()) else {
             return;
         };
@@ -80,7 +89,7 @@ impl Metrics {
     }
 
     pub fn forwarded(&self, key: SessionKey, bytes: u64, start: Instant, end: Instant) {
-        let mut state = self.0.lock().expect("node metrics");
+        let mut state = self.0.state.lock().expect("node metrics");
         state.totals.forwarded_bytes = state.totals.forwarded_bytes.saturating_add(bytes);
         if let Some(session) = state
             .sessions
@@ -100,12 +109,12 @@ impl Metrics {
     }
 
     pub fn wire(&self, bytes: usize) {
-        let mut state = self.0.lock().expect("node metrics");
-        state.totals.wire_bytes = state.totals.wire_bytes.saturating_add(bytes as u64);
+        self.0.wire_bytes.fetch_add(bytes as u64, Ordering::Relaxed);
     }
 
     pub fn admission_refused(&self) {
         self.0
+            .state
             .lock()
             .expect("node metrics")
             .totals
@@ -113,11 +122,17 @@ impl Metrics {
     }
 
     pub fn queue_refused(&self) {
-        self.0.lock().expect("node metrics").totals.queue_refusals += 1;
+        self.0
+            .state
+            .lock()
+            .expect("node metrics")
+            .totals
+            .queue_refusals += 1;
     }
 
     pub fn snapshot(&self) -> Snapshot {
-        let mut snapshot = self.0.lock().expect("node metrics").totals.clone();
+        let mut snapshot = self.0.state.lock().expect("node metrics").totals.clone();
+        snapshot.wire_bytes = self.0.wire_bytes.load(Ordering::Relaxed);
         snapshot.throughput_bytes_per_second_bounds = THROUGHPUT_BOUNDS;
         snapshot
     }

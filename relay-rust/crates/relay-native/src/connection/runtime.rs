@@ -44,7 +44,7 @@ where
     I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     let (outbox, writer, mut closure) = channel(connection, node.clone());
-    let writer = writer.with_usage(admission.usage.clone());
+    let writer = writer.with_usage(admission.usage.clone(), node.clone());
     let outbox = outbox.with_admission(&admission);
     tokio::select! {
         result = events.send(Event::Connected(connection, Box::new(outbox))) => {

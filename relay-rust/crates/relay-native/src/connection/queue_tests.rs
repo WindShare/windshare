@@ -200,16 +200,15 @@ async fn synchronous_bandwidth_grant_still_wakes_the_other_waiting_direction() {
     let (waiting, waiting_wake) = register_lane(&governor, scenario.flow);
     let (active, active_wake) = register_lane(&governor, reverse);
 
-    assert!(waiting.ready(max_frame));
-    waiting.submitted();
+    assert!(waiting.try_take(max_frame));
     let _ = waiting_wake.notified().now_or_never();
     let frame = max_frame / 2;
-    assert!(!waiting.ready(frame));
+    assert!(!waiting.try_take(frame));
     tokio::time::advance(Duration::from_secs(1)).await;
 
-    assert!(active.ready(frame));
+    assert!(active.try_take(frame));
     assert!(waiting_wake.notified().now_or_never().is_some());
-    assert!(waiting.ready(frame));
+    assert!(waiting.try_take(frame));
     assert!(active_wake.notified().now_or_never().is_none());
 }
 
@@ -220,16 +219,15 @@ async fn paced_bandwidth_grant_wakes_the_waiter() {
     let (_directory, governor) = paced_governor(&scenario, frame);
     let (waiting, wake) = register_lane(&governor, scenario.flow);
 
-    assert!(waiting.ready(frame));
-    waiting.submitted();
+    assert!(waiting.try_take(frame));
     let _ = wake.notified().now_or_never();
-    assert!(!waiting.ready(frame));
+    assert!(!waiting.try_take(frame));
 
     tokio::select! {
         () = governor.run() => panic!("governor stopped with a waiting lane"),
         result = tokio::time::timeout(Duration::from_secs(2), wake.notified()) => result.unwrap(),
     }
-    assert!(waiting.ready(frame));
+    assert!(waiting.try_take(frame));
 }
 
 fn paced_governor(scenario: &Scenario, rate: u64) -> (tempfile::TempDir, Governor) {

@@ -155,13 +155,13 @@ impl Outbox {
         attribution: Attribution,
     ) -> Option<RelayStep> {
         let slot = Arc::clone(&self.data_slots).try_acquire_owned().ok()?;
-        let (index, size) = self.pending.next()?;
-        let size = u32::try_from(size).ok()?;
-        let bytes = Arc::clone(&self.data_bytes)
-            .try_acquire_many_owned(size)
-            .ok()?;
         let reserved = self.ordered.try_reserve().ok()?;
-        let pending = self.pending.pop(index);
+        let (pending, bytes) = self.pending.try_pop(|size| {
+            let size = u32::try_from(size).ok()?;
+            Arc::clone(&self.data_bytes)
+                .try_acquire_many_owned(size)
+                .ok()
+        })?;
         self.pending_bytes -= pending.bytes.len();
         // This bounded mailbox is the host handoff, not a cached permit. Anything
         // inside it is already charged as submitted and may outlive revocation.

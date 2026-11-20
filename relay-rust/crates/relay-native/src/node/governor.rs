@@ -5,7 +5,10 @@ use super::access::Service;
 use pacing::Bandwidth;
 use std::{
     collections::{BTreeMap, VecDeque},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 use tokio::{sync::Notify, time::Instant};
@@ -56,6 +59,8 @@ struct State {
 pub struct Governor {
     state: Arc<Mutex<State>>,
     access: Service,
+    wake: Arc<Notify>,
+    pacing_enabled: Arc<AtomicBool>,
 }
 
 /// Its lifetime is the flow's queue lifetime, not a single packet's wait.
@@ -77,6 +82,8 @@ impl Governor {
                 classified: 0,
             })),
             access,
+            wake: Arc::new(Notify::new()),
+            pacing_enabled: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -90,9 +97,33 @@ impl Governor {
         let now = Instant::now();
         let node_changed = state.pacing.node.configure(bytes_per_second, now);
         let public_changed = state.pacing.public.configure(public_bytes_per_second, now);
+        let enabled = bytes_per_second.is_some() || public_bytes_per_second.is_some();
         // A scheduler pass must see the new rate and its admission policy together.
         let result = publish_node();
+        self.pacing_enabled.store(enabled, Ordering::Release);
+        let mut wake_governor = false;
+        if !enabled {
+            // Release any previously throttled lanes so the unpaced fast path
+            // never leaves stale queue entries behind.
+            let sessions: Vec<_> = state.queues.keys().copied().collect();
+            for session in sessions {
+                state.scheduler.cancel(session);
+            }
+            state.queues.clear();
+            for lane in state.lanes.values_mut() {
+                if lane.demand.take().is_some() {
+                    lane.granted = false;
+                    lane.wake.notify_one();
+                }
+            }
+        } else if node_changed || public_changed {
+            state.grant_pending(&self.access, |_, wake| wake.notify_one());
+            wake_governor = state.has_waiting_demand();
+        }
         drop(state);
+        if wake_governor {
+            self.wake.notify_one();
+        }
         if node_changed || public_changed {
             tracing::info!(
                 event = "governor_capacity_changed",
@@ -143,21 +174,31 @@ impl Governor {
         let mut tick = tokio::time::interval(TICK);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
-            tick.tick().await;
-            self.pump();
+            if self.pump() {
+                tick.tick().await;
+            } else {
+                // Sleep at 0Hz until a paced lane actually blocks on token refill.
+                self.wake.notified().await;
+                tick.reset();
+            }
         }
     }
 
-    fn pump(&self) {
+    fn pump(&self) -> bool {
         let mut state = self.state.lock().expect("governor");
         let reclassified = state.refresh_classes(&self.access);
         state.grant_pending(&self.access, |_, wake| wake.notify_one());
+        let active = state.has_waiting_demand();
         drop(state);
         log_reclassifications(reclassified);
+        active
     }
 }
 
 impl State {
+    fn has_waiting_demand(&self) -> bool {
+        self.queues.values().any(|queue| !queue.is_empty())
+    }
     fn demand(&self, id: u64, access: &Service) -> Demand {
         let lane = self.lanes.get(&id).expect("queued lane");
         Demand {
@@ -221,11 +262,24 @@ fn log_reclassifications(reclassified: Vec<(Principal, Class, Class)>) {
 }
 
 impl LaneLease {
-    pub fn ready(&self, bytes: u64) -> bool {
+    /// Atomically checks pacing credit and consumes the grant in one lock
+    /// acquisition, bypassing the global governor lock entirely when unpaced.
+    pub fn try_take(&self, bytes: u64) -> bool {
+        if !self.governor.pacing_enabled.load(Ordering::Acquire) {
+            return true;
+        }
         let mut state = self.governor.state.lock().expect("governor");
+        if !self.governor.pacing_enabled.load(Ordering::Relaxed) {
+            return true;
+        }
         let lane = state.lanes.get_mut(&self.id).expect("live lane");
         if let Some(demand) = lane.demand {
-            return demand == bytes && lane.granted;
+            if demand == bytes && lane.granted {
+                lane.demand = None;
+                lane.granted = false;
+                return true;
+            }
+            return false;
         }
         lane.demand = Some(bytes);
         let session = lane.session;
@@ -246,17 +300,18 @@ impl LaneLease {
                 wake.notify_one();
             }
         });
+        if granted {
+            let lane = state.lanes.get_mut(&self.id).expect("live lane");
+            lane.demand = None;
+            lane.granted = false;
+        }
+        let wake_governor = !granted || state.has_waiting_demand();
         drop(state);
+        if wake_governor {
+            self.governor.wake.notify_one();
+        }
         log_reclassifications(reclassified);
         granted
-    }
-
-    pub fn submitted(&self) {
-        let mut state = self.governor.state.lock().expect("governor");
-        let lane = state.lanes.get_mut(&self.id).expect("live lane");
-        lane.demand = None;
-        lane.granted = false;
-        drop(state);
     }
 }
 

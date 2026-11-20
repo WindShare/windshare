@@ -75,27 +75,28 @@ impl Queues {
         Ok(())
     }
 
-    pub fn next(&self) -> Option<(usize, usize)> {
+    pub fn try_pop<T>(
+        &mut self,
+        mut reserve: impl FnMut(usize) -> Option<T>,
+    ) -> Option<(Pending, T)> {
         for offset in 0..self.flows.len() {
             let index = (self.cursor + offset) % self.flows.len();
-            let flow = &self.flows[index];
-            let Some(head) = flow.queue.front() else {
+            let Some(head) = self.flows[index].queue.front() else {
                 continue;
             };
-            if flow.scheduling.ready(head.bytes.len() as u64) {
-                return Some((index, head.bytes.len()));
+            let size = head.bytes.len();
+            let Some(permit) = reserve(size) else {
+                continue;
+            };
+            if self.flows[index].scheduling.try_take(size as u64) {
+                let flow = &mut self.flows[index];
+                let head = flow.queue.pop_front().expect("scheduled head");
+                self.frames -= 1;
+                self.cursor = (index + 1) % self.flows.len();
+                return Some((head, permit));
             }
         }
         None
-    }
-
-    pub fn pop(&mut self, index: usize) -> Pending {
-        let flow = &mut self.flows[index];
-        let head = flow.queue.pop_front().expect("scheduled head");
-        flow.scheduling.submitted();
-        self.frames -= 1;
-        self.cursor = (index + 1) % self.flows.len();
-        head
     }
 
     pub fn discard(&mut self, key: FlowKey) -> usize {

@@ -24,7 +24,10 @@ pub(crate) use trace::NodeTrace;
 use crate::storage::Database;
 use anyhow::{Result, anyhow};
 use std::{
-    sync::{Arc, Mutex, MutexGuard, OnceLock},
+    sync::{
+        Arc, Mutex, MutexGuard, OnceLock,
+        atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering},
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::watch;
@@ -48,6 +51,11 @@ pub struct Runtime {
     control_writer: Arc<Mutex<()>>,
     reporting_authority: Arc<OnceLock<Option<usage::Authority>>>,
     revocations: watch::Sender<u64>,
+    epoch: Arc<AtomicU64>,
+    unavailable: Arc<AtomicBool>,
+    has_budgets: Arc<AtomicBool>,
+    next_rollover: Arc<AtomicI64>,
+    last_config_bytes: Arc<Mutex<Option<Vec<u8>>>>,
     pub(crate) metrics: Metrics,
     pub(crate) usage: usage::Collector,
 }
@@ -71,6 +79,11 @@ impl Default for Runtime {
             control_writer: Arc::default(),
             reporting_authority: Arc::default(),
             revocations: watch::channel(0).0,
+            epoch: Arc::new(AtomicU64::new(0)),
+            unavailable: Arc::new(AtomicBool::new(false)),
+            has_budgets: Arc::new(AtomicBool::new(false)),
+            next_rollover: Arc::new(AtomicI64::new(i64::MAX)),
+            last_config_bytes: Arc::default(),
             metrics: Metrics::default(),
             usage: usage::Collector::default(),
         }
@@ -121,7 +134,11 @@ impl Runtime {
     }
 
     pub fn available(&self) -> bool {
-        self.state.lock().is_ok_and(|state| !state.unavailable)
+        !self.unavailable.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn tracks_egress_attribution(&self) -> bool {
+        self.usage.is_configured() || self.has_budgets.load(Ordering::Acquire)
     }
 
     pub fn snapshot(&self) -> Snapshot {
@@ -129,7 +146,7 @@ impl Runtime {
     }
 
     pub(crate) fn epoch(&self) -> u64 {
-        *self.revocations.borrow()
+        self.epoch.load(Ordering::Acquire)
     }
 
     pub(crate) async fn revoked(&self, epoch: u64) {
@@ -144,6 +161,8 @@ impl Runtime {
     fn revoke(&self, state: &mut State, reason: &str) {
         if !state.unavailable {
             state.unavailable = true;
+            self.unavailable.store(true, Ordering::Release);
+            self.epoch.fetch_add(1, Ordering::Release);
             self.revocations.send_modify(|epoch| *epoch += 1);
             tracing::warn!(event = "relay_service_unavailable", reason);
         }

@@ -73,6 +73,23 @@ impl Budgets {
         self.public_daily.day_elapsed(timestamp)
     }
 
+    pub(super) fn next_rollover(&self, settings: &Settings) -> i64 {
+        let monthly = settings.relay_budget.and_then(|config| {
+            self.monthly.next_rollover(Window::BillingMonth {
+                reset_day: config.reset_day_utc,
+            })
+        });
+        let daily = settings
+            .contribution
+            .daily_bytes
+            .and_then(|_| self.public_daily.next_rollover(Window::PublicDay));
+        match (monthly, daily) {
+            (Some(a), Some(b)) => a.min(b),
+            (Some(value), None) | (None, Some(value)) => value,
+            (None, None) => i64::MAX,
+        }
+    }
+
     fn ready(&self, limits: Limits) -> u64 {
         self.monthly
             .ready(limits.monthly)

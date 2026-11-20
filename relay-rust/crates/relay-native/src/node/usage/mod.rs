@@ -24,6 +24,10 @@ impl Collector {
         self.issuer.get_or_init(|| issuer);
     }
 
+    pub fn is_configured(&self) -> bool {
+        self.issuer.get().is_some()
+    }
+
     pub fn record(&self, attribution: Attribution, bytes: usize, timestamp: u64) {
         if let Attribution::Account {
             issuer, account, ..
