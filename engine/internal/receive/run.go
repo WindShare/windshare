@@ -80,7 +80,7 @@ func runAttempt(ctx context.Context, input preparedRequest, deps Dependencies, r
 		connectionErr = nil
 	}
 	active.execution.CloseWithReason(getSettlementStopReason(ctx.Err(), admissionErr, runtimeErr, connectionErr))
-	settlement = &SettlementInput{Result: result, AdmissionError: admissionErr, RuntimeError: runtimeErr, ConnectionError: connectionErr, ContextError: ctx.Err(), Destination: prepared.destination, DestinationAdjusted: prepared.destinationAdjusted, Operation: prepared.job.ReceiveIntent().OperationID(), Job: prepared.job.JobID()}
+	settlement = &SettlementInput{Result: result, AdmissionError: admissionErr, RuntimeError: runtimeErr, ConnectionError: connectionErr, ContextError: ctx.Err(), Destination: prepared.destination, DestinationAdjusted: prepared.destinationAdjusted, Operation: prepared.job.ReceiveIntent().OperationID(), Job: prepared.job.JobID(), ShareStopped: observation.relayReportedShareStopped()}
 	return
 }
 
@@ -101,7 +101,7 @@ func (active *receiveOperation) settleAttempt(ctx context.Context, settlement *S
 		}
 		return completed
 	}
-	completed := settlePreparationFailure(step, active.observation.failureSnapshot(), ctx.Err(), cleanupErr)
+	completed := settlePreparationFailure(step, active.observation.preparationFailure(cleanupErr), ctx.Err(), cleanupErr)
 	completed.Value.Destination = active.input.outDir
 	completed.Value.Elapsed = elapsed
 	completed.Value.Connectivity = connectivity

@@ -53,6 +53,14 @@ func (terminal *PeerSessionTerminalError) Message() Message {
 	return terminal.message
 }
 
+// Terminal decodes the code and message the peer sent in its terminal.
+func (terminal *PeerSessionTerminalError) Terminal() (SessionTerminal, error) {
+	if terminal == nil || terminal.message.Kind() != MessageSessionTerminal {
+		return SessionTerminal{}, ErrInvalidSessionTerminal
+	}
+	return DecodeSessionTerminal(terminal.message.Body())
+}
+
 type ProtocolPump struct {
 	channel   FrameChannel
 	opener    InboundEnvelopeOpener

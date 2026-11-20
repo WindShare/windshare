@@ -7,11 +7,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/engine/internal/task"
+	v2 "github.com/windshare/windshare/relay/protocol/v2"
+	"github.com/windshare/windshare/transport/relayv2"
 )
 
 type opaqueCanaryError struct{ value string }
@@ -202,36 +205,116 @@ func TestReceiveSettlementReportsSenderStopAsStoppedShare(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	outputPause, err := transferfault.NewSession(transferfault.ScopeOutputPause, transferfault.SessionTransport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outputContract, err := transferfault.NewOutput(transferfault.ScopeOutputPause, transferfault.OutputContract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceDrift, err := transferfault.NewSource(transferfault.ScopeFileLocal, transferfault.SourceRevisionChanged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peerStop := peerSessionTerminalError(t, session.SessionStoppedCode)
 	tests := []struct {
 		name       string
-		runtimeErr error
+		mutate     func(*SettlementInput)
 		wantCode   FailureCode
 		wantReason RecoveryReason
 		wantRetry  bool
 	}{
-		{"sender stopped share", peerSessionTerminalError(t, session.SessionStoppedCode), FailureShareStopped, RecoveryShareStopped, false},
-		{"other peer terminal stays retryable", peerSessionTerminalError(t, protocolsession.SessionTerminalCodeLast-1), 0, RecoveryTransferFailure, true},
-		{"plain transport failure stays retryable", opaqueCanaryError{"relay-token-canary"}, 0, RecoveryTransferFailure, true},
+		{"sender stop terminal", func(input *SettlementInput) {
+			input.RuntimeError = peerStop
+		}, FailureShareStopped, RecoveryShareStopped, false},
+		{"relay STOPPED without a runtime error", func(input *SettlementInput) {
+			input.ShareStopped = true
+		}, FailureShareStopped, RecoveryShareStopped, false},
+		{"relay STOPPED during an output pause", func(input *SettlementInput) {
+			input.Result.TerminationFault = outputPause
+			input.ShareStopped = true
+		}, FailureShareStopped, RecoveryShareStopped, false},
+		{"sender stop surfacing as a dependency contract", func(input *SettlementInput) {
+			input.Result.TerminationFault = transferfault.DependencyContractFault()
+			input.RuntimeError = peerStop
+		}, FailureShareStopped, RecoveryShareStopped, false},
+		{"output contract keeps precedence", func(input *SettlementInput) {
+			input.Result.TerminationFault = outputContract
+			input.RuntimeError = peerStop
+			input.ShareStopped = true
+		}, 0, RecoveryNeedsInspection, false},
+		{"source drift keeps precedence", func(input *SettlementInput) {
+			input.Result.SourceDriftFault = sourceDrift
+			input.RuntimeError = peerStop
+		}, 0, RecoveryTransferFailure, true},
+		{"other peer terminal stays retryable", func(input *SettlementInput) {
+			input.RuntimeError = peerSessionTerminalError(t, protocolsession.SessionTerminalCodeLast-1)
+		}, 0, RecoveryTransferFailure, true},
+		{"plain transport failure stays retryable", func(input *SettlementInput) {
+			input.RuntimeError = opaqueCanaryError{"relay-token-canary"}
+		}, 0, RecoveryTransferFailure, true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			input := SettlementInput{Result: successfulJobResult(t), RuntimeError: test.runtimeErr}
+			input := SettlementInput{Result: successfulJobResult(t)}
 			input.Result.Outcome = transfer.DirectTreeOutcomePaused
 			input.Result.TerminationFault = sessionTerminal
+			test.mutate(&input)
 			result, err := Settle(input)
 			if err != nil {
 				t.Fatal(err)
 			}
 			failure, ok := errors.AsType[Failure](result.Err)
-			if !ok || result.FailureClass != task.FailureNetwork || failure.Code != test.wantCode {
+			if !ok || failure.Code != test.wantCode {
 				t.Fatalf("failure = %+v class %d, want code %d", failure, result.FailureClass, test.wantCode)
 			}
 			if reason := result.Value.Recovery.Reason; reason != test.wantReason || reason.Retryable() != test.wantRetry {
 				t.Fatalf("recovery reason = %d retryable %t, want %d retryable %t", reason, reason.Retryable(), test.wantReason, test.wantRetry)
 			}
-			if !errors.Is(result.Err, test.runtimeErr) {
+			if input.RuntimeError != nil && !errors.Is(result.Err, input.RuntimeError) {
 				t.Fatal("settlement dropped the diagnostic runtime cause")
 			}
 		})
+	}
+}
+
+func TestRelayStoppedRecoveryMarksTheAttemptShareStopped(t *testing.T) {
+	stopped := fmt.Errorf("join: %w", &relayv2.RelayError{Code: v2.ErrorStopped})
+	for _, test := range []struct {
+		name  string
+		value relayset.ReceiverRecoveryObservation
+		want  bool
+	}{
+		{"terminal STOPPED", relayset.ReceiverRecoveryObservation{Phase: relayset.ReceiverRecoveryTerminal, Err: stopped}, true},
+		{"retrying is not terminal", relayset.ReceiverRecoveryObservation{Phase: relayset.ReceiverRecoveryRetrying, Err: stopped}, false},
+		{"terminal for another reason", relayset.ReceiverRecoveryObservation{Phase: relayset.ReceiverRecoveryTerminal, Err: &relayv2.RelayError{Code: v2.ErrorInvalidProof}}, false},
+		{"terminal without cause", relayset.ReceiverRecoveryObservation{Phase: relayset.ReceiverRecoveryTerminal}, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			observation := newObservation(task.Control{}, false, nil)
+			observation.receiverRecovery(test.value)
+			if got := observation.relayReportedShareStopped(); got != test.want {
+				t.Fatalf("share stopped = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
+func TestPreparationFailureAfterRelayStoppedIsNotRetryable(t *testing.T) {
+	cause := fmt.Errorf("join: %w", &relayv2.RelayError{Code: v2.ErrorStopped})
+	observation := newObservation(task.Control{}, false, nil)
+	observation.receiverRecovery(relayset.ReceiverRecoveryObservation{Phase: relayset.ReceiverRecoveryTerminal, Err: cause})
+	observation.fail(stepNetworkFailure, cause)
+	failure := observation.preparationFailure(nil)
+	if failure.Code != FailureShareStopped || !errors.Is(failure, cause) {
+		t.Fatalf("preparation failure = %+v", failure)
+	}
+	completed := settlePreparationFailure(stepNetworkFailure, failure, nil, nil)
+	if reason := completed.Value.Recovery.Reason; reason != RecoveryShareStopped || reason.Retryable() {
+		t.Fatalf("recovery reason = %d", reason)
+	}
+	if failure := observation.preparationFailure(errors.New("lease release failed")); failure.Code != 0 {
+		t.Fatalf("cleanup failure lost precedence: %+v", failure)
 	}
 }

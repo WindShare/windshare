@@ -9,7 +9,6 @@ import (
 
 	"github.com/windshare/windshare/core/downloadmetrics"
 	"github.com/windshare/windshare/core/session"
-	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
@@ -79,6 +78,9 @@ type SettlementInput struct {
 	Operation                                                                 receivecontract.OperationID
 	Job                                                                       transfer.TransferJobID
 	Connectivity                                                              downloadmetrics.Snapshot
+	// ShareStopped records a terminal relay STOPPED rejection seen by relay
+	// recovery during this attempt; the share no longer exists on the relay.
+	ShareStopped bool
 }
 
 func settlePreparationFailure(step stepOutcome, failure Failure, contextErr, cleanupErr error) task.Completion[Result] {
@@ -187,15 +189,25 @@ func resultHasTerminalNetworkFault(r transfer.JobResult) bool {
 	return r.TerminationFault.Domain() == transferfault.DomainSession && r.TerminationFault.Scope() == transferfault.ScopeSessionTerminal
 }
 
-// peerStoppedSession reports whether the sender ended the session because its
-// share stopped. Retrying the same link cannot succeed after that terminal.
-func peerStoppedSession(cause error) bool {
-	var peer *protocolsession.PeerSessionTerminalError
-	if !errors.As(cause, &peer) || peer == nil || peer.Message().Kind() != protocolsession.MessageSessionTerminal {
+// shareStopped reports whether the attempt ended because the share itself
+// stopped: the sender's authenticated stop terminal or a relay STOPPED rejection.
+// Retrying the same link cannot succeed after either. Source drift, contract
+// faults and cleanup failures keep precedence so they remain visible.
+func shareStopped(input SettlementInput, class task.FailureClass) bool {
+	r := input.Result
+	if !input.ShareStopped && !session.PeerStopped(input.RuntimeError) {
 		return false
 	}
-	terminal, err := protocolsession.DecodeSessionTerminal(peer.Message().Body())
-	return err == nil && terminal.Code == session.SessionStoppedCode
+	if r.SourceDriftFault.Valid() || input.CleanupError != nil ||
+		outputContractFault(r.TerminationFault) || outputContractFault(r.SettlementFault) {
+		return false
+	}
+	return class == task.FailureNetwork || r.TerminationFault.Domain() == transferfault.DomainSession
+}
+
+func outputContractFault(f transferfault.Fault) bool {
+	code, ok := f.OutputCode()
+	return ok && code == transferfault.OutputContract
 }
 
 func resultFailure(input SettlementInput, class task.FailureClass) Failure {
@@ -203,7 +215,7 @@ func resultFailure(input SettlementInput, class task.FailureClass) Failure {
 	if class == task.FailureUsage {
 		return Failure{Local: LocalSelectionMissing}
 	}
-	if !r.SourceDriftFault.Valid() && resultHasTerminalNetworkFault(r) && peerStoppedSession(input.RuntimeError) {
+	if shareStopped(input, class) {
 		return Failure{Code: FailureShareStopped}
 	}
 	for _, f := range []transferfault.Fault{r.SourceDriftFault, r.TerminationFault, r.SettlementFault} {
