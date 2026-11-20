@@ -52,6 +52,7 @@ Treat the first sample of each case as warmup and report all remaining samples
 and their median. Compare identical release relay binaries and benchmark drivers.
 The metrics include feedback controls per data frame and sends exceeding 1 ms;
 send duration includes socket work and credit waits, not just credit waits.
+Run the same command with `-bench '^BenchmarkNativeRelaySignalingLatency$'` to measure delivery of one 2 KiB frame at a time.
 This isolates transport into memory, without encryption, disk output or WAN
 latency. Use `BenchmarkOpenBlock` in `./core/content/records` to measure the
 canonical block decoder separately. The authenticated envelope path is measured by the

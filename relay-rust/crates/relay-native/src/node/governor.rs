@@ -1,19 +1,18 @@
 //! Node-wide pacing, with one fair scheduling identity for both session directions.
 mod pacing;
+mod scheduling;
+
+use crate::connection::{WritePermit, WriteWindow};
+use scheduling::State;
 
 use super::access::Service;
 use pacing::Bandwidth;
 use std::{
-    collections::{BTreeMap, VecDeque},
     sync::{Arc, Mutex},
     time::Duration,
 };
 use tokio::{sync::Notify, time::Instant};
-use windshare_relay_access::{
-    Attribution, Principal,
-    entitlement::Class,
-    governor::{Demand, Scheduler},
-};
+use windshare_relay_access::{Attribution, Principal, entitlement::Class};
 use windshare_relay_core::{flow::FlowKey, sessions::SessionKey};
 
 const TICK: Duration = Duration::from_millis(5);
@@ -34,24 +33,6 @@ impl From<SessionKey> for Key {
     }
 }
 
-struct Lane {
-    session: Key,
-    attribution: Attribution,
-    wake: Arc<Notify>,
-    demand: Option<u64>,
-    granted: bool,
-}
-
-struct State {
-    scheduler: Scheduler<Key>,
-    queues: BTreeMap<Key, VecDeque<u64>>,
-    references: BTreeMap<Key, usize>,
-    lanes: BTreeMap<u64, Lane>,
-    sequence: u64,
-    pacing: Bandwidth,
-    classified: u64,
-}
-
 #[derive(Clone)]
 pub struct Governor {
     state: Arc<Mutex<State>>,
@@ -67,15 +48,7 @@ pub struct LaneLease {
 impl Governor {
     pub fn new(access: Service) -> Self {
         Self {
-            state: Arc::new(Mutex::new(State {
-                scheduler: Scheduler::new(MAX_SESSIONS, MAX_FRAME),
-                queues: BTreeMap::new(),
-                references: BTreeMap::new(),
-                lanes: BTreeMap::new(),
-                sequence: 0,
-                pacing: Bandwidth::default(),
-                classified: 0,
-            })),
+            state: Arc::new(Mutex::new(State::new())),
             access,
         }
     }
@@ -108,35 +81,43 @@ impl Governor {
         self.state.lock().unwrap().pacing.node.capacity()
     }
 
-    pub fn register(
+    pub(crate) fn register(
         &self,
         flow: FlowKey,
         attribution: Attribution,
         wake: Arc<Notify>,
+        window: Arc<WriteWindow>,
     ) -> Option<LaneLease> {
         let mut state = self.state.lock().expect("governor");
-        if state.lanes.len() >= MAX_SESSIONS * 2 {
-            return None;
-        }
-        state.sequence = state.sequence.checked_add(1)?;
-        let id = state.sequence;
-        let session = Key::from(flow.session());
-        state.lanes.insert(
-            id,
-            Lane {
-                session,
-                attribution,
-                wake,
-                demand: None,
-                granted: false,
-            },
-        );
-        *state.references.entry(session).or_default() += 1;
+        let id = state.register(Key::from(flow.session()), attribution, wake, window)?;
         drop(state);
         Some(LaneLease {
             id,
             governor: self.clone(),
         })
+    }
+
+    /// Advertise each flow's writable lookahead together, so the first flow
+    /// visited by the actor cannot take bandwidth before its peers compete.
+    pub(crate) fn take<'a, H, I>(
+        &self,
+        window: &WriteWindow,
+        flows: I,
+    ) -> Option<(usize, WritePermit)>
+    where
+        H: Iterator<Item = u64>,
+        I: Iterator<Item = (&'a LaneLease, H)> + Clone,
+    {
+        let mut state = self.state.lock().expect("governor");
+        let reclassified = state.refresh_classes(&self.access, super::now().unsigned_abs());
+        for (lane, sizes) in flows.clone() {
+            state.offer(lane.id, sizes, &self.access);
+        }
+        state.grant_pending(&self.access, Some(window));
+        let grant = state.take_first(flows.map(|(lane, _)| lane.id));
+        drop(state);
+        log_reclassifications(reclassified);
+        grant
     }
 
     pub async fn run(&self) {
@@ -150,62 +131,10 @@ impl Governor {
 
     fn pump(&self) {
         let mut state = self.state.lock().expect("governor");
-        let reclassified = state.refresh_classes(&self.access);
-        state.grant_pending(&self.access, |_, wake| wake.notify_one());
+        let reclassified = state.refresh_classes(&self.access, super::now().unsigned_abs());
+        state.grant_pending(&self.access, None);
         drop(state);
         log_reclassifications(reclassified);
-    }
-}
-
-impl State {
-    fn demand(&self, id: u64, access: &Service) -> Demand {
-        let lane = self.lanes.get(&id).expect("queued lane");
-        Demand {
-            principal: lane.attribution.principal(lane.session.0),
-            class: access
-                .class(lane.attribution, super::now().unsigned_abs())
-                .0,
-            bytes: lane.demand.expect("queued demand"),
-        }
-    }
-
-    fn refresh_classes(&mut self, access: &Service) -> Vec<(Principal, Class, Class)> {
-        let second = super::now().unsigned_abs();
-        if self.classified == second {
-            return Vec::new();
-        }
-        access.expire_quotas(second);
-        let mut reclassified = Vec::new();
-        for lane in self.lanes.values() {
-            let principal = lane.attribution.principal(lane.session.0);
-            let to = access.class(lane.attribution, second).0;
-            if let Some(from) = self.scheduler.reclassify(principal, to) {
-                reclassified.push((principal, from, to));
-            }
-        }
-        self.classified = second;
-        reclassified
-    }
-
-    fn grant_pending(&mut self, access: &Service, mut on_grant: impl FnMut(u64, &Notify)) {
-        let available = self.pacing.replenish(Instant::now());
-        let mut remaining = available;
-        while let Some((session, _)) = self
-            .scheduler
-            .next(|class, bytes| remaining.reserve(class, bytes))
-        {
-            let queue = self.queues.get_mut(&session).expect("scheduled session");
-            let id = queue.pop_front().expect("scheduled lane");
-            let next = queue.front().copied();
-            let lane = self.lanes.get_mut(&id).expect("scheduled lane");
-            lane.granted = true;
-            on_grant(id, &lane.wake);
-            if let Some(next) = next {
-                let demand = self.demand(next, access);
-                assert!(self.scheduler.request(session, demand));
-            }
-        }
-        self.pacing.charge(&available, &remaining);
     }
 }
 
@@ -220,75 +149,13 @@ fn log_reclassifications(reclassified: Vec<(Principal, Class, Class)>) {
     }
 }
 
-impl LaneLease {
-    pub fn ready(&self, bytes: u64) -> bool {
-        let mut state = self.governor.state.lock().expect("governor");
-        let lane = state.lanes.get_mut(&self.id).expect("live lane");
-        if let Some(demand) = lane.demand {
-            return demand == bytes && lane.granted;
-        }
-        lane.demand = Some(bytes);
-        let session = lane.session;
-        let queue = state.queues.entry(session).or_default();
-        let schedule = queue.is_empty();
-        queue.push_back(self.id);
-        let reclassified = state.refresh_classes(&self.governor.access);
-        if schedule {
-            let demand = state.demand(self.id, &self.governor.access);
-            assert!(state.scheduler.request(session, demand));
-        }
-        // The active caller can take its grant directly. Other lanes may be waiting.
-        let mut granted = false;
-        state.grant_pending(&self.governor.access, |id, wake| {
-            if id == self.id {
-                granted = true;
-            } else {
-                wake.notify_one();
-            }
-        });
-        drop(state);
-        log_reclassifications(reclassified);
-        granted
-    }
-
-    pub fn submitted(&self) {
-        let mut state = self.governor.state.lock().expect("governor");
-        let lane = state.lanes.get_mut(&self.id).expect("live lane");
-        lane.demand = None;
-        lane.granted = false;
-        drop(state);
-    }
-}
-
 impl Drop for LaneLease {
     fn drop(&mut self) {
-        let mut state = self.governor.state.lock().expect("governor");
-        let Some(lane) = state.lanes.remove(&self.id) else {
-            return;
-        };
-        if let Some(queue) = state.queues.get_mut(&lane.session) {
-            let was_head = queue.front() == Some(&self.id);
-            queue.retain(|id| *id != self.id);
-            let next = queue.front().copied();
-            if was_head {
-                // Replacing a cancelled head must retain the session's service debt.
-                state.scheduler.withdraw(lane.session);
-                if let Some(next) = next {
-                    let demand = state.demand(next, &self.governor.access);
-                    assert!(state.scheduler.request(lane.session, demand));
-                }
-            }
-        }
-        let references = state
-            .references
-            .get_mut(&lane.session)
-            .expect("lane session");
-        *references -= 1;
-        if *references == 0 {
-            state.references.remove(&lane.session);
-            state.queues.remove(&lane.session);
-            state.scheduler.cancel(lane.session);
-        }
+        self.governor
+            .state
+            .lock()
+            .expect("governor")
+            .remove(self.id, &self.governor.access);
     }
 }
 
