@@ -91,7 +91,7 @@ func TestShareWaitsForConfirmedSelectionAfterLocalReadFailure(t *testing.T) {
 	store.record = cachedRecord(first)
 	config.Store = store
 	service := testService(t, config)
-	service.nodes["primary"] = &nodeState{key: [32]byte{1}, anonymous: true, available: true, expires: config.Now().Add(time.Hour)}
+	service.nodes.put("primary", &nodeState{key: [32]byte{1}, anonymous: true, available: true, expires: config.Now().Add(time.Hour)})
 
 	failure := errors.New("could not open shared account state")
 	store.err = failure

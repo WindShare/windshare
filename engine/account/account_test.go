@@ -71,7 +71,7 @@ func TestCachedTicketDoesNotWaitForAuthorityAndBlockedAccountNeverBecomesAnonymo
 	source := &Source{share: share, address: "https://node.example"}
 	requireBearer(t, source, response.Ticket)
 	service.mu.Lock()
-	service.nodes[source.address] = &nodeState{key: [32]byte{1}, anonymous: true, available: true, expires: config.Now().Add(time.Hour)}
+	service.nodes.put(source.address, &nodeState{key: [32]byte{1}, anonymous: true, available: true, expires: config.Now().Add(time.Hour)})
 	service.rememberDenialLocked(service.record, "account_blocked")
 	service.mu.Unlock()
 	if authorization := source.ReserveRegistrationAuthorization(); authorization.State != serviceauthority.AdmissionDenied || authorization.Bearer != "" {
@@ -100,11 +100,11 @@ func TestAnonymousAdmissionDuringSetupRequiresFreshSignedNodePolicy(t *testing.T
 		t.Fatalf("manual registration authorization = %v", got)
 	}
 	service.transition(Record{}, Pending, "", time.Time{})
-	service.nodes[source.address] = &nodeState{key: [32]byte{1}, anonymous: true, available: true, expires: config.Now()}
+	service.nodes.put(source.address, &nodeState{key: [32]byte{1}, anonymous: true, available: true, expires: config.Now()})
 	if source.ReserveRegistrationAuthorization().State != serviceauthority.AdmissionPendingSetup {
 		t.Fatal("expired policy permitted anonymous admission")
 	}
-	service.nodes[source.address].expires = config.Now().Add(time.Minute)
+	service.nodes.put(source.address, &nodeState{key: [32]byte{1}, anonymous: true, available: true, expires: config.Now().Add(time.Minute)})
 	requireBearer(t, source, "")
 }
 

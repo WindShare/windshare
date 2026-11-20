@@ -42,15 +42,15 @@ func TestSignedNodeDiscoveryBindsFullWebSocketEndpointWithoutAppendingTwice(t *t
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(string(fixture.Descriptor)))}, nil
 	})
 	service := testService(t, config)
-	descriptor, err := service.discover(t.Context(), "https://node.example", key)
+	descriptor, err := service.nodes.discover(t.Context(), "https://node.example", key)
 	if err != nil || !descriptor.Anonymous {
 		t.Fatal(descriptor, err)
 	}
-	if _, err := service.discover(t.Context(), "https://node.example/another-base", key); err == nil {
+	if _, err := service.nodes.discover(t.Context(), "https://node.example/another-base", key); err == nil {
 		t.Fatal("node moved its signed endpoint")
 	}
 	key[0] ^= 1
-	if _, err := service.discover(t.Context(), "https://node.example", key); err == nil {
+	if _, err := service.nodes.discover(t.Context(), "https://node.example", key); err == nil {
 		t.Fatal("directory-pinned node key was ignored")
 	}
 }
@@ -117,10 +117,7 @@ func TestNodeDiscoveryStopsWhenLastShareCloses(t *testing.T) {
 		if got := discoveries.Load(); got != 2 {
 			t.Fatalf("node discovery continued after last share closed: %d requests", got)
 		}
-		service.mu.Lock()
-		remainingNodes := len(service.nodes)
-		service.mu.Unlock()
-		if remainingNodes != 0 {
+		if remainingNodes := service.nodes.len(); remainingNodes != 0 {
 			t.Fatalf("node map retained %d closed entries", remainingNodes)
 		}
 	})

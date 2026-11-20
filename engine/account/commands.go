@@ -116,7 +116,7 @@ func (service *Service) RequestEmail(ctx context.Context, email string) error {
 		return err
 	}
 	defer func() { <-service.operation }()
-	previous, err := service.initialize(ctx)
+	previous, err := service.syncSelection(ctx, service.initialize, nil)
 	if err != nil {
 		return err
 	}
@@ -188,6 +188,10 @@ func (service *Service) RevokeCredential(ctx context.Context, credential [16]byt
 	if service == nil {
 		return ErrNotConfigured
 	}
+	if err := service.lockOperation(ctx); err != nil {
+		return err
+	}
+	defer func() { <-service.operation }()
 	previous, err := service.load(ctx)
 	if err != nil {
 		return err
@@ -203,14 +207,11 @@ func (service *Service) RevokeCredential(ctx context.Context, credential [16]byt
 	if err != nil {
 		return err
 	}
-	service.mu.Lock()
-	service.rememberDenialLocked(Record{Credential: &Credential{ID: credential, Account: previous.Credential.Account}}, "credential_revoked")
-	service.mu.Unlock()
-	_, err = service.config.Store.Update(ctx, func(current Record) (Record, error) {
+	target := Record{Credential: &Credential{ID: credential, Account: previous.Credential.Account}}
+	return service.recordDenial(ctx, target, "credential_revoked", func(current Record) (Record, error) {
 		if current.Credential != nil && current.Credential.ID == credential {
 			current.Denial = "credential_revoked"
 		}
 		return current, nil
 	})
-	return err
 }

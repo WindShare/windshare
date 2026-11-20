@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/windshare/windshare/core/serviceauthority"
@@ -21,28 +22,65 @@ type nodeState struct {
 	cancel    context.CancelFunc
 }
 
-func (service *Service) retainNodeLocked(address string) {
-	if service.ctx.Err() != nil {
+// nodePolicyCache owns relay node descriptor discovery and anonymous-admission
+// caching independently of account credential state.
+// Lock ordering with Service: Service.mu -> nodePolicyCache.mu.
+type nodePolicyCache struct {
+	ctx         context.Context
+	workers     *sync.WaitGroup
+	client      HTTPClient
+	now         func() time.Time
+	resolveNode func(string) (Node, bool)
+	onChange    func()
+	mu          sync.Mutex
+	entries     map[string]*nodeState
+}
+
+func newNodePolicyCache(
+	ctx context.Context,
+	workers *sync.WaitGroup,
+	client HTTPClient,
+	now func() time.Time,
+	resolveNode func(string) (Node, bool),
+	onChange func(),
+) *nodePolicyCache {
+	return &nodePolicyCache{
+		ctx:         ctx,
+		workers:     workers,
+		client:      client,
+		now:         now,
+		resolveNode: resolveNode,
+		onChange:    onChange,
+		entries:     make(map[string]*nodeState),
+	}
+}
+
+func (cache *nodePolicyCache) retain(address string) {
+	if cache.ctx.Err() != nil {
 		return
 	}
-	state := service.nodes[address]
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	state := cache.entries[address]
 	if state == nil {
 		state = &nodeState{}
-		service.nodes[address] = state
+		cache.entries[address] = state
 	}
 	state.refs++
 	if state.cancel != nil {
 		return
 	}
-	nodeCtx, cancel := context.WithCancel(service.ctx)
+	nodeCtx, cancel := context.WithCancel(cache.ctx)
 	state.cancel = cancel
-	service.workers.Go(func() {
-		service.pollNode(nodeCtx, address, state)
+	cache.workers.Go(func() {
+		cache.pollNode(nodeCtx, address, state)
 	})
 }
 
-func (service *Service) releaseNodeLocked(address string) {
-	state := service.nodes[address]
+func (cache *nodePolicyCache) release(address string) {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	state := cache.entries[address]
 	if state == nil {
 		return
 	}
@@ -56,12 +94,32 @@ func (service *Service) releaseNodeLocked(address string) {
 		state.cancel()
 		state.cancel = nil
 	}
-	delete(service.nodes, address)
+	delete(cache.entries, address)
 }
 
-func (service *Service) pollNode(ctx context.Context, address string, state *nodeState) {
+func (cache *nodePolicyCache) permitsAnonymous(address string, node Node) bool {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	cached := cache.entries[address]
+	return cached != nil && cached.key == node.Key &&
+		cached.expires.After(cache.now()) && cached.anonymous && cached.available
+}
+
+func (cache *nodePolicyCache) put(address string, state *nodeState) {
+	cache.mu.Lock()
+	cache.entries[address] = state
+	cache.mu.Unlock()
+}
+
+func (cache *nodePolicyCache) len() int {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	return len(cache.entries)
+}
+
+func (cache *nodePolicyCache) pollNode(ctx context.Context, address string, state *nodeState) {
 	for {
-		service.refreshNode(ctx, address, state)
+		cache.refreshNode(ctx, address, state)
 		timer := time.NewTimer(RefreshInterval)
 		select {
 		case <-ctx.Done():
@@ -72,30 +130,32 @@ func (service *Service) pollNode(ctx context.Context, address string, state *nod
 	}
 }
 
-func (service *Service) refreshNode(ctx context.Context, address string, state *nodeState) {
-	if service.config.ResolveNode == nil {
-		return
-	}
-	node, official := service.config.ResolveNode(address)
+func (cache *nodePolicyCache) refreshNode(ctx context.Context, address string, state *nodeState) {
+	node, official := cache.resolveNode(address)
 	if !official {
 		return
 	}
-	descriptor, err := service.discover(ctx, address, node.Key)
+	descriptor, err := cache.discover(ctx, address, node.Key)
 	if err != nil {
 		return
 	}
-	service.mu.Lock()
-	if service.nodes[address] == state && ctx.Err() == nil {
+	updated := false
+	cache.mu.Lock()
+	if cache.entries[address] == state && ctx.Err() == nil {
 		state.key = node.Key
 		state.expires = time.Unix(int64(descriptor.ExpiresAt), 0)
 		state.anonymous = descriptor.Anonymous
 		state.available = descriptor.Available && descriptor.Services.Relay
-		service.notifyLocked()
+		updated = true
 	}
-	service.mu.Unlock()
+	cache.mu.Unlock()
+	// Notify after releasing cache.mu to preserve Service.mu -> nodePolicyCache.mu order.
+	if updated && cache.onChange != nil {
+		cache.onChange()
+	}
 }
 
-func (service *Service) discover(ctx context.Context, address string, key [32]byte) (serviceauthority.Descriptor, error) {
+func (cache *nodePolicyCache) discover(ctx context.Context, address string, key [32]byte) (serviceauthority.Descriptor, error) {
 	endpoint, err := v2.NormalizeRelayEndpoint(address)
 	if err != nil {
 		return serviceauthority.Descriptor{}, err
@@ -117,7 +177,7 @@ func (service *Service) discover(ctx context.Context, address string, key [32]by
 	if err != nil {
 		return serviceauthority.Descriptor{}, err
 	}
-	response, err := service.config.Client.Do(request)
+	response, err := cache.client.Do(request)
 	if err != nil {
 		return serviceauthority.Descriptor{}, err
 	}
@@ -126,7 +186,7 @@ func (service *Service) discover(ctx context.Context, address string, key [32]by
 	if err != nil || response.StatusCode != http.StatusOK {
 		return serviceauthority.Descriptor{}, errors.Join(serviceauthority.ErrFormat, err)
 	}
-	descriptor, err := serviceauthority.VerifyDescriptor(data, key, service.config.Now())
+	descriptor, err := serviceauthority.VerifyDescriptor(data, key, cache.now())
 	if err != nil {
 		return descriptor, err
 	}

@@ -38,7 +38,7 @@ func TestAnonymousAttributionWaitsForEveryRegistrationOutcome(t *testing.T) {
 			share := service.NewShareAuthorization(t.Context())
 			defer share.Close()
 			for _, address := range []string{"primary", "secondary"} {
-				service.nodes[address] = &nodeState{key: [32]byte{1}, anonymous: true, available: true, expires: config.Now().Add(time.Hour)}
+				service.nodes.put(address, &nodeState{key: [32]byte{1}, anonymous: true, available: true, expires: config.Now().Add(time.Hour)})
 			}
 			first := reserveBearer(t, &Source{share: share, address: "primary"}, "")
 			if err := service.install(t.Context(), Record{}, ticket, true); err != nil {
@@ -102,7 +102,7 @@ func TestFirstShareUsesNewTicketAfterAnonymousUpgradeFailure(t *testing.T) {
 	}))
 	t.Cleanup(backup.Close)
 
-	service.nodes[anonymous.URL] = &nodeState{key: [32]byte{1}, anonymous: true, available: true, expires: config.Now().Add(time.Hour)}
+	service.nodes.put(anonymous.URL, &nodeState{key: [32]byte{1}, anonymous: true, available: true, expires: config.Now().Add(time.Hour)})
 	share := service.NewShareAuthorization(ctx)
 	defer share.Close()
 	registration := testRegistrationConfig(t)
@@ -146,6 +146,55 @@ func TestFirstShareUsesNewTicketAfterAnonymousUpgradeFailure(t *testing.T) {
 	if set.ReadyRelayURL() != backup.URL {
 		t.Fatal("the account relay did not publish the original share")
 	}
+}
+
+func TestAccountReservationNotSentReleasesTentativeCredential(t *testing.T) {
+	config, first := accountFixture(t)
+	second := otherAccount(t, config, first)
+	service := testService(t, config)
+
+	// Share created before any account exists has no pre-bound credential.
+	unbound := service.NewShareAuthorization(t.Context())
+	defer unbound.Close()
+	if err := service.install(t.Context(), Record{}, first, true); err != nil {
+		t.Fatal(err)
+	}
+	// Share created after login explicitly owns the pre-bound credential.
+	prebound := service.NewShareAuthorization(t.Context())
+	defer prebound.Close()
+
+	firstAttempt := reserveBearer(t, &Source{share: unbound, address: "primary"}, first.Ticket)
+	secondAttempt := reserveBearer(t, &Source{share: unbound, address: "secondary"}, first.Ticket)
+	firstAttempt.Reservation.Finish(serviceauthority.RegistrationNotSent)
+	service.mu.Lock()
+	stillRetained := unbound.credential != nil
+	service.mu.Unlock()
+	if !stillRetained {
+		t.Fatal("released tentative credential while another attempt was still in flight")
+	}
+	secondAttempt.Reservation.Finish(serviceauthority.RegistrationNotSent)
+	service.mu.Lock()
+	releasedAfterAllNotSent := unbound.credential == nil
+	service.mu.Unlock()
+	if !releasedAfterAllNotSent {
+		t.Fatal("tentative credential stayed retained after all unsent reservations rolled back")
+	}
+
+	// Pre-bound shares keep their selected credential across unsent attempts.
+	preboundAttempt := reserveBearer(t, &Source{share: prebound, address: "primary"}, first.Ticket)
+	preboundAttempt.Reservation.Finish(serviceauthority.RegistrationNotSent)
+	service.mu.Lock()
+	preboundKept := prebound.credential != nil
+	service.mu.Unlock()
+	if !preboundKept {
+		t.Fatal("pre-bound share lost its selected credential on unsent attempt")
+	}
+
+	if err := service.install(t.Context(), cachedRecord(first), second, true); err != nil {
+		t.Fatal(err)
+	}
+	requireBearer(t, &Source{share: unbound, address: "primary"}, second.Ticket)
+	requireBearer(t, &Source{share: prebound, address: "primary"}, first.Ticket)
 }
 
 func testRegistrationConfig(t *testing.T) senderrelay.Config {

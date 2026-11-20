@@ -37,7 +37,7 @@ type Service struct {
 	changed              chan struct{}
 	wake                 chan struct{}
 	workers              sync.WaitGroup
-	nodes                map[string]*nodeState
+	nodes                *nodePolicyCache
 	verifiedCertificate  string
 }
 
@@ -59,19 +59,48 @@ func New(config Config) (*Service, error) {
 		config.Client = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	service := &Service{operation: make(chan struct{}, 1), local: make(chan struct{}, 1),
-		config: config, ctx: ctx, cancel: cancel,
-		changed: make(chan struct{}), wake: make(chan struct{}, 1), nodes: make(map[string]*nodeState)}
-	defer service.workers.Go(service.run)
+	service := &Service{
+		operation: make(chan struct{}, 1),
+		local:     make(chan struct{}, 1),
+		config:    config,
+		ctx:       ctx,
+		cancel:    cancel,
+		changed:   make(chan struct{}),
+		wake:      make(chan struct{}, 1),
+	}
+	service.nodes = newNodePolicyCache(
+		ctx,
+		&service.workers,
+		config.Client,
+		config.Now,
+		service.resolveOfficialNode,
+		service.notify,
+	)
 	cacheContext, cancelCache := context.WithTimeout(ctx, CacheLoadTimeout)
 	record, err := service.load(cacheContext)
 	cancelCache()
+	service.mu.Lock()
 	if err != nil {
 		service.state, service.reason = Unavailable, err.Error()
-		return service, nil
+	} else {
+		service.adoptLocked(record)
 	}
-	service.adoptLocked(record)
+	service.mu.Unlock()
+	service.workers.Go(service.run)
 	return service, nil
+}
+
+func (service *Service) resolveOfficialNode(address string) (Node, bool) {
+	if service.config.ResolveNode == nil {
+		return Node{}, false
+	}
+	return service.config.ResolveNode(address)
+}
+
+func (service *Service) notify() {
+	service.mu.Lock()
+	service.notifyLocked()
+	service.mu.Unlock()
 }
 
 func (service *Service) lockOperation(ctx context.Context) error {

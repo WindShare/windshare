@@ -157,10 +157,7 @@ func (service *Service) applyCredentialRefreshLocked(current *credentialSession,
 func (current *credentialSession) nextRetryDelay(err error) time.Duration {
 	delay := max(current.retry, MinimumRetry)
 	current.retry = min(delay*2, MaximumRetry)
-	if remote, ok := errors.AsType[*fault](err); ok && remote.Kind == "rate_limited" {
-		delay = max(delay, time.Duration(min(remote.RetryAfter, maxRateLimitSeconds))*time.Second)
-	}
-	return delay
+	return rateLimitDelay(delay, err)
 }
 
 // Renew a retained credential in place so an older share cannot perturb the

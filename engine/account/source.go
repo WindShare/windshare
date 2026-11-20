@@ -18,8 +18,9 @@ const (
 )
 
 type attributionReservation struct {
-	identity shareAttribution
-	inFlight int
+	identity           shareAttribution
+	inFlight           int
+	retainedCredential bool
 }
 
 // ShareAuthorization owns the identity shared by all official relay registrations
@@ -73,7 +74,7 @@ func (share *ShareAuthorization) Close() {
 		delete(service.unconfirmedShares, share)
 		delete(service.officialShares, share)
 		for address := range share.nodes {
-			service.releaseNodeLocked(address)
+			service.nodes.release(address)
 		}
 		clear(share.nodes)
 		share.releaseCredentialLocked()
@@ -109,7 +110,7 @@ func (share *ShareAuthorization) retainNode(address string) {
 		return
 	}
 	share.nodes[address] = struct{}{}
-	service.retainNodeLocked(address)
+	service.nodes.retain(address)
 }
 
 func (share *ShareAuthorization) beginOfficialUse() {
@@ -169,13 +170,18 @@ func (share *ShareAuthorization) reserveAttributionLocked(bearer string) service
 	service := share.service
 	if share.reservation == nil {
 		identity := attributionAnonymous
+		retainedCredential := false
 		if bearer != "" {
 			identity = attributionAccount
 			if share.credential == nil {
 				share.credential = service.retainCredentialLocked(service.record)
+				retainedCredential = share.credential != nil
 			}
 		}
-		share.reservation = &attributionReservation{identity: identity}
+		share.reservation = &attributionReservation{
+			identity:           identity,
+			retainedCredential: retainedCredential,
+		}
 		if identity == attributionAnonymous {
 			service.notifyLocked()
 		}
@@ -194,7 +200,12 @@ func (share *ShareAuthorization) reserveAttributionLocked(bearer string) service
 		if delivery == serviceauthority.RegistrationNotSent {
 			if reservation.inFlight == 0 {
 				share.reservation = nil
-				service.notifyLocked()
+				if reservation.retainedCredential {
+					share.releaseCredentialLocked()
+					service.refreshDemandChangedLocked()
+				} else {
+					service.notifyLocked()
+				}
 			}
 			return
 		}
@@ -257,10 +268,7 @@ func (source *Source) selectAuthorizationLocked(node Node) serviceauthority.Regi
 }
 
 func (source *Source) permitsAnonymousLocked(node Node) bool {
-	service := source.share.service
-	cached := service.nodes[source.address]
-	return cached != nil && cached.key == node.Key &&
-		cached.expires.After(service.config.Now()) && cached.anonymous && cached.available
+	return source.share.service.nodes.permitsAnonymous(source.address, node)
 }
 
 func deniedAuthorization(reason string) serviceauthority.RegistrationAuthorization {
