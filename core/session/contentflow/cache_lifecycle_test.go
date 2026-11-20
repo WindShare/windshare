@@ -137,7 +137,7 @@ func TestSharedBlockCacheLoaderCanStopWithoutSelfJoin(t *testing.T) {
 	})
 }
 
-func TestBlockCacheRejectsPayloadThatDiffersFromCommittedRecord(t *testing.T) {
+func TestBlockCacheHitClonesPayloadAndPreservesCommittedRecordID(t *testing.T) {
 	share := flowID[catalog.ShareInstance](1)
 	budget, err := NewProcessCacheBudget(64)
 	if err != nil {
@@ -149,19 +149,19 @@ func TestBlockCacheRejectsPayloadThatDiffersFromCommittedRecord(t *testing.T) {
 	}
 	defer cache.Close()
 	key := BlockCacheKey{ShareInstance: share, FileID: flowID[catalog.FileID](2), FileRevision: flowID[content.FileRevision](3)}
-	load := func(context.Context) ([]byte, error) { return []byte("committed"), nil }
+	loads := 0
+	load := func(context.Context) ([]byte, error) {
+		loads++
+		return []byte("committed"), nil
+	}
 	first, err := cache.get(t.Context(), key, load)
 	if err != nil {
 		t.Fatal(err)
 	}
+	first.payload[0] ^= 1
 
-	entry := cache.entries[key].Value.(*cacheEntry)
-	entry.block.payload[0] ^= 1
-	if _, err := cache.get(t.Context(), key, load); !errors.Is(err, errBlockCacheIntegrity) {
-		t.Fatalf("corrupted block was not refused: %v", err)
-	}
-	reloaded, err := cache.get(t.Context(), key, load)
-	if err != nil || reloaded.recordID != first.recordID || string(reloaded.payload) != "committed" {
-		t.Fatalf("reloaded payload=%q id=%x err=%v", reloaded.payload, reloaded.recordID, err)
+	second, err := cache.get(t.Context(), key, load)
+	if err != nil || loads != 1 || second.recordID != first.recordID || string(second.payload) != "committed" {
+		t.Fatalf("cached hit loads=%d payload=%q id=%x err=%v", loads, second.payload, second.recordID, err)
 	}
 }

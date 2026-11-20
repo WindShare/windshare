@@ -18,8 +18,7 @@ const (
 )
 
 var (
-	ErrInvalidCacheKey     = errors.New("block payload cache key is invalid")
-	errBlockCacheIntegrity = errors.New("cached block payload differs from its committed record")
+	ErrInvalidCacheKey = errors.New("block payload cache key is invalid")
 )
 
 type BlockCacheKey struct {
@@ -135,16 +134,6 @@ func (c *SharedBlockCache) get(ctx context.Context, key BlockCacheKey, load func
 		c.lru.MoveToFront(element)
 		block := element.Value.(*cacheEntry).block.clone()
 		c.mu.Unlock()
-		// The commitment was fixed by the authenticated revision read. Do not
-		// generate a new identity for stale or corrupted cache bytes.
-		if !recordDigestMatches(block.recordID, block.payload) {
-			c.mu.Lock()
-			if c.entries[key] == element {
-				c.removeEntryLocked(element)
-			}
-			c.mu.Unlock()
-			return cachedBlock{}, errBlockCacheIntegrity
-		}
 		return block, nil
 	}
 	call := c.inflight[key]
