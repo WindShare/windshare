@@ -545,13 +545,13 @@ describe('persistent production execution bridge', () => {
 })
 
 describe('persistent output revision short-circuit', () => {
-  it('permits omitting openRevision only for complete durable files outside readmission', async () => {
-    const file = fileEntry(identity(19), 'completed.bin', 4n)
+  it.each([0n, 4n])('requires a complete owned replica to skip opening a %s-byte source', async size => {
+    const file = fileEntry(identity(19), 'completed.bin', size)
     const intent = asDirectTree(await receiveIntentFixture({
       planKind: 'direct-tree', artifactKind: 'directory-tree', selection: new SelectionPolicy(),
     }))
-    const completeRanges = [{ start: 0n, end: 4n }] as const
-    const incompleteRanges = [{ start: 0n, end: 2n }] as const
+    const completeRanges = size === 0n ? [] : [{ start: 0n, end: size }]
+    let replica: PersistentFileTransactionPort['contentReplica'] = { ...contentReplica(), objectId: `owned:${file.idText}` }
     let ranges: readonly PersistentByteRange[] = completeRanges
     const historicalRevision = Object.freeze({
       fileId: file.idText, fileRevision: identityText(77), exactSize: file.expectedSize,
@@ -566,7 +566,7 @@ describe('persistent output revision short-circuit', () => {
         expect(request.fileId).toBe(file.idText)
         expect(request.expectedSize).toBe(file.expectedSize)
         const base = await fixture.beginFile({ ...request, openRevision: async () => historicalRevision })
-        return Object.freeze({ ...base, initialDurableRanges: ranges, verifiedRanges: ranges })
+        return Object.freeze({ ...base, contentReplica: replica, initialDurableRanges: ranges, verifiedRanges: ranges })
       },
     }
     const execution = await createPersistentDirectTreeExecution({
@@ -595,12 +595,16 @@ describe('persistent output revision short-circuit', () => {
     const begun = await execution.output.beginFile(request, SIGNAL)
     expect(openRevision).not.toHaveBeenCalled()
     expect(begun.revision.fileRevision).toBe(historicalRevision.fileRevision)
-    await expect(begun.transaction.commit(SIGNAL)).resolves.toMatchObject({ fileSize: 4n })
+    await expect(begun.transaction.commit(SIGNAL)).resolves.toMatchObject({ fileSize: size })
 
     await expect(execution.output.readmitFile!(request, begun.durableRanges, SIGNAL))
       .rejects.toThrow('bypassed authenticated revision authority')
 
-    ranges = incompleteRanges
+    replica = { ...contentReplica(), objectId: 'unrelated-object' }
+    await expect(execution.output.beginFile(request, SIGNAL))
+      .rejects.toThrow('bypassed authenticated revision authority')
+    replica = size === 0n ? null : { ...contentReplica(), objectId: `owned:${file.idText}` }
+    if (size > 0n) ranges = [{ start: 0n, end: 2n }]
     await expect(execution.output.beginFile(request, SIGNAL))
       .rejects.toThrow('bypassed authenticated revision authority')
   })

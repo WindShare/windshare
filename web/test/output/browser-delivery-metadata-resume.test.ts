@@ -46,31 +46,75 @@ describe('folder delivery metadata recovery', () => {
     await expect(session.beginFile({ ...request, requireRevisionOpen: true, openRevision: reopenedSource }))
       .rejects.toMatchObject({ decision: 'reuse-state-blocked' })
     expect(reopenedSource).toHaveBeenCalledTimes(1)
+    const resized = vi.fn(async () => ({ ...current, exactSize: size + 1n, fileRevision: deliveryIdentity(74, 16) }))
+    await expect(session.beginFile({ ...request, expectedSize: size + 1n, openRevision: resized }))
+      .rejects.toBeInstanceOf(SourceRevisionChangedError)
+    expect(resized).toHaveBeenCalledOnce()
     expect(f.repository.files.get(source.fileId)?.digest).toBe(historical.digest)
     await session.close()
   })
 
-  it('delivers a complete staged sibling locally on resume without reopening its source', async () => {
+  it('uses the stage until delivery, then the verified target even if cleanup was interrupted', async () => {
     const f = await deliveryEngineFixture()
-    const request = f.request(11, 4n)
-    const source = { ...await request.openRevision(), sourceMetadata: deliveryIdentity(71) }
-    const first = await f.session.beginFile({ ...request, openRevision: async () => source })
-    await first.writeRange(0n, Uint8Array.of(3, 4, 5, 6))
+    const request = f.request()
+    const source = await request.openRevision()
+    const bytes = Uint8Array.of(3, 4, 5, 6)
+    const first = await f.session.beginFile(request)
+    await first.writeRange(0n, bytes)
     f.onTargetWrite(async () => { throw new DOMException('destination paused', 'AbortError') })
     await expect(first.commit()).rejects.toThrow('destination paused')
     await f.session.close()
 
     f.onTargetWrite(undefined)
     const reopened = await f.reopen()
-    const openRevision = vi.fn(async () => ({ ...source, fileRevision: deliveryIdentity(74, 16) }))
-    const resumed = await reopened.beginFile({ ...request, openRevision })
+    const openRevision = vi.fn(async () => { throw new Error('sender unavailable') })
+    const openLocal = () => reopened.beginFile({ ...request, openRevision })
+    const staged = await openLocal()
+    expect(staged.revision.fileRevision).toBe(source.fileRevision)
+    expect(staged.contentReplica?.operationId).toBe(f.policy.staging!.operationId)
+    expect(staged.checkpointObjectId).toBe(staged.contentReplica?.objectId)
+    expect(staged.initialDurableRanges).toEqual([{ start: 0n, end: 4n }])
+    // The browser removed the physical stage before the journal recorded cleanup.
+    f.repository.failTransition = 'cleaned'
+    const delivered = await staged.commit()
+    expect(reopened.summary.cleanupPendingFiles).toBe(1)
+    expect(await f.stageTree.openFile([source.fileId], staged.checkpointObjectId!)).toBeUndefined()
+
+    const saved = await openLocal()
+    expect(saved.contentReplica?.operationId).toBe(f.policy.target.operationId)
+    expect(saved.checkpointObjectId).toBe(saved.ownedObjectId)
+    expect(saved.initialDurableRanges).toEqual([{ start: 0n, end: 4n }])
+    expect((await saved.commit()).checkpointProof).toEqual(delivered.checkpointProof)
+    expect(f.targetTree.file(request.materializationRelativePath).snapshot()).toEqual(bytes)
+    await f.targetTree.removeFile(request.materializationRelativePath, saved.ownedObjectId)
+    await expect(openLocal()).rejects.toMatchObject({ reason: 'target-ownership-unknown' })
     expect(openRevision).not.toHaveBeenCalled()
-    expect(resumed.revision.fileRevision).toBe(source.fileRevision)
-    expect(resumed.initialDurableRanges).toEqual([{ start: 0n, end: 4n }])
-    const proof = await resumed.commit()
-    expect(proof.fileRevision).toBe(source.fileRevision)
-    expect(f.targetTree.file(request.materializationRelativePath).snapshot()).toEqual(Uint8Array.of(3, 4, 5, 6))
     await reopened.close()
+  })
+
+  it.each([
+    { size: 0n, requireRevisionOpen: false },
+    { size: 0n, requireRevisionOpen: true },
+    { size: 2n, requireRevisionOpen: true },
+  ])('opens the source for an unfinalized $size-byte direct file (forced=$requireRevisionOpen)', async ({ size, requireRevisionOpen }) => {
+    const f = await deliveryEngineFixture()
+    const request = f.request(11, size)
+    const original = { ...await request.openRevision(), sourceMetadata: deliveryIdentity(71) }
+    const first = await f.session.beginFile({ ...request, recovery: { pausedFile: 'restart-owned-file' }, openRevision: async () => original })
+    const bytes = new Uint8Array(Number(size)).fill(7)
+    if (size > 0n) await first.writeRange(0n, bytes)
+    await first.pause()
+    expect(f.targetCheckpoints.commitFinalFileCount).toBe(0)
+
+    const current = { ...original, fileRevision: deliveryIdentity(72, 16) }
+    const openRevision = vi.fn(async () => current)
+    const readmitted = await f.session.beginFile({ ...request, requireRevisionOpen, openRevision })
+    expect(openRevision).toHaveBeenCalledOnce()
+    expect(readmitted.ownedObjectId).toBe(first.ownedObjectId)
+    expect((await readmitted.commit()).fileRevision).toBe(current.fileRevision)
+    expect(f.targetCheckpoints.commitFinalFileCount).toBe(1)
+    expect(f.targetTree.file(request.materializationRelativePath).snapshot()).toEqual(bytes)
+    await f.session.close()
   })
 
   it('reconciles storage admission after the delivery journal commit was interrupted', async () => {

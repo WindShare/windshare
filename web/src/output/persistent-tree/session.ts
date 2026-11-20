@@ -69,6 +69,9 @@ type PersistentTreeTraceInput = Readonly<{
 
 type PersistentFileObjectAdmission = (ownedObjectId: string) => void | Promise<void>
 
+// Retained or very large namespaces use the journal directly to keep session memory bounded.
+const MAX_FRESH_FILE_IDS = 16_384
+
 export class PersistentTreeOutputSession implements PersistentMaterializationPort {
   readonly #tree: PersistentTreeSessionOptions['tree']
   readonly #checkpoints: RecoverableFileCheckpointJournal
@@ -82,7 +85,7 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
   readonly #recreatablePreObjectCandidates = new Set<string>()
   readonly #initialClaims: PersistentInitialClaimCoordinator | undefined
   #needsAttentionReported = false
-  #hasCommittedCheckpoints = false
+  #freshFileIds: Set<string> | undefined = new Set()
   #activated = false
   #activation: Promise<void> | undefined
   #closed = false
@@ -145,7 +148,7 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
         )
       }
       const existing = await options.checkpoints.scanCommitted({ direction: 'ascending', limit: 1 })
-      session.#hasCommittedCheckpoints = existing.records.length > 0
+      if (existing.records.length > 0) session.#freshFileIds = undefined
       return session
     } catch (error) {
       recordOutputException(options.diagnostics?.failures?.outputReservation, error)
@@ -305,7 +308,6 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
             admission.leave()
             transactionScope?.retireFileEvidence()
           },
-          onCommitted: () => { this.#hasCommittedCheckpoints = true },
           onOwnershipUnknown: () => this.#reportLegacyNeedsAttention(),
           ...(transactionScope === undefined ? {} : { stageScope: transactionScope }),
           ...(this.#diagnostics === undefined
@@ -335,11 +337,12 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
     request: PersistentFileRequest,
     path: MaterializationRootRelativePath,
   ): Promise<OpenedFileRevision> {
-    if (this.#hasCommittedCheckpoints) {
+    const { fileId } = request
+    if (!request.requireRevisionOpen && fileId !== undefined &&
+        (this.#freshFileIds === undefined || this.#freshFileIds.has(fileId))) {
       try {
         const completed = await resolveCompletedPersistentRevision({
-          request,
-          path,
+          fileId, expectedSize: request.expectedSize, path,
           checkpoints: this.#checkpoints,
           ...(this.#semantic === undefined ? {} : { semantic: this.#semantic }),
           ...(this.#ledgerBinding === undefined ? {} : { ledgerBinding: this.#ledgerBinding }),
@@ -352,7 +355,14 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
     }
     // Awaiting authenticated source authority before local planning prevents both
     // checkpoint reservations and namespace placeholders for unopened revisions.
-    return snapshotOpenedRevision(await request.openRevision())
+    const opened = snapshotOpenedRevision(await request.openRevision())
+    if (this.#freshFileIds !== undefined && !this.#freshFileIds.has(opened.fileId)) {
+      // Delegated opens already resolved the revision in the folder delivery session.
+      // Leave their membership untracked so each storage layer need not index the same folder.
+      if (request.requireRevisionOpen || this.#freshFileIds.size >= MAX_FRESH_FILE_IDS) this.#freshFileIds = undefined
+      else this.#freshFileIds.add(opened.fileId)
+    }
+    return opened
   }
 
   #recordCheckpointFailure(error: unknown): void {

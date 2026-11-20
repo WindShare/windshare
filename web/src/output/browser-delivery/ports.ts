@@ -1,3 +1,4 @@
+import type { BrowserDeliveryPayloadV1 } from '../../diagnostics/trace/browser-delivery-payload'
 import type { StagingExportAuthority } from '../staging-budget/export-authority'
 import type { FileCheckpointV2 } from '../persistence/checkpoint'
 import type {
@@ -57,9 +58,7 @@ export interface BrowserDeliveryRuntimeTrace {
   readonly name: 'browser.delivery.runtime'
   readonly operation_id: string
   readonly file_id: string
-  readonly transition: 'placement' | 'receiving' | 'copy-started' | 'copy-failed' | 'target-saved' | 'cleanup-failed' | 'cleaned'
-    | 'stop-staging-preserved' | 'stop-cleanup-pending' | 'discard-started' | 'discarded' | 'discard-failed'
-    | 'restart-authorized' | 'restart-recovering' | 'restart-completed'
+  readonly transition: Exclude<BrowserDeliveryPayloadV1['transition'], 'checkpoint'>
   readonly placement?: BrowserFilePlacement
   readonly placement_reason?: string
   readonly received_bytes?: bigint

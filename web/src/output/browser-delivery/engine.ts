@@ -189,7 +189,7 @@ export class BrowserDeliveryEngine {
     return receiving
   }
 
-  async reconcile(fileId: string): Promise<BrowserDeliveryRecordV1> {
+  async reconcile(fileId: string, admission: 'resume' | 'readmit' = 'resume'): Promise<BrowserDeliveryRecordV1> {
     let record = await this.#read(fileId)
     if (record.state.kind === 'restart-authorized') {
       const checkpoint = await this.#options.target.readCheckpoint(fileId)
@@ -208,7 +208,9 @@ export class BrowserDeliveryEngine {
     const checkpoint = await port.readCheckpoint(fileId)
     if (checkpoint === undefined) return record
     if (record.source.fileRevision !== checkpoint.fileRevision) record = await this.#advanceReceiving(record, checkpoint)
-    if (fileCheckpointIsComplete(checkpoint)) {
+    // Readmission must let the newly authenticated source claim undelivered bytes.
+    // A generation-zero empty handle is still a reservation.
+    if (admission === 'resume' && checkpoint.checkpointGeneration > 0n && fileCheckpointIsComplete(checkpoint)) {
       if (record.placement === 'staged') {
         record = await this.#advance(record, { kind: 'staged-complete', stage: checkpoint })
         const reservation = await this.#options.reservation(record)

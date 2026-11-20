@@ -97,32 +97,34 @@ export class BrowserDeliveryMaterialization implements PersistentMaterialization
 
   async #beginFile(request: PersistentFileRequest): Promise<PersistentFileTransactionPort> {
     if (request.sourceAuthenticationPath === undefined) throw new TypeError('Browser delivery requires the authenticated source coordinate')
-    const completed = await this.#tryCompleteRecord(request)
-    if (completed !== undefined) return this.#openReceiving(completed, completed.source, request)
+    const retained = !request.requireRevisionOpen && request.fileId !== undefined && this.#records.has(request.fileId)
+      ? await this.#engine.reconcile(request.fileId) : undefined
+    if (retained !== undefined && retained.localMutation === undefined && isLocallyCompleteDeliveryState(retained.state) &&
+        JSON.stringify(request.sourceAuthenticationPath) === JSON.stringify(retained.source.canonicalPath) &&
+        JSON.stringify(request.materializationRelativePath) === JSON.stringify(retained.materializationRelativePath) &&
+        (request.expectedSize === undefined || request.expectedSize === retained.source.exactSize)) {
+      const file = await this.#openReceiving(retained, retained.source, request)
+      try { this.#options.trace?.({ name: 'browser.delivery.runtime', operation_id: retained.operationId,
+        file_id: retained.fileId, placement: retained.placement,
+        transition: 'target' in retained.state ? 'resume-saved-target' : 'resume-complete-stage' }) }
+      catch { /* Diagnostics cannot change file admission. */ }
+      return file
+    }
     const revision = await request.openRevision()
     const source: BrowserDeliverySource = { ...revision, canonicalPath: request.sourceAuthenticationPath }
-    const record = await this.#selectRecord(source, request.materializationRelativePath)
+    const record = await this.#selectRecord(source, request, retained)
     return this.#openReceiving(record, source, request)
   }
 
-  // Locally completed files keep their authenticated historical revision so folder resume
-  // neither reopens source handles nor attempts metadata reuse against finished deliveries.
-  async #tryCompleteRecord(request: PersistentFileRequest): Promise<BrowserDeliveryRecordV1 | undefined> {
-    if (request.requireRevisionOpen || request.fileId === undefined || !this.#records.has(request.fileId)) return undefined
-    const record = await this.#engine.reconcile(request.fileId)
-    if (!isLocallyCompleteDeliveryState(record.state) || record.localMutation !== undefined) return undefined
-    if (JSON.stringify(request.sourceAuthenticationPath) !== JSON.stringify(record.source.canonicalPath) ||
-        JSON.stringify(request.materializationRelativePath) !== JSON.stringify(record.materializationRelativePath) ||
-        (request.expectedSize !== undefined && request.expectedSize !== record.source.exactSize)) {
-      return undefined
-    }
-    return record
-  }
-
-  async #selectRecord(source: BrowserDeliverySource, materializationRelativePath: readonly string[]): Promise<BrowserDeliveryRecordV1> {
-    const retained = this.#records.get(source.fileId)
-    const record = retained === undefined ? undefined : await this.#engine.reconcile(source.fileId)
-    if (record === undefined) return this.#createRecord(source, materializationRelativePath)
+  async #selectRecord(
+    source: BrowserDeliverySource, request: PersistentFileRequest, reconciled?: BrowserDeliveryRecordV1,
+  ): Promise<BrowserDeliveryRecordV1> {
+    const { materializationRelativePath } = request
+    const latest = this.#records.get(source.fileId)
+    if (latest === undefined) return this.#createRecord(source, materializationRelativePath)
+    // A local save can advance the record while the sender authenticates the new revision.
+    const record = reconciled?.digest === latest.digest ? reconciled
+      : await this.#engine.reconcile(source.fileId, request.requireRevisionOpen ? 'readmit' : 'resume')
     const expected = createBrowserDeliveryRecord({ policy: this.#options.policy, source, materializationRelativePath,
       placement: record.placement, placementReason: record.placementReason })
     const reopened = expected.source.fileRevision !== record.source.fileRevision
@@ -194,7 +196,8 @@ export class BrowserDeliveryMaterialization implements PersistentMaterialization
     let target: PersistentFileTransactionPort | undefined
     let receiving: PersistentFileTransactionPort | undefined
     try {
-      if (record.placement === 'direct' && request.recovery?.pausedFile === 'restart-owned-file') {
+      if (request.recovery?.pausedFile === 'restart-owned-file' && record.placement === 'direct' &&
+          record.state.kind === 'receiving' && this.#records.has(record.fileId)) {
         record = await this.#engine.authorizeRestart(record.fileId)
       }
       // beginFile reserves an owned empty entry; FSA does not open its writable until
@@ -437,20 +440,20 @@ class BrowserDeliveryFileTransaction implements PersistentFileTransactionPort {
   }
   get revision() { return this.#options.target.revision }
   get ownedObjectId() { return this.#options.target.ownedObjectId }
+  get #undeliveredStage() {
+    const { state } = this.#options.record
+    return state.kind === 'staged-complete' || state.kind === 'copying' ? state.stage : undefined
+  }
+  get #storage() { return this.#options.receiving ?? this.#options.target }
   get checkpointObjectId() {
-    return this.#options.receiving?.checkpointObjectId ?? this.#options.receiving?.ownedObjectId ??
-      ('stage' in this.#options.record.state ? this.#options.record.state.stage?.ownedObjectId : undefined) ?? this.ownedObjectId
+    return this.#undeliveredStage?.ownedObjectId ?? this.#storage.checkpointObjectId ?? this.#storage.ownedObjectId
   }
   get contentReplica() {
-    if (this.#options.receiving !== undefined) return this.#options.receiving.contentReplica
-    const state = this.#options.record.state
-    if ('stage' in state && state.stage !== undefined) return fileCheckpointReplica(state.stage, 'browser-origin-private-workspace')
-    return this.#options.target.contentReplica
+    const stage = this.#undeliveredStage
+    return stage === undefined ? this.#storage.contentReplica : fileCheckpointReplica(stage, 'browser-origin-private-workspace')
   }
   get checkpointPolicy() { return this.#options.receiving?.checkpointPolicy ?? this.#options.target.checkpointPolicy ?? { kind: 'disabled' as const } }
-  get initialDurableRanges() {
-    return this.#options.receiving?.initialDurableRanges ?? (this.revision.exactSize === 0n ? [] : [{ start: 0n, end: this.revision.exactSize }])
-  }
+  get initialDurableRanges() { return this.#undeliveredStage?.verifiedRanges ?? this.#storage.initialDurableRanges }
   get verifiedRanges() { return this.#options.receiving?.verifiedRanges ?? this.initialDurableRanges }
   writeRange(...args: Parameters<PersistentFileTransactionPort['writeRange']>) {
     return this.#serialize(async () => {

@@ -29,7 +29,6 @@ import type {
   OpenedFileRevision,
   PersistentDirectoryLedgerMaterialization,
   PersistentDirectoryLedgerRequest,
-  PersistentFileRequest,
   PersistentOutputTree,
   PersistentTreeFile,
   SemanticPersistentOutputJournal,
@@ -181,42 +180,26 @@ async function verifySelectedFile(
 
 /** Short-circuits completed files so resume preserves immutable local delivery history without reopening source handles. */
 export async function resolveCompletedPersistentRevision(input: Readonly<{
-  request: PersistentFileRequest
+  fileId: string
+  expectedSize: bigint | undefined
   path: MaterializationRootRelativePath
   checkpoints: Pick<FileCheckpointJournal, 'binding' | 'readCommitted'>
   semantic?: SemanticPersistentOutputJournal
   ledgerBinding?: Promise<MaterializationLedgerBindingV1>
 }>): Promise<OpenedFileRevision | undefined> {
-  const { request, path, checkpoints, semantic, ledgerBinding } = input
-  if (request.requireRevisionOpen || request.fileId === undefined) return undefined
+  const { fileId, expectedSize, path, checkpoints, semantic, ledgerBinding } = input
   const lineageId = deriveCheckpointLineageID({
     ...checkpoints.binding,
-    fileId: request.fileId,
+    fileId,
     canonicalPath: path,
   })
   const committed = await checkpoints.readCommitted(lineageId)
-  if (committed === undefined || !completedCheckpointMatchesRequest(committed, request, path)) {
+  if (committed === undefined || !completedCheckpointMatchesRequest(committed, fileId, expectedSize, path)) {
     return undefined
   }
   if (semantic !== undefined && ledgerBinding !== undefined) {
-    const binding = await ledgerBinding
-    const proof = await semantic.readMaterializationFinalProof(
-      binding,
-      materializationFinalProofId(binding, committed.recordId),
-    )
-    if (proof !== undefined) {
-      if (proof.checkpoint.recordId !== committed.recordId ||
-          proof.checkpoint.recordDigest !== committed.checksum ||
-          proof.checkpoint.checkpointGeneration !== committed.checkpointGeneration) {
-        throw new TargetOwnershipUnknownError('commit', committed.operationId)
-      }
-      validateFinalOutputAgainstCheckpoint(proof.finalOutput, committed)
-    } else if (committed.exactSize === 0n) {
-      // An empty file without a final proof has only reserved its handle and still requires source admission.
-      return undefined
-    }
-  } else if (committed.exactSize === 0n && committed.checkpointGeneration === 0n) {
-    return undefined
+    const delivered = await hasMatchingFinalProof(semantic, await ledgerBinding, committed)
+    if (!delivered && committed.exactSize === 0n) return undefined
   }
   return Object.freeze({
     fileId: committed.fileId,
@@ -226,16 +209,30 @@ export async function resolveCompletedPersistentRevision(input: Readonly<{
   })
 }
 
+export async function hasMatchingFinalProof(
+  journal: SemanticPersistentOutputJournal, binding: MaterializationLedgerBindingV1, checkpoint: FileCheckpointV2,
+): Promise<boolean> {
+  const proof = await journal.readMaterializationFinalProof(binding, materializationFinalProofId(binding, checkpoint.recordId))
+  if (proof === undefined) return false
+  if (proof.checkpoint.recordId !== checkpoint.recordId || proof.checkpoint.recordDigest !== checkpoint.checksum ||
+      proof.checkpoint.checkpointGeneration !== checkpoint.checkpointGeneration) {
+    throw new TargetOwnershipUnknownError('commit', checkpoint.operationId)
+  }
+  validateFinalOutputAgainstCheckpoint(proof.finalOutput, checkpoint)
+  return true
+}
+
 function completedCheckpointMatchesRequest(
   committed: FileCheckpointV2,
-  request: PersistentFileRequest,
+  fileId: string,
+  expectedSize: bigint | undefined,
   path: MaterializationRootRelativePath,
 ): boolean {
-  return committed.fileId === request.fileId &&
-    committed.commitState === FILE_CHECKPOINT_COMMIT_VERIFIED &&
+  return committed.fileId === fileId &&
+    committed.commitState === FILE_CHECKPOINT_COMMIT_VERIFIED && committed.checkpointGeneration > 0n &&
     (committed.phase === FILE_CHECKPOINT_PHASE_ACTIVE || committed.phase === FILE_CHECKPOINT_PHASE_PAUSED) &&
     fileCheckpointIsComplete(committed) &&
-    (request.expectedSize === undefined || committed.exactSize === request.expectedSize) &&
+    (expectedSize === undefined || committed.exactSize === expectedSize) &&
     committed.canonicalPath.length === path.length &&
     committed.canonicalPath.every((segment, index) => segment === path[index])
 }
