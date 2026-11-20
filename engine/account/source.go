@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/windshare/windshare/core/serviceauthority"
 )
@@ -215,8 +216,16 @@ func (share *ShareAuthorization) reserveAttributionLocked(bearer string) service
 		share.attribution = reservation.identity
 		share.reservation = nil
 		if share.attribution == attributionAnonymous {
+			var fallbackCredential [16]byte
+			hadCredential := share.credential != nil && share.credential.record.Credential != nil
+			if hadCredential {
+				fallbackCredential = share.credential.record.Credential.ID
+			}
 			share.releaseCredentialLocked()
 			service.refreshDemandChangedLocked()
+			if hadCredential {
+				slog.Info("account_share_anonymous_fallback", "credential", fallbackCredential, "state", service.state)
+			}
 		}
 	}
 }
@@ -247,7 +256,7 @@ func (source *Source) selectAuthorizationLocked(node Node) serviceauthority.Regi
 	if service.validTicket(record) && service.currentGenerationLocked(record) {
 		return serviceauthority.RegistrationAuthorization{State: serviceauthority.AdmissionReady, Bearer: record.Ticket}
 	}
-	if identity == attributionPending && source.permitsAnonymousLocked(node) {
+	if identity == attributionPending && share.allowsAnonymousFallbackLocked(record) && source.permitsAnonymousLocked(node) {
 		return serviceauthority.RegistrationAuthorization{State: serviceauthority.AdmissionReady}
 	}
 	authorization := serviceauthority.RegistrationAuthorization{State: serviceauthority.AdmissionPendingSetup, Changed: service.changed}
@@ -265,6 +274,19 @@ func (source *Source) selectAuthorizationLocked(node Node) serviceauthority.Regi
 		authorization.State = serviceauthority.AdmissionUserActionRequired
 	}
 	return authorization
+}
+
+// A logged-in share waits for a pending ticket renewal so a faster anonymous
+// node discovery cannot downgrade it and lock out account-only nodes. Once
+// renewal enters failure backoff, permitted anonymous nodes remain usable.
+func (share *ShareAuthorization) allowsAnonymousFallbackLocked(record Record) bool {
+	if record.Credential == nil {
+		return true
+	}
+	if share.credential != nil && !sameIdentity(record, share.service.record) {
+		return share.credential.retry > 0
+	}
+	return share.service.state == Unavailable && share.service.config.Now().Before(share.service.retryAt)
 }
 
 func (source *Source) permitsAnonymousLocked(node Node) bool {
