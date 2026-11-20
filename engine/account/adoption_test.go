@@ -117,6 +117,10 @@ func TestReloadSelectionDiscardsOldRegistrationFailure(t *testing.T) {
 
 type rejectingDenialStore struct{ record Record }
 
+func (store *rejectingDenialStore) Load(context.Context) (Record, error) {
+	return cloneRecord(store.record), nil
+}
+
 func (store *rejectingDenialStore) Update(_ context.Context, apply func(Record) (Record, error)) (Record, error) {
 	next, err := apply(cloneRecord(store.record))
 	if err != nil {

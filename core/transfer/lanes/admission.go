@@ -67,6 +67,9 @@ func (s *Set) admitLaneLocked(state *laneState, demand Demand, claim CapacityCla
 	}
 	state.performance.Begin(started, bytes)
 	state.inflight++
+	if state.capacity.kind == capacityWaiting {
+		state.capacity.startRecovery()
+	}
 	return &laneAdmission{laneState: state, source: source, permit: permit, release: release, started: started, expected: expected, purpose: lanescheduling.Content}, nil, nil
 }
 
@@ -168,7 +171,7 @@ func (s *Set) allocateRescueLocked(pending *pendingAdmission, now time.Time) {
 	if pending.order.Distance > 0 || len(pending.attempted) >= MaxDemandAttempts {
 		return
 	}
-	ordered, _ := s.eligiblePendingLanesLocked(pending)
+	ordered, _ := s.eligiblePendingLanesLocked(pending, false)
 	if len(ordered) == 0 {
 		return
 	}

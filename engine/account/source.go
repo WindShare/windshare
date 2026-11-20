@@ -29,6 +29,7 @@ type ShareAuthorization struct {
 	attribution  shareAttribution
 	reservation  *attributionReservation
 	credential   *credentialSession
+	nodes        map[string]struct{}
 	selectionErr error
 }
 
@@ -71,6 +72,10 @@ func (share *ShareAuthorization) Close() {
 		share.reservation = nil
 		delete(service.unconfirmedShares, share)
 		delete(service.officialShares, share)
+		for address := range share.nodes {
+			service.releaseNodeLocked(address)
+		}
+		clear(share.nodes)
 		share.releaseCredentialLocked()
 		service.refreshDemandChangedLocked()
 	}
@@ -86,8 +91,25 @@ func (share *ShareAuthorization) Source(address string) *Source {
 		return nil
 	}
 	share.beginOfficialUse()
-	share.service.startNode(address)
+	share.retainNode(address)
 	return &Source{share: share, address: address}
+}
+
+func (share *ShareAuthorization) retainNode(address string) {
+	service := share.service
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	if share.attribution == attributionClosed || service.ctx.Err() != nil {
+		return
+	}
+	if share.nodes == nil {
+		share.nodes = make(map[string]struct{})
+	}
+	if _, retained := share.nodes[address]; retained {
+		return
+	}
+	share.nodes[address] = struct{}{}
+	service.retainNodeLocked(address)
 }
 
 func (share *ShareAuthorization) beginOfficialUse() {

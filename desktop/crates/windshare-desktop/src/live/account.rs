@@ -2,7 +2,7 @@ use super::Runtime;
 use crate::{
     desktop::Desktop,
     localization::{Text, language},
-    model::Overlay,
+    model::{Overlay, Page, SettingsSection},
 };
 use gpui::{Entity, FocusHandle, Focusable, Subscription, Window, prelude::*};
 use windshare_host::{AccountCommand, AccountOutcome, AccountState, AccountView, Failure, Model};
@@ -76,7 +76,7 @@ impl<Target> EmailPurpose<Target> {
         }
     }
 
-    pub(super) const fn entry(self, view: &AccountView) -> AccountScreen<Target> {
+    pub(crate) const fn entry(self, view: &AccountView) -> AccountScreen<Target> {
         let step = self.step(view);
         AccountScreen::Email(self, step)
     }
@@ -106,6 +106,7 @@ impl<Target> AccountScreen<Target> {
 #[derive(Clone, Copy, Debug)]
 pub enum AccountAction {
     Open(AccountPage),
+    Register,
     Submit,
     Retry,
 }
@@ -138,7 +139,7 @@ pub struct AccountForm {
 }
 
 impl AccountForm {
-    pub fn new(cx: &mut Context<Desktop>) -> Self {
+    pub fn new(window: &Window, cx: &mut Context<Desktop>) -> Self {
         let locale = language(cx);
         let nickname = cx.new(|cx| Input::new(locale.text(Text::Nickname), cx));
         let username = cx.new(|cx| Input::new(locale.text(Text::AccountUsername), cx));
@@ -149,14 +150,14 @@ impl AccountForm {
         let subscriptions = [&nickname, &username, &password, &email, &code]
             .into_iter()
             .map(|input| {
-                cx.subscribe(input, |this, _, event, cx| {
+                cx.subscribe_in(input, window, |this, _, event, window, cx| {
                     if matches!(event, InputEvent::Submit)
                         && this
                             .overlays
                             .last()
                             .is_some_and(|frame| matches!(frame.content, Overlay::Account))
                     {
-                        this.submit_account(cx);
+                        this.submit_account(window, cx);
                     }
                     cx.notify();
                 })
@@ -200,6 +201,10 @@ impl AccountForm {
 
     pub(super) fn field_focus(&self, model: &Model, cx: &Context<Desktop>) -> Option<FocusHandle> {
         model.account.as_ref()?;
+        self.preview_field_focus(cx)
+    }
+
+    fn preview_field_focus(&self, cx: &Context<Desktop>) -> Option<FocusHandle> {
         let input = match self.page {
             AccountScreen::Login | AccountScreen::Credentials(_) => &self.username,
             AccountScreen::Nickname(_) => &self.nickname,
@@ -210,8 +215,17 @@ impl AccountForm {
         Some(input.read(cx).focus_handle(cx))
     }
 
-    pub(super) const fn busy(&self, view: &AccountView) -> bool {
+    pub(crate) const fn busy(&self, view: &AccountView) -> bool {
         self.pending.is_some() || view.busy()
+    }
+
+    pub(super) const fn can_register(&self, view: &AccountView) -> bool {
+        !self.busy(view)
+            && view.status.account.is_empty()
+            && !matches!(
+                view.status.state,
+                AccountState::Registering { .. } | AccountState::Denied
+            )
     }
 
     pub(super) fn can_submit(&self, view: &AccountView, cx: &Context<Desktop>) -> bool {
@@ -220,13 +234,7 @@ impl AccountForm {
         }
         match self.page() {
             AccountPage::Overview => false,
-            AccountPage::Registration => {
-                view.status.account.is_empty()
-                    && !matches!(
-                        view.status.state,
-                        AccountState::Registering { .. } | AccountState::Denied
-                    )
-            }
+            AccountPage::Registration => self.can_register(view),
             AccountPage::Login | AccountPage::Credentials(()) => {
                 !self.username.read(cx).value().trim().is_empty()
                     && !self.password.read(cx).value().is_empty()
@@ -367,23 +375,24 @@ impl AccountForm {
 }
 
 impl Desktop {
-    pub(super) fn account_view(&self) -> Option<&AccountView> {
-        if let Runtime::Native(session) = &self.runtime {
-            session.model.account.as_ref()
-        } else {
-            None
+    pub(crate) fn account_view(&self) -> Option<&AccountView> {
+        match &self.runtime {
+            Runtime::Native(session) => session.model.account.as_ref(),
+            Runtime::Preview(preview) => Some(&preview.account),
         }
     }
 
     pub fn open_account(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Runtime::Native(session) = &self.runtime else {
+        if let Runtime::Native(session) = &self.runtime {
+            session.controller.reload_account_selection();
+        }
+        let Some(page) = self.account_view().map(|view| AccountPage::entry(view).0) else {
             return;
         };
-        let Some(view) = session.model.account.as_ref() else {
+        if page == AccountPage::Overview {
+            self.select_settings_section(SettingsSection::Account, window, cx);
             return;
-        };
-        let page = AccountPage::entry(view).0;
-        session.controller.reload_account_selection();
+        }
         self.open_overlay(Overlay::Account, window, cx);
         if self.account_form.pending.is_none()
             && !(page == AccountPage::Registration && self.account_form.page() == page)
@@ -392,15 +401,35 @@ impl Desktop {
         }
     }
 
+    pub fn open_account_modal(
+        &mut self,
+        page: AccountPage,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.account_view().is_none() {
+            return;
+        }
+        if let Runtime::Native(session) = &self.runtime {
+            session.controller.reload_account_selection();
+        }
+        self.open_overlay(Overlay::Account, window, cx);
+        self.set_account_page(page, window, cx);
+    }
+
     pub(crate) fn sync_account_view_visibility(&self, window: &Window) {
         if let Runtime::Native(session) = &self.runtime {
+            let viewing_page = self.page == Page::Settings
+                && self.settings_section == SettingsSection::Account
+                && self.overlays.is_empty();
+            let viewing_overlay = self
+                .overlays
+                .last()
+                .is_some_and(|frame| matches!(frame.content, Overlay::Account))
+                && self.account_form.page() == AccountPage::Overview;
             session.controller.set_account_view_visible(
                 window.is_visible()
-                    && self
-                        .overlays
-                        .last()
-                        .is_some_and(|frame| matches!(frame.content, Overlay::Account))
-                    && self.account_form.page() == AccountPage::Overview
+                    && (viewing_page || viewing_overlay)
                     && self
                         .account_view()
                         .is_some_and(|view| !view.status.account.is_empty()),
@@ -461,11 +490,12 @@ impl Desktop {
         form.clear_secrets(cx);
         form.username
             .update(cx, |input, cx| input.set_value(username, cx));
-        if let Runtime::Native(session) = &self.runtime
-            && let Some(focus) = form
-                .field_focus(&session.model, cx)
-                .or_else(|| self.overlays.last().map(|frame| frame.scope.clone()))
-        {
+        let focus = match &self.runtime {
+            Runtime::Native(session) => form.field_focus(&session.model, cx),
+            Runtime::Preview(_) => form.preview_field_focus(cx),
+        }
+        .or_else(|| self.overlays.last().map(|frame| frame.scope.clone()));
+        if let Some(focus) = focus {
             window.focus(&focus, cx);
         }
     }
@@ -484,8 +514,20 @@ impl Desktop {
         }
         match action {
             AccountAction::Open(page) => self.set_account_page(page, window, cx),
+            AccountAction::Register => {
+                if !self.account_form.can_register(view) {
+                    return;
+                }
+                self.account_form.page = AccountScreen::Registration;
+                self.send_account_command(AccountCommand::Register);
+                if self.account_form.pending.is_some()
+                    && let Some(frame) = self.overlays.last()
+                {
+                    window.focus(&frame.scope, cx);
+                }
+            }
             AccountAction::Submit => {
-                self.submit_account(cx);
+                self.submit_account(window, cx);
                 // The primary button leaves the tree while the account is being created.
                 if self.account_form.page() == AccountPage::Registration
                     && self.account_form.pending.is_some()
@@ -499,12 +541,16 @@ impl Desktop {
         cx.notify();
     }
 
-    fn submit_account(&mut self, cx: &Context<Self>) {
+    fn submit_account(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(view) = self.account_view() else {
             return;
         };
         let form = &self.account_form;
         if !form.can_submit(view, cx) {
+            return;
+        }
+        if matches!(self.runtime, Runtime::Preview(_)) {
+            self.submit_preview_account(window, cx);
             return;
         }
         let command = match &form.page {
@@ -555,6 +601,54 @@ impl Desktop {
             }
         };
         self.send_account_command(command);
+    }
+
+    fn submit_preview_account(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let nickname = self
+            .account_form
+            .nickname
+            .read(cx)
+            .value()
+            .trim()
+            .to_owned();
+        let username = self
+            .account_form
+            .username
+            .read(cx)
+            .value()
+            .trim()
+            .to_owned();
+        let email = self.account_form.email.read(cx).value().trim().to_owned();
+        let page = self.account_form.page();
+        let Runtime::Preview(preview) = &mut self.runtime else {
+            return;
+        };
+        let toast = match page {
+            AccountPage::Nickname(()) => {
+                preview.account.status.profile.nickname = Some(windshare_host::Nickname {
+                    value: nickname,
+                    next_change_at: 0,
+                });
+                Text::NicknameSaved
+            }
+            AccountPage::Credentials(()) => {
+                preview.account.status.username = username;
+                Text::AccountLoginSaved
+            }
+            AccountPage::Login => {
+                preview.account.status.username = username;
+                Text::AccountSignedIn
+            }
+            AccountPage::Email(EmailPurpose::Profile(()), EmailStep::Address) => {
+                preview.account.status.profile.email = email;
+                Text::ProfileEmailSaved
+            }
+            _ => return,
+        };
+        self.account_form.clear_secrets(cx);
+        self.account_form.page = AccountScreen::Overview;
+        self.close_overlay(window, cx);
+        self.notify(toast, cx);
     }
 
     fn send_account_command(&mut self, command: AccountCommand) {

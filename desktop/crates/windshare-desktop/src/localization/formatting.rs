@@ -1,6 +1,13 @@
 use super::Language;
 
 impl Language {
+    pub fn relay_slot_usage(self, enabled: usize, limit: usize) -> String {
+        match self {
+            Self::English => format!("{enabled} / {limit} enabled"),
+            Self::SimplifiedChinese => format!("已启用 {enabled} / {limit}"),
+        }
+    }
+
     pub fn nickname_next_change(self, at: &str) -> String {
         match self {
             Self::English => format!("Next nickname change · {at}"),

@@ -5,7 +5,7 @@ use crate::node::{
     usage::Meter,
 };
 use anyhow::{Result, anyhow};
-use std::{io, task::Poll};
+use std::{io, sync::atomic::Ordering, task::Poll};
 use windshare_relay_access::Attribution;
 use windshare_relay_core::identifiers::ShareId;
 
@@ -62,8 +62,7 @@ impl Runtime {
         timestamp: i64,
         poll_socket: impl FnOnce(usize) -> Poll<io::Result<usize>>,
     ) -> io::Result<WriteAttempt> {
-        let mut state = self.state.lock().expect("node state");
-        if state.unavailable || self.epoch() != connection_epoch {
+        if self.unavailable.load(Ordering::Acquire) || self.epoch() != connection_epoch {
             return Err(io::Error::new(
                 io::ErrorKind::ConnectionAborted,
                 "relay temporarily unavailable",
@@ -71,6 +70,16 @@ impl Runtime {
         }
         if requested == 0 {
             return Ok(WriteAttempt::Socket(Poll::Ready(Ok(0))));
+        }
+        if !self.has_budgets.load(Ordering::Acquire) {
+            return Ok(WriteAttempt::Socket(poll_socket(requested)));
+        }
+        let mut state = self.state.lock().expect("node state");
+        if state.unavailable || self.epoch() != connection_epoch {
+            return Err(io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                "relay temporarily unavailable",
+            ));
         }
         let limits = origin.limits(&state.settings, &self.access);
         if limits.monthly.is_none() && limits.public_daily.is_none() {

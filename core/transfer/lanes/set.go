@@ -16,22 +16,22 @@ import (
 )
 
 type laneState struct {
-	identity          Identity
-	route             Route
-	lane              BlockSource
-	inflight          uint32
-	settlementHolds   uint32
-	failures          uint32
-	capacityWaitUntil time.Time
-	performance       lanescheduling.Performance
-	sampling          lanescheduling.Sampling
-	receive           lanescheduling.ReceiveWindow
-	retired           bool
-	settled           bool
-	settlement        *laneSettlementCounters
-	usefulBytes       uint64
-	lastUsefulAt      time.Time
-	admittedAt        time.Time
+	identity        Identity
+	route           Route
+	lane            BlockSource
+	inflight        uint32
+	settlementHolds uint32
+	failures        uint32
+	capacity        laneCapacityBackoff
+	performance     lanescheduling.Performance
+	sampling        lanescheduling.Sampling
+	receive         lanescheduling.ReceiveWindow
+	retired         bool
+	settled         bool
+	settlement      *laneSettlementCounters
+	usefulBytes     uint64
+	lastUsefulAt    time.Time
+	admittedAt      time.Time
 }
 
 type Set struct {
@@ -49,6 +49,7 @@ type Set struct {
 	attempts           sync.WaitGroup
 	fetches            sync.WaitGroup
 	publications       sync.WaitGroup
+	watchers           sync.WaitGroup
 	closeStarted       bool
 	closeDone          chan struct{}
 	closed             bool

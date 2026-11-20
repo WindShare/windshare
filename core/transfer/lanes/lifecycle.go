@@ -43,6 +43,7 @@ func (s *Set) Close() {
 	// A winner may return without waiting for its hedges, but lane ownership
 	// cannot end until cancellation has brought every admitted attempt home.
 	s.attempts.Wait()
+	s.watchers.Wait()
 	s.publications.Wait()
 	for _, settlement := range s.finalizeLaneSettlements() {
 		s.settlementProducer.TryPublish(settlement)

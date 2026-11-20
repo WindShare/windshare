@@ -40,13 +40,19 @@ impl Frame {
 
 pub struct Writer {
     usage: crate::node::usage::Meter,
+    node: Option<crate::node::Runtime>,
     ordered: mpsc::Receiver<Frame>,
     probes: watch::Receiver<Option<Vec<u8>>>,
 }
 
 impl Writer {
-    pub(crate) fn with_usage(mut self, usage: crate::node::usage::Meter) -> Self {
+    pub(crate) fn with_usage(
+        mut self,
+        usage: crate::node::usage::Meter,
+        node: crate::node::Runtime,
+    ) -> Self {
         self.usage = usage;
+        self.node = Some(node);
         self
     }
     pub(super) fn new(
@@ -57,6 +63,7 @@ impl Writer {
             ordered,
             probes,
             usage: crate::node::usage::Meter::default(),
+            node: None,
         }
     }
 
@@ -95,7 +102,14 @@ impl Writer {
                     };
                     let start = Instant::now();
                     let bytes = frame.bytes.len() as u64;
-                    let scope = frame.session.map(|_| self.usage.enter(frame.attribution));
+                    let track_attribution = self
+                        .node
+                        .as_ref()
+                        .is_none_or(crate::node::Runtime::tracks_egress_attribution);
+                    let scope = frame
+                        .session
+                        .filter(|_| track_attribution)
+                        .map(|_| self.usage.enter(frame.attribution));
                     send(&mut sink, std::mem::take(&mut frame.bytes)).await?;
                     drop(scope);
                     if let Some(session) = frame.session {

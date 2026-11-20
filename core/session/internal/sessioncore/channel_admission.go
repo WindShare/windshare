@@ -35,6 +35,20 @@ func (channel *HandedOffChannel) CapacityWait() time.Duration {
 	return 0
 }
 
+func (channel *HandedOffChannel) CapacityCleared() bool {
+	if pressure, ok := channel.FrameChannel.(framechannel.CapacityPressure); ok {
+		return pressure.CapacityCleared()
+	}
+	return false
+}
+
+func (channel *HandedOffChannel) CapacityClearance() <-chan struct{} {
+	if pressure, ok := channel.FrameChannel.(framechannel.CapacityPressure); ok {
+		return pressure.CapacityClearance()
+	}
+	return nil
+}
+
 // ClassifyLaneWait is restricted to progress deadlines; ordinary failures retain
 // their original semantics even when a relay has recently reported congestion.
 func (runtime *Runtime) ClassifyLaneWait(identity session.LaneIdentity, cause error) error {

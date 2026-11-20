@@ -16,7 +16,7 @@ import (
 // The wake cadence trades native scheduler overhead against rescue latency.
 const (
 	rescuePollInterval   = 100 * time.Millisecond
-	minimumCapacityRetry = 30 * time.Second
+	minimumCapacityRetry = 2 * time.Second
 	maximumCapacityRetry = time.Minute
 )
 
@@ -289,11 +289,14 @@ func (s *Set) fetchLane(
 	}
 	admission.permit.Close()
 	state.performance.Complete(s.now(), bytes, fetchErr == nil)
-	if pressure, waiting := errors.AsType[*framechannel.BandwidthWaitError](fetchErr); waiting && reassignable {
-		state.capacityWaitUntil = maxTime(state.capacityWaitUntil, s.now().Add(min(maximumCapacityRetry, max(minimumCapacityRetry, pressure.RetryAfter))))
+	var watchClearance func(<-chan struct{}, <-chan struct{})
+	if !s.closed && !state.retired {
+		watchClearance = s.watchCapacityClearanceLocked
+	}
+	if waiting, retryAt := state.capacity.settle(s.now(), fetchErr, reassignable, watchClearance); waiting {
 		slog.DebugContext(ctx, "content lane waiting for relay bandwidth",
 			"protocol_session_id", s.sessionID, "lane_id", state.identity.ID,
-			"lane_epoch", state.identity.Epoch, "retry_at", state.capacityWaitUntil)
+			"lane_epoch", state.identity.Epoch, "retry_at", retryAt)
 	}
 	// Completion can change preferred-lane ordering even if receipt capacity
 	// was already available; capacity-only edge notifications cannot replace it.
@@ -349,6 +352,10 @@ func (s *Set) finish(
 		s.recordContentActivityLocked(state.route, uint64(record.DataLength()))
 	}
 	state.inflight--
+	if state.inflight == 0 && state.capacity.canRecover() {
+		// Clearance may have arrived before the last in-flight attempt drained.
+		s.notifyAdmissionChangedLocked()
+	}
 	if err != nil {
 		_, waiting := errors.AsType[*framechannel.BandwidthWaitError](err)
 		state.recordFailure(canceled || waiting)
@@ -358,6 +365,23 @@ func (s *Set) finish(
 	settlement := s.settleLaneLocked(state)
 	s.mu.Unlock()
 	s.publishLaneSettlement(settlement)
+}
+
+func (s *Set) watchCapacityClearanceLocked(clearance <-chan struct{}, stop <-chan struct{}) {
+	s.watchers.Add(1)
+	go func() {
+		defer s.watchers.Done()
+		select {
+		case <-clearance:
+			s.mu.Lock()
+			if !s.closed {
+				s.notifyAdmissionChangedLocked()
+			}
+			s.mu.Unlock()
+		case <-stop:
+		case <-s.lifecycle.Done():
+		}
+	}()
 }
 
 func (state *laneState) recordFailure(canceled bool) {

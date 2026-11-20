@@ -159,6 +159,10 @@ func TestOldPublicationRefreshCannotReplaceNewShareAccount(t *testing.T) {
 
 type unavailableStore struct{}
 
+func (unavailableStore) Load(context.Context) (Record, error) {
+	return Record{}, errors.New("account cache unavailable")
+}
+
 func (unavailableStore) Update(context.Context, func(Record) (Record, error)) (Record, error) {
 	return Record{}, errors.New("account cache unavailable")
 }

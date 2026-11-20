@@ -37,7 +37,7 @@ pub struct SetupForm {
 }
 
 impl SetupForm {
-    pub fn new(cx: &mut Context<Desktop>) -> Self {
+    pub fn new(window: &Window, cx: &mut Context<Desktop>) -> Self {
         let locale = language(cx);
         let relay = cx.new(|cx| {
             Input::new(locale.text(Text::RelayAddress), cx).placeholder("https://relay.example")
@@ -49,12 +49,12 @@ impl SetupForm {
         let subscriptions = [&relay, &frontend, &access_key]
             .into_iter()
             .map(|input| {
-                cx.subscribe(input, |this, _, event, cx| {
+                cx.subscribe_in(input, window, |this, _, event, window, cx| {
                     if matches!(event, InputEvent::Submit)
                         && let Some(frame) = this.overlays.last()
                         && let Overlay::SharingSetup(target) = frame.content
                     {
-                        this.save_sharing_setup(target.share_id(), cx);
+                        this.save_sharing_setup(target.share_id(), window, cx);
                     }
                     cx.notify();
                 })
@@ -186,17 +186,16 @@ impl Desktop {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(Overlay::SharingSetup(target)) = self.overlays.last().map(|frame| &frame.content)
-        else {
-            return;
-        };
         let Runtime::Native(session) = &self.runtime else {
             return;
         };
         if self.setup_form.pending.is_some() || session.model.setup.unfinished() {
             return;
         }
-        let id = target.share_id();
+        let id = match self.overlays.last().map(|frame| frame.content.clone()) {
+            Some(Overlay::SharingSetup(target)) => target.share_id(),
+            _ => None,
+        };
         self.edit_setup_page(
             SetupPage::Relay(RelayOperation::AuthorizeDevice),
             window,
@@ -205,8 +204,25 @@ impl Desktop {
         self.setup_form
             .relay
             .update(cx, |input, cx| input.set_value(relay_url, cx));
-        self.save_sharing_setup(id, cx);
+        self.save_sharing_setup(id, window, cx);
         cx.notify();
+    }
+
+    pub fn open_setup_modal(
+        &mut self,
+        page: SetupPage,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Runtime::Native(session) = &self.runtime {
+            session.controller.refresh_preferences();
+        }
+        self.open_overlay(
+            Overlay::SharingSetup(SharingSetupTarget::Defaults),
+            window,
+            cx,
+        );
+        self.edit_setup_page(page, window, cx);
     }
 
     pub fn open_sharing_setup(
@@ -261,12 +277,15 @@ impl Desktop {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Runtime::Native(session) = &self.runtime else {
-            return;
+        let frontend = match &self.runtime {
+            Runtime::Native(session) => {
+                if self.setup_form.pending.is_some() || session.model.setup.unfinished() {
+                    return;
+                }
+                session.model.preferences.frontend.clone()
+            }
+            Runtime::Preview(preview) => preview.preferences.frontend.clone(),
         };
-        if self.setup_form.pending.is_some() || session.model.setup.unfinished() {
-            return;
-        }
         let form = &mut self.setup_form;
         form.page = page;
         form.feedback = None;
@@ -279,9 +298,8 @@ impl Desktop {
                 Some(form.relay.read(cx).focus_handle(cx))
             }
             SetupPage::ReceiverSite => {
-                form.frontend.update(cx, |input, cx| {
-                    input.set_value(session.model.preferences.frontend.clone(), cx);
-                });
+                form.frontend
+                    .update(cx, |input, cx| input.set_value(frontend, cx));
                 Some(form.frontend.read(cx).focus_handle(cx))
             }
         };
@@ -306,7 +324,16 @@ impl Desktop {
         self.open_sharing_setup(id, window, cx);
     }
 
-    pub fn save_sharing_setup(&mut self, id: Option<usize>, cx: &Context<Self>) {
+    pub fn save_sharing_setup(
+        &mut self,
+        id: Option<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if matches!(self.runtime, Runtime::Preview(_)) {
+            self.save_preview_setup(window, cx);
+            return;
+        }
         let Runtime::Native(session) = &self.runtime else {
             return;
         };
@@ -353,6 +380,60 @@ impl Desktop {
         };
         self.setup_form.pending = id;
         self.setup_form.feedback = None;
+    }
+
+    fn save_preview_setup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let page = self.setup_form.page;
+        let relay = self.setup_form.relay.read(cx).value().trim().to_owned();
+        let frontend = self.setup_form.frontend.read(cx).value().trim().to_owned();
+        let Runtime::Preview(preview) = &mut self.runtime else {
+            return;
+        };
+        let toast = match page {
+            SetupPage::Relay(_) if !relay.is_empty() => {
+                let enabled = !preview.preferences.at_capacity;
+                if let Some(existing) = preview
+                    .preferences
+                    .relays
+                    .iter_mut()
+                    .find(|item| item.url == relay)
+                {
+                    existing.enabled = enabled;
+                } else {
+                    preview.preferences.relays.push(windshare_host::SavedRelay {
+                        url: relay,
+                        enabled,
+                        console_url: None,
+                        offered_frontend: None,
+                    });
+                }
+                preview.preferences.at_capacity = preview
+                    .preferences
+                    .relays
+                    .iter()
+                    .filter(|item| item.enabled)
+                    .count()
+                    >= super::relay_preferences::MAX_ACTIVE_RELAYS;
+                if enabled {
+                    Text::RelayConnected
+                } else {
+                    Text::RelaySavedInactive
+                }
+            }
+            SetupPage::ReceiverSite
+                if !frontend.is_empty() && frontend != preview.preferences.frontend =>
+            {
+                preview.preferences.frontend = frontend;
+                preview.preferences.custom_frontend = true;
+                Text::FrontendSaved
+            }
+            _ => return,
+        };
+        self.setup_form
+            .access_key
+            .update(cx, |input, cx| input.set_value("", cx));
+        self.close_overlay(window, cx);
+        self.notify(toast, cx);
     }
 
     pub(super) fn switch_share_relay(

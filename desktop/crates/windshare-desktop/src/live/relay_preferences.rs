@@ -1,4 +1,4 @@
-use super::{Runtime, SetupPage};
+use super::{Runtime, SetupPage, session::PREVIEW_DEFAULT_FRONTEND};
 use crate::{
     desktop::Desktop,
     localization::{Text, language},
@@ -8,13 +8,15 @@ use gpui::{Div, ElementId, KeyDownEvent, Role, Toggled, prelude::*, px};
 use windshare_host::{PreferenceEdit, RelayMode, RelayOperation, RelayPreferences};
 use windshare_ui::{Button, ButtonStyle, Icon, Theme, Tone, column, icon, row};
 
+pub(super) const MAX_ACTIVE_RELAYS: usize = 8;
+
 impl Desktop {
     pub(super) fn apply_preference(&mut self, edit: PreferenceEdit, cx: &mut Context<Self>) {
-        let Runtime::Native(session) = &self.runtime else {
+        if matches!(self.runtime, Runtime::Preview(_)) {
+            self.apply_preview_preference(edit, cx);
             return;
-        };
-        let Some(Overlay::SharingSetup(target)) = self.overlays.last().map(|frame| &frame.content)
-        else {
+        }
+        let Runtime::Native(session) = &self.runtime else {
             return;
         };
         if self.setup_form.pending.is_some()
@@ -23,17 +25,59 @@ impl Desktop {
         {
             return;
         }
-        let operation = match target.share_id() {
-            Some(id) => {
-                let Some(op) = self.native_operation(id) else {
-                    return;
-                };
-                op
-            }
-            None => "",
+        let operation = match self.overlays.last().map(|frame| &frame.content) {
+            Some(Overlay::SharingSetup(target)) => match target.share_id() {
+                Some(id) => {
+                    let Some(op) = self.native_operation(id) else {
+                        return;
+                    };
+                    op
+                }
+                None => "",
+            },
+            _ => "",
         };
         self.setup_form.pending = session.controller.edit_preference(operation, edit);
         self.setup_form.feedback = None;
+        cx.notify();
+    }
+
+    fn apply_preview_preference(&mut self, edit: PreferenceEdit, cx: &mut Context<Self>) {
+        let Runtime::Preview(preview) = &mut self.runtime else {
+            return;
+        };
+        let prefs = &mut preview.preferences;
+        let mut toast = None;
+        match edit {
+            PreferenceEdit::Mode(mode) => prefs.mode = mode,
+            PreferenceEdit::Enable(url) => {
+                if !prefs.at_capacity
+                    && let Some(relay) = prefs.relays.iter_mut().find(|r| r.url == url)
+                {
+                    relay.enabled = true;
+                }
+            }
+            PreferenceEdit::Disable(url) => {
+                if let Some(relay) = prefs.relays.iter_mut().find(|r| r.url == url) {
+                    relay.enabled = false;
+                }
+            }
+            PreferenceEdit::Frontend(url) => {
+                if url.is_empty() {
+                    prefs.frontend = PREVIEW_DEFAULT_FRONTEND.into();
+                    prefs.custom_frontend = false;
+                } else {
+                    prefs.frontend = url;
+                    prefs.custom_frontend = true;
+                }
+                toast = Some(Text::FrontendSaved);
+            }
+        }
+        prefs.at_capacity =
+            prefs.relays.iter().filter(|relay| relay.enabled).count() >= MAX_ACTIVE_RELAYS;
+        if let Some(message) = toast {
+            self.notify(message, cx);
+        }
         cx.notify();
     }
 
@@ -120,6 +164,7 @@ impl Desktop {
                         prefs,
                         RelayMode::Automatic,
                         busy,
+                        false,
                         cx,
                     ))
                     .child(Self::relay_mode_option(
@@ -127,6 +172,7 @@ impl Desktop {
                         prefs,
                         RelayMode::Selected,
                         busy,
+                        false,
                         cx,
                     )),
             )
@@ -250,11 +296,12 @@ impl Desktop {
             .child(actions.child(choice))
     }
 
-    fn relay_mode_option(
+    pub(super) fn relay_mode_option(
         theme: Theme,
         prefs: &RelayPreferences,
         mode: RelayMode,
         busy: bool,
+        fill_width: bool,
         cx: &Context<Self>,
     ) -> impl IntoElement {
         let locale = language(cx);
@@ -274,6 +321,7 @@ impl Desktop {
         let indicator = row()
             .size(px(18.))
             .flex_shrink_0()
+            .when(fill_width, |el| el.mt(px(3.)))
             .items_center()
             .justify_center()
             .rounded_full()
@@ -297,9 +345,10 @@ impl Desktop {
                 Toggled::False
             })
             .gap(px(14.))
+            .when(fill_width, |el| el.flex_1().min_w_0().items_start())
             .px(px(16.))
-            .py(px(12.))
-            .rounded(px(10.))
+            .py(px(14.))
+            .rounded(px(12.))
             .border_1()
             .border_color(if selected {
                 accent.opacity(0.55)

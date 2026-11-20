@@ -2,14 +2,33 @@ use crate::{
     desktop::Desktop,
     flow_state::ShareRun,
     localization::Text,
-    model::{Overlay, Page, ShareSource},
+    model::{Overlay, Page, ShareSource, SharingSetupTarget},
 };
 use gpui::{Context, Window};
 use std::time::{Duration, SystemTime};
-use windshare_host::{Connection, Controller, Model};
+use windshare_host::{
+    AccountProfile, AccountState, AccountStatus, AccountView, Allowance, Connection, Controller,
+    Model, Nickname, RelayMode, RelayPreferences, SavedRelay,
+};
+
+pub const PREVIEW_DEFAULT_FRONTEND: &str = "https://windshare.top";
+const PREVIEW_REMAINING_BYTES: u64 = 1_932_735_283;
+
+pub struct PreviewRuntime {
+    pub delay: Duration,
+    pub preferences: RelayPreferences,
+    pub account: AccountView,
+}
+
+#[derive(Clone, Copy)]
+enum OverlayCompletion {
+    Keep,
+    Close,
+    CloseWithToast(Text),
+}
 
 pub enum Runtime {
-    Preview { delay: Duration },
+    Preview(Box<PreviewRuntime>),
     Native(Box<Session>),
 }
 
@@ -35,6 +54,57 @@ pub struct Session {
 }
 
 impl Runtime {
+    pub fn preview(delay: Duration) -> Self {
+        Self::Preview(Box::new(PreviewRuntime {
+            delay,
+            preferences: RelayPreferences {
+                mode: RelayMode::Automatic,
+                frontend: PREVIEW_DEFAULT_FRONTEND.into(),
+                custom_frontend: false,
+                relays: vec![
+                    SavedRelay {
+                        url: "https://relay-hk.example.com".into(),
+                        enabled: true,
+                        console_url: Some("https://console.relay-hk.example.com".into()),
+                        offered_frontend: Some("https://share.relay-hk.example.com".into()),
+                    },
+                    SavedRelay {
+                        url: "https://relay-tokyo.example.net".into(),
+                        enabled: false,
+                        console_url: Some("https://console.relay-tokyo.example.net".into()),
+                        offered_frontend: None,
+                    },
+                ],
+                at_capacity: false,
+            },
+            account: AccountView {
+                status: AccountStatus {
+                    active: true,
+                    state: AccountState::Ready,
+                    email_code_pending: false,
+                    account: "k9M4pQ2xL7vN8rT3wY6zBa".into(),
+                    credential: "dR5tY8uI2oP4aS7fG9hJkL".into(),
+                    username: "alex_dev".into(),
+                    profile: AccountProfile {
+                        nickname: Some(Nickname {
+                            value: "Alex".into(),
+                            next_change_at: 0,
+                        }),
+                        email: "alex@example.com".into(),
+                    },
+                    pending_email: None,
+                    allowance: Allowance::Available,
+                    remaining_bytes: PREVIEW_REMAINING_BYTES,
+                    reset_at: String::new(),
+                    reason: String::new(),
+                },
+                reset_local: "2026-11-21 08:00 CST".into(),
+                nickname_change_local: String::new(),
+                operation: None,
+            },
+        }))
+    }
+
     pub fn native(controller: Controller, application: super::application::Application) -> Self {
         Self::Native(Box::new(Session {
             model: controller.model(),
@@ -52,12 +122,12 @@ impl Runtime {
     }
 
     pub const fn is_preview(&self) -> bool {
-        matches!(self, Self::Preview { .. })
+        matches!(self, Self::Preview(_))
     }
 
     pub const fn selection_disabled(&self) -> bool {
         match self {
-            Self::Preview { .. } => false,
+            Self::Preview(_) => false,
             Self::Native(session) => {
                 matches!(session.quit_state, QuitState::Exiting)
                     || matches!(
@@ -138,23 +208,23 @@ impl Desktop {
         let model = session.controller.model();
         if model != session.model {
             let previous_page = self.setup_form.page;
+            let previous_setup_pending = self.setup_form.pending.clone();
+            let previous_account_page = self.account_form.page();
             let previous_field = self.account_form.field_focus(&session.model, cx);
             self.setup_form.reconcile(&model, cx);
             self.account_form.reconcile(&model, cx);
-            if let Some(frame) = self.overlays.last() {
-                match frame.content {
-                    Overlay::Account => {
-                        let next_field = self.account_form.field_focus(&model, cx);
-                        if previous_field != next_field {
-                            window.focus(next_field.as_ref().unwrap_or(&frame.scope), cx);
-                        }
-                    }
-                    Overlay::SharingSetup(_) if self.setup_form.page != previous_page => {
-                        window.focus(&frame.scope, cx);
-                    }
-                    _ => {}
-                }
-            }
+            let close_completed = Self::reconcile_settings_overlay(
+                &self.overlays,
+                &mut self.setup_form,
+                &mut self.account_form,
+                &model,
+                previous_page,
+                previous_setup_pending.is_some(),
+                previous_account_page,
+                previous_field.as_ref(),
+                window,
+                cx,
+            );
             for share in &mut self.shares {
                 let ShareSource::Native { operation_id } = &share.source else {
                     continue;
@@ -210,8 +280,65 @@ impl Desktop {
                 cx.open_url(verification_url);
             }
             session.model = model;
+            match close_completed {
+                OverlayCompletion::Keep => {}
+                OverlayCompletion::Close => self.close_overlay(window, cx),
+                OverlayCompletion::CloseWithToast(text) => {
+                    self.close_overlay(window, cx);
+                    self.notify(text, cx);
+                }
+            }
             cx.notify();
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn reconcile_settings_overlay(
+        overlays: &[crate::overlays::OverlayFrame],
+        setup_form: &mut super::SetupForm,
+        account_form: &mut super::AccountForm,
+        model: &Model,
+        previous_page: super::SetupPage,
+        had_setup_pending: bool,
+        previous_account_page: super::AccountPage,
+        previous_field: Option<&gpui::FocusHandle>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> OverlayCompletion {
+        let Some(frame) = overlays.last() else {
+            return OverlayCompletion::Keep;
+        };
+        match frame.content {
+            Overlay::Account => {
+                if previous_account_page != super::AccountPage::Overview
+                    && account_form.page() == super::AccountPage::Overview
+                    && let Some(Ok(message)) = account_form.feedback
+                {
+                    account_form.feedback = None;
+                    return OverlayCompletion::CloseWithToast(message);
+                }
+                let next_field = account_form.field_focus(model, cx);
+                if previous_field != next_field.as_ref() {
+                    window.focus(next_field.as_ref().unwrap_or(&frame.scope), cx);
+                }
+            }
+            Overlay::SharingSetup(SharingSetupTarget::Defaults)
+                if had_setup_pending
+                    && setup_form.pending.is_none()
+                    && matches!(model.setup, windshare_host::Setup::Finished { .. }) =>
+            {
+                return setup_form
+                    .feedback
+                    .take()
+                    .and_then(Result::ok)
+                    .map_or(OverlayCompletion::Close, OverlayCompletion::CloseWithToast);
+            }
+            Overlay::SharingSetup(_) if setup_form.page != previous_page => {
+                window.focus(&frame.scope, cx);
+            }
+            _ => {}
+        }
+        OverlayCompletion::Keep
     }
 
     pub fn stop_native_share(&self, id: usize) {

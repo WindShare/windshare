@@ -9,7 +9,7 @@ use windshare_relay_core::{
 
 impl<S: Persistence, E: Environment> Actor<S, E> {
     pub(super) fn event(&mut self, event: Event) -> Result<()> {
-        self.enforce_access()?;
+        self.enforce_access_if_changed()?;
         let now = self.environment.now();
         let step = match event {
             Event::Connected(connection, mut writer) => {
@@ -123,7 +123,7 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
     }
 
     pub(super) fn pump(&mut self, connection: ConnectionRef) -> Result<()> {
-        self.enforce_access()?;
+        self.enforce_access_if_changed()?;
         let Some(attribution) = self.attribution() else {
             return Ok(());
         };

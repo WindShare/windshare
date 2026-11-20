@@ -70,6 +70,13 @@ type interruptedSelectionStore struct {
 	err error
 }
 
+func (store *interruptedSelectionStore) Load(ctx context.Context) (Record, error) {
+	if store.err != nil {
+		return Record{}, store.err
+	}
+	return store.MemoryStore.Load(ctx)
+}
+
 func (store *interruptedSelectionStore) Update(ctx context.Context, change func(Record) (Record, error)) (Record, error) {
 	if store.err != nil {
 		return Record{}, store.err

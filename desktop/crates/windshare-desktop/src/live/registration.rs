@@ -2,7 +2,7 @@ use super::account::{AccountAction, AccountPage};
 use crate::{
     desktop::Desktop,
     localization::{Text, language},
-    model::{Action, Overlay},
+    model::{Action, Overlay, Page, SettingsSection},
     motion::{SpiritMood, frame_ticker, scaled_spirit},
 };
 use gpui::{App, Div, Role, Window, prelude::*, px};
@@ -11,7 +11,7 @@ use windshare_host::{AccountState, AccountView};
 use windshare_ui::{ButtonStyle, Icon, Theme, Tone, column, row};
 
 impl Desktop {
-    pub(super) fn registration_panel(
+    pub(crate) fn registration_panel(
         &self,
         theme: Theme,
         view: &AccountView,
@@ -28,10 +28,14 @@ impl Desktop {
             _ => None,
         };
         if let Some(permille) = progress {
-            let visible = self
-                .overlays
-                .last()
-                .is_some_and(|frame| matches!(frame.content, Overlay::Account));
+            let on_account_page = self.page == Page::Settings
+                && self.settings_section == SettingsSection::Account
+                && self.overlays.is_empty();
+            let visible = on_account_page
+                || self
+                    .overlays
+                    .last()
+                    .is_some_and(|frame| matches!(frame.content, Overlay::Account));
             return column()
                 .gap(px(18.))
                 .child(
@@ -50,6 +54,16 @@ impl Desktop {
                 .child(RegistrationProgress { permille, visible })
                 .child(theme.caption(locale.text(Text::AccountRegistrationWait)));
         }
+        let login_action = if self
+            .overlays
+            .last()
+            .is_some_and(|frame| matches!(frame.content, Overlay::Account))
+        {
+            Action::Account(AccountAction::Open(AccountPage::Login))
+        } else {
+            Action::OpenAccountModal(AccountPage::Login)
+        };
+        let create_action = Action::Account(AccountAction::Register);
         column()
             .gap(px(24.))
             .child(
@@ -81,17 +95,17 @@ impl Desktop {
                             }),
                             Icon::Arrow,
                             ButtonStyle::Primary,
-                            Action::Account(AccountAction::Submit),
+                            create_action,
                             cx,
                         )
-                        .disabled(!form.can_submit(view, cx)),
+                        .disabled(!form.can_register(view)),
                     )
                     .child(Self::button(
                         "registration-login",
                         locale.text(Text::LoginExisting),
                         Icon::Lock,
                         ButtonStyle::Quiet,
-                        Action::Account(AccountAction::Open(AccountPage::Login)),
+                        login_action,
                         cx,
                     )),
             )

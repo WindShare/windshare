@@ -51,7 +51,11 @@ impl Configuration {
     /// # Errors
     /// Rejects ambiguous endpoints, origins and authority configuration before binding.
     pub fn read(path: &Path) -> Result<Self> {
-        let mut json: serde_json::Value = serde_json::from_slice(&std::fs::read(path)?)?;
+        Self::read_bytes(path, &std::fs::read(path)?)
+    }
+
+    pub(super) fn read_bytes(path: &Path, bytes: &[u8]) -> Result<Self> {
+        let mut json: serde_json::Value = serde_json::from_slice(bytes)?;
         super::settings::zone_defaults(json.get_mut("node").context("missing node settings")?);
         let mut config: Self = serde_json::from_value(json)?;
         let parent = path.parent().unwrap_or_else(|| Path::new("."));

@@ -21,18 +21,28 @@ func (service *Service) ReloadSelection(ctx context.Context) error {
 }
 
 func (service *Service) load(ctx context.Context) (Record, error) {
-	return service.config.Store.Update(ctx, func(record Record) (Record, error) {
-		issuer := base64.RawURLEncoding.EncodeToString(service.config.Root[:])
-		if record.Issuer != "" && record.Issuer != issuer {
-			return Record{}, errors.New("account store belongs to another issuer")
-		}
-		if record.Certificate != "" {
+	record, err := service.config.Store.Load(ctx)
+	if err != nil {
+		return Record{}, err
+	}
+	issuer := base64.RawURLEncoding.EncodeToString(service.config.Root[:])
+	if record.Issuer != "" && record.Issuer != issuer {
+		return Record{}, errors.New("account store belongs to another issuer")
+	}
+	if record.Certificate != "" {
+		service.mu.Lock()
+		verified := service.verifiedCertificate == record.Certificate
+		service.mu.Unlock()
+		if !verified {
 			if _, err := serviceauthority.VerifyGeneration(record.Certificate, service.config.Root); err != nil {
 				return Record{}, err
 			}
+			service.mu.Lock()
+			service.verifiedCertificate = record.Certificate
+			service.mu.Unlock()
 		}
-		return record, nil
-	})
+	}
+	return record, nil
 }
 
 // syncSelection publishes the stored identity and binds any waiting shares to

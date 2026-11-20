@@ -1,13 +1,117 @@
 use crate::localization::{Language, Text, language};
 use crate::{
     desktop::Desktop,
-    model::{Action, Page},
+    model::{Action, Page, SettingsSection},
 };
-use gpui::{Div, prelude::*, px};
-use windshare_ui::{Button, ButtonStyle, Icon, Theme, Tone, column, row};
+use gpui::{Animation, AnimationExt, Div, ease_out_quint, prelude::*, px};
+use std::time::Duration;
+use windshare_ui::{Button, ButtonStyle, Icon, Theme, Tone, column, icon, row};
+
+const TAB_TRANSITION_MS: u64 = 180;
 
 impl Desktop {
-    pub fn settings_page(&self, theme: Theme, cx: &Context<Self>) -> Div {
+    pub fn active_settings_section(&self) -> SettingsSection {
+        if self.settings_section_available(self.settings_section) {
+            self.settings_section
+        } else {
+            SettingsSection::General
+        }
+    }
+
+    pub fn settings_section_body(
+        &self,
+        theme: Theme,
+        active: SettingsSection,
+        compact: bool,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let body = match active {
+            SettingsSection::General => self.general_settings(theme, cx),
+            SettingsSection::Network => self.network_settings_page(theme, compact, cx),
+            SettingsSection::Account => self.account_settings_page(theme, cx),
+            SettingsSection::Diagnostics => {
+                column().when_some(self.diagnostics_card(theme, cx), gpui::ParentElement::child)
+            }
+        };
+        body.with_animation(
+            ("settings-section", active as usize),
+            Animation::new(Duration::from_millis(if cx.reduce_motion() {
+                1
+            } else {
+                TAB_TRANSITION_MS
+            }))
+            .with_easing(ease_out_quint()),
+            gpui::Styled::opacity,
+        )
+    }
+
+    pub fn settings_tabs(&self, theme: Theme, active: SettingsSection, cx: &Context<Self>) -> Div {
+        let locale = language(cx);
+        let sections = [
+            SettingsSection::General,
+            SettingsSection::Network,
+            SettingsSection::Account,
+            SettingsSection::Diagnostics,
+        ];
+        row().child(
+            row()
+                .flex_wrap()
+                .gap(px(4.))
+                .p(px(4.))
+                .rounded(px(12.))
+                .bg(theme.inset())
+                .children(
+                    sections
+                        .into_iter()
+                        .filter(|section| self.settings_section_available(*section))
+                        .map(|section| {
+                            self.settings_tab(theme, section, active == section, locale, cx)
+                        }),
+                ),
+        )
+    }
+
+    fn settings_tab(
+        &self,
+        theme: Theme,
+        section: SettingsSection,
+        selected: bool,
+        locale: Language,
+        cx: &Context<Self>,
+    ) -> Button {
+        let attention = match section {
+            SettingsSection::Network => self.network_attention_tone(),
+            SettingsSection::Account => self.account_attention_tone(),
+            SettingsSection::General | SettingsSection::Diagnostics => None,
+        };
+        let icon_color = if selected {
+            theme.text()
+        } else {
+            theme.muted_text()
+        };
+        let button = Button::new(("settings-tab", section as usize), section.title(locale))
+            .style(if selected {
+                ButtonStyle::Secondary
+            } else {
+                ButtonStyle::Ghost
+            })
+            .compact()
+            .on_press(cx.listener(move |this, (), window, cx| {
+                this.dispatch(Action::SettingsSection(section), window, cx);
+            }));
+        if let Some(tone) = attention {
+            button.leading(
+                row()
+                    .gap(px(6.))
+                    .child(icon(section.icon(), 16.).text_color(icon_color))
+                    .child(theme.dot(tone)),
+            )
+        } else {
+            button.icon(section.icon())
+        }
+    }
+
+    fn general_settings(&self, theme: Theme, cx: &Context<Self>) -> Div {
         let locale = language(cx);
         let settings = [
             (
@@ -22,8 +126,7 @@ impl Desktop {
             ),
         ];
         column()
-            .gap(px(24.))
-            .when_some(self.network_settings(theme, cx), gpui::ParentElement::child)
+            .gap(px(20.))
             .child(Self::appearance_card(theme, cx))
             .child(Self::language_card(theme, cx))
             .child(
@@ -63,7 +166,6 @@ impl Desktop {
                             }),
                     ),
             )
-            .when_some(self.diagnostics_card(theme, cx), gpui::ParentElement::child)
             .when(self.runtime.is_preview(), |el| {
                 el.child(Self::component_preview(theme, cx))
             })

@@ -1,57 +1,18 @@
 use super::{
     account::{AccountAction, AccountFormError, AccountPage, EmailPurpose, EmailStep},
-    network_settings::setting_row,
     projection::byte_size,
 };
 use crate::{
     desktop::Desktop,
     localization::{Language, Text, language},
-    model::{Action, Page, ShareState},
+    model::{Action, Overlay, Page, SettingsSection, ShareState},
 };
 use gpui::{Div, Entity, Role, prelude::*, px};
 use windshare_host::{AccountState, AccountView, Allowance};
 use windshare_ui::{ButtonStyle, Icon, Input, Theme, Tone, column, row};
 
-fn status(view: &AccountView, locale: Language) -> String {
-    let value = &view.status;
-    let text = match value.state {
-        AccountState::PendingSetup | AccountState::RegistrationRequired => Text::AccountDormant,
-        AccountState::Registering { .. } => Text::AccountSetup,
-        AccountState::EmailRequired => Text::AccountEmailNeeded,
-        AccountState::RefreshRequired => Text::AccountRefreshRequired,
-        AccountState::Refreshing => Text::AccountRefreshing,
-        AccountState::TemporarilyUnavailable => Text::AccountUnavailable,
-        AccountState::Denied => Text::AccountDenied,
-        AccountState::Ready => match value.allowance {
-            Allowance::Spent => Text::AccountSpent,
-            Allowance::Stale => Text::AccountStale,
-            Allowance::Available => {
-                return format!(
-                    "{} · {}",
-                    locale.text(Text::AccountRemaining),
-                    byte_size(value.remaining_bytes)
-                );
-            }
-        },
-    };
-    locale.text(text).into()
-}
-
-fn identity(view: &AccountView, locale: Language) -> Option<&str> {
-    if let Some(nickname) = &view.status.profile.nickname {
-        return Some(&nickname.value);
-    }
-    if !view.status.username.is_empty() {
-        Some(&view.status.username)
-    } else if !view.status.account.is_empty() {
-        Some(locale.text(Text::DeviceAccount))
-    } else {
-        None
-    }
-}
-
 impl AccountPage {
-    const fn title(self, view: &AccountView) -> Text {
+    pub(crate) const fn title(self, view: &AccountView) -> Text {
         match self {
             Self::Overview | Self::Registration => Text::Account,
             Self::Login => Text::LoginExisting,
@@ -71,39 +32,34 @@ impl AccountPage {
 }
 
 impl Desktop {
-    pub(super) fn account_setting(&self, theme: Theme, cx: &Context<Self>) -> Option<Div> {
-        let view = self.account_view()?;
-        let locale = language(cx);
-        let status = if self.account_form.page() == AccountPage::Registration
-            && matches!(self.account_form.feedback, Some(Err(_)))
-            && view.status.state == AccountState::RegistrationRequired
-        {
-            locale.text(Text::AccountRegistrationFailed).to_owned()
-        } else {
-            status(view, locale)
+    pub(crate) fn account_status_summary(view: &AccountView, locale: Language) -> String {
+        let value = &view.status;
+        let text = match value.state {
+            AccountState::PendingSetup | AccountState::RegistrationRequired => Text::AccountDormant,
+            AccountState::Registering { .. } => Text::AccountSetup,
+            AccountState::EmailRequired => Text::AccountEmailNeeded,
+            AccountState::RefreshRequired => Text::AccountRefreshRequired,
+            AccountState::Refreshing => Text::AccountRefreshing,
+            AccountState::TemporarilyUnavailable => Text::AccountUnavailable,
+            AccountState::Denied => Text::AccountDenied,
+            AccountState::Ready => match value.allowance {
+                Allowance::Spent => Text::AccountSpent,
+                Allowance::Stale => Text::AccountStale,
+                Allowance::Available => {
+                    return format!(
+                        "{} · {}",
+                        locale.text(Text::AccountRemaining),
+                        byte_size(value.remaining_bytes)
+                    );
+                }
+            },
         };
-        let detail = match identity(view, locale) {
-            Some(name) => format!("{name} · {status}"),
-            None => status,
-        };
-        Some(setting_row(
-            theme,
-            locale.text(Text::Account),
-            detail,
-            Self::button(
-                "open-account",
-                locale.text(AccountPage::entry(view).1),
-                Icon::User,
-                ButtonStyle::Secondary,
-                Action::OpenAccount,
-                cx,
-            ),
-        ))
+        locale.text(text).into()
     }
 
     pub fn account_notice(&self, theme: Theme, cx: &Context<Self>) -> Option<Div> {
         let view = self.account_view()?;
-        if self.page == Page::Settings
+        if (self.page == Page::Settings && self.settings_section == SettingsSection::Account)
             || !view.status.active
             || !self.shares.iter().any(|s| !s.finished())
             || view.status.state == AccountState::Ready
@@ -128,7 +84,7 @@ impl Desktop {
             row()
                 .gap(px(12.))
                 .justify_between()
-                .child(theme.caption(status(view, locale)))
+                .child(theme.caption(Self::account_status_summary(view, locale)))
                 .child(
                     Self::button(
                         "account-attention",
@@ -152,201 +108,71 @@ impl Desktop {
         let Some(view) = self.account_view() else {
             return column();
         };
-        let locale = language(cx);
         let mut panel = match self.account_form.page() {
             AccountPage::Registration => self.registration_panel(theme, view, cx),
-            AccountPage::Overview => self.account_overview(theme, view, cx),
+            AccountPage::Overview => self.account_identity_content(theme, view, cx),
             _ => self.account_editor(theme, view, cx),
         };
-        if let Some(result) = &self.account_form.feedback {
-            let (message, tone) = match result {
-                Ok(text) => (locale.text(*text).to_owned(), Tone::Mint),
-                Err(AccountFormError::AccountChanged) => {
-                    (locale.text(Text::AccountChanged).to_owned(), Tone::Rose)
-                }
-                Err(AccountFormError::Command(error)) => {
-                    let text = match error.code.as_str() {
-                        "invalid_credentials" => Text::InvalidCredentials,
-                        "username_taken" => Text::UsernameTaken,
-                        "email_taken" => Text::EmailTaken,
-                        "invalid_nickname" => Text::InvalidNickname,
-                        "nickname_cooldown" => Text::NicknameInterval,
-                        "invalid_email" => Text::InvalidEmail,
-                        "unsupported_email" => Text::UnsupportedEmail,
-                        "email_delivery_unavailable" => Text::EmailDeliveryUnavailable,
-                        "account_denied" => Text::AccountDenied,
-                        "email_code_incorrect" => Text::EmailCodeIncorrect,
-                        "email_code_rejected" => Text::EmailCodeRejected,
-                        "rate_limited" => Text::AccountRateLimited,
-                        "invalid_account_input" => Text::InvalidAccountInput,
-                        "account_service_unreachable" => Text::AccountUnavailable,
-                        _ if matches!(
-                            self.account_form.page(),
-                            AccountPage::Registration
-                                | AccountPage::Email(EmailPurpose::Registration, _)
-                        ) =>
-                        {
-                            Text::AccountRegistrationFailed
-                        }
-                        _ => {
-                            return panel.child(
-                                theme
-                                    .caption(error.message.clone())
-                                    .text_color(Tone::Rose.text(theme)),
-                            );
-                        }
-                    };
-                    (locale.text(text).to_owned(), Tone::Rose)
-                }
-            };
-            panel = panel.child(
-                theme
-                    .caption(message.clone())
-                    .id("account-feedback")
-                    .role(if result.is_err() {
-                        Role::Alert
-                    } else {
-                        Role::Status
-                    })
-                    .aria_label(message)
-                    .text_color(tone.text(theme)),
-            );
+        if let Some(banner) = self.account_feedback_banner(theme, cx) {
+            panel = panel.child(banner);
         }
         panel
     }
 
-    fn account_overview(&self, theme: Theme, view: &AccountView, cx: &Context<Self>) -> Div {
+    pub(crate) fn account_feedback_banner(
+        &self,
+        theme: Theme,
+        cx: &Context<Self>,
+    ) -> Option<gpui::Stateful<Div>> {
+        let result = self.account_form.feedback.as_ref()?;
         let locale = language(cx);
-        let busy = self.account_form.busy(view);
-        let locked_until = view.nickname_locked_until();
-        let summary = column()
-            .flex_1()
-            .min_w_0()
-            .gap(px(6.))
-            .when_some(identity(view, locale), |col, name| {
-                col.child(theme.heading(name.to_owned(), 19.).truncate())
-            })
-            .child(theme.caption(status(view, locale)))
-            .when_some(locked_until, |col, at| {
-                col.child(theme.caption(locale.nickname_next_change(at)))
-            })
-            .when(
-                view.status.state == AccountState::Ready && !view.reset_local.is_empty(),
-                |col| {
-                    col.child(theme.caption(format!(
-                        "{} · {}",
-                        locale.text(Text::AccountReset),
-                        view.reset_local
-                    )))
-                },
-            );
-        column()
-            .gap(px(20.))
-            .child(
-                row()
-                    .gap(px(14.))
-                    .child(theme.icon_tile(Icon::User, Tone::Mint, 44.))
-                    .child(summary)
-                    .when(view.can_edit_profile(), |row| {
-                        row.child(
-                            Self::button(
-                                "account-nickname",
-                                locale.text(AccountPage::Nickname(()).title(view)),
-                                Icon::Pencil,
-                                ButtonStyle::Quiet,
-                                Action::Account(AccountAction::Open(AccountPage::Nickname(()))),
-                                cx,
-                            )
-                            .compact()
-                            .disabled(busy || locked_until.is_some()),
-                        )
-                    }),
-            )
-            .when(view.can_edit_profile(), |panel| {
-                let email = &view.status.profile.email;
-                let page = EmailPurpose::Profile(()).entry(view);
-                panel.child(theme.separator()).child(setting_row(
-                    theme,
-                    locale.text(Text::AccountEmailLabel),
-                    if email.is_empty() {
-                        locale.text(Text::EmailNotSet).to_owned()
-                    } else {
-                        email.clone()
-                    },
-                    Self::button(
-                        "account-profile-email",
-                        locale.text(page.title(view)),
-                        Icon::Mail,
-                        ButtonStyle::Secondary,
-                        Action::Account(AccountAction::Open(page)),
-                        cx,
-                    )
-                    .disabled(busy),
-                ))
-            })
-            .child(self.account_access_actions(view, cx))
-    }
-
-    fn account_access_actions(&self, view: &AccountView, cx: &Context<Self>) -> Div {
-        let locale = language(cx);
-        let busy = self.account_form.busy(view);
-        let mut actions = row().flex_wrap().gap(px(8.));
-        if view.status.state == AccountState::EmailRequired {
-            actions = actions.child(
-                Self::button(
-                    "verify-account",
-                    locale.text(Text::AccountEmail),
-                    Icon::Shield,
-                    ButtonStyle::Primary,
-                    Action::Account(AccountAction::Open(EmailPurpose::Registration.entry(view))),
-                    cx,
-                )
-                .disabled(busy),
-            );
-        } else if matches!(
-            view.status.state,
-            AccountState::TemporarilyUnavailable | AccountState::Denied
-        ) {
-            actions = actions.child(
-                Self::button(
-                    "retry-account",
-                    locale.text(Text::RetryConnection),
-                    Icon::Refresh,
-                    ButtonStyle::Secondary,
-                    Action::Account(AccountAction::Retry),
-                    cx,
-                )
-                .disabled(busy),
-            );
-        }
-        if view.can_edit_profile() {
-            actions = actions.child(
-                Self::button(
-                    "set-account-login",
-                    locale.text(AccountPage::Credentials(()).title(view)),
-                    Icon::Lock,
-                    ButtonStyle::Secondary,
-                    Action::Account(AccountAction::Open(AccountPage::Credentials(()))),
-                    cx,
-                )
-                .disabled(busy),
-            );
-        }
-        let switch = if view.status.username.is_empty() {
-            Text::LoginExisting
-        } else {
-            Text::SwitchAccount
+        let (message, tone) = match result {
+            Ok(text) => (locale.text(*text).to_owned(), Tone::Mint),
+            Err(AccountFormError::AccountChanged) => {
+                (locale.text(Text::AccountChanged).to_owned(), Tone::Rose)
+            }
+            Err(AccountFormError::Command(error)) => {
+                let text = match error.code.as_str() {
+                    "invalid_credentials" => Some(Text::InvalidCredentials),
+                    "username_taken" => Some(Text::UsernameTaken),
+                    "email_taken" => Some(Text::EmailTaken),
+                    "invalid_nickname" => Some(Text::InvalidNickname),
+                    "nickname_cooldown" => Some(Text::NicknameInterval),
+                    "invalid_email" => Some(Text::InvalidEmail),
+                    "unsupported_email" => Some(Text::UnsupportedEmail),
+                    "email_delivery_unavailable" => Some(Text::EmailDeliveryUnavailable),
+                    "account_denied" => Some(Text::AccountDenied),
+                    "email_code_incorrect" => Some(Text::EmailCodeIncorrect),
+                    "email_code_rejected" => Some(Text::EmailCodeRejected),
+                    "rate_limited" => Some(Text::AccountRateLimited),
+                    "invalid_account_input" => Some(Text::InvalidAccountInput),
+                    "account_service_unreachable" => Some(Text::AccountUnavailable),
+                    _ if matches!(
+                        self.account_form.page(),
+                        AccountPage::Registration
+                            | AccountPage::Email(EmailPurpose::Registration, _)
+                    ) =>
+                    {
+                        Some(Text::AccountRegistrationFailed)
+                    }
+                    _ => None,
+                };
+                let text =
+                    text.map_or_else(|| error.message.clone(), |key| locale.text(key).to_owned());
+                (text, Tone::Rose)
+            }
         };
-        actions.child(
-            Self::button(
-                "switch-account",
-                locale.text(switch),
-                Icon::Arrow,
-                ButtonStyle::Quiet,
-                Action::Account(AccountAction::Open(AccountPage::Login)),
-                cx,
-            )
-            .disabled(busy),
+        Some(
+            theme
+                .caption(message.clone())
+                .id("account-feedback")
+                .role(if result.is_err() {
+                    Role::Alert
+                } else {
+                    Role::Status
+                })
+                .aria_label(message)
+                .text_color(tone.text(theme)),
         )
     }
 
@@ -470,26 +296,51 @@ impl Desktop {
         view: &AccountView,
         cx: &Context<Self>,
     ) -> Option<windshare_ui::Button> {
-        let (label, page, icon) = match self.account_form.page() {
+        let from_settings = self.page == Page::Settings
+            && self.settings_section == SettingsSection::Account
+            && self
+                .overlays
+                .last()
+                .is_some_and(|frame| matches!(frame.content, Overlay::Account));
+        let (label, action, icon) = match self.account_form.page() {
             AccountPage::Email(purpose, EmailStep::Address) if purpose.has_code(view) => (
                 Text::EnterExistingCode,
-                AccountPage::Email(purpose, EmailStep::Code),
+                Action::Account(AccountAction::Open(AccountPage::Email(
+                    purpose,
+                    EmailStep::Code,
+                ))),
                 Icon::Shield,
             ),
             AccountPage::Login
             | AccountPage::Credentials(())
             | AccountPage::Nickname(())
             | AccountPage::Email(EmailPurpose::Profile(()), _)
+                if from_settings =>
+            {
+                (Text::Cancel, Action::Close, Icon::Close)
+            }
+            AccountPage::Login
+            | AccountPage::Credentials(())
+            | AccountPage::Nickname(())
+            | AccountPage::Email(EmailPurpose::Profile(()), _)
                 if !view.status.account.is_empty() =>
             {
-                (Text::BackToAccount, AccountPage::Overview, Icon::ArrowLeft)
+                (
+                    Text::BackToAccount,
+                    Action::Account(AccountAction::Open(AccountPage::Overview)),
+                    Icon::ArrowLeft,
+                )
             }
-            AccountPage::Email(EmailPurpose::Registration, _) => {
-                (Text::LoginExisting, AccountPage::Login, Icon::Arrow)
-            }
-            AccountPage::Login if view.status.account.is_empty() => {
-                (Text::SetUpAccount, AccountPage::entry(view).0, Icon::User)
-            }
+            AccountPage::Email(EmailPurpose::Registration, _) => (
+                Text::LoginExisting,
+                Action::Account(AccountAction::Open(AccountPage::Login)),
+                Icon::Arrow,
+            ),
+            AccountPage::Login if view.status.account.is_empty() => (
+                Text::SetUpAccount,
+                Action::Account(AccountAction::Open(AccountPage::entry(view).0)),
+                Icon::User,
+            ),
             _ => return None,
         };
         Some(
@@ -498,7 +349,7 @@ impl Desktop {
                 language(cx).text(label),
                 icon,
                 ButtonStyle::Quiet,
-                Action::Account(AccountAction::Open(page)),
+                action,
                 cx,
             )
             .disabled(self.account_form.busy(view)),

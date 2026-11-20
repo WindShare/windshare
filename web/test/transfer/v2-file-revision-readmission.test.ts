@@ -122,6 +122,51 @@ it.each(['agreement', 'unavailable', 'changed-on-retry'] as const)(
   },
 )
 
+it('continues readmitting across multiple reopens while durable progress advances', async () => {
+  const payload = fileEntry(identity(11), 'payload.bin', 6n)
+  const selection = selectOnlyFile(payload)
+  const catalog = catalogFixture([{ id: identity(2), entries: [payload] }])
+  const readers = readerFixture([payload])
+  const versions = [71, 72, 73].map(seed => ({
+    fileRevision: identity(seed), fileRevisionText: identityText(seed), sourceMetadata: digestIdentity(74),
+  }))
+  let payloadOpens = 0
+  const outputs: ReturnType<typeof testOutput>[] = []
+  const firstOutput = testOutput([], { durability: 'ProcessRestart' })
+  outputs.push(firstOutput)
+  const output = {
+    ...firstOutput,
+    readmitFile: (file, paused, signal) => {
+      const next = testOutput([], { durability: 'ProcessRestart', initialRanges: paused.ranges })
+      outputs.push(next)
+      return next.beginFile(file, signal)
+    },
+  } satisfies OutputSession
+  const intent = await receiveIntentFixture({ planKind: 'direct-atomic', artifactKind: 'original-file', selection, file: payload })
+  const result = await transferJobFixture({
+    catalog: catalog.catalog, selection, intent, plans: planAuthorityFixture({ output }),
+    revisions: { open: async (file, signal) => {
+      const opened = await readers.revisions.open(file, signal)
+      const attempt = payloadOpens++
+      return {
+        ...opened,
+        descriptor: { ...opened.descriptor, ...versions[attempt]! },
+        leaseId: identity(81 + attempt),
+      }
+    } },
+    broker: { readRange: async function* (descriptor, _lease, range) {
+      yield { offset: range.start, data: Uint8Array.of(1, 2) }
+      if (range.start + 2n < range.end) {
+        throw new RevisionReopenedDuringRecoveryError(descriptor, { ...descriptor, ...versions[payloadOpens]! })
+      }
+    } },
+  }).run()
+
+  expect(result.worker.status).toBe('Succeeded')
+  expect(payloadOpens).toBe(3)
+  expect(outputs.at(-1)?.commits).toEqual([payload.idText])
+})
+
 it.each([FaultScope.FileLocal, FaultScope.OutputPause])(
   'honors a %s release fault after checkpointing an exhausted readmission',
   async scope => {
@@ -130,8 +175,8 @@ it.each([FaultScope.FileLocal, FaultScope.OutputPause])(
     const selection = new SelectionPolicy(true)
     const catalog = catalogFixture([{ id: identity(2), entries: [payload, sibling] }])
     const readers = readerFixture([payload, sibling])
-    const versions = [71, 72, 73].map(seed => ({
-      fileRevision: identity(seed), fileRevisionText: identityText(seed), sourceMetadata: digestIdentity(74),
+    const versions = [71, 72, 73, 74].map(seed => ({
+      fileRevision: identity(seed), fileRevisionText: identityText(seed), sourceMetadata: digestIdentity(75),
     }))
     let payloadOpens = 0
     const firstOutput = testOutput([], { durability: 'ProcessRestart' })
@@ -154,7 +199,7 @@ it.each([FaultScope.FileLocal, FaultScope.OutputPause])(
           leaseId: identity(81 + attempt),
           release: async () => {
             await opened.release()
-            if (attempt === 1) throw new BoundaryFaultError(sourceFault(scope, SourceFaultCode.Unavailable))
+            if (attempt === 2) throw new BoundaryFaultError(sourceFault(scope, SourceFaultCode.Unavailable))
           },
         }
       } },
@@ -163,12 +208,14 @@ it.each([FaultScope.FileLocal, FaultScope.OutputPause])(
           yield* readers.broker.readRange(descriptor, lease, range, request)
           return
         }
-        yield { offset: range.start, data: Uint8Array.of(1, 2) }
+        if (range.start === 0n) {
+          yield { offset: range.start, data: Uint8Array.of(1, 2) }
+        }
         throw new RevisionReopenedDuringRecoveryError(descriptor, { ...descriptor, ...versions[payloadOpens]! })
       } },
     }).run()
 
-    expect(payloadOpens).toBe(2)
+    expect(payloadOpens).toBe(3)
     expect(result.worker.status).toBe('Paused')
     expect(result.failureTrigger?.fault.scope).toBe(scope)
     expect(plans.pauseRequests).toHaveLength(1)

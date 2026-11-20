@@ -64,6 +64,16 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
         decision
     }
 
+    // Every policy or public-budget revocation bumps `access_changes`, so the
+    // steady-state frame path only performs a lock-free version check.
+    pub(super) fn enforce_access_if_changed(&mut self) -> Result<()> {
+        if self.access_changes.has_changed().unwrap_or(true) {
+            let _ = self.access_changes.borrow_and_update();
+            return self.enforce_access();
+        }
+        Ok(())
+    }
+
     pub(super) fn enforce_access(&mut self) -> Result<()> {
         // Fresh registration resolves the bearer before live policy can revoke a share.
         let Some(attribution) = self.attribution() else {

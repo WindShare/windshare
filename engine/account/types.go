@@ -26,6 +26,7 @@ type HTTPClient interface {
 	Do(*http.Request) (*http.Response, error)
 }
 type Store interface {
+	Load(context.Context) (Record, error)
 	Update(context.Context, func(Record) (Record, error)) (Record, error)
 }
 

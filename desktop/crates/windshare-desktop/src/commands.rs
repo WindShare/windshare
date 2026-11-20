@@ -2,10 +2,10 @@ use crate::localization::{LanguageSettings, Text};
 use crate::{
     desktop::Desktop,
     flow_state::{
-        COPY_FEEDBACK_MS, CopyFeedback, LinkFeedback, RECEIVE_OPEN_MS, RECEIVE_SAVE_MS,
+        COPY_FEEDBACK_MS, CopyFeedback, CopyTarget, LinkFeedback, RECEIVE_OPEN_MS, RECEIVE_SAVE_MS,
         ReceiveFlow, SampleBundle, ShareFlow,
     },
-    model::{Action, Overlay, Page, ShareState, TransferState},
+    model::{Action, Overlay, Page, SettingsSection, ShareState, TransferState},
     sharing::LinkKind,
 };
 use gpui::{BorrowAppContext, ClipboardItem, Context, Focusable, Window};
@@ -78,27 +78,24 @@ impl Desktop {
                 self.repeat_native_share(id, window, cx);
             }
             Action::ConfigureShare(id) => self.configure_share(id, window, cx),
-            Action::OpenAccount => self.open_account(window, cx),
+            Action::OpenAccount => {
+                self.select_settings_section(SettingsSection::Account, window, cx);
+            }
+            Action::OpenAccountModal(page) => self.open_account_modal(page, window, cx),
+            Action::CopyAccountUid => self.copy_account_uid(cx),
             Action::Account(action) => self.account_action(action, window, cx),
-            Action::ConfigureNetwork => self.open_sharing_setup(None, window, cx),
+            Action::OpenSetupModal(page) => self.open_setup_modal(page, window, cx),
             Action::ChooseShareRelays(id) => self.open_sharing_setup(Some(id), window, cx),
             Action::SetupPage(page) => self.edit_setup_page(page, window, cx),
+            Action::SettingsSection(section) => self.select_settings_section(section, window, cx),
             Action::ReturnToSharingSetup => self.return_to_sharing_setup(window, cx),
-            Action::SaveSharingSetup(id) => self.save_sharing_setup(id, cx),
+            Action::SaveSharingSetup(id) => self.save_sharing_setup(id, window, cx),
             Action::ResumeShare(id) => self.resume_native_share(id),
             Action::UseSavedSettings(id) => self.use_saved_settings(id),
             Action::CancelSharingSetup => self.cancel_sharing_setup(),
             Action::ApproveRelay => self.approve_relay(cx),
             Action::ToggleShare(id) => self.toggle_preview_share(id),
-            Action::ToggleTransfer(index) => {
-                if let Some(transfer) = self.transfers.get_mut(index) {
-                    transfer.state = match transfer.state {
-                        TransferState::Running => TransferState::Paused,
-                        TransferState::Paused => TransferState::Running,
-                        TransferState::Complete => TransferState::Complete,
-                    };
-                }
-            }
+            Action::ToggleTransfer(index) => self.toggle_preview_transfer(index),
             Action::ToggleSetting(index) => {
                 if let Some(setting) = self.settings.get_mut(index) {
                     *setting = !*setting;
@@ -114,6 +111,16 @@ impl Desktop {
             Action::Toast(message) => self.notify(message, cx),
         }
         cx.notify();
+    }
+
+    fn toggle_preview_transfer(&mut self, index: usize) {
+        if let Some(transfer) = self.transfers.get_mut(index) {
+            transfer.state = match transfer.state {
+                TransferState::Running => TransferState::Paused,
+                TransferState::Paused => TransferState::Running,
+                TransferState::Complete => TransferState::Complete,
+            };
+        }
     }
 
     fn toggle_preview_share(&mut self, id: usize) {
@@ -167,8 +174,7 @@ impl Desktop {
         cx.write_to_clipboard(ClipboardItem::new_string(url.to_string()));
         let revision = self.next_operation();
         self.copy_feedback = CopyFeedback::Copied {
-            share_id: id,
-            kind,
+            target: CopyTarget::ShareLink { share_id: id, kind },
             revision,
         };
         let overlay = self.overlays.last().map(|frame| &frame.content);
@@ -207,15 +213,44 @@ impl Desktop {
             link_kind = ?kind,
             inline_feedback
         );
+        Self::schedule_copy_feedback_reset(revision, cx);
+    }
+
+    fn copy_account_uid(&mut self, cx: &Context<Self>) {
+        let Some(uid) = self
+            .account_view()
+            .map(|view| view.status.account.clone())
+            .filter(|uid| !uid.is_empty())
+        else {
+            return;
+        };
+        cx.write_to_clipboard(ClipboardItem::new_string(uid));
+        let revision = self.next_operation();
+        self.copy_feedback = CopyFeedback::Copied {
+            target: CopyTarget::AccountUid,
+            revision,
+        };
+        tracing::info!(
+            event = "account.uid_copied",
+            session = std::process::id(),
+            operation = revision,
+        );
+        Self::schedule_copy_feedback_reset(revision, cx);
+    }
+
+    fn schedule_copy_feedback_reset(revision: usize, cx: &Context<Self>) {
         cx.spawn(async move |view, cx| {
-            cx.background_executor().timer(Duration::from_millis(COPY_FEEDBACK_MS)).await;
+            cx.background_executor()
+                .timer(Duration::from_millis(COPY_FEEDBACK_MS))
+                .await;
             let _ = view.update(cx, |this, cx| {
                 if matches!(this.copy_feedback, CopyFeedback::Copied { revision: current, .. } if current == revision) {
                     this.copy_feedback = CopyFeedback::Idle;
                     cx.notify();
                 }
             });
-        }).detach();
+        })
+        .detach();
     }
 
     pub const fn next_operation(&mut self) -> usize {

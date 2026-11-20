@@ -3,7 +3,10 @@ use crate::{
     flow_state::{CopyFeedback, ReceiveFlow, ShareFlow},
     layout::{FlowLayout, MAX_PAGE_WIDTH, page_gutter},
     live::Runtime,
-    model::{Action, Filter, Overlay, Page, Share, Transfer, demo_shares, demo_transfers},
+    model::{
+        Action, Filter, Overlay, Page, SettingsSection, Share, Transfer, demo_shares,
+        demo_transfers,
+    },
     motion::lerp,
     overlays::OverlayFrame,
     sharing::{IntroAnchors, LinkDisclosure},
@@ -21,6 +24,7 @@ use windshare_ui::{
 
 pub struct Desktop {
     pub page: Page,
+    pub settings_section: SettingsSection,
     pub super_share: Entity<crate::supershare::SuperShare>,
     pub filter: Filter,
     pub shares: Vec<Share>,
@@ -58,8 +62,8 @@ impl Desktop {
         let link_input =
             cx.new(|cx| Input::new(locale.text(Text::ShareLink), cx).accent(Tone::Lavender));
         let super_share = cx.new(|cx| crate::supershare::SuperShare::new(window, cx));
-        let setup_form = crate::live::SetupForm::new(cx);
-        let account_form = crate::live::AccountForm::new(cx);
+        let setup_form = crate::live::SetupForm::new(window, cx);
+        let account_form = crate::live::AccountForm::new(window, cx);
         let mut subscriptions = vec![
             cx.observe(&super_share, |_, _, cx| cx.notify()),
             cx.subscribe_in(&super_share, window, |this, _, _, window, cx| {
@@ -110,6 +114,7 @@ impl Desktop {
         }
         Self {
             page: Page::Share,
+            settings_section: SettingsSection::General,
             super_share,
             filter: Filter::All,
             shares: if preview { demo_shares() } else { Vec::new() },
@@ -234,15 +239,60 @@ impl Desktop {
             self.super_share
                 .update(cx, crate::supershare::SuperShare::leave);
         }
-        if page == Page::Settings
-            && let Runtime::Native(session) = &self.runtime
-        {
-            session.controller.refresh_preferences();
+        if page == Page::Settings {
+            if !self.settings_section_available(self.settings_section) {
+                self.settings_section = SettingsSection::General;
+            }
+            self.refresh_settings_section();
         }
         self.page = page;
         self.overlays.clear();
         self.link_disclosure = LinkDisclosure::Summary;
         self.focus_task(window, cx);
+    }
+
+    pub fn settings_section_available(&self, section: SettingsSection) -> bool {
+        match section {
+            SettingsSection::General | SettingsSection::Network => true,
+            SettingsSection::Account => self.account_view().is_some(),
+            SettingsSection::Diagnostics => matches!(self.runtime, Runtime::Native(_)),
+        }
+    }
+
+    pub fn select_settings_section(
+        &mut self,
+        section: SettingsSection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let next = if self.settings_section_available(section) {
+            section
+        } else {
+            SettingsSection::General
+        };
+        tracing::info!(
+            event = "desktop.settings_section_changed",
+            session = std::process::id(),
+            from = ?self.settings_section,
+            to = ?next,
+        );
+        self.settings_section = next;
+        if self.page == Page::Settings {
+            self.overlays.clear();
+            self.refresh_settings_section();
+        } else {
+            self.navigate(Page::Settings, window, cx);
+        }
+    }
+
+    fn refresh_settings_section(&self) {
+        let Runtime::Native(session) = &self.runtime else {
+            return;
+        };
+        session.controller.refresh_preferences();
+        if self.settings_section == SettingsSection::Account {
+            session.controller.reload_account_selection();
+        }
     }
     pub fn focus_task(&self, window: &mut Window, cx: &mut App) {
         let focus = match self.page {
@@ -284,7 +334,7 @@ impl Desktop {
             Page::Receive => self.receiving_page(theme, layout, cx),
             Page::Shares => self.shares_page(theme, compact, cx),
             Page::Transfers => self.transfers_page(theme, cx),
-            Page::Settings => self.settings_page(theme, cx),
+            Page::Settings => column(),
             Page::Components => Self::components_page(theme, cx),
             Page::SuperShare => column().child(self.super_share.clone()),
         }
@@ -293,10 +343,10 @@ impl Desktop {
     fn main_pane(&self, window: &Window, cx: &Context<Self>) -> gpui::Div {
         let theme = Theme::current(window, cx);
         // A showcase owns its layout; workspace gutters must not crop its visual canvas.
-        let body = if self.page == Page::SuperShare {
-            column().flex_1().min_h_0().child(self.super_share.clone())
-        } else {
-            self.workspace_page(window, cx)
+        let body = match self.page {
+            Page::SuperShare => column().flex_1().min_h_0().child(self.super_share.clone()),
+            Page::Settings => self.settings_workspace_page(window, cx),
+            _ => self.workspace_page(window, cx),
         };
         column()
             .flex_1()
@@ -304,6 +354,70 @@ impl Desktop {
             .child(Self::titlebar(window, cx))
             .child(body)
             .child(self.statusbar(theme, cx))
+    }
+
+    fn settings_workspace_page(&self, window: &Window, cx: &Context<Self>) -> gpui::Div {
+        let locale = language(cx);
+        let theme = Theme::current(window, cx);
+        let compact = window.viewport_size().width < px(COMPACT_WIDTH);
+        let gutter = px(page_gutter(compact));
+        let active = self.active_settings_section();
+        column()
+            .flex_1()
+            .min_h_0()
+            // Anchor the title and section switcher above the scroll region so
+            // long preference sections never strand the user off-screen.
+            .child(
+                column()
+                    .items_center()
+                    .flex_shrink_0()
+                    .px(gutter)
+                    .pt(px(if compact { 16. } else { 22. }))
+                    .pb(px(16.))
+                    .child(
+                        row()
+                            .w_full()
+                            .max_w(px(MAX_PAGE_WIDTH))
+                            .flex_wrap()
+                            .justify_between()
+                            .gap(px(16.))
+                            .child(theme.heading(
+                                Page::Settings.title(locale),
+                                if compact { 26. } else { 30. },
+                            ))
+                            .child(self.settings_tabs(theme, active, cx)),
+                    ),
+            )
+            .child(
+                column()
+                    .id(("settings-scroll", active as usize))
+                    .overflow_y_scroll()
+                    .items_center()
+                    .flex_1()
+                    .min_h_0()
+                    .px(gutter)
+                    .pt(px(4.))
+                    .pb(px(28.))
+                    .child(
+                        column()
+                            .w_full()
+                            .max_w(px(MAX_PAGE_WIDTH))
+                            .flex_shrink_0()
+                            .gap(px(16.))
+                            .when_some(self.runtime.setup_cancellation_error(), |el, error| {
+                                el.child(Self::setup_cancellation_notice(theme, error, cx))
+                            })
+                            .when_some(self.account_notice(theme, cx), |el, notice| {
+                                el.child(notice)
+                            })
+                            .when_some(self.runtime.notice(), |el, error| {
+                                el.child(theme.card().p(px(18.)).child(
+                                    theme.label(error, 15.).text_color(Tone::Rose.text(theme)),
+                                ))
+                            })
+                            .child(self.settings_section_body(theme, active, compact, cx)),
+                    ),
+            )
     }
 
     fn workspace_page(&self, window: &Window, cx: &Context<Self>) -> gpui::Div {

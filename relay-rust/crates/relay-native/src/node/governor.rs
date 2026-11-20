@@ -1,14 +1,19 @@
 //! Node-wide pacing, with one fair scheduling identity for both session directions.
+mod handoff;
 mod pacing;
 mod scheduling;
 
 use crate::connection::{WritePermit, WriteWindow};
+use handoff::WriterId;
 use scheduling::State;
 
 use super::access::Service;
 use pacing::Bandwidth;
 use std::{
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 use tokio::{sync::Notify, time::Instant};
@@ -37,6 +42,8 @@ impl From<SessionKey> for Key {
 pub struct Governor {
     state: Arc<Mutex<State>>,
     access: Service,
+    wake: Arc<Notify>,
+    paced: Arc<AtomicBool>,
 }
 
 /// Its lifetime is the flow's queue lifetime, not a single packet's wait.
@@ -50,6 +57,8 @@ impl Governor {
         Self {
             state: Arc::new(Mutex::new(State::new())),
             access,
+            wake: Arc::default(),
+            paced: Arc::default(),
         }
     }
 
@@ -65,6 +74,18 @@ impl Governor {
         let public_changed = state.pacing.public.configure(public_bytes_per_second, now);
         // A scheduler pass must see the new rate and its admission policy together.
         let result = publish_node();
+        let paced = bytes_per_second.is_some() || public_bytes_per_second.is_some();
+        if node_changed || public_changed {
+            if paced {
+                state.grant_pending(&self.access, None, now);
+            } else {
+                state.reset();
+            }
+            self.paced.store(paced, Ordering::Release);
+            if state.waiting() {
+                self.wake.notify_one();
+            }
+        }
         drop(state);
         if node_changed || public_changed {
             tracing::info!(
@@ -102,19 +123,42 @@ impl Governor {
     pub(crate) fn take<'a, H, I>(
         &self,
         window: &WriteWindow,
-        flows: I,
+        mut flows: I,
     ) -> Option<(usize, WritePermit)>
     where
         H: Iterator<Item = u64>,
-        I: Iterator<Item = (&'a LaneLease, H)> + Clone,
+        I: ExactSizeIterator<Item = (&'a LaneLease, H)> + Clone,
     {
-        let mut state = self.state.lock().expect("governor");
-        let reclassified = state.refresh_classes(&self.access, super::now().unsigned_abs());
-        for (lane, sizes) in flows.clone() {
-            state.offer(lane.id, sizes, &self.access);
+        // With one local flow and no outstanding scheduled work, the socket is
+        // the only bottleneck. The ordinary unpaced path takes no node-wide lock.
+        if flows.len() == 1
+            && !self.paced.load(Ordering::Acquire)
+            && !window.scheduled.load(Ordering::Relaxed)
+        {
+            let bytes = flows.next()?.1.next()?;
+            return window.reserve(bytes).map(|permit| (0, permit));
         }
-        state.grant_pending(&self.access, Some(window));
-        let grant = state.take_first(flows.map(|(lane, _)| lane.id));
+        let mut state = self.state.lock().expect("governor");
+        let now = Instant::now();
+        let writer = WriterId::from(window);
+        let reclassified = state.refresh_classes(&self.access, super::now().unsigned_abs());
+        let was_waiting = state.waiting();
+        for (lane, sizes) in flows.clone() {
+            state.offer(lane.id, sizes, &self.access, now);
+        }
+        state.grant_pending(&self.access, Some(writer), now);
+        let grant = state.take(writer).map(|(id, permit)| {
+            (
+                flows
+                    .into_iter()
+                    .position(|(lane, _)| lane.id == id)
+                    .expect("destination owns its lanes"),
+                permit,
+            )
+        });
+        if !was_waiting && state.waiting() {
+            self.wake.notify_one();
+        }
         drop(state);
         log_reclassifications(reclassified);
         grant
@@ -124,17 +168,23 @@ impl Governor {
         let mut tick = tokio::time::interval(TICK);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
-            tick.tick().await;
-            self.pump();
+            if self.pump() {
+                tick.tick().await;
+            } else {
+                self.wake.notified().await;
+                tick.reset();
+            }
         }
     }
 
-    fn pump(&self) {
+    fn pump(&self) -> bool {
         let mut state = self.state.lock().expect("governor");
         let reclassified = state.refresh_classes(&self.access, super::now().unsigned_abs());
-        state.grant_pending(&self.access, None);
+        state.grant_pending(&self.access, None, Instant::now());
+        let waiting = state.waiting();
         drop(state);
         log_reclassifications(reclassified);
+        waiting
     }
 }
 

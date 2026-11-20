@@ -20,6 +20,7 @@ struct Stream {
     scenario: Scenario,
     outbox: Outbox,
     writer: Writer,
+    wake: Arc<Notify>,
     attribution: Attribution,
     sent: usize,
 }
@@ -34,6 +35,8 @@ impl Stream {
     ) -> Self {
         let mut scenario = Scenario::with_incarnation(incarnation);
         let (mut outbox, writer, _) = channel(connection(3), node.clone());
+        let wake = Arc::new(Notify::new());
+        outbox.set_wake(Arc::clone(&wake));
         if count > 1 {
             scenario.grant(count as u64 - 1);
         }
@@ -45,6 +48,7 @@ impl Stream {
             scenario,
             outbox,
             writer,
+            wake,
             attribution,
             sent: 0,
         }
@@ -258,10 +262,11 @@ fn competing_flows_share_one_writer_window_and_discard_releases_its_reserved_slo
         .map(|lane| (lane, sizes.into_iter()));
     let (index, first_permit) = node.governor.take(&window, offers).unwrap();
     assert_eq!(index, 0);
-    assert_eq!(window.frames.available_permits(), 0);
+    // One frame is in the writer, one is promised to the second lane.
+    assert_eq!(window.frames.available_permits(), 1);
     assert_eq!(
         window.bytes.available_permits(),
-        crate::config::SUBMITTED_DATA_BYTES - 200
+        crate::config::SUBMITTED_DATA_BYTES - 100
     );
     drop(second);
     assert!(wake.notified().now_or_never().is_some());
@@ -291,3 +296,6 @@ fn competing_flows_share_one_writer_window_and_discard_releases_its_reserved_slo
     assert_eq!(index, 0);
     assert_eq!(successor.bytes.num_permits(), 500);
 }
+
+#[path = "burst_tests.rs"]
+mod bursts;

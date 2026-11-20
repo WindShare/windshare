@@ -192,6 +192,39 @@ fn rejected_file_allows_the_active_budget_to_roll_over() {
 }
 
 #[test]
+fn unchanged_config_file_skips_reapplying_while_still_rolling_over_budgets() {
+    let (directory, endpoint, node, settings) = configured_node();
+    exhaust_budget(&node);
+    let path = directory.path().join("settings.json");
+    std::fs::write(
+        &path,
+        serde_json::to_vec(&serde_json::json!({
+            "listen": "127.0.0.1:8484",
+            "database": "node.sqlite",
+            "identity_file": "identity",
+            "node": settings,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let current = now();
+    node.refresh_settings(Some(&path), current).unwrap();
+    let changes = node.access.changes();
+    node.refresh_settings(Some(&path), current).unwrap();
+    assert!(!changes.has_changed().unwrap());
+    assert!(!node.available());
+
+    // Crossing the billing period rolls over active budgets without re-applying unchanged settings.
+    node.refresh_settings(Some(&path), next_period(&node))
+        .unwrap();
+    assert!(!changes.has_changed().unwrap());
+    assert_public_settings(&node, &endpoint, OLD_CAPACITY, true);
+    assert!(node.available());
+    assert_eq!(write_bytes(&node, QUOTA).unwrap(), QUOTA);
+}
+
+#[test]
 fn spent_public_day_changes_discovery_without_revoking_the_node() {
     let (_directory, endpoint, node, mut settings) = configured_node();
     settings.contribution.daily_bytes = Some(1);

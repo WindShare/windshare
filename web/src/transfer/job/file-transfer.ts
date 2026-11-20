@@ -92,9 +92,15 @@ export interface FileTransferOptions {
 export async function transferFile(
   options: FileTransferOptions, pending: PendingFile,
 ): Promise<FileContinuationRequired | undefined> {
-  const first = await transferFileAttempt(options, pending)
-  const outcome = first.kind === 'readmit' ? await transferFileAttempt(options, pending, first.readmission) : first
-  return outcome.kind === 'continuation-required' ? outcome : undefined
+  let previous: FileRevisionReadmission | undefined
+  for (;;) {
+    const outcome = await transferFileAttempt(options, pending, previous)
+    if (outcome.kind === 'readmit') {
+      previous = outcome.readmission
+      continue
+    }
+    return outcome.kind === 'continuation-required' ? outcome : undefined
+  }
 }
 
 interface FileAttempt {
@@ -283,7 +289,7 @@ async function settleFileAttemptError(
   // signal still decides whether to start another attempt.
   const outcome = failure instanceof RevisionReopenedDuringRecoveryError && attempt.transaction !== undefined &&
       attempt.initialDurable !== undefined && options.output.capabilities.durability !== 'None'
-    ? await settleReopenedFile(options, attempt.transaction, failure, attempt.initialDurable, started, previous !== undefined)
+    ? await settleReopenedFile(options, attempt.transaction, failure, attempt.initialDurable, started, previous?.stalledReopens ?? 0)
     : await settleTransferError(options, attempt.transaction, failure)
   if (previous === undefined || attempt.admitted || outcome.settlement.kind !== 'unconfirmed') return outcome
   const compared = error instanceof RevisionReopenedDuringRecoveryError ? error : previous

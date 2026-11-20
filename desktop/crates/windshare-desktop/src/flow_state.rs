@@ -10,19 +10,37 @@ use std::time::{Duration, Instant};
 use windshare_ui::{Icon, Tone};
 pub const COPY_FEEDBACK_MS: u64 = 2400;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum CopyTarget {
+    ShareLink { share_id: usize, kind: LinkKind },
+    AccountUid,
+}
+
 #[derive(Clone, Copy)]
 pub enum CopyFeedback {
     Idle,
-    Copied {
-        share_id: usize,
-        kind: LinkKind,
-        revision: usize,
-    },
+    Copied { target: CopyTarget, revision: usize },
 }
 
 impl CopyFeedback {
     pub fn matches(self, id: usize, link_kind: LinkKind) -> bool {
-        matches!(self, Self::Copied { share_id, kind, .. } if share_id == id && kind == link_kind)
+        matches!(
+            self,
+            Self::Copied {
+                target: CopyTarget::ShareLink { share_id, kind },
+                ..
+            } if share_id == id && kind == link_kind
+        )
+    }
+
+    pub const fn is_account_uid(self) -> bool {
+        matches!(
+            self,
+            Self::Copied {
+                target: CopyTarget::AccountUid,
+                ..
+            }
+        )
     }
 }
 

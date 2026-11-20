@@ -1,10 +1,11 @@
 use crate::config::{SUBMITTED_DATA_BYTES, SUBMITTED_DATA_FRAMES};
-use std::sync::Arc;
+use std::sync::{Arc, atomic::AtomicBool};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 /// All flows on a socket contend for the same physical writer capacity. Its
-/// permits follow the frame from bandwidth allocation through socket completion.
+/// permits follow a submitted frame through socket completion.
 pub struct WriteWindow {
+    pub(crate) scheduled: AtomicBool,
     pub(super) frames: Arc<Semaphore>,
     pub(super) bytes: Arc<Semaphore>,
 }
@@ -17,6 +18,7 @@ pub struct WritePermit {
 impl Default for WriteWindow {
     fn default() -> Self {
         Self {
+            scheduled: AtomicBool::new(false),
             frames: Arc::new(Semaphore::new(SUBMITTED_DATA_FRAMES)),
             bytes: Arc::new(Semaphore::new(SUBMITTED_DATA_BYTES)),
         }
@@ -24,8 +26,8 @@ impl Default for WriteWindow {
 }
 
 impl WriteWindow {
-    pub(crate) fn fits(&self, bytes: u64) -> bool {
-        self.frames.available_permits() > 0 && bytes <= self.bytes.available_permits() as u64
+    pub(crate) fn fits(&self, frames: usize, bytes: u64) -> bool {
+        self.frames.available_permits() >= frames && bytes <= self.bytes.available_permits() as u64
     }
 
     pub(crate) fn reserve(&self, bytes: u64) -> Option<WritePermit> {

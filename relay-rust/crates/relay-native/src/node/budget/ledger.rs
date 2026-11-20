@@ -1,6 +1,6 @@
 use crate::storage::budget::{BudgetRecord, Window};
 use anyhow::{Result, anyhow, ensure};
-use chrono::{DateTime, Datelike, NaiveDate};
+use chrono::{DateTime, Datelike, Months, NaiveDate};
 
 // Persist a high-water mark before issuing credit. A crash can lose a batch
 // of unused credit, but restarting cannot spend it twice.
@@ -47,6 +47,23 @@ impl Ledger {
         self.record.is_some_and(|record| {
             timestamp.saturating_sub(record.period) >= chrono::TimeDelta::days(1).num_seconds()
         })
+    }
+
+    pub(super) fn next_rollover(&self, window: Window) -> Option<i64> {
+        let Some(record) = self.record else {
+            return Some(i64::MIN);
+        };
+        if record.window != window {
+            return Some(i64::MIN);
+        }
+        match window {
+            Window::PublicDay => record
+                .period
+                .checked_add(chrono::TimeDelta::days(1).num_seconds()),
+            Window::BillingMonth { .. } => DateTime::from_timestamp(record.period, 0)
+                .and_then(|start| start.checked_add_months(Months::new(1)))
+                .map(|next| next.timestamp()),
+        }
     }
 
     pub(super) fn remaining(&self, limit: Option<u64>) -> u64 {

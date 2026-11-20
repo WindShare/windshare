@@ -1,5 +1,7 @@
+use super::handoff::{Destination, WriterId};
 use super::{Bandwidth, Key, MAX_FRAME, MAX_SESSIONS, Service, WritePermit, WriteWindow};
 use crate::config::SUBMITTED_DATA_FRAMES;
+use std::sync::atomic::Ordering;
 use std::{
     collections::{BTreeMap, VecDeque},
     sync::Arc,
@@ -14,15 +16,15 @@ use windshare_relay_access::{
 enum Unavailable {
     Writer(Key),
     Bandwidth,
+    Handoff,
 }
 
 struct Lane {
     session: Key,
     attribution: Attribution,
-    window: Arc<WriteWindow>,
-    wake: Arc<Notify>,
+    writer: WriterId,
     heads: VecDeque<u64>,
-    grants: VecDeque<(u128, WritePermit)>,
+    unclaimed: usize,
     queued: bool,
 }
 
@@ -37,7 +39,7 @@ pub(super) struct State {
     sessions: BTreeMap<Key, Session>,
     lanes: BTreeMap<u64, Lane>,
     next_lane: u64,
-    grant_order: u128,
+    writers: BTreeMap<WriterId, Destination>,
     pub(super) pacing: Bandwidth,
     classified: u64,
 }
@@ -49,7 +51,7 @@ impl State {
             sessions: BTreeMap::new(),
             lanes: BTreeMap::new(),
             next_lane: 0,
-            grant_order: 0,
+            writers: BTreeMap::new(),
             pacing: Bandwidth::default(),
             classified: 0,
         }
@@ -69,16 +71,20 @@ impl State {
         }
         self.next_lane = self.next_lane.checked_add(1)?;
         let id = self.next_lane;
+        let writer = WriterId::from(window.as_ref());
+        self.writers
+            .entry(writer)
+            .or_insert_with(|| Destination::new(window, wake))
+            .residents += 1;
         self.sessions.entry(session).or_default().residents += 1;
         self.lanes.insert(
             id,
             Lane {
                 session,
                 attribution,
-                window,
-                wake,
+                writer,
                 heads: VecDeque::new(),
-                grants: VecDeque::new(),
+                unclaimed: 0,
                 queued: false,
             },
         );
@@ -106,26 +112,39 @@ impl State {
         reclassified
     }
 
-    pub(super) fn offer(&mut self, id: u64, sizes: impl Iterator<Item = u64>, access: &Service) {
+    pub(super) fn offer(
+        &mut self,
+        id: u64,
+        sizes: impl Iterator<Item = u64>,
+        access: &Service,
+        now: Instant,
+    ) {
         let lane = self.lanes.get_mut(&id).expect("live lane");
         // Published frames stay in the actor FIFO until it takes their grants.
-        let known = lane.grants.len() + lane.heads.len();
+        let known = lane.unclaimed + lane.heads.len();
         lane.heads
-            .extend(sizes.take(SUBMITTED_DATA_FRAMES).skip(known));
+            .extend(sizes.take(SUBMITTED_DATA_FRAMES + 1).skip(known));
+        if !lane.heads.is_empty() {
+            self.writers[&lane.writer]
+                .window
+                .scheduled
+                .store(true, Ordering::Relaxed);
+        }
         let session = lane.session;
-        if self.enqueue(id) {
+        if self.enqueue(id, now) {
             self.publish_head(session, access);
         }
     }
 
     /// Returns true when the session has gained its first competing direction.
-    fn enqueue(&mut self, id: u64) -> bool {
+    fn enqueue(&mut self, id: u64, now: Instant) -> bool {
         let lane = self.lanes.get_mut(&id).expect("live lane");
+        let destination = &self.writers[&lane.writer];
         if lane.queued
             || !lane
                 .heads
                 .front()
-                .is_some_and(|&bytes| lane.window.fits(bytes))
+                .is_some_and(|&bytes| destination.fits(bytes) || destination.awaiting_actor(now))
         {
             return false;
         }
@@ -151,34 +170,37 @@ impl State {
         }
     }
 
-    pub(super) fn grant_pending(&mut self, access: &Service, caller: Option<&WriteWindow>) {
-        let available = self.pacing.replenish(Instant::now());
+    pub(super) fn grant_pending(
+        &mut self,
+        access: &Service,
+        caller: Option<WriterId>,
+        now: Instant,
+    ) {
+        let available = self.pacing.replenish(now);
         let mut remaining = available;
         loop {
             let result = self.scheduler.try_next(|session, class, bytes| {
                 let id = self.sessions[&session].directions[0];
-                let window = &self.lanes[&id].window;
-                // Another flow can fill the same writer after this head was
-                // advertised. Charge neither tokens nor service tags if it did.
-                let mut credit = remaining;
-                if !credit.reserve(class, bytes) {
-                    return Err(if window.fits(bytes) {
-                        Unavailable::Bandwidth
+                let destination = &self.writers[&self.lanes[&id].writer];
+                if !destination.fits(bytes) {
+                    return Err(if destination.awaiting_actor(now) {
+                        Unavailable::Handoff
                     } else {
                         Unavailable::Writer(session)
                     });
                 }
-                let permit = window.reserve(bytes).ok_or(Unavailable::Writer(session))?;
-                remaining = credit;
-                Ok(permit)
+                remaining
+                    .reserve(class, bytes)
+                    .then_some(())
+                    .ok_or(Unavailable::Bandwidth)
             });
-            let (session, permit) = match result {
-                Ok(Some((session, _, permit))) => (session, Some(permit)),
+            let (session, granted_bytes) = match result {
+                Ok(Some((session, bytes, ()))) => (session, Some(bytes)),
                 Err(Unavailable::Writer(session)) => {
                     self.scheduler.withdraw(session);
                     (session, None)
                 }
-                Ok(None) | Err(Unavailable::Bandwidth) => break,
+                Ok(None) | Err(Unavailable::Bandwidth | Unavailable::Handoff) => break,
             };
             let id = self
                 .sessions
@@ -189,40 +211,66 @@ impl State {
                 .expect("ready direction");
             let lane = self.lanes.get_mut(&id).expect("ready lane");
             lane.queued = false;
-            if let Some(permit) = permit {
+            if let Some(bytes) = granted_bytes {
                 lane.heads.pop_front();
-                self.grant_order += 1;
-                lane.grants.push_back((self.grant_order, permit));
-                if !caller.is_some_and(|window| std::ptr::eq(window, lane.window.as_ref())) {
-                    lane.wake.notify_one();
+                lane.unclaimed += 1;
+                let writer = self
+                    .writers
+                    .get_mut(&lane.writer)
+                    .expect("live destination");
+                writer.grant(id, bytes, now);
+                if caller != Some(lane.writer) {
+                    writer.wake.notify_one();
                 }
                 // Preserve the successor's service position before selecting again.
-                self.enqueue(id);
+                self.enqueue(id, now);
             }
             self.publish_head(session, access);
         }
         self.pacing.charge(&available, &remaining);
     }
 
-    pub(super) fn take_first(
-        &mut self,
-        lanes: impl Iterator<Item = u64>,
-    ) -> Option<(usize, WritePermit)> {
-        let (index, id, _) = lanes
-            .enumerate()
-            .filter_map(|(index, id)| {
-                let (order, _) = self.lanes[&id].grants.front()?;
-                Some((index, id, *order))
-            })
-            .min_by_key(|entry| entry.2)?;
-        Some((index, self.lanes.get_mut(&id)?.grants.pop_front()?.1))
+    pub(super) fn take(&mut self, writer: WriterId) -> Option<(u64, WritePermit)> {
+        let destination = self.writers.get_mut(&writer)?;
+        let (id, permit) = destination.take()?;
+        let lane = self.lanes.get_mut(&id).expect("granted lane");
+        lane.unclaimed -= 1;
+        if destination.residents == 1 && lane.unclaimed == 0 && lane.heads.is_empty() {
+            destination.window.scheduled.store(false, Ordering::Relaxed);
+        }
+        Some((id, permit))
+    }
+
+    pub(super) const fn waiting(&self) -> bool {
+        self.scheduler.pending() != 0
+    }
+
+    pub(super) fn reset(&mut self) {
+        self.scheduler = Scheduler::new(MAX_SESSIONS, MAX_FRAME);
+        for session in self.sessions.values_mut() {
+            session.directions.clear();
+        }
+        for lane in self.lanes.values_mut() {
+            lane.heads.clear();
+            lane.unclaimed = 0;
+            lane.queued = false;
+        }
+        for destination in self.writers.values_mut() {
+            destination.reset();
+        }
     }
 
     pub(super) fn remove(&mut self, id: u64, access: &Service) {
         let lane = self.lanes.remove(&id).expect("live lane");
-        if !lane.grants.is_empty() {
-            // Discarding an unsent grant opens a writer slot without a socket completion.
-            lane.wake.notify_one();
+        let destination = self
+            .writers
+            .get_mut(&lane.writer)
+            .expect("live destination");
+        destination.discard(id);
+        destination.residents -= 1;
+        if destination.residents == 0 {
+            destination.window.scheduled.store(false, Ordering::Relaxed);
+            self.writers.remove(&lane.writer);
         }
         let session = self.sessions.get_mut(&lane.session).expect("live session");
         session.residents -= 1;

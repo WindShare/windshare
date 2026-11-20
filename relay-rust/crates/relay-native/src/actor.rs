@@ -17,7 +17,7 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    sync::{mpsc, oneshot},
+    sync::{mpsc, oneshot, watch},
     task::JoinHandle,
     time::Instant,
 };
@@ -61,6 +61,7 @@ pub struct Actor<S, E> {
     idle: Arc<AtomicBool>,
     generation: Generation,
     node: Runtime,
+    access_changes: watch::Receiver<u64>,
     residency: Option<Residency>,
     scheduling: Arc<tokio::sync::Notify>,
 }
@@ -90,6 +91,7 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
             environment.now(),
         )
         .map_err(|error| anyhow!("restore refused: {error:?}"))?;
+        let access_changes = node.access.changes();
         let mut actor = Self {
             relay,
             identity,
@@ -104,6 +106,7 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
             idle,
             generation,
             node,
+            access_changes,
             residency: None,
             scheduling: Arc::new(tokio::sync::Notify::new()),
         };
@@ -113,11 +116,12 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
     }
 
     async fn run(&mut self) -> Result<()> {
-        let mut access_changes = self.node.access.changes();
         let mut capacity_tick = tokio::time::interval(Duration::from_secs(1));
         capacity_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let _ = self.access_changes.borrow_and_update();
+        self.enforce_access()?;
         loop {
-            self.enforce_access()?;
+            self.enforce_access_if_changed()?;
             if self.authority.is_none() && self.ports.is_empty() && self.commit.is_none() {
                 self.residency = None;
             }
@@ -141,8 +145,9 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
                     for connection in connections { self.pump(connection)?; }
                     continue;
                 }
-                changed = access_changes.changed() => {
+                changed = self.access_changes.changed() => {
                     if changed.is_err() { return Err(anyhow!("node access service ended")); }
+                    self.enforce_access()?;
                     continue;
                 }
                 event = self.inbox.recv() => {

@@ -37,7 +37,7 @@ fn governor_reclassification_updates_class_once_per_transition() {
         .register(key, attribution, Arc::default(), Arc::default())
         .unwrap();
     state.refresh_classes(&access, now);
-    state.offer(id, std::iter::once(1_000), &access);
+    state.offer(id, std::iter::once(1_000), &access, Instant::now());
     assert_eq!(state.refresh_classes(&access, now), NO_CHANGES);
 
     assert!(access.refresh(
