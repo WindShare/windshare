@@ -3,6 +3,7 @@ import { newFileCheckpointV2, validateFileCheckpointTransition } from './checkpo
 import { FILE_CHECKPOINT_COMMIT_CANDIDATE } from './checkpoint-lifecycle'
 import { fileCheckpointIsComplete, type FileCheckpointV2 } from './checkpoint-model'
 import type { FileCheckpointJournal, SemanticFileCheckpointJournal } from './journal'
+import { persistedSourceAdmissionError } from './source-admission'
 
 /** The caller has already verified this checkpoint's local object and write authority. */
 export async function admitCheckpointMetadataReuse(
@@ -20,7 +21,7 @@ export async function admitCheckpointMetadataReuse(
   // Semantic journals check final receipts atomically with the revision change. A
   // checkpoint-only journal cannot distinguish flushed bytes from a final delivery.
   if (semantic === undefined && previous.checkpointGeneration > 0n && fileCheckpointIsComplete(previous)) {
-    throw new TypeError('Complete checkpoints require separate delivery-history authority')
+    throw persistedSourceAdmissionError({ kind: 'reuse-state-blocked' })
   }
   const next = newFileCheckpointV2({
     ...previous, fileRevision: current.fileRevision, reusedFrom: previous.fileRevision,

@@ -23,11 +23,24 @@ func (r *jobRun) transferPlannedFile(ctx context.Context, plan plannedFile) erro
 		if retry == nil {
 			return err
 		}
-		// The paused transaction handed back the same handle with its already
-		// acquired revision. Recheck the catalog before opening the new output.
-		opened.Descriptor = retry.reopened.Current()
-		opened, stage, err = r.admitOpenedRevision(ctx, plan, opened, nil)
+		opened, stage, err = r.openReadmittedRevision(ctx, plan, retry)
 	}
+}
+
+func (r *jobRun) openReadmittedRevision(
+	ctx context.Context, plan plannedFile, retry *fileRevisionRetry,
+) (OpenedRevision, FailureStage, error) {
+	opened, stage, err := r.openSelectedRevision(ctx, plan)
+	if err != nil {
+		return OpenedRevision{}, stage, err
+	}
+	reopened := content.NewRevisionReopenedError(retry.reopened.Previous(), opened.Descriptor)
+	retry.reopened = reopened
+	if !reopened.Comparison().AllowsReuse() {
+		r.releaseRevision(ctx, plan, opened.Handle)
+		return OpenedRevision{}, FailureRevisionOpen, normalizeSourceBoundary(ctx, reopened)
+	}
+	return opened, 0, nil
 }
 
 func (r *jobRun) transferFileAttempt(
@@ -264,7 +277,8 @@ func (r *jobRun) settleReopenedRevision(
 		reason, decision = FilePauseRevisionReopened, "readmit"
 	}
 	// The range reader has drained before returning, and no output call remains
-	// active. A durable pause is required before handing the lease to a new writer.
+	// active. A durable pause is required before releasing the old handle and
+	// readmitting the file under a fresh revision handle.
 	settlement, err := r.pauseFileTransaction(ctx, transaction, reason, progress)
 	if err != nil {
 		decision = "settlement-failed"
@@ -281,6 +295,8 @@ func (r *jobRun) settleReopenedRevision(
 		}
 	}
 	r.traceFileRevisionRetry(plan, reopened, decision, progress.persistedBytes, 0, started)
+	// Every attempt owns and releases its own immutable RevisionHandle.
+	r.releaseRevision(ctx, plan, opened.Handle)
 	if err == nil && settlement.Kind() == FilePaused && decision == "readmit" {
 		return &fileRevisionRetry{
 			reopened: reopened, progress: *progress, settlement: settlement, started: started,
@@ -288,7 +304,6 @@ func (r *jobRun) settleReopenedRevision(
 		}, nil
 	}
 
-	r.releaseRevision(ctx, plan, opened.Handle)
 	r.recordFileFailure(FileJobFailure{
 		FileID: plan.file, Path: plan.failurePath(), Stage: FailureBlockTransfer, Cause: cause,
 		Settlement: settlement, SettlementFailure: err,

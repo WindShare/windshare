@@ -2,25 +2,94 @@ package transfer
 
 import (
 	"context"
+	"errors"
 	"slices"
+	"sync"
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 )
 
+type sequencedRevisionClient struct {
+	mu          sync.Mutex
+	revisions   map[catalog.FileID][]content.FileRevisionDescriptor
+	opens       map[catalog.FileID]int
+	active      map[RevisionHandle]content.FileRevisionDescriptor
+	openedCount int
+	released    int
+	nextSeed    byte
+}
+
+func newSequencedRevisionClient(revisions map[catalog.FileID][]content.FileRevisionDescriptor) *sequencedRevisionClient {
+	return &sequencedRevisionClient{
+		revisions: revisions,
+		opens:     make(map[catalog.FileID]int),
+		active:    make(map[RevisionHandle]content.FileRevisionDescriptor),
+		nextSeed:  1,
+	}
+}
+
+func (c *sequencedRevisionClient) OpenRevision(_ context.Context, file catalog.FileID) (OpenedRevision, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	list := c.revisions[file]
+	if len(list) == 0 {
+		return OpenedRevision{}, content.ErrRevisionNotFound
+	}
+	idx := c.opens[file]
+	if idx >= len(list) {
+		idx = len(list) - 1
+	}
+	c.opens[file]++
+	handle := transferID[RevisionHandle](c.nextSeed)
+	c.nextSeed++
+	c.active[handle] = list[idx]
+	c.openedCount++
+	return NewOpenedRevision(handle, list[idx])
+}
+
+func (c *sequencedRevisionClient) ReleaseRevision(_ context.Context, handle RevisionHandle) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.active[handle]; !ok {
+		return content.ErrInvalidLease
+	}
+	delete(c.active, handle)
+	c.released++
+	return nil
+}
+
+func (c *sequencedRevisionClient) assertAllReleased(t *testing.T) {
+	t.Helper()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.active) != 0 || c.released != c.openedCount {
+		t.Fatalf("handle leak: opened=%d released=%d active=%d", c.openedCount, c.released, len(c.active))
+	}
+}
+
 type scriptedReopenBlocks struct {
 	revisions      []content.FileRevisionDescriptor
+	client         *sequencedRevisionClient
 	reopenOnOffset func(revision content.FileRevision, offset uint64) (nextIndex int, reopen bool)
 }
 
 func (reader *scriptedReopenBlocks) ReadRange(
 	ctx context.Context,
-	_ RevisionHandle,
+	handle RevisionHandle,
 	descriptor content.FileRevisionDescriptor,
 	requested content.Range,
 	sink RangeSink,
 ) error {
+	if reader.client != nil {
+		reader.client.mu.Lock()
+		bound, ok := reader.client.active[handle]
+		reader.client.mu.Unlock()
+		if !ok || bound != descriptor {
+			return ErrBlockIdentity
+		}
+	}
 	if nextIndex, reopen := reader.reopenOnOffset(descriptor.FileRevision(), requested.Offset); reopen {
 		return content.NewRevisionReopenedError(descriptor, reader.revisions[nextIndex])
 	}
@@ -54,14 +123,9 @@ func TestTransferJobReadmitsAcrossMultipleProgressingReopens(t *testing.T) {
 	size := 3 * window
 	descriptors := metadataRevisionDescriptors(t, share, file, size, 1, 2, 3)
 
-	opened, err := NewOpenedRevision(transferID[RevisionHandle](0x84), descriptors[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	revisions := &jobRevisionClient{
-		opened:   map[catalog.FileID]OpenedRevision{file: opened},
-		failures: make(map[catalog.FileID]error),
-	}
+	revisions := newSequencedRevisionClient(map[catalog.FileID][]content.FileRevisionDescriptor{
+		file: descriptors,
+	})
 	output := newJobOutput(share)
 	rules, _ := NewSelectionRules(true, nil)
 	var decisions []string
@@ -72,6 +136,7 @@ func TestTransferJobReadmitsAcrossMultipleProgressingReopens(t *testing.T) {
 	})
 	blocks := &scriptedReopenBlocks{
 		revisions: descriptors,
+		client:    revisions,
 		reopenOnOffset: func(revision content.FileRevision, offset uint64) (int, bool) {
 			switch {
 			case revision == descriptors[0].FileRevision() && offset == window:
@@ -97,6 +162,7 @@ func TestTransferJobReadmitsAcrossMultipleProgressingReopens(t *testing.T) {
 		t.Fatal(err)
 	}
 	result := job.Run(context.Background())
+	revisions.assertAllReleased(t)
 	if result.Outcome != DirectTreeOutcomeSuccess || result.SucceededFiles != 1 ||
 		result.Progress.VerifiedBytes != size || !result.Progress.CountersExact {
 		t.Fatalf("result=%+v decisions=%v", result, decisions)
@@ -115,14 +181,9 @@ func TestTransferJobStopsAfterConsecutiveStalledReopens(t *testing.T) {
 	size := 3 * window
 	descriptors := metadataRevisionDescriptors(t, share, file, size, 11, 12, 13, 14)
 
-	opened, err := NewOpenedRevision(transferID[RevisionHandle](0x94), descriptors[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	revisions := &jobRevisionClient{
-		opened:   map[catalog.FileID]OpenedRevision{file: opened},
-		failures: make(map[catalog.FileID]error),
-	}
+	revisions := newSequencedRevisionClient(map[catalog.FileID][]content.FileRevisionDescriptor{
+		file: descriptors,
+	})
 	output := newJobOutput(share)
 	rules, _ := NewSelectionRules(true, nil)
 	var decisions []string
@@ -133,6 +194,7 @@ func TestTransferJobStopsAfterConsecutiveStalledReopens(t *testing.T) {
 	})
 	blocks := &scriptedReopenBlocks{
 		revisions: descriptors,
+		client:    revisions,
 		reopenOnOffset: func(revision content.FileRevision, offset uint64) (int, bool) {
 			if offset < window {
 				return 0, false
@@ -165,6 +227,7 @@ func TestTransferJobStopsAfterConsecutiveStalledReopens(t *testing.T) {
 		t.Fatal(err)
 	}
 	result := job.Run(context.Background())
+	revisions.assertAllReleased(t)
 	if result.Outcome != DirectTreeOutcomePartial || len(result.Files) != 1 ||
 		result.Files[0].Settlement.Kind() != FilePaused || result.Progress.VerifiedBytes != window {
 		t.Fatalf("result=%+v decisions=%v", result, decisions)
@@ -186,21 +249,10 @@ func TestTransferJobReconcilesNewlyVerifiedWhenSecondReadmissionBlocked(t *testi
 	blockedDescriptors := metadataRevisionDescriptors(t, share, blockedFile, size, 21, 22, 23)
 	siblingDescriptor := jobDescriptor(t, share, siblingFile, 24, siblingSize)
 
-	openedBlocked, err := NewOpenedRevision(transferID[RevisionHandle](0xa5), blockedDescriptors[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	openedSibling, err := NewOpenedRevision(transferID[RevisionHandle](0xa6), siblingDescriptor)
-	if err != nil {
-		t.Fatal(err)
-	}
-	revisions := &jobRevisionClient{
-		opened: map[catalog.FileID]OpenedRevision{
-			blockedFile: openedBlocked,
-			siblingFile: openedSibling,
-		},
-		failures: make(map[catalog.FileID]error),
-	}
+	revisions := newSequencedRevisionClient(map[catalog.FileID][]content.FileRevisionDescriptor{
+		blockedFile: blockedDescriptors,
+		siblingFile: {siblingDescriptor},
+	})
 	output := newJobOutput(share)
 	blockedBegins := 0
 	output.beginHook = func(file MaterializationFile) {
@@ -226,6 +278,7 @@ func TestTransferJobReconcilesNewlyVerifiedWhenSecondReadmissionBlocked(t *testi
 	}
 	blocks := &scriptedReopenBlocks{
 		revisions: blockedDescriptors,
+		client:    revisions,
 		reopenOnOffset: func(revision content.FileRevision, offset uint64) (int, bool) {
 			switch {
 			case revision == blockedDescriptors[0].FileRevision() && offset == window:
@@ -255,6 +308,7 @@ func TestTransferJobReconcilesNewlyVerifiedWhenSecondReadmissionBlocked(t *testi
 		t.Fatal(err)
 	}
 	result := job.Run(context.Background())
+	revisions.assertAllReleased(t)
 	if result.Outcome != DirectTreeOutcomePartial || !result.Progress.CountersExact ||
 		result.Progress.VerifiedBytes != siblingSize ||
 		result.Progress.NewlyVerifiedBytes != siblingSize ||
@@ -272,14 +326,9 @@ func TestTransferJobReconcilesCoverageRegressionAcrossMultipleReadmissions(t *te
 	size := 3 * window
 	descriptors := metadataRevisionDescriptors(t, share, file, size, 31, 32, 33)
 
-	opened, err := NewOpenedRevision(transferID[RevisionHandle](0xb4), descriptors[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	revisions := &jobRevisionClient{
-		opened:   map[catalog.FileID]OpenedRevision{file: opened},
-		failures: make(map[catalog.FileID]error),
-	}
+	revisions := newSequencedRevisionClient(map[catalog.FileID][]content.FileRevisionDescriptor{
+		file: descriptors,
+	})
 	output := newJobOutput(share)
 	// Seed attempt 0 with a pre-existing recovered range [0, window).
 	initialRecovered, err := content.NewRangeSet([]content.Range{{Offset: 0, End: window}})
@@ -299,6 +348,7 @@ func TestTransferJobReconcilesCoverageRegressionAcrossMultipleReadmissions(t *te
 	}
 	blocks := &scriptedReopenBlocks{
 		revisions: descriptors,
+		client:    revisions,
 		reopenOnOffset: func(revision content.FileRevision, offset uint64) (int, bool) {
 			switch {
 			case revision == descriptors[0].FileRevision() && offset == 2*window:
@@ -325,6 +375,7 @@ func TestTransferJobReconcilesCoverageRegressionAcrossMultipleReadmissions(t *te
 		t.Fatal(err)
 	}
 	result := job.Run(context.Background())
+	revisions.assertAllReleased(t)
 	if result.Outcome != DirectTreeOutcomeSuccess || !result.Progress.CountersExact ||
 		result.Progress.VerifiedBytes != size || result.Progress.NewlyVerifiedBytes != size {
 		t.Fatalf("result=%+v", result)
@@ -340,14 +391,9 @@ func TestTransferJobReconcilesPartialCoverageRegressionOnSecondReadmission(t *te
 	size := 3 * window
 	descriptors := metadataRevisionDescriptors(t, share, file, size, 41, 42, 43)
 
-	opened, err := NewOpenedRevision(transferID[RevisionHandle](0xc4), descriptors[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	revisions := &jobRevisionClient{
-		opened:   map[catalog.FileID]OpenedRevision{file: opened},
-		failures: make(map[catalog.FileID]error),
-	}
+	revisions := newSequencedRevisionClient(map[catalog.FileID][]content.FileRevisionDescriptor{
+		file: descriptors,
+	})
 	output := newJobOutput(share)
 	regressed, err := content.NewRangeSet([]content.Range{{Offset: 0, End: chunk}})
 	if err != nil {
@@ -364,6 +410,7 @@ func TestTransferJobReconcilesPartialCoverageRegressionOnSecondReadmission(t *te
 	}
 	blocks := &scriptedReopenBlocks{
 		revisions: descriptors,
+		client:    revisions,
 		reopenOnOffset: func(revision content.FileRevision, offset uint64) (int, bool) {
 			switch {
 			case revision == descriptors[0].FileRevision() && offset == window:
@@ -390,6 +437,7 @@ func TestTransferJobReconcilesPartialCoverageRegressionOnSecondReadmission(t *te
 		t.Fatal(err)
 	}
 	result := job.Run(context.Background())
+	revisions.assertAllReleased(t)
 	if result.Outcome != DirectTreeOutcomeSuccess || !result.Progress.CountersExact ||
 		result.Progress.VerifiedBytes != size || result.Progress.NewlyVerifiedBytes != size {
 		t.Fatalf("result=%+v", result)
@@ -564,21 +612,10 @@ func TestTransferJobReconcilesReadmissionImmediateSettlements(t *testing.T) {
 			descriptors := metadataRevisionDescriptors(t, share, targetFile, size, 51, 52, 53)
 			siblingDescriptor := jobDescriptor(t, share, siblingFile, 54, siblingSize)
 
-			openedTarget, err := NewOpenedRevision(transferID[RevisionHandle](0xd5), descriptors[0])
-			if err != nil {
-				t.Fatal(err)
-			}
-			openedSibling, err := NewOpenedRevision(transferID[RevisionHandle](0xd6), siblingDescriptor)
-			if err != nil {
-				t.Fatal(err)
-			}
-			revisions := &jobRevisionClient{
-				opened: map[catalog.FileID]OpenedRevision{
-					targetFile:  openedTarget,
-					siblingFile: openedSibling,
-				},
-				failures: make(map[catalog.FileID]error),
-			}
+			revisions := newSequencedRevisionClient(map[catalog.FileID][]content.FileRevisionDescriptor{
+				targetFile:  descriptors,
+				siblingFile: {siblingDescriptor},
+			})
 			output := newJobOutput(share)
 			begins := 0
 			output.beginHook = func(file MaterializationFile) {
@@ -592,6 +629,7 @@ func TestTransferJobReconcilesReadmissionImmediateSettlements(t *testing.T) {
 			}
 			blocks := &scriptedReopenBlocks{
 				revisions: descriptors,
+				client:    revisions,
 				reopenOnOffset: func(revision content.FileRevision, offset uint64) (int, bool) {
 					switch {
 					case revision == descriptors[0].FileRevision() && offset == window:
@@ -621,6 +659,7 @@ func TestTransferJobReconcilesReadmissionImmediateSettlements(t *testing.T) {
 				t.Fatal(err)
 			}
 			result := job.Run(context.Background())
+			revisions.assertAllReleased(t)
 			progress := result.Progress
 			if result.Outcome != test.wantOutcome || !progress.CountersExact ||
 				progress.VerifiedBytes != test.wantVerified ||
@@ -629,6 +668,68 @@ func TestTransferJobReconcilesReadmissionImmediateSettlements(t *testing.T) {
 				progress.PreviouslyPublishedBytes != test.wantPrevPublished ||
 				progress.FileOutcomes != test.wantOutcomes {
 				t.Fatalf("result=%+v progress=%+v", result, progress)
+			}
+		})
+	}
+}
+
+func TestTransferJobRejectsReadmissionWhenFreshOpenChangesOrLosesMetadata(t *testing.T) {
+	window := uint64(defaultFileReadWindowBlocks) * uint64(catalog.MinChunkSize)
+	size := 2 * window
+
+	for _, tc := range []struct {
+		name     string
+		metadata []byte
+		wantErr  error
+	}{
+		{"metadata changed", slices.Repeat([]byte{0x99}, 32), content.ErrRevisionStale},
+		{"metadata unavailable", nil, content.ErrRevisionReopened},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			share := transferID[catalog.ShareInstance](0xe1)
+			root := transferID[catalog.DirectoryID](0xe2)
+			file := transferID[catalog.FileID](0xe3)
+			initialPair := metadataRevisionDescriptors(t, share, file, size, 71, 72)
+			fresh := jobDescriptor(t, share, file, 73, size)
+			if tc.metadata != nil {
+				meta, err := content.SourceMetadataFromBytes(tc.metadata)
+				if err != nil {
+					t.Fatal(err)
+				}
+				fresh = content.BindRevisionMetadata(fresh, meta)
+			}
+			revisions := newSequencedRevisionClient(map[catalog.FileID][]content.FileRevisionDescriptor{
+				file: {initialPair[0], fresh},
+			})
+			output := newJobOutput(share)
+			blocks := &scriptedReopenBlocks{
+				revisions: initialPair,
+				client:    revisions,
+				reopenOnOffset: func(revision content.FileRevision, offset uint64) (int, bool) {
+					return 1, revision == initialPair[0].FileRevision() && offset == window
+				},
+			}
+			rules, _ := NewSelectionRules(true, nil)
+			job, err := newTestTransferJob(t, testTransferJobConfig{
+				ShareInstance: share, SyntheticRoot: root, Rules: rules,
+				Catalog: failingCatalog{
+					snapshots: map[catalog.DirectoryID]catalog.DirectorySnapshot{
+						root: jobSnapshot(t, share, root, 1, jobEntry(t, file, "changed.bin", size)),
+					},
+					failures: make(map[catalog.DirectoryID]error),
+				},
+				Revisions: revisions, Blocks: blocks, Materializer: output,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := job.Run(context.Background())
+			revisions.assertAllReleased(t)
+			if result.Outcome != DirectTreeOutcomePartial || len(result.Files) != 1 ||
+				result.Files[0].Settlement.Kind() != FilePaused ||
+				!errors.Is(result.Files[0].Cause, tc.wantErr) ||
+				!result.Progress.CountersExact || result.Progress.VerifiedBytes != window {
+				t.Fatalf("result=%+v", result)
 			}
 		})
 	}

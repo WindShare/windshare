@@ -50,7 +50,6 @@ type binding struct {
 	ctx        context.Context
 	cancel     context.CancelFunc
 	lease      Lease
-	reopened   *content.RevisionReopenedError
 	failure    error
 	cleanupErr error
 }
@@ -126,9 +125,6 @@ func (b *binding) validateRead(descriptor content.FileRevisionDescriptor, reques
 		return err
 	}
 	if b.lease.Descriptor != descriptor {
-		if b.reopened != nil && descriptor == b.reopened.Previous() {
-			return b.reopened
-		}
 		return transfer.ErrBlockIdentity
 	}
 	if b.failure != nil {
@@ -194,22 +190,18 @@ func (r *Reader) replace(ctx context.Context, b *binding) error {
 		return err
 	}
 	previous := b.lease
-	var readErr error
 	if next.Descriptor != previous.Descriptor {
+		// One RevisionHandle owns one immutable descriptor for its lifetime.
+		// Release the mismatched lease immediately and fence stale reads on this
+		// handle so transfer readmission opens a fresh handle cleanly.
 		reopened := content.NewRevisionReopenedError(previous.Descriptor, next.Descriptor)
-		if !reopened.Comparison().AllowsReuse() {
-			b.failure = reopened
-			b.recordCleanup(r.release(ctx, next.LeaseID))
-			return reopened
-		}
-		b.reopened = reopened
-		readErr = reopened
+		b.failure = reopened
+		b.recordCleanup(r.release(ctx, next.LeaseID))
+		return reopened
 	}
-	// The handle owns the replacement while the output settles the old attempt.
-	// Releasing the last lease can retire the sender's stable source.
 	b.lease = next
 	b.recordCleanup(r.release(ctx, previous.LeaseID))
-	return readErr
+	return nil
 }
 
 func (r *Reader) ReleaseRevision(ctx context.Context, handle transfer.RevisionHandle) error {

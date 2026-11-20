@@ -2,6 +2,7 @@ import { traceSourceComparison, traceRetainedCheckpointSource } from '../diagnos
 import type { CheckpointTraceDecision } from '../../diagnostics/trace/checkpoint-payload'
 import { sourceMetadataFields } from '../../content/revision-comparison'
 import { admitCheckpointMetadataReuse } from '../persistence/metadata-reuse'
+import { persistedSourceAdmissionError } from '../persistence/source-admission'
 import {
   snapshotMaterializationRootRelativePath,
   type MaterializationRootRelativePath,
@@ -14,6 +15,7 @@ import {
 } from '../diagnostics'
 import {
   FILE_CHECKPOINT_COMMIT_VERIFIED,
+  fileCheckpointIsComplete,
   identityBytes,
   newFileCheckpointV2,
   type FileCheckpointV2,
@@ -37,7 +39,7 @@ import type {
   SemanticPersistentOutputJournal,
 } from './contracts'
 import {
-  CheckpointLineageDecisionError, CheckpointSourceEvidenceUnavailableError,
+  CheckpointLineageDecisionError,
   DestinationCollisionError, TargetOwnershipUnknownError,
 } from './errors'
 import { PersistentFileTransaction } from './file-transaction'
@@ -50,6 +52,7 @@ import {
   preparePersistentFileRecovery,
 } from './recovery'
 import {
+  hasMatchingFinalProof,
   isPristinePreObjectCandidate,
   openPersistentSelectedFile,
   PersistentDirectoryLedgerCoordinator,
@@ -269,6 +272,12 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
           request, handle, selected: selected.checkpoint, stageScope: fileScope,
           checkpoints: this.#checkpoints, semantic: this.#semantic,
         })
+        if (recovered.fileRevision !== revision.fileRevision &&
+            this.#semantic !== undefined && this.#ledgerBinding !== undefined &&
+            fileCheckpointIsComplete(recovered) &&
+            await hasMatchingFinalProof(this.#semantic, await this.#ledgerBinding, recovered)) {
+          throw persistedSourceAdmissionError({ kind: 'reuse-state-blocked' })
+        }
         const committed = await admitCheckpointMetadataReuse(recovered, revision, this.#checkpoints, this.#semantic)
         if (recovered.fileRevision !== committed.fileRevision) {
           traceSourceComparison(this.#diagnostics, recovered, committed.fileRevision,
@@ -714,9 +723,17 @@ function selectedCheckpoint(
     case 'exact':
     case 'metadata-match':
       return decision.record
-    case 'revision-evidence-unavailable':
-      throw new CheckpointSourceEvidenceUnavailableError()
     case 'revision-conflict':
+      throw persistedSourceAdmissionError({
+        kind: 'source-changed',
+        reason: decision.comparison.reason,
+        comparison: decision.comparison,
+      })
+    case 'revision-evidence-unavailable':
+      throw persistedSourceAdmissionError({
+        kind: 'evidence-unavailable',
+        comparison: decision.comparison,
+      })
     case 'reuse-state-blocked':
     case 'ownership-conflict':
     case 'invalid':

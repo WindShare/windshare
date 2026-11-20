@@ -140,6 +140,60 @@ func TestReplacementChecksImmutableIdentityBeforeWriting(t *testing.T) {
 	}
 }
 
+func TestReplacementWithMetadataAgreementStillReleasesMismatchedLease(t *testing.T) {
+	geometry, _ := content.NewFileGeometry(6, catalog.MinChunkSize)
+	metadata, err := content.SourceMetadataFromBytes(bytes.Repeat([]byte{0x42}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, _ := content.NewFileRevisionDescriptor(
+		identity[catalog.ShareInstance](11), identity[catalog.FileID](12),
+		identity[content.FileRevision](13), geometry, catalog.ModifiedTime{},
+	)
+	initial := content.BindRevisionMetadata(base, metadata)
+	nextBase, _ := content.NewFileRevisionDescriptor(
+		initial.ShareInstance(), initial.FileID(),
+		identity[content.FileRevision](14), geometry, catalog.ModifiedTime{},
+	)
+	reopenedDescriptor := content.BindRevisionMetadata(nextBase, metadata)
+
+	source := &sourceFixture{descriptor: initial}
+	reader := New(context.Background(), source)
+	t.Cleanup(reader.Stop)
+	opened, err := reader.OpenRevision(context.Background(), initial.FileID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.read = func(context.Context, content.LeaseID, content.Range, transfer.RangeSink) error {
+		return content.ErrLeaseExpired
+	}
+	source.open = func(context.Context, int) (Lease, error) {
+		return NewLease(identity[content.LeaseID](2), reopenedDescriptor)
+	}
+	sink := transfer.RangeSinkFunc(func(context.Context, uint64, []byte) error { t.Fatal("mixed versions"); return nil })
+
+	firstErr := reader.ReadRange(context.Background(), opened.Handle, opened.Descriptor, content.Range{End: 6}, sink)
+	reopened, ok := errors.AsType[*content.RevisionReopenedError](firstErr)
+	if !ok || !reopened.Comparison().AllowsReuse() || reopened.Current() != reopenedDescriptor {
+		t.Fatalf("err=%v, want reusable RevisionReopenedError", firstErr)
+	}
+	if source.opens != 2 || len(source.released) != 1 || source.released[0] != identity[content.LeaseID](2) {
+		t.Fatalf("mismatched replacement lease was not immediately released: opens=%d released=%v", source.opens, source.released)
+	}
+	if secondErr := reader.ReadRange(context.Background(), opened.Handle, opened.Descriptor, content.Range{End: 6}, sink); secondErr != reopened {
+		t.Fatalf("stale read=%v, want %v", secondErr, reopened)
+	}
+	if foreignErr := reader.ReadRange(context.Background(), opened.Handle, reopenedDescriptor, content.Range{End: 6}, sink); !errors.Is(foreignErr, transfer.ErrBlockIdentity) {
+		t.Fatalf("handle accepted rebound descriptor: %v", foreignErr)
+	}
+	if err := reader.ReleaseRevision(context.Background(), opened.Handle); err != nil {
+		t.Fatal(err)
+	}
+	if len(source.released) != 2 || source.released[1] != identity[content.LeaseID](1) {
+		t.Fatalf("original lease was not released on ReleaseRevision: %v", source.released)
+	}
+}
+
 func TestConcurrentReadersShareReplacementAndCancellationDoesNotWaitForOwner(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		reader, source, opened := fixture(t)

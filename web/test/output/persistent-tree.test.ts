@@ -16,7 +16,8 @@ import type {
   PersistentTreeTraceEvent,
 } from '../../src/output/persistent-tree/contracts'
 import {
-  CheckpointLineageDecisionError, CheckpointSourceEvidenceUnavailableError, TargetOwnershipUnknownError,
+  CheckpointSourceEvidenceUnavailableError,
+  SourceRevisionChangedError, TargetOwnershipUnknownError,
 } from '../../src/output/persistent-tree/errors'
 import { PersistentTreeOutputSession } from '../../src/output/persistent-tree/session'
 import { identity } from './planning/fixture'
@@ -437,7 +438,7 @@ describe('persistent DirectoryTree recovery authority', () => {
 
   it.each([
     [undefined, CheckpointSourceEvidenceUnavailableError, 'metadata-unavailable'],
-    [identity(62, 32), CheckpointLineageDecisionError, 'metadata-changed'],
+    [identity(62, 32), SourceRevisionChangedError, 'metadata-changed'],
   ] as const)('retains the paused checkpoint when reopened with token %s', async (sourceMetadata, errorType, reason) => {
     const traces: OutputTraceEvent[] = []
     const fixture = await materializationFixture({

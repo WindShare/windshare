@@ -1,5 +1,6 @@
 import { taskEntryContent } from '../origin-private/task-checkpoint/content'
 import type { TaskCheckpoint, TaskEntry } from '../origin-private/task-checkpoint/model'
+import { canShortCircuitCompletedFile } from '../persistence/source-admission'
 import { assertContentAvailabilityAdvance } from '../../transfer/output/content-availability'
 import {
   outputCapabilities, outputExecutionProfile, outputSessionIdentity,
@@ -282,12 +283,18 @@ async function openZipRevision(
   retained: TaskEntry | undefined, signal: AbortSignal,
 ): Promise<OpenedOutputRevision> {
   try {
-    const complete = retained?.revision !== undefined &&
-      retained.source.shareInstance === request.source.shareInstance &&
-      retained.revision.fileId === request.source.fileId &&
-      retained.path.join('/') === request.logicalArtifactPath.join('/') &&
-      retained.source.sourcePath.join('/') === request.sourceAuthenticationPath.join('/') &&
-      completeZipEntryCrc(retained.ranges, retained.revision.exactSize) !== undefined
+    const complete = retained?.revision !== undefined && canShortCircuitCompletedFile({
+      requestFileId: request.source.fileId,
+      requestExpectedSize: request.expectedSize,
+      retainedFileId: retained.revision.fileId,
+      retainedExactSize: retained.revision.exactSize,
+      locallyComplete: completeZipEntryCrc(retained.ranges, retained.revision.exactSize) !== undefined,
+      hasBlockingState: retained.revisionFailure !== undefined,
+      coordinateMatches:
+        retained.source.shareInstance === request.source.shareInstance &&
+        retained.path.join('/') === request.logicalArtifactPath.join('/') &&
+        retained.source.sourcePath.join('/') === request.sourceAuthenticationPath.join('/'),
+    })
     // Complete local bytes keep their authenticated revision when the sender replaces its source.
     const revision = complete
       ? snapshotOpenedOutputRevision({ ...retained.revision!, shareInstance: retained.source.shareInstance })
