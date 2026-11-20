@@ -160,9 +160,6 @@ impl Desktop {
                 el.child(
                     row()
                         .gap(px(8.))
-                        .when(share.usable_link().is_some(), |el| {
-                            el.child(Self::share_diagnostics_button(share.id, cx))
-                        })
                         .when(!self.runtime.is_preview(), |el| {
                             let (text, symbol, action) = share.control();
                             el.child(
