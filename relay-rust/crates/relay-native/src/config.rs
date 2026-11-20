@@ -7,31 +7,37 @@ pub const MAILBOX_CAPACITY: usize = 32;
 pub const CONTROL_QUEUE_FRAMES: usize = 8;
 // Keep the existing advisory burst without using protocol control slots.
 pub const CAPACITY_NOTICE_QUEUE_FRAMES: usize = 8;
-// Per-flow pending envelopes and pending flows per connection. The
-// connection-wide bounds are CONNECTION_DATA_FRAMES and DATA_QUEUE_BYTES, which
-// is 64 full frames of bytes.
-pub const DATA_QUEUE_FRAMES: usize = 64;
-pub const DATA_QUEUE_BYTES: usize = DATA_QUEUE_FRAMES * MAX_DATA_BYTES;
+// Connection-wide delivery bounds. Receivers' ToSender envelopes carry small
+// signaling and block-request messages rather than file payloads, so a
+// connection may hold more frames than full-sized frame bytes while bytes still
+// bound memory. 256 frames matches Go's default receive capacity declaration.
+pub const CONNECTION_DATA_FRAMES: usize = 256;
+pub const CONNECTION_DATA_BYTES: usize = 64 * MAX_DATA_BYTES;
+// Per-flow pending frame cap and simultaneous queued-flow cap per connection.
+pub const FLOW_PENDING_FRAMES: usize = 64;
+pub const CONNECTION_PENDING_FLOWS: usize = 64;
 pub const SUBMITTED_DATA_FRAMES: usize = 2;
 pub const SUBMITTED_DATA_BYTES: usize = 2 * MAX_DATA_BYTES;
-pub const DELIVERY_WINDOW: flow::Counts = flow::Counts::new(16, 16 * MAX_DATA_BYTES as u64);
-// Every receiver's ToSender flow shares the sender connection's ledger, and an
-// idle window keeps its credit. Each may refill to two envelopes and one full
-// frame of bytes, while that floor stays reserved for every business receiver
-// that has not joined yet. Early receivers keep the full DELIVERY_WINDOW.
-pub const SENDER_WINDOW_SHARE: flow::WindowShare = flow::WindowShare {
-    floor: flow::Counts::new(2, MAX_DATA_BYTES as u64),
-    flows: SHARE_BUSINESS_CONNECTIONS as u64 - 1,
-};
-// Those envelopes are small, so a connection may hold more frames than full
-// frames of bytes. Bytes still bound memory. This matches the Go default.
-pub const CONNECTION_DATA_FRAMES: usize = 256;
+// ToReceiver carries bulk file fragments on each receiver's dedicated ledger.
+pub const RECEIVER_DELIVERY_WINDOW: flow::Counts =
+    flow::Counts::new(16, 16 * MAX_DATA_BYTES as u64);
+// Every receiver's ToSender flow shares the sender connection's ledger and
+// carries only small control/request envelopes. Sizing each flow to 8 frames
+// (matching the receiver block broker's default concurrency) and 1 full frame
+// of bytes lets all 31 business receivers hold their full window concurrently
+// without join-order starvation, while keeping half the sender byte pool free
+// for settling flows.
+pub const SENDER_DELIVERY_WINDOW: flow::Counts = flow::Counts::new(8, MAX_DATA_BYTES as u64);
 const STARTUP_RESERVE_FRAMES: u64 = 2;
+const SHARE_MAX_RECEIVERS: u64 = SHARE_BUSINESS_CONNECTIONS as u64 - 1;
 const _: () = assert!(
-    SENDER_WINDOW_SHARE.floor.frames * SENDER_WINDOW_SHARE.flows
+    SENDER_DELIVERY_WINDOW.frames * SHARE_MAX_RECEIVERS
         <= CONNECTION_DATA_FRAMES as u64 - STARTUP_RESERVE_FRAMES
-        && SENDER_WINDOW_SHARE.floor.encoded_bytes * SENDER_WINDOW_SHARE.flows
-            <= DATA_QUEUE_BYTES as u64 - STARTUP_RESERVE_FRAMES * MAX_DATA_BYTES as u64
+        && SENDER_DELIVERY_WINDOW.encoded_bytes * SHARE_MAX_RECEIVERS
+            <= CONNECTION_DATA_BYTES as u64 - STARTUP_RESERVE_FRAMES * MAX_DATA_BYTES as u64
+        && SENDER_DELIVERY_WINDOW.frames <= FLOW_PENDING_FRAMES as u64
+        && RECEIVER_DELIVERY_WINDOW.frames <= FLOW_PENDING_FRAMES as u64
+        && SHARE_MAX_RECEIVERS <= CONNECTION_PENDING_FLOWS as u64
 );
 const MAX_DATA_BYTES: usize =
     windshare_relay_core::sessions::OpaqueHeader::MAX_ENCODED_BYTES as usize;
@@ -171,7 +177,7 @@ pub fn limits() -> share::Limits {
         retained_flows_per_connection: 64,
         retirement: share::RetirementPolicy::PhysicalRelease,
         delivery: flow::Limits::new(
-            flow::Counts::new(CONNECTION_DATA_FRAMES as u64, DATA_QUEUE_BYTES as u64),
+            flow::Counts::new(CONNECTION_DATA_FRAMES as u64, CONNECTION_DATA_BYTES as u64),
             capacity(STARTUP_RESERVE_FRAMES),
             capacity(1),
             Duration::from_secs(5),
