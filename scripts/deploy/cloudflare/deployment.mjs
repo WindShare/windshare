@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { prepareRoute, readRoute, sameRoute, verifyRoute } from './routing.mjs';
+import { confirmConverged, PropagationPendingError } from './verification.mjs';
 
 export const STATE_BINDING = 'WINDSHARE_DEPLOYMENT';
 export const SECRET_BINDING = 'OWNER_PASSWORD';
@@ -30,7 +31,19 @@ export function readWorkerIdentity(env) {
 }
 function requireValue(condition, message) { if (!condition) throw new Error(message); }
 function binding(settings, name, type) {
-  const matches = settings?.bindings?.filter(item => item.name === name) ?? [];
+  if (settings == null) {
+    throw new PropagationPendingError(
+      `Existing Worker is missing its ${name} ${type} binding.`,
+      'worker_settings_absent',
+    );
+  }
+  const matches = settings.bindings?.filter(item => item.name === name) ?? [];
+  if (matches.length === 0) {
+    throw new PropagationPendingError(
+      `Existing Worker is missing its ${name} ${type} binding.`,
+      `missing_binding:${name}`,
+    );
+  }
   requireValue(matches.length === 1 && matches[0].type === type, `Existing Worker is missing its ${name} ${type} binding.`);
   return matches[0];
 }
@@ -87,7 +100,10 @@ function verifyConsole(settings, state) {
     'Companion console must bind the authoritative relay Worker.',
   );
 }
-export async function deployRelay({ inputs, cloudflare, consoleCloudflare, deploy, deployConsole, log = () => {}, newId = randomUUID }) {
+export async function deployRelay({
+  inputs, cloudflare, consoleCloudflare, deploy, deployConsole,
+  log = () => {}, newId = randomUUID, wait, verificationDelaysMs,
+}) {
   const endpoint = await prepareRoute(inputs, cloudflare);
   const consoleEndpoint = inputs.route.kind === 'custom-domain'
     ? `https://${inputs.route.consoleHostname}`
@@ -108,16 +124,28 @@ export async function deployRelay({ inputs, cloudflare, consoleCloudflare, deplo
   }
   log('deployment_prepared', { kind: plan.kind, deploymentId: state.deploymentId, endpoint, consoleEndpoint });
   await deploy(plan);
-  const confirmed = readDeployment(await cloudflare.settings(), inputs, endpoint);
-  requireValue(JSON.stringify(confirmed.state) === JSON.stringify(state), 'Deployment record changed during upload.');
-  if (retained) requireValue(confirmed.namespaceId === retained.namespaceId && confirmed.accessNamespaceId === retained.accessNamespaceId,
-    'Access or share namespace changed during deployment.');
-  await verifyRoute(inputs, cloudflare);
+  const verification = { deploymentId: state.deploymentId, log, wait, delays: verificationDelaysMs };
+  const confirmed = await confirmConverged(async () => {
+    const current = readDeployment(await cloudflare.settings(), inputs, endpoint);
+    requireValue(JSON.stringify(current.state) === JSON.stringify(state), 'Deployment record changed during upload.');
+    if (retained) {
+      requireValue(
+        current.namespaceId === retained.namespaceId && current.accessNamespaceId === retained.accessNamespaceId,
+        'Access or share namespace changed during deployment.',
+      );
+    }
+    return current;
+  }, verification);
+  await confirmConverged(() => verifyRoute(inputs, cloudflare), verification);
   if (inputs.route.kind === 'workers-dev') {
     await deployConsole(plan);
-    verifyConsole(await consoleCloudflare.settings(), state);
-    const route = await consoleCloudflare.route();
-    requireValue(route.enabled === true && route.previews_enabled === false, 'Companion console route did not match.');
+    await confirmConverged(async () => {
+      verifyConsole(await consoleCloudflare.settings(), state);
+      const route = await consoleCloudflare.route();
+      if (route.enabled !== true || route.previews_enabled !== false) {
+        throw new PropagationPendingError('Companion console route did not match.', 'console_route_pending');
+      }
+    }, verification);
   }
   log('deployment_verified', { deploymentId: state.deploymentId, endpoint, consoleEndpoint,
     namespaceId: confirmed.namespaceId, accessNamespaceId: confirmed.accessNamespaceId });

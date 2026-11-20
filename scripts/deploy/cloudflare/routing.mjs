@@ -1,3 +1,5 @@
+import { PropagationPendingError } from './verification.mjs';
+
 const DNS_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const ZONE_ID = /^[a-f0-9]{32}$/;
 function requireValue(condition, message) { if (!condition) throw new Error(message); }
@@ -52,14 +54,24 @@ export async function prepareRoute(inputs, cloudflare) {
 }
 export async function verifyRoute(inputs, cloudflare) {
   const route = await cloudflare.route();
-  requireValue(route.enabled === (inputs.route.kind === 'workers-dev') && route.previews_enabled === false,
-    'The stable workers.dev route or preview URL settings did not match; rerun the deployment.');
+  if (route.enabled !== (inputs.route.kind === 'workers-dev') || route.previews_enabled !== false) {
+    throw new PropagationPendingError(
+      'The stable workers.dev route or preview URL settings did not match; rerun the deployment.',
+      'workers_dev_route_pending',
+    );
+  }
   if (inputs.route.kind === 'custom-domain') {
     for (const name of routeHostnames(inputs.route)) {
       const domains = await cloudflare.domains(name);
-      requireValue(Array.isArray(domains) && domains.length === 1 && ownsDomain(domains[0], inputs, name) &&
-        domains[0].enabled === true && domains[0].previews_enabled === false,
-      'Custom domain was not attached to this Worker; rerun the deployment.');
+      if (!Array.isArray(domains) || domains.some(domain => !ownsDomain(domain, inputs, name))) {
+        throw new Error('Custom domain was not attached to this Worker; rerun the deployment.');
+      }
+      if (domains.length !== 1 || domains[0].enabled !== true || domains[0].previews_enabled !== false) {
+        throw new PropagationPendingError(
+          'Custom domain was not attached to this Worker; rerun the deployment.',
+          'custom_domain_pending',
+        );
+      }
     }
   }
 }

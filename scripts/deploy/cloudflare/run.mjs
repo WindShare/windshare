@@ -97,6 +97,9 @@ async function main() {
   log('onboarding_ready', { deploymentId: result.state.deploymentId });
 }
 main().catch(error => {
-  console.error(JSON.stringify({ event: 'deployment_failed', operationId, message: error.message }));
+  console.error(JSON.stringify({
+    event: 'deployment_failed', operationId, message: error.message,
+    ...(error.reason ? { reason: error.reason } : {}),
+  }));
   process.exitCode = 1;
 });
