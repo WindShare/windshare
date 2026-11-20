@@ -312,13 +312,17 @@ jobs:
         with:
           go-version: stable
           cache-dependency-path: go.sum
-      - uses: msys2/setup-msys2@v2
+      - id: msys2
+        uses: msys2/setup-msys2@v2
         with:
-          install: mingw-w64-x86_64-gcc
+          msystem: UCRT64
+          install: mingw-w64-ucrt-x86_64-gcc
           path-type: inherit
       - name: Add Go C compiler to the native build path
         shell: pwsh
-        run: '"C:\msys64\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append'
+        env:
+          MSYS2_LOCATION: ${{ steps.msys2.outputs.msys2-location }}
+        run: 'Join-Path $env:MSYS2_LOCATION "ucrt64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append'
       - uses: actions/setup-node@v7
         with:
           node-version: latest
