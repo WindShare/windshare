@@ -98,7 +98,9 @@ func (s *Session) ReadRange(ctx context.Context, lease transfer.RevisionHandle, 
 		if err = readRemainingRanges(ctx, dependencies, binding.opened.Handle, descriptor, remaining); err == nil {
 			return nil
 		}
-		if !runtime.AwaitPathRetirement(ctx) {
+		// An authenticated reopen already proved the source descriptor changed on this
+		// generation; path retirement afterward must not discard that decision or reconnect.
+		if isRevisionReopened(err) || !runtime.AwaitPathRetirement(ctx) {
 			binding.recordReopened(err)
 			return err
 		}
@@ -125,6 +127,11 @@ func (s *Session) recoverRefreshFailure(ctx context.Context, runtime *receiverse
 	if ctx.Err() != nil {
 		return false, ctx.Err()
 	}
+	// Refresh already obtained an authenticated replacement descriptor from this
+	// generation, so a concurrent path retirement must not replace or retry it.
+	if isRevisionReopened(err) {
+		return false, err
+	}
 	if !runtime.AwaitPathRetirement(ctx) {
 		return false, err
 	}
@@ -132,6 +139,11 @@ func (s *Session) recoverRefreshFailure(ctx context.Context, runtime *receiverse
 		return false, err
 	}
 	return true, nil
+}
+
+func isRevisionReopened(err error) bool {
+	_, ok := errors.AsType[*content.RevisionReopenedError](err)
+	return ok
 }
 
 func readRemainingRanges(
@@ -220,8 +232,10 @@ func (binding *revisionLease) refresh(ctx context.Context, runtime *receiversess
 		// The retired generation no longer owns a live lease. Keep the new
 		// generation's handle across the output's durable pause and readmission.
 		binding.runtime, binding.opened = runtime, opened
-	} else {
-		binding.cleanupErr = dependencies.ReleaseRevision(ctx, opened.Handle)
+	} else if releaseErr := dependencies.ReleaseRevision(ctx, opened.Handle); releaseErr != nil && !runtime.AwaitPathRetirement(ctx) {
+		// Path retirement also ends the discarded lease's authority on the replacement
+		// generation; only protocol rejection or caller shutdown remains a cleanup failure.
+		binding.cleanupErr = errors.Join(binding.cleanupErr, releaseErr)
 	}
 	return reopened
 }
