@@ -2,13 +2,16 @@
 
 package statefile
 
-import "os"
+import (
+	"context"
+	"os"
+)
 
 func createPrivateFile(path string) (*os.File, error) {
 	return os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, privateFileMode)
 }
 
-func replaceFile(source, destination string) error {
+func replaceFile(_ context.Context, source, destination string) error {
 	if err := os.Rename(source, destination); err != nil {
 		return err
 	}

@@ -102,6 +102,6 @@ func (store FileStore) Save(ctx context.Context, candidate relayprofile.Candidat
 		if err != nil {
 			return err
 		}
-		return statefile.Write(path, data)
+		return statefile.Write(ctx, path, data)
 	})
 }

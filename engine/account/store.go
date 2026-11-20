@@ -63,7 +63,7 @@ func (store FileStore) Update(ctx context.Context, apply func(Record) (Record, e
 		if err != nil {
 			return err
 		}
-		return statefile.Write(store.Path, data)
+		return statefile.Write(ctx, store.Path, data)
 	})
 	return result, err
 }

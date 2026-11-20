@@ -17,9 +17,12 @@ const (
 	stagingPrefix        = ".state-"
 )
 
-func Write(path string, data []byte) (err error) {
+func Write(ctx context.Context, path string, data []byte) (err error) {
 	if path == "" {
 		return os.ErrInvalid
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if info, failure := os.Lstat(path); failure == nil && !info.Mode().IsRegular() {
 		return errors.New("state destination must be a regular file")
@@ -49,7 +52,7 @@ func Write(path string, data []byte) (err error) {
 	if err = file.Close(); err != nil {
 		return err
 	}
-	return replaceFile(staging, path)
+	return replaceFile(ctx, staging, path)
 }
 
 func Remove(path string) error {

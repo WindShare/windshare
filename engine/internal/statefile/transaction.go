@@ -56,13 +56,13 @@ func ReadSettings(ctx context.Context, path string) ([]byte, error) {
 func Transact(ctx context.Context, path string, action func(*Transaction) error) error {
 	return WithLock(ctx, path, func() error {
 		tx := &Transaction{path: path, changes: make(map[string]mutation)}
-		if err := tx.recover(); err != nil {
+		if err := tx.recover(ctx); err != nil {
 			return err
 		}
 		if err := action(tx); err != nil {
 			return err
 		}
-		return tx.commit()
+		return tx.commit(ctx)
 	})
 }
 
@@ -139,7 +139,7 @@ func (tx *Transaction) Delete(name string) error {
 	return nil
 }
 
-func (tx *Transaction) apply(changes []mutation) error {
+func (tx *Transaction) apply(ctx context.Context, changes []mutation) error {
 	for _, edit := range changes {
 		path, err := tx.location(edit.Name)
 		if err != nil {
@@ -148,7 +148,7 @@ func (tx *Transaction) apply(changes []mutation) error {
 		if edit.Delete {
 			err = Remove(path)
 		} else {
-			err = Write(path, edit.Data)
+			err = Write(ctx, path, edit.Data)
 		}
 		if err != nil {
 			return err
@@ -157,7 +157,7 @@ func (tx *Transaction) apply(changes []mutation) error {
 	return nil
 }
 
-func (tx *Transaction) commit() error {
+func (tx *Transaction) commit(ctx context.Context) error {
 	if len(tx.changes) == 0 {
 		return nil
 	}
@@ -167,7 +167,7 @@ func (tx *Transaction) commit() error {
 	}
 	sort.Slice(changes, func(i, j int) bool { return changes[i].Name < changes[j].Name })
 	if len(changes) == 1 {
-		return tx.apply(changes)
+		return tx.apply(ctx, changes)
 	}
 	data, err := json.Marshal(changes)
 	if err != nil {
@@ -178,14 +178,14 @@ func (tx *Transaction) commit() error {
 	}
 	// Publishing this intent commits the whole operation. Every subsequent reader
 	// or importer finishes it before seeing or replacing the settings.
-	if err := Write(filepath.Join(StateDirectory(tx.path), commitName), data); err != nil {
+	if err := Write(ctx, filepath.Join(StateDirectory(tx.path), commitName), data); err != nil {
 		return err
 	}
 	slog.Debug("local_state_commit", "settings_path", tx.path, "records", recordNames(changes))
-	return tx.recover()
+	return tx.recover(ctx)
 }
 
-func (tx *Transaction) recover() error {
+func (tx *Transaction) recover(ctx context.Context) error {
 	path := filepath.Join(StateDirectory(tx.path), commitName)
 	file, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -222,7 +222,7 @@ func (tx *Transaction) recover() error {
 		}
 		seen[change.Name] = true
 	}
-	if err := tx.apply(changes); err != nil {
+	if err := tx.apply(ctx, changes); err != nil {
 		return fmt.Errorf("local commit awaiting recovery: %w", err)
 	}
 	if err := Remove(path); err != nil {
