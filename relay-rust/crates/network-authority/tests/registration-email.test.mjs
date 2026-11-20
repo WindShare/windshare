@@ -79,6 +79,14 @@ test('the Worker isolates registration email challenges while tracking retries',
   const verificationRequired = { status: 428 };
   const alice = { email: 'alice@qq.com', client_secret: secret };
   const bob = { email: 'bob@qq.com', client_secret: otherSecret };
+
+  const missingSecret = { email: alice.email };
+  for (const body of [missingSecret, { ...missingSecret, client_secret: null }]) {
+    const rejected = await call('/v1/accounts/email', body, { status: 400 });
+    assert.equal(rejected.value.kind, 'invalid');
+  }
+  assert.equal(delivered, undefined);
+
   const first = await email(alice);
   // Both attempts share the Worker's local source and must keep their own codes.
   const other = await email(bob);
@@ -96,26 +104,8 @@ test('the Worker isolates registration email challenges while tracking retries',
   assert.equal((await call('/v1/accounts/email', bob, { status: 429 })).value.kind, 'rate_limited');
   assert.deepEqual(await register(second.challenge.id, 'typo', verificationRequired), { kind: 'verification', challenge: second.challenge });
   assert.equal((await register(first.challenge.id, 'typo', verificationRequired)).challenge.id, '');
-  assert.equal((await register(second.challenge.id, second.code)).profile.email, alice.email);
+  // The code follows the setup secret across a change of network.
+  const completed = await register(second.challenge.id, second.code, { source: '203.0.113.7' });
+  assert.equal(completed.profile.email, alice.email);
   assert.equal((await register(other.challenge.id, other.code, { clientSecret: otherSecret })).profile.email, bob.email);
-
-  // v0.1.3 sends only an email address when it requests a code.
-  const sharedNetwork = { source: '198.51.100.7' };
-  const carol = { email: 'carol@qq.com' };
-  const dave = { email: 'dave@qq.com' };
-  const carolOnNewNetwork = { source: '203.0.113.7', clientSecret: randomBytes(32).toString('base64url') };
-  const daveOnSharedNetwork = { ...sharedNetwork, clientSecret: randomBytes(32).toString('base64url') };
-  const invalid = await call('/v1/accounts/email',
-    { ...carol, client_secret: null }, { ...sharedNetwork, status: 400 });
-  assert.equal(invalid.value.kind, 'invalid');
-  const carolCode = await email(carol, sharedNetwork);
-  const daveCode = await email(dave, sharedNetwork);
-  const resent = await email(carol, sharedNetwork);
-  assert.notEqual(resent.challenge.id, carolCode.challenge.id);
-
-  // The shared network and the resend must leave the original proofs usable.
-  const mistyped = await register(carolCode.challenge.id, 'typo', { ...carolOnNewNetwork, ...verificationRequired });
-  assert.deepEqual(mistyped, { kind: 'verification', challenge: carolCode.challenge });
-  assert.equal((await register(carolCode.challenge.id, carolCode.code, carolOnNewNetwork)).profile.email, carol.email);
-  assert.equal((await register(daveCode.challenge.id, daveCode.code, daveOnSharedNetwork)).profile.email, dave.email);
 });

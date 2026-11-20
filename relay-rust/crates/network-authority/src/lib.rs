@@ -38,7 +38,6 @@ impl<R: Store, E: Environment> Authority<R, E> {
     /// Configuration cannot move the certified signing generation backwards.
     pub fn new(mut store: R, environment: E, signing: Signing) -> Result<Self> {
         signing.activate(&mut store, environment.now())?;
-        restriction_store::migrate(&mut store)?;
         Ok(Self {
             store,
             environment,

@@ -1,17 +1,11 @@
 mod quotas;
 
 use super::Database;
-use crate::node::access::{AccessSnapshot, AccessUpdate, AuthorityState, Quota};
-use anyhow::{Result, anyhow, ensure};
+use crate::node::access::{AccessSnapshot, AccessUpdate, AuthorityState};
+use anyhow::{Result, anyhow};
 use rusqlite::{Connection, OptionalExtension, params};
-use serde::Deserialize;
-use std::collections::BTreeMap;
 use windshare_relay_access::{
-    AccountId, Issuer,
-    entitlement::Entitlement,
-    restrictions::Restrictions,
-    trust::Generation,
-    usage::{AccountEntitlement, NodePolicy},
+    Issuer, restrictions::Restrictions, trust::Generation, usage::AccountEntitlement,
 };
 
 const SCHEMA: &str = "
@@ -92,7 +86,6 @@ pub(super) fn restore(db: &Connection, now: u64) -> Result<AccessSnapshot> {
     db.execute_batch(quotas::SCHEMA)?;
     // Establish the durable UTC day floor even on nodes that start without a reporter.
     let quota_day_floor = quotas::prune(db, now)?;
-    migrate_cache(db, quota_day_floor, now)?;
     let mut statement = db.prepare("SELECT body FROM access_authorities")?;
     let authorities = statement
         .query_map([], |row| row.get::<_, Vec<u8>>(0))?
@@ -154,57 +147,6 @@ fn write_restrictions(db: &Connection, issuer: Issuer, restrictions: &Restrictio
             serde_json::to_vec(restrictions)?
         ],
     )?;
-    Ok(())
-}
-
-#[derive(Deserialize)]
-struct LegacyCache {
-    generations: Vec<Generation>,
-    entitlements: Vec<(Issuer, AccountId, Entitlement)>,
-    restrictions: Vec<(Issuer, Restrictions)>,
-    policies: Vec<(Issuer, NodePolicy)>,
-}
-
-fn migrate_cache(db: &Connection, quota_day_floor: u64, now: u64) -> Result<()> {
-    let exists: bool = db.query_row(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name='access_cache')",
-        [],
-        |row| row.get(0),
-    )?;
-    if !exists {
-        return Ok(());
-    }
-    let body: Option<Vec<u8>> = db
-        .query_row(
-            "SELECT body FROM access_cache WHERE singleton=1",
-            [],
-            |row| row.get(0),
-        )
-        .optional()?;
-    if let Some(body) = body {
-        let legacy: LegacyCache = serde_json::from_slice(&body)?;
-        let mut policies: BTreeMap<_, _> = legacy.policies.into_iter().collect();
-        for generation in legacy.generations {
-            let policy = policies.remove(&generation.issuer);
-            save_authority(db, AuthorityState { generation, policy })?;
-        }
-        ensure!(policies.is_empty(), "missing cached issuer generation");
-        let mut upsert = quotas::prepare_upsert(db)?;
-        for (issuer, account, entitlement) in legacy.entitlements {
-            quotas::save(
-                &mut upsert,
-                (issuer, account),
-                Quota::from_snapshot(entitlement, now),
-                quota_day_floor,
-            )?;
-        }
-        for (issuer, restrictions) in legacy.restrictions {
-            write_restrictions(db, issuer, &restrictions)?;
-        }
-    }
-    // The old row contains the only rollback barriers on upgrade, so retire it in
-    // the same transaction that installs the new records.
-    db.execute("DROP TABLE access_cache", [])?;
     Ok(())
 }
 

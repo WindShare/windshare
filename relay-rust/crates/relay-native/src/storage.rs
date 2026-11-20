@@ -21,7 +21,6 @@ mod transactions;
 use transactions::read;
 
 const SCHEMA_VERSION: i64 = 4;
-const LEGACY_ACCESS_CACHE_SCHEMA: i64 = 3;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(1);
 
 pub trait Persistence: Clone + Send + Sync + 'static {
@@ -180,7 +179,7 @@ fn initialize(connection: &mut Connection, relay: RelayIdentity) -> Result<NonZe
         .optional()?;
     let generation = if let Some((format, stored_relay, previous)) = existing {
         ensure!(
-            matches!(format, LEGACY_ACCESS_CACHE_SCHEMA | SCHEMA_VERSION),
+            format == SCHEMA_VERSION,
             "unsupported native authority schema"
         );
         ensure!(
@@ -196,10 +195,9 @@ fn initialize(connection: &mut Connection, relay: RelayIdentity) -> Result<NonZe
         ensure!(count == 0, "missing host identity for existing shares");
         1
     };
-    // Older hosts would reopen the retired access cache without its signing barriers.
     transaction.execute(
         "INSERT INTO host VALUES (1, ?1, ?2, ?3)
-         ON CONFLICT(singleton) DO UPDATE SET format=excluded.format,generation=excluded.generation",
+         ON CONFLICT(singleton) DO UPDATE SET generation=excluded.generation",
         params![SCHEMA_VERSION, relay.as_bytes(), generation],
     )?;
     transaction.commit()?;

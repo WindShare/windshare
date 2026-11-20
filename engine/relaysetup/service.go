@@ -19,9 +19,8 @@ import (
 type Operation string
 
 const (
-	AddProfile Operation = "add"
-	// Keep the checkpoint's operation value so outstanding enrollments remain readable.
-	AuthorizeDevice Operation = "private-onboarding"
+	AddProfile      Operation = "add"
+	AuthorizeDevice Operation = "authorize_device"
 )
 
 var (

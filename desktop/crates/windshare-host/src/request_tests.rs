@@ -99,6 +99,6 @@ fn credential_commands_project_only_diagnostic_fields() {
     assert_eq!(wire["setup"]["access_key"], "relay-key-fixture");
     assert_eq!(
         serde_json::to_value(RelayOperation::AuthorizeDevice).unwrap(),
-        "private-onboarding"
+        "authorize_device"
     );
 }

@@ -1,7 +1,11 @@
 use super::*;
-use crate::Endpoint;
+use crate::{Endpoint, node::access::Quota};
 use std::path::Path;
-use windshare_relay_access::{entitlement::DAY_SECONDS, restrictions::Restriction};
+use windshare_relay_access::{
+    entitlement::{DAY_SECONDS, Entitlement},
+    restrictions::Restriction,
+    usage::NodePolicy,
+};
 
 const ISSUER: Issuer = [1; 32];
 const NOW: u64 = 20 * DAY_SECONDS + 120;
@@ -44,10 +48,15 @@ fn entitlement(account: u8, version: u64, valid_until: u64) -> AccountEntitlemen
 }
 
 #[test]
-fn startup_migrates_the_legacy_cache_and_preserves_durable_access_state() {
+fn startup_restores_durable_access_state_and_rejects_unknown_schema() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("node.db");
     let db = open(&path);
+    db.initialize_control(NOW).unwrap();
+    let authority = AuthorityState {
+        generation: generation(2),
+        policy: Some(policy()),
+    };
     let mut restrictions = Restrictions {
         version: 255,
         ..Restrictions::default()
@@ -57,52 +66,14 @@ fn startup_migrates_the_legacy_cache_and_preserves_durable_access_state() {
     let expired = entitlement(5, 8, NOW);
     let mut yesterday = entitlement(6, 9, NOW - 120);
     yesterday.entitlement.day -= 1;
-    {
-        let connection = db.0.connection.lock().unwrap();
-        connection.execute_batch(
-            "CREATE TABLE access_cache(singleton INTEGER PRIMARY KEY, body BLOB NOT NULL) STRICT;",
-        ).unwrap();
-        let entitlements =
-            [&live, &expired, &yesterday].map(|value| (ISSUER, value.account, value.entitlement));
-        let legacy = serde_json::json!({
-            "generations": [generation(2)],
-            "restrictions": [(ISSUER, &restrictions)],
-            "policies": [(ISSUER, policy())],
-            "entitlements": entitlements,
-        });
-        connection
-            .execute(
-                "UPDATE host SET format=?1",
-                [crate::storage::LEGACY_ACCESS_CACHE_SCHEMA],
-            )
-            .unwrap();
-        connection
-            .execute(
-                "INSERT INTO access_cache VALUES(1,?1)",
-                [serde_json::to_vec(&legacy).unwrap()],
-            )
-            .unwrap();
-    }
+    db.save_status(authority, vec![live, expired, yesterday], NOW)
+        .unwrap();
+    db.save_restrictions(ISSUER, &restrictions).unwrap();
 
     drop(db);
     let db = open(&path);
     let restored = db.initialize_control(NOW).unwrap();
-    let format: i64 =
-        db.0.connection
-            .lock()
-            .unwrap()
-            .query_row("SELECT format FROM host WHERE singleton=1", [], |row| {
-                row.get(0)
-            })
-            .unwrap();
-    assert_eq!(format, crate::storage::SCHEMA_VERSION);
-    assert_eq!(
-        restored.authorities,
-        [AuthorityState {
-            generation: generation(2),
-            policy: Some(policy())
-        }]
-    );
+    assert_eq!(restored.authorities, [authority]);
     assert_eq!(restored.restrictions, [(ISSUER, restrictions.clone())]);
     let live = (
         (ISSUER, live.account),
@@ -133,17 +104,21 @@ fn startup_migrates_the_legacy_cache_and_preserves_durable_access_state() {
     assert_eq!(restored.authorities[0].policy, Some(policy()));
     assert_eq!(restored.restrictions, [(ISSUER, latest)]);
     assert_eq!(restored.quotas, []);
-    let legacy_exists: bool =
-        db.0.connection
-            .lock()
-            .unwrap()
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name='access_cache')",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-    assert!(!legacy_exists);
+
+    db.0.connection
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE host SET format=?1",
+            [crate::storage::SCHEMA_VERSION - 1],
+        )
+        .unwrap();
+    drop(db);
+
+    let relay = Endpoint::parse("ws://localhost:8787/v2/ws")
+        .unwrap()
+        .identity;
+    assert!(Database::open(&path, relay).is_err());
 }
 
 #[test]

@@ -62,11 +62,10 @@ pub struct SetupContext {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum RelayOperation {
     #[serde(rename = "add")]
     AddProfile,
-    // The enrollment checkpoint uses this wire value for device authorization.
-    #[serde(rename = "private-onboarding")]
     AuthorizeDevice,
 }
 

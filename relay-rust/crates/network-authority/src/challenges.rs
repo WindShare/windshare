@@ -42,24 +42,21 @@ impl ProofKind {
 }
 
 pub enum EmailOwner {
-    RegistrationAttempt(RegistrationAttempt),
-    RegistrationByChallenge,
+    Registration(RegistrationAttempt),
     Account(AccountId),
 }
 
 impl EmailOwner {
-    fn key(&self, challenge: &str) -> String {
+    fn key(&self) -> String {
         match self {
-            Self::RegistrationAttempt(attempt) => ProofKind::Email.registration_key(*attempt),
-            Self::RegistrationByChallenge => registration_email_key_by_challenge(challenge),
+            Self::Registration(attempt) => ProofKind::Email.registration_key(*attempt),
             Self::Account(id) => account_email_key(id),
         }
     }
 
     const fn binding(&self) -> &'static str {
         match self {
-            Self::RegistrationAttempt(_) => "registration_attempt",
-            Self::RegistrationByChallenge => "registration_challenge",
+            Self::Registration(_) => "registration",
             Self::Account(_) => "account",
         }
     }
@@ -67,14 +64,6 @@ impl EmailOwner {
 
 fn account_email_key(id: &AccountId) -> String {
     key("account-email-proof", id)
-}
-
-// The domain prefix keeps a challenge digest distinct from a setup secret digest.
-fn registration_email_key_by_challenge(challenge: &str) -> String {
-    key(
-        ProofKind::Email.registration_prefix(),
-        &digest(&format!("challenge/{challenge}")),
-    )
 }
 
 #[derive(Serialize, Deserialize)]
@@ -123,7 +112,7 @@ impl Proof {
     }
 
     fn challenge_fingerprint(&self) -> String {
-        // A challenge ID can authorize registration together with a mailed code.
+        // Hash the challenge ID before logging so verification tokens stay out of diagnostics.
         URL_SAFE_NO_PAD.encode(digest(&self.id))
     }
 
@@ -169,15 +158,14 @@ impl EmailDelivery {
     }
 
     /// Commit after provider acceptance so a failed resend leaves the previous code usable.
-    /// Requests bound by challenge have no attempt identity, so each delivery keeps its own proof.
     ///
     /// # Errors
     /// Propagates errors while pruning expired proofs or saving the delivered proof.
     pub fn accepted(self, store: &mut impl Store, now: u64) -> Result<Challenge> {
-        if !matches!(self.owner, EmailOwner::Account(_)) {
+        if matches!(self.owner, EmailOwner::Registration(_)) {
             store.prune_registration_proofs(ProofKind::Email, now)?;
         }
-        save(store, &self.owner.key(&self.proof.id), &self.proof)?;
+        save(store, &self.owner.key(), &self.proof)?;
         tracing::info!(
             event = "email_verification_delivered",
             binding = self.owner.binding(),
@@ -270,12 +258,9 @@ impl<R: Store, E: Environment> Authority<R, E> {
             id.len() <= MAX_CHALLENGE_ID_BYTES && solution.len() <= MAX_SOLUTION_BYTES,
             Fault::Invalid
         );
-        let matches = |proof: &Proof| proof.id == id && proof.method.kind() == kind;
-        let redemption = self.redeem_proof(&kind.registration_key(attempt), solution, matches)?;
-        if kind != ProofKind::Email || !matches!(redemption, ProofRedemption::Unavailable) {
-            return Ok(redemption);
-        }
-        self.redeem_proof(&registration_email_key_by_challenge(id), solution, matches)
+        self.redeem_proof(&kind.registration_key(attempt), solution, |proof| {
+            proof.id == id && proof.method.kind() == kind
+        })
     }
 
     pub(crate) fn verify_mailbox(

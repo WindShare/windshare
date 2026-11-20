@@ -5,7 +5,7 @@ use crate::{
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
-use windshare_relay_access::restrictions::{PAGE_ENTRIES, PageResult, Restriction, Restrictions};
+use windshare_relay_access::restrictions::{PAGE_ENTRIES, PageResult, Restriction};
 
 const VERSION: &str = "restriction-version";
 const ENTRIES: &str = "restriction/";
@@ -26,23 +26,6 @@ fn entry_key(entry: Restriction) -> String {
         Restriction::Share(id) => key(SHARES, &id),
         Restriction::Credential(id) => key(CREDENTIALS, &id),
     }
-}
-
-pub fn migrate(store: &mut impl Store) -> Result<()> {
-    let Some(legacy) = load::<Restrictions>(store, "restrictions")? else {
-        return Ok(());
-    };
-    for entry in legacy
-        .accounts
-        .into_iter()
-        .map(Restriction::Account)
-        .chain(legacy.shares.into_iter().map(Restriction::Share))
-        .chain(legacy.credentials.into_iter().map(Restriction::Credential))
-    {
-        save(store, &entry_key(entry), &entry)?;
-    }
-    save(store, VERSION, &legacy.version)?;
-    store.delete("restrictions")
 }
 
 impl<R: Store, E: Environment> Authority<R, E> {

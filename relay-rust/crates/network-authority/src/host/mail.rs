@@ -34,17 +34,10 @@ struct ProfileEmail {
 }
 
 #[derive(Deserialize)]
-#[serde(untagged, deny_unknown_fields)]
-enum RegistrationEmail {
-    WithSetupSecret {
-        email: String,
-        client_secret: String,
-    },
-    // v0.1.3 first sends its setup secret when it redeems the mailed code.
-    // Retire this wire shape and the challenge binding when v0.1.3 support ends.
-    EmailOnly {
-        email: String,
-    },
+#[serde(deny_unknown_fields)]
+struct RegistrationEmail {
+    email: String,
+    client_secret: String,
 }
 fn parse_request(
     bytes: &[u8],
@@ -54,18 +47,13 @@ fn parse_request(
         let input: ProfileEmail = serde_json::from_slice(bytes).map_err(|_| Fault::InvalidEmail)?;
         (input.email, EmailVerification::Profile { bearer })
     } else {
-        match serde_json::from_slice(bytes).map_err(|_| Fault::Invalid)? {
-            RegistrationEmail::WithSetupSecret {
-                email,
-                client_secret,
-            } => (
-                email,
-                EmailVerification::RegistrationAttempt { client_secret },
-            ),
-            RegistrationEmail::EmailOnly { email } => {
-                (email, EmailVerification::RegistrationByChallenge)
-            }
-        }
+        let input: RegistrationEmail = serde_json::from_slice(bytes).map_err(|_| Fault::Invalid)?;
+        (
+            input.email,
+            EmailVerification::Registration {
+                client_secret: input.client_secret,
+            },
+        )
     };
     Ok((Mailbox::parse(&address)?, verification))
 }
