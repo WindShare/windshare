@@ -7,6 +7,9 @@ pub const MAILBOX_CAPACITY: usize = 32;
 pub const CONTROL_QUEUE_FRAMES: usize = 8;
 // Keep the existing advisory burst without using protocol control slots.
 pub const CAPACITY_NOTICE_QUEUE_FRAMES: usize = 8;
+// Per-flow pending envelopes and pending flows per connection. The
+// connection-wide bounds are CONNECTION_DATA_FRAMES and DATA_QUEUE_BYTES, which
+// is 64 full frames of bytes.
 pub const DATA_QUEUE_FRAMES: usize = 64;
 pub const DATA_QUEUE_BYTES: usize = DATA_QUEUE_FRAMES * MAX_DATA_BYTES;
 pub const SUBMITTED_DATA_FRAMES: usize = 2;

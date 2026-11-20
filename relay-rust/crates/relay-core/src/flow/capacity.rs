@@ -27,6 +27,11 @@ const fn saturating_sub(left: Counts, right: Counts) -> Counts {
     )
 }
 
+/// Startup credit lives in its own pool; only the rest occupies ordinary capacity.
+fn ordinary_occupancy(entry: &super::delivery::Delivery) -> Counts {
+    saturating_sub(entry.usage().total(), entry.startup_used())
+}
+
 const fn scale(counts: Counts, factor: u64) -> Counts {
     Counts::new(
         counts.frames.saturating_mul(factor),
@@ -129,10 +134,15 @@ impl<O: Observer> ConnectionLedger<O> {
     }
 
     /// Like `window_credit`, but splits a destination shared by many flows.
-    /// Ordinary capacity for `share.floor` per flow not yet retained, up to
-    /// `share.flows`, stays free so later admissions and their first refill
-    /// cannot be starved by idle windows. Every open flow may still refill to
-    /// its floor. A declaration too small for that reservation is split evenly.
+    /// Ordinary capacity stays reserved for `share.floor` per flow not yet
+    /// retained, up to `share.flows`, and for every other open flow's shortfall
+    /// below its floor. Later admissions, their first refill and siblings that
+    /// are offered credit later in rotation therefore cannot be starved by idle
+    /// windows: while the declaration holds every floor, each open flow can
+    /// refill to its floor regardless of order. Floors count ordinary occupancy
+    /// only, because consuming startup credit frees the startup pool rather than
+    /// ordinary capacity. A declaration too small for the future reservation is
+    /// split evenly instead.
     pub fn shared_window_credit(
         &self,
         flow: super::FlowKey,
@@ -142,11 +152,27 @@ impl<O: Observer> ConnectionLedger<O> {
         let (occupied, available) = self.window_view(flow)?;
         let retained = self.entries.usage().retained_flows as u64;
         let future = share.flows.saturating_sub(retained);
-        let reserve = scale(share.floor, future).min(saturating_sub(
+        let joining = scale(share.floor, future).min(saturating_sub(
             self.capacity_pools().regular,
             scale(share.floor, retained),
         ));
-        let floor = saturating_sub(share.floor, occupied).min(available);
+        let siblings = self
+            .entries
+            .iter()
+            .filter(|entry| entry.key != flow && entry.phase() == super::Phase::Open)
+            .fold(Counts::ZERO, |sum, entry| {
+                let shortfall = saturating_sub(share.floor, ordinary_occupancy(entry));
+                Counts::new(
+                    sum.frames.saturating_add(shortfall.frames),
+                    sum.encoded_bytes.saturating_add(shortfall.encoded_bytes),
+                )
+            });
+        let reserve = Counts::new(
+            joining.frames.saturating_add(siblings.frames),
+            joining.encoded_bytes.saturating_add(siblings.encoded_bytes),
+        );
+        let entry = self.delivery(flow).ok()?;
+        let floor = saturating_sub(share.floor, ordinary_occupancy(&entry)).min(available);
         let shared = saturating_sub(available, reserve);
         Some(saturating_sub(target, occupied).min(max(floor, shared)))
     }
