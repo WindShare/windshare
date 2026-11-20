@@ -295,7 +295,7 @@ Directory payload, signed as exact bytes with Ed25519 so no JSON canonicalizatio
   and publishes to the mirrors; the repository keeps the signed export as history. P3 moves
   signing into the console.
 - Mirrors: `/.well-known/windshare-network` on `ws.ourworld.top` and `windshare.cc`, plus a
-  GitHub release asset; from P3, every node.
+  GitHub release asset; from P4, every node.
 - `engine/builtinnetwork` (new, imported only by applications such as `cmd/wind` and the desktop
   app): embedded snapshot, pinned root keys, mirrors, and the built-in frontends (link host and
   backup entry), injected through `engine.Config`. The web build uses the same snapshot and
@@ -402,6 +402,8 @@ Volunteers join by running a node, and discovery works without the official oper
   last contributing native relay shows a one-time notice and pauses new community requests;
   owner saturation, maintenance, or a spent budget does not count as refusal. Nothing else mentions contribution.
 - Every node mirrors the signed directory and its descriptor cache.
+- Domainless community hosts: evaluate direct TLS in `wsrelay` (built-in ACME with Let's Encrypt
+  160-hour IP certificates, ARI renewal, and zero-downtime reload) versus a scripted Caddy proxy.
 - Traces: descriptor exchange (source, accepted or rejected, reason) and community picks in planner
   decisions.
 
