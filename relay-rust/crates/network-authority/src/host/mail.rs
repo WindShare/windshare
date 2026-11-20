@@ -27,6 +27,13 @@ impl Webhook {
     }
 }
 
+pub(super) fn extra_email_domains(env: &Env) -> Vec<String> {
+    env.var("EXTRA_EMAIL_DOMAINS").map_or_else(
+        |_| Vec::new(),
+        |value| Mailbox::parse_extra_domains(&value.to_string()),
+    )
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ProfileEmail {
@@ -42,6 +49,7 @@ struct RegistrationEmail {
 fn parse_request(
     bytes: &[u8],
     bearer: Option<String>,
+    extra_domains: &[String],
 ) -> std::result::Result<(Mailbox, EmailVerification), Fault> {
     let (address, verification) = if let Some(bearer) = bearer {
         let input: ProfileEmail = serde_json::from_slice(bytes).map_err(|_| Fault::InvalidEmail)?;
@@ -55,7 +63,10 @@ fn parse_request(
             },
         )
     };
-    Ok((Mailbox::parse(&address)?, verification))
+    Ok((
+        Mailbox::parse_with_extra_domains(&address, extra_domains)?,
+        verification,
+    ))
 }
 
 fn unavailable() -> Result<Response> {
@@ -71,7 +82,8 @@ impl NetworkAuthority {
         if request.method() != Method::Post {
             return Response::error("POST required", 405);
         }
-        let (email, verification) = match parse_request(bytes, bearer) {
+        let extra_domains = extra_email_domains(&self.env);
+        let (email, verification) = match parse_request(bytes, bearer, &extra_domains) {
             Ok(input) => input,
             Err(fault) => return super::routes::fault(&fault).map_err(failure),
         };

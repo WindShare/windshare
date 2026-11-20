@@ -116,6 +116,7 @@ jobs:
           AUTHORITY_TRUST: ${{ vars.AUTHORITY_TRUST }}
           EMAIL_WEBHOOK_URL: ${{ vars.EMAIL_WEBHOOK_URL }}
           EMAIL_WEBHOOK_TOKEN: ${{ secrets.EMAIL_WEBHOOK_TOKEN }}
+          EXTRA_EMAIL_DOMAINS: ${{ vars.EXTRA_EMAIL_DOMAINS }}
           AUTHORITY_SIGNING_SEED: ${{ secrets.AUTHORITY_SIGNING_SEED }}
           INITIALIZATION_TOKEN: ${{ secrets.INITIALIZATION_TOKEN }}
         run: |

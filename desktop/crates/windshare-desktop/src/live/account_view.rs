@@ -168,6 +168,7 @@ impl Desktop {
                     let text = match error.code.as_str() {
                         "invalid_credentials" => Text::InvalidCredentials,
                         "username_taken" => Text::UsernameTaken,
+                        "email_taken" => Text::EmailTaken,
                         "invalid_nickname" => Text::InvalidNickname,
                         "nickname_cooldown" => Text::NicknameInterval,
                         "invalid_email" => Text::InvalidEmail,

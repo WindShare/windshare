@@ -58,6 +58,26 @@ test('the Worker isolates registration email challenges while tracking retries',
   csrf = console.csrf;
   assert.equal(console.settings.registration, 'by_account_count');
   assert.equal(console.registration_mode, 'automatic');
+  const secret = randomBytes(32).toString('base64url');
+  const otherSecret = randomBytes(32).toString('base64url');
+  const thirdSecret = randomBytes(32).toString('base64url');
+  const register = async (challenge, solution, { status, source, clientSecret = secret } = {}) =>
+    (await call('/v1/accounts', { client_secret: clientSecret, challenge, solution }, { status, source })).value;
+  const email = async (body, options) => {
+    const challenge = (await call('/v1/accounts/email', body, options)).value;
+    const [local, domain] = body.email.split('@');
+    assert.equal(delivered.to, `${local}@${domain.toLowerCase()}`);
+    const code = delivered.text.match(/Verification code: (\S+)/)[1];
+    assert.match(code, /^\d{6}$/);
+    return { challenge, code };
+  };
+
+  // Unauthenticated registration mail stays disabled while registration mode is not email.
+  const disabled = await call('/v1/accounts/email', { email: 'alice@qq.com', client_secret: secret }, { status: 403 });
+  assert.equal(disabled.value.kind, 'denied');
+  assert.equal(disabled.value.reason, 'email_registration_disabled');
+  assert.equal(delivered, undefined);
+
   const patchSettings = body => call('/v1/admin/settings', body, { method: 'PATCH', admin: true });
   const override = await patchSettings({ registration: 'email' });
   assert.equal(override.value.registration_mode, 'email');
@@ -65,16 +85,6 @@ test('the Worker isolates registration email challenges while tracking retries',
   const quota = await patchSettings({ daily_bytes });
   assert.equal(quota.value.registration_mode, 'email');
   assert.deepEqual(quota.value.settings, { ...console.settings, registration: 'email', daily_bytes });
-
-  const secret = randomBytes(32).toString('base64url');
-  const otherSecret = randomBytes(32).toString('base64url');
-  const register = async (challenge, solution, { status, source, clientSecret = secret } = {}) =>
-    (await call('/v1/accounts', { client_secret: clientSecret, challenge, solution }, { status, source })).value;
-  const email = async (body, options) => {
-    const challenge = (await call('/v1/accounts/email', body, options)).value;
-    assert.equal(delivered.to, body.email);
-    return { challenge, code: delivered.text.match(/Verification code: (\S+)/)[1] };
-  };
 
   const verificationRequired = { status: 428 };
   const alice = { email: 'alice@qq.com', client_secret: secret };
@@ -108,4 +118,31 @@ test('the Worker isolates registration email challenges while tracking retries',
   const completed = await register(second.challenge.id, second.code, { source: '203.0.113.7' });
   assert.equal(completed.profile.email, alice.email);
   assert.equal((await register(other.challenge.id, other.code, { clientSecret: otherSecret })).profile.email, bob.email);
+
+  // Re-verifying Alice's canonical mailbox from a fresh device recovers her account instead of minting a new one.
+  const recoveredCode = await email(
+    { email: 'Alice+reinstall@QQ.COM', client_secret: thirdSecret },
+    { source: '198.51.100.31' },
+  );
+  const recovered = await register(recoveredCode.challenge.id, recoveredCode.code, {
+    clientSecret: thirdSecret, source: '198.51.100.31',
+  });
+  assert.deepEqual(recovered.account, completed.account);
+  assert.notDeepEqual(recovered.credential, completed.credential);
+  const afterRecovery = (await call('/v1/admin/console', undefined, { method: 'GET', admin: true })).value;
+  assert.equal(afterRecovery.account_count, 2);
+
+  // Rotating IPs targeting the same canonical Gmail mailbox hits the per-recipient limit after burst 3.
+  for (const [idx, alias] of ['target@gmail.com', 'T.a.r.g.e.t+1@googlemail.com', 'target+2@gmail.com'].entries()) {
+    await email(
+      { email: alias, client_secret: randomBytes(32).toString('base64url') },
+      { source: `198.51.100.${40 + idx}` },
+    );
+  }
+  const recipientLimited = await call(
+    '/v1/accounts/email',
+    { email: 't.a.r.g.e.t+3@gmail.com', client_secret: randomBytes(32).toString('base64url') },
+    { status: 429, source: '198.51.100.44' },
+  );
+  assert.equal(recipientLimited.value.kind, 'rate_limited');
 });

@@ -4,6 +4,7 @@ use crate::{
     Profile, Rate, Registration, RegistrationPolicy, Session, Store,
     admission::{AdmissionProof, throttle_key},
     password::{invalid_credentials, valid_password_length},
+    profile::email_owner_key,
     store::{key, load, save},
 };
 use anyhow::{Result, ensure};
@@ -122,7 +123,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
         let account_count = self.account_count()?;
         // Dropping the returned admission handle preserves valid proofs and creation
         // quota for commit while still persisting failed proof attempts.
-        let _preview = self.creation_admission(
+        let preview = self.creation_admission(
             source,
             attempt,
             AdmissionProof {
@@ -132,6 +133,9 @@ impl<R: Store, E: Environment> Authority<R, E> {
             &settings,
             account_count,
         )?;
+        if let Some((_, canonical)) = preview.verified_email() {
+            self.ensure_email_available(canonical, None)?;
+        }
         // Charge per-source and global password-hashing limits atomically so aborted
         // or racing clients cannot trigger edge Argon2 without spending capacity.
         self.throttle_all([
@@ -165,18 +169,43 @@ impl<R: Store, E: Environment> Authority<R, E> {
         }
         let settings = self.settings()?;
         let account_count = self.account_count()?;
-        let email = self
-            .creation_admission(
-                source,
-                attempt,
-                AdmissionProof {
-                    challenge: request.challenge.as_deref(),
-                    solution: request.solution.as_deref(),
-                },
-                &settings,
-                account_count,
-            )?
-            .consume(&mut self.store)?;
+        let admission = self.creation_admission(
+            source,
+            attempt,
+            AdmissionProof {
+                challenge: request.challenge.as_deref(),
+                solution: request.solution.as_deref(),
+            },
+            &settings,
+            account_count,
+        )?;
+        let existing_owner = admission
+            .verified_email()
+            .map(|(_, canonical)| self.email_owner(canonical))
+            .transpose()?
+            .flatten();
+        if let Some(existing_id) = existing_owner {
+            // Password registration explicitly creates a new named account and must
+            // not silently overwrite or merge into another account's credentials.
+            ensure!(
+                name.is_none(),
+                Fault::Denied {
+                    reason: "email_taken".into()
+                }
+            );
+            // Passwordless email verification recovers the existing account with a
+            // new device credential so reinstalls work while keeping one allowance
+            // and block state per canonical mailbox.
+            admission.consume(&mut self.store)?;
+            let account = self.ensure_account(existing_id)?;
+            tracing::info!(
+                event = "account_recovered_by_email",
+                account = ?account.id,
+                source
+            );
+            return self.new_credential(account.id, request.client_secret);
+        }
+        let verified_email = admission.consume(&mut self.store)?;
         let id = self.environment.random()?;
         let account = Account {
             id,
@@ -184,12 +213,15 @@ impl<R: Store, E: Environment> Authority<R, E> {
             username: name.clone(),
             password: request.password,
             profile: Profile {
-                revision: u64::from(email.is_some()),
-                email,
+                revision: u64::from(verified_email.is_some()),
+                email: verified_email.as_ref().map(|email| email.address.clone()),
                 ..Profile::default()
             },
             version: 0,
         };
+        if let Some(email) = &verified_email {
+            save(&mut self.store, &email_owner_key(&email.canonical), &id)?;
+        }
         if let Some(name) = name {
             save(&mut self.store, &format!("username/{name}"), &id)?;
         }

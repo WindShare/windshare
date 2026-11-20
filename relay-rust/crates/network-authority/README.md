@@ -37,7 +37,8 @@ certificate renewal. Pass their outbound IPs in `--trusted-proxy-ips` so the Wor
 can apply source limits to original clients.
 
 For email registration and account email changes, set variable `EMAIL_WEBHOOK_URL` and secret `EMAIL_WEBHOOK_TOKEN` in the same environment.
-Both use the same [consumer mailbox domain allowlist](src/profile.rs).
+Both use the same [consumer mailbox domain allowlist](src/profile.rs), optionally extended via comma-separated `EXTRA_EMAIL_DOMAINS`, and issue 6-digit verification codes with per-source, per-recipient, and global delivery limits.
+Each canonical email address maps to one account: passwordless email verification recovers the existing account with a new device credential while preserving its allowance and block status.
 The HTTPS webhook receives bearer-authenticated JSON `{to,subject,text}`; a 2xx
 response confirms acceptance. Its timeout is 15 seconds.
 

@@ -22,6 +22,7 @@ pub struct Context {
     csrf: String,
     pub(super) initialization: String,
     directory: Option<serde_json::Value>,
+    extra_email_domains: Vec<String>,
 }
 impl Context {
     pub fn new(request: &Request, env: &Env) -> worker::Result<Self> {
@@ -69,6 +70,7 @@ impl Context {
                 .var("DIRECTORY_PUBLICATION")
                 .ok()
                 .and_then(|v| serde_json::from_str(&v.to_string()).ok()),
+            extra_email_domains: super::mail::extra_email_domains(env),
         })
     }
 }
@@ -143,6 +145,7 @@ fn api_routes(
         source,
         bearer,
         device_session,
+        extra_email_domains,
         ..
     } = context;
     let value = match (method, path.as_str()) {
@@ -168,7 +171,7 @@ fn api_routes(
             let input: ConfirmEmail = parse(bytes)?;
             serde_json::to_value(authority.confirm_email(
                 &bearer,
-                Mailbox::parse(&input.email)?,
+                Mailbox::parse_with_extra_domains(&input.email, &extra_email_domains)?,
                 &input.challenge,
                 &input.code,
             )?)?

@@ -28,7 +28,8 @@ test('the Worker changes email only after the provider accepts delivery and the 
         { type: 'CompiledWasm', path: join(build, 'index_bg.wasm') }],
       bindings: { AUTHORITY_ROOT: trust.root, AUTHORITY_CERTIFICATE: trust.certificate,
         AUTHORITY_SIGNING_SEED: (await readFile(join(keys, 'online-1.seed'), 'utf8')).trim(),
-        EMAIL_WEBHOOK_URL: 'https://mail.test/send', EMAIL_WEBHOOK_TOKEN: 'local-mail-token' },
+        EMAIL_WEBHOOK_URL: 'https://mail.test/send', EMAIL_WEBHOOK_TOKEN: 'local-mail-token',
+        EXTRA_EMAIL_DOMAINS: 'partner.edu' },
       durableObjects: { AUTHORITY: { className: 'NetworkAuthority', useSQLite: true } },
       outboundService: async request => {
         assert.equal(request.url, 'https://mail.test/send');
@@ -42,16 +43,19 @@ test('the Worker changes email only after the provider accepts delivery and the 
   t.after(() => mf.dispose());
   const worker = await mf.getWorker('authority');
   const secret = randomBytes(32).toString('base64url');
-  async function call(route, body, status = 200) {
+  const otherSecret = randomBytes(32).toString('base64url');
+  async function call(route, body, status = 200, bearer = secret, source = undefined) {
+    const headers = { Authorization: 'Bearer ' + bearer, 'Content-Type': 'application/json' };
+    if (source) headers['CF-Connecting-IP'] = source;
     const response = await worker.fetch('https://authority.test/v1/accounts' + route, {
-      method: 'POST', headers: { Authorization: 'Bearer ' + secret, 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      method: 'POST', headers, body: JSON.stringify(body),
     });
     const value = await response.json();
     assert.equal(response.status, status, JSON.stringify(value));
     return value;
   }
   await call('', { client_secret: secret });
+  await call('', { client_secret: otherSecret }, 200, otherSecret);
   const email = 'alice@qq.com';
   const { challenge, address } = await call('/profile/email', { email: 'alice@QQ.COM' });
   assert.equal(address, email);
@@ -60,6 +64,25 @@ test('the Worker changes email only after the provider accepts delivery and the 
   assert.equal((await call('/profile/email', { email: 'alice@gmail.com' }, 503)).kind, 'email_delivery_unavailable');
   assert.equal((await call('/ticket', {})).profile.email, null);
   const code = delivered.text.match(/Verification code: (\S+)/)[1];
+  assert.match(code, /^\d{6}$/);
   const verified = await call('/profile/email/verify', { email, challenge: challenge.id, code });
   assert.equal(verified.email, email);
+
+  // Another account cannot claim the same canonical mailbox, while EXTRA_EMAIL_DOMAINS works end-to-end.
+  rejectDelivery = false;
+  const dup = await call('/profile/email', { email: 'Alice+dup@qq.com' }, 200, otherSecret, '198.51.100.20');
+  const dupCode = delivered.text.match(/Verification code: (\S+)/)[1];
+  const taken = await call('/profile/email/verify', {
+    email: dup.address, challenge: dup.challenge.id, code: dupCode,
+  }, 403, otherSecret, '198.51.100.20');
+  assert.equal(taken.kind, 'denied');
+  assert.equal(taken.reason, 'email_taken');
+
+  assert.equal((await call('/profile/email', { email: 'user@example.org' }, 400, otherSecret, '198.51.100.21')).kind, 'unsupported_email');
+  const partner = await call('/profile/email', { email: 'student@PARTNER.EDU' }, 200, otherSecret, '198.51.100.21');
+  const partnerCode = delivered.text.match(/Verification code: (\S+)/)[1];
+  const partnerVerified = await call('/profile/email/verify', {
+    email: partner.address, challenge: partner.challenge.id, code: partnerCode,
+  }, 200, otherSecret, '198.51.100.21');
+  assert.equal(partnerVerified.email, 'student@partner.edu');
 });

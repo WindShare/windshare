@@ -1,6 +1,6 @@
 use crate::{
     Authority, Challenge, Environment, Fault, Rate, RegistrationMode, Settings, Store,
-    challenges::{AcceptedProof, CHALLENGE_SECONDS, ProofCheck, ProofKind},
+    challenges::{AcceptedProof, CHALLENGE_SECONDS, ProofCheck, ProofKind, VerifiedEmail},
     registration::RegistrationAttempt,
     store::{key, load, save},
 };
@@ -75,7 +75,14 @@ pub struct CreationAdmission {
 }
 
 impl CreationAdmission {
-    pub(crate) fn consume(mut self, store: &mut impl Store) -> Result<Option<String>> {
+    pub(crate) const fn verified_email(&self) -> Option<(&str, &str)> {
+        match &self.proof {
+            Some(proof) => proof.verified_email(),
+            None => None,
+        }
+    }
+
+    pub(crate) fn consume(mut self, store: &mut impl Store) -> Result<Option<VerifiedEmail>> {
         self.source.bucket.credit -= 1;
         self.global.credit -= 1;
         save(store, &self.source_key, &self.source)?;

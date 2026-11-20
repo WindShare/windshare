@@ -168,3 +168,12 @@ func TestNicknameCooldownSynchronizesAuthorityProfileWithoutSwitchingAccount(t *
 		t.Fatalf("retry of saved name: %v", err)
 	}
 }
+
+func TestCommandErrorCodeMapsEmailDenials(t *testing.T) {
+	if got := CommandErrorCode(&fault{Kind: "denied", Reason: "email_taken"}); got != "email_taken" {
+		t.Fatalf("email_taken mapped to %q", got)
+	}
+	if got := CommandErrorCode(&fault{Kind: "denied", Reason: "email_registration_disabled"}); got != "email_registration_disabled" {
+		t.Fatalf("email_registration_disabled mapped to %q", got)
+	}
+}

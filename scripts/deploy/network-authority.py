@@ -74,6 +74,12 @@ def deploy(args):
             raise ValueError("Email delivery requires an HTTPS EMAIL_WEBHOOK_URL and EMAIL_WEBHOOK_TOKEN")
         values["EMAIL_WEBHOOK_URL"] = mail_url
         secrets_to_upload["EMAIL_WEBHOOK_TOKEN"] = mail_token
+    extra_domains = [d.strip().lower() for d in os.environ.get("EXTRA_EMAIL_DOMAINS", "").split(",") if d.strip()]
+    for domain in extra_domains:
+        if not HOST.fullmatch(domain):
+            raise ValueError(f"Invalid EXTRA_EMAIL_DOMAINS entry: {domain}")
+    if extra_domains:
+        values["EXTRA_EMAIL_DOMAINS"] = ",".join(dict.fromkeys(extra_domains))
     if args.directory_release:
         release = json.loads(args.directory_release.read_text(encoding="utf-8"))
         index = json.loads(subprocess.check_output(

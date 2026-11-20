@@ -1,5 +1,6 @@
 use crate::{
-    Authority, Challenge, Environment, Fault, RegistrationMode, Settings, Store,
+    Authority, Challenge, Environment, Fault, Mailbox, Rate, RegistrationMode, Settings, Store,
+    admission::throttle_key,
     registration::{RegistrationAttempt, digest},
     store::{key, load, save},
 };
@@ -13,8 +14,23 @@ pub const CHALLENGE_SECONDS: u64 = 15 * 60;
 const MAX_ATTEMPTS: u8 = 5;
 const MAX_SOLUTION_BYTES: usize = 128;
 const MAX_CHALLENGE_ID_BYTES: usize = 64;
-const EMAIL_BURST: u64 = 3;
-const EMAIL_REFILL_SECONDS: u64 = 60;
+const EMAIL_CODE_MODULUS: u128 = 1_000_000;
+const EMAIL_SOURCE_RATE: Rate = Rate {
+    burst: 3,
+    refill_seconds: 60,
+};
+const EMAIL_RECIPIENT_RATE: Rate = Rate {
+    burst: 3,
+    refill_seconds: 600,
+};
+const EMAIL_ACCOUNT_RATE: Rate = Rate {
+    burst: 3,
+    refill_seconds: 300,
+};
+const EMAIL_GLOBAL_RATE: Rate = Rate {
+    burst: 60,
+    refill_seconds: 10,
+};
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ProofKind {
     Work,
@@ -73,8 +89,14 @@ enum ProofMethod {
     },
     Email {
         address: String,
+        canonical: String,
         code_digest: [u8; 32],
     },
+}
+
+pub struct VerifiedEmail {
+    pub address: String,
+    pub canonical: String,
 }
 
 impl ProofMethod {
@@ -118,7 +140,7 @@ impl Proof {
 
     fn accepts(&self, solution: &str) -> bool {
         match &self.method {
-            ProofMethod::Email { code_digest, .. } => digest(solution) == *code_digest,
+            ProofMethod::Email { code_digest, .. } => digest(solution.trim()) == *code_digest,
             ProofMethod::Work { bits } => {
                 let hash = Sha256::new()
                     .chain_update(self.id.as_bytes())
@@ -147,7 +169,16 @@ pub struct AcceptedProof {
 }
 
 impl AcceptedProof {
-    pub(crate) fn consume(self, store: &mut impl Store) -> Result<Option<String>> {
+    pub(crate) const fn verified_email(&self) -> Option<(&str, &str)> {
+        match &self.proof.method {
+            ProofMethod::Work { .. } => None,
+            ProofMethod::Email {
+                address, canonical, ..
+            } => Some((address.as_str(), canonical.as_str())),
+        }
+    }
+
+    pub(crate) fn consume(self, store: &mut impl Store) -> Result<Option<VerifiedEmail>> {
         store.delete(&self.storage_key)?;
         tracing::debug!(
             event = "verification_proof_redeemed",
@@ -156,7 +187,9 @@ impl AcceptedProof {
         );
         Ok(match self.proof.method {
             ProofMethod::Work { .. } => None,
-            ProofMethod::Email { address, .. } => Some(address),
+            ProofMethod::Email {
+                address, canonical, ..
+            } => Some(VerifiedEmail { address, canonical }),
         })
     }
 }
@@ -238,20 +271,46 @@ impl<R: Store, E: Environment> Authority<R, E> {
         &mut self,
         source: &str,
         owner: EmailOwner,
-        address: &str,
+        address: &Mailbox,
     ) -> Result<EmailDelivery> {
-        self.throttle(source, "email-source", EMAIL_BURST, EMAIL_REFILL_SECONDS)?;
-        if let EmailOwner::Account(id) = &owner {
-            self.throttle(
-                &account_email_key(id),
-                "email-account",
-                EMAIL_BURST,
-                EMAIL_REFILL_SECONDS,
-            )?;
+        let source_limit = (
+            "email-source",
+            throttle_key("email-source", source.as_bytes()),
+            EMAIL_SOURCE_RATE,
+        );
+        let recipient_limit = (
+            "email-recipient",
+            throttle_key("email-recipient", address.canonical().as_bytes()),
+            EMAIL_RECIPIENT_RATE,
+        );
+        let global_limit = (
+            "email-global",
+            throttle_key("email-global", b"global"),
+            EMAIL_GLOBAL_RATE,
+        );
+        match &owner {
+            EmailOwner::Registration(_) => {
+                self.throttle_all([source_limit, recipient_limit, global_limit])?;
+            }
+            EmailOwner::Account(id) => {
+                let account_limit = (
+                    "email-account",
+                    throttle_key("email-account", id),
+                    EMAIL_ACCOUNT_RATE,
+                );
+                self.throttle_all([source_limit, recipient_limit, account_limit, global_limit])?;
+            }
         }
-        let code = URL_SAFE_NO_PAD.encode(self.environment.random::<16>()?);
+        // A 6-digit OTP is easy to type across devices and stays safe under the
+        // 5-attempt, 15-minute challenge ceiling; reducing 128 random bits keeps
+        // modulo bias below 3e-33 without retrying the RNG.
+        let code = format!(
+            "{:06}",
+            u128::from_be_bytes(self.environment.random::<16>()?) % EMAIL_CODE_MODULUS
+        );
         let method = ProofMethod::Email {
-            address: address.into(),
+            address: address.as_str().into(),
+            canonical: address.canonical().into(),
             code_digest: digest(&code),
         };
         let proof = self.new_proof(method)?;
