@@ -128,3 +128,58 @@ fn wire_refusals_and_untracked_forwards_accumulate_independently() {
     assert_eq!(snapshot.completed_sessions, 0);
     assert_eq!(snapshot.throughput_sessions, [0; 6]);
 }
+
+#[test]
+fn forwarding_recorder_bypasses_global_session_lock_and_evicts_ended_handles() {
+    let metrics = Metrics::default();
+    let first = session_key(4, 1);
+    let second = session_key(4, 2);
+    let base = Instant::now();
+
+    metrics.begin(first);
+    let mut outbound = metrics.recorder();
+    let mut inbound = metrics.recorder();
+
+    // First write on each direction resolves and caches the shared per-session handle.
+    outbound.forwarded(first, 50_000, base, base + Duration::from_millis(100));
+    inbound.forwarded(
+        first,
+        50_000,
+        base + Duration::from_millis(40),
+        base + Duration::from_millis(120),
+    );
+
+    // Steady-state writes must succeed while another thread holds the node-wide session write lock.
+    let exclusive = metrics.0.sessions.write().expect("node metrics");
+    outbound.forwarded(
+        first,
+        100_000,
+        base + Duration::from_millis(120),
+        base + Duration::from_millis(200),
+    );
+    drop(exclusive);
+
+    metrics.end(first);
+    // A trailing write for an ended session still counts forwarded_bytes but drops its cached handle.
+    outbound.forwarded(
+        first,
+        1_024,
+        base + Duration::from_millis(200),
+        base + Duration::from_millis(250),
+    );
+    assert!(outbound.sessions.is_empty());
+
+    // Opening a subsequent session on a long-lived writer prunes ended handles cached on `inbound`.
+    metrics.begin(second);
+    inbound.forwarded(second, 64_000, base, base + Duration::from_secs(1));
+    assert_eq!(inbound.sessions.len(), 1);
+    assert_eq!(inbound.sessions[0].key, second);
+    metrics.end(second);
+
+    let snapshot = metrics.snapshot();
+    assert_eq!(snapshot.active_sessions, 0);
+    assert_eq!(snapshot.completed_sessions, 2);
+    assert_eq!(snapshot.forwarded_bytes, 200_000 + 1_024 + 64_000);
+    assert_eq!(snapshot.forwarding_nanoseconds, 1_200_000_000);
+    assert_eq!(snapshot.throughput_sessions, [1, 0, 1, 0, 0, 0]);
+}

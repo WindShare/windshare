@@ -17,7 +17,7 @@ impl Residency {
 
 impl Drop for Residency {
     fn drop(&mut self) {
-        let mut state = self.access.state.lock().expect("node access state");
+        let mut state = self.access.write();
         if let Some((_, references)) = state.residents.get_mut(&self.share) {
             *references -= 1;
             if *references == 0 {
@@ -33,7 +33,7 @@ impl Service {
         share: ShareId,
         attribution: Attribution,
     ) -> Result<Residency, RegistrationDecision> {
-        let mut state = self.state.lock().expect("node access state");
+        let mut state = self.write();
         let entry = state.residents.entry(share).or_insert((attribution, 0));
         if entry.0 != attribution {
             return Err(RegistrationDecision::Denied);
@@ -52,7 +52,7 @@ impl Service {
         share: ShareId,
         attribution: Attribution,
     ) -> Result<Residency, RegistrationDecision> {
-        let mut state = self.state.lock().expect("node access state");
+        let mut state = self.write();
         if state.denied(share, attribution) {
             return Err(RegistrationDecision::Denied);
         }
