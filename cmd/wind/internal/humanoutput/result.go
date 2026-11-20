@@ -17,7 +17,12 @@ func formatTransferResult(result clievent.TransferResult, symbols Symbols) []ter
 	case clievent.ResultPartial:
 		headline = statusLine(symbols.Warning, withDrift("Download finished partially in "+elapsed, result.Drift()), terminalcanvas.StyleWarning)
 	case clievent.ResultPaused:
-		headline = statusLine(symbols.Paused, withDrift("Download paused after "+elapsed, result.Drift()), terminalcanvas.StyleWarning)
+		verb := "Download paused after "
+		if failure, ok := result.Failure(); ok && failure.Code() == appobs.FailureRelayStopped {
+			// A stopped share cannot continue, so "paused" would suggest a retry.
+			verb = "Download stopped after "
+		}
+		headline = statusLine(symbols.Paused, withDrift(verb+elapsed, result.Drift()), terminalcanvas.StyleWarning)
 	default:
 		headline = statusLine(symbols.Failure, withDrift("Download failed after "+elapsed, result.Drift()), terminalcanvas.StyleError)
 	}

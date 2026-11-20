@@ -128,6 +128,11 @@ func (a *App) reportReceiveRecovery(result engine.ReceiveResult, selection recei
 		a.writeCompleteLine("Correct the request before starting another download.")
 	case engine.ReceiveRecoveryNeedsInspection:
 		a.writeCompleteLine("Inspect the reported failure before retrying.")
+	case engine.ReceiveRecoveryShareStopped:
+		if recovery.Retention == engine.ReceiveRetentionCheckpoints {
+			a.writeCompleteLine("Saved partials cannot be resumed because the share was stopped, and a new link does not reuse them.")
+			a.writeCompleteLine("Find the operation with wind resume list -o <original-directory>, then remove it with wind resume discard -o <original-directory> --item <N>.")
+		}
 	default:
 		if recovery.Retention == engine.ReceiveRetentionCheckpoints && recovery.Reason.Retryable() {
 			a.writeCompleteLine("Retry with wind resume retry -o <original-directory> --operation %x and the same link and selection.", result.Operation.Bytes())
@@ -212,36 +217,42 @@ func (a *App) receivePauseHandler() func(context.Context, engine.ReceivePause) (
 	}
 	reader := bufio.NewReader(a.Stdin)
 	return func(ctx context.Context, pause engine.ReceivePause) (engine.ReceiveRecoveryAction, error) {
-		reason := "a transfer or output failure"
-		switch pause.Reason {
-		case engine.ReceiveRecoveryCollision:
-			reason = "a destination collision; move the conflicting entry before retrying"
-		case engine.ReceiveRecoveryOwnershipUnknown:
-			reason = "blocked output ownership; unknown objects will remain untouched"
-		case engine.ReceiveRecoveryRevisionChanged:
-			reason = "a changed source revision; prior verified progress remains isolated"
+		return a.promptReceiveRecovery(ctx, reader, pause)
+	}
+}
+
+func (a *App) promptReceiveRecovery(ctx context.Context, reader *bufio.Reader, pause engine.ReceivePause) (engine.ReceiveRecoveryAction, error) {
+	heading, reason := "Download paused", "a transfer or output failure"
+	switch pause.Reason {
+	case engine.ReceiveRecoveryCollision:
+		reason = "a destination collision; move the conflicting entry before retrying"
+	case engine.ReceiveRecoveryOwnershipUnknown:
+		reason = "blocked output ownership; unknown objects will remain untouched"
+	case engine.ReceiveRecoveryRevisionChanged:
+		reason = "a changed source revision; prior verified progress remains isolated"
+	case engine.ReceiveRecoveryShareStopped:
+		heading, reason = "Download stopped", "the sender stopped this share; saved partials cannot be resumed from it or reused by a new link"
+	}
+	a.writeCompleteLine("%s: %s. Saved partials: %d bytes. Previously delivered: %d files (%d bytes).", heading, reason, pause.Transfer.Progress.RestartReusableBytes, pause.Transfer.Progress.FileOutcomes.PreviouslyPublishedFiles, pause.Transfer.Progress.PreviouslyPublishedBytes)
+	a.reportBlockedReceiveItems(pause.Transfer)
+	if pause.Mode == engine.OutputLiveOnly {
+		a.writeCompleteLine("Exit releases unfinished progress on this destination.")
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return engine.ReceiveRecoveryExit, err
 		}
-		a.writeCompleteLine("Download paused: %s. Saved partials: %d bytes. Previously delivered: %d files (%d bytes).", reason, pause.Transfer.Progress.RestartReusableBytes, pause.Transfer.Progress.FileOutcomes.PreviouslyPublishedFiles, pause.Transfer.Progress.PreviouslyPublishedBytes)
-		a.reportBlockedReceiveItems(pause.Transfer)
-		if pause.Mode == engine.OutputLiveOnly {
-			a.writeCompleteLine("Exit releases unfinished progress on this destination.")
+		choices, keys := receiveRecoveryChoices(pause)
+		a.writeCompleteLine("Choose %s [%s]:", choices, keys)
+		line, err := commandinput.ReadLine(ctx, reader)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return engine.ReceiveRecoveryExit, nil
+			}
+			return engine.ReceiveRecoveryExit, err
 		}
-		for {
-			if err := ctx.Err(); err != nil {
-				return engine.ReceiveRecoveryExit, err
-			}
-			choices, keys := receiveRecoveryChoices(pause)
-			a.writeCompleteLine("Choose %s [%s]:", choices, keys)
-			line, err := commandinput.ReadLine(ctx, reader)
-			if err != nil {
-				if errors.Is(err, io.EOF) {
-					return engine.ReceiveRecoveryExit, nil
-				}
-				return engine.ReceiveRecoveryExit, err
-			}
-			if action, allowed := parseReceiveRecoveryAction(pause, line); allowed {
-				return action, nil
-			}
+		if action, allowed := parseReceiveRecoveryAction(pause, line); allowed {
+			return action, nil
 		}
 	}
 }

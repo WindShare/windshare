@@ -158,3 +158,46 @@ func recoveryTestPreparation(t *testing.T, mode OutputMode) (getOutputPreparatio
 	operation.Mode, operation.Control = mode, authority
 	return getOutputPreparation{authority: authority, operation: &operation, mode: mode}, authority
 }
+
+func TestStoppedShareOffersOnlyDiscardOrExit(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		interactive bool
+		action      RecoveryAction
+		retention   ProgressRetention
+		discards    int
+	}{
+		{"unattended keeps partials without retry", false, 0, RetentionCheckpoints, 0},
+		{"exit keeps partials", true, RecoveryExit, RetentionCheckpoints, 0},
+		{"discard removes unfinished output", true, RecoveryDiscard, RetentionDiscarded, 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			prepared, authority := recoveryTestPreparation(t, OutputResumable)
+			attempts, prompts := 0, 0
+			request := Request{Capability: link.Link{Suite: link.SuiteSenderAuthenticated}, Connectivity: ConnectivityRelayOnly}
+			if test.interactive {
+				request.OnPause = func(_ context.Context, pause Pause) (RecoveryAction, error) {
+					prompts++
+					if pause.Reason != RecoveryShareStopped || pause.Allows(RecoveryRetry) ||
+						!pause.Allows(RecoveryDiscard) || !pause.Allows(RecoveryExit) {
+						t.Fatalf("stopped share pause = %+v", pause)
+					}
+					return test.action, nil
+				}
+			}
+			completed := runOperation(t.Context(), request, Dependencies{}, func(_ context.Context, _ preparedRequest, _ Dependencies, retained *getOutputPreparation) task.Completion[Result] {
+				attempts++
+				*retained = prepared
+				return settlePreparationFailure(stepNetworkFailure, Failure{Code: FailureShareStopped}, nil, nil)
+			})
+			wantPrompts := 0
+			if test.interactive {
+				wantPrompts = 1
+			}
+			if attempts != 1 || prompts != wantPrompts || authority.discards != test.discards ||
+				completed.Value.Recovery != (RecoveryOutcome{Retention: test.retention, Reason: RecoveryShareStopped}) {
+				t.Fatalf("recovery=%+v attempts=%d prompts=%d discards=%d", completed.Value.Recovery, attempts, prompts, authority.discards)
+			}
+		})
+	}
+}

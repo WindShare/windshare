@@ -131,11 +131,18 @@ func runOperation(ctx context.Context, request Request, deps Dependencies, attem
 			"retention":         diagnostics.Uint(uint64(completed.Value.Recovery.Retention)),
 			"attempt_available": diagnostics.Bool(attemptAvailable), "retry_allowed": diagnostics.Bool(retryAllowed),
 		}))
-		if ctx.Err() != nil || request.OnPause == nil || !retryAllowed {
+		actions := []RecoveryAction{RecoveryRetry, RecoveryDiscard, RecoveryExit}
+		// A stopped share can never be retried, but its unfinished output can
+		// still be discarded while this operation owns it.
+		offerDiscard := completed.Value.Recovery.Reason == RecoveryShareStopped && control != nil
+		if offerDiscard {
+			actions = []RecoveryAction{RecoveryDiscard, RecoveryExit}
+		}
+		if ctx.Err() != nil || request.OnPause == nil || !retryAllowed && !offerDiscard {
 			return
 		}
 		paused := Pause{Operation: completed.Value.Operation, Mode: retained.mode,
-			Reason: completed.Value.Recovery.Reason, Actions: []RecoveryAction{RecoveryRetry, RecoveryDiscard, RecoveryExit},
+			Reason: completed.Value.Recovery.Reason, Actions: actions,
 			Transfer: completed.Value.Transfer}
 		action, err := request.OnPause(ctx, paused)
 		if ctx.Err() != nil {

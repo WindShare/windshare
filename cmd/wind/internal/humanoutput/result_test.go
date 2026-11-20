@@ -76,6 +76,23 @@ func TestTransferResultVocabularyAndOutcomeAuthority(t *testing.T) {
 	}
 }
 
+func TestStoppedShareResultIsNotCalledPaused(t *testing.T) {
+	t.Parallel()
+	result, err := clievent.NewTransferResult(clievent.TransferResultSpec{
+		Status: clievent.ResultPaused, ExitCode: clievent.ExitNetwork,
+		Elapsed: 1300 * time.Millisecond, Destination: appobs.NewDisplayPath("out"),
+		Files: appobs.FileOutcomes{DownloadedFiles: 3, PausedFiles: 1}, CountersExact: true,
+		Failure: mustFailure(t, appobs.FailureRelayStopped),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	headline := lineText(formatTransferResult(result, SelectSymbols(false))[0])
+	if !strings.Contains(headline, "Download stopped after") || strings.Contains(headline, "paused") {
+		t.Fatalf("stopped share headline = %q", headline)
+	}
+}
+
 func TestShareResultNeverInfersTrafficTotals(t *testing.T) {
 	t.Parallel()
 	clean, err := clievent.NewShareResult(clievent.ShareResultSpec{Publication: clievent.SharePublished, ExitCode: clievent.ExitSuccess, Elapsed: time.Hour})
