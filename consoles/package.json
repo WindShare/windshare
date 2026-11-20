@@ -9,6 +9,8 @@
     "dev:network": "vite --mode network",
     "build:relay": "tsc -p relay && vite build --mode relay",
     "build:network": "tsc -p network && vite build --mode network",
+    "verify:dist": "node build/verify-dist.mjs",
+    "test": "node --test build/*.test.mjs",
     "typecheck": "tsc -p relay && tsc -p network",
     "lint": "eslint ."
   },

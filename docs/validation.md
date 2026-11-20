@@ -31,7 +31,7 @@ Make targets operate on the repository root and use the installed Go, Rust, Node
 | `make vectors-update` | Regenerates protocol vectors. |
 | `make rust` | Cargo fmt, Clippy, native tests, doctests, coverage, and wasm builds. |
 | `make desktop-check` | Desktop workspace: Cargo fmt, strict Clippy, non-UI tests (including native host ABI and artifact staging), and native build; requires Node.js, Go, a C compiler, and GPUI prerequisites. |
-| `make web` | Web and Consoles ESLint, Consoles typecheck, Web TypeScript/Vite build, and Vitest. |
+| `make web` | Web and Consoles ESLint, Consoles typecheck and embedded bundle verification, Web TypeScript/Vite build, and Vitest. |
 | `make e2e` | `TestUserTraceCriticalSenderRelayReceiver` over real CLI processes. |
 | `make browser` | Chromium relay smoke and short browser contracts. |
 | `make browser-weekly` | `browser` plus Firefox/WebKit contracts, Chromium periodic contracts, progressive catalog, direct/TURN routes, and Pion interop. |
@@ -126,7 +126,7 @@ CI calls the reusable [native output workflow](../.github/workflows/native-outpu
 
 [Source and Binary Release](../.github/workflows/release.yml) is started manually with an exact commit SHA and a root `vX.Y.Z` version. Resolution runs on the default branch and binds the version to a default-branch revision.
 
-Linux (ext4) and Windows (NTFS) jobs reconstruct the deterministic source bundle, including pinned Pion nested modules, licenses, manifest, and patches, then run the build, vet, vulnerability, test, and production-output gates. These exercise the shared output backend and public recovery factory, including process-exit lock release, no-copy publication, timestamps, and preserved download progress. The `wsrelay` asset is built from Rust with a static C runtime; Linux needs the stable `x86_64-unknown-linux-musl` target and `musl-gcc`. The hosted Linux gate boots the packaged relay twice under QEMU’s baseline x86-64 CPU to verify SQLite restart on older hosts. After comparing the source bundles byte for byte, the workflow creates the immutable version tag and publishes source and `wind`/`wsrelay` binary ZIPs with SHA-256 checksums.
+Linux (ext4) and Windows (NTFS) jobs reconstruct the deterministic source bundle, including pinned Pion nested modules, licenses, manifest, and patches, then run the build, vet, vulnerability, test, and production-output gates, while a parallel job verifies embedded `console-dist/` bundles against a clean rebuild of that exact commit. These exercise the shared output backend and public recovery factory, including process-exit lock release, no-copy publication, timestamps, and preserved download progress. The `wsrelay` asset is built from Rust with a static C runtime; Linux needs the stable `x86_64-unknown-linux-musl` target and `musl-gcc`. The hosted Linux gate boots the packaged relay twice under QEMU’s baseline x86-64 CPU to verify SQLite restart on older hosts. After comparing the source bundles byte for byte, the workflow creates the immutable version tag and publishes source and `wind`/`wsrelay` binary ZIPs with SHA-256 checksums.
 
 Local release scripts validate and package but never publish. See [installation](installation.md) for the supported clone, source-bundle, and binary paths.
 

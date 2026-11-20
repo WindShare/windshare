@@ -37,10 +37,13 @@ assert_precedes() {
 }
 
 workflow=.github/workflows/release.yml
+console_bundle=.github/workflows/console-bundle.yml
 weekly=.github/workflows/weekly.yml
 ci=.github/workflows/ci.yml
 linux_gate=scripts/ci/linux/release.sh
 windows_gate=scripts/ci/windows/release.ps1
+linux_web=scripts/ci/linux/web.sh
+windows_web=scripts/ci/windows/web.ps1
 
 assert_contains "$workflow" 'workflow_dispatch:'
 assert_contains "$workflow" 'commit_sha:'
@@ -48,6 +51,13 @@ assert_contains "$workflow" 'version:'
 assert_contains "$workflow" 'ref: ${{ github.event.repository.default_branch }}'
 assert_contains "$workflow" 'run: bash scripts/ci/release-ref.sh resolve'
 assert_contains "$workflow" 'run: bash scripts/ci/release-ref.sh publish'
+assert_contains "$workflow" 'uses: ./.github/workflows/console-bundle.yml'
+assert_contains "$workflow" 'ref: ${{ needs.release.outputs.commit_sha }}'
+assert_contains "$workflow" '- console-bundle'
+assert_contains "$console_bundle" 'test "$(git rev-parse HEAD)" = "$EXPECTED_REF"'
+assert_contains "$console_bundle" 'pnpm -C consoles run verify:dist "$APP"'
+assert_contains "$linux_web" 'pnpm -C consoles verify:dist'
+assert_contains "$windows_web" 'pnpm -C consoles verify:dist'
 assert_contains "$workflow" 'scripts/ci/linux/release.sh "$RELEASE_VERSION" "$RELEASE_COMMIT_SHA" linux-ext4'
 assert_contains "$workflow" 'scripts/ci/windows/release.ps1 -Version $env:RELEASE_VERSION -CommitSHA $env:RELEASE_COMMIT_SHA -NativeProfile windows-ntfs'
 assert_contains "$workflow" 'group: release-linux-${{ needs.release.outputs.version }}'

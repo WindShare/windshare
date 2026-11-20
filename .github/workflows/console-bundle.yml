@@ -5,6 +5,10 @@ on:
       app:
         type: string
         required: true
+      ref:
+        type: string
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -15,10 +19,18 @@ jobs:
     timeout-minutes: 10
     env:
       APP: ${{ inputs.app }}
+      EXPECTED_REF: ${{ inputs.ref }}
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ inputs.ref }}
           persist-credentials: false
+      - name: Verify exact pinned checkout
+        if: inputs.ref != ''
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_REF"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
       - uses: actions/setup-node@v7
         with:
           node-version: 24
@@ -26,13 +38,9 @@ jobs:
         with:
           package_json_file: consoles/package.json
       - run: pnpm -C consoles install --frozen-lockfile
-      - name: Compare every embedded file with a clean rebuild
+      - name: Typecheck consoles and run bundle verifier tests
         run: |
-          case "$APP" in
-            relay) bundle=relay-rust/console/console-dist ;;
-            network) bundle=relay-rust/crates/network-authority/console-dist ;;
-            *) exit 1 ;;
-          esac
-          cp -R "$bundle" "$RUNNER_TEMP/checked-in"
-          pnpm -C consoles run "build:$APP"
-          diff -qr "$RUNNER_TEMP/checked-in" "$bundle"
+          pnpm -C consoles typecheck
+          pnpm -C consoles test
+      - name: Compare every embedded file with a clean rebuild
+        run: pnpm -C consoles run verify:dist "$APP"

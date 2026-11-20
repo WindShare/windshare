@@ -14,6 +14,12 @@ pnpm -C consoles lint
 echo "-- Consoles TypeScript"
 pnpm -C consoles typecheck
 
+echo "-- Consoles build verification tests"
+pnpm -C consoles test
+
+echo "-- Consoles embedded bundle consistency"
+pnpm -C consoles verify:dist
+
 echo "-- TypeScript and Vite build"
 pnpm -C web build
 
