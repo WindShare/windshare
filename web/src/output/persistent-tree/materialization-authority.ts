@@ -22,7 +22,7 @@ import {
   newFileCheckpointV2,
   type FileCheckpointV2,
 } from '../persistence/checkpoint'
-import type { FileCheckpointJournal } from '../persistence/journal'
+import type { CheckpointLineageDecision, FileCheckpointJournal } from '../persistence/journal'
 import type { PerformanceFilePipelineObservation } from '../../diagnostics/performance/performance-runtime-observations'
 import { snapshotMaterializationRootRelativePath, type MaterializationRootRelativePath } from '../../transfer/job/coordinate/direct-tree'
 import type {
@@ -183,30 +183,35 @@ export async function resolveCompletedPersistentRevision(input: Readonly<{
   fileId: string
   expectedSize: bigint | undefined
   path: MaterializationRootRelativePath
-  checkpoints: Pick<FileCheckpointJournal, 'binding' | 'readCommitted'>
+  checkpoints: Pick<FileCheckpointJournal, 'binding' | 'readCommitted' | 'lookupLineage'>
   semantic?: SemanticPersistentOutputJournal
   ledgerBinding?: Promise<MaterializationLedgerBindingV1>
-}>): Promise<OpenedFileRevision | undefined> {
+}>): Promise<Readonly<{ revision: OpenedFileRevision; decision: CheckpointLineageDecision }> | undefined> {
   const { fileId, expectedSize, path, checkpoints, semantic, ledgerBinding } = input
   const lineageId = deriveCheckpointLineageID({
     ...checkpoints.binding,
     fileId,
     canonicalPath: path,
   })
-  const committed = await checkpoints.readCommitted(lineageId)
-  if (committed === undefined || !completedCheckpointMatchesRequest(committed, fileId, expectedSize, path)) {
-    return undefined
-  }
+  const snapshot = await checkpoints.readCommitted(lineageId)
+  if (snapshot === undefined || !completedCheckpointMatchesRequest(snapshot, fileId, expectedSize, path)) return undefined
+  // Local recovery can only select an existing lineage. A concurrent readmission
+  // may have advanced its revision since the point read.
+  const selection = await checkpoints.lookupLineage({
+    lineageId, fileId, canonicalPath: path, fileRevision: snapshot.fileRevision,
+    exactSize: snapshot.exactSize, ...sourceMetadataFields(snapshot),
+  })
+  if (selection.kind !== 'exact' && selection.kind !== 'metadata-match') return undefined
+  const committed = selection.record
+  if (committed.ownedObjectId !== snapshot.ownedObjectId ||
+      !completedCheckpointMatchesRequest(committed, fileId, expectedSize, path)) return undefined
   if (semantic !== undefined && ledgerBinding !== undefined) {
     const delivered = await hasMatchingFinalProof(semantic, await ledgerBinding, committed)
     if (!delivered && committed.exactSize === 0n) return undefined
   }
-  return Object.freeze({
-    fileId: committed.fileId,
-    fileRevision: committed.fileRevision,
-    ...sourceMetadataFields(committed),
-    exactSize: committed.exactSize,
-  })
+  const revision = Object.freeze({ fileId, fileRevision: committed.fileRevision,
+    ...sourceMetadataFields(committed), exactSize: committed.exactSize })
+  return { revision, decision: { kind: 'exact', lineageId, record: committed } }
 }
 
 export async function hasMatchingFinalProof(

@@ -211,27 +211,32 @@ export class BrowserDeliveryEngine {
     // Readmission must let the newly authenticated source claim undelivered bytes.
     // A generation-zero empty handle is still a reservation.
     if (admission === 'resume' && checkpoint.checkpointGeneration > 0n && fileCheckpointIsComplete(checkpoint)) {
-      if (record.placement === 'staged') {
-        record = await this.#advance(record, { kind: 'staged-complete', stage: checkpoint })
-        const reservation = await this.#options.reservation(record)
-        await reservation.received(checkpoint.exactSize)
-        await reservation.queueExport()
-      } else {
-        // A complete paused checkpoint can precede the final-file ledger. Reopen
-        // owned local content to establish that proof before claiming a saved target.
-        const target = await this.#openTarget(record)
-        try {
-          const commit = await target.commit()
-          record = await this.#options.repository.finalizeDirect(record, commit.checkpointProof)
-          this.#options.changed(record)
-        } finally { await target.close() }
-      }
-    } else if (record.state.kind === 'receiving' &&
+      return this.#finalizeRecoveredFile(record, checkpoint)
+    }
+    if (record.state.kind === 'receiving' &&
         (record.state.checkpoint?.checkpointGeneration !== checkpoint.checkpointGeneration ||
         record.state.checkpoint?.stateGeneration !== checkpoint.stateGeneration)) {
       record = await this.#advanceReceiving(record, checkpoint)
     }
     return record
+  }
+
+  async #finalizeRecoveredFile(record: BrowserDeliveryRecordV1, checkpoint: FileCheckpointV2): Promise<BrowserDeliveryRecordV1> {
+    if (record.placement === 'staged') {
+      const staged = await this.#advance(record, { kind: 'staged-complete', stage: checkpoint })
+      const reservation = await this.#options.reservation(staged)
+      await reservation.received(checkpoint.exactSize)
+      await reservation.queueExport()
+      return staged
+    }
+    // A flushed target still needs its final-file receipt before the folder can claim delivery.
+    const target = await this.#openTarget(record)
+    try {
+      const commit = await target.commit()
+      const saved = await this.#options.repository.finalizeDirect(record, commit.checkpointProof)
+      this.#options.changed(saved)
+      return saved
+    } finally { await target.close() }
   }
 
   /** The caller has fenced admission and drained every writer before classifying current storage. */

@@ -123,8 +123,14 @@ export class BrowserDeliveryMaterialization implements PersistentMaterialization
     const latest = this.#records.get(source.fileId)
     if (latest === undefined) return this.#createRecord(source, materializationRelativePath)
     // A local save can advance the record while the sender authenticates the new revision.
-    const record = reconciled?.digest === latest.digest ? reconciled
-      : await this.#engine.reconcile(source.fileId, request.requireRevisionOpen ? 'readmit' : 'resume')
+    const admission = request.requireRevisionOpen ? 'readmit' : 'resume'
+    const record = reconciled?.digest === latest.digest ? reconciled : await this.#engine.reconcile(source.fileId, admission)
+    return this.#matchRetainedSource(record, source, materializationRelativePath)
+  }
+
+  #matchRetainedSource(
+    record: BrowserDeliveryRecordV1, source: BrowserDeliverySource, materializationRelativePath: readonly string[],
+  ): BrowserDeliveryRecordV1 {
     const expected = createBrowserDeliveryRecord({ policy: this.#options.policy, source, materializationRelativePath,
       placement: record.placement, placementReason: record.placementReason })
     const reopened = expected.source.fileRevision !== record.source.fileRevision

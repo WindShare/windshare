@@ -220,7 +220,8 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
     let openedHandle: PersistentTreeFile | undefined
     let stageScope: PersistentOutputStageScope | undefined
     try {
-      const revision = await this.#resolveFileRevision(request, materializationRelativePath)
+      const retained = await this.#completedFile(request, materializationRelativePath)
+      const revision = retained?.revision ?? await this.#openSourceRevision(request)
       // Source failures retain their protocol attribution; only local materialization
       // can produce checkpoint evidence.
       try {
@@ -233,7 +234,7 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
             context,
           ),
         )
-        const decision = await this.#selectInitialCheckpoint(
+        const decision = retained?.decision ?? await this.#selectInitialCheckpoint(
           revision,
           materializationRelativePath,
           stageScope,
@@ -333,26 +334,25 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
     }
   }
 
-  async #resolveFileRevision(
-    request: PersistentFileRequest,
-    path: MaterializationRootRelativePath,
-  ): Promise<OpenedFileRevision> {
+  async #completedFile(
+    request: PersistentFileRequest, path: MaterializationRootRelativePath,
+  ): ReturnType<typeof resolveCompletedPersistentRevision> {
     const { fileId } = request
-    if (!request.requireRevisionOpen && fileId !== undefined &&
-        (this.#freshFileIds === undefined || this.#freshFileIds.has(fileId))) {
-      try {
-        const completed = await resolveCompletedPersistentRevision({
-          fileId, expectedSize: request.expectedSize, path,
-          checkpoints: this.#checkpoints,
-          ...(this.#semantic === undefined ? {} : { semantic: this.#semantic }),
-          ...(this.#ledgerBinding === undefined ? {} : { ledgerBinding: this.#ledgerBinding }),
-        })
-        if (completed !== undefined) return completed
-      } catch (error) {
-        this.#recordCheckpointFailure(error)
-        throw error
-      }
+    if (request.requireRevisionOpen || fileId === undefined ||
+        (this.#freshFileIds !== undefined && !this.#freshFileIds.has(fileId))) return undefined
+    try {
+      return await resolveCompletedPersistentRevision({
+        fileId, expectedSize: request.expectedSize, path, checkpoints: this.#checkpoints,
+        ...(this.#semantic === undefined ? {} : { semantic: this.#semantic }),
+        ...(this.#ledgerBinding === undefined ? {} : { ledgerBinding: this.#ledgerBinding }),
+      })
+    } catch (error) {
+      this.#recordCheckpointFailure(error)
+      throw error
     }
+  }
+
+  async #openSourceRevision(request: PersistentFileRequest): Promise<OpenedFileRevision> {
     // Awaiting authenticated source authority before local planning prevents both
     // checkpoint reservations and namespace placeholders for unopened revisions.
     const opened = snapshotOpenedRevision(await request.openRevision())

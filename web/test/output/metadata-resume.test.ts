@@ -135,6 +135,27 @@ describe('metadata resume admission', () => {
     await f.session.close()
   })
 
+  it('keeps a concurrently readmitted revision when an offline resume sees an older checkpoint', async () => {
+    const f = await materializationFixture()
+    const request = { fileId: FILE_ID, expectedSize: previous.exactSize, materializationRelativePath: path }
+    const first = await f.session.beginFile({ ...request, openRevision: async () => previous })
+    await first.writeRange(0n, Uint8Array.of(1, 2, 3, 4, 5, 6))
+    await first.pause()
+    const read = f.checkpoints.readCommitted.bind(f.checkpoints)
+    vi.spyOn(f.checkpoints, 'readCommitted').mockImplementationOnce(async id => {
+      const old = (await read(id))!
+      await admitCheckpointMetadataReuse(old, current, f.checkpoints, f.checkpoints)
+      return old
+    })
+    const openRevision = vi.fn(async () => { throw new Error('sender unavailable') })
+    const local = await f.session.beginFile({ ...request, openRevision })
+    expect(local.revision.fileRevision).toBe(current.fileRevision)
+    expect((await local.commit()).fileRevision).toBe(current.fileRevision)
+    expect(f.checkpoints.committed(FILE_ID).fileRevision).toBe(current.fileRevision)
+    expect(openRevision).not.toHaveBeenCalled()
+    await f.session.close()
+  })
+
   it('never rebinds historical completion receipts to a new revision', async () => {
     const f = await partial()
     const tx = await f.session.beginFile({ materializationRelativePath: path,
