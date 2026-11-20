@@ -2,13 +2,13 @@ package networkruntime
 
 import (
 	"context"
-	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
 	"github.com/windshare/windshare/connectivity/networkstate"
+	"github.com/windshare/windshare/core/diagnostics"
 )
 
 const frontendTimeout = 3 * time.Second
@@ -106,5 +106,16 @@ func (r *Runtime) checkFrontends() {
 	r.mu.Lock()
 	r.linkUnreachable, r.backupReachable = !linkReady, backupReady
 	r.mu.Unlock()
-	slog.Debug("network_frontend_health", "generation", r.generation(), "link_host", r.config.LinkHost, "reachable", linkReady, "backup_reachable", backupReady)
+	if r.diagnostics.Enabled() {
+		fields := diagnostics.Fields{
+			"network_generation": diagnostics.Uint(r.generation()),
+			"link_host":          diagnostics.Text(r.config.LinkHost),
+			"reachable":          diagnostics.Bool(linkReady),
+			"backup_reachable":   diagnostics.Bool(backupReady),
+		}
+		if r.config.BackupEntry != "" {
+			fields["backup_entry"] = diagnostics.Text(r.config.BackupEntry)
+		}
+		r.diagnostics.Emit(diagnostics.New("network_frontend_health", fields).At(r.now()))
+	}
 }

@@ -5,13 +5,13 @@ package networkdirectory
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"math/rand/v2"
 	"net/url"
 	"slices"
 	"sync"
 	"time"
 
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/nodedirectory"
 )
 
@@ -23,17 +23,23 @@ const (
 	MaximumBackoff    = 30 * time.Minute
 	MaximumMirrors    = 8
 	MirrorsPerRefresh = 3
+
+	refreshStageFetch    = "fetch"
+	refreshStageVerify   = "verify"
+	refreshStageInstall  = "install"
+	refreshStageAccepted = "accepted"
 )
 
 type Config struct {
-	Network  string
-	Roots    []nodedirectory.Root
-	Embedded []byte
-	Mirrors  []string
-	Cache    Cache
-	Fetch    func(context.Context, string) ([]byte, error)
-	Now      func() time.Time
-	Order    func(int) []int
+	Network     string
+	Roots       []nodedirectory.Root
+	Embedded    []byte
+	Mirrors     []string
+	Cache       Cache
+	Fetch       func(context.Context, string) ([]byte, error)
+	Now         func() time.Time
+	Order       func(int) []int
+	Diagnostics diagnostics.Sink
 }
 
 type Directory struct {
@@ -189,14 +195,15 @@ func (directory *Directory) requestRefresh(ctx context.Context, scheduled bool) 
 		return err
 	}
 	done := directory.refreshing
-	if done == nil && directory.config.Now().Before(directory.nextRefresh) && (directory.failures > 0 || scheduled) {
+	now := directory.config.Now()
+	if done == nil && now.Before(directory.nextRefresh) && (directory.failures > 0 || scheduled) {
 		if directory.failures == 0 {
 			directory.mu.Unlock()
 			return nil
 		}
 		err := directory.unavailableLocked()
 		directory.mu.Unlock()
-		slog.Debug("network_directory_refresh_deferred", "network", directory.config.Network, "reason", err.Reason, "retry_at", err.RetryAt)
+		directory.emitRefreshDeferred(now, err)
 		return err
 	}
 	if done == nil {
@@ -237,8 +244,9 @@ func (directory *Directory) refresh(done chan struct{}) {
 		backoff := min(MinimumBackoff*time.Duration(1<<(directory.failures-1)), MaximumBackoff)
 		directory.nextRefresh = now.Add(backoff)
 	}
-	slog.Debug("network_directory_refresh_completed", "network", directory.config.Network, "generation", directory.highest.Generation,
-		"serial", directory.highest.Serial, "failures", directory.failures, "next_refresh", directory.nextRefresh, "error", err)
+	// Sink.Emit is strictly nonblocking; emitting before clearing refreshing and
+	// closing done keeps both Refresh callers and Close ordered after publication.
+	directory.emitRefreshCompleted(now, directory.highest, directory.failures, directory.nextRefresh, err)
 	directory.refreshing = nil
 	directory.notifySchedule()
 	close(done)
@@ -260,18 +268,23 @@ func (directory *Directory) tryMirrors(ctx context.Context) error {
 		mirror := directory.config.Mirrors[index]
 		request, cancel := context.WithTimeout(ctx, MirrorTimeout)
 		started := directory.config.Now()
+		stage := refreshStageFetch
 		data, err := directory.config.Fetch(request, mirror)
 		cancel()
 		var snapshot nodedirectory.Snapshot
 		if err == nil {
+			stage = refreshStageVerify
 			snapshot, err = nodedirectory.Verify(data, directory.config.Network, directory.config.Roots)
 		}
 		if err == nil {
+			stage = refreshStageInstall
 			err = directory.install(ctx, snapshot)
 		}
-		cursor := snapshot.Cursor()
-		slog.Debug("network_directory_refresh", "mirror", mirror, "generation", cursor.Generation, "serial", cursor.Serial,
-			"duration", directory.config.Now().Sub(started), "trusted_until", snapshot.TrustedUntil(nodedirectory.DefaultGrace), "error", err)
+		if err == nil {
+			stage = refreshStageAccepted
+		}
+		finished := directory.config.Now()
+		directory.emitMirrorAttempt(finished, mirror, stage, snapshot, finished.Sub(started), err)
 		if err == nil {
 			return nil
 		}
@@ -281,6 +294,59 @@ func (directory *Directory) tryMirrors(ctx context.Context) error {
 		}
 	}
 	return errors.Join(append(failures, nodedirectory.ErrExpired)...)
+}
+
+func (directory *Directory) emitRefreshDeferred(now time.Time, err *UnavailableError) {
+	if !directory.config.Diagnostics.Enabled() {
+		return
+	}
+	fields := diagnostics.Fields{
+		"network": diagnostics.Text(directory.config.Network),
+		"reason":  diagnostics.Text(string(err.Reason)),
+	}
+	if !err.RetryAt.IsZero() {
+		fields["retry_at"] = diagnostics.Text(err.RetryAt.UTC().Format(time.RFC3339Nano))
+	}
+	directory.config.Diagnostics.Emit(diagnostics.New("network_directory_refresh_deferred", fields).At(now))
+}
+
+func (directory *Directory) emitRefreshCompleted(now time.Time, cursor nodedirectory.Cursor, failures uint, nextRefresh time.Time, err error) {
+	if !directory.config.Diagnostics.Enabled() {
+		return
+	}
+	fields := diagnostics.Fields{
+		"network":      diagnostics.Text(directory.config.Network),
+		"generation":   diagnostics.Uint(cursor.Generation),
+		"serial":       diagnostics.Uint(cursor.Serial),
+		"failures":     diagnostics.Uint(uint64(failures)),
+		"next_refresh": diagnostics.Text(nextRefresh.UTC().Format(time.RFC3339Nano)),
+	}
+	if err != nil {
+		fields["error"] = diagnostics.Text(err.Error())
+	}
+	directory.config.Diagnostics.Emit(diagnostics.New("network_directory_refresh_completed", fields).At(now))
+}
+
+func (directory *Directory) emitMirrorAttempt(now time.Time, mirror, stage string, snapshot nodedirectory.Snapshot, duration time.Duration, err error) {
+	if !directory.config.Diagnostics.Enabled() {
+		return
+	}
+	cursor := snapshot.Cursor()
+	fields := diagnostics.Fields{
+		"network":     diagnostics.Text(directory.config.Network),
+		"mirror":      diagnostics.Text(mirror),
+		"stage":       diagnostics.Text(stage),
+		"generation":  diagnostics.Uint(cursor.Generation),
+		"serial":      diagnostics.Uint(cursor.Serial),
+		"duration_ms": diagnostics.Millis(max(duration, 0)),
+	}
+	if trustedUntil := snapshot.TrustedUntil(nodedirectory.DefaultGrace); !trustedUntil.IsZero() {
+		fields["trusted_until"] = diagnostics.Text(trustedUntil.UTC().Format(time.RFC3339Nano))
+	}
+	if err != nil {
+		fields["error"] = diagnostics.Text(err.Error())
+	}
+	directory.config.Diagnostics.Emit(diagnostics.New("network_directory_refresh", fields).At(now))
 }
 
 func (directory *Directory) run() {

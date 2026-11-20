@@ -235,3 +235,33 @@ func TestCandidateDeadlinesExpireIndependently(t *testing.T) {
 		t.Fatal(candidates)
 	}
 }
+
+func TestCandidateRetainsObservationHistoryAndHandshakeDuration(t *testing.T) {
+	now := time.Now()
+	admitted, failed, unmeasured := planNode(0, "global"), planNode(1, "global"), planNode(2, "global")
+	input := Input{
+		Now:               now,
+		NetworkGeneration: "1",
+		Directory:         nodedirectory.Payload{Nodes: []nodedirectory.Node{admitted, failed, unmeasured}},
+	}
+	okFact := observed(t, input, admitted)
+	okFact.Admitted = true
+	okFact.Duration = 0
+	failFact := observed(t, input, failed)
+	failFact.Duration = 500 * time.Millisecond
+	input.Observations = []Observation{okFact, failFact}
+
+	byAlias := map[string]Candidate{}
+	for _, c := range selected(t, input).Network {
+		byAlias[c.Alias] = c
+	}
+	if d, ok := byAlias[admitted.Alias].ObservedHandshake(); !ok || d != 0 || byAlias[admitted.Alias].HistoryState() != "admitted" {
+		t.Fatalf("admitted candidate = %+v (%v, %t)", byAlias[admitted.Alias], d, ok)
+	}
+	if _, ok := byAlias[failed.Alias].ObservedHandshake(); ok || byAlias[failed.Alias].HistoryState() != "failed" {
+		t.Fatalf("failed candidate exposed handshake duration: %+v", byAlias[failed.Alias])
+	}
+	if _, ok := byAlias[unmeasured.Alias].ObservedHandshake(); ok || byAlias[unmeasured.Alias].HistoryState() != "unmeasured" {
+		t.Fatalf("unmeasured candidate exposed handshake duration: %+v", byAlias[unmeasured.Alias])
+	}
+}

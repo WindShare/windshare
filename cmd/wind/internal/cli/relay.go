@@ -10,6 +10,7 @@ import (
 	"runtime"
 
 	"github.com/windshare/windshare/cmd/wind/internal/commandmeta"
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/relaysetup"
@@ -17,7 +18,7 @@ import (
 
 const relayUsage = "Usage: wind relay add <url> [--access-key <key>] [--name <device>] [--no-browser] | wind relay onboard <url> [--name <device>] [--no-browser] | wind relay cancel <url> | wind relay list | wind relay mode <automatic|selected> | wind relay enable|disable|remove <url> | wind relay frontend <url|default>"
 
-func (app *App) runRelay(ctx context.Context, args []string) int {
+func (app *App) runRelay(ctx context.Context, args []string) (code int) {
 	if len(args) == 0 {
 		app.writeCompleteLine("%s", relayUsage)
 		return ExitUsage
@@ -40,6 +41,11 @@ func (app *App) runRelay(ctx context.Context, args []string) int {
 		if outcome != requestParseReady {
 			return outcome.exitCode()
 		}
+		closeApp, err := app.ensureApplication(diagnostics.Sink{})
+		if err != nil {
+			return ExitFailure
+		}
+		defer closeApp(&code)
 		if err := app.application.CancelRelaySetup(ctx, address); err != nil {
 			app.writeCompleteLine("relay cancel: %v", err)
 			return relayCancelExitCode(err)
@@ -88,7 +94,12 @@ func (app *App) parseRelayURL(flags *flag.FlagSet, synopsis string, args []strin
 	return positionals[0], requestParseReady
 }
 
-func (app *App) runRelaySetup(ctx context.Context, request engine.RelaySetupRequest) int {
+func (app *App) runRelaySetup(ctx context.Context, request engine.RelaySetupRequest) (code int) {
+	closeApp, err := app.ensureApplication(diagnostics.Sink{})
+	if err != nil {
+		return ExitFailure
+	}
+	defer closeApp(&code)
 	current, err := app.application.StartRelaySetup(ctx, request)
 	if err != nil {
 		return app.writeRelaySetupFailure(err)

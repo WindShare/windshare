@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/engine/relaysetup"
 )
@@ -64,7 +65,7 @@ func TestRelaySetupDeviceNameFailureTakesPrecedenceOverCancellation(t *testing.T
 			cancel: cancel,
 		}}, nil
 	})
-	application, err := app.newApplication()
+	application, err := app.newApplication(diagnostics.Sink{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -4,12 +4,18 @@ import (
 	"context"
 
 	"github.com/windshare/windshare/cmd/wind/internal/resumecommand"
+	"github.com/windshare/windshare/core/diagnostics"
 )
 
-func (a *App) runResume(ctx context.Context, args []string) int {
+func (a *App) runResume(ctx context.Context, args []string) (code int) {
 	if len(args) > 0 && args[0] == "retry" {
 		return a.runReceive(ctx, receiveResumeRetry, args[1:])
 	}
+	closeApp, err := a.ensureApplication(diagnostics.Sink{})
+	if err != nil {
+		return ExitFailure
+	}
+	defer closeApp(&code)
 	runner := resumecommand.NewFilesystemRunner(resumecommand.FilesystemConfig{
 		Recovery: a.application,
 		Input:    a.Stdin,

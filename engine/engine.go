@@ -150,7 +150,8 @@ func New(config Config) (*Engine, error) {
 		config.RelaySetup.Cache = turnDependencies.Cache
 	}
 	engineID := hex.EncodeToString(identity[:])
-	network, err := networkruntime.New(config.Network, config.Clock.Now, engineID)
+	engineDiagnostics := config.Diagnostics.Bind(diagnostics.Scope{EngineID: engineID})
+	network, err := networkruntime.New(config.Network, config.Clock.Now, engineID, engineDiagnostics)
 	if err != nil {
 		_ = turn.Close()
 		_ = receiveCapacity.Close()

@@ -9,6 +9,7 @@ import (
 	"errors"
 	mathrand "math/rand/v2"
 	"slices"
+	"strconv"
 	"sync"
 	"time"
 
@@ -50,6 +51,28 @@ const (
 	AttemptStage
 	AttemptAuthorization
 )
+
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value AttemptState) DiagnosticName() string {
+	switch value {
+	case AttemptStarted:
+		return "started"
+	case AttemptSucceeded:
+		return "succeeded"
+	case AttemptFailed:
+		return "failed"
+	case AttemptWaiting:
+		return "waiting"
+	case AttemptParked:
+		return "parked"
+	case AttemptStage:
+		return "stage"
+	case AttemptAuthorization:
+		return "authorization"
+	default:
+		return "unknown_" + strconv.FormatUint(uint64(value), 10)
+	}
+}
 
 type Attempt struct {
 	ShareInstance     v2.ShareInstance

@@ -37,6 +37,8 @@ func beginCandidates(t *testing.T, a *NetworkAdmissions, plan relayplan.Plan) []
 func TestAdmissionsUseActualPrimaryAndParkSurplus(t *testing.T) {
 	plan := admissionFixture()
 	a := NewNetworkAdmissions(plan, nil, nil)
+	var events []Admission
+	a.Observe(func(event Admission) { events = append(events, event) })
 	permits := beginCandidates(t, a, plan)
 	if !permits[2].Admit() {
 		t.Fatal("first successful candidate was not primary")
@@ -45,6 +47,9 @@ func TestAdmissionsUseActualPrimaryAndParkSurplus(t *testing.T) {
 		t.Fatal("same-operator candidate displaced a more diverse backup")
 	}
 	permits[0].Release()
+	if permits[0].Admit() {
+		t.Fatal("released permit was admitted")
+	}
 	if !permits[1].Admit() {
 		t.Fatal("diverse global backup refused")
 	}
@@ -73,6 +78,25 @@ func TestAdmissionsUseActualPrimaryAndParkSurplus(t *testing.T) {
 	resume.Release()
 	if a.active != 2 {
 		t.Fatal("resume did not restore pair")
+	}
+	a.Control(plan.Network[2].URL).Unavailable()
+	want := []struct{ endpoint, state, reason string }{
+		{plan.Network[2].URL, AdmissionAdmitted, AdmissionReasonPrimary},
+		{plan.Network[0].URL, AdmissionParked, AdmissionReasonBackupNotChosen},
+		{plan.Network[0].URL, AdmissionParked, AdmissionReasonPermitReleased},
+		{plan.Network[1].URL, AdmissionAdmitted, AdmissionReasonBackup},
+		{plan.Network[3].URL, AdmissionParked, AdmissionReasonTargetReached},
+		{plan.Network[2].URL, AdmissionUnavailable, AdmissionReasonPrimaryLost},
+		{plan.Network[2].URL, AdmissionAdmitted, AdmissionReasonBackup},
+		{plan.Network[2].URL, AdmissionUnavailable, AdmissionReasonBackupLost},
+	}
+	if len(events) != len(want) {
+		t.Fatalf("admission events = %+v, want %d", events, len(want))
+	}
+	for i, w := range want {
+		if events[i].Endpoint != w.endpoint || events[i].State != w.state || events[i].Reason != w.reason {
+			t.Fatalf("event[%d] = %+v, want %+v", i, events[i], w)
+		}
 	}
 }
 

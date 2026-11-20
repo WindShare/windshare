@@ -2,6 +2,7 @@ package networkruntime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/windshare/windshare/connectivity/networkstate"
 	"github.com/windshare/windshare/connectivity/relayplan"
+	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/networkendpoint"
@@ -241,5 +243,81 @@ func TestAttemptDiagnosticsDistinguishLocalReasonFromServerExtension(t *testing.
 	observe(node.URL, senderrelay.Attempt{State: senderrelay.AttemptFailed, Failure: context.DeadlineExceeded})
 	if fields := (<-stream.Records()).Payload(); fields.Get("server_retry_at").Present() {
 		t.Fatal(fields)
+	}
+}
+
+func TestDiagnosticRecordsIncludeReadableAttemptStatesPlanTimingsAndAdmissionReason(t *testing.T) {
+	r := fixtureRuntime(t)
+	intent := relayprofile.Plan([]relayprofile.Candidate{{PublicURL: "https://own.example"}})
+	initial, err := r.Plan(t.Context(), intent, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	node := initial.Plan.Network[0]
+	stream, err := diagnostics.NewStream(16, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	observe := r.Observer(initial, stream.Sink())
+	states := []struct {
+		state senderrelay.AttemptState
+		name  string
+	}{
+		{senderrelay.AttemptStarted, "started"},
+		{senderrelay.AttemptStage, "stage"},
+		{senderrelay.AttemptAuthorization, "authorization"},
+		{senderrelay.AttemptWaiting, "waiting"},
+		{senderrelay.AttemptParked, "parked"},
+		{senderrelay.AttemptSucceeded, "succeeded"},
+		{senderrelay.AttemptFailed, "failed"},
+	}
+	for _, tc := range states {
+		attempt := senderrelay.Attempt{State: tc.state}
+		if tc.state == senderrelay.AttemptSucceeded {
+			attempt.HandshakeDuration = 145 * time.Millisecond
+		}
+		observe(node.URL, attempt)
+		record := <-stream.Records()
+		if got := record.Payload().Get("state").Text(); got != tc.name {
+			t.Fatalf("attempt state %d emitted %q, want %q", tc.state, got, tc.name)
+		}
+	}
+	// Record a fresh admitted sample so the next plan exposes observed_handshake_ms.
+	observe(node.URL, senderrelay.Attempt{State: senderrelay.AttemptStarted})
+	<-stream.Records()
+	observe(node.URL, senderrelay.Attempt{State: senderrelay.AttemptSucceeded, HandshakeDuration: 145 * time.Millisecond})
+	<-stream.Records()
+
+	planned, err := r.Plan(t.Context(), intent, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := planned.DiagnosticRecord().Payload().Get("published_candidates").MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var candidates []struct {
+		Endpoint            string `json:"endpoint"`
+		Configured          bool   `json:"configured"`
+		Observation         string `json:"observation"`
+		ObservedHandshakeMS string `json:"observed_handshake_ms"`
+	}
+	if err := json.Unmarshal(raw, &candidates); err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 2 || !candidates[0].Configured || candidates[0].Observation != "" || candidates[0].ObservedHandshakeMS != "" {
+		t.Fatalf("configured candidate carried directory observation: %+v", candidates)
+	}
+	if candidates[1].Endpoint != node.URL || candidates[1].Observation != "admitted" || candidates[1].ObservedHandshakeMS != "145" {
+		t.Fatalf("directory candidate missing observed handshake timing: %+v", candidates[1])
+	}
+
+	admission := AdmissionRecord(relayset.Admission{
+		Endpoint: node.URL, Primary: "https://primary.example",
+		State: relayset.AdmissionParked, Reason: relayset.AdmissionReasonBackupNotChosen, Count: 1,
+	})
+	if admission.Payload().Get("reason").Text() != relayset.AdmissionReasonBackupNotChosen {
+		t.Fatalf("admission record lost reason: %+v", admission.Payload())
 	}
 }

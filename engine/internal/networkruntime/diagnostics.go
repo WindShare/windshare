@@ -10,14 +10,27 @@ import (
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/core/diagnostics"
+	"github.com/windshare/windshare/engine/networkdirectory"
 	"github.com/windshare/windshare/transport/relayv2"
 )
 
 func (s Selection) DiagnosticRecord() diagnostics.Record {
 	candidates := make([]diagnostics.Value, 0, len(s.Decision.Candidates))
 	filters := make([]diagnostics.Value, 0, len(s.Decision.Filters))
+	plannedNetwork := make(map[string]relayplan.Candidate, len(s.Plan.Network))
+	for _, candidate := range s.Plan.Network {
+		plannedNetwork[candidate.URL] = candidate
+	}
 	for _, candidate := range s.Decision.Candidates {
 		fields := diagnostics.Fields{"endpoint": diagnostics.Text(candidate.URL), "alias": diagnostics.Text(candidate.Alias), "configured": diagnostics.Bool(candidate.Configured)}
+		if !candidate.Configured {
+			if planned, ok := plannedNetwork[candidate.URL]; ok {
+				fields["observation"] = diagnostics.Text(planned.HistoryState())
+				if duration, observed := planned.ObservedHandshake(); observed {
+					fields["observed_handshake_ms"] = diagnostics.Millis(duration)
+				}
+			}
+		}
 		deadlineField(fields, "cooldown_until", candidate.CooldownUntil)
 		deadlineField(fields, "server_retry_at", candidate.ServerRetryAt)
 		candidates = append(candidates, diagnostics.Object(fields))
@@ -33,7 +46,21 @@ func (s Selection) DiagnosticRecord() diagnostics.Record {
 
 func AdmissionRecord(value relayset.Admission) diagnostics.Record {
 	return diagnostics.New("network_relay_admission", diagnostics.Fields{"endpoint": diagnostics.Text(value.Endpoint), "primary": diagnostics.Text(value.Primary),
-		"state": diagnostics.Text(value.State), "admissions": diagnostics.Int(int64(value.Count))})
+		"state": diagnostics.Text(value.State), "reason": diagnostics.Text(value.Reason), "admissions": diagnostics.Int(int64(value.Count))})
+}
+
+func (r *Runtime) emitDirectoryInitFailure(network string, err error) {
+	if !r.diagnostics.Enabled() {
+		return
+	}
+	fields := diagnostics.Fields{"error": diagnostics.Text(err.Error())}
+	if network != "" {
+		fields["network"] = diagnostics.Text(network)
+	}
+	if unavailableErr, ok := errors.AsType[*networkdirectory.UnavailableError](err); ok {
+		fields["reason"] = diagnostics.Text(string(unavailableErr.Reason))
+	}
+	r.diagnostics.Emit(diagnostics.New("network_directory_initialization_failed", fields).At(r.now()))
 }
 
 func deadlineField(fields diagnostics.Fields, key string, deadline time.Time) {
@@ -94,7 +121,7 @@ func (r *Runtime) Observer(selection Selection, sink diagnostics.Sink) func(stri
 }
 
 func attemptFields(url string, attempt senderrelay.Attempt, now time.Time) diagnostics.Fields {
-	fields := diagnostics.Fields{"endpoint": diagnostics.Text(url), "attempt": diagnostics.Uint(uint64(attempt.Number)), "state": diagnostics.Uint(uint64(attempt.State)),
+	fields := diagnostics.Fields{"endpoint": diagnostics.Text(url), "attempt": diagnostics.Uint(uint64(attempt.Number)), "state": diagnostics.Text(attempt.State.DiagnosticName()),
 		"registration_generation": diagnostics.Uint(attempt.Generation), "timeout": diagnostics.Bool(errors.Is(attempt.Failure, context.DeadlineExceeded)),
 		"stage": diagnostics.Text(attempt.Stage), "duration_ms": diagnostics.Millis(attempt.Duration), "resume": diagnostics.Bool(attempt.Resume),
 		"terminal": diagnostics.Bool(attempt.Terminal), "backoff_ms": diagnostics.Millis(attempt.NextDelay)}

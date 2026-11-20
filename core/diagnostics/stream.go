@@ -44,6 +44,16 @@ func (stream *Stream) Capture() (Sink, func()) {
 	return sink, func() { stopped.Store(true) }
 }
 
+// Controlled returns a sink whose publication follows set(enabled). Use
+// Capture for task-scoped intervals that must never reactivate after stopping.
+func (stream *Stream) Controlled(enabled bool) (Sink, func(bool)) {
+	disabled := new(atomic.Bool)
+	disabled.Store(!enabled)
+	sink := stream.Sink()
+	sink.stopped = disabled
+	return sink, func(on bool) { disabled.Store(!on) }
+}
+
 // Close belongs to the host, after its engines stop. One task cannot close a
 // shared recorder or wait for a detached consumer.
 func (stream *Stream) Close() observationstream.Completion { return stream.sink.producer.Complete() }

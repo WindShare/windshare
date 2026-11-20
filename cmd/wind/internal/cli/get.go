@@ -44,7 +44,7 @@ func (a *App) runGet(ctx context.Context, args []string) int {
 	return a.runReceive(ctx, receiveGet, args)
 }
 
-func (a *App) runReceive(ctx context.Context, command receiveCommand, args []string) int {
+func (a *App) runReceive(ctx context.Context, command receiveCommand, args []string) (code int) {
 	request, parsed := a.parseReceiveRequest(ctx, command, args)
 	if parsed != requestParseReady {
 		return parsed.exitCode()
@@ -55,6 +55,11 @@ func (a *App) runReceive(ctx context.Context, command receiveCommand, args []str
 	}
 	observation := newGetObservation(runtime)
 	defer func() { observation.completeAndFinalize(); runtime.Close() }()
+	closeApp, err := a.ensureApplication(runtime.diagnosticSink())
+	if err != nil {
+		return ExitFailure
+	}
+	defer closeApp(&code)
 	destination, err := filepath.Abs(request.outDir)
 	if err != nil {
 		return observation.commandFailure(ExitFailure, err)

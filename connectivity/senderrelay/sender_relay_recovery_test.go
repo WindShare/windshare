@@ -538,3 +538,24 @@ func senderRelayAwaitError(t *testing.T, result <-chan error) error {
 		return nil
 	}
 }
+
+func TestAttemptStateDiagnosticNames(t *testing.T) {
+	for _, tc := range []struct {
+		state AttemptState
+		want  string
+	}{
+		{AttemptStarted, "started"},
+		{AttemptSucceeded, "succeeded"},
+		{AttemptFailed, "failed"},
+		{AttemptWaiting, "waiting"},
+		{AttemptParked, "parked"},
+		{AttemptStage, "stage"},
+		{AttemptAuthorization, "authorization"},
+		{AttemptState(0), "unknown_0"},
+		{AttemptState(99), "unknown_99"},
+	} {
+		if got := tc.state.DiagnosticName(); got != tc.want {
+			t.Fatalf("AttemptState(%d).DiagnosticName() = %q, want %q", tc.state, got, tc.want)
+		}
+	}
+}
