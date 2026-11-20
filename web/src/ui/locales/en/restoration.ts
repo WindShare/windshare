@@ -23,7 +23,7 @@ export const restoration = {
   report: 'Name mapping report',
   location: 'Location',
   runHint: 'Open PowerShell in the folder containing the restoration files and paste the command. Keep both paired files together and preserve their position relative to the downloaded content.',
-  copying: 'Copying?',
+  copying: 'Copying…',
   copy: 'Copy restoration command',
   copied: 'Restoration command copied.',
   copyFailed: 'Could not copy. Select and copy the command from the details below.',
