@@ -104,6 +104,7 @@ export interface FileRevisionReadmission {
   readonly paused: VerifiedDurableRanges
   readonly initialDurable: ByteRangeSet
   readonly beginFile: OutputSession['beginFile']
+  readonly stalledReopens: number
 }
 
 interface ReadmissionReporting {

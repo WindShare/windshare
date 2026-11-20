@@ -17,11 +17,17 @@ for (const preference of ['direct', 'automatic'] as const) {
       reads: [
         { name: 'payload.bin', offset: 0 },
         { name: 'payload.bin', offset: 2 },
+        { name: 'payload.bin', offset: 4 },
+        { name: 'payload.bin', offset: 4 },
         { name: 'sibling.bin', offset: 0 },
       ],
       decisions: [
         { decision: 'readmit', retained: '2', reused: '0' },
         { decision: 'readmitted', retained: '2', reused: '2' },
+        { decision: 'readmit', retained: '4', reused: '0' },
+        { decision: 'readmitted', retained: '4', reused: '4' },
+        { decision: 'readmit', retained: '4', reused: '0' },
+        { decision: 'readmitted', retained: '4', reused: '4' },
         { decision: 'retry-limit', retained: '4', reused: '0' },
       ],
     })

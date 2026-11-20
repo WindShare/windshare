@@ -50,31 +50,42 @@ export type FileAttemptInterruption = SettledFileFailure | FileContinuationRequi
   readonly readmission: FileRevisionReadmission
 }
 
+// Allow one readmission with zero newly persisted bytes; stop once a second
+// consecutive reopen still fails to advance durable coverage.
+const MAX_STALLED_REVISION_READMISSIONS = 1
+
 export async function settleReopenedFile(
   options: FileSettlementOptions, transaction: OutputFileTransaction,
-  error: RevisionReopenedDuringRecoveryError, initialDurable: ByteRangeSet, started: number, retried: boolean,
+  error: RevisionReopenedDuringRecoveryError, initialDurable: ByteRangeSet, started: number, priorStalledReopens: number,
 ): Promise<FileAttemptInterruption> {
   const { previous, current, comparison } = error
   const readmit = options.output.readmitFile?.bind(options.output)
-  const decision = readmissionDecision(options.signal, comparison, retried, readmit !== undefined)
+  const initialDecision = readmissionDecision(options.signal, comparison, readmit !== undefined)
   const failureOptions = {
     signal: options.signal,
     ...(options.incidentScope === undefined ? {} : { incidentScope: options.incidentScope }),
   }
-  const failure = classifyReopenedFileFailure(error, decision, failureOptions)
 
   let paused: VerifiedDurableRanges
   try {
     // Verify the retained cut while it still describes the active revision.
     // Recording a source failure can withdraw these ranges from reuse.
     paused = await pauseOutputFile(options, transaction, error)
-    if (failure?.kind === 'fault') await persistSourceFailure(options, transaction, failure.fault)
   } catch (reason) {
     observeRevisionReadmission(options, previous, current, comparison, 'settlement-failed', 0n, 0n, started)
     return unconfirmedPause(options, reason)
   }
 
   const settlement = pausedFileSettlement(paused)
+  const stalledReopens = nextStalledReopens(settlement.retainedBytes, initialDurable, priorStalledReopens)
+  const decision = resolveReopenedDecision(initialDecision, stalledReopens)
+  const failure = classifyReopenedFileFailure(error, decision, failureOptions)
+  const persistError = await persistReopenedFailure(options, transaction, failure)
+  if (persistError !== undefined) {
+    observeRevisionReadmission(options, previous, current, comparison, 'settlement-failed', 0n, 0n, started)
+    return unconfirmedPause(options, persistError.reason)
+  }
+
   const finalDecision = options.signal.aborted ? 'canceled' : decision
   observeRevisionReadmission(options, previous, current, comparison, finalDecision, settlement.retainedBytes, 0n, started)
   if (finalDecision === 'readmit' && readmit !== undefined) {
@@ -82,12 +93,47 @@ export async function settleReopenedFile(
       kind: 'readmit',
       settlement,
       readmission: {
-        previous, current, comparison, started, paused, initialDurable,
+        previous, current, comparison, started, paused, initialDurable, stalledReopens,
         beginFile: (request, signal) => readmit(request, paused, signal),
       },
     }
   }
+  return finishReopenedFailure(options, error, finalDecision, settlement, failure, failureOptions)
+}
 
+function nextStalledReopens(retainedBytes: bigint, initialDurable: ByteRangeSet, priorStalledReopens: number): number {
+  return retainedBytes > rangeBytes(initialDurable) ? 0 : priorStalledReopens + 1
+}
+
+function resolveReopenedDecision(
+  initial: FileRevisionReadmissionObservation['decision'],
+  stalledReopens: number,
+): FileRevisionReadmissionObservation['decision'] {
+  return initial === 'readmit' && stalledReopens > MAX_STALLED_REVISION_READMISSIONS ? 'retry-limit' : initial
+}
+
+async function persistReopenedFailure(
+  options: FileSettlementOptions,
+  transaction: OutputFileTransaction,
+  failure: NormalizedFileTransferFailure | undefined,
+): Promise<Readonly<{ reason: unknown }> | undefined> {
+  if (options.signal.aborted || failure?.kind !== 'fault') return undefined
+  try {
+    await persistSourceFailure(options, transaction, failure.fault)
+    return undefined
+  } catch (reason) {
+    return { reason }
+  }
+}
+
+function finishReopenedFailure(
+  options: FileSettlementOptions,
+  error: RevisionReopenedDuringRecoveryError,
+  finalDecision: FileRevisionReadmissionObservation['decision'],
+  settlement: PausedFileSettlement,
+  failure: NormalizedFileTransferFailure | undefined,
+  failureOptions: Pick<FileSettlementOptions, 'signal' | 'incidentScope'>,
+): SettledFileFailure | FileContinuationRequired {
   const terminalFailure = finalDecision === 'canceled'
     ? normalizeFileTransferFailure(options.signal.reason, failureOptions)
     : failure ?? normalizeFileTransferFailure(error, failureOptions)
@@ -103,12 +149,11 @@ export async function settleReopenedFile(
 }
 
 function readmissionDecision(
-  signal: AbortSignal, comparison: RevisionReopenedDuringRecoveryError['comparison'], retried: boolean, supported: boolean,
+  signal: AbortSignal, comparison: RevisionReopenedDuringRecoveryError['comparison'], supported: boolean,
 ): FileRevisionReadmissionObservation['decision'] {
   if (signal.aborted) return 'canceled'
   if (comparison.kind === 'observed-change') return 'observed-change'
   if (comparison.kind === 'unavailable') return 'evidence-unavailable'
-  if (retried) return 'retry-limit'
   return supported ? 'readmit' : 'readmission-unsupported'
 }
 

@@ -35,9 +35,9 @@ const PAYLOAD_BYTES = Uint8Array.of(1, 2, 3, 4, 5, 6)
 const SIBLING_BYTES = Uint8Array.of(7, 8)
 const PAYLOAD = fileEntry(identity(80), 'payload.bin', BigInt(PAYLOAD_BYTES.length))
 const SIBLING = fileEntry(identity(81), 'sibling.bin', BigInt(SIBLING_BYTES.length))
-const PAYLOAD_REVISIONS = [51, 52, 53] as const
-const SIBLING_REVISION = 54
-const REOPENED_SIBLING_REVISION = 55
+const PAYLOAD_REVISIONS = [51, 52, 53, 54, 55] as const
+const SIBLING_REVISION = 56
+const REOPENED_SIBLING_REVISION = 57
 const SOURCE_METADATA = digestIdentity(61)
 
 interface ReopenedFolderFixture {
@@ -147,7 +147,9 @@ async function runFolderTransfer(runtime: BoundReceiveOperation, source: 'reopen
       reads.push({ name: payload ? PAYLOAD.name : SIBLING.name, offset: position })
       if (payload && source === 'reopened-twice') {
         const index = revisions.findIndex(candidate => candidate.fileRevisionText === revision.fileRevisionText)
-        yield { offset: range.start, data: PAYLOAD_BYTES.slice(position, position + CHUNK_SIZE) }
+        if (index < 2) {
+          yield { offset: range.start, data: PAYLOAD_BYTES.slice(position, position + CHUNK_SIZE) }
+        }
         throw new RevisionReopenedDuringRecoveryError(revision, revisions[index + 1]!)
       }
       yield { offset: range.start, data: (payload ? PAYLOAD_BYTES : SIBLING_BYTES).slice(position, Number(range.end)) }

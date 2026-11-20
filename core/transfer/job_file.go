@@ -79,7 +79,7 @@ func (r *jobRun) transferFileAttempt(
 	r.traceFileLifecycle(TransferFileAdmitted, plan, nil)
 	completed, err := r.transferMissingRanges(ctx, plan, opened, transaction, &fileProgress)
 	if reopened, ok := errors.AsType[*content.RevisionReopenedError](err); ok {
-		return r.settleReopenedRevision(ctx, plan, opened, transaction, &fileProgress, reopened, retry != nil)
+		return r.settleReopenedRevision(ctx, plan, opened, transaction, &fileProgress, reopened, retry)
 	}
 	if err != nil || !completed {
 		return nil, err
@@ -203,23 +203,39 @@ func (r *jobRun) handleImmediateSettlement(
 	return nil
 }
 
-// A single readmission covers a routine reconnect without keeping a changing
-// file at the head of the queue or repeatedly opening its output writer.
+// Allow one readmission with zero newly persisted bytes (for example a reconnect
+// before the first durable range flushes); stop once a second consecutive reopen
+// still makes no durable progress.
+const maxStalledRevisionReadmissions = 1
+
+// Readmission continues across routine reconnects as long as durable coverage
+// advances, and stops once repeated reopens make no progress.
 type fileRevisionRetry struct {
-	reopened   *content.RevisionReopenedError
-	progress   fileTransferProgress
-	settlement FileSettlement
-	started    time.Time
+	reopened       *content.RevisionReopenedError
+	progress       fileTransferProgress
+	settlement     FileSettlement
+	started        time.Time
+	stalledReopens int
 }
 
 func (r *jobRun) settleReopenedRevision(
 	ctx context.Context, plan plannedFile, opened OpenedRevision, transaction FileTransaction,
-	progress *fileTransferProgress, reopened *content.RevisionReopenedError, retried bool,
+	progress *fileTransferProgress, reopened *content.RevisionReopenedError, priorRetry *fileRevisionRetry,
 ) (*fileRevisionRetry, error) {
 	started := time.Now()
 	cause := normalizeSourceBoundary(ctx, reopened)
 	if ctx.Err() != nil {
 		cause = failurestate.FromCancellation(ctx, context.Cause(ctx))
+	}
+	priorStalled := 0
+	if priorRetry != nil {
+		priorStalled = priorRetry.stalledReopens
+	}
+	initialBytes, _ := rangeSetByteCount(progress.initial)
+	trustedBytes, _ := rangeSetByteCount(progress.trusted.Ranges())
+	nextStalled := 0
+	if trustedBytes <= initialBytes {
+		nextStalled = priorStalled + 1
 	}
 	comparison := reopened.Comparison()
 	reason := filePauseReason(cause)
@@ -230,7 +246,7 @@ func (r *jobRun) settleReopenedRevision(
 	case comparison.Comparison == content.RevisionComparisonMismatch:
 		decision = "observed-change"
 	case !comparison.AllowsReuse():
-	case retried:
+	case nextStalled > maxStalledRevisionReadmissions:
 		decision = "retry-limit"
 	case !progress.retainsRanges || r.output.Capabilities().Durability == DurabilityNone:
 		decision = "output-not-resumable"
@@ -242,11 +258,23 @@ func (r *jobRun) settleReopenedRevision(
 	settlement, err := r.pauseFileTransaction(ctx, transaction, reason, progress)
 	if err != nil {
 		decision = "settlement-failed"
+	} else if settlement.Kind() == FilePaused && reason == FilePauseRevisionReopened {
+		// Base stall accounting on durable bytes confirmed by pause settlement,
+		// not merely writes buffered before checkpoint persistence.
+		if progress.persistedBytes > initialBytes {
+			nextStalled = 0
+		} else {
+			nextStalled = priorStalled + 1
+		}
+		if nextStalled > maxStalledRevisionReadmissions {
+			decision = "retry-limit"
+		}
 	}
 	r.traceFileRevisionRetry(plan, reopened, decision, progress.persistedBytes, 0, started)
-	if err == nil && settlement.Kind() == FilePaused && reason == FilePauseRevisionReopened {
+	if err == nil && settlement.Kind() == FilePaused && decision == "readmit" {
 		return &fileRevisionRetry{
 			reopened: reopened, progress: *progress, settlement: settlement, started: started,
+			stalledReopens: nextStalled,
 		}, nil
 	}
 
