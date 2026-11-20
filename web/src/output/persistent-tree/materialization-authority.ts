@@ -1,7 +1,10 @@
+import { sourceMetadataFields } from '../../content/revision-comparison'
 import { observePerformance, type PerformanceSummaryObservations } from '../../diagnostics/performance/performance-summary'
 import {
   createMaterializationDirectoryAdmittedEntry,
   createMaterializationDirectoryFinalizedEntry,
+  materializationFinalProofId,
+  validateFinalOutputAgainstCheckpoint,
 } from '../materialization-ledger/journal'
 import type {
   MaterializationDirectoryAdmittedEntryV1,
@@ -13,9 +16,13 @@ import {
   FILE_CHECKPOINT_COMMIT_CANDIDATE,
   FILE_CHECKPOINT_COMMIT_VERIFIED,
   FILE_CHECKPOINT_PHASE_ACTIVE,
+  FILE_CHECKPOINT_PHASE_PAUSED,
+  deriveCheckpointLineageID,
+  fileCheckpointIsComplete,
   newFileCheckpointV2,
   type FileCheckpointV2,
 } from '../persistence/checkpoint'
+import type { CheckpointLineageDecision, FileCheckpointJournal } from '../persistence/journal'
 import type { PerformanceFilePipelineObservation } from '../../diagnostics/performance/performance-runtime-observations'
 import { snapshotMaterializationRootRelativePath, type MaterializationRootRelativePath } from '../../transfer/job/coordinate/direct-tree'
 import type {
@@ -169,4 +176,68 @@ async function verifySelectedFile(
     throw new TargetOwnershipUnknownError('checkpoint', checkpoint.operationId)
   }
   await handle.verify('checkpoint')
+}
+
+/** Short-circuits completed files so resume preserves immutable local delivery history without reopening source handles. */
+export async function resolveCompletedPersistentRevision(input: Readonly<{
+  fileId: string
+  expectedSize: bigint | undefined
+  path: MaterializationRootRelativePath
+  checkpoints: Pick<FileCheckpointJournal, 'binding' | 'readCommitted' | 'lookupLineage'>
+  semantic?: SemanticPersistentOutputJournal
+  ledgerBinding?: Promise<MaterializationLedgerBindingV1>
+}>): Promise<Readonly<{ revision: OpenedFileRevision; decision: CheckpointLineageDecision }> | undefined> {
+  const { fileId, expectedSize, path, checkpoints, semantic, ledgerBinding } = input
+  const lineageId = deriveCheckpointLineageID({
+    ...checkpoints.binding,
+    fileId,
+    canonicalPath: path,
+  })
+  const snapshot = await checkpoints.readCommitted(lineageId)
+  if (snapshot === undefined || !completedCheckpointMatchesRequest(snapshot, fileId, expectedSize, path)) return undefined
+  // Local recovery can only select an existing lineage. A concurrent readmission
+  // may have advanced its revision since the point read.
+  const selection = await checkpoints.lookupLineage({
+    lineageId, fileId, canonicalPath: path, fileRevision: snapshot.fileRevision,
+    exactSize: snapshot.exactSize, ...sourceMetadataFields(snapshot),
+  })
+  if (selection.kind !== 'exact' && selection.kind !== 'metadata-match') return undefined
+  const committed = selection.record
+  if (committed.ownedObjectId !== snapshot.ownedObjectId ||
+      !completedCheckpointMatchesRequest(committed, fileId, expectedSize, path)) return undefined
+  if (semantic !== undefined && ledgerBinding !== undefined) {
+    const delivered = await hasMatchingFinalProof(semantic, await ledgerBinding, committed)
+    if (!delivered && committed.exactSize === 0n) return undefined
+  }
+  const revision = Object.freeze({ fileId, fileRevision: committed.fileRevision,
+    ...sourceMetadataFields(committed), exactSize: committed.exactSize })
+  return { revision, decision: { kind: 'exact', lineageId, record: committed } }
+}
+
+export async function hasMatchingFinalProof(
+  journal: SemanticPersistentOutputJournal, binding: MaterializationLedgerBindingV1, checkpoint: FileCheckpointV2,
+): Promise<boolean> {
+  const proof = await journal.readMaterializationFinalProof(binding, materializationFinalProofId(binding, checkpoint.recordId))
+  if (proof === undefined) return false
+  if (proof.checkpoint.recordId !== checkpoint.recordId || proof.checkpoint.recordDigest !== checkpoint.checksum ||
+      proof.checkpoint.checkpointGeneration !== checkpoint.checkpointGeneration) {
+    throw new TargetOwnershipUnknownError('commit', checkpoint.operationId)
+  }
+  validateFinalOutputAgainstCheckpoint(proof.finalOutput, checkpoint)
+  return true
+}
+
+function completedCheckpointMatchesRequest(
+  committed: FileCheckpointV2,
+  fileId: string,
+  expectedSize: bigint | undefined,
+  path: MaterializationRootRelativePath,
+): boolean {
+  return committed.fileId === fileId &&
+    committed.commitState === FILE_CHECKPOINT_COMMIT_VERIFIED && committed.checkpointGeneration > 0n &&
+    (committed.phase === FILE_CHECKPOINT_PHASE_ACTIVE || committed.phase === FILE_CHECKPOINT_PHASE_PAUSED) &&
+    fileCheckpointIsComplete(committed) &&
+    (expectedSize === undefined || committed.exactSize === expectedSize) &&
+    committed.canonicalPath.length === path.length &&
+    committed.canonicalPath.every((segment, index) => segment === path[index])
 }

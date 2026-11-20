@@ -53,6 +53,7 @@ import {
   isPristinePreObjectCandidate,
   openPersistentSelectedFile,
   PersistentDirectoryLedgerCoordinator,
+  resolveCompletedPersistentRevision,
 } from './materialization-authority'
 import {
   captureCheckpointFailureFacts,
@@ -68,6 +69,9 @@ type PersistentTreeTraceInput = Readonly<{
 
 type PersistentFileObjectAdmission = (ownedObjectId: string) => void | Promise<void>
 
+// Retained or very large namespaces use the journal directly to keep session memory bounded.
+const MAX_FRESH_FILE_IDS = 16_384
+
 export class PersistentTreeOutputSession implements PersistentMaterializationPort {
   readonly #tree: PersistentTreeSessionOptions['tree']
   readonly #checkpoints: RecoverableFileCheckpointJournal
@@ -81,6 +85,7 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
   readonly #recreatablePreObjectCandidates = new Set<string>()
   readonly #initialClaims: PersistentInitialClaimCoordinator | undefined
   #needsAttentionReported = false
+  #freshFileIds: Set<string> | undefined = new Set()
   #activated = false
   #activation: Promise<void> | undefined
   #closed = false
@@ -142,6 +147,8 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
           options.checkpoints.binding.operationId,
         )
       }
+      const existing = await options.checkpoints.scanCommitted({ direction: 'ascending', limit: 1 })
+      if (existing.records.length > 0) session.#freshFileIds = undefined
       return session
     } catch (error) {
       recordOutputException(options.diagnostics?.failures?.outputReservation, error)
@@ -213,9 +220,8 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
     let openedHandle: PersistentTreeFile | undefined
     let stageScope: PersistentOutputStageScope | undefined
     try {
-      // Awaiting authenticated source authority before local planning prevents both
-      // checkpoint reservations and namespace placeholders for unopened revisions.
-      const revision = snapshotOpenedRevision(await request.openRevision())
+      const retained = await this.#completedFile(request, materializationRelativePath)
+      const revision = retained?.revision ?? await this.#openSourceRevision(request)
       // Source failures retain their protocol attribution; only local materialization
       // can produce checkpoint evidence.
       try {
@@ -228,7 +234,7 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
             context,
           ),
         )
-        const decision = await this.#selectInitialCheckpoint(
+        const decision = retained?.decision ?? await this.#selectInitialCheckpoint(
           revision,
           materializationRelativePath,
           stageScope,
@@ -315,9 +321,7 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
         handedOff = true
         return transaction
       } catch (error) {
-        recordOutputException(this.#diagnostics?.failures?.checkpoint, error)
-        this.#trace({ eventName: 'checkpoint', transition: 'failed' })
-        if (error instanceof TargetOwnershipUnknownError) this.#reportLegacyNeedsAttention()
+        this.#recordCheckpointFailure(error)
         throw error
       }
     } finally {
@@ -328,6 +332,43 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
         }
       }
     }
+  }
+
+  async #completedFile(
+    request: PersistentFileRequest, path: MaterializationRootRelativePath,
+  ): ReturnType<typeof resolveCompletedPersistentRevision> {
+    const { fileId } = request
+    if (request.requireRevisionOpen || fileId === undefined ||
+        (this.#freshFileIds !== undefined && !this.#freshFileIds.has(fileId))) return undefined
+    try {
+      return await resolveCompletedPersistentRevision({
+        fileId, expectedSize: request.expectedSize, path, checkpoints: this.#checkpoints,
+        ...(this.#semantic === undefined ? {} : { semantic: this.#semantic }),
+        ...(this.#ledgerBinding === undefined ? {} : { ledgerBinding: this.#ledgerBinding }),
+      })
+    } catch (error) {
+      this.#recordCheckpointFailure(error)
+      throw error
+    }
+  }
+
+  async #openSourceRevision(request: PersistentFileRequest): Promise<OpenedFileRevision> {
+    // Awaiting authenticated source authority before local planning prevents both
+    // checkpoint reservations and namespace placeholders for unopened revisions.
+    const opened = snapshotOpenedRevision(await request.openRevision())
+    if (this.#freshFileIds !== undefined && !this.#freshFileIds.has(opened.fileId)) {
+      // Delegated opens already resolved the revision in the folder delivery session.
+      // Leave their membership untracked so each storage layer need not index the same folder.
+      if (request.requireRevisionOpen || this.#freshFileIds.size >= MAX_FRESH_FILE_IDS) this.#freshFileIds = undefined
+      else this.#freshFileIds.add(opened.fileId)
+    }
+    return opened
+  }
+
+  #recordCheckpointFailure(error: unknown): void {
+    recordOutputException(this.#diagnostics?.failures?.checkpoint, error)
+    this.#trace({ eventName: 'checkpoint', transition: 'failed' })
+    if (error instanceof TargetOwnershipUnknownError) this.#reportLegacyNeedsAttention()
   }
 
   ensureDirectory(

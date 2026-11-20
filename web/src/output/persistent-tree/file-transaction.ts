@@ -20,11 +20,7 @@ import {
   recordOutputException,
   type OutputDiagnosticsPorts,
 } from '../diagnostics'
-import {
-  createFinalizedFileMaterializationRecords,
-  materializationFinalProofId,
-  validateFinalOutputAgainstCheckpoint,
-} from '../materialization-ledger/journal'
+import { createFinalizedFileMaterializationRecords } from '../materialization-ledger/journal'
 import type { MaterializationLedgerBindingV1 } from '../materialization-ledger/model'
 import {
   FILE_CHECKPOINT_COMMIT_CANDIDATE,
@@ -49,6 +45,7 @@ import type {
   PersistentTreeFile,
   SemanticPersistentOutputJournal,
 } from './contracts'
+import { hasMatchingFinalProof } from './materialization-authority'
 import { PersistentCheckpointObservation } from './checkpoint-observation'
 import { PersistentOutputError, TargetOwnershipUnknownError } from './errors'
 import {
@@ -532,17 +529,7 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
     checkpoint: FileCheckpointV2,
   ): Promise<PersistentFinalFileCommit | undefined> {
     if (this.#semantic === undefined || this.#ledgerBinding === undefined) return undefined
-    const persisted = await this.#semantic.readMaterializationFinalProof(
-      this.#ledgerBinding,
-      materializationFinalProofId(this.#ledgerBinding, checkpoint.recordId),
-    )
-    if (persisted === undefined) return undefined
-    if (persisted.checkpoint.recordId !== checkpoint.recordId ||
-        persisted.checkpoint.recordDigest !== checkpoint.checksum ||
-        persisted.checkpoint.checkpointGeneration !== checkpoint.checkpointGeneration) {
-      throw new TargetOwnershipUnknownError('commit', checkpoint.operationId)
-    }
-    validateFinalOutputAgainstCheckpoint(persisted.finalOutput, checkpoint)
+    if (!await hasMatchingFinalProof(this.#semantic, this.#ledgerBinding, checkpoint)) return undefined
     // The durable proof belongs to the same owned checkpoint across attempts.
     // Present it to the active job under its current output session.
     const checkpointProof = finalFileCheckpointProof(checkpoint)

@@ -544,6 +544,73 @@ describe('persistent production execution bridge', () => {
 
 })
 
+describe('persistent output revision short-circuit', () => {
+  it.each([0n, 4n])('requires a complete owned replica to skip opening a %s-byte source', async size => {
+    const file = fileEntry(identity(19), 'completed.bin', size)
+    const intent = asDirectTree(await receiveIntentFixture({
+      planKind: 'direct-tree', artifactKind: 'directory-tree', selection: new SelectionPolicy(),
+    }))
+    const completeRanges = size === 0n ? [] : [{ start: 0n, end: size }]
+    let replica: PersistentFileTransactionPort['contentReplica'] = { ...contentReplica(), objectId: `owned:${file.idText}` }
+    let ranges: readonly PersistentByteRange[] = completeRanges
+    const historicalRevision = Object.freeze({
+      fileId: file.idText, fileRevision: identityText(77), exactSize: file.expectedSize,
+    })
+    const fixture = new PersistentMaterializationFixture(intent, completeRanges)
+    const materialization: PersistentMaterializationPort = {
+      ensureDirectory: path => fixture.ensureDirectory(path),
+      materializeDirectory: req => fixture.materializeDirectory(req),
+      finalizeDirectory: (adm, out) => fixture.finalizeDirectory(adm, out),
+      close: () => fixture.close(),
+      beginFile: async request => {
+        expect(request.fileId).toBe(file.idText)
+        expect(request.expectedSize).toBe(file.expectedSize)
+        const base = await fixture.beginFile({ ...request, openRevision: async () => historicalRevision })
+        return Object.freeze({ ...base, contentReplica: replica, initialDurableRanges: ranges, verifiedRanges: ranges })
+      },
+    }
+    const execution = await createPersistentDirectTreeExecution({
+      ...createTestCheckpointAuthorities(),
+      executionProfile: disabledOutputExecutionProfile(1),
+      intent, materialization,
+      outputIdentity: outputSessionIdentity({ backend: 'persistent-test', outputSessionId: 'short-circuit-session' }),
+      settlement: {
+        beginTerminal: () => undefined,
+        pause: async (_req, cut) => { await cut.closeMaterialization(); return partialDirectoryState(intent) },
+        settle: async (_req, cut) => { await cut.closeMaterialization(); return publishedState(intent) },
+      },
+    })
+    const admission = await execution.directories.admitDirectory(
+      rootDirectoryRequest(intent.syntheticRoot, identityText(90)), SIGNAL,
+    )
+    const openRevision = vi.fn(async () => { throw new Error('openRevision must not run for complete files') })
+    const request: OutputFileRequest = {
+      ...outputRequest({
+        fileId: file.idText, sourcePath: [file.name], artifactPath: [file.name],
+        expectedSize: file.expectedSize, parentAdmission: admission, events: fixture.events,
+      }),
+      openRevision,
+    }
+
+    const begun = await execution.output.beginFile(request, SIGNAL)
+    expect(openRevision).not.toHaveBeenCalled()
+    expect(begun.revision.fileRevision).toBe(historicalRevision.fileRevision)
+    await expect(begun.transaction.commit(SIGNAL)).resolves.toMatchObject({ fileSize: size })
+
+    await expect(execution.output.readmitFile!(request, begun.durableRanges, SIGNAL))
+      .rejects.toThrow('bypassed authenticated revision authority')
+
+    replica = { ...contentReplica(), objectId: 'unrelated-object' }
+    await expect(execution.output.beginFile(request, SIGNAL))
+      .rejects.toThrow('bypassed authenticated revision authority')
+    replica = size === 0n ? null : { ...contentReplica(), objectId: `owned:${file.idText}` }
+    if (size > 0n) ranges = [{ start: 0n, end: 2n }]
+    await expect(execution.output.beginFile(request, SIGNAL))
+      .rejects.toThrow('bypassed authenticated revision authority')
+  })
+
+})
+
 describe('persistent Workspace production execution bridge', () => {
   it('retains exact Workspace OriginalFile generation and final checkpoint evidence', async () => {
     const file = fileEntry(identity(12), 'original.bin', 3n)

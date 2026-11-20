@@ -36,6 +36,8 @@ const SIBLING_BYTES = Uint8Array.of(7, 8)
 const PAYLOAD = fileEntry(identity(80), 'payload.bin', BigInt(PAYLOAD_BYTES.length))
 const SIBLING = fileEntry(identity(81), 'sibling.bin', BigInt(SIBLING_BYTES.length))
 const PAYLOAD_REVISIONS = [51, 52, 53] as const
+const SIBLING_REVISION = 54
+const REOPENED_SIBLING_REVISION = 55
 const SOURCE_METADATA = digestIdentity(61)
 
 interface ReopenedFolderFixture {
@@ -94,10 +96,10 @@ export async function continueReopenedFolder(fixture: ReopenedFolderFixture) {
     const continuation = await inventory.act(retained, 'continue', SIGNAL)
     if (continuation.kind !== 'receive-continuation') throw new Error('Continue did not reopen the folder download')
     try {
-      const { result, reads } = await runFolderTransfer(continuation.runtime, 'stable')
-      return { reads, lifecycle: result.lifecycle.kind, worker: result.worker.status,
+      const { result, opens, reads } = await runFolderTransfer(continuation.runtime, 'stable')
+      return { opens, reads, lifecycle: result.lifecycle.kind, worker: result.worker.status,
         stagedBytesBefore: retained.browserDelivery?.stagedBytes.toString(),
-        payloadBytes: await savedBytes(fixture, PAYLOAD.name) }
+        payloadBytes: await savedBytes(fixture, PAYLOAD.name), siblingBytes: await savedBytes(fixture, SIBLING.name) }
     } finally { await continuation.runtime.detach() }
   } finally { inventory.close() }
 }
@@ -113,6 +115,7 @@ async function runFolderTransfer(runtime: BoundReceiveOperation, source: 'reopen
     shareInstanceId: intent.shareInstance, fileRevision: identity(seed), fileRevisionText: identityText(seed),
     sourceMetadata: SOURCE_METADATA }))
   let payloadOpens = 0
+  const opens: string[] = []
   const reads: { name: string; offset: number }[] = []
   const decisions: { decision: string; retained: string; reused: string }[] = []
   const job = new TransferJob({
@@ -129,10 +132,14 @@ async function runFolderTransfer(runtime: BoundReceiveOperation, source: 'reopen
     revisions: { open: async (fileId, signal) => {
       const opened = await reader.open(fileId, signal)
       if (opened.descriptor.fileIdText === PAYLOAD.idText) {
+        opens.push(PAYLOAD.name)
         const descriptor = source === 'stable' ? revisions.at(-1)! : revisions[payloadOpens++]!
         return { ...opened, descriptor }
       }
-      return { ...opened, descriptor: { ...opened.descriptor, shareInstance, shareInstanceId: intent.shareInstance } }
+      opens.push(SIBLING.name)
+      const seed = source === 'stable' ? REOPENED_SIBLING_REVISION : SIBLING_REVISION
+      return { ...opened, descriptor: { ...opened.descriptor, shareInstance, shareInstanceId: intent.shareInstance,
+        fileRevision: identity(seed), fileRevisionText: identityText(seed), sourceMetadata: SOURCE_METADATA } }
     } },
     broker: { readRange: async function* (revision, _lease, range) {
       const payload = revision.fileIdText === PAYLOAD.idText
@@ -151,7 +158,7 @@ async function runFolderTransfer(runtime: BoundReceiveOperation, source: 'reopen
       }
     } },
   })
-  return { result: await job.run(), reads, decisions }
+  return { result: await job.run(), opens, reads, decisions }
 }
 
 async function pinTinyStagedPlacement(intent: ReceiveIntent) {
@@ -170,11 +177,13 @@ async function pinTinyStagedPlacement(intent: ReceiveIntent) {
   try {
     await journal.installPolicy(policy)
     // A pinned placement exercises real staging without transferring a threshold-sized file.
-    await journal.createFile(createBrowserDeliveryRecord({ policy,
-      source: { fileId: PAYLOAD.idText, fileRevision: identityText(PAYLOAD_REVISIONS[0]),
-        sourceMetadata: SOURCE_METADATA, exactSize: PAYLOAD.expectedSize, canonicalPath: [PAYLOAD.name] },
-      materializationRelativePath: [PAYLOAD.name], placement: 'staged', placementReason: 'retained-stage-fixture',
-    }))
+    for (const [file, seed] of [[PAYLOAD, PAYLOAD_REVISIONS[0]], [SIBLING, SIBLING_REVISION]] as const) {
+      await journal.createFile(createBrowserDeliveryRecord({ policy,
+        source: { fileId: file.idText, fileRevision: identityText(seed),
+          sourceMetadata: SOURCE_METADATA, exactSize: file.expectedSize, canonicalPath: [file.name] },
+        materializationRelativePath: [file.name], placement: 'staged', placementReason: 'retained-stage-fixture',
+      }))
+    }
   } finally { journal.close() }
 }
 

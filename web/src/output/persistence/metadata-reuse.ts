@@ -17,7 +17,9 @@ export async function admitCheckpointMetadataReuse(
     throw new TypeError('Saved ranges lack current-source applicability')
   }
   if (previous.fileRevision === current.fileRevision) return previous
-  if (semantic === undefined && fileCheckpointIsComplete(previous)) {
+  // Semantic journals check final receipts atomically with the revision change. A
+  // checkpoint-only journal cannot distinguish flushed bytes from a final delivery.
+  if (semantic === undefined && previous.checkpointGeneration > 0n && fileCheckpointIsComplete(previous)) {
     throw new TypeError('Complete checkpoints require separate delivery-history authority')
   }
   const next = newFileCheckpointV2({

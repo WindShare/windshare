@@ -5,7 +5,7 @@ import { requireOriginPrivateStorage } from './browser-storage-support'
 const REOPEN_PROBE = '/test/browser/browser-delivery-reopen-probe.ts'
 
 for (const preference of ['direct', 'automatic'] as const) {
-  test(`folder download can continue after a second revision reopen (${preference})`, async ({ page, browserName }) => {
+  test(`folder download continues after a second revision reopen without reopening its saved sibling (${preference})`, async ({ page, browserName }) => {
     await page.goto(BROWSER_CONTRACT_HOST_PATH)
     await requireOriginPrivateStorage(page, browserName)
     const first = await page.evaluate(async ({ path, parentName, preference }) => {
@@ -32,10 +32,11 @@ for (const preference of ['direct', 'automatic'] as const) {
       return probe.continueReopenedFolder(fixture)
     }, { path: REOPEN_PROBE, fixture: first.fixture })
     expect(resumed).toMatchObject({
+      opens: ['payload.bin'],
       reads: [{ name: 'payload.bin', offset: 4 }],
       lifecycle: 'published', worker: 'Succeeded',
       stagedBytesBefore: preference === 'automatic' ? '4' : '0',
-      payloadBytes: [1, 2, 3, 4, 5, 6],
+      payloadBytes: [1, 2, 3, 4, 5, 6], siblingBytes: [7, 8],
     })
   })
 }

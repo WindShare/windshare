@@ -93,9 +93,8 @@ export interface OutputFileOwnership extends OutputSessionIdentity {
 }
 
 /**
- * The adapter must invoke openRevision and await it before creating or opening an
- * output object. This callback boundary keeps failed preparation/revision opens
- * from leaving placeholders in a destination namespace.
+ * Open the source before creating an output object so a failed source open leaves no placeholder.
+ * A new attempt may instead reopen a complete owned replica of the originally authenticated revision.
  */
 export interface OutputFileRequest {
   readonly source: OutputCatalogFileIdentity

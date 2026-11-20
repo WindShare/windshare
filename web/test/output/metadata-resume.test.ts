@@ -3,6 +3,7 @@ import { materializationFixture, revision, FILE_ID } from './persistent-tree-ses
 import { identity } from './planning/fixture'
 import { encodeFileCheckpointV2, decodeFileCheckpointV2 } from '../../src/output/persistence/checkpoint'
 import { admitCheckpointMetadataReuse } from '../../src/output/persistence/metadata-reuse'
+import { PersistentTreeOutputSession } from '../../src/output/persistent-tree/session'
 import { preservingRecoveryPolicy } from './persistent-tree-file-fixture'
 
 const sourceMetadata = identity(71, 32)
@@ -74,6 +75,87 @@ describe('metadata resume admission', () => {
     await tx.pause()
   })
 
+  it('continues a checkpoint-only workspace from its fully flushed file before final commit', async () => {
+    const f = await materializationFixture()
+    await f.session.close()
+    const workspace = { tree: f.tree, checkpoints: f.checkpoints }
+    const first = await PersistentTreeOutputSession.open(workspace)
+    const request = { fileId: FILE_ID, expectedSize: previous.exactSize, materializationRelativePath: path }
+    const file = await first.beginFile({ ...request, openRevision: async () => previous })
+    const bytes = Uint8Array.of(1, 2, 3, 4, 5, 6)
+    await file.writeRange(0n, bytes)
+    await file.pause()
+    await first.close()
+
+    const resumed = await PersistentTreeOutputSession.open(workspace)
+    const offline = vi.fn(async () => { throw new Error('sender unavailable') })
+    const saved = await resumed.beginFile({ ...request, openRevision: offline })
+    expect(offline).not.toHaveBeenCalled()
+    expect(saved.ownedObjectId).toBe(file.ownedObjectId)
+    expect((await saved.commit()).fileRevision).toBe(previous.fileRevision)
+    expect(f.tree.visible(path)).toEqual(bytes)
+    await resumed.close()
+  })
+
+  it('looks up retained content on a same-session revisit without probing each new file', async () => {
+    const f = await materializationFixture()
+    const request = { fileId: FILE_ID, expectedSize: previous.exactSize, materializationRelativePath: path }
+    const first = await f.session.beginFile({ ...request, openRevision: async () => previous })
+    await first.writeRange(0n, Uint8Array.of(1, 2, 3, 4, 5, 6))
+    await first.pause()
+    const offline = vi.fn(async () => { throw new Error('sender unavailable') })
+    const local = await f.session.beginFile({ ...request, openRevision: offline })
+    expect(offline).not.toHaveBeenCalled()
+    expect((await local.commit()).fileRevision).toBe(previous.fileRevision)
+
+    const other = { ...previous, fileId: identity(73) }
+    const reads = f.checkpoints.readCommittedCount
+    const fresh = await f.session.beginFile({ ...request, fileId: other.fileId,
+      materializationRelativePath: ['fresh.bin'], openRevision: async () => other })
+    expect(f.checkpoints.readCommittedCount).toBe(reads)
+    await fresh.close()
+    await f.session.close()
+  })
+
+  it('readmits all flushed bytes under matching source metadata before the final receipt exists', async () => {
+    const f = await materializationFixture()
+    const request = { fileId: FILE_ID, expectedSize: previous.exactSize, materializationRelativePath: path }
+    const first = await f.session.beginFile({ ...request, openRevision: async () => previous })
+    const bytes = Uint8Array.of(1, 2, 3, 4, 5, 6)
+    await first.writeRange(0n, bytes)
+    await first.pause()
+    expect(f.checkpoints.commitFinalFileCount).toBe(0)
+    const openRevision = vi.fn(async () => current)
+    const next = await f.session.beginFile({ ...request, requireRevisionOpen: true, openRevision })
+    expect(openRevision).toHaveBeenCalledOnce()
+    expect(next.initialDurableRanges).toEqual([{ start: 0n, end: 6n }])
+    expect(next.ownedObjectId).toBe(first.ownedObjectId)
+    expect((await next.commit()).fileRevision).toBe(current.fileRevision)
+    expect(f.tree.visible(path)).toEqual(bytes)
+    await f.session.close()
+  })
+
+  it('keeps a concurrently readmitted revision when an offline resume sees an older checkpoint', async () => {
+    const f = await materializationFixture()
+    const request = { fileId: FILE_ID, expectedSize: previous.exactSize, materializationRelativePath: path }
+    const first = await f.session.beginFile({ ...request, openRevision: async () => previous })
+    await first.writeRange(0n, Uint8Array.of(1, 2, 3, 4, 5, 6))
+    await first.pause()
+    const read = f.checkpoints.readCommitted.bind(f.checkpoints)
+    vi.spyOn(f.checkpoints, 'readCommitted').mockImplementationOnce(async id => {
+      const old = (await read(id))!
+      await admitCheckpointMetadataReuse(old, current, f.checkpoints, f.checkpoints)
+      return old
+    })
+    const openRevision = vi.fn(async () => { throw new Error('sender unavailable') })
+    const local = await f.session.beginFile({ ...request, openRevision })
+    expect(local.revision.fileRevision).toBe(current.fileRevision)
+    expect((await local.commit()).fileRevision).toBe(current.fileRevision)
+    expect(f.checkpoints.committed(FILE_ID).fileRevision).toBe(current.fileRevision)
+    expect(openRevision).not.toHaveBeenCalled()
+    await f.session.close()
+  })
+
   it('never rebinds historical completion receipts to a new revision', async () => {
     const f = await partial()
     const tx = await f.session.beginFile({ materializationRelativePath: path,
@@ -84,5 +166,35 @@ describe('metadata resume admission', () => {
     await expect(admitCheckpointMetadataReuse(delivered, current, f.checkpoints, f.checkpoints))
       .rejects.toThrow('historical delivery')
     expect(f.checkpoints.committed(FILE_ID)).toEqual(delivered)
+  })
+
+  it.each([0n, 6n])('short-circuits a completed %s-byte file on reopen without calling openRevision or bumping generation', async size => {
+    const f = await materializationFixture()
+    const initial = { ...revision(size), sourceMetadata }
+    const first = await f.session.beginFile({
+      fileId: FILE_ID, expectedSize: size, materializationRelativePath: path,
+      openRevision: async () => initial,
+    })
+    if (size > 0n) await first.writeRange(0n, Uint8Array.of(1, 2, 3, 4, 5, 6))
+    const initialCommit = await first.commit()
+    const delivered = f.checkpoints.committed(FILE_ID)
+    await f.session.close()
+
+    const reopened = await PersistentTreeOutputSession.open({
+      tree: f.tree, checkpoints: f.checkpoints, semantic: f.checkpoints,
+    })
+    const openRevision = vi.fn(async () => ({ ...initial, fileRevision: current.fileRevision }))
+    const revisited = await reopened.beginFile({
+      fileId: FILE_ID, expectedSize: size, materializationRelativePath: path,
+      openRevision,
+    })
+    expect(openRevision).not.toHaveBeenCalled()
+    expect(revisited.revision.fileRevision).toBe(initial.fileRevision)
+    expect(revisited.initialDurableRanges).toEqual(size === 0n ? [] : [{ start: 0n, end: size }])
+    const commit = await revisited.commit()
+    expect(commit.checkpointGeneration).toBe(initialCommit.checkpointGeneration)
+    expect(commit.recordDigest).toBe(initialCommit.recordDigest)
+    expect(f.checkpoints.committed(FILE_ID)).toEqual(delivered)
+    await reopened.close()
   })
 })

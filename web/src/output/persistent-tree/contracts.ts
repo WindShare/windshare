@@ -37,11 +37,15 @@ export interface OpenedFileRevision {
 }
 
 export interface PersistentFileRequest {
+  readonly fileId?: string
+  readonly expectedSize?: bigint
   readonly sourceAuthenticationPath?: readonly string[]
   readonly materializationRelativePath: readonly string[]
   readonly shareInstance?: string
   readonly outputSession?: OutputSessionIdentity
   readonly recovery?: PersistentFileRecoveryPolicy
+  /** Mid-transfer readmission must authenticate a fresh revision rather than short-circuiting. */
+  readonly requireRevisionOpen?: boolean
   readonly automaticCheckpointAdmission?: AutomaticCheckpointFileAdmission
   readonly preservingWriterCapacity?: PreservingWriterCapacityAuthority
   readonly performancePipeline?: PerformanceFilePipelineObservation
