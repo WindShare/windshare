@@ -664,6 +664,15 @@ func (m *UDPMuxDefault) connWorker() { //nolint:cyclop
 		}
 
 		if err = destinationConn.writePacket(buf[:n], srcAddrPort, srcUDPAddr); err != nil {
+			if errors.Is(err, io.ErrClosedPipe) {
+				// The peer keeps sending until the closed connection's removal unmaps
+				// its address, so late packets are expected. This is a one-off
+				// upstreamable fix; do not add further log-suppression patches under
+				// third_party/pion—route Pion logging through WindShare instead.
+				m.params.Logger.Tracef("Dropping packet from %s for closed connection", srcAddrPort)
+
+				continue
+			}
 			m.params.Logger.Errorf("Failed to write packet: %v", err)
 		}
 	}

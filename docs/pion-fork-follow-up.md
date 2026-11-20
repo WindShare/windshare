@@ -1,6 +1,6 @@
 # Pion fork follow-up
 
-Updated: 2026-10-30. Pinned baselines: ICE `v4.4.8`, WebRTC `v4.2.26`, TURN
+Updated: 2026-11-20. Pinned baselines: ICE `v4.4.8`, WebRTC `v4.2.26`, TURN
 `v5.1.3`, SCTP `v1.12.0`. Exact commits and checksums live in
 [the manifest](../third_party/pion/manifest.json).
 
@@ -33,6 +33,7 @@ submission links recorded here.
 | TURN routing and cleanup | Injected cancellable egress, allocation ownership, bounded release | Keep route/capacity policy in WindShare; isolate reusable lifecycle fixes |
 | TURN binding recovery | Binding expiry, stable channel numbers, bounded retries, peer-scoped fallback and observations | Separate protocol recovery fixes from product observation hooks |
 | ICE STUN writes | Bounded per-candidate writers keep permission waits outside the agent loop | Prepare a minimal blocked-permission reproduction |
+| ICE UDP mux closed-conn drops | Log `io.ErrClosedPipe` late packets at trace level instead of error | Submit narrow upstream fix and remove local patch; one-off exception, do not add further log-suppression patches |
 | SCTP RACK | Lost retransmissions remain eligible for recovery; ambiguous retry ACKs are rejected | Submit focused recovery fix with [recorded evidence](../testdata/connectivity/webrtc/stall-20261022/README.md) |
 
 ## Maintenance
@@ -40,6 +41,8 @@ submission links recorded here.
 Before proposing a change, check upstream main and existing issues/PRs. Submit
 one problem per branch, with a minimal reproduction and upstream-native tests.
 Do not include dependency upgrades or WindShare policy in a protocol fix.
+Do not add further Pion log-suppression patches under `third_party/pion/`;
+route or filter provider console noise through WindShare's injected Pion logger instead.
 
 For local changes, update source, patch and manifest together. Run
 `go run ./scripts/ci/_piondeps -reproduce`, affected race tests and
