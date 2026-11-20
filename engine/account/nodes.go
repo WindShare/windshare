@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"sync"
@@ -97,12 +98,15 @@ func (cache *nodePolicyCache) release(address string) {
 	delete(cache.entries, address)
 }
 
+func (state *nodeState) permits(key [32]byte, now time.Time) bool {
+	return state != nil && state.key == key &&
+		state.expires.After(now) && state.anonymous && state.available
+}
+
 func (cache *nodePolicyCache) permitsAnonymous(address string, node Node) bool {
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
-	cached := cache.entries[address]
-	return cached != nil && cached.key == node.Key &&
-		cached.expires.After(cache.now()) && cached.anonymous && cached.available
+	return cache.entries[address].permits(node.Key, cache.now())
 }
 
 func (cache *nodePolicyCache) put(address string, state *nodeState) {
@@ -139,19 +143,28 @@ func (cache *nodePolicyCache) refreshNode(ctx context.Context, address string, s
 	if err != nil {
 		return
 	}
-	updated := false
+	changed := false
+	permits := false
 	cache.mu.Lock()
 	if cache.entries[address] == state && ctx.Err() == nil {
+		now := cache.now()
+		before := state.permits(node.Key, now)
 		state.key = node.Key
 		state.expires = time.Unix(int64(descriptor.ExpiresAt), 0)
 		state.anonymous = descriptor.Anonymous
 		state.available = descriptor.Available && descriptor.Services.Relay
-		updated = true
+		permits = state.permits(node.Key, now)
+		changed = before != permits
 	}
 	cache.mu.Unlock()
 	// Notify after releasing cache.mu to preserve Service.mu -> nodePolicyCache.mu order.
-	if updated && cache.onChange != nil {
-		cache.onChange()
+	// Skip broadcasts when the effective anonymous-admission outcome is unchanged
+	// so steady-state descriptor renewals do not spuriously wake observers.
+	if changed {
+		slog.Debug("account_node_policy_changed", "permits_anonymous", permits)
+		if cache.onChange != nil {
+			cache.onChange()
+		}
 	}
 }
 

@@ -74,10 +74,7 @@ func (share *ShareAuthorization) Close() {
 		share.reservation = nil
 		delete(service.unconfirmedShares, share)
 		delete(service.officialShares, share)
-		for address := range share.nodes {
-			service.nodes.release(address)
-		}
-		clear(share.nodes)
+		share.releaseNodesLocked()
 		share.releaseCredentialLocked()
 		service.refreshDemandChangedLocked()
 	}
@@ -86,6 +83,9 @@ func (share *ShareAuthorization) Close() {
 type Source struct {
 	share   *ShareAuthorization
 	address string
+	// discover is true for sources returned by ShareAuthorization.Source,
+	// enabling on-demand node policy polling while attribution is pending.
+	discover bool
 }
 
 func (share *ShareAuthorization) Source(address string) *Source {
@@ -93,15 +93,12 @@ func (share *ShareAuthorization) Source(address string) *Source {
 		return nil
 	}
 	share.beginOfficialUse()
-	share.retainNode(address)
-	return &Source{share: share, address: address}
+	return &Source{share: share, address: address, discover: true}
 }
 
-func (share *ShareAuthorization) retainNode(address string) {
+func (share *ShareAuthorization) retainNodeLocked(address string) {
 	service := share.service
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	if share.attribution == attributionClosed || service.ctx.Err() != nil {
+	if share.attribution != attributionPending || service.ctx.Err() != nil {
 		return
 	}
 	if share.nodes == nil {
@@ -112,6 +109,13 @@ func (share *ShareAuthorization) retainNode(address string) {
 	}
 	share.nodes[address] = struct{}{}
 	service.nodes.retain(address)
+}
+
+func (share *ShareAuthorization) releaseNodesLocked() {
+	for address := range share.nodes {
+		share.service.nodes.release(address)
+	}
+	clear(share.nodes)
 }
 
 func (share *ShareAuthorization) beginOfficialUse() {
@@ -215,6 +219,9 @@ func (share *ShareAuthorization) reserveAttributionLocked(bearer string) service
 		// on the same attribution as any registration the relay could retain.
 		share.attribution = reservation.identity
 		share.reservation = nil
+		// Anonymous policy is only consulted while attribution is pending; once
+		// a share commits to account or anonymous admission, stop polling nodes.
+		share.releaseNodesLocked()
 		if share.attribution == attributionAnonymous {
 			var fallbackCredential [16]byte
 			hadCredential := share.credential != nil && share.credential.record.Credential != nil
@@ -290,7 +297,13 @@ func (share *ShareAuthorization) allowsAnonymousFallbackLocked(record Record) bo
 }
 
 func (source *Source) permitsAnonymousLocked(node Node) bool {
-	return source.share.service.nodes.permitsAnonymous(source.address, node)
+	if source.share.service.nodes.permitsAnonymous(source.address, node) {
+		return true
+	}
+	if source.discover {
+		source.share.retainNodeLocked(source.address)
+	}
+	return false
 }
 
 func deniedAuthorization(reason string) serviceauthority.RegistrationAuthorization {
