@@ -380,7 +380,7 @@ function displayForRoute(offered: OfferedArtifactChoice, input: ReceiveOperation
   if (input === undefined) return undefined
   const browserDownload = offered.route.kind === 'portable-handoff' || offered.route.kind === 'workspace-then-publish'
   return snapshotReceiveOperationDisplay({
-    ...input, ...(browserDownload ? { destinationLabel: 'Browser downloads' } : {}),
+    ...input, ...(browserDownload ? { destinationLabel: { kind: 'browser-downloads' } } : {}),
   })
 }
 

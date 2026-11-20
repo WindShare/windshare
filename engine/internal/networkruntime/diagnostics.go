@@ -4,27 +4,30 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/windshare/windshare/connectivity/relayplan"
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/core/diagnostics"
-	"github.com/windshare/windshare/core/networkendpoint"
+	"github.com/windshare/windshare/transport/relayv2"
 )
 
 func (s Selection) DiagnosticRecord() diagnostics.Record {
 	candidates := make([]diagnostics.Value, 0, len(s.Decision.Candidates))
 	filters := make([]diagnostics.Value, 0, len(s.Decision.Filters))
 	for _, candidate := range s.Decision.Candidates {
-		candidates = append(candidates, diagnostics.Object(diagnostics.Fields{
-			"endpoint": diagnostics.Text(candidate.URL), "alias": diagnostics.Text(candidate.Alias), "configured": diagnostics.Bool(candidate.Configured)}))
+		fields := diagnostics.Fields{"endpoint": diagnostics.Text(candidate.URL), "alias": diagnostics.Text(candidate.Alias), "configured": diagnostics.Bool(candidate.Configured)}
+		deadlineField(fields, "cooldown_until", candidate.CooldownUntil)
+		deadlineField(fields, "server_retry_at", candidate.ServerRetryAt)
+		candidates = append(candidates, diagnostics.Object(fields))
 	}
 	for _, filter := range s.Decision.Filters {
 		filters = append(filters, diagnostics.Object(diagnostics.Fields{"endpoint": diagnostics.Text(filter.Endpoint), "reason": diagnostics.Text(filter.Reason)}))
 	}
 	return diagnostics.New("share_network_plan", diagnostics.Fields{"generation": diagnostics.Uint(s.Decision.DirectoryGeneration), "serial": diagnostics.Uint(s.Decision.DirectorySerial),
 		"network_generation": diagnostics.Text(s.Decision.NetworkGeneration), "configured_only": diagnostics.Bool(s.Decision.ConfiguredOnly),
-		"published_candidates": diagnostics.Array(candidates...), "filters": diagnostics.Array(filters...), "frontend": diagnostics.Text(s.Frontend),
+		"cooldown_fallback": diagnostics.Bool(s.Decision.CooldownFallback), "published_candidates": diagnostics.Array(candidates...), "filters": diagnostics.Array(filters...), "frontend": diagnostics.Text(s.Frontend),
 		"alternate_frontend": diagnostics.Text(s.AlternateFrontend), "frontend_reason": diagnostics.Text(s.Decision.FrontendReason)})
 }
 
@@ -33,33 +36,79 @@ func AdmissionRecord(value relayset.Admission) diagnostics.Record {
 		"state": diagnostics.Text(value.State), "admissions": diagnostics.Int(int64(value.Count))})
 }
 
-func (r *Runtime) Observer(sink diagnostics.Sink) func(string, senderrelay.Attempt) {
+func deadlineField(fields diagnostics.Fields, key string, deadline time.Time) {
+	if !deadline.IsZero() {
+		fields[key] = diagnostics.Text(deadline.UTC().Format(time.RFC3339Nano))
+	}
+}
+
+func (r *Runtime) Observer(selection Selection, sink diagnostics.Sink) func(string, senderrelay.Attempt) {
+	identities := make(map[string]string, len(selection.Plan.Network))
+	for _, candidate := range selection.Plan.Network {
+		identities[candidate.URL] = candidate.Identity
+	}
 	var mu sync.Mutex
-	generations := map[string]string{}
+	generations := make(map[string]uint64, len(identities))
 	return func(url string, attempt senderrelay.Attempt) {
-		mu.Lock()
-		defer mu.Unlock()
-		if attempt.State == senderrelay.AttemptStarted {
-			generations[url] = r.generation()
+		var started uint64
+		var entry healthEntry
+		var change relayplan.CooldownReason
+		now := r.now()
+		if identity, directory := identities[url]; directory {
+			mu.Lock()
+			if attempt.State == senderrelay.AttemptStarted {
+				generations[url] = r.generation()
+			}
+			started = generations[url]
+			mu.Unlock()
+			switch attempt.State {
+			case senderrelay.AttemptSucceeded, senderrelay.AttemptParked, senderrelay.AttemptFailed:
+				entry, change = r.health.RecordAttempt(identity, started, r.generation(), now, attempt)
+			}
 		}
-		fields := diagnostics.Fields{"endpoint": diagnostics.Text(url), "attempt": diagnostics.Uint(uint64(attempt.Number)), "state": diagnostics.Uint(uint64(attempt.State)),
-			"registration_generation": diagnostics.Uint(attempt.Generation), "timeout": diagnostics.Bool(errors.Is(attempt.Failure, context.DeadlineExceeded)),
-			"stage":       diagnostics.Text(attempt.Stage),
-			"duration_ms": diagnostics.Millis(attempt.Duration), "resume": diagnostics.Bool(attempt.Resume), "terminal": diagnostics.Bool(attempt.Terminal), "backoff_ms": diagnostics.Millis(attempt.NextDelay)}
-		if attempt.Failure != nil {
-			fields["failure"] = diagnostics.Text(attempt.Failure.Error())
+		if !sink.Enabled() {
+			return
+		}
+		if entry.At.After(now) {
+			now = entry.At
+		}
+		fields := attemptFields(url, attempt, now)
+		if started != 0 {
+			fields["network_generation"] = diagnostics.Uint(started)
+		}
+		if change != relayplan.CooldownNone {
+			var delay time.Duration
+			if entry.CooldownReason == change {
+				delay = entry.CooldownUntil.Sub(now)
+			}
+			if change == relayplan.CooldownServerBackoff {
+				delay = max(delay, entry.ServerRetryAt.Sub(now))
+			}
+			fields["cooldown_ms"] = diagnostics.Millis(delay)
+			fields["cooldown_reason"] = diagnostics.Text(string(change))
+			fields["consecutive_failures"] = diagnostics.Int(int64(entry.failures))
+			deadlineField(fields, "server_retry_at", entry.ServerRetryAt)
 		}
 		sink.Emit(diagnostics.New("relay_registration_attempt", fields).Correlate(diagnostics.Fields{"share_instance_id": diagnostics.Identity(attempt.ShareInstance[:])}))
-		if attempt.State != senderrelay.AttemptSucceeded && attempt.State != senderrelay.AttemptFailed && attempt.State != senderrelay.AttemptParked {
-			return
-		}
-		if generations[url] != r.generation() {
-			return
-		}
-		endpoint, err := networkendpoint.NormalizeRelay(url)
-		if err != nil {
-			return
-		}
-		r.observations.Record(relayplan.Observation{Identity: endpoint.IdentityURL, NetworkGeneration: generations[url], At: r.now(), Admitted: attempt.State != senderrelay.AttemptFailed, Duration: attempt.Duration})
 	}
+}
+
+func attemptFields(url string, attempt senderrelay.Attempt, now time.Time) diagnostics.Fields {
+	fields := diagnostics.Fields{"endpoint": diagnostics.Text(url), "attempt": diagnostics.Uint(uint64(attempt.Number)), "state": diagnostics.Uint(uint64(attempt.State)),
+		"registration_generation": diagnostics.Uint(attempt.Generation), "timeout": diagnostics.Bool(errors.Is(attempt.Failure, context.DeadlineExceeded)),
+		"stage": diagnostics.Text(attempt.Stage), "duration_ms": diagnostics.Millis(attempt.Duration), "resume": diagnostics.Bool(attempt.Resume),
+		"terminal": diagnostics.Bool(attempt.Terminal), "backoff_ms": diagnostics.Millis(attempt.NextDelay)}
+	if attempt.Failure != nil {
+		fields["failure"] = diagnostics.Text(attempt.Failure.Error())
+	}
+	if upgrade, ok := errors.AsType[*relayv2.WebSocketDialError](attempt.Failure); ok && upgrade.StatusCode != 0 {
+		fields["http_status"] = diagnostics.Int(int64(upgrade.StatusCode))
+	}
+	if attempt.ServerRetryAt.After(now) {
+		deadlineField(fields, "server_retry_at", attempt.ServerRetryAt)
+	}
+	if attempt.State == senderrelay.AttemptSucceeded || attempt.State == senderrelay.AttemptParked {
+		fields["handshake_ms"] = diagnostics.Millis(attempt.HandshakeDuration)
+	}
+	return fields
 }

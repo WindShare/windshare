@@ -4,15 +4,15 @@ import { filePreviewCapability } from '../../preview/capability'
 import type { SelectionDraft, ShareIdentity } from '../model'
 
 export const EMPTY_SELECTION_DRAFT: SelectionDraft = Object.freeze({
-  mode: 'scope', scope: 'whole-share', label: 'Shared files', summary: 'All shared items', empty: false,
+  mode: 'scope', scope: 'whole-share', label: { kind: 'shared-files' as const }, excludedItems: 0, empty: false,
 })
 
 export function scopeSelection(directory: BrowseDirectory): SelectionPolicy {
-  const root = directory.path.length === 0
-  const selection = new SelectionPolicy(root)
-  if (!root) {
+  const name = directory.path.at(-1)
+  const selection = new SelectionPolicy(name === undefined)
+  if (name !== undefined) {
     // The directory identity and ancestry came from the authenticated navigation route.
-    selection.set({ kind: 'directory', id: directory.id, idText: directory.idText, name: directory.name },
+    selection.set({ kind: 'directory', id: directory.id, idText: directory.idText, name },
       directory.ancestry.slice(0, -1), true)
   }
   return selection
@@ -25,25 +25,17 @@ export function projectDraft(
   share: ShareIdentity | null,
 ): SelectionDraft {
   if (mode === 'scope') {
-    const root = directory.path.length === 0
+    const name = directory.path.at(-1)
     return Object.freeze({
-      mode, scope: root ? 'whole-share' : 'current-folder',
-      label: root ? share?.name ?? 'Shared files' : directory.name,
-      summary: root ? 'All shared items' : 'This folder and its contents', empty: false,
+      mode, scope: name === undefined ? 'whole-share' : 'current-folder',
+      label: name ?? share?.name ?? { kind: 'shared-files' as const },
+      excludedItems: 0, empty: false,
     })
   }
   const intent = selection.intentSummary()
-  const selected = [itemCount(intent.selectedFolders, 'folder'), itemCount(intent.selectedFiles, 'file')]
-    .filter(Boolean).join(', ')
-  const label = intent.allSelected ? 'All shared items' : selected || 'Selected items'
-  const exclusion = intent.excludedItems > 0 ? ', excluding ' + itemCount(intent.excludedItems, 'item') : ''
-  const summary = intent.empty ? 'Select items to download' : label + ' selected' + exclusion
-  return Object.freeze({ mode, scope: 'selected', label, empty: intent.empty, summary })
-}
-
-function itemCount(count: number, noun: string): string {
-  if (count === 0) return ''
-  return `${count} ${noun}${count === 1 ? '' : 's'}`
+  return Object.freeze({ mode, scope: 'selected', empty: intent.empty, excludedItems: intent.excludedItems,
+    label: intent.allSelected ? { kind: 'all-selected' as const } :
+      { kind: 'selection' as const, folders: intent.selectedFolders, files: intent.selectedFiles } })
 }
 
 function filePresentationKind(name: string, expectedSize?: bigint): 'photo' | 'video' | 'file' {
@@ -63,6 +55,6 @@ export function shareIdentityFromRoot(page: BrowsePage, shareInstance: string): 
         expectedSize: sole.expectedSize, selection: 'selected' }) })
   }
   return Object.freeze({ kind: 'browser', shareInstance,
-    name: sole?.name ?? 'Shared files', homeDirectoryId: sole?.idText ?? page.directory.idText,
+    name: sole?.name ?? null, homeDirectoryId: sole?.idText ?? page.directory.idText,
     singleFolder: sole?.kind === 'directory' })
 }

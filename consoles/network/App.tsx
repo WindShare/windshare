@@ -1,10 +1,10 @@
 import { useMemo, useState } from 'react'
-import { useAction, useResource } from '../ui/activity'
-import { Login } from '../ui/forms'
+import { useAction, useResource, type Feedback } from '../ui/activity'
+import { ChangePasswordDialog, Login } from '../ui/forms'
 import { Icon } from '../ui/Icon'
 import { WorkspaceNav } from '../ui/chrome/WorkspaceNav'
 import { Frame, Notice, ReadError, SessionWait } from '../ui/layout'
-import type { Message } from '../ui/locale'
+import { message, type Message } from '../ui/locale'
 import { useCopy } from '../ui/use-locale'
 import { sharedCopy } from '../ui/locales'
 import { networkCopy } from './locales'
@@ -76,7 +76,8 @@ function Dashboard({ api, snapshot, update, refresh, loadMoreNodes, retry, refre
   let view
   if (policy) {
     view = <PolicySettings api={api} snapshot={snapshot} editor={editor}
-      saved={({ settings, registration_mode }) => update(current => ({ ...current, settings, registration_mode }))} />
+      saved={({ settings, registration_mode }) => update(current => ({ ...current, settings, registration_mode }))}
+      reviewsSaved={reviews => update(current => ({ ...current, reviews }))} />
   } else if (page === 'enroll') {
     view = <EnrollNode api={api} saved={enrollNode} />
   } else if (page === 'node') {
@@ -106,17 +107,18 @@ function Dashboard({ api, snapshot, update, refresh, loadMoreNodes, retry, refre
   </div>
 }
 
-function ConsoleBody({ api, state, token, clearToken, resetSession }: {
+function ConsoleBody({ api, state, token, expired, clearToken, resetSession }: {
   api: AuthorityClient
   state: ReturnType<typeof useResource<Snapshot | null>>
   token: string | null
+  expired: boolean
   clearToken: () => void
   resetSession: () => void
 }) {
   const t = useCopy(networkCopy)
   if (state.value === undefined) return <SessionWait error={state.error} retry={state.retry} />
   if (state.value === null) {
-    return <Login area={t.administrator} username initialize={!!token} cancelSetup={clearToken}
+    return <Login area={t.administrator} username initialize={!!token} expired={expired} cancelSetup={clearToken}
       submit={async (password, name) => { await api.signIn(name, password, token); resetSession() }} />
   }
   const snapshot = state.value
@@ -134,24 +136,43 @@ function ConsoleBody({ api, state, token, clearToken, resetSession }: {
     loadMoreNodes={loadMoreNodes} retry={state.retry} update={merge => state.update(previous => previous && merge(previous))} />
 }
 
-function Console({ api, token, clearToken, resetSession }: {
-  api: AuthorityClient; token: string | null; clearToken: () => void; resetSession: () => void
+function Console({ api, token, expired, clearToken, resetSession }: {
+  api: AuthorityClient; token: string | null; expired: boolean; clearToken: () => void; resetSession: () => void
 }) {
   const state = useResource(api.snapshot)
   const logout = useAction()
+  const [changingPassword, setChangingPassword] = useState(false)
+  const [passwordNotice, setPasswordNotice] = useState<Feedback | null>(null)
   const t = useCopy(networkCopy)
   const shared = useCopy(sharedCopy)
-  return <Frame area={t.title} tools={state.value && <button className="quiet sign-out" aria-label={shared.signOut} title={shared.signOut} disabled={logout.busy}
-    onClick={() => void logout.run(async () => { await api.signOut(); resetSession() })}><Icon name="logout" size={16} /><span className="action-text">{shared.signOut}</span></button>}>
-    <Notice feedback={logout.feedback} />
-    <ConsoleBody api={api} state={state} token={token} clearToken={clearToken} resetSession={resetSession} />
+  const tools = state.value && <div className="mast-account">
+    <button type="button" className="quiet" aria-label={shared.changePassword} title={shared.changePassword}
+      disabled={logout.busy} onClick={() => { setPasswordNotice(null); setChangingPassword(true) }}>
+      <Icon name="key" size={16} /><span>{shared.changePassword}</span></button>
+    <button type="button" className="quiet" aria-label={shared.signOut} title={shared.signOut} disabled={logout.busy}
+      onClick={() => { setPasswordNotice(null); void logout.run(async () => { await api.signOut(); resetSession() }) }}>
+      <Icon name="logout" size={16} /><span>{shared.signOut}</span></button>
+  </div>
+  return <Frame area={t.title} tools={tools}>
+    <Notice feedback={logout.feedback ?? passwordNotice} />
+    <ConsoleBody api={api} state={state} token={token} expired={expired} clearToken={clearToken} resetSession={resetSession} />
+    {changingPassword && <ChangePasswordDialog onCancel={() => setChangingPassword(false)}
+      onSubmit={async (current, next) => {
+        await api.changePassword(current, next)
+        setChangingPassword(false)
+        setPasswordNotice({ kind: 'success', message: message(sharedCopy, 'passwordUpdated') })
+      }} />}
   </Frame>
 }
 
 export function App({ initialToken }: { initialToken: string | null }) {
   const [epoch, setEpoch] = useState(0)
   const [token, setToken] = useState(initialToken)
-  const api = useMemo(() => new AuthorityClient(() => setEpoch(current => current === epoch ? current + 1 : current)), [epoch])
-  return <Console key={epoch} api={api} token={token} clearToken={() => setToken(null)}
-    resetSession={() => { setToken(null); setEpoch(epoch + 1) }} />
+  const [sessionExpired, setSessionExpired] = useState(false)
+  const api = useMemo(() => new AuthorityClient(() => {
+    setSessionExpired(true)
+    setEpoch(current => current === epoch ? current + 1 : current)
+  }), [epoch])
+  return <Console key={epoch} api={api} token={token} expired={sessionExpired} clearToken={() => setToken(null)}
+    resetSession={() => { setSessionExpired(false); setToken(null); setEpoch(current => current + 1) }} />
 }

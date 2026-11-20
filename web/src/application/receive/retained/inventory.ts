@@ -99,7 +99,7 @@ export async function resolveRetainedInventory(
         ...(durableSummary === undefined ? {} : { repairSummary: durableSummary }),
         ...(continuation === 'pending-catch-up' && durableSummary?.sidecarSync === 'current' &&
             durableSummary.terminalSettlement === 'none'
-          ? { unavailableReason: 'The prior receive ended abnormally; use the restoration command only after confirming it will not resume.' }
+          ? { unavailableReason: 'abnormalReceive' }
           : {}),
       })
     }

@@ -1,6 +1,6 @@
 import { BrowserReceiveApplication } from '../application/receive/application'
 import { ReceiveSourceInvalidatedError } from '../application/receive/errors'
-import { SOURCE_INVALIDATED_DESCRIPTION } from './lifecycle-presentation'
+import { CryptoError } from '../crypto/errors'
 import { initialReceiverSnapshot, joiningReceiverSnapshot, receiverDiagnosticSnapshot, receiverProgressSnapshot } from './controller-state'
 import { ReceiverExperienceObservability } from './experience/observability'
 import { SelectionPolicy } from '../catalog/selection'
@@ -38,7 +38,6 @@ import { StaleReceiveBoundaryError } from '../application/receive/observation/co
 import { BrowserNavigationCoordinator } from './controller/navigation'
 import { JoinedShareObservation } from './controller/joined-observation'
 import { InitialJoinControl } from '../receiver/initial-join'
-import { initialJoinStatus } from './experience/share-presentation'
 
 export { formatPublicError } from '../application/browser-share/capability-lifecycle'
 export type { DiagnosticFormatter, SecurityMilestone } from '../application/browser-share/capability-lifecycle'
@@ -107,7 +106,7 @@ export class ReceiverController {
       ...(options.trace === undefined ? {} : { trace: options.trace }),
       ...(options.incidents === undefined ? {} : { incidents: options.incidents }),
     })
-    this.#outputs = new OutputPresentationController(this.#receive.observations)
+    this.#outputs = new OutputPresentationController(this.#receive.observations, options.preferences)
     this.#browse = new BrowserNavigationCoordinator({
       onPageCommitted: (page) => this.#pageCommitted(page),
       currentJoinedShare: () => this.#joined,
@@ -128,7 +127,7 @@ export class ReceiverController {
       onCatalogScanProgress: (joined, progress) => this.#browse.catalogScanProgress(joined, progress),
       onProtocolGeneration: joined => this.#beginSelectionProjection(joined, 'observation-replacement'),
     })
-    this.#snapshot = initialReceiverSnapshot()
+    this.#snapshot = { ...initialReceiverSnapshot(), output: this.#outputs.getSnapshot() }
     this.presentation = new ReceiverProjections(this.#snapshot,
       (operation, action) => this.retainedActionAdmission(operation, action),
       action => this.activeLifecycleActionAdmission(action))
@@ -215,7 +214,7 @@ export class ReceiverController {
     }
     this.#receive.cancelJoin()
     this.#publish({ ...this.#snapshot, phase: 'awaiting-key', connection: { kind: 'idle' },
-      status: 'Connection waiting cancelled.', error: null })
+      status: 'cancelled', error: null })
   }
 
   recordExperienceIntent(action: string): void {
@@ -394,7 +393,7 @@ export class ReceiverController {
       if (this.#disposed) return 'blocked'
       const reason = this.#receive.tasks.shareNavigationBlockedReason()
       if (reason !== null) {
-        this.#publishActionError(new Error(reason))
+        this.#publish({ ...this.#snapshot, error: { kind: 'blocked', reason } })
         return 'blocked'
       }
       this.#pageUrl = pageUrl
@@ -442,8 +441,7 @@ export class ReceiverController {
           control: recovery,
           onState: join => {
             if (!this.#joinReplacementIsCurrent(activeNavigation)) return
-            this.#publish({ ...this.#snapshot, connection: { kind: 'idle', join },
-              status: initialJoinStatus(join) })
+            this.#publish({ ...this.#snapshot, connection: { kind: 'idle', join } })
           },
         }))
       candidate = joined
@@ -560,7 +558,7 @@ export class ReceiverController {
     if (joined === undefined) return
     const { share, draft, transition } = this.#draftScope.commitPage(
       joined, page, this.#snapshot.draft.mode, this.#snapshot.share)
-    this.#snapshot = Object.freeze({ ...this.#snapshot, share, draft, status: '' })
+    this.#snapshot = Object.freeze({ ...this.#snapshot, share, draft, status: null })
     if (transition !== 'page-updated') {
       this.#beginSelectionProjection(joined, transition === 'scope-initialized' ? 'observation-replacement' : 'selection-change')
     }
@@ -587,16 +585,17 @@ export class ReceiverController {
   #publishActionError(error: unknown): void {
     this.#publish({
       ...this.#snapshot,
-      error: error instanceof ReceiveSourceInvalidatedError ? SOURCE_INVALIDATED_DESCRIPTION : this.#publicError(error),
+      error: error instanceof ReceiveSourceInvalidatedError ? { kind: 'source-changed' } : this.#publicError(error),
     })
   }
 
   #fail(error: unknown, lease?: CapabilityJoinLease): void {
+    const detail = lease?.publicError(error) ?? this.#publicError(error)
     this.#publish({
       ...this.#snapshot,
       phase: 'failed',
-      status: 'The receiver stopped safely.',
-      error: lease?.publicError(error) ?? this.#publicError(error),
+      status: 'stopped',
+      error: joinFailure(error, detail),
     })
   }
 
@@ -625,5 +624,15 @@ export class ReceiverController {
     this.#experienceTrace.publish(this.#snapshot)
     this.presentation.commit(this.#snapshot)
     for (const listener of this.#listeners) listener()
+  }
+}
+
+function joinFailure(error: unknown, detail: string): NonNullable<ReceiverSnapshot['error']> {
+  if (!(error instanceof CryptoError)) return detail
+  switch (error.code) {
+    case 'malformed-key': case 'malformed-link': case 'malformed-share-id': case 'missing-key': case 'key-conflict':
+      return { kind: 'invalidLink', detail }
+    case 'webcrypto-unavailable': return { kind: 'secureContext', detail }
+    default: return detail
   }
 }

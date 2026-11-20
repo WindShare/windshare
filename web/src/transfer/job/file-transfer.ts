@@ -107,6 +107,8 @@ interface FileAttempt {
   acquired?: OpenedRevision
   transaction?: OutputFileTransaction
   initialDurable?: ByteRangeSet
+  /** Subset of initialDurable not newly persisted during this transfer task. */
+  recoveredDurable?: ByteRangeSet
   checkpoint?: FileCheckpointController
   admitted: boolean
 }
@@ -198,9 +200,9 @@ async function admitFileAttempt(
       options.output.capabilities.durability === 'None' || !initialDurable.covers(byteRange(0n, outputFile.exactSize)))) {
     throw new OutputTransactionContractError('output adapter omitted revision open without complete durable coverage')
   }
-  if (previous !== undefined && opened !== undefined) {
-    observeReadmittedCoverage(options, previous, opened.descriptor, initialDurable)
-  }
+  attempt.recoveredDurable = previous !== undefined && opened !== undefined
+    ? observeReadmittedCoverage(options, previous, opened.descriptor, initialDurable)
+    : initialDurable
   attempt.admitted = true
   options.onInitialCoverage?.({ durableBytes: rangeBytes(initialDurable), acceptedBytes: rangeBytes(bound.initialAccepted) })
   return { opened, outputFile, bound, checkpoint: begun.checkpoint }
@@ -288,8 +290,13 @@ async function settleFileAttemptError(
   // The checkpoint controller can abort the reader to drain it. The caller's
   // signal still decides whether to start another attempt.
   const outcome = failure instanceof RevisionReopenedDuringRecoveryError && attempt.transaction !== undefined &&
-      attempt.initialDurable !== undefined && options.output.capabilities.durability !== 'None'
-    ? await settleReopenedFile(options, attempt.transaction, failure, attempt.initialDurable, started, previous?.stalledReopens ?? 0)
+      attempt.initialDurable !== undefined && attempt.recoveredDurable !== undefined &&
+      options.output.capabilities.durability !== 'None'
+    ? await settleReopenedFile(
+        options, attempt.transaction, failure,
+        attempt.initialDurable, attempt.recoveredDurable,
+        started, previous?.stalledReopens ?? 0,
+      )
     : await settleTransferError(options, attempt.transaction, failure)
   if (previous === undefined || attempt.admitted || outcome.settlement.kind !== 'unconfirmed') return outcome
   const compared = error instanceof RevisionReopenedDuringRecoveryError ? error : previous

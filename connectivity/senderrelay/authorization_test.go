@@ -88,7 +88,10 @@ func TestAccessUnavailableRetriesTheSamePublicationWithRefreshedTicket(t *testin
 		value: Authorization{State: AuthorizationReady, Bearer: "old-ticket"}, changed: make(chan struct{}),
 	}
 	clock := newSenderRelayTestClock()
-	clock.wait = func(ctx context.Context, _ time.Duration) error {
+	clock.wait = func(ctx context.Context, delay time.Duration, _ <-chan struct{}) error {
+		clock.mu.Lock()
+		clock.now = clock.now.Add(delay)
+		clock.mu.Unlock()
 		source.set(Authorization{State: AuthorizationReady, Bearer: "refreshed-ticket"})
 		return ctx.Err()
 	}

@@ -1,3 +1,4 @@
+import { browserPreferences } from '../ui/preferences/browser'
 import '../App.css'
 import type { DocumentRuntime } from './owner'
 import type { DocumentDiagnostics } from './diagnostics'
@@ -24,7 +25,7 @@ export function createReceiverRuntime(windowPort: Window, diagnosticOwner: Docum
     connectivityTrace: createConnectivityTraceSource(diagnostics.trace),
     onCatalogStorageFallback: createCatalogStorageObserver(diagnostics.trace),
   }), {
-    receive, trace: createReceiverTraceSource(diagnostics.trace), incidents: diagnostics.incidents,
+    receive, preferences: browserPreferences, trace: createReceiverTraceSource(diagnostics.trace), incidents: diagnostics.incidents,
   })
   diagnosticOwner.context.read = controller.getDiagnosticSnapshot
   controller.initialize({ capabilityInput: null, pageUrl })

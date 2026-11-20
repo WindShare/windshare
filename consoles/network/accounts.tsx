@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAction, useResource } from '../ui/activity'
 import { Icon } from '../ui/Icon'
-import { BackLink, Badge, DateStamp, EmptyState, Notice, ReadError } from '../ui/layout'
+import { BackLink, Badge, Bytes, DateStamp, EmptyState, Notice, ReadError } from '../ui/layout'
 import { message } from '../ui/locale'
 import { sharedCopy } from '../ui/locales'
 import { useCopy, useLocale } from '../ui/use-locale'
@@ -15,24 +15,9 @@ import { useListNavigation } from './list-navigation'
 import { DirectRestriction, type AccessProps } from './restrictions'
 
 const DAY_MS = 86_400_000
-const BYTE_UNITS = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB']
 
 function utcDate(day: number) {
   return new Date(day * DAY_MS).toISOString().slice(0, 10)
-}
-
-function Bytes({ value }: { value: number }) {
-  const { locale } = useLocale()
-  const decimals = 2
-  const precision = 10 ** decimals
-  let scaled = value
-  let unit = 0
-  while (unit + 1 < BYTE_UNITS.length && Math.round(scaled * precision) >= 1024 * precision) {
-    scaled /= 1024
-    unit++
-  }
-  const amount = scaled.toLocaleString(locale, { maximumFractionDigits: decimals })
-  return <span className="byte-value" title={networkCopy[locale].exactBytes(value)}>{amount} {BYTE_UNITS[unit]}</span>
 }
 
 function AccountOverview({ snapshot }: { snapshot: Snapshot }) {

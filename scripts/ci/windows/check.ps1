@@ -24,5 +24,6 @@ Invoke-Step 'production short tests' { go test -short $allPackages }
 Invoke-Step 'Web typecheck' { pnpm -C web exec tsc -b --force }
 Invoke-Step 'Consoles typecheck' { pnpm -C consoles typecheck }
 Invoke-Step 'Consoles ESLint' { pnpm -C consoles lint }
+Invoke-Step 'Consoles embedded bundle consistency' { pnpm -C consoles verify:dist }
 Invoke-Step 'Web unit tests' { pnpm -C web test }
 Write-Output ('== check: PASS in {0:mm\:ss} ==' -f $gateStopwatch.Elapsed)

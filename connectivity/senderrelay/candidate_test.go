@@ -99,7 +99,7 @@ func TestCleanupSkipsStopWhenNoUpgradeReachedRelay(t *testing.T) {
 	defer server.Close()
 	clock := newSenderRelayTestClock()
 	ctx, stop := context.WithCancel(t.Context())
-	clock.wait = func(context.Context, time.Duration) error { stop(); return context.Canceled }
+	clock.wait = func(context.Context, time.Duration, <-chan struct{}) error { stop(); return context.Canceled }
 	config := newSenderRelayTestConfig(t, nil, nil, clock)
 	config.Candidate = Candidate{PublicURL: server.URL}
 	lifecycle, err := New(config)
@@ -120,7 +120,7 @@ func TestCleanupSkipsStopWhenNoUpgradeReachedRelay(t *testing.T) {
 func TestCleanupStopsAfterUpgradeEvenWhenRegistrationFails(t *testing.T) {
 	clock := newSenderRelayTestClock()
 	ctx, stop := context.WithCancel(t.Context())
-	clock.wait = func(context.Context, time.Duration) error { stop(); return context.Canceled }
+	clock.wait = func(context.Context, time.Duration, <-chan struct{}) error { stop(); return context.Canceled }
 	dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (Connection, error) {
 		return Connection{}, errors.New("register acknowledgement lost")
 	}}

@@ -46,6 +46,7 @@ func prepareRelay(prepared Prepared, candidate relayprofile.Registration, d Depe
 		LifecycleObservationCapacity: capacity,
 		ObserveConnection:            o.attachRelay,
 		Attempts:                     attempts,
+		Clock:                        d.Clock,
 		ObserveAttempt: func(attempt senderrelay.Attempt) {
 			if attempt.State != senderrelay.AttemptParked && attempt.State != senderrelay.AttemptStage {
 				o.emit(Observation{RelayRecovery: &RelayRecovery{Endpoint: endpoint, Attempt: attempt}})

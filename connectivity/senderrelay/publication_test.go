@@ -120,7 +120,15 @@ func TestLifecycleRejectsChangedPublicationMaterialBeforeDial(t *testing.T) {
 func TestNetworkWakeUsesSingleRecoveryOwner(t *testing.T) {
 	waiting, dialing, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	clock := newSenderRelayTestClock()
-	clock.wait = func(ctx context.Context, delay time.Duration) error { close(waiting); <-ctx.Done(); return ctx.Err() }
+	clock.wait = func(ctx context.Context, delay time.Duration, wake <-chan struct{}) error {
+		close(waiting)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-wake:
+			return nil
+		}
+	}
 	endpoint := &senderRelayTestEndpoint{accept: func(context.Context) (*relayv2.Channel, error) { return nil, nil }}
 	calls := 0
 	dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (Connection, error) {

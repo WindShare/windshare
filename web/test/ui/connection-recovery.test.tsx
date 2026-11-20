@@ -11,6 +11,11 @@ import { FakeReceiveComposition, FakeJoinedShare, WORKSPACE_ENVIRONMENT, control
 
 afterEach(resetOrchestrationTestEnvironment)
 
+function joinPaused(controller: ReceiverController): boolean {
+  const connection = controller.getSnapshot().connection
+  return connection.kind === 'idle' && connection.join?.kind === 'paused'
+}
+
 it('extends initial waiting through the existing gateway call and releases it when cancelled', async () => {
   const receive = new FakeReceiveComposition(WORKSPACE_ENVIRONMENT)
   const joined = new FakeJoinedShare(true)
@@ -26,8 +31,7 @@ it('extends initial waiting through the existing gateway call and releases it wh
     })) }
   const controller = new ReceiverController(gateway as unknown as BrowserReceiverGateway, { receive })
   controller.initialize({ capabilityInput: 'key', pageUrl: 'https://receiver.invalid/s/share' })
-  await waitFor(() => controller.getSnapshot().connection.kind === 'idle' &&
-    'join' in controller.getSnapshot().connection && controller.getSnapshot().status.includes('temporarily unreachable'))
+  await waitFor(() => joinPaused(controller))
   expect(gateway.join).toHaveBeenCalledTimes(1)
   available = true
   controller.continueJoinWaiting()
@@ -39,7 +43,7 @@ it('extends initial waiting through the existing gateway call and releases it wh
   available = false
   const cancelled = new ReceiverController(gateway as unknown as BrowserReceiverGateway, { receive })
   cancelled.initialize({ capabilityInput: 'key', pageUrl: 'https://receiver.invalid/s/share' })
-  await waitFor(() => cancelled.getSnapshot().status.includes('temporarily unreachable'))
+  await waitFor(() => joinPaused(cancelled))
   const attempts = gateway.join.mock.calls.length
   cancelled.cancelJoin()
   await turns()
@@ -99,8 +103,7 @@ it('keeps a paused task paused when the connection returns or the user requests 
 })
 
 it('offers bounded initial waiting choices and same-page recovery controls', () => {
-  const waiting = experienceSnapshot({ phase: 'joining', connection: { kind: 'idle', join: { kind: 'paused', reason: 'unreachable' } },
-    status: 'The sender is temporarily unreachable. The link may still be valid.' })
+  const waiting = experienceSnapshot({ phase: 'joining', connection: { kind: 'idle', join: { kind: 'paused', reason: 'unreachable' } } })
   const html = renderToString(<ReceiverApp controller={experienceController(waiting)} />)
   expect(html).toContain('Retry now')
   expect(html).toContain('Continue waiting')

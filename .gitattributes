@@ -20,3 +20,7 @@ docs/.archive/**/.recovered-codex-playwright-recon.*.md binary
 
 # Unified-diff context markers are syntax; preserve checksum-verified patch bytes.
 third_party/pion/patches/*.patch -whitespace
+
+# Embedded console bundles are Vite build outputs verified by `pnpm -C consoles verify:dist`;
+# mark them generated so PR diffs collapse them while Rust builds stay Node-free.
+relay-rust/**/console-dist/** linguist-generated=true

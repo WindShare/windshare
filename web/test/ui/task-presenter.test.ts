@@ -185,11 +185,11 @@ describe('shared task presenter', () => {
   it('uses runtime admission per retained action without blocking independent local export', () => {
     const result = presentTask(retainedTaskFacts(retained(), 'matching-share', {
       admission: action => action === 'continue'
-        ? { allowed: false, reason: 'Pause the current download before continuing this one.' }
+        ? { allowed: false, reason: 'receiverBusy' }
         : { allowed: true, reason: null },
     }))
     expect(result.primaryAction?.id).toBe('save-partial')
-    expect(result.secondaryActions.find(action => action.id === 'continue')?.disabledReason).toContain('Pause the current download')
+    expect(result.secondaryActions.find(action => action.id === 'continue')?.disabledReason).toContain('Pause or finish it')
   })
 
   it('treats crash inventory as inactive while preserving its durable receive and packaging phases', () => {
@@ -218,13 +218,13 @@ describe('shared task presenter', () => {
     const result = presentTask(retainedTaskFacts(operation, 'matching-share', {
       blocking: { kind: 'share-ended' },
       admission: action => action === 'continue'
-        ? { allowed: false, reason: 'The share ended. Open a new link to continue.' }
+        ? { allowed: false, reason: 'endedContinue' }
         : { allowed: true, reason: null },
     }))
     expect(result.stage).toBe('needs-action')
     expect(result.headline).toBe('The share has ended')
     expect(result.primaryAction?.id).toBe('save-partial')
-    expect(result.secondaryActions.find(action => action.id === 'continue')?.disabledReason).toContain('new link')
+    expect(result.secondaryActions.find(action => action.id === 'continue')?.disabledReason).toContain('new share link')
     const local = presentTask(retainedTaskFacts({ ...operation, continuation: 'resume-package' }, 'local', {
       blocking: { kind: 'share-ended' },
     }))
@@ -261,10 +261,10 @@ describe('shared task presenter', () => {
   })
 
   it('keeps filename restoration pending prominent without losing a saved headline', () => {
-    const action: TaskAction = {
+    const action = {
       id: 'catch-up', label: 'Finish setup', destructive: false, disabledReason: null, consequence: null,
       target: { kind: 'retained', operation: retained(), action: 'catch-up' },
-    }
+    } satisfies TaskAction
     const result = presentTask(taskFixture({
       ...TASK_FIXTURES['saved-cleanup']!,
       actions: [action],

@@ -20,6 +20,9 @@ pnpm -C consoles typecheck
 echo "-- Consoles ESLint"
 pnpm -C consoles lint
 
+echo "-- Consoles embedded bundle consistency"
+pnpm -C consoles verify:dist
+
 echo "-- Web unit tests"
 pnpm -C web test
 

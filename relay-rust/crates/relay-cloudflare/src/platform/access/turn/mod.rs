@@ -150,6 +150,13 @@ impl AccessObject {
                 let Some(value) = body.get("enabled").and_then(Value::as_bool) else {
                     return reply(&json!({"error":"invalid_request"}), 400);
                 };
+                if value && !self.turn_ready(db)? {
+                    trace(
+                        "turn_service_configuration_refused",
+                        &json!({"service_id":self.turn_service_id()?,"enabled":value,"reason":"turn_not_ready"}),
+                    );
+                    return reply(&json!({"error":"turn_not_ready"}), 409);
+                }
                 db.put(ENABLED_KEY, &value, None)?;
                 if !value {
                     Self::withdraw_turn(db, None, now)?;

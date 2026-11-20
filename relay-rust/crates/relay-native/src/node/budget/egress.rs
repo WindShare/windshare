@@ -4,6 +4,7 @@ use crate::node::{
     access::{Bearer, Service},
     usage::Meter,
 };
+use crate::storage::Persistence;
 use anyhow::{Result, anyhow};
 use std::{io, sync::atomic::Ordering, task::Poll};
 use windshare_relay_access::Attribution;
@@ -34,14 +35,42 @@ pub(in crate::node) enum WriteAttempt {
 }
 
 impl Runtime {
-    pub(crate) fn public_budget_refuses(&self, share: ShareId, bearer: Option<&Bearer>) -> bool {
+    pub(crate) async fn public_budget_refuses(
+        &self,
+        share: ShareId,
+        bearer: Option<&Bearer>,
+    ) -> Result<bool> {
+        let store = {
+            let state = self.state.lock().expect("node state");
+            if !state
+                .budgets
+                .public_exhausted(&state.settings, crate::node::now())
+            {
+                return Ok(false);
+            }
+            if let Some(owner) = self.access.egress_owner(share, bearer, None) {
+                return Ok(!owner);
+            }
+            state
+                .control
+                .clone()
+                .ok_or_else(|| anyhow!("missing public budget ledger"))?
+        };
+        // Only exhausted, unattributed requests need durable evidence. A socket
+        // may arrive before a restarted owner actor has restored its residency.
+        let stored = tokio::task::spawn_blocking(move || {
+            Ok::<_, anyhow::Error>(
+                store
+                    .load(share)?
+                    .and_then(|authority| authority.record().live_attribution()),
+            )
+        })
+        .await??;
         let state = self.state.lock().expect("node state");
-        // An unauthenticated join can restore an owner's persisted share just
-        // after upgrade. Defer unknown attribution to the actor and metered socket.
-        state
+        Ok(state
             .budgets
             .public_exhausted(&state.settings, crate::node::now())
-            && self.access.egress_owner(share, bearer, None) == Some(false)
+            && self.access.egress_owner(share, bearer, stored) != Some(true))
     }
 
     pub(crate) fn public_budget_refuses_attribution(&self, attribution: Attribution) -> bool {

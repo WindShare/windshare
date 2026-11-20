@@ -167,6 +167,102 @@ it('continues readmitting across multiple reopens while durable progress advance
   expect(outputs.at(-1)?.commits).toEqual([payload.idText])
 })
 
+it('deducts all earlier task attempts from recoverableBytes when a later readmission loses coverage', async () => {
+  const payload = fileEntry(identity(11), 'payload.bin', 6n)
+  const selection = selectOnlyFile(payload)
+  const catalog = catalogFixture([{ id: identity(2), entries: [payload] }])
+  const readers = readerFixture([payload])
+  const versions = [71, 72, 73].map(seed => ({
+    fileRevision: identity(seed), fileRevisionText: identityText(seed), sourceMetadata: digestIdentity(74),
+  }))
+  let payloadOpens = 0
+  let readmissions = 0
+  const firstOutput = testOutput([], { durability: 'ProcessRestart' })
+  const output = {
+    ...firstOutput,
+    readmitFile: (file, paused, signal) => {
+      readmissions += 1
+      // Attempt 1 reuses attempt 0's [0, 2); attempt 2 loses durable coverage
+      // written across both earlier attempts and restarts from empty ranges.
+      const retained = readmissions === 1 ? paused.ranges : []
+      return testOutput([], { durability: 'ProcessRestart', initialRanges: retained }).beginFile(file, signal)
+    },
+  } satisfies OutputSession
+  const intent = await receiveIntentFixture({ planKind: 'direct-atomic', artifactKind: 'original-file', selection, file: payload })
+  const progress: TransferProgress[] = []
+  const result = await transferJobFixture({
+    catalog: catalog.catalog, selection, intent, plans: planAuthorityFixture({ output }),
+    onProgress: snapshot => progress.push(snapshot),
+    revisions: { open: async (file, signal) => {
+      const opened = await readers.revisions.open(file, signal)
+      const attempt = payloadOpens++
+      return {
+        ...opened,
+        descriptor: { ...opened.descriptor, ...versions[attempt]! },
+        leaseId: identity(81 + attempt),
+      }
+    } },
+    broker: { readRange: async function* (descriptor, _lease, range) {
+      if (payloadOpens < 3) {
+        yield { offset: range.start, data: Uint8Array.of(1, 2) }
+        throw new RevisionReopenedDuringRecoveryError(descriptor, { ...descriptor, ...versions[payloadOpens]! })
+      }
+      yield { offset: range.start, data: new Uint8Array(Number(range.end - range.start)) }
+    } },
+  }).run()
+
+  expect(result.worker.status).toBe('Succeeded')
+  expect(payloadOpens).toBe(3)
+  expect(progress.some(snapshot => snapshot.recoverableBytes === 4n)).toBe(true)
+  expect(progress.at(-1)?.recoverableBytes).toBe(6n)
+})
+
+it('tracks recovered ranges re-downloaded after an earlier coverage loss across subsequent readmissions', async () => {
+  const payload = fileEntry(identity(11), 'payload.bin', 6n)
+  const selection = selectOnlyFile(payload)
+  const catalog = catalogFixture([{ id: identity(2), entries: [payload] }])
+  const readers = readerFixture([payload])
+  const versions = [71, 72, 73].map(seed => ({
+    fileRevision: identity(seed), fileRevisionText: identityText(seed), sourceMetadata: digestIdentity(74),
+  }))
+  let payloadOpens = 0
+  // Start attempt 0 with pre-existing recovered [0, 2). Both readmissions drop
+  // durable coverage, so attempt 1 re-downloads [0, 2) as new task bytes and
+  // attempt 2 must roll those bytes back too.
+  const firstOutput = testOutput([], { durability: 'ProcessRestart', initialRanges: [byteRange(0n, 2n)] })
+  const output = {
+    ...firstOutput,
+    readmitFile: (file, _paused, signal) =>
+      testOutput([], { durability: 'ProcessRestart', initialRanges: [] }).beginFile(file, signal),
+  } satisfies OutputSession
+  const intent = await receiveIntentFixture({ planKind: 'direct-atomic', artifactKind: 'original-file', selection, file: payload })
+  const progress: TransferProgress[] = []
+  const result = await transferJobFixture({
+    catalog: catalog.catalog, selection, intent, plans: planAuthorityFixture({ output }),
+    onProgress: snapshot => progress.push(snapshot),
+    revisions: { open: async (file, signal) => {
+      const opened = await readers.revisions.open(file, signal)
+      const attempt = payloadOpens++
+      return {
+        ...opened,
+        descriptor: { ...opened.descriptor, ...versions[attempt]! },
+        leaseId: identity(81 + attempt),
+      }
+    } },
+    broker: { readRange: async function* (descriptor, _lease, range) {
+      if (payloadOpens < 3) {
+        yield { offset: range.start, data: Uint8Array.of(1, 2) }
+        throw new RevisionReopenedDuringRecoveryError(descriptor, { ...descriptor, ...versions[payloadOpens]! })
+      }
+      yield { offset: range.start, data: new Uint8Array(Number(range.end - range.start)) }
+    } },
+  }).run()
+
+  expect(result.worker.status).toBe('Succeeded')
+  expect(payloadOpens).toBe(3)
+  expect(progress.at(-1)?.recoverableBytes).toBe(6n)
+})
+
 it.each([FaultScope.FileLocal, FaultScope.OutputPause])(
   'honors a %s release fault after checkpointing an exhausted readmission',
   async scope => {

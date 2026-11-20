@@ -52,18 +52,20 @@ const (
 )
 
 type Attempt struct {
-	ShareInstance v2.ShareInstance
-	Number        uint32
-	State         AttemptState
-	Failure       error
-	Generation    uint64
-	Slow          bool
-	Resume        bool
-	NextDelay     time.Duration
-	Terminal      bool
-	Duration      time.Duration
-	Stage         string
-	Authorization AuthorizationState
+	ShareInstance     v2.ShareInstance
+	Number            uint32
+	State             AttemptState
+	Failure           error
+	Generation        uint64
+	Slow              bool
+	Resume            bool
+	NextDelay         time.Duration
+	ServerRetryAt     time.Time
+	HandshakeDuration time.Duration
+	Terminal          bool
+	Duration          time.Duration
+	Stage             string
+	Authorization     AuthorizationState
 }
 
 type RegistrationState uint8
@@ -89,6 +91,7 @@ type Lifecycle struct {
 	cleanupOnce         sync.Once
 	cleanupErr          error
 	retiredCompletion   relayv2.LifecycleObservationCompletion
+	serverRetryAt       time.Time // owned by recoveryMu across callers
 	resumeNext          bool
 	terminalErr         error
 	generation          uint64
@@ -111,7 +114,7 @@ func New(config Config) (*Lifecycle, error) {
 		config.Dialer = relayV2SenderDialer{}
 	}
 	if config.Clock == nil {
-		config.Clock = wallSenderRelayRecoveryClock{}
+		config.Clock = SystemClock{}
 	}
 	if config.Jitter == nil {
 		config.Jitter = func(delay time.Duration) time.Duration {

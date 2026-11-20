@@ -40,10 +40,10 @@ func capacityNative(t *testing.T, application *Engine) *nativepeer.NativePeerCon
 		t.Fatal(err)
 	}
 	native, err := application.connectivity.NewNative(nativepeer.Config{
-		Now:                 application.config.Now,
+		Now:                 application.config.Clock.Now,
 		Pool:                func() icepolicy.ICEEndpointPool { return pool },
 		Monitor:             networkstate.NewMonitor(capacityNetwork{}, time.Nanosecond),
-		Reachability:        reachability.New(reachability.Config{Now: application.config.Now}),
+		Reachability:        reachability.New(reachability.Config{Now: application.config.Clock.Now}),
 		ObservationCapacity: nativepeer.DefaultObservationCapacity,
 	})
 	if err != nil {
@@ -68,8 +68,8 @@ func capacityRequest() nativepeer.AttemptRequest {
 
 func TestEngineAdmissionSurvivesOwnerReplacementAndIsolatesOtherEngines(t *testing.T) {
 	now := func() time.Time { return time.Unix(100, 0) }
-	first := newTestEngine(t, Config{Now: now})
-	second := newTestEngine(t, Config{Now: now})
+	first := newTestEngine(t, Config{Clock: engineTestClock{now: now}})
+	second := newTestEngine(t, Config{Clock: engineTestClock{now: now}})
 	ctx, cancel := context.WithTimeout(context.Background(), capacityTestTimeout)
 	defer cancel()
 
@@ -124,8 +124,8 @@ func TestEngineAdmissionSurvivesOwnerReplacementAndIsolatesOtherEngines(t *testi
 func TestEngineTURNCapacitySharesAcrossOwnersAndIsolatesOtherEngines(t *testing.T) {
 	var seconds atomic.Int64
 	now := func() time.Time { return time.Unix(100+seconds.Load(), 0) }
-	first := newTestEngine(t, Config{Now: now})
-	second := newTestEngine(t, Config{Now: now})
+	first := newTestEngine(t, Config{Clock: engineTestClock{now: now}})
+	second := newTestEngine(t, Config{Clock: engineTestClock{now: now}})
 	ctx, cancel := context.WithTimeout(context.Background(), capacityTestTimeout)
 	defer cancel()
 	credential, err := iceconfig.Fixed("user", "password")

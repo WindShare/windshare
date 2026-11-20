@@ -20,6 +20,7 @@ test('deployment provisioning, device authority and lease ownership survive rest
   try {
     const first = await f.admin('credentials', { name: 'before setup' });
     assert.equal((await f.device(first.access_key, 'capability')).body.turn, null);
+    await assert.rejects(() => f.admin('turn/settings', { enabled: true }), /409.*turn_not_ready/);
     const ready = await f.provision();
     assert.equal(ready.status, 'ready', JSON.stringify(ready));
     const credential = await f.admin('credentials', { name: 'managed sender' });

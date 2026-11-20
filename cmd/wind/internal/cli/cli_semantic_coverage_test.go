@@ -30,6 +30,8 @@ func TestAppCommandSurfaceReportsActionableFailures(t *testing.T) {
 	}{
 		{name: "missing command", wantCode: ExitUsage, wantStderr: "Usage:"},
 		{name: "help", args: []string{"help"}, wantCode: ExitOK, wantStderr: "Usage:"},
+		{name: "account help", args: []string{"account", "--help"}, wantCode: ExitOK, wantStderr: "wind account status"},
+		{name: "unknown account subcommand", args: []string{"account", "unknown"}, wantCode: ExitUsage, wantStderr: "wind account status"},
 		{name: "unknown command", args: []string{"unknown"}, wantCode: ExitUsage, wantStderr: "unknown command"},
 		{
 			name:       "malformed share flag",

@@ -1,52 +1,52 @@
+import { receiverCopy } from '../locales/receiver'
 import type { InitialJoinState } from '../../receiver/initial-join'
 import type { ReceiverSnapshot } from '../model'
 import type { TaskBlocking } from '../tasks'
 
-export function downloadScopeLabel(share: ReceiverSnapshot['share'], draft: ReceiverSnapshot['draft']): string {
-  if (share !== null && share.kind !== 'browser') return share.kind === 'file' ? 'Download file' : 'Download original'
-  if (draft.scope === 'selected') return 'Download selected'
-  return draft.scope === 'current-folder' ? 'Download this folder' : 'Download all'
+export function downloadScopeLabel(share: ReceiverSnapshot['share'], draft: ReceiverSnapshot['draft'], t = receiverCopy.en.saving): string {
+  if (share !== null && share.kind !== 'browser') return share.kind === 'file' ? t.downloadFile : t.downloadOriginal
+  if (draft.scope === 'selected') return t.downloadSelected
+  return draft.scope === 'current-folder' ? t.downloadFolder : t.downloadAll
 }
 
-export function shareConnectionLabel(connection: ReceiverSnapshot['connection'], phase: ReceiverSnapshot['phase'], status: string): string {
+export function shareConnectionLabel(connection: ReceiverSnapshot['connection'], phase: ReceiverSnapshot['phase'], status: ReceiverSnapshot['status'], t = receiverCopy.en.connection): string {
   switch (connection.kind) {
-    case 'connected': return 'Sender connected'
-    case 'reconnecting': return connection.activity.kind === 'waiting' ? 'Waiting to reconnect automatically' : 'Reconnecting to the sender…'
-    case 'ended': return 'Share ended — a new link is needed'
-    case 'unavailable': return 'Connection unavailable'
+    case 'connected': return t.senderConnected
+    case 'reconnecting': return connection.activity.kind === 'waiting' ? t.waitingReconnect : t.reconnecting
+    case 'ended': return t.shareEnded
+    case 'unavailable': return t.unavailable
     case 'idle': {
       const join = connection.join
-      if (join?.kind === 'paused' || join?.kind === 'waiting') return initialJoinHoldLabel(join)
-      return phase === 'joining' ? 'Connecting to the sender…' : status
+      if (join?.kind === 'paused' || join?.kind === 'waiting') return initialJoinHoldLabel(join, t)
+      return phase === 'joining' ? t.connectingSender : receiverStatus(status, t)
     }
   }
 }
 
-function initialJoinHoldLabel(join: Exclude<InitialJoinState, { kind: 'connecting' }>): string {
-  if (join.reason === 'authorization') return 'Official relay access restricted'
+function initialJoinHoldLabel(join: Exclude<InitialJoinState, { kind: 'connecting' }>, t: typeof receiverCopy.en.connection): string {
+  if (join.reason === 'authorization') return t.relayRestricted
   if (join.kind === 'paused') {
-    return join.reason === 'bandwidth' ? 'Relay bandwidth unavailable' : 'Sender temporarily unreachable'
+    return join.reason === 'bandwidth' ? t.relayUnavailable : t.senderUnreachable
   }
-  return join.reason === 'bandwidth' ? 'Waiting for relay bandwidth' : 'Waiting for the sender; reconnecting automatically'
+  return join.reason === 'bandwidth' ? t.waitingBandwidth : t.waitingSender
 }
 
-export function initialJoinStatus(join: InitialJoinState): string {
+export function initialJoinStatus(join: InitialJoinState, t = receiverCopy.en.connection): string {
   if (join.kind !== 'connecting' && join.reason === 'authorization') {
-    return 'This share is temporarily unavailable through official relays.'
+    return t.restrictedStatus
   }
   switch (join.kind) {
     case 'paused': return join.reason === 'bandwidth'
-      ? 'The connection timed out while waiting for relay bandwidth.'
-      : 'The sender is temporarily unreachable. The link may still be valid.'
+      ? t.bandwidthTimeout
+      : t.unreachableStatus
     case 'waiting': return join.reason === 'bandwidth'
-      ? 'Relay bandwidth is busy. Waiting automatically.'
-      : 'Waiting for the sender. Reconnection is automatic.'
-    case 'connecting': return 'Connecting to the sender…'
+      ? t.bandwidthStatus
+      : t.senderStatus
+    case 'connecting': return t.connectingSender
   }
 }
 
-const RECONNECTING: TaskBlocking = Object.freeze({ kind: 'reconnecting',
-  description: 'Reconnection is automatic. Keep this page open to preserve the current download and its received progress.' })
+const RECONNECTING: TaskBlocking = Object.freeze({ kind: 'reconnecting' })
 const SHARE_ENDED: TaskBlocking = Object.freeze({ kind: 'share-ended' })
 const UNAVAILABLE: TaskBlocking = Object.freeze({ kind: 'unavailable' })
 
@@ -55,4 +55,16 @@ export function taskConnectionBlocking(connection: ReceiverSnapshot['connection'
   if (connection.kind === 'ended') return SHARE_ENDED
   if (connection.kind === 'unavailable') return UNAVAILABLE
   return null
+}
+
+export function receiverStatus(status: ReceiverSnapshot['status'], t = receiverCopy.en.connection): string {
+  switch (status) {
+    case null: return ''
+    case 'enter-key': return t.enterKey
+    case 'connecting': return t.connectingShare
+    case 'cancelled': return t.joinCancelled
+    case 'stopped': return t.receiverStopped
+    case 'replacement-selected': return t.replacementSelected
+    default: return t.findingReplacement(status.path)
+  }
 }

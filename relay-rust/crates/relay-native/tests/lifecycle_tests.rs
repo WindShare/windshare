@@ -122,9 +122,24 @@ async fn go_runtime_client_drives_native_io_and_process_restart() {
     success(&result);
     stopped(&database);
 
+    let budget_database = directory.path().join("budget.sqlite");
+    let mut exhausted = owner_node();
+    exhausted.contribution.daily_bytes = Some(0);
+    let settings = serde_json::to_string(&exhausted).unwrap();
     let database = directory.path().join("process.sqlite");
     let process_database = database.clone();
     let result = tokio::task::spawn_blocking(move || {
+        let budget_case = Command::new(&client)
+            .arg("-binary")
+            .arg(env!("CARGO_BIN_EXE_relay-native"))
+            .arg("-database")
+            .arg(budget_database)
+            .arg("-budget-node")
+            .arg(settings)
+            .env("WINDSHARE_RELAY_ACCESS_KEY", TEST_OWNER_TOKEN)
+            .output()
+            .unwrap();
+        success(&budget_case);
         Command::new(client)
             .arg("-binary")
             .arg(env!("CARGO_BIN_EXE_relay-native"))

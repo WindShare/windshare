@@ -129,9 +129,13 @@ func (service *Service) Snapshot() (Snapshot, <-chan struct{}) {
 	service.mu.Lock()
 	defer service.mu.Unlock()
 	now := service.config.Now()
+	var validUntil time.Time
+	if service.record.Entitlement.Version > 0 && service.record.Entitlement.ValidUntil > 0 {
+		validUntil = time.Unix(int64(service.record.Entitlement.ValidUntil), 0).UTC()
+	}
 	value := Snapshot{Active: service.refreshScopeLocked() != refreshInactive, State: service.state, Allowance: service.record.Entitlement.Allowance(now),
 		RemainingBytes: service.record.Entitlement.RemainingBytes, ResetAt: service.record.Entitlement.ResetAt(),
-		ValidUntil: time.Unix(int64(service.record.Entitlement.ValidUntil), 0), RetryAt: service.retryAt,
+		ValidUntil: validUntil, RetryAt: service.retryAt,
 		RegistrationPermille: service.registrationPermille, Reason: service.reason}
 	// Email admission first returns an empty challenge. Only a delivered code has an ID.
 	if proof := service.record.Proof; proof != nil {
@@ -149,7 +153,7 @@ func (service *Service) Snapshot() (Snapshot, <-chan struct{}) {
 	}
 	ticket, err := service.verifyTicket(service.record, now)
 	if err == nil {
-		value.TicketExpires = time.Unix(int64(ticket.ExpiresAt), 0)
+		value.TicketExpires = time.Unix(int64(ticket.ExpiresAt), 0).UTC()
 	}
 	// Cached authorization can age without a worker transition.
 	switch value.State {

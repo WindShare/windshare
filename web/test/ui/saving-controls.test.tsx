@@ -6,7 +6,7 @@ import { presentSavingActions, type SavingActionPresentation } from '../../src/u
 import { SavingControls } from '../../src/ui/saving/SavingControls'
 import { COMPLETE_DISCOVERY, environment, fsaTarget, identity, projection, treeProof } from '../output/planning/fixture'
 
-const TASK_ADMISSION = { operationId: 'active-download', reason: 'The current download still owns its saving destination.' }
+const TASK_ADMISSION = { operationId: 'active-download', reason: 'Another download is using the saving destination.' }
 
 async function folderOffers() {
   const selection = await createSelectionSpec({
@@ -25,7 +25,7 @@ function renderSaving(model: SavingActionPresentation, currentTaskContext: typeo
 describe('saving decision placement beside a current task', () => {
   it('keeps an occupied draft concise and restores the route summary when available', async () => {
     const offers = await folderOffers()
-    const occupied = presentSavingActions({ offers, disabledReason: TASK_ADMISSION.reason })
+    const occupied = presentSavingActions({ offers, blockedBy: 'destinationBusy' })
     const summary = occupied.primary!.summary
     const html = renderSaving(occupied, TASK_ADMISSION)
     expect(html).toContain(TASK_ADMISSION.reason)
@@ -51,7 +51,7 @@ describe('saving decision placement beside a current task', () => {
   })
 
   it('keeps empty selection guidance at its disabled action without dumping route details', async () => {
-    const model = presentSavingActions({ offers: await folderOffers(), disabledReason: 'Select items to download' })
+    const model = presentSavingActions({ offers: await folderOffers(), blockedBy: 'emptySelection' })
     const html = renderSaving(model, null)
     expect(html).toContain('Select items to download')
     expect(html).not.toContain(model.primary!.summary)

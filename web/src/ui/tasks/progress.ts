@@ -1,3 +1,5 @@
+import type { Language } from '../preferences/model'
+import { receiverCopy } from '../locales/receiver'
 import { formatBytes } from '../progress-presentation'
 import type { TaskFacts, TaskProgressPresentation } from './model'
 import { isTerminalLifecycleState } from '../../transfer/lifecycle/state'
@@ -5,15 +7,16 @@ import { isTerminalLifecycleState } from '../../transfer/lifecycle/state'
 const PERCENT_SCALE = 100n
 const UNSETTLED_PERCENT_LIMIT = 99n
 
-export function presentTaskProgress(facts: TaskFacts): TaskProgressPresentation | null {
+export function presentTaskProgress(facts: TaskFacts, language: Language = 'en'): TaskProgressPresentation | null {
+  const t = receiverCopy[language].progress
   const progress = facts.progress
   const direct = facts.directZipProgress
-  if (progress === null && direct === null) return retainedProgress(facts)
+  if (progress === null && direct === null) return retainedProgress(facts, language)
   // Direct ZIP receipt advances while output writes and durable checkpoints wait.
   // Its logical payload already includes the retained prefix after reopening.
   const materialized = materializedTaskBytes(facts)
-  const files = completedFileLabel(facts)
-  const details = progressDetails(facts)
+  const files = completedFileLabel(facts, language)
+  const details = progressDetails(facts, language)
   const percentage = exactPercentage(facts, materialized)
   const exact = progress?.discovery === 'complete'
   const total = exact ? ` / ${formatBytes(progress.discoveredBytes)}` : ''
@@ -26,8 +29,8 @@ export function presentTaskProgress(facts: TaskFacts): TaskProgressPresentation 
     writtenBytes: progress?.writtenBytes ?? 0n,
     remainingBytes: exact && facts.completeness !== 'partial'
       ? maximum(0n, progress.discoveredBytes - materialized) : null,
-    status: discoveryStatus(facts),
-    label: `${formatBytes(materialized)}${total} ${direct === null ? 'written or reused' : 'received'}${ratio}${files}`,
+    status: discoveryStatus(facts, language),
+    label: `${t.amount(formatBytes(materialized) + total, direct !== null)}${ratio}${files}`,
     details: Object.freeze(details),
   })
 }
@@ -40,28 +43,30 @@ function materializedTaskBytes(facts: TaskFacts): bigint {
   return facts.directZipProgress?.receivedSelectedBytes ?? facts.progress?.materializedBytes ?? 0n
 }
 
-function completedFileLabel(facts: TaskFacts): string {
-  if (facts.browserDelivery != null) return ` · ${facts.browserDelivery.targetSavedFiles} files saved to folder`
-  return facts.progress === null ? '' : ` · ${facts.progress.completedFiles} files completed`
+function completedFileLabel(facts: TaskFacts, language: Language): string {
+  const t = receiverCopy[language].progress
+  if (facts.browserDelivery != null) return ` · ${t.savedFiles(facts.browserDelivery.targetSavedFiles)}`
+  return facts.progress === null ? '' : ` · ${t.completedFiles(facts.progress.completedFiles)}`
 }
 
-function retainedProgress(facts: TaskFacts): TaskProgressPresentation | null {
+function retainedProgress(facts: TaskFacts, language: Language): TaskProgressPresentation | null {
+  const t = receiverCopy[language].progress
   const state = facts.lifecycle
   if (facts.browserDelivery != null) return Object.freeze({
     mode: 'indeterminate', percentage: null,
     sampleIdentity: '', receivedObjectBytes: 0n, writtenBytes: 0n, remainingBytes: null, status: null,
-    label: `${formatBytes(facts.browserDelivery.targetSavedBytes)} saved to folder`,
-    details: Object.freeze(browserDeliveryDetails(facts.browserDelivery, facts.lifecycle)),
+    label: t.savedBytes(formatBytes(facts.browserDelivery.targetSavedBytes)),
+    details: Object.freeze(browserDeliveryDetails(facts.browserDelivery, facts.lifecycle, language)),
   })
   if (state.kind !== 'resumable-receive') return null
   const retained = retainedReceiveBytes(state)
   return Object.freeze({
     mode: 'indeterminate', percentage: null,
     sampleIdentity: '', receivedObjectBytes: 0n, writtenBytes: 0n, remainingBytes: null, status: null,
-    label: `${formatBytes(retained)} retained for continuation`,
+    label: t.retainedBytes(formatBytes(retained)),
     details: Object.freeze(state.payloadKind === 'direct-zip'
-      ? [`Continuing may need up to ${formatBytes(state.committedArchiveLength)} of temporary destination space.`]
-      : [`${state.completedFileCount} completed files retained.`]),
+      ? [t.continueSpace(formatBytes(state.committedArchiveLength))]
+      : [t.completedRetained(state.completedFileCount)]),
   })
 }
 
@@ -85,51 +90,54 @@ function exactPercentage(facts: TaskFacts, materialized: bigint): number | null 
   return Number(raw > limit ? limit : raw)
 }
 
-function discoveryStatus(facts: TaskFacts): string | null {
+function discoveryStatus(facts: TaskFacts, language: Language): string | null {
+  const t = receiverCopy[language].progress
   const progress = facts.progress
-  if (progress?.discovery === 'open') return `Calculating total · ${progress.discoveredFiles} files found so far`
-  return progress?.discovery === 'failed' ? 'Counting did not finish; final total unknown.' : null
+  if (progress?.discovery === 'open') return t.calculating(progress.discoveredFiles)
+  return progress?.discovery === 'failed' ? t.countFailed : null
 }
 
-function browserDeliveryDetails(summary: NonNullable<TaskFacts['browserDelivery']>, lifecycle: TaskFacts['lifecycle']): string[] {
+function browserDeliveryDetails(summary: NonNullable<TaskFacts['browserDelivery']>, lifecycle: TaskFacts['lifecycle'], language: Language): string[] {
+  const t = receiverCopy[language].progress
   const terminal = isTerminalLifecycleState(lifecycle)
   return [
-    ...(terminal ? [] : [`${formatBytes(summary.recoverableBytes)} verified and recoverable after restart.`]),
-    `${formatBytes(summary.targetSavedBytes)} saved to the chosen folder.`,
-    `${formatBytes(summary.stagedBytes)} retained in browser staging.`,
+    ...(terminal ? [] : [t.verified(formatBytes(summary.recoverableBytes))]),
+    t.savedDestination(formatBytes(summary.targetSavedBytes)),
+    t.staged(formatBytes(summary.stagedBytes)),
     ...((summary.stagedCompleteFiles + summary.copyingFiles) > 0
-      ? [`${summary.stagedCompleteFiles + summary.copyingFiles} received files still need local saving.`] : []),
+      ? [t.awaitingSave(summary.stagedCompleteFiles + summary.copyingFiles)] : []),
     ...(summary.cleanupPendingFiles > 0
-      ? [`${summary.cleanupPendingFiles} files await staging cleanup.`] : []),
+      ? [t.awaitingCleanup(summary.cleanupPendingFiles)] : []),
     ...(terminal && summary.incompleteStagedFiles > 0
-      ? [`${summary.incompleteStagedFiles} incomplete staged files cannot continue and can be discarded.`] : []),
+      ? [t.discardable(summary.incompleteStagedFiles)] : []),
   ]
 }
 
 function maximum(left: bigint, right: bigint): bigint { return left > right ? left : right }
 
-function progressDetails(facts: TaskFacts): string[] {
+function progressDetails(facts: TaskFacts, language: Language): string[] {
+  const t = receiverCopy[language].progress
   const progress = facts.progress
   const direct = facts.directZipProgress
   const details: string[] = []
   if (progress !== null) {
     details.push(progress.discovery === 'complete'
-      ? `${progress.discoveredFiles} files · ${formatBytes(progress.discoveredBytes)} total`
-      : `At least ${progress.discoveredFiles} files · ${formatBytes(progress.discoveredBytes)} found; final total unknown.`)
-    details.push(`${formatBytes(progress.completedBytes)} in completed files.`)
-    details.push(`${formatBytes(progress.writtenBytes)} newly received during this attempt.`)
-    if (progress.discovery === 'failed') details.push(`${progress.failedDirectories} folders could not be fully discovered.`)
+      ? t.total(progress.discoveredFiles, formatBytes(progress.discoveredBytes))
+      : t.atLeast(progress.discoveredFiles, formatBytes(progress.discoveredBytes)))
+    details.push(t.completeBytes(formatBytes(progress.completedBytes)))
+    details.push(t.newBytes(formatBytes(progress.writtenBytes)))
+    if (progress.discovery === 'failed') details.push(t.failedDirectories(progress.failedDirectories))
   }
   if (direct !== null) {
-    details.push(`${formatBytes(direct.writtenSelectedBytes)} written or reused in the ZIP.`)
-    details.push(`${formatBytes(direct.safeResumeBytes)} safe to resume after restart.`)
+    details.push(t.zipWritten(formatBytes(direct.writtenSelectedBytes)))
+    details.push(t.resumeBytes(formatBytes(direct.safeResumeBytes)))
     if (direct.resumeTemporarySpaceUpperBound !== undefined) {
-      details.push(`Resuming may need up to ${formatBytes(direct.resumeTemporarySpaceUpperBound)} of temporary destination space.`)
+      details.push(t.resumeSpace(formatBytes(direct.resumeTemporarySpaceUpperBound)))
     }
   } else if (facts.browserDelivery != null) {
-    details.push(...browserDeliveryDetails(facts.browserDelivery, facts.lifecycle))
+    details.push(...browserDeliveryDetails(facts.browserDelivery, facts.lifecycle, language))
   } else {
-    details.push('Received bytes are not a measurement of progress recoverable after restart.')
+    details.push(t.receivedHint)
   }
   return details
 }

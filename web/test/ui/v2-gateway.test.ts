@@ -519,7 +519,6 @@ function browseDirectory(
   return Object.freeze({
     id: identity(2),
     idText,
-    name: idText,
     path: Object.freeze([...path]),
     ancestry: Object.freeze([...ancestry]),
   })

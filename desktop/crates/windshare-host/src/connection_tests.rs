@@ -76,7 +76,7 @@ fn a_rejected_settings_submission_retains_its_own_failure() {
     let commands = [
         Command::Account {
             operation_id: "account:1".into(),
-            account: crate::AccountCommand::Retry,
+            account: crate::AccountCommand::Refresh,
         },
         Command::Configure {
             operation_id: String::new(),

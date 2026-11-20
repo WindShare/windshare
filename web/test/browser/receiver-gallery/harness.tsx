@@ -1,7 +1,8 @@
 import { ReceiverProjections } from '../../../src/ui/controller/projections'
 import { ReceiverDownloads } from '../../../src/ui/receiver-presentation/ReceiverTasks'
 import { useState } from 'react'
-import { initializeBrowserPreferences } from '../../../src/ui/preferences/browser'
+import { presentReceiveOutput } from '../../../src/ui/output'
+import { browserPreferences, initializeBrowserPreferences } from '../../../src/ui/preferences/browser'
 import { createRoot, type Root } from 'react-dom/client'
 import { flushSync } from 'react-dom'
 import { PortalApp } from '../../../src/ui/portal/PortalApp'
@@ -9,7 +10,7 @@ import { ReceiverApp } from '../../../src/ui/ReceiverApp'
 import type { ReceiverController } from '../../../src/ui/controller'
 import type { ReceiverSnapshot } from '../../../src/ui/model'
 import { EMPTY_PREVIEW } from '../../../src/ui/model'
-import { gallerySnapshot, photoPreview, ROOT_ROWS, SCENARIOS, type CompletedDownloadScenario, type Scenario } from './fixtures'
+import { gallerySnapshot, photoPreview, ROOT_ROWS, SCENARIOS, type CompletedDownloadScenario, type GallerySnapshot, type Scenario } from './fixtures'
 import { syntheticVideo } from './video'
 import { TASK_FIXTURES } from '../../../src/ui/tasks/fixtures'
 import type { ReceiveLifecycleState } from '../../../src/output/workspace'
@@ -23,6 +24,9 @@ let active: GalleryController | undefined
 
 class GalleryController {
   #snapshot: ReceiverSnapshot
+  #output: GallerySnapshot['output']
+  readonly #unsubscribe: () => void
+  #presentOutput = () => presentReceiveOutput(this.#output, browserPreferences.getSnapshot().language)
   readonly #listeners = new Set<() => void>()
   readonly intents: string[] = []
   #videoUrl: string | undefined
@@ -30,12 +34,19 @@ class GalleryController {
   // The requested position of the frame on the canvas, as the production
   // controller tracks it for rollback.
   #presentedSeconds = 0
-  close = () => { if (this.#videoUrl !== undefined) URL.revokeObjectURL(this.#videoUrl) }
+  close = () => {
+    this.#unsubscribe()
+    if (this.#videoUrl !== undefined) URL.revokeObjectURL(this.#videoUrl)
+  }
   readonly presentation: ReceiverProjections
   ensureDownloads = async () => undefined
-  constructor(snapshot: ReceiverSnapshot) {
-    this.#snapshot = snapshot
-    this.presentation = new ReceiverProjections(snapshot, this.retainedActionAdmission, this.activeLifecycleActionAdmission)
+  constructor(snapshot: GallerySnapshot) {
+    this.#output = snapshot.output
+    this.#snapshot = { ...snapshot, output: this.#presentOutput() }
+    this.presentation = new ReceiverProjections(this.#snapshot, this.retainedActionAdmission, this.activeLifecycleActionAdmission)
+    this.#unsubscribe = browserPreferences.subscribe(() => {
+      if (browserPreferences.getSnapshot().language !== this.#snapshot.output.language) this.#publish({ output: this.#presentOutput() })
+    })
   }
   getSnapshot = () => this.#snapshot
   subscribe = (listener: () => void) => {
@@ -54,13 +65,13 @@ class GalleryController {
     const rows = this.#snapshot.rows.map(row => row.id === id
       ? { ...row, selection: row.selection === 'selected' ? 'unselected' as const : 'selected' as const } : row)
     this.#publish({ rows, draft: { ...this.#snapshot.draft, mode: 'selection', scope: 'selected',
-      empty: !rows.some(row => row.selection !== 'unselected'), summary: 'Selected items across this share' } })
+      empty: !rows.some(row => row.selection !== 'unselected') } })
   }
   enterSelectionMode = () => this.#publish({ draft: { ...this.#snapshot.draft, mode: 'selection', scope: 'selected' } })
   exitSelectionMode = () => this.#publish({ draft: { ...this.#snapshot.draft, mode: 'scope', scope: 'current-folder', empty: false } })
   clearSelection = () => this.#publish({
     rows: this.#snapshot.rows.map(row => ({ ...row, selection: 'unselected' })),
-    draft: { ...this.#snapshot.draft, mode: 'selection', scope: 'selected', empty: true, summary: 'Select items to download' },
+    draft: { ...this.#snapshot.draft, mode: 'selection', scope: 'selected', empty: true },
   })
   selectPage = () => this.#publish({
     rows: this.#snapshot.rows.map(row => ({ ...row, selection: 'selected' })),
@@ -76,7 +87,7 @@ class GalleryController {
     this.intents.push('page:' + pageIndex)
     this.#publish({ pageIndex, rows: ROOT_ROWS.map(row => ({ ...row, id: row.id + '-page-' + pageIndex })) })
   }
-  retryDirectory = () => this.#publish({ browse: { kind: 'ready', status: 'Ready', error: null } })
+  retryDirectory = () => this.#publish({ browse: { kind: 'ready', error: null } })
   previewFile = (id: string) => {
     this.intents.push('preview:' + id)
     if (this.#snapshot.share?.kind === 'video') {
@@ -156,11 +167,12 @@ class GalleryController {
     const display = { objectLabel: this.#snapshot.share?.name ?? 'Shared files',
       createdAtMilliseconds: facts.display!.createdAtMilliseconds,
       ...(kind === 'published' ? { destinationLabel: 'Downloads' } : {}) }
+    this.#output = { ...this.#output, lifecycle }
     this.#publish({
       activeReceiveOperationId: null,
       startAdmission: { allowed: true, reason: null, canReleaseCurrent: false },
       taskDisplay: display,
-      output: { ...this.#snapshot.output, lifecycle, lifecyclePresentation: null },
+      output: this.#presentOutput(),
       retained: { ...this.#snapshot.retained, operations: [
         ...this.#snapshot.retained.operations.filter(operation => operation.operationId !== lifecycle.operationId),
         { operationId: lifecycle.operationId, receiveIntentDigest: lifecycle.receiveIntentDigest,
@@ -185,6 +197,7 @@ class GalleryController {
 export async function mountGallery(scenario: Scenario = 'folder'): Promise<void> {
   root?.unmount()
   active?.close()
+  initializeBrowserPreferences()
   active = new GalleryController(await gallerySnapshot(scenario))
   // Vite may give dynamic imports distinct module URLs; bind evidence to the mounted controller.
   Object.assign(window, { windshareGalleryEvidence: galleryEvidence,
@@ -211,7 +224,6 @@ export async function mountGallery(scenario: Scenario = 'folder'): Promise<void>
   root = createRoot(container)
   // Test data supplies snapshots and records intents; every rendered control is
   // the production receiver, with no networking or destination authority.
-  initializeBrowserPreferences()
   const controller = active as unknown as ReceiverController
   function PortalSurface() {
     const [open, setOpen] = useState(false)

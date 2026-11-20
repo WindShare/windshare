@@ -167,7 +167,6 @@ function directory(): BrowseDirectory {
   return Object.freeze({
     id: identity(1),
     idText: identityText(1),
-    name: 'Shared files',
     path: Object.freeze([]),
     ancestry: Object.freeze([identityText(1)]),
   })

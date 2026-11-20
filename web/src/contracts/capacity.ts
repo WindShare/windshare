@@ -1,6 +1,8 @@
 import type { FrameChannel } from './channel'
 
-export const MINIMUM_BANDWIDTH_RETRY_MILLISECONDS = 30_000
+// Floor prevents hot retry loops on nearly expired pressure leases while honoring
+// server RetryAfter hints (e.g. 15 s); connection recovery applies its own slow backoff.
+export const MINIMUM_BANDWIDTH_RETRY_MILLISECONDS = 2_000
 export const MAXIMUM_BANDWIDTH_RETRY_MILLISECONDS = 60_000
 
 /** Advisory congestion never renews protocol authority or suppresses heartbeats. */
@@ -19,8 +21,9 @@ export class BandwidthWaitError extends Error {
     super('Relay bandwidth is busy', { cause })
     this.name = 'BandwidthWaitError'
     this.pressure = pressure
+    const bounded = Number.isFinite(milliseconds) ? milliseconds : 0
     this.retryAfterMilliseconds = Math.min(MAXIMUM_BANDWIDTH_RETRY_MILLISECONDS,
-      Math.max(MINIMUM_BANDWIDTH_RETRY_MILLISECONDS, milliseconds))
+      Math.max(MINIMUM_BANDWIDTH_RETRY_MILLISECONDS, bounded))
   }
 }
 

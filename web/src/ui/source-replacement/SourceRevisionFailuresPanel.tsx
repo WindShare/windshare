@@ -1,3 +1,5 @@
+import { receiverCopy } from '../locales/receiver'
+import { useCopy } from '../preferences/use-preferences'
 import type { SourceRevisionFailure } from '../../transfer/lifecycle/source-revision'
 import type { RetainedReceiveOperation } from '../../application/receive/contracts'
 
@@ -6,19 +8,19 @@ export function SourceRevisionFailuresPanel(props: {
   readonly busy: boolean
   readonly prepareReplacement: (failure: SourceRevisionFailure) => void
 }) {
+  const t = useCopy(receiverCopy).result
   const failures = props.operation.sourceRevisionFailures
   if (failures === undefined) return null
   const hidden = failures.count - BigInt(failures.files.length)
-  return <section aria-label="Files requiring a new download">
-    <p>{failures.count.toString()} {failures.count === 1n ? 'file stopped' : 'files stopped'} because the original source version could not be used.
-      The original ZIP and its other received files are retained. Continue retries only the original versions.</p>
-    <p>Download a current version as a separate task. Choose its download option after selecting it below.</p>
+  return <section aria-label={t.replacementFiles}>
+    <p>{t.staleSources(failures.count)}</p>
+    <p>{t.replacementHint}</p>
     <ul>{failures.files.map(failure => <li key={failure.entryId}>
       <span>{failure.path.join('/')}</span>{' '}
       <button type="button" disabled={props.busy} onClick={() => props.prepareReplacement(failure)}>
-        Download current version of {failure.path.join('/')}
+        {t.downloadCurrent(failure.path.join('/'))}
       </button>
     </li>)}</ul>
-    {hidden > 0n && <p>{hidden.toString()} more affected files. Browse the share to download their current versions separately.</p>}
+    {hidden > 0n && <p>{t.moreSources(hidden)}</p>}
   </section>
 }

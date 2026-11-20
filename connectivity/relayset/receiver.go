@@ -241,12 +241,7 @@ func (receiver *Receiver) run(url string) {
 				return
 			}
 		}
-		attempt := recovery.begin(url)
-		recovery.observe(url, attempt, ReceiverRecoveryConnecting, 0, receiver.current(), nil)
-		ctx, cancel := recovery.options.TimeoutContext(receiver.ctx, receiverAttemptTimeout)
-		connection, err := receiver.connectAttempt(ctx, url, &lane)
-		cancel()
-		recovery.rejected(url, err)
+		attempt, connection, err := receiver.tryEndpoint(url, &lane)
 		if !receiverEndpointRetryable(err) {
 			// Publish the terminal reason before ready releases the join owner,
 			// whose cleanup may cancel this worker immediately.
@@ -260,7 +255,7 @@ func (receiver *Receiver) run(url string) {
 			recovery.observe(url, attempt, ReceiverRecoveryConnected, 0, receiver.current(), nil)
 			receiver.waitLane(connection, lane)
 			err = retiredLaneError(connection)
-			recovery.rejected(url, err)
+			recovery.recordFailure(url, err)
 			if !receiverEndpointRetryable(err) {
 				recovery.observe(url, attempt, ReceiverRecoveryTerminal, 0, receiver.current(), err)
 			}
@@ -290,12 +285,27 @@ func (receiver *Receiver) run(url string) {
 		if runtime.Stopping() {
 			return
 		}
-		delay, phase := recovery.delay(started, failures, err)
-		recovery.observe(url, attempt, phase, delay, runtime, err)
+		delay, phase := recovery.localRetryDelay(started, failures, err)
+		delay = recovery.scheduleEndpointRetry(url, phase, delay, runtime, err)
 		if err := receiver.config.Clock.Wait(receiver.ctx, delay); err != nil {
 			return
 		}
 	}
+}
+
+func (receiver *Receiver) tryEndpoint(url string, lane *session.LaneIdentity) (uint32, ReceiverConnection, error) {
+	recovery := receiver.config.recovery
+	attempt, err := recovery.begin(url)
+	if err != nil {
+		// Completing this initial slot lets another endpoint retry while this one waits.
+		return attempt, nil, err
+	}
+	recovery.observe(url, attempt, ReceiverRecoveryConnecting, 0, receiver.current(), nil)
+	ctx, cancel := recovery.options.TimeoutContext(receiver.ctx, receiverAttemptTimeout)
+	connection, err := receiver.connectAttempt(ctx, url, lane)
+	cancel()
+	recovery.recordFailure(url, err)
+	return attempt, connection, err
 }
 
 func retiredLaneError(connection ReceiverConnection) error {

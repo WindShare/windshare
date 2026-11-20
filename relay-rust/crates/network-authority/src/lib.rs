@@ -24,7 +24,7 @@ use anyhow::Result;
 pub use challenges::{EmailDelivery, ProofKind};
 #[cfg(any(test, target_arch = "wasm32"))]
 pub use device_login::DeviceApproval;
-pub use governance::{Block, Report, ReportPage, ReportPosition};
+pub use governance::{Block, MilestoneReview, Report, ReportPage, ReportPosition};
 pub use model::*;
 pub use nodes::{
     Node, NodeDetails, NodeEnrollment, NodeLoadReport, NodePage, NodePolicyChange, Zone,
@@ -64,6 +64,9 @@ impl<R: Store, E: Environment> Authority<R, E> {
 mod host;
 #[cfg(target_arch = "wasm32")]
 pub use host::NetworkAuthority;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "host/telemetry.rs"]
+mod telemetry;
 #[cfg(test)]
 #[path = "authority_tests.rs"]
 mod tests;

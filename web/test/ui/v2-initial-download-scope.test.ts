@@ -33,7 +33,7 @@ class InitialFolderShare extends FakeJoinedShare {
   }
 
   childDirectory(parent: BrowseDirectory, entry: CatalogEntry): BrowseDirectory {
-    return { id: entry.id, idText: entry.idText, name: entry.name,
+    return { id: entry.id, idText: entry.idText,
       path: [...parent.path, entry.name], ancestry: [...parent.ancestry, entry.idText] }
   }
 

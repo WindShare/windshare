@@ -1,45 +1,104 @@
 import release from '../../../../deploy/network/release.json'
-import { NetworkDirectory } from '../../network/directory'
+import { NetworkDirectory, type DirectoryObservation, type NetworkDirectoryOptions } from '../../network/directory'
 import { directoryICEEndpointPool } from '../../connectivity/ice-policy/defaults'
 import type { ICEEndpointPool } from '../../connectivity/ice-policy/endpoints'
-import type { DirectoryObservation } from '../../network/directory'
+import type { NetworkRoot } from '../../network/node-directory'
 import type { Suite02CapabilityLink } from '../../crypto/suite02-link'
 import { resolveLinkRelays } from './resolve'
 import { RelayCandidates } from '../../receiver/relay-selection/candidates'
 import { OfficialRelayAuthority } from './authority'
 import type { AuthorityConfig, AuthorityObservation } from '../../network/authority/feed'
 
+export interface BuiltinNetworkRelease {
+  readonly network: string
+  readonly roots: readonly NetworkRoot[]
+  readonly mirrors: readonly string[]
+  readonly snapshot: unknown
+  readonly authority?: AuthorityConfig | null
+}
+
+export interface BuiltinNetworkDependencies {
+  readonly release?: BuiltinNetworkRelease
+  readonly directory?: Pick<NetworkDirectoryOptions, 'cache' | 'fetch' | 'now' | 'origin'>
+}
+
 export class BuiltinNetwork {
+  readonly #release: BuiltinNetworkRelease
+  readonly #directoryOptions: BuiltinNetworkDependencies['directory']
   #directory: NetworkDirectory | undefined
   readonly #authority: OfficialRelayAuthority | undefined
   readonly #reportListeners = new Set<() => void>()
   #reportURL: string | undefined
+  #stopReport: (() => void) | undefined
   readonly #observe: ((event: DirectoryObservation) => void) | undefined
-  constructor(observe?: (event: DirectoryObservation) => void, authorityObserve?: (event: AuthorityObservation) => void) {
+  constructor(
+    observe?: (event: DirectoryObservation) => void,
+    authorityObserve?: (event: AuthorityObservation) => void,
+    dependencies: BuiltinNetworkDependencies = {},
+  ) {
     this.#observe = observe
-    const authority = (release as typeof release & { authority?: AuthorityConfig | null }).authority
-    if (authority) this.#authority = new OfficialRelayAuthority(authority, authorityObserve)
+    this.#release = dependencies.release ?? (release as BuiltinNetworkRelease)
+    this.#directoryOptions = dependencies.directory
+    if (this.#release.authority) this.#authority = new OfficialRelayAuthority(this.#release.authority, authorityObserve)
   }
   getReportURL = (): string | undefined => this.#reportURL
   observeReport = (listener: () => void): (() => void) => {
     this.#reportListeners.add(listener)
     return () => { this.#reportListeners.delete(listener) }
   }
-  clearReport(): void { this.#reportURL = undefined; this.#reportListeners.forEach(listener => listener()) }
+  clearReport(): void {
+    this.#stopReport?.()
+    this.#stopReport = undefined
+    this.#setReportURL(undefined)
+  }
+  #setReportURL(next: string | undefined): void {
+    if (this.#reportURL === next) return
+    this.#reportURL = next
+    this.#reportListeners.forEach(listener => listener())
+  }
   #source(): NetworkDirectory {
-    this.#directory ??= new NetworkDirectory({ network: release.network, roots: release.roots,
-      mirrors: release.mirrors, ...(release.snapshot === null ? {} : { embedded: JSON.stringify(release.snapshot) }),
+    const origin = this.#directoryOptions?.origin ?? (typeof location === 'undefined' ? undefined : location.origin)
+    this.#directory ??= new NetworkDirectory({
+      network: this.#release.network,
+      roots: this.#release.roots,
+      mirrors: this.#release.mirrors,
+      ...(this.#release.snapshot === null || this.#release.snapshot === undefined ? {} : { embedded: JSON.stringify(this.#release.snapshot) }),
       ...(this.#observe === undefined ? {} : { observe: this.#observe }),
-      ...(typeof location === 'undefined' ? {} : { origin: location.origin }) })
+      ...(origin === undefined ? {} : { origin }),
+      ...(this.#directoryOptions?.cache === undefined ? {} : { cache: this.#directoryOptions.cache }),
+      ...(this.#directoryOptions?.fetch === undefined ? {} : { fetch: this.#directoryOptions.fetch }),
+      ...(this.#directoryOptions?.now === undefined ? {} : { now: this.#directoryOptions.now }),
+    })
     return this.#directory
   }
-  icePool = (): ICEEndpointPool => directoryICEEndpointPool(release.roots.length === 0 ? undefined : this.#source().snapshot)
+  icePool = (): ICEEndpointPool => directoryICEEndpointPool(this.#release.roots.length === 0 ? undefined : this.#source().snapshot)
   resolve(capability: Suite02CapabilityLink): RelayCandidates {
     const source = capability.nodeAliases.length > 0 || this.#authority ? this.#source() : undefined
     const candidates = resolveLinkRelays(capability, source)
-    this.#reportURL = this.#authority?.reportURL(capability.shareId)
-    this.#reportListeners.forEach(listener => listener())
-    return this.#authority && source ? new RelayCandidates(candidates.bases, candidates.all(), this.#authority.admission(capability.shareId, source)) : candidates
+    this.#stopReport?.()
+    this.#stopReport = undefined
+    if (this.#authority && source) {
+      let matched = false
+      const stop = this.#authority.watchReport(capability.shareId, candidates, source, url => {
+        matched = true
+        this.#stopReport = undefined
+        this.#setReportURL(url)
+      })
+      if (!matched) {
+        this.#stopReport = stop
+        this.#setReportURL(undefined)
+      }
+      return new RelayCandidates(candidates.bases, candidates.all(), this.#authority.admission(capability.shareId, source))
+    }
+    this.#setReportURL(undefined)
+    return candidates
   }
-  close(): void { this.#directory?.close(); this.#authority?.close(); this.#reportListeners.clear() }
+  close(): void {
+    this.#stopReport?.()
+    this.#stopReport = undefined
+    this.#reportURL = undefined
+    this.#directory?.close()
+    this.#authority?.close()
+    this.#reportListeners.clear()
+  }
 }

@@ -44,6 +44,12 @@ pub struct ReportPage {
     pub next: Option<ReportPosition>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MilestoneReview {
+    pub count: u64,
+    pub reached_at: u64,
+}
+
 impl<R: Store, E: Environment> Authority<R, E> {
     /// # Errors
     /// Requires a live administrator session and a valid registration policy.
@@ -152,16 +158,40 @@ impl<R: Store, E: Environment> Authority<R, E> {
         report.ok_or_else(|| Fault::ReportNotFound.into())
     }
 
+    fn reviews(&self) -> Result<Vec<MilestoneReview>> {
+        let mut reviews = self
+            .store
+            .scan("review/", Some(MAX_CONSOLE_REVIEWS))?
+            .into_iter()
+            .filter_map(|(record, value)| {
+                let count = record.strip_prefix("review/")?.parse::<u64>().ok()?;
+                Some(
+                    serde_json::from_str::<u64>(&value)
+                        .map(|reached_at| MilestoneReview { count, reached_at }),
+                )
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        reviews.sort_unstable_by_key(|review| review.count);
+        Ok(reviews)
+    }
+
+    /// Marks a registration milestone review as acknowledged and returns the remaining ones.
+    ///
+    /// # Errors
+    /// Requires a live administrator session and a positive milestone count.
+    pub fn dismiss_review(&mut self, session: &str, count: u64) -> Result<Vec<MilestoneReview>> {
+        self.require_admin(session)?;
+        ensure!(count > 0, Fault::Invalid);
+        self.store.delete(&format!("review/{count}"))?;
+        tracing::info!(event = "authority_milestone_review_dismissed", count);
+        self.reviews()
+    }
+
     /// # Errors
     /// Requires a live administrator session and readable persistent records.
     pub fn console(&self, session: &str) -> Result<serde_json::Value> {
         self.require_admin(session)?;
-        let reviews = self
-            .store
-            .scan("review/", Some(MAX_CONSOLE_REVIEWS))?
-            .into_iter()
-            .map(|(_, value)| serde_json::from_str::<serde_json::Value>(&value))
-            .collect::<Result<Vec<_>, _>>()?;
+        let reviews = self.reviews()?;
         let settings = self.settings()?;
         let account_count = self.account_count()?;
         let email_configured = self.environment.registration_email_configured();

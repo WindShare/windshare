@@ -1,3 +1,5 @@
+import { shellCopy } from '../locales/shell'
+import { useCopy } from '../preferences/use-preferences'
 import { useEffect, useId, useRef, type ReactNode, type RefObject } from 'react'
 import { ReceiverIcon } from '../receiver-presentation/ReceiverIcon'
 
@@ -13,7 +15,8 @@ export interface DetailSheetProps {
 }
 
 /** Native modal ownership keeps keyboard focus and background interaction aligned. */
-export function DetailSheet({ title, children, onClose, returnFocus, className = '', returnLabel = 'Back to share', subtitle, navigation }: DetailSheetProps) {
+export function DetailSheet({ title, children, onClose, returnFocus, className = '', returnLabel, subtitle, navigation }: DetailSheetProps) {
+  const t = useCopy(shellCopy)
   const dialog = useRef<HTMLDialogElement>(null)
   const titleId = useId()
   const close = useRef(onClose)
@@ -45,7 +48,7 @@ export function DetailSheet({ title, children, onClose, returnFocus, className =
             <h2 id={titleId}>{title}</h2>
             {subtitle !== undefined && <p className="detail-sheet-subtitle">{subtitle}</p>}
           </div>
-          <button className="quiet-action detail-sheet-return" type="button" onClick={onClose} aria-label={returnLabel} title={returnLabel}>
+          <button className="quiet-action detail-sheet-return" type="button" onClick={onClose} aria-label={returnLabel ?? t.backToShare} title={returnLabel ?? t.backToShare}>
             <ReceiverIcon name="close" />
           </button>
         </header>

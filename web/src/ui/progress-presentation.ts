@@ -1,3 +1,5 @@
+import { receiverCopy } from './locales/receiver'
+import type { Language } from './preferences/model'
 import type { ProjectedByteCount } from '../output/model/artifacts/projections'
 import type { ReceiveLifecycleState } from '../transfer/lifecycle/state'
 import type { DirectZipProgressSnapshot } from '../application/receive/contracts'
@@ -32,36 +34,27 @@ export function presentDirectZipProgress(input: Readonly<{
   progress: DirectZipProgressSnapshot
   selectedBytes: ProjectedByteCount
   lifecycle: ReceiveLifecycleState | null
-}>): DirectZipProgressPresentation {
+}>, language: Language = 'en'): DirectZipProgressPresentation {
+  const t = receiverCopy[language].progress
   const published = input.lifecycle?.kind === 'published'
   const total = input.selectedBytes.bytes
   const percentage = input.selectedBytes.kind === 'exact'
     ? boundedPercentage(input.progress.receivedSelectedBytes, total, published)
     : null
-  const totalCopy = input.selectedBytes.kind === 'exact'
-    ? ` of ${formatBytes(total)}`
-    : `; estimated selection is at least ${formatBytes(total)}`
-  const phaseCopy = published ? 'saved and verified' : directZipPhaseCopy(input.progress.phase)
+  const received = formatBytes(input.progress.receivedSelectedBytes)
+  const amount = input.selectedBytes.kind === 'exact'
+    ? t.receivedExact(received, formatBytes(total))
+    : t.receivedEstimate(received, formatBytes(total))
+  const phase = published ? t.zipPublished : t.zipPhases[input.progress.phase]
   const percentageCopy = percentage === null ? '' : ` (${percentage}%)`
   return Object.freeze({
-    primary: `${formatBytes(input.progress.receivedSelectedBytes)} received${totalCopy}` +
-      `${percentageCopy} · ${phaseCopy}`,
-    written: `${formatBytes(input.progress.writtenSelectedBytes)} written or reused in the ZIP.`,
-    safeResume: `If interrupted, resume from ${formatBytes(input.progress.safeResumeBytes)}.`,
+    primary: `${amount}${percentageCopy} · ${phase}`,
+    written: t.zipWritten(formatBytes(input.progress.writtenSelectedBytes)),
+    safeResume: t.resumeFrom(formatBytes(input.progress.safeResumeBytes)),
     temporarySpace: input.progress.resumeTemporarySpaceUpperBound === undefined
-      ? null
-      : `Continuing may require up to ${formatBytes(input.progress.resumeTemporarySpaceUpperBound)} of additional temporary space.`,
+      ? null : t.extraSpace(formatBytes(input.progress.resumeTemporarySpaceUpperBound)),
     percentage,
   })
-}
-
-function directZipPhaseCopy(phase: DirectZipProgressSnapshot['phase']): string {
-  switch (phase) {
-    case 'receiving': return 'receiving selected content'
-    case 'saving-resume-position': return 'saving a safe resume position'
-    case 'closing': return 'closing the ZIP'
-    case 'verifying': return 'confirming saved content'
-  }
 }
 
 function boundedPercentage(received: bigint, total: bigint, published: boolean): bigint {

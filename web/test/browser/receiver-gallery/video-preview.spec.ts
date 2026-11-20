@@ -138,7 +138,7 @@ test('a failed seek rolls the slider and time label back to the presented frame'
   await page.evaluate(() => (window as unknown as VideoGallery)
     .windshareFailVideoSeek('MP4 sample geometry exceeds the preview limits'))
 
-  await expect(page.locator('.preview-seek-failure [role="alert"]')).toHaveText('MP4 sample geometry exceeds the preview limits')
+  await expect(page.locator('.preview-seek-failure [role="alert"]')).toContainText('MP4 sample geometry exceeds the preview limits')
   await expect(slider).toHaveValue('0.1')
   await expect(slider).toHaveAttribute('aria-valuetext', /^0:00 of /u)
   await expect(label).toHaveText(presentedLabel!)
@@ -169,7 +169,7 @@ test('a failed seek rolls back to the requested position, not the presented keyf
   await expect(slider).toHaveValue('0.3')
   await page.evaluate(() => (window as unknown as VideoGallery)
     .windshareFailVideoSeek('MP4 sample geometry exceeds the preview limits'))
-  await expect(page.locator('.preview-seek-failure [role="alert"]')).toHaveText('MP4 sample geometry exceeds the preview limits')
+  await expect(page.locator('.preview-seek-failure [role="alert"]')).toContainText('MP4 sample geometry exceeds the preview limits')
   await expect(slider).toHaveValue('0.2')
   await expect(page.locator('.preview-frame-status')).toHaveText('')
 })

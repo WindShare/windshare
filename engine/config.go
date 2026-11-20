@@ -38,12 +38,19 @@ type ReceiveDependencies struct {
 	PeerFactory  func() (ReceivePeerStarter, error)
 }
 
+// Clock keeps task timestamps, sender registrations, and node admissions in the same time domain.
+type Clock interface {
+	Now() time.Time
+	// Wait ends when the delay elapses, wake signals a change, or ctx is canceled.
+	Wait(ctx context.Context, delay time.Duration, wake <-chan struct{}) error
+}
+
 type Config struct {
 	Network             *networkconfig.Config
 	TURN                turn.Settings
 	TURNDependencies    turn.Dependencies
 	RelaySetup          relaysetup.Dependencies
-	Now                 func() time.Time
+	Clock               Clock
 	Random              io.Reader
 	CleanupTimeout      time.Duration
 	ObservationCapacity observationstream.Capacity

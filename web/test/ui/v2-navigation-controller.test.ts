@@ -52,7 +52,7 @@ class NavigableJoinedShare {
   }> = []
 
   rootDirectory(): BrowseDirectory {
-    return directory(1, 'root', 'Shared files', [], ['root'])
+    return directory(1, 'root', [], ['root'])
   }
 
   childDirectory(parent: BrowseDirectory, entry: CatalogEntry): BrowseDirectory {
@@ -60,7 +60,6 @@ class NavigableJoinedShare {
     return directory(
       entry.id[0] ?? 0,
       entry.idText,
-      entry.name,
       [...parent.path, entry.name],
       [...parent.ancestry, entry.idText],
     )
@@ -125,14 +124,14 @@ describe('v2 receiver child navigation publication', () => {
     controller.openDirectory(firstChild.idText)
     controller.openDirectory(firstChild.idText)
     expect(joined.requests).toHaveLength(1)
-    expect(controller.getSnapshot().breadcrumbs.map((item) => item.name)).toEqual(['Shared files'])
+    expect(controller.getSnapshot().breadcrumbs.map((item) => item.name)).toEqual([null])
     expect(controller.getSnapshot().rows.map((item) => item.id)).toEqual(['first', 'second'])
 
     const request = joined.requests[0]
     request?.result.resolve(browsePage(request.directory, [fileEntry(4, 'inside', 'inside.txt')]))
     await turns()
     expect(controller.getSnapshot().breadcrumbs.map((item) => item.name)).toEqual([
-      'Shared files',
+      null,
       'First',
     ])
     expect(controller.getSnapshot().rows.map((item) => item.id)).toEqual(['inside'])
@@ -151,7 +150,7 @@ describe('v2 receiver child navigation publication', () => {
       error: null,
       browse: { kind: 'failed', error: 'listing failed' },
     })
-    expect(controller.getSnapshot().breadcrumbs.map((item) => item.name)).toEqual(['Shared files'])
+    expect(controller.getSnapshot().breadcrumbs.map((item) => item.name)).toEqual([null])
     expect(controller.getSnapshot().rows.map((item) => item.id)).toEqual(['first', 'second'])
 
     controller.openDirectory(firstChild.idText)
@@ -165,7 +164,7 @@ describe('v2 receiver child navigation publication', () => {
     await turns()
 
     expect(controller.getSnapshot().breadcrumbs.map((item) => item.name)).toEqual([
-      'Shared files',
+      null,
       'Second',
     ])
     expect(controller.getSnapshot().rows.map((item) => item.id)).toEqual(['current'])
@@ -233,7 +232,7 @@ describe('browser navigation incident ownership', () => {
       incidents,
     })
     incidents.onDecision = () => { throw new Error('diagnostic submit failed') }
-    const requested = directory(2, 'first', 'First', ['First'], ['first'])
+    const requested = directory(2, 'first', ['First'], ['first'])
 
     const loading = navigation.loadPage(
       requested,
@@ -264,8 +263,8 @@ describe('browser navigation incident ownership', () => {
       publicError: () => 'failed',
       incidents,
     })
-    const first = directory(2, 'first', 'First', ['First'], ['first'])
-    const second = directory(3, 'second', 'Second', ['Second'], ['second'])
+    const first = directory(2, 'first', ['First'], ['first'])
+    const second = directory(3, 'second', ['Second'], ['second'])
 
     const stale = navigation.loadPage(first, 0, Object.freeze([first]))
     const current = navigation.loadPage(second, 0, Object.freeze([second]))
@@ -303,7 +302,7 @@ describe('browser navigation incident ownership', () => {
       publicError: () => 'failed',
       incidents,
     })
-    const requested = directory(2, 'first', 'First', ['First'], ['first'])
+    const requested = directory(2, 'first', ['First'], ['first'])
     const failure = authenticatedRemoteOperationError()
 
     const loading = navigation.loadPage(
@@ -340,7 +339,7 @@ describe('browser navigation incident ownership', () => {
       publicError: () => 'failed',
       incidents,
     })
-    const requested = directory(2, 'first', 'First', ['First'], ['first'])
+    const requested = directory(2, 'first', ['First'], ['first'])
 
     const loading = navigation.loadPage(
       requested,
@@ -468,14 +467,12 @@ function fileEntry(first: number, idText: string, name: string): CatalogEntry {
 function directory(
   first: number,
   idText: string,
-  name: string,
   path: readonly string[],
   ancestry: readonly string[],
 ): BrowseDirectory {
   return Object.freeze({
     id: identity(first),
     idText,
-    name,
     path: Object.freeze([...path]),
     ancestry: Object.freeze([...ancestry]),
   })

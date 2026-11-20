@@ -23,7 +23,7 @@ type AccountInput struct {
 	Credential string `json:"credential,omitempty"`
 }
 type AccountView struct {
-	ResetLocal          string            `json:"reset_local"`
+	ResetLocal          string            `json:"reset_local,omitempty"`
 	NicknameChangeLocal string            `json:"nickname_change_local,omitempty"`
 	Account             account.Snapshot  `json:"status"`
 	Operation           *AccountOperation `json:"operation,omitempty"`
@@ -43,7 +43,10 @@ func (a *Application) syncAccountLocked() <-chan struct{} {
 	status, changed := a.deps.accounts.Snapshot()
 	view := *a.accountView
 	view.Account = status
-	view.ResetLocal = status.ResetAt.Local().Format("2006-01-02 15:04 MST")
+	view.ResetLocal = ""
+	if !status.ResetAt.IsZero() {
+		view.ResetLocal = status.ResetAt.Local().Format("2006-01-02 15:04 MST")
+	}
 	view.NicknameChangeLocal = ""
 	if at := status.Profile.Nickname.NextChangeAt; at > 0 {
 		view.NicknameChangeLocal = time.Unix(at, 0).Local().Format("2006-01-02 15:04:05 MST")
@@ -183,7 +186,7 @@ func (a *Application) runAccountCommand(input AccountInput) error {
 	switch input.Action {
 	case "register":
 		return service.Register(ctx)
-	case "retry":
+	case "refresh":
 		_, err := service.RefreshOnce(ctx)
 		return err
 	case "login":

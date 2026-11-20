@@ -39,6 +39,12 @@ func TestRustAuthorityContractsAndMonotonicIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !(Entitlement{}).ResetAt().IsZero() {
+		t.Fatalf("zero entitlement reported reset time %v", (Entitlement{}).ResetAt())
+	}
+	if !ticket.Entitlement.ResetAt().Equal(time.Unix(int64((ticket.Entitlement.Day+1)*DaySeconds), 0).UTC()) {
+		t.Fatalf("issued entitlement reset time = %v", ticket.Entitlement.ResetAt())
+	}
 	refreshed, err := VerifyTicket(fixture.Refreshed.Ticket, generation, now)
 	if err != nil || refreshed.Account != ticket.Account || refreshed.Credential != ticket.Credential ||
 		refreshed.Entitlement.Version <= ticket.Entitlement.Version {

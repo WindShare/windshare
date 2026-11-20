@@ -5,6 +5,7 @@ use std::time::{Duration, SystemTime};
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct AccountView {
     pub status: AccountStatus,
+    #[serde(default)]
     pub reset_local: String,
     #[serde(default)]
     pub nickname_change_local: String,
@@ -71,6 +72,7 @@ pub struct AccountStatus {
     pub pending_email: Option<PendingEmail>,
     pub allowance: Allowance,
     pub remaining_bytes: u64,
+    #[serde(default)]
     pub reset_at: String,
     #[serde(default)]
     pub reason: String,
@@ -128,7 +130,7 @@ pub enum Allowance {
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum AccountCommand {
     Register,
-    Retry,
+    Refresh,
     Login {
         username: String,
         password: String,
@@ -166,7 +168,7 @@ impl AccountCommand {
     pub(crate) const fn action(&self) -> &'static str {
         match self {
             Self::Register => "register",
-            Self::Retry => "retry",
+            Self::Refresh => "refresh",
             Self::Login { .. } => "login",
             Self::Password { .. } => "password",
             Self::Nickname { .. } => "nickname",

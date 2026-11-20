@@ -24,7 +24,7 @@ use std::{
 };
 use tokio::sync::watch;
 use windshare_relay_access::{
-    AccountId, Attribution, Issuer, Principal,
+    AccountId, Attribution, Issuer,
     entitlement::{Allowance, Class, DAY_SECONDS, Entitlement},
     restrictions::Restrictions,
 };

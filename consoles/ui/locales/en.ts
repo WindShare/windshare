@@ -1,3 +1,5 @@
+const integer = new Intl.NumberFormat('en', { maximumFractionDigits: 0 })
+
 export const en = {
   language: 'Language',
   appearance: 'Appearance',
@@ -10,8 +12,16 @@ export const en = {
   createAdmin: 'Create administrator',
   ownerSetupTitle: 'Set owner password',
   username: 'Username',
+  currentPassword: 'Current password',
   newPassword: 'New password',
+  confirmPassword: 'Confirm password',
   password: 'Password',
+  confirmationMismatch: 'The passwords do not match.',
+  changePassword: 'Change password',
+  savePassword: 'Update password',
+  updating: 'Updating…',
+  passwordUpdated: 'Password updated.',
+  sessionExpired: 'Your session expired. Sign in again to continue.',
   hidePassword: 'Hide password',
   showPassword: 'Show password',
   requiredField: 'Fill in this field.',
@@ -22,6 +32,7 @@ export const en = {
   minValue: (value: string) => `Enter a value of ${value} or greater.`,
   maxValue: (value: string) => `Enter a value of ${value} or less.`,
   stepValue: (step: string) => `Use increments of ${step}.`,
+  exactBytes: (bytes: number) => `${integer.format(bytes)} ${bytes === 1 ? 'byte' : 'bytes'}`,
   signingIn: 'Signing in…',
   usePassword: 'Use existing password',
   cancel: 'Cancel',

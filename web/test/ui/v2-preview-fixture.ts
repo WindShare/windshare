@@ -57,7 +57,6 @@ export class FakeJoined {
     return {
       id: identity(1),
       idText: identityText(1),
-      name: 'Shared files',
       path: [],
       ancestry: [identityText(1)],
     }

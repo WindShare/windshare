@@ -9,6 +9,7 @@ mod mail;
 mod passwords;
 mod routes;
 mod storage;
+mod telemetry;
 use crate::{Authority, Environment, Fault, Signing, public_blocks::PublicBlockFeed};
 use futures_util::StreamExt;
 use std::{cell::RefCell, rc::Rc};
@@ -60,6 +61,7 @@ pub struct NetworkAuthority {
 }
 impl DurableObject for NetworkAuthority {
     fn new(state: State, env: Env) -> Self {
+        telemetry::install(&env);
         Self {
             state,
             env,
@@ -115,7 +117,7 @@ impl DurableObject for NetworkAuthority {
         match result {
             Ok(response) => Ok(response),
             Err(error) => {
-                worker::console_error!("authority_request_failed: {}", error);
+                tracing::error!(event = "authority_request_failed", %error);
                 Response::error("authority temporarily unavailable", 503)
             }
         }

@@ -7,6 +7,8 @@ mod contract_vectors;
 mod device_login;
 #[path = "governance_tests.rs"]
 mod governance;
+#[path = "observability_tests.rs"]
+mod observability;
 #[path = "password_flow_tests.rs"]
 mod password_flow;
 #[path = "profile_tests.rs"]
@@ -555,4 +557,50 @@ fn initialization_is_consumed_and_signing_rollback_is_refused_after_expiry() {
             .activate(&mut authority.store, authority.environment.now())
             .is_err()
     );
+}
+
+#[test]
+fn global_creation_rate_limit_preserves_innocent_source_state_and_reports_remaining_wait() {
+    let mut authority = fixture();
+    let settings = Settings {
+        registration: RegistrationPolicy::Automatic,
+        source_rate: Rate {
+            burst: 1,
+            refill_seconds: 600,
+        },
+        global_rate: Rate {
+            burst: 1,
+            refill_seconds: 2,
+        },
+        ..Settings::default()
+    };
+    save(&mut authority.store, "settings", &settings).unwrap();
+
+    authority.register("noisy", registration(1)).unwrap();
+    authority.environment.now += 1;
+    let writes_before = authority.store.put_count;
+    for attempt in 0..2 {
+        let fault = authority
+            .register("innocent", registration(2))
+            .unwrap_err()
+            .downcast::<Fault>()
+            .unwrap();
+        assert!(
+            matches!(fault, Fault::RateLimited { retry_after: 1 }),
+            "attempt {attempt} returned {fault:?}"
+        );
+    }
+    assert_eq!(authority.store.put_count, writes_before);
+
+    authority.environment.now += 1;
+    // Prior global-only refusals must not escalate an innocent source to PoW.
+    authority.register("innocent", registration(2)).unwrap();
+
+    authority.environment.now += 98;
+    let fault = authority
+        .register("noisy", registration(3))
+        .unwrap_err()
+        .downcast::<Fault>()
+        .unwrap();
+    assert!(matches!(fault, Fault::RateLimited { retry_after: 500 }));
 }

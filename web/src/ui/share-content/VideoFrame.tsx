@@ -1,3 +1,6 @@
+import { FailureNotice } from '../controls/FailureNotice'
+import { receiverCopy } from '../locales/receiver'
+import { useCopy } from '../preferences/use-preferences'
 import { useEffectEvent, useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
 import type { PreviewSnapshot } from '../model'
 import type { PreviewActions } from './MediaPreview'
@@ -18,6 +21,7 @@ export function VideoFrame({ preview, actions }: {
   readonly preview: Extract<PreviewSnapshot, { state: 'video' }>
   readonly actions: PreviewActions
 }) {
+  const t = useCopy(receiverCopy).browse
   const canvas = useRef<HTMLCanvasElement>(null)
   const decoder = useRef<HTMLVideoElement>(null)
   const [presentedId, setPresentedId] = useState<number | null>(null)
@@ -71,19 +75,19 @@ export function VideoFrame({ preview, actions }: {
     <div className="preview-frame-stage" style={{ '--preview-ratio': preview.width / preview.height } as CSSProperties}
       aria-busy={pending}>
       <canvas ref={canvas} className="preview-frame" width={preview.width} height={preview.height}
-        role="img" aria-label={`Video preview of ${preview.name}`} />
+        role="img" aria-label={t.videoPreviewOf(preview.name)} />
       <video ref={decoder} key={preview.presentationId} src={preview.url} hidden muted playsInline preload="auto" />
-      <span className="preview-frame-status" role="status">{pending ? 'Loading frame…' : ''}</span>
+      <span className="preview-frame-status" role="status">{pending ? t.loadingFrame : ''}</span>
     </div>
     <div className="preview-seek">
       <div className="preview-seek-heading">
-        <span>Frame preview</span>
+        <span>{t.framePreview}</span>
         <span className="preview-time">{time(position)} / {time(preview.durationSeconds)}</span>
       </div>
       <input type="range" min={0} max={preview.durationSeconds}
         step={Math.max(MINIMUM_SEEK_STEP_SECONDS, preview.durationSeconds / SEEK_STEP_COUNT)}
-        value={position} aria-label={`Seek ${preview.name}`}
-        aria-valuetext={`${time(position)} of ${time(preview.durationSeconds)}`}
+        value={position} aria-label={t.seek(preview.name)}
+        aria-valuetext={t.position(time(position), time(preview.durationSeconds))}
         onPointerDown={event => {
           if (!event.isPrimary || event.button !== 0) return
           drag.current = { pointerId: event.pointerId, origin: position }
@@ -103,9 +107,9 @@ export function VideoFrame({ preview, actions }: {
         onPointerCancel={cancelDrag}
         onLostPointerCapture={cancelDrag} />
       {preview.failure === null
-        ? <p className="preview-seek-hint">Scrub to preview frames · Download for full playback.</p>
+        ? <p className="preview-seek-hint">{t.scrubHint}</p>
         : <div className="preview-seek-failure">
-          <p role="alert">{preview.failure}</p>
+          <div role="alert"><FailureNotice failure={preview.failure} context="frame" /></div>
         </div>}
     </div>
   </div>

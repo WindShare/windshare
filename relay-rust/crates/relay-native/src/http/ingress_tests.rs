@@ -297,6 +297,7 @@ async fn health_survives_full_business_and_control_budgets_and_upgrade_owns_its_
     let (response, refused) = exchange(&ingress, &format!("{UPGRADE_REQUEST}\r\n")).await;
     assert!(response.starts_with("HTTP/1.1 503 "));
     assert!(refused.unwrap().is_none());
+    assert!(!response.contains("retry-after:"));
     drop(upgraded);
     assert!(admission(&ingress).is_ok());
     drop(business);
@@ -446,4 +447,36 @@ async fn direct_upgrade_uses_socket_ip_without_port_or_forwarded_header_bypass()
     assert!(response.starts_with("HTTP/1.1 101 "));
     drop(first.unwrap().unwrap());
     drop(other.unwrap().unwrap());
+}
+
+#[tokio::test]
+async fn exhausted_public_budget_refuses_unowned_upgrades() {
+    use crate::node::{ContributionLimits, Settings};
+    let ingress = ingress(16);
+    let directory = tempfile::tempdir().unwrap();
+    let store = crate::Database::open(
+        &directory.path().join("node.sqlite"),
+        ingress.endpoint.identity,
+    )
+    .unwrap();
+    let settings = Settings {
+        contribution: ContributionLimits {
+            daily_bytes: Some(0),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    ingress.node.configure(settings, store).unwrap();
+    let (response, refused) = exchange(
+        &ingress,
+        &format!("{UPGRADE_REQUEST}Authorization: Bearer public-ticket\r\n\r\n"),
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 503 "), "{response}");
+    assert!(response.contains("retry-after: 30\r\n"), "{response}");
+    assert!(refused.unwrap().is_none());
+    let (response, unknown) = exchange(&ingress, &format!("{UPGRADE_REQUEST}\r\n")).await;
+    assert!(response.starts_with("HTTP/1.1 503 "), "{response}");
+    assert!(response.contains("retry-after: 30\r\n"), "{response}");
+    assert!(unknown.unwrap().is_none());
 }

@@ -1,24 +1,54 @@
+import { LanguageSelect } from './preferences/LanguageSelect'
+import { shellCopy } from './locales/shell'
 import { useState, useSyncExternalStore } from 'react'
 import type { ReceiverController } from './controller'
 import { WindShareMark } from './brand/WindShareMark'
+import { useCopy, usePreferences } from './preferences/use-preferences'
+import type { Appearance } from './preferences/model'
 import { ReceiverHeading } from './receiver-presentation/ReceiverHeading'
 import { ReceiverBrowsing } from './receiver-presentation/ReceiverBrowsing'
+import { ReceiverIcon, type ReceiverIconName } from './receiver-presentation/ReceiverIcon'
 import { ReportLink, type ShareReportSource } from './receiver-presentation/ReportLink'
-import { ReceiverTasks, ReceiverDownloads } from './receiver-presentation/ReceiverTasks'
+import { ReceiverActivity, ReceiverDownloads, ReceiverPrimarySaving } from './receiver-presentation/ReceiverTasks'
+
+const APPEARANCE_ORDER: readonly Appearance[] = ['system', 'light', 'dark']
+const APPEARANCE_META = {
+  system: { icon: 'monitor', label: 'appearanceSystem' },
+  light: { icon: 'sun', label: 'appearanceLight' },
+  dark: { icon: 'moon', label: 'appearanceDark' },
+} as const satisfies Record<Appearance, { icon: ReceiverIconName; label: keyof typeof shellCopy.en }>
+
+function AppearanceToggle() {
+  const { language, appearance, update } = usePreferences()
+  const next = APPEARANCE_ORDER[(APPEARANCE_ORDER.indexOf(appearance) + 1) % APPEARANCE_ORDER.length] ?? 'system'
+  const meta = APPEARANCE_META[appearance]
+  return <button className="appearance-toggle" type="button" aria-label={shellCopy[language][meta.label]} title={shellCopy[language][meta.label]}
+    onClick={() => update({ appearance: next })}>
+    <ReceiverIcon name={meta.icon} />
+  </button>
+}
 
 export function ReceiverApp({ controller, report }: { readonly controller: ReceiverController; readonly report?: ShareReportSource }) {
+  const t = useCopy(shellCopy)
   const source = controller.presentation.shareKind
   const kind = useSyncExternalStore(source.subscribe, source.getSnapshot, source.getSnapshot)
   const [downloadsOpen, setDownloadsOpen] = useState(false)
   return <main className={`receiver-shell receiver-content-${kind}`}>
     <header className="receiver-header">
-      <a className="brand" href="/" aria-label="WindShare home"><WindShareMark size={36} /><span>WindShare</span></a>
-      <div className="receiver-header-actions">{report && <ReportLink source={report} />}<ReceiverDownloads controller={controller} open={downloadsOpen} onOpenChange={setDownloadsOpen} /></div>
+      <div className="receiver-header-inner">
+        <a className="brand" href="/" aria-label={t.home}><WindShareMark size={32} /><span>WindShare</span></a>
+        <div className="receiver-header-actions">
+          {report && <ReportLink source={report} />}
+          <LanguageSelect className="receiver-language" />
+          <AppearanceToggle />
+          <ReceiverDownloads controller={controller} open={downloadsOpen} onOpenChange={setDownloadsOpen} />
+        </div>
+      </div>
     </header>
     <div className="share-workspace">
-      <ReceiverHeading controller={controller} />
+      <ReceiverHeading controller={controller} actions={<ReceiverPrimarySaving controller={controller} />} />
+      <ReceiverActivity controller={controller} openDownloads={() => setDownloadsOpen(true)} />
       <ReceiverBrowsing controller={controller} />
-      <ReceiverTasks controller={controller} openDownloads={() => setDownloadsOpen(true)} />
     </div>
   </main>
 }

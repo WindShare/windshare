@@ -112,7 +112,7 @@ describe('receive lifecycle terminal presentation', () => {
       receiptDigest: 'receipt',
     }), TREE, 'direct-tree')
 
-    expect(presentation.description).toContain('3 file(s) remain saved')
+    expect(presentation.description).toContain('3 files remain saved')
     expect(presentation.actions).toEqual([])
   })
 })

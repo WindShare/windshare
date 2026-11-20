@@ -3,6 +3,7 @@ package relayset
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/windshare/windshare/connectivity/relayplan"
 	"github.com/windshare/windshare/connectivity/senderrelay"
@@ -11,15 +12,17 @@ import (
 // NetworkAdmissions coordinates only directory candidates. Configured endpoints
 // keep independent lifetimes, and no successful published connection is evicted.
 type NetworkAdmissions struct {
-	mu         sync.Mutex
-	candidates []relayplan.Candidate
-	policy     relayplan.Policy
-	states     []admissionState
-	changed    chan struct{}
-	primary    int
-	inflight   int
-	active     int
-	observe    func(Admission)
+	mu            sync.Mutex
+	candidates    []relayplan.Candidate
+	policy        relayplan.Policy
+	states        []admissionState
+	changed       chan struct{}
+	primary       int
+	inflight      int
+	active        int
+	clock         senderrelay.Clock
+	serverRetryAt func(string) time.Time
+	observe       func(Admission)
 }
 
 type Admission struct {
@@ -44,7 +47,10 @@ func (a *NetworkAdmissions) record(index int, state string) {
 	a.observe(Admission{Endpoint: a.candidates[index].URL, Primary: primary, State: state, Count: a.active})
 }
 
-type admissionState struct{ eligible, attempting, admitted bool }
+type admissionState struct {
+	eligible, admitted bool
+	notBefore          time.Time
+}
 type admissionControl struct {
 	owner *NetworkAdmissions
 	index int
@@ -54,11 +60,19 @@ type admissionPermit struct {
 	released bool
 }
 
-func NewNetworkAdmissions(plan relayplan.Plan) *NetworkAdmissions {
-	a := &NetworkAdmissions{candidates: append([]relayplan.Candidate(nil), plan.Network...), policy: plan.Policy,
+func NewNetworkAdmissions(plan relayplan.Plan, clock senderrelay.Clock, serverRetryAt func(string) time.Time) *NetworkAdmissions {
+	if clock == nil {
+		clock = senderrelay.SystemClock{}
+	}
+	a := &NetworkAdmissions{clock: clock, serverRetryAt: serverRetryAt, candidates: append([]relayplan.Candidate(nil), plan.Network...), policy: plan.Policy,
 		states: make([]admissionState, len(plan.Network)), changed: make(chan struct{}), primary: -1}
-	for i := range a.states {
-		a.states[i].eligible = true
+	started := clock.Now()
+	for i, candidate := range a.candidates {
+		at := candidate.ServerRetryAt
+		if !plan.Decision.CooldownFallback && candidate.CooldownUntil.After(at) {
+			at = candidate.CooldownUntil
+		}
+		a.states[i] = admissionState{notBefore: at, eligible: !at.After(started)}
 	}
 	return a
 }
@@ -75,8 +89,7 @@ func (a *NetworkAdmissions) Control(url string) senderrelay.AttemptControl {
 func (c admissionControl) Begin(ctx context.Context) (senderrelay.AttemptPermit, error) {
 	a := c.owner
 	a.mu.Lock()
-	a.states[c.index].eligible = true
-	a.notify()
+	state := &a.states[c.index]
 	for {
 		if err := ctx.Err(); err != nil {
 			a.states[c.index].eligible = false
@@ -84,20 +97,43 @@ func (c admissionControl) Begin(ctx context.Context) (senderrelay.AttemptPermit,
 			a.mu.Unlock()
 			return nil, err
 		}
-		if a.active < relayplan.TargetNetworkRegistrations && a.inflight < relayplan.MaximumConcurrentAttempts &&
+		at := state.notBefore
+		// Another share may receive an HTTP deadline after this link is frozen.
+		// Recheck at admission, before spending a dial slot or reserving a ticket.
+		if a.serverRetryAt != nil {
+			if latest := a.serverRetryAt(a.candidates[c.index].Identity); latest.After(at) {
+				at = latest
+			}
+		}
+		delay := at.Sub(a.clock.Now())
+		if eligible := delay <= 0; state.eligible != eligible {
+			state.eligible = eligible
+			a.notify()
+		}
+		if state.eligible && a.active < relayplan.TargetNetworkRegistrations && a.inflight < relayplan.MaximumConcurrentAttempts &&
 			(a.primary < 0 || a.backup() == c.index) {
-			a.states[c.index].attempting = true
 			a.inflight++
 			a.mu.Unlock()
 			return &admissionPermit{control: c}, nil
 		}
 		changed := a.changed
 		a.mu.Unlock()
-		select {
-		case <-ctx.Done():
-		case <-changed:
+		var err error
+		if delay > 0 {
+			err = a.clock.Wait(ctx, delay, changed)
+		} else {
+			select {
+			case <-ctx.Done():
+			case <-changed:
+			}
 		}
 		a.mu.Lock()
+		if err != nil {
+			state.eligible = false
+			a.notify()
+			a.mu.Unlock()
+			return nil, err
+		}
 	}
 }
 
@@ -111,6 +147,7 @@ func (c admissionControl) Unavailable() {
 	a.states[c.index].admitted = false
 	a.active--
 	if a.primary == c.index {
+		a.releaseSoftCooldown()
 		a.primary = -1
 		for i, state := range a.states {
 			if state.admitted {
@@ -150,9 +187,19 @@ func (p *admissionPermit) Release() {
 	}
 	p.released = true
 	a.inflight--
-	a.states[index].attempting = false
+	if !a.states[index].admitted {
+		a.releaseSoftCooldown()
+	}
 	a.states[index].eligible = false
 	a.notify()
+}
+
+// A failed, unauthorized or lost primary frees its published backup to dial.
+// Server deadlines still constrain that endpoint across all shares.
+func (a *NetworkAdmissions) releaseSoftCooldown() {
+	for i, candidate := range a.candidates {
+		a.states[i].notBefore = candidate.ServerRetryAt
+	}
 }
 
 // Backoff candidates are absent here: their lifecycle re-enters eligibility only

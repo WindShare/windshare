@@ -60,7 +60,7 @@ describe('compatible-name receiver UI', () => {
       <ReceiverApp controller={controller(snapshot({
         output,
         retained: {
-          kind: 'available', error: null, pending: null,
+          kind: 'available', pending: null,
           operations: [{
             operationId: lifecycle.operationId,
             receiveIntentDigest: lifecycle.receiveIntentDigest,
@@ -145,7 +145,7 @@ function snapshot(
     ...experienceSnapshot(),
     pathActivity: { lanes: [] },
     phase: 'browsing',
-    status: 'Ready.',
+    status: null,
     error: null,
     rows: Object.freeze([]),
     breadcrumbs: Object.freeze([{ id: 'root', name: 'Shared files' }]),

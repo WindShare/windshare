@@ -52,6 +52,7 @@ test('the Worker runs password hashing and rate limits across edge and Durable O
     '/internal/accounts/login/complete',
     '/internal/accounts/password/commit',
     '/internal/admin/login/complete',
+    '/internal/admin/password/commit',
   ]) {
     const blocked = await worker.fetch('https://localhost' + internalPath, {
       method: 'POST',
@@ -85,8 +86,32 @@ test('the Worker runs password hashing and rate limits across edge and Durable O
   await call('/v1/admin/initialize', { ...operator, token: 'local-initialization-token' }, { status: 403 });
   await call('/v1/admin/login', { username: operator.username, password: 'wrong-password-attempt' }, { status: 403 });
   const adminLogin = await call('/v1/admin/login', operator);
+  const priorAdminCookie = adminCookie;
   adminCookie = adminLogin.response.headers.get('set-cookie').split(';')[0];
   csrf = adminLogin.value.csrf;
+  const rotatedAdmin = 'Operator-Rotated-Password-2026!';
+  await call('/v1/admin/password', {
+    current_password: 'wrong-password-attempt', new_password: rotatedAdmin,
+  }, { admin: true, status: 403 });
+  await call('/v1/admin/password', {
+    current_password: operator.password, new_password: 'short',
+  }, { admin: true, status: 400 });
+  const passwordChanged = await call('/v1/admin/password', {
+    current_password: operator.password, new_password: rotatedAdmin,
+  }, { admin: true });
+  adminCookie = passwordChanged.response.headers.get('set-cookie').split(';')[0];
+  csrf = passwordChanged.value.csrf;
+  const staleConsole = await worker.fetch('https://localhost/v1/admin/console', {
+    headers: { Cookie: priorAdminCookie },
+  });
+  assert.equal(staleConsole.status, 403);
+  await call('/v1/admin/login', operator, { status: 403 });
+  const relogged = await call('/v1/admin/login', { ...operator, password: rotatedAdmin });
+  adminCookie = relogged.response.headers.get('set-cookie').split(';')[0];
+  csrf = relogged.value.csrf;
+  const dismissed = await call('/v1/admin/reviews/dismiss', { count: 1000 }, { admin: true });
+  assert.deepEqual(dismissed.value, []);
+  await call('/v1/admin/reviews/dismiss', { count: 0 }, { admin: true, status: 400 });
 
   // Password registration + idempotent retry + login + edge oversized password rejection.
   const secret = randomBytes(32).toString('base64url');

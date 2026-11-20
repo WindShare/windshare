@@ -133,7 +133,7 @@ func TestAccountCompletionIdentifiesItsSubmission(t *testing.T) {
 	})
 	t.Cleanup(func() { _ = app.close() })
 	for _, test := range []struct{ id, action, state string }{
-		{"register", "register", "succeeded"}, {"email-1", "email", "succeeded"}, {"email-2", "email", "succeeded"},
+		{"register", "register", "succeeded"}, {"refresh", "refresh", "succeeded"}, {"email-1", "email", "succeeded"}, {"email-2", "email", "succeeded"},
 		{"nickname", "nickname", "succeeded"}, {"send-code", "request_profile_email", "succeeded"},
 		{"confirm-code", "confirm_profile_email", "succeeded"}, {"invalid", "unknown", "failed"},
 	} {
@@ -143,6 +143,9 @@ func TestAccountCompletionIdentifiesItsSubmission(t *testing.T) {
 		}
 		app.work.Wait()
 		view := app.snapshot().Account
+		if view.ResetLocal != "" {
+			t.Fatalf("zero reset time formatted as %q", view.ResetLocal)
+		}
 		if view.busy() || view.Operation.ID != test.id || view.Operation.State != test.state ||
 			(view.Operation.Error != nil) != (test.state == "failed") {
 			t.Fatalf("unexpected completion: %+v", view.Operation)

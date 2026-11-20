@@ -40,7 +40,12 @@ func Advance(previous, next Entitlement) Entitlement {
 	return previous
 }
 
-func (value Entitlement) ResetAt() time.Time { return time.Unix(int64((value.Day+1)*DaySeconds), 0) }
+func (value Entitlement) ResetAt() time.Time {
+	if value.Version == 0 {
+		return time.Time{}
+	}
+	return time.Unix(int64((value.Day+1)*DaySeconds), 0).UTC()
+}
 
 type Ticket struct {
 	Issuer      [32]byte

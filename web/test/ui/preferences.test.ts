@@ -2,9 +2,10 @@ import { describe, expect, it, vi } from 'vitest'
 import { createPreferencesStore, parsePreferences } from '../../src/ui/preferences/model'
 
 describe('UI preferences', () => {
-  it('chooses a supported language without overriding the first browser preference', () => {
+  it('chooses the first supported browser language', () => {
     expect(parsePreferences(null, ['zh-HK', 'en'])).toEqual({ language: 'zh-CN', appearance: 'system' })
     expect(parsePreferences(null, ['en-US', 'zh-CN']).language).toBe('en')
+    expect(parsePreferences(null, ['fr-FR', 'zh-Hant', 'en-GB']).language).toBe('zh-CN')
     expect(parsePreferences(null, ['fr-FR']).language).toBe('en')
     expect(parsePreferences(null, []).language).toBe('en')
   })

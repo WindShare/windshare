@@ -109,7 +109,7 @@ pub enum AccountAction {
     Open(AccountPage),
     Register,
     Submit,
-    Retry,
+    Refresh,
 }
 
 pub(super) enum AccountFormError {
@@ -551,7 +551,7 @@ impl Desktop {
                     window.focus(&frame.scope, cx);
                 }
             }
-            AccountAction::Retry => self.send_account_command(AccountCommand::Retry),
+            AccountAction::Refresh => self.send_account_command(AccountCommand::Refresh),
         }
         cx.notify();
     }

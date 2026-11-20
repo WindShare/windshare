@@ -303,18 +303,17 @@ Directory payload, signed as exact bytes with Ed25519 so no JSON canonicalizatio
 - `engine/networkdirectory` (new): load the snapshot, refresh from mirrors in random order with
   backoff, and persist the highest accepted generation and its highest serial under
   `config.json.state/network/`.
-- Connection observations: actual registration attempts record TCP/TLS/WebSocket/admission outcomes
-  and timings. Keep recent results in memory per network generation with an age limit, for ordering
-  only. Reuse registration timeouts and backoff; no separate probe scheduler or persistent probe store.
-  Optional coarse exit-location hints seed cold-start order without excluding regions or delaying sharing.
+- The engine keeps recent directory-node handshake samples per network generation. Nodes can
+  request a retry deadline over HTTP. Share-specific refusals and their waits stay with the registration.
 - `connectivity/relayplan` (new, pure): configured candidates, directory nodes, connection observations,
   and policy in; an ordered plan and a decision record out.
   1. Maintain all configured active relays. Deduplicate network candidates against them and use only
      remaining slots under the shared eight-endpoint limit.
-  2. Unless the user chose configured relays only, candidates are `active` and `canary` nodes with the
-     `relay` role, allowed by admission policy and not in cooldown.
-  3. Order by recent connection results, P0 priors, capacity, and canary status; retain an unmeasured
-     candidate when available. Low RTT alone does not imply high throughput.
+  2. In planned mode, use eligible active or canary relay nodes. One ready node can retain a
+     cooled backup. When all are cooled, race as server deadlines permit and wake directory refresh.
+  3. Rank by registration history, rollout status, the 50 Mbps capacity tier, 100 ms handshake
+     buckets and advertised capacity. A process seed spreads ties. Retain an unmeasured candidate
+     when a slot remains.
   4. Prefer another provider and operator. With a `cn` primary, prefer a `global` backup. With a
      `global` primary, prefer another `global` when P0 measurements support mainland first-join
      reachability through at least one of the pair; otherwise prefer a usable `cn` backup.
@@ -434,6 +433,7 @@ comparison measurements; relay usage is not a P2P failure rate.
 | Hong Kong optimized line (CN2 GIA or CMI) | Cross-border legs limit relayed transfers at evening peak | A `global` node that mainland networks reach well |
 | Receiver-suggested relays | Joined transfers are limited by the link relays' distance or capacity | Over an existing E2E path, ask the sender to publish on an allowed node near the receiver; extend P1's bounded membership beyond the published set for that receiver. Cannot repair first-join failure; not required for launch |
 | Cross-border quality in planning | Vantage-point data shows cross-border quality differs widely between nodes | The planner weighs measured cross-border quality, not only RTT from the sender |
+| Cold-start exit hint | More than four `>=50 Mbps` relay nodes and measured slow cross-region first connects | Non-blocking edge hint in planned desktop mode; normalize `region` values (`zone=cn, region=as` in mainland) |
 | Official TURN | Measured transfers where WebRTC over TURN would beat the application relays | coturn on purchased nodes; the authority issues short-lived credentials to ticket holders, delegated through the existing `TURN_CONTROL` `Grant` |
 | Relay-to-relay forwarding | P2P fails and no relay is reachable by both sides | Directed forwarding for that case only |
 

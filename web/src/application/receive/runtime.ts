@@ -1,3 +1,4 @@
+import type { ReceiveAdmission, ReceiveBlockReason } from './admission'
 import type { SelectionProjectionRuntime } from './discovery'
 import { validateReceiveIntent } from '../../transfer/intent'
 import type { ReceiveOperationDisplay } from '../../output/model/operation-display'
@@ -63,10 +64,10 @@ export class BrowserReceiveRuntime<Share extends ReceiveJoinedShare> {
       this.#options.active.canRetainForLocalOutput
   }
 
-  activeLifecycleActionAdmission(action: LifecycleUserAction): Readonly<{ allowed: boolean; reason: string | null }> {
+  activeLifecycleActionAdmission(action: LifecycleUserAction): ReceiveAdmission {
     if (!this.#options.active.active || this.#pending ||
         isReceiveOutputDelivered(this.#options.state.getSnapshot().lifecycle)) {
-      return { allowed: false, reason: 'This download is managed in Downloads.' }
+      return { allowed: false, reason: 'managedInDownloads' }
     }
     if (action === 'continue' && this.#options.state.getSnapshot().lifecycle?.kind === 'resumable-receive') {
       const reason = this.remoteContinuationUnavailable()
@@ -74,7 +75,7 @@ export class BrowserReceiveRuntime<Share extends ReceiveJoinedShare> {
     }
     return this.#options.active.canPerformLifecycleAction(action)
       ? { allowed: true, reason: null }
-      : { allowed: false, reason: 'This download action is no longer available.' }
+      : { allowed: false, reason: 'actionUnavailable' }
   }
 
   performLifecycleAction(action: LifecycleUserAction): void {
@@ -214,37 +215,37 @@ export class BrowserReceiveRuntime<Share extends ReceiveJoinedShare> {
     return detached
   }
 
-  shareNavigationBlockedReason(): string | null {
+  shareNavigationBlockedReason(): ReceiveBlockReason | null {
     if (this.#options.retained.pending || this.#pending) {
-      return 'Wait for the current download action to finish before opening another share.'
+      return 'navigationPending'
     }
     if (this.#options.active.active && !isReceiveOutputDelivered(this.#options.state.getSnapshot().lifecycle)) {
-      return 'Finish this download, or pause it and keep it in Downloads, before opening another share.'
+      return 'navigationOccupied'
     }
     return null
   }
 
-  remoteContinuationUnavailable(): string | null {
-    if (this.#connection === 'ended') return 'This share has ended. Open a new share link to receive more content.'
-    if (this.#connection === 'unavailable') return 'Reopen the share link to reconnect before continuing this download.'
+  remoteContinuationUnavailable(): ReceiveBlockReason | null {
+    if (this.#connection === 'ended') return 'endedContinue'
+    if (this.#connection === 'unavailable') return 'reconnectContinue'
     return null
   }
 
-  startBlockedReason(): string | null {
-    if (this.#options.disposed() || this.#options.joined() === undefined) return 'Connect to the share first.'
-    if (this.#pending || this.#options.retained.pending) return 'Another download is using the saving destination.'
+  startBlockedReason(): ReceiveBlockReason | null {
+    if (this.#options.disposed() || this.#options.joined() === undefined) return 'connectFirst'
+    if (this.#pending || this.#options.retained.pending) return 'destinationBusy'
     if (this.#options.active.active) {
       const state = this.#options.state.getSnapshot().lifecycle
-      if (isReceiveOutputDelivered(state)) return 'Finishing the current download.'
-      if (this.#options.active.canRelease) return 'Choose Start another download to try again.'
-      if (state?.kind === 'resumable-receive') return 'The paused download still owns its destination. Continue or stop it first.'
-      if (state?.kind === 'waiting-to-save') return 'Save or discard the prepared result before starting another download.'
-      return 'A download is in progress.'
+      if (isReceiveOutputDelivered(state)) return 'finishing'
+      if (this.#options.active.canRelease) return 'newAttempt'
+      if (state?.kind === 'resumable-receive') return 'pausedDestination'
+      if (state?.kind === 'waiting-to-save') return 'savePrepared'
+      return 'downloading'
     }
-    if (this.#options.activation.pending) return 'Finish or cancel the current saving choice.'
-    if (this.#connection === 'ended') return 'This share has ended. Open a new share link to download more.'
-    if (this.#connection === 'unavailable') return 'Reconnect using the share link before starting another download.'
-    if (this.#options.selectionIsEmpty()) return 'Select items to download.'
+    if (this.#options.activation.pending) return 'pendingChoice'
+    if (this.#connection === 'ended') return 'endedDownload'
+    if (this.#connection === 'unavailable') return 'reconnectDownload'
+    if (this.#options.selectionIsEmpty()) return 'emptySelection'
     return null
   }
 

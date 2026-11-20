@@ -33,6 +33,20 @@ struct InitializeRequest {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AdminPasswordChangeRequest {
+    current_password: String,
+    new_password: String,
+}
+
+#[derive(Default)]
+struct ForwardHeaders<'a> {
+    authorization: Option<&'a str>,
+    cookie: Option<&'a str>,
+    csrf: Option<&'a str>,
+}
+
+#[derive(Deserialize)]
 struct DeviceApproveRequest {
     invitation: String,
     login: Option<LoginRequest>,
@@ -50,6 +64,7 @@ pub(super) fn handles(method: &Method, path: &str) -> bool {
                 | "/v1/device/approve"
                 | "/v1/admin/login"
                 | "/v1/admin/initialize"
+                | "/v1/admin/password"
         )
 }
 
@@ -58,6 +73,7 @@ pub(super) async fn handle(mut request: Request, env: &Env) -> Result<Response> 
     let source = edge::source_for_request(&request, env)?;
     let authorization = request.headers().get("Authorization")?;
     let cookie = request.headers().get("Cookie")?;
+    let csrf = request.headers().get("X-CSRF-Token")?;
     let Some(bytes) = read_body(&mut request).await? else {
         return Response::error("request too large", 413);
     };
@@ -70,6 +86,9 @@ pub(super) async fn handle(mut request: Request, env: &Env) -> Result<Response> 
         "/v1/device/approve" => device_approve(env, &source, cookie.as_deref(), &bytes).await,
         "/v1/admin/login" => admin_login(env, &source, &bytes).await,
         "/v1/admin/initialize" => admin_initialize(env, &source, &bytes).await,
+        "/v1/admin/password" => {
+            admin_change_password(env, &source, cookie.as_deref(), csrf.as_deref(), &bytes).await
+        }
         _ => Response::error("not found", 404),
     }
 }
@@ -79,7 +98,14 @@ async fn register(env: &Env, source: &str, bytes: &[u8]) -> Result<Response> {
         return fault_response(&Fault::Invalid);
     };
     if wire.username.is_none() && wire.password.is_none() {
-        return call_do_raw(env, "/v1/accounts", source, None, None, bytes).await;
+        return call_do_raw(
+            env,
+            "/v1/accounts",
+            source,
+            &ForwardHeaders::default(),
+            bytes,
+        )
+        .await;
     }
     let (Some(username), Some(password)) = (wire.username, wire.password) else {
         return fault_response(&Fault::Invalid);
@@ -218,7 +244,17 @@ async fn device_approve(
         return fault_response(&Fault::Invalid);
     };
     let Some(login) = input.login else {
-        return call_do_raw(env, "/v1/device/approve", source, None, cookie, bytes).await;
+        return call_do_raw(
+            env,
+            "/v1/device/approve",
+            source,
+            &ForwardHeaders {
+                cookie,
+                ..ForwardHeaders::default()
+            },
+            bytes,
+        )
+        .await;
     };
     if !valid_login_password_length(login.password.len()) {
         return credentials_denied();
@@ -324,6 +360,59 @@ async fn admin_initialize(env: &Env, source: &str, bytes: &[u8]) -> Result<Respo
     .await
 }
 
+async fn admin_change_password(
+    env: &Env,
+    source: &str,
+    cookie: Option<&str>,
+    csrf: Option<&str>,
+    bytes: &[u8],
+) -> Result<Response> {
+    let Ok(input) = serde_json::from_slice::<AdminPasswordChangeRequest>(bytes) else {
+        return fault_response(&Fault::Invalid);
+    };
+    if !valid_password_length(input.new_password.len()) {
+        return fault_response(&Fault::Invalid);
+    }
+    if !valid_login_password_length(input.current_password.len()) {
+        return credentials_denied();
+    }
+    let headers = ForwardHeaders {
+        cookie,
+        csrf,
+        ..ForwardHeaders::default()
+    };
+    let mut prepare = call_do_json_with_headers(
+        env,
+        "/internal/admin/password/prepare",
+        source,
+        &headers,
+        &serde_json::json!({ "new_password_len": input.new_password.len() }),
+    )
+    .await?;
+    if prepare.status_code() != 200 {
+        return Ok(prepare);
+    }
+    let verifier: HashedPassword = prepare.json().await?;
+    if !verifier.verify(&input.current_password) {
+        return credentials_denied();
+    }
+    let hashed = match hash_on_edge(&input.new_password)? {
+        Ok(hashed) => hashed,
+        Err(response) => return Ok(response),
+    };
+    call_do_json_with_headers(
+        env,
+        "/internal/admin/password/commit",
+        source,
+        &headers,
+        &serde_json::json!({
+            "password_hash": hashed,
+            "previous_verifier_digest": verifier.fingerprint(),
+        }),
+    )
+    .await
+}
+
 fn hash_on_edge(password: &str) -> Result<std::result::Result<HashedPassword, Response>> {
     let mut salt = [0_u8; PASSWORD_SALT_BYTES];
     getrandom::fill(&mut salt).map_err(failure)?;
@@ -351,16 +440,35 @@ async fn call_do_json(
     authorization: Option<&str>,
     body: &impl Serialize,
 ) -> Result<Response> {
+    call_do_json_with_headers(
+        env,
+        path,
+        source,
+        &ForwardHeaders {
+            authorization,
+            ..ForwardHeaders::default()
+        },
+        body,
+    )
+    .await
+}
+
+async fn call_do_json_with_headers(
+    env: &Env,
+    path: &str,
+    source: &str,
+    headers: &ForwardHeaders<'_>,
+    body: &impl Serialize,
+) -> Result<Response> {
     let payload = serde_json::to_vec(body).map_err(failure)?;
-    call_do_raw(env, path, source, authorization, None, &payload).await
+    call_do_raw(env, path, source, headers, &payload).await
 }
 
 async fn call_do_raw(
     env: &Env,
     path: &str,
     source: &str,
-    authorization: Option<&str>,
-    cookie: Option<&str>,
+    forwarded: &ForwardHeaders<'_>,
     bytes: &[u8],
 ) -> Result<Response> {
     let url = format!("https://internal{path}");
@@ -374,11 +482,14 @@ async fn call_do_raw(
     let headers = request.headers_mut()?;
     headers.set("Content-Type", "application/json")?;
     headers.set("X-Authority-Source", source)?;
-    if let Some(auth) = authorization {
+    if let Some(auth) = forwarded.authorization {
         headers.set("Authorization", auth)?;
     }
-    if let Some(cookie) = cookie {
+    if let Some(cookie) = forwarded.cookie {
         headers.set("Cookie", cookie)?;
+    }
+    if let Some(csrf) = forwarded.csrf {
+        headers.set("X-CSRF-Token", csrf)?;
     }
     env.durable_object("AUTHORITY")?
         .id_from_name(AUTHORITY_OBJECT)?

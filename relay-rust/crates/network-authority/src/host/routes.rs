@@ -18,9 +18,9 @@ pub struct Context {
     pub(super) method: Method,
     pub(super) source: String,
     pub(super) bearer: String,
-    session: String,
+    pub(super) session: String,
     device_session: String,
-    csrf: String,
+    pub(super) csrf: String,
     pub(super) initialization: String,
     directory: Option<serde_json::Value>,
     extra_email_domains: Vec<String>,
@@ -117,11 +117,26 @@ struct Report {
     share: [u8; 12],
     reason: String,
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DismissReview {
+    count: u64,
+}
 pub(super) fn parse<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T> {
     serde_json::from_slice(bytes).map_err(|_| Fault::Invalid.into())
 }
 pub fn csrf(session: &str) -> String {
     URL_SAFE_NO_PAD.encode(crate::registration::digest(&format!("csrf/{session}")))
+}
+pub(super) fn verify_admin_csrf(session: &str, provided: &str) -> Result<()> {
+    ensure!(!session.is_empty(), Fault::administrator_session_required());
+    ensure!(
+        provided == csrf(session),
+        Fault::Denied {
+            reason: "csrf".into()
+        }
+    );
+    Ok(())
 }
 
 pub fn dispatch(
@@ -238,13 +253,7 @@ fn admin_routes(
         ..
     } = context;
     if method != Method::Get {
-        ensure!(!session.is_empty(), Fault::administrator_session_required());
-        ensure!(
-            provided == csrf(&session),
-            Fault::Denied {
-                reason: "csrf".into()
-            }
-        );
+        verify_admin_csrf(&session, &provided)?;
     }
     let value = match (method, path.as_str()) {
         (Method::Post, "/v1/admin/logout") => {
@@ -309,6 +318,10 @@ fn admin_routes(
         (Method::Post, "/v1/admin/blocks") => {
             authority.block(&session, parse::<Block>(bytes)?)?;
             serde_json::to_value(authority.blocks()?)?
+        }
+        (Method::Post, "/v1/admin/reviews/dismiss") => {
+            let input: DismissReview = parse(bytes)?;
+            serde_json::to_value(authority.dismiss_review(&session, input.count)?)?
         }
         _ => return Response::error("not found", 404).map_err(|error| anyhow::anyhow!("{error}")),
     };

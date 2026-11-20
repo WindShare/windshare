@@ -71,14 +71,7 @@ impl Ingress {
             );
         }
         if !self.node.available() {
-            let mut response = reply(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "relay temporarily unavailable\n",
-            );
-            response
-                .headers_mut()
-                .insert(header::RETRY_AFTER, "30".parse().expect("static retry"));
-            return Route::Reply(response);
+            return Route::Reply(unavailable("relay temporarily unavailable\n"));
         }
         if !self.origins.allows(request.headers()) {
             return Route::Reply(reply(StatusCode::FORBIDDEN, "origin is not allowed\n"));
@@ -117,6 +110,15 @@ fn share_hint<B>(request: &Request<B>) -> Result<ShareId> {
         share = ShareId::new(bytes.try_into().map_err(|_| anyhow!("share_id width"))?);
     }
     share.ok_or_else(|| anyhow!("missing share_id routing hint"))
+}
+
+pub(super) fn unavailable(body: &'static str) -> Response<ResponseBody> {
+    let mut response = reply(StatusCode::SERVICE_UNAVAILABLE, body);
+    response.headers_mut().insert(
+        header::RETRY_AFTER,
+        crate::node::SERVICE_RETRY_SECONDS.into(),
+    );
+    response
 }
 
 pub(super) fn reply(status: StatusCode, body: &'static str) -> Response<ResponseBody> {

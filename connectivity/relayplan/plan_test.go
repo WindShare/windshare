@@ -54,10 +54,10 @@ func TestPlanFiltersTrustRolesAndExpiredObservations(t *testing.T) {
 		input.Observations[i].Identity = endpoint.IdentityURL
 	}
 	plan, err := Build(input)
-	if err != nil || len(plan.Network) != 1 || plan.Network[0].Alias != b.Alias {
+	if err != nil || len(plan.Network) != 2 || plan.Network[0].Alias != b.Alias || plan.Network[1].Alias != d.Alias || !plan.Network[1].CooldownUntil.After(now) {
 		t.Fatalf("filter result: %+v %v", plan, err)
 	}
-	if len(plan.Decision.Filters) != 3 {
+	if len(plan.Decision.Filters) != 2 {
 		t.Fatal("missing rejection reasons")
 	}
 }

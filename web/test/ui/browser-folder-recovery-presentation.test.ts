@@ -130,7 +130,7 @@ describe('folder receiving and local saving presentation', () => {
     }))
     expect(task.headline).toBe('Saving received files to folder')
     expect(task.publication).toBe('unpublished')
-    expect(task.progress?.details).toContain('1 received files still need local saving.')
+    expect(task.progress?.details).toContain('1 received file still needs local saving.')
   })
 
   it('keeps the offline local save action enabled while unfinished receive requires the original link', () => {

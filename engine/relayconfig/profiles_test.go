@@ -42,6 +42,30 @@ func TestNewRelaysUseOnlyAvailableAutomaticSlots(t *testing.T) {
 	}
 }
 
+func TestSelectedModeEnablesNewRelaysWithoutReenablingDisabledOnes(t *testing.T) {
+	var c Config
+	if err := c.SetMode(Selected); err != nil {
+		t.Fatal(err)
+	}
+	c, err := c.MergeRelay(relayprofile.Candidate{PublicURL: "https://first.example"})
+	if err != nil || !slices.Equal(c.ActiveRelays, []string{"https://first.example"}) {
+		t.Fatalf("first selected relay = %v, err=%v", c.ActiveRelays, err)
+	}
+	if err := c.SetEnabled("https://first.example", false); err != nil {
+		t.Fatal(err)
+	}
+	// Re-merging a deliberately disabled profile must keep it disabled.
+	c, err = c.MergeRelay(relayprofile.Candidate{PublicURL: "https://first.example", ConsoleURL: "https://console.example"})
+	if err != nil || len(c.ActiveRelays) != 0 {
+		t.Fatalf("re-merged disabled relay = %v, err=%v", c.ActiveRelays, err)
+	}
+	// Adding a distinct new relay enables it while preserving the disabled first profile.
+	c, err = c.MergeRelay(relayprofile.Candidate{PublicURL: "https://second.example"})
+	if err != nil || !slices.Equal(c.ActiveRelays, []string{"https://second.example"}) {
+		t.Fatalf("second selected relay = %v, err=%v", c.ActiveRelays, err)
+	}
+}
+
 func TestManualCredentialKeepsDiscoveryAndRediscoveryCanWithdrawIt(t *testing.T) {
 	p := relayprofile.Candidate{PublicURL: "https://relay.example", ConsoleURL: "https://console.example", OfferedFrontend: "https://self.example", AccessKey: "old"}
 	c := Config{Profiles: []relayprofile.Candidate{p}, FrontURL: "https://saved.example"}

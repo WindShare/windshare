@@ -101,23 +101,28 @@ impl Reporter {
             let now = super::super::now().unsigned_abs();
             if now >= next_report {
                 next_report = now.saturating_add(REPORT_INTERVAL_SECONDS);
-                if let Err(error) = self.flush(super::super::now).await {
-                    tracing::error!(event="usage_persist_failed", %error);
-                }
-                // A failed old batch never holds up today's zero-byte entitlement refresh.
-                let (refresh, retry, prune) =
-                    tokio::join!(self.refresh(versions), self.retry(), self.prune_quotas(now));
-                for result in [refresh, retry] {
-                    if let Err(error) = result {
-                        tracing::warn!(event="authority_usage_retry", %error);
-                    }
-                }
-                if let Err(error) = prune {
-                    tracing::warn!(event="access_quota_prune_failed", %error);
-                }
+                self.run_report_cycle(versions, now).await;
             } else if let Err(error) = self.retry().await {
                 tracing::warn!(event="authority_usage_retry", %error);
             }
+        }
+    }
+
+    pub(super) async fn run_report_cycle(&self, versions: &watch::Sender<u64>, now: u64) {
+        if let Err(error) = self.flush(super::super::now).await {
+            tracing::error!(event = "usage_persist_failed", %error);
+        }
+        // Submit the pending usage batch before querying status so fresh
+        // entitlements reflect just-flushed bytes, without letting a failed
+        // batch suppress policy, restriction, or allowance refreshes.
+        if let Err(error) = self.retry().await {
+            tracing::warn!(event = "authority_usage_retry", %error);
+        }
+        if let Err(error) = self.refresh(versions).await {
+            tracing::warn!(event = "authority_usage_retry", %error);
+        }
+        if let Err(error) = self.prune_quotas(now).await {
+            tracing::warn!(event = "access_quota_prune_failed", %error);
         }
     }
 

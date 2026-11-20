@@ -96,7 +96,7 @@ fn offline_tickets_share_a_resident_limit_and_reconnect_reuses_it() {
     .attribution();
     assert!(matches!(
         service.reserve(share(2), sibling),
-        Err(RegistrationDecision::Unavailable)
+        Err(RegistrationDecision::Unavailable(_))
     ));
     drop(first);
     assert!(service.reserve(share(2), sibling).is_err());
@@ -204,7 +204,7 @@ fn registration_retries_generation_mismatches_and_revalidates_cached_proof() {
     );
     assert!(matches!(
         service.authorize(share(1), Some(&next_bearer), NOW),
-        RegistrationDecision::Unavailable
+        RegistrationDecision::Unavailable(_)
     ));
     assert!(matches!(
         service.authorize(share(1), Some(&next_bearer), next_ticket.expires_at),
@@ -226,7 +226,7 @@ fn registration_retries_generation_mismatches_and_revalidates_cached_proof() {
     for stale_bearer in [previous_bearer, Bearer::new(&previous_token)] {
         assert!(matches!(
             service.authorize(share(1), Some(&stale_bearer), NOW + 1),
-            RegistrationDecision::Unavailable
+            RegistrationDecision::Unavailable(_)
         ));
     }
     assert!(matches!(
@@ -307,7 +307,7 @@ fn local_owner_capacity_is_preserved_when_public_residency_is_full() {
     let public = service.reserve(share(1), Attribution::Anonymous).unwrap();
     assert!(matches!(
         service.reserve(share(2), Attribution::Anonymous),
-        Err(RegistrationDecision::Unavailable)
+        Err(RegistrationDecision::Unavailable(_))
     ));
     let mut token = Bearer::new("owner-secret");
     assert_eq!(
@@ -330,4 +330,61 @@ fn local_owner_capacity_is_preserved_when_public_residency_is_full() {
     assert_eq!(service.class(owner, NOW).0, Class::Owner);
     drop(public);
     assert!(service.allowed(share(2), owner));
+}
+
+#[test]
+fn owner_can_use_all_reserved_shares_beyond_per_principal_limit() {
+    let service = Service::default();
+    let owner_credential = Credential {
+        principal: [1; 16],
+        id: [2; 16],
+        name: "owner".into(),
+        digest: Digest::of(b"owner-secret"),
+        created_at: NOW,
+        last_used_at: None,
+        state: CredentialState::Active,
+    };
+    let guest_credential = Credential {
+        principal: [3; 16],
+        id: [4; 16],
+        name: "guest".into(),
+        digest: Digest::of(b"guest-secret"),
+        created_at: NOW,
+        last_used_at: None,
+        state: CredentialState::Active,
+    };
+    let default_policy = Policy::default();
+    let owner_reserve = default_policy.owner_reserved_shares;
+    let per_principal = default_policy.shares_per_principal;
+    assert!(owner_reserve > per_principal);
+    service
+        .configure(Policy {
+            owner_principals: vec![owner_credential.principal],
+            credentials: vec![owner_credential, guest_credential],
+            ..default_policy
+        })
+        .unwrap();
+
+    let owner = Attribution::Credential {
+        principal: [1; 16],
+        credential: [2; 16],
+    };
+    let guest = Attribution::Credential {
+        principal: [3; 16],
+        credential: [4; 16],
+    };
+    let mut owner_shares = Vec::with_capacity(owner_reserve);
+    for index in 1..=u8::try_from(owner_reserve).unwrap() {
+        owner_shares.push(service.reserve(share(index), owner).unwrap());
+    }
+    let mut guest_shares = Vec::with_capacity(per_principal);
+    for index in 1..=u8::try_from(per_principal).unwrap() {
+        guest_shares.push(service.reserve(share(100 + index), guest).unwrap());
+    }
+    assert!(matches!(
+        service.reserve(share(200), guest),
+        Err(RegistrationDecision::Unavailable(_))
+    ));
+    drop(guest_shares);
+    drop(owner_shares);
 }

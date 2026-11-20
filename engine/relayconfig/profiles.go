@@ -84,7 +84,9 @@ func (c Config) MergeRelay(p relayprofile.Candidate) (Config, error) {
 			return Config{}, fmt.Errorf("%w: limit of %d relay profiles reached", ErrConfig, MaximumProfiles)
 		}
 		c.Profiles = append(c.Profiles, p)
-		if !c.ConfiguredOnly && len(c.ActiveRelays) < relayprofile.MaximumEndpoints {
+		// Newly added profiles start enabled whenever a slot is available,
+		// independently of whether automatic built-in relays are used.
+		if len(c.ActiveRelays) < relayprofile.MaximumEndpoints {
 			c.ActiveRelays = append(slices.Clone(c.ActiveRelays), p.PublicURL)
 		}
 	} else {

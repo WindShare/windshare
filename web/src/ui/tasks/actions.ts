@@ -1,40 +1,46 @@
+import type { Language } from '../preferences/model'
+import { receiverCopy } from '../locales/receiver'
+import type { ReceiveBlockReason } from '../../application/receive/admission'
 import type { LifecycleActionPresentation } from '../lifecycle-presentation'
 import type { RetainedReceiveAction, RetainedReceiveOperation } from '../../application/receive/contracts'
 import type { TaskAction, TaskRecoveryReadiness } from './model'
 
-export function activeTaskAction(action: LifecycleActionPresentation, planKind: string): TaskAction {
+export function activeTaskAction(action: LifecycleActionPresentation, planKind: string, language: Language = 'en'): TaskAction<ReceiveBlockReason> {
+  const t = receiverCopy[language].actions
   return Object.freeze({
     id: action.kind,
-    label: action.kind === 'pause' ? 'Pause' : action.label,
+    label: action.kind === 'pause' ? t.pause : action.label,
     destructive: action.destructive,
     disabledReason: null,
-    consequence: activeConsequence(action, planKind),
+    consequence: activeConsequence(action, planKind, language),
     target: Object.freeze({ kind: 'active', action: action.kind }),
   })
 }
 
-function activeConsequence(action: LifecycleActionPresentation, planKind: string): string | null {
-  if (action.kind === 'save-staged-files') return 'Copies complete retained files to the chosen folder without receiving them again.'
-  if (action.kind === 'cleanup-staging') return 'Finishes previously authorized cleanup of browser staging; saved destination files remain untouched.'
-  if (action.kind === 'discard-incomplete-staging') return incompleteStagingConsequence()
-  if (action.kind === 'pause') return 'Keeps the progress supported by this saving method; accepted writes finish before pausing.'
-  if (action.kind === 'stop') return stopConsequence(planKind)
+function activeConsequence(action: LifecycleActionPresentation, planKind: string, language: Language): string | null {
+  const t = receiverCopy[language].actions
+  if (action.kind === 'save-staged-files') return t.saveStagedHint
+  if (action.kind === 'cleanup-staging') return t.cleanupStagingHint
+  if (action.kind === 'discard-incomplete-staging') return incompleteStagingConsequence(language)
+  if (action.kind === 'pause') return t.pauseHint
+  if (action.kind === 'stop') return stopConsequence(planKind, language)
   if (action.kind === 'delete' || action.kind === 'discard') {
-    return 'Deletes task-owned retained data. Files already exported through browser downloads are unaffected.'
+    return t.deleteHint
   }
   return action.kind === 'redownload' && action.destructive
-    ? 'Restarts incomplete files; their existing partial progress will not be reused.' : null
+    ? t.restartHint : null
 }
 
 export function retainedTaskAction(
   operation: RetainedReceiveOperation,
   action: RetainedReceiveAction,
   readiness: TaskRecoveryReadiness,
-): TaskAction {
+  language: Language = 'en',
+): TaskAction<ReceiveBlockReason> {
   const remote = action === 'continue' || (action === 'redownload' && operation.recoverySummary !== undefined)
-  let disabledReason: string | null = null
+  let disabledReason: ReceiveBlockReason | null = null
   if (remote && (readiness === 'original-link-required' || readiness === 'different-share')) {
-    disabledReason = 'Open the original share link to continue this download.'
+    disabledReason = 'matchingShare'
   } else if (remote) {
     disabledReason = operation.unavailableReason ?? null
   }
@@ -43,20 +49,21 @@ export function retainedTaskAction(
     (action === 'redownload' && operation.recoverySummary !== undefined)
   return Object.freeze({
     id: action,
-    label: retainedLabel(operation, action, readiness),
+    label: retainedLabel(operation, action, readiness, language),
     destructive: action === 'discard-incomplete-staging' || (destructive && !cleanupOnly),
     disabledReason,
-    consequence: retainedConsequence(operation, action),
+    consequence: retainedConsequence(operation, action, language),
     target: Object.freeze({ kind: 'retained', operation, action }),
   })
 }
 
-function stopConsequence(planKind: string): string {
+function stopConsequence(planKind: string, language: Language): string {
+  const t = receiverCopy[language].actions
   switch (planKind) {
-    case 'direct-tree': return 'Ends receiving and removes incomplete browser staging. Saved folder files remain; complete staged files can still be saved locally.'
-    case 'direct-resumable-zip': return 'Keeps the unfinished ZIP and its verified resume position. It is not a usable archive until finishing succeeds.'
-    case 'workspace-then-publish': return 'Stops receiving and settles retained browser data before releasing this task.'
-    default: return 'Stops receiving. This saving method cannot resume an interrupted transfer.'
+    case 'direct-tree': return t.stopFolder
+    case 'direct-resumable-zip': return t.stopZip
+    case 'workspace-then-publish': return t.stopWorkspace
+    default: return t.stopPortable
   }
 }
 
@@ -64,59 +71,64 @@ function retainedLabel(
   operation: RetainedReceiveOperation,
   action: RetainedReceiveAction,
   readiness: TaskRecoveryReadiness,
+  language: Language,
 ): string {
+  const t = receiverCopy[language].actions
   switch (action) {
-    case 'save-staged-files': return 'Save received files to folder'
-    case 'cleanup-staging': return 'Retry staging cleanup'
-    case 'discard-incomplete-staging': return 'Discard incomplete browser data'
-    case 'save-partial': return 'Save partial ZIP'
-    case 'catch-up': return 'Finish filename restoration setup'
-    case 'continue': return continuationLabel(operation, readiness)
-    case 'save': return 'Save'
-    case 'redownload': return operation.recoverySummary === undefined ? 'Download again' : 'Restart incomplete files'
-    case 'forget': return 'Remove from Downloads'
-    case 'discard': return operation.continuation === 'cleanup-incompatible' ? 'Delete history record' : 'Discard unfinished output'
+    case 'save-staged-files': return t.saveStaged
+    case 'cleanup-staging': return t.cleanupStaging
+    case 'discard-incomplete-staging': return t.discardStaging
+    case 'save-partial': return t.savePartial
+    case 'catch-up': return t.finishRestoration
+    case 'continue': return continuationLabel(operation, readiness, language)
+    case 'save': return t.save
+    case 'redownload': return operation.recoverySummary === undefined ? t.downloadAgain : t.restartIncomplete
+    case 'forget': return t.forget
+    case 'discard': return operation.continuation === 'cleanup-incompatible' ? t.deleteHistory : t.discardOutput
     case 'delete':
-      if (operation.continuation === 'retry-cleanup') return 'Retry cleanup'
-      if (['resume-direct-zip', 'reauthorize-direct-zip', 'verify-direct-zip-target', 'retry-direct-zip-space'].includes(operation.continuation)) return 'Delete unfinished ZIP'
-      return 'Delete retained result'
+      if (operation.continuation === 'retry-cleanup') return t.retryCleanup
+      if (['resume-direct-zip', 'reauthorize-direct-zip', 'verify-direct-zip-target', 'retry-direct-zip-space'].includes(operation.continuation)) return t.deleteZip
+      return t.deleteRetained
   }
 }
 
-function continuationLabel(operation: RetainedReceiveOperation, readiness: TaskRecoveryReadiness): string {
+function continuationLabel(operation: RetainedReceiveOperation, readiness: TaskRecoveryReadiness, language: Language): string {
+  const t = receiverCopy[language].actions
   if (operation.continuation === 'resume-start') return operation.lifecycle.kind === 'resumable-start' &&
-    operation.lifecycle.reason === 'paused' ? 'Continue' : 'Retry download'
-  if (readiness === 'destination-authorization-required') return 'Authorize destination and continue'
-  if (operation.continuation === 'resume-local-finalization' || operation.continuation === 'resume-package') return 'Finish and save'
-  if (operation.continuation === 'verify-direct-zip-target') return 'Verify destination and continue'
-  if (operation.continuation === 'verify-direct-zip-completion') return 'Verify saved ZIP'
-  if (operation.continuation === 'retry-direct-zip-space') return 'Retry after freeing space'
-  return operation.recoverySummary === undefined ? 'Continue' : 'Continue and preserve partial files'
+    operation.lifecycle.reason === 'paused' ? t.resume : t.retryDownload
+  if (readiness === 'destination-authorization-required') return t.authorizeContinue
+  if (operation.continuation === 'resume-local-finalization' || operation.continuation === 'resume-package') return t.finishSave
+  if (operation.continuation === 'verify-direct-zip-target') return t.verifyContinue
+  if (operation.continuation === 'verify-direct-zip-completion') return t.verifyZip
+  if (operation.continuation === 'retry-direct-zip-space') return t.retrySpace
+  return operation.recoverySummary === undefined ? t.resume : t.resumePartial
 }
 
-function retainedConsequence(operation: RetainedReceiveOperation, action: RetainedReceiveAction): string | null {
+function retainedConsequence(operation: RetainedReceiveOperation, action: RetainedReceiveAction, language: Language): string | null {
+  const t = receiverCopy[language].actions
   switch (action) {
-    case 'save-staged-files': return 'Copies complete retained files to the chosen folder without receiving them again.'
-    case 'cleanup-staging': return 'Finishes previously authorized cleanup of browser staging; saved destination files remain untouched.'
-    case 'discard-incomplete-staging': return incompleteStagingConsequence()
+    case 'save-staged-files': return t.saveStagedHint
+    case 'cleanup-staging': return t.cleanupStagingHint
+    case 'discard-incomplete-staging': return incompleteStagingConsequence(language)
     case 'save-partial':
-      return 'Exports only complete files as a separate partial ZIP. Missing and unfinished items are excluded; the retained task remains available for continuation.'
-    case 'forget': return 'Removes this history record from Downloads. Files already saved or handed to the browser remain untouched.'
+      return t.savePartialHint
+    case 'forget': return t.forgetHint
     case 'discard':
       return operation.continuation === 'cleanup-incompatible'
-        ? 'Removes only the incompatible saved record; it does not authorize deleting destination files.'
-        : 'Deletes task-owned unfinished output and retained data.'
+        ? t.deleteHistoryHint
+        : t.discardOutputHint
     case 'delete':
       return operation.continuation === 'retry-cleanup'
-        ? 'Removes owned temporary data; the published result remains saved.'
-        : 'Verifies ownership before deleting retained output. Files already exported through browser downloads are unaffected.'
+        ? t.retryCleanupHint
+        : t.deleteRetainedHint
     case 'redownload':
       return operation.recoverySummary === undefined ? null
-        : 'Restarts incomplete files instead of reusing their retained partial progress.'
+        : t.restartIncompleteHint
     default: return null
   }
 }
 
-function incompleteStagingConsequence(): string {
-  return 'Deletes incomplete browser data that this ended task cannot continue. Complete staged files remain saveable; saved folder files stay untouched.'
+function incompleteStagingConsequence(language: Language): string {
+  const t = receiverCopy[language].actions
+  return t.discardStagingHint
 }

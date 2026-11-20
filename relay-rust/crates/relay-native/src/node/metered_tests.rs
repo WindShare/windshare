@@ -120,14 +120,26 @@ async fn public_exhaustion_spares_owner_registration_and_its_uncredentialed_rece
     assert_eq!(guest.write(b"public").await.unwrap(), 4);
     assert!(guest.write(b"more").await.is_err());
     assert!(node.available());
-    assert!(node.public_budget_refuses(public.share, None));
-    assert!(!node.public_budget_refuses(owner.share, owner.bearer.as_ref()));
-    // An unresident share with an explicit non-owner bearer (such as an official ticket)
-    // is refused at upgrade, while an unauthenticated join still defers to actor recovery.
+    assert!(
+        node.public_budget_refuses(public.share, None)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !node
+            .public_budget_refuses(owner.share, owner.bearer.as_ref())
+            .await
+            .unwrap()
+    );
+    // An unknown share has no owner contribution to recover in this database.
     let unresident = windshare_relay_core::identifiers::ShareId::new([9; 12]).unwrap();
     let non_owner_bearer = access::Bearer::new("official-account-ticket");
-    assert!(node.public_budget_refuses(unresident, Some(&non_owner_bearer)));
-    assert!(!node.public_budget_refuses(unresident, None));
+    assert!(
+        node.public_budget_refuses(unresident, Some(&non_owner_bearer))
+            .await
+            .unwrap()
+    );
+    assert!(node.public_budget_refuses(unresident, None).await.unwrap());
     sender.write_all(b"hi").await.unwrap();
 
     let attribution = Attribution::Credential {
@@ -135,7 +147,7 @@ async fn public_exhaustion_spares_owner_registration_and_its_uncredentialed_rece
         credential: [6; 16],
     };
     let _residency = node.access.reserve(owner.share, attribution).unwrap();
-    assert!(!node.public_budget_refuses(owner.share, None));
+    assert!(!node.public_budget_refuses(owner.share, None).await.unwrap());
     let mut receiver = write(WriteOrigin {
         bearer: None,
         ..owner

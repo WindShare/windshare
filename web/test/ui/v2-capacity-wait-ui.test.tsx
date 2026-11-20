@@ -53,7 +53,7 @@ function render(
     ...experienceSnapshot(),
     pathActivity: { lanes: [] },
     phase: 'browsing',
-    status: 'Ready.',
+    status: null,
     error: null,
     rows: Object.freeze([]),
     breadcrumbs: Object.freeze([{ id: 'root', name: 'Shared files' }]),

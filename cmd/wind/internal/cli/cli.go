@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"time"
 
 	"github.com/windshare/windshare/cmd/wind/internal/accountcommand"
 	"github.com/windshare/windshare/cmd/wind/internal/commandmeta"
@@ -58,12 +59,12 @@ const usageText = `Usage:
 
   ` + commandmeta.Name + ` relay add <url> [--access-key <key>] [--name <device>] [--no-browser]
   ` + commandmeta.Name + ` relay onboard <url> [--name <device>] [--no-browser]
-      Pair this device in the relay console. New profiles follow the saved relay mode.
+      Pair this device in the relay console. New relays are enabled when a slot is available.
   ` + commandmeta.Name + ` relay list | mode <automatic|selected> | enable|disable <url> | frontend <url|default>
   ` + commandmeta.Name + ` relay cancel <url>
       Cancel a pending enrollment.
 
-  ` + commandmeta.Name + ` account status [--json] | register | retry
+  ` + commandmeta.Name + ` account status [--json] | register | refresh
   ` + commandmeta.Name + ` account login <username> | password <username> [--password-stdin]
   ` + commandmeta.Name + ` account email <address> | verify <code> | revoke <credential>
       Manage the account shared with the desktop app. Login applies to new shares.
@@ -169,6 +170,10 @@ func (a *App) Run(ctx context.Context, args []string) (code int) {
 			return ExitFailure
 		}
 	}
+	if len(args) != 0 && args[0] == "account" && accountcommand.IsHelp(args[1:]) {
+		a.stderrLines().WriteLines(accountcommand.Usage)
+		return ExitOK
+	}
 	if a.application == nil {
 		application, err := a.newApplication()
 		if err != nil {
@@ -196,7 +201,14 @@ func (a *App) Run(ctx context.Context, args []string) (code int) {
 		if service := a.application.Accounts(); service != nil {
 			runner.Service = service
 		}
-		return runner.Run(ctx, args[1:])
+		switch runner.Run(ctx, args[1:]) {
+		case accountcommand.ResultOK:
+			return ExitOK
+		case accountcommand.ResultUsage:
+			return ExitUsage
+		default:
+			return ExitFailure
+		}
 	case "relay":
 		return a.runRelay(ctx, args[1:])
 	case "share":
@@ -217,10 +229,27 @@ func (a *App) Run(ctx context.Context, args []string) (code int) {
 	}
 }
 
+type engineCommandClock struct{ commandClock }
+
+func (c engineCommandClock) NewTicker(d time.Duration) engine.ReceiveTicker {
+	return c.commandClock.NewTicker(d)
+}
+func (c engineCommandClock) Wait(ctx context.Context, delay time.Duration, wake <-chan struct{}) error {
+	timer := c.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-wake:
+	case <-timer.C():
+	}
+	return nil
+}
+
 func (a *App) newApplication() (*engine.Engine, error) {
 	config := a.engineConfig
-	if config.Now == nil && a.clock != nil {
-		config.Now = a.clock.Now
+	if config.Clock == nil && a.clock != nil {
+		config.Clock = engineCommandClock{a.clock}
 	}
 	config.Receive = a.receiveDependencies()
 	return engine.New(config)

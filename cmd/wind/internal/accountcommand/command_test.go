@@ -28,7 +28,7 @@ func (service *commandService) Snapshot() (account.Snapshot, <-chan struct{}) {
 	return service.value, nil
 }
 func (service *commandService) RefreshOnce(ctx context.Context) (account.RefreshOutcome, error) {
-	service.action = "retry"
+	service.action = "refresh"
 	return service.refresh(ctx)
 }
 func (service *commandService) Register(context.Context) error {
@@ -105,18 +105,29 @@ func TestAccountCommandsDispatchSecretsWithoutEcho(t *testing.T) {
 func TestAccountCommandsRejectInvalidInputBeforeMutation(t *testing.T) {
 	for _, args := range [][]string{
 		{"status", "unexpected"}, {"login", "alice"}, {"login"}, {"password", "alice", "--unknown"},
-		{"email"}, {"verify"}, {"revoke", "not-an-id"}, {"unknown"},
+		{"email"}, {"verify"}, {"revoke", "not-an-id"}, {"retry"}, {"unknown"},
 	} {
 		service := &commandService{}
 		output := &lines{}
 		runner := Runner{Service: service, Input: strings.NewReader("secret"), Output: output}
-		if code := runner.Run(context.Background(), args); code != ResultFailure || service.action != "" {
-			t.Fatalf("invalid command mutated account: %v %d %s", args, code, service.action)
+		if code := runner.Run(context.Background(), args); code != ResultUsage || service.action != "" {
+			t.Fatalf("invalid command returned %d or mutated account: %v %s", code, args, service.action)
 		}
 	}
 }
 
-func TestAccountRetryUsesAttemptResult(t *testing.T) {
+func TestAccountHelpSucceedsWithoutConfiguredService(t *testing.T) {
+	for _, args := range [][]string{
+		{"help"}, {"-h"}, {"-help"}, {"--help"}, {"status", "--help"}, {"refresh", "-h"}, {"login", "--help"},
+	} {
+		output := &lines{}
+		if code := (Runner{Output: output}).Run(context.Background(), args); code != ResultOK || !strings.Contains(output.String(), "wind account status") {
+			t.Fatalf("help %v returned %d output=%q", args, code, output.String())
+		}
+	}
+}
+
+func TestAccountRefreshUsesAttemptResult(t *testing.T) {
 	denied := errors.New("account_blocked")
 	for _, scenario := range []struct {
 		name    string
@@ -139,18 +150,18 @@ func TestAccountRetryUsesAttemptResult(t *testing.T) {
 				},
 			}
 			output := &lines{}
-			code := (Runner{Service: service, Output: output}).Run(t.Context(), []string{"retry"})
-			if code != scenario.code || service.action != "retry" {
-				t.Fatalf("retry returned %d without the expected attempt result: %s", code, output)
+			code := (Runner{Service: service, Output: output}).Run(t.Context(), []string{"refresh"})
+			if code != scenario.code || service.action != "refresh" {
+				t.Fatalf("refresh returned %d without the expected attempt result: %s", code, output)
 			}
 			if scenario.hint != "" && !strings.Contains(output.String(), scenario.hint) {
-				t.Fatalf("retry omitted recovery guidance: %s", output)
+				t.Fatalf("refresh omitted recovery guidance: %s", output)
 			}
 		})
 	}
 }
 
-func TestAccountRetryWaitsForAttemptDespiteCachedReadiness(t *testing.T) {
+func TestAccountRefreshWaitsForAttemptDespiteCachedReadiness(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
@@ -165,22 +176,22 @@ func TestAccountRetryWaitsForAttemptDespiteCachedReadiness(t *testing.T) {
 		}
 		done := make(chan int, 1)
 		go func() {
-			done <- (Runner{Service: service, Output: &lines{}}).Run(ctx, []string{"retry"})
+			done <- (Runner{Service: service, Output: &lines{}}).Run(ctx, []string{"refresh"})
 		}()
 		synctest.Wait()
 		select {
 		case <-started:
 		default:
-			t.Fatal("retry never started the refresh attempt")
+			t.Fatal("refresh never started the refresh attempt")
 		}
 		select {
 		case code := <-done:
-			t.Fatalf("retry returned %d while the attempt was still in flight", code)
+			t.Fatalf("refresh returned %d while the attempt was still in flight", code)
 		default:
 		}
 		cancel()
 		if code := <-done; code != ResultFailure {
-			t.Fatalf("canceled retry returned %d", code)
+			t.Fatalf("canceled refresh returned %d", code)
 		}
 	})
 }
@@ -190,7 +201,14 @@ func TestAccountStatusAndErrors(t *testing.T) {
 	if code := (Runner{Output: output}).Run(context.Background(), nil); code != ResultFailure {
 		t.Fatal("unconfigured service accepted")
 	}
-	service := &commandService{value: account.Snapshot{State: account.RefreshRequired, Account: "account", Credential: "credential"}}
+	service := &commandService{value: account.Snapshot{
+		State:        account.RefreshRequired,
+		Account:      "account",
+		Credential:   "credential",
+		Username:     "alice",
+		Profile:      account.Profile{Nickname: account.Nickname{Value: "Alice"}, Email: "alice@example.test"},
+		PendingEmail: account.PendingEmail{Address: "next@example.test"},
+	}}
 	var encoded bytes.Buffer
 	runner := Runner{Service: service, Output: output, JSONOutput: &encoded}
 	if code := runner.Run(context.Background(), []string{"status", "--json"}); code != ResultOK {
@@ -200,8 +218,22 @@ func TestAccountStatusAndErrors(t *testing.T) {
 	if err := json.Unmarshal(encoded.Bytes(), &snapshot); err != nil || snapshot.Account != service.value.Account {
 		t.Fatalf("invalid account status: %v", err)
 	}
+	output.Reset()
 	if code := runner.Run(context.Background(), nil); code != ResultOK || service.action != "" {
 		t.Fatal("reading status performed an account operation")
+	}
+	for _, want := range []string{
+		"wind account refresh",
+		"Nickname: Alice",
+		"Username: alice",
+		"Email: alice@example.test",
+		"Pending email: next@example.test",
+		"Account: account",
+		"Credential: credential",
+	} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("status output missing %q:\n%s", want, output.String())
+		}
 	}
 	service.failure = errors.New("request unavailable")
 	if code := runner.Run(context.Background(), []string{"email", "alice@example.test"}); code != ResultFailure {

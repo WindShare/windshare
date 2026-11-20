@@ -1,3 +1,6 @@
+import type { Language } from '../preferences/model'
+import type { ReceiveAdmission } from '../../application/receive/admission'
+import { presentReceiveReason } from '../experience/receive-reason'
 import type { ReceiveLifecycleState } from '../../transfer/lifecycle/state'
 import type { ReceiveOperationDisplay } from '../../output/model/operation-display'
 import { presentCompatibleNameRepair } from '../compatible-name-repair-presentation'
@@ -15,15 +18,15 @@ export function activeTaskFacts(input: Readonly<{
   progress: ReceiverProgress
   display?: ReceiveOperationDisplay | null
   blocking?: TaskBlocking | null
-  actionAdmission?: (action: import('../../application/receive/actions').LifecycleUserAction) => Readonly<{ allowed: boolean; reason: string | null }>
-}>): TaskFacts | null {
+  actionAdmission?: (action: import('../../application/receive/actions').LifecycleUserAction) => ReceiveAdmission
+}>, language: Language = 'en'): TaskFacts | null {
   const { output, progress } = input
   const state = output.lifecycle
   if (state === null) return null
   const lifecycle = output.lifecyclePresentation
   const details = [
     ...(output.transferResultPresentation?.lines ?? []),
-    ...(output.recoverySummary === null ? [] : [recoverySummaryDescription(output.recoverySummary)]),
+    ...(output.recoverySummary === null ? [] : [recoverySummaryDescription(output.recoverySummary, language)]),
     ...(lifecycle?.writerOpenPause === null || lifecycle?.writerOpenPause === undefined
       ? [] : [lifecycle.writerOpenPause.description]),
     ...(lifecycle?.usage === null || lifecycle?.usage === undefined ? [] : [lifecycle.usage.label]),
@@ -32,10 +35,10 @@ export function activeTaskFacts(input: Readonly<{
     lifecycle: state,
     display: input.display ?? null,
     actions: Object.freeze((lifecycle?.actions ?? []).map(action => {
-      const presented = activeTaskAction(action, output.plan?.kind ?? '')
+      const presented = activeTaskAction(action, output.plan?.kind ?? '', language)
       const admission = input.actionAdmission?.(action.kind)
       return admission !== undefined && !admission.allowed
-        ? Object.freeze({ ...presented, disabledReason: admission.reason ?? 'This action is currently unavailable.' })
+        ? Object.freeze({ ...presented, disabledReason: admission.reason ?? 'actionUnavailable' as const })
         : presented
     })),
     blocking: input.blocking ?? (progress.capacityWaitVisible && progress.capacityWaitingFiles > 0
@@ -59,8 +62,9 @@ export function retainedTaskFacts(
   execution: Readonly<{
     pending?: PendingRetainedReceiveActionSnapshot | null
     blocking?: TaskBlocking | null
-    admission?: (action: RetainedReceiveAction) => Readonly<{ allowed: boolean; reason: string | null }>
+    admission?: (action: RetainedReceiveAction) => ReceiveAdmission
   }> = {},
+  language: Language = 'en',
 ): TaskFacts {
   const details: string[] = []
   const localWork = execution.pending?.operationId === operation.operationId &&
@@ -69,16 +73,16 @@ export function retainedTaskFacts(
       (execution.pending.action === 'continue' &&
         (operation.continuation === 'resume-package' || operation.continuation === 'resume-local-finalization')))
     ? 'finalizing' : 'idle'
-  if (operation.recoverySummary !== undefined) details.push(recoverySummaryDescription(operation.recoverySummary))
-  if (operation.unavailableReason !== undefined) details.push(operation.unavailableReason)
+  if (operation.recoverySummary !== undefined) details.push(recoverySummaryDescription(operation.recoverySummary, language))
+  if (operation.unavailableReason !== undefined) details.push(presentReceiveReason(operation.unavailableReason, language))
   return Object.freeze({
     lifecycle: operation.lifecycle,
     display: operation.display ?? null,
     actions: Object.freeze(operation.actions.map(action => {
-      const presented = retainedTaskAction(operation, action, readiness)
+      const presented = retainedTaskAction(operation, action, readiness, language)
       const admission = execution.admission?.(action)
       return admission !== undefined && !admission.allowed
-        ? Object.freeze({ ...presented, disabledReason: admission.reason ?? 'Another operation is using this destination.' })
+        ? Object.freeze({ ...presented, disabledReason: admission.reason ?? 'destinationBusy' as const })
         : presented
     })),
     blocking: execution.blocking ?? null,
@@ -90,7 +94,7 @@ export function retainedTaskFacts(
     directZipProgress: null,
     fidelity: operation.repairSummary === undefined ? null : presentCompatibleNameRepair({
       state: operation.lifecycle, summary: operation.repairSummary, context: 'retained-operation',
-    }),
+    }, language),
     details: Object.freeze(details),
     interruption: null,
     execution: localWork === 'finalizing'
@@ -100,9 +104,9 @@ export function retainedTaskFacts(
 }
 
 function completenessFromFacts(state: ReceiveLifecycleState, progress: ReceiverProgress | null): TaskCompleteness {
-  if (state.kind === 'resumable-start') return 'incomplete'
+  // Paused receives remain resumable rather than finalized partial archives.
+  if (state.kind === 'resumable-start' || state.kind === 'resumable-receive') return 'incomplete'
   if (state.contentWarning !== undefined || state.kind === 'partial-directory') return 'partial'
-  if (state.kind === 'resumable-receive') return 'incomplete'
   if (progress !== null && (progress.fileErrors > 0 || progress.selectionErrors > 0 ||
       progress.failedDirectories > 0 || progress.discovery === 'failed')) return 'partial'
   // Publication proves that an artifact is ready. Its retained warning separately records selection omissions.

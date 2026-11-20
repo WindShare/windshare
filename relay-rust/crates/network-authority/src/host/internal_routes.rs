@@ -1,6 +1,6 @@
 use super::{
     WorkerEnvironment,
-    routes::{Context, parse, signed_in},
+    routes::{Context, parse, signed_in, verify_admin_csrf},
     storage::Database,
 };
 use crate::{Authority, HashedPassword, PasswordRegistrationPrepare};
@@ -64,6 +64,17 @@ struct InitializeCommit {
 #[serde(deny_unknown_fields)]
 struct AdminLoginComplete {
     password_digest: [u8; 32],
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AdminPasswordPrepare {
+    new_password_len: usize,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AdminPasswordCommit {
+    password_hash: HashedPassword,
+    previous_verifier_digest: [u8; 32],
 }
 
 pub(super) fn dispatch(
@@ -176,6 +187,8 @@ fn admin_routes(
     let Context {
         path,
         source,
+        session,
+        csrf,
         initialization,
         ..
     } = context;
@@ -208,6 +221,25 @@ fn admin_routes(
         "/internal/admin/login/complete" => {
             let input: AdminLoginComplete = parse(bytes)?;
             signed_in(&authority.complete_admin_login(input.password_digest)?)
+        }
+        "/internal/admin/password/prepare" => {
+            verify_admin_csrf(&session, &csrf)?;
+            let input: AdminPasswordPrepare = parse(bytes)?;
+            let value = serde_json::to_value(authority.prepare_admin_password_change(
+                &source,
+                &session,
+                input.new_password_len,
+            )?)?;
+            Response::from_json(&value).map_err(|error| anyhow::anyhow!("{error}"))
+        }
+        "/internal/admin/password/commit" => {
+            verify_admin_csrf(&session, &csrf)?;
+            let input: AdminPasswordCommit = parse(bytes)?;
+            signed_in(&authority.commit_admin_password_change(
+                &session,
+                input.password_hash,
+                input.previous_verifier_digest,
+            )?)
         }
         _ => Response::error("not found", 404).map_err(|error| anyhow::anyhow!("{error}")),
     }

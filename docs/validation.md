@@ -20,7 +20,7 @@ Make targets operate on the repository root and use the installed Go, Rust, Node
 
 | Command | Runs |
 |---|---|
-| `make check` | `rust` and `desktop-check`, then Go short tests, Web/Consoles typecheck, Consoles ESLint, and Web unit tests. |
+| `make check` | `rust` and `desktop-check`, then Go short tests, Web/Consoles typecheck, Consoles ESLint and embedded bundle verification, and Web unit tests. |
 | `make ci` | The ordinary gate set, serially. |
 | `make ci-parallel` | The same gates in three concurrent lanes: `short-go vectors rust desktop-check e2e hygiene workflow-lint sloc`, `web browser`, and `gopls lint vet`. |
 | `make ci-full` | `ci`, `long-go`, and the weekly browser supplement. |

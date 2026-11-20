@@ -2,9 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import fixture from '../../../testdata/network/authority.json'
 import directoryVectors from '../../../testdata/network/directory.json'
 import { OfficialRelayAuthority } from '../../src/application/network/authority'
+import { BuiltinNetwork } from '../../src/application/network/builtin'
+import { encodeSuite02CapabilityKey, type Suite02CapabilityLink } from '../../src/crypto/suite02-link'
 import { NetworkDirectory } from '../../src/network/directory'
 import { MemoryDirectoryCache } from '../../src/network/directory-cache'
 import type { NetworkSnapshot } from '../../src/network/node-directory'
+import { RelayCandidates } from '../../src/receiver/relay-selection/candidates'
 
 const api = 'https://authority.example'
 const officialRelay = 'https://official.example'
@@ -141,5 +144,149 @@ describe('official relay policy demand', () => {
     await vi.advanceTimersByTimeAsync(0)
     expect(request).toHaveBeenCalledTimes(1)
     watch.close()
+  })
+})
+
+async function capabilityLink(
+  relays: readonly string[],
+  nodeAliases: readonly string[],
+  seed = 1,
+): Promise<Suite02CapabilityLink> {
+  const key = await encodeSuite02CapabilityKey(new Uint8Array(16).fill(seed), new Uint8Array(16).fill(seed))
+  return Object.freeze({ ...key, relays, nodeAliases })
+}
+
+describe('official share report scope', () => {
+  const validEnvelope = directoryVectors.entries.find(entry => entry.name === 'valid')!.envelope
+  const vectorNow = Date.parse(directoryVectors.now)
+  const testRelease = {
+    network: directoryVectors.network,
+    roots: directoryVectors.roots,
+    mirrors: [],
+    snapshot: validEnvelope,
+    authority: { url: api, root: fixture.root },
+  }
+  const networks: BuiltinNetwork[] = []
+
+  afterEach(() => {
+    for (const network of networks.splice(0)) network.close()
+  })
+
+  it('omits report URLs for self-hosted relays without waking the block feed', () => {
+    const request = vi.fn(async () => new Response(null, { status: 503 }))
+    vi.stubGlobal('fetch', request)
+    const authority = new OfficialRelayAuthority({ url: api, root: fixture.root })
+    try {
+      const source = directory(snapshot)
+      const onAvailable = vi.fn()
+      const stop = authority.watchReport(share, new RelayCandidates([independentRelay]), source, onAvailable)
+      source.publish(snapshot)
+      expect(onAvailable).not.toHaveBeenCalled()
+      expect(request).not.toHaveBeenCalled()
+      stop()
+    } finally {
+      authority.close()
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('publishes report URLs once official membership is confirmed across canonical, mixed, and late discovery', async () => {
+    const authority = new OfficialRelayAuthority({ url: api, root: fixture.root })
+    try {
+      const expected = `${api}/report#share=${share}`
+      const warm = directory(snapshot)
+      const immediate = vi.fn()
+      authority.watchReport(share, new RelayCandidates([independentRelay, 'wss://OFFICIAL.example:443/']), warm, immediate)
+      expect(immediate).toHaveBeenCalledExactlyOnceWith(expected)
+
+      const lateDirectory = directory()
+      const fromDirectory = vi.fn()
+      authority.watchReport(share, new RelayCandidates([officialRelay]), lateDirectory, fromDirectory)
+      expect(fromDirectory).not.toHaveBeenCalled()
+      lateDirectory.publish(snapshot)
+      expect(fromDirectory).toHaveBeenCalledExactlyOnceWith(expected)
+
+      let expand!: (bases: readonly string[]) => void
+      const expanding = new RelayCandidates([], new Promise(resolve => { expand = resolve }))
+      const fromExpansion = vi.fn()
+      authority.watchReport(share, expanding, warm, fromExpansion)
+      expect(fromExpansion).not.toHaveBeenCalled()
+      expand([officialRelay])
+      await expanding.settled
+      expect(fromExpansion).toHaveBeenCalledExactlyOnceWith(expected)
+
+      let expandCancelled!: (bases: readonly string[]) => void
+      const cancelledCandidates = new RelayCandidates([], new Promise(resolve => { expandCancelled = resolve }))
+      const cancelled = vi.fn()
+      const stopCancelled = authority.watchReport(share, cancelledCandidates, warm, cancelled)
+      stopCancelled()
+      expandCancelled([officialRelay])
+      await cancelledCandidates.settled
+      expect(cancelled).not.toHaveBeenCalled()
+    } finally {
+      authority.close()
+    }
+  })
+
+  it('filters BuiltinNetwork report URLs by official directory membership and cleans up across share transitions', async () => {
+    const cache = new MemoryDirectoryCache()
+    let finishLoad!: () => void
+    const loadGate = new Promise<undefined>(resolve => { finishLoad = () => resolve(undefined) })
+    const network = new BuiltinNetwork(undefined, undefined, {
+      release: testRelease,
+      directory: {
+        cache: { load: () => loadGate, commit: value => cache.commit(value) },
+        now: () => vectorNow,
+      },
+    })
+    networks.push(network)
+    const observed: Array<string | undefined> = []
+    network.observeReport(() => observed.push(network.getReportURL()))
+
+    const cancelledOfficial = await capabilityLink([], ['jp1'], 1)
+    const cancelledCandidates = network.resolve(cancelledOfficial)
+    expect(network.getReportURL()).toBeUndefined()
+    network.clearReport()
+
+    const selfHosted = await capabilityLink([independentRelay], [], 2)
+    network.resolve(selfHosted)
+    finishLoad()
+    await cancelledCandidates.all()
+    expect(network.getReportURL()).toBeUndefined()
+    expect(observed).toEqual([])
+
+    const officialAlias = await capabilityLink([], ['jp1'], 3)
+    const aliasCandidates = network.resolve(officialAlias)
+    await aliasCandidates.all()
+    expect(network.getReportURL()).toBe(`${api}/report#share=${officialAlias.shareId}`)
+
+    const officialExplicit = await capabilityLink(['wss://JP1.example:443/'], [], 4)
+    network.resolve(officialExplicit)
+    expect(network.getReportURL()).toBe(`${api}/report#share=${officialExplicit.shareId}`)
+
+    const hybrid = await capabilityLink([independentRelay], ['jp1'], 5)
+    const hybridCandidates = network.resolve(hybrid)
+    await hybridCandidates.all()
+    expect(network.getReportURL()).toBe(`${api}/report#share=${hybrid.shareId}`)
+
+    network.resolve(selfHosted)
+    expect(network.getReportURL()).toBeUndefined()
+    expect(observed).toEqual([
+      `${api}/report#share=${officialAlias.shareId}`,
+      `${api}/report#share=${officialExplicit.shareId}`,
+      `${api}/report#share=${hybrid.shareId}`,
+      undefined,
+    ])
+  })
+
+  it('leaves report URLs absent when release configuration has no authority', async () => {
+    const network = new BuiltinNetwork(undefined, undefined, {
+      release: { ...testRelease, authority: null },
+      directory: { cache: new MemoryDirectoryCache(), now: () => vectorNow },
+    })
+    networks.push(network)
+    const officialAlias = await capabilityLink([], ['jp1'], 6)
+    await network.resolve(officialAlias).all()
+    expect(network.getReportURL()).toBeUndefined()
   })
 })

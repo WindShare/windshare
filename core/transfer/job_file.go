@@ -71,7 +71,7 @@ func (r *jobRun) transferFileAttempt(
 			ctx, plan, opened, transaction, FailureFileOutput, contractFailure, 0, nil,
 		)
 	}
-	r.reconcileFileCoverage(retry, fileProgress.initial, fileProgress.persistedBytes, recovered)
+	fileProgress.recovered = r.reconcileFileCoverage(retry, fileProgress.initial, fileProgress.persistedBytes, recovered)
 	if retry != nil {
 		reused := overlapBytes(fileProgress.initial, retry.progress.trusted.Ranges())
 		r.traceFileRevisionRetry(plan, retry.reopened, "readmitted", retry.progress.persistedBytes, reused, retry.started)
@@ -313,21 +313,27 @@ func (r *jobRun) rejectFileAdmission(plan plannedFile, retry *fileRevisionRetry,
 	return nil
 }
 
-func (r *jobRun) reconcileFileCoverage(retry *fileRevisionRetry, admitted content.RangeSet, persisted, verified uint64) {
+func (r *jobRun) reconcileFileCoverage(
+	retry *fileRevisionRetry, admitted content.RangeSet, persisted, verified uint64,
+) content.RangeSet {
 	if retry == nil {
 		r.job.progress.addRecoveredVerified(verified)
 		r.job.progress.replaceRestartReusable(0, persisted)
-		return
+		return admitted
 	}
 	prior := retry.progress.trusted.Ranges()
 	priorTotal, _ := rangeSetByteCount(prior)
-	initialTotal, _ := rangeSetByteCount(retry.progress.initial)
+	priorNewly := subtractRanges(prior, retry.progress.recovered)
+	previousNewly, _ := rangeSetByteCount(priorNewly)
 	// Bytes written earlier in this same task stay newly verified only where
-	// the new output admission still covers them.
-	newly := overlapBytes(admitted, prior) - overlapBytes(admitted, retry.progress.initial)
+	// the new output admission still covers them; any other admitted range
+	// remains pre-existing recovered coverage.
+	keptNewly := intersectRanges(admitted, priorNewly)
+	newly, _ := rangeSetByteCount(keptNewly)
 	r.job.progress.replaceReadmittedCoverage(
-		priorTotal, priorTotal-initialTotal, retry.progress.persistedBytes, verified, newly, persisted,
+		priorTotal, previousNewly, retry.progress.persistedBytes, verified, newly, persisted,
 	)
+	return subtractRanges(admitted, keptNewly)
 }
 
 func overlapBytes(left, right content.RangeSet) uint64 {
@@ -345,4 +351,56 @@ func overlapBytes(left, right content.RangeSet) uint64 {
 		}
 	}
 	return total
+}
+
+func intersectRanges(left, right content.RangeSet) content.RangeSet {
+	a, b := left.Ranges(), right.Ranges()
+	if len(a) == 0 || len(b) == 0 {
+		return content.RangeSet{}
+	}
+	var result []content.Range
+	for i, j := 0, 0; i < len(a) && j < len(b); {
+		start, end := max(a[i].Offset, b[j].Offset), min(a[i].End, b[j].End)
+		if end > start {
+			result = append(result, content.Range{Offset: start, End: end})
+		}
+		if a[i].End <= b[j].End {
+			i++
+		} else {
+			j++
+		}
+	}
+	out, _ := content.NewRangeSet(result)
+	return out
+}
+
+func subtractRanges(left, right content.RangeSet) content.RangeSet {
+	a, b := left.Ranges(), right.Ranges()
+	if len(a) == 0 || len(b) == 0 {
+		return left
+	}
+	var result []content.Range
+	j := 0
+	for _, current := range a {
+		cursor := current.Offset
+		for j < len(b) && b[j].End <= cursor {
+			j++
+		}
+		for j < len(b) && b[j].Offset < current.End {
+			if b[j].Offset > cursor {
+				result = append(result, content.Range{Offset: cursor, End: b[j].Offset})
+			}
+			if b[j].End >= current.End {
+				cursor = current.End
+				break
+			}
+			cursor = b[j].End
+			j++
+		}
+		if cursor < current.End {
+			result = append(result, content.Range{Offset: cursor, End: current.End})
+		}
+	}
+	out, _ := content.NewRangeSet(result)
+	return out
 }

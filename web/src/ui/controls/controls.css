@@ -1,33 +1,44 @@
-:where(.receiver-shell, .detail-sheet) button {
-  min-height: 38px;
-  border: 1px solid var(--receiver-rule);
-  border-radius: var(--receiver-radius-control, 8px);
-  background: var(--receiver-paper);
-  color: var(--receiver-ink);
-  padding: 7px 14px;
-  font: inherit;
-  font-size: .875rem;
-  font-weight: 500;
-  line-height: 1.4;
-  cursor: pointer;
-  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease, box-shadow 140ms ease;
-}
-:where(.receiver-shell, .detail-sheet) button:hover:not(:disabled) {
-  background: var(--receiver-wash);
-  border-color: color-mix(in srgb, var(--receiver-accent) 45%, var(--receiver-rule));
-}
-:where(.receiver-shell, .detail-sheet) button.primary-action {
+/* Specificity (0,1,0) overrides index.css element reset while staying easy to specialize. */
+.receiver-shell :where(button),
+.detail-sheet :where(button) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  min-height: 42px;
-  padding: 10px 18px;
+  gap: 7px;
+  min-height: 40px;
+  border: 1px solid var(--receiver-rule);
+  border-radius: var(--receiver-radius-control, 10px);
+  background: var(--receiver-paper);
+  color: var(--receiver-ink);
+  padding: 8px 15px;
+  font: inherit;
+  font-size: .875rem;
+  font-weight: 500;
+  line-height: 1.35;
+  box-shadow: var(--receiver-control-shadow);
+  cursor: pointer;
+  transition: background-color 150ms var(--receiver-ease, ease),
+    border-color 150ms var(--receiver-ease, ease),
+    color 150ms var(--receiver-ease, ease),
+    box-shadow 150ms var(--receiver-ease, ease),
+    transform 120ms var(--receiver-ease, ease);
+}
+:where(.receiver-shell, .detail-sheet) button:hover:not(:disabled) {
+  background: var(--receiver-hover);
+  border-color: var(--receiver-rule-strong);
+}
+:where(.receiver-shell, .detail-sheet) button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+:where(.receiver-shell, .detail-sheet) button.primary-action {
+  min-height: 44px;
+  padding: 10px 20px;
   background: var(--receiver-accent);
   color: var(--receiver-on-accent);
   border-color: transparent;
-  font-size: .875rem;
+  font-size: .9375rem;
   font-weight: 600;
+  box-shadow: 0 1px 2px var(--receiver-shadow-key);
 }
 :where(.receiver-shell, .detail-sheet) button.primary-action:hover:not(:disabled) {
   background: var(--receiver-accent-hover);
@@ -35,25 +46,22 @@
 }
 :where(.receiver-shell, .detail-sheet) button.danger-action {
   color: var(--receiver-error);
-  border-color: color-mix(in srgb, var(--receiver-error) 55%, var(--receiver-rule));
+  border-color: color-mix(in srgb, var(--receiver-error) 36%, var(--receiver-rule));
 }
 :where(.receiver-shell, .detail-sheet) button.danger-action:hover:not(:disabled) {
   background: var(--receiver-error-wash);
-  border-color: var(--receiver-error);
+  border-color: color-mix(in srgb, var(--receiver-error) 56%, transparent);
 }
 :where(.receiver-shell, .detail-sheet) button.quiet-action {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
   background: transparent;
   border-color: transparent;
   color: var(--receiver-muted);
-  padding-inline: 8px;
+  padding-inline: 12px;
   font-weight: 500;
+  box-shadow: none;
 }
 :where(.receiver-shell, .detail-sheet) button.quiet-action:hover:not(:disabled) {
-  color: var(--receiver-accent);
+  color: var(--receiver-ink);
   background: var(--receiver-wash);
   border-color: transparent;
 }
@@ -61,6 +69,7 @@
   background: var(--receiver-disabled);
   color: var(--receiver-disabled-ink);
   border-color: transparent;
+  box-shadow: none;
   cursor: default;
 }
 :where(.receiver-shell, .detail-sheet) :is(button, input, a, summary, [tabindex]):focus-visible {
@@ -71,18 +80,18 @@
   color: var(--receiver-ink);
   accent-color: var(--receiver-accent);
 }
-.downloads-entry { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+.downloads-entry { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
 .attention-count {
   display: inline-grid;
   place-items: center;
-  border-radius: 999px;
+  border-radius: var(--receiver-radius-tag, 6px);
   min-width: 20px;
   height: 20px;
-  padding-inline: 5px;
+  padding-inline: 6px;
   background: #e5a53d;
   color: #312408;
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 .receiver-icon {
@@ -93,7 +102,8 @@
   vertical-align: middle;
 }
 @media (max-width: 600px), (pointer: coarse) {
-  :where(.receiver-shell, .detail-sheet) button { min-height: 44px; }
+  .receiver-shell :where(button),
+  .detail-sheet :where(button) { min-height: 44px; }
 }
 @media (prefers-reduced-motion: reduce) {
   :where(.receiver-shell, .detail-sheet),

@@ -1,3 +1,5 @@
+import type { Language } from './preferences/model'
+import { receiverCopy } from './locales/receiver'
 import type { ReceiveLifecycleState } from '../transfer/lifecycle/state'
 import type {
   RecoverySummary,
@@ -14,33 +16,30 @@ export function resumableFileSetDescription(
   state: ResumableFileSetState,
   planKind: MaterializationPlan['kind'],
   recoverySummary?: RecoverySummary | null,
+  language: Language = 'en',
 ): string {
-  const completed = `${state.completedFileCount} file(s) and ${formatBytes(state.completedBytes)} are complete.`
-  if (planKind !== 'direct-tree') return `${completed} Continuing still requires the sender and save permission.`
+  const t = receiverCopy[language].progress
+  const completed = t.completed(state.completedFileCount, formatBytes(state.completedBytes))
+  if (planKind !== 'direct-tree') return t.needSender(completed)
   if (recoverySummary === undefined || recoverySummary === null) {
-    return `${completed} Recovery costs are being validated before either continuation action becomes available.`
+    return t.validating(completed)
   }
   requireMatchingRecoverySummary(state, recoverySummary)
-  return recoverySummaryDescription(recoverySummary)
+  return recoverySummaryDescription(recoverySummary, language)
 }
 
-export function recoverySummaryDescription(summary: RecoverySummary): string {
+export function recoverySummaryDescription(summary: RecoverySummary, language: Language = 'en'): string {
+  const t = receiverCopy[language].progress
   const scope = summary.discovery === 'complete'
-    ? 'Selection complete.'
-    : 'Known so far (discovery incomplete)'
+    ? t.discovered
+    : t.discovering
   const suffix = summary.discovery === 'complete'
     ? ''
-    : ' These totals can grow if more selected files are discovered.'
-  return `${scope} Completed: ${fileCount(summary.completedFileCount)}, ${formatBytes(summary.completedBytes)}. ` +
-    `Verified partial data: ${fileCount(summary.verifiedPartialFileCount)}, ${formatBytes(summary.verifiedPartialBytes)}. ` +
-    `Preserve partial files: ${formatBytes(summary.preservingRemainingBytes)} remaining; up to ` +
-    `${formatBytes(summary.maximumPreservingTemporaryBytes)} of temporary destination space. ` +
-    `Restart incomplete files: ${formatBytes(summary.restartRemainingBytes)} remaining, including ` +
-    `${formatBytes(summary.restartRedownloadBytes)} of verified data to redownload.${suffix}`
-}
-
-function fileCount(count: bigint): string {
-  return `${count} ${count === 1n ? 'file' : 'files'}`
+    : t.mayGrow
+  const counts = t.recoveryCounts(t.fileCount(summary.completedFileCount), formatBytes(summary.completedBytes),
+    t.fileCount(summary.verifiedPartialFileCount), formatBytes(summary.verifiedPartialBytes))
+  return [scope, counts, t.preserve(formatBytes(summary.preservingRemainingBytes), formatBytes(summary.maximumPreservingTemporaryBytes)),
+    t.restart(formatBytes(summary.restartRemainingBytes), formatBytes(summary.restartRedownloadBytes))].join(' ') + suffix
 }
 
 function requireMatchingRecoverySummary(

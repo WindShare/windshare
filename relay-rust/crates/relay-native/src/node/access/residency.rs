@@ -1,4 +1,5 @@
-use super::{Attribution, Principal, Service, ShareId};
+use super::{Attribution, Service, ShareId};
+use crate::connection::AdmissionPriority;
 use windshare_relay_core::access::RegistrationDecision;
 
 /// A resident share owns its slot across receiver joins and sender reconnects.
@@ -61,26 +62,25 @@ impl Service {
             }
             *references += 1;
         } else {
-            let principal = attribution.principal(*share.as_bytes());
-            let shares = state
-                .residents
-                .values()
-                .filter(|(value, _)| {
-                    !matches!(principal, Principal::Anonymous(_))
-                        && value.principal(*share.as_bytes()) == principal
-                })
-                .count();
             let priority = if state.owner(attribution) {
-                crate::connection::AdmissionPriority::Owner
+                AdmissionPriority::Owner
             } else if matches!(attribution, Attribution::Anonymous) {
-                crate::connection::AdmissionPriority::Anonymous
+                AdmissionPriority::Anonymous
             } else {
-                crate::connection::AdmissionPriority::Authenticated
+                AdmissionPriority::Authenticated
             };
-            if shares >= state.policy.shares_per_principal
-                || state.residents.len() >= state.share_limit(priority)
-            {
-                return Err(RegistrationDecision::Unavailable);
+            // Owners can use the full reserved pool instead of being capped by the public per-principal limit.
+            let principal_limited = priority == AdmissionPriority::Authenticated && {
+                let principal = attribution.principal(*share.as_bytes());
+                state
+                    .residents
+                    .values()
+                    .filter(|(value, _)| value.principal(*share.as_bytes()) == principal)
+                    .count()
+                    >= state.policy.shares_per_principal
+            };
+            if principal_limited || state.residents.len() >= state.share_limit(priority) {
+                return Err(RegistrationDecision::SERVICE_UNAVAILABLE);
             }
             state.residents.insert(share, (attribution, 1));
         }

@@ -1,3 +1,4 @@
+import type { ReceiveBlockReason } from '../../application/receive/admission'
 import type { ReceiveLifecycleState } from '../../transfer/lifecycle/state'
 import type { ReceiveOperationDisplay } from '../../output/model/operation-display'
 import type { CompatibleNameRepairPresentation } from '../compatible-name-repair-presentation'
@@ -16,11 +17,11 @@ export type TaskActionTarget =
   | Readonly<{ kind: 'active'; action: LifecycleUserAction }>
   | Readonly<{ kind: 'retained'; operation: RetainedReceiveOperation; action: RetainedReceiveAction }>
 
-export interface TaskAction {
+export interface TaskAction<Reason extends string = string> {
   readonly id: string
   readonly label: string
   readonly destructive: boolean
-  readonly disabledReason: string | null
+  readonly disabledReason: Reason | null
   readonly consequence: string | null
   readonly target: TaskActionTarget
 }
@@ -34,7 +35,7 @@ export type TaskStage = 'preparing' | 'downloading' | 'waiting' | 'paused' | 'fi
 export interface TaskFacts {
   readonly lifecycle: ReceiveLifecycleState
   readonly display: ReceiveOperationDisplay | null
-  readonly actions: readonly TaskAction[]
+  readonly actions: readonly TaskAction<ReceiveBlockReason>[]
   readonly blocking: TaskBlocking | null
   readonly readiness: TaskRecoveryReadiness
   readonly completeness: TaskCompleteness

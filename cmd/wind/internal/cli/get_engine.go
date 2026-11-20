@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io"
 	"strings"
-	"time"
 
 	"golang.org/x/term"
 
@@ -19,15 +18,10 @@ import (
 	"github.com/windshare/windshare/engine/recovery"
 )
 
-type receiveCommandClock struct{ commandClock }
-
-func (c receiveCommandClock) NewTicker(d time.Duration) engine.ReceiveTicker {
-	return c.commandClock.NewTicker(d)
-}
 func (a *App) receiveDependencies() engine.ReceiveDependencies {
 	dependencies := a.engineConfig.Receive
 	if a.clock != nil {
-		dependencies.Clock = receiveCommandClock{a.clock}
+		dependencies.Clock = engineCommandClock{a.clock}
 	}
 	if a.receiverDial != nil {
 		dependencies.ReceiverDial = a.receiverDial

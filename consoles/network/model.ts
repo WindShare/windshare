@@ -59,6 +59,7 @@ export interface Report { id: number[]; share: number[]; reason: string; created
 export interface ReportPage { reports: Report[]; next_cursor: string | null }
 export type Target = { kind: 'share' | 'account'; id: number[] }
 export interface Restrictions { version: number; shares: number[][]; accounts: number[][] }
+export interface MilestoneReview { count: number; reached_at: number }
 export interface Snapshot extends PolicySnapshot {
   csrf: string
   node_page: NodePage
@@ -66,6 +67,6 @@ export interface Snapshot extends PolicySnapshot {
   restrictions: Restrictions
   email_configured: boolean
   account_count: number
-  reviews: number[]
+  reviews: MilestoneReview[]
 }
 export const GIB = 1024 ** 3

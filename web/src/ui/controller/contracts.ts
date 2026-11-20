@@ -1,3 +1,4 @@
+import type { PresentationPreferences } from '../output'
 import type { CapturedLocation } from '../capability/location'
 import type { DiagnosticFormatter, SecurityMilestone } from '../../application/browser-share/capability-lifecycle'
 import type { ReceiveCompositionPort } from '../../application/receive/contracts'
@@ -11,5 +12,6 @@ export interface ReceiverControllerOptions extends ReceiveObservationOptions {
   readonly capabilityIntake?: CapabilityIntakePort
   readonly diagnosticFormatter?: DiagnosticFormatter
   readonly onSecurityMilestone?: (milestone: SecurityMilestone) => void
+  readonly preferences?: PresentationPreferences
   readonly receive: ReceiveCompositionPort
 }

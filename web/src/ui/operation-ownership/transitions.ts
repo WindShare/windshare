@@ -50,7 +50,7 @@ export class ReceiveOperationTransitions {
   prepareReplacementDownload(operation: RetainedReceiveOperation, failure: SourceRevisionFailure): void {
     this.#options.runtime.prepareReplacement(operation, async (joined, signal, current) => {
       this.#options.publish({ ...this.#options.snapshot(), error: null,
-        status: 'Finding the current version of ' + failure.path.join('/') + '…' })
+        status: { kind: 'finding-replacement', path: failure.path.join('/') } })
       const found = await findReplacementFile(joined, operation, failure, signal)
       if (!current()) return
       await this.#options.runtime.resetOwnership(new DOMException('Preparing a separate replacement download', 'AbortError'))
@@ -61,7 +61,7 @@ export class ReceiveOperationTransitions {
       await this.#options.browse.loadPage(found.page.directory, found.page.pageIndex, found.directories)
       if (!current()) return
       this.#options.publish({ ...this.#options.snapshot(), error: null,
-        status: 'Current version selected. Choose Download to create a separate task; the original ZIP progress is retained.' })
+        status: 'replacement-selected' })
       this.#options.beginProjection(joined)
     })
   }

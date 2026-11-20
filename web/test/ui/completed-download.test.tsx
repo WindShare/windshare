@@ -40,7 +40,7 @@ describe('completed download ownership and presentation', () => {
       retained: { ...EMPTY_RETAINED_INVENTORY, operations: [operation] } })
     const current = composeTasks(snapshot).current!
     expect(current.stage).toBe('handed-to-browser')
-    expect(current.details).toContain('1 files · 8 B total')
+    expect(current.details).toContain('1 file · 8 B total')
     expect(current.details).toContain('8 B in completed files.')
     expect(current.secondaryActions[0]?.target).toMatchObject({ kind: 'retained', action: 'forget' })
     expect(current.primaryAction).toBeNull()
@@ -255,7 +255,7 @@ describe('stopped child obligation refresh integration', () => {
     const actual = composeTasks(snapshot).current!
     const retained = presentTask(retainedTaskFacts(operation))
     expect(actual.headline).toBe(retained.headline)
-    expect(actual.details).toContain('1 files · 8 B total')
+    expect(actual.details).toContain('1 file · 8 B total')
     expect(actual.details).toContain('0 B retained in browser staging.')
     expect(actual.details).toContain(kind === 'staged-complete' ? '8 B saved to the chosen folder.' : '0 B saved to the chosen folder.')
     expect(actual.details.join(' ')).not.toContain('await staging cleanup')

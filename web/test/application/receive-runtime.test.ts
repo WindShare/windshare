@@ -4,6 +4,7 @@ import { ReceiveRuntimeState } from '../../src/application/receive/state'
 import { ActiveReceiveCoordinator } from '../../src/application/receive/active/coordinator'
 import { RetainedInventoryCoordinator } from '../../src/application/receive/retained/coordinator'
 import { BrowserReceiveRuntime } from '../../src/application/receive/runtime'
+import { createPreferencesStore } from '../../src/ui/preferences/model'
 import { OutputPresentationController } from '../../src/ui/output'
 import {
   FakeBoundRuntime, FakeJoinedShare, FakeReceiveComposition, WORKSPACE_ENVIRONMENT,
@@ -80,6 +81,27 @@ describe('browser receive authority without presentation', () => {
     await waitFor(() => f.joined.transferRuns.length === 2)
     expect(f.operation.lifecycleActions.map(action => action.action)).toEqual(['continue'])
     expect(f.errors).toEqual([])
+  })
+
+  it('reprojects the same live transfer when the display language changes', async () => {
+    const f = await fixture()
+    f.start()
+    const preferences = createPreferencesStore({ language: 'en', appearance: 'system' }, () => undefined)
+    const view = new OutputPresentationController(f.state, preferences)
+    const initial = view.getSnapshot()
+    const run = f.joined.transferRuns[0]
+    try {
+      preferences.update({ language: 'zh-CN' })
+      const translated = view.getSnapshot()
+      expect(translated.lifecycle).toBe(initial.lifecycle)
+      expect(translated.lifecyclePresentation?.title).not.toEqual(initial.lifecyclePresentation?.title)
+      expect(f.joined.transferRuns).toEqual([run])
+      expect(run?.signal?.aborted).toBe(false)
+      preferences.update({ language: 'en' })
+      expect(view.getSnapshot().lifecyclePresentation).toEqual(initial.lifecyclePresentation)
+    } finally {
+      view.close()
+    }
   })
 
   it('keeps admission independent of a detached, stale presentation snapshot', async () => {
