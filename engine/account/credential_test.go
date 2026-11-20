@@ -347,3 +347,92 @@ func TestRetainedCredentialDenialStopsRetries(t *testing.T) {
 		}
 	})
 }
+
+func TestRetainedCredentialReleaseCancelsInFlightRefresh(t *testing.T) {
+	config, response := accountFixture(t)
+	synctest.Test(t, func(t *testing.T) {
+		issuedAt, start := config.Now(), time.Now()
+		config.Now = func() time.Time { return issuedAt.Add(time.Since(start)) }
+		config.Store = &MemoryStore{record: cachedRecord(response)}
+		started := make(chan struct{})
+		canceled := make(chan struct{})
+		config.Client = clientFunc(func(request *http.Request) (*http.Response, error) {
+			close(started)
+			<-request.Context().Done()
+			close(canceled)
+			return nil, request.Context().Err()
+		})
+		service := testService(t, config)
+		share := service.NewShareAuthorization(t.Context())
+		backup := &Source{share: share, address: "backup"}
+
+		service.mu.Lock()
+		share.credential.record.Ticket = ""
+		service.adoptLocked(Record{SetupSecret: "new-selection"})
+		service.mu.Unlock()
+
+		waiting := backup.ReserveRegistrationAuthorization()
+		if waiting.State != serviceauthority.AdmissionExpired {
+			t.Fatalf("state = %s, want expired", waiting.State.Name())
+		}
+		<-started
+		share.Close()
+		synctest.Wait()
+		select {
+		case <-canceled:
+		default:
+			t.Fatal("closing the last share did not cancel the in-flight retained refresh")
+		}
+	})
+}
+
+func TestRetainedCredentialRejectsMismatchedSessionAndRecoversOnRetry(t *testing.T) {
+	config, response := accountFixture(t)
+	wrong := otherAccount(t, config, response)
+	synctest.Test(t, func(t *testing.T) {
+		issuedAt, start := config.Now(), time.Now()
+		config.Now = func() time.Time { return issuedAt.Add(time.Since(start)) }
+		config.Store = &MemoryStore{record: cachedRecord(response)}
+		var attempts atomic.Int32
+		config.Client = clientFunc(func(*http.Request) (*http.Response, error) {
+			reply := response
+			if attempts.Add(1) == 1 {
+				reply = wrong
+			}
+			body, _ := json.Marshal(reply)
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(string(body)))}, nil
+		})
+		service := testService(t, config)
+		share := service.NewShareAuthorization(t.Context())
+		defer share.Close()
+		backup := &Source{share: share, address: "backup"}
+
+		service.mu.Lock()
+		share.credential.record.Ticket = ""
+		service.adoptLocked(Record{SetupSecret: "new-selection"})
+		service.mu.Unlock()
+
+		first := backup.ReserveRegistrationAuthorization()
+		if first.State != serviceauthority.AdmissionExpired {
+			t.Fatalf("state = %s, want expired", first.State.Name())
+		}
+		synctest.Wait()
+		if got := backup.ReserveRegistrationAuthorization(); got.State != serviceauthority.AdmissionExpired {
+			t.Fatalf("mismatched session was accepted: %s", got.State.Name())
+		}
+
+		time.Sleep(MinimumRetry)
+		synctest.Wait()
+		retry := backup.ReserveRegistrationAuthorization()
+		if retry.State != serviceauthority.AdmissionExpired {
+			t.Fatalf("retry state = %s, want expired while refreshing", retry.State.Name())
+		}
+		synctest.Wait()
+		requireBearer(t, backup, response.Ticket)
+		service.mu.Lock()
+		defer service.mu.Unlock()
+		if service.record.SetupSecret != "new-selection" {
+			t.Fatal("retained refresh replaced active selection")
+		}
+	})
+}

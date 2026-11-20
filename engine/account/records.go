@@ -151,24 +151,40 @@ func (service *Service) checkGeneration(certificate string, next serviceauthorit
 	return serviceauthority.Compare(cached, next)
 }
 
-func (service *Service) install(ctx context.Context, previous Record, response session, login bool) error {
+func (service *Service) verifySession(previous Record, response session, login bool) (Record, serviceauthority.Generation, error) {
 	generation, err := serviceauthority.VerifyGeneration(response.Certificate, service.config.Root)
 	if err != nil {
-		return err
+		return Record{}, serviceauthority.Generation{}, err
 	}
 	ticket, err := serviceauthority.VerifyTicket(response.Ticket, generation, service.config.Now())
 	if err != nil {
-		return err
+		return Record{}, serviceauthority.Generation{}, err
 	}
 	if ticket.Account != response.Account || ticket.Credential != response.Credential ||
 		ticket.Entitlement != response.Entitlement || ticket.ExpiresAt != response.ExpiresAt {
-		return serviceauthority.ErrSignature
+		return Record{}, serviceauthority.Generation{}, serviceauthority.ErrSignature
 	}
 	if !login && previous.Credential != nil &&
 		(ticket.Account != previous.Credential.Account || ticket.Credential != previous.Credential.ID) {
-		return serviceauthority.ErrSignature
+		return Record{}, serviceauthority.Generation{}, serviceauthority.ErrSignature
 	}
 	secret, err := issuedSecret(previous, response.Secret, login)
+	if err != nil {
+		return Record{}, serviceauthority.Generation{}, err
+	}
+	record := Record{
+		Issuer:      base64.RawURLEncoding.EncodeToString(service.config.Root[:]),
+		Credential:  &Credential{Account: response.Account, ID: response.Credential, Secret: secret, Username: response.Username},
+		Certificate: response.Certificate,
+		Ticket:      response.Ticket,
+		Entitlement: response.Entitlement,
+		Profile:     response.Profile,
+	}
+	return record, generation, nil
+}
+
+func (service *Service) install(ctx context.Context, previous Record, response session, login bool) error {
+	issued, generation, err := service.verifySession(previous, response, login)
 	if err != nil {
 		return err
 	}
@@ -183,9 +199,7 @@ func (service *Service) install(ctx context.Context, previous Record, response s
 		if err := service.checkGeneration(current.Certificate, generation); err != nil {
 			return Record{}, err
 		}
-		next := Record{Issuer: base64.RawURLEncoding.EncodeToString(service.config.Root[:]),
-			Credential:  &Credential{Account: response.Account, ID: response.Credential, Secret: secret, Username: response.Username},
-			Certificate: response.Certificate, Ticket: response.Ticket, Entitlement: response.Entitlement, Profile: response.Profile}
+		next := cloneRecord(issued)
 		next.mergeIssuance(current)
 		return next, nil
 	})
