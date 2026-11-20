@@ -10,7 +10,8 @@ use std::{
 };
 use tokio::{sync::Notify, time::Instant};
 use windshare_relay_access::{
-    Attribution,
+    Attribution, Principal,
+    entitlement::Class,
     governor::{Demand, Scheduler},
 };
 use windshare_relay_core::{flow::FlowKey, sessions::SessionKey};
@@ -149,7 +150,10 @@ impl Governor {
 
     fn pump(&self) {
         let mut state = self.state.lock().expect("governor");
+        let reclassified = state.refresh_classes(&self.access);
         state.grant_pending(&self.access, |_, wake| wake.notify_one());
+        drop(state);
+        log_reclassifications(reclassified);
     }
 }
 
@@ -165,19 +169,26 @@ impl State {
         }
     }
 
+    fn refresh_classes(&mut self, access: &Service) -> Vec<(Principal, Class, Class)> {
+        let second = super::now().unsigned_abs();
+        if self.classified == second {
+            return Vec::new();
+        }
+        access.expire_quotas(second);
+        let mut reclassified = Vec::new();
+        for lane in self.lanes.values() {
+            let principal = lane.attribution.principal(lane.session.0);
+            let to = access.class(lane.attribution, second).0;
+            if let Some(from) = self.scheduler.reclassify(principal, to) {
+                reclassified.push((principal, from, to));
+            }
+        }
+        self.classified = second;
+        reclassified
+    }
+
     fn grant_pending(&mut self, access: &Service, mut on_grant: impl FnMut(u64, &Notify)) {
         let available = self.pacing.replenish(Instant::now());
-        let second = super::now().unsigned_abs();
-        if self.classified != second {
-            access.expire_quotas(second);
-            for lane in self.lanes.values() {
-                self.scheduler.reclassify(
-                    lane.attribution.principal(lane.session.0),
-                    access.class(lane.attribution, second).0,
-                );
-            }
-            self.classified = second;
-        }
         let mut remaining = available;
         while let Some((session, _)) = self
             .scheduler
@@ -198,6 +209,17 @@ impl State {
     }
 }
 
+fn log_reclassifications(reclassified: Vec<(Principal, Class, Class)>) {
+    for (principal, from, to) in reclassified {
+        tracing::info!(
+            event = "governor_principal_reclassified",
+            ?principal,
+            ?from,
+            ?to,
+        );
+    }
+}
+
 impl LaneLease {
     pub fn ready(&self, bytes: u64) -> bool {
         let mut state = self.governor.state.lock().expect("governor");
@@ -210,6 +232,7 @@ impl LaneLease {
         let queue = state.queues.entry(session).or_default();
         let schedule = queue.is_empty();
         queue.push_back(self.id);
+        let reclassified = state.refresh_classes(&self.governor.access);
         if schedule {
             let demand = state.demand(self.id, &self.governor.access);
             assert!(state.scheduler.request(session, demand));
@@ -223,6 +246,8 @@ impl LaneLease {
                 wake.notify_one();
             }
         });
+        drop(state);
+        log_reclassifications(reclassified);
         granted
     }
 
@@ -266,3 +291,7 @@ impl Drop for LaneLease {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "governor/governor_tests.rs"]
+mod tests;

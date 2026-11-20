@@ -55,8 +55,10 @@ authority changes require restart. Unknown fields and invalid policies fail vali
 HTTP liveness independently of relay capacity; UDP STUN has its own private health
 endpoint. Ctrl-C or SIGTERM joins relay, reporter and STUN teardown.
 
-A node-wide governor schedules owner, standard and lowest classes, then principals
-and sessions. Idle capacity is shared. Bounded flow queues preserve order; scheduling
+A node-wide governor gives owners strict priority and shares remaining capacity
+across public classes (weighted toward standard so lowest keeps a small
+signaling/progress share without starving), then fairly across principals and
+sessions. Idle capacity is shared. Bounded flow queues preserve order; scheduling
 and writer capacity are obtained before synchronous forwarding authorization.
 Bandwidth-pressure controls let clients back off without losing downloaded progress.
 

@@ -75,9 +75,12 @@ Account admission and fair relaying enable mainland service and public promotion
     do not multiply an account's bandwidth share. Entitlements are independent of account age; source
     limits protect admission rather than define bandwidth shares. Account fairness does not guarantee
     one allowance per person.
-  - A small per-session scheduling floor is best-effort within account and node limits, with no fixed
-    bandwidth reservation or override of owner priority. Opaque frames cannot be classified as
-    signaling versus file data. Refactor pending output into bounded per-session queues; schedule
+  - Public classes share capacity via class-level weighted fair queueing (`standard` heavily
+    weighted over `lowest`), preserving owner strict preemption and per-principal fairness without
+    fixed bandwidth reservations or per-session Sybil amplification. Opaque frames cannot be
+    classified as signaling versus file data, so byte-weighted class sharing lets small handshakes,
+    browsing, and P2P signaling traverse contention promptly while bulk lowest-class transfers yield
+    to a low rate. Refactor pending output into bounded per-session queues; schedule
     across sessions while preserving each flow's order and existing flow control. Obtain scheduling
     permission before writer submission and recheck forwarding authority synchronously at submission,
     keeping share actors responsive while waiting for capacity. Coordinate backpressure with handshake, send, and
