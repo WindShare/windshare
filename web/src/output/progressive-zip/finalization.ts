@@ -1,5 +1,6 @@
 import { completeZipMember } from '../zip-layout/member'
 import type { NativeObjectWrite } from '../origin-private/native-object/write-batch'
+import type { ReceiveContentWarning } from '../../transfer/lifecycle/content-warning'
 import type { TaskEntry } from '../origin-private/task-checkpoint/model'
 import {
   checkedZipAdd, encodeZipLocalHeader,
@@ -13,6 +14,33 @@ export interface ZipFinalizationBatch {
   readonly writes: readonly NativeObjectWrite[]
   readonly nextEntry: bigint
   readonly committedLength: bigint
+}
+
+/** Reopening can finish previously missing entries before worker settlement clears the warning. */
+export async function inspectZipForFinalization(
+  entries: AsyncIterable<TaskEntry>, warning?: ReceiveContentWarning, signal?: AbortSignal,
+): Promise<
+  | { kind: 'ready'; contentWarning: ReceiveContentWarning | null }
+  | { kind: 'rejected'; cause: unknown }
+> {
+  const missing = new Map(warning?.missingFiles.map(file => [file.path.join('/'), file]))
+  let completedFileCount = 0n
+  for await (const entry of entries) {
+    if (signal?.aborted) return { kind: 'rejected', cause: signal.reason }
+    if (entry.revisionFailure !== undefined || completeZipEntryCrc(entry.ranges, entry.zipLayout!.exactSize) === undefined) {
+      return { kind: 'rejected', cause: new Error(`ZIP entry still needs remote content: ${entry.path.join('/')}`) }
+    }
+    if (warning !== undefined && entry.kind === 'file') {
+      completedFileCount++
+      if (missing.size > 0) missing.delete(entry.path.join('/'))
+    }
+  }
+  if (signal?.aborted) return { kind: 'rejected', cause: signal.reason }
+  if (warning === undefined || completedFileCount === warning.selectedFileCount) return { kind: 'ready', contentWarning: null }
+  if (completedFileCount > warning.selectedFileCount) {
+    return { kind: 'rejected', cause: new Error('ZIP contains more files than the frozen selection') }
+  }
+  return { kind: 'ready', contentWarning: { ...warning, completedFileCount, missingFiles: [...missing.values()] } }
 }
 
 /** Bound both recovery work and metadata memory independently of archive size or path length. */

@@ -221,6 +221,10 @@ function visitCursor(
 function sequenceKey(sequence: bigint): string { return sequence.toString(16).padStart(16, '0') }
 
 function validateCheckpointAdvance(previous: TaskCheckpoint, next: TaskCheckpoint): void {
+  if (previous.artifactState === 'finalizing' && (next.artifactState === 'receiving' ||
+      next.allocatedLength !== previous.allocatedLength || next.entryCount !== previous.entryCount)) {
+    throw new TypeError('Task checkpoint changed the ZIP layout after finalization started')
+  }
   if (previous.artifactState === 'sealed' || next.allocatedLength < previous.allocatedLength ||
       (previous.discoveryComplete && !next.discoveryComplete) ||
       !sameValue(previous.selectedPaths, next.selectedPaths)) {

@@ -260,7 +260,7 @@ describe('progressive native ZIP missing-file results', () => {
     { code: SourceFaultCode.RevisionChanged, reason: 'source-changed', rejectWarning: false },
     { code: SourceFaultCode.Unavailable, reason: 'source-unavailable', rejectWarning: false },
     { code: SourceFaultCode.RevisionChanged, reason: 'source-changed', rejectWarning: true },
-  ] as const)('retains first-open $code omissions across recovery (rejected commit: $rejectWarning)', async test => {
+  ] as const)('keeps discovery open and retains warning for unallocated $code failures across recovery (rejected commit: $rejectWarning)', async test => {
     const files = [fileEntry(identity(61), 'a.txt', 3n), fileEntry(identity(62), 'b.txt', 4n),
       fileEntry(identity(63), 'c.txt', 5n)]
     const selection = new SelectionPolicy(true)
@@ -269,14 +269,15 @@ describe('progressive native ZIP missing-file results', () => {
     const archive = await f.open()
     const commit = f.store.commit.bind(f.store)
     vi.spyOn(f.store, 'commit').mockImplementation(async input => {
-      if (input.checkpoint.discoveryComplete) {
+      if (input.checkpoint.contentWarning !== undefined) {
+        expect(input.checkpoint.discoveryComplete).toBe(false)
         expect(input.checkpoint.contentWarning).toMatchObject({ selectedFileCount: 3n, completedFileCount: 2n })
         if (test.rejectWarning) throw new Error('warning commit failed')
       }
       await commit(input)
     })
-    const execution = await createProgressiveWorkspaceExecution({
-      archive, intent, outputIdentity: { backend: 'native-zip', outputSessionId: 'missing-file-session' },
+    const createExecution = (target: ProgressiveZipArchive, sessionId: string) => createProgressiveWorkspaceExecution({
+      archive: target, intent, outputIdentity: { backend: 'native-zip', outputSessionId: sessionId },
       settlement: {
         pause: async (_request, evidence) => {
           expect(evidence.kind).toBe(test.rejectWarning ? 'last-committed-checkpoint' : 'checkpoint-committed')
@@ -288,16 +289,21 @@ describe('progressive native ZIP missing-file results', () => {
             completedFileCount: 2n, completedBytes: 8n, discoveryComplete: checkpoint.discoveryComplete,
           }
         },
-        settle: async () => { throw new Error('Missing selected file must remain a partial result') },
+        settle: async (_request, checkpoint) => ({
+          kind: 'waiting-to-save', operationId: intent.operationId,
+          receiveIntentDigest: intent.digest, generation: 3n, packageDigest: checkpoint.object.objectId,
+        }),
       },
     })
     const plans = planAuthorityFixture()
+    let execution = await createExecution(archive, 'missing-file-session')
     plans.openWorkspaceZip = async () => ({ kind: 'accepted', execution })
+    const catalog = catalogFixture([{ id: identity(2), entries: files }]).catalog
     const readers = readerFixture(files, [], { beforeOpen: async id => {
       if (id === files[1]!.idText) throw new BoundaryFaultError(sourceFault(FaultScope.FileLocal, test.code))
     } })
     const result = await transferJobFixture({
-      catalog: catalogFixture([{ id: identity(2), entries: files }]).catalog, selection, intent, plans,
+      catalog, selection, intent, plans,
       revisions: readers.revisions, broker: readers.broker,
     }).run()
     expect(result.worker.status).toBe('CompletedWithErrors')
@@ -306,25 +312,209 @@ describe('progressive native ZIP missing-file results', () => {
     f.store.checkpoint = structuredClone(f.store.checkpoint!)
     vi.mocked(f.store.commit).mockRestore()
     const recovered = await verifyProgressiveZipRecovery(f.store, archive.state.object, result.lifecycle)
+    expect(recovered.requirement).toBe('remote-content-needed')
+    expect(recovered.checkpoint.discoveryComplete).toBe(false)
     if (test.rejectWarning) {
-      expect(recovered.requirement).toBe('remote-content-needed')
-      expect(recovered.checkpoint.discoveryComplete).toBe(false)
+      expect(recovered.checkpoint.contentWarning).toBeUndefined()
       return
     }
-    expect(recovered.requirement).toBe('local-finalization')
     expect(recovered.checkpoint.contentWarning).toMatchObject({
       kind: 'partial-zip', selectedFileCount: 3n, completedFileCount: 2n,
       missingFiles: [{ path: ['windshare', 'b.txt'], reason: test.reason }],
     })
     const reopened = await f.open()
-    const sealed = await reopened.finalize()
-    expect(sealed.contentWarning).toEqual(recovered.checkpoint.contentWarning)
+    execution = await createExecution(reopened, 'missing-file-resume-session')
+    const resumedReaders = readerFixture(files)
+    const resumed = await transferJobFixture({
+      catalog, selection, intent, plans,
+      revisions: resumedReaders.revisions, broker: resumedReaders.broker,
+    }).run()
+    expect(resumed.worker.status).toBe('Succeeded')
+    expect(resumed.lifecycle.kind).toBe('waiting-to-save')
+    expect(resumedReaders.revisionRequests).toEqual([files[1]!.idText])
+    expect(reopened.state.discoveryComplete).toBe(true)
+    expect(reopened.state.contentWarning).toBeUndefined()
     const reader = new ZipReader(new Uint8ArrayReader(f.io.data))
     const entries = (await reader.getEntries()).filter(entry => !entry.directory)
-    expect(entries.map(entry => entry.filename).sort()).toEqual(['windshare/a.txt', 'windshare/c.txt'])
+    expect(entries.map(entry => entry.filename).sort()).toEqual(['windshare/a.txt', 'windshare/b.txt', 'windshare/c.txt'])
     for (const entry of entries) expect(await entry.getData!(new Uint8ArrayWriter()))
       .toEqual(new Uint8Array(entry.uncompressedSize).fill(7))
     await reader.close()
+  })
+
+  it('resumes and allocates a previously unallocated failed file alongside an incomplete allocated entry', async () => {
+    const partial = fileEntry(identity(64), 'partial.bin', 6n)
+    const unallocated = fileEntry(identity(65), 'unallocated.bin', 4n)
+    const healthy = fileEntry(identity(66), 'healthy.bin', 2n)
+    const files = [partial, unallocated, healthy]
+    const selection = new SelectionPolicy(true)
+    const intent = await receiveIntentFixture({ planKind: 'workspace-then-publish', artifactKind: 'zip-archive', selection })
+    const f = fixture(new MemoryStore(), new MemoryIO(), undefined, intent.operationId)
+    const catalog = catalogFixture([{ id: identity(2), entries: files }]).catalog
+    const createExecution = (target: ProgressiveZipArchive, sessionId: string) => createProgressiveWorkspaceExecution({
+      archive: target, intent, outputIdentity: { backend: 'native-zip', outputSessionId: sessionId },
+      settlement: {
+        pause: async (request, { checkpoint }) => ({
+          operationId: intent.operationId, receiveIntentDigest: intent.digest, generation: 2n,
+          kind: 'resumable-receive', payloadKind: 'workspace-archive',
+          objectId: checkpoint.object.objectId, checkpointGeneration: checkpoint.generation,
+          occupiedBytes: checkpoint.physicalLength, discoveryComplete: checkpoint.discoveryComplete,
+          completedFileCount: request.materialization.fileCount, completedBytes: request.materialization.rawBytes,
+        }),
+        settle: async (_request, checkpoint) => ({
+          kind: 'waiting-to-save', operationId: intent.operationId,
+          receiveIntentDigest: intent.digest, generation: 3n, packageDigest: checkpoint.object.objectId,
+        }),
+      },
+    })
+
+    const firstArchive = await f.open()
+    const plans = planAuthorityFixture()
+    let execution = await createExecution(firstArchive, 'mixed-failure-first')
+    plans.openWorkspaceZip = async () => ({ kind: 'accepted', execution })
+    const firstReaders = readerFixture(files, [], { beforeOpen: async id => {
+      if (id === unallocated.idText) throw new BoundaryFaultError(sourceFault(FaultScope.FileLocal, SourceFaultCode.Unavailable))
+    } })
+    const first = await transferJobFixture({
+      catalog, selection, intent, plans, maximumConcurrentFiles: 1,
+      revisions: firstReaders.revisions,
+      broker: { readRange: async function* (descriptor, lease, range, request) {
+        if (descriptor.fileIdText !== partial.idText) {
+          yield* firstReaders.broker.readRange(descriptor, lease, range, request)
+          return
+        }
+        yield { offset: range.start, data: new Uint8Array(2).fill(7) }
+        throw new BoundaryFaultError(sourceFault(FaultScope.FileLocal, SourceFaultCode.RevisionInvalidated), 'source invalidated')
+      } },
+    }).run()
+
+    expect(first.worker.status).toBe('CompletedWithErrors')
+    expect(first.lifecycle).toMatchObject({ kind: 'resumable-receive', discoveryComplete: false, completedFileCount: 1n })
+    expect(f.store.entries.has(`file:${partial.idText}`)).toBe(true)
+    expect(f.store.entries.has(`file:${unallocated.idText}`)).toBe(false)
+    expect(firstArchive.state.discoveryComplete).toBe(false)
+    expect(firstArchive.state.contentWarning).toMatchObject({
+      kind: 'partial-zip', completedFileCount: 1n, selectedFileCount: 3n,
+      missingFiles: [
+        { path: ['windshare', partial.name], reason: 'source-changed' },
+        { path: ['windshare', unallocated.name], reason: 'source-unavailable' },
+      ],
+    })
+    const recovered = await verifyProgressiveZipRecovery(f.store, firstArchive.state.object, first.lifecycle)
+    expect(recovered.requirement).toBe('remote-content-needed')
+
+    const resumedArchive = await f.open()
+    execution = await createExecution(resumedArchive, 'mixed-failure-resume')
+    const resumedReaders = readerFixture(files)
+    const resumed = await transferJobFixture({
+      catalog, selection, intent, plans, maximumConcurrentFiles: 1,
+      revisions: resumedReaders.revisions, broker: resumedReaders.broker,
+    }).run()
+
+    expect(resumed.worker.status).toBe('Succeeded')
+    expect(resumed.lifecycle.kind).toBe('waiting-to-save')
+    expect(resumedArchive.failed).toBe(false)
+    expect(resumedArchive.state.discoveryComplete).toBe(true)
+    expect(resumedArchive.state.contentWarning).toBeUndefined()
+    expect(resumedReaders.revisionRequests).toEqual([partial.idText, unallocated.idText])
+    const reader = new ZipReader(new Uint8ArrayReader(f.io.data))
+    const entries = (await reader.getEntries()).filter(entry => !entry.directory)
+    expect(entries.map(entry => entry.filename).sort()).toEqual([
+      'windshare/healthy.bin', 'windshare/partial.bin', 'windshare/unallocated.bin',
+    ])
+    for (const entry of entries) expect(await entry.getData!(new Uint8ArrayWriter()))
+      .toEqual(new Uint8Array(entry.uncompressedSize).fill(7))
+    await reader.close()
+  })
+
+  it('clears a stale content warning while keeping discovery open when files complete but a directory fails', async () => {
+    const file = fileEntry(identity(67), 'only.txt', 2n)
+    const emptyDir = directoryEntry(identity(68), 'empty')
+    const selection = new SelectionPolicy(true)
+    const intent = await receiveIntentFixture({ planKind: 'workspace-then-publish', artifactKind: 'zip-archive', selection })
+    const f = fixture(new MemoryStore(), new MemoryIO(), undefined, intent.operationId)
+    const archive = await f.open()
+    const flushesBeforeNoOp = f.io.flushes
+    await archive.recordContentWarning(undefined)
+    expect(f.io.flushes).toBe(flushesBeforeNoOp)
+
+    await archive.recordContentWarning({
+      kind: 'partial-zip', completedFileCount: 0n, selectedFileCount: 1n,
+      missingFiles: [{ path: ['windshare', file.name], reason: 'source-unavailable' }],
+    })
+    expect(archive.state.discoveryComplete).toBe(false)
+    expect(archive.state.contentWarning).toBeDefined()
+
+    const execution = await createProgressiveWorkspaceExecution({
+      archive, intent, outputIdentity: { backend: 'native-zip', outputSessionId: 'dir-failure-session' },
+      settlement: {
+        pause: async (request, { checkpoint }) => ({
+          operationId: intent.operationId, receiveIntentDigest: intent.digest, generation: 2n,
+          kind: 'resumable-receive', payloadKind: 'workspace-archive',
+          objectId: checkpoint.object.objectId, checkpointGeneration: checkpoint.generation,
+          occupiedBytes: checkpoint.physicalLength, discoveryComplete: checkpoint.discoveryComplete,
+          completedFileCount: request.materialization.fileCount, completedBytes: request.materialization.rawBytes,
+        }),
+        settle: async () => { throw new Error('Directory failure must keep the ZIP resumable') },
+      },
+    })
+    const admitDirectory = execution.directories!.admitDirectory
+    const plans = planAuthorityFixture()
+    plans.openWorkspaceZip = async () => ({ kind: 'accepted', execution: {
+      ...execution,
+      directories: {
+        ...execution.directories!,
+        admitDirectory: async (request, signal) => {
+          if (request.directory.directoryId === emptyDir.idText) {
+            throw new BoundaryFaultError(sourceFault(FaultScope.DirectoryLocal, SourceFaultCode.Unavailable))
+          }
+          return admitDirectory(request, signal)
+        },
+      },
+    } })
+    const catalog = catalogFixture([
+      { id: identity(2), entries: [file, emptyDir] },
+      { id: emptyDir.id, entries: [] },
+    ]).catalog
+    const readers = readerFixture([file])
+    const result = await transferJobFixture({
+      catalog, selection, intent, plans, revisions: readers.revisions, broker: readers.broker,
+    }).run()
+
+    expect(result.worker.status).toBe('CompletedWithErrors')
+    expect(archive.state.discoveryComplete).toBe(false)
+    expect(archive.state.contentWarning).toBeUndefined()
+  })
+
+  it('freezes entry mutations atomically when finalization starts and clears a resolved content warning', async () => {
+    const f = fixture()
+    const archive = await f.open()
+    await admit(archive, 'a', 2n)
+    await archive.markDiscoveryComplete({
+      kind: 'partial-zip', completedFileCount: 0n, selectedFileCount: 1n,
+      missingFiles: [{ path: ['a'], reason: 'source-unavailable' }],
+    })
+    await archive.writeRange('a', 0n, bytes('ok'))
+    await archive.checkpoint('file-complete')
+
+    const scanning = deferred()
+    const release = deferred()
+    const readEntries = f.store.readEntries.bind(f.store)
+    vi.spyOn(f.store, 'readEntries').mockImplementationOnce(async input => {
+      scanning.resolve()
+      await release.promise
+      return readEntries(input)
+    })
+    const finishing = archive.finalize()
+    await scanning.promise
+    const lateNew = expect(admit(archive, 'late', 1n)).rejects.toThrow('frozen')
+    const lateExisting = expect(admit(archive, 'a', 2n)).rejects.toThrow('frozen')
+    const lateFailure = expect(archive.markRevisionFailure('a', SourceFaultCode.Unavailable)).rejects.toThrow('frozen')
+    release.resolve()
+    const [sealed] = await Promise.all([finishing, lateNew, lateExisting, lateFailure])
+    expect(sealed.artifactState).toBe('sealed')
+    expect(sealed.contentWarning).toBeUndefined()
+    expect(archive.failed).toBe(false)
   })
 
   it.each([
@@ -876,8 +1066,15 @@ describe('progressive native ZIP archive', () => {
     await admit(archive, 'a', 2n)
     await expect(archive.finalize()).rejects.toThrow('discovery')
     await archive.markDiscoveryComplete()
+    const flushesBefore = f.io.flushes
+    await expect(admit(archive, 'late', 2n)).rejects.toThrow('ZIP discovery is closed')
+    expect(f.io.flushes).toBe(flushesBefore)
+    expect(archive.failed).toBe(false)
+    expect(f.io.closed).toBe(false)
     await expect(archive.finalize()).rejects.toThrow('a')
     expect(archive.state.artifactState).toBe('receiving')
+    await archive.writeRange('a', 0n, bytes('ok'))
+    expect((await archive.finalize()).artifactState).toBe('sealed')
   })
 
   it('resumes paged finalization after an uncommitted metadata tail without touching earlier entries', async () => {

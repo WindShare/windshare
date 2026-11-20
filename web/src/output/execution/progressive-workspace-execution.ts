@@ -32,7 +32,8 @@ export async function createProgressiveWorkspaceExecution(input: {
   let discoveryComplete = false
   return Object.freeze({
     planKind: 'workspace-then-publish' as const,
-    ...ports,
+    output: ports.output,
+    directories: ports.directories,
     discoveryGeneration: async (directoryId: string, generation: string, sourcePath: readonly string[], signal: AbortSignal) => {
       signal.throwIfAborted()
       await input.archive.pinDirectory(directoryId, generation, sourcePath)
@@ -52,7 +53,15 @@ export async function createProgressiveWorkspaceExecution(input: {
             ? { kind: 'partial-zip', completedFileCount, selectedFileCount,
               missingFiles: ports.missingFiles().slice(0, Number(selectedFileCount - completedFileCount)) }
             : undefined
-          await input.archive.markDiscoveryComplete(contentWarning)
+          // Discovery closure is monotonic and forbids future entry allocation; keep it open
+          // whenever any selected file or directory failed before receiving a checkpoint entry.
+          const hasUnallocatedEntries = ports.hasUnallocatedFailures() ||
+            request.worker.failureCount > request.worker.fileFailureCount
+          if (!hasUnallocatedEntries) {
+            await input.archive.markDiscoveryComplete(contentWarning)
+          } else {
+            await input.archive.recordContentWarning(contentWarning)
+          }
         }
         await input.archive.checkpoint('task-pause')
         evidence = { kind: 'checkpoint-committed', checkpoint: input.archive.state }

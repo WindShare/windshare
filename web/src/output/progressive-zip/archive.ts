@@ -5,7 +5,7 @@ import { CheckpointSourceEvidenceUnavailableError, SourceRevisionChangedError } 
 import { receiveContentWarningFields, snapshotReceiveContentWarning, type ReceiveContentWarning } from '../../transfer/lifecycle/content-warning'
 import type { NativeObjectIO } from '../origin-private/native-object/contracts'
 import { writeObjectBatch, type NativeObjectWrite, type ObjectWriteBatchCapacity } from '../origin-private/native-object/write-batch'
-import { zipFinalizationBatches } from './finalization'
+import { inspectZipForFinalization, zipFinalizationBatches } from './finalization'
 import type { ObjectCheckpointCoordinator } from '../origin-private/native-object/coordinator'
 import type { TaskCheckpoint, TaskEntry, TaskObjectRef, TaskDirectoryPin } from '../origin-private/task-checkpoint/model'
 import type { TaskCheckpointStore } from '../origin-private/task-checkpoint/store'
@@ -23,6 +23,7 @@ const RANGE_METADATA_BYTES = 64n
 const ENTRY_METADATA_BYTES = 4096n
 const ENTRY_ALLOCATION_CHECKPOINT = 'zip-entry-allocation'
 const REVISION_FAILURE_CHECKPOINT = 'zip-revision-unavailable'
+const ZIP_LAYOUT_FROZEN = 'ZIP entry layout is frozen for finalization'
 
 export type ZipObjectCapacity = ObjectWriteBatchCapacity
 
@@ -54,7 +55,7 @@ type ZipEntryComparison =
     }>
   | Extract<RevisionComparison, { kind: 'observed-change' }>
 
-type ZipEntryRejection = Extract<ZipEntryComparison, { kind: 'deferred' | 'observed-change' }>
+type ZipObservedChange = Extract<ZipEntryComparison, { kind: 'observed-change' }>
 
 export interface CompleteZipEntrySpan {
   readonly entry: TaskEntry
@@ -150,9 +151,19 @@ export class ProgressiveZipArchive {
   }
 
   async #admit(kind: TaskEntry['kind'], input: ZipEntryRequest): Promise<TaskEntry> {
-    const result = await this.#input.coordinator.checkpointFromPlan<TaskEntry | ZipEntryRejection>(async () => {
+    const result = await this.#input.coordinator.checkpointFromPlan<TaskEntry | ZipObservedChange>(async () => {
+      if (this.#checkpoint.artifactState !== 'receiving') {
+        return { kind: 'rejected', cause: new Error(ZIP_LAYOUT_FROZEN) }
+      }
       const committed = await this.#input.store.readEntry(input.entryId)
       if (committed === undefined) {
+        // Check allocation preconditions before flushing so a rejected entry never poisons the shared writer.
+        if (this.#checkpoint.discoveryComplete) {
+          return { kind: 'rejected', cause: new Error('ZIP discovery is closed') }
+        }
+        if (kind === 'file' && input.revision === undefined) {
+          return { kind: 'rejected', cause: new TypeError('ZIP allocation requires an authenticated opened revision') }
+        }
         return { kind: 'commit', reason: ENTRY_ALLOCATION_CHECKPOINT, commit: () => this.#allocate(kind, input) }
       }
       const existing = this.#dirty.get(input.entryId) ?? committed
@@ -164,7 +175,7 @@ export class ProgressiveZipArchive {
           reason: comparison.reason,
           retainedBytes: committed.ranges.reduce((total, range) => total + range.end - range.start, 0n),
         })
-        return { kind: 'unchanged', result: comparison }
+        return { kind: 'rejected', cause: new CheckpointSourceEvidenceUnavailableError() }
       }
       if (comparison.kind === 'observed-change') {
         return { kind: 'commit', reason: REVISION_FAILURE_CHECKPOINT, commit: async () => {
@@ -175,7 +186,6 @@ export class ProgressiveZipArchive {
       return { kind: 'commit', reason: ENTRY_ALLOCATION_CHECKPOINT, commit: () => this.#restoreEntry(existing, comparison) }
     })
     // A known entry refusal must leave the shared writer available for other entries.
-    if (result.kind === 'deferred') throw new CheckpointSourceEvidenceUnavailableError()
     if (result.kind === 'observed-change') {
       throw new SourceRevisionChangedError({ cause: new Error(`ZIP source evidence changed (${result.reason})`) })
     }
@@ -205,12 +215,6 @@ export class ProgressiveZipArchive {
   }
 
   async #allocate(kind: TaskEntry['kind'], input: ZipEntryRequest): Promise<TaskEntry> {
-    if (this.#checkpoint.discoveryComplete || this.#checkpoint.artifactState !== 'receiving') {
-      throw new Error('ZIP discovery is closed')
-    }
-    if (kind === 'file' && input.revision === undefined) {
-      throw new TypeError('ZIP allocation requires an authenticated opened revision')
-    }
     const normalized = normalizeZipEntry({
       kind, path: input.path, exactSize: input.revision?.exactSize ?? 0n,
       ...(input.modifiedTimeMilliseconds === undefined ? {} : {
@@ -300,19 +304,40 @@ export class ProgressiveZipArchive {
     })
   }
 
+  async recordContentWarning(warning?: ReceiveContentWarning): Promise<void> {
+    const contentWarning = warning === undefined ? undefined : snapshotReceiveContentWarning(warning)
+    const checkpoint = await this.#input.coordinator.checkpointFromPlan(() => {
+      if (this.#checkpoint.artifactState !== 'receiving') return { kind: 'unchanged', result: this.#checkpoint }
+      if (contentWarning === undefined && this.#checkpoint.contentWarning === undefined) {
+        return { kind: 'unchanged', result: this.#checkpoint }
+      }
+      return { kind: 'commit', reason: 'zip-content-warning',
+        commit: () => this.#commit({ contentWarning: contentWarning ?? null }) }
+    })
+    if (checkpoint.artifactState === 'receiving' && contentWarning !== undefined) this.#traceContentWarning(contentWarning)
+  }
+
   async markDiscoveryComplete(warning?: ReceiveContentWarning): Promise<void> {
     const contentWarning = warning === undefined ? undefined : snapshotReceiveContentWarning(warning)
-    await this.#input.coordinator.checkpoint('zip-discovery-complete', () =>
-      this.#commit({ discoveryComplete: true, contentWarning: contentWarning ?? null }))
-    if (contentWarning !== undefined) this.#trace('zip_selected_content_missing', {
+    const checkpoint = await this.#input.coordinator.checkpointFromPlan(() => this.#checkpoint.artifactState === 'receiving'
+      ? { kind: 'commit', reason: 'zip-discovery-complete',
+          commit: () => this.#commit({ discoveryComplete: true, contentWarning: contentWarning ?? null }) }
+      : { kind: 'unchanged', result: this.#checkpoint })
+    if (checkpoint.artifactState === 'receiving' && contentWarning !== undefined) this.#traceContentWarning(contentWarning)
+  }
+
+  #traceContentWarning(contentWarning: ReceiveContentWarning): void {
+    this.#trace('zip_selected_content_missing', {
       reason: JSON.stringify({ completed_file_count: contentWarning.completedFileCount.toString(),
         selected_file_count: contentWarning.selectedFileCount.toString(), missing_files: contentWarning.missingFiles }),
     })
   }
 
   markRevisionFailure(entryId: string, reason: SourceFaultCode): Promise<void> {
-    return this.#input.coordinator.checkpoint(REVISION_FAILURE_CHECKPOINT, async () =>
-      this.#commitRevisionFailure(await this.entry(entryId), reason))
+    return this.#input.coordinator.checkpointFromPlan(() => this.#checkpoint.artifactState === 'receiving'
+      ? { kind: 'commit', reason: REVISION_FAILURE_CHECKPOINT,
+          commit: async () => this.#commitRevisionFailure(await this.entry(entryId), reason) }
+      : { kind: 'rejected', cause: new Error(ZIP_LAYOUT_FROZEN) })
   }
 
   async #commitRevisionFailure(entry: TaskEntry, reason: SourceFaultCode): Promise<void> {
@@ -338,21 +363,7 @@ export class ProgressiveZipArchive {
     }
     await this.checkpoint('zip-before-finalization')
     signal?.throwIfAborted()
-    if (!this.#checkpoint.discoveryComplete) throw new Error('ZIP still needs remote discovery')
-    if (this.#checkpoint.artifactState === 'receiving') {
-      for await (const entry of this.#entries()) {
-        signal?.throwIfAborted()
-        if (entry.revisionFailure !== undefined ||
-            completeZipEntryCrc(entry.ranges, entry.zipLayout!.exactSize) === undefined) {
-          throw new Error(`ZIP entry still needs remote content: ${entry.path.join('/')}`)
-        }
-      }
-      await this.#input.coordinator.checkpoint('zip-finalization-start', () => this.#commit({
-        artifactState: 'finalizing',
-        finalization: { nextEntry: 0n, centralDirectoryOffset: this.#checkpoint.allocatedLength,
-          committedLength: this.#checkpoint.allocatedLength },
-      }))
-    }
+    await this.#beginFinalization(signal)
     signal?.throwIfAborted()
     const start = this.#checkpoint.finalization!
     // Only the uncommitted central-directory tail is discarded after interrupted finalization.
@@ -394,6 +405,23 @@ export class ProgressiveZipArchive {
       this.#headroomBytes = 0n
       await Promise.all(reservations.map(reservation => reservation.release()))
     }
+  }
+
+  async #beginFinalization(signal?: AbortSignal): Promise<void> {
+    // Completeness inspection and the layout freeze share one coordinator turn to avoid TOCTOU races.
+    await this.#input.coordinator.checkpointFromPlan(async () => {
+      if (!this.#checkpoint.discoveryComplete) {
+        return { kind: 'rejected', cause: new Error('ZIP still needs remote discovery') }
+      }
+      if (this.#checkpoint.artifactState !== 'receiving') return { kind: 'unchanged', result: this.#checkpoint }
+      const result = await inspectZipForFinalization(this.#entries(), this.#checkpoint.contentWarning, signal)
+      if (result.kind === 'rejected') return result
+      const offset = this.#checkpoint.allocatedLength
+      return { kind: 'commit', reason: 'zip-finalization-start', commit: () => this.#commit({
+        artifactState: 'finalizing', contentWarning: result.contentWarning,
+        finalization: { nextEntry: 0n, centralDirectoryOffset: offset, committedLength: offset },
+      }) }
+    })
   }
 
   async #finalizationCheckpoint(nextEntry: bigint, committedLength: bigint): Promise<void> {

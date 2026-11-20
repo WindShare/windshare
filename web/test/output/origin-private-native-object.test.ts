@@ -153,6 +153,20 @@ describe('one native object checkpoint boundary', () => {
     expect(events).toContain('close')
     expect(events).not.toContain('write:1')
   })
+
+  it('declines rejected checkpoint plans without flushing or poisoning the coordinator', async () => {
+    const events: string[] = []
+    const coordinator = new ObjectCheckpointCoordinator({
+      io: fakeIO(events), operationId: 'task', objectId: 'zip',
+    })
+    const cause = new RangeError('layout frozen')
+    await expect(coordinator.checkpointFromPlan(() => ({ kind: 'rejected', cause }))).rejects.toBe(cause)
+    expect(coordinator.failed).toBe(false)
+    expect(events).toEqual([])
+    await coordinator.writeAt(0n, Uint8Array.of(1))
+    expect(events).toEqual(['write:0'])
+    await coordinator.close()
+  })
 })
 
 class ControlledWorker implements NativeWorkerPort {

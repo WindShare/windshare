@@ -10,6 +10,7 @@ export type NativeObjectTrace = (event: Readonly<{
 
 type CheckpointPlan<T> =
   | Readonly<{ kind: 'unchanged'; result: T }>
+  | Readonly<{ kind: 'rejected'; cause: unknown }>
   | Readonly<{ kind: 'commit'; reason: string; commit: () => Promise<T> }>
 
 /** One queue owns the cut across every entry sharing an object's native handle. */
@@ -64,6 +65,7 @@ export class ObjectCheckpointCoordinator implements NativeObjectIO {
   checkpointFromPlan<T>(plan: () => CheckpointPlan<T> | Promise<CheckpointPlan<T>>): Promise<T> {
     return this.#enqueue(async () => {
       const cut = await plan()
+      if (cut.kind === 'rejected') throw new MutationAdmissionDeclined(cut.cause)
       return cut.kind === 'commit' ? this.#flushAndCommit(cut.reason, cut.commit) : cut.result
     })
   }

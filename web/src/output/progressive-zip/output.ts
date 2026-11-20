@@ -38,9 +38,15 @@ export async function createProgressiveZipOutput(input: {
   readonly archive: ProgressiveZipArchive
   readonly identity: OutputSessionIdentity
   readonly intent: ReceiveIntent
-}): Promise<{ output: OutputSession; directories: IncrementalDirectoryOutput; missingFiles: () => readonly MissingContentFile[] }> {
+}): Promise<{
+  output: OutputSession
+  directories: IncrementalDirectoryOutput
+  missingFiles: () => readonly MissingContentFile[]
+  hasUnallocatedFailures: () => boolean
+}> {
   const { archive, intent } = input
   const missingFiles = new Map<string, MissingContentFile>()
+  let unallocatedFailure = false
   if (intent.plan.kind !== 'workspace-then-publish' || intent.artifact.kind !== 'zip-archive' ||
       archive.state.object.operationId !== intent.operationId) {
     throw new TypeError('ZIP output does not belong to the frozen receive operation')
@@ -79,8 +85,15 @@ export async function createProgressiveZipOutput(input: {
       return finalizedDirectorySettlement(admission)
     },
   }
-  const output = createZipFileOutput({ archive, identity, capacity, verify, missingFiles })
-  return { output, directories, missingFiles: () => Object.freeze([...missingFiles.values()]) }
+  const output = createZipFileOutput({
+    archive, identity, capacity, verify, missingFiles,
+    onUnallocatedFailure: () => { unallocatedFailure = true },
+  })
+  return {
+    output, directories,
+    missingFiles: () => Object.freeze([...missingFiles.values()]),
+    hasUnallocatedFailures: () => unallocatedFailure,
+  }
 }
 
 function createZipFileOutput(input: {
@@ -89,8 +102,9 @@ function createZipFileOutput(input: {
   readonly capacity: ZipCapacityWindow
   readonly verify: (admission: DirectoryAdmission) => Promise<void>
   readonly missingFiles: Map<string, MissingContentFile>
+  readonly onUnallocatedFailure: () => void
 }): OutputSession {
-  const { archive, identity, capacity, verify, missingFiles } = input
+  const { archive, identity, capacity, verify, missingFiles, onUnallocatedFailure } = input
   return {
     identity,
     capabilities: outputCapabilities({
@@ -117,12 +131,14 @@ function createZipFileOutput(input: {
     }
     const entryId = `file:${request.source.fileId}`
     const capacityEntry = capacity.enter(entryId)
+    let entryAllocated = false
     try {
       const ownership: OutputFileOwnership = {
         ...identity, canonicalPath: request.logicalArtifactPath,
         ownedFileIdentity: `${archive.state.object.objectId}:${entryId}`,
       }
       const retained = await archive.findCommittedEntry(entryId)
+      entryAllocated = retained !== undefined
       if (admission.kind === 'readmit') {
         requirePausedZipEntry(admission.paused, ownership, request, retained, archive.state)
       }
@@ -137,6 +153,7 @@ function createZipFileOutput(input: {
         },
         revision, ...modifiedTime(request.modifiedTime),
       })
+      entryAllocated = true
       let terminal = false
       const finish = () => {
         terminal = true
@@ -198,7 +215,10 @@ function createZipFileOutput(input: {
         },
       }
     } catch (error) {
-      if (!signal.aborted) recordMissingFile(missingFiles, entryId, request.logicalArtifactPath, error)
+      if (!signal.aborted) {
+        recordMissingFile(missingFiles, entryId, request.logicalArtifactPath, error)
+        if (!entryAllocated) onUnallocatedFailure()
+      }
       capacityEntry.finish()
       throw error
     }
