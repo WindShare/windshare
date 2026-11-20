@@ -339,7 +339,7 @@ Directory payload, signed as exact bytes with Ed25519 so no JSON canonicalizatio
   backup entry when the link host is known unreachable from the sender. Adding a relay must not save
   its discovered `frontend_url` as a frontend override. Bounded frontend checks on
   network changes never delay sharing and cannot detect receiver-only blocking. An optional "Copy
-  backup link" action reuses the share on the built-in backup host; switching hosts does not move
+  backup link" action reuses the share on the alternate built-in host; switching hosts does not move
   browser download state.
 - Engine API: `ShareRequest` carries a relay intent, either explicit (`--relay`, the complete set as
   today) or planned, plus an optional explicit frontend. `ShareReady` reports the frozen candidates,

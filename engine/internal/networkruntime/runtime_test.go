@@ -60,17 +60,32 @@ func TestPlanningPreservesExplicitIntentAndFrontendAuthority(t *testing.T) {
 		{relayprofile.UseExplicit([]relayprofile.Candidate{candidate}), 1},
 	} {
 		selected, err := r.Plan(context.Background(), test.intent, "https://explicit.example")
-		if err != nil || len(selected.Relays) != test.count || selected.Frontend != "https://explicit.example" {
+		if err != nil || len(selected.Relays) != test.count || selected.Frontend != "https://explicit.example" || selected.AlternateFrontend != "" {
 			t.Fatal(selected, err)
 		}
 	}
+	if selected, err := r.Plan(context.Background(), relayprofile.Plan(nil), ""); err != nil || selected.Frontend != r.config.LinkHost || selected.AlternateFrontend != r.config.BackupEntry {
+		t.Fatalf("default built-in frontend = (%q, %q), err = %v", selected.Frontend, selected.AlternateFrontend, err)
+	}
 	r.linkUnreachable = true
-	if got, _ := r.frontend(""); got != r.config.LinkHost {
-		t.Fatal("unverified backup selected")
+	if got := r.frontend(""); got.primary != r.config.LinkHost || got.alternate != r.config.BackupEntry {
+		t.Fatal("unverified backup selected", got)
 	}
 	r.backupReachable = true
-	if got, _ := r.frontend(""); got != r.config.BackupEntry {
+	if got := r.frontend(""); got.primary != r.config.BackupEntry || got.alternate != r.config.LinkHost {
 		t.Fatal(got)
+	}
+	if selected, err := r.Plan(context.Background(), relayprofile.Plan(nil), ""); err != nil || selected.Frontend != r.config.BackupEntry || selected.AlternateFrontend != r.config.LinkHost {
+		t.Fatalf("fallback built-in frontend = (%q, %q), err = %v", selected.Frontend, selected.AlternateFrontend, err)
+	}
+	r.config.BackupEntry = "https://FRONT.example/"
+	r.linkUnreachable, r.backupReachable = false, false
+	if got := r.frontend(""); got.primary != r.config.LinkHost || got.alternate != "" {
+		t.Fatalf("equivalent backup host exposed duplicate alternate: %+v", got)
+	}
+	r.config.BackupEntry = ""
+	if got := r.frontend(""); got.primary != r.config.LinkHost || got.alternate != "" {
+		t.Fatalf("missing backup host exposed alternate: %+v", got)
 	}
 	if _, err := r.Plan(context.Background(), relayprofile.OnlyConfigured(nil), ""); !errors.Is(err, relayprofile.ErrCandidatesRequired) || errors.Is(err, ErrUnavailable) {
 		t.Fatal(err)

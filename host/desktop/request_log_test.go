@@ -88,6 +88,7 @@ func TestControlLogsExcludeCredentialsFromAcceptedAndRejectedRequests(t *testing
 	a.work.Wait()
 	a.logShareState(Share{
 		OperationID: "share-fixture", URL: "https://example.test/s/sample#share-key-fixture",
+		BackupURL: "https://backup.example/s/sample#backup-key-fixture",
 		Selection: &Selection{Root: &SelectedRoot{Name: "private-file-fixture"}}, State: Sharing,
 	})
 	if err := log.Close(); err != nil {
@@ -102,7 +103,7 @@ func TestControlLogsExcludeCredentialsFromAcceptedAndRejectedRequests(t *testing
 		t.Fatal(err)
 	}
 	body := string(data)
-	for _, secret := range []string{key, password, "password-fixture", "private-path", "query-fixture", "fragment-fixture", "share-key-fixture", "private-file-fixture"} {
+	for _, secret := range []string{key, password, "password-fixture", "private-path", "query-fixture", "fragment-fixture", "share-key-fixture", "backup-key-fixture", "private-file-fixture"} {
 		if strings.Contains(body, secret) {
 			t.Fatalf("log contains credential-bearing input %q", secret)
 		}

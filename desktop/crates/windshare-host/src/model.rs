@@ -44,6 +44,8 @@ pub struct Share {
     #[serde(default)]
     pub url: String,
     #[serde(default)]
+    pub backup_url: String,
+    #[serde(default)]
     pub created_at_ms: u64,
     pub selection: Option<Selection>,
     pub result: Option<Completion>,

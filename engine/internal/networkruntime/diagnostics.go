@@ -24,7 +24,8 @@ func (s Selection) DiagnosticRecord() diagnostics.Record {
 	}
 	return diagnostics.New("share_network_plan", diagnostics.Fields{"generation": diagnostics.Uint(s.Decision.DirectoryGeneration), "serial": diagnostics.Uint(s.Decision.DirectorySerial),
 		"network_generation": diagnostics.Text(s.Decision.NetworkGeneration), "configured_only": diagnostics.Bool(s.Decision.ConfiguredOnly),
-		"published_candidates": diagnostics.Array(candidates...), "filters": diagnostics.Array(filters...), "frontend": diagnostics.Text(s.Frontend), "frontend_reason": diagnostics.Text(s.Decision.FrontendReason)})
+		"published_candidates": diagnostics.Array(candidates...), "filters": diagnostics.Array(filters...), "frontend": diagnostics.Text(s.Frontend),
+		"alternate_frontend": diagnostics.Text(s.AlternateFrontend), "frontend_reason": diagnostics.Text(s.Decision.FrontendReason)})
 }
 
 func AdmissionRecord(value relayset.Admission) diagnostics.Record {

@@ -26,6 +26,13 @@ fn blocking_contract_preserves_reason_recovery_and_deadline() {
     }))
     .unwrap();
     assert!(matches!(setup, Setup::Finished { context } if context.operation_id.is_empty()));
+
+    let with_backup: Share = serde_json::from_value(serde_json::json!({
+        "operation_id": "share", "state": "sharing", "startup": "ready",
+        "url": "https://ws.example/id#key", "backup_url": "https://backup.example/id#key"
+    }))
+    .unwrap();
+    assert_eq!(with_backup.backup_url, "https://backup.example/id#key");
 }
 
 fn snapshot(revision: u64, shares: Vec<Share>) -> Snapshot {
@@ -47,6 +54,7 @@ fn accepted(id: &str, state: ShareState) -> Share {
         state,
         startup: Startup::Ready,
         url: "https://example.test/share#key".into(),
+        backup_url: String::new(),
         created_at_ms: 0,
         selection: None,
         result: None,

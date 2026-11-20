@@ -232,6 +232,8 @@ messages! {
     Buttons => ("Buttons", "按钮"),
     ButtonStates => ("Hover · Focus · Press", "悬停 · 聚焦 · 按下"),
     CopyLink => ("Copy link", "复制链接"),
+    CopyBackupLink => ("Copy backup link", "复制备用链接"),
+    BackupLinkCopied => ("Backup link copied", "备用链接已复制"),
     ShareDiagnostics => ("Share diagnostics", "分享诊断"),
     BrowserTrace => ("Browser trace", "浏览器追踪"),
     BrowserTraceDetail => ("The browser starts recording when the recipient opens the diagnostic link.", "对方打开诊断链接后，浏览器会自动开始记录。"),

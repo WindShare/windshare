@@ -5,6 +5,7 @@ use windshare_ui::{QrCodeError, QrCodeImage};
 const BROWSER_TRACE_QUERY: &str = "trace=1";
 
 const PREVIEW_ORIGIN: &str = "https://windshare.example";
+const PREVIEW_BACKUP_ORIGIN: &str = "https://backup.windshare.example";
 const PREVIEW_SHARE_ID: &str = "tVW-68OSeLBZTpU-";
 const PREVIEW_KEY: &str = "AgABAgMEBQYHCAkKCwwNDg8kQqCgOKPbpFQm33t9wk_E";
 const PREVIEW_RELAY_QUERY: &str = "r=https%3A%2F%2Frelay.example.com%3A8443";
@@ -12,19 +13,24 @@ const PREVIEW_RELAY_QUERY: &str = "r=https%3A%2F%2Frelay.example.com%3A8443";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LinkKind {
     Standard,
+    Backup,
     Diagnostic,
 }
 
 #[derive(Clone)]
 pub struct SharePublication {
     standard: ShareLink,
+    backup: Option<SharedString>,
     diagnostic: OnceCell<Option<ShareLink>>,
 }
 
 impl SharePublication {
-    pub fn new(url: impl Into<SharedString>) -> Self {
+    pub fn new(url: impl Into<SharedString>, backup: Option<SharedString>) -> Self {
+        let standard_url: SharedString = url.into();
+        let backup = backup.filter(|candidate| !candidate.is_empty() && candidate != &standard_url);
         Self {
-            standard: ShareLink::new(url.into()),
+            standard: ShareLink::new(standard_url),
+            backup,
             diagnostic: OnceCell::new(),
         }
     }
@@ -32,9 +38,12 @@ impl SharePublication {
     pub fn preview(id: usize) -> Self {
         // The public identity from core/testvectors/v2-identity.json is a fixture, not a
         // new cryptographic implementation. A preview-only frontend path distinguishes samples.
-        let publication = Self::new(format!(
-            "{PREVIEW_ORIGIN}/s/preview-{id}/{PREVIEW_SHARE_ID}?{PREVIEW_RELAY_QUERY}#{PREVIEW_KEY}"
-        ));
+        let path =
+            format!("/s/preview-{id}/{PREVIEW_SHARE_ID}?{PREVIEW_RELAY_QUERY}#{PREVIEW_KEY}");
+        let publication = Self::new(
+            format!("{PREVIEW_ORIGIN}{path}"),
+            Some(format!("{PREVIEW_BACKUP_ORIGIN}{path}").into()),
+        );
         let link = &publication.standard;
         match &link.qr {
             Ok(code) => tracing::info!(
@@ -56,19 +65,32 @@ impl SharePublication {
         publication
     }
 
-    pub fn matches(&self, url: &str) -> bool {
-        self.standard.url.as_ref() == url
+    pub fn matches(&self, url: &str, backup: Option<&str>) -> bool {
+        let normalized = backup.filter(|candidate| !candidate.is_empty() && *candidate != url);
+        self.standard.url.as_ref() == url && self.backup.as_deref() == normalized
     }
 
-    pub fn link(&self, kind: LinkKind) -> Option<&ShareLink> {
+    pub const fn standard(&self) -> &ShareLink {
+        &self.standard
+    }
+
+    pub const fn has_backup(&self) -> bool {
+        self.backup.is_some()
+    }
+
+    pub fn diagnostic(&self) -> Option<&ShareLink> {
+        self.diagnostic
+            .get_or_init(|| {
+                browser_trace_url(&self.standard.url).map(|url| ShareLink::new(url.into()))
+            })
+            .as_ref()
+    }
+
+    pub fn url(&self, kind: LinkKind) -> Option<SharedString> {
         match kind {
-            LinkKind::Standard => Some(&self.standard),
-            LinkKind::Diagnostic => self
-                .diagnostic
-                .get_or_init(|| {
-                    browser_trace_url(&self.standard.url).map(|url| ShareLink::new(url.into()))
-                })
-                .as_ref(),
+            LinkKind::Standard => Some(self.standard.url()),
+            LinkKind::Backup => self.backup.clone(),
+            LinkKind::Diagnostic => self.diagnostic().map(ShareLink::url),
         }
     }
 }

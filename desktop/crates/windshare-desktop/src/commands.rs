@@ -65,12 +65,11 @@ impl Desktop {
             Action::Detail(id) => self.open_overlay(Overlay::Detail(id), window, cx),
             Action::Help => self.open_overlay(Overlay::Help, window, cx),
             Action::Close => self.close_overlay(window, cx),
-            Action::CopyLink(id) => self.copy_link(id, LinkKind::Standard, cx),
+            Action::CopyLink(id, kind) => self.copy_link(id, kind, cx),
             Action::ToggleLink(id) => self.toggle_link(id),
             Action::OpenShareDiagnostics(id) => {
                 self.open_overlay(Overlay::ShareDiagnostics(id), window, cx);
             }
-            Action::CopyDiagnosticLink(id) => self.copy_link(id, LinkKind::Diagnostic, cx),
             Action::SetSenderTrace(enabled) => self.set_sender_trace(enabled),
             Action::OpenLogs => self.open_logs(cx),
             Action::EnlargeQr(id) => self.enlarge_qr(id, window, cx),
@@ -162,10 +161,10 @@ impl Desktop {
         let Some(share) = self.shares.iter().find(|share| share.id == id) else {
             return;
         };
-        let Some(link) = share.link_for(kind) else {
+        let Some(url) = share.url_for(kind) else {
             return;
         };
-        cx.write_to_clipboard(ClipboardItem::new_string(link.url().to_string()));
+        cx.write_to_clipboard(ClipboardItem::new_string(url.to_string()));
         let revision = self.next_operation();
         self.copy_feedback = CopyFeedback::Copied {
             share_id: id,
@@ -173,23 +172,29 @@ impl Desktop {
             revision,
         };
         let overlay = self.overlays.last().map(|frame| &frame.content);
-        let inline_feedback = match (kind, overlay) {
-            (LinkKind::Diagnostic, Some(Overlay::ShareDiagnostics(share_id)))
-            | (LinkKind::Standard, Some(Overlay::Detail(share_id))) => *share_id == id,
-            (LinkKind::Standard, None) => {
+        let on_share_surface = match overlay {
+            Some(Overlay::Detail(share_id)) => *share_id == id,
+            None => {
                 self.page == Page::Share
                     && matches!(self.share_flow, ShareFlow::Running(run) if run.share_id == id)
             }
             _ => false,
         };
+        let inline_feedback = match kind {
+            LinkKind::Standard => on_share_surface,
+            LinkKind::Backup => on_share_surface && self.link_disclosure.expanded(id),
+            LinkKind::Diagnostic => {
+                matches!(overlay, Some(Overlay::ShareDiagnostics(share_id)) if *share_id == id)
+            }
+        };
         // The result button acknowledges its own action; other surfaces still
         // need a toast because they have no inline confirmation.
         if !inline_feedback {
             self.notify(
-                if kind == LinkKind::Diagnostic {
-                    Text::DiagnosticLinkCopied
-                } else {
-                    Text::LinkCopied
+                match kind {
+                    LinkKind::Standard => Text::LinkCopied,
+                    LinkKind::Backup => Text::BackupLinkCopied,
+                    LinkKind::Diagnostic => Text::DiagnosticLinkCopied,
                 },
                 cx,
             );

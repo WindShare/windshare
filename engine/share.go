@@ -36,7 +36,10 @@ type ShareReady struct {
 	FrozenCandidates    []networkconfig.Candidate
 	InitialAdmissions   []string
 	Frontend            string
-	Decision            networkconfig.Decision
+	// AlternateFrontend is set only when the share uses a built-in network
+	// frontend and another distinct built-in entry exists for the same share.
+	AlternateFrontend string
+	Decision          networkconfig.Decision
 }
 type ShareTask struct {
 	*Task[ShareResult]
@@ -113,7 +116,8 @@ func (current *ShareTask) Ready(ctx context.Context) (ShareReady, error) {
 	decision := current.selection.Decision
 	decision.Candidates, decision.Filters = slices.Clone(decision.Candidates), slices.Clone(decision.Filters)
 	return ShareReady{Capability: value.Capability, SelectedRootSummary: value.SelectedRootSummary, RelayOrigin: origin,
-		FrozenCandidates: slices.Clone(decision.Candidates), InitialAdmissions: slices.Clone(value.Registrations.Admitted), Frontend: current.selection.Frontend, Decision: decision}, nil
+		FrozenCandidates: slices.Clone(decision.Candidates), InitialAdmissions: slices.Clone(value.Registrations.Admitted),
+		Frontend: current.selection.Frontend, AlternateFrontend: current.selection.AlternateFrontend, Decision: decision}, nil
 }
 
 // CancelBeforeReady reserves cancellation of an unpublished attempt. Once a

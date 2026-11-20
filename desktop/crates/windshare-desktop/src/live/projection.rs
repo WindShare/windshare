@@ -51,14 +51,18 @@ pub fn update_share(share: &mut Share, operation: &Operation) {
                 None => {}
             }
         }
+        let backup = (!task.backup_url.is_empty()).then_some(task.backup_url.as_str());
         if task.url.is_empty() {
             share.link = None;
         } else if share
             .link
             .as_ref()
-            .is_none_or(|link| !link.matches(&task.url))
+            .is_none_or(|link| !link.matches(&task.url, backup))
         {
-            share.link = Some(SharePublication::new(task.url.clone()));
+            share.link = Some(SharePublication::new(
+                task.url.clone(),
+                backup.map(|url| url.to_owned().into()),
+            ));
         }
         share.relay_status = task
             .relay

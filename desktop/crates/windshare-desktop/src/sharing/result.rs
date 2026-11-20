@@ -1,5 +1,5 @@
 use super::{
-    ShareLink,
+    SharePublication,
     intro::IntroFrame,
     link_views::{LINK_COLUMN_GAP, LINK_PANEL_WIDTH, link_columns_fit},
     qr_slot::{Arrival, QrSlot},
@@ -39,7 +39,8 @@ impl Desktop {
         // "preparing", so the status, the copy action and the code all turn on
         // the beat the entrance finishes instead of trickling in under the flight.
         let revealed = intro.revealed();
-        let link = share.usable_link().filter(|_| revealed);
+        let publication = share.live_publication().filter(|_| revealed);
+        let link = publication.map(SharePublication::standard);
         let pending = !revealed || matches!(share.state, ShareState::Preparing);
         let playback = if intro.still || !window.is_visible() || !window.is_window_active() {
             SpringPlayback::Completed
@@ -79,11 +80,14 @@ impl Desktop {
                 revealed && (share.error.is_some() || share.relay_notice().is_some()),
                 |el| el.child(Self::share_notice(theme, share, cx)),
             )
-            .child(self.result_action(theme, share.id, link, cx).with_spring(
-                ("result-action-reveal", share.id),
-                readiness(link.is_some()),
-                gpui::Styled::opacity,
-            ));
+            .child(
+                self.result_action(theme, share.id, publication, cx)
+                    .with_spring(
+                        ("result-action-reveal", share.id),
+                        readiness(link.is_some()),
+                        gpui::Styled::opacity,
+                    ),
+            );
         let slot = QrSlot::new(
             ("result-qr", share.id),
             link.and_then(|link| link.qr().ok()).cloned(),
@@ -193,9 +197,10 @@ impl Desktop {
         &self,
         theme: Theme,
         id: usize,
-        link: Option<&ShareLink>,
+        publication: Option<&SharePublication>,
         cx: &Context<Self>,
     ) -> Div {
+        let link = publication.map(SharePublication::standard);
         column()
             .w_full()
             .min_w_0()
@@ -207,7 +212,7 @@ impl Desktop {
             .child(
                 column()
                     .min_h(px(COMPACT_BUTTON_HEIGHT))
-                    .child(self.share_link_disclosure(theme, id, link, cx)),
+                    .child(self.share_link_disclosure(theme, id, publication, cx)),
             )
     }
 

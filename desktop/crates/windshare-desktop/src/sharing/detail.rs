@@ -1,4 +1,5 @@
 use super::{
+    SharePublication,
     link_views::{LINK_COLUMN_GAP, LINK_PANEL_WIDTH, link_columns_fit},
     qr_slot::QrSlot,
 };
@@ -48,7 +49,8 @@ impl Desktop {
         let Some(share) = self.shares.iter().find(|share| share.id == id) else {
             return column();
         };
-        let link = share.usable_link();
+        let publication = share.live_publication();
+        let link = publication.map(SharePublication::standard);
         // No run arrives in a dialog: its slot raises a whirl of its own while
         // the link is pending and opens the moment the link exists.
         let slot = QrSlot::new(
@@ -79,7 +81,7 @@ impl Desktop {
                 column()
                     .gap(px(8.))
                     .child(self.share_copy_button(id, link, cx))
-                    .child(self.share_link_disclosure(theme, id, link, cx)),
+                    .child(self.share_link_disclosure(theme, id, publication, cx)),
             );
         column()
             .gap(px(24.))

@@ -29,7 +29,7 @@ impl Desktop {
             .shares
             .iter()
             .find(|share| share.id == id)
-            .and_then(|share| share.link_for(LinkKind::Diagnostic))
+            .and_then(crate::model::Share::diagnostic_link)
         else {
             return theme.caption(locale.text(Text::DiagnosticLinkUnavailable));
         };
@@ -58,7 +58,7 @@ impl Desktop {
                 }),
                 if copied { Icon::Check } else { Icon::Copy },
                 ButtonStyle::Tinted(Tone::Lavender),
-                Action::CopyDiagnosticLink(id),
+                Action::CopyLink(id, LinkKind::Diagnostic),
                 cx,
             ));
         let qr = link.qr().map_or_else(

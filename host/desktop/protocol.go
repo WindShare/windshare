@@ -53,6 +53,7 @@ type Share struct {
 	State         ShareState                 `json:"state"`
 	Startup       string                     `json:"startup"`
 	URL           string                     `json:"url,omitempty"`
+	BackupURL     string                     `json:"backup_url,omitempty"`
 	Selection     *Selection                 `json:"selection,omitempty"`
 	Relay         *wire.Encoded              `json:"relay,omitempty"`
 	Result        *Completion                `json:"result,omitempty"`

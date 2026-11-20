@@ -1,4 +1,4 @@
-use super::{LinkKind, ShareLink, qr_slot::QR_FRAME_SIDE};
+use super::{LinkKind, ShareLink, SharePublication, qr_slot::QR_FRAME_SIDE};
 use crate::{
     desktop::Desktop,
     localization::{Text, language},
@@ -29,7 +29,7 @@ impl Desktop {
             language(cx).text(if copied { Text::Copied } else { Text::CopyLink }),
             if copied { Icon::Check } else { Icon::Copy },
             ButtonStyle::Primary,
-            Action::CopyLink(id),
+            Action::CopyLink(id, LinkKind::Standard),
             cx,
         )
         .large()
@@ -41,12 +41,14 @@ impl Desktop {
         &self,
         theme: Theme,
         id: usize,
-        link: Option<&ShareLink>,
+        publication: Option<&SharePublication>,
         cx: &Context<Self>,
     ) -> Div {
-        let Some(link) = link else {
+        let Some(publication) = publication else {
             return column();
         };
+        let link = publication.standard();
+        let has_backup = publication.has_backup();
         let locale = language(cx);
         let expanded = self.link_disclosure.expanded(id);
         let label = locale.text(if expanded {
@@ -86,6 +88,25 @@ impl Desktop {
                         .rounded(px(10.))
                         .bg(theme.inset()),
                 )
+                .when(has_backup, |el| {
+                    let copied = self.copy_feedback.matches(id, LinkKind::Backup);
+                    el.child(
+                        Self::button(
+                            ("copy-backup-link", id),
+                            locale.text(if copied {
+                                Text::Copied
+                            } else {
+                                Text::CopyBackupLink
+                            }),
+                            if copied { Icon::Check } else { Icon::Copy },
+                            ButtonStyle::Secondary,
+                            Action::CopyLink(id, LinkKind::Backup),
+                            cx,
+                        )
+                        .compact()
+                        .full_width(),
+                    )
+                })
             })
     }
 

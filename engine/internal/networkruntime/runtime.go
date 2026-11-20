@@ -89,12 +89,13 @@ func (r *Runtime) Close() {
 }
 
 type Selection struct {
-	Relays        []relayprofile.Registration
-	authorization *account.ShareAuthorization
-	Plan          relayplan.Plan
-	Frontend      string
-	useAliases    bool
-	Decision      networkconfig.Decision
+	Relays            []relayprofile.Registration
+	authorization     *account.ShareAuthorization
+	Plan              relayplan.Plan
+	Frontend          string
+	AlternateFrontend string
+	useAliases        bool
+	Decision          networkconfig.Decision
 }
 
 func (selection Selection) ReleaseAuthorization() { selection.authorization.Close() }
@@ -126,7 +127,8 @@ func (r *Runtime) Plan(ctx context.Context, intent relayprofile.Intent, frontend
 	result := Selection{Plan: plan, Relays: relayprofile.Registrations(configured)}
 	result.Decision = networkconfig.Decision{DirectoryGeneration: plan.Decision.DirectoryGeneration, DirectorySerial: plan.Decision.DirectorySerial,
 		NetworkGeneration: generation, ConfiguredOnly: only}
-	result.Frontend, result.Decision.FrontendReason = r.frontend(frontend)
+	front := r.frontend(frontend)
+	result.Frontend, result.AlternateFrontend, result.Decision.FrontendReason = front.primary, front.alternate, front.reason
 	// Only these release frontends are built against this directory's trust roots.
 	result.useAliases = result.Frontend != "" && (result.Frontend == r.config.LinkHost || result.Frontend == r.config.BackupEntry)
 	if result.Frontend != "" {

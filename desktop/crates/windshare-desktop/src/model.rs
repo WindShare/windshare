@@ -2,7 +2,7 @@ mod share;
 pub use share::{Share, ShareSource, ShareState};
 
 use crate::localization::{Language, LanguageChoice, Text};
-use crate::sharing::SharePublication;
+use crate::sharing::{LinkKind, SharePublication};
 use windshare_ui::{Icon, Tone};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -103,10 +103,9 @@ pub enum Action {
     SavePreview,
     ResetReceive,
     Detail(usize),
-    CopyLink(usize),
+    CopyLink(usize, LinkKind),
     ToggleLink(usize),
     OpenShareDiagnostics(usize),
-    CopyDiagnosticLink(usize),
     SetSenderTrace(bool),
     OpenLogs,
     EnlargeQr(usize),

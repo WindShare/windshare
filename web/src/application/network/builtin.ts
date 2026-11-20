@@ -9,8 +9,6 @@ import { RelayCandidates } from '../../receiver/relay-selection/candidates'
 import { OfficialRelayAuthority } from './authority'
 import type { AuthorityConfig, AuthorityObservation } from '../../network/authority/feed'
 
-export const BUILTIN_LINK_HOST = release.link_host
-export const BUILTIN_BACKUP_ENTRY = release.backup_entry
 export class BuiltinNetwork {
   #directory: NetworkDirectory | undefined
   readonly #authority: OfficialRelayAuthority | undefined

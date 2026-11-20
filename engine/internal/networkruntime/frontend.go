@@ -4,6 +4,8 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/windshare/windshare/connectivity/networkstate"
@@ -11,16 +13,50 @@ import (
 
 const frontendTimeout = 3 * time.Second
 
-func (r *Runtime) frontend(explicit string) (string, string) {
+type frontendChoice struct {
+	primary   string
+	alternate string
+	reason    string
+}
+
+func (r *Runtime) frontend(explicit string) frontendChoice {
 	if explicit != "" {
-		return explicit, "explicit"
+		// Explicit frontends reflect the user's trust choice and must never offer
+		// a built-in official origin as an alternate link.
+		return frontendChoice{primary: explicit, reason: "explicit"}
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.config.LinkHost != "" && (!r.linkUnreachable || !r.backupReachable) {
-		return r.config.LinkHost, "builtin_link_host"
+		return frontendChoice{
+			primary:   r.config.LinkHost,
+			alternate: alternateFrontend(r.config.LinkHost, r.config.BackupEntry),
+			reason:    "builtin_link_host",
+		}
 	}
-	return r.config.BackupEntry, "builtin_backup"
+	return frontendChoice{
+		primary:   r.config.BackupEntry,
+		alternate: alternateFrontend(r.config.BackupEntry, r.config.LinkHost),
+		reason:    "builtin_backup",
+	}
+}
+
+func alternateFrontend(primary, candidate string) string {
+	if primary == "" || candidate == "" || sameFrontendBase(primary, candidate) {
+		return ""
+	}
+	return candidate
+}
+
+func sameFrontendBase(left, right string) bool {
+	first, firstErr := url.Parse(left)
+	second, secondErr := url.Parse(right)
+	if firstErr != nil || secondErr != nil {
+		return left == right
+	}
+	return strings.EqualFold(first.Scheme, second.Scheme) &&
+		strings.EqualFold(first.Host, second.Host) &&
+		strings.TrimSuffix(first.Path, "/") == strings.TrimSuffix(second.Path, "/")
 }
 
 func (r *Runtime) run() {

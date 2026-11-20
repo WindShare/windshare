@@ -3,6 +3,7 @@ use crate::{
     localization::{Language, Text},
     sharing::{LinkKind, ShareLink, SharePublication},
 };
+use gpui::SharedString;
 use windshare_ui::{Icon, Tone};
 
 #[derive(Clone, Debug)]
@@ -62,15 +63,22 @@ impl Share {
         )
     }
 
-    pub fn usable_link(&self) -> Option<&ShareLink> {
-        self.link_for(LinkKind::Standard)
+    pub fn live_publication(&self) -> Option<&SharePublication> {
+        self.link.as_ref().filter(|_| self.live())
     }
 
-    pub fn link_for(&self, kind: LinkKind) -> Option<&ShareLink> {
-        self.link
-            .as_ref()
-            .filter(|_| self.live())
-            .and_then(|publication| publication.link(kind))
+    pub fn usable_link(&self) -> Option<&ShareLink> {
+        self.live_publication().map(SharePublication::standard)
+    }
+
+    pub fn diagnostic_link(&self) -> Option<&ShareLink> {
+        self.live_publication()
+            .and_then(SharePublication::diagnostic)
+    }
+
+    pub fn url_for(&self, kind: LinkKind) -> Option<SharedString> {
+        self.live_publication()
+            .and_then(|publication| publication.url(kind))
     }
 
     pub fn description(&self, locale: Language) -> String {

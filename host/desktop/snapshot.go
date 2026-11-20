@@ -97,6 +97,9 @@ func projectTask(view *Share, current running) {
 			frontend = current.frontURL
 		}
 		view.URL, _ = state.Ready.Capability.URL(frontend)
+		if view.URL != "" && state.Ready.AlternateFrontend != "" {
+			view.BackupURL, _ = state.Ready.Capability.URL(state.Ready.AlternateFrontend)
+		}
 		summary := state.Ready.SelectedRootSummary
 		view.Selection = &Selection{Count: summary.SelectedCount()}
 		if root, ok := summary.SingleRoot(); ok {
@@ -117,6 +120,7 @@ func projectTask(view *Share, current running) {
 	if state.State == engine.TaskStopping || state.State == engine.TaskFinished {
 		view.State = Stopping
 		view.URL = ""
+		view.BackupURL = ""
 	}
 	if state.RelayAvailability != nil {
 		encoded, err := wire.Encode(*state.RelayAvailability)
@@ -125,7 +129,7 @@ func projectTask(view *Share, current running) {
 		}
 	}
 	if result := state.Result; result != nil {
-		view.State, view.URL = Finished, ""
+		view.State, view.URL, view.BackupURL = Finished, "", ""
 		view.Result = &Completion{
 			Outcome: outcomeName(result.Outcome), StopReason: reasonName(result.StopReason),
 			Error: errorText(result.Err), CleanupError: errorText(result.CleanupError),

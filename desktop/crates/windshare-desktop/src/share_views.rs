@@ -2,6 +2,7 @@ use crate::localization::{Text, language};
 use crate::{
     desktop::Desktop,
     model::{Action, Filter, Share},
+    sharing::LinkKind,
 };
 use gpui::{Div, Stateful, div, prelude::*, px};
 use windshare_ui::{ButtonStyle, Icon, Theme, Tone, column, row};
@@ -68,7 +69,7 @@ impl Desktop {
                             "",
                             Icon::Link,
                             ButtonStyle::Ghost,
-                            Action::CopyLink(id),
+                            Action::CopyLink(id, LinkKind::Standard),
                             cx,
                         )
                         .compact()
@@ -220,7 +221,7 @@ impl Desktop {
                     locale.text(Text::CopyLink),
                     Icon::Link,
                     ButtonStyle::Secondary,
-                    Action::CopyLink(share.id),
+                    Action::CopyLink(share.id, LinkKind::Standard),
                     cx,
                 )
                 .compact()
