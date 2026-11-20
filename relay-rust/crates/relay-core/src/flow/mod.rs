@@ -19,7 +19,7 @@
 
 mod accounting;
 mod capacity;
-pub use capacity::ReceiveCapacity;
+pub use capacity::{ReceiveCapacity, WindowShare};
 mod checkpoint;
 mod checkpoint_codec;
 pub use checkpoint::{CheckpointError, LedgerCheckpoint};

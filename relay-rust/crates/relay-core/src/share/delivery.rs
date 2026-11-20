@@ -29,6 +29,20 @@ impl<O: Observer> ShareRelay<O> {
             .window_credit(flow, target)
     }
 
+    /// Replenishment offer that keeps admission headroom on a shared destination.
+    /// See `ConnectionLedger::shared_window_credit`; hosts still reserve it
+    /// through `Input::Grant`.
+    pub fn shared_delivery_window(
+        &self,
+        flow: FlowKey,
+        target: Counts,
+        share: crate::flow::WindowShare,
+    ) -> Option<Counts> {
+        self.generations
+            .ledger(&flow.destination())?
+            .shared_window_credit(flow, target, share)
+    }
+
     /// Enumerate current open flows without a host-maintained copy of routing state.
     /// Hibernating hosts can resume scheduling from restored ledgers; this view
     /// grants no credit and must still be rechecked through `Input::Grant`.
