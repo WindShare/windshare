@@ -229,7 +229,7 @@ func TestSenderRelayStopRecoveryInterruptsBackoffWithoutResume(t *testing.T) {
 	}
 	waiting := make(chan struct{})
 	clock := newSenderRelayTestClock()
-	clock.wait = func(ctx context.Context, _ time.Duration) error {
+	clock.wait = func(ctx context.Context, _ time.Duration, _ <-chan struct{}) error {
 		close(waiting)
 		<-ctx.Done()
 		return ctx.Err()
@@ -316,7 +316,7 @@ func TestSenderRelayStopWinsDialSuccessAndClosesLateConnection(t *testing.T) {
 }
 
 func TestSenderRelayDefaultRecoveryDependenciesHonorContext(t *testing.T) {
-	clock := wallSenderRelayRecoveryClock{}
+	clock := SystemClock{}
 	before := time.Now()
 	now := clock.Now()
 	after := time.Now()
@@ -325,7 +325,7 @@ func TestSenderRelayDefaultRecoveryDependenciesHonorContext(t *testing.T) {
 	}
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := clock.Wait(canceled, time.Hour); !errors.Is(err, context.Canceled) {
+	if err := clock.Wait(canceled, time.Hour, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled wall recovery wait = %v", err)
 	}
 	connection, err := (relayV2SenderDialer{}).Dial(context.Background(), relayv2.SenderConfig{})
@@ -347,7 +347,7 @@ func TestSenderRelayCleanupKeepsDefaultDependenciesAndClosesOnce(t *testing.T) {
 	if _, ok := lifecycle.config.Dialer.(relayV2SenderDialer); !ok {
 		t.Fatalf("default dialer type = %T", lifecycle.config.Dialer)
 	}
-	if _, ok := lifecycle.config.Clock.(wallSenderRelayRecoveryClock); !ok {
+	if _, ok := lifecycle.config.Clock.(SystemClock); !ok {
 		t.Fatalf("default recovery clock type = %T", lifecycle.config.Clock)
 	}
 
@@ -419,7 +419,7 @@ type senderRelayTestClock struct {
 	mu    sync.Mutex
 	now   time.Time
 	waits []time.Duration
-	wait  func(context.Context, time.Duration) error
+	wait  func(context.Context, time.Duration, <-chan struct{}) error
 }
 
 func newSenderRelayTestClock() *senderRelayTestClock {
@@ -432,7 +432,7 @@ func (clock *senderRelayTestClock) Now() time.Time {
 	return clock.now
 }
 
-func (clock *senderRelayTestClock) Wait(ctx context.Context, delay time.Duration) error {
+func (clock *senderRelayTestClock) Wait(ctx context.Context, delay time.Duration, wake <-chan struct{}) error {
 	clock.mu.Lock()
 	clock.waits = append(clock.waits, delay)
 	wait := clock.wait
@@ -441,7 +441,7 @@ func (clock *senderRelayTestClock) Wait(ctx context.Context, delay time.Duration
 	}
 	clock.mu.Unlock()
 	if wait != nil {
-		return wait(ctx, delay)
+		return wait(ctx, delay, wake)
 	}
 	return ctx.Err()
 }

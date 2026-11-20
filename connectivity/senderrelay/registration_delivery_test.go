@@ -60,7 +60,7 @@ func TestInitialMissingWebSocketRouteRetiresOnlyThisLifecycle(t *testing.T) {
 		return Connection{}, failure
 	}}
 	clock := newSenderRelayTestClock()
-	clock.wait = func(context.Context, time.Duration) error {
+	clock.wait = func(context.Context, time.Duration, <-chan struct{}) error {
 		return errors.New("missing initial route retried")
 	}
 	lifecycle := newSenderRelayTestLifecycle(t, nil, dialer, clock)

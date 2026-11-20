@@ -18,10 +18,14 @@ type child struct {
 }
 
 func start(binary, database, address string) *child {
+	return startNode(binary, database, address, map[string]any{"services": map[string]bool{"relay": true, "stun": true}, "relay_budget": nil})
+}
+
+func startNode(binary, database, address string, node any) *child {
 	configuration, err := json.Marshal(map[string]any{
 		"listen": address, "database": database, "identity_file": database + ".identity.json",
 		"stun": map[string]any{"udp_addresses": []string{"127.0.0.1:0", "[::1]:0"}, "admin_address": "127.0.0.1:0"},
-		"node": map[string]any{"services": map[string]bool{"relay": true, "stun": true}, "relay_budget": nil},
+		"node": node,
 	})
 	check(err)
 	check(os.WriteFile(database+".config.json", configuration, 0o600))

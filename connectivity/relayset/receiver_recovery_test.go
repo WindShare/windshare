@@ -375,13 +375,16 @@ func TestReceiverRecoveryDescriptorAndDelayBounds(t *testing.T) {
 		t.Fatal("identity failure was reversible")
 	}
 	started := clock.Now()
-	delay, phase := recovery.delay(started, 0, nil)
+	delay, phase := recovery.localRetryDelay(started, 0, nil)
 	if delay != receiverRetryDelay/2 || phase != ReceiverRecoveryRetrying {
 		t.Fatal(delay, phase)
 	}
 	clock.Wait(context.Background(), time.Hour)
-	delay, phase = recovery.delay(started, 100, &relayv2.RelayError{Code: v2.ErrorAdmission, RetryAfter: time.Hour})
-	if delay != receiverMaximumRetryDelay/2 || phase != ReceiverRecoveryWaiting {
+	err := &relayv2.RelayError{Code: v2.ErrorAdmission, RetryAfter: time.Hour}
+	recovery.recordFailure("one", err)
+	delay, phase = recovery.localRetryDelay(started, 100, err)
+	delay = recovery.scheduleEndpointRetry("one", phase, delay, nil, err)
+	if delay != receiverMaximumRetryDelay || phase != ReceiverRecoveryWaiting {
 		t.Fatal(delay, phase)
 	}
 	for _, options := range []ReceiverRecoveryOptions{{InitialWait: -1}, {FastWindow: -1}, {WaitTimeout: -1}} {
@@ -416,5 +419,42 @@ func TestReceiverRecoveryRejectsInvalidCallerLifetimes(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestReceiverHardDeadlineOnlyBindsItsEndpointAcrossJoins(t *testing.T) {
+	clock := &receiverFakeClock{now: time.Unix(1, 0)}
+	recovery, err := NewReceiverRecovery(ReceiverRecoveryOptions{
+		Clock: clock, Jitter: func(time.Duration) time.Duration { return 0 },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const blocked = "busy"
+	var busy, healthy atomic.Int32
+	config := receiverUnavailableConfig(blocked, "restarting")
+	config.Dial = func(_ context.Context, request relayv2.ReceiverConfig) (ReceiverConnection, error) {
+		if request.RelayBaseURL == blocked {
+			busy.Add(1)
+			return nil, &relayv2.WebSocketDialError{StatusCode: 503, RetryAfter: 30 * time.Second}
+		}
+		healthy.Add(1)
+		return nil, &relayv2.RelayError{Code: v2.ErrorStarting}
+	}
+	start := clock.Now()
+	if _, err = recovery.Join(t.Context(), config); !errors.Is(err, ErrReceiverUnavailable) ||
+		clock.Now().Sub(start) != ReceiverInitialWait || busy.Load() != 1 || healthy.Load() < 2 {
+		t.Fatalf("join=%v elapsed=%s dials=(%d,%d)", err, clock.Now().Sub(start), busy.Load(), healthy.Load())
+	}
+	// A replacement on the blocked route waits out the original deadline even
+	// with minimum jitter, then receives a permanent answer on the next dial.
+	config.Receiver.Capability.Relays = []string{blocked}
+	config.Dial = func(context.Context, relayv2.ReceiverConfig) (ReceiverConnection, error) {
+		busy.Add(1)
+		return nil, &relayv2.RelayError{Code: v2.ErrorStopped}
+	}
+	if _, err = recovery.Replace(t.Context(), config); !errors.Is(err, ErrReceiverShareStopped) ||
+		clock.Now().Sub(start) != 30*time.Second || busy.Load() != 2 {
+		t.Fatalf("replacement=%v elapsed=%s dials=%d", err, clock.Now().Sub(start), busy.Load())
 	}
 }

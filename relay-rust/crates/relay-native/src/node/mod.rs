@@ -32,6 +32,11 @@ use std::{
 };
 use tokio::sync::watch;
 
+pub(crate) const SERVICE_RETRY_SECONDS: u32 = 30;
+pub(crate) const SERVICE_RETRY_AFTER: windshare_relay_core::error_frame::RetryAfter =
+    windshare_relay_core::error_frame::RetryAfter::from_millis(SERVICE_RETRY_SECONDS * 1000)
+        .expect("service retry must fit a WS2E frame");
+
 struct State {
     settings: Settings,
     identity: Option<Identity>,

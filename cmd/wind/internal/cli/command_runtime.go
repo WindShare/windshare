@@ -610,9 +610,8 @@ func (runtime *commandRuntime) drain() {
 	runtime.canvas.FinishProgress()
 }
 
-// commandClock is shared by presentation sampling and user trace metadata for
-// one command. Connectivity policy keeps its own clock because transport
-// deadlines must not become presentation policy accidentally.
+// Presentation and engine adapters draw their timers and timestamps from the
+// same command clock so an injected clock can drive a whole command.
 type commandClock interface {
 	Now() time.Time
 	NewTimer(time.Duration) commandTimer

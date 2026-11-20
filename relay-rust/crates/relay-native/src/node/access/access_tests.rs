@@ -96,7 +96,7 @@ fn offline_tickets_share_a_resident_limit_and_reconnect_reuses_it() {
     .attribution();
     assert!(matches!(
         service.reserve(share(2), sibling),
-        Err(RegistrationDecision::Unavailable)
+        Err(RegistrationDecision::Unavailable(_))
     ));
     drop(first);
     assert!(service.reserve(share(2), sibling).is_err());
@@ -204,7 +204,7 @@ fn registration_retries_generation_mismatches_and_revalidates_cached_proof() {
     );
     assert!(matches!(
         service.authorize(share(1), Some(&next_bearer), NOW),
-        RegistrationDecision::Unavailable
+        RegistrationDecision::Unavailable(_)
     ));
     assert!(matches!(
         service.authorize(share(1), Some(&next_bearer), next_ticket.expires_at),
@@ -226,7 +226,7 @@ fn registration_retries_generation_mismatches_and_revalidates_cached_proof() {
     for stale_bearer in [previous_bearer, Bearer::new(&previous_token)] {
         assert!(matches!(
             service.authorize(share(1), Some(&stale_bearer), NOW + 1),
-            RegistrationDecision::Unavailable
+            RegistrationDecision::Unavailable(_)
         ));
     }
     assert!(matches!(
@@ -307,7 +307,7 @@ fn local_owner_capacity_is_preserved_when_public_residency_is_full() {
     let public = service.reserve(share(1), Attribution::Anonymous).unwrap();
     assert!(matches!(
         service.reserve(share(2), Attribution::Anonymous),
-        Err(RegistrationDecision::Unavailable)
+        Err(RegistrationDecision::Unavailable(_))
     ));
     let mut token = Bearer::new("owner-secret");
     assert_eq!(

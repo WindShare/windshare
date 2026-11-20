@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"time"
 
 	"github.com/windshare/windshare/cmd/wind/internal/accountcommand"
 	"github.com/windshare/windshare/cmd/wind/internal/commandmeta"
@@ -217,10 +218,27 @@ func (a *App) Run(ctx context.Context, args []string) (code int) {
 	}
 }
 
+type engineCommandClock struct{ commandClock }
+
+func (c engineCommandClock) NewTicker(d time.Duration) engine.ReceiveTicker {
+	return c.commandClock.NewTicker(d)
+}
+func (c engineCommandClock) Wait(ctx context.Context, delay time.Duration, wake <-chan struct{}) error {
+	timer := c.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-wake:
+	case <-timer.C():
+	}
+	return nil
+}
+
 func (a *App) newApplication() (*engine.Engine, error) {
 	config := a.engineConfig
-	if config.Now == nil && a.clock != nil {
-		config.Now = a.clock.Now
+	if config.Clock == nil && a.clock != nil {
+		config.Clock = engineCommandClock{a.clock}
 	}
 	config.Receive = a.receiveDependencies()
 	return engine.New(config)

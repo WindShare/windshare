@@ -225,6 +225,15 @@ pub enum Record {
 }
 
 impl Record {
+    /// Only live and recoverable routes carry a sender contribution identity.
+    pub const fn live_attribution(&self) -> Option<crate::access::Attribution> {
+        match self {
+            Self::Published(owned) => Some(owned.route.attribution()),
+            Self::Grace(grace) => Some(grace.route.attribution()),
+            Self::Stopping(_) | Self::Stopped(_) => None,
+        }
+    }
+
     /// Returns the relay whose storage owns this record.
     pub const fn relay(&self) -> RelayIdentity {
         match self {

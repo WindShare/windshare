@@ -23,22 +23,24 @@ var errParked = errors.New("network registration parked")
 
 type Clock interface {
 	Now() time.Time
-	Wait(context.Context, time.Duration) error
+	// A wake signal ends local backoff. A nil wake leaves only elapsed time or cancellation.
+	Wait(context.Context, time.Duration, <-chan struct{}) error
 }
 
-type wallSenderRelayRecoveryClock struct{}
+type SystemClock struct{}
 
-func (wallSenderRelayRecoveryClock) Now() time.Time { return time.Now() }
+func (SystemClock) Now() time.Time { return time.Now() }
 
-func (wallSenderRelayRecoveryClock) Wait(ctx context.Context, delay time.Duration) error {
+func (SystemClock) Wait(ctx context.Context, delay time.Duration, wake <-chan struct{}) error {
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
+	case <-wake:
 	case <-timer.C:
-		return nil
 	}
+	return nil
 }
 
 func (lifecycle *Lifecycle) recover(ctx context.Context) error {
@@ -75,18 +77,18 @@ func (lifecycle *Lifecycle) recoverRegistration(callerContext, recoveryContext c
 	slow := false
 	waitingAnnounced := false
 	for {
-		if err := lifecycle.recoveryCause(callerContext, recoveryContext); err != nil {
+		if err := lifecycle.waitForServerRetry(callerContext, recoveryContext); err != nil {
 			return err
 		}
 		resume := lifecycle.resumeNext
 		permit, authorization, err := lifecycle.acquireRegistrationAttempt(recoveryContext, resume, attempt)
 		if err != nil {
-			return err
+			return lifecycle.attemptCause(callerContext, recoveryContext, err)
 		}
 		started := lifecycle.config.Clock.Now()
 		event := Attempt{ShareInstance: lifecycle.config.Fresh.ShareInstance, Number: attempt, State: AttemptStarted, Generation: lifecycle.generation, Slow: slow, Resume: resume}
 		lifecycle.observeRecoveryAttempt(event)
-		dialErr := lifecycle.connectAttempt(callerContext, recoveryContext, resume, permit, event, authorization)
+		dialErr := lifecycle.connectAttempt(callerContext, recoveryContext, resume, permit, &event, authorization)
 		if permit != nil {
 			permit.Release()
 		}
@@ -95,6 +97,7 @@ func (lifecycle *Lifecycle) recoverRegistration(callerContext, recoveryContext c
 			return cause
 		}
 		if dialErr == nil {
+			lifecycle.serverRetryAt = time.Time{}
 			event.State, event.Generation = AttemptSucceeded, lifecycle.generation
 			lifecycle.observeRecoveryAttempt(event)
 			return nil
@@ -110,10 +113,11 @@ func (lifecycle *Lifecycle) recoverRegistration(callerContext, recoveryContext c
 		if lifecycle.registrationFailed(&event, dialErr) {
 			return dialErr
 		}
-		if !lifecycle.config.Clock.Now().Add(delay).Before(deadline) {
-			slow = true
-		}
-		wait := lifecycle.retryDelay(delay, slow, dialErr)
+		now := lifecycle.config.Clock.Now()
+		slow = slow || !now.Add(delay).Before(deadline)
+		wait := max(lifecycle.retryDelay(delay, slow), event.ServerRetryAt.Sub(now))
+		// Announce the actual wait crossing the fast window without delaying this retry further.
+		slow = slow || !now.Add(wait).Before(deadline)
 		event.NextDelay = wait
 		lifecycle.observeRecoveryAttempt(event)
 		if slow && !waitingAnnounced {
@@ -121,8 +125,8 @@ func (lifecycle *Lifecycle) recoverRegistration(callerContext, recoveryContext c
 			lifecycle.observeRecoveryAttempt(event)
 			waitingAnnounced = true
 		}
-		if err := lifecycle.wait(callerContext, recoveryContext, wait); err != nil {
-			return err
+		if err := lifecycle.config.Clock.Wait(recoveryContext, wait, lifecycle.wake); err != nil {
+			return lifecycle.attemptCause(callerContext, recoveryContext, err)
 		}
 		delay = min(delay*2, senderRelayRetryMaximum)
 		if attempt != ^uint32(0) {
@@ -156,32 +160,33 @@ func (lifecycle *Lifecycle) registrationFailed(event *Attempt, failure error) bo
 	return event.Terminal
 }
 
-func (lifecycle *Lifecycle) wait(caller, ctx context.Context, delay time.Duration) error {
-	waitContext, cancel := context.WithCancel(ctx)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		select {
-		case <-lifecycle.wake:
-			cancel()
-		case <-waitContext.Done():
+// A server deadline belongs to the registration, so it survives a local wake
+// and cancellation of the caller that first received the refusal.
+func (lifecycle *Lifecycle) waitForServerRetry(caller, recovery context.Context) error {
+	for {
+		if err := lifecycle.recoveryCause(caller, recovery); err != nil {
+			return err
 		}
-	}()
-	err := lifecycle.config.Clock.Wait(waitContext, delay)
-	cancel()
-	<-done
-	if cause := lifecycle.recoveryCause(caller, ctx); cause != nil {
-		return cause
+		remaining := lifecycle.serverRetryAt.Sub(lifecycle.config.Clock.Now())
+		if remaining <= 0 {
+			return nil
+		}
+		if err := lifecycle.config.Clock.Wait(recovery, remaining, nil); err != nil {
+			return lifecycle.attemptCause(caller, recovery, err)
+		}
 	}
-	if errors.Is(err, context.Canceled) {
-		return nil
+}
+
+func (lifecycle *Lifecycle) attemptCause(caller, recovery context.Context, err error) error {
+	if cause := lifecycle.recoveryCause(caller, recovery); cause != nil {
+		return cause
 	}
 	return err
 }
 
 // connectAttempt contains ownership arbitration around one bounded handshake.
 // A success observed after cancellation is retired before it can advertise readiness.
-func (lifecycle *Lifecycle) connectAttempt(caller, recovery context.Context, resume bool, permit AttemptPermit, attempt Attempt, authorization Authorization) error {
+func (lifecycle *Lifecycle) connectAttempt(caller, recovery context.Context, resume bool, permit AttemptPermit, attempt *Attempt, authorization Authorization) error {
 	init := lifecycle.config.Fresh
 	var descriptor []byte
 	if resume {
@@ -191,16 +196,26 @@ func (lifecycle *Lifecycle) connectAttempt(caller, recovery context.Context, res
 	}
 	dialContext, cancel := context.WithTimeout(recovery, senderRelayAttemptTimeout)
 	dialOptions := registrationDialOptions(lifecycle.config.LifecycleObservationCapacity, resume, authorization)
+	stageAttempt := *attempt
 	dialOptions.ObserveStage = func(stage relayv2.DialStage) {
-		event := attempt
+		event := stageAttempt
 		event.State, event.Stage, event.Duration, event.Failure = AttemptStage, stage.Stage, stage.Duration, stage.Failure
 		lifecycle.observeRecoveryAttempt(event)
 	}
+	started := lifecycle.config.Clock.Now()
 	connection, err := lifecycle.config.Dialer.Dial(dialContext, relayv2.SenderConfig{
 		RelayBaseURL: lifecycle.config.Candidate.PublicURL, Init: init, SenderPrivateKey: lifecycle.config.PrivateKey,
 		ResumeToken: lifecycle.config.ResumeToken, Descriptor: descriptor,
 		Dial: dialOptions,
 	})
+	finished := lifecycle.config.Clock.Now()
+	attempt.HandshakeDuration = finished.Sub(started)
+	if delay := min(relayv2.RetryAfter(err), 2*senderRelaySlowRetry); delay > 0 {
+		if until := finished.Add(delay); until.After(lifecycle.serverRetryAt) {
+			lifecycle.serverRetryAt = until
+		}
+		attempt.ServerRetryAt = lifecycle.serverRetryAt
+	}
 	// Delivery uncertainty survives later failures: a lost acknowledgement can
 	// leave a registration that must be resumed and permanently revoked on stop.
 	delivery := serviceauthority.RegistrationNotSent
@@ -266,16 +281,10 @@ func classifyRegistrationFailure(resume bool, failure error) (resumeNext, termin
 	}
 }
 
-func (lifecycle *Lifecycle) retryDelay(fast time.Duration, slow bool, failure error) time.Duration {
-	delay := fast
-	if slow {
-		delay = lifecycle.config.Jitter(senderRelaySlowRetry)
-		// Bound injected jitter as well, so scheduler defects cannot cause a hot loop.
-		delay = max(senderRelaySlowRetry/2, min(delay, senderRelaySlowRetry*3/2))
+func (lifecycle *Lifecycle) retryDelay(fast time.Duration, slow bool) time.Duration {
+	if !slow {
+		return fast
 	}
-	var relayError *relayv2.RelayError
-	if errors.As(failure, &relayError) && relayError.RetryAfter > delay {
-		delay = min(relayError.RetryAfter, senderRelaySlowRetry*2)
-	}
-	return delay
+	// Bound injected jitter so scheduler defects cannot cause a hot loop.
+	return max(senderRelaySlowRetry/2, min(lifecycle.config.Jitter(senderRelaySlowRetry), senderRelaySlowRetry*3/2))
 }

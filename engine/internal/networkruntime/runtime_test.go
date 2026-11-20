@@ -34,7 +34,7 @@ func fixtureRuntime(t *testing.T) *Runtime {
 		t.Fatal(err)
 	}
 	key, _ := base64.RawURLEncoding.DecodeString(fixture.Roots[0].Key)
-	r, err := New(nil, func() time.Time { return fixture.Now })
+	r, err := New(nil, func() time.Time { return fixture.Now }, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func TestAliasResolutionReturnsKnownPathsBeforeRefresh(t *testing.T) {
 }
 
 func TestLibraryRuntimeHasNoImplicitInfrastructure(t *testing.T) {
-	r, err := New(nil, time.Now)
+	r, err := New(nil, time.Now, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +177,7 @@ func TestUnreadableTrustStatePreservesExplicitRelays(t *testing.T) {
 	cause := errors.New("trust state unavailable")
 	r, err := New(&networkconfig.Config{Directory: networkdirectory.Config{
 		Network: "test", Cache: &brokenCache{err: cause},
-	}}, time.Now)
+	}}, time.Now, "")
 	if err != nil {
 		t.Fatal(err)
 	}

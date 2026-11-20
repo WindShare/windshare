@@ -13,7 +13,7 @@ fn access_failure_is_retryable_without_claiming_sender_ownership() {
         &mut host,
         connection(1),
         &f.frame("registerInitB64"),
-        RegistrationDecision::Unavailable,
+        RegistrationDecision::SERVICE_UNAVAILABLE,
     )
     .unwrap();
     assert!(host.stored.is_none());
