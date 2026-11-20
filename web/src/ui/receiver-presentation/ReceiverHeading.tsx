@@ -1,8 +1,10 @@
 import { useRef, useState, useSyncExternalStore, type FormEvent } from 'react'
+import type { InitialJoinState } from '../../receiver/initial-join'
 import type { ReceiverController } from '../controller'
 import { shareConnectionLabel } from '../experience/share-presentation'
 import { ConnectionDetails } from '../experience/ConnectionDetails'
 import { ConnectionRecovery } from '../connection/ConnectionRecovery'
+import { useCountdownSeconds } from '../connection/countdown'
 import { connectedChannelCount } from '../connection/path-presentation'
 import { DetailSheet } from '../controls/DetailSheet'
 import { DiagnosticsEntry } from '../diagnostics/DiagnosticsEntry'
@@ -23,6 +25,8 @@ export function ReceiverHeading({ controller }: { readonly controller: ReceiverC
     setDetails(true)
   }
   const closeDetails = () => { controller.recordExperienceIntent('close-details'); setDetails(false) }
+  const join = snapshot.connection.kind === 'idle' ? snapshot.connection.join : undefined
+  const joinRetryAt = join?.kind === 'paused' || join?.kind === 'waiting' ? join.retryAt : undefined
   return <>
     <div className="share-heading">
       <div className="share-heading-copy">
@@ -42,21 +46,41 @@ export function ReceiverHeading({ controller }: { readonly controller: ReceiverC
     </div>
     {snapshot.error !== null && <div className="share-error" role="alert">{snapshot.error} <DiagnosticsEntry label="Export diagnostics" /></div>}
     {snapshot.phase === 'awaiting-key' && <KeyForm controller={controller} />}
-    {share === null && breadcrumbs.length === 0 && snapshot.phase === 'joining' && <div className="share-loading">
-      <p role="status">{snapshot.status}</p>
-      <div className="share-loading-actions">
-        {snapshot.connection.kind === 'idle' && snapshot.connection.join?.kind === 'paused' && <>
-          <button type="button" className="primary-action" onClick={() => controller.requestReconnect()}>Retry now</button>
-          <button type="button" onClick={() => controller.continueJoinWaiting()}>Continue waiting</button>
-        </>}
-        <button type="button" onClick={() => controller.cancelJoin()}>Cancel</button>
-      </div>
-    </div>}
+    {share === null && breadcrumbs.length === 0 && snapshot.phase === 'joining' &&
+      <InitialJoinLoading key={joinRetryAt ?? 'none'} status={snapshot.status} join={join} controller={controller} />}
     {snapshot.connection.kind === 'reconnecting' && <ConnectionRecovery activity={snapshot.connection.activity} retry={() => controller.requestReconnect()} />}
     {details && <DetailSheet title="Encryption and connection" onClose={closeDetails} returnFocus={invoker}>
       <ConnectionDetails status={label} path={snapshot.pathActivity} />
     </DetailSheet>}
   </>
+}
+
+function InitialJoinLoading({ status, join, controller }: {
+  readonly status: string
+  readonly join: InitialJoinState | undefined
+  readonly controller: ReceiverController
+}) {
+  const retryAt = join?.kind === 'paused' || join?.kind === 'waiting' ? join.retryAt : undefined
+  const seconds = useCountdownSeconds(retryAt)
+  const coolingDown = join?.kind === 'paused' && seconds > 0
+  let countdown: string | null = null
+  if (join?.kind === 'waiting' && retryAt !== undefined) {
+    countdown = seconds > 0 ? `Retrying automatically in ${seconds} s.` : 'Retrying shortly…'
+  } else if (coolingDown) {
+    countdown = `Retry available in ${seconds} s.`
+  }
+  return <div className="share-loading">
+    <p role="status">{status}</p>
+    {countdown !== null && <p className="connection-recovery-countdown" role="timer" aria-live="off">{countdown}</p>}
+    <div className="share-loading-actions">
+      {join?.kind === 'paused' && <>
+        <button type="button" className="primary-action" disabled={coolingDown}
+          onClick={() => controller.requestReconnect()}>{coolingDown ? 'Please wait' : 'Retry now'}</button>
+        <button type="button" onClick={() => controller.continueJoinWaiting()}>Continue waiting</button>
+      </>}
+      <button type="button" onClick={() => controller.cancelJoin()}>Cancel</button>
+    </div>
+  </div>
 }
 
 function KeyForm({ controller }: { readonly controller: ReceiverController }) {

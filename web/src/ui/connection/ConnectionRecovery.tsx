@@ -1,9 +1,6 @@
-import { useEffect, useId, useState } from 'react'
+import { useId } from 'react'
 import type { ReceiverReconnectActivity } from '../../receiver/connection-state'
-import { systemReconnectClock } from '../../receiver/recovery-clock'
-
-const COUNTDOWN_INTERVAL_MILLISECONDS = 1_000
-const MILLISECONDS_PER_SECOND = 1_000
+import { useCountdownSeconds } from './countdown'
 
 export function ConnectionRecovery({ activity, retry }: {
   readonly activity: ReceiverReconnectActivity
@@ -38,17 +35,7 @@ function recoveryMessage(activity: ReceiverReconnectActivity): string {
 }
 
 function RetryCountdown({ retryAt }: { readonly retryAt: number }) {
-  const [now, setNow] = useState(() => systemReconnectClock.now())
-  useEffect(() => {
-    if (systemReconnectClock.now() >= retryAt) return
-    const timer = setInterval(() => {
-      const current = systemReconnectClock.now()
-      setNow(current)
-      if (current >= retryAt) clearInterval(timer)
-    }, COUNTDOWN_INTERVAL_MILLISECONDS)
-    return () => clearInterval(timer)
-  }, [retryAt])
-  const seconds = Math.max(0, Math.ceil((retryAt - now) / MILLISECONDS_PER_SECOND))
+  const seconds = useCountdownSeconds(retryAt)
   // Countdown ticks must not repeatedly interrupt screen reader announcements.
   return <p className="connection-recovery-countdown" role="timer" aria-live="off">
     {seconds > 0 ? `Retrying automatically in ${seconds} s.` : 'Retrying shortly…'}

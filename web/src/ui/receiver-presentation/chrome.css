@@ -144,6 +144,7 @@
   text-align: center;
 }
 .share-loading p { margin: 0 0 16px; }
+.share-loading .connection-recovery-countdown { margin: -8px 0 16px; font-size: .8125rem; }
 .share-loading-actions { display: flex; justify-content: center; flex-wrap: wrap; gap: 10px; }
 .connection-recovery {
   display: flex;

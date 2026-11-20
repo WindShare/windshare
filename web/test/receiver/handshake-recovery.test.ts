@@ -165,8 +165,9 @@ describe('initial browser handshake under relay congestion', () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
-  it('limits a congested handshake and retains the capacity cause through the retry delay', async () => {
+  it('limits a congested handshake and pauses with its capacity cooldown deadline', async () => {
     vi.useFakeTimers()
+    vi.setSystemTime(0)
     const channel = new HandshakeChannel('silent')
     const allowDial = deferred<void>()
     const fixture = await initialJoinFixture({ relay: channel }, allowDial.promise)
@@ -181,13 +182,16 @@ describe('initial browser handshake under relay congestion', () => {
     await vi.advanceTimersByTimeAsync(1)
     expect(channel.state).toBe('closed')
     const failure = fixture.observations.find(event => event.transition === 'attempt_failed')?.failure
-    expect(recoveryBandwidthWait(failure)).toBe(30_000)
+    expect(recoveryBandwidthWait(failure)).toBe(15_000)
+    expect(fixture.states.at(-1)).toEqual({ kind: 'paused', reason: 'bandwidth', retryAt: 45_000 })
     fixture.control.request('retry')
-    await vi.advanceTimersByTimeAsync(29_999)
+    await vi.advanceTimersByTimeAsync(14_999)
     expect(fixture.dial).toHaveBeenCalledTimes(1)
-    expect(fixture.states.at(-1)).toEqual({ kind: 'waiting', reason: 'bandwidth' })
+    expect(fixture.states.at(-1)).toEqual({ kind: 'paused', reason: 'bandwidth', retryAt: 45_000 })
     await vi.advanceTimersByTimeAsync(1)
-    expect(fixture.states.at(-1)).toEqual({ kind: 'paused', reason: 'bandwidth' })
+    fixture.control.request('retry')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fixture.dial).toHaveBeenCalledTimes(2)
     fixture.parent.abort()
     await expect(fixture.task).rejects.toBe(fixture.parent.signal.reason)
     expect(vi.getTimerCount()).toBe(0)

@@ -118,19 +118,26 @@ function reportPressure(socket: FakeSocket, direction: 0 | 1, milliseconds: numb
 afterEach(() => vi.useRealTimers())
 
 describe('v2 receiver LaneSet', () => {
-  it('waits for bandwidth without spending retries and immediately uses an added direct path', async () => {
+  it('waits for bandwidth honoring server hints and minimum floor without spending retries', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
     const lanes = new LaneSet()
     let calls = 0
     lanes.add({ id: 1, fetchBlock: async () => {
       calls++
-      throw new BandwidthWaitError(1_000, new Error('fragment inactivity'))
+      // First failure exercises the anti-spin floor; later failures verify server hints are not inflated to 30 s.
+      const retryAfter = calls === 1 ? 500 : 15_000
+      throw new BandwidthWaitError(retryAfter, new Error('fragment inactivity'))
     } }, 'application-relay')
     const result = lanes.fetch(demand(0n), ALL_ROUTES, new AbortController().signal)
     await vi.advanceTimersByTimeAsync(0)
+    expect(calls).toBe(1)
+    await vi.advanceTimersByTimeAsync(MINIMUM_BANDWIDTH_RETRY_MILLISECONDS - 1)
+    expect(calls).toBe(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(calls).toBe(2)
     for (let round = 0; round < 17; round++) {
       const before = calls
-      await vi.advanceTimersByTimeAsync(29_999)
+      await vi.advanceTimersByTimeAsync(14_999)
       expect(calls).toBe(before)
       await vi.advanceTimersByTimeAsync(1)
       expect(calls).toBe(before + 1)
@@ -249,7 +256,7 @@ describe('v2 receiver LaneSet', () => {
       await vi.advanceTimersByTimeAsync(0)
       expect(calls).toBe(2)
       reportPressure(socket, 1, 0)
-      await vi.advanceTimersByTimeAsync(MINIMUM_BANDWIDTH_RETRY_MILLISECONDS - 1)
+      await vi.advanceTimersByTimeAsync(14_999)
       expect(calls).toBe(2)
       await vi.advanceTimersByTimeAsync(1)
       await expect(result).resolves.toMatchObject({ data: Uint8Array.of(1) })

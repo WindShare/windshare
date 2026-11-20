@@ -57,8 +57,9 @@ describe('initial receiver waiting', () => {
     expect(states).toContainEqual({ kind: 'waiting', reason: 'sender' })
   })
 
-  it('reports an official relay restriction immediately and allows retry after the cooldown', async () => {
+  it('pauses immediately with retry deadline on official relay restriction and allows retry after cooldown', async () => {
     vi.useFakeTimers()
+    vi.setSystemTime(0)
     const clock = { now: () => Date.now(), sleep: systemReconnectClock.sleep }
     const control = new InitialJoinControl()
     const lifetime = new AbortController()
@@ -78,19 +79,67 @@ describe('initial receiver waiting', () => {
     }).catch((failure: unknown) => failure)
     try {
       await vi.advanceTimersByTimeAsync(0)
-      expect(states.at(-1)).toEqual({ kind: 'waiting', reason: 'authorization' })
+      expect(states.at(-1)).toEqual({ kind: 'paused', reason: 'authorization', retryAt: RELAY_POLICY_RETRY_MS })
+      // Early retry clicks cannot bypass the policy cooldown.
       control.request('retry')
       await vi.advanceTimersByTimeAsync(RELAY_POLICY_RETRY_MS - 1)
       expect(dial).toHaveBeenCalledTimes(candidates.bases.length)
-      expect(states.at(-1)).toEqual({ kind: 'waiting', reason: 'authorization' })
+      expect(states.at(-1)).toEqual({ kind: 'paused', reason: 'authorization', retryAt: RELAY_POLICY_RETRY_MS })
       await vi.advanceTimersByTimeAsync(1)
-      expect(states.at(-1)).toEqual({ kind: 'paused', reason: 'authorization' })
       restricted = false
       control.request('retry')
       await expect(task).resolves.toBe('authenticated-session')
     } finally {
       lifetime.abort()
       await task
+    }
+  })
+
+  it('continues waiting through an active cooldown and fails fast without interactive control', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(0)
+    const clock = { now: () => Date.now(), sleep: systemReconnectClock.sleep }
+    const close = async () => undefined
+    const headlessRecovery = new RelayRecovery(['official'], clock)
+    await expect(runInitialJoin({
+      clock, signal: new AbortController().signal, relayRecovery: headlessRecovery, close,
+      connect: attempt => headlessRecovery.race(attempt.signal, async () => { throw new RelayPolicyDeniedError() }, close),
+    })).rejects.toBeInstanceOf(InitialJoinUnavailableError)
+    expect(Date.now()).toBe(0)
+    expect(vi.getTimerCount()).toBe(0)
+
+    const control = new InitialJoinControl()
+    const lifetime = new AbortController()
+    const relayRecovery = new RelayRecovery(['official'], clock)
+    const states: InitialJoinState[] = []
+    let restricted = true
+    const dial = vi.fn(async () => {
+      if (restricted) throw new RelayPolicyDeniedError()
+      return 'authenticated-session'
+    })
+    const task = runInitialJoin({
+      clock, control, signal: lifetime.signal, relayRecovery, close,
+      connect: attempt => relayRecovery.race(attempt.signal, dial, close),
+      onState: state => states.push(state),
+    })
+    try {
+      await vi.advanceTimersByTimeAsync(0)
+      expect(states.at(-1)).toEqual({ kind: 'paused', reason: 'authorization', retryAt: RELAY_POLICY_RETRY_MS })
+      await vi.advanceTimersByTimeAsync(10_000)
+      control.request('continue')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(states.at(-1)).toEqual({ kind: 'waiting', reason: 'authorization', retryAt: RELAY_POLICY_RETRY_MS })
+      expect(dial).toHaveBeenCalledTimes(1)
+      restricted = false
+      await vi.advanceTimersByTimeAsync(RELAY_POLICY_RETRY_MS - 10_001)
+      expect(dial).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(1)
+      await expect(task).resolves.toBe('authenticated-session')
+      expect(dial).toHaveBeenCalledTimes(2)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      lifetime.abort()
+      await task.catch(() => undefined)
     }
   })
 

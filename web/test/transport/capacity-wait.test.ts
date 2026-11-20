@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { decodeCapacityWait } from '../../src/transport/relay/capacity-wait-codec'
-import { BandwidthWaitError } from '../../src/contracts/capacity'
+import {
+  BandwidthWaitError,
+  MAXIMUM_BANDWIDTH_RETRY_MILLISECONDS,
+  MINIMUM_BANDWIDTH_RETRY_MILLISECONDS,
+} from '../../src/contracts/capacity'
 import { recoveryRetry } from '../../src/receiver/recovery-failure'
 
 describe('relay bandwidth waits', () => {
@@ -22,8 +26,10 @@ describe('relay bandwidth waits', () => {
     const error = new BandwidthWaitError(15_000, cause)
     expect(error.cause).toBe(cause)
     expect(recoveryRetry(new AggregateError([new Error('lane', { cause: error })]), 10)).toEqual({
-      retryAt: 30_010, reason: 'bandwidth',
+      retryAt: 15_010, reason: 'bandwidth',
     })
+    expect(new BandwidthWaitError(500, cause).retryAfterMilliseconds).toBe(MINIMUM_BANDWIDTH_RETRY_MILLISECONDS)
+    expect(new BandwidthWaitError(90_000, cause).retryAfterMilliseconds).toBe(MAXIMUM_BANDWIDTH_RETRY_MILLISECONDS)
     expect(recoveryRetry(new Error('connection failed'), 10)).toBeUndefined()
   })
 })
