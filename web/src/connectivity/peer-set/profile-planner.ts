@@ -58,13 +58,13 @@ export class PeerProfilePlanner {
     this.#facts.snapshot())
   }
 
-  observe(profile: AttemptICEProfile, fact: PeerProviderFact, startedAt: number, nowMs: number): void {
+  observe(profile: AttemptICEProfile, fact: PeerProviderFact, nowMs: number): void {
     if (fact.kind === 'ice-error') {
       const index = profile.urls.indexOf(fact.endpoint)
       const endpointID = profile.endpointIDs[index]
       if (endpointID !== undefined) this.#facts.recordEndpointFailure(profile, endpointID, nowMs)
     } else if (fact.kind === 'candidate' && fact.candidateType === 'srflx' && fact.disposition === 'accepted') {
-      this.#facts.recordProfile(profile, true, Math.max(0, nowMs - startedAt), nowMs)
+      this.#facts.recordProfile(profile, true, nowMs)
     }
   }
 }

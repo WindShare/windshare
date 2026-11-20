@@ -62,24 +62,20 @@ func (n *NativePeerConnectivity) selectProfileLocked(snapshot networkstate.Snaps
 
 	return profile
 }
-func (n *NativePeerConnectivity) attemptObserver(key pathKey, path *pathResources, profile icepolicy.AttemptICEProfile, binding v2signal.Binding, now time.Time) func(pionpeer.Event) {
+func (n *NativePeerConnectivity) attemptObserver(key pathKey, path *pathResources, profile icepolicy.AttemptICEProfile, binding v2signal.Binding) func(pionpeer.Event) {
 	generation := path.generation
 	subject := Subject{ProtocolSessionID: key.session, PeerPathID: [16]byte(key.path), AttemptID: [16]byte(binding.AttemptID), AttemptSequence: binding.AttemptSequence, NetworkGenerationID: generation, ICEProfileID: profile.ID(), Side: n.config.Side}
 	facts := n.facts
 	var observationMu sync.Mutex
 	produced := false
-	firstDelay := time.Duration(-1)
 	return func(event pionpeer.Event) {
 		observationMu.Lock()
 		if event.Candidate != nil && event.Candidate.Type == "srflx" && event.Candidate.Origin == "ordinary" {
-			if firstDelay < 0 {
-				firstDelay = max(event.At.Sub(now), 0)
-			}
 			produced = true
-			facts.RecordProfile(profile, produced, firstDelay, event.At)
+			facts.RecordProfile(profile, true, event.At)
 		}
-		if event.Milestone == "gathering_complete" && firstDelay < 0 {
-			facts.RecordProfile(profile, false, 0, event.At)
+		if event.Milestone == "gathering_complete" && !produced {
+			facts.RecordProfile(profile, false, event.At)
 		}
 		observationMu.Unlock()
 		n.recordSelectedMapping(key, path, generation, event.Pair)

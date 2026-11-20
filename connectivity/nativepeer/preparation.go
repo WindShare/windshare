@@ -272,7 +272,7 @@ func (p *PreparedAttempt) connect(ctx context.Context) (*pionpeer.Connection, er
 	if p.turn != nil {
 		config.TURN = &pionpeer.TURNConfig{Plan: p.turnPlan, Reservation: p.turn}
 	}
-	observer := n.attemptObserver(p.key, path, p.profile, p.request.Binding, now)
+	observer := n.attemptObserver(p.key, path, p.profile, p.request.Binding)
 	config.Observe = func(event pionpeer.Event) {
 		observer(event)
 		if event.Milestone == "provider_closed" {

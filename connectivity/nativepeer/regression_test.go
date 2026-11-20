@@ -94,7 +94,7 @@ func TestProfilesRotateOnceAndNeverLoseSingletonSTUNOnLaterAttempts(t *testing.T
 		})
 	}
 }
-func TestMappedCandidateCannotClaimSTUNSuccessOrHostDelay(t *testing.T) {
+func TestMappedCandidateCannotClaimSTUNSuccess(t *testing.T) {
 	h := newHarness(t)
 	_, _ = h.native.NewPeerConnection(context.Background(), request(1))
 	emit := h.requests[0].Observe
@@ -102,7 +102,7 @@ func TestMappedCandidateCannotClaimSTUNSuccessOrHostDelay(t *testing.T) {
 	emit(pionpeer.Event{At: h.now.Add(time.Second), Candidate: &pionpeer.CandidateFacts{Type: "srflx", Origin: "mapped"}})
 	emit(pionpeer.Event{At: h.now.Add(2 * time.Second), Milestone: "gathering_complete"})
 	facts := h.native.facts.Snapshot()
-	if len(facts.Profiles) != 1 || facts.Profiles[0].ServerReflexiveProduced || facts.Profiles[0].FirstCandidateDelay != 0 || len(facts.Endpoints) != 0 {
+	if len(facts.Profiles) != 1 || facts.Profiles[0].ServerReflexiveProduced || len(facts.Endpoints) != 0 {
 		t.Fatal(facts)
 	}
 }

@@ -51,7 +51,7 @@ export interface SelectionRequest {
 export interface GenerationFacts {
  readonly networkGenerationID: string
  readonly endpoints: readonly { readonly endpointID: string; readonly failedUntilMs: number }[]
-  readonly profiles?: readonly { readonly profileID: string; readonly serverReflexiveProduced: boolean; readonly firstCandidateDelayMs: number; readonly endpointIDs: readonly string[]; readonly observedAtMs: number }[]
+  readonly profiles?: readonly { readonly profileID: string; readonly serverReflexiveProduced: boolean; readonly endpointIDs: readonly string[]; readonly observedAtMs: number }[]
 }
 export interface AttemptICEProfile {
  readonly id: string

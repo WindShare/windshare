@@ -90,7 +90,6 @@ type EndpointFact struct {
 type ProfileFact struct {
 	ProfileID               string
 	ServerReflexiveProduced bool
-	FirstCandidateDelay     time.Duration
 	EndpointIDs             []string
 	ObservedAt              time.Time
 }
