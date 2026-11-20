@@ -14,9 +14,10 @@ impl Desktop {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Runtime::Preview { delay } = self.runtime else {
+        let Runtime::Preview(preview) = &self.runtime else {
             return;
         };
+        let delay = preview.delay;
         let operation = self.next_operation();
         self.shares.insert(
             0,

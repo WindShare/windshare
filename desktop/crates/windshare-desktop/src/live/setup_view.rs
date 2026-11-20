@@ -15,17 +15,22 @@ impl Desktop {
         target: SharingSetupTarget,
         cx: &Context<Self>,
     ) -> Div {
-        let Runtime::Native(session) = &self.runtime else {
-            return column();
-        };
+        let prefs = self.relay_preferences_view();
         let locale = language(cx);
-        let setup = &session.model.setup;
+        let idle = windshare_host::Setup::Idle;
         let id = target.share_id();
         let operation = id.and_then(|id| self.native_operation(id)).unwrap_or("");
+        let (setup, command_error, waits_official) = match &self.runtime {
+            Runtime::Native(session) => (
+                &session.model.setup,
+                session.model.command_error.as_ref(),
+                session.model.waits_for_official_authorization(operation),
+            ),
+            Runtime::Preview(_) => (&idle, None, false),
+        };
         if let Some(progress) = self.setup_return(theme, operation, cx) {
             return progress;
         }
-        let prefs = &session.model.preferences;
         let form = &self.setup_form;
         let locked = form.pending.is_some() || self.runtime.selection_disabled();
         let busy = locked || setup.unfinished();
@@ -52,56 +57,75 @@ impl Desktop {
         if setup.busy() && connecting || setup.requires_cancellation() {
             return panel.child(Self::setup_progress(theme, setup, cx));
         }
-        match form.page {
-            SetupPage::Selection => {
-                panel = panel.child(Self::relay_preferences(
+        let close_on_back = matches!(target, SharingSetupTarget::Defaults);
+        panel = match form.page {
+            SetupPage::Selection => panel
+                .child(Self::relay_preferences(
                     theme,
                     prefs,
                     switch_share,
-                    busy || switch_share.is_some()
-                        && !session.model.waits_for_official_authorization(operation),
+                    busy || switch_share.is_some() && !waits_official,
                     cx,
-                ));
-                if switch_share.is_none()
-                    && let Some(share) = share.filter(|share| !share.finished() && !share.live())
-                {
-                    panel = panel.child(
-                        Self::button(
-                            "use-saved-sharing-settings",
-                            locale.text(Text::UseSavedSettings),
-                            Icon::Refresh,
-                            ButtonStyle::Secondary,
-                            Action::UseSavedSettings(share.id),
-                            cx,
+                ))
+                .when_some(
+                    share.filter(|share| {
+                        switch_share.is_none() && !share.finished() && !share.live()
+                    }),
+                    |panel, share| {
+                        panel.child(
+                            Self::button(
+                                "use-saved-sharing-settings",
+                                locale.text(Text::UseSavedSettings),
+                                Icon::Refresh,
+                                ButtonStyle::Secondary,
+                                Action::UseSavedSettings(share.id),
+                                cx,
+                            )
+                            .disabled(busy),
                         )
-                        .disabled(busy),
-                    );
-                }
-            }
-            SetupPage::Relay(_) => {
-                let blocked = locked || !setup.can_configure(operation);
-                panel = panel.child(self.connect_relay_fields(theme, id, blocked, busy, cx));
-            }
+                    },
+                ),
+            SetupPage::Relay(_) => panel.child(self.connect_relay_fields(
+                theme,
+                id,
+                locked || !setup.can_configure(operation),
+                busy,
+                close_on_back,
+                cx,
+            )),
             SetupPage::ReceiverSite => {
-                panel = panel.child(self.receiver_website(theme, prefs, id, busy, cx));
+                panel.child(self.receiver_website(theme, prefs, id, busy, close_on_back, cx))
             }
+        };
+        if let Some(feedback) = self.sharing_setup_feedback(theme, setup, command_error, cx) {
+            panel = panel.child(feedback);
         }
+        panel
+    }
+
+    fn sharing_setup_feedback(
+        &self,
+        theme: Theme,
+        setup: &windshare_host::Setup,
+        command_error: Option<&String>,
+        cx: &Context<Self>,
+    ) -> Option<Div> {
+        let locale = language(cx);
         if setup.unfinished() && !setup.busy() {
-            panel = panel.child(Self::setup_progress(theme, setup, cx));
-        } else if let Some(feedback) = &form.feedback {
+            Some(Self::setup_progress(theme, setup, cx))
+        } else if let Some(feedback) = &self.setup_form.feedback {
             let (message, tone) = match feedback {
                 Ok(label) => (locale.text(*label).to_owned(), Tone::Mint),
                 Err(error) => (error.clone(), Tone::Rose),
             };
-            panel = panel.child(theme.caption(message).text_color(tone.text(theme)));
-        } else if let Some(error) = &session.model.command_error {
-            panel = panel.child(
+            Some(theme.caption(message).text_color(tone.text(theme)))
+        } else {
+            command_error.map(|error| {
                 theme
                     .caption(error.clone())
-                    .text_color(Tone::Rose.text(theme)),
-            );
+                    .text_color(Tone::Rose.text(theme))
+            })
         }
-        panel
     }
 
     fn connect_relay_fields(
@@ -110,6 +134,7 @@ impl Desktop {
         id: Option<usize>,
         blocked: bool,
         busy: bool,
+        close_on_back: bool,
         cx: &Context<Self>,
     ) -> Div {
         let form = &self.setup_form;
@@ -143,7 +168,7 @@ impl Desktop {
                         )
                         .disabled(blocked || form.relay.read(cx).value().trim().is_empty()),
                     )
-                    .child(Self::back_to_relays(busy, cx)),
+                    .child(Self::back_to_relays(busy, close_on_back, cx)),
             )
     }
 
@@ -153,6 +178,7 @@ impl Desktop {
         prefs: &RelayPreferences,
         id: Option<usize>,
         busy: bool,
+        close_on_back: bool,
         cx: &Context<Self>,
     ) -> Div {
         let locale = language(cx);
@@ -182,9 +208,9 @@ impl Desktop {
                         )
                         .disabled(busy || url.is_empty() || url == prefs.frontend),
                     )
-                    .child(Self::back_to_relays(busy, cx)),
+                    .child(Self::back_to_relays(busy, close_on_back, cx)),
             );
-        if prefs.custom_frontend {
+        if !close_on_back && prefs.custom_frontend {
             panel = panel.child(
                 Self::preference_button(
                     "default-website",
@@ -197,12 +223,16 @@ impl Desktop {
                 .disabled(busy),
             );
         }
-        let offered: std::collections::BTreeSet<_> = prefs
-            .relays
-            .iter()
-            .filter_map(|relay| relay.offered_frontend.as_deref())
-            .filter(|url| *url != prefs.frontend)
-            .collect();
+        let offered: std::collections::BTreeSet<_> = if close_on_back {
+            std::collections::BTreeSet::new()
+        } else {
+            prefs
+                .relays
+                .iter()
+                .filter_map(|relay| relay.offered_frontend.as_deref())
+                .filter(|url| *url != prefs.frontend)
+                .collect()
+        };
         if !offered.is_empty() {
             panel = panel
                 .child(theme.separator())
@@ -234,13 +264,22 @@ impl Desktop {
         panel
     }
 
-    fn back_to_relays(busy: bool, cx: &Context<Self>) -> windshare_ui::Button {
+    fn back_to_relays(busy: bool, close_on_back: bool, cx: &Context<Self>) -> windshare_ui::Button {
+        let (label, icon, action) = if close_on_back {
+            (Text::Cancel, Icon::Close, Action::Close)
+        } else {
+            (
+                Text::BackToRelays,
+                Icon::ArrowLeft,
+                Action::SetupPage(SetupPage::Selection),
+            )
+        };
         Self::button(
             "back-to-relays",
-            language(cx).text(Text::BackToRelays),
-            Icon::ArrowLeft,
+            language(cx).text(label),
+            icon,
             ButtonStyle::Quiet,
-            Action::SetupPage(SetupPage::Selection),
+            action,
             cx,
         )
         .disabled(busy)

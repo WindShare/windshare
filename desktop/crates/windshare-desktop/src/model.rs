@@ -39,6 +39,32 @@ impl Page {
         }
     }
 }
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SettingsSection {
+    #[default]
+    General,
+    Network,
+    Account,
+    Diagnostics,
+}
+impl SettingsSection {
+    pub const fn title(self, language: Language) -> &'static str {
+        match self {
+            Self::General => language.text(Text::SettingsGeneral),
+            Self::Network => language.text(Text::SettingsNetwork),
+            Self::Account => language.text(Text::SettingsAccount),
+            Self::Diagnostics => language.text(Text::Diagnostics),
+        }
+    }
+    pub const fn icon(self) -> Icon {
+        match self {
+            Self::General => Icon::Sliders,
+            Self::Network => Icon::Globe,
+            Self::Account => Icon::User,
+            Self::Diagnostics => Icon::Activity,
+        }
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Filter {
     All,
@@ -113,11 +139,14 @@ pub enum Action {
     StopShare(usize),
     ShareAgain(usize),
     ConfigureShare(usize),
-    ConfigureNetwork,
     ChooseShareRelays(usize),
     SetupPage(crate::live::SetupPage),
+    OpenSetupModal(crate::live::SetupPage),
     OpenAccount,
+    OpenAccountModal(crate::live::AccountPage),
+    CopyAccountUid,
     Account(crate::live::AccountAction),
+    SettingsSection(SettingsSection),
     ReturnToSharingSetup,
     SaveSharingSetup(Option<usize>),
     ResumeShare(usize),

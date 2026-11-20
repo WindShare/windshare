@@ -123,15 +123,7 @@ fn run_preview(compact: bool, share_delay_ms: u64) {
                 ..Default::default()
             };
             cx.open_window(options, |window, cx| {
-                cx.new(|cx| {
-                    Desktop::new(
-                        window,
-                        live::Runtime::Preview {
-                            delay: preview_share_delay,
-                        },
-                        cx,
-                    )
-                })
+                cx.new(|cx| Desktop::new(window, live::Runtime::preview(preview_share_delay), cx))
             })
             .expect("WindShare needs an available native GPU window");
             tracing::info!(

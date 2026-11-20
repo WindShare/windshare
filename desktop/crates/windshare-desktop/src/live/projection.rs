@@ -72,7 +72,7 @@ pub fn update_share(share: &mut Share, operation: &Operation) {
     }
 }
 
-pub(super) fn byte_size(bytes: u64) -> String {
+pub fn byte_size(bytes: u64) -> String {
     const KIB: u64 = 1024;
     const UNITS: [(u64, &str); 4] = [
         (KIB.pow(4), "TiB"),
