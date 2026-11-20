@@ -2,7 +2,7 @@
 mod pacing;
 
 use super::access::Service;
-use pacing::Pacing;
+use pacing::Bandwidth;
 use std::{
     collections::{BTreeMap, VecDeque},
     sync::{Arc, Mutex},
@@ -47,7 +47,7 @@ struct State {
     references: BTreeMap<Key, usize>,
     lanes: BTreeMap<u64, Lane>,
     sequence: u64,
-    pacing: Pacing,
+    pacing: Bandwidth,
     classified: u64,
 }
 
@@ -72,7 +72,7 @@ impl Governor {
                 references: BTreeMap::new(),
                 lanes: BTreeMap::new(),
                 sequence: 0,
-                pacing: Pacing::default(),
+                pacing: Bandwidth::default(),
                 classified: 0,
             })),
             access,
@@ -82,22 +82,29 @@ impl Governor {
     pub(super) fn publish_capacity<T>(
         &self,
         bytes_per_second: Option<u64>,
+        public_bytes_per_second: Option<u64>,
         publish_node: impl FnOnce() -> T,
     ) -> T {
         let mut state = self.state.lock().expect("governor");
-        let changed = state.pacing.configure(bytes_per_second, Instant::now());
+        let now = Instant::now();
+        let node_changed = state.pacing.node.configure(bytes_per_second, now);
+        let public_changed = state.pacing.public.configure(public_bytes_per_second, now);
         // A scheduler pass must see the new rate and its admission policy together.
         let result = publish_node();
         drop(state);
-        if changed {
-            tracing::info!(event = "governor_capacity_changed", ?bytes_per_second);
+        if node_changed || public_changed {
+            tracing::info!(
+                event = "governor_capacity_changed",
+                ?bytes_per_second,
+                ?public_bytes_per_second
+            );
         }
         result
     }
 
     #[cfg(test)]
     pub(super) fn capacity(&self) -> Option<u64> {
-        self.state.lock().unwrap().pacing.capacity()
+        self.state.lock().unwrap().pacing.node.capacity()
     }
 
     pub fn register(
@@ -172,8 +179,10 @@ impl State {
             self.classified = second;
         }
         let mut remaining = available;
-        while let Some((session, bytes)) = self.scheduler.next(remaining) {
-            remaining -= bytes;
+        while let Some((session, _)) = self
+            .scheduler
+            .next(|class, bytes| remaining.reserve(class, bytes))
+        {
             let queue = self.queues.get_mut(&session).expect("scheduled session");
             let id = queue.pop_front().expect("scheduled lane");
             let next = queue.front().copied();
@@ -185,7 +194,7 @@ impl State {
                 assert!(self.scheduler.request(session, demand));
             }
         }
-        self.pacing.charge(available - remaining);
+        self.pacing.charge(&available, &remaining);
     }
 }
 

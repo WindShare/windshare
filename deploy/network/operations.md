@@ -43,7 +43,7 @@ records. Private keys and API credentials stay outside the checkout.
 5. Open TCP 443 and, only for STUN nodes, UDP 3478. Keep TCP 8484 on loopback.
    Ingress overwrites `X-Windshare-Source-Ip`; the service trusts only loopback.
    Start `windshare-network.service`; inspect `/.well-known/windshare` and the
-   `node_settings_changed`, `relay_service_unavailable`, and `node_load_summary` logs.
+   `node_settings_changed`, `relay_pacing_disabled`, `relay_service_unavailable`, and `node_load_summary` logs.
 
 ## Certificate renewal
 

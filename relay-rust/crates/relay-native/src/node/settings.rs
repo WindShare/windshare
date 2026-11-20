@@ -26,6 +26,13 @@ pub struct MonthlyBudget {
     pub reset_day_utc: u8,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContributionLimits {
+    pub daily_bytes: Option<u64>,
+    pub bytes_per_second: Option<u64>,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Settings {
@@ -43,6 +50,8 @@ pub struct Settings {
     pub capacity_bytes_per_second: Option<u64>,
     pub services: Services,
     pub relay_budget: Option<MonthlyBudget>,
+    #[serde(default)]
+    pub contribution: ContributionLimits,
 }
 
 pub(super) fn zone_defaults(node: &mut serde_json::Value) {
@@ -73,6 +82,7 @@ impl Default for Settings {
             capacity_bytes_per_second: None,
             services: Services::default(),
             relay_budget: None,
+            contribution: ContributionLimits::default(),
         }
     }
 }
@@ -102,6 +112,16 @@ impl Settings {
         ensure!(
             self.capacity_bytes_per_second != Some(0),
             "relay capacity must be positive"
+        );
+        ensure!(
+            self.contribution.bytes_per_second != Some(0),
+            "public relay bandwidth must be positive"
+        );
+        ensure!(
+            self.contribution
+                .daily_bytes
+                .is_none_or(|bytes| i64::try_from(bytes).is_ok()),
+            "public daily budget exceeds storage range"
         );
         if let Some(budget) = self.relay_budget {
             ensure!(

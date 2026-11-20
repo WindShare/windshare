@@ -41,8 +41,16 @@ pub async fn serve(
     let epoch = node.epoch();
     anyhow::ensure!(node.available(), "relay temporarily unavailable");
     let socket = WebSocketStream::from_partially_read(
-        crate::node::Metered::new(upgrade.stream, node.clone(), epoch)
-            .with_usage(upgrade.admission.usage.clone()),
+        crate::node::Metered::new(
+            upgrade.stream,
+            node.clone(),
+            epoch,
+            crate::node::WriteOrigin {
+                share: upgrade.share,
+                bearer: upgrade.admission.bearer().cloned(),
+                usage: upgrade.admission.usage.clone(),
+            },
+        ),
         upgrade.buffered,
         Role::Server,
         Some(config),

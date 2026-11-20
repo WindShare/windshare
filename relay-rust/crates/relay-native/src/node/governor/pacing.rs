@@ -1,12 +1,52 @@
 use super::MAX_FRAME;
 use std::time::Duration;
 use tokio::time::Instant;
+use windshare_relay_access::entitlement::Class;
 
 // A delayed wake can span several governor ticks. Leave room for the bytes
 // earned during that delay plus any leftover credit smaller than a frame.
 const CATCH_UP_WINDOW: Duration = Duration::from_millis(25);
 const CREDIT_PER_BYTE: u128 = Duration::from_secs(1).as_nanos();
 const FRAME_CREDIT: u128 = MAX_FRAME as u128 * CREDIT_PER_BYTE;
+
+#[derive(Default)]
+pub(super) struct Bandwidth {
+    pub(super) node: Pacing,
+    pub(super) public: Pacing,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct Credit {
+    node: u64,
+    public: u64,
+}
+
+impl Bandwidth {
+    pub(super) fn replenish(&mut self, now: Instant) -> Credit {
+        Credit {
+            node: self.node.replenish(now),
+            public: self.public.replenish(now),
+        }
+    }
+
+    pub(super) fn charge(&mut self, before: &Credit, after: &Credit) {
+        self.node.charge(before.node - after.node);
+        self.public.charge(before.public - after.public);
+    }
+}
+
+impl Credit {
+    pub(super) fn reserve(&mut self, class: Class, bytes: u64) -> bool {
+        if bytes > self.node || (class != Class::Owner && bytes > self.public) {
+            return false;
+        }
+        self.node -= bytes;
+        if class != Class::Owner {
+            self.public -= bytes;
+        }
+        true
+    }
+}
 
 #[derive(Default)]
 pub(super) struct Pacing {

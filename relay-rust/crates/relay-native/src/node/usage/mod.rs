@@ -68,8 +68,12 @@ impl Meter {
         Scope(self.clone())
     }
 
+    pub(crate) fn attribution(&self) -> Option<Attribution> {
+        *self.0.lock().expect("usage scope")
+    }
+
     pub fn record(&self, collector: &Collector, bytes: usize, timestamp: u64) {
-        let attribution = *self.0.lock().expect("usage scope");
+        let attribution = self.attribution();
         if let Some(attribution) = attribution {
             collector.record(attribution, bytes, timestamp);
         }

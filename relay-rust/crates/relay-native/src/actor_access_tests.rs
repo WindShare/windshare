@@ -2,7 +2,7 @@ use super::{Actor, Event, Frozen, Generation, Recovery, Runtime, read};
 use crate::{
     connection::{self, Writer},
     node::access::{AuthorityState, Bearer, Policy, TrustedIssuer},
-    storage::Database,
+    storage::{Database, Persistence},
     test_support::{Fixture, connection as reference, socket_admission},
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -39,7 +39,7 @@ async fn with_sender(
     fixture: &Fixture,
     bearer: Option<&str>,
     exercise: impl AsyncFnOnce(&mut Sender),
-) {
+) -> bool {
     let identity = fixture.identity();
     let directory = tempfile::tempdir().unwrap();
     let store = Database::open(&directory.path().join("authority.sqlite"), identity.relay).unwrap();
@@ -51,7 +51,7 @@ async fn with_sender(
     };
     let (tx, inbox) = mpsc::channel(4);
     let actor = tokio::spawn(generation.track(Actor::start(
-        store,
+        store.clone(),
         environment,
         inbox,
         Arc::new(AtomicBool::new(false)),
@@ -81,7 +81,9 @@ async fn with_sender(
     exercise(&mut sender).await;
     drop(sender);
     timeout(TEST_BUDGET, actor).await.unwrap().unwrap().unwrap();
+    let persisted = store.load(identity.share).unwrap().is_some();
     drop(directory);
+    persisted
 }
 
 impl Sender {
@@ -116,10 +118,7 @@ fn local_credential(secret: &str, id: u8) -> Credential {
     }
 }
 
-#[tokio::test]
-async fn public_pause_keeps_local_registration_and_revokes_public_access() {
-    let fixture = Fixture::new();
-    let now = fixture.now(false).0 / 1000;
+fn access_fixture(now: u64) -> (SigningGeneration, String, Policy) {
     let root = SigningKey::from_bytes(&[1; 32]);
     let key = SigningKey::from_bytes(&[2; 32]);
     let generation = SigningGeneration {
@@ -154,6 +153,13 @@ async fn public_pause_keeps_local_registration_and_revokes_public_access() {
         }],
         ..Policy::default()
     };
+    (generation, account_bearer, policy)
+}
+
+#[tokio::test]
+async fn public_pause_keeps_local_registration_and_revokes_public_access() {
+    let fixture = Fixture::new();
+    let (generation, account_bearer, policy) = access_fixture(fixture.now(false).0 / 1000);
     let node = || {
         let node = Runtime::default();
         node.access.configure(policy.clone()).unwrap();
@@ -202,4 +208,94 @@ async fn public_pause_keeps_local_registration_and_revokes_public_access() {
         })
         .await;
     }
+}
+
+#[tokio::test]
+async fn public_daily_budget_exhaustion_refuses_new_public_registrations_and_disconnects_active_public_shares()
+ {
+    use crate::node::{ContributionLimits, Settings};
+    use windshare_relay_core::error_frame::RetryAfter;
+
+    const ACCESS_RETRY_MS: u32 = 1_000;
+    let fixture = Fixture::new();
+    let (_generation, account_bearer, policy) = access_fixture(fixture.now(false).0 / 1000);
+    let base_settings = Settings {
+        access: policy,
+        contribution: ContributionLimits {
+            daily_bytes: Some(1024),
+            ..Default::default()
+        },
+        ..Settings::default()
+    };
+    let exhausted_settings = Settings {
+        contribution: ContributionLimits {
+            daily_bytes: Some(0),
+            ..Default::default()
+        },
+        ..base_settings.clone()
+    };
+    let wall_now = i64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs(),
+    )
+    .unwrap();
+    let open_node = |settings: &Settings| {
+        let dir = tempfile::tempdir().unwrap();
+        let store =
+            Database::open(&dir.path().join("node.sqlite"), fixture.identity().relay).unwrap();
+        let node = Runtime::default();
+        node.configure(settings.clone(), store).unwrap();
+        (dir, node)
+    };
+
+    for bearer in [None, Some(account_bearer.as_str())] {
+        let (_dir, public_node) = open_node(&base_settings);
+        assert!(
+            with_sender(&public_node, &fixture, bearer, async |sender| {
+                sender.finish_registration(&fixture).await;
+                public_node
+                    .update(exhausted_settings.clone(), wall_now)
+                    .unwrap();
+                assert_eq!(
+                    timeout(TEST_BUDGET, sender.writer.recv()).await.unwrap(),
+                    None
+                );
+            })
+            .await
+        );
+
+        let persisted = with_sender(&public_node, &fixture, bearer, async |sender| {
+            assert_eq!(
+                read(&mut sender.writer).await,
+                ErrorFrame::AccessUnavailable(RetryAfter::from_millis(ACCESS_RETRY_MS).unwrap())
+                    .encode()
+            );
+        })
+        .await;
+        assert!(!persisted);
+    }
+
+    let (_dir, owner_node) = open_node(&base_settings);
+    assert!(
+        with_sender(&owner_node, &fixture, Some(OWNER_KEY), async |sender| {
+            sender.finish_registration(&fixture).await;
+            owner_node
+                .update(exhausted_settings.clone(), wall_now)
+                .unwrap();
+            assert!(
+                timeout(Duration::from_millis(50), sender.writer.recv())
+                    .await
+                    .is_err()
+            );
+        })
+        .await
+    );
+    assert!(
+        with_sender(&owner_node, &fixture, Some(OWNER_KEY), async |sender| {
+            sender.finish_registration(&fixture).await;
+        })
+        .await
+    );
 }

@@ -1,5 +1,5 @@
 use super::{Identity, Runtime, Settings, State, access::PreparedPolicy, now, usage::Authority};
-use crate::storage::budget::BudgetRecord;
+use crate::storage::budget::BudgetRecords;
 use anyhow::{Context, Result, anyhow, ensure};
 use std::{
     path::{Path, PathBuf},
@@ -12,7 +12,7 @@ const SUMMARY_INTERVAL: Duration = Duration::from_secs(60);
 
 struct PreparedSettings<'a> {
     settings: Settings,
-    budget: Option<BudgetRecord>,
+    budgets: BudgetRecords,
     controller: Option<Issuer>,
     access: Option<PreparedPolicy<'a>>,
 }
@@ -52,15 +52,11 @@ impl Runtime {
             .state
             .lock()
             .map_err(|_| anyhow!("node state poisoned"))?;
-        let budget = if let Some(config) = settings.relay_budget {
-            state
-                .budget
-                .as_ref()
-                .ok_or_else(|| anyhow!("missing persistent relay ledger"))?
-                .next_record(config, timestamp)?
-        } else {
-            None
-        };
+        let budgets = state.budgets.rollover(&settings, timestamp)?;
+        ensure!(
+            budgets.is_empty() || state.control.is_some(),
+            "missing persistent relay ledger"
+        );
         let owner = state.identity.as_ref().map(Identity::owner);
         let store = state.control.clone();
         drop(state);
@@ -79,7 +75,7 @@ impl Runtime {
         };
         let access = match store {
             Some(store) => store
-                .persist_node_settings(budget, generations, prepare_access)
+                .persist_node_settings(budgets, generations, prepare_access)
                 .context("persisting node settings")?,
             None => prepare_access(generations.iter().copied().map(Into::into).collect())?,
         };
@@ -87,7 +83,7 @@ impl Runtime {
         self.publish_settings(
             PreparedSettings {
                 settings,
-                budget,
+                budgets,
                 controller,
                 access,
             },
@@ -99,56 +95,70 @@ impl Runtime {
     fn publish_settings(&self, prepared: PreparedSettings<'_>, timestamp: i64) {
         let PreparedSettings {
             settings,
-            budget,
+            budgets,
             controller,
             access,
         } = prepared;
         let mut state = self.state.lock().expect("node state");
         let changed = state.settings != settings;
-        let publication =
-            self.governor
-                .publish_capacity(settings.capacity_bytes_per_second, || {
-                    if let Some(record) = budget {
-                        state
-                            .budget
-                            .as_mut()
-                            .expect("prepared relay ledger")
-                            .advance(record);
-                    }
-                    if state.settings.relay_budget != settings.relay_budget {
-                        // A pending socket write must not reuse credit from the previous
-                        // limit, even when the billing period itself is still current.
-                        state.budget_revision += 1;
-                    }
-                    state.settings = settings;
-                    let publication = self.access.publish_policy(controller, access);
-                    self.refresh_availability(&mut state, timestamp);
-                    publication
-                });
+        let was_public_exhausted = state.budgets.public_exhausted(&state.settings, timestamp);
+        let publication = self.governor.publish_capacity(
+            settings.capacity_bytes_per_second,
+            settings.contribution.bytes_per_second,
+            || {
+                state.budgets.advance(budgets);
+                state.settings = settings;
+                let publication = self.access.publish_policy(controller, access);
+                self.refresh_availability(&mut state, timestamp);
+                publication
+            },
+        );
+        let public_just_exhausted =
+            !was_public_exhausted && state.budgets.public_exhausted(&state.settings, timestamp);
         if changed {
             tracing::info!(
                 event = "node_settings_changed",
                 timestamp,
                 zone = state.settings.zone,
                 capacity_bytes_per_second = state.settings.capacity_bytes_per_second,
+                monthly_relay_bytes = state.settings.relay_budget.map(|budget| budget.bytes),
+                public_daily_bytes = state.settings.contribution.daily_bytes,
+                public_bytes_per_second = state.settings.contribution.bytes_per_second,
                 relay_enabled = state.settings.services.relay,
                 stun_enabled = state.settings.services.stun,
                 access_changed = publication.changed,
             );
         }
+        // Track the active unpaced state independently of `changed` so initial
+        // default settings still warn once without repeating on every 1s reload.
+        // Public pacing alone still governs non-owner traffic even without a node rate.
+        let unpaced_relay = state.settings.services.relay
+            && state.settings.capacity_bytes_per_second.is_none()
+            && state.settings.contribution.bytes_per_second.is_none();
+        let unpaced_warning = (unpaced_relay && !state.unpaced_relay_warned).then(|| {
+            (
+                state.identity.as_ref().map(Identity::id),
+                state.settings.zone.clone(),
+            )
+        });
+        state.unpaced_relay_warned = unpaced_relay;
         drop(state);
-        if publication.changed {
+        if let Some((node_id, zone)) = unpaced_warning {
+            tracing::warn!(
+                event = "relay_pacing_disabled",
+                timestamp,
+                node_id = node_id.as_deref(),
+                %zone,
+                "relay enabled without capacity_bytes_per_second or contribution.bytes_per_second; fair scheduling and priority pacing are bypassed"
+            );
+        }
+        if publication.changed || public_just_exhausted {
             self.access.notify_policy_changed();
         }
     }
 
     fn refresh_availability(&self, state: &mut State, timestamp: i64) {
-        let exhausted = state.settings.relay_budget.is_some_and(|config| {
-            state
-                .budget
-                .as_ref()
-                .is_none_or(|budget| budget.remaining(config.bytes) == 0)
-        });
+        let exhausted = state.budgets.node_remaining(&state.settings) == 0;
         if !state.settings.services.relay || exhausted || state.storage_failed {
             self.revoke(
                 state,

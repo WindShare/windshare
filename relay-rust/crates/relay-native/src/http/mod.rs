@@ -180,6 +180,17 @@ impl RequestService<'_> {
             },
             _ => return reply(StatusCode::BAD_REQUEST, "duplicate authorization header\n"),
         };
+        if self
+            .ingress
+            .node
+            .public_budget_refuses(share, bearer.as_ref())
+        {
+            tracing::debug!(event = "public_relay_admission_refused", ?share, connection = ?self.connection);
+            return reply(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "public daily relay budget exhausted\n",
+            );
+        }
         self.ingress
             .capacity
             .accept(

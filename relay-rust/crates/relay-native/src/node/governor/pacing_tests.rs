@@ -76,3 +76,48 @@ fn rate_changes_clamp_credit_and_unchanged_settings_preserve_it() {
     assert!(pacing.configure(Some(EXAMPLE_RATE), idle));
     assert_eq!(pacing.replenish(idle), MAX_FRAME);
 }
+
+#[test]
+fn public_ceiling_limits_only_public_frames_with_or_without_node_capacity() {
+    use super::Bandwidth;
+    use windshare_relay_access::{
+        Principal,
+        entitlement::Class,
+        governor::{Demand, Scheduler},
+    };
+
+    for node_rate in [None, Some(MAX_FRAME * 4)] {
+        let now = Instant::now();
+        let mut pacing = Bandwidth::default();
+        pacing.node.configure(node_rate, now);
+        pacing.public.configure(Some(MAX_FRAME), now);
+        let mut scheduler = Scheduler::new(4, MAX_FRAME);
+        let head = |principal, class, bytes| Demand {
+            principal: Principal::Local([principal; 16]),
+            class,
+            bytes,
+        };
+        let mut serve = |scheduler: &mut Scheduler<u8>, now| {
+            let initial = pacing.replenish(now);
+            let mut remaining = initial;
+            let grant = scheduler.next(|class, bytes| remaining.reserve(class, bytes));
+            pacing.charge(&initial, &remaining);
+            grant
+        };
+        assert!(scheduler.request(1, head(1, Class::Standard, MAX_FRAME)));
+        assert_eq!(serve(&mut scheduler, now), Some((1, MAX_FRAME)));
+        assert!(scheduler.request(1, head(1, Class::Standard, MAX_FRAME)));
+        assert_eq!(serve(&mut scheduler, now), None);
+        assert!(scheduler.request(2, head(2, Class::Owner, MAX_FRAME / 2)));
+        if node_rate.is_some() {
+            assert_eq!(serve(&mut scheduler, now), None);
+        }
+        let later = now + Duration::from_millis(250);
+        assert_eq!(serve(&mut scheduler, later), Some((2, MAX_FRAME / 2)));
+        assert_eq!(serve(&mut scheduler, later), None);
+        assert_eq!(
+            serve(&mut scheduler, now + Duration::from_secs(1)),
+            Some((1, MAX_FRAME))
+        );
+    }
+}

@@ -127,6 +127,37 @@ impl Service {
         priority
     }
 
+    pub(crate) fn egress_owner(
+        &self,
+        share: ShareId,
+        bearer: Option<&Bearer>,
+        forwarded: Option<Attribution>,
+    ) -> Option<bool> {
+        let state = self.state.lock().expect("node access state");
+        // Receivers normally present no owner key. Once a share is registered,
+        // its sender's attribution governs both directions and their controls.
+        // An explicit bearer that does not match an active local credential
+        // (such as an official account ticket) cannot represent an owner share.
+        let attribution = forwarded
+            .or_else(|| {
+                state
+                    .residents
+                    .get(&share)
+                    .map(|(attribution, _)| *attribution)
+            })
+            .or_else(|| {
+                let entry = state.credentials.get(bearer?.digest)?;
+                state
+                    .local_attribution(entry)
+                    .filter(|value| !state.denied(share, *value))
+            });
+        let owner = attribution
+            .map(|value| state.owner(value))
+            .or_else(|| bearer.map(|_| false));
+        drop(state);
+        owner
+    }
+
     pub(crate) fn authorize(
         &self,
         share: ShareId,

@@ -1,9 +1,9 @@
-use super::{BudgetEpoch, Grant, Runtime};
+use super::{Runtime, WriteOrigin, budget::WriteAttempt};
 use std::{
     future::Future,
     io,
     pin::Pin,
-    task::{Context, Poll},
+    task::{Context, Poll, ready},
 };
 use tokio::{
     io::{AsyncRead, AsyncWrite, ReadBuf},
@@ -12,28 +12,20 @@ use tokio::{
 
 pub struct Metered<S> {
     stream: S,
-    usage: super::usage::Meter,
+    origin: WriteOrigin,
     node: Runtime,
     epoch: u64,
-    credit: u64,
-    budget_epoch: BudgetEpoch,
-    reservation: Option<JoinHandle<anyhow::Result<Grant>>>,
+    refill: Option<JoinHandle<anyhow::Result<()>>>,
 }
 
 impl<S> Metered<S> {
-    pub fn with_usage(mut self, usage: super::usage::Meter) -> Self {
-        self.usage = usage;
-        self
-    }
-    pub fn new(stream: S, node: Runtime, epoch: u64) -> Self {
+    pub(crate) const fn new(stream: S, node: Runtime, epoch: u64, origin: WriteOrigin) -> Self {
         Self {
             stream,
-            usage: super::usage::Meter::default(),
-            budget_epoch: node.budget_epoch(),
+            origin,
             node,
             epoch,
-            credit: 0,
-            reservation: None,
+            refill: None,
         }
     }
 }
@@ -50,77 +42,48 @@ impl<S: AsyncRead + Unpin> AsyncRead for Metered<S> {
 
 impl<S: AsyncWrite + Unpin> AsyncWrite for Metered<S> {
     fn poll_write(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         context: &mut Context<'_>,
         buffer: &[u8],
     ) -> Poll<io::Result<usize>> {
-        if !self.node.available() || self.node.epoch() != self.epoch {
-            return Poll::Ready(Err(io::Error::new(
-                io::ErrorKind::ConnectionAborted,
-                "relay temporarily unavailable",
-            )));
-        }
-        if buffer.is_empty() {
-            return Poll::Ready(Ok(0));
-        }
-        let budget_epoch = self.node.budget_epoch();
-        if self.budget_epoch != budget_epoch {
-            self.credit = 0;
-            self.budget_epoch = budget_epoch;
-        }
-        if self.credit == 0 {
-            if self.reservation.is_none() {
-                let requested = buffer.len() as u64;
-                if let Some(granted) = self.node.try_reserve(requested) {
-                    self.budget_epoch = granted.epoch;
-                    self.credit = granted.bytes;
-                } else {
-                    let node = self.node.clone();
-                    self.reservation = Some(tokio::task::spawn_blocking(move || {
-                        node.reserve_for_period(requested)
+        let this = self.get_mut();
+        loop {
+            if let Some(refill) = this.refill.as_mut() {
+                let result = ready!(Pin::new(refill).poll(context));
+                this.refill = None;
+                result
+                    .map_err(io::Error::other)?
+                    .map_err(io::Error::other)?;
+            }
+            let timestamp = super::now();
+            let attempt = this.node.write_egress(
+                this.epoch,
+                &this.origin,
+                buffer.len(),
+                timestamp,
+                |length| Pin::new(&mut this.stream).poll_write(context, &buffer[..length]),
+            )?;
+            match attempt {
+                WriteAttempt::Socket(result) => {
+                    if let Poll::Ready(Ok(written)) = result {
+                        this.node.metrics.wire(written);
+                        this.origin.usage.record(
+                            &this.node.usage,
+                            written,
+                            timestamp.unsigned_abs(),
+                        );
+                    }
+                    return result;
+                }
+                WriteAttempt::Refill => {
+                    let node = this.node.clone();
+                    let origin = this.origin.clone();
+                    let requested = buffer.len() as u64;
+                    this.refill = Some(tokio::task::spawn_blocking(move || {
+                        node.refill_budgets(&origin, requested, super::now())
                     }));
                 }
             }
-            if let Some(reservation) = self.reservation.as_mut() {
-                match Pin::new(reservation).poll(context) {
-                    Poll::Pending => return Poll::Pending,
-                    Poll::Ready(result) => {
-                        self.reservation = None;
-                        let granted = result
-                            .map_err(io::Error::other)?
-                            .map_err(io::Error::other)?;
-                        if granted.epoch != self.node.budget_epoch() {
-                            context.waker().wake_by_ref();
-                            return Poll::Pending;
-                        }
-                        self.budget_epoch = granted.epoch;
-                        self.credit = granted.bytes;
-                    }
-                }
-            }
-            if self.credit == 0 {
-                return Poll::Ready(Err(io::Error::new(
-                    io::ErrorKind::ConnectionAborted,
-                    "relay budget exhausted",
-                )));
-            }
-        }
-        if self.budget_epoch != self.node.budget_epoch() {
-            context.waker().wake_by_ref();
-            return Poll::Pending;
-        }
-        let length = buffer
-            .len()
-            .min(usize::try_from(self.credit).unwrap_or(usize::MAX));
-        match Pin::new(&mut self.stream).poll_write(context, &buffer[..length]) {
-            Poll::Ready(Ok(written)) => {
-                self.credit -= written as u64;
-                self.node.metrics.wire(written);
-                self.usage
-                    .record(&self.node.usage, written, super::now().unsigned_abs());
-                Poll::Ready(Ok(written))
-            }
-            result => result,
         }
     }
 

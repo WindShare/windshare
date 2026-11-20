@@ -9,7 +9,7 @@ use windshare_relay_access::trust::Generation;
 
 const OLD_CAPACITY: u64 = 10_000_000;
 const NEW_CAPACITY: u64 = 2_000_000;
-const QUOTA: u64 = 128;
+const QUOTA: usize = 128;
 
 fn configured_node() -> (TempDir, Endpoint, Runtime, Settings) {
     let directory = tempfile::tempdir().unwrap();
@@ -18,7 +18,7 @@ fn configured_node() -> (TempDir, Endpoint, Runtime, Settings) {
     let settings = Settings {
         capacity_bytes_per_second: Some(OLD_CAPACITY),
         relay_budget: Some(MonthlyBudget {
-            bytes: QUOTA,
+            bytes: QUOTA as u64,
             reset_day_utc: 1,
         }),
         ..Settings::default()
@@ -46,7 +46,8 @@ fn assert_public_settings(node: &Runtime, endpoint: &Endpoint, capacity: u64, an
 }
 
 fn next_period(node: &Runtime) -> i64 {
-    let period = node.state.lock().unwrap().budget.as_ref().unwrap().period();
+    let store = node.state.lock().unwrap().control.clone().unwrap();
+    let period = store.load_budgets().unwrap().monthly.unwrap().period;
     DateTime::from_timestamp(period, 0)
         .unwrap()
         .checked_add_months(Months::new(1))
@@ -59,9 +60,24 @@ fn change_public_settings(settings: &mut Settings) {
     settings.access.anonymous = false;
 }
 
+fn write_bytes(node: &Runtime, bytes: usize) -> std::io::Result<usize> {
+    use crate::node::{WriteOrigin, budget::WriteAttempt};
+    use std::task::Poll;
+    let origin = WriteOrigin::test_public();
+    node.refill_budgets(&origin, bytes as u64, now()).unwrap();
+    let WriteAttempt::Socket(Poll::Ready(written)) =
+        node.write_egress(node.epoch(), &origin, bytes, now(), |length| {
+            Poll::Ready(Ok(length))
+        })?
+    else {
+        panic!("funded writer did not complete");
+    };
+    written
+}
+
 fn exhaust_budget(node: &Runtime) {
-    assert_eq!(node.reserve_for_period(QUOTA).unwrap().bytes, QUOTA);
-    assert_eq!(node.reserve_for_period(1).unwrap().bytes, 0);
+    assert_eq!(write_bytes(node, QUOTA).unwrap(), QUOTA);
+    assert!(write_bytes(node, 1).is_err());
     assert!(!node.available());
 }
 
@@ -69,7 +85,7 @@ fn exhaust_budget(node: &Runtime) {
 fn rejected_reset_day_keeps_live_settings_and_descriptor() {
     let (_directory, endpoint, node, mut settings) = configured_node();
     let changes = node.access.changes();
-    let previous_epoch = node.budget_epoch();
+    assert_eq!(write_bytes(&node, QUOTA - 1).unwrap(), QUOTA - 1);
     change_public_settings(&mut settings);
     settings.relay_budget.as_mut().unwrap().reset_day_utc = 15;
 
@@ -81,7 +97,7 @@ fn rejected_reset_day_keeps_live_settings_and_descriptor() {
     );
     assert_public_settings(&node, &endpoint, OLD_CAPACITY, true);
     assert!(!changes.has_changed().unwrap());
-    assert!(node.budget_epoch() == previous_epoch);
+    assert_eq!(write_bytes(&node, 1).unwrap(), 1);
 }
 
 #[test]
@@ -90,7 +106,7 @@ fn issuer_write_failure_rolls_back_the_pending_billing_period() {
     exhaust_budget(&node);
     let changes = node.access.changes();
     let store = node.state.lock().unwrap().control.clone().unwrap();
-    let previous_budget = store.load_budget().unwrap().unwrap();
+    let previous_budget = store.load_budgets().unwrap().monthly.unwrap();
 
     let db = Connection::open(directory.path().join("node.sqlite")).unwrap();
     db.execute_batch(
@@ -118,7 +134,7 @@ fn issuer_write_failure_rolls_back_the_pending_billing_period() {
     let effective_at = next_period(&node);
     let error = node.update(settings.clone(), effective_at).unwrap_err();
     assert!(format!("{error:#}").contains("injected issuer write failure"));
-    let stored_budget = store.load_budget().unwrap().unwrap();
+    let stored_budget = store.load_budgets().unwrap().monthly.unwrap();
     assert_eq!(stored_budget.period, previous_budget.period);
     assert_eq!(stored_budget.reserved, previous_budget.reserved);
     assert_public_settings(&node, &endpoint, OLD_CAPACITY, true);
@@ -127,11 +143,14 @@ fn issuer_write_failure_rolls_back_the_pending_billing_period() {
 
     db.execute_batch("DROP TRIGGER reject_issuer;").unwrap();
     node.update(settings, effective_at).unwrap();
-    assert_eq!(store.load_budget().unwrap().unwrap().period, effective_at);
+    assert_eq!(
+        store.load_budgets().unwrap().monthly.unwrap().period,
+        effective_at
+    );
     assert_public_settings(&node, &endpoint, NEW_CAPACITY, false);
     assert!(node.available());
     assert!(changes.has_changed().unwrap());
-    assert_eq!(node.reserve_for_period(QUOTA).unwrap().bytes, QUOTA);
+    assert_eq!(write_bytes(&node, QUOTA).unwrap(), QUOTA);
 }
 
 #[test]
@@ -159,5 +178,138 @@ fn rejected_file_allows_the_active_budget_to_roll_over() {
     );
     assert_public_settings(&node, &endpoint, OLD_CAPACITY, true);
     assert!(node.available());
-    assert_eq!(node.reserve_for_period(QUOTA).unwrap().bytes, QUOTA);
+    assert_eq!(write_bytes(&node, QUOTA).unwrap(), QUOTA);
+}
+
+#[test]
+fn spent_public_day_changes_discovery_without_revoking_the_node() {
+    let (_directory, endpoint, node, mut settings) = configured_node();
+    settings.contribution.daily_bytes = Some(1);
+    let today = now();
+    node.update(settings.clone(), today).unwrap();
+    let connection_epoch = node.epoch();
+    assert_eq!(describe(&node, &endpoint)["relay_available"], true);
+    assert_eq!(write_bytes(&node, 1).unwrap(), 1);
+    assert_eq!(describe(&node, &endpoint)["relay_available"], false);
+    assert!(node.available());
+    node.update(settings, today + chrono::TimeDelta::days(1).num_seconds())
+        .unwrap();
+    assert_eq!(describe(&node, &endpoint)["relay_available"], true);
+    assert_eq!(node.epoch(), connection_epoch);
+}
+
+#[derive(Clone, Default)]
+struct LogBuffer(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for LogBuffer {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogBuffer {
+    type Writer = Self;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
+fn capture_pacing_warnings(exercise: impl FnOnce()) -> Vec<serde_json::Value> {
+    let buffer = LogBuffer::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .with_writer(buffer.clone())
+        .with_max_level(tracing::Level::WARN)
+        .finish();
+    tracing::subscriber::with_default(subscriber, exercise);
+    let bytes = buffer.0.lock().unwrap().clone();
+    String::from_utf8(bytes)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .filter(|entry| entry["fields"]["event"] == "relay_pacing_disabled")
+        .collect()
+}
+
+#[test]
+fn unpaced_relay_warns_once_per_transition_including_default_startup() {
+    const NO_WARNINGS: &[serde_json::Value] = &[];
+    let directory = tempfile::tempdir().unwrap();
+    let endpoint = Endpoint::parse("wss://node.example/v2/ws").unwrap();
+    let store = Database::open(&directory.path().join("node.sqlite"), endpoint.identity).unwrap();
+    let identity = Identity::generate().unwrap();
+    let expected_node_id = identity.id();
+    let node = Runtime::default();
+    node.identify(identity).unwrap();
+
+    let mut settings = Settings {
+        capacity_bytes_per_second: None,
+        services: super::super::Services {
+            relay: false,
+            stun: true,
+        },
+        ..Settings::default()
+    };
+    let warnings = capture_pacing_warnings(|| {
+        node.configure(settings.clone(), store).unwrap();
+    });
+    assert_eq!(warnings, NO_WARNINGS);
+
+    settings.services.relay = true;
+    let warnings = capture_pacing_warnings(|| {
+        node.update(settings.clone(), now()).unwrap();
+        node.update(settings.clone(), now()).unwrap();
+    });
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings[0]["fields"]["node_id"], expected_node_id);
+    assert_eq!(warnings[0]["fields"]["zone"], "global");
+
+    settings.capacity_bytes_per_second = Some(OLD_CAPACITY);
+    let warnings = capture_pacing_warnings(|| {
+        node.update(settings.clone(), now()).unwrap();
+    });
+    assert_eq!(warnings, NO_WARNINGS);
+
+    let invalid = Settings {
+        capacity_bytes_per_second: None,
+        relay_budget: Some(MonthlyBudget {
+            bytes: QUOTA as u64,
+            reset_day_utc: 0,
+        }),
+        ..settings.clone()
+    };
+    let warnings = capture_pacing_warnings(|| {
+        assert!(node.update(invalid, now()).is_err());
+    });
+    assert_eq!(warnings, NO_WARNINGS);
+
+    // Public contribution pacing alone still governs non-owner traffic.
+    settings.capacity_bytes_per_second = None;
+    settings.contribution.bytes_per_second = Some(NEW_CAPACITY);
+    let warnings = capture_pacing_warnings(|| {
+        node.update(settings.clone(), now()).unwrap();
+    });
+    assert_eq!(warnings, NO_WARNINGS);
+
+    settings.contribution.bytes_per_second = None;
+    let warnings = capture_pacing_warnings(|| {
+        node.update(settings.clone(), now()).unwrap();
+    });
+    assert_eq!(warnings.len(), 1);
+
+    let default_store =
+        Database::open(&directory.path().join("default.sqlite"), endpoint.identity).unwrap();
+    let default_node = Runtime::default();
+    let warnings = capture_pacing_warnings(|| {
+        default_node
+            .configure(Settings::default(), default_store)
+            .unwrap();
+    });
+    assert_eq!(warnings.len(), 1);
 }

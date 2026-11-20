@@ -44,7 +44,11 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
             self.environment.now().0 / 1000,
         );
         if let RegistrationDecision::Granted(attribution) = decision {
-            if let Some(residency) = &self.residency {
+            // Stop non-owner registrations before reserving residency or writing SQLite
+            // when the daily public contribution budget is already spent.
+            if self.node.public_budget_refuses_attribution(attribution) {
+                decision = RegistrationDecision::Unavailable;
+            } else if let Some(residency) = &self.residency {
                 if residency.attribution() != attribution {
                     decision = RegistrationDecision::Denied;
                 }
@@ -65,12 +69,19 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
         let Some(attribution) = self.attribution() else {
             return Ok(());
         };
-        if self.node.access.allowed(self.identity.share, attribution) {
+        let revoked_by_policy = !self.node.access.allowed(self.identity.share, attribution);
+        let revoked_by_budget = self.node.public_budget_refuses_attribution(attribution);
+        if !revoked_by_policy && !revoked_by_budget {
             return Ok(());
         }
         let connections: Vec<_> = self.ports.keys().copied().collect();
         if !connections.is_empty() {
-            tracing::warn!(event = "share_access_revoked", share = ?self.identity.share, ?attribution);
+            let reason = if revoked_by_policy {
+                "access_policy"
+            } else {
+                "public_daily_budget_exhausted"
+            };
+            tracing::warn!(event = "share_access_revoked", share = ?self.identity.share, ?attribution, reason);
         }
         for connection in connections {
             self.ports.remove(&connection);

@@ -1,109 +1,103 @@
-use super::settings::MonthlyBudget;
-use crate::storage::{Database, budget::BudgetRecord};
-use anyhow::{Result, ensure};
-use chrono::{DateTime, Datelike, NaiveDate};
+mod egress;
+mod ledger;
 
-// Durable reservations precede socket permission, so a crash retains unused credit
-// instead of granting another allowance. Batching avoids a SQLite commit per frame.
-const RESERVATION_BYTES: u64 = 1024 * 1024;
+use super::Settings;
+use crate::storage::budget::{BudgetRecords, Window};
+use anyhow::Result;
+pub(super) use egress::WriteAttempt;
+pub use egress::WriteOrigin;
+use ledger::Ledger;
 
-pub(super) struct Budget {
-    store: Database,
-    record: Option<BudgetRecord>,
-    available: u64,
+#[derive(Clone, Copy)]
+struct Limits {
+    monthly: Option<u64>,
+    public_daily: Option<u64>,
 }
 
-impl Budget {
-    pub fn new(store: Database) -> Result<Self> {
-        let record = store.load_budget()?;
-        Ok(Self {
-            store,
-            record,
-            available: 0,
+#[derive(Default)]
+pub(super) struct Budgets {
+    monthly: Ledger,
+    public_daily: Ledger,
+}
+
+impl Budgets {
+    pub(super) const fn restore(records: BudgetRecords) -> Self {
+        Self {
+            monthly: Ledger::restore(records.monthly),
+            public_daily: Ledger::restore(records.public_daily),
+        }
+    }
+
+    pub(super) fn rollover(&self, settings: &Settings, now: i64) -> Result<BudgetRecords> {
+        Ok(BudgetRecords {
+            monthly: match settings.relay_budget {
+                Some(config) => self.monthly.rollover(
+                    Window::BillingMonth {
+                        reset_day: config.reset_day_utc,
+                    },
+                    now,
+                )?,
+                None => None,
+            },
+            public_daily: match settings.contribution.daily_bytes {
+                Some(_) => self.public_daily.rollover(Window::PublicDay, now)?,
+                None => None,
+            },
         })
     }
 
-    pub fn next_record(&self, config: MonthlyBudget, now: i64) -> Result<Option<BudgetRecord>> {
-        let period = period_start(now, config.reset_day_utc)?;
-        if let Some(record) = self.record {
-            ensure!(
-                record.reset_day == config.reset_day_utc,
-                "billing reset day cannot change for an existing ledger"
-            );
-            if period <= record.period {
-                return Ok(None);
-            }
+    pub(super) fn advance(&mut self, records: BudgetRecords) {
+        self.monthly.advance(records.monthly);
+        self.public_daily.advance(records.public_daily);
+    }
+
+    pub(super) fn node_remaining(&self, settings: &Settings) -> u64 {
+        self.monthly
+            .remaining(settings.relay_budget.map(|budget| budget.bytes))
+    }
+
+    pub(super) fn public_remaining(&self, settings: &Settings) -> u64 {
+        self.public_daily
+            .remaining(settings.contribution.daily_bytes)
+    }
+
+    pub(super) fn public_exhausted(&self, settings: &Settings, timestamp: i64) -> bool {
+        match settings.contribution.daily_bytes {
+            None => false,
+            Some(0) => true,
+            Some(_) => self.public_remaining(settings) == 0 && !self.public_day_elapsed(timestamp),
         }
-        Ok(Some(BudgetRecord {
-            period,
-            reset_day: config.reset_day_utc,
-            reserved: 0,
-        }))
     }
 
-    pub fn advance(&mut self, record: BudgetRecord) {
-        self.record = Some(record);
-        self.available = 0;
-        tracing::info!(
-            event = "relay_budget_period",
-            period = record.period,
-            reset_day = record.reset_day
-        );
+    pub(super) fn public_day_elapsed(&self, timestamp: i64) -> bool {
+        self.public_daily.day_elapsed(timestamp)
     }
 
-    pub fn remaining(&self, limit: u64) -> u64 {
-        self.record.map_or(limit, |record| {
-            limit.saturating_sub(record.reserved.saturating_sub(self.available))
-        })
+    fn ready(&self, limits: Limits) -> u64 {
+        self.monthly
+            .ready(limits.monthly)
+            .min(self.public_daily.ready(limits.public_daily))
     }
 
-    pub fn period(&self) -> i64 {
-        self.record.map_or(0, |record| record.period)
+    const fn charge(&mut self, limits: Limits, written: u64) {
+        self.monthly.spend(limits.monthly, written);
+        self.public_daily.spend(limits.public_daily, written);
     }
 
-    pub fn try_reserve(&mut self, limit: u64, requested: u64) -> Option<u64> {
-        let remaining = self.remaining(limit);
-        if self.available == 0 && remaining > 0 {
-            return None;
+    fn refill(&self, limits: Limits, requested: u64) -> BudgetRecords {
+        let bytes = requested
+            .min(self.monthly.remaining(limits.monthly))
+            .min(self.public_daily.remaining(limits.public_daily));
+        BudgetRecords {
+            monthly: self.monthly.refill(limits.monthly, bytes),
+            public_daily: self.public_daily.refill(limits.public_daily, bytes),
         }
-        let granted = requested.min(self.available).min(remaining);
-        self.available -= granted;
-        Some(granted)
     }
 
-    pub fn reserve(&mut self, limit: u64, requested: u64) -> Result<u64> {
-        let mut record = self.record.expect("configured budget initialized");
-        self.available = self.available.min(self.remaining(limit));
-        if self.available < requested && record.reserved < limit {
-            let allocation = RESERVATION_BYTES
-                .max(requested)
-                .min(limit - record.reserved);
-            record.reserved += allocation;
-            // Durable upper bounds precede socket permission. Storage errors fail closed.
-            self.store.save_budget(record)?;
-            self.record = Some(record);
-            self.available += allocation;
-        }
-        let granted = requested.min(self.available);
-        self.available -= granted;
-        Ok(granted)
+    const fn funded(&mut self, records: BudgetRecords) {
+        self.monthly.funded(records.monthly);
+        self.public_daily.funded(records.public_daily);
     }
-}
-
-fn period_start(now: i64, day: u8) -> Result<i64> {
-    let date = DateTime::from_timestamp(now, 0).ok_or_else(|| anyhow::anyhow!("invalid clock"))?;
-    let (year, month) = if date.day() >= u32::from(day) {
-        (date.year(), date.month())
-    } else if date.month() == 1 {
-        (date.year() - 1, 12)
-    } else {
-        (date.year(), date.month() - 1)
-    };
-    Ok(NaiveDate::from_ymd_opt(year, month, u32::from(day))
-        .and_then(|date| date.and_hms_opt(0, 0, 0))
-        .ok_or_else(|| anyhow::anyhow!("invalid billing period"))?
-        .and_utc()
-        .timestamp())
 }
 
 #[cfg(test)]

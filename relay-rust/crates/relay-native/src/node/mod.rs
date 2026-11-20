@@ -14,10 +14,11 @@ mod settings;
 mod trace;
 pub use configuration::Configuration;
 
+pub(crate) use budget::WriteOrigin;
 pub(crate) use metered::Metered;
 pub(crate) use metrics::Metrics;
 pub use metrics::Snapshot;
-pub use settings::{MonthlyBudget, Services, Settings};
+pub use settings::{ContributionLimits, MonthlyBudget, Services, Settings};
 pub(crate) use trace::NodeTrace;
 
 use crate::storage::Database;
@@ -32,30 +33,10 @@ struct State {
     settings: Settings,
     identity: Option<Identity>,
     control: Option<Database>,
-    budget: Option<budget::Budget>,
+    budgets: budget::Budgets,
     unavailable: bool,
     storage_failed: bool,
-    budget_revision: u64,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) struct BudgetEpoch {
-    period: i64,
-    revision: u64,
-}
-
-pub(crate) struct Grant {
-    epoch: BudgetEpoch,
-    bytes: u64,
-}
-
-impl State {
-    fn budget_epoch(&self) -> BudgetEpoch {
-        BudgetEpoch {
-            period: self.budget.as_ref().map_or(0, budget::Budget::period),
-            revision: self.budget_revision,
-        }
-    }
+    unpaced_relay_warned: bool,
 }
 
 #[derive(Clone)]
@@ -82,10 +63,10 @@ impl Default for Runtime {
                 settings: Settings::default(),
                 identity: None,
                 control: None,
-                budget: None,
+                budgets: budget::Budgets::default(),
                 unavailable: false,
                 storage_failed: false,
-                budget_revision: 0,
+                unpaced_relay_warned: false,
             })),
             control_writer: Arc::default(),
             reporting_authority: Arc::default(),
@@ -111,10 +92,10 @@ impl Runtime {
         let access_now = timestamp.unsigned_abs();
         self.access
             .restore_access(store.initialize_control(access_now)?, access_now)?;
-        let budget = budget::Budget::new(store.clone())?;
+        let budgets = budget::Budgets::restore(store.load_budgets()?);
         let mut state = self.state.lock().map_err(|_| anyhow!("node state"))?;
         state.control = Some(store);
-        state.budget = Some(budget);
+        state.budgets = budgets;
         drop(state);
         let result = self.apply_settings(settings, &generations, timestamp);
         drop(writer);
@@ -151,35 +132,6 @@ impl Runtime {
         *self.revocations.borrow()
     }
 
-    pub(crate) fn budget_epoch(&self) -> BudgetEpoch {
-        self.state.lock().expect("node state").budget_epoch()
-    }
-
-    pub(crate) fn try_reserve(&self, requested: u64) -> Option<Grant> {
-        let mut state = self.state.lock().expect("node state");
-        if state.unavailable {
-            return Some(Grant {
-                epoch: state.budget_epoch(),
-                bytes: 0,
-            });
-        }
-        let granted = state
-            .settings
-            .relay_budget
-            .map_or(Some(requested), |config| {
-                state
-                    .budget
-                    .as_mut()
-                    .and_then(|budget| budget.try_reserve(config.bytes, requested))
-            });
-        if granted == Some(0) {
-            self.revoke(&mut state, "budget_exhausted");
-        }
-        let epoch = state.budget_epoch();
-        drop(state);
-        granted.map(|bytes| Grant { epoch, bytes })
-    }
-
     pub(crate) async fn revoked(&self, epoch: u64) {
         let mut changes = self.revocations.subscribe();
         while *changes.borrow_and_update() == epoch {
@@ -187,36 +139,6 @@ impl Runtime {
                 return;
             }
         }
-    }
-
-    pub(crate) fn reserve_for_period(&self, requested: u64) -> Result<Grant> {
-        let writer = self.lock_control()?;
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| anyhow!("node state poisoned"))?;
-        let epoch = state.budget_epoch();
-        if state.unavailable {
-            return Ok(Grant { epoch, bytes: 0 });
-        }
-        let result = if let Some(config) = state.settings.relay_budget {
-            state
-                .budget
-                .as_mut()
-                .ok_or_else(|| anyhow!("missing persistent relay ledger"))?
-                .reserve(config.bytes, requested)
-        } else {
-            Ok(requested)
-        };
-        state.storage_failed = result.is_err();
-        if !result.as_ref().is_ok_and(|granted| *granted > 0) {
-            self.revoke(&mut state, "budget_exhausted_or_storage_failure");
-        }
-        drop(state);
-        drop(writer);
-        // Pair the grant with the period that was charged, so a pending socket
-        // write cannot spend the credit after the ledger advances.
-        result.map(|bytes| Grant { epoch, bytes })
     }
 
     fn revoke(&self, state: &mut State, reason: &str) {

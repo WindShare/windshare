@@ -122,6 +122,13 @@ impl Service {
             .denied(share, attribution)
     }
 
+    pub(crate) fn is_owner(&self, attribution: Attribution) -> bool {
+        self.state
+            .lock()
+            .expect("node access state")
+            .owner(attribution)
+    }
+
     pub fn class(&self, attribution: Attribution, now: u64) -> (Class, Option<Allowance>) {
         let state = self.state.lock().expect("node access state");
         let result = match attribution {

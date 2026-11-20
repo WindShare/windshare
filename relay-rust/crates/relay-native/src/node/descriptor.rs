@@ -72,7 +72,8 @@ impl Runtime {
             .identity
             .as_ref()
             .ok_or_else(|| anyhow!("missing node identity"))?;
-        let now = super::now().unsigned_abs();
+        let timestamp = super::now();
+        let now = timestamp.unsigned_abs();
         let login_page = self
             .console
             .get()
@@ -84,7 +85,7 @@ impl Runtime {
             "stun":state.settings.stun_urls, "zone":state.settings.zone, "region":state.settings.region,
             "capacity_bytes_per_second":state.settings.capacity_bytes_per_second,
             "classes":["owner","standard","lowest"], "issued_at":now, "expires_at":now+DESCRIPTOR_SECONDS,
-            "relay_available":!state.unavailable && self.access.public_enabled(), "anonymous":self.access.anonymous(),
+            "relay_available":!state.unavailable && !state.budgets.public_exhausted(&state.settings, timestamp) && self.access.public_enabled(), "anonymous":self.access.anonymous(),
             "account_login_page":login_page,
             "console_url": self.console.get().map(crate::console::Console::origin), "authority":state.settings.authority
         });

@@ -9,6 +9,7 @@
     "region": "",
     "services": { "relay": true, "stun": true },
     "capacity_bytes_per_second": 12500000,
+    "contribution": { "daily_bytes": 10737418240, "bytes_per_second": 3125000 },
     "access": { "anonymous": true }
   }
 }

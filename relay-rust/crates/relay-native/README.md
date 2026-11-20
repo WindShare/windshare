@@ -33,7 +33,14 @@ by changing configuration. JSON readiness goes to stdout; traces go to stderr.
   see [STUN](../../../docs/stun.md).
 - `node`: enabled `services`, `zone`, `region`, `stun_urls`,
   `capacity_bytes_per_second`, optional `relay_budget`, and `access`.
+  All classes share the configured bandwidth. The monthly budget caps WebSocket
+  egress, including owner traffic and control frames, on the UTC billing cycle.
   Anonymous admission defaults off for `cn`, on for `global`.
+- `node.contribution` accepts optional `daily_bytes` (UTC midnight) and `bytes_per_second`
+  for non-owner shares. Receivers inherit their share's owner status. The public
+  rate works even without a configured node rate. With neither rate set, the host
+  forwards ready frames immediately, bypasses fair scheduling and priority pacing,
+  and logs `relay_pacing_disabled`.
 - `node.access`: local credentials/owner principals, trusted issuer certificates,
   `shares_per_principal` and `owner_reserved_shares`.
 - `node.authority`: official usage endpoint and issuer; see

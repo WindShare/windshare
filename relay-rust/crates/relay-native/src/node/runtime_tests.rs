@@ -18,6 +18,7 @@ fn runtime(bytes: u64) -> (tempfile::TempDir, Runtime) {
         region: String::new(),
         stun_urls: Vec::new(),
         access: super::access::Policy::default(),
+        contribution: ContributionLimits::default(),
         capacity_bytes_per_second: None,
         services: Services::default(),
         relay_budget: Some(MonthlyBudget {
@@ -33,8 +34,18 @@ async fn every_writer_spends_one_shared_budget_including_control_bytes() {
     let (_directory, node) = runtime(10);
     let (first, mut first_reader) = tokio::io::duplex(32);
     let (second, mut second_reader) = tokio::io::duplex(32);
-    let mut first = Metered::new(first, node.clone(), node.epoch());
-    let mut second = Metered::new(second, node.clone(), node.epoch());
+    let mut first = Metered::new(
+        first,
+        node.clone(),
+        node.epoch(),
+        WriteOrigin::test_public(),
+    );
+    let mut second = Metered::new(
+        second,
+        node.clone(),
+        node.epoch(),
+        WriteOrigin::test_public(),
+    );
     first.write_all(b"control").await.unwrap();
     assert_eq!(second.write(b"payload").await.unwrap(), 3);
     assert!(first.write_all(b"overflow").await.is_err());
@@ -58,6 +69,7 @@ async fn service_revocation_is_not_lost_when_immediately_reenabled() {
             region: String::new(),
             stun_urls: Vec::new(),
             access: super::access::Policy::default(),
+            contribution: ContributionLimits::default(),
             capacity_bytes_per_second: None,
             services: Services {
                 relay: false,
@@ -74,7 +86,7 @@ async fn service_revocation_is_not_lost_when_immediately_reenabled() {
         .unwrap();
     assert!(node.available());
     let (stream, _) = tokio::io::duplex(32);
-    let mut old = Metered::new(stream, node, epoch);
+    let mut old = Metered::new(stream, node, epoch, WriteOrigin::test_public());
     assert!(old.write_all(b"old-session").await.is_err());
 }
 
@@ -127,6 +139,7 @@ async fn disabling_service_closes_active_websockets_and_rejects_new_upgrades() {
             region: String::new(),
             stun_urls: Vec::new(),
             access: super::access::Policy::default(),
+            contribution: ContributionLimits::default(),
             capacity_bytes_per_second: None,
             services: Services {
                 relay: false,

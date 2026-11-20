@@ -60,6 +60,29 @@ fn stopped(database: &Path) {
     assert!(records[0].1);
 }
 
+const TEST_OWNER_TOKEN: &str = "native-interop-owner";
+
+fn owner_node() -> windshare_relay_native::node::Settings {
+    use windshare_relay_access::{Credential, Digest};
+    use windshare_relay_native::node::{ContributionLimits, Identity, Settings};
+    let owner = Credential {
+        digest: Digest::of(TEST_OWNER_TOKEN.as_bytes()),
+        ..Identity::generate().unwrap().owner()
+    };
+    let mut settings = Settings {
+        // Only the sender presents its key. Charging JOINs or forwarded frames
+        // to the receiver would exhaust this allowance during the exchange.
+        contribution: ContributionLimits {
+            daily_bytes: Some(8192),
+            bytes_per_second: Some(1),
+        },
+        ..Settings::default()
+    };
+    settings.access.owner_principals.push(owner.principal);
+    settings.access.credentials.push(owner);
+    settings
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn go_runtime_client_drives_native_io_and_process_restart() {
     let (directory, client) = tokio::task::spawn_blocking(client).await.unwrap();
@@ -73,6 +96,8 @@ async fn go_runtime_client_drives_native_io_and_process_restart() {
         ConnectionLimits::default(),
         &database,
     )
+    .unwrap()
+    .configure(owner_node(), None)
     .unwrap();
     let (shutdown, ended) = oneshot::channel();
     let task = tokio::spawn(async move {
@@ -85,6 +110,7 @@ async fn go_runtime_client_drives_native_io_and_process_restart() {
     let helper = client.clone();
     let result = tokio::task::spawn_blocking(move || {
         Command::new(helper)
+            .env("WINDSHARE_RELAY_ACCESS_KEY", TEST_OWNER_TOKEN)
             .args(["-endpoint", &endpoint])
             .output()
             .unwrap()

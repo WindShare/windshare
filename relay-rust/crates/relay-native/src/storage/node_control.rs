@@ -1,8 +1,4 @@
-use super::{
-    Database,
-    access_control::save_authority,
-    budget::{BudgetRecord, write_budget},
-};
+use super::{Database, access_control::save_authority, budget::BudgetRecords};
 use crate::node::access::{AccessSnapshot, AuthorityState};
 use anyhow::{Result, anyhow, ensure};
 use rusqlite::{OptionalExtension, params};
@@ -29,32 +25,21 @@ impl Database {
 
     pub(crate) fn persist_node_settings<T>(
         &self,
-        budget: Option<BudgetRecord>,
+        budgets: BudgetRecords,
         generations: &[Generation],
         prepare_access: impl FnOnce(Vec<AuthorityState>) -> Result<T>,
     ) -> Result<T> {
-        if budget.is_none() && generations.is_empty() {
+        if budgets.is_empty() && generations.is_empty() {
             return prepare_access(Vec::new());
         }
-        let mut connection = self
-            .0
-            .connection
-            .lock()
-            .map_err(|_| anyhow!("database lock"))?;
-        let transaction = connection.transaction()?;
-        if let Some(record) = budget {
-            write_budget(&transaction, record)?;
-        }
-        let authorities = generations
-            .iter()
-            .map(|&generation| save_authority(&transaction, generation.into()))
-            .collect::<Result<_>>()?;
-        // The live trust cache may reject a merged record. Keep it inside the
-        // transaction so the ledger cannot advance for a rejected configuration.
-        let prepared = prepare_access(authorities)?;
-        transaction.commit()?;
-        drop(connection);
-        Ok(prepared)
+        self.budget_transaction(budgets, |transaction| {
+            let authorities = generations
+                .iter()
+                .map(|&generation| save_authority(transaction, generation.into()))
+                .collect::<Result<_>>()?;
+            // Rejecting the prepared trust cache must roll back both billing periods.
+            prepare_access(authorities)
+        })
     }
 
     pub(crate) fn enqueue_usage(&self, batches: &[Batch]) -> Result<()> {

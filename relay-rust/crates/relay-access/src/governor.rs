@@ -121,7 +121,7 @@ impl<K: Copy + Ord> Scheduler<K> {
         }
     }
 
-    pub fn next(&mut self, available_bytes: u64) -> Option<(K, u64)> {
+    pub fn next(&mut self, reserve: impl FnOnce(Class, u64) -> bool) -> Option<(K, u64)> {
         // Select before testing packet size so small packets cannot starve a
         // larger head while pacing credit accumulates.
         let position = *self.ready.first()?;
@@ -133,7 +133,7 @@ impl<K: Copy + Ord> Scheduler<K> {
         let &(served, key) = account.ready.first()?;
         let selected = self.sessions.get_mut(&key).expect("ready session");
         let bytes = selected.bytes?;
-        if bytes > available_bytes {
+        if !reserve(account.class, bytes) {
             return None;
         }
         self.ready.remove(&position);
