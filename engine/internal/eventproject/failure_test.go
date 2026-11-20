@@ -18,6 +18,7 @@ import (
 	"github.com/windshare/windshare/connectivity/v2peer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	networkruntime "github.com/windshare/windshare/engine/internal/networkruntime"
+	"github.com/windshare/windshare/engine/internal/receive"
 	"github.com/windshare/windshare/engine/networkdirectory"
 	appobs "github.com/windshare/windshare/engine/observation"
 	"github.com/windshare/windshare/engine/relayprofile"
@@ -37,6 +38,11 @@ func TestStoppedShareIsNotReportedAsRelayUnavailable(t *testing.T) {
 	key, ok := stopped.MessageKey()
 	if !ok || key != appobs.MessageShareStopped {
 		t.Fatalf("stopped share message key = %v,%t; want %v", key, ok, appobs.MessageShareStopped)
+	}
+	// The sender's stop terminal during a transfer is the same permanent stop.
+	midTransfer, ok := projectReceiveFailure(receive.Failure{Code: receive.FailureShareStopped})
+	if key, _ := midTransfer.MessageKey(); !ok || midTransfer.Code() != stopped.Code() || key != appobs.MessageShareStopped {
+		t.Fatalf("sender stop during transfer = %+v,%t; want %+v", midTransfer, ok, stopped)
 	}
 	for _, code := range []v2.ErrorCode{v2.ErrorStarting, v2.ErrorAdmission} {
 		unavailable, ok := ProjectRelayErrorCode(code)

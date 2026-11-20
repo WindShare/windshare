@@ -42,6 +42,11 @@ type PeerSessionTerminalError struct {
 	message Message
 }
 
+// NewPeerSessionTerminalError records the authenticated terminal the peer sent.
+func NewPeerSessionTerminalError(message Message) *PeerSessionTerminalError {
+	return &PeerSessionTerminalError{message: message}
+}
+
 func (terminal *PeerSessionTerminalError) Error() string { return ErrPeerSessionTerminal.Error() }
 func (terminal *PeerSessionTerminalError) Unwrap() error { return ErrPeerSessionTerminal }
 func (terminal *PeerSessionTerminalError) Message() Message {
@@ -135,7 +140,7 @@ func (pump *ProtocolPump) acceptFrame(ctx context.Context, frame framechannel.Fr
 		return pump.rejectLocally(fmt.Errorf("%w: %w", ErrInboundRejected, err))
 	}
 	if disposition == OperationSessionTerminal {
-		return &PeerSessionTerminalError{message: message}
+		return NewPeerSessionTerminalError(message)
 	}
 	return nil
 }

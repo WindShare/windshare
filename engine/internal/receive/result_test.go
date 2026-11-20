@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/engine/internal/task"
@@ -179,5 +181,57 @@ func successfulJobResult(t *testing.T) transfer.JobResult {
 			FileOutcomes: transfer.FileOutcomeSummary{DownloadedFiles: 1, ResumedFiles: 1},
 			Discovery:    transfer.DiscoveryComplete, CountersExact: true,
 		},
+	}
+}
+
+func peerSessionTerminalError(t *testing.T, code uint16) error {
+	t.Helper()
+	body, err := protocolsession.EncodeSessionTerminal(protocolsession.SessionTerminal{Code: code, Message: "Sender closed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, err := protocolsession.NewMessage(protocolsession.MessageSessionTerminal, nil, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fmt.Errorf("pump failed: %w", protocolsession.NewPeerSessionTerminalError(message))
+}
+
+func TestReceiveSettlementReportsSenderStopAsStoppedShare(t *testing.T) {
+	sessionTerminal, err := transferfault.NewSession(transferfault.ScopeSessionTerminal, transferfault.SessionTransport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name       string
+		runtimeErr error
+		wantCode   FailureCode
+		wantReason RecoveryReason
+		wantRetry  bool
+	}{
+		{"sender stopped share", peerSessionTerminalError(t, session.SessionStoppedCode), FailureShareStopped, RecoveryShareStopped, false},
+		{"other peer terminal stays retryable", peerSessionTerminalError(t, protocolsession.SessionTerminalCodeLast-1), 0, RecoveryTransferFailure, true},
+		{"plain transport failure stays retryable", opaqueCanaryError{"relay-token-canary"}, 0, RecoveryTransferFailure, true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			input := SettlementInput{Result: successfulJobResult(t), RuntimeError: test.runtimeErr}
+			input.Result.Outcome = transfer.DirectTreeOutcomePaused
+			input.Result.TerminationFault = sessionTerminal
+			result, err := Settle(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			failure, ok := errors.AsType[Failure](result.Err)
+			if !ok || result.FailureClass != task.FailureNetwork || failure.Code != test.wantCode {
+				t.Fatalf("failure = %+v class %d, want code %d", failure, result.FailureClass, test.wantCode)
+			}
+			if reason := result.Value.Recovery.Reason; reason != test.wantReason || reason.Retryable() != test.wantRetry {
+				t.Fatalf("recovery reason = %d retryable %t, want %d retryable %t", reason, reason.Retryable(), test.wantReason, test.wantRetry)
+			}
+			if !errors.Is(result.Err, test.runtimeErr) {
+				t.Fatal("settlement dropped the diagnostic runtime cause")
+			}
+		})
 	}
 }

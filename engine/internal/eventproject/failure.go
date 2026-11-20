@@ -363,6 +363,8 @@ func ReceiveFailureCode(code receive.FailureCode) (appobs.FailureCode, bool) {
 		return appobs.FailurePeerSignaling, true
 	case receive.FailurePeerStopped:
 		return appobs.FailurePeerStopped, true
+	case receive.FailureShareStopped:
+		return appobs.FailureRelayStopped, true
 	default:
 		return 0, false
 	}

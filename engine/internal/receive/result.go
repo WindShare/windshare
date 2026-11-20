@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/core/downloadmetrics"
+	"github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
@@ -184,10 +186,25 @@ func successfulGetResult(r transfer.JobResult) bool {
 func resultHasTerminalNetworkFault(r transfer.JobResult) bool {
 	return r.TerminationFault.Domain() == transferfault.DomainSession && r.TerminationFault.Scope() == transferfault.ScopeSessionTerminal
 }
+
+// peerStoppedSession reports whether the sender ended the session because its
+// share stopped. Retrying the same link cannot succeed after that terminal.
+func peerStoppedSession(cause error) bool {
+	var peer *protocolsession.PeerSessionTerminalError
+	if !errors.As(cause, &peer) || peer == nil || peer.Message().Kind() != protocolsession.MessageSessionTerminal {
+		return false
+	}
+	terminal, err := protocolsession.DecodeSessionTerminal(peer.Message().Body())
+	return err == nil && terminal.Code == session.SessionStoppedCode
+}
+
 func resultFailure(input SettlementInput, class task.FailureClass) Failure {
 	r := input.Result
 	if class == task.FailureUsage {
 		return Failure{Local: LocalSelectionMissing}
+	}
+	if !r.SourceDriftFault.Valid() && resultHasTerminalNetworkFault(r) && peerStoppedSession(input.RuntimeError) {
+		return Failure{Code: FailureShareStopped}
 	}
 	for _, f := range []transferfault.Fault{r.SourceDriftFault, r.TerminationFault, r.SettlementFault} {
 		if f.Valid() {

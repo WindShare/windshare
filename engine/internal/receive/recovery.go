@@ -31,6 +31,7 @@ const (
 	RecoverySourceOmitted
 	RecoveryInvalidRequest
 	RecoveryNeedsInspection
+	RecoveryShareStopped
 )
 
 // Retryable describes replaying the same request, possibly after repairing its
@@ -181,6 +182,9 @@ func recoveryReason(class task.FailureClass, failure Failure, result transfer.Jo
 	}
 	if class == task.FailureUsage || failure.Code == FailureInvalidInput {
 		return RecoveryInvalidRequest
+	}
+	if failure.Code == FailureShareStopped {
+		return RecoveryShareStopped
 	}
 	switch failure.Code {
 	case FailureOutputContract, FailurePeerConfiguration:
