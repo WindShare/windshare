@@ -12,7 +12,9 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/engine/relayconfig"
+	"github.com/windshare/windshare/engine/relayprofile"
 	"github.com/windshare/windshare/engine/relaysetup"
+	"github.com/windshare/windshare/engine/turn"
 )
 
 func TestNativeFrontendCommitInitializesMissingSettingsAndSurvivesRelayFailure(t *testing.T) {
@@ -134,5 +136,33 @@ func TestNativeCancellationRevokesPendingApprovalAndPreservesFrontend(t *testing
 	saved, err := (relaysetup.FileStore{Settings: store}).Load()
 	if err != nil || saved.Pending != nil || saved.FrontURL != "https://chosen.example" || len(saved.Profiles) != 0 || cancellations.Load() != 1 {
 		t.Fatal("cancellation lost settings or retained approval", saved, err, cancellations.Load())
+	}
+}
+
+func TestNativeRemoveRelayPreferencePersistsCleanConfig(t *testing.T) {
+	store := relayconfig.FileStore{Path: filepath.Join(t.TempDir(), "settings.json")}
+	initial := relayconfig.Config{
+		Profiles: []relayprofile.Candidate{
+			{PublicURL: "https://one.example", AccessKey: "one-key"},
+			{PublicURL: "https://two.example", AccessKey: "two-key"},
+		},
+		ActiveRelays: []string{"https://one.example", "https://two.example"},
+		ManagedTURNPolicies: []turn.ManagedPolicy{
+			{RelayURL: "https://one.example", LocalBudgetBytes: 100},
+		},
+	}
+	if err := store.Save(initial); err != nil {
+		t.Fatal(err)
+	}
+	result, err := newNativeSetup(store).run(t.Context(), SetupInput{
+		Preference: &relayconfig.PreferenceEdit{Action: "remove", Value: "https://one.example"},
+	}, nil)
+	if err != nil || result.FrontendSaved || result.RelaySaved {
+		t.Fatalf("unexpected result=%+v err=%v", result, err)
+	}
+	saved, err := store.Load()
+	if err != nil || len(saved.Profiles) != 1 || saved.Profiles[0].PublicURL != "https://two.example" ||
+		len(saved.ActiveRelays) != 1 || len(saved.ManagedTURNPolicies) != 0 {
+		t.Fatalf("unexpected saved config: %+v err=%v", saved, err)
 	}
 }

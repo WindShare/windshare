@@ -61,7 +61,7 @@ impl Desktop {
             .child(Self::receiver_site_card(theme, prefs, busy, cx))
     }
 
-    fn network_settings_busy(&self) -> bool {
+    pub(super) fn network_settings_busy(&self) -> bool {
         let setup_unfinished = match &self.runtime {
             Runtime::Native(session) => session.model.setup.unfinished(),
             Runtime::Preview(_) => false,
@@ -199,7 +199,7 @@ impl Desktop {
             let last = prefs.relays.len().saturating_sub(1);
             card = card.child(column().children(prefs.relays.iter().enumerate().map(
                 |(index, relay)| {
-                    Self::network_relay_row(
+                    self.network_relay_row(
                         theme,
                         relay,
                         index,
@@ -264,7 +264,9 @@ impl Desktop {
         None
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn network_relay_row(
+        &self,
         theme: Theme,
         relay: &SavedRelay,
         index: usize,
@@ -273,8 +275,8 @@ impl Desktop {
         at_capacity: bool,
         cx: &Context<Self>,
     ) -> Div {
-        let locale = language(cx);
         let can_toggle = !busy && (relay.enabled || !at_capacity);
+        let expanded = self.setup_form.expanded_relay.as_deref() == Some(relay.url.as_str());
         let toggle_edit = if relay.enabled {
             PreferenceEdit::Disable(relay.url.clone())
         } else {
@@ -289,63 +291,43 @@ impl Desktop {
                     this.apply_preference(toggle_edit.clone(), cx);
                 }))
             });
-        let trailing = if let Some(console_url) = relay.console_url.clone() {
-            let relay_url = relay.url.clone();
-            row()
-                .gap(px(12.))
-                .flex_wrap()
-                .justify_end()
-                .child(
-                    row()
-                        .gap(px(4.))
-                        .child(
-                            Button::new(
-                                ("authorize-relay", index),
-                                locale.text(Text::ApproveDevice),
-                            )
-                            .icon(Icon::Shield)
-                            .compact()
-                            .style(ButtonStyle::Ghost)
-                            .disabled(busy)
-                            .on_press(cx.listener(
-                                move |this, (), window, cx| {
-                                    this.authorize_relay(relay_url.clone(), window, cx);
-                                },
-                            )),
-                        )
-                        .child(
-                            Button::new(("relay-console", index), "")
-                                .icon(Icon::External)
-                                .compact()
-                                .style(ButtonStyle::Ghost)
-                                .tooltip(locale.text(Text::ManageRelay))
-                                .on_press(move |(), _, cx| cx.open_url(&console_url)),
-                        ),
-                )
-                .child(toggle)
-        } else {
-            row().child(toggle)
-        };
-        row()
-            .gap(px(14.))
+        let trailing = row()
+            .gap(px(10.))
+            .child(Self::relay_actions_toggle(
+                index,
+                relay.url.clone(),
+                expanded,
+                busy,
+                cx,
+            ))
+            .child(toggle);
+        column()
+            .gap(px(10.))
             .pt(px(12.))
             .when(!is_last, |el| el.pb(px(12.)))
             .border_t_1()
             .border_color(theme.border())
-            .child(theme.dot(if relay.enabled {
-                Tone::Mint
-            } else {
-                Tone::Neutral
-            }))
             .child(
-                theme
-                    .label(relay.url.clone(), 15.)
-                    .font_family(FONT)
-                    .flex_1()
-                    .min_w_0()
-                    .line_clamp(2),
+                row()
+                    .gap(px(14.))
+                    .child(theme.dot(if relay.enabled {
+                        Tone::Mint
+                    } else {
+                        Tone::Neutral
+                    }))
+                    .child(
+                        theme
+                            .label(relay.url.clone(), 15.)
+                            .font_family(FONT)
+                            .flex_1()
+                            .min_w_0()
+                            .line_clamp(2),
+                    )
+                    .child(trailing),
             )
-            .child(trailing)
+            .when(expanded, |col| {
+                col.child(self.relay_actions_drawer(theme, relay, index, busy, cx))
+            })
     }
 
     fn receiver_site_card(

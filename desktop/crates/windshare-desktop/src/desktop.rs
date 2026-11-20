@@ -225,6 +225,9 @@ impl Desktop {
         let Some(frame) = self.overlays.pop() else {
             return;
         };
+        if matches!(frame.content, Overlay::SharingSetup(_)) {
+            self.setup_form.expanded_relay = None;
+        }
         let fallback = self
             .overlays
             .last()
@@ -256,6 +259,7 @@ impl Desktop {
         }
         self.page = page;
         self.overlays.clear();
+        self.setup_form.expanded_relay = None;
         self.link_disclosure = LinkDisclosure::Summary;
         self.focus_task(window, cx);
     }
@@ -287,6 +291,7 @@ impl Desktop {
             to = ?next,
         );
         self.settings_section = next;
+        self.setup_form.expanded_relay = None;
         if self.page == Page::Settings {
             self.overlays.clear();
             self.refresh_settings_section();

@@ -15,7 +15,7 @@ import (
 	"github.com/windshare/windshare/engine/relaysetup"
 )
 
-const relayUsage = "Usage: wind relay add <url> [--access-key <key>] [--name <device>] [--no-browser] | wind relay onboard <url> [--name <device>] [--no-browser] | wind relay cancel <url> | wind relay list | wind relay mode <automatic|selected> | wind relay enable|disable <url> | wind relay frontend <url|default>"
+const relayUsage = "Usage: wind relay add <url> [--access-key <key>] [--name <device>] [--no-browser] | wind relay onboard <url> [--name <device>] [--no-browser] | wind relay cancel <url> | wind relay list | wind relay mode <automatic|selected> | wind relay enable|disable|remove <url> | wind relay frontend <url|default>"
 
 func (app *App) runRelay(ctx context.Context, args []string) int {
 	if len(args) == 0 {
@@ -32,7 +32,7 @@ func (app *App) runRelay(ctx context.Context, args []string) int {
 			return outcome.exitCode()
 		}
 		return app.runRelaySetup(ctx, request)
-	case "list", "mode", "enable", "disable", "frontend":
+	case "list", "mode", "enable", "disable", "remove", "frontend":
 		return app.relayPreferences(ctx, args)
 	case "cancel":
 		flags := app.newFlagSet("relay cancel")

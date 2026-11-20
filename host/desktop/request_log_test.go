@@ -25,6 +25,7 @@ func TestPreferenceRequestLogsUseOnlyDiagnosticFields(t *testing.T) {
 	}{
 		{"enable", relayconfig.PreferenceEdit{Action: "enable", Value: relay}, "enable", "wss://relay.example:8443", ""},
 		{"disable", relayconfig.PreferenceEdit{Action: "disable", Value: relay}, "disable", "wss://relay.example:8443", ""},
+		{"remove", relayconfig.PreferenceEdit{Action: "remove", Value: relay}, "remove", "wss://relay.example:8443", ""},
 		{"frontend", relayconfig.PreferenceEdit{Action: "frontend", Value: frontend}, "frontend", "", "https://frontend.example"},
 		{"invalid address", relayconfig.PreferenceEdit{Action: "frontend", Value: "private text"}, "frontend", "", ""},
 		{"restore default", relayconfig.PreferenceEdit{Action: "frontend"}, "frontend", "", ""},

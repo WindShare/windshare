@@ -60,7 +60,7 @@ impl Desktop {
         let close_on_back = matches!(target, SharingSetupTarget::Defaults);
         panel = match form.page {
             SetupPage::Selection => panel
-                .child(Self::relay_preferences(
+                .child(self.relay_preferences(
                     theme,
                     prefs,
                     switch_share,

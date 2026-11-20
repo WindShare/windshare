@@ -7,6 +7,7 @@ fn preference_commands_log_the_action_and_keep_the_address_on_the_wire() {
     let cases = [
         (PreferenceEdit::Enable(address.into()), "enable"),
         (PreferenceEdit::Disable(address.into()), "disable"),
+        (PreferenceEdit::Remove(address.into()), "remove"),
         (PreferenceEdit::Frontend(address.into()), "frontend"),
     ];
     for (edit, action) in cases {

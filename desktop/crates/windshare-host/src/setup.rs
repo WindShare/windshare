@@ -162,6 +162,7 @@ pub enum PreferenceEdit {
     Mode(RelayMode),
     Enable(String),
     Disable(String),
+    Remove(String),
     Frontend(String),
 }
 
@@ -171,6 +172,7 @@ impl PreferenceEdit {
             Self::Mode(_) => "mode",
             Self::Enable(_) => "enable",
             Self::Disable(_) => "disable",
+            Self::Remove(_) => "remove",
             Self::Frontend(_) => "frontend",
         }
     }

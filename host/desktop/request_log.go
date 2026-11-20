@@ -40,7 +40,7 @@ func (a *Application) logRequestResult(request Request, rejection *Failure) {
 			fields.SetupID = request.Setup.ID
 			if edit := request.Setup.Preference; edit != nil {
 				switch edit.Action {
-				case "enable", "disable":
+				case "enable", "disable", "remove":
 					fields.Action = edit.Action
 					fields.RelayOrigin = endpointOrigin(edit.Value)
 				case "frontend":

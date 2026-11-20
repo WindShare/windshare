@@ -12,7 +12,8 @@ use std::{
 };
 use windshare_host::{
     AccountProfile, AccountState, AccountStatus, AccountView, Allowance, Connection, Controller,
-    Model, Nickname, RelayMode, RelayPreferences, SavedRelay,
+    Model, Nickname, RelayMode, RelayOperation, RelayPreferences, SavedRelay,
+    ShareState as HostShareState,
 };
 
 pub const PREVIEW_DEFAULT_FRONTEND: &str = "https://windshare.top";
@@ -29,6 +30,41 @@ enum OverlayCompletion {
     Keep,
     Close,
     CloseWithToast(Text),
+}
+
+struct OverlayReconcile<'a> {
+    previous_model: &'a Model,
+    model: &'a Model,
+    previous_page: super::SetupPage,
+    had_setup_pending: bool,
+    previous_account_page: super::AccountPage,
+    previous_field: Option<&'a gpui::FocusHandle>,
+}
+
+fn share_operation_id(shares: &[crate::model::Share], id: usize) -> Option<&str> {
+    shares
+        .iter()
+        .find(|share| share.id == id)
+        .and_then(|share| {
+            if let ShareSource::Native { operation_id } = &share.source {
+                Some(operation_id.as_str())
+            } else {
+                None
+            }
+        })
+}
+
+fn host_share_state(model: &Model, operation_id: &str) -> Option<HostShareState> {
+    model
+        .operations
+        .iter()
+        .find(|op| op.id == operation_id)
+        .and_then(windshare_host::Operation::share)
+        .map(|share| share.state)
+}
+
+const fn host_share_running(state: HostShareState) -> bool {
+    matches!(state, HostShareState::Preparing | HostShareState::Sharing)
 }
 
 pub enum Runtime {
@@ -184,6 +220,13 @@ impl Runtime {
 }
 
 impl Desktop {
+    pub(super) const fn interaction_epoch(&self) -> u64 {
+        match &self.runtime {
+            Runtime::Native(session) => session.interaction_epoch,
+            Runtime::Preview(_) => 0,
+        }
+    }
+
     pub const fn page_available(&self, page: Page) -> bool {
         self.runtime.is_preview() || matches!(page, Page::Share | Page::Shares | Page::Settings)
     }
@@ -217,17 +260,23 @@ impl Desktop {
         let previous_setup_pending = self.setup_form.pending.clone();
         let previous_account_page = self.account_form.page();
         let previous_field = self.account_form.field_focus(&session.model, cx);
-        self.setup_form.reconcile(&model, cx);
+        let completed_toast = self.setup_form.reconcile(&model, cx);
         self.account_form.reconcile(&model, cx);
         let close_completed = Self::reconcile_settings_overlay(
             &self.overlays,
+            &self.shares,
+            self.page,
+            self.share_flow,
             &mut self.setup_form,
             &mut self.account_form,
-            &model,
-            previous_page,
-            previous_setup_pending.is_some(),
-            previous_account_page,
-            previous_field.as_ref(),
+            &OverlayReconcile {
+                previous_model: &session.model,
+                model: &model,
+                previous_page,
+                had_setup_pending: previous_setup_pending.is_some(),
+                previous_account_page,
+                previous_field: previous_field.as_ref(),
+            },
             window,
             cx,
         );
@@ -251,6 +300,39 @@ impl Desktop {
                 }
             }
         }
+        session.retry_wakeup = Self::schedule_retry_wakeups(&model, cx);
+        if let windshare_host::Setup::Running {
+            verification_url,
+            service_login: None,
+            ..
+        } = &model.setup
+            && !verification_url.is_empty()
+            && !matches!(&session.model.setup, windshare_host::Setup::Running { verification_url: previous, .. } if previous == verification_url)
+        {
+            cx.open_url(verification_url);
+        }
+        session.model = model;
+        match close_completed {
+            OverlayCompletion::Keep => {
+                if let Some(text) = completed_toast {
+                    self.notify(text, cx);
+                }
+            }
+            OverlayCompletion::Close => {
+                self.close_overlay(window, cx);
+                if let Some(text) = completed_toast {
+                    self.notify(text, cx);
+                }
+            }
+            OverlayCompletion::CloseWithToast(text) => {
+                self.close_overlay(window, cx);
+                self.notify(text, cx);
+            }
+        }
+        cx.notify();
+    }
+
+    fn schedule_retry_wakeups(model: &Model, cx: &Context<Self>) -> Option<gpui::Task<()>> {
         // This timer only re-enables presentation at the host's deadline.
         // It never refreshes the directory or retries an operation.
         let mut deadlines: Vec<_> = model
@@ -273,7 +355,7 @@ impl Desktop {
             .collect();
         deadlines.sort_unstable();
         deadlines.dedup();
-        session.retry_wakeup = (!deadlines.is_empty()).then(|| {
+        (!deadlines.is_empty()).then(|| {
             cx.spawn(async move |view, cx| {
                 for at in deadlines {
                     let delay = at.duration_since(SystemTime::now()).unwrap_or_default();
@@ -283,39 +365,18 @@ impl Desktop {
                     }
                 }
             })
-        });
-        if let windshare_host::Setup::Running {
-            verification_url,
-            service_login: None,
-            ..
-        } = &model.setup
-            && !verification_url.is_empty()
-            && !matches!(&session.model.setup, windshare_host::Setup::Running { verification_url: previous, .. } if previous == verification_url)
-        {
-            cx.open_url(verification_url);
-        }
-        session.model = model;
-        match close_completed {
-            OverlayCompletion::Keep => {}
-            OverlayCompletion::Close => self.close_overlay(window, cx),
-            OverlayCompletion::CloseWithToast(text) => {
-                self.close_overlay(window, cx);
-                self.notify(text, cx);
-            }
-        }
-        cx.notify();
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
     fn reconcile_settings_overlay(
         overlays: &[crate::overlays::OverlayFrame],
+        shares: &[crate::model::Share],
+        page: Page,
+        share_flow: crate::flow_state::ShareFlow,
         setup_form: &mut super::SetupForm,
         account_form: &mut super::AccountForm,
-        model: &Model,
-        previous_page: super::SetupPage,
-        had_setup_pending: bool,
-        previous_account_page: super::AccountPage,
-        previous_field: Option<&gpui::FocusHandle>,
+        state: &OverlayReconcile<'_>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> OverlayCompletion {
@@ -323,34 +384,117 @@ impl Desktop {
             return OverlayCompletion::Keep;
         };
         match frame.content {
-            Overlay::Account => {
-                if previous_account_page != super::AccountPage::Overview
-                    && account_form.page() == super::AccountPage::Overview
-                    && let Some(Ok(message)) = account_form.feedback
-                {
-                    account_form.feedback = None;
-                    return OverlayCompletion::CloseWithToast(message);
-                }
-                let next_field = account_form.field_focus(model, cx);
-                if previous_field != next_field.as_ref() {
-                    window.focus(next_field.as_ref().unwrap_or(&frame.scope), cx);
-                }
+            Overlay::Account => Self::reconcile_account_overlay(
+                frame,
+                shares,
+                page,
+                share_flow,
+                account_form,
+                state,
+                window,
+                cx,
+            ),
+            Overlay::SharingSetup(target) => {
+                Self::reconcile_setup_overlay(frame, target, shares, setup_form, state, window, cx)
             }
-            Overlay::SharingSetup(SharingSetupTarget::Defaults)
-                if had_setup_pending
-                    && setup_form.pending.is_none()
-                    && matches!(model.setup, windshare_host::Setup::Finished { .. }) =>
-            {
-                return setup_form
-                    .feedback
-                    .take()
-                    .and_then(Result::ok)
-                    .map_or(OverlayCompletion::Close, OverlayCompletion::CloseWithToast);
+            _ => OverlayCompletion::Keep,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn reconcile_account_overlay(
+        frame: &crate::overlays::OverlayFrame,
+        shares: &[crate::model::Share],
+        page: Page,
+        share_flow: crate::flow_state::ShareFlow,
+        account_form: &mut super::AccountForm,
+        state: &OverlayReconcile<'_>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> OverlayCompletion {
+        if state.previous_account_page != super::AccountPage::Overview
+            && account_form.page() == super::AccountPage::Overview
+        {
+            if let Some(Ok(message)) = account_form.feedback {
+                account_form.feedback = None;
+                return OverlayCompletion::CloseWithToast(message);
             }
-            Overlay::SharingSetup(_) if setup_form.page != previous_page => {
-                window.focus(&frame.scope, cx);
+            let had_no_account = state
+                .previous_model
+                .account
+                .as_ref()
+                .is_some_and(|view| view.status.account.is_empty());
+            let has_account = state
+                .model
+                .account
+                .as_ref()
+                .is_some_and(|view| !view.status.account.is_empty());
+            if account_form.feedback.is_none() && had_no_account && has_account {
+                return OverlayCompletion::Close;
             }
-            _ => {}
+        }
+        if page == Page::Share
+            && !matches!(account_form.feedback, Some(Err(_)))
+            && let crate::flow_state::ShareFlow::Running(run) = share_flow
+            && let Some(op_id) = share_operation_id(shares, run.share_id)
+            && host_share_state(state.previous_model, op_id)
+                == Some(HostShareState::AwaitingAuthorization)
+            && host_share_state(state.model, op_id).is_some_and(host_share_running)
+        {
+            return account_form
+                .feedback
+                .take()
+                .and_then(Result::ok)
+                .map_or(OverlayCompletion::Close, OverlayCompletion::CloseWithToast);
+        }
+        let next_field = account_form.field_focus(state.model, cx);
+        if state.previous_field != next_field.as_ref() {
+            window.focus(next_field.as_ref().unwrap_or(&frame.scope), cx);
+        }
+        OverlayCompletion::Keep
+    }
+
+    fn reconcile_setup_overlay(
+        frame: &crate::overlays::OverlayFrame,
+        target: SharingSetupTarget,
+        shares: &[crate::model::Share],
+        setup_form: &mut super::SetupForm,
+        state: &OverlayReconcile<'_>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> OverlayCompletion {
+        let finished = state.had_setup_pending
+            && setup_form.pending.is_none()
+            && matches!(state.model.setup, windshare_host::Setup::Finished { .. });
+        let should_close = match target {
+            SharingSetupTarget::Defaults => finished,
+            SharingSetupTarget::RecoverShare(id) | SharingSetupTarget::SwitchRelay(id) => {
+                let op_id = share_operation_id(shares, id);
+                let prev = op_id.and_then(|op| host_share_state(state.previous_model, op));
+                let next = op_id.and_then(|op| host_share_state(state.model, op));
+                let auth_completed = matches!(target, SharingSetupTarget::RecoverShare(_))
+                    && prev == Some(HostShareState::AwaitingAuthorization)
+                    && finished
+                    && matches!(
+                        &state.model.setup,
+                        windshare_host::Setup::Finished { context }
+                            if context.relay_operation == Some(RelayOperation::AuthorizeDevice)
+                                && context.relay_saved
+                    );
+                let share_unblocked = prev.is_some_and(|s| !host_share_running(s))
+                    && next.is_some_and(host_share_running);
+                auth_completed || share_unblocked
+            }
+        };
+        if should_close {
+            return setup_form
+                .feedback
+                .take()
+                .and_then(Result::ok)
+                .map_or(OverlayCompletion::Close, OverlayCompletion::CloseWithToast);
+        }
+        if setup_form.page != state.previous_page {
+            window.focus(&frame.scope, cx);
         }
         OverlayCompletion::Keep
     }

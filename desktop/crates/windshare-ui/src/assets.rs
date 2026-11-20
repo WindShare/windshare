@@ -42,6 +42,7 @@ impl AssetSource for Assets {
             }
             "check" => r#"<path d="m5 12 4 4L19 6"/>"#,
             "close" => r#"<path d="m6 6 12 12M6 18 18 6"/>"#,
+            "trash" => r#"<path d="M3 6h18M8 6V4h8v2m-9 0 1 14h8l1-14M10 11v6M14 11v6"/>"#,
             "more" => {
                 r#"<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>"#
             }

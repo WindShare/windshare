@@ -33,8 +33,10 @@ pub struct SetupForm {
     pub(super) access_key: Entity<Input>,
     pub(super) frontend: Entity<Input>,
     pub(super) pending: Option<String>,
+    pub(super) pending_toast: Option<Text>,
     pub(super) feedback: Option<Result<Text, String>>,
     pub(super) rendered_input_ready: Cell<Option<bool>>,
+    pub(crate) expanded_relay: Option<String>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -80,8 +82,10 @@ impl SetupForm {
             access_key,
             frontend,
             pending: None,
+            pending_toast: None,
             feedback: None,
             rendered_input_ready: Cell::new(None),
+            expanded_relay: None,
             _subscriptions: subscriptions,
         }
     }
@@ -114,10 +118,21 @@ impl SetupForm {
         }
     }
 
-    pub(super) fn reconcile(&mut self, model: &Model, cx: &mut Context<Desktop>) {
-        let Some(id) = &self.pending else { return };
+    pub(super) fn reconcile(&mut self, model: &Model, cx: &mut Context<Desktop>) -> Option<Text> {
+        if let Some(url) = &self.expanded_relay
+            && !model
+                .preferences
+                .relays
+                .iter()
+                .any(|relay| &relay.url == url)
+        {
+            self.expanded_relay = None;
+        }
+        let id = self.pending.as_ref()?;
+        let mut toast = None;
         if let Some(error) = model.settings_rejection(id) {
             self.feedback = Some(Err(error.message.clone()));
+            self.pending_toast = None;
         } else if model
             .setup
             .context()
@@ -128,6 +143,7 @@ impl SetupForm {
                     self.page = SetupPage::Selection;
                     self.access_key
                         .update(cx, |input, cx| input.set_value("", cx));
+                    toast = self.pending_toast.take();
                     if context.frontend_saved {
                         Some(Ok(Text::FrontendSaved))
                     } else if context.relay_saved {
@@ -150,20 +166,26 @@ impl SetupForm {
                     }
                 }
                 Setup::Cancelled { .. } => {
+                    self.pending_toast = None;
                     self.access_key
                         .update(cx, |input, cx| input.set_value("", cx));
                     Some(Ok(Text::SetupCancelled))
                 }
                 Setup::Failed { error, .. } if !model.setup.unfinished() => {
+                    self.pending_toast = None;
                     Some(Err(error.message.clone()))
                 }
-                Setup::Failed { .. } | Setup::CancelFailed { .. } => None,
-                _ => return,
+                Setup::Failed { .. } | Setup::CancelFailed { .. } => {
+                    self.pending_toast = None;
+                    None
+                }
+                _ => return None,
             };
         } else {
-            return;
+            return None;
         }
         self.pending = None;
+        toast
     }
 }
 
@@ -240,6 +262,7 @@ impl Desktop {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.setup_form.expanded_relay = None;
         if let Runtime::Native(session) = &self.runtime {
             session.controller.refresh_preferences();
         }
@@ -257,6 +280,7 @@ impl Desktop {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.setup_form.expanded_relay = None;
         let Runtime::Native(session) = &self.runtime else {
             return;
         };
@@ -405,6 +429,7 @@ impl Desktop {
             }
         };
         self.setup_form.pending = id;
+        self.setup_form.pending_toast = None;
         self.setup_form.feedback = None;
     }
 

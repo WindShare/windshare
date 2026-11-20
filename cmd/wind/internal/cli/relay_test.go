@@ -258,3 +258,36 @@ func TestInterruptedRelaySetupHintMatchesWhatWasSaved(t *testing.T) {
 		})
 	}
 }
+
+func TestRelayRemoveDeletesSavedProfileAndRejectsUnknownRelay(t *testing.T) {
+	store := relayconfig.FileStore{Path: filepath.Join(t.TempDir(), "config.json")}
+	initial := relayconfig.Config{
+		Profiles: []relayprofile.Candidate{
+			{PublicURL: "https://one.example", AccessKey: "secret-one"},
+			{PublicURL: "https://two.example"},
+		},
+		ActiveRelays: []string{"https://one.example", "https://two.example"},
+	}
+	if err := store.Save(initial); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	app := &App{Stdout: &stdout, Stderr: &stderr, engineConfig: engine.Config{RelaySetup: relaysetup.Dependencies{
+		Store: relaysetup.FileStore{Settings: store},
+	}}}
+	t.Cleanup(app.closeTerminalOutput)
+	if code := app.Run(t.Context(), []string{"relay", "remove", "https://one.example"}); code != ExitOK {
+		t.Fatalf("remove exit=%d stderr=%q", code, stderr.String())
+	}
+	if stdout.Len() != 0 || strings.Contains(stderr.String(), "secret-one") || !strings.Contains(stderr.String(), "https://two.example") {
+		t.Fatalf("unexpected output: stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+	saved, err := store.Load()
+	if err != nil || len(saved.Profiles) != 1 || saved.Profiles[0].PublicURL != "https://two.example" || !slices.Equal(saved.ActiveRelays, []string{"https://two.example"}) {
+		t.Fatalf("saved config = %+v err=%v", saved, err)
+	}
+	stderr.Reset()
+	if code := app.Run(t.Context(), []string{"relay", "remove", "https://one.example"}); code != ExitFailure {
+		t.Fatalf("removing missing relay exit=%d stderr=%q", code, stderr.String())
+	}
+}

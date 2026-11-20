@@ -31,7 +31,7 @@ wind share <path...> [--relay <url>]... [--configured-relays-only] [--front-url 
 ```text
 wind relay add <url> [--access-key <key>] [--name <device>] [--no-browser]
 wind relay onboard <url> [--name <device>] [--no-browser]
-wind relay list | mode <automatic|selected> | enable <url> | disable <url>
+wind relay list | mode <automatic|selected> | enable <url> | disable <url> | remove <url>
 wind relay frontend <url|default>
 wind relay cancel <url>
 wind config import <file|-> [--front-url <url>] [-v|--verbose]
