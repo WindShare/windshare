@@ -4,6 +4,7 @@ import { CandidateBudget } from '../src/connectivity/ice-policy/candidates'
 import { ICEEndpointPool, selectAttemptProfile, type ICEEndpoint, type SelectionRequest } from '../src/connectivity/ice-policy/endpoints'
 import { ICEFactStore } from '../src/connectivity/ice-policy/facts'
 import { defaultICEEndpointPool } from '../src/connectivity/ice-policy/defaults'
+import { canonicalSTUN } from '../src/network/stun-endpoint'
 
 const request: SelectionRequest = {
  networkGenerationID: 'network', waveID: 'wave', sequence: 1, nowMs: 100_000,
@@ -69,5 +70,19 @@ describe('trusted ICE policy', () => {
   expect(flood.acceptMapped('candidate:6 1 udp 100 192.0.2.55 6000 typ srflx')).toEqual({
    accepted: true, reason: 'accepted', candidateClass: 'mapped',
   })
+ })
+ it('keeps the public STUN candidate catalog canonical, unreviewed, and inactive', () => {
+  const entries = JSON.parse(readFileSync(new URL('../../deploy/network/public-stun-candidates.json', import.meta.url), 'utf8')) as ICEEndpoint[]
+  expect(entries.length).toBeGreaterThan(0)
+  const candidatePool = new ICEEndpointPool(entries)
+  const urls = new Set<string>()
+  for (const entry of entries) {
+   expect(canonicalSTUN(entry.url)).toBe(entry.url)
+   expect(urls.has(entry.url)).toBe(false)
+   urls.add(entry.url)
+   expect(entry.trust).toBe('unreviewed')
+   expect(entry.enabled).toBe(false)
+  }
+  expect(selectAttemptProfile(candidatePool, request).urls).toEqual([])
  })
 })

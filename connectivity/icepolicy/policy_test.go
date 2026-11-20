@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/windshare/windshare/core/networkendpoint"
 )
 
 func testPool(t *testing.T) ICEEndpointPool {
@@ -221,5 +223,46 @@ func TestSharedProfileIdentityVector(t *testing.T) {
 	profile := SelectAttemptProfile(testPool(t), request, GenerationFacts{})
 	if profile.ID() != vector.ProfileID || !reflect.DeepEqual(profile.EndpointIDs(), vector.EndpointIDs) {
 		t.Fatal(profile.ID(), profile.EndpointIDs())
+	}
+}
+
+func TestPublicSTUNCandidateCatalogRemainsUnreviewed(t *testing.T) {
+	data, err := os.ReadFile("../../deploy/network/public-stun-candidates.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var entries []Endpoint
+	if err := json.Unmarshal(data, &entries); err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("empty candidate catalog")
+	}
+	pool, err := ParseLocalConfiguration(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seenURLs := make(map[string]bool, len(entries))
+	for i, entry := range entries {
+		canonical, err := networkendpoint.NormalizeSTUN(entry.URL)
+		if err != nil || canonical != entry.URL {
+			t.Fatalf("non-canonical STUN URL %q: %v", entry.URL, err)
+		}
+		if seenURLs[entry.URL] {
+			t.Fatalf("duplicate STUN URL %q", entry.URL)
+		}
+		seenURLs[entry.URL] = true
+		if i > 0 && entries[i-1].URL >= entry.URL {
+			t.Fatalf("catalog not sorted at %q >= %q", entries[i-1].URL, entry.URL)
+		}
+		if entry.Trust != "unreviewed" || entry.Enabled {
+			t.Fatalf("candidate %q must remain unreviewed and disabled", entry.ID)
+		}
+		if entry.Region != "" || entry.FailureDomain != "" || entry.Provider != "" {
+			t.Fatalf("candidate %q carries unmeasured facts", entry.ID)
+		}
+	}
+	if got := SelectAttemptProfile(pool, selection(), GenerationFacts{}).URLs(); len(got) != 0 {
+		t.Fatalf("unreviewed catalog produced active URLs: %v", got)
 	}
 }
