@@ -438,3 +438,198 @@ func TestReadmissionRangeSetOperations(t *testing.T) {
 		t.Fatalf("intersectRanges(left, empty) should be empty")
 	}
 }
+
+func TestTransferJobReconcilesReadmissionImmediateSettlements(t *testing.T) {
+	window := uint64(defaultFileReadWindowBlocks) * uint64(catalog.MinChunkSize)
+	size := 3 * window
+	siblingSize := uint64(catalog.MinChunkSize)
+	objectID := func() OwnedObjectID {
+		var id OwnedObjectID
+		for i := range id {
+			id[i] = byte(i + 1)
+		}
+		return id
+	}()
+	itemBlocked := func(reason ItemBlockReason) func(*testing.T, *jobOutput, MaterializationFile) FileSettlement {
+		return func(t *testing.T, output *jobOutput, file MaterializationFile) FileSettlement {
+			t.Helper()
+			ref, err := NewMaterializationStateRef(output.SessionID(), file.Target().Locator().Digest())
+			if err != nil {
+				t.Fatal(err)
+			}
+			settlement, err := NewImmediateItemBlockedFileSettlement(file.Target(), ref, reason)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return settlement
+		}
+	}
+	boundSettlement := func(build func(MaterializedFileBinding) (FileSettlement, error)) func(*testing.T, *jobOutput, MaterializationFile) FileSettlement {
+		return func(t *testing.T, _ *jobOutput, file MaterializationFile) FileSettlement {
+			t.Helper()
+			binding, err := BindFileMaterializationTarget(file.Target(), objectID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			settlement, err := build(binding)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return settlement
+		}
+	}
+
+	for _, test := range []struct {
+		name              string
+		settlement        func(*testing.T, *jobOutput, MaterializationFile) FileSettlement
+		wantOutcome       DirectTreeOutcome
+		wantVerified      uint64
+		wantNewlyVerified uint64
+		wantReusable      uint64
+		wantPrevPublished uint64
+		wantOutcomes      FileOutcomeSummary
+	}{
+		{
+			name:              "checkpoint invalid",
+			settlement:        itemBlocked(ItemBlockCheckpointInvalid),
+			wantOutcome:       DirectTreeOutcomePartial,
+			wantVerified:      siblingSize,
+			wantNewlyVerified: siblingSize,
+			wantOutcomes:      FileOutcomeSummary{DownloadedFiles: 1, ItemBlockedFiles: 1, CheckpointInvalidFiles: 1},
+		},
+		{
+			name:              "revision conflict",
+			settlement:        itemBlocked(ItemBlockRevisionConflict),
+			wantOutcome:       DirectTreeOutcomePartial,
+			wantVerified:      siblingSize,
+			wantNewlyVerified: siblingSize,
+			wantOutcomes:      FileOutcomeSummary{DownloadedFiles: 1, ItemBlockedFiles: 1, RevisionConflictFiles: 1},
+		},
+		{
+			name:              "state corrupt",
+			settlement:        itemBlocked(ItemBlockStateCorrupt),
+			wantOutcome:       DirectTreeOutcomePartial,
+			wantVerified:      siblingSize,
+			wantNewlyVerified: siblingSize,
+			wantOutcomes:      FileOutcomeSummary{DownloadedFiles: 1, ItemBlockedFiles: 1},
+		},
+		{
+			name:              "publication ambiguous",
+			settlement:        itemBlocked(ItemBlockPublicationAmbiguous),
+			wantOutcome:       DirectTreeOutcomePartial,
+			wantVerified:      siblingSize,
+			wantNewlyVerified: siblingSize,
+			wantOutcomes:      FileOutcomeSummary{DownloadedFiles: 1, ItemBlockedFiles: 1},
+		},
+		{
+			name:              "retirement uncertain",
+			settlement:        itemBlocked(ItemBlockRetirementUncertain),
+			wantOutcome:       DirectTreeOutcomePartial,
+			wantVerified:      siblingSize,
+			wantNewlyVerified: siblingSize,
+			wantOutcomes:      FileOutcomeSummary{DownloadedFiles: 1, ItemBlockedFiles: 1},
+		},
+		{
+			name:              "retired file failed",
+			settlement:        boundSettlement(NewFailedFileSettlement),
+			wantOutcome:       DirectTreeOutcomePartial,
+			wantVerified:      siblingSize,
+			wantNewlyVerified: siblingSize,
+			wantOutcomes:      FileOutcomeSummary{DownloadedFiles: 1, FailedFiles: 1},
+		},
+		{
+			name:              "previously published",
+			settlement:        boundSettlement(NewPreviouslyPublishedFileSettlement),
+			wantOutcome:       DirectTreeOutcomeSuccess,
+			wantVerified:      siblingSize,
+			wantNewlyVerified: siblingSize,
+			wantPrevPublished: size,
+			wantOutcomes:      FileOutcomeSummary{DownloadedFiles: 1, PreviouslyPublishedFiles: 1},
+		},
+		{
+			name:              "reversible collision preserves partial coverage",
+			settlement:        boundSettlement(NewTransactionCollisionFileSettlement),
+			wantOutcome:       DirectTreeOutcomePartial,
+			wantVerified:      2*window + siblingSize,
+			wantNewlyVerified: 2*window + siblingSize,
+			wantReusable:      2 * window,
+			wantOutcomes:      FileOutcomeSummary{DownloadedFiles: 1, CollisionFiles: 1},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			share := transferID[catalog.ShareInstance](0xd1)
+			root := transferID[catalog.DirectoryID](0xd2)
+			targetFile := transferID[catalog.FileID](0xd3)
+			siblingFile := transferID[catalog.FileID](0xd4)
+			descriptors := metadataRevisionDescriptors(t, share, targetFile, size, 51, 52, 53)
+			siblingDescriptor := jobDescriptor(t, share, siblingFile, 54, siblingSize)
+
+			openedTarget, err := NewOpenedRevision(transferID[RevisionHandle](0xd5), descriptors[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			openedSibling, err := NewOpenedRevision(transferID[RevisionHandle](0xd6), siblingDescriptor)
+			if err != nil {
+				t.Fatal(err)
+			}
+			revisions := &jobRevisionClient{
+				opened: map[catalog.FileID]OpenedRevision{
+					targetFile:  openedTarget,
+					siblingFile: openedSibling,
+				},
+				failures: make(map[catalog.FileID]error),
+			}
+			output := newJobOutput(share)
+			begins := 0
+			output.beginHook = func(file MaterializationFile) {
+				if file.ArtifactPath().String() != "a-target.bin" {
+					return
+				}
+				begins++
+				if begins == 3 {
+					output.immediate["a-target.bin"] = test.settlement(t, output, file)
+				}
+			}
+			blocks := &scriptedReopenBlocks{
+				revisions: descriptors,
+				reopenOnOffset: func(revision content.FileRevision, offset uint64) (int, bool) {
+					switch {
+					case revision == descriptors[0].FileRevision() && offset == window:
+						return 1, true
+					case revision == descriptors[1].FileRevision() && offset == 2*window:
+						return 2, true
+					default:
+						return 0, false
+					}
+				},
+			}
+			rules, _ := NewSelectionRules(true, nil)
+			job, err := newTestTransferJob(t, testTransferJobConfig{
+				ShareInstance: share, SyntheticRoot: root, Rules: rules,
+				Catalog: failingCatalog{
+					snapshots: map[catalog.DirectoryID]catalog.DirectorySnapshot{
+						root: jobSnapshot(t, share, root, 1,
+							jobEntry(t, targetFile, "a-target.bin", size),
+							jobEntry(t, siblingFile, "b-sibling.bin", siblingSize),
+						),
+					},
+					failures: make(map[catalog.DirectoryID]error),
+				},
+				Revisions: revisions, Blocks: blocks, Materializer: output,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := job.Run(context.Background())
+			progress := result.Progress
+			if result.Outcome != test.wantOutcome || !progress.CountersExact ||
+				progress.VerifiedBytes != test.wantVerified ||
+				progress.NewlyVerifiedBytes != test.wantNewlyVerified ||
+				progress.RestartReusableBytes != test.wantReusable ||
+				progress.PreviouslyPublishedBytes != test.wantPrevPublished ||
+				progress.FileOutcomes != test.wantOutcomes {
+				t.Fatalf("result=%+v progress=%+v", result, progress)
+			}
+		})
+	}
+}

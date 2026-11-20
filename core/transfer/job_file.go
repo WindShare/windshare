@@ -124,11 +124,21 @@ func (r *jobRun) reconcileImmediateSettlementCoverage(
 	if retry == nil {
 		return nil
 	}
-	if _, reason, blocked := settlement.ItemBlock(); blocked &&
-		(reason == ItemBlockOwnedObjectUnknown || reason == ItemBlockOwnershipUnknown) {
-		// The pause proved durable coverage at the time. The new
-		// ownership result withdraws it for this file alone.
+	switch settlement.Kind() {
+	case FileCollision:
+		// Destination occupation is reversible; the paused staged partial and
+		// its durable coverage remain intact for retry once the path is cleared.
+	case FileItemBlocked, FileFailed:
+		// The pause proved coverage at the time, but this terminal settlement
+		// withdraws any reusable partial for this file alone.
 		r.reconcileFileCoverage(retry, content.RangeSet{}, 0, 0)
+	case FilePreviouslyPublished:
+		// Withdraw prior partial credit before acceptFileSettlement records
+		// historical delivery so CompletedBytes never double-counts this file.
+		r.reconcileFileCoverage(retry, content.RangeSet{}, 0, 0)
+		return nil
+	default:
+		return outputContractFault(ErrOutputContract)
 	}
 	r.traceFileRevisionRetry(plan, retry.reopened, "admission-blocked", retry.progress.persistedBytes, 0, retry.started)
 	return nil
