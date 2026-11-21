@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
-import { directoryRevision } from './directory-revision.mjs';
+import { directoryRevision, MAX_BYTES } from './directory-revision.mjs';
 import { frontendConfig } from './configuration.mjs';
 import { deployFrontend, readFrontendInputs } from './frontend.mjs';
 import { STATE_BINDING } from './deployment.mjs';
@@ -472,4 +472,72 @@ test('transient ASSETS 5xx does not poison bundled directory cache while 404 and
     { event: 'directory_asset_fetch_failed', status: 500 },
     { event: 'directory_asset_fetch_failed', status: 502 },
   ]);
+});
+
+test('oversized KV payloads are rejected without pinning isolate memory and recovery clears KV cache', async t => {
+  t.mock.method(Date, 'now', () => Date.parse(vectors.now));
+  const baseline = signed('valid'), newer = signed('new_generation');
+  const bundledRevision = JSON.stringify(await directoryRevision(baseline));
+  const oversizedAscii = 'x'.repeat(MAX_BYTES + 1);
+  const oversizedUtf8 = '中'.repeat(Math.floor(MAX_BYTES / 3) + 1);
+  const invalidSmall = '{not-json';
+  const request = new Request('https://windshare.cc/.well-known/windshare-network');
+  let current = null;
+  const env = {
+    BUNDLED_DIRECTORY_REVISION: bundledRevision,
+    DIRECTORY: { get: async () => current },
+    ASSETS: { fetch: async () => new Response(baseline) },
+  };
+  const encodeSpy = t.mock.method(TextEncoder.prototype, 'encode');
+  const encodedCount = value => encodeSpy.mock.calls.filter(call => call.arguments[0] === value).length;
+
+  // Strings longer than MAX_BYTES fail fast without allocating an encoded UTF-8 buffer.
+  await assert.rejects(directoryRevision(oversizedAscii), /wire limit/);
+  assert.equal(encodedCount(oversizedAscii), 0);
+
+  // Repeated oversized ASCII KV values fall back cleanly with zero TextEncoder allocations.
+  current = oversizedAscii;
+  assert.equal(await (await serveDirectory(request, env, null, null)).text(), baseline);
+  assert.equal(await (await serveDirectory(request, env, null, null)).text(), baseline);
+  assert.equal(encodedCount(oversizedAscii), 0);
+
+  // Multi-byte UTF-8 payloads that exceed MAX_BYTES are never memoized in state.kv.
+  current = oversizedUtf8;
+  assert.equal(await (await serveDirectory(request, env, null, null)).text(), baseline);
+  assert.equal(await (await serveDirectory(request, env, null, null)).text(), baseline);
+  assert.equal(encodedCount(oversizedUtf8), 2);
+
+  // Within-limit rejected payloads stay memoized so repeat requests do not re-evaluate them.
+  current = invalidSmall;
+  assert.equal(await (await serveDirectory(request, env, null, null)).text(), baseline);
+  const smallFirstCalls = encodedCount(invalidSmall);
+  assert.ok(smallFirstCalls > 0);
+  assert.equal(await (await serveDirectory(request, env, null, null)).text(), baseline);
+  assert.equal(encodedCount(invalidSmall), smallFirstCalls);
+
+  // Receiving an oversized KV value clears any prior cached KV entry.
+  current = oversizedAscii;
+  assert.equal(await (await serveDirectory(request, env, null, null)).text(), baseline);
+  assert.equal(encodedCount(oversizedAscii), 0);
+  current = invalidSmall;
+  assert.equal(await (await serveDirectory(request, env, null, null)).text(), baseline);
+  assert.equal(encodedCount(invalidSmall), smallFirstCalls * 2);
+
+  // Clearing KV (null) or recovering to state.last.body also clears state.kv.
+  current = null;
+  assert.equal(await (await serveDirectory(request, env, null, null)).text(), baseline);
+  current = invalidSmall;
+  assert.equal(await (await serveDirectory(request, env, null, null)).text(), baseline);
+  assert.equal(encodedCount(invalidSmall), smallFirstCalls * 3);
+
+  current = newer;
+  assert.equal(await (await serveDirectory(request, env, null, null)).text(), newer);
+  current = invalidSmall;
+  assert.equal(await (await serveDirectory(request, env, null, null)).text(), newer);
+  assert.equal(encodedCount(invalidSmall), smallFirstCalls * 4);
+  current = newer;
+  assert.equal(await (await serveDirectory(request, env, null, null)).text(), newer);
+  current = invalidSmall;
+  assert.equal(await (await serveDirectory(request, env, null, null)).text(), newer);
+  assert.equal(encodedCount(invalidSmall), smallFirstCalls * 5);
 });

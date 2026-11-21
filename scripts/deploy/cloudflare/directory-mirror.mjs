@@ -1,4 +1,4 @@
-import { compare, directoryRevision } from './directory-revision.mjs';
+import { compare, directoryRevision, exceedsWireLimit } from './directory-revision.mjs';
 
 const mirrors = new WeakMap();
 const EDGE_TTL = 60;
@@ -56,13 +56,22 @@ function adoptLast(state, copy, retryAt) {
   if (!copy) return;
   if (!state.last || compare(copy.revision, state.last.revision) > 0) {
     state.last = retryAt === undefined ? copy : { ...copy, retryAt };
+    if (state.kv?.raw === copy.body) state.kv = null;
   }
 }
 
 async function kvCopy(state, raw) {
-  if (!raw || raw === state.last?.body) return null;
+  if (!raw || raw === state.last?.body) {
+    state.kv = null;
+    return null;
+  }
   // KV can keep returning the same stale revision for its entire edge TTL.
   if (state.kv?.raw === raw) return state.kv.copy;
+  // Never retain oversized KV blobs in the isolate-scoped cache.
+  if (exceedsWireLimit(raw)) {
+    state.kv = null;
+    return null;
+  }
   const copy = await directoryRevision(raw).then(revision => ({ body: raw, revision }), () => null);
   state.kv = { raw, copy };
   return copy;

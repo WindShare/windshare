@@ -1,15 +1,22 @@
 const GRACE_MS = 7 * 24 * 60 * 60 * 1000;
 const SKEW_MS = 5 * 60 * 1000;
-const MAX_BYTES = 512 * 1024;
+export const MAX_BYTES = 512 * 1024;
 const utf8 = new TextDecoder('utf-8', { fatal: true });
+const utf8Encoder = new TextEncoder();
 function decode(encoded) {
   return Uint8Array.from(atob(encoded.replaceAll('-', '+').replaceAll('_', '/')), c => c.charCodeAt(0));
+}
+
+// Every UTF-16 code unit encodes to at least one UTF-8 byte, so strings longer
+// than MAX_BYTES can be rejected without allocating an encoded copy.
+export function exceedsWireLimit(raw) {
+  return raw.length > MAX_BYTES || utf8Encoder.encode(raw).byteLength > MAX_BYTES;
 }
 
 // Both sources are controlled by the signed-release build or the authority publisher.
 // Receivers independently verify signatures before trusting an advertised relay.
 export async function directoryRevision(raw) {
-  if (new TextEncoder().encode(raw).byteLength > MAX_BYTES) throw new Error('Directory exceeds wire limit');
+  if (exceedsWireLimit(raw)) throw new Error('Directory exceeds wire limit');
   const envelope = JSON.parse(raw);
   const bytes = decode(envelope.payload);
   const payload = JSON.parse(utf8.decode(bytes));
