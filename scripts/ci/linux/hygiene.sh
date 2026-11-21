@@ -47,6 +47,10 @@ node --test scripts/deploy/cloudflare/*.test.mjs
 echo "-- Official wsrelay upgrade helper"
 bash scripts/deploy/network/install-wsrelay.tests.sh
 
+# Disable bytecode writes so local hygiene runs leave the working tree clean.
+echo "-- Official web release installer"
+python3 -B -m unittest scripts/deploy/network/install_web_test.py
+
 echo "-- Browser dependency installation recovery"
 bash .github/actions/setup-browser/install-dependencies.tests.sh
 
