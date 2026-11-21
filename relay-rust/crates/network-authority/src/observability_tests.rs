@@ -444,3 +444,70 @@ fn ticket_auth_refusals_and_node_status_batches_emit_structured_traces() {
     assert_eq!(status_events[0]["fields"]["entitlements"], 1);
     assert_eq!(status_events[0]["fields"]["policy_version"], 3);
 }
+
+#[test]
+fn ticket_issuance_and_governance_traces_expose_expiry_and_target_fields() {
+    let mut authority = fixture();
+    let admin = authority
+        .initialize("once", "once", "admin", "correct horse battery")
+        .unwrap();
+    let secret = URL_SAFE_NO_PAD.encode([1; 32]);
+    let share = [9; 12];
+
+    let mut refreshed_entitlement = None;
+    let events = capture_events(|| {
+        let session = authority.register("source", registration(1)).unwrap();
+        let refreshed = authority.refresh(&secret).unwrap();
+        assert!(refreshed.entitlement.valid_until > 0);
+        refreshed_entitlement = Some(refreshed.entitlement);
+        authority
+            .block(
+                &admin,
+                Block::Share {
+                    id: share,
+                    blocked: true,
+                },
+            )
+            .unwrap();
+        authority
+            .block(
+                &admin,
+                Block::Account {
+                    id: session.account,
+                    blocked: true,
+                },
+            )
+            .unwrap();
+        authority
+            .report("source", share, "abuse report".into())
+            .unwrap();
+    });
+
+    let refreshed_entitlement = refreshed_entitlement.unwrap();
+    let issued = events_named(&events, "account_ticket_issued");
+    assert_eq!(issued.len(), 2);
+    assert_eq!(
+        issued[1]["fields"]["valid_until"],
+        refreshed_entitlement.valid_until
+    );
+    assert_eq!(
+        issued[1]["fields"]["version"],
+        refreshed_entitlement.version
+    );
+
+    let blocks = events_named(&events, "access_block_changed");
+    assert_eq!(blocks.len(), 2);
+    assert_eq!(blocks[0]["fields"]["kind"], "share");
+    assert!(blocks[0]["fields"].get("share").is_some());
+    assert!(blocks[0]["fields"].get("account").is_none());
+    assert_eq!(blocks[0]["fields"]["blocked"], true);
+    assert_eq!(blocks[1]["fields"]["kind"], "account");
+    assert!(blocks[1]["fields"].get("account").is_some());
+    assert!(blocks[1]["fields"].get("share").is_none());
+    assert_eq!(blocks[1]["fields"]["blocked"], true);
+
+    let reported = events_named(&events, "share_reported");
+    assert_eq!(reported.len(), 1);
+    assert!(reported[0]["fields"].get("share").is_some());
+    assert!(reported[0]["fields"].get("report").is_some());
+}

@@ -4,9 +4,10 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
-	"log/slog"
 	"net/url"
 	"time"
+
+	"github.com/windshare/windshare/core/diagnostics"
 )
 
 var (
@@ -172,8 +173,11 @@ func (service *Service) VerifyEmail(ctx context.Context, code string) error {
 	if err != nil || challenge == nil {
 		return err
 	}
-	if *challenge != proof.Challenge {
-		slog.Debug("account_email_verification_challenge_replaced", "challenge_id", proof.Challenge.ID, "next_mode", challenge.Mode)
+	if *challenge != proof.Challenge && service.config.Diagnostics.Enabled() {
+		service.emitDiagnostic("account_email_verification_challenge_replaced", diagnostics.Fields{
+			"challenge_id": diagnostics.Text(proof.Challenge.ID),
+			"next_mode":    diagnostics.Text(challenge.Mode),
+		})
 	}
 	service.transition(previous, challenge.requiredState(), "", time.Time{})
 	if challenge.Mode == emailChallenge {

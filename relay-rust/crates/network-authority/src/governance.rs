@@ -110,7 +110,32 @@ impl<R: Store, E: Environment> Authority<R, E> {
             }
         };
         if self.set_restriction(entry, blocked)? {
-            tracing::warn!(event = "access_block_changed", ?entry, blocked);
+            match entry {
+                Restriction::Share(share) => {
+                    tracing::warn!(
+                        event = "access_block_changed",
+                        kind = "share",
+                        ?share,
+                        blocked
+                    );
+                }
+                Restriction::Account(account) => {
+                    tracing::warn!(
+                        event = "access_block_changed",
+                        kind = "account",
+                        ?account,
+                        blocked
+                    );
+                }
+                Restriction::Credential(credential) => {
+                    tracing::warn!(
+                        event = "access_block_changed",
+                        kind = "credential",
+                        ?credential,
+                        blocked
+                    );
+                }
+            }
             self.update_public_blocks()?;
         }
         Ok(())
@@ -134,6 +159,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
                 created_at: self.environment.now(),
             },
         )?;
+        tracing::info!(event = "share_reported", report = ?id, ?share);
         Ok(id)
     }
     /// # Errors

@@ -4,7 +4,7 @@ mod control;
 mod devices;
 mod policy;
 mod quota;
-pub(crate) use admission::Bearer;
+pub(crate) use admission::{Authorization, Bearer, Refusal, RefusalReason};
 pub(crate) use control::{AccessSnapshot, AccessUpdate, AuthorityState};
 use devices::CredentialIndex;
 pub(crate) use devices::{BoundAccount, DeviceCredential, DeviceKeys};
@@ -126,20 +126,7 @@ impl Service {
     }
 
     pub fn class(&self, attribution: Attribution, now: u64) -> (Class, Option<Allowance>) {
-        let state = self.read();
-        let result = match attribution {
-            Attribution::Credential { .. } if state.owner(attribution) => (Class::Owner, None),
-            Attribution::Credential { .. } => (Class::Standard, None),
-            Attribution::Anonymous => (Class::Lowest, None),
-            Attribution::Account {
-                issuer, account, ..
-            } => {
-                let allowance = state.quotas.allowance((issuer, account), now);
-                (Entitlement::class(allowance), Some(allowance))
-            }
-        };
-        drop(state);
-        result
+        self.read().class(attribution, now)
     }
 
     pub fn refresh(&self, issuer: Issuer, account: AccountId, next: Entitlement, now: u64) -> bool {
@@ -263,7 +250,25 @@ impl State {
         })
     }
 
-    fn denied(&self, share: ShareId, attribution: Attribution) -> bool {
+    pub(super) fn class(&self, attribution: Attribution, now: u64) -> (Class, Option<Allowance>) {
+        match attribution {
+            Attribution::Credential { .. } if self.owner(attribution) => (Class::Owner, None),
+            Attribution::Credential { .. } => (Class::Standard, None),
+            Attribution::Anonymous => (Class::Lowest, None),
+            Attribution::Account {
+                issuer, account, ..
+            } => {
+                let allowance = self.quotas.allowance((issuer, account), now);
+                (Entitlement::class(allowance), Some(allowance))
+            }
+        }
+    }
+
+    pub(super) fn denial_reason(
+        &self,
+        share: ShareId,
+        attribution: Attribution,
+    ) -> Option<RefusalReason> {
         let disabled = self
             .disabled_controller()
             .is_some_and(|controller| match attribution {
@@ -271,6 +276,9 @@ impl State {
                 Attribution::Account { issuer, .. } => issuer == controller,
                 Attribution::Credential { .. } => false,
             });
+        if disabled {
+            return Some(RefusalReason::NodePublicDisabled);
+        }
         let local_key = match attribution {
             Attribution::Credential { credential, .. } => Some(credential),
             Attribution::Account {
@@ -282,12 +290,37 @@ impl State {
             }
             _ => None,
         };
-        disabled
-            || local_key.is_some_and(|id| !self.credentials.active(id))
-            || matches!(attribution, Attribution::Account { issuer, .. } if !self.active_issuers.contains(&issuer))
-            || self.restrictions.iter().any(|(issuer, restrictions)| {
-                restrictions.denied(*issuer, *share.as_bytes(), attribution)
-            })
+        if local_key.is_some_and(|id| !self.credentials.active(id)) {
+            return Some(RefusalReason::CredentialInactive);
+        }
+        if matches!(attribution, Attribution::Account { issuer, .. } if !self.active_issuers.contains(&issuer))
+        {
+            return Some(RefusalReason::IssuerInactive);
+        }
+        for (issuer, restrictions) in &self.restrictions {
+            if restrictions.shares.contains(share.as_bytes()) {
+                return Some(RefusalReason::ShareRestricted);
+            }
+            if let Attribution::Account {
+                issuer: actual,
+                account,
+                credential,
+            } = attribution
+                && actual == *issuer
+            {
+                if restrictions.accounts.contains(&account) {
+                    return Some(RefusalReason::AccountRestricted);
+                }
+                if restrictions.credentials.contains(&credential) {
+                    return Some(RefusalReason::CredentialRestricted);
+                }
+            }
+        }
+        None
+    }
+
+    fn denied(&self, share: ShareId, attribution: Attribution) -> bool {
+        self.denial_reason(share, attribution).is_some()
     }
 
     fn owner(&self, attribution: Attribution) -> bool {

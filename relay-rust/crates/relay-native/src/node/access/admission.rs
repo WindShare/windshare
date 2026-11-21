@@ -4,6 +4,7 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use std::sync::Arc;
 use windshare_relay_access::{
     Attribution, Digest,
+    entitlement::{Allowance, Class},
     ticket::{MAX_TICKET_BYTES, Ticket, VerificationError, VerifiedTicket},
     trust::Error,
 };
@@ -65,8 +66,87 @@ impl Bearer {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RefusalReason {
+    ConnectionMissing,
+    AnonymousDisabled,
+    CredentialInactive,
+    TicketEncoding,
+    TicketLifetime,
+    TicketSignature,
+    TicketExpired,
+    TicketUntrusted,
+    TicketGenerationMismatch,
+    NodePublicDisabled,
+    IssuerInactive,
+    ShareRestricted,
+    AccountRestricted,
+    CredentialRestricted,
+    PublicDailyBudgetExhausted,
+    AttributionMismatch,
+    PrincipalShareLimit,
+    ResidentShareCapacity,
+}
+
+impl RefusalReason {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::ConnectionMissing => "connection_missing",
+            Self::AnonymousDisabled => "anonymous_disabled",
+            Self::CredentialInactive => "credential_inactive",
+            Self::TicketEncoding => "ticket_encoding",
+            Self::TicketLifetime => "ticket_lifetime",
+            Self::TicketSignature => "ticket_signature",
+            Self::TicketExpired => "ticket_expired",
+            Self::TicketUntrusted => "ticket_untrusted",
+            Self::TicketGenerationMismatch => "ticket_generation_mismatch",
+            Self::NodePublicDisabled => "node_public_disabled",
+            Self::IssuerInactive => "issuer_inactive",
+            Self::ShareRestricted => "share_restricted",
+            Self::AccountRestricted => "account_restricted",
+            Self::CredentialRestricted => "credential_restricted",
+            Self::PublicDailyBudgetExhausted => "public_daily_budget_exhausted",
+            Self::AttributionMismatch => "attribution_mismatch",
+            Self::PrincipalShareLimit => "principal_share_limit",
+            Self::ResidentShareCapacity => "resident_share_capacity",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Refusal {
+    pub decision: RegistrationDecision,
+    pub reason: RefusalReason,
+}
+
+impl Refusal {
+    pub const fn denied(reason: RefusalReason) -> Self {
+        Self {
+            decision: RegistrationDecision::Denied,
+            reason,
+        }
+    }
+
+    pub const fn unavailable(reason: RefusalReason) -> Self {
+        Self {
+            decision: RegistrationDecision::SERVICE_UNAVAILABLE,
+            reason,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum Authorization {
+    Granted {
+        attribution: Attribution,
+        class: Class,
+        allowance: Option<Allowance>,
+    },
+    Refused(Refusal),
+}
+
 enum AdmissionRefusal {
-    Denied,
+    Denied(RefusalReason),
     Ticket(VerificationError),
 }
 
@@ -163,7 +243,7 @@ impl Service {
         share: ShareId,
         bearer: Option<&Bearer>,
         now: u64,
-    ) -> RegistrationDecision {
+    ) -> Authorization {
         // A previously untrusted signing generation may have become available since upgrade.
         let proof = bearer.map(|bearer| bearer.ticket_proof(self, now));
         let proof = proof
@@ -172,8 +252,12 @@ impl Service {
         let mut state = self.write();
         let identity = match state.authorized_identity(share, bearer, proof, now) {
             Ok(identity) => identity,
-            Err(AdmissionRefusal::Denied) => return RegistrationDecision::Denied,
-            Err(AdmissionRefusal::Ticket(error)) => return state.ticket_refusal(share, error),
+            Err(AdmissionRefusal::Denied(reason)) => {
+                return Authorization::Refused(Refusal::denied(reason));
+            }
+            Err(AdmissionRefusal::Ticket(error)) => {
+                return Authorization::Refused(state.ticket_refusal(share, error));
+            }
         };
         let attribution = identity.attribution();
         match identity {
@@ -187,8 +271,13 @@ impl Service {
                 );
             }
         }
+        let (class, allowance) = state.class(attribution, now);
         drop(state);
-        RegistrationDecision::Granted(attribution)
+        Authorization::Granted {
+            attribution,
+            class,
+            allowance,
+        }
     }
 }
 
@@ -225,46 +314,60 @@ impl State {
     ) -> Result<AuthorizedIdentity<'_>, AdmissionRefusal> {
         let identity = match bearer {
             None if self.anonymous() => AuthorizedIdentity::Anonymous,
-            None => return Err(AdmissionRefusal::Denied),
+            None => return Err(AdmissionRefusal::Denied(RefusalReason::AnonymousDisabled)),
             Some(bearer) => {
                 if let Some(entry) = self.credentials.get(bearer.digest) {
                     AuthorizedIdentity::Local {
                         attribution: self
                             .local_attribution(entry)
-                            .ok_or(AdmissionRefusal::Denied)?,
+                            .ok_or(AdmissionRefusal::Denied(RefusalReason::CredentialInactive))?,
                         entry,
                     }
                 } else {
                     let ticket = proof
-                        .ok_or(AdmissionRefusal::Denied)?
+                        .ok_or(AdmissionRefusal::Denied(RefusalReason::TicketEncoding))?
                         .and_then(|proof| proof.current(&self.authorities.trusted, now))
                         .map_err(AdmissionRefusal::Ticket)?;
                     AuthorizedIdentity::Ticket(ticket)
                 }
             }
         };
-        (!self.denied(share, identity.attribution()))
-            .then_some(identity)
-            .ok_or(AdmissionRefusal::Denied)
+        if let Some(reason) = self.denial_reason(share, identity.attribution()) {
+            return Err(AdmissionRefusal::Denied(reason));
+        }
+        Ok(identity)
     }
 
-    fn ticket_refusal(&self, share: ShareId, error: VerificationError) -> RegistrationDecision {
+    fn ticket_refusal(&self, share: ShareId, error: VerificationError) -> Refusal {
         let VerificationError::GenerationMismatch {
             issuer,
             presented_generation,
             installed_generation,
         } = error
         else {
-            return RegistrationDecision::Denied;
+            let VerificationError::Invalid(error) = error else {
+                unreachable!("non-mismatch verification error must be Invalid");
+            };
+            return Refusal::denied(match error {
+                Error::Encoding => RefusalReason::TicketEncoding,
+                Error::Lifetime => RefusalReason::TicketLifetime,
+                Error::Signature => RefusalReason::TicketSignature,
+                Error::Expired => RefusalReason::TicketExpired,
+                Error::Untrusted | Error::Rollback => RefusalReason::TicketUntrusted,
+            });
         };
-        if !self.active_issuers.contains(&issuer)
-            || self.disabled_controller() == Some(issuer)
-            || self
-                .restrictions
-                .values()
-                .any(|restrictions| restrictions.shares.contains(share.as_bytes()))
+        if !self.active_issuers.contains(&issuer) {
+            return Refusal::denied(RefusalReason::IssuerInactive);
+        }
+        if self.disabled_controller() == Some(issuer) {
+            return Refusal::denied(RefusalReason::NodePublicDisabled);
+        }
+        if self
+            .restrictions
+            .values()
+            .any(|restrictions| restrictions.shares.contains(share.as_bytes()))
         {
-            return RegistrationDecision::Denied;
+            return Refusal::denied(RefusalReason::ShareRestricted);
         }
 
         let direction = if presented_generation > installed_generation {
@@ -280,7 +383,7 @@ impl State {
             installed_generation,
             direction,
         );
-        RegistrationDecision::SERVICE_UNAVAILABLE
+        Refusal::unavailable(RefusalReason::TicketGenerationMismatch)
     }
 
     fn local_attribution(&self, entry: &CredentialEntry) -> Option<Attribution> {

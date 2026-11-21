@@ -3,9 +3,9 @@ package account
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"time"
 
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/serviceauthority"
 )
 
@@ -131,7 +131,7 @@ func (service *Service) applyCredentialRefreshLocked(current *credentialSession,
 		if current.record.Denial != "" || service.validTicket(current.record) {
 			current.refreshing = false
 			current.retry = 0
-			slog.Debug("account_retained_credential_refreshed", "credential", current.record.Credential.ID)
+			service.emitRetainedCredentialRefreshed(current.record)
 			service.notifyLocked()
 			return 0
 		}
@@ -139,7 +139,7 @@ func (service *Service) applyCredentialRefreshLocked(current *credentialSession,
 		service.rememberDenialLocked(current.record, failure.Reason)
 		current.refreshing = false
 		current.retry = 0
-		slog.Debug("account_retained_credential_denied", "credential", current.record.Credential.ID, "reason", failure.Reason)
+		service.emitRetainedCredentialDenied(current.record.Credential, failure.Reason)
 		return 0
 	}
 	if current.references == 0 || service.ctx.Err() != nil || current.record.Denial != "" ||
@@ -149,9 +149,44 @@ func (service *Service) applyCredentialRefreshLocked(current *credentialSession,
 		return 0
 	}
 	delay := current.nextRetryDelay(err)
-	slog.Debug("account_retained_credential_refresh_backoff",
-		"credential", current.record.Credential.ID, "retry_in", delay, "error", err)
+	service.emitRetainedCredentialBackoff(current.record.Credential, delay, err)
 	return delay
+}
+
+func (service *Service) emitRetainedCredentialRefreshed(record Record) {
+	if !service.config.Diagnostics.Enabled() {
+		return
+	}
+	fields := diagnostics.Fields{
+		"entitlement_version": diagnostics.Uint(record.Entitlement.Version),
+		"remaining_bytes":     diagnostics.Uint(record.Entitlement.RemainingBytes),
+	}
+	credentialFields(fields, record.Credential)
+	if record.Entitlement.ValidUntil > 0 {
+		timestampField(fields, "valid_until", time.Unix(int64(record.Entitlement.ValidUntil), 0))
+	}
+	service.emitDiagnostic("account_retained_credential_refreshed", fields)
+}
+
+func (service *Service) emitRetainedCredentialDenied(credential *Credential, reason string) {
+	if !service.config.Diagnostics.Enabled() {
+		return
+	}
+	fields := diagnostics.Fields{"reason": diagnostics.Text(reason)}
+	credentialFields(fields, credential)
+	service.emitDiagnostic("account_retained_credential_denied", fields)
+}
+
+func (service *Service) emitRetainedCredentialBackoff(credential *Credential, delay time.Duration, err error) {
+	if !service.config.Diagnostics.Enabled() {
+		return
+	}
+	fields := diagnostics.Fields{"retry_in_ms": diagnostics.Millis(delay)}
+	credentialFields(fields, credential)
+	if err != nil {
+		fields["error"] = diagnostics.Text(err.Error())
+	}
+	service.emitDiagnostic("account_retained_credential_refresh_backoff", fields)
 }
 
 func (current *credentialSession) nextRetryDelay(err error) time.Duration {

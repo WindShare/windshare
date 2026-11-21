@@ -19,6 +19,8 @@ import (
 	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/nodedirectory"
+	"github.com/windshare/windshare/core/serviceauthority"
+	"github.com/windshare/windshare/engine/account"
 	"github.com/windshare/windshare/engine/networkconfig"
 	"github.com/windshare/windshare/engine/networkdirectory"
 	"github.com/windshare/windshare/engine/relayprofile"
@@ -263,5 +265,86 @@ func TestEngineDiagnosticsCaptureFrontendHealthAndDirectoryInitFailure(t *testin
 	stream.Close()
 	if slogOutput.Len() != 0 {
 		t.Fatalf("networkruntime bypassed diagnostics sink via slog: %s", slogOutput.String())
+	}
+}
+
+func TestEngineDiagnosticsCaptureAccountIssuanceWithoutSlog(t *testing.T) {
+	var slogOutput bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&slogOutput, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+
+	data, err := os.ReadFile("../../../testdata/network/authority.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Now     int64
+		Root    string
+		Session map[string]any
+	}
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	root, err := serviceauthority.PublicKey(fixture.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Secret string `json:"client_secret"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		reply := make(map[string]any, len(fixture.Session))
+		for k, v := range fixture.Session {
+			reply[k] = v
+		}
+		if body.Secret != "" {
+			reply["credential_secret"] = body.Secret
+		}
+		_ = json.NewEncoder(w).Encode(reply)
+	}))
+	defer server.Close()
+
+	stream, err := diagnostics.NewStream(32, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := diagnostics.Scope{EngineID: "engine-acct"}
+	r, err := New(&networkconfig.Config{
+		Directory: networkdirectory.Config{Network: "test"},
+		Authority: &account.Config{
+			URL:   server.URL,
+			Root:  root,
+			Store: &account.MemoryStore{},
+		},
+	}, func() time.Time { return time.Unix(fixture.Now, 0) }, "", stream.Sink().Bind(scope))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome, err := r.Accounts().RefreshOnce(t.Context()); err != nil || outcome != account.RefreshSucceeded {
+		r.Close()
+		t.Fatalf("refresh = %s, %v", outcome, err)
+	}
+	r.Close()
+	stream.Close()
+
+	var sawState, sawIssued bool
+	for record := range stream.Records() {
+		if record.Scope() != scope {
+			t.Fatalf("unexpected scope: %+v", record.Scope())
+		}
+		switch record.Name() {
+		case "account_state_changed":
+			sawState = true
+		case "account_ticket_issued":
+			sawIssued = true
+		}
+	}
+	if !sawState || !sawIssued {
+		t.Fatalf("missing account diagnostics in engine stream: state=%t issued=%t", sawState, sawIssued)
+	}
+	if slogOutput.Len() != 0 {
+		t.Fatalf("networkruntime account service bypassed diagnostics sink via slog: %s", slogOutput.String())
 	}
 }

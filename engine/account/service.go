@@ -4,13 +4,14 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
-	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/windshare/windshare/core/diagnostics"
 )
 
 var ErrNotConfigured = errors.New("official account service is not configured")
@@ -75,6 +76,7 @@ func New(config Config) (*Service, error) {
 		config.Now,
 		service.resolveOfficialNode,
 		service.notify,
+		config.Diagnostics,
 	)
 	cacheContext, cancelCache := context.WithTimeout(ctx, CacheLoadTimeout)
 	record, err := service.load(cacheContext)
@@ -208,7 +210,11 @@ func (service *Service) transition(record Record, state State, reason string, re
 	// A local read can adopt a new selection while an authority request is in flight.
 	if !sameIdentity(service.record, record) || service.state == StorageError {
 		service.mu.Unlock()
-		slog.Debug("account_state_transition_superseded", "state", state)
+		if service.config.Diagnostics.Enabled() {
+			service.emitDiagnostic("account_state_transition_superseded", diagnostics.Fields{
+				"state": diagnostics.Text(string(state)),
+			})
+		}
 		return
 	}
 	previous := service.state
@@ -222,6 +228,60 @@ func (service *Service) transition(record Record, state State, reason string, re
 	service.notifyLocked()
 	service.mu.Unlock()
 	if previous != state {
-		slog.Info("account_state_changed", "from", previous, "to", state, "reason", reason, "retry_at", retry)
+		service.emitStateChanged(previous, state, reason, retry, record.Credential)
 	}
+}
+
+func (service *Service) emitDiagnostic(name string, fields diagnostics.Fields) {
+	service.config.Diagnostics.Emit(diagnostics.New(name, fields).At(service.config.Now()))
+}
+
+func (service *Service) emitStateChanged(from, to State, reason string, retry time.Time, credential *Credential) {
+	if !service.config.Diagnostics.Enabled() {
+		return
+	}
+	fields := diagnostics.Fields{
+		"from": diagnostics.Text(string(from)),
+		"to":   diagnostics.Text(string(to)),
+	}
+	if reason != "" {
+		fields["reason"] = diagnostics.Text(reason)
+	}
+	timestampField(fields, "retry_at", retry)
+	credentialFields(fields, credential)
+	service.emitDiagnostic("account_state_changed", fields)
+}
+
+func (service *Service) emitTicketIssued(record Record, expiresAt uint64, login bool) {
+	if !service.config.Diagnostics.Enabled() {
+		return
+	}
+	fields := diagnostics.Fields{
+		"login":               diagnostics.Bool(login),
+		"entitlement_version": diagnostics.Uint(record.Entitlement.Version),
+		"entitlement_day":     diagnostics.Uint(record.Entitlement.Day),
+		"remaining_bytes":     diagnostics.Uint(record.Entitlement.RemainingBytes),
+	}
+	credentialFields(fields, record.Credential)
+	if expiresAt > 0 {
+		timestampField(fields, "expires_at", time.Unix(int64(expiresAt), 0))
+	}
+	if record.Entitlement.ValidUntil > 0 {
+		timestampField(fields, "valid_until", time.Unix(int64(record.Entitlement.ValidUntil), 0))
+	}
+	service.emitDiagnostic("account_ticket_issued", fields)
+}
+
+func timestampField(fields diagnostics.Fields, key string, at time.Time) {
+	if !at.IsZero() {
+		fields[key] = diagnostics.Text(at.UTC().Format(time.RFC3339Nano))
+	}
+}
+
+func credentialFields(fields diagnostics.Fields, credential *Credential) {
+	if credential == nil {
+		return
+	}
+	fields["account"] = diagnostics.Identity(credential.Account[:])
+	fields["credential"] = diagnostics.Identity(credential.ID[:])
 }

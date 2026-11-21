@@ -1,4 +1,4 @@
-use super::{Attribution, Service, ShareId};
+use super::{Attribution, Refusal, RefusalReason, Service, ShareId};
 use crate::connection::AdmissionPriority;
 use windshare_relay_core::access::RegistrationDecision;
 
@@ -51,14 +51,14 @@ impl Service {
         &self,
         share: ShareId,
         attribution: Attribution,
-    ) -> Result<Residency, RegistrationDecision> {
+    ) -> Result<Residency, Refusal> {
         let mut state = self.write();
-        if state.denied(share, attribution) {
-            return Err(RegistrationDecision::Denied);
+        if let Some(reason) = state.denial_reason(share, attribution) {
+            return Err(Refusal::denied(reason));
         }
         if let Some((existing, references)) = state.residents.get_mut(&share) {
             if *existing != attribution {
-                return Err(RegistrationDecision::Denied);
+                return Err(Refusal::denied(RefusalReason::AttributionMismatch));
             }
             *references += 1;
         } else {
@@ -79,8 +79,11 @@ impl Service {
                     .count()
                     >= state.policy.shares_per_principal
             };
-            if principal_limited || state.residents.len() >= state.share_limit(priority) {
-                return Err(RegistrationDecision::SERVICE_UNAVAILABLE);
+            if principal_limited {
+                return Err(Refusal::unavailable(RefusalReason::PrincipalShareLimit));
+            }
+            if state.residents.len() >= state.share_limit(priority) {
+                return Err(Refusal::unavailable(RefusalReason::ResidentShareCapacity));
             }
             state.residents.insert(share, (attribution, 1));
         }

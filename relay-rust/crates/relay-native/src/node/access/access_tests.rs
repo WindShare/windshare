@@ -83,10 +83,18 @@ fn share(value: u8) -> ShareId {
 fn offline_tickets_share_a_resident_limit_and_reconnect_reuses_it() {
     let (service, ticket, key, generation, _) = identity();
     let token = Bearer::new(&URL_SAFE_NO_PAD.encode(ticket.issue(generation, &key).unwrap()));
-    let RegistrationDecision::Granted(attribution) = service.authorize(share(1), Some(&token), NOW)
+    let Authorization::Granted {
+        attribution,
+        class,
+        allowance,
+    } = service.authorize(share(1), Some(&token), NOW)
     else {
         panic!("valid ticket refused");
     };
+    assert_eq!(
+        (class, allowance),
+        (Class::Standard, Some(Allowance::Available))
+    );
     let first = service.reserve(share(1), attribution).unwrap();
     let resumed = service.reserve(share(1), attribution).unwrap();
     let sibling = Ticket {
@@ -96,7 +104,10 @@ fn offline_tickets_share_a_resident_limit_and_reconnect_reuses_it() {
     .attribution();
     assert!(matches!(
         service.reserve(share(2), sibling),
-        Err(RegistrationDecision::Unavailable(_))
+        Err(Refusal {
+            decision: RegistrationDecision::Unavailable(_),
+            reason: RefusalReason::PrincipalShareLimit,
+        })
     ));
     drop(first);
     assert!(service.reserve(share(2), sibling).is_err());
@@ -116,7 +127,11 @@ fn old_tickets_do_not_revive_allowance_or_revoked_credentials() {
     assert_eq!(service.class(attribution, NOW).1, Some(Allowance::Stale));
     assert!(matches!(
         service.authorize(share(1), Some(&token), NOW),
-        RegistrationDecision::Granted(_)
+        Authorization::Granted {
+            class: Class::Standard,
+            allowance: Some(Allowance::Available),
+            ..
+        }
     ));
     let spent = Entitlement {
         version: 2,
@@ -127,7 +142,11 @@ fn old_tickets_do_not_revive_allowance_or_revoked_credentials() {
     assert!(service.refresh(ticket.issuer, ticket.account, spent, NOW));
     assert!(matches!(
         service.authorize(share(1), Some(&token), NOW),
-        RegistrationDecision::Granted(_)
+        Authorization::Granted {
+            class: Class::Lowest,
+            allowance: Some(Allowance::Spent),
+            ..
+        }
     ));
     assert_eq!(
         service.class(attribution, NOW),
@@ -136,7 +155,11 @@ fn old_tickets_do_not_revive_allowance_or_revoked_credentials() {
     service.expire_quotas(spent.valid_until);
     assert!(matches!(
         service.authorize(share(1), Some(&token), spent.valid_until),
-        RegistrationDecision::Granted(_)
+        Authorization::Granted {
+            class: Class::Lowest,
+            allowance: Some(Allowance::Stale),
+            ..
+        }
     ));
     assert_eq!(
         service.class(attribution, spent.valid_until),
@@ -151,7 +174,10 @@ fn old_tickets_do_not_revive_allowance_or_revoked_credentials() {
     assert!(!service.allowed(share(1), attribution));
     assert!(matches!(
         service.authorize(share(1), Some(&token), NOW),
-        RegistrationDecision::Denied
+        Authorization::Refused(Refusal {
+            decision: RegistrationDecision::Denied,
+            reason: RefusalReason::CredentialRestricted,
+        })
     ));
     assert!(service.refresh(
         ticket.issuer,
@@ -183,7 +209,10 @@ fn registration_retries_generation_mismatches_and_revalidates_cached_proof() {
     );
     assert!(matches!(
         service.authorize(share(1), Some(&previous_bearer), ticket.expires_at),
-        RegistrationDecision::Denied
+        Authorization::Refused(Refusal {
+            decision: RegistrationDecision::Denied,
+            reason: RefusalReason::TicketExpired,
+        })
     ));
 
     let next_key = SigningKey::from_bytes(&[8; 32]);
@@ -204,11 +233,17 @@ fn registration_retries_generation_mismatches_and_revalidates_cached_proof() {
     );
     assert!(matches!(
         service.authorize(share(1), Some(&next_bearer), NOW),
-        RegistrationDecision::Unavailable(_)
+        Authorization::Refused(Refusal {
+            decision: RegistrationDecision::Unavailable(_),
+            reason: RefusalReason::TicketGenerationMismatch,
+        })
     ));
     assert!(matches!(
         service.authorize(share(1), Some(&next_bearer), next_ticket.expires_at),
-        RegistrationDecision::Denied
+        Authorization::Refused(Refusal {
+            decision: RegistrationDecision::Denied,
+            reason: RefusalReason::TicketExpired,
+        })
     ));
 
     let mut restrictions = Restrictions {
@@ -219,19 +254,29 @@ fn registration_retries_generation_mismatches_and_revalidates_cached_proof() {
     assert!(service.restrict(ticket.issuer, restrictions));
     assert!(matches!(
         service.authorize(share(2), Some(&next_bearer), NOW),
-        RegistrationDecision::Denied
+        Authorization::Refused(Refusal {
+            decision: RegistrationDecision::Denied,
+            reason: RefusalReason::ShareRestricted,
+        })
     ));
 
     service.apply_authority(next_generation.into()).unwrap();
     for stale_bearer in [previous_bearer, Bearer::new(&previous_token)] {
         assert!(matches!(
             service.authorize(share(1), Some(&stale_bearer), NOW + 1),
-            RegistrationDecision::Unavailable(_)
+            Authorization::Refused(Refusal {
+                decision: RegistrationDecision::Unavailable(_),
+                reason: RefusalReason::TicketGenerationMismatch,
+            })
         ));
     }
     assert!(matches!(
         service.authorize(share(1), Some(&next_bearer), NOW + 1),
-        RegistrationDecision::Granted(attribution) if attribution == ticket.attribution()
+        Authorization::Granted {
+            attribution,
+            class: Class::Standard,
+            allowance: Some(Allowance::Available),
+        } if attribution == ticket.attribution()
     ));
 
     service.set_controller(Some(ticket.issuer));
@@ -247,7 +292,10 @@ fn registration_retries_generation_mismatches_and_revalidates_cached_proof() {
         .unwrap();
     assert!(matches!(
         service.authorize(share(1), Some(&Bearer::new(&previous_token)), NOW + 1),
-        RegistrationDecision::Denied
+        Authorization::Refused(Refusal {
+            decision: RegistrationDecision::Denied,
+            reason: RefusalReason::NodePublicDisabled,
+        })
     ));
 }
 
@@ -272,15 +320,24 @@ fn removing_an_issuer_disables_new_admission_and_preserves_generation_high_water
     service.configure(policy).unwrap();
     assert!(matches!(
         service.authorize(share(1), Some(&token), NOW),
-        RegistrationDecision::Denied
+        Authorization::Refused(Refusal {
+            decision: RegistrationDecision::Denied,
+            reason: RefusalReason::IssuerInactive,
+        })
     ));
     assert!(matches!(
         service.authorize(share(1), None, NOW),
-        RegistrationDecision::Denied
+        Authorization::Refused(Refusal {
+            decision: RegistrationDecision::Denied,
+            reason: RefusalReason::AnonymousDisabled,
+        })
     ));
     assert!(matches!(
         service.authorize(share(1), Some(&Bearer::new("invalid")), NOW),
-        RegistrationDecision::Denied
+        Authorization::Refused(Refusal {
+            decision: RegistrationDecision::Denied,
+            reason: RefusalReason::TicketEncoding,
+        })
     ));
 }
 
@@ -307,7 +364,10 @@ fn local_owner_capacity_is_preserved_when_public_residency_is_full() {
     let public = service.reserve(share(1), Attribution::Anonymous).unwrap();
     assert!(matches!(
         service.reserve(share(2), Attribution::Anonymous),
-        Err(RegistrationDecision::Unavailable(_))
+        Err(Refusal {
+            decision: RegistrationDecision::Unavailable(_),
+            reason: RefusalReason::ResidentShareCapacity,
+        })
     ));
     let mut token = Bearer::new("owner-secret");
     assert_eq!(
@@ -318,7 +378,11 @@ fn local_owner_capacity_is_preserved_when_public_residency_is_full() {
         service.credential_by_id([2; 16]).unwrap().last_used_at,
         None
     );
-    let RegistrationDecision::Granted(owner) = service.authorize(share(2), Some(&token), NOW)
+    let Authorization::Granted {
+        attribution: owner,
+        class: Class::Owner,
+        allowance: None,
+    } = service.authorize(share(2), Some(&token), NOW)
     else {
         panic!("owner refused");
     };
@@ -383,7 +447,10 @@ fn owner_can_use_all_reserved_shares_beyond_per_principal_limit() {
     }
     assert!(matches!(
         service.reserve(share(200), guest),
-        Err(RegistrationDecision::Unavailable(_))
+        Err(Refusal {
+            decision: RegistrationDecision::Unavailable(_),
+            reason: RefusalReason::PrincipalShareLimit,
+        })
     ));
     drop(guest_shares);
     drop(owner_shares);

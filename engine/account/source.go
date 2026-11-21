@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/serviceauthority"
 )
 
@@ -229,16 +229,10 @@ func (share *ShareAuthorization) reserveAttributionLocked(bearer string) service
 		// a share commits to account or anonymous admission, stop polling nodes.
 		share.releaseNodesLocked()
 		if share.attribution == attributionAnonymous {
-			var fallbackCredential [16]byte
-			hadCredential := share.credential != nil && share.credential.record.Credential != nil
-			if hadCredential {
-				fallbackCredential = share.credential.record.Credential.ID
-			}
+			fallback := share.fallbackCredentialLocked()
 			share.releaseCredentialLocked()
 			service.refreshDemandChangedLocked()
-			if hadCredential {
-				slog.Info("account_share_anonymous_fallback", "credential", fallbackCredential, "state", service.state)
-			}
+			service.emitAnonymousFallback(fallback, service.state)
 		}
 	}
 }
@@ -319,4 +313,21 @@ func (source *Source) permitsAnonymousLocked(node Node) bool {
 
 func deniedAuthorization(reason string) serviceauthority.RegistrationAuthorization {
 	return serviceauthority.RegistrationAuthorization{State: serviceauthority.AdmissionDenied, Cause: errors.New(reason)}
+}
+
+func (share *ShareAuthorization) fallbackCredentialLocked() *Credential {
+	if share.credential == nil || share.credential.record.Credential == nil {
+		return nil
+	}
+	credential := *share.credential.record.Credential
+	return &credential
+}
+
+func (service *Service) emitAnonymousFallback(credential *Credential, state State) {
+	if credential == nil || !service.config.Diagnostics.Enabled() {
+		return
+	}
+	fields := diagnostics.Fields{"state": diagnostics.Text(string(state))}
+	credentialFields(fields, credential)
+	service.emitDiagnostic("account_share_anonymous_fallback", fields)
 }

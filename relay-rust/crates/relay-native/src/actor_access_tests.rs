@@ -722,3 +722,67 @@ async fn public_daily_budget_exhaustion_refuses_resume_and_join_with_retry_after
         .await;
     }
 }
+
+#[tokio::test]
+async fn registration_authorized_traces_record_class_and_specific_refusal_reasons() {
+    use crate::node::{ContributionLimits, Settings};
+    use crate::test_support::capture_events_async;
+
+    async fn capture_registration(
+        node: &Runtime,
+        fixture: &Fixture,
+        bearer: Option<&str>,
+    ) -> Vec<serde_json::Value> {
+        capture_events_async(async {
+            let _ = with_sender(node, fixture, bearer, async |sender| {
+                let _ = read(&mut sender.writer).await;
+            })
+            .await;
+        })
+        .await
+        .into_iter()
+        .filter(|entry| entry["fields"]["event"] == "registration_authorized")
+        .collect()
+    }
+
+    let fixture = Fixture::new();
+    let (_generation, account_bearer, mut policy) = access_fixture(fixture.now(false).0 / 1000);
+    policy.anonymous = false;
+    let node = Runtime::default();
+    node.access.configure(policy.clone()).unwrap();
+
+    let granted = capture_registration(&node, &fixture, Some(&account_bearer)).await;
+    assert_eq!(granted.len(), 1);
+    assert_eq!(granted[0]["fields"]["class"], "Standard");
+    assert_eq!(granted[0]["fields"]["allowance"], "Some(Available)");
+    assert!(granted[0]["fields"].get("reason").is_none());
+
+    let refused = capture_registration(&node, &fixture, None).await;
+    assert_eq!(refused.len(), 1);
+    assert_eq!(refused[0]["fields"]["reason"], "anonymous_disabled");
+    assert!(refused[0]["fields"].get("class").is_none());
+
+    let dir = tempfile::tempdir().unwrap();
+    let store =
+        Database::open(&dir.path().join("budget.sqlite"), fixture.identity().relay).unwrap();
+    let exhausted = Runtime::default();
+    exhausted
+        .configure(
+            Settings {
+                access: policy,
+                contribution: ContributionLimits {
+                    daily_bytes: Some(0),
+                    ..Default::default()
+                },
+                ..Settings::default()
+            },
+            store,
+        )
+        .unwrap();
+    let budget_refused = capture_registration(&exhausted, &fixture, Some(&account_bearer)).await;
+    assert_eq!(budget_refused.len(), 1);
+    assert_eq!(
+        budget_refused[0]["fields"]["reason"],
+        "public_daily_budget_exhausted"
+    );
+}

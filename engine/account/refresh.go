@@ -3,9 +3,10 @@ package account
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"reflect"
 	"time"
+
+	"github.com/windshare/windshare/core/diagnostics"
 )
 
 type refreshDemand struct {
@@ -40,9 +41,15 @@ func (service *Service) refreshDemand() refreshDemand {
 
 func (service *Service) refreshDemandChangedLocked() {
 	demand := service.refreshDemandLocked()
-	slog.Debug("account_refresh_demand_changed", "official_shares", len(service.officialShares),
-		"account_views", service.accountViews, "active", demand.active(),
-		"automatic_setup", demand.setup, "monitor", demand.monitor)
+	if service.config.Diagnostics.Enabled() {
+		service.emitDiagnostic("account_refresh_demand_changed", diagnostics.Fields{
+			"official_shares": diagnostics.Int(int64(len(service.officialShares))),
+			"account_views":   diagnostics.Int(int64(service.accountViews)),
+			"active":          diagnostics.Bool(demand.active()),
+			"automatic_setup": diagnostics.Bool(demand.setup),
+			"monitor":         diagnostics.Bool(demand.monitor),
+		})
+	}
 	service.notifyLocked()
 	service.wakeRefreshLocked()
 }
@@ -218,7 +225,12 @@ func (service *Service) observeRefresh(schedule *refreshSchedule, record Record,
 		if next.After(now) {
 			schedule.next, schedule.backoffUntil, schedule.retry = next, time.Time{}, MinimumRetry
 			service.transition(record, Ready, "", next)
-			slog.Debug("account_refresh_satisfied_by_ticket", "credential", record.Credential.ID, "refresh_at", next)
+			if service.config.Diagnostics.Enabled() {
+				fields := diagnostics.Fields{}
+				credentialFields(fields, record.Credential)
+				timestampField(fields, "refresh_at", next)
+				service.emitDiagnostic("account_refresh_satisfied_by_ticket", fields)
+			}
 		}
 		return
 	}
@@ -280,12 +292,15 @@ func (service *Service) RefreshOnce(ctx context.Context) (RefreshOutcome, error)
 	if err != nil {
 		return "", err
 	}
-	logger := slog.Default()
-	if record.Credential != nil {
-		logger = logger.With("credential", record.Credential.ID)
-	}
 	outcome, err := service.refreshRecord(ctx, record)
-	logger.DebugContext(ctx, "account_refresh_attempt_completed", "outcome", outcome, "error", err)
+	if service.config.Diagnostics.Enabled() {
+		fields := diagnostics.Fields{"outcome": diagnostics.Text(string(outcome))}
+		credentialFields(fields, record.Credential)
+		if err != nil {
+			fields["error"] = diagnostics.Text(err.Error())
+		}
+		service.emitDiagnostic("account_refresh_attempt_completed", fields)
+	}
 	return outcome, err
 }
 

@@ -230,6 +230,7 @@ func (service *Service) install(ctx context.Context, previous Record, response s
 	next := service.ticketRefreshAt(record, service.config.Now(), service.accountViews != 0)
 	service.mu.Unlock()
 	service.transition(record, Ready, "", next)
+	service.emitTicketIssued(record, response.ExpiresAt, login)
 	return nil
 }
 

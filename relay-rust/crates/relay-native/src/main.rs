@@ -1,7 +1,20 @@
 use anyhow::{Result, bail};
-use std::{future::Future, path::PathBuf};
+use std::{
+    fmt,
+    future::Future,
+    path::PathBuf,
+    sync::{Arc, OnceLock},
+};
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
+use tracing::{Event, Subscriber};
+use tracing_subscriber::{
+    fmt::{
+        FmtContext, FormatEvent, FormatFields,
+        format::{Format, Json, Writer},
+    },
+    registry::LookupSpan,
+};
 use windshare_relay_native::{
     Endpoint, Server,
     node::{Configuration, Identity},
@@ -10,6 +23,50 @@ use windshare_relay_native::{
 
 const USAGE: &str = "WindShare native relay\nUsage: wsrelay --config <node.json>";
 
+struct NodeJsonFormat {
+    inner: Format<Json>,
+    node_id_json: Arc<OnceLock<String>>,
+}
+
+impl NodeJsonFormat {
+    fn new(node_id_json: Arc<OnceLock<String>>) -> Self {
+        Self {
+            inner: Format::default().json(),
+            node_id_json,
+        }
+    }
+}
+
+impl<S, N> FormatEvent<S, N> for NodeJsonFormat
+where
+    S: Subscriber + for<'a> LookupSpan<'a>,
+    N: for<'a> FormatFields<'a> + 'static,
+{
+    fn format_event(
+        &self,
+        ctx: &FmtContext<'_, S, N>,
+        mut writer: Writer<'_>,
+        event: &Event<'_>,
+    ) -> fmt::Result {
+        let Some(node_id_json) = self.node_id_json.get() else {
+            return self.inner.format_event(ctx, writer, event);
+        };
+        let mut line = String::new();
+        self.inner
+            .format_event(ctx, Writer::new(&mut line), event)?;
+        if let Some(rest) = line.strip_prefix('{') {
+            writer.write_str("{\"node_id\":")?;
+            writer.write_str(node_id_json)?;
+            if !rest.starts_with('}') {
+                writer.write_str(",")?;
+            }
+            writer.write_str(rest)
+        } else {
+            writer.write_str(&line)
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -17,8 +74,10 @@ async fn main() -> Result<()> {
         println!("{USAGE}");
         return Ok(());
     }
+    let node_id_json = Arc::new(OnceLock::new());
     tracing_subscriber::fmt()
         .json()
+        .event_format(NodeJsonFormat::new(Arc::clone(&node_id_json)))
         .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
@@ -32,7 +91,7 @@ async fn main() -> Result<()> {
     }
     let path = PathBuf::from(path);
     let config = Configuration::read(&path)?;
-    run(config, path, shutdown_signal()?).await
+    run(config, path, shutdown_signal()?, &node_id_json).await
 }
 
 fn shutdown_signal() -> Result<impl Future<Output = ()>> {
@@ -62,6 +121,7 @@ async fn run(
     config: Configuration,
     path: PathBuf,
     shutdown: impl Future<Output = ()>,
+    node_id_json: &OnceLock<String>,
 ) -> Result<()> {
     let listener = TcpListener::bind(config.listen).await?;
     let address = listener.local_addr()?;
@@ -76,9 +136,9 @@ async fn run(
         config.connections,
         &config.database,
     )?;
-    server
-        .node()
-        .identify(Identity::open(&config.identity_file)?)?;
+    let identity = Identity::open(&config.identity_file)?;
+    let _ = node_id_json.set(serde_json::to_string(&identity.id())?);
+    server.node().identify(identity)?;
     let configured = server.configure(config.node, Some(path))?;
     let stun = stun::Service::bind_with_node(config.stun, configured.node())?;
     println!(
@@ -105,3 +165,7 @@ async fn run(
     let (result, ()) = tokio::join!(relay, stun.serve(stopped.cancelled()));
     result
 }
+
+#[cfg(test)]
+#[path = "main_tests.rs"]
+mod tests;

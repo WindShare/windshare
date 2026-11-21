@@ -1,11 +1,11 @@
 use super::*;
-use crate::node::access::{Bearer, Policy};
+use crate::node::access::{Authorization, Bearer, Policy};
 use std::path::Path;
 use windshare_relay_access::{Credential, CredentialState};
 use windshare_relay_console::{
     MAX_ACTIVE_CREDENTIALS, credentials::CREDENTIAL_HISTORY_PAGE_SIZE, text_id,
 };
-use windshare_relay_core::{access::RegistrationDecision, identifiers::ShareId};
+use windshare_relay_core::identifiers::ShareId;
 
 fn open(path: &Path, identity: &Identity, policy: &Policy) -> Console {
     let endpoint = Endpoint::parse("wss://node.example/v2/ws").unwrap();
@@ -64,7 +64,7 @@ fn admitted(console: &Console, secret: &str) -> bool {
             Some(&Bearer::new(secret)),
             100
         ),
-        RegistrationDecision::Granted(_)
+        Authorization::Granted { .. }
     )
 }
 

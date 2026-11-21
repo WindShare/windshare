@@ -3,9 +3,9 @@ package account
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"time"
 
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/serviceauthority"
 )
 
@@ -67,7 +67,7 @@ func (service *Service) Register(ctx context.Context) (err error) {
 			if record.Proof != nil {
 				challengeID = record.Proof.Challenge.ID
 			}
-			slog.Warn("account_registration_failed", "challenge_id", challengeID, "error", err)
+			service.emitRegistrationFailed(challengeID, err)
 			if isLocalStoreError(err) {
 				service.mu.Lock()
 				service.recordStorageErrorLocked(err)
@@ -90,7 +90,7 @@ func (service *Service) Register(ctx context.Context) (err error) {
 		return errInvalidRegistrationChallenge
 	}
 	if proof.Solution == "" {
-		slog.Info("account_registration_verifying", "challenge_id", proof.Challenge.ID)
+		service.emitRegistrationVerifying(proof.Challenge)
 		service.setRegistrationProgress(registrationWorkStart)
 		proof.Solution, err = service.solve(ctx, proof.Challenge)
 		if err != nil {
@@ -102,7 +102,7 @@ func (service *Service) Register(ctx context.Context) (err error) {
 		record.Proof = &proof
 	}
 	service.setRegistrationProgress(registrationSubmitting)
-	slog.Info("account_registration_submitting", "challenge_id", proof.Challenge.ID)
+	service.emitRegistrationSubmitting(proof.Challenge.ID)
 	challenge, err := service.submitRegistration(ctx, record, &proof)
 	if err != nil || challenge == nil {
 		return err
@@ -138,7 +138,16 @@ func (service *Service) submitRegistration(ctx context.Context, record Record, p
 	if err := service.saveProof(ctx, record, &Proof{Challenge: challenge}); err != nil {
 		return nil, err
 	}
-	slog.Debug("account_registration_challenge_received", "challenge_id", challenge.ID, "mode", challenge.Mode, "expires_at", challenge.ExpiresAt)
+	if service.config.Diagnostics.Enabled() {
+		fields := diagnostics.Fields{
+			"challenge_id": diagnostics.Text(challenge.ID),
+			"mode":         diagnostics.Text(challenge.Mode),
+		}
+		if challenge.ExpiresAt > 0 {
+			timestampField(fields, "expires_at", time.Unix(int64(challenge.ExpiresAt), 0))
+		}
+		service.emitDiagnostic("account_registration_challenge_received", fields)
+	}
 	return &challenge, nil
 }
 
@@ -160,4 +169,34 @@ func (challenge Challenge) hasEmailCode(now time.Time) bool {
 func (service *Service) acceptsChallengeExpiry(expiresAt uint64) bool {
 	now := uint64(service.config.Now().Unix())
 	return expiresAt > now && expiresAt <= now+uint64(authorityChallengeLifetime/time.Second)+serviceauthority.ClockSkew
+}
+
+func (service *Service) emitRegistrationFailed(challengeID string, err error) {
+	if !service.config.Diagnostics.Enabled() {
+		return
+	}
+	fields := diagnostics.Fields{"error": diagnostics.Text(err.Error())}
+	if challengeID != "" {
+		fields["challenge_id"] = diagnostics.Text(challengeID)
+	}
+	service.emitDiagnostic("account_registration_failed", fields)
+}
+
+func (service *Service) emitRegistrationVerifying(challenge Challenge) {
+	if !service.config.Diagnostics.Enabled() {
+		return
+	}
+	service.emitDiagnostic("account_registration_verifying", diagnostics.Fields{
+		"challenge_id": diagnostics.Text(challenge.ID),
+		"bits":         diagnostics.Uint(uint64(challenge.Bits)),
+	})
+}
+
+func (service *Service) emitRegistrationSubmitting(challengeID string) {
+	if !service.config.Diagnostics.Enabled() {
+		return
+	}
+	service.emitDiagnostic("account_registration_submitting", diagnostics.Fields{
+		"challenge_id": diagnostics.Text(challengeID),
+	})
 }

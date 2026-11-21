@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/serviceauthority"
 )
 
@@ -39,6 +40,7 @@ type Config struct {
 	Client      HTTPClient
 	Now         func() time.Time
 	ResolveNode func(string) (Node, bool)
+	Diagnostics diagnostics.Sink
 }
 
 // RefreshOutcome describes what a completed attempt achieved for its caller.

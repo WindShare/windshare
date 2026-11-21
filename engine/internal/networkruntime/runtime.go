@@ -68,7 +68,7 @@ func New(config *networkconfig.Config, now func() time.Time, selectionSeed strin
 	}
 	if config.Authority != nil {
 		authority := *config.Authority
-		authority.Now, authority.ResolveNode = now, r.officialNode
+		authority.Now, authority.ResolveNode, authority.Diagnostics = now, r.officialNode, sink
 		r.accounts, err = account.New(authority)
 		if err != nil {
 			cancel()

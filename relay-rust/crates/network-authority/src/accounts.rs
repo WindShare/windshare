@@ -94,7 +94,14 @@ impl<R: Store, E: Environment> Authority<R, E> {
         let signed = ticket
             .issue(self.signing.generation, &self.signing.key)
             .map_err(|error| anyhow!("ticket signing: {error:?}"))?;
-        tracing::info!(event="account_ticket_issued",account=?credential.account,credential=?credential.id,expires_at,version=entitlement.version);
+        tracing::info!(
+            event = "account_ticket_issued",
+            account = ?credential.account,
+            credential = ?credential.id,
+            expires_at,
+            version = entitlement.version,
+            valid_until = entitlement.valid_until,
+        );
         Ok(Session {
             account: credential.account,
             credential: credential.id,

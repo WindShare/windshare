@@ -1,4 +1,5 @@
 use super::{Actor, Environment, Persistence};
+use crate::node::access::{Authorization, Refusal, RefusalReason};
 use anyhow::{Result, anyhow};
 use windshare_relay_core::{
     access::{Attribution, RegistrationDecision, RegistrationRequest},
@@ -98,34 +99,98 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
     pub(super) fn authorize(&mut self, request: &RegistrationRequest) -> RegistrationDecision {
         let connection = request.connection();
         let Some(port) = self.ports.get(&connection) else {
+            tracing::info!(
+                event = "registration_authorized",
+                share = ?self.identity.share,
+                attempt = ?connection,
+                decision = ?RegistrationDecision::Denied,
+                reason = RefusalReason::ConnectionMissing.as_str(),
+            );
             return RegistrationDecision::Denied;
         };
-        let mut decision = self.node.access.authorize(
+        let outcome = match self.node.access.authorize(
             self.identity.share,
             port.bearer(),
             self.environment.now().0 / 1000,
-        );
-        if let RegistrationDecision::Granted(attribution) = decision {
-            // Stop non-owner registrations before reserving residency or writing SQLite
-            // when the daily public contribution budget is already spent.
-            if self.node.public_budget_refuses_attribution(attribution) {
-                decision = RegistrationDecision::Unavailable(crate::node::SERVICE_RETRY_AFTER);
-            } else if let Some(residency) = &self.residency {
-                if residency.attribution() != attribution {
-                    decision = RegistrationDecision::Denied;
-                }
-            } else if !self.has_terminal_authority() {
-                // Stopping/Stopped records cannot become live again; let the kernel
-                // return StopPending/Stopped/Occupied without reserving a slot.
-                match self.node.access.reserve(self.identity.share, attribution) {
-                    Ok(residency) => self.residency = Some(residency),
-                    Err(refusal) => decision = refusal,
+        ) {
+            Authorization::Granted {
+                attribution,
+                class,
+                allowance,
+            } => {
+                // Stop non-owner registrations before reserving residency or writing SQLite
+                // when the daily public contribution budget is already spent.
+                if self.node.public_budget_refuses_attribution(attribution) {
+                    Authorization::Refused(Refusal {
+                        decision: RegistrationDecision::Unavailable(
+                            crate::node::SERVICE_RETRY_AFTER,
+                        ),
+                        reason: RefusalReason::PublicDailyBudgetExhausted,
+                    })
+                } else if let Some(residency) = &self.residency {
+                    if residency.attribution() == attribution {
+                        Authorization::Granted {
+                            attribution,
+                            class,
+                            allowance,
+                        }
+                    } else {
+                        Authorization::Refused(Refusal::denied(RefusalReason::AttributionMismatch))
+                    }
+                } else if self.has_terminal_authority() {
+                    // Stopping/Stopped records cannot become live again; let the kernel
+                    // return StopPending/Stopped/Occupied without reserving a slot.
+                    Authorization::Granted {
+                        attribution,
+                        class,
+                        allowance,
+                    }
+                } else {
+                    match self.node.access.reserve(self.identity.share, attribution) {
+                        Ok(residency) => {
+                            self.residency = Some(residency);
+                            Authorization::Granted {
+                                attribution,
+                                class,
+                                allowance,
+                            }
+                        }
+                        Err(refusal) => Authorization::Refused(refusal),
+                    }
                 }
             }
+            refused @ Authorization::Refused(_) => refused,
+        };
+        match outcome {
+            Authorization::Granted {
+                attribution,
+                class,
+                allowance,
+            } => {
+                let decision = RegistrationDecision::Granted(attribution);
+                tracing::info!(
+                    event = "registration_authorized",
+                    share = ?self.identity.share,
+                    attempt = ?connection,
+                    source = ?port.source(),
+                    ?decision,
+                    ?class,
+                    ?allowance,
+                );
+                decision
+            }
+            Authorization::Refused(refusal) => {
+                tracing::info!(
+                    event = "registration_authorized",
+                    share = ?self.identity.share,
+                    attempt = ?connection,
+                    source = ?port.source(),
+                    decision = ?refusal.decision,
+                    reason = refusal.reason.as_str(),
+                );
+                refusal.decision
+            }
         }
-        tracing::info!(event = "registration_authorized", share = ?self.identity.share,
-            attempt = ?connection, source = ?port.source(), ?decision);
-        decision
     }
 
     pub(super) fn resident_revocation(&self) -> Option<ResidentRevocation> {

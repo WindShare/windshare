@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/url"
 	"sync"
 	"time"
 
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/serviceauthority"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 )
@@ -38,6 +38,7 @@ type nodePolicyCache struct {
 	now         func() time.Time
 	resolveNode func(string) (Node, bool)
 	onChange    func()
+	diagnostics diagnostics.Sink
 	mu          sync.Mutex
 	policies    map[string]nodeState
 	pollers     map[string]*nodePoller
@@ -50,6 +51,7 @@ func newNodePolicyCache(
 	now func() time.Time,
 	resolveNode func(string) (Node, bool),
 	onChange func(),
+	sink diagnostics.Sink,
 ) *nodePolicyCache {
 	return &nodePolicyCache{
 		ctx:         ctx,
@@ -58,6 +60,7 @@ func newNodePolicyCache(
 		now:         now,
 		resolveNode: resolveNode,
 		onChange:    onChange,
+		diagnostics: sink,
 		policies:    make(map[string]nodeState),
 		pollers:     make(map[string]*nodePoller),
 	}
@@ -201,7 +204,12 @@ func (cache *nodePolicyCache) refreshNode(ctx context.Context, address string, p
 	// Skip broadcasts when the effective anonymous-admission outcome is unchanged
 	// so steady-state descriptor renewals do not spuriously wake observers.
 	if changed {
-		slog.Debug("account_node_policy_changed", "permits_anonymous", permits)
+		if cache.diagnostics.Enabled() {
+			cache.diagnostics.Emit(diagnostics.New("account_node_policy_changed", diagnostics.Fields{
+				"endpoint":          diagnostics.Text(address),
+				"permits_anonymous": diagnostics.Bool(permits),
+			}).At(cache.now()))
+		}
 		if cache.onChange != nil {
 			cache.onChange()
 		}

@@ -1,5 +1,7 @@
 use super::*;
-use crate::node::access::{AuthorityState, Bearer, Policy, TrustedIssuer};
+use crate::node::access::{
+    AuthorityState, Authorization, Bearer, Policy, Refusal, RefusalReason, TrustedIssuer,
+};
 use ed25519_dalek::SigningKey;
 use windshare_relay_access::{
     Attribution,
@@ -58,7 +60,7 @@ fn open_console(
 fn admitted_as(console: &Console, share: ShareId, key: &Bearer, account: Attribution) -> bool {
     matches!(
         console.0.access.authorize(share, Some(key), 11),
-        RegistrationDecision::Granted(attribution) if attribution == account
+        Authorization::Granted { attribution, .. } if attribution == account
     )
 }
 
@@ -157,6 +159,9 @@ fn service_approval_installs_an_account_key_and_node_revocation_survives_restart
     drop(restored);
     assert!(matches!(
         setup().0.access.authorize(share, Some(&key), 12),
-        RegistrationDecision::Denied
+        Authorization::Refused(Refusal {
+            decision: RegistrationDecision::Denied,
+            reason: RefusalReason::CredentialInactive,
+        })
     ));
 }

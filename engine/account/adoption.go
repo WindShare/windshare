@@ -1,8 +1,9 @@
 package account
 
 import (
-	"log/slog"
 	"time"
+
+	"github.com/windshare/windshare/core/diagnostics"
 )
 
 // Denials are remembered before persistence. Losing a cache write or loading an
@@ -61,6 +62,7 @@ func (service *Service) adoptLocked(record Record) {
 		service.rememberDenialLocked(record, record.Denial)
 	}
 	record = service.withDenialLocked(record)
+	previousState := service.state
 	recoveredStorage := service.state == StorageError
 	selectionChanged := !sameIdentity(service.record, record)
 	service.record = record
@@ -69,8 +71,18 @@ func (service *Service) adoptLocked(record Record) {
 		service.state, service.reason = service.cachedState(record)
 		service.registrationPermille, service.retryAt = 0, time.Time{}
 	}
+	if previousState != "" && previousState != service.state {
+		service.emitStateChanged(previousState, service.state, service.reason, time.Time{}, record.Credential)
+	}
 	if selectionChanged || recoveredStorage {
-		slog.Debug("account_selection_adopted", "state", service.state, "has_credential", record.Credential != nil)
+		if service.config.Diagnostics.Enabled() {
+			fields := diagnostics.Fields{
+				"state":          diagnostics.Text(string(service.state)),
+				"has_credential": diagnostics.Bool(record.Credential != nil),
+			}
+			credentialFields(fields, record.Credential)
+			service.emitDiagnostic("account_selection_adopted", fields)
+		}
 		service.wakeRefreshLocked()
 	}
 	if record.Credential != nil {
@@ -89,7 +101,12 @@ func (service *Service) recordStorageErrorLocked(err error) {
 	service.state, service.reason = StorageError, reason
 	service.registrationPermille, service.retryAt = 0, time.Time{}
 	service.notifyLocked()
-	slog.Warn("account_storage_error", "from", previous, "reason", reason)
+	if service.config.Diagnostics.Enabled() {
+		service.emitDiagnostic("account_storage_error", diagnostics.Fields{
+			"from":   diagnostics.Text(string(previous)),
+			"reason": diagnostics.Text(reason),
+		})
+	}
 }
 
 func (service *Service) cachedState(record Record) (State, string) {
