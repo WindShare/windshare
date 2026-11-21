@@ -461,3 +461,90 @@ async fn stop_supersedes_an_ownership_write_already_in_flight() {
     ));
     drop(host);
 }
+
+#[tokio::test]
+async fn graceful_mailbox_close_drains_in_flight_commit_before_returning() {
+    let fixture = Fixture::new();
+    let identity = fixture.identity();
+    let directory = tempfile::tempdir().unwrap();
+    let store = Database::open(&directory.path().join("authority.sqlite"), identity.relay).unwrap();
+    let (attempt_tx, mut attempts) = mpsc::unbounded_channel();
+    let controlled = Controlled {
+        database: store.clone(),
+        attempts: attempt_tx,
+    };
+    let environment = Frozen {
+        now: Arc::new(AtomicU64::new(fixture.now(false).0)),
+        seeds: Arc::new(Mutex::new(VecDeque::from([fixture.seed(false)]))),
+    };
+    let (tx, inbox) = mpsc::channel(16);
+    let generation = Generation::new(identity, store.clone());
+    let actor = tokio::spawn(generation.track(Actor::start(
+        controlled,
+        environment,
+        inbox,
+        Arc::new(AtomicBool::new(false)),
+        generation.clone(),
+        Recovery::vacant(&store),
+        Runtime::default(),
+    )));
+    let (sender_tx, mut sender, _closure) =
+        crate::connection::channel(connection(1), Runtime::default());
+    tx.send(Event::Connected(connection(1), Box::new(sender_tx)))
+        .await
+        .unwrap();
+    tx.send(Event::Control(
+        connection(1),
+        fixture.bytes("registerInitB64"),
+    ))
+    .await
+    .unwrap();
+    assert_eq!(&read(&mut sender).await[..4], b"WS2Q");
+    tx.send(Event::Control(
+        connection(1),
+        fixture.bytes("registerProofB64"),
+    ))
+    .await
+    .unwrap();
+    tx.send(Event::Control(
+        connection(1),
+        fixture.bytes("descriptorUploadB64"),
+    ))
+    .await
+    .unwrap();
+    let publish = timeout(Duration::from_secs(3), attempts.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    publish.release.send(Receipt::Commit).unwrap();
+    assert_eq!(&read(&mut sender).await[..4], b"WS2K");
+
+    tx.send(Event::Disconnected(connection(1))).await.unwrap();
+    let grace = timeout(Duration::from_secs(3), attempts.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(grace.operation, Storage::CompareExchange { .. }));
+
+    // Closing the mailbox while Grace persistence is still blocked must wait
+    // for the in-flight commit instead of returning with Published still on disk.
+    drop(tx);
+    for _ in 0..8 {
+        tokio::task::yield_now().await;
+    }
+    assert!(!actor.is_finished());
+
+    grace.release.send(Receipt::Commit).unwrap();
+    timeout(Duration::from_secs(3), actor)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        store
+            .load(identity.share)
+            .unwrap()
+            .map(|stored| stored.record()),
+        Some(Record::Grace(_))
+    ));
+}
