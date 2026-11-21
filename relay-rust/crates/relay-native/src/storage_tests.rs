@@ -139,3 +139,40 @@ fn unknown_or_corrupt_authority_is_not_absence() {
     drop(database);
     assert!(Database::open(&path, RelayIdentity::new([1; 32]).unwrap()).is_err());
 }
+
+#[test]
+fn resident_inventory_tracks_live_attributions_across_recovery_and_stop() {
+    let fixture = Fixture::new();
+    let identity = fixture.identity();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("inventory.sqlite");
+    let works = fixture.works();
+
+    let database = Database::open(&path, identity.relay).unwrap();
+    assert!(database.resident_inventory().is_empty());
+
+    let published = database
+        .execute(identity.share, &works[0])
+        .unwrap()
+        .unwrap();
+    let attribution = published.record().live_attribution().unwrap();
+    assert_eq!(
+        database.resident_inventory(),
+        BTreeMap::from([(identity.share, attribution)])
+    );
+    drop(database);
+
+    let database = Database::open(&path, identity.relay).unwrap();
+    assert!(database.resident_inventory().is_empty());
+    let records = database.recoverable_records(10).unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        database.resident_inventory(),
+        BTreeMap::from([(identity.share, attribution)])
+    );
+
+    for work in &works[1..] {
+        database.execute(identity.share, work).unwrap();
+    }
+    assert!(database.resident_inventory().is_empty());
+}

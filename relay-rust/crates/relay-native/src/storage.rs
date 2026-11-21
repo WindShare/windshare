@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, anyhow, ensure};
 use rusqlite::{Connection, ErrorCode, OpenFlags, OptionalExtension, TransactionBehavior, params};
 use std::{
+    collections::BTreeMap,
     fs::{File, OpenOptions},
     num::NonZeroU64,
     path::Path,
@@ -8,6 +9,7 @@ use std::{
     time::Duration,
 };
 use windshare_relay_core::{
+    access::Attribution,
     authority::StoredAuthority,
     identifiers::{RelayIdentity, ShareId},
     lifecycle::Record,
@@ -30,7 +32,7 @@ pub trait Persistence: Clone + Send + Sync + 'static {
 
 struct State {
     connection: Mutex<Connection>,
-    residents: Mutex<std::collections::BTreeSet<ShareId>>,
+    residents: Mutex<BTreeMap<ShareId, Attribution>>,
     path: std::path::PathBuf,
     // Generation-owned clones retain this lock through transport teardown and
     // blocking transactions, even when their actor or server has disappeared.
@@ -100,7 +102,7 @@ impl Database {
         &self.0.path
     }
 
-    pub(crate) fn resident_inventory(&self) -> std::collections::BTreeSet<ShareId> {
+    pub(crate) fn resident_inventory(&self) -> BTreeMap<ShareId, Attribution> {
         self.0.residents.lock().expect("resident inventory").clone()
     }
 
@@ -138,8 +140,11 @@ impl Database {
         }
         *self.0.residents.lock().expect("resident inventory") = records
             .iter()
-            .filter(|record| record.live_attribution().is_some())
-            .map(Record::share)
+            .filter_map(|record| {
+                record
+                    .live_attribution()
+                    .map(|attribution| (record.share(), attribution))
+            })
             .collect();
         drop(rows);
         drop(statement);
@@ -173,11 +178,8 @@ impl Persistence for Database {
         // Report committed idle and recovering shares even while an actor is being rebuilt.
         {
             let mut residents = self.0.residents.lock().expect("resident inventory");
-            if stored
-                .as_ref()
-                .is_some_and(|s| s.record().live_attribution().is_some())
-            {
-                residents.insert(share);
+            if let Some(attribution) = stored.as_ref().and_then(|s| s.record().live_attribution()) {
+                residents.insert(share, attribution);
             } else {
                 residents.remove(&share);
             }

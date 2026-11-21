@@ -99,18 +99,25 @@ impl Service {
     pub fn reported_policy(
         &self,
         issuer: Issuer,
-        mut durable: std::collections::BTreeSet<ShareId>,
+        mut durable: BTreeMap<ShareId, Attribution>,
     ) -> (u64, u64) {
         let state = self.read();
-        durable.extend(state.residents.keys().copied());
-        (
-            state
-                .authorities
-                .policies
-                .get(&issuer)
-                .map_or(0, |p| p.version),
-            durable.len() as u64,
-        )
+        for (&share, &(attribution, _)) in &state.residents {
+            durable.entry(share).or_insert(attribution);
+        }
+        // Synthetic verification probes occupy internal admission slots but are not
+        // user shares and must not hold authority drain/cutoff readiness open.
+        let resident_shares = durable
+            .into_iter()
+            .filter(|&(share, attribution)| !state.scoped_probe(share, attribution))
+            .count() as u64;
+        let version = state
+            .authorities
+            .policies
+            .get(&issuer)
+            .map_or(0, |p| p.version);
+        drop(state);
+        (version, resident_shares)
     }
 
     pub fn anonymous(&self) -> bool {
@@ -211,36 +218,52 @@ impl Service {
         &self,
         authority: Issuer,
     ) -> Vec<windshare_relay_access::usage::ShareAttribution> {
-        self.read()
+        let state = self.read();
+        let shares = state
             .residents
             .iter()
-            .filter_map(|(share, (attribution, _))| match attribution {
-                Attribution::Account {
-                    issuer, account, ..
-                } if *issuer == authority => {
-                    Some(windshare_relay_access::usage::ShareAttribution {
-                        share: *share.as_bytes(),
-                        account: *account,
-                    })
+            .filter_map(|(share, (attribution, _))| {
+                if state.scoped_probe(*share, *attribution) {
+                    return None;
                 }
-                _ => None,
+                match attribution {
+                    Attribution::Account {
+                        issuer, account, ..
+                    } if *issuer == authority => {
+                        Some(windshare_relay_access::usage::ShareAttribution {
+                            share: *share.as_bytes(),
+                            account: *account,
+                        })
+                    }
+                    _ => None,
+                }
             })
-            .collect()
+            .collect();
+        drop(state);
+        shares
     }
 
     pub fn resident_accounts(&self) -> Vec<(Issuer, AccountId)> {
-        self.read()
+        let state = self.read();
+        let accounts = state
             .residents
-            .values()
-            .filter_map(|(attribution, _)| match attribution {
-                Attribution::Account {
-                    issuer, account, ..
-                } => Some((*issuer, *account)),
-                _ => None,
+            .iter()
+            .filter_map(|(share, (attribution, _))| {
+                if state.scoped_probe(*share, *attribution) {
+                    return None;
+                }
+                match attribution {
+                    Attribution::Account {
+                        issuer, account, ..
+                    } => Some((*issuer, *account)),
+                    _ => None,
+                }
             })
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
-            .collect()
+            .collect();
+        drop(state);
+        accounts
     }
 }
 

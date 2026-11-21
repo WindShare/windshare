@@ -69,6 +69,22 @@ func NewShare() (SyntheticShare, error) {
 	return SyntheticShare{key, init, descriptor}, err
 }
 
+const (
+	stopCleanupBudget  = 3 * time.Second
+	stopCleanupDivisor = 4
+)
+
+// Reserve a bounded cleanup tail inside the caller's deadline so a stalled
+// post-registration step can still STOP the synthetic share without overrunning
+// tight upgrade or rollback budgets.
+func cleanupReserve(now, outer time.Time) time.Duration {
+	remaining := outer.Sub(now)
+	if remaining <= 0 {
+		return 0
+	}
+	return min(stopCleanupBudget, remaining/stopCleanupDivisor)
+}
+
 func (s SyntheticShare) exchange(ctx context.Context, client *http.Client, base, origin, ticket string) (result error) {
 	dial := relayv2.DialOptions{HTTPClient: client, Header: http.Header{"Origin": {origin}, "Authorization": {"Bearer " + ticket}}}
 	sender, err := relayv2.DialSender(ctx, relayv2.SenderConfig{RelayBaseURL: base, Init: s.init, SenderPrivateKey: s.key, Descriptor: s.descriptor, Dial: dial})
@@ -77,7 +93,7 @@ func (s SyntheticShare) exchange(ctx context.Context, client *http.Client, base,
 	}
 	defer func() {
 		_ = sender.Close()
-		deadline := time.Now().Add(3 * time.Second)
+		deadline := time.Now().Add(stopCleanupBudget)
 		if outer, ok := ctx.Deadline(); ok && outer.Before(deadline) {
 			deadline = outer
 		}
@@ -88,8 +104,16 @@ func (s SyntheticShare) exchange(ctx context.Context, client *http.Client, base,
 		result = errors.Join(result, relayv2.Stop(cleanup, relayv2.StopConfig{RelayBaseURL: base, ShareID: s.init.ShareID, ShareInstance: s.init.ShareInstance,
 			PKHash: s.init.PKHash, StopID: stop, SenderPrivateKey: s.key, Dial: relayv2.DialOptions{HTTPClient: client, Header: http.Header{"Origin": {origin}}}}))
 	}()
+	workCtx := ctx
+	if outer, ok := ctx.Deadline(); ok {
+		if reserve := cleanupReserve(time.Now(), outer); reserve > 0 {
+			var cancelWork context.CancelFunc
+			workCtx, cancelWork = context.WithDeadline(ctx, outer.Add(-reserve))
+			defer cancelWork()
+		}
+	}
 	dial.Header = http.Header{"Origin": {origin}}
-	receiver, err := relayv2.DialReceiver(ctx, relayv2.ReceiverConfig{RelayBaseURL: base, ShareID: s.init.ShareID, Dial: dial})
+	receiver, err := relayv2.DialReceiver(workCtx, relayv2.ReceiverConfig{RelayBaseURL: base, ShareID: s.init.ShareID, Dial: dial})
 	if err != nil {
 		return err
 	}
@@ -99,20 +123,20 @@ func (s SyntheticShare) exchange(ctx context.Context, client *http.Client, base,
 	}
 	var challenge [32]byte
 	rand.Read(challenge[:])
-	if err = receiver.Channel().Send(ctx, challenge[:]); err != nil {
+	if err = receiver.Channel().Send(workCtx, challenge[:]); err != nil {
 		return err
 	}
-	channel, err := sender.Accept(ctx)
+	channel, err := sender.Accept(workCtx)
 	if err != nil {
 		return err
 	}
-	if err = receive(ctx, channel.Recv(), challenge[:]); err != nil {
+	if err = receive(workCtx, channel.Recv(), challenge[:]); err != nil {
 		return err
 	}
-	if err = channel.Send(ctx, challenge[:]); err != nil {
+	if err = channel.Send(workCtx, challenge[:]); err != nil {
 		return err
 	}
-	return receive(ctx, receiver.Channel().Recv(), challenge[:])
+	return receive(workCtx, receiver.Channel().Recv(), challenge[:])
 }
 
 func receive(ctx context.Context, frames <-chan framechannel.Frame, want []byte) error {

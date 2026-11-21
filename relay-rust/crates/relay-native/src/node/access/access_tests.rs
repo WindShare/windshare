@@ -817,3 +817,68 @@ fn probe_reserved_priority_requires_matching_scope_and_enabled_node() {
     );
     drop(resident);
 }
+
+#[test]
+fn reported_policy_and_status_lists_exclude_controller_scoped_probes() {
+    let (service, template, signing, generation, _) = identity();
+    let node = [29; 32];
+    service.identify(node);
+    service.set_controller(Some(generation.issuer));
+    service
+        .apply_authority(AuthorityState {
+            generation,
+            policy: Some(windshare_relay_access::usage::NodePolicy {
+                version: 7,
+                admission: Admission::Draining,
+                anonymous: true,
+                probe_account: windshare_relay_access::probe::PROBE_ACCOUNT,
+            }),
+        })
+        .unwrap();
+
+    let (probe_live, _) = probe_bearer(template, &signing, generation, &node, share(1));
+    let (probe_durable, _) = probe_bearer(template, &signing, generation, &node, share(2));
+    let live_guard = service.reserve(share(1), probe_live).unwrap();
+
+    // Probe shares stay out of reported_policy and status lists whether live in memory,
+    // committed in durable storage (e.g. Grace after timeout), or present in both.
+    let durable = BTreeMap::from([(share(1), probe_live), (share(2), probe_durable)]);
+    assert_eq!(service.reported_policy(generation.issuer, durable), (7, 0));
+    assert_eq!(service.resident_shares(generation.issuer), Vec::new());
+    assert_eq!(service.resident_accounts(), Vec::new());
+    // Internal residency and reserved connection priority remain intact.
+    assert_eq!(
+        service.admission_priority(share(1), None, NOW),
+        AdmissionPriority::Owner
+    );
+
+    // Real user shares (in-memory, durable-only, or overlapping) are still counted once.
+    let mut user_ticket = template;
+    user_ticket.account = [88; 16];
+    let user_attr = user_ticket.attribution();
+    let user_guard = service.restore(share(3), user_attr).unwrap();
+    let mixed_durable = BTreeMap::from([
+        (share(1), probe_live),
+        (share(2), probe_durable),
+        (share(3), user_attr),
+        (share(4), Attribution::Anonymous),
+    ]);
+    assert_eq!(
+        service.reported_policy(generation.issuer, mixed_durable),
+        (7, 2)
+    );
+    assert_eq!(
+        service.resident_shares(generation.issuer),
+        vec![windshare_relay_access::usage::ShareAttribution {
+            share: *share(3).as_bytes(),
+            account: user_ticket.account,
+        }]
+    );
+    assert_eq!(
+        service.resident_accounts(),
+        vec![(generation.issuer, user_ticket.account)]
+    );
+
+    drop(user_guard);
+    drop(live_guard);
+}

@@ -284,6 +284,7 @@ struct FakeAuthority {
     used_bytes: u64,
     entitlement_version: u64,
     order: Vec<&'static str>,
+    last_status: Option<Batch>,
 }
 
 impl FakeAuthority {
@@ -310,6 +311,7 @@ impl FakeAuthority {
             used_bytes: 0,
             entitlement_version: 0,
             order: Vec::new(),
+            last_status: None,
         }
     }
 
@@ -324,6 +326,7 @@ impl FakeAuthority {
         let batch: Batch = serde_json::from_slice(&body[..body.len() - 64]).unwrap();
         let result = if batch.records.is_empty() {
             self.order.push("status");
+            self.last_status = Some(batch.clone());
             let day = now / DAY_SECONDS;
             let remaining = self.daily_limit.saturating_sub(self.used_bytes);
             let entitlements = batch
@@ -543,4 +546,107 @@ async fn report_cycle_still_refreshes_status_when_usage_retry_fails() {
     let issuer = reporter.authority.issuer().unwrap();
     let node = reporter.signing_key.verifying_key().to_bytes();
     assert!(store.next_usage_batch(issuer, node).unwrap().is_some());
+}
+
+#[tokio::test]
+async fn status_heartbeat_excludes_controller_scoped_probes_from_resident_shares() {
+    use crate::node::{
+        Settings,
+        access::{Policy, TrustedIssuer},
+    };
+    use windshare_relay_core::identifiers::ShareId;
+
+    let now = crate::node::now().unsigned_abs();
+    let state = Arc::new(Mutex::new(FakeAuthority::new(now, 100, false)));
+    let (url, server) = spawn_fake_authority(Arc::clone(&state)).await;
+    let directory = tempfile::tempdir().unwrap();
+    let (issuer, certificate) = {
+        let authority = state.lock().unwrap();
+        (
+            authority.root.verifying_key().to_bytes(),
+            authority.certificate.clone(),
+        )
+    };
+    let authority = Authority {
+        url,
+        issuer: URL_SAFE_NO_PAD.encode(issuer),
+    };
+    let relay = Endpoint::parse("ws://localhost:8787/v2/ws")
+        .unwrap()
+        .identity;
+    let store = Database::open(&directory.path().join("probe-status.db"), relay).unwrap();
+    let node_identity = Identity::generate().unwrap();
+    let node_key = node_identity.key().verifying_key().to_bytes();
+    let runtime = Runtime::default();
+    runtime.identify(node_identity.clone()).unwrap();
+    runtime
+        .configure(
+            Settings {
+                authority: Some(authority.clone()),
+                access: Policy {
+                    trusted_issuers: vec![TrustedIssuer {
+                        root: URL_SAFE_NO_PAD.encode(issuer),
+                        certificate,
+                    }],
+                    ..Policy::default()
+                },
+                ..Settings::default()
+            },
+            store.clone(),
+        )
+        .unwrap();
+    let reporter = Reporter::new(runtime, store, node_identity.key(), authority).unwrap();
+
+    let probe_share = ShareId::new([11; 12]).unwrap();
+    let probe_attr = Attribution::Account {
+        issuer,
+        account: windshare_relay_access::probe::PROBE_ACCOUNT,
+        credential: windshare_relay_access::probe::credential(&node_key, probe_share.as_bytes()),
+    };
+    let _probe = reporter
+        .node
+        .access
+        .reserve(probe_share, probe_attr)
+        .unwrap();
+
+    let (versions, _updates) = tokio::sync::watch::channel(0);
+    reporter.run_report_cycle(&versions, now).await;
+
+    let status = state
+        .lock()
+        .unwrap()
+        .last_status
+        .clone()
+        .expect("status heartbeat");
+    assert_eq!(status.load.resident_shares, 0);
+    assert_eq!(status.shares, Vec::new());
+    assert_eq!(status.resident_accounts, Vec::<AccountId>::new());
+
+    let user_share = ShareId::new([12; 12]).unwrap();
+    let user_account = [22; 16];
+    let _user = reporter
+        .node
+        .access
+        .restore(
+            user_share,
+            Attribution::Account {
+                issuer,
+                account: user_account,
+                credential: [23; 16],
+            },
+        )
+        .unwrap();
+    reporter.run_report_cycle(&versions, now).await;
+    server.abort();
+
+    let status = state
+        .lock()
+        .unwrap()
+        .last_status
+        .clone()
+        .expect("second status heartbeat");
+    assert_eq!(status.load.resident_shares, 1);
+    assert_eq!(status.shares.len(), 1);
+    assert_eq!(status.shares[0].account, user_account);
+    assert_eq!(status.resident_accounts, vec![user_account]);
 }
