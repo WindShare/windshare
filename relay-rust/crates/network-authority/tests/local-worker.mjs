@@ -87,10 +87,14 @@ export async function fixture(
       constructor(state, env) {
         this.state = state;
         this.kvFailCount = 0;
+        this.signingCertReads = 0;
+        this.signingSeedReads = 0;
         ${seedActiveSql}
         const self = this;
         const wrappedEnv = new Proxy(env, {
           get(target, prop) {
+            if (prop === 'AUTHORITY_CERTIFICATE') self.signingCertReads += 1;
+            if (prop === 'AUTHORITY_SIGNING_SEED') self.signingSeedReads += 1;
             if (prop === 'DIRECTORY' && target.DIRECTORY) {
               const kv = target.DIRECTORY;
               return new Proxy(kv, {
@@ -143,6 +147,12 @@ export async function fixture(
         if (path === '/__test/run-alarm' && request.method === 'POST') {
           await this.state.storage.deleteAlarm();
           return this.authority.alarm();
+        }
+        if (path === '/__test/signing-reads' && request.method === 'GET') {
+          return Response.json({
+            certificate: this.signingCertReads,
+            seed: this.signingSeedReads,
+          });
         }
         return this.authority.fetch(request);
       }

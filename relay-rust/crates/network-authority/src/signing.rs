@@ -6,6 +6,7 @@ use windshare_relay_access::trust::{Generation, TrustStore};
 
 const SIGNING_GENERATION_KEY: &str = "signing-generation";
 
+#[derive(Clone)]
 pub struct Signing {
     pub generation: Generation,
     pub key: SigningKey,

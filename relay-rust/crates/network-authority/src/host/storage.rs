@@ -12,10 +12,16 @@ fn api<T>(value: worker::Result<T>) -> Result<T> {
     value.map_err(|error| anyhow!("{error}"))
 }
 impl Database {
-    pub fn open(state: &State) -> Result<Self> {
-        let database = Self(state.storage().sql());
-        api(database.0.exec("CREATE TABLE IF NOT EXISTS authority_records(key TEXT PRIMARY KEY,value TEXT NOT NULL) STRICT",None))?;
-        Ok(database)
+    pub fn new(state: &State) -> Self {
+        Self(state.storage().sql())
+    }
+
+    pub fn ensure_schema(&self) -> Result<()> {
+        api(self.0.exec(
+            "CREATE TABLE IF NOT EXISTS authority_records(key TEXT PRIMARY KEY,value TEXT NOT NULL) STRICT",
+            None,
+        ))?;
+        Ok(())
     }
 }
 impl Store for Database {

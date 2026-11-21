@@ -637,4 +637,8 @@ test('directory KV publish failures retry via bounded Durable Object alarms and 
   assert.equal(recovered.outcome, 'ok');
   assert.equal(await kv.get(KV_DIRECTORY_KEY), published);
   assert.equal(await getAlarm(), null);
+
+  // Across multiple scheduled ticks and transactions, the DO instance verifies and caches Signing once.
+  const signingReads = await (await authority.fetch('https://authority/__test/signing-reads')).json();
+  assert.deepEqual(signingReads, { certificate: 1, seed: 1 });
 });

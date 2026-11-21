@@ -16,7 +16,7 @@ use crate::{
 };
 use futures_util::StreamExt;
 use std::{
-    cell::{Cell, RefCell},
+    cell::{Cell, OnceCell, RefCell},
     collections::BTreeMap,
     rc::Rc,
 };
@@ -64,12 +64,43 @@ impl Environment for WorkerEnvironment {
 pub struct NetworkAuthority {
     state: State,
     env: Env,
+    signing: OnceCell<Signing>,
+    schema_ready: Cell<bool>,
     public_blocks: Rc<RefCell<PublicBlockFeed>>,
     publishing: futures_util::lock::Mutex<()>,
     kv_alarm_deadline: Cell<Option<u64>>,
     node_loads: Rc<RefCell<BTreeMap<[u8; 32], NodeLoadReport>>>,
 }
 impl NetworkAuthority {
+    pub(super) fn database(&self) -> anyhow::Result<Database> {
+        let database = Database::new(&self.state);
+        if !self.schema_ready.get() {
+            // Run DDL once per DO instance outside rollbackable transactions so a
+            // later transaction abort cannot undo the table creation.
+            database.ensure_schema()?;
+            self.schema_ready.set(true);
+            tracing::debug!(event = "authority_schema_ready");
+        }
+        Ok(database)
+    }
+
+    pub(super) fn signing(&self) -> anyhow::Result<Signing> {
+        if let Some(signing) = self.signing.get() {
+            return Ok(signing.clone());
+        }
+        // Worker vars and secrets are immutable for the lifetime of a Durable Object
+        // instance; verify the root-signed online certificate once and reuse it while
+        // Authority::new still enforces time-based expiry and rollback barriers.
+        let signing = Signing::load(
+            &self.env.var("AUTHORITY_ROOT")?.to_string(),
+            &self.env.var("AUTHORITY_CERTIFICATE")?.to_string(),
+            &self.env.secret("AUTHORITY_SIGNING_SEED")?.to_string(),
+        )?;
+        let generation = signing.generation.number;
+        tracing::debug!(event = "authority_signing_loaded", generation);
+        Ok(self.signing.get_or_init(|| signing).clone())
+    }
+
     // Keep live isolate load state synchronized across every DO transaction so
     // uncheckpointed node heartbeats are never lost between HTTP entry points.
     fn transact<T: 'static>(
@@ -78,15 +109,11 @@ impl NetworkAuthority {
         action: impl FnOnce(&mut Authority<Database, WorkerEnvironment>, &Env) -> anyhow::Result<T>
         + 'static,
     ) -> anyhow::Result<T> {
-        let database = Database::open(&self.state)?;
+        let signing = self.signing()?;
+        let database = self.database()?;
         let env = self.env.clone();
         let loads = self.node_loads.borrow().clone();
         let (value, updated_loads) = storage::transaction(&self.state, move || {
-            let signing = Signing::load(
-                &env.var("AUTHORITY_ROOT")?.to_string(),
-                &env.var("AUTHORITY_CERTIFICATE")?.to_string(),
-                &env.secret("AUTHORITY_SIGNING_SEED")?.to_string(),
-            )?;
             let mut authority = Authority::new(database, environment, signing)?;
             authority.set_live_loads(loads);
             let value = action(&mut authority, &env)?;
@@ -102,6 +129,8 @@ impl DurableObject for NetworkAuthority {
         Self {
             state,
             env,
+            signing: OnceCell::new(),
+            schema_ready: Cell::new(false),
             public_blocks: Rc::default(),
             node_loads: Rc::default(),
             publishing: futures_util::lock::Mutex::new(()),

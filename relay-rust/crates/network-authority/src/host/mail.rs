@@ -1,10 +1,6 @@
-use super::{
-    NetworkAuthority, WorkerEnvironment, failure,
-    storage::{self, Database},
-};
+use super::{NetworkAuthority, WorkerEnvironment, failure, storage};
 use crate::{
-    Authority, EmailVerification, Environment, Fault, Mailbox, Signing,
-    challenges::CHALLENGE_SECONDS,
+    Authority, EmailVerification, Environment, Fault, Mailbox, challenges::CHALLENGE_SECONDS,
 };
 use serde::Deserialize;
 use worker::{
@@ -96,14 +92,9 @@ impl NetworkAuthority {
             .headers()
             .get("X-Authority-Source")?
             .unwrap_or_default();
-        let mut database = Database::open(&self.state).map_err(failure)?;
+        let signing = self.signing().map_err(failure)?;
+        let mut database = self.database().map_err(failure)?;
         let admission_store = database.clone();
-        let signing = Signing::load(
-            &self.env.var("AUTHORITY_ROOT")?.to_string(),
-            &self.env.var("AUTHORITY_CERTIFICATE")?.to_string(),
-            &self.env.secret("AUTHORITY_SIGNING_SEED")?.to_string(),
-        )
-        .map_err(failure)?;
         let environment = WorkerEnvironment {
             registration_email_configured: true,
         };

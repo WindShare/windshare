@@ -280,7 +280,7 @@ impl NetworkAuthority {
     }
 
     async fn reconcile_locked(&self, mode: ReconcileMode) -> Result<ReconcileOutcome> {
-        let mut db = Database::open(&self.state)?;
+        let mut db = self.database()?;
         let mirror = KvMirror(
             self.env
                 .kv("DIRECTORY")
