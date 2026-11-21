@@ -144,3 +144,38 @@ fn account_storage_error_deserializes_and_disables_profile_edits() {
     assert_eq!(view.status.reason, "invalid account state");
     assert!(!view.can_edit_profile());
 }
+
+#[test]
+fn waits_for_official_authorization_covers_live_and_repeated_waits() {
+    let mut live_official = accepted("live", ShareState::AwaitingAuthorization);
+    live_official.authorization = Some(ShareAuthorization::Official);
+
+    let mut repeated_official = accepted("repeated", ShareState::AwaitingAuthorization);
+    repeated_official.task_id.clear();
+    repeated_official.authorization = Some(ShareAuthorization::Official);
+
+    let mut self_hosted = accepted("self-hosted", ShareState::AwaitingAuthorization);
+    self_hosted.task_id.clear();
+    self_hosted.authorization = Some(ShareAuthorization::SelfHosted {
+        relay_url: "https://relay.example".into(),
+    });
+
+    let mut finished_official = accepted("finished", ShareState::Finished);
+    finished_official.authorization = Some(ShareAuthorization::Official);
+
+    let mut model = Model::default();
+    model.reconcile(snapshot(
+        1,
+        vec![
+            live_official,
+            repeated_official,
+            self_hosted,
+            finished_official,
+        ],
+    ));
+
+    assert!(model.waits_for_official_authorization("live"));
+    assert!(model.waits_for_official_authorization("repeated"));
+    assert!(!model.waits_for_official_authorization("self-hosted"));
+    assert!(!model.waits_for_official_authorization("finished"));
+}

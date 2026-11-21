@@ -39,6 +39,92 @@ func (view *AccountView) busy() bool {
 	return view != nil && view.Operation != nil && view.Operation.State == "running"
 }
 
+type officialAuthorizationGrant struct {
+	ready             bool
+	account           string
+	credential        string
+	ticketExpiresUnix int64
+}
+
+func officialGrantFromSnapshot(status account.Snapshot) officialAuthorizationGrant {
+	if status.State != account.Ready {
+		return officialAuthorizationGrant{}
+	}
+	var expires int64
+	if !status.TicketExpires.IsZero() {
+		expires = status.TicketExpires.UnixNano()
+	}
+	return officialAuthorizationGrant{
+		ready:             true,
+		account:           status.Account,
+		credential:        status.Credential,
+		ticketExpiresUnix: expires,
+	}
+}
+
+func (a *Application) currentOfficialGrantLocked() officialAuthorizationGrant {
+	if a.accountView == nil {
+		return officialAuthorizationGrant{}
+	}
+	return officialGrantFromSnapshot(a.accountView.Account)
+}
+
+func (a *Application) recordOfficialAuthorizationFailureLocked(op *operation, view Share) {
+	if op.officialFailureRecorded || view.State != Finished || view.Authorization == nil ||
+		view.Authorization.Kind != engine.ShareOfficialAuthorization {
+		return
+	}
+	op.officialFailureGrant = a.currentOfficialGrantLocked()
+	op.officialFailureRecorded = true
+}
+
+func (a *Application) officialFailureGrantLocked(op *operation) officialAuthorizationGrant {
+	if !op.officialFailureRecorded {
+		op.officialFailureGrant = a.currentOfficialGrantLocked()
+		op.officialFailureRecorded = true
+	}
+	return op.officialFailureGrant
+}
+
+func refreshesOfficialAuthorization(action string) bool {
+	switch action {
+	case "login", "register", "verify", "refresh":
+		return true
+	default:
+		return false
+	}
+}
+
+func (a *Application) resumeOfficialAuthorizationLocked(explicitSuccess bool) {
+	if a.closing {
+		return
+	}
+	grant := a.currentOfficialGrantLocked()
+	if !grant.ready {
+		return
+	}
+	trigger := "account_updated"
+	if explicitSuccess {
+		trigger = "account_command"
+	}
+	for _, op := range a.operations {
+		waiting, ok := op.phase.(awaitingAuthorization)
+		if !ok || waiting.authority.Kind != engine.ShareOfficialAuthorization {
+			continue
+		}
+		// Avoid re-admitting the same locally cached ticket that just failed on a relay
+		// unless the user explicitly completed a fresh authorization action.
+		if !explicitSuccess && waiting.rejectedGrant == grant {
+			continue
+		}
+		a.deps.log("host.share_official_authorization_resumed", map[string]string{
+			"operation_id": op.id,
+			"trigger":      trigger,
+		})
+		a.admit(op)
+	}
+}
+
 func (a *Application) syncAccountLocked() <-chan struct{} {
 	status, changed := a.deps.accounts.Snapshot()
 	view := *a.accountView
@@ -66,6 +152,7 @@ func (a *Application) watchAccount() {
 		for {
 			a.mu.Lock()
 			changed := a.syncAccountLocked()
+			a.resumeOfficialAuthorizationLocked(false)
 			a.snapshotLocked()
 			a.mu.Unlock()
 			select {
@@ -177,6 +264,7 @@ func (a *Application) accountCommand(request Request) error {
 			fields["error_code"] = result.Error.Code
 		}
 		a.deps.log("host.account_completed", fields)
+		a.resumeOfficialAuthorizationLocked(err == nil && refreshesOfficialAuthorization(input.Action))
 		a.snapshotLocked()
 	})
 	return nil

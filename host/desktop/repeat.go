@@ -2,6 +2,8 @@ package desktop
 
 import (
 	"errors"
+
+	"github.com/windshare/windshare/engine"
 )
 
 // A repeat owns a new identity and eventual engine task. The source remains a
@@ -19,10 +21,24 @@ func (a *Application) repeat(request Request) error {
 	if err != nil || op == nil {
 		return err
 	}
-	if view.Authorization != nil {
-		op.phase = awaitingAuthorization{authority: *view.Authorization}
-	} else {
+	switch {
+	case view.Authorization == nil:
 		a.admit(op)
+	case view.Authorization.Kind == engine.ShareOfficialAuthorization:
+		rejectedGrant := a.officialFailureGrantLocked(source)
+		currentGrant := a.currentOfficialGrantLocked()
+		if currentGrant.ready && currentGrant != rejectedGrant {
+			a.deps.log("host.share_official_authorization_resumed", map[string]string{
+				"operation_id":        op.id,
+				"source_operation_id": source.id,
+				"trigger":             "account_already_updated",
+			})
+			a.admit(op)
+		} else {
+			op.phase = awaitingAuthorization{authority: *view.Authorization, rejectedGrant: currentGrant}
+		}
+	default:
+		op.phase = awaitingAuthorization{authority: *view.Authorization}
 	}
 	a.deps.log("host.share_repeated", map[string]string{"operation_id": op.id, "source_operation_id": source.id})
 	return nil

@@ -87,3 +87,16 @@ func waitingForAdmission(phase operationPhase) bool {
 		return false
 	}
 }
+
+// Relay setup only unblocks configuration, network, and self-hosted approval
+// waits. Official authorization waits follow account recovery or explicit switch_relay.
+func setupResumesPhase(phase operationPhase) bool {
+	switch current := phase.(type) {
+	case awaitingConfiguration, awaitingNetwork:
+		return true
+	case awaitingAuthorization:
+		return current.authority.Kind == engine.ShareSelfHostedAuthorization
+	default:
+		return false
+	}
+}

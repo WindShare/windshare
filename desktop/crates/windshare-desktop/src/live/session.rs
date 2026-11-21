@@ -430,7 +430,12 @@ impl Desktop {
             && let Some(op_id) = share_operation_id(&self.shares, run.share_id)
             && host_share_state(previous_model, op_id)
                 == Some(HostShareState::AwaitingAuthorization)
-            && host_share_state(model, op_id).is_some_and(host_share_running)
+            && host_share_state(model, op_id).is_some_and(|state| {
+                matches!(
+                    state,
+                    HostShareState::Admitting | HostShareState::Preparing | HostShareState::Sharing
+                )
+            })
         {
             return self
                 .account

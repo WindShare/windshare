@@ -67,7 +67,10 @@ type awaitingNetwork struct {
 	block   CreationBlock
 	failure *Failure
 }
-type awaitingAuthorization struct{ authority engine.ShareAuthorization }
+type awaitingAuthorization struct {
+	authority     engine.ShareAuthorization
+	rejectedGrant officialAuthorizationGrant
+}
 type admission struct{ cancelling bool }
 type running struct {
 	task           shareTask
@@ -87,14 +90,16 @@ func (running) operationPhase()               {}
 func (terminal) operationPhase()              {}
 
 type operation struct {
-	id                string
-	sourceOperationID string
-	paths             []string
-	requestedRelays   []string
-	explicitRelays    []string
-	createdAt         time.Time
-	phase             operationPhase
-	cancel            context.CancelFunc
+	id                      string
+	sourceOperationID       string
+	paths                   []string
+	requestedRelays         []string
+	explicitRelays          []string
+	createdAt               time.Time
+	phase                   operationPhase
+	cancel                  context.CancelFunc
+	officialFailureGrant    officialAuthorizationGrant
+	officialFailureRecorded bool
 }
 
 // Application owns intents independently of connections, navigation and startup.

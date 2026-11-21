@@ -19,7 +19,9 @@ func (a *Application) snapshotLocked() Snapshot {
 	}
 	for _, op := range a.operations {
 		a.retainFailedSelection(op)
-		next.Shares = append(next.Shares, projectShare(op))
+		view := projectShare(op)
+		a.recordOfficialAuthorizationFailureLocked(op, view)
+		next.Shares = append(next.Shares, view)
 	}
 	slices.SortFunc(next.Shares, func(left, right Share) int { return cmp.Compare(left.OperationID, right.OperationID) })
 	if next.Revision != 0 && next.SenderTrace == a.snapshotValue.SenderTrace &&

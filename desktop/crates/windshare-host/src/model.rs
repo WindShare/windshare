@@ -311,7 +311,6 @@ impl Model {
             .and_then(Operation::share)
             .is_some_and(|share| {
                 share.state == ShareState::AwaitingAuthorization
-                    && !share.task_id.is_empty()
                     && share.authorization == Some(ShareAuthorization::Official)
             })
     }

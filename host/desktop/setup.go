@@ -190,7 +190,7 @@ func (a *Application) runSetup(ctx context.Context, input SetupInput) {
 	a.logSetupResult("host.setup_completed")
 	if err == nil {
 		for _, pending := range a.operations {
-			if waitingForAdmission(pending.phase) && result.affectsAdmission(pending.explicitRelays) {
+			if setupResumesPhase(pending.phase) && result.affectsAdmission(pending.explicitRelays) {
 				a.admit(pending)
 			}
 		}
