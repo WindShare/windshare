@@ -416,7 +416,7 @@ describe('windshare-donations Worker + SQLite DO HTTP integration', () => {
     })
     expect(badLogin.status).toBe(401)
 
-    // Successful login issues HttpOnly Secure SameSite=Strict cookie + CSRF token.
+    // Successful login issues a __Host- HttpOnly Secure SameSite=Strict cookie + CSRF token.
     const loginRes = await mf.dispatchFetch(`${DONATE_ORIGIN}/v1/admin/login`, {
       method: 'POST',
       headers: {
@@ -428,7 +428,7 @@ describe('windshare-donations Worker + SQLite DO HTTP integration', () => {
     })
     expect(loginRes.status).toBe(200)
     const setCookie = loginRes.headers.get('set-cookie') ?? ''
-    expect(setCookie).toContain('HttpOnly; Secure; SameSite=Strict')
+    expect(setCookie).toMatch(/^__Host-windshare_donate_admin=[^;]+; HttpOnly; Secure; SameSite=Strict; Path=\/; Max-Age=\d+$/)
     const cookiePair = setCookie.split(';', 1)[0] ?? ''
     const loginData = await loginRes.json() as { authenticated: boolean; csrfToken: string }
     expect(loginData.authenticated).toBe(true)
@@ -581,6 +581,7 @@ describe('windshare-donations Worker + SQLite DO HTTP integration', () => {
       },
     })
     expect(logoutRes.status).toBe(200)
+    expect(logoutRes.headers.get('set-cookie')).toBe('__Host-windshare_donate_admin=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0')
 
     const afterLogout = await mf.dispatchFetch(`${DONATE_ORIGIN}/v1/admin/session`, {
       headers: { Cookie: cookiePair },

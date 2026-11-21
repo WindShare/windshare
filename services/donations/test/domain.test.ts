@@ -727,7 +727,7 @@ describe('WallStore SQLite persistence, caching, rate limiting, and pagination',
     const loginV1 = await loginWith(initialEnv, initialSecret)
     expect(loginV1.status).toBe(200)
     const cookieV1 = (loginV1.headers.get('set-cookie') ?? '').split(';', 1)[0] ?? ''
-    expect(cookieV1).toContain('windshare_donate_admin=')
+    expect(cookieV1.startsWith('__Host-windshare_donate_admin=')).toBe(true)
 
     const sessionBeforeRotate = await handleWorkerFetch(
       new Request(`${origin}/v1/admin/session`, { headers: { Cookie: cookieV1 } }),

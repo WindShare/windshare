@@ -4,7 +4,9 @@ export const MAX_CRYPTO_INTENT_BODY_BYTES = 8 * 1024
 export const MAX_WEBHOOK_BODY_BYTES = 64 * 1024
 export const MAX_ADMIN_BODY_BYTES = 8 * 1024
 export const DONATION_WALL_INSTANCE_NAME = 'global'
-export const ADMIN_COOKIE_NAME = 'windshare_donate_admin'
+// __Host- binds the admin session cookie to this host (Secure, Path=/, no Domain)
+// so sibling *.windshare.cc origins cannot shadow it via a Domain=.windshare.cc cookie.
+export const ADMIN_COOKIE_NAME = '__Host-windshare_donate_admin'
 
 export type BodyReadResult =
   | { readonly ok: true; readonly text: string }
