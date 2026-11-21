@@ -200,6 +200,12 @@
   color: var(--portal-dim);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
+  transition: color 160ms;
+}
+
+.donate-counter-over {
+  color: var(--portal-error);
+  font-weight: 600;
 }
 
 .donate-amount-grid {
@@ -263,6 +269,17 @@
   outline: none;
   border-color: var(--portal-accent);
   box-shadow: 0 0 0 3px var(--portal-focus-wash);
+}
+
+.donate-input[aria-invalid="true"],
+.donate-textarea[aria-invalid="true"] {
+  border-color: var(--portal-error);
+}
+
+.donate-input[aria-invalid="true"]:focus,
+.donate-textarea[aria-invalid="true"]:focus {
+  border-color: var(--portal-error);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--portal-error) 18%, transparent);
 }
 
 .donate-error {

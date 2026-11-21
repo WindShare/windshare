@@ -6,12 +6,15 @@ import {
   canCreateCryptoIntent,
 } from '../../src/ui/donate/config'
 import {
+  MAX_DISPLAY_NAME_CODEPOINTS,
   MAX_EPOCH_SECONDS,
+  MAX_MESSAGE_CODEPOINTS,
   countCodePoints,
   formatDonationAmount,
   formatIsoTimestamp,
   formatRelativeTime,
   parseCryptoAmountInput,
+  validateCryptoCheckoutInput,
 } from '../../src/ui/donate/format'
 
 describe('donate pure formatting and validation helpers', () => {
@@ -31,6 +34,51 @@ describe('donate pure formatting and validation helpers', () => {
     expect(parseCryptoAmountInput('100000.01')).toEqual({ ok: false, reason: 'above_max' })
     expect(parseCryptoAmountInput('10.123')).toEqual({ ok: false, reason: 'invalid' })
     expect(parseCryptoAmountInput('')).toEqual({ ok: false, reason: 'invalid' })
+  })
+
+  it('validates crypto checkout fields against amount and Unicode code-point caps', () => {
+    const maxName = '😀'.repeat(MAX_DISPLAY_NAME_CODEPOINTS)
+    const maxMessage = '风'.repeat(MAX_MESSAGE_CODEPOINTS)
+
+    expect(validateCryptoCheckoutInput({
+      rawAmount: '10',
+      displayName: `  ${'a'.repeat(MAX_DISPLAY_NAME_CODEPOINTS - 4)}  `,
+      message: '   ',
+    })).toEqual({
+      ok: true,
+      amountUsd: '10',
+      displayName: 'a'.repeat(MAX_DISPLAY_NAME_CODEPOINTS - 4),
+      message: null,
+    })
+
+    expect(validateCryptoCheckoutInput({
+      rawAmount: '5.50',
+      displayName: maxName,
+      message: maxMessage,
+    })).toEqual({
+      ok: true,
+      amountUsd: '5.50',
+      displayName: maxName,
+      message: maxMessage,
+    })
+
+    expect(validateCryptoCheckoutInput({
+      rawAmount: '10',
+      displayName: `${maxName}x`,
+      message: '',
+    })).toEqual({ ok: false, reason: 'display_name_too_long' })
+
+    expect(validateCryptoCheckoutInput({
+      rawAmount: '10',
+      displayName: '',
+      message: `${maxMessage}x`,
+    })).toEqual({ ok: false, reason: 'message_too_long' })
+
+    expect(validateCryptoCheckoutInput({
+      rawAmount: '4',
+      displayName: `${maxName}x`,
+      message: `${maxMessage}x`,
+    })).toEqual({ ok: false, reason: 'amount_below_min' })
   })
 
   it('formats bilingual relative timestamps and counts Unicode code points', () => {

@@ -1,3 +1,4 @@
+import { MAX_DISPLAY_NAME_CODEPOINTS, MAX_MESSAGE_CODEPOINTS } from '../format'
 import type { en } from './en'
 
 export const zh: typeof en = {
@@ -32,6 +33,8 @@ export const zh: typeof en = {
   cryptoErrInvalid: '请输入有效的美元金额（最多两位小数）。',
   cryptoErrBelowMin: '加密货币赞助最低为 $5。',
   cryptoErrAboveMax: '金额超出单笔上限。',
+  cryptoErrNameTooLong: `展示昵称最多 ${MAX_DISPLAY_NAME_CODEPOINTS} 个字符。`,
+  cryptoErrMessageTooLong: `公开留言最多 ${MAX_MESSAGE_CODEPOINTS} 个字符。`,
   cryptoErrPaused: '加密支付通道暂维护中，请选择其他方式。',
   cryptoErrRateLimited: '请求过于频繁，请稍后再试。',
   cryptoErrFailed: '暂时无法创建加密支付页，请稍后重试。',

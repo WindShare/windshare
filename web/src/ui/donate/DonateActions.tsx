@@ -16,7 +16,8 @@ import {
   MAX_DISPLAY_NAME_CODEPOINTS,
   MAX_MESSAGE_CODEPOINTS,
   countCodePoints,
-  parseCryptoAmountInput,
+  validateCryptoCheckoutInput,
+  type CryptoCheckoutValidationReason,
 } from './format'
 import { useDonateCopy } from './locales/use-donate-copy'
 
@@ -39,6 +40,24 @@ function resolveCryptoApiErrorMessage(
     if (error.code === 'invalid_amount') return t.cryptoErrInvalid
   }
   return t.cryptoErrFailed
+}
+
+function resolveCryptoValidationError(
+  reason: CryptoCheckoutValidationReason,
+  t: ReturnType<typeof useDonateCopy>,
+): string {
+  switch (reason) {
+    case 'amount_below_min':
+      return t.cryptoErrBelowMin
+    case 'amount_above_max':
+      return t.cryptoErrAboveMax
+    case 'invalid_amount':
+      return t.cryptoErrInvalid
+    case 'display_name_too_long':
+      return t.cryptoErrNameTooLong
+    case 'message_too_long':
+      return t.cryptoErrMessageTooLong
+  }
 }
 
 function SelfHostCryptoFallback() {
@@ -108,7 +127,12 @@ function CryptoCheckoutForm() {
   // so re-entry, tab unmount, and bfcache restore share one lifecycle handle.
   const activeSubmissionRef = useRef<AbortController | null>(null)
 
+  // Soft-limit validation instead of onChange interception or UTF-16 maxLength:
+  // avoids dropping oversized pastes and interrupting CJK IME composition near the cap.
+  const displayNameCount = countCodePoints(displayName)
+  const displayNameOverLimit = displayNameCount > MAX_DISPLAY_NAME_CODEPOINTS
   const messageCount = countCodePoints(message)
+  const messageOverLimit = messageCount > MAX_MESSAGE_CODEPOINTS
 
   useEffect(() => {
     const handlePageShow = (event: PageTransitionEvent) => {
@@ -129,12 +153,13 @@ function CryptoCheckoutForm() {
     event.preventDefault()
     if (activeSubmissionRef.current !== null) return
 
-    const rawAmount = customMode ? customAmount : preset
-    const validated = parseCryptoAmountInput(rawAmount)
+    const validated = validateCryptoCheckoutInput({
+      rawAmount: customMode ? customAmount : preset,
+      displayName,
+      message,
+    })
     if (!validated.ok) {
-      if (validated.reason === 'below_min') setErrorText(t.cryptoErrBelowMin)
-      else if (validated.reason === 'above_max') setErrorText(t.cryptoErrAboveMax)
-      else setErrorText(t.cryptoErrInvalid)
+      setErrorText(resolveCryptoValidationError(validated.reason, t))
       return
     }
 
@@ -143,12 +168,10 @@ function CryptoCheckoutForm() {
     setErrorText(null)
     setSubmitting(true)
     try {
-      const trimmedName = displayName.trim()
-      const trimmedMessage = message.trim()
       const response = await createCryptoIntent({
-        displayName: trimmedName.length > 0 ? trimmedName : null,
-        message: trimmedMessage.length > 0 ? trimmedMessage : null,
-        amountUsd: validated.normalized,
+        displayName: validated.displayName,
+        message: validated.message,
+        amountUsd: validated.amountUsd,
       }, controller.signal)
       if (controller.signal.aborted) return
       window.location.assign(response.invoiceUrl)
@@ -209,18 +232,23 @@ function CryptoCheckoutForm() {
       </div>
 
       <label className="donate-field">
-        <span className="donate-field-label">{t.cryptoNameLabel}</span>
+        <span className="donate-field-head">
+          <span className="donate-field-label">{t.cryptoNameLabel}</span>
+          {displayNameOverLimit && (
+            <span className="donate-counter donate-counter-over" aria-hidden="true">
+              {displayNameCount}/{MAX_DISPLAY_NAME_CODEPOINTS}
+            </span>
+          )}
+        </span>
         <input
           type="text"
           className="donate-input"
           value={displayName}
-          maxLength={MAX_DISPLAY_NAME_CODEPOINTS * 2}
+          aria-invalid={displayNameOverLimit || undefined}
           placeholder={t.cryptoNamePlaceholder}
           onChange={event => {
-            const next = event.target.value
-            if (countCodePoints(next) <= MAX_DISPLAY_NAME_CODEPOINTS) {
-              setDisplayName(next)
-            }
+            setDisplayName(event.target.value)
+            setErrorText(null)
           }}
         />
       </label>
@@ -228,7 +256,10 @@ function CryptoCheckoutForm() {
       <label className="donate-field">
         <span className="donate-field-head">
           <span className="donate-field-label">{t.cryptoMessageLabel}</span>
-          <span className="donate-counter" aria-hidden="true">
+          <span
+            className={messageOverLimit ? 'donate-counter donate-counter-over' : 'donate-counter'}
+            aria-hidden="true"
+          >
             {messageCount}/{MAX_MESSAGE_CODEPOINTS}
           </span>
         </span>
@@ -236,12 +267,11 @@ function CryptoCheckoutForm() {
           className="donate-textarea"
           rows={3}
           value={message}
+          aria-invalid={messageOverLimit || undefined}
           placeholder={t.cryptoMessagePlaceholder}
           onChange={event => {
-            const next = event.target.value
-            if (countCodePoints(next) <= MAX_MESSAGE_CODEPOINTS) {
-              setMessage(next)
-            }
+            setMessage(event.target.value)
+            setErrorText(null)
           }}
         />
       </label>

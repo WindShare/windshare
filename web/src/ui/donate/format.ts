@@ -28,6 +28,37 @@ export type CryptoAmountValidation =
   | { readonly ok: true; readonly normalized: string; readonly amountMinor: number }
   | { readonly ok: false; readonly reason: 'invalid' | 'below_min' | 'above_max' }
 
+export interface CryptoCheckoutDraft {
+  readonly rawAmount: string
+  readonly displayName: string
+  readonly message: string
+}
+
+export type CryptoCheckoutValidationReason =
+  | 'invalid_amount'
+  | 'amount_below_min'
+  | 'amount_above_max'
+  | 'display_name_too_long'
+  | 'message_too_long'
+
+export type CryptoCheckoutValidation =
+  | {
+      readonly ok: true
+      readonly amountUsd: string
+      readonly displayName: string | null
+      readonly message: string | null
+    }
+  | {
+      readonly ok: false
+      readonly reason: CryptoCheckoutValidationReason
+    }
+
+const AMOUNT_REASON_MAP: Readonly<Record<'invalid' | 'below_min' | 'above_max', CryptoCheckoutValidationReason>> = {
+  invalid: 'invalid_amount',
+  below_min: 'amount_below_min',
+  above_max: 'amount_above_max',
+}
+
 function addThousandsSeparators(digits: string): string {
   let out = ''
   const len = digits.length
@@ -136,4 +167,25 @@ export function formatRelativeTime(
 
 export function countCodePoints(value: string): number {
   return Array.from(value).length
+}
+
+export function validateCryptoCheckoutInput(draft: CryptoCheckoutDraft): CryptoCheckoutValidation {
+  const amount = parseCryptoAmountInput(draft.rawAmount)
+  if (!amount.ok) {
+    return { ok: false, reason: AMOUNT_REASON_MAP[amount.reason] }
+  }
+  if (countCodePoints(draft.displayName) > MAX_DISPLAY_NAME_CODEPOINTS) {
+    return { ok: false, reason: 'display_name_too_long' }
+  }
+  if (countCodePoints(draft.message) > MAX_MESSAGE_CODEPOINTS) {
+    return { ok: false, reason: 'message_too_long' }
+  }
+  const trimmedName = draft.displayName.trim()
+  const trimmedMessage = draft.message.trim()
+  return {
+    ok: true,
+    amountUsd: amount.normalized,
+    displayName: trimmedName.length > 0 ? trimmedName : null,
+    message: trimmedMessage.length > 0 ? trimmedMessage : null,
+  }
 }

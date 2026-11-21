@@ -1,3 +1,5 @@
+import { MAX_DISPLAY_NAME_CODEPOINTS, MAX_MESSAGE_CODEPOINTS } from '../format'
+
 export const en = {
   title: 'Support WindShare',
   subtitle: 'Open-source, end-to-end encrypted file sharing. Voluntary donations sustain development and relay infrastructure.',
@@ -30,6 +32,8 @@ export const en = {
   cryptoErrInvalid: 'Enter a valid USD amount with up to two decimals.',
   cryptoErrBelowMin: 'Minimum crypto donation is $5.',
   cryptoErrAboveMax: 'Amount exceeds the single checkout limit.',
+  cryptoErrNameTooLong: `Display name must be ${MAX_DISPLAY_NAME_CODEPOINTS} characters or fewer.`,
+  cryptoErrMessageTooLong: `Public note must be ${MAX_MESSAGE_CODEPOINTS} characters or fewer.`,
   cryptoErrPaused: 'Crypto checkout is temporarily paused. Please try another channel.',
   cryptoErrRateLimited: 'Too many requests. Please wait a moment and try again.',
   cryptoErrFailed: 'Could not start crypto checkout right now. Please try again.',
