@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { BuiltinNetwork } from '../../src/application/network/builtin'
 import { resolveLinkRelays } from '../../src/application/network/resolve'
 import { encodeSuite02CapabilityKey } from '../../src/crypto/suite02-link'
 import { MemoryDirectoryCache } from '../../src/network/directory-cache'
@@ -76,18 +77,23 @@ describe('root-authorized network directory', () => {
     expect(publishedGenerations).toEqual([1, 2])
     expect(directory.snapshot!.cursor.generation).toBe(2)
   })
-  it('adds missing aliases to an in-flight startup pass and tries live mirrors before the release asset', async () => {
-    const cold = 'https://github.com/releases/directory'
+  it('adds missing aliases to an in-flight startup pass, skips cold fallback after live success, and falls back only on total live outage', async () => {
+    const cold = 'https://release-asset.example/directory'
     const live = ['https://ws.ourworld.top/directory', 'https://windshare.cc/directory']
     const requests: string[] = []
+    const observations: DirectoryObservation[] = []
     let release!: (response: Response) => void
     let began!: () => void
+    let liveDown = false
     const entered = new Promise<void>(resolve => { began = resolve })
     const directory = new NetworkDirectory({ network: vectors.network, roots: vectors.roots,
-      mirrors: [cold, ...live], random: () => 0.99, now: () => now, cache: new MemoryDirectoryCache(),
+      mirrors: live, fallbackMirrors: [cold], random: () => 0.99, now: () => now, cache: new MemoryDirectoryCache(),
+      observe: value => observations.push(value),
       fetch: input => {
-        requests.push(String(input))
+        const url = String(input)
+        requests.push(url)
         if (requests.length === 1) { began(); return new Promise<Response>(resolve => { release = resolve }) }
+        if (liveDown && url !== cold) return Promise.reject(new Error('live mirror outage'))
         return Promise.resolve(new Response(envelope('reassigned')))
       },
     })
@@ -98,10 +104,16 @@ describe('root-authorized network directory', () => {
     await target
     expect(requests).toEqual(live)
     expect(directory.snapshot?.nodes[0]?.alias).toBe('jp1')
+    // Missing aliases must not probe cold fallbacks once a live mirror has succeeded.
     await directory.refresh(['missing'])
-    expect(requests.slice(2)).toEqual([...live, cold])
+    expect(requests.slice(2)).toEqual(live)
     await directory.refresh()
-    expect(requests.slice(5)).toEqual([live[0]])
+    expect(requests.slice(4)).toEqual([live[0]])
+    // Only when every live mirror fails should a refresh fall back to the cold tier.
+    liveDown = true
+    await directory.refresh()
+    expect(requests.slice(5)).toEqual([...live, cold])
+    expect(observations.at(-1)).toMatchObject({ transition: 'accepted', mirror: cold, tier: 'fallback' })
   })
   it('emits a verified local alias while another alias is still waiting on the network', async () => {
     let finish!: (value: Response) => void
@@ -185,19 +197,48 @@ describe('root-authorized network directory', () => {
     const mirrors = [
       'https://ws.ourworld.top/.well-known/windshare-network',
       'https://windshare.cc/.well-known/windshare-network',
-      'https://github.com/windshare/windshare/releases/latest/download/windshare-network.json',
     ]
     const calls: string[] = []
     const cache = new MemoryDirectoryCache()
     const commitSpy = vi.spyOn(cache, 'commit')
     const directory = new NetworkDirectory({ network: vectors.network, roots: vectors.roots, origin: 'https://self-hosted.example',
-      mirrors, random: () => 0.99, now: () => now, cache,
+      mirrors, fallbackMirrors: ['https://release-asset.example/windshare-network.json'], random: () => 0.99, now: () => now, cache,
       fetch: async input => { calls.push(String(input)); return new Response(envelope('valid')) },
     })
     directories.push(directory)
     await directory.refresh(['missing'])
     expect(calls).toEqual(mirrors)
     expect(commitSpy).toHaveBeenCalledTimes(1)
+  })
+  it('bounds combined live and fallback mirror counts and keeps built-in browser release free of non-CORS release assets', async () => {
+    expect(() => new NetworkDirectory({
+      network: vectors.network,
+      roots: vectors.roots,
+      mirrors: ['https://m1.example', 'https://m2.example', 'https://m3.example', 'https://m4.example', 'https://m5.example', 'https://m6.example'],
+      fallbackMirrors: ['https://f1.example', 'https://f2.example', 'https://f3.example'],
+      cache: new MemoryDirectoryCache(),
+    })).toThrow('Too many network mirrors')
+
+    const requests: string[] = []
+    const network = new BuiltinNetwork(undefined, undefined, {
+      directory: {
+        cache: new MemoryDirectoryCache(),
+        origin: 'https://self-hosted.example',
+        fetch: async input => {
+          requests.push(String(input))
+          throw new Error('offline')
+        },
+      },
+    })
+    try {
+      const key = await encodeSuite02CapabilityKey(new Uint8Array(16), new Uint8Array(16))
+      const candidates = network.resolve({ ...key, relays: [], nodeAliases: ['missing-node'] })
+      await expect(candidates.all()).rejects.toThrow()
+      expect(requests.length).toBeGreaterThanOrEqual(2)
+      expect(requests.every(url => !url.toLowerCase().includes('github.com'))).toBe(true)
+    } finally {
+      network.close()
+    }
   })
   it('joins an in-flight retry even if the wall clock steps backward during the request', async () => {
     let wallClock = now

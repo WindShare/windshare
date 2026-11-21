@@ -31,18 +31,22 @@ const (
 	refreshStageVerify   = "verify"
 	refreshStageInstall  = "install"
 	refreshStageAccepted = "accepted"
+
+	mirrorTierLive     = "live"
+	mirrorTierFallback = "fallback"
 )
 
 type Config struct {
-	Network     string
-	Roots       []nodedirectory.Root
-	Embedded    []byte
-	Mirrors     []string
-	Cache       Cache
-	Fetch       func(context.Context, string) ([]byte, error)
-	Now         func() time.Time
-	Order       func(int) []int
-	Diagnostics diagnostics.Sink
+	Network         string
+	Roots           []nodedirectory.Root
+	Embedded        []byte
+	Mirrors         []string
+	FallbackMirrors []string
+	Cache           Cache
+	Fetch           func(context.Context, string) ([]byte, error)
+	Now             func() time.Time
+	Order           func(int) []int
+	Diagnostics     diagnostics.Sink
 }
 
 type Directory struct {
@@ -65,13 +69,22 @@ type Directory struct {
 	done              chan struct{}
 }
 
+func validMirrorURL(raw string) bool {
+	address, err := url.Parse(raw)
+	return err == nil && address.Scheme == "https" && address.Host != "" && address.User == nil && address.Fragment == ""
+}
+
 func New(config Config) (*Directory, error) {
-	if config.Network == "" || len(config.Mirrors) > MaximumMirrors {
+	if config.Network == "" || len(config.Mirrors)+len(config.FallbackMirrors) > MaximumMirrors {
 		return nil, blocked(InvalidConfiguration, nodedirectory.ErrFormat)
 	}
 	for _, mirror := range config.Mirrors {
-		address, err := url.Parse(mirror)
-		if err != nil || address.Scheme != "https" || address.Host == "" || address.User != nil || address.Fragment != "" {
+		if !validMirrorURL(mirror) {
+			return nil, blocked(InvalidConfiguration, nodedirectory.ErrFormat)
+		}
+	}
+	for _, mirror := range config.FallbackMirrors {
+		if !validMirrorURL(mirror) {
 			return nil, blocked(InvalidConfiguration, nodedirectory.ErrFormat)
 		}
 	}
@@ -81,6 +94,7 @@ func New(config Config) (*Directory, error) {
 	}
 	config.Embedded = slices.Clone(config.Embedded)
 	config.Mirrors = slices.Clone(config.Mirrors)
+	config.FallbackMirrors = slices.Clone(config.FallbackMirrors)
 	if config.Cache == nil {
 		config.Cache = &MemoryCache{}
 	}
@@ -194,7 +208,7 @@ func (directory *Directory) TriggerRefresh() {
 // on a previous network generation so recovery does not wait behind stale outages.
 func (directory *Directory) NetworkChanged() {
 	directory.mu.Lock()
-	if directory.ctx.Err() != nil || len(directory.config.Roots) == 0 || len(directory.config.Mirrors) == 0 {
+	if directory.ctx.Err() != nil || len(directory.config.Roots) == 0 || len(directory.config.Mirrors)+len(directory.config.FallbackMirrors) == 0 {
 		directory.mu.Unlock()
 		return
 	}
@@ -279,7 +293,7 @@ func (directory *Directory) emitRefreshCompleted(now time.Time, cursor nodedirec
 	directory.config.Diagnostics.Emit(diagnostics.New("network_directory_refresh_completed", fields).At(now))
 }
 
-func (directory *Directory) emitMirrorAttempt(now time.Time, mirror, stage string, snapshot nodedirectory.Snapshot, duration time.Duration, err error) {
+func (directory *Directory) emitMirrorAttempt(now time.Time, mirror, tier, stage string, snapshot nodedirectory.Snapshot, duration time.Duration, err error) {
 	if !directory.config.Diagnostics.Enabled() {
 		return
 	}
@@ -287,6 +301,7 @@ func (directory *Directory) emitMirrorAttempt(now time.Time, mirror, stage strin
 	fields := diagnostics.Fields{
 		"network":     diagnostics.Text(directory.config.Network),
 		"mirror":      diagnostics.Text(mirror),
+		"tier":        diagnostics.Text(tier),
 		"stage":       diagnostics.Text(stage),
 		"generation":  diagnostics.Uint(cursor.Generation),
 		"serial":      diagnostics.Uint(cursor.Serial),

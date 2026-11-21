@@ -35,13 +35,20 @@ func TestTargetedWaiterContinuesStartupPassAndPreservesAvailability(t *testing.T
 		if err != nil {
 			t.Fatal(err)
 		}
-		const cold = "https://github.com/releases/directory"
+		const cold = "https://release-asset.example/directory"
 		const primary = "https://ws.ourworld.top/directory"
 		const backup = "https://windshare.cc/directory"
+		stream, err := diagnostics.NewStream(32, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
 		config := f.config()
-		config.Mirrors = []string{cold, primary, backup}
+		config.Mirrors = []string{primary, backup}
+		config.FallbackMirrors = []string{cold}
+		config.Diagnostics = stream.Sink()
 		began, unblock := make(chan struct{}), make(chan struct{})
 		var calls []string
+		var liveDown atomic.Bool
 		config.Fetch = func(_ context.Context, address string) ([]byte, error) {
 			calls = append(calls, address)
 			if len(calls) == 1 {
@@ -49,13 +56,15 @@ func TestTargetedWaiterContinuesStartupPassAndPreservesAvailability(t *testing.T
 				<-unblock
 				return stale, nil
 			}
+			if liveDown.Load() && address != cold {
+				return nil, errors.New("live mirror outage")
+			}
 			return fresh, nil
 		}
 		directory, err := New(config)
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer directory.Close()
 		<-began
 		done := make(chan error, 1)
 		go func() { done <- directory.RefreshAliases(t.Context(), []string{"new"}) }()
@@ -67,14 +76,38 @@ func TestTargetedWaiterContinuesStartupPassAndPreservesAvailability(t *testing.T
 		if !slices.Equal(calls, []string{primary, backup}) {
 			t.Fatalf("startup used %v", calls)
 		}
+		// Missing aliases must stop after live mirrors succeed without probing cold fallbacks.
 		if err := directory.RefreshAliases(t.Context(), []string{"nonexistent"}); err != nil {
 			t.Fatal(err)
 		}
-		if !slices.Equal(calls[2:], []string{primary, backup, cold}) {
-			t.Fatalf("targeted pass used %v", calls[2:])
+		if !slices.Equal(calls[2:], []string{primary, backup}) {
+			t.Fatalf("targeted pass probed cold fallback after live success: %v", calls[2:])
 		}
 		if err := directory.Refresh(t.Context()); err != nil || calls[len(calls)-1] != primary {
 			t.Fatalf("unexpected backoff: %v", err)
+		}
+		// When every live mirror fails, cold fallback recovers availability.
+		beforeOutage := len(calls)
+		liveDown.Store(true)
+		if err := directory.Refresh(t.Context()); err != nil {
+			t.Fatalf("cold fallback did not recover live outage: %v", err)
+		}
+		if !slices.Equal(calls[beforeOutage:], []string{primary, backup, cold}) {
+			t.Fatalf("outage pass used %v, want live mirrors before cold fallback", calls[beforeOutage:])
+		}
+		directory.Close()
+		stream.Close()
+		var sawFallbackAccepted bool
+		for record := range stream.Records() {
+			if record.Name() == "network_directory_refresh" &&
+				record.Payload().Get("mirror").Text() == cold &&
+				record.Payload().Get("tier").Text() == mirrorTierFallback &&
+				record.Payload().Get("stage").Text() == refreshStageAccepted {
+				sawFallbackAccepted = true
+			}
+		}
+		if !sawFallbackAccepted {
+			t.Fatal("missing fallback tier diagnostic on recovery")
 		}
 	})
 }
@@ -90,17 +123,18 @@ func (c *countingCache) Update(ctx context.Context, change func(Record) (Record,
 	return c.inner.Update(ctx, change)
 }
 
-func TestEqualCursorMirrorsAndMixedCaseReleaseAssetAvoidRedundantWrites(t *testing.T) {
+func TestEqualCursorLiveMirrorsAvoidRedundantWritesAndSkipFallback(t *testing.T) {
 	f := signing()
 	snapshot := f.envelope(t, 1, 1, 0)
 	fileCache := NewFileCache(filepath.Join(t.TempDir(), "config.json"), f.config().Network)
 	cache := &countingCache{inner: fileCache}
-	const cold = "https://GitHub.com/releases/directory"
+	const cold = "https://release-asset.example/directory"
 	const primary = "https://ws.ourworld.top/directory"
 	const backup = "https://windshare.cc/directory"
 	config := f.config()
 	config.Cache = cache
-	config.Mirrors = []string{cold, primary, backup}
+	config.Mirrors = []string{primary, backup}
+	config.FallbackMirrors = []string{cold}
 	var calls []string
 	config.Fetch = func(_ context.Context, address string) ([]byte, error) {
 		calls = append(calls, address)
@@ -128,8 +162,8 @@ func TestEqualCursorMirrorsAndMixedCaseReleaseAssetAvoidRedundantWrites(t *testi
 	if err := directory.RefreshAliases(t.Context(), []string{"missing"}); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(calls, []string{primary, backup, cold}) {
-		t.Fatalf("mirror order = %v, want live mirrors before mixed-case GitHub asset", calls)
+	if !slices.Equal(calls, []string{primary, backup}) {
+		t.Fatalf("mirror order = %v, want live mirrors only when a live mirror succeeded", calls)
 	}
 	if got := cache.updates.Load(); got != 1 {
 		t.Fatalf("cache updates across equal-cursor mirrors = %d, want 1", got)
@@ -140,6 +174,24 @@ func TestEqualCursorMirrorsAndMixedCaseReleaseAssetAvoidRedundantWrites(t *testi
 	}
 	if !statAfter.ModTime().Equal(oldModTime) {
 		t.Fatalf("file cache rewrote identical record: before=%v after=%v", oldModTime, statAfter.ModTime())
+	}
+}
+
+func TestMirrorTierConfigurationValidation(t *testing.T) {
+	f := signing()
+	invalid := f.config()
+	invalid.FallbackMirrors = []string{"http://insecure.example/directory"}
+	if _, err := New(invalid); !errors.Is(err, nodedirectory.ErrFormat) {
+		t.Fatalf("non-https fallback mirror err = %v, want ErrFormat", err)
+	}
+	tooMany := f.config()
+	tooMany.Mirrors = []string{
+		"https://m1.example", "https://m2.example", "https://m3.example", "https://m4.example",
+		"https://m5.example", "https://m6.example", "https://m7.example",
+	}
+	tooMany.FallbackMirrors = []string{"https://f1.example", "https://f2.example"}
+	if _, err := New(tooMany); !errors.Is(err, nodedirectory.ErrFormat) {
+		t.Fatalf("combined mirrors over limit err = %v, want ErrFormat", err)
 	}
 }
 

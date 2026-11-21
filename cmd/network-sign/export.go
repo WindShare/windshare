@@ -18,6 +18,7 @@ type releaseManifest struct {
 	LinkHost                 string          `json:"link_host"`
 	BackupEntry              string          `json:"backup_entry"`
 	Mirrors                  []string        `json:"mirrors"`
+	NativeFallbackMirrors    []string        `json:"native_fallback_mirrors,omitempty"`
 	Roots                    []publicKey     `json:"roots"`
 	Snapshot                 json.RawMessage `json:"snapshot"`
 	Authority                json.RawMessage `json:"authority,omitempty"`

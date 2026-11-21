@@ -61,6 +61,8 @@ export class BuiltinNetwork {
     this.#directory ??= new NetworkDirectory({
       network: this.#release.network,
       roots: this.#release.roots,
+      // Native release-asset fallbacks (e.g. GitHub Releases) lack CORS headers
+      // and cannot be fetched by browsers; wire only live CORS-enabled mirrors.
       mirrors: this.#release.mirrors,
       ...(this.#release.snapshot === null || this.#release.snapshot === undefined ? {} : { embedded: JSON.stringify(this.#release.snapshot) }),
       ...(this.#observe === undefined ? {} : { observe: this.#observe }),

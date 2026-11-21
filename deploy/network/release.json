@@ -4,7 +4,9 @@
   "backup_entry": "https://windshare.cc",
   "mirrors": [
     "https://ws.ourworld.top/.well-known/windshare-network",
-    "https://windshare.cc/.well-known/windshare-network",
+    "https://windshare.cc/.well-known/windshare-network"
+  ],
+  "native_fallback_mirrors": [
     "https://github.com/windshare/windshare/releases/latest/download/windshare-network.json"
   ],
   "roots": [

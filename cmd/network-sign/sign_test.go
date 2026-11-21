@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -35,7 +36,15 @@ func TestOfflineAuthorityAndImmutableDirectoryHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	authority := json.RawMessage(`{"url":"https://api.example","roots":["account-root"]}`)
-	manifest := releaseManifest{Network: "windshare", Roots: roots, Snapshot: json.RawMessage("null"), LinkHost: "https://front.example", Authority: authority}
+	manifest := releaseManifest{
+		Network:               "windshare",
+		Roots:                 roots,
+		Snapshot:              json.RawMessage("null"),
+		LinkHost:              "https://front.example",
+		Mirrors:               []string{"https://front.example/.well-known/windshare-network"},
+		NativeFallbackMirrors: []string{"https://release-asset.example/windshare-network.json"},
+		Authority:             authority,
+	}
 	if err := writeJSON(path("release.json"), manifest); err != nil {
 		t.Fatal(err)
 	}
@@ -79,6 +88,9 @@ func TestOfflineAuthorityAndImmutableDirectoryHistory(t *testing.T) {
 	var preserved bytes.Buffer
 	if err := json.Compact(&preserved, updated.Authority); err != nil || !bytes.Equal(preserved.Bytes(), authority) {
 		t.Fatalf("directory signing replaced account authority: %s, %v", updated.Authority, err)
+	}
+	if !slices.Equal(updated.Mirrors, manifest.Mirrors) || !slices.Equal(updated.NativeFallbackMirrors, manifest.NativeFallbackMirrors) {
+		t.Fatalf("directory signing altered mirrors: live=%v fallback=%v", updated.Mirrors, updated.NativeFallbackMirrors)
 	}
 	var embedded, exported any
 	_ = json.Unmarshal(updated.Snapshot, &embedded)

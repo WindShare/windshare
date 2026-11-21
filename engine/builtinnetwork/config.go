@@ -21,11 +21,12 @@ type releaseConfig struct {
 		URL  string `json:"url"`
 		Root string `json:"root"`
 	} `json:"authority"`
-	Network     string   `json:"network"`
-	LinkHost    string   `json:"link_host"`
-	BackupEntry string   `json:"backup_entry"`
-	Mirrors     []string `json:"mirrors"`
-	Roots       []struct {
+	Network               string   `json:"network"`
+	LinkHost              string   `json:"link_host"`
+	BackupEntry           string   `json:"backup_entry"`
+	Mirrors               []string `json:"mirrors"`
+	NativeFallbackMirrors []string `json:"native_fallback_mirrors"`
+	Roots                 []struct {
 		ID  string `json:"id"`
 		Key string `json:"key"`
 	} `json:"roots"`
@@ -47,7 +48,7 @@ func parse(data []byte, configPath string) (*networkconfig.Config, error) {
 		return nil, errors.New("built-in network requires two distinct roots")
 	}
 	result := &networkconfig.Config{LinkHost: source.LinkHost, BackupEntry: source.BackupEntry, GlobalPairCoversMainland: source.GlobalPairCoversMainland,
-		Directory: networkdirectory.Config{Network: source.Network, Mirrors: source.Mirrors}}
+		Directory: networkdirectory.Config{Network: source.Network, Mirrors: source.Mirrors, FallbackMirrors: source.NativeFallbackMirrors}}
 	if configPath != "" {
 		result.Directory.Cache = networkdirectory.NewFileCache(configPath, source.Network)
 	}
@@ -70,6 +71,7 @@ func parse(data []byte, configPath string) (*networkconfig.Config, error) {
 	// unsigned mirrors or manufacture an official signing authority on first run.
 	if len(result.Directory.Roots) == 0 {
 		result.Directory.Mirrors = nil
+		result.Directory.FallbackMirrors = nil
 	}
 	if source.Authority != nil {
 		root, err := serviceauthority.PublicKey(source.Authority.Root)

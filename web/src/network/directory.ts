@@ -7,12 +7,16 @@ const MIRROR_TIMEOUT_MS = 2_000
 const REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000
 const MINIMUM_BACKOFF_MS = 30_000
 const MAXIMUM_BACKOFF_MS = 30 * 60 * 1000
+const MAXIMUM_MIRRORS = 8
 const MIRRORS_PER_REFRESH = 3
+
+export type DirectoryMirrorTier = 'live' | 'fallback'
 
 export type DirectoryObservation = {
   readonly operationId: string
   readonly transition: 'accepted' | 'rejected'
   readonly mirror: string
+  readonly tier: DirectoryMirrorTier
   readonly generation?: number
   readonly serial?: number
   readonly trustedUntil?: number
@@ -31,6 +35,7 @@ export interface NetworkDirectoryOptions {
   readonly roots: readonly NetworkRoot[]
   readonly embedded?: string
   readonly mirrors: readonly string[]
+  readonly fallbackMirrors?: readonly string[]
   readonly origin?: string
   readonly cache?: DirectoryCache
   readonly now?: () => number
@@ -71,7 +76,9 @@ export class NetworkDirectory {
   #refreshSequence = 0
 
   constructor(options: NetworkDirectoryOptions) {
-    if (options.mirrors.length > 8) throw new TypeError('Too many network mirrors')
+    if (options.mirrors.length + (options.fallbackMirrors?.length ?? 0) > MAXIMUM_MIRRORS) {
+      throw new TypeError('Too many network mirrors')
+    }
     this.#options = options
     this.#now = options.now ?? Date.now
     this.#monotonicNow = options.monotonicNow ?? (() => performance.now())
@@ -135,20 +142,35 @@ export class NetworkDirectory {
     try {
       deadline = operationDeadlineSignal(this.#lifetime.signal, REFRESH_TIMEOUT_MS, new DOMException('Directory refresh timed out', 'TimeoutError'))
       const overall = deadline.signal
-      const ranked = orderedMirrors(this.#options)
+      const live = orderedLiveMirrors(this.#options)
       let accepted = false
       let committed: DirectoryCursor | undefined
+      let attempts = 0
       let last: unknown = new Error('Network temporarily unavailable')
-      if (this.#options.roots.length > 0) for (const mirror of ranked.slice(0, MIRRORS_PER_REFRESH)) {
-        try {
-          const next = await this.#readMirror(cache, operationId, mirror, overall, committed)
-          accepted = true
-          committed = next.cursor
-          if ([...this.#targets].every(alias => next.nodes.some(node => node.alias === alias))) break
-        } catch (failure) {
-          last = failure
-          this.#observe({ operationId, transition: 'rejected', mirror, failure })
-          if (overall.aborted) break
+      const tryTier = async (mirrors: readonly string[], tier: DirectoryMirrorTier): Promise<boolean> => {
+        for (const mirror of mirrors) {
+          if (attempts >= MIRRORS_PER_REFRESH || overall.aborted) break
+          attempts++
+          try {
+            const next = await this.#readMirror(cache, operationId, mirror, tier, overall, committed)
+            accepted = true
+            committed = next.cursor
+            if ([...this.#targets].every(alias => next.nodes.some(node => node.alias === alias))) return true
+          } catch (failure) {
+            last = failure
+            this.#observe({ operationId, transition: 'rejected', mirror, tier, failure })
+            if (overall.aborted) break
+          }
+        }
+        return false
+      }
+      if (this.#options.roots.length > 0) {
+        const resolved = await tryTier(live, 'live')
+        // Cold fallback mirrors carry static release snapshots and cannot advertise
+        // newer aliases than a reachable live mirror; use them only when all live
+        // mirrors fail.
+        if (!resolved && !accepted && !overall.aborted) {
+          await tryTier(orderedFallbackMirrors(this.#options, live), 'fallback')
         }
       }
       if (accepted) return
@@ -172,7 +194,7 @@ export class NetworkDirectory {
     }
   }
 
-  async #readMirror(cache: DirectoryCache, operationId: string, mirror: string, overall: AbortSignal, committed?: DirectoryCursor): Promise<NetworkSnapshot> {
+  async #readMirror(cache: DirectoryCache, operationId: string, mirror: string, tier: DirectoryMirrorTier, overall: AbortSignal, committed?: DirectoryCursor): Promise<NetworkSnapshot> {
     const deadline = operationDeadlineSignal(overall, MIRROR_TIMEOUT_MS, new DOMException('Directory mirror timed out', 'TimeoutError'))
     let data: string
     try { data = await fetchEnvelope(mirror, deadline.signal, this.#options.fetch ?? fetch) }
@@ -182,17 +204,17 @@ export class NetworkDirectory {
     if (!usableDirectory(next, this.#now())) throw new Error('Network directory expired')
     rejectRollback(this.#snapshot?.cursor, next.cursor)
     if (!sameCursor(committed, next.cursor)) await cache.commit(next)
-    this.#accept(next, operationId, mirror)
+    this.#accept(next, operationId, mirror, tier)
     return next
   }
 
-  #accept(snapshot: NetworkSnapshot, operationId: string, mirror: string): void {
+  #accept(snapshot: NetworkSnapshot, operationId: string, mirror: string, tier: DirectoryMirrorTier): void {
     const changed = !sameCursor(this.#snapshot?.cursor, snapshot.cursor)
     this.#failures = 0
     this.#retryAt = 0
     this.#schedule(REFRESH_INTERVAL_MS)
     if (changed) this.#publishSnapshot(snapshot)
-    this.#observe({ operationId, transition: 'accepted', mirror, generation: snapshot.cursor.generation, serial: snapshot.cursor.serial, trustedUntil: snapshot.trustedUntil })
+    this.#observe({ operationId, transition: 'accepted', mirror, tier, generation: snapshot.cursor.generation, serial: snapshot.cursor.serial, trustedUntil: snapshot.trustedUntil })
   }
 
   #publishSnapshot(snapshot: NetworkSnapshot): void {
@@ -264,14 +286,21 @@ function parseMirror(raw: string): URL | undefined {
   try { return new URL(raw) } catch { return undefined }
 }
 
-function orderedMirrors(options: NetworkDirectoryOptions): string[] {
-  const mirrors = [...options.mirrors]
-  const random = options.random ?? Math.random
-  for (let i = mirrors.length - 1; i > 0; i--) { const j = Math.floor(random() * (i + 1)); [mirrors[i], mirrors[j]] = [mirrors[j]!, mirrors[i]!] }
+function shuffledMirrors(raw: readonly string[], random: () => number): string[] {
+  const mirrors = [...raw]
+  for (let i = mirrors.length - 1; i > 0; i--) {
+    const j = Math.floor(random() * (i + 1))
+    ;[mirrors[i], mirrors[j]] = [mirrors[j]!, mirrors[i]!]
+  }
+  return mirrors
+}
+
+function orderedLiveMirrors(options: NetworkDirectoryOptions): string[] {
+  const mirrors = shuffledMirrors(options.mirrors, options.random ?? Math.random)
   const origin = parseMirror(options.origin ?? '')
   if (origin?.protocol === 'https:') {
     const sameOrigin = new URL('/.well-known/windshare-network', origin).href
-    // Only prioritize the current origin when it is already a configured mirror so
+    // Only prioritize the current origin when it is already a configured live mirror so
     // self-hosted frontends keep all built-in mirrors within MIRRORS_PER_REFRESH.
     const index = mirrors.findIndex(mirror => parseMirror(mirror)?.href === sameOrigin)
     if (index !== -1) {
@@ -279,5 +308,12 @@ function orderedMirrors(options: NetworkDirectoryOptions): string[] {
       mirrors.unshift(sameOrigin)
     }
   }
-  return [...new Set(mirrors)].sort((a, b) => Number(parseMirror(a)?.hostname === 'github.com') - Number(parseMirror(b)?.hostname === 'github.com'))
+  return [...new Set(mirrors)]
+}
+
+function orderedFallbackMirrors(options: NetworkDirectoryOptions, live: readonly string[]): string[] {
+  if (!options.fallbackMirrors?.length) return []
+  const seen = new Set(live)
+  return [...new Set(shuffledMirrors(options.fallbackMirrors, options.random ?? Math.random))]
+    .filter(mirror => !seen.has(mirror))
 }

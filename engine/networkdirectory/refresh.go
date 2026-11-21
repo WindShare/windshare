@@ -3,9 +3,6 @@ package networkdirectory
 import (
 	"context"
 	"errors"
-	"net/url"
-	"sort"
-	"strings"
 	"time"
 
 	"github.com/windshare/windshare/core/nodedirectory"
@@ -18,11 +15,6 @@ type refreshCycle struct {
 	initialCursor     nodedirectory.Cursor
 	triggered         bool
 	err               error
-}
-
-func releaseAsset(mirror string) bool {
-	address, err := url.Parse(mirror)
-	return err == nil && strings.EqualFold(address.Hostname(), "github.com")
 }
 
 // RefreshAliases joins the current pass, including startup maintenance, and
@@ -143,40 +135,69 @@ func (directory *Directory) finishIfResolved(cycle *refreshCycle, snapshot noded
 	return true
 }
 
+func (directory *Directory) orderedTier(mirrors []string) ([]string, error) {
+	if len(mirrors) == 0 {
+		return nil, nil
+	}
+	order := directory.config.Order(len(mirrors))
+	ordered := make([]string, 0, len(order))
+	for _, index := range order {
+		if index < 0 || index >= len(mirrors) {
+			return nil, nodedirectory.ErrFormat
+		}
+		ordered = append(ordered, mirrors[index])
+	}
+	return ordered, nil
+}
+
 func (directory *Directory) tryMirrors(ctx context.Context, cycle *refreshCycle) error {
 	if len(directory.config.Roots) == 0 {
 		return blocked(Unprovisioned, nil)
 	}
-	order := directory.config.Order(len(directory.config.Mirrors))
-	// Release configuration orders live mirrors before the cold release asset.
-	// Randomize peers within each tier so neither primary absorbs every refresh.
-	for _, index := range order {
-		if index < 0 || index >= len(directory.config.Mirrors) {
-			return nodedirectory.ErrFormat
-		}
+	live, err := directory.orderedTier(directory.config.Mirrors)
+	if err != nil {
+		return err
 	}
-	sort.SliceStable(order, func(i, j int) bool {
-		return !releaseAsset(directory.config.Mirrors[order[i]]) && releaseAsset(directory.config.Mirrors[order[j]])
-	})
 	var committed *nodedirectory.Cursor
 	var failures []error
-	for attempt, index := range order {
-		if attempt >= MirrorsPerRefresh {
-			break
-		}
-		mirror := directory.config.Mirrors[index]
-		snapshot, err := directory.fetchMirror(ctx, mirror, committed)
-		if err == nil {
-			cursor := snapshot.Cursor()
-			committed = &cursor
-			if directory.finishIfResolved(cycle, snapshot) {
-				return nil
+	seen := make(map[string]struct{}, MirrorsPerRefresh)
+	attempts := 0
+	tryTier := func(mirrors []string, tier string) bool {
+		for _, mirror := range mirrors {
+			if attempts >= MirrorsPerRefresh || ctx.Err() != nil {
+				break
 			}
-			continue
+			if _, duplicate := seen[mirror]; duplicate {
+				continue
+			}
+			seen[mirror] = struct{}{}
+			attempts++
+			snapshot, err := directory.fetchMirror(ctx, mirror, tier, committed)
+			if err == nil {
+				cursor := snapshot.Cursor()
+				committed = &cursor
+				if directory.finishIfResolved(cycle, snapshot) {
+					return true
+				}
+				continue
+			}
+			failures = append(failures, err)
 		}
-		failures = append(failures, err)
-		if ctx.Err() != nil {
-			break
+		return false
+	}
+	if tryTier(live, mirrorTierLive) {
+		return nil
+	}
+	// Cold fallback mirrors carry static release snapshots and cannot advertise
+	// newer aliases than a reachable live mirror; use them only when all live
+	// mirrors fail.
+	if committed == nil && ctx.Err() == nil && len(directory.config.FallbackMirrors) > 0 {
+		fallback, err := directory.orderedTier(directory.config.FallbackMirrors)
+		if err != nil {
+			return err
+		}
+		if tryTier(fallback, mirrorTierFallback) {
+			return nil
 		}
 	}
 	if committed != nil {
@@ -188,7 +209,7 @@ func (directory *Directory) tryMirrors(ctx context.Context, cycle *refreshCycle)
 	return errors.Join(append(failures, nodedirectory.ErrExpired)...)
 }
 
-func (directory *Directory) fetchMirror(ctx context.Context, mirror string, committed *nodedirectory.Cursor) (nodedirectory.Snapshot, error) {
+func (directory *Directory) fetchMirror(ctx context.Context, mirror, tier string, committed *nodedirectory.Cursor) (nodedirectory.Snapshot, error) {
 	request, cancel := context.WithTimeout(ctx, MirrorTimeout)
 	started := directory.config.Now()
 	stage := refreshStageFetch
@@ -215,6 +236,6 @@ func (directory *Directory) fetchMirror(ctx context.Context, mirror string, comm
 		stage = refreshStageAccepted
 	}
 	finished := directory.config.Now()
-	directory.emitMirrorAttempt(finished, mirror, stage, snapshot, finished.Sub(started), err)
+	directory.emitMirrorAttempt(finished, mirror, tier, stage, snapshot, finished.Sub(started), err)
 	return snapshot, err
 }

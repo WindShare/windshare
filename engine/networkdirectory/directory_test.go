@@ -347,7 +347,7 @@ func TestDirectoryRefreshEmitsStructuredDiagnosticsWithoutSlog(t *testing.T) {
 					sawVerifyFailure = true
 				}
 			case "accepted":
-				if payload.Get("mirror").Text() == config.Mirrors[1] && payload.Get("serial").Uint() == 2 && payload.Get("trusted_until").Text() != "" {
+				if payload.Get("mirror").Text() == config.Mirrors[1] && payload.Get("tier").Text() == mirrorTierLive && payload.Get("serial").Uint() == 2 && payload.Get("trusted_until").Text() != "" {
 					sawAccepted = true
 				}
 			case "fetch":

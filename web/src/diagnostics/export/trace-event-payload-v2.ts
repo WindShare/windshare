@@ -114,7 +114,8 @@ function validateNetworkDirectory(payload: UnknownRecord): void {
   if (payload.transition === 'storage_fallback') {
     exactKeys(payload, ['operation_id', 'transition', 'failure_detail'], [], 'network directory storage fallback')
   } else {
-    exactKeys(payload, ['operation_id', 'mirror', 'transition'], ['generation', 'serial', 'trusted_until_ms', 'failure_detail'], 'network directory')
+    exactKeys(payload, ['operation_id', 'mirror', 'transition'], ['tier', 'generation', 'serial', 'trusted_until_ms', 'failure_detail'], 'network directory')
+    if (payload.tier !== undefined) member(payload.tier, ['live', 'fallback'], 'directory mirror tier')
   }
   for (const field of ['operation_id', 'mirror', 'failure_detail']) {
     if (payload[field] !== undefined && (typeof payload[field] !== 'string' || payload[field].length > 2048)) throw new TypeError('Invalid network trace text')

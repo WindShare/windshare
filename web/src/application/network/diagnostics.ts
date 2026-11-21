@@ -28,7 +28,7 @@ export function networkObserver(trace: DomainTraceSource<TraceEventObservationV2
       return
     }
     observer(observation('network_directory', {
-      operation_id: event.operationId, mirror: event.mirror.slice(0, 2048), transition: event.transition,
+      operation_id: event.operationId, mirror: event.mirror.slice(0, 2048), tier: event.tier, transition: event.transition,
       ...(event.generation === undefined ? {} : { generation: event.generation }),
       ...(event.serial === undefined ? {} : { serial: event.serial }),
       ...(event.trustedUntil === undefined ? {} : { trusted_until_ms: event.trustedUntil }),

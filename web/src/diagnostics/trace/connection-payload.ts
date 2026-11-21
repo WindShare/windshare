@@ -19,6 +19,7 @@ export interface ConnectionTracePayloads {
   }>
   readonly network_directory: Readonly<{ operation_id: string } & ({
     mirror: string
+    tier?: 'live' | 'fallback'
     transition: 'accepted' | 'rejected'
     generation?: number
     serial?: number
