@@ -38,11 +38,12 @@ import {
   parseAfdianSponsorName,
   parseAfdianSponsorPage,
   parseAfdianWebhookPayload,
-  parseKofiWebhookBody,
+  parseKofiFormDataObject,
+  parseKofiWebhookPayload,
   parseNowPaymentsIpnPayload,
   parseUnixTimestampSeconds,
   sortJsonKeysRecursively,
-  verifyKofiToken,
+  verifyKofiWebhookToken,
   verifyNowPaymentsSignature,
 } from '../src/verify'
 import { matchesIfNoneMatch } from '../src/wall-store'
@@ -299,7 +300,7 @@ describe('provider protocol signing, parsing, and outbound adapters', () => {
     }
   })
 
-  it('parses Ko-fi webhooks while physically stripping email and failing closed on privacy', () => {
+  it('authenticates Ko-fi webhooks before projecting payload fields and strips PII and credentials', () => {
     const form = new URLSearchParams({
       data: JSON.stringify({
         verification_token: 'kofi-secret',
@@ -315,13 +316,22 @@ describe('provider protocol signing, parsing, and outbound adapters', () => {
       }),
     }).toString()
 
-    const parsed = parseKofiWebhookBody(form)
+    const rawObject = parseKofiFormDataObject(form)
+    expect(rawObject).not.toBeNull()
+    if (rawObject === null) throw new Error('expected valid Ko-fi form envelope')
+    expect(verifyKofiWebhookToken(rawObject, 'kofi-secret')).toBe(true)
+    expect(verifyKofiWebhookToken(rawObject, 'wrong')).toBe(false)
+    expect(verifyKofiWebhookToken({}, 'kofi-secret')).toBe(false)
+    expect(verifyKofiWebhookToken({ verification_token: '   ' }, 'kofi-secret')).toBe(false)
+    expect(parseKofiFormDataObject('data=not-json')).toBeNull()
+    expect(parseKofiFormDataObject('data=[]')).toBeNull()
+
+    const parsed = parseKofiWebhookPayload(rawObject)
     expect(parsed.ok).toBe(true)
     if (!parsed.ok) throw new Error('expected valid Ko-fi payload')
     expect('email' in parsed.payload).toBe(false)
+    expect('verificationToken' in parsed.payload).toBe(false)
     expect(parsed.payload.isPublic).toBe(false)
-    expect(verifyKofiToken(parsed.payload.verificationToken, 'kofi-secret')).toBe(true)
-    expect(verifyKofiToken(parsed.payload.verificationToken, 'wrong')).toBe(false)
     expect(isSupportedKofiType('Donation')).toBe(true)
     expect(isSupportedKofiType('Shop Order')).toBe(false)
   })

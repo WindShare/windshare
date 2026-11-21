@@ -13,6 +13,7 @@ import {
 const API_ORIGIN = 'https://donate.windshare.cc'
 const NOW_SEC = 1_700_000_000
 const AFDIAN_SECRET = 'test-afdian-webhook-secret'
+const KOFI_TOKEN = 'test-kofi-verification-token'
 const NOWPAYMENTS_IPN_SECRET = 'test-nowpayments-ipn-secret'
 
 interface LogRecord {
@@ -50,6 +51,7 @@ function createObservabilityHarness(overrides: Partial<AsyncWallStub> = {}) {
     AFDIAN_USER_ID: 'creator',
     AFDIAN_TOKEN: 'afdian-token',
     AFDIAN_WEBHOOK_SECRET: AFDIAN_SECRET,
+    KOFI_VERIFICATION_TOKEN: KOFI_TOKEN,
     ALLOWED_ORIGINS: 'https://windshare.cc',
     DONATE_API_ORIGIN: API_ORIGIN,
     NOWPAYMENTS_IPN_SECRET,
@@ -248,5 +250,53 @@ describe('structured observability logs on failure, fallback, and admin config p
       },
     ])
     expect(logs.some(entry => entry.level === 'error' && entry.payload.event === 'donation.admin_storage_error')).toBe(true)
+  })
+
+  it('verifies Ko-fi verification_token before validating business fields and logs distinct rejection reasons', async () => {
+    const logs = captureStructuredLogs()
+    const { env, commits } = createObservabilityHarness()
+
+    const sendKofiRaw = (rawData: string) => handleWorkerFetch(
+      new Request(`${API_ORIGIN}/v1/donations/webhooks/kofi`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ data: rawData }).toString(),
+      }),
+      env,
+      { nowSec: () => NOW_SEC },
+    )
+
+    // Unauthenticated JSON objects without business fields must return 403 and log invalid_signature.
+    for (const unauthBody of [
+      JSON.stringify({}),
+      JSON.stringify({ verification_token: 'wrong-token' }),
+      JSON.stringify({ verification_token: 12345 }),
+    ]) {
+      const res = await sendKofiRaw(unauthBody)
+      expect(res.status).toBe(403)
+      expect(await res.json()).toEqual({ error: 'forbidden' })
+    }
+
+    // Malformed envelope JSON cannot be authenticated and remains 400 invalid_payload.
+    const badJsonRes = await sendKofiRaw('{not-json')
+    expect(badJsonRes.status).toBe(400)
+    expect(await badJsonRes.json()).toEqual({ error: 'invalid_payload' })
+
+    // Authenticated payloads missing required business fields return 400 invalid_payload.
+    const missingFieldsRes = await sendKofiRaw(JSON.stringify({ verification_token: KOFI_TOKEN }))
+    expect(missingFieldsRes.status).toBe(400)
+    expect(await missingFieldsRes.json()).toEqual({ error: 'invalid_payload' })
+
+    expect(commits).toHaveLength(0)
+    const rejectedReasons = logs
+      .filter(entry => entry.payload.event === 'donation.webhook_rejected' && entry.payload.provider === 'kofi')
+      .map(entry => entry.payload.reason)
+    expect(rejectedReasons).toEqual([
+      'invalid_signature',
+      'invalid_signature',
+      'invalid_signature',
+      'invalid_payload',
+      'invalid_payload',
+    ])
   })
 })

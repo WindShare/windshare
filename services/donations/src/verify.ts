@@ -19,9 +19,9 @@ export interface AfdianOrderRecord {
   readonly donatedAt: number | null
 }
 
-// Ko-fi webhook payload projected without PII (email is intentionally discarded at parse time).
+// Ko-fi webhook payload projected without PII or credentials
+// (email and verification_token are intentionally discarded before domain handling).
 export interface KofiWebhookPayload {
-  readonly verificationToken: string
   readonly kofiTransactionId: string
   readonly type: string
   readonly amount: string | number
@@ -210,30 +210,36 @@ export function parseAfdianSponsorName(
   return { ok: true, matched: true, displayName: parsed.sponsors.get(targetUserId) ?? null }
 }
 
-export function parseKofiWebhookBody(
-  rawFormBody: string,
-): { readonly ok: true; readonly payload: KofiWebhookPayload } | { readonly ok: false; readonly reason: 'invalid_payload' } {
+export function parseKofiFormDataObject(rawFormBody: string): Record<string, unknown> | null {
   const params = new URLSearchParams(rawFormBody)
   const rawData = params.get('data')
-  if (rawData === null || rawData.trim().length === 0) {
-    return { ok: false, reason: 'invalid_payload' }
-  }
-  let parsed: unknown
+  if (rawData === null || rawData.trim().length === 0) return null
   try {
-    parsed = JSON.parse(rawData)
+    const parsed: unknown = JSON.parse(rawData)
+    return isPlainRecord(parsed) ? parsed : null
   } catch {
-    return { ok: false, reason: 'invalid_payload' }
+    return null
   }
-  if (!isPlainRecord(parsed)) return { ok: false, reason: 'invalid_payload' }
+}
 
-  const verificationToken = readNonEmptyString(parsed.verification_token)
-  const kofiTransactionId = readNonEmptyString(parsed.kofi_transaction_id)
-  const type = readNonEmptyString(parsed.type)
-  const amount = readAmountField(parsed.amount)
-  const currency = readNonEmptyString(parsed.currency)
+export function verifyKofiWebhookToken(
+  rawObject: Record<string, unknown>,
+  expectedToken: string,
+): boolean {
+  const payloadToken = readNonEmptyString(rawObject.verification_token)
+  if (payloadToken === null) return false
+  return constantTimeEqual(payloadToken, expectedToken)
+}
+
+export function parseKofiWebhookPayload(
+  rawObject: Record<string, unknown>,
+): { readonly ok: true; readonly payload: KofiWebhookPayload } | { readonly ok: false; readonly reason: 'invalid_payload' } {
+  const kofiTransactionId = readNonEmptyString(rawObject.kofi_transaction_id)
+  const type = readNonEmptyString(rawObject.type)
+  const amount = readAmountField(rawObject.amount)
+  const currency = readNonEmptyString(rawObject.currency)
   if (
-    verificationToken === null
-    || kofiTransactionId === null
+    kofiTransactionId === null
     || type === null
     || amount === null
     || currency === null
@@ -242,26 +248,21 @@ export function parseKofiWebhookBody(
   }
 
   // Default to private if is_public is absent or non-boolean so privacy fails closed.
-  const isPublic = parsed.is_public === true
+  const isPublic = rawObject.is_public === true
 
   return {
     ok: true,
     payload: {
-      verificationToken,
       kofiTransactionId,
       type,
       amount,
       currency,
       isPublic,
-      fromName: readOptionalString(parsed.from_name),
-      message: readOptionalString(parsed.message),
-      donatedAt: parseIsoTimestampSeconds(parsed.timestamp),
+      fromName: readOptionalString(rawObject.from_name),
+      message: readOptionalString(rawObject.message),
+      donatedAt: parseIsoTimestampSeconds(rawObject.timestamp),
     },
   }
-}
-
-export function verifyKofiToken(payloadToken: string, expectedToken: string): boolean {
-  return constantTimeEqual(payloadToken, expectedToken)
 }
 
 export function isSupportedKofiType(type: string): boolean {

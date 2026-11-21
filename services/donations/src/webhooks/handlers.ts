@@ -34,11 +34,13 @@ import {
   constantTimeEqual,
   isSupportedKofiType,
   parseAfdianWebhookPayload,
-  parseKofiWebhookBody,
+  parseKofiFormDataObject,
+  parseKofiWebhookPayload,
   parseNowPaymentsIpnPayload,
-  verifyKofiToken,
+  verifyKofiWebhookToken,
   verifyNowPaymentsSignature,
   type AfdianOrderRecord,
+  type KofiWebhookPayload,
 } from '../verify'
 
 const AFDIAN_PAID_STATUS = 2
@@ -258,6 +260,46 @@ export async function handleAfdianWebhook(
   return afdianAckResponse()
 }
 
+async function verifyAndParseKofiRequest(
+  request: Request,
+  expectedToken: string,
+): Promise<
+  | { readonly ok: true; readonly payload: KofiWebhookPayload }
+  | { readonly ok: false; readonly response: Response }
+> {
+  if (!hasMediaType(request, 'application/x-www-form-urlencoded')) {
+    logWebhookRejected({ provider: 'kofi', reason: 'invalid_payload' })
+    return { ok: false, response: jsonResponse({ error: 'unsupported_media_type' }, 400, NO_STORE_HEADERS) }
+  }
+
+  const bodyResult = await readBoundedText(request, MAX_WEBHOOK_BODY_BYTES)
+  if (!bodyResult.ok) {
+    logWebhookRejected({ provider: 'kofi', reason: 'body_too_large' })
+    return { ok: false, response: jsonResponse({ error: 'body_too_large' }, 413, NO_STORE_HEADERS) }
+  }
+
+  const rawObject = parseKofiFormDataObject(bodyResult.text)
+  if (rawObject === null) {
+    logWebhookRejected({ provider: 'kofi', reason: 'invalid_payload' })
+    return { ok: false, response: jsonResponse({ error: 'invalid_payload' }, 400, NO_STORE_HEADERS) }
+  }
+
+  // Authenticate before business-field validation so unauthenticated requests
+  // consistently fail with 403 and log invalid_signature rather than invalid_payload.
+  if (!verifyKofiWebhookToken(rawObject, expectedToken)) {
+    logWebhookRejected({ provider: 'kofi', reason: 'invalid_signature' })
+    return { ok: false, response: jsonResponse({ error: 'forbidden' }, 403, NO_STORE_HEADERS) }
+  }
+
+  const parsed = parseKofiWebhookPayload(rawObject)
+  if (!parsed.ok) {
+    logWebhookRejected({ provider: 'kofi', reason: 'invalid_payload' })
+    return { ok: false, response: jsonResponse({ error: 'invalid_payload' }, 400, NO_STORE_HEADERS) }
+  }
+
+  return { ok: true, payload: parsed.payload }
+}
+
 export async function handleKofiWebhook(
   request: Request,
   env: DonationsEnv,
@@ -266,63 +308,46 @@ export async function handleKofiWebhook(
   if (!env.KOFI_VERIFICATION_TOKEN) {
     return jsonResponse({ error: 'provider_not_configured' }, 503, NO_STORE_HEADERS)
   }
-  if (!hasMediaType(request, 'application/x-www-form-urlencoded')) {
-    logWebhookRejected({ provider: 'kofi', reason: 'invalid_payload' })
-    return jsonResponse({ error: 'unsupported_media_type' }, 400, NO_STORE_HEADERS)
-  }
 
-  const bodyResult = await readBoundedText(request, MAX_WEBHOOK_BODY_BYTES)
-  if (!bodyResult.ok) {
-    logWebhookRejected({ provider: 'kofi', reason: 'body_too_large' })
-    return jsonResponse({ error: 'body_too_large' }, 413, NO_STORE_HEADERS)
-  }
+  const verified = await verifyAndParseKofiRequest(request, env.KOFI_VERIFICATION_TOKEN)
+  if (!verified.ok) return verified.response
 
-  const parsed = parseKofiWebhookBody(bodyResult.text)
-  if (!parsed.ok) {
-    logWebhookRejected({ provider: 'kofi', reason: 'invalid_payload' })
-    return jsonResponse({ error: 'invalid_payload' }, 400, NO_STORE_HEADERS)
-  }
-
-  if (!verifyKofiToken(parsed.payload.verificationToken, env.KOFI_VERIFICATION_TOKEN)) {
-    logWebhookRejected({ provider: 'kofi', reason: 'invalid_signature' })
-    return jsonResponse({ error: 'forbidden' }, 403, NO_STORE_HEADERS)
-  }
-
+  const { payload } = verified
   logWebhookReceived({
     provider: 'kofi',
-    externalId: parsed.payload.kofiTransactionId,
-    status: parsed.payload.type,
+    externalId: payload.kofiTransactionId,
+    status: payload.type,
   })
 
-  if (!isSupportedKofiType(parsed.payload.type)) {
+  if (!isSupportedKofiType(payload.type)) {
     return jsonResponse({ ok: true, ignored: true }, 200, NO_STORE_HEADERS)
   }
 
-  const money = parseFixedPointAmount(parsed.payload.amount, parsed.payload.currency)
+  const money = parseFixedPointAmount(payload.amount, payload.currency)
   if (money === null) {
     logWebhookRejected({ provider: 'kofi', reason: 'invalid_payload' })
     return jsonResponse({ error: 'invalid_amount' }, 400, NO_STORE_HEADERS)
   }
 
-  const displayName = parsed.payload.isPublic
-    ? sanitizePlainText(parsed.payload.fromName, MAX_DISPLAY_NAME_CODEPOINTS)
+  const displayName = payload.isPublic
+    ? sanitizePlainText(payload.fromName, MAX_DISPLAY_NAME_CODEPOINTS)
     : null
-  const message = parsed.payload.isPublic
-    ? sanitizePlainText(parsed.payload.message, MAX_MESSAGE_CODEPOINTS)
+  const message = payload.isPublic
+    ? sanitizePlainText(payload.message, MAX_MESSAGE_CODEPOINTS)
     : null
 
   await commitDonationToWall(
     env,
     {
       provider: 'kofi',
-      externalId: parsed.payload.kofiTransactionId,
+      externalId: payload.kofiTransactionId,
       displayName,
       amountMinor: money.amountMinor,
       currency: money.currency,
       minorDigits: money.minorDigits,
       message,
-      isPublic: parsed.payload.isPublic,
-      donatedAt: parsed.payload.donatedAt,
+      isPublic: payload.isPublic,
+      donatedAt: payload.donatedAt,
     },
     deps.nowSec(),
   )
