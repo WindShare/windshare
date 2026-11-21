@@ -63,12 +63,14 @@ impl Desktop {
                 cx,
             )
         });
+        let initial_focus = dialog.read(cx).focus_target(cx);
         let subscription = cx.subscribe_in(&dialog, window, |this, _, event, window, cx| {
             this.handle_account_dialog_event(event, window, cx);
         });
         self.open_scoped_overlay(
             Overlay::Account(dialog),
             scope,
+            &initial_focus,
             Some(subscription),
             window,
             cx,

@@ -112,12 +112,14 @@ impl Desktop {
         let dialog = cx.new(|cx| {
             SetupDialog::new(snapshot, page, initial_relay_url, scope.clone(), window, cx)
         });
+        let initial_focus = dialog.read(cx).focus_target(cx);
         let subscription = cx.subscribe_in(&dialog, window, |this, _, event, window, cx| {
             this.handle_setup_dialog_event(event.clone(), window, cx);
         });
         self.open_scoped_overlay(
             Overlay::SharingSetup(target, dialog),
             scope,
+            &initial_focus,
             Some(subscription),
             window,
             cx,

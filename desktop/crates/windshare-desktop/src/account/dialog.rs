@@ -144,7 +144,7 @@ impl AccountDialog {
         is_preview: bool,
         overlay_scope: FocusHandle,
         tracker: &AccountTracker,
-        window: &mut Window,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let locale = language(cx);
@@ -189,7 +189,9 @@ impl AccountDialog {
             overlay_scope,
             _subscriptions: subscriptions,
         };
-        dialog.set_page(initial_page, false, window, cx);
+        // Defer window focus to Desktop::open_scoped_overlay so it captures the
+        // pre-dialog return focus before moving focus into this modal.
+        dialog.apply_page(initial_page, cx);
         dialog
     }
 
@@ -244,6 +246,11 @@ impl AccountDialog {
             AccountScreen::Overview | AccountScreen::Registration => return None,
         };
         Some(input.read(cx).focus_handle(cx))
+    }
+
+    pub fn focus_target(&self, cx: &gpui::App) -> FocusHandle {
+        self.field_focus(cx)
+            .unwrap_or_else(|| self.overlay_scope.clone())
     }
 
     pub(super) fn can_submit(&self, cx: &Context<Self>) -> bool {
@@ -302,23 +309,20 @@ impl AccountDialog {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.busy() {
+        if self.busy() || !self.apply_page(page, cx) {
             return;
         }
-        self.set_page(page, true, window, cx);
+        let focus = self.focus_target(cx);
+        window.focus(&focus, cx);
+        cx.emit(AccountDialogEvent::PageChanged);
+        cx.notify();
     }
 
-    fn set_page(
-        &mut self,
-        page: AccountPage,
-        emit: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn apply_page(&mut self, page: AccountPage, cx: &mut Context<Self>) -> bool {
         if page.target().is_some()
             && (self.view.status.account.is_empty() || self.target_changed(&self.view))
         {
-            return;
+            return false;
         }
         let username = if page == AccountPage::Credentials(()) {
             self.view.status.username.clone()
@@ -364,14 +368,7 @@ impl AccountDialog {
         self.clear_secrets(cx);
         self.username
             .update(cx, |input, cx| input.set_value(username, cx));
-        let focus = self
-            .field_focus(cx)
-            .unwrap_or_else(|| self.overlay_scope.clone());
-        window.focus(&focus, cx);
-        if emit {
-            cx.emit(AccountDialogEvent::PageChanged);
-        }
-        cx.notify();
+        true
     }
 
     pub(super) fn register(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -519,7 +516,8 @@ impl AccountDialog {
         self.feedback.clone_from(&tracker.feedback);
         let next_field = self.field_focus(cx);
         if previous_field != next_field {
-            window.focus(next_field.as_ref().unwrap_or(&self.overlay_scope), cx);
+            let focus = self.focus_target(cx);
+            window.focus(&focus, cx);
         }
         cx.notify();
         previous_page

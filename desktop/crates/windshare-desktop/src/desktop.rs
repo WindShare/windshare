@@ -208,24 +208,31 @@ impl Desktop {
     }
     pub fn open_overlay(&mut self, overlay: Overlay, window: &mut Window, cx: &mut Context<Self>) {
         let scope = cx.focus_handle();
-        self.open_scoped_overlay(overlay, scope, None, window, cx);
+        let initial_focus = scope.clone();
+        self.open_scoped_overlay(overlay, scope, &initial_focus, None, window, cx);
     }
 
     pub fn open_scoped_overlay(
         &mut self,
         overlay: Overlay,
         scope: FocusHandle,
+        initial_focus: &FocusHandle,
         subscription: Option<Subscription>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.dialog_sequence += 1;
-        let should_focus_scope =
-            !matches!(overlay, Overlay::Account(_) | Overlay::SharingSetup(..));
+        // Capture the caller's focus before moving focus into the new dialog so
+        // closing restores an existing control rather than the unmounted overlay.
         let return_focus = window.focused(cx);
-        if should_focus_scope {
-            window.focus(&scope, cx);
-        }
+        window.focus(initial_focus, cx);
+        tracing::info!(
+            event = "desktop.overlay_opened",
+            session = std::process::id(),
+            overlay = ?overlay,
+            has_return_focus = return_focus.is_some(),
+            depth = self.overlays.len() + 1,
+        );
         self.overlays.push(OverlayFrame {
             content: overlay,
             return_focus,
@@ -251,6 +258,7 @@ impl Desktop {
             event = "desktop.overlay_closed",
             session = std::process::id(),
             overlay = ?frame.content,
+            restored_focus = frame.return_focus.is_some(),
             remaining = self.overlays.len(),
         );
     }

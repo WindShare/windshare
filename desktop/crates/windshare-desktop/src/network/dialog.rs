@@ -123,7 +123,7 @@ impl SetupDialog {
         initial_page: SetupPage,
         initial_relay_url: Option<String>,
         overlay_scope: FocusHandle,
-        window: &mut Window,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let locale = language(cx);
@@ -160,7 +160,9 @@ impl SetupDialog {
             overlay_scope,
             _subscriptions: subscriptions,
         };
-        dialog.apply_page(initial_page, initial_relay_url, false, window, cx);
+        // Defer window focus to Desktop::open_scoped_overlay so it captures the
+        // pre-dialog return focus before moving focus into this modal.
+        dialog.configure_page(initial_page, initial_relay_url, cx);
         dialog
     }
 
@@ -203,6 +205,30 @@ impl SetupDialog {
         }
     }
 
+    pub(super) fn shows_setup_progress(&self) -> bool {
+        let connecting = self
+            .snapshot
+            .setup
+            .context()
+            .is_some_and(|ctx| !ctx.relay_url.is_empty());
+        self.snapshot.setup.busy() && connecting || self.snapshot.setup.requires_cancellation()
+    }
+
+    fn form_visible(&self) -> bool {
+        self.snapshot.other_running.is_none() && !self.shows_setup_progress()
+    }
+
+    pub fn focus_target(&self, cx: &gpui::App) -> FocusHandle {
+        if !self.form_visible() {
+            return self.overlay_scope.clone();
+        }
+        match self.page {
+            SetupPage::Selection => self.overlay_scope.clone(),
+            SetupPage::Relay(_) => self.relay.read(cx).focus_handle(cx),
+            SetupPage::ReceiverSite => self.frontend.read(cx).focus_handle(cx),
+        }
+    }
+
     pub(super) fn set_page(
         &mut self,
         page: SetupPage,
@@ -212,7 +238,7 @@ impl SetupDialog {
         if self.snapshot.mode.pending() || self.snapshot.setup.unfinished() {
             return;
         }
-        self.apply_page(page, None, true, window, cx);
+        self.switch_page(page, None, window, cx);
     }
 
     pub fn prepare_relay_authorization(
@@ -224,48 +250,52 @@ impl SetupDialog {
         if self.snapshot.mode.pending() || self.snapshot.setup.unfinished() {
             return;
         }
-        self.apply_page(
+        self.switch_page(
             SetupPage::Relay(RelayOperation::AuthorizeDevice),
             Some(relay_url),
-            true,
             window,
             cx,
         );
         self.submit(cx);
     }
 
-    fn apply_page(
+    fn switch_page(
         &mut self,
         page: SetupPage,
         prefill_relay: Option<String>,
-        emit: bool,
         window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.configure_page(page, prefill_relay, cx);
+        let focus = self.focus_target(cx);
+        window.focus(&focus, cx);
+        cx.emit(SetupDialogEvent::PageChanged);
+        cx.notify();
+    }
+
+    fn configure_page(
+        &mut self,
+        page: SetupPage,
+        prefill_relay: Option<String>,
         cx: &mut Context<Self>,
     ) {
         self.page = page;
         self.snapshot.feedback = None;
         self.access_key
             .update(cx, |input, cx| input.set_value("", cx));
-        let focus = match page {
-            SetupPage::Selection => self.overlay_scope.clone(),
+        match page {
+            SetupPage::Selection => {}
             SetupPage::Relay(_) => {
                 let relay_value = prefill_relay.unwrap_or_default();
                 self.relay
                     .update(cx, |input, cx| input.set_value(relay_value, cx));
-                self.relay.read(cx).focus_handle(cx)
             }
             SetupPage::ReceiverSite => {
                 let frontend = self.snapshot.prefs.frontend.clone();
                 self.frontend
                     .update(cx, |input, cx| input.set_value(frontend, cx));
-                self.frontend.read(cx).focus_handle(cx)
             }
-        };
-        window.focus(&focus, cx);
-        if emit {
-            cx.emit(SetupDialogEvent::PageChanged);
         }
-        cx.notify();
     }
 
     pub(super) fn submit(&self, cx: &mut Context<Self>) {
@@ -311,6 +341,7 @@ impl SetupDialog {
         cx: &mut Context<Self>,
     ) {
         let previous_page = self.page;
+        let previous_form_visible = self.form_visible();
         if let Some(update) = update {
             if update.clear_access_key {
                 self.access_key
@@ -321,8 +352,9 @@ impl SetupDialog {
             }
         }
         self.snapshot = snapshot;
-        if self.page != previous_page {
-            window.focus(&self.overlay_scope, cx);
+        if self.page != previous_page || self.form_visible() != previous_form_visible {
+            let focus = self.focus_target(cx);
+            window.focus(&focus, cx);
         }
         cx.notify();
     }
