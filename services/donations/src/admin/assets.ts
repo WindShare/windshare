@@ -36,7 +36,7 @@ export const ADMIN_HTML = `<!doctype html>
       <form id="login-form" class="stack">
         <label for="password-input" class="label">Admin password</label>
         <input id="password-input" type="password" autocomplete="current-password" required class="input">
-        <button type="submit" class="btn btn-primary">Sign in</button>
+        <button id="login-btn" type="submit" class="btn btn-primary">Sign in</button>
       </form>
     </section>
 
@@ -44,11 +44,11 @@ export const ADMIN_HTML = `<!doctype html>
       <form id="config-form" class="card config-grid">
         <label class="field">
           <span class="label">Min public CNY (minor)</span>
-          <input id="cfg-cny" type="number" min="0" step="100" class="input">
+          <input id="cfg-cny" type="number" min="0" step="100" required class="input">
         </label>
         <label class="field">
           <span class="label">Min public USD (minor)</span>
-          <input id="cfg-usd" type="number" min="0" step="100" class="input">
+          <input id="cfg-usd" type="number" min="0" step="100" required class="input">
         </label>
         <label class="checkbox-field">
           <input id="cfg-moderation" type="checkbox">
@@ -59,7 +59,7 @@ export const ADMIN_HTML = `<!doctype html>
           <span>Pause Crypto checkout</span>
         </label>
         <div class="config-actions">
-          <button type="submit" class="btn btn-primary">Save settings</button>
+          <button id="save-config-btn" type="submit" class="btn btn-primary">Save settings</button>
         </div>
       </form>
 
@@ -204,15 +204,52 @@ export const ADMIN_APP_JS = `(() => {
     el('cfg-crypto-paused').checked = Boolean(cfg.cryptoCheckoutPaused)
   }
 
+  function parseNonNegativeInt(raw) {
+    const trimmed = String(raw).trim()
+    if (!/^\\d+$/.test(trimmed)) return null
+    const value = Number(trimmed)
+    return Number.isSafeInteger(value) ? value : null
+  }
+
+  async function withBusy(target, task) {
+    const buttons = (Array.isArray(target) ? target : [target]).filter(Boolean)
+    if (buttons.some(btn => btn.disabled)) return
+    for (const btn of buttons) btn.disabled = true
+    try {
+      return await task()
+    } finally {
+      for (const btn of buttons) btn.disabled = false
+    }
+  }
+
   async function api(path, options = {}) {
     const headers = { ...(options.headers || {}) }
     if (options.body !== undefined) headers['Content-Type'] = 'application/json'
     if (options.method && options.method !== 'GET' && state.csrf) {
       headers['X-CSRF-Token'] = state.csrf
     }
-    const res = await fetch(path, { ...options, headers, credentials: 'same-origin' })
-    const data = await res.json().catch(() => ({}))
-    return { ok: res.ok, status: res.status, data }
+    try {
+      const res = await fetch(path, { ...options, headers, credentials: 'same-origin' })
+      const data = await res.json().catch(() => ({}))
+      return { ok: res.ok, status: res.status, data }
+    } catch {
+      return { ok: false, status: 0, data: { error: 'network_error' } }
+    }
+  }
+
+  // Authenticated console actions share one 401 -> logged-out transition while
+  // session probes, login, and logout keep their own status copy.
+  async function authedApi(path, options = {}) {
+    const res = await api(path, options)
+    if (res.status === 401) {
+      showLoggedOut('Session expired.')
+      return null
+    }
+    return res
+  }
+
+  function runItemAction(bar, id, command) {
+    return withBusy(Array.from(bar.querySelectorAll('button')), () => moderate(id, command))
   }
 
   function renderItemActions(item) {
@@ -226,7 +263,7 @@ export const ADMIN_APP_JS = `(() => {
       btn.type = 'button'
       btn.className = 'btn btn-primary'
       btn.textContent = 'Approve'
-      btn.addEventListener('click', () => moderate(item.id, { action: 'approve' }))
+      btn.addEventListener('click', () => runItemAction(bar, item.id, { action: 'approve' }))
       bar.appendChild(btn)
     }
 
@@ -235,7 +272,7 @@ export const ADMIN_APP_JS = `(() => {
       btn.type = 'button'
       btn.className = 'btn'
       btn.textContent = 'Restore'
-      btn.addEventListener('click', () => moderate(item.id, { action: 'restore' }))
+      btn.addEventListener('click', () => runItemAction(bar, item.id, { action: 'restore' }))
       bar.appendChild(btn)
     } else {
       const input = document.createElement('input')
@@ -248,7 +285,7 @@ export const ADMIN_APP_JS = `(() => {
       btn.textContent = 'Hide'
       btn.addEventListener('click', () => {
         const reason = input.value.trim() || 'moderated'
-        moderate(item.id, { action: 'hide', reason })
+        runItemAction(bar, item.id, { action: 'hide', reason })
       })
       bar.appendChild(input)
       bar.appendChild(btn)
@@ -319,24 +356,26 @@ export const ADMIN_APP_JS = `(() => {
 
   async function loadDonations(reset) {
     const query = !reset && state.nextCursor ? '?after=' + encodeURIComponent(state.nextCursor) : ''
-    const res = await api('/v1/admin/donations' + query)
+    const res = await authedApi('/v1/admin/donations' + query)
+    if (!res) return false
     if (!res.ok) {
-      if (res.status === 401) showLoggedOut('Session expired.')
-      else setStatus('Failed to load donations.')
-      return
+      setStatus('Failed to load donations.')
+      return false
     }
     applyConfig(res.data.config)
     state.items = reset ? res.data.items : state.items.concat(res.data.items)
     state.nextCursor = res.data.nextCursor
     renderList()
     setStatus('Loaded ' + state.items.length + ' records.')
+    return true
   }
 
   async function moderate(id, command) {
-    const res = await api('/v1/admin/donations/' + encodeURIComponent(id) + '/visibility', {
+    const res = await authedApi('/v1/admin/donations/' + encodeURIComponent(id) + '/visibility', {
       method: 'POST',
       body: JSON.stringify(command),
     })
+    if (!res) return
     if (!res.ok) {
       setStatus('Action failed: ' + (res.data.error || res.status))
       return
@@ -362,66 +401,91 @@ export const ADMIN_APP_JS = `(() => {
     show(el('login-card'), false)
     show(el('header-actions'), true)
     show(el('console-view'), true)
-    await loadDonations(true)
+    await withBusy([el('refresh-btn'), el('load-more-btn')], () => loadDonations(true))
   }
 
-  el('login-form').addEventListener('submit', async event => {
+  el('login-form').addEventListener('submit', event => {
     event.preventDefault()
-    const input = el('password-input')
-    setStatus('Signing in...')
-    const res = await api('/v1/admin/login', {
-      method: 'POST',
-      body: JSON.stringify({ password: input.value }),
+    withBusy(el('login-btn'), async () => {
+      const input = el('password-input')
+      const password = input.value
+      if (!password) {
+        setStatus('Admin password is required.')
+        return
+      }
+      setStatus('Signing in...')
+      const res = await api('/v1/admin/login', {
+        method: 'POST',
+        body: JSON.stringify({ password }),
+      })
+      input.value = ''
+      if (!res.ok) {
+        setStatus('Sign in failed: ' + (res.data.error || res.status))
+        return
+      }
+      await showLoggedIn(res.data.csrfToken, null)
     })
-    input.value = ''
-    if (!res.ok) {
-      setStatus('Sign in failed: ' + (res.data.error || res.status))
-      return
-    }
-    await showLoggedIn(res.data.csrfToken, null)
   })
 
-  el('logout-btn').addEventListener('click', async () => {
-    await api('/v1/admin/logout', { method: 'POST' })
-    showLoggedOut('Signed out.')
+  el('logout-btn').addEventListener('click', () => {
+    withBusy(el('logout-btn'), async () => {
+      await api('/v1/admin/logout', { method: 'POST' })
+      showLoggedOut('Signed out.')
+    })
   })
 
-  el('refresh-btn').addEventListener('click', () => loadDonations(true))
-  el('load-more-btn').addEventListener('click', () => loadDonations(false))
-
-  el('sync-afdian-btn').addEventListener('click', async () => {
-    setStatus('Syncing recent Afdian orders...')
-    const res = await api('/v1/admin/donations/sync-afdian', { method: 'POST' })
-    if (!res.ok) {
-      setStatus('Sync failed: ' + (res.data.error || res.status))
-      return
-    }
-    await loadDonations(true)
-    const deferredSuffix = res.data.deferred > 0
-      ? ', ' + res.data.deferred + ' remaining — sync again to continue'
-      : ''
-    setStatus(
-      'Synced Afdian: +' + res.data.committed + ' new (' + res.data.deduplicated + ' existing' + deferredSuffix + ').',
-    )
+  el('refresh-btn').addEventListener('click', () => {
+    withBusy([el('refresh-btn'), el('load-more-btn')], () => loadDonations(true))
+  })
+  el('load-more-btn').addEventListener('click', () => {
+    withBusy([el('refresh-btn'), el('load-more-btn')], () => loadDonations(false))
   })
 
-  el('config-form').addEventListener('submit', async event => {
+  el('sync-afdian-btn').addEventListener('click', () => {
+    withBusy([el('sync-afdian-btn'), el('refresh-btn'), el('load-more-btn')], async () => {
+      setStatus('Syncing recent Afdian orders...')
+      const res = await authedApi('/v1/admin/donations/sync-afdian', { method: 'POST' })
+      if (!res) return
+      if (!res.ok) {
+        setStatus('Sync failed: ' + (res.data.error || res.status))
+        return
+      }
+      if (!await loadDonations(true)) return
+      const deferredSuffix = res.data.deferred > 0
+        ? ', ' + res.data.deferred + ' remaining — sync again to continue'
+        : ''
+      setStatus(
+        'Synced Afdian: +' + res.data.committed + ' new (' + res.data.deduplicated + ' existing' + deferredSuffix + ').',
+      )
+    })
+  })
+
+  el('config-form').addEventListener('submit', event => {
     event.preventDefault()
-    const res = await api('/v1/admin/donations/config', {
-      method: 'PATCH',
-      body: JSON.stringify({
-        minPublicCnyMinor: Number(el('cfg-cny').value),
-        minPublicUsdMinor: Number(el('cfg-usd').value),
-        moderationEnabled: el('cfg-moderation').checked,
-        cryptoCheckoutPaused: el('cfg-crypto-paused').checked,
-      }),
+    withBusy(el('save-config-btn'), async () => {
+      const minPublicCnyMinor = parseNonNegativeInt(el('cfg-cny').value)
+      const minPublicUsdMinor = parseNonNegativeInt(el('cfg-usd').value)
+      if (minPublicCnyMinor === null || minPublicUsdMinor === null) {
+        setStatus('Thresholds must be non-negative integers.')
+        return
+      }
+      const res = await authedApi('/v1/admin/donations/config', {
+        method: 'PATCH',
+        body: JSON.stringify({
+          minPublicCnyMinor,
+          minPublicUsdMinor,
+          moderationEnabled: el('cfg-moderation').checked,
+          cryptoCheckoutPaused: el('cfg-crypto-paused').checked,
+        }),
+      })
+      if (!res) return
+      if (!res.ok) {
+        setStatus('Failed to save settings: ' + (res.data.error || res.status))
+        return
+      }
+      applyConfig(res.data.config)
+      setStatus('Settings saved.')
     })
-    if (!res.ok) {
-      setStatus('Failed to save settings: ' + (res.data.error || res.status))
-      return
-    }
-    applyConfig(res.data.config)
-    setStatus('Settings saved.')
   })
 
   el('filters').addEventListener('click', event => {
