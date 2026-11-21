@@ -82,7 +82,7 @@ export const en = {
   stunOnly: 'STUN only',
   appliedPolicy: 'Applied / requested policy', residentShares: 'Resident shares', probes: 'Vantage reports',
   passed: 'Passed', probeFailed: 'Failed', fleetOperations: 'Traffic controls', maintenance: 'Maintenance in progress',
-  drain: 'Drain relay', disable: 'Disable node', removeNode: 'Remove node', verifyAgain: 'Verify again',
+  drain: 'Drain relay', resume: 'Resume service', disable: 'Disable node', removeNode: 'Remove node', verifyAgain: 'Verify again',
   confirmDisable: 'Disable this node?',
   disableEffect: 'Removes the node from the directory and stops public service, or queues disable until maintenance finishes. Publishing it again requires zone verification.',
   confirmCutoff: 'Cut off service early?',

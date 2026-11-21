@@ -20,10 +20,11 @@ pub struct Manage {
     pub operation_id: String,
     pub action: Action,
 }
-#[derive(Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Action {
     Drain,
+    Resume,
     Disable { early_cutoff: bool },
     Remove { early_cutoff: bool },
     Verify,
@@ -32,6 +33,31 @@ pub enum Action {
 }
 
 impl Listing {
+    fn resume(&mut self) -> Result<bool> {
+        match &mut self.state {
+            ListingState::Listed {
+                status: status @ Status::Draining,
+                ..
+            } => {
+                *status = Status::Active;
+                Ok(true)
+            }
+            // Resuming an already-active listing is idempotent so retries and
+            // concurrent admin tabs converge cleanly. Canary rollouts must advance
+            // through promote() so mirror freshness is verified first.
+            ListingState::Listed {
+                status: Status::Active,
+                ..
+            } => Ok(false),
+            ListingState::Listed {
+                status: Status::Canary,
+                ..
+            }
+            | ListingState::Staging { .. }
+            | ListingState::Disabled => Err(Fault::Invalid.into()),
+        }
+    }
+
     pub(super) fn relay_drained(&self) -> bool {
         self.maintenance.is_some()
             || matches!(
@@ -199,6 +225,11 @@ impl<R: Store, E: Environment> Authority<R, E> {
                 };
                 *status = Status::Draining;
             }
+            Action::Resume => {
+                if !listing.resume()? {
+                    return Ok(());
+                }
+            }
             &Action::Disable { early_cutoff } => match listing.state {
                 ListingState::Listed { .. } => {
                     ensure!(
@@ -262,7 +293,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
         }
         node.apply_listing()?;
         save(&mut self.store, &record, &node)?;
-        tracing::info!(event="node_intent_changed", operation_id=%cmd.operation_id,node_id=%cmd.node_key, admission=?node.admission,version=node.version);
+        tracing::info!(event="node_intent_changed", operation_id=%cmd.operation_id,node_id=%cmd.node_key, action=?cmd.action, admission=?node.admission,version=node.version);
         publication::current(&self.store)?.project(
             &mut self.store,
             signer,

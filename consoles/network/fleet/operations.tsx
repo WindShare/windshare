@@ -123,6 +123,8 @@ export function FleetControls({ node, api, refresh }: { node: NodeDetails; api: 
     <div className="actions">
       {hasRelay && listing.state.kind === 'listed' && listing.state.status !== 'draining' &&
         <button type="button" className="secondary" disabled={action.busy} onClick={() => run({ kind: 'drain' })}>{t.drain}</button>}
+      {listing.state.kind === 'listed' && listing.state.status === 'draining' &&
+        <button type="button" disabled={action.busy} onClick={() => run({ kind: 'resume' })}>{t.resume}</button>}
       {maintenance && <button type="button" className="secondary" disabled={action.busy}
         onClick={() => setAborting(maintenance)}>{t.abortMaintenance}</button>}
       {disabled && <button type="button" className="secondary" disabled={action.busy || Boolean(maintenance)} onClick={() => run({ kind: 'verify' })}>{t.verifyAgain}</button>}

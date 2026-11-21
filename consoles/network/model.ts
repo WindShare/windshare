@@ -5,7 +5,7 @@ export interface Discovery { node_key: string; relay: string; roles: Role[]; stu
 export interface Enrollment { url: string; node_key: string; alias: string; provider: string; zone: Zone; region: string; capacity_mbps: number; roles: Role[] }
 export type Admission = 'accepting' | 'draining' | 'disabled'
 export type FleetAction =
-  | { kind: 'drain' | 'verify' }
+  | { kind: 'drain' | 'resume' | 'verify' }
   | { kind: 'disable' | 'remove'; early_cutoff: boolean }
   | { kind: 'restore_role'; role: Role }
   | { kind: 'abort_maintenance'; maintenance_id: string }

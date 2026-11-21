@@ -269,32 +269,36 @@ impl<R: Store, E: Environment> Authority<R, E> {
         if listing.status() == Some(status) {
             return Ok(());
         }
-        let eligible = match &listing.state {
+        match &listing.state {
             ListingState::Staging {
                 check: Verification::Passed { at, vantage_key },
                 ..
-            } => {
+            } => ensure!(
                 now.saturating_sub(*at) <= EVIDENCE_SECONDS
                     && agents
                         .iter()
-                        .any(|agent| agent.key == *vantage_key && agent.zone == listing.spec.zone)
+                        .any(|agent| agent.key == *vantage_key && agent.zone == listing.spec.zone),
+                Fault::Denied {
+                    reason: "verification_required".into()
+                }
+            ),
+            ListingState::Staging { .. } | ListingState::Disabled => {
+                return Err(Fault::Denied {
+                    reason: "verification_required".into(),
+                }
+                .into());
             }
             ListingState::Listed {
                 status: Status::Canary,
                 ..
-            } => status == Status::Active,
+            } => ensure!(status == Status::Active, Fault::Invalid),
+            // Draining listings are already published and return to active service via
+            // manage(Action::Resume) without blocking on mirror-freshness checks.
             ListingState::Listed {
-                status: Status::Draining,
+                status: Status::Active | Status::Draining,
                 ..
-            } => true,
-            _ => false,
-        };
-        ensure!(
-            eligible,
-            Fault::Denied {
-                reason: "verification_required".into()
-            }
-        );
+            } => return Err(Fault::Invalid.into()),
+        }
         ensure!(
             node.admission != operations::Admission::Disabled,
             Fault::Invalid

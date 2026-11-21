@@ -83,7 +83,7 @@ export const zhCN = {
   stunOnly: '仅 STUN',
   appliedPolicy: '已应用 / 请求的策略', residentShares: '驻留分享数', probes: '探测点报告',
   passed: '通过', probeFailed: '失败', fleetOperations: '流量管理', maintenance: '维护中',
-  drain: '排空中转', disable: '停用节点', removeNode: '移除节点', verifyAgain: '重新验证',
+  drain: '排空中转', resume: '恢复服务', disable: '停用节点', removeNode: '移除节点', verifyAgain: '重新验证',
   confirmDisable: '停用此节点？',
   disableEffect: '将节点从目录中下线并停止对外服务，若正在维护则排队至维护结束后生效。重新发布需要再次通过分区验证。',
   confirmCutoff: '提前切断服务？',

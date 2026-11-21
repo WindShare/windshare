@@ -1,6 +1,6 @@
 use super::*;
 use crate::fleet::{
-    Promote, attach,
+    attach,
     maintenance::Operation,
     monitoring::CYCLE_SECONDS,
     operations::{Action, Admission, Manage},
@@ -276,7 +276,7 @@ fn abort_maintenance_on_listed_node_keeps_draining_and_fences_aborted_id() {
 }
 
 #[test]
-fn abort_maintenance_resumes_health_checks_and_allows_explicit_promotion() {
+fn abort_maintenance_resumes_health_checks_and_allows_explicit_resume() {
     let mut fleet = MaintenanceFleet::new();
     let aborted = Operation {
         node_key: fleet.target.node_key.clone(),
@@ -296,37 +296,17 @@ fn abort_maintenance_resumes_health_checks_and_allows_explicit_promotion() {
     assert_eq!(entry.status, Status::Draining);
     assert_eq!(entry.spec.roles, [Role::Relay]);
 
-    // Report the updated directory digest after STUN withdrawal so mainland mirrors match.
-    fleet.observe([true, false], [true, true]);
-
-    // Explicit promotion restores relay admission while keeping STUN withdrawn.
-    let observed = digest(&publication::current(&fleet.auth.store).unwrap().envelope).unwrap();
-    let op_id = fleet
-        .node(&fleet.target.node_key)
-        .listing
-        .unwrap()
-        .operation_id;
-    fleet
-        .auth
-        .promote(
-            &fleet.admin,
-            &Promote {
-                node_key: fleet.target.node_key.clone(),
-                operation_id: op_id,
-                status: Status::Active,
-            },
-            &fleet.agents,
-            &observed,
-            &fleet.signer,
-        )
-        .unwrap();
+    // Explicit resume restores relay admission immediately (even before mirrors
+    // observe the STUN withdrawal revision) while keeping STUN withdrawn.
+    let target_key = fleet.target.node_key.clone();
+    fleet.manage_node(&target_key, Action::Resume).unwrap();
     assert_eq!(
         fleet.node(&fleet.target.node_key).admission,
         Admission::Accepting
     );
-    let promoted = fleet.find_entry("primary").unwrap();
-    assert_eq!(promoted.status, Status::Active);
-    assert_eq!(promoted.spec.roles, [Role::Relay]);
+    let resumed = fleet.find_entry("primary").unwrap();
+    assert_eq!(resumed.status, Status::Active);
+    assert_eq!(resumed.spec.roles, [Role::Relay]);
 }
 
 #[test]

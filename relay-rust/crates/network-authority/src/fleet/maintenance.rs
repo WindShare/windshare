@@ -61,7 +61,7 @@ pub(super) fn abort(
     listing.maintenance = None;
     if let ListingState::Listed { status, .. } = &mut listing.state {
         // Fail closed after an aborted upgrade: keep the node draining until
-        // an operator verifies the host and explicitly promotes it back.
+        // an operator verifies the host and explicitly resumes it.
         *status = ListingStatus::Draining;
     }
     save(

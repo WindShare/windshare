@@ -64,7 +64,7 @@ After an accepting native node receives a verified usage reply advertising brows
 
 Vantages poll for enrollment every minute and send one signed fleet report every five minutes. **Nodes** shows per-vantage reachability, WebSocket, STUN and TLS expiry. Three consecutive agreeing cycles from at least two reporting vantages, including one in the node's zone, can withdraw or restore a service. A fleet-wide fault, conflicting evidence or loss of the last healthy active service in a zone holds routing steady.
 
-Use **Drain** to stop new registrations while existing links continue serving. Disable or remove after a fresh signed report confirms the policy version and zero resident shares, or confirm early cutoff. Removing a node preserves its published alias binding. A disabled node must pass verification again before promotion.
+Use **Drain** to stop new registrations while existing links continue serving, and **Resume service** to return a draining node to active traffic without waiting for mirror propagation. Disable or remove after a fresh signed report confirms the policy version and zero resident shares, or confirm early cutoff. Removing a node preserves its published alias binding. A disabled node must pass verification again before promotion.
 
 During a [host upgrade](../../../deploy/network/operations.md#official-node-upgrades), the maintenance hold keeps the node probe-accessible. A disable requested during the hold takes effect on release. An administrator can abort a stuck maintenance hold from the console, leaving a listed node draining or completing a queued disable without clearing any local host fence. Use the operation ID and node key to correlate authority, vantage and host logs.
 

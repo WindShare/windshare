@@ -11,7 +11,7 @@ export function Verification({ node, api, refresh }: { node: RelayNode; api: Aut
   if (!node.listing || node.listing.state.kind === 'disabled') return null
   const { spec, state, operation_id } = node.listing
   const passed = state.kind === 'staging' && state.check.kind === 'passed'
-  const promotable = passed || state.kind === 'listed' && state.status !== 'active'
+  const promotable = passed || state.kind === 'listed' && state.status === 'canary'
   const promote = (status: TrafficStatus) => void action.run(async () => {
     await api.promote(spec.node_key, operation_id, status)
     await refresh()

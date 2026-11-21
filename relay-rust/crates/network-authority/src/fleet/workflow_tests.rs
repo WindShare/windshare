@@ -534,3 +534,5 @@ mod operations;
 mod public_directory;
 #[path = "../host/fleet/reconcile_tests.rs"]
 mod reconcile;
+#[path = "resume_tests.rs"]
+mod resume;

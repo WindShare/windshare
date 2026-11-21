@@ -470,10 +470,10 @@ fn disable_verify_promote_clears_withdrawn_overrides_and_staging_streaks() {
     assert_eq!(fleet.entry().status, Status::Draining);
     assert_eq!(fleet.target_node().admission, Admission::Draining);
 
-    // Changing listed operator intent without re-verification preserves active health overrides.
+    // Changing listed operator intent without re-verification preserves active health overrides
+    // and does not wait for mirror propagation.
     fleet.manage(Action::Drain).unwrap();
-    fleet.observe(&[(0, bad_relay, ok), (1, bad_relay, ok)]);
-    fleet.promote_target(Status::Active).unwrap();
+    fleet.manage(Action::Resume).unwrap();
     assert_eq!(fleet.entry().status, Status::Draining);
     assert_eq!(fleet.target_node().admission, Admission::Draining);
 
