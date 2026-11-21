@@ -43,6 +43,8 @@ export const en = {
   selfHostOfficialCta: 'Open official /donate',
   copyAddress: 'Copy',
   copiedAddress: 'Copied',
+  copyAddressFailed: 'Copy failed',
+  copyAddressFailedHint: 'Could not copy automatically. Copy the selected address manually.',
 
   submittedBannerTitle: 'Payment submitted',
   submittedBannerBody: 'Thanks for supporting WindShare. Once confirmed on-chain, eligible public notes will appear on the supporter wall.',

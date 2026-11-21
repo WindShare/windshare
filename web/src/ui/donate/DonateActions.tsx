@@ -22,8 +22,15 @@ import {
 import { useDonateCopy } from './locales/use-donate-copy'
 
 type DonateChannel = 'afdian' | 'kofi' | 'crypto'
+type CopyFeedbackStatus = 'copied' | 'failed'
+
+interface WalletCopyFeedback {
+  readonly ticker: string
+  readonly status: CopyFeedbackStatus
+}
 
 const CHANNELS: readonly DonateChannel[] = ['afdian', 'kofi', 'crypto']
+const COPY_FEEDBACK_MS = 2000
 
 interface DonateActionsProps {
   readonly submittedFromCheckout: boolean
@@ -59,19 +66,63 @@ function resolveCryptoValidationError(
   }
 }
 
+function selectElementText(node: HTMLElement | null): void {
+  if (node === null || typeof window === 'undefined') return
+  const selection = window.getSelection()
+  if (selection === null) return
+  const range = document.createRange()
+  range.selectNodeContents(node)
+  selection.removeAllRanges()
+  selection.addRange(range)
+}
+
+function resolveWalletCopyLabel(
+  status: CopyFeedbackStatus | null,
+  t: ReturnType<typeof useDonateCopy>,
+): string {
+  if (status === 'copied') return t.copiedAddress
+  if (status === 'failed') return t.copyAddressFailed
+  return t.copyAddress
+}
+
 function SelfHostCryptoFallback() {
   const t = useDonateCopy()
-  const [copiedTicker, setCopiedTicker] = useState<string | null>(null)
+  const [feedback, setFeedback] = useState<WalletCopyFeedback | null>(null)
+  const addressRefs = useRef<Map<string, HTMLElement>>(new Map())
+  const resetTimerRef = useRef<number | null>(null)
+  const copyAttemptRef = useRef(0)
+
+  useEffect(() => () => {
+    // Invalidate any in-flight clipboard write and cancel pending reset on unmount.
+    copyAttemptRef.current += 1
+    if (resetTimerRef.current !== null) {
+      window.clearTimeout(resetTimerRef.current)
+      resetTimerRef.current = null
+    }
+  }, [])
 
   const copyAddress = async (ticker: string, address: string) => {
+    copyAttemptRef.current += 1
+    const attempt = copyAttemptRef.current
+    if (resetTimerRef.current !== null) {
+      window.clearTimeout(resetTimerRef.current)
+      resetTimerRef.current = null
+    }
+
     try {
       await navigator.clipboard.writeText(address)
-      setCopiedTicker(ticker)
-      window.setTimeout(() => {
-        setCopiedTicker(current => (current === ticker ? null : current))
-      }, 2000)
+      if (attempt !== copyAttemptRef.current) return
+      setFeedback({ ticker, status: 'copied' })
+      resetTimerRef.current = window.setTimeout(() => {
+        resetTimerRef.current = null
+        setFeedback(null)
+      }, COPY_FEEDBACK_MS)
     } catch {
-      // Clipboard may be unavailable on non-HTTPS self-hosted origins.
+      if (attempt !== copyAttemptRef.current) return
+      setFeedback({ ticker, status: 'failed' })
+      // Non-HTTPS self-hosted origins lack navigator.clipboard; select the address
+      // so the user can copy it directly with Ctrl+C or long-press.
+      selectElementText(addressRefs.current.get(ticker) ?? null)
     }
   }
 
@@ -90,25 +141,42 @@ function SelfHostCryptoFallback() {
         </a>
       </div>
       <ul className="donate-wallet-list" aria-label={t.selfHostCryptoTitle}>
-        {SELF_HOST_FALLBACK_WALLETS.map(wallet => (
-          <li key={wallet.ticker} className="donate-wallet-row">
-            <div className="donate-wallet-meta">
-              <span className="donate-wallet-ticker">{wallet.ticker}</span>
-              <span className="donate-wallet-network">{wallet.network}</span>
-            </div>
-            <div className="donate-wallet-address-line">
-              <code className="donate-wallet-address">{wallet.address}</code>
-              <button
-                type="button"
-                className="donate-copy-btn"
-                onClick={() => void copyAddress(wallet.ticker, wallet.address)}
-              >
-                {copiedTicker === wallet.ticker ? t.copiedAddress : t.copyAddress}
-              </button>
-            </div>
-          </li>
-        ))}
+        {SELF_HOST_FALLBACK_WALLETS.map(wallet => {
+          const status = feedback?.ticker === wallet.ticker ? feedback.status : null
+          const label = resolveWalletCopyLabel(status, t)
+          return (
+            <li key={wallet.ticker} className="donate-wallet-row">
+              <div className="donate-wallet-meta">
+                <span className="donate-wallet-ticker">{wallet.ticker}</span>
+                <span className="donate-wallet-network">{wallet.network}</span>
+              </div>
+              <div className="donate-wallet-address-line">
+                <code
+                  ref={node => {
+                    if (node === null) addressRefs.current.delete(wallet.ticker)
+                    else addressRefs.current.set(wallet.ticker, node)
+                  }}
+                  className="donate-wallet-address"
+                >
+                  {wallet.address}
+                </code>
+                <button
+                  type="button"
+                  className="donate-copy-btn"
+                  data-status={status ?? undefined}
+                  aria-label={`${label} ${wallet.ticker}`}
+                  onClick={() => void copyAddress(wallet.ticker, wallet.address)}
+                >
+                  {label}
+                </button>
+              </div>
+            </li>
+          )
+        })}
       </ul>
+      {feedback?.status === 'failed' && (
+        <p className="donate-error" role="alert">{t.copyAddressFailedHint}</p>
+      )}
     </div>
   )
 }

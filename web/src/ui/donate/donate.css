@@ -367,10 +367,21 @@
   font-size: 11px;
   font-weight: 550;
   cursor: pointer;
+  transition: color 160ms, background-color 160ms, border-color 160ms;
 }
 
 .donate-copy-btn:hover {
   background: var(--portal-wash);
+}
+
+.donate-copy-btn[data-status="copied"] {
+  border-color: var(--portal-accent);
+  color: var(--portal-accent);
+}
+
+.donate-copy-btn[data-status="failed"] {
+  border-color: var(--portal-error);
+  color: var(--portal-error);
 }
 
 /* Supporter Wall */

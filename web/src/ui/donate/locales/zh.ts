@@ -44,6 +44,8 @@ export const zh: typeof en = {
   selfHostOfficialCta: '前往官网赞助页',
   copyAddress: '复制',
   copiedAddress: '已复制',
+  copyAddressFailed: '复制失败',
+  copyAddressFailedHint: '无法自动复制，请手动复制选中的地址。',
 
   submittedBannerTitle: '已收到支付提交',
   submittedBannerBody: '感谢支持 WindShare，链上确认完成后，符合公开展示条件的留言将展示于致谢墙。',
