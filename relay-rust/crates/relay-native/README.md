@@ -70,7 +70,7 @@ forwarding. Local owner credentials remain independent of official account polic
 
 REGISTER acknowledgements follow committed SQLite receipts. STOP retains its permanent
 intent through cleanup; process restart recovers committed ownership and grace.
-Schema version 4 rejects older databases. Unsubmitted frames are discarded on closure;
+Schema version 5 rejects older databases. Unsubmitted frames are discarded on closure;
 already submitted bytes may still arrive. Slow socket writes cannot block share actors.
 
 `make rust` covers protocol, persistence, fair scheduling, admission, usage, HTTP/STUN,
