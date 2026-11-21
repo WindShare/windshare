@@ -14,8 +14,8 @@ use std::{
 use windshare_relay_access::usage::Admission;
 use windshare_relay_core::{clock::UnixMillis, lifecycle::Record};
 
-// Bound SQLite waits while holding the exclusive `.admission` gate lock so
-// live traffic is not stalled before `network-upgrade` retries on exit 75.
+// Bound SQLite waits during read-only prechecks so `network-upgrade` retries
+// promptly on exit 75 instead of stalling until its SSH attempt timeout.
 const READ_BUSY_TIMEOUT: Duration = Duration::from_millis(250);
 
 #[derive(Clone, Copy)]
@@ -314,16 +314,36 @@ fn change_with_read_timeout(
         .write(true)
         .open(Gate::path(&config.database)?)
         .context("running relay has no admission gate")?;
-    if matches!(transition, Transition::Release) {
-        match file.try_lock_shared() {
-            Ok(()) => {}
-            Err(std::fs::TryLockError::WouldBlock) => return Ok(false),
-            Err(e) => return Err(e.into()),
+    match transition {
+        Transition::Enter {
+            policy_version,
+            reconnect_budget,
+        } => {
+            // Precheck drain policy and grace windows outside the exclusive gate
+            // lock so SQLite waits or deferred entries never refuse concurrent
+            // JOIN or RESUME handshakes.
+            if !preflight_enter(
+                config,
+                node_key,
+                operation,
+                policy_version,
+                reconnect_budget,
+                read_busy_timeout,
+            )? {
+                return Ok(false);
+            }
         }
-        if file.metadata()?.len() == 0 {
-            return Ok(true);
+        Transition::Release => {
+            match file.try_lock_shared() {
+                Ok(()) => {}
+                Err(std::fs::TryLockError::WouldBlock) => return Ok(false),
+                Err(e) => return Err(e.into()),
+            }
+            if file.metadata()?.len() == 0 {
+                return Ok(true);
+            }
+            file.unlock()?;
         }
-        file.unlock()?;
     }
     match file.try_lock() {
         Ok(()) => {}
@@ -336,52 +356,64 @@ fn change_with_read_timeout(
         owner.is_empty() || owner == operation,
         "another operation owns the local hold"
     );
-    if let Transition::Enter {
-        policy_version,
-        reconnect_budget,
-    } = transition
-    {
-        let issuer = config
-            .node
-            .authority
-            .as_ref()
-            .context("missing reporting authority")?
-            .issuer()?;
-        ensure!(
-            !reconnect_budget.is_zero()
-                && reconnect_budget <= windshare_relay_core::lifecycle::SENDER_GRACE,
-            "invalid reconnect budget"
-        );
-        match check_enter_database(
-            &config.database,
-            issuer,
-            policy_version,
-            reconnect_budget,
-            read_busy_timeout,
-        ) {
-            Ok(true) => {}
-            Ok(false) => return Ok(false),
-            Err(error) if is_database_busy(&error) => {
-                tracing::info!(
-                    event = "local_maintenance_deferred",
-                    operation_id = %operation,
-                    node_id = %node_key,
-                    reason = "database_busy",
-                    %error,
-                );
-                return Ok(false);
-            }
-            Err(error) => return Err(error),
-        }
-        if owner.is_empty() {
+    match transition {
+        Transition::Enter { .. } if owner.is_empty() => {
             file.write_all(operation.as_bytes())?;
         }
-    } else if !owner.is_empty() {
-        file.set_len(0)?;
+        Transition::Release if !owner.is_empty() => {
+            file.set_len(0)?;
+        }
+        Transition::Enter { .. } | Transition::Release => {}
     }
     file.sync_all()?;
-    tracing::info!(event="local_maintenance_changed",operation_id=%operation,node_id=%node_key,probe_only=matches!(transition, Transition::Enter { .. }));
+    tracing::info!(
+        event = "local_maintenance_changed",
+        operation_id = %operation,
+        node_id = %node_key,
+        probe_only = matches!(transition, Transition::Enter { .. }),
+    );
     Ok(true)
+}
+
+fn preflight_enter(
+    config: &Configuration,
+    node_key: &str,
+    operation: &str,
+    policy_version: u64,
+    reconnect_budget: Duration,
+    read_busy_timeout: Duration,
+) -> Result<bool> {
+    let issuer = config
+        .node
+        .authority
+        .as_ref()
+        .context("missing reporting authority")?
+        .issuer()?;
+    ensure!(
+        !reconnect_budget.is_zero()
+            && reconnect_budget <= windshare_relay_core::lifecycle::SENDER_GRACE,
+        "invalid reconnect budget"
+    );
+    match check_enter_database(
+        &config.database,
+        issuer,
+        policy_version,
+        reconnect_budget,
+        read_busy_timeout,
+    ) {
+        Ok(ready) => Ok(ready),
+        Err(error) if is_database_busy(&error) => {
+            tracing::info!(
+                event = "local_maintenance_deferred",
+                operation_id = %operation,
+                node_id = %node_key,
+                reason = "database_busy",
+                %error,
+            );
+            Ok(false)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 fn check_enter_database(

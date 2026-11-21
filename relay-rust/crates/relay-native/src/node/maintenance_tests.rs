@@ -70,6 +70,7 @@ fn durable_fence_requires_the_installed_key_current_drain_and_no_pending_join() 
     assert!(gate.open_to_users());
     assert!(change(&config, &node, owner, enter(6)).is_err());
     let join = gate.admit_join(false).unwrap();
+    assert!(change(&config, &node, owner, enter(6)).is_err());
     assert!(!change(&config, &node, owner, enter(7)).unwrap());
     drop(join);
     assert!(change(&config, &node, owner, enter(7)).unwrap());
@@ -256,9 +257,23 @@ fn busy_sqlite_defers_enter_and_waits_for_transient_lock_release() {
         policy_version: 9,
         reconnect_budget: Duration::from_secs(56),
     };
-    assert!(
-        !change_with_read_timeout(&config, &node, owner, enter, Duration::from_millis(20)).unwrap()
-    );
+    let started = std::sync::Barrier::new(2);
+    let entered = std::thread::scope(|scope| {
+        let deferred = scope.spawn(|| {
+            started.wait();
+            change_with_read_timeout(&config, &node, owner, enter, Duration::from_millis(120))
+        });
+        started.wait();
+        std::thread::sleep(Duration::from_millis(30));
+        // Waiting on SQLite must not hold the exclusive `.admission` lock or refuse
+        // concurrent RESUME/JOIN handshakes before maintenance is actually entered.
+        assert!(gate.check(false).is_ok());
+        let concurrent_join = gate.admit_join(false).unwrap();
+        drop(concurrent_join);
+        deferred.join().unwrap()
+    })
+    .unwrap();
+    assert!(!entered);
     assert!(check_hold(&config, &node, owner).is_err());
     assert!(gate.open_to_users());
 
