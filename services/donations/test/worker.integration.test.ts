@@ -11,7 +11,7 @@ import {
   Response as MiniflareResponse,
   convertV4MiniflareOptions,
 } from 'miniflare'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import type {
   AdminDonationsPage,
   DonationRecord,
@@ -22,6 +22,9 @@ import { computeNowPaymentsSignature } from '../src/verify'
 const SERVICE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const DONATE_ORIGIN = 'https://donate.windshare.cc'
 const ALLOWED_ORIGIN = 'https://windshare.cc'
+// Mirror wrangler.toml so integration tests exercise the same Workers runtime flags as production.
+const WORKER_COMPATIBILITY_DATE = '2026-09-28'
+const WORKER_COMPATIBILITY_FLAGS = ['nodejs_compat', 'global_fetch_strictly_public'] as const
 
 const SECRETS = Object.freeze({
   AFDIAN_USER_ID: '735de47ce57c11f1b2c95254001e7c00',
@@ -49,16 +52,19 @@ interface OutboundControl {
   nowPaymentsInvoiceCalls: number
 }
 
-const outbound: OutboundControl = {
-  afdianOrderStatus: 'ok',
-  afdianSponsorMode: 'ok',
-  afdianOrderCalls: 0,
-  afdianSponsorCalls: 0,
-  afdianSyncOrders: [],
-  nowPaymentsInvoiceCalls: 0,
+function createOutboundControl(): OutboundControl {
+  return {
+    afdianOrderStatus: 'ok',
+    afdianSponsorMode: 'ok',
+    afdianOrderCalls: 0,
+    afdianSponsorCalls: 0,
+    afdianSyncOrders: [],
+    nowPaymentsInvoiceCalls: 0,
+  }
 }
 
 let bundleDir = ''
+let outbound: OutboundControl = createOutboundControl()
 let mf: Miniflare
 
 function buildWorkerBundle(): string {
@@ -72,10 +78,13 @@ function buildWorkerBundle(): string {
   return outDir
 }
 
-function handleOutboundMock(request: { url: string; headers: { get(name: string): string | null }; text(): Promise<string> }): Promise<MiniflareResponse> {
+function handleOutboundMock(
+  control: OutboundControl,
+  request: { url: string; headers: { get(name: string): string | null }; text(): Promise<string> },
+): Promise<MiniflareResponse> {
   return (async () => {
     if (request.url === 'https://api.nowpayments.io/v1/invoice') {
-      outbound.nowPaymentsInvoiceCalls += 1
+      control.nowPaymentsInvoiceCalls += 1
       if (request.headers.get('x-api-key') !== SECRETS.NOWPAYMENTS_API_KEY) {
         return new MiniflareResponse(JSON.stringify({ message: 'unauthorized' }), { status: 401 })
       }
@@ -90,14 +99,14 @@ function handleOutboundMock(request: { url: string; headers: { get(name: string)
     }
 
     if (request.url === 'https://afdian.com/api/open/query-order') {
-      outbound.afdianOrderCalls += 1
-      if (outbound.afdianOrderStatus === 'transient_error') {
+      control.afdianOrderCalls += 1
+      if (control.afdianOrderStatus === 'transient_error') {
         return new MiniflareResponse('upstream overloaded', { status: 503 })
       }
       const body = JSON.parse(await request.text()) as { params: string }
       const params = JSON.parse(body.params) as { out_trade_no?: string }
       if (params.out_trade_no !== undefined) {
-        const list = outbound.afdianOrderStatus === 'unpaid'
+        const list = control.afdianOrderStatus === 'unpaid'
           ? [{ out_trade_no: params.out_trade_no, user_id: 'u-1', total_amount: '10.00', status: 1, remark: 'unpaid', create_time: 1_760_000_200 }]
           : [{ out_trade_no: params.out_trade_no, user_id: 'u-1', total_amount: '15.00', status: 2, remark: '支持开源', create_time: 1_760_000_200 }]
         return new MiniflareResponse(JSON.stringify({ ec: 200, data: { list } }), {
@@ -106,14 +115,14 @@ function handleOutboundMock(request: { url: string; headers: { get(name: string)
         })
       }
       return new MiniflareResponse(
-        JSON.stringify({ ec: 200, data: { list: outbound.afdianSyncOrders } }),
+        JSON.stringify({ ec: 200, data: { list: control.afdianSyncOrders } }),
         { status: 200, headers: { 'Content-Type': 'application/json' } },
       )
     }
 
     if (request.url === 'https://afdian.com/api/open/query-sponsor') {
-      outbound.afdianSponsorCalls += 1
-      if (outbound.afdianSponsorMode === 'fail') {
+      control.afdianSponsorCalls += 1
+      if (control.afdianSponsorMode === 'fail') {
         return new MiniflareResponse('timeout', { status: 504 })
       }
       return new MiniflareResponse(
@@ -134,16 +143,22 @@ function handleOutboundMock(request: { url: string; headers: { get(name: string)
   })()
 }
 
-beforeAll(async () => {
+beforeAll(() => {
+  // Bundle once per file; each test boots its own lightweight Miniflare sandbox against this output.
   bundleDir = buildWorkerBundle()
+}, 30_000)
+
+beforeEach(() => {
+  const currentOutbound = createOutboundControl()
+  outbound = currentOutbound
   const workerPath = path.join(bundleDir, 'worker.js')
   const options = convertV4MiniflareOptions({
     log: new Log(LogLevel.ERROR),
     workers: [
       {
         name: 'donations',
-        compatibilityDate: '2026-09-28',
-        compatibilityFlags: ['nodejs_compat'],
+        compatibilityDate: WORKER_COMPATIBILITY_DATE,
+        compatibilityFlags: [...WORKER_COMPATIBILITY_FLAGS],
         modulesRoot: bundleDir,
         modules: [{ type: 'ESModule', path: workerPath }],
         bindings: {
@@ -154,21 +169,37 @@ beforeAll(async () => {
         durableObjects: {
           DONATION_WALL: { className: 'DonationWall', useSQLite: true },
         },
-        outboundService: request => handleOutboundMock(request),
+        outboundService: request => handleOutboundMock(currentOutbound, request),
       },
     ],
   })
   mf = new Miniflare(options)
-}, 30_000)
+})
 
-afterAll(async () => {
+afterEach(async () => {
   await mf?.dispose()
+})
+
+afterAll(() => {
   if (bundleDir) {
     rmSync(bundleDir, { recursive: true, force: true })
   }
 })
 
-function postKofiWebhook(fields: Record<string, unknown>): Promise<Awaited<ReturnType<Miniflare['dispatchFetch']>>> {
+type DispatchResponse = Awaited<ReturnType<Miniflare['dispatchFetch']>>
+
+function postAfdianWebhook(
+  outTradeNo: string,
+  secret: string = SECRETS.AFDIAN_WEBHOOK_SECRET,
+): Promise<DispatchResponse> {
+  return mf.dispatchFetch(`${DONATE_ORIGIN}/v1/donations/webhooks/afdian/${secret}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ec: 200, data: { order: { out_trade_no: outTradeNo } } }),
+  })
+}
+
+function postKofiWebhook(fields: Record<string, unknown>): Promise<DispatchResponse> {
   const body = new URLSearchParams({
     data: JSON.stringify({
       verification_token: SECRETS.KOFI_VERIFICATION_TOKEN,
@@ -181,6 +212,27 @@ function postKofiWebhook(fields: Record<string, unknown>): Promise<Awaited<Retur
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body,
   })
+}
+
+async function loginAdmin(clientIp = '198.51.100.5'): Promise<{
+  readonly response: DispatchResponse
+  readonly setCookie: string
+  readonly cookiePair: string
+  readonly data: { authenticated: boolean; csrfToken: string }
+}> {
+  const response = await mf.dispatchFetch(`${DONATE_ORIGIN}/v1/admin/login`, {
+    method: 'POST',
+    headers: {
+      Origin: DONATE_ORIGIN,
+      'Content-Type': 'application/json',
+      'CF-Connecting-IP': clientIp,
+    },
+    body: JSON.stringify({ password: SECRETS.DONATE_ADMIN_PASSWORD }),
+  })
+  const setCookie = response.headers.get('set-cookie') ?? ''
+  const cookiePair = setCookie.split(';', 1)[0] ?? ''
+  const data = await response.json() as { authenticated: boolean; csrfToken: string }
+  return { response, setCookie, cookiePair, data }
 }
 
 describe('windshare-donations Worker + SQLite DO HTTP integration', () => {
@@ -310,50 +362,25 @@ describe('windshare-donations Worker + SQLite DO HTTP integration', () => {
 
   it('handles Afdian retries, sponsor fallback, dedup short-circuit, and Ko-fi privacy rules', async () => {
     // Wrong Afdian secret -> 403.
-    const badSecret = await mf.dispatchFetch(`${DONATE_ORIGIN}/v1/donations/webhooks/afdian/wrong-secret`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ec: 200, data: { order: { out_trade_no: 'AF-1' } } }),
-    })
+    const badSecret = await postAfdianWebhook('AF-1', 'wrong-secret')
     expect(badSecret.status).toBe(403)
 
     // Transient query-order error -> 502 so Afdian retries (not ec: 200).
     outbound.afdianOrderStatus = 'transient_error'
-    const transient = await mf.dispatchFetch(
-      `${DONATE_ORIGIN}/v1/donations/webhooks/afdian/${SECRETS.AFDIAN_WEBHOOK_SECRET}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ec: 200, data: { order: { out_trade_no: 'AF-1' } } }),
-      },
-    )
+    const transient = await postAfdianWebhook('AF-1')
     expect(transient.status).toBe(502)
 
     // Verified paid order succeeds even when query-sponsor fails (degrades to anonymous).
     outbound.afdianOrderStatus = 'ok'
     outbound.afdianSponsorMode = 'fail'
     const callsBeforeCommit = outbound.afdianOrderCalls
-    const afdianOk = await mf.dispatchFetch(
-      `${DONATE_ORIGIN}/v1/donations/webhooks/afdian/${SECRETS.AFDIAN_WEBHOOK_SECRET}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ec: 200, data: { order: { out_trade_no: 'AF-1' } } }),
-      },
-    )
+    const afdianOk = await postAfdianWebhook('AF-1')
     expect(afdianOk.status).toBe(200)
     expect(await afdianOk.json()).toEqual({ ec: 200, em: '' })
     expect(outbound.afdianOrderCalls).toBe(callsBeforeCommit + 1)
 
     // Replay of already-committed order short-circuits before calling query-order again.
-    const afdianReplay = await mf.dispatchFetch(
-      `${DONATE_ORIGIN}/v1/donations/webhooks/afdian/${SECRETS.AFDIAN_WEBHOOK_SECRET}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ec: 200, data: { order: { out_trade_no: 'AF-1' } } }),
-      },
-    )
+    const afdianReplay = await postAfdianWebhook('AF-1')
     expect(afdianReplay.status).toBe(200)
     expect(await afdianReplay.json()).toEqual({ ec: 200, em: '' })
     expect(outbound.afdianOrderCalls).toBe(callsBeforeCommit + 1)
@@ -382,11 +409,49 @@ describe('windshare-donations Worker + SQLite DO HTTP integration', () => {
     expect(kofiJpyRes.status).toBe(200)
 
     const wall = await (await mf.dispatchFetch(`${DONATE_ORIGIN}/v1/donations/wall`)).json() as PublicWallResponse
+    expect(wall.entries).toHaveLength(1)
     expect(wall.entries.some(e => e.provider === 'afdian' && e.message === '支持开源' && e.displayName === null)).toBe(true)
     expect(wall.entries.some(e => e.provider === 'kofi')).toBe(false)
+
+    // Inspect persisted records via admin list to verify PII stripping and zero-decimal currency handling.
+    const { response: loginRes, cookiePair } = await loginAdmin()
+    expect(loginRes.status).toBe(200)
+    const listRes = await mf.dispatchFetch(`${DONATE_ORIGIN}/v1/admin/donations`, {
+      headers: { Cookie: cookiePair },
+    })
+    expect(listRes.status).toBe(200)
+    const listData = await listRes.json() as AdminDonationsPage
+    expect(listData.items.find((item: DonationRecord) => item.externalId === 'AF-1')).toMatchObject({
+      displayName: null,
+      donatedAt: 1_760_000_200,
+    })
+    expect(listData.items.find((item: DonationRecord) => item.externalId === 'KOFI-PRIV-1')).toMatchObject({
+      displayName: null,
+      message: null,
+      visibility: { kind: 'private_donor' },
+    })
+    expect(listData.items.find((item: DonationRecord) => item.externalId === 'KOFI-JPY-1')).toMatchObject({
+      amountMinor: 500,
+      currency: 'JPY',
+      minorDigits: 0,
+      displayName: 'Taro',
+      visibility: { kind: 'pending_review', reason: 'unsupported_currency' },
+    })
   })
 
   it('enforces admin auth, CSRF, sync-afdian, moderation transitions, config updates, and logout revocation', async () => {
+    // Seed an existing Afdian donation (for sync dedup & ordering) and a private Ko-fi donation (for 409 guard).
+    expect((await postAfdianWebhook('AF-1')).status).toBe(200)
+    expect((await postKofiWebhook({
+      kofi_transaction_id: 'KOFI-PRIV-1',
+      amount: '25.00',
+      currency: 'USD',
+      is_public: false,
+      from_name: 'Hidden Person',
+      message: 'Top secret message',
+      email: 'hidden@example.com',
+    })).status).toBe(200)
+
     const adminHtml = await mf.dispatchFetch(`${DONATE_ORIGIN}/admin`)
     expect(adminHtml.status).toBe(200)
     expect(adminHtml.headers.get('cache-control')).toBe('no-store')
@@ -416,20 +481,9 @@ describe('windshare-donations Worker + SQLite DO HTTP integration', () => {
     expect(badLogin.status).toBe(401)
 
     // Successful login issues a __Host- HttpOnly Secure SameSite=Strict cookie + CSRF token.
-    const loginRes = await mf.dispatchFetch(`${DONATE_ORIGIN}/v1/admin/login`, {
-      method: 'POST',
-      headers: {
-        Origin: DONATE_ORIGIN,
-        'Content-Type': 'application/json',
-        'CF-Connecting-IP': '198.51.100.5',
-      },
-      body: JSON.stringify({ password: SECRETS.DONATE_ADMIN_PASSWORD }),
-    })
+    const { response: loginRes, setCookie, cookiePair, data: loginData } = await loginAdmin()
     expect(loginRes.status).toBe(200)
-    const setCookie = loginRes.headers.get('set-cookie') ?? ''
     expect(setCookie).toMatch(/^__Host-windshare_donate_admin=[^;]+; HttpOnly; Secure; SameSite=Strict; Path=\/; Max-Age=\d+$/)
-    const cookiePair = setCookie.split(';', 1)[0] ?? ''
-    const loginData = await loginRes.json() as { authenticated: boolean; csrfToken: string }
     expect(loginData.authenticated).toBe(true)
 
     // Session endpoint restores CSRF after page reload.
@@ -448,7 +502,6 @@ describe('windshare-donations Worker + SQLite DO HTTP integration', () => {
     expect(noCsrf.status).toBe(403)
 
     // One-click Afdian sync imports new paid orders and skips already-existing ones.
-    outbound.afdianSponsorMode = 'ok'
     outbound.afdianSyncOrders = [
       { out_trade_no: 'AF-1', user_id: 'u-1', total_amount: '15.00', status: 2, remark: 'duplicate', create_time: 1_760_000_200 },
       { out_trade_no: 'AF-SYNC-2', user_id: 'u-sync', total_amount: '20.00', status: 2, remark: '补录感谢', create_time: 1_760_000_100 },
@@ -487,17 +540,9 @@ describe('windshare-donations Worker + SQLite DO HTTP integration', () => {
     expect(listRes.status).toBe(200)
     const listData = await listRes.json() as AdminDonationsPage
     const privateItem = listData.items.find((item: DonationRecord) => item.externalId === 'KOFI-PRIV-1')
-    const kofiJpyItem = listData.items.find((item: DonationRecord) => item.externalId === 'KOFI-JPY-1')
     const syncedItem = listData.items.find((item: DonationRecord) => item.externalId === 'AF-SYNC-2')
-    expect(privateItem).toBeDefined()
-    expect(kofiJpyItem).toMatchObject({
-      amountMinor: 500,
-      currency: 'JPY',
-      minorDigits: 0,
-      displayName: 'Taro',
-      visibility: { kind: 'pending_review', reason: 'unsupported_currency' },
-    })
     const webhookAfdianItem = listData.items.find((item: DonationRecord) => item.externalId === 'AF-1')
+    expect(privateItem).toBeDefined()
     expect(syncedItem).toMatchObject({ displayName: '同步赞助者', donatedAt: 1_760_000_100 })
     expect(webhookAfdianItem?.donatedAt).toBe(1_760_000_200)
 
@@ -548,7 +593,7 @@ describe('windshare-donations Worker + SQLite DO HTTP integration', () => {
     )
     expect(restoreRes.status).toBe(200)
     const wallAfterRestore = await (await mf.dispatchFetch(`${DONATE_ORIGIN}/v1/donations/wall`)).json() as PublicWallResponse
-    expect(wallAfterRestore.entries.map(e => e.id).slice(2)).toEqual([webhookAfdianItem?.id, syncedItem?.id])
+    expect(wallAfterRestore.entries.map(e => e.id)).toEqual([webhookAfdianItem?.id, syncedItem?.id])
 
     // Pause Crypto checkout via config patch and verify 503 enforcement.
     const patchRes = await mf.dispatchFetch(`${DONATE_ORIGIN}/v1/admin/donations/config`, {
