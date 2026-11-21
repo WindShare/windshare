@@ -7,7 +7,7 @@ use std::time::Duration;
 use std::{
     fmt,
     fs::{File, OpenOptions, TryLockError},
-    io::{Read, Write},
+    io::{Read, Seek, Write},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, MutexGuard, PoisonError},
 };
@@ -17,6 +17,8 @@ use windshare_relay_core::{clock::UnixMillis, lifecycle::Record};
 // Bound SQLite waits during read-only prechecks so `network-upgrade` retries
 // promptly on exit 75 instead of stalling until its SSH attempt timeout.
 const READ_BUSY_TIMEOUT: Duration = Duration::from_millis(250);
+// Cap audit reads so a corrupted or oversized gate file cannot cause unbounded memory use.
+const MAX_OWNER_PREVIEW_BYTES: u64 = 128;
 
 #[derive(Clone, Copy)]
 pub enum Transition {
@@ -156,7 +158,8 @@ impl Gate {
             .open(&path)?;
         // Keep one read-only descriptor for the process lifetime so active joins
         // never multiply OS FDs or fail open/close under descriptor pressure.
-        let file = File::open(&path)?;
+        let mut file = File::open(&path)?;
+        warn_if_fence_active(&mut file, &path);
         Ok(Self {
             state: Arc::new(Mutex::new(GateState {
                 file,
@@ -250,6 +253,32 @@ impl Gate {
     }
 }
 
+fn read_owner_preview(file: &mut File) -> std::io::Result<String> {
+    let mut raw = Vec::new();
+    (&mut *file)
+        .take(MAX_OWNER_PREVIEW_BYTES)
+        .read_to_end(&mut raw)?;
+    Ok(String::from_utf8_lossy(&raw).into_owned())
+}
+
+fn warn_if_fence_active(file: &mut File, path: &Path) {
+    let Ok(metadata) = file.metadata() else {
+        return;
+    };
+    let bytes = metadata.len();
+    if bytes == 0 {
+        return;
+    }
+    let owner = read_owner_preview(file).unwrap_or_else(|_| "<unreadable>".to_string());
+    let _ = file.rewind();
+    tracing::warn!(
+        event = "local_maintenance_fence_active",
+        gate = %path.display(),
+        owner = %owner,
+        bytes,
+    );
+}
+
 fn check_operation(config: &Configuration, node_key: &str, operation: &str) -> Result<()> {
     ensure!(
         (16..=64).contains(&operation.len())
@@ -282,6 +311,50 @@ pub fn check_hold(config: &Configuration, node_key: &str, operation: &str) -> Re
     (&mut file).take(65).read_to_string(&mut owner)?;
     ensure!(owner == operation, "operation does not own the local hold");
     Ok(())
+}
+
+/// Break-glass release of the installed host's admission gate regardless of recorded
+/// owner, including corrupted or non-UTF-8 contents.
+///
+/// Returns `Ok(false)` when a live JOIN or concurrent gate transition holds the OS lock.
+///
+/// # Errors
+/// Fails if `node_key` does not match the installed identity or the gate cannot be accessed.
+pub fn force_release(config: &Configuration, node_key: &str) -> Result<bool> {
+    check_identity(config, node_key)?;
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(Gate::path(&config.database)?)
+        .context("running relay has no admission gate")?;
+    match file.try_lock_shared() {
+        Ok(()) => {}
+        Err(TryLockError::WouldBlock) => return Ok(false),
+        Err(error) => return Err(error.into()),
+    }
+    if file.metadata()?.len() == 0 {
+        return Ok(true);
+    }
+    file.unlock()?;
+    match file.try_lock() {
+        Ok(()) => {}
+        Err(TryLockError::WouldBlock) => return Ok(false),
+        Err(error) => return Err(error.into()),
+    }
+    let previous_bytes = file.metadata()?.len();
+    if previous_bytes == 0 {
+        return Ok(true);
+    }
+    let previous_owner = read_owner_preview(&mut file)?;
+    file.set_len(0)?;
+    file.sync_all()?;
+    tracing::warn!(
+        event = "local_maintenance_force_released",
+        node_id = %node_key,
+        previous_owner = %previous_owner,
+        previous_bytes,
+    );
+    Ok(true)
 }
 
 /// Operates on the installed host's admission gate under its local OS credentials.

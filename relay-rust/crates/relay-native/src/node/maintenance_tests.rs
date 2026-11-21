@@ -336,3 +336,90 @@ fn non_busy_sqlite_errors_remain_fatal() {
         None,
     )));
 }
+
+#[test]
+fn force_release_clears_foreign_and_corrupted_holds_and_startup_warns_when_fenced() {
+    let temp = tempfile::tempdir().unwrap();
+    let (config, node, _db) = draining_node(&temp);
+    let wrong_node = URL_SAFE_NO_PAD.encode([9u8; 32]);
+    let owner = "operation-owner-1";
+    let enter = Transition::Enter {
+        policy_version: 7,
+        reconnect_budget: Duration::from_secs(56),
+    };
+
+    // Clean startup emits no active-fence warning.
+    let clean_start = capture_events(|| {
+        let _gate = Gate::install(&config.database).unwrap();
+    });
+    assert!(
+        !clean_start
+            .iter()
+            .any(|entry| { entry["fields"]["event"] == "local_maintenance_fence_active" })
+    );
+
+    let gate = Gate::install(&config.database).unwrap();
+    assert!(force_release(&config, &wrong_node).is_err());
+
+    // Already-open gates return idempotently even while ordinary joins hold the shared lock.
+    let active_join = gate.admit_join(false).unwrap();
+    let noop_events = capture_events(|| {
+        assert!(force_release(&config, &node).unwrap());
+    });
+    assert!(
+        !noop_events
+            .iter()
+            .any(|entry| { entry["fields"]["event"] == "local_maintenance_force_released" })
+    );
+    drop(active_join);
+
+    // Enter maintenance and confirm active probe leases still defer break-glass release.
+    assert!(change(&config, &node, owner, enter).unwrap());
+    assert!(!gate.open_to_users());
+    let active_probe = gate.admit_join(true).unwrap();
+    assert!(!force_release(&config, &node).unwrap());
+    drop(active_probe);
+
+    // Restarting while fenced emits a WARN naming the recorded owner.
+    let fenced_start = capture_events(|| {
+        let restarted = Gate::install(&config.database).unwrap();
+        assert!(!restarted.open_to_users());
+    });
+    assert!(fenced_start.iter().any(|entry| {
+        entry["level"] == "WARN"
+            && entry["fields"]["event"] == "local_maintenance_fence_active"
+            && entry["fields"]["owner"] == owner
+            && entry["fields"]["bytes"] == owner.len()
+    }));
+
+    // Force-release clears the lock in place so existing open FDs immediately admit users.
+    let release_events = capture_events(|| {
+        assert!(force_release(&config, &node).unwrap());
+    });
+    assert!(gate.open_to_users());
+    assert!(gate.admit_join(false).is_ok());
+    assert!(release_events.iter().any(|entry| {
+        entry["level"] == "WARN"
+            && entry["fields"]["event"] == "local_maintenance_force_released"
+            && entry["fields"]["node_id"] == node
+            && entry["fields"]["previous_owner"] == owner
+            && entry["fields"]["previous_bytes"] == owner.len()
+    }));
+
+    // Corrupted non-UTF-8 / oversized contents cannot match `--release-maintenance`,
+    // yet break-glass release still truncates them cleanly.
+    let mut corrupted = vec![0xFF, 0xFE, b'x'];
+    corrupted.resize(200, b'!');
+    std::fs::write(Gate::path(&config.database).unwrap(), &corrupted).unwrap();
+    assert!(!gate.open_to_users());
+    assert!(change(&config, &node, owner, Transition::Release).is_err());
+    let corrupt_release = capture_events(|| {
+        assert!(force_release(&config, &node).unwrap());
+    });
+    assert!(gate.open_to_users());
+    assert!(corrupt_release.iter().any(|entry| {
+        entry["level"] == "WARN"
+            && entry["fields"]["event"] == "local_maintenance_force_released"
+            && entry["fields"]["previous_bytes"] == corrupted.len()
+    }));
+}

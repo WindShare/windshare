@@ -862,3 +862,41 @@ async fn maintenance_gate_io_errors_warn_and_do_not_report_node_draining() {
             && entry["fields"]["kind"] == "Join"
     }));
 }
+
+#[tokio::test]
+async fn local_maintenance_fence_reports_distinct_refusal_reason_when_authority_accepts() {
+    use crate::test_support::capture_events_async;
+
+    let fixture = Fixture::new();
+    let now_seconds = fixture.now(false).0 / 1000;
+    let (generation, _account_bearer, policy) = access_fixture(now_seconds);
+    let directory = tempfile::tempdir().unwrap();
+    let store = Database::open(
+        &directory.path().join("authority.sqlite"),
+        fixture.identity().relay,
+    )
+    .unwrap();
+    let gate = crate::node::maintenance::Gate::install(store.path()).unwrap();
+    std::fs::write(
+        store.path().with_added_extension("admission"),
+        b"operation-stuck-1",
+    )
+    .unwrap();
+    let node = Runtime::default();
+    assert!(node.maintenance.set(gate).is_ok());
+    node.access.configure(policy).unwrap();
+    set_admission(&node, generation, 1, Admission::Accepting);
+
+    let events = capture_events_async(async {
+        let _ = with_sender(&node, &fixture, Some(OWNER_KEY), async |sender| {
+            let _ = read(&mut sender.writer).await;
+        })
+        .await;
+    })
+    .await;
+    let registration = events
+        .iter()
+        .find(|entry| entry["fields"]["event"] == "registration_authorized")
+        .expect("registration_authorized event");
+    assert_eq!(registration["fields"]["reason"], "local_maintenance");
+}

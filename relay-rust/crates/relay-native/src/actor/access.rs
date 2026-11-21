@@ -114,7 +114,9 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
             .is_probe(self.identity.share, Some(attribution));
         match gate.check(probe) {
             Ok(()) => None,
-            Err(GateError::Maintenance) => Some(Refusal::unavailable(RefusalReason::NodeDraining)),
+            Err(GateError::Maintenance) => {
+                Some(Refusal::unavailable(RefusalReason::LocalMaintenance))
+            }
             Err(GateError::Io(error)) => {
                 tracing::warn!(
                     event = "maintenance_gate_io_error",

@@ -69,3 +69,11 @@ If a runner stops with a hold outstanding, use its logged operation ID. Recovery
 ```
 
 When rollback cannot be verified, the fence stays in place. Inspect the journal for `windshare-network.service` and the root-owned release paths in `/opt/windshare-network/operations/$OPERATION_ID/`, repair the host, then repeat recovery.
+
+If the authority hold was already aborted or released separately and the host has been verified, clear the local fence in place as the service user instead of deleting the `.admission` file (which leaves the running process holding the old unlinked descriptor):
+
+```sh
+sudo runuser -u windshare-network -- \
+  /opt/windshare-network/current/wsrelay --force-release-maintenance \
+  /etc/windshare-network/node.json "$NODE_KEY"
+```

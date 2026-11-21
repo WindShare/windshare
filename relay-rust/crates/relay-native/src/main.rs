@@ -21,7 +21,8 @@ use windshare_relay_native::{
     stun,
 };
 
-const USAGE: &str = "WindShare native relay\nUsage: wsrelay --config <node.json> | --check-config <node.json> [node_key] | --enter-maintenance <config> <node_key> <operation> <policy_version> <reconnect_budget_ms> | --release-maintenance <config> <node_key> <operation> | --check-hold <config> <node_key> <operation>";
+const BUSY_EXIT_CODE: i32 = 75;
+const USAGE: &str = "WindShare native relay\nUsage: wsrelay --config <node.json> | --check-config <node.json> [node_key] | --enter-maintenance <config> <node_key> <operation> <policy_version> <reconnect_budget_ms> | --release-maintenance <config> <node_key> <operation> | --force-release-maintenance <config> <node_key> | --check-hold <config> <node_key> <operation>";
 
 struct NodeJsonFormat {
     inner: Format<Json>,
@@ -83,44 +84,11 @@ async fn main() -> Result<()> {
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
-    if let [command, path, node, operation, tail @ ..] = args.as_slice()
-        && (command == "--enter-maintenance" || command == "--release-maintenance")
-    {
-        use windshare_relay_native::node::maintenance::Transition;
-        let transition = match (command.as_str(), tail) {
-            ("--enter-maintenance", [version, millis]) => Transition::Enter {
-                policy_version: version.parse()?,
-                reconnect_budget: std::time::Duration::from_millis(millis.parse()?),
-            },
-            ("--release-maintenance", []) => Transition::Release,
-            _ => bail!("{USAGE}"),
-        };
-        if !windshare_relay_native::node::maintenance::change(
-            &Configuration::read(path.as_ref())?,
-            node,
-            operation,
-            transition,
-        )? {
-            std::process::exit(75);
+    if let Some(code) = run_maintenance_command(&args)? {
+        if code != 0 {
+            std::process::exit(code);
         }
         return Ok(());
-    }
-    if let [command, path, node, operation] = args.as_slice()
-        && command == "--check-hold"
-    {
-        return windshare_relay_native::node::maintenance::check_hold(
-            &Configuration::read(path.as_ref())?,
-            node,
-            operation,
-        );
-    }
-    if let [command, path, node] = args.as_slice()
-        && command == "--check-config"
-    {
-        return windshare_relay_native::node::maintenance::check_identity(
-            &Configuration::read(path.as_ref())?,
-            node,
-        );
     }
     let [flag, path] = args.as_slice() else {
         bail!("{USAGE}")
@@ -135,6 +103,47 @@ async fn main() -> Result<()> {
     let path = PathBuf::from(path);
     let config = Configuration::read(&path)?;
     run(config, path, shutdown_signal()?, &node_id_json).await
+}
+
+fn run_maintenance_command(args: &[String]) -> Result<Option<i32>> {
+    use windshare_relay_native::node::maintenance::{self, Transition};
+    match args {
+        [command, path, node, operation, version, millis] if command == "--enter-maintenance" => {
+            let transition = Transition::Enter {
+                policy_version: version.parse()?,
+                reconnect_budget: std::time::Duration::from_millis(millis.parse()?),
+            };
+            let done = maintenance::change(
+                &Configuration::read(path.as_ref())?,
+                node,
+                operation,
+                transition,
+            )?;
+            Ok(Some(if done { 0 } else { BUSY_EXIT_CODE }))
+        }
+        [command, path, node, operation] if command == "--release-maintenance" => {
+            let done = maintenance::change(
+                &Configuration::read(path.as_ref())?,
+                node,
+                operation,
+                Transition::Release,
+            )?;
+            Ok(Some(if done { 0 } else { BUSY_EXIT_CODE }))
+        }
+        [command, path, node] if command == "--force-release-maintenance" => {
+            let done = maintenance::force_release(&Configuration::read(path.as_ref())?, node)?;
+            Ok(Some(if done { 0 } else { BUSY_EXIT_CODE }))
+        }
+        [command, path, node, operation] if command == "--check-hold" => {
+            maintenance::check_hold(&Configuration::read(path.as_ref())?, node, operation)?;
+            Ok(Some(0))
+        }
+        [command, path, node] if command == "--check-config" => {
+            maintenance::check_identity(&Configuration::read(path.as_ref())?, node)?;
+            Ok(Some(0))
+        }
+        _ => Ok(None),
+    }
 }
 
 fn shutdown_signal() -> Result<impl Future<Output = ()>> {
