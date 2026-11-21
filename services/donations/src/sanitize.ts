@@ -66,12 +66,17 @@ export function sanitizePlainText(
   return truncated.length === 0 ? null : truncated
 }
 
+function stripTrailingZeros(digits: string): string {
+  let end = digits.length
+  while (end > 0 && digits[end - 1] === '0') end -= 1
+  return digits.slice(0, end)
+}
+
 function trimTrailingDecimalZeros(fixed: string): string {
-  if (!fixed.includes('.')) return fixed
-  let end = fixed.length
-  while (end > 0 && fixed[end - 1] === '0') end -= 1
-  if (end > 0 && fixed[end - 1] === '.') end -= 1
-  return fixed.slice(0, end)
+  const dotIndex = fixed.indexOf('.')
+  if (dotIndex === -1) return fixed
+  const fraction = stripTrailingZeros(fixed.slice(dotIndex + 1))
+  return fraction.length > 0 ? `${fixed.slice(0, dotIndex)}.${fraction}` : fixed.slice(0, dotIndex)
 }
 
 function normalizeDecimalString(rawAmount: string | number): string | null {
@@ -86,14 +91,28 @@ function normalizeDecimalString(rawAmount: string | number): string | null {
   return trimmed.length > 0 ? trimmed : null
 }
 
-function resolveMinorDigits(
+interface NormalizedFraction {
+  readonly digits: string
+  readonly minorDigits: number
+}
+
+function resolveNormalizedFraction(
   fraction: string,
   knownDigits: number | undefined,
-): number | null {
+): NormalizedFraction | null {
+  const significant = stripTrailingZeros(fraction)
   if (knownDigits !== undefined) {
-    return fraction.length <= knownDigits ? knownDigits : null
+    if (significant.length > knownDigits) return null
+    return {
+      digits: significant.padEnd(knownDigits, '0'),
+      minorDigits: knownDigits,
+    }
   }
-  return fraction.length <= MAX_INFERRED_MINOR_DIGITS ? fraction.length : null
+  if (significant.length > MAX_INFERRED_MINOR_DIGITS) return null
+  // Keep explicit precision within the cap (e.g. "10.50" CAD -> 2 digits),
+  // while stripping insignificant trailing zeros beyond the cap.
+  const digits = fraction.length <= MAX_INFERRED_MINOR_DIGITS ? fraction : significant
+  return { digits, minorDigits: digits.length }
 }
 
 export function parseFixedPointAmount(
@@ -112,18 +131,16 @@ export function parseFixedPointAmount(
   const wholePart = match[1] ?? ''
   const fractionPart = match[2] ?? ''
   const knownDigits = KNOWN_CURRENCY_DECIMALS[currency]
-  const minorDigits = resolveMinorDigits(fractionPart, knownDigits)
-  if (minorDigits === null) return null
+  const fraction = resolveNormalizedFraction(fractionPart, knownDigits)
+  if (fraction === null) return null
 
-  const paddedFraction = fractionPart.padEnd(minorDigits, '0')
-  const combinedDigits = `${wholePart}${paddedFraction}`
-  const amountMinor = Number(combinedDigits)
+  const amountMinor = Number(`${wholePart}${fraction.digits}`)
   if (!Number.isSafeInteger(amountMinor) || amountMinor <= 0) return null
 
   return {
     amountMinor,
     currency,
-    minorDigits,
+    minorDigits: fraction.minorDigits,
     knownCurrency: knownDigits !== undefined,
   }
 }

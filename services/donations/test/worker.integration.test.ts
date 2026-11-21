@@ -165,6 +165,21 @@ afterAll(async () => {
   }
 })
 
+function postKofiWebhook(fields: Record<string, unknown>): Promise<Awaited<ReturnType<Miniflare['dispatchFetch']>>> {
+  const body = new URLSearchParams({
+    data: JSON.stringify({
+      verification_token: SECRETS.KOFI_VERIFICATION_TOKEN,
+      type: 'Donation',
+      ...fields,
+    }),
+  }).toString()
+  return mf.dispatchFetch(`${DONATE_ORIGIN}/v1/donations/webhooks/kofi`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body,
+  })
+}
+
 describe('windshare-donations Worker + SQLite DO HTTP integration', () => {
   it('handles crypto intent creation, NOWPayments IPN lifecycle, concurrent idempotency, and wall ETag caching', async () => {
     const initialWall = await mf.dispatchFetch(`${DONATE_ORIGIN}/v1/donations/wall`)
@@ -341,25 +356,27 @@ describe('windshare-donations Worker + SQLite DO HTTP integration', () => {
     expect(outbound.afdianOrderCalls).toBe(callsBeforeCommit + 1)
 
     // Ko-fi private donation stays off public wall and strips PII.
-    const kofiPrivateBody = new URLSearchParams({
-      data: JSON.stringify({
-        verification_token: SECRETS.KOFI_VERIFICATION_TOKEN,
-        kofi_transaction_id: 'KOFI-PRIV-1',
-        type: 'Donation',
-        amount: '25.00',
-        currency: 'USD',
-        is_public: false,
-        from_name: 'Hidden Person',
-        message: 'Top secret message',
-        email: 'hidden@example.com',
-      }),
-    }).toString()
-    const kofiRes = await mf.dispatchFetch(`${DONATE_ORIGIN}/v1/donations/webhooks/kofi`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: kofiPrivateBody,
+    const kofiRes = await postKofiWebhook({
+      kofi_transaction_id: 'KOFI-PRIV-1',
+      amount: '25.00',
+      currency: 'USD',
+      is_public: false,
+      from_name: 'Hidden Person',
+      message: 'Top secret message',
+      email: 'hidden@example.com',
     })
     expect(kofiRes.status).toBe(200)
+
+    // Ko-fi zero-decimal currency with ".00" string amount commits with exact minor units.
+    const kofiJpyRes = await postKofiWebhook({
+      kofi_transaction_id: 'KOFI-JPY-1',
+      amount: '500.00',
+      currency: 'JPY',
+      is_public: true,
+      from_name: 'Taro',
+      message: '応援しています',
+    })
+    expect(kofiJpyRes.status).toBe(200)
 
     const wall = await (await mf.dispatchFetch(`${DONATE_ORIGIN}/v1/donations/wall`)).json() as PublicWallResponse
     expect(wall.entries.some(e => e.provider === 'afdian' && e.message === '支持开源' && e.displayName === null)).toBe(true)
@@ -452,8 +469,16 @@ describe('windshare-donations Worker + SQLite DO HTTP integration', () => {
     expect(listRes.status).toBe(200)
     const listData = await listRes.json() as AdminDonationsPage
     const privateItem = listData.items.find((item: DonationRecord) => item.externalId === 'KOFI-PRIV-1')
+    const kofiJpyItem = listData.items.find((item: DonationRecord) => item.externalId === 'KOFI-JPY-1')
     const syncedItem = listData.items.find((item: DonationRecord) => item.externalId === 'AF-SYNC-2')
     expect(privateItem).toBeDefined()
+    expect(kofiJpyItem).toMatchObject({
+      amountMinor: 500,
+      currency: 'JPY',
+      minorDigits: 0,
+      displayName: 'Taro',
+      visibility: { kind: 'pending_review', reason: 'unsupported_currency' },
+    })
     expect(syncedItem?.displayName).toBe('同步赞助者')
 
     const privateApprove = await mf.dispatchFetch(
