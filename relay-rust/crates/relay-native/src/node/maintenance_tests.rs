@@ -98,7 +98,7 @@ fn already_disconnected_sender_must_have_time_for_rollback_and_redial() {
     let Record::Grace(grace) = stored.record() else {
         panic!("sender did not enter grace");
     };
-    let reader = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    let reader = crate::storage::open_read_only(&path, READ_BUSY_TIMEOUT).unwrap();
     assert!(has_reconnect_window(&reader, grace.deadline()).unwrap());
     assert!(
         !has_reconnect_window(
@@ -107,4 +107,131 @@ fn already_disconnected_sender_must_have_time_for_rollback_and_redial() {
         )
         .unwrap()
     );
+}
+
+#[test]
+fn busy_sqlite_defers_enter_and_waits_for_transient_lock_release() {
+    let temp = tempfile::tempdir().unwrap();
+    let issuer = [5u8; 32];
+    let config: Configuration = serde_json::from_value(serde_json::json!({
+        "listen": "127.0.0.1:8484",
+        "database": temp.path().join("relay.db"),
+        "identity_file": temp.path().join("identity.json"),
+        "node": {
+            "services": {"relay": true, "stun": false},
+            "authority": {
+                "url": "https://authority.example",
+                "issuer": URL_SAFE_NO_PAD.encode(issuer)
+            }
+        }
+    }))
+    .unwrap();
+    let identity = Identity::open(&config.identity_file).unwrap();
+    let node = URL_SAFE_NO_PAD.encode(identity.key().verifying_key().to_bytes());
+    let fixture = Fixture::new();
+    let db = Database::open(&config.database, fixture.identity().relay).unwrap();
+    db.initialize_control(100).unwrap();
+    db.save_status(
+        AuthorityState {
+            generation: Generation {
+                issuer,
+                number: 1,
+                key: [11; 32],
+                not_before: 1,
+                expires_at: 200,
+            },
+            policy: Some(NodePolicy {
+                version: 9,
+                admission: Admission::Draining,
+                anonymous: true,
+                probe_account: probe::PROBE_ACCOUNT,
+            }),
+        },
+        vec![],
+        100,
+    )
+    .unwrap();
+    let gate = Gate::install(&config.database).unwrap();
+    drop(db);
+
+    // Hold an exclusive SQLite lock like WAL recovery or startup journal setup.
+    let blocker = Connection::open(&config.database).unwrap();
+    blocker
+        .execute_batch(
+            "PRAGMA locking_mode = EXCLUSIVE;
+             BEGIN IMMEDIATE;
+             UPDATE access_authorities SET body = body;
+             COMMIT;",
+        )
+        .unwrap();
+
+    let owner = "operation-owner-1";
+    let enter = Transition::Enter {
+        policy_version: 9,
+        reconnect_budget: Duration::from_secs(56),
+    };
+    assert!(
+        !change_with_read_timeout(&config, &node, owner, enter, Duration::from_millis(20)).unwrap()
+    );
+    assert!(check_hold(&config, &node, owner).is_err());
+    assert!(gate.open_to_users());
+
+    // Releasing the exclusive lock within busy_timeout lets enter succeed
+    // cleanly without waiting for an external poll cycle.
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(30));
+        drop(blocker);
+    });
+    assert!(
+        change_with_read_timeout(&config, &node, owner, enter, Duration::from_secs(2)).unwrap()
+    );
+    release.join().unwrap();
+    check_hold(&config, &node, owner).unwrap();
+}
+
+#[test]
+fn non_busy_sqlite_errors_remain_fatal() {
+    let temp = tempfile::tempdir().unwrap();
+    let issuer = [6u8; 32];
+    let config: Configuration = serde_json::from_value(serde_json::json!({
+        "listen": "127.0.0.1:8484",
+        "database": temp.path().join("relay.db"),
+        "identity_file": temp.path().join("identity.json"),
+        "node": {
+            "services": {"relay": true, "stun": false},
+            "authority": {
+                "url": "https://authority.example",
+                "issuer": URL_SAFE_NO_PAD.encode(issuer)
+            }
+        }
+    }))
+    .unwrap();
+    let identity = Identity::open(&config.identity_file).unwrap();
+    let node = URL_SAFE_NO_PAD.encode(identity.key().verifying_key().to_bytes());
+    let fixture = Fixture::new();
+    let db = Database::open(&config.database, fixture.identity().relay).unwrap();
+    db.initialize_control(100).unwrap();
+    let _gate = Gate::install(&config.database).unwrap();
+    drop(db);
+
+    // Missing authority row is QueryReturnedNoRows, not transient lock contention.
+    let err = change(
+        &config,
+        &node,
+        "operation-owner-1",
+        Transition::Enter {
+            policy_version: 1,
+            reconnect_budget: Duration::from_secs(56),
+        },
+    )
+    .unwrap_err();
+    assert!(!is_database_busy(&err));
+    assert!(crate::storage::is_busy(&rusqlite::Error::SqliteFailure(
+        rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY_RECOVERY),
+        None,
+    )));
+    assert!(!crate::storage::is_busy(&rusqlite::Error::SqliteFailure(
+        rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_LOCKED),
+        None,
+    )));
 }

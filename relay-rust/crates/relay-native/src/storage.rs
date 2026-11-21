@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, anyhow, ensure};
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use rusqlite::{Connection, ErrorCode, OpenFlags, OptionalExtension, TransactionBehavior, params};
 use std::{
     fs::{File, OpenOptions},
     num::NonZeroU64,
@@ -194,6 +194,28 @@ pub fn recovery_filter() -> String {
     let ([format, kind], length) = Record::STOPPED_ENCODING;
     format!(
         "descriptor IS NOT NULL OR length(record) != {length} OR substr(record,1,2) != x'{format:02X}{kind:02X}'"
+    )
+}
+
+// Keep OS-level read-only access on the main database file so closing this
+// inspection handle can never checkpoint or unlink a live host's WAL files.
+// SQLite still opens `-shm`/`-wal` via directory permissions when needed.
+pub fn open_read_only(path: &Path, busy_timeout: Duration) -> rusqlite::Result<Connection> {
+    let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    connection.busy_timeout(busy_timeout)?;
+    Ok(connection)
+}
+
+pub const fn is_busy(error: &rusqlite::Error) -> bool {
+    matches!(
+        error,
+        rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error {
+                code: ErrorCode::DatabaseBusy,
+                ..
+            },
+            _,
+        )
     )
 }
 
