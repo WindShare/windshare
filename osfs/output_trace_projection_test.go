@@ -84,6 +84,8 @@ func TestOutputTraceProjectionMapsEveryRuntimeEnum(t *testing.T) {
 		{outputruntime.FilesystemOutputRuntimeDeliveryReceipt, FilesystemOutputRuntimeDeliveryReceipt},
 		{outputruntime.FilesystemOutputRuntimeReleaseLiveFile, FilesystemOutputRuntimeReleaseLiveFile},
 		{outputruntime.FilesystemOutputRuntimeLiveRetention, FilesystemOutputRuntimeLiveRetention},
+		{outputruntime.FilesystemOutputRuntimeMapName, FilesystemOutputRuntimeMapName},
+		{outputruntime.FilesystemOutputRuntimeSelectOperation, FilesystemOutputRuntimeSelectOperation},
 	}
 	for _, test := range runtimeOperations {
 		if actual := projectRuntimeOperation(test.value); actual != test.want {
@@ -114,6 +116,7 @@ func TestOutputTraceProjectionMapsEveryRuntimeEnum(t *testing.T) {
 		{outputruntime.FilesystemOutputRuntimeNeedsAttention, FilesystemOutputRuntimeNeedsAttention},
 		{outputruntime.FilesystemOutputRuntimeIsolatedFailure, FilesystemOutputRuntimeIsolatedFailure},
 		{outputruntime.FilesystemOutputRuntimeCleanupPending, FilesystemOutputRuntimeCleanupPending},
+		{outputruntime.FilesystemOutputRuntimeSelectionMismatch, FilesystemOutputRuntimeSelectionMismatch},
 	}
 	for _, test := range runtimeDecisions {
 		if actual := projectRuntimeDecision(test.value); actual != test.want {

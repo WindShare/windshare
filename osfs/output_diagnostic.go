@@ -25,14 +25,14 @@ func (value FilesystemOutputRuntimeComponent) DiagnosticName() string {
 	return names[value]
 }
 func (value FilesystemOutputRuntimeOperation) DiagnosticName() string {
-	names := [...]string{"", "open_direct_tree", "acquire_operation_lease", "reconcile_checkpoints", "admit_directory", "finalize_directory", "begin_file", "write_range", "checkpoint_file", "commit_file", "pause_file", "retire_file", "pause_tree", "finalize_tree", "materialize_directory", "create_owned_file", "recover_file", "publish_file", "quarantine_file", "admit_destination", "first_write", "cleanup", "delivery_receipt", "release_live_file", "live_retention", "map_name"}
+	names := [...]string{"", "open_direct_tree", "acquire_operation_lease", "reconcile_checkpoints", "admit_directory", "finalize_directory", "begin_file", "write_range", "checkpoint_file", "commit_file", "pause_file", "retire_file", "pause_tree", "finalize_tree", "materialize_directory", "create_owned_file", "recover_file", "publish_file", "quarantine_file", "admit_destination", "first_write", "cleanup", "delivery_receipt", "release_live_file", "live_retention", "map_name", "select_operation"}
 	if int(value) >= len(names) {
 		return "unknown_" + strconv.FormatUint(uint64(value), 10)
 	}
 	return names[value]
 }
 func (value FilesystemOutputRuntimeDecision) DiagnosticName() string {
-	names := [...]string{"", "validated", "reserved", "coalesced", "rejected", "rolled_back", "admitted", "active", "sealed", "settled", "ambiguous", "draining", "closed", "succeeded", "reconciled", "collision", "no_change", "needs_attention", "isolated_failure", "cleanup_pending"}
+	names := [...]string{"", "validated", "reserved", "coalesced", "rejected", "rolled_back", "admitted", "active", "sealed", "settled", "ambiguous", "draining", "closed", "succeeded", "reconciled", "collision", "no_change", "needs_attention", "isolated_failure", "cleanup_pending", "selection_mismatch"}
 	if int(value) >= len(names) {
 		return "unknown_" + strconv.FormatUint(uint64(value), 10)
 	}

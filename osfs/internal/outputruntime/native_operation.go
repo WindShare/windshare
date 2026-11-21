@@ -120,7 +120,7 @@ func (authority *Authority) SelectOperation(ctx context.Context, selection trans
 	var activeAdmission checkpointstore.ActiveAdmission
 	var registryLookup checkpointstore.ActiveLookup
 	if selector.Kind() == receivecontract.OperationByID {
-		registryLookup, err = authority.registry.LookupOperation(selector.ID())
+		registryLookup, err = authority.registry.LookupOperation(selector.ID(), selection)
 		key = registryLookup.Record().ActiveOperationKey()
 	} else {
 		activeAdmission, registryLookup, err = authority.registry.BeginActive(key)
@@ -132,6 +132,10 @@ func (authority *Authority) SelectOperation(ctx context.Context, selection trans
 		)
 	}
 	switch registryLookup.State() {
+	case checkpointstore.ActiveLookupSelectionMismatch:
+		authority.stage = authorityStageLookupStopped
+		authority.traceSelectedOperationMismatch(registryLookup.Record(), registryLookup.Intent())
+		return ActiveLookup{authority: authority, kind: ActiveLookupNotFound}, nil
 	case checkpointstore.ActiveLookupNone:
 		if selector.Kind() == receivecontract.OperationByID {
 			authority.stage = authorityStageLookupStopped
@@ -159,9 +163,9 @@ func (authority *Authority) SelectOperation(ctx context.Context, selection trans
 		return ActiveLookup{authority: authority, kind: ActiveLookupReopened, operation: operation}, nil
 	case checkpointstore.ActiveLookupShareStopped:
 		authority.stage = authorityStageLookupStopped
-		intent, err := registryLookup.Record().VerifyIntent(transfer.DecodeReceiveIntent)
-		if err != nil || !sameSelection(intent.SelectionSpec(), selection) {
-			return ActiveLookup{}, errors.Join(transfer.ErrInvalidOutputBinding, err)
+		intent := registryLookup.Intent()
+		if intent.IsZero() || !sameSelection(intent.SelectionSpec(), selection) {
+			return ActiveLookup{}, transfer.ErrInvalidOutputBinding
 		}
 		return ActiveLookup{}, ErrOutputShareStopped
 	case checkpointstore.ActiveLookupAlreadyRunning:
@@ -187,16 +191,25 @@ func (authority *Authority) SelectOperation(ctx context.Context, selection trans
 }
 
 func (authority *Authority) selectLiveOperationLocked(selection transfer.SelectionSpec, selector receivecontract.OperationSelection, key checkpointmodel.ActiveOperationKey, operationID receivecontract.OperationID) (ActiveLookup, error) {
+	var (
+		blocked bool
+		err     error
+	)
 	if selector.Kind() == receivecontract.OperationByID {
-		return ActiveLookup{}, transfer.ErrInvalidOutputBinding
+		blocked, err = authority.retainedOperationBlocked(selection, selector.ID())
+	} else {
+		blocked, err = authority.retainedSelectionBlocked(selection)
 	}
-	blocked, err := authority.retainedSelectionBlocked(selection)
 	if err != nil {
 		return ActiveLookup{}, err
 	}
 	if blocked {
 		authority.stage = authorityStageLookupStopped
 		return ActiveLookup{authority: authority, kind: ActiveLookupNeedsAttention, stateReason: FilesystemOutputStateRecoveryUnavailable}, nil
+	}
+	if selector.Kind() == receivecontract.OperationByID {
+		authority.stage = authorityStageLookupStopped
+		return ActiveLookup{authority: authority, kind: ActiveLookupNotFound}, nil
 	}
 	claimer, err := newVolatileReservationClaimer(authority.binding.AuthorityRef())
 	if err != nil {
@@ -218,15 +231,19 @@ func (authority *Authority) reopenOperationLocked(
 		return nil, 0, transfer.ErrInvalidOutputBinding
 	}
 	record := lookup.Record()
-	intent, err := record.VerifyIntent(transfer.DecodeReceiveIntent)
+	intent := lookup.Intent()
+	var err error
+	if intent.IsZero() {
+		err = checkpointmodel.ErrInvalidOrdinaryOperation
+	}
 	proof := lookup.RecoveryProof()
 	var reservation receivecontract.DestinationReservation
 	var direct bool
 	if err == nil {
 		reservation, direct = intent.MaterializationPlan().DestinationReservation()
 	}
-	// Choosing an ID with the wrong link or selection is a request error, not
-	// evidence that the retained operation lost ownership of its destination.
+	// A selection mismatch here is a binding or index mismatch, not evidence
+	// that the retained operation lost ownership of its destination.
 	if err == nil && !sameSelection(intent.SelectionSpec(), selection) {
 		return nil, 0, errors.Join(transfer.ErrInvalidOutputBinding, lease.Close())
 	}

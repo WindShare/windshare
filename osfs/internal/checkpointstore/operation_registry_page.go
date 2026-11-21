@@ -82,6 +82,72 @@ func ReadOperationPage(control outputcap.Directory, cursor OperationPageCursor, 
 	return page, errors.Join(err, operations.Close(), root.Close())
 }
 
+type ObservedOperationState uint8
+
+const (
+	ObservedOperationAbsent ObservedOperationState = iota + 1
+	ObservedOperationPresent
+	ObservedOperationUnknown
+)
+
+type ObservedOperation struct {
+	state  ObservedOperationState
+	record checkpointmodel.OrdinaryOperationRecord
+	intent transfer.ReceiveIntent
+}
+
+func (observed ObservedOperation) State() ObservedOperationState { return observed.state }
+func (observed ObservedOperation) Record() checkpointmodel.OrdinaryOperationRecord {
+	return observed.record
+}
+func (observed ObservedOperation) Intent() transfer.ReceiveIntent { return observed.intent }
+
+// ReadOperation observes one exact operation record without locks, repairs, or
+// creation. Missing operation directories are absent; corrupt or incomplete
+// target entries fail closed as unknown while genuine I/O failures propagate.
+func ReadOperation(
+	control outputcap.Directory,
+	operation receivecontract.OperationID,
+) (observed ObservedOperation, resultErr error) {
+	if control == nil || operation.IsZero() {
+		return ObservedOperation{}, transfer.ErrInvalidOutputBinding
+	}
+	root, err := openExistingDirectory(control, OrdinaryRegistryDirectoryV1)
+	if errors.Is(err, fs.ErrNotExist) {
+		return ObservedOperation{state: ObservedOperationAbsent}, nil
+	}
+	if err != nil {
+		return ObservedOperation{}, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, root.Close()) }()
+	operations, err := openExistingDirectory(root, ordinaryOperationsDirectory)
+	if errors.Is(err, fs.ErrNotExist) {
+		return ObservedOperation{state: ObservedOperationUnknown}, nil
+	}
+	if err != nil {
+		return ObservedOperation{}, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, operations.Close()) }()
+	directory, err := openExistingDirectory(operations, operationNamespaceName(operation))
+	if errors.Is(err, fs.ErrNotExist) {
+		return ObservedOperation{state: ObservedOperationAbsent}, nil
+	}
+	if errors.Is(err, outputcap.ErrUnsafeNamespace) {
+		return ObservedOperation{state: ObservedOperationUnknown}, nil
+	}
+	if err != nil {
+		return ObservedOperation{}, err
+	}
+	record, intent, _, err := readAndCloseOperation(directory, operation)
+	if err != nil {
+		if ErrorCodeFor(err) == ErrorStateIO && !errors.Is(err, fs.ErrNotExist) {
+			return ObservedOperation{}, err
+		}
+		return ObservedOperation{state: ObservedOperationUnknown}, nil
+	}
+	return ObservedOperation{state: ObservedOperationPresent, record: record, intent: intent}, nil
+}
+
 func (registry *OperationRegistry) unknownAdmissionCandidates(root outputcap.Directory) (unknown bool, resultErr error) {
 	candidates, err := openExistingDirectory(root, ordinaryCandidatesDirectory)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -112,7 +178,7 @@ func (registry *OperationRegistry) unknownAdmissionCandidates(root outputcap.Dir
 		if err != nil || name != activeKeyName(candidate.ActiveOperationKey()) {
 			return true, nil
 		}
-		record, _, err := registry.readOperation(candidate.OperationID())
+		record, _, _, err := registry.readOperation(candidate.OperationID())
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) || ErrorCodeFor(err) != ErrorStateIO {
 				return true, nil
@@ -158,7 +224,7 @@ func (registry *OperationRegistry) pageOperations(cursor OperationPageCursor, ma
 			page.unknown = true
 			continue
 		}
-		record, _, readErr := registry.readOperation(operation)
+		record, _, _, readErr := registry.readOperation(operation)
 		if readErr != nil {
 			if ErrorCodeFor(readErr) == ErrorStateIO && !errors.Is(readErr, fs.ErrNotExist) {
 				return OperationPage{}, readErr
@@ -176,10 +242,10 @@ func (registry *OperationRegistry) pageOperations(cursor OperationPageCursor, ma
 
 func (registry *OperationRegistry) readOperation(
 	operation receivecontract.OperationID,
-) (checkpointmodel.OrdinaryOperationRecord, []byte, error) {
+) (checkpointmodel.OrdinaryOperationRecord, transfer.ReceiveIntent, []byte, error) {
 	directory, err := openExistingDirectory(registry.operations, operationNamespaceName(operation))
 	if err != nil {
-		return checkpointmodel.OrdinaryOperationRecord{}, nil, repositoryError("open ordinary operation", err)
+		return checkpointmodel.OrdinaryOperationRecord{}, transfer.ReceiveIntent{}, nil, repositoryError("open ordinary operation", err)
 	}
 	return readAndCloseOperation(directory, operation)
 }
@@ -189,20 +255,21 @@ func (registry *OperationRegistry) readOperation(
 func readAndCloseOperation(
 	directory outputcap.Directory,
 	operation receivecontract.OperationID,
-) (checkpointmodel.OrdinaryOperationRecord, []byte, error) {
+) (checkpointmodel.OrdinaryOperationRecord, transfer.ReceiveIntent, []byte, error) {
 	encoded, readErr := ReadFile(directory, ordinaryOperationRecordFile)
 	closeErr := directory.Close()
 	if readErr != nil || closeErr != nil {
-		return checkpointmodel.OrdinaryOperationRecord{}, nil, repositoryError("read ordinary operation", errors.Join(readErr, closeErr))
+		return checkpointmodel.OrdinaryOperationRecord{}, transfer.ReceiveIntent{}, nil, repositoryError("read ordinary operation", errors.Join(readErr, closeErr))
 	}
 	record, decodeErr := checkpointmodel.DecodeOrdinaryOperationRecord(encoded)
 	if decodeErr != nil || record.OperationID() != operation {
-		return checkpointmodel.OrdinaryOperationRecord{}, nil, codedError(ErrorCorruptRecord, "decode ordinary operation", errors.Join(decodeErr, checkpointmodel.ErrInvalidOrdinaryOperation))
+		return checkpointmodel.OrdinaryOperationRecord{}, transfer.ReceiveIntent{}, nil, codedError(ErrorCorruptRecord, "decode ordinary operation", errors.Join(decodeErr, checkpointmodel.ErrInvalidOrdinaryOperation))
 	}
-	if _, verifyErr := record.VerifyIntent(transfer.DecodeReceiveIntent); verifyErr != nil {
-		return checkpointmodel.OrdinaryOperationRecord{}, nil, codedError(ErrorCorruptRecord, "verify ordinary operation intent", verifyErr)
+	intent, verifyErr := record.VerifyIntent(transfer.DecodeReceiveIntent)
+	if verifyErr != nil {
+		return checkpointmodel.OrdinaryOperationRecord{}, transfer.ReceiveIntent{}, nil, codedError(ErrorCorruptRecord, "verify ordinary operation intent", verifyErr)
 	}
-	return record, encoded, nil
+	return record, intent, encoded, nil
 }
 
 func (registry *OperationRegistry) replaceOperation(
@@ -407,4 +474,9 @@ func sameOrdinaryRecord(left, right checkpointmodel.OrdinaryOperationRecord) boo
 	leftEncoded, leftErr := checkpointmodel.EncodeOrdinaryOperationRecord(left)
 	rightEncoded, rightErr := checkpointmodel.EncodeOrdinaryOperationRecord(right)
 	return leftErr == nil && rightErr == nil && bytes.Equal(leftEncoded, rightEncoded)
+}
+
+func sameSelection(left, right transfer.SelectionSpec) bool {
+	return !left.IsZero() && !right.IsZero() &&
+		bytes.Equal(left.CanonicalBytes(), right.CanonicalBytes())
 }

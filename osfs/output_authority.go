@@ -322,6 +322,7 @@ const (
 	FilesystemOutputRuntimeReleaseLiveFile
 	FilesystemOutputRuntimeLiveRetention
 	FilesystemOutputRuntimeMapName
+	FilesystemOutputRuntimeSelectOperation
 )
 
 type FilesystemOutputRuntimeDecision uint8
@@ -346,6 +347,7 @@ const (
 	FilesystemOutputRuntimeNeedsAttention
 	FilesystemOutputRuntimeIsolatedFailure
 	FilesystemOutputRuntimeCleanupPending
+	FilesystemOutputRuntimeSelectionMismatch
 )
 
 // FilesystemCheckpointDecision is the closed, privacy-safe result of resolving

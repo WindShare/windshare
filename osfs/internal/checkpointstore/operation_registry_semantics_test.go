@@ -12,7 +12,7 @@ import (
 )
 
 func TestOperationRegistryCapabilitiesFailClosedWithoutExactLease(t *testing.T) {
-	for state := ActiveLookupNone; state <= ActiveLookupAmbiguous; state++ {
+	for state := ActiveLookupNone; state <= ActiveLookupSelectionMismatch; state++ {
 		if !state.Valid() {
 			t.Fatalf("active lookup state %d rejected", state)
 		}

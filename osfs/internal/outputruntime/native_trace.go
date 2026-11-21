@@ -10,6 +10,21 @@ import (
 	"github.com/windshare/windshare/osfs/internal/outputsession"
 )
 
+func (authority *Authority) traceSelectedOperationMismatch(
+	record checkpointmodel.OrdinaryOperationRecord,
+	intent transfer.ReceiveIntent,
+) {
+	authority.trace(FilesystemOutputTrace{
+		Operation:            TraceRuntimeDecision,
+		DestinationBindingID: authority.binding.ID(),
+		ReceiveIntentDigest:  intent.Digest(),
+		ReceiveOperationID:   record.OperationID(),
+		RuntimeComponent:     FilesystemOutputRuntimeSession,
+		RuntimeOperation:     FilesystemOutputRuntimeSelectOperation,
+		RuntimeDecision:      FilesystemOutputRuntimeSelectionMismatch,
+	})
+}
+
 func (authority *Authority) traceCheckpointReconciled(
 	intent transfer.ReceiveIntent,
 	sessionID transfer.OutputSessionID,

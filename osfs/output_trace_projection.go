@@ -293,6 +293,8 @@ func projectRuntimeOperation(
 		return FilesystemOutputRuntimeMapName
 	case outputruntime.FilesystemOutputRuntimeLiveRetention:
 		return FilesystemOutputRuntimeLiveRetention
+	case outputruntime.FilesystemOutputRuntimeSelectOperation:
+		return FilesystemOutputRuntimeSelectOperation
 	default:
 		return 0
 	}
@@ -340,6 +342,8 @@ func projectRuntimeDecision(
 		return FilesystemOutputRuntimeIsolatedFailure
 	case outputruntime.FilesystemOutputRuntimeCleanupPending:
 		return FilesystemOutputRuntimeCleanupPending
+	case outputruntime.FilesystemOutputRuntimeSelectionMismatch:
+		return FilesystemOutputRuntimeSelectionMismatch
 	default:
 		return 0
 	}
