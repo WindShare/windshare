@@ -30,6 +30,7 @@ export interface NetworkDirectoryOptions {
   readonly origin?: string
   readonly cache?: DirectoryCache
   readonly now?: () => number
+  readonly monotonicNow?: () => number
   readonly fetch?: typeof fetch
   readonly random?: () => number
   readonly observe?: (value: DirectoryObservation) => void
@@ -39,6 +40,7 @@ export class NetworkDirectory {
   readonly #options: NetworkDirectoryOptions
   readonly #initialized: Promise<DirectoryCache>
   readonly #now: () => number
+  readonly #monotonicNow: () => number
   readonly #lifetime = new AbortController()
   readonly #snapshotListeners = new Set<() => void>()
   readonly ready: Promise<void>
@@ -54,6 +56,7 @@ export class NetworkDirectory {
     if (options.mirrors.length > 8) throw new TypeError('Too many network mirrors')
     this.#options = options
     this.#now = options.now ?? Date.now
+    this.#monotonicNow = options.monotonicNow ?? (() => performance.now())
     this.#initialized = this.#initialize()
     this.ready = this.#initialized.then(() => undefined)
     this.ready.then(() => this.refresh()).catch(() => undefined)
@@ -98,7 +101,7 @@ export class NetworkDirectory {
   async refresh(aliases: readonly string[] = []): Promise<void> {
     const cache = await this.#initialized
     this.#lifetime.signal.throwIfAborted()
-    if (!this.#pending && this.#failures > 0 && this.#now() < this.#retryAt) throw new Error('Network refresh is in backoff')
+    if (!this.#pending && this.#failures > 0 && this.#monotonicNow() < this.#retryAt) throw new Error('Network refresh is in backoff')
     for (const alias of aliases) this.#targets.add(alias)
     this.#pending ??= Promise.resolve().then(() => this.#refresh(cache))
     return this.#pending
@@ -129,7 +132,7 @@ export class NetworkDirectory {
       if (accepted) return
       this.#failures++
       const backoff = Math.min(MAXIMUM_BACKOFF_MS, MINIMUM_BACKOFF_MS * 2 ** Math.min(this.#failures - 1, 10))
-      this.#retryAt = this.#now() + backoff
+      this.#retryAt = this.#monotonicNow() + backoff
       this.#schedule(backoff)
       throw last
     } finally {
@@ -156,6 +159,7 @@ export class NetworkDirectory {
   #accept(snapshot: NetworkSnapshot, operationId: string, mirror: string): void {
     const changed = !sameCursor(this.#snapshot?.cursor, snapshot.cursor)
     this.#failures = 0
+    this.#retryAt = 0
     this.#schedule(REFRESH_INTERVAL_MS)
     if (changed) this.#publishSnapshot(snapshot)
     this.#observe({ operationId, transition: 'accepted', mirror, generation: snapshot.cursor.generation, serial: snapshot.cursor.serial, trustedUntil: snapshot.trustedUntil })
@@ -174,12 +178,32 @@ export class NetworkDirectory {
 
   #schedule(delay: number): void {
     if (this.#timer !== undefined) clearTimeout(this.#timer)
-    if (!this.#lifetime.signal.aborted) this.#timer = setTimeout(() => { void this.refresh().catch(() => undefined) }, delay)
+    if (this.#lifetime.signal.aborted) {
+      this.#timer = undefined
+      return
+    }
+    this.#timer = setTimeout(() => {
+      this.#timer = undefined
+      if (this.#lifetime.signal.aborted || this.#pending) return
+      if (this.#failures > 0) {
+        // Timers can wake slightly ahead of performance.now(); reschedule the
+        // remainder instead of letting the backoff guard kill background retries.
+        const remaining = this.#retryAt - this.#monotonicNow()
+        if (remaining > 0) {
+          this.#schedule(remaining)
+          return
+        }
+      }
+      void this.refresh().catch(() => undefined)
+    }, Math.max(0, Math.ceil(delay)))
   }
 
   close(): void {
     this.#lifetime.abort()
-    if (this.#timer !== undefined) clearTimeout(this.#timer)
+    if (this.#timer !== undefined) {
+      clearTimeout(this.#timer)
+      this.#timer = undefined
+    }
     this.#snapshotListeners.clear()
   }
 }

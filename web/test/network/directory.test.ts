@@ -199,14 +199,16 @@ describe('root-authorized network directory', () => {
     expect(calls).toEqual(mirrors)
     expect(commitSpy).toHaveBeenCalledTimes(1)
   })
-  it('joins an in-flight retry even if the wall clock steps backward before retryAt', async () => {
-    let clock = now
+  it('joins an in-flight retry even if the wall clock steps backward during the request', async () => {
+    let wallClock = now
+    let monotonic = 1_000
     let attempt = 0
     let release!: (response: Response) => void
     let entered!: () => void
     const secondStarted = new Promise<void>(resolve => { entered = resolve })
     const directory = new NetworkDirectory({ network: vectors.network, roots: vectors.roots,
-      mirrors: ['https://mirror.example/directory'], now: () => clock, cache: new MemoryDirectoryCache(),
+      mirrors: ['https://mirror.example/directory'], now: () => wallClock, monotonicNow: () => monotonic,
+      cache: new MemoryDirectoryCache(),
       fetch: () => {
         attempt++
         if (attempt === 1) return Promise.reject(new Error('offline'))
@@ -216,15 +218,73 @@ describe('root-authorized network directory', () => {
     })
     directories.push(directory)
     await expect(directory.refresh()).rejects.toThrow('offline')
-    clock += 30_000
+    monotonic += 30_000
     const retry = directory.refresh()
     await secondStarted
     // Wall-clock step backward during an active retry must still coalesce callers into it.
-    clock -= 10_000
+    wallClock -= 10_000
     const joined = directory.refresh(['jp1'])
     release(new Response(envelope('valid')))
     await Promise.all([retry, joined])
     expect(attempt).toBe(2)
     expect(directory.snapshot?.nodes[0]?.alias).toBe('jp1')
+  })
+  it('keeps scheduled backoff retries running when the wall clock steps backward or forward', async () => {
+    vi.useFakeTimers()
+    try {
+      let wallClock = now
+      let attempt = 0
+      const directory = new NetworkDirectory({ network: vectors.network, roots: vectors.roots,
+        mirrors: ['https://mirror.example/directory'], now: () => wallClock, cache: new MemoryDirectoryCache(),
+        fetch: async () => {
+          attempt++
+          if (attempt === 1) throw new Error('offline')
+          return new Response(envelope('valid'))
+        },
+      })
+      directories.push(directory)
+      await expect(directory.refresh()).rejects.toThrow('offline')
+      // Wall-clock jump forward must not bypass monotonic backoff.
+      wallClock += 3_600_000
+      await expect(directory.refresh()).rejects.toThrow('backoff')
+      // Wall-clock step backward before the scheduled timer fires must not stall recovery.
+      wallClock = now - 600_000
+      const published = new Promise<void>(resolve => { directory.observeSnapshot(resolve) })
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(attempt).toBe(2)
+      await published
+      expect(directory.snapshot?.nodes[0]?.alias).toBe('jp1')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+  it('reschedules background backoff when a timer wakes ahead of the monotonic deadline', async () => {
+    vi.useFakeTimers()
+    try {
+      let monotonic = 1_000
+      let attempt = 0
+      const directory = new NetworkDirectory({ network: vectors.network, roots: vectors.roots,
+        mirrors: ['https://mirror.example/directory'], now: () => now, monotonicNow: () => monotonic,
+        cache: new MemoryDirectoryCache(),
+        fetch: async () => {
+          attempt++
+          if (attempt === 1) throw new Error('offline')
+          return new Response(envelope('valid'))
+        },
+      })
+      directories.push(directory)
+      await expect(directory.refresh()).rejects.toThrow('offline')
+      monotonic = 30_995
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(attempt).toBe(1)
+      const published = new Promise<void>(resolve => { directory.observeSnapshot(resolve) })
+      monotonic = 31_000
+      await vi.advanceTimersByTimeAsync(5)
+      expect(attempt).toBe(2)
+      await published
+      expect(directory.snapshot?.nodes[0]?.alias).toBe('jp1')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
