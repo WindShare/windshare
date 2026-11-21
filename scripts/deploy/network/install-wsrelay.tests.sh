@@ -2,7 +2,7 @@
 set -euo pipefail
 
 readonly script_dir=$(cd -- "$(dirname -- "$0")" && pwd)
-readonly source_script="$script_dir/install.sh"
+readonly source_script="$script_dir/install-wsrelay.sh"
 readonly node_key="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 readonly rev_a="1111111111111111111111111111111111111111"
 readonly rev_b="2222222222222222222222222222222222222222"

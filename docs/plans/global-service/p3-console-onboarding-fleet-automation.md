@@ -96,8 +96,8 @@ follow in P4.
   alias binding. Early cutoff requires operator confirmation.
 - Keep host upgrade credentials and root execution strictly outside the authority Worker so an
   authority compromise cannot reach frontend hosts (`ws.ourworld.top`) or weaken E2EE isolation.
-  Unify `scripts/deploy/wsrelay/install.sh` with the official `/opt/windshare-network` and
-  `windshare-network.service` layout. Upgrade one node at a time over SSH from GitHub Actions or
+  Move the official node upgrade helper to `scripts/deploy/network/install-wsrelay.sh` for the
+  official `/opt/windshare-network` and `windshare-network.service` layout. Upgrade one node at a time over SSH from GitHub Actions or
   an operator script. Scope a dedicated env-configured credential to maintenance drain/undrain, status
   reads and probe ticket issuance. Stage and preflight the binary while the current release serves
   traffic. Request a maintenance drain and wait for the node to confirm `applied_policy_version`.

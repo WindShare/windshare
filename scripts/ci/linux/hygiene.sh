@@ -45,7 +45,7 @@ echo "-- Cloudflare deployment lifecycle"
 node --test scripts/deploy/cloudflare/*.test.mjs
 
 echo "-- Official wsrelay upgrade helper"
-bash scripts/deploy/wsrelay/install.tests.sh
+bash scripts/deploy/network/install-wsrelay.tests.sh
 
 echo "-- Browser dependency installation recovery"
 bash .github/actions/setup-browser/install-dependencies.tests.sh
