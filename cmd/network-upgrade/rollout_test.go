@@ -106,3 +106,73 @@ func TestBusyFenceDefersWithoutRestartAndFailedCandidateProbeRollsBack(t *testin
 		t.Fatal("maintenance can outlive sender grace")
 	}
 }
+
+func TestSwitchAndReleaseRetryBusyLock(t *testing.T) {
+	discard := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	t.Run("rollback retries busy lock after cancelled switch", func(t *testing.T) {
+		t.Parallel()
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		rollbackBusy := 1
+		f := &fakeTarget{held: true, version: 74, fail: map[string]error{}}
+		f.onCall = func(step string) {
+			switch step {
+			case "host switch":
+				cancel()
+				f.fail[step] = ctx.Err()
+			case "host rollback":
+				if rollbackBusy > 0 {
+					rollbackBusy--
+					f.fail[step] = deferredExit{}
+				} else {
+					delete(f.fail, step)
+				}
+			}
+		}
+		err := (rollout{f}).upgrade(ctx, discard)
+		want := []string{"authority drain", "host enter", "host switch", "host rollback", "host rollback", "probe", "host release", "authority release"}
+		if err == nil || f.held || !slices.Equal(f.calls, want) {
+			t.Fatalf("error=%v, held=%v, calls=%v", err, f.held, f.calls)
+		}
+	})
+
+	t.Run("recover inspect retries busy lock without rolling back", func(t *testing.T) {
+		t.Parallel()
+		inspectBusy := 1
+		f := &fakeTarget{held: true, version: 75, fail: map[string]error{}}
+		f.onCall = func(step string) {
+			if step == "host inspect" {
+				if inspectBusy > 0 {
+					inspectBusy--
+					f.fail[step] = deferredExit{}
+				} else {
+					delete(f.fail, step)
+				}
+			}
+		}
+		err := (rollout{f}).recover(t.Context(), discard)
+		want := []string{"authority status", "host inspect", "host inspect", "probe", "host release", "authority release"}
+		if err != nil || f.held || !slices.Equal(f.calls, want) {
+			t.Fatalf("error=%v, held=%v, calls=%v", err, f.held, f.calls)
+		}
+	})
+
+	t.Run("switchAndVerify bounds busy retries to stage deadline", func(t *testing.T) {
+		t.Parallel()
+		f := &fakeTarget{fail: map[string]error{"host rollback": deferredExit{}}}
+		err := (rollout{f}).switchAndVerify(t.Context(), discard, "rollback", time.Now().Add(50*time.Millisecond))
+		if !busy(err) || !errors.Is(err, context.DeadlineExceeded) || slices.Contains(f.calls, "probe") {
+			t.Fatalf("error=%v, calls=%v", err, f.calls)
+		}
+	})
+
+	t.Run("release bounds busy retries and preserves busy cause", func(t *testing.T) {
+		t.Parallel()
+		f := &fakeTarget{held: true, fail: map[string]error{"host release": deferredExit{}}}
+		err := (rollout{f}).release(t.Context(), discard, time.Now().Add(50*time.Millisecond))
+		if !busy(err) || !errors.Is(err, context.DeadlineExceeded) || slices.Contains(f.calls, "authority release") {
+			t.Fatalf("error=%v, calls=%v", err, f.calls)
+		}
+	})
+}

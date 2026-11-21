@@ -48,7 +48,7 @@ func (r rollout) upgrade(ctx context.Context, log *slog.Logger) error {
 	restore := context.WithoutCancel(ctx)
 	if err != nil {
 		log.Info("node remains on current release", "error", err)
-		return errors.Join(err, r.release(restore, time.Now().Add(releaseBudget)))
+		return errors.Join(err, r.release(restore, log, time.Now().Add(releaseBudget)))
 	}
 	log.Info("local admission fenced")
 	return r.finish(ctx, log, start, "switch")
@@ -71,17 +71,17 @@ func (r rollout) finish(ctx context.Context, log *slog.Logger, start time.Time, 
 	// The node checked this window against every already-disconnected sender.
 	candidateUntil := start.Add(switchBudget)
 	rollbackUntil := candidateUntil.Add(rollbackBudget)
-	err := r.switchAndVerify(ctx, action, candidateUntil)
+	err := r.switchAndVerify(ctx, log, action, candidateUntil)
 	if err != nil {
 		log.Warn("rolling back candidate", "error", err)
-		if rollback := r.switchAndVerify(restore, "rollback", rollbackUntil); rollback != nil {
+		if rollback := r.switchAndVerify(restore, log, "rollback", rollbackUntil); rollback != nil {
 			return errors.Join(err, fmt.Errorf("rollback verification failed, maintenance hold retained: %w", rollback))
 		}
 		log.Info("previous release verified")
 	} else {
 		log.Info("selected release verified")
 	}
-	return errors.Join(err, r.release(restore, rollbackUntil.Add(releaseBudget)))
+	return errors.Join(err, r.release(restore, log, rollbackUntil.Add(releaseBudget)))
 }
 
 func (r rollout) enter(ctx context.Context, status drainStatus) (time.Time, error) {
@@ -120,10 +120,31 @@ func busy(err error) bool {
 	return errors.As(err, &exit) && exit.ExitCode() == busyExit
 }
 
-func (r rollout) switchAndVerify(parent context.Context, action string, until time.Time) error {
+// Retry exit 75 (host .lock or local admission gate contention) within the
+// stage deadline; an interrupted switch may hold .lock until restart exits.
+func (r rollout) localUntilReady(ctx context.Context, log *slog.Logger, action string) error {
+	logged := false
+	for {
+		err := r.local(ctx, action)
+		if err == nil || !busy(err) {
+			return err
+		}
+		if !logged {
+			log.Warn("host operation busy, retrying", "action", action, "error", err)
+			logged = true
+		}
+		select {
+		case <-ctx.Done():
+			return errors.Join(err, ctx.Err())
+		case <-time.After(retryInterval):
+		}
+	}
+}
+
+func (r rollout) switchAndVerify(parent context.Context, log *slog.Logger, action string, until time.Time) error {
 	ctx, cancel := context.WithDeadline(parent, until)
 	defer cancel()
-	if err := r.local(ctx, action); err != nil {
+	if err := r.localUntilReady(ctx, log, action); err != nil {
 		return err
 	}
 	for {
@@ -139,22 +160,11 @@ func (r rollout) switchAndVerify(parent context.Context, action string, until ti
 	}
 }
 
-func (r rollout) release(parent context.Context, until time.Time) error {
+func (r rollout) release(parent context.Context, log *slog.Logger, until time.Time) error {
 	ctx, cancel := context.WithDeadline(parent, until)
 	defer cancel()
-	for {
-		err := r.local(ctx, "release")
-		if err == nil {
-			break
-		}
-		if !busy(err) {
-			return fmt.Errorf("release local maintenance hold: %w", err)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(retryInterval):
-		}
+	if err := r.localUntilReady(ctx, log, "release"); err != nil {
+		return fmt.Errorf("release local maintenance hold: %w", err)
 	}
 	_, err := r.policy(ctx, "release")
 	return err
