@@ -59,13 +59,11 @@ fn burst_counts(nodes: &[Node], reporting: &[Cycle]) -> (usize, usize) {
         let NodeState::Listed {
             status: Status::Active,
             withdrawn,
+            maintenance: None,
         } = node.state()
         else {
             continue;
         };
-        if node.maintenance().is_some() {
-            continue;
-        }
         let mut roles = node
             .spec
             .roles
@@ -128,13 +126,13 @@ fn alternative(nodes: &[Node], subject: &Node, role: Role, reporting: &[Cycle]) 
         let NodeState::Listed {
             status: Status::Active,
             withdrawn,
+            maintenance: None,
         } = candidate.state()
         else {
             return false;
         };
         candidate.spec.node_key != subject.spec.node_key
             && candidate.spec.zone == subject.spec.zone
-            && candidate.maintenance().is_none()
             && candidate.spec.roles.contains(&role)
             && !withdrawn.contains(&role)
             && reporting.iter().all(|c| sample(c, candidate, role) > 0)
@@ -166,12 +164,14 @@ impl<R: Store, E: Environment> Authority<R, E> {
         let operation = format!("health-{}", now / super::monitoring::CYCLE_SECONDS);
         let mut suppressed = false;
         for index in 0..nodes.len() {
-            let NodeState::Listed { status, withdrawn } = nodes[index].state() else {
+            let NodeState::Listed {
+                status,
+                withdrawn,
+                maintenance: None,
+            } = nodes[index].state()
+            else {
                 continue;
             };
-            if nodes[index].maintenance().is_some() {
-                continue;
-            }
             let (roles, blocked) =
                 next_withdrawn(&nodes, &nodes[index], *status, withdrawn, &reporting, burst);
             suppressed |= blocked;

@@ -48,21 +48,33 @@ pub(super) fn abort(
     operation_id: &str,
     maintenance_id: &str,
 ) -> Result<()> {
-    ensure!(
-        valid_operation_id(maintenance_id) && !matches!(node.state, NodeState::Staging { .. }),
-        Fault::Invalid
-    );
-    ensure!(
-        node.maintenance.as_deref() == Some(maintenance_id),
-        Fault::Conflict {
-            reason: "listing_changed".into()
+    ensure!(valid_operation_id(maintenance_id), Fault::Invalid);
+    match node.state {
+        NodeState::Staging { .. } => return Err(Fault::Invalid.into()),
+        // A stale tab from before maintenance finished and the node was disabled
+        // shares the same operation_id; prompt refresh rather than reporting bad input.
+        NodeState::Disabled => {
+            return Err(Fault::Conflict {
+                reason: "listing_changed".into(),
+            }
+            .into());
         }
-    );
-    *node.maintenance = None;
-    if let NodeState::Listed { status, .. } = node.state {
-        // Fail closed after an aborted upgrade: keep the node draining until
-        // an operator verifies the host and explicitly resumes it.
-        *status = TopologyStatus::Draining;
+        NodeState::Listed {
+            status,
+            maintenance,
+            ..
+        } => {
+            ensure!(
+                maintenance.as_deref() == Some(maintenance_id),
+                Fault::Conflict {
+                    reason: "listing_changed".into()
+                }
+            );
+            *maintenance = None;
+            // Fail closed after an aborted upgrade: keep the node draining until
+            // an operator verifies the host and explicitly resumes it.
+            *status = TopologyStatus::Draining;
+        }
     }
     save(
         store,
@@ -74,7 +86,6 @@ pub(super) fn abort(
         operation_id = %operation_id,
         maintenance_id = %maintenance_id,
         node_id = %node.spec.node_key,
-        disabled = matches!(node.state, NodeState::Disabled),
     );
     Ok(())
 }
@@ -119,7 +130,10 @@ impl<R: Store, E: Environment> Authority<R, E> {
                 );
             }
             node.update_lifecycle(|n| {
-                *n.maintenance = Some(cmd.operation_id.clone());
+                let NodeState::Listed { maintenance, .. } = n.state else {
+                    return Err(Fault::Invalid.into());
+                };
+                *maintenance = Some(cmd.operation_id.clone());
                 Ok(())
             })?;
         } else {
@@ -137,7 +151,10 @@ impl<R: Store, E: Environment> Authority<R, E> {
                 }
             );
             node.update_lifecycle(|n| {
-                *n.maintenance = None;
+                let NodeState::Listed { maintenance, .. } = n.state else {
+                    return Err(Fault::Invalid.into());
+                };
+                *maintenance = None;
                 Ok(())
             })?;
             save(&mut self.store, &done, &true)?;

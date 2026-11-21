@@ -46,6 +46,7 @@ impl MaintenanceFleet {
                 NodeState::Listed {
                     status: Status::Active,
                     withdrawn: BTreeSet::new(),
+                    maintenance: None,
                 },
                 alias.into(),
             )
@@ -207,7 +208,6 @@ fn abort_maintenance_on_listed_node_keeps_draining_and_fences_aborted_id() {
         aborted_events[0]["fields"]["node_id"],
         fleet.target.node_key
     );
-    assert_eq!(aborted_events[0]["fields"]["disabled"], false);
 
     // Fail-closed: node remains draining rather than automatically returning to Active.
     let node = fleet.node(&fleet.target.node_key);
@@ -217,6 +217,7 @@ fn abort_maintenance_on_listed_node_keeps_draining_and_fences_aborted_id() {
         NodeState::Listed {
             status: Status::Draining,
             withdrawn,
+            maintenance: None,
         } if withdrawn.is_empty()
     ));
     assert_eq!(node.admission(), Admission::Draining);
@@ -309,7 +310,7 @@ fn abort_maintenance_resumes_health_checks_and_allows_explicit_resume() {
 }
 
 #[test]
-fn abort_maintenance_on_disabled_node_completes_disable_and_unlocks_verify_and_remove() {
+fn disable_is_rejected_during_maintenance_until_abort_and_disabled_cannot_hold_maintenance() {
     let mut fleet = MaintenanceFleet::new();
     let target_key = fleet.target.node_key.clone();
     let op = Operation {
@@ -320,31 +321,61 @@ fn abort_maintenance_on_disabled_node_completes_disable_and_unlocks_verify_and_r
         .auth
         .maintenance_hold(&op, true, &fleet.signer)
         .unwrap();
-    fleet
-        .manage_node(&target_key, Action::Disable { early_cutoff: true })
-        .unwrap();
     let version_during_hold = fleet.node(&target_key).version;
-    assert_eq!(fleet.node(&target_key).admission(), Admission::Draining);
+    for early_cutoff in [false, true] {
+        assert_conflict(
+            &fleet
+                .manage_node(&target_key, Action::Disable { early_cutoff })
+                .unwrap_err(),
+            "maintenance_in_progress",
+        );
+    }
+    let held = fleet.node(&target_key);
+    assert_eq!(held.version, version_during_hold);
+    assert_eq!(held.admission(), Admission::Draining);
+    assert_eq!(held.maintenance(), Some(op.operation_id.as_str()));
     assert!(fleet.find_entry("primary").is_some());
-    assert!(
-        fleet
-            .manage_node(&target_key, Action::Remove { early_cutoff: true })
-            .is_err()
-    );
-    assert!(fleet.manage_node(&target_key, Action::Verify).is_err());
 
     let events = super::observability::capture_events(|| {
         fleet.abort_target(&op.operation_id).unwrap();
     });
     let aborted = super::observability::events_named(&events, "maintenance_hold_aborted");
     assert_eq!(aborted.len(), 1);
-    assert_eq!(aborted[0]["fields"]["disabled"], true);
+    assert_eq!(aborted[0]["fields"]["maintenance_id"], op.operation_id);
 
-    let node = fleet.node(&target_key);
-    assert_eq!(node.admission(), Admission::Disabled);
-    assert_eq!(node.version, version_during_hold + 1);
-    assert!(node.maintenance().is_none());
+    let after_abort = fleet.node(&target_key);
+    assert_eq!(after_abort.admission(), Admission::Draining);
+    assert!(after_abort.maintenance().is_none());
+
+    fleet
+        .manage_node(&target_key, Action::Disable { early_cutoff: true })
+        .unwrap();
+    let disabled = fleet.node(&target_key);
+    assert!(matches!(disabled.state(), NodeState::Disabled));
+    assert_eq!(disabled.admission(), Admission::Disabled);
+    assert_eq!(disabled.version, version_during_hold + 1);
+    assert!(disabled.maintenance().is_none());
     assert!(fleet.find_entry("primary").is_none());
+
+    // A disabled node cannot acquire maintenance; a stale tab attempting to abort
+    // an earlier hold sees listing_changed so it refreshes cleanly.
+    let late_op = Operation {
+        node_key: target_key.clone(),
+        operation_id: "disabled-late-hold01".into(),
+    };
+    let acquire_err = fleet
+        .auth
+        .maintenance_hold(&late_op, true, &fleet.signer)
+        .err()
+        .unwrap();
+    assert!(matches!(
+        acquire_err.downcast_ref::<Fault>(),
+        Some(Fault::Invalid)
+    ));
+    assert_conflict(
+        &fleet.abort_target(&op.operation_id).unwrap_err(),
+        "listing_changed",
+    );
 
     fleet.manage_node(&target_key, Action::Verify).unwrap();
     let staging_op = fleet.node(&target_key).operation_id;
@@ -522,6 +553,7 @@ fn maintenance_hold_withdraws_stateless_stun_until_release() {
         NodeState::Listed {
             status: Status::Active,
             withdrawn: BTreeSet::new(),
+            maintenance: None,
         },
         "stun-only-maint".into(),
     )

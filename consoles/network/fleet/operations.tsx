@@ -103,9 +103,10 @@ export function FleetControls({ node, api, refresh }: { node: NodeDetails; api: 
   const [pending, setPending] = useState<PendingAction | null>(null)
   const [aborting, setAborting] = useState<string | null>(null)
   if (node.state.kind === 'staging') return null
-  const { spec, state, operation_id, maintenance } = node
+  const { spec, state, operation_id } = node
   const disabled = state.kind === 'disabled'
   const listed = state.kind === 'listed' ? state : null
+  const maintenance = listed?.maintenance ?? null
   const hasRelay = servesRelay(node)
   const status = fleetStatusBadge(state, t)
   const canPromoteActive = Boolean(listed && listed.status === 'canary')
@@ -137,7 +138,7 @@ export function FleetControls({ node, api, refresh }: { node: NodeDetails; api: 
   const next = disabled ? 'remove' : 'disable'
   return <section className="panel padded stack"><div className="section-title"><h2>{t.fleetOperations}</h2>
     <Badge tone={status.tone}>{status.label}</Badge></div>
-    {maintenance && <Badge tone="info">{disabled ? t.disableAfterMaintenance : t.maintenance} · {maintenance}</Badge>}
+    {maintenance && <Badge tone="info">{t.maintenance} · {maintenance}</Badge>}
     <div className="actions">
       {canPromoteActive &&
         <button type="button" disabled={action.busy} onClick={promoteActive}>{t.publishActive}</button>}
@@ -147,10 +148,10 @@ export function FleetControls({ node, api, refresh }: { node: NodeDetails; api: 
         <button type="button" className="secondary" disabled={action.busy} onClick={() => run({ kind: 'drain' })}>{t.drain}</button>}
       {maintenance && <button type="button" className="secondary" disabled={action.busy}
         onClick={() => setAborting(maintenance)}>{t.abortMaintenance}</button>}
-      {disabled && <button type="button" className="secondary" disabled={action.busy || Boolean(maintenance)} onClick={() => run({ kind: 'verify' })}>{t.verifyAgain}</button>}
+      {disabled && <button type="button" className="secondary" disabled={action.busy} onClick={() => run({ kind: 'verify' })}>{t.verifyAgain}</button>}
       {listed?.withdrawn.map(role => <button key={role} type="button" className="secondary" disabled={action.busy}
         onClick={() => run({ kind: 'restore_role', role })}>{t.restoreService(role.toUpperCase())}</button>)}
-      <button type="button" className="secondary danger-text" disabled={action.busy || (disabled && Boolean(maintenance))}
+      <button type="button" className="secondary danger-text" disabled={action.busy || Boolean(maintenance)}
         onClick={() => setPending({ kind: next, earlyCutoff: !node.cutoff_ready })}>{disabled ? t.removeNode : t.disable}</button>
     </div>
     <FleetConfirmDialogs pending={pending} aborting={aborting}

@@ -61,28 +61,16 @@ fn resume_state(state: &mut NodeState) -> Result<bool> {
 impl Node {
     pub(super) fn entry(&self) -> Option<Entry> {
         match self.state() {
-            NodeState::Staging { .. } => None,
-            NodeState::Disabled => {
-                // The verified binary switch owns a temporary drain even when an operator
-                // queues a disable. Keep only the relay alias resolvable until that
-                // operation releases it; stateless STUN has no sessions to drain and must
-                // not reappear after disabling a previously health-withdrawn node.
-                if self.maintenance().is_none() || !self.spec.roles.contains(&Role::Relay) {
-                    return None;
-                }
-                let mut spec = self.spec.clone();
-                spec.roles.retain(|r| *r == Role::Relay);
-                spec.stun.clear();
-                Some(Entry {
-                    spec,
-                    status: Status::Draining,
-                })
-            }
-            NodeState::Listed { status, withdrawn } => {
+            NodeState::Staging { .. } | NodeState::Disabled => None,
+            NodeState::Listed {
+                status,
+                withdrawn,
+                maintenance,
+            } => {
                 let mut spec = self.spec.clone();
                 // Stateless STUN has no sessions to drain; withdraw it while a verified
-                // binary switch holds maintenance, matching disabled-under-maintenance.
-                if self.maintenance().is_some() || withdrawn.contains(&Role::Stun) {
+                // binary switch holds maintenance.
+                if maintenance.is_some() || withdrawn.contains(&Role::Stun) {
                     spec.roles.retain(|r| *r != Role::Stun);
                     spec.stun.clear();
                 }
@@ -198,7 +186,20 @@ impl<R: Store, E: Environment> Authority<R, E> {
             }
             Action::Resume => return resume_state(node.state),
             &Action::Disable { early_cutoff } => match node.state {
-                NodeState::Listed { .. } => {
+                // Refuse crossing out of Listed while an active upgrade holds the
+                // maintenance lock so Disabled stays strictly lock-free and final.
+                NodeState::Listed {
+                    maintenance: Some(_),
+                    ..
+                } => {
+                    return Err(Fault::Conflict {
+                        reason: "maintenance_in_progress".into(),
+                    }
+                    .into());
+                }
+                NodeState::Listed {
+                    maintenance: None, ..
+                } => {
                     ensure!(
                         early_cutoff || drained,
                         Fault::Conflict {
@@ -214,10 +215,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
                 NodeState::Staging { .. } => return Err(Fault::Invalid.into()),
             },
             Action::Verify => {
-                ensure!(
-                    matches!(node.state, NodeState::Disabled) && node.maintenance.is_none(),
-                    Fault::Invalid
-                );
+                ensure!(matches!(node.state, NodeState::Disabled), Fault::Invalid);
                 *node.operation_id = super::B64.encode(self.environment.random::<16>()?);
                 *node.state = NodeState::Staging {
                     check: Verification::Queued,
@@ -259,10 +257,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
             }
         );
         if let &Action::Remove { early_cutoff } = &cmd.action {
-            ensure!(
-                matches!(node.state(), NodeState::Disabled) && node.maintenance().is_none(),
-                Fault::Invalid
-            );
+            ensure!(matches!(node.state(), NodeState::Disabled), Fault::Invalid);
             ensure!(
                 early_cutoff || drained,
                 Fault::Conflict {

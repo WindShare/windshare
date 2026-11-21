@@ -50,6 +50,7 @@ impl MonitoringFleet {
                 NodeState::Listed {
                     status: Status::Active,
                     withdrawn: BTreeSet::new(),
+                    maintenance: None,
                 },
                 node.alias.clone(),
             )
@@ -316,6 +317,7 @@ fn record_cycle_ignores_staging_and_disabled_nodes_so_promotion_starts_clean() {
         NodeState::Listed {
             status: Status::Canary,
             withdrawn,
+            maintenance: None,
         } if withdrawn.is_empty()
     ));
 }

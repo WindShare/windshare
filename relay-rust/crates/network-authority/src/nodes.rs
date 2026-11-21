@@ -28,8 +28,6 @@ pub struct Node {
     pub spec: Spec,
     pub operation_id: String,
     state: NodeState,
-    #[serde(default)]
-    maintenance: Option<String>,
     pub anonymous: bool,
     pub version: u64,
 }
@@ -38,7 +36,6 @@ pub struct NodeMutation<'a> {
     pub spec: &'a Spec,
     pub operation_id: &'a mut String,
     pub state: &'a mut NodeState,
-    pub maintenance: &'a mut Option<String>,
 }
 
 impl Node {
@@ -55,7 +52,6 @@ impl Node {
             spec,
             operation_id,
             state,
-            maintenance: None,
             anonymous,
             version,
         })
@@ -66,7 +62,10 @@ impl Node {
     }
 
     pub fn maintenance(&self) -> Option<&str> {
-        self.maintenance.as_deref()
+        match &self.state {
+            NodeState::Listed { maintenance, .. } => maintenance.as_deref(),
+            NodeState::Staging { .. } | NodeState::Disabled => None,
+        }
     }
 
     pub const fn status(&self) -> Option<Status> {
@@ -77,17 +76,20 @@ impl Node {
     }
 
     pub fn relay_drained(&self) -> bool {
-        self.maintenance.is_some()
-            || matches!(
-                &self.state,
-                NodeState::Listed { status, withdrawn }
-                    if *status == Status::Draining || withdrawn.contains(&Role::Relay)
-            )
+        matches!(
+            &self.state,
+            NodeState::Listed {
+                status,
+                withdrawn,
+                maintenance,
+            } if maintenance.is_some()
+                || *status == Status::Draining
+                || withdrawn.contains(&Role::Relay)
+        )
     }
 
     pub fn admission(&self) -> Admission {
         match self.state {
-            NodeState::Disabled if self.maintenance.is_some() => Admission::Draining,
             NodeState::Disabled => Admission::Disabled,
             NodeState::Staging { .. } => Admission::Draining,
             NodeState::Listed { .. }
@@ -131,7 +133,6 @@ impl Node {
             spec: &self.spec,
             operation_id: &mut self.operation_id,
             state: &mut self.state,
-            maintenance: &mut self.maintenance,
         };
         let result = mutate(&mut mutation)?;
         if self.admission() != before {

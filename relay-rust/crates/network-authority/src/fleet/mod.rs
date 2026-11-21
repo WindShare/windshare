@@ -37,6 +37,8 @@ pub enum NodeState {
         status: Status,
         #[serde(default)]
         withdrawn: BTreeSet<topology::Role>,
+        #[serde(default)]
+        maintenance: Option<String>,
     },
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -240,6 +242,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
                     *n.state = NodeState::Listed {
                         status,
                         withdrawn: BTreeSet::new(),
+                        maintenance: None,
                     };
                 }
             }

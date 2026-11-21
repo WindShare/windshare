@@ -91,6 +91,7 @@ fn importing_seeds_listed_nodes_alias_bindings_and_renews_only_once() {
                 NodeState::Listed {
                     status: Status::Active,
                     withdrawn,
+                    maintenance: None,
                 } if withdrawn.is_empty()
             )
     );
@@ -241,6 +242,7 @@ fn a_verified_staging_node_requires_current_mirrors_before_publication() {
         NodeState::Listed {
             status: Status::Canary,
             withdrawn,
+            maintenance: None,
         } if withdrawn.is_empty()
     ));
     assert_removed_alias_stays_bound(&mut auth, &admin, &signer, candidate, &work.operation_id);

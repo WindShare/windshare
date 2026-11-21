@@ -149,6 +149,7 @@ impl Publication {
                 NodeState::Listed {
                     status: entry.status,
                     withdrawn: BTreeSet::new(),
+                    maintenance: None,
                 },
                 "release-import".into(),
             )?;

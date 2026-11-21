@@ -44,6 +44,7 @@ impl Fleet {
                 NodeState::Listed {
                     status: Status::Active,
                     withdrawn: BTreeSet::new(),
+                    maintenance: None,
                 },
                 alias.into(),
             )
@@ -300,9 +301,14 @@ fn maintenance_serializes_the_fleet_and_releases_to_current_intent() {
             .policy_version,
         drain.policy_version
     );
-    fleet
-        .manage(Action::Disable { early_cutoff: true })
-        .unwrap();
+    for early_cutoff in [false, true] {
+        let err = fleet.manage(Action::Disable { early_cutoff }).unwrap_err();
+        assert!(matches!(
+            err.downcast_ref::<Fault>(),
+            Some(Fault::Conflict { reason }) if reason == "maintenance_in_progress"
+        ));
+    }
+    fleet.manage(Action::Drain).unwrap();
     let evidence = fleet
         .auth
         .maintenance_probe(
@@ -326,8 +332,21 @@ fn maintenance_serializes_the_fleet_and_releases_to_current_intent() {
             &SigningKey::from_bytes(&[11; 32]).verifying_key().to_bytes(),
         )
         .unwrap();
-    assert_eq!(node.admission, Admission::Disabled);
-    assert!(!node.cutoff_ready);
+    assert_eq!(node.admission, Admission::Draining);
+    assert_eq!(fleet.entry().status, Status::Draining);
+
+    fleet
+        .manage(Action::Disable { early_cutoff: true })
+        .unwrap();
+    let disabled = fleet
+        .auth
+        .node_by_key(
+            &fleet.admin,
+            &SigningKey::from_bytes(&[11; 32]).verifying_key().to_bytes(),
+        )
+        .unwrap();
+    assert_eq!(disabled.admission, Admission::Disabled);
+    assert!(!disabled.cutoff_ready);
     assert!(
         fleet
             .manage(Action::Remove {
@@ -427,6 +446,7 @@ fn stun_only_node_disappears_and_recovers_without_ever_accepting_relay_traffic()
         NodeState::Listed {
             status: Status::Active,
             withdrawn: BTreeSet::new(),
+            maintenance: None,
         },
         fleet.target.alias.clone(),
     )
@@ -503,6 +523,7 @@ fn disable_verify_promote_clears_withdrawn_overrides_and_staging_streaks() {
         NodeState::Listed {
             status: Status::Active,
             withdrawn,
+            maintenance: None,
         } if withdrawn.is_empty()
     ));
 
@@ -524,6 +545,7 @@ fn disable_verify_promote_clears_withdrawn_overrides_and_staging_streaks() {
         NodeState::Listed {
             status: Status::Active,
             withdrawn: BTreeSet::new(),
+            maintenance: None,
         },
         "stun-only".into(),
     )
@@ -547,7 +569,7 @@ fn disable_verify_promote_clears_withdrawn_overrides_and_staging_streaks() {
 }
 
 #[test]
-fn disable_during_maintenance_does_not_republish_withdrawn_stun() {
+fn rejected_disable_during_maintenance_preserves_withdrawn_stun_and_stun_only_probes() {
     let mut fleet = Fleet::new();
     let ok = [true, true];
     let bad_stun = [true, false];
@@ -565,9 +587,13 @@ fn disable_during_maintenance_does_not_republish_withdrawn_stun() {
         .auth
         .maintenance_hold(&hold, true, &fleet.signer)
         .unwrap();
-    fleet
+    let err = fleet
         .manage(Action::Disable { early_cutoff: true })
-        .unwrap();
+        .unwrap_err();
+    assert!(matches!(
+        err.downcast_ref::<Fault>(),
+        Some(Fault::Conflict { reason }) if reason == "maintenance_in_progress"
+    ));
     assert_eq!(fleet.entry().status, Status::Draining);
     assert_eq!(fleet.entry().spec.roles, [Role::Relay]);
     assert_eq!(fleet.entry().spec.stun, Vec::<String>::new());
@@ -576,10 +602,17 @@ fn disable_during_maintenance_does_not_republish_withdrawn_stun() {
         .auth
         .maintenance_hold(&hold, false, &fleet.signer)
         .unwrap();
+    assert_eq!(fleet.entry().status, Status::Active);
+    assert_eq!(fleet.entry().spec.roles, [Role::Relay]);
+    assert_eq!(fleet.entry().spec.stun, Vec::<String>::new());
+
+    fleet
+        .manage(Action::Disable { early_cutoff: true })
+        .unwrap();
     assert!(fleet.find_entry().is_none());
     assert_eq!(fleet.target_node().admission(), Admission::Disabled);
 
-    // STUN-only nodes have no relay sessions to drain and stay omitted when disabled under hold.
+    // STUN-only nodes stay omitted under hold, reject disable, and still allow maintenance probes.
     let mut fleet = Fleet::new();
     fleet.target.roles = vec![Role::Stun];
     attach(
@@ -588,6 +621,7 @@ fn disable_during_maintenance_does_not_republish_withdrawn_stun() {
         NodeState::Listed {
             status: Status::Active,
             withdrawn: BTreeSet::new(),
+            maintenance: None,
         },
         "stun-maintenance".into(),
     )
@@ -605,9 +639,13 @@ fn disable_during_maintenance_does_not_republish_withdrawn_stun() {
         .auth
         .maintenance_hold(&stun_hold, true, &fleet.signer)
         .unwrap();
-    fleet
+    let stun_err = fleet
         .manage(Action::Disable { early_cutoff: true })
-        .unwrap();
+        .unwrap_err();
+    assert!(matches!(
+        stun_err.downcast_ref::<Fault>(),
+        Some(Fault::Conflict { reason }) if reason == "maintenance_in_progress"
+    ));
     assert!(fleet.find_entry().is_none());
     assert_eq!(
         fleet
@@ -625,6 +663,9 @@ fn disable_during_maintenance_does_not_republish_withdrawn_stun() {
     fleet
         .auth
         .maintenance_hold(&stun_hold, false, &fleet.signer)
+        .unwrap();
+    fleet
+        .manage(Action::Disable { early_cutoff: true })
         .unwrap();
     assert!(fleet.find_entry().is_none());
     assert_eq!(fleet.target_node().admission(), Admission::Disabled);
@@ -685,6 +726,7 @@ impl MultiNodeFleet {
                 NodeState::Listed {
                     status,
                     withdrawn: BTreeSet::new(),
+                    maintenance: None,
                 },
                 alias.into(),
             )

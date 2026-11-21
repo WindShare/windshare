@@ -27,9 +27,9 @@ function relayPolicyStatus(node: RelayNode, t: typeof networkCopy.en): { tone: B
   // Authority keeps STUN-only fleet nodes at admission=draining (fail-closed for relay)
   // so they reject public relay traffic while remaining eligible for probes and maintenance.
   if (node.state.kind === 'disabled') return { tone: 'warning', label: t.admissions.disabled }
-  if (node.maintenance) return { tone: 'info', label: t.maintenance }
-  if (node.state.kind === 'listed' && node.state.status === 'draining') {
-    return { tone: 'warning', label: t.states.draining }
+  if (node.state.kind === 'listed') {
+    if (node.state.maintenance) return { tone: 'info', label: t.maintenance }
+    if (node.state.status === 'draining') return { tone: 'warning', label: t.states.draining }
   }
   return { tone: 'neutral', label: t.stunOnly }
 }

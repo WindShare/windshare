@@ -11,7 +11,7 @@ export type FleetAction =
   | { kind: 'abort_maintenance'; maintenance_id: string }
 export type NodeSpec = Omit<Enrollment, 'url'> & { relay: string }
 export type NodeState =
-  | { kind: 'listed'; status: TrafficStatus | 'draining'; withdrawn: Role[] }
+  | { kind: 'listed'; status: TrafficStatus | 'draining'; withdrawn: Role[]; maintenance: string | null }
   | { kind: 'disabled' }
   | { kind: 'staging'; check: { kind: 'queued' | 'running' } | { kind: 'passed'; at: number } | { kind: 'failed'; reason: string } }
 export interface RelayNode {
@@ -19,7 +19,6 @@ export interface RelayNode {
   spec: NodeSpec
   operation_id: string
   state: NodeState
-  maintenance: string | null
   admission: Admission
   anonymous: boolean
   version: number

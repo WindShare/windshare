@@ -8,7 +8,7 @@ use windshare_relay_access::usage::REPORT_INTERVAL_SECONDS;
 
 fn draining_node(key: [u8; 32], operation_id: &str) -> Node {
     let encoded_key = URL_SAFE_NO_PAD.encode(key);
-    let mut node = Node::new(
+    Node::new(
         Spec {
             node_key: encoded_key,
             alias: "skew-relay".into(),
@@ -25,16 +25,11 @@ fn draining_node(key: [u8; 32], operation_id: &str) -> Node {
         NodeState::Listed {
             status: Status::Draining,
             withdrawn: std::collections::BTreeSet::new(),
+            maintenance: Some(operation_id.into()),
         },
         2,
     )
-    .unwrap();
-    node.update_lifecycle(|n| {
-        *n.maintenance = Some(operation_id.into());
-        Ok(())
-    })
-    .unwrap();
-    node
+    .unwrap()
 }
 
 fn sign_report(

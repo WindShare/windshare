@@ -41,6 +41,7 @@ impl ResumeFleet {
             NodeState::Listed {
                 status: initial,
                 withdrawn: BTreeSet::new(),
+                maintenance: None,
             },
             "target-op".into(),
         )
