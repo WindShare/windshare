@@ -793,3 +793,72 @@ async fn registration_authorized_traces_record_class_and_specific_refusal_reason
         "public_daily_budget_exhausted"
     );
 }
+
+#[tokio::test]
+async fn maintenance_gate_io_errors_warn_and_do_not_report_node_draining() {
+    use crate::test_support::capture_events_async;
+
+    let fixture = Fixture::new();
+    let now_seconds = fixture.now(false).0 / 1000;
+    let (generation, _account_bearer, policy) = access_fixture(now_seconds);
+    let directory = tempfile::tempdir().unwrap();
+    let store = Database::open(
+        &directory.path().join("authority.sqlite"),
+        fixture.identity().relay,
+    )
+    .unwrap();
+    let gate = crate::node::maintenance::Gate::install(store.path()).unwrap();
+    let node = Runtime::default();
+    assert!(node.maintenance.set(gate.clone()).is_ok());
+    node.access.configure(policy).unwrap();
+    set_admission(&node, generation, 1, Admission::Accepting);
+
+    let auth_events = capture_events_async(async {
+        gate.set_io_fault(Some(std::io::ErrorKind::PermissionDenied));
+        let expected_auth =
+            match windshare_relay_core::access::RegistrationDecision::SERVICE_UNAVAILABLE {
+                windshare_relay_core::access::RegistrationDecision::Unavailable(retry) => {
+                    ErrorFrame::AccessUnavailable(retry)
+                }
+                _ => unreachable!("SERVICE_UNAVAILABLE is Unavailable"),
+            };
+        let _ = with_sender(&node, &fixture, Some(OWNER_KEY), async |sender| {
+            assert_refused(&mut sender.writer, expected_auth).await;
+        })
+        .await;
+    })
+    .await;
+    assert!(auth_events.iter().any(|entry| {
+        entry["level"] == "WARN"
+            && entry["fields"]["event"] == "maintenance_gate_io_error"
+            && entry["fields"]["operation"] == "authorize"
+    }));
+    let registration = auth_events
+        .iter()
+        .find(|entry| entry["fields"]["event"] == "registration_authorized")
+        .expect("registration_authorized event");
+    assert_eq!(registration["fields"]["reason"], "maintenance_gate_error");
+
+    gate.set_io_fault(None);
+    let join_events = capture_events_async(async {
+        with_access_actor(node.clone(), store, &fixture, async |harness| {
+            let _sender = harness.publish(1, Some(OWNER_KEY), &fixture).await;
+            gate.set_io_fault(Some(std::io::ErrorKind::PermissionDenied));
+            let mut joined = harness.send_join(2, &fixture).await;
+            assert_refused(
+                &mut joined,
+                ErrorFrame::AccessUnavailable(
+                    windshare_relay_core::error_frame::RetryAfter::from_millis(1000).unwrap(),
+                ),
+            )
+            .await;
+        })
+        .await;
+    })
+    .await;
+    assert!(join_events.iter().any(|entry| {
+        entry["level"] == "WARN"
+            && entry["fields"]["event"] == "maintenance_gate_io_error"
+            && entry["fields"]["kind"] == "Join"
+    }));
+}

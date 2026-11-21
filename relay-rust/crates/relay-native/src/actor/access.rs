@@ -1,5 +1,8 @@
 use super::{Actor, Environment, Persistence};
-use crate::node::access::{Authorization, Refusal, RefusalReason};
+use crate::node::{
+    access::{Authorization, Refusal, RefusalReason},
+    maintenance::GateError,
+};
 use anyhow::{Result, anyhow};
 use windshare_relay_core::{
     access::{Attribution, RegistrationDecision, RegistrationRequest},
@@ -99,6 +102,32 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
         }
     }
 
+    fn maintenance_refusal(
+        &self,
+        connection: ConnectionRef,
+        attribution: Attribution,
+    ) -> Option<Refusal> {
+        let gate = self.node.maintenance.get()?;
+        let probe = self
+            .node
+            .access
+            .is_probe(self.identity.share, Some(attribution));
+        match gate.check(probe) {
+            Ok(()) => None,
+            Err(GateError::Maintenance) => Some(Refusal::unavailable(RefusalReason::NodeDraining)),
+            Err(GateError::Io(error)) => {
+                tracing::warn!(
+                    event = "maintenance_gate_io_error",
+                    share = ?self.identity.share,
+                    attempt = ?connection,
+                    operation = "authorize",
+                    %error,
+                );
+                Some(Refusal::unavailable(RefusalReason::MaintenanceGateError))
+            }
+        }
+    }
+
     pub(super) fn authorize(&mut self, request: &RegistrationRequest) -> RegistrationDecision {
         let connection = request.connection();
         let Some(port) = self.ports.get(&connection) else {
@@ -122,16 +151,9 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
                 allowance,
             } => {
                 // Stop non-owner registrations before reserving residency or writing SQLite
-                // when the daily public contribution budget is already spent.
-                if self.node.maintenance.get().is_some_and(|gate| {
-                    gate.admit(
-                        self.node
-                            .access
-                            .is_probe(self.identity.share, Some(attribution)),
-                    )
-                    .is_err()
-                }) {
-                    Authorization::Refused(Refusal::unavailable(RefusalReason::NodeDraining))
+                // when the local maintenance fence or daily public budget refuses admission.
+                if let Some(refusal) = self.maintenance_refusal(connection, attribution) {
+                    Authorization::Refused(refusal)
                 } else if self.node.public_budget_refuses_attribution(attribution) {
                     Authorization::Refused(Refusal {
                         decision: RegistrationDecision::Unavailable(

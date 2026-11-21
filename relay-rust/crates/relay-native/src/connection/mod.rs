@@ -45,7 +45,7 @@ pub enum Closure {
 /// Dropping it aborts the connection; orderly terminal replies use `finish`.
 pub struct Outbox {
     bearer: Option<Bearer>,
-    pub(crate) join_lease: Option<std::fs::File>,
+    pub(crate) join_lease: Option<crate::node::maintenance::JoinLease>,
     share_attribution: Arc<OnceLock<Attribution>>,
     source: Option<std::net::IpAddr>,
     connection: ConnectionRef,
