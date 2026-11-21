@@ -3,6 +3,7 @@ package networkdirectory
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -11,6 +12,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/nodedirectory"
 )
 
@@ -139,4 +141,196 @@ func TestEqualCursorMirrorsAndMixedCaseReleaseAssetAvoidRedundantWrites(t *testi
 	if !statAfter.ModTime().Equal(oldModTime) {
 		t.Fatalf("file cache rewrote identical record: before=%v after=%v", oldModTime, statAfter.ModTime())
 	}
+}
+
+func TestExplicitAliasRefreshCapsCooldownWithoutShorteningBackgroundBackoff(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := signing()
+		stale := f.envelope(t, 1, 1, 0)
+		prior, err := nodedirectory.Verify(stale, "fixture", f.roots)
+		if err != nil {
+			t.Fatal(err)
+		}
+		updated := prior.Payload()
+		updated.Serial++
+		updated.Nodes[0].Alias = "new"
+		var envelope nodedirectory.Envelope
+		if err := json.Unmarshal(stale, &envelope); err != nil {
+			t.Fatal(err)
+		}
+		fresh, err := nodedirectory.Sign(updated, envelope.Certificate, f.online, f.roots)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		start := time.Now()
+		config := f.config()
+		config.Embedded = stale
+		config.Mirrors = []string{"https://mirror.example/directory"}
+		config.Now = func() time.Time { return f.now.Add(time.Since(start)) }
+		var calls atomic.Int32
+		var online atomic.Bool
+		config.Fetch = func(context.Context, string) ([]byte, error) {
+			calls.Add(1)
+			if !online.Load() {
+				return nil, errors.New("offline")
+			}
+			return fresh, nil
+		}
+
+		directory, err := New(config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer directory.Close()
+
+		// Drive scheduled backoff to MaximumBackoff (30s + 1m + 2m + 4m + 8m + 16m = 31m30s).
+		synctest.Wait()
+		for _, step := range []time.Duration{
+			MinimumBackoff,
+			2 * MinimumBackoff,
+			4 * MinimumBackoff,
+			8 * MinimumBackoff,
+			16 * MinimumBackoff,
+			32 * MinimumBackoff,
+		} {
+			time.Sleep(step)
+			synctest.Wait()
+		}
+		if got := calls.Load(); got != 7 {
+			t.Fatalf("background failure attempts = %d, want 7", got)
+		}
+		now := config.Now()
+		if got := directory.RetryAt(); !got.Equal(now.Add(ExplicitRetryCooldown)) {
+			t.Fatalf("RetryAt = %v, want explicit cap %v", got, now.Add(ExplicitRetryCooldown))
+		}
+		var failure *UnavailableError
+		if err := directory.RefreshAliases(t.Context(), []string{"new"}); !errors.As(err, &failure) || !failure.RetryAt.Equal(now.Add(ExplicitRetryCooldown)) {
+			t.Fatalf("immediate explicit alias refresh = %v, want explicit cooldown", err)
+		}
+		if calls.Load() != 7 {
+			t.Fatalf("explicit cooldown did not throttle immediate retry: calls=%d", calls.Load())
+		}
+
+		// After ExplicitRetryCooldown (30s), background remains in 30m backoff while explicit refresh proceeds.
+		time.Sleep(ExplicitRetryCooldown)
+		synctest.Wait()
+		if calls.Load() != 7 {
+			t.Fatalf("background refresh ignored 30m backoff: calls=%d", calls.Load())
+		}
+		if !directory.RetryAt().IsZero() {
+			t.Fatalf("expired explicit cooldown remained active: %v", directory.RetryAt())
+		}
+		if err := directory.RefreshAliases(t.Context(), []string{"new"}); !errors.As(err, &failure) || !failure.RetryAt.Equal(config.Now().Add(ExplicitRetryCooldown)) {
+			t.Fatalf("explicit retry after cooldown = %v, want new %v cooldown", err, ExplicitRetryCooldown)
+		}
+		if calls.Load() != 8 {
+			t.Fatalf("explicit alias refresh stayed blocked during 30m background backoff: calls=%d", calls.Load())
+		}
+
+		// Background must still wait the full MaximumBackoff after the failed explicit refresh.
+		time.Sleep(ExplicitRetryCooldown)
+		synctest.Wait()
+		if calls.Load() != 8 {
+			t.Fatalf("background refresh ran before MaximumBackoff: calls=%d", calls.Load())
+		}
+		online.Store(true)
+		if err := directory.RefreshAliases(t.Context(), []string{"new"}); err != nil {
+			t.Fatalf("explicit alias refresh after recovery failed: %v", err)
+		}
+		snapshot, usable := directory.Snapshot()
+		if _, ok := snapshot.Resolve("new"); !usable || !ok || !directory.RetryAt().IsZero() {
+			t.Fatalf("recovered snapshot missing alias or retained cooldown: usable=%t ok=%t retry=%v", usable, ok, directory.RetryAt())
+		}
+	})
+}
+
+func TestNetworkChangedResetsBackoffAndSupersedesInFlightFailure(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		stream, err := diagnostics.NewStream(32, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f := signing()
+		data := f.envelope(t, 1, 1, 0)
+		start := time.Now()
+		config := f.config()
+		config.Mirrors = []string{"https://mirror.example/directory"}
+		config.Now = func() time.Time { return f.now.Add(time.Since(start)) }
+		config.Diagnostics = stream.Sink()
+
+		var calls atomic.Int32
+		var online atomic.Bool
+		var holdNext atomic.Bool
+		entered, release := make(chan struct{}), make(chan struct{})
+		config.Fetch = func(context.Context, string) ([]byte, error) {
+			calls.Add(1)
+			if holdNext.Swap(false) {
+				close(entered)
+				<-release
+				return nil, errors.New("stale network failure")
+			}
+			if !online.Load() {
+				return nil, errors.New("offline")
+			}
+			return data, nil
+		}
+
+		directory, err := New(config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		if calls.Load() != 1 || directory.RetryAt().IsZero() {
+			t.Fatalf("expected initial failure backoff: calls=%d retry=%v", calls.Load(), directory.RetryAt())
+		}
+
+		// Network change while in backoff clears cooldown and recovers immediately.
+		online.Store(true)
+		directory.NetworkChanged()
+		synctest.Wait()
+		if calls.Load() != 2 || !directory.RetryAt().IsZero() {
+			t.Fatalf("network change did not trigger immediate recovery: calls=%d retry=%v", calls.Load(), directory.RetryAt())
+		}
+		if _, usable := directory.Snapshot(); !usable {
+			t.Fatal("snapshot not installed after network-change recovery")
+		}
+
+		// Healthy directory must not issue extra fetches on subsequent network changes.
+		directory.NetworkChanged()
+		synctest.Wait()
+		if calls.Load() != 2 {
+			t.Fatalf("healthy directory fetched on network change: calls=%d", calls.Load())
+		}
+
+		// An in-flight failure from the previous network generation must not impose cooldown.
+		holdNext.Store(true)
+		done := make(chan error, 1)
+		go func() { done <- directory.Refresh(t.Context()) }()
+		<-entered
+		directory.NetworkChanged()
+		close(release)
+		var failure *UnavailableError
+		if err := <-done; !errors.As(err, &failure) || !failure.RetryAt.IsZero() {
+			t.Fatalf("superseded in-flight failure carried backoff: %v", err)
+		}
+		synctest.Wait()
+		if calls.Load() != 4 || !directory.RetryAt().IsZero() {
+			t.Fatalf("superseded in-flight failure did not immediately retry on new network: calls=%d retry=%v", calls.Load(), directory.RetryAt())
+		}
+
+		directory.Close()
+		stream.Close()
+		var sawReset bool
+		for record := range stream.Records() {
+			if record.Name() == "network_directory_backoff_reset" &&
+				record.Payload().Get("previous_failures").Uint() == 1 &&
+				record.Payload().Get("reason").Text() == "network_changed" {
+				sawReset = true
+			}
+		}
+		if !sawReset {
+			t.Fatal("missing network_directory_backoff_reset diagnostic")
+		}
+	})
 }

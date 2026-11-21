@@ -50,30 +50,33 @@ func blocked(reason BlockingReason, cause error) *UnavailableError {
 func (directory *Directory) Unavailability() *UnavailableError {
 	directory.mu.Lock()
 	defer directory.mu.Unlock()
-	if directory.current.Usable(directory.config.Now(), nodedirectory.DefaultGrace) {
+	now := directory.config.Now()
+	if directory.current.Usable(now, nodedirectory.DefaultGrace) {
 		return nil
 	}
 	if len(directory.config.Roots) == 0 {
 		return blocked(Unprovisioned, nil)
 	}
-	return directory.unavailableLocked()
+	return directory.unavailableLocked(now)
 }
 
-func (directory *Directory) unavailableLocked() *UnavailableError {
+func (directory *Directory) unavailableLocked(now time.Time) *UnavailableError {
 	failure := *blocked(SnapshotUnavailable, directory.lastError)
-	if directory.failures > 0 {
-		failure.RetryAt = directory.nextRefresh
-	}
+	failure.RetryAt = directory.retryAtLocked(now)
 	return &failure
 }
 
-// RetryAt exposes only failure backoff. Successful periodic maintenance must
-// never postpone an explicit retry or unknown-alias refresh.
+func (directory *Directory) retryAtLocked(now time.Time) time.Time {
+	if directory.failures > 0 && now.Before(directory.explicitRetryAt) {
+		return directory.explicitRetryAt
+	}
+	return time.Time{}
+}
+
+// RetryAt exposes only active explicit failure cooldown. Periodic schedules and
+// longer background backoff must not postpone an explicit retry or alias refresh.
 func (directory *Directory) RetryAt() time.Time {
 	directory.mu.Lock()
 	defer directory.mu.Unlock()
-	if directory.failures > 0 {
-		return directory.nextRefresh
-	}
-	return time.Time{}
+	return directory.retryAtLocked(directory.config.Now())
 }

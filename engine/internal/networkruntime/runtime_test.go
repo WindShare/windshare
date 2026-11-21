@@ -11,11 +11,15 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"slices"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/windshare/windshare/connectivity/networkstate"
 	"github.com/windshare/windshare/connectivity/relayplan"
 	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/link"
@@ -345,5 +349,104 @@ func TestEngineDiagnosticsCaptureAccountIssuanceWithoutSlog(t *testing.T) {
 	}
 	if slogOutput.Len() != 0 {
 		t.Fatalf("networkruntime account service bypassed diagnostics sink via slog: %s", slogOutput.String())
+	}
+}
+
+type fakeNetworkSource struct {
+	mu    sync.Mutex
+	state networkstate.State
+}
+
+func (s *fakeNetworkSource) Snapshot(context.Context) (networkstate.State, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.state, nil
+}
+
+func (s *fakeNetworkSource) setIP(ip string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.state = networkstate.State{Addresses: []networkstate.Address{{IP: netip.MustParseAddr(ip), InterfaceIndex: 1}}}
+}
+
+func TestNetworkChangeResetsDirectoryBackoffForExplicitAliasResolve(t *testing.T) {
+	data, err := os.ReadFile("../../../testdata/network/directory.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Now     time.Time
+		Roots   []struct{ ID, Key string }
+		Entries []struct{ Envelope json.RawMessage }
+	}
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	key, _ := base64.RawURLEncoding.DecodeString(fixture.Roots[0].Key)
+	var clock atomic.Int64
+	clock.Store(fixture.Now.UnixNano())
+	now := func() time.Time { return time.Unix(0, clock.Load()) }
+
+	r, err := New(nil, now, "", diagnostics.Sink{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := &fakeNetworkSource{}
+	source.setIP("192.0.2.1")
+	r.monitor = networkstate.NewMonitor(source, networkstate.DefaultDebounce)
+
+	var online atomic.Bool
+	r.directory, err = networkdirectory.New(networkdirectory.Config{
+		Network: "test",
+		Roots:   []nodedirectory.Root{{ID: fixture.Roots[0].ID, Key: ed25519.PublicKey(key)}},
+		Mirrors: []string{"https://mirror.example/directory"},
+		Now:     now,
+		Fetch: func(context.Context, string) ([]byte, error) {
+			if !online.Load() {
+				return nil, errors.New("offline")
+			}
+			return fixture.Entries[0].Envelope, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+
+	// Seed failure backoff via an explicit alias refresh while offline.
+	_, expand, err := r.Resolve(link.Link{NodeAliases: []string{"jp1"}})
+	if err != nil || expand == nil {
+		t.Fatalf("Resolve = (expand=%t, err=%v)", expand != nil, err)
+	}
+	var unavailable *networkdirectory.UnavailableError
+	if _, err := expand(t.Context()); !errors.As(err, &unavailable) || unavailable.RetryAt.IsZero() {
+		t.Fatalf("expected offline cooldown error, got %v", err)
+	}
+
+	// Initial poll establishes the baseline generation without resetting backoff.
+	r.pollNetwork(true)
+	if r.directory.RetryAt().IsZero() {
+		t.Fatal("initial network poll unexpectedly cleared directory backoff")
+	}
+
+	// Switching networks after debounce clears directory backoff immediately.
+	online.Store(true)
+	source.setIP("192.0.2.2")
+	r.pollNetwork(false)
+	clock.Store(now().Add(networkstate.DefaultDebounce).UnixNano())
+	r.pollNetwork(false)
+
+	known, expand, err := r.Resolve(link.Link{NodeAliases: []string{"jp1"}})
+	if err != nil {
+		t.Fatalf("Resolve after network change failed: %v", err)
+	}
+	if len(known) == 0 && expand != nil {
+		known, err = expand(t.Context())
+		if err != nil {
+			t.Fatalf("alias expand after network change failed: %v", err)
+		}
+	}
+	if !slices.Equal(known, []string{"https://jp1.example"}) {
+		t.Fatalf("resolved endpoints = %v, want [https://jp1.example]", known)
 	}
 }

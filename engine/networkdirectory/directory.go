@@ -16,13 +16,14 @@ import (
 )
 
 const (
-	RefreshTimeout    = 6 * time.Second
-	MirrorTimeout     = 2 * time.Second
-	RefreshInterval   = 6 * time.Hour
-	MinimumBackoff    = 30 * time.Second
-	MaximumBackoff    = 30 * time.Minute
-	MaximumMirrors    = 8
-	MirrorsPerRefresh = 3
+	RefreshTimeout        = 6 * time.Second
+	MirrorTimeout         = 2 * time.Second
+	RefreshInterval       = 6 * time.Hour
+	MinimumBackoff        = 30 * time.Second
+	MaximumBackoff        = 30 * time.Minute
+	ExplicitRetryCooldown = MinimumBackoff
+	MaximumMirrors        = 8
+	MirrorsPerRefresh     = 3
 
 	refreshStageFetch    = "fetch"
 	refreshStageVerify   = "verify"
@@ -43,19 +44,21 @@ type Config struct {
 }
 
 type Directory struct {
-	config          Config
-	mu              sync.Mutex
-	current         nodedirectory.Snapshot
-	highest         nodedirectory.Cursor
-	refreshing      *refreshCycle
-	nextRefresh     time.Time
-	earliestTrigger time.Time
-	scheduleChanged chan struct{}
-	failures        uint
-	lastError       error
-	ctx             context.Context
-	cancel          context.CancelFunc
-	done            chan struct{}
+	config            Config
+	mu                sync.Mutex
+	current           nodedirectory.Snapshot
+	highest           nodedirectory.Cursor
+	refreshing        *refreshCycle
+	nextRefresh       time.Time
+	earliestTrigger   time.Time
+	explicitRetryAt   time.Time
+	networkGeneration uint64
+	scheduleChanged   chan struct{}
+	failures          uint
+	lastError         error
+	ctx               context.Context
+	cancel            context.CancelFunc
+	done              chan struct{}
 }
 
 func New(config Config) (*Directory, error) {
@@ -181,11 +184,46 @@ func (directory *Directory) TriggerRefresh() {
 	directory.notifySchedule()
 }
 
+// NetworkChanged invalidates failure backoff accumulated on a previous network
+// generation so recovery and explicit refreshes do not wait behind stale outages.
+func (directory *Directory) NetworkChanged() {
+	directory.mu.Lock()
+	if directory.ctx.Err() != nil || len(directory.config.Roots) == 0 || len(directory.config.Mirrors) == 0 {
+		directory.mu.Unlock()
+		return
+	}
+	directory.networkGeneration++
+	previousFailures := directory.failures
+	if previousFailures == 0 {
+		directory.mu.Unlock()
+		return
+	}
+	now := directory.config.Now()
+	directory.failures = 0
+	directory.explicitRetryAt = time.Time{}
+	directory.nextRefresh = now
+	// Sink.Emit is strictly nonblocking; emit under mu so Close stays ordered after publication.
+	directory.emitBackoffReset(now, previousFailures)
+	directory.notifySchedule()
+	directory.mu.Unlock()
+}
+
 func (directory *Directory) notifySchedule() {
 	select {
 	case directory.scheduleChanged <- struct{}{}:
 	default:
 	}
+}
+
+func (directory *Directory) emitBackoffReset(now time.Time, previousFailures uint) {
+	if !directory.config.Diagnostics.Enabled() {
+		return
+	}
+	directory.config.Diagnostics.Emit(diagnostics.New("network_directory_backoff_reset", diagnostics.Fields{
+		"network":           diagnostics.Text(directory.config.Network),
+		"previous_failures": diagnostics.Uint(uint64(previousFailures)),
+		"reason":            diagnostics.Text("network_changed"),
+	}).At(now))
 }
 
 func (directory *Directory) emitRefreshDeferred(now time.Time, err *UnavailableError) {
@@ -202,7 +240,7 @@ func (directory *Directory) emitRefreshDeferred(now time.Time, err *UnavailableE
 	directory.config.Diagnostics.Emit(diagnostics.New("network_directory_refresh_deferred", fields).At(now))
 }
 
-func (directory *Directory) emitRefreshCompleted(now time.Time, cursor nodedirectory.Cursor, failures uint, nextRefresh time.Time, err error) {
+func (directory *Directory) emitRefreshCompleted(now time.Time, cursor nodedirectory.Cursor, failures uint, nextRefresh, explicitRetryAt time.Time, err error) {
 	if !directory.config.Diagnostics.Enabled() {
 		return
 	}
@@ -212,6 +250,9 @@ func (directory *Directory) emitRefreshCompleted(now time.Time, cursor nodedirec
 		"serial":       diagnostics.Uint(cursor.Serial),
 		"failures":     diagnostics.Uint(uint64(failures)),
 		"next_refresh": diagnostics.Text(nextRefresh.UTC().Format(time.RFC3339Nano)),
+	}
+	if !explicitRetryAt.IsZero() {
+		fields["retry_at"] = diagnostics.Text(explicitRetryAt.UTC().Format(time.RFC3339Nano))
 	}
 	if err != nil {
 		fields["error"] = diagnostics.Text(err.Error())

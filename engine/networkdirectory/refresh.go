@@ -12,9 +12,10 @@ import (
 )
 
 type refreshCycle struct {
-	done    chan struct{}
-	targets map[string]struct{}
-	err     error
+	done              chan struct{}
+	targets           map[string]struct{}
+	networkGeneration uint64
+	err               error
 }
 
 func releaseAsset(mirror string) bool {
@@ -36,18 +37,19 @@ func (directory *Directory) requestRefresh(ctx context.Context, scheduled bool, 
 	}
 	cycle := directory.refreshing
 	now := directory.config.Now()
-	if cycle == nil && now.Before(directory.nextRefresh) && (directory.failures > 0 || scheduled) {
-		if directory.failures == 0 {
-			directory.mu.Unlock()
-			return nil
-		}
-		err := directory.unavailableLocked()
-		directory.mu.Unlock()
-		directory.emitRefreshDeferred(now, err)
-		return err
-	}
 	if cycle == nil {
-		cycle = &refreshCycle{done: make(chan struct{}), targets: make(map[string]struct{})}
+		if scheduled {
+			if now.Before(directory.nextRefresh) {
+				directory.mu.Unlock()
+				return nil
+			}
+		} else if directory.failures > 0 && now.Before(directory.explicitRetryAt) {
+			err := directory.unavailableLocked(now)
+			directory.mu.Unlock()
+			directory.emitRefreshDeferred(now, err)
+			return err
+		}
+		cycle = &refreshCycle{done: make(chan struct{}), targets: make(map[string]struct{}), networkGeneration: directory.networkGeneration}
 		directory.refreshing = cycle
 		go directory.refresh(cycle)
 	}
@@ -69,22 +71,31 @@ func (directory *Directory) requestRefresh(ctx context.Context, scheduled bool, 
 func (directory *Directory) finishLocked(cycle *refreshCycle, err error) {
 	directory.lastError = err
 	now := directory.config.Now()
-	if err == nil {
+	switch {
+	case err == nil:
 		directory.failures = 0
 		directory.nextRefresh = now.Add(RefreshInterval)
 		directory.earliestTrigger = now.Add(MinimumBackoff)
-	} else {
+		directory.explicitRetryAt = time.Time{}
+	case cycle.networkGeneration != directory.networkGeneration:
+		// A network transition occurred while this pass was in flight, so its
+		// failure reflects the previous network rather than the current one.
+		directory.failures = 0
+		directory.nextRefresh = now
+		directory.explicitRetryAt = time.Time{}
+	default:
 		directory.failures = min(directory.failures+1, 10)
 		backoff := min(MinimumBackoff*time.Duration(1<<(directory.failures-1)), MaximumBackoff)
 		directory.nextRefresh = now.Add(backoff)
+		directory.explicitRetryAt = now.Add(min(backoff, ExplicitRetryCooldown))
 	}
 	// Sink.Emit is strictly nonblocking; emitting before clearing refreshing and
 	// closing done keeps both Refresh callers and Close ordered after publication.
-	directory.emitRefreshCompleted(now, directory.highest, directory.failures, directory.nextRefresh, err)
+	directory.emitRefreshCompleted(now, directory.highest, directory.failures, directory.nextRefresh, directory.explicitRetryAt, err)
 	directory.refreshing = nil
 	directory.notifySchedule()
 	if err != nil {
-		cycle.err = directory.unavailableLocked()
+		cycle.err = directory.unavailableLocked(now)
 	}
 	close(cycle.done)
 }

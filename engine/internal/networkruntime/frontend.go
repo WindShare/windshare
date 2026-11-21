@@ -63,19 +63,25 @@ func (r *Runtime) run() {
 	defer close(r.done)
 	ticker := time.NewTicker(networkstate.DefaultPollInterval)
 	defer ticker.Stop()
-	first := true
-	for {
-		_, changed, err := r.monitor.Poll(r.ctx, r.now())
-		if first || err == nil && changed {
-			first = false
-			r.checkFrontends()
-		}
+	for first := true; ; first = false {
+		r.pollNetwork(first)
 		select {
 		case <-r.ctx.Done():
 			return
 		case <-ticker.C:
 		}
 	}
+}
+
+func (r *Runtime) pollNetwork(first bool) {
+	_, changed, err := r.monitor.Poll(r.ctx, r.now())
+	if !first && (err != nil || !changed) {
+		return
+	}
+	if !first && r.directory != nil {
+		r.directory.NetworkChanged()
+	}
+	r.checkFrontends()
 }
 
 func (r *Runtime) checkFrontends() {
