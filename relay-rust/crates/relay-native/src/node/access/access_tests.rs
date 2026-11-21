@@ -559,3 +559,36 @@ fn expire_quotas_skips_write_lock_until_a_deadline_is_due() {
         Some(Allowance::Stale)
     );
 }
+#[test]
+fn registration_checks_the_probe_grant_against_this_node_and_share() {
+    use windshare_relay_access::probe;
+    let (service, mut ticket, signing, generation, _) = identity();
+    let node = [11; 32];
+    ticket.account = probe::PROBE_ACCOUNT;
+    ticket.credential = probe::credential(&node, share(1).as_bytes());
+    ticket.expires_at = NOW + probe::LIFETIME;
+    ticket.entitlement.valid_until = ticket.expires_at;
+    let bearer = |ticket: Ticket| {
+        Bearer::new(&URL_SAFE_NO_PAD.encode(ticket.issue(generation, &signing).unwrap()))
+    };
+    let proof = bearer(ticket);
+    service.identify([12; 32]);
+    assert!(matches!(
+        service.authorize(share(1), Some(&proof), NOW),
+        Authorization::Refused(_)
+    ));
+    service.identify(node);
+    assert!(matches!(
+        service.authorize(share(2), Some(&proof), NOW),
+        Authorization::Refused(_)
+    ));
+    assert!(matches!(
+        service.authorize(share(1), Some(&proof), NOW),
+        Authorization::Granted { .. }
+    ));
+    ticket.expires_at += 1;
+    assert!(matches!(
+        service.authorize(share(1), Some(&bearer(ticket)), NOW),
+        Authorization::Refused(_)
+    ));
+}

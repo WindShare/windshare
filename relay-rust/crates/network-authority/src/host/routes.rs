@@ -1,7 +1,7 @@
 use super::{WorkerEnvironment, failure, storage::Database};
 use crate::{
-    Authority, Block, Fault, Mailbox, NodeEnrollment, NodePolicyChange, Registration,
-    ReportPosition, SettingsChanges, public_blocks::PublicBlockFeed,
+    Authority, Block, Fault, Mailbox, NodePolicyChange, Registration, ReportPosition,
+    SettingsChanges, public_blocks::PublicBlockFeed,
 };
 use anyhow::{Result, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -22,7 +22,7 @@ pub struct Context {
     device_session: String,
     pub(super) csrf: String,
     pub(super) initialization: String,
-    directory: Option<serde_json::Value>,
+    env: Env,
     extra_email_domains: Vec<String>,
 }
 impl Context {
@@ -75,10 +75,7 @@ impl Context {
             initialization: env
                 .secret("INITIALIZATION_TOKEN")
                 .map_or_else(|_| String::new(), |value| value.to_string()),
-            directory: env
-                .var("DIRECTORY_PUBLICATION")
-                .ok()
-                .and_then(|v| serde_json::from_str(&v.to_string()).ok()),
+            env: env.clone(),
             extra_email_domains: super::mail::extra_email_domains(env),
         })
     }
@@ -249,7 +246,7 @@ fn admin_routes(
         method,
         session,
         csrf: provided,
-        directory,
+        env,
         ..
     } = context;
     if method != Method::Get {
@@ -261,9 +258,11 @@ fn admin_routes(
             return signed_in("");
         }
         (Method::Get, "/v1/admin/console") => {
+            authority.require_admin(&session)?;
+            let directory = super::fleet::console(authority, &env)?;
             let mut value = authority.console(&session)?;
             value["csrf"] = csrf(&session).into();
-            value["directory"] = directory.into();
+            value["directory"] = directory;
             value
         }
         (Method::Get, "/v1/admin/reports") => {
@@ -304,9 +303,6 @@ fn admin_routes(
             let key = node_key(&path["/v1/admin/nodes/".len()..])?;
             serde_json::to_value(authority.node_by_key(&session, &key)?)?
         }
-        (Method::Post, "/v1/admin/nodes") => serde_json::to_value(
-            authority.enrolled_node_details(&session, &parse::<NodeEnrollment>(bytes)?)?,
-        )?,
         (Method::Put, "/v1/admin/nodes/policy") => {
             let update = parse::<NodePolicyRequest>(bytes)?;
             serde_json::to_value(authority.set_node_policy(

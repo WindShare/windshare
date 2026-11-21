@@ -5,6 +5,8 @@ mod account_admin;
 mod contract_vectors;
 #[path = "device_login_tests.rs"]
 mod device_login;
+#[path = "fleet/workflow_tests.rs"]
+mod fleet_workflow;
 #[path = "governance_tests.rs"]
 mod governance;
 #[path = "observability_tests.rs"]
@@ -117,6 +119,25 @@ impl Environment for Clock {
         Ok([self.next; N])
     }
 }
+// Historical enrollments had no directory metadata. Tests seed that state before exercising governance or bootstrap.
+struct NodeEnrollment {
+    key: [u8; 32],
+    zone: Zone,
+    region: String,
+}
+impl Authority<Memory, Clock> {
+    fn enroll_node(&mut self, session: &str, record: &NodeEnrollment) -> Result<Node> {
+        self.require_admin(session)?;
+        let path = key("node", &record.key);
+        if let Some(node) = load(&self.store, &path)? {
+            return Ok(node);
+        }
+        let node = Node::enrolled(record.key, record.zone, record.region.clone());
+        save(&mut self.store, &path, &node)?;
+        Ok(node)
+    }
+}
+
 fn signing_fixture(number: u64) -> Signing {
     let root = SigningKey::from_bytes(&[41; 32]);
     let key = SigningKey::from_bytes(&[42; 32]);
@@ -304,6 +325,7 @@ fn batch(
         resident_accounts: if bytes == 0 { vec![account] } else { vec![] },
         shares: vec![],
         load: Load {
+            relay_budget: None,
             active_sessions: 1,
             wire_bytes: bytes,
             forwarded_bytes: bytes,
@@ -379,6 +401,7 @@ fn late_reports_charge_the_original_day_and_restart_retries_do_not_double_charge
         &mut authority.store,
         &key("node", &node_key),
         &Node {
+            listing: None,
             version: 1,
             key: node_key,
             zone: Zone::Global,

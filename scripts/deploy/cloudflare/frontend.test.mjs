@@ -4,6 +4,7 @@ import { frontendConfig } from './configuration.mjs';
 import { deployFrontend, readFrontendInputs } from './frontend.mjs';
 import { STATE_BINDING } from './deployment.mjs';
 import worker from './frontend-entry.mjs';
+import { serveDirectory } from './directory-mirror.mjs';
 
 const inputs = readFrontendInputs({ CLOUDFLARE_ACCOUNT_ID: 'a'.repeat(32), CLOUDFLARE_WORKER_NAME: 'official-web' });
 function cloud() {
@@ -135,4 +136,26 @@ test('frontend post-deploy verification retries stale state and lagging SaaS rou
     'stale_frontend_state',
     'saas_route_pending',
   ]);
+});
+test('regional KV loss retains the last trusted directory until its grant expires', async () => {
+  const grant = Buffer.from(JSON.stringify({ expires_at: new Date(Date.now() + 100_000).toISOString() })).toString('base64url');
+  const current = JSON.stringify({ payload: grant, certificate: { payload: grant } });
+  const request = new Request('https://windshare.cc/.well-known/windshare-network');
+  let online = true, saved;
+  const kv = { get(key, options) {
+    assert.equal(key, 'windshare-network');
+    assert.deepEqual(options, { cacheTtl: 60 });
+    if (!online) throw Error('offline');
+    return current;
+  } };
+  const cache = { async put(key, value) { saved = value; }, async match() { return saved.clone(); } };
+  const context = { waitUntil() {} };
+  const env = { DIRECTORY: kv, ASSETS: { fetch: async () => new Response('bundle') } };
+  assert.equal(await (await serveDirectory(request, env, context, cache)).text(), current);
+  online = false;
+  const fallback = await serveDirectory(request, env, context, cache);
+  assert.equal(await fallback.text(), current);
+  assert.equal(fallback.headers.get('Cache-Control'), 'public, max-age=60');
+  saved.headers.set('X-WindShare-Trusted-Until', String(Date.now() - 1));
+  assert.equal(await (await serveDirectory(request, env, context, cache)).text(), 'bundle');
 });

@@ -39,10 +39,26 @@ func TestOfflineAuthorityAndImmutableDirectoryHistory(t *testing.T) {
 	}
 	payload := nodedirectory.Payload{Format: 1, Network: "windshare", Generation: 1, Serial: 2, IssuedAt: now, ExpiresAt: now.Add(24 * time.Hour),
 		Nodes: []nodedirectory.Node{{Alias: "a", NodeKey: roots[0].Key, Relay: "https://a.example", Roles: []string{"relay"}, Zone: "global", Region: "jp", Provider: "p", Operator: "o", CapacityMbps: 50, Status: nodedirectory.Active}}}
-	arguments := []string{"sign", "--source", path("source.json"), "--release", path("release.json"), "--history", path("history"),
-		"--online-private", path("online.pem"), "--certificate", path("certificate.json"), "--out", path("mirror.json")}
+	arguments := []string{"export", "--source", path("signed.json"), "--release", path("release.json"), "--history", path("history"),
+		"--payload", path("source.json"), "--out", path("mirror.json")}
 	issue := func() error {
-		if err := writeJSON(path("source.json"), payload); err != nil {
+		var cert nodedirectory.SignedCertificate
+		if err := readJSON(path("certificate.json"), &cert); err != nil {
+			return err
+		}
+		key, err := privateKey(path("online.pem"))
+		if err != nil {
+			return err
+		}
+		roots, err := releaseRoots(manifest)
+		if err != nil {
+			return err
+		}
+		issued, err := nodedirectory.Sign(payload, cert, key, roots)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(path("signed.json"), issued, 0600); err != nil {
 			t.Fatal(err)
 		}
 		return run(arguments)

@@ -30,6 +30,7 @@ fn browser_session_authorizes_two_enrolled_nodes_with_independent_receipts() {
             &mut service.store,
             &key("node", &node),
             &Node {
+                listing: None,
                 key: node,
                 zone: Zone::Global,
                 region: "region".into(),

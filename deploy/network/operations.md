@@ -89,8 +89,16 @@ deleting copies on a host controlled by another administrator is insufficient.
 
 ## Release
 
-Sign the directory as described in [README](README.md). Keep aliases permanently
-bound to the original canonical relay endpoint, including removed nodes.
+For each trusted mainland frontend, install a Linux build of `./cmd/network-sign` at
+`/opt/windshare-network/network-sign` and run
+`install -d -m 0755 -o windshare-network /srv/windshare/directory`. Install
+`windshare-directory.service` and `windshare-directory.timer` under `/etc/systemd/system/`,
+then run `systemctl daemon-reload && systemctl enable --now windshare-directory.timer`.
+The timer verifies and atomically replaces the persistent mirror once per minute.
+Both ingress templates serve this file with a 60-second TTL and a release-bundle fallback.
+
+Set `DIRECTORY_KV_ID` in `official-cloudflare` to the authority's directory namespace.
+Export the signed release head for each client release as described in the [release guide](README.md).
 
 Install `scripts/deploy/network/install-web.sh` only on approved frontend hosts as
 `/usr/local/sbin/windshare-install-web`. It requires Python 3.12+, web-server read access

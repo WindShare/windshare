@@ -43,6 +43,7 @@ export class NetworkDirectory {
   readonly ready: Promise<void>
   #snapshot: NetworkSnapshot | undefined
   #pending: Promise<void> | undefined
+  readonly #targets = new Set<string>()
   #timer: ReturnType<typeof setTimeout> | undefined
   #retryAt = 0
   #failures = 0
@@ -93,45 +94,52 @@ export class NetworkDirectory {
     return cache
   }
 
-  async refresh(): Promise<void> {
+  async refresh(aliases: readonly string[] = []): Promise<void> {
     const cache = await this.#initialized
     this.#lifetime.signal.throwIfAborted()
-    if (this.#pending) return this.#pending
     if (this.#failures > 0 && this.#now() < this.#retryAt) throw new Error('Network refresh is in backoff')
-    this.#pending = this.#refresh(cache).finally(() => { this.#pending = undefined })
+    for (const alias of aliases) this.#targets.add(alias)
+    this.#pending ??= Promise.resolve().then(() => this.#refresh(cache))
     return this.#pending
   }
 
   async #refresh(cache: DirectoryCache): Promise<void> {
     const operationId = `directory-refresh-${++this.#refreshSequence}`
     const overall = AbortSignal.any([this.#lifetime.signal, AbortSignal.timeout(REFRESH_TIMEOUT_MS)])
-    const mirrors = [...this.#options.mirrors]
-    const random = this.#options.random ?? Math.random
-    for (let i = mirrors.length - 1; i > 0; i--) { const j = Math.floor(random() * (i + 1)); [mirrors[i], mirrors[j]] = [mirrors[j]!, mirrors[i]!] }
-    if (this.#options.origin?.startsWith('https://')) mirrors.unshift(new URL('/.well-known/windshare-network', this.#options.origin).href)
+    const ranked = orderedMirrors(this.#options)
+    let accepted = false
     let last: unknown = new Error('Network temporarily unavailable')
-    if (this.#options.roots.length > 0) for (const mirror of [...new Set(mirrors)].slice(0, MIRRORS_PER_REFRESH)) {
+    if (this.#options.roots.length > 0) for (const mirror of ranked.slice(0, MIRRORS_PER_REFRESH)) {
       try {
-        const signal = AbortSignal.any([overall, AbortSignal.timeout(MIRROR_TIMEOUT_MS)])
-        const data = await fetchEnvelope(mirror, signal, this.#options.fetch ?? fetch)
-        const next = await verifyDirectory(data, this.#options.network, this.#options.roots)
-        overall.throwIfAborted()
-        if (!usableDirectory(next, this.#now())) throw new Error('Network directory expired')
-        rejectRollback(this.#snapshot?.cursor, next.cursor)
-        await cache.commit(next)
-        this.#accept(next, operationId, mirror)
-        return
+        const next = await this.#readMirror(cache, operationId, mirror, overall)
+        accepted = true
+        if ([...this.#targets].every(alias => next.nodes.some(node => node.alias === alias))) break
       } catch (failure) {
         last = failure
         this.#observe({ operationId, transition: 'rejected', mirror, failure })
         if (overall.aborted) break
       }
     }
+    this.#targets.clear()
+    this.#pending = undefined
+    if (accepted) return
     this.#failures++
     const backoff = Math.min(MAXIMUM_BACKOFF_MS, MINIMUM_BACKOFF_MS * 2 ** Math.min(this.#failures - 1, 10))
     this.#retryAt = this.#now() + backoff
     this.#schedule(backoff)
     throw last
+  }
+
+  async #readMirror(cache: DirectoryCache, operationId: string, mirror: string, overall: AbortSignal): Promise<NetworkSnapshot> {
+    const signal = AbortSignal.any([overall, AbortSignal.timeout(MIRROR_TIMEOUT_MS)])
+    const data = await fetchEnvelope(mirror, signal, this.#options.fetch ?? fetch)
+    const next = await verifyDirectory(data, this.#options.network, this.#options.roots)
+    overall.throwIfAborted()
+    if (!usableDirectory(next, this.#now())) throw new Error('Network directory expired')
+    rejectRollback(this.#snapshot?.cursor, next.cursor)
+    await cache.commit(next)
+    this.#accept(next, operationId, mirror)
+    return next
   }
 
   #accept(snapshot: NetworkSnapshot, operationId: string, mirror: string): void {
@@ -183,4 +191,13 @@ async function fetchEnvelope(mirror: string, signal: AbortSignal, request: typeo
   let offset = 0
   for (const chunk of chunks) { result.set(chunk, offset); offset += chunk.byteLength }
   return new TextDecoder('utf-8', { fatal: true }).decode(result)
+}
+
+function orderedMirrors(options: NetworkDirectoryOptions): string[] {
+  const mirrors = [...options.mirrors]
+  const random = options.random ?? Math.random
+  for (let i = mirrors.length - 1; i > 0; i--) { const j = Math.floor(random() * (i + 1)); [mirrors[i], mirrors[j]] = [mirrors[j]!, mirrors[i]!] }
+  const origin = URL.parse(options.origin ?? '')
+  if (origin?.protocol === 'https:') mirrors.unshift(new URL('/.well-known/windshare-network', origin).href)
+  return [...new Set(mirrors)].sort((a, b) => Number(URL.parse(a)?.hostname === 'github.com') - Number(URL.parse(b)?.hostname === 'github.com'))
 }

@@ -222,6 +222,10 @@ impl<R: Store, E: Environment> Authority<R, E> {
         let source_bucket = admission.source_bucket().to_owned();
         let verified_email = admission.consume(&mut self.store)?;
         let id = self.environment.random()?;
+        ensure!(
+            id != windshare_relay_access::probe::PROBE_ACCOUNT,
+            "reserved account identity"
+        );
         anyhow::ensure!(id != [0; 16], "account ID generator returned zero");
         let account = Account {
             id,

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Deploy the network authority with one certified signing generation."""
 import argparse
+import base64
 import ipaddress
 import json
 import os
@@ -36,6 +37,21 @@ def prepare_token(path, host):
     if not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", token):
         raise ValueError("Invalid initialization token file")
     print(f"https://{host}/console#initialize={token}")
+
+
+def directory_seed(value):
+    value = value.strip()
+    if value.startswith("-----BEGIN PRIVATE KEY-----"):
+        # Go keygen emits the RFC 8410 PKCS#8 form with an absent algorithm parameter.
+        pem = value.removeprefix("-----BEGIN PRIVATE KEY-----").removesuffix("-----END PRIVATE KEY-----")
+        data = base64.b64decode("".join(pem.split()), validate=True)
+        prefix = bytes.fromhex("302e020100300506032b657004220420")
+        if len(data) != len(prefix) + 32 or not data.startswith(prefix):
+            raise ValueError("Expected an Ed25519 PKCS#8 private key")
+        value = base64.urlsafe_b64encode(data[len(prefix):]).decode("ascii").rstrip("=")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{43}", value):
+        raise ValueError("Expected a 32-byte base64url directory seed")
+    return value
 
 
 def deploy(args):
@@ -80,15 +96,13 @@ def deploy(args):
             raise ValueError(f"Invalid EXTRA_EMAIL_DOMAINS entry: {domain}")
     if extra_domains:
         values["EXTRA_EMAIL_DOMAINS"] = ",".join(dict.fromkeys(extra_domains))
-    if args.directory_release:
-        release = json.loads(args.directory_release.read_text(encoding="utf-8"))
-        index = json.loads(subprocess.check_output(
-            ["go", "run", "./cmd/network-sign", "publication", "--release", str(args.directory_release.resolve())], cwd=ROOT))
-        if index:
-            mirror = args.directory_mirror or release["mirrors"][0]
-            url = urlsplit(mirror)
-            values["DIRECTORY_ORIGIN"] = https_origin(f"{url.scheme}://{url.netloc}")
-            values["DIRECTORY_PUBLICATION"] = json.dumps(dict(index, mirror=mirror), separators=(",", ":"))
+    namespace = os.environ["DIRECTORY_KV_ID"].strip()
+    if not re.fullmatch(r"[0-9a-f]{32}", namespace):
+        raise ValueError("Invalid shared directory KV namespace")
+    config += '\n[[kv_namespaces]]\nbinding = "DIRECTORY"\nid = ' + json.dumps(namespace) + '\n'
+    values["DIRECTORY_CERTIFICATE"] = json.dumps(json.loads(os.environ["DIRECTORY_CERTIFICATE"]), separators=(",", ":"))
+    values["VANTAGE_KEYS"] = json.dumps(json.loads(os.environ.get("VANTAGE_KEYS") or "[]"), separators=(",", ":"))
+    secrets_to_upload["DIRECTORY_SIGNING_SEED"] = directory_seed(os.environ["DIRECTORY_SIGNING_SEED"])
     config += "\n[vars]\n" + "".join(f"{k} = {json.dumps(v)}\n" for k, v in values.items())
     # Keep the config beside the template for Worker build paths. Credentials only enter
     # Wrangler's atomic code-and-secrets upload after local signature verification.
@@ -99,6 +113,12 @@ def deploy(args):
         seed_path.write_text(seed, encoding="utf-8")
         subprocess.run(["cargo", "run", "--quiet", "--locked", "--bin", "network-authority-keys", "--",
                         "verify", str(trust_path), str(seed_path)], cwd=CRATE, check=True)
+        cert_path = Path(private) / "directory-certificate.json"
+        cert_path.write_text(values["DIRECTORY_CERTIFICATE"], encoding="utf-8")
+        directory_key = Path(private) / "directory.seed"
+        directory_key.write_text(secrets_to_upload["DIRECTORY_SIGNING_SEED"], encoding="utf-8")
+        subprocess.run(["cargo", "run", "--quiet", "--locked", "--bin", "network-authority-keys", "--",
+                        "verify-publisher", str(cert_path), str(directory_key)], cwd=CRATE, check=True)
         uploads = Path(private) / "secrets.json"
         uploads.write_text(json.dumps(secrets_to_upload), encoding="utf-8")
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", suffix=".toml", prefix="wrangler.generated.", dir=CRATE, delete=False) as generated:
@@ -122,8 +142,6 @@ def main():
     parser.add_argument("--online-seed", type=Path)
     parser.add_argument("--initialization-token", type=Path)
     parser.add_argument("--prepare-initialization", type=Path)
-    parser.add_argument("--directory-release", type=Path)
-    parser.add_argument("--directory-mirror", default=os.environ.get("AUTHORITY_DIRECTORY_MIRROR"))
     deploy(parser.parse_args())
 
 

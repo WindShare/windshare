@@ -40,10 +40,10 @@ struct AdminPasswordChangeRequest {
 }
 
 #[derive(Default)]
-struct ForwardHeaders<'a> {
-    authorization: Option<&'a str>,
-    cookie: Option<&'a str>,
-    csrf: Option<&'a str>,
+pub(super) struct ForwardHeaders<'a> {
+    pub(super) authorization: Option<&'a str>,
+    pub(super) cookie: Option<&'a str>,
+    pub(super) csrf: Option<&'a str>,
 }
 
 #[derive(Deserialize)]
@@ -453,7 +453,7 @@ async fn call_do_json(
     .await
 }
 
-async fn call_do_json_with_headers(
+pub(super) async fn call_do_json_with_headers(
     env: &Env,
     path: &str,
     source: &str,

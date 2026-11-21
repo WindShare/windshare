@@ -317,6 +317,7 @@ fn node_details_and_load_remain_reachable_beyond_the_console_page() {
         .unwrap();
     let now = authority.environment.now;
     let load = Load {
+        relay_budget: None,
         active_sessions: 4,
         wire_bytes: 20,
         forwarded_bytes: 17,

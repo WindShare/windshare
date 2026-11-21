@@ -47,7 +47,7 @@ type Directory struct {
 	mu              sync.Mutex
 	current         nodedirectory.Snapshot
 	highest         nodedirectory.Cursor
-	refreshing      chan struct{}
+	refreshing      *refreshCycle
 	nextRefresh     time.Time
 	earliestTrigger time.Time
 	scheduleChanged chan struct{}
@@ -166,7 +166,7 @@ func (directory *Directory) commit(ctx context.Context, next nodedirectory.Snaps
 // Refresh coalesces user retries, unknown-alias resolution and periodic refresh.
 // Caller cancellation stops waiting, not an update another task also needs.
 func (directory *Directory) Refresh(ctx context.Context) error {
-	return directory.requestRefresh(ctx, false)
+	return directory.requestRefresh(ctx, false, nil)
 }
 
 // TriggerRefresh advances periodic maintenance after an all-cooled plan. A
@@ -186,114 +186,6 @@ func (directory *Directory) notifySchedule() {
 	case directory.scheduleChanged <- struct{}{}:
 	default:
 	}
-}
-
-func (directory *Directory) requestRefresh(ctx context.Context, scheduled bool) error {
-	directory.mu.Lock()
-	if err := directory.ctx.Err(); err != nil {
-		directory.mu.Unlock()
-		return err
-	}
-	done := directory.refreshing
-	now := directory.config.Now()
-	if done == nil && now.Before(directory.nextRefresh) && (directory.failures > 0 || scheduled) {
-		if directory.failures == 0 {
-			directory.mu.Unlock()
-			return nil
-		}
-		err := directory.unavailableLocked()
-		directory.mu.Unlock()
-		directory.emitRefreshDeferred(now, err)
-		return err
-	}
-	if done == nil {
-		done = make(chan struct{})
-		directory.refreshing = done
-		go directory.refresh(done)
-	}
-	directory.mu.Unlock()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-directory.ctx.Done():
-		return directory.ctx.Err()
-	case <-done:
-		directory.mu.Lock()
-		defer directory.mu.Unlock()
-		if directory.lastError != nil {
-			return directory.unavailableLocked()
-		}
-		return nil
-	}
-}
-
-func (directory *Directory) refresh(done chan struct{}) {
-	ctx, cancel := context.WithTimeout(directory.ctx, RefreshTimeout)
-	defer cancel()
-	err := directory.tryMirrors(ctx)
-	directory.mu.Lock()
-	defer directory.mu.Unlock()
-	directory.lastError = err
-	now := directory.config.Now()
-	if err == nil {
-		directory.failures = 0
-		directory.nextRefresh = now.Add(RefreshInterval)
-		directory.earliestTrigger = now.Add(MinimumBackoff)
-	} else {
-		directory.failures = min(directory.failures+1, 10)
-		backoff := min(MinimumBackoff*time.Duration(1<<(directory.failures-1)), MaximumBackoff)
-		directory.nextRefresh = now.Add(backoff)
-	}
-	// Sink.Emit is strictly nonblocking; emitting before clearing refreshing and
-	// closing done keeps both Refresh callers and Close ordered after publication.
-	directory.emitRefreshCompleted(now, directory.highest, directory.failures, directory.nextRefresh, err)
-	directory.refreshing = nil
-	directory.notifySchedule()
-	close(done)
-}
-
-func (directory *Directory) tryMirrors(ctx context.Context) error {
-	if len(directory.config.Roots) == 0 {
-		return blocked(Unprovisioned, nil)
-	}
-	order := directory.config.Order(len(directory.config.Mirrors))
-	var failures []error
-	for attempt, index := range order {
-		if attempt >= MirrorsPerRefresh {
-			break
-		}
-		if index < 0 || index >= len(directory.config.Mirrors) {
-			return nodedirectory.ErrFormat
-		}
-		mirror := directory.config.Mirrors[index]
-		request, cancel := context.WithTimeout(ctx, MirrorTimeout)
-		started := directory.config.Now()
-		stage := refreshStageFetch
-		data, err := directory.config.Fetch(request, mirror)
-		cancel()
-		var snapshot nodedirectory.Snapshot
-		if err == nil {
-			stage = refreshStageVerify
-			snapshot, err = nodedirectory.Verify(data, directory.config.Network, directory.config.Roots)
-		}
-		if err == nil {
-			stage = refreshStageInstall
-			err = directory.install(ctx, snapshot)
-		}
-		if err == nil {
-			stage = refreshStageAccepted
-		}
-		finished := directory.config.Now()
-		directory.emitMirrorAttempt(finished, mirror, stage, snapshot, finished.Sub(started), err)
-		if err == nil {
-			return nil
-		}
-		failures = append(failures, err)
-		if ctx.Err() != nil {
-			break
-		}
-	}
-	return errors.Join(append(failures, nodedirectory.ErrExpired)...)
 }
 
 func (directory *Directory) emitRefreshDeferred(now time.Time, err *UnavailableError) {
@@ -360,7 +252,7 @@ func (directory *Directory) run() {
 		case <-timer.C:
 		case <-directory.scheduleChanged:
 		}
-		_ = directory.requestRefresh(directory.ctx, true)
+		_ = directory.requestRefresh(directory.ctx, true, nil)
 		directory.mu.Lock()
 		// Reading the schedule consumes all changes published before this lock.
 		select {
@@ -380,6 +272,6 @@ func (directory *Directory) Close() {
 	directory.mu.Unlock()
 	<-directory.done
 	if refreshing != nil {
-		<-refreshing
+		<-refreshing.done
 	}
 }

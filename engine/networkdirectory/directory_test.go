@@ -84,7 +84,7 @@ func TestCancelledWaiterDoesNotCancelSharedRefresh(t *testing.T) {
 		t.Fatal("caller cancelled shared request")
 	}
 	directory.mu.Lock()
-	done := directory.refreshing
+	done := directory.refreshing.done
 	directory.mu.Unlock()
 	close(release)
 	<-done

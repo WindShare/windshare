@@ -105,6 +105,7 @@ jobs:
           node-version: lts/*
       - name: Deploy shared frontend artifact
         env:
+          DIRECTORY_KV_ID: ${{ vars.DIRECTORY_KV_ID }}
           CLOUDFLARE_DEPLOYMENT_MODE: frontend
           WINDSHARE_WEB_ARTIFACT: official/web
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

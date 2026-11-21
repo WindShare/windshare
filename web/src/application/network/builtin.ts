@@ -5,7 +5,7 @@ import type { ICEEndpointPool } from '../../connectivity/ice-policy/endpoints'
 import type { NetworkRoot } from '../../network/node-directory'
 import type { Suite02CapabilityLink } from '../../crypto/suite02-link'
 import { resolveLinkRelays } from './resolve'
-import { RelayCandidates } from '../../receiver/relay-selection/candidates'
+import type { RelayCandidates } from '../../receiver/relay-selection/candidates'
 import { OfficialRelayAuthority } from './authority'
 import type { AuthorityConfig, AuthorityObservation } from '../../network/authority/feed'
 
@@ -74,7 +74,7 @@ export class BuiltinNetwork {
   icePool = (): ICEEndpointPool => directoryICEEndpointPool(this.#release.roots.length === 0 ? undefined : this.#source().snapshot)
   resolve(capability: Suite02CapabilityLink): RelayCandidates {
     const source = capability.nodeAliases.length > 0 || this.#authority ? this.#source() : undefined
-    const candidates = resolveLinkRelays(capability, source)
+    const candidates = resolveLinkRelays(capability, source, source && this.#authority?.admission(capability.shareId, source))
     this.#stopReport?.()
     this.#stopReport = undefined
     if (this.#authority && source) {
@@ -88,7 +88,7 @@ export class BuiltinNetwork {
         this.#stopReport = stop
         this.#setReportURL(undefined)
       }
-      return new RelayCandidates(candidates.bases, candidates.all(), this.#authority.admission(capability.shareId, source))
+      return candidates
     }
     this.#setReportURL(undefined)
     return candidates

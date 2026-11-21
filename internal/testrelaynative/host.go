@@ -38,6 +38,7 @@ type Fixture struct {
 	database       string
 	listenAddress  string
 	publicEndpoint string
+	trustedIssuer  map[string]string
 }
 
 func NewFixture(stateDirectory, publicEndpoint string) *Fixture {
@@ -45,6 +46,11 @@ func NewFixture(stateDirectory, publicEndpoint string) *Fixture {
 		database:      filepath.Join(stateDirectory, databaseFilename),
 		listenAddress: loopbackAddress, publicEndpoint: publicEndpoint,
 	}
+}
+
+// TrustIssuer configures the same offline admission check an official relay uses.
+func (fixture *Fixture) TrustIssuer(root, certificate string) {
+	fixture.trustedIssuer = map[string]string{"root": root, "certificate": certificate}
 }
 
 func (fixture *Fixture) Database() string { return fixture.database }
@@ -92,13 +98,17 @@ func (fixture *Fixture) Start(ctx context.Context, owner processStarter, launch 
 }
 
 func (fixture *Fixture) configuration() map[string]any {
+	node := map[string]any{"services": map[string]bool{"relay": true, "stun": true}, "relay_budget": nil}
+	if fixture.trustedIssuer != nil {
+		node["access"] = map[string]any{"anonymous": false, "trusted_issuers": []map[string]string{fixture.trustedIssuer}}
+	}
 	config := map[string]any{
 		"listen": fixture.listenAddress, "database": fixture.database,
 		"identity_file": fixture.database + ".identity.json",
 		"origins":       map[string]any{"kind": "public"},
 		// Ephemeral ports keep independently scheduled scenarios isolated.
 		"stun": map[string]any{"udp_addresses": []string{loopbackAddress}, "admin_address": loopbackAddress},
-		"node": map[string]any{"services": map[string]bool{"relay": true, "stun": true}, "relay_budget": nil},
+		"node": node,
 	}
 	if fixture.publicEndpoint != "" {
 		config["endpoint"] = fixture.publicEndpoint

@@ -18,14 +18,17 @@ export class RelayCandidates {
   #failure: unknown
   #expanding: boolean
 
-  constructor(initial: readonly string[], expansion?: Promise<readonly string[]>, admission?: RelayAdmission) {
+  constructor(initial: readonly string[], expansion?: Promise<readonly string[]> | ((emit: (bases: readonly string[]) => void) => Promise<void>), admission?: RelayAdmission) {
     this.admission = admission
     this.#expanding = expansion !== undefined
     this.#bases = initial.length === 0 && expansion ? [] : receiverRelayBases(initial)
-    this.settled = expansion ? expansion.then(additional => {
+    const emit = (additional: readonly string[]) => {
+      if (!additional.some(base => !this.#bases.includes(base))) return
       this.#bases = receiverRelayBases([...this.#bases, ...additional])
       for (const listener of this.#listeners) listener(this.#bases)
-    }).catch((error: unknown) => { this.#failure = error })
+    }
+    const pending = typeof expansion === 'function' ? expansion(emit) : expansion?.then(emit)
+    this.settled = pending ? pending.catch((error: unknown) => { this.#failure = error })
       .finally(() => { this.#expanding = false }) : Promise.resolve()
   }
 

@@ -60,6 +60,49 @@ describe('root-authorized network directory', () => {
     expect(publishedGenerations).toEqual([1, 2])
     expect(directory.snapshot!.cursor.generation).toBe(2)
   })
+  it('adds missing aliases to an in-flight startup pass and tries live mirrors before the release asset', async () => {
+    const cold = 'https://github.com/releases/directory'
+    const live = ['https://ws.ourworld.top/directory', 'https://windshare.cc/directory']
+    const requests: string[] = []
+    let release!: (response: Response) => void
+    let began!: () => void
+    const entered = new Promise<void>(resolve => { began = resolve })
+    const directory = new NetworkDirectory({ network: vectors.network, roots: vectors.roots,
+      mirrors: [cold, ...live], random: () => 0.99, now: () => now, cache: new MemoryDirectoryCache(),
+      fetch: input => {
+        requests.push(String(input))
+        if (requests.length === 1) { began(); return new Promise<Response>(resolve => { release = resolve }) }
+        return Promise.resolve(new Response(envelope('reassigned')))
+      },
+    })
+    directories.push(directory)
+    await entered
+    const target = directory.refresh(['jp1'])
+    release(new Response(envelope('removed')))
+    await target
+    expect(requests).toEqual(live)
+    expect(directory.snapshot?.nodes[0]?.alias).toBe('jp1')
+    await directory.refresh(['missing'])
+    expect(requests.slice(2)).toEqual([...live, cold])
+    await directory.refresh()
+    expect(requests.slice(5)).toEqual([live[0]])
+  })
+  it('emits a verified local alias while another alias is still waiting on the network', async () => {
+    let finish!: (value: Response) => void
+    const pending = new Promise<Response>(resolve => { finish = resolve })
+    const directory = new NetworkDirectory({ network: vectors.network, roots: vectors.roots, embedded: envelope('valid'),
+      mirrors: ['https://mirror.example/directory'], now: () => now, cache: new MemoryDirectoryCache(), fetch: () => pending })
+    directories.push(directory)
+    const key = await encodeSuite02CapabilityKey(new Uint8Array(16), new Uint8Array(16))
+    const known = 'https://explicit.example'
+    const candidates = resolveLinkRelays({ ...key, relays: [known], nodeAliases: ['jp1', 'missing'] }, directory)
+    expect(candidates.bases).toContain(known)
+    await directory.ready
+    expect(candidates.bases).toEqual([known, 'https://jp1.example'])
+    expect(candidates.expanding).toBe(true)
+    finish(new Response(envelope('new_generation')))
+    await expect(candidates.all()).resolves.toEqual([known, 'https://jp1.example'])
+  })
   it('publishes only the authoritative initial snapshot when the release seed supersedes the cache', async () => {
     const cache = new MemoryDirectoryCache()
     await cache.commit(await verify('valid'))

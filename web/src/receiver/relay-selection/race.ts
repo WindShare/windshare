@@ -19,8 +19,9 @@ export async function firstUsableRelay<T>(
   eligible: (relayBase: string) => boolean = () => true,
 ): Promise<T> {
   signal.throwIfAborted()
-  const candidates = relayCandidates(source), initial = candidates.bases.filter(eligible)
+  const candidates = relayCandidates(source)
   const controllers: AbortController[] = []
+  let unsubscribe: (() => void) | undefined
   let claimed = false
   let fail!: (error: unknown) => void
   const terminal = new Promise<never>((_resolve, reject) => { fail = reject })
@@ -53,13 +54,23 @@ export async function firstUsableRelay<T>(
       })
       return value
     }
-    const attempts = initial.map(attempt)
-    attempts.push(candidates.all().then(bases => {
-      signal.throwIfAborted()
-      return Promise.any(bases.filter(base => !initial.includes(base) && eligible(base)).map(attempt))
-    }))
-    const result = await Promise.race([terminal, Promise.any(attempts)])
-    return result
+    return await new Promise<T>((resolve, reject) => {
+      const seen = new Set<string>(), failures: unknown[] = []
+      let pending = 0, settled = false
+      const finish = () => {
+        if (settled && pending === 0) reject(new AggregateError(failures))
+      }
+      unsubscribe = candidates.observe(bases => {
+        for (const base of bases) {
+          if (claimed || seen.has(base) || !eligible(base)) continue
+          seen.add(base)
+          pending++
+          void attempt(base).then(resolve, error => { failures.push(error) }).finally(() => { pending--; finish() })
+        }
+      })
+      void candidates.all().catch(error => { failures.push(error) }).finally(() => { settled = true; finish() })
+      void terminal.catch(reject)
+    })
   } catch (error) {
     signal.throwIfAborted()
     if (error instanceof AggregateError) {
@@ -70,6 +81,7 @@ export async function firstUsableRelay<T>(
     }
     throw error
   } finally {
+    unsubscribe?.()
     signal.removeEventListener('abort', abort)
   }
 }

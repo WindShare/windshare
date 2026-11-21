@@ -1,4 +1,4 @@
-// network-sign keeps root authorization and online directory publication local.
+// network-sign authorizes signing keys offline and mirrors authority-signed publications.
 package main
 
 import (
@@ -15,17 +15,17 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: network-sign keygen|authorize|sign|verify|publication [options]")
+		return fmt.Errorf("usage: network-sign keygen|authorize|export|mirror|verify [options]")
 	}
 	switch args[0] {
 	case "keygen":
 		return keygen(args[1:])
 	case "authorize":
 		return authorize(args[1:])
-	case "sign":
-		return sign(args[1:])
-	case "publication":
-		return publication(args[1:])
+	case "export":
+		return exportDirectory(args[1:])
+	case "mirror":
+		return mirror(args[1:])
 	case "verify":
 		return verify(args[1:])
 	default:

@@ -23,13 +23,20 @@ impl<R: Store, E: Environment> Authority<R, E> {
     /// # Errors
     /// Refuses unauthenticated nodes, conflicting batch IDs, invalid records or storage failures.
     pub fn usage(&mut self, signed: &[u8]) -> Result<SignedReply> {
-        let batch: Batch = parse_signed(signed)?;
+        let mut batch: Batch = parse_signed(signed)?;
         let now = self.environment.now();
         ensure!(
             batch.valid() && batch.created_at <= now + trust::CLOCK_SKEW,
             Fault::Invalid
         );
         let node = self.authenticate_node(batch.issuer, batch.node, USAGE_DOMAIN, signed)?;
+        // Filter only after authenticating the complete report. A probe-only usage
+        // batch still needs a usage receipt so the node can retire its outbox row.
+        let usage = !batch.records.is_empty();
+        let probe = windshare_relay_access::probe::PROBE_ACCOUNT;
+        batch.records.retain(|entry| entry.account != probe);
+        batch.resident_accounts.retain(|account| *account != probe);
+        batch.shares.retain(|entry| entry.account != probe);
         // Expected admission refusals commit limiter state in the host transaction.
         // Validate all referenced accounts before writing anything for this report.
         for account in batch
@@ -44,12 +51,14 @@ impl<R: Store, E: Environment> Authority<R, E> {
             );
         }
 
-        let result = if batch.records.is_empty() {
+        let result = if usage {
+            if !batch.records.is_empty() {
+                self.charge_usage(&batch, signed)?;
+            }
+            ReportResult::UsageReceived
+        } else {
             self.remember_shares(&batch.shares)?;
             self.status(&batch, &node)?
-        } else {
-            self.charge_usage(&batch, signed)?;
-            ReportResult::UsageReceived
         };
         self.record_load(&batch, now)?;
         self.sign_reply(RESPONSE_DOMAIN, batch.node, batch.id, now, result)

@@ -82,7 +82,7 @@ func (r *Runtime) Resolve(capability link.Link) ([]string, func(context.Context)
 }
 
 func (r *Runtime) refreshAliases(ctx context.Context, aliases []string) ([]string, error) {
-	if err := r.directory.Refresh(ctx); err != nil {
+	if err := r.directory.RefreshAliases(ctx, aliases); err != nil {
 		return nil, unavailable(err, networkdirectory.SnapshotUnavailable)
 	}
 	snapshot, usable := r.directory.Snapshot()

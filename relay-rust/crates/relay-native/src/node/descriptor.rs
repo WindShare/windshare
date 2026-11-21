@@ -11,6 +11,8 @@ impl Runtime {
     /// The identity must be installed before ingress starts.
     pub fn identify(&self, identity: Identity) -> Result<()> {
         let writer = self.lock_control()?;
+        self.access
+            .identify(identity.key().verifying_key().to_bytes());
         self.state
             .lock()
             .map_err(|_| anyhow!("node state"))?

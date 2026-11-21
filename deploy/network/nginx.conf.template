@@ -16,10 +16,11 @@ server {
     root /srv/windshare/current/web;
 
     location = /.well-known/windshare-network {
+        root /srv/windshare;
         default_type application/json;
         add_header Access-Control-Allow-Origin "*" always;
-        add_header Cache-Control "public, max-age=300";
-        try_files $uri =503;
+        add_header Cache-Control "public, max-age=60";
+        try_files /directory/windshare-network.json /current/web$uri =503;
     }
     location /downloads/ {
         alias /srv/windshare/current/downloads/;

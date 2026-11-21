@@ -25,6 +25,13 @@ impl Reporter {
             resident_accounts,
             shares: Vec::new(),
             load: Load {
+                relay_budget: self
+                    .node
+                    .state
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("node state"))?
+                    .settings
+                    .relay_budget,
                 active_sessions: load.active_sessions,
                 wire_bytes: load.wire_bytes,
                 forwarded_bytes: load.forwarded_bytes,

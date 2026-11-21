@@ -2,13 +2,12 @@ use crate::{
     Authority, Environment, Fault, Store,
     store::{key, load, save},
 };
-use anyhow::{Result, ensure};
+use anyhow::Result;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use windshare_relay_access::usage::Load;
 
-const MAX_REGION_BYTES: usize = 128;
 const NODE_PAGE_SIZE: usize = 1000;
 pub const NODE_LOAD_CHECKPOINT_SECONDS: u64 = 15 * 60;
 
@@ -19,16 +18,10 @@ pub enum Zone {
     Cn,
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct NodeEnrollment {
-    pub key: [u8; 32],
-    pub zone: Zone,
-    pub region: String,
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Node {
+    #[serde(default)]
+    pub listing: Option<crate::fleet::Listing>,
     pub key: [u8; 32],
     pub zone: Zone,
     pub region: String,
@@ -36,6 +29,20 @@ pub struct Node {
     pub anonymous: bool,
     #[serde(default)]
     pub version: u64,
+}
+
+impl Node {
+    pub(super) fn enrolled(key: [u8; 32], zone: Zone, region: String) -> Self {
+        Self {
+            listing: None,
+            key,
+            zone,
+            region,
+            enabled: true,
+            anonymous: zone == Zone::Global,
+            version: 1,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -150,47 +157,10 @@ impl<R: Store, E: Environment> Authority<R, E> {
         self.node_details(node.ok_or(Fault::NodeNotFound)?)
     }
 
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn enrolled_node_details(
-        &mut self,
-        session: &str,
-        enrollment: &NodeEnrollment,
-    ) -> Result<NodeDetails> {
-        let node = self.enroll_node(session, enrollment)?;
-        self.node_details(node)
-    }
-
-    fn node_details(&self, node: Node) -> Result<NodeDetails> {
+    pub(crate) fn node_details(&self, node: Node) -> Result<NodeDetails> {
         let persisted = load::<NodeLoadReport>(&self.store, &key("node-load", &node.key))?;
         let report = merge_load_report(persisted, self.live_loads.get(&node.key));
         Ok(NodeDetails { node, report })
-    }
-
-    /// # Errors
-    /// Requires an administrator session, a nonzero public key and a named region.
-    pub fn enroll_node(&mut self, session: &str, enrollment: &NodeEnrollment) -> Result<Node> {
-        self.require_admin(session)?;
-        let region = enrollment.region.trim();
-        ensure!(
-            enrollment.key != [0; 32] && !region.is_empty() && region.len() <= MAX_REGION_BYTES,
-            Fault::Invalid
-        );
-        let record = key("node", &enrollment.key);
-        if let Some(node) = load(&self.store, &record)? {
-            tracing::info!(event = "node_already_enrolled", node = record);
-            return Ok(node);
-        }
-        let node = Node {
-            key: enrollment.key,
-            zone: enrollment.zone,
-            region: region.to_owned(),
-            enabled: true,
-            anonymous: enrollment.zone == Zone::Global,
-            version: 1,
-        };
-        save(&mut self.store, &record, &node)?;
-        tracing::info!(event = "node_enrolled", node = record, zone = ?node.zone, version = node.version);
-        Ok(node)
     }
 
     /// # Errors

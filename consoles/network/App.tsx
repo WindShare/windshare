@@ -10,10 +10,10 @@ import { sharedCopy } from '../ui/locales'
 import { networkCopy } from './locales'
 import { usePage } from '../ui/location'
 import { AuthorityClient } from './api'
-import { useDirectory } from './directory'
+import { EnrollNode } from './onboarding'
 import { encode } from './identity'
 import type { NodeDetails, RelayNode, Restrictions, Snapshot } from './model'
-import { EnrollNode, LookupNode, NodeDetail, Nodes } from './nodes'
+import { LookupNode, NodeDetail, Nodes } from './nodes'
 import { Accounts } from './accounts'
 import { LookupShare, Reports } from './restrictions'
 import { usePolicyEditor } from './policy-editor'
@@ -35,7 +35,7 @@ function Dashboard({ api, snapshot, update, refresh, loadMoreNodes, retry, refre
 }) {
   const t = useCopy(networkCopy)
   const [page, id] = usePage().split('/')
-  const directory = useDirectory(snapshot.directory)
+  const directory = snapshot.directory
   const editor = usePolicyEditor(snapshot.settings)
   const policy = page === 'policy'
   const accounts = page === 'accounts' || page === 'account'
@@ -79,11 +79,11 @@ function Dashboard({ api, snapshot, update, refresh, loadMoreNodes, retry, refre
       saved={({ settings, registration_mode }) => update(current => ({ ...current, settings, registration_mode }))}
       reviewsSaved={reviews => update(current => ({ ...current, reviews }))} />
   } else if (page === 'enroll') {
-    view = <EnrollNode api={api} saved={enrollNode} />
+    view = <EnrollNode api={api} saved={enrollNode} setup={directory?.setup} />
   } else if (page === 'node') {
     const cached = snapshot.node_page.entries.find(entry => encode(entry.key) === id)
-    view = cached ? <NodeDetail key={id} node={cached} api={api} saved={saveNode} directory={directory} />
-      : <LookupNode key={id + ':' + nodeRevision} id={id ?? ''} api={api} saved={saveNode} directory={directory} />
+    view = cached ? <NodeDetail key={id} node={cached} api={api} saved={saveNode} directory={directory} refresh={refreshCurrent} />
+      : <LookupNode key={id + ':' + nodeRevision} id={id ?? ''} api={api} saved={saveNode} directory={directory} refresh={refreshCurrent} />
   } else if (accounts) {
     view = <Accounts {...access} snapshot={snapshot} revision={accountRevision} refresh={refresh} selectedId={page === 'account' ? id ?? '' : undefined} />
   } else if (page === 'share-access') {

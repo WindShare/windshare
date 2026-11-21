@@ -21,6 +21,13 @@ pub struct UsageRecord {
     pub bytes: u64,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct MonthlyBudget {
+    pub bytes: u64,
+    pub reset_day_utc: u8,
+}
+
 /// Lightweight node-health counters piggybacked on authority usage reports.
 ///
 /// Detailed node-local forwarding timing and throughput buckets remain in
@@ -29,6 +36,8 @@ pub struct UsageRecord {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Load {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay_budget: Option<MonthlyBudget>,
     pub active_sessions: u64,
     pub wire_bytes: u64,
     pub forwarded_bytes: u64,

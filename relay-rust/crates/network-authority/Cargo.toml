@@ -20,14 +20,14 @@ ed25519-dalek = { version = "3.0.0", default-features = false, features = ["allo
 argon2 = { version = "0.5", default-features = false, features = ["alloc"] }
 tracing = "0.1"
 
-[dev-dependencies]
+chrono = { version = "0.4", default-features = false, features = ["serde", "std"] }
 url = "2"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 getrandom = "0.4"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-url = "2"
+web-sys = { version = "0.3", features = ["AbortSignal"] }
 worker = "=0.8.7"
 futures-util = "0.3"
 getrandom = { version = "0.4", features = ["wasm_js"] }

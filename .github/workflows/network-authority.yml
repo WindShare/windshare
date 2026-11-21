@@ -38,6 +38,7 @@ on:
       - consoles/pnpm-lock.yaml
       - relay-rust/crates/network-authority/**
       - relay-rust/crates/relay-cloudflare/package-lock.json
+      - deploy/network/history/**
       - deploy/network/release.json
       - core/nodedirectory/**
       - cmd/network-sign/**
@@ -77,7 +78,7 @@ jobs:
         working-directory: relay-rust/crates/network-authority
         run: |
           worker-build --dev --locked
-          node --test tests/mail.test.mjs tests/registration-email.test.mjs tests/password-edge.test.mjs
+          node --test tests/mail.test.mjs tests/registration-email.test.mjs tests/password-edge.test.mjs tests/worker.mjs
 
   deploy:
     needs: console
@@ -112,7 +113,10 @@ jobs:
           AUTHORITY_ZONE: ${{ vars.AUTHORITY_ZONE }}
           AUTHORITY_ALLOWED_ORIGINS: ${{ vars.AUTHORITY_ALLOWED_ORIGINS }}
           AUTHORITY_TRUSTED_PROXY_IPS: ${{ vars.AUTHORITY_TRUSTED_PROXY_IPS }}
-          AUTHORITY_DIRECTORY_MIRROR: ${{ vars.AUTHORITY_DIRECTORY_MIRROR }}
+          DIRECTORY_KV_ID: ${{ vars.DIRECTORY_KV_ID }}
+          DIRECTORY_CERTIFICATE: ${{ vars.DIRECTORY_CERTIFICATE }}
+          DIRECTORY_SIGNING_SEED: ${{ secrets.DIRECTORY_SIGNING_SEED }}
+          VANTAGE_KEYS: ${{ vars.VANTAGE_KEYS }}
           AUTHORITY_TRUST: ${{ vars.AUTHORITY_TRUST }}
           EMAIL_WEBHOOK_URL: ${{ vars.EMAIL_WEBHOOK_URL }}
           EMAIL_WEBHOOK_TOKEN: ${{ secrets.EMAIL_WEBHOOK_TOKEN }}
@@ -120,5 +124,5 @@ jobs:
           AUTHORITY_SIGNING_SEED: ${{ secrets.AUTHORITY_SIGNING_SEED }}
           INITIALIZATION_TOKEN: ${{ secrets.INITIALIZATION_TOKEN }}
         run: |
-          python scripts/deploy/network-authority.py --directory-release deploy/network/release.json
+          python scripts/deploy/network-authority.py
           echo 'Network authority deployed. Sign in at the configured API host under `/console`.' >> "$GITHUB_STEP_SUMMARY"

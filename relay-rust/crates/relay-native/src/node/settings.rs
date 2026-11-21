@@ -19,12 +19,7 @@ impl Default for Services {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct MonthlyBudget {
-    pub bytes: u64,
-    pub reset_day_utc: u8,
-}
+pub use windshare_relay_access::usage::MonthlyBudget;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]

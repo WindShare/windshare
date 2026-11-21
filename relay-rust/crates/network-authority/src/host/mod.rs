@@ -4,6 +4,7 @@
 )]
 mod device_login;
 mod edge;
+mod fleet;
 mod internal_routes;
 mod mail;
 mod passwords;
@@ -60,6 +61,7 @@ pub struct NetworkAuthority {
     state: State,
     env: Env,
     public_blocks: Rc<RefCell<PublicBlockFeed>>,
+    publishing: futures_util::lock::Mutex<()>,
     node_loads: Rc<RefCell<BTreeMap<[u8; 32], NodeLoadReport>>>,
 }
 impl DurableObject for NetworkAuthority {
@@ -70,6 +72,7 @@ impl DurableObject for NetworkAuthority {
             env,
             public_blocks: Rc::default(),
             node_loads: Rc::default(),
+            publishing: futures_util::lock::Mutex::new(()),
         }
     }
     async fn fetch(&self, mut request: Request) -> Result<Response> {
@@ -80,6 +83,11 @@ impl DurableObject for NetworkAuthority {
         } else {
             return Response::error("request too large", 413);
         };
+        if request.path().starts_with("/internal/fleet/")
+            || request.path().starts_with("/v1/vantage/")
+        {
+            return self.fleet(&request, &bytes).await;
+        }
         match request.path().as_str() {
             "/v1/accounts/email" => return self.email(&request, &bytes, None).await,
             "/v1/accounts/profile/email" => {

@@ -19,8 +19,7 @@ In GitHub Environment `network-authority`, set variables `AUTHORITY_API_HOST`,
 `AUTHORITY_SIGNING_SEED` and the saved token as `INITIALIZATION_TOKEN`.
 Provide deployment secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`.
 For split DNS also set `AUTHORITY_ORIGIN_HOST`, `AUTHORITY_ZONE` and
-`AUTHORITY_TRUSTED_PROXY_IPS`. Point `AUTHORITY_DIRECTORY_MIRROR` at your
-published snapshot and use your own public trust in `deploy/network/release.json`.
+`AUTHORITY_TRUSTED_PROXY_IPS`. Set `DIRECTORY_KV_ID` to the shared frontend KV namespace, `DIRECTORY_CERTIFICATE` to the offline-root-signed directory certificate JSON, and secret `DIRECTORY_SIGNING_SEED` to its private key (the generated PEM file or an unpadded base64url Ed25519 seed). Use the [directory key ceremony](../../../deploy/network/README.md) for this separate signing generation.
 
 Run **Deploy network authority**, open the saved initialization link and choose
 administrator credentials. Set repository variable `NETWORK_AUTHORITY_ENABLED=true`
@@ -44,23 +43,20 @@ response confirms acceptance. Its timeout is 15 seconds.
 
 ## Enroll and publish
 
-1. Install each native node with its [full configuration](../relay-native/README.md).
-   Preserve the generated identity file. Verify its discovery v2 descriptor and
-   enroll the actual `node_key` in the console. Mainland nodes default to account-only access.
-2. Set `node.authority` to `{"url":"https://api.ourworld.top","issuer":"<root>"}`
-   and add `{"root":"<root>","certificate":"<certificate>"}` to
-   `node.access.trusted_issuers`. Restart to start the reporting loop.
-3. Add the public `authority: {url, root}` to the client release manifest.
-   Add each real `node_key` to its directory entry and publish a higher signed serial.
-   Enable the mainland node's relay service only after account admission and usage
-   replies work; then publish its relay role.
+1. Generate a separate probe key for each vantage point with `network-sign keygen --id cn-a --private probe.pem --public probe.json`.
+   Configure `VANTAGE_KEYS` as a JSON array of `{"id":"cn-a","key":"<probe.json key>","zone":"cn"}` entries (`cn` or `global`).
+   Install a build of `./cmd/network-vantage` in that zone and run `network-vantage --key probe.pem`.
+   Add `--mainland` on mainland agents so they verify the split-DNS mirror.
+2. In **Nodes ? Add node**, enter the public HTTPS origin. For a fresh host with a working reverse proxy,
+   use the setup command in an empty service directory with `wsrelay` installed. Keep its generated identity and database.
+   For existing nodes, configure `node.authority` and `node.access.trusted_issuers` using the same public trust.
+3. Inspect the signed descriptor, confirm the alias, location, provider, roles and capacity, and enroll.
+   A staging node can report immediately. Its signed load report includes its locally enforced metered budget.
+   A vantage in the selected zone tests the advertised services. Promote to **Canary** or **Active** once verification passes
+   and both Cloudflare mirrors and the mainland mirror report the current signed revision.
 
-After an enabled native node receives a verified usage reply advertising browser login, Desktop offers **Sign in to this service** when adding it. The authority serves `/device`, and the node serves `/device/complete`. Keep both routes on their respective public HTTPS origins.
-
-The console records enrollment and the most recent signed report separately. It
-marks a node published only when the live mirror matches the verified release
-snapshot and contains its relay key. Transfer a file with a fresh candidate
-client and check the account's usage before publishing that snapshot and client.
+The console shows the signed generation/serial, mirror state, silent vantages and upcoming directory or ticket certificate expiry.
+Use [directory export](../../../deploy/network/README.md) to capture a verified revision for Git and embedded clients.
 
 ## Operations
 
@@ -83,9 +79,5 @@ PoW defaults to 28 bits, about 16 seconds at 16M attempts/s. Calibrate with
 `go test ./engine/account -run '^$' -bench BenchmarkProofAttempt`; difficulty
 remains operator-controlled. Run `make rust vectors web` for shared contracts and hosts.
 
-For an isolated local Worker with generation-1 test keys, run
-`node relay-rust/crates/network-authority/tests/worker.mjs <loopback-url> <trust-1.json> <initialization-token>`.
-It verifies the Wasm/SQLite API, cookies, usage signatures, retries and access decisions.
-It uses disposable `local-operator` credentials and refuses non-loopback destinations.
-
-From this crate, run `worker-build --dev --locked` followed by `node --test tests/mail.test.mjs tests/registration-email.test.mjs`. The tests use the relay-cloudflare npm dependencies and a local mail webhook. CI runs the registration test on authority pull requests.
+From this crate run `worker-build --dev --locked`, then `node --test tests/*.test.mjs tests/worker.mjs` with the relay-cloudflare npm dependencies installed.
+The tests use isolated local Workers, signed node descriptors, SQLite and a local mail webhook.

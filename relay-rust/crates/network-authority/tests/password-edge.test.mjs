@@ -1,41 +1,10 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { createPrivateKey, createPublicKey, randomBytes, sign } from 'node:crypto';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
-import { createRequire } from 'node:module';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { randomBytes, sign } from 'node:crypto';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
-
-const crate = fileURLToPath(new URL('../', import.meta.url));
-const { Miniflare, Log, LogLevel, convertV4MiniflareOptions } =
-  createRequire(new URL('../../relay-cloudflare/package.json', import.meta.url))('miniflare');
+import { fixture } from './local-worker.mjs';
 
 test('the Worker runs password hashing and rate limits across edge and Durable Object boundaries', async t => {
-  const keys = await mkdtemp(join(tmpdir(), 'windshare-password-edge-test-'));
-  t.after(() => rm(keys, { recursive: true, force: true }));
-  execFileSync('cargo', ['run', '--quiet', '--locked', '--bin', 'network-authority-keys', '--', keys, '1'], { cwd: crate });
-  const trust = JSON.parse(await readFile(join(keys, 'trust-1.json'), 'utf8'));
-  const build = resolve(crate, process.env.AUTHORITY_TEST_BUILD || 'build');
-  const mf = new Miniflare(convertV4MiniflareOptions({
-    log: new Log(LogLevel.ERROR),
-    workers: [{
-      name: 'authority', compatibilityDate: '2026-09-28', modulesRoot: build,
-      modules: [{ type: 'ESModule', path: join(build, 'index.js') },
-        { type: 'CompiledWasm', path: join(build, 'index_bg.wasm') }],
-      bindings: {
-        AUTHORITY_ROOT: trust.root,
-        AUTHORITY_CERTIFICATE: trust.certificate,
-        AUTHORITY_SIGNING_SEED: (await readFile(join(keys, 'online-1.seed'), 'utf8')).trim(),
-        INITIALIZATION_TOKEN: 'local-initialization-token',
-      },
-      durableObjects: { AUTHORITY: { className: 'NetworkAuthority', useSQLite: true } },
-    }],
-  }));
-  t.after(() => mf.dispose());
-  const worker = await mf.getWorker('authority');
-
+  const { worker, mf, trust, nodeKey, node, requests, enrollment } = await fixture(t);
   // Hashed console bundles are immutable while HTML entrypoints remain uncached.
   const consolePage = await worker.fetch('https://localhost/console');
   assert.equal(consolePage.status, 200);
@@ -49,6 +18,8 @@ test('the Worker runs password hashing and rate limits across edge and Durable O
 
   // External callers can never invoke internal DO orchestration routes.
   for (const internalPath of [
+    '/internal/fleet/stage',
+    '/internal/fleet/tick',
     '/internal/accounts/login/complete',
     '/internal/accounts/password/commit',
     '/internal/admin/login/complete',
@@ -77,6 +48,15 @@ test('the Worker runs password hashing and rate limits across edge and Durable O
     assert.equal(response.status, status, JSON.stringify(value));
     return { response, value };
   }
+
+  // The first committed SQLite cursor can be delivered to KV with no node or frontend traffic.
+  const namespace = await mf.getDurableObjectNamespace('AUTHORITY', 'authority');
+  const object = namespace.get(namespace.idFromName('network-authority-v1'));
+  const tick = await object.fetch('https://authority/internal/fleet/tick', { method: 'POST', body: '{}' });
+  assert.equal(tick.status, 200);
+  const directory = await worker.fetch('https://localhost/.well-known/windshare-network');
+  assert.equal(directory.status, 200);
+  assert.deepEqual(await directory.json(), await tick.json());
 
   // Two-phase admin initialize and login.
   const operator = { username: 'operator', password: 'Operator-Password-2026!' };
@@ -152,12 +132,13 @@ test('the Worker runs password hashing and rate limits across edge and Durable O
   await call('/v1/admin/blocks', { kind: 'account', id: created.account, blocked: false }, { admin: true });
 
   // Device login with password, then password A -> B -> A keeps old cookie invalidated.
-  const nodeKey = createPrivateKey({
-    key: Buffer.concat([Buffer.from('302e020100300506032b657004220420', 'hex'), randomBytes(32)]),
-    type: 'pkcs8', format: 'der',
-  });
-  const node = [...createPublicKey(nodeKey).export({ type: 'spki', format: 'der' }).subarray(-32)];
-  await call('/v1/admin/nodes', { key: node, zone: 'global', region: 'edge-test' }, { admin: true });
+  assert.equal(requests.length, 0);
+  await call('/v1/admin/nodes/discover', { url: enrollment.url }, { status: 403 });
+  assert.equal(requests.length, 0);
+  const discovered = (await call('/v1/admin/nodes/discover', { url: enrollment.url }, { admin: true })).value;
+  assert.equal(discovered.node_key, enrollment.node_key);
+  const staged = (await call('/v1/admin/nodes', enrollment, { admin: true })).value;
+  assert.equal(staged.listing.state.check.kind, 'queued');
   const invitePayload = Buffer.from(JSON.stringify({
     node, issuer: [...Buffer.from(trust.root, 'base64url')],
     enrollment: [...randomBytes(16)], origin: 'https://relay.example',

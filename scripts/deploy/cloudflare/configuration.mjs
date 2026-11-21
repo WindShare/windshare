@@ -33,6 +33,7 @@ export function frontendConfig(inputs, directory = FRONTEND_DIRECTORY) {
     routes: inputs.route.kind === 'custom-domain'
       ? [{ pattern: inputs.route.hostname, zone_id: inputs.route.zoneId, custom_domain: true },
         ...(inputs.route.saasHostname ? [{ pattern: `${inputs.route.saasHostname}/*`, zone_id: inputs.route.zoneId }] : [])] : [],
+    ...(inputs.directory ? { kv_namespaces: [{ binding: 'DIRECTORY', id: inputs.directory }] } : {}),
     // Static page traffic must not consume Worker invocations or their free request quota.
     // Only directory validation and installer redirects require the handler.
     assets: { directory, binding: 'ASSETS', not_found_handling: 'single-page-application',

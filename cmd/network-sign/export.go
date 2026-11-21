@@ -24,13 +24,12 @@ type releaseManifest struct {
 	GlobalPairCoversMainland bool            `json:"global_pair_covers_mainland"`
 }
 
-func sign(args []string) error {
-	flags := flag.NewFlagSet("sign", flag.ContinueOnError)
-	source := flags.String("source", "deploy/network/directory.json", "directory payload JSON")
+func exportDirectory(args []string) error {
+	flags := flag.NewFlagSet("export", flag.ContinueOnError)
+	source := flags.String("source", "", "signed authority envelope file (defaults to the public authority mirror)")
 	release := flags.String("release", "deploy/network/release.json", "shared native/browser release configuration")
 	history := flags.String("history", "deploy/network/history", "immutable signed export history")
-	keyPath := flags.String("online-private", "", "online signing PEM file")
-	certPath := flags.String("certificate", "", "root-signed online certificate JSON")
+	payloadPath := flags.String("payload", "deploy/network/directory.json", "verified payload for release review")
 	output := flags.String("out", "deploy/network/windshare-network.json", "mirror export")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -46,23 +45,16 @@ func sign(args []string) error {
 	if err != nil {
 		return err
 	}
-	var payload nodedirectory.Payload
-	if err := readJSON(*source, &payload); err != nil {
-		return err
+	var signed []byte
+	if *source != "" {
+		signed, err = os.ReadFile(*source)
+	} else {
+		var authority struct{ URL string }
+		if err := json.Unmarshal(manifest.Authority, &authority); err != nil {
+			return err
+		}
+		signed, err = fetchMirror(authority.URL)
 	}
-	if payload.Network != manifest.Network {
-		return nodedirectory.ErrFormat
-	}
-	var certificate nodedirectory.SignedCertificate
-	if err := readJSON(*certPath, &certificate); err != nil {
-		return err
-	}
-	key, err := privateKey(*keyPath)
-	if err != nil {
-		return err
-	}
-	defer clear(key)
-	signed, err := nodedirectory.Sign(payload, certificate, key, roots)
 	if err != nil {
 		return err
 	}
@@ -73,14 +65,26 @@ func sign(args []string) error {
 	if err := validateHistory(*history, next, manifest, roots); err != nil {
 		return err
 	}
+	payload := next.Payload()
 	path := filepath.Join(*history, fmt.Sprintf("g%016d-s%016d.json", payload.Generation, payload.Serial))
-	if err := distinctPaths(*keyPath, *certPath, *source, *release, *output, path); err != nil {
+	if err := distinctPaths(*payloadPath, *release, *output, path); err != nil {
+		return err
+	}
+	var envelope nodedirectory.Envelope
+	if err := json.Unmarshal(signed, &envelope); err != nil {
+		return err
+	}
+	signed, err = json.Marshal(envelope)
+	if err != nil {
 		return err
 	}
 	if err := writeHistory(path, signed); err != nil {
 		return err
 	}
 	if err := writePublic(*output, signed); err != nil {
+		return err
+	}
+	if err := writeJSON(*payloadPath, payload); err != nil {
 		return err
 	}
 	manifest.Snapshot = signed

@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react'
-import { ValidatedForm } from '../ui/ValidatedForm'
+import { Verification } from './verification'
 import { useAction, useResource } from '../ui/activity'
 import { message } from '../ui/locale'
 import { useCopy, useLocale } from '../ui/use-locale'
@@ -9,8 +9,8 @@ import { Confirm } from '../ui/forms'
 import { BackLink, Badge, Bytes, DateStamp, EmptyState, Notice, ReadError } from '../ui/layout'
 import { Icon, type IconName } from '../ui/Icon'
 import type { AuthorityClient } from './api'
-import { encode, requireIdentity } from './identity'
-import type { LoadReport, NodeDetails, NodePage, PolicyField, Publication, RelayNode, Zone } from './model'
+import { encode } from './identity'
+import type { LoadReport, NodeDetails, NodePage, PolicyField, Publication, RelayNode } from './model'
 
 type Directory = Publication | null | undefined
 
@@ -61,18 +61,24 @@ export function Nodes({ page, directory, loading, loadMore }: {
   const enroll = <a className="button" href="#enroll"><Icon name="plus" size={17} />{t.enroll}</a>
   return <div className="view"><div className="page-title"><h1 id="node-heading">{t.nodes}</h1>
     {nodes.length > 0 && enroll}</div>
+    {directory && <div className="actions"><Badge>{t.directoryVersion(directory.generation, directory.serial)}</Badge>
+      {!directory.mirrors_current && <Badge tone="warning">{t.mirrorLag}</Badge>}
+      {directory.expiring_certificates.directory !== null && <Badge tone="warning">{t.directoryCertExpiry} · <DateStamp millis={directory.expiring_certificates.directory * 1000} /></Badge>}
+      {directory.expiring_certificates.ticket !== null && <Badge tone="warning">{t.ticketCertExpiry} · <DateStamp millis={directory.expiring_certificates.ticket * 1000} /></Badge>}
+      {directory.silent_vantages.length > 0 && <Badge tone="warning">{t.silentVantages} · {directory.silent_vantages.join(', ')}</Badge>}
+    </div>}
     {nodes.length === 0 ? <div className="panel"><EmptyState icon="network" title={t.noNodes}>
       <p>{t.registerHint}</p>{enroll}</EmptyState></div>
       : <><NodeOverview nodes={nodes} complete={cursor === null} directory={directory} />
         <div className="table-wrap panel" role="region" aria-labelledby="node-heading" tabIndex={0}>
         <table><caption className="sr-only">{t.nodeTable}</caption>
-          <thead><tr>{[t.region, t.savedRelayPolicy, t.lastReport, t.directory].map(title => <th scope="col" key={title}>{title}</th>)}</tr></thead>
+          <thead><tr>{[t.nodeDetails, t.savedRelayPolicy, t.lastReport, t.directory].map(title => <th scope="col" key={title}>{title}</th>)}</tr></thead>
           <tbody>{nodes.map(node => {
             const id = encode(node.key)
             return <tr key={id}>
               <th scope="row"><a className="node-link" href={'#node/' + id}>
                 <span className="row-icon"><Icon name="server" size={19} /></span>
-                <span>{node.region || t.zones[node.zone]}<small>{t.zones[node.zone]} · <code>{id.slice(0, 8)}</code></small></span></a></th>
+                <span>{node.listing?.spec.alias || node.region || t.zones[node.zone]}<small>{t.zones[node.zone]} · <code>{id.slice(0, 8)}</code></small></span></a></th>
               <td data-label={t.savedRelayPolicy}><div><Badge tone={node.enabled ? 'good' : 'warning'}>{node.enabled ? t.enabled : t.paused}</Badge>
                 <small>{node.anonymous ? t.anonymousAllowed : t.accountRequired} · v{node.version}</small></div></td>
               <td data-label={t.lastReport}><div><Latest report={node.report} /></div></td>
@@ -86,37 +92,14 @@ export function Nodes({ page, directory, loading, loadMore }: {
   </div>
 }
 
-export function EnrollNode({ api, saved }: { api: AuthorityClient; saved: (node: NodeDetails) => void }) {
-  const t = useCopy(networkCopy)
-  const action = useAction()
-  return <div className="view editor"><BackLink href="#nodes">{t.backToNodes}</BackLink><h1>{t.enroll}</h1>
-    <ValidatedForm className="panel padded stack" onSubmit={event => {
-      event.preventDefault()
-      const data = new FormData(event.currentTarget)
-      void action.run(async () => {
-        const node = await api.enroll({ key: requireIdentity(String(data.get('key')), 'node'),
-          zone: data.get('zone') as Zone, region: String(data.get('region')).trim() })
-        saved(node)
-        location.hash = 'node/' + encode(node.key)
-      })
-    }}>
-      <div className="field"><label htmlFor="node-key">{t.publicNodeKey}</label>
-        <input id="node-key" name="key" autoCapitalize="none" spellCheck={false} required /></div>
-      <div className="field"><label htmlFor="zone">{t.zone}</label><select id="zone" name="zone">
-        <option value="global">{t.zones.global}</option><option value="cn">{t.zones.cn}</option></select></div>
-      <div className="field"><label htmlFor="region">{t.region}</label><input id="region" name="region" maxLength={128} required /></div>
-      <Notice feedback={action.feedback} /><div><button disabled={action.busy}>{action.busy ? t.enrolling : t.enroll}</button></div>
-    </ValidatedForm></div>
-}
+type NodeDetailActions = { refresh: () => void; directory: Directory; api: AuthorityClient; saved: (node: RelayNode) => void }
 
-type NodeDetailActions = { directory: Directory; api: AuthorityClient; saved: (node: RelayNode) => void }
-
-export function LookupNode({ id, api, directory, saved }: NodeDetailActions & { id: string }) {
+export function LookupNode({ id, api, directory, saved, refresh }: NodeDetailActions & { id: string }) {
   const t = useCopy(networkCopy)
   const read = useCallback((signal: AbortSignal) => api.node(id, signal), [api, id])
   const resource = useResource(read)
   const node = resource.value
-  if (node) return <NodeDetail node={node} api={api} directory={directory} saved={next => {
+  if (node) return <NodeDetail node={node} api={api} directory={directory} refresh={refresh} saved={next => {
     resource.update(previous => previous && { ...previous, ...next })
     saved(next)
   }} />
@@ -127,7 +110,7 @@ export function LookupNode({ id, api, directory, saved }: NodeDetailActions & { 
   </div>
 }
 
-export function NodeDetail({ node, directory, api, saved }: NodeDetailActions & { node: NodeDetails }) {
+export function NodeDetail({ node, directory, api, saved, refresh }: NodeDetailActions & { node: NodeDetails }) {
   const { report } = node
   const [confirmPause, setConfirmPause] = useState(false)
   const t = useCopy(networkCopy)
@@ -140,11 +123,12 @@ export function NodeDetail({ node, directory, api, saved }: NodeDetailActions & 
     })
   }
   return <div className="view"><BackLink href="#nodes">{t.backToNodes}</BackLink>
-    <h1>{node.region || t.zones[node.zone]}</h1>
+    <h1>{node.listing?.spec.alias || node.region || t.zones[node.zone]}</h1>
     <div className="node-detail-grid"><section className="panel padded"><h2>{t.nodeDetails}</h2>
-      <dl className="facts"><dt>{t.zone}</dt><dd>{t.zones[node.zone]}</dd><dt>{t.publicKey}</dt><dd><code>{id}</code></dd>
+      <dl className="facts"><dt>{t.region}</dt><dd>{node.region}</dd><dt>{t.zone}</dt><dd>{t.zones[node.zone]}</dd><dt>{t.publicKey}</dt><dd><code>{id}</code></dd>
         <dt>{t.directory}</dt><dd><Listing directory={directory} id={id} /></dd>
         <dt>{t.lastReport}</dt><dd>{report ? <ReportTime report={report} /> : t.awaitingReport}</dd>
+        {report?.load.relay_budget && <><dt>{t.relayBudget}</dt><dd><Bytes value={report.load.relay_budget.bytes} /> · {t.resetsDay(report.load.relay_budget.reset_day_utc)}</dd></>}
         {report && <><dt>{t.loadSnapshot} · <DateStamp millis={report.created_at * 1000} /></dt><dd>
           {t.sessions(report.load.active_sessions)} · {t.relayed} <Bytes value={report.load.forwarded_bytes} /> · {t.refusals(report.load.admission_refusals)}</dd></>}
       </dl></section>
@@ -157,6 +141,7 @@ export function NodeDetail({ node, directory, api, saved }: NodeDetailActions & 
           {node.anonymous ? t.requireAccount : t.allowAnonymous}</button></div>
       <Notice feedback={action.feedback} />
     </section></div>
+    {node.listing && <Verification node={node} api={api} refresh={refresh} />}
     {confirmPause && <Confirm title={t.confirmPause} confirm={t.pauseRelay} onCancel={() => setConfirmPause(false)}
       onConfirm={() => { setConfirmPause(false); change('public_relay', false) }}>
       <p>{t.pauseConsequences}</p>

@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh the WindShare directory independently of frontend releases
+
+[Timer]
+OnBootSec=15s
+OnUnitActiveSec=60s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

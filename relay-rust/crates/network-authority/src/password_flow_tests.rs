@@ -55,6 +55,7 @@ fn independent_random_salts_prevent_cookie_resurrection_and_verify_legacy_hashes
         &mut authority.store,
         &key("node", &node),
         &Node {
+            listing: None,
             key: node,
             zone: Zone::Global,
             region: "test".into(),

@@ -1,0 +1,13 @@
+[Unit]
+Description=Refresh the verified WindShare directory mirror
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=windshare-network
+ExecStart=/opt/windshare-network/network-sign mirror --out /srv/windshare/directory/windshare-network.json
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/windshare/directory
+PrivateTmp=true

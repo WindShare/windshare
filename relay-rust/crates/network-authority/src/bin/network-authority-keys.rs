@@ -38,6 +38,18 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     if let [command, document, seed] = args.as_slice()
+        && command == "verify-publisher"
+    {
+        use windshare_network_authority::fleet::publication::{Publisher, Release};
+        let release = Release::bundled()?;
+        let cert = serde_json::from_slice(&std::fs::read(document)?)?;
+        return Publisher::new(&release, cert, std::fs::read_to_string(seed)?.trim())?
+            .check_release(
+                &release,
+                SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
+            );
+    }
+    if let [command, document, seed] = args.as_slice()
         && command == "verify"
     {
         let trust: serde_json::Value = serde_json::from_slice(&std::fs::read(document)?)?;

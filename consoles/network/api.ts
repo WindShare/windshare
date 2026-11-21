@@ -2,9 +2,12 @@ import { message, type Message } from '../ui/locale'
 import { networkCopy } from './locales'
 import { request, RequestError } from '../ui/request'
 import { decode, encode } from './identity'
-import type { AccountDetails, AccountPage, AccountSummary, Enrollment, MilestoneReview, NodeDetails, NodePage, PolicyField, PolicySnapshot, RelayNode, Report, ReportPage, Restrictions, SettingsChanges, Snapshot, Target } from './model'
+import type { AccountDetails, AccountPage, AccountSummary, Discovery, Enrollment, TrafficStatus, MilestoneReview, NodeDetails, NodePage, PolicyField, PolicySnapshot, RelayNode, Report, ReportPage, Restrictions, SettingsChanges, Snapshot, Target } from './model'
 
 const messages = {
+  alias_bound: message(networkCopy, 'aliasBound'),
+  verification_required: message(networkCopy, 'verificationRequired'),
+  mirror_lag: message(networkCopy, 'mirrorLag'),
   credentials: message(networkCopy, 'invalidCredentials'),
   credentials_changed: message(networkCopy, 'sessionChanged'),
   initialization_consumed: message(networkCopy, 'setupLinkUsed'),
@@ -102,6 +105,8 @@ export class AuthorityClient {
     }, 'POST', { credentials: message(networkCopy, 'invalidCurrentPassword') })
     this.csrf = result.csrf
   }
+  discover = (url: string) => this.write<Discovery>('nodes/discover', { url })
+  promote = (node_key: string, status: TrafficStatus) => this.write('nodes/promote', { node_key, status })
   enroll = (node: Enrollment) => this.write<NodeDetails>('nodes', node)
   policy = (key: number[], field: PolicyField, value: boolean) => this.write<RelayNode>('nodes/policy', { key, change: { field, value } }, 'PUT')
   updateSettings = (changes: SettingsChanges) => this.write<PolicySnapshot>('settings', changes, 'PATCH')

@@ -10,7 +10,7 @@ export function networkAssets(): Plugin {
       const release = JSON.parse(readFileSync(new URL('release.json', networkDirectory), 'utf8')) as { snapshot: unknown }
       if (release.snapshot === null) return
       const source = readFileSync(new URL('windshare-network.json', networkDirectory), 'utf8')
-      if (JSON.stringify(JSON.parse(source)) !== JSON.stringify(release.snapshot)) throw new Error('Directory mirror and embedded snapshot differ; run network-sign sign before building.')
+      if (JSON.stringify(JSON.parse(source)) !== JSON.stringify(release.snapshot)) throw new Error('Directory mirror and embedded snapshot differ; run network-sign export before building.')
       this.emitFile({ type: 'asset', fileName: '.well-known/windshare-network', source })
     },
   }

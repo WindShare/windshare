@@ -41,6 +41,7 @@ pub(crate) struct Service {
 }
 
 struct State {
+    node_key: Option<[u8; 32]>,
     policy: Arc<Policy>,
     authorities: control::Authorities,
     controller: Option<Issuer>,
@@ -56,6 +57,7 @@ impl Default for Service {
     fn default() -> Self {
         Self {
             state: Arc::new(RwLock::new(State {
+                node_key: None,
                 policy: Arc::default(),
                 authorities: control::Authorities::default(),
                 controller: None,
@@ -73,6 +75,9 @@ impl Default for Service {
 }
 
 impl Service {
+    pub(super) fn identify(&self, key: [u8; 32]) {
+        self.write().node_key = Some(key);
+    }
     fn read(&self) -> RwLockReadGuard<'_, State> {
         self.state.read().expect("node access state")
     }

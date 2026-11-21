@@ -397,6 +397,7 @@ fn ticket_auth_refusals_and_node_status_batches_emit_structured_traces() {
         &mut authority.store,
         &key("node", &node.verifying_key().to_bytes()),
         &Node {
+            listing: None,
             version: 3,
             key: node.verifying_key().to_bytes(),
             zone: Zone::Global,

@@ -26,6 +26,9 @@ impl CachePolicy {
 #[event(fetch)]
 pub async fn fetch(request: Request, env: Env, _context: Context) -> Result<Response> {
     super::telemetry::install(&env);
+    if request.method() == Method::Get && request.path() == "/.well-known/windshare-network" {
+        return super::fleet::public_directory(&env).await;
+    }
     if request.path().starts_with("/internal/") {
         return Response::error("not found", 404);
     }
@@ -68,7 +71,9 @@ pub async fn fetch(request: Request, env: Env, _context: Context) -> Result<Resp
         {
             return Response::error("JSON required", 415);
         }
-        if super::passwords::handles(&request.method(), &request.path()) {
+        if super::fleet::handles_edge(&request) {
+            super::fleet::handle_edge(request, &env).await?
+        } else if super::passwords::handles(&request.method(), &request.path()) {
             super::passwords::handle(request, &env).await?
         } else {
             forward(request, &env).await?
@@ -78,18 +83,11 @@ pub async fn fetch(request: Request, env: Env, _context: Context) -> Result<Resp
         // Revalidate on each poll so normal browser caching adds no delay to blocks.
         cache_policy = CachePolicy::PrivateRevalidate;
     }
-    apply_response_headers(
-        response,
-        &env,
-        origin.as_deref(),
-        cache_policy,
-        usage_report,
-    )
+    apply_response_headers(response, origin.as_deref(), cache_policy, usage_report)
 }
 
 fn apply_response_headers(
     response: Response,
-    env: &Env,
     origin: Option<&str>,
     cache_policy: CachePolicy,
     usage_report: bool,
@@ -107,18 +105,9 @@ fn apply_response_headers(
     response
         .headers_mut()
         .set("Cache-Control", cache_policy.header())?;
-    let policy = env.var("DIRECTORY_ORIGIN").map_or_else(
-        |_| POLICY.to_owned(),
-        |origin| {
-            POLICY.replace(
-                "connect-src 'self'",
-                &format!("connect-src 'self' {origin}"),
-            )
-        },
-    );
     response
         .headers_mut()
-        .set("Content-Security-Policy", &policy)?;
+        .set("Content-Security-Policy", POLICY)?;
     response
         .headers_mut()
         .set("X-Content-Type-Options", "nosniff")?;

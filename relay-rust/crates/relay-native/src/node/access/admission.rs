@@ -328,6 +328,13 @@ impl State {
                         .ok_or(AdmissionRefusal::Denied(RefusalReason::TicketEncoding))?
                         .and_then(|proof| proof.current(&self.authorities.trusted, now))
                         .map_err(AdmissionRefusal::Ticket)?;
+                    if !windshare_relay_access::probe::permits(
+                        ticket,
+                        self.node_key.as_ref(),
+                        share.as_bytes(),
+                    ) {
+                        return Err(AdmissionRefusal::Denied(RefusalReason::TicketUntrusted));
+                    }
                     AuthorizedIdentity::Ticket(ticket)
                 }
             }

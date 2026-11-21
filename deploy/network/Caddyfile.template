@@ -7,9 +7,11 @@ ws.ourworld.top {
 
     handle /.well-known/windshare-network {
         header Access-Control-Allow-Origin *
-        header Cache-Control "public, max-age=300"
-        @available file {path}
+        header Cache-Control "public, max-age=60"
+        root * /srv/windshare
+        @available file /directory/windshare-network.json /current/web{path}
         handle @available {
+            rewrite * {file_match.relative}
             header Content-Type application/json
             file_server
         }

@@ -1,0 +1,30 @@
+import { useAction } from '../ui/activity'
+import { Notice } from '../ui/layout'
+import { useCopy } from '../ui/use-locale'
+import type { AuthorityClient } from './api'
+import { networkCopy } from './locales'
+import type { RelayNode, TrafficStatus } from './model'
+
+export function Verification({ node, api, refresh }: { node: RelayNode; api: AuthorityClient; refresh: () => void }) {
+  const t = useCopy(networkCopy)
+  const action = useAction()
+  if (!node.listing) return null
+  const { spec, state } = node.listing
+  const passed = state.kind === 'staging' && state.check.kind === 'passed'
+  const promotable = passed || state.kind === 'listed' && state.status === 'canary'
+  const promote = (status: TrafficStatus) => void action.run(async () => {
+    await api.promote(spec.node_key, status)
+    refresh()
+  })
+  return <section className="panel padded stack"><h2>{t.verification}</h2>
+    <dl className="facts"><dt>{t.endpoint}</dt><dd>{spec.relay}</dd><dt>{t.provider}</dt><dd>{spec.provider}</dd>
+      <dt>{t.services}</dt><dd>{spec.roles.map(role => role === 'stun' ? 'STUN' : t.publicRelay).join(', ')}</dd>
+      <dt>{t.capacity}</dt><dd>{spec.capacity_mbps}</dd><dt>{t.status}</dt><dd>{state.kind === 'listed' ? t.states[state.status] : t.states[state.check.kind]}</dd></dl>
+    {state.kind === 'staging' && state.check.kind === 'failed' && <p role="status">{state.check.reason}</p>}
+    {promotable && node.enabled && <div className="actions">
+      {passed && <button type="button" className="secondary" disabled={action.busy} onClick={() => promote('canary')}>{t.publishCanary}</button>}
+      <button type="button" disabled={action.busy} onClick={() => promote('active')}>{t.publishActive}</button>
+    </div>}
+    <Notice feedback={action.feedback} />
+  </section>
+}

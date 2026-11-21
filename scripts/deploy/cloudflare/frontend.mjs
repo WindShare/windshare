@@ -4,7 +4,11 @@ import { prepareRoute, readFrontendRoute, sameRoute, verifyRoute } from './routi
 import { confirmConverged, PropagationPendingError } from './verification.mjs';
 
 const FORMAT = 'windshare-cloudflare-frontend-v1';
-export function readFrontendInputs(env) { return { ...readWorkerIdentity(env), route: readFrontendRoute(env) }; }
+export function readFrontendInputs(env) {
+  const directory = env.DIRECTORY_KV_ID;
+  if (directory !== undefined && !/^[0-9a-f]{32}$/.test(directory)) throw new Error('Invalid directory KV namespace.');
+  return { ...readWorkerIdentity(env), route: readFrontendRoute(env), ...(directory ? { directory } : {}) };
+}
 function retainedState(settings, inputs, endpoint, allowSaaSAttachment = false, previousState = null) {
   if (settings == null) {
     throw new PropagationPendingError(

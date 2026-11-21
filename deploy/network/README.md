@@ -5,30 +5,25 @@
 The production manifest pins two directory roots and the account authority.
 `cn1` and `us1` advertise relay and STUN. Verify with `go run ./cmd/network-sign verify`.
 
-Build the local signer with `go build ./cmd/network-sign`. Generate two offline
-roots on separate storage and one online key; keep production private keys outside the checkout:
+The authority signs every new directory revision and renews it before expiry. For a new
+signing generation, generate an online Ed25519 key and authorize its public key with one of
+the offline roots pinned in `release.json`. Keep the private keys outside this checkout.
 
-```text
-network-sign keygen --id root-a --private <offline-root.pem> --public <root-a.json>
-network-sign keygen --id root-b --private <separate-offline-root.pem> --public <root-b.json>
-network-sign keygen --id online-1 --private <online.pem> --public <online.json>
-network-sign authorize --root-private <offline-root.pem> --root-id root-a --online-public <online.json> --generation 1 --not-before <RFC3339> --expires <RFC3339> --out <certificate.json>
-network-sign sign --online-private <online.pem> --certificate <certificate.json>
-network-sign verify
+```sh
+network-sign keygen --id online-2 --private online.pem --public online.json
+network-sign authorize --root-private <offline-root.pem> --root-id root-a --online-public online.json --generation 2 --not-before <RFC3339> --expires <RFC3339> --out certificate.json
 ```
 
-Copy the two public root records into `release.json.roots`. Edit `directory.json`
-with verified node keys and current validity dates. Publish a mainland relay role
-after its account admission and usage reports have been verified. Keep both root storage and the online key
-outside the checkout. Increase serial for each update; an offline root must
-authorize every higher generation. Signing checks all historical alias bindings,
-updates the shared embedded snapshot, and writes an immutable export under `history/`.
-Certificates last at most 180 days and payloads 90 days. Clients allow seven days of
-payload expiry grace, never past certificate expiry.
+Set the authority's `DIRECTORY_CERTIFICATE` to that certificate and configure its private
+PEM file as secret `DIRECTORY_SIGNING_SEED`. See the [authority deployment guide](../../relay-rust/crates/network-authority/README.md).
+A certificate can authorize up to 180 days. Each payload lasts at most 90 days.
+Clients allow seven days of payload expiry grace within the certificate lifetime.
 
-Publish `windshare-network.json` as `/.well-known/windshare-network` on both
-frontends and as a GitHub release asset. Keep the embedded snapshot current in client
-releases. Cache expiry disables directory use for new work without stopping transfers.
+Before cutting a client release, run `go run ./cmd/network-sign export` and
+`go run ./cmd/network-sign verify`. Review and commit the changes in this directory.
+Export verifies the public authority snapshot, checks immutable alias history, and updates
+the Go/browser release manifest, readable payload, signed archive and GitHub release asset.
+The live frontend mirrors update independently of this export.
 
 To verify first-run sharing, create a fresh settings file containing `{"profiles":[]}`
 and point `WINDSHARE_CONFIG` at it. Share a test file with `go run ./cmd/wind share <file>`

@@ -6,6 +6,7 @@ mod admission;
 mod challenges;
 #[cfg(any(test, target_arch = "wasm32"))]
 mod device_login;
+pub mod fleet;
 mod governance;
 mod model;
 mod nodes;
@@ -26,9 +27,7 @@ pub use challenges::{EmailDelivery, ProofKind};
 pub use device_login::DeviceApproval;
 pub use governance::{Block, MilestoneReview, Report, ReportPage, ReportPosition};
 pub use model::*;
-pub use nodes::{
-    Node, NodeDetails, NodeEnrollment, NodeLoadReport, NodePage, NodePolicyChange, Zone,
-};
+pub use nodes::{Node, NodeDetails, NodeLoadReport, NodePage, NodePolicyChange, Zone};
 pub use password::{
     HashedPassword, PASSWORD_SALT_BYTES, PasswordChallenge, PasswordChangePreparation,
     PasswordRegistrationPreparation, PasswordRegistrationPrepare, valid_login_password_length,
