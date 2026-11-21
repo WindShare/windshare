@@ -198,6 +198,75 @@ test('a temporary Cache API failure retries the same live revision after the edg
   await read();
   assert.equal(writes, 2);
 });
+test('mirror isolates request I/O promises, merges cold restores monotonically, and isolates cache writes', async t => {
+  t.mock.method(Date, 'now', () => Date.parse(vectors.now));
+  const baseline = signed('valid'), newer = signed('new_generation');
+  const request = new Request('https://windshare.cc/.well-known/windshare-network');
+
+  // 1. A stalled/canceled request on cold start must not poison subsequent requests' restore or bundle fetch.
+  let matchCalls = 0, assetCalls = 0;
+  const cache = {
+    match: () => (++matchCalls === 1 ? new Promise(() => {}) : Promise.resolve(null)),
+    put: async () => {},
+  };
+  const env = {
+    DIRECTORY: { get: async () => null },
+    ASSETS: { fetch: () => (++assetCalls === 1 ? new Promise(() => {}) : Promise.resolve(new Response(baseline))) },
+  };
+  // Request 1 hangs forever inside its own cache.match and ASSETS.fetch (like an aborted workerd IoContext).
+  const req1 = serveDirectory(request, env, null, cache);
+  const req2 = await serveDirectory(request, env, null, cache);
+  assert.equal(req2.status, 200);
+  assert.equal(await req2.text(), baseline);
+  // Request 3 hits cached plain data without re-running cache.match or ASSETS.fetch.
+  const req3 = await serveDirectory(request, env, null, cache);
+  assert.equal(req3.status, 200);
+  assert.equal(await req3.text(), baseline);
+  assert.equal(matchCalls, 2);
+  assert.equal(assetCalls, 2);
+  void req1;
+
+  // 2. Late cold-start restore resolving with an older revision must not downgrade a newer KV revision.
+  let releaseSlowRestore, mergeMatchCalls = 0, mergeKv = newer;
+  const slowRestore = new Promise(resolve => { releaseSlowRestore = resolve; });
+  const mergeCache = {
+    match: () => (++mergeMatchCalls === 1 ? slowRestore : Promise.resolve(null)),
+    put: async () => {},
+  };
+  const mergeEnv = {
+    DIRECTORY: { get: async () => mergeKv },
+    BUNDLED_DIRECTORY_REVISION: 'null',
+  };
+  const slowReq = serveDirectory(request, mergeEnv, null, mergeCache);
+  const fastReq = await serveDirectory(request, mergeEnv, null, mergeCache);
+  assert.equal(await fastReq.text(), newer);
+  releaseSlowRestore(new Response(baseline));
+  assert.equal(await (await slowReq).text(), newer);
+  mergeKv = null;
+  assert.equal(await (await serveDirectory(request, mergeEnv, null, mergeCache)).text(), newer);
+
+  // 3. A stalled waitUntil cache.put on an earlier revision must not block persisting a newer revision.
+  let putCalls = 0, persisted = null, writeKv = baseline;
+  const writeEnv = {
+    DIRECTORY: { get: async () => writeKv },
+    BUNDLED_DIRECTORY_REVISION: 'null',
+  };
+  const writeCache = {
+    match: async () => null,
+    put: async (key, value) => {
+      if (++putCalls === 1) return new Promise(() => {});
+      persisted = await value.text();
+    },
+  };
+  const waits = [];
+  const ctx = { waitUntil(promise) { waits.push(promise); } };
+  assert.equal(await (await serveDirectory(request, writeEnv, ctx, writeCache)).text(), baseline);
+  writeKv = newer;
+  assert.equal(await (await serveDirectory(request, writeEnv, ctx, writeCache)).text(), newer);
+  await waits[1];
+  assert.equal(putCalls, 2);
+  assert.equal(persisted, newer);
+});
 
 test('frontend inputs normalize optional KV bindings and reject malformed IDs', () => {
   const account = { CLOUDFLARE_ACCOUNT_ID: 'a'.repeat(32), CLOUDFLARE_WORKER_NAME: 'official-web' };

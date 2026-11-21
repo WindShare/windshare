@@ -22,24 +22,36 @@ async function asset(request, env) {
   return response.text();
 }
 
-function kvCopy(state, raw) {
+function adoptLast(state, copy, retryAt) {
+  if (!copy) return;
+  if (!state.last || compare(copy.revision, state.last.revision) > 0) {
+    state.last = retryAt === undefined ? copy : { ...copy, retryAt };
+  }
+}
+
+async function kvCopy(state, raw) {
   if (!raw || raw === state.last?.body) return null;
   // KV can keep returning the same stale revision for its entire edge TTL.
-  if (state.kv?.raw !== raw) state.kv = { raw, parsed: directoryRevision(raw).then(revision => ({ body: raw, revision }), () => null) };
-  return state.kv.parsed;
+  if (state.kv?.raw === raw) return state.kv.copy;
+  const copy = await directoryRevision(raw).then(revision => ({ body: raw, revision }), () => null);
+  state.kv = { raw, copy };
+  return copy;
 }
 
 async function restore(cache, key) {
-  const saved = await cache?.match(key);
+  const saved = await cache.match(key);
   if (!saved) return null;
   const body = await saved.text();
-  return { body, revision: await directoryRevision(body) };
+  const revision = await directoryRevision(body).catch(() => null);
+  return revision ? { body, revision } : null;
 }
 
-function bundled(env, request, state) {
-  state.bundle ??= asset(request, env).then(async body => body && { revision: await directoryRevision(body), body })
-    .catch(error => { state.bundle = undefined; throw error; });
-  return state.bundle;
+async function bundled(env, request, state) {
+  if (state.bundle !== undefined) return state.bundle;
+  const body = await asset(request, env);
+  const copy = body ? { revision: await directoryRevision(body), body } : null;
+  state.bundle = copy;
+  return copy;
 }
 async function bundledRevision(env, request, state) {
   // Production Workers know their immutable asset revision without reading the body.
@@ -47,17 +59,16 @@ async function bundledRevision(env, request, state) {
   return (await bundled(env, request, state))?.revision;
 }
 
-function persist(context, cache, key, state, copy, now) {
+function persist(context, cache, key, copy, now) {
   if (!context || !cache || copy.retryAt === undefined || now < copy.retryAt) return;
   copy.retryAt = undefined;
-  // Serializing the rare changed revisions prevents concurrent puts completing in reverse order.
-  state.writing = state.writing.then(() => cache.put(key, new Response(copy.body, {
+  // Keep each Cache API write inside its own request IoContext so a canceled waitUntil cannot stall later revisions.
+  context.waitUntil(cache.put(key, new Response(copy.body, {
     headers: { 'Cache-Control': 'public, max-age=' + Math.ceil((copy.revision.until - now) / 1000) },
-  }))).catch(error => {
+  })).catch(error => {
     copy.retryAt = Date.now() + EDGE_TTL * 1000;
     console.warn('directory_cache_write_failed', { generation: copy.revision.generation, serial: copy.revision.serial, error: String(error) });
-  });
-  context.waitUntil(state.writing);
+  }));
 }
 
 export async function serveDirectory(request, env, context, cache = globalThis.caches?.default) {
@@ -65,20 +76,26 @@ export async function serveDirectory(request, env, context, cache = globalThis.c
   const key = new URL('/.windshare-cache/last-directory', request.url).href;
   let state = mirrors.get(env);
   if (!state) {
-    state = { last: null, writing: Promise.resolve() };
+    // Store only resolved plain data across requests; never share pending I/O promises across IoContexts.
+    state = { last: null, restored: false, bundle: undefined, kv: null };
     mirrors.set(env, state);
-    state.ready = restore(env.DIRECTORY && cache, key).then(copy => { state.last = copy; }).catch(() => {});
   }
-  const [, raw, bundle] = await Promise.all([state.ready,
+  const restoreTask = !state.restored && env.DIRECTORY && cache
+    ? restore(cache, key).then(copy => {
+      adoptLast(state, copy);
+      state.restored = true;
+    }).catch(() => {})
+    : null;
+  const [, raw, bundle] = await Promise.all([
+    restoreTask,
     Promise.resolve().then(() => env.DIRECTORY?.get('windshare-network', { cacheTtl: EDGE_TTL })).catch(() => null),
     bundledRevision(env, request, state).catch(() => null),
   ]);
   const remote = await kvCopy(state, raw);
   const now = Date.now();
   const floor = bundle && bundle.start <= now ? bundle : null;
-  if (remote && usable(remote.revision, now) && atLeast(remote.revision, floor) &&
-      (!state.last || compare(remote.revision, state.last.revision) > 0)) {
-    state.last = { ...remote, retryAt: 0 };
+  if (remote && usable(remote.revision, now) && atLeast(remote.revision, floor)) {
+    adoptLast(state, remote, 0);
   }
   const last = state.last;
   const useLast = usable(last?.revision, now) && atLeast(last.revision, floor);
@@ -86,7 +103,7 @@ export async function serveDirectory(request, env, context, cache = globalThis.c
   const useBundle = usable(bundle, now) && (!last || compare(bundle, last.revision) >= 0);
   const revision = useLast ? last.revision : useBundle ? bundle : null;
   if (!revision) return unavailable();
-  if (useLast) persist(context, cache, key, state, last, now);
+  if (useLast) persist(context, cache, key, last, now);
   let body = null;
   if (request.method === 'GET') {
     if (useLast) body = last.body;
