@@ -1,6 +1,7 @@
 package networkdirectory
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -97,6 +98,10 @@ func (cache *FileCache) Update(ctx context.Context, change func(Record) (Record,
 		committed, err = change(record)
 		if err != nil {
 			return err
+		}
+		if record.Cursor.Generation != 0 && committed.Cursor == record.Cursor &&
+			bytes.Equal(committed.Envelope, record.Envelope) && maps.Equal(committed.Aliases, record.Aliases) {
+			return nil
 		}
 		data, err := json.Marshal(committed)
 		if err != nil {

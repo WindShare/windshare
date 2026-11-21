@@ -3,9 +3,13 @@ package networkdirectory
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"github.com/windshare/windshare/core/nodedirectory"
 )
@@ -71,4 +75,68 @@ func TestTargetedWaiterContinuesStartupPassAndPreservesAvailability(t *testing.T
 			t.Fatalf("unexpected backoff: %v", err)
 		}
 	})
+}
+
+type countingCache struct {
+	inner   Cache
+	updates atomic.Int32
+}
+
+func (c *countingCache) Load(ctx context.Context) (Record, error) { return c.inner.Load(ctx) }
+func (c *countingCache) Update(ctx context.Context, change func(Record) (Record, error)) (Record, error) {
+	c.updates.Add(1)
+	return c.inner.Update(ctx, change)
+}
+
+func TestEqualCursorMirrorsAndMixedCaseReleaseAssetAvoidRedundantWrites(t *testing.T) {
+	f := signing()
+	snapshot := f.envelope(t, 1, 1, 0)
+	fileCache := NewFileCache(filepath.Join(t.TempDir(), "config.json"), f.config().Network)
+	cache := &countingCache{inner: fileCache}
+	const cold = "https://GitHub.com/releases/directory"
+	const primary = "https://ws.ourworld.top/directory"
+	const backup = "https://windshare.cc/directory"
+	config := f.config()
+	config.Cache = cache
+	config.Mirrors = []string{cold, primary, backup}
+	var calls []string
+	config.Fetch = func(_ context.Context, address string) ([]byte, error) {
+		calls = append(calls, address)
+		return snapshot, nil
+	}
+	directory, err := New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer directory.Close()
+	// Let the initial startup refresh complete so the subsequent targeted pass is deterministic.
+	if err := directory.Refresh(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	statBefore, err := os.Stat(fileCache.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldModTime := statBefore.ModTime().Add(-2 * time.Minute)
+	if err := os.Chtimes(fileCache.path, oldModTime, oldModTime); err != nil {
+		t.Fatal(err)
+	}
+	calls = nil
+	cache.updates.Store(0)
+	if err := directory.RefreshAliases(t.Context(), []string{"missing"}); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(calls, []string{primary, backup, cold}) {
+		t.Fatalf("mirror order = %v, want live mirrors before mixed-case GitHub asset", calls)
+	}
+	if got := cache.updates.Load(); got != 1 {
+		t.Fatalf("cache updates across equal-cursor mirrors = %d, want 1", got)
+	}
+	statAfter, err := os.Stat(fileCache.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !statAfter.ModTime().Equal(oldModTime) {
+		t.Fatalf("file cache rewrote identical record: before=%v after=%v", oldModTime, statAfter.ModTime())
+	}
 }

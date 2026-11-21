@@ -16,6 +16,16 @@ interface LoadedDirectoryCache {
   readonly storageDenial?: DOMException
 }
 
+function sameRecord(previous: DirectoryRecord | undefined, next: DirectoryRecord): boolean {
+  if (!previous || !sameCursor(previous.cursor, next.cursor) || previous.envelope !== next.envelope) return false
+  const previousKeys = Object.keys(previous.aliases), nextKeys = Object.keys(next.aliases)
+  return previousKeys.length === nextKeys.length && previousKeys.every(key => previous.aliases[key] === next.aliases[key])
+}
+
+export function sameCursor(a: DirectoryCursor | undefined, b: DirectoryCursor): boolean {
+  return a !== undefined && a.generation === b.generation && a.serial === b.serial && a.digest === b.digest
+}
+
 function nextRecord(previous: DirectoryRecord | undefined, snapshot: NetworkSnapshot): DirectoryRecord {
   rejectRollback(previous?.cursor, snapshot.cursor)
   const aliases: Record<string, string> = { ...previous?.aliases }
@@ -92,8 +102,11 @@ export class BrowserDirectoryCache implements DirectoryCache {
         // Verification is finished before this transaction; rollback state and
         // alias history commit atomically even when two tabs refresh together.
         request.onsuccess = () => {
-          try { store.put(nextRecord(request.result as DirectoryRecord | undefined, snapshot), this.#key) }
-          catch (error) { reject(error); tx.abort() }
+          try {
+            const previous = request.result as DirectoryRecord | undefined
+            const record = nextRecord(previous, snapshot)
+            if (!sameRecord(previous, record)) store.put(record, this.#key)
+          } catch (error) { reject(error); tx.abort() }
         }
         tx.oncomplete = () => resolve()
         tx.onerror = () => reject(tx.error)

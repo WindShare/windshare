@@ -14,8 +14,17 @@ import type { LoadReport, NodeDetails, NodePage, PolicyField, Publication, Relay
 
 type Directory = Publication | null | undefined
 
-function Listing({ directory, id }: { directory: Directory; id: string }) {
+const STAGING_TONES = { queued: 'neutral', running: 'neutral', passed: 'good', failed: 'warning' } as const
+
+function Listing({ directory, id, listing }: { directory: Directory; id: string; listing?: RelayNode['listing'] }) {
   const t = useCopy(networkCopy)
+  if (listing?.state.kind === 'staging') {
+    const { kind } = listing.state.check
+    let note = t.notListed
+    if (directory === undefined) note = t.checkingMirror
+    else if (directory === null) note = t.unverified
+    return <><Badge tone={STAGING_TONES[kind]}>{t.states[kind]}</Badge><small>{note}</small></>
+  }
   if (directory === undefined) return <span>{t.checkingMirror}</span>
   if (directory === null) return <span>{t.unverified}</span>
   const listed = directory.keys.includes(id)
@@ -82,7 +91,7 @@ export function Nodes({ page, directory, loading, loadMore }: {
               <td data-label={t.savedRelayPolicy}><div><Badge tone={node.enabled ? 'good' : 'warning'}>{node.enabled ? t.enabled : t.paused}</Badge>
                 <small>{node.anonymous ? t.anonymousAllowed : t.accountRequired} · v{node.version}</small></div></td>
               <td data-label={t.lastReport}><div><Latest report={node.report} /></div></td>
-              <td data-label={t.directory}><div><Listing directory={directory} id={id} /></div></td>
+              <td data-label={t.directory}><div><Listing directory={directory} id={id} listing={node.listing} /></div></td>
             </tr>
           })}</tbody>
         </table>
@@ -92,7 +101,7 @@ export function Nodes({ page, directory, loading, loadMore }: {
   </div>
 }
 
-type NodeDetailActions = { refresh: () => void; directory: Directory; api: AuthorityClient; saved: (node: RelayNode) => void }
+type NodeDetailActions = { refresh: () => Promise<void>; directory: Directory; api: AuthorityClient; saved: (node: RelayNode) => void }
 
 export function LookupNode({ id, api, directory, saved, refresh }: NodeDetailActions & { id: string }) {
   const t = useCopy(networkCopy)
@@ -126,7 +135,7 @@ export function NodeDetail({ node, directory, api, saved, refresh }: NodeDetailA
     <h1>{node.listing?.spec.alias || node.region || t.zones[node.zone]}</h1>
     <div className="node-detail-grid"><section className="panel padded"><h2>{t.nodeDetails}</h2>
       <dl className="facts"><dt>{t.region}</dt><dd>{node.region}</dd><dt>{t.zone}</dt><dd>{t.zones[node.zone]}</dd><dt>{t.publicKey}</dt><dd><code>{id}</code></dd>
-        <dt>{t.directory}</dt><dd><Listing directory={directory} id={id} /></dd>
+        <dt>{t.directory}</dt><dd><Listing directory={directory} id={id} listing={node.listing} /></dd>
         <dt>{t.lastReport}</dt><dd>{report ? <ReportTime report={report} /> : t.awaitingReport}</dd>
         {report?.load.relay_budget && <><dt>{t.relayBudget}</dt><dd><Bytes value={report.load.relay_budget.bytes} /> · {t.resetsDay(report.load.relay_budget.reset_day_utc)}</dd></>}
         {report && <><dt>{t.loadSnapshot} · <DateStamp millis={report.created_at * 1000} /></dt><dd>

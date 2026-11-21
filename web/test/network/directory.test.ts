@@ -63,7 +63,7 @@ describe('root-authorized network directory', () => {
     const calls: string[] = []
     const observations: string[] = []
     const directory = new NetworkDirectory({ network: vectors.network, roots: vectors.roots, embedded: envelope('valid'),
-      origin: 'https://ws.ourworld.top', mirrors: ['https://mirror.example/directory'], now: () => now,
+      origin: 'https://ws.ourworld.top', mirrors: ['https://mirror.example/directory', 'https://ws.ourworld.top/.well-known/windshare-network'], now: () => now,
       cache: new MemoryDirectoryCache(), observe: value => observations.push(value.transition),
       fetch: async input => { calls.push(String(input)); return new Response(envelope(calls.length === 1 ? 'bad_signature' : 'new_generation')) },
     })
@@ -180,5 +180,51 @@ describe('root-authorized network directory', () => {
     expect(calls).toBe(1)
     expect(directory.snapshot).toBeUndefined()
     expect((await cache.load())!.cursor.generation).toBe(4)
+  })
+  it('does not spend a mirror slot on an unconfigured self-hosted origin and deduplicates equal-cursor commits', async () => {
+    const mirrors = [
+      'https://ws.ourworld.top/.well-known/windshare-network',
+      'https://windshare.cc/.well-known/windshare-network',
+      'https://github.com/windshare/windshare/releases/latest/download/windshare-network.json',
+    ]
+    const calls: string[] = []
+    const cache = new MemoryDirectoryCache()
+    const commitSpy = vi.spyOn(cache, 'commit')
+    const directory = new NetworkDirectory({ network: vectors.network, roots: vectors.roots, origin: 'https://self-hosted.example',
+      mirrors, random: () => 0.99, now: () => now, cache,
+      fetch: async input => { calls.push(String(input)); return new Response(envelope('valid')) },
+    })
+    directories.push(directory)
+    await directory.refresh(['missing'])
+    expect(calls).toEqual(mirrors)
+    expect(commitSpy).toHaveBeenCalledTimes(1)
+  })
+  it('joins an in-flight retry even if the wall clock steps backward before retryAt', async () => {
+    let clock = now
+    let attempt = 0
+    let release!: (response: Response) => void
+    let entered!: () => void
+    const secondStarted = new Promise<void>(resolve => { entered = resolve })
+    const directory = new NetworkDirectory({ network: vectors.network, roots: vectors.roots,
+      mirrors: ['https://mirror.example/directory'], now: () => clock, cache: new MemoryDirectoryCache(),
+      fetch: () => {
+        attempt++
+        if (attempt === 1) return Promise.reject(new Error('offline'))
+        entered()
+        return new Promise<Response>(resolve => { release = resolve })
+      },
+    })
+    directories.push(directory)
+    await expect(directory.refresh()).rejects.toThrow('offline')
+    clock += 30_000
+    const retry = directory.refresh()
+    await secondStarted
+    // Wall-clock step backward during an active retry must still coalesce callers into it.
+    clock -= 10_000
+    const joined = directory.refresh(['jp1'])
+    release(new Response(envelope('valid')))
+    await Promise.all([retry, joined])
+    expect(attempt).toBe(2)
+    expect(directory.snapshot?.nodes[0]?.alias).toBe('jp1')
   })
 })

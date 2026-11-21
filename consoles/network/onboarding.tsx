@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { ValidatedForm } from '../ui/ValidatedForm'
 import { useAction } from '../ui/activity'
 import { BackLink, Notice } from '../ui/layout'
+import { message, MessageError } from '../ui/locale'
 import { useCopy } from '../ui/use-locale'
 import type { AuthorityClient } from './api'
 import { encode } from './identity'
@@ -28,6 +29,7 @@ function setupCommand(address: string, trust: Publication['setup']): string | un
 export function EnrollNode({ api, saved, setup }: Props) {
   const t = useCopy(networkCopy)
   const action = useAction()
+  const copy = useAction()
   const [address, setAddress] = useState('')
   const [node, setNode] = useState<Discovery>()
   const command = setup && setupCommand(address, setup)
@@ -41,21 +43,28 @@ export function EnrollNode({ api, saved, setup }: Props) {
       <div><button disabled={action.busy}>{t.inspectNode}</button></div>
       {command && <details><summary>{t.freshInstall}</summary>
         <p>{t.setupHint}</p><textarea aria-label={t.setupCommand} readOnly value={command} onFocus={event => event.target.select()} />
-        <button type="button" className="secondary" onClick={() => void action.run(() => navigator.clipboard.writeText(command))}>{t.copySetup}</button></details>}
+        <div><button type="button" className="secondary" disabled={copy.busy} onClick={() => void copy.run(async () => {
+          try { await navigator.clipboard.writeText(command) }
+          catch { throw new MessageError(message(networkCopy, 'copyCommandFailed')) }
+          return message(networkCopy, 'setupCommandCopied')
+        })}>{t.copySetup}</button></div>
+        <Notice feedback={copy.feedback} /></details>}
     </ValidatedForm>
     {node && <ValidatedForm key={node.node_key} className="panel padded stack" onSubmit={event => {
       event.preventDefault()
       const data = new FormData(event.currentTarget)
+      const roles = data.getAll('role') as Role[]
       void action.run(async () => {
+        if (roles.length === 0) throw new MessageError(message(networkCopy, 'selectService'))
         const added = await api.enroll({ url: node.relay, node_key: node.node_key, alias: String(data.get('alias')).trim(),
           zone: data.get('zone') as Zone, region: String(data.get('region')).trim(), provider: String(data.get('provider')).trim(),
-          roles: data.getAll('role') as Role[], capacity_mbps: Number(data.get('capacity')) })
+          roles, capacity_mbps: Number(data.get('capacity')) })
         saved(added)
         location.hash = 'node/' + encode(added.key)
       })
     }}>
       <div className="facts"><span>{t.publicNodeKey}</span><code>{node.node_key}</code></div>
-      <label className="field">{t.alias}<input name="alias" pattern="[a-z]([a-z0-9\-]{0,30}[a-z0-9])?" maxLength={32} required /></label>
+      <label className="field">{t.alias}<input name="alias" pattern="[a-z]([a-z0-9\-]{0,30}[a-z0-9])?" title={t.aliasFormat} maxLength={32} required /></label>
       <label className="field">{t.zone}<select name="zone" defaultValue={node.zone}>
         <option value="global">{t.zones.global}</option><option value="cn">{t.zones.cn}</option></select></label>
       <label className="field">{t.region}<input name="region" defaultValue={node.region} maxLength={128} required /></label>

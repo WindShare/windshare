@@ -15,7 +15,14 @@ function cloud() {
   let settings = null;
   return { subdomain: async () => 'account', settings: async () => settings,
     route: async () => ({ enabled: true, previews_enabled: false }),
-    retain: state => { settings = { bindings: [{ name: STATE_BINDING, type: 'plain_text', text: JSON.stringify(state) }] }; },
+    retain: (state, kv = state.directory) => {
+      settings = {
+        bindings: [
+          { name: STATE_BINDING, type: 'plain_text', text: JSON.stringify(state) },
+          ...(kv ? [{ name: 'DIRECTORY', type: 'kv_namespace', namespace_id: kv }] : []),
+        ],
+      };
+    },
   };
 }
 test('frontend creates and updates without credentials, namespaces or TURN', async () => {
@@ -197,4 +204,74 @@ test('frontend inputs normalize optional KV bindings and reject malformed IDs', 
   assert.equal(readFrontendInputs({ ...account, DIRECTORY_KV_ID: ' ' }).directory, undefined);
   assert.equal(readFrontendInputs({ ...account, DIRECTORY_KV_ID: ' ' + 'c'.repeat(32) + ' ' }).directory, 'c'.repeat(32));
   assert.throws(() => readFrontendInputs({ ...account, DIRECTORY_KV_ID: 'oops' }), /KV/);
+});
+
+test('frontend updates converge directory KV attachment, rotation, and removal', async () => {
+  const account = { CLOUDFLARE_ACCOUNT_ID: 'a'.repeat(32), CLOUDFLARE_WORKER_NAME: 'official-web' };
+  const firstKv = 'c'.repeat(32);
+  const rotatedKv = 'd'.repeat(32);
+  const plain = readFrontendInputs(account);
+  const attached = readFrontendInputs({ ...account, DIRECTORY_KV_ID: firstKv });
+  const rotated = readFrontendInputs({ ...account, DIRECTORY_KV_ID: rotatedKv });
+  const base = cloud();
+  const events = [];
+  let pendingSettings = [];
+  const cloudflare = {
+    ...base,
+    settings: async () => pendingSettings.length > 0 ? pendingSettings.shift() : base.settings(),
+  };
+  const initial = await deployFrontend({ inputs: plain, cloudflare, deploy: async plan => base.retain(plan.state) });
+  const priorSettings = await base.settings();
+
+  const upgraded = await deployFrontend({
+    inputs: attached, cloudflare,
+    deploy: async plan => {
+      // Simulate Cloudflare returning stale state, then updated state without the KV binding yet.
+      pendingSettings = [
+        priorSettings,
+        { bindings: [{ name: STATE_BINDING, type: 'plain_text', text: JSON.stringify(plan.state) }] },
+      ];
+      base.retain(plan.state);
+    },
+    log: (event, fields) => events.push({ event, ...fields }),
+    wait: async () => {},
+    verificationDelaysMs: [10, 20, 40],
+  });
+  assert.equal(upgraded.kind, 'update');
+  assert.equal(upgraded.state.deploymentId, initial.state.deploymentId);
+  assert.equal(upgraded.state.directory, firstKv);
+  assert.deepEqual(events.filter(e => e.event === 'deployment_verification_retry').map(e => e.reason), [
+    'stale_frontend_state',
+    'missing_binding:DIRECTORY',
+  ]);
+
+  const moved = await deployFrontend({
+    inputs: rotated, cloudflare,
+    deploy: async plan => {
+      pendingSettings = [
+        { bindings: [{ name: STATE_BINDING, type: 'plain_text', text: JSON.stringify(plan.state) },
+          { name: 'DIRECTORY', type: 'kv_namespace', namespace_id: firstKv }] },
+      ];
+      base.retain(plan.state);
+    },
+    log: (event, fields) => events.push({ event, ...fields }),
+    wait: async () => {},
+    verificationDelaysMs: [10, 20],
+  });
+  assert.equal(moved.state.directory, rotatedKv);
+  assert.equal(events.filter(e => e.event === 'deployment_verification_retry').at(-1)?.reason, 'directory_binding_pending');
+
+  const detached = await deployFrontend({
+    inputs: plain, cloudflare,
+    deploy: async plan => {
+      pendingSettings = [
+        { bindings: [{ name: STATE_BINDING, type: 'plain_text', text: JSON.stringify(plan.state) },
+          { name: 'DIRECTORY', type: 'kv_namespace', namespace_id: rotatedKv }] },
+      ];
+      base.retain(plan.state);
+    },
+    wait: async () => {},
+    verificationDelaysMs: [10, 20],
+  });
+  assert.equal(detached.state.directory, undefined);
 });

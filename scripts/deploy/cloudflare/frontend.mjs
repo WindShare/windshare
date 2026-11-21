@@ -4,6 +4,7 @@ import { prepareRoute, readFrontendRoute, sameRoute, verifyRoute } from './routi
 import { confirmConverged, PropagationPendingError } from './verification.mjs';
 
 const FORMAT = 'windshare-cloudflare-frontend-v1';
+const DIRECTORY_BINDING = 'DIRECTORY';
 export function readFrontendInputs(env) {
   const directory = env.DIRECTORY_KV_ID?.trim() || undefined;
   if (directory !== undefined && !/^[0-9a-f]{32}$/.test(directory)) throw new Error('Invalid directory KV namespace.');
@@ -29,7 +30,7 @@ function retainedState(settings, inputs, endpoint, allowSaaSAttachment = false, 
   let state;
   if (markers.length === 1) { try { state = JSON.parse(markers[0].text); } catch { /* Invalid ownership records cannot authorize replacement. */ } }
   if (previousState && state && JSON.stringify(state) === JSON.stringify(previousState) &&
-      JSON.stringify(previousState.route) !== JSON.stringify(inputs.route)) {
+      (JSON.stringify(previousState.route) !== JSON.stringify(inputs.route) || previousState.directory !== inputs.directory)) {
     throw new PropagationPendingError('Frontend ownership changed during upload.', 'stale_frontend_state');
   }
   // The owned frontend can go live before SaaS billing and certificate validation.
@@ -42,6 +43,21 @@ function retainedState(settings, inputs, endpoint, allowSaaSAttachment = false, 
   }
   return state;
 }
+function verifyDirectoryBinding(settings, directory) {
+  const matches = settings?.bindings?.filter(binding => binding.name === DIRECTORY_BINDING) ?? [];
+  if (!directory) {
+    if (matches.length > 0) {
+      throw new PropagationPendingError('Directory KV binding is still present after removal.', 'directory_binding_pending');
+    }
+    return;
+  }
+  if (matches.length === 0) {
+    throw new PropagationPendingError('Directory KV binding is not active yet.', `missing_binding:${DIRECTORY_BINDING}`);
+  }
+  if (matches.length !== 1 || matches[0].type !== 'kv_namespace' || matches[0].namespace_id !== directory) {
+    throw new PropagationPendingError('Directory KV binding does not match configured namespace.', 'directory_binding_pending');
+  }
+}
 export async function deployFrontend({
   inputs, cloudflare, deploy, log = () => {}, newId = randomUUID, wait, verificationDelaysMs,
 }) {
@@ -49,16 +65,22 @@ export async function deployFrontend({
   if (inputs.route.saasHostname) await verifySaaS(inputs, cloudflare, false);
   const settings = await cloudflare.settings();
   const previousState = settings === null ? null : retainedState(settings, inputs, endpoint, true);
-  const state = previousState === null
-    ? { format: FORMAT, deploymentId: newId(), ...inputs, endpoint }
-    : { ...previousState, route: inputs.route };
+  // Keep create and update state shapes identical so directory KV transitions converge cleanly.
+  const state = {
+    format: FORMAT,
+    deploymentId: previousState === null ? newId() : previousState.deploymentId,
+    ...inputs,
+    endpoint,
+  };
   const kind = previousState === null ? 'create' : 'update';
   log('frontend_prepared', { kind, deploymentId: state.deploymentId, endpoint });
   await deploy({ kind, state });
   const verification = { deploymentId: state.deploymentId, log, wait, delays: verificationDelaysMs };
   await confirmConverged(async () => {
-    const confirmed = retainedState(await cloudflare.settings(), inputs, endpoint, false, previousState);
+    const latest = await cloudflare.settings();
+    const confirmed = retainedState(latest, inputs, endpoint, false, previousState);
     if (JSON.stringify(confirmed) !== JSON.stringify(state)) throw new Error('Frontend ownership changed during upload.');
+    verifyDirectoryBinding(latest, inputs.directory);
   }, verification);
   await confirmConverged(() => verifyRoute(inputs, cloudflare), verification);
   if (inputs.route.saasHostname) await confirmConverged(() => verifySaaS(inputs, cloudflare, true), verification);

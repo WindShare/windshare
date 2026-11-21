@@ -10,12 +10,12 @@ export function useResource<T>(read: Read<T>) {
   const [value, setValue] = useState<T>()
   const [error, setError] = useState<Message | null>(null)
   const [busy, setBusy] = useState(true)
-  const start = useCallback((readValue: Read<T>, merge?: (previous: T, next: T) => T) => {
+  const start = useCallback((readValue: Read<T>, merge?: (previous: T, next: T) => T): Promise<void> => {
     active.current?.abort()
     failed.current = null
     const controller = new AbortController()
     active.current = controller
-    void readValue(controller.signal).then(result => {
+    return readValue(controller.signal).then(result => {
       if (!controller.signal.aborted) {
         setValue(previous => previous === undefined || !merge ? result : merge(previous, result))
         setError(null)
@@ -29,17 +29,17 @@ export function useResource<T>(read: Read<T>) {
       if (!controller.signal.aborted) setBusy(false)
     })
   }, [])
-  function run(operation: () => void) {
+  function run(operation: () => Promise<void>): Promise<void> {
     setBusy(true)
     setError(null)
-    operation()
+    return operation()
   }
   const reload = useCallback(() => run(() => start(read)), [read, start])
   const retry = () => run(() => start(failed.current?.read ?? read, failed.current?.merge))
   const extend = (readMore: Read<T>, merge: (previous: T, next: T) => T) =>
     run(() => start(readMore, merge))
   useEffect(() => {
-    start(read)
+    void start(read)
     return () => active.current?.abort()
   }, [read, start])
 

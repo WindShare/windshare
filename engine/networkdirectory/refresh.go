@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/url"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/windshare/windshare/core/nodedirectory"
@@ -18,7 +19,7 @@ type refreshCycle struct {
 
 func releaseAsset(mirror string) bool {
 	address, err := url.Parse(mirror)
-	return err == nil && address.Hostname() == "github.com"
+	return err == nil && strings.EqualFold(address.Hostname(), "github.com")
 }
 
 // RefreshAliases joins the current pass, including startup maintenance, and
@@ -127,6 +128,7 @@ func (directory *Directory) tryMirrors(ctx context.Context, cycle *refreshCycle)
 		return !releaseAsset(directory.config.Mirrors[order[i]]) && releaseAsset(directory.config.Mirrors[order[j]])
 	})
 	var accepted bool
+	var committed nodedirectory.Cursor
 	var failures []error
 	for attempt, index := range order {
 		if attempt >= MirrorsPerRefresh {
@@ -145,7 +147,15 @@ func (directory *Directory) tryMirrors(ctx context.Context, cycle *refreshCycle)
 		}
 		if err == nil {
 			stage = refreshStageInstall
-			err = directory.install(ctx, snapshot)
+			// Skip redundant durable lock/write passes when another mirror in
+			// this same cycle already committed the exact same signed cursor.
+			if accepted && snapshot.Cursor() == committed {
+				if !snapshot.Usable(directory.config.Now(), nodedirectory.DefaultGrace) {
+					err = nodedirectory.ErrExpired
+				}
+			} else {
+				err = directory.install(ctx, snapshot)
+			}
 		}
 		if err == nil {
 			stage = refreshStageAccepted
@@ -154,6 +164,7 @@ func (directory *Directory) tryMirrors(ctx context.Context, cycle *refreshCycle)
 		directory.emitMirrorAttempt(finished, mirror, stage, snapshot, finished.Sub(started), err)
 		if err == nil {
 			accepted = true
+			committed = snapshot.Cursor()
 			if directory.finishIfResolved(cycle, snapshot) {
 				return nil
 			}

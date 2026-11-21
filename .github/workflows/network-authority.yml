@@ -18,6 +18,8 @@ on:
       - relay-rust/crates/relay-access/**
       - relay-rust/crates/network-authority/**
       - relay-rust/crates/relay-cloudflare/package-lock.json
+      - deploy/network/history/**
+      - deploy/network/release.json
       - .github/workflows/network-authority.yml
   push:
     branches: [main]
@@ -40,8 +42,6 @@ on:
       - relay-rust/crates/relay-cloudflare/package-lock.json
       - deploy/network/history/**
       - deploy/network/release.json
-      - core/nodedirectory/**
-      - cmd/network-sign/**
 
 permissions:
   contents: read
@@ -95,9 +95,6 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: lts/*
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
       - name: Install pinned deployment tools
         run: |
           rustup target add wasm32-unknown-unknown

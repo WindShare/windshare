@@ -31,7 +31,7 @@ function mergeNodeEntries(current: NodeDetails[], received: NodeDetails[]) {
 
 function Dashboard({ api, snapshot, update, refresh, loadMoreNodes, retry, refreshing, error }: {
   api: AuthorityClient; snapshot: Snapshot; update: (merge: (current: Snapshot) => Snapshot) => void
-  refresh: () => void; loadMoreNodes: () => void; retry: () => void; refreshing: boolean; error: Message | null
+  refresh: () => Promise<void>; loadMoreNodes: () => void; retry: () => void; refreshing: boolean; error: Message | null
 }) {
   const t = useCopy(networkCopy)
   const [page, id] = usePage().split('/')
@@ -64,13 +64,13 @@ function Dashboard({ api, snapshot, update, refresh, loadMoreNodes, retry, refre
       ? current : { ...current, restrictions }),
   }
 
-  function refreshCurrent() {
-    refresh()
+  function refreshCurrent(): Promise<void> {
     if (page === 'accounts') setAccountRevision(current => ({ ...current, list: current.list + 1 }))
     if (page === 'account') setAccountRevision(current => ({ ...current, detail: current.detail + 1 }))
     if (page === 'node') setNodeRevision(current => current + 1)
     if (page === 'reports') setReportRevision(current => ({ ...current, list: current.list + 1 }))
     if (page === 'report') setReportRevision(current => ({ ...current, detail: current.detail + 1 }))
+    return refresh()
   }
 
   let view
@@ -100,7 +100,7 @@ function Dashboard({ api, snapshot, update, refresh, loadMoreNodes, retry, refre
       { href: '#accounts', label: t.accounts, icon: 'user', current: accounts },
       { href: '#reports', label: t.reports, icon: 'report', current: reports },
       { href: '#policy', label: t.policy, icon: 'policy', current: policy },
-    ]} action={<button className="quiet" onClick={refreshCurrent} disabled={refreshing} aria-label={refreshLabel} title={refreshLabel}>
+    ]} action={<button className="quiet" onClick={() => { void refreshCurrent() }} disabled={refreshing} aria-label={refreshLabel} title={refreshLabel}>
       <Icon name={refreshing ? 'loader' : 'refresh'} size={16} /><span className="action-text">{refreshLabel}</span></button>} />
     <ReadError error={error} retry={retry} />
     {view}

@@ -1,6 +1,6 @@
 import { operationDeadlineSignal } from '../contracts/deadline'
-import { BrowserDirectoryCache, type DirectoryCache } from './directory-cache'
-import { MAXIMUM_ENVELOPE_BYTES, rejectRollback, usableDirectory, verifyDirectory, type NetworkRoot, type NetworkSnapshot } from './node-directory'
+import { BrowserDirectoryCache, sameCursor, type DirectoryCache } from './directory-cache'
+import { MAXIMUM_ENVELOPE_BYTES, rejectRollback, usableDirectory, verifyDirectory, type DirectoryCursor, type NetworkRoot, type NetworkSnapshot } from './node-directory'
 
 const REFRESH_TIMEOUT_MS = 6_000
 const MIRROR_TIMEOUT_MS = 2_000
@@ -98,7 +98,7 @@ export class NetworkDirectory {
   async refresh(aliases: readonly string[] = []): Promise<void> {
     const cache = await this.#initialized
     this.#lifetime.signal.throwIfAborted()
-    if (this.#failures > 0 && this.#now() < this.#retryAt) throw new Error('Network refresh is in backoff')
+    if (!this.#pending && this.#failures > 0 && this.#now() < this.#retryAt) throw new Error('Network refresh is in backoff')
     for (const alias of aliases) this.#targets.add(alias)
     this.#pending ??= Promise.resolve().then(() => this.#refresh(cache))
     return this.#pending
@@ -112,11 +112,13 @@ export class NetworkDirectory {
       const overall = deadline.signal
       const ranked = orderedMirrors(this.#options)
       let accepted = false
+      let committed: DirectoryCursor | undefined
       let last: unknown = new Error('Network temporarily unavailable')
       if (this.#options.roots.length > 0) for (const mirror of ranked.slice(0, MIRRORS_PER_REFRESH)) {
         try {
-          const next = await this.#readMirror(cache, operationId, mirror, overall)
+          const next = await this.#readMirror(cache, operationId, mirror, overall, committed)
           accepted = true
+          committed = next.cursor
           if ([...this.#targets].every(alias => next.nodes.some(node => node.alias === alias))) break
         } catch (failure) {
           last = failure
@@ -137,7 +139,7 @@ export class NetworkDirectory {
     }
   }
 
-  async #readMirror(cache: DirectoryCache, operationId: string, mirror: string, overall: AbortSignal): Promise<NetworkSnapshot> {
+  async #readMirror(cache: DirectoryCache, operationId: string, mirror: string, overall: AbortSignal, committed?: DirectoryCursor): Promise<NetworkSnapshot> {
     const deadline = operationDeadlineSignal(overall, MIRROR_TIMEOUT_MS, new DOMException('Directory mirror timed out', 'TimeoutError'))
     let data: string
     try { data = await fetchEnvelope(mirror, deadline.signal, this.#options.fetch ?? fetch) }
@@ -146,15 +148,16 @@ export class NetworkDirectory {
     overall.throwIfAborted()
     if (!usableDirectory(next, this.#now())) throw new Error('Network directory expired')
     rejectRollback(this.#snapshot?.cursor, next.cursor)
-    await cache.commit(next)
+    if (!sameCursor(committed, next.cursor)) await cache.commit(next)
     this.#accept(next, operationId, mirror)
     return next
   }
 
   #accept(snapshot: NetworkSnapshot, operationId: string, mirror: string): void {
+    const changed = !sameCursor(this.#snapshot?.cursor, snapshot.cursor)
     this.#failures = 0
     this.#schedule(REFRESH_INTERVAL_MS)
-    this.#publishSnapshot(snapshot)
+    if (changed) this.#publishSnapshot(snapshot)
     this.#observe({ operationId, transition: 'accepted', mirror, generation: snapshot.cursor.generation, serial: snapshot.cursor.serial, trustedUntil: snapshot.trustedUntil })
   }
 
@@ -211,6 +214,15 @@ function orderedMirrors(options: NetworkDirectoryOptions): string[] {
   const random = options.random ?? Math.random
   for (let i = mirrors.length - 1; i > 0; i--) { const j = Math.floor(random() * (i + 1)); [mirrors[i], mirrors[j]] = [mirrors[j]!, mirrors[i]!] }
   const origin = parseMirror(options.origin ?? '')
-  if (origin?.protocol === 'https:') mirrors.unshift(new URL('/.well-known/windshare-network', origin).href)
+  if (origin?.protocol === 'https:') {
+    const sameOrigin = new URL('/.well-known/windshare-network', origin).href
+    // Only prioritize the current origin when it is already a configured mirror so
+    // self-hosted frontends keep all built-in mirrors within MIRRORS_PER_REFRESH.
+    const index = mirrors.findIndex(mirror => parseMirror(mirror)?.href === sameOrigin)
+    if (index !== -1) {
+      mirrors.splice(index, 1)
+      mirrors.unshift(sameOrigin)
+    }
+  }
   return [...new Set(mirrors)].sort((a, b) => Number(parseMirror(a)?.hostname === 'github.com') - Number(parseMirror(b)?.hostname === 'github.com'))
 }
