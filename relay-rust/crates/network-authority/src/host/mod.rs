@@ -64,6 +64,33 @@ pub struct NetworkAuthority {
     publishing: futures_util::lock::Mutex<()>,
     node_loads: Rc<RefCell<BTreeMap<[u8; 32], NodeLoadReport>>>,
 }
+impl NetworkAuthority {
+    // Keep live isolate load state synchronized across every DO transaction so
+    // uncheckpointed node heartbeats are never lost between HTTP entry points.
+    fn transact<T: 'static>(
+        &self,
+        environment: WorkerEnvironment,
+        action: impl FnOnce(&mut Authority<Database, WorkerEnvironment>, &Env) -> anyhow::Result<T>
+        + 'static,
+    ) -> anyhow::Result<T> {
+        let database = Database::open(&self.state)?;
+        let env = self.env.clone();
+        let loads = self.node_loads.borrow().clone();
+        let (value, updated_loads) = storage::transaction(&self.state, move || {
+            let signing = Signing::load(
+                &env.var("AUTHORITY_ROOT")?.to_string(),
+                &env.var("AUTHORITY_CERTIFICATE")?.to_string(),
+                &env.secret("AUTHORITY_SIGNING_SEED")?.to_string(),
+            )?;
+            let mut authority = Authority::new(database, environment, signing)?;
+            authority.set_live_loads(loads);
+            let value = action(&mut authority, &env)?;
+            Ok((value, authority.into_live_loads()))
+        })?;
+        *self.node_loads.borrow_mut() = updated_loads;
+        Ok(value)
+    }
+}
 impl DurableObject for NetworkAuthority {
     fn new(state: State, env: Env) -> Self {
         telemetry::install(&env);
@@ -96,44 +123,23 @@ impl DurableObject for NetworkAuthority {
             }
             _ => {}
         }
-        let database = Database::open(&self.state).map_err(failure)?;
-        let env = self.env.clone();
-        let context = routes::Context::new(&request, &env)?;
+        let context = routes::Context::new(&request, &self.env)?;
         let environment = WorkerEnvironment {
-            registration_email_configured: mail::Webhook::configured(&env).is_some(),
+            registration_email_configured: mail::Webhook::configured(&self.env).is_some(),
         };
         let public_blocks = self.public_blocks.clone();
-        let initial_loads = self.node_loads.borrow().clone();
-        let result = storage::transaction(&self.state, move || {
-            let signing = Signing::load(
-                &env.var("AUTHORITY_ROOT")?.to_string(),
-                &env.var("AUTHORITY_CERTIFICATE")?.to_string(),
-                &env.secret("AUTHORITY_SIGNING_SEED")?.to_string(),
-            )
-            .map_err(|error| anyhow::anyhow!("{error}"))?;
-            let mut authority = Authority::new(database, environment, signing)?;
-            authority.set_live_loads(initial_loads);
-            match routes::dispatch(
-                &mut authority,
-                context,
-                &bytes,
-                &mut public_blocks.borrow_mut(),
-            ) {
-                Ok(response) => Ok((response, authority.into_live_loads())),
+        match self.transact(environment, move |authority, _| {
+            match routes::dispatch(authority, context, &bytes, &mut public_blocks.borrow_mut()) {
+                Ok(response) => Ok(response),
                 Err(error) => {
                     if let Some(fault) = error.downcast_ref::<Fault>() {
-                        return routes::fault(fault)
-                            .map(|response| (response, authority.into_live_loads()));
+                        return routes::fault(fault);
                     }
                     Err(error)
                 }
             }
-        });
-        match result {
-            Ok((response, updated_loads)) => {
-                *self.node_loads.borrow_mut() = updated_loads;
-                Ok(response)
-            }
+        }) {
+            Ok(response) => Ok(response),
             Err(error) => {
                 tracing::error!(event = "authority_request_failed", %error);
                 Response::error("authority temporarily unavailable", 503)

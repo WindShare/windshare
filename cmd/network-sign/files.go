@@ -16,18 +16,26 @@ import (
 	"github.com/windshare/windshare/core/nodedirectory"
 )
 
-func readJSON(path string, target any) error {
+func readBounded(path string, limit int64) ([]byte, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer file.Close()
-	data, err := io.ReadAll(io.LimitReader(file, nodedirectory.MaximumEnvelopeBytes+1))
+	data, err := io.ReadAll(io.LimitReader(file, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, nodedirectory.ErrFormat
+	}
+	return data, nil
+}
+
+func readJSON(path string, target any) error {
+	data, err := readBounded(path, nodedirectory.MaximumEnvelopeBytes)
 	if err != nil {
 		return err
-	}
-	if len(data) > nodedirectory.MaximumEnvelopeBytes {
-		return nodedirectory.ErrFormat
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()

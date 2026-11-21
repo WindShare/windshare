@@ -47,11 +47,18 @@ func exportDirectory(args []string) error {
 	}
 	var signed []byte
 	if *source != "" {
-		signed, err = os.ReadFile(*source)
+		signed, err = readBounded(*source, nodedirectory.MaximumEnvelopeBytes)
 	} else {
-		var authority struct{ URL string }
-		if err := json.Unmarshal(manifest.Authority, &authority); err != nil {
-			return err
+		var authority struct {
+			URL string `json:"url"`
+		}
+		if len(manifest.Authority) > 0 {
+			if err := json.Unmarshal(manifest.Authority, &authority); err != nil {
+				return err
+			}
+		}
+		if authority.URL == "" {
+			return errors.New("release has no public authority")
 		}
 		signed, err = fetchMirror(authority.URL)
 	}
@@ -67,7 +74,11 @@ func exportDirectory(args []string) error {
 	}
 	payload := next.Payload()
 	path := filepath.Join(*history, fmt.Sprintf("g%016d-s%016d.json", payload.Generation, payload.Serial))
-	if err := distinctPaths(*payloadPath, *release, *output, path); err != nil {
+	paths := []string{*payloadPath, *release, *output, path}
+	if *source != "" {
+		paths = append(paths, *source)
+	}
+	if err := distinctPaths(paths...); err != nil {
 		return err
 	}
 	var envelope nodedirectory.Envelope
@@ -120,7 +131,7 @@ func validateHistory(directory string, next nodedirectory.Snapshot, manifest rel
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(directory, entry.Name()))
+		data, err := readBounded(filepath.Join(directory, entry.Name()), nodedirectory.MaximumEnvelopeBytes)
 		if err != nil {
 			return err
 		}

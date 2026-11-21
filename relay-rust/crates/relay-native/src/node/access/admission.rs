@@ -77,6 +77,7 @@ pub enum RefusalReason {
     TicketExpired,
     TicketUntrusted,
     TicketGenerationMismatch,
+    ProbeScopeMismatch,
     NodePublicDisabled,
     IssuerInactive,
     ShareRestricted,
@@ -100,6 +101,7 @@ impl RefusalReason {
             Self::TicketExpired => "ticket_expired",
             Self::TicketUntrusted => "ticket_untrusted",
             Self::TicketGenerationMismatch => "ticket_generation_mismatch",
+            Self::ProbeScopeMismatch => "probe_scope_mismatch",
             Self::NodePublicDisabled => "node_public_disabled",
             Self::IssuerInactive => "issuer_inactive",
             Self::ShareRestricted => "share_restricted",
@@ -333,7 +335,7 @@ impl State {
                         self.node_key.as_ref(),
                         share.as_bytes(),
                     ) {
-                        return Err(AdmissionRefusal::Denied(RefusalReason::TicketUntrusted));
+                        return Err(AdmissionRefusal::Denied(RefusalReason::ProbeScopeMismatch));
                     }
                     AuthorizedIdentity::Ticket(ticket)
                 }

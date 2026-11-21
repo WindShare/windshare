@@ -5,10 +5,10 @@ use super::{
     NetworkAuthority, WorkerEnvironment, failure,
     passwords::{ForwardHeaders, call_do_json_with_headers},
     routes::{self, Context},
-    storage::{self, Database},
+    storage::Database,
 };
 use crate::{
-    Authority, Environment, Fault, Signing, Store,
+    Authority, Environment, Fault, Store,
     fleet::{
         publication::{self, KV_KEY, Publication, Publisher, Release},
         signature::Envelope,
@@ -132,8 +132,6 @@ impl NetworkAuthority {
             return Response::error("not found", 404);
         }
         let ctx = Context::new(req, &self.env)?;
-        let database = Database::open(&self.state).map_err(failure)?;
-        let env = self.env.clone();
         let bytes = bytes.to_vec();
         let publish = matches!(
             ctx.path.as_str(),
@@ -141,21 +139,12 @@ impl NetworkAuthority {
         );
         // A rejected fleet command rolls back the whole transaction, including
         // bootstrap and lease writes. Network reads and KV writes run outside it.
-        let result = storage::transaction(&self.state, move || {
-            let signing = Signing::load(
-                &env.var("AUTHORITY_ROOT")?.to_string(),
-                &env.var("AUTHORITY_CERTIFICATE")?.to_string(),
-                &env.secret("AUTHORITY_SIGNING_SEED")?.to_string(),
-            )?;
-            let mut service = Authority::new(
-                database,
-                WorkerEnvironment {
-                    registration_email_configured: false,
-                },
-                signing,
-            )?;
-            dispatch(&mut service, &env, &ctx, &bytes)
-        });
+        let result = self.transact(
+            WorkerEnvironment {
+                registration_email_configured: false,
+            },
+            move |service, env| dispatch(service, env, &ctx, &bytes),
+        );
         match result {
             Ok(value) => {
                 if publish && let Err(error) = self.reconcile().await {

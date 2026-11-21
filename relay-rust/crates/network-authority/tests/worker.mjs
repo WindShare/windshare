@@ -151,6 +151,10 @@ test('the local Worker preserves account and node policy across signed reports a
   assert.deepEqual(inspected.key, node);
   assert.equal(inspected.version, existing.version);
   assert.deepEqual(inspected.report.load, batch.load);
+  const liveLoad = { ...batch.load, active_sessions: 3 };
+  await usage({ ...batch, id: [...randomBytes(16)], created_at: batch.created_at + 1, load: liveLoad });
+  const restaged = (await call('/v1/admin/nodes', enrollment, { admin: true })).value;
+  assert.deepEqual(restaged.report.load, liveLoad);
   const { value: nextNodes } = await call(nodesEndpoint + '?after=' + encodedNodeKey, undefined, adminGet);
   assert(!nextNodes.entries.some(item => Buffer.from(item.key).equals(Buffer.from(node))));
   await call(nodesEndpoint + '?after=invalid', undefined, { ...adminGet, status: 400 });

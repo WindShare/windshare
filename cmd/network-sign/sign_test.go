@@ -3,8 +3,10 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -149,6 +151,79 @@ func TestSigningPathsAndMalformedInputs(t *testing.T) {
 	for _, args := range [][]string{nil, {"unknown"}, {"keygen"}, {"sign", "extra"}, {"authorize"}} {
 		if err := run(args); err == nil {
 			t.Fatal(args)
+		}
+	}
+}
+
+func TestExportGuardsSourcePathSizeAndAuthorityURL(t *testing.T) {
+	dir := t.TempDir()
+	path := func(name string) string { return filepath.Join(dir, name) }
+	var roots []publicKey
+	for _, id := range []string{"root", "spare", "online"} {
+		if err := run([]string{"keygen", "--id", id, "--private", path(id + ".pem"), "--public", path(id + ".json")}); err != nil {
+			t.Fatal(err)
+		}
+		if id != "online" {
+			var public publicKey
+			if err := readJSON(path(id+".json"), &public); err != nil {
+				t.Fatal(err)
+			}
+			roots = append(roots, public)
+		}
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	if err := run([]string{"authorize", "--root-private", path("root.pem"), "--root-id", "root", "--online-public", path("online.json"),
+		"--generation", "1", "--not-before", now.Add(-time.Hour).Format(time.RFC3339), "--expires", now.Add(48 * time.Hour).Format(time.RFC3339), "--out", path("certificate.json")}); err != nil {
+		t.Fatal(err)
+	}
+	manifest := releaseManifest{Network: "windshare", Roots: roots, Snapshot: json.RawMessage("null"), LinkHost: "https://front.example"}
+	if err := writeJSON(path("release.json"), manifest); err != nil {
+		t.Fatal(err)
+	}
+	var cert nodedirectory.SignedCertificate
+	if err := readJSON(path("certificate.json"), &cert); err != nil {
+		t.Fatal(err)
+	}
+	key, err := privateKey(path("online.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pinned, err := releaseRoots(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signed, err := nodedirectory.Sign(nodedirectory.Payload{Format: 1, Network: "windshare", Generation: 1, Serial: 1, IssuedAt: now, ExpiresAt: now.Add(24 * time.Hour)}, cert, key, pinned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path("signed.json"), signed, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Reject overwriting the input envelope when --source matches an output path.
+	if err := run([]string{"export", "--source", path("signed.json"), "--release", path("release.json"), "--history", path("history"),
+		"--payload", path("signed.json"), "--out", path("mirror.json")}); err == nil {
+		t.Fatal("colliding --source and --payload accepted")
+	}
+	after, err := os.ReadFile(path("signed.json"))
+	if err != nil || !bytes.Equal(after, signed) {
+		t.Fatal("colliding export modified --source")
+	}
+	if err := os.WriteFile(path("oversized.json"), bytes.Repeat([]byte{' '}, nodedirectory.MaximumEnvelopeBytes+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"export", "--source", path("oversized.json"), "--release", path("release.json"), "--history", path("history"),
+		"--payload", path("payload.json"), "--out", path("mirror.json")}); !errors.Is(err, nodedirectory.ErrFormat) {
+		t.Fatalf("oversized --source err = %v, want %v", err, nodedirectory.ErrFormat)
+	}
+	for _, authority := range []json.RawMessage{nil, json.RawMessage("null"), json.RawMessage(`{}`), json.RawMessage(`{"url":""}`)} {
+		manifest.Authority = authority
+		if err := writeJSON(path("release.json"), manifest); err != nil {
+			t.Fatal(err)
+		}
+		err := run([]string{"export", "--release", path("release.json"), "--history", path("history"),
+			"--payload", path("payload.json"), "--out", path("mirror.json")})
+		if err == nil || !strings.Contains(err.Error(), "release has no public authority") {
+			t.Fatalf("authority %s err = %v", authority, err)
 		}
 	}
 }

@@ -44,6 +44,38 @@ fn only_actual_writes_in_a_forwarding_scope_count_and_midnight_splits_days() {
 }
 
 #[tokio::test]
+async fn probe_account_traffic_is_excluded_from_usage_collection_and_outbox() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = usage_store(&directory.path().join("probe-usage.db"));
+    let issuer = [1; 32];
+    let reporter = Reporter::new(
+        Runtime::default(),
+        store.clone(),
+        Identity::generate().unwrap().key(),
+        Authority {
+            url: "http://localhost".into(),
+            issuer: URL_SAFE_NO_PAD.encode(issuer),
+        },
+    )
+    .unwrap();
+    let probe = Attribution::Account {
+        issuer,
+        account: windshare_relay_access::probe::PROBE_ACCOUNT,
+        credential: [3; 16],
+    };
+    reporter.node.usage.record(probe, 256, DAY_SECONDS);
+    assert!(reporter.node.usage.drain().is_empty());
+
+    reporter.node.usage.record(probe, 256, DAY_SECONDS);
+    reporter
+        .flush(|| i64::try_from(DAY_SECONDS).unwrap())
+        .await
+        .unwrap();
+    let node = reporter.signing_key.verifying_key().to_bytes();
+    assert!(store.next_usage_batch(issuer, node).unwrap().is_none());
+}
+
+#[tokio::test]
 async fn flush_reads_the_clock_after_draining_midnight_usage() {
     let directory = tempfile::tempdir().unwrap();
     let store = usage_store(&directory.path().join("usage.db"));

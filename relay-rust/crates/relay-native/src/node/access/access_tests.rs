@@ -575,12 +575,18 @@ fn registration_checks_the_probe_grant_against_this_node_and_share() {
     service.identify([12; 32]);
     assert!(matches!(
         service.authorize(share(1), Some(&proof), NOW),
-        Authorization::Refused(_)
+        Authorization::Refused(Refusal {
+            decision: RegistrationDecision::Denied,
+            reason: RefusalReason::ProbeScopeMismatch,
+        })
     ));
     service.identify(node);
     assert!(matches!(
         service.authorize(share(2), Some(&proof), NOW),
-        Authorization::Refused(_)
+        Authorization::Refused(Refusal {
+            decision: RegistrationDecision::Denied,
+            reason: RefusalReason::ProbeScopeMismatch,
+        })
     ));
     assert!(matches!(
         service.authorize(share(1), Some(&proof), NOW),
@@ -589,6 +595,13 @@ fn registration_checks_the_probe_grant_against_this_node_and_share() {
     ticket.expires_at += 1;
     assert!(matches!(
         service.authorize(share(1), Some(&bearer(ticket)), NOW),
-        Authorization::Refused(_)
+        Authorization::Refused(Refusal {
+            decision: RegistrationDecision::Denied,
+            reason: RefusalReason::ProbeScopeMismatch,
+        })
     ));
+    assert_eq!(
+        RefusalReason::ProbeScopeMismatch.as_str(),
+        "probe_scope_mismatch"
+    );
 }
