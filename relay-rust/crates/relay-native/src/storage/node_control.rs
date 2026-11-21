@@ -4,6 +4,9 @@ use anyhow::{Result, anyhow, ensure};
 use rusqlite::{OptionalExtension, params};
 use windshare_relay_access::{Issuer, trust::Generation, usage::Batch};
 
+const NEXT_USAGE_BATCH_SQL: &str =
+    "SELECT id,body FROM usage_outbox WHERE issuer=?1 ORDER BY created_at,id LIMIT 1";
+
 impl Database {
     pub(crate) fn initialize_control(&self, now: u64) -> Result<AccessSnapshot> {
         let mut connection = self
@@ -12,11 +15,16 @@ impl Database {
             .lock()
             .map_err(|_| anyhow!("database lock"))?;
         let transaction = connection.transaction()?;
-        transaction.execute_batch("CREATE TABLE IF NOT EXISTS usage_outbox(
-            id BLOB PRIMARY KEY, issuer BLOB NOT NULL, body BLOB NOT NULL, created_at INTEGER NOT NULL) STRICT;
-            CREATE TABLE IF NOT EXISTS usage_outbox_quarantine(
-             id BLOB PRIMARY KEY, issuer BLOB NOT NULL, body BLOB NOT NULL, created_at INTEGER NOT NULL,
-             reason TEXT NOT NULL) STRICT;")?;
+        // Keep queue pops O(log N) under the shared SQLite mutex even during authority outages.
+        transaction.execute_batch(
+            "CREATE TABLE IF NOT EXISTS usage_outbox(
+             id BLOB PRIMARY KEY, issuer BLOB NOT NULL, body BLOB NOT NULL, created_at INTEGER NOT NULL) STRICT;
+             CREATE INDEX IF NOT EXISTS usage_outbox_queue
+              ON usage_outbox(issuer, created_at, id);
+             CREATE TABLE IF NOT EXISTS usage_outbox_quarantine(
+              id BLOB PRIMARY KEY, issuer BLOB NOT NULL, body BLOB NOT NULL, created_at INTEGER NOT NULL,
+              reason TEXT NOT NULL) STRICT;",
+        )?;
         let snapshot = super::access_control::restore(&transaction, now)?;
         transaction.commit()?;
         drop(connection);
@@ -80,11 +88,9 @@ impl Database {
                 .connection
                 .lock()
                 .map_err(|_| anyhow!("database lock"))?
-                .query_row(
-                    "SELECT id,body FROM usage_outbox WHERE issuer=?1 ORDER BY created_at,id LIMIT 1",
-                    [issuer.as_slice()],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
+                .query_row(NEXT_USAGE_BATCH_SQL, [issuer.as_slice()], |row| {
+                    Ok((row.get(0)?, row.get(1)?))
+                })
                 .optional()?;
             let Some((id, body)) = entry else {
                 return Ok(None);
@@ -151,3 +157,7 @@ impl Database {
 fn valid_usage_batch(batch: &Batch) -> bool {
     !batch.records.is_empty() && batch.valid()
 }
+
+#[cfg(test)]
+#[path = "node_control_tests.rs"]
+mod tests;
