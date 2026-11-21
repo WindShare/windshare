@@ -1,6 +1,7 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
 
 const HEX_SHA512_PATTERN = /^[0-9a-f]{128}$/i
+const INTEGER_TIMESTAMP_PATTERN = /^\d+$/
 
 export interface AfdianSignedBody {
   readonly user_id: string
@@ -15,6 +16,7 @@ export interface AfdianOrderRecord {
   readonly totalAmount: string
   readonly status: number
   readonly remark: string | null
+  readonly donatedAt: number | null
 }
 
 // Ko-fi webhook payload projected without PII (email is intentionally discarded at parse time).
@@ -92,6 +94,19 @@ export function parseIsoTimestampSeconds(raw: unknown): number | null {
   return Math.floor(millis / 1000)
 }
 
+export function parseUnixTimestampSeconds(raw: unknown): number | null {
+  if (typeof raw === 'number') {
+    return Number.isSafeInteger(raw) && raw > 0 ? raw : null
+  }
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim()
+    if (!INTEGER_TIMESTAMP_PATTERN.test(trimmed)) return null
+    const parsed = Number(trimmed)
+    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null
+  }
+  return null
+}
+
 export function buildAfdianSignedBody(
   userId: string,
   token: string,
@@ -132,6 +147,7 @@ function parseSingleAfdianOrder(item: unknown): AfdianOrderRecord | null {
     totalAmount: String(totalAmount),
     status,
     remark: readOptionalString(item.remark),
+    donatedAt: parseUnixTimestampSeconds(item.create_time),
   }
 }
 

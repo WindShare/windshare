@@ -367,7 +367,9 @@ function partitionReadyAfdianInputs(
 ): { readonly readyInputs: CommitDonationInput[]; readonly deferred: number } {
   const readyInputs: CommitDonationInput[] = []
   let deferred = 0
-  for (const { order, money } of validOrders) {
+  // Afdian returns query-order newest-first; build commit inputs oldest-first so
+  // batch inserts and audit logs preserve chronological order.
+  for (const { order, money } of validOrders.toReversed()) {
     if (order.userId.length > 0 && deferredUserIds.has(order.userId)) {
       deferred += 1
       continue

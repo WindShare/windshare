@@ -42,6 +42,7 @@ import {
   parseAfdianWebhookPayload,
   parseKofiWebhookBody,
   parseNowPaymentsIpnPayload,
+  parseUnixTimestampSeconds,
   sortJsonKeysRecursively,
   verifyKofiToken,
   verifyNowPaymentsSignature,
@@ -280,25 +281,24 @@ describe('provider protocol signing, parsing, and outbound adapters', () => {
     const orders = parseAfdianOrderQueryResponse({
       ec: 200,
       data: {
-        list: [{
-          out_trade_no: 'ORD-1',
-          user_id: 'supporter-1',
-          total_amount: '15.00',
-          status: 2,
-          remark: '加油！',
-        }],
+        list: [
+          { out_trade_no: 'ORD-1', user_id: 'supporter-1', total_amount: '15.00', status: 2, remark: '加油！', create_time: 1_700_000_123 },
+          { out_trade_no: 'ORD-2', user_id: 'supporter-2', total_amount: '10.00', status: 2, remark: '', create_time: '1700000456' },
+          { out_trade_no: 'ORD-3', user_id: 'supporter-3', total_amount: '10.00', status: 2, remark: '' },
+        ],
       },
     })
     expect(orders).toEqual({
       ok: true,
-      orders: [{
-        outTradeNo: 'ORD-1',
-        userId: 'supporter-1',
-        totalAmount: '15.00',
-        status: 2,
-        remark: '加油！',
-      }],
+      orders: [
+        { outTradeNo: 'ORD-1', userId: 'supporter-1', totalAmount: '15.00', status: 2, remark: '加油！', donatedAt: 1_700_000_123 },
+        { outTradeNo: 'ORD-2', userId: 'supporter-2', totalAmount: '10.00', status: 2, remark: '', donatedAt: 1_700_000_456 },
+        { outTradeNo: 'ORD-3', userId: 'supporter-3', totalAmount: '10.00', status: 2, remark: '', donatedAt: null },
+      ],
     })
+    expect(parseUnixTimestampSeconds(1_700_000_000)).toBe(1_700_000_000)
+    expect(parseUnixTimestampSeconds(' 1700000000 ')).toBe(1_700_000_000)
+    expect([0, -10, 1_700_000_000.5, 'not-a-timestamp', null].map(parseUnixTimestampSeconds)).toEqual([null, null, null, null, null])
 
     expect(parseAfdianSponsorName({
       ec: 200,
@@ -839,11 +839,13 @@ function createSyncHarness() {
   const adminPassword = randomBytes(16).toString('hex')
   const now = 1_700_000_000
   const counts = { doCalls: 0, orderCalls: 0, sponsorPageCalls: 0, sponsorDirectCalls: 0 }
+  const committedBatches: string[][] = []
 
   const dispatchInternal = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     counts.doCalls += 1
     const req = input instanceof Request ? input : new Request(input, init)
-    const pathname = new URL(req.url).pathname
+    const url = new URL(req.url)
+    const { pathname } = url
     if (pathname === '/internal/admin/rate-limit') {
       const body = await req.json() as { clientIp: string; nowSec: number }
       return Response.json(store.consumeDualRateLimit('admin_login', body.clientIp, body.nowSec), { status: 200 })
@@ -859,12 +861,22 @@ function createSyncHarness() {
         ? Response.json({ valid: false }, { status: 401 })
         : Response.json({ valid: true, ...session }, { status: 200 })
     }
+    if (pathname === '/internal/donations/exists') {
+      const provider = url.searchParams.get('provider') as DonationProvider
+      const externalId = url.searchParams.get('externalId') ?? ''
+      return Response.json({ exists: store.hasDonation(provider, externalId) }, { status: 200 })
+    }
+    if (pathname === '/internal/donations/commit') {
+      const body = await req.json() as { input: CommitDonationInput; nowSec: number }
+      return Response.json(store.commitDonation(body.input, body.nowSec), { status: 200 })
+    }
     if (pathname === '/internal/donations/exists-batch') {
       const body = await req.json() as { provider: DonationProvider; externalIds: string[] }
       return Response.json({ existingIds: store.findExistingExternalIds(body.provider, body.externalIds) }, { status: 200 })
     }
     if (pathname === '/internal/donations/commit-batch') {
       const body = await req.json() as { inputs: CommitDonationInput[]; nowSec: number }
+      committedBatches.push(body.inputs.map(item => item.externalId))
       return Response.json({ results: store.commitDonationsBatch(body.inputs, body.nowSec) }, { status: 200 })
     }
     return Response.json({ error: 'not_found' }, { status: 404 })
@@ -879,6 +891,7 @@ function createSyncHarness() {
     DONATION_WALL: wallNamespace,
     AFDIAN_USER_ID: 'creator',
     AFDIAN_TOKEN: 'afdian-token',
+    AFDIAN_WEBHOOK_SECRET: 'afdian-webhook-secret',
     KOFI_HANDLE: 'windshare',
     ALLOWED_ORIGINS: 'https://windshare.cc',
     DONATE_API_ORIGIN: origin,
@@ -912,7 +925,20 @@ function createSyncHarness() {
     { nowSec: () => now, fetchFn },
   )
 
-  return { store, counts, authenticate, runSync }
+  const postAfdianWebhook = async (
+    outTradeNo: string,
+    fetchFn: FetchLike,
+  ): Promise<Response> => handleWorkerFetch(
+    new Request(`${origin}/v1/donations/webhooks/afdian/afdian-webhook-secret`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ec: 200, data: { order: { out_trade_no: outTradeNo } } }),
+    }),
+    env,
+    { nowSec: () => now, fetchFn },
+  )
+
+  return { store, now, counts, committedBatches, authenticate, runSync, postAfdianWebhook }
 }
 
 describe('handleSyncAfdian batching, sponsor cache, and subrequest budgeting', () => {
@@ -1083,5 +1109,66 @@ describe('handleSyncAfdian batching, sponsor cache, and subrequest budgeting', (
     expect(outageRes.status).toBe(200)
     expect(await outageRes.json()).toEqual({ fetched: 3, paid: 3, committed: 2, deduplicated: 1, deferred: 0 })
     expect(sponsorAttempts).toBe(1)
+  })
+
+  it('preserves Afdian create_time on sync and webhook, and submits sync batches oldest-first', async () => {
+    const { store, now, committedBatches, authenticate, runSync, postAfdianWebhook } = createSyncHarness()
+    const auth = await authenticate()
+
+    // Seed a newer Ko-fi donation so backfilled historical Afdian orders stay below it on the wall.
+    store.commitDonation({
+      provider: 'kofi',
+      externalId: 'KOFI-RECENT',
+      displayName: 'Recent Kofi',
+      amountMinor: 500,
+      currency: 'USD',
+      minorDigits: 2,
+      message: 'recent',
+      isPublic: true,
+      donatedAt: now - 120,
+    }, now - 120)
+
+    const syncRes = await runSync(auth, async (url) => {
+      if (String(url).endsWith('/query-order')) {
+        return Response.json({
+          ec: 200,
+          data: {
+            list: [
+              { out_trade_no: 'AF-HIST-NEW', user_id: '', total_amount: '15.00', status: 2, remark: 'hist-new', create_time: now - 3600 },
+              { out_trade_no: 'AF-HIST-OLD', user_id: '', total_amount: '15.00', status: 2, remark: 'hist-old', create_time: now - 7200 },
+            ],
+          },
+        })
+      }
+      return Response.json({ ec: 200, data: { list: [] } })
+    })
+    expect(syncRes.status).toBe(200)
+    expect(committedBatches).toEqual([['AF-HIST-OLD', 'AF-HIST-NEW']])
+
+    const wall = JSON.parse(store.getPublicWallSnapshot().json) as PublicWallResponse
+    expect(wall.entries.map(entry => [entry.message, entry.donatedAt])).toEqual([
+      ['recent', now - 120],
+      ['hist-new', now - 3600],
+      ['hist-old', now - 7200],
+    ])
+
+    // Webhook preserves create_time and clamps future skew to now + 60s.
+    const webhookRes = await postAfdianWebhook('AF-WH-FUTURE', async () => Response.json({
+      ec: 200,
+      data: {
+        list: [{
+          out_trade_no: 'AF-WH-FUTURE',
+          user_id: '',
+          total_amount: '20.00',
+          status: 2,
+          remark: 'wh-future',
+          create_time: now + 500,
+        }],
+      },
+    }))
+    expect(webhookRes.status).toBe(200)
+    const wallAfterWebhook = JSON.parse(store.getPublicWallSnapshot().json) as PublicWallResponse
+    expect(wallAfterWebhook.entries[0]?.message).toBe('wh-future')
+    expect(wallAfterWebhook.entries[0]?.donatedAt).toBe(now + 60)
   })
 })

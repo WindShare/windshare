@@ -150,7 +150,7 @@ export function toAfdianCommitInput(
     minorDigits: money.minorDigits,
     message: sanitizePlainText(order.remark, MAX_MESSAGE_CODEPOINTS),
     isPublic: true,
-    donatedAt: null,
+    donatedAt: order.donatedAt,
   }
 }
 

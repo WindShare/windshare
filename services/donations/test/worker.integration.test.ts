@@ -45,6 +45,7 @@ interface OutboundControl {
     total_amount: string
     status: number
     remark: string
+    create_time?: number
   }>
   nowPaymentsInvoiceCalls: number
 }
@@ -98,8 +99,8 @@ function handleOutboundMock(request: { url: string; headers: { get(name: string)
       const params = JSON.parse(body.params) as { out_trade_no?: string }
       if (params.out_trade_no !== undefined) {
         const list = outbound.afdianOrderStatus === 'unpaid'
-          ? [{ out_trade_no: params.out_trade_no, user_id: 'u-1', total_amount: '10.00', status: 1, remark: 'unpaid' }]
-          : [{ out_trade_no: params.out_trade_no, user_id: 'u-1', total_amount: '15.00', status: 2, remark: '支持开源' }]
+          ? [{ out_trade_no: params.out_trade_no, user_id: 'u-1', total_amount: '10.00', status: 1, remark: 'unpaid', create_time: 1_760_000_200 }]
+          : [{ out_trade_no: params.out_trade_no, user_id: 'u-1', total_amount: '15.00', status: 2, remark: '支持开源', create_time: 1_760_000_200 }]
         return new MiniflareResponse(JSON.stringify({ ec: 200, data: { list } }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
@@ -450,9 +451,9 @@ describe('windshare-donations Worker + SQLite DO HTTP integration', () => {
     // One-click Afdian sync imports new paid orders and skips already-existing ones.
     outbound.afdianSponsorMode = 'ok'
     outbound.afdianSyncOrders = [
-      { out_trade_no: 'AF-1', user_id: 'u-1', total_amount: '15.00', status: 2, remark: 'duplicate' },
-      { out_trade_no: 'AF-SYNC-2', user_id: 'u-sync', total_amount: '20.00', status: 2, remark: '补录感谢' },
-      { out_trade_no: 'AF-UNPAID', user_id: 'u-sync', total_amount: '20.00', status: 1, remark: 'pending' },
+      { out_trade_no: 'AF-1', user_id: 'u-1', total_amount: '15.00', status: 2, remark: 'duplicate', create_time: 1_760_000_200 },
+      { out_trade_no: 'AF-SYNC-2', user_id: 'u-sync', total_amount: '20.00', status: 2, remark: '补录感谢', create_time: 1_760_000_100 },
+      { out_trade_no: 'AF-UNPAID', user_id: 'u-sync', total_amount: '20.00', status: 1, remark: 'pending', create_time: 1_760_000_050 },
     ]
     const sponsorCallsBeforeSync = outbound.afdianSponsorCalls
     const syncRes = await mf.dispatchFetch(`${DONATE_ORIGIN}/v1/admin/donations/sync-afdian`, {
@@ -497,7 +498,9 @@ describe('windshare-donations Worker + SQLite DO HTTP integration', () => {
       displayName: 'Taro',
       visibility: { kind: 'pending_review', reason: 'unsupported_currency' },
     })
-    expect(syncedItem?.displayName).toBe('同步赞助者')
+    const webhookAfdianItem = listData.items.find((item: DonationRecord) => item.externalId === 'AF-1')
+    expect(syncedItem).toMatchObject({ displayName: '同步赞助者', donatedAt: 1_760_000_100 })
+    expect(webhookAfdianItem?.donatedAt).toBe(1_760_000_200)
 
     const privateApprove = await mf.dispatchFetch(
       `${DONATE_ORIGIN}/v1/admin/donations/${privateItem?.id}/visibility`,
@@ -546,7 +549,7 @@ describe('windshare-donations Worker + SQLite DO HTTP integration', () => {
     )
     expect(restoreRes.status).toBe(200)
     const wallAfterRestore = await (await mf.dispatchFetch(`${DONATE_ORIGIN}/v1/donations/wall`)).json() as PublicWallResponse
-    expect(wallAfterRestore.entries.some(e => e.id === syncedItem?.id)).toBe(true)
+    expect(wallAfterRestore.entries.map(e => e.id).slice(2)).toEqual([webhookAfdianItem?.id, syncedItem?.id])
 
     // Pause Crypto checkout via config patch and verify 503 enforcement.
     const patchRes = await mf.dispatchFetch(`${DONATE_ORIGIN}/v1/admin/donations/config`, {
