@@ -540,9 +540,9 @@ function validateSourceComparison(payload: UnknownRecord): void {
     canonicalIdentity(payload[key], key)
   }
   member(payload.stage, ['accepted', 'retained'], 'comparison stage')
-  member(payload.comparison, ['metadata-agreement', 'byte-agreement', 'observed-change',
+  member(payload.comparison, ['metadata-agreement', 'observed-change',
     'unavailable'], 'comparison evidence')
-  member(payload.reason, ['same-revision', 'metadata-agreement', 'saved-ranges-compared',
+  member(payload.reason, ['same-revision', 'metadata-agreement',
     'size-changed', 'metadata-changed', 'metadata-unavailable'], 'comparison reason')
   decimalUint64(payload.reused_bytes, 'reused bytes')
   decimalUint64(payload.retained_bytes, 'retained bytes')

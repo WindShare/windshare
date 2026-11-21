@@ -14,9 +14,12 @@ export type RevisionMetadataComparison =
   | Readonly<{ kind: 'observed-change'; reason: 'size-changed' | 'metadata-changed' }>
   | Readonly<{ kind: 'unavailable'; reason: 'metadata-unavailable' }>
 
+/**
+ * Best-effort source applicability for saved-range reuse. Metadata agreement
+ * does not prove byte identity; saved ranges are not reread on reopen.
+ */
 export type RevisionComparison =
   | RevisionMetadataComparison
-  | Readonly<{ kind: 'byte-agreement'; reason: 'saved-ranges-compared' }>
   | Readonly<{ kind: 'observed-change'; reason: 'context-changed' }>
 
 export class RevisionEvidenceUnavailableError extends Error {

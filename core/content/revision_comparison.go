@@ -49,7 +49,6 @@ type RevisionComparison uint8
 const (
 	RevisionComparisonUnknown RevisionComparison = iota
 	RevisionComparisonMetadataAgreement
-	RevisionComparisonByteAgreement
 	RevisionComparisonMismatch
 	RevisionComparisonUnavailable
 )
@@ -72,8 +71,11 @@ type RevisionComparisonEvidence struct {
 	Reason     RevisionComparisonReason
 }
 
+// AllowsReuse reports whether best-effort source comparison permits reusing
+// saved plaintext ranges. Metadata agreement does not prove byte identity;
+// saved ranges are intentionally not reread or hashed on reopen or restart.
 func (e RevisionComparisonEvidence) AllowsReuse() bool {
-	return e.Comparison == RevisionComparisonMetadataAgreement || e.Comparison == RevisionComparisonByteAgreement
+	return e.Comparison == RevisionComparisonMetadataAgreement
 }
 
 // RevisionSourceEvidence is the part of an authenticated revision retained by output checkpoints.

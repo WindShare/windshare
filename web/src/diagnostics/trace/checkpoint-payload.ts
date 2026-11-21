@@ -14,8 +14,8 @@ export type CheckpointPayloadV1 =
       previous_revision: string
       current_revision: string
       stage: 'accepted' | 'retained'
-      comparison: 'metadata-agreement' | 'byte-agreement' | 'observed-change' | 'unavailable'
-      reason: 'same-revision' | 'metadata-agreement' | 'saved-ranges-compared' |
+      comparison: 'metadata-agreement' | 'observed-change' | 'unavailable'
+      reason: 'same-revision' | 'metadata-agreement' |
         'size-changed' | 'metadata-changed' | 'metadata-unavailable'
       reused_bytes: string
       retained_bytes: string

@@ -274,6 +274,9 @@ func (r *jobRun) settleReopenedRevision(
 	case !progress.retainsRanges || r.output.Capabilities().Durability == DurabilityNone:
 		decision = "output-not-resumable"
 	default:
+		// Best-effort readmission accepts metadata agreement without rereading
+		// persisted ranges; output admission still verifies local ownership and
+		// checkpoint bounds before rebinding the staged file to the new revision.
 		reason, decision = FilePauseRevisionReopened, "readmit"
 	}
 	// The range reader has drained before returning, and no output call remains
