@@ -363,6 +363,36 @@ describe('provider protocol signing, parsing, and outbound adapters', () => {
     })
   })
 
+  it('preserves __proto__ as an own data property during recursive key sorting and signature verification', () => {
+    const rawWithProto = JSON.parse(
+      '{"b":2,"__proto__":{"z":1,"a":2},"nested":[{"k":1,"__proto__":null}]}',
+    ) as Record<string, unknown>
+    const sorted = sortJsonKeysRecursively(rawWithProto) as Record<string, unknown>
+
+    expect(Object.getPrototypeOf(sorted)).toBe(Object.prototype)
+    expect(Object.hasOwn(sorted, '__proto__')).toBe(true)
+    expect(Object.keys(sorted)).toEqual(['__proto__', 'b', 'nested'])
+    expect('a' in sorted).toBe(false)
+    expect(JSON.stringify(sorted)).toBe(
+      '{"__proto__":{"a":2,"z":1},"b":2,"nested":[{"__proto__":null,"k":1}]}',
+    )
+
+    const basePayload = {
+      payment_status: 'finished',
+      price_amount: 10.5,
+      price_currency: 'usd',
+      payment_id: 987654321,
+    }
+    const baseSig = computeNowPaymentsSignature(basePayload, 'ipn-secret')
+    const tamperedPayload = JSON.parse(
+      `{"__proto__":{"injected":true},${JSON.stringify(basePayload).slice(1)}`,
+    ) as Record<string, unknown>
+
+    expect(verifyNowPaymentsSignature(tamperedPayload, baseSig, 'ipn-secret')).toBe(false)
+    const tamperedSig = computeNowPaymentsSignature(tamperedPayload, 'ipn-secret')
+    expect(verifyNowPaymentsSignature(tamperedPayload, tamperedSig, 'ipn-secret')).toBe(true)
+  })
+
   it('handles Afdian sponsor page fallback, timeouts, and NOWPayments redirect rejection', async () => {
     let calls = 0
     const sponsorFallbackFetch: FetchLike = async (_url, init) => {

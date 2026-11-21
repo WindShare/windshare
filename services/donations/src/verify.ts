@@ -275,17 +275,17 @@ export function sortJsonKeysRecursively(value: unknown): unknown {
   if (!isPlainRecord(value)) {
     return value
   }
-  const sorted: Record<string, unknown> = {}
   // NOWPayments uses default JS UTF-16 code-unit sort (`Object.keys(obj).sort()`).
   const codeUnitKeys = Object.keys(value).sort((left, right) => {
     if (left < right) return -1
     if (left > right) return 1
     return 0
   })
-  for (const key of codeUnitKeys) {
-    sorted[key] = sortJsonKeysRecursively(value[key])
-  }
-  return sorted
+  // Object.fromEntries defines own data properties so "__proto__" keys do not
+  // invoke Object.prototype.__proto__'s setter or get dropped from JSON.stringify.
+  return Object.fromEntries(
+    codeUnitKeys.map((key): [string, unknown] => [key, sortJsonKeysRecursively(value[key])]),
+  )
 }
 
 export function computeNowPaymentsSignature(
