@@ -56,7 +56,7 @@ impl Queues {
             &mut self.flows[index]
         } else {
             ensure!(
-                self.flows.len() < crate::config::DATA_QUEUE_FRAMES,
+                self.flows.len() < crate::config::CONNECTION_PENDING_FLOWS,
                 "session queue limit"
             );
             let scheduling = governor
@@ -76,7 +76,7 @@ impl Queues {
             self.flows.last_mut().expect("inserted flow")
         };
         ensure!(
-            flow.queue.len() < crate::config::DATA_QUEUE_FRAMES,
+            flow.queue.len() < crate::config::FLOW_PENDING_FRAMES,
             "session pending frame limit"
         );
         flow.queue.push_back(pending);
