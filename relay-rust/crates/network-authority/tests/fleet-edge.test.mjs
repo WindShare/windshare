@@ -6,7 +6,7 @@ import { fixture, signedDescriptor } from './local-worker.mjs';
 
 const MAX_DESCRIPTOR_BYTES = 16 * 1024;
 const MAX_DNS_BYTES = 16 * 1024;
-const MAX_DIRECTORY_BYTES = 256 * 1024;
+const MAX_DIRECTORY_BYTES = 512 * 1024;
 const KV_DIRECTORY_KEY = 'windshare-network';
 
 const release = JSON.parse(
