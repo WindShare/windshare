@@ -1,4 +1,10 @@
-import { KNOWN_CURRENCY_DECIMALS } from './model'
+import {
+  KNOWN_CURRENCY_DECIMALS,
+  MAX_CRYPTO_USD_MINOR,
+  MIN_CRYPTO_USD_MINOR,
+  type DonationConfig,
+  type WallVisibility,
+} from './model'
 
 const MAX_INFERRED_MINOR_DIGITS = 4
 const ISO_CURRENCY_PATTERN = /^[A-Z]{3}$/
@@ -6,11 +12,25 @@ const DECIMAL_AMOUNT_PATTERN = /^(\d+)(?:\.(\d+))?$/
 const ZERO_WIDTH_PATTERN = /[\u200B-\u200D\u2060\uFEFF]/g
 const COLLAPSIBLE_WHITESPACE_PATTERN = /[\r\n\t]+/g
 
+// Linear-time patterns without nested quantifiers to stay ReDoS-safe on untrusted UGC.
+const EXTERNAL_URL_PATTERN = /(?:https?:\/\/|ftp:\/\/|\bwww\.[a-z0-9-]|\b(?:t\.me|telegram\.me|discord\.gg|wa\.me|bit\.ly|tinyurl\.com)\/)/i
+const EMAIL_PATTERN = /[a-z0-9._%+-]{1,64}@[a-z0-9-]{1,63}(?:\.[a-z0-9-]{1,63})+/i
+const MAINLAND_MOBILE_PATTERN = /(?<!\d)1[3-9]\d(?:[\s-]?\d{4}){2}(?!\d)/
+
 export interface ParsedMoney {
   readonly amountMinor: number
   readonly currency: string
   readonly minorDigits: number
   readonly knownCurrency: boolean
+}
+
+export interface VisibilityClassificationInput {
+  readonly amountMinor: number
+  readonly currency: string
+  readonly displayName: string | null
+  readonly message: string | null
+  readonly isPublic: boolean
+  readonly config: DonationConfig
 }
 
 function isDisallowedControlCode(codePoint: number): boolean {
@@ -106,4 +126,60 @@ export function parseFixedPointAmount(
     minorDigits,
     knownCurrency: knownDigits !== undefined,
   }
+}
+
+export function parseCryptoUsdAmount(rawAmount: string | number): number | null {
+  const parsed = parseFixedPointAmount(rawAmount, 'USD')
+  if (parsed === null) return null
+  if (parsed.amountMinor < MIN_CRYPTO_USD_MINOR || parsed.amountMinor > MAX_CRYPTO_USD_MINOR) {
+    return null
+  }
+  return parsed.amountMinor
+}
+
+export function formatUsdMinorForInvoice(usdMinor: number): string {
+  const whole = Math.floor(usdMinor / 100)
+  const fraction = String(usdMinor % 100).padStart(2, '0')
+  return `${whole}.${fraction}`
+}
+
+export function containsExternalUrl(value: string | null): boolean {
+  return value !== null && EXTERNAL_URL_PATTERN.test(value)
+}
+
+export function containsContactPii(value: string | null): boolean {
+  if (value === null) return false
+  return EMAIL_PATTERN.test(value) || MAINLAND_MOBILE_PATTERN.test(value)
+}
+
+function isBelowAutomaticThreshold(
+  currency: string,
+  amountMinor: number,
+  config: DonationConfig,
+): boolean {
+  if (currency === 'CNY') return amountMinor < config.minPublicCnyMinor
+  if (currency === 'USD') return amountMinor < config.minPublicUsdMinor
+  return false
+}
+
+export function determineInitialVisibility(input: VisibilityClassificationInput): WallVisibility {
+  if (!input.isPublic) {
+    return { kind: 'private_donor' }
+  }
+  if (input.currency !== 'CNY' && input.currency !== 'USD') {
+    return { kind: 'pending_review', reason: 'unsupported_currency' }
+  }
+  if (isBelowAutomaticThreshold(input.currency, input.amountMinor, input.config)) {
+    return { kind: 'below_threshold' }
+  }
+  if (containsExternalUrl(input.displayName) || containsExternalUrl(input.message)) {
+    return { kind: 'pending_review', reason: 'url_detected' }
+  }
+  if (containsContactPii(input.displayName) || containsContactPii(input.message)) {
+    return { kind: 'pending_review', reason: 'pii_detected' }
+  }
+  if (input.config.moderationEnabled) {
+    return { kind: 'pending_review', reason: 'moderation_mode' }
+  }
+  return { kind: 'published' }
 }

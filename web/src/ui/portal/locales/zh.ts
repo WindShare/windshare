@@ -9,6 +9,7 @@ export const zh: typeof en = {
   navWorkflow: '如何使用',
   navShare: '开始分享',
   navSelfHost: '自建中转',
+  navDonate: '赞助',
   repository: '查看 GitHub 开源仓库',
   openSource: '开源',
   preferences: '外观与语言',

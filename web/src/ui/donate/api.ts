@@ -9,6 +9,37 @@ export interface WallFetchOptions {
   readonly signal?: AbortSignal
 }
 
+export class DonateApiError extends Error {
+  readonly status: number
+  readonly code: string | null
+  readonly retryAfterSeconds: number | null
+
+  constructor(status: number, code: string | null, retryAfterSeconds: number | null) {
+    super(code ?? `Request failed with status ${status}`)
+    this.name = 'DonateApiError'
+    this.status = status
+    this.code = code
+    this.retryAfterSeconds = retryAfterSeconds
+  }
+}
+
+async function readErrorDetails(response: Response): Promise<{ code: string | null; retryAfterSeconds: number | null }> {
+  const retryHeader = response.headers.get('Retry-After')
+  const retryFromHeader = retryHeader !== null && Number.isFinite(Number(retryHeader))
+    ? Number(retryHeader)
+    : null
+  try {
+    const body = await response.json() as { error?: unknown; retryAfterSeconds?: unknown }
+    const code = typeof body.error === 'string' ? body.error : null
+    const retryFromBody = typeof body.retryAfterSeconds === 'number' && Number.isFinite(body.retryAfterSeconds)
+      ? body.retryAfterSeconds
+      : null
+    return { code, retryAfterSeconds: retryFromBody ?? retryFromHeader }
+  } catch {
+    return { code: null, retryAfterSeconds: retryFromHeader }
+  }
+}
+
 export async function fetchDonationWall(
   options: WallFetchOptions = {},
 ): Promise<PublicWallResponse> {
@@ -19,7 +50,8 @@ export async function fetchDonationWall(
     signal,
   })
   if (!response.ok) {
-    throw new Error(`Donation wall request failed with status ${response.status}`)
+    const details = await readErrorDetails(response)
+    throw new DonateApiError(response.status, details.code, details.retryAfterSeconds)
   }
   return await response.json() as PublicWallResponse
 }
@@ -35,7 +67,8 @@ export async function createCryptoIntent(
     signal: signal ?? AbortSignal.timeout(INTENT_TIMEOUT_MS),
   })
   if (!response.ok) {
-    throw new Error(`Crypto checkout request failed with status ${response.status}`)
+    const details = await readErrorDetails(response)
+    throw new DonateApiError(response.status, details.code, details.retryAfterSeconds)
   }
   return await response.json() as CryptoIntentResponse
 }

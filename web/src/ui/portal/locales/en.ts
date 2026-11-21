@@ -7,6 +7,7 @@ export const en = {
   navWorkflow: 'How it works',
   navShare: 'Start sharing',
   navSelfHost: 'Self-host',
+  navDonate: 'Donate',
   repository: 'View the source on GitHub',
   openSource: 'Open source',
   preferences: 'Appearance & language',

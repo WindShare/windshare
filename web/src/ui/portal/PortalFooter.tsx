@@ -13,6 +13,7 @@ export function PortalFooter() {
           <span className="portal-footer-note">{t.footerNote}</span>
         </div>
         <nav className="portal-footer-links" aria-label={t.resources}>
+          <a href="/donate">{t.navDonate}</a>
           <a href={PORTAL_LINKS.repository} target="_blank" rel="noopener noreferrer">GitHub</a>
           <a href={PORTAL_LINKS.protocol} target="_blank" rel="noopener noreferrer">{t.protocol}</a>
           <a href={PORTAL_LINKS.issues} target="_blank" rel="noopener noreferrer">{t.feedback}</a>
