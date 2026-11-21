@@ -27,7 +27,7 @@ import {
   queryAfdianOrders,
   type FetchLike,
 } from '../providers'
-import { parseFixedPointAmount, sanitizePlainText } from '../sanitize'
+import { parseFixedPointAmount, sanitizePlainText, type ParsedMoney } from '../sanitize'
 import {
   constantTimeEqual,
   isSupportedKofiType,
@@ -51,7 +51,7 @@ function getWallStub(env: DonationsEnv): DurableObjectStub {
   return env.DONATION_WALL.get(env.DONATION_WALL.idFromName(DONATION_WALL_INSTANCE_NAME))
 }
 
-export async function donationExistsInWall(
+async function donationExistsInWall(
   env: DonationsEnv,
   provider: DonationProvider,
   externalId: string,
@@ -62,6 +62,37 @@ export async function donationExistsInWall(
   if (!response.ok) return false
   const body = await response.json() as { exists: boolean }
   return body.exists
+}
+
+export async function findExistingDonationsInWall(
+  env: DonationsEnv,
+  provider: DonationProvider,
+  externalIds: readonly string[],
+): Promise<Set<string>> {
+  if (externalIds.length === 0) return new Set()
+  const stub = getWallStub(env)
+  const response = await stub.fetch('https://donation-wall.internal/internal/donations/exists-batch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider, externalIds }),
+  })
+  if (!response.ok) {
+    throw new Error(`Donation batch existence check failed with status ${response.status}`)
+  }
+  const body = await response.json() as { existingIds: string[] }
+  return new Set(body.existingIds)
+}
+
+function logCommitResult(result: CommitDonationResult): void {
+  logDonationCommitted({
+    donationId: result.record.id,
+    provider: result.record.provider,
+    externalId: result.record.externalId,
+    currency: result.record.currency,
+    amountMinor: result.record.amountMinor,
+    visibility: result.record.visibility.kind,
+    deduplicated: result.deduplicated,
+  })
 }
 
 async function commitDonationToWall(
@@ -79,16 +110,48 @@ async function commitDonationToWall(
     throw new Error(`Donation commit failed with status ${response.status}`)
   }
   const result = await response.json() as CommitDonationResult
-  logDonationCommitted({
-    donationId: result.record.id,
-    provider: result.record.provider,
-    externalId: result.record.externalId,
-    currency: result.record.currency,
-    amountMinor: result.record.amountMinor,
-    visibility: result.record.visibility.kind,
-    deduplicated: result.deduplicated,
-  })
+  logCommitResult(result)
   return result
+}
+
+export async function commitDonationsBatchToWall(
+  env: DonationsEnv,
+  inputs: readonly CommitDonationInput[],
+  nowSec: number,
+): Promise<CommitDonationResult[]> {
+  if (inputs.length === 0) return []
+  const stub = getWallStub(env)
+  const response = await stub.fetch('https://donation-wall.internal/internal/donations/commit-batch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ inputs, nowSec }),
+  })
+  if (!response.ok) {
+    throw new Error(`Donation batch commit failed with status ${response.status}`)
+  }
+  const body = await response.json() as { results: CommitDonationResult[] }
+  for (const result of body.results) {
+    logCommitResult(result)
+  }
+  return body.results
+}
+
+export function toAfdianCommitInput(
+  order: AfdianOrderRecord,
+  money: ParsedMoney,
+  rawDisplayName: string | null,
+): CommitDonationInput {
+  return {
+    provider: 'afdian',
+    externalId: order.outTradeNo,
+    displayName: sanitizePlainText(rawDisplayName, MAX_DISPLAY_NAME_CODEPOINTS),
+    amountMinor: money.amountMinor,
+    currency: money.currency,
+    minorDigits: money.minorDigits,
+    message: sanitizePlainText(order.remark, MAX_MESSAGE_CODEPOINTS),
+    isPublic: true,
+    donatedAt: null,
+  }
 }
 
 async function lookupCryptoIntent(
@@ -109,7 +172,7 @@ function afdianAckResponse(): Response {
   return jsonResponse({ ec: 200, em: '' }, 200, NO_STORE_HEADERS)
 }
 
-export async function commitVerifiedAfdianOrder(
+async function commitVerifiedAfdianOrder(
   env: DonationsEnv,
   order: AfdianOrderRecord,
   afdianToken: string,
@@ -121,7 +184,7 @@ export async function commitVerifiedAfdianOrder(
     return null
   }
 
-  let displayName: string | null = null
+  let rawDisplayName: string | null = null
   if (order.userId.length > 0) {
     const sponsor = await lookupAfdianSponsorName({
       userId: env.AFDIAN_USER_ID,
@@ -131,7 +194,7 @@ export async function commitVerifiedAfdianOrder(
       fetchFn: deps.fetchFn,
     })
     if (sponsor.ok) {
-      displayName = sanitizePlainText(sponsor.displayName, MAX_DISPLAY_NAME_CODEPOINTS)
+      rawDisplayName = sponsor.displayName
     } else {
       logAfdianSponsorLookupFallback({
         outTradeNo: order.outTradeNo,
@@ -140,20 +203,9 @@ export async function commitVerifiedAfdianOrder(
     }
   }
 
-  const message = sanitizePlainText(order.remark, MAX_MESSAGE_CODEPOINTS)
   return commitDonationToWall(
     env,
-    {
-      provider: 'afdian',
-      externalId: order.outTradeNo,
-      displayName,
-      amountMinor: money.amountMinor,
-      currency: money.currency,
-      minorDigits: money.minorDigits,
-      message,
-      isPublic: true,
-      donatedAt: null,
-    },
+    toAfdianCommitInput(order, money, rawDisplayName),
     deps.nowSec(),
   )
 }

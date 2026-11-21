@@ -15,7 +15,9 @@ import {
 import {
   logAdminAfdianSynced,
   logAdminLogin,
+  logAfdianSponsorLookupFallback,
   logDonationModerated,
+  logWebhookRejected,
 } from '../log'
 import {
   ADMIN_SESSION_TTL_SECONDS,
@@ -24,21 +26,32 @@ import {
   type AdminConfigPatch,
   type AdminSessionRecord,
   type AdminVisibilityCommand,
+  type CommitDonationInput,
   type DonationRecord,
   type WallVisibility,
 } from '../model'
-import { queryAfdianOrders } from '../providers'
-import { sanitizePlainText } from '../sanitize'
-import { constantTimeEqual, hmacSha256Hex } from '../verify'
 import {
-  commitVerifiedAfdianOrder,
-  donationExistsInWall,
+  lookupAfdianSponsorNameDirect,
+  queryAfdianOrders,
+  queryAfdianSponsorPage,
+} from '../providers'
+import { parseFixedPointAmount, sanitizePlainText, type ParsedMoney } from '../sanitize'
+import { constantTimeEqual, hmacSha256Hex, type AfdianOrderRecord } from '../verify'
+import {
+  commitDonationsBatchToWall,
+  findExistingDonationsInWall,
+  toAfdianCommitInput,
   type RuntimeDeps,
 } from '../webhooks/handlers'
 
 const VISIBILITY_PATH_PREFIX = '/v1/admin/donations/'
 const VISIBILITY_PATH_SUFFIX = '/visibility'
 const AFDIAN_PAID_STATUS = 2
+const AFDIAN_SYNC_PER_PAGE = 50
+// Cap per-sync direct sponsor lookups so 1 query-order + 1 sponsor page + direct lookups
+// stay safely below the 50 external subrequests/request Workers Free limit.
+const MAX_AFDIAN_SYNC_SPONSOR_LOOKUPS = 40
+const AFDIAN_RATE_LIMIT_REASON = 'http_429'
 const ADMIN_SESSION_HASH_DOMAIN = 'windshare-donations-admin-session:v1:'
 
 interface AuthenticatedSession extends AdminSessionRecord {
@@ -223,6 +236,159 @@ function parseConfigPatch(data: Record<string, unknown>): AdminConfigPatch | nul
   return changed ? patch : null
 }
 
+interface ValidAfdianOrderDraft {
+  readonly order: AfdianOrderRecord
+  readonly money: ParsedMoney
+}
+
+type BatchSponsorResolution =
+  | {
+    readonly ok: true
+    readonly names: ReadonlyMap<string, string | null>
+    readonly deferredUserIds: ReadonlySet<string>
+  }
+  | { readonly ok: false; readonly reason: string }
+
+function collectMissingPaidAfdianOrders(
+  paidOrders: readonly AfdianOrderRecord[],
+  existingIds: ReadonlySet<string>,
+): { readonly deduplicated: number; readonly validOrders: ValidAfdianOrderDraft[] } {
+  const seenIds = new Set(existingIds)
+  let deduplicated = 0
+  const validOrders: ValidAfdianOrderDraft[] = []
+
+  for (const order of paidOrders) {
+    if (seenIds.has(order.outTradeNo)) {
+      deduplicated += 1
+      continue
+    }
+    seenIds.add(order.outTradeNo)
+    const money = parseFixedPointAmount(order.totalAmount, 'CNY')
+    if (money === null) {
+      logWebhookRejected({ provider: 'afdian', reason: 'invalid_payload' })
+      continue
+    }
+    validOrders.push({ order, money })
+  }
+
+  return { deduplicated, validOrders }
+}
+
+async function resolveMissedSponsorUsers(
+  env: DonationsEnv,
+  afdianToken: string,
+  firstOrderByUser: ReadonlyMap<string, string>,
+  names: Map<string, string | null>,
+  deps: RuntimeDeps,
+): Promise<Set<string>> {
+  const deferredUserIds = new Set<string>()
+  let directLookups = 0
+  let rateLimited = false
+
+  for (const [sponsorUserId, outTradeNo] of firstOrderByUser) {
+    if (names.has(sponsorUserId)) continue
+    if (rateLimited || directLookups >= MAX_AFDIAN_SYNC_SPONSOR_LOOKUPS) {
+      // Defer unresolved sponsors beyond our subrequest budget or after a 429 rather than
+      // persisting irreversible anonymous records; re-running Sync Afdian picks them up cleanly.
+      deferredUserIds.add(sponsorUserId)
+      continue
+    }
+    directLookups += 1
+    const lookup = await lookupAfdianSponsorNameDirect({
+      userId: env.AFDIAN_USER_ID,
+      token: afdianToken,
+      sponsorUserId,
+      nowSec: deps.nowSec(),
+      fetchFn: deps.fetchFn,
+    })
+    if (lookup.ok) {
+      names.set(sponsorUserId, lookup.displayName)
+      continue
+    }
+    logAfdianSponsorLookupFallback({ outTradeNo, reason: lookup.reason })
+    if (lookup.reason === AFDIAN_RATE_LIMIT_REASON) {
+      rateLimited = true
+      deferredUserIds.add(sponsorUserId)
+    } else {
+      names.set(sponsorUserId, null)
+    }
+  }
+
+  return deferredUserIds
+}
+
+async function resolveBatchSponsorNames(
+  env: DonationsEnv,
+  afdianToken: string,
+  validOrders: readonly ValidAfdianOrderDraft[],
+  deps: RuntimeDeps,
+): Promise<BatchSponsorResolution> {
+  const firstOrderByUser = new Map<string, string>()
+  for (const { order } of validOrders) {
+    if (order.userId.length > 0 && !firstOrderByUser.has(order.userId)) {
+      firstOrderByUser.set(order.userId, order.outTradeNo)
+    }
+  }
+  if (firstOrderByUser.size === 0) {
+    return { ok: true, names: new Map(), deferredUserIds: new Set() }
+  }
+
+  // Prime a batch-wide map from page 1 once so recent sponsors resolve in a single outbound call.
+  const pageResult = await queryAfdianSponsorPage({
+    userId: env.AFDIAN_USER_ID,
+    token: afdianToken,
+    nowSec: deps.nowSec(),
+    fetchFn: deps.fetchFn,
+  })
+  if (!pageResult.ok) {
+    const sampleTradeNo = firstOrderByUser.values().next().value ?? 'batch'
+    logAfdianSponsorLookupFallback({ outTradeNo: sampleTradeNo, reason: pageResult.reason })
+    if (pageResult.reason === AFDIAN_RATE_LIMIT_REASON) {
+      return { ok: false, reason: pageResult.reason }
+    }
+    return { ok: true, names: new Map(), deferredUserIds: new Set() }
+  }
+
+  const names = new Map(pageResult.sponsors)
+  const deferredUserIds = await resolveMissedSponsorUsers(
+    env,
+    afdianToken,
+    firstOrderByUser,
+    names,
+    deps,
+  )
+  return { ok: true, names, deferredUserIds }
+}
+
+function partitionReadyAfdianInputs(
+  validOrders: readonly ValidAfdianOrderDraft[],
+  names: ReadonlyMap<string, string | null>,
+  deferredUserIds: ReadonlySet<string>,
+): { readonly readyInputs: CommitDonationInput[]; readonly deferred: number } {
+  const readyInputs: CommitDonationInput[] = []
+  let deferred = 0
+  for (const { order, money } of validOrders) {
+    if (order.userId.length > 0 && deferredUserIds.has(order.userId)) {
+      deferred += 1
+      continue
+    }
+    const rawDisplayName = order.userId.length > 0 ? (names.get(order.userId) ?? null) : null
+    readyInputs.push(toAfdianCommitInput(order, money, rawDisplayName))
+  }
+  return { readyInputs, deferred }
+}
+
+function finalizeAfdianSyncResponse(summary: {
+  readonly fetched: number
+  readonly paid: number
+  readonly committed: number
+  readonly deduplicated: number
+  readonly deferred: number
+}): Response {
+  logAdminAfdianSynced(summary)
+  return adminJsonResponse(summary)
+}
+
 async function handleSyncAfdian(env: DonationsEnv, deps: RuntimeDeps): Promise<Response> {
   if (!env.AFDIAN_TOKEN) {
     return adminJsonResponse({ error: 'afdian_not_configured' }, 503)
@@ -231,7 +397,7 @@ async function handleSyncAfdian(env: DonationsEnv, deps: RuntimeDeps): Promise<R
     userId: env.AFDIAN_USER_ID,
     token: env.AFDIAN_TOKEN,
     page: 1,
-    perPage: 50,
+    perPage: AFDIAN_SYNC_PER_PAGE,
     nowSec: deps.nowSec(),
     fetchFn: deps.fetchFn,
   })
@@ -239,37 +405,50 @@ async function handleSyncAfdian(env: DonationsEnv, deps: RuntimeDeps): Promise<R
     return adminJsonResponse({ error: 'afdian_query_failed', reason: orderQuery.reason }, 502)
   }
 
-  let paid = 0
-  let committed = 0
-  let deduplicated = 0
-
-  for (const order of orderQuery.orders) {
-    if (order.status !== AFDIAN_PAID_STATUS) continue
-    paid += 1
-    if (await donationExistsInWall(env, 'afdian', order.outTradeNo)) {
-      deduplicated += 1
-      continue
-    }
-    const result = await commitVerifiedAfdianOrder(env, order, env.AFDIAN_TOKEN, deps)
-    if (result === null) continue
-    if (result.deduplicated) {
-      deduplicated += 1
-    } else {
-      committed += 1
-    }
+  const fetched = orderQuery.orders.length
+  const paidOrders = orderQuery.orders.filter(order => order.status === AFDIAN_PAID_STATUS)
+  if (paidOrders.length === 0) {
+    return finalizeAfdianSyncResponse({ fetched, paid: 0, committed: 0, deduplicated: 0, deferred: 0 })
   }
 
-  logAdminAfdianSynced({
-    fetched: orderQuery.orders.length,
-    paid,
+  const existingIds = await findExistingDonationsInWall(
+    env,
+    'afdian',
+    paidOrders.map(order => order.outTradeNo),
+  )
+  const missing = collectMissingPaidAfdianOrders(paidOrders, existingIds)
+  if (missing.validOrders.length === 0) {
+    return finalizeAfdianSyncResponse({
+      fetched,
+      paid: paidOrders.length,
+      committed: 0,
+      deduplicated: missing.deduplicated,
+      deferred: 0,
+    })
+  }
+
+  const sponsors = await resolveBatchSponsorNames(env, env.AFDIAN_TOKEN, missing.validOrders, deps)
+  if (!sponsors.ok) {
+    return adminJsonResponse({ error: 'afdian_rate_limited', reason: sponsors.reason }, 502)
+  }
+
+  const { readyInputs, deferred } = partitionReadyAfdianInputs(
+    missing.validOrders,
+    sponsors.names,
+    sponsors.deferredUserIds,
+  )
+  const results = readyInputs.length > 0
+    ? await commitDonationsBatchToWall(env, readyInputs, deps.nowSec())
+    : []
+  const committed = results.filter(result => !result.deduplicated).length
+  const deduplicated = missing.deduplicated + (results.length - committed)
+
+  return finalizeAfdianSyncResponse({
+    fetched,
+    paid: paidOrders.length,
     committed,
     deduplicated,
-  })
-  return adminJsonResponse({
-    fetched: orderQuery.orders.length,
-    paid,
-    committed,
-    deduplicated,
+    deferred,
   })
 }
 

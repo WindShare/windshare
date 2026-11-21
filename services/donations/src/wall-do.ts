@@ -133,6 +133,33 @@ export class DonationWall extends DurableObject<DonationsEnv> {
       const body = await request.json() as { input: CommitDonationInput; nowSec?: number }
       return json(this.store.commitDonation(body.input, body.nowSec ?? nowSeconds()), 200)
     }
+    return this.handleDonationBatchRoute(request, method, pathname)
+  }
+
+  private async handleDonationBatchRoute(
+    request: Request,
+    method: string,
+    pathname: string,
+  ): Promise<Response | null> {
+    if (method === 'POST' && pathname === '/internal/donations/exists-batch') {
+      const body = await request.json() as { provider?: DonationProvider; externalIds?: unknown }
+      if (typeof body.provider !== 'string' || !Array.isArray(body.externalIds)) {
+        return json({ error: 'invalid_payload' }, 400)
+      }
+      const externalIds = body.externalIds.filter((id): id is string => typeof id === 'string')
+      return json({ existingIds: this.store.findExistingExternalIds(body.provider, externalIds) }, 200)
+    }
+    if (method === 'POST' && pathname === '/internal/donations/commit-batch') {
+      const body = await request.json() as { inputs?: unknown; nowSec?: number }
+      if (!Array.isArray(body.inputs)) {
+        return json({ error: 'invalid_payload' }, 400)
+      }
+      const results = this.store.commitDonationsBatch(
+        body.inputs as CommitDonationInput[],
+        body.nowSec ?? nowSeconds(),
+      )
+      return json({ results }, 200)
+    }
     return null
   }
 

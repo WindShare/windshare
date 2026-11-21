@@ -397,7 +397,12 @@ export const ADMIN_APP_JS = `(() => {
       return
     }
     await loadDonations(true)
-    setStatus('Synced Afdian: +' + res.data.committed + ' new (' + res.data.deduplicated + ' existing).')
+    const deferredSuffix = res.data.deferred > 0
+      ? ', ' + res.data.deferred + ' remaining — sync again to continue'
+      : ''
+    setStatus(
+      'Synced Afdian: +' + res.data.committed + ' new (' + res.data.deduplicated + ' existing' + deferredSuffix + ').',
+    )
   })
 
   el('config-form').addEventListener('submit', async event => {

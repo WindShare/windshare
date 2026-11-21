@@ -27,6 +27,8 @@ const CLEANUP_BATCH_SIZE = 32
 const RATE_LIMIT_STALE_SECONDS = 3600
 const DEFAULT_ADMIN_PAGE_LIMIT = 50
 const MAX_ADMIN_PAGE_LIMIT = 100
+// Keep parameterized IN-clause chunks well under SQLite's 999 bound parameter ceiling.
+const SQL_IN_BATCH_SIZE = 100
 const CURSOR_PATTERN = /^(\d+):([A-Za-z0-9_-]+)$/
 
 export type RateLimitScope = 'crypto' | 'admin_login'
@@ -455,67 +457,121 @@ export class WallStore {
     return row !== null
   }
 
+  findExistingExternalIds(
+    provider: DonationProvider,
+    externalIds: readonly string[],
+  ): string[] {
+    const uniqueIds = [...new Set(externalIds.filter(id => id.length > 0))]
+    if (uniqueIds.length === 0) return []
+    const existing: string[] = []
+    for (let offset = 0; offset < uniqueIds.length; offset += SQL_IN_BATCH_SIZE) {
+      const chunk = uniqueIds.slice(offset, offset + SQL_IN_BATCH_SIZE)
+      const placeholders = chunk.map(() => '?').join(', ')
+      const rows = this.sql.exec(
+        `SELECT external_id FROM donations WHERE provider = ? AND external_id IN (${placeholders})`,
+        provider,
+        ...chunk,
+      )
+      for (const row of rows) {
+        existing.push(String(row.external_id))
+      }
+    }
+    return existing
+  }
+
+  private insertDonationInTx(
+    input: CommitDonationInput,
+    config: DonationConfig,
+    nowSec: number,
+  ): CommitDonationResult {
+    const existing = firstRow(this.sql.exec(
+      `SELECT id, provider, external_id, display_name, amount_minor, currency,
+              minor_digits, message, visibility_kind, visibility_json, donated_at
+       FROM donations
+       WHERE provider = ? AND external_id = ?
+       LIMIT 1`,
+      input.provider,
+      input.externalId,
+    ))
+    if (existing !== null) {
+      return { record: rowToDonationRecord(existing), deduplicated: true }
+    }
+
+    // Enforce privacy invariant at the persistence boundary even if a caller passes text.
+    const displayName = input.isPublic ? input.displayName : null
+    const message = input.isPublic ? input.message : null
+    const visibility = determineInitialVisibility({
+      amountMinor: input.amountMinor,
+      currency: input.currency,
+      displayName,
+      message,
+      isPublic: input.isPublic,
+      config,
+    })
+    const donatedAt = clampDonatedAt(input.donatedAt, nowSec)
+    const record: DonationRecord = {
+      id: generateUrlSafeId(12),
+      provider: input.provider,
+      externalId: input.externalId,
+      displayName,
+      amountMinor: input.amountMinor,
+      currency: input.currency,
+      minorDigits: input.minorDigits,
+      message,
+      visibility,
+      donatedAt,
+    }
+
+    this.sql.exec(
+      `INSERT INTO donations (
+        id, provider, external_id, display_name, amount_minor, currency,
+        minor_digits, message, visibility_kind, visibility_json, donated_at, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      record.id,
+      record.provider,
+      record.externalId,
+      record.displayName,
+      record.amountMinor,
+      record.currency,
+      record.minorDigits,
+      record.message,
+      record.visibility.kind,
+      JSON.stringify(record.visibility),
+      record.donatedAt,
+      nowSec,
+    )
+    return { record, deduplicated: false }
+  }
+
   commitDonation(input: CommitDonationInput, nowSec: number): CommitDonationResult {
     return this.runTx(() => {
-      const existing = firstRow(this.sql.exec(
-        `SELECT id, provider, external_id, display_name, amount_minor, currency,
-                minor_digits, message, visibility_kind, visibility_json, donated_at
-         FROM donations
-         WHERE provider = ? AND external_id = ?
-         LIMIT 1`,
-        input.provider,
-        input.externalId,
-      ))
-      if (existing !== null) {
-        return { record: rowToDonationRecord(existing), deduplicated: true }
-      }
-
       const { config } = this.readConfigRow()
-      // Enforce privacy invariant at the persistence boundary even if a caller passes text.
-      const displayName = input.isPublic ? input.displayName : null
-      const message = input.isPublic ? input.message : null
-      const visibility = determineInitialVisibility({
-        amountMinor: input.amountMinor,
-        currency: input.currency,
-        displayName,
-        message,
-        isPublic: input.isPublic,
-        config,
-      })
-      const donatedAt = clampDonatedAt(input.donatedAt, nowSec)
-      const record: DonationRecord = {
-        id: generateUrlSafeId(12),
-        provider: input.provider,
-        externalId: input.externalId,
-        displayName,
-        amountMinor: input.amountMinor,
-        currency: input.currency,
-        minorDigits: input.minorDigits,
-        message,
-        visibility,
-        donatedAt,
+      const result = this.insertDonationInTx(input, config, nowSec)
+      if (!result.deduplicated) {
+        this.bumpWallVersion()
       }
+      return result
+    })
+  }
 
-      this.sql.exec(
-        `INSERT INTO donations (
-          id, provider, external_id, display_name, amount_minor, currency,
-          minor_digits, message, visibility_kind, visibility_json, donated_at, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        record.id,
-        record.provider,
-        record.externalId,
-        record.displayName,
-        record.amountMinor,
-        record.currency,
-        record.minorDigits,
-        record.message,
-        record.visibility.kind,
-        JSON.stringify(record.visibility),
-        record.donatedAt,
-        nowSec,
-      )
-      this.bumpWallVersion()
-      return { record, deduplicated: false }
+  commitDonationsBatch(
+    inputs: readonly CommitDonationInput[],
+    nowSec: number,
+  ): CommitDonationResult[] {
+    if (inputs.length === 0) return []
+    return this.runTx(() => {
+      const { config } = this.readConfigRow()
+      const results: CommitDonationResult[] = []
+      let insertedAny = false
+      for (const input of inputs) {
+        const result = this.insertDonationInTx(input, config, nowSec)
+        if (!result.deduplicated) insertedAny = true
+        results.push(result)
+      }
+      if (insertedAny) {
+        this.bumpWallVersion()
+      }
+      return results
     })
   }
 

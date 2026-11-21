@@ -38,6 +38,7 @@ interface OutboundControl {
   afdianOrderStatus: 'ok' | 'transient_error' | 'unpaid'
   afdianSponsorMode: 'ok' | 'fail'
   afdianOrderCalls: number
+  afdianSponsorCalls: number
   afdianSyncOrders: Array<{
     out_trade_no: string
     user_id: string
@@ -52,6 +53,7 @@ const outbound: OutboundControl = {
   afdianOrderStatus: 'ok',
   afdianSponsorMode: 'ok',
   afdianOrderCalls: 0,
+  afdianSponsorCalls: 0,
   afdianSyncOrders: [],
   nowPaymentsInvoiceCalls: 0,
 }
@@ -110,6 +112,7 @@ function handleOutboundMock(request: { url: string; headers: { get(name: string)
     }
 
     if (request.url === 'https://afdian.com/api/open/query-sponsor') {
+      outbound.afdianSponsorCalls += 1
       if (outbound.afdianSponsorMode === 'fail') {
         return new MiniflareResponse('timeout', { status: 504 })
       }
@@ -451,6 +454,7 @@ describe('windshare-donations Worker + SQLite DO HTTP integration', () => {
       { out_trade_no: 'AF-SYNC-2', user_id: 'u-sync', total_amount: '20.00', status: 2, remark: '补录感谢' },
       { out_trade_no: 'AF-UNPAID', user_id: 'u-sync', total_amount: '20.00', status: 1, remark: 'pending' },
     ]
+    const sponsorCallsBeforeSync = outbound.afdianSponsorCalls
     const syncRes = await mf.dispatchFetch(`${DONATE_ORIGIN}/v1/admin/donations/sync-afdian`, {
       method: 'POST',
       headers: {
@@ -460,7 +464,21 @@ describe('windshare-donations Worker + SQLite DO HTTP integration', () => {
       },
     })
     expect(syncRes.status).toBe(200)
-    expect(await syncRes.json()).toEqual({ fetched: 3, paid: 2, committed: 1, deduplicated: 1 })
+    expect(await syncRes.json()).toEqual({ fetched: 3, paid: 2, committed: 1, deduplicated: 1, deferred: 0 })
+    expect(outbound.afdianSponsorCalls).toBe(sponsorCallsBeforeSync + 1)
+
+    // Re-running sync with zero new orders short-circuits via DO batch dedup with zero sponsor lookups.
+    const replaySyncRes = await mf.dispatchFetch(`${DONATE_ORIGIN}/v1/admin/donations/sync-afdian`, {
+      method: 'POST',
+      headers: {
+        Origin: DONATE_ORIGIN,
+        Cookie: cookiePair,
+        'X-CSRF-Token': loginData.csrfToken,
+      },
+    })
+    expect(replaySyncRes.status).toBe(200)
+    expect(await replaySyncRes.json()).toEqual({ fetched: 3, paid: 2, committed: 0, deduplicated: 2, deferred: 0 })
+    expect(outbound.afdianSponsorCalls).toBe(sponsorCallsBeforeSync + 1)
 
     // Fetch admin list and verify private_donor cannot be approved (409), while published can hide/restore.
     const listRes = await mf.dispatchFetch(`${DONATE_ORIGIN}/v1/admin/donations`, {

@@ -151,12 +151,34 @@ export function parseAfdianOrderQueryResponse(
   return { ok: true, orders }
 }
 
-function extractSponsorMatch(item: unknown, targetUserId: string): string | null | undefined {
-  if (!isPlainRecord(item)) return undefined
+function extractSponsorEntry(
+  item: unknown,
+): { readonly userId: string; readonly displayName: string | null } | null {
+  if (!isPlainRecord(item)) return null
   const userObj = isPlainRecord(item.user) ? item.user : null
-  const itemUserId = readNonEmptyString(userObj?.user_id) ?? readNonEmptyString(item.user_id)
-  if (itemUserId !== targetUserId) return undefined
-  return readNonEmptyString(userObj?.name) ?? readNonEmptyString(item.user_name)
+  const userId = readNonEmptyString(userObj?.user_id) ?? readNonEmptyString(item.user_id)
+  if (userId === null) return null
+  const displayName = readNonEmptyString(userObj?.name) ?? readNonEmptyString(item.user_name)
+  return { userId, displayName }
+}
+
+export function parseAfdianSponsorPage(
+  rawJson: unknown,
+): { readonly ok: true; readonly sponsors: ReadonlyMap<string, string | null> }
+  | { readonly ok: false; readonly reason: string } {
+  if (!isPlainRecord(rawJson)) return { ok: false, reason: 'invalid_json' }
+  if (rawJson.ec !== 200) return { ok: false, reason: `afdian_ec_${String(rawJson.ec)}` }
+  if (!isPlainRecord(rawJson.data) || !Array.isArray(rawJson.data.list)) {
+    return { ok: false, reason: 'missing_sponsor_list' }
+  }
+  const sponsors = new Map<string, string | null>()
+  for (const item of rawJson.data.list) {
+    const entry = extractSponsorEntry(item)
+    if (entry !== null && !sponsors.has(entry.userId)) {
+      sponsors.set(entry.userId, entry.displayName)
+    }
+  }
+  return { ok: true, sponsors }
 }
 
 export function parseAfdianSponsorName(
@@ -164,18 +186,12 @@ export function parseAfdianSponsorName(
   targetUserId: string,
 ): { readonly ok: true; readonly matched: boolean; readonly displayName: string | null }
   | { readonly ok: false; readonly reason: string } {
-  if (!isPlainRecord(rawJson)) return { ok: false, reason: 'invalid_json' }
-  if (rawJson.ec !== 200) return { ok: false, reason: `afdian_ec_${String(rawJson.ec)}` }
-  if (!isPlainRecord(rawJson.data) || !Array.isArray(rawJson.data.list)) {
-    return { ok: false, reason: 'missing_sponsor_list' }
+  const parsed = parseAfdianSponsorPage(rawJson)
+  if (!parsed.ok) return parsed
+  if (!parsed.sponsors.has(targetUserId)) {
+    return { ok: true, matched: false, displayName: null }
   }
-  for (const item of rawJson.data.list) {
-    const matchedName = extractSponsorMatch(item, targetUserId)
-    if (matchedName !== undefined) {
-      return { ok: true, matched: true, displayName: matchedName }
-    }
-  }
-  return { ok: true, matched: false, displayName: null }
+  return { ok: true, matched: true, displayName: parsed.sponsors.get(targetUserId) ?? null }
 }
 
 export function parseKofiWebhookBody(

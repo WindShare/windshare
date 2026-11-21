@@ -9,6 +9,8 @@ import {
   applyVisibilityCommand,
   clampDonatedAt,
   defaultDonationConfig,
+  type CommitDonationInput,
+  type DonationProvider,
   type DonationRecord,
   type PublicWallResponse,
   type WallVisibility,
@@ -36,6 +38,7 @@ import {
   md5Hex,
   parseAfdianOrderQueryResponse,
   parseAfdianSponsorName,
+  parseAfdianSponsorPage,
   parseAfdianWebhookPayload,
   parseKofiWebhookBody,
   parseNowPaymentsIpnPayload,
@@ -301,6 +304,26 @@ describe('provider protocol signing, parsing, and outbound adapters', () => {
       ec: 200,
       data: { list: [{ user: { user_id: 'supporter-1', name: '小明' } }] },
     }, 'supporter-1')).toEqual({ ok: true, matched: true, displayName: '小明' })
+
+    const parsedPage = parseAfdianSponsorPage({
+      ec: 200,
+      data: {
+        list: [
+          { user: { user_id: 'u-1', name: 'Alice' } },
+          { user: { user_id: 'u-1', name: 'DuplicateIgnored' } },
+          { user_id: 'u-2', user_name: 'Bob' },
+          { user: { user_id: 'u-nameless', name: '   ' } },
+        ],
+      },
+    })
+    expect(parsedPage.ok).toBe(true)
+    if (parsedPage.ok) {
+      expect([...parsedPage.sponsors.entries()]).toEqual([
+        ['u-1', 'Alice'],
+        ['u-2', 'Bob'],
+        ['u-nameless', null],
+      ])
+    }
   })
 
   it('parses Ko-fi webhooks while physically stripping email and failing closed on privacy', () => {
@@ -711,5 +734,354 @@ describe('WallStore SQLite persistence, caching, rate limiting, and pagination',
       expect(disabledLogin.status).toBe(503)
       expect(doCalls).toBe(callsBefore)
     }
+  })
+
+  it('batch-checks existing external IDs and atomically commits batches with a single wall version bump', () => {
+    const store = createInMemoryWallStore()
+    store.commitDonation({
+      provider: 'afdian',
+      externalId: 'AF-PRE',
+      displayName: 'Existing',
+      amountMinor: 1500,
+      currency: 'CNY',
+      minorDigits: 2,
+      message: null,
+      isPublic: true,
+      donatedAt: 1000,
+    }, 1000)
+    store.commitDonation({
+      provider: 'kofi',
+      externalId: 'AF-OTHER-PROVIDER',
+      displayName: 'KofiUser',
+      amountMinor: 1000,
+      currency: 'USD',
+      minorDigits: 2,
+      message: null,
+      isPublic: true,
+      donatedAt: 1001,
+    }, 1001)
+
+    const versionBefore = store.getPublicWallSnapshot().version
+    expect(store.findExistingExternalIds('afdian', ['AF-PRE', 'AF-PRE', 'AF-NEW', 'AF-OTHER-PROVIDER', ''])).toEqual([
+      'AF-PRE',
+    ])
+
+    const batchResults = store.commitDonationsBatch([
+      {
+        provider: 'afdian',
+        externalId: 'AF-PRE',
+        displayName: 'Ignored',
+        amountMinor: 9999,
+        currency: 'CNY',
+        minorDigits: 2,
+        message: null,
+        isPublic: true,
+        donatedAt: 1002,
+      },
+      {
+        provider: 'afdian',
+        externalId: 'AF-B1',
+        displayName: 'First',
+        amountMinor: 1000,
+        currency: 'CNY',
+        minorDigits: 2,
+        message: 'hi',
+        isPublic: true,
+        donatedAt: 1003,
+      },
+      {
+        provider: 'afdian',
+        externalId: 'AF-B2',
+        displayName: 'Second',
+        amountMinor: 2000,
+        currency: 'CNY',
+        minorDigits: 2,
+        message: 'hello',
+        isPublic: true,
+        donatedAt: 1004,
+      },
+      {
+        provider: 'afdian',
+        externalId: 'AF-B1',
+        displayName: 'DuplicateInSameBatch',
+        amountMinor: 1000,
+        currency: 'CNY',
+        minorDigits: 2,
+        message: null,
+        isPublic: true,
+        donatedAt: 1005,
+      },
+    ], 1005)
+
+    expect(batchResults.map(r => r.deduplicated)).toEqual([true, false, false, true])
+    expect(store.getPublicWallSnapshot().version).toBe(versionBefore + 1)
+
+    // Re-submitting an all-duplicate batch does not bump wall_version.
+    const dupOnly = store.commitDonationsBatch([{
+      provider: 'afdian',
+      externalId: 'AF-B1',
+      displayName: 'First',
+      amountMinor: 1000,
+      currency: 'CNY',
+      minorDigits: 2,
+      message: 'hi',
+      isPublic: true,
+      donatedAt: 1006,
+    }], 1006)
+    expect(dupOnly[0]?.deduplicated).toBe(true)
+    expect(store.getPublicWallSnapshot().version).toBe(versionBefore + 1)
+  })
+})
+
+function createSyncHarness() {
+  const store = createInMemoryWallStore()
+  const origin = 'https://donate.windshare.cc'
+  const adminPassword = randomBytes(16).toString('hex')
+  const now = 1_700_000_000
+  const counts = { doCalls: 0, orderCalls: 0, sponsorPageCalls: 0, sponsorDirectCalls: 0 }
+
+  const dispatchInternal = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    counts.doCalls += 1
+    const req = input instanceof Request ? input : new Request(input, init)
+    const pathname = new URL(req.url).pathname
+    if (pathname === '/internal/admin/rate-limit') {
+      const body = await req.json() as { clientIp: string; nowSec: number }
+      return Response.json(store.consumeDualRateLimit('admin_login', body.clientIp, body.nowSec), { status: 200 })
+    }
+    if (pathname === '/internal/admin/sessions') {
+      const body = await req.json() as { sessionHash: string; csrfToken: string; nowSec: number }
+      return Response.json(store.createAdminSession(body), { status: 201 })
+    }
+    if (pathname === '/internal/admin/sessions/verify') {
+      const body = await req.json() as { sessionHash: string; nowSec: number }
+      const session = store.verifyAdminSession(body.sessionHash, body.nowSec)
+      return session === null
+        ? Response.json({ valid: false }, { status: 401 })
+        : Response.json({ valid: true, ...session }, { status: 200 })
+    }
+    if (pathname === '/internal/donations/exists-batch') {
+      const body = await req.json() as { provider: DonationProvider; externalIds: string[] }
+      return Response.json({ existingIds: store.findExistingExternalIds(body.provider, body.externalIds) }, { status: 200 })
+    }
+    if (pathname === '/internal/donations/commit-batch') {
+      const body = await req.json() as { inputs: CommitDonationInput[]; nowSec: number }
+      return Response.json({ results: store.commitDonationsBatch(body.inputs, body.nowSec) }, { status: 200 })
+    }
+    return Response.json({ error: 'not_found' }, { status: 404 })
+  }
+
+  const wallNamespace = {
+    idFromName: (name: string) => ({ toString: () => name }),
+    get: () => ({ fetch: dispatchInternal }),
+  } as unknown as DurableObjectNamespace
+
+  const env: DonationsEnv = {
+    DONATION_WALL: wallNamespace,
+    AFDIAN_USER_ID: 'creator',
+    AFDIAN_TOKEN: 'afdian-token',
+    KOFI_HANDLE: 'windshare',
+    ALLOWED_ORIGINS: 'https://windshare.cc',
+    DONATE_API_ORIGIN: origin,
+    DONATE_ADMIN_PASSWORD: adminPassword,
+  }
+
+  const authenticate = async (): Promise<{ cookie: string; csrf: string }> => {
+    const res = await handleWorkerFetch(
+      new Request(`${origin}/v1/admin/login`, {
+        method: 'POST',
+        headers: { Origin: origin, 'Content-Type': 'application/json', 'CF-Connecting-IP': '198.51.100.77' },
+        body: JSON.stringify({ password: adminPassword }),
+      }),
+      env,
+      { nowSec: () => now },
+    )
+    const cookie = (res.headers.get('set-cookie') ?? '').split(';', 1)[0] ?? ''
+    const data = await res.json() as { csrfToken: string }
+    return { cookie, csrf: data.csrfToken }
+  }
+
+  const runSync = async (
+    auth: { cookie: string; csrf: string },
+    fetchFn: FetchLike,
+  ): Promise<Response> => handleWorkerFetch(
+    new Request(`${origin}/v1/admin/donations/sync-afdian`, {
+      method: 'POST',
+      headers: { Origin: origin, Cookie: auth.cookie, 'X-CSRF-Token': auth.csrf },
+    }),
+    env,
+    { nowSec: () => now, fetchFn },
+  )
+
+  return { store, counts, authenticate, runSync }
+}
+
+describe('handleSyncAfdian batching, sponsor cache, and subrequest budgeting', () => {
+  it('batches 50 existing orders into a single DO check with zero sponsor lookups', async () => {
+    const { store, counts, authenticate, runSync } = createSyncHarness()
+    const auth = await authenticate()
+    const existingOrders = Array.from({ length: 50 }, (_, index) => ({
+      out_trade_no: `AF-OLD-${index}`,
+      user_id: `u-${index}`,
+      total_amount: '10.00',
+      status: 2,
+      remark: '',
+    }))
+    store.commitDonationsBatch(
+      existingOrders.map(order => ({
+        provider: 'afdian',
+        externalId: order.out_trade_no,
+        displayName: 'Old',
+        amountMinor: 1000,
+        currency: 'CNY',
+        minorDigits: 2,
+        message: null,
+        isPublic: true,
+        donatedAt: 1_700_000_000,
+      })),
+      1_700_000_000,
+    )
+
+    counts.doCalls = 0
+    const fetchFn: FetchLike = async (url) => {
+      if (String(url).endsWith('/query-order')) {
+        counts.orderCalls += 1
+        return Response.json({ ec: 200, data: { list: existingOrders } })
+      }
+      counts.sponsorPageCalls += 1
+      return Response.json({ ec: 200, data: { list: [] } })
+    }
+
+    const res = await runSync(auth, fetchFn)
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ fetched: 50, paid: 50, committed: 0, deduplicated: 50, deferred: 0 })
+    // 1 auth verify + 1 exists-batch; zero sponsor calls and zero commit-batch calls.
+    expect(counts.doCalls).toBe(2)
+    expect(counts.orderCalls).toBe(1)
+    expect(counts.sponsorPageCalls).toBe(0)
+  })
+
+  it('primes page-1 sponsor cache, deduplicates missed user lookups, and defers beyond budget without anonymizing', async () => {
+    const { store, counts, authenticate, runSync } = createSyncHarness()
+    const auth = await authenticate()
+    // 2 orders share page-1 user u-page1; 2 orders share missed user u-miss-0; 44 more unique missed users => 45 unique misses total.
+    const orders = [
+      { out_trade_no: 'AF-P1-A', user_id: 'u-page1', total_amount: '15.00', status: 2, remark: '' },
+      { out_trade_no: 'AF-P1-B', user_id: 'u-page1', total_amount: '15.00', status: 2, remark: '' },
+      { out_trade_no: 'AF-M0-A', user_id: 'u-miss-0', total_amount: '15.00', status: 2, remark: '' },
+      { out_trade_no: 'AF-M0-B', user_id: 'u-miss-0', total_amount: '15.00', status: 2, remark: '' },
+      ...Array.from({ length: 44 }, (_, index) => ({
+        out_trade_no: `AF-M-${index + 1}`,
+        user_id: `u-miss-${index + 1}`,
+        total_amount: '15.00',
+        status: 2,
+        remark: '',
+      })),
+    ]
+
+    const fetchFn: FetchLike = async (url, init) => {
+      if (String(url).endsWith('/query-order')) {
+        counts.orderCalls += 1
+        return Response.json({ ec: 200, data: { list: orders } })
+      }
+      const body = JSON.parse(String(init?.body)) as { params: string }
+      const params = JSON.parse(body.params) as { user_id?: string }
+      if (params.user_id !== undefined) {
+        counts.sponsorDirectCalls += 1
+        return Response.json({
+          ec: 200,
+          data: { list: [{ user: { user_id: params.user_id, name: `Name-${params.user_id}` } }] },
+        })
+      }
+      counts.sponsorPageCalls += 1
+      return Response.json({
+        ec: 200,
+        data: { list: [{ user: { user_id: 'u-page1', name: 'PageOneUser' } }] },
+      })
+    }
+
+    counts.doCalls = 0
+    const versionBefore = store.getPublicWallSnapshot().version
+    const firstRes = await runSync(auth, fetchFn)
+    expect(firstRes.status).toBe(200)
+    // 2 page-1 orders + 2 u-miss-0 orders + 39 unique missed orders (u-miss-1..39) = 43 committed; 5 deferred (u-miss-40..44).
+    expect(await firstRes.json()).toEqual({ fetched: 48, paid: 48, committed: 43, deduplicated: 0, deferred: 5 })
+    expect(counts.doCalls).toBe(3)
+    expect(counts.orderCalls).toBe(1)
+    expect(counts.sponsorPageCalls).toBe(1)
+    expect(counts.sponsorDirectCalls).toBe(40)
+    expect(store.getPublicWallSnapshot().version).toBe(versionBefore + 1)
+
+    // Re-running sync picks up only the 5 deferred orders with real display names (never anonymized).
+    counts.doCalls = 0
+    counts.orderCalls = 0
+    counts.sponsorPageCalls = 0
+    counts.sponsorDirectCalls = 0
+    const secondRes = await runSync(auth, fetchFn)
+    expect(secondRes.status).toBe(200)
+    expect(await secondRes.json()).toEqual({ fetched: 48, paid: 48, committed: 5, deduplicated: 43, deferred: 0 })
+    expect(counts.doCalls).toBe(3)
+    expect(counts.sponsorPageCalls).toBe(1)
+    expect(counts.sponsorDirectCalls).toBe(5)
+
+    const allDonations = store.listAdminDonations(null, 100).items
+    expect(allDonations).toHaveLength(48)
+    expect(allDonations.every(item => item.displayName !== null)).toBe(true)
+    expect(allDonations.find(item => item.externalId === 'AF-P1-B')?.displayName).toBe('PageOneUser')
+    expect(allDonations.find(item => item.externalId === 'AF-M0-B')?.displayName).toBe('Name-u-miss-0')
+    expect(allDonations.find(item => item.externalId === 'AF-M-44')?.displayName).toBe('Name-u-miss-44')
+  })
+
+  it('stops without anonymizing on 429 rate limits and degrades gracefully on non-429 sponsor outage', async () => {
+    const { store, counts, authenticate, runSync } = createSyncHarness()
+    const auth = await authenticate()
+    const orders = [
+      { out_trade_no: 'AF-RL-1', user_id: 'u-a', total_amount: '15.00', status: 2, remark: '' },
+      { out_trade_no: 'AF-RL-2', user_id: 'u-b', total_amount: '15.00', status: 2, remark: '' },
+      { out_trade_no: 'AF-RL-3', user_id: 'u-c', total_amount: '15.00', status: 2, remark: '' },
+    ]
+
+    // Page-1 429 aborts before committing anonymous records.
+    const page429Res = await runSync(auth, async (url) => {
+      if (String(url).endsWith('/query-order')) {
+        return Response.json({ ec: 200, data: { list: orders } })
+      }
+      return new Response('rate limited', { status: 429 })
+    })
+    expect(page429Res.status).toBe(502)
+    expect(await page429Res.json()).toEqual({ error: 'afdian_rate_limited', reason: 'http_429' })
+    expect(store.listAdminDonations(null, 10).items).toHaveLength(0)
+
+    // Mid-batch direct lookup 429 commits already-resolved orders and defers remaining without hammering upstream.
+    const mid429Res = await runSync(auth, async (url, init) => {
+      if (String(url).endsWith('/query-order')) {
+        return Response.json({ ec: 200, data: { list: orders } })
+      }
+      const body = JSON.parse(String(init?.body)) as { params: string }
+      const params = JSON.parse(body.params) as { user_id?: string }
+      if (params.user_id === undefined) {
+        return Response.json({ ec: 200, data: { list: [{ user: { user_id: 'u-a', name: 'Alice' } }] } })
+      }
+      counts.sponsorDirectCalls += 1
+      return new Response('rate limited', { status: 429 })
+    })
+    expect(mid429Res.status).toBe(200)
+    expect(await mid429Res.json()).toEqual({ fetched: 3, paid: 3, committed: 1, deduplicated: 0, deferred: 2 })
+    expect(counts.sponsorDirectCalls).toBe(1)
+    expect(store.listAdminDonations(null, 10).items.map(item => [item.externalId, item.displayName])).toEqual([
+      ['AF-RL-1', 'Alice'],
+    ])
+
+    // Non-429 page-1 outage (e.g. 504) fails fast in 1 sponsor call and commits verified orders as anonymous.
+    let sponsorAttempts = 0
+    const outageRes = await runSync(auth, async (url) => {
+      if (String(url).endsWith('/query-order')) {
+        return Response.json({ ec: 200, data: { list: orders } })
+      }
+      sponsorAttempts += 1
+      return new Response('timeout', { status: 504 })
+    })
+    expect(outageRes.status).toBe(200)
+    expect(await outageRes.json()).toEqual({ fetched: 3, paid: 3, committed: 2, deduplicated: 1, deferred: 0 })
+    expect(sponsorAttempts).toBe(1)
   })
 })

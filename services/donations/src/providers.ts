@@ -1,7 +1,7 @@
 import {
   buildAfdianSignedBody,
   parseAfdianOrderQueryResponse,
-  parseAfdianSponsorName,
+  parseAfdianSponsorPage,
   type AfdianOrderRecord,
 } from './verify'
 
@@ -9,12 +9,17 @@ const OUTBOUND_TIMEOUT_MS = 10_000
 const AFDIAN_QUERY_ORDER_URL = 'https://afdian.com/api/open/query-order'
 const AFDIAN_QUERY_SPONSOR_URL = 'https://afdian.com/api/open/query-sponsor'
 const NOWPAYMENTS_INVOICE_URL = 'https://api.nowpayments.io/v1/invoice'
-const AFDIAN_SPONSOR_FALLBACK_PER_PAGE = 50
+// Afdian query-sponsor supports up to 100 entries per page, maximizing single-request cache hits for recent orders.
+const AFDIAN_SPONSOR_PAGE_SIZE = 100
 
 export type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
 
 export type AfdianOrderQueryResult =
   | { readonly ok: true; readonly orders: readonly AfdianOrderRecord[] }
+  | { readonly ok: false; readonly reason: string }
+
+export type AfdianSponsorPageResult =
+  | { readonly ok: true; readonly sponsors: ReadonlyMap<string, string | null> }
   | { readonly ok: false; readonly reason: string }
 
 export type AfdianSponsorLookupResult =
@@ -81,23 +86,58 @@ export async function queryAfdianOrders(input: {
   return parseAfdianOrderQueryResponse(result.json)
 }
 
-async function queryAfdianSponsorPage(
-  input: {
-    readonly userId: string
-    readonly token: string
-    readonly params: Record<string, unknown>
-    readonly sponsorUserId: string
-    readonly nowSec: number
-    readonly fetchFn: FetchLike
-  },
-): Promise<
-  | { readonly ok: true; readonly matched: boolean; readonly displayName: string | null }
-  | { readonly ok: false; readonly reason: string }
-> {
+async function fetchAfdianSponsorMap(input: {
+  readonly userId: string
+  readonly token: string
+  readonly params: Record<string, unknown>
+  readonly nowSec: number
+  readonly fetchFn: FetchLike
+}): Promise<AfdianSponsorPageResult> {
   const signed = buildAfdianSignedBody(input.userId, input.token, input.params, input.nowSec)
   const result = await postJsonOutbound(AFDIAN_QUERY_SPONSOR_URL, signed, {}, input.fetchFn)
   if (!result.ok) return result
-  return parseAfdianSponsorName(result.json, input.sponsorUserId)
+  return parseAfdianSponsorPage(result.json)
+}
+
+export async function queryAfdianSponsorPage(input: {
+  readonly userId: string
+  readonly token: string
+  readonly page?: number
+  readonly perPage?: number
+  readonly nowSec: number
+  readonly fetchFn: FetchLike
+}): Promise<AfdianSponsorPageResult> {
+  return fetchAfdianSponsorMap({
+    userId: input.userId,
+    token: input.token,
+    params: {
+      page: input.page ?? 1,
+      per_page: input.perPage ?? AFDIAN_SPONSOR_PAGE_SIZE,
+    },
+    nowSec: input.nowSec,
+    fetchFn: input.fetchFn,
+  })
+}
+
+export async function lookupAfdianSponsorNameDirect(input: {
+  readonly userId: string
+  readonly token: string
+  readonly sponsorUserId: string
+  readonly nowSec: number
+  readonly fetchFn: FetchLike
+}): Promise<AfdianSponsorLookupResult> {
+  const filtered = await fetchAfdianSponsorMap({
+    userId: input.userId,
+    token: input.token,
+    params: { user_id: input.sponsorUserId, page: 1 },
+    nowSec: input.nowSec,
+    fetchFn: input.fetchFn,
+  })
+  if (!filtered.ok) return filtered
+  if (!filtered.sponsors.has(input.sponsorUserId)) {
+    return { ok: false, reason: 'sponsor_not_found' }
+  }
+  return { ok: true, displayName: filtered.sponsors.get(input.sponsorUserId) ?? null }
 }
 
 export async function lookupAfdianSponsorName(input: {
@@ -107,31 +147,32 @@ export async function lookupAfdianSponsorName(input: {
   readonly nowSec: number
   readonly fetchFn: FetchLike
 }): Promise<AfdianSponsorLookupResult> {
-  const filtered = await queryAfdianSponsorPage({
+  const filtered = await fetchAfdianSponsorMap({
     userId: input.userId,
     token: input.token,
     params: { user_id: input.sponsorUserId, page: 1 },
-    sponsorUserId: input.sponsorUserId,
     nowSec: input.nowSec,
     fetchFn: input.fetchFn,
   })
   if (!filtered.ok) return filtered
-  if (filtered.matched) {
-    return { ok: true, displayName: filtered.displayName }
+  if (filtered.sponsors.has(input.sponsorUserId)) {
+    return { ok: true, displayName: filtered.sponsors.get(input.sponsorUserId) ?? null }
   }
 
   // Fallback to page 1 in case the upstream account/endpoint ignores user_id filtering.
   const fallback = await queryAfdianSponsorPage({
     userId: input.userId,
     token: input.token,
-    params: { page: 1, per_page: AFDIAN_SPONSOR_FALLBACK_PER_PAGE },
-    sponsorUserId: input.sponsorUserId,
+    page: 1,
+    perPage: AFDIAN_SPONSOR_PAGE_SIZE,
     nowSec: input.nowSec,
     fetchFn: input.fetchFn,
   })
   if (!fallback.ok) return fallback
-  if (!fallback.matched) return { ok: false, reason: 'sponsor_not_found' }
-  return { ok: true, displayName: fallback.displayName }
+  if (!fallback.sponsors.has(input.sponsorUserId)) {
+    return { ok: false, reason: 'sponsor_not_found' }
+  }
+  return { ok: true, displayName: fallback.sponsors.get(input.sponsorUserId) ?? null }
 }
 
 function isValidHttpsUrl(raw: unknown): raw is string {

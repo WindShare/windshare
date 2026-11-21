@@ -110,12 +110,14 @@ export function logAdminAfdianSynced(fields: {
   readonly paid: number
   readonly committed: number
   readonly deduplicated: number
+  readonly deferred: number
 }): void {
   emit('info', 'donation.admin_afdian_synced', {
     fetched: fields.fetched,
     paid: fields.paid,
     committed: fields.committed,
     deduplicated: fields.deduplicated,
+    deferred: fields.deferred,
   })
 }
 
