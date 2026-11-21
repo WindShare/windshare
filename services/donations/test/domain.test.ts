@@ -501,6 +501,11 @@ describe('WallStore SQLite persistence, caching, rate limiting, and pagination',
     const afterFirst = store.getPublicWallSnapshot()
     expect(afterFirst.version).toBe(1)
     expect(afterFirst.etag).toBe('"wall-v1"')
+    expect(JSON.parse(afterFirst.json)).not.toHaveProperty('moderationEnabled')
+
+    store.patchConfig({ moderationEnabled: true })
+    expect(store.getPublicWallSnapshot().etag).toBe('"wall-v1"')
+    store.patchConfig({ moderationEnabled: false })
 
     for (let i = 2; i <= PUBLIC_WALL_LIMIT + 5; i += 1) {
       store.commitDonation({

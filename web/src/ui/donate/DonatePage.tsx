@@ -13,7 +13,6 @@ const SILENT_REFRESH_THROTTLE_MS = 10_000
 interface WallViewState {
   readonly status: WallLoadStatus
   readonly refreshing: boolean
-  readonly moderationEnabled: boolean
   readonly entries: readonly PublicWallEntry[]
   readonly nowSec: number
 }
@@ -27,7 +26,6 @@ function toReadyWallState(response: PublicWallResponse): WallViewState {
   return {
     status: 'ready',
     refreshing: false,
-    moderationEnabled: response.moderationEnabled,
     entries: response.entries,
     nowSec: Math.floor(Date.now() / 1000),
   }
@@ -47,7 +45,6 @@ export default function DonatePage() {
   const [wall, setWall] = useState<WallViewState>(() => ({
     status: 'loading',
     refreshing: false,
-    moderationEnabled: false,
     entries: [],
     nowSec: Math.floor(Date.now() / 1000),
   }))
@@ -114,10 +111,7 @@ export default function DonatePage() {
       <PortalHeader anchorPrefix="/" />
       <main className="donate-main">
         <div className="portal-container donate-grid">
-          <DonateActions
-            submittedFromCheckout={submittedFromCheckout}
-            moderationEnabled={wall.moderationEnabled}
-          />
+          <DonateActions submittedFromCheckout={submittedFromCheckout} />
           <SupporterWall
             status={wall.status}
             refreshing={wall.refreshing}

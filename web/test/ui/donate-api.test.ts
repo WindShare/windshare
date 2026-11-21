@@ -168,7 +168,6 @@ describe('donate public wall response validation', () => {
   it('accepts valid wall payloads including forward-compatible unknown provider names', () => {
     const wall = {
       version: 3,
-      moderationEnabled: false,
       entries: [
         validEntry,
         {
@@ -191,23 +190,22 @@ describe('donate public wall response validation', () => {
       [],
       'not-an-object',
       {},
-      { version: 1, moderationEnabled: false },
-      { version: '1', moderationEnabled: false, entries: [] },
-      { version: Number.NaN, moderationEnabled: false, entries: [] },
-      { version: 1, moderationEnabled: 'false', entries: [] },
-      { version: 1, moderationEnabled: false, entries: [null] },
-      { version: 1, moderationEnabled: false, entries: [{ ...validEntry, id: '' }] },
-      { version: 1, moderationEnabled: false, entries: [{ ...validEntry, provider: '   ' }] },
-      { version: 1, moderationEnabled: false, entries: [{ ...validEntry, displayName: 123 }] },
-      { version: 1, moderationEnabled: false, entries: [{ ...validEntry, amountMinor: -1 }] },
-      { version: 1, moderationEnabled: false, entries: [{ ...validEntry, amountMinor: Number.NaN }] },
-      { version: 1, moderationEnabled: false, entries: [{ ...validEntry, currency: '' }] },
-      { version: 1, moderationEnabled: false, entries: [{ ...validEntry, minorDigits: Number.POSITIVE_INFINITY }] },
-      { version: 1, moderationEnabled: false, entries: [{ ...validEntry, message: 42 }] },
-      { version: 1, moderationEnabled: false, entries: [{ ...validEntry, donatedAt: '1700000000' }] },
-      { version: 1, moderationEnabled: false, entries: [{ ...validEntry, donatedAt: Number.NaN }] },
-      { version: 1, moderationEnabled: false, entries: [{ ...validEntry, donatedAt: Number.POSITIVE_INFINITY }] },
-      { version: 1, moderationEnabled: false, entries: [{ ...validEntry, donatedAt: outOfDateRangeSeconds }] },
+      { version: 1 },
+      { version: '1', entries: [] },
+      { version: Number.NaN, entries: [] },
+      { version: 1, entries: [null] },
+      { version: 1, entries: [{ ...validEntry, id: '' }] },
+      { version: 1, entries: [{ ...validEntry, provider: '   ' }] },
+      { version: 1, entries: [{ ...validEntry, displayName: 123 }] },
+      { version: 1, entries: [{ ...validEntry, amountMinor: -1 }] },
+      { version: 1, entries: [{ ...validEntry, amountMinor: Number.NaN }] },
+      { version: 1, entries: [{ ...validEntry, currency: '' }] },
+      { version: 1, entries: [{ ...validEntry, minorDigits: Number.POSITIVE_INFINITY }] },
+      { version: 1, entries: [{ ...validEntry, message: 42 }] },
+      { version: 1, entries: [{ ...validEntry, donatedAt: '1700000000' }] },
+      { version: 1, entries: [{ ...validEntry, donatedAt: Number.NaN }] },
+      { version: 1, entries: [{ ...validEntry, donatedAt: Number.POSITIVE_INFINITY }] },
+      { version: 1, entries: [{ ...validEntry, donatedAt: outOfDateRangeSeconds }] },
     ]) {
       expect(parsePublicWallResponse(malformed)).toBeNull()
     }
@@ -215,7 +213,7 @@ describe('donate public wall response validation', () => {
 
   it('throws DonateApiError(invalid_response) when fetchDonationWall receives malformed 2xx payloads', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
-      Response.json({ version: 1, moderationEnabled: false, entries: [{ ...validEntry, donatedAt: 1e13 }] }, { status: 200 }),
+      Response.json({ version: 1, entries: [{ ...validEntry, donatedAt: 1e13 }] }, { status: 200 }),
     )
     await expect(fetchDonationWall()).rejects.toMatchObject({
       name: 'DonateApiError',
@@ -228,7 +226,7 @@ describe('donate public wall response validation', () => {
     )
     await expect(fetchDonationWall()).rejects.toBeInstanceOf(DonateApiError)
 
-    const validWall = { version: 2, moderationEnabled: true, entries: [validEntry] }
+    const validWall = { version: 2, entries: [validEntry] }
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(Response.json(validWall, { status: 200 }))
     await expect(fetchDonationWall()).resolves.toEqual(validWall)
   })

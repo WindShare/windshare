@@ -298,20 +298,19 @@ export class WallStore {
         moderationEnabled: patch.moderationEnabled ?? config.moderationEnabled,
         cryptoCheckoutPaused: patch.cryptoCheckoutPaused ?? config.cryptoCheckoutPaused,
       }
+      // Config governs future intake and checkout admission only; it is not projected into the public wall.
       this.sql.exec(
         `UPDATE donation_config
          SET min_public_cny_minor = ?,
              min_public_usd_minor = ?,
              moderation_enabled = ?,
-             crypto_checkout_paused = ?,
-             wall_version = wall_version + 1
+             crypto_checkout_paused = ?
          WHERE singleton_id = 1`,
         next.minPublicCnyMinor,
         next.minPublicUsdMinor,
         next.moderationEnabled ? 1 : 0,
         next.cryptoCheckoutPaused ? 1 : 0,
       )
-      this.cachedWall = null
       return next
     })
   }
@@ -320,7 +319,7 @@ export class WallStore {
     if (this.cachedWall !== null) {
       return this.cachedWall
     }
-    const { config, wallVersion } = this.readConfigRow()
+    const { wallVersion } = this.readConfigRow()
     const entries = []
     for (const row of this.sql.exec(
       `SELECT id, provider, external_id, display_name, amount_minor, currency,
@@ -335,7 +334,6 @@ export class WallStore {
     }
     const payload: PublicWallResponse = {
       version: wallVersion,
-      moderationEnabled: config.moderationEnabled,
       entries,
     }
     this.cachedWall = {

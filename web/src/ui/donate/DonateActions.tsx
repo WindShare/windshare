@@ -27,7 +27,6 @@ const CHANNELS: readonly DonateChannel[] = ['afdian', 'kofi', 'crypto']
 
 interface DonateActionsProps {
   readonly submittedFromCheckout: boolean
-  readonly moderationEnabled: boolean
 }
 
 function resolveCryptoApiErrorMessage(
@@ -292,7 +291,6 @@ function CryptoCheckoutForm() {
 
 export function DonateActions({
   submittedFromCheckout,
-  moderationEnabled,
 }: DonateActionsProps) {
   const { language } = usePreferences()
   const t = useDonateCopy()
@@ -339,9 +337,7 @@ export function DonateActions({
             <PortalIcon name="check" size={16} />
             <strong>{t.submittedBannerTitle}</strong>
           </div>
-          <p>
-            {moderationEnabled ? t.submittedBannerModeration : t.submittedBannerPendingChain}
-          </p>
+          <p>{t.submittedBannerBody}</p>
         </div>
       )}
 

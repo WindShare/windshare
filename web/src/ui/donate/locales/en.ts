@@ -45,8 +45,7 @@ export const en = {
   copiedAddress: 'Copied',
 
   submittedBannerTitle: 'Payment submitted',
-  submittedBannerPendingChain: 'Thanks for supporting WindShare. Your note will appear on the wall automatically once on-chain confirmation completes.',
-  submittedBannerModeration: 'Thanks for supporting WindShare. Your note will appear on the wall once reviewed.',
+  submittedBannerBody: 'Thanks for supporting WindShare. Once confirmed on-chain, eligible public notes will appear on the supporter wall.',
 
   wallHeading: 'Recent supporters',
   wallRefresh: 'Refresh',

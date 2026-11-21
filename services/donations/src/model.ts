@@ -77,7 +77,6 @@ export interface PublicWallEntry {
 
 export interface PublicWallResponse {
   readonly version: number
-  readonly moderationEnabled: boolean
   readonly entries: readonly PublicWallEntry[]
 }
 

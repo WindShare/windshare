@@ -85,9 +85,8 @@ function parsePublicWallEntry(raw: unknown): PublicWallEntry | null {
 
 export function parsePublicWallResponse(raw: unknown): PublicWallResponse | null {
   if (!isRecord(raw)) return null
-  const { version, moderationEnabled, entries } = raw
+  const { version, entries } = raw
   if (typeof version !== 'number' || !Number.isFinite(version)) return null
-  if (typeof moderationEnabled !== 'boolean') return null
   if (!Array.isArray(entries)) return null
 
   const parsedEntries: PublicWallEntry[] = []
@@ -96,7 +95,7 @@ export function parsePublicWallResponse(raw: unknown): PublicWallResponse | null
     if (entry === null) return null
     parsedEntries.push(entry)
   }
-  return { version, moderationEnabled, entries: parsedEntries }
+  return { version, entries: parsedEntries }
 }
 
 export function parseCryptoIntentResponse(raw: unknown): CryptoIntentResponse | null {

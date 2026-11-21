@@ -33,7 +33,7 @@ function createStubEnv(): DonationsEnv {
       getPublicWall: async () => ({
         notModified: false as const,
         etag: '"wall-v0"',
-        json: JSON.stringify({ version: 0, moderationEnabled: false, entries: [] }),
+        json: JSON.stringify({ version: 0, entries: [] }),
       }),
     }),
   } as unknown as DurableObjectNamespace<DonationWallRpc>
@@ -153,7 +153,7 @@ describe('donations worker scaffold', () => {
     expect(wall.status).toBe(200)
     expect(wall.headers.get('access-control-allow-origin')).toBe('*')
     expect(wall.headers.get('etag')).toBe('"wall-v0"')
-    expect(await wall.json()).toEqual({ version: 0, moderationEnabled: false, entries: [] })
+    expect(await wall.json()).toEqual({ version: 0, entries: [] })
 
     const admin = await handleWorkerFetch(new Request('https://donate.windshare.cc/admin'), env)
     expect(admin.status).toBe(200)

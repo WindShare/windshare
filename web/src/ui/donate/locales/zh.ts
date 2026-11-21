@@ -46,8 +46,7 @@ export const zh: typeof en = {
   copiedAddress: '已复制',
 
   submittedBannerTitle: '已收到支付提交',
-  submittedBannerPendingChain: '感谢支持 WindShare，链上确认完成后将自动展示于致谢墙。',
-  submittedBannerModeration: '感谢支持 WindShare，您的留言将在审核通过后展示。',
+  submittedBannerBody: '感谢支持 WindShare，链上确认完成后，符合公开展示条件的留言将展示于致谢墙。',
 
   wallHeading: '最新支持者',
   wallRefresh: '刷新',
