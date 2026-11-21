@@ -3,26 +3,31 @@ use crate::{
     config::limits,
     environment::Trace,
     storage::{Database, Persistence},
-    test_support::{Fixture, work},
+    test_support::{Fixture, capture_events, work},
 };
 use windshare_relay_access::{probe, trust::Generation, usage::NodePolicy};
 use windshare_relay_core::share::{Responsibility, Restore, ShareRelay};
 
-#[test]
-fn durable_fence_requires_the_installed_key_current_drain_and_no_pending_join() {
-    let temp = tempfile::tempdir().unwrap();
+fn draining_node(temp: &tempfile::TempDir) -> (Configuration, String, Database) {
     let issuer = [3u8; 32];
     let config: Configuration = serde_json::from_value(serde_json::json!({
-        "listen":"127.0.0.1:8484", "database":temp.path().join("relay.db"),
-        "identity_file":temp.path().join("identity.json"),
-        "node":{"services":{"relay":true,"stun":false},"authority":{"url":"https://authority.example","issuer":URL_SAFE_NO_PAD.encode(issuer)}}
-    })).unwrap();
+        "listen": "127.0.0.1:8484",
+        "database": temp.path().join("relay.db"),
+        "identity_file": temp.path().join("identity.json"),
+        "node": {
+            "services": { "relay": true, "stun": false },
+            "authority": {
+                "url": "https://authority.example",
+                "issuer": URL_SAFE_NO_PAD.encode(issuer),
+            }
+        }
+    }))
+    .unwrap();
     let identity = Identity::open(&config.identity_file).unwrap();
     let node = URL_SAFE_NO_PAD.encode(identity.key().verifying_key().to_bytes());
     check_identity(&config, &node).unwrap();
     assert!(check_identity(&config, &URL_SAFE_NO_PAD.encode([7; 32])).is_err());
     assert!(!config.database.exists());
-
     let fixture = Fixture::new();
     let db = Database::open(&config.database, fixture.identity().relay).unwrap();
     db.initialize_control(100).unwrap();
@@ -46,6 +51,15 @@ fn durable_fence_requires_the_installed_key_current_drain_and_no_pending_join() 
         100,
     )
     .unwrap();
+    (config, node, db)
+}
+
+#[test]
+fn durable_fence_requires_the_installed_key_current_drain_and_no_pending_join() {
+    let temp = tempfile::tempdir().unwrap();
+    let (config, node, db) = draining_node(&temp);
+
+    let fixture = Fixture::new();
     let owner = "operation-owner-1";
     let other = "operation-other-2";
     let enter = |policy_version| Transition::Enter {
@@ -53,22 +67,94 @@ fn durable_fence_requires_the_installed_key_current_drain_and_no_pending_join() 
         reconnect_budget: Duration::from_secs(56),
     };
     let gate = Gate::install(&config.database).unwrap();
+    assert!(gate.open_to_users());
     assert!(change(&config, &node, owner, enter(6)).is_err());
-    let join = gate.admit(false).unwrap();
+    let join = gate.admit_join(false).unwrap();
     assert!(!change(&config, &node, owner, enter(7)).unwrap());
     drop(join);
     assert!(change(&config, &node, owner, enter(7)).unwrap());
+    assert!(!gate.open_to_users());
     check_hold(&config, &node, owner).unwrap();
     assert!(check_hold(&config, &node, other).is_err());
     drop(db);
     let _db = Database::open(&config.database, fixture.identity().relay).unwrap();
     let restarted = Gate::install(&config.database).unwrap();
-    assert!(restarted.admit(false).is_err());
-    assert!(restarted.admit(true).is_ok());
+    assert!(matches!(
+        restarted.admit_join(false),
+        Err(GateError::Maintenance)
+    ));
+    assert!(matches!(
+        restarted.check(false),
+        Err(GateError::Maintenance)
+    ));
+    assert!(restarted.admit_join(true).is_ok());
+    assert!(restarted.check(true).is_ok());
     assert!(change(&config, &node, other, Transition::Release).is_err());
     assert!(change(&config, &node, owner, Transition::Release).unwrap());
-    assert!(restarted.admit(false).is_ok());
+    assert!(restarted.open_to_users());
+    assert!(restarted.admit_join(false).is_ok());
     assert!(change(&config, &node, owner, Transition::Release).unwrap());
+}
+
+#[test]
+fn shared_gate_refcounts_leases_preserves_probe_only_and_reports_io_errors() {
+    let temp = tempfile::tempdir().unwrap();
+    let (config, node, _db) = draining_node(&temp);
+    let owner = "operation-owner-1";
+    let enter = Transition::Enter {
+        policy_version: 7,
+        reconnect_budget: Duration::from_secs(56),
+    };
+    let gate = Gate::install(&config.database).unwrap();
+
+    // Multiple concurrent receivers share one process-wide lock until the last drops.
+    let first = gate.admit_join(false).unwrap();
+    let second = gate.admit_join(false).unwrap();
+    assert!(gate.check(false).is_ok());
+    assert!(gate.open_to_users());
+    drop(first);
+    assert!(!change(&config, &node, owner, enter).unwrap());
+    drop(second);
+    assert!(change(&config, &node, owner, enter).unwrap());
+
+    // An active probe lease during maintenance must still refuse ordinary users.
+    let probe_first = gate.admit_join(true).unwrap();
+    assert!(matches!(
+        gate.admit_join(false),
+        Err(GateError::Maintenance)
+    ));
+    assert!(matches!(gate.check(false), Err(GateError::Maintenance)));
+    assert!(!gate.open_to_users());
+    let probe_second = gate.admit_join(true).unwrap();
+    assert!(gate.check(true).is_ok());
+    drop(probe_first);
+    assert!(!change(&config, &node, owner, Transition::Release).unwrap());
+    drop(probe_second);
+    assert!(change(&config, &node, owner, Transition::Release).unwrap());
+    assert!(gate.open_to_users());
+
+    // Unexpected OS I/O errors remain distinct from maintenance refusals and log warnings.
+    gate.set_io_fault(Some(std::io::ErrorKind::PermissionDenied));
+    assert!(matches!(
+        gate.admit_join(false),
+        Err(GateError::Io(ref err)) if err.kind() == std::io::ErrorKind::PermissionDenied
+    ));
+    assert!(matches!(
+        gate.admit_join(true),
+        Err(GateError::Io(ref err)) if err.kind() == std::io::ErrorKind::PermissionDenied
+    ));
+    assert!(matches!(
+        gate.check(false),
+        Err(GateError::Io(ref err)) if err.kind() == std::io::ErrorKind::PermissionDenied
+    ));
+    let events = capture_events(|| {
+        assert!(!gate.open_to_users());
+    });
+    assert!(events.iter().any(|entry| {
+        entry["level"] == "WARN"
+            && entry["fields"]["event"] == "maintenance_gate_io_error"
+            && entry["fields"]["operation"] == "open_to_users"
+    }));
 }
 
 #[test]

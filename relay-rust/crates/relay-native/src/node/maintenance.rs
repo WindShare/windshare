@@ -5,9 +5,11 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use rusqlite::{Connection, OpenFlags};
 use std::time::Duration;
 use std::{
-    fs::{File, OpenOptions},
+    fmt,
+    fs::{File, OpenOptions, TryLockError},
     io::{Read, Write},
     path::{Path, PathBuf},
+    sync::{Arc, Mutex, MutexGuard, PoisonError},
 };
 use windshare_relay_access::usage::Admission;
 use windshare_relay_core::{clock::UnixMillis, lifecycle::Record};
@@ -42,14 +44,105 @@ fn has_reconnect_window(db: &Connection, required_until: UnixMillis) -> Result<b
     Ok(true)
 }
 
+#[derive(Debug)]
+pub(crate) enum GateError {
+    Maintenance,
+    Io(std::io::Error),
+}
+
+impl fmt::Display for GateError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Maintenance => formatter.write_str("probe-only maintenance"),
+            Self::Io(error) => write!(formatter, "maintenance gate I/O error: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for GateError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Maintenance => None,
+            Self::Io(error) => Some(error),
+        }
+    }
+}
+
+struct GateState {
+    file: File,
+    leases: usize,
+    probe_only: bool,
+    #[cfg(test)]
+    fault: Option<std::io::ErrorKind>,
+}
+
+impl GateState {
+    fn lock_shared(&self) -> Result<bool, GateError> {
+        #[cfg(test)]
+        if let Some(kind) = self.fault {
+            return Err(GateError::Io(std::io::Error::from(kind)));
+        }
+        match self.file.try_lock_shared() {
+            Ok(()) => {}
+            Err(TryLockError::WouldBlock) => return Err(GateError::Maintenance),
+            Err(TryLockError::Error(error)) => return Err(GateError::Io(error)),
+        }
+        match self.file.metadata() {
+            Ok(metadata) => Ok(metadata.len() != 0),
+            Err(error) => {
+                self.unlock("admit_metadata_cleanup");
+                Err(GateError::Io(error))
+            }
+        }
+    }
+
+    fn unlock(&self, operation: &'static str) {
+        if let Err(error) = self.file.unlock() {
+            tracing::warn!(
+                event = "maintenance_gate_io_error",
+                operation,
+                %error,
+            );
+        }
+    }
+
+    fn is_probe_only(&self) -> Result<bool, std::io::Error> {
+        #[cfg(test)]
+        if let Some(kind) = self.fault {
+            return Err(std::io::Error::from(kind));
+        }
+        self.file.metadata().map(|metadata| metadata.len() != 0)
+    }
+}
+
+/// Reference-counted lease onto the process-wide shared maintenance lock.
+pub(crate) struct JoinLease {
+    state: Arc<Mutex<GateState>>,
+}
+
+impl Drop for JoinLease {
+    fn drop(&mut self) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state.leases -= 1;
+        if state.leases == 0 {
+            state.probe_only = false;
+            state.unlock("release_join_lease");
+        }
+    }
+}
+
 #[derive(Clone)]
-pub(crate) struct Gate(PathBuf);
+pub(crate) struct Gate {
+    state: Arc<Mutex<GateState>>,
+}
+
 impl Gate {
     fn path(database: &Path) -> Result<PathBuf> {
         let mut path = database.canonicalize()?.into_os_string();
         path.push(".admission");
         Ok(path.into())
     }
+
     pub(crate) fn install(database: &Path) -> Result<Self> {
         let path = Self::path(database)?;
         OpenOptions::new()
@@ -57,21 +150,99 @@ impl Gate {
             .truncate(false)
             .write(true)
             .open(&path)?;
-        Ok(Self(path))
+        // Keep one read-only descriptor for the process lifetime so active joins
+        // never multiply OS FDs or fail open/close under descriptor pressure.
+        let file = File::open(&path)?;
+        Ok(Self {
+            state: Arc::new(Mutex::new(GateState {
+                file,
+                leases: 0,
+                probe_only: false,
+                #[cfg(test)]
+                fault: None,
+            })),
+        })
     }
-    // The receiver owns this shared file lock from JOIN inspection until its
-    // socket leaves the actor, covering the pending and admitted session alike.
-    pub(crate) fn admit(&self, probe: bool) -> Result<File> {
-        let file = File::open(&self.0)?;
-        file.try_lock_shared()?;
-        ensure!(
-            probe || file.metadata()?.len() == 0,
-            "probe-only maintenance"
-        );
-        Ok(file)
+
+    fn lock_state(&self) -> MutexGuard<'_, GateState> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
+
+    // Non-JOIN handshakes only need an admission check without retaining a lease.
+    // While any JOIN lease holds the shared OS lock, no writer can mutate the fence,
+    // so cached `probe_only` state stays valid without touching the filesystem.
+    pub(crate) fn check(&self, probe: bool) -> Result<(), GateError> {
+        let state = self.lock_state();
+        if state.leases > 0 {
+            let allowed = probe || !state.probe_only;
+            drop(state);
+            return if allowed {
+                Ok(())
+            } else {
+                Err(GateError::Maintenance)
+            };
+        }
+        let probe_only = state.lock_shared()?;
+        state.unlock("check");
+        drop(state);
+        if !probe && probe_only {
+            return Err(GateError::Maintenance);
+        }
+        Ok(())
+    }
+
+    // Receivers share one process-wide OS shared lock from JOIN inspection until
+    // their socket leaves the actor, covering pending and admitted sessions alike.
+    pub(crate) fn admit_join(&self, probe: bool) -> Result<JoinLease, GateError> {
+        let mut state = self.lock_state();
+        if state.leases > 0 {
+            if !probe && state.probe_only {
+                drop(state);
+                return Err(GateError::Maintenance);
+            }
+            state.leases += 1;
+            drop(state);
+            return Ok(JoinLease {
+                state: Arc::clone(&self.state),
+            });
+        }
+        let probe_only = state.lock_shared()?;
+        if !probe && probe_only {
+            state.unlock("admit_join_refused");
+            drop(state);
+            return Err(GateError::Maintenance);
+        }
+        state.leases = 1;
+        state.probe_only = probe_only;
+        drop(state);
+        Ok(JoinLease {
+            state: Arc::clone(&self.state),
+        })
+    }
+
     pub(crate) fn open_to_users(&self) -> bool {
-        self.0.metadata().is_ok_and(|m| m.len() == 0)
+        let state = self.lock_state();
+        if state.leases > 0 {
+            return !state.probe_only;
+        }
+        let result = state.is_probe_only();
+        drop(state);
+        match result {
+            Ok(probe_only) => !probe_only,
+            Err(error) => {
+                tracing::warn!(
+                    event = "maintenance_gate_io_error",
+                    operation = "open_to_users",
+                    %error,
+                );
+                false
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_io_fault(&self, kind: Option<std::io::ErrorKind>) {
+        self.lock_state().fault = kind;
     }
 }
 

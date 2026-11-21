@@ -9,6 +9,7 @@ Group=windshare-network
 ExecStart=/opt/windshare-network/current/wsrelay --config /etc/windshare-network/node.json
 Restart=on-failure
 RestartSec=3
+LimitNOFILE=65536
 StateDirectory=windshare-network
 UMask=0077
 NoNewPrivileges=true
