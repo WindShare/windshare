@@ -187,6 +187,60 @@ pub struct Session {
     pub entitlement: Entitlement,
     pub certificate: String,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "reason")]
+pub enum DiscoveryFailure {
+    #[serde(rename = "invalid_node_url")]
+    InvalidUrl,
+    #[serde(rename = "reserved_node_host")]
+    ReservedHost,
+    #[serde(rename = "node_dns_failed")]
+    DnsFailed,
+    #[serde(rename = "node_non_public_address")]
+    NonPublicAddress,
+    #[serde(rename = "node_unreachable")]
+    Unreachable,
+    #[serde(rename = "node_redirect_refused")]
+    RedirectRefused,
+    #[serde(rename = "node_http_status")]
+    HttpStatus { status: u16 },
+    #[serde(rename = "node_invalid_descriptor")]
+    InvalidDescriptor,
+    #[serde(rename = "node_descriptor_expired")]
+    DescriptorExpired,
+    #[serde(rename = "node_descriptor_mismatch")]
+    DescriptorMismatch,
+}
+impl DiscoveryFailure {
+    pub const fn http_status(self) -> u16 {
+        match self {
+            Self::InvalidUrl | Self::ReservedHost => 400,
+            Self::NonPublicAddress
+            | Self::InvalidDescriptor
+            | Self::DescriptorExpired
+            | Self::DescriptorMismatch => 422,
+            Self::DnsFailed
+            | Self::Unreachable
+            | Self::RedirectRefused
+            | Self::HttpStatus { .. } => 502,
+        }
+    }
+
+    pub const fn reason(self) -> &'static str {
+        match self {
+            Self::InvalidUrl => "invalid_node_url",
+            Self::ReservedHost => "reserved_node_host",
+            Self::DnsFailed => "node_dns_failed",
+            Self::NonPublicAddress => "node_non_public_address",
+            Self::Unreachable => "node_unreachable",
+            Self::RedirectRefused => "node_redirect_refused",
+            Self::HttpStatus { .. } => "node_http_status",
+            Self::InvalidDescriptor => "node_invalid_descriptor",
+            Self::DescriptorExpired => "node_descriptor_expired",
+            Self::DescriptorMismatch => "node_descriptor_mismatch",
+        }
+    }
+}
 #[derive(Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Fault {
@@ -199,17 +253,35 @@ pub enum Fault {
     InvalidEmail,
     EmailCodeRejected,
     EmailDeliveryUnavailable,
-    NicknameCooldown { profile: Profile },
-    Conflict { reason: String },
-    Denied { reason: String },
-    RateLimited { retry_after: u64 },
-    Verification { challenge: Challenge },
+    NicknameCooldown {
+        profile: Profile,
+    },
+    Conflict {
+        reason: String,
+    },
+    Denied {
+        reason: String,
+    },
+    NodeDiscovery {
+        #[serde(flatten)]
+        failure: DiscoveryFailure,
+    },
+    RateLimited {
+        retry_after: u64,
+    },
+    Verification {
+        challenge: Challenge,
+    },
 }
 impl Fault {
     pub(crate) fn administrator_session_required() -> Self {
         Self::Denied {
             reason: "administrator_session".into(),
         }
+    }
+
+    pub const fn node_discovery(failure: DiscoveryFailure) -> Self {
+        Self::NodeDiscovery { failure }
     }
 }
 impl std::fmt::Display for Fault {

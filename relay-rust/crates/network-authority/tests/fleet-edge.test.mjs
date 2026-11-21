@@ -106,34 +106,57 @@ test('discover_node enforces SSRF, DNS, redirect, size, and role/identity guards
   assert.equal((await shortTokenRes.json()).reason, 'maintenance_credential');
 
   // Reserved frontend/control origins and non-canonical URLs fail before any outbound DNS or HTTP request.
-  for (const blockedURL of [
-    release.link_host,
-    release.backup_entry,
-    'https://api.example',
-    'https://localhost',
-    'https://foo.localhost',
-    'https://foo.internal',
-    'http://relay.example',
-    'https://1.1.1.1',
-    'https://relay.example:0',
-    'https://relay.example/custom',
+  for (const [blockedURL, reason] of [
+    [release.link_host, 'reserved_node_host'],
+    [release.backup_entry, 'reserved_node_host'],
+    ['https://api.example', 'reserved_node_host'],
+    ['https://localhost', 'invalid_node_url'],
+    ['https://foo.localhost', 'invalid_node_url'],
+    ['https://foo.internal', 'invalid_node_url'],
+    ['http://relay.example', 'invalid_node_url'],
+    ['https://1.1.1.1', 'invalid_node_url'],
+    ['https://relay.example:0', 'invalid_node_url'],
+    ['https://relay.example/custom', 'invalid_node_url'],
   ]) {
     const before = requests.length;
     const result = await adminPost('/v1/admin/nodes/discover', { url: blockedURL }, 400);
-    assert.equal(result.kind, 'invalid', blockedURL);
+    assert.equal(result.kind, 'node_discovery', blockedURL);
+    assert.equal(result.reason, reason, blockedURL);
     assert.equal(requests.length, before, `expected no outbound fetch for ${blockedURL}`);
   }
 
   // DoH validation rejects private/loopback IPs, incomplete/error replies, empty answers, and oversized responses
   // before touching the target host's descriptor endpoint.
   const dnsFailureCases = [
-    { name: 'private IPv4', answer: type => (type === '1' ? [{ type: 1, data: '10.0.0.1' }] : []) },
-    { name: 'loopback IPv4', answer: type => (type === '1' ? [{ type: 1, data: '127.0.0.1' }] : []) },
-    { name: 'empty A and AAAA', answer: () => [] },
-    { name: 'truncated DNS reply', reply: { Status: 0, TC: true, Answer: [{ type: 1, data: '1.1.1.1' }] } },
-    { name: 'SERVFAIL DNS reply', reply: { Status: 2, TC: false, Answer: [] } },
+    {
+      name: 'private IPv4',
+      status: 422,
+      reason: 'node_non_public_address',
+      answer: type => (type === '1' ? [{ type: 1, data: '10.0.0.1' }] : []),
+    },
+    {
+      name: 'loopback IPv4',
+      status: 422,
+      reason: 'node_non_public_address',
+      answer: type => (type === '1' ? [{ type: 1, data: '127.0.0.1' }] : []),
+    },
+    { name: 'empty A and AAAA', status: 502, reason: 'node_dns_failed', answer: () => [] },
+    {
+      name: 'truncated DNS reply',
+      status: 502,
+      reason: 'node_dns_failed',
+      reply: { Status: 0, TC: true, Answer: [{ type: 1, data: '1.1.1.1' }] },
+    },
+    {
+      name: 'SERVFAIL DNS reply',
+      status: 502,
+      reason: 'node_dns_failed',
+      reply: { Status: 2, TC: false, Answer: [] },
+    },
     {
       name: 'oversized DoH body',
+      status: 502,
+      reason: 'node_dns_failed',
       raw: () => new Response(' '.repeat(MAX_DNS_BYTES + 1), { headers: { 'Content-Type': 'application/dns-json' } }),
     },
   ];
@@ -145,8 +168,9 @@ test('discover_node enforces SSRF, DNS, redirect, size, and role/identity guards
       if (scenario.reply) return Response.json(scenario.reply);
       return Response.json({ Status: 0, TC: false, Answer: scenario.answer(url.searchParams.get('type')) });
     };
-    const result = await adminPost('/v1/admin/nodes/discover', { url: enrollment.url }, 400);
-    assert.equal(result.kind, 'invalid', scenario.name);
+    const result = await adminPost('/v1/admin/nodes/discover', { url: enrollment.url }, scenario.status);
+    assert.equal(result.kind, 'node_discovery', scenario.name);
+    assert.equal(result.reason, scenario.reason, scenario.name);
     assert.ok(requests.length > before, `${scenario.name} should query DoH`);
     assert.ok(
       requests.slice(before).every(href => new URL(href).hostname === 'cloudflare-dns.com'),
@@ -176,15 +200,48 @@ test('discover_node enforces SSRF, DNS, redirect, size, and role/identity guards
     }
     return undefined;
   };
-  assert.equal((await adminPost('/v1/admin/nodes/discover', { url: enrollment.url }, 400)).kind, 'invalid');
+  const redirectResult = await adminPost('/v1/admin/nodes/discover', { url: enrollment.url }, 502);
+  assert.equal(redirectResult.kind, 'node_discovery');
+  assert.equal(redirectResult.reason, 'node_redirect_refused');
   assert.ok(
     !requests.slice(beforeRedirect).some(href => href.includes('redirected.example')),
     'discover_node must not follow redirects',
   );
 
-  // Non-200 HTTP status and streamed bodies exceeding MAX_DESCRIPTOR_BYTES are rejected.
+  // Transport failures, non-200 HTTP statuses, oversized responses, and descriptor rejections carry distinct reasons.
+  customOutbound = (_req, url) => {
+    if (url.hostname !== 'relay.example') return undefined;
+    let sent = false;
+    const body = new ReadableStream({
+      pull(controller) {
+        if (!sent) {
+          sent = true;
+          controller.enqueue(new Uint8Array([0x7b]));
+          return;
+        }
+        controller.error(new Error('connection reset'));
+      },
+    });
+    return new Response(body, {
+      status: 200,
+      headers: { 'Content-Type': 'application/json', 'Content-Length': '100' },
+    });
+  };
+  const unreachableResult = await adminPost('/v1/admin/nodes/discover', { url: enrollment.url }, 502);
+  assert.equal(unreachableResult.kind, 'node_discovery');
+  assert.equal(unreachableResult.reason, 'node_unreachable');
+
+  customOutbound = (_req, url) => (url.hostname === 'relay.example' ? new Response('not found', { status: 404 }) : undefined);
+  const notFoundResult = await adminPost('/v1/admin/nodes/discover', { url: enrollment.url }, 502);
+  assert.equal(notFoundResult.kind, 'node_discovery');
+  assert.equal(notFoundResult.reason, 'node_http_status');
+  assert.equal(notFoundResult.status, 404);
+
   customOutbound = (_req, url) => (url.hostname === 'relay.example' ? new Response('boom', { status: 500 }) : undefined);
-  assert.equal((await adminPost('/v1/admin/nodes/discover', { url: enrollment.url }, 400)).kind, 'invalid');
+  const serverErrorResult = await adminPost('/v1/admin/nodes/discover', { url: enrollment.url }, 502);
+  assert.equal(serverErrorResult.kind, 'node_discovery');
+  assert.equal(serverErrorResult.reason, 'node_http_status');
+  assert.equal(serverErrorResult.status, 500);
 
   customOutbound = (_req, url) => {
     if (url.hostname !== 'relay.example') return undefined;
@@ -199,18 +256,45 @@ test('discover_node enforces SSRF, DNS, redirect, size, and role/identity guards
     });
     return new Response(body, { status: 200, headers: { 'Content-Type': 'application/json' } });
   };
-  assert.equal((await adminPost('/v1/admin/nodes/discover', { url: enrollment.url }, 400)).kind, 'invalid');
+  const oversizedResult = await adminPost('/v1/admin/nodes/discover', { url: enrollment.url }, 422);
+  assert.equal(oversizedResult.kind, 'node_discovery');
+  assert.equal(oversizedResult.reason, 'node_invalid_descriptor');
+
+  const descriptorIdentity = makeEd25519Identity();
+  const expiredAt = Math.floor(Date.now() / 1000) - 60;
+  customOutbound = (_req, url) => {
+    if (url.hostname !== 'relay.example') return undefined;
+    return Response.json(
+      signedDescriptor('relay.example', descriptorIdentity.privateKey, descriptorIdentity.rawPublic, {
+        issued_at: expiredAt - 300,
+        expires_at: expiredAt,
+      }),
+    );
+  };
+  const expiredResult = await adminPost('/v1/admin/nodes/discover', { url: enrollment.url }, 422);
+  assert.equal(expiredResult.kind, 'node_discovery');
+  assert.equal(expiredResult.reason, 'node_descriptor_expired');
+
+  customOutbound = (_req, url) => {
+    if (url.hostname !== 'relay.example') return undefined;
+    return Response.json(
+      signedDescriptor('relay.example', descriptorIdentity.privateKey, descriptorIdentity.rawPublic, {
+        relay_endpoint: 'wss://wrong.example/v2/ws',
+      }),
+    );
+  };
+  const mismatchResult = await adminPost('/v1/admin/nodes/discover', { url: enrollment.url }, 422);
+  assert.equal(mismatchResult.kind, 'node_discovery');
+  assert.equal(mismatchResult.reason, 'node_descriptor_mismatch');
 
   // Edge staging rejects mismatched node_key, undeclared roles, and keys enrolled as vantages.
   customOutbound = null;
-  assert.equal(
-    (await adminPost('/v1/admin/nodes', { ...enrollment, node_key: makeEd25519Identity().publicKey }, 400)).kind,
-    'invalid',
-  );
-  assert.equal(
-    (await adminPost('/v1/admin/nodes', { ...enrollment, roles: ['relay', 'stun'] }, 400)).kind,
-    'invalid',
-  );
+  const changedKey = await adminPost('/v1/admin/nodes', { ...enrollment, node_key: makeEd25519Identity().publicKey }, 409);
+  assert.equal(changedKey.kind, 'conflict');
+  assert.equal(changedKey.reason, 'node_settings_changed');
+  const changedRoles = await adminPost('/v1/admin/nodes', { ...enrollment, roles: ['relay', 'stun'] }, 409);
+  assert.equal(changedRoles.kind, 'conflict');
+  assert.equal(changedRoles.reason, 'node_settings_changed');
 
   customOutbound = (_req, url) => {
     if (url.hostname === 'cloudflare-dns.com') {
@@ -221,16 +305,13 @@ test('discover_node enforces SSRF, DNS, redirect, size, and role/identity guards
     }
     return undefined;
   };
-  assert.equal(
-    (
-      await adminPost(
-        '/v1/admin/nodes',
-        { ...enrollment, url: 'https://vantage-node.example', node_key: vantage.publicKey },
-        400,
-      )
-    ).kind,
-    'invalid',
+  const vantageConflict = await adminPost(
+    '/v1/admin/nodes',
+    { ...enrollment, url: 'https://vantage-node.example', node_key: vantage.publicKey },
+    409,
   );
+  assert.equal(vantageConflict.kind, 'conflict');
+  assert.equal(vantageConflict.reason, 'vantage_key_bound');
 });
 
 test('vantage routes, scheduled mirror audit, maintenance/manage boundaries, and public directory fallbacks work across the Worker', async t => {

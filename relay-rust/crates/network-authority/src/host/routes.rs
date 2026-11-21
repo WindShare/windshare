@@ -386,6 +386,7 @@ pub fn fault(fault: &Fault) -> Result<Response> {
         | Fault::EmailCodeRejected => 400,
         Fault::Conflict { .. } => 409,
         Fault::Denied { .. } => 403,
+        Fault::NodeDiscovery { failure } => failure.http_status(),
         Fault::ReportNotFound | Fault::NodeNotFound | Fault::AccountNotFound => 404,
         Fault::RateLimited { .. } | Fault::NicknameCooldown { .. } => 429,
         Fault::Verification { .. } => 428,

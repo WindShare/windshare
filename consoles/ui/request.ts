@@ -10,9 +10,23 @@ export class RequestError extends MessageError {
   }
 }
 
+export type FaultMessage = Message | ((fault: Readonly<Record<string, unknown>>) => Message)
+
 interface RequestOptions extends RequestInit {
   data?: unknown
-  messages?: Readonly<Record<string, Message>>
+  messages?: Readonly<Record<string, FaultMessage>>
+}
+
+function resolveFaultMessage(
+  messages: Readonly<Record<string, FaultMessage>> | undefined,
+  code: string,
+  fault: unknown,
+): Message {
+  if (!messages || !Object.hasOwn(messages, code)) return requestFailed
+  const entry = messages[code]
+  if (typeof entry !== 'function') return entry
+  const payload = fault && typeof fault === 'object' ? fault as Readonly<Record<string, unknown>> : {}
+  return entry(payload)
 }
 
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
@@ -29,7 +43,7 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   if (!response.ok) {
     const fault = await response.json().catch(() => null)
     const code = fault?.error ?? fault?.reason ?? fault?.kind ?? ''
-    const description = messages && Object.hasOwn(messages, code) ? messages[code] : requestFailed
+    const description = resolveFaultMessage(messages, code, fault)
     throw new RequestError(response.status, code, description)
   }
   return response.json() as Promise<T>

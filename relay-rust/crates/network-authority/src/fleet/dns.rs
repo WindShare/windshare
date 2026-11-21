@@ -1,6 +1,20 @@
-use anyhow::{Result, ensure};
 use serde::Deserialize;
-use std::net::IpAddr;
+use std::{fmt, net::IpAddr};
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum DnsError {
+    InvalidReply(String),
+    NonPublicAddress(IpAddr),
+}
+impl fmt::Display for DnsError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidReply(detail) => f.write_str(detail),
+            Self::NonPublicAddress(address) => write!(f, "non-public node address {address}"),
+        }
+    }
+}
+impl std::error::Error for DnsError {}
 
 #[derive(Deserialize)]
 struct Reply {
@@ -42,29 +56,33 @@ fn public(address: IpAddr) -> bool {
     }
 }
 
-pub fn public_answers(bytes: &[u8], kind: u16) -> Result<usize> {
-    let reply: Reply = serde_json::from_slice(bytes)?;
-    ensure!(
-        !reply.truncated && reply.status == 0,
-        "incomplete DNS answer (status {}, truncated {})",
-        reply.status,
-        reply.truncated
-    );
+pub fn public_answers(bytes: &[u8], kind: u16) -> Result<usize, DnsError> {
+    let reply: Reply = serde_json::from_slice(bytes)
+        .map_err(|error| DnsError::InvalidReply(format!("invalid DNS JSON reply: {error}")))?;
+    if reply.truncated || reply.status != 0 {
+        return Err(DnsError::InvalidReply(format!(
+            "incomplete DNS answer (status {}, truncated {})",
+            reply.status, reply.truncated
+        )));
+    }
     let mut count = 0;
     for entry in reply
         .answers
         .into_iter()
         .filter(|a| matches!(a.kind, 1 | 28))
     {
-        let address: IpAddr = entry.data.parse()?;
-        ensure!(
-            matches!(
-                (entry.kind, address),
-                (1, IpAddr::V4(_)) | (28, IpAddr::V6(_))
-            ),
-            "DNS address family mismatch"
-        );
-        ensure!(public(address), "non-public node address");
+        let address: IpAddr = entry.data.parse().map_err(|error| {
+            DnsError::InvalidReply(format!("invalid DNS address record: {error}"))
+        })?;
+        if !matches!(
+            (entry.kind, address),
+            (1, IpAddr::V4(_)) | (28, IpAddr::V6(_))
+        ) {
+            return Err(DnsError::InvalidReply("DNS address family mismatch".into()));
+        }
+        if !public(address) {
+            return Err(DnsError::NonPublicAddress(address));
+        }
         count += usize::from(entry.kind == kind);
     }
     Ok(count)

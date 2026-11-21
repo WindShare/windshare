@@ -402,7 +402,9 @@ fn dispatch_admin(
             let spec: Spec = routes::parse(bytes)?;
             anyhow::ensure!(
                 !agents(env)?.iter().any(|agent| agent.key == spec.node_key),
-                Fault::Invalid
+                Fault::Conflict {
+                    reason: "vantage_key_bound".into()
+                }
             );
             let node = service.stage(&ctx.session, spec)?;
             Ok(json!(service.node_details(node)?))

@@ -2,13 +2,51 @@ use super::{
     signature::verify_bytes,
     topology::{Role, public_key, public_origin, stun_host},
 };
-use crate::{Fault, Zone};
-use anyhow::{Result, ensure};
+use crate::{DiscoveryFailure, Zone};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD as B64};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::fmt;
 
 pub const MAX_DESCRIPTOR: usize = 16 * 1024;
+const DESCRIPTOR_VERSION: u8 = 2;
+const MAX_CLOCK_SKEW_SECONDS: u64 = 60;
+const MAX_DESCRIPTOR_LIFETIME_SECONDS: u64 = 300;
+const MAX_STUN_URLS: usize = 4;
+const BYTES_PER_MBPS: u64 = 125_000;
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct DescriptorError {
+    pub failure: DiscoveryFailure,
+    pub detail: String,
+}
+impl DescriptorError {
+    fn new(failure: DiscoveryFailure, detail: impl Into<String>) -> Self {
+        Self {
+            failure,
+            detail: detail.into(),
+        }
+    }
+
+    fn invalid(detail: impl Into<String>) -> Self {
+        Self::new(DiscoveryFailure::InvalidDescriptor, detail)
+    }
+
+    fn expired(detail: impl Into<String>) -> Self {
+        Self::new(DiscoveryFailure::DescriptorExpired, detail)
+    }
+
+    fn mismatch(detail: impl Into<String>) -> Self {
+        Self::new(DiscoveryFailure::DescriptorMismatch, detail)
+    }
+}
+impl fmt::Display for DescriptorError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.detail)
+    }
+}
+impl std::error::Error for DescriptorError {}
+
 #[derive(Deserialize)]
 struct Envelope {
     version: u8,
@@ -34,7 +72,7 @@ struct Descriptor {
     issued_at: u64,
     expires_at: u64,
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Discovery {
     pub node_key: String,
     pub relay: String,
@@ -45,35 +83,101 @@ pub struct Discovery {
     pub capacity_mbps: Option<u32>,
 }
 
-/// # Errors
-/// Rejects invalid or stale signatures, mismatched endpoint identities and unusable service settings.
-pub fn inspect(origin: &str, bytes: &[u8], now: u64) -> Result<Discovery> {
-    let origin = public_origin(origin)?;
-    ensure!(bytes.len() <= MAX_DESCRIPTOR, Fault::Invalid);
-    let envelope: Envelope = serde_json::from_slice(bytes)?;
-    ensure!(envelope.version == 2, Fault::Invalid);
-    let payload = B64.decode(envelope.descriptor)?;
-    let value: Descriptor = serde_json::from_slice(&payload)?;
+fn decode_verified(bytes: &[u8]) -> Result<(Descriptor, [u8; 32]), DescriptorError> {
+    if bytes.len() > MAX_DESCRIPTOR {
+        return Err(DescriptorError::invalid(format!(
+            "descriptor exceeds {MAX_DESCRIPTOR} bytes"
+        )));
+    }
+    let envelope: Envelope = serde_json::from_slice(bytes)
+        .map_err(|error| DescriptorError::invalid(format!("malformed descriptor JSON: {error}")))?;
+    if envelope.version != DESCRIPTOR_VERSION {
+        return Err(DescriptorError::invalid(format!(
+            "unsupported descriptor envelope version {}",
+            envelope.version
+        )));
+    }
+    let payload = B64.decode(envelope.descriptor).map_err(|error| {
+        DescriptorError::invalid(format!("invalid descriptor base64 payload: {error}"))
+    })?;
+    let value: Descriptor = serde_json::from_slice(&payload).map_err(|error| {
+        DescriptorError::invalid(format!("malformed descriptor payload JSON: {error}"))
+    })?;
     verify_bytes(
         &value.node_key,
         b"windshare/node-descriptor/v2\0",
         &payload,
         &envelope.signature,
-    )?;
+    )
+    .map_err(|error| {
+        DescriptorError::invalid(format!("descriptor signature verification failed: {error}"))
+    })?;
+    if value.version != DESCRIPTOR_VERSION {
+        return Err(DescriptorError::invalid(format!(
+            "unsupported descriptor payload version {}",
+            value.version
+        )));
+    }
+    let key = public_key(&value.node_key)
+        .map_err(|error| DescriptorError::invalid(format!("invalid node_key: {error}")))?;
+    Ok((value, key))
+}
+
+fn validate_identity_and_endpoint(
+    origin: &str,
+    value: &Descriptor,
+    key: &[u8; 32],
+) -> Result<(), DescriptorError> {
     let mut digest = Sha256::new();
     digest.update(b"windshare/node-identity/v1\0");
-    digest.update(public_key(&value.node_key)?);
-    let host = origin.strip_prefix("https://").ok_or(Fault::Invalid)?;
-    ensure!(
-        value.version == 2
-            && value.node_id == B64.encode(digest.finalize())
-            && value.relay_endpoint == format!("wss://{host}/v2/ws")
-            && value.expires_at > now
-            && value.issued_at <= now + 60
-            && value.expires_at > value.issued_at
-            && value.expires_at - value.issued_at <= 300,
-        Fault::Invalid
-    );
+    digest.update(key);
+    let expected_node_id = B64.encode(digest.finalize());
+    if value.node_id != expected_node_id {
+        return Err(DescriptorError::mismatch(
+            "descriptor node_id does not match node_key",
+        ));
+    }
+    let host = origin
+        .strip_prefix("https://")
+        .ok_or_else(|| DescriptorError::new(DiscoveryFailure::InvalidUrl, "non-HTTPS origin"))?;
+    let expected_endpoint = format!("wss://{host}/v2/ws");
+    if value.relay_endpoint != expected_endpoint {
+        return Err(DescriptorError::mismatch(format!(
+            "descriptor relay_endpoint '{}' does not match expected '{expected_endpoint}'",
+            value.relay_endpoint
+        )));
+    }
+    Ok(())
+}
+
+fn validate_freshness(value: &Descriptor, now: u64) -> Result<(), DescriptorError> {
+    if value.expires_at <= now {
+        return Err(DescriptorError::expired(format!(
+            "descriptor expired at {} (authority time {now})",
+            value.expires_at
+        )));
+    }
+    if value.issued_at > now.saturating_add(MAX_CLOCK_SKEW_SECONDS) {
+        return Err(DescriptorError::expired(format!(
+            "descriptor issued_at {} exceeds authority clock skew (authority time {now})",
+            value.issued_at
+        )));
+    }
+    if value.expires_at <= value.issued_at
+        || value.expires_at - value.issued_at > MAX_DESCRIPTOR_LIFETIME_SECONDS
+    {
+        return Err(DescriptorError::expired(format!(
+            "descriptor lifetime {}..{} is out of bounds",
+            value.issued_at, value.expires_at
+        )));
+    }
+    Ok(())
+}
+
+fn validate_services(
+    origin: &str,
+    value: &Descriptor,
+) -> Result<(Vec<Role>, Vec<String>), DescriptorError> {
     let mut roles = Vec::new();
     if value.services.relay {
         roles.push(Role::Relay);
@@ -81,26 +185,53 @@ pub fn inspect(origin: &str, bytes: &[u8], now: u64) -> Result<Discovery> {
     if value.services.stun {
         roles.push(Role::Stun);
     }
-    ensure!(
-        !roles.is_empty()
-            && value.stun.len() <= 4
-            && (!value.services.stun || !value.stun.is_empty()),
-        Fault::Invalid
-    );
+    if roles.is_empty() {
+        return Err(DescriptorError::mismatch(
+            "descriptor advertises neither relay nor STUN service",
+        ));
+    }
+    if value.stun.len() > MAX_STUN_URLS || (value.services.stun && value.stun.is_empty()) {
+        return Err(DescriptorError::mismatch(
+            "descriptor STUN URL count does not match declared services",
+        ));
+    }
     let mut stun = Vec::new();
     if value.services.stun {
-        let url = url::Url::parse(&origin)?;
-        for address in value.stun {
-            ensure!(
-                Some(stun_host(&address)?.as_str()) == url.host_str() && !stun.contains(&address),
-                Fault::Invalid
-            );
-            stun.push(address);
+        let url = url::Url::parse(origin).map_err(|error| {
+            DescriptorError::new(DiscoveryFailure::InvalidUrl, error.to_string())
+        })?;
+        for address in &value.stun {
+            let host = stun_host(address).map_err(|_| {
+                DescriptorError::mismatch(format!("malformed descriptor STUN URL '{address}'"))
+            })?;
+            if Some(host.as_str()) != url.host_str() {
+                return Err(DescriptorError::mismatch(format!(
+                    "descriptor STUN host '{host}' does not match origin host"
+                )));
+            }
+            if stun.contains(address) {
+                return Err(DescriptorError::mismatch(format!(
+                    "descriptor contains duplicate STUN URL '{address}'"
+                )));
+            }
+            stun.push(address.clone());
         }
     }
+    Ok((roles, stun))
+}
+
+/// # Errors
+/// Rejects invalid or stale signatures, mismatched endpoint identities and unusable service settings.
+pub fn inspect(origin: &str, bytes: &[u8], now: u64) -> Result<Discovery, DescriptorError> {
+    let origin = public_origin(origin)
+        .map_err(|_| DescriptorError::new(DiscoveryFailure::InvalidUrl, "invalid public origin"))?;
+    let (value, key) = decode_verified(bytes)?;
+    validate_identity_and_endpoint(&origin, &value, &key)?;
+    validate_freshness(&value, now)?;
+    let (roles, stun) = validate_services(&origin, &value)?;
     let capacity_mbps = value
         .capacity_bytes_per_second
-        .and_then(|n| u32::try_from(n.div_ceil(125_000)).ok());
+        .and_then(|n| u32::try_from(n.div_ceil(BYTES_PER_MBPS)).ok());
     Ok(Discovery {
         node_key: value.node_key,
         relay: origin,
@@ -111,3 +242,7 @@ pub fn inspect(origin: &str, bytes: &[u8], now: u64) -> Result<Discovery> {
         capacity_mbps,
     })
 }
+
+#[cfg(test)]
+#[path = "descriptor_tests.rs"]
+mod tests;

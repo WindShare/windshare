@@ -1,18 +1,37 @@
 import { message, type Message } from '../ui/locale'
 import { networkCopy } from './locales'
-import { request, RequestError } from '../ui/request'
+import { request, RequestError, type FaultMessage } from '../ui/request'
 import { decode, encode } from './identity'
 import type { AccountDetails, AccountPage, AccountSummary, Discovery, Enrollment, TrafficStatus, MilestoneReview, NodeDetails, NodePage, FleetAction, PolicyChange, PolicySnapshot, RelayNode, Report, ReportPage, Restrictions, SettingsChanges, Snapshot, Target } from './model'
 
-const messages = {
+function nodeHttpStatus(fault: Readonly<Record<string, unknown>>): Message {
+  const status = typeof fault.status === 'number' && Number.isInteger(fault.status) ? fault.status : null
+  return status === null
+    ? message(networkCopy, 'nodeHttpError')
+    : { format: locale => networkCopy[locale].nodeHttpStatus(status) }
+}
+
+const messages: Readonly<Record<string, FaultMessage>> = {
   relay_bound: message(networkCopy, 'relayBound'),
   stun_bound: message(networkCopy, 'stunBound'),
   listing_changed: message(networkCopy, 'listingChanged'),
   alias_bound: message(networkCopy, 'aliasBound'),
+  node_settings_changed: message(networkCopy, 'nodeSettingsChanged'),
+  vantage_key_bound: message(networkCopy, 'vantageKeyBound'),
   verification_required: message(networkCopy, 'verificationRequired'),
   drain_pending: message(networkCopy, 'drainPending'),
   maintenance_in_progress: message(networkCopy, 'maintenance'),
   mirror_lag: message(networkCopy, 'mirrorLag'),
+  invalid_node_url: message(networkCopy, 'invalidNodeUrl'),
+  reserved_node_host: message(networkCopy, 'reservedNodeHost'),
+  node_dns_failed: message(networkCopy, 'nodeDnsFailed'),
+  node_non_public_address: message(networkCopy, 'nodeNonPublicAddress'),
+  node_unreachable: message(networkCopy, 'nodeUnreachable'),
+  node_redirect_refused: message(networkCopy, 'nodeRedirectRefused'),
+  node_http_status: nodeHttpStatus,
+  node_invalid_descriptor: message(networkCopy, 'nodeInvalidDescriptor'),
+  node_descriptor_expired: message(networkCopy, 'nodeDescriptorExpired'),
+  node_descriptor_mismatch: message(networkCopy, 'nodeDescriptorMismatch'),
   credentials: message(networkCopy, 'invalidCredentials'),
   credentials_changed: message(networkCopy, 'sessionChanged'),
   initialization_consumed: message(networkCopy, 'setupLinkUsed'),
@@ -91,7 +110,7 @@ export class AuthorityClient {
     }
   }
 
-  private async write<T>(route: string, data: unknown, method = 'POST', overrides?: Readonly<Record<string, Message>>) {
+  private async write<T>(route: string, data: unknown, method = 'POST', overrides?: Readonly<Record<string, FaultMessage>>) {
     try {
       return await request<T>('/v1/admin/' + route, {
         method, data, messages: overrides ? { ...messages, ...overrides } : messages,
