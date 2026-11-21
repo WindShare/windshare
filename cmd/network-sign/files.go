@@ -16,7 +16,10 @@ import (
 	"github.com/windshare/windshare/core/nodedirectory"
 )
 
-var errNonRegularFile = errors.New("signed directory path must be a regular file")
+var (
+	errNonRegularFile   = errors.New("signed directory path must be a regular file")
+	syncParentDirectory = syncDirectory
+)
 
 func readBoundedFile(file *os.File, limit int64) ([]byte, error) {
 	data, err := io.ReadAll(io.LimitReader(file, limit+1))
@@ -149,5 +152,16 @@ func writePublic(path string, data []byte) error {
 	if err = file.Close(); err != nil {
 		return err
 	}
-	return os.Rename(file.Name(), path)
+	if err = os.Rename(file.Name(), path); err != nil {
+		return err
+	}
+	// Persist the directory entry before callers remove a superseded file.
+	return syncParentDirectory(path)
+}
+
+func removePublic(path string) error {
+	if err := os.Remove(path); err != nil {
+		return err
+	}
+	return syncParentDirectory(path)
 }

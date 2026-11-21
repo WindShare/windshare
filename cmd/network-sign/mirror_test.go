@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -147,4 +148,119 @@ func TestReadInstalledMirrorRejectsOversizedAndNonRegularInputs(t *testing.T) {
 			t.Fatalf("unexpected mirror from symlinked release dir: %v, %v", snap.Cursor(), err)
 		}
 	}
+}
+
+func TestMirrorSyncsParentDirectoryAcrossPublishAndWithdrawTransitions(t *testing.T) {
+	config, vector, now := loadMirrorFixtures(t)
+	newGen, err := nodedirectory.Verify(vector["new_generation"], config.Network, config.Roots)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expired := newGen.TrustedUntil(nodedirectory.DefaultGrace)
+
+	exists := func(path string) bool {
+		_, err := os.Stat(path)
+		return err == nil
+	}
+	type syncEvent struct {
+		path           string
+		outPresent     bool
+		retiredPresent bool
+	}
+
+	hookSync := func(t *testing.T, fn func(string) error) {
+		t.Helper()
+		previous := syncParentDirectory
+		syncParentDirectory = fn
+		t.Cleanup(func() { syncParentDirectory = previous })
+	}
+
+	t.Run("withdraw syncs retired marker before removing public copy", func(t *testing.T) {
+		dir := t.TempDir()
+		out := filepath.Join(dir, "windshare-network.json")
+		retired := out + ".expired"
+		if err := os.WriteFile(out, vector["new_generation"], 0o644); err != nil {
+			t.Fatal(err)
+		}
+		var events []syncEvent
+		hookSync(t, func(path string) error {
+			events = append(events, syncEvent{
+				path:           path,
+				outPresent:     exists(out),
+				retiredPresent: exists(retired),
+			})
+			return nil
+		})
+		if err := reconcileMirror(config, out, "", nil, expired); !errors.Is(err, nodedirectory.ErrExpired) {
+			t.Fatalf("withdraw err = %v, want %v", err, nodedirectory.ErrExpired)
+		}
+		want := []syncEvent{
+			{path: retired, outPresent: true, retiredPresent: true},
+			{path: out, outPresent: false, retiredPresent: true},
+		}
+		if !slices.Equal(events, want) {
+			t.Fatalf("withdraw sync events = %+v, want %+v", events, want)
+		}
+	})
+
+	t.Run("withdraw aborts before removing public copy if retired sync fails", func(t *testing.T) {
+		dir := t.TempDir()
+		out := filepath.Join(dir, "windshare-network.json")
+		if err := os.WriteFile(out, vector["new_generation"], 0o644); err != nil {
+			t.Fatal(err)
+		}
+		syncErr := errors.New("parent dir sync failed")
+		hookSync(t, func(string) error { return syncErr })
+		if err := reconcileMirror(config, out, "", nil, expired); !errors.Is(err, syncErr) {
+			t.Fatalf("withdraw err = %v, want %v", err, syncErr)
+		}
+		if !exists(out) {
+			t.Fatal("public copy was removed even though retired marker directory sync failed")
+		}
+	})
+
+	t.Run("publish syncs new public copy before removing retired marker", func(t *testing.T) {
+		dir := t.TempDir()
+		out := filepath.Join(dir, "windshare-network.json")
+		retired := out + ".expired"
+		if err := os.WriteFile(retired, vector["valid"], 0o644); err != nil {
+			t.Fatal(err)
+		}
+		var events []syncEvent
+		hookSync(t, func(path string) error {
+			events = append(events, syncEvent{
+				path:           path,
+				outPresent:     exists(out),
+				retiredPresent: exists(retired),
+			})
+			return nil
+		})
+		if err := reconcileMirror(config, out, "", vector["new_generation"], now); err != nil {
+			t.Fatalf("publish err = %v", err)
+		}
+		want := []syncEvent{
+			{path: out, outPresent: true, retiredPresent: true},
+			{path: retired, outPresent: true, retiredPresent: false},
+		}
+		if !slices.Equal(events, want) {
+			t.Fatalf("publish sync events = %+v, want %+v", events, want)
+		}
+	})
+
+	t.Run("publish aborts before removing retired marker if public sync fails", func(t *testing.T) {
+		dir := t.TempDir()
+		out := filepath.Join(dir, "windshare-network.json")
+		retired := out + ".expired"
+		if err := os.WriteFile(retired, vector["valid"], 0o644); err != nil {
+			t.Fatal(err)
+		}
+		syncErr := errors.New("parent dir sync failed")
+		hookSync(t, func(string) error { return syncErr })
+		if err := reconcileMirror(config, out, "", vector["new_generation"], now); !errors.Is(err, syncErr) {
+			t.Fatalf("publish err = %v, want %v", err, syncErr)
+		}
+		if !exists(retired) {
+			t.Fatal("retired marker was removed even though public copy directory sync failed")
+		}
+	})
 }

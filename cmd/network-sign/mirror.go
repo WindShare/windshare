@@ -156,7 +156,7 @@ func (m *installedMirror) publish(now time.Time) error {
 		fmt.Printf("event=directory_mirrored generation=%d serial=%d\n", cursor.Generation, cursor.Serial)
 	}
 	if m.retired != (nodedirectory.Cursor{}) {
-		return os.Remove(m.retiredPath)
+		return removePublic(m.retiredPath)
 	}
 	return nil
 }
@@ -170,7 +170,7 @@ func (m *installedMirror) withdraw() error {
 		}
 	}
 	if m.published != (nodedirectory.Cursor{}) {
-		if err := os.Remove(m.path); err != nil {
+		if err := removePublic(m.path); err != nil {
 			return err
 		}
 	}

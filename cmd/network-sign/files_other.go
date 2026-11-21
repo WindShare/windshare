@@ -27,3 +27,6 @@ func openRegularNoFollow(path string) (*os.File, error) {
 	}
 	return file, nil
 }
+
+// Non-Unix targets (including Windows) cannot fsync a directory handle opened via os.Open.
+func syncDirectory(string) error { return nil }

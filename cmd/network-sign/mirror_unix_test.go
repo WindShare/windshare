@@ -34,3 +34,18 @@ func TestReadInstalledMirrorRejectsFIFOAndLeafSymlink(t *testing.T) {
 		t.Fatalf("symlink mirror err = %v, want ELOOP", err)
 	}
 }
+
+func TestSyncDirectory(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "windshare-network.json")
+	if err := os.WriteFile(path, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := syncDirectory(path); err != nil {
+		t.Fatalf("syncDirectory(%s) = %v, want nil", path, err)
+	}
+	missing := filepath.Join(dir, "missing", "windshare-network.json")
+	if err := syncDirectory(missing); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("syncDirectory(%s) = %v, want ErrNotExist", missing, err)
+	}
+}

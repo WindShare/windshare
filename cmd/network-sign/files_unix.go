@@ -4,6 +4,7 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"syscall"
 )
 
@@ -23,4 +24,13 @@ func openRegularNoFollow(path string) (*os.File, error) {
 		return nil, errNonRegularFile
 	}
 	return file, nil
+}
+
+func syncDirectory(path string) error {
+	directory, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	return directory.Sync()
 }
