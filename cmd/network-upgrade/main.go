@@ -86,7 +86,7 @@ func run(host, key, path, revision, recoverID string) error {
 	defer stop()
 	if recoverID != "" {
 		log.Info("recovering interrupted maintenance")
-		return (rollout{&r}).recover(ctx, log)
+		return (rollout{maintenanceTarget: &r}).recover(ctx, log)
 	}
 	return r.stageAndUpgrade(ctx, log, path, revision)
 }
@@ -108,5 +108,5 @@ func (r *runner) stageAndUpgrade(ctx context.Context, log *slog.Logger, path, re
 	if err = r.remote(ctx, file, "stage", revision, hex.EncodeToString(hash.Sum(nil))); err != nil {
 		return err
 	}
-	return (rollout{r}).upgrade(ctx, log)
+	return (rollout{maintenanceTarget: r}).upgrade(ctx, log)
 }

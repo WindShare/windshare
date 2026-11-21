@@ -62,7 +62,7 @@ func TestUpgradeOrdersSwitchVerificationAndRelease(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			f := &fakeTarget{held: true, version: 73, fail: tc.fail}
-			err := (rollout{f}).upgrade(t.Context(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+			err := (rollout{maintenanceTarget: f}).upgrade(t.Context(), slog.New(slog.NewTextHandler(io.Discard, nil)))
 			if (err != nil) != tc.failed || !slices.Equal(f.calls, tc.want) {
 				t.Fatalf("error=%v, calls=%v", err, f.calls)
 			}
@@ -90,7 +90,7 @@ func TestBusyFenceDefersWithoutRestartAndFailedCandidateProbeRollsBack(t *testin
 					f.onCall = nil
 				}
 			}
-			err := (rollout{f}).upgrade(ctx, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			err := (rollout{maintenanceTarget: f}).upgrade(ctx, slog.New(slog.NewTextHandler(io.Discard, nil)))
 			if err == nil || f.held {
 				t.Fatalf("error=%v, held=%v, calls=%v", err, f.held, f.calls)
 			}
@@ -130,7 +130,7 @@ func TestSwitchAndReleaseRetryBusyLock(t *testing.T) {
 				}
 			}
 		}
-		err := (rollout{f}).upgrade(ctx, discard)
+		err := (rollout{maintenanceTarget: f}).upgrade(ctx, discard)
 		want := []string{"authority drain", "host enter", "host switch", "host rollback", "host rollback", "probe", "host release", "authority release"}
 		if err == nil || f.held || !slices.Equal(f.calls, want) {
 			t.Fatalf("error=%v, held=%v, calls=%v", err, f.held, f.calls)
@@ -151,7 +151,7 @@ func TestSwitchAndReleaseRetryBusyLock(t *testing.T) {
 				}
 			}
 		}
-		err := (rollout{f}).recover(t.Context(), discard)
+		err := (rollout{maintenanceTarget: f}).recover(t.Context(), discard)
 		want := []string{"authority status", "host inspect", "host inspect", "probe", "host release", "authority release"}
 		if err != nil || f.held || !slices.Equal(f.calls, want) {
 			t.Fatalf("error=%v, held=%v, calls=%v", err, f.held, f.calls)
@@ -161,7 +161,7 @@ func TestSwitchAndReleaseRetryBusyLock(t *testing.T) {
 	t.Run("switchAndVerify bounds busy retries to stage deadline", func(t *testing.T) {
 		t.Parallel()
 		f := &fakeTarget{fail: map[string]error{"host rollback": deferredExit{}}}
-		err := (rollout{f}).switchAndVerify(t.Context(), discard, "rollback", time.Now().Add(50*time.Millisecond))
+		err := (rollout{maintenanceTarget: f}).switchAndVerify(t.Context(), discard, "rollback", time.Now().Add(50*time.Millisecond))
 		if !busy(err) || !errors.Is(err, context.DeadlineExceeded) || slices.Contains(f.calls, "probe") {
 			t.Fatalf("error=%v, calls=%v", err, f.calls)
 		}
@@ -170,9 +170,56 @@ func TestSwitchAndReleaseRetryBusyLock(t *testing.T) {
 	t.Run("release bounds busy retries and preserves busy cause", func(t *testing.T) {
 		t.Parallel()
 		f := &fakeTarget{held: true, fail: map[string]error{"host release": deferredExit{}}}
-		err := (rollout{f}).release(t.Context(), discard, time.Now().Add(50*time.Millisecond))
+		err := (rollout{maintenanceTarget: f}).release(t.Context(), discard, time.Now().Add(50*time.Millisecond))
 		if !busy(err) || !errors.Is(err, context.DeadlineExceeded) || slices.Contains(f.calls, "authority release") {
 			t.Fatalf("error=%v, calls=%v", err, f.calls)
 		}
 	})
+}
+
+func TestSwitchAndVerifyBacksOffAndCapsProbeAttempts(t *testing.T) {
+	discard := slog.New(slog.NewTextHandler(io.Discard, nil))
+	probeErr := errors.New("candidate leaked share before stop")
+	f := &fakeTarget{held: true, version: 81, fail: map[string]error{"probe": probeErr}}
+	var delays []time.Duration
+	r := rollout{
+		maintenanceTarget: f,
+		wait: func(ctx context.Context, d time.Duration) error {
+			delays = append(delays, d)
+			return ctx.Err()
+		},
+	}
+
+	err := r.switchAndVerify(t.Context(), discard, "switch", time.Now().Add(switchBudget))
+	if !errors.Is(err, probeErr) {
+		t.Fatalf("expected wrapped probe error, got %v", err)
+	}
+	wantDelays := []time.Duration{
+		250 * time.Millisecond,
+		500 * time.Millisecond,
+		1 * time.Second,
+		2 * time.Second,
+		4 * time.Second,
+		4 * time.Second,
+		4 * time.Second,
+	}
+	if !slices.Equal(delays, wantDelays) {
+		t.Fatalf("delays=%v, want=%v", delays, wantDelays)
+	}
+	var probes int
+	for _, call := range f.calls {
+		if call == "probe" {
+			probes++
+		}
+	}
+	if probes != probeMaxAttempts {
+		t.Fatalf("probe attempts=%d, want=%d", probes, probeMaxAttempts)
+	}
+	var totalDelay time.Duration
+	for _, d := range delays {
+		totalDelay += d
+	}
+	if totalDelay >= switchBudget {
+		t.Fatalf("total backoff %v must fit within switchBudget %v", totalDelay, switchBudget)
+	}
 }

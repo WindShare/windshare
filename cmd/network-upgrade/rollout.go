@@ -20,6 +20,10 @@ const (
 	redialBudget    = 10 * time.Second
 	reconnectBudget = switchBudget + rollbackBudget + releaseBudget + redialBudget
 	retryInterval   = 250 * time.Millisecond
+	// Exponential backoff + cap spans startup recovery across switchBudget while
+	// bounding synthetic shares a broken candidate can leak before rollback.
+	probeMaxBackoff  = 4 * time.Second
+	probeMaxAttempts = 8
 )
 
 var errDeferred = errors.New("node is still draining, upgrade deferred")
@@ -30,7 +34,10 @@ type maintenanceTarget interface {
 	verify(context.Context) error
 }
 
-type rollout struct{ maintenanceTarget }
+type rollout struct {
+	maintenanceTarget
+	wait func(context.Context, time.Duration) error
+}
 
 func (r rollout) upgrade(ctx context.Context, log *slog.Logger) error {
 	status, err := r.policy(ctx, "drain")
@@ -120,6 +127,20 @@ func busy(err error) bool {
 	return errors.As(err, &exit) && exit.ExitCode() == busyExit
 }
 
+func (r rollout) sleep(ctx context.Context, d time.Duration) error {
+	if r.wait != nil {
+		return r.wait(ctx, d)
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 // Retry exit 75 (host .lock or local admission gate contention) within the
 // stage deadline; an interrupted switch may hold .lock until restart exits.
 func (r rollout) localUntilReady(ctx context.Context, log *slog.Logger, action string) error {
@@ -133,10 +154,8 @@ func (r rollout) localUntilReady(ctx context.Context, log *slog.Logger, action s
 			log.Warn("host operation busy, retrying", "action", action, "error", err)
 			logged = true
 		}
-		select {
-		case <-ctx.Done():
-			return errors.Join(err, ctx.Err())
-		case <-time.After(retryInterval):
+		if waitErr := r.sleep(ctx, retryInterval); waitErr != nil {
+			return errors.Join(err, waitErr)
 		}
 	}
 }
@@ -147,16 +166,23 @@ func (r rollout) switchAndVerify(parent context.Context, log *slog.Logger, actio
 	if err := r.localUntilReady(ctx, log, action); err != nil {
 		return err
 	}
-	for {
+	backoff := retryInterval
+	for attempt := 1; ; attempt++ {
 		err := r.verify(ctx)
 		if err == nil {
 			return nil
 		}
-		select {
-		case <-ctx.Done():
+		if ctx.Err() != nil {
 			return errors.Join(err, ctx.Err())
-		case <-time.After(retryInterval):
 		}
+		if attempt >= probeMaxAttempts {
+			return fmt.Errorf("probe failed after %d attempts: %w", attempt, err)
+		}
+		log.Warn("probe attempt failed, backing off", "action", action, "attempt", attempt, "next_delay", backoff, "error", err)
+		if waitErr := r.sleep(ctx, backoff); waitErr != nil {
+			return errors.Join(err, waitErr)
+		}
+		backoff = min(backoff*2, probeMaxBackoff)
 	}
 }
 

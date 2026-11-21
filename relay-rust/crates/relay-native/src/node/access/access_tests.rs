@@ -663,3 +663,157 @@ fn registration_checks_the_probe_grant_against_this_node_and_share() {
         "probe_scope_mismatch"
     );
 }
+
+fn probe_bearer(
+    template: Ticket,
+    signing: &SigningKey,
+    generation: Generation,
+    node: &[u8; 32],
+    id: ShareId,
+) -> (Attribution, Bearer) {
+    let mut ticket = template;
+    ticket.account = windshare_relay_access::probe::PROBE_ACCOUNT;
+    ticket.credential = windshare_relay_access::probe::credential(node, id.as_bytes());
+    ticket.expires_at = NOW + windshare_relay_access::probe::LIFETIME;
+    ticket.entitlement.valid_until = ticket.expires_at;
+    let encoded = URL_SAFE_NO_PAD.encode(ticket.issue(generation, signing).unwrap());
+    (ticket.attribution(), Bearer::new(&encoded))
+}
+
+#[test]
+fn controller_scoped_probes_use_reserved_admission_and_bypass_principal_share_cap() {
+    let (service, template, signing, generation, policy) = identity();
+    let node = [19; 32];
+    service.identify(node);
+    service
+        .configure(Policy {
+            anonymous: true,
+            shares_per_principal: 1,
+            owner_reserved_shares: crate::config::MAX_RESIDENT_SHARES - 1,
+            ..policy
+        })
+        .unwrap();
+
+    // Without controller enrollment, probe tickets stay at Authenticated priority.
+    let (probe_one, mut bearer_one) = probe_bearer(template, &signing, generation, &node, share(1));
+    assert_eq!(
+        service.admission_priority(share(1), Some(&mut bearer_one), NOW),
+        AdmissionPriority::Authenticated
+    );
+
+    // Fill the entire public share pool (1 slot with MAX_RESIDENT_SHARES - 1 reserved).
+    let public = service.reserve(share(10), Attribution::Anonymous).unwrap();
+    assert!(matches!(
+        service.reserve(share(1), probe_one),
+        Err(Refusal {
+            decision: RegistrationDecision::Unavailable(_),
+            reason: RefusalReason::ResidentShareCapacity,
+        })
+    ));
+
+    // Once enrolled under the controller, scoped probes get reserved (Owner) admission
+    // without gaining owner bandwidth or egress exemptions.
+    service.set_controller(Some(generation.issuer));
+    let (_, mut bearer_one) = probe_bearer(template, &signing, generation, &node, share(1));
+    assert_eq!(
+        service.admission_priority(share(1), Some(&mut bearer_one), NOW),
+        AdmissionPriority::Owner
+    );
+
+    // Restored leaked probe shares beyond shares_per_principal (1) must not block
+    // subsequent rollback probes, and unauthenticated receiver/STOP joins on a
+    // resident probe share inherit reserved connection priority.
+    let restored = service.restore(share(1), probe_one).unwrap();
+    assert_eq!(
+        service.admission_priority(share(1), None, NOW),
+        AdmissionPriority::Owner
+    );
+
+    let (probe_two, mut bearer_two) = probe_bearer(template, &signing, generation, &node, share(2));
+    assert_eq!(
+        service.admission_priority(share(2), Some(&mut bearer_two), NOW),
+        AdmissionPriority::Owner
+    );
+    let active_probe = service.reserve(share(2), probe_two).unwrap();
+    assert_eq!(
+        service.admission_priority(share(2), None, NOW),
+        AdmissionPriority::Owner
+    );
+    assert!(!service.is_owner(probe_two));
+    assert_eq!(service.class(probe_two, NOW), (Class::Standard, None));
+    assert_eq!(service.egress_owner(share(2), None, None), Some(false));
+
+    // Ordinary authenticated accounts still obey the public cap while accepting traffic.
+    service
+        .apply_authority(AuthorityState {
+            generation,
+            policy: Some(windshare_relay_access::usage::NodePolicy {
+                version: 1,
+                admission: Admission::Accepting,
+                anonymous: true,
+                probe_account: windshare_relay_access::probe::PROBE_ACCOUNT,
+            }),
+        })
+        .unwrap();
+    let mut normal = template;
+    normal.account = [77; 16];
+    let normal_encoded = URL_SAFE_NO_PAD.encode(normal.issue(generation, &signing).unwrap());
+    let mut normal_bearer = Bearer::new(&normal_encoded);
+    assert_eq!(
+        service.admission_priority(share(3), Some(&mut normal_bearer), NOW),
+        AdmissionPriority::Authenticated
+    );
+    assert!(matches!(
+        service.reserve(share(3), normal.attribution()),
+        Err(Refusal {
+            decision: RegistrationDecision::Unavailable(_),
+            reason: RefusalReason::ResidentShareCapacity,
+        })
+    ));
+
+    drop(active_probe);
+    drop(restored);
+    drop(public);
+}
+
+#[test]
+fn probe_reserved_priority_requires_matching_scope_and_enabled_node() {
+    let (service, template, signing, generation, _) = identity();
+    let node = [23; 32];
+    service.identify(node);
+    service.set_controller(Some(generation.issuer));
+
+    let (probe_one, mut wrong_share) =
+        probe_bearer(template, &signing, generation, &node, share(1));
+    assert_eq!(
+        service.admission_priority(share(2), Some(&mut wrong_share), NOW),
+        AdmissionPriority::Anonymous
+    );
+    let resident = service.reserve(share(1), probe_one).unwrap();
+    assert_eq!(
+        service.admission_priority(share(1), None, NOW),
+        AdmissionPriority::Owner
+    );
+
+    service
+        .apply_authority(AuthorityState {
+            generation,
+            policy: Some(windshare_relay_access::usage::NodePolicy {
+                version: 2,
+                admission: Admission::Disabled,
+                anonymous: true,
+                probe_account: windshare_relay_access::probe::PROBE_ACCOUNT,
+            }),
+        })
+        .unwrap();
+    let (_, mut disabled_bearer) = probe_bearer(template, &signing, generation, &node, share(2));
+    assert_eq!(
+        service.admission_priority(share(2), Some(&mut disabled_bearer), NOW),
+        AdmissionPriority::Anonymous
+    );
+    assert_eq!(
+        service.admission_priority(share(1), None, NOW),
+        AdmissionPriority::Anonymous
+    );
+    drop(resident);
+}

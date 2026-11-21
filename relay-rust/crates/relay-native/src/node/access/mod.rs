@@ -369,4 +369,25 @@ impl State {
     fn owner(&self, attribution: Attribution) -> bool {
         matches!(attribution, Attribution::Credential { principal, .. } if self.policy.owner_principals.contains(&principal))
     }
+
+    // Owners and controller-verified probes share reserved admission headroom so
+    // full public residency or leaked probe shares cannot block maintenance probes.
+    fn has_reserved_admission(&self, share: ShareId, attribution: Attribution) -> bool {
+        self.owner(attribution) || self.scoped_probe(share, attribution)
+    }
+
+    fn priority_for(
+        &self,
+        share: ShareId,
+        attribution: Attribution,
+    ) -> crate::connection::AdmissionPriority {
+        use crate::connection::AdmissionPriority;
+        if self.has_reserved_admission(share, attribution) {
+            AdmissionPriority::Owner
+        } else if matches!(attribution, Attribution::Anonymous) {
+            AdmissionPriority::Anonymous
+        } else {
+            AdmissionPriority::Authenticated
+        }
+    }
 }

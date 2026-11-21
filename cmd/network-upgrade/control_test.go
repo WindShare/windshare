@@ -79,12 +79,12 @@ func TestRunnerRejectsUnboundInputsBeforeSSH(t *testing.T) {
 func TestRecoveryRequiresOwnershipAndVerifiesCurrentSelection(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	f := &fakeTarget{}
-	if err := (rollout{f}).recover(context.Background(), log); err == nil || !slices.Equal(f.calls, []string{"authority status"}) {
+	if err := (rollout{maintenanceTarget: f}).recover(context.Background(), log); err == nil || !slices.Equal(f.calls, []string{"authority status"}) {
 		t.Fatalf("foreign recovery %v: %v", f.calls, err)
 	}
 	f.held = true
 	f.calls = nil
-	if err := (rollout{f}).recover(t.Context(), log); err != nil || !slices.Equal(f.calls, []string{"authority status", "host inspect", "probe", "host release", "authority release"}) {
+	if err := (rollout{maintenanceTarget: f}).recover(t.Context(), log); err != nil || !slices.Equal(f.calls, []string{"authority status", "host inspect", "probe", "host release", "authority release"}) {
 		t.Fatalf("recovery %v: %v", f.calls, err)
 	}
 }

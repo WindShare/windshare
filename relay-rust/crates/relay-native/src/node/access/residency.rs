@@ -67,14 +67,9 @@ impl Service {
             }
             *references += 1;
         } else {
-            let priority = if state.owner(attribution) {
-                AdmissionPriority::Owner
-            } else if matches!(attribution, Attribution::Anonymous) {
-                AdmissionPriority::Anonymous
-            } else {
-                AdmissionPriority::Authenticated
-            };
-            // Owners can use the full reserved pool instead of being capped by the public per-principal limit.
+            let priority = state.priority_for(share, attribution);
+            // Owners and controller-verified probes use the reserved pool instead of
+            // being capped by the public per-principal limit.
             let principal_limited = priority == AdmissionPriority::Authenticated && {
                 let principal = attribution.principal(*share.as_bytes());
                 state

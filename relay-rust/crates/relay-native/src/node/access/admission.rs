@@ -196,14 +196,11 @@ impl Service {
         let priority = state
             .known_priority(share, Some(bearer))
             .unwrap_or_else(|| {
-                if state
+                state
                     .authorized_identity(share, Some(bearer), Some(Ok(proof.as_ref())), now)
-                    .is_ok()
-                {
-                    AdmissionPriority::Authenticated
-                } else {
-                    AdmissionPriority::Anonymous
-                }
+                    .map_or(AdmissionPriority::Anonymous, |identity| {
+                        state.priority_for(share, identity.attribution())
+                    })
             });
         drop(state);
         // Keep proof of the signature on this connection. Policy is checked again at REGISTER.
@@ -313,7 +310,7 @@ impl State {
             });
         let local = bearer.and_then(|bearer| self.credentials.get(bearer.digest));
         let local_attribution = local.and_then(|entry| self.local_attribution(entry));
-        if resident.is_some_and(|attribution| self.owner(attribution))
+        if resident.is_some_and(|attribution| self.has_reserved_admission(share, attribution))
             || local_attribution.is_some_and(|attribution| self.owner(attribution))
         {
             Some(AdmissionPriority::Owner)
