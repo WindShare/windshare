@@ -242,6 +242,7 @@ type NativeResumeLease struct {
 	topLevel   *destinationauthority.TopLevelReservation
 	names      *outputnames.Mapper
 	nameStore  *namestore.Store
+	nameReport outputcap.CompatibleNameReport
 	repository *checkpointstore.Repository
 	store      *checkpointstore.FileExecutionStore
 }
@@ -366,6 +367,7 @@ func (lease *NativeResumeLease) Cleanup(
 	if err := lease.validateLocked(ctx); err != nil {
 		return 0, err
 	}
+	lease.nameReport = outputcap.CompatibleNameReport{}
 	record := lease.operation.Record()
 	if record.Lifecycle() != checkpointmodel.OrdinaryOperationCompleted &&
 		record.Lifecycle() != checkpointmodel.OrdinaryOperationDiscarded &&

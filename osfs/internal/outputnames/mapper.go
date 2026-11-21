@@ -94,7 +94,11 @@ func (mapper *Mapper) Bind(logical string) (string, error) {
 	}
 	parent, leaf := splitParent(physical)
 	owner, claimed := mapper.claims[physical]
-	if !claimed || owner == logical {
+	// Guard the exact private namespace that shares direct children with this
+	// root so reserved source children are repaired like any other incompatible name.
+	scope := outputcap.ReservedNamespaceScopeForEntry(mapper.resolver.root.Kind)
+	reserved := parent == "" && outputcap.ReservedRootName(scope, leaf)
+	if !reserved && (!claimed || owner == logical) {
 		if PortableName(leaf) {
 			mapper.claims[physical] = logical
 			return physical, nil

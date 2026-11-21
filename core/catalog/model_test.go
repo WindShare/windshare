@@ -196,8 +196,8 @@ func TestCanonicalNameAndPathPolicy(t *testing.T) {
 	if key := siblingCollisionKey("ǰ"); key != "ǰ" {
 		t.Fatalf("case-fold collision key was not recomposed to NFC: %q", key)
 	}
-	if _, err := CanonicalPath(".WSRESUME-state/file"); !errors.Is(err, ErrInvalidPath) {
-		t.Fatalf("reserved output-root path = %v", err)
+	if got, err := CanonicalPath(".WSRESUME-state/file"); err != nil || got != ".WSRESUME-state/file" {
+		t.Fatalf("output-marker-shaped logical path = %q, %v", got, err)
 	}
 	if nested, err := CanonicalPath("folder/.WSRESUME-state"); err != nil || nested != "folder/.WSRESUME-state" {
 		t.Fatalf("nested output-prefix path = %q, %v", nested, err)

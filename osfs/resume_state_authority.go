@@ -138,6 +138,9 @@ func (summary ResumeStateSummary) Items() []ResumeStateItem {
 func (summary ResumeStateSummary) Busy() bool {
 	return summary.inner.Busy()
 }
+func (summary ResumeStateSummary) CompatibleNameReport() FilesystemCompatibleNameReport {
+	return summary.inner.CompatibleNameReport()
+}
 func (summary ResumeStateSummary) Resumable() bool {
 	return summary.State() == ResumeOperationResumable
 }

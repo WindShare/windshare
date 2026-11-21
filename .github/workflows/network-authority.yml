@@ -20,6 +20,8 @@ on:
       - relay-rust/crates/relay-cloudflare/package-lock.json
       - deploy/network/history/**
       - deploy/network/release.json
+      - scripts/deploy/network-authority.py
+      - scripts/deploy/network_authority_test.py
       - .github/workflows/network-authority.yml
   push:
     branches: [main]
@@ -63,6 +65,8 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - name: Verify authority deployment helper
+        run: python3 -m unittest scripts/deploy/network_authority_test.py
       - uses: actions/setup-node@v7
         with:
           node-version: 24
@@ -92,6 +96,8 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - name: Verify authority deployment helper
+        run: python3 -m unittest scripts/deploy/network_authority_test.py
       - uses: actions/setup-node@v7
         with:
           node-version: lts/*
@@ -122,5 +128,5 @@ jobs:
           AUTHORITY_SIGNING_SEED: ${{ secrets.AUTHORITY_SIGNING_SEED }}
           INITIALIZATION_TOKEN: ${{ secrets.INITIALIZATION_TOKEN }}
         run: |
-          python scripts/deploy/network-authority.py
+          python scripts/deploy/network-authority.py --network-release deploy/network/release.json
           echo 'Network authority deployed. Sign in at the configured API host under `/console`.' >> "$GITHUB_STEP_SUMMARY"

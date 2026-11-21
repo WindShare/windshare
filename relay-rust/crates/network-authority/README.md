@@ -58,6 +58,8 @@ response confirms acceptance. Its timeout is 15 seconds.
 The console shows the signed generation/serial, mirror state, silent vantages and upcoming directory or ticket certificate expiry.
 Use [directory export](../../../deploy/network/README.md) to capture a verified revision for Git and embedded clients.
 
+After an accepting native node receives a verified usage reply advertising browser login, Desktop and the CLI offer service-account sign-in when adding it. The authority serves `/device`, and the node serves `/device/complete`. Keep both routes on their respective public HTTPS origins.
+
 ## Fleet operations
 
 Vantages poll for enrollment every minute and send one signed fleet report every five minutes. **Nodes** shows per-vantage reachability, WebSocket, STUN and TLS expiry. Three consecutive agreeing cycles from at least two reporting vantages, including one in the node's zone, can withdraw or restore a service. A fleet-wide fault, conflicting evidence or loss of the last healthy active service in a zone holds routing steady.

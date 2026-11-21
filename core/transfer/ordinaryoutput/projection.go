@@ -553,8 +553,7 @@ func canonicalArtifactComponent(value string) bool {
 		return false
 	}
 	canonical, err := catalog.CanonicalPath(value)
-	return err == nil && canonical == value &&
-		!strings.HasPrefix(strings.ToLower(value), ".wsresume")
+	return err == nil && canonical == value
 }
 
 func joinArtifactPath(root, suffix string) string {

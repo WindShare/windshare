@@ -9,7 +9,7 @@ import type { DirectZipProgressSnapshot, RetainedReceiveAction, RetainedReceiveO
 export type TaskRecoveryReadiness = import('../../application/receive/retained/readiness').RetainedContinuationReadiness
 
 export interface TaskBlocking {
-  readonly kind: 'reconnecting' | 'unavailable' | 'sender-capacity' | 'share-ended' | 'storage'
+  readonly kind: 'reconnecting' | 'unavailable' | 'sender-capacity' | 'relay-bandwidth' | 'share-ended' | 'storage'
   readonly description?: string
 }
 

@@ -10,6 +10,7 @@ import (
 
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
+	"github.com/windshare/windshare/engine/output"
 	"github.com/windshare/windshare/engine/recovery"
 	"github.com/windshare/windshare/osfs"
 )
@@ -141,6 +142,20 @@ func TestFilesystemDiscardProjectionSeparatesCommandOutcomeFromInventoryHistory(
 	if _, err := projectDiscardSummary(summary); !errors.Is(err, recovery.ErrContract) {
 		t.Fatalf("active discard report error=%v", err)
 	}
+	repaired := validResumeSummaryView()
+	repaired.state = osfs.ResumeOperationDiscarded
+	repaired.nameReport = osfs.FilesystemCompatibleNameReport{
+		RepairedCount: 3, ReportName: "windshare-names-abc-1-0.json", PageCount: 2,
+	}
+	report, err := projectDiscardSummary(repaired)
+	wantReport := output.CompatibleNameReport{RepairedCount: 3, ReportName: "windshare-names-abc-1-0.json", PageCount: 2}
+	if err != nil || report.CompatibleNameReport != wantReport {
+		t.Fatalf("repaired discard projection = (%+v, %v)", report, err)
+	}
+	repaired.nameReport = osfs.FilesystemCompatibleNameReport{RepairedCount: 1, ReportName: "windshare-names-abc-1-0.json"}
+	if _, err := projectDiscardSummary(repaired); !errors.Is(err, recovery.ErrContract) {
+		t.Fatalf("invalid compatible name report discard error=%v", err)
+	}
 }
 
 func TestInventoryAndDiscardFailClosedForDetachedValues(t *testing.T) {
@@ -165,6 +180,7 @@ type fakeResumeSummaryView struct {
 	Reason     osfs.FilesystemOutputStateReason
 	items      []osfs.ResumeStateItem
 	busy       bool
+	nameReport osfs.FilesystemCompatibleNameReport
 	valid      bool
 }
 
@@ -215,6 +231,12 @@ func (summary *fakeResumeSummaryView) Items() []osfs.ResumeStateItem {
 }
 func (summary *fakeResumeSummaryView) Busy() bool {
 	return summary != nil && summary.busy
+}
+func (summary *fakeResumeSummaryView) CompatibleNameReport() osfs.FilesystemCompatibleNameReport {
+	if summary == nil {
+		return osfs.FilesystemCompatibleNameReport{}
+	}
+	return summary.nameReport
 }
 func (summary *fakeResumeSummaryView) Valid() bool {
 	return summary != nil && summary.valid

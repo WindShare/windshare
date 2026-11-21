@@ -60,7 +60,7 @@ func TestRevisionContinuityRetainsResidentProgressAndSeparatesWeakReopen(t *test
 			}
 			comparison := CompareRevisions(first.Descriptor(), reopened.Descriptor())
 			if first.Descriptor().SourceMetadata().IsZero() || !comparison.AllowsReuse() ||
-				comparison.Comparison == RevisionComparisonByteAgreement {
+				comparison.Comparison != RevisionComparisonMetadataAgreement {
 				t.Fatalf("reopen lost best-effort source applicability: %+v", comparison)
 			}
 			if source.Calls() != 2 || source.files[0].closed.Load() != 1 {

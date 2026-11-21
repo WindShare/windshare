@@ -221,3 +221,36 @@ func TestRepairTraceDistinguishesChoiceFromReuse(t *testing.T) {
 		t.Fatalf("traces = %+v", events)
 	}
 }
+
+func TestRootChildUsingTheRecoveryPrefixGetsACompatibleName(t *testing.T) {
+	store := &memoryStore{}
+	mapper := testMapper(t, store, namespaceFunc(func(_, _ string) (outputcap.EntryKind, error) { return outputcap.EntryAbsent, nil }))
+	for _, name := range []string{".wsresume-notes.txt", ".WSResume", ".wſresume-part", ".wsresume-" + strings.Repeat("0", 64) + ".identity"} {
+		physical, err := mapper.Bind("docs/" + name)
+		if err != nil || strings.Contains(physical, "/") || outputcap.ReservedRootName(outputcap.ReservedNamespaceResultRoot, physical) {
+			t.Fatalf("%q -> %q, %v", name, physical, err)
+		}
+		if _, err := catalog.CanonicalPath(physical); err != nil {
+			t.Fatalf("%q -> %q is not a destination path: %v", name, physical, err)
+		}
+	}
+	repairedDir, err := mapper.Bind("docs/.wsresume-dir")
+	if err != nil || outputcap.ReservedRootName(outputcap.ReservedNamespaceResultRoot, repairedDir) {
+		t.Fatalf("top-level dir = %q, %v", repairedDir, err)
+	}
+	if child, err := mapper.Bind("docs/.wsresume-dir/child.txt"); err != nil || child != repairedDir+"/child.txt" {
+		t.Fatalf("repaired dir child = %q, %v", child, err)
+	}
+	if len(store.records) != 5 {
+		t.Fatalf("repairs were not persisted: %+v", store.records)
+	}
+	// Only direct children of a result root share a directory with recovery markers.
+	if physical, err := mapper.Bind("docs/sub/.wsresume-notes"); err != nil || physical != "sub/.wsresume-notes" {
+		t.Fatalf("nested name = %q, %v", physical, err)
+	}
+	// The container control directory lives outside the result root, so a child
+	// named .windshare-output does not collide here.
+	if physical, err := mapper.Bind("docs/.windshare-output"); err != nil || physical != ".windshare-output" {
+		t.Fatalf("container-control-named child = %q, %v", physical, err)
+	}
+}

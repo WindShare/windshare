@@ -25,7 +25,7 @@ function validateRevisionReadmission(payload: UnknownRecord): void {
     'retry-limit', 'admission-failed', 'settlement-failed', 'canceled',
   ], 'file revision readmission decision')
   member(payload.comparison_reason, [
-    'same-revision', 'metadata-agreement', 'saved-ranges-compared', 'context-changed',
+    'same-revision', 'metadata-agreement', 'context-changed',
     'size-changed', 'metadata-changed', 'metadata-unavailable',
   ], 'file revision comparison reason')
   decimalFields(payload, ['retained_bytes', 'reused_bytes'], 'file revision readmission')

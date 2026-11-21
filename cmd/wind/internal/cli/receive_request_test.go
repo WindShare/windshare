@@ -63,10 +63,10 @@ func TestReceiveCommandsNormalizeEquivalentCatalogSelections(t *testing.T) {
 			app := &App{Stderr: &bytes.Buffer{}}
 			request, outcome := app.parseReceiveRequest(context.Background(), command, []string{
 				encoded, "--only", "tree/", "--only", "cafe\u0301/",
-				"--only", "tree", "--only", "caf\u00e9", "--only", " spaced ",
+				"--only", "tree", "--only", "caf\u00e9", "--only", " spaced ", "--only", ".wsresume-notes.txt",
 			})
-			want := []string{"tree", "caf\u00e9", " spaced "}
-			wantTyped := []string{"tree/", "cafe\u0301/", " spaced "}
+			want := []string{"tree", "caf\u00e9", " spaced ", ".wsresume-notes.txt"}
+			wantTyped := []string{"tree/", "cafe\u0301/", " spaced ", ".wsresume-notes.txt"}
 			if outcome != requestParseReady || !slices.Equal(request.selection.paths, want) ||
 				!slices.Equal(request.selection.typed, wantTyped) {
 				t.Fatalf("selection=%q typed=%q outcome=%d", request.selection.paths, request.selection.typed, outcome)
@@ -84,7 +84,7 @@ func TestInvalidReceiveSelectionReportsTheOptionBeforeRequestingAKey(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{"", "./tree", "../escape", "tree//file.bin", "/tree", "tree//", "tree\\file", ".wsresume"} {
+	for _, path := range []string{"", "./tree", "../escape", "tree//file.bin", "/tree", "tree//", "tree\\file"} {
 		for _, command := range []receiveCommand{receiveGet, receiveResumeRetry} {
 			var stderr bytes.Buffer
 			// No input stream or engine: invalid paths must stop at argument parsing.

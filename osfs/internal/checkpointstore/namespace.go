@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	ControlDirectory     = ".windshare-output"
+	ControlDirectory     = outputcap.ControlDirectoryName
 	CheckpointsDirectory = "checkpoints"
 	RecordsDirectory     = "records"
 	AnchorsDirectory     = "anchors"

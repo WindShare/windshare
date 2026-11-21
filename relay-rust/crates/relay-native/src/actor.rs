@@ -24,7 +24,7 @@ use tokio::{
 use windshare_relay_core::{
     authority::StoredAuthority,
     lifecycle::ConnectionRef,
-    share::{Identity, Input, ShareRelay, WorkId, WorkResult},
+    share::{Identity, Input, RelayStep, ShareRelay, WorkId, WorkResult},
 };
 
 mod access;
@@ -149,28 +149,15 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
                     continue;
                 }
                 event = self.inbox.recv() => {
-                    let Some(event) = event else { return Ok(()); };
+                    let Some(event) = event else {
+                        return self.drain_commits().await;
+                    };
                     self.event(event)?;
                     continue;
                 }
                 result = complete(&mut self.commit) => {
                     self.commit = None;
-                    let (id, result) = result?;
-                    let outcome = match result {
-                        Ok(authority) => {
-                            // A JOIN can use descriptor bytes only from a confirmed
-                            // transaction, including after a lost receipt is retried.
-                            self.authority = authority;
-                            self.sync_residency();
-                            WorkResult::Complete
-                        }
-                        Err(error) => {
-                            tracing::error!(event = "storage_uncertain", share = ?self.identity.share,
-                                incarnation = ?id.incarnation(), work = id.sequence(), %error);
-                            WorkResult::Uncertain
-                        }
-                    };
-                    self.relay.handle(Input::Completed { id, result: outcome }, self.environment.now())
+                    self.finish_commit(result?)
                 }
                 () = wait(wake) => {
                     let input = if self.retry.is_some_and(|(at, _)| at <= Instant::now()) {
@@ -181,6 +168,49 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
             };
             self.outputs(step)?;
         }
+    }
+
+    async fn drain_commits(&mut self) -> Result<()> {
+        if self.commit.is_some() {
+            tracing::debug!(
+                event = "actor_draining_commits",
+                share = ?self.identity.share,
+                incarnation = ?self.identity.incarnation
+            );
+        }
+        // Graceful mailbox closure must not abandon an already-issued SQLite
+        // transaction; finish any queued persistence before returning Ok(()).
+        while let Some(commit) = self.commit.take() {
+            let step = self.finish_commit(commit.await?);
+            self.outputs(step)?;
+            self.sync_residency();
+        }
+        Ok(())
+    }
+
+    fn finish_commit(&mut self, committed: Committed) -> RelayStep {
+        let (id, result) = committed;
+        let outcome = match result {
+            Ok(authority) => {
+                // A JOIN can use descriptor bytes only from a confirmed
+                // transaction, including after a lost receipt is retried.
+                self.authority = authority;
+                self.sync_residency();
+                WorkResult::Complete
+            }
+            Err(error) => {
+                tracing::error!(event = "storage_uncertain", share = ?self.identity.share,
+                    incarnation = ?id.incarnation(), work = id.sequence(), %error);
+                WorkResult::Uncertain
+            }
+        };
+        self.relay.handle(
+            Input::Completed {
+                id,
+                result: outcome,
+            },
+            self.environment.now(),
+        )
     }
 
     fn wake(&self) -> Option<Instant> {

@@ -53,13 +53,21 @@ func (operation *Operation) Discard(ctx context.Context) error {
 	}
 	authority := operation.authority
 	id, mode := operation.intent.OperationID(), operation.mode
+	operation.setNameReport(outputcap.CompatibleNameReport{})
+	if mode == outputcap.ExecutionLiveOnly {
+		if operation.names != nil && operation.nameStore != nil {
+			summary, err := operation.nameStore.Export(operation.names, namesRoot(operation.topLevel), authority.destination.WithPublicContainer)
+			if err != nil {
+				return err
+			}
+			operation.setNameReport(summary)
+		}
+		return authority.Close()
+	}
 	// End the live lease before the shared recovery workflow acquires the exact
 	// operation. It revalidates persisted identity before deleting private state.
 	if err := authority.Close(); err != nil {
 		return err
-	}
-	if mode == outputcap.ExecutionLiveOnly {
-		return nil
 	}
 	repository, err := NewNativeResumeRepository(authority.rootPath, authority.platformFactory, authority.tracer)
 	if err != nil {
@@ -70,6 +78,9 @@ func (operation *Operation) Discard(ctx context.Context) error {
 		return err
 	}
 	result, err := recovery.Discard(ctx, id)
+	if report := result.CompatibleNameReport(); !report.Empty() {
+		operation.setNameReport(report)
+	}
 	if err == nil && result.State() != resumeauthority.OperationDiscarded {
 		return errors.New("owned output cleanup remains pending")
 	}

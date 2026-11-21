@@ -479,3 +479,48 @@ describe('v2 receiver LaneSet', () => {
     expect(fallback.calls).toEqual([])
   })
 })
+
+describe('v2 receiver LaneSet bandwidth wait observation', () => {
+  it('reports bandwidth waiting only when all eligible lanes are backed off while content is queued', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+    const lanes = new LaneSet()
+    const transitions: boolean[] = []
+    const unsubscribe = lanes.subscribeBandwidthWait(ALL_ROUTES, waiting => transitions.push(waiting))
+    expect(transitions).toEqual([false])
+
+    lanes.add({ id: 1, fetchBlock: async () => {
+      throw new BandwidthWaitError(15_000, new Error('fragment inactivity'))
+    } }, 'application-relay')
+
+    const abort = new AbortController()
+    const pending = lanes.fetch(demand(0n), ALL_ROUTES, abort.signal)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(transitions).toEqual([false, true])
+
+    // Adding a ready direct lane unblocks the download immediately.
+    lanes.add(new ImmediateLane(2), 'direct')
+    await expect(pending).resolves.toMatchObject({ data: Uint8Array.of(2) })
+    expect(transitions).toEqual([false, true, false])
+
+    // With direct still ready, a subsequent relay bandwidth wait must not report waiting.
+    const second = lanes.fetch(demand(1n), ALL_ROUTES, abort.signal)
+    await expect(second).resolves.toMatchObject({ data: Uint8Array.of(2) })
+    expect(transitions).toEqual([false, true, false])
+
+    // Removing the direct lane and queuing again re-enters waiting, then clears on cancel.
+    lanes.remove(2)
+    const cancel = new AbortController()
+    const third = lanes.fetch(demand(0n), ALL_ROUTES, cancel.signal)
+    const rejected = expect(third).rejects.toThrow('stopped')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(transitions).toEqual([false, true, false, true])
+
+    cancel.abort(new Error('stopped'))
+    await rejected
+    expect(transitions).toEqual([false, true, false, true, false])
+
+    unsubscribe()
+    lanes.close()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+})

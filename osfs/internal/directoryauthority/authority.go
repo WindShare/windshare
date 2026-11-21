@@ -46,6 +46,7 @@ type Authority struct {
 	snapshotter     ParentNamespaceSnapshotter
 	snapshotLimit   int
 	rootDisposition outputcap.RootOpenDisposition
+	reservedScope   outputcap.ReservedNamespaceScope
 	trace           func(TraceEvent)
 
 	gate sync.RWMutex
@@ -81,7 +82,11 @@ func New(platform Platform, config Config) (*Authority, error) {
 	if disposition != outputcap.CallerProvidedContainer && disposition != outputcap.AuthorityCreatedRoot {
 		return nil, ErrInvalidConfiguration
 	}
-	reservedKey, err := platform.CanonicalComponentKey(reservedControlComponent)
+	reservedScope := platform.ReservedNamespaceScope()
+	if !reservedScope.Valid() {
+		return nil, ErrInvalidConfiguration
+	}
+	reservedKey, err := platform.CanonicalComponentKey(outputcap.ReservedNamespacePrefix(reservedScope))
 	if err != nil || reservedKey == "" {
 		return nil, errors.Join(ErrInvalidConfiguration, err)
 	}
@@ -91,7 +96,7 @@ func New(platform Platform, config Config) (*Authority, error) {
 	}
 	return &Authority{
 		platform: platform, snapshotter: snapshotter, snapshotLimit: limit,
-		rootDisposition: disposition, trace: config.Trace,
+		rootDisposition: disposition, reservedScope: reservedScope, trace: config.Trace,
 		claims: make(map[ClaimID]*claimRecord), admissions: make(map[string]ClaimID), reservedKey: reservedKey,
 	}, nil
 }

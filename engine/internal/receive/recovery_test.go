@@ -14,11 +14,12 @@ import (
 
 type retainedAttemptAuthority struct {
 	getOutputAuthority
-	closes   int
-	discards int
-	stops    int
-	stopErr  error
-	busy     bool
+	closes     int
+	discards   int
+	stops      int
+	stopErr    error
+	busy       bool
+	nameReport output.CompatibleNameReport
 }
 
 func (authority *retainedAttemptAuthority) Close() error { authority.closes++; return nil }
@@ -32,6 +33,9 @@ func (authority *retainedAttemptAuthority) RecordShareStopped(context.Context) e
 func (authority *retainedAttemptAuthority) Discard(context.Context) error {
 	authority.discards++
 	return nil
+}
+func (authority *retainedAttemptAuthority) CompatibleNameReport() output.CompatibleNameReport {
+	return authority.nameReport
 }
 
 func TestReceiveAttemptLifetimeKeepsOneOperationUntilDecision(t *testing.T) {
@@ -122,6 +126,54 @@ func TestExplicitResumeNeverCreatesMissingOperation(t *testing.T) {
 	failure, ok := errors.AsType[Failure](completed.Err)
 	if !ok || failure.Code != FailureRetainedOutputMissing || completed.FailureClass != task.FailureLocal || !errors.Is(completed.Err, ErrRetainedOutputMissing) {
 		t.Fatalf("resume admission lost its refusal reason: %+v", completed)
+	}
+}
+
+func TestReceiveDiscardPropagatesAndValidatesCompatibleNameReport(t *testing.T) {
+	selection := getReopenSelection(t, true, nil)
+	decision, err := ordinaryoutput.NewSyntheticSelectionShape(ordinaryoutput.ShapeFallbackMultipleRoots)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantReport := output.CompatibleNameReport{
+		RepairedCount: 2, ReportName: "windshare-names-abc-1-0.json", PageCount: 1,
+	}
+	for _, tc := range []struct {
+		name       string
+		report     output.CompatibleNameReport
+		wantReason RecoveryReason
+	}{
+		{"valid report", wantReport, RecoveryTransferFailure},
+		{"invalid report requires inspection", output.CompatibleNameReport{RepairedCount: 1}, RecoveryNeedsInspection},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			events := []string{}
+			source := &layoutRecordingGetOutputAuthority{selection: selection, events: &events}
+			admission, err := resolveGetOutputOperation(context.Background(), source, &fixedGetShapeResolver{decision: decision, events: &events}, selection, OutputCreateOrResume, receivecontract.OperationID{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			authority := &retainedAttemptAuthority{nameReport: tc.report}
+			operation := admission.operation
+			operation.Mode, operation.Control = OutputResumable, authority
+			request := Request{
+				Capability: link.Link{Suite: link.SuiteSenderAuthenticated}, Connectivity: ConnectivityRelayOnly,
+				OnPause: func(context.Context, Pause) (RecoveryAction, error) { return RecoveryDiscard, nil },
+			}
+			result := runOperation(context.Background(), request, Dependencies{}, func(_ context.Context, _ preparedRequest, _ Dependencies, retained *getOutputPreparation) task.Completion[Result] {
+				*retained = getOutputPreparation{authority: authority, operation: &operation, mode: OutputResumable}
+				return settlePreparationFailure(stepLocalFailure, Failure{}, nil, nil)
+			})
+			if result.Value.Recovery.Reason != tc.wantReason {
+				t.Fatalf("recovery reason = %v, want %v", result.Value.Recovery.Reason, tc.wantReason)
+			}
+			if tc.report.Valid() && result.Value.CompatibleNameReport != tc.report {
+				t.Fatalf("discard report = %+v, want %+v", result.Value.CompatibleNameReport, tc.report)
+			}
+			if !tc.report.Valid() && !errors.Is(result.Err, ErrInvalidResult) {
+				t.Fatalf("invalid discard report err = %v, want %v", result.Err, ErrInvalidResult)
+			}
+		})
 	}
 }
 

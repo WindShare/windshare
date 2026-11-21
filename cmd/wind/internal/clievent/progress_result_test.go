@@ -87,6 +87,22 @@ func TestResultConstructorsFreezeExitAndDriftSemantics(t *testing.T) {
 	if err != nil || !success.Valid() {
 		t.Fatalf("valid success rejected: %+v err=%v", success, err)
 	}
+	if _, present := success.CompatibleNameReport(); present {
+		t.Fatalf("empty compatible name report reported present")
+	}
+	repaired, err := NewTransferResult(TransferResultSpec{
+		Status: ResultSuccess, ExitCode: ExitSuccess, Drift: DriftNone,
+		Elapsed: time.Second, Destination: destination, CountersExact: true,
+		CompatibleNameReport: CompatibleNameReport{
+			RepairedCount: 2, ReportName: appobs.NewDisplayName("windshare-names-abc-1-0.json"), PageCount: 1,
+		},
+	})
+	if err != nil || !repaired.Valid() {
+		t.Fatalf("valid repaired transfer result rejected: %+v err=%v", repaired, err)
+	}
+	if report, present := repaired.CompatibleNameReport(); !present || report.RepairedCount != 2 || report.PageCount != 1 || report.ReportName.Text() != "windshare-names-abc-1-0.json" {
+		t.Fatalf("compatible name report = (%+v, %t)", report, present)
+	}
 	driftFailure, _ := appobs.NewFailure(appobs.FailureSourceRevisionChanged)
 	drifted, err := NewTransferResult(TransferResultSpec{
 		Status: ResultPartial, ExitCode: ExitDrift, Drift: DriftSource,
@@ -102,6 +118,10 @@ func TestResultConstructorsFreezeExitAndDriftSemantics(t *testing.T) {
 		{Status: ResultPartial, ExitCode: ExitDrift, Drift: DriftNone, Destination: destination},
 		{Status: ResultPartial, ExitCode: ExitFailure, Drift: DriftNone, Destination: destination},
 		{Status: ResultPartial, ExitCode: ExitFailure, Drift: DriftNone},
+		{Status: ResultSuccess, ExitCode: ExitSuccess, Drift: DriftNone, Destination: destination, CompatibleNameReport: CompatibleNameReport{RepairedCount: 1}},
+		{Status: ResultSuccess, ExitCode: ExitSuccess, Drift: DriftNone, Destination: destination, CompatibleNameReport: CompatibleNameReport{ReportName: appobs.NewDisplayName("windshare-names-abc-1-0.json")}},
+		{Status: ResultSuccess, ExitCode: ExitSuccess, Drift: DriftNone, Destination: destination, CompatibleNameReport: CompatibleNameReport{PageCount: 1}},
+		{Status: ResultSuccess, ExitCode: ExitSuccess, Drift: DriftNone, Destination: destination, CompatibleNameReport: CompatibleNameReport{RepairedCount: 1, ReportName: appobs.NewDisplayName("windshare-names-abc-1-0.json")}},
 	}
 	for _, candidate := range invalid {
 		if _, err := NewTransferResult(candidate); err == nil {

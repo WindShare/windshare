@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { BandwidthWaitError } from '../../src/contracts/capacity'
 import { DownloadMetrics } from '../../src/receiver/download-metrics'
 
 import { createReceivedProtocolError } from '../../src/diagnostics/incident/fact'
@@ -7,7 +8,7 @@ import {
   type BlockRouteEligibility,
   type BlockSlice,
   BlockLaneAttemptsError,
-  type LaneSet,
+  LaneSet,
   type RouteAuthorizedBlockRangeReader,
 } from '../../src/content/broker'
 import { REVISION_CODE_QUOTA } from '../../src/content/flow'
@@ -465,6 +466,67 @@ describe('v2 supervised content generations', () => {
     expect(second.ranges).toHaveLength(0)
     expect(second.releases).toBe(1)
     content.close()
+  })
+
+  it('rebinds scoped bandwidth-wait observation across generation replacement and clears on retirement', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+    const descriptor = revision(9)
+    const firstLanes = new LaneSet()
+    const secondLanes = new LaneSet()
+    const listeners = new Set<() => void>()
+    let current: ContentGeneration | undefined = {
+      id: 1, revisions: {} as RevisionService, broker: {} as RouteAuthorizedBlockRangeReader, lanes: firstLanes,
+    }
+    const provider: ContentGenerationProvider = {
+      currentGeneration: () => current,
+      subscribeGeneration: listener => { listeners.add(listener); return () => listeners.delete(listener) },
+      execute: async () => { throw new Error('unused') },
+      recover: async () => false,
+      isCurrent: generation => generation === current,
+      contentLaneCount: routes => current?.lanes.eligibleSize(routes) ?? 0,
+    }
+    const content = new SupervisedContent(provider)
+    const routes = new ConnectivityRouteAuthority()
+    const scoped = content.forRoutes(routes)
+    const states: boolean[] = []
+    const unsubscribe = scoped.lanes.subscribeBandwidthWait!(waiting => states.push(waiting))
+    expect(states).toEqual([false])
+
+    firstLanes.add({ id: 1, fetchBlock: async () => {
+      throw new BandwidthWaitError(15_000, new Error('busy'))
+    } }, 'application-relay')
+    const firstRead = firstLanes.fetch({ descriptor, leaseId: identity(9), localBlockIndex: 0n }, routes, new AbortController().signal)
+    const firstRejected = expect(firstRead).rejects.toThrow(/retired/)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(states).toEqual([false, true])
+
+    firstLanes.retire()
+    await firstRejected
+    expect(states).toEqual([false, true, false])
+
+    current = {
+      id: 2, revisions: {} as RevisionService, broker: {} as RouteAuthorizedBlockRangeReader, lanes: secondLanes,
+    }
+    for (const listener of listeners) listener()
+
+    secondLanes.add({ id: 2, fetchBlock: async () => {
+      throw new BandwidthWaitError(15_000, new Error('busy'))
+    } }, 'application-relay')
+    const secondAbort = new AbortController()
+    const secondRead = secondLanes.fetch({ descriptor, leaseId: identity(10), localBlockIndex: 0n }, routes, secondAbort.signal)
+    const secondRejected = expect(secondRead).rejects.toThrow(/stopped/)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(states).toEqual([false, true, false, true])
+
+    secondAbort.abort(new Error('stopped'))
+    await secondRejected
+    expect(states).toEqual([false, true, false, true, false])
+
+    unsubscribe()
+    content.close()
+    firstLanes.close()
+    secondLanes.close()
+    vi.useRealTimers()
   })
 })
 

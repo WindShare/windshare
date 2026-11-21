@@ -90,6 +90,7 @@ export interface BlockRangeReader {
 
 export interface ContentLaneStatus {
   readonly downloadConnectivity?: (final?: boolean) => DownloadConnectivitySnapshot
+  readonly subscribeBandwidthWait?: (listener: (waiting: boolean) => void) => () => void
   readonly size: number
 }
 

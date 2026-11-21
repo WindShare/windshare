@@ -30,7 +30,7 @@ server {
         return 503;
     }
     location /downloads/ {
-        alias /srv/windshare/current/downloads/;
+        alias /srv/windshare/downloads/;
         autoindex off;
         add_header X-Content-Type-Options nosniff;
     }

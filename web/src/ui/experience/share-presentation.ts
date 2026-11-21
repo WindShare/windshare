@@ -47,11 +47,15 @@ export function initialJoinStatus(join: InitialJoinState, t = receiverCopy.en.co
 }
 
 const RECONNECTING: TaskBlocking = Object.freeze({ kind: 'reconnecting' })
+const RELAY_BANDWIDTH: TaskBlocking = Object.freeze({ kind: 'relay-bandwidth' })
 const SHARE_ENDED: TaskBlocking = Object.freeze({ kind: 'share-ended' })
 const UNAVAILABLE: TaskBlocking = Object.freeze({ kind: 'unavailable' })
 
 export function taskConnectionBlocking(connection: ReceiverSnapshot['connection']): TaskBlocking | null {
-  if (connection.kind === 'reconnecting') return RECONNECTING
+  if (connection.kind === 'reconnecting') {
+    return connection.activity.kind === 'waiting' && connection.activity.reason === 'bandwidth'
+      ? RELAY_BANDWIDTH : RECONNECTING
+  }
   if (connection.kind === 'ended') return SHARE_ENDED
   if (connection.kind === 'unavailable') return UNAVAILABLE
   return null

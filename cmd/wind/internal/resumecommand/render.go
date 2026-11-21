@@ -177,6 +177,17 @@ func (textRenderer) DiscardReport(itemNumber int, report resumeDiscardReport) (s
 	if report.Attention != "" {
 		fmt.Fprintf(&output, " reason=%q", report.Attention)
 	}
+	if !report.CompatibleNameReport.Empty() {
+		fmt.Fprintf(
+			&output,
+			" repaired_names=%d name_report=%q",
+			report.CompatibleNameReport.RepairedCount,
+			report.CompatibleNameReport.ReportName,
+		)
+		if report.CompatibleNameReport.PageCount > 1 {
+			fmt.Fprintf(&output, " name_report_pages=%d", report.CompatibleNameReport.PageCount)
+		}
+	}
 	output.WriteByte('\n')
 	for _, item := range report.BlockedItems {
 		if item.PathKnown {

@@ -26,6 +26,28 @@ def https_origin(address):
     return "https://" + url.netloc
 
 
+def verify_release_authority(release, api, root):
+    """Ensure a deployment targeting a network release matches its client-pinned authority."""
+    authority = release.get("authority")
+    if authority is None:
+        return
+    if not isinstance(authority, dict):
+        raise ValueError("Invalid authority section in network release manifest")
+    release_url = authority.get("url")
+    release_root = authority.get("root")
+    if not isinstance(release_url, str) or not isinstance(release_root, str) or not release_root:
+        raise ValueError("Network release authority requires url and root")
+    expected_api = https_origin(release_url)
+    if api != expected_api:
+        raise ValueError(
+            f"Deployment API origin {api} does not match network release authority url {expected_api}"
+        )
+    if root != release_root:
+        raise ValueError(
+            f"Deployment trust root {root} does not match network release authority root {release_root}"
+        )
+
+
 def prepare_token(path, host):
     if os.environ.get("CI"):
         raise ValueError("Prepare the administrator link on the operator machine")
@@ -68,6 +90,11 @@ def deploy(args):
     if origin != host and (not args.zone or not HOST.fullmatch(args.zone) or not origin.endswith("." + args.zone)):
         raise ValueError("The SaaS origin must belong to the selected zone")
     trust = json.loads(args.trust.read_text(encoding="utf-8") if args.trust else os.environ["AUTHORITY_TRUST"])
+    if args.network_release:
+        release = json.loads(args.network_release.read_text(encoding="utf-8"))
+        if not isinstance(release, dict):
+            raise ValueError("Network release manifest must be a JSON object")
+        verify_release_authority(release, api, trust["root"])
     seed = args.online_seed.read_text(encoding="utf-8").strip() if args.online_seed else os.environ["AUTHORITY_SIGNING_SEED"].strip()
     token = args.initialization_token.read_text(encoding="utf-8").strip() if args.initialization_token else os.environ.get("INITIALIZATION_TOKEN", "").strip()
     if not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", token):
@@ -151,6 +178,7 @@ def main():
     parser.add_argument("--online-seed", type=Path)
     parser.add_argument("--initialization-token", type=Path)
     parser.add_argument("--prepare-initialization", type=Path)
+    parser.add_argument("--network-release", type=Path)
     deploy(parser.parse_args())
 
 

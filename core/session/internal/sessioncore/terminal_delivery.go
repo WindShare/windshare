@@ -6,6 +6,7 @@ import (
 	"github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/protocolsession"
+	"slices"
 )
 
 // TerminalSendObservation carries only physical evidence, never operation or
@@ -128,12 +129,7 @@ func (outbound *Responses) sendTerminalRecipients(
 		if completion.Err != nil &&
 			(completion.Outcome == protocolsession.SendOutcomeTransportConfirmed ||
 				(completion.Outcome == protocolsession.SendOutcomeDropped &&
-					!errorTreeContainsOnly(
-						completion.Err,
-						protocolsession.ErrWriterStopped,
-						context.Canceled,
-						context.DeadlineExceeded,
-					))) {
+					!isNaturalTerminalDropError(completion.Err))) {
 			hardAdmissionError = errors.Join(hardAdmissionError, completion.Err)
 		}
 		combined = errors.Join(combined, completion.Err)
@@ -159,12 +155,9 @@ func terminalCompletionNaturallyRetired(
 	}
 	switch completion.TransportDisposition {
 	case 0:
-		return errorTreeContainsOnly(
-			completion.Err,
-			protocolsession.ErrWriterStopped,
-			context.Canceled,
-			context.DeadlineExceeded,
-		)
+		// A queued terminal never reached SendTerminal when the writer stopped
+		// because cancellation or a preceding send's channel retirement won first.
+		return isNaturalTerminalDropError(completion.Err)
 	case framechannel.SendRejected:
 		// SessionWriter sends with its lane lifecycle context. Once the last
 		// writer is unusable, an exact cancellation rejection is the claimed-send
@@ -173,6 +166,16 @@ func terminalCompletionNaturallyRetired(
 	default:
 		return false
 	}
+}
+
+func isNaturalTerminalDropError(err error) bool {
+	return errorTreeContainsOnly(
+		err,
+		protocolsession.ErrWriterStopped,
+		context.Canceled,
+		context.DeadlineExceeded,
+		framechannel.ErrSendRetired,
+	)
 }
 
 func errorTreeContainsOnly(err error, allowed ...error) bool {
@@ -189,6 +192,11 @@ func errorTreeContainsOnly(err error, allowed ...error) bool {
 				return false
 			}
 		}
+		return true
+	}
+	// Match classified wrapper errors (such as framechannel.RetireSend) before
+	// unwrapping to their underlying transport cause.
+	if matcher, ok := err.(interface{ Is(error) bool }); ok && slices.ContainsFunc(allowed, matcher.Is) {
 		return true
 	}
 	if wrapped := errors.Unwrap(err); wrapped != nil {

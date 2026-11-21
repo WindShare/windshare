@@ -11,6 +11,7 @@ import (
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
+	"github.com/windshare/windshare/osfs/internal/outputcap"
 	"github.com/windshare/windshare/osfs/internal/resumeauthority"
 )
 
@@ -139,6 +140,7 @@ type publicOrdinaryLease struct {
 	header        resumeauthority.Header
 	items         []resumeauthority.Item
 	cleanup       resumeauthority.CleanupState
+	nameReport    outputcap.CompatibleNameReport
 	snapshotErr   error
 	transitionErr error
 	cleanupErr    error
@@ -192,6 +194,10 @@ func (lease *publicOrdinaryLease) Transition(
 
 func (lease *publicOrdinaryLease) Cleanup(context.Context) (resumeauthority.CleanupState, error) {
 	return lease.cleanup, lease.cleanupErr
+}
+
+func (lease *publicOrdinaryLease) CompatibleNameReport() outputcap.CompatibleNameReport {
+	return lease.nameReport
 }
 
 func (lease *publicOrdinaryLease) Close() error {
@@ -310,8 +316,11 @@ func TestRepositoryResumeStateAuthoritySurfacesBusyAndUnknownInventory(t *testin
 
 func TestRepositoryResumeStateAuthorityDeindexesBeforeSafeDiscard(t *testing.T) {
 	fixture := newPublicOrdinaryFixture(t, 0x51)
+	wantReport := FilesystemCompatibleNameReport{
+		RepairedCount: 2, ReportName: "windshare-names-abc-1-0.json", PageCount: 1,
+	}
 	lease := &publicOrdinaryLease{
-		header: fixture.header, cleanup: resumeauthority.CleanupComplete,
+		header: fixture.header, cleanup: resumeauthority.CleanupComplete, nameReport: wantReport,
 	}
 	authority, err := newResumeStateAuthority(&publicOrdinaryStore{
 		header: fixture.header, lease: lease,
@@ -321,6 +330,7 @@ func TestRepositoryResumeStateAuthorityDeindexesBeforeSafeDiscard(t *testing.T) 
 	}
 	summary, err := authority.Discard(context.Background(), fixture.operation)
 	if err != nil || summary.State() != ResumeOperationDiscarded ||
+		summary.CompatibleNameReport() != wantReport ||
 		!slices.Equal(lease.transitions, []checkpointmodel.OrdinaryLifecycleEvent{
 			checkpointmodel.OrdinaryLifecycleDiscard,
 		}) || lease.closed != 1 {

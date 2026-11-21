@@ -30,17 +30,17 @@ func encode(bytes []byte) string { return base64.RawURLEncoding.EncodeToString(b
 func claimant(pending *PendingSetup) map[string]string {
 	return map[string]string{"enrollment_id": pending.enrollment().ID, "claim_secret": pending.ClaimSecret}
 }
-func (run *workflow) continueEnrollment(ctx context.Context, saved Snapshot, progress func(Progress), noBrowser bool) (Result, error) {
+func (run *workflow) continueEnrollment(ctx context.Context, saved Snapshot, progress func(Progress)) (Result, error) {
 	if saved.Pending.phase.stage() == (cancelling{}).stage() {
 		if err := run.finishCancellation(ctx, saved.Pending); err != nil {
 			return Result{}, err
 		}
 		return Result{}, ErrSetupSuperseded
 	}
-	return run.enroll(ctx, saved, progress, noBrowser)
+	return run.enroll(ctx, saved, progress)
 }
 
-func (run *workflow) enroll(ctx context.Context, saved Snapshot, progress func(Progress), noBrowser bool) (result Result, resultErr error) {
+func (run *workflow) enroll(ctx context.Context, saved Snapshot, progress func(Progress)) (result Result, resultErr error) {
 	pending := saved.Pending
 	defer func() {
 		if errors.Is(resultErr, ErrExpired) {
@@ -70,12 +70,6 @@ func (run *workflow) enroll(ctx context.Context, saved Snapshot, progress func(P
 	}
 	event.ServiceLogin = login
 	run.emit(progress, event)
-	if !noBrowser && run.dependencies.OpenBrowser != nil {
-		if err := run.dependencies.OpenBrowser(ctx, pending.enrollment().VerificationURL); err != nil {
-			event.Stage = "browser_unavailable"
-			run.emit(progress, event)
-		}
-	}
 	claimed, err := run.awaitCredential(ctx, pending, progress)
 	if err != nil {
 		return Result{}, err

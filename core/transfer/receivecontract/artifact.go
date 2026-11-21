@@ -305,8 +305,7 @@ func canonicalSourcePath(value string) (string, string, error) {
 
 func canonicalComponent(value string) error {
 	canonical, err := catalog.CanonicalName(value)
-	if err != nil || canonical != value || len([]byte(value)) > MaxResultComponentBytes ||
-		strings.HasPrefix(strings.ToLower(value), ".wsresume") {
+	if err != nil || canonical != value || len([]byte(value)) > MaxResultComponentBytes {
 		return ErrInvalidReceiveContract
 	}
 	return nil

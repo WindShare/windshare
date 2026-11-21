@@ -94,6 +94,10 @@ describe('portal release download recommendation', () => {
       platform: 'Win32',
     })).toEqual({ platform: 'windows', arch: 'amd64' })
     expect(detectVisitorEnvironment({
+      userAgent: 'Mozilla/5.0 (X11; Linux aarch64; rv:136.0) Gecko/20100101 Firefox/136.0',
+      platform: 'Linux aarch64',
+    })).toEqual({ platform: 'linux', arch: 'arm64' })
+    expect(detectVisitorEnvironment({
       userAgent: 'Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 Mobile',
       platform: 'Linux armv8l',
     })).toEqual({ platform: undefined, arch: undefined })
@@ -103,10 +107,12 @@ describe('portal release download recommendation', () => {
     })).toEqual({ platform: undefined, arch: undefined })
   })
 
-  it('recommends matching desktop first, falls back to CLI when allowed, and avoids cross-OS guesses', () => {
+  it('recommends matching desktop first, falls back to CLI when allowed, and avoids cross-OS or cross-arch guesses', () => {
     const cliOnly = collectReleaseDownloads('v0.1.3', RELEASE_ASSETS_V013)
     const winVisitor = { platform: 'windows', arch: 'amd64' } as const
     const macVisitor = { platform: 'macos', arch: 'arm64' } as const
+    const linuxArmVisitor = { platform: 'linux', arch: 'arm64' } as const
+    const linuxUnknownArchVisitor = { platform: 'linux', arch: undefined } as const
 
     expect(selectRecommendedAsset(cliOnly, winVisitor, {
       preferredKind: 'desktop',
@@ -116,10 +122,24 @@ describe('portal release download recommendation', () => {
       preferredKind: 'desktop',
       allowOtherKind: true,
     })).toBeUndefined()
+    expect(selectRecommendedAsset(cliOnly, linuxArmVisitor, {
+      preferredKind: 'desktop',
+      allowOtherKind: true,
+    })).toBeUndefined()
+    expect(selectRecommendedAsset(cliOnly, linuxArmVisitor, {
+      preferredKind: 'cli',
+      allowOtherKind: false,
+    })).toBeUndefined()
+    expect(selectRecommendedAsset(cliOnly, linuxUnknownArchVisitor, {
+      preferredKind: 'desktop',
+      allowOtherKind: true,
+    })?.filename).toBe('windshare-v0.1.3-linux-amd64.zip')
 
     const withDesktop = collectReleaseDownloads('v0.2.0', [
       'windshare-v0.2.0-windows-amd64.zip',
       'windshare-desktop-v0.2.0-windows-amd64.msi',
+      'windshare-desktop-v0.2.0-linux-amd64.AppImage',
+      'windshare-v0.2.0-linux-arm64.zip',
     ])
     expect(selectRecommendedAsset(withDesktop, winVisitor, {
       preferredKind: 'desktop',
@@ -129,6 +149,14 @@ describe('portal release download recommendation', () => {
       preferredKind: 'cli',
       allowOtherKind: false,
     })?.filename).toBe('windshare-v0.2.0-windows-amd64.zip')
+    expect(selectRecommendedAsset(withDesktop, linuxArmVisitor, {
+      preferredKind: 'desktop',
+      allowOtherKind: true,
+    })?.filename).toBe('windshare-v0.2.0-linux-arm64.zip')
+    expect(selectRecommendedAsset(withDesktop, linuxArmVisitor, {
+      preferredKind: 'desktop',
+      allowOtherKind: false,
+    })).toBeUndefined()
   })
 
   it('formats distinct labels for desktop and CLI packages', () => {

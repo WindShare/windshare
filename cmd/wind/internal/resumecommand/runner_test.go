@@ -302,6 +302,54 @@ func TestResumeDiscardRequiresFreshOrdinalAndExactTerminalIntent(t *testing.T) {
 			t.Fatalf("stdout=%q missing=%q", stdout.String(), want)
 		}
 	}
+	if strings.Contains(stdout.String(), "repaired_names=") || strings.Contains(stdout.String(), "name_report=") {
+		t.Fatalf("empty compatible name report appeared in stdout=%q", stdout.String())
+	}
+}
+
+func TestResumeDiscardRendersCompatibleNameReport(t *testing.T) {
+	snapshot, _ := newResumeInventorySnapshot([]resumeOperation{testResumeOperation("1", resumeOperationResumable)}, false)
+	for _, tc := range []struct {
+		name      string
+		report    engine.OutputCompatibleNameReport
+		want      []string
+		forbidden string
+	}{
+		{
+			name:      "single page",
+			report:    engine.OutputCompatibleNameReport{RepairedCount: 2, ReportName: "windshare-names-abc-1-0.json", PageCount: 1},
+			want:      []string{`repaired_names=2`, `name_report="windshare-names-abc-1-0.json"`},
+			forbidden: "name_report_pages=",
+		},
+		{
+			name:   "multi page",
+			report: engine.OutputCompatibleNameReport{RepairedCount: 5000, ReportName: "windshare-names-abc-1-0.json", PageCount: 3},
+			want:   []string{`repaired_names=5000`, `name_report="windshare-names-abc-1-0.json"`, `name_report_pages=3`},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inventory := &fakeResumeStateInventory{
+				snapshot: snapshot,
+				discardReport: resumeDiscardReport{
+					Status: resumeDiscardStatusDiscarded, ID: testResumeID("1"), CompatibleNameReport: tc.report,
+				},
+			}
+			app, stdout, stderr := newResumeTestApp()
+			app.resumeInventories = &fakeResumeStateInventoryOpener{inventory: inventory}
+			app.resumeConfirmation = &fakeResumeConfirmationTerminal{interactive: true, line: "discard 1"}
+			if result := app.Run(context.Background(), []string{"resume", "discard", "-o", t.TempDir(), "--item", "1"}); result != ResultOK {
+				t.Fatalf("result=%d stderr=%q", result, stderr.String())
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(stdout.String(), want) {
+					t.Fatalf("stdout=%q missing=%q", stdout.String(), want)
+				}
+			}
+			if tc.forbidden != "" && strings.Contains(stdout.String(), tc.forbidden) {
+				t.Fatalf("stdout=%q unexpectedly contained %q", stdout.String(), tc.forbidden)
+			}
+		})
+	}
 }
 
 func TestResumeDiscardRejectsRedirectedInexactUnknownAndRunningSelections(t *testing.T) {

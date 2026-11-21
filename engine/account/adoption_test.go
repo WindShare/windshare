@@ -11,6 +11,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/serviceauthority"
 )
 
@@ -299,4 +300,166 @@ func TestRequestIssuanceDenialSerializesWithLocalGate(t *testing.T) {
 			t.Fatalf("denial not persisted: record=%+v err=%v", stored, err)
 		}
 	})
+}
+
+func TestLateRefreshDoesNotOverwriteNewerDenial(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		reason string
+		deny   func(t *testing.T, cli *Service, active Snapshot, issued session)
+	}{
+		{
+			name:   "concurrent revoke",
+			reason: denialCredentialRevoked,
+			deny: func(t *testing.T, cli *Service, active Snapshot, issued session) {
+				if err := cli.RevokeCredential(t.Context(), active.Account, issued.Credential); err != nil {
+					t.Fatalf("cli revoke: %v", err)
+				}
+			},
+		},
+		{
+			name:   "concurrent account block",
+			reason: denialAccountBlocked,
+			deny: func(t *testing.T, cli *Service, _ Snapshot, _ session) {
+				if _, err := cli.RefreshOnce(t.Context()); CommandErrorCode(err) != "account_denied" {
+					t.Fatalf("cli block refresh: %v", err)
+				}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			config, issued := accountFixture(t)
+			config.Store = FileStore{Path: filepath.Join(t.TempDir(), "account.json")}
+			if _, err := config.Store.Update(t.Context(), func(Record) (Record, error) {
+				return cachedRecord(issued), nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			stream, err := diagnostics.NewStream(32, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			desktopCfg := config
+			desktopCfg.Diagnostics = stream.Sink()
+			inFlight := make(chan struct{})
+			release := make(chan struct{})
+			desktopCfg.Client = clientFunc(func(request *http.Request) (*http.Response, error) {
+				if request.URL.Path != "/v1/accounts/ticket" {
+					t.Errorf("unexpected desktop route %s", request.URL.Path)
+				}
+				close(inFlight)
+				<-release
+				return accountReply(t, http.StatusOK, issued), nil
+			})
+			desktop := testService(t, desktopCfg)
+
+			cliCfg := config
+			cliCfg.Client = clientFunc(func(request *http.Request) (*http.Response, error) {
+				switch request.URL.Path {
+				case "/v1/accounts/credentials/revoke":
+					return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{}`))}, nil
+				case "/v1/accounts/ticket":
+					return accountReply(t, http.StatusForbidden, fault{Kind: "denied", Reason: tc.reason}), nil
+				default:
+					t.Errorf("unexpected cli route %s", request.URL.Path)
+					return nil, context.Canceled
+				}
+			})
+			cli := testService(t, cliCfg)
+			active, _ := cli.Snapshot()
+
+			done := make(chan error, 1)
+			go func() {
+				_, refreshErr := desktop.RefreshOnce(t.Context())
+				done <- refreshErr
+			}()
+			<-inFlight
+
+			tc.deny(t, cli, active, issued)
+			close(release)
+
+			if refreshErr := <-done; CommandErrorCode(refreshErr) != "account_denied" {
+				t.Fatalf("late refresh error = %v (%s), want account_denied", refreshErr, CommandErrorCode(refreshErr))
+			}
+			stored, err := config.Store.Load(t.Context())
+			if err != nil || stored.Denial != tc.reason {
+				t.Fatalf("stored denial = %q (err=%v), want %q", stored.Denial, err, tc.reason)
+			}
+			if snapshot, _ := desktop.Snapshot(); snapshot.State != Denied || snapshot.Reason != tc.reason {
+				t.Fatalf("desktop snapshot = %+v, want Denied/%s", snapshot, tc.reason)
+			}
+
+			desktop.Close()
+			var sawSuperseded bool
+			for _, rec := range drainDiagnostics(stream) {
+				if rec.Name() == "account_issuance_superseded_by_denial" && rec.Payload().Get("reason").Text() == tc.reason {
+					sawSuperseded = true
+				}
+			}
+			if !sawSuperseded {
+				t.Fatalf("missing account_issuance_superseded_by_denial diagnostic for %s", tc.reason)
+			}
+		})
+	}
+}
+
+func TestAccountUnblockStillRecoversWhileRevokedCredentialRequiresNewLogin(t *testing.T) {
+	config, issued := accountFixture(t)
+	replacement := otherAccount(t, config, issued)
+
+	blocked := cachedRecord(issued)
+	blocked.Denial = denialAccountBlocked
+	config.Store = &MemoryStore{record: blocked}
+	config.Client = clientFunc(func(request *http.Request) (*http.Response, error) {
+		switch request.URL.Path {
+		case "/v1/accounts/ticket":
+			return accountReply(t, http.StatusOK, issued), nil
+		case "/v1/accounts/login":
+			return accountReply(t, http.StatusOK, replacement), nil
+		default:
+			t.Errorf("unexpected route %s", request.URL.Path)
+			return nil, context.Canceled
+		}
+	})
+	service := testService(t, config)
+
+	// A refresh that started from a reversible account_blocked state must still recover on unblock.
+	if outcome, err := service.RefreshOnce(t.Context()); err != nil || outcome != RefreshSucceeded {
+		t.Fatalf("unblock recovery failed: outcome=%s err=%v", outcome, err)
+	}
+	if stored, err := config.Store.Load(t.Context()); err != nil || stored.Denial != "" {
+		t.Fatalf("unblock did not clear stored denial: %+v, %v", stored, err)
+	}
+	if snapshot, _ := service.Snapshot(); snapshot.State != Ready {
+		t.Fatalf("unblock snapshot = %+v, want Ready", snapshot)
+	}
+
+	// Permanent credential_revoked cannot be cleared by a non-login refresh even if a stale 200 arrives.
+	if _, err := config.Store.Update(t.Context(), func(current Record) (Record, error) {
+		current.Denial = denialCredentialRevoked
+		return current, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.RefreshOnce(t.Context()); CommandErrorCode(err) != "account_denied" {
+		t.Fatalf("revoked refresh = %v, want account_denied", err)
+	}
+	if stored, err := config.Store.Load(t.Context()); err != nil || stored.Denial != denialCredentialRevoked {
+		t.Fatalf("revoked denial cleared by refresh: %+v, %v", stored, err)
+	}
+	if snapshot, _ := service.Snapshot(); snapshot.State != Denied || snapshot.Reason != denialCredentialRevoked {
+		t.Fatalf("revoked snapshot = %+v, want Denied/%s", snapshot, denialCredentialRevoked)
+	}
+
+	// Explicit Login installs a new credential and replaces the revoked one.
+	if err := service.Login(t.Context(), "alice", "new-password"); err != nil {
+		t.Fatalf("login after revoke: %v", err)
+	}
+	if stored, err := config.Store.Load(t.Context()); err != nil || stored.Denial != "" || stored.Credential.ID != replacement.Credential {
+		t.Fatalf("login did not replace revoked credential: %+v, %v", stored, err)
+	}
+	if snapshot, _ := service.Snapshot(); snapshot.State != Ready {
+		t.Fatalf("post-login snapshot = %+v, want Ready", snapshot)
+	}
 }

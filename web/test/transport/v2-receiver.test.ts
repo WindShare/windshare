@@ -5,6 +5,7 @@ import { decodeDeliveryJoin } from '../../src/transport/relay/delivery-handshake
 import { encodeSettlementNotice } from '../../src/transport/relay/delivery-settlement-codec'
 import {
   dialRelayReceiver,
+  RelayReceiverError,
   RELAY_HEARTBEAT_CLOSE_CODE,
   RELAY_PROTOCOL_CLOSE_CODE,
 } from '../../src/transport/relay/receiver'
@@ -12,7 +13,9 @@ import {
   decodeConnectionProbe,
   encodeConnectionProbeAck,
   encodeOpaqueRoute,
+  encodeRelayError,
   encodeSessionCredit,
+  RELAY_ERROR,
 } from '../../src/transport/relay/protocol'
 
 import { capability, FakeSocket, relaySessionId } from './relay-receiver-fixture'
@@ -129,6 +132,38 @@ describe('v2 relay receiver ingress', () => {
     socket.message(malformed)
     expect(socket.closeCode).toBe(RELAY_PROTOCOL_CLOSE_CODE)
     await expect(connection.channel.frames.getReader().read()).rejects.toMatchObject({ kind: 'malformed' })
+  })
+
+  it('distinguishes AccessDenied and AccessUnavailable error frames', async () => {
+    const cases = [
+      { code: RELAY_ERROR.accessDenied, retryAfterMilliseconds: 0, pattern: /denied/i },
+      { code: RELAY_ERROR.accessUnavailable, retryAfterMilliseconds: 1_000, pattern: /temporarily unavailable/i },
+    ] as const
+    const messages: string[] = []
+    for (const testCase of cases) {
+      const socket = new FakeSocket(false)
+      const originalSend = socket.send.bind(socket)
+      socket.send = data => {
+        originalSend(data)
+        queueMicrotask(() => {
+          socket.message(encodeRelayError({ code: testCase.code, retryAfterMilliseconds: testCase.retryAfterMilliseconds }))
+        })
+      }
+      let caught: unknown
+      try {
+        await dialRelayReceiver('https://relay.invalid', capability, {
+          socketFactory: () => socket,
+        })
+      } catch (reason: unknown) {
+        caught = reason
+      }
+      expect(caught).toBeInstanceOf(RelayReceiverError)
+      const error = caught as RelayReceiverError
+      expect(error.message).toMatch(testCase.pattern)
+      expect(error.relayError).toEqual({ code: testCase.code, retryAfterMilliseconds: testCase.retryAfterMilliseconds })
+      messages.push(error.message)
+    }
+    expect(messages[0]).not.toBe(messages[1])
   })
 })
 

@@ -11,6 +11,7 @@ import (
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
+	"github.com/windshare/windshare/osfs/internal/outputcap"
 )
 
 const MaximumDiagnosticReferenceBytes = 256
@@ -245,13 +246,14 @@ func compareItems(left, right Item) int {
 }
 
 type Summary struct {
-	operationID receivecontract.OperationID
-	intent      transfer.ReceiveIntentDigest
-	generation  uint64
-	state       OperationState
-	reason      checkpointmodel.OrdinaryClosedReason
-	items       []Item
-	busy        bool
+	operationID          receivecontract.OperationID
+	intent               transfer.ReceiveIntentDigest
+	generation           uint64
+	state                OperationState
+	reason               checkpointmodel.OrdinaryClosedReason
+	items                []Item
+	busy                 bool
+	compatibleNameReport outputcap.CompatibleNameReport
 }
 
 func newSummary(
@@ -287,9 +289,19 @@ func (summary Summary) NeedsAttentionReason() checkpointmodel.OrdinaryClosedReas
 }
 func (summary Summary) Items() []Item { return slices.Clone(summary.items) }
 func (summary Summary) Busy() bool    { return summary.busy }
+func (summary Summary) CompatibleNameReport() outputcap.CompatibleNameReport {
+	return summary.compatibleNameReport
+}
+func (summary Summary) withCompatibleNameReport(report outputcap.CompatibleNameReport) (Summary, error) {
+	if !report.Valid() {
+		return Summary{}, ErrInvalidContract
+	}
+	summary.compatibleNameReport = report
+	return summary, nil
+}
 func (summary Summary) Valid() bool {
 	return !summary.operationID.IsZero() && !summary.intent.IsZero() && summary.generation > 0 &&
-		summary.state.Valid() && (!summary.reason.IsAttentionReason() ||
+		summary.state.Valid() && summary.compatibleNameReport.Valid() && (!summary.reason.IsAttentionReason() ||
 		summary.state == OperationNeedsAttention || summary.state == OperationDiscarded || summary.state == OperationRecoveryUnavailable)
 }
 

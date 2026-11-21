@@ -192,14 +192,15 @@ const (
 )
 
 type DiscardReport struct {
-	Status       DiscardStatus
-	ID           receivecontract.OperationID
-	Attention    AttentionReason
-	BlockedItems []BlockedItem
+	Status               DiscardStatus
+	ID                   receivecontract.OperationID
+	Attention            AttentionReason
+	BlockedItems         []BlockedItem
+	CompatibleNameReport output.CompatibleNameReport
 }
 
 func (report DiscardReport) Valid() bool {
-	if report.ID.IsZero() {
+	if report.ID.IsZero() || !report.CompatibleNameReport.Valid() {
 		return false
 	}
 	for _, item := range report.BlockedItems {

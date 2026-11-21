@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -296,9 +297,7 @@ func TestEngineDiagnosticsCaptureAccountIssuanceWithoutSlog(t *testing.T) {
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		reply := make(map[string]any, len(fixture.Session))
-		for k, v := range fixture.Session {
-			reply[k] = v
-		}
+		maps.Copy(reply, fixture.Session)
 		if body.Secret != "" {
 			reply["credential_secret"] = body.Secret
 		}

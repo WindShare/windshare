@@ -72,25 +72,53 @@ func (resources *operationOutputResources) ReleaseOutputSession(context.Context)
 }
 
 func (resources *operationOutputResources) RecordTreeSettlement(ctx context.Context, kind transfer.DirectTreeSettlementKind, outcome transfer.DirectTreeOutcome, snapshot outputsession.TreeSettlementSnapshot) error {
+	var exported namestore.ReportSummary
 	if kind == transfer.DirectTreeSettlementSuccess {
 		operation := resources.operation
-		if err := operation.nameStore.Export(operation.names, namesRoot(operation.topLevel), operation.authority.destination.WithPublicContainer); err != nil {
+		summary, err := operation.nameStore.Export(operation.names, namesRoot(operation.topLevel), operation.authority.destination.WithPublicContainer)
+		if err != nil {
 			return err
 		}
+		exported = summary
 	}
 	if resources.lifecycle != nil {
 		if err := resources.lifecycle.RecordTreeSettlement(ctx, kind, outcome, snapshot); err != nil {
 			return err
 		}
 	}
+	if kind == transfer.DirectTreeSettlementSuccess {
+		resources.operation.setNameReport(exported)
+	}
 	resources.completed = kind == transfer.DirectTreeSettlementSuccess
 	return nil
+}
+
+func (operation *Operation) setNameReport(summary namestore.ReportSummary) {
+	operation.nameReportMu.Lock()
+	operation.nameReport = summary
+	operation.nameReportMu.Unlock()
+}
+
+// CompatibleNameReport reports any compatible-name repairs exported when the
+// operation settles or is discarded. It remains readable after terminal close
+// because the summary holds only values.
+func (operation *Operation) CompatibleNameReport() outputcap.CompatibleNameReport {
+	if operation == nil {
+		return outputcap.CompatibleNameReport{}
+	}
+	operation.nameReportMu.Lock()
+	summary := operation.nameReport
+	operation.nameReportMu.Unlock()
+	return summary
 }
 
 func (authority *Authority) openNamedOperation(
 	ctx context.Context,
 	operation *Operation,
 ) (transfer.DirectTreeSession, error) {
+	// Reset any previous attempt's exported report so a retried session never
+	// surfaces a stale summary if this attempt fails or pauses.
+	operation.setNameReport(namestore.ReportSummary{})
 	intent := operation.intent
 	if err := operation.prepareNames(); err != nil {
 		return nil, checkpointRuntimeError(ctx, "load destination name mappings", err)

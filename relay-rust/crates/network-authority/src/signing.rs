@@ -38,9 +38,22 @@ impl Signing {
         })
     }
     pub(crate) fn activate(&self, store: &mut impl Store, now: u64) -> Result<()> {
-        let previous = load(store, SIGNING_GENERATION_KEY)?;
+        let previous: Option<Generation> = load(store, SIGNING_GENERATION_KEY)?;
         let mut trusted = TrustStore::default();
         if let Some(generation) = previous {
+            // An authority Durable Object owns one root identity for its lifetime;
+            // TrustStore tracks rollback barriers per issuer, so cross-root swaps
+            // must be rejected before overwriting the persisted generation.
+            if generation.issuer != self.generation.issuer {
+                tracing::error!(
+                    event = "authority_signing_issuer_mismatch",
+                    expected_issuer = %URL_SAFE_NO_PAD.encode(generation.issuer),
+                    configured_issuer = %URL_SAFE_NO_PAD.encode(self.generation.issuer),
+                    previous_generation = generation.number,
+                    configured_generation = self.generation.number,
+                );
+                anyhow::bail!("signing root does not match persisted authority issuer");
+            }
             trusted
                 .remember(generation)
                 .map_err(|error| anyhow!("{error:?}"))?;

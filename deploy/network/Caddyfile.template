@@ -24,7 +24,7 @@ ws.ourworld.top {
         }
     }
     handle_path /downloads/* {
-        root * /srv/windshare/current/downloads
+        root * /srv/windshare/downloads
         file_server
     }
     handle /assets/* {

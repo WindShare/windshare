@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	NamePrefix          = ".windshare-output.probe-"
-	ReservedPrefix      = ".windshare-output.probe"
+	NamePrefix          = outputcap.ControlDirectoryName + ".probe-"
+	ReservedPrefix      = outputcap.ControlDirectoryName + ".probe"
 	RandomBytes         = 16
 	AllocationAttempts  = 16
 	MaximumLeftovers    = 64

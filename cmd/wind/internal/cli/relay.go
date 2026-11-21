@@ -58,28 +58,33 @@ func (app *App) runRelay(ctx context.Context, args []string) (code int) {
 	}
 }
 
-func (app *App) parseRelaySetupRequest(operation string, args []string) (engine.RelaySetupRequest, requestParseOutcome) {
-	request := engine.RelaySetupRequest{Operation: relaysetup.AddProfile}
+type relaySetupCommand struct {
+	request   engine.RelaySetupRequest
+	noBrowser bool
+}
+
+func (app *App) parseRelaySetupRequest(operation string, args []string) (relaySetupCommand, requestParseOutcome) {
+	command := relaySetupCommand{request: engine.RelaySetupRequest{Operation: relaysetup.AddProfile}}
 	if operation == "onboard" {
-		request.Operation = relaysetup.AuthorizeDevice
+		command.request.Operation = relaysetup.AuthorizeDevice
 	}
 	flags := app.newFlagSet("relay " + operation)
 	if operation == "add" {
-		flags.StringVar(&request.AccessKey, "access-key", "", "merge this service key into the saved relay")
+		flags.StringVar(&command.request.AccessKey, "access-key", "", "merge this service key into the saved relay")
 	}
 	hostname, _ := os.Hostname()
-	flags.BoolVar(&request.NoBrowser, "no-browser", false, "display the approval URL without opening a browser")
-	flags.StringVar(&request.DeviceName, "name", relaysetup.DefaultDeviceName(hostname), "device name displayed for browser approval")
+	flags.BoolVar(&command.noBrowser, "no-browser", false, "display the approval URL without opening a browser")
+	flags.StringVar(&command.request.DeviceName, "name", relaysetup.DefaultDeviceName(hostname), "device name displayed for browser approval")
 	address, outcome := app.parseRelayURL(flags, flags.Name()+" <url> [options]", args)
 	if outcome != requestParseReady {
-		return engine.RelaySetupRequest{}, outcome
+		return relaySetupCommand{}, outcome
 	}
-	if err := relaysetup.ValidateDeviceName(request.DeviceName); err != nil {
+	if err := relaysetup.ValidateDeviceName(command.request.DeviceName); err != nil {
 		app.writeRelaySetupFailure(err)
-		return engine.RelaySetupRequest{}, requestParseUsageFailure
+		return relaySetupCommand{}, requestParseUsageFailure
 	}
-	request.URL = address
-	return request, requestParseReady
+	command.request.URL = address
+	return command, requestParseReady
 }
 
 func (app *App) parseRelayURL(flags *flag.FlagSet, synopsis string, args []string) (string, requestParseOutcome) {
@@ -94,24 +99,19 @@ func (app *App) parseRelayURL(flags *flag.FlagSet, synopsis string, args []strin
 	return positionals[0], requestParseReady
 }
 
-func (app *App) runRelaySetup(ctx context.Context, request engine.RelaySetupRequest) (code int) {
+func (app *App) runRelaySetup(ctx context.Context, command relaySetupCommand) (code int) {
 	closeApp, err := app.ensureApplication(diagnostics.Sink{})
 	if err != nil {
 		return ExitFailure
 	}
 	defer closeApp(&code)
-	current, err := app.application.StartRelaySetup(ctx, request)
+	current, err := app.application.StartRelaySetup(ctx, command.request)
 	if err != nil {
 		return app.writeRelaySetupFailure(err)
 	}
 	for observation := range current.Observations() {
-		if event, ok := observation.Event.(engine.RelaySetupProgress); ok {
-			switch event.Stage {
-			case "approval_required":
-				app.writeCompleteLine("Approve this device: %s\nDevice code: %s", event.VerificationURL, event.UserCode)
-			case "browser_unavailable":
-				app.writeCompleteLine("Open the approval URL on another device and confirm the code.")
-			}
+		if event, ok := observation.Event.(engine.RelaySetupProgress); ok && event.Stage == "approval_required" {
+			app.presentRelayApproval(ctx, event, command.noBrowser)
 		}
 	}
 	result, err := current.Wait(context.Background())
@@ -142,6 +142,25 @@ func (app *App) runRelaySetup(ctx context.Context, request engine.RelaySetupRequ
 		app.writeCompleteLine("Use your receiver website: wind relay frontend %s", receipt.OfferedFrontend)
 	}
 	return ExitOK
+}
+
+func (app *App) presentRelayApproval(ctx context.Context, event engine.RelaySetupProgress, noBrowser bool) {
+	if event.ServiceLogin != nil {
+		// Match Desktop: when both service-account sign-in and owner approval
+		// are available, display the discovered login host and let the user
+		// choose instead of auto-opening one destination.
+		app.writeCompleteLine(
+			"Sign in with %s: %s\nOr pair as node owner: %s\nDevice code: %s",
+			event.ServiceLogin.Host, event.ServiceLogin.URL, event.VerificationURL, event.UserCode,
+		)
+		return
+	}
+	app.writeCompleteLine("Approve this device: %s\nDevice code: %s", event.VerificationURL, event.UserCode)
+	if !noBrowser && app.openBrowser != nil {
+		if err := app.openBrowser(ctx, event.VerificationURL); err != nil && ctx.Err() == nil {
+			app.writeCompleteLine("Open the approval URL on another device and confirm the code.")
+		}
+	}
 }
 
 func (app *App) writeRelaySetupFailure(err error) int {

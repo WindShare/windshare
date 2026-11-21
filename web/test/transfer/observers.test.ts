@@ -1,12 +1,15 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { DomainTraceSource, TraceObserver } from '../../src/diagnostics/trace/ports'
 import type { ReceiveIntent } from '../../src/transfer/intent'
 import type { TransferTraceEvent } from '../../src/transfer/job/contract'
 import { TransferProgressLedger } from '../../src/transfer/progress/ledger'
+import { RELAY_BANDWIDTH_WAIT_VISIBILITY_THRESHOLD_MILLISECONDS } from '../../src/transfer/progress/bandwidth-wait'
 import { TransferObservers } from '../../src/transfer/job/observers'
 import { observeTransferContent } from '../../src/transfer/progress/content'
 import { byteRange } from '../../src/content/geometry'
 import { fileEntry, identity, readerFixture } from './v2-job-fixture'
+
+afterEach(() => vi.useRealTimers())
 
 describe('transfer observer separation', () => {
   it('retains every receipt without building progress snapshots until the observer reads', async () => {
@@ -131,6 +134,62 @@ describe('transfer observer separation', () => {
     }
     expect(() => observers.materializationStarted()).not.toThrow()
     expect(progress).toHaveLength(1)
+  })
+
+  it('debounces active relay bandwidth waits, clears immediately on recovery, and stops on finishing', () => {
+    vi.useFakeTimers()
+    const ledger = new TransferProgressLedger()
+    let emitBandwidth: ((waiting: boolean) => void) | undefined
+    let unsubscribed = false
+    const changes: Array<{ change: string; visible: boolean }> = []
+    const observers = new TransferObservers({
+      intent: minimalIntent(),
+      transferJobId: 'bandwidth-job',
+      lanes: {
+        size: 1,
+        subscribeBandwidthWait: listener => {
+          emitBandwidth = listener
+          listener(false)
+          return () => { unsubscribed = true }
+        },
+      },
+      readProgress: () => ledger.snapshot({
+        discovery: 'complete', discoveredFiles: 1, discoveredBytes: 1024n, sourceOmittedEntries: 0n, sizeClass: 'small',
+      }),
+      observeProgress: (source, change) => {
+        changes.push({ change, visible: source.read().bandwidthWaitVisible })
+      },
+    })
+
+    // Transient dips shorter than the visibility threshold never emit UI transitions.
+    emitBandwidth!(true)
+    vi.advanceTimersByTime(RELAY_BANDWIDTH_WAIT_VISIBILITY_THRESHOLD_MILLISECONDS - 1)
+    expect(changes).toEqual([])
+    emitBandwidth!(false)
+    vi.advanceTimersByTime(RELAY_BANDWIDTH_WAIT_VISIBILITY_THRESHOLD_MILLISECONDS)
+    expect(changes).toEqual([])
+
+    // Sustained waits surface as a transition and clear immediately when bandwidth resumes.
+    emitBandwidth!(true)
+    vi.advanceTimersByTime(RELAY_BANDWIDTH_WAIT_VISIBILITY_THRESHOLD_MILLISECONDS)
+    expect(changes).toEqual([{ change: 'transition', visible: true }])
+    emitBandwidth!(false)
+    expect(changes).toEqual([
+      { change: 'transition', visible: true },
+      { change: 'transition', visible: false },
+    ])
+
+    // Entering local finishing suppresses relay bandwidth waits and cleans up listeners/timers.
+    emitBandwidth!(true)
+    vi.advanceTimersByTime(RELAY_BANDWIDTH_WAIT_VISIBILITY_THRESHOLD_MILLISECONDS)
+    expect(changes.at(-1)).toEqual({ change: 'transition', visible: true })
+    ledger.beginFinishing()
+    observers.progress()
+    expect(changes.at(-1)).toEqual({ change: 'transition', visible: false })
+    expect(unsubscribed).toBe(true)
+
+    observers.completePerformance()
+    expect(vi.getTimerCount()).toBe(0)
   })
 })
 

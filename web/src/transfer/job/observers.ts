@@ -1,4 +1,5 @@
 import type { ProgressChange, TransferProgressObserver, TransferProgressSource } from '../progress/observation'
+import { BandwidthWaitVisibility } from '../progress/bandwidth-wait'
 import type { ContentLaneStatus } from '../../content/broker'
 import type { IncidentScopeHandle } from '../../diagnostics/incident'
 import type { DomainTraceSource } from '../../diagnostics/trace/ports'
@@ -64,10 +65,17 @@ export class TransferObservers {
   readonly #options: TransferObserversOptions
   #performance: PerformanceSummaryObservations | undefined
   readonly #progress: TransferProgressSource
+  readonly #bandwidthWait: BandwidthWaitVisibility
 
   constructor(options: TransferObserversOptions) {
     this.#options = options
     this.#progress = Object.freeze({ transferJobId: options.transferJobId, read: () => this.#readProgress() })
+    this.#bandwidthWait = new BandwidthWaitVisibility({
+      ...(options.lanes.subscribeBandwidthWait === undefined
+        ? {}
+        : { subscribe: options.lanes.subscribeBandwidthWait }),
+      onChange: () => this.progress('transition'),
+    })
   }
 
   bindPerformance(performance: PerformanceSummaryObservations | undefined): void {
@@ -76,6 +84,7 @@ export class TransferObservers {
   }
 
   completePerformance(): void {
+    this.#bandwidthWait.close()
     observePerformance(this.#performance, summary => summary.complete())
     const connectivity = this.#options.lanes.downloadConnectivity?.(true)
     if (connectivity !== undefined) this.#emit(() => Object.freeze({
@@ -94,6 +103,7 @@ export class TransferObservers {
 
   #readProgress(): TransferProgress {
     const state = this.#options.readProgress()
+    if (state.phase === 'finishing') this.#bandwidthWait.close()
     const partial = state.measure.discovery === 'failed' || state.failedDirectories > 0 ||
       state.fileErrors > 0 || state.selectionErrors > 0
     return Object.freeze({
@@ -115,6 +125,7 @@ export class TransferObservers {
         capacityAccumulatedWaitMilliseconds: state.capacityAccumulatedWaitMilliseconds,
         capacityWaitAttempts: state.capacityWaitAttempts,
         capacityWaitVisible: state.capacityWaitVisible,
+        bandwidthWaitVisible: state.phase === 'receiving' && this.#bandwidthWait.visible,
         partial,
         transferJobId: this.#options.transferJobId,
         ...(state.outputSessionId === undefined ? {} : { outputSessionId: state.outputSessionId }),

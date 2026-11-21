@@ -15,8 +15,8 @@ use windshare_relay_core::{
     share::{AttemptLimiter, AttemptRate},
 };
 
-const OWNER_CAPACITY_DIVISOR: usize = 8;
-const AUTHENTICATED_CAPACITY_DIVISOR: usize = 8;
+const OWNER_CAPACITY_DIVISOR: u32 = 8;
+const AUTHENTICATED_CAPACITY_DIVISOR: u32 = 8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AdmissionPriority {
@@ -26,12 +26,22 @@ pub enum AdmissionPriority {
 }
 
 const fn admission_limit(total: usize, priority: AdmissionPriority) -> usize {
+    let owner = total / OWNER_CAPACITY_DIVISOR as usize;
+    let authenticated = total / AUTHENTICATED_CAPACITY_DIVISOR as usize;
     match priority {
         AdmissionPriority::Owner => total,
-        AdmissionPriority::Authenticated => total - total / OWNER_CAPACITY_DIVISOR,
-        AdmissionPriority::Anonymous => {
-            total - total / OWNER_CAPACITY_DIVISOR - total / AUTHENTICATED_CAPACITY_DIVISOR
-        }
+        AdmissionPriority::Authenticated => total - owner,
+        AdmissionPriority::Anonymous => total - owner - authenticated,
+    }
+}
+
+const fn attempt_reserve(burst: u32, priority: AdmissionPriority) -> u32 {
+    let owner = burst / OWNER_CAPACITY_DIVISOR;
+    let authenticated = burst / AUTHENTICATED_CAPACITY_DIVISOR;
+    match priority {
+        AdmissionPriority::Owner => 0,
+        AdmissionPriority::Authenticated => owner,
+        AdmissionPriority::Anonymous => owner + authenticated,
     }
 }
 
@@ -171,7 +181,8 @@ impl State {
         {
             return Err(Refusal::SourceControl);
         }
-        if !self.attempts.attempt(now) {
+        let reserve = attempt_reserve(self.attempts.burst(), priority);
+        if !self.attempts.attempt_with_reserve(now, reserve) {
             return Err(Refusal::AttemptRate);
         }
         self.total.controls += 1;

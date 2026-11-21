@@ -1,4 +1,5 @@
 import { ContentAllocation, demandBytes, orderedContentLanes, type ContentAssignment, type ContentLane, type ContentSelection, type ContentWork } from './selection'
+import type { BlockRouteEligibility } from '../route-policy'
 import type { BlockReceivePermit } from './receive-window'
 import { RESCUE_POLL_MILLISECONDS, type DispatchPurpose, type RescueReason } from './exploration'
 import type { DeliveryEstimate } from './completion'
@@ -42,7 +43,9 @@ export class ContentAdmissions {
   readonly #now: () => number
   readonly #pending = new Set<PendingAdmission>()
   readonly #allocation = new ContentAllocation()
-  readonly #bandwidth = new WeakMap<ContentLane, LaneCapacityBackoff>()
+  readonly #bandwidth = new Map<ContentLane, LaneCapacityBackoff>()
+  readonly #stateListeners = new Set<() => void>()
+  #hadBackoff = false
   #scheduled = false
   #deadline: ReturnType<typeof setTimeout> | undefined
 
@@ -54,6 +57,29 @@ export class ContentAdmissions {
   removeLane(lane: ContentLane): void {
     this.#bandwidth.get(lane)?.close()
     this.#bandwidth.delete(lane)
+    this.#notifyState()
+  }
+
+  subscribeState(listener: () => void): () => void {
+    this.#stateListeners.add(listener)
+    return () => { this.#stateListeners.delete(listener) }
+  }
+
+  isBandwidthWaiting(routes: BlockRouteEligibility): boolean {
+    if (!routes.active || this.#bandwidth.size === 0 || this.#pending.size === 0) return false
+    const now = this.#now()
+    const eligible = this.#lanes().filter(lane => routes.allows(lane.route))
+    if (eligible.length === 0) return false
+    const readiness = (lane: ContentLane) => this.#laneReadiness(lane, now)
+    // Any ready eligible lane (for example P2P or another relay) means the
+    // transfer can continue without waiting on relay bandwidth.
+    if (eligible.some(lane => readiness(lane) === 'ready')) return false
+    for (const work of this.#pending) {
+      if (work.signal.aborted || work.intent.kind !== 'content') continue
+      if (work.capacity !== undefined && work.capacity.readiness() !== 'ready') continue
+      if (eligible.some(lane => work.routes.allows(lane.route) && work.intent.eligible(lane))) return true
+    }
+    return false
   }
 
   request(work: ContentWork, signal: AbortSignal, eligible: (lane: ContentLane) => boolean): Promise<ContentAdmission> {
@@ -75,6 +101,7 @@ export class ContentAdmissions {
         pending.cleanup()
         reject(signal.reason)
         this.wake()
+        this.#notifyState()
       }
       const unsubscribe = work.routes.subscribe(() => this.wake())
       const pending: PendingAdmission = {
@@ -129,8 +156,10 @@ export class ContentAdmissions {
         this.#deadline = undefined
         this.wake()
       }, Math.max(0, Math.ceil(at - this.#now())))
+      this.#notifyState()
       return
     }
+    this.#notifyState()
   }
 
   #nextCapacityDeadline(): number {
@@ -148,7 +177,7 @@ export class ContentAdmissions {
   #select(): ContentSelection<PendingAdmission> {
     const now = this.#now()
     const lanes = this.#lanes()
-    const readiness = (lane: ContentLane) => this.#bandwidth.get(lane)?.readiness(now, lane.inflight) ?? 'ready'
+    const readiness = (lane: ContentLane) => this.#laneReadiness(lane, now)
     const ready = lanes.filter(lane => readiness(lane) === 'ready')
     const candidates = [...this.#pending].filter(item => item.capacity === undefined || item.capacity.readiness() === 'ready').sort((a, b) => {
       const agedA = now - a.queuedAt >= PRIORITY_AGING_MILLISECONDS
@@ -235,6 +264,25 @@ export class ContentAdmissions {
       this.#bandwidth.set(lane, backoff)
     }
     backoff.settle(outcome, now)
+    if (backoff.isReady) this.#bandwidth.delete(lane)
+    this.#notifyState()
+  }
+
+  #laneReadiness(lane: ContentLane, now: number): 'ready' | 'recoverable' | 'waiting' {
+    const backoff = this.#bandwidth.get(lane)
+    if (backoff === undefined) return 'ready'
+    const status = backoff.readiness(now, lane.inflight)
+    if (status === 'ready') this.#bandwidth.delete(lane)
+    return status
+  }
+
+  #notifyState(): void {
+    const active = this.#bandwidth.size > 0
+    if (!active && !this.#hadBackoff) return
+    this.#hadBackoff = active
+    for (const listener of this.#stateListeners) {
+      try { listener() } catch { /* Bandwidth-wait observers cannot redirect scheduling. */ }
+    }
   }
 
   #begin(

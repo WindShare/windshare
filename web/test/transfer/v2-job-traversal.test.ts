@@ -99,10 +99,10 @@ describe('v2 catalog generation cursor', () => {
     },
   )
 
-  it('applies the reserved output namespace policy while composing entry paths', () => {
+  it('retains output-marker-shaped names while composing logical entry paths', () => {
     const guard = new CatalogTraversalGuard(SHARE, 1)
-    expect(() => guard.entryPath(directoryCursor(), fileEntry(4, '.WSRESUME-state')))
-      .toThrow(/path policy/u)
+    expect(guard.entryPath(directoryCursor(), fileEntry(4, '.WSRESUME-state')))
+      .toEqual(['.WSRESUME-state'])
   })
 
   it.each([

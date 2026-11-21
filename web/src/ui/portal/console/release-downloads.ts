@@ -84,7 +84,8 @@ export function selectRecommendedAsset(
   const forPlatform = manifest.assets.filter(asset => asset.platform === visitor.platform)
   if (forPlatform.length === 0) return undefined
   const preferred = forPlatform.filter(asset => asset.kind === options.preferredKind)
-  if (preferred.length > 0) return pickByArch(preferred, visitor.arch)
+  const preferredMatch = pickByArch(preferred, visitor.arch)
+  if (preferredMatch !== undefined) return preferredMatch
   if (!options.allowOtherKind) return undefined
   return pickByArch(forPlatform, visitor.arch)
 }
@@ -131,9 +132,9 @@ function pickByArch(
   candidates: readonly ReleaseDownloadAsset[],
   arch: ReleaseDownloadArch | undefined,
 ): ReleaseDownloadAsset | undefined {
-  if (arch !== undefined) {
-    const exact = candidates.find(asset => asset.arch === arch)
-    if (exact !== undefined) return exact
-  }
-  return candidates[0]
+  // Never guess across architectures once the visitor's architecture is known:
+  // callers fall back to the full asset list and releases/source links instead
+  // of handing out a binary that cannot execute on the host.
+  if (arch === undefined) return candidates[0]
+  return candidates.find(asset => asset.arch === arch)
 }

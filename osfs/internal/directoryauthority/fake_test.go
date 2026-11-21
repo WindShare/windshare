@@ -54,6 +54,7 @@ type fakePlatform struct {
 	root            *fakeNode
 	nextID          uint64
 	disposition     outputcap.RootOpenDisposition
+	reservedScope   outputcap.ReservedNamespaceScope
 	guardErr        error
 	guardCloseErr   error
 	modifiedErr     error
@@ -62,13 +63,24 @@ type fakePlatform struct {
 }
 
 func newFakePlatform(disposition outputcap.RootOpenDisposition) *fakePlatform {
-	platform := &fakePlatform{nextID: 2, disposition: disposition}
+	var scope outputcap.ReservedNamespaceScope
+	switch disposition {
+	case outputcap.CallerProvidedContainer:
+		scope = outputcap.ReservedNamespaceDestinationContainer
+	case outputcap.AuthorityCreatedRoot:
+		scope = outputcap.ReservedNamespaceResultRoot
+	}
+	platform := &fakePlatform{nextID: 2, disposition: disposition, reservedScope: scope}
 	platform.root = &fakeNode{id: 1, entries: make(map[string]fakeEntry)}
 	return platform
 }
 
 func (platform *fakePlatform) RootOpenDisposition() outputcap.RootOpenDisposition {
 	return platform.disposition
+}
+
+func (platform *fakePlatform) ReservedNamespaceScope() outputcap.ReservedNamespaceScope {
+	return platform.reservedScope
 }
 
 func (platform *fakePlatform) ValidateModifiedTime(catalog.ModifiedTime) error {

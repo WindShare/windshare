@@ -61,6 +61,8 @@ export function relayErrorMessage(error: RelayErrorFrame): string {
   if (error.code === RELAY_ERROR.starting) return 'This share is still starting.'
   if (error.code === RELAY_ERROR.notFound) return 'This share is not currently available.'
   if (error.code === RELAY_ERROR.admission) return 'The relay is currently at capacity.'
+  if (error.code === RELAY_ERROR.accessDenied) return 'Relay access was denied for this share.'
+  if (error.code === RELAY_ERROR.accessUnavailable) return 'Relay access is temporarily unavailable.'
   return 'The relay rejected this receiver join.'
 }
 

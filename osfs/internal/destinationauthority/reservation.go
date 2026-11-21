@@ -329,6 +329,15 @@ func (reservation *TopLevelReservation) RootOpenDisposition() outputcap.RootOpen
 	return ""
 }
 
+// ReservedNamespaceScope declares which private WindShare namespace lives as a
+// direct child of this reservation's execution root.
+func (reservation *TopLevelReservation) ReservedNamespaceScope() outputcap.ReservedNamespaceScope {
+	if reservation == nil {
+		return 0
+	}
+	return outputcap.ReservedNamespaceScopeForEntry(reservation.entry.EntryKind())
+}
+
 func (reservation *TopLevelReservation) ValidateModifiedTime(modified catalog.ModifiedTime) error {
 	authority, err := reservation.executionAuthority()
 	if err != nil {

@@ -440,9 +440,14 @@ describe('ReceiveIntent input integrity', () => {
     })).rejects.toThrow(/source-path leaf/u)
     await expect(createOriginalFileArtifact({
       fileId: identity(30),
+      sourcePath: '../escape',
+      suggestedName: 'escape',
+    })).rejects.toThrow(/path policy|portable policy/u)
+    await expect(createOriginalFileArtifact({
+      fileId: identity(30),
       sourcePath: '.wsresume-secret',
       suggestedName: '.wsresume-secret',
-    })).rejects.toThrow(/path policy|portable policy/u)
+    })).resolves.toMatchObject({ suggestedName: '.wsresume-secret' })
     await expect(collisionName(identity(31), 'report.txt', -1, true)).rejects.toThrow(/32-bit/u)
 
     const first = await collisionName(identity(31), 'report.txt', 1, true)

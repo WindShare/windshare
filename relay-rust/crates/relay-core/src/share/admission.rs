@@ -61,12 +61,22 @@ impl AttemptLimiter {
         })
     }
 
+    pub const fn burst(&self) -> u32 {
+        self.burst
+    }
+
     pub(super) const fn state(self) -> AttemptState {
         self.state
     }
 
     /// A backwards clock neither replenishes tokens nor moves the refill origin.
     pub fn attempt(&mut self, now: UnixMillis) -> bool {
+        self.attempt_with_reserve(now, 0)
+    }
+
+    /// Keeps at least `reserve` tokens untouched, preserving burst headroom
+    /// and subsequent refills for higher-priority callers.
+    pub fn attempt_with_reserve(&mut self, now: UnixMillis, reserve: u32) -> bool {
         let interval = self.refill_millis.get();
         let elapsed = now.0.saturating_sub(self.state.updated.0);
         let refill = elapsed / interval;
@@ -78,7 +88,7 @@ impl AttemptLimiter {
                 .min(self.burst);
             self.state.updated.0 = now.0 - elapsed % interval;
         }
-        if self.state.tokens == 0 {
+        if self.state.tokens <= reserve {
             return false;
         }
         self.state.tokens -= 1;

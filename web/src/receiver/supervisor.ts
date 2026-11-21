@@ -285,6 +285,14 @@ export class ReceiverReconnectSupervisor implements ContentGenerationProvider {
     return this.#current === generation && !this.#current.retired && !this.#stopped
   }
 
+  currentGeneration(): ContentGeneration | undefined {
+    return this.#stopped || this.#failed || this.#current.retired ? undefined : this.#current
+  }
+
+  subscribeGeneration(listener: () => void): () => void {
+    return this.subscribeProtocolGeneration(() => listener())
+  }
+
   contentLaneCount(routes: BlockRouteEligibility): number {
     if (this.#stopped || this.#current.retired || !routes.active) return 0
     return this.#current.lanes.eligibleSize(routes)

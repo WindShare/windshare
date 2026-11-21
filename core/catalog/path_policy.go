@@ -12,10 +12,9 @@ import (
 const (
 	// This is a metadata budget, not a filesystem component limit. It leaves
 	// room for UTF-16 native names and NFC expansion without unbounded records.
-	MaxNameBytes             = 4 << 10
-	MaxPathBytes             = 32 * 1024
-	MaxPathDepth             = 256
-	reservedOutputRootPrefix = ".wsresume"
+	MaxNameBytes = 4 << 10
+	MaxPathBytes = 32 * 1024
+	MaxPathDepth = 256
 )
 
 const PathPolicy = "windshare/path/v3-unicode-" + unicode15.Version
@@ -103,9 +102,6 @@ func CanonicalPath(path string) (string, error) {
 		}
 		components[index] = validated
 	}
-	if reservedOutputRootName(components[0]) {
-		return "", fmt.Errorf("%w: root component uses the reserved %q prefix", ErrInvalidPath, reservedOutputRootPrefix)
-	}
 	return strings.Join(components, "/"), nil
 }
 
@@ -119,10 +115,6 @@ func SiblingNameKey(name string) string {
 
 func siblingCollisionKey(name string) string {
 	return unicode15.FoldPortableName(name)
-}
-
-func reservedOutputRootName(name string) bool {
-	return strings.HasPrefix(siblingCollisionKey(name), reservedOutputRootPrefix)
 }
 
 func isControlOrFormatCharacter(scalar rune) bool {

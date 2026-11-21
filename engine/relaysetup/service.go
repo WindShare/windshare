@@ -54,20 +54,18 @@ type HTTPClient interface {
 	Do(*http.Request) (*http.Response, error)
 }
 type Dependencies struct {
-	Store       Store
-	Cache       DiscoveryCache
-	HTTP        HTTPClient
-	OpenBrowser func(context.Context, string) error
-	Now         func() time.Time
-	Random      io.Reader
-	Wait        func(context.Context, time.Duration) error
-	Log         *slog.Logger
+	Store  Store
+	Cache  DiscoveryCache
+	HTTP   HTTPClient
+	Now    func() time.Time
+	Random io.Reader
+	Wait   func(context.Context, time.Duration) error
+	Log    *slog.Logger
 }
 type Request struct {
 	URL, DeviceName string
 	AccessKey       string
 	Operation       Operation
-	NoBrowser       bool
 }
 type Result struct {
 	RelayURL, CredentialID, FrontURL string

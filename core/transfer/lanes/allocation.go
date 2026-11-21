@@ -136,8 +136,8 @@ func comparePending(left, right *pendingAdmission, now time.Time) int {
 func (s *Set) allocateOneLocked(pending *pendingAdmission, now time.Time) {
 	pending.blocked, pending.probeAt, pending.capacityChanged = CapacityNetwork, time.Time{}, nil
 	remaining := MaxDemandAttempts - len(pending.attempted)
-	ordered, suspended := s.eligiblePendingLanesLocked(pending, true)
-	if remaining <= 0 || (len(ordered) == 0 && !suspended) {
+	ordered, suspended, backedOff := s.eligiblePendingLanesLocked(pending, true)
+	if remaining <= 0 || (len(ordered) == 0 && !suspended && !backedOff) {
 		pending.exhausted, pending.done = true, true
 		return
 	}
@@ -149,7 +149,13 @@ func (s *Set) allocateOneLocked(pending *pendingAdmission, now time.Time) {
 		}
 	}
 	if len(ordered) == 0 {
-		pending.blocked = CapacityRoute
+		// A permitted lane in congestion backoff is a transport supply wait, not a
+		// missing or suspended route; keep its cooldown while exposing demand.
+		if backedOff {
+			pending.blocked = CapacityBackoff
+		} else {
+			pending.blocked = CapacityRoute
+		}
 		return
 	}
 	s.orderLanesLocked(ordered, blockDemandBytes(pending.request.Demand))
@@ -187,10 +193,11 @@ func priorityRank(priority WorkPriority) int {
 	}
 }
 
-func (s *Set) eligiblePendingLanesLocked(pending *pendingAdmission, allowRecovery bool) ([]*laneState, bool) {
+func (s *Set) eligiblePendingLanesLocked(pending *pendingAdmission, allowRecovery bool) ([]*laneState, bool, bool) {
 	now := s.now()
 	ordered := make([]*laneState, 0, len(s.lanes))
 	suspended := len(s.routeSupplies) != 0
+	backedOff := false
 	for laneID, hold := range s.contentSuspensions {
 		if s.lanes[laneID] == nil && s.contentRoutePolicy.Allows(hold.route) {
 			suspended = true
@@ -211,7 +218,7 @@ func (s *Set) eligiblePendingLanesLocked(pending *pendingAdmission, allowRecover
 		}
 		ready, recoverable, deadline := state.capacity.readiness(now, state.inflight)
 		if !ready && (!allowRecovery || !recoverable) {
-			suspended = true
+			backedOff = true
 			if !deadline.IsZero() && (pending.probeAt.IsZero() || deadline.Before(pending.probeAt)) {
 				pending.probeAt = deadline
 			}
@@ -219,7 +226,7 @@ func (s *Set) eligiblePendingLanesLocked(pending *pendingAdmission, allowRecover
 		}
 		ordered = append(ordered, state)
 	}
-	return ordered, suspended
+	return ordered, suspended, backedOff
 }
 
 func (s *Set) orderLanesLocked(ordered []*laneState, bytes uint64) {
@@ -319,6 +326,7 @@ type CapacityBlock uint8
 const (
 	CapacityReady CapacityBlock = iota
 	CapacityNetwork
+	CapacityBackoff
 	CapacityRoute
 	CapacityConsumer
 )
@@ -372,7 +380,7 @@ func (s *Set) SchedulingDemand() SchedulingDemand {
 		bytes := blockDemandBytes(pending.request.Demand)
 		result.QueuedBlocks++
 		result.QueuedBytes += bytes
-		if pending.blocked == CapacityNetwork {
+		if pending.blocked == CapacityNetwork || pending.blocked == CapacityBackoff {
 			result.NetworkWaitingBytes += bytes
 		}
 		if pending.blocked == CapacityConsumer {

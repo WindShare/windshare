@@ -13,7 +13,6 @@ export const CATALOG_PATH_DEPTH = 256
 
 const TEXT_ENCODER = new TextEncoder()
 const SNAPSHOTTED_CATALOG_PATHS = new WeakSet<readonly string[]>()
-const RESERVED_OUTPUT_PREFIX = '.wsresume'
 const FORMAT_CHARACTER_RANGES: readonly (readonly [number, number])[] = [
   [0x00ad, 0x00ad],
   [0x0600, 0x0605],
@@ -91,10 +90,9 @@ export function snapshotCatalogPath(path: readonly string[]): readonly string[] 
     }
     pathBytes += TEXT_ENCODER.encode(segment).byteLength
   }
-  if (
-    pathBytes > CATALOG_PATH_BYTES ||
-    foldPortableName15(path[0] ?? '').startsWith(RESERVED_OUTPUT_PREFIX)
-  ) throw new TypeError('Catalog path violates the frozen path policy')
+  if (pathBytes > CATALOG_PATH_BYTES) {
+    throw new TypeError('Catalog path violates the frozen path policy')
+  }
   const snapshot = Object.freeze([...path])
   SNAPSHOTTED_CATALOG_PATHS.add(snapshot)
   return snapshot

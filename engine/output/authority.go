@@ -35,6 +35,23 @@ const (
 	OutputLookupAmbiguous
 )
 
+// CompatibleNameReport records compatible-name repairs exported beside a
+// destination when a receive operation settles or is discarded. Either all
+// fields are populated or all are zero.
+type CompatibleNameReport struct {
+	RepairedCount uint64
+	ReportName    string
+	PageCount     uint64
+}
+
+func (report CompatibleNameReport) Empty() bool {
+	return report.RepairedCount == 0 && report.ReportName == "" && report.PageCount == 0
+}
+
+func (report CompatibleNameReport) Valid() bool {
+	return report.Empty() || (report.RepairedCount > 0 && report.ReportName != "" && report.PageCount > 0)
+}
+
 // Operation couples immutable intent with the authority that can open it.
 // It does not expose a filesystem path or a provider-specific operation handle.
 type OperationControl interface {
@@ -42,6 +59,10 @@ type OperationControl interface {
 	Idle() bool
 	RecordShareStopped(context.Context) error
 	Discard(context.Context) error
+	// CompatibleNameReport reports any compatible-name repairs exported when the
+	// operation settles or is discarded. It remains readable after terminal close
+	// because it holds only values.
+	CompatibleNameReport() CompatibleNameReport
 }
 
 type Operation struct {

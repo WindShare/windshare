@@ -28,6 +28,8 @@ export interface ContentGeneration {
 
 export interface ContentGenerationProvider {
   downloadMetrics?(routes: BlockRouteEligibility): DownloadMetrics | undefined
+  currentGeneration?(): ContentGeneration | undefined
+  subscribeGeneration?(listener: () => void): () => void
   execute<T>(
     signal: AbortSignal | undefined,
     operation: (generation: ContentGeneration) => Promise<T>,
@@ -56,6 +58,7 @@ export class SupervisedContent {
   readonly #provider: ContentGenerationProvider
   readonly #randomBytes: (length: number) => Uint8Array
   readonly #authorizations = new Map<string, RevisionAuthorization>()
+  readonly #bandwidthCleanups = new Set<() => void>()
   #closed = false
 
   constructor(
@@ -71,6 +74,9 @@ export class SupervisedContent {
     routes.assertActive()
     const metrics = this.#provider.downloadMetrics?.(routes)
     const status = new SupervisedLaneStatus(() => this.#currentLaneCount(routes))
+    const subscribeBandwidthWait = this.#provider.currentGeneration === undefined
+      ? undefined
+      : (listener: (waiting: boolean) => void) => this.#subscribeBandwidthWait(routes, listener)
     return Object.freeze({
       revisions: Object.freeze({
         open: (fileId: Uint8Array, signal?: AbortSignal) => this.#open(fileId, routes, signal),
@@ -86,6 +92,7 @@ export class SupervisedContent {
       lanes: Object.freeze({
         get size() { return status.size },
         ...(metrics === undefined ? {} : { downloadConnectivity: (final = false) => metrics.snapshot(final) }),
+        ...(subscribeBandwidthWait === undefined ? {} : { subscribeBandwidthWait }),
       }),
     })
   }
@@ -93,8 +100,64 @@ export class SupervisedContent {
   close(): void {
     if (this.#closed) return
     this.#closed = true
+    for (const cleanup of [...this.#bandwidthCleanups]) cleanup()
+    this.#bandwidthCleanups.clear()
     for (const authorization of this.#authorizations.values()) authorization.close()
     this.#authorizations.clear()
+  }
+
+  #subscribeBandwidthWait(
+    routes: BlockRouteEligibility,
+    listener: (waiting: boolean) => void,
+  ): () => void {
+    let closed = false
+    let waiting = false
+    let unsubscribeLane: (() => void) | undefined
+    let unsubscribeGeneration: (() => void) | undefined
+    let unsubscribeRoutes: (() => void) | undefined
+    const publish = (next: boolean) => {
+      if (closed || next === waiting) return
+      waiting = next
+      try { listener(next) } catch { /* Bandwidth-wait observation is passive. */ }
+    }
+    const bind = () => {
+      unsubscribeLane?.()
+      unsubscribeLane = undefined
+      if (closed || this.#closed || !routes.active) {
+        publish(false)
+        return
+      }
+      const generation = this.#provider.currentGeneration?.()
+      if (generation === undefined) {
+        publish(false)
+        return
+      }
+      unsubscribeLane = generation.lanes.subscribeBandwidthWait(routes, publish)
+    }
+    const cleanup = () => {
+      if (closed) return
+      closed = true
+      this.#bandwidthCleanups.delete(closeFromOwner)
+      unsubscribeLane?.()
+      unsubscribeGeneration?.()
+      unsubscribeRoutes?.()
+      unsubscribeLane = undefined
+      unsubscribeGeneration = undefined
+      unsubscribeRoutes = undefined
+    }
+    const closeFromOwner = () => {
+      publish(false)
+      cleanup()
+    }
+    try { listener(false) } catch { /* Bandwidth-wait observation is passive. */ }
+    if (this.#closed || !routes.active) return () => undefined
+    this.#bandwidthCleanups.add(closeFromOwner)
+    bind()
+    unsubscribeGeneration = this.#provider.subscribeGeneration?.(() => bind())
+    unsubscribeRoutes = routes.subscribe(() => {
+      if (!routes.active) bind()
+    })
+    return cleanup
   }
 
   async #open(

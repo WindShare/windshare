@@ -53,11 +53,7 @@ impl Render for SetupDialog {
                         ),
                 )
             });
-        let connecting = snapshot
-            .setup
-            .context()
-            .is_some_and(|ctx| !ctx.relay_url.is_empty());
-        if snapshot.setup.busy() && connecting || snapshot.setup.requires_cancellation() {
+        if self.shows_setup_progress() {
             return panel.child(self.progress_view(theme, cx));
         }
         let close_on_back = matches!(snapshot.target, SharingSetupTarget::Defaults);

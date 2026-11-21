@@ -86,9 +86,11 @@ func TestNameReportsAreIdempotentAndPreserveForeignFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	visit := func(callback func(outputcap.Directory) error) error { return callback(platform.Root()) }
+	wantReport := "windshare-names-" + store.operationID + "-1-1.json"
 	for range 2 {
-		if err := store.Export(resolver, shape, visit); err != nil {
-			t.Fatal(err)
+		summary, err := store.Export(resolver, shape, visit)
+		if err != nil || summary.RepairedCount != 1 || summary.ReportName != wantReport || summary.PageCount != 1 {
+			t.Fatalf("export summary = %+v, %v", summary, err)
 		}
 	}
 	files, err := filepath.Glob(filepath.Join(root, "windshare-names-*.json"))
@@ -110,11 +112,48 @@ func TestOrdinaryCollisionDoesNotExportANameReport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Export(resolver, shape, func(func(outputcap.Directory) error) error {
+	if summary, err := store.Export(resolver, shape, func(func(outputcap.Directory) error) error {
 		t.Fatal("ordinary collision opened the destination for a report")
 		return nil
-	}); err != nil {
+	}); err != nil || summary != (ReportSummary{}) {
+		t.Fatalf("ordinary collision summary = %+v, %v", summary, err)
+	}
+}
+
+func TestNameReportPaginationCountsAndWritesAllPages(t *testing.T) {
+	root := t.TempDir()
+	platform, err := outputportable.Open(root, false)
+	if err != nil {
 		t.Fatal(err)
+	}
+	defer platform.Close()
+	store := New(nil, operationID.Bytes(), true)
+	shape := outputnames.Root{RequestedName: "docs", ReservedName: "docs", PhysicalName: "docs", Kind: receivecontract.ContainerEntryResultRoot}
+	for _, logical := range []string{"docs/a?.txt", "docs/b?.txt", "docs/c?.txt"} {
+		component, err := outputnames.Candidate(operationID.Bytes(), logical, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Put(outputnames.Mapping{LogicalPath: logical, PhysicalComponent: component}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	records, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolver, err := outputnames.NewResolver(operationID.Bytes(), shape, records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstName, pageCount, err := store.exportToLimit(platform.Root(), resolver, shape, resolver.Mappings(), 1)
+	wantFirst := "windshare-names-" + store.operationID + "-1-0.json"
+	if err != nil || firstName != wantFirst || pageCount != 3 {
+		t.Fatalf("exportToLimit = (%q, %d, %v), want (%q, 3, nil)", firstName, pageCount, err, wantFirst)
+	}
+	files, err := filepath.Glob(filepath.Join(root, "windshare-names-*.json"))
+	if err != nil || len(files) != 3 {
+		t.Fatalf("report pages = %v, %v", files, err)
 	}
 }
 

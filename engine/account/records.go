@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"time"
 
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/serviceauthority"
 )
 
@@ -207,9 +208,23 @@ func (service *Service) install(ctx context.Context, previous Record, response s
 		return err
 	}
 	defer func() { <-service.local }()
+	var memoryReason string
+	if !login {
+		service.mu.Lock()
+		memoryReason = service.memoryDenialLocked(previous, issued)
+		service.mu.Unlock()
+	}
+	var denied Record
 	record, err := service.config.Store.Update(ctx, func(current Record) (Record, error) {
 		if !sameIdentity(current, previous) {
 			return Record{}, ErrSuperseded
+		}
+		if !login {
+			if reason, blocked := deniedIssuance(previous.Denial, current.Denial, memoryReason); blocked {
+				denied = current
+				denied.Denial = reason
+				return Record{}, &fault{Kind: "denied", Reason: reason}
+			}
 		}
 		if err := service.checkGeneration(current.Certificate, generation); err != nil {
 			return Record{}, err
@@ -219,6 +234,13 @@ func (service *Service) install(ctx context.Context, previous Record, response s
 		return next, nil
 	})
 	if err != nil {
+		if denied.Denial != "" {
+			service.mu.Lock()
+			service.adoptLocked(denied)
+			service.mu.Unlock()
+			service.transition(denied, Denied, denied.Denial, time.Time{})
+			service.emitIssuanceSupersededByDenial(denied, denied.Denial)
+		}
 		return err
 	}
 	service.mu.Lock()
@@ -226,12 +248,29 @@ func (service *Service) install(ctx context.Context, previous Record, response s
 		service.mu.Unlock()
 		return serviceauthority.ErrSignature
 	}
+	if !login {
+		if reason := service.memoryDenialLocked(previous, record); supersededByDenial(previous.Denial, reason) {
+			service.mu.Unlock()
+			service.transition(record, Denied, reason, time.Time{})
+			service.emitIssuanceSupersededByDenial(record, reason)
+			return &fault{Kind: "denied", Reason: reason}
+		}
+	}
 	service.issuedLocked(record)
 	next := service.ticketRefreshAt(record, service.config.Now(), service.accountViews != 0)
 	service.mu.Unlock()
 	service.transition(record, Ready, "", next)
 	service.emitTicketIssued(record, response.ExpiresAt, login)
 	return nil
+}
+
+func (service *Service) emitIssuanceSupersededByDenial(record Record, reason string) {
+	if !service.config.Diagnostics.Enabled() {
+		return
+	}
+	fields := diagnostics.Fields{"reason": diagnostics.Text(reason)}
+	credentialFields(fields, record.Credential)
+	service.emitDiagnostic("account_issuance_superseded_by_denial", fields)
 }
 
 // recordDenial serializes denial persistence with local store projections while

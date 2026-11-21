@@ -33,6 +33,19 @@ func formatTransferResult(result clievent.TransferResult, symbols Symbols) []ter
 		terminalcanvas.NewLine(terminalcanvas.Span{Text: destination}),
 		terminalcanvas.NewLine(terminalcanvas.Span{Text: "  " + formatOutcomeSummary(result, symbols.Separator)}),
 	}
+	if report, ok := result.CompatibleNameReport(); ok {
+		// RepairedCount comes from the persisted name-mapping ledger rather than
+		// bounded transfer progress counters, so it is always exact even when
+		// overall progress counters are marked inexact.
+		reference := escapedDisplay(report.ReportName.Text())
+		if report.PageCount > 1 {
+			reference += " and " + exactCountedNoun(report.PageCount-1, "more page", "more pages")
+		}
+		lines = append(lines, terminalcanvas.Plain(
+			"  "+exactCountedNoun(report.RepairedCount, "item saved under a compatible name", "items saved under compatible names")+
+				" (see "+reference+" beside destination).",
+		))
+	}
 	if result.SourceOmittedEntries() != 0 {
 		lines = append(lines, terminalcanvas.Plain("  A skipped directory counts as one item; all of its contents are excluded."))
 	}
@@ -137,6 +150,14 @@ func countedResultNoun(result clievent.TransferResult, count uint64, singular, p
 		label = singular
 	}
 	return resultCount(result, count) + " " + label
+}
+
+func exactCountedNoun(count uint64, singular, plural string) string {
+	label := plural
+	if count == 1 {
+		label = singular
+	}
+	return formatCount(count) + " " + label
 }
 
 func formatShareResult(result clievent.ShareResult, symbols Symbols) terminalcanvas.Line {

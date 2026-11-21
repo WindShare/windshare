@@ -243,6 +243,7 @@ export function receiverProgressSnapshot(progress: TransferProgress): ReceiverPr
     capacityAccumulatedWaitMilliseconds: progress.capacityAccumulatedWaitMilliseconds,
     capacityWaitAttempts: progress.capacityWaitAttempts,
     capacityWaitVisible: progress.capacityWaitVisible,
+    bandwidthWaitVisible: progress.bandwidthWaitVisible,
     transferJobId: progress.transferJobId,
     ...(progress.outputSessionId === undefined
       ? {}

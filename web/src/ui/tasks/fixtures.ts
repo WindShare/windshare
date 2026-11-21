@@ -43,6 +43,7 @@ export const TASK_FIXTURES: Readonly<Record<string, TaskFacts>> = Object.freeze(
   'open-discovery': taskFixture(),
   reconnecting: taskFixture({ blocking: Object.freeze({ kind: 'reconnecting' }) }),
   'sender-capacity': taskFixture({ blocking: Object.freeze({ kind: 'sender-capacity' }) }),
+  'relay-bandwidth': taskFixture({ blocking: Object.freeze({ kind: 'relay-bandwidth' }) }),
   verifying: taskFixture({
     directZipProgress: Object.freeze({
       kind: 'direct-zip', operationId: FIXTURE_OPERATION_ID, generation: 1n,

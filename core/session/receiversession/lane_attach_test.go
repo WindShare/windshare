@@ -324,7 +324,7 @@ func TestSenderMigratesSameBlockOperationAfterSendDetachRace(t *testing.T) {
 	defer cancel()
 	fragments := 0
 	completedRecord := false
-	tombstonedDuplicate := false
+	duplicateReplay := false
 	for {
 		message, awaitErr := receiver.rpc.Await(ctx, call)
 		if awaitErr != nil {
@@ -344,17 +344,17 @@ func TestSenderMigratesSameBlockOperationAfterSendDetachRace(t *testing.T) {
 				t.Fatal(assemblyErr)
 			}
 			completedRecord = completedRecord || assembly.Status == contentflow.RecordComplete
-			tombstonedDuplicate = tombstonedDuplicate || assembly.Status == contentflow.FragmentTombstoned
+			duplicateReplay = duplicateReplay || assembly.Status == contentflow.FragmentDuplicate
 			releaseFailure()
 		case protocolsession.MessageOperationComplete:
-			if fragments < 2 || !completedRecord || !tombstonedDuplicate {
+			if fragments < 2 || !completedRecord || !duplicateReplay {
 				receiver.rpc.End(call)
 				t.Fatalf(
-					"ambiguous fragment replay was not idempotent: fragments=%d complete=%v tombstoned=%v",
-					fragments, completedRecord, tombstonedDuplicate,
+					"ambiguous fragment replay was not idempotent: fragments=%d complete=%v duplicate=%v",
+					fragments, completedRecord, duplicateReplay,
 				)
 			}
-			_ = receiver.assembler.CompleteOperation(call.ID())
+			_ = receiver.assembler.RetireOperation(call.ID())
 			receiver.rpc.End(call)
 			goto completed
 		default:
