@@ -16,12 +16,9 @@ import (
 	"github.com/windshare/windshare/core/nodedirectory"
 )
 
-func readBounded(path string, limit int64) ([]byte, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
+var errNonRegularFile = errors.New("signed directory path must be a regular file")
+
+func readBoundedFile(file *os.File, limit int64) ([]byte, error) {
 	data, err := io.ReadAll(io.LimitReader(file, limit+1))
 	if err != nil {
 		return nil, err
@@ -30,6 +27,24 @@ func readBounded(path string, limit int64) ([]byte, error) {
 		return nil, nodedirectory.ErrFormat
 	}
 	return data, nil
+}
+
+func readBounded(path string, limit int64) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	return readBoundedFile(file, limit)
+}
+
+func readBoundedRegular(path string, limit int64) ([]byte, error) {
+	file, err := openRegularNoFollow(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	return readBoundedFile(file, limit)
 }
 
 func readJSON(path string, target any) error {
@@ -122,14 +137,16 @@ func writePublic(path string, data []byte) error {
 		_ = file.Close()
 		return err
 	}
+	// Apply permissions on the open handle before rename so a peer in the directory cannot swap a symlink.
+	if err = file.Chmod(0o644); err != nil {
+		_ = file.Close()
+		return err
+	}
 	if err = file.Sync(); err != nil {
 		_ = file.Close()
 		return err
 	}
 	if err = file.Close(); err != nil {
-		return err
-	}
-	if err = os.Chmod(file.Name(), 0o644); err != nil {
 		return err
 	}
 	return os.Rename(file.Name(), path)

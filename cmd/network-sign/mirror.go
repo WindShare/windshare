@@ -96,7 +96,7 @@ func readInstalledMirror(dir networkdirectory.Config, out, bundle string) (*inst
 		if path == "" {
 			continue
 		}
-		data, err := os.ReadFile(path)
+		data, err := readBoundedRegular(path, nodedirectory.MaximumEnvelopeBytes)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}

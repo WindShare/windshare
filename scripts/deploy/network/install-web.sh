@@ -8,6 +8,7 @@ revision=${3:?40-character commit required}
 [[ $(id -u) == 0 && -f $artifact && ! -L $artifact ]] || exit 2
 readonly root=/srv/windshare
 readonly retain_releases=3
+readonly account=windshare-network
 install -d -m 0755 "$root/releases" "$root/downloads"
 exec 9>/run/lock/windshare-web.lock
 flock 9
@@ -145,11 +146,17 @@ for version, src_dir in desired.items():
 PY
 
 # Serialize the release switch with the timer, which may still be reading the old current.
+if [[ -L "$root/directory" ]]; then
+    echo 'Directory mirror path must not be a symlink' >&2
+    exit 1
+fi
 if [[ -d "$root/directory" ]]; then
     exec 8<"$root/directory"
     flock 8
-    /opt/windshare-network/network-sign mirror --local-only \
-        --bundle "$destination/web/.well-known/windshare-network" --out "$root/directory/windshare-network.json"
+    # Drop root privileges and close both host lock FDs before touching service-owned mirror state.
+    runuser -u "$account" -- /opt/windshare-network/network-sign mirror --local-only \
+        --bundle "$destination/web/.well-known/windshare-network" \
+        --out "$root/directory/windshare-network.json" 8<&- 9>&-
 fi
 link="$root/.current.$$"
 ln -s -- "$destination" "$link"
