@@ -386,3 +386,32 @@ fn rate_refill_is_bounded_and_backward_time_never_refunds_attempts() {
         assert!(AttemptLimiter::new(attempts, UnixMillis(0)).is_err());
     }
 }
+
+#[test]
+fn attempt_reserve_protects_burst_headroom_and_refills() {
+    let mut rate = AttemptLimiter::new(
+        AttemptRate {
+            burst: 4,
+            refill: Duration::from_millis(100),
+        },
+        UnixMillis(100),
+    )
+    .unwrap();
+    assert_eq!(rate.burst(), 4);
+    assert!(!rate.attempt_with_reserve(UnixMillis(100), 4));
+    assert!(!rate.attempt_with_reserve(UnixMillis(100), u32::MAX));
+    assert!(rate.attempt_with_reserve(UnixMillis(100), 2));
+    assert!(rate.attempt_with_reserve(UnixMillis(100), 2));
+    assert!(!rate.attempt_with_reserve(UnixMillis(100), 2));
+    assert!(rate.attempt_with_reserve(UnixMillis(100), 1));
+    assert!(!rate.attempt_with_reserve(UnixMillis(100), 1));
+    assert!(rate.attempt_with_reserve(UnixMillis(100), 0));
+    assert!(!rate.attempt_with_reserve(UnixMillis(100), 0));
+    // One refill stays exclusively available to reserve=0 callers even if lower
+    // priority callers probe first.
+    assert!(!rate.attempt_with_reserve(UnixMillis(200), 2));
+    assert!(!rate.attempt_with_reserve(UnixMillis(200), 1));
+    assert!(rate.attempt_with_reserve(UnixMillis(200), 0));
+    // Backwards time cannot replenish reserved tokens.
+    assert!(!rate.attempt_with_reserve(UnixMillis(50), 0));
+}

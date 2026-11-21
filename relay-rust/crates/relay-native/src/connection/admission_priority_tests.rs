@@ -50,3 +50,68 @@ fn anonymous_pressure_preserves_authenticated_then_owner_control_and_business_ca
         assert!(connect(AdmissionPriority::Anonymous, 101).is_ok());
     }
 }
+
+#[test]
+fn anonymous_attempt_churn_preserves_authenticated_then_owner_upgrade_rate() {
+    let capacity = Capacity::new(
+        ConnectionLimits {
+            business: 32,
+            controls: 32,
+            business_per_source: 32,
+            controls_per_source: 32,
+        },
+        AttemptRate {
+            burst: 32,
+            refill: Duration::from_millis(100),
+        },
+        UnixMillis(0),
+    )
+    .unwrap();
+    let mut next_id = 1u64;
+    let mut churn = |priority, now| -> Result<(), Refusal> {
+        let id = next_id;
+        next_id += 1;
+        let slot = capacity.accept("192.0.2.1".parse().unwrap(), connection(id), now, priority)?;
+        drop(slot);
+        Ok(())
+    };
+
+    for (priority, count) in [
+        (AdmissionPriority::Anonymous, 24),
+        (AdmissionPriority::Authenticated, 4),
+        (AdmissionPriority::Owner, 4),
+    ] {
+        for _ in 0..count {
+            assert!(
+                churn(priority, UnixMillis(0)).is_ok(),
+                "priority={priority:?}"
+            );
+        }
+        assert_eq!(
+            churn(priority, UnixMillis(0)),
+            Err(Refusal::AttemptRate),
+            "priority={priority:?}"
+        );
+    }
+
+    // Under sustained anonymous pressure, single refills stay exclusively with Owner.
+    assert_eq!(
+        churn(AdmissionPriority::Anonymous, UnixMillis(100)),
+        Err(Refusal::AttemptRate)
+    );
+    assert_eq!(
+        churn(AdmissionPriority::Authenticated, UnixMillis(100)),
+        Err(Refusal::AttemptRate)
+    );
+    assert!(churn(AdmissionPriority::Owner, UnixMillis(100)).is_ok());
+
+    // Once Owner stops consuming, refills unlock Authenticated before Anonymous.
+    assert_eq!(
+        churn(AdmissionPriority::Anonymous, UnixMillis(600)),
+        Err(Refusal::AttemptRate)
+    );
+    assert!(churn(AdmissionPriority::Authenticated, UnixMillis(600)).is_ok());
+
+    // After full headroom recovers, Anonymous is admitted again.
+    assert!(churn(AdmissionPriority::Anonymous, UnixMillis(1_100)).is_ok());
+}

@@ -163,7 +163,7 @@ fn source_rejections_preserve_other_sources_and_do_not_partially_charge_budgets(
                     SOURCE_A,
                     connection(id),
                     UnixMillis(0),
-                    crate::connection::AdmissionPriority::Authenticated,
+                    crate::connection::AdmissionPriority::Owner,
                 )
                 .unwrap(),
         );
@@ -173,7 +173,7 @@ fn source_rejections_preserve_other_sources_and_do_not_partially_charge_budgets(
             SOURCE_B,
             connection(10),
             UnixMillis(0),
-            crate::connection::AdmissionPriority::Authenticated
+            crate::connection::AdmissionPriority::Owner
         ),
         Err(Refusal::AttemptRate)
     ));
@@ -235,7 +235,7 @@ fn closing_does_not_refund_the_attempt_rate() {
                     SOURCE_A,
                     connection(id),
                     UnixMillis(0),
-                    crate::connection::AdmissionPriority::Authenticated,
+                    crate::connection::AdmissionPriority::Owner,
                 )
                 .unwrap(),
         );
@@ -245,7 +245,7 @@ fn closing_does_not_refund_the_attempt_rate() {
             SOURCE_B,
             connection(9),
             UnixMillis(0),
-            crate::connection::AdmissionPriority::Authenticated
+            crate::connection::AdmissionPriority::Owner
         ),
         Err(Refusal::AttemptRate)
     ));
@@ -254,7 +254,7 @@ fn closing_does_not_refund_the_attempt_rate() {
             SOURCE_B,
             connection(10),
             UnixMillis(99),
-            crate::connection::AdmissionPriority::Authenticated
+            crate::connection::AdmissionPriority::Owner
         ),
         Err(Refusal::AttemptRate)
     ));
@@ -266,7 +266,7 @@ fn closing_does_not_refund_the_attempt_rate() {
                 SOURCE_B,
                 connection(11),
                 UnixMillis(100),
-                crate::connection::AdmissionPriority::Authenticated
+                crate::connection::AdmissionPriority::Owner
             )
             .is_ok()
     );
