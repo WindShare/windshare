@@ -21,6 +21,11 @@ export interface Listing {
 export interface RelayNode { key: number[]; zone: Zone; region: string; admission: Admission; anonymous: boolean; version: number; listing: Listing | null }
 export type PolicyChange = { field: 'admission'; value: Admission } | { field: 'anonymous_sharing'; value: boolean }
 
+// Legacy nodes without a fleet listing are relay-capable; fleet listings declare roles explicitly.
+export function servesRelay(node: Pick<RelayNode, 'listing'>): boolean {
+  return !node.listing || node.listing.spec.roles.includes('relay')
+}
+
 export interface LoadReport {
   created_at: number
   reported_at: number

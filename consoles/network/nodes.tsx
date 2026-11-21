@@ -11,11 +11,38 @@ import { BackLink, Badge, Bytes, DateStamp, EmptyState, Notice, ReadError } from
 import { Icon, type IconName } from '../ui/Icon'
 import type { AuthorityClient } from './api'
 import { encode } from './identity'
-import type { LoadReport, NodeDetails, NodePage, PolicyChange, Publication, RelayNode } from './model'
+import { servesRelay, type LoadReport, type NodeDetails, type NodePage, type PolicyChange, type Publication, type RelayNode } from './model'
 
 type Directory = Publication | null | undefined
+type BadgeTone = 'neutral' | 'good' | 'warning' | 'info'
 
 const STAGING_TONES = { queued: 'neutral', running: 'neutral', passed: 'good', failed: 'warning' } as const
+
+function relayPolicyStatus(node: RelayNode, t: typeof networkCopy.en): { tone: BadgeTone; label: string } {
+  const { listing } = node
+  if (!listing || servesRelay(node)) {
+    return {
+      tone: node.admission === 'accepting' ? 'good' : 'warning',
+      label: t.admissions[node.admission],
+    }
+  }
+  // Authority keeps STUN-only fleet nodes at admission=draining (fail-closed for relay)
+  // so they reject public relay traffic while remaining eligible for probes and maintenance.
+  if (listing.state.kind === 'disabled') return { tone: 'warning', label: t.admissions.disabled }
+  if (listing.maintenance) return { tone: 'info', label: t.maintenance }
+  if (listing.state.kind === 'listed' && listing.state.status === 'draining') {
+    return { tone: 'warning', label: t.states.draining }
+  }
+  return { tone: 'neutral', label: t.stunOnly }
+}
+
+function RelayPolicyCell({ node }: { node: RelayNode }) {
+  const t = useCopy(networkCopy)
+  const status = relayPolicyStatus(node, t)
+  const access = node.anonymous ? t.anonymousAllowed : t.accountRequired
+  return <><Badge tone={status.tone}>{status.label}</Badge>
+    <small>{servesRelay(node) ? `${access} · v${node.version}` : `v${node.version}`}</small></>
+}
 
 function Listing({ directory, id, listing }: { directory: Directory; id: string; listing?: RelayNode['listing'] }) {
   const t = useCopy(networkCopy)
@@ -84,8 +111,7 @@ export function Nodes({ page, directory, loading, loadMore }: {
               <th scope="row"><a className="node-link" href={'#node/' + id}>
                 <span className="row-icon"><Icon name="server" size={19} /></span>
                 <span>{node.listing?.spec.alias || node.region || t.zones[node.zone]}<small>{t.zones[node.zone]} · <code>{id.slice(0, 8)}</code></small></span></a></th>
-              <td data-label={t.savedRelayPolicy}><div><Badge tone={node.admission === 'accepting' ? 'good' : 'warning'}>{t.admissions[node.admission]}</Badge>
-                <small>{node.anonymous ? t.anonymousAllowed : t.accountRequired} · v{node.version}</small></div></td>
+              <td data-label={t.savedRelayPolicy}><div><RelayPolicyCell node={node} /></div></td>
               <td data-label={t.lastReport}><div><Latest report={node.report} /></div></td>
               <td data-label={t.directory}><div><Listing directory={directory} id={id} listing={node.listing} />{directory && <ProbeWarnings node={node} directory={directory} />}</div></td>
             </tr>
@@ -121,6 +147,8 @@ export function NodeDetail({ node, directory, api, saved, refresh }: NodeDetailA
   const t = useCopy(networkCopy)
   const action = useAction()
   const id = encode(node.key)
+  const hasRelay = servesRelay(node)
+  const relayPolicy = relayPolicyStatus(node, t)
   function change(change: PolicyChange) {
     void action.run(async () => {
       saved(await api.policy(node.key, change))
@@ -140,12 +168,12 @@ export function NodeDetail({ node, directory, api, saved, refresh }: NodeDetailA
           {t.sessions(report.load.active_sessions)} · {t.relayed} <Bytes value={report.load.forwarded_bytes} /> · {t.refusals(report.load.admission_refusals)}</dd></>}
       </dl></section>
     <section className="panel padded"><div className="section-title"><h2>{t.savedNodePolicy}</h2><Badge>v{node.version}</Badge></div>
-      <div className="setting-row"><div><h3>{t.publicRelay}</h3><p>{t.admissions[node.admission]}</p></div>
+      <div className="setting-row"><div><h3>{t.publicRelay}</h3><p>{relayPolicy.label}</p></div>
         {!node.listing && <button className="secondary" disabled={action.busy} onClick={() => node.admission === 'disabled'
           ? change({ field: 'admission', value: 'accepting' }) : setConfirmPause(true)}>{node.admission === 'disabled' ? t.enableRelay : t.disable}</button>}</div>
-      <div className="setting-row"><div><h3>{t.anonymousSharing}</h3><p>{node.anonymous ? t.allowed : t.accountRequired}</p></div>
+      {hasRelay && <div className="setting-row"><div><h3>{t.anonymousSharing}</h3><p>{node.anonymous ? t.allowed : t.accountRequired}</p></div>
         <button className="secondary" disabled={action.busy} onClick={() => change({ field: 'anonymous_sharing', value: !node.anonymous })}>
-          {node.anonymous ? t.requireAccount : t.allowAnonymous}</button></div>
+          {node.anonymous ? t.requireAccount : t.allowAnonymous}</button></div>}
       <Notice feedback={action.feedback} />
     </section></div>
     {node.listing && <Verification node={node} api={api} refresh={refresh} />}

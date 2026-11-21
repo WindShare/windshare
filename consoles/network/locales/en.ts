@@ -79,6 +79,7 @@ export const en = {
   states: { queued: 'Waiting for a vantage agent', running: 'Verification in progress', passed: 'Verified', failed: 'Verification failed', canary: 'Canary', active: 'Active', draining: 'Draining' },
   relayBudget: 'Monthly relay budget', resetsDay: (day: number) => `resets on day ${day} UTC`,
   admissions: { accepting: 'Accepting shares', draining: 'Draining', disabled: 'Disabled' },
+  stunOnly: 'STUN only',
   appliedPolicy: 'Applied / requested policy', residentShares: 'Resident shares', probes: 'Vantage reports',
   passed: 'Passed', probeFailed: 'Failed', fleetOperations: 'Traffic controls', maintenance: 'Maintenance in progress',
   drain: 'Drain relay', disable: 'Disable node', removeNode: 'Remove node', verifyAgain: 'Verify again',

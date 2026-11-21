@@ -80,6 +80,7 @@ export const zhCN = {
   states: { queued: '等待分区探测', running: '正在验证', passed: '已验证', failed: '验证失败', canary: '灰度', active: '正式', draining: '排空中' },
   relayBudget: '每月中转流量上限', resetsDay: (day: number) => `每月 ${day} 日 UTC 重置`,
   admissions: { accepting: '接受新分享', draining: '排空中', disabled: '已停用' },
+  stunOnly: '仅 STUN',
   appliedPolicy: '已应用 / 请求的策略', residentShares: '驻留分享数', probes: '探测点报告',
   passed: '通过', probeFailed: '失败', fleetOperations: '流量管理', maintenance: '维护中',
   drain: '排空中转', disable: '停用节点', removeNode: '移除节点', verifyAgain: '重新验证',

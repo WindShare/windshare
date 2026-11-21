@@ -6,7 +6,7 @@ import { RequestError } from '../../ui/request'
 import { useCopy } from '../../ui/use-locale'
 import { networkCopy } from '../locales'
 import type { AuthorityClient } from '../api'
-import type { FleetAction, NodeDetails, Publication } from '../model'
+import { servesRelay, type FleetAction, type NodeDetails, type Publication } from '../model'
 
 const CERTIFICATE_WARNING_SECONDS = 14 * 86400
 
@@ -98,6 +98,7 @@ export function FleetControls({ node, api, refresh }: { node: NodeDetails; api: 
   if (!listing || listing.state.kind === 'staging') return null
   const disabled = listing.state.kind === 'disabled'
   const maintenance = listing.maintenance
+  const hasRelay = servesRelay(node)
   function run(command: FleetAction) {
     if (!listing) return
     void action.run(async () => {
@@ -120,7 +121,7 @@ export function FleetControls({ node, api, refresh }: { node: NodeDetails; api: 
   return <section className="panel padded stack"><h2>{t.fleetOperations}</h2>
     {maintenance && <Badge tone="info">{disabled ? t.disableAfterMaintenance : t.maintenance} · {maintenance}</Badge>}
     <div className="actions">
-      {listing.state.kind === 'listed' && listing.state.status !== 'draining' &&
+      {hasRelay && listing.state.kind === 'listed' && listing.state.status !== 'draining' &&
         <button type="button" className="secondary" disabled={action.busy} onClick={() => run({ kind: 'drain' })}>{t.drain}</button>}
       {maintenance && <button type="button" className="secondary" disabled={action.busy}
         onClick={() => setAborting(maintenance)}>{t.abortMaintenance}</button>}
