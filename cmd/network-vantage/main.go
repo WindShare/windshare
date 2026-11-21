@@ -17,13 +17,14 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 	"unicode/utf8"
 
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/nodedirectory"
-	"github.com/windshare/windshare/engine/builtinnetwork"
+	"github.com/windshare/windshare/engine/account"
 	"github.com/windshare/windshare/engine/networkconfig"
 	"github.com/windshare/windshare/internal/networkprobe"
 )
@@ -48,16 +49,35 @@ type agent struct {
 
 func main() {
 	keyPath := flag.String("key", "", "probe-only Ed25519 PKCS8 PEM")
+	releasePath := flag.String("release", "", "optional release manifest overriding the embedded network configuration")
+	authority := flag.String("authority", "", "optional authority HTTPS origin overriding the release authority URL")
 	flag.Parse()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
-	err := run(*keyPath)
+	err := run(*keyPath, *releasePath, *authority)
 	if err != nil {
 		slog.Error("vantage stopped", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(path string) error {
+func loadConfig(releasePath, authorityOverride string) (*networkconfig.Config, error) {
+	config, err := networkprobe.LoadRelease(releasePath)
+	if err != nil {
+		return nil, err
+	}
+	authorityURL, err := networkprobe.ResolveAuthority(config, authorityOverride)
+	if err != nil {
+		return nil, err
+	}
+	if config.Authority == nil {
+		config.Authority = &account.Config{URL: authorityURL}
+	} else {
+		config.Authority.URL = authorityURL
+	}
+	return config, nil
+}
+
+func run(path, releasePath, authorityOverride string) error {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -74,13 +94,11 @@ func run(path string) error {
 	if !ok {
 		return errors.New("expected Ed25519 probe key")
 	}
-	config, err := builtinnetwork.Config("")
+	config, err := loadConfig(releasePath, authorityOverride)
 	if err != nil {
 		return err
 	}
-	if config.Authority == nil {
-		return errors.New("release does not specify an authority")
-	}
+	slog.Info("vantage started", "authority", config.Authority.URL, "release_override", releasePath != "", "authority_override", authorityOverride != "")
 	a := agent{key: key, config: config, client: networkprobe.Client(), authority: networkprobe.ReleaseClient()}
 	defer a.client.CloseIdleConnections()
 	defer a.authority.CloseIdleConnections()
@@ -104,7 +122,7 @@ func run(path string) error {
 }
 
 func (a *agent) mirror(ctx context.Context) *string {
-	mirrorURL := a.config.LinkHost + "/.well-known/windshare-network"
+	mirrorURL := strings.TrimRight(a.config.LinkHost, "/") + "/.well-known/windshare-network"
 	data, err := networkprobe.Fetch(ctx, a.client, mirrorURL, nodedirectory.MaximumEnvelopeBytes)
 	if err != nil {
 		slog.Warn("mainland mirror fetch failed", "url", mirrorURL, "error", err)
@@ -208,7 +226,7 @@ func (a *agent) post(ctx context.Context, path, domain string, body, out any) er
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.config.Authority.URL+"/v1/vantage/"+path, bytes.NewReader(proof))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(a.config.Authority.URL, "/")+"/v1/vantage/"+path, bytes.NewReader(proof))
 	if err != nil {
 		return err
 	}

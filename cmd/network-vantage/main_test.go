@@ -10,6 +10,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -19,6 +21,7 @@ import (
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/nodedirectory"
 	"github.com/windshare/windshare/engine/account"
+	"github.com/windshare/windshare/engine/builtinnetwork"
 	"github.com/windshare/windshare/engine/networkconfig"
 	"github.com/windshare/windshare/engine/networkdirectory"
 	"github.com/windshare/windshare/internal/networkprobe"
@@ -581,5 +584,120 @@ func TestFleetCycleBoundsMirrorInsideCycleBudget(t *testing.T) {
 	}
 	if reported.Mirror != nil || len(reported.Nodes) != 1 {
 		t.Fatalf("expected nil mirror and 1 node observation after mirror timeout, got %+v", reported)
+	}
+}
+
+func writeSignedReleaseFile(t *testing.T, dir, name, network, linkHost, authorityURL string) string {
+	t.Helper()
+	b64 := base64.RawURLEncoding
+	rootA := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{21}, ed25519.SeedSize))
+	rootB := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{22}, ed25519.SeedSize))
+	online := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{23}, ed25519.SeedSize))
+	authRoot := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{24}, ed25519.SeedSize))
+	now := time.Now().UTC().Truncate(time.Second)
+	roots := []nodedirectory.Root{
+		{ID: "stage-a", Key: rootA.Public().(ed25519.PublicKey)},
+		{ID: "stage-b", Key: rootB.Public().(ed25519.PublicKey)},
+	}
+	cert, err := nodedirectory.Certify(nodedirectory.Certificate{
+		Format:     nodedirectory.Format,
+		Network:    network,
+		Generation: 1,
+		Key:        b64.EncodeToString(online.Public().(ed25519.PublicKey)),
+		NotBefore:  now.Add(-time.Minute),
+		ExpiresAt:  now.Add(24 * time.Hour),
+	}, "stage-a", rootA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := nodedirectory.Sign(nodedirectory.Payload{
+		Format:     nodedirectory.Format,
+		Network:    network,
+		Generation: 1,
+		Serial:     1,
+		IssuedAt:   now,
+		ExpiresAt:  now.Add(24 * time.Hour),
+	}, cert, online, roots)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := map[string]any{
+		"network":   network,
+		"link_host": linkHost,
+		"roots": []map[string]string{
+			{"id": "stage-a", "key": b64.EncodeToString(rootA.Public().(ed25519.PublicKey))},
+			{"id": "stage-b", "key": b64.EncodeToString(rootB.Public().(ed25519.PublicKey))},
+		},
+		"snapshot": json.RawMessage(snapshot),
+	}
+	if authorityURL != "" {
+		manifest["authority"] = map[string]string{
+			"url":  authorityURL,
+			"root": b64.EncodeToString(authRoot.Public().(ed25519.PublicKey)),
+		}
+	}
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestLoadConfigOverridesReleaseAndAuthority(t *testing.T) {
+	t.Parallel()
+	embedded, err := builtinnetwork.Config("")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	def, err := loadConfig("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if def.LinkHost != embedded.LinkHost || def.Authority == nil || def.Authority.URL != embedded.Authority.URL {
+		t.Fatalf("default config = %+v, want embedded %+v", def, embedded)
+	}
+
+	overrideOnly, err := loadConfig("", "https://staging-api.example.workers.dev/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overrideOnly.LinkHost != embedded.LinkHost || overrideOnly.Directory.Network != embedded.Directory.Network || overrideOnly.Authority.URL != "https://staging-api.example.workers.dev" {
+		t.Fatalf("authority-only override config = %+v", overrideOnly)
+	}
+
+	dir := t.TempDir()
+	releaseWithAuthority := writeSignedReleaseFile(t, dir, "with-authority.json", "windshare-staging", "https://stage-front.example", "https://stage-api.example/")
+	fromRelease, err := loadConfig(releaseWithAuthority, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fromRelease.Directory.Network != "windshare-staging" || fromRelease.LinkHost != "https://stage-front.example" || fromRelease.Authority.URL != "https://stage-api.example" {
+		t.Fatalf("release-override config = %+v", fromRelease)
+	}
+
+	releaseWithoutAuthority := writeSignedReleaseFile(t, dir, "no-authority.json", "windshare-staging", "https://stage-front.example", "")
+	if _, err := loadConfig(releaseWithoutAuthority, ""); err == nil {
+		t.Fatal("release without authority accepted when no -authority override given")
+	}
+	combined, err := loadConfig(releaseWithoutAuthority, "https://direct-origin.example/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if combined.Directory.Network != "windshare-staging" || combined.LinkHost != "https://stage-front.example" || combined.Authority.URL != "https://direct-origin.example" {
+		t.Fatalf("combined override config = %+v", combined)
+	}
+
+	for _, bad := range []string{"http://stage-api.example", "https://stage-api.example/v1", "https://user@stage-api.example"} {
+		if _, err := loadConfig("", bad); err == nil {
+			t.Fatalf("accepted invalid -authority %q", bad)
+		}
+	}
+	if _, err := loadConfig(filepath.Join(dir, "missing.json"), ""); err == nil {
+		t.Fatal("accepted missing -release file")
 	}
 }

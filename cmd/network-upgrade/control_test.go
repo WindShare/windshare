@@ -66,13 +66,41 @@ func TestRunnerRejectsUnboundInputsBeforeSSH(t *testing.T) {
 	op := strings.Repeat("b", 32)
 	path := filepath.Join(t.TempDir(), "missing-binary")
 	t.Setenv("FLEET_MAINTENANCE_TOKEN", strings.Repeat("c", 42))
-	for _, args := range [][5]string{{"-ssh", key, path, rev, ""}, {"relay", key, path, "bad", ""}, {"relay", "bad", path, rev, ""}, {"relay", key, path, rev, op}, {"relay", key, "", "", "bad"}} {
-		if err := run(args[0], args[1], args[2], args[3], args[4]); err == nil {
+	for _, args := range [][6]string{
+		{"-ssh", key, path, rev, "", ""},
+		{"relay", key, path, "bad", "", ""},
+		{"relay", "bad", path, rev, "", ""},
+		{"relay", key, path, rev, op, ""},
+		{"relay", key, "", "", "bad", ""},
+		{"relay", key, path, rev, "", "http://staging.example"},
+		{"relay", key, path, rev, "", "https://staging.example/v1"},
+		{"relay", key, path, rev, "", "https://user:pass@staging.example"},
+	} {
+		if err := run(args[0], args[1], args[2], args[3], args[4], args[5]); err == nil {
 			t.Fatalf("accepted invalid identifiers: %q", args)
 		}
 	}
-	if err := run("relay", key, path, rev, ""); !errors.Is(err, os.ErrNotExist) {
+	if err := run("relay", key, path, rev, "", ""); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("preflight: %v", err)
+	}
+	if err := run("relay", key, path, rev, "", "https://staging-authority.example.workers.dev/"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("preflight with authority override: %v", err)
+	}
+}
+
+func TestResolveAuthorityDefaultAndOverride(t *testing.T) {
+	defaultURL, err := resolveAuthority("")
+	if err != nil || !strings.HasPrefix(defaultURL, "https://") {
+		t.Fatalf("default authority = (%q, %v)", defaultURL, err)
+	}
+	overrideURL, err := resolveAuthority("https://authority.windshare.cc/")
+	if err != nil || overrideURL != "https://authority.windshare.cc" {
+		t.Fatalf("override authority = (%q, %v)", overrideURL, err)
+	}
+	for _, bad := range []string{"http://authority.windshare.cc", "https://authority.windshare.cc/v1", "https://authority.windshare.cc?a=1"} {
+		if _, err := resolveAuthority(bad); err == nil {
+			t.Fatalf("accepted invalid authority override %q", bad)
+		}
 	}
 }
 

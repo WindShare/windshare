@@ -11,7 +11,7 @@ import (
 )
 
 func TestReleasePinsTrustAndLeavesUnprovisionedBuildsExplicit(t *testing.T) {
-	config, err := parse([]byte(`{"network":"test","link_host":"https://front.example","mirrors":["https://mirror.example"],"native_fallback_mirrors":["https://release-asset.example/directory.json"],"roots":[],"snapshot":null}`), filepath.Join(t.TempDir(), "config.json"))
+	config, err := Parse([]byte(`{"network":"test","link_host":"https://front.example","mirrors":["https://mirror.example"],"native_fallback_mirrors":["https://release-asset.example/directory.json"],"roots":[],"snapshot":null}`), filepath.Join(t.TempDir(), "config.json"))
 	if err != nil || config.LinkHost != "https://front.example" || len(config.Directory.Mirrors) != 0 || len(config.Directory.FallbackMirrors) != 0 || config.Directory.Cache == nil {
 		t.Fatal(config, err)
 	}
@@ -40,7 +40,7 @@ func TestReleasePinsTrustAndLeavesUnprovisionedBuildsExplicit(t *testing.T) {
 		}
 		return data
 	}
-	if _, err := parse(encode(), ""); err == nil {
+	if _, err := Parse(encode(), ""); err == nil {
 		t.Fatal("single built-in root accepted")
 	}
 	spare := release.Roots[0]
@@ -48,7 +48,7 @@ func TestReleasePinsTrustAndLeavesUnprovisionedBuildsExplicit(t *testing.T) {
 	release.Roots = append(release.Roots, spare)
 	release.Mirrors = []string{"https://live.example/.well-known/windshare-network"}
 	release.NativeFallbackMirrors = []string{"https://cold.example/windshare-network.json"}
-	provisioned, err := parse(encode(), "")
+	provisioned, err := Parse(encode(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,19 +56,19 @@ func TestReleasePinsTrustAndLeavesUnprovisionedBuildsExplicit(t *testing.T) {
 		t.Fatalf("mirror tiers = live:%v fallback:%v", provisioned.Directory.Mirrors, provisioned.Directory.FallbackMirrors)
 	}
 	release.Roots[1] = release.Roots[0]
-	if _, err := parse(encode(), ""); err == nil {
+	if _, err := Parse(encode(), ""); err == nil {
 		t.Fatal("duplicate roots accepted")
 	}
 	release.Roots[1] = spare
 	release.Roots[1].Key = "bad"
-	if _, err := parse(encode(), ""); err == nil {
+	if _, err := Parse(encode(), ""); err == nil {
 		t.Fatal("malformed root accepted")
 	}
 	release.Roots = nil
-	if _, err := parse(encode(), ""); err == nil {
+	if _, err := Parse(encode(), ""); err == nil {
 		t.Fatal("snapshot without root accepted")
 	}
-	if _, err := parse([]byte("{"), ""); err == nil {
+	if _, err := Parse([]byte("{"), ""); err == nil {
 		t.Fatal("malformed release accepted")
 	}
 }

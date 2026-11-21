@@ -264,3 +264,180 @@ func TestMirrorSyncsParentDirectoryAcrossPublishAndWithdrawTransitions(t *testin
 		}
 	})
 }
+
+func TestMirrorReleaseAndAuthorityOverrides(t *testing.T) {
+	t.Parallel()
+	b64 := base64.RawURLEncoding
+	rootA := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{31}, ed25519.SeedSize))
+	rootB := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{32}, ed25519.SeedSize))
+	online := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{33}, ed25519.SeedSize))
+	authRoot := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{34}, ed25519.SeedSize))
+	now := time.Now().UTC().Truncate(time.Second)
+	roots := []nodedirectory.Root{
+		{ID: "stage-a", Key: rootA.Public().(ed25519.PublicKey)},
+		{ID: "stage-b", Key: rootB.Public().(ed25519.PublicKey)},
+	}
+	cert, err := nodedirectory.Certify(nodedirectory.Certificate{
+		Format:     nodedirectory.Format,
+		Network:    "windshare-staging",
+		Generation: 1,
+		Key:        b64.EncodeToString(online.Public().(ed25519.PublicKey)),
+		NotBefore:  now.Add(-time.Minute),
+		ExpiresAt:  now.Add(24 * time.Hour),
+	}, "stage-a", rootA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	embeddedSnap, err := nodedirectory.Sign(nodedirectory.Payload{
+		Format:     nodedirectory.Format,
+		Network:    "windshare-staging",
+		Generation: 1,
+		Serial:     1,
+		IssuedAt:   now,
+		ExpiresAt:  now.Add(24 * time.Hour),
+	}, cert, online, roots)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remoteSnap, err := nodedirectory.Sign(nodedirectory.Payload{
+		Format:     nodedirectory.Format,
+		Network:    "windshare-staging",
+		Generation: 1,
+		Serial:     2,
+		IssuedAt:   now,
+		ExpiresAt:  now.Add(24 * time.Hour),
+	}, cert, online, roots)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	releasePath := filepath.Join(dir, "staging-release.json")
+	rawRelease, err := json.Marshal(map[string]any{
+		"network":   "windshare-staging",
+		"link_host": "https://staging-front.example",
+		"roots": []map[string]string{
+			{"id": "stage-a", "key": b64.EncodeToString(rootA.Public().(ed25519.PublicKey))},
+			{"id": "stage-b", "key": b64.EncodeToString(rootB.Public().(ed25519.PublicKey))},
+		},
+		"snapshot": json.RawMessage(embeddedSnap),
+		"authority": map[string]string{
+			"url":  "https://staging-api.example/",
+			"root": b64.EncodeToString(authRoot.Public().(ed25519.PublicKey)),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(releasePath, rawRelease, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("release override works offline with --local-only", func(t *testing.T) {
+		out := filepath.Join(t.TempDir(), "dir.json")
+		fetchCalled := false
+		err := mirrorWithFetch([]string{"--out", out, "--local-only", "--release", releasePath}, func(string) ([]byte, error) {
+			fetchCalled = true
+			return nil, errors.New("unexpected fetch")
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fetchCalled {
+			t.Fatal("--local-only invoked fetch")
+		}
+		published, err := os.ReadFile(out)
+		if err != nil {
+			t.Fatal(err)
+		}
+		snap, err := nodedirectory.Verify(published, "windshare-staging", roots)
+		if err != nil || snap.Cursor().Serial != 1 {
+			t.Fatalf("published snapshot = (%v, %v), want serial 1", snap.Cursor(), err)
+		}
+	})
+
+	t.Run("release override fetches configured authority and verifies with manifest roots", func(t *testing.T) {
+		out := filepath.Join(t.TempDir(), "dir.json")
+		var fetched string
+		err := mirrorWithFetch([]string{"--out", out, "--release", releasePath}, func(authority string) ([]byte, error) {
+			fetched = authority
+			return remoteSnap, nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fetched != "https://staging-api.example" {
+			t.Fatalf("fetched authority = %q, want %q", fetched, "https://staging-api.example")
+		}
+		published, err := os.ReadFile(out)
+		if err != nil {
+			t.Fatal(err)
+		}
+		snap, err := nodedirectory.Verify(published, "windshare-staging", roots)
+		if err != nil || snap.Cursor().Serial != 2 {
+			t.Fatalf("published snapshot = (%v, %v), want serial 2", snap.Cursor(), err)
+		}
+	})
+
+	t.Run("authority override supersedes release authority URL", func(t *testing.T) {
+		out := filepath.Join(t.TempDir(), "dir.json")
+		var fetched string
+		err := mirrorWithFetch([]string{
+			"--out", out,
+			"--release", releasePath,
+			"--authority", "https://preview-authority.example.workers.dev/",
+		}, func(authority string) ([]byte, error) {
+			fetched = authority
+			return remoteSnap, nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fetched != "https://preview-authority.example.workers.dev" {
+			t.Fatalf("fetched authority = %q, want canonical override", fetched)
+		}
+	})
+
+	t.Run("authority override works with default embedded release", func(t *testing.T) {
+		out := filepath.Join(t.TempDir(), "dir.json")
+		var fetched string
+		upstreamErr := errors.New("staging unreachable")
+		err := mirrorWithFetch([]string{
+			"--out", out,
+			"--authority", "https://authority.windshare.cc/",
+		}, func(authority string) ([]byte, error) {
+			fetched = authority
+			return nil, upstreamErr
+		})
+		if !errors.Is(err, upstreamErr) {
+			t.Fatalf("err = %v, want %v", err, upstreamErr)
+		}
+		if fetched != "https://authority.windshare.cc" {
+			t.Fatalf("fetched authority = %q, want %q", fetched, "https://authority.windshare.cc")
+		}
+		if _, statErr := os.Stat(out); statErr != nil {
+			t.Fatalf("embedded snapshot was not published to %s: %v", out, statErr)
+		}
+	})
+
+	t.Run("rejects --authority with --local-only and invalid authority origins", func(t *testing.T) {
+		for _, args := range [][]string{
+			{"--out", filepath.Join(t.TempDir(), "dir.json"), "--local-only", "--authority", "https://staging-api.example"},
+			{"--out", filepath.Join(t.TempDir(), "dir.json"), "--release", releasePath, "--authority", "http://staging-api.example"},
+			{"--out", filepath.Join(t.TempDir(), "dir.json"), "--release", releasePath, "--authority", "https://staging-api.example/path"},
+			{"--out", filepath.Join(t.TempDir(), "dir.json"), "--release", releasePath, "--authority", "https://user@staging-api.example"},
+		} {
+			fetchCalled := false
+			err := mirrorWithFetch(args, func(string) ([]byte, error) {
+				fetchCalled = true
+				return remoteSnap, nil
+			})
+			if err == nil {
+				t.Fatalf("mirrorWithFetch(%v) succeeded, want error", args)
+			}
+			if fetchCalled {
+				t.Fatalf("mirrorWithFetch(%v) called fetch despite invalid flags", args)
+			}
+		}
+	})
+}

@@ -35,10 +35,13 @@ type releaseConfig struct {
 }
 
 func Config(configPath string) (*networkconfig.Config, error) {
-	return parse(release.Release, configPath)
+	return Parse(release.Release, configPath)
 }
 
-func parse(data []byte, configPath string) (*networkconfig.Config, error) {
+// Parse decodes and verifies an explicit release manifest with the same root
+// and snapshot checks as Config. End-user applications must continue calling
+// Config so compiled-in trust cannot be overridden at runtime.
+func Parse(data []byte, configPath string) (*networkconfig.Config, error) {
 	var source releaseConfig
 	if err := json.Unmarshal(data, &source); err != nil {
 		return nil, err

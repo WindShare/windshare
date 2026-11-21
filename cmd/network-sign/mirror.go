@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/core/nodedirectory"
-	"github.com/windshare/windshare/engine/builtinnetwork"
 	"github.com/windshare/windshare/engine/networkdirectory"
 	"github.com/windshare/windshare/internal/networkprobe"
 )
@@ -26,27 +25,37 @@ func fetchMirror(authority string) ([]byte, error) {
 }
 
 func mirror(args []string) error {
+	return mirrorWithFetch(args, fetchMirror)
+}
+
+func mirrorWithFetch(args []string, fetch func(string) ([]byte, error)) error {
 	flags := flag.NewFlagSet("mirror", flag.ContinueOnError)
 	path := flags.String("out", "", "persistent directory envelope path")
 	bundle := flags.String("bundle", "", "directory in the frontend release being served")
 	local := flags.Bool("local-only", false, "reconcile installed snapshots without contacting the authority")
+	releasePath := flags.String("release", "", "optional release manifest overriding the embedded network configuration")
+	authority := flags.String("authority", "", "optional authority HTTPS origin overriding the release authority URL")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if *path == "" || flags.NArg() != 0 {
 		return errors.New("mirror requires --out")
 	}
-	config, err := builtinnetwork.Config("")
+	if *local && *authority != "" {
+		return errors.New("mirror --authority cannot be combined with --local-only")
+	}
+	config, err := networkprobe.LoadRelease(*releasePath)
 	if err != nil {
 		return err
 	}
 	var remote []byte
 	var refreshErr error
 	if !*local {
-		if config.Authority == nil {
-			return errors.New("release has no public authority")
+		authorityURL, err := networkprobe.ResolveAuthority(config, *authority)
+		if err != nil {
+			return err
 		}
-		remote, refreshErr = fetchMirror(config.Authority.URL)
+		remote, refreshErr = fetch(authorityURL)
 	}
 	// Installation and the timer take the same host lock across selection and rename.
 	// Even during an upstream outage a newly installed release can advance the local mirror.

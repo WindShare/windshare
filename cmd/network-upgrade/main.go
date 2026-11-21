@@ -35,9 +35,10 @@ func main() {
 	artifact := flag.String("artifact", "", "candidate wsrelay executable")
 	revision := flag.String("revision", "", "40-character source commit")
 	recoverID := flag.String("recover-operation", "", "verify and release an interrupted operation by its logged ID")
+	authority := flag.String("authority", "", "optional authority HTTPS origin overriding the embedded release")
 	flag.Parse()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
-	err := run(*host, *node, *artifact, *revision, *recoverID)
+	err := run(*host, *node, *artifact, *revision, *recoverID, *authority)
 	if err != nil {
 		slog.Error("upgrade ended", "error", err)
 		if errors.Is(err, errDeferred) {
@@ -47,7 +48,18 @@ func main() {
 	}
 }
 
-func run(host, key, path, revision, recoverID string) error {
+func resolveAuthority(override string) (string, error) {
+	if override != "" {
+		return networkprobe.AuthorityOrigin(override)
+	}
+	config, err := builtinnetwork.Config("")
+	if err != nil {
+		return "", err
+	}
+	return networkprobe.ResolveAuthority(config, "")
+}
+
+func run(host, key, path, revision, recoverID, authorityOverride string) error {
 	if !sshAlias.MatchString(host) {
 		return errors.New("expected a pinned SSH alias")
 	}
@@ -65,12 +77,9 @@ func run(host, key, path, revision, recoverID string) error {
 	if len(token) < 32 {
 		return errors.New("set FLEET_MAINTENANCE_TOKEN")
 	}
-	config, err := builtinnetwork.Config("")
+	authorityURL, err := resolveAuthority(authorityOverride)
 	if err != nil {
 		return err
-	}
-	if config.Authority == nil {
-		return errors.New("release has no authority")
 	}
 	var id [16]byte
 	rand.Read(id[:])
@@ -78,10 +87,10 @@ func run(host, key, path, revision, recoverID string) error {
 	if op == "" {
 		op = hex.EncodeToString(id[:])
 	}
-	r := runner{op: operation{key, op}, authority: config.Authority.URL, host: host, token: token, api: networkprobe.ReleaseClient(), probe: networkprobe.Client()}
+	r := runner{op: operation{key, op}, authority: authorityURL, host: host, token: token, api: networkprobe.ReleaseClient(), probe: networkprobe.Client()}
 	defer r.api.CloseIdleConnections()
 	defer r.probe.CloseIdleConnections()
-	log := slog.With("operation_id", r.op.ID, "node_id", key, "revision", revision)
+	log := slog.With("operation_id", r.op.ID, "node_id", key, "revision", revision, "authority", authorityURL)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if recoverID != "" {

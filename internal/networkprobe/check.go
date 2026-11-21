@@ -117,11 +117,10 @@ func checkRelayOrigins(
 }
 
 func relayOrigin(raw string) (*url.URL, error) {
-	base, err := url.Parse(raw)
-	if err != nil || base.Scheme != "https" || base.Hostname() == "" || base.User != nil || base.ForceQuery || base.RawQuery != "" || base.Fragment != "" || (base.EscapedPath() != "" && base.EscapedPath() != "/") {
+	base, err := parseHTTPSOrigin(raw)
+	if err != nil {
 		return nil, errors.New("invalid enrolled relay origin")
 	}
-	base.Path = ""
 	return base, nil
 }
 
