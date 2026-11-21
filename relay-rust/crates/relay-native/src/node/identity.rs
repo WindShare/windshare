@@ -114,12 +114,7 @@ impl Identity {
     }
 
     pub fn id(&self) -> String {
-        URL_SAFE_NO_PAD.encode(
-            Sha256::new()
-                .chain_update(NODE_ID_DOMAIN)
-                .chain_update(self.key().verifying_key().to_bytes())
-                .finalize(),
-        )
+        node_id(&self.key().verifying_key().to_bytes())
     }
 
     pub fn owner(&self) -> Credential {
@@ -145,6 +140,15 @@ impl Drop for TemporaryIdentity {
 #[cfg(test)]
 #[path = "identity_tests.rs"]
 mod tests;
+
+pub(super) fn node_id(verifying_key: &[u8; 32]) -> String {
+    URL_SAFE_NO_PAD.encode(
+        Sha256::new()
+            .chain_update(NODE_ID_DOMAIN)
+            .chain_update(verifying_key)
+            .finalize(),
+    )
+}
 
 pub(super) fn random<const N: usize>() -> Result<[u8; N]> {
     let mut bytes = [0; N];

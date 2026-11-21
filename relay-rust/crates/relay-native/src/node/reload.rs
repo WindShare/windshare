@@ -1,6 +1,6 @@
 use super::{
-    Configuration, Identity, Runtime, Settings, State, access::PreparedPolicy, now,
-    usage::Authority,
+    Configuration, Runtime, Settings, State, access::PreparedPolicy, descriptor::InstalledIdentity,
+    now, usage::Authority,
 };
 use crate::storage::budget::BudgetRecords;
 use anyhow::{Context, Result, anyhow, ensure};
@@ -61,9 +61,9 @@ impl Runtime {
             budgets.is_empty() || state.control.is_some(),
             "missing persistent relay ledger"
         );
-        let owner = state.identity.as_ref().map(Identity::owner);
         let store = state.control.clone();
         drop(state);
+        let owner = self.identity.get().map(InstalledIdentity::owner);
 
         let mut policy = settings.access.clone();
         if let Some(owner) = owner {
@@ -114,6 +114,8 @@ impl Runtime {
                 state.settings = settings;
                 let publication = self.access.publish_policy(controller, access);
                 self.refresh_availability(&mut state, timestamp);
+                self.services
+                    .store(state.settings.services.to_bits(), Ordering::Release);
                 self.has_budgets.store(
                     state.settings.relay_budget.is_some()
                         || state.settings.contribution.daily_bytes.is_some(),
@@ -150,7 +152,7 @@ impl Runtime {
             && state.settings.contribution.bytes_per_second.is_none();
         let unpaced_warning = (unpaced_relay && !state.unpaced_relay_warned).then(|| {
             (
-                state.identity.as_ref().map(Identity::id),
+                self.identity.get().map(|identity| identity.id().to_owned()),
                 state.settings.zone.clone(),
             )
         });

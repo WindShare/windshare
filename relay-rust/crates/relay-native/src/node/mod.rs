@@ -27,7 +27,7 @@ use anyhow::{Result, anyhow};
 use std::{
     sync::{
         Arc, Mutex, MutexGuard, OnceLock,
-        atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicI64, AtomicU8, AtomicU64, Ordering},
     },
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -40,7 +40,6 @@ pub(crate) const SERVICE_RETRY_AFTER: windshare_relay_core::error_frame::RetryAf
 
 struct State {
     settings: Settings,
-    identity: Option<Identity>,
     control: Option<Database>,
     budgets: budget::Budgets,
     unavailable: bool,
@@ -54,11 +53,13 @@ pub struct Runtime {
     pub(crate) maintenance: Arc<OnceLock<maintenance::Gate>>,
     pub(crate) console: Arc<OnceLock<crate::console::Console>>,
     pub(crate) governor: governor::Governor,
+    identity: Arc<OnceLock<descriptor::InstalledIdentity>>,
     state: Arc<Mutex<State>>,
     control_writer: Arc<Mutex<()>>,
     reporting_authority: Arc<OnceLock<Option<usage::Authority>>>,
     revocations: watch::Sender<u64>,
     epoch: Arc<AtomicU64>,
+    services: Arc<AtomicU8>,
     unavailable: Arc<AtomicBool>,
     has_budgets: Arc<AtomicBool>,
     next_rollover: Arc<AtomicI64>,
@@ -70,14 +71,15 @@ pub struct Runtime {
 impl Default for Runtime {
     fn default() -> Self {
         let access = access::Service::default();
+        let default_services = Services::default();
         Self {
             governor: governor::Governor::new(access.clone()),
             access,
             maintenance: Arc::default(),
             console: Arc::default(),
+            identity: Arc::default(),
             state: Arc::new(Mutex::new(State {
                 settings: Settings::default(),
-                identity: None,
                 control: None,
                 budgets: budget::Budgets::default(),
                 unavailable: false,
@@ -88,6 +90,7 @@ impl Default for Runtime {
             reporting_authority: Arc::default(),
             revocations: watch::channel(0).0,
             epoch: Arc::new(AtomicU64::new(0)),
+            services: Arc::new(AtomicU8::new(default_services.to_bits())),
             unavailable: Arc::new(AtomicBool::new(false)),
             has_budgets: Arc::new(AtomicBool::new(false)),
             next_rollover: Arc::new(AtomicI64::new(i64::MAX)),
@@ -136,13 +139,7 @@ impl Runtime {
     }
 
     pub fn services(&self) -> Services {
-        self.state.lock().map_or(
-            Services {
-                relay: false,
-                stun: false,
-            },
-            |state| state.settings.services,
-        )
+        Services::from_bits(self.services.load(Ordering::Acquire))
     }
 
     pub fn available(&self) -> bool {

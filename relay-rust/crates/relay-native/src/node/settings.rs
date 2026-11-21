@@ -3,11 +3,34 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use windshare_relay_access::trust::Generation;
 
+const SERVICE_RELAY_BIT: u8 = 1 << 0;
+const SERVICE_STUN_BIT: u8 = 1 << 1;
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Services {
     pub relay: bool,
     pub stun: bool,
+}
+
+impl Services {
+    pub(super) const fn to_bits(self) -> u8 {
+        let mut bits = 0;
+        if self.relay {
+            bits |= SERVICE_RELAY_BIT;
+        }
+        if self.stun {
+            bits |= SERVICE_STUN_BIT;
+        }
+        bits
+    }
+
+    pub(super) const fn from_bits(bits: u8) -> Self {
+        Self {
+            relay: bits & SERVICE_RELAY_BIT != 0,
+            stun: bits & SERVICE_STUN_BIT != 0,
+        }
+    }
 }
 
 impl Default for Services {

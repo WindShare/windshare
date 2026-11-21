@@ -1,5 +1,9 @@
 use super::*;
-use crate::{Database, Endpoint, node::MonthlyBudget, test_support::capture_events};
+use crate::{
+    Database, Endpoint,
+    node::{Identity, MonthlyBudget},
+    test_support::capture_events,
+};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Months};
 use ed25519_dalek::SigningKey;

@@ -50,6 +50,9 @@ impl Runtime {
         share: ShareId,
         bearer: Option<&Bearer>,
     ) -> Result<bool> {
+        if !self.has_budgets.load(Ordering::Acquire) {
+            return Ok(false);
+        }
         let store = {
             let state = self.state.lock().expect("node state");
             if !state
@@ -84,6 +87,9 @@ impl Runtime {
     }
 
     pub(crate) fn public_budget_refuses_attribution(&self, attribution: Attribution) -> bool {
+        if !self.has_budgets.load(Ordering::Acquire) {
+            return false;
+        }
         let exhausted = {
             let state = self.state.lock().expect("node state");
             state

@@ -1,22 +1,86 @@
-use super::{Identity, Runtime, usage::Reporter};
-use anyhow::{Result, anyhow};
+use super::{Identity, Runtime, Services, usage::Reporter};
+use anyhow::{Result, anyhow, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use windshare_relay_access::trust;
+use ed25519_dalek::SigningKey;
+use windshare_relay_access::{Credential, trust};
 
 const DESCRIPTOR_DOMAIN: &[u8] = b"windshare/node-descriptor/v2\0";
 const DESCRIPTOR_SECONDS: u64 = 300;
 
+/// Immutable node identity installed once at startup with pre-derived key material
+/// so discovery and status checks never re-expand the seed or lock `Runtime::state`.
+pub(super) struct InstalledIdentity {
+    raw: Identity,
+    signing_key: SigningKey,
+    verifying_key: [u8; 32],
+    id: String,
+    key_b64: String,
+}
+
+impl InstalledIdentity {
+    fn new(raw: Identity) -> Self {
+        let signing_key = raw.key();
+        let verifying_key = signing_key.verifying_key().to_bytes();
+        let id = super::identity::node_id(&verifying_key);
+        let key_b64 = URL_SAFE_NO_PAD.encode(verifying_key);
+        Self {
+            raw,
+            signing_key,
+            verifying_key,
+            id,
+            key_b64,
+        }
+    }
+
+    pub(super) const fn raw(&self) -> &Identity {
+        &self.raw
+    }
+
+    pub(super) const fn signing_key(&self) -> &SigningKey {
+        &self.signing_key
+    }
+
+    pub(super) const fn verifying_key(&self) -> [u8; 32] {
+        self.verifying_key
+    }
+
+    pub(super) fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub(super) fn key_b64(&self) -> &str {
+        &self.key_b64
+    }
+
+    pub(super) fn owner(&self) -> Credential {
+        self.raw.owner()
+    }
+}
+
+struct DescriptorSnapshot {
+    services: Services,
+    stun_urls: Vec<String>,
+    zone: String,
+    region: String,
+    capacity_bytes_per_second: Option<u64>,
+    authority: Option<super::usage::Authority>,
+    relay_ready: bool,
+}
+
 impl Runtime {
     /// # Errors
-    /// The identity must be installed before ingress starts.
+    /// The identity must be installed once before ingress starts.
     pub fn identify(&self, identity: Identity) -> Result<()> {
         let writer = self.lock_control()?;
-        self.access
-            .identify(identity.key().verifying_key().to_bytes());
-        self.state
-            .lock()
-            .map_err(|_| anyhow!("node state"))?
-            .identity = Some(identity);
+        ensure!(
+            self.identity.get().is_none(),
+            "node identity already installed"
+        );
+        let installed = InstalledIdentity::new(identity);
+        self.access.identify(installed.verifying_key());
+        self.identity
+            .set(installed)
+            .map_err(|_| anyhow!("node identity already installed"))?;
         drop(writer);
         Ok(())
     }
@@ -26,19 +90,23 @@ impl Runtime {
         endpoint: &crate::Endpoint,
         store: &crate::Database,
     ) -> Result<()> {
-        let state = self.state.lock().map_err(|_| anyhow!("node state"))?;
-        let identity = state.identity.clone();
-        let authority = state.settings.authority.clone();
-        drop(state);
-        if let Some(identity) = identity
-            && let Some(console) = crate::console::Console::open(
-                endpoint,
-                store,
-                self.access.clone(),
-                &identity,
-                authority,
-            )?
-        {
+        let Some(identity) = self.identity.get() else {
+            return Ok(());
+        };
+        let authority = self
+            .state
+            .lock()
+            .map_err(|_| anyhow!("node state"))?
+            .settings
+            .authority
+            .clone();
+        if let Some(console) = crate::console::Console::open(
+            endpoint,
+            store,
+            self.access.clone(),
+            identity.raw(),
+            authority,
+        )? {
             self.console
                 .set(console)
                 .map_err(|_| anyhow!("console already initialized"))?;
@@ -54,54 +122,92 @@ impl Runtime {
         let Some(authority) = state.settings.authority.clone() else {
             return Ok(None);
         };
-        let signing_key = state
-            .identity
-            .as_ref()
-            .ok_or_else(|| anyhow!("authority requires a node identity"))?
-            .key();
-        let store = state
-            .control
-            .clone()
-            .ok_or_else(|| anyhow!("authority requires persistent storage"))?;
+        let store = state.control.clone();
         drop(state);
+        let signing_key = self
+            .identity
+            .get()
+            .ok_or_else(|| anyhow!("authority requires a node identity"))?
+            .signing_key()
+            .clone();
+        let store = store.ok_or_else(|| anyhow!("authority requires persistent storage"))?;
         drop(writer);
         Reporter::new(self.clone(), store, signing_key, authority).map(Some)
     }
 
-    pub(crate) fn descriptor(&self, endpoint: &crate::Endpoint) -> Result<serde_json::Value> {
+    fn descriptor_snapshot(&self, timestamp: i64) -> Result<DescriptorSnapshot> {
         let state = self.state.lock().map_err(|_| anyhow!("node state"))?;
-        let identity = state
+        Ok(DescriptorSnapshot {
+            services: state.settings.services,
+            stun_urls: state.settings.stun_urls.clone(),
+            zone: state.settings.zone.clone(),
+            region: state.settings.region.clone(),
+            capacity_bytes_per_second: state.settings.capacity_bytes_per_second,
+            authority: state.settings.authority.clone(),
+            relay_ready: state.settings.services.relay
+                && !state.unavailable
+                && !state.budgets.public_exhausted(&state.settings, timestamp),
+        })
+    }
+
+    pub(crate) fn descriptor(&self, endpoint: &crate::Endpoint) -> Result<serde_json::Value> {
+        self.descriptor_with(endpoint, || {
+            self.maintenance
+                .get()
+                .is_none_or(super::maintenance::Gate::open_to_users)
+        })
+    }
+
+    fn descriptor_with(
+        &self,
+        endpoint: &crate::Endpoint,
+        open_to_users: impl FnOnce() -> bool,
+    ) -> Result<serde_json::Value> {
+        let identity = self
             .identity
-            .as_ref()
+            .get()
             .ok_or_else(|| anyhow!("missing node identity"))?;
         let timestamp = super::now();
         let now = timestamp.unsigned_abs();
-        let accepting = self.access.public_enabled()
-            && self
-                .maintenance
-                .get()
-                .is_none_or(super::maintenance::Gate::open_to_users);
+        // Snapshot only in-memory settings and budget availability under `Runtime::state`;
+        // access locks, maintenance `fstat`, JSON serialization, and Ed25519 signing run unlocked.
+        let snapshot = self.descriptor_snapshot(timestamp)?;
+        let accepting = self.access.public_enabled() && open_to_users();
         let login_page = self
             .console
             .get()
-            .filter(|_| state.settings.services.relay && accepting)
+            .filter(|_| snapshot.services.relay && accepting)
             .and_then(|console| console.login_page(now));
         let descriptor = serde_json::json!({
-            "version":2, "node_id":identity.id(), "node_key":URL_SAFE_NO_PAD.encode(identity.key().verifying_key().to_bytes()),
-            "relay_endpoint":endpoint.as_str(), "services":state.settings.services,
-            "stun":state.settings.stun_urls, "zone":state.settings.zone, "region":state.settings.region,
-            "capacity_bytes_per_second":state.settings.capacity_bytes_per_second,
-            "classes":["owner","standard","lowest"], "issued_at":now, "expires_at":now+DESCRIPTOR_SECONDS,
-            "relay_available":state.settings.services.relay && !state.unavailable && !state.budgets.public_exhausted(&state.settings, timestamp) && accepting, "anonymous":accepting && self.access.anonymous(),
-            "account_login_page":login_page,
-            "console_url": self.console.get().map(crate::console::Console::origin), "authority":state.settings.authority
+            "version": 2,
+            "node_id": identity.id(),
+            "node_key": identity.key_b64(),
+            "relay_endpoint": endpoint.as_str(),
+            "services": snapshot.services,
+            "stun": snapshot.stun_urls,
+            "zone": snapshot.zone,
+            "region": snapshot.region,
+            "capacity_bytes_per_second": snapshot.capacity_bytes_per_second,
+            "classes": ["owner", "standard", "lowest"],
+            "issued_at": now,
+            "expires_at": now + DESCRIPTOR_SECONDS,
+            "relay_available": snapshot.relay_ready && accepting,
+            "anonymous": accepting && self.access.anonymous(),
+            "account_login_page": login_page,
+            "console_url": self.console.get().map(crate::console::Console::origin),
+            "authority": snapshot.authority,
         });
         let payload = serde_json::to_vec(&descriptor)?;
-        let signed = trust::sign(DESCRIPTOR_DOMAIN, &payload, &identity.key());
-        drop(state);
-        Ok(
-            serde_json::json!({"version":2,"relay_url":endpoint.relay_url(),"descriptor":URL_SAFE_NO_PAD.encode(&payload),
-            "signature":URL_SAFE_NO_PAD.encode(&signed[payload.len()..])}),
-        )
+        let signed = trust::sign(DESCRIPTOR_DOMAIN, &payload, identity.signing_key());
+        Ok(serde_json::json!({
+            "version": 2,
+            "relay_url": endpoint.relay_url(),
+            "descriptor": URL_SAFE_NO_PAD.encode(&payload),
+            "signature": URL_SAFE_NO_PAD.encode(&signed[payload.len()..]),
+        }))
     }
 }
+
+#[cfg(test)]
+#[path = "descriptor_tests.rs"]
+mod tests;
