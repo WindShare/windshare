@@ -46,19 +46,43 @@ export function ProbeResults({ id, operation, directory }: { id: string; operati
   </section>
 }
 
-function FleetConfirmDialogs({ cutoff, aborting, onCancelCutoff, onConfirmCutoff, onCancelAbort, onConfirmAbort }: {
-  cutoff: 'disable' | 'remove' | null
+type PendingAction = { kind: 'disable' | 'remove'; earlyCutoff: boolean }
+
+function confirmDetails(t: typeof networkCopy.en, pending: PendingAction) {
+  if (pending.kind === 'remove') {
+    return {
+      title: t.confirmRemove,
+      confirm: t.removeNode,
+      body: pending.earlyCutoff ? t.removeEarlyEffect : t.removeEffect,
+    }
+  }
+  return pending.earlyCutoff
+    ? { title: t.confirmCutoff, confirm: t.disable, body: t.cutoffEffect }
+    : { title: t.confirmDisable, confirm: t.disable, body: t.disableEffect }
+}
+
+function canEscalateDrainPending(
+  error: unknown,
+  command: FleetAction,
+): command is { kind: 'disable' | 'remove'; early_cutoff: false } {
+  return error instanceof RequestError && error.code === 'drain_pending' &&
+    (command.kind === 'disable' || command.kind === 'remove') && !command.early_cutoff
+}
+
+function FleetConfirmDialogs({ pending, aborting, onCancelPending, onConfirmPending, onCancelAbort, onConfirmAbort }: {
+  pending: PendingAction | null
   aborting: string | null
-  onCancelCutoff: () => void
-  onConfirmCutoff: (kind: 'disable' | 'remove') => void
+  onCancelPending: () => void
+  onConfirmPending: (action: PendingAction) => void
   onCancelAbort: () => void
   onConfirmAbort: (maintenanceId: string) => void
 }) {
   const t = useCopy(networkCopy)
+  const details = pending ? confirmDetails(t, pending) : null
   return <>
-    {cutoff && <Confirm title={t.confirmCutoff} confirm={cutoff === 'remove' ? t.removeNode : t.disable}
-      onCancel={onCancelCutoff} onConfirm={() => onConfirmCutoff(cutoff)}>
-      <p>{t.cutoffEffect}</p></Confirm>}
+    {pending && details && <Confirm title={details.title} confirm={details.confirm}
+      onCancel={onCancelPending} onConfirm={() => onConfirmPending(pending)}>
+      <p>{details.body}</p></Confirm>}
     {aborting && <Confirm title={t.confirmAbortMaintenance} confirm={t.abortMaintenance}
       onCancel={onCancelAbort} onConfirm={() => onConfirmAbort(aborting)}>
       <p>{t.abortMaintenanceEffect}</p></Confirm>}
@@ -68,7 +92,7 @@ function FleetConfirmDialogs({ cutoff, aborting, onCancelCutoff, onConfirmCutoff
 export function FleetControls({ node, api, refresh }: { node: NodeDetails; api: AuthorityClient; refresh: () => Promise<void> }) {
   const t = useCopy(networkCopy)
   const action = useAction()
-  const [cutoff, setCutoff] = useState<'disable' | 'remove' | null>(null)
+  const [pending, setPending] = useState<PendingAction | null>(null)
   const [aborting, setAborting] = useState<string | null>(null)
   const listing = node.listing
   if (!listing || listing.state.kind === 'staging') return null
@@ -80,9 +104,11 @@ export function FleetControls({ node, api, refresh }: { node: NodeDetails; api: 
       try {
         await api.manage(listing.spec.node_key, listing.operation_id, command)
       } catch (error) {
-        if (error instanceof RequestError && error.code === 'drain_pending' &&
-            (command.kind === 'disable' || command.kind === 'remove')) {
-          setCutoff(command.kind)
+        if (canEscalateDrainPending(error, command)) {
+          // Escalate a stale-snapshot drain conflict straight into the early-cutoff confirmation
+          // without leaving a raw error banner behind the dialog.
+          setPending({ kind: command.kind, earlyCutoff: true })
+          return
         }
         throw error
       }
@@ -95,18 +121,18 @@ export function FleetControls({ node, api, refresh }: { node: NodeDetails; api: 
     {maintenance && <Badge tone="info">{disabled ? t.disableAfterMaintenance : t.maintenance} · {maintenance}</Badge>}
     <div className="actions">
       {listing.state.kind === 'listed' && listing.state.status !== 'draining' &&
-        <button className="secondary" disabled={action.busy} onClick={() => run({ kind: 'drain' })}>{t.drain}</button>}
-      {maintenance && <button className="secondary" disabled={action.busy}
+        <button type="button" className="secondary" disabled={action.busy} onClick={() => run({ kind: 'drain' })}>{t.drain}</button>}
+      {maintenance && <button type="button" className="secondary" disabled={action.busy}
         onClick={() => setAborting(maintenance)}>{t.abortMaintenance}</button>}
-      {disabled && <button className="secondary" disabled={action.busy || Boolean(maintenance)} onClick={() => run({ kind: 'verify' })}>{t.verifyAgain}</button>}
-      {listing.state.kind === 'listed' && listing.state.withdrawn.map(role => <button key={role} className="secondary" disabled={action.busy}
+      {disabled && <button type="button" className="secondary" disabled={action.busy || Boolean(maintenance)} onClick={() => run({ kind: 'verify' })}>{t.verifyAgain}</button>}
+      {listing.state.kind === 'listed' && listing.state.withdrawn.map(role => <button key={role} type="button" className="secondary" disabled={action.busy}
         onClick={() => run({ kind: 'restore_role', role })}>{t.restoreService(role.toUpperCase())}</button>)}
-      <button className="secondary" disabled={action.busy || (disabled && Boolean(maintenance))}
-        onClick={() => node.cutoff_ready ? run({ kind: next, early_cutoff: false }) : setCutoff(next)}>{disabled ? t.removeNode : t.disable}</button>
+      <button type="button" className="secondary danger-text" disabled={action.busy || (disabled && Boolean(maintenance))}
+        onClick={() => setPending({ kind: next, earlyCutoff: !node.cutoff_ready })}>{disabled ? t.removeNode : t.disable}</button>
     </div>
-    <FleetConfirmDialogs cutoff={cutoff} aborting={aborting}
-      onCancelCutoff={() => setCutoff(null)}
-      onConfirmCutoff={kind => { run({ kind, early_cutoff: true }); setCutoff(null) }}
+    <FleetConfirmDialogs pending={pending} aborting={aborting}
+      onCancelPending={() => setPending(null)}
+      onConfirmPending={confirmed => { setPending(null); run({ kind: confirmed.kind, early_cutoff: confirmed.earlyCutoff }) }}
       onCancelAbort={() => setAborting(null)}
       onConfirmAbort={maintenanceId => { run({ kind: 'abort_maintenance', maintenance_id: maintenanceId }); setAborting(null) }} />
     <Notice feedback={action.feedback} />
