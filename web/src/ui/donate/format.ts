@@ -8,12 +8,13 @@ export const MAX_DISPLAY_NAME_CODEPOINTS = 32
 export const MAX_MESSAGE_CODEPOINTS = 140
 
 const DECIMAL_INPUT_PATTERN = /^(\d+)(?:\.(\d{1,2}))?$/
+// Reserve short symbols for unambiguous primary currencies; other ISO codes (including JPY)
+// fall back to explicit code prefixes so CNY ¥1,000 and JPY 1,000 cannot collide on the wall.
 const CURRENCY_SYMBOLS: Readonly<Record<string, string>> = Object.freeze({
   CNY: '¥',
   USD: '$',
   EUR: '€',
   GBP: '£',
-  JPY: '¥',
 })
 
 const MS_PER_SECOND = 1000
@@ -74,8 +75,12 @@ export function formatDonationAmount(
   currency: string,
   minorDigits: number,
 ): string {
-  const safeDigits = Math.max(0, Math.min(4, Math.floor(minorDigits)))
-  const safeMinor = Math.max(0, Math.floor(amountMinor))
+  const safeDigits = Number.isFinite(minorDigits)
+    ? Math.max(0, Math.min(4, Math.floor(minorDigits)))
+    : 0
+  const safeMinor = Number.isFinite(amountMinor)
+    ? Math.max(0, Math.floor(amountMinor))
+    : 0
   const upperCurrency = currency.trim().toUpperCase()
   const symbol = CURRENCY_SYMBOLS[upperCurrency]
   const prefix = symbol ?? `${upperCurrency} `

@@ -23,8 +23,17 @@ describe('donate pure formatting and validation helpers', () => {
     expect(formatDonationAmount(1250, 'CNY', 2)).toBe('¥12.50')
     expect(formatDonationAmount(500, 'USD', 2)).toBe('$5')
     expect(formatDonationAmount(100500, 'USD', 2)).toBe('$1,005')
-    expect(formatDonationAmount(1000, 'JPY', 0)).toBe('¥1,000')
+    expect(formatDonationAmount(1000, 'JPY', 0)).toBe('JPY 1,000')
     expect(formatDonationAmount(12345, 'CAD', 3)).toBe('CAD 12.345')
+  })
+
+  it('clamps negative and non-finite numeric inputs in formatDonationAmount', () => {
+    expect(formatDonationAmount(-500, 'USD', 2)).toBe('$0')
+    expect(formatDonationAmount(Number.NaN, 'CNY', 2)).toBe('¥0')
+    expect(formatDonationAmount(Number.POSITIVE_INFINITY, 'USD', 2)).toBe('$0')
+    expect(formatDonationAmount(Number.NEGATIVE_INFINITY, 'USD', 2)).toBe('$0')
+    expect(formatDonationAmount(1000, 'CNY', Number.NaN)).toBe('¥1,000')
+    expect(formatDonationAmount(1000, 'CNY', Number.POSITIVE_INFINITY)).toBe('¥1,000')
   })
 
   it('validates crypto USD inputs against minimum and maximum bounds', () => {
