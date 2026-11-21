@@ -477,6 +477,102 @@ run_case_auth_hold_inspect_and_lock_guards() (
     printf 'PASS: auth, check-hold, inspect mismatch, and lock contention guards\n'
 )
 
+run_case_recover_hold_states_and_guards() (
+    local tmp
+    tmp=$(mktemp -d)
+    trap 'rm -rf -- "$tmp"' EXIT
+
+    local root_path="$tmp/opt/windshare-network"
+    prepare_harness "$tmp" "$root_path"
+    mkdir -p "$root_path/releases/$rev_a"
+    make_fake_wsrelay "$root_path/releases/$rev_a/wsrelay"
+    ln -sfn -- "$root_path/releases/$rev_a" "$root_path/current"
+    make_fake_wsrelay "$tmp/candidate-bin"
+    printf '# candidate-b\n' >>"$tmp/candidate-bin"
+
+    local canonical_a canonical_b sha_b
+    canonical_a=$(realpath -e "$root_path/releases/$rev_a")
+    canonical_b="$(realpath -e "$root_path/releases")/$rev_b"
+    sha_b=$(sha256sum "$tmp/candidate-bin" | awk '{print $1}')
+
+    # Active local hold reports "held" without releasing or sealing the operation.
+    local op_held="op-recover-held-01"
+    local log="$tmp/wsrelay-recover.log"
+    PATH="$tmp/bin:$PATH" "$tmp/install.sh" stage "$op_held" "$node_key" "$rev_b" "$sha_b" <"$tmp/candidate-bin"
+    local stdout
+    stdout=$(FAKE_WSRELAY_LOG="$log" FAKE_WSRELAY_CHECK_HOLD_EXIT=0 PATH="$tmp/bin:$PATH" \
+        "$tmp/install.sh" recover "$op_held" "$node_key")
+    [[ $stdout == "held" ]] || fail "expected held state, got: $stdout"
+    [[ ! -e "$root_path/operations/$op_held/released" ]] || fail "held recover prematurely marked released"
+    if grep -Fq -- '--release-maintenance' "$log"; then
+        fail "held recover unexpectedly called --release-maintenance"
+    fi
+
+    # Unentered operation still on previous verifies empty hold, seals released, and reports "released".
+    local op_unentered="op-recover-unentered-01"
+    : >"$log"
+    PATH="$tmp/bin:$PATH" "$tmp/install.sh" stage "$op_unentered" "$node_key" "$rev_b" "$sha_b" <"$tmp/candidate-bin"
+    stdout=$(FAKE_WSRELAY_LOG="$log" FAKE_WSRELAY_CHECK_HOLD_EXIT=1 PATH="$tmp/bin:$PATH" \
+        "$tmp/install.sh" recover "$op_unentered" "$node_key")
+    [[ $stdout == "released" ]] || fail "expected released state for unentered op, got: $stdout"
+    [[ -e "$root_path/operations/$op_unentered/released" ]] || fail "unentered recover did not record released marker"
+    grep -Fxq "$canonical_a/wsrelay --release-maintenance $tmp/node.json $node_key $op_unentered" "$log" \
+        || fail "unentered recover did not verify empty gate via --release-maintenance"
+    local status=0 output
+    output=$(PATH="$tmp/bin:$PATH" "$tmp/install.sh" enter "$op_unentered" "$node_key" 7 58000 2>&1) || status=$?
+    [[ $status != 0 && $output == *"operation already released"* ]] || fail "late enter succeeded after recover sealed released: $status $output"
+
+    # Already-released operation on candidate closes cleanly as "released".
+    local op_released="op-recover-released-01"
+    PATH="$tmp/bin:$PATH" "$tmp/install.sh" stage "$op_released" "$node_key" "$rev_b" "$sha_b" <"$tmp/candidate-bin"
+    ln -sfn -- "$canonical_b" "$root_path/current"
+    touch "$root_path/operations/$op_released/released"
+    stdout=$(FAKE_WSRELAY_CHECK_HOLD_EXIT=1 PATH="$tmp/bin:$PATH" \
+        "$tmp/install.sh" recover "$op_released" "$node_key")
+    [[ $stdout == "released" ]] || fail "expected released state for post-release op, got: $stdout"
+
+    # Unheld operation switched to candidate without a released marker must fail closed.
+    local op_missing="op-recover-missing-hold-01"
+    : >"$log"
+    ln -sfn -- "$canonical_a" "$root_path/current"
+    PATH="$tmp/bin:$PATH" "$tmp/install.sh" stage "$op_missing" "$node_key" "$rev_b" "$sha_b" <"$tmp/candidate-bin"
+    ln -sfn -- "$canonical_b" "$root_path/current"
+    status=0
+    output=$(FAKE_WSRELAY_LOG="$log" FAKE_WSRELAY_CHECK_HOLD_EXIT=1 PATH="$tmp/bin:$PATH" \
+        "$tmp/install.sh" recover "$op_missing" "$node_key" 2>&1) || status=$?
+    [[ $status != 0 && $output == *"local hold missing for switched release"* ]] \
+        || fail "expected missing-hold guard failure, got: $status $output"
+    [[ ! -e "$root_path/operations/$op_missing/released" ]] || fail "missing-hold failure still marked released"
+    if grep -Fq -- '--release-maintenance' "$log"; then
+        fail "missing-hold guard should abort before --release-maintenance"
+    fi
+
+    # Foreign local hold and busy gate errors abort before marking released.
+    ln -sfn -- "$canonical_a" "$root_path/current"
+    local op_foreign="op-recover-foreign-01"
+    PATH="$tmp/bin:$PATH" "$tmp/install.sh" stage "$op_foreign" "$node_key" "$rev_b" "$sha_b" <"$tmp/candidate-bin"
+    status=0
+    FAKE_WSRELAY_CHECK_HOLD_EXIT=1 FAKE_WSRELAY_RELEASE_EXIT=1 PATH="$tmp/bin:$PATH" \
+        "$tmp/install.sh" recover "$op_foreign" "$node_key" >/dev/null 2>&1 || status=$?
+    [[ $status == 1 ]] || fail "expected foreign hold failure exit 1, got $status"
+    [[ ! -e "$root_path/operations/$op_foreign/released" ]] || fail "foreign hold failure marked released"
+
+    status=0
+    FAKE_WSRELAY_CHECK_HOLD_EXIT=1 FAKE_WSRELAY_RELEASE_EXIT=75 PATH="$tmp/bin:$PATH" \
+        "$tmp/install.sh" recover "$op_foreign" "$node_key" >/dev/null 2>&1 || status=$?
+    [[ $status == 75 ]] || fail "expected busy gate exit 75 during recover, got $status"
+    [[ ! -e "$root_path/operations/$op_foreign/released" ]] || fail "busy gate failure marked released"
+
+    (
+        exec 8>"$root_path/operations/.lock"
+        flock 8
+        status=0
+        PATH="$tmp/bin:$PATH" "$tmp/install.sh" recover "$op_foreign" "$node_key" 8>&- >/dev/null 2>&1 || status=$?
+        [[ $status == 75 ]] || fail "expected lock contention exit 75 for recover, got $status"
+    )
+    printf 'PASS: recover hold classification, sealing, and fail-closed guards\n'
+)
+
 run_case_same_binary_waits_for_fresh_invocation
 run_case_rollback_fails_when_invocation_never_advances
 run_case_empty_old_invocation_requires_non_empty_new_invocation
@@ -484,3 +580,4 @@ run_case_symlinked_root_and_releases_canonicalized
 run_case_enter_switch_release_lifecycle_and_guards
 run_case_stage_validation_collisions_and_cleanup
 run_case_auth_hold_inspect_and_lock_guards
+run_case_recover_hold_states_and_guards

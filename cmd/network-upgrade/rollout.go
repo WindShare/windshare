@@ -31,9 +31,17 @@ var (
 	errDrainExpired = errors.New("drain deadline expired before node became idle")
 )
 
+type recoveryState string
+
+const (
+	recoveryHeld     recoveryState = "held"
+	recoveryReleased recoveryState = "released"
+)
+
 type maintenanceTarget interface {
 	policy(context.Context, string) (drainStatus, error)
 	local(context.Context, string, ...string) error
+	localRecovery(context.Context) (recoveryState, error)
 	verify(context.Context) error
 }
 
@@ -59,32 +67,45 @@ func (r rollout) upgrade(ctx context.Context, log *slog.Logger) error {
 	status, err := r.policy(ctx, "drain")
 	if err != nil {
 		// The hold may have committed before its response was lost.
-		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), releaseBudget)
-		defer cancel()
-		_, release := r.policy(cleanup, "release")
+		release := r.releaseAuthority(context.WithoutCancel(ctx), time.Now().Add(releaseBudget))
 		return errors.Join(err, release)
 	}
 	log.Info("maintenance drain requested", "policy_version", status.Version)
-	start, err := r.enter(ctx, status)
-	restore := context.WithoutCancel(ctx)
+	start, localMayBeHeld, err := r.enter(ctx, status)
 	if err != nil {
-		log.Info("node remains on current release", "error", err)
-		if releaseErr := r.release(restore, log, time.Now().Add(releaseBudget)); releaseErr != nil {
-			log.Error("maintenance hold release failed, hold may remain active", "error", releaseErr)
-			return errors.Join(err, releaseErr)
-		}
-		// Only a cleanly released drain timeout may exit busyExit (75); any failed
-		// cleanup leaves a fleet-blocking hold and must exit fatal (1).
-		if errors.Is(err, errDrainExpired) {
-			if ctx.Err() != nil {
-				return errors.Join(err, ctx.Err())
-			}
-			return errDeferred
-		}
-		return err
+		return r.abortEnter(ctx, log, localMayBeHeld, err)
 	}
 	log.Info("local admission fenced")
 	return r.finish(ctx, log, start, "switch")
+}
+
+func (r rollout) abortEnter(ctx context.Context, log *slog.Logger, localMayBeHeld bool, err error) error {
+	log.Info("node remains on current release", "local_may_be_held", localMayBeHeld, "error", err)
+	restore := context.WithoutCancel(ctx)
+	releaseUntil := time.Now().Add(releaseBudget)
+	var releaseErr error
+	if localMayBeHeld {
+		// Local enter failed ambiguously; confirm the host fence is clear
+		// before restoring public admission on the authority.
+		releaseErr = r.release(restore, log, releaseUntil)
+	} else {
+		// Local enter was never invoked or only deferred cleanly with exit 75,
+		// so the host never acquired a fence and SSH errors must not strand the authority lock.
+		releaseErr = r.releaseAuthority(restore, releaseUntil)
+	}
+	if releaseErr != nil {
+		log.Error("maintenance hold release failed, hold may remain active", "local_may_be_held", localMayBeHeld, "error", releaseErr)
+		return errors.Join(err, releaseErr)
+	}
+	// Only a cleanly released drain timeout may exit busyExit (75); any failed
+	// cleanup leaves a fleet-blocking hold and must exit fatal (1).
+	if errors.Is(err, errDrainExpired) {
+		if ctx.Err() != nil {
+			return errors.Join(err, ctx.Err())
+		}
+		return errDeferred
+	}
+	return err
 }
 
 func (r rollout) recover(ctx context.Context, log *slog.Logger) error {
@@ -95,7 +116,20 @@ func (r rollout) recover(ctx context.Context, log *slog.Logger) error {
 	if !status.Held {
 		return errors.New("operation no longer owns the authority drain")
 	}
-	return r.finish(ctx, log, time.Now(), "inspect")
+	state, err := r.localRecoveryUntilReady(ctx, log, time.Now().Add(switchBudget))
+	if err != nil {
+		return err
+	}
+	switch state {
+	case recoveryReleased:
+		log.Info("local maintenance hold not active, releasing authority hold")
+		return r.releaseAuthority(context.WithoutCancel(ctx), time.Now().Add(releaseBudget))
+	case recoveryHeld:
+		log.Info("local maintenance hold active, verifying host release")
+		return r.finish(ctx, log, time.Now(), "inspect")
+	default:
+		return fmt.Errorf("unexpected host recovery state %q", state)
+	}
 }
 
 func (r rollout) finish(ctx context.Context, log *slog.Logger, start time.Time, action string) error {
@@ -117,7 +151,7 @@ func (r rollout) finish(ctx context.Context, log *slog.Logger, start time.Time, 
 	return errors.Join(err, r.release(restore, log, rollbackUntil.Add(releaseBudget)))
 }
 
-func (r rollout) enter(parent context.Context, status drainStatus) (time.Time, error) {
+func (r rollout) enter(parent context.Context, status drainStatus) (time.Time, bool, error) {
 	// Wrap DeadlineExceeded in the timeout cause so HTTP clients returning either
 	// ctx.Err() or context.Cause(ctx) stay distinguishable from non-timeout errors.
 	drainCause := fmt.Errorf("%w: %w", errDrainExpired, context.DeadlineExceeded)
@@ -125,26 +159,31 @@ func (r rollout) enter(parent context.Context, status drainStatus) (time.Time, e
 	defer cancel()
 	for {
 		if !status.Held {
-			return time.Time{}, errors.New("maintenance ownership changed")
+			return time.Time{}, false, errors.New("maintenance ownership changed")
 		}
 		if status.Confirmed {
 			start, entered, err := r.tryEnter(parent, drain, status.Version)
-			if err != nil || entered {
-				return start, err
+			if entered {
+				return start, true, nil
+			}
+			if err != nil {
+				// Any non-busy failure during local enter leaves remote hold state
+				// uncertain (e.g. SSH disconnect or timeout after writing the fence).
+				return time.Time{}, true, err
 			}
 		}
 		if err := r.sleep(drain, statusPoll); err != nil {
 			if isDrainExpired(parent, drain) {
-				return time.Time{}, errDrainExpired
+				return time.Time{}, false, errDrainExpired
 			}
-			return time.Time{}, err
+			return time.Time{}, false, err
 		}
 		var err error
 		if status, err = r.policy(drain, "status"); err != nil {
 			if isDrainExpired(parent, drain) && errors.Is(err, context.DeadlineExceeded) {
-				return time.Time{}, errDrainExpired
+				return time.Time{}, false, errDrainExpired
 			}
-			return time.Time{}, err
+			return time.Time{}, false, err
 		}
 	}
 }
@@ -191,10 +230,10 @@ func (r rollout) sleep(ctx context.Context, d time.Duration) error {
 
 // Retry exit 75 (host .lock or local admission gate contention) within the
 // stage deadline; an interrupted switch may hold .lock until restart exits.
-func (r rollout) localUntilReady(ctx context.Context, log *slog.Logger, action string) error {
+func (r rollout) retryWhileBusy(ctx context.Context, log *slog.Logger, action string, attempt func() error) error {
 	logged := false
 	for {
-		err := r.local(ctx, action)
+		err := attempt()
 		if err == nil || !busy(err) {
 			return err
 		}
@@ -206,6 +245,24 @@ func (r rollout) localUntilReady(ctx context.Context, log *slog.Logger, action s
 			return errors.Join(err, waitErr)
 		}
 	}
+}
+
+func (r rollout) localUntilReady(ctx context.Context, log *slog.Logger, action string) error {
+	return r.retryWhileBusy(ctx, log, action, func() error {
+		return r.local(ctx, action)
+	})
+}
+
+func (r rollout) localRecoveryUntilReady(parent context.Context, log *slog.Logger, until time.Time) (recoveryState, error) {
+	ctx, cancel := context.WithDeadline(parent, until)
+	defer cancel()
+	var state recoveryState
+	err := r.retryWhileBusy(ctx, log, "recover", func() error {
+		var err error
+		state, err = r.localRecovery(ctx)
+		return err
+	})
+	return state, err
 }
 
 func (r rollout) switchAndVerify(parent context.Context, log *slog.Logger, action string, until time.Time) error {
@@ -240,6 +297,13 @@ func (r rollout) release(parent context.Context, log *slog.Logger, until time.Ti
 	if err := r.localUntilReady(ctx, log, "release"); err != nil {
 		return fmt.Errorf("release local maintenance hold: %w", err)
 	}
+	_, err := r.policy(ctx, "release")
+	return err
+}
+
+func (r rollout) releaseAuthority(parent context.Context, until time.Time) error {
+	ctx, cancel := context.WithDeadline(parent, until)
+	defer cancel()
 	_, err := r.policy(ctx, "release")
 	return err
 }

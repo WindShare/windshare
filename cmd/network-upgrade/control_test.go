@@ -84,7 +84,26 @@ func TestRecoveryRequiresOwnershipAndVerifiesCurrentSelection(t *testing.T) {
 	}
 	f.held = true
 	f.calls = nil
-	if err := (rollout{maintenanceTarget: f}).recover(t.Context(), log); err != nil || !slices.Equal(f.calls, []string{"authority status", "host inspect", "probe", "host release", "authority release"}) {
+	if err := (rollout{maintenanceTarget: f}).recover(t.Context(), log); err != nil || !slices.Equal(f.calls, []string{"authority status", "host recover", "host inspect", "probe", "host release", "authority release"}) {
 		t.Fatalf("recovery %v: %v", f.calls, err)
+	}
+}
+
+func TestParseRecoveryState(t *testing.T) {
+	for _, tc := range []struct {
+		raw  string
+		want recoveryState
+		ok   bool
+	}{
+		{"held\n", recoveryHeld, true},
+		{"released\r\n", recoveryReleased, true},
+		{"", "", false},
+		{"unexpected\n", "", false},
+		{"banner\nreleased\n", "", false},
+	} {
+		got, err := parseRecoveryState(tc.raw)
+		if (err == nil) != tc.ok || got != tc.want {
+			t.Fatalf("parseRecoveryState(%q) = (%q, %v), want (%q, ok=%v)", tc.raw, got, err, tc.want, tc.ok)
+		}
 	}
 }

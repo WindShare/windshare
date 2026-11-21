@@ -62,7 +62,7 @@ go build -o network-upgrade ./cmd/network-upgrade
 
 The runner stages and checks the candidate as the service account while the old release serves users. It then waits up to five minutes for the signed drain confirmation and an idle transfer window. Exit 75 defers a busy node. A successful upgrade exits zero. A failed candidate exits nonzero and logs whether the previous release was verified. Both switches use the installed key, endpoint and database. The local fence rejects ordinary joins with a one-second retry.
 
-If a runner stops with a hold outstanding, use its logged operation ID. Recovery checks the selected release directly, attempts the recorded previous binary if needed, and releases the matching hold after verification.
+If a runner stops with a hold outstanding, use its logged operation ID. Recovery closes an unentered or already-released operation directly; if the local maintenance hold is active, it checks the selected release, rolls back to the recorded previous binary if needed, and releases the matching hold after verification.
 
 ```sh
 ./network-upgrade -host "$SSH_ALIAS" -node-key "$NODE_KEY" -recover-operation "$OPERATION_ID"

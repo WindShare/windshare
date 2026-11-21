@@ -17,12 +17,14 @@ func (deferredExit) Error() string { return "sessions still active" }
 func (deferredExit) ExitCode() int { return busyExit }
 
 type fakeTarget struct {
-	calls   []string
-	fail    map[string]error
-	onCall  func(string)
-	onStep  func(context.Context, string) error
-	held    bool
-	version uint64
+	calls       []string
+	fail        map[string]error
+	onCall      func(string)
+	onStep      func(context.Context, string) error
+	held        bool
+	unconfirmed bool
+	version     uint64
+	recovery    recoveryState
 }
 
 func (f *fakeTarget) step(ctx context.Context, action string) error {
@@ -42,13 +44,22 @@ func (f *fakeTarget) policy(ctx context.Context, action string) (drainStatus, er
 	if action == "release" && err == nil {
 		f.held = false
 	}
-	return drainStatus{Held: f.held, Confirmed: true, Version: f.version}, err
+	return drainStatus{Held: f.held, Confirmed: !f.unconfirmed, Version: f.version}, err
 }
 func (f *fakeTarget) local(ctx context.Context, action string, args ...string) error {
 	if action == "enter" && !slices.Equal(args, []string{strconv.FormatUint(f.version, 10), strconv.FormatInt(reconnectBudget.Milliseconds(), 10)}) {
 		return errors.New("incorrect fence version or reconnect budget")
 	}
 	return f.step(ctx, "host "+action)
+}
+func (f *fakeTarget) localRecovery(ctx context.Context) (recoveryState, error) {
+	if err := f.step(ctx, "host recover"); err != nil {
+		return "", err
+	}
+	if f.recovery != "" {
+		return f.recovery, nil
+	}
+	return recoveryHeld, nil
 }
 func (f *fakeTarget) verify(ctx context.Context) error { return f.step(ctx, "probe") }
 
@@ -84,7 +95,7 @@ func TestBusyFenceDefersWithoutRestartAndFailedCandidateProbeRollsBack(t *testin
 		if !errors.Is(err, errDeferred) || f.held || slices.Contains(f.calls, "host switch") {
 			t.Fatalf("error=%v, held=%v, calls=%v", err, f.held, f.calls)
 		}
-		if want := []string{"authority drain", "host enter", "host release", "authority release"}; !slices.Equal(f.calls, want) {
+		if want := []string{"authority drain", "host enter", "authority release"}; !slices.Equal(f.calls, want) {
 			t.Fatalf("calls=%v, want=%v", f.calls, want)
 		}
 	})
@@ -118,20 +129,67 @@ func TestBusyFenceDefersWithoutRestartAndFailedCandidateProbeRollsBack(t *testin
 func TestUpgradeDeferralAndReleaseClassification(t *testing.T) {
 	discard := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	t.Run("failed host release after drain deferral returns fatal error", func(t *testing.T) {
+	t.Run("drain deferral after busy enter releases authority without ssh host release", func(t *testing.T) {
+		t.Parallel()
+		f := &fakeTarget{
+			held:    true,
+			version: 72,
+			fail: map[string]error{
+				"host enter":   deferredExit{},
+				"host release": errors.New("ssh connection reset"),
+			},
+		}
+		err := (rollout{maintenanceTarget: f, drainTimeout: 15 * time.Millisecond}).upgrade(t.Context(), discard)
+		if !errors.Is(err, errDeferred) || f.held {
+			t.Fatalf("error=%v, held=%v, calls=%v", err, f.held, f.calls)
+		}
+		if want := []string{"authority drain", "host enter", "authority release"}; !slices.Equal(f.calls, want) {
+			t.Fatalf("calls=%v, want=%v", f.calls, want)
+		}
+	})
+
+	t.Run("drain deferral before confirmed status releases authority without host calls", func(t *testing.T) {
+		t.Parallel()
+		f := &fakeTarget{
+			held:        true,
+			unconfirmed: true,
+			version:     72,
+			fail: map[string]error{
+				"host release": errors.New("ssh connection reset"),
+			},
+		}
+		err := (rollout{maintenanceTarget: f, drainTimeout: 15 * time.Millisecond}).upgrade(t.Context(), discard)
+		if !errors.Is(err, errDeferred) || f.held {
+			t.Fatalf("error=%v, held=%v, calls=%v", err, f.held, f.calls)
+		}
+		if want := []string{"authority drain", "authority release"}; !slices.Equal(f.calls, want) {
+			t.Fatalf("calls=%v, want=%v", f.calls, want)
+		}
+	})
+
+	t.Run("failed host release after ambiguous local enter keeps authority hold and returns fatal error", func(t *testing.T) {
 		t.Parallel()
 		releaseErr := errors.New("ssh connection reset")
 		f := &fakeTarget{
 			held:    true,
 			version: 72,
 			fail: map[string]error{
-				"host enter":   deferredExit{},
 				"host release": releaseErr,
 			},
+		}
+		f.onStep = func(ctx context.Context, step string) error {
+			if step == "host enter" {
+				<-ctx.Done()
+				return errors.New("signal: killed")
+			}
+			return nil
 		}
 		err := (rollout{maintenanceTarget: f, drainTimeout: 15 * time.Millisecond}).upgrade(t.Context(), discard)
 		if err == nil || errors.Is(err, errDeferred) || !errors.Is(err, releaseErr) || !f.held {
 			t.Fatalf("error=%v, held=%v, calls=%v", err, f.held, f.calls)
+		}
+		if want := []string{"authority drain", "host enter", "host release"}; !slices.Equal(f.calls, want) {
+			t.Fatalf("calls=%v, want=%v", f.calls, want)
 		}
 	})
 
@@ -166,7 +224,7 @@ func TestUpgradeDeferralAndReleaseClassification(t *testing.T) {
 		if !errors.Is(err, context.Canceled) || errors.Is(err, errDeferred) || f.held {
 			t.Fatalf("error=%v, held=%v, calls=%v", err, f.held, f.calls)
 		}
-		if want := []string{"authority drain", "host enter", "host release", "authority release"}; !slices.Equal(f.calls, want) {
+		if want := []string{"authority drain", "host enter", "authority release"}; !slices.Equal(f.calls, want) {
 			t.Fatalf("calls=%v, want=%v", f.calls, want)
 		}
 	})
@@ -185,6 +243,9 @@ func TestUpgradeDeferralAndReleaseClassification(t *testing.T) {
 		err := (rollout{maintenanceTarget: f, drainTimeout: 15 * time.Millisecond}).upgrade(t.Context(), discard)
 		if !errors.Is(err, errDeferred) || f.held {
 			t.Fatalf("error=%v, held=%v, calls=%v", err, f.held, f.calls)
+		}
+		if want := []string{"authority drain", "host enter", "host release", "authority release"}; !slices.Equal(f.calls, want) {
+			t.Fatalf("calls=%v, want=%v", f.calls, want)
 		}
 	})
 
@@ -327,8 +388,67 @@ func TestSwitchAndReleaseRetryBusyLock(t *testing.T) {
 			}
 		}
 		err := (rollout{maintenanceTarget: f}).recover(t.Context(), discard)
-		want := []string{"authority status", "host inspect", "host inspect", "probe", "host release", "authority release"}
+		want := []string{"authority status", "host recover", "host inspect", "host inspect", "probe", "host release", "authority release"}
 		if err != nil || f.held || !slices.Equal(f.calls, want) {
+			t.Fatalf("error=%v, held=%v, calls=%v", err, f.held, f.calls)
+		}
+	})
+
+	t.Run("recover retries busy lock before closing unheld operation", func(t *testing.T) {
+		t.Parallel()
+		recoverBusy := 1
+		f := &fakeTarget{
+			held:     true,
+			version:  76,
+			recovery: recoveryReleased,
+			fail: map[string]error{
+				"host inspect":  errors.New("selected release is not running"),
+				"host rollback": errors.New("operation does not own the local hold"),
+				"probe":         errors.New("probe timed out"),
+			},
+		}
+		f.onCall = func(step string) {
+			if step == "host recover" {
+				if recoverBusy > 0 {
+					recoverBusy--
+					f.fail[step] = deferredExit{}
+				} else {
+					delete(f.fail, step)
+				}
+			}
+		}
+		err := (rollout{maintenanceTarget: f}).recover(t.Context(), discard)
+		want := []string{"authority status", "host recover", "host recover", "authority release"}
+		if err != nil || f.held || !slices.Equal(f.calls, want) {
+			t.Fatalf("error=%v, held=%v, calls=%v", err, f.held, f.calls)
+		}
+	})
+
+	t.Run("recover fails closed without rollback when host recovery reports an error", func(t *testing.T) {
+		t.Parallel()
+		missingHold := errors.New("local hold missing for switched release")
+		f := &fakeTarget{
+			held:    true,
+			version: 77,
+			fail:    map[string]error{"host recover": missingHold},
+		}
+		err := (rollout{maintenanceTarget: f}).recover(t.Context(), discard)
+		want := []string{"authority status", "host recover"}
+		if !errors.Is(err, missingHold) || !f.held || !slices.Equal(f.calls, want) {
+			t.Fatalf("error=%v, held=%v, calls=%v", err, f.held, f.calls)
+		}
+	})
+
+	t.Run("recover fails closed on unexpected host recovery state", func(t *testing.T) {
+		t.Parallel()
+		f := &fakeTarget{
+			held:     true,
+			version:  78,
+			recovery: recoveryState("unexpected"),
+		}
+		err := (rollout{maintenanceTarget: f}).recover(t.Context(), discard)
+		want := []string{"authority status", "host recover"}
+		if err == nil || !f.held || !slices.Equal(f.calls, want) {
 			t.Fatalf("error=%v, held=%v, calls=%v", err, f.held, f.calls)
 		}
 	})

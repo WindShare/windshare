@@ -96,6 +96,23 @@ case "$action" in
         [[ ! -e $state/released ]] || die "operation already released"
         gate --enter-maintenance "$1" "$2"
         ;;
+    recover)
+        [[ $# == 0 && $(cat "$state/node") == "$node" ]] || die "operation mismatch"
+        previous=$(cat "$state/previous")
+        as_service "$previous/wsrelay" --check-config "$config" "$node" >&2
+        if gate --check-hold >/dev/null 2>&1; then
+            printf 'held\n'
+        else
+            # Only an already-released or unswitched operation may close without a local hold.
+            if [[ ! -e $state/released ]]; then
+                release=$(selected)
+                [[ $release == "$previous" ]] || die "local hold missing for switched release"
+            fi
+            gate --release-maintenance >&2
+            touch "$state/released"
+            printf 'released\n'
+        fi
+        ;;
     inspect)
         [[ $# == 0 && $(cat "$state/node") == "$node" ]] || die "operation mismatch"
         previous=$(cat "$state/previous")

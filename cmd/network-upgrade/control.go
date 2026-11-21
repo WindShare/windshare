@@ -69,7 +69,7 @@ func (r *runner) call(ctx context.Context, action string, input, out any) error 
 
 // The operator's pinned OpenSSH alias owns host access. Only validated identifiers
 // and digits cross the SSH command boundary. The authority token stays on the runner.
-func (r *runner) remote(ctx context.Context, input io.Reader, action string, args ...string) error {
+func (r *runner) remoteCommand(ctx context.Context, input io.Reader, action string, args ...string) *exec.Cmd {
 	argv := append([]string{"-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "ForwardAgent=no", "-o", "ClearAllForwardings=yes", "-o", "ConnectTimeout=4", "--", r.host, "sudo", "-n", "/usr/local/sbin/windshare-install-wsrelay", action, r.op.ID, r.op.NodeKey}, args...)
 	cmd := exec.CommandContext(ctx, "ssh", argv...)
 	cmd.Env = slices.DeleteFunc(os.Environ(), func(entry string) bool {
@@ -78,9 +78,33 @@ func (r *runner) remote(ctx context.Context, input io.Reader, action string, arg
 	})
 	cmd.Stdin = input
 	cmd.Stderr = os.Stderr
-	cmd.Stdout = os.Stderr
 	cmd.WaitDelay = time.Second
+	return cmd
+}
+
+func (r *runner) remote(ctx context.Context, input io.Reader, action string, args ...string) error {
+	cmd := r.remoteCommand(ctx, input, action, args...)
+	cmd.Stdout = os.Stderr
 	return cmd.Run()
+}
+
+func (r *runner) localRecovery(ctx context.Context) (recoveryState, error) {
+	cmd := r.remoteCommand(ctx, nil, "recover")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	if err := cmd.Run(); err != nil {
+		return "", err
+	}
+	return parseRecoveryState(out.String())
+}
+
+func parseRecoveryState(raw string) (recoveryState, error) {
+	switch state := recoveryState(strings.TrimSpace(raw)); state {
+	case recoveryHeld, recoveryReleased:
+		return state, nil
+	default:
+		return "", fmt.Errorf("unexpected host recovery state %q", state)
+	}
 }
 
 func (r *runner) verify(ctx context.Context) error {
