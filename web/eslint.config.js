@@ -53,6 +53,32 @@ export default defineConfig([
     },
   },
   {
+    files: ['src/ui/donate/**/*.{ts,tsx}'],
+    rules: {
+      'complexity': ['error', DEFAULT_COGNITIVE_COMPLEXITY],
+      'max-depth': ['error', 4],
+      'max-params': ['error', 5],
+      'no-restricted-imports': ['error', {
+        patterns: [{
+          group: [
+            '**/application/**',
+            '**/connectivity/**',
+            '**/crypto/**',
+            '**/network/**',
+            '!**/deploy/network/release.json',
+            '**/output/**',
+            '**/protocol/**',
+            '**/receiver/**',
+            '**/session/**',
+            '**/transfer/**',
+            '**/transport/**',
+          ],
+          message: 'Donate UI must stay decoupled from receiver, transfer, and network directory runtimes.',
+        }],
+      }],
+    },
+  },
+  {
     // Config files and Vitest fixtures execute in Node, even when they import
     // browser-facing modules for type or vector conformance checks.
     files: ['*.config.ts', 'test/**/*.{ts,tsx}', 'e2e/**/*.{ts,tsx}'],

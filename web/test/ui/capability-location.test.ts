@@ -76,6 +76,14 @@ describe('document capability intake', () => {
     expect(captureLocation(port).diagnosticsRequested).toBe(false)
   })
 
+  it('skips capability capture for fragments on the donate route', () => {
+    for (const url of ['https://receiver.invalid/donate#section', 'https://receiver.invalid/donate/#kofi']) {
+      const port = locationPort(url)
+      expect(captureLocation(port).capabilityInput).toBeNull()
+      expect(port.history.replaceState).not.toHaveBeenCalled()
+    }
+  })
+
   it('keeps credential erasure authoritative when an observer fails', () => {
     const port = locationPort('https://receiver.invalid/s/share#invalid-key')
     const captured = captureLocation(port, { onSecurityMilestone: () => { throw new Error('observer failed') } })

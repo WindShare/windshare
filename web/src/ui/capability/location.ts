@@ -1,3 +1,4 @@
+import { isDonatePathname } from '../donate/route'
 import { isPortalFragment } from '../portal/navigation'
 
 import { requestsBrowserTrace, TRACE_QUERY_PARAMETER } from './intake'
@@ -25,7 +26,8 @@ export function captureLocation(
 ): BrowserLocationCapture {
   const input = windowPort.location.href
   const sanitized = new URL(input)
-  const capabilityInput = sanitized.hash.length > 1 && !isPortalFragment(sanitized.hash)
+  const skipsCapabilityCapture = isDonatePathname(sanitized.pathname) || isPortalFragment(sanitized.hash)
+  const capabilityInput = sanitized.hash.length > 1 && !skipsCapabilityCapture
     ? input : null
   const diagnosticsRequested = requestsBrowserTrace(input)
   const hasDiagnosticsParameter = sanitized.searchParams.has(TRACE_QUERY_PARAMETER)

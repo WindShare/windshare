@@ -94,6 +94,10 @@ node_modules/
 .codex-work/
 .codex
 
+# Cloudflare Worker local state and secrets
+.wrangler/
+.dev.vars*
+
 # Local MCP server config; holds host-specific SSH credentials.
 /.mcp.json
 

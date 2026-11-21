@@ -1,0 +1,34 @@
+name = "windshare-donations"
+main = "src/worker.ts"
+compatibility_date = "2026-09-28"
+compatibility_flags = ["nodejs_compat", "global_fetch_strictly_public"]
+workers_dev = false
+
+[[routes]]
+pattern = "donate.windshare.cc"
+custom_domain = true
+
+[[durable_objects.bindings]]
+name = "DONATION_WALL"
+class_name = "DonationWall"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["DonationWall"]
+
+[vars]
+AFDIAN_USER_ID = "735de47ce57c11f1b2c95254001e7c00"
+KOFI_HANDLE = "windshare"
+ALLOWED_ORIGINS = "https://ws.ourworld.top,https://windshare.cc"
+DONATE_API_ORIGIN = "https://donate.windshare.cc"
+
+[observability]
+enabled = true
+
+# Required Cloudflare Secrets (configure via `wrangler secret put` or dashboard; never commit values):
+# - AFDIAN_TOKEN
+# - AFDIAN_WEBHOOK_SECRET
+# - KOFI_VERIFICATION_TOKEN
+# - NOWPAYMENTS_API_KEY
+# - NOWPAYMENTS_IPN_SECRET
+# - DONATE_ADMIN_PASSWORD

@@ -6,12 +6,18 @@ import { PortalPopover } from './PortalPopover'
 import { PORTAL_LINKS, PORTAL_SECTIONS } from './navigation'
 import { usePortalCopy } from './locales/use-portal-copy'
 
-export function PortalHeader({ onShare }: { readonly onShare: () => void }) {
+export function PortalHeader({
+  onShare,
+  anchorPrefix = '',
+}: {
+  readonly onShare?: () => void
+  readonly anchorPrefix?: string
+}) {
   const t = usePortalCopy()
   const menu = useRef<HTMLDivElement>(null)
   const links = Object.values(PORTAL_SECTIONS)
   const navigate = (id: string) => {
-    if (id === PORTAL_SECTIONS.cli.id) onShare()
+    if (id === PORTAL_SECTIONS.cli.id) onShare?.()
     menu.current?.hidePopover()
   }
 
@@ -22,7 +28,7 @@ export function PortalHeader({ onShare }: { readonly onShare: () => void }) {
           <WindShareMark size={38} /><span>WindShare</span>
         </a>
         <nav className="portal-nav" aria-label={t.nav}>
-          {links.map(section => <a key={section.id} href={`#${section.id}`}
+          {links.map(section => <a key={section.id} href={`${anchorPrefix}#${section.id}`}
             onClick={() => navigate(section.id)}>{t[section.labelKey]}</a>)}
         </nav>
         <div className="portal-header-actions">
@@ -33,7 +39,7 @@ export function PortalHeader({ onShare }: { readonly onShare: () => void }) {
           <PortalPreferences />
           <PortalPopover className="portal-mobile-nav" label={t.openNav} icon="menu" panelRef={menu}>
             <nav className="portal-mobile-links" aria-label={t.mobileNav}>
-              {links.map(section => <a key={section.id} href={`#${section.id}`}
+              {links.map(section => <a key={section.id} href={`${anchorPrefix}#${section.id}`}
                 onClick={() => navigate(section.id)}>{t[section.labelKey]}<PortalIcon name="arrow" size={16} /></a>)}
             </nav>
           </PortalPopover>
