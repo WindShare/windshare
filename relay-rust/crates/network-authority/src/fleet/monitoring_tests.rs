@@ -4,9 +4,8 @@ use crate::fleet::{
     monitoring::{CYCLE_SECONDS, MIN_CYCLE_SECONDS},
     operations::{Action, Admission, Manage},
     topology::Role,
-    vantage::SILENT_SECONDS,
 };
-use std::collections::BTreeSet;
+use tracing::Level;
 
 struct MonitoringFleet {
     auth: Authority<Memory, Clock>,
@@ -49,7 +48,6 @@ impl MonitoringFleet {
                 node.clone(),
                 NodeState::Listed {
                     status: Status::Active,
-                    withdrawn: BTreeSet::new(),
                     maintenance: None,
                 },
                 node.alias.clone(),
@@ -105,18 +103,13 @@ impl MonitoringFleet {
     }
 
     fn target_keys(&self, vantage: usize) -> Vec<String> {
-        let origins = [
-            "https://ws.ourworld.top".into(),
-            "https://windshare.cc".into(),
-            "https://other.example".into(),
-        ];
         let req = proof(
             &self.keys[vantage],
             b"windshare/fleet-targets/v1\0",
             &json!({"at": self.auth.environment.now()}),
         );
         self.auth
-            .fleet_targets(&self.agents, &req, origins)
+            .fleet_targets(&self.agents, &req)
             .unwrap()
             .nodes
             .into_iter()
@@ -157,17 +150,6 @@ impl MonitoringFleet {
             )
             .unwrap();
     }
-    fn active_status(&self) -> Status {
-        crate::fleet::publication::current(&self.auth.store)
-            .unwrap()
-            .payload()
-            .unwrap()
-            .nodes
-            .into_iter()
-            .find(|entry| entry.spec.node_key == self.active.node_key)
-            .unwrap()
-            .status
-    }
 
     fn active_report(&self, vantage: usize, reported_at: u64, active_roles: [bool; 2]) -> Proof {
         let prior_key = URL_SAFE_NO_PAD.encode([9u8; 32]);
@@ -192,20 +174,6 @@ impl MonitoringFleet {
             b"windshare/fleet-cycle/v1\0",
             &json!({"at": reported_at, "mirror": self.head_digest(), "nodes": nodes}),
         )
-    }
-
-    fn observe_active_after(&mut self, delta: u64, vantages: &[usize], active_roles: [bool; 2]) {
-        self.auth.environment.now += delta;
-        let at = self.auth.environment.now;
-        for &vantage in vantages {
-            let report = self.active_report(vantage, at, active_roles);
-            self.auth.record_cycle(&self.agents, &report).unwrap();
-            assert!(self.auth.record_cycle(&self.agents, &report).is_err());
-        }
-        let mut head = crate::fleet::publication::current(&self.auth.store).unwrap();
-        self.auth
-            .evaluate_health(&self.agents, &self.signer, &mut head)
-            .unwrap();
     }
 }
 
@@ -250,19 +218,17 @@ fn fleet_targets_include_only_listed_nodes() {
 }
 
 #[test]
-fn record_cycle_ignores_staging_and_disabled_nodes_so_promotion_starts_clean() {
+fn record_cycle_records_read_only_observations_and_ignores_unlisted_nodes() {
     let mut fleet = MonitoringFleet::new();
     let observed = fleet.head_digest();
 
-    // Even if vantages submit failing observations for staging or disabled nodes for 3 cycles,
-    // record_cycle ignores them so fresh promotions enter Listed without poisoned streaks.
     for _ in 0..3 {
         fleet.auth.environment.now += CYCLE_SECONDS;
         let at = fleet.auth.environment.now;
         let nodes = json!({
             fleet.active.node_key.clone(): {
                 "operation_id": fleet.active.alias, "tcp": true, "https": true,
-                "tls_expires": at + 86400, "relay": true, "stun": true
+                "tls_expires": at + 86400, "relay": false, "stun": true
             },
             fleet.disabled.node_key.clone(): {
                 "operation_id": fleet.disabled.alias, "tcp": false, "https": false,
@@ -283,21 +249,35 @@ fn record_cycle_ignores_staging_and_disabled_nodes_so_promotion_starts_clean() {
             fleet.auth.record_cycle(&fleet.agents, &report).unwrap();
         }
     }
-    for cycle in crate::fleet::monitoring::reports(&fleet.auth.store, &fleet.agents).unwrap() {
-        assert!(cycle.nodes.contains_key(&fleet.active.node_key));
+    let reports = crate::fleet::monitoring::reports(&fleet.auth.store, &fleet.agents).unwrap();
+    assert_eq!(reports.len(), fleet.agents.len());
+    for cycle in reports {
+        let active_obs = cycle.nodes.get(&fleet.active.node_key).unwrap();
+        assert_eq!(active_obs.relay, Some(false));
+        assert_eq!(active_obs.stun, Some(true));
         assert!(
             !cycle.nodes.contains_key(&fleet.disabled.node_key)
                 && !cycle.nodes.contains_key(&fleet.staged.node_key)
         );
     }
 
-    fleet.verify_and_promote_staged(Status::Canary, &observed);
-    let mut head = crate::fleet::publication::current(&fleet.auth.store).unwrap();
-    fleet
-        .auth
-        .evaluate_health(&fleet.agents, &fleet.signer, &mut head)
+    // Monitoring observations remain read-only: failing probes do not mutate node admission
+    // or directory status, leaving traffic changes to explicit operator actions.
+    let active_key = crate::fleet::topology::public_key(&fleet.active.node_key).unwrap();
+    let active_saved: Node = load(&fleet.auth.store, &key("node", &active_key))
+        .unwrap()
         .unwrap();
+    assert_eq!(active_saved.admission(), Admission::Accepting);
+    assert!(matches!(
+        active_saved.state(),
+        NodeState::Listed {
+            status: Status::Active,
+            maintenance: None,
+        }
+    ));
 
+    fleet.verify_and_promote_staged(Status::Canary, &observed);
+    let head = crate::fleet::publication::current(&fleet.auth.store).unwrap();
     let published = head
         .payload()
         .unwrap()
@@ -316,41 +296,36 @@ fn record_cycle_ignores_staging_and_disabled_nodes_so_promotion_starts_clean() {
         saved.state(),
         NodeState::Listed {
             status: Status::Canary,
-            withdrawn,
             maintenance: None,
-        } if withdrawn.is_empty()
+        }
     ));
 }
 
 #[test]
-fn cycle_spacing_and_streaks_track_receipt_elapsed_time_across_epoch_boundaries() {
+fn cycle_spacing_rejects_replays_and_warns_only_on_unexpected_probe_failures() {
     let mut fleet = MonitoringFleet::new();
     let bad_relay = [false, true];
-    let boundary = (fleet.auth.environment.now / CYCLE_SECONDS + 2) * CYCLE_SECONDS;
+    let t0 = fleet.auth.environment.now;
 
-    // Start 1 s before a 300 s UTC boundary (bucket N), jump across two buckets on
-    // the next report (bucket N+2 after +302 s), then land inside bucket N+2 again
-    // after +298 s. Elapsed receipt time preserves streaks without false 400s.
-    fleet.auth.environment.now = boundary - 1;
-    fleet.observe_active_after(0, &[0, 1], bad_relay);
-    assert_eq!(fleet.active_status(), Status::Active);
-
-    fleet.observe_active_after(CYCLE_SECONDS + 2, &[0, 1], bad_relay);
-    assert_eq!(fleet.active_status(), Status::Active);
-
-    fleet.observe_active_after(CYCLE_SECONDS - 2, &[0, 1], bad_relay);
-    assert_eq!(fleet.active_status(), Status::Draining);
+    // An accepting node reporting relay=false emits a structured fleet_probe_failed warning.
+    let fast_initial = fleet.active_report(0, t0 + 80, bad_relay);
+    let events = super::observability::capture_events(|| {
+        fleet
+            .auth
+            .record_cycle(&fleet.agents, &fast_initial)
+            .unwrap();
+    });
+    let warnings: Vec<_> = events
+        .iter()
+        .filter(|(level, entry)| {
+            *level == Level::WARN && entry["fields"]["event"] == "fleet_probe_failed"
+        })
+        .collect();
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings[0].1["fields"]["node_id"], fleet.active.node_key);
 
     // Reports arriving sooner than MIN_CYCLE_SECONDS are rejected, and a previously
     // accepted fast-clock (+80 s) proof cannot be replayed once spacing elapses.
-    let mut fleet = MonitoringFleet::new();
-    let t0 = fleet.auth.environment.now;
-    let fast_initial = fleet.active_report(0, t0 + 80, bad_relay);
-    fleet
-        .auth
-        .record_cycle(&fleet.agents, &fast_initial)
-        .unwrap();
-
     fleet.auth.environment.now = t0 + MIN_CYCLE_SECONDS - 1;
     let too_soon = fleet.active_report(0, fleet.auth.environment.now, bad_relay);
     assert!(fleet.auth.record_cycle(&fleet.agents, &too_soon).is_err());
@@ -362,13 +337,43 @@ fn cycle_spacing_and_streaks_track_receipt_elapsed_time_across_epoch_boundaries(
             .record_cycle(&fleet.agents, &fast_initial)
             .is_err()
     );
-    let spaced = fleet.active_report(0, fleet.auth.environment.now, bad_relay);
-    fleet.auth.record_cycle(&fleet.agents, &spaced).unwrap();
 
-    // Exceeding SILENT_SECONDS resets accumulated streaks instead of carrying stale evidence.
-    let mut fleet = MonitoringFleet::new();
-    fleet.observe_active_after(CYCLE_SECONDS, &[0, 1], bad_relay);
-    fleet.observe_active_after(CYCLE_SECONDS, &[0, 1], bad_relay);
-    fleet.observe_active_after(SILENT_SECONDS + 1, &[0, 1], bad_relay);
-    assert_eq!(fleet.active_status(), Status::Active);
+    // Once drained by the operator, relay=false reflects the intended admission state and
+    // does not emit a false-positive fleet_probe_failed warning, whereas a STUN failure does.
+    fleet
+        .auth
+        .manage(
+            &fleet.admin,
+            &Manage {
+                node_key: fleet.active.node_key.clone(),
+                operation_id: fleet.active.alias.clone(),
+                action: Action::Drain,
+            },
+            &fleet.signer,
+        )
+        .unwrap();
+    let drained_relay = fleet.active_report(0, fleet.auth.environment.now, bad_relay);
+    let events = super::observability::capture_events(|| {
+        fleet
+            .auth
+            .record_cycle(&fleet.agents, &drained_relay)
+            .unwrap();
+    });
+    assert_eq!(
+        super::observability::events_named(&events, "fleet_probe_failed"),
+        Vec::<&serde_json::Value>::new()
+    );
+
+    fleet.auth.environment.now += CYCLE_SECONDS;
+    let drained_stun_fault = fleet.active_report(0, fleet.auth.environment.now, [false, false]);
+    let events = super::observability::capture_events(|| {
+        fleet
+            .auth
+            .record_cycle(&fleet.agents, &drained_stun_fault)
+            .unwrap();
+    });
+    assert_eq!(
+        super::observability::events_named(&events, "fleet_probe_failed").len(),
+        1
+    );
 }

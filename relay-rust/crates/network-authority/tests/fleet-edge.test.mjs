@@ -375,7 +375,7 @@ test('vantage routes, scheduled mirror audit, maintenance/manage boundaries, and
     await call('/v1/vantage/targets', signVantageProof(cnVantage, 'windshare/fleet-targets/v1\0', { at: now }))
   ).value;
   assert.equal(cnTargets.zone, 'cn');
-  assert.deepEqual(cnTargets.origins, [release.link_host, release.backup_entry, 'https://self-hosted.example']);
+  assert.equal(cnTargets.origins, undefined);
   assert.equal(cnTargets.nodes.length, releaseNodes.length);
   assert.ok(!cnTargets.nodes.some(item => item.spec.node_key === enrollment.node_key));
 

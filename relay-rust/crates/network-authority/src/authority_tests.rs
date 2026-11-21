@@ -140,7 +140,6 @@ fn listed_node(key: [u8; 32], zone: Zone, region: &str) -> Node {
         "seed-op".into(),
         crate::fleet::NodeState::Listed {
             status: crate::fleet::topology::Status::Active,
-            withdrawn: std::collections::BTreeSet::new(),
             maintenance: None,
         },
         1,

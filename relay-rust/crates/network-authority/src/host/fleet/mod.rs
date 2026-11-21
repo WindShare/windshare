@@ -225,7 +225,7 @@ impl NetworkAuthority {
             },
             move |service, env| dispatch(service, env, route, &ctx, &bytes),
         );
-        // A failed health or renewal transaction cannot strand the last committed head in SQLite.
+        // A failed renewal transaction cannot strand the last committed head in SQLite.
         let reconcile_mode = match route.reconcile_policy() {
             PostCommitReconcile::AlwaysAudit => Some(ReconcileMode::AuditKv),
             PostCommitReconcile::OnCommitPending if result.is_ok() => {
@@ -358,11 +358,9 @@ fn dispatch_vantage(
     bytes: &[u8],
 ) -> Result<Value> {
     match route {
-        VantageRoute::Targets => Ok(json!(service.fleet_targets(
-            &agents(env)?,
-            &routes::parse(bytes)?,
-            origins()?
-        )?)),
+        VantageRoute::Targets => Ok(json!(
+            service.fleet_targets(&agents(env)?, &routes::parse(bytes)?,)?
+        )),
         VantageRoute::Cycle => {
             service.record_cycle(&agents(env)?, &routes::parse(bytes)?)?;
             Ok(json!({}))
@@ -452,10 +450,9 @@ fn dispatch_internal(
 
 fn tick(service: &mut Service, env: &Env, head: &mut Publication) -> Result<Value> {
     let now = service.environment.now();
-    let registry = agents(env);
-    match &registry {
+    match agents(env) {
         Ok(agents) => {
-            let missing = vantage::silent(&service.store, agents, now)?;
+            let missing = vantage::silent(&service.store, &agents, now)?;
             if !missing.is_empty() {
                 tracing::warn!(event="vantage_silent", vantages=?missing);
             }
@@ -474,9 +471,6 @@ fn tick(service: &mut Service, env: &Env, head: &mut Publication) -> Result<Valu
     }
     match signer(env) {
         Ok(publisher) => {
-            if let Ok(agents) = registry {
-                service.evaluate_health(&agents, &publisher, head)?;
-            }
             if head.renew(&publisher, now)? {
                 head.save(&mut service.store)?;
             }

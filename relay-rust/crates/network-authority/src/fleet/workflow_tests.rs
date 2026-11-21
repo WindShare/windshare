@@ -90,9 +90,8 @@ fn importing_seeds_listed_nodes_alias_bindings_and_renews_only_once() {
                 imported.state(),
                 NodeState::Listed {
                     status: Status::Active,
-                    withdrawn,
                     maintenance: None,
-                } if withdrawn.is_empty()
+                }
             )
     );
     assert_eq!(publication.revision().unwrap().serial, 4);
@@ -241,9 +240,8 @@ fn a_verified_staging_node_requires_current_mirrors_before_publication() {
         saved.state(),
         NodeState::Listed {
             status: Status::Canary,
-            withdrawn,
             maintenance: None,
-        } if withdrawn.is_empty()
+        }
     ));
     assert_removed_alias_stays_bound(&mut auth, &admin, &signer, candidate, &work.operation_id);
 }
@@ -365,12 +363,38 @@ fn failed_checks_back_off_and_a_replacement_draft_rejects_old_results() {
 #[test]
 fn deployment_rejects_invalid_vantage_configuration_as_a_server_error() {
     use crate::fleet::vantage::validate_agents;
-    let agent = Agent {
-        id: "cn-a".into(),
-        zone: Zone::Cn,
-        key: URL_SAFE_NO_PAD.encode(SigningKey::from_bytes(&[11; 32]).verifying_key().to_bytes()),
+    let make = |id: &str, zone: Zone, byte: u8| Agent {
+        id: id.into(),
+        zone,
+        key: URL_SAFE_NO_PAD.encode(
+            SigningKey::from_bytes(&[byte; 32])
+                .verifying_key()
+                .to_bytes(),
+        ),
     };
-    validate_agents(std::slice::from_ref(&agent)).unwrap();
+    let agent = make("cn-a", Zone::Cn, 11);
+    validate_agents(&[
+        agent.clone(),
+        make("cn-b", Zone::Cn, 12),
+        make("us-a", Zone::Global, 13),
+        make("eu-a", Zone::Global, 14),
+    ])
+    .unwrap();
+    for too_many in [
+        vec![
+            agent.clone(),
+            make("cn-b", Zone::Cn, 12),
+            make("cn-c", Zone::Cn, 15),
+        ],
+        vec![
+            make("us-a", Zone::Global, 13),
+            make("eu-a", Zone::Global, 14),
+            make("jp-a", Zone::Global, 16),
+        ],
+    ] {
+        let error = validate_agents(&too_many).unwrap_err();
+        assert!(error.downcast_ref::<Fault>().is_none());
+    }
     for invalid in [
         Agent {
             key: "short".into(),

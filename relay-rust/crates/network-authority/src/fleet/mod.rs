@@ -4,7 +4,6 @@ pub mod descriptor;
 #[cfg(any(test, target_arch = "wasm32"))]
 pub(crate) mod dns;
 mod endpoints;
-mod health;
 pub mod maintenance;
 pub mod monitoring;
 pub mod operations;
@@ -20,7 +19,6 @@ use crate::{
 use anyhow::{Result, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD as B64};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
 use topology::{Spec, Status, public_key};
 
 pub const EVIDENCE_SECONDS: u64 = 15 * 60;
@@ -35,8 +33,6 @@ pub enum NodeState {
     },
     Listed {
         status: Status,
-        #[serde(default)]
-        withdrawn: BTreeSet<topology::Role>,
         #[serde(default)]
         maintenance: Option<String>,
     },
@@ -241,7 +237,6 @@ impl<R: Store, E: Environment> Authority<R, E> {
                 NodeState::Staging { .. } | NodeState::Disabled => {
                     *n.state = NodeState::Listed {
                         status,
-                        withdrawn: BTreeSet::new(),
                         maintenance: None,
                     };
                 }

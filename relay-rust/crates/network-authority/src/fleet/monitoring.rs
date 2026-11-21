@@ -1,4 +1,5 @@
 use super::{
+    operations::Admission,
     topology::{MAX_NODES, Role, Spec, public_key},
     vantage::{Agent, FRESH_SECONDS, Proof, SILENT_SECONDS},
 };
@@ -21,7 +22,6 @@ const _: () = assert!(
 );
 const ASSIGN_DOMAIN: &[u8] = b"windshare/fleet-targets/v1\0";
 pub(super) const REPORT_DOMAIN: &[u8] = b"windshare/fleet-cycle/v1\0";
-pub(super) const SUSTAINED: i8 = 3;
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Request {
@@ -31,7 +31,6 @@ struct Request {
 pub struct Targets {
     pub zone: Zone,
     pub nodes: Vec<Target>,
-    pub origins: [String; super::vantage::ORIGIN_COUNT],
 }
 #[derive(Serialize)]
 pub struct Target {
@@ -57,18 +56,12 @@ struct Report {
     nodes: BTreeMap<String, Observation>,
 }
 #[derive(Deserialize, Serialize)]
-pub struct Sample {
-    #[serde(flatten)]
-    pub observation: Observation,
-    pub streak: BTreeMap<Role, i8>,
-}
-#[derive(Deserialize, Serialize)]
 pub struct Cycle {
     pub id: String,
     pub zone: Zone,
     pub at: u64,
     pub mirror: Option<String>,
-    pub nodes: BTreeMap<String, Sample>,
+    pub nodes: BTreeMap<String, Observation>,
 }
 fn record(agent: &Agent) -> String {
     format!("fleet-cycle/{}", agent.key)
@@ -77,7 +70,9 @@ pub(super) fn latest(store: &impl Store, agent: &Agent) -> Result<Option<Cycle>>
     load(store, &record(agent))
 }
 
-pub(crate) fn reports(store: &impl Store, agents: &[Agent]) -> Result<Vec<Cycle>> {
+/// # Errors
+/// Propagates storage and monitoring cycle decoding errors.
+pub fn reports(store: &impl Store, agents: &[Agent]) -> Result<Vec<Cycle>> {
     let mut result = Vec::new();
     for agent in agents {
         if let Some(cycle) = latest(store, agent)?
@@ -89,35 +84,10 @@ pub(crate) fn reports(store: &impl Store, agents: &[Agent]) -> Result<Vec<Cycle>
     Ok(result)
 }
 
-pub(super) fn reset_evidence(store: &mut impl Store, node: &str, role: Role) -> Result<()> {
-    for (key, raw) in store.scan("fleet-cycle/", None)? {
-        let mut cycle: Cycle = serde_json::from_str(&raw)?;
-        if let Some(sample) = cycle.nodes.get_mut(node)
-            && sample.streak.remove(&role).is_some()
-        {
-            save(store, &key, &cycle)?;
-        }
-    }
-    Ok(())
-}
-
-fn streak(previous: i8, pass: bool) -> i8 {
-    if pass {
-        previous.max(0).saturating_add(1)
-    } else {
-        previous.min(0).saturating_sub(1)
-    }
-}
-
 impl<R: Store, E: Environment> Authority<R, E> {
     /// # Errors
     /// Accepts only fresh requests from dedicated vantage identities.
-    pub fn fleet_targets(
-        &self,
-        agents: &[Agent],
-        proof: &Proof,
-        origins: [String; super::vantage::ORIGIN_COUNT],
-    ) -> Result<Targets> {
+    pub fn fleet_targets(&self, agents: &[Agent], proof: &Proof) -> Result<Targets> {
         let (agent, request) = proof.open::<Request>(agents, ASSIGN_DOMAIN)?;
         let now = self.environment.now();
         ensure!(
@@ -143,13 +113,11 @@ impl<R: Store, E: Environment> Authority<R, E> {
         Ok(Targets {
             zone: agent.zone,
             nodes,
-            origins,
         })
     }
 
     /// # Errors
-    /// Rejects forged, oversized, stale or too-frequent reports. Streaks continue while receipt
-    /// spacing stays within `SILENT_SECONDS`.
+    /// Rejects forged, oversized, stale or too-frequent reports.
     pub fn record_cycle(&mut self, agents: &[Agent], proof: &Proof) -> Result<()> {
         let (agent, report) = proof.open::<Report>(agents, REPORT_DOMAIN)?;
         let now = self.environment.now();
@@ -163,54 +131,28 @@ impl<R: Store, E: Environment> Authority<R, E> {
                     .is_none(),
             Fault::Invalid
         );
-        let previous = match latest(&self.store, agent)? {
-            Some(cycle) if now.saturating_sub(cycle.at) < MIN_CYCLE_SECONDS => {
-                tracing::warn!(
-                    event = "fleet_cycle_rejected",
-                    vantage = %agent.id,
-                    reason = "too_frequent",
-                    elapsed = now.saturating_sub(cycle.at),
-                    min_seconds = MIN_CYCLE_SECONDS
-                );
-                return Err(Fault::Invalid.into());
-            }
-            Some(cycle)
-                if cycle.zone == agent.zone && now.saturating_sub(cycle.at) <= SILENT_SECONDS =>
-            {
-                Some(cycle)
-            }
-            Some(cycle) => {
-                let reason = if cycle.zone == agent.zone {
-                    "silent_gap"
-                } else {
-                    "zone_changed"
-                };
-                tracing::info!(
-                    event = "fleet_streak_reset",
-                    vantage = %agent.id,
-                    reason,
-                    elapsed = now.saturating_sub(cycle.at),
-                    silent_seconds = SILENT_SECONDS
-                );
-                None
-            }
-            None => None,
-        };
+        if let Some(cycle) = latest(&self.store, agent)?
+            && now.saturating_sub(cycle.at) < MIN_CYCLE_SECONDS
+        {
+            tracing::warn!(
+                event = "fleet_cycle_rejected",
+                vantage = %agent.id,
+                reason = "too_frequent",
+                elapsed = now.saturating_sub(cycle.at),
+                min_seconds = MIN_CYCLE_SECONDS
+            );
+            return Err(Fault::Invalid.into());
+        }
         let mut nodes = BTreeMap::new();
         for (id, observation) in report.nodes {
             let Some(node) = load::<Node>(&self.store, &key("node", &public_key(&id)?))? else {
                 continue;
             };
-            // Ignore non-listed nodes rather than rejecting the whole cycle so concurrent
-            // disables stay harmless and staging drafts cannot accumulate failure streaks.
+            // Ignore non-listed or superseded operations so concurrent disables and
+            // staging drafts do not surface stale probe rows in the console.
             if node.status().is_none() || node.operation_id != observation.operation_id {
                 continue;
             }
-            let old = previous
-                .as_ref()
-                .and_then(|c| c.nodes.get(&id))
-                .filter(|s| s.observation.operation_id == observation.operation_id);
-            let mut counts = BTreeMap::new();
             for (role, verdict) in [
                 (Role::Relay, observation.relay),
                 (Role::Stun, observation.stun),
@@ -219,22 +161,40 @@ impl<R: Store, E: Environment> Authority<R, E> {
                     node.spec.roles.contains(&role) == verdict.is_some(),
                     Fault::Invalid
                 );
-                if let Some(pass) = verdict {
-                    let count = streak(
-                        old.and_then(|s| s.streak.get(&role)).copied().unwrap_or(0),
-                        pass,
-                    );
-                    counts.insert(role, count);
-                }
             }
-            tracing::info!(event="fleet_probe", operation_id=%observation.operation_id, node_id=%id, vantage=%agent.id, at=now, relay=?observation.relay, stun=?observation.stun, tls_expires=?observation.tls_expires);
-            nodes.insert(
-                id,
-                Sample {
-                    observation,
-                    streak: counts,
-                },
+            tracing::info!(
+                event = "fleet_probe",
+                operation_id = %observation.operation_id,
+                node_id = %id,
+                vantage = %agent.id,
+                at = now,
+                relay = ?observation.relay,
+                stun = ?observation.stun,
+                tls_expires = ?observation.tls_expires,
             );
+            // Intentionally draining or maintenance-held nodes advertise relay_available=false;
+            // only warn on relay unavailability when the node is expected to accept traffic.
+            let relay_failed =
+                node.admission() == Admission::Accepting && observation.relay == Some(false);
+            if !observation.tcp
+                || !observation.https
+                || relay_failed
+                || observation.stun == Some(false)
+            {
+                tracing::warn!(
+                    event = "fleet_probe_failed",
+                    operation_id = %observation.operation_id,
+                    node_id = %id,
+                    vantage = %agent.id,
+                    at = now,
+                    tcp = observation.tcp,
+                    https = observation.https,
+                    relay = ?observation.relay,
+                    stun = ?observation.stun,
+                    tls_expires = ?observation.tls_expires,
+                );
+            }
+            nodes.insert(id, observation);
         }
         save(
             &mut self.store,

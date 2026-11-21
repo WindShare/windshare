@@ -102,8 +102,8 @@ impl Proof {
 pub fn validate_agents(agents: &[Agent]) -> Result<()> {
     ensure!(
         agents.iter().filter(|a| a.zone == Zone::Cn).count() <= 2
-            && agents.iter().filter(|a| a.zone == Zone::Global).count() <= 1,
-        "configure at most two CN vantages and one overseas vantage"
+            && agents.iter().filter(|a| a.zone == Zone::Global).count() <= 2,
+        "configure at most two CN vantages and two overseas vantages"
     );
     let mut ids = std::collections::BTreeSet::new();
     let mut keys = std::collections::BTreeSet::new();

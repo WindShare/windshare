@@ -2,20 +2,16 @@ use super::*;
 use crate::fleet::{
     attach,
     maintenance::Operation,
-    monitoring::CYCLE_SECONDS,
     operations::{Action, Admission, Manage},
     publication,
     topology::{Entry, Role},
 };
-use std::collections::BTreeSet;
 use tracing::Level;
 
 struct MaintenanceFleet {
     auth: Authority<Memory, Clock>,
     admin: String,
     signer: Publisher,
-    keys: [SigningKey; 3],
-    agents: Vec<Agent>,
     target: Spec,
     spare: Spec,
 }
@@ -45,7 +41,6 @@ impl MaintenanceFleet {
                 node.clone(),
                 NodeState::Listed {
                     status: Status::Active,
-                    withdrawn: BTreeSet::new(),
                     maintenance: None,
                 },
                 alias.into(),
@@ -55,20 +50,6 @@ impl MaintenanceFleet {
         };
         let target = add("primary", 11);
         let spare = add("spare", 12);
-        let keys = [21, 22, 23].map(|v| SigningKey::from_bytes(&[v; 32]));
-        let agents = keys
-            .iter()
-            .zip([
-                ("cn-a", Zone::Cn),
-                ("cn-b", Zone::Cn),
-                ("abroad", Zone::Global),
-            ])
-            .map(|(key, (id, zone))| Agent {
-                id: id.into(),
-                zone,
-                key: URL_SAFE_NO_PAD.encode(key.verifying_key().to_bytes()),
-            })
-            .collect();
         let mut head = publication::current(&auth.store).unwrap();
         let now = auth.environment.now();
         head.project(&mut auth.store, &signer, now, "init").unwrap();
@@ -76,8 +57,6 @@ impl MaintenanceFleet {
             auth,
             admin,
             signer,
-            keys,
-            agents,
             target,
             spare,
         }
@@ -121,39 +100,6 @@ impl MaintenanceFleet {
                 maintenance_id: maintenance_id.into(),
             },
         )
-    }
-
-    fn observe(&mut self, target_roles: [bool; 2], spare_roles: [bool; 2]) {
-        self.auth.environment.now += CYCLE_SECONDS;
-        let at = self.auth.environment.now;
-        let mirror = digest(&publication::current(&self.auth.store).unwrap().envelope).unwrap();
-        for index in [0, 1] {
-            let mut nodes = serde_json::Map::new();
-            for (spec, roles) in [(&self.target, target_roles), (&self.spare, spare_roles)] {
-                let op = self.node(&spec.node_key).operation_id;
-                nodes.insert(
-                    spec.node_key.clone(),
-                    json!({
-                        "operation_id": op,
-                        "tcp": true,
-                        "https": true,
-                        "tls_expires": at + 86400,
-                        "relay": roles[0],
-                        "stun": roles[1],
-                    }),
-                );
-            }
-            let proof = proof(
-                &self.keys[index],
-                b"windshare/fleet-cycle/v1\0",
-                &json!({"at": at, "mirror": mirror, "nodes": nodes}),
-            );
-            self.auth.record_cycle(&self.agents, &proof).unwrap();
-        }
-        let mut head = publication::current(&self.auth.store).unwrap();
-        self.auth
-            .evaluate_health(&self.agents, &self.signer, &mut head)
-            .unwrap();
     }
 }
 
@@ -216,9 +162,8 @@ fn abort_maintenance_on_listed_node_keeps_draining_and_fences_aborted_id() {
         node.state(),
         NodeState::Listed {
             status: Status::Draining,
-            withdrawn,
             maintenance: None,
-        } if withdrawn.is_empty()
+        }
     ));
     assert_eq!(node.admission(), Admission::Draining);
     assert_eq!(
@@ -276,7 +221,7 @@ fn abort_maintenance_on_listed_node_keeps_draining_and_fences_aborted_id() {
 }
 
 #[test]
-fn abort_maintenance_resumes_health_checks_and_allows_explicit_resume() {
+fn abort_maintenance_allows_explicit_resume_without_mirror_wait() {
     let mut fleet = MaintenanceFleet::new();
     let aborted = Operation {
         node_key: fleet.target.node_key.clone(),
@@ -288,16 +233,11 @@ fn abort_maintenance_resumes_health_checks_and_allows_explicit_resume() {
         .unwrap();
     fleet.abort_target(&aborted.operation_id).unwrap();
 
-    // Health evaluation resumes once maintenance is cleared.
-    for _ in 0..3 {
-        fleet.observe([true, false], [true, true]);
-    }
     let entry = fleet.find_entry("primary").unwrap();
     assert_eq!(entry.status, Status::Draining);
-    assert_eq!(entry.spec.roles, [Role::Relay]);
+    assert_eq!(entry.spec.roles, [Role::Relay, Role::Stun]);
 
-    // Explicit resume restores relay admission immediately (even before mirrors
-    // observe the STUN withdrawal revision) while keeping STUN withdrawn.
+    // Explicit resume restores relay admission immediately without waiting for mirrors.
     let target_key = fleet.target.node_key.clone();
     fleet.manage_node(&target_key, Action::Resume).unwrap();
     assert_eq!(
@@ -306,7 +246,7 @@ fn abort_maintenance_resumes_health_checks_and_allows_explicit_resume() {
     );
     let resumed = fleet.find_entry("primary").unwrap();
     assert_eq!(resumed.status, Status::Active);
-    assert_eq!(resumed.spec.roles, [Role::Relay]);
+    assert_eq!(resumed.spec.roles, [Role::Relay, Role::Stun]);
 }
 
 #[test]
@@ -552,7 +492,6 @@ fn maintenance_hold_withdraws_stateless_stun_until_release() {
         stun_only,
         NodeState::Listed {
             status: Status::Active,
-            withdrawn: BTreeSet::new(),
             maintenance: None,
         },
         "stun-only-maint".into(),
@@ -595,36 +534,4 @@ fn maintenance_hold_withdraws_stateless_stun_until_release() {
     let recovered = fleet.find_entry("primary").unwrap();
     assert_eq!(recovered.status, Status::Active);
     assert_eq!(recovered.spec.roles, [Role::Stun]);
-}
-
-#[test]
-fn maintenance_hold_excludes_node_as_stun_alternative() {
-    let mut fleet = MaintenanceFleet::new();
-    let spare_op = Operation {
-        node_key: fleet.spare.node_key.clone(),
-        operation_id: "spare-maint-stun-001".into(),
-    };
-    fleet
-        .auth
-        .maintenance_hold(&spare_op, true, &fleet.signer)
-        .unwrap();
-
-    // Spare is under maintenance and not publishing STUN, so primary stays
-    // protected as the last serving STUN node in the zone.
-    for _ in 0..3 {
-        fleet.observe([true, false], [true, true]);
-    }
-    let protected = fleet.find_entry("primary").unwrap();
-    assert_eq!(protected.status, Status::Active);
-    assert_eq!(protected.spec.roles, [Role::Relay, Role::Stun]);
-
-    // Once spare releases maintenance, primary's broken STUN can fail over.
-    fleet
-        .auth
-        .maintenance_hold(&spare_op, false, &fleet.signer)
-        .unwrap();
-    fleet.observe([true, false], [true, true]);
-    let failed_over = fleet.find_entry("primary").unwrap();
-    assert_eq!(failed_over.status, Status::Active);
-    assert_eq!(failed_over.spec.roles, [Role::Relay]);
 }

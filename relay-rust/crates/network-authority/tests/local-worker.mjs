@@ -69,7 +69,7 @@ export async function fixture(
       capacity_mbps: 10,
     },
     operation_id: 'active-edge-seed',
-    state: { kind: 'listed', status: 'active', withdrawn: [], maintenance: null },
+    state: { kind: 'listed', status: 'active', maintenance: null },
     anonymous: false,
     version: 1,
   };

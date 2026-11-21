@@ -6,7 +6,6 @@ use crate::fleet::{
     publication,
     topology::{Entry, Role},
 };
-use std::collections::BTreeSet;
 
 struct ResumeFleet {
     auth: Authority<Memory, Clock>,
@@ -40,7 +39,6 @@ impl ResumeFleet {
             target.clone(),
             NodeState::Listed {
                 status: initial,
-                withdrawn: BTreeSet::new(),
                 maintenance: None,
             },
             "target-op".into(),

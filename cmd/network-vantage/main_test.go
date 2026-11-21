@@ -374,7 +374,7 @@ func TestFleetCycleSendsOneSignedAggregateAndOnlyCNChecksItsMirror(t *testing.T)
 				}
 				switch action {
 				case "targets":
-					_ = json.NewEncoder(w).Encode(map[string]any{"zone": zone, "nodes": nodes, "origins": []string{}})
+					_ = json.NewEncoder(w).Encode(map[string]any{"zone": zone, "nodes": nodes})
 				case "cycle":
 					reports++
 					var report struct {
@@ -548,7 +548,7 @@ func TestFleetCycleBoundsMirrorInsideCycleBudget(t *testing.T) {
 	service := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch strings.TrimPrefix(r.URL.Path, "/v1/vantage/") {
 		case "targets":
-			_ = json.NewEncoder(w).Encode(map[string]any{"zone": "cn", "nodes": nodes, "origins": []string{}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"zone": "cn", "nodes": nodes})
 		case "cycle":
 			var proof struct{ Payload string }
 			if err := json.NewDecoder(r.Body).Decode(&proof); err != nil {

@@ -185,6 +185,6 @@ export function NodeDetail({ node, directory, api, saved, refresh }: NodeDetailA
     </section></div>
     <Verification node={node} api={api} refresh={refresh} />
     <FleetControls node={node} api={api} refresh={refresh} />
-    {directory && <ProbeResults operation={node.operation_id} id={id} directory={directory} />}
+    {directory && <ProbeResults node={node} directory={directory} />}
   </div>
 }

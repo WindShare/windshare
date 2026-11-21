@@ -97,7 +97,6 @@ export const zhCN = {
   confirmAbortMaintenance: '中止当前维护锁？',
   abortMaintenanceEffect: '将清除控制面维护锁，并使节点保持排空。此操作不会清除宿主机本地维护锁。',
   tlsExpiring: 'TLS 证书即将到期', probeWarning: '探测异常',
-  restoreService: (role: string) => `清除 ${role} 健康限制`,
   cancelDraft: '撤销上架草稿', relayBound: 'Relay 地址已被占用。', stunBound: 'STUN 地址已被占用。',
   listingChanged: '上架记录已变更，请刷新查看。',
   aliasBound: '别名已绑定。', verificationRequired: '需要节点所在分区的新验证结果。', mirrorLag: '等待镜像同步到当前版本',

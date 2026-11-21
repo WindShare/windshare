@@ -62,7 +62,6 @@ pub(super) fn abort(
         NodeState::Listed {
             status,
             maintenance,
-            ..
         } => {
             ensure!(
                 maintenance.as_deref() == Some(maintenance_id),

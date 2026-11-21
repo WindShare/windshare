@@ -29,7 +29,6 @@ pub enum Action {
     Disable { early_cutoff: bool },
     Remove { early_cutoff: bool },
     Verify,
-    RestoreRole { role: Role },
     AbortMaintenance { maintenance_id: String },
 }
 
@@ -64,13 +63,12 @@ impl Node {
             NodeState::Staging { .. } | NodeState::Disabled => None,
             NodeState::Listed {
                 status,
-                withdrawn,
                 maintenance,
             } => {
                 let mut spec = self.spec.clone();
-                // Stateless STUN has no sessions to drain; withdraw it while a verified
+                // Stateless STUN has no sessions to drain; omit it while a verified
                 // binary switch holds maintenance.
-                if maintenance.is_some() || withdrawn.contains(&Role::Stun) {
+                if maintenance.is_some() {
                     spec.roles.retain(|r| *r != Role::Stun);
                     spec.stun.clear();
                 }
@@ -221,14 +219,6 @@ impl<R: Store, E: Environment> Authority<R, E> {
                     check: Verification::Queued,
                     enrollment: DraftEnrollment::Disabled,
                 };
-            }
-            &Action::RestoreRole { role } => {
-                let NodeState::Listed { withdrawn, .. } = node.state else {
-                    return Err(Fault::Invalid.into());
-                };
-                ensure!(node.spec.roles.contains(&role), Fault::Invalid);
-                withdrawn.remove(&role);
-                super::monitoring::reset_evidence(&mut self.store, &cmd.node_key, role)?;
             }
             Action::AbortMaintenance { maintenance_id } => {
                 super::maintenance::abort(

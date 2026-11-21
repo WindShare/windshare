@@ -96,7 +96,6 @@ export const en = {
   confirmAbortMaintenance: 'Abort maintenance hold?',
   abortMaintenanceEffect: 'Clears the authority maintenance lock and leaves the node draining. It does not clear any local lock on the host.',
   tlsExpiring: 'TLS certificate expiring', probeWarning: 'Probe warning',
-  restoreService: (role: string) => `Clear ${role} health override`,
   cancelDraft: 'Withdraw draft', relayBound: 'This relay endpoint is already assigned.', stunBound: 'This STUN endpoint is already assigned.',
   listingChanged: 'This listing changed. Refresh to see the current node.',
   aliasBound: 'This alias is already bound.', verificationRequired: 'A fresh check from the node’s zone is required.',

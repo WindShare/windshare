@@ -24,7 +24,6 @@ fn draining_node(key: [u8; 32], operation_id: &str) -> Node {
         operation_id.into(),
         NodeState::Listed {
             status: Status::Draining,
-            withdrawn: std::collections::BTreeSet::new(),
             maintenance: Some(operation_id.into()),
         },
         2,

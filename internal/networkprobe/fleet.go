@@ -2,15 +2,12 @@ package networkprobe
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/tls"
 	"net/http"
 	"net/http/httptrace"
 	"sync/atomic"
 
-	"github.com/coder/websocket"
 	"github.com/windshare/windshare/core/nodedirectory"
-	v2 "github.com/windshare/windshare/relay/protocol/v2"
 )
 
 type Target struct {
@@ -28,12 +25,12 @@ type Observation struct {
 }
 
 // Observe keeps the UDP and HTTPS paths independent so a broken reverse proxy
-// cannot withdraw a working STUN server.
-func Observe(ctx context.Context, client *http.Client, target Target, origins []string) Observation {
-	return observe(ctx, client, target, origins, binding)
+// does not mask a working STUN server in monitoring reports.
+func Observe(ctx context.Context, client *http.Client, target Target) Observation {
+	return observe(ctx, client, target, binding)
 }
 
-func observe(ctx context.Context, client *http.Client, target Target, origins []string, bind func(context.Context, string) error) Observation {
+func observe(ctx context.Context, client *http.Client, target Target, bind func(context.Context, string) error) Observation {
 	node := target.Node
 	report := Observation{OperationID: target.OperationID}
 	if node.HasRole("relay") {
@@ -53,14 +50,14 @@ func observe(ctx context.Context, client *http.Client, target Target, origins []
 		stun = make(chan bool, 1)
 		go func() { stun <- checkSTUN(ctx, base.Hostname(), node.STUN, bind) == nil }()
 	}
-	observeHTTPS(ctx, client, node, origins, &report)
+	observeHTTPS(ctx, client, node, &report)
 	if stun != nil {
 		*report.STUN = <-stun
 	}
 	return report
 }
 
-func observeHTTPS(ctx context.Context, client *http.Client, node nodedirectory.Node, origins []string, report *Observation) {
+func observeHTTPS(ctx context.Context, client *http.Client, node nodedirectory.Node, report *Observation) {
 	var connected atomic.Bool
 	var expires atomic.Int64
 	trace := &httptrace.ClientTrace{
@@ -88,22 +85,12 @@ func observeHTTPS(ctx context.Context, client *http.Client, node nodedirectory.N
 		return
 	}
 	report.HTTPS = true
-	if report.Relay == nil || !desc.Services.Relay || len(origins) != OriginCount {
+	if report.Relay == nil {
 		return
 	}
-	var id v2.ShareID
-	rand.Read(id[:])
-	endpoint, err := v2.RelayEndpointForShare(node.Relay, id)
-	if err != nil {
-		return
-	}
-	for _, origin := range origins {
-		// The dialer owns and closes the HTTP handshake response.
-		conn, _, err := websocket.Dial(ctx, endpoint.DialURL, &websocket.DialOptions{HTTPClient: client, HTTPHeader: http.Header{"Origin": {origin}}}) //nolint:bodyclose
-		if err != nil {
-			return
-		}
-		_ = conn.CloseNow()
-	}
-	*report.Relay = true
+	// Read-only fleet monitoring relies on the signed descriptor's relay_available
+	// flag rather than unauthenticated WebSocket upgrades, surfacing local storage,
+	// budget, maintenance-gate, and admission unavailability without tripping
+	// anonymous capacity limits under load.
+	*report.Relay = desc.Services.Relay && desc.Available
 }

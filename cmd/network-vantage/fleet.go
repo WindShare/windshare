@@ -94,9 +94,8 @@ func (a *agent) fleetCycle(ctx context.Context) error {
 
 func (a *agent) fleetCycleWithBudget(ctx context.Context, cycleLimit, mirrorLimit time.Duration) error {
 	var assignment struct {
-		Zone    string                `json:"zone"`
-		Nodes   []networkprobe.Target `json:"nodes"`
-		Origins []string              `json:"origins"`
+		Zone  string                `json:"zone"`
+		Nodes []networkprobe.Target `json:"nodes"`
 	}
 	if err := a.post(ctx, "targets", "windshare/fleet-targets/v1\x00", map[string]int64{"at": time.Now().Unix()}, &assignment); err != nil {
 		return err
@@ -126,7 +125,7 @@ func (a *agent) fleetCycleWithBudget(ctx context.Context, cycleLimit, mirrorLimi
 					return
 				}
 				check, stop := context.WithTimeout(probe, checkTimeout)
-				result := networkprobe.Observe(check, a.client, target, assignment.Origins)
+				result := networkprobe.Observe(check, a.client, target)
 				stop()
 				// An incomplete cycle cannot supply negative evidence about a node.
 				if probe.Err() != nil {

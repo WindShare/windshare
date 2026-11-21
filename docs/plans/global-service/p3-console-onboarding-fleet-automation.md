@@ -62,24 +62,17 @@ follow in P4.
 
 ## Operate the fleet
 
-- Limit fleet probes to CN-A, CN-B, and one overseas vantage point at a bounded interval (5–10
+- Limit fleet probes to up to two CN and two overseas vantage points at a bounded interval (5–10
   minutes), writing one aggregated state record per vantage point per cycle to stay within
-  Workers/DO free-tier budgets. Check TCP and certificate expiry on every node, WebSocket with
-  official and public HTTPS `Origin` headers on configured relays, and binding on configured STUN
-  nodes. CN vantage points also check the mainland `ws.ourworld.top` mirror revision. Report results
-  to the authority for console visibility and expiry alerts. Derive directory entries and node policies
-  from operator intent (`staging`, `canary`, `active`, `draining`, `disabled`) and independent health
-  overrides for `relay` and `stun`. Update Go and TypeScript `icepolicy` so
-  `status: draining` only drains `relay` while STUN follows the `stun` role, omitting a STUN-only
-  node when it has no remaining healthy role so `roles` never becomes empty. Withdraw a failing
-  service automatically only on sustained failures across all reporting applicable vantage points:
-  move a failing `relay` to `draining` (keeping its alias resolvable) and drop a failing `stun`
-  role without taking down the sibling healthy service. Treat silent vantage points as probe faults
-  rather than node failures, never auto-withdraw the last healthy `active` node per `(zone,
-  service)` or during a fleet-wide fault burst, surface single-vantage or cross-border jitter as
-  warnings without churning the directory, and require sustained recovery or explicit operator
-  confirmation to clear an automatic health override (never overriding an explicit operator
-  `draining` or `disabled` state).
+  Workers/DO free-tier budgets. Check TCP, certificate expiry, and the signed descriptor's
+  `relay_available` flag on every node, and STUN binding on configured STUN nodes. CN vantage
+  points also check the mainland `ws.ourworld.top` mirror revision. Report read-only observations
+  to the authority for console health badges, structured warning logs, and expiry alerts; leave
+  traffic changes to explicit operator actions (`drain`, `resume`, `disable`) and verified
+  maintenance holds while clients race healthy relays and STUN endpoints locally. Derive directory
+  entries and node policies strictly from operator intent (`staging`, `canary`, `active`,
+  `draining`, `disabled`) and active maintenance holds, omitting stateless STUN during maintenance
+  and omitting a STUN-only node while held so `roles` never becomes empty.
 - Replace binary node pause (`enabled: bool`) with `NodePolicy` admission states (`accepting`,
   `draining`, `disabled`). Cut the authority and nodes over
   together. In a one-time SQLite transaction, migrate stored policies in `access_authorities`
@@ -108,7 +101,7 @@ follow in P4.
   using the same role-specific enrollment checks and roll back on failure. Use a short maintenance
   retry delay and budget verification, rollback and client redial within the remaining reconnect
   grace (up to 60 s). After the upgrade or rollback is verified, release only this operation's hold
-  and apply the latest operator intent and health overrides.
+  and apply the latest operator intent.
 - Trace enrollment, verification, directory publication (generation, serial, changes, mirror
   checks), probe outcomes, and drain or maintenance transitions by `operation_id` and `node_id`.
 

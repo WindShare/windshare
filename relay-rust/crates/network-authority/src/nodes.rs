@@ -75,16 +75,16 @@ impl Node {
         }
     }
 
-    pub fn relay_drained(&self) -> bool {
+    pub const fn relay_drained(&self) -> bool {
         matches!(
             &self.state,
             NodeState::Listed {
-                status,
-                withdrawn,
-                maintenance,
-            } if maintenance.is_some()
-                || *status == Status::Draining
-                || withdrawn.contains(&Role::Relay)
+                status: Status::Draining,
+                ..
+            } | NodeState::Listed {
+                maintenance: Some(_),
+                ..
+            }
         )
     }
 

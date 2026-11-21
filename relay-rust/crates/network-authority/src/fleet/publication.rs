@@ -13,7 +13,7 @@ use chrono::{DateTime, Utc};
 use ed25519_dalek::SigningKey;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 const DIRECTORY: &str = "directory/current";
 pub const KV_KEY: &str = "windshare-network";
@@ -148,7 +148,6 @@ impl Publication {
                 entry.spec,
                 NodeState::Listed {
                     status: entry.status,
-                    withdrawn: BTreeSet::new(),
                     maintenance: None,
                 },
                 "release-import".into(),
