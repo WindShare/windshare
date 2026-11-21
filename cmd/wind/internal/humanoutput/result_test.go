@@ -176,27 +176,67 @@ func TestTransferResultReportsCompatibleNameRepairsWhenPresent(t *testing.T) {
 	}
 
 	for _, tc := range []struct {
-		count uint64
-		want  string
+		name          string
+		status        clievent.ResultStatus
+		exit          clievent.ExitCode
+		failure       appobs.Failure
+		countersExact bool
+		count         uint64
+		want          string
 	}{
-		{1, "1 item saved under a compatible name (see windshare-names-abc-1-0.json)."},
-		{2, "2 items saved under compatible names (see windshare-names-abc-1-0.json)."},
+		{
+			name:          "single exact",
+			status:        clievent.ResultSuccess,
+			exit:          clievent.ExitSuccess,
+			countersExact: true,
+			count:         1,
+			want:          "  1 item saved under a compatible name (see windshare-names-abc-1-0.json beside destination).",
+		},
+		{
+			name:          "multiple exact",
+			status:        clievent.ResultSuccess,
+			exit:          clievent.ExitSuccess,
+			countersExact: true,
+			count:         2,
+			want:          "  2 items saved under compatible names (see windshare-names-abc-1-0.json beside destination).",
+		},
+		{
+			name:          "inexact transfer counters keep exact repaired count",
+			status:        clievent.ResultPartial,
+			exit:          clievent.ExitFailure,
+			failure:       mustFailure(t, appobs.FailureSourceOmitted),
+			countersExact: false,
+			count:         1,
+			want:          "  1 item saved under a compatible name (see windshare-names-abc-1-0.json beside destination).",
+		},
 	} {
-		repaired, err := clievent.NewTransferResult(clievent.TransferResultSpec{
-			Status: clievent.ResultSuccess, ExitCode: clievent.ExitSuccess,
-			Destination: appobs.NewDisplayPath("./docs"), CountersExact: true,
-			RepairedNames: tc.count, NameReport: appobs.NewDisplayName("windshare-names-abc-1-0.json"),
+		t.Run(tc.name, func(t *testing.T) {
+			repaired, err := clievent.NewTransferResult(clievent.TransferResultSpec{
+				Status: tc.status, ExitCode: tc.exit,
+				Destination: appobs.NewDisplayPath("./docs"), CountersExact: tc.countersExact,
+				Failure: tc.failure,
+				CompatibleNameReport: clievent.CompatibleNameReport{
+					RepairedCount: tc.count, ReportName: appobs.NewDisplayName("windshare-names-abc-1-0.json"),
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var output strings.Builder
+			for _, line := range formatTransferResult(repaired, SelectSymbols(false)) {
+				output.WriteString(lineText(line))
+				output.WriteByte('\n')
+			}
+			rendered := output.String()
+			if !strings.Contains(rendered, tc.want) {
+				t.Fatalf("output %q missing %q", rendered, tc.want)
+			}
+			if !tc.countersExact && !strings.Contains(rendered, ">=0 B") {
+				t.Fatalf("expected inexact transfer summary in %q", rendered)
+			}
+			if strings.Contains(rendered, ">=1 item saved") {
+				t.Fatalf("compatible name count unexpectedly rendered as inexact: %q", rendered)
+			}
 		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		var output strings.Builder
-		for _, line := range formatTransferResult(repaired, SelectSymbols(false)) {
-			output.WriteString(lineText(line))
-			output.WriteByte('\n')
-		}
-		if !strings.Contains(output.String(), tc.want) {
-			t.Fatalf("output %q missing %q", output.String(), tc.want)
-		}
 	}
 }

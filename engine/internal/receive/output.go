@@ -11,6 +11,7 @@ var errGetOutputAdapterContract = output.ErrContract
 
 type OutputMode = output.Mode
 type OutputLookupKind = output.LookupKind
+type OutputCompatibleNameReport = output.CompatibleNameReport
 type OutputOperation = output.Operation
 type OutputReservation = output.Reservation
 type OutputLookup = output.Lookup
@@ -48,10 +49,6 @@ const (
 	getOutputLookupNeedsAttention = OutputLookupNeedsAttention
 	getOutputLookupAmbiguous      = OutputLookupAmbiguous
 )
-
-type compatibleNameReporter interface {
-	CompatibleNameReport() (repairedCount int, reportName string)
-}
 
 type getOperationMaterializer struct{ operation OutputOperation }
 

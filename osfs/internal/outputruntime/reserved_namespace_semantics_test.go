@@ -137,7 +137,7 @@ func TestPortableOutputSeparatesResultRootAndContainerReservedNamespaces(t *test
 				t.Fatalf("%q was not repaired: %q", tc.path, physical)
 			}
 			first, _, _ := strings.Cut(physical, "/")
-			if outputcap.ReservedRootName(outputcap.AuthorityCreatedRoot, first) {
+			if outputcap.ReservedRootName(outputcap.ReservedNamespaceResultRoot, first) {
 				t.Fatalf("%q remained in reserved result-root namespace: %q", tc.path, physical)
 			}
 		} else if physical != wantRelative {
@@ -181,7 +181,7 @@ func TestPortableOutputRepairsTopLevelControlNameAndPreservesTopLevelMarkerName(
 			t.Fatal(err)
 		}
 		physicalRoot := operation.topLevel.ReservedEntry().PhysicalName()
-		if outputcap.ReservedRootName(outputcap.CallerProvidedContainer, physicalRoot) || !strings.Contains(physicalRoot, ".windshare-") {
+		if outputcap.ReservedRootName(outputcap.ReservedNamespaceDestinationContainer, physicalRoot) || !strings.Contains(physicalRoot, ".windshare-") {
 			t.Fatalf("repaired root = %q", physicalRoot)
 		}
 		intent, _ := operation.ReceiveIntent()
@@ -238,7 +238,7 @@ func TestPortableOutputRepairsTopLevelControlNameAndPreservesTopLevelMarkerName(
 		fixture := openNamedResumeFile(t, root, 0x81, 2, false, ".windshare-output", outputportable.Open, nil)
 		t.Cleanup(func() { _ = fixture.authority.Close() })
 		savedBase := filepath.Base(fixture.finalPath)
-		if outputcap.ReservedRootName(outputcap.CallerProvidedContainer, savedBase) || !strings.Contains(savedBase, ".windshare-") {
+		if outputcap.ReservedRootName(outputcap.ReservedNamespaceDestinationContainer, savedBase) || !strings.Contains(savedBase, ".windshare-") {
 			t.Fatalf("single-file control name was not repaired: %q", savedBase)
 		}
 		if err := fixture.transaction.WriteRange(ctx, 0, []byte("ok")); err != nil {
@@ -258,6 +258,103 @@ func TestPortableOutputRepairsTopLevelControlNameAndPreservesTopLevelMarkerName(
 			t.Fatalf("name reports = %v, %v", reports, err)
 		}
 		assertNativeNameReport(t, reports[0], ".windshare-output", savedBase, 0)
+	})
+
+	t.Run("newly created destination container preserves .wsresume and repairs .windshare-output", func(t *testing.T) {
+		ctx := context.Background()
+		root := filepath.Join(t.TempDir(), "new-container")
+		authority, err := New(Config{RootPath: root, CreateRoot: true, PlatformFactory: outputportable.Open})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = authority.Close() })
+		if _, err := authority.BindDestination(ctx); err != nil {
+			t.Fatal(err)
+		}
+
+		wsFileID := incrementalTestIdentity16[catalog.FileID](0x91)
+		wsArtifact, err := receivecontract.NewSingleFileDirectoryTree(wsFileID, ".wsresume-notes.txt", ".wsresume-notes.txt")
+		if err != nil {
+			t.Fatal(err)
+		}
+		wsSelection := nativeReservationTestSelection(t, 0x92)
+		lookup, err := authority.LookupActive(ctx, wsSelection)
+		if err != nil {
+			t.Fatal(err)
+		}
+		operation, err := authority.CreateOperation(ctx, lookup, wsArtifact)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := operation.topLevel.ReservedEntry().PhysicalName(); got != ".wsresume-notes.txt" {
+			t.Fatalf("new-container .wsresume file physical = %q", got)
+		}
+		intent, _ := operation.ReceiveIntent()
+		session, err := authority.OpenOperation(ctx, operation)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rootSource := transfer.AuthenticatedSourceDirectory{
+			DirectoryID: wsSelection.SyntheticRoot(),
+			Generation:  incrementalTestIdentity16[catalog.DirectoryGeneration](0x94),
+			SourcePath:  ordinaryoutput.EmptySourceCatalogPath(),
+		}
+		geometry, err := content.NewFileGeometry(2, catalog.DefaultChunkSize)
+		if err != nil {
+			t.Fatal(err)
+		}
+		descriptor, err := content.NewFileRevisionDescriptor(
+			intent.ShareInstance(), wsFileID, incrementalTestIdentity16[content.FileRevision](0x93),
+			geometry, catalog.ModifiedTime{},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		file := ordinaryResumeMaterializationFile(t, session, intent, descriptor, ".wsresume-notes.txt", rootSource, transfer.DirectoryAdmission{}, transfer.MaterializedDirectoryClaim{})
+		start, err := session.BeginFile(ctx, file)
+		if err != nil {
+			t.Fatalf("BeginFile(.wsresume-notes.txt): %v", err)
+		}
+		tx, _, _ := start.Transaction()
+		if err := tx.WriteRange(ctx, 0, []byte("ok")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Commit(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := session.FinalizeTree(ctx, transfer.DirectTreeOutcomeSuccess); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := os.ReadFile(filepath.Join(root, ".wsresume-notes.txt")); err != nil || string(got) != "ok" {
+			t.Fatalf("saved file in new container = %q, %v", got, err)
+		}
+
+		controlRoot := filepath.Join(t.TempDir(), "new-container-control")
+		controlAuthority, err := New(Config{RootPath: controlRoot, CreateRoot: true, PlatformFactory: outputportable.Open})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = controlAuthority.Close() })
+		if _, err := controlAuthority.BindDestination(ctx); err != nil {
+			t.Fatal(err)
+		}
+		controlFileID := incrementalTestIdentity16[catalog.FileID](0x95)
+		controlArtifact, err := receivecontract.NewSingleFileDirectoryTree(controlFileID, ".windshare-output", ".windshare-output")
+		if err != nil {
+			t.Fatal(err)
+		}
+		controlLookup, err := controlAuthority.LookupActive(ctx, nativeReservationTestSelection(t, 0x96))
+		if err != nil {
+			t.Fatal(err)
+		}
+		controlOp, err := controlAuthority.CreateOperation(ctx, controlLookup, controlArtifact)
+		if err != nil {
+			t.Fatal(err)
+		}
+		repairedControl := controlOp.topLevel.ReservedEntry().PhysicalName()
+		if outputcap.ReservedRootName(outputcap.ReservedNamespaceDestinationContainer, repairedControl) || !strings.Contains(repairedControl, ".windshare-") {
+			t.Fatalf("new-container .windshare-output file physical = %q, want compatible repair", repairedControl)
+		}
 	})
 }
 

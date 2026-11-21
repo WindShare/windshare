@@ -32,7 +32,7 @@ type nameView interface {
 }
 
 type ReportSummary struct {
-	RepairedCount int
+	RepairedCount uint64
 	ReportName    string
 }
 
@@ -53,7 +53,7 @@ func (store *Store) Export(mapper nameView, root outputnames.Root, visit func(fu
 	}); err != nil {
 		return ReportSummary{}, err
 	}
-	repaired := len(mappings)
+	repaired := uint64(len(mappings))
 	if rootRepaired {
 		repaired++
 	}

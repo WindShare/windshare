@@ -305,3 +305,27 @@ func TestPreparationFailureAfterConfirmedRelayStop(t *testing.T) {
 		}
 	}
 }
+
+func TestReceiveSettlementValidatesCompatibleNameReport(t *testing.T) {
+	validReport := OutputCompatibleNameReport{RepairedCount: 2, ReportName: "windshare-names-abc-1-0.json"}
+	settled, err := Settle(SettlementInput{
+		Result:               successfulJobResult(t),
+		Destination:          "C:/downloads/result",
+		CompatibleNameReport: validReport,
+	})
+	if err != nil || settled.Value.CompatibleNameReport != validReport {
+		t.Fatalf("valid compatible name report settlement = (%+v, %v)", settled.Value.CompatibleNameReport, err)
+	}
+	for _, invalid := range []OutputCompatibleNameReport{
+		{RepairedCount: 1},
+		{ReportName: "windshare-names-abc-1-0.json"},
+	} {
+		if _, err := Settle(SettlementInput{
+			Result:               successfulJobResult(t),
+			Destination:          "C:/downloads/result",
+			CompatibleNameReport: invalid,
+		}); !errors.Is(err, ErrInvalidResult) {
+			t.Fatalf("invalid compatible name report %+v error = %v, want %v", invalid, err, ErrInvalidResult)
+		}
+	}
+}

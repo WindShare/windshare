@@ -27,6 +27,22 @@ func (value DriftReason) Name() (string, bool) {
 	}
 }
 
+// CompatibleNameReport pairs the exact count of compatible-name repairs with
+// the report filename written beside the destination. Either both fields are
+// populated or both are zero.
+type CompatibleNameReport struct {
+	RepairedCount uint64
+	ReportName    appobs.DisplayName
+}
+
+func (report CompatibleNameReport) Empty() bool {
+	return report.RepairedCount == 0 && report.ReportName.Empty()
+}
+
+func (report CompatibleNameReport) Valid() bool {
+	return (report.RepairedCount == 0) == report.ReportName.Empty()
+}
+
 type TransferResultSpec struct {
 	SourceOmittedEntries uint64
 	Status               ResultStatus
@@ -35,8 +51,7 @@ type TransferResultSpec struct {
 	Elapsed              time.Duration
 	Destination          appobs.DisplayPath
 	DestinationAdjusted  bool
-	RepairedNames        uint64
-	NameReport           appobs.DisplayName
+	CompatibleNameReport CompatibleNameReport
 	Files                appobs.FileOutcomes
 	DirectoryFailures    uint64
 	OmittedDiagnostics   uint64
@@ -53,8 +68,7 @@ type TransferResult struct {
 	elapsed              time.Duration
 	destination          appobs.DisplayPath
 	destinationAdjusted  bool
-	repairedNames        uint64
-	nameReport           appobs.DisplayName
+	compatibleNameReport CompatibleNameReport
 	files                appobs.FileOutcomes
 	directoryFailures    uint64
 	omittedDiagnostics   uint64
@@ -66,7 +80,7 @@ type TransferResult struct {
 
 func NewTransferResult(spec TransferResultSpec) (TransferResult, error) {
 	if !spec.Status.Valid() || !spec.ExitCode.Valid() || spec.Elapsed < 0 || spec.Destination.Empty() ||
-		(spec.RepairedNames == 0) != spec.NameReport.Empty() ||
+		!spec.CompatibleNameReport.Valid() ||
 		spec.CountersExact && !appobs.ValidExactItemBlockCounts(spec.Files) {
 		return TransferResult{}, ErrInvalidResult
 	}
@@ -90,10 +104,10 @@ func NewTransferResult(spec TransferResultSpec) (TransferResult, error) {
 		sourceOmittedEntries: spec.SourceOmittedEntries,
 		status:               spec.Status, exitCode: spec.ExitCode, drift: spec.Drift,
 		elapsed: spec.Elapsed, destination: spec.Destination,
-		destinationAdjusted: spec.DestinationAdjusted,
-		repairedNames:       spec.RepairedNames, nameReport: spec.NameReport,
-		files:             spec.Files,
-		directoryFailures: spec.DirectoryFailures, omittedDiagnostics: spec.OmittedDiagnostics,
+		destinationAdjusted:  spec.DestinationAdjusted,
+		compatibleNameReport: spec.CompatibleNameReport,
+		files:                spec.Files,
+		directoryFailures:    spec.DirectoryFailures, omittedDiagnostics: spec.OmittedDiagnostics,
 		publishedBytes: spec.PublishedBytes, countersExact: spec.CountersExact,
 		failure: spec.Failure, hasFailure: hasFailure,
 	}, nil
@@ -105,14 +119,15 @@ func (result TransferResult) Drift() DriftReason              { return result.dr
 func (result TransferResult) Elapsed() time.Duration          { return result.elapsed }
 func (result TransferResult) Destination() appobs.DisplayPath { return result.destination }
 func (result TransferResult) DestinationAdjusted() bool       { return result.destinationAdjusted }
-func (result TransferResult) RepairedNames() uint64           { return result.repairedNames }
-func (result TransferResult) NameReport() appobs.DisplayName  { return result.nameReport }
-func (result TransferResult) Files() appobs.FileOutcomes      { return result.files }
-func (result TransferResult) SourceOmittedEntries() uint64    { return result.sourceOmittedEntries }
-func (result TransferResult) DirectoryFailures() uint64       { return result.directoryFailures }
-func (result TransferResult) OmittedDiagnostics() uint64      { return result.omittedDiagnostics }
-func (result TransferResult) PublishedBytes() uint64          { return result.publishedBytes }
-func (result TransferResult) CountersExact() bool             { return result.countersExact }
+func (result TransferResult) CompatibleNameReport() (CompatibleNameReport, bool) {
+	return result.compatibleNameReport, !result.compatibleNameReport.Empty()
+}
+func (result TransferResult) Files() appobs.FileOutcomes   { return result.files }
+func (result TransferResult) SourceOmittedEntries() uint64 { return result.sourceOmittedEntries }
+func (result TransferResult) DirectoryFailures() uint64    { return result.directoryFailures }
+func (result TransferResult) OmittedDiagnostics() uint64   { return result.omittedDiagnostics }
+func (result TransferResult) PublishedBytes() uint64       { return result.publishedBytes }
+func (result TransferResult) CountersExact() bool          { return result.countersExact }
 func (result TransferResult) Failure() (appobs.Failure, bool) {
 	return result.failure, result.hasFailure
 }
@@ -121,10 +136,10 @@ func (result TransferResult) Valid() bool {
 		SourceOmittedEntries: result.sourceOmittedEntries,
 		Status:               result.status, ExitCode: result.exitCode, Drift: result.drift,
 		Elapsed: result.elapsed, Destination: result.destination,
-		DestinationAdjusted: result.destinationAdjusted,
-		RepairedNames:       result.repairedNames, NameReport: result.nameReport,
-		Files:             result.files,
-		DirectoryFailures: result.directoryFailures, OmittedDiagnostics: result.omittedDiagnostics,
+		DestinationAdjusted:  result.destinationAdjusted,
+		CompatibleNameReport: result.compatibleNameReport,
+		Files:                result.files,
+		DirectoryFailures:    result.directoryFailures, OmittedDiagnostics: result.omittedDiagnostics,
 		PublishedBytes: result.publishedBytes, CountersExact: result.countersExact,
 		Failure: func() appobs.Failure {
 			if result.hasFailure {

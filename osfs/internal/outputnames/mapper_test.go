@@ -227,7 +227,7 @@ func TestRootChildUsingTheRecoveryPrefixGetsACompatibleName(t *testing.T) {
 	mapper := testMapper(t, store, namespaceFunc(func(_, _ string) (outputcap.EntryKind, error) { return outputcap.EntryAbsent, nil }))
 	for _, name := range []string{".wsresume-notes.txt", ".WSResume", ".wſresume-part", ".wsresume-" + strings.Repeat("0", 64) + ".identity"} {
 		physical, err := mapper.Bind("docs/" + name)
-		if err != nil || strings.Contains(physical, "/") || outputcap.ReservedRootName(outputcap.AuthorityCreatedRoot, physical) {
+		if err != nil || strings.Contains(physical, "/") || outputcap.ReservedRootName(outputcap.ReservedNamespaceResultRoot, physical) {
 			t.Fatalf("%q -> %q, %v", name, physical, err)
 		}
 		if _, err := catalog.CanonicalPath(physical); err != nil {
@@ -235,7 +235,7 @@ func TestRootChildUsingTheRecoveryPrefixGetsACompatibleName(t *testing.T) {
 		}
 	}
 	repairedDir, err := mapper.Bind("docs/.wsresume-dir")
-	if err != nil || outputcap.ReservedRootName(outputcap.AuthorityCreatedRoot, repairedDir) {
+	if err != nil || outputcap.ReservedRootName(outputcap.ReservedNamespaceResultRoot, repairedDir) {
 		t.Fatalf("top-level dir = %q, %v", repairedDir, err)
 	}
 	if child, err := mapper.Bind("docs/.wsresume-dir/child.txt"); err != nil || child != repairedDir+"/child.txt" {

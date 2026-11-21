@@ -58,7 +58,7 @@ func TestTopLevelReservationRepairsContainerControlPrefixAndKeepsRecoveryPrefix(
 		}
 		physical := reservation.ReservedEntry().PhysicalName()
 		_ = reservation.Close()
-		if outputcap.ReservedRootName(outputcap.CallerProvidedContainer, physical) || !strings.Contains(physical, ".windshare-") {
+		if outputcap.ReservedRootName(outputcap.ReservedNamespaceDestinationContainer, physical) || !strings.Contains(physical, ".windshare-") {
 			t.Fatalf("%q physical = %q, want compatible repair", name, physical)
 		}
 	}

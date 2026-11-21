@@ -122,6 +122,9 @@ func TestEncodeVisitsEveryEventWithSealedPayloads(t *testing.T) {
 		payloadTypes[payloadType] = record.Event
 		assertEnvelopeAllowlist(t, encoded, record.Correlation != nil)
 		assertNoPrivacyCanaries(t, encoded)
+		if payload, ok := record.Payload.(transferSettledPayload); ok && payload.RepairedNames != "2" {
+			t.Fatalf("transfer_settled repaired_names = %q, want %q", payload.RepairedNames, "2")
+		}
 	}
 }
 
@@ -361,12 +364,16 @@ func allTraceEvents(t *testing.T) []clievent.Event {
 		Elapsed:             3*time.Second + 4*time.Millisecond,
 		Destination:         appobs.NewDisplayPath(displayPathCanary),
 		DestinationAdjusted: true,
-		Files:               appobs.FileOutcomes{DownloadedFiles: 1, FailedFiles: 1},
-		DirectoryFailures:   math.MaxUint64,
-		OmittedDiagnostics:  2,
-		PublishedBytes:      100,
-		CountersExact:       false,
-		Failure:             failure,
+		CompatibleNameReport: clievent.CompatibleNameReport{
+			RepairedCount: 2,
+			ReportName:    appobs.NewDisplayName(displayNameCanary),
+		},
+		Files:              appobs.FileOutcomes{DownloadedFiles: 1, FailedFiles: 1},
+		DirectoryFailures:  math.MaxUint64,
+		OmittedDiagnostics: 2,
+		PublishedBytes:     100,
+		CountersExact:      false,
+		Failure:            failure,
 	}))
 	shareResult := mustValue(clievent.NewShareResult(clievent.ShareResultSpec{Publication: clievent.SharePublished,
 		ExitCode: clievent.ExitSuccess,

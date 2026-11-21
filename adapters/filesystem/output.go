@@ -130,6 +130,33 @@ func (m filesystemMaterializer) OpenDirectTree(ctx context.Context, intent trans
 	session, err := m.authority.OpenOperation(ctx, m.operation)
 	return session, sealFilesystemOutputFailure(err)
 }
+
+type filesystemOperationControl struct {
+	operation osfs.FilesystemOutputOperation
+}
+
+func (c filesystemOperationControl) Idle() bool {
+	return c.operation.Idle()
+}
+
+func (c filesystemOperationControl) RecordShareStopped(ctx context.Context) error {
+	return c.operation.RecordShareStopped(ctx)
+}
+
+func (c filesystemOperationControl) Discard(ctx context.Context) error {
+	return c.operation.Discard(ctx)
+}
+
+func (c filesystemOperationControl) CompatibleNameReport() output.CompatibleNameReport {
+	report := c.operation.CompatibleNameReport()
+	return output.CompatibleNameReport{
+		RepairedCount: report.RepairedCount,
+		ReportName:    report.ReportName,
+	}
+}
+
+var _ output.OperationControl = filesystemOperationControl{}
+
 func filesystemOperation(authority nativeFilesystemOutputAuthority, native osfs.FilesystemOutputOperation, rootPath string) (output.Operation, error) {
 	intent, ok := native.ReceiveIntent()
 	if !ok {
@@ -147,5 +174,5 @@ func filesystemOperation(authority nativeFilesystemOutputAuthority, native osfs.
 	if reservation.Kind() == receivecontract.ReservationNamedContainerEntry {
 		destination = filepath.Join(rootPath, reservation.PhysicalName())
 	}
-	return output.Operation{Intent: intent, Mode: mode, Control: native, Materializer: filesystemMaterializer{authority: authority, operation: native}, Destination: destination, DestinationAdjusted: reservation.CollisionIndex() > 0}, nil
+	return output.Operation{Intent: intent, Mode: mode, Control: filesystemOperationControl{operation: native}, Materializer: filesystemMaterializer{authority: authority, operation: native}, Destination: destination, DestinationAdjusted: reservation.CollisionIndex() > 0}, nil
 }

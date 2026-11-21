@@ -97,7 +97,7 @@ func (operation *Operation) setNameReport(summary namestore.ReportSummary) {
 
 // CompatibleNameReport reports any compatible-name repairs exported on success.
 // It remains readable after terminal close because the summary holds only values.
-func (operation *Operation) CompatibleNameReport() (repairedCount int, reportName string) {
+func (operation *Operation) CompatibleNameReport() (repairedCount uint64, reportName string) {
 	if operation == nil {
 		return 0, ""
 	}

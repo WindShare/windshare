@@ -175,6 +175,7 @@ type ParentNamespaceSnapshotter interface {
 type Platform interface {
 	AcquirePublicOperationGuard() (outputcap.PublicOperationGuard, error)
 	RootOpenDisposition() outputcap.RootOpenDisposition
+	ReservedNamespaceScope() outputcap.ReservedNamespaceScope
 	ValidateModifiedTime(catalog.ModifiedTime) error
 	CanonicalLocatorKey(string) (string, error)
 	CanonicalComponentKey(string) (string, error)

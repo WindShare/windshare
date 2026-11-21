@@ -33,6 +33,9 @@ func (authority *retainedAttemptAuthority) Discard(context.Context) error {
 	authority.discards++
 	return nil
 }
+func (*retainedAttemptAuthority) CompatibleNameReport() output.CompatibleNameReport {
+	return output.CompatibleNameReport{}
+}
 
 func TestReceiveAttemptLifetimeKeepsOneOperationUntilDecision(t *testing.T) {
 	for _, test := range []struct {

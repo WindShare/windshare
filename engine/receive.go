@@ -67,6 +67,7 @@ type OutputMode = receive.OutputMode
 type OutputLookup = receive.OutputLookup
 type OutputLookupKind = receive.OutputLookupKind
 type OutputReservation = receive.OutputReservation
+type OutputCompatibleNameReport = receive.OutputCompatibleNameReport
 type OutputOperation = receive.OutputOperation
 
 const (

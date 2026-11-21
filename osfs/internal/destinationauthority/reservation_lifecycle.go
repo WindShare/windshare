@@ -157,7 +157,7 @@ func resolveTopLevelPhysicalName(
 	operationID []byte,
 	logicalReservedName string,
 ) (string, error) {
-	if outputcap.ReservedRootName(outputcap.CallerProvidedContainer, logicalReservedName) {
+	if outputcap.ReservedRootName(outputcap.ReservedNamespaceDestinationContainer, logicalReservedName) {
 		// Top-level entries live beside the container's private control namespace;
 		// repair collisions here rather than rejecting the receive operation.
 		return outputnames.Candidate(operationID, logicalReservedName, 0)

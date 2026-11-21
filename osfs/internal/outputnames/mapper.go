@@ -97,7 +97,9 @@ func (mapper *Mapper) Bind(logical string) (string, error) {
 	// Recovery markers live beside direct children of an authority-created
 	// result root, so a source child in that namespace is repaired like any
 	// other name the destination cannot hold.
-	reserved := parent == "" && outputcap.ReservedRootName(outputcap.AuthorityCreatedRoot, leaf)
+	reserved := parent == "" &&
+		mapper.resolver.root.Kind == receivecontract.ContainerEntryResultRoot &&
+		outputcap.ReservedRootName(outputcap.ReservedNamespaceResultRoot, leaf)
 	if !reserved && (!claimed || owner == logical) {
 		if PortableName(leaf) {
 			mapper.claims[physical] = logical

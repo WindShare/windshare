@@ -146,6 +146,22 @@ func TestCanonicalLocatorClaimsPlatformEquivalenceAndReservedNamespace(t *testin
 			t.Errorf("result root rejected non-colliding path %q: %v", path, err)
 		}
 	}
+
+	// A newly created destination container has AuthorityCreatedRoot ownership
+	// yet guards the container control namespace rather than result-root markers.
+	createdContainerPlatform := newFakePlatform(outputcap.AuthorityCreatedRoot)
+	createdContainerPlatform.reservedScope = outputcap.ReservedNamespaceDestinationContainer
+	createdContainer, err := New(createdContainerPlatform, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = createdContainer.Close() })
+	if _, err := createdContainer.CanonicalLocatorKey(".windshare-output"); !errors.Is(err, outputfault.ErrReservedPath) {
+		t.Errorf("created container allowed control dir: %v", err)
+	}
+	if _, err := createdContainer.CanonicalLocatorKey(".wsresume-notes.txt"); err != nil {
+		t.Errorf("created container rejected result-root marker prefix: %v", err)
+	}
 }
 
 func TestAuthorityRejectsInvalidConfigurationAndClosedUse(t *testing.T) {
@@ -159,6 +175,11 @@ func TestAuthorityRejectsInvalidConfigurationAndClosedUse(t *testing.T) {
 	invalidDisposition := newFakePlatform(outputcap.RootOpenDisposition(""))
 	if _, err := New(invalidDisposition, Config{}); !errors.Is(err, ErrInvalidConfiguration) {
 		t.Fatalf("invalid disposition error=%v", err)
+	}
+	invalidScope := newFakePlatform(outputcap.CallerProvidedContainer)
+	invalidScope.reservedScope = 0
+	if _, err := New(invalidScope, Config{}); !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("invalid reserved scope error=%v", err)
 	}
 
 	authority, err := New(platform, Config{})
