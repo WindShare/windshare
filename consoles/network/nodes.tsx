@@ -11,7 +11,7 @@ import { BackLink, Badge, Bytes, DateStamp, EmptyState, Notice, ReadError } from
 import { Icon, type IconName } from '../ui/Icon'
 import type { AuthorityClient } from './api'
 import { encode } from './identity'
-import { servesRelay, type LoadReport, type NodeDetails, type NodePage, type PolicyChange, type Publication, type RelayNode } from './model'
+import { servesRelay, type LoadReport, type NodeDetails, type NodePage, type NodeSpec, type PolicyChange, type Publication, type RelayNode } from './model'
 
 type Directory = Publication | null | undefined
 type BadgeTone = 'neutral' | 'good' | 'warning' | 'info'
@@ -141,6 +141,17 @@ export function LookupNode({ id, api, directory, saved, refresh }: NodeDetailAct
   </div>
 }
 
+function NodeSpecFacts({ spec }: { spec: NodeSpec }) {
+  const t = useCopy(networkCopy)
+  const services = spec.roles.map(role => role === 'stun' ? 'STUN' : t.publicRelay).join(', ')
+  return <>
+    <dt>{t.endpoint}</dt><dd>{spec.relay}</dd>
+    <dt>{t.provider}</dt><dd>{spec.provider}</dd>
+    <dt>{t.services}</dt><dd>{services}</dd>
+    <dt>{t.capacity}</dt><dd>{spec.capacity_mbps}</dd>
+  </>
+}
+
 export function NodeDetail({ node, directory, api, saved, refresh }: NodeDetailActions & { node: NodeDetails }) {
   const { report } = node
   const [confirmPause, setConfirmPause] = useState(false)
@@ -158,7 +169,8 @@ export function NodeDetail({ node, directory, api, saved, refresh }: NodeDetailA
   return <div className="view"><BackLink href="#nodes">{t.backToNodes}</BackLink>
     <h1>{node.listing?.spec.alias || node.region || t.zones[node.zone]}</h1>
     <div className="node-detail-grid"><section className="panel padded"><h2>{t.nodeDetails}</h2>
-      <dl className="facts"><dt>{t.region}</dt><dd>{node.region}</dd><dt>{t.zone}</dt><dd>{t.zones[node.zone]}</dd><dt>{t.publicKey}</dt><dd><code>{id}</code></dd>
+      <dl className="facts">{node.listing && <NodeSpecFacts spec={node.listing.spec} />}
+        <dt>{t.region}</dt><dd>{node.region}</dd><dt>{t.zone}</dt><dd>{t.zones[node.zone]}</dd><dt>{t.publicKey}</dt><dd><code>{id}</code></dd>
         <dt>{t.directory}</dt><dd><Listing directory={directory} id={id} listing={node.listing} /></dd>
         <dt>{t.lastReport}</dt><dd>{report ? <DateStamp millis={report.reported_at * 1000} /> : t.awaitingReport}</dd>
         {report?.load.relay_budget && <><dt>{t.relayBudget}</dt><dd><Bytes value={report.load.relay_budget.bytes} /> · {t.resetsDay(report.load.relay_budget.reset_day_utc)}</dd></>}

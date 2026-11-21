@@ -6,9 +6,10 @@ import { RequestError } from '../../ui/request'
 import { useCopy } from '../../ui/use-locale'
 import { networkCopy } from '../locales'
 import type { AuthorityClient } from '../api'
-import { servesRelay, type FleetAction, type NodeDetails, type Publication } from '../model'
+import { servesRelay, type FleetAction, type Listing, type NodeDetails, type Publication } from '../model'
 
 const CERTIFICATE_WARNING_SECONDS = 14 * 86400
+const LISTED_STATUS_TONES = { active: 'good', canary: 'info', draining: 'warning' } as const
 
 export function ProbeWarnings({ node, directory }: { node: NodeDetails; directory: Publication }) {
   const t = useCopy(networkCopy)
@@ -89,6 +90,14 @@ function FleetConfirmDialogs({ pending, aborting, onCancelPending, onConfirmPend
   </>
 }
 
+function fleetStatusBadge(
+  state: Exclude<Listing['state'], { kind: 'staging' }>,
+  t: typeof networkCopy.en,
+): { tone: 'good' | 'info' | 'warning'; label: string } {
+  if (state.kind === 'disabled') return { tone: 'warning', label: t.admissions.disabled }
+  return { tone: LISTED_STATUS_TONES[state.status], label: t.states[state.status] }
+}
+
 export function FleetControls({ node, api, refresh }: { node: NodeDetails; api: AuthorityClient; refresh: () => Promise<void> }) {
   const t = useCopy(networkCopy)
   const action = useAction()
@@ -96,14 +105,24 @@ export function FleetControls({ node, api, refresh }: { node: NodeDetails; api: 
   const [aborting, setAborting] = useState<string | null>(null)
   const listing = node.listing
   if (!listing || listing.state.kind === 'staging') return null
-  const disabled = listing.state.kind === 'disabled'
-  const maintenance = listing.maintenance
+  const { spec, state, operation_id, maintenance } = listing
+  const disabled = state.kind === 'disabled'
+  const listed = state.kind === 'listed' ? state : null
   const hasRelay = servesRelay(node)
+  const status = fleetStatusBadge(state, t)
+  const canPromoteActive = Boolean(listed && listed.status === 'canary' && node.admission !== 'disabled')
+  const canResume = listed?.status === 'draining'
+  const canDrain = Boolean(hasRelay && listed && listed.status !== 'draining')
+  function promoteActive() {
+    void action.run(async () => {
+      await api.promote(spec.node_key, operation_id, 'active')
+      await refresh()
+    })
+  }
   function run(command: FleetAction) {
-    if (!listing) return
     void action.run(async () => {
       try {
-        await api.manage(listing.spec.node_key, listing.operation_id, command)
+        await api.manage(spec.node_key, operation_id, command)
       } catch (error) {
         if (canEscalateDrainPending(error, command)) {
           // Escalate a stale-snapshot drain conflict straight into the early-cutoff confirmation
@@ -118,17 +137,20 @@ export function FleetControls({ node, api, refresh }: { node: NodeDetails; api: 
     })
   }
   const next = disabled ? 'remove' : 'disable'
-  return <section className="panel padded stack"><h2>{t.fleetOperations}</h2>
+  return <section className="panel padded stack"><div className="section-title"><h2>{t.fleetOperations}</h2>
+    <Badge tone={status.tone}>{status.label}</Badge></div>
     {maintenance && <Badge tone="info">{disabled ? t.disableAfterMaintenance : t.maintenance} · {maintenance}</Badge>}
     <div className="actions">
-      {hasRelay && listing.state.kind === 'listed' && listing.state.status !== 'draining' &&
-        <button type="button" className="secondary" disabled={action.busy} onClick={() => run({ kind: 'drain' })}>{t.drain}</button>}
-      {listing.state.kind === 'listed' && listing.state.status === 'draining' &&
+      {canPromoteActive &&
+        <button type="button" disabled={action.busy} onClick={promoteActive}>{t.publishActive}</button>}
+      {canResume &&
         <button type="button" disabled={action.busy} onClick={() => run({ kind: 'resume' })}>{t.resume}</button>}
+      {canDrain &&
+        <button type="button" className="secondary" disabled={action.busy} onClick={() => run({ kind: 'drain' })}>{t.drain}</button>}
       {maintenance && <button type="button" className="secondary" disabled={action.busy}
         onClick={() => setAborting(maintenance)}>{t.abortMaintenance}</button>}
       {disabled && <button type="button" className="secondary" disabled={action.busy || Boolean(maintenance)} onClick={() => run({ kind: 'verify' })}>{t.verifyAgain}</button>}
-      {listing.state.kind === 'listed' && listing.state.withdrawn.map(role => <button key={role} type="button" className="secondary" disabled={action.busy}
+      {listed?.withdrawn.map(role => <button key={role} type="button" className="secondary" disabled={action.busy}
         onClick={() => run({ kind: 'restore_role', role })}>{t.restoreService(role.toUpperCase())}</button>)}
       <button type="button" className="secondary danger-text" disabled={action.busy || (disabled && Boolean(maintenance))}
         onClick={() => setPending({ kind: next, earlyCutoff: !node.cutoff_ready })}>{disabled ? t.removeNode : t.disable}</button>

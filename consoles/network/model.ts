@@ -9,10 +9,11 @@ export type FleetAction =
   | { kind: 'disable' | 'remove'; early_cutoff: boolean }
   | { kind: 'restore_role'; role: Role }
   | { kind: 'abort_maintenance'; maintenance_id: string }
+export type NodeSpec = Omit<Enrollment, 'url'> & { relay: string }
 export interface Listing {
   maintenance: string | null
   operation_id: string
-  spec: Omit<Enrollment, 'url'> & { relay: string }
+  spec: NodeSpec
   state:
     | { kind: 'listed'; status: TrafficStatus | 'draining'; withdrawn: Role[] }
     | { kind: 'disabled' }
