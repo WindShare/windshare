@@ -23,6 +23,10 @@
   box-shadow: 0 6px 24px var(--portal-shadow);
 }
 
+.donate-actions-card {
+  container: donate-actions / inline-size;
+}
+
 .donate-header {
   margin-bottom: 22px;
 }
@@ -612,5 +616,21 @@
   .donate-input,
   .donate-textarea {
     font-size: 16px;
+  }
+}
+
+/* Switch from equal-width segments to content-proportional tabs whenever the
+   actions card cannot comfortably fit three equal columns (mobile and narrow
+   two-column desktop), allowing wrapped lines on extreme narrow widths. */
+@container donate-actions (max-width: 420px) {
+  .donate-tabs {
+    display: flex;
+  }
+
+  .donate-tab-btn {
+    flex: 1 1 auto;
+    white-space: normal;
+    text-align: center;
+    line-height: 1.25;
   }
 }
