@@ -7,6 +7,7 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content/revisioncapacity"
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/engine/internal/share"
@@ -46,7 +47,10 @@ type Clock interface {
 }
 
 type Config struct {
-	Network             *networkconfig.Config
+	Network *networkconfig.Config
+	// Diagnostics receives engine-scoped infrastructure events (such as
+	// directory refreshes and frontend health checks) bound with Scope.EngineID.
+	Diagnostics         diagnostics.Sink
 	TURN                turn.Settings
 	TURNDependencies    turn.Dependencies
 	RelaySetup          relaysetup.Dependencies

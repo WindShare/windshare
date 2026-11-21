@@ -1,7 +1,10 @@
-import { compareRevisionMetadata, type RevisionComparison } from '../../content/revision-comparison'
 import { SourceFaultCode } from '../../transfer/failure/fault'
 import { zipMemberCoordinates } from '../zip-layout/member'
-import { CheckpointSourceEvidenceUnavailableError, SourceRevisionChangedError } from '../persistent-tree/errors'
+import {
+  evaluatePersistedSourceAdmission,
+  persistedSourceAdmissionError,
+  type PersistedSourceAdmissionRejection,
+} from '../persistence/source-admission'
 import { receiveContentWarningFields, snapshotReceiveContentWarning, type ReceiveContentWarning } from '../../transfer/lifecycle/content-warning'
 import type { NativeObjectIO } from '../origin-private/native-object/contracts'
 import { writeObjectBatch, type NativeObjectWrite, type ObjectWriteBatchCapacity } from '../origin-private/native-object/write-batch'
@@ -62,12 +65,13 @@ type ZipEntryComparison =
   | Readonly<{ kind: 'same' }>
   | Readonly<{ kind: 'reuse'; previous: ZipEntryRevision; current: ZipEntryRevision }>
   | Readonly<{
-      kind: 'deferred'; previous: ZipEntryRevision; current: ZipEntryRevision
-      reason: 'metadata-unavailable' | 'complete-revision-retained'
+      kind: 'rejected'
+      outcome: PersistedSourceAdmissionRejection
+      previous?: ZipEntryRevision
+      current?: ZipEntryRevision
     }>
-  | Extract<RevisionComparison, { kind: 'observed-change' }>
 
-type ZipObservedChange = Extract<ZipEntryComparison, { kind: 'observed-change' }>
+type ZipObservedChange = Extract<PersistedSourceAdmissionRejection, { kind: 'source-changed' }>
 
 export interface CompleteZipEntrySpan {
   readonly entry: TaskEntry
@@ -180,26 +184,32 @@ export class ProgressiveZipArchive {
       }
       const existing = this.#dirty.get(input.entryId) ?? committed
       const comparison = compareZipEntry(existing, kind, input)
-      if (comparison.kind === 'deferred') {
-        this.#trace('source_comparison_retained', {
-          entryId: committed.entryId, fileId: comparison.previous.fileId,
-          previousRevision: comparison.previous.fileRevision, currentRevision: comparison.current.fileRevision,
-          reason: comparison.reason,
-          retainedBytes: committed.ranges.reduce((total, range) => total + range.end - range.start, 0n),
-        })
-        return { kind: 'rejected', cause: new CheckpointSourceEvidenceUnavailableError() }
-      }
-      if (comparison.kind === 'observed-change') {
-        return { kind: 'commit', reason: REVISION_FAILURE_CHECKPOINT, commit: async () => {
-          await this.#commitRevisionFailure(existing, SourceFaultCode.RevisionChanged)
-          return comparison
-        } }
+      if (comparison.kind === 'rejected') {
+        if (comparison.outcome.kind === 'source-changed') {
+          const changed = comparison.outcome
+          return { kind: 'commit', reason: REVISION_FAILURE_CHECKPOINT, commit: async () => {
+            await this.#commitRevisionFailure(existing, SourceFaultCode.RevisionChanged)
+            return changed
+          } }
+        }
+        if (comparison.outcome.kind === 'evidence-unavailable' &&
+            comparison.previous !== undefined && comparison.current !== undefined) {
+          this.#trace('source_comparison_retained', {
+            entryId: committed.entryId, fileId: comparison.previous.fileId,
+            previousRevision: comparison.previous.fileRevision, currentRevision: comparison.current.fileRevision,
+            reason: comparison.outcome.comparison.reason,
+            retainedBytes: committed.ranges.reduce((total, range) => total + range.end - range.start, 0n),
+          })
+        }
+        return { kind: 'rejected', cause: persistedSourceAdmissionError(comparison.outcome) }
       }
       return { kind: 'commit', reason: ENTRY_ALLOCATION_CHECKPOINT, commit: () => this.#restoreEntry(existing, comparison) }
     })
     // A known entry refusal must leave the shared writer available for other entries.
-    if (result.kind === 'observed-change') {
-      throw new SourceRevisionChangedError({ cause: new Error(`ZIP source evidence changed (${result.reason})`) })
+    if (result.kind === 'source-changed') {
+      throw persistedSourceAdmissionError(result, {
+        cause: new Error(`ZIP source evidence changed (${result.reason})`),
+      })
     }
     return result
   }
@@ -545,19 +555,18 @@ function compareZipEntry(entry: TaskEntry, kind: TaskEntry['kind'], input: ZipEn
   const previous = entry.revision
   const current = input.revision
   if (!sameEntryContext(entry, kind, input) || previous?.fileId !== current?.fileId) {
-    return { kind: 'observed-change', reason: 'context-changed' }
+    return { kind: 'rejected', outcome: { kind: 'source-changed', reason: 'context-changed' } }
   }
   if (previous === undefined || current === undefined) return { kind: 'same' }
 
-  const comparison = compareRevisionMetadata(previous, current)
-  if (comparison.kind === 'observed-change') return comparison
-  if (comparison.kind === 'unavailable') return { kind: 'deferred', reason: comparison.reason, previous, current }
-  if (comparison.reason === 'same-revision') return { kind: 'same' }
-  // A completed payload keeps the revision under which it was authenticated.
-  if (completeZipEntryCrc(entry.ranges, previous.exactSize) !== undefined) {
-    return { kind: 'deferred', reason: 'complete-revision-retained', previous, current }
-  }
-  return { kind: 'reuse', previous, current }
+  const admission = evaluatePersistedSourceAdmission({
+    previous,
+    current,
+    allowsMetadataReuse: completeZipEntryCrc(entry.ranges, previous.exactSize) === undefined,
+  })
+  if (admission.kind === 'same-revision') return { kind: 'same' }
+  if (admission.kind === 'metadata-reuse') return { kind: 'reuse', previous, current }
+  return { kind: 'rejected', outcome: admission, previous, current }
 }
 
 function sameEntryContext(entry: TaskEntry, kind: TaskEntry['kind'], input: ZipEntryRequest): boolean {

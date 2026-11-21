@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"errors"
+	"log/slog"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -13,6 +14,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/nodedirectory"
 )
 
@@ -286,4 +288,88 @@ func TestCloseJoinsRefreshDuringConcurrentRequests(t *testing.T) {
 			t.Fatalf("post-close refresh=%v calls=%d", err, calls.Load())
 		}
 	})
+}
+
+func TestDirectoryRefreshEmitsStructuredDiagnosticsWithoutSlog(t *testing.T) {
+	var slogOutput bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&slogOutput, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+
+	stream, err := diagnostics.NewStream(32, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := signing()
+	config := f.config()
+	config.Embedded = f.envelope(t, 1, 1, 0)
+	config.Mirrors = []string{"https://bad.example/network", "https://good.example/network"}
+	config.Diagnostics = stream.Sink().Bind(diagnostics.Scope{EngineID: "engine-dir"})
+	valid := f.envelope(t, 1, 2, 0)
+	var failAll atomic.Bool
+	config.Fetch = func(_ context.Context, mirror string) ([]byte, error) {
+		if failAll.Load() {
+			return nil, errors.New("offline")
+		}
+		if mirror == config.Mirrors[0] {
+			return []byte(`{}`), nil
+		}
+		return valid, nil
+	}
+	directory, err := New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := directory.Refresh(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	failAll.Store(true)
+	if err := directory.Refresh(t.Context()); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("expected failure, got %v", err)
+	}
+	if err := directory.Refresh(t.Context()); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("expected deferred backoff, got %v", err)
+	}
+	directory.Close()
+	stream.Close()
+
+	var sawVerifyFailure, sawAccepted, sawCompletedSuccess, sawFetchFailure, sawDeferred bool
+	for record := range stream.Records() {
+		if record.Scope() != (diagnostics.Scope{EngineID: "engine-dir"}) {
+			t.Fatalf("unexpected scope: %+v", record.Scope())
+		}
+		payload := record.Payload()
+		switch record.Name() {
+		case "network_directory_refresh":
+			switch payload.Get("stage").Text() {
+			case "verify":
+				if payload.Get("mirror").Text() == config.Mirrors[0] && payload.Get("error").Text() != "" && !payload.Get("trusted_until").Present() {
+					sawVerifyFailure = true
+				}
+			case "accepted":
+				if payload.Get("mirror").Text() == config.Mirrors[1] && payload.Get("serial").Uint() == 2 && payload.Get("trusted_until").Text() != "" {
+					sawAccepted = true
+				}
+			case "fetch":
+				if payload.Get("error").Text() == "offline" {
+					sawFetchFailure = true
+				}
+			}
+		case "network_directory_refresh_completed":
+			if payload.Get("failures").Uint() == 0 && payload.Get("serial").Uint() == 2 && !payload.Get("error").Present() {
+				sawCompletedSuccess = true
+			}
+		case "network_directory_refresh_deferred":
+			if payload.Get("reason").Text() == string(SnapshotUnavailable) && payload.Get("retry_at").Text() != "" {
+				sawDeferred = true
+			}
+		}
+	}
+	if !sawVerifyFailure || !sawAccepted || !sawCompletedSuccess || !sawFetchFailure || !sawDeferred {
+		t.Fatalf("missing directory diagnostics: verify=%t accepted=%t completed=%t fetch=%t deferred=%t",
+			sawVerifyFailure, sawAccepted, sawCompletedSuccess, sawFetchFailure, sawDeferred)
+	}
+	if slogOutput.Len() != 0 {
+		t.Fatalf("directory bypassed diagnostics sink via slog: %s", slogOutput.String())
+	}
 }

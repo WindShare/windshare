@@ -1,7 +1,6 @@
 package contentflow
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -467,7 +466,7 @@ func testSharedBlockCacheIsolatesConsumerCancellationAndInvalidation(t *testing.
 	firstResult := make(chan error, 1)
 	go func() { _, err := cache.get(firstContext, key, loader); firstResult <- err }()
 	<-started
-	secondResult := make(chan []byte, 1)
+	secondResult := make(chan string, 1)
 	go func() { object, _ := cache.get(context.Background(), key, loader); secondResult <- object.payload }()
 	synctest.Wait()
 	cache.mu.Lock()
@@ -481,10 +480,10 @@ func testSharedBlockCacheIsolatesConsumerCancellationAndInvalidation(t *testing.
 		t.Fatalf("first consumer error=%v", err)
 	}
 	close(release)
-	if object := <-secondResult; !bytes.Equal(object, []byte("payload")) {
+	if object := <-secondResult; object != "payload" {
 		t.Fatalf("second consumer object=%q", object)
 	}
-	if object, err := cache.get(context.Background(), key, loader); err != nil || !bytes.Equal(object.payload, []byte("payload")) || loads.Load() != 1 {
+	if object, err := cache.get(context.Background(), key, loader); err != nil || object.payload != "payload" || loads.Load() != 1 {
 		t.Fatalf("cache hit object=%q loads=%d err=%v", object, loads.Load(), err)
 	}
 
@@ -515,7 +514,7 @@ func testSharedBlockCacheIsolatesConsumerCancellationAndInvalidation(t *testing.
 		loads.Add(1)
 		return []byte("fresh"), nil
 	})
-	if !errors.Is(err, content.ErrRevisionDrift) || object.payload != nil || loads.Load() != loadsBefore {
+	if !errors.Is(err, content.ErrRevisionDrift) || object.payload != "" || loads.Load() != loadsBefore {
 		t.Fatalf("permanently invalidated revision object=%q loads=%d err=%v", object, loads.Load(), err)
 	}
 	close(ignoredCancelRelease)

@@ -137,7 +137,7 @@ func TestSharedBlockCacheLoaderCanStopWithoutSelfJoin(t *testing.T) {
 	})
 }
 
-func TestBlockCacheHitClonesPayloadAndPreservesCommittedRecordID(t *testing.T) {
+func TestBlockCacheIsolatesLoaderAndPublicGetPayloads(t *testing.T) {
 	share := flowID[catalog.ShareInstance](1)
 	budget, err := NewProcessCacheBudget(64)
 	if err != nil {
@@ -149,19 +149,26 @@ func TestBlockCacheHitClonesPayloadAndPreservesCommittedRecordID(t *testing.T) {
 	}
 	defer cache.Close()
 	key := BlockCacheKey{ShareInstance: share, FileID: flowID[catalog.FileID](2), FileRevision: flowID[content.FileRevision](3)}
+	source := []byte("committed")
 	loads := 0
 	load := func(context.Context) ([]byte, error) {
 		loads++
-		return []byte("committed"), nil
+		return source, nil
 	}
 	first, err := cache.get(t.Context(), key, load)
 	if err != nil {
 		t.Fatal(err)
 	}
-	first.payload[0] ^= 1
+	source[0] ^= 1
+
+	exported, err := cache.Get(t.Context(), key, load)
+	if err != nil || loads != 1 || string(exported) != "committed" {
+		t.Fatalf("exported hit loads=%d payload=%q err=%v", loads, exported, err)
+	}
+	exported[0] ^= 1
 
 	second, err := cache.get(t.Context(), key, load)
-	if err != nil || loads != 1 || second.recordID != first.recordID || string(second.payload) != "committed" {
+	if err != nil || loads != 1 || second.recordID != first.recordID || second.payload != "committed" {
 		t.Fatalf("cached hit loads=%d payload=%q id=%x err=%v", loads, second.payload, second.recordID, err)
 	}
 }

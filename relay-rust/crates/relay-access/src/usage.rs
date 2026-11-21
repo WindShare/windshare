@@ -21,6 +21,11 @@ pub struct UsageRecord {
     pub bytes: u64,
 }
 
+/// Lightweight node-health counters piggybacked on authority usage reports.
+///
+/// Detailed node-local forwarding timing and throughput buckets remain in
+/// per-node logs (`node_load_summary`) instead of expanding this signed wire
+/// contract and single-row authority state.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Load {

@@ -84,7 +84,13 @@ func (engine *Engine) StartShare(ctx context.Context, request ShareRequest) (*Sh
 		defer selection.ReleaseAuthorization()
 		control.Diagnostics.Record(selection)
 		dependencies.ObserveAttempt = engine.network.Observer(selection, control.Diagnostics)
-		admissions.Observe(func(value relayset.Admission) { control.Diagnostics.Emit(networkruntime.AdmissionRecord(value)) })
+		if control.Diagnostics.Enabled() {
+			admissions.Observe(func(value relayset.Admission) {
+				if control.Diagnostics.Enabled() {
+					control.Diagnostics.Emit(networkruntime.AdmissionRecord(value))
+				}
+			})
+		}
 		var stopDiscovery func()
 		dependencies.TURN, stopDiscovery = engine.turn.ForShare(ctx, request.RelayIntent.Candidates())
 		defer stopDiscovery()

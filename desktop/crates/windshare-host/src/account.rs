@@ -160,6 +160,7 @@ pub enum AccountCommand {
         code: String,
     },
     Revoke {
+        account_id: String,
         credential: String,
     },
 }

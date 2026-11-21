@@ -1047,7 +1047,9 @@ describe('progressive native ZIP archive', () => {
     await archive.checkpoint('first')
     await archive.writeRange('z', 3n, bytes('456'))
     f.store.failCommit = true
-    const cut = trigger === 'checkpoint' ? archive.checkpoint('failure') : admit(archive, 'z', 7n)
+    const cut = trigger === 'checkpoint'
+      ? archive.checkpoint('failure')
+      : archive.admitFile({ entryId: 'z', path: ['z'], source, revision: { fileId: 'z', fileRevision: 'changed', exactSize: 7n } })
     await expect(cut).rejects.toThrow('metadata')
     expect(archive.failed).toBe(true)
     expect(f.io.closed).toBe(true)

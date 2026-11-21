@@ -252,8 +252,11 @@ and fleet/device measurements; see
 - Measure, at evening peak, connection success, throughput and loss between mainland and overseas
   nodes, and from home networks in both zones to each node. Results set initial weights and zone
   preferences and decide the Hong Kong line and the [data-triggered work](#data-triggered-work).
-- Record node-local active-session counts, relay bytes, per-session active-forwarding duration and
-  throughput distributions, and admission/queue pressure; P2 exports these aggregates in its usage loop.
+- Log periodic node-local load summaries (`node_load_summary`: active and completed sessions, wire
+  and forwarded bytes, cumulative forwarding-write time, per-session throughput buckets, and
+  admission/queue refusals); P2 exports only a lightweight node-health subset (`active_sessions`,
+  `wire_bytes`, `forwarded_bytes`, `admission_refusals`) in its usage loop instead of turning
+  authority Durable Object state into a metrics store.
 
 ### P1 — Built-in network
 

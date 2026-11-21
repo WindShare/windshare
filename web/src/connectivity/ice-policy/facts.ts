@@ -21,13 +21,13 @@ export class ICEFactStore {
   this.endpoints.set(endpointID, { endpointID, failedUntilMs: nowMs + ENDPOINT_FAILURE_COOLDOWN_MS })
   return true
  }
- recordProfile(profile: AttemptICEProfile, serverReflexiveProduced: boolean, firstCandidateDelayMs: number, nowMs: number): void {
-  if (profile.networkGenerationID !== this.generation || firstCandidateDelayMs < 0) return
+ recordProfile(profile: AttemptICEProfile, serverReflexiveProduced: boolean, nowMs: number): void {
+  if (profile.networkGenerationID !== this.generation) return
   if (!this.profiles.has(profile.id) && this.profiles.size >= MAXIMUM_PROFILE_FACTS) {
    const oldest = this.profiles.keys().next().value
    if (oldest !== undefined) this.profiles.delete(oldest)
   }
-  this.profiles.set(profile.id, { profileID: profile.id, serverReflexiveProduced, firstCandidateDelayMs, endpointIDs: [...profile.endpointIDs], observedAtMs: nowMs })
+  this.profiles.set(profile.id, { profileID: profile.id, serverReflexiveProduced, endpointIDs: [...profile.endpointIDs], observedAtMs: nowMs })
  }
  snapshot(): GenerationFacts {
   return { networkGenerationID: this.generation, endpoints: [...this.endpoints.values()].map(fact => ({ ...fact })),

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/windshare/windshare/core/serviceauthority"
 )
@@ -18,8 +19,9 @@ const (
 )
 
 type attributionReservation struct {
-	identity shareAttribution
-	inFlight int
+	identity           shareAttribution
+	inFlight           int
+	retainedCredential bool
 }
 
 // ShareAuthorization owns the identity shared by all official relay registrations
@@ -72,10 +74,7 @@ func (share *ShareAuthorization) Close() {
 		share.reservation = nil
 		delete(service.unconfirmedShares, share)
 		delete(service.officialShares, share)
-		for address := range share.nodes {
-			service.releaseNodeLocked(address)
-		}
-		clear(share.nodes)
+		share.releaseNodesLocked()
 		share.releaseCredentialLocked()
 		service.refreshDemandChangedLocked()
 	}
@@ -84,6 +83,9 @@ func (share *ShareAuthorization) Close() {
 type Source struct {
 	share   *ShareAuthorization
 	address string
+	// discover is true for sources returned by ShareAuthorization.Source,
+	// enabling on-demand node policy polling while attribution is pending.
+	discover bool
 }
 
 func (share *ShareAuthorization) Source(address string) *Source {
@@ -91,15 +93,12 @@ func (share *ShareAuthorization) Source(address string) *Source {
 		return nil
 	}
 	share.beginOfficialUse()
-	share.retainNode(address)
-	return &Source{share: share, address: address}
+	return &Source{share: share, address: address, discover: true}
 }
 
-func (share *ShareAuthorization) retainNode(address string) {
+func (share *ShareAuthorization) retainNodeLocked(address string) {
 	service := share.service
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	if share.attribution == attributionClosed || service.ctx.Err() != nil {
+	if share.attribution != attributionPending || service.ctx.Err() != nil {
 		return
 	}
 	if share.nodes == nil {
@@ -109,7 +108,14 @@ func (share *ShareAuthorization) retainNode(address string) {
 		return
 	}
 	share.nodes[address] = struct{}{}
-	service.retainNodeLocked(address)
+	service.nodes.retain(address)
+}
+
+func (share *ShareAuthorization) releaseNodesLocked() {
+	for address := range share.nodes {
+		share.service.nodes.release(address)
+	}
+	clear(share.nodes)
 }
 
 func (share *ShareAuthorization) beginOfficialUse() {
@@ -169,13 +175,18 @@ func (share *ShareAuthorization) reserveAttributionLocked(bearer string) service
 	service := share.service
 	if share.reservation == nil {
 		identity := attributionAnonymous
+		retainedCredential := false
 		if bearer != "" {
 			identity = attributionAccount
 			if share.credential == nil {
 				share.credential = service.retainCredentialLocked(service.record)
+				retainedCredential = share.credential != nil
 			}
 		}
-		share.reservation = &attributionReservation{identity: identity}
+		share.reservation = &attributionReservation{
+			identity:           identity,
+			retainedCredential: retainedCredential,
+		}
 		if identity == attributionAnonymous {
 			service.notifyLocked()
 		}
@@ -194,7 +205,12 @@ func (share *ShareAuthorization) reserveAttributionLocked(bearer string) service
 		if delivery == serviceauthority.RegistrationNotSent {
 			if reservation.inFlight == 0 {
 				share.reservation = nil
-				service.notifyLocked()
+				if reservation.retainedCredential {
+					share.releaseCredentialLocked()
+					service.refreshDemandChangedLocked()
+				} else {
+					service.notifyLocked()
+				}
 			}
 			return
 		}
@@ -203,9 +219,20 @@ func (share *ShareAuthorization) reserveAttributionLocked(bearer string) service
 		// on the same attribution as any registration the relay could retain.
 		share.attribution = reservation.identity
 		share.reservation = nil
+		// Anonymous policy is only consulted while attribution is pending; once
+		// a share commits to account or anonymous admission, stop polling nodes.
+		share.releaseNodesLocked()
 		if share.attribution == attributionAnonymous {
+			var fallbackCredential [16]byte
+			hadCredential := share.credential != nil && share.credential.record.Credential != nil
+			if hadCredential {
+				fallbackCredential = share.credential.record.Credential.ID
+			}
 			share.releaseCredentialLocked()
 			service.refreshDemandChangedLocked()
+			if hadCredential {
+				slog.Info("account_share_anonymous_fallback", "credential", fallbackCredential, "state", service.state)
+			}
 		}
 	}
 }
@@ -236,7 +263,7 @@ func (source *Source) selectAuthorizationLocked(node Node) serviceauthority.Regi
 	if service.validTicket(record) && service.currentGenerationLocked(record) {
 		return serviceauthority.RegistrationAuthorization{State: serviceauthority.AdmissionReady, Bearer: record.Ticket}
 	}
-	if identity == attributionPending && source.permitsAnonymousLocked(node) {
+	if identity == attributionPending && share.allowsAnonymousFallbackLocked(record) && source.permitsAnonymousLocked(node) {
 		return serviceauthority.RegistrationAuthorization{State: serviceauthority.AdmissionReady}
 	}
 	authorization := serviceauthority.RegistrationAuthorization{State: serviceauthority.AdmissionPendingSetup, Changed: service.changed}
@@ -256,11 +283,27 @@ func (source *Source) selectAuthorizationLocked(node Node) serviceauthority.Regi
 	return authorization
 }
 
+// A logged-in share waits for a pending ticket renewal so a faster anonymous
+// node discovery cannot downgrade it and lock out account-only nodes. Once
+// renewal enters failure backoff, permitted anonymous nodes remain usable.
+func (share *ShareAuthorization) allowsAnonymousFallbackLocked(record Record) bool {
+	if record.Credential == nil {
+		return true
+	}
+	if share.credential != nil && !sameIdentity(record, share.service.record) {
+		return share.credential.retry > 0
+	}
+	return share.service.state == Unavailable && share.service.config.Now().Before(share.service.retryAt)
+}
+
 func (source *Source) permitsAnonymousLocked(node Node) bool {
-	service := source.share.service
-	cached := service.nodes[source.address]
-	return cached != nil && cached.key == node.Key &&
-		cached.expires.After(service.config.Now()) && cached.anonymous && cached.available
+	if source.share.service.nodes.permitsAnonymous(source.address, node) {
+		return true
+	}
+	if source.discover {
+		source.share.retainNodeLocked(source.address)
+	}
+	return false
 }
 
 func deniedAuthorization(reason string) serviceauthority.RegistrationAuthorization {

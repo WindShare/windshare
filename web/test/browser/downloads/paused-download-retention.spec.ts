@@ -15,7 +15,7 @@ test('retains a paused native ZIP in Downloads with its partial-save authority w
     hiddenWhileOwned: true, copiedRejected: true, sameOperation: true, sameIntent: true,
     sameGeneration: true, lifecycle: 'resumable-receive', continuation: 'resume-receive',
     completeFileCount: '1',
-    display: { objectLabel: 'Retained folder', destinationLabel: 'Browser downloads', createdAtMilliseconds: 1234 },
+    display: { objectLabel: 'Retained folder', destinationLabel: { kind: 'browser-downloads' }, createdAtMilliseconds: 1234 },
   })
   expect(result.actions).toContain('save-partial')
   expect(result.actions).toContain('continue')

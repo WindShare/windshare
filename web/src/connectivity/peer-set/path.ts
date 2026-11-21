@@ -411,7 +411,7 @@ export class PeerRecoverySupervisor {
         this.#policy.waveElapsedBudgetMilliseconds,
         this.#policy.negotiationBudgetMilliseconds + this.#policy.admissionBudgetMilliseconds)),
       iceProfile,
-      observeICEFact: (fact: PeerProviderFact) => this.#profiles.observe(iceProfile, fact, startedAt, this.#activity.now()),
+      observeICEFact: (fact: PeerProviderFact) => this.#profiles.observe(iceProfile, fact, this.#activity.now()),
       protocolSessionId: this.#protocolSessionId,
       peerPathId: this.#peerPathId,
       waveOrdinal: wave.ordinal,

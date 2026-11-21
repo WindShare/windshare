@@ -92,7 +92,7 @@ impl Authorities {
 
 impl Service {
     pub(crate) fn restore_access(&self, snapshot: AccessSnapshot, now: u64) -> Result<()> {
-        let mut state = self.state.lock().expect("node access state");
+        let mut state = self.write();
         for authority in snapshot.authorities {
             state.authorities.apply(authority)?;
         }
@@ -113,12 +113,7 @@ impl Service {
     }
 
     pub(crate) fn apply_authority(&self, authority: AuthorityState) -> Result<()> {
-        let changed = self
-            .state
-            .lock()
-            .expect("node access state")
-            .authorities
-            .apply(authority)?;
+        let changed = self.write().authorities.apply(authority)?;
         if changed {
             self.changes.send_modify(|version| *version += 1);
         }
@@ -128,7 +123,7 @@ impl Service {
     pub(crate) fn apply_access_update(&self, update: AccessUpdate, now: u64) -> Result<()> {
         let trace_quotas = tracing::enabled!(tracing::Level::TRACE);
         let mut traced = Vec::new();
-        let mut state = self.state.lock().expect("node access state");
+        let mut state = self.write();
         let changed = state.authorities.apply(update.authority)?;
         state.quotas.retire_before(update.quota_day_floor, now);
         let mut advanced = 0;
@@ -175,7 +170,7 @@ impl Service {
         now: u64,
         domain: &[u8],
     ) -> Result<(Generation, Reply<T>)> {
-        let state = self.state.lock().expect("node access state");
+        let state = self.read();
         ensure!(state.active_issuers.contains(&issuer), "inactive authority");
         let mut trusted: TrustStore = state.authorities.trusted.clone();
         drop(state);

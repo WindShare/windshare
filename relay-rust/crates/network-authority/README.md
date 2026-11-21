@@ -32,8 +32,8 @@ Provision `api.ourworld.top` as a Cloudflare SaaS custom hostname on `windshare.
 using the existing zone fallback. The helper installs its exact Worker route and the
 origin custom domain. See [Cloudflare routing](https://developers.cloudflare.com/cloudflare-for-platforms/cloudflare-for-saas/start/advanced-settings/worker-as-origin/).
 Mainland DNS points to trusted API ingress hosts; use the
-[ingress templates](../../../deploy/network/authority.Caddyfile.template) and DNS-01
-certificate renewal. Pass their outbound IPs in `--trusted-proxy-ips` so the Worker
+[ingress templates](../../../deploy/network/authority.Caddyfile.template) and
+[DNS-01 certificate renewal](../../../deploy/network/operations.md#certificate-renewal). Pass their outbound IPs in `--trusted-proxy-ips` so the Worker
 can apply source limits to original clients.
 
 For email registration and account email changes, set variable `EMAIL_WEBHOOK_URL` and secret `EMAIL_WEBHOOK_TOKEN` in the same environment.
@@ -64,9 +64,12 @@ client and check the account's usage before publishing that snapshot and client.
 
 ## Operations
 
-The console controls registration mode/difficulty, source/global creation rates,
-daily allowance, node admission, and share/account blocks. Account milestones at
-1,000 and 4,000 request review without changing registration mode.
+The console controls registration policy/difficulty, source/global creation rates,
+daily allowance, node admission, and share/account blocks. Under the default
+`by_account_count` policy, new accounts switch from automatic to proof of work
+after 1,000 accounts and to email verification after 4,000 when mail delivery
+is configured (otherwise staying on proof of work); selecting a fixed mode keeps
+it unchanged. Both milestones prompt a capacity review.
 Use **Accounts** to find an account by ID or username and inspect its daily usage
 and attributed shares. **Reports** lists active account and share restrictions.
 

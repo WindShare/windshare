@@ -6,8 +6,8 @@ use crate::{
     sharing::{detail_width, enlarged_qr_side},
 };
 use gpui::{
-    Animation, AnimationExt, Div, FocusHandle, MouseButton, Role, Window, ease_out_quint,
-    prelude::*, px,
+    Animation, AnimationExt, AnyElement, Div, FocusHandle, MouseButton, Role, Subscription, Window,
+    ease_out_quint, prelude::*, px,
 };
 use std::time::Duration;
 use windshare_ui::{ButtonStyle, Icon, MOTION_MS, Theme, Tone, column, row};
@@ -21,6 +21,7 @@ pub struct OverlayFrame {
     pub return_focus: Option<FocusHandle>,
     pub scope: FocusHandle,
     pub sequence: usize,
+    pub _subscription: Option<Subscription>,
 }
 
 impl Desktop {
@@ -47,11 +48,11 @@ impl Desktop {
     ) -> impl IntoElement {
         let locale = language(cx);
         let theme = Theme::current(window, cx);
-        let (title, width, content) = match &frame.content {
+        let (title, width, content): (&str, f32, AnyElement) = match &frame.content {
             Overlay::Detail(id) => (
                 locale.text(Text::ShareDetails),
                 detail_width(window),
-                self.share_detail(theme, *id, window, cx),
+                self.share_detail(theme, *id, window, cx).into_any_element(),
             ),
             Overlay::ShareQr(id) => {
                 let share = self.shares.iter().find(|share| share.id == *id);
@@ -66,23 +67,24 @@ impl Desktop {
                         OVERLAY_PADDING
                             .mul_add(2., enlarged_qr_side(share, self.browser_trace, window))
                     }),
-                    self.share_qr_detail(theme, *id, window, cx),
+                    self.share_qr_detail(theme, *id, window, cx)
+                        .into_any_element(),
                 )
             }
-            Overlay::SharingSetup(target) => (
-                locale.text(self.setup_form.page.title()),
+            Overlay::SharingSetup(_, dialog) => (
+                locale.text(dialog.read(cx).title()),
                 DEFAULT_OVERLAY_WIDTH,
-                self.sharing_setup(theme, *target, cx),
+                dialog.clone().into_any_element(),
             ),
-            Overlay::Account => (
-                locale.text(self.account_title()),
+            Overlay::Account(dialog) => (
+                locale.text(dialog.read(cx).title()),
                 DEFAULT_OVERLAY_WIDTH,
-                self.account_panel(theme, cx),
+                dialog.clone().into_any_element(),
             ),
             Overlay::Help => (
                 locale.text(Text::About),
                 DEFAULT_OVERLAY_WIDTH,
-                Self::about_preview(theme, cx),
+                Self::about_preview(theme, cx).into_any_element(),
             ),
         };
         let modal = theme

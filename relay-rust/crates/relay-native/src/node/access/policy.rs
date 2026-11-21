@@ -87,7 +87,7 @@ pub(in crate::node) struct PolicyPublication {
 
 impl Service {
     pub(in crate::node) fn policy_matches(&self, policy: &Policy) -> bool {
-        let current = Arc::clone(&self.state.lock().expect("node access state").policy);
+        let current = Arc::clone(&self.read().policy);
         current.as_ref() == policy
     }
 
@@ -98,7 +98,7 @@ impl Service {
     ) -> Result<PreparedPolicy<'_>> {
         let devices = self.devices.lock().expect("credential writer");
         let (mut authorities, current, previous) = {
-            let state = self.state.lock().expect("node access state");
+            let state = self.read();
             (
                 state.authorities.clone(),
                 Arc::clone(&state.policy),
@@ -135,7 +135,7 @@ impl Service {
         controller: Option<Issuer>,
         prepared: Option<PreparedPolicy<'_>>,
     ) -> PolicyPublication {
-        let mut state = self.state.lock().expect("node access state");
+        let mut state = self.write();
         let controller_changed = state.controller != controller;
         state.controller = controller;
         let Some(mut prepared) = prepared else {
@@ -166,7 +166,7 @@ impl Service {
         if !self.policy_matches(&policy) {
             let prepared =
                 self.prepare_policy(policy, generations.into_iter().map(Into::into).collect())?;
-            let controller = self.state.lock().expect("node access state").controller;
+            let controller = self.read().controller;
             self.publish_policy(controller, Some(prepared));
             self.notify_policy_changed();
         }

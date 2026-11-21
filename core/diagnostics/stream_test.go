@@ -100,3 +100,49 @@ func TestValuesRemainJSONAndBoundDiagnosticText(t *testing.T) {
 		t.Fatalf("empty collection became null: %s", encoded)
 	}
 }
+
+func TestControlledSinkTogglesWithoutReenablingCapturedSinks(t *testing.T) {
+	stream, err := NewStream(8, func() time.Time { return time.Unix(100, 0) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	controlled, setEnabled := stream.Controlled(false)
+	engineSink := controlled.Bind(Scope{EngineID: "engine-1"})
+	if engineSink.Enabled() || engineSink.Record(panicSource{}) {
+		t.Fatal("disabled controlled sink accepted a record")
+	}
+
+	captured, stopCapture := stream.Capture()
+	setEnabled(true)
+	if !engineSink.Emit(New("first", Fields{"step": Uint(1)})) {
+		t.Fatal("enabled controlled sink dropped record")
+	}
+	if !captured.Emit(New("task", Fields{"step": Uint(2)})) {
+		t.Fatal("active capture dropped record")
+	}
+
+	stopCapture()
+	setEnabled(false)
+	if engineSink.Enabled() || engineSink.Record(panicSource{}) || captured.Enabled() {
+		t.Fatal("disabled sinks stayed active")
+	}
+
+	setEnabled(true)
+	if captured.Enabled() {
+		t.Fatal("revoked capture was reactivated")
+	}
+	if !engineSink.Emit(New("second", Fields{"step": Uint(3)})) {
+		t.Fatal("re-enabled controlled sink dropped record")
+	}
+
+	cut := stream.Close()
+	if cut.Enqueued != 3 || cut.CapacityDropped != 0 {
+		t.Fatalf("completion = %+v", cut)
+	}
+	first, taskRec, second := <-stream.Records(), <-stream.Records(), <-stream.Records()
+	if first.Name() != "first" || first.Scope() != (Scope{EngineID: "engine-1"}) ||
+		taskRec.Name() != "task" ||
+		second.Name() != "second" || second.Scope() != (Scope{EngineID: "engine-1"}) {
+		t.Fatalf("records = %+v %+v %+v", first, taskRec, second)
+	}
+}

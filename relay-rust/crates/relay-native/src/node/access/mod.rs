@@ -20,7 +20,7 @@ pub(crate) use residency::Residency;
 
 use std::{
     collections::BTreeMap,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
 use tokio::sync::watch;
 use windshare_relay_access::{
@@ -32,7 +32,9 @@ use windshare_relay_core::identifiers::ShareId;
 
 #[derive(Clone)]
 pub(crate) struct Service {
-    state: Arc<Mutex<State>>,
+    // Read-mostly access checks (including concurrent frame submission) share
+    // this lock while policy, restriction, quota, and residency mutations fence them.
+    state: Arc<RwLock<State>>,
     // Serializes the writers of the effective credential index, including policy reloads.
     devices: Arc<Mutex<DeviceKeys>>,
     changes: watch::Sender<u64>,
@@ -53,7 +55,7 @@ struct State {
 impl Default for Service {
     fn default() -> Self {
         Self {
-            state: Arc::new(Mutex::new(State {
+            state: Arc::new(RwLock::new(State {
                 policy: Arc::default(),
                 authorities: control::Authorities::default(),
                 controller: None,
@@ -71,28 +73,29 @@ impl Default for Service {
 }
 
 impl Service {
+    fn read(&self) -> RwLockReadGuard<'_, State> {
+        self.state.read().expect("node access state")
+    }
+
+    fn write(&self) -> RwLockWriteGuard<'_, State> {
+        self.state.write().expect("node access state")
+    }
+
     #[cfg(test)]
     pub fn set_controller(&self, issuer: Option<Issuer>) {
-        self.state.lock().expect("node access state").controller = issuer;
+        self.write().controller = issuer;
     }
 
     pub fn public_enabled(&self) -> bool {
-        self.state
-            .lock()
-            .expect("node access state")
-            .disabled_controller()
-            .is_none()
+        self.read().disabled_controller().is_none()
     }
 
     pub fn anonymous(&self) -> bool {
-        self.state.lock().expect("node access state").anonymous()
+        self.read().anonymous()
     }
 
     pub fn share_limit(&self, priority: crate::connection::AdmissionPriority) -> usize {
-        self.state
-            .lock()
-            .expect("node access state")
-            .share_limit(priority)
+        self.read().share_limit(priority)
     }
 
     pub fn changes(&self) -> watch::Receiver<u64> {
@@ -105,7 +108,7 @@ impl Service {
         attribution: Attribution,
         forward: impl FnOnce() -> T,
     ) -> Option<T> {
-        let state = self.state.lock().expect("node access state");
+        let state = self.read();
         if state.denied(share, attribution) {
             return None;
         }
@@ -115,22 +118,15 @@ impl Service {
     }
 
     pub fn allowed(&self, share: ShareId, attribution: Attribution) -> bool {
-        !self
-            .state
-            .lock()
-            .expect("node access state")
-            .denied(share, attribution)
+        !self.read().denied(share, attribution)
     }
 
     pub(crate) fn is_owner(&self, attribution: Attribution) -> bool {
-        self.state
-            .lock()
-            .expect("node access state")
-            .owner(attribution)
+        self.read().owner(attribution)
     }
 
     pub fn class(&self, attribution: Attribution, now: u64) -> (Class, Option<Allowance>) {
-        let state = self.state.lock().expect("node access state");
+        let state = self.read();
         let result = match attribution {
             Attribution::Credential { .. } if state.owner(attribution) => (Class::Owner, None),
             Attribution::Credential { .. } => (Class::Standard, None),
@@ -147,12 +143,10 @@ impl Service {
     }
 
     pub fn refresh(&self, issuer: Issuer, account: AccountId, next: Entitlement, now: u64) -> bool {
-        let changed = self
-            .state
-            .lock()
-            .expect("node access state")
-            .quotas
-            .advance((issuer, account), Quota::from_snapshot(next, now), now);
+        let changed =
+            self.write()
+                .quotas
+                .advance((issuer, account), Quota::from_snapshot(next, now), now);
         if changed {
             self.changes.send_modify(|version| *version += 1);
             tracing::info!(
@@ -170,28 +164,25 @@ impl Service {
 
     pub(super) fn expire_quotas(&self, now: u64) {
         let day = now / DAY_SECONDS;
-        let pruned = self
-            .state
-            .lock()
-            .expect("node access state")
-            .quotas
-            .retire_before(day, now);
+        // Skip the exclusive lock on the 1s scheduler tick when no quota deadline is due.
+        if !self.read().quotas.needs_retire(day, now) {
+            return;
+        }
+        let pruned = self.write().quotas.retire_before(day, now);
         if pruned != 0 {
             tracing::debug!(event = "runtime_quotas_pruned", day, pruned);
         }
     }
 
     pub fn restriction_version(&self, issuer: Issuer) -> u64 {
-        self.state
-            .lock()
-            .expect("node access state")
+        self.read()
             .restrictions
             .get(&issuer)
             .map_or(0, |value| value.version)
     }
 
     pub fn restrict(&self, issuer: Issuer, next: Restrictions) -> bool {
-        let mut state = self.state.lock().expect("node access state");
+        let mut state = self.write();
         let version = next.version;
         let changed = state.restrictions.entry(issuer).or_default().advance(next);
         drop(state);
@@ -206,9 +197,7 @@ impl Service {
         &self,
         authority: Issuer,
     ) -> Vec<windshare_relay_access::usage::ShareAttribution> {
-        self.state
-            .lock()
-            .expect("node access state")
+        self.read()
             .residents
             .iter()
             .filter_map(|(share, (attribution, _))| match attribution {
@@ -226,9 +215,7 @@ impl Service {
     }
 
     pub fn resident_accounts(&self) -> Vec<(Issuer, AccountId)> {
-        self.state
-            .lock()
-            .expect("node access state")
+        self.read()
             .residents
             .values()
             .filter_map(|(attribution, _)| match attribution {

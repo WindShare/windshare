@@ -18,6 +18,7 @@ import (
 	"github.com/windshare/windshare/cmd/wind/internal/commandmeta"
 	"github.com/windshare/windshare/cmd/wind/internal/configcommand"
 	"github.com/windshare/windshare/cmd/wind/internal/networkcommand"
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/engine/builtinnetwork"
 	"github.com/windshare/windshare/engine/relayconfig"
@@ -174,41 +175,13 @@ func (a *App) Run(ctx context.Context, args []string) (code int) {
 		a.stderrLines().WriteLines(accountcommand.Usage)
 		return ExitOK
 	}
-	if a.application == nil {
-		application, err := a.newApplication()
-		if err != nil {
-			a.writeCompleteLine("%s: initialize application: %v", commandmeta.Name, err)
-			return ExitFailure
-		}
-		a.application = application
-		defer func() {
-			if err := application.Close(context.Background()); err != nil {
-				a.writeCompleteLine("%s: close application: %v", commandmeta.Name, err)
-				if code == ExitOK {
-					code = ExitFailure
-				}
-			}
-			a.application = nil
-		}()
-	}
 	if len(args) == 0 {
 		a.usage()
 		return ExitUsage
 	}
 	switch args[0] {
 	case "account":
-		runner := accountcommand.Runner{Input: a.Stdin, Output: a.stderrLines(), JSONOutput: a.Stdout}
-		if service := a.application.Accounts(); service != nil {
-			runner.Service = service
-		}
-		switch runner.Run(ctx, args[1:]) {
-		case accountcommand.ResultOK:
-			return ExitOK
-		case accountcommand.ResultUsage:
-			return ExitUsage
-		default:
-			return ExitFailure
-		}
+		return a.runAccount(ctx, args[1:])
 	case "relay":
 		return a.runRelay(ctx, args[1:])
 	case "share":
@@ -229,6 +202,51 @@ func (a *App) Run(ctx context.Context, args []string) (code int) {
 	}
 }
 
+func (a *App) runAccount(ctx context.Context, args []string) (code int) {
+	closeApp, err := a.ensureApplication(diagnostics.Sink{})
+	if err != nil {
+		return ExitFailure
+	}
+	defer closeApp(&code)
+	runner := accountcommand.Runner{Input: a.Stdin, Output: a.stderrLines(), JSONOutput: a.Stdout}
+	if service := a.application.Accounts(); service != nil {
+		runner.Service = service
+	}
+	switch runner.Run(ctx, args) {
+	case accountcommand.ResultOK:
+		return ExitOK
+	case accountcommand.ResultUsage:
+		return ExitUsage
+	default:
+		return ExitFailure
+	}
+}
+
+// ensureApplication constructs a command-scoped engine after flags and trace
+// streams are parsed so startup directory and frontend checks enter the trace.
+// Deferring the returned closer after commandRuntime.Close joins engine loops
+// before the diagnostic stream seals.
+func (a *App) ensureApplication(diagnosticSink diagnostics.Sink) (func(*int), error) {
+	if a.application != nil {
+		return func(*int) {}, nil
+	}
+	application, err := a.newApplication(diagnosticSink)
+	if err != nil {
+		a.writeCompleteLine("%s: initialize application: %v", commandmeta.Name, err)
+		return nil, err
+	}
+	a.application = application
+	return func(code *int) {
+		if err := application.Close(context.Background()); err != nil {
+			a.writeCompleteLine("%s: close application: %v", commandmeta.Name, err)
+			if code != nil && *code == ExitOK {
+				*code = ExitFailure
+			}
+		}
+		a.application = nil
+	}, nil
+}
+
 type engineCommandClock struct{ commandClock }
 
 func (c engineCommandClock) NewTicker(d time.Duration) engine.ReceiveTicker {
@@ -246,8 +264,11 @@ func (c engineCommandClock) Wait(ctx context.Context, delay time.Duration, wake 
 	return nil
 }
 
-func (a *App) newApplication() (*engine.Engine, error) {
+func (a *App) newApplication(diagnosticSink diagnostics.Sink) (*engine.Engine, error) {
 	config := a.engineConfig
+	if diagnosticSink.Enabled() {
+		config.Diagnostics = diagnosticSink
+	}
 	if config.Clock == nil && a.clock != nil {
 		config.Clock = engineCommandClock{a.clock}
 	}

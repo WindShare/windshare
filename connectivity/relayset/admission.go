@@ -25,9 +25,25 @@ type NetworkAdmissions struct {
 	observe       func(Admission)
 }
 
+const (
+	AdmissionAdmitted    = "admitted"
+	AdmissionParked      = "parked"
+	AdmissionUnavailable = "unavailable"
+)
+
+const (
+	AdmissionReasonPrimary         = "primary"
+	AdmissionReasonBackup          = "backup"
+	AdmissionReasonPermitReleased  = "permit_released"
+	AdmissionReasonTargetReached   = "target_reached"
+	AdmissionReasonBackupNotChosen = "backup_not_selected"
+	AdmissionReasonPrimaryLost     = "primary_lost"
+	AdmissionReasonBackupLost      = "backup_lost"
+)
+
 type Admission struct {
-	Endpoint, Primary, State string
-	Count                    int
+	Endpoint, Primary, State, Reason string
+	Count                            int
 }
 
 func (a *NetworkAdmissions) Observe(observer func(Admission)) {
@@ -36,7 +52,7 @@ func (a *NetworkAdmissions) Observe(observer func(Admission)) {
 	a.mu.Unlock()
 }
 
-func (a *NetworkAdmissions) record(index int, state string) {
+func (a *NetworkAdmissions) record(index int, state, reason string) {
 	if a.observe == nil {
 		return
 	}
@@ -44,7 +60,7 @@ func (a *NetworkAdmissions) record(index int, state string) {
 	if a.primary >= 0 {
 		primary = a.candidates[a.primary].URL
 	}
-	a.observe(Admission{Endpoint: a.candidates[index].URL, Primary: primary, State: state, Count: a.active})
+	a.observe(Admission{Endpoint: a.candidates[index].URL, Primary: primary, State: state, Reason: reason, Count: a.active})
 }
 
 type admissionState struct {
@@ -146,7 +162,9 @@ func (c admissionControl) Unavailable() {
 	}
 	a.states[c.index].admitted = false
 	a.active--
+	reason := AdmissionReasonBackupLost
 	if a.primary == c.index {
+		reason = AdmissionReasonPrimaryLost
 		a.releaseSoftCooldown()
 		a.primary = -1
 		for i, state := range a.states {
@@ -156,7 +174,7 @@ func (c admissionControl) Unavailable() {
 			}
 		}
 	}
-	a.record(c.index, "unavailable")
+	a.record(c.index, AdmissionUnavailable, reason)
 	a.notify()
 }
 
@@ -164,16 +182,26 @@ func (p *admissionPermit) Admit() bool {
 	a, index := p.control.owner, p.control.index
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if p.released || a.active >= relayplan.TargetNetworkRegistrations || (a.primary >= 0 && a.backup() != index) {
-		a.record(index, "parked")
+	if p.released {
+		a.record(index, AdmissionParked, AdmissionReasonPermitReleased)
 		return false
+	}
+	if a.active >= relayplan.TargetNetworkRegistrations {
+		a.record(index, AdmissionParked, AdmissionReasonTargetReached)
+		return false
+	}
+	if a.primary >= 0 && a.backup() != index {
+		a.record(index, AdmissionParked, AdmissionReasonBackupNotChosen)
+		return false
+	}
+	reason := AdmissionReasonBackup
+	if a.primary < 0 {
+		a.primary = index
+		reason = AdmissionReasonPrimary
 	}
 	a.states[index].admitted = true
 	a.active++
-	if a.primary < 0 {
-		a.primary = index
-	}
-	a.record(index, "admitted")
+	a.record(index, AdmissionAdmitted, reason)
 	a.notify()
 	return true
 }

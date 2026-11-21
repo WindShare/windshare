@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/framechannel"
 
 	"github.com/windshare/windshare/core/session"
 	receiversession "github.com/windshare/windshare/core/session/receiversession"
@@ -136,6 +138,108 @@ func TestReplacementRevisionDriftRejectsRetainedProgress(t *testing.T) {
 	}
 	if err = s.ReleaseRevision(context.Background(), opened.Handle); err != nil {
 		t.Fatal(err)
+	}
+}
+
+type retireOnNthSendChannel struct {
+	framechannel.Channel
+	wire      *pipeChannel
+	remaining atomic.Int32
+}
+
+func (c *retireOnNthSendChannel) Send(ctx context.Context, frame framechannel.Frame) error {
+	if c.remaining.Add(-1) == 0 {
+		_ = c.wire.Close()
+		return framechannel.RetireSend(io.ErrClosedPipe)
+	}
+	return c.Channel.Send(ctx, frame)
+}
+
+func TestRefreshRevisionDriftSurvivesImmediatePathRetirement(t *testing.T) {
+	f := newFixture(t)
+	runtime, wire := f.connect()
+	var replacements atomic.Int32
+	var retiredReplacement *receiversession.Runtime
+	s, err := New(t.Context(), runtime, func(context.Context, *receiversession.Runtime) (*receiversession.Runtime, error) {
+		if replacements.Add(1) > 1 {
+			return nil, errors.New("unexpected reconnection after authenticated revision drift")
+		}
+		sender, nextWire := newPipe()
+		gate := &retireOnNthSendChannel{Channel: sender, wire: nextWire}
+		next := f.connectChannels(gate, nextWire)
+		// Allow OpenRevision's reply through, then retire the path on the
+		// discarded handle's ReleaseRevision reply inside binding.refresh.
+		gate.remaining.Store(2)
+		retiredReplacement = next
+		return next, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	snapshot, release, err := s.AcquireDirectory(t.Context(), runtime.Descriptor().SyntheticRoot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	file, _ := snapshot.Pages()[0].Entries()[0].FileID()
+	opened, err := s.OpenRevision(t.Context(), file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := content.Range{End: 1024}
+	sink := transfer.RangeSinkFunc(func(context.Context, uint64, []byte) error { return nil })
+	if err = s.ReadRange(t.Context(), opened.Handle, opened.Descriptor, first, sink); err != nil {
+		t.Fatal(err)
+	}
+	dependencies, _ := runtime.TransferDependencies()
+	if err = dependencies.ReleaseRevision(t.Context(), opened.Handle); err != nil {
+		t.Fatal(err)
+	}
+	_ = wire.Close()
+	<-runtime.Done()
+
+	// Model a prior descriptor whose source timestamp no longer matches what the
+	// replacement generation opens, so binding.refresh produces RevisionReopenedError
+	// with RevisionComparisonMismatch and releases the newly opened handle.
+	modified := opened.Descriptor.ModifiedTime()
+	priorModified, err := catalog.NewModifiedTime(modified.Seconds()-1, modified.Nanoseconds(), modified.Precision())
+	if err != nil {
+		t.Fatal(err)
+	}
+	priorDescriptor, err := content.NewFileRevisionDescriptor(
+		opened.Descriptor.ShareInstance(), file, opened.Descriptor.FileRevision(),
+		opened.Descriptor.Geometry(), priorModified,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	s.leases[opened.Handle].opened.Descriptor = priorDescriptor
+	s.mu.Unlock()
+
+	err = s.ReadRange(t.Context(), opened.Handle, priorDescriptor, content.Range{Offset: first.End, End: priorDescriptor.ExactSize()}, sink)
+	reopened, ok := errors.AsType[*content.RevisionReopenedError](err)
+	if !ok || !errors.Is(err, content.ErrRevisionStale) {
+		t.Fatalf("path retirement hid source drift: %v", err)
+	}
+	if replacements.Load() != 1 || retiredReplacement == nil || !retiredReplacement.PathsExhausted() {
+		t.Fatalf("replacements=%d retired=%v", replacements.Load(), retiredReplacement != nil && retiredReplacement.PathsExhausted())
+	}
+	if err = s.ReleaseRevision(t.Context(), opened.Handle); err != nil {
+		t.Fatalf("retired replacement release poisoned cleanup: %v", err)
+	}
+
+	// Verify recoverRefreshFailure directly preserves RevisionReopenedError on a
+	// retired runtime while still honoring caller cancellation.
+	retry, got := s.recoverRefreshFailure(t.Context(), retiredReplacement, reopened)
+	if retry || got != reopened || replacements.Load() != 1 {
+		t.Fatalf("recoverRefreshFailure retried or replaced reopen: retry=%v err=%v replacements=%d", retry, got, replacements.Load())
+	}
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if retry, got = s.recoverRefreshFailure(canceled, retiredReplacement, reopened); retry || !errors.Is(got, context.Canceled) {
+		t.Fatalf("recoverRefreshFailure ignored caller cancellation: retry=%v err=%v", retry, got)
 	}
 }
 

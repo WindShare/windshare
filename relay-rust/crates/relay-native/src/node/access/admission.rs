@@ -52,7 +52,7 @@ impl Bearer {
                     .decode(encoded.as_bytes())
                     .map_err(|_| Error::Encoding)?;
                 VerifiedTicket::verify_with(&signed, now, |issuer| {
-                    let state = access.state.lock().expect("node access state");
+                    let state = access.read();
                     if state.active_issuers.contains(&issuer) {
                         state.authorities.trusted.generation(issuer)
                     } else {
@@ -96,7 +96,7 @@ impl Service {
         bearer: Option<&mut Bearer>,
         now: u64,
     ) -> AdmissionPriority {
-        let state = self.state.lock().expect("node access state");
+        let state = self.read();
         if let Some(priority) = state.known_priority(share, bearer.as_deref()) {
             return priority;
         }
@@ -108,7 +108,7 @@ impl Service {
             return AdmissionPriority::Anonymous;
         };
 
-        let state = self.state.lock().expect("node access state");
+        let state = self.read();
         let priority = state
             .known_priority(share, Some(bearer))
             .unwrap_or_else(|| {
@@ -133,7 +133,7 @@ impl Service {
         bearer: Option<&Bearer>,
         forwarded: Option<Attribution>,
     ) -> Option<bool> {
-        let state = self.state.lock().expect("node access state");
+        let state = self.read();
         // Receivers normally present no owner key. Once a share is registered,
         // its sender's attribution governs both directions and their controls.
         // An explicit bearer that does not match an active local credential
@@ -169,7 +169,7 @@ impl Service {
         let proof = proof
             .as_ref()
             .map(|result| result.as_deref().map_err(|error| *error));
-        let mut state = self.state.lock().expect("node access state");
+        let mut state = self.write();
         let identity = match state.authorized_identity(share, bearer, proof, now) {
             Ok(identity) => identity,
             Err(AdmissionRefusal::Denied) => return RegistrationDecision::Denied,

@@ -63,19 +63,20 @@ func (s *expiringFileSource) ReleaseLease(ctx context.Context, id content.LeaseI
 }
 
 func TestLeaseReplacementIsolatesCleanupFromDirectoryTransfer(t *testing.T) {
-	oldLease, newLease := testFileLease(1), testFileLease(2)
+	oldLease, newLease, readmittedLease := testFileLease(1), testFileLease(2), testFileLease(3)
 	for _, tc := range []struct {
 		name               string
 		revision, metadata byte
 		timeout            content.LeaseID
 		durable            bool
 		published          uint64
+		opens              byte
 		releases           []content.LeaseID
 	}{
-		{"same descriptor", 1, 1, oldLease, true, 2, []content.LeaseID{oldLease, newLease}},
-		{"metadata permits readmission", 2, 1, newLease, true, 2, []content.LeaseID{oldLease, newLease}},
-		{"metadata changed", 2, 2, newLease, true, 1, []content.LeaseID{newLease, oldLease}},
-		{"output cannot resume", 2, 1, newLease, false, 1, []content.LeaseID{oldLease, newLease}},
+		{"same descriptor", 1, 1, oldLease, true, 2, 2, []content.LeaseID{oldLease, newLease}},
+		{"metadata permits readmission", 2, 1, readmittedLease, true, 2, 3, []content.LeaseID{newLease, oldLease, readmittedLease}},
+		{"metadata changed", 2, 2, newLease, true, 1, 2, []content.LeaseID{newLease, oldLease}},
+		{"output cannot resume", 2, 1, newLease, false, 1, 2, []content.LeaseID{newLease, oldLease}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newSyntheticCapacityFixture(t, 2)
@@ -122,8 +123,8 @@ func TestLeaseReplacementIsolatesCleanupFromDirectoryTransfer(t *testing.T) {
 			if result.Outcome != wantOutcome || result.SucceededFiles != tc.published || result.TerminationCause != nil || receiver.Lifetime().Err() != nil {
 				t.Fatalf("job result=%+v, session=%v", result, receiver.Lifetime().Err())
 			}
-			if source.opens != 2 || !slices.Equal(source.released, tc.releases) {
-				t.Fatalf("target opens=%d releases=%v, want two opens and %v", source.opens, source.released, tc.releases)
+			if source.opens != tc.opens || !slices.Equal(source.released, tc.releases) {
+				t.Fatalf("target opens=%d releases=%v, want %d opens and %v", source.opens, source.released, tc.opens, tc.releases)
 			}
 			if failures := result.RevisionCleanupFailures; len(failures) != 1 || failures[0].FileID != file ||
 				failures[0].Interruption != transfer.TransferInterruptionDeadline || !errors.Is(failures[0].Cause, context.DeadlineExceeded) {

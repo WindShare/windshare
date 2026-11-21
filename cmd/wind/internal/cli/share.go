@@ -15,14 +15,10 @@ import (
 	appobs "github.com/windshare/windshare/engine/observation"
 )
 
-func (a *App) runShare(ctx context.Context, args []string) int {
+func (a *App) runShare(ctx context.Context, args []string) (code int) {
 	request, parse := a.parseShareRequest(args)
 	if parse != requestParseReady {
 		return parse.exitCode()
-	}
-	if err := a.application.ConfigureTURN(request.sharing.TURNSettings()); err != nil {
-		a.writeCompleteLine("share: TURN configuration: %v", err)
-		return ExitUsage
 	}
 	runtime, err := a.newCommandRuntime(clievent.CommandShare, request.observation)
 	if err != nil {
@@ -36,6 +32,15 @@ func (a *App) runShare(ctx context.Context, args []string) int {
 		runtime.FinalizeStaged()
 		runtime.Close()
 	}()
+	closeApp, err := a.ensureApplication(runtime.diagnosticSink())
+	if err != nil {
+		return ExitFailure
+	}
+	defer closeApp(&code)
+	if err := a.application.ConfigureTURN(request.sharing.TURNSettings()); err != nil {
+		a.writeCompleteLine("share: TURN configuration: %v", err)
+		return ExitUsage
+	}
 
 	// Ctrl+C means explicitly stop publishing this share. Its cleanup lifetime
 	// belongs to the engine and therefore outlives this command's canceled wait.

@@ -51,8 +51,8 @@ func (service *commandService) VerifyEmail(_ context.Context, code string) error
 	service.action, service.secret = "verify", code
 	return service.failure
 }
-func (service *commandService) RevokeCredential(_ context.Context, id [16]byte) error {
-	service.action, service.revoked = "revoke", id
+func (service *commandService) RevokeCredential(_ context.Context, accountID string, id [16]byte) error {
+	service.action, service.target, service.revoked = "revoke", accountID, id
 	return service.failure
 }
 
@@ -89,8 +89,8 @@ func TestAccountCommandsDispatchSecretsWithoutEcho(t *testing.T) {
 			if service.action != scenario.action || service.username != scenario.username || service.secret != scenario.secret {
 				t.Fatalf("wrong operation: %+v", service)
 			}
-			if scenario.action == "password" && service.target != activeAccount {
-				t.Fatal("password edit lost its account target")
+			if (scenario.action == "password" || scenario.action == "revoke") && service.target != activeAccount {
+				t.Fatalf("%s lost its account target", scenario.action)
 			}
 			if scenario.action == "revoke" && service.revoked != id {
 				t.Fatal("credential identity changed")
@@ -113,6 +113,12 @@ func TestAccountCommandsRejectInvalidInputBeforeMutation(t *testing.T) {
 		if code := runner.Run(context.Background(), args); code != ResultUsage || service.action != "" {
 			t.Fatalf("invalid command returned %d or mutated account: %v %s", code, args, service.action)
 		}
+	}
+	service := &commandService{value: account.Snapshot{State: account.Pending}}
+	output := &lines{}
+	id := [16]byte{19}
+	if code := (Runner{Service: service, Output: output}).Run(context.Background(), []string{"revoke", base64.RawURLEncoding.EncodeToString(id[:])}); code != ResultFailure || service.action != "" || !strings.Contains(output.String(), "account setup is still pending") {
+		t.Fatalf("pending revoke returned %d action=%q output=%q", code, service.action, output.String())
 	}
 }
 

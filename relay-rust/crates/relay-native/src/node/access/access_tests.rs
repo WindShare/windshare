@@ -388,3 +388,107 @@ fn owner_can_use_all_reserved_shares_beyond_per_principal_limit() {
     drop(guest_shares);
     drop(owner_shares);
 }
+
+#[test]
+fn with_forwarding_allows_concurrent_readers_and_fences_revocation() {
+    use std::sync::{
+        Barrier,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    };
+
+    let (service, ticket, _, _, _) = identity();
+    let attribution = ticket.attribution();
+
+    // Two share actors must enter `with_forwarding` in parallel; an exclusive lock would deadlock.
+    let barrier = Arc::new(Barrier::new(2));
+    let other_service = service.clone();
+    let other_barrier = Arc::clone(&barrier);
+    let peer = std::thread::spawn(move || {
+        other_service
+            .with_forwarding(share(2), attribution, || {
+                other_barrier.wait();
+                true
+            })
+            .unwrap()
+    });
+    assert!(
+        service
+            .with_forwarding(share(1), attribution, || {
+                barrier.wait();
+                true
+            })
+            .unwrap()
+    );
+    assert!(peer.join().unwrap());
+
+    // A restriction write must wait for any in-flight forwarding closure to finish.
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let (revoker_started_tx, revoker_started_rx) = mpsc::channel();
+    let restricted_finished = Arc::new(AtomicBool::new(false));
+
+    let forward_service = service.clone();
+    let forwarder = std::thread::spawn(move || {
+        forward_service.with_forwarding(share(1), attribution, || {
+            entered_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            42
+        })
+    });
+    entered_rx.recv().unwrap();
+
+    let revoke_service = service.clone();
+    let revoke_done = Arc::clone(&restricted_finished);
+    let revoker = std::thread::spawn(move || {
+        let mut restrictions = Restrictions {
+            version: 1,
+            ..Restrictions::default()
+        };
+        restrictions.shares.insert(*share(1).as_bytes());
+        revoker_started_tx.send(()).unwrap();
+        assert!(revoke_service.restrict(ticket.issuer, restrictions));
+        revoke_done.store(true, Ordering::Release);
+    });
+    revoker_started_rx.recv().unwrap();
+
+    // Release the in-flight forwarder and ensure revocation then rejects subsequent forwards.
+    assert!(!restricted_finished.load(Ordering::Acquire));
+    release_tx.send(()).unwrap();
+    assert_eq!(forwarder.join().unwrap(), Some(42));
+    revoker.join().unwrap();
+    assert!(restricted_finished.load(Ordering::Acquire));
+    assert!(
+        service
+            .with_forwarding(share(1), attribution, || unreachable!())
+            .is_none()
+    );
+}
+
+#[test]
+fn expire_quotas_skips_write_lock_until_a_deadline_is_due() {
+    let (service, ticket, _, _, _) = identity();
+    let attribution = ticket.attribution();
+    assert!(service.refresh(ticket.issuer, ticket.account, ticket.entitlement, NOW));
+    // Establish the current day floor once; steady-state ticks within the same day need no writer.
+    service.expire_quotas(NOW);
+    assert_eq!(
+        service.class(attribution, NOW).1,
+        Some(Allowance::Available)
+    );
+
+    // Holding a shared read lock while another thread runs steady-state `expire_quotas`
+    // proves it takes only a shared read lock and never blocks waiting for a writer.
+    let guard = service.read();
+    let peer = service.clone();
+    std::thread::spawn(move || peer.expire_quotas(NOW + 1))
+        .join()
+        .unwrap();
+    drop(guard);
+
+    service.expire_quotas(ticket.entitlement.valid_until);
+    assert_eq!(
+        service.class(attribution, ticket.entitlement.valid_until).1,
+        Some(Allowance::Stale)
+    );
+}

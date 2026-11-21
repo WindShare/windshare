@@ -58,3 +58,44 @@ func TestSenderTraceFollowsAdmissionAndStopsWithoutDiscardingRecords(t *testing.
 		t.Fatalf("stopping trace lost queued evidence: %+v", cut)
 	}
 }
+
+func TestEngineDiagnosticsFollowSenderTraceToggle(t *testing.T) {
+	a, _, _ := fixture(t)
+	stream, err := diagnostics.NewStream(8, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trace := newSenderTrace(stream, false)
+	a.deps.senderTrace = trace
+	engineSink := trace.engineDiagnostics().Bind(diagnostics.Scope{EngineID: "engine-desktop"})
+
+	if engineSink.Enabled() {
+		t.Fatal("engine diagnostics started enabled while trace was off")
+	}
+	on, off := true, false
+	if reply := a.execute(Request{Command: "set_sender_trace", SenderTrace: &on}); reply.Error != nil {
+		t.Fatal(reply.Error)
+	}
+	firstTask := trace.captureSink()
+	if !engineSink.Emit(diagnostics.New("network_frontend_health", diagnostics.Fields{"reachable": diagnostics.Bool(true)})) {
+		t.Fatal("engine diagnostics did not enable with sender trace")
+	}
+	if reply := a.execute(Request{Command: "set_sender_trace", SenderTrace: &off}); reply.Error != nil {
+		t.Fatal(reply.Error)
+	}
+	if engineSink.Enabled() || firstTask.Enabled() {
+		t.Fatal("disabling sender trace left diagnostics active")
+	}
+	if reply := a.execute(Request{Command: "set_sender_trace", SenderTrace: &on}); reply.Error != nil {
+		t.Fatal(reply.Error)
+	}
+	if firstTask.Enabled() {
+		t.Fatal("re-enabling trace reactivated a prior task capture")
+	}
+	if !engineSink.Emit(diagnostics.New("network_directory_refresh", diagnostics.Fields{"stage": diagnostics.Text("accepted")})) {
+		t.Fatal("re-enabling trace did not resume engine diagnostics")
+	}
+	if cut := stream.Close(); cut.Enqueued != 2 {
+		t.Fatalf("expected 2 engine records, got %+v", cut)
+	}
+}

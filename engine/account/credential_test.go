@@ -67,7 +67,7 @@ func TestAnonymousShareKeepsAttributionWhenSetupFinishes(t *testing.T) {
 	if pending.State != serviceauthority.AdmissionPendingSetup {
 		t.Fatal(pending.State)
 	}
-	service.nodes[primary.address] = &nodeState{key: [32]byte{1}, anonymous: true, available: true, expires: config.Now().Add(time.Hour)}
+	service.nodes.put(primary.address, &nodeState{key: [32]byte{1}, anonymous: true, available: true, expires: config.Now().Add(time.Hour)})
 	requireBearer(t, primary, "")
 	select {
 	case <-pending.Changed:
@@ -170,7 +170,7 @@ func TestUnreadableAccountCacheDoesNotBlockEngineOrAssumeAnonymous(t *testing.T)
 	config, _ := accountFixture(t)
 	config.Store = unavailableStore{}
 	service := testService(t, config)
-	service.nodes["node"] = &nodeState{key: [32]byte{1}, anonymous: true, available: true, expires: config.Now().Add(time.Hour)}
+	service.nodes.put("node", &nodeState{key: [32]byte{1}, anonymous: true, available: true, expires: config.Now().Add(time.Hour)})
 	share := service.NewShareAuthorization(t.Context())
 	defer share.Close()
 	source := &Source{share: share, address: "node"}

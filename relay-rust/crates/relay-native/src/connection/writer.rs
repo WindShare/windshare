@@ -80,6 +80,7 @@ impl Writer {
         S::Error: std::error::Error + Send + Sync + 'static,
     {
         let mut probes_open = true;
+        let mut metrics = metrics.recorder();
         loop {
             tokio::select! {
                 biased;

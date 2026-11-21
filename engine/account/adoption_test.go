@@ -150,7 +150,7 @@ func TestDenialSurvivesFailedWriteAndCacheReload(t *testing.T) {
 	}
 	service.mu.Lock()
 	service.adoptLocked(cached)
-	service.nodes["node"] = &nodeState{key: [32]byte{1}, anonymous: true, available: true, expires: config.Now().Add(time.Hour)}
+	service.nodes.put("node", &nodeState{key: [32]byte{1}, anonymous: true, available: true, expires: config.Now().Add(time.Hour)})
 	service.mu.Unlock()
 	newShare := service.NewShareAuthorization(t.Context())
 	defer newShare.Close()
@@ -196,4 +196,107 @@ func TestAdoptionUpdatesRetainedCredentialBeforeLoginChanges(t *testing.T) {
 	if retained != "fresh-ticket" {
 		t.Fatal("login lost the last credential refresh")
 	}
+}
+
+func TestRevokeCredentialSerializesWithOperationAndLocalGates(t *testing.T) {
+	config, issued := accountFixture(t)
+	synctest.Test(t, func(t *testing.T) {
+		config.Store = &MemoryStore{record: cachedRecord(issued)}
+		revoked := make(chan struct{})
+		config.Client = clientFunc(func(request *http.Request) (*http.Response, error) {
+			if request.URL.Path != "/v1/accounts/credentials/revoke" {
+				t.Errorf("unexpected route %s", request.URL.Path)
+			}
+			select {
+			case <-revoked:
+			default:
+				close(revoked)
+			}
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{}`))}, nil
+		})
+		service := testService(t, config)
+		active, _ := service.Snapshot()
+
+		if err := service.lockOperation(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan error, 1)
+		go func() { done <- service.RevokeCredential(t.Context(), active.Account, issued.Credential) }()
+		synctest.Wait()
+		select {
+		case <-revoked:
+			t.Fatal("RevokeCredential bypassed the operation gate")
+		default:
+		}
+
+		// Hold local before releasing operation so revocation must wait before persisting.
+		if err := service.lockLocal(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		<-service.operation
+		synctest.Wait()
+		select {
+		case <-revoked:
+		default:
+			t.Fatal("RevokeCredential did not contact the authority after operation released")
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("RevokeCredential persisted without the local gate: %v", err)
+		default:
+		}
+
+		<-service.local
+		if err := <-done; err != nil {
+			t.Fatalf("RevokeCredential failed: %v", err)
+		}
+		stored, err := service.load(t.Context())
+		if err != nil || stored.Denial != "credential_revoked" {
+			t.Fatalf("revocation not persisted: record=%+v err=%v", stored, err)
+		}
+		if snapshot, _ := service.Snapshot(); snapshot.State != Denied || snapshot.Reason != "credential_revoked" {
+			t.Fatalf("revocation not reflected in snapshot: %+v", snapshot)
+		}
+	})
+}
+
+func TestRequestIssuanceDenialSerializesWithLocalGate(t *testing.T) {
+	config, issued := accountFixture(t)
+	synctest.Test(t, func(t *testing.T) {
+		config.Store = &MemoryStore{record: cachedRecord(issued)}
+		denied := make(chan struct{})
+		config.Client = clientFunc(func(*http.Request) (*http.Response, error) {
+			close(denied)
+			return &http.Response{
+				StatusCode: http.StatusForbidden,
+				Body:       io.NopCloser(strings.NewReader(`{"kind":"denied","reason":"credential_revoked"}`)),
+			}, nil
+		})
+		service := testService(t, config)
+		record := cachedRecord(issued)
+
+		if err := service.lockLocal(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan error, 1)
+		go func() {
+			done <- service.requestIssuance(t.Context(), record, "/v1/accounts/ticket", record.Credential.Secret, struct{}{})
+		}()
+		<-denied
+		synctest.Wait()
+		select {
+		case err := <-done:
+			t.Fatalf("requestIssuance wrote denial without holding the local gate: %v", err)
+		default:
+		}
+
+		<-service.local
+		if err := <-done; CommandErrorCode(err) != "account_denied" {
+			t.Fatalf("expected denial fault, got %v", err)
+		}
+		stored, err := service.load(t.Context())
+		if err != nil || stored.Denial != "credential_revoked" {
+			t.Fatalf("denial not persisted: record=%+v err=%v", stored, err)
+		}
+	})
 }

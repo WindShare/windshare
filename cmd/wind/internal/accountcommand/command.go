@@ -59,7 +59,7 @@ type Service interface {
 	SetPassword(context.Context, string, string, string) error
 	RequestEmail(context.Context, string) error
 	VerifyEmail(context.Context, string) error
-	RevokeCredential(context.Context, [16]byte) error
+	RevokeCredential(context.Context, string, [16]byte) error
 }
 
 type Runner struct {
@@ -174,7 +174,7 @@ func (runner Runner) execute(ctx context.Context, command parsedCommand) error {
 	case "verify":
 		return runner.Service.VerifyEmail(ctx, command.value)
 	case "revoke":
-		return runner.Service.RevokeCredential(ctx, command.credential)
+		return runner.revoke(ctx, command.credential)
 	default:
 		return usageError{message: Usage}
 	}
@@ -226,6 +226,14 @@ func (runner Runner) setPassword(ctx context.Context, username string, stdin boo
 		return err
 	}
 	return runner.Service.SetPassword(ctx, snapshot.Account, username, password)
+}
+
+func (runner Runner) revoke(ctx context.Context, credential [16]byte) error {
+	snapshot, _ := runner.Service.Snapshot()
+	if snapshot.Account == "" {
+		return errors.New("account setup is still pending")
+	}
+	return runner.Service.RevokeCredential(ctx, snapshot.Account, credential)
 }
 
 func (runner Runner) password(ctx context.Context, stdin bool) (string, error) {

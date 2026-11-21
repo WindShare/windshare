@@ -67,6 +67,15 @@ fn credential_commands_project_only_diagnostic_fields() {
             "/account/code",
             "email-code-fixture",
         ),
+        (
+            account(AccountCommand::Revoke {
+                account_id: "target-account".into(),
+                credential: "credential-id-fixture".into(),
+            }),
+            "revoke",
+            "/account/credential",
+            "credential-id-fixture",
+        ),
     ];
     for (command, action, pointer, secret) in cases {
         let fields = command.log_fields();
@@ -76,7 +85,7 @@ fn credential_commands_project_only_diagnostic_fields() {
         assert!(!format!("{fields:?}").contains(secret));
         let request = serde_json::to_value(&command).unwrap();
         assert_eq!(request.pointer(pointer).unwrap(), secret);
-        if action == "password" {
+        if matches!(action, "password" | "revoke") {
             assert_eq!(request["account"]["account_id"], "target-account");
         }
     }

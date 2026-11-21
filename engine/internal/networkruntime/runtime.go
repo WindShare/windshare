@@ -4,13 +4,13 @@ package networkruntime
 
 import (
 	"context"
-	"log/slog"
 	"strconv"
 	"sync"
 	"time"
 
 	"github.com/windshare/windshare/connectivity/networkstate"
 	"github.com/windshare/windshare/connectivity/relayplan"
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/nodedirectory"
 	"github.com/windshare/windshare/core/serviceauthority"
 	"github.com/windshare/windshare/engine/account"
@@ -26,6 +26,7 @@ type Runtime struct {
 	config          networkconfig.Config
 	directory       *networkdirectory.Directory
 	directoryError  error
+	diagnostics     diagnostics.Sink
 	now             func() time.Time
 	monitor         *networkstate.Monitor
 	health          nodeHealth
@@ -38,9 +39,9 @@ type Runtime struct {
 	done            chan struct{}
 }
 
-func New(config *networkconfig.Config, now func() time.Time, selectionSeed string) (*Runtime, error) {
+func New(config *networkconfig.Config, now func() time.Time, selectionSeed string, sink diagnostics.Sink) (*Runtime, error) {
 	ctx, cancel := context.WithCancel(context.Background())
-	r := &Runtime{now: now, selectionSeed: selectionSeed, monitor: networkstate.NewMonitor(nil, networkstate.DefaultDebounce), ctx: ctx, cancel: cancel, done: make(chan struct{})}
+	r := &Runtime{diagnostics: sink, now: now, selectionSeed: selectionSeed, monitor: networkstate.NewMonitor(nil, networkstate.DefaultDebounce), ctx: ctx, cancel: cancel, done: make(chan struct{})}
 	if config == nil {
 		close(r.done)
 		return r, nil
@@ -56,13 +57,14 @@ func New(config *networkconfig.Config, now func() time.Time, selectionSeed strin
 	}
 	directoryConfig := config.Directory
 	directoryConfig.Now = now
+	directoryConfig.Diagnostics = sink
 	var err error
 	r.directory, err = networkdirectory.New(directoryConfig)
 	if err != nil {
 		// Corrupt or inaccessible trust state must fail closed for directory use,
 		// without taking the user's independently configured relays down with it.
 		r.directoryError = err
-		slog.Warn("network_directory_initialization_failed", "error", err)
+		r.emitDirectoryInitFailure(directoryConfig.Network, err)
 	}
 	if config.Authority != nil {
 		authority := *config.Authority

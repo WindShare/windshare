@@ -78,14 +78,47 @@ func TestFileBackendNamespaceFailuresRemainUnpublished(t *testing.T) {
 		defer backend.Destroy()
 		transaction := preparedEmptyFileTransaction(t, backend, share, 86)
 		target := backend.directoryPath(transaction.directory)
-		if err := os.RemoveAll(transaction.pagesPath); err != nil {
-			t.Fatal(err)
+		syncFault := errors.New("injected directory sync failure")
+		backend.syncDir = func(path string) error {
+			if path == transaction.pagesPath {
+				return syncFault
+			}
+			return nil
 		}
-		if _, err := transaction.Publish(context.Background()); err == nil {
-			t.Fatal("publication ignored a missing staged page namespace")
+		if _, err := transaction.Publish(context.Background()); !errors.Is(err, syncFault) {
+			t.Fatalf("publication ignored staged page directory sync failure: %v", err)
 		}
 		if _, err := os.Stat(target); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("failed publication exposed target: %v", err)
+		}
+		if err := transaction.Abort(); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("publication committed directory sync rollback", func(t *testing.T) {
+		backend, err := NewFileCatalogBackend(FileCatalogBackendConfig{Root: t.TempDir(), ShareInstance: share})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer backend.Destroy()
+		transaction := preparedEmptyFileTransaction(t, backend, share, 89)
+		target := backend.directoryPath(transaction.directory)
+		syncFault := errors.New("injected committed directory sync failure")
+		backend.syncDir = func(path string) error {
+			if path == backend.committedDir {
+				return syncFault
+			}
+			return nil
+		}
+		if _, err := transaction.Publish(context.Background()); !errors.Is(err, syncFault) {
+			t.Fatalf("publication ignored committed directory sync failure: %v", err)
+		}
+		if _, err := os.Stat(target); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("rolled-back publication exposed target: %v", err)
+		}
+		if _, err := os.Stat(transaction.path); err != nil {
+			t.Fatalf("rolled-back staging transaction disappeared: %v", err)
 		}
 		if err := transaction.Abort(); err != nil {
 			t.Fatal(err)

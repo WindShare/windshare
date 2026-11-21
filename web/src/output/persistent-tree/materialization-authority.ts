@@ -23,6 +23,7 @@ import {
   type FileCheckpointV2,
 } from '../persistence/checkpoint'
 import type { CheckpointLineageDecision, FileCheckpointJournal } from '../persistence/journal'
+import { canShortCircuitCompletedFile } from '../persistence/source-admission'
 import type { PerformanceFilePipelineObservation } from '../../diagnostics/performance/performance-runtime-observations'
 import { snapshotMaterializationRootRelativePath, type MaterializationRootRelativePath } from '../../transfer/job/coordinate/direct-tree'
 import type {
@@ -233,11 +234,18 @@ function completedCheckpointMatchesRequest(
   expectedSize: bigint | undefined,
   path: MaterializationRootRelativePath,
 ): boolean {
-  return committed.fileId === fileId &&
-    committed.commitState === FILE_CHECKPOINT_COMMIT_VERIFIED && committed.checkpointGeneration > 0n &&
-    (committed.phase === FILE_CHECKPOINT_PHASE_ACTIVE || committed.phase === FILE_CHECKPOINT_PHASE_PAUSED) &&
-    fileCheckpointIsComplete(committed) &&
-    (expectedSize === undefined || committed.exactSize === expectedSize) &&
-    committed.canonicalPath.length === path.length &&
-    committed.canonicalPath.every((segment, index) => segment === path[index])
+  return canShortCircuitCompletedFile({
+    requestFileId: fileId,
+    requestExpectedSize: expectedSize,
+    retainedFileId: committed.fileId,
+    retainedExactSize: committed.exactSize,
+    locallyComplete:
+      committed.commitState === FILE_CHECKPOINT_COMMIT_VERIFIED &&
+      committed.checkpointGeneration > 0n &&
+      (committed.phase === FILE_CHECKPOINT_PHASE_ACTIVE || committed.phase === FILE_CHECKPOINT_PHASE_PAUSED) &&
+      fileCheckpointIsComplete(committed),
+    coordinateMatches:
+      committed.canonicalPath.length === path.length &&
+      committed.canonicalPath.every((segment, index) => segment === path[index]),
+  })
 }

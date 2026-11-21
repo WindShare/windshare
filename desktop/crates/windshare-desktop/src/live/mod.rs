@@ -1,26 +1,16 @@
-mod account;
-mod account_view;
 mod application;
-pub use account::{AccountAction, AccountForm, AccountPage, EmailPurpose};
-pub use network_settings::setting_row;
-pub use projection::byte_size;
 mod blocking;
 mod presentation;
 mod projection;
 mod quit;
-mod registration;
-mod relay_preferences;
 mod selection;
 mod session;
-mod setup;
-mod setup_feedback;
-pub use setup::{SetupForm, SetupPage};
-mod network_settings;
-mod setup_view;
+
+pub use projection::byte_size;
+pub use session::{PREVIEW_DEFAULT_FRONTEND, Runtime};
 
 use crate::desktop::Desktop;
 use gpui::{AppContext, Bounds, TitlebarOptions, WindowBounds, WindowOptions, px, size};
-pub use session::Runtime;
 use windshare_activation::Activation;
 use windshare_host::Controller;
 

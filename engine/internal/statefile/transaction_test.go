@@ -15,19 +15,19 @@ func TestRecoveryCompletesSettingsAndOperationRemovalBeforeImport(t *testing.T) 
 			path := filepath.Join(t.TempDir(), "config.json")
 			record := "setup/operation.json"
 			tx := &Transaction{path: path}
-			if err := Write(path, []byte("before")); err != nil {
+			if err := Write(t.Context(), path, []byte("before")); err != nil {
 				t.Fatal(err)
 			}
 			journal, _ := tx.location(record)
-			if err := Write(journal, []byte("installing")); err != nil {
+			if err := Write(t.Context(), journal, []byte("installing")); err != nil {
 				t.Fatal(err)
 			}
 			changes := []mutation{{Name: Settings, Data: []byte("installed")}, {Name: record, Delete: true}}
 			data, _ := json.Marshal(changes)
-			if err := Write(filepath.Join(StateDirectory(path), commitName), data); err != nil {
+			if err := Write(t.Context(), filepath.Join(StateDirectory(path), commitName), data); err != nil {
 				t.Fatal(err)
 			}
-			if err := tx.apply(changes[:applied]); err != nil {
+			if err := tx.apply(t.Context(), changes[:applied]); err != nil {
 				t.Fatal(err)
 			}
 			// Each prefix models a process exit after a durable commit step.
@@ -98,7 +98,7 @@ func TestTransactionCommitsCheckpointAndInstallation(t *testing.T) {
 func TestRejectedTransactionAndCancelledLockDoNotPublish(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	original := []byte("original")
-	if err := Write(path, original); err != nil {
+	if err := Write(t.Context(), path, original); err != nil {
 		t.Fatal(err)
 	}
 	failure := errors.New("rejected")
@@ -131,11 +131,11 @@ func TestInvalidRecoveryLogCannotEscapeOrPartiallyApply(t *testing.T) {
 		{{Name: Settings, Delete: true}, {Name: "setup/a.json", Delete: true}},
 	} {
 		path := filepath.Join(t.TempDir(), "config.json")
-		if err := Write(path, []byte("original")); err != nil {
+		if err := Write(t.Context(), path, []byte("original")); err != nil {
 			t.Fatal(err)
 		}
 		data, _ := json.Marshal(changes)
-		if err := Write(filepath.Join(StateDirectory(path), commitName), data); err != nil {
+		if err := Write(t.Context(), filepath.Join(StateDirectory(path), commitName), data); err != nil {
 			t.Fatal(err)
 		}
 		if err := Transact(t.Context(), path, func(*Transaction) error { t.Fatal("invalid commit admitted reader"); return nil }); err == nil {
@@ -183,7 +183,7 @@ func TestFailedPublicationKeepsRecoveryIntent(t *testing.T) {
 
 func TestOrdinarySettingsReadRequiresNoWritableState(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
-	if err := Write(path, []byte("settings")); err != nil {
+	if err := Write(t.Context(), path, []byte("settings")); err != nil {
 		t.Fatal(err)
 	}
 	data, err := ReadSettings(t.Context(), path)

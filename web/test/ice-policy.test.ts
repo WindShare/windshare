@@ -3,7 +3,17 @@ import { describe, expect, it } from 'vitest'
 import { CandidateBudget } from '../src/connectivity/ice-policy/candidates'
 import { ICEEndpointPool, selectAttemptProfile, type ICEEndpoint, type SelectionRequest } from '../src/connectivity/ice-policy/endpoints'
 import { ICEFactStore } from '../src/connectivity/ice-policy/facts'
-import { defaultICEEndpointPool } from '../src/connectivity/ice-policy/defaults'
+import {
+ CLOUDFLARE_STUN_SERVER,
+ DIRECTORY_NODE_STUN_PRIORITY,
+ DIRECTORY_PUBLIC_STUN_PRIORITY,
+ EXISTING_DEFAULT_STUN_SERVER,
+ FALLBACK_STUN_PRIORITY,
+ defaultICEEndpointPool,
+ directoryICEEndpointPool,
+} from '../src/connectivity/ice-policy/defaults'
+import type { NetworkSnapshot } from '../src/network/node-directory'
+import { canonicalSTUN } from '../src/network/stun-endpoint'
 
 const request: SelectionRequest = {
  networkGenerationID: 'network', waveID: 'wave', sequence: 1, nowMs: 100_000,
@@ -36,7 +46,7 @@ describe('trusted ICE policy', () => {
   const facts = new ICEFactStore('network')
   expect(facts.recordEndpointFailure(first, 'unknown', request.nowMs)).toBe(false)
   expect(facts.recordEndpointFailure(first, '0', request.nowMs)).toBe(true)
-  facts.recordProfile(first, true, 12, request.nowMs)
+  facts.recordProfile(first, true, request.nowMs)
   expect(selectAttemptProfile(directory, request, facts.snapshot()).endpointIDs[0]).toBe('1')
   facts.setGeneration('next')
   expect(facts.snapshot().endpoints).toEqual([])
@@ -69,5 +79,66 @@ describe('trusted ICE policy', () => {
   expect(flood.acceptMapped('candidate:6 1 udp 100 192.0.2.55 6000 typ srflx')).toEqual({
    accepted: true, reason: 'accepted', candidateClass: 'mapped',
   })
+ })
+ it('keeps the public STUN candidate catalog canonical, unreviewed, and inactive', () => {
+  const entries = JSON.parse(readFileSync(new URL('../../deploy/network/public-stun-candidates.json', import.meta.url), 'utf8')) as ICEEndpoint[]
+  expect(entries.length).toBeGreaterThan(0)
+  const candidatePool = new ICEEndpointPool(entries)
+  const urls = new Set<string>()
+  for (const entry of entries) {
+   expect(canonicalSTUN(entry.url)).toBe(entry.url)
+   expect(urls.has(entry.url)).toBe(false)
+   urls.add(entry.url)
+   expect(entry.trust).toBe('unreviewed')
+   expect(entry.enabled).toBe(false)
+  }
+  expect(selectAttemptProfile(candidatePool, request).urls).toEqual([])
+ })
+ it('prioritizes signed directory STUN endpoints ahead of embedded fallbacks', () => {
+  const snapshot: NetworkSnapshot = {
+   cursor: { generation: 1, serial: 3, digest: 'digest' },
+   nodes: [
+    { alias: 'cn1', nodeKey: 'key-cn1', relay: 'https://cn1.example', identity: 'https://cn1.example', stun: ['stun:cn1.example:3478'], roles: ['relay', 'stun'], zone: 'cn', region: 'cn-wuhan', provider: 'aliyun', operator: 'official', capacityMbps: 200, status: 'active' },
+    { alias: 'us1', nodeKey: 'key-us1', relay: 'https://us1.example', identity: 'https://us1.example', stun: ['stun:us1.example:3478'], roles: ['relay', 'stun'], zone: 'global', region: 'us-los-angeles', provider: 'quickpacket', operator: 'official', capacityMbps: 100, status: 'active' },
+    { alias: 'draining', nodeKey: 'key-dr', relay: 'https://dr.example', identity: 'https://dr.example', stun: ['stun:draining.example:3478'], roles: ['stun'], zone: 'global', region: 'jp-tokyo', provider: 'other', operator: 'official', capacityMbps: 50, status: 'draining' },
+    { alias: 'relay-only', nodeKey: 'key-ro', relay: 'https://ro.example', identity: 'https://ro.example', stun: ['stun:ignored.example:3478'], roles: ['relay'], zone: 'global', region: 'de-frankfurt', provider: 'other', operator: 'official', capacityMbps: 50, status: 'active' },
+   ],
+   publicSTUN: [
+    { url: CLOUDFLARE_STUN_SERVER, region: 'global', provider: 'cloudflare', failureDomain: 'directory-cloudflare' },
+    { url: 'stun:cn-public.example:3478', region: 'cn', provider: 'tencent', failureDomain: 'tencent-stun' },
+   ],
+   notBefore: 0,
+   trustedUntil: 1_000_000,
+   envelope: '{}',
+  }
+  const directoryPool = directoryICEEndpointPool(snapshot)
+  const byURL = new Map(directoryPool.endpoints.map(endpoint => [endpoint.url, endpoint]))
+  expect(byURL.has('stun:draining.example:3478')).toBe(false)
+  expect(byURL.has('stun:ignored.example:3478')).toBe(false)
+  expect(byURL.get('stun:cn1.example:3478')?.priority).toBe(DIRECTORY_NODE_STUN_PRIORITY)
+  expect(byURL.get(CLOUDFLARE_STUN_SERVER)).toMatchObject({
+   priority: DIRECTORY_PUBLIC_STUN_PRIORITY,
+   failureDomain: 'directory-cloudflare',
+   region: 'global',
+  })
+  expect(byURL.get(EXISTING_DEFAULT_STUN_SERVER)?.priority).toBe(FALLBACK_STUN_PRIORITY)
+  for (let i = 0; i < 16; i++) {
+   const waveRequest: SelectionRequest = { ...request, waveID: `wave-${i}` }
+   const primary = selectAttemptProfile(directoryPool, waveRequest)
+   expect(new Set(primary.urls)).toEqual(new Set(['stun:cn1.example:3478', 'stun:us1.example:3478']))
+   const backup = selectAttemptProfile(directoryPool, {
+    ...waveRequest, sequence: waveRequest.sequence + 1,
+    usedEndpointIDs: primary.endpointIDs, usedFailureDomains: primary.failureDomains,
+   })
+   expect(new Set(backup.urls)).toEqual(new Set(['stun:cn-public.example:3478', CLOUDFLARE_STUN_SERVER]))
+  }
+  const facts = new ICEFactStore(request.networkGenerationID)
+  const primary = selectAttemptProfile(directoryPool, request)
+  const backup = selectAttemptProfile(directoryPool, {
+   ...request, sequence: request.sequence + 1,
+   usedEndpointIDs: primary.endpointIDs, usedFailureDomains: primary.failureDomains,
+  })
+  facts.recordProfile(backup, true, request.nowMs)
+  expect(selectAttemptProfile(directoryPool, request, facts.snapshot()).urls).toEqual(backup.urls)
  })
 })

@@ -206,8 +206,8 @@ type RevisionClient interface {
 
 type RangeReader interface {
 	// A direct RevisionReopenedError fences reads of the previous descriptor.
-	// When its comparison allows reuse, the same handle owns the current
-	// descriptor for a new output admission until ReleaseRevision.
+	// Each handle remains bound to its opened descriptor until ReleaseRevision;
+	// readmission acquires a fresh handle through RevisionClient.OpenRevision.
 	ReadRange(context.Context, RevisionHandle, content.FileRevisionDescriptor, content.Range, RangeSink) error
 }
 

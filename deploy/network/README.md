@@ -40,3 +40,5 @@ Public STUN fallbacks: the existing Google endpoint,
 [Cloudflare](https://developers.cloudflare.com/realtime/turn/), and
 [Twilio](https://www.twilio.com/docs/stun-turn/api). Provider diversity is known;
 mainland reachability and peak-hour measurements remain to be collected on the real fleet.
+`public-stun-candidates.json` holds an unreviewed, disabled `icepolicy` candidate
+catalog for future measurement and promotion; it is not embedded or dialed by clients.

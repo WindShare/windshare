@@ -23,11 +23,24 @@ func (r *jobRun) transferPlannedFile(ctx context.Context, plan plannedFile) erro
 		if retry == nil {
 			return err
 		}
-		// The paused transaction handed back the same handle with its already
-		// acquired revision. Recheck the catalog before opening the new output.
-		opened.Descriptor = retry.reopened.Current()
-		opened, stage, err = r.admitOpenedRevision(ctx, plan, opened, nil)
+		opened, stage, err = r.openReadmittedRevision(ctx, plan, retry)
 	}
+}
+
+func (r *jobRun) openReadmittedRevision(
+	ctx context.Context, plan plannedFile, retry *fileRevisionRetry,
+) (OpenedRevision, FailureStage, error) {
+	opened, stage, err := r.openSelectedRevision(ctx, plan)
+	if err != nil {
+		return OpenedRevision{}, stage, err
+	}
+	reopened := content.NewRevisionReopenedError(retry.reopened.Previous(), opened.Descriptor)
+	retry.reopened = reopened
+	if !reopened.Comparison().AllowsReuse() {
+		r.releaseRevision(ctx, plan, opened.Handle)
+		return OpenedRevision{}, FailureRevisionOpen, normalizeSourceBoundary(ctx, reopened)
+	}
+	return opened, 0, nil
 }
 
 func (r *jobRun) transferFileAttempt(
@@ -124,11 +137,21 @@ func (r *jobRun) reconcileImmediateSettlementCoverage(
 	if retry == nil {
 		return nil
 	}
-	if _, reason, blocked := settlement.ItemBlock(); blocked &&
-		(reason == ItemBlockOwnedObjectUnknown || reason == ItemBlockOwnershipUnknown) {
-		// The pause proved durable coverage at the time. The new
-		// ownership result withdraws it for this file alone.
+	switch settlement.Kind() {
+	case FileCollision:
+		// Destination occupation is reversible; the paused staged partial and
+		// its durable coverage remain intact for retry once the path is cleared.
+	case FileItemBlocked, FileFailed:
+		// The pause proved coverage at the time, but this terminal settlement
+		// withdraws any reusable partial for this file alone.
 		r.reconcileFileCoverage(retry, content.RangeSet{}, 0, 0)
+	case FilePreviouslyPublished:
+		// Withdraw prior partial credit before acceptFileSettlement records
+		// historical delivery so CompletedBytes never double-counts this file.
+		r.reconcileFileCoverage(retry, content.RangeSet{}, 0, 0)
+		return nil
+	default:
+		return outputContractFault(ErrOutputContract)
 	}
 	r.traceFileRevisionRetry(plan, retry.reopened, "admission-blocked", retry.progress.persistedBytes, 0, retry.started)
 	return nil
@@ -254,7 +277,8 @@ func (r *jobRun) settleReopenedRevision(
 		reason, decision = FilePauseRevisionReopened, "readmit"
 	}
 	// The range reader has drained before returning, and no output call remains
-	// active. A durable pause is required before handing the lease to a new writer.
+	// active. A durable pause is required before releasing the old handle and
+	// readmitting the file under a fresh revision handle.
 	settlement, err := r.pauseFileTransaction(ctx, transaction, reason, progress)
 	if err != nil {
 		decision = "settlement-failed"
@@ -271,6 +295,8 @@ func (r *jobRun) settleReopenedRevision(
 		}
 	}
 	r.traceFileRevisionRetry(plan, reopened, decision, progress.persistedBytes, 0, started)
+	// Every attempt owns and releases its own immutable RevisionHandle.
+	r.releaseRevision(ctx, plan, opened.Handle)
 	if err == nil && settlement.Kind() == FilePaused && decision == "readmit" {
 		return &fileRevisionRetry{
 			reopened: reopened, progress: *progress, settlement: settlement, started: started,
@@ -278,7 +304,6 @@ func (r *jobRun) settleReopenedRevision(
 		}, nil
 	}
 
-	r.releaseRevision(ctx, plan, opened.Handle)
 	r.recordFileFailure(FileJobFailure{
 		FileID: plan.file, Path: plan.failurePath(), Stage: FailureBlockTransfer, Cause: cause,
 		Settlement: settlement, SettlementFailure: err,

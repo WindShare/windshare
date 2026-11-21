@@ -77,19 +77,10 @@ impl Desktop {
             }
             Action::ConfigureShare(id) => self.configure_share(id, window, cx),
             Action::OpenAccount => self.open_account(window, cx),
-            Action::OpenAccountModal(page) => self.open_account_modal(page, window, cx),
-            Action::CopyAccountUid => self.copy_account_uid(cx),
-            Action::Account(action) => self.account_action(action, window, cx),
-            Action::OpenSetupModal(page) => self.open_setup_modal(page, window, cx),
             Action::ChooseShareRelays(id) => self.open_sharing_setup(Some(id), window, cx),
-            Action::SetupPage(page) => self.edit_setup_page(page, window, cx),
             Action::SettingsSection(section) => self.select_settings_section(section, window, cx),
-            Action::ReturnToSharingSetup => self.return_to_sharing_setup(window, cx),
-            Action::SaveSharingSetup(id) => self.save_sharing_setup(id, window, cx),
             Action::ResumeShare(id) => self.resume_native_share(id),
             Action::UseSavedSettings(id) => self.use_saved_settings(id),
-            Action::CancelSharingSetup => self.cancel_sharing_setup(),
-            Action::ApproveRelay => self.approve_relay(cx),
             Action::ToggleShare(id) => self.toggle_preview_share(id),
             Action::ToggleTransfer(index) => self.toggle_preview_transfer(index),
             Action::ToggleSetting(index) => {
@@ -219,29 +210,7 @@ impl Desktop {
         Self::schedule_copy_feedback_reset(revision, cx);
     }
 
-    fn copy_account_uid(&mut self, cx: &Context<Self>) {
-        let Some(uid) = self
-            .account_view()
-            .map(|view| view.status.account.clone())
-            .filter(|uid| !uid.is_empty())
-        else {
-            return;
-        };
-        cx.write_to_clipboard(ClipboardItem::new_string(uid));
-        let revision = self.next_operation();
-        self.copy_feedback = CopyFeedback::Copied {
-            target: CopyTarget::AccountUid,
-            revision,
-        };
-        tracing::info!(
-            event = "account.uid_copied",
-            session = std::process::id(),
-            operation = revision,
-        );
-        Self::schedule_copy_feedback_reset(revision, cx);
-    }
-
-    fn schedule_copy_feedback_reset(revision: usize, cx: &Context<Self>) {
+    pub(crate) fn schedule_copy_feedback_reset(revision: usize, cx: &Context<Self>) {
         cx.spawn(async move |view, cx| {
             cx.background_executor()
                 .timer(Duration::from_millis(COPY_FEEDBACK_MS))
@@ -249,6 +218,7 @@ impl Desktop {
             let _ = view.update(cx, |this, cx| {
                 if matches!(this.copy_feedback, CopyFeedback::Copied { revision: current, .. } if current == revision) {
                     this.copy_feedback = CopyFeedback::Idle;
+                    this.sync_account_dialog_uid_copied(false, cx);
                     cx.notify();
                 }
             });

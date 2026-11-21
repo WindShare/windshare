@@ -56,6 +56,7 @@ type FileCatalogBackend struct {
 	failuresDir  string
 	share        ShareInstance
 	faults       FileBackendFaults
+	syncDir      func(string) error
 	closed       bool
 	nodeIndexes  map[DirectoryID]fileNodeIndex
 }

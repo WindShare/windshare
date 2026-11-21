@@ -42,7 +42,7 @@ type ReceiveProgressSnapshot struct {
 	VerifiedBytes            uint64
 	NewlyVerifiedBytes       uint64
 	// RestartReusableBytes counts persisted partial ranges backed by the last
-	// confirmed output state. A later ownership block can withdraw that evidence.
+	// confirmed output state. A later non-resumable settlement can withdraw that evidence.
 	RestartReusableBytes uint64
 	FileOutcomes         FileOutcomeSummary
 	CapacityWait         revisionwait.Snapshot

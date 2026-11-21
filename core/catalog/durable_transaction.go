@@ -369,16 +369,16 @@ func (t *fileCatalogTransaction) Publish(ctx context.Context) (CommittedDirector
 	// lets a failed parent-directory sync roll the rename back without exposing a
 	// generation which the caller was told had failed.
 	for _, path := range []string{t.pagesPath, t.path} {
-		if err := syncCatalogDirectory(path); err != nil {
+		if err := t.backend.syncDirectory(path); err != nil {
 			return CommittedDirectory{}, fmt.Errorf("sync catalog transaction directory: %w", err)
 		}
 	}
 	if err := dirpublish.Rename(ctx, t.path, target); err != nil {
 		return CommittedDirectory{}, fmt.Errorf("publish catalog generation: %w", err)
 	}
-	if err := syncCatalogDirectory(t.backend.committedDir); err != nil {
+	if err := t.backend.syncDirectory(t.backend.committedDir); err != nil {
 		if rollbackErr := os.Rename(target, t.path); rollbackErr == nil {
-			_ = syncCatalogDirectory(t.backend.committedDir)
+			_ = t.backend.syncDirectory(t.backend.committedDir)
 			return CommittedDirectory{}, fmt.Errorf("sync catalog publication: %w", err)
 		}
 		// A complete target is already the authoritative state if the namespace

@@ -8,11 +8,25 @@ import (
 )
 
 // Application.mu serializes capture changes with share admission. Tasks get
-// one sink for their admission so routine shares avoid installing observers.
+// one sink for their admission so routine shares avoid installing observers,
+// while engine-scoped infrastructure follows the active trace toggle.
 type senderTrace struct {
-	stream *diagnostics.Stream
-	sink   diagnostics.Sink
-	stop   func()
+	stream     *diagnostics.Stream
+	sink       diagnostics.Sink
+	stop       func()
+	engineSink diagnostics.Sink
+	setEngine  func(bool)
+}
+
+func newSenderTrace(stream *diagnostics.Stream, enabled bool) *senderTrace {
+	t := &senderTrace{stream: stream}
+	if stream != nil {
+		t.engineSink, t.setEngine = stream.Controlled(enabled)
+	}
+	if enabled && stream != nil {
+		t.sink, t.stop = stream.Capture()
+	}
+	return t
 }
 
 func (t *senderTrace) state() SenderTraceState {
@@ -33,6 +47,13 @@ func (t *senderTrace) captureSink() diagnostics.Sink {
 	return t.sink
 }
 
+func (t *senderTrace) engineDiagnostics() diagnostics.Sink {
+	if t == nil {
+		return diagnostics.Sink{}
+	}
+	return t.engineSink
+}
+
 func (t *senderTrace) setEnabled(enabled bool) bool {
 	if enabled == (t.stop != nil) {
 		return false
@@ -42,6 +63,9 @@ func (t *senderTrace) setEnabled(enabled bool) bool {
 	} else {
 		t.stop()
 		t.sink, t.stop = diagnostics.Sink{}, nil
+	}
+	if t.setEngine != nil {
+		t.setEngine(enabled)
 	}
 	return true
 }

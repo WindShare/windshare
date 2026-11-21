@@ -94,6 +94,16 @@ impl Quotas {
         true
     }
 
+    pub(super) fn needs_retire(&self, day: u64, now: u64) -> bool {
+        let day_floor = self.day_floor.max(day).max(now / DAY_SECONDS);
+        let effective_now = now.max(day_floor.saturating_mul(DAY_SECONDS));
+        day_floor > self.day_floor
+            || self
+                .deadlines
+                .first()
+                .is_some_and(|&(deadline, _)| deadline <= u128::from(effective_now))
+    }
+
     pub(super) fn retire_before(&mut self, day: u64, now: u64) -> usize {
         self.day_floor = self.day_floor.max(day).max(now / DAY_SECONDS);
         let now = now.max(self.day_floor.saturating_mul(DAY_SECONDS));

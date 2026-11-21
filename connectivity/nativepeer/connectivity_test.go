@@ -215,7 +215,7 @@ func TestProfileFactsComeFromProviderCandidatesWithoutInventedEndpointSuccess(t 
 	emit(pionpeer.Event{At: h.now.Add(time.Second), Candidate: &pionpeer.CandidateFacts{Type: "host"}})
 	emit(pionpeer.Event{At: h.now.Add(2 * time.Second), Candidate: &pionpeer.CandidateFacts{Type: "srflx", Origin: "ordinary"}})
 	facts := h.native.facts.Snapshot()
-	if len(facts.Endpoints) != 0 || len(facts.Profiles) != 1 || !facts.Profiles[0].ServerReflexiveProduced || facts.Profiles[0].FirstCandidateDelay != 2*time.Second {
+	if len(facts.Endpoints) != 0 || len(facts.Profiles) != 1 || !facts.Profiles[0].ServerReflexiveProduced {
 		t.Fatal(facts)
 	}
 }

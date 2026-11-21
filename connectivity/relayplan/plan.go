@@ -20,19 +20,40 @@ const (
 var ErrConfiguration = errors.New("invalid relay plan")
 
 type Candidate struct {
-	URL           string
-	Identity      string
-	Alias         string
-	Zone          string
-	Region        string
-	Provider      string
-	Operator      string
-	history       registrationHistory
-	CapacityMbps  uint32
-	Canary        bool
-	Configured    bool
-	CooldownUntil time.Time
-	ServerRetryAt time.Time
+	URL              string
+	Identity         string
+	Alias            string
+	Zone             string
+	Region           string
+	Provider         string
+	Operator         string
+	history          registrationHistory
+	ObservedDuration time.Duration
+	CapacityMbps     uint32
+	Canary           bool
+	Configured       bool
+	CooldownUntil    time.Time
+	ServerRetryAt    time.Time
+}
+
+// ObservedHandshake returns the recent admitted handshake duration used for
+// ranking, reporting false when the candidate was unmeasured or last failed.
+func (c Candidate) ObservedHandshake() (time.Duration, bool) {
+	if c.history != recentlyAdmitted {
+		return 0, false
+	}
+	return max(c.ObservedDuration, 0), true
+}
+
+func (c Candidate) HistoryState() string {
+	switch c.history {
+	case recentlyAdmitted:
+		return "admitted"
+	case recentlyFailed:
+		return "failed"
+	default:
+		return "unmeasured"
+	}
 }
 
 type registrationHistory int8
@@ -163,6 +184,7 @@ func Build(input Input) (Plan, error) {
 			candidate.history = recentlyFailed
 			if fact.Admitted {
 				candidate.history = recentlyAdmitted
+				candidate.ObservedDuration = max(fact.Duration, 0)
 			}
 		}
 		if !fact.CooldownUntil.IsZero() || !fact.ServerRetryAt.IsZero() {

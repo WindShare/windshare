@@ -22,4 +22,7 @@ func TestRenamePublishesStagedFiles(t *testing.T) {
 	if err != nil || string(data) != "complete" {
 		t.Fatalf("published index = %q, %v", data, err)
 	}
+	if err := SyncDir(root); err != nil {
+		t.Fatalf("SyncDir(root) = %v", err)
+	}
 }

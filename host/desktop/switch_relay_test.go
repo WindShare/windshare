@@ -206,3 +206,131 @@ func TestRelayRecoveryCommandsLeavePublishedTaskRunning(t *testing.T) {
 		t.Fatal("recovery changed the selection of a published share")
 	}
 }
+
+func TestSwitchRelayValidatesAgainstCurrentDiskSettings(t *testing.T) {
+	t.Run("accepts saved relay without prior preferences load", func(t *testing.T) {
+		a, original, starts := fixture(t)
+		original.state.Startup = engine.ShareAwaitingAuthorization
+		original.state.Authorization = &engine.ShareAuthorization{Kind: engine.ShareOfficialAuthorization}
+		saved := configured()
+		address := saved.ActiveRelays[0]
+		saved.ActiveRelays = nil
+		a.deps.load = func() (relayconfig.Config, error) { return saved, nil }
+
+		replacement := &fakeShare{
+			id: "engine:2", state: engine.ShareSnapshot{State: engine.TaskRunning},
+			events: make(chan engine.Observation), changed: make(chan struct{}), done: make(chan struct{}),
+		}
+		closeOriginal := a.deps.close
+		a.deps.close = func(ctx context.Context) error { replacement.finish(); return closeOriginal(ctx) }
+		requests := make(chan engine.ShareRequest, 1)
+		a.deps.start = func(_ context.Context, request engine.ShareRequest) (shareTask, error) {
+			if starts.Add(1) == 1 {
+				return original, nil
+			}
+			requests <- request
+			return replacement, nil
+		}
+
+		create := createRequest()
+		a.execute(create)
+		awaitShare(t, a, create.OperationID, func(s Share) bool { return s.State == AwaitingAuthorization })
+
+		reply := a.execute(Request{Command: "switch_relay", OperationID: create.OperationID, RelayURL: address})
+		if reply.Error != nil || reply.Snapshot.Shares[0].State != Admitting {
+			t.Fatalf("switch without prior preferences load failed: %+v", reply)
+		}
+		original.finish()
+		awaitShare(t, a, create.OperationID, func(s Share) bool { return s.TaskID == string(replacement.ID()) })
+		request := <-requests
+		if candidates := request.RelayIntent.Candidates(); len(candidates) != 1 || candidates[0].PublicURL != address {
+			t.Fatalf("replacement did not use disk-saved relay: %+v", request.RelayIntent)
+		}
+	})
+
+	t.Run("rejects relay removed from disk and refreshes preferences", func(t *testing.T) {
+		a, original, starts := fixture(t)
+		original.state.Startup = engine.ShareAwaitingAuthorization
+		original.state.Authorization = &engine.ShareAuthorization{Kind: engine.ShareOfficialAuthorization}
+		saved := configured()
+		address := saved.ActiveRelays[0]
+		saved.ActiveRelays = nil
+		current := saved
+		a.deps.load = func() (relayconfig.Config, error) { return current, nil }
+
+		a.execute(Request{Command: "preferences"})
+		create := createRequest()
+		a.execute(create)
+		awaitShare(t, a, create.OperationID, func(s Share) bool { return s.State == AwaitingAuthorization })
+
+		current = relayconfig.Config{FrontURL: saved.FrontURL}
+		reply := a.execute(Request{Command: "switch_relay", OperationID: create.OperationID, RelayURL: address})
+		if reply.Error == nil {
+			t.Fatal("removed relay was accepted from stale cached preferences")
+		}
+		if original.Snapshot().State != engine.TaskRunning || starts.Load() != 1 {
+			t.Fatal("rejected switch cancelled or replaced the waiting share")
+		}
+		if len(a.snapshot().Preferences.Relays) != 0 {
+			t.Fatalf("preferences were not refreshed after stale rejection: %+v", a.snapshot().Preferences.Relays)
+		}
+	})
+}
+
+func TestSwitchRelayAdmitsRepeatedAwaitingAuthorizationShare(t *testing.T) {
+	a, original, starts := fixture(t)
+	original.finish()
+	original.state.Startup = engine.ShareStartupFailed
+	original.state.Result.Outcome = engine.OutcomeFailed
+	original.state.Authorization = &engine.ShareAuthorization{Kind: engine.ShareOfficialAuthorization}
+
+	saved := configured()
+	address := saved.ActiveRelays[0]
+	saved.ActiveRelays = nil
+	a.deps.load = func() (relayconfig.Config, error) { return saved, nil }
+
+	create := createRequest()
+	a.execute(create)
+	admitted(t, a)
+
+	repeat := Request{Command: "repeat", OperationID: "repeat:1", SourceOperationID: create.OperationID}
+	if reply := a.execute(repeat); reply.Error != nil {
+		t.Fatal(reply.Error)
+	}
+	repeated := awaitShare(t, a, repeat.OperationID, func(s Share) bool { return s.State == AwaitingAuthorization })
+	if repeated.TaskID != "" {
+		t.Fatalf("repeated authorization share unexpectedly started a task: %+v", repeated)
+	}
+
+	replacement := &fakeShare{
+		id: "engine:2", state: engine.ShareSnapshot{State: engine.TaskRunning},
+		events: make(chan engine.Observation), changed: make(chan struct{}), done: make(chan struct{}),
+	}
+	closeOriginal := a.deps.close
+	a.deps.close = func(ctx context.Context) error { replacement.finish(); return closeOriginal(ctx) }
+	requests := make(chan engine.ShareRequest, 1)
+	a.deps.start = func(_ context.Context, request engine.ShareRequest) (shareTask, error) {
+		starts.Add(1)
+		requests <- request
+		return replacement, nil
+	}
+
+	switchReq := Request{Command: "switch_relay", OperationID: repeat.OperationID, RelayURL: address}
+	reply := a.execute(switchReq)
+	if reply.Error != nil {
+		t.Fatalf("switch on repeated awaitingAuthorization failed: %+v", reply.Error)
+	}
+	// Replays after admission must remain idempotent no-ops.
+	if replay := a.execute(switchReq); replay.Error != nil {
+		t.Fatalf("switch replay failed: %+v", replay.Error)
+	}
+	if replay := a.execute(repeat); replay.Error != nil {
+		t.Fatalf("repeat replay after switch failed: %+v", replay.Error)
+	}
+	awaitShare(t, a, repeat.OperationID, func(s Share) bool { return s.TaskID == string(replacement.ID()) })
+	request := <-requests
+	if candidates := request.RelayIntent.Candidates(); starts.Load() != 2 || request.RelayIntent.Mode() != relayprofile.Explicit ||
+		len(candidates) != 1 || candidates[0].PublicURL != address {
+		t.Fatalf("repeated share did not switch to the saved relay: starts=%d intent=%+v", starts.Load(), request.RelayIntent)
+	}
+}

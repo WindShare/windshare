@@ -34,8 +34,8 @@ pub struct Desktop {
     pub link_input: Entity<Input>,
     pub share_flow: ShareFlow,
     pub runtime: Runtime,
-    pub setup_form: crate::live::SetupForm,
-    pub account_form: crate::live::AccountForm,
+    pub setup: crate::network::SetupTracker,
+    pub account: crate::account::AccountTracker,
     pub share_reveal_wakeup: Option<gpui::Task<()>>,
     pub intro_anchors: IntroAnchors,
     pub receive_flow: ReceiveFlow,
@@ -63,8 +63,6 @@ impl Desktop {
         let link_input =
             cx.new(|cx| Input::new(locale.text(Text::ShareLink), cx).accent(Tone::Lavender));
         let super_share = cx.new(|cx| crate::supershare::SuperShare::new(window, cx));
-        let setup_form = crate::live::SetupForm::new(window, cx);
-        let account_form = crate::live::AccountForm::new(window, cx);
         let mut subscriptions = vec![
             cx.observe(&super_share, |_, _, cx| cx.notify()),
             cx.subscribe_in(&super_share, window, |this, _, _, window, cx| {
@@ -84,8 +82,6 @@ impl Desktop {
                 this.link_input.update(cx, |input, cx| {
                     input.set_labels(locale.text(Text::ShareLink), "", cx);
                 });
-                this.setup_form.localize(cx);
-                this.account_form.localize(cx);
                 cx.notify();
             }),
             cx.subscribe(&search, |this, _, _, cx| {
@@ -117,7 +113,7 @@ impl Desktop {
             let view = cx.entity().downgrade();
             // Visibility can change while the window is no longer drawing frames.
             subscriptions.push(window.observe_window_visibility(move |_, window, cx| {
-                let _ = view.update(cx, |this, _| this.sync_account_view_visibility(window));
+                let _ = view.update(cx, |this, cx| this.sync_account_view_visibility(window, cx));
             }));
         }
         Self {
@@ -136,8 +132,8 @@ impl Desktop {
             link_input,
             share_flow: ShareFlow::Choose,
             runtime,
-            setup_form,
-            account_form,
+            setup: crate::network::SetupTracker::default(),
+            account: crate::account::AccountTracker::default(),
             share_reveal_wakeup: None,
             intro_anchors: IntroAnchors::default(),
             receive_flow: ReceiveFlow::default(),
@@ -211,22 +207,40 @@ impl Desktop {
         cx.notify();
     }
     pub fn open_overlay(&mut self, overlay: Overlay, window: &mut Window, cx: &mut Context<Self>) {
-        self.dialog_sequence += 1;
         let scope = cx.focus_handle();
+        self.open_scoped_overlay(overlay, scope, None, window, cx);
+    }
+
+    pub fn open_scoped_overlay(
+        &mut self,
+        overlay: Overlay,
+        scope: FocusHandle,
+        subscription: Option<Subscription>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dialog_sequence += 1;
+        let should_focus_scope =
+            !matches!(overlay, Overlay::Account(_) | Overlay::SharingSetup(..));
+        let return_focus = window.focused(cx);
+        if should_focus_scope {
+            window.focus(&scope, cx);
+        }
         self.overlays.push(OverlayFrame {
             content: overlay,
-            return_focus: window.focused(cx),
-            scope: scope.clone(),
+            return_focus,
+            scope,
             sequence: self.dialog_sequence,
+            _subscription: subscription,
         });
-        window.focus(&scope, cx);
     }
+
     pub fn close_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(frame) = self.overlays.pop() else {
             return;
         };
-        if matches!(frame.content, Overlay::SharingSetup(_)) {
-            self.setup_form.expanded_relay = None;
+        if matches!(frame.content, Overlay::SharingSetup(..)) {
+            self.setup.expanded_relay = None;
         }
         let fallback = self
             .overlays
@@ -259,7 +273,7 @@ impl Desktop {
         }
         self.page = page;
         self.overlays.clear();
-        self.setup_form.expanded_relay = None;
+        self.setup.expanded_relay = None;
         self.link_disclosure = LinkDisclosure::Summary;
         self.focus_task(window, cx);
     }
@@ -291,7 +305,7 @@ impl Desktop {
             to = ?next,
         );
         self.settings_section = next;
-        self.setup_form.expanded_relay = None;
+        self.setup.expanded_relay = None;
         if self.page == Page::Settings {
             self.overlays.clear();
             self.refresh_settings_section();
@@ -500,7 +514,7 @@ impl Desktop {
 }
 impl Render for Desktop {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.sync_account_view_visibility(window);
+        self.sync_account_view_visibility(window, cx);
         self.intro_anchors.begin_frame();
         let locale = language(cx);
         let theme = Theme::current(window, cx);

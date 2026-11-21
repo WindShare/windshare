@@ -7,6 +7,9 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/windshare/windshare/core/networkendpoint"
+	"github.com/windshare/windshare/core/nodedirectory"
 )
 
 func testPool(t *testing.T) ICEEndpointPool {
@@ -61,7 +64,7 @@ func TestProfilesBoundTrustDiversityAndGeneration(t *testing.T) {
 	if got := SelectAttemptProfile(pool, request, facts.Snapshot()).EndpointIDs(); got[0] != "1" {
 		t.Fatal(got)
 	}
-	facts.RecordProfile(profile, true, time.Millisecond, time.Now())
+	facts.RecordProfile(profile, true, time.Now())
 	if len(facts.Snapshot().Profiles) != 1 {
 		t.Fatal("missing profile fact")
 	}
@@ -163,8 +166,8 @@ func TestFactStoreBoundedAndSnapshotsDetached(t *testing.T) {
 	for i := range MaximumProfileFacts + 1 {
 		request.Sequence = uint64(i)
 		profile := SelectAttemptProfile(pool, request, GenerationFacts{})
-		store.RecordProfile(profile, true, time.Millisecond, time.Now())
-		store.RecordProfile(profile, false, 2*time.Millisecond, time.Now())
+		store.RecordProfile(profile, true, time.Now())
+		store.RecordProfile(profile, false, time.Now())
 	}
 	snapshot := store.Snapshot()
 	if len(snapshot.Profiles) != MaximumProfileFacts {
@@ -175,9 +178,8 @@ func TestFactStoreBoundedAndSnapshotsDetached(t *testing.T) {
 		t.Fatal("snapshot mutable")
 	}
 	profile := SelectAttemptProfile(pool, request, GenerationFacts{})
-	store.RecordProfile(profile, true, -1, time.Now())
 	store.SetGeneration("other")
-	store.RecordProfile(profile, true, 1, time.Now())
+	store.RecordProfile(profile, true, time.Now())
 	if len(store.Snapshot().Profiles) != 0 {
 		t.Fatal("stale profile")
 	}
@@ -221,5 +223,113 @@ func TestSharedProfileIdentityVector(t *testing.T) {
 	profile := SelectAttemptProfile(testPool(t), request, GenerationFacts{})
 	if profile.ID() != vector.ProfileID || !reflect.DeepEqual(profile.EndpointIDs(), vector.EndpointIDs) {
 		t.Fatal(profile.ID(), profile.EndpointIDs())
+	}
+}
+
+func TestPublicSTUNCandidateCatalogRemainsUnreviewed(t *testing.T) {
+	data, err := os.ReadFile("../../deploy/network/public-stun-candidates.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var entries []Endpoint
+	if err := json.Unmarshal(data, &entries); err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("empty candidate catalog")
+	}
+	pool, err := ParseLocalConfiguration(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seenURLs := make(map[string]bool, len(entries))
+	for i, entry := range entries {
+		canonical, err := networkendpoint.NormalizeSTUN(entry.URL)
+		if err != nil || canonical != entry.URL {
+			t.Fatalf("non-canonical STUN URL %q: %v", entry.URL, err)
+		}
+		if seenURLs[entry.URL] {
+			t.Fatalf("duplicate STUN URL %q", entry.URL)
+		}
+		seenURLs[entry.URL] = true
+		if i > 0 && entries[i-1].URL >= entry.URL {
+			t.Fatalf("catalog not sorted at %q >= %q", entries[i-1].URL, entry.URL)
+		}
+		if entry.Trust != "unreviewed" || entry.Enabled {
+			t.Fatalf("candidate %q must remain unreviewed and disabled", entry.ID)
+		}
+		if entry.Region != "" || entry.FailureDomain != "" || entry.Provider != "" {
+			t.Fatalf("candidate %q carries unmeasured facts", entry.ID)
+		}
+	}
+	if got := SelectAttemptProfile(pool, selection(), GenerationFacts{}).URLs(); len(got) != 0 {
+		t.Fatalf("unreviewed catalog produced active URLs: %v", got)
+	}
+}
+
+func TestDirectoryPoolPrioritizesDirectoryOverFallbacks(t *testing.T) {
+	payload := nodedirectory.Payload{
+		Nodes: []nodedirectory.Node{
+			{Alias: "cn1", STUN: []string{"stun:cn1.example:3478"}, Roles: []string{"relay", "stun"}, Region: "cn-wuhan", Provider: "aliyun", Operator: "official", Status: nodedirectory.Active},
+			{Alias: "us1", STUN: []string{"stun:us1.example:3478"}, Roles: []string{"relay", "stun"}, Region: "us-los-angeles", Provider: "quickpacket", Operator: "official", Status: nodedirectory.Active},
+			{Alias: "draining", STUN: []string{"stun:draining.example:3478"}, Roles: []string{"stun"}, Region: "jp-tokyo", Provider: "other", Operator: "official", Status: nodedirectory.Draining},
+			{Alias: "relay-only", STUN: []string{"stun:ignored.example:3478"}, Roles: []string{"relay"}, Region: "de-frankfurt", Provider: "other", Operator: "official", Status: nodedirectory.Active},
+		},
+		PublicSTUN: []nodedirectory.STUNEndpoint{
+			{URL: CloudflareSTUNServer, Region: "global", Provider: "cloudflare", FailureDomain: "directory-cloudflare"},
+			{URL: "stun:cn-public.example:3478", Region: "cn", Provider: "tencent", FailureDomain: "tencent-stun"},
+		},
+	}
+	pool := DirectoryPool(payload)
+	byURL := make(map[string]Endpoint, len(pool.endpoints))
+	for _, endpoint := range pool.endpoints {
+		byURL[endpoint.URL] = endpoint
+	}
+	if _, excluded := byURL["stun:draining.example:3478"]; excluded {
+		t.Fatal("draining node entered pool")
+	}
+	if _, excluded := byURL["stun:ignored.example:3478"]; excluded {
+		t.Fatal("non-stun node entered pool")
+	}
+	if got := byURL["stun:cn1.example:3478"].Priority; got != DirectoryNodeSTUNPriority {
+		t.Fatalf("directory node priority = %d, want %d", got, DirectoryNodeSTUNPriority)
+	}
+	if cf := byURL[CloudflareSTUNServer]; cf.Priority != DirectoryPublicSTUNPriority || cf.FailureDomain != "directory-cloudflare" || cf.Region != "global" {
+		t.Fatalf("overlapping directory public_stun did not override fallback: %+v", cf)
+	}
+	if got := byURL[ExistingDefaultSTUNServer].Priority; got != FallbackSTUNPriority {
+		t.Fatalf("fallback priority = %d, want %d", got, FallbackSTUNPriority)
+	}
+	for i := range 16 {
+		request := selection()
+		request.WaveID = fmt.Sprintf("wave-%d", i)
+		primary := SelectAttemptProfile(pool, request, GenerationFacts{})
+		urls := primary.URLs()
+		if len(urls) != 2 || !((urls[0] == "stun:cn1.example:3478" && urls[1] == "stun:us1.example:3478") ||
+			(urls[0] == "stun:us1.example:3478" && urls[1] == "stun:cn1.example:3478")) {
+			t.Fatalf("wave %d cold-start primary = %v, want {cn1, us1}", i, urls)
+		}
+		request.Sequence++
+		request.UsedEndpointIDs = primary.EndpointIDs()
+		request.UsedFailureDomains = primary.FailureDomains()
+		backup := SelectAttemptProfile(pool, request, GenerationFacts{})
+		backupURLs := backup.URLs()
+		if len(backupURLs) != 2 || !((backupURLs[0] == CloudflareSTUNServer && backupURLs[1] == "stun:cn-public.example:3478") ||
+			(backupURLs[0] == "stun:cn-public.example:3478" && backupURLs[1] == CloudflareSTUNServer)) {
+			t.Fatalf("wave %d backup = %v, want directory public_stun tier", i, backupURLs)
+		}
+	}
+	// Runtime profile success still overrides static directory priority.
+	facts := NewFactStore("network")
+	request := selection()
+	primary := SelectAttemptProfile(pool, request, GenerationFacts{})
+	request.Sequence++
+	request.UsedEndpointIDs = primary.EndpointIDs()
+	request.UsedFailureDomains = primary.FailureDomains()
+	backup := SelectAttemptProfile(pool, request, GenerationFacts{})
+	facts.RecordProfile(backup, true, request.Now)
+	promoted := SelectAttemptProfile(pool, selection(), facts.Snapshot())
+	if !reflect.DeepEqual(promoted.URLs(), backup.URLs()) {
+		t.Fatalf("runtime-successful backup was not promoted: got %v, want %v", promoted.URLs(), backup.URLs())
 	}
 }

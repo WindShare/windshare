@@ -70,14 +70,17 @@ test('SaaS link hostname requires validated TLS and refuses another Worker route
   await assert.rejects(deployFrontend({ inputs, cloudflare, deploy }), /route must belong/);
   assert.deepEqual(frontendConfig(inputs).routes[1], { pattern: 'ws.ourworld.top/*', zone_id: inputs.route.zoneId });
 });
-test('frontend serves assets, refuses absent directory and redirects only installer paths', async () => {
+test('frontend serves assets, refuses absent directory and redirects only versioned installer paths', async () => {
   const env = { ASSETS: { fetch: async () => new Response('page', { headers: { 'Content-Type': 'text/html' } }) } };
   assert.equal((await worker.fetch(new Request('https://ws.ourworld.top/share'), env)).status, 200);
   assert.equal((await worker.fetch(new Request('https://ws.ourworld.top/.well-known/windshare-network'), env)).status, 503);
-  const download = await worker.fetch(new Request('https://ws.ourworld.top/downloads/latest/wind-windows-amd64.zip'), env);
-  assert.equal(download.headers.get('Location'), 'https://github.com/WindShare/windshare/releases/latest/download/wind-windows-amd64.zip');
-  assert.equal((await worker.fetch(new Request('https://ws.ourworld.top/downloads/latest/https:%2F%2Fevil'), env)).status, 404);
-  assert.equal((await worker.fetch(new Request('https://ws.ourworld.top/downloads/latest/a.zip', { method: 'POST' }), env)).status, 405);
+  const download = await worker.fetch(new Request('https://ws.ourworld.top/downloads/v0.1.3/windshare-v0.1.3-windows-amd64.zip'), env);
+  assert.equal(download.status, 302);
+  assert.equal(download.headers.get('Location'), 'https://github.com/WindShare/windshare/releases/download/v0.1.3/windshare-v0.1.3-windows-amd64.zip');
+  assert.equal((await worker.fetch(new Request('https://ws.ourworld.top/downloads/'), env)).status, 404);
+  assert.equal((await worker.fetch(new Request('https://ws.ourworld.top/downloads/latest/windshare-v0.1.3-windows-amd64.zip'), env)).status, 404);
+  assert.equal((await worker.fetch(new Request('https://ws.ourworld.top/downloads/v0.1.3/https:%2F%2Fevil'), env)).status, 404);
+  assert.equal((await worker.fetch(new Request('https://ws.ourworld.top/downloads/v0.1.3/windshare-v0.1.3-windows-amd64.zip', { method: 'POST' }), env)).status, 405);
 });
 
 test('signed directory mirrors are readable from self-hosted frontends', async () => {
@@ -88,4 +91,48 @@ test('signed directory mirrors are readable from self-hosted frontends', async (
   assert.equal(response.headers.get('Access-Control-Allow-Origin'), '*');
   assert.equal(response.headers.get('Content-Type'), 'application/json');
   assert.equal(await response.text(), bytes);
+});
+
+test('frontend post-deploy verification retries stale state and lagging SaaS routes', async () => {
+  const primary = readFrontendInputs({ CLOUDFLARE_ACCOUNT_ID: 'a'.repeat(32), CLOUDFLARE_WORKER_NAME: 'official-web',
+    CLOUDFLARE_ZONE_ID: 'b'.repeat(32), CLOUDFLARE_FRONTEND_DOMAIN: 'windshare.cc' });
+  const linked = { ...primary, route: { ...primary.route, saasHostname: 'ws.ourworld.top' } };
+  const base = cloud();
+  let previousSettings = null, deployed = false, postSettingsCalls = 0, postRouteCalls = 0;
+  const waits = [], events = [];
+  const cloudflare = { ...base,
+    settings: async () => {
+      if (deployed) {
+        postSettingsCalls++;
+        if (postSettingsCalls === 1) return { bindings: [] };
+        if (postSettingsCalls === 2) return previousSettings;
+      }
+      return base.settings();
+    },
+    zone: async () => ({ id: primary.route.zoneId, account: { id: primary.accountId }, name: 'windshare.cc', status: 'active' }),
+    domains: async () => [{ hostname: primary.route.hostname, zone_id: primary.route.zoneId,
+      service: primary.workerName, environment: 'production', enabled: true, previews_enabled: false }],
+    route: async () => ({ enabled: false, previews_enabled: false }),
+    customHostnames: async (_, hostname) => [{ hostname, status: 'active', ssl: { status: 'active' } }],
+    workerRoutes: async () => {
+      if (!deployed) return [];
+      return ++postRouteCalls === 1 ? [] : [{ pattern: 'ws.ourworld.top/*', script: primary.workerName }];
+    },
+  };
+  await deployFrontend({ inputs: primary, cloudflare, deploy: async plan => base.retain(plan.state) });
+  previousSettings = await base.settings();
+  const upgraded = await deployFrontend({
+    inputs: linked, cloudflare,
+    deploy: async plan => { deployed = true; base.retain(plan.state); },
+    log: (event, fields) => events.push({ event, ...fields }),
+    wait: async ms => waits.push(ms),
+    verificationDelaysMs: [10, 20, 40],
+  });
+  assert.deepEqual(upgraded.state.route, linked.route);
+  assert.deepEqual(waits, [10, 20, 10]);
+  assert.deepEqual(events.filter(e => e.event === 'deployment_verification_retry').map(e => e.reason), [
+    'missing_binding:WINDSHARE_DEPLOYMENT',
+    'stale_frontend_state',
+    'saas_route_pending',
+  ]);
 });

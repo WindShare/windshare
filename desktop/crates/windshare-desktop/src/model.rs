@@ -89,14 +89,32 @@ pub struct Transfer {
     pub tone: Tone,
     pub state: TransferState,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub enum Overlay {
     Detail(usize),
     ShareQr(usize),
     Help,
-    SharingSetup(SharingSetupTarget),
-    Account,
+    SharingSetup(
+        SharingSetupTarget,
+        gpui::Entity<crate::network::SetupDialog>,
+    ),
+    Account(gpui::Entity<crate::account::AccountDialog>),
 }
+
+impl std::fmt::Debug for Overlay {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Detail(id) => formatter.debug_tuple("Detail").field(id).finish(),
+            Self::ShareQr(id) => formatter.debug_tuple("ShareQr").field(id).finish(),
+            Self::Help => formatter.write_str("Help"),
+            Self::SharingSetup(target, _) => {
+                formatter.debug_tuple("SharingSetup").field(target).finish()
+            }
+            Self::Account(_) => formatter.write_str("Account"),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum SharingSetupTarget {
     Defaults,
@@ -139,19 +157,10 @@ pub enum Action {
     ShareAgain(usize),
     ConfigureShare(usize),
     ChooseShareRelays(usize),
-    SetupPage(crate::live::SetupPage),
-    OpenSetupModal(crate::live::SetupPage),
     OpenAccount,
-    OpenAccountModal(crate::live::AccountPage),
-    CopyAccountUid,
-    Account(crate::live::AccountAction),
     SettingsSection(SettingsSection),
-    ReturnToSharingSetup,
-    SaveSharingSetup(Option<usize>),
     ResumeShare(usize),
     UseSavedSettings(usize),
-    ApproveRelay,
-    CancelSharingSetup,
     ToggleTransfer(usize),
     ToggleGrid,
     Close,

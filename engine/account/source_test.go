@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/windshare/windshare/core/serviceauthority"
@@ -91,7 +93,7 @@ func TestShareWaitsForConfirmedSelectionAfterLocalReadFailure(t *testing.T) {
 	store.record = cachedRecord(first)
 	config.Store = store
 	service := testService(t, config)
-	service.nodes["primary"] = &nodeState{key: [32]byte{1}, anonymous: true, available: true, expires: config.Now().Add(time.Hour)}
+	service.nodes.put("primary", &nodeState{key: [32]byte{1}, anonymous: true, available: true, expires: config.Now().Add(time.Hour)})
 
 	failure := errors.New("could not open shared account state")
 	store.err = failure
@@ -118,4 +120,148 @@ func TestShareWaitsForConfirmedSelectionAfterLocalReadFailure(t *testing.T) {
 		t.Fatal("successful synchronization did not wake the waiting share")
 	}
 	requireBearer(t, source, second.Ticket)
+}
+
+func TestLoggedInShareWaitsForTicketRenewalBeforeAnonymousFallback(t *testing.T) {
+	t.Run("renewal succeeds", func(t *testing.T) {
+		config, initial := accountFixture(t)
+		synctest.Test(t, func(t *testing.T) {
+			issuedAt, start := config.Now(), time.Now()
+			config.Now = func() time.Time { return issuedAt.Add(time.Since(start)) }
+			expired := cachedRecord(initial)
+			expired.Ticket = ""
+			config.Store = &MemoryStore{record: expired}
+			started := make(chan struct{})
+			release := make(chan struct{})
+			config.Client = clientFunc(func(request *http.Request) (*http.Response, error) {
+				if request.URL.Path != "/v1/accounts/ticket" {
+					t.Errorf("unexpected route %s", request.URL.Path)
+				}
+				close(started)
+				<-release
+				return accountReply(t, http.StatusOK, initial), nil
+			})
+
+			service := testService(t, config)
+			service.nodes.put("global", &nodeState{key: [32]byte{1}, anonymous: true, available: true, expires: config.Now().Add(time.Hour)})
+			share := service.NewShareAuthorization(t.Context())
+			defer share.Close()
+			share.beginOfficialUse()
+			<-started
+			synctest.Wait()
+
+			global := &Source{share: share, address: "global"}
+			mainland := &Source{share: share, address: "mainland"}
+			waiting := global.ReserveRegistrationAuthorization()
+			if waiting.State != serviceauthority.AdmissionExpired || waiting.Bearer != "" {
+				t.Fatalf("logged-in share downgraded while renewing: %+v", waiting)
+			}
+
+			close(release)
+			synctest.Wait()
+			select {
+			case <-waiting.Changed:
+			default:
+				t.Fatal("ticket renewal did not wake waiting share")
+			}
+			requireBearer(t, global, initial.Ticket)
+			requireBearer(t, mainland, initial.Ticket)
+		})
+	})
+
+	t.Run("renewal failure falls back to anonymous", func(t *testing.T) {
+		config, initial := accountFixture(t)
+		synctest.Test(t, func(t *testing.T) {
+			issuedAt, start := config.Now(), time.Now()
+			config.Now = func() time.Time { return issuedAt.Add(time.Since(start)) }
+			expired := cachedRecord(initial)
+			expired.Ticket = ""
+			config.Store = &MemoryStore{record: expired}
+			release := make(chan struct{})
+			var attempts atomic.Int32
+			config.Client = clientFunc(func(request *http.Request) (*http.Response, error) {
+				if request.URL.Path != "/v1/accounts/ticket" {
+					t.Errorf("unexpected route %s", request.URL.Path)
+				}
+				if attempts.Add(1) == 1 {
+					<-release
+					return accountReply(t, http.StatusServiceUnavailable, fault{}), nil
+				}
+				return accountReply(t, http.StatusOK, initial), nil
+			})
+
+			service := testService(t, config)
+			service.nodes.put("global", &nodeState{key: [32]byte{1}, anonymous: true, available: true, expires: config.Now().Add(time.Hour)})
+			first := service.NewShareAuthorization(t.Context())
+			first.beginOfficialUse()
+			synctest.Wait()
+
+			firstGlobal := &Source{share: first, address: "global"}
+			waiting := firstGlobal.ReserveRegistrationAuthorization()
+			if waiting.State != serviceauthority.AdmissionExpired {
+				t.Fatalf("state while refreshing = %s, want expired", waiting.State.Name())
+			}
+
+			close(release)
+			synctest.Wait()
+			select {
+			case <-waiting.Changed:
+			default:
+				t.Fatal("renewal failure did not wake waiting share")
+			}
+			requireBearer(t, firstGlobal, "")
+			first.Close()
+
+			// Once retry backoff elapses, a new share must retry the authority
+			// instead of acting on an expired Unavailable state.
+			time.Sleep(2 * MinimumRetry)
+			synctest.Wait()
+			second := service.NewShareAuthorization(t.Context())
+			defer second.Close()
+			secondGlobal := &Source{share: second, address: "global"}
+			if got := secondGlobal.ReserveRegistrationAuthorization(); got.State != serviceauthority.AdmissionTemporaryFailure || got.Bearer != "" {
+				t.Fatalf("stale unavailable state downgraded new share: %+v", got)
+			}
+			second.beginOfficialUse()
+			synctest.Wait()
+			requireBearer(t, secondGlobal, initial.Ticket)
+		})
+	})
+
+	t.Run("retained credential waits before anonymous fallback", func(t *testing.T) {
+		config, initial := accountFixture(t)
+		synctest.Test(t, func(t *testing.T) {
+			issuedAt, start := config.Now(), time.Now()
+			config.Now = func() time.Time { return issuedAt.Add(time.Since(start)) }
+			expired := cachedRecord(initial)
+			expired.Ticket = ""
+			config.Store = &MemoryStore{record: expired}
+			config.Client = clientFunc(func(*http.Request) (*http.Response, error) {
+				return accountReply(t, http.StatusServiceUnavailable, fault{}), nil
+			})
+
+			service := testService(t, config)
+			share := service.NewShareAuthorization(t.Context())
+			defer share.Close()
+			service.mu.Lock()
+			service.adoptLocked(Record{SetupSecret: "new-selection"})
+			service.mu.Unlock()
+			service.nodes.put("global", &nodeState{key: [32]byte{1}, anonymous: true, available: true, expires: config.Now().Add(time.Hour)})
+
+			global := &Source{share: share, address: "global"}
+			waiting := global.ReserveRegistrationAuthorization()
+			if waiting.State != serviceauthority.AdmissionExpired {
+				t.Fatalf("retained credential downgraded before retry: %+v", waiting)
+			}
+			synctest.Wait()
+			time.Sleep(MinimumRetry)
+			synctest.Wait()
+			select {
+			case <-waiting.Changed:
+			default:
+				t.Fatal("retained refresh backoff expiry did not wake waiting share")
+			}
+			requireBearer(t, global, "")
+		})
+	})
 }

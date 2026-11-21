@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vitest/config'
 import { networkAssets } from './build/network-assets.js'
+import { resolveReleaseDownloads } from './build/release-downloads.js'
 
 const UNIT_TEST_PATTERN = 'test/**/*.test.{ts,tsx}'
 const MAX_UNIT_TEST_WORKERS = 2
@@ -23,6 +24,7 @@ const packageMetadata = JSON.parse(
 export default defineConfig(({ command, mode }) => {
   const revision = process.env.WIND_BUILD_REVISION
   const buildMode = resolveBuildMode(command, mode)
+  const releaseDownloads = resolveReleaseDownloads(process.env)
 
   return {
     define: {
@@ -32,6 +34,9 @@ export default defineConfig(({ command, mode }) => {
         ? JSON.stringify(revision)
         : 'undefined',
       __WIND_BUILD_MODE__: JSON.stringify(buildMode),
+      __WIND_RELEASE_DOWNLOADS__: releaseDownloads === undefined
+        ? 'undefined'
+        : JSON.stringify(releaseDownloads),
     },
     plugins: [react(), networkAssets()],
     ...(mode === LOCAL_DEVELOPMENT_MODE

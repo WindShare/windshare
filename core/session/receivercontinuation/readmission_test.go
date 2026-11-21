@@ -13,8 +13,10 @@ import (
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/internal/testoutputroot"
 	"github.com/windshare/windshare/core/liveshare"
+	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/receiversession"
 	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/core/transfer/revisionwait"
 	"github.com/windshare/windshare/osfs"
@@ -70,7 +72,7 @@ func testTransferReadmission(t *testing.T, changeStage func(string) error) {
 		t.Fatal("missing destination reservation")
 	}
 
-	var firstRevision, offeredRevision content.FileRevision
+	var firstRevision content.FileRevision
 	var firstRange content.Range
 	var cutAt time.Time
 	var reconnectedAfter time.Duration
@@ -88,13 +90,15 @@ func testTransferReadmission(t *testing.T, changeStage func(string) error) {
 		}))
 		if err != nil {
 			if reopened, ok := err.(*content.RevisionReopenedError); ok {
-				offeredRevision = reopened.Current().FileRevision()
 				staleSink := transfer.RangeSinkFunc(func(context.Context, uint64, []byte) error {
 					t.Error("a stale reader wrote bytes after the revision changed")
 					return transfer.ErrBlockIdentity
 				})
 				if again := continuation.ReadRange(ctx, lease, descriptor, requested, staleSink); again != reopened {
 					t.Errorf("stale reader lost its reopen result: %v", again)
+				}
+				if rebound := continuation.ReadRange(ctx, lease, reopened.Current(), requested, staleSink); !errors.Is(rebound, transfer.ErrBlockIdentity) {
+					t.Errorf("old handle accepted rebound descriptor: %v", rebound)
 				}
 			}
 			return err
@@ -190,7 +194,7 @@ func testTransferReadmission(t *testing.T, changeStage func(string) error) {
 		!result.Progress.CountersExact || settled != 1 {
 		t.Fatalf("result=%+v file settlements=%d", result, settled)
 	}
-	if readmission.Previous != firstRevision || readmission.Current == firstRevision || readmission.Current != offeredRevision ||
+	if readmission.Previous != firstRevision || readmission.Current == firstRevision || readmission.Current.IsZero() ||
 		readmission.ComparisonReason != content.ComparisonMetadataAgreement ||
 		readmission.Retained != firstRange.Length() || readmission.Reused != firstRange.Length() ||
 		transferred != total || retriedBytes != 0 || reconnectedAfter <= 0 {
@@ -238,4 +242,74 @@ func replaceReadmissionStage(path string) error {
 		return err
 	}
 	return os.WriteFile(path, make([]byte, info.Size()), 0o600)
+}
+
+func TestRecoverRefreshFailurePreservesAuthenticatedSourceOutcomesOnPathRetirement(t *testing.T) {
+	f := newFixture(t)
+	retired, ch := f.connect()
+	ctx := t.Context()
+	replacements := 0
+	continuation, err := New(ctx, retired, func(context.Context, *receiversession.Runtime) (*receiversession.Runtime, error) {
+		replacements++
+		next, _ := f.connect()
+		return next, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer continuation.Close()
+
+	// Retire the runtime so AwaitPathRetirement(ctx) deterministically returns true.
+	_ = ch.Close()
+	select {
+	case <-retired.Done():
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	if !retired.PathsExhausted() {
+		t.Fatal("expected retired runtime paths to be exhausted")
+	}
+
+	geometry1, _ := content.NewFileGeometry(64, catalog.MinChunkSize)
+	geometry2, _ := content.NewFileGeometry(128, catalog.MinChunkSize)
+	meta, _ := content.SourceMetadataFromBytes(bytes.Repeat([]byte{0x55}, 32))
+	share := retired.Descriptor().ShareInstance()
+	fileID := catalog.FileID{0x11}
+	prevBase, _ := content.NewFileRevisionDescriptor(share, fileID, content.FileRevision{1}, geometry1, catalog.ModifiedTime{})
+	prev := content.BindRevisionMetadata(prevBase, meta)
+	sameMetaBase, _ := content.NewFileRevisionDescriptor(share, fileID, content.FileRevision{2}, geometry1, catalog.ModifiedTime{})
+	sameMeta := content.BindRevisionMetadata(sameMetaBase, meta)
+	changedSize, _ := content.NewFileRevisionDescriptor(share, fileID, content.FileRevision{3}, geometry2, catalog.ModifiedTime{})
+
+	changedFault, _ := fault.NewSource(fault.ScopeFileLocal, fault.SourceRevisionChanged)
+	invalidatedFault, _ := fault.NewSource(fault.ScopeFileLocal, fault.SourceRevisionInvalidated)
+	permanentFault, _ := fault.NewSource(fault.ScopeFileLocal, fault.SourcePermanent)
+
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{"reopened mismatch", content.NewRevisionReopenedError(prev, changedSize)},
+		{"reopened reusable", content.NewRevisionReopenedError(prev, sameMeta)},
+		{"source revision changed", fault.Wrap(changedFault, content.ErrRevisionStale)},
+		{"source revision invalidated", fault.Wrap(invalidatedFault, content.ErrRevisionDrift)},
+		{"source permanent", fault.Wrap(permanentFault, content.ErrRevisionNotFound)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			retry, got := continuation.recoverRefreshFailure(ctx, retired, tc.err)
+			if retry || got != tc.err {
+				t.Fatalf("recoverRefreshFailure=(%v, %v), want (false, %v)", retry, got, tc.err)
+			}
+			if replacements != 0 {
+				t.Fatalf("unexpected generation replacements=%d", replacements)
+			}
+		})
+	}
+
+	// Transport/runtime close errors must still trigger generation recovery.
+	retry, got := continuation.recoverRefreshFailure(ctx, retired, session.ErrRuntimeClosed)
+	if !retry || got != nil || replacements != 1 {
+		t.Fatalf("transport recovery=(%v, %v) replacements=%d, want (true, nil) with 1 replacement", retry, got, replacements)
+	}
 }

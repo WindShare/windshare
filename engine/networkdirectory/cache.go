@@ -105,7 +105,7 @@ func (cache *FileCache) Update(ctx context.Context, change func(Record) (Record,
 		if len(data) > maximumCacheBytes {
 			return nodedirectory.ErrFormat
 		}
-		return statefile.Write(cache.path, data)
+		return statefile.Write(ctx, cache.path, data)
 	})
 	return committed, err
 }

@@ -70,12 +70,26 @@ func Start() (*Host, error) {
 		_ = log.Close()
 		return nil, err
 	}
-	application, err := engine.New(engine.Config{Network: network})
+	host := &Host{log: log, diagnosticDone: make(chan struct{})}
+	var trace *senderTrace
+	if logAvailable {
+		host.diagnostics, err = diagnostics.NewStream(diagnosticCapacity, nil)
+		if err != nil {
+			_ = log.Close()
+			return nil, err
+		}
+		trace = newSenderTrace(host.diagnostics, os.Getenv("WINDSHARE_TRACE") == "1")
+		go host.recordDiagnostics()
+	} else {
+		directory = ""
+		close(host.diagnosticDone)
+	}
+	application, err := engine.New(engine.Config{Network: network, Diagnostics: trace.engineDiagnostics()})
 	if err != nil {
+		host.stopDiagnostics()
 		_ = log.Close()
 		return nil, err
 	}
-	host := &Host{log: log, diagnosticDone: make(chan struct{})}
 	setup := newNativeSetup(relayconfig.FileStore{})
 	deps := dependencies{
 		defaultFrontend: network.LinkHost,
@@ -91,23 +105,10 @@ func Start() (*Host, error) {
 		configure:   application.ConfigureTURN,
 		setup:       setup.run,
 		cancelSetup: setup.cancel,
+		senderTrace: trace,
 	}
 	if accounts := application.Accounts(); accounts != nil {
 		deps.accounts = accounts
-	}
-	if logAvailable {
-		host.diagnostics, err = diagnostics.NewStream(diagnosticCapacity, nil)
-		if err != nil {
-			_ = application.Close(context.Background())
-			_ = log.Close()
-			return nil, err
-		}
-		deps.senderTrace = &senderTrace{stream: host.diagnostics}
-		deps.senderTrace.setEnabled(os.Getenv("WINDSHARE_TRACE") == "1")
-		go host.recordDiagnostics()
-	} else {
-		directory = ""
-		close(host.diagnosticDone)
 	}
 	host.app = newApplication(sessionID, deps)
 	host.server, err = listen(host.app, token)
@@ -130,12 +131,16 @@ func (h *Host) recordDiagnostics() {
 	}
 }
 
-func (h *Host) closeEngine() error {
-	err := h.app.close()
+func (h *Host) stopDiagnostics() {
 	if h.diagnostics != nil {
 		h.diagnostics.Close()
 	}
 	<-h.diagnosticDone
+}
+
+func (h *Host) closeEngine() error {
+	err := h.app.close()
+	h.stopDiagnostics()
 	if logErr := h.log.Close(); logErr != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "host.log_closed session_id=%s error=%v\n", h.Endpoint.SessionID, logErr)
 	}

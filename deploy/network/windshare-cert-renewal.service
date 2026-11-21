@@ -11,6 +11,9 @@ ExecStart=/opt/windshare-acme/3.1.6/acme.sh --cron --home /opt/windshare-acme/3.
 UMask=0077
 PrivateTmp=true
 ProtectHome=true
+# Keep every DNS-01 certificate under /etc/windshare-network/tls/<host>/ so
+# ProtectSystem=strict works across frontend-only, API-only, and combined hosts
+# without per-domain ReadWritePaths entries.
 ProtectSystem=strict
 ReadWritePaths=/var/lib/windshare-acme /etc/windshare-network/tls
 NoNewPrivileges=true

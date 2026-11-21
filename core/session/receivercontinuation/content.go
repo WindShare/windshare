@@ -10,6 +10,7 @@ import (
 
 	receiversession "github.com/windshare/windshare/core/session/receiversession"
 	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/fault"
 )
 
 type revisionLease struct {
@@ -34,7 +35,7 @@ func (s *Session) OpenRevision(ctx context.Context, file catalog.FileID) (transf
 			s.mu.Unlock()
 			return opened, nil
 		}
-		if !runtime.AwaitPathRetirement(ctx) {
+		if isAuthenticatedSourceOutcome(err) || !runtime.AwaitPathRetirement(ctx) {
 			return opened, err
 		}
 		if err = s.recoverContent(ctx, runtime); err != nil {
@@ -98,8 +99,13 @@ func (s *Session) ReadRange(ctx context.Context, lease transfer.RevisionHandle, 
 		if err = readRemainingRanges(ctx, dependencies, binding.opened.Handle, descriptor, remaining); err == nil {
 			return nil
 		}
-		if !runtime.AwaitPathRetirement(ctx) {
-			binding.recordReopened(err)
+		if reopened, ok := errors.AsType[*content.RevisionReopenedError](err); ok {
+			binding.reopened = reopened
+			return err
+		}
+		// An authenticated source outcome already proved the source state on this
+		// generation; path retirement afterward must not discard that decision or reconnect.
+		if isAuthenticatedSourceOutcome(err) || !runtime.AwaitPathRetirement(ctx) {
 			return err
 		}
 		if err = s.recoverContent(ctx, runtime); err != nil {
@@ -125,6 +131,12 @@ func (s *Session) recoverRefreshFailure(ctx context.Context, runtime *receiverse
 	if ctx.Err() != nil {
 		return false, ctx.Err()
 	}
+	// An authenticated source outcome (including RevisionReopenedError) already
+	// succeeded on the wire and must never be swallowed by a concurrent path
+	// retirement on the refreshed runtime.
+	if isAuthenticatedSourceOutcome(err) {
+		return false, err
+	}
 	if !runtime.AwaitPathRetirement(ctx) {
 		return false, err
 	}
@@ -132,6 +144,20 @@ func (s *Session) recoverRefreshFailure(ctx context.Context, runtime *receiverse
 		return false, err
 	}
 	return true, nil
+}
+
+func isAuthenticatedSourceOutcome(err error) bool {
+	if _, ok := errors.AsType[*content.RevisionReopenedError](err); ok {
+		return true
+	}
+	if boundary, ok := errors.AsType[*fault.BoundaryError](err); ok && boundary != nil {
+		if code, isSource := boundary.Fault().SourceCode(); isSource {
+			return code == fault.SourceRevisionChanged ||
+				code == fault.SourceRevisionInvalidated ||
+				code == fault.SourcePermanent
+		}
+	}
+	return false
 }
 
 func readRemainingRanges(
@@ -147,17 +173,6 @@ func readRemainingRanges(
 		}
 	}
 	return nil
-}
-
-func (binding *revisionLease) recordReopened(err error) {
-	reopened, ok := errors.AsType[*content.RevisionReopenedError](err)
-	if !ok {
-		return
-	}
-	binding.reopened = reopened
-	if reopened.Comparison().AllowsReuse() {
-		binding.opened.Descriptor = reopened.Current()
-	}
 }
 
 // Only interval metadata survives retry. Verified bytes stay in the existing
@@ -216,12 +231,12 @@ func (binding *revisionLease) refresh(ctx context.Context, runtime *receiversess
 	}
 	reopened := content.NewRevisionReopenedError(descriptor, opened.Descriptor)
 	binding.reopened = reopened
-	if reopened.Comparison().AllowsReuse() {
-		// The retired generation no longer owns a live lease. Keep the new
-		// generation's handle across the output's durable pause and readmission.
-		binding.runtime, binding.opened = runtime, opened
-	} else {
-		binding.cleanupErr = dependencies.ReleaseRevision(ctx, opened.Handle)
+	// One handle owns one immutable descriptor for its lifetime. Release the
+	// mismatched new handle immediately; transfer readmission opens a fresh one.
+	// Path retirement also ends the discarded lease's authority on the replacement
+	// generation; only protocol rejection or caller shutdown remains a cleanup failure.
+	if releaseErr := dependencies.ReleaseRevision(ctx, opened.Handle); releaseErr != nil && !runtime.AwaitPathRetirement(ctx) {
+		binding.cleanupErr = errors.Join(binding.cleanupErr, releaseErr)
 	}
 	return reopened
 }

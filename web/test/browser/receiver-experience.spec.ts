@@ -19,7 +19,7 @@ test('production explorer keeps semantic selection, preview focus and current ta
   await expect(page.getByRole('button', { name: 'Download selected', exact: true })).toBeDisabled()
   await page.getByRole('button', { name: 'Done selecting', exact: true }).click()
   await expect(page.getByRole('button', { name: 'Download this folder', exact: true })).toBeDisabled()
-  await expect(page.getByText('Pause the current download before starting another.', { exact: true })).toBeVisible()
+  await expect(page.getByText('A download is in progress.', { exact: true })).toBeVisible()
 
   const folder = page.getByRole('button', { name: 'Summer photos', exact: true }).last()
   await folder.focus()

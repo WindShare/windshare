@@ -147,14 +147,14 @@ impl CredentialIndex {
 
 impl Service {
     pub(crate) fn observe_device_login(&self, issuer: Issuer, supported: bool) {
-        let mut state = self.state.lock().expect("node access state");
+        let mut state = self.write();
         if state.controller == Some(issuer) {
             state.login_issuer = supported.then_some(issuer);
         }
     }
 
     pub(crate) fn login_generation(&self, issuer: Issuer, now: u64) -> Option<Generation> {
-        let state = self.state.lock().expect("node access state");
+        let state = self.read();
         if state.login_issuer != Some(issuer)
             || state.controller != Some(issuer)
             || !state.active_issuers.contains(&issuer)
@@ -197,7 +197,7 @@ impl Service {
             &devices,
             &previous,
         ));
-        self.state.lock().expect("node access state").credentials = next;
+        self.write().credentials = next;
         drop(devices);
         self.changes.send_modify(|version| *version += 1);
     }
@@ -239,11 +239,11 @@ impl Service {
     }
 
     fn credential_index(&self) -> Arc<CredentialIndex> {
-        Arc::clone(&self.state.lock().expect("node access state").credentials)
+        Arc::clone(&self.read().credentials)
     }
 
     pub(super) fn credential_snapshot(&self) -> (Arc<super::Policy>, Arc<CredentialIndex>) {
-        let state = self.state.lock().expect("node access state");
+        let state = self.read();
         (Arc::clone(&state.policy), Arc::clone(&state.credentials))
     }
 }

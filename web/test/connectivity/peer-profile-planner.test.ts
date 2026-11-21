@@ -36,7 +36,7 @@ it('rotates once into unused domains and reuses backup across network notices wi
 it('cools attributable failures without converting profile exhaustion into permanent host-only recovery', () => {
   const planner = singletonPlanner()
   const first = planner.select(1, 1, 0)
-  planner.observe(first, { kind: 'ice-error', endpoint: first.urls[0]!, code: 701 }, 0, 1)
+  planner.observe(first, { kind: 'ice-error', endpoint: first.urls[0]!, code: 701 }, 1)
   expect(planner.select(1, 2, 1000).urls).toEqual([])
   expect(planner.select(1, 3, 31_000).urls).toEqual(first.urls)
   expect(new PeerProfilePlanner(new ICEEndpointPool()).select(1, 1, 0).urls).toEqual([])

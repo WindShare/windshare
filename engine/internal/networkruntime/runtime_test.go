@@ -1,17 +1,22 @@
 package networkruntime
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"slices"
 	"testing"
 	"time"
 
 	"github.com/windshare/windshare/connectivity/relayplan"
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/nodedirectory"
 	"github.com/windshare/windshare/engine/networkconfig"
@@ -34,7 +39,7 @@ func fixtureRuntime(t *testing.T) *Runtime {
 		t.Fatal(err)
 	}
 	key, _ := base64.RawURLEncoding.DecodeString(fixture.Roots[0].Key)
-	r, err := New(nil, func() time.Time { return fixture.Now }, "")
+	r, err := New(nil, func() time.Time { return fixture.Now }, "", diagnostics.Sink{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +146,7 @@ func TestAliasResolutionReturnsKnownPathsBeforeRefresh(t *testing.T) {
 }
 
 func TestLibraryRuntimeHasNoImplicitInfrastructure(t *testing.T) {
-	r, err := New(nil, time.Now, "")
+	r, err := New(nil, time.Now, "", diagnostics.Sink{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +182,7 @@ func TestUnreadableTrustStatePreservesExplicitRelays(t *testing.T) {
 	cause := errors.New("trust state unavailable")
 	r, err := New(&networkconfig.Config{Directory: networkdirectory.Config{
 		Network: "test", Cache: &brokenCache{err: cause},
-	}}, time.Now, "")
+	}}, time.Now, "", diagnostics.Sink{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,5 +199,69 @@ func TestUnreadableTrustStatePreservesExplicitRelays(t *testing.T) {
 	}
 	if failure := r.Unavailability(); failure == nil || failure.Reason != networkdirectory.TrustStateUnreadable || !failure.RetryAt.IsZero() {
 		t.Fatal("local trust failure was reported as a temporary outage", failure)
+	}
+}
+
+func TestEngineDiagnosticsCaptureFrontendHealthAndDirectoryInitFailure(t *testing.T) {
+	var slogOutput bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&slogOutput, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+
+	linkServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer linkServer.Close()
+	backupServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backupServer.Close()
+
+	stream, err := diagnostics.NewStream(16, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := diagnostics.Scope{EngineID: "engine-net"}
+	cause := errors.New("corrupt trust store")
+	r, err := New(&networkconfig.Config{
+		Directory:   networkdirectory.Config{Network: "test", Cache: &brokenCache{err: cause}},
+		LinkHost:    linkServer.URL,
+		BackupEntry: backupServer.URL,
+	}, time.Now, "", stream.Sink().Bind(scope))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawInitFailure, sawFrontendHealth bool
+	deadline := time.After(5 * time.Second)
+	for !(sawInitFailure && sawFrontendHealth) {
+		select {
+		case record := <-stream.Records():
+			if record.Scope() != scope {
+				t.Fatalf("unexpected scope: %+v", record.Scope())
+			}
+			switch record.Name() {
+			case "network_directory_initialization_failed":
+				if record.Payload().Get("reason").Text() == string(networkdirectory.TrustStateUnreadable) &&
+					record.Payload().Get("network").Text() == "test" {
+					sawInitFailure = true
+				}
+			case "network_frontend_health":
+				if record.Payload().Get("link_host").Text() == linkServer.URL &&
+					!record.Payload().Get("reachable").Bool() &&
+					record.Payload().Get("backup_entry").Text() == backupServer.URL &&
+					record.Payload().Get("backup_reachable").Bool() &&
+					record.Payload().Get("network_generation").Uint() >= 1 {
+					sawFrontendHealth = true
+				}
+			}
+		case <-deadline:
+			r.Close()
+			t.Fatalf("timed out waiting for engine diagnostics: init=%t frontend=%t", sawInitFailure, sawFrontendHealth)
+		}
+	}
+	r.Close()
+	stream.Close()
+	if slogOutput.Len() != 0 {
+		t.Fatalf("networkruntime bypassed diagnostics sink via slog: %s", slogOutput.String())
 	}
 }

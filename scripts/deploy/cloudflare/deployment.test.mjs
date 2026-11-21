@@ -97,3 +97,58 @@ test('input validation requires an owner secret and bounded stable names', () =>
   assert.throws(() => readInputs({ ...env, CLOUDFLARE_WORKER_NAME: 'name; command' }));
   assert.throws(() => readInputs({ ...env, CLOUDFLARE_WORKER_NAME: 'a'.repeat(56) }));
 });
+
+test('post-deploy verification retries transient control-plane lag and logs retry reasons', async () => {
+  const h = harness();
+  await deployRelay(h.options);
+  const waits = [];
+  let postDeploySettingsCalls = 0, routeCalls = 0, consoleSettingsCalls = 0;
+  const realSettings = h.options.cloudflare.settings;
+  const realConsoleSettings = h.options.consoleCloudflare.settings;
+  h.options.wait = async ms => waits.push(ms);
+  h.options.verificationDelaysMs = [10, 20, 40];
+  h.options.cloudflare.settings = async () => {
+    if (h.plans.length === 2) {
+      postDeploySettingsCalls++;
+      if (postDeploySettingsCalls === 1) return { bindings: h.remote.bindings.slice(1) };
+      if (postDeploySettingsCalls === 2) return null;
+    }
+    return realSettings();
+  };
+  h.options.cloudflare.route = async () => (++routeCalls === 1
+    ? { enabled: false, previews_enabled: false }
+    : { enabled: true, previews_enabled: false });
+  h.options.consoleCloudflare.settings = async () => {
+    if (h.plans.length === 2 && ++consoleSettingsCalls === 1) return { bindings: [] };
+    return realConsoleSettings();
+  };
+  const updated = await deployRelay(h.options);
+  assert.equal(updated.kind, 'update');
+  assert.deepEqual(waits, [10, 20, 10, 10]);
+  const retries = h.events.filter(event => event.event === 'deployment_verification_retry');
+  assert.deepEqual(retries.map(({ attempt, reason }) => ({ attempt, reason })), [
+    { attempt: 1, reason: 'missing_binding:WINDSHARE_DEPLOYMENT' },
+    { attempt: 2, reason: 'worker_settings_absent' },
+    { attempt: 1, reason: 'workers_dev_route_pending' },
+    { attempt: 1, reason: 'missing_binding:WINDSHARE_DEPLOYMENT' },
+  ]);
+  assert.ok(!JSON.stringify(h.events).includes(inputs.ownerPassword));
+});
+
+test('post-deploy verification stops after bounded retries while failing fast on non-retryable drift', async () => {
+  const exhausted = harness(), exhaustedWaits = [];
+  await deployRelay(exhausted.options);
+  exhausted.options.wait = async ms => exhaustedWaits.push(ms);
+  exhausted.options.verificationDelaysMs = [10, 20];
+  exhausted.options.deploy = async () => { exhausted.remote = { bindings: [] }; };
+  await assert.rejects(deployRelay(exhausted.options), /missing its WINDSHARE_DEPLOYMENT plain_text binding/);
+  assert.deepEqual(exhaustedWaits, [10, 20]);
+
+  const drift = harness(), driftWaits = [];
+  await deployRelay(drift.options);
+  drift.options.wait = async ms => driftWaits.push(ms);
+  drift.options.verificationDelaysMs = [10, 20];
+  drift.options.deploy = async () => { drift.remote.bindings[3].namespace_id = 'd'.repeat(32); };
+  await assert.rejects(deployRelay(drift.options), /namespace changed/);
+  assert.deepEqual(driftWaits, []);
+});

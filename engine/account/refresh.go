@@ -271,10 +271,7 @@ func (service *Service) requestIssuance(ctx context.Context, record Record, path
 	if !ok || failure.Kind != "denied" {
 		return err
 	}
-	service.mu.Lock()
-	service.rememberDenialLocked(record, failure.Reason)
-	service.mu.Unlock()
-	_, storeErr := service.config.Store.Update(ctx, func(current Record) (Record, error) {
+	storeErr := service.recordDenial(ctx, record, failure.Reason, func(current Record) (Record, error) {
 		if !sameIdentity(current, record) {
 			return Record{}, ErrSuperseded
 		}
@@ -327,10 +324,15 @@ func (service *Service) failure(record Record, err error, delay time.Duration) t
 		if remote.Kind == "denied" {
 			state, delay = Denied, MaximumRetry
 		}
-		if remote.Kind == "rate_limited" {
-			delay = max(delay, time.Duration(min(remote.RetryAfter, maxRateLimitSeconds))*time.Second)
-		}
 	}
+	delay = rateLimitDelay(delay, err)
 	service.transition(record, state, reason, service.config.Now().Add(delay))
+	return delay
+}
+
+func rateLimitDelay(delay time.Duration, err error) time.Duration {
+	if remote, ok := errors.AsType[*fault](err); ok && remote.Kind == "rate_limited" {
+		return max(delay, time.Duration(min(remote.RetryAfter, maxRateLimitSeconds))*time.Second)
+	}
 	return delay
 }

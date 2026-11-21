@@ -226,3 +226,21 @@ func (service *Service) install(ctx context.Context, previous Record, response s
 	service.transition(record, Ready, "", service.config.Now().Add(RefreshInterval))
 	return nil
 }
+
+// recordDenial serializes denial persistence with local store projections while
+// guaranteeing that an explicit refusal is remembered in memory even if the
+// context expires before acquiring the local gate or writing to the store.
+func (service *Service) recordDenial(ctx context.Context, record Record, reason string, update func(Record) (Record, error)) error {
+	if err := service.lockLocal(ctx); err != nil {
+		service.mu.Lock()
+		service.rememberDenialLocked(record, reason)
+		service.mu.Unlock()
+		return err
+	}
+	defer func() { <-service.local }()
+	service.mu.Lock()
+	service.rememberDenialLocked(record, reason)
+	service.mu.Unlock()
+	_, err := service.config.Store.Update(ctx, update)
+	return err
+}
