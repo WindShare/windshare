@@ -70,8 +70,8 @@ export class RelayRecovery {
   }
 
   nextRetry(): RecoveryRetry | undefined {
-    // Discovery can still supply a route that has never been attempted.
-    if (this.candidates.expanding) return undefined
+    // Incomplete discovery can still supply a route that has never been attempted.
+    if (this.candidates.expanding || !this.candidates.complete) return undefined
     const now = this.#clock.now()
     let earliest: RecoveryRetry | undefined
     for (const base of this.candidates.bases) {
@@ -87,22 +87,33 @@ export class RelayRecovery {
   #selectionFailure(failure: unknown): unknown {
     if (isShareRecoveryFailure(failure)) return failure
     const rejections = this.candidates.bases.map(base => this.#rejections.get(base))
-    if (rejections.length > 0 && rejections.every(rejection => rejection?.kind === 'terminal')) {
+    if (this.candidates.complete && rejections.length > 0 && rejections.every(rejection => rejection?.kind === 'terminal')) {
       if (rejections.length === 1) return rejections[0]!.failure
       return new AggregateError(rejections.map(rejection => rejection.failure),
         'All relay endpoints rejected this share', { cause: failure })
     }
     const cooldowns = rejections.filter(rejection => rejection?.kind === 'cooldown')
-    const allRestricted = cooldowns.length > 0 && cooldowns.length === rejections.length &&
+    const allRestricted = this.candidates.complete && cooldowns.length > 0 && cooldowns.length === rejections.length &&
       cooldowns.every(({ retry }) => retry.reason === 'authorization')
-    // Pending discovery and expired cooldowns can still yield other routes.
+    // Incomplete discovery and expired cooldowns can still yield other routes.
     const retry = allRestricted ? this.nextRetry() : undefined
     if (retry !== undefined) return new AllRelaysRestrictedError(retry.retryAt, failure)
     if (cooldowns.length > 0 && isTerminalRecoveryFailure(failure)) {
       return new AggregateError([failure, ...cooldowns.map(rejection => rejection.failure)],
         'Some relay endpoints are cooling down', { cause: failure })
     }
+    if (!this.candidates.complete) return this.#incompleteSelectionFailure(failure)
     return failure
+  }
+
+  #incompleteSelectionFailure(failure: unknown): unknown {
+    const emptyFailure = failure instanceof AggregateError && failure.errors.length === 0
+    if (!emptyFailure && !isTerminalRecoveryFailure(failure)) return failure
+    // Missing directory results or transient refresh errors leave unresolved
+    // aliases open; terminal rejections on known endpoints cannot end the share.
+    const unresolved = new Error('Some relay aliases are not yet resolved',
+      this.candidates.expansionFailure === undefined ? undefined : { cause: this.candidates.expansionFailure })
+    return emptyFailure ? unresolved : new AggregateError([failure, unresolved], unresolved.message, { cause: failure })
   }
 
   #blockingRejection(base: string, now: number): EndpointRejection | undefined {

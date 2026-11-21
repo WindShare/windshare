@@ -357,6 +357,63 @@ describe('initial receiver waiting', () => {
   })
 })
 
+it('does not terminate initial join when a known relay stops while another alias is still unresolved', async () => {
+  vi.useFakeTimers()
+  vi.setSystemTime(0)
+  const clock = { now: () => Date.now(), sleep: systemReconnectClock.sleep }
+  const control = new InitialJoinControl()
+  const lifetime = new AbortController()
+  const vectorNow = Date.parse(directoryVectors.now)
+  const key = await encodeSuite02CapabilityKey(new Uint8Array(16), new Uint8Array(16))
+  let offline = true
+  const directory = new NetworkDirectory({
+    network: directoryVectors.network,
+    roots: directoryVectors.roots,
+    mirrors: ['https://mirror.example/directory'],
+    now: () => vectorNow,
+    monotonicNow: () => Date.now(),
+    cache: new MemoryDirectoryCache(),
+    fetch: async () => {
+      if (offline) throw new Error('offline')
+      return new Response(directoryEnvelope('valid'))
+    },
+  })
+  let task: Promise<string> | undefined
+  try {
+    const candidates = resolveLinkRelays({ ...key, relays: ['https://stopped.example'], nodeAliases: ['jp1'] }, directory)
+    const relayRecovery = new RelayRecovery(candidates, clock)
+    const states: InitialJoinState[] = []
+    const dial = vi.fn(async (relayBase: string) => {
+      if (relayBase === 'https://stopped.example') {
+        throw new RelayReceiverError('share stopped', {
+          relayError: { code: RELAY_ERROR.stopped, retryAfterMilliseconds: 0 },
+        })
+      }
+      return `connected:${relayBase}`
+    })
+    const close = async () => undefined
+    task = runInitialJoin({
+      clock, control, signal: lifetime.signal, relayRecovery, close,
+      connect: attempt => relayRecovery.race(attempt.signal, dial, close, { explicit: attempt.explicitRetry }),
+      onState: state => states.push(state),
+    })
+
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(states.at(-1)).toEqual({ kind: 'paused', reason: 'unreachable' })
+    expect(dial.mock.calls.map(([base]) => base)).toEqual(['https://stopped.example'])
+
+    offline = false
+    control.request('retry')
+    await vi.advanceTimersByTimeAsync(0)
+    await expect(task).resolves.toBe('connected:https://jp1.example')
+    expect(dial.mock.calls.map(([base]) => base)).toEqual(['https://stopped.example', 'https://jp1.example'])
+  } finally {
+    lifetime.abort()
+    await task?.catch(() => undefined)
+    directory.close()
+  }
+})
+
 it('coalesces retry requests for existing waits and releases delay timers on cancellation', async () => {
   vi.useFakeTimers()
   const wake = new RecoveryWake()

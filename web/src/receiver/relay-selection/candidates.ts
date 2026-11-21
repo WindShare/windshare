@@ -29,6 +29,7 @@ export class RelayCandidates {
   #current: Promise<unknown>
   #expanding: boolean
   #complete: boolean
+  #expansionFailure: unknown
 
   constructor(
     initial: readonly string[],
@@ -48,9 +49,19 @@ export class RelayCandidates {
     } else if (expansion !== undefined) {
       this.#runner = undefined
       this.#expanding = true
-      this.#complete = true
-      this.#current = expansion.then(this.#emit)
-        .then(() => undefined, (error: unknown) => error)
+      this.#complete = false
+      this.#current = expansion
+        .then(bases => {
+          this.#emit(bases)
+          this.#complete = true
+        })
+        .then(
+          () => undefined,
+          (error: unknown) => {
+            this.#expansionFailure = error
+            return error
+          },
+        )
         .finally(() => { this.#expanding = false })
     } else {
       this.#runner = undefined
@@ -62,6 +73,8 @@ export class RelayCandidates {
 
   get bases(): readonly string[] { return this.#bases }
   get expanding(): boolean { return this.#expanding }
+  get complete(): boolean { return this.#complete }
+  get expansionFailure(): unknown { return this.#expansionFailure }
   get settled(): Promise<void> { return this.#current.then(() => undefined) }
 
   async all(options: RelayExpansionOptions = {}): Promise<readonly string[]> {
@@ -94,10 +107,14 @@ export class RelayCandidates {
     }
     const run = pending.then(
       status => {
+        this.#expansionFailure = undefined
         if (status !== 'incomplete') this.#complete = true
         return undefined
       },
-      (error: unknown) => error,
+      (error: unknown) => {
+        this.#expansionFailure = error
+        return error
+      },
     ).finally(() => {
       this.#expanding = false
     })

@@ -6,7 +6,8 @@ import { BandwidthWaitError } from '../../src/contracts/capacity'
 import { receiverRelayBases, RelayCandidates } from '../../src/receiver/relay-selection/candidates'
 import { RelayRecovery } from '../../src/receiver/relay-selection/recovery'
 import { RelayPolicyDeniedError, RELAY_POLICY_RETRY_MS } from '../../src/receiver/relay-admission'
-import { RelayProtocolError } from '../../src/transport/relay/protocol'
+import { RELAY_ERROR, RelayProtocolError } from '../../src/transport/relay/protocol'
+import { RelayReceiverError } from '../../src/transport/relay/receiver'
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -144,5 +145,73 @@ describe('first usable relay', () => {
     await expect(source.all({ explicit: true })).resolves.toEqual(['resolved'])
     expect(attempt).toBe(3)
     expect(seenOptions).toEqual([true, false, true])
+  })
+
+  it('keeps recovery retryable until unresolved aliases complete and terminates once every route rejects', async () => {
+    let attempt = 0
+    const source = new RelayCandidates(['known'], async (emit, options) => {
+      attempt += 1
+      if (attempt === 1) throw new Error('directory offline')
+      if (!options.explicit) return 'incomplete'
+      emit(['resolved'])
+      return 'complete'
+    })
+    const recovery = new RelayRecovery(source, { now: () => 0 })
+    const signal = new AbortController().signal
+    const close = async () => undefined
+    const stopped = () => new RelayReceiverError('share stopped', {
+      relayError: { code: RELAY_ERROR.stopped, retryAfterMilliseconds: 0 },
+    })
+    const connect = vi.fn(async (base: string) => {
+      if (base === 'known') throw stopped()
+      throw stopped()
+    })
+
+    const firstFailure = await recovery.race(signal, connect, close).catch((error: unknown) => error)
+    expect(source.complete).toBe(false)
+    expect(isTerminalRecoveryFailure(firstFailure)).toBe(false)
+
+    const secondFailure = await recovery.race(signal, connect, close).catch((error: unknown) => error)
+    expect(isTerminalRecoveryFailure(secondFailure)).toBe(false)
+    expect(secondFailure).toBeInstanceOf(Error)
+    expect((secondFailure as Error).message).toContain('not yet resolved')
+    expect(connect).toHaveBeenCalledTimes(1)
+
+    const finalFailure = await recovery.race(signal, connect, close, { explicit: true }).catch((error: unknown) => error)
+    expect(source.complete).toBe(true)
+    expect(isTerminalRecoveryFailure(finalFailure)).toBe(true)
+    expect(connect.mock.calls.map(([base]) => base)).toEqual(['known', 'resolved'])
+
+    const rejectedOneShot = new RelayCandidates(['known'], Promise.reject(new Error('one-shot failed')))
+    const oneShotRecovery = new RelayRecovery(rejectedOneShot, { now: () => 0 })
+    const oneShotFailure = await oneShotRecovery.race(signal, async () => { throw stopped() }, close)
+      .catch((error: unknown) => error)
+    expect(rejectedOneShot.complete).toBe(false)
+    expect(isTerminalRecoveryFailure(oneShotFailure)).toBe(false)
+  })
+
+  it('does not claim all relays are restricted while candidate expansion is incomplete', async () => {
+    let resolveAlias = false
+    const source = new RelayCandidates(['official-a'], async (emit) => {
+      if (!resolveAlias) return 'incomplete'
+      emit(['official-b'])
+      return 'complete'
+    })
+    const recovery = new RelayRecovery(source, { now: () => 0 })
+    const signal = new AbortController().signal
+    const close = async () => undefined
+    const connect = vi.fn<(base: string) => Promise<string>>(async () => { throw new RelayPolicyDeniedError() })
+
+    const partialFailure = await recovery.race(signal, connect, close).catch((error: unknown) => error)
+    expect(source.complete).toBe(false)
+    expect(partialFailure).not.toBeInstanceOf(AllRelaysRestrictedError)
+    expect(recovery.nextRetry()).toBeUndefined()
+
+    resolveAlias = true
+    const fullFailure = await recovery.race(signal, connect, close).catch((error: unknown) => error)
+    expect(source.complete).toBe(true)
+    expect(fullFailure).toBeInstanceOf(AllRelaysRestrictedError)
+    expect(recovery.nextRetry()).toEqual({ retryAt: RELAY_POLICY_RETRY_MS, reason: 'authorization' })
+    expect(connect.mock.calls.map(([base]) => base)).toEqual(['official-a', 'official-b'])
   })
 })
