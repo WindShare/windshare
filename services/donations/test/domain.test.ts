@@ -726,7 +726,6 @@ describe('WallStore SQLite persistence, caching, rate limiting, and pagination',
     const createEnv = (adminSecret?: string): DonationsEnv => ({
       DONATION_WALL: wallNamespace,
       AFDIAN_USER_ID: 'creator',
-      KOFI_HANDLE: 'windshare',
       ALLOWED_ORIGINS: 'https://windshare.cc',
       DONATE_API_ORIGIN: origin,
       ...(adminSecret === undefined ? {} : { DONATE_ADMIN_PASSWORD: adminSecret }),
@@ -966,7 +965,6 @@ describe('admin donations page limit normalization', () => {
     const env: DonationsEnv = {
       DONATION_WALL: createWallNamespaceFromStore(store),
       AFDIAN_USER_ID: 'creator',
-      KOFI_HANDLE: 'windshare',
       ALLOWED_ORIGINS: 'https://windshare.cc',
       DONATE_API_ORIGIN: origin,
       DONATE_ADMIN_PASSWORD: adminPassword,
@@ -1035,7 +1033,6 @@ function createSyncHarness() {
     AFDIAN_USER_ID: 'creator',
     AFDIAN_TOKEN: 'afdian-token',
     AFDIAN_WEBHOOK_SECRET: 'afdian-webhook-secret',
-    KOFI_HANDLE: 'windshare',
     ALLOWED_ORIGINS: 'https://windshare.cc',
     DONATE_API_ORIGIN: origin,
     DONATE_ADMIN_PASSWORD: adminPassword,

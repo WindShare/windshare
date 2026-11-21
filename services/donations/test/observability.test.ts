@@ -50,7 +50,6 @@ function createObservabilityHarness(overrides: Partial<AsyncWallStub> = {}) {
     AFDIAN_USER_ID: 'creator',
     AFDIAN_TOKEN: 'afdian-token',
     AFDIAN_WEBHOOK_SECRET: AFDIAN_SECRET,
-    KOFI_HANDLE: 'windshare',
     ALLOWED_ORIGINS: 'https://windshare.cc',
     DONATE_API_ORIGIN: API_ORIGIN,
     NOWPAYMENTS_IPN_SECRET,

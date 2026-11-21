@@ -43,7 +43,6 @@ export interface DonationWallRpc extends Rpc.DurableObjectBranded {
 export interface DonationsEnv {
   readonly DONATION_WALL: DurableObjectNamespace<DonationWallRpc>
   readonly AFDIAN_USER_ID: string
-  readonly KOFI_HANDLE: string
   readonly ALLOWED_ORIGINS: string
   readonly DONATE_API_ORIGIN: string
   readonly AFDIAN_TOKEN?: string

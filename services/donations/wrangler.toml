@@ -18,7 +18,6 @@ new_sqlite_classes = ["DonationWall"]
 
 [vars]
 AFDIAN_USER_ID = "735de47ce57c11f1b2c95254001e7c00"
-KOFI_HANDLE = "windshare"
 ALLOWED_ORIGINS = "https://ws.ourworld.top,https://windshare.cc"
 DONATE_API_ORIGIN = "https://donate.windshare.cc"
 

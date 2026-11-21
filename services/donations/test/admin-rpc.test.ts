@@ -19,7 +19,6 @@ describe('Admin DO RPC fail-closed error boundary', () => {
     const makeEnv = (overrides?: Partial<AsyncWallStub>): DonationsEnv => ({
       DONATION_WALL: createWallNamespaceFromStore(store, overrides === undefined ? undefined : { overrides }),
       AFDIAN_USER_ID: 'creator',
-      KOFI_HANDLE: 'windshare',
       ALLOWED_ORIGINS: 'https://windshare.cc',
       DONATE_API_ORIGIN: origin,
       DONATE_ADMIN_PASSWORD: adminPassword,

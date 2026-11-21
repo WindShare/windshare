@@ -27,7 +27,6 @@ const SECRETS = Object.freeze({
   AFDIAN_USER_ID: '735de47ce57c11f1b2c95254001e7c00',
   AFDIAN_TOKEN: 'test-afdian-token',
   AFDIAN_WEBHOOK_SECRET: 'test-afdian-webhook-secret-entropy',
-  KOFI_HANDLE: 'windshare',
   KOFI_VERIFICATION_TOKEN: 'test-kofi-verification-token',
   NOWPAYMENTS_API_KEY: 'test-nowpayments-api-key',
   NOWPAYMENTS_IPN_SECRET: 'test-nowpayments-ipn-secret',

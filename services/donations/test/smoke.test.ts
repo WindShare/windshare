@@ -41,7 +41,6 @@ function createStubEnv(): DonationsEnv {
   return {
     DONATION_WALL: namespace,
     AFDIAN_USER_ID: 'test-user',
-    KOFI_HANDLE: 'windshare',
     ALLOWED_ORIGINS: 'https://ws.ourworld.top, https://windshare.cc, invalid-origin',
     DONATE_API_ORIGIN: 'https://donate.windshare.cc',
   }
