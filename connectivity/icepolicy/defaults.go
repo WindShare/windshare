@@ -7,13 +7,27 @@ const ExistingDefaultSTUNServer = "stun:stun.l.google.com:19302"
 const CloudflareSTUNServer = "stun:stun.cloudflare.com:3478"
 const TwilioSTUNServer = "stun:global.stun.twilio.com:3478"
 
-// Static priority tiers keep signed directory endpoints ahead of embedded
-// public fallbacks while allowing runtime profile success to override both.
+// Static priority tiers keep healthy active directory nodes ahead of canary
+// and draining nodes, signed public STUN, and embedded fallbacks, while
+// allowing runtime profile success to override static order.
 const (
-	DirectoryNodeSTUNPriority   = 2
-	DirectoryPublicSTUNPriority = 1
-	FallbackSTUNPriority        = 0
+	DirectoryNodeSTUNPriority     = 4
+	DirectoryCanarySTUNPriority   = 3
+	DirectoryDrainingSTUNPriority = 2
+	DirectoryPublicSTUNPriority   = 1
+	FallbackSTUNPriority          = 0
 )
+
+func directoryNodeSTUNPriority(status nodedirectory.Status) int {
+	switch status {
+	case nodedirectory.Active:
+		return DirectoryNodeSTUNPriority
+	case nodedirectory.Canary:
+		return DirectoryCanarySTUNPriority
+	default:
+		return DirectoryDrainingSTUNPriority
+	}
+}
 
 // Provider-published endpoints are fallbacks, not mainland reachability claims.
 func DefaultPool() ICEEndpointPool {
@@ -42,11 +56,12 @@ func DirectoryPool(directory nodedirectory.Payload) ICEEndpointPool {
 		if !node.HasRole("stun") {
 			continue
 		}
+		priority := directoryNodeSTUNPriority(node.Status)
 		for _, url := range node.STUN {
 			add(Endpoint{
 				ID: "directory:" + url, URL: url, Region: node.Region, Provider: node.Provider,
 				FailureDomain: node.Operator + ":" + node.Provider + ":" + node.Region,
-				Family:        "any", Trust: "reviewed", Priority: DirectoryNodeSTUNPriority, Enabled: true,
+				Family:        "any", Trust: "reviewed", Priority: priority, Enabled: true,
 			})
 		}
 	}

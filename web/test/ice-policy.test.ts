@@ -5,6 +5,8 @@ import { ICEEndpointPool, selectAttemptProfile, type ICEEndpoint, type Selection
 import { ICEFactStore } from '../src/connectivity/ice-policy/facts'
 import {
  CLOUDFLARE_STUN_SERVER,
+ DIRECTORY_CANARY_STUN_PRIORITY,
+ DIRECTORY_DRAINING_STUN_PRIORITY,
  DIRECTORY_NODE_STUN_PRIORITY,
  DIRECTORY_PUBLIC_STUN_PRIORITY,
  EXISTING_DEFAULT_STUN_SERVER,
@@ -115,6 +117,7 @@ describe('trusted ICE policy', () => {
   expect(byURL.has('stun:us1.example:3478')).toBe(true)
   expect(byURL.has('stun:ignored.example:3478')).toBe(false)
   expect(byURL.get('stun:cn1.example:3478')?.priority).toBe(DIRECTORY_NODE_STUN_PRIORITY)
+  expect(byURL.get('stun:us1.example:3478')?.priority).toBe(DIRECTORY_DRAINING_STUN_PRIORITY)
   expect(byURL.get(CLOUDFLARE_STUN_SERVER)).toMatchObject({
    priority: DIRECTORY_PUBLIC_STUN_PRIORITY,
    failureDomain: 'directory-cloudflare',
@@ -139,5 +142,60 @@ describe('trusted ICE policy', () => {
   })
   facts.recordProfile(backup, true, request.nowMs)
   expect(selectAttemptProfile(directoryPool, request, facts.snapshot()).urls).toEqual(backup.urls)
+ })
+ it('ranks active directory STUN ahead of canary, draining, and public tiers', () => {
+  const threeNode = directoryICEEndpointPool({
+   cursor: { generation: 1, serial: 4, digest: 'digest' },
+   nodes: [
+    { alias: 'cn1', nodeKey: 'key-cn1', relay: 'https://cn1.example', identity: 'https://cn1.example', stun: ['stun:cn1.example:3478'], roles: ['relay', 'stun'], zone: 'cn', region: 'cn-wuhan', provider: 'aliyun', operator: 'official', capacityMbps: 200, status: 'active' },
+    { alias: 'us1', nodeKey: 'key-us1', relay: 'https://us1.example', identity: 'https://us1.example', stun: ['stun:us1.example:3478'], roles: ['relay', 'stun'], zone: 'global', region: 'us-los-angeles', provider: 'quickpacket', operator: 'official', capacityMbps: 100, status: 'draining' },
+    { alias: 'eu1', nodeKey: 'key-eu1', relay: 'https://eu1.example', identity: 'https://eu1.example', stun: ['stun:eu1.example:3478'], roles: ['relay', 'stun'], zone: 'global', region: 'eu-frankfurt', provider: 'gtt', operator: 'official', capacityMbps: 300, status: 'active' },
+   ],
+   publicSTUN: [],
+   notBefore: 0,
+   trustedUntil: 1_000_000,
+   envelope: '{}',
+  })
+  for (let i = 0; i < 16; i++) {
+   const waveRequest: SelectionRequest = { ...request, waveID: `three-${i}` }
+   const primary = selectAttemptProfile(threeNode, waveRequest)
+   expect(new Set(primary.urls)).toEqual(new Set(['stun:cn1.example:3478', 'stun:eu1.example:3478']))
+   const backup = selectAttemptProfile(threeNode, {
+    ...waveRequest, sequence: waveRequest.sequence + 1,
+    usedEndpointIDs: primary.endpointIDs, usedFailureDomains: primary.failureDomains,
+   })
+   expect(backup.urls).toHaveLength(2)
+   expect(backup.urls[0]).toBe('stun:us1.example:3478')
+  }
+
+  const mixed = directoryICEEndpointPool({
+   cursor: { generation: 1, serial: 5, digest: 'digest' },
+   nodes: [
+    { alias: 'cn1', nodeKey: 'key-cn1', relay: 'https://cn1.example', identity: 'https://cn1.example', stun: ['stun:cn1.example:3478'], roles: ['relay', 'stun'], zone: 'cn', region: 'cn-wuhan', provider: 'aliyun', operator: 'official', capacityMbps: 200, status: 'active' },
+    { alias: 'jp1', nodeKey: 'key-jp1', relay: 'https://jp1.example', identity: 'https://jp1.example', stun: ['stun:jp1.example:3478'], roles: ['relay', 'stun'], zone: 'global', region: 'jp-tokyo', provider: 'vultr', operator: 'official', capacityMbps: 150, status: 'canary' },
+    { alias: 'us1', nodeKey: 'key-us1', relay: 'https://us1.example', identity: 'https://us1.example', stun: ['stun:us1.example:3478'], roles: ['relay', 'stun'], zone: 'global', region: 'us-los-angeles', provider: 'quickpacket', operator: 'official', capacityMbps: 100, status: 'draining' },
+   ],
+   publicSTUN: [
+    { url: 'stun:cn-public.example:3478', region: 'cn', provider: 'tencent', failureDomain: 'tencent-stun' },
+   ],
+   notBefore: 0,
+   trustedUntil: 1_000_000,
+   envelope: '{}',
+  })
+  const byURL = new Map(mixed.endpoints.map(endpoint => [endpoint.url, endpoint]))
+  expect(byURL.get('stun:cn1.example:3478')?.priority).toBe(DIRECTORY_NODE_STUN_PRIORITY)
+  expect(byURL.get('stun:jp1.example:3478')?.priority).toBe(DIRECTORY_CANARY_STUN_PRIORITY)
+  expect(byURL.get('stun:us1.example:3478')?.priority).toBe(DIRECTORY_DRAINING_STUN_PRIORITY)
+  expect(byURL.get('stun:cn-public.example:3478')?.priority).toBe(DIRECTORY_PUBLIC_STUN_PRIORITY)
+  for (let i = 0; i < 16; i++) {
+   const waveRequest: SelectionRequest = { ...request, waveID: `mixed-${i}` }
+   const primary = selectAttemptProfile(mixed, waveRequest)
+   expect(primary.urls).toEqual(['stun:cn1.example:3478', 'stun:jp1.example:3478'])
+   const backup = selectAttemptProfile(mixed, {
+    ...waveRequest, sequence: waveRequest.sequence + 1,
+    usedEndpointIDs: primary.endpointIDs, usedFailureDomains: primary.failureDomains,
+   })
+   expect(backup.urls).toEqual(['stun:us1.example:3478', 'stun:cn-public.example:3478'])
+  }
  })
 })

@@ -137,9 +137,9 @@ fn alternative(nodes: &[Node], subject: &Listing, role: Role, reporting: &[Cycle
             };
             l.spec.node_key != subject.spec.node_key
                 && l.spec.zone == subject.spec.zone
+                && l.maintenance.is_none()
                 && l.spec.roles.contains(&role)
                 && !withdrawn.contains(&role)
-                && (role != Role::Relay || !l.relay_drained())
                 && reporting.iter().all(|c| sample(c, l, role) > 0)
         })
 }

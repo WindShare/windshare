@@ -293,6 +293,9 @@ func TestDirectoryPoolPrioritizesDirectoryOverFallbacks(t *testing.T) {
 	if got := byURL["stun:cn1.example:3478"].Priority; got != DirectoryNodeSTUNPriority {
 		t.Fatalf("directory node priority = %d, want %d", got, DirectoryNodeSTUNPriority)
 	}
+	if got := byURL["stun:us1.example:3478"].Priority; got != DirectoryDrainingSTUNPriority {
+		t.Fatalf("draining node priority = %d, want %d", got, DirectoryDrainingSTUNPriority)
+	}
 	if cf := byURL[CloudflareSTUNServer]; cf.Priority != DirectoryPublicSTUNPriority || cf.FailureDomain != "directory-cloudflare" || cf.Region != "global" {
 		t.Fatalf("overlapping directory public_stun did not override fallback: %+v", cf)
 	}
@@ -330,5 +333,68 @@ func TestDirectoryPoolPrioritizesDirectoryOverFallbacks(t *testing.T) {
 	promoted := SelectAttemptProfile(pool, selection(), facts.Snapshot())
 	if !reflect.DeepEqual(promoted.URLs(), backup.URLs()) {
 		t.Fatalf("runtime-successful backup was not promoted: got %v, want %v", promoted.URLs(), backup.URLs())
+	}
+}
+
+func TestDirectoryPoolRanksActiveAheadOfCanaryAndDraining(t *testing.T) {
+	threeNode := DirectoryPool(nodedirectory.Payload{
+		Nodes: []nodedirectory.Node{
+			{Alias: "cn1", STUN: []string{"stun:cn1.example:3478"}, Roles: []string{"relay", "stun"}, Region: "cn-wuhan", Provider: "aliyun", Operator: "official", Status: nodedirectory.Active},
+			{Alias: "us1", STUN: []string{"stun:us1.example:3478"}, Roles: []string{"relay", "stun"}, Region: "us-los-angeles", Provider: "quickpacket", Operator: "official", Status: nodedirectory.Draining},
+			{Alias: "eu1", STUN: []string{"stun:eu1.example:3478"}, Roles: []string{"relay", "stun"}, Region: "eu-frankfurt", Provider: "gtt", Operator: "official", Status: nodedirectory.Active},
+		},
+	})
+	for i := range 16 {
+		request := selection()
+		request.WaveID = fmt.Sprintf("three-%d", i)
+		primary := SelectAttemptProfile(threeNode, request, GenerationFacts{})
+		urls := primary.URLs()
+		if len(urls) != 2 || !((urls[0] == "stun:cn1.example:3478" && urls[1] == "stun:eu1.example:3478") ||
+			(urls[0] == "stun:eu1.example:3478" && urls[1] == "stun:cn1.example:3478")) {
+			t.Fatalf("wave %d primary = %v, want active pair {cn1, eu1}", i, urls)
+		}
+		request.Sequence++
+		request.UsedEndpointIDs = primary.EndpointIDs()
+		request.UsedFailureDomains = primary.FailureDomains()
+		backup := SelectAttemptProfile(threeNode, request, GenerationFacts{})
+		if got := backup.URLs(); len(got) != 2 || got[0] != "stun:us1.example:3478" {
+			t.Fatalf("wave %d backup = %v, want draining us1 first before embedded fallback", i, got)
+		}
+	}
+
+	mixed := DirectoryPool(nodedirectory.Payload{
+		Nodes: []nodedirectory.Node{
+			{Alias: "cn1", STUN: []string{"stun:cn1.example:3478"}, Roles: []string{"relay", "stun"}, Region: "cn-wuhan", Provider: "aliyun", Operator: "official", Status: nodedirectory.Active},
+			{Alias: "jp1", STUN: []string{"stun:jp1.example:3478"}, Roles: []string{"relay", "stun"}, Region: "jp-tokyo", Provider: "vultr", Operator: "official", Status: nodedirectory.Canary},
+			{Alias: "us1", STUN: []string{"stun:us1.example:3478"}, Roles: []string{"relay", "stun"}, Region: "us-los-angeles", Provider: "quickpacket", Operator: "official", Status: nodedirectory.Draining},
+		},
+		PublicSTUN: []nodedirectory.STUNEndpoint{
+			{URL: "stun:cn-public.example:3478", Region: "cn", Provider: "tencent", FailureDomain: "tencent-stun"},
+		},
+	})
+	byURL := make(map[string]Endpoint, len(mixed.endpoints))
+	for _, endpoint := range mixed.endpoints {
+		byURL[endpoint.URL] = endpoint
+	}
+	if byURL["stun:cn1.example:3478"].Priority != DirectoryNodeSTUNPriority ||
+		byURL["stun:jp1.example:3478"].Priority != DirectoryCanarySTUNPriority ||
+		byURL["stun:us1.example:3478"].Priority != DirectoryDrainingSTUNPriority ||
+		byURL["stun:cn-public.example:3478"].Priority != DirectoryPublicSTUNPriority {
+		t.Fatalf("unexpected priority tiers: %+v", byURL)
+	}
+	for i := range 16 {
+		request := selection()
+		request.WaveID = fmt.Sprintf("mixed-%d", i)
+		primary := SelectAttemptProfile(mixed, request, GenerationFacts{})
+		if got := primary.URLs(); !reflect.DeepEqual(got, []string{"stun:cn1.example:3478", "stun:jp1.example:3478"}) {
+			t.Fatalf("wave %d primary = %v, want [cn1, jp1]", i, got)
+		}
+		request.Sequence++
+		request.UsedEndpointIDs = primary.EndpointIDs()
+		request.UsedFailureDomains = primary.FailureDomains()
+		backup := SelectAttemptProfile(mixed, request, GenerationFacts{})
+		if got := backup.URLs(); !reflect.DeepEqual(got, []string{"stun:us1.example:3478", "stun:cn-public.example:3478"}) {
+			t.Fatalf("wave %d backup = %v, want [us1, cn-public]", i, got)
+		}
 	}
 }

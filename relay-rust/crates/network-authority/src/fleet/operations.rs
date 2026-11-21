@@ -62,7 +62,9 @@ impl Listing {
             }
             ListingState::Listed { status, withdrawn } => {
                 let mut spec = self.spec.clone();
-                if withdrawn.contains(&Role::Stun) {
+                // Stateless STUN has no sessions to drain; withdraw it while a verified
+                // binary switch holds maintenance, matching disabled-under-maintenance.
+                if self.maintenance.is_some() || withdrawn.contains(&Role::Stun) {
                     spec.roles.retain(|r| *r != Role::Stun);
                     spec.stun.clear();
                 }

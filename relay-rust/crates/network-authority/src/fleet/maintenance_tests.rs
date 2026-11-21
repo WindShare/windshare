@@ -504,3 +504,125 @@ fn abort_maintenance_requires_admin_and_rejects_stale_maintenance_or_listing_ids
         "listing_changed",
     );
 }
+
+#[test]
+fn maintenance_hold_withdraws_stateless_stun_until_release() {
+    let mut fleet = MaintenanceFleet::new();
+    let op = Operation {
+        node_key: fleet.target.node_key.clone(),
+        operation_id: "stun-withdraw-hold01".into(),
+    };
+    fleet
+        .auth
+        .maintenance_hold(&op, true, &fleet.signer)
+        .unwrap();
+
+    let held = fleet.find_entry("primary").unwrap();
+    assert_eq!(held.status, Status::Draining);
+    assert_eq!(held.spec.roles, [Role::Relay]);
+    assert_eq!(held.spec.stun, Vec::<String>::new());
+
+    // Upgrade verification still receives the full configured STUN role/endpoints.
+    let probe = fleet
+        .auth
+        .maintenance_probe(
+            &op,
+            &[[1; 12], [2; 12], [3; 12]],
+            ["a", "b", "c"].map(String::from),
+        )
+        .unwrap();
+    assert_eq!(probe.spec.roles, [Role::Relay, Role::Stun]);
+    assert_eq!(probe.spec.stun, ["stun:primary.example:3478"]);
+
+    fleet
+        .auth
+        .maintenance_hold(&op, false, &fleet.signer)
+        .unwrap();
+    let restored = fleet.find_entry("primary").unwrap();
+    assert_eq!(restored.status, Status::Active);
+    assert_eq!(restored.spec.roles, [Role::Relay, Role::Stun]);
+    assert_eq!(restored.spec.stun, ["stun:primary.example:3478"]);
+
+    // STUN-only nodes have no relay alias to drain and disappear while held.
+    let mut stun_only = fleet.target.clone();
+    stun_only.roles = vec![Role::Stun];
+    attach(
+        &mut fleet.auth.store,
+        stun_only,
+        ListingState::Listed {
+            status: Status::Active,
+            withdrawn: BTreeSet::new(),
+        },
+        "stun-only-maint".into(),
+    )
+    .unwrap();
+    let mut directory = publication::current(&fleet.auth.store).unwrap();
+    let now = fleet.auth.environment.now();
+    directory
+        .project(&mut fleet.auth.store, &fleet.signer, now, "stun-only")
+        .unwrap();
+    assert_eq!(
+        fleet.find_entry("primary").unwrap().spec.roles,
+        [Role::Stun]
+    );
+
+    let stun_op = Operation {
+        node_key: fleet.target.node_key.clone(),
+        operation_id: "stun-only-hold-00001".into(),
+    };
+    fleet
+        .auth
+        .maintenance_hold(&stun_op, true, &fleet.signer)
+        .unwrap();
+    assert!(fleet.find_entry("primary").is_none());
+    let stun_probe = fleet
+        .auth
+        .maintenance_probe(
+            &stun_op,
+            &[[1; 12], [2; 12], [3; 12]],
+            ["a", "b", "c"].map(String::from),
+        )
+        .unwrap();
+    assert_eq!(stun_probe.spec.roles, [Role::Stun]);
+    assert_eq!(stun_probe.tickets, Vec::<String>::new());
+
+    fleet
+        .auth
+        .maintenance_hold(&stun_op, false, &fleet.signer)
+        .unwrap();
+    let recovered = fleet.find_entry("primary").unwrap();
+    assert_eq!(recovered.status, Status::Active);
+    assert_eq!(recovered.spec.roles, [Role::Stun]);
+}
+
+#[test]
+fn maintenance_hold_excludes_node_as_stun_alternative() {
+    let mut fleet = MaintenanceFleet::new();
+    let spare_op = Operation {
+        node_key: fleet.spare.node_key.clone(),
+        operation_id: "spare-maint-stun-001".into(),
+    };
+    fleet
+        .auth
+        .maintenance_hold(&spare_op, true, &fleet.signer)
+        .unwrap();
+
+    // Spare is under maintenance and not publishing STUN, so primary stays
+    // protected as the last serving STUN node in the zone.
+    for _ in 0..3 {
+        fleet.observe([true, false], [true, true]);
+    }
+    let protected = fleet.find_entry("primary").unwrap();
+    assert_eq!(protected.status, Status::Active);
+    assert_eq!(protected.spec.roles, [Role::Relay, Role::Stun]);
+
+    // Once spare releases maintenance, primary's broken STUN can fail over.
+    fleet
+        .auth
+        .maintenance_hold(&spare_op, false, &fleet.signer)
+        .unwrap();
+    fleet.observe([true, false], [true, true]);
+    let failed_over = fleet.find_entry("primary").unwrap();
+    assert_eq!(failed_over.status, Status::Active);
+    assert_eq!(failed_over.spec.roles, [Role::Relay]);
+}
