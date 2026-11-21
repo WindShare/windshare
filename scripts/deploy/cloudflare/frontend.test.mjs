@@ -268,6 +268,72 @@ test('mirror isolates request I/O promises, merges cold restores monotonically, 
   assert.equal(persisted, newer);
 });
 
+test('multi-hostname mirror shares one canonical Cache API key across origins and cold restarts', async t => {
+  t.mock.method(Date, 'now', () => Date.parse(vectors.now));
+  const baseline = signed('valid'), newer = signed('new_generation');
+  const bundledRevision = JSON.stringify(await directoryRevision(baseline));
+  const linkReq = new Request('https://ws.ourworld.top/.well-known/windshare-network');
+  const backupReq = new Request('https://windshare.cc/.well-known/windshare-network');
+  const createCache = () => {
+    const entries = new Map();
+    let writes = 0;
+    return {
+      entries,
+      get writes() { return writes; },
+      async put(key, value) { writes++; entries.set(String(key), await value.text()); },
+      async match(key) {
+        const hit = entries.get(String(key));
+        return hit === undefined ? null : new Response(hit);
+      },
+    };
+  };
+
+  // 1. Anchors the canonical cache key to the zone primary endpoint from WINDSHARE_DEPLOYMENT.
+  const cache = createCache();
+  const pending = [];
+  const context = { waitUntil(promise) { pending.push(promise); } };
+  const deployment = JSON.stringify({ endpoint: 'https://windshare.cc' });
+  const warmEnv = {
+    [STATE_BINDING]: deployment,
+    BUNDLED_DIRECTORY_REVISION: bundledRevision,
+    DIRECTORY: { get: async () => newer },
+    ASSETS: { fetch: async () => new Response(baseline) },
+  };
+  assert.equal(await (await serveDirectory(linkReq, warmEnv, context, cache)).text(), newer);
+  assert.equal(await (await serveDirectory(backupReq, warmEnv, context, cache)).text(), newer);
+  await Promise.all(pending);
+  assert.equal(cache.writes, 1);
+  assert.deepEqual([...cache.entries.keys()], ['https://windshare.cc/.windshare-cache/last-directory']);
+
+  // Cold restart during a KV outage restores the persisted copy regardless of which hostname arrives first.
+  const outageEnv = () => ({
+    [STATE_BINDING]: deployment,
+    BUNDLED_DIRECTORY_REVISION: bundledRevision,
+    DIRECTORY: { get: async () => { throw new Error('kv outage'); } },
+    ASSETS: { fetch: async () => new Response(baseline) },
+  });
+  assert.equal(await (await serveDirectory(backupReq, outageEnv(), context, cache)).text(), newer);
+  assert.equal(await (await serveDirectory(linkReq, outageEnv(), context, cache)).text(), newer);
+
+  // 2. Falls back to a shared canonical internal key when deployment metadata is absent or malformed.
+  for (const metadata of [undefined, '{not-json']) {
+    const fallbackCache = createCache();
+    const fallbackPending = [];
+    const fallbackCtx = { waitUntil(promise) { fallbackPending.push(promise); } };
+    const envWith = get => ({
+      ...(metadata !== undefined ? { [STATE_BINDING]: metadata } : {}),
+      BUNDLED_DIRECTORY_REVISION: bundledRevision,
+      DIRECTORY: { get },
+      ASSETS: { fetch: async () => new Response(baseline) },
+    });
+    assert.equal(await (await serveDirectory(linkReq, envWith(async () => newer), fallbackCtx, fallbackCache)).text(), newer);
+    await Promise.all(fallbackPending);
+    assert.equal(fallbackCache.writes, 1);
+    assert.deepEqual([...fallbackCache.entries.keys()], ['https://directory-mirror.windshare.internal/.windshare-cache/last-directory']);
+    assert.equal(await (await serveDirectory(backupReq, envWith(async () => null), fallbackCtx, fallbackCache)).text(), newer);
+  }
+});
+
 test('frontend inputs normalize optional KV bindings and reject malformed IDs', () => {
   const account = { CLOUDFLARE_ACCOUNT_ID: 'a'.repeat(32), CLOUDFLARE_WORKER_NAME: 'official-web' };
   assert.equal(readFrontendInputs({ ...account, DIRECTORY_KV_ID: ' ' }).directory, undefined);
