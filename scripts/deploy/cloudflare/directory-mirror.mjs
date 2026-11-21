@@ -35,7 +35,17 @@ function unavailable() {
 
 async function asset(request, env) {
   const response = await env.ASSETS.fetch(new Request(request.url, { method: 'GET' }));
-  if (!response.ok || response.headers.get('Content-Type')?.includes('text/html')) {
+  if (response.status === 404) {
+    await response.body?.cancel();
+    return null;
+  }
+  if (!response.ok) {
+    await response.body?.cancel();
+    console.warn('directory_asset_fetch_failed', { status: response.status });
+    throw new Error(`Bundled directory asset returned HTTP ${response.status}`);
+  }
+  // SPA fallback serves index.html with 200 when no directory asset was bundled.
+  if (response.headers.get('Content-Type')?.toLowerCase().includes('text/html')) {
     await response.body?.cancel();
     return null;
   }
@@ -69,7 +79,8 @@ async function restore(cache, key) {
 async function bundled(env, request, state) {
   if (state.bundle !== undefined) return state.bundle;
   const body = await asset(request, env);
-  const copy = body ? { revision: await directoryRevision(body), body } : null;
+  // Memoize only definitive deployment facts (present or 404/SPA-absent); transient errors throw above.
+  const copy = body === null ? null : { revision: await directoryRevision(body), body };
   state.bundle = copy;
   return copy;
 }

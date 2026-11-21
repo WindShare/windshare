@@ -410,3 +410,66 @@ test('frontend updates converge directory KV attachment, rotation, and removal',
   });
   assert.equal(detached.state.directory, undefined);
 });
+
+test('transient ASSETS 5xx does not poison bundled directory cache while 404 and SPA HTML stay memoized', async t => {
+  t.mock.method(Date, 'now', () => Date.parse(vectors.now));
+  const warnings = [];
+  t.mock.method(console, 'warn', (event, fields) => warnings.push({ event, ...fields }));
+  const baseline = signed('valid'), older = signed('older_serial');
+  const request = new Request('https://windshare.cc/.well-known/windshare-network');
+
+  // 1. Production mode (BUNDLED_DIRECTORY_REVISION set): transient 5xx (including HTML error pages) retries until 200.
+  let prodAssetCalls = 0;
+  const prodResponses = [
+    () => new Response('<html>503</html>', { status: 503, headers: { 'Content-Type': 'text/html; charset=utf-8' } }),
+    () => new Response(null, { status: 500 }),
+    () => new Response(baseline),
+  ];
+  const prodEnv = {
+    BUNDLED_DIRECTORY_REVISION: JSON.stringify(await directoryRevision(baseline)),
+    DIRECTORY: { get: async () => null },
+    ASSETS: { fetch: async () => prodResponses[prodAssetCalls++]() },
+  };
+  assert.equal((await serveDirectory(request, prodEnv, null, null)).status, 503);
+  assert.equal((await serveDirectory(request, prodEnv, null, null)).status, 503);
+  const prodRecovered = await serveDirectory(request, prodEnv, null, null);
+  assert.equal(prodRecovered.status, 200);
+  assert.equal(await prodRecovered.text(), baseline);
+  const prodCached = await serveDirectory(request, prodEnv, null, null);
+  assert.equal(prodCached.status, 200);
+  assert.equal(await prodCached.text(), baseline);
+  assert.equal(prodAssetCalls, 3);
+
+  // 2. Without BUNDLED_DIRECTORY_REVISION: recovery restores bundled floor protection against older KV revisions.
+  let devAssetCalls = 0;
+  const devEnv = {
+    DIRECTORY: { get: async () => older },
+    ASSETS: {
+      fetch: async () => (++devAssetCalls === 1
+        ? new Response('<html>502</html>', { status: 502, headers: { 'Content-Type': 'text/html' } })
+        : new Response(baseline)),
+    },
+  };
+  assert.equal(await (await serveDirectory(request, devEnv, null, null)).text(), older);
+  assert.equal(await (await serveDirectory(request, devEnv, null, null)).text(), baseline);
+  assert.equal(await (await serveDirectory(request, devEnv, null, null)).text(), baseline);
+  assert.equal(devAssetCalls, 2);
+
+  // 3. Definitive absence (404 and 200 text/html SPA fallback) remains memoized across requests.
+  for (const makeAbsent of [
+    () => new Response('not found', { status: 404 }),
+    () => new Response('<html>spa</html>', { status: 200, headers: { 'Content-Type': 'text/html' } }),
+  ]) {
+    let absentCalls = 0;
+    const absentEnv = { ASSETS: { fetch: async () => { absentCalls++; return makeAbsent(); } } };
+    assert.equal((await serveDirectory(request, absentEnv, null, null)).status, 503);
+    assert.equal((await serveDirectory(request, absentEnv, null, null)).status, 503);
+    assert.equal(absentCalls, 1);
+  }
+
+  assert.deepEqual(warnings, [
+    { event: 'directory_asset_fetch_failed', status: 503 },
+    { event: 'directory_asset_fetch_failed', status: 500 },
+    { event: 'directory_asset_fetch_failed', status: 502 },
+  ]);
+});
