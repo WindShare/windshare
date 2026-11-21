@@ -95,8 +95,9 @@ bound to the original canonical relay endpoint, including removed nodes.
 Install `scripts/deploy/network/install-web.sh` only on approved frontend hosts as
 `/usr/local/sbin/windshare-install-web`. It requires Python 3.12+, web-server read access
 to `/srv/windshare`, and a deployment SSH user allowed to invoke this installer via
-sudo. It verifies the archive, atomically switches `current`, and retains
-recent releases for operator rollback.
+sudo. It verifies the archive, publishes versioned downloads under
+`/srv/windshare/downloads` for retained releases, atomically switches `current`,
+and retains recent releases for operator rollback.
 
 Set repository variable `OFFICIAL_FRONTEND_NODES` to the trusted frontend aliases
 (JSON array, default `["cn-a"]`; add `cn-b` only when its host meets that trust requirement).
