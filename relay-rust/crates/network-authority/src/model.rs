@@ -200,6 +200,7 @@ pub enum Fault {
     EmailCodeRejected,
     EmailDeliveryUnavailable,
     NicknameCooldown { profile: Profile },
+    Conflict { reason: String },
     Denied { reason: String },
     RateLimited { retry_after: u64 },
     Verification { challenge: Challenge },

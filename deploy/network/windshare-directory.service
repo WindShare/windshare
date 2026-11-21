@@ -5,7 +5,7 @@ After=network-online.target
 [Service]
 Type=oneshot
 User=windshare-network
-ExecStart=/opt/windshare-network/network-sign mirror --out /srv/windshare/directory/windshare-network.json
+ExecStart=/usr/bin/flock /srv/windshare/directory /opt/windshare-network/network-sign mirror --bundle /srv/windshare/current/web/.well-known/windshare-network --out /srv/windshare/directory/windshare-network.json
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true

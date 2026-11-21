@@ -1,10 +1,11 @@
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { appendFile, mkdir, mkdtemp, rm, rmdir, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, readFile, rm, rmdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { directoryRevision } from './directory-revision.mjs';
 import { cloudflareClient } from './cloudflare.mjs';
 import { consoleConfig, deploymentConfig, frontendConfig, FRONTEND_DEPLOYMENT, FULL_DEPLOYMENT, readDeploymentMode } from './configuration.mjs';
 import { deployFrontend, readFrontendInputs } from './frontend.mjs';
@@ -57,8 +58,15 @@ async function main() {
     const directory = process.env.WINDSHARE_WEB_ARTIFACT;
     if (!directory) command('pnpm build', [], { cwd: join(repositoryRoot, 'web'), shell: true,
       env: { WIND_BUILD_REVISION: process.env.GITHUB_SHA ?? process.env.WIND_BUILD_REVISION } });
+    const assets = directory ? resolve(directory) : join(repositoryRoot, 'web/dist');
+    let revision = null;
+    try {
+      revision = await directoryRevision(await readFile(join(assets, '.well-known/windshare-network'), 'utf8'));
+    } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    const config = frontendConfig(inputs, assets);
+    config.vars = { BUNDLED_DIRECTORY_REVISION: JSON.stringify(revision) };
     await deployFrontend({ inputs, cloudflare: cloudflareClient({ ...inputs, apiToken: process.env.CLOUDFLARE_API_TOKEN }),
-      log: reporter.log, deploy: plan => publish(plan, frontendConfig(inputs, directory ? resolve(directory) : undefined)) });
+      log: reporter.log, deploy: plan => publish(plan, config) });
     return;
   }
   const inputs = readInputs(process.env);

@@ -26,8 +26,8 @@ impl CachePolicy {
 #[event(fetch)]
 pub async fn fetch(request: Request, env: Env, _context: Context) -> Result<Response> {
     super::telemetry::install(&env);
-    if request.method() == Method::Get && request.path() == "/.well-known/windshare-network" {
-        return super::fleet::public_directory(&env).await;
+    if request.path() == "/.well-known/windshare-network" {
+        return super::fleet::public_directory(request.method(), &env).await;
     }
     if request.path().starts_with("/internal/") {
         return Response::error("not found", 404);

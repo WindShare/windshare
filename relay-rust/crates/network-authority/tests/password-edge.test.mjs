@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { randomBytes, sign } from 'node:crypto';
 import test from 'node:test';
+import { readFile } from 'node:fs/promises';
 import { fixture } from './local-worker.mjs';
 
 test('the Worker runs password hashing and rate limits across edge and Durable Object boundaries', async t => {
-  const { worker, mf, trust, nodeKey, node, requests, enrollment } = await fixture(t);
+  const { worker, mf, trust, nodeKey, node, requests, mirrors, enrollment } = await fixture(t);
   // Hashed console bundles are immutable while HTML entrypoints remain uncached.
   const consolePage = await worker.fetch('https://localhost/console');
   assert.equal(consolePage.status, 200);
@@ -52,11 +53,26 @@ test('the Worker runs password hashing and rate limits across edge and Durable O
   // The first committed SQLite cursor can be delivered to KV with no node or frontend traffic.
   const namespace = await mf.getDurableObjectNamespace('AUTHORITY', 'authority');
   const object = namespace.get(namespace.idFromName('network-authority-v1'));
+  const publicURL = 'https://localhost/.well-known/windshare-network';
+  // A different loopback origin passes Miniflare's host guard but is outside the console's allowed origins.
+  const preflight = await worker.fetch(publicURL, { method: 'OPTIONS', headers: { Origin: 'http://127.0.0.1:9090' } });
+  assert.equal(preflight.status, 204, await preflight.text());
+  assert.equal(preflight.headers.get('access-control-allow-origin'), '*');
+  const cold = await worker.fetch(publicURL, { method: 'HEAD' });
+  assert.equal(cold.headers.get('x-content-type-options'), 'nosniff');
+  assert.equal(await cold.text(), '');
+  // A provisioned release can outlive its trust window in an old checkout.
+  const release = JSON.parse(await readFile(new URL('../../../../deploy/network/release.json', import.meta.url)));
+  const decode = raw => JSON.parse(Buffer.from(raw, 'base64url'));
+  const payload = decode(release.snapshot.payload), grant = decode(release.snapshot.certificate.payload);
+  const usable = Date.now() + 300_000 >= Date.parse(payload.issued_at) && Date.now() < Math.min(Date.parse(grant.expires_at), Date.parse(payload.expires_at) + 7 * 86400_000);
+  assert.equal(cold.status, usable ? 200 : 503);
   const tick = await object.fetch('https://authority/internal/fleet/tick', { method: 'POST', body: '{}' });
   assert.equal(tick.status, 200);
   const directory = await worker.fetch('https://localhost/.well-known/windshare-network');
-  assert.equal(directory.status, 200);
-  assert.deepEqual(await directory.json(), await tick.json());
+  assert.equal(directory.status, usable ? 200 : 503);
+  if (usable) assert.deepEqual(await directory.json(), await tick.json());
+  else assert.equal(directory.headers.get('cache-control'), 'no-store');
 
   // Two-phase admin initialize and login.
   const operator = { username: 'operator', password: 'Operator-Password-2026!' };
@@ -139,6 +155,25 @@ test('the Worker runs password hashing and rate limits across edge and Durable O
   assert.equal(discovered.node_key, enrollment.node_key);
   const staged = (await call('/v1/admin/nodes', enrollment, { admin: true })).value;
   assert.equal(staged.listing.state.check.kind, 'queued');
+  await call('/v1/admin/nodes/cancel', { node_key: enrollment.node_key, operation_id: staged.listing.operation_id }, { admin: true });
+  const replacement = (await call('/v1/admin/nodes', enrollment, { admin: true })).value;
+  assert.notEqual(replacement.listing.operation_id, staged.listing.operation_id);
+  await call('/v1/admin/nodes/cancel', { node_key: enrollment.node_key, operation_id: staged.listing.operation_id }, { admin: true, status: 409 });
+  const mirrorURLs = [release.link_host, release.backup_entry].map(origin => origin + '/.well-known/windshare-network');
+  for (const url of mirrorURLs) mirrors.set(url, release.snapshot);
+  const promotion = () => worker.fetch('https://localhost/v1/admin/nodes/promote', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'https://localhost', Cookie: adminCookie, 'X-CSRF-Token': csrf },
+    body: JSON.stringify({ node_key: enrollment.node_key, operation_id: replacement.listing.operation_id, status: 'canary' }),
+  });
+  // Matching mirrors reach the DO. This local Worker has no production directory signing seed.
+  const matched = await promotion();
+  assert.equal(matched.status, 503);
+  assert.equal(await matched.text(), 'fleet temporarily unavailable');
+  assert.deepEqual(new Set(requests.slice(-2)), new Set(mirrorURLs));
+  mirrors.set(mirrorURLs[0], {});
+  const lagging = await promotion();
+  assert.equal(lagging.status, 403);
+  assert.equal((await lagging.json()).reason, 'mirror_lag');
   const invitePayload = Buffer.from(JSON.stringify({
     node, issuer: [...Buffer.from(trust.root, 'base64url')],
     enrollment: [...randomBytes(16)], origin: 'https://relay.example',

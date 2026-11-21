@@ -36,6 +36,13 @@ chmod -R a+rX "$candidate"
 destination="$root/releases/$revision-$expected"
 if [[ ! -d $destination ]]; then mv -- "$candidate" "$destination"; fi
 touch -- "$destination"
+# Serialize the release switch with the timer, which may still be reading the old current.
+if [[ -d "$root/directory" ]]; then
+    exec 8<"$root/directory"
+    flock 8
+    /opt/windshare-network/network-sign mirror --local-only \
+        --bundle "$destination/web/.well-known/windshare-network" --out "$root/directory/windshare-network.json"
+fi
 link="$root/.current.$$"
 ln -s -- "$destination" "$link"
 mv -Tf -- "$link" "$root/current"

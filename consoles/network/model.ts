@@ -4,6 +4,7 @@ export type TrafficStatus = 'canary' | 'active'
 export interface Discovery { node_key: string; relay: string; roles: Role[]; stun: string[]; zone: Zone; region: string; capacity_mbps: number | null }
 export interface Enrollment { url: string; node_key: string; alias: string; provider: string; zone: Zone; region: string; capacity_mbps: number; roles: Role[] }
 export interface Listing {
+  operation_id: string
   spec: Omit<Enrollment, 'url'> & { relay: string }
   state: { kind: 'listed'; status: TrafficStatus | 'draining' } | { kind: 'staging'; check:
     { kind: 'queued' | 'running' } | { kind: 'passed'; at: number } | { kind: 'failed'; reason: string } }

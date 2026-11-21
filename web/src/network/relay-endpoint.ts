@@ -192,6 +192,12 @@ export function canonicalNetworkHost(parsed: URL): string {
     throw new TypeError('v2 relay host is invalid')
   }
   const port = parsed.port
+  if (port === '0') throw new TypeError('Invalid relay port')
+  const mapped = /^::ffff:([a-f\d]+):([a-f\d]+)$/u.exec(unbracketed)
+  if (mapped) {
+    const high = Number.parseInt(mapped[1]!, 16), low = Number.parseInt(mapped[2]!, 16)
+    return [high >>> 8, high & 255, low >>> 8, low & 255].join('.') + (port ? ':' + port : '')
+  }
   const address = isIPv6 ? `[${unbracketed}]` : unbracketed
   const portSuffix = port === '' ? '' : ':' + port
   return address + portSuffix

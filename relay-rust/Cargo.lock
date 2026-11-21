@@ -2216,6 +2216,7 @@ dependencies = [
  "futures-util",
  "getrandom 0.4.3",
  "js-sys",
+ "percent-encoding",
  "serde",
  "serde_json",
  "sha2",

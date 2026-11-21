@@ -5,6 +5,9 @@ import { decode, encode } from './identity'
 import type { AccountDetails, AccountPage, AccountSummary, Discovery, Enrollment, TrafficStatus, MilestoneReview, NodeDetails, NodePage, PolicyField, PolicySnapshot, RelayNode, Report, ReportPage, Restrictions, SettingsChanges, Snapshot, Target } from './model'
 
 const messages = {
+  relay_bound: message(networkCopy, 'relayBound'),
+  stun_bound: message(networkCopy, 'stunBound'),
+  listing_changed: message(networkCopy, 'listingChanged'),
   alias_bound: message(networkCopy, 'aliasBound'),
   verification_required: message(networkCopy, 'verificationRequired'),
   mirror_lag: message(networkCopy, 'mirrorLag'),
@@ -106,7 +109,8 @@ export class AuthorityClient {
     this.csrf = result.csrf
   }
   discover = (url: string) => this.write<Discovery>('nodes/discover', { url })
-  promote = (node_key: string, status: TrafficStatus) => this.write('nodes/promote', { node_key, status })
+  promote = (node_key: string, operation_id: string, status: TrafficStatus) => this.write('nodes/promote', { node_key, operation_id, status })
+  cancelDraft = (node_key: string, operation_id: string) => this.write('nodes/cancel', { node_key, operation_id })
   enroll = (node: Enrollment) => this.write<NodeDetails>('nodes', node)
   policy = (key: number[], field: PolicyField, value: boolean) => this.write<RelayNode>('nodes/policy', { key, change: { field, value } }, 'PUT')
   updateSettings = (changes: SettingsChanges) => this.write<PolicySnapshot>('settings', changes, 'PATCH')

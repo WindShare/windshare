@@ -1,12 +1,11 @@
 use super::topology::{
-    Entry, MAX_COUNTER, MAX_NODES, PublicStun, null_list, public_key, stun_host, valid_text,
+    Entry, MAX_COUNTER, MAX_NODES, Occupied, PublicStun, null_list, public_key, valid_text,
 };
 use anyhow::{Result, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD as B64};
 use chrono::{DateTime, Duration, Utc};
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
 
 pub const MAX_BYTES: usize = 512 * 1024;
 const CERT_DOMAIN: &[u8] = b"windshare/network-certificate/v1\0";
@@ -28,7 +27,7 @@ pub struct Envelope {
     pub certificate: Certificate,
     pub signature: String,
 }
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct Root {
     pub id: String,
     pub key: String,
@@ -67,6 +66,12 @@ pub fn verify_bytes(key: &str, domain: &[u8], bytes: &[u8], signature: &str) -> 
     Ok(key.verify_strict(&[domain, bytes].concat(), &signature)?)
 }
 
+// Go's zero time is a sentinel in the shared wire contract.
+const ZERO_TIME_SECONDS: i64 = -62_135_596_800;
+fn valid_time(value: DateTime<Utc>) -> bool {
+    Some(value) != DateTime::from_timestamp(ZERO_TIME_SECONDS, 0)
+}
+
 impl Certificate {
     /// # Errors
     /// Rejects untrusted roots, invalid signatures and invalid signing grants.
@@ -86,6 +91,7 @@ impl Certificate {
             grant.format == 1
                 && grant.network == network
                 && (1..=MAX_COUNTER).contains(&grant.generation)
+                && valid_time(grant.not_before)
                 && grant.expires_at > grant.not_before
                 && grant.expires_at - grant.not_before <= Duration::days(180),
             "invalid directory grant"
@@ -96,9 +102,26 @@ impl Certificate {
 }
 impl Envelope {
     /// # Errors
+    /// Bounds the original wire bytes, including JSON whitespace, before decoding.
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        ensure!(bytes.len() <= MAX_BYTES, "directory too large");
+        Ok(serde_json::from_slice(bytes)?)
+    }
+    /// # Errors
     /// Rejects invalid signatures, directory bounds and topology inconsistent with the grant.
     pub fn verify(&self, network: &str, roots: &[Root], history: bool) -> Result<Payload> {
-        ensure!(self.payload.len() < MAX_BYTES, "directory too large");
+        Ok(self.verified_parts(network, roots, history)?.0)
+    }
+    pub(crate) fn verified_parts(
+        &self,
+        network: &str,
+        roots: &[Root],
+        history: bool,
+    ) -> Result<(Payload, Grant)> {
+        ensure!(
+            serde_json::to_vec(self)?.len() <= MAX_BYTES,
+            "directory too large"
+        );
         let grant = self.certificate.verify(network, roots)?;
         let bytes = B64.decode(&self.payload)?;
         verify_bytes(&grant.key, PAYLOAD_DOMAIN, &bytes, &self.signature)?;
@@ -107,6 +130,8 @@ impl Envelope {
             payload.format == 1
                 && payload.network == network
                 && payload.generation == grant.generation
+                && valid_text(&payload.network)
+                && valid_time(payload.issued_at)
                 && payload.issued_at >= grant.not_before
                 && payload.expires_at > payload.issued_at
                 && payload.expires_at - payload.issued_at <= PAYLOAD_LIFETIME
@@ -114,7 +139,7 @@ impl Envelope {
             "invalid directory payload"
         );
         payload.validate(history)?;
-        Ok(payload)
+        Ok((payload, grant))
     }
 }
 impl Payload {
@@ -123,15 +148,10 @@ impl Payload {
             self.nodes.len() <= MAX_NODES && self.public_stun.len() <= 128,
             "directory capacity exceeded"
         );
-        let mut aliases = BTreeSet::new();
-        let mut endpoints = BTreeSet::new();
-        let mut stuns = BTreeSet::new();
+        let mut occupied = Occupied::default();
         for node in &self.nodes {
             node.spec.validate(history)?;
-            ensure!(
-                aliases.insert(&node.spec.alias) && endpoints.insert(node.spec.relay_identity()?),
-                "duplicate directory node"
-            );
+            occupied.add(&node.spec)?;
         }
         for item in &self.public_stun {
             ensure!(
@@ -140,25 +160,18 @@ impl Payload {
                     .all(|v| valid_text(v)),
                 "invalid public STUN metadata"
             );
-        }
-        for stun in self
-            .nodes
-            .iter()
-            .flat_map(|n| &n.spec.stun)
-            .chain(self.public_stun.iter().map(|s| &s.url))
-        {
-            stun_host(stun)?;
-            ensure!(stuns.insert(stun), "duplicate STUN endpoint");
+            occupied.add_stun(&item.url)?;
         }
         Ok(())
     }
     /// # Errors
     /// Rejects stale or unauthorized generations, invalid topology and exhausted serials.
-    pub fn advance(
+    pub(super) fn advance(
         &mut self,
         certificate: Certificate,
         grant: &Grant,
         key: &SigningKey,
+        roots: &[Root],
         now: DateTime<Utc>,
     ) -> Result<Envelope> {
         ensure!(
@@ -178,14 +191,15 @@ impl Payload {
         self.generation = grant.generation;
         self.issued_at = now;
         self.expires_at = (now + PAYLOAD_LIFETIME).min(grant.expires_at);
-        self.validate(false)?;
         let bytes = serde_json::to_vec(self)?;
         let signed = key.sign(&[PAYLOAD_DOMAIN, &bytes].concat());
-        Ok(Envelope {
+        let envelope = Envelope {
             payload: B64.encode(bytes),
             certificate,
             signature: B64.encode(signed.to_bytes()),
-        })
+        };
+        envelope.verify(&self.network, roots, false)?;
+        Ok(envelope)
     }
 }
 

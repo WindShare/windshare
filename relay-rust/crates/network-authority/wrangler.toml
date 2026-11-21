@@ -1,6 +1,7 @@
 name = "windshare-network-authority"
 main = "build/worker/shim.mjs"
 compatibility_date = "2026-09-28"
+compatibility_flags = ["global_fetch_strictly_public"]
 workers_dev = false
 
 [build]

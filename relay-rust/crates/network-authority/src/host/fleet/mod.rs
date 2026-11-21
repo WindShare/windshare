@@ -1,4 +1,5 @@
 mod edge;
+mod public_directory;
 mod public_dns;
 use super::{
     NetworkAuthority, WorkerEnvironment, failure,
@@ -17,7 +18,8 @@ use crate::{
     store::{load, save},
 };
 use anyhow::Result;
-pub(super) use edge::{handle_edge, handles_edge, public_directory};
+pub(super) use edge::{handle_edge, handles_edge};
+pub(super) use public_directory::serve as public_directory;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use worker::{Env, Method, Request, Response, ScheduleContext, ScheduledEvent, event};
@@ -50,8 +52,7 @@ pub(super) fn console(authority: &mut Service, env: &Env) -> Result<Value> {
     let now = authority.environment.now();
     let mirrors = load::<MirrorCheck>(&authority.store, MIRRORS)?;
     let enrolled = agents(env)?;
-    let mainland =
-        vantage::mainland_current(&authority.store, &enrolled, &publication.envelope, now)?;
+    let mainland = vantage::mainland_current(&authority.store, &enrolled, &revision.digest, now)?;
     let mut value = serde_json::to_value(&revision)?;
     value["mirrors_current"] = json!(
         mainland
@@ -176,13 +177,16 @@ impl NetworkAuthority {
         let mut db = Database::open(&self.state).map_err(failure)?;
         let head = publication::current(&db).map_err(failure)?;
         let digest = publication::digest(&head.envelope).map_err(failure)?;
-        if db.get(DELIVERED).map_err(failure)?.as_deref() == Some(&digest) {
+        let kv = self.env.kv("DIRECTORY")?;
+        let body = serde_json::to_string(&head.envelope)?;
+        // A namespace can be emptied or replaced independently of SQLite. Audit the
+        // delivery on the scheduled path so public reads never need the DO.
+        if db.get(DELIVERED).map_err(failure)?.as_deref() == Some(&digest)
+            && kv.get(KV_KEY).cache_ttl(60).text().await?.as_deref() == Some(body.as_str())
+        {
             return Ok(());
         }
-        let kv = self.env.kv("DIRECTORY")?;
-        kv.put(KV_KEY, serde_json::to_string(&head.envelope)?)?
-            .execute()
-            .await?;
+        kv.put(KV_KEY, body)?.execute().await?;
         db.put(DELIVERED, &digest).map_err(failure)?;
         tracing::info!(event="directory_kv_published",operation_id=%digest);
         Ok(())
@@ -233,16 +237,18 @@ fn dispatch(service: &mut Service, env: &Env, ctx: &Context, bytes: &[u8]) -> Re
         "/internal/fleet/promote" => {
             #[derive(Deserialize)]
             struct Promotion {
-                command: edge::Promote,
-                observed: Envelope,
+                command: crate::fleet::Promote,
+                observed_digest: String,
             }
-            let Promotion { command, observed } = routes::parse(bytes)?;
+            let Promotion {
+                command,
+                observed_digest,
+            } = routes::parse(bytes)?;
             service.promote(
                 &ctx.session,
-                &command.node_key,
-                command.status,
+                &command,
                 &agents(env)?,
-                &observed,
+                &observed_digest,
                 &signer(env)?,
             )?;
             Ok(json!({}))
@@ -254,9 +260,14 @@ fn dispatch(service: &mut Service, env: &Env, ctx: &Context, bytes: &[u8]) -> Re
                 Ok(false) => {}
                 Err(error) => tracing::error!(event="directory_renewal_failed", %error),
             }
-            let missing = vantage::silent(&service.store, &agents(env)?, now)?;
-            if !missing.is_empty() {
-                tracing::warn!(event="vantage_silent",vantages=?missing);
+            match agents(env) {
+                Ok(registry) => {
+                    let missing = vantage::silent(&service.store, &registry, now)?;
+                    if !missing.is_empty() {
+                        tracing::warn!(event="vantage_silent",vantages=?missing);
+                    }
+                }
+                Err(error) => tracing::error!(event="vantage_configuration_invalid", %error),
             }
             let expiry = head.revision()?.certificate_expires;
             if expiry <= i64::try_from(now + EXPIRY_ALERT_SECONDS)?

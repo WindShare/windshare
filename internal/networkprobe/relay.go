@@ -25,7 +25,7 @@ type SyntheticShare struct {
 	descriptor []byte
 }
 
-func (s SyntheticShare) ID() v2.ShareID { return s.init.ShareID }
+func (s SyntheticShare) ID() [link.SenderAuthenticatedShareIDBytes]byte { return s.init.ShareID }
 func NewShare() (SyntheticShare, error) {
 	pub, key, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {

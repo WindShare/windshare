@@ -113,6 +113,10 @@ def deploy(args):
         seed_path.write_text(seed, encoding="utf-8")
         subprocess.run(["cargo", "run", "--quiet", "--locked", "--bin", "network-authority-keys", "--",
                         "verify", str(trust_path), str(seed_path)], cwd=CRATE, check=True)
+        agents_path = Path(private) / "vantages.json"
+        agents_path.write_text(values["VANTAGE_KEYS"], encoding="utf-8")
+        subprocess.run(["cargo", "run", "--quiet", "--locked", "--bin", "network-authority-keys", "--",
+                        "verify-vantages", str(agents_path)], cwd=CRATE, check=True)
         cert_path = Path(private) / "directory-certificate.json"
         cert_path.write_text(values["DIRECTORY_CERTIFICATE"], encoding="utf-8")
         directory_key = Path(private) / "directory.seed"

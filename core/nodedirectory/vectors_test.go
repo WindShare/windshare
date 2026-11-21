@@ -91,6 +91,43 @@ func TestBrowserDirectoryVectors(t *testing.T) {
 	replace("text_inner_space_before_line_separator", `"region":"jp"`, "\"region\":\"j \u2028p\"", true)
 	replace("text_128_utf8_bytes", `"region":"jp"`, `"region":"`+strings.Repeat("\u00e9", 64)+`"`, true)
 	replace("text_129_utf8_bytes", `"region":"jp"`, `"region":"`+strings.Repeat("\u00e9", 63)+"\u65e5\"", false)
+	for _, invalid := range []struct{ name, relay string }{
+		{"relay_reserved_label", "https://cn--east.example"},
+		{"relay_zero_port", "https://jp1.example:0"},
+		{"relay_dot_path", "https://jp1.example/a/%2e%2e/b"},
+		{"relay_bom", "https://jp1.example/a\ufeff"},
+	} {
+		replace(invalid.name, "https://jp1.example", invalid.relay, false)
+	}
+	replace("relay_mapped_v4", "https://jp1.example", "https://[::ffff:c000:201]", true)
+	replace("stun_mapped_v4", `"stun":null,"roles":["relay"]`, `"stun":["stun:[::ffff:c000:201]:3478"],"roles":["relay","stun"]`, false)
+	replace("stun_reserved_label", `"stun":null,"roles":["relay"]`, `"stun":["stun:cn--east.example:3478"],"roles":["relay","stun"]`, false)
+	zero := time.Time{}
+	for _, test := range []struct {
+		name          string
+		start, issued time.Time
+	}{
+		{"zero_certificate_start", zero, zero.Add(time.Hour)},
+		{"zero_certificate_offset", zero.In(time.FixedZone("east", 3600)), zero.Add(time.Hour)},
+		{"zero_payload_issued", zero.Add(-time.Hour), zero},
+	} {
+		mutate(test.name, func(e *Envelope) {
+			grant := Certificate{Format: Format, Network: "test", Generation: 1, Key: encoding.EncodeToString(f.online.Public().(ed25519.PublicKey)), NotBefore: test.start, ExpiresAt: zero.Add(30 * 24 * time.Hour)}
+			var err error
+			e.Certificate, err = Certify(grant, "primary", f.root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			p := f.payload(1, 42)
+			p.IssuedAt, p.ExpiresAt = test.issued, zero.Add(24*time.Hour)
+			data, err := json.Marshal(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			e.Payload = encoding.EncodeToString(data)
+			e.Signature = encoding.EncodeToString(ed25519.Sign(f.online, append([]byte(PayloadDomain), data...)))
+		})
+	}
 	for _, item := range vectors {
 		_, err := Verify(item.Envelope, "test", f.roots)
 		if (err == nil) != item.Valid {

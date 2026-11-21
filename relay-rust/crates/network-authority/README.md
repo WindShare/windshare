@@ -45,7 +45,7 @@ response confirms acceptance. Its timeout is 15 seconds.
 
 1. Generate a separate probe key for each vantage point with `network-sign keygen --id cn-a --private probe.pem --public probe.json`.
    Configure `VANTAGE_KEYS` as a JSON array of `{"id":"cn-a","key":"<probe.json key>","zone":"cn"}` entries (`cn` or `global`).
-   Install a build of `./cmd/network-vantage` in that zone and run `network-vantage --key probe.pem`.
+   Install `./cmd/network-vantage` in that zone and run `network-vantage --key probe.pem`. Roll out matching agent and authority builds when the signed probe protocol changes.
    Add `--mainland` on mainland agents so they verify the split-DNS mirror.
 2. In **Nodes ? Add node**, enter the public HTTPS origin. For a fresh host with a working reverse proxy,
    use the setup command in an empty service directory with `wsrelay` installed. Keep its generated identity and database.

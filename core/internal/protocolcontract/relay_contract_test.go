@@ -97,6 +97,8 @@ func v2RelayEndpointCases() []v2RelayEndpointVector {
 		accepted("https-root", "https://relay.example", "wss://relay.example/v2/ws", "wss://relay.example/v2/ws"),
 		accepted("canonicalize-scheme-host-default-port", "HTTPS://RELAY.EXAMPLE:443/base/", "wss://relay.example/base/v2/ws", "wss://relay.example/base/v2/ws"),
 		accepted("query-kept-outside-identity", "https://relay.example/base/?token=a%20b", "wss://relay.example/base/v2/ws?token=a%20b", "wss://relay.example/base/v2/ws"),
+		accepted("mapped-ipv4", "https://[::ffff:c000:201]:443/", "wss://192.0.2.1/v2/ws", "wss://192.0.2.1/v2/ws"),
+		rejected("zero-port", "https://relay.example:0"),
 		accepted("local-ws-port", "http://127.0.0.1:8080/relay", "ws://127.0.0.1:8080/relay/v2/ws", "ws://127.0.0.1:8080/relay/v2/ws"),
 		accepted("unicode-latin", "https://münchen.de", "wss://xn--mnchen-3ya.de/v2/ws", "wss://xn--mnchen-3ya.de/v2/ws"),
 		accepted("punycode-latin", "https://xn--mnchen-3ya.de", "wss://xn--mnchen-3ya.de/v2/ws", "wss://xn--mnchen-3ya.de/v2/ws"),

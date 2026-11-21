@@ -1,32 +1,35 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/windshare/windshare/core/nodedirectory"
 	"github.com/windshare/windshare/engine/builtinnetwork"
+	"github.com/windshare/windshare/engine/networkdirectory"
 	"github.com/windshare/windshare/internal/networkprobe"
 )
 
 const directoryRoute = "/.well-known/windshare-network"
 
 func fetchMirror(authority string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	client := networkprobe.Client()
+	client := networkprobe.ReleaseClient()
 	defer client.CloseIdleConnections()
-	return networkprobe.Fetch(ctx, client, strings.TrimSuffix(authority, "/")+directoryRoute, nodedirectory.MaximumEnvelopeBytes)
+	return networkprobe.Fetch(context.Background(), client, strings.TrimSuffix(authority, "/")+directoryRoute, nodedirectory.MaximumEnvelopeBytes)
 }
 
 func mirror(args []string) error {
 	flags := flag.NewFlagSet("mirror", flag.ContinueOnError)
 	path := flags.String("out", "", "persistent directory envelope path")
+	bundle := flags.String("bundle", "", "directory in the frontend release being served")
+	local := flags.Bool("local-only", false, "reconcile installed snapshots without contacting the authority")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -37,54 +40,139 @@ func mirror(args []string) error {
 	if err != nil {
 		return err
 	}
-	if config.Authority == nil {
-		return errors.New("release has no public authority")
+	var remote []byte
+	var refreshErr error
+	if !*local {
+		if config.Authority == nil {
+			return errors.New("release has no public authority")
+		}
+		remote, refreshErr = fetchMirror(config.Authority.URL)
 	}
-	dir := config.Directory
+	// Installation and the timer take the same host lock across selection and rename.
+	// Even during an upstream outage a newly installed release can advance the local mirror.
+	err = reconcileMirror(config.Directory, *path, *bundle, remote, time.Now())
+	if *local && errors.Is(err, nodedirectory.ErrExpired) {
+		// An offline frontend release can still serve explicit sharing links.
+		fmt.Fprintln(os.Stderr, "event=directory_unavailable reason=expired")
+		return nil
+	}
+	return errors.Join(err, refreshErr)
+}
+
+func compareRevision(a, b nodedirectory.Cursor) int {
+	if a.Generation != b.Generation {
+		return cmp.Compare(a.Generation, b.Generation)
+	}
+	return cmp.Compare(a.Serial, b.Serial)
+}
+
+type installedMirror struct {
+	path, retiredPath  string
+	published, retired nodedirectory.Cursor
+	head               nodedirectory.Snapshot
+	aliases            map[string]string
+}
+
+func reconcileMirror(dir networkdirectory.Config, out, bundle string, remote []byte, now time.Time) error {
+	mirror, err := readInstalledMirror(dir, out, bundle)
+	if err != nil {
+		return err
+	}
+	var remoteErr error
+	if remote != nil {
+		remoteErr = mirror.accept(dir, remote, now)
+	}
+	return errors.Join(mirror.publish(now), remoteErr)
+}
+
+func readInstalledMirror(dir networkdirectory.Config, out, bundle string) (*installedMirror, error) {
 	embedded, err := nodedirectory.Verify(dir.Embedded, dir.Network, dir.Roots)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	data, err := fetchMirror(config.Authority.URL)
-	if err != nil {
-		return err
-	}
-	next, err := nodedirectory.Verify(data, dir.Network, dir.Roots)
-	if err != nil {
-		return err
-	}
-	if err = nodedirectory.Accept(embedded.Cursor(), next, time.Now(), 0); err != nil {
-		return err
-	}
-	aliases, err := nodedirectory.RetainAliases(nil, embedded)
-	if err != nil {
-		return err
-	}
-	current, err := os.ReadFile(*path)
-	if err == nil {
-		prior, err := nodedirectory.Verify(current, dir.Network, dir.Roots)
+	mirror := &installedMirror{path: out, retiredPath: out + ".expired"}
+	candidates := []nodedirectory.Snapshot{embedded}
+	for _, path := range []string{out, mirror.retiredPath, bundle} {
+		if path == "" {
+			continue
+		}
+		data, err := os.ReadFile(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
 		if err != nil {
-			return err
+			return nil, err
 		}
-		if err = nodedirectory.Compare(prior.Cursor(), next.Cursor()); err != nil {
-			return err
-		}
-		if prior.Cursor() == next.Cursor() {
-			return nil
-		}
-		aliases, err = nodedirectory.RetainAliases(aliases, prior)
+		copy, err := nodedirectory.Verify(data, dir.Network, dir.Roots)
 		if err != nil {
-			return err
+			return nil, fmt.Errorf("invalid signed directory %s: %w", path, err)
 		}
-	} else if !errors.Is(err, os.ErrNotExist) {
+		candidates = append(candidates, copy)
+		switch path {
+		case out:
+			mirror.published = copy.Cursor()
+		case mirror.retiredPath:
+			mirror.retired = copy.Cursor()
+		}
+	}
+	// Installing a signed release sets a minimum revision, even after its trust window closes.
+	slices.SortFunc(candidates, func(a, b nodedirectory.Snapshot) int { return compareRevision(a.Cursor(), b.Cursor()) })
+	for _, copy := range candidates {
+		if err := nodedirectory.Compare(mirror.head.Cursor(), copy.Cursor()); err != nil {
+			return nil, err
+		}
+		mirror.aliases, err = nodedirectory.RetainAliases(mirror.aliases, copy)
+		if err != nil {
+			return nil, err
+		}
+		mirror.head = copy
+	}
+	return mirror, nil
+}
+
+func (m *installedMirror) accept(dir networkdirectory.Config, remote []byte, now time.Time) error {
+	next, err := nodedirectory.Verify(remote, dir.Network, dir.Roots)
+	if err != nil {
 		return err
 	}
-	if _, err = nodedirectory.RetainAliases(aliases, next); err != nil {
+	if err := nodedirectory.Accept(m.head.Cursor(), next, now, nodedirectory.DefaultGrace); err != nil {
 		return err
 	}
-	if err = writePublic(*path, next.Envelope()); err != nil {
+	if _, err := nodedirectory.RetainAliases(m.aliases, next); err != nil {
 		return err
 	}
-	fmt.Printf("event=directory_mirrored generation=%d serial=%d\n", next.Cursor().Generation, next.Cursor().Serial)
+	m.head = next
 	return nil
+}
+
+func (m *installedMirror) publish(now time.Time) error {
+	if !m.head.Usable(now, nodedirectory.DefaultGrace) {
+		return m.withdraw()
+	}
+	if cursor := m.head.Cursor(); cursor != m.published {
+		if err := writePublic(m.path, m.head.Envelope()); err != nil {
+			return err
+		}
+		fmt.Printf("event=directory_mirrored generation=%d serial=%d\n", cursor.Generation, cursor.Serial)
+	}
+	if m.retired != (nodedirectory.Cursor{}) {
+		return os.Remove(m.retiredPath)
+	}
+	return nil
+}
+
+func (m *installedMirror) withdraw() error {
+	// Persist the signed cursor before withdrawing the public copy. A restart at
+	// either point will refuse rollback and finish the interrupted transition.
+	if m.retired != m.head.Cursor() {
+		if err := writePublic(m.retiredPath, m.head.Envelope()); err != nil {
+			return err
+		}
+	}
+	if m.published != (nodedirectory.Cursor{}) {
+		if err := os.Remove(m.path); err != nil {
+			return err
+		}
+	}
+	return nodedirectory.ErrExpired
 }

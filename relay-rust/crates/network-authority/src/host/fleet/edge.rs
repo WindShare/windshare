@@ -1,16 +1,16 @@
 use super::{DIRECTORY_PATH, internal, release};
 use crate::fleet::{
+    Promote,
     descriptor::{self, MAX_DESCRIPTOR},
-    publication::KV_KEY,
     signature::{Envelope, MAX_BYTES},
-    topology::{Role, Spec, Status, public_origin},
+    topology::{Role, Spec, public_origin},
 };
 use crate::{
     Fault, Zone,
     host::{failure, read_body, routes},
 };
 use futures_util::StreamExt;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::json;
 use worker::{
     CacheMode, Env, Fetch, Method, Request, RequestInit, RequestRedirect, Response, Result,
@@ -41,12 +41,6 @@ struct Enroll {
     roles: Vec<Role>,
     capacity_mbps: u32,
 }
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct Promote {
-    pub node_key: String,
-    pub status: Status,
-}
 
 pub(super) async fn fetch_public(url: &str, limit: usize, accept: &str) -> anyhow::Result<Vec<u8>> {
     let mut req = Request::new_with_init(
@@ -59,7 +53,11 @@ pub(super) async fn fetch_public(url: &str, limit: usize, accept: &str) -> anyho
     req.headers_mut()?.set("Accept", accept)?;
     let signal = web_sys::AbortSignal::timeout_with_u32(REQUEST_TIMEOUT_MS);
     let mut response = Fetch::Request(req).send_with_signal(&signal.into()).await?;
-    anyhow::ensure!(response.status_code() == 200, "remote endpoint unavailable");
+    anyhow::ensure!(
+        response.status_code() == 200,
+        "remote HTTP {}",
+        response.status_code()
+    );
     let mut stream = response.stream()?;
     let mut bytes = Vec::new();
     while let Some(chunk) = stream.next().await {
@@ -76,16 +74,20 @@ pub(super) async fn fetch_public(url: &str, limit: usize, accept: &str) -> anyho
 pub(super) async fn mirrors_match(expected: &Envelope) -> bool {
     let Ok(release) = release() else { return false };
     let check = async |origin: &str| {
-        let Ok(bytes) = fetch_public(
+        let result = fetch_public(
             &format!("{origin}{DIRECTORY_PATH}"),
             MAX_BYTES,
             "application/json",
         )
         .await
-        else {
-            return false;
-        };
-        serde_json::from_slice::<Envelope>(&bytes).is_ok_and(|actual| actual == *expected)
+        .and_then(|bytes| Envelope::decode(&bytes));
+        match result {
+            Ok(actual) => actual == *expected,
+            Err(error) => {
+                tracing::warn!(event="directory_mirror_unavailable", %origin, %error);
+                false
+            }
+        }
     };
     let (primary, backup) =
         futures_util::future::join(check(&release.link_host), check(&release.backup_entry)).await;
@@ -124,7 +126,7 @@ pub(in crate::host) async fn handle_edge(mut req: Request, env: &Env) -> Result<
             env,
             "promote",
             auth,
-            &json!({"command":command,"observed":expected}),
+            &json!({"command":command,"observed_digest":crate::fleet::publication::digest(&expected).map_err(failure)?}),
         )
         .await;
     }
@@ -142,22 +144,12 @@ pub(in crate::host) async fn handle_edge(mut req: Request, env: &Env) -> Result<
     let Ok(origin) = public_origin(&address) else {
         return invalid();
     };
-    if super::public_dns::validate(&origin).await.is_err() {
-        return invalid();
-    }
-    let Ok(bytes) = fetch_public(
-        &format!("{origin}/.well-known/windshare"),
-        MAX_DESCRIPTOR,
-        "application/json",
-    )
-    .await
-    else {
-        return invalid();
-    };
-    let Ok(discovery) =
-        descriptor::inspect(&origin, &bytes, worker::Date::now().as_millis() / 1000)
-    else {
-        return invalid();
+    let discovery = match discover_node(&origin, &req, env).await {
+        Ok(node) => node,
+        Err(error) => {
+            tracing::warn!(event="node_discovery_rejected", %origin, error=%format!("{error:#}"));
+            return invalid();
+        }
     };
     let Some(command) = command else {
         return Response::from_json(&discovery);
@@ -191,26 +183,28 @@ pub(in crate::host) async fn handle_edge(mut req: Request, env: &Env) -> Result<
 fn invalid() -> Result<Response> {
     routes::fault(&Fault::Invalid).map_err(failure)
 }
-
-pub(in crate::host) async fn public_directory(env: &Env) -> Result<Response> {
-    let body = env
-        .kv("DIRECTORY")?
-        .get(KV_KEY)
-        .cache_ttl(60)
-        .text()
-        .await?;
-    let Some(body) = body else {
-        return Response::error("directory unavailable", 503);
-    };
-    let mut response = Response::ok(body)?;
-    response
-        .headers_mut()
-        .set("Content-Type", "application/json")?;
-    response
-        .headers_mut()
-        .set("Access-Control-Allow-Origin", "*")?;
-    response
-        .headers_mut()
-        .set("Cache-Control", "public, max-age=60")?;
-    Ok(response)
+async fn discover_node(
+    origin: &str,
+    req: &Request,
+    env: &Env,
+) -> anyhow::Result<descriptor::Discovery> {
+    let host = url::Url::parse(origin)?;
+    let release = release()?;
+    let api = env.var("API_ORIGIN")?.to_string();
+    let own = req.url()?.origin().ascii_serialization();
+    for protected in [release.link_host, release.backup_entry, api, own] {
+        let url = url::Url::parse(&protected)?;
+        anyhow::ensure!(
+            host.host() != url.host(),
+            "reserved control or frontend hostname"
+        );
+    }
+    super::public_dns::validate(origin).await?;
+    let bytes = fetch_public(
+        &format!("{origin}/.well-known/windshare"),
+        MAX_DESCRIPTOR,
+        "application/json",
+    )
+    .await?;
+    descriptor::inspect(origin, &bytes, worker::Date::now().as_millis() / 1000)
 }

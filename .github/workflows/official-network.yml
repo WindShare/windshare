@@ -115,6 +115,10 @@ jobs:
           CLOUDFLARE_FRONTEND_SAAS_HOST: ws.ourworld.top
           CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
         run: |
+          if [[ -z "${DIRECTORY_KV_ID//[[:space:]]/}" ]]; then
+            echo 'Configure DIRECTORY_KV_ID in official-cloudflare with the authority directory namespace.' >&2
+            exit 1
+          fi
           sha256sum -c official-network.sha256
           mkdir official
           tar -xzf official-network.tar.gz -C official

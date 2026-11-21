@@ -30,6 +30,19 @@
           "relayIdentityB64": "lqw7a1WCyYfbtMfhCa0djaH+/mO59x3qwmV4Mgrmsh0="
         },
         {
+          "name": "mapped-ipv4",
+          "relayBaseUrl": "https://[::ffff:c000:201]:443/",
+          "accepted": true,
+          "dialEndpoint": "wss://192.0.2.1/v2/ws",
+          "relayIdentityEndpoint": "wss://192.0.2.1/v2/ws",
+          "relayIdentityB64": "R0ldqm30PdUYSV+6fEoZDRya9XHBEAwRsS7EUqUjM4g="
+        },
+        {
+          "name": "zero-port",
+          "relayBaseUrl": "https://relay.example:0",
+          "accepted": false
+        },
+        {
           "name": "local-ws-port",
           "relayBaseUrl": "http://127.0.0.1:8080/relay",
           "accepted": true,

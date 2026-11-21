@@ -67,6 +67,8 @@ export function counter(value: unknown): number {
   return value
 }
 
+const ZERO_TIME_MS = Date.parse('0001-01-01T00:00:00Z')
+
 export function timestamp(value: unknown): number {
   if (typeof value !== 'string' || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?(?:Z|[+-]\d\d:\d\d)$/.test(value)) throw new TypeError('Invalid network timestamp')
   const year = Number(value.slice(0, 4)), month = Number(value.slice(5, 7)), day = Number(value.slice(8, 10))
@@ -74,7 +76,7 @@ export function timestamp(value: unknown): number {
   endOfMonth.setUTCFullYear(year, month, 0)
   if (month < 1 || month > 12 || day < 1 || day > endOfMonth.getUTCDate() || Number(value.slice(11, 13)) > 23) throw new TypeError('Invalid network timestamp')
   const result = Date.parse(value)
-  if (!Number.isFinite(result) || value === '0001-01-01T00:00:00Z') throw new TypeError('Invalid network timestamp')
+  if (!Number.isFinite(result) || (result === ZERO_TIME_MS && !/\.\d*[1-9]/.test(value))) throw new TypeError('Invalid network timestamp')
   return result
 }
 

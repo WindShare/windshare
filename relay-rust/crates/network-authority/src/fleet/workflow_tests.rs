@@ -33,6 +33,7 @@ fn directory() -> (Release, Publisher, String) {
     cert["root"] = json!("test-root");
     let snapshot = |alias, serial| {
         let mut entry = spec(alias, 9);
+        entry["relay"] = json!(format!("https://{alias}.example/"));
         entry["status"] = json!("active");
         let mut envelope = signed(
             &online,
@@ -61,6 +62,14 @@ fn proof(key: &SigningKey, domain: &[u8], body: &Value) -> Proof {
     let mut value = signed(key, domain, body);
     value["key"] = json!(URL_SAFE_NO_PAD.encode(key.verifying_key().to_bytes()));
     serde_json::from_value(value).unwrap()
+}
+
+fn cn_agent(key: &SigningKey) -> Agent {
+    Agent {
+        id: "cn-a".into(),
+        zone: Zone::Cn,
+        key: URL_SAFE_NO_PAD.encode(key.verifying_key().to_bytes()),
+    }
 }
 
 #[test]
@@ -107,12 +116,7 @@ fn a_verified_staging_node_requires_current_mirrors_before_publication() {
     let node = auth.stage(&admin, candidate.clone()).unwrap();
     assert_eq!(publication.payload().unwrap().nodes.len(), 1);
     let probe_key = SigningKey::from_bytes(&[8; 32]);
-    let agent = Agent {
-        id: "cn-a".into(),
-        zone: Zone::Cn,
-        key: URL_SAFE_NO_PAD.encode(probe_key.verifying_key().to_bytes()),
-    };
-    let agents = [agent];
+    let agents = [cn_agent(&probe_key)];
     let now = auth.environment.now();
     let shares = [[1u8; 12], [2u8; 12], [3u8; 12]];
     let poll = |mirror: Option<String>, at| {
@@ -149,10 +153,13 @@ fn a_verified_staging_node_requires_current_mirrors_before_publication() {
     let promote = |auth: &mut Authority<Memory, Clock>, observed: &Envelope, enrolled: &[Agent]| {
         auth.promote(
             &admin,
-            &candidate.node_key,
-            Status::Canary,
+            &crate::fleet::Promote {
+                node_key: candidate.node_key.clone(),
+                status: Status::Canary,
+                operation_id: work.operation_id.clone(),
+            },
             enrolled,
-            observed,
+            &digest(observed).unwrap(),
             &signer,
         )
     };
@@ -160,7 +167,7 @@ fn a_verified_staging_node_requires_current_mirrors_before_publication() {
     let outcome = proof(
         &probe_key,
         b"windshare/vantage-result/v1\0",
-        &json!({"at":now,"node_key":candidate.node_key,"lease":work.lease,"error":null}),
+        &json!({"at":now,"node_key":candidate.node_key,"lease":work.lease,"outcome":{"kind":"passed"}}),
     );
     auth.complete_probe(&agents, &outcome).unwrap();
     assert!(auth.complete_probe(&agents, &outcome).is_err());
@@ -194,4 +201,194 @@ fn a_verified_staging_node_requires_current_mirrors_before_publication() {
             status: Status::Canary
         }
     ));
+}
+#[test]
+fn draft_conflicts_and_withdrawal_are_scoped_to_one_operation() {
+    let mut auth = fixture();
+    let admin = auth
+        .initialize("init", "init", "operator", "reasonable password")
+        .unwrap();
+    let (release, _, history) = directory();
+    Publication::bootstrap(&mut auth.store, &release, &[&history]).unwrap();
+    let mut candidate: Spec = serde_json::from_value(spec("new", 7)).unwrap();
+    let historic_endpoint = Spec {
+        relay: "https://prior.example".into(),
+        ..candidate.clone()
+    };
+    assert!(
+        matches!(auth.stage(&admin, historic_endpoint).unwrap_err().downcast_ref::<Fault>(), Some(Fault::Conflict {reason}) if reason == "relay_bound")
+    );
+    candidate.stun = vec!["stun:stun.example:3478".into()];
+    candidate.roles.push(crate::fleet::topology::Role::Stun);
+    assert!(
+        matches!(auth.stage(&admin,candidate.clone()).unwrap_err().downcast_ref::<Fault>(),Some(Fault::Conflict { reason }) if reason == "stun_bound")
+    );
+    candidate.stun = vec!["stun:new.example:3478".into()];
+    let draft = auth
+        .stage(&admin, candidate.clone())
+        .unwrap()
+        .listing
+        .unwrap();
+    let mut duplicate: Spec = serde_json::from_value(spec("other", 8)).unwrap();
+    duplicate.stun.clone_from(&candidate.stun);
+    duplicate.roles.clone_from(&candidate.roles);
+    assert!(
+        matches!(auth.stage(&admin, duplicate.clone()).unwrap_err().downcast_ref::<Fault>(), Some(Fault::Conflict {reason}) if reason == "stun_bound")
+    );
+    duplicate.relay.clone_from(&candidate.relay);
+    assert!(
+        matches!(auth.stage(&admin,duplicate).unwrap_err().downcast_ref::<Fault>(),Some(Fault::Conflict { reason }) if reason == "relay_bound")
+    );
+    auth.cancel_draft(&admin, &candidate.node_key, &draft.operation_id)
+        .unwrap();
+    candidate.relay = "https://correct.example".into();
+    let next = auth
+        .stage(&admin, candidate.clone())
+        .unwrap()
+        .listing
+        .unwrap();
+    assert_ne!(draft.operation_id, next.operation_id);
+    assert!(
+        auth.cancel_draft(&admin, &candidate.node_key, &draft.operation_id)
+            .is_err()
+    );
+    auth.cancel_draft(&admin, &candidate.node_key, &next.operation_id)
+        .unwrap();
+    candidate.node_key = URL_SAFE_NO_PAD.encode([4; 32]);
+    auth.stage(&admin, candidate).unwrap();
+}
+
+#[test]
+fn failed_checks_back_off_and_a_replacement_draft_rejects_old_results() {
+    let mut auth = fixture();
+    let admin = auth
+        .initialize("init", "init", "operator", "reasonable password")
+        .unwrap();
+    let (release, _, history) = directory();
+    Publication::bootstrap(&mut auth.store, &release, &[&history]).unwrap();
+    let candidate: Spec = serde_json::from_value(spec("retry", 7)).unwrap();
+    let draft = auth
+        .stage(&admin, candidate.clone())
+        .unwrap()
+        .listing
+        .unwrap();
+    let key = SigningKey::from_bytes(&[11; 32]);
+    let agents = [cn_agent(&key)];
+    let poll = |auth: &mut Authority<Memory, Clock>| {
+        let shares = [[1u8; 12], [2u8; 12], [3u8; 12]];
+        let proof = proof(
+            &key,
+            b"windshare/vantage-poll/v1\0",
+            &json!({"at":auth.environment.now(), "shares":shares}),
+        );
+        auth.claim(&agents, &proof, Default::default()).unwrap()
+    };
+    let outcome = |at, lease: &str, kind: &str| {
+        let outcome = if kind == "failed" {
+            json!({"kind":kind, "reason":"timeout"})
+        } else {
+            json!({"kind":kind})
+        };
+        proof(
+            &key,
+            b"windshare/vantage-result/v1\0",
+            &json!({"at":at, "node_key":candidate.node_key, "lease":lease, "outcome":outcome}),
+        )
+    };
+    let mut work = poll(&mut auth).unwrap();
+    for delay in [60, 120] {
+        auth.complete_probe(
+            &agents,
+            &outcome(auth.environment.now(), &work.lease, "failed"),
+        )
+        .unwrap();
+        auth.environment.now += delay - 1;
+        assert!(poll(&mut auth).is_none());
+        auth.environment.now += 1;
+        work = poll(&mut auth).unwrap();
+    }
+    auth.cancel_draft(&admin, &candidate.node_key, &draft.operation_id)
+        .unwrap();
+    auth.stage(&admin, candidate.clone()).unwrap();
+    auth.environment.now += 1;
+    let replacement = poll(&mut auth).unwrap();
+    assert_ne!(replacement.lease, work.lease);
+    assert!(
+        auth.complete_probe(
+            &agents,
+            &outcome(auth.environment.now(), &work.lease, "passed")
+        )
+        .is_err()
+    );
+    auth.complete_probe(
+        &agents,
+        &outcome(auth.environment.now(), &replacement.lease, "released"),
+    )
+    .unwrap();
+    auth.environment.now += 1;
+    assert!(poll(&mut auth).is_some());
+}
+
+#[test]
+fn deployment_rejects_invalid_vantage_configuration_as_a_server_error() {
+    use crate::fleet::vantage::validate_agents;
+    let agent = Agent {
+        id: "cn-a".into(),
+        zone: Zone::Cn,
+        key: URL_SAFE_NO_PAD.encode(SigningKey::from_bytes(&[11; 32]).verifying_key().to_bytes()),
+    };
+    validate_agents(std::slice::from_ref(&agent)).unwrap();
+    for invalid in [
+        Agent {
+            key: "short".into(),
+            ..agent.clone()
+        },
+        Agent {
+            id: "two".into(),
+            ..agent.clone()
+        },
+        agent.clone(),
+    ] {
+        let error = validate_agents(&[agent.clone(), invalid]).unwrap_err();
+        assert!(error.downcast_ref::<Fault>().is_none());
+    }
+    for invalid in [
+        json!({"key":agent.key,"id":"cn","zone":"CN"}),
+        json!({"key":agent.key,"id":"cn","zone":"cn","extra":true}),
+    ] {
+        assert!(serde_json::from_value::<Agent>(invalid).is_err());
+    }
+}
+
+#[test]
+fn withdrawing_an_older_draft_releases_its_unpublished_alias_and_preserves_admission() {
+    let mut auth = fixture();
+    let admin = auth
+        .initialize("init", "init", "operator", "reasonable password")
+        .unwrap();
+    Publication::load_or_import(&mut auth.store).unwrap();
+    let mut candidate: Spec = serde_json::from_value(spec("old-draft", 7)).unwrap();
+    let node = auth.stage(&admin, candidate.clone()).unwrap();
+    let record = key("node", &node.key);
+    let mut old_node = serde_json::to_value(&node).unwrap();
+    old_node["listing"]["state"]
+        .as_object_mut()
+        .unwrap()
+        .remove("enrollment");
+    old_node["anonymous"] = json!(true);
+    save(&mut auth.store, &record, &old_node).unwrap();
+    let mut old_head: Value = load(&auth.store, "directory/current").unwrap().unwrap();
+    old_head["aliases"][&candidate.alias] = json!("wss://old-draft.example/v2/ws");
+    save(&mut auth.store, "directory/current", &old_head).unwrap();
+
+    auth.cancel_draft(
+        &admin,
+        &candidate.node_key,
+        &node.listing.unwrap().operation_id,
+    )
+    .unwrap();
+    let saved: Node = load(&auth.store, &record).unwrap().unwrap();
+    assert!(saved.listing.is_none() && saved.anonymous);
+    candidate.relay = "https://replacement.example".into();
+    auth.stage(&admin, candidate).unwrap();
 }

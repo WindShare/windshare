@@ -5,7 +5,7 @@ import { confirmConverged, PropagationPendingError } from './verification.mjs';
 
 const FORMAT = 'windshare-cloudflare-frontend-v1';
 export function readFrontendInputs(env) {
-  const directory = env.DIRECTORY_KV_ID;
+  const directory = env.DIRECTORY_KV_ID?.trim() || undefined;
   if (directory !== undefined && !/^[0-9a-f]{32}$/.test(directory)) throw new Error('Invalid directory KV namespace.');
   return { ...readWorkerIdentity(env), route: readFrontendRoute(env), ...(directory ? { directory } : {}) };
 }

@@ -1,11 +1,15 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { readFileSync } from 'node:fs';
+import { directoryRevision } from './directory-revision.mjs';
 import { frontendConfig } from './configuration.mjs';
 import { deployFrontend, readFrontendInputs } from './frontend.mjs';
 import { STATE_BINDING } from './deployment.mjs';
 import worker from './frontend-entry.mjs';
 import { serveDirectory } from './directory-mirror.mjs';
 
+const vectors = JSON.parse(readFileSync(new URL('../../../testdata/network/directory.json', import.meta.url), 'utf8'));
+const signed = name => JSON.stringify(vectors.entries.find(entry => entry.name === name).envelope);
 const inputs = readFrontendInputs({ CLOUDFLARE_ACCOUNT_ID: 'a'.repeat(32), CLOUDFLARE_WORKER_NAME: 'official-web' });
 function cloud() {
   let settings = null;
@@ -84,8 +88,9 @@ test('frontend serves assets, refuses absent directory and redirects only versio
   assert.equal((await worker.fetch(new Request('https://ws.ourworld.top/downloads/v0.1.3/windshare-v0.1.3-windows-amd64.zip', { method: 'POST' }), env)).status, 405);
 });
 
-test('signed directory mirrors are readable from self-hosted frontends', async () => {
-  const bytes = '{"payload":"exact-signed-bytes"}';
+test('signed directory mirrors are readable from self-hosted frontends', async t => {
+  t.mock.method(Date, 'now', () => Date.parse(vectors.now));
+  const bytes = signed('valid');
   const response = await worker.fetch(new Request('https://windshare.cc/.well-known/windshare-network', {
     headers: { Origin: 'https://self-hosted.example' },
   }), { ASSETS: { fetch: async () => new Response(bytes) } });
@@ -137,25 +142,59 @@ test('frontend post-deploy verification retries stale state and lagging SaaS rou
     'saas_route_pending',
   ]);
 });
-test('regional KV loss retains the last trusted directory until its grant expires', async () => {
-  const grant = Buffer.from(JSON.stringify({ expires_at: new Date(Date.now() + 100_000).toISOString() })).toString('base64url');
-  const current = JSON.stringify({ payload: grant, certificate: { payload: grant } });
+test('published mirror compares signed revisions and only persists a changed copy', async t => {
+  let now = Date.parse(vectors.now);
+  t.mock.method(Date, 'now', () => now);
+  const baseline = signed('valid'), newer = signed('new_generation');
+  let current = signed('older_serial'), saved, writes = 0, reads = 0;
+  const cache = { async put(key, value) { writes++; saved = await value.text(); },
+    async match() { return saved && new Response(saved); } };
+  const pending = [];
+  const context = { waitUntil(promise) { pending.push(promise); } };
+  const env = { BUNDLED_DIRECTORY_REVISION: JSON.stringify(await directoryRevision(baseline)),
+    DIRECTORY: { get(key, options) { assert.deepEqual(options, { cacheTtl: 60 }); return current; } },
+    ASSETS: { fetch: async () => { reads++; return new Response(baseline); } } };
   const request = new Request('https://windshare.cc/.well-known/windshare-network');
-  let online = true, saved;
-  const kv = { get(key, options) {
-    assert.equal(key, 'windshare-network');
-    assert.deepEqual(options, { cacheTtl: 60 });
-    if (!online) throw Error('offline');
-    return current;
-  } };
-  const cache = { async put(key, value) { saved = value; }, async match() { return saved.clone(); } };
-  const context = { waitUntil() {} };
-  const env = { DIRECTORY: kv, ASSETS: { fetch: async () => new Response('bundle') } };
-  assert.equal(await (await serveDirectory(request, env, context, cache)).text(), current);
-  online = false;
-  const fallback = await serveDirectory(request, env, context, cache);
-  assert.equal(await fallback.text(), current);
-  assert.equal(fallback.headers.get('Cache-Control'), 'public, max-age=60');
-  saved.headers.set('X-WindShare-Trusted-Until', String(Date.now() - 1));
-  assert.equal(await (await serveDirectory(request, env, context, cache)).text(), 'bundle');
+  const serve = (req = request, bindings = env) => serveDirectory(req, bindings, context, cache);
+  assert.equal(await (await serve()).text(), baseline);
+  current = newer;
+  assert.equal(await (await serve()).text(), newer);
+  assert.equal(await (await serve(new Request(request, { method: 'HEAD' }))).text(), '');
+  await Promise.all(pending);
+  assert.equal(writes, 1);
+  assert.equal(reads, 1);
+  current = null;
+  assert.equal(await (await serve(request, { ...env })).text(), newer);
+  now = (await directoryRevision(newer)).until + 1;
+  const unavailable = await serve();
+  assert.equal(unavailable.status, 503);
+  assert.equal(unavailable.headers.get('cache-control'), 'no-store');
+});
+test('a temporary Cache API failure retries the same live revision after the edge TTL', async t => {
+  let now = Date.parse(vectors.now), writes = 0, pending;
+  t.mock.method(Date, 'now', () => now);
+  t.mock.method(console, 'warn', () => {});
+  const bytes = signed('valid');
+  const env = { DIRECTORY: { get: async () => bytes }, BUNDLED_DIRECTORY_REVISION: 'null' };
+  const cache = { match: async () => null, async put() { if (++writes === 1) throw new Error('temporarily unavailable'); } };
+  const ctx = { waitUntil(promise) { pending = promise; } };
+  const request = new Request('https://windshare.cc/.well-known/windshare-network');
+  const read = async () => {
+    assert.equal(await (await serveDirectory(request, env, ctx, cache)).text(), bytes);
+    await pending;
+  };
+  await read();
+  await read();
+  assert.equal(writes, 1);
+  now += 60_000;
+  await read();
+  await read();
+  assert.equal(writes, 2);
+});
+
+test('frontend inputs normalize optional KV bindings and reject malformed IDs', () => {
+  const account = { CLOUDFLARE_ACCOUNT_ID: 'a'.repeat(32), CLOUDFLARE_WORKER_NAME: 'official-web' };
+  assert.equal(readFrontendInputs({ ...account, DIRECTORY_KV_ID: ' ' }).directory, undefined);
+  assert.equal(readFrontendInputs({ ...account, DIRECTORY_KV_ID: ' ' + 'c'.repeat(32) + ' ' }).directory, 'c'.repeat(32));
+  assert.throws(() => readFrontendInputs({ ...account, DIRECTORY_KV_ID: 'oops' }), /KV/);
 });

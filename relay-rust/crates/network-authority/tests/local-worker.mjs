@@ -22,10 +22,11 @@ export async function fixture(t, extra = {}) {
   const host = 'relay.example';
   const base = 'https://' + host;
   const requests = [];
+  const mirrors = new Map();
   const mf = new Miniflare(convertV4MiniflareOptions({
     log: new Log(LogLevel.ERROR),
     workers: [{
-      name: 'authority', compatibilityDate: '2026-09-28', modulesRoot: build,
+      name: 'authority', compatibilityDate: '2026-09-28', compatibilityFlags: ['global_fetch_strictly_public'], modulesRoot: build,
       modules: [{ type: 'ESModule', path: join(build, 'index.js') },
         { type: 'CompiledWasm', path: join(build, 'index_bg.wasm') }],
       outboundService: async request => {
@@ -34,9 +35,10 @@ export async function fixture(t, extra = {}) {
         assert.equal(request.headers.get('Authorization'), null);
         assert.equal(request.headers.get('X-CSRF-Token'), null);
         const url = new URL(request.url);
+        if (mirrors.has(url.href)) return Response.json(mirrors.get(url.href));
         if (url.hostname === 'cloudflare-dns.com') {
           assert.equal(url.searchParams.get('name'), host);
-          return Response.json({ Status: 0, Answer: url.searchParams.get('type') === '1' ? [{ type: 1, data: '1.1.1.1' }] : [] });
+          return Response.json({ Status: 0, TC: false, Answer: url.searchParams.get('type') === '1' ? [{ type: 1, data: '1.1.1.1' }] : [] });
         }
         if (url.href !== base + '/.well-known/windshare') throw Error('Unexpected outbound request ' + url.href);
         const now = Math.floor(Date.now() / 1000);
@@ -63,5 +65,5 @@ export async function fixture(t, extra = {}) {
   const worker = await mf.getWorker('authority');
   const enrollment = { url: base, node_key: node.toString('base64url'), alias: 'test-node', zone: 'global',
     region: 'edge-test', provider: 'test', roles: ['relay'], capacity_mbps: 5 };
-  return { worker, mf, trust, keys, nodeKey, node: [...node], requests, enrollment };
+  return { worker, mf, trust, keys, nodeKey, node: [...node], requests, mirrors, enrollment };
 }

@@ -1,6 +1,9 @@
 //! Operator intent and verification live in the authority transaction. Network I/O
 //! starts only after the corresponding authenticated command has committed.
 pub mod descriptor;
+#[cfg(any(test, target_arch = "wasm32"))]
+pub(crate) mod dns;
+mod endpoints;
 pub mod publication;
 pub mod signature;
 pub mod topology;
@@ -13,7 +16,6 @@ use crate::{
 use anyhow::{Result, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD as B64};
 use serde::{Deserialize, Serialize};
-use signature::Envelope;
 use topology::{Spec, Status, public_key};
 
 pub const EVIDENCE_SECONDS: u64 = 15 * 60;
@@ -27,8 +29,22 @@ pub struct Listing {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ListingState {
-    Staging { check: Verification },
-    Listed { status: Status },
+    Staging {
+        check: Verification,
+        #[serde(default)]
+        enrollment: DraftEnrollment,
+    },
+    Listed {
+        status: Status,
+    },
+}
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DraftEnrollment {
+    #[default]
+    Legacy,
+    Existing,
+    Provisional,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -38,17 +54,29 @@ pub enum Verification {
         vantage_key: String,
         lease: String,
         until: u64,
+        #[serde(default)]
+        failures: u8,
     },
     Failed {
         vantage_key: String,
         at: u64,
         reason: String,
+        #[serde(default)]
+        failures: u8,
     },
     Passed {
         vantage_key: String,
         at: u64,
     },
 }
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Promote {
+    pub node_key: String,
+    pub operation_id: String,
+    pub status: Status,
+}
+
 impl Listing {
     pub const fn status(&self) -> Option<Status> {
         match self.state {
@@ -90,69 +118,134 @@ impl<R: Store, E: Environment> Authority<R, E> {
             Fault::Invalid
         );
         let record = key("node", &public_key(&spec.node_key)?);
-        if let Some(node) = load::<Node>(&self.store, &record)?
+        let existing: Option<Node> = load(&self.store, &record)?;
+        if let Some(node) = &existing
             && let Some(listing) = &node.listing
         {
-            ensure!(listing.spec == spec, Fault::Invalid);
-            return Ok(node);
+            ensure!(
+                listing.spec == spec,
+                Fault::Conflict {
+                    reason: "listing_changed".into()
+                }
+            );
+            return Ok(node.clone());
         }
-        let rows = self.store.scan("node/", None)?;
+        let directory = publication::current(&self.store)?;
+        directory.check_alias(&spec)?;
+        let mut occupied = topology::Occupied::default();
+        for stun in directory.payload()?.public_stun {
+            occupied.add_stun(&stun.url)?;
+        }
         let mut count = 0;
-        for (_, value) in rows {
+        for (_, value) in self.store.scan("node/", None)? {
             if let Some(listing) = serde_json::from_str::<Node>(&value)?.listing {
-                ensure!(
-                    listing.spec.alias != spec.alias && listing.spec.relay != spec.relay,
-                    Fault::Denied {
-                        reason: "alias_bound".into()
-                    }
-                );
+                occupied.add(&listing.spec)?;
                 count += 1;
             }
         }
         ensure!(count < topology::MAX_NODES, Fault::Invalid);
-        let mut directory = publication::current(&self.store)?;
-        directory.reserve(&spec)?;
+        occupied.add(&spec)?;
+        let (mut node, enrollment) = match existing {
+            Some(node) => (node, DraftEnrollment::Existing),
+            None => (
+                Node::enrolled(public_key(&spec.node_key)?, spec.zone, spec.region.clone()),
+                DraftEnrollment::Provisional,
+            ),
+        };
         let operation_id = B64.encode(self.environment.random::<16>()?);
         tracing::info!(event="node_staged", %operation_id, node_id=%spec.node_key, alias=%spec.alias);
-        let node = attach(
-            &mut self.store,
+        node.listing = Some(Listing {
             spec,
-            ListingState::Staging {
-                check: Verification::Queued,
-            },
             operation_id,
-        )?;
-        directory.save(&mut self.store)?;
+            state: ListingState::Staging {
+                check: Verification::Queued,
+                enrollment,
+            },
+        });
+        save(&mut self.store, &record, &node)?;
         Ok(node)
+    }
+    /// # Errors
+    /// Only the named draft can be withdrawn. A stale tab cannot cancel a later enrollment.
+    pub fn cancel_draft(
+        &mut self,
+        session: &str,
+        node_key: &str,
+        operation_id: &str,
+    ) -> Result<()> {
+        self.require_admin(session)?;
+        let id = public_key(node_key)?;
+        let record = key("node", &id);
+        let Some(mut node) = load::<Node>(&self.store, &record)? else {
+            return Ok(());
+        };
+        let Some(listing) = node.listing.take() else {
+            return Ok(());
+        };
+        let ListingState::Staging { enrollment, .. } = listing.state else {
+            return Err(Fault::Conflict {
+                reason: "listing_changed".into(),
+            }
+            .into());
+        };
+        ensure!(
+            listing.operation_id == operation_id,
+            Fault::Conflict {
+                reason: "listing_changed".into()
+            }
+        );
+        if matches!(enrollment, DraftEnrollment::Legacy) {
+            publication::withdraw_legacy_alias(&mut self.store, &listing.spec.alias)?;
+        }
+        match enrollment {
+            DraftEnrollment::Existing | DraftEnrollment::Legacy => {
+                save(&mut self.store, &record, &node)?;
+            }
+            DraftEnrollment::Provisional => {
+                self.store.delete(&record)?;
+                self.store.delete(&key("node-load", &id))?;
+                self.live_loads.remove(&id);
+            }
+        }
+        tracing::info!(event="node_draft_cancelled", %operation_id, node_id=%node_key);
+        Ok(())
     }
     /// # Errors
     /// Requires current verification and matching mirrors. Signing or storage failures abort publication.
     pub fn promote(
         &mut self,
         session: &str,
-        node_key: &str,
-        status: Status,
+        command: &Promote,
         agents: &[vantage::Agent],
-        observed: &Envelope,
+        observed_digest: &str,
         signer: &publication::Publisher,
     ) -> Result<()> {
         self.require_admin(session)?;
+        let node_key = command.node_key.as_str();
+        let status = command.status;
         ensure!(status != Status::Draining, Fault::Invalid);
         let now = self.environment.now();
         let record = key("node", &public_key(node_key)?);
         let mut node: Node = load(&self.store, &record)?.ok_or(Fault::NodeNotFound)?;
         let listing = node.listing.as_mut().ok_or(Fault::Invalid)?;
+        ensure!(
+            listing.operation_id == command.operation_id,
+            Fault::Conflict {
+                reason: "listing_changed".into()
+            }
+        );
         if listing.status() == Some(status) {
             return Ok(());
         }
         let eligible = match &listing.state {
             ListingState::Staging {
                 check: Verification::Passed { at, vantage_key },
+                ..
             } => {
                 now.saturating_sub(*at) <= EVIDENCE_SECONDS
                     && agents
                         .iter()
-                        .any(|agent| agent.key == *vantage_key && agent.zone == node.zone)
+                        .any(|agent| agent.key == *vantage_key && agent.zone == listing.spec.zone)
             }
             ListingState::Listed {
                 status: Status::Canary,
@@ -168,8 +261,8 @@ impl<R: Store, E: Environment> Authority<R, E> {
         ensure!(node.enabled, Fault::Invalid);
         let mut publication = publication::current(&self.store)?;
         ensure!(
-            publication.envelope == *observed
-                && vantage::mainland_current(&self.store, agents, observed, now)?,
+            publication::digest(&publication.envelope)? == observed_digest
+                && vantage::mainland_current(&self.store, agents, observed_digest, now)?,
             Fault::Denied {
                 reason: "mirror_lag".into()
             }
@@ -183,7 +276,10 @@ impl<R: Store, E: Environment> Authority<R, E> {
         payload
             .nodes
             .sort_by(|a, b| a.spec.alias.cmp(&b.spec.alias));
+        publication.reserve(&listing.spec)?;
         publication.publish(payload, signer, now, &listing.operation_id)?;
+        node.zone = listing.spec.zone;
+        node.region.clone_from(&listing.spec.region);
         listing.state = ListingState::Listed { status };
         tracing::info!(event="node_promoted",operation_id=%listing.operation_id,node_id=%node_key,?status);
         save(&mut self.store, &record, &node)?;

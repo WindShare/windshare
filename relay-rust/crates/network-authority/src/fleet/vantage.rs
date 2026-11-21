@@ -1,6 +1,6 @@
 use super::{
-    EVIDENCE_SECONDS, ListingState, Verification, publication,
-    signature::{Envelope, verify_bytes},
+    EVIDENCE_SECONDS, ListingState, Verification,
+    signature::verify_bytes,
     topology::{Role, Spec, public_key},
 };
 use crate::{
@@ -21,6 +21,7 @@ const RESULT_DOMAIN: &[u8] = b"windshare/vantage-result/v1\0";
 const FRESH_SECONDS: u64 = 90;
 const PROBE_ALLOWANCE_BYTES: u64 = 4 * 1024;
 const RETRY_SECONDS: u64 = 60;
+const MAX_RETRY_SHIFT: u8 = 5; // 32 minutes between retries for an unattended broken draft.
 pub const SILENT_SECONDS: u64 = 5 * 60;
 pub const ORIGIN_COUNT: usize = 3;
 
@@ -47,11 +48,18 @@ struct Poll {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Outcome {
+struct ProbeReport {
     at: u64,
     node_key: String,
     lease: String,
-    error: Option<String>,
+    outcome: ProbeOutcome,
+}
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum ProbeOutcome {
+    Passed,
+    Failed { reason: String },
+    Released,
 }
 #[derive(Deserialize, Serialize)]
 struct Heartbeat {
@@ -96,18 +104,24 @@ impl Proof {
 pub fn validate_agents(agents: &[Agent]) -> Result<()> {
     let mut ids = std::collections::BTreeSet::new();
     let mut keys = std::collections::BTreeSet::new();
-    for agent in agents {
-        public_key(&agent.key)?;
+    for (index, agent) in agents.iter().enumerate() {
+        let bytes = public_key(&agent.key)
+            .map_err(|_| anyhow::anyhow!("invalid VANTAGE_KEYS[{index}].key"))?;
+        let key = ed25519_dalek::VerifyingKey::from_bytes(&bytes)?;
+        ensure!(!key.is_weak(), "weak VANTAGE_KEYS[{index}].key");
         ensure!(
             !agent.id.is_empty()
                 && agent.id.len() <= 64
                 && agent
                     .id
                     .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b == b'-')
-                && ids.insert(&agent.id)
-                && keys.insert(&agent.key),
-            Fault::Invalid
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-'),
+            "invalid VANTAGE_KEYS[{index}].id"
+        );
+        ensure!(ids.insert(&agent.id), "duplicate VANTAGE_KEYS[{index}].id");
+        ensure!(
+            keys.insert(&agent.key),
+            "duplicate VANTAGE_KEYS[{index}].key"
         );
     }
     Ok(())
@@ -118,17 +132,16 @@ pub fn validate_agents(agents: &[Agent]) -> Result<()> {
 pub fn mainland_current(
     store: &impl Store,
     agents: &[Agent],
-    envelope: &Envelope,
+    expected: &str,
     now: u64,
 ) -> Result<bool> {
-    let expected = publication::digest(envelope)?;
     let mut seen = false;
     for agent in agents.iter().filter(|agent| agent.zone == Zone::Cn) {
         let Some(beat) = load::<Heartbeat>(store, &format!("vantage/{}", agent.key))? else {
             continue;
         };
         if beat.zone == agent.zone && now.saturating_sub(beat.at) <= SILENT_SECONDS {
-            if beat.mirror.as_deref() != Some(expected.as_str()) {
+            if beat.mirror.as_deref() != Some(expected) {
                 return Ok(false);
             }
             seen = true;
@@ -192,19 +205,21 @@ impl<R: Store, E: Environment> Authority<R, E> {
         let mut selected = None;
         for (_, raw) in self.store.scan("node/", None)? {
             let node: Node = serde_json::from_str(&raw)?;
-            if node.zone != agent.zone {
-                continue;
-            }
             let Some(listing) = &node.listing else {
                 continue;
             };
-            let ListingState::Staging { check } = &listing.state else {
+            if listing.spec.zone != agent.zone {
+                continue;
+            }
+            let ListingState::Staging { check, .. } = &listing.state else {
                 continue;
             };
             let due = match check {
                 Verification::Queued => 0,
                 Verification::Running { until, .. } => *until,
-                Verification::Failed { at, .. } => at + RETRY_SECONDS,
+                Verification::Failed { at, failures, .. } => at.saturating_add(
+                    RETRY_SECONDS << failures.saturating_sub(1).min(MAX_RETRY_SHIFT),
+                ),
                 Verification::Passed { at, .. } => at + EVIDENCE_SECONDS,
             };
             if due <= now && selected.as_ref().is_none_or(|(old, _)| due < *old) {
@@ -225,12 +240,20 @@ impl<R: Store, E: Environment> Authority<R, E> {
         } else {
             Vec::new()
         };
-        listing.state = ListingState::Staging {
-            check: Verification::Running {
-                vantage_key: agent.key.clone(),
-                lease: lease.clone(),
-                until,
-            },
+        let ListingState::Staging { check, .. } = &mut listing.state else {
+            return Err(Fault::Invalid.into());
+        };
+        let failures = match check {
+            Verification::Failed { failures, .. } | Verification::Running { failures, .. } => {
+                *failures
+            }
+            _ => 0,
+        };
+        *check = Verification::Running {
+            vantage_key: agent.key.clone(),
+            lease: lease.clone(),
+            until,
+            failures,
         };
         let work = Work {
             operation_id: listing.operation_id.clone(),
@@ -275,47 +298,49 @@ impl<R: Store, E: Environment> Authority<R, E> {
     /// # Errors
     /// Rejects unauthenticated, expired or superseded leases and storage failures.
     pub fn complete_probe(&mut self, agents: &[Agent], proof: &Proof) -> Result<()> {
-        let (agent, result) = proof.open::<Outcome>(agents, RESULT_DOMAIN)?;
+        let (agent, result) = proof.open::<ProbeReport>(agents, RESULT_DOMAIN)?;
         let now = self.environment.now();
         ensure!(
             now.abs_diff(result.at) <= FRESH_SECONDS
-                && result.error.as_ref().is_none_or(|s| s.len() <= 256),
+                && !matches!(&result.outcome, ProbeOutcome::Failed { reason } if reason.is_empty() || reason.len() > 256),
             Fault::Invalid
         );
         let record = key("node", &public_key(&result.node_key)?);
         let mut node: Node = load(&self.store, &record)?.ok_or(Fault::NodeNotFound)?;
         let listing = node.listing.as_mut().ok_or(Fault::Invalid)?;
-        let ListingState::Staging {
-            check:
-                Verification::Running {
-                    vantage_key,
-                    lease,
-                    until,
-                },
-        } = &listing.state
+        let ListingState::Staging { check, .. } = &mut listing.state else {
+            return Err(Fault::Invalid.into());
+        };
+        let Verification::Running {
+            vantage_key,
+            lease,
+            until,
+            failures,
+        } = check
         else {
             return Err(Fault::Invalid.into());
         };
         ensure!(
-            node.zone == agent.zone
+            listing.spec.zone == agent.zone
                 && *vantage_key == agent.key
                 && *lease == result.lease
                 && now < *until,
             Fault::Invalid
         );
-        tracing::info!(event="verification_completed",operation_id=%listing.operation_id,node_id=%result.node_key,vantage=%agent.id,success=result.error.is_none());
-        listing.state = ListingState::Staging {
-            check: result.error.map_or_else(
-                || Verification::Passed {
-                    vantage_key: agent.key.clone(),
-                    at: now,
-                },
-                |reason| Verification::Failed {
-                    vantage_key: agent.key.clone(),
-                    at: now,
-                    reason,
-                },
-            ),
+        tracing::info!(event="verification_completed",operation_id=%listing.operation_id,node_id=%result.node_key,vantage=%agent.id,outcome=?result.outcome);
+        let consecutive = failures.saturating_add(1);
+        *check = match result.outcome {
+            ProbeOutcome::Released => Verification::Queued,
+            ProbeOutcome::Passed => Verification::Passed {
+                vantage_key: agent.key.clone(),
+                at: now,
+            },
+            ProbeOutcome::Failed { reason } => Verification::Failed {
+                vantage_key: agent.key.clone(),
+                at: now,
+                reason,
+                failures: consecutive,
+            },
         };
         save(&mut self.store, &record, &node)
     }

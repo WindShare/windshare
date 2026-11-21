@@ -9,11 +9,11 @@ export function Verification({ node, api, refresh }: { node: RelayNode; api: Aut
   const t = useCopy(networkCopy)
   const action = useAction()
   if (!node.listing) return null
-  const { spec, state } = node.listing
+  const { spec, state, operation_id } = node.listing
   const passed = state.kind === 'staging' && state.check.kind === 'passed'
   const promotable = passed || state.kind === 'listed' && state.status === 'canary'
   const promote = (status: TrafficStatus) => void action.run(async () => {
-    await api.promote(spec.node_key, status)
+    await api.promote(spec.node_key, operation_id, status)
     refresh()
   })
   return <section className="panel padded stack"><h2>{t.verification}</h2>
@@ -25,6 +25,12 @@ export function Verification({ node, api, refresh }: { node: RelayNode; api: Aut
       {passed && <button type="button" className="secondary" disabled={action.busy} onClick={() => promote('canary')}>{t.publishCanary}</button>}
       <button type="button" disabled={action.busy} onClick={() => promote('active')}>{t.publishActive}</button>
     </div>}
+    {state.kind === 'staging' && <div><button type="button" className="secondary" disabled={action.busy}
+      onClick={() => void action.run(async () => {
+        await api.cancelDraft(spec.node_key, operation_id)
+        refresh()
+        location.hash = 'nodes'
+      })}>{t.cancelDraft}</button></div>}
     <Notice feedback={action.feedback} />
   </section>
 }

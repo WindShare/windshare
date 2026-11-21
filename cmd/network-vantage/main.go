@@ -17,27 +17,30 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"syscall"
 	"time"
 
+	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/nodedirectory"
 	"github.com/windshare/windshare/engine/builtinnetwork"
 	"github.com/windshare/windshare/engine/networkconfig"
 	"github.com/windshare/windshare/internal/networkprobe"
-	v2 "github.com/windshare/windshare/relay/protocol/v2"
 )
 
 const (
-	pollInterval = time.Minute
-	checkTimeout = 45 * time.Second
-	pollDomain   = "windshare/vantage-poll/v1\x00"
-	resultDomain = "windshare/vantage-result/v1\x00"
+	pollInterval  = time.Minute
+	checkTimeout  = 45 * time.Second
+	reportTimeout = 3 * time.Second
+	pollDomain    = "windshare/vantage-poll/v1\x00"
+	resultDomain  = "windshare/vantage-result/v1\x00"
 )
 
 type agent struct {
-	key      ed25519.PrivateKey
-	config   *networkconfig.Config
-	client   *http.Client
-	mainland bool
+	key       ed25519.PrivateKey
+	config    *networkconfig.Config
+	client    *http.Client
+	authority *http.Client
+	mainland  bool
 }
 
 func main() {
@@ -76,8 +79,10 @@ func run(path string, mainland bool) error {
 	if config.Authority == nil {
 		return errors.New("release does not specify an authority")
 	}
-	a := agent{key, config, networkprobe.Client(), mainland}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	a := agent{key: key, config: config, client: networkprobe.Client(), authority: networkprobe.ReleaseClient(), mainland: mainland}
+	defer a.client.CloseIdleConnections()
+	defer a.authority.CloseIdleConnections()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	ticks := time.NewTicker(pollInterval)
 	defer ticks.Stop()
@@ -113,7 +118,7 @@ func (a *agent) mirror(ctx context.Context) *string {
 
 func (a *agent) cycle(ctx context.Context) error {
 	var shares [networkprobe.OriginCount]networkprobe.SyntheticShare
-	var ids [networkprobe.OriginCount]v2.ShareID
+	var ids [networkprobe.OriginCount][link.SenderAuthenticatedShareIDBytes]byte
 	for i := range shares {
 		share, err := networkprobe.NewShare()
 		if err != nil {
@@ -130,16 +135,22 @@ func (a *agent) cycle(ctx context.Context) error {
 	probe, cancel := context.WithTimeout(ctx, checkTimeout)
 	failure := networkprobe.Check(probe, a.client, *work, shares)
 	cancel()
-	var reason *string
-	if failure != nil {
+	outcome := map[string]string{"kind": "passed"}
+	switch {
+	case ctx.Err() != nil:
+		// A stopped vantage releases its lease without attributing a failure to the node.
+		outcome["kind"] = "released"
+	case failure != nil:
 		message := failure.Error()
 		if len(message) > 240 {
 			message = message[:240]
 		}
-		reason = &message
+		outcome = map[string]string{"kind": "failed", "reason": message}
 	}
 	slog.Info("enrollment verification", "operation_id", work.OperationID, "node_id", work.Node.NodeKey, "error", failure)
-	return a.post(ctx, "result", resultDomain, map[string]any{"at": time.Now().Unix(), "lease": work.Lease, "node_key": work.Node.NodeKey, "error": reason}, nil)
+	report, stop := context.WithTimeout(context.WithoutCancel(ctx), reportTimeout)
+	defer stop()
+	return a.post(report, "result", resultDomain, map[string]any{"at": time.Now().Unix(), "lease": work.Lease, "node_key": work.Node.NodeKey, "outcome": outcome}, nil)
 }
 
 func (a *agent) post(ctx context.Context, path, domain string, body, out any) error {
@@ -157,7 +168,7 @@ func (a *agent) post(ctx context.Context, path, domain string, body, out any) er
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	res, err := a.client.Do(req)
+	res, err := a.authority.Do(req)
 	if err != nil {
 		return err
 	}

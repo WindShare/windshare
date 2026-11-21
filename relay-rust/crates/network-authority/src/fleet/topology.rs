@@ -1,9 +1,9 @@
+pub use super::endpoints::{public_origin, stun_host};
 use crate::{Fault, Zone};
 use anyhow::{Result, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeSet;
-use url::{Host, Url};
 
 pub const MAX_NODES: usize = 256;
 pub const MAX_COUNTER: u64 = (1 << 53) - 1;
@@ -32,40 +32,6 @@ pub fn valid_text(value: &str) -> bool {
         && value.len() <= 128
         && value.trim_matches(edge) == value
         && !value.contains(['\0', '\r', '\n', '\t'])
-}
-
-/// # Errors
-/// Rejects non-HTTPS origins, credentials, private host names and non-origin URLs.
-pub fn public_origin(raw: &str) -> Result<String> {
-    let url = Url::parse(raw).map_err(|_| Fault::Invalid)?;
-    let Some(Host::Domain(domain)) = url.host() else {
-        return Err(Fault::Invalid.into());
-    };
-    let valid_label = |part: &str| {
-        !part.is_empty()
-            && part.len() <= 63
-            && !part.starts_with('-')
-            && !part.ends_with('-')
-            && part.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-')
-    };
-    ensure!(
-        !raw.contains('@')
-            && !raw.contains('\\')
-            && raw.trim() == raw
-            && url.scheme() == "https"
-            && url.username().is_empty()
-            && url.password().is_none()
-            && url.path() == "/"
-            && url.query().is_none()
-            && url.fragment().is_none()
-            && domain.len() <= 253
-            && domain.contains('.')
-            && domain.split('.').all(valid_label)
-            && !["localhost", "local", "internal", "invalid", "onion", "arpa"]
-                .contains(&domain.rsplit('.').next().unwrap_or("")),
-        Fault::Invalid
-    );
-    Ok(url.origin().ascii_serialization())
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -136,23 +102,7 @@ impl Spec {
         Ok(())
     }
     pub(super) fn relay_identity(&self) -> Result<String> {
-        let raw = &self.relay;
-        let relay = Url::parse(raw).map_err(|_| Fault::Invalid)?;
-        ensure!(
-            raw.starts_with("https://")
-                && relay.host().is_some()
-                && !raw.contains(['@', '?', '#', '\\'])
-                && !raw.chars().any(char::is_control)
-                && raw.trim() == raw,
-            Fault::Invalid
-        );
-        // Registration signs a WebSocket identity. The optional trailing slash of
-        // the HTTPS base cannot create a new binding for an existing alias.
-        let base = relay.as_str().trim_start_matches("https://");
-        Ok(format!(
-            "wss://{}/v2/ws",
-            base.strip_suffix('/').unwrap_or(base)
-        ))
+        super::endpoints::relay_identity(&self.relay)
     }
 }
 
@@ -164,20 +114,39 @@ pub struct PublicStun {
     pub provider: String,
     pub failure_domain: String,
 }
-
-/// # Errors
-/// Rejects malformed or noncanonical STUN host and port pairs.
-pub fn stun_host(raw: &str) -> Result<String> {
-    let hostport = raw.strip_prefix("stun:").ok_or(Fault::Invalid)?;
-    let (host, port) = hostport.rsplit_once(':').ok_or(Fault::Invalid)?;
-    let port = port.parse::<u16>().map_err(|_| Fault::Invalid)?;
-    let url = Url::parse(&format!("https://{host}")).map_err(|_| Fault::Invalid)?;
-    ensure!(
-        port > 0
-            && Some(host) == url.host_str()
-            && !host.contains(['/', '@', '?', '#'])
-            && format!("stun:{host}:{port}") == raw,
-        Fault::Invalid
-    );
-    Ok(host.to_owned())
+#[derive(Default)]
+pub(super) struct Occupied {
+    aliases: BTreeSet<String>,
+    relays: BTreeSet<String>,
+    stuns: BTreeSet<String>,
+}
+impl Occupied {
+    pub(super) fn add_stun(&mut self, endpoint: &str) -> Result<()> {
+        stun_host(endpoint)?;
+        ensure!(
+            self.stuns.insert(endpoint.into()),
+            Fault::Conflict {
+                reason: "stun_bound".into()
+            }
+        );
+        Ok(())
+    }
+    pub(super) fn add(&mut self, spec: &Spec) -> Result<()> {
+        ensure!(
+            self.aliases.insert(spec.alias.clone()),
+            Fault::Conflict {
+                reason: "alias_bound".into()
+            }
+        );
+        ensure!(
+            self.relays.insert(spec.relay_identity()?),
+            Fault::Conflict {
+                reason: "relay_bound".into()
+            }
+        );
+        for stun in &spec.stun {
+            self.add_stun(stun)?;
+        }
+        Ok(())
+    }
 }

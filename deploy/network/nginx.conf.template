@@ -20,7 +20,14 @@ server {
         default_type application/json;
         add_header Access-Control-Allow-Origin "*" always;
         add_header Cache-Control "public, max-age=60";
-        try_files /directory/windshare-network.json /current/web$uri =503;
+        error_page 503 = @directory_unavailable;
+        if (-f /srv/windshare/directory/windshare-network.json.expired) { return 503; }
+        try_files /directory/windshare-network.json /current/web$uri @directory_unavailable;
+    }
+    location @directory_unavailable {
+        add_header Access-Control-Allow-Origin "*" always;
+        add_header Cache-Control "no-store" always;
+        return 503;
     }
     location /downloads/ {
         alias /srv/windshare/current/downloads/;

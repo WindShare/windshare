@@ -37,6 +37,7 @@ impl Release {
     }
 }
 pub struct Publisher {
+    roots: Vec<Root>,
     cert: Certificate,
     grant: Grant,
     key: SigningKey,
@@ -55,7 +56,12 @@ impl Publisher {
             B64.encode(key.verifying_key().to_bytes()) == grant.key,
             "directory signing key mismatch"
         );
-        Ok(Self { cert, grant, key })
+        Ok(Self {
+            roots: release.roots.clone(),
+            cert,
+            grant,
+            key,
+        })
     }
     /// # Errors
     /// Rejects a stale, conflicting or not-yet-authorized publishing key during deploy preflight.
@@ -101,6 +107,32 @@ pub fn current(store: &impl Store) -> Result<Publication> {
     load(store, DIRECTORY)?.context("directory has not been imported")
 }
 
+// Earlier drafts wrote a permanent alias at staging and did not record whether the
+// node policy predated the draft. Preserve the policy and every signed historical binding.
+pub(super) fn withdraw_legacy_alias(store: &mut impl Store, alias: &str) -> Result<()> {
+    let mut head = current(store)?;
+    if !head.aliases.contains_key(alias)
+        || head.payload()?.nodes.iter().any(|n| n.spec.alias == alias)
+    {
+        return Ok(());
+    }
+    let release = Release::bundled()?;
+    for envelope in std::iter::once(Ok(release.snapshot.clone()))
+        .chain(HISTORY.iter().map(|raw| Envelope::decode(raw.as_bytes())))
+    {
+        if envelope?
+            .verify(&release.network, &release.roots, true)?
+            .nodes
+            .iter()
+            .any(|n| n.spec.alias == alias)
+        {
+            return Ok(());
+        }
+    }
+    head.aliases.remove(alias);
+    head.save(store)
+}
+
 impl Publication {
     /// # Errors
     /// Rejects invalid signatures, conflicting revisions, alias reassignments and storage failures.
@@ -114,7 +146,7 @@ impl Publication {
         };
         let mut previous = None;
         for raw in history {
-            let envelope: Envelope = serde_json::from_str(raw)?;
+            let envelope = Envelope::decode(raw.as_bytes())?;
             let past = envelope.verify(&release.network, &release.roots, true)?;
             let cursor = (past.generation, past.serial);
             ensure!(
@@ -164,17 +196,22 @@ impl Publication {
         }
         Self::bootstrap(store, &Release::bundled()?, HISTORY)
     }
-    pub(super) fn reserve(&mut self, spec: &Spec) -> Result<()> {
+    pub(super) fn check_alias(&self, spec: &Spec) -> Result<()> {
         let endpoint = spec.relay_identity()?;
         ensure!(
             self.aliases
                 .get(&spec.alias)
                 .is_none_or(|prev| prev == &endpoint),
-            Fault::Denied {
+            Fault::Conflict {
                 reason: "alias_bound".into()
             }
         );
-        self.aliases.insert(spec.alias.clone(), endpoint);
+        Ok(())
+    }
+    pub(super) fn reserve(&mut self, spec: &Spec) -> Result<()> {
+        self.check_alias(spec)?;
+        self.aliases
+            .insert(spec.alias.clone(), spec.relay_identity()?);
         Ok(())
     }
     /// # Errors
@@ -228,6 +265,7 @@ impl Publication {
             signer.cert.clone(),
             &signer.grant,
             &signer.key,
+            &signer.roots,
             timestamp(now)?,
         )?;
         tracing::info!(event="directory_signed",%operation_id,generation=data.generation,serial=data.serial,nodes=data.nodes.len());

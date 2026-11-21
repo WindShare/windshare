@@ -94,8 +94,8 @@ For each trusted mainland frontend, install a Linux build of `./cmd/network-sign
 `install -d -m 0755 -o windshare-network /srv/windshare/directory`. Install
 `windshare-directory.service` and `windshare-directory.timer` under `/etc/systemd/system/`,
 then run `systemctl daemon-reload && systemctl enable --now windshare-directory.timer`.
-The timer verifies and atomically replaces the persistent mirror once per minute.
-Both ingress templates serve this file with a 60-second TTL and a release-bundle fallback.
+The timer and web installer use the same directory lock and atomically select the newest verified signed revision. Install the matching `network-sign` before updating the frontend. The timer checks the authority once per minute.
+Both ingress templates serve this file with a 60-second TTL and a release-bundle fallback. If the last accepted revision expires, the timer retires it to `.expired` and ingress returns an uncached 503 until a usable revision arrives.
 
 Set `DIRECTORY_KV_ID` in `official-cloudflare` to the authority's directory namespace.
 Export the signed release head for each client release as described in the [release guide](README.md).

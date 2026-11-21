@@ -99,6 +99,18 @@ func (directory *Directory) refresh(cycle *refreshCycle) {
 	}
 }
 
+func (directory *Directory) finishIfResolved(cycle *refreshCycle, snapshot nodedirectory.Snapshot) bool {
+	directory.mu.Lock()
+	defer directory.mu.Unlock()
+	for alias := range cycle.targets {
+		if _, ok := snapshot.Resolve(alias); !ok {
+			return false
+		}
+	}
+	directory.finishLocked(cycle, nil)
+	return true
+}
+
 func (directory *Directory) tryMirrors(ctx context.Context, cycle *refreshCycle) error {
 	if len(directory.config.Roots) == 0 {
 		return blocked(Unprovisioned, nil)
@@ -142,19 +154,7 @@ func (directory *Directory) tryMirrors(ctx context.Context, cycle *refreshCycle)
 		directory.emitMirrorAttempt(finished, mirror, stage, snapshot, finished.Sub(started), err)
 		if err == nil {
 			accepted = true
-			directory.mu.Lock()
-			complete := true
-			for alias := range cycle.targets {
-				if _, ok := snapshot.Resolve(alias); !ok {
-					complete = false
-					break
-				}
-			}
-			if complete {
-				directory.finishLocked(cycle, nil)
-			}
-			directory.mu.Unlock()
-			if complete {
+			if directory.finishIfResolved(cycle, snapshot) {
 				return nil
 			}
 			continue

@@ -1,6 +1,9 @@
 package networkprobe
 
 import (
+	"bytes"
+	"context"
+	"errors"
 	"net"
 	"testing"
 	"time"
@@ -42,7 +45,7 @@ func TestSTUNRequiresMappedAddressFromTheRequestedTransaction(t *testing.T) {
 				_, err = server.Write(response.Raw)
 				done <- err
 			}()
-			err := exchangeBinding(client)
+			err := exchangeBinding(client, bindingRTO)
 			if setup := <-done; setup != nil {
 				t.Fatal(setup)
 			}
@@ -50,5 +53,61 @@ func TestSTUNRequiresMappedAddressFromTheRequestedTransaction(t *testing.T) {
 				t.Fatalf("binding result %v", err)
 			}
 		})
+	}
+}
+func TestBindingRetriesLossAndFallsBackToReachableFamily(t *testing.T) {
+	socket, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer socket.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	end, _ := ctx.Deadline()
+	_ = socket.SetDeadline(end)
+	done := make(chan error, 1)
+	go func() {
+		var packet [2048]byte
+		n, _, err := socket.ReadFrom(packet[:])
+		if err != nil {
+			done <- err
+			return
+		}
+		first := append([]byte(nil), packet[:n]...)
+		n, addr, err := socket.ReadFrom(packet[:])
+		if err != nil {
+			done <- err
+			return
+		}
+		if !bytes.Equal(first, packet[:n]) {
+			done <- errors.New("retransmission changed transaction")
+			return
+		}
+		req := &stun.Message{Raw: packet[:n]}
+		if err := req.Decode(); err != nil {
+			done <- err
+			return
+		}
+		ip := addr.(*net.UDPAddr)
+		response, err := stun.Build(req, stun.BindingSuccess, &stun.XORMappedAddress{IP: ip.IP, Port: ip.Port})
+		if err == nil {
+			_, err = socket.WriteTo(response.Raw, addr)
+		}
+		done <- err
+	}()
+	dial := func(ctx context.Context, network, address string) (net.Conn, error) {
+		if address == "[::1]:3478" {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		return (&net.Dialer{}).DialContext(ctx, network, address)
+	}
+	winner, err := raceFamilies(ctx, "udp", []string{"[::1]:3478"}, []string{socket.LocalAddr().String()}, bindingDial(dial, 10*time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer winner.Close()
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }

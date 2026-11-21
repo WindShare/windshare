@@ -43,6 +43,22 @@ describe('root-authorized network directory', () => {
     expect(results.map(result => result.status)).toEqual(['fulfilled', 'rejected'])
     expect((await cache.load())!.cursor.generation).toBe(2)
   })
+  it('can start a fresh request after mirror ordering throws before any fetch', async () => {
+    let interrupted = true
+    const directory = new NetworkDirectory({ network: vectors.network, roots: vectors.roots, now: () => now,
+      cache: new MemoryDirectoryCache(), mirrors: ['https://first.example', 'https://second.example'],
+      random: () => {
+        if (interrupted) throw new Error('interrupted')
+        return 0
+      },
+      fetch: async () => new Response(envelope('valid')),
+    })
+    directories.push(directory)
+    await expect(directory.refresh(['missing'])).rejects.toThrow('interrupted')
+    interrupted = false
+    await directory.refresh(['jp1'])
+    expect(directory.snapshot?.nodes[0]?.alias).toBe('jp1')
+  })
   it('refreshes same-origin first, shares one operation and falls back after rejected bytes', async () => {
     const calls: string[] = []
     const observations: string[] = []
