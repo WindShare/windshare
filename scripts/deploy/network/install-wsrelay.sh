@@ -11,6 +11,9 @@ readonly busy=75
 readonly restart_wait_seconds=10
 readonly restart_poll_interval=0.2
 readonly restart_max_polls=50
+# Retain recent releases and operation records for post-release recovery and manual rollback.
+readonly retain_releases=3
+readonly retain_operations=20
 
 die() { echo "wsrelay installation: $*" >&2; exit 1; }
 [[ $(id -u) == 0 ]] || die "root required"
@@ -71,6 +74,115 @@ restart() {
     log "restart_timeout old_invocation=${old_invocation:-none} invocation=${invocation:-none} pid=${pid:-0} polls=$attempt"
     die "selected binary did not start"
 }
+sort_basenames_by_mtime_desc() {
+    local dir=$1 pattern=$2
+    local entry name
+    local -a matched=()
+    for entry in "$dir"/*; do
+        [[ -d $entry && ! -L $entry ]] || continue
+        name=${entry##*/}
+        [[ $name =~ $pattern ]] || continue
+        matched+=("$entry")
+    done
+    (( ${#matched[@]} > 0 )) || return 0
+    # UTC %y formats as YYYY-MM-DD HH:MM:SS.NNNNNNNNN +0000, sorting newest-first without
+    # relying on non-POSIX find -printf or losing sub-second order across rapid runs.
+    TZ=UTC stat -c '%y|%n' -- "${matched[@]}" | LC_ALL=C sort -r | while IFS='|' read -r _ path; do
+        printf '%s\n' "${path##*/}"
+    done
+}
+prune_releases() {
+    local current_release previous_release ordered name path kept=0 pruned=0 errors=0
+    # Fail closed on release pruning if current or previous cannot be resolved safely.
+    current_release=$(selected 2>/dev/null) || {
+        printf '0 1\n'
+        return 0
+    }
+    previous_release=$(cat "$state/previous" 2>/dev/null) || {
+        printf '0 1\n'
+        return 0
+    }
+    if [[ -e $previous_release ]]; then
+        previous_release=$(realpath -e "$previous_release" 2>/dev/null || printf '%s' "$previous_release")
+    fi
+    if [[ $(dirname "$current_release") == "$releases" && ${current_release##*/} =~ ^[0-9a-f]{40}$ ]]; then
+        kept=$((kept + 1))
+    fi
+    if [[ $previous_release != "$current_release" && $(dirname "$previous_release") == "$releases" && ${previous_release##*/} =~ ^[0-9a-f]{40}$ ]]; then
+        kept=$((kept + 1))
+    fi
+    ordered=$(sort_basenames_by_mtime_desc "$releases" '^[0-9a-f]{40}$') || {
+        printf '0 1\n'
+        return 0
+    }
+    while IFS= read -r name; do
+        [[ -n $name ]] || continue
+        path="$releases/$name"
+        if [[ $path == "$current_release" || $path == "$previous_release" ]]; then
+            continue
+        fi
+        if (( kept < retain_releases )); then
+            kept=$((kept + 1))
+            continue
+        fi
+        if rm -rf -- "$path"; then
+            pruned=$((pruned + 1))
+        else
+            errors=$((errors + 1))
+        fi
+    done <<< "$ordered"
+    printf '%s %s\n' "$pruned" "$errors"
+}
+prune_operations() {
+    local ops_dir="$root/operations"
+    local ordered name kept=1 pruned=0 errors=0
+    # Pin the current operation so post-release -recover-operation can still inspect
+    # $state/released and $state/previous if the subsequent authority release fails.
+    ordered=$(sort_basenames_by_mtime_desc "$ops_dir" '^[a-zA-Z0-9-]{16,64}$') || {
+        printf '0 1\n'
+        return 0
+    }
+    while IFS= read -r name; do
+        [[ -n $name && $name != "$operation" ]] || continue
+        if (( kept < retain_operations )); then
+            kept=$((kept + 1))
+            continue
+        fi
+        if rm -rf -- "$ops_dir/$name"; then
+            pruned=$((pruned + 1))
+        else
+            errors=$((errors + 1))
+        fi
+    done <<< "$ordered"
+    printf '%s %s\n' "$pruned" "$errors"
+}
+prune_orphan_stages() {
+    local entry name pruned=0 errors=0
+    # Holding the exclusive operations lock guarantees no live stage owns these dirs.
+    for entry in "$releases"/.stage-*; do
+        [[ -d $entry && ! -L $entry ]] || continue
+        name=${entry##*/}
+        [[ $name =~ ^\.stage-[A-Za-z0-9_-]{8}$ ]] || continue
+        if rm -rf -- "$entry"; then
+            pruned=$((pruned + 1))
+        else
+            errors=$((errors + 1))
+        fi
+    done
+    printf '%s %s\n' "$pruned" "$errors"
+}
+prune_retained_state() {
+    local pruned_releases=0 release_errors=0 pruned_operations=0 op_errors=0 pruned_stages=0 stage_errors=0 total_errors
+    read -r pruned_releases release_errors <<< "$(prune_releases)" || release_errors=1
+    read -r pruned_operations op_errors <<< "$(prune_operations)" || op_errors=1
+    read -r pruned_stages stage_errors <<< "$(prune_orphan_stages)" || stage_errors=1
+    total_errors=$((release_errors + op_errors + stage_errors))
+    if (( total_errors > 0 )); then
+        log "prune_warning pruned_releases=$pruned_releases pruned_operations=$pruned_operations pruned_stages=$pruned_stages errors=$total_errors"
+    else
+        log "pruned releases=$pruned_releases operations=$pruned_operations stages=$pruned_stages"
+    fi
+}
 
 case "$action" in
     stage)
@@ -92,6 +204,8 @@ case "$action" in
         else
             mv -T -- "$stage" "$release"
         fi
+        # Refresh mtime on both new and reused revisions so redeploying an older commit keeps it newest.
+        touch -- "$release"
         install -d -m 0700 "$state"
         if [[ -e $state/previous ]]; then
             [[ $(cat "$state/candidate") == "$release" && $(cat "$state/node") == "$node" ]] || die "operation collision"
@@ -145,6 +259,10 @@ case "$action" in
         [[ $# == 0 && $(cat "$state/node") == "$node" ]] || die "operation mismatch"
         gate --release-maintenance
         touch "$state/released"
+        touch -- "$state" || true
+        # Pruning runs best-effort only after the local hold is cleared under .lock, so
+        # cleanup errors cannot block authority release or touch an active unrecovered hold.
+        prune_retained_state || log "prune_warning errors=1"
         ;;
     *) die "unknown action" ;;
 esac

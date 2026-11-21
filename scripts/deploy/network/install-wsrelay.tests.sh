@@ -648,6 +648,185 @@ run_case_recover_hold_states_and_guards() (
     printf 'PASS: recover hold classification, sealing, and fail-closed guards\n'
 )
 
+run_case_release_prunes_stale_releases_operations_and_stages() (
+    local tmp
+    tmp=$(mktemp -d)
+    trap 'rm -rf -- "$tmp"' EXIT
+
+    local root_path="$tmp/opt/windshare-network"
+    prepare_harness "$tmp" "$root_path"
+
+    local rev_1="1111111111111111111111111111111111111111"
+    local rev_2="2222222222222222222222222222222222222222"
+    local rev_3="3333333333333333333333333333333333333333"
+    local rev_4="4444444444444444444444444444444444444444"
+    local rev_5="5555555555555555555555555555555555555555"
+    local rev_symlink="6666666666666666666666666666666666666666"
+
+    mkdir -p "$root_path/releases" "$root_path/operations" "$tmp/external-dir"
+    local r ts=10
+    for r in "$rev_1" "$rev_2" "$rev_3" "$rev_4"; do
+        mkdir -p "$root_path/releases/$r"
+        make_fake_wsrelay "$root_path/releases/$r/wsrelay"
+        printf '# %s\n' "$r" >>"$root_path/releases/$r/wsrelay"
+        touch -d "2026-01-01 00:00:$ts UTC" "$root_path/releases/$r"
+        ts=$((ts + 1))
+    done
+
+    # Non-40-hex bootstrap dir and 40-hex symlink must remain untouched; orphan stage dir must be pruned.
+    mkdir -p "$root_path/releases/20261114-6eb7bdee" "$root_path/releases/.stage-AbCd1234"
+    make_fake_wsrelay "$root_path/releases/20261114-6eb7bdee/wsrelay"
+    ln -sfn -- "$tmp/external-dir" "$root_path/releases/$rev_symlink"
+    ln -sfn -- "$root_path/releases/$rev_4" "$root_path/current"
+
+    # Seed 21 older operations (exceeding retain_operations=20 once op_current is staged) plus a non-matching dir.
+    local i op_name
+    for i in $(seq -w 1 21); do
+        op_name="op-historical-0000$i"
+        mkdir -p "$root_path/operations/$op_name"
+        printf '%s\n' "$node_key" >"$root_path/operations/$op_name/node"
+        touch -d "2026-01-01 00:01:$i UTC" "$root_path/operations/$op_name"
+    done
+    mkdir -p "$root_path/operations/manual"
+
+    make_fake_wsrelay "$tmp/candidate-5"
+    printf '# %s\n' "$rev_5" >>"$tmp/candidate-5"
+    local sha_5 canonical_4 canonical_5
+    sha_5=$(sha256sum "$tmp/candidate-5" | awk '{print $1}')
+    canonical_4=$(realpath -e "$root_path/releases/$rev_4")
+    canonical_5="$(realpath -e "$root_path/releases")/$rev_5"
+
+    printf 'inv-1\n' >"$tmp/mock/current_invocation"
+    printf '101\n' >"$tmp/mock/current_pid"
+    printf '%s/wsrelay\n' "$canonical_4" >"$tmp/mock/proc/101.exe"
+    printf 'inv_first|inv-2|202|%s/wsrelay\n' "$canonical_5" >"$tmp/mock/polls"
+
+    local op_current="op-release-prune-active01"
+    PATH="$tmp/bin:$PATH" "$tmp/install.sh" stage "$op_current" "$node_key" "$rev_5" "$sha_5" <"$tmp/candidate-5"
+    PATH="$tmp/bin:$PATH" "$tmp/install.sh" switch "$op_current" "$node_key"
+
+    local output
+    output=$(PATH="$tmp/bin:$PATH" "$tmp/install.sh" release "$op_current" "$node_key" 2>&1)
+    [[ $output == *"pruned releases=2 operations=2 stages=1"* ]] \
+        || fail "unexpected prune summary log: $output"
+
+    # Retain current (rev_5), previous (rev_4), and 3rd newest (rev_3); prune rev_1 and rev_2.
+    [[ -d "$root_path/releases/$rev_5" ]] || fail "current release was pruned"
+    [[ -d "$root_path/releases/$rev_4" ]] || fail "previous release was pruned"
+    [[ -d "$root_path/releases/$rev_3" ]] || fail "3rd newest release was pruned"
+    [[ ! -e "$root_path/releases/$rev_2" ]] || fail "stale rev_2 was not pruned"
+    [[ ! -e "$root_path/releases/$rev_1" ]] || fail "stale rev_1 was not pruned"
+    [[ -d "$root_path/releases/20261114-6eb7bdee" ]] || fail "legacy non-40-hex release was pruned"
+    [[ -L "$root_path/releases/$rev_symlink" ]] || fail "40-hex symlink was pruned"
+    [[ ! -e "$root_path/releases/.stage-AbCd1234" ]] || fail "orphan .stage dir was not pruned"
+
+    # Retain current op + 19 newest historical ops (20 total); prune oldest 2 and keep non-matching dirs.
+    [[ -e "$root_path/operations/$op_current/released" ]] || fail "current operation was pruned"
+    [[ ! -e "$root_path/operations/op-historical-000001" ]] || fail "oldest operation 01 was not pruned"
+    [[ ! -e "$root_path/operations/op-historical-000002" ]] || fail "oldest operation 02 was not pruned"
+    [[ -d "$root_path/operations/op-historical-000003" ]] || fail "retained operation 03 was pruned"
+    [[ -d "$root_path/operations/op-historical-000021" ]] || fail "retained operation 21 was pruned"
+    [[ -d "$root_path/operations/manual" ]] || fail "non-operation dir was pruned"
+
+    # Post-release recovery must still succeed after pruning if authority release failed right after host release.
+    local stdout
+    stdout=$(FAKE_WSRELAY_CHECK_HOLD_EXIT=1 PATH="$tmp/bin:$PATH" "$tmp/install.sh" recover "$op_current" "$node_key")
+    [[ $stdout == "released" ]] || fail "post-release recover failed after pruning: $stdout"
+
+    # Re-staging an older revision refreshes its mtime, and an ancient previous release stays pinned.
+    local rev_ancient="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    mkdir -p "$root_path/releases/$rev_ancient"
+    make_fake_wsrelay "$root_path/releases/$rev_ancient/wsrelay"
+    touch -d "2020-01-01 00:00:00 UTC" "$root_path/releases/$rev_ancient"
+    touch -d "2026-01-01 00:00:20 UTC" "$root_path/releases/$rev_3"
+    touch -d "2026-01-01 00:00:30 UTC" "$root_path/releases/$rev_4"
+    touch -d "2026-01-01 00:00:40 UTC" "$root_path/releases/$rev_5"
+    ln -sfn -- "$root_path/releases/$rev_ancient" "$root_path/current"
+
+    local sha_3 canonical_3
+    sha_3=$(sha256sum "$root_path/releases/$rev_3/wsrelay" | awk '{print $1}')
+    canonical_3=$(realpath -e "$root_path/releases/$rev_3")
+    printf '0\n' >"$tmp/mock/poll_count"
+    printf 'inv-2\n' >"$tmp/mock/current_invocation"
+    printf 'inv_first|inv-3|303|%s/wsrelay\n' "$canonical_3" >"$tmp/mock/polls"
+
+    local op_redeploy="op-redeploy-old-rev-0001"
+    PATH="$tmp/bin:$PATH" "$tmp/install.sh" stage "$op_redeploy" "$node_key" "$rev_3" "$sha_3" <"$root_path/releases/$rev_3/wsrelay"
+    PATH="$tmp/bin:$PATH" "$tmp/install.sh" switch "$op_redeploy" "$node_key"
+    output=$(PATH="$tmp/bin:$PATH" "$tmp/install.sh" release "$op_redeploy" "$node_key" 2>&1)
+    [[ $output == *"pruned releases=1 operations=1 stages=0"* ]] \
+        || fail "unexpected redeploy prune summary: $output"
+
+    # Kept: rev_3 (current, refreshed), rev_ancient (pinned previous), rev_5 (newest remaining). Pruned: rev_4.
+    [[ -d "$root_path/releases/$rev_3" ]] || fail "redeployed current rev_3 was pruned"
+    [[ -d "$root_path/releases/$rev_ancient" ]] || fail "pinned ancient previous release was pruned"
+    [[ -d "$root_path/releases/$rev_5" ]] || fail "newest remaining rev_5 was pruned"
+    [[ ! -e "$root_path/releases/$rev_4" ]] || fail "older unpinned rev_4 was not pruned"
+    printf 'PASS: release prunes stale releases, operations, and orphan stages while preserving recovery\n'
+)
+
+run_case_release_prune_failure_is_best_effort() (
+    local tmp
+    tmp=$(mktemp -d)
+    trap 'rm -rf -- "$tmp"' EXIT
+
+    local root_path="$tmp/opt/windshare-network"
+    prepare_harness "$tmp" "$root_path"
+
+    local rev_1="1111111111111111111111111111111111111111"
+    local rev_2="2222222222222222222222222222222222222222"
+    local rev_3="3333333333333333333333333333333333333333"
+    local rev_4="4444444444444444444444444444444444444444"
+    local r ts=10
+    for r in "$rev_1" "$rev_2" "$rev_3"; do
+        mkdir -p "$root_path/releases/$r"
+        make_fake_wsrelay "$root_path/releases/$r/wsrelay"
+        touch -d "2026-01-01 00:00:$ts UTC" "$root_path/releases/$r"
+        ts=$((ts + 1))
+    done
+    ln -sfn -- "$root_path/releases/$rev_3" "$root_path/current"
+
+    make_fake_wsrelay "$tmp/candidate-4"
+    printf '# candidate-4\n' >>"$tmp/candidate-4"
+    local sha_4 canonical_3 canonical_4
+    sha_4=$(sha256sum "$tmp/candidate-4" | awk '{print $1}')
+    canonical_3=$(realpath -e "$root_path/releases/$rev_3")
+    canonical_4="$(realpath -e "$root_path/releases")/$rev_4"
+
+    printf 'inv-1\n' >"$tmp/mock/current_invocation"
+    printf '101\n' >"$tmp/mock/current_pid"
+    printf '%s/wsrelay\n' "$canonical_3" >"$tmp/mock/proc/101.exe"
+    printf 'inv_first|inv-2|202|%s/wsrelay\n' "$canonical_4" >"$tmp/mock/polls"
+
+    local op="op-prune-best-effort-001"
+    PATH="$tmp/bin:$PATH" "$tmp/install.sh" stage "$op" "$node_key" "$rev_4" "$sha_4" <"$tmp/candidate-4"
+    PATH="$tmp/bin:$PATH" "$tmp/install.sh" switch "$op" "$node_key"
+
+    # Inject a failing rm for rev_1 to verify cleanup errors warn without failing release.
+    local real_rm
+    real_rm=$(command -v rm)
+    cat >"$tmp/bin/rm" <<EOF
+#!/usr/bin/env bash
+for arg in "\$@"; do
+    if [[ \$arg == *"$rev_1" ]]; then
+        echo "simulated rm failure for \$arg" >&2
+        exit 1
+    fi
+done
+exec "$real_rm" "\$@"
+EOF
+    chmod 0755 "$tmp/bin/rm"
+
+    local log="$tmp/wsrelay.log" output
+    output=$(FAKE_WSRELAY_LOG="$log" PATH="$tmp/bin:$PATH" "$tmp/install.sh" release "$op" "$node_key" 2>&1)
+    [[ $output == *"prune_warning pruned_releases=0 pruned_operations=0 pruned_stages=0 errors=1"* ]] \
+        || fail "expected prune_warning on rm failure: $output"
+    [[ -e "$root_path/operations/$op/released" ]] || fail "release marker missing after prune warning"
+    grep -Fxq "$canonical_3/wsrelay --release-maintenance $tmp/node.json $node_key $op" "$log" \
+        || fail "release did not clear local maintenance hold before prune warning"
+    printf 'PASS: release prune failures emit warning without failing release\n'
+)
+
 run_case_same_binary_waits_for_fresh_invocation
 run_case_rollback_fails_when_invocation_never_advances
 run_case_restart_timeout_contract_and_wall_clock_deadline
@@ -657,3 +836,5 @@ run_case_enter_switch_release_lifecycle_and_guards
 run_case_stage_validation_collisions_and_cleanup
 run_case_auth_hold_inspect_and_lock_guards
 run_case_recover_hold_states_and_guards
+run_case_release_prunes_stale_releases_operations_and_stages
+run_case_release_prune_failure_is_best_effort
