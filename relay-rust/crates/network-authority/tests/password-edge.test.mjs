@@ -87,11 +87,18 @@ test('the Worker runs password hashing and rate limits across edge and Durable O
   assert.equal(wrongMethod.status, 404);
   const tick = await object.fetch('https://authority/internal/fleet/tick', { method: 'POST', body: '{}' });
   assert.equal(tick.status, 200);
-  assert.equal(tick.headers.get('x-directory-published'), '1');
+  assert.equal(tick.headers.get('x-directory-mirror-defer'), 'kv_just_published');
   const tickBody = await tick.json();
+  const settlingTick = await object.fetch('https://authority/internal/fleet/tick', { method: 'POST', body: '{}' });
+  assert.equal(settlingTick.status, 200);
+  assert.equal(settlingTick.headers.get('x-directory-mirror-defer'), 'kv_settling');
+  await object.fetch('https://authority/__test/age-delivery', {
+    method: 'POST',
+    body: JSON.stringify({ ms: 120_000 }),
+  });
   const steadyTick = await object.fetch('https://authority/internal/fleet/tick', { method: 'POST', body: '{}' });
   assert.equal(steadyTick.status, 200);
-  assert.equal(steadyTick.headers.get('x-directory-published'), null);
+  assert.equal(steadyTick.headers.get('x-directory-mirror-defer'), null);
   const directory = await worker.fetch('https://localhost/.well-known/windshare-network');
   assert.equal(directory.status, usable ? 200 : 503);
   if (usable) assert.deepEqual(await directory.json(), tickBody);

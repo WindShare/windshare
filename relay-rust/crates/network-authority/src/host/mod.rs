@@ -15,7 +15,11 @@ use crate::{
     Authority, Environment, Fault, NodeLoadReport, Signing, public_blocks::PublicBlockFeed,
 };
 use futures_util::StreamExt;
-use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    collections::BTreeMap,
+    rc::Rc,
+};
 use storage::Database;
 use worker::{DurableObject, Env, Method, Request, Response, Result, State, durable_object};
 
@@ -62,6 +66,7 @@ pub struct NetworkAuthority {
     env: Env,
     public_blocks: Rc<RefCell<PublicBlockFeed>>,
     publishing: futures_util::lock::Mutex<()>,
+    kv_alarm_deadline: Cell<Option<u64>>,
     node_loads: Rc<RefCell<BTreeMap<[u8; 32], NodeLoadReport>>>,
 }
 impl NetworkAuthority {
@@ -100,6 +105,7 @@ impl DurableObject for NetworkAuthority {
             public_blocks: Rc::default(),
             node_loads: Rc::default(),
             publishing: futures_util::lock::Mutex::new(()),
+            kv_alarm_deadline: Cell::new(None),
         }
     }
     async fn fetch(&self, mut request: Request) -> Result<Response> {
@@ -143,5 +149,15 @@ impl DurableObject for NetworkAuthority {
                 Response::error("authority temporarily unavailable", 503)
             }
         }
+    }
+
+    async fn alarm(&self) -> Result<Response> {
+        // Clear the cached deadline before awaiting the publishing lock so any
+        // concurrent request re-arms from authoritative alarm storage.
+        self.kv_alarm_deadline.set(None);
+        self.reconcile_alarm().await;
+        // Return Ok after handling and re-arming so the Workers runtime does not
+        // layer its own unbounded alarm retries on top of RETRY_BACKOFF_MS.
+        Response::empty()
     }
 }

@@ -238,13 +238,17 @@ test('vantage routes, scheduled mirror audit, maintenance/manage boundaries, and
   const globalVantage = makeEd25519Identity();
   const unknownVantage = makeEd25519Identity();
   const maintenanceToken = randomBytes(32).toString('base64url');
-  const { worker, mf, requests, mirrors, enrollment } = await fixture(t, {
-    FLEET_MAINTENANCE_TOKEN: maintenanceToken,
-    VANTAGE_KEYS: JSON.stringify([
-      { id: 'cn-a', key: cnVantage.publicKey, zone: 'cn' },
-      { id: 'global-a', key: globalVantage.publicKey, zone: 'global' },
-    ]),
-  });
+  const { worker, mf, requests, mirrors, enrollment } = await fixture(
+    t,
+    {
+      FLEET_MAINTENANCE_TOKEN: maintenanceToken,
+      VANTAGE_KEYS: JSON.stringify([
+        { id: 'cn-a', key: cnVantage.publicKey, zone: 'cn' },
+        { id: 'global-a', key: globalVantage.publicKey, zone: 'global' },
+      ]),
+    },
+    { testControl: true },
+  );
   const admin = await initAdmin(worker);
 
   async function call(path, body, { method = 'POST', status = 200, adminAuth = false, secret, headers = {} } = {}) {
@@ -346,10 +350,13 @@ test('vantage routes, scheduled mirror audit, maintenance/manage boundaries, and
   assert.equal(consoleBeforeScheduled.directory.vantages[0].id, 'cn-a');
   assert.equal(consoleBeforeScheduled.directory.mirrors_current, false);
 
-  // Scheduled cron runs reconcile -> KV publish (deferring mirror checks), then audits mirrors and updates console.
+  // Scheduled cron runs reconcile -> KV publish (deferring mirror checks), skips AuditKv
+  // while KV settles, then audits mirrors and repairs real drift once settled.
   const mirrorURLs = [release.link_host, release.backup_entry].map(origin => origin + '/.well-known/windshare-network');
   for (const url of mirrorURLs) mirrors.set(url, release.snapshot);
   const kv = await mf.getKVNamespace('DIRECTORY');
+  const namespace = await mf.getDurableObjectNamespace('AUTHORITY', 'authority');
+  const authority = namespace.get(namespace.idFromName('network-authority-v1'));
 
   requests.length = 0;
   const firstCron = await worker.scheduled({ cron: '*/5 * * * *' });
@@ -359,6 +366,19 @@ test('vantage routes, scheduled mirror audit, maintenance/manage boundaries, and
   assert.ok(publishedRaw, 'scheduled tick must publish directory snapshot to KV');
   assert.equal(directoryDigest(JSON.parse(publishedRaw)), expectedDigest);
 
+  // Within the 120 s settling window, a scheduled tick skips KV reads and defers mirror probes.
+  await kv.delete(KV_DIRECTORY_KEY);
+  requests.length = 0;
+  const settlingCron = await worker.scheduled({ cron: '*/5 * * * *' });
+  assert.equal(settlingCron.outcome, 'ok');
+  assert.equal(requests.length, 0, 'settling KV write must defer mirror probe');
+  assert.equal(await kv.get(KV_DIRECTORY_KEY), null, 'settling AuditKv must not rewrite KV');
+  await kv.put(KV_DIRECTORY_KEY, publishedRaw);
+
+  await authority.fetch('https://authority/__test/age-delivery', {
+    method: 'POST',
+    body: JSON.stringify({ ms: 120_000 }),
+  });
   requests.length = 0;
   const secondCron = await worker.scheduled({ cron: '*/5 * * * *' });
   assert.equal(secondCron.outcome, 'ok');
@@ -376,7 +396,7 @@ test('vantage routes, scheduled mirror audit, maintenance/manage boundaries, and
   ).value;
   assert.equal(consoleLagging.directory.mirrors_current, false);
 
-  // Deleting KV simulates drift; the next scheduled AuditKv repairs KV and defers mirror probes again.
+  // Deleting KV after the settling window simulates drift; AuditKv repairs KV and defers mirror probes again.
   await kv.delete(KV_DIRECTORY_KEY);
   requests.length = 0;
   const repairCron = await worker.scheduled({ cron: '*/5 * * * *' });
@@ -466,4 +486,74 @@ test('vantage routes, scheduled mirror audit, maintenance/manage boundaries, and
     { adminAuth: true, status: 503 },
   );
   assert.equal(manageAbortReachedSigner.text, 'fleet temporarily unavailable');
+});
+
+test('directory KV publish failures retry via bounded Durable Object alarms and recover cleanly', async t => {
+  const { worker, mf, requests } = await fixture(t, {}, { testControl: true, manualAlarm: true });
+  const kv = await mf.getKVNamespace('DIRECTORY');
+  const namespace = await mf.getDurableObjectNamespace('AUTHORITY', 'authority');
+  const authority = namespace.get(namespace.idFromName('network-authority-v1'));
+
+  const getAlarm = async () => (await (await authority.fetch('https://authority/__test/alarm')).json()).alarm;
+  const runAlarm = async () => {
+    const response = await authority.fetch('https://authority/__test/run-alarm', { method: 'POST' });
+    assert.equal(response.status, 200);
+  };
+  const failKvPuts = async count => {
+    const response = await authority.fetch('https://authority/__test/kv-fail', {
+      method: 'POST',
+      body: JSON.stringify({ count }),
+    });
+    assert.equal(response.status, 200);
+  };
+
+  // A transient KV 429 during publish arms a ~2 s DO alarm and recovers on alarm execution.
+  await failKvPuts(1);
+  requests.length = 0;
+  const before = Date.now();
+  const initial = await worker.scheduled({ cron: '*/5 * * * *' });
+  assert.equal(initial.outcome, 'ok');
+  assert.equal(await kv.get(KV_DIRECTORY_KEY), null);
+  assert.equal(requests.length, 0, 'retry-pending tick must defer mirror probe');
+  const firstAlarm = await getAlarm();
+  assert.ok(firstAlarm && firstAlarm >= before + 1_500 && firstAlarm <= Date.now() + 5_000, `alarm=${firstAlarm}`);
+
+  await runAlarm();
+  const published = await kv.get(KV_DIRECTORY_KEY);
+  assert.ok(published, 'alarm retry must publish pending directory snapshot to KV');
+  assert.equal(await getAlarm(), null, 'successful alarm retry must leave no alarm armed');
+
+  // Sustained KV failures during post-settle drift repair back off 2 s -> 5 s -> 15 s and stop arming alarms.
+  await authority.fetch('https://authority/__test/age-delivery', {
+    method: 'POST',
+    body: JSON.stringify({ ms: 120_000 }),
+  });
+  await kv.delete(KV_DIRECTORY_KEY);
+  await failKvPuts(4);
+
+  const repairAttempt = await worker.scheduled({ cron: '*/5 * * * *' });
+  assert.equal(repairAttempt.outcome, 'ok');
+  const alarm1 = await getAlarm();
+  assert.ok(alarm1 !== null, 'first failure must schedule 2 s retry alarm');
+
+  const before2 = Date.now();
+  await runAlarm();
+  const alarm2 = await getAlarm();
+  assert.ok(alarm2 && alarm2 >= before2 + 4_500, `expected ~5 s backoff, got ${alarm2 - before2} ms`);
+
+  const before3 = Date.now();
+  await runAlarm();
+  const alarm3 = await getAlarm();
+  assert.ok(alarm3 && alarm3 >= before3 + 14_500, `expected ~15 s backoff, got ${alarm3 - before3} ms`);
+
+  // Fourth failure exhausts rapid alarm retries and hands recovery back to the 5-minute cron.
+  await runAlarm();
+  assert.equal(await getAlarm(), null, 'exhausted retries must stop arming DO alarms');
+  assert.equal(await kv.get(KV_DIRECTORY_KEY), null);
+
+  // Once KV recovers, the next scheduled tick repairs KV and leaves no alarm armed.
+  const recovered = await worker.scheduled({ cron: '*/5 * * * *' });
+  assert.equal(recovered.outcome, 'ok');
+  assert.equal(await kv.get(KV_DIRECTORY_KEY), published);
+  assert.equal(await getAlarm(), null);
 });

@@ -23,7 +23,7 @@ use crate::{
 use anyhow::Result;
 pub(super) use edge::{handle_edge, handles_edge};
 pub(super) use public_directory::serve as public_directory;
-use reconcile::{DirectoryMirror, ReconcileMode};
+use reconcile::{DirectoryMirror, ReconcileMode, ReconcileOutcome};
 pub(super) use route::Route;
 use route::{AdminRoute, InternalRoute, PostCommitReconcile, VantageRoute};
 use serde::{Deserialize, Serialize};
@@ -31,10 +31,28 @@ use serde_json::{Value, json};
 use worker::{Env, Method, Request, Response, ScheduleContext, ScheduledEvent, event};
 const DIRECTORY_PATH: &str = "/.well-known/windshare-network";
 const MIRRORS: &str = "directory/mirrors";
-const KV_PUBLISHED_HEADER: &str = "X-Directory-Published";
+const MIRROR_DEFER_HEADER: &str = "X-Directory-Mirror-Defer";
 // Cloudflare Workers KV enforces a 60 s minimum cache_ttl on reads.
 const KV_AUDIT_CACHE_SECONDS: u64 = 60;
 const EXPIRY_ALERT_SECONDS: u64 = 14 * 86400;
+const MAX_JS_DATE_MS: u64 = 8_640_000_000_000_000;
+// Clamp sub-second alarm re-arms so early alarm jitter past a cooldown boundary
+// does not hot-spin while waiting for the remaining few milliseconds.
+const MIN_ALARM_DELAY_MS: u64 = 500;
+
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "JavaScript Date's supported integer range is below 2^53"
+)]
+fn alarm_time(at_ms: u64) -> Result<worker::ScheduledTime> {
+    anyhow::ensure!(
+        at_ms <= MAX_JS_DATE_MS,
+        "alarm timestamp exceeds JavaScript Date range"
+    );
+    Ok(worker::ScheduledTime::new(js_sys::Date::new(
+        &wasm_bindgen::JsValue::from_f64(at_ms as f64),
+    )))
+}
 
 struct KvMirror(worker::kv::KvStore);
 
@@ -161,13 +179,10 @@ async fn maintenance(env: &Env) -> worker::Result<()> {
     if response.status_code() != 200 {
         return Err(failure("directory maintenance unavailable"));
     }
-    if response.headers().get(KV_PUBLISHED_HEADER)?.as_deref() == Some("1") {
-        // Frontend mirrors cache KV reads for 60 s, so probing milliseconds
-        // after a fresh KV write always sees the previous revision.
-        tracing::info!(
-            event = "directory_mirror_check_deferred",
-            reason = "kv_just_published"
-        );
+    if let Some(reason) = response.headers().get(MIRROR_DEFER_HEADER)? {
+        // Frontend mirrors cache KV reads for 60 s, so probing before KV settles
+        // or while a write retry is queued would observe the previous revision.
+        tracing::info!(event = "directory_mirror_check_deferred", %reason);
         return Ok(());
     }
     let expected: Envelope = response.json().await?;
@@ -218,21 +233,17 @@ impl NetworkAuthority {
             }
             PostCommitReconcile::OnCommitPending | PostCommitReconcile::None => None,
         };
-        let published = match reconcile_mode {
-            Some(mode) => match self.reconcile(mode).await {
-                Ok(written) => written,
-                Err(error) => {
-                    tracing::warn!(event="directory_kv_retry_pending", ?mode, %error);
-                    false
-                }
-            },
-            None => false,
+        let outcome = match reconcile_mode {
+            Some(mode) => self.reconcile_and_schedule(mode).await,
+            None => None,
         };
         match result {
             Ok(value) => {
                 let mut response = Response::from_json(&value)?;
-                if published && route == Route::Internal(InternalRoute::Tick) {
-                    response.headers_mut().set(KV_PUBLISHED_HEADER, "1")?;
+                if route == Route::Internal(InternalRoute::Tick)
+                    && let Some(reason) = outcome.and_then(ReconcileOutcome::mirror_defer_reason)
+                {
+                    response.headers_mut().set(MIRROR_DEFER_HEADER, reason)?;
                 }
                 Ok(response)
             }
@@ -245,13 +256,83 @@ impl NetworkAuthority {
             ),
         }
     }
-    async fn reconcile(&self, mode: ReconcileMode) -> worker::Result<bool> {
+
+    pub(super) async fn reconcile_alarm(&self) {
+        let outcome = self
+            .reconcile_and_schedule(ReconcileMode::PendingOnly)
+            .await;
+        tracing::info!(event = "directory_kv_alarm_handled", ?outcome);
+    }
+
+    async fn reconcile_and_schedule(&self, mode: ReconcileMode) -> Option<ReconcileOutcome> {
         let _writer = self.publishing.lock().await;
-        let mut db = Database::open(&self.state).map_err(failure)?;
-        let mirror = KvMirror(self.env.kv("DIRECTORY")?);
-        reconcile::reconcile(&mut db, &mirror, mode)
-            .await
-            .map_err(failure)
+        let outcome = match self.reconcile_locked(mode).await {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                tracing::warn!(event = "directory_kv_reconcile_failed", ?mode, %error);
+                return None;
+            }
+        };
+        if let Err(error) = self.sync_kv_alarm(outcome).await {
+            tracing::warn!(event = "directory_kv_alarm_update_failed", ?outcome, %error);
+        }
+        Some(outcome)
+    }
+
+    async fn reconcile_locked(&self, mode: ReconcileMode) -> Result<ReconcileOutcome> {
+        let mut db = Database::open(&self.state)?;
+        let mirror = KvMirror(
+            self.env
+                .kv("DIRECTORY")
+                .map_err(|error| anyhow::anyhow!("{error}"))?,
+        );
+        reconcile::reconcile(&mut db, &mirror, mode, || worker::Date::now().as_millis()).await
+    }
+
+    async fn sync_kv_alarm(&self, outcome: ReconcileOutcome) -> Result<()> {
+        let storage = self.state.storage();
+        if let Some(delay_ms) = outcome.retry_after_ms() {
+            let now_ms = worker::Date::now().as_millis();
+            let deadline = now_ms.saturating_add(delay_ms.max(MIN_ALARM_DELAY_MS));
+            if self
+                .kv_alarm_deadline
+                .get()
+                .is_some_and(|at| at <= deadline)
+            {
+                return Ok(());
+            }
+            let existing = storage
+                .get_alarm()
+                .await
+                .map_err(|error| anyhow::anyhow!("{error}"))?
+                .and_then(|at| u64::try_from(at).ok());
+            if let Some(at) = existing
+                && at <= deadline
+            {
+                self.kv_alarm_deadline.set(Some(at));
+                return Ok(());
+            }
+            storage
+                .set_alarm(alarm_time(deadline)?)
+                .await
+                .map_err(|error| anyhow::anyhow!("{error}"))?;
+            self.kv_alarm_deadline.set(Some(deadline));
+            tracing::info!(
+                event = "directory_kv_alarm_scheduled",
+                ?outcome,
+                delay_ms = deadline.saturating_sub(now_ms),
+                deadline_ms = deadline
+            );
+            return Ok(());
+        }
+        if self.kv_alarm_deadline.get().is_some() {
+            storage
+                .delete_alarm()
+                .await
+                .map_err(|error| anyhow::anyhow!("{error}"))?;
+            self.kv_alarm_deadline.set(None);
+        }
+        Ok(())
     }
 }
 
