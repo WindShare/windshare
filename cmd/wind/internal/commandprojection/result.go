@@ -37,6 +37,7 @@ func ProjectReceiveResult(input engine.TaskCompletion[engine.ReceiveResult]) (cl
 		spec.CompatibleNameReport = clievent.CompatibleNameReport{
 			RepairedCount: input.Value.CompatibleNameReport.RepairedCount,
 			ReportName:    appobs.NewDisplayName(input.Value.CompatibleNameReport.ReportName),
+			PageCount:     input.Value.CompatibleNameReport.PageCount,
 		}
 	}
 	spec.SourceOmittedEntries = r.Progress.SourceOmittedEntries

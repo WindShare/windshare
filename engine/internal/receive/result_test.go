@@ -307,7 +307,7 @@ func TestPreparationFailureAfterConfirmedRelayStop(t *testing.T) {
 }
 
 func TestReceiveSettlementValidatesCompatibleNameReport(t *testing.T) {
-	validReport := OutputCompatibleNameReport{RepairedCount: 2, ReportName: "windshare-names-abc-1-0.json"}
+	validReport := OutputCompatibleNameReport{RepairedCount: 2, ReportName: "windshare-names-abc-1-0.json", PageCount: 1}
 	settled, err := Settle(SettlementInput{
 		Result:               successfulJobResult(t),
 		Destination:          "C:/downloads/result",
@@ -319,6 +319,8 @@ func TestReceiveSettlementValidatesCompatibleNameReport(t *testing.T) {
 	for _, invalid := range []OutputCompatibleNameReport{
 		{RepairedCount: 1},
 		{ReportName: "windshare-names-abc-1-0.json"},
+		{PageCount: 1},
+		{RepairedCount: 1, ReportName: "windshare-names-abc-1-0.json"},
 	} {
 		if _, err := Settle(SettlementInput{
 			Result:               successfulJobResult(t),

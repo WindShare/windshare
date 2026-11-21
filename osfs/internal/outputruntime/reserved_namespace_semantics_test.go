@@ -122,12 +122,12 @@ func TestPortableOutputSeparatesResultRootAndContainerReservedNamespaces(t *test
 		t.Fatalf("FinalizeTree: %v, %v", settlement.Kind(), err)
 	}
 
-	repairedCount, reportName := operation.CompatibleNameReport()
+	report := operation.CompatibleNameReport()
 	// 3 direct .wsresume* files + 1 direct .wsresume-dir directory = 4 repaired mappings.
-	if repairedCount != 4 || !strings.HasPrefix(reportName, "windshare-names-") {
-		t.Fatalf("CompatibleNameReport() = (%d, %q), want (4, windshare-names-*.json)", repairedCount, reportName)
+	if report.RepairedCount != 4 || report.PageCount != 1 || !strings.HasPrefix(report.ReportName, "windshare-names-") {
+		t.Fatalf("CompatibleNameReport() = %+v, want RepairedCount=4 PageCount=1 ReportName=windshare-names-*.json", report)
 	}
-	assertNativeNameReport(t, filepath.Join(root, reportName), "proj", "proj", 4)
+	assertNativeNameReport(t, filepath.Join(root, report.ReportName), "proj", "proj", 4)
 
 	for _, tc := range cases {
 		physical := resolved[tc.path]
@@ -197,11 +197,11 @@ func TestPortableOutputRepairsTopLevelControlNameAndPreservesTopLevelMarkerName(
 		if _, err := session.FinalizeTree(ctx, transfer.DirectTreeOutcomeSuccess); err != nil {
 			t.Fatal(err)
 		}
-		count, reportName := operation.CompatibleNameReport()
-		if count != 1 || reportName == "" {
-			t.Fatalf("CompatibleNameReport() = (%d, %q), want (1, non-empty)", count, reportName)
+		report := operation.CompatibleNameReport()
+		if report.RepairedCount != 1 || report.PageCount != 1 || report.ReportName == "" {
+			t.Fatalf("CompatibleNameReport() = %+v, want RepairedCount=1 PageCount=1 non-empty ReportName", report)
 		}
-		assertNativeNameReport(t, filepath.Join(root, reportName), ".windshare-output", physicalRoot, 0)
+		assertNativeNameReport(t, filepath.Join(root, report.ReportName), ".windshare-output", physicalRoot, 0)
 		if got, err := os.ReadFile(filepath.Join(root, physicalRoot, "ok.txt")); err != nil || string(got) != "ok" {
 			t.Fatalf("delivered file = %q, %v", got, err)
 		}
@@ -356,6 +356,65 @@ func TestPortableOutputRepairsTopLevelControlNameAndPreservesTopLevelMarkerName(
 			t.Fatalf("new-container .windshare-output file physical = %q, want compatible repair", repairedControl)
 		}
 	})
+}
+
+func TestDiscardExportsAndSurfacesCompatibleNameReportAndRetryResetsStaleReport(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	authority, err := New(Config{RootPath: root, PlatformFactory: outputportable.Open})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = authority.Close() })
+	if _, err := authority.BindDestination(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	anchor := incrementalTestIdentity16[catalog.DirectoryID](0xa1)
+	layout, err := receivecontract.NewCompleteDirectoryResultRoot(anchor, "proj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := receivecontract.NewResultRootDirectoryTree(layout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lookup, err := authority.LookupActive(ctx, nativeReservationTestSelection(t, 0xa2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation, err := authority.CreateOperation(ctx, lookup, artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, _ := operation.ReceiveIntent()
+
+	// Seed a stale summary to verify opening a session clears prior-attempt state.
+	operation.setNameReport(outputcap.CompatibleNameReport{RepairedCount: 99, ReportName: "stale.json", PageCount: 9})
+	session, err := authority.OpenOperation(ctx, operation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stale := operation.CompatibleNameReport(); !stale.Empty() {
+		t.Fatalf("OpenOperation retained stale CompatibleNameReport: %+v", stale)
+	}
+
+	rootSource, rootAdmission, rootClaim := admitTestDirectory(t, ctx, session, intent, anchor, 0xa3, "proj", transfer.DirectoryAdmission{}, transfer.MaterializedDirectoryClaim{})
+	publishSmallTestFile(t, ctx, session, intent, 0xa4, "proj/.wsresume-notes.txt", rootSource, rootAdmission, rootClaim)
+	if _, err := session.PauseTree(ctx, transfer.JobPauseInterrupted); err != nil {
+		t.Fatal(err)
+	}
+	if before := operation.CompatibleNameReport(); !before.Empty() {
+		t.Fatalf("paused operation unexpectedly reported name report before discard: %+v", before)
+	}
+	if err := operation.Discard(ctx); err != nil {
+		t.Fatalf("Discard: %v", err)
+	}
+	report := operation.CompatibleNameReport()
+	if !report.Valid() || report.RepairedCount != 1 || report.PageCount != 1 || !strings.HasPrefix(report.ReportName, "windshare-names-") {
+		t.Fatalf("CompatibleNameReport after Discard = %+v", report)
+	}
+	assertNativeNameReport(t, filepath.Join(root, report.ReportName), "proj", "proj", 1)
 }
 
 func admitTestDirectory(

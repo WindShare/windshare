@@ -6,6 +6,7 @@ import (
 
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
+	"github.com/windshare/windshare/osfs/internal/outputcap"
 )
 
 const operationInventoryPageSize = 128
@@ -23,6 +24,7 @@ type OperationLease interface {
 		checkpointmodel.OrdinaryClosedReason,
 	) (Header, error)
 	Cleanup(context.Context) (CleanupState, error)
+	CompatibleNameReport() outputcap.CompatibleNameReport
 	Close() error
 }
 
@@ -152,8 +154,16 @@ func (authority *Authority) Discard(
 	if !cleanup.Valid() {
 		return Summary{}, errors.Join(ErrInvalidContract, cleanupErr)
 	}
+	report := lease.CompatibleNameReport()
+	if !report.Valid() {
+		return Summary{}, errors.Join(ErrInvalidContract, cleanupErr)
+	}
 	if cleanup == CleanupComplete {
-		return newSummary(header, OperationDiscarded, snapshot.Items(), false)
+		summary, err := newSummary(header, OperationDiscarded, snapshot.Items(), false)
+		if err != nil {
+			return Summary{}, err
+		}
+		return summary.withCompatibleNameReport(report)
 	}
 
 	record := header.Record()
@@ -172,5 +182,8 @@ func (authority *Authority) Discard(
 		return Summary{}, errors.Join(cleanupErr, err)
 	}
 	result, err = ReduceRecovery(pending)
+	if err == nil {
+		result, err = result.withCompatibleNameReport(report)
+	}
 	return result, errors.Join(cleanupErr, err)
 }

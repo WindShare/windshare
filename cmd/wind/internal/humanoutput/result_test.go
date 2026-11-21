@@ -182,6 +182,7 @@ func TestTransferResultReportsCompatibleNameRepairsWhenPresent(t *testing.T) {
 		failure       appobs.Failure
 		countersExact bool
 		count         uint64
+		pages         uint64
 		want          string
 	}{
 		{
@@ -190,6 +191,7 @@ func TestTransferResultReportsCompatibleNameRepairsWhenPresent(t *testing.T) {
 			exit:          clievent.ExitSuccess,
 			countersExact: true,
 			count:         1,
+			pages:         1,
 			want:          "  1 item saved under a compatible name (see windshare-names-abc-1-0.json beside destination).",
 		},
 		{
@@ -198,7 +200,26 @@ func TestTransferResultReportsCompatibleNameRepairsWhenPresent(t *testing.T) {
 			exit:          clievent.ExitSuccess,
 			countersExact: true,
 			count:         2,
+			pages:         1,
 			want:          "  2 items saved under compatible names (see windshare-names-abc-1-0.json beside destination).",
+		},
+		{
+			name:          "two report pages",
+			status:        clievent.ResultSuccess,
+			exit:          clievent.ExitSuccess,
+			countersExact: true,
+			count:         5000,
+			pages:         2,
+			want:          "  5,000 items saved under compatible names (see windshare-names-abc-1-0.json and 1 more page beside destination).",
+		},
+		{
+			name:          "three report pages",
+			status:        clievent.ResultSuccess,
+			exit:          clievent.ExitSuccess,
+			countersExact: true,
+			count:         9000,
+			pages:         3,
+			want:          "  9,000 items saved under compatible names (see windshare-names-abc-1-0.json and 2 more pages beside destination).",
 		},
 		{
 			name:          "inexact transfer counters keep exact repaired count",
@@ -207,6 +228,7 @@ func TestTransferResultReportsCompatibleNameRepairsWhenPresent(t *testing.T) {
 			failure:       mustFailure(t, appobs.FailureSourceOmitted),
 			countersExact: false,
 			count:         1,
+			pages:         1,
 			want:          "  1 item saved under a compatible name (see windshare-names-abc-1-0.json beside destination).",
 		},
 	} {
@@ -216,7 +238,7 @@ func TestTransferResultReportsCompatibleNameRepairsWhenPresent(t *testing.T) {
 				Destination: appobs.NewDisplayPath("./docs"), CountersExact: tc.countersExact,
 				Failure: tc.failure,
 				CompatibleNameReport: clievent.CompatibleNameReport{
-					RepairedCount: tc.count, ReportName: appobs.NewDisplayName("windshare-names-abc-1-0.json"),
+					RepairedCount: tc.count, ReportName: appobs.NewDisplayName("windshare-names-abc-1-0.json"), PageCount: tc.pages,
 				},
 			})
 			if err != nil {

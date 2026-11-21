@@ -1,6 +1,10 @@
 package outputcap
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/windshare/windshare/core/transfer/receivecontract"
+)
 
 func TestReservedRootNamespacesMatchScope(t *testing.T) {
 	if !ReservedNamespaceDestinationContainer.Valid() || !ReservedNamespaceResultRoot.Valid() || ReservedNamespaceScope(0).Valid() {
@@ -47,6 +51,39 @@ func TestReservedRootNamespacesMatchScope(t *testing.T) {
 	for _, name := range []string{"readme.txt", "WSRESUME", "文档.txt", ".gitignore", ".wsresum"} {
 		if ReservedRootName(ReservedNamespaceDestinationContainer, name) || ReservedRootName(ReservedNamespaceResultRoot, name) {
 			t.Errorf("ordinary name %q was treated as reserved", name)
+		}
+	}
+
+	if got := ReservedNamespaceScopeForEntry(receivecontract.ContainerEntryResultRoot); got != ReservedNamespaceResultRoot {
+		t.Fatalf("result-root entry scope = %v", got)
+	}
+	if got := ReservedNamespaceScopeForEntry(receivecontract.ContainerEntrySingleFile); got != ReservedNamespaceDestinationContainer {
+		t.Fatalf("single-file entry scope = %v", got)
+	}
+	if got := ReservedNamespaceScopeForEntry(0); got != 0 {
+		t.Fatalf("unknown entry scope = %v", got)
+	}
+}
+
+func TestCompatibleNameReportValidityContract(t *testing.T) {
+	var zero CompatibleNameReport
+	if !zero.Empty() || !zero.Valid() {
+		t.Fatalf("zero report = %+v, want empty and valid", zero)
+	}
+	valid := CompatibleNameReport{RepairedCount: 3, ReportName: "windshare-names-abc-1-0.json", PageCount: 2}
+	if valid.Empty() || !valid.Valid() {
+		t.Fatalf("valid report = %+v, want non-empty and valid", valid)
+	}
+	for _, invalid := range []CompatibleNameReport{
+		{RepairedCount: 1},
+		{ReportName: "windshare-names-abc-1-0.json"},
+		{PageCount: 1},
+		{RepairedCount: 1, ReportName: "windshare-names-abc-1-0.json"},
+		{RepairedCount: 1, PageCount: 1},
+		{ReportName: "windshare-names-abc-1-0.json", PageCount: 1},
+	} {
+		if invalid.Empty() || invalid.Valid() {
+			t.Fatalf("invalid report %+v unexpectedly empty=%t valid=%t", invalid, invalid.Empty(), invalid.Valid())
 		}
 	}
 }

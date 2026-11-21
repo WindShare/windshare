@@ -28,19 +28,20 @@ func (value DriftReason) Name() (string, bool) {
 }
 
 // CompatibleNameReport pairs the exact count of compatible-name repairs with
-// the report filename written beside the destination. Either both fields are
-// populated or both are zero.
+// the first report filename and total page count written beside the
+// destination. Either all fields are populated or all are zero.
 type CompatibleNameReport struct {
 	RepairedCount uint64
 	ReportName    appobs.DisplayName
+	PageCount     uint64
 }
 
 func (report CompatibleNameReport) Empty() bool {
-	return report.RepairedCount == 0 && report.ReportName.Empty()
+	return report.RepairedCount == 0 && report.ReportName.Empty() && report.PageCount == 0
 }
 
 func (report CompatibleNameReport) Valid() bool {
-	return (report.RepairedCount == 0) == report.ReportName.Empty()
+	return report.Empty() || (report.RepairedCount > 0 && !report.ReportName.Empty() && report.PageCount > 0)
 }
 
 type TransferResultSpec struct {

@@ -180,6 +180,11 @@ func runOperation(ctx context.Context, request Request, deps Dependencies, attem
 			} else {
 				completed.Value.Recovery.Retention = RetentionDiscarded
 			}
+			if report := control.CompatibleNameReport(); !report.Valid() {
+				requireOutputInspection(&completed, ErrInvalidResult)
+			} else if !report.Empty() {
+				completed.Value.CompatibleNameReport = report
+			}
 			return
 		}
 	}

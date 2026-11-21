@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 const (
@@ -65,4 +66,35 @@ func ReservedRootName(scope ReservedNamespaceScope, name string) bool {
 		return false
 	}
 	return strings.HasPrefix(catalog.SiblingNameKey(name), prefix)
+}
+
+// ReservedNamespaceScopeForEntry maps a top-level reservation entry kind to
+// the private WindShare namespace that shares direct children with its
+// execution root.
+func ReservedNamespaceScopeForEntry(kind receivecontract.ContainerEntryKind) ReservedNamespaceScope {
+	switch kind {
+	case receivecontract.ContainerEntryResultRoot:
+		return ReservedNamespaceResultRoot
+	case receivecontract.ContainerEntrySingleFile:
+		return ReservedNamespaceDestinationContainer
+	default:
+		return 0
+	}
+}
+
+// CompatibleNameReport summarizes compatible-name repairs exported beside a
+// destination when an operation settles or is discarded. Either all fields are
+// zero or all fields describe an exported report.
+type CompatibleNameReport struct {
+	RepairedCount uint64
+	ReportName    string
+	PageCount     uint64
+}
+
+func (report CompatibleNameReport) Empty() bool {
+	return report.RepairedCount == 0 && report.ReportName == "" && report.PageCount == 0
+}
+
+func (report CompatibleNameReport) Valid() bool {
+	return report.Empty() || (report.RepairedCount > 0 && report.ReportName != "" && report.PageCount > 0)
 }

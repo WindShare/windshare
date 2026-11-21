@@ -313,19 +313,21 @@ func TestProjectReceiveResultPreservesAndValidatesCompatibleNameReport(t *testin
 		Value: engine.ReceiveResult{
 			Destination: "out",
 			CompatibleNameReport: engine.OutputCompatibleNameReport{
-				RepairedCount: 3, ReportName: "windshare-names-abc-1-0.json",
+				RepairedCount: 3, ReportName: "windshare-names-abc-1-0.json", PageCount: 2,
 			},
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report, ok := projected.CompatibleNameReport(); !ok || report.RepairedCount != 3 || report.ReportName.Text() != "windshare-names-abc-1-0.json" {
+	if report, ok := projected.CompatibleNameReport(); !ok || report.RepairedCount != 3 || report.PageCount != 2 || report.ReportName.Text() != "windshare-names-abc-1-0.json" {
 		t.Fatalf("projected compatible name report = (%+v, %t)", report, ok)
 	}
 	for _, invalid := range []engine.OutputCompatibleNameReport{
 		{RepairedCount: 1},
 		{ReportName: "windshare-names-abc-1-0.json"},
+		{PageCount: 1},
+		{RepairedCount: 1, ReportName: "windshare-names-abc-1-0.json"},
 	} {
 		if _, err := ProjectReceiveResult(engine.TaskCompletion[engine.ReceiveResult]{
 			Outcome: engine.OutcomeSuccess,

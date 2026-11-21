@@ -555,18 +555,14 @@ func (operation FilesystemOutputOperation) Discard(ctx context.Context) error {
 }
 
 // FilesystemCompatibleNameReport summarizes compatible-name repairs exported
-// beside the destination when an operation succeeds.
-type FilesystemCompatibleNameReport struct {
-	RepairedCount uint64
-	ReportName    string
-}
+// beside the destination when an operation settles or is discarded.
+type FilesystemCompatibleNameReport = outputcap.CompatibleNameReport
 
 func (operation FilesystemOutputOperation) CompatibleNameReport() FilesystemCompatibleNameReport {
 	if operation.operation == nil {
 		return FilesystemCompatibleNameReport{}
 	}
-	count, name := operation.operation.CompatibleNameReport()
-	return FilesystemCompatibleNameReport{RepairedCount: count, ReportName: name}
+	return operation.operation.CompatibleNameReport()
 }
 
 type NativeDirectTreeReservationKind uint8

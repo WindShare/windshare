@@ -41,6 +41,9 @@ func (authority *Authority) canonicalLocator(path string) (locatorKey, error) {
 	}
 	// Guard the exact private namespace that lives in this root: control state
 	// inside a destination container, or recovery markers inside a result root.
+	// Both checks are intentional: ReservedRootName applies Unicode 15 full-fold
+	// independently of platform key folding, while firstKey catches provider-
+	// specific canonical equivalences.
 	if outputcap.ReservedRootName(authority.reservedScope, first) ||
 		strings.HasPrefix(firstKey, authority.reservedKey) {
 		return locatorKey{}, errors.Join(ErrInvalidLocator, outputfault.ErrReservedPath)

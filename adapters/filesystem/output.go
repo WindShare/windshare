@@ -152,6 +152,7 @@ func (c filesystemOperationControl) CompatibleNameReport() output.CompatibleName
 	return output.CompatibleNameReport{
 		RepairedCount: report.RepairedCount,
 		ReportName:    report.ReportName,
+		PageCount:     report.PageCount,
 	}
 }
 

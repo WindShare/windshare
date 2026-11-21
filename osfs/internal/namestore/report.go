@@ -31,10 +31,7 @@ type nameView interface {
 	Resolve(string) (string, error)
 }
 
-type ReportSummary struct {
-	RepairedCount uint64
-	ReportName    string
-}
+type ReportSummary = outputcap.CompatibleNameReport
 
 // Export keeps the source spellings readable after private resume state is
 // retired. All saved paths are relative to the selected destination container;
@@ -46,9 +43,10 @@ func (store *Store) Export(mapper nameView, root outputnames.Root, visit func(fu
 		return ReportSummary{}, nil
 	}
 	var reportName string
+	var pageCount uint64
 	if err := visit(func(directory outputcap.Directory) error {
 		var err error
-		reportName, err = store.exportTo(directory, mapper, root, mappings)
+		reportName, pageCount, err = store.exportTo(directory, mapper, root, mappings)
 		return err
 	}); err != nil {
 		return ReportSummary{}, err
@@ -57,10 +55,14 @@ func (store *Store) Export(mapper nameView, root outputnames.Root, visit func(fu
 	if rootRepaired {
 		repaired++
 	}
-	return ReportSummary{RepairedCount: repaired, ReportName: reportName}, nil
+	return ReportSummary{RepairedCount: repaired, ReportName: reportName, PageCount: pageCount}, nil
 }
 
-func (store *Store) exportTo(directory outputcap.Directory, mapper nameView, root outputnames.Root, mappings []outputnames.Mapping) (string, error) {
+func (store *Store) exportTo(directory outputcap.Directory, mapper nameView, root outputnames.Root, mappings []outputnames.Mapping) (string, uint64, error) {
+	return store.exportToLimit(directory, mapper, root, mappings, maximumReportPageBytes)
+}
+
+func (store *Store) exportToLimit(directory outputcap.Directory, mapper nameView, root outputnames.Root, mappings []outputnames.Mapping, maxPageBytes int) (string, uint64, error) {
 	page := reportPage{
 		Format: "windshare/native-name-report/v1", OperationID: store.operationID,
 		OriginalRoot: root.RequestedName, SavedRoot: root.PhysicalName, Page: 1,
@@ -68,6 +70,7 @@ func (store *Store) exportTo(directory outputcap.Directory, mapper nameView, roo
 	}
 	pageBytes := 0
 	var firstReportName string
+	var pageCount uint64
 	flush := func() error {
 		encoded, err := json.MarshalIndent(page, "", "  ")
 		if err != nil {
@@ -80,6 +83,7 @@ func (store *Store) exportTo(directory outputcap.Directory, mapper nameView, roo
 		if firstReportName == "" {
 			firstReportName = name
 		}
+		pageCount++
 		page.Page++
 		page.Entries = []reportEntry{}
 		pageBytes = 0
@@ -88,25 +92,25 @@ func (store *Store) exportTo(directory outputcap.Directory, mapper nameView, roo
 	for _, mapping := range mappings {
 		physical, err := mapper.Resolve(mapping.LogicalPath)
 		if err != nil {
-			return "", err
+			return "", 0, err
 		}
 		entry := reportEntry{OriginalPath: mapping.LogicalPath, SavedPath: root.PhysicalName + "/" + physical}
 		encoded, err := json.Marshal(entry)
 		if err != nil {
-			return "", err
+			return "", 0, err
 		}
-		if pageBytes+len(encoded) > maximumReportPageBytes && len(page.Entries) > 0 {
+		if pageBytes+len(encoded) > maxPageBytes && len(page.Entries) > 0 {
 			if err := flush(); err != nil {
-				return "", err
+				return "", 0, err
 			}
 		}
 		page.Entries = append(page.Entries, entry)
 		pageBytes += len(encoded)
 	}
 	if err := flush(); err != nil {
-		return "", err
+		return "", 0, err
 	}
-	return firstReportName, nil
+	return firstReportName, pageCount, nil
 }
 
 func installReport(directory outputcap.Directory, operation string, page int, encoded []byte) (string, error) {

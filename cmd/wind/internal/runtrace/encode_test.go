@@ -367,6 +367,7 @@ func allTraceEvents(t *testing.T) []clievent.Event {
 		CompatibleNameReport: clievent.CompatibleNameReport{
 			RepairedCount: 2,
 			ReportName:    appobs.NewDisplayName(displayNameCanary),
+			PageCount:     1,
 		},
 		Files:              appobs.FileOutcomes{DownloadedFiles: 1, FailedFiles: 1},
 		DirectoryFailures:  math.MaxUint64,

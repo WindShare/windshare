@@ -7,6 +7,7 @@ import (
 
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
+	"github.com/windshare/windshare/osfs/internal/outputcap"
 )
 
 type authorityMemoryStore struct {
@@ -59,6 +60,7 @@ type authorityMemoryLease struct {
 	header      Header
 	items       []Item
 	cleanup     CleanupState
+	nameReport  outputcap.CompatibleNameReport
 	snapshotErr error
 	cleanupErr  error
 	closeErr    error
@@ -104,6 +106,10 @@ func (lease *authorityMemoryLease) Transition(
 
 func (lease *authorityMemoryLease) Cleanup(context.Context) (CleanupState, error) {
 	return lease.cleanup, lease.cleanupErr
+}
+
+func (lease *authorityMemoryLease) CompatibleNameReport() outputcap.CompatibleNameReport {
+	return lease.nameReport
 }
 
 func (lease *authorityMemoryLease) Close() error {
@@ -165,7 +171,10 @@ func TestAuthorityPagesAndEnumeratesOnlyAcquiredOperations(t *testing.T) {
 func TestAuthorityDiscardTransitionsBeforeCleanupAndDeletesHistory(t *testing.T) {
 	fixture := newOrdinaryResumeFixture(t, 0xa1)
 	header := resumeHeader(t, heldResumeRecord(t, fixture.record))
-	lease := &authorityMemoryLease{header: header, cleanup: CleanupComplete}
+	wantReport := outputcap.CompatibleNameReport{
+		RepairedCount: 2, ReportName: "windshare-names-abc-1-0.json", PageCount: 1,
+	}
+	lease := &authorityMemoryLease{header: header, cleanup: CleanupComplete, nameReport: wantReport}
 	store := &authorityMemoryStore{
 		leases: map[receivecontract.OperationID]*authorityMemoryLease{
 			header.Record().OperationID(): lease,
@@ -175,6 +184,7 @@ func TestAuthorityDiscardTransitionsBeforeCleanupAndDeletesHistory(t *testing.T)
 	authority, _ := New(store)
 	summary, err := authority.Discard(context.Background(), header.Record().OperationID())
 	if err != nil || summary.State() != OperationDiscarded || lease.closed != 1 ||
+		summary.CompatibleNameReport() != wantReport ||
 		len(lease.transitions) != 1 ||
 		lease.transitions[0] != checkpointmodel.OrdinaryLifecycleDiscard {
 		t.Fatalf("discard = %+v, %v, transitions=%v", summary, err, lease.transitions)
@@ -236,5 +246,20 @@ func TestAuthorityRejectsInvalidBoundariesAndJoinsCloseFailure(t *testing.T) {
 	}
 	if _, err := authority.Discard(context.Background(), receivecontract.OperationID{}); !errors.Is(err, ErrInvalidContract) {
 		t.Fatalf("zero discard = %v", err)
+	}
+	badReportLease := &authorityMemoryLease{
+		header:     header,
+		cleanup:    CleanupComplete,
+		nameReport: outputcap.CompatibleNameReport{RepairedCount: 1},
+	}
+	badStore := &authorityMemoryStore{
+		leases: map[receivecontract.OperationID]*authorityMemoryLease{
+			header.Record().OperationID(): badReportLease,
+		},
+		busy: make(map[receivecontract.OperationID]bool),
+	}
+	badAuthority, _ := New(badStore)
+	if _, err := badAuthority.Discard(context.Background(), header.Record().OperationID()); !errors.Is(err, ErrInvalidContract) {
+		t.Fatalf("invalid compatible name report discard = %v, want %v", err, ErrInvalidContract)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/windshare/windshare/osfs/internal/destinationauthority"
 	"github.com/windshare/windshare/osfs/internal/fileexecution"
 	"github.com/windshare/windshare/osfs/internal/namestore"
+	"github.com/windshare/windshare/osfs/internal/outputcap"
 	"github.com/windshare/windshare/osfs/internal/outputnames"
 	"github.com/windshare/windshare/osfs/internal/resumeauthority"
 )
@@ -149,9 +150,20 @@ func (lease *NativeResumeLease) ensureNamesLocked() error {
 	return nil
 }
 
+func (lease *NativeResumeLease) CompatibleNameReport() outputcap.CompatibleNameReport {
+	if lease == nil {
+		return outputcap.CompatibleNameReport{}
+	}
+	lease.mu.Lock()
+	report := lease.nameReport
+	lease.mu.Unlock()
+	return report
+}
+
 func (lease *NativeResumeLease) cleanupNamesLocked() error {
 	// Empty name state requires no public capability. This preserves cleanup
 	// after a result root was removed, and the normal path adds no public I/O.
+	lease.nameReport = outputcap.CompatibleNameReport{}
 	intent, err := lease.operation.Record().VerifyIntent(transfer.DecodeReceiveIntent)
 	if err != nil {
 		return err
@@ -173,8 +185,10 @@ func (lease *NativeResumeLease) cleanupNamesLocked() error {
 	if err != nil {
 		return err
 	}
-	if _, err := store.Export(resolver, root, lease.runtime.destination.WithPublicContainer); err != nil {
+	summary, err := store.Export(resolver, root, lease.runtime.destination.WithPublicContainer)
+	if err != nil {
 		return err
 	}
+	lease.nameReport = summary
 	return store.Clear()
 }
