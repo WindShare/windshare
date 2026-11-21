@@ -146,19 +146,165 @@ func TestTruncateUTF8PreservesBoundariesWithinByteBudget(t *testing.T) {
 	}
 }
 
-func TestNextPollTimestampStaysMonotonicAcrossClockStepBack(t *testing.T) {
+func TestPollTimestampStaysMonotonicOnlyAfterClaimedTimestamp(t *testing.T) {
 	var a agent
-	if got := a.nextPollTimestamp(time.Unix(1000, 0)); got != 1000 {
-		t.Fatalf("first timestamp = %d; want 1000", got)
+	if got := a.pollTimestamp(time.Unix(1000, 0)); got != 1000 {
+		t.Fatalf("initial timestamp = %d; want 1000", got)
 	}
-	if got := a.nextPollTimestamp(time.Unix(970, 0)); got != 1001 {
-		t.Fatalf("step-back timestamp = %d; want 1001", got)
+	if got := a.pollTimestamp(time.Unix(970, 0)); got != 970 {
+		t.Fatalf("uncommitted step-back timestamp = %d; want 970", got)
 	}
-	if got := a.nextPollTimestamp(time.Unix(1001, 0)); got != 1002 {
+	a.lastClaimedAt = 1000
+	if got := a.pollTimestamp(time.Unix(970, 0)); got != 1001 {
+		t.Fatalf("claimed step-back timestamp = %d; want 1001", got)
+	}
+	if got := a.pollTimestamp(time.Unix(970, 0)); got != 1001 {
+		t.Fatalf("pure repeated step-back timestamp = %d; want 1001", got)
+	}
+	a.lastClaimedAt = 1001
+	if got := a.pollTimestamp(time.Unix(1001, 0)); got != 1002 {
 		t.Fatalf("equal timestamp = %d; want 1002", got)
 	}
-	if got := a.nextPollTimestamp(time.Unix(1060, 0)); got != 1060 {
+	if got := a.pollTimestamp(time.Unix(1060, 0)); got != 1060 {
 		t.Fatalf("caught-up timestamp = %d; want 1060", got)
+	}
+}
+
+func TestPollCycleCommitsTimestampOnlyAfterClaimingWork(t *testing.T) {
+	dir, _ := mirrorFixture(t)
+	nodeMux := http.NewServeMux()
+	nodeMux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "offline", http.StatusServiceUnavailable)
+	})
+	node := httptest.NewTLSServer(nodeMux)
+	defer node.Close()
+
+	key := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{31}, ed25519.SeedSize))
+	b64 := base64.RawURLEncoding
+	nodeKey := b64.EncodeToString(ed25519.NewKeyFromSeed(bytes.Repeat([]byte{32}, ed25519.SeedSize)).Public().(ed25519.PublicKey))
+
+	const serverNow int64 = 1_700_000_000
+	const freshSeconds int64 = 90
+	var (
+		hasWork      bool
+		savedLeaseAt int64
+		pollAts      []int64
+		resultCount  int
+	)
+	authority := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var proof struct{ Payload string }
+		if err := json.NewDecoder(r.Body).Decode(&proof); err != nil {
+			t.Error(err)
+			return
+		}
+		data, err := b64.DecodeString(proof.Payload)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		switch r.URL.Path {
+		case "/v1/vantage/poll":
+			var poll struct{ At int64 }
+			if err := json.Unmarshal(data, &poll); err != nil {
+				t.Error(err)
+				return
+			}
+			pollAts = append(pollAts, poll.At)
+			diff := poll.At - serverNow
+			if diff < 0 {
+				diff = -diff
+			}
+			if diff > freshSeconds || (savedLeaseAt > 0 && poll.At <= savedLeaseAt) {
+				http.Error(w, "invalid", http.StatusBadRequest)
+				return
+			}
+			if !hasWork {
+				_, _ = w.Write([]byte("null"))
+				return
+			}
+			savedLeaseAt = poll.At
+			_ = json.NewEncoder(w).Encode(networkprobe.Work{
+				OperationID: "enroll",
+				Lease:       "claim",
+				Node:        nodedirectory.Node{Relay: node.URL, NodeKey: nodeKey, Roles: []string{"relay"}},
+			})
+		case "/v1/vantage/result":
+			resultCount++
+			_, _ = w.Write([]byte("{}"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer authority.Close()
+
+	clock := time.Unix(serverNow+3600, 0)
+	a := agent{
+		key:       key,
+		client:    node.Client(),
+		authority: authority.Client(),
+		config:    &networkconfig.Config{Directory: dir, LinkHost: node.URL, Authority: &account.Config{URL: authority.URL}},
+		now:       func() time.Time { return clock },
+	}
+
+	// Fast RTC (>90s ahead) rejected with HTTP 400 must not latch lastClaimedAt.
+	if err := a.cycle(t.Context()); err == nil {
+		t.Fatal("expected HTTP 400 rejection for fast RTC poll")
+	}
+	if a.lastClaimedAt != 0 {
+		t.Fatalf("lastClaimedAt latched on rejected poll = %d; want 0", a.lastClaimedAt)
+	}
+
+	// Once NTP steps the clock back, an idle poll (work == nil) succeeds without latching.
+	clock = time.Unix(serverNow, 0)
+	if err := a.cycle(t.Context()); err != nil {
+		t.Fatalf("post-NTP idle poll failed: %v", err)
+	}
+	if a.lastClaimedAt != 0 {
+		t.Fatalf("lastClaimedAt latched on idle poll = %d; want 0", a.lastClaimedAt)
+	}
+
+	// Claiming work persists vantage-lease on the authority and commits lastClaimedAt.
+	hasWork = true
+	clock = time.Unix(serverNow+40, 0)
+	if err := a.cycle(t.Context()); err != nil {
+		t.Fatalf("claimed poll failed: %v", err)
+	}
+	if a.lastClaimedAt != serverNow+40 || savedLeaseAt != serverNow+40 {
+		t.Fatalf("claimed watermark mismatch: client=%d server=%d; want %d", a.lastClaimedAt, savedLeaseAt, serverNow+40)
+	}
+
+	// A backward clock step after a real claim stays strictly above the persisted lease,
+	// without ratcheting client state when the poll returns idle.
+	hasWork = false
+	clock = time.Unix(serverNow, 0)
+	if err := a.cycle(t.Context()); err != nil {
+		t.Fatalf("step-back idle poll failed: %v", err)
+	}
+	if a.lastClaimedAt != serverNow+40 {
+		t.Fatalf("idle poll ratcheted lastClaimedAt = %d; want %d", a.lastClaimedAt, serverNow+40)
+	}
+
+	// The next real claim while still behind lastClaimedAt advances both client and server watermarks.
+	hasWork = true
+	clock = time.Unix(serverNow+10, 0)
+	if err := a.cycle(t.Context()); err != nil {
+		t.Fatalf("step-back claimed poll failed: %v", err)
+	}
+	if a.lastClaimedAt != serverNow+41 || savedLeaseAt != serverNow+41 {
+		t.Fatalf("second claimed watermark mismatch: client=%d server=%d; want %d", a.lastClaimedAt, savedLeaseAt, serverNow+41)
+	}
+
+	wantAts := []int64{serverNow + 3600, serverNow, serverNow + 40, serverNow + 41, serverNow + 41}
+	if len(pollAts) != len(wantAts) {
+		t.Fatalf("poll timestamps = %v; want %v", pollAts, wantAts)
+	}
+	for i := range wantAts {
+		if pollAts[i] != wantAts[i] {
+			t.Fatalf("poll[%d].at = %d; want %d (all=%v)", i, pollAts[i], wantAts[i], pollAts)
+		}
+	}
+	if resultCount != 2 {
+		t.Fatalf("result reports = %d; want 2", resultCount)
 	}
 }
 
