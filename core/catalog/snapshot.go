@@ -106,7 +106,7 @@ func NewSyntheticRootCommit(spec SyntheticRootCommitSpec) (DirectoryCommit, erro
 		if !record.valid() || record.IsSyntheticRoot() || record.Parent() != spec.SyntheticRoot {
 			return DirectoryCommit{}, errors.New("synthetic root commit contains an invalid selected-root record")
 		}
-		if reservedOutputRootName(record.Entry().Name()) {
+		if ReservedOutputRootName(record.Entry().Name()) {
 			return DirectoryCommit{}, errors.New("synthetic root contains an output-reserved name")
 		}
 		nameBytes += uint64(len(record.Entry().Name()))

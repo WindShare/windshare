@@ -103,7 +103,7 @@ func CanonicalPath(path string) (string, error) {
 		}
 		components[index] = validated
 	}
-	if reservedOutputRootName(components[0]) {
+	if ReservedOutputRootName(components[0]) {
 		return "", fmt.Errorf("%w: root component uses the reserved %q prefix", ErrInvalidPath, reservedOutputRootPrefix)
 	}
 	return strings.Join(components, "/"), nil
@@ -121,7 +121,9 @@ func siblingCollisionKey(name string) string {
 	return unicode15.FoldPortableName(name)
 }
 
-func reservedOutputRootName(name string) bool {
+// ReservedOutputRootName reports whether name, as the first component of an
+// output path, would share the namespace of receiver recovery markers.
+func ReservedOutputRootName(name string) bool {
 	return strings.HasPrefix(siblingCollisionKey(name), reservedOutputRootPrefix)
 }
 

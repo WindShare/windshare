@@ -221,3 +221,24 @@ func TestRepairTraceDistinguishesChoiceFromReuse(t *testing.T) {
 		t.Fatalf("traces = %+v", events)
 	}
 }
+
+func TestRootChildUsingTheRecoveryPrefixGetsACompatibleName(t *testing.T) {
+	store := &memoryStore{}
+	mapper := testMapper(t, store, namespaceFunc(func(_, _ string) (outputcap.EntryKind, error) { return outputcap.EntryAbsent, nil }))
+	for _, name := range []string{".wsresume-notes.txt", ".WSResume", ".wsresume-" + strings.Repeat("0", 64) + ".identity"} {
+		physical, err := mapper.Bind("docs/" + name)
+		if err != nil || strings.Contains(physical, "/") || !strings.HasPrefix(physical, "wsresume") && !strings.HasPrefix(physical, "WSResume") {
+			t.Fatalf("%q -> %q, %v", name, physical, err)
+		}
+		if _, err := catalog.CanonicalPath(physical); err != nil {
+			t.Fatalf("%q -> %q is not a destination path: %v", name, physical, err)
+		}
+	}
+	if len(store.records) != 3 {
+		t.Fatalf("repairs were not persisted: %+v", store.records)
+	}
+	// Only the artifact root shares a directory with recovery markers.
+	if physical, err := mapper.Bind("docs/sub/.wsresume-notes"); err != nil || physical != "sub/.wsresume-notes" {
+		t.Fatalf("nested name = %q, %v", physical, err)
+	}
+}
