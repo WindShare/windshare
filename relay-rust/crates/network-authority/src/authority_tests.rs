@@ -117,8 +117,8 @@ impl Environment for Clock {
         Ok([self.next; N])
     }
 }
-fn signing_fixture(number: u64) -> Signing {
-    let root = SigningKey::from_bytes(&[41; 32]);
+fn signing_fixture_for_root(root_seed: [u8; 32], number: u64) -> Signing {
+    let root = SigningKey::from_bytes(&root_seed);
     let key = SigningKey::from_bytes(&[42; 32]);
     let generation = Generation {
         issuer: root.verifying_key().to_bytes(),
@@ -133,6 +133,9 @@ fn signing_fixture(number: u64) -> Signing {
         key,
         certificate,
     }
+}
+fn signing_fixture(number: u64) -> Signing {
+    signing_fixture_for_root([41; 32], number)
 }
 fn fixture() -> Authority<Memory, Clock> {
     Authority::new(
@@ -582,6 +585,24 @@ fn signing_activation_writes_only_when_generation_changes() {
     next.activate(store, now).unwrap();
     assert_eq!(store.put_count, 2);
     assert!(signing.activate(store, now).is_err());
+    assert_eq!(store.put_count, 2);
+}
+
+#[test]
+fn signing_activation_refuses_different_root_without_overwriting_generation() {
+    let mut authority = fixture();
+    let now = authority.environment.now();
+    let store = &mut authority.store;
+    let second = signing_fixture(2);
+    second.activate(store, now).unwrap();
+    assert_eq!(store.put_count, 2);
+
+    let foreign = signing_fixture_for_root([99; 32], 3);
+    assert!(foreign.activate(store, now).is_err());
+    assert_eq!(store.put_count, 2);
+
+    assert!(signing_fixture(1).activate(store, now).is_err());
+    second.activate(store, now).unwrap();
     assert_eq!(store.put_count, 2);
 }
 

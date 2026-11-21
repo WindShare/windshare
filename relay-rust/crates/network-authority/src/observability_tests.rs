@@ -511,3 +511,30 @@ fn ticket_issuance_and_governance_traces_expose_expiry_and_target_fields() {
     assert!(reported[0]["fields"].get("share").is_some());
     assert!(reported[0]["fields"].get("report").is_some());
 }
+
+#[test]
+fn signing_issuer_mismatch_emits_structured_error_trace() {
+    let mut authority = fixture();
+    let now = authority.environment.now();
+    let expected = URL_SAFE_NO_PAD.encode(authority.signing.generation.issuer);
+    let foreign = signing_fixture_for_root([99; 32], 2);
+    let configured = URL_SAFE_NO_PAD.encode(foreign.generation.issuer);
+
+    let events = capture_events(|| {
+        assert!(foreign.activate(&mut authority.store, now).is_err());
+    });
+
+    let mismatched: Vec<_> = events
+        .iter()
+        .filter(|(level, entry)| {
+            *level == Level::ERROR
+                && entry["fields"]["event"] == "authority_signing_issuer_mismatch"
+        })
+        .map(|(_, entry)| entry)
+        .collect();
+    assert_eq!(mismatched.len(), 1);
+    assert_eq!(mismatched[0]["fields"]["expected_issuer"], expected);
+    assert_eq!(mismatched[0]["fields"]["configured_issuer"], configured);
+    assert_eq!(mismatched[0]["fields"]["previous_generation"], 1);
+    assert_eq!(mismatched[0]["fields"]["configured_generation"], 2);
+}

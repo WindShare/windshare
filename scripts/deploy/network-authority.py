@@ -25,6 +25,41 @@ def https_origin(address):
     return "https://" + url.netloc
 
 
+def verify_release_authority(release, api, root):
+    """Ensure a deployment targeting a network release matches its client-pinned authority."""
+    authority = release.get("authority")
+    if authority is None:
+        return
+    if not isinstance(authority, dict):
+        raise ValueError("Invalid authority section in network release manifest")
+    release_url = authority.get("url")
+    release_root = authority.get("root")
+    if not isinstance(release_url, str) or not isinstance(release_root, str) or not release_root:
+        raise ValueError("Network release authority requires url and root")
+    expected_api = https_origin(release_url)
+    if api != expected_api:
+        raise ValueError(
+            f"Deployment API origin {api} does not match network release authority url {expected_api}"
+        )
+    if root != release_root:
+        raise ValueError(
+            f"Deployment trust root {root} does not match network release authority root {release_root}"
+        )
+
+
+def load_directory_publication(release_path, release, directory_mirror):
+    index = json.loads(subprocess.check_output(
+        ["go", "run", "./cmd/network-sign", "publication", "--release", str(release_path.resolve())], cwd=ROOT))
+    if not index:
+        return {}
+    mirror = directory_mirror or release["mirrors"][0]
+    url = urlsplit(mirror)
+    return {
+        "DIRECTORY_ORIGIN": https_origin(f"{url.scheme}://{url.netloc}"),
+        "DIRECTORY_PUBLICATION": json.dumps(dict(index, mirror=mirror), separators=(",", ":")),
+    }
+
+
 def prepare_token(path, host):
     if os.environ.get("CI"):
         raise ValueError("Prepare the administrator link on the operator machine")
@@ -80,15 +115,14 @@ def deploy(args):
             raise ValueError(f"Invalid EXTRA_EMAIL_DOMAINS entry: {domain}")
     if extra_domains:
         values["EXTRA_EMAIL_DOMAINS"] = ",".join(dict.fromkeys(extra_domains))
-    if args.directory_release:
-        release = json.loads(args.directory_release.read_text(encoding="utf-8"))
-        index = json.loads(subprocess.check_output(
-            ["go", "run", "./cmd/network-sign", "publication", "--release", str(args.directory_release.resolve())], cwd=ROOT))
-        if index:
-            mirror = args.directory_mirror or release["mirrors"][0]
-            url = urlsplit(mirror)
-            values["DIRECTORY_ORIGIN"] = https_origin(f"{url.scheme}://{url.netloc}")
-            values["DIRECTORY_PUBLICATION"] = json.dumps(dict(index, mirror=mirror), separators=(",", ":"))
+    if args.network_release:
+        release = json.loads(args.network_release.read_text(encoding="utf-8"))
+        if not isinstance(release, dict):
+            raise ValueError("Network release manifest must be a JSON object")
+        # Released clients pin authority.url and authority.root from this manifest;
+        # reject cross-environment mismatches before compiling or uploading a Worker.
+        verify_release_authority(release, api, trust["root"])
+        values.update(load_directory_publication(args.network_release, release, args.directory_mirror))
     config += "\n[vars]\n" + "".join(f"{k} = {json.dumps(v)}\n" for k, v in values.items())
     # Keep the config beside the template for Worker build paths. Credentials only enter
     # Wrangler's atomic code-and-secrets upload after local signature verification.
@@ -122,7 +156,7 @@ def main():
     parser.add_argument("--online-seed", type=Path)
     parser.add_argument("--initialization-token", type=Path)
     parser.add_argument("--prepare-initialization", type=Path)
-    parser.add_argument("--directory-release", type=Path)
+    parser.add_argument("--network-release", type=Path)
     parser.add_argument("--directory-mirror", default=os.environ.get("AUTHORITY_DIRECTORY_MIRROR"))
     deploy(parser.parse_args())
 
