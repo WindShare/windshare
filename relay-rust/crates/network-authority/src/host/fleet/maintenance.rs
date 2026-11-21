@@ -1,4 +1,4 @@
-use super::{Service, origins, signer};
+use super::{Service, origins, route::MaintenanceRoute, signer};
 use crate::{
     Fault,
     fleet::{maintenance::Operation, vantage::ORIGIN_COUNT},
@@ -13,6 +13,7 @@ use worker::Env;
 pub(super) fn dispatch(
     service: &mut Service,
     env: &Env,
+    route: MaintenanceRoute,
     ctx: &Context,
     bytes: &[u8],
 ) -> Result<Value> {
@@ -28,16 +29,19 @@ pub(super) fn dispatch(
         }
     );
     crate::fleet::publication::Publication::load_or_import(&mut service.store)?;
-    match ctx.path.as_str() {
-        "/v1/maintenance/status" => Ok(json!(service.maintenance_status(&parse(bytes)?)?)),
-        "/v1/maintenance/drain" | "/v1/maintenance/release" => {
-            Ok(json!(service.maintenance_hold(
-                &parse(bytes)?,
-                ctx.path.ends_with("/drain"),
-                &signer(env)?
-            )?))
-        }
-        "/v1/maintenance/probe" => {
+    match route {
+        MaintenanceRoute::Status => Ok(json!(service.maintenance_status(&parse(bytes)?)?)),
+        MaintenanceRoute::Drain => Ok(json!(service.maintenance_hold(
+            &parse(bytes)?,
+            true,
+            &signer(env)?
+        )?)),
+        MaintenanceRoute::Release => Ok(json!(service.maintenance_hold(
+            &parse(bytes)?,
+            false,
+            &signer(env)?
+        )?)),
+        MaintenanceRoute::Probe => {
             #[derive(Deserialize)]
             #[serde(deny_unknown_fields)]
             struct Probe {
@@ -51,6 +55,5 @@ pub(super) fn dispatch(
                 origins()?
             )?))
         }
-        _ => Err(Fault::Invalid.into()),
     }
 }

@@ -3,6 +3,7 @@ mod maintenance;
 mod public_directory;
 mod public_dns;
 mod reconcile;
+mod route;
 use super::{
     NetworkAuthority, WorkerEnvironment, failure,
     passwords::{ForwardHeaders, call_do_json_with_headers},
@@ -23,6 +24,8 @@ use anyhow::Result;
 pub(super) use edge::{handle_edge, handles_edge};
 pub(super) use public_directory::serve as public_directory;
 use reconcile::{DirectoryMirror, ReconcileMode};
+pub(super) use route::Route;
+use route::{AdminRoute, InternalRoute, PostCommitReconcile, VantageRoute};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use worker::{Env, Method, Request, Response, ScheduleContext, ScheduledEvent, event};
@@ -120,13 +123,13 @@ struct MirrorCheck {
 
 async fn internal(
     env: &Env,
-    command: &str,
+    route: Route,
     auth: (Option<&str>, Option<&str>),
     body: &impl Serialize,
 ) -> worker::Result<Response> {
     call_do_json_with_headers(
         env,
-        &format!("/internal/fleet/{command}"),
+        route.path(),
         "fleet",
         &ForwardHeaders {
             cookie: auth.0,
@@ -148,7 +151,13 @@ pub async fn scheduled(_event: ScheduledEvent, env: Env, context: ScheduleContex
     });
 }
 async fn maintenance(env: &Env) -> worker::Result<()> {
-    let mut response = internal(env, "tick", (None, None), &json!({})).await?;
+    let mut response = internal(
+        env,
+        Route::Internal(InternalRoute::Tick),
+        (None, None),
+        &json!({}),
+    )
+    .await?;
     if response.status_code() != 200 {
         return Err(failure("directory maintenance unavailable"));
     }
@@ -169,57 +178,60 @@ async fn maintenance(env: &Env) -> worker::Result<()> {
         matches,
         at: worker::Date::now().as_millis() / 1000,
     };
-    let response = internal(env, "mirrors", (None, None), &check).await?;
+    let response = internal(
+        env,
+        Route::Internal(InternalRoute::Mirrors),
+        (None, None),
+        &check,
+    )
+    .await?;
     if response.status_code() != 200 {
         return Err(failure("mirror report unavailable"));
     }
     Ok(())
 }
 impl NetworkAuthority {
-    pub(super) async fn fleet(&self, req: &Request, bytes: &[u8]) -> worker::Result<Response> {
+    pub(super) async fn fleet(
+        &self,
+        route: Route,
+        req: &Request,
+        bytes: &[u8],
+    ) -> worker::Result<Response> {
         if req.method() != Method::Post {
             return Response::error("not found", 404);
         }
         let ctx = Context::new(req, &self.env)?;
         let bytes = bytes.to_vec();
-        let is_tick = ctx.path == "/internal/fleet/tick";
-        let publish = is_tick
-            || matches!(
-                ctx.path.as_str(),
-                "/internal/fleet/promote"
-                    | "/v1/admin/nodes/manage"
-                    | "/v1/maintenance/drain"
-                    | "/v1/maintenance/release"
-            );
         // A rejected fleet command rolls back the whole transaction, including
         // bootstrap and lease writes. Network reads and KV writes run outside it.
         let result = self.transact(
             WorkerEnvironment {
                 registration_email_configured: false,
             },
-            move |service, env| dispatch(service, env, &ctx, &bytes),
+            move |service, env| dispatch(service, env, route, &ctx, &bytes),
         );
         // A failed health or renewal transaction cannot strand the last committed head in SQLite.
-        let mode = if is_tick {
-            ReconcileMode::AuditKv
-        } else {
-            ReconcileMode::PendingOnly
+        let reconcile_mode = match route.reconcile_policy() {
+            PostCommitReconcile::AlwaysAudit => Some(ReconcileMode::AuditKv),
+            PostCommitReconcile::OnCommitPending if result.is_ok() => {
+                Some(ReconcileMode::PendingOnly)
+            }
+            PostCommitReconcile::OnCommitPending | PostCommitReconcile::None => None,
         };
-        let published = if publish && (result.is_ok() || is_tick) {
-            match self.reconcile(mode).await {
+        let published = match reconcile_mode {
+            Some(mode) => match self.reconcile(mode).await {
                 Ok(written) => written,
                 Err(error) => {
                     tracing::warn!(event="directory_kv_retry_pending", ?mode, %error);
                     false
                 }
-            }
-        } else {
-            false
+            },
+            None => false,
         };
         match result {
             Ok(value) => {
                 let mut response = Response::from_json(&value)?;
-                if published && is_tick {
+                if published && route == Route::Internal(InternalRoute::Tick) {
                     response.headers_mut().set(KV_PUBLISHED_HEADER, "1")?;
                 }
                 Ok(response)
@@ -243,55 +255,69 @@ impl NetworkAuthority {
     }
 }
 
-fn dispatch(service: &mut Service, env: &Env, ctx: &Context, bytes: &[u8]) -> Result<Value> {
-    let admin = matches!(
-        ctx.path.as_str(),
-        "/internal/fleet/prepare"
-            | "/internal/fleet/stage"
-            | "/internal/fleet/promote"
-            | "/v1/admin/nodes/manage"
-    );
-    if admin {
-        routes::verify_admin_csrf(&ctx.session, &ctx.csrf)?;
-        service.require_admin(&ctx.session)?;
+fn dispatch(
+    service: &mut Service,
+    env: &Env,
+    route: Route,
+    ctx: &Context,
+    bytes: &[u8],
+) -> Result<Value> {
+    match route {
+        Route::Maintenance(action) => maintenance::dispatch(service, env, action, ctx, bytes),
+        Route::Vantage(action) => dispatch_vantage(service, env, action, bytes),
+        Route::Admin(action) => dispatch_admin(service, env, action, ctx, bytes),
+        Route::Internal(action) => dispatch_internal(service, env, action, bytes),
     }
-    if ctx.path.starts_with("/v1/maintenance/") {
-        return maintenance::dispatch(service, env, ctx, bytes);
-    }
-    match ctx.path.as_str() {
-        "/v1/vantage/targets" => {
-            return Ok(json!(service.fleet_targets(
-                &agents(env)?,
-                &routes::parse(bytes)?,
-                origins()?
-            )?));
-        }
-        "/v1/vantage/cycle" => {
+}
+
+fn dispatch_vantage(
+    service: &mut Service,
+    env: &Env,
+    route: VantageRoute,
+    bytes: &[u8],
+) -> Result<Value> {
+    match route {
+        VantageRoute::Targets => Ok(json!(service.fleet_targets(
+            &agents(env)?,
+            &routes::parse(bytes)?,
+            origins()?
+        )?)),
+        VantageRoute::Cycle => {
             service.record_cycle(&agents(env)?, &routes::parse(bytes)?)?;
-            return Ok(json!({}));
+            Ok(json!({}))
         }
-        "/v1/vantage/poll" => {
+        VantageRoute::Poll => {
             let origins = origins()?;
-            return Ok(json!(service.claim(
+            Ok(json!(service.claim(
                 &agents(env)?,
                 &routes::parse(bytes)?,
                 origins
-            )?));
+            )?))
         }
-        "/v1/vantage/result" => {
+        VantageRoute::Result => {
             service.complete_probe(&agents(env)?, &routes::parse(bytes)?)?;
-            return Ok(json!({}));
+            Ok(json!({}))
         }
-        _ => {}
     }
-    let mut head = Publication::load_or_import(&mut service.store)?;
-    match ctx.path.as_str() {
-        "/internal/fleet/prepare" => Ok(json!(head.envelope)),
-        "/v1/admin/nodes/manage" => {
+}
+
+fn dispatch_admin(
+    service: &mut Service,
+    env: &Env,
+    route: AdminRoute,
+    ctx: &Context,
+    bytes: &[u8],
+) -> Result<Value> {
+    routes::verify_admin_csrf(&ctx.session, &ctx.csrf)?;
+    service.require_admin(&ctx.session)?;
+    let head = Publication::load_or_import(&mut service.store)?;
+    match route {
+        AdminRoute::Prepare => Ok(json!(head.envelope)),
+        AdminRoute::Manage => {
             service.manage(&ctx.session, &routes::parse(bytes)?, &signer(env)?)?;
             Ok(json!({}))
         }
-        "/internal/fleet/stage" => {
+        AdminRoute::Stage => {
             let spec: Spec = routes::parse(bytes)?;
             anyhow::ensure!(
                 !agents(env)?.iter().any(|agent| agent.key == spec.node_key),
@@ -300,7 +326,7 @@ fn dispatch(service: &mut Service, env: &Env, ctx: &Context, bytes: &[u8]) -> Re
             let node = service.stage(&ctx.session, spec)?;
             Ok(json!(service.node_details(node)?))
         }
-        "/internal/fleet/promote" => {
+        AdminRoute::Promote => {
             #[derive(Deserialize)]
             struct Promotion {
                 command: crate::fleet::Promote,
@@ -319,15 +345,25 @@ fn dispatch(service: &mut Service, env: &Env, ctx: &Context, bytes: &[u8]) -> Re
             )?;
             Ok(json!({}))
         }
-        "/internal/fleet/tick" => tick(service, env, &mut head),
-        "/internal/fleet/mirrors" => {
+    }
+}
+
+fn dispatch_internal(
+    service: &mut Service,
+    env: &Env,
+    route: InternalRoute,
+    bytes: &[u8],
+) -> Result<Value> {
+    let mut head = Publication::load_or_import(&mut service.store)?;
+    match route {
+        InternalRoute::Tick => tick(service, env, &mut head),
+        InternalRoute::Mirrors => {
             let check: MirrorCheck = routes::parse(bytes)?;
             if publication::digest(&head.envelope)? == check.digest {
                 save(&mut service.store, MIRRORS, &check)?;
             }
             Ok(json!({}))
         }
-        _ => Err(Fault::Invalid.into()),
     }
 }
 
