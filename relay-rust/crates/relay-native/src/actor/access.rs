@@ -2,8 +2,42 @@ use super::{Actor, Environment, Persistence};
 use anyhow::{Result, anyhow};
 use windshare_relay_core::{
     access::{Attribution, RegistrationDecision, RegistrationRequest},
+    clock::UnixMillis,
+    error_frame::ErrorFrame,
+    ingress::FrameKind,
+    lifecycle::ConnectionRef,
     share::Input,
 };
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum RevocationReason {
+    AccessPolicy,
+    PublicDailyBudgetExhausted,
+}
+
+impl RevocationReason {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::AccessPolicy => "access_policy",
+            Self::PublicDailyBudgetExhausted => "public_daily_budget_exhausted",
+        }
+    }
+
+    const fn error_frame(self) -> ErrorFrame {
+        match self {
+            Self::AccessPolicy => ErrorFrame::AccessDenied,
+            Self::PublicDailyBudgetExhausted => {
+                ErrorFrame::AccessUnavailable(crate::node::SERVICE_RETRY_AFTER)
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct ResidentRevocation {
+    attribution: Attribution,
+    reason: RevocationReason,
+}
 
 impl<S: Persistence, E: Environment> Actor<S, E> {
     pub(super) fn attribution(&self) -> Option<Attribution> {
@@ -59,6 +93,24 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
         decision
     }
 
+    pub(super) fn resident_revocation(&self) -> Option<ResidentRevocation> {
+        // Fresh registration resolves the bearer before live policy can revoke a share.
+        let attribution = self.attribution()?;
+        if !self.node.access.allowed(self.identity.share, attribution) {
+            Some(ResidentRevocation {
+                attribution,
+                reason: RevocationReason::AccessPolicy,
+            })
+        } else if self.node.public_budget_refuses_attribution(attribution) {
+            Some(ResidentRevocation {
+                attribution,
+                reason: RevocationReason::PublicDailyBudgetExhausted,
+            })
+        } else {
+            None
+        }
+    }
+
     // Every policy or public-budget revocation bumps `access_changes`, so the
     // steady-state frame path only performs a lock-free version check.
     pub(super) fn enforce_access_if_changed(&mut self) -> Result<()> {
@@ -70,23 +122,50 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
     }
 
     pub(super) fn enforce_access(&mut self) -> Result<()> {
-        // Fresh registration resolves the bearer before live policy can revoke a share.
-        let Some(attribution) = self.attribution() else {
+        let Some(revocation) = self.resident_revocation() else {
             return Ok(());
         };
-        let revoked_by_policy = !self.node.access.allowed(self.identity.share, attribution);
-        let revoked_by_budget = self.node.public_budget_refuses_attribution(attribution);
-        if !revoked_by_policy && !revoked_by_budget {
-            return Ok(());
+        self.disconnect_revoked_ports(revocation)
+    }
+
+    pub(super) fn refuse_control_access(
+        &mut self,
+        connection: ConnectionRef,
+        kind: FrameKind,
+        revocation: ResidentRevocation,
+        now: UnixMillis,
+    ) -> Result<()> {
+        let error = revocation.reason.error_frame();
+        tracing::warn!(
+            event = "share_control_access_refused",
+            share = ?self.identity.share,
+            ?connection,
+            ?kind,
+            attribution = ?revocation.attribution,
+            reason = revocation.reason.as_str(),
+            ?error
+        );
+        if let Some(port) = self.ports.remove(&connection)
+            && port.control(error.encode().to_vec()).is_ok()
+        {
+            port.finish();
         }
+        let step = self.relay.handle(Input::Disconnected(connection), now);
+        self.outputs(step)?;
+        // Defense in depth: ensure no active sibling connection survives once
+        // control admission observes a revoked share.
+        self.disconnect_revoked_ports(revocation)
+    }
+
+    fn disconnect_revoked_ports(&mut self, revocation: ResidentRevocation) -> Result<()> {
         let connections: Vec<_> = self.ports.keys().copied().collect();
         if !connections.is_empty() {
-            let reason = if revoked_by_policy {
-                "access_policy"
-            } else {
-                "public_daily_budget_exhausted"
-            };
-            tracing::warn!(event = "share_access_revoked", share = ?self.identity.share, ?attribution, reason);
+            tracing::warn!(
+                event = "share_access_revoked",
+                share = ?self.identity.share,
+                attribution = ?revocation.attribution,
+                reason = revocation.reason.as_str()
+            );
         }
         for connection in connections {
             self.ports.remove(&connection);

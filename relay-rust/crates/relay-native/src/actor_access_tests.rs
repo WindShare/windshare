@@ -19,11 +19,12 @@ use tokio::{sync::mpsc, time::timeout};
 use windshare_relay_access::{
     Credential, CredentialState, Digest,
     entitlement::{DAY_SECONDS, ENTITLEMENT_LIFETIME, Entitlement},
+    restrictions::{Restriction, Restrictions},
     ticket::Ticket,
     trust::Generation as SigningGeneration,
     usage::NodePolicy,
 };
-use windshare_relay_core::error_frame::ErrorFrame;
+use windshare_relay_core::{challenge::ChallengeSeed, error_frame::ErrorFrame};
 
 const OWNER_KEY: &str = "test-owner-key";
 const SERVICE_KEY: &str = "test-local-service-key";
@@ -298,4 +299,426 @@ async fn public_daily_budget_exhaustion_refuses_new_public_registrations_and_dis
         })
         .await
     );
+}
+
+const RESUME_HANDSHAKE_BUDGET_MS: u64 = 5_000;
+const ACCOUNT_ID: [u8; 16] = [3; 16];
+const CREDENTIAL_ID: [u8; 16] = [4; 16];
+
+fn resume_now(fixture: &Fixture) -> u64 {
+    fixture.0["resumeExpiresAt"]
+        .as_str()
+        .unwrap()
+        .parse::<u64>()
+        .unwrap()
+        * 1000
+        - RESUME_HANDSHAKE_BUDGET_MS
+        - 1
+}
+
+fn resume_seed(fixture: &Fixture) -> ChallengeSeed {
+    ChallengeSeed::new(
+        fixture.bytes("resumeChallengeIdB64").try_into().unwrap(),
+        fixture.bytes("resumeChallengeNonceB64").try_into().unwrap(),
+    )
+    .unwrap()
+}
+
+struct AccessHarness {
+    tx: mpsc::Sender<Event>,
+    node: Runtime,
+    now: Arc<AtomicU64>,
+}
+
+async fn with_access_actor(
+    node: Runtime,
+    store: Database,
+    fixture: &Fixture,
+    exercise: impl AsyncFnOnce(&AccessHarness),
+) {
+    let identity = fixture.identity();
+    let generation = Generation::new(identity, store.clone());
+    let now = Arc::new(AtomicU64::new(fixture.now(false).0));
+    let environment = Frozen {
+        now: Arc::clone(&now),
+        seeds: Arc::new(Mutex::new(VecDeque::from([
+            fixture.seed(false),
+            resume_seed(fixture),
+        ]))),
+    };
+    let (tx, inbox) = mpsc::channel(16);
+    let actor = tokio::spawn(generation.track(Actor::start(
+        store.clone(),
+        environment,
+        inbox,
+        Arc::new(AtomicBool::new(false)),
+        generation.clone(),
+        Recovery::vacant(&store),
+        node.clone(),
+    )));
+    let harness = AccessHarness { tx, node, now };
+    exercise(&harness).await;
+    drop(harness);
+    timeout(TEST_BUDGET, actor).await.unwrap().unwrap().unwrap();
+}
+
+impl AccessHarness {
+    async fn connect(&self, id: u64, bearer: Option<&str>, fixture: &Fixture) -> Writer {
+        let admission = socket_admission();
+        if let Some(bearer) = bearer {
+            let mut bearer = Bearer::new(bearer);
+            self.node.access.admission_priority(
+                fixture.identity().share,
+                Some(&mut bearer),
+                fixture.now(false).0 / 1000,
+            );
+            admission.set_bearer(bearer);
+        }
+        let (port, writer, _) = connection::channel(reference(id), self.node.clone());
+        self.tx
+            .send(Event::Connected(
+                reference(id),
+                Box::new(port.with_admission(&admission)),
+            ))
+            .await
+            .unwrap();
+        writer
+    }
+
+    async fn send(&self, id: u64, frame: Vec<u8>) {
+        self.tx
+            .send(Event::Control(reference(id), frame))
+            .await
+            .unwrap();
+    }
+
+    async fn publish(&self, id: u64, bearer: Option<&str>, fixture: &Fixture) -> Writer {
+        let mut writer = self.connect(id, bearer, fixture).await;
+        self.send(id, fixture.bytes("registerInitB64")).await;
+        let challenge = read(&mut writer).await;
+        assert_eq!(&challenge[..4], b"WS2Q");
+        self.send(id, fixture.bytes("registerProofB64")).await;
+        self.send(id, fixture.bytes("descriptorUploadB64")).await;
+        assert_eq!(read(&mut writer).await, fixture.bytes("registeredB64"));
+        writer
+    }
+
+    async fn start_resume(&self, id: u64, bearer: Option<&str>, fixture: &Fixture) -> Writer {
+        self.now
+            .store(resume_now(fixture), std::sync::atomic::Ordering::Release);
+        let writer = self.connect(id, bearer, fixture).await;
+        self.send(id, fixture.bytes("resumeInitB64")).await;
+        self.send(id, fixture.bytes("resumeCredentialB64")).await;
+        writer
+    }
+
+    async fn send_join(&self, id: u64, fixture: &Fixture) -> Writer {
+        let writer = self.connect(id, None, fixture).await;
+        self.send(id, fixture.bytes("joinB64")).await;
+        writer
+    }
+}
+
+async fn assert_closed(writer: &mut Writer) {
+    assert_eq!(timeout(TEST_BUDGET, writer.recv()).await.unwrap(), None);
+}
+
+async fn assert_refused(writer: &mut Writer, expected: ErrorFrame) {
+    assert_eq!(read(writer).await, expected.encode());
+    assert_closed(writer).await;
+}
+
+#[derive(Clone, Copy)]
+enum PolicyRevocation {
+    ShareBan,
+    AccountBan,
+    CredentialRevocation,
+    LocalServiceKeyRevocation,
+    PublicPause,
+}
+
+fn apply_policy_revocation(
+    kind: PolicyRevocation,
+    node: &Runtime,
+    generation: SigningGeneration,
+    policy: &Policy,
+    share: [u8; 12],
+    now: u64,
+) {
+    match kind {
+        PolicyRevocation::ShareBan => {
+            let mut restrictions = Restrictions {
+                version: 1,
+                ..Restrictions::default()
+            };
+            restrictions.insert(Restriction::Share(share));
+            assert!(node.access.restrict(generation.issuer, restrictions));
+        }
+        PolicyRevocation::AccountBan => {
+            let mut restrictions = Restrictions {
+                version: 1,
+                ..Restrictions::default()
+            };
+            restrictions.insert(Restriction::Account(ACCOUNT_ID));
+            assert!(node.access.restrict(generation.issuer, restrictions));
+        }
+        PolicyRevocation::CredentialRevocation => {
+            let mut restrictions = Restrictions {
+                version: 1,
+                ..Restrictions::default()
+            };
+            restrictions.insert(Restriction::Credential(CREDENTIAL_ID));
+            assert!(node.access.restrict(generation.issuer, restrictions));
+        }
+        PolicyRevocation::LocalServiceKeyRevocation => {
+            let mut updated = policy.clone();
+            for credential in &mut updated.credentials {
+                if credential.name == SERVICE_KEY {
+                    credential.state = CredentialState::Revoked { at: now };
+                }
+            }
+            node.access.configure(updated).unwrap();
+        }
+        PolicyRevocation::PublicPause => {
+            node.access
+                .apply_authority(AuthorityState {
+                    generation,
+                    policy: Some(NodePolicy {
+                        version: 1,
+                        enabled: false,
+                        anonymous: true,
+                    }),
+                })
+                .unwrap();
+        }
+    }
+}
+
+#[tokio::test]
+async fn revoked_resident_share_refuses_resume_and_join_after_access_change_is_consumed() {
+    use windshare_relay_core::lifecycle::Record;
+
+    let fixture = Fixture::new();
+    let now_seconds = fixture.now(false).0 / 1000;
+    let (generation, account_bearer, policy) = access_fixture(now_seconds);
+    let share_bytes = *fixture.identity().share.as_bytes();
+    let cases = [
+        (
+            "share_ban",
+            Some(account_bearer.as_str()),
+            PolicyRevocation::ShareBan,
+        ),
+        (
+            "account_ban",
+            Some(account_bearer.as_str()),
+            PolicyRevocation::AccountBan,
+        ),
+        (
+            "credential_revocation",
+            Some(account_bearer.as_str()),
+            PolicyRevocation::CredentialRevocation,
+        ),
+        (
+            "local_service_key_revocation",
+            Some(SERVICE_KEY),
+            PolicyRevocation::LocalServiceKeyRevocation,
+        ),
+        (
+            "public_pause_account",
+            Some(account_bearer.as_str()),
+            PolicyRevocation::PublicPause,
+        ),
+        (
+            "public_pause_anonymous",
+            None,
+            PolicyRevocation::PublicPause,
+        ),
+    ];
+
+    for (case, bearer, revocation) in cases {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Database::open(
+            &directory.path().join("authority.sqlite"),
+            fixture.identity().relay,
+        )
+        .unwrap();
+        let node = Runtime::default();
+        node.access.configure(policy.clone()).unwrap();
+        node.access.set_controller(Some(generation.issuer));
+
+        with_access_actor(node.clone(), store.clone(), &fixture, async |harness| {
+            let mut sender = harness.publish(1, bearer, &fixture).await;
+            apply_policy_revocation(
+                revocation,
+                &node,
+                generation,
+                &policy,
+                share_bytes,
+                now_seconds,
+            );
+            assert_closed(&mut sender).await;
+
+            let mut resumed = harness.start_resume(2, bearer, &fixture).await;
+            assert_refused(&mut resumed, ErrorFrame::AccessDenied).await;
+
+            let mut joined = harness.send_join(3, &fixture).await;
+            assert_refused(&mut joined, ErrorFrame::AccessDenied).await;
+        })
+        .await;
+
+        assert!(
+            matches!(
+                store
+                    .load(fixture.identity().share)
+                    .unwrap()
+                    .map(|stored| stored.record()),
+                Some(Record::Grace(_))
+            ),
+            "{case}: revoked share must remain in Grace rather than resurrecting"
+        );
+    }
+}
+
+#[tokio::test]
+async fn owner_share_keeps_resume_and_join_while_public_relay_is_paused() {
+    let fixture = Fixture::new();
+    let now_seconds = fixture.now(false).0 / 1000;
+    let (generation, _account_bearer, policy) = access_fixture(now_seconds);
+    let directory = tempfile::tempdir().unwrap();
+    let store = Database::open(
+        &directory.path().join("authority.sqlite"),
+        fixture.identity().relay,
+    )
+    .unwrap();
+    let owner_node = Runtime::default();
+    owner_node.access.configure(policy.clone()).unwrap();
+    owner_node.access.set_controller(Some(generation.issuer));
+    apply_policy_revocation(
+        PolicyRevocation::PublicPause,
+        &owner_node,
+        generation,
+        &policy,
+        *fixture.identity().share.as_bytes(),
+        now_seconds,
+    );
+
+    with_access_actor(owner_node, store, &fixture, async |harness| {
+        let _sender = harness.publish(1, Some(OWNER_KEY), &fixture).await;
+        harness
+            .tx
+            .send(Event::Disconnected(reference(1)))
+            .await
+            .unwrap();
+        let mut resumed = harness.start_resume(2, Some(OWNER_KEY), &fixture).await;
+        assert_eq!(&read(&mut resumed).await[..4], b"WS2Q");
+        harness.send(2, fixture.bytes("resumeProofB64")).await;
+        assert_eq!(read(&mut resumed).await, fixture.bytes("registeredB64"));
+        let mut joined = harness.send_join(3, &fixture).await;
+        assert_eq!(&read(&mut joined).await[..4], b"WS2D");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn restarted_actor_refuses_resume_and_join_for_previously_banned_share() {
+    let fixture = Fixture::new();
+    let now_seconds = fixture.now(false).0 / 1000;
+    let (generation, account_bearer, policy) = access_fixture(now_seconds);
+    let directory = tempfile::tempdir().unwrap();
+    let store = Database::open(
+        &directory.path().join("authority.sqlite"),
+        fixture.identity().relay,
+    )
+    .unwrap();
+    let node = Runtime::default();
+    node.access.configure(policy.clone()).unwrap();
+    node.access.set_controller(Some(generation.issuer));
+
+    with_access_actor(node.clone(), store.clone(), &fixture, async |first| {
+        let _sender = first
+            .publish(1, Some(account_bearer.as_str()), &fixture)
+            .await;
+    })
+    .await;
+
+    apply_policy_revocation(
+        PolicyRevocation::ShareBan,
+        &node,
+        generation,
+        &policy,
+        *fixture.identity().share.as_bytes(),
+        now_seconds,
+    );
+
+    // Fresh actor consumes `access_changes` on startup with no ports attached.
+    with_access_actor(node, store, &fixture, async |restarted| {
+        let mut resumed = restarted
+            .start_resume(2, Some(account_bearer.as_str()), &fixture)
+            .await;
+        assert_refused(&mut resumed, ErrorFrame::AccessDenied).await;
+        let mut joined = restarted.send_join(3, &fixture).await;
+        assert_refused(&mut joined, ErrorFrame::AccessDenied).await;
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn public_daily_budget_exhaustion_refuses_resume_and_join_with_retry_after() {
+    use crate::node::{ContributionLimits, Settings};
+    use windshare_relay_core::error_frame::RetryAfter;
+
+    const BUDGET_RETRY_MS: u32 = 30_000;
+    let fixture = Fixture::new();
+    let (_generation, account_bearer, policy) = access_fixture(fixture.now(false).0 / 1000);
+    let base_settings = Settings {
+        access: policy,
+        contribution: ContributionLimits {
+            daily_bytes: Some(1024),
+            ..Default::default()
+        },
+        ..Settings::default()
+    };
+    let exhausted_settings = Settings {
+        contribution: ContributionLimits {
+            daily_bytes: Some(0),
+            ..Default::default()
+        },
+        ..base_settings.clone()
+    };
+    let wall_now = i64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs(),
+    )
+    .unwrap();
+    let expected = ErrorFrame::AccessUnavailable(RetryAfter::from_millis(BUDGET_RETRY_MS).unwrap());
+
+    for bearer in [None, Some(account_bearer.as_str())] {
+        let directory = tempfile::tempdir().unwrap();
+        let node_store = Database::open(
+            &directory.path().join("node.sqlite"),
+            fixture.identity().relay,
+        )
+        .unwrap();
+        let share_store = Database::open(
+            &directory.path().join("authority.sqlite"),
+            fixture.identity().relay,
+        )
+        .unwrap();
+        let node = Runtime::default();
+        node.configure(base_settings.clone(), node_store).unwrap();
+
+        with_access_actor(node.clone(), share_store, &fixture, async |harness| {
+            let mut sender = harness.publish(1, bearer, &fixture).await;
+            node.update(exhausted_settings.clone(), wall_now).unwrap();
+            assert_closed(&mut sender).await;
+
+            let mut resumed = harness.start_resume(2, bearer, &fixture).await;
+            assert_refused(&mut resumed, expected).await;
+            let mut joined = harness.send_join(3, &fixture).await;
+            assert_refused(&mut joined, expected).await;
+        })
+        .await;
+    }
 }

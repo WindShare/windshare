@@ -1,7 +1,7 @@
 use super::{Actor, Environment, Event, Persistence};
 use anyhow::{Context, Result};
 use windshare_relay_core::{
-    ingress::Control,
+    ingress::{Control, FrameKind},
     lifecycle::ConnectionRef,
     sessions::OpaqueHeader,
     share::{Input, Output, RelayStep},
@@ -26,7 +26,15 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
                         let decision = self.authorize(&request);
                         Input::Register(request.resolve(decision, now))
                     }
-                    Control::Ready(input) => input,
+                    Control::Ready(input) => {
+                        let kind = FrameKind::classify(&frame);
+                        if Self::requires_resident_access(kind)
+                            && let Some(revocation) = self.resident_revocation()
+                        {
+                            return self.refuse_control_access(connection, kind, revocation, now);
+                        }
+                        input
+                    }
                 };
                 let mut step = self.relay.handle(input, now);
                 self.disconnect_refused(connection, &mut step);
@@ -120,6 +128,22 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
                     .outputs,
             );
         }
+    }
+
+    // Steady-state transfer controls (`DeliveryConsumed`, `ConnectionProbe`,
+    // `SettlementAck`, `SessionAdmitted`) rely on the lock-free `access_changes`
+    // edge check. Handshake controls that establish or restore access to a
+    // resident share must re-check live policy because a prior revocation may
+    // already have been consumed while the share sat in Grace or after restart.
+    const fn requires_resident_access(kind: FrameKind) -> bool {
+        matches!(
+            kind,
+            FrameKind::RegisterInit
+                | FrameKind::ResumeCredential
+                | FrameKind::RegisterProof
+                | FrameKind::DescriptorUpload
+                | FrameKind::Join
+        )
     }
 
     pub(super) fn pump(&mut self, connection: ConnectionRef) -> Result<()> {
