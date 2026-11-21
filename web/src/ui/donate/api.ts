@@ -10,6 +10,13 @@ import type {
 const WALL_TIMEOUT_MS = 6_000
 const INTENT_TIMEOUT_MS = 10_000
 const INVALID_RESPONSE_ERROR_CODE = 'invalid_response'
+const RATE_LIMITED_STATUS = 429
+const RATE_LIMITED_ERROR_CODE = 'rate_limited'
+const INVALID_AMOUNT_ERROR_CODE = 'invalid_amount'
+const CRYPTO_UNAVAILABLE_ERROR_CODES: ReadonlySet<string> = new Set([
+  'crypto_checkout_paused',
+  'crypto_not_configured',
+])
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -121,6 +128,29 @@ export class DonateApiError extends Error {
     this.status = status
     this.code = code
   }
+}
+
+export type CryptoIntentErrorKind =
+  | 'unavailable'
+  | 'rate_limited'
+  | 'invalid_amount'
+  | 'failed'
+
+export function classifyCryptoIntentError(error: unknown): CryptoIntentErrorKind {
+  if (error instanceof DonateApiError) {
+    // Match explicit unavailable codes instead of status 503 so transient edge/proxy
+    // 503 responses still surface the retryable failure path.
+    if (error.code !== null && CRYPTO_UNAVAILABLE_ERROR_CODES.has(error.code)) {
+      return 'unavailable'
+    }
+    if (error.status === RATE_LIMITED_STATUS || error.code === RATE_LIMITED_ERROR_CODE) {
+      return 'rate_limited'
+    }
+    if (error.code === INVALID_AMOUNT_ERROR_CODE) {
+      return 'invalid_amount'
+    }
+  }
+  return 'failed'
 }
 
 async function readErrorCode(response: Response): Promise<string | null> {

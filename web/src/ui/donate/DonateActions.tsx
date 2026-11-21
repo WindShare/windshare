@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 
 import { PortalIcon } from '../portal/PortalIcon'
 import { usePreferences } from '../preferences/use-preferences'
 import { AfdianQrCode } from './AfdianQrCode'
-import { DonateApiError, createCryptoIntent } from './api'
+import { classifyCryptoIntentError, createCryptoIntent } from './api'
 import {
   AFDIAN_ORDER_URL,
   KOFI_PAGE_URL,
@@ -40,12 +40,16 @@ function resolveCryptoApiErrorMessage(
   error: unknown,
   t: ReturnType<typeof useDonateCopy>,
 ): string {
-  if (error instanceof DonateApiError) {
-    if (error.code === 'crypto_checkout_paused') return t.cryptoErrPaused
-    if (error.status === 429 || error.code === 'rate_limited') return t.cryptoErrRateLimited
-    if (error.code === 'invalid_amount') return t.cryptoErrInvalid
+  switch (classifyCryptoIntentError(error)) {
+    case 'unavailable':
+      return t.cryptoErrUnavailable
+    case 'rate_limited':
+      return t.cryptoErrRateLimited
+    case 'invalid_amount':
+      return t.cryptoErrInvalid
+    case 'failed':
+      return t.cryptoErrFailed
   }
-  return t.cryptoErrFailed
 }
 
 function resolveCryptoValidationError(

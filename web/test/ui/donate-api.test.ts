@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   DonateApiError,
+  classifyCryptoIntentError,
   createCryptoIntent,
   fetchDonationWall,
   parseCryptoIntentResponse,
@@ -260,5 +261,24 @@ describe('donate public wall response validation', () => {
       status: 502,
       code: null,
     })
+  })
+})
+
+describe('donate crypto intent error classification', () => {
+  it('classifies paused and unconfigured backend codes as unavailable without catching generic 503s', () => {
+    expect(classifyCryptoIntentError(new DonateApiError(503, 'crypto_checkout_paused'))).toBe('unavailable')
+    expect(classifyCryptoIntentError(new DonateApiError(503, 'crypto_not_configured'))).toBe('unavailable')
+
+    expect(classifyCryptoIntentError(new DonateApiError(503, null))).toBe('failed')
+    expect(classifyCryptoIntentError(new DonateApiError(503, 'edge_overloaded'))).toBe('failed')
+  })
+
+  it('classifies rate limit, invalid amount, upstream, and non-API errors', () => {
+    expect(classifyCryptoIntentError(new DonateApiError(429, null))).toBe('rate_limited')
+    expect(classifyCryptoIntentError(new DonateApiError(429, 'rate_limited'))).toBe('rate_limited')
+    expect(classifyCryptoIntentError(new DonateApiError(400, 'invalid_amount'))).toBe('invalid_amount')
+    expect(classifyCryptoIntentError(new DonateApiError(502, 'upstream_checkout_failed'))).toBe('failed')
+    expect(classifyCryptoIntentError(new TypeError('Failed to fetch'))).toBe('failed')
+    expect(classifyCryptoIntentError('unexpected')).toBe('failed')
   })
 })
