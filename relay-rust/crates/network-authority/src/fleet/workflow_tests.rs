@@ -84,7 +84,7 @@ fn importing_preserves_policies_alias_bindings_and_renews_only_once() {
         key: [9; 32],
         zone: Zone::Global,
         region: "prior".into(),
-        enabled: false,
+        admission: windshare_relay_access::usage::Admission::Disabled,
         anonymous: true,
         version: 19,
     };
@@ -93,7 +93,11 @@ fn importing_preserves_policies_alias_bindings_and_renews_only_once() {
     let imported: Node = load(&auth.store, &key("node", &prior.key))
         .unwrap()
         .unwrap();
-    assert!(!imported.enabled && imported.anonymous && imported.version == 19);
+    assert!(
+        imported.admission == windshare_relay_access::usage::Admission::Disabled
+            && imported.anonymous
+            && imported.version == 19
+    );
     assert_eq!(publication.revision().unwrap().serial, 4);
     let mut candidate: Spec = serde_json::from_value(spec("new", 7)).unwrap();
     candidate.alias = "retired".into();
@@ -101,6 +105,21 @@ fn importing_preserves_policies_alias_bindings_and_renews_only_once() {
     let now = auth.environment.now();
     assert!(publication.renew(&signer, now).unwrap());
     assert!(!publication.renew(&signer, now).unwrap());
+}
+
+fn assert_scoped_tickets(auth: &Authority<Memory, Clock>, tickets: &[String], node_key: &[u8; 32]) {
+    let now = auth.environment.now();
+    let mut trusted = TrustStore::default();
+    trusted.accept(auth.signing.generation, now).unwrap();
+    for (index, raw) in tickets.iter().enumerate() {
+        let ticket = Ticket::verify(&URL_SAFE_NO_PAD.decode(raw).unwrap(), &trusted, now).unwrap();
+        assert!(probe::permits(
+            ticket,
+            Some(node_key),
+            &[u8::try_from(index + 1).unwrap(); 12]
+        ));
+        assert!(!probe::permits(ticket, Some(&[10; 32]), &[1; 12]));
+    }
 }
 
 #[test]
@@ -119,11 +138,11 @@ fn a_verified_staging_node_requires_current_mirrors_before_publication() {
     let agents = [cn_agent(&probe_key)];
     let now = auth.environment.now();
     let shares = [[1u8; 12], [2u8; 12], [3u8; 12]];
-    let poll = |mirror: Option<String>, at| {
+    let poll = |at| {
         proof(
             &probe_key,
             b"windshare/vantage-poll/v1\0",
-            &json!({"at":at,"shares": shares, "mirror":mirror}),
+            &json!({"at":at,"shares": shares}),
         )
     };
     let origins = || {
@@ -133,23 +152,13 @@ fn a_verified_staging_node_requires_current_mirrors_before_publication() {
             "https://other.example".into(),
         ]
     };
-    let start = poll(None, now);
+    let start = poll(now);
     assert!(auth.claim(&[], &start, origins()).is_err());
     let work = auth.claim(&agents, &start, origins()).unwrap().unwrap();
     assert!(auth.claim(&agents, &start, origins()).is_err());
     assert_eq!(work.spec, candidate);
     assert_eq!(work.tickets.len(), shares.len());
-    let mut trusted = TrustStore::default();
-    trusted.accept(auth.signing.generation, now).unwrap();
-    for (index, raw) in work.tickets.iter().enumerate() {
-        let ticket = Ticket::verify(&URL_SAFE_NO_PAD.decode(raw).unwrap(), &trusted, now).unwrap();
-        assert!(probe::permits(
-            ticket,
-            Some(&node.key),
-            &[u8::try_from(index + 1).unwrap(); 12]
-        ));
-        assert!(!probe::permits(ticket, Some(&[10; 32]), &[1; 12]));
-    }
+    assert_scoped_tickets(&auth, &work.tickets, &node.key);
     let promote = |auth: &mut Authority<Memory, Clock>, observed: &Envelope, enrolled: &[Agent]| {
         auth.promote(
             &admin,
@@ -173,18 +182,9 @@ fn a_verified_staging_node_requires_current_mirrors_before_publication() {
     assert!(auth.complete_probe(&agents, &outcome).is_err());
     assert!(promote(&mut auth, &publication.envelope, &agents).is_err());
     auth.environment.now += 1;
-    assert!(
-        auth.claim(
-            &agents,
-            &poll(
-                Some(digest(&publication.envelope).unwrap()),
-                auth.environment.now
-            ),
-            origins()
-        )
-        .unwrap()
-        .is_none()
-    );
+    let at = auth.environment.now;
+    auth.record_cycle(&agents, &proof(&probe_key, b"windshare/fleet-cycle/v1\0",
+        &json!({"at":at, "cycle":at/300, "mirror":digest(&publication.envelope).unwrap(), "nodes":{}}))).unwrap();
     assert!(promote(&mut auth, &publication.envelope, &[]).is_err());
     promote(&mut auth, &publication.envelope, &agents).unwrap();
     let promoted = crate::fleet::publication::current(&auth.store).unwrap();
@@ -201,6 +201,28 @@ fn a_verified_staging_node_requires_current_mirrors_before_publication() {
             status: Status::Canary
         }
     ));
+    for action in [
+        crate::fleet::operations::Action::Disable { early_cutoff: true },
+        crate::fleet::operations::Action::Remove { early_cutoff: true },
+    ] {
+        auth.manage(
+            &admin,
+            &crate::fleet::operations::Manage {
+                node_key: candidate.node_key.clone(),
+                operation_id: work.operation_id.clone(),
+                action,
+            },
+            &signer,
+        )
+        .unwrap();
+    }
+    let mut rebind = candidate;
+    rebind.node_key = URL_SAFE_NO_PAD.encode([27; 32]);
+    rebind.relay = "https://replacement.example".into();
+    assert!(
+        matches!(auth.stage(&admin,rebind).unwrap_err().downcast_ref::<Fault>(),
+        Some(Fault::Conflict {reason}) if reason=="alias_bound")
+    );
 }
 #[test]
 fn draft_conflicts_and_withdrawal_are_scoped_to_one_operation() {
@@ -395,12 +417,20 @@ fn withdrawing_an_older_draft_releases_its_unpublished_alias_and_preserves_admis
 
 #[test]
 fn vantage_liveness_tracks_authority_receipt_time_separately_from_poll_replay_clock() {
-    use crate::fleet::vantage::{SILENT_SECONDS, mainland_current, silent};
+    use crate::fleet::{
+        monitoring::CYCLE_SECONDS,
+        vantage::{SILENT_SECONDS, mainland_current, silent},
+    };
 
     let mut auth = fixture();
+    let admin = auth
+        .initialize("init", "init", "operator", "reasonable password")
+        .unwrap();
     let (release, _, history) = directory();
     let publication = Publication::bootstrap(&mut auth.store, &release, &[&history]).unwrap();
     let expected = digest(&publication.envelope).unwrap();
+    let candidate: Spec = serde_json::from_value(spec("clock-check", 7)).unwrap();
+    auth.stage(&admin, candidate).unwrap();
     let slow_key = SigningKey::from_bytes(&[12; 32]);
     let fast_key = SigningKey::from_bytes(&[13; 32]);
     let slow_agent = Agent {
@@ -419,17 +449,30 @@ fn vantage_liveness_tracks_authority_receipt_time_separately_from_poll_replay_cl
         proof(
             key,
             b"windshare/vantage-poll/v1\0",
-            &json!({"at": at, "shares": shares, "mirror": expected}),
+            &json!({"at": at, "shares": shares}),
+        )
+    };
+    let cycle = |key: &SigningKey, at: u64, number: u64| {
+        proof(
+            key,
+            b"windshare/fleet-cycle/v1\0",
+            &json!({"at": at, "cycle": number, "mirror": expected, "nodes": {}}),
         )
     };
 
     let t0 = auth.environment.now();
+    let number = t0 / CYCLE_SECONDS;
     // Slow agent reports 80 s behind authority; fast agent reports 80 s ahead.
-    auth.claim(&agents, &poll(&slow_key, t0 - 80), Default::default())
+    auth.record_cycle(&agents, &cycle(&slow_key, t0 - 80, number))
         .unwrap();
-    auth.claim(&agents, &poll(&fast_key, t0 + 80), Default::default())
+    auth.record_cycle(&agents, &cycle(&fast_key, t0 + 80, number))
         .unwrap();
-    // Non-increasing client poll timestamp is still rejected against replay.
+    // Claiming a lease still rejects non-increasing client poll timestamps.
+    assert!(
+        auth.claim(&agents, &poll(&fast_key, t0 + 80), Default::default())
+            .unwrap()
+            .is_some()
+    );
     assert!(
         auth.claim(&agents, &poll(&fast_key, t0 + 80), Default::default())
             .is_err()
@@ -440,7 +483,7 @@ fn vantage_liveness_tracks_authority_receipt_time_separately_from_poll_replay_cl
     );
 
     // Near the end of the authority silence window, the slow agent is still live
-    // even though now - poll.at already exceeds SILENT_SECONDS.
+    // even though now - report.at already exceeds SILENT_SECONDS.
     let before_expiry = t0 + SILENT_SECONDS - 10;
     assert_eq!(
         silent(&auth.store, &agents, before_expiry).unwrap(),
@@ -457,3 +500,6 @@ fn vantage_liveness_tracks_authority_receipt_time_separately_from_poll_replay_cl
     );
     assert!(!mainland_current(&auth.store, &agents, &expected, after_expiry).unwrap());
 }
+
+#[path = "operations_tests.rs"]
+mod operations;

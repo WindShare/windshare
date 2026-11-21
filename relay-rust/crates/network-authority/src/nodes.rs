@@ -6,7 +6,7 @@ use anyhow::Result;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use windshare_relay_access::usage::Load;
+use windshare_relay_access::usage::{Admission, Load, NodePolicy, REPORT_INTERVAL_SECONDS};
 
 const NODE_PAGE_SIZE: usize = 1000;
 pub const NODE_LOAD_CHECKPOINT_SECONDS: u64 = 15 * 60;
@@ -25,20 +25,52 @@ pub struct Node {
     pub key: [u8; 32],
     pub zone: Zone,
     pub region: String,
-    pub enabled: bool,
+    #[serde(alias = "enabled", deserialize_with = "stored_admission")]
+    pub admission: Admission,
     pub anonymous: bool,
     #[serde(default)]
     pub version: u64,
 }
 
+fn stored_admission<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Admission, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Stored {
+        Current(Admission),
+        Legacy(bool),
+    }
+    Ok(match Stored::deserialize(d)? {
+        Stored::Current(admission) => admission,
+        Stored::Legacy(true) => Admission::Accepting,
+        Stored::Legacy(false) => Admission::Disabled,
+    })
+}
+
 impl Node {
+    pub(crate) const fn policy(&self) -> NodePolicy {
+        NodePolicy {
+            version: self.version,
+            admission: self.admission,
+            anonymous: self.anonymous,
+            probe_account: windshare_relay_access::probe::PROBE_ACCOUNT,
+        }
+    }
+
+    pub(crate) fn set_admission(&mut self, admission: Admission) -> Result<()> {
+        if self.admission != admission {
+            self.version = self.version.checked_add(1).ok_or(Fault::Invalid)?;
+            self.admission = admission;
+        }
+        Ok(())
+    }
+
     pub(super) fn enrolled(key: [u8; 32], zone: Zone, region: String) -> Self {
         Self {
             listing: None,
             key,
             zone,
             region,
-            enabled: true,
+            admission: Admission::Accepting,
             anonymous: zone == Zone::Global,
             version: 1,
         }
@@ -50,6 +82,7 @@ pub struct NodeDetails {
     #[serde(flatten)]
     pub node: Node,
     pub report: Option<NodeLoadReport>,
+    pub cutoff_ready: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -57,6 +90,28 @@ pub struct NodeLoadReport {
     pub created_at: u64,
     pub reported_at: Option<u64>,
     pub load: Load,
+}
+
+impl NodeDetails {
+    fn new(node: Node, report: Option<NodeLoadReport>, now: u64) -> Self {
+        let cutoff_ready = node.admission != Admission::Accepting
+            && report
+                .as_ref()
+                .is_some_and(|r| r.confirms(node.version, now) && r.load.resident_shares == 0);
+        Self {
+            node,
+            report,
+            cutoff_ready,
+        }
+    }
+}
+
+impl NodeLoadReport {
+    pub(crate) const fn confirms(&self, policy_version: u64, now: u64) -> bool {
+        policy_version > 0
+            && self.load.applied_policy_version == policy_version
+            && self.created_at.abs_diff(now) <= 2 * REPORT_INTERVAL_SECONDS
+    }
 }
 
 pub fn merge_load_report(
@@ -91,7 +146,7 @@ pub struct NodePage {
     deny_unknown_fields
 )]
 pub enum NodePolicyChange {
-    PublicRelay(bool),
+    Admission(Admission),
     AnonymousSharing(bool),
 }
 
@@ -128,7 +183,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
                     .map(|value| serde_json::from_str::<NodeLoadReport>(value))
                     .transpose()?;
                 let report = merge_load_report(persisted, self.live_loads.get(&node.key));
-                Ok(NodeDetails { node, report })
+                Ok(NodeDetails::new(node, report, self.environment.now()))
             })
             .collect::<Result<Vec<_>>>()?;
         let next_cursor = entries
@@ -160,7 +215,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
     pub(crate) fn node_details(&self, node: Node) -> Result<NodeDetails> {
         let persisted = load::<NodeLoadReport>(&self.store, &key("node-load", &node.key))?;
         let report = merge_load_report(persisted, self.live_loads.get(&node.key));
-        Ok(NodeDetails { node, report })
+        Ok(NodeDetails::new(node, report, self.environment.now()))
     }
 
     /// # Errors
@@ -174,16 +229,18 @@ impl<R: Store, E: Environment> Authority<R, E> {
         self.require_admin(session)?;
         let record = key("node", public_key);
         let mut node: Node = load(&self.store, &record)?.ok_or(Fault::Invalid)?;
-        let (field, value) = match change {
-            NodePolicyChange::PublicRelay(value) => (&mut node.enabled, value),
-            NodePolicyChange::AnonymousSharing(value) => (&mut node.anonymous, value),
-        };
-        // A lost response can be retried without publishing a fictitious new revision.
-        if *field != value {
-            *field = value;
-            node.version = node.version.checked_add(1).ok_or(Fault::Invalid)?;
-            save(&mut self.store, &record, &node)?;
+        match change {
+            NodePolicyChange::Admission(admission) => {
+                anyhow::ensure!(node.listing.is_none(), Fault::Invalid);
+                node.set_admission(admission)?;
+            }
+            NodePolicyChange::AnonymousSharing(value) if node.anonymous != value => {
+                node.anonymous = value;
+                node.version = node.version.checked_add(1).ok_or(Fault::Invalid)?;
+            }
+            NodePolicyChange::AnonymousSharing(_) => return Ok(node),
         }
+        save(&mut self.store, &record, &node)?;
         tracing::info!(
             event = "node_policy_saved",
             node = record,

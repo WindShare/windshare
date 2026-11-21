@@ -10,6 +10,9 @@ use windshare_relay_core::{
     share::Input,
 };
 
+pub(super) const MAINTENANCE_RETRY: windshare_relay_core::error_frame::RetryAfter =
+    windshare_relay_core::error_frame::RetryAfter::from_millis(1000).expect("one second retry");
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum RevocationReason {
     AccessPolicy,
@@ -120,7 +123,16 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
             } => {
                 // Stop non-owner registrations before reserving residency or writing SQLite
                 // when the daily public contribution budget is already spent.
-                if self.node.public_budget_refuses_attribution(attribution) {
+                if self.node.maintenance.get().is_some_and(|gate| {
+                    gate.admit(
+                        self.node
+                            .access
+                            .is_probe(self.identity.share, Some(attribution)),
+                    )
+                    .is_err()
+                }) {
+                    Authorization::Refused(Refusal::unavailable(RefusalReason::NodeDraining))
+                } else if self.node.public_budget_refuses_attribution(attribution) {
                     Authorization::Refused(Refusal {
                         decision: RegistrationDecision::Unavailable(
                             crate::node::SERVICE_RETRY_AFTER,

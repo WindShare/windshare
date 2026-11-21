@@ -45,23 +45,7 @@ func exportDirectory(args []string) error {
 	if err != nil {
 		return err
 	}
-	var signed []byte
-	if *source != "" {
-		signed, err = readBounded(*source, nodedirectory.MaximumEnvelopeBytes)
-	} else {
-		var authority struct {
-			URL string `json:"url"`
-		}
-		if len(manifest.Authority) > 0 {
-			if err := json.Unmarshal(manifest.Authority, &authority); err != nil {
-				return err
-			}
-		}
-		if authority.URL == "" {
-			return errors.New("release has no public authority")
-		}
-		signed, err = fetchMirror(authority.URL)
-	}
+	signed, err := exportSource(*source, manifest.Authority)
 	if err != nil {
 		return err
 	}
@@ -149,4 +133,22 @@ func validateHistory(directory string, next nodedirectory.Snapshot, manifest rel
 	}
 	_, err = nodedirectory.RetainAliases(aliases, next)
 	return err
+}
+
+func exportSource(path string, rawAuthority json.RawMessage) ([]byte, error) {
+	if path != "" {
+		return readBounded(path, nodedirectory.MaximumEnvelopeBytes)
+	}
+	var authority struct {
+		URL string `json:"url"`
+	}
+	if len(rawAuthority) > 0 {
+		if err := json.Unmarshal(rawAuthority, &authority); err != nil {
+			return nil, err
+		}
+	}
+	if authority.URL == "" {
+		return nil, errors.New("release has no public authority")
+	}
+	return fetchMirror(authority.URL)
 }

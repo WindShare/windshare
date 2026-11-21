@@ -147,6 +147,8 @@ fn usage_batch() -> Batch {
         shares: vec![],
         load: Load {
             relay_budget: None,
+            applied_policy_version: 0,
+            resident_shares: 0,
             active_sessions: 0,
             wire_bytes: 17,
             forwarded_bytes: 17,
@@ -347,7 +349,8 @@ impl FakeAuthority {
                 restriction_version: self.restriction_version,
                 policy: NodePolicy {
                     version: 1,
-                    enabled: true,
+                    admission: windshare_relay_access::usage::Admission::Accepting,
+                    probe_account: windshare_relay_access::probe::PROBE_ACCOUNT,
                     anonymous: true,
                 },
             }

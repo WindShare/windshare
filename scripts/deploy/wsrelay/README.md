@@ -41,22 +41,31 @@ The builder uses the same Dockerfile, writes the binary and provenance manifest
 to `dist/deploy/wsrelay/`, and records changes in the Rust workspace and builder.
 Add `-RunTests` to run the local `make rust` gate first.
 
-For an already configured systemd host, install the helper once:
+## Official node upgrades
+
+Provision the system user, unit and release symlink using the [official host layout](../../../deploy/network/operations.md#provisioning). Both releases must support the persistent maintenance fence. Install the first fence-capable release during a coordinated node and authority cutover. Keep the node identity and SQLite database in `/var/lib/windshare-network`.
+
+Install the root-owned helper once on the node host.
 
 ```sh
 sudo install -o root -g root -m 0755 scripts/deploy/wsrelay/install.sh \
   /usr/local/sbin/windshare-install-wsrelay
 ```
 
-Configure `windshare-relay.service` to run `/usr/local/bin/wsrelay` with the Rust
-`--config /etc/windshare-relay/node.json`, listening on `127.0.0.1:8484`. Upload `wsrelay-linux-amd64`, then:
+On the operator runner, pin the node's SSH host key and configure its alias for batch access to that helper through `sudo -n`. Keep SSH credentials on the runner. Give the authority and runner the same dedicated `FLEET_MAINTENANCE_TOKEN` (32 to 128 random base64url characters). The token authorizes drain, status, scoped synthetic tickets and release.
 
 ```sh
-sudo /usr/local/sbin/windshare-install-wsrelay \
-  --artifact /tmp/wsrelay-linux-amd64 \
-  --sha256 "<manifest sha256>" --revision "<manifest revision>"
+go build -o network-upgrade ./cmd/network-upgrade
+./network-upgrade -host "$SSH_ALIAS" -node-key "$NODE_KEY" \
+  -artifact ./wsrelay-linux-amd64 -revision "$GIT_COMMIT"
 ```
 
-The helper verifies the executable, restarts the service, checks relay health and
-restores the previous binary on failure. It preserves service configuration and
-storage. The deployment record is `/etc/windshare-relay/deployment.env`.
+The runner stages and checks the candidate as the service account while the old release serves users. It then waits up to five minutes for the signed drain confirmation and an idle transfer window. Exit 75 defers a busy node. A successful upgrade exits zero. A failed candidate exits nonzero and logs whether the previous release was verified. Both switches use the installed key, endpoint and database. The local fence rejects ordinary joins with a one-second retry.
+
+If a runner stops with a hold outstanding, use its logged operation ID. Recovery checks the selected release directly, attempts the recorded previous binary if needed, and releases the matching hold after verification.
+
+```sh
+./network-upgrade -host "$SSH_ALIAS" -node-key "$NODE_KEY" -recover-operation "$OPERATION_ID"
+```
+
+When rollback cannot be verified, the fence stays in place. Inspect the journal for `windshare-network.service` and the root-owned release paths in `/opt/windshare-network/operations/$OPERATION_ID/`, repair the host, then repeat recovery.

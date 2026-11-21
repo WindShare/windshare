@@ -40,46 +40,26 @@ func check(ctx context.Context, client *http.Client, work Work, shares [OriginCo
 			return fmt.Errorf("unknown node role %q", role)
 		}
 	}
-	base, err := url.Parse(node.Relay)
-	if err != nil || base.Scheme != "https" || base.Hostname() == "" || base.User != nil || base.RawQuery != "" || base.Fragment != "" || base.Path != "" {
-		return errors.New("invalid enrolled relay origin")
-	}
-	key, err := serviceauthority.PublicKey(node.NodeKey)
+	origin, err := relayOrigin(node.Relay)
 	if err != nil {
 		return err
 	}
-	health, err := Fetch(ctx, client, node.Relay+"/healthz", 128)
-	if err != nil {
-		return fmt.Errorf("health: %w", err)
-	}
-	if strings.TrimSpace(string(health)) != "ok" {
-		return errors.New("node health check failed")
-	}
-	body, err := Fetch(ctx, client, node.Relay+"/.well-known/windshare", serviceauthority.MaximumDescriptorBytes)
+	node.Relay = origin.String()
+	descriptor, err := descriptorAt(ctx, client, node)
 	if err != nil {
 		return err
-	}
-	descriptor, err := serviceauthority.VerifyDescriptor(body, key, time.Now())
-	if err != nil {
-		return fmt.Errorf("descriptor: %w", err)
-	}
-	if descriptor.RelayBaseURL() != node.Relay {
-		return errors.New("node descriptor relay mismatch")
 	}
 	if node.HasRole("stun") {
 		if !descriptor.Services.STUN || len(node.STUN) == 0 {
 			return errors.New("STUN unavailable")
 		}
-		for _, raw := range node.STUN {
-			address := strings.TrimPrefix(raw, "stun:")
-			host, _, err := net.SplitHostPort(address)
-			canonical, normErr := networkendpoint.NormalizeSTUN(raw)
-			if err != nil || normErr != nil || canonical != raw || host != base.Hostname() || !slices.Contains(descriptor.STUN, raw) {
+		for _, address := range node.STUN {
+			if !slices.Contains(descriptor.STUN, address) {
 				return errors.New("STUN endpoint mismatch")
 			}
-			if err := bind(ctx, address); err != nil {
-				return fmt.Errorf("STUN binding: %w", err)
-			}
+		}
+		if err := checkSTUN(ctx, origin.Hostname(), node.STUN, bind); err != nil {
+			return err
 		}
 	}
 	if node.HasRole("relay") {
@@ -90,6 +70,60 @@ func check(ctx context.Context, client *http.Client, work Work, shares [OriginCo
 			if err := shares[i].exchange(ctx, client, node.Relay, origin, work.Tickets[i]); err != nil {
 				return fmt.Errorf("relay (%s): %w", origin, err)
 			}
+		}
+	}
+	return nil
+}
+
+func relayOrigin(raw string) (*url.URL, error) {
+	base, err := url.Parse(raw)
+	if err != nil || base.Scheme != "https" || base.Hostname() == "" || base.User != nil || base.ForceQuery || base.RawQuery != "" || base.Fragment != "" || (base.EscapedPath() != "" && base.EscapedPath() != "/") {
+		return nil, errors.New("invalid enrolled relay origin")
+	}
+	base.Path = ""
+	return base, nil
+}
+
+func descriptorAt(ctx context.Context, client *http.Client, node nodedirectory.Node) (serviceauthority.Descriptor, error) {
+	var empty serviceauthority.Descriptor
+	key, err := serviceauthority.PublicKey(node.NodeKey)
+	if err != nil {
+		return empty, err
+	}
+	health, err := Fetch(ctx, client, node.Relay+"/healthz", 128)
+	if err != nil {
+		return empty, fmt.Errorf("health: %w", err)
+	}
+	if strings.TrimSpace(string(health)) != "ok" {
+		return empty, errors.New("node health check failed")
+	}
+	body, err := Fetch(ctx, client, node.Relay+"/.well-known/windshare", serviceauthority.MaximumDescriptorBytes)
+	if err != nil {
+		return empty, err
+	}
+	descriptor, err := serviceauthority.VerifyDescriptor(body, key, time.Now())
+	if err != nil {
+		return empty, fmt.Errorf("descriptor: %w", err)
+	}
+	if descriptor.RelayBaseURL() != node.Relay {
+		return empty, errors.New("node descriptor relay mismatch")
+	}
+	return descriptor, nil
+}
+
+func checkSTUN(ctx context.Context, hostname string, endpoints []string, bind func(context.Context, string) error) error {
+	if len(endpoints) == 0 {
+		return errors.New("STUN unavailable")
+	}
+	for _, raw := range endpoints {
+		address := strings.TrimPrefix(raw, "stun:")
+		host, _, err := net.SplitHostPort(address)
+		canonical, normErr := networkendpoint.NormalizeSTUN(raw)
+		if err != nil || normErr != nil || canonical != raw || host != hostname {
+			return errors.New("STUN endpoint mismatch")
+		}
+		if err := bind(ctx, address); err != nil {
+			return fmt.Errorf("STUN binding: %w", err)
 		}
 	}
 	return nil

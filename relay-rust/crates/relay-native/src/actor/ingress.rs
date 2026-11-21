@@ -29,6 +29,34 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
                     Control::Ready(input) => {
                         let kind = FrameKind::classify(&frame);
                         if Self::requires_resident_access(kind)
+                            && let Some(gate) = self.node.maintenance.get()
+                        {
+                            let probe = self
+                                .node
+                                .access
+                                .is_probe(self.identity.share, self.attribution());
+                            match gate.admit(probe) {
+                                Ok(lease) if kind == FrameKind::Join => {
+                                    self.ports
+                                        .get_mut(&connection)
+                                        .expect("connected port")
+                                        .join_lease = Some(lease);
+                                }
+                                Ok(_) => {}
+                                Err(_) => {
+                                    let error = windshare_relay_core::error_frame::ErrorFrame::AccessUnavailable(super::access::MAINTENANCE_RETRY);
+                                    if let Some(port) = self.ports.remove(&connection)
+                                        && port.control(error.encode().to_vec()).is_ok()
+                                    {
+                                        port.finish();
+                                    }
+                                    let step =
+                                        self.relay.handle(Input::Disconnected(connection), now);
+                                    return self.outputs(step);
+                                }
+                            }
+                        }
+                        if Self::requires_resident_access(kind)
                             && let Some(revocation) = self.resident_revocation()
                         {
                             return self.refuse_control_access(connection, kind, revocation, now);

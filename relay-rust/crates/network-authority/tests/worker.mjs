@@ -7,7 +7,8 @@ import test from 'node:test';
 import { fixture } from './local-worker.mjs';
 
 test('the local Worker preserves account and node policy across signed reports and retries', async t => {
-  const { worker, trust, keys, nodeKey: privateKey, node, enrollment: proposed } = await fixture(t);
+  const maintenanceToken = randomBytes(32).toString('base64url');
+  const { worker, trust, keys, nodeKey: privateKey, node, enrollment: proposed } = await fixture(t, { FLEET_MAINTENANCE_TOKEN: maintenanceToken });
   const url = new URL('https://localhost');
   const request = (input, options) => worker.fetch(String(input), options);
   const initialization = 'local-initialization-token';
@@ -99,17 +100,18 @@ test('the local Worker preserves account and node policy across signed reports a
   assert.deepEqual(second.account, first.account);
   assert.notDeepEqual(second.credential, first.credential);
   const enrolled = (await call('/v1/admin/nodes', enrollment, { admin: true })).value;
-  assert(enrolled.enabled && !enrolled.anonymous && enrolled.version === 1);
-  // Independent operator sessions can edit these fields against the same saved snapshot.
+  assert(enrolled.admission === 'draining' && !enrolled.anonymous && enrolled.version === 1);
+  // Staging preserves probe access while ordinary registrations wait for promotion.
   const update = (field, value) => call('/v1/admin/nodes/policy', { key: node, change: { field, value } }, { admin: true, method: 'PUT' });
-  await Promise.all([update('public_relay', false), update('anonymous_sharing', true)]);
+  await update('anonymous_sharing', true);
+  await call('/v1/admin/nodes/policy', { key: node, change: { field: 'admission', value: 'accepting' } }, { admin: true, method: 'PUT', status: 400 });
   const existing = (await call('/v1/admin/nodes', enrollment, { admin: true })).value;
   assert.equal(existing.zone, 'cn');
-  assert(!existing.enabled && existing.anonymous && existing.version === 3);
+  assert(existing.admission === 'draining' && existing.anonymous && existing.version === 2);
   const batch = {
     id: [...randomBytes(16)], node, issuer: [...Buffer.from(trust.root, 'base64url')],
     created_at: Math.floor(Date.now() / 1000), records: [], resident_accounts: [first.account], shares: [],
-    load: { active_sessions: 0, wire_bytes: 0, forwarded_bytes: 0, admission_refusals: 0 },
+    load: { applied_policy_version: 2, resident_shares: 0, active_sessions: 0, wire_bytes: 0, forwarded_bytes: 0, admission_refusals: 0 },
   };
   const onlineSeed = (await readFile(join(keys, 'online-1.seed'), 'utf8')).trim();
   const onlineKey = createPublicKey(createPrivateKey({ key: Buffer.concat([
@@ -145,6 +147,12 @@ test('the local Worker preserves account and node policy across signed reports a
   await call(accountsEndpoint + '/' + Buffer.alloc(16).toString('base64url'), undefined, { ...adminGet, status: 400 });
   const nodesEndpoint = '/v1/admin/nodes';
   const encodedNodeKey = Buffer.from(node).toString('base64url');
+  const operation = { node_key: encodedNodeKey, operation_id: 'local-maintenance-check' };
+  await call('/v1/maintenance/status', operation, { status: 403, admin: true });
+  const maintenance = (await call('/v1/maintenance/status', operation, { secret: maintenanceToken })).value;
+  assert.equal(maintenance.held, false);
+  assert.equal(maintenance.applied_policy_version, existing.version);
+  await call('/v1/admin/nodes/manage', { ...operation, action: { kind: 'drain' } }, { secret: maintenanceToken, status: 403 });
   const nodeDetail = nodesEndpoint + '/' + encodedNodeKey;
   await call(nodeDetail, undefined, { method: 'GET', status: 403 });
   const { value: inspected } = await call(nodeDetail, undefined, adminGet);

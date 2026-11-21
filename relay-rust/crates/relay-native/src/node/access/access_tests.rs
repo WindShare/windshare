@@ -14,24 +14,33 @@ use windshare_relay_core::access::RegistrationDecision;
 fn newer_policy_revokes_forwarding_and_older_reports_cannot_restore_it() {
     let (service, ticket, _, generation, _) = identity();
     service.set_controller(Some(ticket.issuer));
-    let policy = |version, enabled| AuthorityState {
+    let policy = |version, admission| AuthorityState {
         generation,
         policy: Some(windshare_relay_access::usage::NodePolicy {
             version,
-            enabled,
+            admission,
+            probe_account: windshare_relay_access::probe::PROBE_ACCOUNT,
             anonymous: true,
         }),
     };
-    service.apply_authority(policy(1, true)).unwrap();
+    service
+        .apply_authority(policy(1, Admission::Accepting))
+        .unwrap();
     assert!(service.allowed(share(1), ticket.attribution()));
     assert!(service.anonymous());
-    service.apply_authority(policy(2, false)).unwrap();
-    service.apply_authority(policy(1, true)).unwrap();
+    service
+        .apply_authority(policy(2, Admission::Disabled))
+        .unwrap();
+    service
+        .apply_authority(policy(1, Admission::Accepting))
+        .unwrap();
     assert!(!service.public_enabled());
     assert!(!service.anonymous());
     assert!(!service.allowed(share(1), ticket.attribution()));
     assert!(!service.allowed(share(1), Attribution::Anonymous));
-    service.apply_authority(policy(3, true)).unwrap();
+    service
+        .apply_authority(policy(3, Admission::Accepting))
+        .unwrap();
     assert!(service.allowed(share(1), ticket.attribution()));
 }
 
@@ -285,7 +294,8 @@ fn registration_retries_generation_mismatches_and_revalidates_cached_proof() {
             generation: next_generation,
             policy: Some(windshare_relay_access::usage::NodePolicy {
                 version: 1,
-                enabled: false,
+                admission: windshare_relay_access::usage::Admission::Disabled,
+                probe_account: windshare_relay_access::probe::PROBE_ACCOUNT,
                 anonymous: false,
             }),
         })
@@ -591,6 +601,54 @@ fn registration_checks_the_probe_grant_against_this_node_and_share() {
     assert!(matches!(
         service.authorize(share(1), Some(&proof), NOW),
         Authorization::Granted { .. }
+    ));
+    service.set_controller(Some(generation.issuer));
+    // Fresh official installs and signed drains both reserve admission for scoped probes.
+    for version in [None, Some(2)] {
+        if let Some(version) = version {
+            service
+                .apply_authority(AuthorityState {
+                    generation,
+                    policy: Some(windshare_relay_access::usage::NodePolicy {
+                        version,
+                        admission: Admission::Draining,
+                        anonymous: true,
+                        probe_account: probe::PROBE_ACCOUNT,
+                    }),
+                })
+                .unwrap();
+        }
+        assert!(matches!(
+            service.authorize(share(1), Some(&proof), NOW),
+            Authorization::Granted { .. }
+        ));
+        for (id, credential) in [(share(2), Some(&proof)), (share(1), None)] {
+            assert!(matches!(
+                service.authorize(id, credential, NOW),
+                Authorization::Refused(Refusal {
+                    decision: RegistrationDecision::Unavailable(_),
+                    reason: RefusalReason::NodeDraining,
+                })
+            ));
+        }
+    }
+    service
+        .apply_authority(AuthorityState {
+            generation,
+            policy: Some(windshare_relay_access::usage::NodePolicy {
+                version: 3,
+                admission: Admission::Disabled,
+                anonymous: true,
+                probe_account: probe::PROBE_ACCOUNT,
+            }),
+        })
+        .unwrap();
+    assert!(matches!(
+        service.authorize(share(1), Some(&proof), NOW),
+        Authorization::Refused(Refusal {
+            decision: RegistrationDecision::Denied,
+            reason: RefusalReason::NodePublicDisabled,
+        })
     ));
     ticket.expires_at += 1;
     assert!(matches!(

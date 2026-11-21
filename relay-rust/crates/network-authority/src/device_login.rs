@@ -47,7 +47,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
         })?;
         let node = load::<Node>(&self.store, &key("node", &invite.node))?;
         ensure!(
-            node.is_some_and(|n| n.enabled),
+            node.is_some_and(|n| n.admission == windshare_relay_access::usage::Admission::Accepting),
             Fault::Denied {
                 reason: "node_unavailable".into()
             }

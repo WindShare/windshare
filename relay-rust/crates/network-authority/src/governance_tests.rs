@@ -85,7 +85,10 @@ fn node_policy_versions_survive_same_second_changes_and_disabled_reports() {
     let enrolled = authority
         .enroll_node(&admin, &enrollment(Zone::Cn))
         .unwrap();
-    assert!(enrolled.enabled && !enrolled.anonymous);
+    assert!(
+        enrolled.admission == windshare_relay_access::usage::Admission::Accepting
+            && !enrolled.anonymous
+    );
     let account = authority
         .register("source", registration(1))
         .unwrap()
@@ -93,31 +96,51 @@ fn node_policy_versions_survive_same_second_changes_and_disabled_reports() {
     let bytes = batch(&authority, &node, account, 1, 2, 0);
     assert_eq!(status(&mut authority, &bytes).1.version, 1);
     authority
-        .set_node_policy(&admin, &key, NodePolicyChange::PublicRelay(false))
+        .set_node_policy(
+            &admin,
+            &key,
+            NodePolicyChange::Admission(windshare_relay_access::usage::Admission::Disabled),
+        )
         .unwrap();
     let disabled = status(&mut authority, &bytes).1;
     assert_eq!(disabled.version, 2);
-    assert!(!disabled.enabled);
+    assert_eq!(
+        disabled.admission,
+        windshare_relay_access::usage::Admission::Disabled
+    );
     let existing = authority
         .enroll_node(&admin, &enrollment(Zone::Global))
         .unwrap();
     assert_eq!(existing.zone, Zone::Cn);
-    assert!(!existing.enabled && !existing.anonymous);
+    assert!(
+        existing.admission == windshare_relay_access::usage::Admission::Disabled
+            && !existing.anonymous
+    );
     let changed = authority
         .set_node_policy(&admin, &key, NodePolicyChange::AnonymousSharing(true))
         .unwrap();
-    assert!(!changed.enabled && changed.anonymous);
+    assert!(
+        changed.admission == windshare_relay_access::usage::Admission::Disabled
+            && changed.anonymous
+    );
     assert_eq!(changed.version, 3);
     let repeated = authority
         .set_node_policy(&admin, &key, NodePolicyChange::AnonymousSharing(true))
         .unwrap();
     assert_eq!(repeated.version, 3);
     authority
-        .set_node_policy(&admin, &key, NodePolicyChange::PublicRelay(true))
+        .set_node_policy(
+            &admin,
+            &key,
+            NodePolicyChange::Admission(windshare_relay_access::usage::Admission::Accepting),
+        )
         .unwrap();
     let restored = status(&mut authority, &bytes).1;
     assert_eq!(restored.version, 4);
-    assert!(restored.enabled && restored.anonymous);
+    assert!(
+        restored.admission == windshare_relay_access::usage::Admission::Accepting
+            && restored.anonymous
+    );
 }
 
 #[test]
@@ -318,6 +341,8 @@ fn node_details_and_load_remain_reachable_beyond_the_console_page() {
     let now = authority.environment.now;
     let load = Load {
         relay_budget: None,
+        applied_policy_version: 0,
+        resident_shares: 0,
         active_sessions: 4,
         wire_bytes: 20,
         forwarded_bytes: 17,

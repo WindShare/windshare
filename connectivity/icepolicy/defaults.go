@@ -39,7 +39,7 @@ func DirectoryPool(directory nodedirectory.Payload) ICEEndpointPool {
 		entries = append(entries, entry)
 	}
 	for _, node := range directory.Nodes {
-		if node.Status == nodedirectory.Draining || !node.HasRole("stun") {
+		if !node.HasRole("stun") {
 			continue
 		}
 		for _, url := range node.STUN {

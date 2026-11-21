@@ -403,7 +403,7 @@ fn ticket_auth_refusals_and_node_status_batches_emit_structured_traces() {
             zone: Zone::Global,
             region: "test".into(),
             anonymous: true,
-            enabled: true,
+            admission: windshare_relay_access::usage::Admission::Accepting,
         },
     )
     .unwrap();

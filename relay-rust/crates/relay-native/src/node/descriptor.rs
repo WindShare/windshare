@@ -76,10 +76,15 @@ impl Runtime {
             .ok_or_else(|| anyhow!("missing node identity"))?;
         let timestamp = super::now();
         let now = timestamp.unsigned_abs();
+        let accepting = self.access.public_enabled()
+            && self
+                .maintenance
+                .get()
+                .is_none_or(super::maintenance::Gate::open_to_users);
         let login_page = self
             .console
             .get()
-            .filter(|_| state.settings.services.relay)
+            .filter(|_| state.settings.services.relay && accepting)
             .and_then(|console| console.login_page(now));
         let descriptor = serde_json::json!({
             "version":2, "node_id":identity.id(), "node_key":URL_SAFE_NO_PAD.encode(identity.key().verifying_key().to_bytes()),
@@ -87,7 +92,7 @@ impl Runtime {
             "stun":state.settings.stun_urls, "zone":state.settings.zone, "region":state.settings.region,
             "capacity_bytes_per_second":state.settings.capacity_bytes_per_second,
             "classes":["owner","standard","lowest"], "issued_at":now, "expires_at":now+DESCRIPTOR_SECONDS,
-            "relay_available":!state.unavailable && !state.budgets.public_exhausted(&state.settings, timestamp) && self.access.public_enabled(), "anonymous":self.access.anonymous(),
+            "relay_available":state.settings.services.relay && !state.unavailable && !state.budgets.public_exhausted(&state.settings, timestamp) && accepting, "anonymous":accepting && self.access.anonymous(),
             "account_login_page":login_page,
             "console_url": self.console.get().map(crate::console::Console::origin), "authority":state.settings.authority
         });

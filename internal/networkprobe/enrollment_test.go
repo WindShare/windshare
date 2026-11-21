@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/pion/stun/v4"
 	"github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/nodedirectory"
@@ -62,6 +63,7 @@ func TestEnrollmentChecksPinnedDescriptorAndSTUNOverTLSAndUDP(t *testing.T) {
 	now := uint64(time.Now().Unix())
 	descriptor := serviceauthority.Descriptor{Version: 2, NodeID: b64.EncodeToString(identity[:]), NodeKey: b64.EncodeToString(pub),
 		RelayEndpoint: strings.Replace(host.URL, "https://", "wss://", 1) + "/v2/ws", STUN: []string{address}, IssuedAt: now, ExpiresAt: now + 120}
+	descriptor.Services.Relay = true
 	descriptor.Services.STUN = true
 	body, err := json.Marshal(descriptor)
 	if err != nil {
@@ -93,6 +95,45 @@ func TestEnrollmentChecksPinnedDescriptorAndSTUNOverTLSAndUDP(t *testing.T) {
 	if err := check(t.Context(), host.Client(), work, shares, bind); err != nil {
 		t.Fatal(err)
 	}
+	t.Run("fleet paths fail independently", func(t *testing.T) {
+		origins := []string{"https://one.example", "https://two.example", "https://public.example"}
+		seen := make(chan string, len(origins))
+		mux.HandleFunc("/v2/ws", func(w http.ResponseWriter, r *http.Request) {
+			conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: []string{"*.example"}})
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			seen <- r.Header.Get("Origin")
+			_ = conn.CloseNow()
+		})
+		target := Target{OperationID: "listing-v1", Node: work.Node}
+		target.Node.Roles = []string{"relay", "stun"}
+		target.Node.Relay += "/"
+		udpFailure := func(context.Context, string) error { return errors.New("no binding") }
+		report := observe(t.Context(), host.Client(), target, origins, udpFailure)
+		if !report.HTTPS || !report.TCP || report.TLSExpires == nil || report.Relay == nil || !*report.Relay || report.STUN == nil || *report.STUN {
+			t.Fatalf("UDP outage damaged HTTPS verdict: %+v", report)
+		}
+		for _, origin := range origins {
+			select {
+			case actual := <-seen:
+				if actual != origin {
+					t.Errorf("saw %s, want %s", actual, origin)
+				}
+			default:
+				t.Errorf("missing websocket origin %s", origin)
+			}
+		}
+		offline := httptest.NewTLSServer(http.NotFoundHandler())
+		defer offline.Close()
+		target.Node.Relay = offline.URL
+		udpSuccess := func(context.Context, string) error { return nil }
+		report = observe(t.Context(), offline.Client(), target, origins, udpSuccess)
+		if report.HTTPS || *report.Relay || !*report.STUN {
+			t.Fatalf("HTTPS outage damaged STUN verdict: %+v", report)
+		}
+	})
 	work.Node.STUN[0] = "stun:other.example:3478"
 	if err := check(t.Context(), host.Client(), work, shares, bind); err == nil {
 		t.Fatal("unadvertised STUN accepted")

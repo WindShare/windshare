@@ -11,7 +11,7 @@ const crate = fileURLToPath(new URL('../', import.meta.url));
 const { Miniflare, Log, LogLevel, convertV4MiniflareOptions } =
   createRequire(new URL('../../relay-cloudflare/package.json', import.meta.url))('miniflare');
 
-export async function fixture(t, extra = {}) {
+export async function fixture(t, extra = {}, { existingEnrollment = false } = {}) {
   const keys = await mkdtemp(join(tmpdir(), 'windshare-password-edge-test-'));
   t.after(() => rm(keys, { recursive: true, force: true }));
   execFileSync('cargo', ['run', '--quiet', '--locked', '--bin', 'network-authority-keys', '--', keys, '1'], { cwd: crate });
@@ -23,11 +23,26 @@ export async function fixture(t, extra = {}) {
   const base = 'https://' + host;
   const requests = [];
   const mirrors = new Map();
+  // Rehydrate the pre-P3 approval for the password flow from the same SQLite row
+  // an upgraded deployment would retain. The test module exists only in Miniflare.
+  const legacy = { key: [...node], zone: 'global', region: 'edge-test', enabled: true, anonymous: false, version: 1 };
+  const bootstrap = existingEnrollment ? [{ type: 'ESModule', path: join(build, 'fixture.mjs'), contents: `
+    import worker, { NetworkAuthority } from './index.js';
+    export default worker;
+    export class ExistingEnrollment {
+      constructor(state, env) {
+        const sql = state.storage.sql;
+        sql.exec('CREATE TABLE IF NOT EXISTS authority_records(key TEXT PRIMARY KEY,value TEXT NOT NULL) STRICT');
+        sql.exec('INSERT OR IGNORE INTO authority_records VALUES (?, ?)', ${JSON.stringify('node/' + node.toString('base64url'))}, ${JSON.stringify(JSON.stringify(legacy))});
+        this.authority = new NetworkAuthority(state, env);
+      }
+      fetch(request) { return this.authority.fetch(request); }
+    }` }] : [];
   const mf = new Miniflare(convertV4MiniflareOptions({
     log: new Log(LogLevel.ERROR),
     workers: [{
       name: 'authority', compatibilityDate: '2026-09-28', compatibilityFlags: ['global_fetch_strictly_public'], modulesRoot: build,
-      modules: [{ type: 'ESModule', path: join(build, 'index.js') },
+      modules: [...bootstrap, { type: 'ESModule', path: join(build, 'index.js') },
         { type: 'CompiledWasm', path: join(build, 'index_bg.wasm') }],
       outboundService: async request => {
         requests.push(request.url);
@@ -58,7 +73,7 @@ export async function fixture(t, extra = {}) {
         AUTHORITY_SIGNING_SEED: (await readFile(join(keys, 'online-1.seed'), 'utf8')).trim(),
         INITIALIZATION_TOKEN: 'local-initialization-token',
       },
-      durableObjects: { AUTHORITY: { className: 'NetworkAuthority', useSQLite: true } },
+      durableObjects: { AUTHORITY: { className: existingEnrollment ? 'ExistingEnrollment' : 'NetworkAuthority', useSQLite: true } },
     }],
   }));
   t.after(() => mf.dispose());

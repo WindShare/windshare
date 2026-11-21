@@ -82,6 +82,11 @@ def deploy(args):
     values = {"AUTHORITY_ROOT": trust["root"], "AUTHORITY_CERTIFICATE": trust["certificate"], "API_ORIGIN": api,
               "ALLOWED_ORIGINS": ",".join(dict.fromkeys([api, *origins])), "TRUSTED_PROXY_IPS": ",".join(proxies)}
     secrets_to_upload = {"AUTHORITY_SIGNING_SEED": seed, "INITIALIZATION_TOKEN": token}
+    maintenance = os.environ.get("FLEET_MAINTENANCE_TOKEN", "").strip()
+    if maintenance:
+        if not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", maintenance):
+            raise ValueError("Invalid fleet maintenance token")
+        secrets_to_upload["FLEET_MAINTENANCE_TOKEN"] = maintenance
     mail_url = os.environ.get("EMAIL_WEBHOOK_URL", "").strip()
     mail_token = os.environ.get("EMAIL_WEBHOOK_TOKEN", "").strip()
     if mail_url or mail_token:

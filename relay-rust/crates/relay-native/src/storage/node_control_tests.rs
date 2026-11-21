@@ -32,6 +32,8 @@ fn batch(issuer: Issuer, id: u8, created_at: u64) -> Batch {
         shares: vec![],
         load: Load {
             relay_budget: None,
+            applied_policy_version: 0,
+            resident_shares: 0,
             active_sessions: 0,
             wire_bytes: 17,
             forwarded_bytes: 17,

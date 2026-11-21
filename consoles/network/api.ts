@@ -2,7 +2,7 @@ import { message, type Message } from '../ui/locale'
 import { networkCopy } from './locales'
 import { request, RequestError } from '../ui/request'
 import { decode, encode } from './identity'
-import type { AccountDetails, AccountPage, AccountSummary, Discovery, Enrollment, TrafficStatus, MilestoneReview, NodeDetails, NodePage, PolicyField, PolicySnapshot, RelayNode, Report, ReportPage, Restrictions, SettingsChanges, Snapshot, Target } from './model'
+import type { AccountDetails, AccountPage, AccountSummary, Discovery, Enrollment, TrafficStatus, MilestoneReview, NodeDetails, NodePage, FleetAction, PolicyChange, PolicySnapshot, RelayNode, Report, ReportPage, Restrictions, SettingsChanges, Snapshot, Target } from './model'
 
 const messages = {
   relay_bound: message(networkCopy, 'relayBound'),
@@ -10,6 +10,8 @@ const messages = {
   listing_changed: message(networkCopy, 'listingChanged'),
   alias_bound: message(networkCopy, 'aliasBound'),
   verification_required: message(networkCopy, 'verificationRequired'),
+  drain_pending: message(networkCopy, 'drainPending'),
+  maintenance_in_progress: message(networkCopy, 'maintenance'),
   mirror_lag: message(networkCopy, 'mirrorLag'),
   credentials: message(networkCopy, 'invalidCredentials'),
   credentials_changed: message(networkCopy, 'sessionChanged'),
@@ -110,9 +112,10 @@ export class AuthorityClient {
   }
   discover = (url: string) => this.write<Discovery>('nodes/discover', { url })
   promote = (node_key: string, operation_id: string, status: TrafficStatus) => this.write('nodes/promote', { node_key, operation_id, status })
+  manage = (node_key: string, operation_id: string, action: FleetAction) => this.write('nodes/manage', { node_key, operation_id, action })
   cancelDraft = (node_key: string, operation_id: string) => this.write('nodes/cancel', { node_key, operation_id })
   enroll = (node: Enrollment) => this.write<NodeDetails>('nodes', node)
-  policy = (key: number[], field: PolicyField, value: boolean) => this.write<RelayNode>('nodes/policy', { key, change: { field, value } }, 'PUT')
+  policy = (key: number[], change: PolicyChange) => this.write<RelayNode>('nodes/policy', { key, change }, 'PUT')
   updateSettings = (changes: SettingsChanges) => this.write<PolicySnapshot>('settings', changes, 'PATCH')
   dismissReview = (count: number) => this.write<MilestoneReview[]>('reviews/dismiss', { count })
   restrict = (target: Target, blocked: boolean) => this.write<Restrictions>('blocks', { ...target, blocked })

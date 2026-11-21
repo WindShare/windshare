@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { fixture } from './local-worker.mjs';
 
 test('the Worker runs password hashing and rate limits across edge and Durable Object boundaries', async t => {
-  const { worker, mf, trust, nodeKey, node, requests, mirrors, enrollment } = await fixture(t);
+  const { worker, mf, trust, nodeKey, node, requests, mirrors, enrollment } = await fixture(t, {}, { existingEnrollment: true });
   // Hashed console bundles are immutable while HTML entrypoints remain uncached.
   const consolePage = await worker.fetch('https://localhost/console');
   assert.equal(consolePage.status, 200);
@@ -188,6 +188,11 @@ test('the Worker runs password hashing and rate limits across edge and Durable O
     invitePayload,
     sign(null, Buffer.concat([Buffer.from('windshare/device-invitation/v1\0'), invitePayload]), nodeKey),
   ]).toString('base64url');
+  const blocked = await call('/v1/device/approve', {
+    invitation, login: { username: 'alice', password: firstPassword },
+  }, { source: '198.51.100.12', status: 403 });
+  assert.equal(blocked.value.reason, 'node_unavailable');
+  await call('/v1/admin/nodes/cancel', { node_key: enrollment.node_key, operation_id: replacement.listing.operation_id }, { admin: true });
   const approved = await call('/v1/device/approve', {
     invitation, login: { username: 'alice', password: firstPassword },
   }, { source: '198.51.100.12' });

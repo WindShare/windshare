@@ -151,7 +151,7 @@ impl Fixture {
     }
 }
 
-fn work(step: RelayStep) -> Work {
+pub fn work(step: RelayStep) -> Work {
     assert!(step.refusal.is_none(), "{:?}", step.refusal);
     step.outputs
         .into_iter()

@@ -1,4 +1,5 @@
 mod edge;
+mod maintenance;
 mod public_directory;
 mod public_dns;
 use super::{
@@ -31,6 +32,14 @@ const EXPIRY_ALERT_SECONDS: u64 = 14 * 86400;
 fn release() -> Result<Release> {
     Release::bundled()
 }
+fn origins() -> Result<[String; vantage::ORIGIN_COUNT]> {
+    let release = release()?;
+    Ok([
+        release.link_host,
+        release.backup_entry,
+        "https://self-hosted.example".into(),
+    ])
+}
 fn agents(env: &Env) -> Result<Vec<Agent>> {
     let agents = env.var("VANTAGE_KEYS").map_or_else(
         |_| Ok(vec![]),
@@ -62,6 +71,10 @@ pub(super) fn console(authority: &mut Service, env: &Env) -> Result<Value> {
                 && now.saturating_sub(m.at) <= vantage::SILENT_SECONDS * 2)
     );
     value["silent_vantages"] = json!(vantage::silent(&authority.store, &enrolled, now)?);
+    value["vantages"] = json!(crate::fleet::monitoring::reports(
+        &authority.store,
+        &enrolled
+    )?);
     let ticket_expiry = authority.signing.generation.expires_at;
     let alert_time = now + EXPIRY_ALERT_SECONDS;
     value["expiring_certificates"] = json!({
@@ -124,9 +137,10 @@ async fn maintenance(env: &Env) -> worker::Result<()> {
         return Ok(());
     }
     let expected: Envelope = response.json().await?;
-    let matches = edge::mirrors_match(&expected).await;
+    let digest = publication::digest(&expected).map_err(failure)?;
+    let matches = edge::mirrors_match(&expected, &digest, None).await;
     let check = MirrorCheck {
-        digest: publication::digest(&expected).map_err(failure)?,
+        digest,
         matches,
         at: worker::Date::now().as_millis() / 1000,
     };
@@ -144,7 +158,14 @@ impl NetworkAuthority {
         let ctx = Context::new(req, &self.env)?;
         let bytes = bytes.to_vec();
         let is_tick = ctx.path == "/internal/fleet/tick";
-        let publish = is_tick || ctx.path == "/internal/fleet/promote";
+        let publish = is_tick
+            || matches!(
+                ctx.path.as_str(),
+                "/internal/fleet/promote"
+                    | "/v1/admin/nodes/manage"
+                    | "/v1/maintenance/drain"
+                    | "/v1/maintenance/release"
+            );
         // A rejected fleet command rolls back the whole transaction, including
         // bootstrap and lease writes. Network reads and KV writes run outside it.
         let result = self.transact(
@@ -153,19 +174,20 @@ impl NetworkAuthority {
             },
             move |service, env| dispatch(service, env, &ctx, &bytes),
         );
+        // A failed health or renewal transaction cannot strand the last committed head in SQLite.
+        let published = if publish && (result.is_ok() || is_tick) {
+            match self.reconcile().await {
+                Ok(written) => written,
+                Err(error) => {
+                    tracing::warn!(event="directory_kv_retry_pending", %error);
+                    false
+                }
+            }
+        } else {
+            false
+        };
         match result {
             Ok(value) => {
-                let published = if publish {
-                    match self.reconcile().await {
-                        Ok(written) => written,
-                        Err(error) => {
-                            tracing::warn!(event="directory_kv_retry_pending",%error);
-                            false
-                        }
-                    }
-                } else {
-                    false
-                };
                 let mut response = Response::from_json(&value)?;
                 if published && is_tick {
                     response.headers_mut().set(KV_PUBLISHED_HEADER, "1")?;
@@ -197,7 +219,8 @@ impl NetworkAuthority {
         }
         kv.put(KV_KEY, body)?.execute().await?;
         db.put(DELIVERED, &digest).map_err(failure)?;
-        tracing::info!(event="directory_kv_published",revision=%digest);
+        let revision = head.revision().map_err(failure)?;
+        tracing::info!(event="directory_kv_published", operation_id=%digest, generation=revision.generation, serial=revision.serial, revision=%digest);
         Ok(true)
     }
 }
@@ -205,20 +228,32 @@ impl NetworkAuthority {
 fn dispatch(service: &mut Service, env: &Env, ctx: &Context, bytes: &[u8]) -> Result<Value> {
     let admin = matches!(
         ctx.path.as_str(),
-        "/internal/fleet/prepare" | "/internal/fleet/stage" | "/internal/fleet/promote"
+        "/internal/fleet/prepare"
+            | "/internal/fleet/stage"
+            | "/internal/fleet/promote"
+            | "/v1/admin/nodes/manage"
     );
     if admin {
         routes::verify_admin_csrf(&ctx.session, &ctx.csrf)?;
         service.require_admin(&ctx.session)?;
     }
+    if ctx.path.starts_with("/v1/maintenance/") {
+        return maintenance::dispatch(service, env, ctx, bytes);
+    }
     match ctx.path.as_str() {
+        "/v1/vantage/targets" => {
+            return Ok(json!(service.fleet_targets(
+                &agents(env)?,
+                &routes::parse(bytes)?,
+                origins()?
+            )?));
+        }
+        "/v1/vantage/cycle" => {
+            service.record_cycle(&agents(env)?, &routes::parse(bytes)?)?;
+            return Ok(json!({}));
+        }
         "/v1/vantage/poll" => {
-            let release = release()?;
-            let origins = [
-                release.link_host,
-                release.backup_entry,
-                "https://self-hosted.example".into(),
-            ];
+            let origins = origins()?;
             return Ok(json!(service.claim(
                 &agents(env)?,
                 &routes::parse(bytes)?,
@@ -234,6 +269,10 @@ fn dispatch(service: &mut Service, env: &Env, ctx: &Context, bytes: &[u8]) -> Re
     let mut head = Publication::load_or_import(&mut service.store)?;
     match ctx.path.as_str() {
         "/internal/fleet/prepare" => Ok(json!(head.envelope)),
+        "/v1/admin/nodes/manage" => {
+            service.manage(&ctx.session, &routes::parse(bytes)?, &signer(env)?)?;
+            Ok(json!({}))
+        }
         "/internal/fleet/stage" => {
             let spec: Spec = routes::parse(bytes)?;
             anyhow::ensure!(
@@ -262,34 +301,7 @@ fn dispatch(service: &mut Service, env: &Env, ctx: &Context, bytes: &[u8]) -> Re
             )?;
             Ok(json!({}))
         }
-        "/internal/fleet/tick" => {
-            let now = service.environment.now();
-            match signer(env).and_then(|publisher| head.renew(&publisher, now)) {
-                Ok(true) => head.save(&mut service.store)?,
-                Ok(false) => {}
-                Err(error) => tracing::error!(event="directory_renewal_failed", %error),
-            }
-            match agents(env) {
-                Ok(registry) => {
-                    let missing = vantage::silent(&service.store, &registry, now)?;
-                    if !missing.is_empty() {
-                        tracing::warn!(event="vantage_silent",vantages=?missing);
-                    }
-                }
-                Err(error) => tracing::error!(event="vantage_configuration_invalid", %error),
-            }
-            let expiry = head.revision()?.certificate_expires;
-            if expiry <= i64::try_from(now + EXPIRY_ALERT_SECONDS)?
-                || service.signing.generation.expires_at <= now + EXPIRY_ALERT_SECONDS
-            {
-                tracing::warn!(
-                    event = "network_certificate_expiring",
-                    directory_expires = expiry,
-                    ticket_expires = service.signing.generation.expires_at
-                );
-            }
-            Ok(json!(head.envelope))
-        }
+        "/internal/fleet/tick" => tick(service, env, &mut head),
         "/internal/fleet/mirrors" => {
             let check: MirrorCheck = routes::parse(bytes)?;
             if publication::digest(&head.envelope)? == check.digest {
@@ -299,4 +311,40 @@ fn dispatch(service: &mut Service, env: &Env, ctx: &Context, bytes: &[u8]) -> Re
         }
         _ => Err(Fault::Invalid.into()),
     }
+}
+
+fn tick(service: &mut Service, env: &Env, head: &mut Publication) -> Result<Value> {
+    let now = service.environment.now();
+    let registry = agents(env);
+    match &registry {
+        Ok(agents) => {
+            let missing = vantage::silent(&service.store, agents, now)?;
+            if !missing.is_empty() {
+                tracing::warn!(event="vantage_silent", vantages=?missing);
+            }
+        }
+        Err(error) => tracing::error!(event="vantage_configuration_invalid", %error),
+    }
+    let expiry = head.revision()?.certificate_expires;
+    if expiry <= i64::try_from(now + EXPIRY_ALERT_SECONDS)?
+        || service.signing.generation.expires_at <= now + EXPIRY_ALERT_SECONDS
+    {
+        tracing::warn!(
+            event = "network_certificate_expiring",
+            directory_expires = expiry,
+            ticket_expires = service.signing.generation.expires_at
+        );
+    }
+    match signer(env) {
+        Ok(publisher) => {
+            if let Ok(agents) = registry {
+                service.evaluate_health(&agents, &publisher, head)?;
+            }
+            if head.renew(&publisher, now)? {
+                head.save(&mut service.store)?;
+            }
+        }
+        Err(error) => tracing::error!(event="directory_renewal_failed", %error),
+    }
+    Ok(json!(head.envelope))
 }

@@ -81,8 +81,31 @@ impl Database {
     }
 }
 
+const ADMISSION_SCHEMA: u32 = 1;
+
 pub(super) fn restore(db: &Connection, now: u64) -> Result<AccessSnapshot> {
     db.execute_batch(SCHEMA)?;
+    // initialize_control holds one transaction through migration and decoding.
+    // Rewrite only the policy fields so each issuer keeps its highest trusted generation.
+    let schema = db.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))?;
+    anyhow::ensure!(
+        schema <= ADMISSION_SCHEMA,
+        "unsupported node control schema"
+    );
+    if schema < ADMISSION_SCHEMA {
+        db.execute(
+            "UPDATE access_authorities SET body = CAST(json_set(
+           json_remove(CAST(body AS TEXT), '$.policy.enabled'),
+           '$.policy.admission', CASE json_extract(CAST(body AS TEXT), '$.policy.enabled')
+                                  WHEN 1 THEN 'accepting' ELSE 'disabled' END,
+           '$.policy.probe_account', json(?1)) AS BLOB)
+         WHERE json_type(CAST(body AS TEXT), '$.policy.enabled') IN ('true','false')",
+            [serde_json::to_string(
+                &windshare_relay_access::probe::PROBE_ACCOUNT,
+            )?],
+        )?;
+        db.pragma_update(None, "user_version", ADMISSION_SCHEMA)?;
+    }
     db.execute_batch(quotas::SCHEMA)?;
     // Establish the durable UTC day floor even on nodes that start without a reporter.
     let quota_day_floor = quotas::prune(db, now)?;

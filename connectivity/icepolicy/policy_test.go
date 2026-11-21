@@ -271,8 +271,7 @@ func TestDirectoryPoolPrioritizesDirectoryOverFallbacks(t *testing.T) {
 	payload := nodedirectory.Payload{
 		Nodes: []nodedirectory.Node{
 			{Alias: "cn1", STUN: []string{"stun:cn1.example:3478"}, Roles: []string{"relay", "stun"}, Region: "cn-wuhan", Provider: "aliyun", Operator: "official", Status: nodedirectory.Active},
-			{Alias: "us1", STUN: []string{"stun:us1.example:3478"}, Roles: []string{"relay", "stun"}, Region: "us-los-angeles", Provider: "quickpacket", Operator: "official", Status: nodedirectory.Active},
-			{Alias: "draining", STUN: []string{"stun:draining.example:3478"}, Roles: []string{"stun"}, Region: "jp-tokyo", Provider: "other", Operator: "official", Status: nodedirectory.Draining},
+			{Alias: "us1", STUN: []string{"stun:us1.example:3478"}, Roles: []string{"relay", "stun"}, Region: "us-los-angeles", Provider: "quickpacket", Operator: "official", Status: nodedirectory.Draining},
 			{Alias: "relay-only", STUN: []string{"stun:ignored.example:3478"}, Roles: []string{"relay"}, Region: "de-frankfurt", Provider: "other", Operator: "official", Status: nodedirectory.Active},
 		},
 		PublicSTUN: []nodedirectory.STUNEndpoint{
@@ -285,8 +284,8 @@ func TestDirectoryPoolPrioritizesDirectoryOverFallbacks(t *testing.T) {
 	for _, endpoint := range pool.endpoints {
 		byURL[endpoint.URL] = endpoint
 	}
-	if _, excluded := byURL["stun:draining.example:3478"]; excluded {
-		t.Fatal("draining node entered pool")
+	if _, included := byURL["stun:us1.example:3478"]; !included {
+		t.Fatal("relay drain removed healthy STUN")
 	}
 	if _, excluded := byURL["stun:ignored.example:3478"]; excluded {
 		t.Fatal("non-stun node entered pool")

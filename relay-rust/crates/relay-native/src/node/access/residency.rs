@@ -53,6 +53,11 @@ impl Service {
         attribution: Attribution,
     ) -> Result<Residency, Refusal> {
         let mut state = self.write();
+        if state.admission() == super::Admission::Draining
+            && !state.scoped_probe(share, attribution)
+        {
+            return Err(Refusal::unavailable(RefusalReason::NodeDraining));
+        }
         if let Some(reason) = state.denial_reason(share, attribution) {
             return Err(Refusal::denied(reason));
         }

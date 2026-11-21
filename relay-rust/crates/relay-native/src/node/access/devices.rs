@@ -162,7 +162,7 @@ impl Service {
                 .authorities
                 .policies
                 .get(&issuer)
-                .is_some_and(|policy| policy.enabled)
+                .is_some_and(|policy| policy.admission == super::Admission::Accepting)
         {
             return None;
         }

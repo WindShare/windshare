@@ -17,6 +17,7 @@ pub use policy::{Policy, TrustedIssuer};
 use quota::Quotas;
 pub(crate) use quota::{AccountKey, Quota};
 pub(crate) use residency::Residency;
+use windshare_relay_access::usage::{Admission, NodePolicy};
 
 use std::{
     collections::BTreeMap,
@@ -92,7 +93,24 @@ impl Service {
     }
 
     pub fn public_enabled(&self) -> bool {
-        self.read().disabled_controller().is_none()
+        self.read().admission() == Admission::Accepting
+    }
+
+    pub fn reported_policy(
+        &self,
+        issuer: Issuer,
+        mut durable: std::collections::BTreeSet<ShareId>,
+    ) -> (u64, u64) {
+        let state = self.read();
+        durable.extend(state.residents.keys().copied());
+        (
+            state
+                .authorities
+                .policies
+                .get(&issuer)
+                .map_or(0, |p| p.version),
+            durable.len() as u64,
+        )
     }
 
     pub fn anonymous(&self) -> bool {
@@ -124,6 +142,10 @@ impl Service {
 
     pub fn allowed(&self, share: ShareId, attribution: Attribution) -> bool {
         !self.read().denied(share, attribution)
+    }
+
+    pub(crate) fn is_probe(&self, share: ShareId, attribution: Option<Attribution>) -> bool {
+        attribution.is_some_and(|a| self.read().scoped_probe(share, a))
     }
 
     pub(crate) fn is_owner(&self, attribution: Attribution) -> bool {
@@ -235,24 +257,42 @@ impl State {
         }
     }
 
-    fn anonymous(&self) -> bool {
+    fn controller_policy(&self) -> Option<&NodePolicy> {
         self.controller
-            .filter(|issuer| self.active_issuers.contains(issuer))
-            .and_then(|issuer| self.authorities.policies.get(&issuer))
-            .map_or(self.policy.anonymous, |policy| {
-                policy.enabled && policy.anonymous
-            })
+            .filter(|i| self.active_issuers.contains(i))
+            .and_then(|i| self.authorities.policies.get(&i))
     }
 
-    fn disabled_controller(&self) -> Option<Issuer> {
-        self.controller.filter(|issuer| {
-            self.active_issuers.contains(issuer)
-                && self
-                    .authorities
-                    .policies
-                    .get(issuer)
-                    .is_some_and(|policy| !policy.enabled)
-        })
+    fn admission(&self) -> Admission {
+        match (self.controller, self.controller_policy()) {
+            (_, Some(policy)) => policy.admission,
+            // An official install needs its first signed approval before admitting users.
+            (Some(_), None) => Admission::Draining,
+            (None, None) => Admission::Accepting,
+        }
+    }
+
+    fn anonymous(&self) -> bool {
+        self.admission() == Admission::Accepting
+            && self
+                .controller_policy()
+                .map_or(self.policy.anonymous, |p| p.anonymous)
+    }
+
+    fn scoped_probe(&self, share: ShareId, attr: Attribution) -> bool {
+        let Attribution::Account {
+            issuer,
+            account,
+            credential,
+        } = attr
+        else {
+            return false;
+        };
+        Some(issuer) == self.controller
+            && account == windshare_relay_access::probe::PROBE_ACCOUNT
+            && self.node_key.is_some_and(|key| {
+                credential == windshare_relay_access::probe::credential(&key, share.as_bytes())
+            })
     }
 
     pub(super) fn class(&self, attribution: Attribution, now: u64) -> (Class, Option<Allowance>) {
@@ -260,6 +300,11 @@ impl State {
             Attribution::Credential { .. } if self.owner(attribution) => (Class::Owner, None),
             Attribution::Credential { .. } => (Class::Standard, None),
             Attribution::Anonymous => (Class::Lowest, None),
+            Attribution::Account { account, .. }
+                if account == windshare_relay_access::probe::PROBE_ACCOUNT =>
+            {
+                (Class::Standard, None)
+            }
             Attribution::Account {
                 issuer, account, ..
             } => {
@@ -274,14 +319,7 @@ impl State {
         share: ShareId,
         attribution: Attribution,
     ) -> Option<RefusalReason> {
-        let disabled = self
-            .disabled_controller()
-            .is_some_and(|controller| match attribution {
-                Attribution::Anonymous => true,
-                Attribution::Account { issuer, .. } => issuer == controller,
-                Attribution::Credential { .. } => false,
-            });
-        if disabled {
+        if self.admission() == Admission::Disabled {
             return Some(RefusalReason::NodePublicDisabled);
         }
         let local_key = match attribution {

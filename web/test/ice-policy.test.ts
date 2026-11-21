@@ -99,8 +99,7 @@ describe('trusted ICE policy', () => {
    cursor: { generation: 1, serial: 3, digest: 'digest' },
    nodes: [
     { alias: 'cn1', nodeKey: 'key-cn1', relay: 'https://cn1.example', identity: 'https://cn1.example', stun: ['stun:cn1.example:3478'], roles: ['relay', 'stun'], zone: 'cn', region: 'cn-wuhan', provider: 'aliyun', operator: 'official', capacityMbps: 200, status: 'active' },
-    { alias: 'us1', nodeKey: 'key-us1', relay: 'https://us1.example', identity: 'https://us1.example', stun: ['stun:us1.example:3478'], roles: ['relay', 'stun'], zone: 'global', region: 'us-los-angeles', provider: 'quickpacket', operator: 'official', capacityMbps: 100, status: 'active' },
-    { alias: 'draining', nodeKey: 'key-dr', relay: 'https://dr.example', identity: 'https://dr.example', stun: ['stun:draining.example:3478'], roles: ['stun'], zone: 'global', region: 'jp-tokyo', provider: 'other', operator: 'official', capacityMbps: 50, status: 'draining' },
+    { alias: 'us1', nodeKey: 'key-us1', relay: 'https://us1.example', identity: 'https://us1.example', stun: ['stun:us1.example:3478'], roles: ['relay', 'stun'], zone: 'global', region: 'us-los-angeles', provider: 'quickpacket', operator: 'official', capacityMbps: 100, status: 'draining' },
     { alias: 'relay-only', nodeKey: 'key-ro', relay: 'https://ro.example', identity: 'https://ro.example', stun: ['stun:ignored.example:3478'], roles: ['relay'], zone: 'global', region: 'de-frankfurt', provider: 'other', operator: 'official', capacityMbps: 50, status: 'active' },
    ],
    publicSTUN: [
@@ -113,7 +112,7 @@ describe('trusted ICE policy', () => {
   }
   const directoryPool = directoryICEEndpointPool(snapshot)
   const byURL = new Map(directoryPool.endpoints.map(endpoint => [endpoint.url, endpoint]))
-  expect(byURL.has('stun:draining.example:3478')).toBe(false)
+  expect(byURL.has('stun:us1.example:3478')).toBe(true)
   expect(byURL.has('stun:ignored.example:3478')).toBe(false)
   expect(byURL.get('stun:cn1.example:3478')?.priority).toBe(DIRECTORY_NODE_STUN_PRIORITY)
   expect(byURL.get(CLOUDFLARE_STUN_SERVER)).toMatchObject({

@@ -59,7 +59,7 @@ fn independent_random_salts_prevent_cookie_resurrection_and_verify_legacy_hashes
             key: node,
             zone: Zone::Global,
             region: "test".into(),
-            enabled: true,
+            admission: windshare_relay_access::usage::Admission::Accepting,
             anonymous: false,
             version: 1,
         },

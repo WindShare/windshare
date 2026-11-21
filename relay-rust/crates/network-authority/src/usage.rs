@@ -19,6 +19,11 @@ use windshare_relay_access::{
     },
 };
 
+enum ReportingNode {
+    Enrolled(NodePolicy),
+    Retired(NodePolicy),
+}
+
 impl<R: Store, E: Environment> Authority<R, E> {
     /// # Errors
     /// Refuses unauthenticated nodes, conflicting batch IDs, invalid records or storage failures.
@@ -29,7 +34,23 @@ impl<R: Store, E: Environment> Authority<R, E> {
             batch.valid() && batch.created_at <= now + trust::CLOCK_SKEW,
             Fault::Invalid
         );
-        let node = self.authenticate_node(batch.issuer, batch.node, USAGE_DOMAIN, signed)?;
+        let policy = match self.authenticate_node(batch.issuer, batch.node, USAGE_DOMAIN, signed)? {
+            ReportingNode::Enrolled(policy) => policy,
+            ReportingNode::Retired(policy) => {
+                // An offline node may first learn of an early cutoff after removal.
+                // Give it the final policy without granting access to any user records.
+                let reply = if batch.records.is_empty() {
+                    ReportResult::Status {
+                        entitlements: vec![],
+                        restriction_version: 0,
+                        policy,
+                    }
+                } else {
+                    ReportResult::UsageReceived
+                };
+                return self.sign_reply(RESPONSE_DOMAIN, batch.node, batch.id, now, reply);
+            }
+        };
         // Filter only after authenticating the complete report. A probe-only usage
         // batch still needs a usage receipt so the node can retire its outbox row.
         let usage = !batch.records.is_empty();
@@ -58,9 +79,13 @@ impl<R: Store, E: Environment> Authority<R, E> {
             ReportResult::UsageReceived
         } else {
             self.remember_shares(&batch.shares)?;
-            self.status(&batch, &node)?
+            self.status(&batch, policy)?
         };
-        self.record_load(&batch, now)?;
+        // Queued accounting batches can outlive several policy revisions.
+        // Only the signed status round trip can acknowledge a drain.
+        if !usage {
+            self.record_load(&batch, now)?;
+        }
         self.sign_reply(RESPONSE_DOMAIN, batch.node, batch.id, now, result)
     }
 
@@ -69,12 +94,20 @@ impl<R: Store, E: Environment> Authority<R, E> {
     pub fn restriction_page(&self, signed: &[u8]) -> Result<SignedReply> {
         let request: PageRequest = parse_signed(signed)?;
         ensure!(request.id != [0; 16], Fault::Invalid);
-        self.authenticate_node(
-            request.issuer,
-            request.node,
-            restrictions::REQUEST_DOMAIN,
-            signed,
-        )?;
+        ensure!(
+            matches!(
+                self.authenticate_node(
+                    request.issuer,
+                    request.node,
+                    restrictions::REQUEST_DOMAIN,
+                    signed,
+                )?,
+                ReportingNode::Enrolled(_)
+            ),
+            Fault::Denied {
+                reason: "node_unregistered".into()
+            }
+        );
         let result = self.restriction_page_at(request.version, request.after)?;
         self.sign_reply(
             restrictions::RESPONSE_DOMAIN,
@@ -91,16 +124,21 @@ impl<R: Store, E: Environment> Authority<R, E> {
         node: [u8; 32],
         domain: &[u8],
         signed: &[u8],
-    ) -> Result<Node> {
+    ) -> Result<ReportingNode> {
         ensure!(issuer == self.signing.generation.issuer, Fault::Invalid);
-        let node =
-            load::<Node>(&self.store, &key("node", &node))?.ok_or_else(|| Fault::Denied {
-                reason: "node_unregistered".into(),
-            })?;
-        trust::verify(domain, signed, &node.key).map_err(|_| Fault::Denied {
+        let reporter = if let Some(enrolled) = load::<Node>(&self.store, &key("node", &node))? {
+            ReportingNode::Enrolled(enrolled.policy())
+        } else {
+            let policy =
+                load(&self.store, &key("retired-node", &node))?.ok_or_else(|| Fault::Denied {
+                    reason: "node_unregistered".into(),
+                })?;
+            ReportingNode::Retired(policy)
+        };
+        trust::verify(domain, signed, &node).map_err(|_| Fault::Denied {
             reason: "node_signature".into(),
         })?;
-        Ok(node)
+        Ok(reporter)
     }
 
     fn sign_reply(
@@ -175,7 +213,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
         Ok(())
     }
 
-    fn status(&self, batch: &Batch, node: &Node) -> Result<ReportResult> {
+    fn status(&self, batch: &Batch, policy: NodePolicy) -> Result<ReportResult> {
         let accounts: BTreeSet<_> = batch.resident_accounts.iter().copied().collect();
         let mut entitlements = Vec::with_capacity(accounts.len());
         for account in accounts {
@@ -193,16 +231,12 @@ impl<R: Store, E: Environment> Authority<R, E> {
             batch = ?batch.id,
             entitlements = entitlements.len(),
             restriction_version,
-            policy_version = node.version,
+            policy_version = policy.version,
         );
         Ok(ReportResult::Status {
             entitlements,
             restriction_version,
-            policy: NodePolicy {
-                version: node.version,
-                enabled: node.enabled,
-                anonymous: node.anonymous,
-            },
+            policy,
         })
     }
 
@@ -226,7 +260,10 @@ impl<R: Store, E: Environment> Authority<R, E> {
         // Keep per-minute heartbeats in isolate memory and persist coarse checkpoints
         // so idle nodes do not consume Durable Object row-write quota every minute.
         let checkpoint_due = persisted.as_ref().is_none_or(|stored| {
-            now.saturating_sub(stored.reported_at.unwrap_or(0)) >= NODE_LOAD_CHECKPOINT_SECONDS
+            stored.load.applied_policy_version != next.load.applied_policy_version
+                || (stored.load.resident_shares == 0) != (next.load.resident_shares == 0)
+                || now.saturating_sub(stored.reported_at.unwrap_or(0))
+                    >= NODE_LOAD_CHECKPOINT_SECONDS
         });
         if checkpoint_due {
             save(&mut self.store, &load_key, &next)?;

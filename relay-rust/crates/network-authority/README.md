@@ -46,9 +46,9 @@ response confirms acceptance. Its timeout is 15 seconds.
 1. Generate a separate probe key for each vantage point with `network-sign keygen --id cn-a --private probe.pem --public probe.json`.
    Configure `VANTAGE_KEYS` as a JSON array of `{"id":"cn-a","key":"<probe.json key>","zone":"cn"}` entries (`cn` or `global`).
    Install `./cmd/network-vantage` in that zone and run `network-vantage --key probe.pem`. Roll out matching agent and authority builds when the signed probe protocol changes.
-   Add `--mainland` on mainland agents so they verify the split-DNS mirror.
-2. In **Nodes ? Add node**, enter the public HTTPS origin. For a fresh host with a working reverse proxy,
-   use the setup command in an empty service directory with `wsrelay` installed. Keep its generated identity and database.
+   Configure up to two CN probes and one overseas probe. The authority assigns the split-DNS mirror check to CN agents.
+2. In **Nodes**, choose **Add node** and enter the public HTTPS origin. For a fresh host with a working reverse proxy,
+   use the setup command after installing the [official unit and binary](../../../deploy/network/operations.md#provisioning). Keep its generated identity and database.
    For existing nodes, configure `node.authority` and `node.access.trusted_issuers` using the same public trust.
 3. Inspect the signed descriptor, confirm the alias, location, provider, roles and capacity, and enroll.
    A staging node can report immediately. Its signed load report includes its locally enforced metered budget.
@@ -57,6 +57,14 @@ response confirms acceptance. Its timeout is 15 seconds.
 
 The console shows the signed generation/serial, mirror state, silent vantages and upcoming directory or ticket certificate expiry.
 Use [directory export](../../../deploy/network/README.md) to capture a verified revision for Git and embedded clients.
+
+## Fleet operations
+
+Vantages poll for enrollment every minute and send one signed fleet report every five minutes. **Nodes** shows per-vantage reachability, WebSocket, STUN and TLS expiry. Three consecutive agreeing cycles from at least two reporting vantages, including one in the node's zone, can withdraw or restore a service. A fleet-wide fault, conflicting evidence or loss of the last healthy active service in a zone holds routing steady.
+
+Use **Drain** to stop new registrations while existing links continue serving. Disable or remove after a fresh signed report confirms the policy version and zero resident shares, or confirm early cutoff. Removing a node preserves its published alias binding. A disabled node must pass verification again before promotion.
+
+During a [host upgrade](../../../scripts/deploy/wsrelay/README.md#official-node-upgrades), the maintenance hold keeps the node probe-accessible. A disable requested during the hold takes effect on release. Use the operation ID and node key to correlate authority, vantage and host logs.
 
 ## Operations
 

@@ -50,6 +50,8 @@ records. Private keys and API credentials stay outside the checkout.
    Start `windshare-network.service`; inspect `/.well-known/windshare` and the
    `node_settings_changed`, `relay_pacing_disabled`, `relay_service_unavailable`, and `node_load_summary` logs.
 
+For subsequent binary changes use the [single-node upgrade runner](../../scripts/deploy/wsrelay/README.md#official-node-upgrades).
+
 ## Certificate renewal
 
 Install pinned `acme.sh` 3.1.6 in `/opt/windshare-acme/3.1.6`, with private

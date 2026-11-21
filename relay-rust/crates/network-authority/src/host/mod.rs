@@ -112,6 +112,8 @@ impl DurableObject for NetworkAuthority {
         };
         if request.path().starts_with("/internal/fleet/")
             || request.path().starts_with("/v1/vantage/")
+            || request.path().starts_with("/v1/maintenance/")
+            || request.path() == "/v1/admin/nodes/manage"
         {
             return self.fleet(&request, &bytes).await;
         }

@@ -18,11 +18,11 @@ use windshare_relay_access::{
 
 const POLL_DOMAIN: &[u8] = b"windshare/vantage-poll/v1\0";
 const RESULT_DOMAIN: &[u8] = b"windshare/vantage-result/v1\0";
-const FRESH_SECONDS: u64 = 90;
+pub(super) const FRESH_SECONDS: u64 = 90;
 const PROBE_ALLOWANCE_BYTES: u64 = 4 * 1024;
 const RETRY_SECONDS: u64 = 60;
 const MAX_RETRY_SHIFT: u8 = 5; // 32 minutes between retries for an unattended broken draft.
-pub const SILENT_SECONDS: u64 = 5 * 60;
+pub const SILENT_SECONDS: u64 = 2 * super::monitoring::CYCLE_SECONDS;
 pub const ORIGIN_COUNT: usize = 3;
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -44,7 +44,6 @@ pub struct Proof {
 struct Poll {
     at: u64,
     shares: [[u8; 12]; ORIGIN_COUNT],
-    mirror: Option<String>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -61,15 +60,6 @@ enum ProbeOutcome {
     Failed { reason: String },
     Released,
 }
-#[derive(Deserialize, Serialize)]
-struct Heartbeat {
-    zone: Zone,
-    // Client-signed poll timestamp used only to reject replayed polls.
-    last_poll_at: u64,
-    // Authority receipt clock time used for liveness and mirror freshness.
-    seen_at: u64,
-    mirror: Option<String>,
-}
 #[derive(Serialize)]
 pub struct Work {
     pub operation_id: String,
@@ -80,7 +70,7 @@ pub struct Work {
 }
 
 impl Proof {
-    fn open<'a, T: DeserializeOwned>(
+    pub(super) fn open<'a, T: DeserializeOwned>(
         &self,
         agents: &'a [Agent],
         domain: &[u8],
@@ -91,7 +81,12 @@ impl Proof {
             .ok_or_else(|| Fault::Denied {
                 reason: "unknown_vantage".into(),
             })?;
-        ensure!(self.payload.len() <= 4096, Fault::Invalid);
+        let limit = if domain == super::monitoring::REPORT_DOMAIN {
+            128 * 1024
+        } else {
+            4096
+        };
+        ensure!(self.payload.len() <= limit, Fault::Invalid);
         let data = B64.decode(&self.payload).map_err(|_| Fault::Invalid)?;
         verify_bytes(&agent.key, domain, &data, &self.signature).map_err(|_| Fault::Denied {
             reason: "vantage_signature".into(),
@@ -105,6 +100,11 @@ impl Proof {
 /// # Errors
 /// Rejects malformed entries, duplicate names and reused signing keys.
 pub fn validate_agents(agents: &[Agent]) -> Result<()> {
+    ensure!(
+        agents.iter().filter(|a| a.zone == Zone::Cn).count() <= 2
+            && agents.iter().filter(|a| a.zone == Zone::Global).count() <= 1,
+        "configure at most two CN vantages and one overseas vantage"
+    );
     let mut ids = std::collections::BTreeSet::new();
     let mut keys = std::collections::BTreeSet::new();
     for (index, agent) in agents.iter().enumerate() {
@@ -140,10 +140,10 @@ pub fn mainland_current(
 ) -> Result<bool> {
     let mut seen = false;
     for agent in agents.iter().filter(|agent| agent.zone == Zone::Cn) {
-        let Some(beat) = load::<Heartbeat>(store, &format!("vantage/{}", agent.key))? else {
+        let Some(beat) = super::monitoring::latest(store, agent)? else {
             continue;
         };
-        if beat.zone == agent.zone && now.saturating_sub(beat.seen_at) <= SILENT_SECONDS {
+        if beat.zone == agent.zone && now.saturating_sub(beat.at) <= SILENT_SECONDS {
             if beat.mirror.as_deref() != Some(expected) {
                 return Ok(false);
             }
@@ -158,8 +158,8 @@ pub fn mainland_current(
 pub fn silent(store: &impl Store, agents: &[Agent], now: u64) -> Result<Vec<String>> {
     let mut missing = Vec::new();
     for agent in agents {
-        let beat = load::<Heartbeat>(store, &format!("vantage/{}", agent.key))?;
-        if beat.is_none_or(|b| now.saturating_sub(b.seen_at) > SILENT_SECONDS) {
+        let beat = super::monitoring::latest(store, agent)?;
+        if beat.is_none_or(|b| b.zone != agent.zone || now.saturating_sub(b.at) > SILENT_SECONDS) {
             missing.push(agent.id.clone());
         }
     }
@@ -176,7 +176,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
     ) -> Result<Option<Work>> {
         let (agent, poll) = proof.open::<Poll>(agents, POLL_DOMAIN)?;
         let now = self.environment.now();
-        let beat = format!("vantage/{}", agent.key);
+        let claim_key = format!("vantage-lease/{}", agent.key);
         ensure!(
             now.abs_diff(poll.at) <= FRESH_SECONDS
                 && poll.shares.iter().all(|s| *s != [0; 12])
@@ -186,8 +186,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
                     .collect::<std::collections::BTreeSet<_>>()
                     .len()
                     == ORIGIN_COUNT
-                && poll.mirror.as_ref().is_none_or(|s| s.len() == 43)
-                && load::<Heartbeat>(&self.store, &beat)?.is_none_or(|b| poll.at > b.last_poll_at),
+                && load::<u64>(&self.store, &claim_key)?.is_none_or(|at| poll.at > at),
             Fault::Invalid
         );
         ensure!(
@@ -196,16 +195,6 @@ impl<R: Store, E: Environment> Authority<R, E> {
                 .is_none(),
             Fault::Invalid
         );
-        save(
-            &mut self.store,
-            &beat,
-            &Heartbeat {
-                zone: agent.zone,
-                last_poll_at: poll.at,
-                seen_at: now,
-                mirror: poll.mirror,
-            },
-        )?;
         let mut selected = None;
         for (_, raw) in self.store.scan("node/", None)? {
             let node: Node = serde_json::from_str(&raw)?;
@@ -233,6 +222,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
         let Some((_, mut node)) = selected else {
             return Ok(None);
         };
+        save(&mut self.store, &claim_key, &poll.at)?;
         let lease = B64.encode(self.environment.random::<16>()?);
         let listing = node.listing.as_mut().ok_or(Fault::Invalid)?;
         let until = (now + probe::LIFETIME).min(self.signing.generation.expires_at);
@@ -270,7 +260,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
         save(&mut self.store, &key("node", &node.key), &node)?;
         Ok(Some(work))
     }
-    fn probe_ticket(
+    pub(crate) fn probe_ticket(
         &self,
         node: &[u8; 32],
         share: &[u8; 12],

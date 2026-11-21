@@ -3,6 +3,7 @@ pub mod access;
 mod budget;
 pub(crate) mod governor;
 mod identity;
+pub mod maintenance;
 mod metered;
 mod metrics;
 pub(crate) mod usage;
@@ -50,6 +51,7 @@ struct State {
 #[derive(Clone)]
 pub struct Runtime {
     pub(crate) access: access::Service,
+    pub(crate) maintenance: Arc<OnceLock<maintenance::Gate>>,
     pub(crate) console: Arc<OnceLock<crate::console::Console>>,
     pub(crate) governor: governor::Governor,
     state: Arc<Mutex<State>>,
@@ -71,6 +73,7 @@ impl Default for Runtime {
         Self {
             governor: governor::Governor::new(access.clone()),
             access,
+            maintenance: Arc::default(),
             console: Arc::default(),
             state: Arc::new(Mutex::new(State {
                 settings: Settings::default(),
@@ -110,6 +113,10 @@ impl Runtime {
         let access_now = timestamp.unsigned_abs();
         self.access
             .restore_access(store.initialize_control(access_now)?, access_now)?;
+        if settings.authority.is_some() && self.maintenance.get().is_none() {
+            let gate = maintenance::Gate::install(store.path())?;
+            let _ = self.maintenance.set(gate);
+        }
         let budgets = budget::Budgets::restore(store.load_budgets()?);
         let mut state = self.state.lock().map_err(|_| anyhow!("node state"))?;
         state.control = Some(store);

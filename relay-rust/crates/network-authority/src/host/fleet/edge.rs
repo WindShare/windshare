@@ -71,7 +71,11 @@ pub(super) async fn fetch_public(url: &str, limit: usize, accept: &str) -> anyho
     Ok(bytes)
 }
 
-pub(super) async fn mirrors_match(expected: &Envelope) -> bool {
+pub(super) async fn mirrors_match(
+    expected: &Envelope,
+    operation_id: &str,
+    node_id: Option<&str>,
+) -> bool {
     let Ok(release) = release() else { return false };
     let check = async |origin: &str| {
         let result = fetch_public(
@@ -84,7 +88,7 @@ pub(super) async fn mirrors_match(expected: &Envelope) -> bool {
         match result {
             Ok(actual) => actual == *expected,
             Err(error) => {
-                tracing::warn!(event="directory_mirror_unavailable", %origin, %error);
+                tracing::warn!(event="directory_mirror_unavailable", %operation_id, node_id, %origin, %error);
                 false
             }
         }
@@ -93,6 +97,8 @@ pub(super) async fn mirrors_match(expected: &Envelope) -> bool {
         futures_util::future::join(check(&release.link_host), check(&release.backup_entry)).await;
     tracing::info!(
         event = "directory_mirrors_checked",
+        %operation_id,
+        node_id,
         revision = %crate::fleet::publication::digest(expected).unwrap_or_default(),
         primary,
         backup
@@ -116,7 +122,7 @@ pub(in crate::host) async fn handle_edge(mut req: Request, env: &Env) -> Result<
             return invalid();
         };
         let expected = verified.json::<Envelope>().await?;
-        if !mirrors_match(&expected).await {
+        if !mirrors_match(&expected, &command.operation_id, Some(&command.node_key)).await {
             return routes::fault(&Fault::Denied {
                 reason: "mirror_lag".into(),
             })

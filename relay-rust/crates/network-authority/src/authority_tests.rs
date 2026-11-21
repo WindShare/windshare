@@ -326,6 +326,8 @@ fn batch(
         shares: vec![],
         load: Load {
             relay_budget: None,
+            applied_policy_version: 0,
+            resident_shares: 0,
             active_sessions: 1,
             wire_bytes: bytes,
             forwarded_bytes: bytes,
@@ -407,7 +409,7 @@ fn late_reports_charge_the_original_day_and_restart_retries_do_not_double_charge
             zone: Zone::Global,
             region: "test".into(),
             anonymous: true,
-            enabled: true,
+            admission: windshare_relay_access::usage::Admission::Accepting,
         },
     )
     .unwrap();
@@ -426,8 +428,11 @@ fn late_reports_charge_the_original_day_and_restart_retries_do_not_double_charge
     let (before, _) = status(&mut authority, &refresh);
     assert_eq!(before[0].entitlement.remaining_bytes, 1000);
     assert_eq!(before[0].entitlement.version, session.entitlement.version);
-    // The first node report already checkpointed load; idle refreshes write nothing.
-    assert_eq!(authority.store.put_count, writes_before_idle);
+    // Queued usage cannot confirm admission. Only the first status checkpoints load.
+    assert_eq!(authority.store.put_count, writes_before_idle + 1);
+    let writes_after_status = authority.store.put_count;
+    status(&mut authority, &refresh);
+    assert_eq!(authority.store.put_count, writes_after_status);
     let store = authority.store.clone();
     authority = Authority::new(store, authority.environment, authority.signing).unwrap();
     assert!(matches!(
@@ -692,7 +697,7 @@ fn usage_report_rejects_invalid_monthly_relay_budget() {
             zone: Zone::Global,
             region: "test".into(),
             anonymous: true,
-            enabled: true,
+            admission: windshare_relay_access::usage::Admission::Accepting,
         },
     )
     .unwrap();
@@ -716,6 +721,8 @@ fn usage_report_rejects_invalid_monthly_relay_budget() {
             shares: vec![],
             load: Load {
                 relay_budget: Some(budget),
+                applied_policy_version: 0,
+                resident_shares: 0,
                 active_sessions: 0,
                 wire_bytes: 0,
                 forwarded_bytes: 0,

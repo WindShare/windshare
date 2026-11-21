@@ -55,11 +55,8 @@ use crate::{
 use observation::{decision, event_context};
 use operation::Pending;
 
-/// How long a published route waits for its sender after losing the owner
-/// connection: enough for a sender to notice the loss and redial through its
-/// relay backoff, short enough that a crashed sender does not keep receivers
-/// retrying a dead share.
-const SENDER_GRACE: Duration = Duration::from_secs(60);
+/// Time reserved for a disconnected sender to detect loss and resume its share.
+pub const SENDER_GRACE: Duration = Duration::from_secs(60);
 
 #[derive(Debug)]
 enum State {

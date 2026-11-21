@@ -77,7 +77,11 @@ func (s SyntheticShare) exchange(ctx context.Context, client *http.Client, base,
 	}
 	defer func() {
 		_ = sender.Close()
-		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+		deadline := time.Now().Add(3 * time.Second)
+		if outer, ok := ctx.Deadline(); ok && outer.Before(deadline) {
+			deadline = outer
+		}
+		cleanup, cancel := context.WithDeadline(context.WithoutCancel(ctx), deadline)
 		defer cancel()
 		var stop v2.StopID
 		rand.Read(stop[:])

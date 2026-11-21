@@ -11,6 +11,8 @@ fn sample_batch(relay_budget: Option<MonthlyBudget>) -> Batch {
         shares: Vec::new(),
         load: Load {
             relay_budget,
+            applied_policy_version: 0,
+            resident_shares: 0,
             active_sessions: 0,
             wire_bytes: 0,
             forwarded_bytes: 0,

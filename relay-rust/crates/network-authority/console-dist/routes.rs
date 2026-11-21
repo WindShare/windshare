@@ -2,7 +2,7 @@
 match path {
     "/assets/device-D4S9ah3R.js" => Some((include_str!("assets/device-D4S9ah3R.js"), "text/javascript; charset=utf-8")),
     "/assets/identity-DaoS8ut4.js" => Some((include_str!("assets/identity-DaoS8ut4.js"), "text/javascript; charset=utf-8")),
-    "/assets/index-BK9hrA1G.js" => Some((include_str!("assets/index-BK9hrA1G.js"), "text/javascript; charset=utf-8")),
+    "/assets/index-C1U8j4xi.js" => Some((include_str!("assets/index-C1U8j4xi.js"), "text/javascript; charset=utf-8")),
     "/assets/index-D7mc2f70.css" => Some((include_str!("assets/index-D7mc2f70.css"), "text/css; charset=utf-8")),
     "/assets/layout-DkL5uAA6.css" => Some((include_str!("assets/layout-DkL5uAA6.css"), "text/css; charset=utf-8")),
     "/assets/layout-PhsVwBC9.js" => Some((include_str!("assets/layout-PhsVwBC9.js"), "text/javascript; charset=utf-8")),

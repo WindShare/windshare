@@ -30,6 +30,7 @@ pub trait Persistence: Clone + Send + Sync + 'static {
 
 struct State {
     connection: Mutex<Connection>,
+    residents: Mutex<std::collections::BTreeSet<ShareId>>,
     path: std::path::PathBuf,
     // Generation-owned clones retain this lock through transport teardown and
     // blocking transactions, even when their actor or server has disappeared.
@@ -77,6 +78,7 @@ impl Database {
         let generation = initialize(&mut connection, relay)?;
         Ok(Self(Arc::new(State {
             connection: Mutex::new(connection),
+            residents: Mutex::default(),
             path,
             _lease: lease,
             relay,
@@ -94,6 +96,14 @@ impl Database {
         Ok(db)
     }
 
+    pub(crate) fn path(&self) -> &Path {
+        &self.0.path
+    }
+
+    pub(crate) fn resident_inventory(&self) -> std::collections::BTreeSet<ShareId> {
+        self.0.residents.lock().expect("resident inventory").clone()
+    }
+
     pub(crate) fn generation(&self) -> NonZeroU64 {
         self.0.generation
     }
@@ -104,24 +114,34 @@ impl Database {
             .connection
             .lock()
             .map_err(|_| anyhow!("database lock poisoned"))?;
-        let mut statement = connection.prepare("SELECT share FROM shares")?;
-        let shares = statement.query_map([], |row| row.get::<_, Vec<u8>>(0))?;
+        let mut statement = connection.prepare(&format!(
+            "SELECT share,record,descriptor FROM shares WHERE {}",
+            recovery_filter()
+        ))?;
+        let mut rows = statement.query([])?;
         let mut records = Vec::new();
         // Permanent STOP history is not an in-memory actor inventory.
-        for bytes in shares {
+        while let Some(row) = rows.next()? {
             let share = ShareId::new(
-                bytes?
+                row.get::<_, Vec<u8>>(0)?
                     .try_into()
                     .map_err(|_| anyhow!("invalid share key"))?,
             )
             .ok_or_else(|| anyhow!("zero share key"))?;
-            let stored = read(&connection, self.0.relay, share)?
-                .ok_or_else(|| anyhow!("authority disappeared"))?;
+            let bytes = row.get::<_, Vec<u8>>(1)?;
+            let stored = StoredAuthority::decode(self.0.relay, share, &bytes, row.get(2)?)
+                .map_err(|error| anyhow!("invalid durable authority: {error:?}"))?;
             if !matches!(stored.record(), Record::Stopped(_)) {
                 ensure!(records.len() < limit, "recovering share capacity exhausted");
                 records.push(stored.record());
             }
         }
+        *self.0.residents.lock().expect("resident inventory") = records
+            .iter()
+            .filter(|record| record.live_attribution().is_some())
+            .map(Record::share)
+            .collect();
+        drop(rows);
         drop(statement);
         drop(connection);
         Ok(records)
@@ -150,9 +170,31 @@ impl Persistence for Database {
         let stored = transactions::apply(&transaction, self.0.relay, share, operation)?;
         // Complete is evidence of a committed transaction, never of an attempted write.
         transaction.commit()?;
+        // Report committed idle and recovering shares even while an actor is being rebuilt.
+        {
+            let mut residents = self.0.residents.lock().expect("resident inventory");
+            if stored
+                .as_ref()
+                .is_some_and(|s| s.record().live_attribution().is_some())
+            {
+                residents.insert(share);
+            } else {
+                residents.remove(&share);
+            }
+        }
         drop(connection);
         Ok(stored)
     }
+}
+
+// Idle senders have a bounded reconnect window. A restart must scale with live
+// routes and pending STOP cleanup, independently of the permanent STOP history.
+// Unknown formats stay in the recovery set and still pass through full decoding.
+pub fn recovery_filter() -> String {
+    let ([format, kind], length) = Record::STOPPED_ENCODING;
+    format!(
+        "descriptor IS NOT NULL OR length(record) != {length} OR substr(record,1,2) != x'{format:02X}{kind:02X}'"
+    )
 }
 
 fn initialize(connection: &mut Connection, relay: RelayIdentity) -> Result<NonZeroU64> {
@@ -170,6 +212,10 @@ fn initialize(connection: &mut Connection, relay: RelayIdentity) -> Result<NonZe
             descriptor BLOB
          ) STRICT;",
     )?;
+    transaction.execute_batch(&format!(
+        "CREATE INDEX IF NOT EXISTS shares_needing_recovery ON shares(share) WHERE {}",
+        recovery_filter()
+    ))?;
     let existing: Option<(i64, Vec<u8>, i64)> = transaction
         .query_row(
             "SELECT format, relay, generation FROM host WHERE singleton = 1",

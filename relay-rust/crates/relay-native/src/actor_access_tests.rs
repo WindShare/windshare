@@ -22,7 +22,7 @@ use windshare_relay_access::{
     restrictions::{Restriction, Restrictions},
     ticket::Ticket,
     trust::Generation as SigningGeneration,
-    usage::NodePolicy,
+    usage::{Admission, NodePolicy},
 };
 use windshare_relay_core::{challenge::ChallengeSeed, error_frame::ErrorFrame};
 
@@ -157,55 +157,47 @@ fn access_fixture(now: u64) -> (SigningGeneration, String, Policy) {
     (generation, account_bearer, policy)
 }
 
+fn set_admission(
+    node: &Runtime,
+    generation: SigningGeneration,
+    version: u64,
+    admission: Admission,
+) {
+    node.access.set_controller(Some(generation.issuer));
+    node.access
+        .apply_authority(AuthorityState {
+            generation,
+            policy: Some(NodePolicy {
+                version,
+                admission,
+                probe_account: windshare_relay_access::probe::PROBE_ACCOUNT,
+                anonymous: true,
+            }),
+        })
+        .unwrap();
+}
+
 #[tokio::test]
-async fn public_pause_keeps_local_registration_and_revokes_public_access() {
+async fn disabling_closes_every_live_sender_and_denies_fresh_registrations() {
     let fixture = Fixture::new();
-    let (generation, account_bearer, policy) = access_fixture(fixture.now(false).0 / 1000);
-    let node = || {
+    let (generation, account, policy) = access_fixture(fixture.now(false).0 / 1000);
+    for bearer in [
+        None,
+        Some(account.as_str()),
+        Some(OWNER_KEY),
+        Some(SERVICE_KEY),
+    ] {
         let node = Runtime::default();
         node.access.configure(policy.clone()).unwrap();
-        node.access.set_controller(Some(generation.issuer));
-        node
-    };
-    let pause = |node: &Runtime| {
-        node.access
-            .apply_authority(AuthorityState {
-                generation,
-                policy: Some(NodePolicy {
-                    version: 1,
-                    enabled: false,
-                    anonymous: true,
-                }),
-            })
-            .unwrap();
-    };
-
-    let local = node();
-    pause(&local);
-    for key in [OWNER_KEY, SERVICE_KEY] {
-        with_sender(&local, &fixture, Some(key), async |sender| {
+        set_admission(&node, generation, 1, Admission::Accepting);
+        with_sender(&node, &fixture, bearer, async |sender| {
             sender.finish_registration(&fixture).await;
+            set_admission(&node, generation, 2, Admission::Disabled);
+            assert_closed(&mut sender.writer).await;
         })
         .await;
-    }
-
-    for bearer in [None, Some(account_bearer.as_str())] {
-        let public = node();
-        with_sender(&public, &fixture, bearer, async |sender| {
-            sender.finish_registration(&fixture).await;
-            pause(&public);
-            assert_eq!(
-                timeout(TEST_BUDGET, sender.writer.recv()).await.unwrap(),
-                None
-            );
-        })
-        .await;
-
-        with_sender(&public, &fixture, bearer, async |sender| {
-            assert_eq!(
-                read(&mut sender.writer).await,
-                ErrorFrame::AccessDenied.encode()
-            );
+        with_sender(&node, &fixture, bearer, async |sender| {
+            assert_refused(&mut sender.writer, ErrorFrame::AccessDenied).await;
         })
         .await;
     }
@@ -434,7 +426,7 @@ enum PolicyRevocation {
     AccountBan,
     CredentialRevocation,
     LocalServiceKeyRevocation,
-    PublicPause,
+    Disabled,
 }
 
 fn apply_policy_revocation(
@@ -479,17 +471,8 @@ fn apply_policy_revocation(
             }
             node.access.configure(updated).unwrap();
         }
-        PolicyRevocation::PublicPause => {
-            node.access
-                .apply_authority(AuthorityState {
-                    generation,
-                    policy: Some(NodePolicy {
-                        version: 1,
-                        enabled: false,
-                        anonymous: true,
-                    }),
-                })
-                .unwrap();
+        PolicyRevocation::Disabled => {
+            set_admission(node, generation, 2, Admission::Disabled);
         }
     }
 }
@@ -526,13 +509,9 @@ async fn revoked_resident_share_refuses_resume_and_join_after_access_change_is_c
         (
             "public_pause_account",
             Some(account_bearer.as_str()),
-            PolicyRevocation::PublicPause,
+            PolicyRevocation::Disabled,
         ),
-        (
-            "public_pause_anonymous",
-            None,
-            PolicyRevocation::PublicPause,
-        ),
+        ("public_pause_anonymous", None, PolicyRevocation::Disabled),
     ];
 
     for (case, bearer, revocation) in cases {
@@ -544,7 +523,7 @@ async fn revoked_resident_share_refuses_resume_and_join_after_access_change_is_c
         .unwrap();
         let node = Runtime::default();
         node.access.configure(policy.clone()).unwrap();
-        node.access.set_controller(Some(generation.issuer));
+        set_admission(&node, generation, 1, Admission::Accepting);
 
         with_access_actor(node.clone(), store.clone(), &fixture, async |harness| {
             let mut sender = harness.publish(1, bearer, &fixture).await;
@@ -580,7 +559,7 @@ async fn revoked_resident_share_refuses_resume_and_join_after_access_change_is_c
 }
 
 #[tokio::test]
-async fn owner_share_keeps_resume_and_join_while_public_relay_is_paused() {
+async fn draining_preserves_join_and_resume_for_an_existing_owner_share() {
     let fixture = Fixture::new();
     let now_seconds = fixture.now(false).0 / 1000;
     let (generation, _account_bearer, policy) = access_fixture(now_seconds);
@@ -590,20 +569,22 @@ async fn owner_share_keeps_resume_and_join_while_public_relay_is_paused() {
         fixture.identity().relay,
     )
     .unwrap();
-    let owner_node = Runtime::default();
-    owner_node.access.configure(policy.clone()).unwrap();
-    owner_node.access.set_controller(Some(generation.issuer));
-    apply_policy_revocation(
-        PolicyRevocation::PublicPause,
-        &owner_node,
-        generation,
-        &policy,
-        *fixture.identity().share.as_bytes(),
-        now_seconds,
+    let node = Runtime::default();
+    assert!(
+        node.maintenance
+            .set(crate::node::maintenance::Gate::install(store.path()).unwrap())
+            .is_ok()
     );
-
-    with_access_actor(owner_node, store, &fixture, async |harness| {
+    let fence = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(store.path().with_added_extension("admission"))
+        .unwrap();
+    node.access.configure(policy).unwrap();
+    set_admission(&node, generation, 1, Admission::Accepting);
+    with_access_actor(node.clone(), store, &fixture, async |harness| {
         let _sender = harness.publish(1, Some(OWNER_KEY), &fixture).await;
+        set_admission(&node, generation, 2, Admission::Draining);
         harness
             .tx
             .send(Event::Disconnected(reference(1)))
@@ -615,6 +596,32 @@ async fn owner_share_keeps_resume_and_join_while_public_relay_is_paused() {
         assert_eq!(read(&mut resumed).await, fixture.bytes("registeredB64"));
         let mut joined = harness.send_join(3, &fixture).await;
         assert_eq!(&read(&mut joined).await[..4], b"WS2D");
+        // A pending JOIN already owns the fence before its sender admits the session.
+        assert!(matches!(
+            fence.try_lock(),
+            Err(std::fs::TryLockError::WouldBlock)
+        ));
+        let (closed, applied) = tokio::sync::oneshot::channel();
+        harness
+            .tx
+            .send(Event::Disconnected(reference(3)))
+            .await
+            .unwrap();
+        harness
+            .tx
+            .send(Event::Closed(reference(3), closed))
+            .await
+            .unwrap();
+        applied.await.unwrap();
+        fence.try_lock().unwrap();
+        let mut retrying = harness.send_join(4, &fixture).await;
+        assert_refused(
+            &mut retrying,
+            ErrorFrame::AccessUnavailable(
+                windshare_relay_core::error_frame::RetryAfter::from_millis(1000).unwrap(),
+            ),
+        )
+        .await;
     })
     .await;
 }
@@ -632,7 +639,7 @@ async fn restarted_actor_refuses_resume_and_join_for_previously_banned_share() {
     .unwrap();
     let node = Runtime::default();
     node.access.configure(policy.clone()).unwrap();
-    node.access.set_controller(Some(generation.issuer));
+    set_admission(&node, generation, 1, Admission::Accepting);
 
     with_access_actor(node.clone(), store.clone(), &fixture, async |first| {
         let _sender = first

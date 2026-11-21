@@ -42,23 +42,21 @@ type agent struct {
 	config     *networkconfig.Config
 	client     *http.Client
 	authority  *http.Client
-	mainland   bool
 	lastPollAt int64
 }
 
 func main() {
 	keyPath := flag.String("key", "", "probe-only Ed25519 PKCS8 PEM")
-	mainland := flag.Bool("mainland", false, "check the split-DNS mainland frontend mirror")
 	flag.Parse()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
-	err := run(*keyPath, *mainland)
+	err := run(*keyPath)
 	if err != nil {
 		slog.Error("vantage stopped", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(path string, mainland bool) error {
+func run(path string) error {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -82,11 +80,14 @@ func run(path string, mainland bool) error {
 	if config.Authority == nil {
 		return errors.New("release does not specify an authority")
 	}
-	a := agent{key: key, config: config, client: networkprobe.Client(), authority: networkprobe.ReleaseClient(), mainland: mainland}
+	a := agent{key: key, config: config, client: networkprobe.Client(), authority: networkprobe.ReleaseClient()}
 	defer a.client.CloseIdleConnections()
 	defer a.authority.CloseIdleConnections()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	monitorDone := make(chan struct{})
+	go func() { defer close(monitorDone); a.monitor(ctx) }()
+	defer func() { stop(); <-monitorDone }()
 	ticks := time.NewTicker(pollInterval)
 	defer ticks.Stop()
 	for {
@@ -102,9 +103,6 @@ func run(path string, mainland bool) error {
 }
 
 func (a *agent) mirror(ctx context.Context) *string {
-	if !a.mainland {
-		return nil
-	}
 	mirrorURL := a.config.LinkHost + "/.well-known/windshare-network"
 	data, err := networkprobe.Fetch(ctx, a.client, mirrorURL, nodedirectory.MaximumEnvelopeBytes)
 	if err != nil {
@@ -163,9 +161,8 @@ func (a *agent) cycle(ctx context.Context) error {
 		shares[i] = share
 		ids[i] = share.ID()
 	}
-	mirror := a.mirror(ctx)
 	var work *networkprobe.Work
-	if err := a.post(ctx, "poll", pollDomain, map[string]any{"at": a.nextPollTimestamp(time.Now()), "shares": ids, "mirror": mirror}, &work); err != nil || work == nil {
+	if err := a.post(ctx, "poll", pollDomain, map[string]any{"at": a.nextPollTimestamp(time.Now()), "shares": ids}, &work); err != nil || work == nil {
 		return err
 	}
 	probe, cancel := context.WithTimeout(ctx, checkTimeout)
@@ -211,7 +208,7 @@ func (a *agent) post(ctx context.Context, path, domain string, body, out any) er
 	if out == nil {
 		return nil
 	}
-	const limit = 32 << 10
+	const limit = 512 << 10
 	data, err := io.ReadAll(io.LimitReader(res.Body, limit+1))
 	if err != nil {
 		return err

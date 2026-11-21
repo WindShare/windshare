@@ -225,6 +225,10 @@ pub enum Record {
 }
 
 impl Record {
+    /// Stable codec prefix and size used by durable indexes to skip completed STOPs.
+    pub const STOPPED_ENCODING: ([u8; 2], usize) =
+        ([FORMAT, STOPPED], HEADER_BYTES + STOP_FACT_BYTES);
+
     /// Only live and recoverable routes carry a sender contribution identity.
     pub const fn live_attribution(&self) -> Option<crate::access::Attribution> {
         match self {

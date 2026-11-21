@@ -1,4 +1,5 @@
 import { useCallback, useState } from 'react'
+import { FleetControls, ProbeResults, ProbeWarnings } from './fleet/operations'
 import { Verification } from './verification'
 import { useAction, useResource } from '../ui/activity'
 import { message } from '../ui/locale'
@@ -10,7 +11,7 @@ import { BackLink, Badge, Bytes, DateStamp, EmptyState, Notice, ReadError } from
 import { Icon, type IconName } from '../ui/Icon'
 import type { AuthorityClient } from './api'
 import { encode } from './identity'
-import type { LoadReport, NodeDetails, NodePage, PolicyField, Publication, RelayNode } from './model'
+import type { LoadReport, NodeDetails, NodePage, PolicyChange, Publication, RelayNode } from './model'
 
 type Directory = Publication | null | undefined
 
@@ -88,10 +89,10 @@ export function Nodes({ page, directory, loading, loadMore }: {
               <th scope="row"><a className="node-link" href={'#node/' + id}>
                 <span className="row-icon"><Icon name="server" size={19} /></span>
                 <span>{node.listing?.spec.alias || node.region || t.zones[node.zone]}<small>{t.zones[node.zone]} · <code>{id.slice(0, 8)}</code></small></span></a></th>
-              <td data-label={t.savedRelayPolicy}><div><Badge tone={node.enabled ? 'good' : 'warning'}>{node.enabled ? t.enabled : t.paused}</Badge>
+              <td data-label={t.savedRelayPolicy}><div><Badge tone={node.admission === 'accepting' ? 'good' : 'warning'}>{t.admissions[node.admission]}</Badge>
                 <small>{node.anonymous ? t.anonymousAllowed : t.accountRequired} · v{node.version}</small></div></td>
               <td data-label={t.lastReport}><div><Latest report={node.report} /></div></td>
-              <td data-label={t.directory}><div><Listing directory={directory} id={id} listing={node.listing} /></div></td>
+              <td data-label={t.directory}><div><Listing directory={directory} id={id} listing={node.listing} />{directory && <ProbeWarnings node={node} directory={directory} />}</div></td>
             </tr>
           })}</tbody>
         </table>
@@ -125,9 +126,9 @@ export function NodeDetail({ node, directory, api, saved, refresh }: NodeDetailA
   const t = useCopy(networkCopy)
   const action = useAction()
   const id = encode(node.key)
-  function change(field: PolicyField, value: boolean) {
+  function change(change: PolicyChange) {
     void action.run(async () => {
-      saved(await api.policy(node.key, field, value))
+      saved(await api.policy(node.key, change))
       return message(networkCopy, 'nodePolicySaved')
     })
   }
@@ -138,21 +139,25 @@ export function NodeDetail({ node, directory, api, saved, refresh }: NodeDetailA
         <dt>{t.directory}</dt><dd><Listing directory={directory} id={id} listing={node.listing} /></dd>
         <dt>{t.lastReport}</dt><dd>{report ? <ReportTime report={report} /> : t.awaitingReport}</dd>
         {report?.load.relay_budget && <><dt>{t.relayBudget}</dt><dd><Bytes value={report.load.relay_budget.bytes} /> · {t.resetsDay(report.load.relay_budget.reset_day_utc)}</dd></>}
-        {report && <><dt>{t.loadSnapshot} · <DateStamp millis={report.created_at * 1000} /></dt><dd>
+        {report && <><dt>{t.appliedPolicy}</dt><dd>v{report.load.applied_policy_version} / v{node.version}</dd>
+          <dt>{t.residentShares}</dt><dd>{report.load.resident_shares}</dd>
+          <dt>{t.loadSnapshot} · <DateStamp millis={report.created_at * 1000} /></dt><dd>
           {t.sessions(report.load.active_sessions)} · {t.relayed} <Bytes value={report.load.forwarded_bytes} /> · {t.refusals(report.load.admission_refusals)}</dd></>}
       </dl></section>
     <section className="panel padded"><div className="section-title"><h2>{t.savedNodePolicy}</h2><Badge>v{node.version}</Badge></div>
-      <div className="setting-row"><div><h3>{t.publicRelay}</h3><p>{node.enabled ? t.enabled : t.paused}</p></div>
-        <button className="secondary" disabled={action.busy} onClick={() => node.enabled ? setConfirmPause(true) : change('public_relay', true)}>
-          {node.enabled ? t.pauseRelay : t.enableRelay}</button></div>
+      <div className="setting-row"><div><h3>{t.publicRelay}</h3><p>{t.admissions[node.admission]}</p></div>
+        {!node.listing && <button className="secondary" disabled={action.busy} onClick={() => node.admission === 'disabled'
+          ? change({ field: 'admission', value: 'accepting' }) : setConfirmPause(true)}>{node.admission === 'disabled' ? t.enableRelay : t.disable}</button>}</div>
       <div className="setting-row"><div><h3>{t.anonymousSharing}</h3><p>{node.anonymous ? t.allowed : t.accountRequired}</p></div>
-        <button className="secondary" disabled={action.busy} onClick={() => change('anonymous_sharing', !node.anonymous)}>
+        <button className="secondary" disabled={action.busy} onClick={() => change({ field: 'anonymous_sharing', value: !node.anonymous })}>
           {node.anonymous ? t.requireAccount : t.allowAnonymous}</button></div>
       <Notice feedback={action.feedback} />
     </section></div>
     {node.listing && <Verification node={node} api={api} refresh={refresh} />}
-    {confirmPause && <Confirm title={t.confirmPause} confirm={t.pauseRelay} onCancel={() => setConfirmPause(false)}
-      onConfirm={() => { setConfirmPause(false); change('public_relay', false) }}>
+    {node.listing && <FleetControls node={node} api={api} refresh={refresh} />}
+    {directory && <ProbeResults operation={node.listing?.operation_id} id={id} directory={directory} />}
+    {confirmPause && <Confirm title={t.confirmPause} confirm={t.disable} onCancel={() => setConfirmPause(false)}
+      onConfirm={() => { setConfirmPause(false); change({ field: 'admission', value: 'disabled' }) }}>
       <p>{t.pauseConsequences}</p>
     </Confirm>}
   </div>

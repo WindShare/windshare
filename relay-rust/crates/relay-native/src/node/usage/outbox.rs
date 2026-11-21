@@ -16,15 +16,22 @@ impl Reporter {
         created_at: u64,
     ) -> Result<Batch> {
         let load = self.node.snapshot();
+        let issuer = self.authority.issuer()?;
+        let (applied_policy_version, resident_shares) = self
+            .node
+            .access
+            .reported_policy(issuer, self.store.resident_inventory());
         Ok(Batch {
             id: super::super::identity::random()?,
-            issuer: self.authority.issuer()?,
+            issuer,
             node: self.signing_key.verifying_key().to_bytes(),
             created_at,
             records,
             resident_accounts,
             shares: Vec::new(),
             load: Load {
+                applied_policy_version,
+                resident_shares,
                 relay_budget: self
                     .node
                     .state
@@ -93,6 +100,7 @@ impl Reporter {
         };
         ensure!(
             policy.version > 0
+                && policy.probe_account == windshare_relay_access::probe::PROBE_ACCOUNT
                 && entitlements.len() <= STATUS_BATCH_ENTRIES
                 && entitlements.iter().all(|entry| {
                     entry.entitlement.valid_snapshot(reply.issued_at)

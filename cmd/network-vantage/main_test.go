@@ -45,8 +45,8 @@ func mirrorFixture(t *testing.T) (networkdirectory.Config, string) {
 	return networkdirectory.Config{Network: "test", Roots: roots, Embedded: data}, base64.RawURLEncoding.EncodeToString(digest[:])
 }
 
-func TestCycleSignsMirrorEvidenceAndDistinguishesShutdownFromNodeFailure(t *testing.T) {
-	dir, digest := mirrorFixture(t)
+func TestEnrollmentCycleDistinguishesShutdownFromNodeFailure(t *testing.T) {
+	dir, _ := mirrorFixture(t)
 	for _, want := range []string{"released", "failed"} {
 		t.Run(want, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
@@ -87,10 +87,9 @@ func TestCycleSignsMirrorEvidenceAndDistinguishesShutdownFromNodeFailure(t *test
 				switch r.URL.Path {
 				case "/v1/vantage/poll":
 					var poll struct {
-						Mirror string
 						Shares [][link.SenderAuthenticatedShareIDBytes]byte
 					}
-					if err := json.Unmarshal(data, &poll); err != nil || poll.Mirror != digest || len(poll.Shares) != networkprobe.OriginCount || poll.Shares[0] == poll.Shares[1] {
+					if err := json.Unmarshal(data, &poll); err != nil || len(poll.Shares) != networkprobe.OriginCount || poll.Shares[0] == poll.Shares[1] {
 						t.Errorf("invalid poll evidence: %+v (%v)", poll, err)
 						return
 					}
@@ -113,7 +112,7 @@ func TestCycleSignsMirrorEvidenceAndDistinguishesShutdownFromNodeFailure(t *test
 				}
 			}))
 			defer authority.Close()
-			a := agent{key: key, mainland: true, client: node.Client(), authority: authority.Client(),
+			a := agent{key: key, client: node.Client(), authority: authority.Client(),
 				config: &networkconfig.Config{Directory: dir, LinkHost: node.URL, Authority: &account.Config{URL: authority.URL}}}
 			if err := a.cycle(ctx); err != nil {
 				t.Fatal(err)
@@ -176,14 +175,92 @@ func TestMirrorLogsVerificationFailures(t *testing.T) {
 	defer slog.SetDefault(previous)
 
 	a := agent{
-		mainland: true,
-		client:   host.Client(),
-		config:   &networkconfig.Config{Directory: dir, LinkHost: host.URL},
+
+		client: host.Client(),
+		config: &networkconfig.Config{Directory: dir, LinkHost: host.URL},
 	}
 	if got := a.mirror(t.Context()); got != nil {
 		t.Fatalf("mirror = %v; want nil", *got)
 	}
 	if !strings.Contains(logs.String(), "mainland mirror verification failed") {
 		t.Fatalf("expected mirror warning log, got %q", logs.String())
+	}
+}
+
+func TestFleetCycleSendsOneSignedAggregateAndOnlyCNChecksItsMirror(t *testing.T) {
+	directory, digest := mirrorFixture(t)
+	b64 := base64.RawURLEncoding
+	for _, zone := range []string{"cn", "global"} {
+		t.Run(zone, func(t *testing.T) {
+			var mirrorReads int
+			mux := http.NewServeMux()
+			mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "offline", http.StatusServiceUnavailable) })
+			mux.HandleFunc("GET /.well-known/windshare-network", func(w http.ResponseWriter, _ *http.Request) { mirrorReads++; _, _ = w.Write(directory.Embedded) })
+			node := httptest.NewTLSServer(mux)
+			defer node.Close()
+			signing := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{28}, 32))
+			pub := signing.Public().(ed25519.PublicKey)
+			nodes := []networkprobe.Target{}
+			for _, tag := range []byte{8, 9} {
+				nodes = append(nodes, networkprobe.Target{OperationID: string([]byte{'a' + tag}), Node: nodedirectory.Node{
+					NodeKey: b64.EncodeToString(bytes.Repeat([]byte{tag}, 32)), Relay: node.URL + "/", Roles: []string{"relay"},
+				}})
+			}
+			reports := 0
+			service := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var proof struct{ Key, Payload, Signature string }
+				if err := json.NewDecoder(r.Body).Decode(&proof); err != nil {
+					t.Error(err)
+					return
+				}
+				body, err := b64.DecodeString(proof.Payload)
+				sig, sigErr := b64.DecodeString(proof.Signature)
+				action := strings.TrimPrefix(r.URL.Path, "/v1/vantage/")
+				domain := "windshare/fleet-" + action + "/v1\x00"
+				if err != nil || sigErr != nil || proof.Key != b64.EncodeToString(pub) || !ed25519.Verify(pub, append([]byte(domain), body...), sig) {
+					t.Error("unsigned request")
+					return
+				}
+				switch action {
+				case "targets":
+					_ = json.NewEncoder(w).Encode(map[string]any{"cycle": 41, "zone": zone, "nodes": nodes, "origins": []string{}})
+				case "cycle":
+					reports++
+					var report struct {
+						Cycle  uint64
+						Mirror *string
+						Nodes  map[string]networkprobe.Observation
+					}
+					if err := json.Unmarshal(body, &report); err != nil {
+						t.Error(err)
+						return
+					}
+					if report.Cycle != 41 || len(report.Nodes) != 2 {
+						t.Errorf("aggregate: %+v", report)
+					}
+					if zone == "cn" && (report.Mirror == nil || *report.Mirror != digest) || zone == "global" && report.Mirror != nil {
+						t.Errorf("unexpected mirror %v", report.Mirror)
+					}
+					for _, target := range nodes {
+						got := report.Nodes[target.Node.NodeKey]
+						if got.OperationID != target.OperationID || !got.TCP || got.TLSExpires == nil || got.HTTPS || got.Relay == nil || *got.Relay || got.STUN != nil {
+							t.Errorf("bad observation: %+v", got)
+						}
+					}
+				default:
+					t.Errorf("unexpected %s", action)
+				}
+			}))
+			defer service.Close()
+			a := agent{key: signing, client: node.Client(), authority: service.Client(), config: &networkconfig.Config{
+				LinkHost: node.URL, Directory: directory, Authority: &account.Config{URL: service.URL},
+			}}
+			if err := a.fleetCycle(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if reports != 1 || (zone == "cn") != (mirrorReads == 1) {
+				t.Fatalf("%d aggregate reports, %d mirror reads", reports, mirrorReads)
+			}
+		})
 	}
 }

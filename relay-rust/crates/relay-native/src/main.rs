@@ -21,7 +21,7 @@ use windshare_relay_native::{
     stun,
 };
 
-const USAGE: &str = "WindShare native relay\nUsage: wsrelay --config <node.json>";
+const USAGE: &str = "WindShare native relay\nUsage: wsrelay --config <node.json> | --check-config <node.json> [node_key] | --enter-maintenance <config> <node_key> <operation> <policy_version> <reconnect_budget_ms> | --release-maintenance <config> <node_key> <operation> | --check-hold <config> <node_key> <operation>";
 
 struct NodeJsonFormat {
     inner: Format<Json>,
@@ -83,9 +83,52 @@ async fn main() -> Result<()> {
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
+    if let [command, path, node, operation, tail @ ..] = args.as_slice()
+        && (command == "--enter-maintenance" || command == "--release-maintenance")
+    {
+        use windshare_relay_native::node::maintenance::Transition;
+        let transition = match (command.as_str(), tail) {
+            ("--enter-maintenance", [version, millis]) => Transition::Enter {
+                policy_version: version.parse()?,
+                reconnect_budget: std::time::Duration::from_millis(millis.parse()?),
+            },
+            ("--release-maintenance", []) => Transition::Release,
+            _ => bail!("{USAGE}"),
+        };
+        if !windshare_relay_native::node::maintenance::change(
+            &Configuration::read(path.as_ref())?,
+            node,
+            operation,
+            transition,
+        )? {
+            std::process::exit(75);
+        }
+        return Ok(());
+    }
+    if let [command, path, node, operation] = args.as_slice()
+        && command == "--check-hold"
+    {
+        return windshare_relay_native::node::maintenance::check_hold(
+            &Configuration::read(path.as_ref())?,
+            node,
+            operation,
+        );
+    }
+    if let [command, path, node] = args.as_slice()
+        && command == "--check-config"
+    {
+        return windshare_relay_native::node::maintenance::check_identity(
+            &Configuration::read(path.as_ref())?,
+            node,
+        );
+    }
     let [flag, path] = args.as_slice() else {
         bail!("{USAGE}")
     };
+    if flag == "--check-config" {
+        Configuration::read(path.as_ref())?;
+        return Ok(());
+    }
     if flag != "--config" {
         bail!("{USAGE}");
     }

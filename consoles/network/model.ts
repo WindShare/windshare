@@ -3,21 +3,25 @@ export type Role = 'relay' | 'stun'
 export type TrafficStatus = 'canary' | 'active'
 export interface Discovery { node_key: string; relay: string; roles: Role[]; stun: string[]; zone: Zone; region: string; capacity_mbps: number | null }
 export interface Enrollment { url: string; node_key: string; alias: string; provider: string; zone: Zone; region: string; capacity_mbps: number; roles: Role[] }
+export type Admission = 'accepting' | 'draining' | 'disabled'
+export type FleetAction = { kind: 'drain' | 'verify' } | { kind: 'disable' | 'remove'; early_cutoff: boolean } | { kind: 'restore_role'; role: Role }
 export interface Listing {
+  maintenance: string | null
+  withdrawn: Role[]
   operation_id: string
   spec: Omit<Enrollment, 'url'> & { relay: string }
-  state: { kind: 'listed'; status: TrafficStatus | 'draining' } | { kind: 'staging'; check:
+  state: { kind: 'listed'; status: TrafficStatus | 'draining' } | { kind: 'disabled' } | { kind: 'staging'; check:
     { kind: 'queued' | 'running' } | { kind: 'passed'; at: number } | { kind: 'failed'; reason: string } }
 }
-export interface RelayNode { key: number[]; zone: Zone; region: string; enabled: boolean; anonymous: boolean; version: number; listing: Listing | null }
-export type PolicyField = 'public_relay' | 'anonymous_sharing'
+export interface RelayNode { key: number[]; zone: Zone; region: string; admission: Admission; anonymous: boolean; version: number; listing: Listing | null }
+export type PolicyChange = { field: 'admission'; value: Admission } | { field: 'anonymous_sharing'; value: boolean }
 
 export interface LoadReport {
   created_at: number
   reported_at: number | null
-  load: { relay_budget?: { bytes: number; reset_day_utc: number }; active_sessions: number; forwarded_bytes: number; admission_refusals: number; wire_bytes: number }
+  load: { resident_shares: number; applied_policy_version: number; relay_budget?: { bytes: number; reset_day_utc: number }; active_sessions: number; forwarded_bytes: number; admission_refusals: number; wire_bytes: number }
 }
-export interface NodeDetails extends RelayNode { report: LoadReport | null }
+export interface NodeDetails extends RelayNode { report: LoadReport | null; cutoff_ready: boolean }
 export interface NodePage { entries: NodeDetails[]; next_cursor: string | null }
 
 export interface AccountSummary {
@@ -44,7 +48,12 @@ export interface AccountDetails extends AccountSummary {
   has_more_shares: boolean
 }
 
+export interface VantageReport {
+  id: string; zone: Zone; at: number
+  nodes: Record<string, { operation_id: string; tcp: boolean; https: boolean; tls_expires: number | null; relay: boolean | null; stun: boolean | null }>
+}
 export interface Publication {
+  vantages: VantageReport[]
   generation: number; serial: number; expires: number; keys: string[]; digest: string; mirrors_current: boolean; expiring_certificates: { ticket: number | null; directory: number | null }; silent_vantages: string[]
   setup: { url: string; issuer: string; certificate: string }
 }

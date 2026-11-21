@@ -79,6 +79,7 @@ pub enum RefusalReason {
     TicketGenerationMismatch,
     ProbeScopeMismatch,
     NodePublicDisabled,
+    NodeDraining,
     IssuerInactive,
     ShareRestricted,
     AccountRestricted,
@@ -102,6 +103,7 @@ impl RefusalReason {
             Self::TicketUntrusted => "ticket_untrusted",
             Self::TicketGenerationMismatch => "ticket_generation_mismatch",
             Self::ProbeScopeMismatch => "probe_scope_mismatch",
+            Self::NodeDraining => "node_draining",
             Self::NodePublicDisabled => "node_public_disabled",
             Self::IssuerInactive => "issuer_inactive",
             Self::ShareRestricted => "share_restricted",
@@ -252,6 +254,21 @@ impl Service {
             .as_ref()
             .map(|result| result.as_deref().map_err(|error| *error));
         let mut state = self.write();
+        if state.admission() == super::Admission::Draining
+            && !proof
+                .and_then(Result::ok)
+                .and_then(|p| p.current(&state.authorities.trusted, now).ok())
+                .is_some_and(|t| {
+                    state.scoped_probe(share, t.attribution())
+                        && windshare_relay_access::probe::permits(
+                            t,
+                            state.node_key.as_ref(),
+                            share.as_bytes(),
+                        )
+                })
+        {
+            return Authorization::Refused(Refusal::unavailable(RefusalReason::NodeDraining));
+        }
         let identity = match state.authorized_identity(share, bearer, proof, now) {
             Ok(identity) => identity,
             Err(AdmissionRefusal::Denied(reason)) => {
@@ -265,6 +282,8 @@ impl Service {
         match identity {
             AuthorizedIdentity::Anonymous => {}
             AuthorizedIdentity::Local { entry, .. } => entry.record_use(now.saturating_mul(1000)),
+            AuthorizedIdentity::Ticket(ticket)
+                if ticket.account == windshare_relay_access::probe::PROBE_ACCOUNT => {}
             AuthorizedIdentity::Ticket(ticket) => {
                 state.quotas.advance(
                     (ticket.issuer, ticket.account),
@@ -368,7 +387,7 @@ impl State {
         if !self.active_issuers.contains(&issuer) {
             return Refusal::denied(RefusalReason::IssuerInactive);
         }
-        if self.disabled_controller() == Some(issuer) {
+        if self.admission() == super::Admission::Disabled {
             return Refusal::denied(RefusalReason::NodePublicDisabled);
         }
         if self

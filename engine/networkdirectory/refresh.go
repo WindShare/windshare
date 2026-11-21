@@ -127,44 +127,17 @@ func (directory *Directory) tryMirrors(ctx context.Context, cycle *refreshCycle)
 	sort.SliceStable(order, func(i, j int) bool {
 		return !releaseAsset(directory.config.Mirrors[order[i]]) && releaseAsset(directory.config.Mirrors[order[j]])
 	})
-	var accepted bool
-	var committed nodedirectory.Cursor
+	var committed *nodedirectory.Cursor
 	var failures []error
 	for attempt, index := range order {
 		if attempt >= MirrorsPerRefresh {
 			break
 		}
 		mirror := directory.config.Mirrors[index]
-		request, cancel := context.WithTimeout(ctx, MirrorTimeout)
-		started := directory.config.Now()
-		stage := refreshStageFetch
-		data, err := directory.config.Fetch(request, mirror)
-		cancel()
-		var snapshot nodedirectory.Snapshot
+		snapshot, err := directory.fetchMirror(ctx, mirror, committed)
 		if err == nil {
-			stage = refreshStageVerify
-			snapshot, err = nodedirectory.Verify(data, directory.config.Network, directory.config.Roots)
-		}
-		if err == nil {
-			stage = refreshStageInstall
-			// Skip redundant durable lock/write passes when another mirror in
-			// this same cycle already committed the exact same signed cursor.
-			if accepted && snapshot.Cursor() == committed {
-				if !snapshot.Usable(directory.config.Now(), nodedirectory.DefaultGrace) {
-					err = nodedirectory.ErrExpired
-				}
-			} else {
-				err = directory.install(ctx, snapshot)
-			}
-		}
-		if err == nil {
-			stage = refreshStageAccepted
-		}
-		finished := directory.config.Now()
-		directory.emitMirrorAttempt(finished, mirror, stage, snapshot, finished.Sub(started), err)
-		if err == nil {
-			accepted = true
-			committed = snapshot.Cursor()
+			cursor := snapshot.Cursor()
+			committed = &cursor
 			if directory.finishIfResolved(cycle, snapshot) {
 				return nil
 			}
@@ -175,11 +148,42 @@ func (directory *Directory) tryMirrors(ctx context.Context, cycle *refreshCycle)
 			break
 		}
 	}
-	if accepted {
+	if committed != nil {
 		directory.mu.Lock()
 		directory.finishLocked(cycle, nil)
 		directory.mu.Unlock()
 		return nil
 	}
 	return errors.Join(append(failures, nodedirectory.ErrExpired)...)
+}
+
+func (directory *Directory) fetchMirror(ctx context.Context, mirror string, committed *nodedirectory.Cursor) (nodedirectory.Snapshot, error) {
+	request, cancel := context.WithTimeout(ctx, MirrorTimeout)
+	started := directory.config.Now()
+	stage := refreshStageFetch
+	data, err := directory.config.Fetch(request, mirror)
+	cancel()
+	var snapshot nodedirectory.Snapshot
+	if err == nil {
+		stage = refreshStageVerify
+		snapshot, err = nodedirectory.Verify(data, directory.config.Network, directory.config.Roots)
+	}
+	if err == nil {
+		stage = refreshStageInstall
+		// Skip redundant durable lock/write passes when another mirror in
+		// this same cycle already committed the exact same signed cursor.
+		if committed != nil && snapshot.Cursor() == *committed {
+			if !snapshot.Usable(directory.config.Now(), nodedirectory.DefaultGrace) {
+				err = nodedirectory.ErrExpired
+			}
+		} else {
+			err = directory.install(ctx, snapshot)
+		}
+	}
+	if err == nil {
+		stage = refreshStageAccepted
+	}
+	finished := directory.config.Now()
+	directory.emitMirrorAttempt(finished, mirror, stage, snapshot, finished.Sub(started), err)
+	return snapshot, err
 }

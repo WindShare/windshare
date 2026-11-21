@@ -30,7 +30,7 @@ export function directoryICEEndpointPool(snapshot: NetworkSnapshot | undefined):
   seen.add(entry.url)
   entries.push(entry)
  }
- for (const node of snapshot?.nodes ?? []) if (node.status !== 'draining' && node.roles.includes('stun')) {
+ for (const node of snapshot?.nodes ?? []) if (node.roles.includes('stun')) {
   for (const url of node.stun) add({
    id: `directory:${url}`, url, region: node.region, provider: node.provider,
    failureDomain: `${node.operator}:${node.provider}:${node.region}`,

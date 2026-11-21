@@ -15,15 +15,25 @@ function setupCommand(address: string, trust: Publication['setup']): string | un
   let target: URL
   try { target = new URL(address) } catch { return undefined }
   if (target.protocol !== 'https:' || target.username || target.password || target.pathname !== '/' || target.search || target.hash) return undefined
-  const config = { listen: '127.0.0.1:8484', database: 'relay.sqlite', identity_file: 'identity.json',
+  const config = { listen: '127.0.0.1:8484', database: '/var/lib/windshare-network/relay.sqlite', identity_file: '/var/lib/windshare-network/identity.json',
     endpoint: 'wss://' + target.host + '/v2/ws', origins: { kind: 'public' },
     proxy: { peers: ['127.0.0.1'], header: 'x-windshare-source-ip' },
     stun: { udp_addresses: ['0.0.0.0:3478'], admin_address: '127.0.0.1:8081' },
     node: { services: { relay: true, stun: true }, stun_urls: ['stun:' + target.hostname + ':3478'],
       authority: { url: trust.url, issuer: trust.issuer }, access: { anonymous: false, trusted_issuers: [{ root: trust.issuer, certificate: trust.certificate }] } } }
-  // Only base64 reaches the shell. Noclobber preserves an existing node configuration.
+  // An exclusive link installs only the fully validated configuration on a fresh host.
   const payload = btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify(config))))
-  return `(umask 077; set -C; printf %s '${payload}' | base64 -d > node.json) && wsrelay --config node.json`
+  return `sudo sh -eu <<'WINDSHARE_SETUP'
+install -d -m 0755 /etc/windshare-network
+config=$(mktemp /etc/windshare-network/.setup.XXXXXXXX)
+trap 'rm -f -- "$config"' EXIT
+printf %s '${payload}' | base64 -d > "$config"
+chown root:windshare-network "$config"
+chmod 0640 "$config"
+runuser -u windshare-network -- /opt/windshare-network/current/wsrelay --check-config "$config"
+ln "$config" /etc/windshare-network/node.json
+systemctl enable --now windshare-network.service
+WINDSHARE_SETUP`
 }
 
 export function EnrollNode({ api, saved, setup }: Props) {

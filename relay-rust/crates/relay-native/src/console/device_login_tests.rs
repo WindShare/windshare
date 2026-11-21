@@ -40,7 +40,8 @@ fn open_console(
             generation,
             policy: Some(NodePolicy {
                 version: 1,
-                enabled: true,
+                admission: windshare_relay_access::usage::Admission::Accepting,
+                probe_account: windshare_relay_access::probe::PROBE_ACCOUNT,
                 anonymous: false,
             }),
         })

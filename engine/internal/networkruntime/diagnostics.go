@@ -11,6 +11,7 @@ import (
 	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/engine/networkdirectory"
+	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
 )
 
@@ -88,6 +89,9 @@ func (r *Runtime) Observer(selection Selection, sink diagnostics.Sink) func(stri
 			}
 			started = generations[url]
 			mu.Unlock()
+			if refusal, ok := errors.AsType[*relayv2.RelayError](attempt.Failure); ok && refusal.Code == v2.ErrorAccessUnavailable && !attempt.Resume && r.directory != nil {
+				r.directory.TriggerRefresh()
+			}
 			switch attempt.State {
 			case senderrelay.AttemptSucceeded, senderrelay.AttemptParked, senderrelay.AttemptFailed:
 				entry, change = r.health.RecordAttempt(identity, started, r.generation(), now, attempt)
