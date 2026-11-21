@@ -31,7 +31,7 @@ func TestReservedAssemblyKeepsSharedCapacityThroughAuthentication(t *testing.T) 
 	if waiting != nil || changed == nil || err != nil {
 		t.Fatalf("shared contention did not wait: %v %v", waiting, err)
 	}
-	if err := first.CompleteOperation(result.OperationID); err != nil {
+	if err := first.RetireOperation(result.OperationID); err != nil {
 		t.Fatal(err)
 	}
 	first.Close()

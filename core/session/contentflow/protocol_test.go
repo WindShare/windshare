@@ -90,10 +90,6 @@ func TestAssemblerEnforcesFrozenOperationBudgetIndependentlyOfSessionBudget(t *t
 			t.Fatalf("failed operation retained budget=%+v", usage)
 		}
 	}
-	late, err := assembler.AcceptAuthenticated(flowMessagePlaintext(t, first[1]))
-	if err != nil || late.Status != FragmentTombstoned || late.ReceivedBytes != 0 {
-		t.Fatalf("over-budget operation resurrected: status=%d err=%v", late.Status, err)
-	}
 	independent := flowID[protocolsession.OperationID](223)
 	third, err := FragmentRecord(independent, bytes.Repeat([]byte{3}, recordBytes))
 	if err != nil {
@@ -165,9 +161,12 @@ func TestFragmentRoundTripOutOfOrderDuplicateAndLate(t *testing.T) {
 			t.Fatal("reassembled object changed")
 		}
 	}
-	late, err := assembler.AcceptAuthenticated(flowMessagePlaintext(t, messages[1]))
-	if err != nil || late.Status != FragmentTombstoned || late.ReceivedBytes != 0 {
-		t.Fatalf("late fragment status=%d err=%v", late.Status, err)
+	replay, err := assembler.AcceptAuthenticated(flowMessagePlaintext(t, messages[1]))
+	if err != nil || replay.Status != FragmentDuplicate || replay.ReceivedBytes != 0 {
+		t.Fatalf("in-operation completed replay status=%d err=%v", replay.Status, err)
+	}
+	if err := assembler.RetireOperation(operation); err != nil {
+		t.Fatalf("retire completed operation: %v", err)
 	}
 	for _, account := range accounts {
 		if usage := account.Usage(); usage != (ReassemblyUsage{}) {
@@ -187,7 +186,7 @@ func TestFragmentConflictTerminatesOnlyItsOperation(t *testing.T) {
 	object := bytes.Repeat([]byte{0x61}, MaxFragmentPayloadBytes+9)
 	first, _ := FragmentRecord(firstOperation, object)
 	second, _ := FragmentRecord(secondOperation, []byte("independent"))
-	hierarchy, _ := reassemblyHierarchy(t, ReassemblyLimits{Bytes: uint64(len(object)) * 2, Records: 4})
+	hierarchy, accounts := reassemblyHierarchy(t, ReassemblyLimits{Bytes: uint64(len(object)) * 2, Records: 4})
 	assembler, _ := NewAssembler(flowID[protocolsession.ProtocolSessionID](8), hierarchy, nil)
 	if _, err := assembler.AcceptAuthenticated(flowMessagePlaintext(t, first[0])); err != nil {
 		t.Fatal(err)
@@ -197,9 +196,13 @@ func TestFragmentConflictTerminatesOnlyItsOperation(t *testing.T) {
 	if _, err := assembler.AcceptAuthenticated(conflict); !errors.Is(err, ErrFragmentConflict) {
 		t.Fatalf("conflict error=%v", err)
 	}
-	late, err := assembler.AcceptAuthenticated(flowMessagePlaintext(t, first[1]))
-	if err != nil || late.Status != FragmentTombstoned || late.ReceivedBytes != 0 {
-		t.Fatalf("conflicted operation resurrected: %+v %v", late, err)
+	if assembler.ActiveRecords() != 0 {
+		t.Fatalf("conflicted operation retained active records=%d", assembler.ActiveRecords())
+	}
+	for _, account := range accounts {
+		if usage := account.Usage(); usage != (ReassemblyUsage{}) {
+			t.Fatalf("conflicted operation leaked budget=%+v", usage)
+		}
 	}
 	completed, err := assembler.AcceptAuthenticated(flowMessagePlaintext(t, second[0]))
 	if err != nil || completed.Status != RecordComplete {
@@ -235,23 +238,28 @@ func TestAssemblerTimeoutCancelAndThreeTierBudget(t *testing.T) {
 	if !slices.Equal(timedOut, []protocolsession.OperationID{operation}) {
 		t.Fatalf("timeouts=%x", timedOut)
 	}
-	late, err := assembler.AcceptAuthenticated(flowMessagePlaintext(t, messages[1]))
-	if err != nil || late.Status != FragmentTombstoned || late.ReceivedBytes != 0 {
-		t.Fatalf("timeout late result=%+v err=%v", late, err)
+	if assembler.ActiveRecords() != 0 {
+		t.Fatalf("timed-out active records=%d", assembler.ActiveRecords())
 	}
-	if err := assembler.CancelOperation(flowID[protocolsession.OperationID](12)); err != nil {
+	for _, account := range accounts {
+		if usage := account.Usage(); usage != (ReassemblyUsage{}) {
+			t.Fatalf("timed-out operation retained budget=%+v", usage)
+		}
+	}
+	if _, err := assembler.AcceptAuthenticated(flowMessagePlaintext(t, messages[0])); err != nil {
 		t.Fatal(err)
 	}
-	cancelledObject, _ := FragmentRecord(flowID[protocolsession.OperationID](12), []byte("cancelled"))
-	cancelled, _ := assembler.AcceptAuthenticated(flowMessagePlaintext(t, cancelledObject[0]))
-	if cancelled.Status != FragmentTombstoned {
-		t.Fatalf("cancelled fragment status=%d", cancelled.Status)
-	}
-	if err := assembler.CompleteOperation(flowID[protocolsession.OperationID](13)); err != nil {
+	if err := assembler.RetireOperation(operation); err != nil {
 		t.Fatal(err)
 	}
-	if err := assembler.CancelOperation(protocolsession.OperationID{}); !errors.Is(err, ErrFragmentMalformed) {
-		t.Fatalf("zero cancel error=%v", err)
+	if assembler.ActiveRecords() != 0 {
+		t.Fatalf("retired operation retained active records=%d", assembler.ActiveRecords())
+	}
+	if err := assembler.RetireOperation(flowID[protocolsession.OperationID](13)); err != nil {
+		t.Fatal(err)
+	}
+	if err := assembler.RetireOperation(protocolsession.OperationID{}); !errors.Is(err, ErrFragmentMalformed) {
+		t.Fatalf("zero retire error=%v", err)
 	}
 
 	tooSmall, _ := NewReassemblyAccount("small", ReassemblyLimits{Bytes: uint64(len(object)) - 1, Records: 1})
@@ -297,9 +305,8 @@ func TestUnrelatedFragmentCannotConsumeAnotherOperationsTimeoutSignal(t *testing
 	if _, err := assembler.AcceptAuthenticated(flowMessagePlaintext(t, second[1])); !errors.Is(err, ErrFragmentInactivity) {
 		t.Fatalf("expired operation accepted a late completing fragment: %v", err)
 	}
-	late, err := assembler.AcceptAuthenticated(flowMessagePlaintext(t, second[0]))
-	if err != nil || late.Status != FragmentTombstoned || late.ReceivedBytes != 0 {
-		t.Fatalf("timed-out operation resurrected: status=%d err=%v", late.Status, err)
+	if assembler.ActiveRecords() != 0 {
+		t.Fatalf("timed-out operation retained active records=%d", assembler.ActiveRecords())
 	}
 }
 

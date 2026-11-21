@@ -2,37 +2,27 @@ package contentflow
 
 import (
 	"encoding/binary"
-	"errors"
 	"testing"
 	"time"
 
-	"github.com/windshare/windshare/core/content/records"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
-// A healthy transfer completes and retires one block operation after another.
-// Each must leave bounded late-fragment protection, but only as much as the
-// table can sustain for the whole tombstone lifetime.
-func TestAssemblerSustainsBlocksBeyondTheTombstoneTableWhenOperationsRetire(t *testing.T) {
-	hierarchy, _ := reassemblyHierarchy(t, ReassemblyLimits{Bytes: 1 << 20, Records: 4})
+// Sustained transfers at arbitrary throughput must never fail in Assembler
+// after operations retire; cross-operation retention and backpressure belong
+// solely to protocolsession.OperationTable.
+func TestAssemblerSustainsBlocksBeyondOperationTableRetentionAtFrozenClock(t *testing.T) {
+	hierarchy, accounts := reassemblyHierarchy(t, ReassemblyLimits{Bytes: 1 << 20, Records: 4})
 	now := time.Unix(4_000, 0)
 	assembler, err := NewAssembler(flowID[protocolsession.ProtocolSessionID](1), hierarchy, func() time.Time { return now })
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(assembler.Close)
-	// The completions stay inside one tombstone lifetime, so none may expire.
-	const blocks = MaxFragmentTombstones - 1
-	step := FragmentTombstone / (blocks + 1)
-	var lastOperation protocolsession.OperationID
-	var lastFragment []byte
+
+	const blocks = 10_000
 	for index := range blocks {
-		var raw [16]byte
-		binary.BigEndian.PutUint64(raw[8:], uint64(index)+1)
-		operation, err := protocolsession.OperationIDFromBytes(raw[:])
-		if err != nil {
-			t.Fatal(err)
-		}
+		operation := sequentialOperationID(t, uint64(index)+1)
 		fragments, err := FragmentRecord(operation, binary.BigEndian.AppendUint64(nil, uint64(index)+1))
 		if err != nil {
 			t.Fatal(err)
@@ -41,25 +31,29 @@ func TestAssemblerSustainsBlocksBeyondTheTombstoneTableWhenOperationsRetire(t *t
 		if err != nil || result.Status != RecordComplete {
 			t.Fatalf("block %d of %d: status=%v err=%v", index, blocks, result.Status, err)
 		}
-		if err := assembler.CompleteOperation(operation); err != nil {
-			t.Fatalf("block %d of %d: retiring its operation: %v", index, blocks, err)
+		if err := assembler.RetireOperation(operation); err != nil {
+			t.Fatalf("block %d of %d: retiring operation: %v", index, blocks, err)
 		}
-		lastOperation, lastFragment = operation, flowMessagePlaintext(t, fragments[0])
-		now = now.Add(step)
 	}
-	late, err := assembler.AcceptAuthenticated(lastFragment)
-	if err != nil || late.Status != FragmentTombstoned || late.OperationID != lastOperation {
-		t.Fatalf("late fragment of a retired operation: %+v err=%v", late, err)
+	if assembler.ActiveRecords() != 0 || len(assembler.completedRecords) != 0 || len(assembler.operationBytes) != 0 {
+		t.Fatalf("retained state after %d retired blocks: records=%d completed=%d bytes=%d",
+			blocks, assembler.ActiveRecords(), len(assembler.completedRecords), len(assembler.operationBytes))
+	}
+	for _, account := range accounts {
+		if usage := account.Usage(); usage != (ReassemblyUsage{}) {
+			t.Fatalf("budget leaked after sustained blocks: %+v", usage)
+		}
 	}
 }
 
-func TestAssemblerRetiringAnOperationReleasesItsRecordTombstones(t *testing.T) {
+func TestAssemblerSuppressesInOperationDuplicateUntilRetired(t *testing.T) {
 	hierarchy, _ := reassemblyHierarchy(t, ReassemblyLimits{Bytes: 1 << 20, Records: 4})
 	assembler, err := NewAssembler(flowID[protocolsession.ProtocolSessionID](1), hierarchy, func() time.Time { return time.Unix(4_000, 0) })
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(assembler.Close)
+
 	operation := flowID[protocolsession.OperationID](201)
 	fragments, err := FragmentRecord(operation, []byte("block"))
 	if err != nil {
@@ -69,53 +63,83 @@ func TestAssemblerRetiringAnOperationReleasesItsRecordTombstones(t *testing.T) {
 	if result, err := assembler.AcceptAuthenticated(fragment); err != nil || result.Status != RecordComplete {
 		t.Fatalf("status=%v err=%v", result.Status, err)
 	}
-	if len(assembler.recordTombstones) != 1 {
-		t.Fatalf("completed record tombstones=%d, want 1", len(assembler.recordTombstones))
+	if len(assembler.completedRecords[operation]) != 1 {
+		t.Fatalf("completed records=%d, want 1", len(assembler.completedRecords[operation]))
 	}
-	if err := assembler.CompleteOperation(operation); err != nil {
+	replay, err := assembler.AcceptAuthenticated(fragment)
+	if err != nil || replay.Status != FragmentDuplicate || replay.ReceivedBytes != 0 {
+		t.Fatalf("in-operation replay: %+v err=%v", replay, err)
+	}
+	if err := assembler.RetireOperation(operation); err != nil {
 		t.Fatal(err)
 	}
-	if len(assembler.recordTombstones) != 0 || len(assembler.operationTombs) != 1 {
-		t.Fatalf("record tombstones=%d operation tombstones=%d", len(assembler.recordTombstones), len(assembler.operationTombs))
-	}
-	late, err := assembler.AcceptAuthenticated(fragment)
-	if err != nil || late.Status != FragmentTombstoned || late.OperationID != operation {
-		t.Fatalf("late fragment: %+v err=%v", late, err)
+	if len(assembler.completedRecords) != 0 {
+		t.Fatalf("completed records retained after retire: %d", len(assembler.completedRecords))
 	}
 }
 
-func TestAssemblerKeepsRecordTombstonesWhenTheTableCannotTakeTheOperationTombstone(t *testing.T) {
-	hierarchy, _ := reassemblyHierarchy(t, ReassemblyLimits{Bytes: 1 << 20, Records: 4})
+// Reproduces the production TryReserve -> AcceptAuthenticated -> RetireOperation
+// -> delayed AssemblyCapacity.Release flow past OperationTable's retention cap
+// without advancing the clock, proving delayed releases cannot stall or fail
+// newly admitted operations.
+func TestReservedAssemblySustainsDelayedCapacityReleasePastRetentionCap(t *testing.T) {
+	const blockSize = 64
+	hierarchy, accounts := reassemblyHierarchy(t, ReassemblyLimits{Bytes: blockSize * 4, Records: 4})
 	now := time.Unix(4_000, 0)
-	assembler, err := NewAssembler(flowID[protocolsession.ProtocolSessionID](1), hierarchy, func() time.Time { return now })
+	assembler, err := NewAssembler(flowID[protocolsession.ProtocolSessionID](2), hierarchy, func() time.Time { return now })
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(assembler.Close)
-	operation := flowID[protocolsession.OperationID](200)
-	fragments, err := FragmentRecord(operation, []byte("block"))
+
+	const blocks = 5_000
+	var deferred *AssemblyCapacity
+	for index := range blocks {
+		capacity, _, err := assembler.TryReserve(blockSize)
+		if err != nil || capacity == nil {
+			t.Fatalf("block %d reserve: capacity=%v err=%v", index, capacity, err)
+		}
+		operation := sequentialOperationID(t, uint64(index)+1)
+		payload := make([]byte, blockSize)
+		binary.BigEndian.PutUint64(payload, uint64(index)+1)
+		fragments, err := FragmentRecord(operation, payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := capacity.AcceptAuthenticated(fragments[0].Body())
+		if err != nil || result.Status != RecordComplete {
+			t.Fatalf("block %d accept: status=%v err=%v", index, result.Status, err)
+		}
+		if err := assembler.RetireOperation(operation); err != nil {
+			t.Fatalf("block %d retire: %v", index, err)
+		}
+		// Release the previous attempt only after the next operation completes
+		// and retires, matching delayed lane settlement in receiversession.
+		if deferred != nil {
+			deferred.Release()
+		}
+		deferred = capacity
+	}
+	if deferred != nil {
+		deferred.Release()
+	}
+	if assembler.ActiveRecords() != 0 || len(assembler.completedRecords) != 0 {
+		t.Fatalf("retained state: records=%d completed=%d", assembler.ActiveRecords(), len(assembler.completedRecords))
+	}
+	for _, account := range accounts {
+		if usage := account.Usage(); usage != (ReassemblyUsage{}) {
+			t.Fatalf("budget leaked: %+v", usage)
+		}
+	}
+}
+
+func sequentialOperationID(t *testing.T, sequence uint64) protocolsession.OperationID {
+	t.Helper()
+	var raw [16]byte
+	binary.BigEndian.PutUint64(raw[8:], sequence)
+	id, err := protocolsession.OperationIDFromBytes(raw[:])
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result, err := assembler.AcceptAuthenticated(flowMessagePlaintext(t, fragments[0])); err != nil || result.Status != RecordComplete {
-		t.Fatalf("status=%v err=%v", result.Status, err)
-	}
-	// Other operations' tombstones fill the table even without this one's.
-	for index := range MaxFragmentTombstones {
-		assembler.recordTombstones[assemblyKey{
-			operation: flowID[protocolsession.OperationID](byte(index%100 + 1)),
-			record:    records.RecordID{byte(index / 250), byte(index%250 + 1)},
-		}] = now.Add(time.Hour)
-	}
-	owned := len(assembler.recordTombstones)
-	if err := assembler.CompleteOperation(operation); !errors.Is(err, ErrReassemblyBudget) {
-		t.Fatalf("retire error=%v", err)
-	}
-	if len(assembler.recordTombstones) != owned || len(assembler.operationTombs) != 0 {
-		t.Fatalf("a refused retire dropped protection: record tombstones=%d (was %d) operation tombstones=%d", len(assembler.recordTombstones), owned, len(assembler.operationTombs))
-	}
-	late, err := assembler.AcceptAuthenticated(flowMessagePlaintext(t, fragments[0]))
-	if err != nil || late.Status != FragmentTombstoned {
-		t.Fatalf("late fragment after refused retire: %+v err=%v", late, err)
-	}
+	return id
 }

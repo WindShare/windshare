@@ -524,7 +524,7 @@ func (operation *receiverBlockOperation) complete(message protocolsession.Messag
 		}
 		return operation.rejectCompletion(session.ErrOperationMissing)
 	}
-	if err := operation.lane.assembler.CompleteOperation(operation.call.ID()); err != nil {
+	if err := operation.lane.assembler.RetireOperation(operation.call.ID()); err != nil {
 		return operation.rejectCompletion(err)
 	}
 	return record, nil

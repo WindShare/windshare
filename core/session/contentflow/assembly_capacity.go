@@ -41,7 +41,7 @@ func (capacity *AssemblyCapacity) Release() {
 	}
 	capacity.released = true
 	if !capacity.operation.IsZero() && !a.closed {
-		_ = a.terminateOperationLocked(capacity.operation, a.now())
+		a.retireOperationLocked(capacity.operation)
 	}
 	capacity.reservation.Release()
 }

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
@@ -17,7 +18,6 @@ const (
 	FragmentAccepted AssemblyStatus = iota + 1
 	FragmentDuplicate
 	RecordComplete
-	FragmentTombstoned
 )
 
 type AssemblyResult struct {
@@ -43,6 +43,10 @@ type assemblyState struct {
 	reservation      *reassemblyReservation
 }
 
+// Assembler owns active block-fragment reassembly and its three-tier memory
+// budget. Cross-operation late-arrival suppression and retained-identity
+// backpressure belong solely to protocolsession.OperationTable, so Assembler
+// keeps no post-retirement tombstones and drops per-operation state on retire.
 type Assembler struct {
 	sessionID protocolsession.ProtocolSessionID
 	hierarchy ReassemblyHierarchy
@@ -52,8 +56,7 @@ type Assembler struct {
 	closed           bool
 	records          map[assemblyKey]*assemblyState
 	operationBytes   map[protocolsession.OperationID]uint64
-	recordTombstones map[assemblyKey]time.Time
-	operationTombs   map[protocolsession.OperationID]time.Time
+	completedRecords map[protocolsession.OperationID]map[records.RecordID]struct{}
 }
 
 func NewAssembler(sessionID protocolsession.ProtocolSessionID, hierarchy ReassemblyHierarchy, now func() time.Time) (*Assembler, error) {
@@ -70,7 +73,7 @@ func NewAssembler(sessionID protocolsession.ProtocolSessionID, hierarchy Reassem
 		sessionID: sessionID, hierarchy: hierarchy, now: now,
 		records:          make(map[assemblyKey]*assemblyState),
 		operationBytes:   make(map[protocolsession.OperationID]uint64),
-		recordTombstones: make(map[assemblyKey]time.Time), operationTombs: make(map[protocolsession.OperationID]time.Time),
+		completedRecords: make(map[protocolsession.OperationID]map[records.RecordID]struct{}),
 	}, nil
 }
 
@@ -102,20 +105,16 @@ func (a *Assembler) acceptAuthenticated(plaintext []byte, capacity *AssemblyCapa
 		}
 	}
 	now := a.now()
-	a.pruneLocked(now)
 	for key, state := range a.records {
 		if key.operation == fragment.OperationID && !now.Before(state.progressDeadline) {
-			_ = a.terminateOperationLocked(fragment.OperationID, now)
+			a.retireOperationLocked(fragment.OperationID)
 			return AssemblyResult{}, ErrFragmentInactivity
 		}
 	}
+	if _, complete := a.completedRecords[fragment.OperationID][fragment.RecordID]; complete {
+		return AssemblyResult{Status: FragmentDuplicate, OperationID: fragment.OperationID, RecordID: fragment.RecordID}, nil
+	}
 	key := assemblyKey{operation: fragment.OperationID, record: fragment.RecordID}
-	if _, cancelled := a.operationTombs[fragment.OperationID]; cancelled {
-		return AssemblyResult{Status: FragmentTombstoned, OperationID: fragment.OperationID, RecordID: fragment.RecordID}, nil
-	}
-	if _, complete := a.recordTombstones[key]; complete {
-		return AssemblyResult{Status: FragmentTombstoned, OperationID: fragment.OperationID, RecordID: fragment.RecordID}, nil
-	}
 	state, err := a.assemblyLocked(key, fragment, capacity, now)
 	if err != nil {
 		return AssemblyResult{}, err
@@ -123,12 +122,12 @@ func (a *Assembler) acceptAuthenticated(plaintext []byte, capacity *AssemblyCapa
 	offset := uint64(fragment.Index) * MaxFragmentPayloadBytes
 	end := offset + uint64(len(fragment.Payload))
 	if end > uint64(len(state.buffer)) {
-		_ = a.terminateOperationLocked(fragment.OperationID, now)
+		a.retireOperationLocked(fragment.OperationID)
 		return AssemblyResult{}, ErrFragmentConflict
 	}
 	if state.received[fragment.Index] {
 		if !slices.Equal(state.buffer[offset:end], fragment.Payload) {
-			_ = a.terminateOperationLocked(fragment.OperationID, now)
+			a.retireOperationLocked(fragment.OperationID)
 			return AssemblyResult{}, ErrFragmentConflict
 		}
 		return AssemblyResult{Status: FragmentDuplicate, OperationID: fragment.OperationID, RecordID: fragment.RecordID}, nil
@@ -143,14 +142,14 @@ func (a *Assembler) acceptAuthenticated(plaintext []byte, capacity *AssemblyCapa
 		return AssemblyResult{Status: FragmentAccepted, OperationID: fragment.OperationID, RecordID: fragment.RecordID, ReceivedBytes: uint64(len(fragment.Payload))}, nil
 	}
 	if !recordDigestMatches(fragment.RecordID, state.buffer) {
-		_ = a.terminateOperationLocked(fragment.OperationID, now)
+		a.retireOperationLocked(fragment.OperationID)
 		return AssemblyResult{}, ErrRecordDigest
 	}
 	// The completed buffer leaves the assembly table. A pre-dispatch reservation
 	// remains with its physical attempt through authentication and cancellation.
 	object := state.buffer
 	a.releaseRecordLocked(key)
-	a.recordTombstones[key] = now.Add(FragmentTombstone)
+	a.markRecordCompletedLocked(fragment.OperationID, fragment.RecordID)
 	return AssemblyResult{Status: RecordComplete, OperationID: fragment.OperationID, RecordID: fragment.RecordID, Object: object, ReceivedBytes: uint64(len(fragment.Payload))}, nil
 }
 
@@ -158,20 +157,21 @@ func (a *Assembler) assemblyLocked(key assemblyKey, fragment Fragment, capacity 
 	state := a.records[key]
 	if state != nil {
 		if state.count != fragment.Count || state.total != fragment.TotalLength {
-			_ = a.terminateOperationLocked(fragment.OperationID, now)
+			a.retireOperationLocked(fragment.OperationID)
 			return nil, ErrFragmentConflict
 		}
 		return state, nil
 	}
-	// Every live assembly reserves the tombstone slot it will need when it
-	// completes. This keeps late-arrival protection bounded without evicting
-	// a still-live 30-second tombstone under hostile churn.
-	if len(a.records)+len(a.recordTombstones)+len(a.operationTombs) >= MaxFragmentTombstones {
-		return nil, ErrReassemblyBudget
+	// A single REQUEST_BLOCKS operation can legally request at most
+	// MaxRequestedBlockIndices records; bounding in-operation state here
+	// prevents an unretired operation from growing completedRecords unboundedly.
+	if len(a.completedRecords[fragment.OperationID])+a.activeOperationRecordsLocked(fragment.OperationID) >= content.MaxRequestedBlockIndices {
+		a.retireOperationLocked(fragment.OperationID)
+		return nil, ErrFragmentConflict
 	}
 	operationBytes := a.operationBytes[fragment.OperationID]
 	if uint64(fragment.TotalLength) > MaxOperationReassemblyBytes-operationBytes {
-		_ = a.terminateOperationLocked(fragment.OperationID, now)
+		a.retireOperationLocked(fragment.OperationID)
 		return nil, ErrReassemblyBudget
 	}
 	var reservation *reassemblyReservation
@@ -192,7 +192,9 @@ func (a *Assembler) assemblyLocked(key assemblyKey, fragment Fragment, capacity 
 	return state, nil
 }
 
-func (a *Assembler) CancelOperation(operationID protocolsession.OperationID) error {
+// RetireOperation releases active reassembly buffers and in-operation
+// completed-record markers for operationID. It is idempotent while open.
+func (a *Assembler) RetireOperation(operationID protocolsession.OperationID) error {
 	if operationID.IsZero() {
 		return ErrFragmentMalformed
 	}
@@ -201,23 +203,17 @@ func (a *Assembler) CancelOperation(operationID protocolsession.OperationID) err
 	if a.closed {
 		return ErrAssemblerClosed
 	}
-	now := a.now()
-	a.pruneLocked(now)
-	return a.terminateOperationLocked(operationID, now)
-}
-
-func (a *Assembler) CompleteOperation(operationID protocolsession.OperationID) error {
-	return a.CancelOperation(operationID)
+	a.retireOperationLocked(operationID)
+	return nil
 }
 
 func (a *Assembler) SweepTimeouts() []protocolsession.OperationID {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	now := a.now()
-	a.pruneLocked(now)
 	if a.closed {
 		return nil
 	}
+	now := a.now()
 	timedOut := make(map[protocolsession.OperationID]struct{})
 	for key, state := range a.records {
 		if !now.Before(state.progressDeadline) {
@@ -226,7 +222,7 @@ func (a *Assembler) SweepTimeouts() []protocolsession.OperationID {
 	}
 	result := make([]protocolsession.OperationID, 0, len(timedOut))
 	for operationID := range timedOut {
-		_ = a.terminateOperationLocked(operationID, now)
+		a.retireOperationLocked(operationID)
 		result = append(result, operationID)
 	}
 	slices.SortFunc(result, func(left, right protocolsession.OperationID) int {
@@ -239,6 +235,25 @@ func (a *Assembler) ActiveRecords() int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return len(a.records)
+}
+
+func (a *Assembler) activeOperationRecordsLocked(operationID protocolsession.OperationID) int {
+	count := 0
+	for key := range a.records {
+		if key.operation == operationID {
+			count++
+		}
+	}
+	return count
+}
+
+func (a *Assembler) markRecordCompletedLocked(operationID protocolsession.OperationID, recordID records.RecordID) {
+	completed := a.completedRecords[operationID]
+	if completed == nil {
+		completed = make(map[records.RecordID]struct{}, 1)
+		a.completedRecords[operationID] = completed
+	}
+	completed[recordID] = struct{}{}
 }
 
 func (a *Assembler) releaseRecordLocked(key assemblyKey) {
@@ -256,49 +271,16 @@ func (a *Assembler) releaseRecordLocked(key assemblyKey) {
 	state.reservation.Release()
 }
 
-func (a *Assembler) terminateOperationLocked(operationID protocolsession.OperationID, now time.Time) error {
+func (a *Assembler) retireOperationLocked(operationID protocolsession.OperationID) {
 	for key := range a.records {
 		if key.operation == operationID {
 			a.releaseRecordLocked(key)
 		}
 	}
-	// The operation tombstone rejects every fragment of the operation for at
-	// least as long as any of its record tombstones, so those records no longer
-	// need their own slots. Keeping both charged each completed block twice and
-	// let a sustained transfer exhaust the table in half the time it needs.
-	var superseded []assemblyKey
-	for key := range a.recordTombstones {
-		if key.operation == operationID {
-			superseded = append(superseded, key)
-		}
-	}
-	if _, exists := a.operationTombs[operationID]; !exists &&
-		len(a.recordTombstones)-len(superseded)+len(a.operationTombs) >= MaxFragmentTombstones {
-		return ErrReassemblyBudget
-	}
-	for _, key := range superseded {
-		delete(a.recordTombstones, key)
-	}
-	a.operationTombs[operationID] = now.Add(FragmentTombstone)
-	return nil
+	delete(a.completedRecords, operationID)
 }
 
-func (a *Assembler) pruneLocked(now time.Time) {
-	for key, expiry := range a.recordTombstones {
-		if !now.Before(expiry) {
-			delete(a.recordTombstones, key)
-		}
-	}
-	for operation, expiry := range a.operationTombs {
-		if !now.Before(expiry) {
-			delete(a.operationTombs, operation)
-		}
-	}
-}
-
-// Close releases all three levels of reservations immediately. The assembler
-// cannot receive late frames once its owning ProtocolSession is gone, so
-// retaining tombstones after this boundary would only prolong memory charges.
+// Close releases all three levels of reservations immediately.
 func (a *Assembler) Close() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -309,7 +291,6 @@ func (a *Assembler) Close() {
 	for key := range a.records {
 		a.releaseRecordLocked(key)
 	}
-	clear(a.recordTombstones)
-	clear(a.operationTombs)
+	clear(a.completedRecords)
 	clear(a.operationBytes)
 }

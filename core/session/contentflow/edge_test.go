@@ -18,7 +18,7 @@ import (
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
-func TestAssemblerAdmissionTombstoneCapacityAndExpiryEdges(t *testing.T) {
+func TestAssemblerAdmissionInactivityAndRecordCapEdges(t *testing.T) {
 	hierarchy, accounts := reassemblyHierarchy(t, ReassemblyLimits{Bytes: 1 << 20, Records: 4})
 	session := flowID[protocolsession.ProtocolSessionID](101)
 	if _, err := NewAssembler(protocolsession.ProtocolSessionID{}, hierarchy, nil); err == nil {
@@ -41,32 +41,27 @@ func TestAssemblerAdmissionTombstoneCapacityAndExpiryEdges(t *testing.T) {
 	if _, err := assembler.AcceptAuthenticated(flowMessagePlaintext(t, fragments[1])); !errors.Is(err, ErrFragmentInactivity) || assembler.ActiveRecords() != 0 {
 		t.Fatalf("implicit timeout active=%d err=%v", assembler.ActiveRecords(), err)
 	}
-	late, err := assembler.AcceptAuthenticated(flowMessagePlaintext(t, fragments[1]))
-	if err != nil || late.Status != FragmentTombstoned {
-		t.Fatalf("timeout tombstone result=%+v err=%v", late, err)
-	}
-	now = now.Add(FragmentTombstone)
-	accepted, err := assembler.AcceptAuthenticated(flowMessagePlaintext(t, fragments[0]))
-	if err != nil || accepted.Status != FragmentAccepted {
-		t.Fatalf("expired tombstone retained: %+v %v", accepted, err)
-	}
 	assembler.Close()
+	if err := assembler.RetireOperation(operation); !errors.Is(err, ErrAssemblerClosed) {
+		t.Fatalf("closed retire error=%v", err)
+	}
 
-	full, _ := NewAssembler(session, hierarchy, func() time.Time { return now })
-	for index := range MaxFragmentTombstones {
-		full.recordTombstones[assemblyKey{
-			// Operation 110 stays out of the table: its record tombstones would
-			// be superseded by the operation tombstone cancelling it adds.
-			operation: flowID[protocolsession.OperationID](byte(index%100 + 120)),
-			record:    records.RecordID{byte(index / 250), byte(index%250 + 1)},
-		}] = now.Add(time.Hour)
+	capped, _ := NewAssembler(session, hierarchy, func() time.Time { return now })
+	defer capped.Close()
+	batchOp := flowID[protocolsession.OperationID](110)
+	for index := range content.MaxRequestedBlockIndices {
+		recordFragments, _ := FragmentRecord(batchOp, fmt.Appendf(nil, "record-%d", index))
+		result, err := capped.AcceptAuthenticated(flowMessagePlaintext(t, recordFragments[0]))
+		if err != nil || result.Status != RecordComplete {
+			t.Fatalf("record %d status=%v err=%v", index, result.Status, err)
+		}
 	}
-	if err := full.CancelOperation(flowID[protocolsession.OperationID](110)); !errors.Is(err, ErrReassemblyBudget) {
-		t.Fatalf("tombstone budget cancel error=%v", err)
+	overflow, _ := FragmentRecord(batchOp, []byte("record-overflow"))
+	if _, err := capped.AcceptAuthenticated(flowMessagePlaintext(t, overflow[0])); !errors.Is(err, ErrFragmentConflict) {
+		t.Fatalf("per-operation record cap error=%v", err)
 	}
-	newFragment, _ := FragmentRecord(flowID[protocolsession.OperationID](111), []byte("new"))
-	if _, err := full.AcceptAuthenticated(flowMessagePlaintext(t, newFragment[0])); !errors.Is(err, ErrReassemblyBudget) {
-		t.Fatalf("tombstone budget allocation error=%v", err)
+	if len(capped.completedRecords) != 0 {
+		t.Fatalf("overflowed operation retained completed records: %d", len(capped.completedRecords))
 	}
 
 	if _, err := NewReassemblyAccount("", ReassemblyLimits{Bytes: 1, Records: 1}); err == nil {
