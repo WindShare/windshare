@@ -17,7 +17,7 @@ func TestLookupOperationDistinguishesMissingOperationFromMissingRecord(t *testin
 	}
 	defer registry.Close()
 	id := receivecontract.OperationID{1}
-	lookup, err := registry.LookupOperation(id)
+	lookup, err := registry.LookupOperation(id, nil)
 	if err != nil || lookup.State() != ActiveLookupNone || lookup.TakeLease() != nil {
 		t.Fatalf("absent operation = %v, %v", lookup.State(), err)
 	}
@@ -33,7 +33,7 @@ func TestLookupOperationDistinguishesMissingOperationFromMissingRecord(t *testin
 	if err := directory.Close(); err != nil {
 		t.Fatal(err)
 	}
-	lookup, err = registry.LookupOperation(id)
+	lookup, err = registry.LookupOperation(id, nil)
 	if !errors.Is(err, fs.ErrNotExist) || lookup.State() == ActiveLookupNone {
 		t.Fatalf("missing record disguised as absent operation: %v, %v", lookup.State(), err)
 	}
@@ -44,7 +44,7 @@ func TestLookupOperationDistinguishesMissingOperationFromMissingRecord(t *testin
 			return nil, fs.ErrPermission
 		},
 	}
-	if _, err := registry.LookupOperation(id); !errors.Is(err, fs.ErrPermission) {
+	if _, err := registry.LookupOperation(id, nil); !errors.Is(err, fs.ErrPermission) {
 		t.Fatalf("lookup hid storage failure: %v", err)
 	}
 }
@@ -85,7 +85,7 @@ func TestLookupOperationExcludesTerminalDownloads(t *testing.T) {
 			if err := lease.Replace(previous, next); err != nil {
 				t.Fatal(err)
 			}
-			lookup, err := registry.LookupOperation(fixture.intent.OperationID())
+			lookup, err := registry.LookupOperation(fixture.intent.OperationID(), nil)
 			if err != nil || lookup.State() != ActiveLookupNone || lookup.TakeLease() != nil {
 				t.Fatalf("terminal selection = %v, %v", lookup.State(), err)
 			}
@@ -94,5 +94,50 @@ func TestLookupOperationExcludesTerminalDownloads(t *testing.T) {
 				t.Fatalf("lookup changed terminal record: %v", err)
 			}
 		})
+	}
+}
+
+func TestLookupOperationSkipsNonMatchingRecordWithoutLeaseOrMutation(t *testing.T) {
+	_, registry, lease, repository, _, fixture := openRepositoryFixture(t, 0x72)
+	defer registry.Close()
+	defer repository.Close()
+	id := fixture.intent.OperationID()
+
+	// While running (lease held), a non-matching predicate reports absence rather
+	// than AlreadyRunning.
+	heldRecord, _, err := registry.readOperation(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lookup, err := registry.LookupOperation(id, func(checkpointmodel.OrdinaryOperationRecord) bool {
+		return false
+	})
+	if err != nil || lookup.State() != ActiveLookupNone || lookup.TakeLease() != nil {
+		t.Fatalf("non-matching running lookup = %v, %v", lookup.State(), err)
+	}
+	afterHeld, _, err := registry.readOperation(id)
+	if err != nil || !sameOrdinaryRecord(afterHeld, heldRecord) {
+		t.Fatalf("non-matching running lookup changed record: %v", err)
+	}
+
+	// Once idle, a non-matching predicate must not acquire a lease or advance
+	// lifecycle generation on disk.
+	if err := lease.Close(); err != nil {
+		t.Fatal(err)
+	}
+	idleRecord, _, err := registry.readOperation(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lookup, err = registry.LookupOperation(id, func(checkpointmodel.OrdinaryOperationRecord) bool {
+		return false
+	})
+	if err != nil || lookup.State() != ActiveLookupNone || lookup.TakeLease() != nil {
+		t.Fatalf("non-matching idle lookup = %v, %v", lookup.State(), err)
+	}
+	afterIdle, _, err := registry.readOperation(id)
+	if err != nil || !sameOrdinaryRecord(afterIdle, idleRecord) {
+		t.Fatalf("non-matching idle lookup mutated record: before gen=%d lease=%v, after gen=%d lease=%v, err=%v",
+			idleRecord.LifecycleGeneration(), idleRecord.Lease(), afterIdle.LifecycleGeneration(), afterIdle.Lease(), err)
 	}
 }

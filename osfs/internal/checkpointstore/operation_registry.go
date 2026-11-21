@@ -388,8 +388,13 @@ func (registry *OperationRegistry) lookupActiveLocked(
 }
 
 // LookupOperation takes the same exact lease as automatic continuation without
-// inspecting or replacing the selection's automatic match.
-func (registry *OperationRegistry) LookupOperation(operation receivecontract.OperationID) (ActiveLookup, error) {
+// inspecting or replacing the selection's automatic match. When match rejects a
+// candidate record, LookupOperation reports absence before checking state or
+// acquiring a lease so unrelated operations are never locked or mutated.
+func (registry *OperationRegistry) LookupOperation(
+	operation receivecontract.OperationID,
+	match func(checkpointmodel.OrdinaryOperationRecord) bool,
+) (ActiveLookup, error) {
 	if !registry.valid() || operation.IsZero() {
 		return ActiveLookup{}, transfer.ErrInvalidOutputBinding
 	}
@@ -405,6 +410,9 @@ func (registry *OperationRegistry) LookupOperation(operation receivecontract.Ope
 		return ActiveLookup{}, err
 	}
 	if !record.Lifecycle().ParticipatesInActiveLookup() {
+		return ActiveLookup{state: ActiveLookupNone}, nil
+	}
+	if match != nil && !match(record) {
 		return ActiveLookup{state: ActiveLookupNone}, nil
 	}
 	return registry.lookupOperationRecord(record)

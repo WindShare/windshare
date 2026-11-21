@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
-	"fmt"
 	"sync"
 
 	"github.com/windshare/windshare/core/transfer"
@@ -80,10 +79,6 @@ func (operation *Operation) close() error {
 	return err
 }
 
-// errOtherSelection rejects a retained operation reached by ID with another
-// link or selection. Selecting by ID reports it as no matching saved download.
-var errOtherSelection = fmt.Errorf("%w: retained operation belongs to another selection", transfer.ErrInvalidOutputBinding)
-
 func (authority *Authority) LookupActive(
 	ctx context.Context,
 	selection transfer.SelectionSpec,
@@ -125,7 +120,9 @@ func (authority *Authority) SelectOperation(ctx context.Context, selection trans
 	var activeAdmission checkpointstore.ActiveAdmission
 	var registryLookup checkpointstore.ActiveLookup
 	if selector.Kind() == receivecontract.OperationByID {
-		registryLookup, err = authority.registry.LookupOperation(selector.ID())
+		registryLookup, err = authority.registry.LookupOperation(selector.ID(), func(record checkpointmodel.OrdinaryOperationRecord) bool {
+			return authority.selectedOperationMatches(record, selection)
+		})
 		key = registryLookup.Record().ActiveOperationKey()
 	} else {
 		activeAdmission, registryLookup, err = authority.registry.BeginActive(key)
@@ -149,10 +146,6 @@ func (authority *Authority) SelectOperation(ctx context.Context, selection trans
 		return ActiveLookup{authority: authority, kind: ActiveLookupCreateReady, admission: admission}, nil
 	case checkpointstore.ActiveLookupReopenable:
 		operation, stateReason, err := authority.reopenOperationLocked(ctx, selection, key, &registryLookup)
-		if selector.Kind() == receivecontract.OperationByID && errors.Is(err, errOtherSelection) {
-			authority.stage = authorityStageLookupStopped
-			return ActiveLookup{authority: authority, kind: ActiveLookupNotFound}, nil
-		}
 		if err != nil {
 			return ActiveLookup{}, diagnoseFilesystemOutputFailure(
 				FilesystemOutputFailureOperationAcquisition, err,
@@ -168,7 +161,11 @@ func (authority *Authority) SelectOperation(ctx context.Context, selection trans
 		return ActiveLookup{authority: authority, kind: ActiveLookupReopened, operation: operation}, nil
 	case checkpointstore.ActiveLookupShareStopped:
 		authority.stage = authorityStageLookupStopped
-		return authority.stoppedShareLookupLocked(registryLookup.Record(), selection, selector)
+		intent, err := registryLookup.Record().VerifyIntent(transfer.DecodeReceiveIntent)
+		if err != nil || !sameSelection(intent.SelectionSpec(), selection) {
+			return ActiveLookup{}, errors.Join(transfer.ErrInvalidOutputBinding, err)
+		}
+		return ActiveLookup{}, ErrOutputShareStopped
 	case checkpointstore.ActiveLookupAlreadyRunning:
 		authority.stage = authorityStageLookupStopped
 		return ActiveLookup{authority: authority, kind: ActiveLookupAlreadyRunning}, nil
@@ -191,37 +188,33 @@ func (authority *Authority) SelectOperation(ctx context.Context, selection trans
 	}
 }
 
-// stoppedShareLookupLocked never reopens a stopped share; an ID chosen with
-// another link or selection matches no saved download.
-func (authority *Authority) stoppedShareLookupLocked(
+// selectedOperationMatches filters an ID lookup before taking a lease or
+// exposing another operation's state. Corrupt intent bytes pass through so
+// lookup still diagnoses or quarantines them instead of hiding corruption.
+func (authority *Authority) selectedOperationMatches(
 	record checkpointmodel.OrdinaryOperationRecord,
 	selection transfer.SelectionSpec,
-	selector receivecontract.OperationSelection,
-) (ActiveLookup, error) {
+) bool {
 	intent, err := record.VerifyIntent(transfer.DecodeReceiveIntent)
-	if err != nil {
-		return ActiveLookup{}, errors.Join(transfer.ErrInvalidOutputBinding, err)
+	if err != nil || sameSelection(intent.SelectionSpec(), selection) {
+		return true
 	}
-	if !sameSelection(intent.SelectionSpec(), selection) {
-		if selector.Kind() == receivecontract.OperationByID {
-			return ActiveLookup{authority: authority, kind: ActiveLookupNotFound}, nil
-		}
-		return ActiveLookup{}, transfer.ErrInvalidOutputBinding
-	}
-	return ActiveLookup{}, ErrOutputShareStopped
+	authority.traceSelectedOperationMismatch(record, intent)
+	return false
 }
 
 func (authority *Authority) selectLiveOperationLocked(selection transfer.SelectionSpec, selector receivecontract.OperationSelection, key checkpointmodel.ActiveOperationKey, operationID receivecontract.OperationID) (ActiveLookup, error) {
-	if selector.Kind() == receivecontract.OperationByID {
-		return ActiveLookup{}, transfer.ErrInvalidOutputBinding
-	}
-	blocked, err := authority.retainedSelectionBlocked(selection)
+	blocked, err := authority.retainedSelectionBlocked(selection, selector)
 	if err != nil {
 		return ActiveLookup{}, err
 	}
 	if blocked {
 		authority.stage = authorityStageLookupStopped
 		return ActiveLookup{authority: authority, kind: ActiveLookupNeedsAttention, stateReason: FilesystemOutputStateRecoveryUnavailable}, nil
+	}
+	if selector.Kind() == receivecontract.OperationByID {
+		authority.stage = authorityStageLookupStopped
+		return ActiveLookup{authority: authority, kind: ActiveLookupNotFound}, nil
 	}
 	claimer, err := newVolatileReservationClaimer(authority.binding.AuthorityRef())
 	if err != nil {
@@ -250,13 +243,10 @@ func (authority *Authority) reopenOperationLocked(
 	if err == nil {
 		reservation, direct = intent.MaterializationPlan().DestinationReservation()
 	}
-	// Choosing an ID with the wrong link or selection is a request error, not
-	// evidence that the retained operation lost ownership of its destination.
+	// A selection mismatch here is a binding or index mismatch, not evidence
+	// that the retained operation lost ownership of its destination.
 	if err == nil && !sameSelection(intent.SelectionSpec(), selection) {
-		if closeErr := lease.Close(); closeErr != nil {
-			return nil, 0, errors.Join(transfer.ErrInvalidOutputBinding, closeErr)
-		}
-		return nil, 0, errOtherSelection
+		return nil, 0, errors.Join(transfer.ErrInvalidOutputBinding, lease.Close())
 	}
 	if err != nil || !direct ||
 		!validNamedReservation(reservation, intent.ArtifactSpec(), authority.binding) ||
