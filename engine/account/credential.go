@@ -109,17 +109,23 @@ func (service *Service) executeCredentialRefresh(ctx context.Context, current *c
 		err = service.lockLocal(ctx)
 		if err == nil {
 			defer func() { <-service.local }()
-			record, err = service.persistRetained(ctx, record, generation)
+			record, err = service.persistRetained(ctx, previous, record, generation)
 		}
 	}
 	service.mu.Lock()
 	defer service.mu.Unlock()
-	return service.applyCredentialRefreshLocked(current, record, err)
+	return service.applyCredentialRefreshLocked(current, previous, record, err)
 }
 
-func (service *Service) applyCredentialRefreshLocked(current *credentialSession, record Record, err error) time.Duration {
+func (service *Service) applyCredentialRefreshLocked(current *credentialSession, previous, record Record, err error) time.Duration {
 	if err == nil && !service.currentGenerationLocked(record) {
 		err = serviceauthority.ErrSignature
+	}
+	if err == nil {
+		if reason := service.memoryDenialLocked(previous, record); supersededByDenial(previous.Denial, reason) {
+			service.emitIssuanceSupersededByDenial(record, reason)
+			err = &fault{Kind: "denied", Reason: reason}
+		}
 	}
 	if err == nil {
 		service.clearIssuedDenialLocked(record)
@@ -216,7 +222,11 @@ func (service *Service) refreshRetained(ctx context.Context, previous Record) (R
 	return record, generation, nil
 }
 
-func (service *Service) persistRetained(ctx context.Context, record Record, generation serviceauthority.Generation) (Record, error) {
+func (service *Service) persistRetained(ctx context.Context, previous, record Record, generation serviceauthority.Generation) (Record, error) {
+	service.mu.Lock()
+	memoryReason := service.memoryDenialLocked(previous, record)
+	service.mu.Unlock()
+	var supersededReason string
 	// Every live publication shares the issuer's rollback barrier, while the
 	// selected login remains independent from credentials retained by old shares.
 	_, err := service.config.Store.Update(ctx, func(selected Record) (Record, error) {
@@ -224,14 +234,29 @@ func (service *Service) persistRetained(ctx context.Context, record Record, gene
 			return Record{}, err
 		}
 		if sameIdentity(selected, record) {
+			if reason, blocked := deniedIssuance(previous.Denial, selected.Denial, memoryReason); blocked {
+				supersededReason = reason
+				return Record{}, &fault{Kind: "denied", Reason: reason}
+			}
 			record.mergeIssuance(selected)
 			return record, nil
 		}
-		if selected.Credential != nil && selected.Credential.Account == record.Credential.Account && selected.Denial == "account_blocked" {
+		if supersededByDenial(previous.Denial, memoryReason) {
+			supersededReason = memoryReason
+			return Record{}, &fault{Kind: "denied", Reason: memoryReason}
+		}
+		if selected.Credential != nil && selected.Credential.Account == record.Credential.Account && selected.Denial == denialAccountBlocked {
+			if previous.Denial != denialAccountBlocked {
+				supersededReason = selected.Denial
+				return Record{}, &fault{Kind: "denied", Reason: selected.Denial}
+			}
 			selected.Denial = ""
 		}
 		selected.Certificate = record.Certificate
 		return selected, nil
 	})
+	if supersededReason != "" {
+		service.emitIssuanceSupersededByDenial(record, supersededReason)
+	}
 	return record, err
 }

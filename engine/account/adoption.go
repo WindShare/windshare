@@ -6,6 +6,28 @@ import (
 	"github.com/windshare/windshare/core/diagnostics"
 )
 
+const (
+	denialAccountBlocked    = "account_blocked"
+	denialCredentialRevoked = "credential_revoked"
+)
+
+// A non-login issuance cannot clear a permanent credential revocation or a denial
+// recorded after the refresh started, while a retry that began from a reversible
+// account block can still restore access after an unblock.
+func supersededByDenial(previous, current string) bool {
+	return current == denialCredentialRevoked || current != "" && current != previous
+}
+
+func deniedIssuance(previous, stored, memory string) (string, bool) {
+	if supersededByDenial(previous, stored) {
+		return stored, true
+	}
+	if supersededByDenial(previous, memory) {
+		return memory, true
+	}
+	return "", false
+}
+
 // Denials are remembered before persistence. Losing a cache write or loading an
 // older record cannot turn an explicit refusal into anonymous admission.
 func (service *Service) rememberDenialLocked(record Record, reason string) {
@@ -22,7 +44,7 @@ func (service *Service) rememberDenialLocked(record Record, reason string) {
 	if service.accountDenials == nil {
 		service.accountDenials = make(map[[16]byte]string)
 	}
-	if reason == "account_blocked" {
+	if reason == denialAccountBlocked {
 		service.accountDenials[record.Credential.Account] = reason
 	} else {
 		service.credentialDenials[record.Credential.ID] = reason
@@ -35,6 +57,24 @@ func (service *Service) rememberDenialLocked(record Record, reason string) {
 		service.state, service.reason = Denied, service.record.Denial
 	}
 	service.notifyLocked()
+}
+
+func (service *Service) memoryDenialLocked(previous, issued Record) string {
+	if credential := issued.Credential; credential != nil {
+		if reason := service.credentialDenials[credential.ID]; reason == denialCredentialRevoked {
+			return reason
+		}
+		if reason := service.accountDenials[credential.Account]; reason != "" {
+			return reason
+		}
+		if reason := service.credentialDenials[credential.ID]; reason != "" {
+			return reason
+		}
+	}
+	if previous.Credential == nil && previous.SetupSecret != "" && sameIdentity(service.record, previous) {
+		return service.record.Denial
+	}
+	return ""
 }
 
 func (service *Service) withDenialLocked(record Record) Record {
@@ -58,12 +98,12 @@ func (service *Service) adoptLocked(record Record) {
 		record.Certificate, record.Ticket = service.record.Certificate, ""
 	}
 	record.advanceAccountState(service.record)
+	previousState := service.state
+	recoveredStorage := service.state == StorageError
 	if record.Denial != "" {
 		service.rememberDenialLocked(record, record.Denial)
 	}
 	record = service.withDenialLocked(record)
-	previousState := service.state
-	recoveredStorage := service.state == StorageError
 	selectionChanged := !sameIdentity(service.record, record)
 	service.record = record
 	if selectionChanged || service.state == "" || recoveredStorage {
@@ -136,11 +176,11 @@ func (service *Service) clearIssuedDenialLocked(record Record) {
 	if record.Credential != nil {
 		delete(service.credentialDenials, record.Credential.ID)
 		delete(service.accountDenials, record.Credential.Account)
-		if service.record.Credential != nil && service.record.Credential.Account == record.Credential.Account && service.record.Denial == "account_blocked" {
+		if service.record.Credential != nil && service.record.Credential.Account == record.Credential.Account && service.record.Denial == denialAccountBlocked {
 			service.record.Denial = ""
 		}
 		for _, retained := range service.credentials {
-			if retained.record.Credential.Account == record.Credential.Account && retained.record.Denial == "account_blocked" {
+			if retained.record.Credential.Account == record.Credential.Account && retained.record.Denial == denialAccountBlocked {
 				retained.record.Denial = ""
 			}
 		}

@@ -200,9 +200,9 @@ func (service *Service) RevokeCredential(ctx context.Context, accountID string, 
 			return err
 		}
 		target := Record{Credential: &Credential{ID: credential, Account: previous.Credential.Account}}
-		return service.recordDenial(ctx, target, "credential_revoked", func(current Record) (Record, error) {
+		return service.recordDenial(ctx, target, denialCredentialRevoked, func(current Record) (Record, error) {
 			if current.Credential != nil && current.Credential.ID == credential {
-				current.Denial = "credential_revoked"
+				current.Denial = denialCredentialRevoked
 			}
 			return current, nil
 		})

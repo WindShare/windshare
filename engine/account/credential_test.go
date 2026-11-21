@@ -440,3 +440,78 @@ func TestRetainedCredentialRejectsMismatchedSessionAndRecoversOnRetry(t *testing
 		}
 	})
 }
+
+func TestLateRetainedCredentialRefreshDoesNotOverwriteNewerDenial(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		siblingSelected bool
+		reason          string
+	}{
+		{name: "same credential revoked", reason: denialCredentialRevoked},
+		{name: "sibling credential account blocked", siblingSelected: true, reason: denialAccountBlocked},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			config, response := accountFixture(t)
+			synctest.Test(t, func(t *testing.T) {
+				issuedAt, start := config.Now(), time.Now()
+				config.Now = func() time.Time { return issuedAt.Add(time.Since(start)) }
+				config.Store = &MemoryStore{record: cachedRecord(response)}
+				inFlight := make(chan struct{})
+				release := make(chan struct{})
+				var attempts atomic.Int32
+				config.Client = clientFunc(func(request *http.Request) (*http.Response, error) {
+					attempts.Add(1)
+					close(inFlight)
+					select {
+					case <-release:
+					case <-request.Context().Done():
+						return nil, request.Context().Err()
+					}
+					return accountReply(t, http.StatusOK, response), nil
+				})
+				service := testService(t, config)
+				share := service.NewShareAuthorization(t.Context())
+				defer share.Close()
+				backup := &Source{share: share, address: "backup"}
+
+				// Switch active selection in memory so retained share triggers refreshRetained.
+				service.mu.Lock()
+				share.credential.record.Ticket = ""
+				service.adoptLocked(Record{SetupSecret: "other-selection"})
+				service.mu.Unlock()
+
+				waiting := backup.ReserveRegistrationAuthorization()
+				if waiting.State != serviceauthority.AdmissionExpired {
+					t.Fatalf("state = %s, want expired", waiting.State.Name())
+				}
+				<-inFlight
+
+				if _, err := config.Store.Update(t.Context(), func(current Record) (Record, error) {
+					if tc.siblingSelected {
+						current.Credential.ID[0] ^= 1
+						current.Credential.Secret = "sibling-secret"
+					}
+					current.Denial = tc.reason
+					return current, nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+				close(release)
+				synctest.Wait()
+
+				stored, err := config.Store.Load(t.Context())
+				if err != nil || stored.Denial != tc.reason {
+					t.Fatalf("stored denial = %q (err=%v), want %q", stored.Denial, err, tc.reason)
+				}
+				if got := backup.ReserveRegistrationAuthorization(); got.State != serviceauthority.AdmissionDenied {
+					t.Fatalf("retained share state = %s, want denied", got.State.Name())
+				}
+				time.Sleep(2 * MaximumRetry)
+				synctest.Wait()
+				if got := attempts.Load(); got != 1 {
+					t.Fatalf("superseded retained refresh retried: %d attempts", got)
+				}
+			})
+		})
+	}
+}
