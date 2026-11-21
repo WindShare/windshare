@@ -404,8 +404,9 @@ impl Desktop {
             | AccountState::Denied => Tone::Rose,
             _ => Tone::Neutral,
         };
-        let reset = (view.status.state == AccountState::Ready && !view.reset_local.is_empty())
-            .then(|| format!("{} · {}", locale.text(Text::AccountReset), view.reset_local));
+        let reset = view
+            .allowance_reset_local()
+            .map(|at| format!("{} · {at}", locale.text(Text::AccountReset)));
         theme
             .card()
             .px(px(CARD_PADDING_X))

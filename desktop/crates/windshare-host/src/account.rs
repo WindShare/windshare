@@ -24,6 +24,16 @@ impl AccountView {
             .map(|_| self.nickname_change_local.as_str())
     }
 
+    pub fn allowance_reset_local(&self) -> Option<&str> {
+        (self.status.state == AccountState::Ready
+            && matches!(
+                self.status.allowance,
+                Allowance::Available | Allowance::Spent
+            )
+            && !self.reset_local.is_empty())
+        .then_some(self.reset_local.as_str())
+    }
+
     pub const fn can_edit_profile(&self) -> bool {
         !self.status.account.is_empty()
             && !matches!(

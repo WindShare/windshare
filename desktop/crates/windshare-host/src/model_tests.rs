@@ -146,6 +146,56 @@ fn account_storage_error_deserializes_and_disables_profile_edits() {
 }
 
 #[test]
+fn allowance_reset_local_requires_ready_non_stale_allowance() {
+    let cases = [
+        (
+            "ready",
+            "available",
+            "2026-11-21 08:00 CST",
+            Some("2026-11-21 08:00 CST"),
+        ),
+        (
+            "ready",
+            "spent",
+            "2026-11-21 08:00 CST",
+            Some("2026-11-21 08:00 CST"),
+        ),
+        ("ready", "stale", "2026-11-21 08:00 CST", None),
+        ("ready", "available", "", None),
+        (
+            "refresh_required",
+            "available",
+            "2026-11-21 08:00 CST",
+            None,
+        ),
+        (
+            "temporarily_unavailable",
+            "available",
+            "2026-11-21 08:00 CST",
+            None,
+        ),
+    ];
+    for (state, allowance, reset_local, expected) in cases {
+        let view: crate::AccountView = serde_json::from_value(serde_json::json!({
+            "status": {
+                "active": true,
+                "state": state,
+                "account": "acct-1",
+                "allowance": allowance,
+                "remaining_bytes": 0
+            },
+            "reset_local": reset_local
+        }))
+        .unwrap();
+        assert_eq!(
+            view.allowance_reset_local(),
+            expected,
+            "state={state} allowance={allowance} reset_local={reset_local:?}"
+        );
+    }
+}
+
+#[test]
 fn waits_for_official_authorization_covers_live_and_repeated_waits() {
     let mut live_official = accepted("live", ShareState::AwaitingAuthorization);
     live_official.authorization = Some(ShareAuthorization::Official);

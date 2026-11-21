@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/core/diagnostics"
+	"github.com/windshare/windshare/core/serviceauthority"
 )
 
 var ErrNotConfigured = errors.New("official account service is not configured")
@@ -168,8 +169,16 @@ func (service *Service) Snapshot() (Snapshot, <-chan struct{}) {
 	if service.record.Entitlement.Version > 0 && service.record.Entitlement.ValidUntil > 0 {
 		validUntil = time.Unix(int64(service.record.Entitlement.ValidUntil), 0).UTC()
 	}
-	value := Snapshot{Active: service.refreshDemandLocked().active(), State: service.state, Allowance: service.record.Entitlement.Allowance(now),
-		RemainingBytes: service.record.Entitlement.RemainingBytes, ResetAt: service.record.Entitlement.ResetAt(),
+	allowance := service.record.Entitlement.Allowance(now)
+	var remainingBytes uint64
+	var resetAt time.Time
+	// Stale entitlements may belong to an elapsed UTC day whose reset time is already in the past.
+	if allowance != serviceauthority.AllowanceStale {
+		remainingBytes = service.record.Entitlement.RemainingBytes
+		resetAt = service.record.Entitlement.ResetAt()
+	}
+	value := Snapshot{Active: service.refreshDemandLocked().active(), State: service.state, Allowance: allowance,
+		RemainingBytes: remainingBytes, ResetAt: resetAt,
 		ValidUntil: validUntil, RetryAt: service.retryAt,
 		RegistrationPermille: service.registrationPermille, Reason: service.reason}
 	// Email admission first returns an empty challenge. Only a delivered code has an ID.

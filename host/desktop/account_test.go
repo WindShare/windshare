@@ -7,6 +7,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/windshare/windshare/core/serviceauthority"
 	"github.com/windshare/windshare/engine/account"
 )
 
@@ -14,12 +15,16 @@ type controlledAccount struct {
 	started  chan struct{}
 	renewals int
 	changed  chan struct{}
+	status   account.Snapshot
 	calls    atomic.Int32
 	finished atomic.Bool
 	reload   func(context.Context) error
 }
 
 func (service *controlledAccount) Snapshot() (account.Snapshot, <-chan struct{}) {
+	if service.status.State != "" {
+		return service.status, service.changed
+	}
 	return account.Snapshot{State: account.Pending}, service.changed
 }
 func (service *controlledAccount) ReloadSelection(ctx context.Context) error {
@@ -202,5 +207,53 @@ func TestAccountCommandReplayAndShutdownOwnOneCancelableOperation(t *testing.T) 
 	}
 	if result := app.execute(other); result.Error == nil {
 		t.Fatal("closed host accepted account work")
+	}
+}
+
+func TestAccountViewResetLocalRequiresFreshReadyAllowance(t *testing.T) {
+	resetAt := time.Date(2026, 11, 21, 0, 0, 0, 0, time.UTC)
+	wantFormatted := resetAt.Local().Format("2006-01-02 15:04 MST")
+	for _, tc := range []struct {
+		name      string
+		status    account.Snapshot
+		wantReset string
+	}{
+		{
+			name:      "ready available",
+			status:    account.Snapshot{State: account.Ready, Allowance: serviceauthority.AllowanceAvailable, ResetAt: resetAt},
+			wantReset: wantFormatted,
+		},
+		{
+			name:      "ready spent",
+			status:    account.Snapshot{State: account.Ready, Allowance: serviceauthority.AllowanceSpent, ResetAt: resetAt},
+			wantReset: wantFormatted,
+		},
+		{
+			name:      "ready stale omits past reset",
+			status:    account.Snapshot{State: account.Ready, Allowance: serviceauthority.AllowanceStale, ResetAt: resetAt},
+			wantReset: "",
+		},
+		{
+			name:      "ready unknown allowance omits reset",
+			status:    account.Snapshot{State: account.Ready, ResetAt: resetAt},
+			wantReset: "",
+		},
+		{
+			name:      "non-ready omits reset",
+			status:    account.Snapshot{State: account.Unavailable, Allowance: serviceauthority.AllowanceAvailable, ResetAt: resetAt},
+			wantReset: "",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app := newApplication("test", dependencies{
+				accounts: &controlledAccount{changed: make(chan struct{}), status: tc.status},
+				log:      func(string, any) {},
+				close:    func(context.Context) error { return nil },
+			})
+			t.Cleanup(func() { _ = app.close() })
+			if got := app.snapshot().Account.ResetLocal; got != tc.wantReset {
+				t.Fatalf("ResetLocal = %q, want %q", got, tc.wantReset)
+			}
+		})
 	}
 }

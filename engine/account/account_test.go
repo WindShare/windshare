@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -198,5 +199,61 @@ func TestUnissuedEntitlementOmitsResetAndValidityTimestamps(t *testing.T) {
 		if strings.Contains(text, field) {
 			t.Fatalf("unissued snapshot JSON emitted %q: %s", field, text)
 		}
+	}
+}
+
+func TestStaleEntitlementOmitsRemainingBytesAndResetTime(t *testing.T) {
+	config, response := accountFixture(t)
+	var nowUnix atomic.Int64
+	nowUnix.Store(config.Now().Unix())
+	config.Now = func() time.Time { return time.Unix(nowUnix.Load(), 0).UTC() }
+	if _, err := config.Store.Update(t.Context(), func(Record) (Record, error) {
+		return cachedRecord(response), nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service := testService(t, config)
+	wantReset := response.Entitlement.ResetAt()
+
+	fresh, _ := service.Snapshot()
+	if fresh.State != Ready || fresh.Allowance != serviceauthority.AllowanceAvailable ||
+		fresh.RemainingBytes != response.Entitlement.RemainingBytes || !fresh.ResetAt.Equal(wantReset) {
+		t.Fatalf("fresh snapshot lost allowance details: %+v", fresh)
+	}
+
+	service.mu.Lock()
+	service.record.Entitlement.RemainingBytes = 0
+	service.mu.Unlock()
+	spent, _ := service.Snapshot()
+	if spent.State != Ready || spent.Allowance != serviceauthority.AllowanceSpent ||
+		spent.RemainingBytes != 0 || !spent.ResetAt.Equal(wantReset) {
+		t.Fatalf("spent snapshot should preserve reset time: %+v", spent)
+	}
+
+	service.mu.Lock()
+	service.record.Entitlement.RemainingBytes = response.Entitlement.RemainingBytes
+	service.mu.Unlock()
+	nowUnix.Store(int64(response.Entitlement.ValidUntil))
+	expiredWindow, _ := service.Snapshot()
+	if expiredWindow.State != Ready || expiredWindow.Allowance != serviceauthority.AllowanceStale ||
+		expiredWindow.RemainingBytes != 0 || !expiredWindow.ResetAt.IsZero() {
+		t.Fatalf("expired entitlement window leaked stale allowance: %+v", expiredWindow)
+	}
+	if encoded, err := json.Marshal(expiredWindow); err != nil || strings.Contains(string(encoded), "reset_at") {
+		t.Fatalf("stale snapshot JSON emitted reset_at: err=%v json=%s", err, encoded)
+	}
+
+	// Simulate crossing UTC midnight while the 12-hour ticket remains valid.
+	service.mu.Lock()
+	service.record.Entitlement.Day = response.Entitlement.Day - 1
+	service.record.Entitlement.ValidUntil = uint64(nowUnix.Load()) + 60
+	service.mu.Unlock()
+	pastMidnight, _ := service.Snapshot()
+	if pastMidnight.State != Ready || pastMidnight.Allowance != serviceauthority.AllowanceStale ||
+		pastMidnight.RemainingBytes != 0 || !pastMidnight.ResetAt.IsZero() {
+		t.Fatalf("post-midnight stale snapshot leaked past reset time: %+v", pastMidnight)
+	}
+	if encoded, err := json.Marshal(pastMidnight); err != nil || strings.Contains(string(encoded), "reset_at") {
+		t.Fatalf("post-midnight stale snapshot JSON emitted reset_at: err=%v json=%s", err, encoded)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/windshare/windshare/core/serviceauthority"
 	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/engine/account"
 )
@@ -125,12 +126,20 @@ func (a *Application) resumeOfficialAuthorizationLocked(explicitSuccess bool) {
 	}
 }
 
+func showsAllowanceReset(status account.Snapshot) bool {
+	if status.State != account.Ready || status.ResetAt.IsZero() {
+		return false
+	}
+	return status.Allowance == serviceauthority.AllowanceAvailable ||
+		status.Allowance == serviceauthority.AllowanceSpent
+}
+
 func (a *Application) syncAccountLocked() <-chan struct{} {
 	status, changed := a.deps.accounts.Snapshot()
 	view := *a.accountView
 	view.Account = status
 	view.ResetLocal = ""
-	if !status.ResetAt.IsZero() {
+	if showsAllowanceReset(status) {
 		view.ResetLocal = status.ResetAt.Local().Format("2006-01-02 15:04 MST")
 	}
 	view.NicknameChangeLocal = ""
