@@ -26,19 +26,23 @@ selected() {
     [[ $(dirname "$path") == "$(realpath -e "$releases")" && -x "$path/wsrelay" ]] || die "unexpected current release"
     printf '%s\n' "$path"
 }
+as_service() {
+    # Close the root-owned operations lock FD before crossing the privilege boundary.
+    runuser -u "$account" -- "$@" 9>&-
+}
 gate() {
     local previous
     previous=$(cat "$state/previous")
-    runuser -u "$account" -- "$previous/wsrelay" "$1" "$config" "$node" "$operation" "${@:2}"
+    as_service "$previous/wsrelay" "$1" "$config" "$node" "$operation" "${@:2}"
 }
 restart() {
     local release=$1 pid
     ln -sfn -- "$release" "$root/.switch-$operation"
     mv -Tf -- "$root/.switch-$operation" "$current"
-    systemctl restart --no-block "$unit"
+    systemctl restart --no-block "$unit" 9>&-
     # systemctl can report the retiring process as active immediately after queueing a restart.
     for ((attempt=0;attempt<50;attempt++)); do
-        pid=$(systemctl show --property=MainPID --value "$unit")
+        pid=$(systemctl show --property=MainPID --value "$unit" 9>&-)
         if [[ $pid =~ ^[1-9][0-9]*$ && $(readlink "/proc/$pid/exe") == "$release/wsrelay" ]]; then return 0; fi
         sleep 0.1
     done
@@ -57,8 +61,8 @@ case "$action" in
         previous=$(selected)
         # Both binaries must bind the same installed identity and support the reconnect fence.
         for binary in "$previous/wsrelay" "$stage/wsrelay"; do
-            runuser -u "$account" -- "$binary" --check-config "$config" "$node"
-            runuser -u "$account" -- "$binary" --help | grep -q -- '<reconnect_budget_ms>' || die "incompatible maintenance protocol"
+            as_service "$binary" --check-config "$config" "$node"
+            as_service "$binary" --help | grep -q -- '<reconnect_budget_ms>' || die "incompatible maintenance protocol"
         done
         if [[ -d $release ]]; then
             printf '%s  %s\n' "$2" "$release/wsrelay" | sha256sum --check --status || die "revision collision"
@@ -83,10 +87,10 @@ case "$action" in
     inspect)
         [[ $# == 0 && $(cat "$state/node") == "$node" ]] || die "operation mismatch"
         previous=$(cat "$state/previous")
-        runuser -u "$account" -- "$previous/wsrelay" --check-config "$config" "$node"
+        as_service "$previous/wsrelay" --check-config "$config" "$node"
         release=$(selected)
         [[ $release == "$previous" || $release == "$(cat "$state/candidate")" ]] || die "unexpected running revision"
-        pid=$(systemctl show --property=MainPID --value "$unit")
+        pid=$(systemctl show --property=MainPID --value "$unit" 9>&-)
         [[ $pid =~ ^[1-9][0-9]*$ && $(readlink "/proc/$pid/exe") == "$release/wsrelay" ]] || die "selected release is not running"
         ;;
     switch|rollback)
