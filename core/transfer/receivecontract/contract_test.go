@@ -161,12 +161,15 @@ func TestArtifactVariantsPreserveOneCanonicalLayout(t *testing.T) {
 	}
 	invalidOriginals := []struct{ path, name string }{
 		{"docs/report.txt", "other.txt"}, {"docs/../report.txt", "report.txt"},
-		{"docs/.wsresume-file", ".wsresume-file"}, {"", ""},
+		{"docs/a\u202eb", "a\u202eb"}, {"", ""},
 	}
 	for _, test := range invalidOriginals {
 		if _, err := NewOriginalFileArtifact(file, test.path, test.name); !errors.Is(err, ErrInvalidReceiveContract) {
 			t.Fatalf("invalid original %+v error=%v", test, err)
 		}
+	}
+	if _, err := NewOriginalFileArtifact(file, "docs/.wsresume-file", ".wsresume-file"); err != nil {
+		t.Fatalf("valid logical marker-shaped original file rejected: %v", err)
 	}
 	if _, err := NewSingleFileDirectoryTree(catalog.FileID{}, "report.txt", "report.txt"); !errors.Is(err, ErrInvalidReceiveContract) {
 		t.Fatalf("zero single-file error=%v", err)
@@ -347,8 +350,11 @@ func TestReceiveContractArtifactEdgeCases(t *testing.T) {
 	if _, err := AppendProtectedSuffix("", ".zip"); !errors.Is(err, ErrInvalidReceiveContract) {
 		t.Fatal("empty base allowed")
 	}
-	if _, err := AppendProtectedSuffix(".wsresume", ".zip"); !errors.Is(err, ErrInvalidReceiveContract) {
-		t.Fatal(".wsresume base allowed")
+	if _, err := AppendProtectedSuffix("..", ".zip"); !errors.Is(err, ErrInvalidReceiveContract) {
+		t.Fatal("relative base allowed")
+	}
+	if got, err := AppendProtectedSuffix(".wsresume", ".zip"); err != nil || got != ".wsresume.zip" {
+		t.Fatalf("marker-shaped logical base = %q, %v", got, err)
 	}
 	if _, err := AppendProtectedSuffix("name", ""); !errors.Is(err, ErrInvalidReceiveContract) {
 		t.Fatal("empty suffix allowed")

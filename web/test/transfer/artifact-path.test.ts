@@ -234,6 +234,26 @@ describe('artifact path projection', () => {
       relativePath: ['docs', 'report.bin'],
     })
   })
+
+  it('projects marker-shaped root children for browser FSA without throwing', async () => {
+    const layout = createCompleteDirectoryResultRoot(identityText(8), 'proj')
+    const artifact = await createResultRootDirectoryTreeArtifact(layout)
+    const contract = await fsaContract(artifact)
+
+    expect(contract.projectDirectory(['proj', '.wsresume-dir'])).toMatchObject({
+      kind: 'materialize',
+      logicalArtifactPath: ['proj', '.wsresume-dir'],
+      relativePath: ['.wsresume-dir'],
+    })
+    expect(contract.projectFile(['proj', '.wsresume-notes.txt'])).toMatchObject({
+      logicalArtifactPath: ['proj', '.wsresume-notes.txt'],
+      relativePath: ['.wsresume-notes.txt'],
+    })
+    expect(contract.projectFile(['proj', '.wſresume-part'])).toMatchObject({
+      logicalArtifactPath: ['proj', '.wſresume-part'],
+      relativePath: ['.wſresume-part'],
+    })
+  })
 })
 
 async function fsaContract(

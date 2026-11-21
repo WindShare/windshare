@@ -1,7 +1,4 @@
-import {
-  catalogNameCollisionKey,
-  isCatalogName,
-} from '../../catalog/path-policy'
+import { isCatalogName } from '../../catalog/path-policy'
 import { encodeBase64Url } from '../../crypto/bytes'
 import type {
   CanonicalSelectionRule,
@@ -371,8 +368,7 @@ export function resultNamePrefix(value: string, maximumBytes: number): string {
 }
 
 export function requireResultName(value: string): string {
-  if (typeof value !== 'string' || !isCatalogName(value) ||
-      catalogNameCollisionKey(value).startsWith('.wsresume')) {
+  if (typeof value !== 'string' || !isCatalogName(value)) {
     throw new TypeError('result name violates the catalog path policy')
   }
   return value

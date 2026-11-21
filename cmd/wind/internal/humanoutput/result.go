@@ -33,6 +33,12 @@ func formatTransferResult(result clievent.TransferResult, symbols Symbols) []ter
 		terminalcanvas.NewLine(terminalcanvas.Span{Text: destination}),
 		terminalcanvas.NewLine(terminalcanvas.Span{Text: "  " + formatOutcomeSummary(result, symbols.Separator)}),
 	}
+	if count := result.RepairedNames(); count != 0 {
+		lines = append(lines, terminalcanvas.Plain(
+			"  "+countedResultNoun(result, count, "item saved under a compatible name", "items saved under compatible names")+
+				" (see "+escapedDisplay(result.NameReport().Text())+").",
+		))
+	}
 	if result.SourceOmittedEntries() != 0 {
 		lines = append(lines, terminalcanvas.Plain("  A skipped directory counts as one item; all of its contents are excluded."))
 	}

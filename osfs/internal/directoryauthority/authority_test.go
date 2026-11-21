@@ -125,9 +125,25 @@ func TestCanonicalLocatorClaimsPlatformEquivalenceAndReservedNamespace(t *testin
 			t.Errorf("reserved path %q error=%v", path, err)
 		}
 	}
+	// Recovery markers live inside result roots, not the destination container.
+	if _, err := authority.CanonicalLocatorKey(".wsresume-notes.txt"); err != nil {
+		t.Errorf("container rejected non-container prefix: %v", err)
+	}
 	for _, path := range []string{"folder//child", "folder/../child", "/absolute"} {
 		if _, err := authority.CanonicalLocatorKey(path); !errors.Is(err, ErrInvalidLocator) {
 			t.Errorf("invalid path %q error=%v", path, err)
+		}
+	}
+
+	resultRoot, _ := newTestAuthority(t, outputcap.AuthorityCreatedRoot, Config{})
+	for _, path := range []string{".wsresume", ".WSRESUME-state/file", ".wſresume-part"} {
+		if _, err := resultRoot.CanonicalLocatorKey(path); !errors.Is(err, outputfault.ErrReservedPath) {
+			t.Errorf("result-root reserved path %q error=%v", path, err)
+		}
+	}
+	for _, path := range []string{".windshare-output", ".windshare-output/child", "sub/.wsresume-notes"} {
+		if _, err := resultRoot.CanonicalLocatorKey(path); err != nil {
+			t.Errorf("result root rejected non-colliding path %q: %v", path, err)
 		}
 	}
 }

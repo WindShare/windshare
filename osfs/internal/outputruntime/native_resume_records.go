@@ -173,7 +173,7 @@ func (lease *NativeResumeLease) cleanupNamesLocked() error {
 	if err != nil {
 		return err
 	}
-	if err := store.Export(resolver, root, lease.runtime.destination.WithPublicContainer); err != nil {
+	if _, err := store.Export(resolver, root, lease.runtime.destination.WithPublicContainer); err != nil {
 		return err
 	}
 	return store.Clear()

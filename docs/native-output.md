@@ -12,7 +12,7 @@ Scheduling uses accepted ranges. Restart-reusable progress includes only persist
 
 `get` automatically continues a matching task. `get --redownload` reserves a separate, collision-safe destination and leaves the original continuation target intact; both tasks may occupy disk space. `resume retry --operation <id>` selects either task. Observed source changes, unavailable comparison evidence and uncertain partials block only affected files. Task-owned checkpoint write remnants are reclaimed automatically; discard also removes owned unfinished data, preserving published or unrecognized files.
 
-Source names are preserved when the destination accepts them. Rejected names receive a stable compatible spelling, retaining usable extensions; saved mappings are reused on resume. Completion or discard exports `windshare-names-*.json` beside the result, recording original and saved paths before private mappings are removed. Ordinary names and collision suffixes need no mapping report.
+Source names are preserved when the destination accepts them. Names rejected by the destination or colliding with WindShare's private namespace at the saved root (`.windshare-output*` in the destination container, `.wsresume*` inside a result root) receive a stable compatible spelling, retaining usable extensions; saved mappings are reused on resume. Completion or discard exports `windshare-names-*.json` beside the result, recording original and saved paths before private mappings are removed. Ordinary names and collision suffixes need no mapping report.
 
 Live-only files release their stages on delivery. On supported roots, crash cleanup drains a bounded batch at each destination bind; a backlog does not disable cleanup. Unrecognized objects are preserved.
 

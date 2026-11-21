@@ -55,14 +55,13 @@ func TestSyntheticRootCommitRejectsPortableNameCollisions(t *testing.T) {
 	}
 }
 
-func TestSyntheticRootCommitRejectsOutputReservedRootName(t *testing.T) {
+func TestSyntheticRootCommitAcceptsOutputMarkerShapedRootName(t *testing.T) {
 	root := idValue[DirectoryID](20)
-	_, err := NewSyntheticRootCommit(SyntheticRootCommitSpec{
+	if _, err := NewSyntheticRootCommit(SyntheticRootCommitSpec{
 		ShareInstance: idValue[ShareInstance](1), SyntheticRoot: root, Generation: idValue[DirectoryGeneration](2),
 		SelectedRoots: []NodeRecord{selectedRootRecord(t, root, 3, ".WSRESUME-state")},
-	})
-	if err == nil {
-		t.Fatal("output-reserved selected-root name was accepted")
+	}); err != nil {
+		t.Fatalf("logical selected-root name was rejected: %v", err)
 	}
 }
 

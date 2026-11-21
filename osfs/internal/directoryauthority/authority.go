@@ -81,7 +81,7 @@ func New(platform Platform, config Config) (*Authority, error) {
 	if disposition != outputcap.CallerProvidedContainer && disposition != outputcap.AuthorityCreatedRoot {
 		return nil, ErrInvalidConfiguration
 	}
-	reservedKey, err := platform.CanonicalComponentKey(reservedControlComponent)
+	reservedKey, err := platform.CanonicalComponentKey(outputcap.ReservedRootPrefix(disposition))
 	if err != nil || reservedKey == "" {
 		return nil, errors.Join(ErrInvalidConfiguration, err)
 	}

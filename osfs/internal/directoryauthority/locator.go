@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/osfs/internal/outputcap"
 	"github.com/windshare/windshare/osfs/internal/outputfault"
 )
 
@@ -38,9 +39,10 @@ func (authority *Authority) canonicalLocator(path string) (locatorKey, error) {
 	if err != nil || firstKey == "" {
 		return locatorKey{}, errors.Join(ErrInvalidLocator, err)
 	}
-	// Catalog validation already protects portable aliases of the reserved root.
-	// Keep the provider spelling check as well for its private namespace names.
-	if strings.HasPrefix(firstKey, authority.reservedKey) {
+	// Guard the exact private namespace that lives in this root: control state
+	// inside a destination container, or recovery markers inside a result root.
+	if outputcap.ReservedRootName(authority.rootDisposition, first) ||
+		strings.HasPrefix(firstKey, authority.reservedKey) {
 		return locatorKey{}, errors.Join(ErrInvalidLocator, outputfault.ErrReservedPath)
 	}
 	separator := strings.LastIndexByte(path, '/')

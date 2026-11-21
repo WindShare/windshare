@@ -64,6 +64,9 @@ func (enc *cliEncoder) encodeTransferSettled(event clievent.TransferSettled) err
 		PublishedBytes:       decimal(result.PublishedBytes()),
 		CountersExact:        result.CountersExact(),
 	}
+	if count := result.RepairedNames(); count != 0 {
+		payload.RepairedNames = decimal(count)
+	}
 	if metrics, ok := event.DownloadConnectivity(); ok {
 		summary := &downloadConnectivity{
 			DownloadID: metrics.DownloadID, DirectBytes: decimal(metrics.DirectBytes),

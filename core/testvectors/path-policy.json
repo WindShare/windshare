@@ -110,12 +110,18 @@
     {
       "name": "folded-journal-prefix",
       "input": ".WSRESUME-part",
-      "expected": "invalid-path"
+      "expected": "valid",
+      "canonical": ".WSRESUME-part",
+      "collisionKey": ".wsresume-part",
+      "collisionGroup": "long-s-fold"
     },
     {
       "name": "full-fold-journal-prefix",
       "input": ".wſresume-part",
-      "expected": "invalid-path"
+      "expected": "valid",
+      "canonical": ".wſresume-part",
+      "collisionKey": ".wsresume-part",
+      "collisionGroup": "long-s-fold"
     },
     {
       "name": "bidi-format-character",

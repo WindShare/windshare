@@ -49,6 +49,10 @@ const (
 	getOutputLookupAmbiguous      = OutputLookupAmbiguous
 )
 
+type compatibleNameReporter interface {
+	CompatibleNameReport() (repairedCount int, reportName string)
+}
+
 type getOperationMaterializer struct{ operation OutputOperation }
 
 func (m getOperationMaterializer) OpenDirectTree(ctx context.Context, intent transfer.ReceiveIntent) (transfer.DirectTreeSession, error) {

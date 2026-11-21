@@ -67,6 +67,8 @@ type Result struct {
 	Job                 transfer.TransferJobID
 	Destination         string
 	DestinationAdjusted bool
+	RepairedNames       int
+	NameReport          string
 	Elapsed             time.Duration
 	Connectivity        downloadmetrics.Snapshot
 }
@@ -76,6 +78,8 @@ type SettlementInput struct {
 	Elapsed                                                                   time.Duration
 	Destination                                                               string
 	DestinationAdjusted                                                       bool
+	RepairedNames                                                             int
+	NameReport                                                                string
 	Operation                                                                 receivecontract.OperationID
 	Job                                                                       transfer.TransferJobID
 	Connectivity                                                              downloadmetrics.Snapshot
@@ -154,7 +158,7 @@ func Settle(input SettlementInput) (task.Completion[Result], error) {
 	}
 	result := task.Completion[Result]{
 		Outcome: outcome, FailureClass: class, CleanupError: input.CleanupError,
-		Value: Result{Transfer: r, Operation: input.Operation, Job: input.Job, Destination: input.Destination, DestinationAdjusted: input.DestinationAdjusted, Elapsed: input.Elapsed, Connectivity: input.Connectivity},
+		Value: Result{Transfer: r, Operation: input.Operation, Job: input.Job, Destination: input.Destination, DestinationAdjusted: input.DestinationAdjusted, RepairedNames: input.RepairedNames, NameReport: input.NameReport, Elapsed: input.Elapsed, Connectivity: input.Connectivity},
 	}
 	if outcome != task.OutcomeSuccess {
 		// The typed reason keeps application precedence while the error tree retains

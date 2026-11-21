@@ -30,6 +30,10 @@ func ProjectReceiveResult(input engine.TaskCompletion[engine.ReceiveResult]) (cl
 	r := input.Value.Transfer
 	spec := clievent.TransferResultSpec{Status: status, ExitCode: exit, Drift: drift, Elapsed: input.Value.Elapsed, Destination: appobs.NewDisplayPath(input.Value.Destination), DestinationAdjusted: input.Value.DestinationAdjusted,
 		Files: projectFileOutcomes(r.Progress.FileOutcomes), DirectoryFailures: saturatingCount(len(r.Directories), r.OmittedDirectoryFailures), OmittedDiagnostics: saturatingAdd(r.OmittedDirectoryFailures, r.OmittedFileFailures), PublishedBytes: r.Progress.PublishedBytes, CountersExact: r.Progress.CountersExact}
+	if input.Value.RepairedNames > 0 && input.Value.NameReport != "" {
+		spec.RepairedNames = uint64(input.Value.RepairedNames)
+		spec.NameReport = appobs.NewDisplayName(input.Value.NameReport)
+	}
 	spec.SourceOmittedEntries = r.Progress.SourceOmittedEntries
 	if input.Outcome != engine.OutcomeSuccess {
 		spec.Failure = input.Failure

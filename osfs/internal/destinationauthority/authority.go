@@ -17,7 +17,7 @@ import (
 	"github.com/windshare/windshare/osfs/internal/outputcap"
 )
 
-const controlDirectoryName = ".windshare-output"
+const controlDirectoryName = outputcap.ControlDirectoryName
 
 var (
 	ErrInvalidBinding          = errors.New("destination authority binding is invalid")

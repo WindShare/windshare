@@ -98,20 +98,9 @@ func beginTopLevelReservationCandidate(
 	if err != nil {
 		return topLevelReservationCandidate{}, false, errors.Join(ErrInvalidReservation, err)
 	}
-	physicalName := logicalReservedName
-	if !outputnames.PortableName(physicalName) {
-		// Probe before recording ownership: a refusal cannot leave a claim under
-		// a spelling the destination cannot subsequently reopen.
-		_, _, probeErr := root.ClassifyExactEntry(physicalName)
-		if errors.Is(probeErr, outputcap.ErrNameRejected) {
-			operationID := request.OperationID.Bytes()
-			physicalName, err = outputnames.Candidate(operationID, logicalReservedName, 0)
-			if err != nil {
-				return topLevelReservationCandidate{}, false, err
-			}
-		} else if probeErr != nil {
-			return topLevelReservationCandidate{}, false, probeErr
-		}
+	physicalName, err := resolveTopLevelPhysicalName(root, request.OperationID.Bytes(), logicalReservedName)
+	if err != nil {
+		return topLevelReservationCandidate{}, false, err
 	}
 	canonicalNameKey, err := canonicalComponentKey(physicalName)
 	if err != nil || canonicalNameKey == "" {
@@ -161,6 +150,31 @@ func beginTopLevelReservationCandidate(
 	return topLevelReservationCandidate{
 		canonical: canonical, claim: claim, handle: handle, physicalName: physicalName, mode: mode,
 	}, false, nil
+}
+
+func resolveTopLevelPhysicalName(
+	root outputcap.Directory,
+	operationID []byte,
+	logicalReservedName string,
+) (string, error) {
+	if outputcap.ReservedRootName(outputcap.CallerProvidedContainer, logicalReservedName) {
+		// Top-level entries live beside the container's private control namespace;
+		// repair collisions here rather than rejecting the receive operation.
+		return outputnames.Candidate(operationID, logicalReservedName, 0)
+	}
+	if outputnames.PortableName(logicalReservedName) {
+		return logicalReservedName, nil
+	}
+	// Probe before recording ownership: a refusal cannot leave a claim under
+	// a spelling the destination cannot subsequently reopen.
+	_, _, probeErr := root.ClassifyExactEntry(logicalReservedName)
+	if errors.Is(probeErr, outputcap.ErrNameRejected) {
+		return outputnames.Candidate(operationID, logicalReservedName, 0)
+	}
+	if probeErr != nil {
+		return "", probeErr
+	}
+	return logicalReservedName, nil
 }
 
 func reserveSingleFileCandidate(

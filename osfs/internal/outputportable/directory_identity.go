@@ -24,7 +24,7 @@ func directoryIdentityName(claim []byte) (string, error) {
 	if len(claim) != directoryIdentityBytes || bytes.Equal(claim, make([]byte, directoryIdentityBytes)) {
 		return "", outputcap.ErrUnsafeNamespace
 	}
-	return ".wsresume-" + hex.EncodeToString(claim) + ".identity", nil
+	return outputcap.RecoveryIdentityPrefix + "-" + hex.EncodeToString(claim) + ".identity", nil
 }
 
 func encodeDirectoryIdentity(claim []byte) []byte {

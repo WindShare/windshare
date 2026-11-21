@@ -159,3 +159,44 @@ func TestDisplayValuesAreEscapedBeforeLayout(t *testing.T) {
 		t.Fatalf("escaped subject = %q", text)
 	}
 }
+
+func TestTransferResultReportsCompatibleNameRepairsWhenPresent(t *testing.T) {
+	t.Parallel()
+	plain, err := clievent.NewTransferResult(clievent.TransferResultSpec{
+		Status: clievent.ResultSuccess, ExitCode: clievent.ExitSuccess,
+		Destination: appobs.NewDisplayPath("./docs"), CountersExact: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range formatTransferResult(plain, SelectSymbols(false)) {
+		if strings.Contains(lineText(line), "compatible name") {
+			t.Fatalf("unexpected compatible-name notice: %q", lineText(line))
+		}
+	}
+
+	for _, tc := range []struct {
+		count uint64
+		want  string
+	}{
+		{1, "1 item saved under a compatible name (see windshare-names-abc-1-0.json)."},
+		{2, "2 items saved under compatible names (see windshare-names-abc-1-0.json)."},
+	} {
+		repaired, err := clievent.NewTransferResult(clievent.TransferResultSpec{
+			Status: clievent.ResultSuccess, ExitCode: clievent.ExitSuccess,
+			Destination: appobs.NewDisplayPath("./docs"), CountersExact: true,
+			RepairedNames: tc.count, NameReport: appobs.NewDisplayName("windshare-names-abc-1-0.json"),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var output strings.Builder
+		for _, line := range formatTransferResult(repaired, SelectSymbols(false)) {
+			output.WriteString(lineText(line))
+			output.WriteByte('\n')
+		}
+		if !strings.Contains(output.String(), tc.want) {
+			t.Fatalf("output %q missing %q", output.String(), tc.want)
+		}
+	}
+}

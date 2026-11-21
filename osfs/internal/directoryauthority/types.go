@@ -22,7 +22,6 @@ const (
 	// exposed by the Windows native directory record.
 	MaximumPlatformAliasesPerEntry = 1
 
-	reservedControlComponent = ".windshare-output"
 	// Catalog paths cannot contain NUL, so the synthetic root can participate in
 	// the output-local locator ledger without colliding with a platform locator.
 	rootLocatorKey = "\x00windshare/output-root"

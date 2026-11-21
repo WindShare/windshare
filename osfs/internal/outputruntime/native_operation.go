@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"sync"
 
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
@@ -19,20 +20,22 @@ import (
 )
 
 type Operation struct {
-	authority *Authority
-	key       checkpointmodel.ActiveOperationKey
-	mode      outputcap.ExecutionMode
-	intent    transfer.ReceiveIntent
-	topLevel  *destinationauthority.TopLevelReservation
-	claim     destinationauthority.ReservationClaim
-	lease     *checkpointstore.OperationRegistryLease
-	volatile  *volatileReservationClaimer
-	reopened  bool
-	opened    bool
-	closed    bool
-	liveFiles *fileexecution.LiveFiles
-	names     *outputnames.Mapper
-	nameStore *namestore.Store
+	authority    *Authority
+	key          checkpointmodel.ActiveOperationKey
+	mode         outputcap.ExecutionMode
+	intent       transfer.ReceiveIntent
+	topLevel     *destinationauthority.TopLevelReservation
+	claim        destinationauthority.ReservationClaim
+	lease        *checkpointstore.OperationRegistryLease
+	volatile     *volatileReservationClaimer
+	reopened     bool
+	opened       bool
+	closed       bool
+	liveFiles    *fileexecution.LiveFiles
+	names        *outputnames.Mapper
+	nameStore    *namestore.Store
+	nameReportMu sync.Mutex
+	nameReport   namestore.ReportSummary
 }
 
 func (operation *Operation) ReceiveIntent() (transfer.ReceiveIntent, bool) {

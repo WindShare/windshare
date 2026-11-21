@@ -5,7 +5,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/osfs/internal/outputcap"
 )
@@ -95,9 +94,10 @@ func (mapper *Mapper) Bind(logical string) (string, error) {
 	}
 	parent, leaf := splitParent(physical)
 	owner, claimed := mapper.claims[physical]
-	// Recovery markers live beside top-level children, so a source child with
-	// their prefix is repaired like any other name the destination cannot hold.
-	reserved := parent == "" && catalog.ReservedOutputRootName(leaf)
+	// Recovery markers live beside direct children of an authority-created
+	// result root, so a source child in that namespace is repaired like any
+	// other name the destination cannot hold.
+	reserved := parent == "" && outputcap.ReservedRootName(outputcap.AuthorityCreatedRoot, leaf)
 	if !reserved && (!claimed || owner == logical) {
 		if PortableName(leaf) {
 			mapper.claims[physical] = logical

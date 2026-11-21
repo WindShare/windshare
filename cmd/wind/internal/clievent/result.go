@@ -35,6 +35,8 @@ type TransferResultSpec struct {
 	Elapsed              time.Duration
 	Destination          appobs.DisplayPath
 	DestinationAdjusted  bool
+	RepairedNames        uint64
+	NameReport           appobs.DisplayName
 	Files                appobs.FileOutcomes
 	DirectoryFailures    uint64
 	OmittedDiagnostics   uint64
@@ -51,6 +53,8 @@ type TransferResult struct {
 	elapsed              time.Duration
 	destination          appobs.DisplayPath
 	destinationAdjusted  bool
+	repairedNames        uint64
+	nameReport           appobs.DisplayName
 	files                appobs.FileOutcomes
 	directoryFailures    uint64
 	omittedDiagnostics   uint64
@@ -62,6 +66,7 @@ type TransferResult struct {
 
 func NewTransferResult(spec TransferResultSpec) (TransferResult, error) {
 	if !spec.Status.Valid() || !spec.ExitCode.Valid() || spec.Elapsed < 0 || spec.Destination.Empty() ||
+		(spec.RepairedNames == 0) != spec.NameReport.Empty() ||
 		spec.CountersExact && !appobs.ValidExactItemBlockCounts(spec.Files) {
 		return TransferResult{}, ErrInvalidResult
 	}
@@ -85,7 +90,9 @@ func NewTransferResult(spec TransferResultSpec) (TransferResult, error) {
 		sourceOmittedEntries: spec.SourceOmittedEntries,
 		status:               spec.Status, exitCode: spec.ExitCode, drift: spec.Drift,
 		elapsed: spec.Elapsed, destination: spec.Destination,
-		destinationAdjusted: spec.DestinationAdjusted, files: spec.Files,
+		destinationAdjusted: spec.DestinationAdjusted,
+		repairedNames:       spec.RepairedNames, nameReport: spec.NameReport,
+		files:             spec.Files,
 		directoryFailures: spec.DirectoryFailures, omittedDiagnostics: spec.OmittedDiagnostics,
 		publishedBytes: spec.PublishedBytes, countersExact: spec.CountersExact,
 		failure: spec.Failure, hasFailure: hasFailure,
@@ -98,6 +105,8 @@ func (result TransferResult) Drift() DriftReason              { return result.dr
 func (result TransferResult) Elapsed() time.Duration          { return result.elapsed }
 func (result TransferResult) Destination() appobs.DisplayPath { return result.destination }
 func (result TransferResult) DestinationAdjusted() bool       { return result.destinationAdjusted }
+func (result TransferResult) RepairedNames() uint64           { return result.repairedNames }
+func (result TransferResult) NameReport() appobs.DisplayName  { return result.nameReport }
 func (result TransferResult) Files() appobs.FileOutcomes      { return result.files }
 func (result TransferResult) SourceOmittedEntries() uint64    { return result.sourceOmittedEntries }
 func (result TransferResult) DirectoryFailures() uint64       { return result.directoryFailures }
@@ -112,7 +121,9 @@ func (result TransferResult) Valid() bool {
 		SourceOmittedEntries: result.sourceOmittedEntries,
 		Status:               result.status, ExitCode: result.exitCode, Drift: result.drift,
 		Elapsed: result.elapsed, Destination: result.destination,
-		DestinationAdjusted: result.destinationAdjusted, Files: result.files,
+		DestinationAdjusted: result.destinationAdjusted,
+		RepairedNames:       result.repairedNames, NameReport: result.nameReport,
+		Files:             result.files,
 		DirectoryFailures: result.directoryFailures, OmittedDiagnostics: result.omittedDiagnostics,
 		PublishedBytes: result.publishedBytes, CountersExact: result.countersExact,
 		Failure: func() appobs.Failure {

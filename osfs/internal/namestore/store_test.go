@@ -86,9 +86,11 @@ func TestNameReportsAreIdempotentAndPreserveForeignFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	visit := func(callback func(outputcap.Directory) error) error { return callback(platform.Root()) }
+	wantReport := "windshare-names-" + store.operationID + "-1-1.json"
 	for range 2 {
-		if err := store.Export(resolver, shape, visit); err != nil {
-			t.Fatal(err)
+		summary, err := store.Export(resolver, shape, visit)
+		if err != nil || summary.RepairedCount != 1 || summary.ReportName != wantReport {
+			t.Fatalf("export summary = %+v, %v", summary, err)
 		}
 	}
 	files, err := filepath.Glob(filepath.Join(root, "windshare-names-*.json"))
@@ -110,11 +112,11 @@ func TestOrdinaryCollisionDoesNotExportANameReport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Export(resolver, shape, func(func(outputcap.Directory) error) error {
+	if summary, err := store.Export(resolver, shape, func(func(outputcap.Directory) error) error {
 		t.Fatal("ordinary collision opened the destination for a report")
 		return nil
-	}); err != nil {
-		t.Fatal(err)
+	}); err != nil || summary != (ReportSummary{}) {
+		t.Fatalf("ordinary collision summary = %+v, %v", summary, err)
 	}
 }
 

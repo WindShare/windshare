@@ -554,6 +554,13 @@ func (operation FilesystemOutputOperation) Discard(ctx context.Context) error {
 	return operation.operation.Discard(ctx)
 }
 
+func (operation FilesystemOutputOperation) CompatibleNameReport() (int, string) {
+	if operation.operation == nil {
+		return 0, ""
+	}
+	return operation.operation.CompatibleNameReport()
+}
+
 type NativeDirectTreeReservationKind uint8
 
 const (

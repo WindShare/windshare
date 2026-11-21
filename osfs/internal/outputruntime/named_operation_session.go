@@ -74,9 +74,11 @@ func (resources *operationOutputResources) ReleaseOutputSession(context.Context)
 func (resources *operationOutputResources) RecordTreeSettlement(ctx context.Context, kind transfer.DirectTreeSettlementKind, outcome transfer.DirectTreeOutcome, snapshot outputsession.TreeSettlementSnapshot) error {
 	if kind == transfer.DirectTreeSettlementSuccess {
 		operation := resources.operation
-		if err := operation.nameStore.Export(operation.names, namesRoot(operation.topLevel), operation.authority.destination.WithPublicContainer); err != nil {
+		summary, err := operation.nameStore.Export(operation.names, namesRoot(operation.topLevel), operation.authority.destination.WithPublicContainer)
+		if err != nil {
 			return err
 		}
+		operation.setNameReport(summary)
 	}
 	if resources.lifecycle != nil {
 		if err := resources.lifecycle.RecordTreeSettlement(ctx, kind, outcome, snapshot); err != nil {
@@ -85,6 +87,24 @@ func (resources *operationOutputResources) RecordTreeSettlement(ctx context.Cont
 	}
 	resources.completed = kind == transfer.DirectTreeSettlementSuccess
 	return nil
+}
+
+func (operation *Operation) setNameReport(summary namestore.ReportSummary) {
+	operation.nameReportMu.Lock()
+	operation.nameReport = summary
+	operation.nameReportMu.Unlock()
+}
+
+// CompatibleNameReport reports any compatible-name repairs exported on success.
+// It remains readable after terminal close because the summary holds only values.
+func (operation *Operation) CompatibleNameReport() (repairedCount int, reportName string) {
+	if operation == nil {
+		return 0, ""
+	}
+	operation.nameReportMu.Lock()
+	summary := operation.nameReport
+	operation.nameReportMu.Unlock()
+	return summary.RepairedCount, summary.ReportName
 }
 
 func (authority *Authority) openNamedOperation(
