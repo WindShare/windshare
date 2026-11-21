@@ -15,6 +15,8 @@ type refreshCycle struct {
 	done              chan struct{}
 	targets           map[string]struct{}
 	networkGeneration uint64
+	initialCursor     nodedirectory.Cursor
+	triggered         bool
 	err               error
 }
 
@@ -49,7 +51,15 @@ func (directory *Directory) requestRefresh(ctx context.Context, scheduled bool, 
 			directory.emitRefreshDeferred(now, err)
 			return err
 		}
-		cycle = &refreshCycle{done: make(chan struct{}), targets: make(map[string]struct{}), networkGeneration: directory.networkGeneration}
+		triggered := scheduled && directory.triggerPending
+		directory.triggerPending = false
+		cycle = &refreshCycle{
+			done:              make(chan struct{}),
+			targets:           make(map[string]struct{}),
+			networkGeneration: directory.networkGeneration,
+			initialCursor:     directory.highest,
+			triggered:         triggered,
+		}
 		directory.refreshing = cycle
 		go directory.refresh(cycle)
 	}
@@ -74,24 +84,34 @@ func (directory *Directory) finishLocked(cycle *refreshCycle, err error) {
 	switch {
 	case err == nil:
 		directory.failures = 0
+		directory.triggerPending = false
+		if cycle.triggered && cycle.networkGeneration == directory.networkGeneration && directory.highest == cycle.initialCursor {
+			directory.unchangedTriggers = min(directory.unchangedTriggers+1, maxBackoffShift)
+		} else {
+			directory.unchangedTriggers = 0
+		}
+		triggerCooldown := min(MinimumBackoff<<directory.unchangedTriggers, MaximumTriggerBackoff)
 		directory.nextRefresh = now.Add(RefreshInterval)
-		directory.earliestTrigger = now.Add(MinimumBackoff)
+		directory.earliestTrigger = now.Add(triggerCooldown)
 		directory.explicitRetryAt = time.Time{}
 	case cycle.networkGeneration != directory.networkGeneration:
 		// A network transition occurred while this pass was in flight, so its
 		// failure reflects the previous network rather than the current one.
 		directory.failures = 0
+		directory.unchangedTriggers = 0
+		directory.triggerPending = false
 		directory.nextRefresh = now
 		directory.explicitRetryAt = time.Time{}
 	default:
-		directory.failures = min(directory.failures+1, 10)
+		directory.failures = min(directory.failures+1, maxBackoffShift)
+		directory.triggerPending = false
 		backoff := min(MinimumBackoff*time.Duration(1<<(directory.failures-1)), MaximumBackoff)
 		directory.nextRefresh = now.Add(backoff)
 		directory.explicitRetryAt = now.Add(min(backoff, ExplicitRetryCooldown))
 	}
 	// Sink.Emit is strictly nonblocking; emitting before clearing refreshing and
 	// closing done keeps both Refresh callers and Close ordered after publication.
-	directory.emitRefreshCompleted(now, directory.highest, directory.failures, directory.nextRefresh, directory.explicitRetryAt, err)
+	directory.emitRefreshCompleted(now, directory.highest, directory.failures, directory.unchangedTriggers, directory.nextRefresh, directory.earliestTrigger, directory.explicitRetryAt, err)
 	directory.refreshing = nil
 	directory.notifySchedule()
 	if err != nil {

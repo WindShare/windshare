@@ -21,9 +21,11 @@ const (
 	RefreshInterval       = 6 * time.Hour
 	MinimumBackoff        = 30 * time.Second
 	MaximumBackoff        = 30 * time.Minute
+	MaximumTriggerBackoff = 5 * time.Minute
 	ExplicitRetryCooldown = MinimumBackoff
 	MaximumMirrors        = 8
 	MirrorsPerRefresh     = 3
+	maxBackoffShift       = 10
 
 	refreshStageFetch    = "fetch"
 	refreshStageVerify   = "verify"
@@ -55,6 +57,8 @@ type Directory struct {
 	networkGeneration uint64
 	scheduleChanged   chan struct{}
 	failures          uint
+	unchangedTriggers uint
+	triggerPending    bool
 	lastError         error
 	ctx               context.Context
 	cancel            context.CancelFunc
@@ -172,8 +176,9 @@ func (directory *Directory) Refresh(ctx context.Context) error {
 	return directory.requestRefresh(ctx, false, nil)
 }
 
-// TriggerRefresh advances periodic maintenance after an all-cooled plan. A
-// burst of shares coalesces into one fetch, including during success cooldown.
+// TriggerRefresh advances periodic maintenance after an all-cooled plan or
+// admission refusal. Bursts coalesce into one fetch, and repeated triggered
+// fetches that observe an unchanged cursor back off up to MaximumTriggerBackoff.
 func (directory *Directory) TriggerRefresh() {
 	directory.mu.Lock()
 	defer directory.mu.Unlock()
@@ -181,11 +186,12 @@ func (directory *Directory) TriggerRefresh() {
 		return
 	}
 	directory.nextRefresh = directory.earliestTrigger
+	directory.triggerPending = true
 	directory.notifySchedule()
 }
 
-// NetworkChanged invalidates failure backoff accumulated on a previous network
-// generation so recovery and explicit refreshes do not wait behind stale outages.
+// NetworkChanged invalidates failure and unchanged-trigger backoff accumulated
+// on a previous network generation so recovery does not wait behind stale outages.
 func (directory *Directory) NetworkChanged() {
 	directory.mu.Lock()
 	if directory.ctx.Err() != nil || len(directory.config.Roots) == 0 || len(directory.config.Mirrors) == 0 {
@@ -193,13 +199,22 @@ func (directory *Directory) NetworkChanged() {
 		return
 	}
 	directory.networkGeneration++
+	now := directory.config.Now()
+	directory.unchangedTriggers = 0
+	if earliest := now.Add(MinimumBackoff); directory.earliestTrigger.After(earliest) {
+		directory.earliestTrigger = earliest
+		if directory.triggerPending && directory.nextRefresh.After(earliest) {
+			directory.nextRefresh = earliest
+			directory.notifySchedule()
+		}
+	}
 	previousFailures := directory.failures
 	if previousFailures == 0 {
 		directory.mu.Unlock()
 		return
 	}
-	now := directory.config.Now()
 	directory.failures = 0
+	directory.triggerPending = false
 	directory.explicitRetryAt = time.Time{}
 	directory.nextRefresh = now
 	// Sink.Emit is strictly nonblocking; emit under mu so Close stays ordered after publication.
@@ -240,7 +255,7 @@ func (directory *Directory) emitRefreshDeferred(now time.Time, err *UnavailableE
 	directory.config.Diagnostics.Emit(diagnostics.New("network_directory_refresh_deferred", fields).At(now))
 }
 
-func (directory *Directory) emitRefreshCompleted(now time.Time, cursor nodedirectory.Cursor, failures uint, nextRefresh, explicitRetryAt time.Time, err error) {
+func (directory *Directory) emitRefreshCompleted(now time.Time, cursor nodedirectory.Cursor, failures, unchangedTriggers uint, nextRefresh, earliestTrigger, explicitRetryAt time.Time, err error) {
 	if !directory.config.Diagnostics.Enabled() {
 		return
 	}
@@ -250,6 +265,10 @@ func (directory *Directory) emitRefreshCompleted(now time.Time, cursor nodedirec
 		"serial":       diagnostics.Uint(cursor.Serial),
 		"failures":     diagnostics.Uint(uint64(failures)),
 		"next_refresh": diagnostics.Text(nextRefresh.UTC().Format(time.RFC3339Nano)),
+	}
+	if err == nil && unchangedTriggers > 0 {
+		fields["unchanged_triggers"] = diagnostics.Uint(uint64(unchangedTriggers))
+		fields["earliest_trigger"] = diagnostics.Text(earliestTrigger.UTC().Format(time.RFC3339Nano))
 	}
 	if !explicitRetryAt.IsZero() {
 		fields["retry_at"] = diagnostics.Text(explicitRetryAt.UTC().Format(time.RFC3339Nano))

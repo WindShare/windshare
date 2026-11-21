@@ -10,6 +10,8 @@ import (
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/core/diagnostics"
+	"github.com/windshare/windshare/core/networkendpoint"
+	"github.com/windshare/windshare/core/nodedirectory"
 	"github.com/windshare/windshare/engine/networkdirectory"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
@@ -89,11 +91,11 @@ func (r *Runtime) Observer(selection Selection, sink diagnostics.Sink) func(stri
 			}
 			started = generations[url]
 			mu.Unlock()
-			if refusal, ok := errors.AsType[*relayv2.RelayError](attempt.Failure); ok && refusal.Code == v2.ErrorAccessUnavailable && !attempt.Resume && r.directory != nil {
-				r.directory.TriggerRefresh()
-			}
 			switch attempt.State {
 			case senderrelay.AttemptSucceeded, senderrelay.AttemptParked, senderrelay.AttemptFailed:
+				if r.shouldRefreshDirectoryOnRefusal(identity, attempt) {
+					r.directory.TriggerRefresh()
+				}
 				entry, change = r.health.RecordAttempt(identity, started, r.generation(), now, attempt)
 			}
 		}
@@ -122,6 +124,36 @@ func (r *Runtime) Observer(selection Selection, sink diagnostics.Sink) func(stri
 		}
 		sink.Emit(diagnostics.New("relay_registration_attempt", fields).Correlate(diagnostics.Fields{"share_instance_id": diagnostics.Identity(attempt.ShareInstance[:])}))
 	}
+}
+
+func (r *Runtime) shouldRefreshDirectoryOnRefusal(identity string, attempt senderrelay.Attempt) bool {
+	if attempt.State != senderrelay.AttemptFailed || attempt.Resume || r.directory == nil {
+		return false
+	}
+	refusal, ok := errors.AsType[*relayv2.RelayError](attempt.Failure)
+	if !ok || refusal.Code != v2.ErrorAccessUnavailable {
+		return false
+	}
+	// Once the current directory already marks this relay draining or omits it,
+	// further retries on a frozen share cannot converge the directory.
+	return r.directoryListsSchedulableRelay(identity)
+}
+
+func (r *Runtime) directoryListsSchedulableRelay(identity string) bool {
+	snapshot, usable := r.directory.Snapshot()
+	if !usable {
+		return true
+	}
+	for _, node := range snapshot.Payload().Nodes {
+		if !node.HasRole("relay") || node.Status == nodedirectory.Draining {
+			continue
+		}
+		endpoint, err := networkendpoint.NormalizeRelay(node.Relay)
+		if err == nil && endpoint.IdentityURL == identity {
+			return true
+		}
+	}
+	return false
 }
 
 func attemptFields(url string, attempt senderrelay.Attempt, now time.Time) diagnostics.Fields {

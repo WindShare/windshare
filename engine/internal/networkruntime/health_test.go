@@ -2,12 +2,17 @@ package networkruntime
 
 import (
 	"context"
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/windshare/windshare/connectivity/networkstate"
@@ -17,6 +22,7 @@ import (
 	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/networkendpoint"
 	"github.com/windshare/windshare/core/nodedirectory"
+	"github.com/windshare/windshare/engine/networkdirectory"
 	"github.com/windshare/windshare/engine/relayprofile"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
@@ -320,4 +326,112 @@ func TestDiagnosticRecordsIncludeReadableAttemptStatesPlanTimingsAndAdmissionRea
 	if admission.Payload().Get("reason").Text() != relayset.AdmissionReasonBackupNotChosen {
 		t.Fatalf("admission record lost reason: %+v", admission.Payload())
 	}
+}
+
+func TestObserverTriggersDirectoryRefreshOnlyWhileFailedNodeIsSchedulable(t *testing.T) {
+	data, err := os.ReadFile("../../../testdata/network/directory.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Now     time.Time
+		Roots   []struct{ ID, Key string }
+		Entries []struct {
+			Name     string
+			Envelope json.RawMessage
+		}
+	}
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	byName := make(map[string][]byte, len(fixture.Entries))
+	for _, entry := range fixture.Entries {
+		byName[entry.Name] = entry.Envelope
+	}
+	key, err := base64.RawURLEncoding.DecodeString(fixture.Roots[0].Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	synctest.Test(t, func(t *testing.T) {
+		start := time.Now()
+		now := func() time.Time { return fixture.Now.Add(time.Since(start)) }
+		r, err := New(nil, now, "", diagnostics.Sink{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Close()
+
+		var calls atomic.Int32
+		var nextEnvelope atomic.Value
+		nextEnvelope.Store(byName["valid"])
+		r.directory, err = networkdirectory.New(networkdirectory.Config{
+			Network:  "test",
+			Roots:    []nodedirectory.Root{{ID: fixture.Roots[0].ID, Key: ed25519.PublicKey(key)}},
+			Embedded: byName["valid"],
+			Mirrors:  []string{"https://mirror.example/directory"},
+			Now:      now,
+			Fetch: func(context.Context, string) ([]byte, error) {
+				calls.Add(1)
+				return nextEnvelope.Load().([]byte), nil
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		if calls.Load() != 1 {
+			t.Fatalf("startup refresh calls = %d, want 1", calls.Load())
+		}
+
+		selection, err := r.Plan(t.Context(), relayprofile.Plan(nil), "")
+		if err != nil || len(selection.Plan.Network) != 1 {
+			t.Fatalf("Plan = (%+v, %v)", selection.Plan, err)
+		}
+		node := selection.Plan.Network[0]
+		observe := r.Observer(selection, diagnostics.Sink{})
+		unavailable := &relayv2.RelayError{Code: v2.ErrorAccessUnavailable, RetryAfter: time.Second}
+
+		// Non-failed stages, resume attempts, and other failure codes must not trigger a directory refresh.
+		observe(node.URL, senderrelay.Attempt{State: senderrelay.AttemptStage, Failure: unavailable})
+		observe(node.URL, senderrelay.Attempt{State: senderrelay.AttemptFailed, Resume: true, Failure: unavailable})
+		observe(node.URL, senderrelay.Attempt{State: senderrelay.AttemptFailed, Failure: &relayv2.RelayError{Code: v2.ErrorAccessDenied}})
+		observe(node.URL, senderrelay.Attempt{State: senderrelay.AttemptFailed, Failure: &relayv2.WebSocketDialError{StatusCode: http.StatusServiceUnavailable}})
+		time.Sleep(networkdirectory.MinimumBackoff)
+		synctest.Wait()
+		if calls.Load() != 1 {
+			t.Fatalf("ignored attempt types triggered refresh: calls=%d", calls.Load())
+		}
+
+		// A fresh AttemptFailed AccessUnavailable while the node is still Active triggers a refresh.
+		nextEnvelope.Store(byName["draining"])
+		observe(node.URL, senderrelay.Attempt{State: senderrelay.AttemptFailed, Failure: unavailable})
+		synctest.Wait()
+		if calls.Load() != 2 {
+			t.Fatalf("active-node refusal did not trigger refresh: calls=%d", calls.Load())
+		}
+
+		// Once the directory already marks this node Draining, further retries on the frozen share stop triggering refreshes.
+		observe(node.URL, senderrelay.Attempt{State: senderrelay.AttemptFailed, Failure: unavailable})
+		time.Sleep(networkdirectory.MaximumTriggerBackoff)
+		synctest.Wait()
+		if calls.Load() != 2 {
+			t.Fatalf("draining-node refusal still triggered refresh: calls=%d", calls.Load())
+		}
+
+		// Same when the node has been removed from the directory entirely.
+		nextEnvelope.Store(byName["removed"])
+		if err := r.directory.Refresh(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		if calls.Load() != 3 {
+			t.Fatalf("explicit refresh calls = %d, want 3", calls.Load())
+		}
+		observe(node.URL, senderrelay.Attempt{State: senderrelay.AttemptFailed, Failure: unavailable})
+		time.Sleep(networkdirectory.MaximumTriggerBackoff)
+		synctest.Wait()
+		if calls.Load() != 3 {
+			t.Fatalf("removed-node refusal still triggered refresh: calls=%d", calls.Load())
+		}
+	})
 }

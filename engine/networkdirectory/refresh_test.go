@@ -334,3 +334,121 @@ func TestNetworkChangedResetsBackoffAndSupersedesInFlightFailure(t *testing.T) {
 		}
 	})
 }
+
+func TestTriggeredRefreshBacksOffWhenCursorIsUnchangedAndResetsOnAdvance(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		stream, err := diagnostics.NewStream(64, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f := signing()
+		stale := f.envelope(t, 1, 1, 0)
+		fresh := f.envelope(t, 1, 2, 0)
+		start := time.Now()
+		config := f.config()
+		config.Embedded = stale
+		config.Mirrors = []string{"https://mirror.example/directory"}
+		config.Now = func() time.Time { return f.now.Add(time.Since(start)) }
+		config.Diagnostics = stream.Sink()
+
+		var calls atomic.Int32
+		var publishFresh atomic.Bool
+		config.Fetch = func(context.Context, string) ([]byte, error) {
+			calls.Add(1)
+			if publishFresh.Load() {
+				return fresh, nil
+			}
+			return stale, nil
+		}
+
+		directory, err := New(config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		if calls.Load() != 1 {
+			t.Fatalf("startup calls = %d, want 1", calls.Load())
+		}
+
+		// Repeated unchanged triggered fetches back off 30s -> 60s -> 120s -> 240s -> 5m cap.
+		steps := []time.Duration{
+			MinimumBackoff,
+			2 * MinimumBackoff,
+			4 * MinimumBackoff,
+			8 * MinimumBackoff,
+			MaximumTriggerBackoff,
+		}
+		for i, wait := range steps {
+			wantBefore := int32(i + 1)
+			wantAfter := int32(i + 2)
+			directory.TriggerRefresh()
+			synctest.Wait()
+			time.Sleep(wait - time.Nanosecond)
+			synctest.Wait()
+			if calls.Load() != wantBefore {
+				t.Fatalf("step %d fetched early before %v: calls=%d want=%d", i, wait, calls.Load(), wantBefore)
+			}
+			time.Sleep(time.Nanosecond)
+			synctest.Wait()
+			if calls.Load() != wantAfter {
+				t.Fatalf("step %d did not fetch at %v: calls=%d want=%d", i, wait, calls.Load(), wantAfter)
+			}
+		}
+
+		// Trigger backoff must not throttle an explicit Refresh, and explicit success resets trigger backoff.
+		if err := directory.Refresh(t.Context()); err != nil {
+			t.Fatalf("explicit Refresh during trigger backoff failed: %v", err)
+		}
+		if calls.Load() != 7 {
+			t.Fatalf("calls after explicit refresh = %d, want 7", calls.Load())
+		}
+
+		// Drive one unchanged trigger (30s -> next 60s), then verify NetworkChanged resets it back to 30s without fetching.
+		directory.TriggerRefresh()
+		time.Sleep(MinimumBackoff)
+		synctest.Wait()
+		if calls.Load() != 8 {
+			t.Fatalf("calls after post-explicit trigger = %d, want 8", calls.Load())
+		}
+		directory.TriggerRefresh()
+		synctest.Wait()
+		directory.NetworkChanged()
+		synctest.Wait()
+		if calls.Load() != 8 {
+			t.Fatalf("NetworkChanged unexpectedly fetched while healthy: calls=%d", calls.Load())
+		}
+		time.Sleep(MinimumBackoff - time.Nanosecond)
+		synctest.Wait()
+		if calls.Load() != 8 {
+			t.Fatalf("trigger ran before MinimumBackoff after NetworkChanged: calls=%d", calls.Load())
+		}
+		publishFresh.Store(true)
+		time.Sleep(time.Nanosecond)
+		synctest.Wait()
+		if calls.Load() != 9 {
+			t.Fatalf("trigger did not fire at clamped MinimumBackoff after NetworkChanged: calls=%d", calls.Load())
+		}
+
+		// Advancing the cursor resets unchanged-trigger backoff back to MinimumBackoff.
+		directory.TriggerRefresh()
+		time.Sleep(MinimumBackoff)
+		synctest.Wait()
+		if calls.Load() != 10 {
+			t.Fatalf("cursor advance did not reset trigger backoff: calls=%d", calls.Load())
+		}
+
+		directory.Close()
+		stream.Close()
+		var sawUnchangedDiag bool
+		for record := range stream.Records() {
+			if record.Name() == "network_directory_refresh_completed" &&
+				record.Payload().Get("unchanged_triggers").Uint() >= 4 &&
+				record.Payload().Get("earliest_trigger").Text() != "" {
+				sawUnchangedDiag = true
+			}
+		}
+		if !sawUnchangedDiag {
+			t.Fatal("missing unchanged_triggers diagnostic on backed-off refresh")
+		}
+	})
+}
