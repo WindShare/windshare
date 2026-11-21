@@ -4,7 +4,7 @@
 
 先重写节点管理台，让自建者从 CLI 或桌面端打开链接，核对设备，批准后回到客户端。再重写网络管理台，让运营者登录后就能比较各节点的最近上报和目录收录情况，并直接查看举报。普通用户继续从客户端分享、从接收页下载。[中转服务需求](../../clarifications/中转服务.md) · [原始需求](../../clarifications/原始需求.md)
 
-两次重写分批交付，取代[原计划第 4 节的按需迁移安排](../../.archive/2026.11.21/relay-and-network-consoles.md#4-按实际复用需求迁移-react)。审批反馈和节点策略写入可先在现有页面与 API 交付。两个管理台共用根目录的 `consoles/` 工程，各自拥有入口、API 客户端和管理员会话。原生 `wsrelay` 与 Cloudflare 中转共用节点页面。网络管理台和公共举报页随 Network Authority Worker 独立发布。
+两次重写分批交付，取代[原计划第 4 节的按需迁移安排](relay-and-network-consoles.md#4-按实际复用需求迁移-react)。审批反馈和节点策略写入可先在现有页面与 API 交付。两个管理台共用根目录的 `consoles/` 工程，各自拥有入口、API 客户端和管理员会话。原生 `wsrelay` 与 Cloudflare 中转共用节点页面。网络管理台和公共举报页随 Network Authority Worker 独立发布。
 
 ## 第一阶段 · 重写节点管理台
 
