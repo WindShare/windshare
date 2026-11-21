@@ -441,7 +441,11 @@ func (lane *receiverBlockLane) fetchReservedBlock(
 	if err != nil {
 		return records.BlockRecord{}, err
 	}
-	defer func() { err = operation.finish(ctx, err) }()
+	defer func() {
+		if err = operation.finish(ctx, err); err != nil {
+			record = records.BlockRecord{}
+		}
+	}()
 	operation.capacity = capacity
 	return operation.receive(ctx, demand, received)
 }
@@ -507,11 +511,13 @@ func (operation *receiverBlockOperation) retire(reason contentflow.CancelReason)
 		return nil
 	}
 	operation.retired = true
-	// The local reassembly tombstone is committed before the RPC sink is
-	// removed, so late fragments cannot alias a replacement lane operation.
-	assemblyErr := operation.lane.assembler.CancelOperation(operation.call.ID())
+	// Commit the protocol-layer operation tombstone and drop the RPC sink before
+	// releasing active reassembly state so late fragments cannot reach this
+	// operation or alias a replacement lane operation.
+	rpcErr := operation.lane.rpc.CancelAndEnd(operation.call, reason)
+	assemblyErr := operation.lane.assembler.RetireOperation(operation.call.ID())
 	operation.call.RecordTraceCleanup(assemblyErr)
-	return errors.Join(assemblyErr, operation.lane.rpc.CancelAndEnd(operation.call, reason))
+	return errors.Join(rpcErr, assemblyErr)
 }
 
 func (operation *receiverBlockOperation) receive(

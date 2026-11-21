@@ -19,8 +19,6 @@ const (
 	MaxFragmentCount            = 128
 	MaxOperationReassemblyBytes = uint64(records.MaxBlockRecordObjectBytes)
 	FragmentInactivityTimeout   = 15 * time.Second
-	FragmentTombstone           = 30 * time.Second
-	MaxFragmentTombstones       = 4_096
 )
 
 var (
