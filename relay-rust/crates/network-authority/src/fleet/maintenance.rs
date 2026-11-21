@@ -1,7 +1,8 @@
 use super::{
+    Listing, ListingState,
     operations::Admission,
     publication::{self, Publisher},
-    topology::{Role, public_key},
+    topology::{Role, Status as ListingStatus, public_key},
     vantage::{ORIGIN_COUNT, Work},
 };
 use crate::{
@@ -27,16 +28,60 @@ pub struct Status {
     pub resident_shares: Option<u64>,
     pub active_sessions: Option<u64>,
 }
+fn valid_operation_id(operation_id: &str) -> bool {
+    (16..=64).contains(&operation_id.len())
+        && operation_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+}
+
+fn complete_key(node_key: &str, operation_id: &str) -> String {
+    format!("maintenance-complete/{node_key}/{operation_id}")
+}
+
+/// Clears a stuck maintenance hold under administrator control, tombstoning the
+/// aborted operation ID so late runner requests cannot reclaim it.
+pub(super) fn abort(
+    store: &mut impl Store,
+    listing: &mut Listing,
+    operation_id: &str,
+    maintenance_id: &str,
+) -> Result<()> {
+    ensure!(
+        valid_operation_id(maintenance_id)
+            && !matches!(listing.state, ListingState::Staging { .. }),
+        Fault::Invalid
+    );
+    ensure!(
+        listing.maintenance.as_deref() == Some(maintenance_id),
+        Fault::Conflict {
+            reason: "listing_changed".into()
+        }
+    );
+    listing.maintenance = None;
+    if let ListingState::Listed { status, .. } = &mut listing.state {
+        // Fail closed after an aborted upgrade: keep the node draining until
+        // an operator verifies the host and explicitly promotes it back.
+        *status = ListingStatus::Draining;
+    }
+    save(
+        store,
+        &complete_key(&listing.spec.node_key, maintenance_id),
+        &true,
+    )?;
+    tracing::warn!(
+        event = "maintenance_hold_aborted",
+        operation_id = %operation_id,
+        maintenance_id = %maintenance_id,
+        node_id = %listing.spec.node_key,
+        disabled = matches!(listing.state, ListingState::Disabled),
+    );
+    Ok(())
+}
+
 impl Operation {
     fn record(&self) -> Result<String> {
-        ensure!(
-            (16..=64).contains(&self.operation_id.len())
-                && self
-                    .operation_id
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b == b'-'),
-            Fault::Invalid
-        );
+        ensure!(valid_operation_id(&self.operation_id), Fault::Invalid);
         Ok(key("node", &public_key(&self.node_key)?))
     }
 }
@@ -56,7 +101,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
         let mut node = self.maintenance_node(cmd)?;
         let listing = node.listing.as_mut().ok_or(Fault::Invalid)?;
         let owner = listing.maintenance.as_deref();
-        let done = format!("maintenance-complete/{}/{}", cmd.node_key, cmd.operation_id);
+        let done = complete_key(&listing.spec.node_key, &cmd.operation_id);
         if acquire {
             ensure!(
                 listing.status().is_some() && self.store.get(&done)?.is_none(),

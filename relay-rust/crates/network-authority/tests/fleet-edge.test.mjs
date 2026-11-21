@@ -444,10 +444,26 @@ test('vantage routes, scheduled mirror audit, maintenance/manage boundaries, and
     { adminAuth: true, status: 400 },
   );
   assert.equal(manageBadAction.value.kind, 'invalid');
+  const manageBadAbort = await call(
+    '/v1/admin/nodes/manage',
+    { node_key: enrollment.node_key, operation_id: staged.listing.operation_id, action: { kind: 'abort_maintenance' } },
+    { adminAuth: true, status: 400 },
+  );
+  assert.equal(manageBadAbort.value.kind, 'invalid');
   const manageReachedSigner = await call(
     '/v1/admin/nodes/manage',
     { node_key: enrollment.node_key, operation_id: staged.listing.operation_id, action: { kind: 'drain' } },
     { adminAuth: true, status: 503 },
   );
   assert.equal(manageReachedSigner.text, 'fleet temporarily unavailable');
+  const manageAbortReachedSigner = await call(
+    '/v1/admin/nodes/manage',
+    {
+      node_key: enrollment.node_key,
+      operation_id: staged.listing.operation_id,
+      action: { kind: 'abort_maintenance', maintenance_id: 'maintenance-boundary-01' },
+    },
+    { adminAuth: true, status: 503 },
+  );
+  assert.equal(manageAbortReachedSigner.text, 'fleet temporarily unavailable');
 });

@@ -524,6 +524,8 @@ fn vantage_liveness_tracks_authority_receipt_time_separately_from_poll_replay_cl
 
 #[path = "../host/fleet/route_tests.rs"]
 mod fleet_route;
+#[path = "maintenance_tests.rs"]
+mod maintenance;
 #[path = "monitoring_tests.rs"]
 mod monitoring;
 #[path = "operations_tests.rs"]

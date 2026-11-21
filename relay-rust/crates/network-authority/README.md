@@ -66,7 +66,7 @@ Vantages poll for enrollment every minute and send one signed fleet report every
 
 Use **Drain** to stop new registrations while existing links continue serving. Disable or remove after a fresh signed report confirms the policy version and zero resident shares, or confirm early cutoff. Removing a node preserves its published alias binding. A disabled node must pass verification again before promotion.
 
-During a [host upgrade](../../../scripts/deploy/wsrelay/README.md#official-node-upgrades), the maintenance hold keeps the node probe-accessible. A disable requested during the hold takes effect on release. Use the operation ID and node key to correlate authority, vantage and host logs.
+During a [host upgrade](../../../scripts/deploy/wsrelay/README.md#official-node-upgrades), the maintenance hold keeps the node probe-accessible. A disable requested during the hold takes effect on release. An administrator can abort a stuck maintenance hold from the console, leaving a listed node draining or completing a queued disable without clearing any local host fence. Use the operation ID and node key to correlate authority, vantage and host logs.
 
 ## Operations
 

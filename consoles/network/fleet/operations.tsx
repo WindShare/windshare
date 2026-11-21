@@ -46,13 +46,34 @@ export function ProbeResults({ id, operation, directory }: { id: string; operati
   </section>
 }
 
+function FleetConfirmDialogs({ cutoff, aborting, onCancelCutoff, onConfirmCutoff, onCancelAbort, onConfirmAbort }: {
+  cutoff: 'disable' | 'remove' | null
+  aborting: string | null
+  onCancelCutoff: () => void
+  onConfirmCutoff: (kind: 'disable' | 'remove') => void
+  onCancelAbort: () => void
+  onConfirmAbort: (maintenanceId: string) => void
+}) {
+  const t = useCopy(networkCopy)
+  return <>
+    {cutoff && <Confirm title={t.confirmCutoff} confirm={cutoff === 'remove' ? t.removeNode : t.disable}
+      onCancel={onCancelCutoff} onConfirm={() => onConfirmCutoff(cutoff)}>
+      <p>{t.cutoffEffect}</p></Confirm>}
+    {aborting && <Confirm title={t.confirmAbortMaintenance} confirm={t.abortMaintenance}
+      onCancel={onCancelAbort} onConfirm={() => onConfirmAbort(aborting)}>
+      <p>{t.abortMaintenanceEffect}</p></Confirm>}
+  </>
+}
+
 export function FleetControls({ node, api, refresh }: { node: NodeDetails; api: AuthorityClient; refresh: () => Promise<void> }) {
   const t = useCopy(networkCopy)
   const action = useAction()
   const [cutoff, setCutoff] = useState<'disable' | 'remove' | null>(null)
+  const [aborting, setAborting] = useState<string | null>(null)
   const listing = node.listing
   if (!listing || listing.state.kind === 'staging') return null
   const disabled = listing.state.kind === 'disabled'
+  const maintenance = listing.maintenance
   function run(command: FleetAction) {
     if (!listing) return
     void action.run(async () => {
@@ -71,19 +92,23 @@ export function FleetControls({ node, api, refresh }: { node: NodeDetails; api: 
   }
   const next = disabled ? 'remove' : 'disable'
   return <section className="panel padded stack"><h2>{t.fleetOperations}</h2>
-    {listing.maintenance && <Badge tone="info">{disabled ? t.disableAfterMaintenance : t.maintenance} · {listing.maintenance}</Badge>}
+    {maintenance && <Badge tone="info">{disabled ? t.disableAfterMaintenance : t.maintenance} · {maintenance}</Badge>}
     <div className="actions">
       {listing.state.kind === 'listed' && listing.state.status !== 'draining' &&
         <button className="secondary" disabled={action.busy} onClick={() => run({ kind: 'drain' })}>{t.drain}</button>}
-      {disabled && <button className="secondary" disabled={action.busy || Boolean(listing.maintenance)} onClick={() => run({ kind: 'verify' })}>{t.verifyAgain}</button>}
+      {maintenance && <button className="secondary" disabled={action.busy}
+        onClick={() => setAborting(maintenance)}>{t.abortMaintenance}</button>}
+      {disabled && <button className="secondary" disabled={action.busy || Boolean(maintenance)} onClick={() => run({ kind: 'verify' })}>{t.verifyAgain}</button>}
       {listing.state.kind === 'listed' && listing.state.withdrawn.map(role => <button key={role} className="secondary" disabled={action.busy}
         onClick={() => run({ kind: 'restore_role', role })}>{t.restoreService(role.toUpperCase())}</button>)}
-      <button className="secondary" disabled={action.busy || (disabled && Boolean(listing.maintenance))}
+      <button className="secondary" disabled={action.busy || (disabled && Boolean(maintenance))}
         onClick={() => node.cutoff_ready ? run({ kind: next, early_cutoff: false }) : setCutoff(next)}>{disabled ? t.removeNode : t.disable}</button>
     </div>
-    {cutoff && <Confirm title={t.confirmCutoff} confirm={cutoff === 'remove' ? t.removeNode : t.disable}
-      onCancel={() => setCutoff(null)} onConfirm={() => { run({ kind: cutoff, early_cutoff: true }); setCutoff(null) }}>
-      <p>{t.cutoffEffect}</p></Confirm>}
+    <FleetConfirmDialogs cutoff={cutoff} aborting={aborting}
+      onCancelCutoff={() => setCutoff(null)}
+      onConfirmCutoff={kind => { run({ kind, early_cutoff: true }); setCutoff(null) }}
+      onCancelAbort={() => setAborting(null)}
+      onConfirmAbort={maintenanceId => { run({ kind: 'abort_maintenance', maintenance_id: maintenanceId }); setAborting(null) }} />
     <Notice feedback={action.feedback} />
   </section>
 }

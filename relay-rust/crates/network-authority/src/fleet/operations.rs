@@ -28,6 +28,7 @@ pub enum Action {
     Remove { early_cutoff: bool },
     Verify,
     RestoreRole { role: Role },
+    AbortMaintenance { maintenance_id: String },
 }
 
 impl Listing {
@@ -189,14 +190,14 @@ impl<R: Store, E: Environment> Authority<R, E> {
                 reason: "listing_changed".into()
             }
         );
-        match cmd.action {
+        match &cmd.action {
             Action::Drain => {
                 let ListingState::Listed { status, .. } = &mut listing.state else {
                     return Err(Fault::Invalid.into());
                 };
                 *status = Status::Draining;
             }
-            Action::Disable { early_cutoff } => match listing.state {
+            &Action::Disable { early_cutoff } => match listing.state {
                 ListingState::Listed { .. } => {
                     ensure!(
                         early_cutoff || drained,
@@ -212,7 +213,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
                 // Staging drafts carry rollback metadata and must leave via promote or cancel_draft.
                 ListingState::Staging { .. } => return Err(Fault::Invalid.into()),
             },
-            Action::Remove { early_cutoff } => {
+            &Action::Remove { early_cutoff } => {
                 ensure!(
                     matches!(listing.state, ListingState::Disabled)
                         && listing.maintenance.is_none(),
@@ -240,13 +241,21 @@ impl<R: Store, E: Environment> Authority<R, E> {
                     enrollment: DraftEnrollment::DisabledListing,
                 };
             }
-            Action::RestoreRole { role } => {
+            &Action::RestoreRole { role } => {
                 let ListingState::Listed { withdrawn, .. } = &mut listing.state else {
                     return Err(Fault::Invalid.into());
                 };
                 ensure!(listing.spec.roles.contains(&role), Fault::Invalid);
                 withdrawn.remove(&role);
                 super::monitoring::reset_evidence(&mut self.store, &cmd.node_key, role)?;
+            }
+            Action::AbortMaintenance { maintenance_id } => {
+                super::maintenance::abort(
+                    &mut self.store,
+                    listing,
+                    &cmd.operation_id,
+                    maintenance_id,
+                )?;
             }
         }
         node.apply_listing()?;
