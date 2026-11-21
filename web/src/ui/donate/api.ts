@@ -40,14 +40,20 @@ async function readErrorDetails(response: Response): Promise<{ code: string | nu
   }
 }
 
+// Compose caller cancellation with the transport timeout so passing a lifecycle
+// AbortSignal never disables the bounded request deadline.
+function composeRequestSignal(timeoutMs: number, signal?: AbortSignal): AbortSignal {
+  const timeoutSignal = AbortSignal.timeout(timeoutMs)
+  return signal === undefined ? timeoutSignal : AbortSignal.any([signal, timeoutSignal])
+}
+
 export async function fetchDonationWall(
   options: WallFetchOptions = {},
 ): Promise<PublicWallResponse> {
-  const signal = options.signal ?? AbortSignal.timeout(WALL_TIMEOUT_MS)
   const response = await fetch(`${DONATE_API_ORIGIN}/v1/donations/wall`, {
     method: 'GET',
     ...(options.cache === undefined ? {} : { cache: options.cache }),
-    signal,
+    signal: composeRequestSignal(WALL_TIMEOUT_MS, options.signal),
   })
   if (!response.ok) {
     const details = await readErrorDetails(response)
@@ -64,7 +70,7 @@ export async function createCryptoIntent(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
-    signal: signal ?? AbortSignal.timeout(INTENT_TIMEOUT_MS),
+    signal: composeRequestSignal(INTENT_TIMEOUT_MS, signal),
   })
   if (!response.ok) {
     const details = await readErrorDetails(response)

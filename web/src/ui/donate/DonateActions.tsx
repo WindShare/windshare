@@ -1,4 +1,4 @@
-import { useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { PortalIcon } from '../portal/PortalIcon'
 import { usePreferences } from '../preferences/use-preferences'
 import { AfdianQrCode } from './AfdianQrCode'
@@ -104,12 +104,30 @@ function CryptoCheckoutForm() {
   const [message, setMessage] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [errorText, setErrorText] = useState<string | null>(null)
+  // Single synchronous owner for an in-flight intent request or pending redirect
+  // so re-entry, tab unmount, and bfcache restore share one lifecycle handle.
+  const activeSubmissionRef = useRef<AbortController | null>(null)
 
   const messageCount = countCodePoints(message)
 
+  useEffect(() => {
+    const handlePageShow = (event: PageTransitionEvent) => {
+      if (!event.persisted) return
+      activeSubmissionRef.current?.abort()
+      activeSubmissionRef.current = null
+      setSubmitting(false)
+    }
+    window.addEventListener('pageshow', handlePageShow)
+    return () => {
+      window.removeEventListener('pageshow', handlePageShow)
+      activeSubmissionRef.current?.abort()
+      activeSubmissionRef.current = null
+    }
+  }, [])
+
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (submitting) return
+    if (activeSubmissionRef.current !== null) return
 
     const rawAmount = customMode ? customAmount : preset
     const validated = parseCryptoAmountInput(rawAmount)
@@ -120,6 +138,8 @@ function CryptoCheckoutForm() {
       return
     }
 
+    const controller = new AbortController()
+    activeSubmissionRef.current = controller
     setErrorText(null)
     setSubmitting(true)
     try {
@@ -129,9 +149,12 @@ function CryptoCheckoutForm() {
         displayName: trimmedName.length > 0 ? trimmedName : null,
         message: trimmedMessage.length > 0 ? trimmedMessage : null,
         amountUsd: validated.normalized,
-      })
+      }, controller.signal)
+      if (controller.signal.aborted) return
       window.location.assign(response.invoiceUrl)
     } catch (error) {
+      if (controller.signal.aborted) return
+      activeSubmissionRef.current = null
       setErrorText(resolveCryptoApiErrorMessage(error, t))
       setSubmitting(false)
     }
