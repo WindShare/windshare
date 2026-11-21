@@ -47,8 +47,10 @@ interface ScopeRateLimitPolicy {
 
 const RATE_LIMIT_POLICIES: Readonly<Record<RateLimitScope, ScopeRateLimitPolicy>> = Object.freeze({
   crypto: {
-    ip: { capacity: 10, windowSeconds: 60 },
-    global: { capacity: 120, windowSeconds: 60 },
+    // Bound unauthenticated NOWPayments invoice creation and 7-day intent storage
+    // while leaving headroom for legitimate retries and shared-NAT donors.
+    ip: { capacity: 5, windowSeconds: 60 },
+    global: { capacity: 30, windowSeconds: 60 },
   },
   admin_login: {
     // Omit a shared global bucket so unauthenticated callers cannot lock out the operator;

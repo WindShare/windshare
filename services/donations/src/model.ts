@@ -3,6 +3,7 @@ export const MIN_PUBLIC_USD_MINOR = 500
 export const MIN_CRYPTO_USD_MINOR = 500
 export const MAX_CRYPTO_USD_MINOR = 10_000_000
 export const PUBLIC_WALL_LIMIT = 50
+// Align with NOWPayments' 7-day payment tracking window so slow confirmations and IPN retries retain donor notes.
 export const CRYPTO_INTENT_TTL_SECONDS = 7 * 24 * 60 * 60
 export const ADMIN_SESSION_TTL_SECONDS = 12 * 60 * 60
 export const MAX_DISPLAY_NAME_CODEPOINTS = 32

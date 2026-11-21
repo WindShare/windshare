@@ -119,17 +119,19 @@ describe('admin login per-IP isolation and high-entropy secret enforcement', () 
     expect(globalRows).toHaveLength(0)
   })
 
-  it('retains both per-IP and global caps for crypto checkout intents', () => {
+  it('enforces bounded per-IP and global caps for crypto checkout intents', () => {
     const { store } = createInMemoryWallStoreWithDb()
-    for (let ip = 0; ip < 12; ip += 1) {
-      for (let attempt = 0; attempt < 10; attempt += 1) {
+    for (let ip = 0; ip < 6; ip += 1) {
+      for (let attempt = 0; attempt < 5; attempt += 1) {
         expect(store.consumeRateLimit('crypto', `crypto-ip-${ip}`, NOW_SEC).allowed).toBe(true)
       }
-      expect(store.consumeRateLimit('crypto', `crypto-ip-${ip}`, NOW_SEC).allowed).toBe(false)
+      const ipBlocked = store.consumeRateLimit('crypto', `crypto-ip-${ip}`, NOW_SEC)
+      expect(ipBlocked.allowed).toBe(false)
+      expect(ipBlocked.retryAfterSeconds).toBe(12)
     }
     const globalBlocked = store.consumeRateLimit('crypto', 'crypto-ip-overflow', NOW_SEC)
     expect(globalBlocked.allowed).toBe(false)
-    expect(globalBlocked.retryAfterSeconds).toBeGreaterThan(0)
+    expect(globalBlocked.retryAfterSeconds).toBe(2)
   })
 
   it('rejects short or whitespace-padded DONATE_ADMIN_PASSWORD fail-closed before touching the DO', async () => {
