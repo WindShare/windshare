@@ -6,11 +6,13 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/nodedirectory"
@@ -125,5 +127,63 @@ func TestCycleSignsMirrorEvidenceAndDistinguishesShutdownFromNodeFailure(t *test
 				t.Fatal("assignment was not reported")
 			}
 		})
+	}
+}
+
+func TestTruncateUTF8PreservesBoundariesWithinByteBudget(t *testing.T) {
+	ascii := strings.Repeat("a", maxFailureReasonBytes+10)
+	if got := truncateUTF8(ascii, maxFailureReasonBytes); len(got) != maxFailureReasonBytes {
+		t.Fatalf("ascii length = %d; want %d", len(got), maxFailureReasonBytes)
+	}
+	boundary := strings.Repeat("a", maxFailureReasonBytes-1) + "中tail"
+	got := truncateUTF8(boundary, maxFailureReasonBytes)
+	if len(got) != maxFailureReasonBytes-1 || !utf8.ValidString(got) {
+		t.Fatalf("boundary truncation = %q (len=%d, valid=%v)", got, len(got), utf8.ValidString(got))
+	}
+	multibyte := strings.Repeat("错", 100)
+	got = truncateUTF8(multibyte, maxFailureReasonBytes)
+	if len(got) > maxFailureReasonBytes || !utf8.ValidString(got) || got != strings.Repeat("错", maxFailureReasonBytes/3) {
+		t.Fatalf("multibyte truncation invalid: len=%d valid=%v", len(got), utf8.ValidString(got))
+	}
+}
+
+func TestNextPollTimestampStaysMonotonicAcrossClockStepBack(t *testing.T) {
+	var a agent
+	if got := a.nextPollTimestamp(time.Unix(1000, 0)); got != 1000 {
+		t.Fatalf("first timestamp = %d; want 1000", got)
+	}
+	if got := a.nextPollTimestamp(time.Unix(970, 0)); got != 1001 {
+		t.Fatalf("step-back timestamp = %d; want 1001", got)
+	}
+	if got := a.nextPollTimestamp(time.Unix(1001, 0)); got != 1002 {
+		t.Fatalf("equal timestamp = %d; want 1002", got)
+	}
+	if got := a.nextPollTimestamp(time.Unix(1060, 0)); got != 1060 {
+		t.Fatalf("caught-up timestamp = %d; want 1060", got)
+	}
+}
+
+func TestMirrorLogsVerificationFailures(t *testing.T) {
+	dir, _ := mirrorFixture(t)
+	host := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("not-a-directory"))
+	}))
+	defer host.Close()
+
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	defer slog.SetDefault(previous)
+
+	a := agent{
+		mainland: true,
+		client:   host.Client(),
+		config:   &networkconfig.Config{Directory: dir, LinkHost: host.URL},
+	}
+	if got := a.mirror(t.Context()); got != nil {
+		t.Fatalf("mirror = %v; want nil", *got)
+	}
+	if !strings.Contains(logs.String(), "mainland mirror verification failed") {
+		t.Fatalf("expected mirror warning log, got %q", logs.String())
 	}
 }

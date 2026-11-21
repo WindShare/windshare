@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/pion/stun/v4"
+	"github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/nodedirectory"
 	"github.com/windshare/windshare/core/serviceauthority"
 )
@@ -96,8 +98,33 @@ func TestEnrollmentChecksPinnedDescriptorAndSTUNOverTLSAndUDP(t *testing.T) {
 		t.Fatal("unadvertised STUN accepted")
 	}
 	work.Node.NodeKey = b64.EncodeToString(ed25519.NewKeyFromSeed(make([]byte, 32)).Public().(ed25519.PublicKey))
-	if err := Check(t.Context(), host.Client(), work, shares); err == nil {
-		t.Fatal("descriptor with a different node key accepted")
+	if err := check(t.Context(), host.Client(), work, shares, bind); !errors.Is(err, serviceauthority.ErrSignature) {
+		t.Fatalf("wrong node key error = %v; want %v", err, serviceauthority.ErrSignature)
+	}
+	if err := check(t.Context(), host.Client(), Work{Node: nodedirectory.Node{NodeKey: descriptor.NodeKey, Relay: host.URL}}, shares, bind); err == nil {
+		t.Fatal("empty node roles accepted")
+	}
+	if err := check(t.Context(), host.Client(), Work{Node: nodedirectory.Node{NodeKey: descriptor.NodeKey, Relay: host.URL, Roles: []string{"unknown"}}}, shares, bind); err == nil {
+		t.Fatal("unknown node role accepted")
+	}
+}
+
+func TestReceiveDistinguishesClosedChannelFromTransferMismatch(t *testing.T) {
+	want := []byte("challenge")
+	closed := make(chan framechannel.Frame)
+	close(closed)
+	if err := receive(t.Context(), closed, want); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("closed channel error = %v; want closed diagnostic", err)
+	}
+	mismatch := make(chan framechannel.Frame, 1)
+	mismatch <- framechannel.Frame("other")
+	if err := receive(t.Context(), mismatch, want); err == nil || !strings.Contains(err.Error(), "mismatch") {
+		t.Fatalf("mismatch error = %v; want mismatch diagnostic", err)
+	}
+	matching := make(chan framechannel.Frame, 1)
+	matching <- framechannel.Frame(want)
+	if err := receive(t.Context(), matching, want); err != nil {
+		t.Fatalf("matching frame rejected: %v", err)
 	}
 }
 

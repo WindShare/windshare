@@ -69,9 +69,14 @@ test('the Worker runs password hashing and rate limits across edge and Durable O
   assert.equal(cold.status, usable ? 200 : 503);
   const tick = await object.fetch('https://authority/internal/fleet/tick', { method: 'POST', body: '{}' });
   assert.equal(tick.status, 200);
+  assert.equal(tick.headers.get('x-directory-published'), '1');
+  const tickBody = await tick.json();
+  const steadyTick = await object.fetch('https://authority/internal/fleet/tick', { method: 'POST', body: '{}' });
+  assert.equal(steadyTick.status, 200);
+  assert.equal(steadyTick.headers.get('x-directory-published'), null);
   const directory = await worker.fetch('https://localhost/.well-known/windshare-network');
   assert.equal(directory.status, usable ? 200 : 503);
-  if (usable) assert.deepEqual(await directory.json(), await tick.json());
+  if (usable) assert.deepEqual(await directory.json(), tickBody);
   else assert.equal(directory.headers.get('cache-control'), 'no-store');
 
   // Two-phase admin initialize and login.

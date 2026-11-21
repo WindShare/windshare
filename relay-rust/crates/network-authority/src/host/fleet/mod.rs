@@ -26,6 +26,7 @@ use worker::{Env, Method, Request, Response, ScheduleContext, ScheduledEvent, ev
 const DIRECTORY_PATH: &str = "/.well-known/windshare-network";
 const MIRRORS: &str = "directory/mirrors";
 const DELIVERED: &str = "directory/kv-digest";
+const KV_PUBLISHED_HEADER: &str = "X-Directory-Published";
 const EXPIRY_ALERT_SECONDS: u64 = 14 * 86400;
 fn release() -> Result<Release> {
     Release::bundled()
@@ -113,6 +114,15 @@ async fn maintenance(env: &Env) -> worker::Result<()> {
     if response.status_code() != 200 {
         return Err(failure("directory maintenance unavailable"));
     }
+    if response.headers().get(KV_PUBLISHED_HEADER)?.as_deref() == Some("1") {
+        // Frontend mirrors cache KV reads for 60 s, so probing milliseconds
+        // after a fresh KV write always sees the previous revision.
+        tracing::info!(
+            event = "directory_mirror_check_deferred",
+            reason = "kv_just_published"
+        );
+        return Ok(());
+    }
     let expected: Envelope = response.json().await?;
     let matches = edge::mirrors_match(&expected).await;
     let check = MirrorCheck {
@@ -133,10 +143,8 @@ impl NetworkAuthority {
         }
         let ctx = Context::new(req, &self.env)?;
         let bytes = bytes.to_vec();
-        let publish = matches!(
-            ctx.path.as_str(),
-            "/internal/fleet/promote" | "/internal/fleet/tick"
-        );
+        let is_tick = ctx.path == "/internal/fleet/tick";
+        let publish = is_tick || ctx.path == "/internal/fleet/promote";
         // A rejected fleet command rolls back the whole transaction, including
         // bootstrap and lease writes. Network reads and KV writes run outside it.
         let result = self.transact(
@@ -147,10 +155,22 @@ impl NetworkAuthority {
         );
         match result {
             Ok(value) => {
-                if publish && let Err(error) = self.reconcile().await {
-                    tracing::warn!(event="directory_kv_retry_pending",%error);
+                let published = if publish {
+                    match self.reconcile().await {
+                        Ok(written) => written,
+                        Err(error) => {
+                            tracing::warn!(event="directory_kv_retry_pending",%error);
+                            false
+                        }
+                    }
+                } else {
+                    false
+                };
+                let mut response = Response::from_json(&value)?;
+                if published && is_tick {
+                    response.headers_mut().set(KV_PUBLISHED_HEADER, "1")?;
                 }
-                Response::from_json(&value)
+                Ok(response)
             }
             Err(error) => error.downcast_ref::<Fault>().map_or_else(
                 || {
@@ -161,7 +181,7 @@ impl NetworkAuthority {
             ),
         }
     }
-    async fn reconcile(&self) -> worker::Result<()> {
+    async fn reconcile(&self) -> worker::Result<bool> {
         let _writer = self.publishing.lock().await;
         let mut db = Database::open(&self.state).map_err(failure)?;
         let head = publication::current(&db).map_err(failure)?;
@@ -173,12 +193,12 @@ impl NetworkAuthority {
         if db.get(DELIVERED).map_err(failure)?.as_deref() == Some(&digest)
             && kv.get(KV_KEY).cache_ttl(60).text().await?.as_deref() == Some(body.as_str())
         {
-            return Ok(());
+            return Ok(false);
         }
         kv.put(KV_KEY, body)?.execute().await?;
         db.put(DELIVERED, &digest).map_err(failure)?;
         tracing::info!(event="directory_kv_published",revision=%digest);
-        Ok(())
+        Ok(true)
     }
 }
 

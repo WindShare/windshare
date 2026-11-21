@@ -19,6 +19,7 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/nodedirectory"
@@ -28,19 +29,21 @@ import (
 )
 
 const (
-	pollInterval  = time.Minute
-	checkTimeout  = 45 * time.Second
-	reportTimeout = 3 * time.Second
-	pollDomain    = "windshare/vantage-poll/v1\x00"
-	resultDomain  = "windshare/vantage-result/v1\x00"
+	pollInterval          = time.Minute
+	checkTimeout          = 45 * time.Second
+	reportTimeout         = 3 * time.Second
+	maxFailureReasonBytes = 240
+	pollDomain            = "windshare/vantage-poll/v1\x00"
+	resultDomain          = "windshare/vantage-result/v1\x00"
 )
 
 type agent struct {
-	key       ed25519.PrivateKey
-	config    *networkconfig.Config
-	client    *http.Client
-	authority *http.Client
-	mainland  bool
+	key        ed25519.PrivateKey
+	config     *networkconfig.Config
+	client     *http.Client
+	authority  *http.Client
+	mainland   bool
+	lastPollAt int64
 }
 
 func main() {
@@ -102,18 +105,51 @@ func (a *agent) mirror(ctx context.Context) *string {
 	if !a.mainland {
 		return nil
 	}
-	data, err := networkprobe.Fetch(ctx, a.client, a.config.LinkHost+"/.well-known/windshare-network", nodedirectory.MaximumEnvelopeBytes)
+	mirrorURL := a.config.LinkHost + "/.well-known/windshare-network"
+	data, err := networkprobe.Fetch(ctx, a.client, mirrorURL, nodedirectory.MaximumEnvelopeBytes)
 	if err != nil {
+		slog.Warn("mainland mirror fetch failed", "url", mirrorURL, "error", err)
 		return nil
 	}
 	dir := a.config.Directory
 	snapshot, err := nodedirectory.Verify(data, dir.Network, dir.Roots)
-	if err != nil || !snapshot.Usable(time.Now(), 0) {
+	if err != nil {
+		slog.Warn("mainland mirror verification failed", "url", mirrorURL, "error", err)
 		return nil
 	}
-	digest := snapshot.Cursor().Digest
-	value := base64.RawURLEncoding.EncodeToString(digest[:])
+	cursor := snapshot.Cursor()
+	if !snapshot.Usable(time.Now(), 0) {
+		slog.Warn("mainland mirror snapshot unusable", "url", mirrorURL, "generation", cursor.Generation, "serial", cursor.Serial)
+		return nil
+	}
+	value := base64.RawURLEncoding.EncodeToString(cursor.Digest[:])
 	return &value
+}
+
+// Keep poll timestamps strictly monotonic across small backward NTP clock steps
+// so replay checks on the authority do not stall until wall time catches up.
+func (a *agent) nextPollTimestamp(now time.Time) int64 {
+	ts := now.Unix()
+	if ts <= a.lastPollAt {
+		ts = a.lastPollAt + 1
+	}
+	a.lastPollAt = ts
+	return ts
+}
+
+func truncateUTF8(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	cut := 0
+	for cut < len(s) {
+		_, size := utf8.DecodeRuneInString(s[cut:])
+		if cut+size > maxBytes {
+			break
+		}
+		cut += size
+	}
+	return s[:cut]
 }
 
 func (a *agent) cycle(ctx context.Context) error {
@@ -129,7 +165,7 @@ func (a *agent) cycle(ctx context.Context) error {
 	}
 	mirror := a.mirror(ctx)
 	var work *networkprobe.Work
-	if err := a.post(ctx, "poll", pollDomain, map[string]any{"at": time.Now().Unix(), "shares": ids, "mirror": mirror}, &work); err != nil || work == nil {
+	if err := a.post(ctx, "poll", pollDomain, map[string]any{"at": a.nextPollTimestamp(time.Now()), "shares": ids, "mirror": mirror}, &work); err != nil || work == nil {
 		return err
 	}
 	probe, cancel := context.WithTimeout(ctx, checkTimeout)
@@ -141,11 +177,7 @@ func (a *agent) cycle(ctx context.Context) error {
 		// A stopped vantage releases its lease without attributing a failure to the node.
 		outcome["kind"] = "released"
 	case failure != nil:
-		message := failure.Error()
-		if len(message) > 240 {
-			message = message[:240]
-		}
-		outcome = map[string]string{"kind": "failed", "reason": message}
+		outcome = map[string]string{"kind": "failed", "reason": truncateUTF8(failure.Error(), maxFailureReasonBytes)}
 	}
 	slog.Info("enrollment verification", "operation_id", work.OperationID, "node_id", work.Node.NodeKey, "error", failure)
 	report, stop := context.WithTimeout(context.WithoutCancel(ctx), reportTimeout)

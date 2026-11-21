@@ -32,6 +32,14 @@ func Check(ctx context.Context, client *http.Client, work Work, shares [OriginCo
 
 func check(ctx context.Context, client *http.Client, work Work, shares [OriginCount]SyntheticShare, bind func(context.Context, string) error) error {
 	node := work.Node
+	if len(node.Roles) == 0 {
+		return errors.New("node has no roles")
+	}
+	for _, role := range node.Roles {
+		if role != "relay" && role != "stun" {
+			return fmt.Errorf("unknown node role %q", role)
+		}
+	}
 	base, err := url.Parse(node.Relay)
 	if err != nil || base.Scheme != "https" || base.Hostname() == "" || base.User != nil || base.RawQuery != "" || base.Fragment != "" || base.Path != "" {
 		return errors.New("invalid enrolled relay origin")
@@ -52,8 +60,11 @@ func check(ctx context.Context, client *http.Client, work Work, shares [OriginCo
 		return err
 	}
 	descriptor, err := serviceauthority.VerifyDescriptor(body, key, time.Now())
-	if err != nil || descriptor.RelayBaseURL() != node.Relay {
-		return errors.New("node descriptor mismatch")
+	if err != nil {
+		return fmt.Errorf("descriptor: %w", err)
+	}
+	if descriptor.RelayBaseURL() != node.Relay {
+		return errors.New("node descriptor relay mismatch")
 	}
 	if node.HasRole("stun") {
 		if !descriptor.Services.STUN || len(node.STUN) == 0 {

@@ -392,3 +392,68 @@ fn withdrawing_an_older_draft_releases_its_unpublished_alias_and_preserves_admis
     candidate.relay = "https://replacement.example".into();
     auth.stage(&admin, candidate).unwrap();
 }
+
+#[test]
+fn vantage_liveness_tracks_authority_receipt_time_separately_from_poll_replay_clock() {
+    use crate::fleet::vantage::{SILENT_SECONDS, mainland_current, silent};
+
+    let mut auth = fixture();
+    let (release, _, history) = directory();
+    let publication = Publication::bootstrap(&mut auth.store, &release, &[&history]).unwrap();
+    let expected = digest(&publication.envelope).unwrap();
+    let slow_key = SigningKey::from_bytes(&[12; 32]);
+    let fast_key = SigningKey::from_bytes(&[13; 32]);
+    let slow_agent = Agent {
+        id: "cn-slow".into(),
+        zone: Zone::Cn,
+        key: URL_SAFE_NO_PAD.encode(slow_key.verifying_key().to_bytes()),
+    };
+    let fast_agent = Agent {
+        id: "cn-fast".into(),
+        zone: Zone::Cn,
+        key: URL_SAFE_NO_PAD.encode(fast_key.verifying_key().to_bytes()),
+    };
+    let agents = [slow_agent.clone(), fast_agent.clone()];
+    let shares = [[1u8; 12], [2u8; 12], [3u8; 12]];
+    let poll = |key: &SigningKey, at: u64| {
+        proof(
+            key,
+            b"windshare/vantage-poll/v1\0",
+            &json!({"at": at, "shares": shares, "mirror": expected}),
+        )
+    };
+
+    let t0 = auth.environment.now();
+    // Slow agent reports 80 s behind authority; fast agent reports 80 s ahead.
+    auth.claim(&agents, &poll(&slow_key, t0 - 80), Default::default())
+        .unwrap();
+    auth.claim(&agents, &poll(&fast_key, t0 + 80), Default::default())
+        .unwrap();
+    // Non-increasing client poll timestamp is still rejected against replay.
+    assert!(
+        auth.claim(&agents, &poll(&fast_key, t0 + 80), Default::default())
+            .is_err()
+    );
+    assert!(
+        auth.claim(&agents, &poll(&fast_key, t0 + 79), Default::default())
+            .is_err()
+    );
+
+    // Near the end of the authority silence window, the slow agent is still live
+    // even though now - poll.at already exceeds SILENT_SECONDS.
+    let before_expiry = t0 + SILENT_SECONDS - 10;
+    assert_eq!(
+        silent(&auth.store, &agents, before_expiry).unwrap(),
+        Vec::<String>::new()
+    );
+    assert!(mainland_current(&auth.store, &agents, &expected, before_expiry).unwrap());
+
+    // Just past SILENT_SECONDS from authority receipt time, the fast agent is
+    // also marked silent rather than getting an extra 80 s of self-reported grace.
+    let after_expiry = t0 + SILENT_SECONDS + 1;
+    assert_eq!(
+        silent(&auth.store, &agents, after_expiry).unwrap(),
+        vec![slow_agent.id, fast_agent.id]
+    );
+    assert!(!mainland_current(&auth.store, &agents, &expected, after_expiry).unwrap());
+}

@@ -64,7 +64,10 @@ enum ProbeOutcome {
 #[derive(Deserialize, Serialize)]
 struct Heartbeat {
     zone: Zone,
-    at: u64,
+    // Client-signed poll timestamp used only to reject replayed polls.
+    last_poll_at: u64,
+    // Authority receipt clock time used for liveness and mirror freshness.
+    seen_at: u64,
     mirror: Option<String>,
 }
 #[derive(Serialize)]
@@ -140,7 +143,7 @@ pub fn mainland_current(
         let Some(beat) = load::<Heartbeat>(store, &format!("vantage/{}", agent.key))? else {
             continue;
         };
-        if beat.zone == agent.zone && now.saturating_sub(beat.at) <= SILENT_SECONDS {
+        if beat.zone == agent.zone && now.saturating_sub(beat.seen_at) <= SILENT_SECONDS {
             if beat.mirror.as_deref() != Some(expected) {
                 return Ok(false);
             }
@@ -156,7 +159,7 @@ pub fn silent(store: &impl Store, agents: &[Agent], now: u64) -> Result<Vec<Stri
     let mut missing = Vec::new();
     for agent in agents {
         let beat = load::<Heartbeat>(store, &format!("vantage/{}", agent.key))?;
-        if beat.is_none_or(|b| now.saturating_sub(b.at) > SILENT_SECONDS) {
+        if beat.is_none_or(|b| now.saturating_sub(b.seen_at) > SILENT_SECONDS) {
             missing.push(agent.id.clone());
         }
     }
@@ -184,7 +187,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
                     .len()
                     == ORIGIN_COUNT
                 && poll.mirror.as_ref().is_none_or(|s| s.len() == 43)
-                && load::<Heartbeat>(&self.store, &beat)?.is_none_or(|b| poll.at > b.at),
+                && load::<Heartbeat>(&self.store, &beat)?.is_none_or(|b| poll.at > b.last_poll_at),
             Fault::Invalid
         );
         ensure!(
@@ -198,7 +201,8 @@ impl<R: Store, E: Environment> Authority<R, E> {
             &beat,
             &Heartbeat {
                 zone: agent.zone,
-                at: poll.at,
+                last_poll_at: poll.at,
+                seen_at: now,
                 mirror: poll.mirror,
             },
         )?;

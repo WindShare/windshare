@@ -115,7 +115,10 @@ func receive(ctx context.Context, frames <-chan framechannel.Frame, want []byte)
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case frame := <-frames:
+	case frame, ok := <-frames:
+		if !ok {
+			return errors.New("synthetic relay channel closed")
+		}
 		if !bytes.Equal(frame, want) {
 			return errors.New("synthetic relay transfer mismatch")
 		}
