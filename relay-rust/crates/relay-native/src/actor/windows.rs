@@ -1,10 +1,11 @@
 //! Native scheduling indexes live flows, never mirrors their accounting.
-use crate::config::DELIVERY_WINDOW;
+use crate::config::{TO_RECEIVER_DELIVERY_WINDOW, TO_SENDER_DELIVERY_WINDOW};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use windshare_relay_core::{
     flow::{Counts, FlowKey},
     lifecycle::ConnectionRef,
     observation::Observer,
+    sessions::Direction,
     share::ShareRelay,
 };
 
@@ -66,7 +67,11 @@ impl Windows {
             for _ in 0..flows.len() {
                 let flow = flows.pop_front().expect("bounded flow rotation");
                 flows.push_back(flow);
-                let Some(credit) = relay.delivery_window(flow, DELIVERY_WINDOW) else {
+                let target = match flow.direction() {
+                    Direction::ToSender => TO_SENDER_DELIVERY_WINDOW,
+                    Direction::ToReceiver => TO_RECEIVER_DELIVERY_WINDOW,
+                };
+                let Some(credit) = relay.delivery_window(flow, target) else {
                     continue;
                 };
                 if credit != Counts::ZERO {

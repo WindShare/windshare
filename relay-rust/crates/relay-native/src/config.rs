@@ -7,11 +7,48 @@ pub const MAILBOX_CAPACITY: usize = 32;
 pub const CONTROL_QUEUE_FRAMES: usize = 8;
 // Keep the existing advisory burst without using protocol control slots.
 pub const CAPACITY_NOTICE_QUEUE_FRAMES: usize = 8;
-pub const DATA_QUEUE_FRAMES: usize = 64;
-pub const DATA_QUEUE_BYTES: usize = DATA_QUEUE_FRAMES * MAX_DATA_BYTES;
+// Connection-wide delivery bounds. Receivers' ToSender envelopes carry small
+// signaling and block-request messages rather than file payloads, so a
+// connection may hold more frames than full-sized frame bytes while bytes still
+// bound memory. 256 frames matches Go's default receive capacity declaration.
+pub const CONNECTION_DATA_FRAMES: usize = 256;
+pub const CONNECTION_DATA_BYTES: usize = 64 * MAX_DATA_BYTES;
+// Per-flow pending frame cap and simultaneous queued-flow cap per connection.
+pub const FLOW_PENDING_FRAMES: usize = 64;
+pub const CONNECTION_PENDING_FLOWS: usize = 64;
 pub const SUBMITTED_DATA_FRAMES: usize = 2;
 pub const SUBMITTED_DATA_BYTES: usize = 2 * MAX_DATA_BYTES;
-pub const DELIVERY_WINDOW: flow::Counts = flow::Counts::new(16, 16 * MAX_DATA_BYTES as u64);
+// ToReceiver carries bulk file fragments on each receiver's dedicated ledger.
+pub const TO_RECEIVER_DELIVERY_WINDOW: flow::Counts =
+    flow::Counts::new(16, 16 * MAX_DATA_BYTES as u64);
+// Every receiver's ToSender flow shares the sender connection's ledger and
+// carries only small control/request envelopes. Sizing each flow to 8 frames
+// (matching the receiver block broker's default concurrency) and 1 full frame
+// of bytes lets all 31 business receivers hold their full window concurrently
+// without join-order starvation. At full occupancy (31 * 8 = 248 frames) half
+// the sender byte pool stays free while the 256-frame connection bound leaves
+// 6 ordinary plus 2 startup frames for light settling churn; heavier churn
+// waits for WS2S or the 5s settlement timeout.
+pub const TO_SENDER_DELIVERY_WINDOW: flow::Counts = flow::Counts::new(8, MAX_DATA_BYTES as u64);
+const STARTUP_RESERVE_FRAMES: u64 = 2;
+const SHARE_MAX_RECEIVERS: u64 = SHARE_BUSINESS_CONNECTIONS as u64 - 1;
+pub const SHARE_MAX_SESSIONS: usize = 64;
+const CONNECTION_RETAINED_FLOWS: usize = 64;
+const _: () = assert!(
+    TO_SENDER_DELIVERY_WINDOW.frames > 0
+        && TO_SENDER_DELIVERY_WINDOW.encoded_bytes >= MAX_DATA_BYTES as u64
+        && TO_RECEIVER_DELIVERY_WINDOW.frames > 0
+        && TO_RECEIVER_DELIVERY_WINDOW.encoded_bytes >= MAX_DATA_BYTES as u64
+        && TO_SENDER_DELIVERY_WINDOW.frames * SHARE_MAX_RECEIVERS
+            <= CONNECTION_DATA_FRAMES as u64 - STARTUP_RESERVE_FRAMES
+        && TO_SENDER_DELIVERY_WINDOW.encoded_bytes * SHARE_MAX_RECEIVERS
+            <= CONNECTION_DATA_BYTES as u64 - STARTUP_RESERVE_FRAMES * MAX_DATA_BYTES as u64
+        && TO_SENDER_DELIVERY_WINDOW.frames <= FLOW_PENDING_FRAMES as u64
+        && TO_RECEIVER_DELIVERY_WINDOW.frames <= FLOW_PENDING_FRAMES as u64
+        && SHARE_MAX_RECEIVERS <= SHARE_MAX_SESSIONS as u64
+        && SHARE_MAX_RECEIVERS <= CONNECTION_RETAINED_FLOWS as u64
+        && CONNECTION_RETAINED_FLOWS <= CONNECTION_PENDING_FLOWS
+);
 const MAX_DATA_BYTES: usize =
     windshare_relay_core::sessions::OpaqueHeader::MAX_ENCODED_BYTES as usize;
 pub const MAX_HTTP_REQUESTS: usize = 64;
@@ -146,12 +183,12 @@ pub fn limits() -> share::Limits {
             concurrent: SHARE_CONTROL_CONNECTIONS,
             attempts: SHARE_CONNECTION_ATTEMPTS,
         },
-        sessions: 64,
-        retained_flows_per_connection: 64,
+        sessions: SHARE_MAX_SESSIONS,
+        retained_flows_per_connection: CONNECTION_RETAINED_FLOWS,
         retirement: share::RetirementPolicy::PhysicalRelease,
         delivery: flow::Limits::new(
-            flow::Counts::new(DATA_QUEUE_FRAMES as u64, DATA_QUEUE_BYTES as u64),
-            capacity(2),
+            flow::Counts::new(CONNECTION_DATA_FRAMES as u64, CONNECTION_DATA_BYTES as u64),
+            capacity(STARTUP_RESERVE_FRAMES),
             capacity(1),
             Duration::from_secs(5),
         )

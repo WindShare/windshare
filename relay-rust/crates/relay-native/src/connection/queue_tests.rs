@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     Database,
-    config::limits,
+    config::{CONNECTION_DATA_BYTES, CONNECTION_DATA_FRAMES, limits},
     environment::Trace,
     node::{
         Runtime, Settings,
@@ -389,7 +389,7 @@ fn byte_limit_rejects_before_growing_the_pending_queue() {
     scenario.grant(8);
     let (mut outbox, _writer, _) = channel(connection(3), crate::node::Runtime::default());
     outbox.pending_limit = Counts::new(
-        DATA_QUEUE_FRAMES as u64,
+        CONNECTION_DATA_FRAMES as u64,
         8 * u64::from(OpaqueHeader::MAX_ENCODED_BYTES),
     );
     let payload = OpaqueHeader::MAX_ENCODED_BYTES as usize - 20;
@@ -406,7 +406,7 @@ fn byte_limit_rejects_before_growing_the_pending_queue() {
         outbox.pending_bytes as u64,
         outbox.pending_limit.encoded_bytes
     );
-    assert!(outbox.pending.len() < DATA_QUEUE_FRAMES);
+    assert!(outbox.pending.len() < CONNECTION_DATA_FRAMES);
     outbox.discard(scenario.flow);
     assert!(outbox.pending.is_empty());
     assert_eq!(outbox.pending_bytes, 0);
@@ -472,7 +472,7 @@ fn frame_limit_is_independent_of_byte_capacity() {
             .is_err()
     );
     assert_eq!(outbox.pending.len(), 2);
-    assert!(outbox.pending_bytes < DATA_QUEUE_BYTES);
+    assert!(outbox.pending_bytes < CONNECTION_DATA_BYTES);
 }
 
 #[test]
