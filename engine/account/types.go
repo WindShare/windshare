@@ -15,6 +15,7 @@ const (
 	// The authority waits up to 15 seconds for the mail provider to accept delivery.
 	EmailRequestTimeout = 20 * time.Second
 	RefreshInterval     = time.Minute
+	TicketRenewalLead   = time.Hour
 	PollInterval        = 5 * time.Second
 	MinimumRetry        = time.Second
 	MaximumRetry        = time.Minute

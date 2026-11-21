@@ -10,54 +10,55 @@ pub type AccountKey = (Issuer, AccountId);
 pub struct Quota {
     pub day: u64,
     pub version: u64,
-    pub grant: Option<Grant>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Grant {
     pub valid_until: u64,
-    pub remaining_bytes: u64,
+    pub remaining_bytes: Option<u64>,
 }
 
 impl Quota {
-    pub(crate) fn from_snapshot(snapshot: Entitlement, now: u64) -> Self {
+    pub(crate) const fn from_snapshot(snapshot: Entitlement, now: u64) -> Self {
         Self {
             day: snapshot.day,
             version: snapshot.version,
-            grant: Some(Grant {
-                valid_until: snapshot.valid_until,
-                remaining_bytes: snapshot.remaining_bytes,
-            }),
+            valid_until: snapshot.valid_until,
+            remaining_bytes: Some(snapshot.remaining_bytes),
         }
         .at(now)
     }
 
-    fn at(mut self, now: u64) -> Self {
-        if self.grant.is_some_and(|grant| now >= grant.valid_until) {
-            self.grant = None;
+    const fn order_key(self) -> (u64, u64, u64) {
+        (self.day, self.version, self.valid_until)
+    }
+
+    const fn at(mut self, now: u64) -> Self {
+        // Keep `valid_until` as part of the monotonic watermark after expiry so
+        // replaying an old snapshot cannot revive allowance even under clock rollback.
+        if now >= self.valid_until {
+            self.remaining_bytes = None;
         }
         self
     }
 
     fn deadline(self) -> u128 {
-        // Earlier versions can have different expiry times. All snapshots for
-        // this UTC day become unusable at its end, regardless of their version.
-        self.grant.map_or_else(
-            || (u128::from(self.day) + 1) * u128::from(DAY_SECONDS),
-            |grant| u128::from(grant.valid_until),
-        )
+        // Active grants retire when `valid_until` passes; expired watermarks stay
+        // until the end of the UTC day so older tickets cannot roll them back.
+        if self.remaining_bytes.is_some() {
+            u128::from(self.valid_until)
+        } else {
+            (u128::from(self.day) + 1) * u128::from(DAY_SECONDS)
+        }
     }
 
     fn allowance(self, now: u64) -> Allowance {
-        self.grant.map_or(Allowance::Stale, |grant| {
-            Entitlement {
-                day: self.day,
-                version: self.version,
-                valid_until: grant.valid_until,
-                remaining_bytes: grant.remaining_bytes,
-            }
-            .allowance(now)
-        })
+        self.remaining_bytes
+            .map_or(Allowance::Stale, |remaining_bytes| {
+                Entitlement {
+                    day: self.day,
+                    version: self.version,
+                    valid_until: self.valid_until,
+                    remaining_bytes,
+                }
+                .allowance(now)
+            })
     }
 }
 
@@ -83,9 +84,7 @@ impl Quotas {
         }
         let previous = self.accounts.get(&key).copied();
         if let Some(previous) = previous {
-            if previous.day >= day_floor
-                && (next.version <= previous.version || next.day < previous.day)
-            {
+            if previous.day >= day_floor && next.order_key() <= previous.order_key() {
                 return false;
             }
             self.deadlines.remove(&(previous.deadline(), key));

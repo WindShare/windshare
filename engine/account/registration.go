@@ -52,7 +52,10 @@ func (service *Service) Register(ctx context.Context) (err error) {
 	}
 	if record.Credential != nil {
 		if service.validTicket(record) {
-			service.transition(record, Ready, "", service.config.Now().Add(RefreshInterval))
+			service.mu.Lock()
+			monitor := service.accountViews != 0
+			service.mu.Unlock()
+			service.transition(record, Ready, "", service.ticketRefreshAt(record, service.config.Now(), monitor))
 			return nil
 		}
 		return ErrSuperseded

@@ -20,7 +20,7 @@ pub mod node_control;
 mod transactions;
 use transactions::read;
 
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(1);
 
 pub trait Persistence: Clone + Send + Sync + 'static {

@@ -227,8 +227,9 @@ func (service *Service) install(ctx context.Context, previous Record, response s
 		return serviceauthority.ErrSignature
 	}
 	service.issuedLocked(record)
+	next := service.ticketRefreshAt(record, service.config.Now(), service.accountViews != 0)
 	service.mu.Unlock()
-	service.transition(record, Ready, "", service.config.Now().Add(RefreshInterval))
+	service.transition(record, Ready, "", next)
 	return nil
 }
 

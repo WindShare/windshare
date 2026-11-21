@@ -10,9 +10,11 @@ mod passwords;
 mod routes;
 mod storage;
 mod telemetry;
-use crate::{Authority, Environment, Fault, Signing, public_blocks::PublicBlockFeed};
+use crate::{
+    Authority, Environment, Fault, NodeLoadReport, Signing, public_blocks::PublicBlockFeed,
+};
 use futures_util::StreamExt;
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 use storage::Database;
 use worker::{DurableObject, Env, Method, Request, Response, Result, State, durable_object};
 
@@ -58,6 +60,7 @@ pub struct NetworkAuthority {
     state: State,
     env: Env,
     public_blocks: Rc<RefCell<PublicBlockFeed>>,
+    node_loads: Rc<RefCell<BTreeMap<[u8; 32], NodeLoadReport>>>,
 }
 impl DurableObject for NetworkAuthority {
     fn new(state: State, env: Env) -> Self {
@@ -66,6 +69,7 @@ impl DurableObject for NetworkAuthority {
             state,
             env,
             public_blocks: Rc::default(),
+            node_loads: Rc::default(),
         }
     }
     async fn fetch(&self, mut request: Request) -> Result<Response> {
@@ -91,6 +95,7 @@ impl DurableObject for NetworkAuthority {
             registration_email_configured: mail::Webhook::configured(&env).is_some(),
         };
         let public_blocks = self.public_blocks.clone();
+        let initial_loads = self.node_loads.borrow().clone();
         let result = storage::transaction(&self.state, move || {
             let signing = Signing::load(
                 &env.var("AUTHORITY_ROOT")?.to_string(),
@@ -99,23 +104,28 @@ impl DurableObject for NetworkAuthority {
             )
             .map_err(|error| anyhow::anyhow!("{error}"))?;
             let mut authority = Authority::new(database, environment, signing)?;
+            authority.set_live_loads(initial_loads);
             match routes::dispatch(
                 &mut authority,
                 context,
                 &bytes,
                 &mut public_blocks.borrow_mut(),
             ) {
-                Ok(response) => Ok(response),
+                Ok(response) => Ok((response, authority.into_live_loads())),
                 Err(error) => {
                     if let Some(fault) = error.downcast_ref::<Fault>() {
-                        return routes::fault(fault);
+                        return routes::fault(fault)
+                            .map(|response| (response, authority.into_live_loads()));
                     }
                     Err(error)
                 }
             }
         });
         match result {
-            Ok(response) => Ok(response),
+            Ok((response, updated_loads)) => {
+                *self.node_loads.borrow_mut() = updated_loads;
+                Ok(response)
+            }
             Err(error) => {
                 tracing::error!(event = "authority_request_failed", %error);
                 Response::error("authority temporarily unavailable", 503)

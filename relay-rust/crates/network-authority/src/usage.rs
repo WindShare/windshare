@@ -1,5 +1,7 @@
 use crate::{
-    Account, Authority, Environment, Fault, Node, Store,
+    Account, Authority, Environment, Fault, Node, NodeLoadReport, Store,
+    accounts::DailyUsageRecord,
+    nodes::{NODE_LOAD_CHECKPOINT_SECONDS, merge_load_report},
     store::{key, load, save},
 };
 use anyhow::{Result, anyhow, ensure};
@@ -142,14 +144,19 @@ impl<R: Store, E: Environment> Authority<R, E> {
         if previous.is_none() {
             for record in &batch.records {
                 let usage_key = format!("{}/{}", key("usage", &record.account), record.day);
-                let used = load::<u64>(&self.store, &usage_key)?.unwrap_or(0);
-                save(
-                    &mut self.store,
-                    &usage_key,
-                    &used
+                let current =
+                    load::<DailyUsageRecord>(&self.store, &usage_key)?.unwrap_or_default();
+                let updated = DailyUsageRecord {
+                    bytes: current
+                        .bytes
                         .checked_add(record.bytes)
                         .ok_or_else(|| anyhow!("usage overflow"))?,
-                )?;
+                    version: current
+                        .version
+                        .checked_add(1)
+                        .ok_or_else(|| anyhow!("entitlement version exhausted"))?,
+                };
+                save(&mut self.store, &usage_key, &updated)?;
             }
             // Keep batch receipts so delayed retries cannot charge twice.
             save(&mut self.store, &receipt, &digest)?;
@@ -159,7 +166,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
         Ok(())
     }
 
-    fn status(&mut self, batch: &Batch, node: &Node) -> Result<ReportResult> {
+    fn status(&self, batch: &Batch, node: &Node) -> Result<ReportResult> {
         let accounts: BTreeSet<_> = batch.resident_accounts.iter().copied().collect();
         let mut entitlements = Vec::with_capacity(accounts.len());
         for account in accounts {
@@ -191,13 +198,37 @@ impl<R: Store, E: Environment> Authority<R, E> {
     }
 
     fn record_load(&mut self, batch: &Batch, now: u64) -> Result<()> {
-        save(&mut self.store, &key("node-report", &batch.node), &now)?;
         let load_key = key("node-load", &batch.node);
-        let previous_load =
-            load::<(u64, windshare_relay_access::usage::Load)>(&self.store, &load_key)?;
-        if previous_load.is_none_or(|(time, _)| batch.created_at >= time) {
-            save(&mut self.store, &load_key, &(batch.created_at, &batch.load))?;
+        let persisted = load::<NodeLoadReport>(&self.store, &load_key)?;
+        let baseline = merge_load_report(persisted.clone(), self.live_loads.get(&batch.node));
+        let next = match baseline {
+            Some(previous) if batch.created_at < previous.created_at => NodeLoadReport {
+                reported_at: Some(now.max(previous.reported_at.unwrap_or(0))),
+                ..previous
+            },
+            previous => NodeLoadReport {
+                created_at: batch.created_at,
+                reported_at: Some(
+                    now.max(previous.and_then(|entry| entry.reported_at).unwrap_or(0)),
+                ),
+                load: batch.load.clone(),
+            },
+        };
+        // Keep per-minute heartbeats in isolate memory and persist coarse checkpoints
+        // so idle nodes do not consume Durable Object row-write quota every minute.
+        let checkpoint_due = persisted.as_ref().is_none_or(|stored| {
+            now.saturating_sub(stored.reported_at.unwrap_or(0)) >= NODE_LOAD_CHECKPOINT_SECONDS
+        });
+        if checkpoint_due {
+            save(&mut self.store, &load_key, &next)?;
+            tracing::debug!(
+                event = "node_load_checkpointed",
+                node = ?batch.node,
+                created_at = next.created_at,
+                reported_at = next.reported_at
+            );
         }
+        self.live_loads.insert(batch.node, next);
         Ok(())
     }
 }

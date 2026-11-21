@@ -13,7 +13,7 @@ struct Request {
 }
 
 pub(super) fn handle(
-    authority: &mut Authority<Database, WorkerEnvironment>,
+    authority: &Authority<Database, WorkerEnvironment>,
     path: &str,
     cookie: &str,
     bytes: &[u8],

@@ -15,7 +15,7 @@ mod residency;
 mod tests;
 pub use policy::{Policy, TrustedIssuer};
 use quota::Quotas;
-pub(crate) use quota::{AccountKey, Grant, Quota};
+pub(crate) use quota::{AccountKey, Quota};
 pub(crate) use residency::Residency;
 
 use std::{

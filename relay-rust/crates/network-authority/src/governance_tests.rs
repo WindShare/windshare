@@ -325,10 +325,13 @@ fn node_details_and_load_remain_reachable_beyond_the_console_page() {
     save(
         &mut authority.store,
         &key("node-load", &last),
-        &(now - 1, &load),
+        &NodeLoadReport {
+            created_at: now - 1,
+            reported_at: Some(now),
+            load: load.clone(),
+        },
     )
     .unwrap();
-    save(&mut authority.store, &key("node-report", &last), &now).unwrap();
 
     let next = authority.nodes(&admin, Some(cursor)).unwrap();
     assert_eq!(next.entries.len(), 2);

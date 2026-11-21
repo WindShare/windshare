@@ -233,7 +233,6 @@ impl<R: Store, E: Environment> Authority<R, E> {
                 email: verified_email.as_ref().map(|email| email.address.clone()),
                 ..Profile::default()
             },
-            version: 0,
         };
         if let Some(email) = &verified_email {
             save(&mut self.store, &email_owner_key(&email.canonical), &id)?;
@@ -242,7 +241,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
             save(&mut self.store, &format!("username/{name}"), &id)?;
         }
         save(&mut self.store, &key("account", &id), &account)?;
-        // Entitlement refreshes rewrite the account, but registration order is immutable.
+        // Registration order is immutable, while accounts are updated only on login/profile edits.
         self.store.put(
             &crate::account_admin::index_key(account.created_at, &id),
             "",

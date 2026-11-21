@@ -142,10 +142,18 @@ func TestOfficialRenewalStopsWithLastShareOrView(t *testing.T) {
 		}
 		closeView()
 		closeView()
-		time.Sleep(RefreshInterval)
+		// With only a background share remaining, client renewal waits until the
+		// ticket approaches expiry instead of polling every minute.
+		time.Sleep(3 * RefreshInterval)
+		synctest.Wait()
+		if got := requests.Load(); got != 1 {
+			t.Fatalf("background share polled %d times before ticket renewal lead", got)
+		}
+		renewalDelay := time.Unix(int64(initial.ExpiresAt), 0).Add(-TicketRenewalLead).Sub(config.Now())
+		time.Sleep(renewalDelay)
 		synctest.Wait()
 		if got := requests.Load(); got != 2 {
-			t.Fatalf("closing the view stopped the remaining share: %d tickets", got)
+			t.Fatalf("background share did not renew ahead of ticket expiry: %d tickets", got)
 		}
 		second.Close()
 		time.Sleep(3 * RefreshInterval)
@@ -285,6 +293,52 @@ func TestSharedTicketSatisfiesBackgroundRefresh(t *testing.T) {
 		snapshot, _ = second.Snapshot()
 		if got := requests.Load(); got != 3 || snapshot.State != Ready || snapshot.Profile != profile {
 			t.Fatalf("manual recovery: requests=%d state=%s profile=%+v", got, snapshot.State, snapshot.Profile)
+		}
+	})
+}
+
+func TestOpeningViewDuringIdleShareRefreshesStaleAllowanceImmediately(t *testing.T) {
+	config, initial := accountFixture(t)
+	synctest.Test(t, func(t *testing.T) {
+		issuedAt, start := config.Now(), time.Now()
+		config.Now = func() time.Time { return issuedAt.Add(time.Since(start)) }
+		config.Store = &MemoryStore{record: cachedRecord(initial)}
+		config.ResolveNode = nil
+		var requests atomic.Int32
+		config.Client = clientFunc(func(request *http.Request) (*http.Response, error) {
+			if request.URL.Path != "/v1/accounts/ticket" {
+				t.Errorf("unexpected route %s", request.URL.Path)
+			}
+			requests.Add(1)
+			return accountReply(t, http.StatusOK, initial), nil
+		})
+
+		service := testService(t, config)
+		share := service.NewShareAuthorization(t.Context())
+		defer share.Close()
+		share.Source("https://node.example")
+		synctest.Wait()
+
+		// Two hours of idle sharing needs no client ticket renewal.
+		time.Sleep(2 * time.Hour)
+		synctest.Wait()
+		if got := requests.Load(); got != 0 {
+			t.Fatalf("idle background share issued %d tickets in 2h", got)
+		}
+
+		// Opening the account view immediately fetches a fresh allowance snapshot.
+		closeView := service.ObserveAccount()
+		synctest.Wait()
+		if got := requests.Load(); got != 1 {
+			t.Fatalf("opening account view during idle share issued %d tickets", got)
+		}
+		closeView()
+
+		// Closing the view returns to ticket-expiry cadence without extra minute polls.
+		time.Sleep(3 * RefreshInterval)
+		synctest.Wait()
+		if got := requests.Load(); got != 1 {
+			t.Fatalf("closing account view left background share polling: %d tickets", got)
 		}
 	})
 }

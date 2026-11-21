@@ -64,7 +64,10 @@ fn immutable_registration_index_pages_stably_across_timestamp_ties_and_retries()
     save(
         &mut authority.store,
         &format!("{}/2", key("usage", &retry.account)),
-        &42,
+        &DailyUsageRecord {
+            bytes: 42,
+            version: 1,
+        },
     )
     .unwrap();
     let index = authority.store.scan("account-index/", None).unwrap();
@@ -173,7 +176,10 @@ fn blocked_account_diagnostics_are_read_only_numeric_and_bounded() {
         save(
             &mut authority.store,
             &format!("{}/{day}", key("usage", &id)),
-            &(day * 2),
+            &DailyUsageRecord {
+                bytes: day * 2,
+                version: 1,
+            },
         )
         .unwrap();
     }
@@ -214,7 +220,11 @@ fn blocked_account_diagnostics_are_read_only_numeric_and_bounded() {
         ),
         (110, 220, 100, 0)
     );
-    assert_eq!(details.entitlement_version, session.entitlement.version);
+    assert_eq!(
+        details.entitlement_version,
+        authority.entitlement(id).unwrap().version
+    );
+    assert_eq!(details.entitlement_version, session.entitlement.version + 1);
     assert_eq!(
         details.restriction_version,
         authority.restriction_version().unwrap()

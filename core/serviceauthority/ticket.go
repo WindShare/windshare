@@ -33,8 +33,18 @@ func (value Entitlement) ValidSnapshot(issued uint64) bool {
 		value.ValidUntil <= (value.Day+1)*DaySeconds
 }
 
+func (value Entitlement) supersedes(previous Entitlement) bool {
+	if value.Day != previous.Day {
+		return value.Day > previous.Day
+	}
+	if value.Version != previous.Version {
+		return value.Version > previous.Version
+	}
+	return value.ValidUntil > previous.ValidUntil
+}
+
 func Advance(previous, next Entitlement) Entitlement {
-	if next.Version > previous.Version && next.Day >= previous.Day {
+	if next.supersedes(previous) {
 		return next
 	}
 	return previous

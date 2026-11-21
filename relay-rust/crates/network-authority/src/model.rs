@@ -139,7 +139,6 @@ pub struct Account {
     pub password: Option<HashedPassword>,
     #[serde(default)]
     pub profile: Profile,
-    pub version: u64,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Profile {

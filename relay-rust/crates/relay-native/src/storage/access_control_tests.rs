@@ -166,13 +166,40 @@ fn status_returns_only_advanced_quotas_and_expiry_survives_restart() {
             .quotas,
         []
     );
+    let renewed = entitlement(4, u64::MAX, expired_at + 60);
+    assert_eq!(
+        db.save_status(authority, vec![renewed], expired_at)
+            .unwrap()
+            .quotas,
+        [(
+            (ISSUER, renewed.account),
+            Quota::from_snapshot(renewed.entitlement, expired_at)
+        )]
+    );
+    let mut tomorrow = entitlement(4, 1, NOW + DAY_SECONDS + 60);
+    tomorrow.entitlement.day += 1;
+    assert_eq!(
+        db.save_status(authority, vec![tomorrow], expired_at)
+            .unwrap()
+            .quotas,
+        [(
+            (ISSUER, tomorrow.account),
+            Quota::from_snapshot(tomorrow.entitlement, expired_at)
+        )]
+    );
 
     db.prune_quotas(NOW + DAY_SECONDS).unwrap();
     drop(db);
     let db = open(&path);
     let restored = db.initialize_control(NOW).unwrap();
     assert_eq!(restored.quota_day_floor, NOW / DAY_SECONDS + 1);
-    assert_eq!(restored.quotas, []);
+    assert_eq!(
+        restored.quotas,
+        [(
+            (ISSUER, tomorrow.account),
+            Quota::from_snapshot(tomorrow.entitlement, NOW)
+        )]
+    );
     assert_eq!(
         db.save_status(authority, vec![old], NOW).unwrap().quotas,
         []

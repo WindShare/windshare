@@ -56,6 +56,16 @@ impl Entitlement {
             && self.valid_until <= (self.day + 1).saturating_mul(DAY_SECONDS)
     }
 
+    pub const fn supersedes(self, previous: Self) -> bool {
+        if self.day != previous.day {
+            return self.day > previous.day;
+        }
+        if self.version != previous.version {
+            return self.version > previous.version;
+        }
+        self.valid_until > previous.valid_until
+    }
+
     pub(crate) fn encode(self, out: &mut Encoder) {
         out.array(4);
         out.uint(self.version);
@@ -75,9 +85,10 @@ impl Entitlement {
     }
 }
 
-/// Equality is not a refresh. Old tickets cannot extend a newer snapshot's lifetime.
+/// Equality is not a refresh. Snapshots advance strictly by `(day, version, valid_until)`
+/// so read-only lease renewals extend `valid_until` while old tickets cannot roll back newer state.
 pub fn advance(current: &mut Option<Entitlement>, next: Entitlement) -> bool {
-    if current.is_some_and(|value| next.version <= value.version || next.day < value.day) {
+    if current.is_some_and(|value| !next.supersedes(value)) {
         return false;
     }
     *current = Some(next);

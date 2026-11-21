@@ -8,40 +8,41 @@ import (
 	"time"
 )
 
-type refreshScope uint8
+type refreshDemand struct {
+	setup   bool
+	monitor bool
+}
 
-const (
-	refreshInactive refreshScope = iota
-	refreshExisting
-	refreshWithSetup
-)
+func (demand refreshDemand) active() bool {
+	return demand.setup || demand.monitor
+}
 
-func (service *Service) refreshScopeLocked() refreshScope {
+func (service *Service) refreshDemandLocked() refreshDemand {
 	if service.ctx.Err() != nil {
-		return refreshInactive
+		return refreshDemand{}
 	}
+	demand := refreshDemand{monitor: service.accountViews != 0}
 	for share := range service.officialShares {
 		// A share retaining a previous login refreshes that credential on demand.
 		if share.credential == nil || sameIdentity(share.credential.record, service.record) {
-			return refreshWithSetup
+			demand.setup = true
+			break
 		}
 	}
-	if service.accountViews != 0 {
-		return refreshExisting
-	}
-	return refreshInactive
+	return demand
 }
 
-func (service *Service) refreshScope() refreshScope {
+func (service *Service) refreshDemand() refreshDemand {
 	service.mu.Lock()
 	defer service.mu.Unlock()
-	return service.refreshScopeLocked()
+	return service.refreshDemandLocked()
 }
 
 func (service *Service) refreshDemandChangedLocked() {
-	scope := service.refreshScopeLocked()
+	demand := service.refreshDemandLocked()
 	slog.Debug("account_refresh_demand_changed", "official_shares", len(service.officialShares),
-		"account_views", service.accountViews, "active", scope != refreshInactive, "automatic_setup", scope == refreshWithSetup)
+		"account_views", service.accountViews, "active", demand.active(),
+		"automatic_setup", demand.setup, "monitor", demand.monitor)
 	service.notifyLocked()
 	service.wakeRefreshLocked()
 }
@@ -57,7 +58,9 @@ const persistentStoreFailureThreshold = 2
 
 type refreshSchedule struct {
 	observed      Record
+	monitor       bool
 	next          time.Time
+	backoffUntil  time.Time
 	retry         time.Duration
 	storeFailures int
 }
@@ -78,7 +81,7 @@ func (service *Service) run() {
 		timer.Stop()
 		due = nil
 
-		if service.refreshScope() == refreshInactive {
+		if !service.refreshDemand().active() {
 			continue
 		}
 		if service.lockOperation(service.ctx) != nil {
@@ -87,7 +90,7 @@ func (service *Service) run() {
 		service.pollLocked(service.ctx, &schedule)
 		<-service.operation
 		// Keep deadlines across idle periods so reopening respects backoff.
-		if service.refreshScope() != refreshInactive {
+		if service.refreshDemand().active() {
 			delay := PollInterval
 			if !schedule.next.IsZero() {
 				delay = min(PollInterval, max(MinimumRetry, schedule.next.Sub(service.config.Now())))
@@ -102,13 +105,13 @@ func (service *Service) run() {
 // replace a newer interactive registration state.
 func (service *Service) pollLocked(ctx context.Context, schedule *refreshSchedule) {
 	service.mu.Lock()
-	scope, beforeRead := service.refreshScopeLocked(), service.record
+	demand, beforeRead := service.refreshDemandLocked(), service.record
 	service.mu.Unlock()
-	if scope == refreshInactive {
+	if !demand.active() {
 		return
 	}
 	read := service.load
-	if scope == refreshWithSetup {
+	if demand.setup {
 		read = service.loadOrInitialize
 	}
 	record, err := service.syncSelection(ctx, read, nil)
@@ -117,7 +120,7 @@ func (service *Service) pollLocked(ctx context.Context, schedule *refreshSchedul
 		return
 	}
 	schedule.storeFailures = 0
-	if scope == refreshExisting && record.Credential == nil {
+	if !demand.setup && record.Credential == nil {
 		if !schedule.next.IsZero() {
 			state, reason := service.cachedState(record)
 			service.transition(record, state, reason, time.Time{})
@@ -126,14 +129,14 @@ func (service *Service) pollLocked(ctx context.Context, schedule *refreshSchedul
 		return
 	}
 	now := service.config.Now()
-	service.observeRefresh(schedule, record, now)
+	service.observeRefresh(schedule, record, demand.monitor, now)
 	if now.Before(schedule.next) {
 		return
 	}
 	// Recheck after the store read. A view can disappear or a share can finish
 	// while the worker waits for local state.
-	scope = service.refreshScope()
-	if scope == refreshInactive || scope == refreshExisting && record.Credential == nil {
+	demand = service.refreshDemand()
+	if !demand.active() || !demand.setup && record.Credential == nil {
 		return
 	}
 	if record.Credential != nil && record.Denial == "" && !service.validTicket(record) {
@@ -155,6 +158,7 @@ func (service *Service) handleLocalPollFailure(schedule *refreshSchedule, record
 		service.recordStorageErrorLocked(err)
 		service.mu.Unlock()
 		schedule.retry = MinimumRetry
+		schedule.backoffUntil = time.Time{}
 		schedule.next = service.config.Now().Add(PollInterval)
 		return
 	}
@@ -162,42 +166,71 @@ func (service *Service) handleLocalPollFailure(schedule *refreshSchedule, record
 }
 
 func (service *Service) scheduleNextRefresh(schedule *refreshSchedule, record Record, err error) {
-	delay := RefreshInterval
+	now := service.config.Now()
 	if err != nil {
-		delay = service.failure(record, err, schedule.retry)
+		delay := service.failure(record, err, schedule.retry)
 		schedule.retry = min(schedule.retry*2, MaximumRetry)
-	} else {
-		schedule.retry = MinimumRetry
+		schedule.backoffUntil = now.Add(delay)
+		schedule.next = schedule.backoffUntil
+		return
 	}
-	schedule.next = service.config.Now().Add(delay)
+	schedule.retry = MinimumRetry
+	schedule.backoffUntil = time.Time{}
+	service.mu.Lock()
+	current := cloneRecord(service.record)
+	monitor := service.accountViews != 0
+	service.mu.Unlock()
+	schedule.observed = current
+	schedule.monitor = monitor
+	next := now.Add(RefreshInterval)
+	if !monitor {
+		if renewal := service.ticketRefreshAt(current, now, false); renewal.After(next) {
+			next = renewal
+		}
+	}
+	schedule.next = next
 }
 
-func (service *Service) observeRefresh(schedule *refreshSchedule, record Record, now time.Time) {
+func (service *Service) observeRefresh(schedule *refreshSchedule, record Record, monitor bool, now time.Time) {
 	previous := schedule.observed
+	previousMonitor := schedule.monitor
 	schedule.observed = record
+	schedule.monitor = monitor
 	newIdentity := !sameIdentity(previous, record)
 	newGeneration := previous.Certificate != record.Certificate
 	if newIdentity || newGeneration {
-		schedule.next, schedule.retry = time.Time{}, MinimumRetry
+		schedule.next, schedule.backoffUntil, schedule.retry = time.Time{}, time.Time{}, MinimumRetry
 	}
 	if record.Credential == nil {
 		if !reflect.DeepEqual(previous.Proof, record.Proof) {
-			schedule.next = time.Time{}
+			schedule.next, schedule.backoffUntil = time.Time{}, time.Time{}
 		}
 		return
 	}
+	recordChanged := newIdentity || newGeneration || previous.Ticket != record.Ticket || previous.Denial != record.Denial
+	monitorChanged := previousMonitor != monitor
 	// Profile edits are independent of ticket freshness and retry backoff.
-	if !newIdentity && !newGeneration && previous.Ticket == record.Ticket && previous.Denial == record.Denial {
+	if !recordChanged && !monitorChanged {
 		return
 	}
-	if next := service.cachedRefreshAt(record, now); next.After(now) {
-		schedule.next, schedule.retry = next, MinimumRetry
-		service.transition(record, Ready, "", next)
-		slog.Debug("account_refresh_satisfied_by_ticket", "credential", record.Credential.ID, "refresh_at", next)
+	next := service.ticketRefreshAt(record, now, monitor)
+	if recordChanged {
+		if next.After(now) {
+			schedule.next, schedule.backoffUntil, schedule.retry = next, time.Time{}, MinimumRetry
+			service.transition(record, Ready, "", next)
+			slog.Debug("account_refresh_satisfied_by_ticket", "credential", record.Credential.ID, "refresh_at", next)
+		}
+		return
 	}
+	// Switching between background share renewal and an open account view
+	// adjusts cadence immediately without bypassing active retry backoff.
+	if schedule.backoffUntil.After(next) {
+		next = schedule.backoffUntil
+	}
+	schedule.next = next
 }
 
-func (service *Service) cachedRefreshAt(record Record, now time.Time) time.Time {
+func (service *Service) ticketRefreshAt(record Record, now time.Time, monitor bool) time.Time {
 	ticket, valid := service.usableTicket(record, now)
 	if !valid {
 		return time.Time{}
@@ -207,9 +240,20 @@ func (service *Service) cachedRefreshAt(record Record, now time.Time) time.Time 
 	if issuedAt.After(now) {
 		issuedAt = now
 	}
+	expiresAt := time.Unix(int64(ticket.ExpiresAt), 0)
+	usableUntil := expiresAt.Add(-TicketMargin)
+	if !monitor {
+		// Relay nodes maintain per-minute entitlements for resident shares; clients
+		// only renew long-lived identity tickets ahead of expiry unless a view is open.
+		lead := expiresAt.Add(-TicketRenewalLead)
+		if lead.After(issuedAt) && lead.Before(usableUntil) {
+			return lead
+		}
+		return usableUntil
+	}
 	next := issuedAt.Add(RefreshInterval)
 	for _, cutoff := range []time.Time{
-		time.Unix(int64(ticket.ExpiresAt), 0).Add(-TicketMargin),
+		usableUntil,
 		time.Unix(int64(ticket.Entitlement.ValidUntil), 0),
 	} {
 		if cutoff.Before(next) {

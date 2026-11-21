@@ -1,5 +1,6 @@
 use crate::{
     Account, Authority, Environment, Fault, Store,
+    accounts::DailyUsageRecord,
     registration::username,
     store::{key, load},
 };
@@ -155,9 +156,10 @@ impl<R: Store, E: Environment> Authority<R, E> {
         let account = load::<Account>(&self.store, &key("account", &id))?;
         tracing::debug!(event = "authority_account_read", account = %text, found = account.is_some());
         let account = account.ok_or(Fault::AccountNotFound)?;
-        let entitlement_version = account.version;
         let today_day = self.environment.now() / DAY_SECONDS;
-        let summary = self.account_summary(account, today_day)?;
+        let today_usage = self.daily_usage(&id, today_day)?;
+        let entitlement_version = self.entitlement_version(today_usage)?;
+        let summary = account_summary_with_bytes(account, today_usage.bytes);
         let daily_limit_bytes = self.settings()?.daily_bytes;
         let remaining_bytes = daily_limit_bytes.saturating_sub(summary.today_bytes);
         let restricted = self.restricted(Restriction::Account(id))?;
@@ -189,28 +191,23 @@ impl<R: Store, E: Environment> Authority<R, E> {
 
     fn account_summary(&self, account: Account, day: u64) -> Result<AccountSummary> {
         let today_bytes = self.daily_usage_bytes(&account.id, day)?;
-        Ok(AccountSummary {
-            id: account.id,
-            created_at: account.created_at,
-            username: account.username,
-            nickname: account.profile.nickname.map(|name| name.value),
-            email: account.profile.email,
-            has_password: account.password.is_some(),
-            today_bytes,
-        })
+        Ok(account_summary_with_bytes(account, today_bytes))
     }
 
     fn recent_usage(&self, id: &AccountId) -> Result<(Vec<DailyUsage>, bool)> {
         let prefix = format!("{}/", key("usage", id));
         let mut days = Vec::new();
         for (record, value) in self.store.scan(&prefix, None)? {
-            let bytes = serde_json::from_str(&value)?;
-            if bytes > 0 {
+            let entry: DailyUsageRecord = serde_json::from_str(&value)?;
+            if entry.bytes > 0 {
                 let day = record
                     .strip_prefix(&prefix)
                     .context("invalid usage record")?
                     .parse()?;
-                days.push(DailyUsage { day, bytes });
+                days.push(DailyUsage {
+                    day,
+                    bytes: entry.bytes,
+                });
             }
         }
         // Usage keys contain unpadded decimal days, so storage order is not chronological.
@@ -218,5 +215,17 @@ impl<R: Store, E: Environment> Authority<R, E> {
         let older = days.len() > USAGE_DAYS;
         days.truncate(USAGE_DAYS);
         Ok((days, older))
+    }
+}
+
+fn account_summary_with_bytes(account: Account, today_bytes: u64) -> AccountSummary {
+    AccountSummary {
+        id: account.id,
+        created_at: account.created_at,
+        username: account.username,
+        nickname: account.profile.nickname.map(|name| name.value),
+        email: account.profile.email,
+        has_password: account.password.is_some(),
+        today_bytes,
     }
 }

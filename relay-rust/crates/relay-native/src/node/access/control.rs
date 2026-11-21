@@ -153,8 +153,8 @@ impl Service {
                     ?account,
                     version = quota.version,
                     day = quota.day,
-                    valid_until = quota.grant.map(|grant| grant.valid_until),
-                    remaining_bytes = quota.grant.map(|grant| grant.remaining_bytes),
+                    valid_until = quota.valid_until,
+                    remaining_bytes = quota.remaining_bytes,
                 );
             }
         }

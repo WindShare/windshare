@@ -42,6 +42,7 @@ pub struct Authority<R, E> {
     pub store: R,
     pub environment: E,
     pub signing: Signing,
+    live_loads: std::collections::BTreeMap<[u8; 32], NodeLoadReport>,
 }
 impl<R: Store, E: Environment> Authority<R, E> {
     /// # Errors
@@ -52,7 +53,21 @@ impl<R: Store, E: Environment> Authority<R, E> {
             store,
             environment,
             signing,
+            live_loads: std::collections::BTreeMap::new(),
         })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn set_live_loads(
+        &mut self,
+        loads: std::collections::BTreeMap<[u8; 32], NodeLoadReport>,
+    ) {
+        self.live_loads = loads;
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn into_live_loads(self) -> std::collections::BTreeMap<[u8; 32], NodeLoadReport> {
+        self.live_loads
     }
     /// # Errors
     /// Propagates malformed or unreadable persisted configuration.

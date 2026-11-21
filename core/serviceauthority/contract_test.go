@@ -47,7 +47,7 @@ func TestRustAuthorityContractsAndMonotonicIdentity(t *testing.T) {
 	}
 	refreshed, err := VerifyTicket(fixture.Refreshed.Ticket, generation, now)
 	if err != nil || refreshed.Account != ticket.Account || refreshed.Credential != ticket.Credential ||
-		refreshed.Entitlement.Version <= ticket.Entitlement.Version {
+		refreshed.Entitlement != ticket.Entitlement {
 		t.Fatal(refreshed, err)
 	}
 	if _, err := VerifyTicket(fixture.Noncanonical, generation, now); !errors.Is(err, ErrFormat) {
@@ -60,11 +60,26 @@ func TestRustAuthorityContractsAndMonotonicIdentity(t *testing.T) {
 	if err != nil || stale.Entitlement.Allowance(now.Add(6*time.Minute)) != AllowanceStale {
 		t.Fatal(stale, err)
 	}
+	renewed := ticket.Entitlement
+	renewed.ValidUntil += 60
+	if Advance(ticket.Entitlement, renewed) != renewed || Advance(renewed, ticket.Entitlement) != renewed {
+		t.Fatal("lease renewal did not advance monotonically")
+	}
 	spent := refreshed.Entitlement
 	spent.Version++
 	spent.RemainingBytes = 0
-	if Advance(spent, ticket.Entitlement) != spent || spent.Allowance(now) != AllowanceSpent {
+	if Advance(renewed, spent) != spent || Advance(spent, renewed) != spent ||
+		Advance(spent, ticket.Entitlement) != spent || spent.Allowance(now) != AllowanceSpent {
 		t.Fatal("old ticket replenished allowance")
+	}
+	nextDay := Entitlement{
+		Version:        1,
+		Day:            spent.Day + 1,
+		ValidUntil:     (spent.Day+1)*DaySeconds + EntitlementLifetime,
+		RemainingBytes: ticket.Entitlement.RemainingBytes,
+	}
+	if Advance(spent, nextDay) != nextDay || Advance(nextDay, spent) != nextDay {
+		t.Fatal("new UTC day did not supersede prior day version")
 	}
 	newer, err := VerifyGeneration(fixture.NextCertificate, root)
 	if err != nil || Compare(generation, newer) != nil || !errors.Is(Compare(newer, generation), ErrRollback) {

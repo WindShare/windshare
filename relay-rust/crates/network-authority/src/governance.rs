@@ -1,9 +1,10 @@
 use crate::{
     Authority, Environment, Fault, RegistrationMode, RegistrationPolicy, Settings, SettingsChanges,
     Store,
+    accounts::DAILY_BYTES_VERSION_KEY,
     store::{key, save},
 };
-use anyhow::{Result, ensure};
+use anyhow::{Result, anyhow, ensure};
 use serde::{Deserialize, Serialize};
 use windshare_relay_access::restrictions::Restriction;
 
@@ -76,6 +77,13 @@ impl<R: Store, E: Environment> Authority<R, E> {
         let mode = settings.registration.mode(account_count, email_configured);
         if settings != current {
             save(&mut self.store, "settings", &settings)?;
+            if settings.daily_bytes != current.daily_bytes {
+                let next_version = self
+                    .daily_bytes_version()?
+                    .checked_add(1)
+                    .ok_or_else(|| anyhow!("entitlement version exhausted"))?;
+                save(&mut self.store, DAILY_BYTES_VERSION_KEY, &next_version)?;
+            }
             tracing::info!(
                 event = "authority_policy_changed",
                 ?changes,

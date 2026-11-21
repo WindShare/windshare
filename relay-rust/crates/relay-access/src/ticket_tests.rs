@@ -51,9 +51,28 @@ fn identity_outlives_entitlement_without_replenishing_it() {
         remaining_bytes: 0,
         ..ticket.entitlement
     };
-    let mut cached = Some(spent);
+    let mut cached = Some(ticket.entitlement);
+    assert!(!advance(&mut cached, ticket.entitlement));
+    let renewed = Entitlement {
+        valid_until: ticket.entitlement.valid_until + 60,
+        ..ticket.entitlement
+    };
+    assert!(advance(&mut cached, renewed));
+    assert_eq!(cached, Some(renewed));
+    assert!(!advance(&mut cached, ticket.entitlement));
+    assert!(advance(&mut cached, spent));
+    assert!(!advance(&mut cached, renewed));
     assert!(!advance(&mut cached, verified.entitlement));
     assert_eq!(cached, Some(spent));
+    let next_day = Entitlement {
+        version: 1,
+        day: spent.day + 1,
+        valid_until: (spent.day + 1) * DAY_SECONDS + ENTITLEMENT_LIFETIME,
+        remaining_bytes: 100,
+    };
+    assert!(advance(&mut cached, next_day));
+    assert!(!advance(&mut cached, spent));
+    assert_eq!(cached, Some(next_day));
     assert_eq!(spent.allowance(NOW), Allowance::Spent);
     assert_eq!(
         spent.allowance((spent.day + 1) * DAY_SECONDS),

@@ -17,7 +17,10 @@ mod profile;
 mod restriction_sync;
 #[path = "work_registration_tests.rs"]
 mod work_registration;
-use crate::store::{key, load, save};
+use crate::{
+    accounts::DailyUsageRecord,
+    store::{key, load, save},
+};
 use anyhow::Result;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use ed25519_dalek::SigningKey;
@@ -341,7 +344,9 @@ fn status(
 fn setup_retry_reuses_principal_and_refresh_reuses_credential() {
     let mut authority = fixture();
     let first = authority.register("source", registration(1)).unwrap();
+    let writes_after_register = authority.store.put_count;
     let retry = authority.register("source", registration(1)).unwrap();
+    assert_eq!(authority.store.put_count, writes_after_register);
     assert_eq!(first.account, retry.account);
     assert_eq!(first.credential, retry.credential);
     assert_eq!(
@@ -359,20 +364,23 @@ fn setup_retry_reuses_principal_and_refresh_reuses_credential() {
     )
     .unwrap();
     assert_eq!(ticket.credential, first.credential);
-    assert!(retry.entitlement.version > first.entitlement.version);
-    assert_eq!(retry.entitlement.valid_until, first.entitlement.valid_until);
+    assert_eq!(retry.entitlement, first.entitlement);
 }
 #[test]
 fn late_reports_charge_the_original_day_and_restart_retries_do_not_double_charge() {
     let mut authority = fixture();
+    let admin = authority
+        .initialize("once", "once", "admin", "correct horse battery")
+        .unwrap();
     let session = authority.register("source", registration(1)).unwrap();
     let node = SigningKey::from_bytes(&[3; 32]);
+    let node_key = node.verifying_key().to_bytes();
     save(
         &mut authority.store,
-        &key("node", &node.verifying_key().to_bytes()),
+        &key("node", &node_key),
         &Node {
             version: 1,
-            key: node.verifying_key().to_bytes(),
+            key: node_key,
             zone: Zone::Global,
             region: "test".into(),
             anonymous: true,
@@ -391,8 +399,12 @@ fn late_reports_charge_the_original_day_and_restart_retries_do_not_double_charge
         ReportResult::UsageReceived
     ));
     let refresh = batch(&authority, &node, session.account, 2, 2, 0);
+    let writes_before_idle = authority.store.put_count;
     let (before, _) = status(&mut authority, &refresh);
     assert_eq!(before[0].entitlement.remaining_bytes, 1000);
+    assert_eq!(before[0].entitlement.version, session.entitlement.version);
+    // The first node report already checkpointed load; idle refreshes write nothing.
+    assert_eq!(authority.store.put_count, writes_before_idle);
     let store = authority.store.clone();
     authority = Authority::new(store, authority.environment, authority.signing).unwrap();
     assert!(matches!(
@@ -400,12 +412,15 @@ fn late_reports_charge_the_original_day_and_restart_retries_do_not_double_charge
         ReportResult::UsageReceived
     ));
     assert_eq!(
-        load::<u64>(
+        load::<DailyUsageRecord>(
             &authority.store,
             &format!("{}/1", key("usage", &session.account))
         )
         .unwrap(),
-        Some(700)
+        Some(DailyUsageRecord {
+            bytes: 700,
+            version: 1,
+        })
     );
     let current = batch(&authority, &node, session.account, 3, 2, 300);
     assert!(matches!(
@@ -415,10 +430,44 @@ fn late_reports_charge_the_original_day_and_restart_retries_do_not_double_charge
     let (current, _) = status(&mut authority, &refresh);
     assert_eq!(current[0].entitlement.remaining_bytes, 700);
     assert!(current[0].entitlement.version > before[0].entitlement.version);
+    let writes_after_charge = authority.store.put_count;
     authority.environment.now += ENTITLEMENT_LIFETIME - 1;
     let refresh = batch(&authority, &node, session.account, 4, 2, 0);
     let (fresh, _) = status(&mut authority, &refresh);
+    assert_eq!(authority.store.put_count, writes_after_charge);
+    assert_eq!(fresh[0].entitlement.version, current[0].entitlement.version);
     assert!(fresh[0].entitlement.valid_until > current[0].entitlement.valid_until);
+    assert_eq!(
+        authority
+            .node_by_key(&admin, &node_key)
+            .unwrap()
+            .report
+            .unwrap()
+            .reported_at,
+        Some(authority.environment.now)
+    );
+
+    // Changing the daily allowance limit advances every account's state version immediately.
+    authority
+        .update_settings(
+            &admin,
+            &SettingsChanges {
+                daily_bytes: Some(2000),
+                ..SettingsChanges::default()
+            },
+        )
+        .unwrap();
+    let refresh = batch(&authority, &node, session.account, 5, 2, 0);
+    let (raised, _) = status(&mut authority, &refresh);
+    assert_eq!(raised[0].entitlement.remaining_bytes, 1700);
+    assert!(raised[0].entitlement.version > fresh[0].entitlement.version);
+
+    // Advancing past the load checkpoint interval persists a single node-load row.
+    let writes_before_checkpoint = authority.store.put_count;
+    authority.environment.now += crate::nodes::NODE_LOAD_CHECKPOINT_SECONDS;
+    let refresh = batch(&authority, &node, session.account, 6, 2, 0);
+    let _ = status(&mut authority, &refresh);
+    assert_eq!(authority.store.put_count, writes_before_checkpoint + 1);
 }
 #[test]
 fn credential_revocation_preserves_siblings_and_is_not_reset_by_new_days() {

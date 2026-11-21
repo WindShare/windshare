@@ -1,4 +1,4 @@
-use crate::node::access::{AccountKey, Grant, Quota};
+use crate::node::access::{AccountKey, Quota};
 use anyhow::Result;
 use rusqlite::{Connection, Statement, params};
 use windshare_relay_access::{Issuer, entitlement::DAY_SECONDS, usage::AccountEntitlement};
@@ -10,12 +10,12 @@ pub(super) const SCHEMA: &str = "
     CREATE TABLE IF NOT EXISTS access_quotas(
         issuer BLOB NOT NULL, account BLOB NOT NULL,
         day BLOB NOT NULL CHECK(length(day)=8), version BLOB NOT NULL CHECK(length(version)=8),
-        valid_until BLOB CHECK(length(valid_until)=8), remaining_bytes BLOB CHECK(length(remaining_bytes)=8),
-        CHECK((valid_until IS NULL) = (remaining_bytes IS NULL)),
+        valid_until BLOB NOT NULL CHECK(length(valid_until)=8),
+        remaining_bytes BLOB CHECK(length(remaining_bytes)=8),
         PRIMARY KEY(issuer,account)) STRICT, WITHOUT ROWID;
     CREATE INDEX IF NOT EXISTS access_quota_days ON access_quotas(day);
     CREATE INDEX IF NOT EXISTS access_quota_expiries ON access_quotas(valid_until)
-        WHERE valid_until IS NOT NULL;";
+        WHERE remaining_bytes IS NOT NULL;";
 
 pub(super) fn day_floor(db: &Connection) -> Result<u64> {
     let day = db.query_row(
@@ -38,7 +38,8 @@ pub(super) fn prune(db: &Connection, now: u64) -> Result<u64> {
         [day.to_be_bytes()],
     )?;
     let expired = db.execute(
-        "UPDATE access_quotas SET valid_until=NULL,remaining_bytes=NULL WHERE valid_until <= ?1",
+        "UPDATE access_quotas SET remaining_bytes=NULL
+         WHERE remaining_bytes IS NOT NULL AND valid_until <= ?1",
         [now.to_be_bytes()],
     )?;
     if retired != 0 || expired != 0 {
@@ -53,20 +54,15 @@ pub(super) fn restore(db: &Connection) -> Result<Vec<(AccountKey, Quota)>> {
     )?;
     let rows = statement.query_map([], |row| {
         let version = row.get::<_, [u8; 8]>(3)?;
-        let valid_until = row.get::<_, Option<[u8; 8]>>(4)?;
-        let remaining_bytes = row.get::<_, Option<[u8; 8]>>(5)?;
-        let grant = valid_until
-            .zip(remaining_bytes)
-            .map(|(valid_until, remaining_bytes)| Grant {
-                valid_until: u64::from_be_bytes(valid_until),
-                remaining_bytes: u64::from_be_bytes(remaining_bytes),
-            });
+        let valid_until = row.get::<_, [u8; 8]>(4)?;
+        let remaining_bytes = row.get::<_, Option<[u8; 8]>>(5)?.map(u64::from_be_bytes);
         Ok((
             (row.get(0)?, row.get(1)?),
             Quota {
                 day: u64::from_be_bytes(row.get(2)?),
                 version: u64::from_be_bytes(version),
-                grant,
+                valid_until: u64::from_be_bytes(valid_until),
+                remaining_bytes,
             },
         ))
     })?;
@@ -78,7 +74,8 @@ pub(super) fn prepare_upsert(db: &Connection) -> Result<Statement<'_>> {
         "INSERT INTO access_quotas VALUES(?1,?2,?3,?4,?5,?6)
          ON CONFLICT(issuer,account) DO UPDATE SET day=excluded.day,version=excluded.version,
              valid_until=excluded.valid_until,remaining_bytes=excluded.remaining_bytes
-         WHERE day < ?7 OR (excluded.version > version AND excluded.day >= day)",
+         WHERE day < ?7
+            OR (excluded.day, excluded.version, excluded.valid_until) > (day, version, valid_until)",
     )?)
 }
 
@@ -97,8 +94,8 @@ pub(super) fn save(
         account,
         quota.day.to_be_bytes(),
         quota.version.to_be_bytes(),
-        quota.grant.map(|grant| grant.valid_until.to_be_bytes()),
-        quota.grant.map(|grant| grant.remaining_bytes.to_be_bytes()),
+        quota.valid_until.to_be_bytes(),
+        quota.remaining_bytes.map(u64::to_be_bytes),
         day_floor.to_be_bytes(),
     ])?;
     Ok(changed != 0)

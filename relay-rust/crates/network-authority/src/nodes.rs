@@ -10,6 +10,7 @@ use windshare_relay_access::usage::Load;
 
 const MAX_REGION_BYTES: usize = 128;
 const NODE_PAGE_SIZE: usize = 1000;
+pub const NODE_LOAD_CHECKPOINT_SECONDS: u64 = 15 * 60;
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -44,11 +45,29 @@ pub struct NodeDetails {
     pub report: Option<NodeLoadReport>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct NodeLoadReport {
     pub created_at: u64,
     pub reported_at: Option<u64>,
     pub load: Load,
+}
+
+pub fn merge_load_report(
+    persisted: Option<NodeLoadReport>,
+    live: Option<&NodeLoadReport>,
+) -> Option<NodeLoadReport> {
+    match (persisted, live.cloned()) {
+        (Some(persisted), Some(live)) => {
+            if live.reported_at >= persisted.reported_at {
+                Some(live)
+            } else {
+                Some(persisted)
+            }
+        }
+        (Some(persisted), None) => Some(persisted),
+        (None, Some(live)) => Some(live),
+        (None, None) => None,
+    }
 }
 
 #[derive(Serialize)]
@@ -97,10 +116,11 @@ impl<R: Store, E: Environment> Authority<R, E> {
             .into_iter()
             .map(|(_, value)| {
                 let node: Node = serde_json::from_str(&value)?;
-                let report = loads
+                let persisted = loads
                     .get(&key("node-load", &node.key))
-                    .map(|value| self.node_load(&node.key, value))
+                    .map(|value| serde_json::from_str::<NodeLoadReport>(value))
                     .transpose()?;
+                let report = merge_load_report(persisted, self.live_loads.get(&node.key));
                 Ok(NodeDetails { node, report })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -141,22 +161,9 @@ impl<R: Store, E: Environment> Authority<R, E> {
     }
 
     fn node_details(&self, node: Node) -> Result<NodeDetails> {
-        let report = self
-            .store
-            .get(&key("node-load", &node.key))?
-            .map(|value| self.node_load(&node.key, &value))
-            .transpose()?;
+        let persisted = load::<NodeLoadReport>(&self.store, &key("node-load", &node.key))?;
+        let report = merge_load_report(persisted, self.live_loads.get(&node.key));
         Ok(NodeDetails { node, report })
-    }
-
-    fn node_load(&self, node: &[u8; 32], value: &str) -> Result<NodeLoadReport> {
-        let (created_at, load_snapshot) = serde_json::from_str(value)?;
-        let reported_at = load(&self.store, &key("node-report", node))?;
-        Ok(NodeLoadReport {
-            created_at,
-            reported_at,
-            load: load_snapshot,
-        })
     }
 
     /// # Errors

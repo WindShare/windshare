@@ -136,7 +136,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
 
     /// # Errors
     /// The receipt is usable for one enrollment and contains no password or reusable service ticket.
-    pub fn approve_device(&mut self, invite: &Invitation, account: &Account) -> Result<String> {
+    pub fn approve_device(&self, invite: &Invitation, account: &Account) -> Result<String> {
         tracing::info!(event="service_device_approved",node=?invite.node,enrollment=?invite.enrollment,account=?account.id);
         Approval {
             node: invite.node,

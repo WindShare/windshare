@@ -5,12 +5,22 @@ use crate::{
 };
 use anyhow::{Result, anyhow, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use serde::{Deserialize, Serialize};
 use windshare_relay_access::{
     AccountId, CredentialId,
     entitlement::{DAY_SECONDS, ENTITLEMENT_LIFETIME, Entitlement},
     restrictions::Restriction,
     ticket::{TICKET_LIFETIME, Ticket},
 };
+
+pub const DAILY_BYTES_VERSION_KEY: &str = "daily-bytes-version";
+const INITIAL_DAILY_BYTES_VERSION: u64 = 1;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DailyUsageRecord {
+    pub bytes: u64,
+    pub version: u64,
+}
 
 impl<R: Store, E: Environment> Authority<R, E> {
     pub(crate) fn ensure_account(&self, id: AccountId) -> Result<Account> {
@@ -65,7 +75,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
     }
     /// # Errors
     /// Revoked credentials and blocked accounts cannot obtain tickets; signing and storage failures propagate.
-    pub fn refresh(&mut self, secret: &str) -> Result<Session> {
+    pub fn refresh(&self, secret: &str) -> Result<Session> {
         let (credential, account) = self.authenticate(secret)?;
         let entitlement = self.entitlement(credential.account)?;
         let now = self.environment.now();
@@ -97,28 +107,39 @@ impl<R: Store, E: Environment> Authority<R, E> {
             certificate: self.signing.certificate.clone(),
         })
     }
-    pub(crate) fn daily_usage_bytes(&self, id: &AccountId, day: u64) -> Result<u64> {
-        Ok(load(&self.store, &format!("{}/{day}", key("usage", id)))?.unwrap_or(0))
+    pub(crate) fn daily_bytes_version(&self) -> Result<u64> {
+        Ok(load(&self.store, DAILY_BYTES_VERSION_KEY)?.unwrap_or(INITIAL_DAILY_BYTES_VERSION))
     }
 
-    pub(crate) fn entitlement(&mut self, id: AccountId) -> Result<Entitlement> {
-        let mut account =
-            load::<Account>(&self.store, &key("account", &id))?.ok_or(Fault::Invalid)?;
+    pub(crate) fn daily_usage(&self, id: &AccountId, day: u64) -> Result<DailyUsageRecord> {
+        Ok(load(&self.store, &format!("{}/{day}", key("usage", id)))?.unwrap_or_default())
+    }
+
+    pub(crate) fn daily_usage_bytes(&self, id: &AccountId, day: u64) -> Result<u64> {
+        Ok(self.daily_usage(id, day)?.bytes)
+    }
+
+    pub(crate) fn entitlement_version(&self, usage: DailyUsageRecord) -> Result<u64> {
+        // Combine global allowance-limit revisions with per-account daily charge counts so
+        // version increases strictly on state mutations without writing on read-only refreshes.
+        self.daily_bytes_version()?
+            .checked_add(usage.version)
+            .ok_or_else(|| anyhow!("entitlement version exhausted"))
+    }
+
+    pub(crate) fn entitlement(&self, id: AccountId) -> Result<Entitlement> {
+        load::<Account>(&self.store, &key("account", &id))?.ok_or(Fault::Invalid)?;
         let now = self.environment.now();
         let day = now / DAY_SECONDS;
-        let used = self.daily_usage_bytes(&id, day)?;
-        account.version = account
-            .version
-            .checked_add(1)
-            .ok_or_else(|| anyhow!("entitlement version exhausted"))?;
-        save(&mut self.store, &key("account", &id), &account)?;
+        let usage = self.daily_usage(&id, day)?;
+        let version = self.entitlement_version(usage)?;
         Ok(Entitlement {
-            version: account.version,
+            version,
             day,
             valid_until: now
                 .saturating_add(ENTITLEMENT_LIFETIME)
                 .min((day + 1) * DAY_SECONDS),
-            remaining_bytes: self.settings()?.daily_bytes.saturating_sub(used),
+            remaining_bytes: self.settings()?.daily_bytes.saturating_sub(usage.bytes),
         })
     }
     /// # Errors
