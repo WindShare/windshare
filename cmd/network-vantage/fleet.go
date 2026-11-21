@@ -11,6 +11,10 @@ import (
 
 const (
 	fleetInterval = 5 * time.Minute
+	// Starts short enough that transient edge or network blips recover inside the
+	// authority's 10-minute SILENT_SECONDS window (5m + 15s/30s/60s/120s), then
+	// caps back at fleetInterval so prolonged outages do not amplify DO traffic.
+	fleetRetryInitial = 15 * time.Second
 	// Keeps worst-case receipt spacing (fleetInterval + fleetBudget + HTTP RTT)
 	// comfortably inside the authority's 10-minute SILENT_SECONDS window while
 	// still covering 32 simultaneously timed-out nodes across 8 workers.
@@ -20,26 +24,66 @@ const (
 )
 
 func (a *agent) monitor(ctx context.Context) {
-	monitorLoop(ctx, fleetInterval, a.fleetCycle)
+	monitorLoop(ctx, fleetInterval, fleetRetryInitial, a.fleetCycle, sleepContext)
 }
 
-// Wait a full interval after each cycle finishes instead of firing on a
-// fixed-rate ticker so a slow failing cycle followed by a fast recovery cycle
-// cannot compress consecutive authority receipts below MIN_CYCLE_SECONDS.
-func monitorLoop(ctx context.Context, interval time.Duration, run func(context.Context) error) {
-	for {
-		if err := run(ctx); err != nil && ctx.Err() == nil {
-			slog.Warn("fleet cycle failed", "error", err)
+func sleepContext(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	select {
+	case <-ctx.Done():
+		timer.Stop()
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func retryBackoff(initial, maxDelay time.Duration, failures int) time.Duration {
+	if failures <= 0 || initial <= 0 || initial >= maxDelay {
+		return maxDelay
+	}
+	delay := initial
+	for range failures - 1 {
+		if maxDelay-delay <= delay {
+			return maxDelay
 		}
+		delay *= 2
+	}
+	return delay
+}
+
+// Wait a full interval after each successful cycle instead of firing on a
+// fixed-rate ticker so a slow cycle followed by a fast one cannot compress
+// consecutive authority receipts below MIN_CYCLE_SECONDS. Failed cycles back
+// off exponentially from retryInitial up to interval so transient blips
+// recover inside SILENT_SECONDS without amplifying prolonged outages or
+// HTTP 400 too_frequent responses.
+func monitorLoop(
+	ctx context.Context,
+	interval, retryInitial time.Duration,
+	run func(context.Context) error,
+	wait func(context.Context, time.Duration) bool,
+) {
+	failures := 0
+	for {
+		err := run(ctx)
 		if ctx.Err() != nil {
 			return
 		}
-		timer := time.NewTimer(interval)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
+		var delay time.Duration
+		if err != nil {
+			failures++
+			delay = retryBackoff(retryInitial, interval, failures)
+			slog.Warn("fleet cycle failed", "error", err, "consecutive_failures", failures, "retry_in", delay)
+		} else {
+			if failures > 0 {
+				slog.Info("fleet cycle recovered", "after_failures", failures)
+				failures = 0
+			}
+			delay = interval
+		}
+		if !wait(ctx, delay) {
 			return
-		case <-timer.C:
 		}
 	}
 }

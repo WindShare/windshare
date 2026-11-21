@@ -6,9 +6,11 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -417,7 +419,7 @@ func TestMonitorLoopWaitsFullIntervalAfterCycleCompletes(t *testing.T) {
 	const interval = 40 * time.Millisecond
 	var firstFinished, secondStarted time.Time
 	calls := 0
-	monitorLoop(ctx, interval, func(context.Context) error {
+	monitorLoop(ctx, interval, 10*time.Millisecond, func(context.Context) error {
 		calls++
 		if calls == 1 {
 			time.Sleep(30 * time.Millisecond)
@@ -427,12 +429,90 @@ func TestMonitorLoopWaitsFullIntervalAfterCycleCompletes(t *testing.T) {
 		secondStarted = time.Now()
 		cancel()
 		return nil
-	})
+	}, sleepContext)
 	if calls != 2 {
 		t.Fatalf("calls = %d; want 2", calls)
 	}
 	if gap := secondStarted.Sub(firstFinished); gap < interval-5*time.Millisecond {
 		t.Fatalf("post-completion wait = %v; want at least %v", gap, interval)
+	}
+}
+
+func TestMonitorLoopBacksOffOnFailureAndResetsOnRecovery(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	defer slog.SetDefault(previous)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	// 7 consecutive failures verify exponential doubling and capping at fleetInterval;
+	// recovery then restores fleetInterval and resets backoff for a later transient fault.
+	transient := errors.New("authority cycle returned HTTP 503")
+	outcomes := []error{
+		transient,
+		transient,
+		transient,
+		transient,
+		transient,
+		transient,
+		transient,
+		nil,
+		transient,
+		nil,
+	}
+	var delays []time.Duration
+	index := 0
+	monitorLoop(ctx, fleetInterval, fleetRetryInitial, func(context.Context) error {
+		err := outcomes[index]
+		index++
+		if index == len(outcomes) {
+			cancel()
+		}
+		return err
+	}, func(_ context.Context, delay time.Duration) bool {
+		delays = append(delays, delay)
+		return true
+	})
+
+	want := []time.Duration{
+		15 * time.Second,
+		30 * time.Second,
+		60 * time.Second,
+		120 * time.Second,
+		240 * time.Second,
+		fleetInterval,
+		fleetInterval,
+		fleetInterval,
+		15 * time.Second,
+	}
+	if !slices.Equal(delays, want) {
+		t.Fatalf("delays = %v; want %v", delays, want)
+	}
+	if !strings.Contains(logs.String(), `"msg":"fleet cycle failed"`) || !strings.Contains(logs.String(), `"msg":"fleet cycle recovered"`) {
+		t.Fatalf("expected failure and recovery logs, got %q", logs.String())
+	}
+}
+
+func TestRetryBackoffEdgeCases(t *testing.T) {
+	if got := retryBackoff(fleetRetryInitial, fleetInterval, 0); got != fleetInterval {
+		t.Fatalf("failures=0 delay = %v; want %v", got, fleetInterval)
+	}
+	if got := retryBackoff(0, fleetInterval, 1); got != fleetInterval {
+		t.Fatalf("initial=0 delay = %v; want %v", got, fleetInterval)
+	}
+	if got := retryBackoff(10*time.Minute, fleetInterval, 1); got != fleetInterval {
+		t.Fatalf("initial>max delay = %v; want %v", got, fleetInterval)
+	}
+	if got := retryBackoff(2*time.Nanosecond, 5*time.Nanosecond, 2); got != 4*time.Nanosecond {
+		t.Fatalf("odd max step-2 delay = %v; want 4ns", got)
+	}
+	if got := retryBackoff(2*time.Nanosecond, 5*time.Nanosecond, 3); got != 5*time.Nanosecond {
+		t.Fatalf("odd max cap delay = %v; want 5ns", got)
+	}
+	if got := retryBackoff(fleetRetryInitial, fleetInterval, 1000); got != fleetInterval {
+		t.Fatalf("high failure count delay = %v; want %v", got, fleetInterval)
 	}
 }
 
