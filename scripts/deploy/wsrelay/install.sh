@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 readonly root=/opt/windshare-network
-readonly releases="$root/releases"
 readonly current="$root/current"
 readonly config=/etc/windshare-network/node.json
 readonly unit=windshare-network.service
@@ -15,7 +14,10 @@ action=$1 operation=$2 node=$3
 shift 3
 [[ $operation =~ ^[a-zA-Z0-9-]{16,64}$ && $node =~ ^[a-zA-Z0-9_-]{43}$ ]] || die "invalid operation or node key"
 readonly state="$root/operations/$operation"
-install -d -m 0755 "$releases"
+# Canonicalize once so candidate/previous paths match /proc/$pid/exe and selected() across symlinked roots.
+install -d -m 0755 "$root/releases"
+releases=$(realpath -e "$root/releases")
+readonly releases
 install -d -m 0700 "$root/operations"
 exec 9>"$root/operations/.lock"
 flock -w 2 9 || exit "$busy"
@@ -23,7 +25,7 @@ log() { printf 'wsrelay operation_id=%s node_id=%s action=%s %s\n' "$operation" 
 selected() {
     local path
     path=$(realpath -e "$current")
-    [[ $(dirname "$path") == "$(realpath -e "$releases")" && -x "$path/wsrelay" ]] || die "unexpected current release"
+    [[ $(dirname "$path") == "$releases" && -x "$path/wsrelay" ]] || die "unexpected current release"
     printf '%s\n' "$path"
 }
 as_service() {
@@ -36,14 +38,24 @@ gate() {
     as_service "$previous/wsrelay" "$1" "$config" "$node" "$operation" "${@:2}"
 }
 restart() {
-    local release=$1 pid
+    local release=$1 old_invocation status invocation pid line attempt
     ln -sfn -- "$release" "$root/.switch-$operation"
     mv -Tf -- "$root/.switch-$operation" "$current"
+    old_invocation=$(systemctl show --property=InvocationID --value "$unit" 9>&-)
     systemctl restart --no-block "$unit" 9>&-
-    # systemctl can report the retiring process as active immediately after queueing a restart.
+    # Require a fresh InvocationID so same-binary restarts cannot match a still-retiring MainPID.
     for ((attempt=0;attempt<50;attempt++)); do
-        pid=$(systemctl show --property=MainPID --value "$unit" 9>&-)
-        if [[ $pid =~ ^[1-9][0-9]*$ && $(readlink "/proc/$pid/exe") == "$release/wsrelay" ]]; then return 0; fi
+        status=$(systemctl show --property=InvocationID --property=MainPID "$unit" 9>&-)
+        invocation= pid=
+        while IFS= read -r line; do
+            case "$line" in
+                InvocationID=*) invocation=${line#InvocationID=} ;;
+                MainPID=*) pid=${line#MainPID=} ;;
+            esac
+        done <<< "$status"
+        if [[ -n $invocation && $invocation != "$old_invocation" && $pid =~ ^[1-9][0-9]*$ && $(readlink "/proc/$pid/exe") == "$release/wsrelay" ]]; then
+            return 0
+        fi
         sleep 0.1
     done
     die "selected binary did not start"
