@@ -59,7 +59,7 @@ func (r *runner) call(ctx context.Context, action string, input, out any) error 
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
-		return fmt.Errorf("authority %s: HTTP %d", action, res.StatusCode)
+		return networkprobe.ReadAuthorityError(action, res)
 	}
 	if out == nil {
 		return nil

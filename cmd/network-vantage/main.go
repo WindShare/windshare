@@ -11,7 +11,6 @@ import (
 	"encoding/pem"
 	"errors"
 	"flag"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -237,7 +236,7 @@ func (a *agent) post(ctx context.Context, path, domain string, body, out any) er
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
-		return fmt.Errorf("authority %s returned HTTP %d", path, res.StatusCode)
+		return networkprobe.ReadAuthorityError(path, res)
 	}
 	if out == nil {
 		return nil

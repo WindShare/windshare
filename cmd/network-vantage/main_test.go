@@ -701,3 +701,62 @@ func TestLoadConfigOverridesReleaseAndAuthority(t *testing.T) {
 		t.Fatal("accepted missing -release file")
 	}
 }
+
+func TestPostSurfacesAuthorityFaultJSONAndFallsBackOnPlainText(t *testing.T) {
+	t.Parallel()
+	key := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{41}, ed25519.SeedSize))
+	cases := []struct {
+		path       string
+		status     int
+		body       string
+		wantKind   string
+		wantReason string
+		wantError  string
+	}{
+		{
+			path:       "poll",
+			status:     http.StatusForbidden,
+			body:       `{"kind":"denied","reason":"unknown_vantage"}`,
+			wantKind:   "denied",
+			wantReason: "unknown_vantage",
+			wantError:  "authority poll: HTTP 403 (denied: unknown_vantage)",
+		},
+		{
+			path:      "result",
+			status:    http.StatusNotFound,
+			body:      `{"kind":"node_not_found"}`,
+			wantKind:  "node_not_found",
+			wantError: "authority result: HTTP 404 (node_not_found)",
+		},
+		{
+			path:      "cycle",
+			status:    http.StatusServiceUnavailable,
+			body:      "fleet temporarily unavailable",
+			wantError: "authority cycle: HTTP 503",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.path, func(t *testing.T) {
+			t.Parallel()
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+			a := agent{
+				key:       key,
+				authority: server.Client(),
+				config:    &networkconfig.Config{Authority: &account.Config{URL: server.URL}},
+			}
+			err := a.post(t.Context(), tc.path, pollDomain, map[string]int64{"at": 1}, nil)
+			var authorityErr *networkprobe.AuthorityError
+			if !errors.As(err, &authorityErr) {
+				t.Fatalf("error = %T (%v), want *networkprobe.AuthorityError", err, err)
+			}
+			if authorityErr.StatusCode != tc.status || authorityErr.Kind != tc.wantKind || authorityErr.Reason != tc.wantReason || err.Error() != tc.wantError {
+				t.Fatalf("error = %+v (%q), want status=%d kind=%q reason=%q err=%q",
+					authorityErr, err.Error(), tc.status, tc.wantKind, tc.wantReason, tc.wantError)
+			}
+		})
+	}
+}

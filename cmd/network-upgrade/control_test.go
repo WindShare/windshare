@@ -135,3 +135,68 @@ func TestParseRecoveryState(t *testing.T) {
 		}
 	}
 }
+
+func TestMaintenanceCallSurfacesAuthorityFaultJSONAndFallsBackOnPlainText(t *testing.T) {
+	t.Parallel()
+	const token = "test-maintenance-only-credential"
+	op := operation{NodeKey: "enrolled-key", ID: "runner-operation"}
+	cases := []struct {
+		action     string
+		status     int
+		body       string
+		wantKind   string
+		wantReason string
+		wantError  string
+	}{
+		{
+			action:     "drain",
+			status:     http.StatusConflict,
+			body:       `{"kind":"conflict","reason":"maintenance_in_progress"}`,
+			wantKind:   "conflict",
+			wantReason: "maintenance_in_progress",
+			wantError:  "authority drain: HTTP 409 (conflict: maintenance_in_progress)",
+		},
+		{
+			action:     "release",
+			status:     http.StatusConflict,
+			body:       `{"kind":"conflict","reason":"maintenance_owner"}`,
+			wantKind:   "conflict",
+			wantReason: "maintenance_owner",
+			wantError:  "authority release: HTTP 409 (conflict: maintenance_owner)",
+		},
+		{
+			action:     "status",
+			status:     http.StatusForbidden,
+			body:       `{"kind":"denied","reason":"maintenance_credential"}`,
+			wantKind:   "denied",
+			wantReason: "maintenance_credential",
+			wantError:  "authority status: HTTP 403 (denied: maintenance_credential)",
+		},
+		{
+			action:    "probe",
+			status:    http.StatusServiceUnavailable,
+			body:      "fleet temporarily unavailable",
+			wantError: "authority probe: HTTP 503",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.action, func(t *testing.T) {
+			t.Parallel()
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+			r := runner{authority: server.URL, api: server.Client(), token: token, op: op}
+			err := r.call(t.Context(), tc.action, op, nil)
+			var authorityErr *networkprobe.AuthorityError
+			if !errors.As(err, &authorityErr) {
+				t.Fatalf("error = %T (%v), want *networkprobe.AuthorityError", err, err)
+			}
+			if authorityErr.StatusCode != tc.status || authorityErr.Kind != tc.wantKind || authorityErr.Reason != tc.wantReason || err.Error() != tc.wantError {
+				t.Fatalf("error = %+v (%q), want status=%d kind=%q reason=%q err=%q",
+					authorityErr, err.Error(), tc.status, tc.wantKind, tc.wantReason, tc.wantError)
+			}
+		})
+	}
+}
