@@ -9,6 +9,7 @@ const OUTBOUND_TIMEOUT_MS = 10_000
 const AFDIAN_QUERY_ORDER_URL = 'https://afdian.com/api/open/query-order'
 const AFDIAN_QUERY_SPONSOR_URL = 'https://afdian.com/api/open/query-sponsor'
 const NOWPAYMENTS_INVOICE_URL = 'https://api.nowpayments.io/v1/invoice'
+const NOWPAYMENTS_HOST = 'nowpayments.io'
 // Afdian query-sponsor supports up to 100 entries per page, maximizing single-request cache hits for recent orders.
 const AFDIAN_SPONSOR_PAGE_SIZE = 100
 
@@ -175,11 +176,23 @@ export async function lookupAfdianSponsorName(input: {
   return { ok: true, displayName: fallback.sponsors.get(input.sponsorUserId) ?? null }
 }
 
-function isValidHttpsUrl(raw: unknown): raw is string {
+function isNowPaymentsHostname(hostname: string): boolean {
+  return hostname === NOWPAYMENTS_HOST || hostname.endsWith(`.${NOWPAYMENTS_HOST}`)
+}
+
+export function isValidNowPaymentsInvoiceUrl(raw: unknown): raw is string {
   if (typeof raw !== 'string') return false
   try {
     const parsed = new URL(raw)
-    return parsed.protocol === 'https:'
+    // Constrain upstream invoice links to NOWPayments HTTPS origins without embedded
+    // credentials or non-default ports so upstream anomalies cannot redirect donors elsewhere.
+    return (
+      parsed.protocol === 'https:'
+      && parsed.username === ''
+      && parsed.password === ''
+      && parsed.port === ''
+      && isNowPaymentsHostname(parsed.hostname)
+    )
   } catch {
     return false
   }
@@ -212,8 +225,8 @@ export async function createNowPaymentsInvoice(input: {
     return { ok: false, reason: 'invalid_invoice_response' }
   }
   const invoiceUrl = (result.json as Record<string, unknown>).invoice_url
-  if (!isValidHttpsUrl(invoiceUrl)) {
-    return { ok: false, reason: 'missing_invoice_url' }
+  if (!isValidNowPaymentsInvoiceUrl(invoiceUrl)) {
+    return { ok: false, reason: 'invalid_invoice_url' }
   }
   return { ok: true, invoiceUrl }
 }

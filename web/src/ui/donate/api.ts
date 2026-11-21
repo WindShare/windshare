@@ -3,6 +3,35 @@ import type { CryptoIntentRequest, CryptoIntentResponse, PublicWallResponse } fr
 
 const WALL_TIMEOUT_MS = 6_000
 const INTENT_TIMEOUT_MS = 10_000
+const INVALID_RESPONSE_ERROR_CODE = 'invalid_response'
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isValidCheckoutHttpsUrl(raw: unknown): raw is string {
+  if (typeof raw !== 'string') return false
+  try {
+    const parsed = new URL(raw)
+    // Require an absolute credential-free https: URL so malformed or compromised API
+    // responses cannot execute javascript: on the E2EE receiver origin or navigate to /undefined.
+    return (
+      parsed.protocol === 'https:'
+      && parsed.username === ''
+      && parsed.password === ''
+    )
+  } catch {
+    return false
+  }
+}
+
+export function parseCryptoIntentResponse(raw: unknown): CryptoIntentResponse | null {
+  if (!isRecord(raw)) return null
+  const { intentId, invoiceUrl } = raw
+  if (typeof intentId !== 'string' || intentId.trim().length === 0) return null
+  if (!isValidCheckoutHttpsUrl(invoiceUrl)) return null
+  return { intentId, invoiceUrl }
+}
 
 export interface WallFetchOptions {
   readonly cache?: RequestCache
@@ -66,15 +95,27 @@ export async function createCryptoIntent(
   payload: CryptoIntentRequest,
   signal?: AbortSignal,
 ): Promise<CryptoIntentResponse> {
+  const requestSignal = composeRequestSignal(INTENT_TIMEOUT_MS, signal)
   const response = await fetch(`${DONATE_API_ORIGIN}/v1/donations/crypto-intents`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
-    signal: composeRequestSignal(INTENT_TIMEOUT_MS, signal),
+    signal: requestSignal,
   })
   if (!response.ok) {
     const details = await readErrorDetails(response)
     throw new DonateApiError(response.status, details.code, details.retryAfterSeconds)
   }
-  return await response.json() as CryptoIntentResponse
+  let body: unknown
+  try {
+    body = await response.json()
+  } catch (error) {
+    if (requestSignal.aborted) throw error
+    throw new DonateApiError(response.status, INVALID_RESPONSE_ERROR_CODE, null)
+  }
+  const parsed = parseCryptoIntentResponse(body)
+  if (parsed === null) {
+    throw new DonateApiError(response.status, INVALID_RESPONSE_ERROR_CODE, null)
+  }
+  return parsed
 }

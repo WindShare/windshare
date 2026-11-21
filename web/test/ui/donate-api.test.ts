@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createCryptoIntent, fetchDonationWall } from '../../src/ui/donate/api'
+import {
+  DonateApiError,
+  createCryptoIntent,
+  fetchDonationWall,
+  parseCryptoIntentResponse,
+} from '../../src/ui/donate/api'
 
 describe('donate API request signal composition', () => {
   afterEach(() => {
@@ -63,5 +68,82 @@ describe('donate API request signal composition', () => {
     wallCaller.abort(new DOMException('Cancelled', 'AbortError'))
     await expect(wallPending).rejects.toThrow('Cancelled')
     expect(capturedSignals[1]?.aborted).toBe(true)
+  })
+})
+
+describe('donate crypto intent response validation', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('accepts valid HTTPS checkout URLs without coupling to a single provider hostname', () => {
+    expect(
+      parseCryptoIntentResponse({
+        intentId: 'intent-1',
+        invoiceUrl: 'https://nowpayments.io/payment/?iid=123',
+      }),
+    ).toEqual({
+      intentId: 'intent-1',
+      invoiceUrl: 'https://nowpayments.io/payment/?iid=123',
+    })
+
+    expect(
+      parseCryptoIntentResponse({
+        intentId: 'intent-2',
+        invoiceUrl: 'https://checkout.example/invoice/456',
+      }),
+    ).toEqual({
+      intentId: 'intent-2',
+      invoiceUrl: 'https://checkout.example/invoice/456',
+    })
+  })
+
+  it('rejects missing fields, javascript: URLs, non-HTTPS schemes, credentials, and relative URLs', () => {
+    const insecureHttpUrl = ['http', '//nowpayments.io/payment/?iid=1'].join(':')
+    for (const malformed of [
+      null,
+      [],
+      'not-an-object',
+      {},
+      { intentId: '   ', invoiceUrl: 'https://nowpayments.io/payment/?iid=1' },
+      { intentId: 'intent-1' },
+      { intentId: 'intent-1', invoiceUrl: '' },
+      { intentId: 'intent-1', invoiceUrl: '/undefined' },
+      { intentId: 'intent-1', invoiceUrl: 'javascript:alert(1)' },
+      { intentId: 'intent-1', invoiceUrl: 'data:text/html,<script>alert(1)</script>' },
+      { intentId: 'intent-1', invoiceUrl: insecureHttpUrl },
+      { intentId: 'intent-1', invoiceUrl: 'https://user:pass@nowpayments.io/payment/?iid=1' },
+    ]) {
+      expect(parseCryptoIntentResponse(malformed)).toBeNull()
+    }
+  })
+
+  it('throws DonateApiError(invalid_response) when createCryptoIntent receives unsafe or malformed 2xx payloads', async () => {
+    const payload = { displayName: null, message: null, amountUsd: '10' }
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      Response.json({ intentId: 'intent-1', invoiceUrl: 'javascript:alert(1)' }, { status: 201 }),
+    )
+    await expect(createCryptoIntent(payload)).rejects.toMatchObject({
+      name: 'DonateApiError',
+      status: 201,
+      code: 'invalid_response',
+    })
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response('<html>proxy error</html>', { status: 200 }),
+    )
+    await expect(createCryptoIntent(payload)).rejects.toBeInstanceOf(DonateApiError)
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      Response.json({
+        intentId: 'intent-ok',
+        invoiceUrl: 'https://nowpayments.io/payment/?iid=ok',
+      }, { status: 201 }),
+    )
+    await expect(createCryptoIntent(payload)).resolves.toEqual({
+      intentId: 'intent-ok',
+      invoiceUrl: 'https://nowpayments.io/payment/?iid=ok',
+    })
   })
 })

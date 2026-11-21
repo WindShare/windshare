@@ -27,6 +27,16 @@ export function logCryptoIntentCreated(fields: {
   })
 }
 
+export function logCryptoInvoiceFailed(fields: {
+  readonly intentId: string
+  readonly reason: string
+}): void {
+  emit('warn', 'donation.crypto_invoice_failed', {
+    intent_id: fields.intentId,
+    reason: fields.reason,
+  })
+}
+
 export function logWebhookReceived(fields: {
   readonly provider: DonationProvider
   readonly externalId: string

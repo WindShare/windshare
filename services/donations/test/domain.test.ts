@@ -17,6 +17,7 @@ import {
 } from '../src/model'
 import {
   createNowPaymentsInvoice,
+  isValidNowPaymentsInvoiceUrl,
   lookupAfdianSponsorName,
   queryAfdianOrders,
   type FetchLike,
@@ -441,6 +442,52 @@ describe('provider protocol signing, parsing, and outbound adapters', () => {
       fetchFn: redirectFetch,
     })
     expect(invoiceFail).toEqual({ ok: false, reason: 'unexpected_redirect_302' })
+  })
+
+  it('restricts NOWPayments invoice_url to credential-free HTTPS nowpayments.io origins', async () => {
+    expect(isValidNowPaymentsInvoiceUrl('https://nowpayments.io/payment/?iid=100')).toBe(true)
+    expect(isValidNowPaymentsInvoiceUrl('https://pay.nowpayments.io/payment/?iid=100')).toBe(true)
+    expect(isValidNowPaymentsInvoiceUrl('https://sandbox.nowpayments.io/payment/?iid=100')).toBe(true)
+    expect(isValidNowPaymentsInvoiceUrl('https://NOWPAYMENTS.IO:443/payment/?iid=100')).toBe(true)
+
+    const insecureHttpUrl = ['http', '//nowpayments.io/payment/?iid=100'].join(':')
+    for (const invalidUrl of [
+      insecureHttpUrl,
+      'javascript:alert(1)',
+      'https://phishing.example/payment/?iid=100',
+      'https://evil-nowpayments.io/payment/?iid=100',
+      'https://nowpayments.io.evil.example/payment/?iid=100',
+      'https://nowpayments.io@evil.example/payment/?iid=100',
+      'https://user:pass@nowpayments.io/payment/?iid=100',
+      'https://nowpayments.io:8443/payment/?iid=100',
+      '/payment/?iid=100',
+      '',
+      null,
+      undefined,
+    ]) {
+      expect(isValidNowPaymentsInvoiceUrl(invalidUrl)).toBe(false)
+    }
+
+    const baseInput = {
+      apiKey: 'secret-key',
+      priceAmountUsd: 10,
+      orderId: 'intent-2',
+      ipnCallbackUrl: 'https://donate.windshare.cc/v1/donations/webhooks/nowpayments',
+      successUrl: 'https://windshare.cc/donate?status=submitted',
+      cancelUrl: 'https://windshare.cc/donate',
+    }
+
+    const foreignHostRes = await createNowPaymentsInvoice({
+      ...baseInput,
+      fetchFn: async () => Response.json({ invoice_url: 'https://evil.example/pay' }),
+    })
+    expect(foreignHostRes).toEqual({ ok: false, reason: 'invalid_invoice_url' })
+
+    const validRes = await createNowPaymentsInvoice({
+      ...baseInput,
+      fetchFn: async () => Response.json({ invoice_url: 'https://nowpayments.io/payment/?iid=intent-2' }),
+    })
+    expect(validRes).toEqual({ ok: true, invoiceUrl: 'https://nowpayments.io/payment/?iid=intent-2' })
   })
 })
 

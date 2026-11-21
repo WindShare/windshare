@@ -11,7 +11,7 @@ import {
   parseJsonObject,
   readBoundedText,
 } from './http'
-import { logCryptoIntentCreated } from './log'
+import { logCryptoIntentCreated, logCryptoInvoiceFailed } from './log'
 import {
   MAX_DISPLAY_NAME_CODEPOINTS,
   MAX_MESSAGE_CODEPOINTS,
@@ -203,6 +203,10 @@ async function handleCreateCryptoIntent(
     fetchFn: deps.fetchFn,
   })
   if (!invoice.ok) {
+    logCryptoInvoiceFailed({
+      intentId: intent.intentId,
+      reason: invoice.reason,
+    })
     return jsonResponse({ error: 'upstream_checkout_failed' }, 502, cors)
   }
 
