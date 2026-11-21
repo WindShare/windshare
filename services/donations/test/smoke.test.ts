@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import {
   parseAllowedOrigins,
@@ -298,5 +299,61 @@ describe('donations worker scaffold', () => {
       invoiceUrl: 'https://nowpayments.io/payment/?iid=intent-ready-1',
     })
     expect(outboundCalls).toBe(1)
+  })
+
+  it('exposes Retry-After via CORS on rate-limited crypto intents without duplicating it in JSON error bodies', async () => {
+    const allowedOrigin = 'https://windshare.cc'
+    const apiOrigin = 'https://donate.windshare.cc'
+    const namespace = {
+      idFromName: (name: string) => ({ toString: () => name }),
+      get: () => ({
+        createCryptoIntent: async () => ({
+          ok: false as const,
+          code: 'rate_limited' as const,
+          retryAfterSeconds: 42,
+        }),
+        consumeAdminLoginRateLimit: async () => ({
+          allowed: false,
+          retryAfterSeconds: 17,
+        }),
+      }),
+    } as unknown as DurableObjectNamespace<DonationWallRpc>
+
+    const adminSecret = randomBytes(16).toString('hex')
+    const env: DonationsEnv = {
+      ...createStubEnv(),
+      DONATION_WALL: namespace,
+      NOWPAYMENTS_API_KEY: 'test-nowpayments-api-key',
+      NOWPAYMENTS_IPN_SECRET: 'test-nowpayments-ipn-secret',
+      DONATE_ADMIN_PASSWORD: adminSecret,
+    }
+
+    const cryptoRes = await handleWorkerFetch(
+      new Request(`${apiOrigin}/v1/donations/crypto-intents`, {
+        method: 'POST',
+        headers: { Origin: allowedOrigin, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amountUsd: '10' }),
+      }),
+      env,
+      { nowSec: () => 1_700_000_000 },
+    )
+    expect(cryptoRes.status).toBe(429)
+    expect(cryptoRes.headers.get('access-control-allow-origin')).toBe(allowedOrigin)
+    expect(cryptoRes.headers.get('retry-after')).toBe('42')
+    expect(cryptoRes.headers.get('access-control-expose-headers')).toBe('Retry-After')
+    expect(await cryptoRes.json()).toEqual({ error: 'rate_limited' })
+
+    const adminRes = await handleWorkerFetch(
+      new Request(`${apiOrigin}/v1/admin/login`, {
+        method: 'POST',
+        headers: { Origin: apiOrigin, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: adminSecret }),
+      }),
+      env,
+      { nowSec: () => 1_700_000_000 },
+    )
+    expect(adminRes.status).toBe(429)
+    expect(adminRes.headers.get('retry-after')).toBe('17')
+    expect(await adminRes.json()).toEqual({ error: 'rate_limited' })
   })
 })

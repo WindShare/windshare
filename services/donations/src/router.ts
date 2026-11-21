@@ -172,9 +172,14 @@ async function handleCreateCryptoIntent(
       return jsonResponse({ error: created.code }, 503, cors)
     }
     return jsonResponse(
-      { error: created.code, retryAfterSeconds: created.retryAfterSeconds },
+      { error: created.code },
       429,
-      { ...cors, 'Retry-After': String(created.retryAfterSeconds) },
+      {
+        ...cors,
+        'Retry-After': String(created.retryAfterSeconds),
+        // Retry-After is not CORS-safelisted; expose it explicitly so cross-origin clients can read it.
+        'Access-Control-Expose-Headers': 'Retry-After',
+      },
     )
   }
 

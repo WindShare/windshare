@@ -147,7 +147,7 @@ async function handleAdminLogin(
   if (!limit.allowed) {
     logAdminLogin({ ok: false, reason: 'rate_limited' })
     return adminJsonResponse(
-      { error: 'rate_limited', retryAfterSeconds: limit.retryAfterSeconds },
+      { error: 'rate_limited' },
       429,
       { 'Retry-After': String(limit.retryAfterSeconds) },
     )

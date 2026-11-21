@@ -230,4 +230,35 @@ describe('donate public wall response validation', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(Response.json(validWall, { status: 200 }))
     await expect(fetchDonationWall()).resolves.toEqual(validWall)
   })
+
+  it('extracts structured error codes on non-2xx responses and falls back to null on non-object bodies', async () => {
+    const payload = { displayName: null, message: null, amountUsd: '10' }
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      Response.json({ error: 'rate_limited' }, { status: 429, headers: { 'Retry-After': '42' } }),
+    )
+    await expect(createCryptoIntent(payload)).rejects.toMatchObject({
+      name: 'DonateApiError',
+      status: 429,
+      code: 'rate_limited',
+    })
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      Response.json(null, { status: 503 }),
+    )
+    await expect(fetchDonationWall()).rejects.toMatchObject({
+      name: 'DonateApiError',
+      status: 503,
+      code: null,
+    })
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response('upstream gateway error', { status: 502 }),
+    )
+    await expect(fetchDonationWall()).rejects.toMatchObject({
+      name: 'DonateApiError',
+      status: 502,
+      code: null,
+    })
+  })
 })
