@@ -84,21 +84,12 @@ pub(crate) fn reports(store: &impl Store, agents: &[Agent]) -> Result<Vec<Cycle>
     Ok(result)
 }
 
-pub(super) fn reset_evidence(store: &mut impl Store, node: &str, role: Option<Role>) -> Result<()> {
+pub(super) fn reset_evidence(store: &mut impl Store, node: &str, role: Role) -> Result<()> {
     for (key, raw) in store.scan("fleet-cycle/", None)? {
         let mut cycle: Cycle = serde_json::from_str(&raw)?;
-        let Some(sample) = cycle.nodes.get_mut(node) else {
-            continue;
-        };
-        let changed = match role {
-            Some(role) => sample.streak.remove(&role).is_some(),
-            None if !sample.streak.is_empty() => {
-                sample.streak.clear();
-                true
-            }
-            None => false,
-        };
-        if changed {
+        if let Some(sample) = cycle.nodes.get_mut(node)
+            && sample.streak.remove(&role).is_some()
+        {
             save(store, &key, &cycle)?;
         }
     }
@@ -134,7 +125,11 @@ impl<R: Store, E: Environment> Authority<R, E> {
         );
         let mut nodes = Vec::new();
         for (_, raw) in self.store.scan("node/", None)? {
-            if let Some(listing) = serde_json::from_str::<Node>(&raw)?.listing {
+            // Only listed nodes participate in periodic fleet monitoring; staging drafts
+            // have dedicated enrollment verification and disabled nodes are out of service.
+            if let Some(listing) = serde_json::from_str::<Node>(&raw)?.listing
+                && listing.status().is_some()
+            {
                 nodes.push(Target {
                     operation_id: listing.operation_id,
                     spec: listing.spec,
@@ -180,7 +175,9 @@ impl<R: Store, E: Environment> Authority<R, E> {
             let Some(listing) = node.listing else {
                 continue;
             };
-            if listing.operation_id != observation.operation_id {
+            // Ignore non-listed nodes rather than rejecting the whole cycle so concurrent
+            // disables stay harmless and staging drafts cannot accumulate failure streaks.
+            if listing.status().is_none() || listing.operation_id != observation.operation_id {
                 continue;
             }
             let old = previous

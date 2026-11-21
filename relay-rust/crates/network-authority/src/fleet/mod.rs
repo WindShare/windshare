@@ -269,32 +269,32 @@ impl<R: Store, E: Environment> Authority<R, E> {
         if listing.status() == Some(status) {
             return Ok(());
         }
-        let from_staging = match &listing.state {
+        let eligible = match &listing.state {
             ListingState::Staging {
                 check: Verification::Passed { at, vantage_key },
                 ..
-            } if now.saturating_sub(*at) <= EVIDENCE_SECONDS
-                && agents
-                    .iter()
-                    .any(|agent| agent.key == *vantage_key && agent.zone == listing.spec.zone) =>
-            {
-                true
+            } => {
+                now.saturating_sub(*at) <= EVIDENCE_SECONDS
+                    && agents
+                        .iter()
+                        .any(|agent| agent.key == *vantage_key && agent.zone == listing.spec.zone)
             }
             ListingState::Listed {
                 status: Status::Canary,
                 ..
-            } if status == Status::Active => false,
+            } => status == Status::Active,
             ListingState::Listed {
                 status: Status::Draining,
                 ..
-            } => false,
-            _ => {
-                return Err(Fault::Denied {
-                    reason: "verification_required".into(),
-                }
-                .into());
-            }
+            } => true,
+            _ => false,
         };
+        ensure!(
+            eligible,
+            Fault::Denied {
+                reason: "verification_required".into()
+            }
+        );
         ensure!(
             node.admission != operations::Admission::Disabled,
             Fault::Invalid
@@ -320,11 +320,6 @@ impl<R: Store, E: Environment> Authority<R, E> {
                     withdrawn: BTreeSet::new(),
                 };
             }
-        }
-        if from_staging {
-            // Fresh verification supersedes any failure streaks accumulated while staging
-            // under this operation_id so the next health pass starts from a clean slate.
-            monitoring::reset_evidence(&mut self.store, node_key, None)?;
         }
         tracing::info!(event="node_promoted",operation_id=%listing.operation_id,node_id=%node_key,?status);
         node.apply_listing()?;

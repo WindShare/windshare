@@ -502,5 +502,7 @@ fn vantage_liveness_tracks_authority_receipt_time_separately_from_poll_replay_cl
     assert!(!mainland_current(&auth.store, &agents, &expected, after_expiry).unwrap());
 }
 
+#[path = "monitoring_tests.rs"]
+mod monitoring;
 #[path = "operations_tests.rs"]
 mod operations;

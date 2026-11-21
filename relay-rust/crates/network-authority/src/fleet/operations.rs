@@ -239,7 +239,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
                 };
                 ensure!(listing.spec.roles.contains(&role), Fault::Invalid);
                 withdrawn.remove(&role);
-                super::monitoring::reset_evidence(&mut self.store, &cmd.node_key, Some(role))?;
+                super::monitoring::reset_evidence(&mut self.store, &cmd.node_key, role)?;
             }
         }
         node.apply_listing()?;
