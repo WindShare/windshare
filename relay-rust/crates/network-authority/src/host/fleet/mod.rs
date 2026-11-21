@@ -2,6 +2,7 @@ mod edge;
 mod maintenance;
 mod public_directory;
 mod public_dns;
+mod reconcile;
 use super::{
     NetworkAuthority, WorkerEnvironment, failure,
     passwords::{ForwardHeaders, call_do_json_with_headers},
@@ -9,7 +10,7 @@ use super::{
     storage::Database,
 };
 use crate::{
-    Authority, Environment, Fault, Store,
+    Authority, Environment, Fault,
     fleet::{
         publication::{self, KV_KEY, Publication, Publisher, Release},
         signature::Envelope,
@@ -21,14 +22,38 @@ use crate::{
 use anyhow::Result;
 pub(super) use edge::{handle_edge, handles_edge};
 pub(super) use public_directory::serve as public_directory;
+use reconcile::{DirectoryMirror, ReconcileMode};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use worker::{Env, Method, Request, Response, ScheduleContext, ScheduledEvent, event};
 const DIRECTORY_PATH: &str = "/.well-known/windshare-network";
 const MIRRORS: &str = "directory/mirrors";
-const DELIVERED: &str = "directory/kv-digest";
 const KV_PUBLISHED_HEADER: &str = "X-Directory-Published";
+// Cloudflare Workers KV enforces a 60 s minimum cache_ttl on reads.
+const KV_AUDIT_CACHE_SECONDS: u64 = 60;
 const EXPIRY_ALERT_SECONDS: u64 = 14 * 86400;
+
+struct KvMirror(worker::kv::KvStore);
+
+impl DirectoryMirror for KvMirror {
+    async fn read(&self) -> Result<Option<String>> {
+        self.0
+            .get(KV_KEY)
+            .cache_ttl(KV_AUDIT_CACHE_SECONDS)
+            .text()
+            .await
+            .map_err(|error| anyhow::anyhow!("{error}"))
+    }
+
+    async fn write(&self, body: &str) -> Result<()> {
+        self.0
+            .put(KV_KEY, body)
+            .map_err(|error| anyhow::anyhow!("{error}"))?
+            .execute()
+            .await
+            .map_err(|error| anyhow::anyhow!("{error}"))
+    }
+}
 fn release() -> Result<Release> {
     Release::bundled()
 }
@@ -175,11 +200,16 @@ impl NetworkAuthority {
             move |service, env| dispatch(service, env, &ctx, &bytes),
         );
         // A failed health or renewal transaction cannot strand the last committed head in SQLite.
+        let mode = if is_tick {
+            ReconcileMode::AuditKv
+        } else {
+            ReconcileMode::PendingOnly
+        };
         let published = if publish && (result.is_ok() || is_tick) {
-            match self.reconcile().await {
+            match self.reconcile(mode).await {
                 Ok(written) => written,
                 Err(error) => {
-                    tracing::warn!(event="directory_kv_retry_pending", %error);
+                    tracing::warn!(event="directory_kv_retry_pending", ?mode, %error);
                     false
                 }
             }
@@ -203,25 +233,13 @@ impl NetworkAuthority {
             ),
         }
     }
-    async fn reconcile(&self) -> worker::Result<bool> {
+    async fn reconcile(&self, mode: ReconcileMode) -> worker::Result<bool> {
         let _writer = self.publishing.lock().await;
         let mut db = Database::open(&self.state).map_err(failure)?;
-        let head = publication::current(&db).map_err(failure)?;
-        let digest = publication::digest(&head.envelope).map_err(failure)?;
-        let kv = self.env.kv("DIRECTORY")?;
-        let body = serde_json::to_string(&head.envelope)?;
-        // A namespace can be emptied or replaced independently of SQLite. Audit the
-        // delivery on the scheduled path so public reads never need the DO.
-        if db.get(DELIVERED).map_err(failure)?.as_deref() == Some(&digest)
-            && kv.get(KV_KEY).cache_ttl(60).text().await?.as_deref() == Some(body.as_str())
-        {
-            return Ok(false);
-        }
-        kv.put(KV_KEY, body)?.execute().await?;
-        db.put(DELIVERED, &digest).map_err(failure)?;
-        let revision = head.revision().map_err(failure)?;
-        tracing::info!(event="directory_kv_published", operation_id=%digest, generation=revision.generation, serial=revision.serial, revision=%digest);
-        Ok(true)
+        let mirror = KvMirror(self.env.kv("DIRECTORY")?);
+        reconcile::reconcile(&mut db, &mirror, mode)
+            .await
+            .map_err(failure)
     }
 }
 

@@ -79,6 +79,9 @@ mod host;
 #[cfg(target_arch = "wasm32")]
 pub use host::NetworkAuthority;
 #[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "host/fleet/reconcile.rs"]
+mod directory_reconcile;
+#[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "host/telemetry.rs"]
 mod telemetry;
 #[cfg(test)]
