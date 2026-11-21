@@ -41,13 +41,13 @@ CLI 和桌面按引擎结果显示节点是否启用、当前策略和分享域�
 
 首批官方节点上线时，运营者登记签名描述中的节点公钥，在节点配置 Authority 上报地址和受信签发者，再签发含这些 `relay` 节点的目录快照。候选客户端内置该快照、目录信任根及 Authority 地址和根公钥。用新安装的候选客户端完成一次账号中转传输，确认用量上报后，公开发布同一份快照和客户端。[节点接入](../../../relay-rust/crates/network-authority/README.md#enroll-and-publish) · [网络发布配置](../../../deploy/network/README.md)
 
-后台分别显示登记情况和最近上报时间，“已收录”以已发布签名目录中的节点公钥及版本为准。后台一键扩容留到 P3。仅对已知使用同一受信目录的接收页生成节点别名，其他接收页使用明确的中转地址。[P3 扩容流程](p3-console-onboarding-fleet-automation.md) · [分享链接生成](../../../engine/internal/networkruntime/resolve.go)
+后台分别显示登记情况和最近上报时间，“已收录”以已发布签名目录中的节点公钥及版本为准。后台一键扩容留到 P3。仅对已知使用同一受信目录的接收页生成节点别名，其他接收页使用明确的中转地址。[P3 扩容流程](../../plans/global-service/p3-console-onboarding-fleet-automation.md) · [分享链接生成](../../../engine/internal/networkruntime/resolve.go)
 
 ### 3. 原生节点复用网页授权，管理页随二进制交付
 
 原生端的主要工作在授权。现在 `wsrelay` 首次启动生成节点身份和本地 Owner key；Go 引擎读取签名描述后，把原生节点归为匿名或手工密钥两种路径。把**允许匿名分享**与**支持设备授权**拆成独立能力，在签名描述中发布管理入口，同步更新 Rust 描述生成端和 Go 消费端。公开节点的访客可以直接匿名使用，主人走设备配对获得自用优先级。再次添加同一地址时保留已领取的凭据。[节点身份](../../../relay-rust/crates/relay-native/src/node/identity.rs) · [签名描述](../../../relay-rust/crates/relay-native/src/node/descriptor.rs) · [引擎接入分支](../../../engine/relaysetup/workflow.go)
 
-给原生节点增加一次性管理员初始化、同源会话和管理路由。复用 `relay-access` 的设备授权状态机，用本地 SQLite 保存管理员、配对申请、设备凭据和撤销记录。手工配置的 key 也受同一撤销记录约束，配置重载或重启后撤销仍生效。引擎沿用现有申请、领取、安装确认及中断恢复流程，无人值守设备仍可手工配置密钥。社区发现和贡献额度沿用全局计划的 P4 安排。[授权状态机](../../../relay-rust/crates/relay-access/src/enrollment.rs) · [原生 HTTP 入口](../../../relay-rust/crates/relay-native/src/http/route.rs) · [社区节点计划](global-network.md#p4--community-nodes)
+给原生节点增加一次性管理员初始化、同源会话和管理路由。复用 `relay-access` 的设备授权状态机，用本地 SQLite 保存管理员、配对申请、设备凭据和撤销记录。手工配置的 key 也受同一撤销记录约束，配置重载或重启后撤销仍生效。引擎沿用现有申请、领取、安装确认及中断恢复流程，无人值守设备仍可手工配置密钥。社区发现和贡献额度沿用全局计划的 P4 安排。[授权状态机](../../../relay-rust/crates/relay-access/src/enrollment.rs) · [原生 HTTP 入口](../../../relay-rust/crates/relay-native/src/http/route.rs) · [社区节点计划](../../plans/global-service/global-network.md#p4--community-nodes)
 
 原生和 Cloudflare 节点复用同一套设备审批与凭据管理界面，各自签发和保存凭据。同一节点的主人设备共用 Owner 身份，每台设备的 key 可单独撤销。原生端在撤销前提示将停止该设备在本节点的现有中转，Cloudflare 保留“同时停止现有分享”选项。发给他人的服务 key 各有独立身份，导出配置只提供中转地址和 key。Cloudflare 沿用 Owner 密码、管理域名、`SHARES` 和 `ACCESS` 绑定，并提供 TURN 管理。原生部署模板允许所选接收网页的 Origin，使接收者能直接打开链接下载。[凭据生成](../../../relay-rust/crates/relay-cloudflare/src/platform/access/management.rs) · [原生浏览器来源策略](../../../relay-rust/crates/relay-native/src/http/origin.rs)
 
