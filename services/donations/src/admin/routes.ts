@@ -29,7 +29,7 @@ import {
 } from '../model'
 import { queryAfdianOrders } from '../providers'
 import { sanitizePlainText } from '../sanitize'
-import { constantTimeEqual, sha256Hex } from '../verify'
+import { constantTimeEqual, hmacSha256Hex } from '../verify'
 import {
   commitVerifiedAfdianOrder,
   donationExistsInWall,
@@ -39,6 +39,7 @@ import {
 const VISIBILITY_PATH_PREFIX = '/v1/admin/donations/'
 const VISIBILITY_PATH_SUFFIX = '/visibility'
 const AFDIAN_PAID_STATUS = 2
+const ADMIN_SESSION_HASH_DOMAIN = 'windshare-donations-admin-session:v1:'
 
 interface AuthenticatedSession extends AdminSessionRecord {
   readonly sessionHash: string
@@ -52,14 +53,21 @@ function buildSessionCookie(token: string, maxAgeSeconds: number): string {
   return `${ADMIN_COOKIE_NAME}=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${maxAgeSeconds}`
 }
 
+function deriveAdminSessionHash(adminPassword: string, token: string): string {
+  // Keying stored session hashes with the active admin password invalidates all existing
+  // sessions immediately upon secret rotation without persisting a password digest.
+  return hmacSha256Hex(adminPassword, `${ADMIN_SESSION_HASH_DOMAIN}${token}`)
+}
+
 async function authenticateAdmin(
   request: Request,
   env: DonationsEnv,
+  adminPassword: string,
   nowSec: number,
 ): Promise<AuthenticatedSession | null> {
   const token = parseCookie(request.headers.get('Cookie'), ADMIN_COOKIE_NAME)
   if (token === null) return null
-  const sessionHash = sha256Hex(token)
+  const sessionHash = deriveAdminSessionHash(adminPassword, token)
   const stub = getWallStub(env)
   const response = await stub.fetch('https://donation-wall.internal/internal/admin/sessions/verify', {
     method: 'POST',
@@ -108,13 +116,11 @@ async function handleAdminLogin(
   request: Request,
   env: DonationsEnv,
   url: URL,
+  adminPassword: string,
   deps: RuntimeDeps,
 ): Promise<Response> {
   if (!isSameOriginRequest(request, url.origin)) {
     return adminJsonResponse({ error: 'forbidden_origin' }, 403)
-  }
-  if (!env.DONATE_ADMIN_PASSWORD) {
-    return adminJsonResponse({ error: 'admin_not_configured' }, 503)
   }
 
   const parsedBody = await readAdminJsonBody(request)
@@ -139,14 +145,14 @@ async function handleAdminLogin(
     )
   }
 
-  if (password.length === 0 || !constantTimeEqual(password, env.DONATE_ADMIN_PASSWORD)) {
+  if (password.length === 0 || !constantTimeEqual(password, adminPassword)) {
     logAdminLogin({ ok: false, reason: 'invalid_password' })
     return adminJsonResponse({ error: 'invalid_credentials' }, 401)
   }
 
   const sessionToken = randomBytes(32).toString('base64url')
   const csrfToken = randomBytes(32).toString('base64url')
-  const sessionHash = sha256Hex(sessionToken)
+  const sessionHash = deriveAdminSessionHash(adminPassword, sessionToken)
   const createRes = await stub.fetch('https://donation-wall.internal/internal/admin/sessions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -394,14 +400,21 @@ export async function handleAdminApi(
   url: URL,
   deps: RuntimeDeps,
 ): Promise<Response> {
+  // Fail closed across every admin route when the shared secret is absent or deleted so
+  // existing cookies cannot survive disabling admin access.
+  const adminPassword = env.DONATE_ADMIN_PASSWORD
+  if (!adminPassword) {
+    return adminJsonResponse({ error: 'admin_not_configured' }, 503)
+  }
+
   const { method } = request
   const { pathname } = url
 
   if (method === 'POST' && pathname === '/v1/admin/login') {
-    return handleAdminLogin(request, env, url, deps)
+    return handleAdminLogin(request, env, url, adminPassword, deps)
   }
 
-  const session = await authenticateAdmin(request, env, deps.nowSec())
+  const session = await authenticateAdmin(request, env, adminPassword, deps.nowSec())
   if (session === null) {
     return adminJsonResponse({ error: 'unauthorized' }, 401)
   }

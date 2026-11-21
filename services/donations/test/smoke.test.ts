@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { parseAllowedOrigins, type DonationsEnv } from '../src/env'
 import { handleWorkerFetch } from '../src/router'
 import { parseFixedPointAmount, sanitizePlainText } from '../src/sanitize'
-import { constantTimeEqual, hmacSha512Hex, md5Hex } from '../src/verify'
+import { constantTimeEqual, hmacSha256Hex, hmacSha512Hex, md5Hex } from '../src/verify'
 
 function createStubEnv(): DonationsEnv {
   const namespace = {
@@ -71,6 +71,7 @@ describe('donations worker scaffold', () => {
     // RFC 1321 canonical MD5 test vectors.
     expect(md5Hex('')).toBe('d41d8cd98f00b204e9800998ecf8427e')
     expect(md5Hex('abc')).toBe('900150983cd24fb0d6963f7d28e17f72')
+    expect(hmacSha256Hex('key', 'payload')).toMatch(/^[0-9a-f]{64}$/)
     expect(hmacSha512Hex('key', 'payload')).toMatch(/^[0-9a-f]{128}$/)
   })
 

@@ -1,5 +1,7 @@
+import { randomBytes } from 'node:crypto'
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { describe, expect, it } from 'vitest'
+import type { DonationsEnv } from '../src/env'
 import {
   MIN_PUBLIC_CNY_MINOR,
   MIN_PUBLIC_USD_MINOR,
@@ -17,6 +19,7 @@ import {
   queryAfdianOrders,
   type FetchLike,
 } from '../src/providers'
+import { handleWorkerFetch } from '../src/router'
 import {
   containsContactPii,
   containsExternalUrl,
@@ -578,5 +581,135 @@ describe('WallStore SQLite persistence, caching, rate limiting, and pagination',
     store.createAdminSession({ sessionHash: 'hash-old', csrfToken: 'csrf-old', nowSec: now })
     expect(store.verifyAdminSession('hash-old', now + 10)?.csrfToken).toBe('csrf-old')
     expect(store.verifyAdminSession('hash-old', now + 12 * 3600)).toBeNull()
+  })
+
+  it('invalidates existing admin sessions immediately when DONATE_ADMIN_PASSWORD is rotated or deleted', async () => {
+    const store = createInMemoryWallStore()
+    const now = 1_700_000_000
+    const origin = 'https://donate.windshare.cc'
+    let doCalls = 0
+
+    const dispatchInternal = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      doCalls += 1
+      const req = input instanceof Request ? input : new Request(input, init)
+      const pathname = new URL(req.url).pathname
+      if (pathname === '/internal/admin/rate-limit') {
+        const body = await req.json() as { clientIp: string; nowSec: number }
+        const decision = store.consumeDualRateLimit('admin_login', body.clientIp, body.nowSec)
+        return Response.json(decision, { status: decision.allowed ? 200 : 429 })
+      }
+      if (pathname === '/internal/admin/sessions') {
+        const body = await req.json() as { sessionHash: string; csrfToken: string; nowSec: number }
+        return Response.json(store.createAdminSession(body), { status: 201 })
+      }
+      if (pathname === '/internal/admin/sessions/verify') {
+        const body = await req.json() as { sessionHash: string; nowSec: number }
+        const session = store.verifyAdminSession(body.sessionHash, body.nowSec)
+        return session === null
+          ? Response.json({ valid: false }, { status: 401 })
+          : Response.json({ valid: true, ...session }, { status: 200 })
+      }
+      if (pathname === '/internal/admin/config') {
+        return Response.json({ config: store.getConfig() }, { status: 200 })
+      }
+      if (pathname === '/internal/admin/donations') {
+        return Response.json(store.listAdminDonations(null), { status: 200 })
+      }
+      return Response.json({ error: 'not_found' }, { status: 404 })
+    }
+
+    const wallNamespace = {
+      idFromName: (name: string) => ({ toString: () => name }),
+      get: () => ({ fetch: dispatchInternal }),
+    } as unknown as DurableObjectNamespace
+
+    const createEnv = (adminSecret?: string): DonationsEnv => ({
+      DONATION_WALL: wallNamespace,
+      AFDIAN_USER_ID: 'creator',
+      KOFI_HANDLE: 'windshare',
+      ALLOWED_ORIGINS: 'https://windshare.cc',
+      DONATE_API_ORIGIN: origin,
+      ...(adminSecret === undefined ? {} : { DONATE_ADMIN_PASSWORD: adminSecret }),
+    })
+
+    const loginWith = async (env: DonationsEnv, credential: string): Promise<Response> => handleWorkerFetch(
+      new Request(`${origin}/v1/admin/login`, {
+        method: 'POST',
+        headers: {
+          Origin: origin,
+          'Content-Type': 'application/json',
+          'CF-Connecting-IP': '198.51.100.42',
+        },
+        body: JSON.stringify({ password: credential }),
+      }),
+      env,
+      { nowSec: () => now },
+    )
+
+    const initialSecret = randomBytes(16).toString('hex')
+    const rotatedSecret = randomBytes(16).toString('hex')
+    const initialEnv = createEnv(initialSecret)
+
+    const loginV1 = await loginWith(initialEnv, initialSecret)
+    expect(loginV1.status).toBe(200)
+    const cookieV1 = (loginV1.headers.get('set-cookie') ?? '').split(';', 1)[0] ?? ''
+    expect(cookieV1).toContain('windshare_donate_admin=')
+
+    const sessionBeforeRotate = await handleWorkerFetch(
+      new Request(`${origin}/v1/admin/session`, { headers: { Cookie: cookieV1 } }),
+      initialEnv,
+      { nowSec: () => now + 60 },
+    )
+    expect(sessionBeforeRotate.status).toBe(200)
+
+    // Rotating the secret invalidates existing cookies immediately without DB migration.
+    const rotatedEnv = createEnv(rotatedSecret)
+    const staleSession = await handleWorkerFetch(
+      new Request(`${origin}/v1/admin/session`, { headers: { Cookie: cookieV1 } }),
+      rotatedEnv,
+      { nowSec: () => now + 60 },
+    )
+    expect(staleSession.status).toBe(401)
+
+    const staleDonations = await handleWorkerFetch(
+      new Request(`${origin}/v1/admin/donations`, { headers: { Cookie: cookieV1 } }),
+      rotatedEnv,
+      { nowSec: () => now + 60 },
+    )
+    expect(staleDonations.status).toBe(401)
+
+    const loginV2 = await loginWith(rotatedEnv, rotatedSecret)
+    expect(loginV2.status).toBe(200)
+    const cookieV2 = (loginV2.headers.get('set-cookie') ?? '').split(';', 1)[0] ?? ''
+
+    const freshSession = await handleWorkerFetch(
+      new Request(`${origin}/v1/admin/session`, { headers: { Cookie: cookieV2 } }),
+      rotatedEnv,
+      { nowSec: () => now + 60 },
+    )
+    expect(freshSession.status).toBe(200)
+
+    // Deleting or blanking the secret fails closed across all admin routes before any DO call.
+    for (const disabledEnv of [createEnv(undefined), createEnv('')]) {
+      const callsBefore = doCalls
+      const disabledSession = await handleWorkerFetch(
+        new Request(`${origin}/v1/admin/session`, { headers: { Cookie: cookieV2 } }),
+        disabledEnv,
+        { nowSec: () => now + 60 },
+      )
+      expect(disabledSession.status).toBe(503)
+      expect(await disabledSession.json()).toEqual({ error: 'admin_not_configured' })
+
+      const disabledDonations = await handleWorkerFetch(
+        new Request(`${origin}/v1/admin/donations`, { headers: { Cookie: cookieV2 } }),
+        disabledEnv,
+        { nowSec: () => now + 60 },
+      )
+      expect(disabledDonations.status).toBe(503)
+
+      const disabledLogin = await loginWith(disabledEnv, rotatedSecret)
+      expect(disabledLogin.status).toBe(503)
+      expect(doCalls).toBe(callsBefore)
+    }
   })
 })
