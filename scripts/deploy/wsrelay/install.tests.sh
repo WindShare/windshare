@@ -16,9 +16,15 @@ make_fake_wsrelay() {
     local target=$1
     cat >"$target" <<'EOF'
 #!/usr/bin/env bash
+if [[ -n ${FAKE_WSRELAY_LOG:-} ]]; then
+    printf '%s\n' "$0 $*" >>"$FAKE_WSRELAY_LOG"
+fi
 case "${1:-}" in
     --help) echo "Usage: wsrelay --enter-maintenance <config> <node_key> <operation> <policy_version> <reconnect_budget_ms>" ;;
-    --check-config|--check-hold|--enter-maintenance|--release-maintenance) exit 0 ;;
+    --check-config) exit "${FAKE_WSRELAY_CHECK_CONFIG_EXIT:-0}" ;;
+    --check-hold) exit "${FAKE_WSRELAY_CHECK_HOLD_EXIT:-0}" ;;
+    --enter-maintenance) exit "${FAKE_WSRELAY_ENTER_EXIT:-0}" ;;
+    --release-maintenance) exit "${FAKE_WSRELAY_RELEASE_EXIT:-0}" ;;
     *) exit 1 ;;
 esac
 EOF
@@ -48,7 +54,7 @@ prepare_harness() {
 
     cat >"$bin_dir/id" <<EOF
 #!/usr/bin/env bash
-if [[ \${1:-} == -u ]]; then echo 0; exit 0; fi
+if [[ \${1:-} == -u ]]; then echo "\${FAKE_UID:-0}"; exit 0; fi
 exec "$real_id" "\$@"
 EOF
     case "$(uname -s)" in
@@ -289,7 +295,192 @@ EOF
     printf 'PASS: symlinked root and releases stay canonical across stage/switch/inspect/rollback\n'
 )
 
+run_case_enter_switch_release_lifecycle_and_guards() (
+    local tmp
+    tmp=$(mktemp -d)
+    trap 'rm -rf -- "$tmp"' EXIT
+
+    local root_path="$tmp/opt/windshare-network"
+    prepare_harness "$tmp" "$root_path"
+    mkdir -p "$root_path/releases/$rev_a"
+    make_fake_wsrelay "$root_path/releases/$rev_a/wsrelay"
+    ln -sfn -- "$root_path/releases/$rev_a" "$root_path/current"
+    make_fake_wsrelay "$tmp/candidate-bin"
+    printf '# candidate-b\n' >>"$tmp/candidate-bin"
+
+    local canonical_a canonical_b sha_b
+    canonical_a=$(realpath -e "$root_path/releases/$rev_a")
+    canonical_b="$(realpath -e "$root_path/releases")/$rev_b"
+    sha_b=$(sha256sum "$tmp/candidate-bin" | awk '{print $1}')
+
+    printf 'inv-1\n' >"$tmp/mock/current_invocation"
+    printf '101\n' >"$tmp/mock/current_pid"
+    printf '%s/wsrelay\n' "$canonical_a" >"$tmp/mock/proc/101.exe"
+    printf 'inv_first|inv-2|202|%s/wsrelay\n' "$canonical_b" >"$tmp/mock/polls"
+
+    local op="op-full-lifecycle-01"
+    local log="$tmp/wsrelay.log"
+    FAKE_WSRELAY_LOG="$log" PATH="$tmp/bin:$PATH" \
+        "$tmp/install.sh" stage "$op" "$node_key" "$rev_b" "$sha_b" <"$tmp/candidate-bin"
+
+    # Active sessions defer enter with exit code 75 without mutating the current symlink.
+    local status=0
+    FAKE_WSRELAY_LOG="$log" FAKE_WSRELAY_ENTER_EXIT=75 PATH="$tmp/bin:$PATH" \
+        "$tmp/install.sh" enter "$op" "$node_key" 7 58000 || status=$?
+    [[ $status == 75 ]] || fail "expected busy exit 75 from enter, got $status"
+
+    FAKE_WSRELAY_LOG="$log" PATH="$tmp/bin:$PATH" "$tmp/install.sh" enter "$op" "$node_key" 7 58000
+    grep -Fxq "$canonical_a/wsrelay --enter-maintenance $tmp/node.json $node_key $op 7 58000" "$log" \
+        || fail "enter did not forward expected maintenance args: $(cat "$log")"
+
+    FAKE_WSRELAY_LOG="$log" PATH="$tmp/bin:$PATH" "$tmp/install.sh" switch "$op" "$node_key"
+    grep -Fxq "$canonical_a/wsrelay --check-hold $tmp/node.json $node_key $op" "$log" \
+        || fail "switch did not check durable maintenance hold"
+
+    FAKE_WSRELAY_LOG="$log" PATH="$tmp/bin:$PATH" "$tmp/install.sh" inspect "$op" "$node_key"
+    FAKE_WSRELAY_LOG="$log" PATH="$tmp/bin:$PATH" "$tmp/install.sh" release "$op" "$node_key"
+    grep -Fxq "$canonical_a/wsrelay --release-maintenance $tmp/node.json $node_key $op" "$log" \
+        || fail "release did not clear durable maintenance hold"
+    [[ -e "$root_path/operations/$op/released" ]] || fail "release did not record released marker"
+
+    # Re-entering after release must fail even if current is moved back to previous.
+    ln -sfn -- "$canonical_a" "$root_path/current"
+    local output
+    status=0
+    output=$(PATH="$tmp/bin:$PATH" "$tmp/install.sh" enter "$op" "$node_key" 7 58000 2>&1) || status=$?
+    [[ $status != 0 && $output == *"operation already released"* ]] || fail "unexpected re-enter result: $status $output"
+
+    # Staging a fresh op and switching current out from under it must block enter.
+    local op2="op-moved-current-01"
+    PATH="$tmp/bin:$PATH" "$tmp/install.sh" stage "$op2" "$node_key" "$rev_b" "$sha_b" <"$tmp/candidate-bin"
+    ln -sfn -- "$canonical_b" "$root_path/current"
+    status=0
+    output=$(PATH="$tmp/bin:$PATH" "$tmp/install.sh" enter "$op2" "$node_key" 8 58000 2>&1) || status=$?
+    [[ $status != 0 && $output == *"release changed after staging"* ]] || fail "unexpected moved-current enter result: $status $output"
+    printf 'PASS: enter/switch/inspect/release lifecycle, args, exit 75, and guards\n'
+)
+
+run_case_stage_validation_collisions_and_cleanup() (
+    local tmp
+    tmp=$(mktemp -d)
+    trap 'rm -rf -- "$tmp"' EXIT
+
+    local root_path="$tmp/opt/windshare-network"
+    prepare_harness "$tmp" "$root_path"
+    mkdir -p "$root_path/releases/$rev_a"
+    make_fake_wsrelay "$root_path/releases/$rev_a/wsrelay"
+    ln -sfn -- "$root_path/releases/$rev_a" "$root_path/current"
+    make_fake_wsrelay "$tmp/candidate-b"
+    printf '# candidate-b\n' >>"$tmp/candidate-b"
+    make_fake_wsrelay "$tmp/candidate-b2"
+    printf '# candidate-b-modified\n' >>"$tmp/candidate-b2"
+
+    local rev_c="3333333333333333333333333333333333333333"
+    local sha_b sha_b2 bad_sha
+    sha_b=$(sha256sum "$tmp/candidate-b" | awk '{print $1}')
+    sha_b2=$(sha256sum "$tmp/candidate-b2" | awk '{print $1}')
+    bad_sha="0000000000000000000000000000000000000000000000000000000000000000"
+
+    local status=0 output
+    output=$(PATH="$tmp/bin:$PATH" "$tmp/install.sh" stage "op-bad-checksum-01" "$node_key" "$rev_b" "$bad_sha" <"$tmp/candidate-b" 2>&1) || status=$?
+    [[ $status != 0 && $output == *"checksum mismatch"* ]] || fail "expected checksum mismatch: $status $output"
+    [[ -z $(find "$root_path/releases" -maxdepth 1 -name '.stage-*') ]] || fail "checksum failure leaked temp stage dir"
+
+    # Candidate lacking reconnect_budget_ms in --help is rejected and cleaned up.
+    cat >"$tmp/legacy-bin" <<'EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+    --help) echo "Usage: wsrelay --config <node.json>" ;;
+    --check-config) exit 0 ;;
+    *) exit 1 ;;
+esac
+EOF
+    chmod 0755 "$tmp/legacy-bin"
+    local sha_legacy
+    sha_legacy=$(sha256sum "$tmp/legacy-bin" | awk '{print $1}')
+    status=0
+    output=$(PATH="$tmp/bin:$PATH" "$tmp/install.sh" stage "op-legacy-proto-01" "$node_key" "$rev_b" "$sha_legacy" <"$tmp/legacy-bin" 2>&1) || status=$?
+    [[ $status != 0 && $output == *"incompatible maintenance protocol"* ]] || fail "expected protocol mismatch: $status $output"
+    [[ -z $(find "$root_path/releases" -maxdepth 1 -name '.stage-*') ]] || fail "protocol failure leaked temp stage dir"
+
+    # Valid stage is idempotent on retry, rejects different bytes for the same revision, and rejects operation reuse.
+    local op="op-stage-collision-01"
+    PATH="$tmp/bin:$PATH" "$tmp/install.sh" stage "$op" "$node_key" "$rev_b" "$sha_b" <"$tmp/candidate-b"
+    PATH="$tmp/bin:$PATH" "$tmp/install.sh" stage "$op" "$node_key" "$rev_b" "$sha_b" <"$tmp/candidate-b"
+
+    status=0
+    output=$(PATH="$tmp/bin:$PATH" "$tmp/install.sh" stage "op-rev-collision-01" "$node_key" "$rev_b" "$sha_b2" <"$tmp/candidate-b2" 2>&1) || status=$?
+    [[ $status != 0 && $output == *"revision collision"* ]] || fail "expected revision collision: $status $output"
+
+    status=0
+    output=$(PATH="$tmp/bin:$PATH" "$tmp/install.sh" stage "$op" "$node_key" "$rev_c" "$sha_b2" <"$tmp/candidate-b2" 2>&1) || status=$?
+    [[ $status != 0 && $output == *"operation collision"* ]] || fail "expected operation collision: $status $output"
+    printf 'PASS: stage checksum, protocol, idempotency, collisions, and temp cleanup\n'
+)
+
+run_case_auth_hold_inspect_and_lock_guards() (
+    local tmp
+    tmp=$(mktemp -d)
+    trap 'rm -rf -- "$tmp"' EXIT
+
+    local root_path="$tmp/opt/windshare-network"
+    prepare_harness "$tmp" "$root_path"
+    mkdir -p "$root_path/releases/$rev_a" "$root_path/releases/3333333333333333333333333333333333333333"
+    make_fake_wsrelay "$root_path/releases/$rev_a/wsrelay"
+    make_fake_wsrelay "$root_path/releases/3333333333333333333333333333333333333333/wsrelay"
+    ln -sfn -- "$root_path/releases/$rev_a" "$root_path/current"
+    make_fake_wsrelay "$tmp/candidate-b"
+    printf '# candidate-b\n' >>"$tmp/candidate-b"
+
+    local canonical_a sha_b
+    canonical_a=$(realpath -e "$root_path/releases/$rev_a")
+    sha_b=$(sha256sum "$tmp/candidate-b" | awk '{print $1}')
+
+    local status=0 output
+    output=$(FAKE_UID=1000 PATH="$tmp/bin:$PATH" "$tmp/install.sh" inspect "op-nonroot-check-01" "$node_key" 2>&1) || status=$?
+    [[ $status != 0 && $output == *"root required"* ]] || fail "expected root required: $status $output"
+
+    status=0
+    output=$(PATH="$tmp/bin:$PATH" "$tmp/install.sh" inspect "short" "$node_key" 2>&1) || status=$?
+    [[ $status != 0 && $output == *"invalid operation or node key"* ]] || fail "expected invalid op error: $status $output"
+
+    local op="op-hold-and-inspect-01"
+    PATH="$tmp/bin:$PATH" "$tmp/install.sh" stage "$op" "$node_key" "$rev_b" "$sha_b" <"$tmp/candidate-b"
+
+    # Failing --check-hold must abort before changing current or restarting systemd.
+    status=0
+    FAKE_WSRELAY_CHECK_HOLD_EXIT=1 PATH="$tmp/bin:$PATH" "$tmp/install.sh" switch "$op" "$node_key" 2>/dev/null || status=$?
+    [[ $status != 0 ]] || fail "switch succeeded despite failed hold check"
+    [[ $(realpath -e "$root_path/current") == "$canonical_a" ]] || fail "switch mutated current after failed hold check"
+    [[ ! -e "$tmp/mock/systemctl.log" ]] || fail "switch invoked systemctl after failed hold check"
+
+    # inspect rejects mismatched running binary and unexpected current revision.
+    printf '101\n' >"$tmp/mock/current_pid"
+    printf '/some/other/wsrelay\n' >"$tmp/mock/proc/101.exe"
+    status=0
+    output=$(PATH="$tmp/bin:$PATH" "$tmp/install.sh" inspect "$op" "$node_key" 2>&1) || status=$?
+    [[ $status != 0 && $output == *"selected release is not running"* ]] || fail "expected exe mismatch: $status $output"
+
+    ln -sfn -- "$root_path/releases/3333333333333333333333333333333333333333" "$root_path/current"
+    status=0
+    output=$(PATH="$tmp/bin:$PATH" "$tmp/install.sh" inspect "$op" "$node_key" 2>&1) || status=$?
+    [[ $status != 0 && $output == *"unexpected running revision"* ]] || fail "expected unexpected revision: $status $output"
+
+    # Concurrent invocation while .lock is held exits with busy code 75.
+    (
+        exec 8>"$root_path/operations/.lock"
+        flock 8
+        status=0
+        PATH="$tmp/bin:$PATH" "$tmp/install.sh" inspect "$op" "$node_key" 8>&- 2>/dev/null || status=$?
+        [[ $status == 75 ]] || fail "expected lock contention exit 75, got $status"
+    )
+    printf 'PASS: auth, check-hold, inspect mismatch, and lock contention guards\n'
+)
+
 run_case_same_binary_waits_for_fresh_invocation
 run_case_rollback_fails_when_invocation_never_advances
 run_case_empty_old_invocation_requires_non_empty_new_invocation
 run_case_symlinked_root_and_releases_canonicalized
+run_case_enter_switch_release_lifecycle_and_guards
+run_case_stage_validation_collisions_and_cleanup
+run_case_auth_hold_inspect_and_lock_guards

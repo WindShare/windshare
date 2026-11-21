@@ -82,7 +82,7 @@ jobs:
         working-directory: relay-rust/crates/network-authority
         run: |
           worker-build --dev --locked
-          node --test tests/mail.test.mjs tests/registration-email.test.mjs tests/password-edge.test.mjs tests/worker.mjs
+          node --test tests/mail.test.mjs tests/registration-email.test.mjs tests/password-edge.test.mjs tests/fleet-edge.test.mjs tests/worker.mjs
 
   deploy:
     needs: console
