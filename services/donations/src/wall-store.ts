@@ -206,6 +206,15 @@ export function decodeAdminCursor(
   return { donatedAt, id }
 }
 
+function normalizeAdminPageLimit(rawLimit?: number | null): number {
+  // Guard SQLite's integer LIMIT invariant here so fractional, NaN, or unsafe-integer
+  // inputs from any caller cannot trigger SQLITE_MISMATCH.
+  const candidate = rawLimit !== null && rawLimit !== undefined && Number.isSafeInteger(rawLimit)
+    ? rawLimit
+    : DEFAULT_ADMIN_PAGE_LIMIT
+  return Math.min(MAX_ADMIN_PAGE_LIMIT, Math.max(1, candidate))
+}
+
 function evaluateBucket(
   row: Record<string, unknown> | null,
   policy: BucketPolicy,
@@ -612,10 +621,7 @@ export class WallStore {
   }
 
   listAdminDonations(afterCursor: string | null, rawLimit?: number | null): AdminDonationsPage {
-    const limit = Math.min(
-      MAX_ADMIN_PAGE_LIMIT,
-      Math.max(1, rawLimit ?? DEFAULT_ADMIN_PAGE_LIMIT),
-    )
+    const limit = normalizeAdminPageLimit(rawLimit)
     const cursor = decodeAdminCursor(afterCursor)
     const rows = cursor === null
       ? this.sql.exec(

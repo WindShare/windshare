@@ -53,14 +53,19 @@ const AFDIAN_SYNC_PER_PAGE = 50
 const MAX_AFDIAN_SYNC_SPONSOR_LOOKUPS = 40
 const AFDIAN_RATE_LIMIT_REASON = 'http_429'
 const ADMIN_SESSION_HASH_DOMAIN = 'windshare-donations-admin-session:v1:'
+const DECIMAL_INT_PATTERN = /^-?\d+$/
 
 interface AuthenticatedSession extends AdminSessionRecord {
   readonly sessionHash: string
 }
 
 function parseOptionalIntParam(raw: string | null): number | null {
-  if (raw === null || raw.trim().length === 0) return null
-  const parsed = Number(raw)
+  if (raw === null) return null
+  const trimmed = raw.trim()
+  // Require base-10 integer syntax so hex (0x10), scientific notation (1e0), and decimal
+  // floats (1.0 / 1.5) all fall back consistently rather than relying on Number() coercions.
+  if (!DECIMAL_INT_PATTERN.test(trimmed)) return null
+  const parsed = Number(trimmed)
   return Number.isSafeInteger(parsed) ? parsed : null
 }
 

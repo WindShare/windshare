@@ -936,6 +936,79 @@ describe('WallStore rate-limit eviction indexing', () => {
   })
 })
 
+describe('admin donations page limit normalization', () => {
+  it('guards SQLite LIMIT against fractional/non-safe numbers and non-decimal query params', async () => {
+    const store = createInMemoryWallStore()
+    const now = 1_700_000_000
+    for (let i = 1; i <= 3; i += 1) {
+      store.commitDonation({
+        provider: 'kofi',
+        externalId: `lim-${i}`,
+        displayName: `Donor ${i}`,
+        amountMinor: 500,
+        currency: 'USD',
+        minorDigits: 2,
+        message: null,
+        isPublic: true,
+        donatedAt: now + i,
+      }, now + i)
+    }
+
+    for (const invalidLimit of [1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(store.listAdminDonations(null, invalidLimit).items).toHaveLength(3)
+    }
+    expect(store.listAdminDonations(null, 0).items).toHaveLength(1)
+    expect(store.listAdminDonations(null, -5).items).toHaveLength(1)
+    expect(store.listAdminDonations(null, 2).items).toHaveLength(2)
+
+    const origin = 'https://donate.windshare.cc'
+    const adminPassword = randomBytes(16).toString('hex')
+    const env: DonationsEnv = {
+      DONATION_WALL: createWallNamespaceFromStore(store),
+      AFDIAN_USER_ID: 'creator',
+      KOFI_HANDLE: 'windshare',
+      ALLOWED_ORIGINS: 'https://windshare.cc',
+      DONATE_API_ORIGIN: origin,
+      DONATE_ADMIN_PASSWORD: adminPassword,
+    }
+    const loginRes = await handleWorkerFetch(
+      new Request(`${origin}/v1/admin/login`, {
+        method: 'POST',
+        headers: { Origin: origin, 'Content-Type': 'application/json', 'CF-Connecting-IP': '198.51.100.88' },
+        body: JSON.stringify({ password: adminPassword }),
+      }),
+      env,
+      { nowSec: () => now },
+    )
+    expect(loginRes.status).toBe(200)
+    const cookie = (loginRes.headers.get('set-cookie') ?? '').split(';', 1)[0] ?? ''
+
+    const fetchPage = async (query: string) => {
+      const res = await handleWorkerFetch(
+        new Request(`${origin}/v1/admin/donations?${query}`, { headers: { Cookie: cookie } }),
+        env,
+        { nowSec: () => now + 10 },
+      )
+      expect(res.status).toBe(200)
+      return res.json() as Promise<{ items: DonationRecord[]; nextCursor: string | null }>
+    }
+
+    for (const query of ['limit=1.5', 'limit=1.0', 'limit=', 'limit=%20', 'limit=0x2', 'limit=1e0', 'limit=abc', 'limit=9007199254740992']) {
+      const page = await fetchPage(query)
+      expect(page.items).toHaveLength(3)
+      expect(page.nextCursor).toBeNull()
+    }
+
+    const bounded = await fetchPage('limit=2')
+    expect(bounded.items).toHaveLength(2)
+    expect(bounded.nextCursor).not.toBeNull()
+
+    const clamped = await fetchPage('limit=-5')
+    expect(clamped.items).toHaveLength(1)
+    expect(clamped.nextCursor).not.toBeNull()
+  })
+})
+
 function createSyncHarness() {
   const store = createInMemoryWallStore()
   const origin = 'https://donate.windshare.cc'
