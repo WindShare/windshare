@@ -2,7 +2,7 @@ import { message, type Message } from '../ui/locale'
 import { networkCopy } from './locales'
 import { request, RequestError, type FaultMessage } from '../ui/request'
 import { decode, encode } from './identity'
-import type { AccountDetails, AccountPage, AccountSummary, Discovery, Enrollment, TrafficStatus, MilestoneReview, NodeDetails, NodePage, FleetAction, PolicyChange, PolicySnapshot, RelayNode, Report, ReportPage, Restrictions, SettingsChanges, Snapshot, Target } from './model'
+import type { AccountDetails, AccountPage, AccountSummary, Discovery, Enrollment, TrafficStatus, MilestoneReview, NodeDetails, NodePage, FleetAction, PolicyChange, PolicySnapshot, Report, ReportPage, Restrictions, SettingsChanges, Snapshot, Target } from './model'
 
 function nodeHttpStatus(fault: Readonly<Record<string, unknown>>): Message {
   const status = typeof fault.status === 'number' && Number.isInteger(fault.status) ? fault.status : null
@@ -134,7 +134,7 @@ export class AuthorityClient {
   manage = (node_key: string, operation_id: string, action: FleetAction) => this.write('nodes/manage', { node_key, operation_id, action })
   cancelDraft = (node_key: string, operation_id: string) => this.write('nodes/cancel', { node_key, operation_id })
   enroll = (node: Enrollment) => this.write<NodeDetails>('nodes', node)
-  policy = (key: number[], change: PolicyChange) => this.write<RelayNode>('nodes/policy', { key, change }, 'PUT')
+  policy = (key: number[], change: PolicyChange) => this.write<NodeDetails>('nodes/policy', { key, change }, 'PUT')
   updateSettings = (changes: SettingsChanges) => this.write<PolicySnapshot>('settings', changes, 'PATCH')
   dismissReview = (count: number) => this.write<MilestoneReview[]>('reviews/dismiss', { count })
   restrict = (target: Target, blocked: boolean) => this.write<Restrictions>('blocks', { ...target, blocked })

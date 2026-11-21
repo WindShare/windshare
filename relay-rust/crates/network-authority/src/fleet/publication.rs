@@ -1,5 +1,5 @@
 use super::{
-    ListingState, attach,
+    NodeState, attach,
     signature::{Certificate, Envelope, Grant, Payload, RENEW_BEFORE, Root},
     topology::Spec,
 };
@@ -107,32 +107,6 @@ pub fn current(store: &impl Store) -> Result<Publication> {
     load(store, DIRECTORY)?.context("directory has not been imported")
 }
 
-// Earlier drafts wrote a permanent alias at staging and did not record whether the
-// node policy predated the draft. Preserve the policy and every signed historical binding.
-pub(super) fn withdraw_legacy_alias(store: &mut impl Store, alias: &str) -> Result<()> {
-    let mut head = current(store)?;
-    if !head.aliases.contains_key(alias)
-        || head.payload()?.nodes.iter().any(|n| n.spec.alias == alias)
-    {
-        return Ok(());
-    }
-    let release = Release::bundled()?;
-    for envelope in std::iter::once(Ok(release.snapshot.clone()))
-        .chain(HISTORY.iter().map(|raw| Envelope::decode(raw.as_bytes())))
-    {
-        if envelope?
-            .verify(&release.network, &release.roots, true)?
-            .nodes
-            .iter()
-            .any(|n| n.spec.alias == alias)
-        {
-            return Ok(());
-        }
-    }
-    head.aliases.remove(alias);
-    head.save(store)
-}
-
 impl Publication {
     /// # Errors
     /// Rejects invalid signatures, conflicting revisions, alias reassignments and storage failures.
@@ -172,7 +146,7 @@ impl Publication {
             attach(
                 store,
                 entry.spec,
-                ListingState::Listed {
+                NodeState::Listed {
                     status: entry.status,
                     withdrawn: BTreeSet::new(),
                 },

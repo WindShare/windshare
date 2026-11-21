@@ -1,5 +1,9 @@
 use crate::{
     Authority, Environment, Fault, Store,
+    fleet::{
+        NodeState,
+        topology::{Role, Spec, Status, public_key},
+    },
     store::{key, load, save},
 };
 use anyhow::Result;
@@ -20,60 +24,136 @@ pub enum Zone {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Node {
-    #[serde(default)]
-    pub listing: Option<crate::fleet::Listing>,
     pub key: [u8; 32],
-    pub zone: Zone,
-    pub region: String,
-    #[serde(alias = "enabled", deserialize_with = "stored_admission")]
-    pub admission: Admission,
-    pub anonymous: bool,
+    pub spec: Spec,
+    pub operation_id: String,
+    state: NodeState,
     #[serde(default)]
+    maintenance: Option<String>,
+    pub anonymous: bool,
     pub version: u64,
 }
 
-fn stored_admission<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Admission, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Stored {
-        Current(Admission),
-        Legacy(bool),
-    }
-    Ok(match Stored::deserialize(d)? {
-        Stored::Current(admission) => admission,
-        Stored::Legacy(true) => Admission::Accepting,
-        Stored::Legacy(false) => Admission::Disabled,
-    })
+pub struct NodeMutation<'a> {
+    pub spec: &'a Spec,
+    pub operation_id: &'a mut String,
+    pub state: &'a mut NodeState,
+    pub maintenance: &'a mut Option<String>,
 }
 
 impl Node {
-    pub(crate) const fn policy(&self) -> NodePolicy {
+    pub(crate) fn new(
+        spec: Spec,
+        operation_id: String,
+        state: NodeState,
+        version: u64,
+    ) -> Result<Self> {
+        let key = public_key(&spec.node_key)?;
+        let anonymous = spec.zone == Zone::Global;
+        Ok(Self {
+            key,
+            spec,
+            operation_id,
+            state,
+            maintenance: None,
+            anonymous,
+            version,
+        })
+    }
+
+    pub const fn state(&self) -> &NodeState {
+        &self.state
+    }
+
+    pub fn maintenance(&self) -> Option<&str> {
+        self.maintenance.as_deref()
+    }
+
+    pub const fn status(&self) -> Option<Status> {
+        match self.state {
+            NodeState::Listed { status, .. } => Some(status),
+            NodeState::Staging { .. } | NodeState::Disabled => None,
+        }
+    }
+
+    pub fn relay_drained(&self) -> bool {
+        self.maintenance.is_some()
+            || matches!(
+                &self.state,
+                NodeState::Listed { status, withdrawn }
+                    if *status == Status::Draining || withdrawn.contains(&Role::Relay)
+            )
+    }
+
+    pub fn admission(&self) -> Admission {
+        match self.state {
+            NodeState::Disabled if self.maintenance.is_some() => Admission::Draining,
+            NodeState::Disabled => Admission::Disabled,
+            NodeState::Staging { .. } => Admission::Draining,
+            NodeState::Listed { .. }
+                if self.relay_drained() || !self.spec.roles.contains(&Role::Relay) =>
+            {
+                Admission::Draining
+            }
+            NodeState::Listed { .. } => Admission::Accepting,
+        }
+    }
+
+    pub(crate) fn policy(&self) -> NodePolicy {
         NodePolicy {
             version: self.version,
-            admission: self.admission,
+            admission: self.admission(),
             anonymous: self.anonymous,
             probe_account: windshare_relay_access::probe::PROBE_ACCOUNT,
         }
     }
 
-    pub(crate) fn set_admission(&mut self, admission: Admission) -> Result<()> {
-        if self.admission != admission {
-            self.version = self.version.checked_add(1).ok_or(Fault::Invalid)?;
-            self.admission = admission;
+    /// Produces the final disabled policy for a retired node record, advancing
+    /// `version` only when retirement changes the effective relay admission.
+    pub(crate) fn retired_policy(&mut self) -> Result<NodePolicy> {
+        if self.admission() != Admission::Disabled {
+            self.bump_version()?;
         }
-        Ok(())
+        Ok(NodePolicy {
+            version: self.version,
+            admission: Admission::Disabled,
+            anonymous: self.anonymous,
+            probe_account: windshare_relay_access::probe::PROBE_ACCOUNT,
+        })
     }
 
-    pub(super) fn enrolled(key: [u8; 32], zone: Zone, region: String) -> Self {
-        Self {
-            listing: None,
-            key,
-            zone,
-            region,
-            admission: Admission::Accepting,
-            anonymous: zone == Zone::Global,
-            version: 1,
+    /// Mutates fleet lifecycle fields and advances `version` whenever the
+    /// derived relay `Admission` changes, preserving the anti-rollback barrier.
+    pub(crate) fn update_lifecycle<T>(
+        &mut self,
+        mutate: impl FnOnce(&mut NodeMutation<'_>) -> Result<T>,
+    ) -> Result<T> {
+        let before = self.admission();
+        let mut mutation = NodeMutation {
+            spec: &self.spec,
+            operation_id: &mut self.operation_id,
+            state: &mut self.state,
+            maintenance: &mut self.maintenance,
+        };
+        let result = mutate(&mut mutation)?;
+        if self.admission() != before {
+            self.bump_version()?;
         }
+        Ok(result)
+    }
+
+    pub(crate) fn set_anonymous(&mut self, value: bool) -> Result<bool> {
+        if self.anonymous == value {
+            return Ok(false);
+        }
+        self.anonymous = value;
+        self.bump_version()?;
+        Ok(true)
+    }
+
+    fn bump_version(&mut self) -> Result<()> {
+        self.version = self.version.checked_add(1).ok_or(Fault::Invalid)?;
+        Ok(())
     }
 }
 
@@ -81,6 +161,7 @@ impl Node {
 pub struct NodeDetails {
     #[serde(flatten)]
     pub node: Node,
+    pub admission: Admission,
     pub report: Option<NodeLoadReport>,
     pub cutoff_ready: bool,
 }
@@ -94,12 +175,14 @@ pub struct NodeLoadReport {
 
 impl NodeDetails {
     fn new(node: Node, report: Option<NodeLoadReport>, now: u64) -> Self {
-        let cutoff_ready = node.admission != Admission::Accepting
+        let admission = node.admission();
+        let cutoff_ready = admission != Admission::Accepting
             && report
                 .as_ref()
                 .is_some_and(|r| r.confirms(node.version, now) && r.load.resident_shares == 0);
         Self {
             node,
+            admission,
             report,
             cutoff_ready,
         }
@@ -148,7 +231,6 @@ pub struct NodePage {
     deny_unknown_fields
 )]
 pub enum NodePolicyChange {
-    Admission(Admission),
     AnonymousSharing(bool),
 }
 
@@ -232,15 +314,11 @@ impl<R: Store, E: Environment> Authority<R, E> {
         let record = key("node", public_key);
         let mut node: Node = load(&self.store, &record)?.ok_or(Fault::Invalid)?;
         match change {
-            NodePolicyChange::Admission(admission) => {
-                anyhow::ensure!(node.listing.is_none(), Fault::Invalid);
-                node.set_admission(admission)?;
+            NodePolicyChange::AnonymousSharing(value) => {
+                if !node.set_anonymous(value)? {
+                    return Ok(node);
+                }
             }
-            NodePolicyChange::AnonymousSharing(value) if node.anonymous != value => {
-                node.anonymous = value;
-                node.version = node.version.checked_add(1).ok_or(Fault::Invalid)?;
-            }
-            NodePolicyChange::AnonymousSharing(_) => return Ok(node),
         }
         save(&mut self.store, &record, &node)?;
         tracing::info!(

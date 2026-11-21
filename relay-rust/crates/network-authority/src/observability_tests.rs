@@ -393,20 +393,9 @@ fn ticket_auth_refusals_and_node_status_batches_emit_structured_traces() {
     .unwrap();
 
     let node = SigningKey::from_bytes(&[7; 32]);
-    save(
-        &mut authority.store,
-        &key("node", &node.verifying_key().to_bytes()),
-        &Node {
-            listing: None,
-            version: 3,
-            key: node.verifying_key().to_bytes(),
-            zone: Zone::Global,
-            region: "test".into(),
-            anonymous: true,
-            admission: windshare_relay_access::usage::Admission::Accepting,
-        },
-    )
-    .unwrap();
+    let mut seeded = listed_node(node.verifying_key().to_bytes(), Zone::Global, "test");
+    seeded.version = 3;
+    save(&mut authority.store, &key("node", &seeded.key), &seeded).unwrap();
     let status_batch = batch(&authority, &node, session.account, 5, 2, 0);
 
     let events = capture_events(|| {

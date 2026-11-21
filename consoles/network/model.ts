@@ -10,21 +10,24 @@ export type FleetAction =
   | { kind: 'restore_role'; role: Role }
   | { kind: 'abort_maintenance'; maintenance_id: string }
 export type NodeSpec = Omit<Enrollment, 'url'> & { relay: string }
-export interface Listing {
-  maintenance: string | null
-  operation_id: string
+export type NodeState =
+  | { kind: 'listed'; status: TrafficStatus | 'draining'; withdrawn: Role[] }
+  | { kind: 'disabled' }
+  | { kind: 'staging'; check: { kind: 'queued' | 'running' } | { kind: 'passed'; at: number } | { kind: 'failed'; reason: string } }
+export interface RelayNode {
+  key: number[]
   spec: NodeSpec
-  state:
-    | { kind: 'listed'; status: TrafficStatus | 'draining'; withdrawn: Role[] }
-    | { kind: 'disabled' }
-    | { kind: 'staging'; check: { kind: 'queued' | 'running' } | { kind: 'passed'; at: number } | { kind: 'failed'; reason: string } }
+  operation_id: string
+  state: NodeState
+  maintenance: string | null
+  admission: Admission
+  anonymous: boolean
+  version: number
 }
-export interface RelayNode { key: number[]; zone: Zone; region: string; admission: Admission; anonymous: boolean; version: number; listing: Listing | null }
-export type PolicyChange = { field: 'admission'; value: Admission } | { field: 'anonymous_sharing'; value: boolean }
+export type PolicyChange = { field: 'anonymous_sharing'; value: boolean }
 
-// Legacy nodes without a fleet listing are relay-capable; fleet listings declare roles explicitly.
-export function servesRelay(node: Pick<RelayNode, 'listing'>): boolean {
-  return !node.listing || node.listing.spec.roles.includes('relay')
+export function servesRelay(node: Pick<RelayNode, 'spec'>): boolean {
+  return node.spec.roles.includes('relay')
 }
 
 export interface LoadReport {

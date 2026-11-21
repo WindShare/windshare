@@ -368,7 +368,7 @@ test('vantage routes, scheduled mirror audit, maintenance/manage boundaries, and
   assert.equal(badSigRes.value.reason, 'vantage_signature');
 
   const staged = (await call('/v1/admin/nodes', enrollment, { adminAuth: true })).value;
-  assert.equal(staged.listing.state.check.kind, 'queued');
+  assert.equal(staged.state.check.kind, 'queued');
 
   const releaseNodes = JSON.parse(Buffer.from(release.snapshot.payload, 'base64url')).nodes;
   const cnTargets = (
@@ -394,7 +394,7 @@ test('vantage routes, scheduled mirror audit, maintenance/manage boundaries, and
       signVantageProof(globalVantage, 'windshare/vantage-poll/v1\0', { at: now, shares: uniqueShares() }),
     )
   ).value;
-  assert.equal(work.operation_id, staged.listing.operation_id);
+  assert.equal(work.operation_id, staged.operation_id);
   assert.equal(work.spec.node_key, enrollment.node_key);
   assert.equal(work.tickets.length, 3);
   assert.deepEqual(work.origins, [release.link_host, release.backup_entry, 'https://self-hosted.example']);
@@ -411,8 +411,8 @@ test('vantage routes, scheduled mirror audit, maintenance/manage boundaries, and
   const verifiedNode = (
     await call(`/v1/admin/nodes/${enrollment.node_key}`, undefined, { method: 'GET', adminAuth: true })
   ).value;
-  assert.equal(verifiedNode.listing.state.check.kind, 'passed');
-  assert.equal(verifiedNode.listing.state.check.vantage_key, globalVantage.publicKey);
+  assert.equal(verifiedNode.state.check.kind, 'passed');
+  assert.equal(verifiedNode.state.check.vantage_key, globalVantage.publicKey);
 
   const expectedDigest = directoryDigest(release.snapshot);
   const cycleProof = signVantageProof(cnVantage, 'windshare/fleet-cycle/v1\0', {
@@ -535,25 +535,25 @@ test('vantage routes, scheduled mirror audit, maintenance/manage boundaries, and
 
   const manageNoCsrf = await call(
     '/v1/admin/nodes/manage',
-    { node_key: enrollment.node_key, operation_id: staged.listing.operation_id, action: { kind: 'drain' } },
+    { node_key: enrollment.node_key, operation_id: staged.operation_id, action: { kind: 'drain' } },
     { status: 403, headers: { Origin: 'https://localhost', Cookie: admin.cookie, 'X-CSRF-Token': 'wrong' } },
   );
   assert.equal(manageNoCsrf.value.reason, 'csrf');
   const manageBadAction = await call(
     '/v1/admin/nodes/manage',
-    { node_key: enrollment.node_key, operation_id: staged.listing.operation_id, action: { kind: 'bogus' } },
+    { node_key: enrollment.node_key, operation_id: staged.operation_id, action: { kind: 'bogus' } },
     { adminAuth: true, status: 400 },
   );
   assert.equal(manageBadAction.value.kind, 'invalid');
   const manageBadAbort = await call(
     '/v1/admin/nodes/manage',
-    { node_key: enrollment.node_key, operation_id: staged.listing.operation_id, action: { kind: 'abort_maintenance' } },
+    { node_key: enrollment.node_key, operation_id: staged.operation_id, action: { kind: 'abort_maintenance' } },
     { adminAuth: true, status: 400 },
   );
   assert.equal(manageBadAbort.value.kind, 'invalid');
   const manageReachedSigner = await call(
     '/v1/admin/nodes/manage',
-    { node_key: enrollment.node_key, operation_id: staged.listing.operation_id, action: { kind: 'drain' } },
+    { node_key: enrollment.node_key, operation_id: staged.operation_id, action: { kind: 'drain' } },
     { adminAuth: true, status: 503 },
   );
   assert.equal(manageReachedSigner.text, 'fleet temporarily unavailable');
@@ -561,7 +561,7 @@ test('vantage routes, scheduled mirror audit, maintenance/manage boundaries, and
     '/v1/admin/nodes/manage',
     {
       node_key: enrollment.node_key,
-      operation_id: staged.listing.operation_id,
+      operation_id: staged.operation_id,
       action: { kind: 'abort_maintenance', maintenance_id: 'maintenance-boundary-01' },
     },
     { adminAuth: true, status: 503 },

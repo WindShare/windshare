@@ -47,7 +47,7 @@ impl MonitoringFleet {
             attach(
                 &mut auth.store,
                 node.clone(),
-                ListingState::Listed {
+                NodeState::Listed {
                     status: Status::Active,
                     withdrawn: BTreeSet::new(),
                 },
@@ -66,12 +66,7 @@ impl MonitoringFleet {
         )
         .unwrap();
         let staged = dual_role("staged-node", 13);
-        let staged_op = auth
-            .stage(&admin, staged.clone())
-            .unwrap()
-            .listing
-            .unwrap()
-            .operation_id;
+        let staged_op = auth.stage(&admin, staged.clone()).unwrap().operation_id;
         let keys = [21, 22, 23].map(|v| SigningKey::from_bytes(&[v; 32]));
         let agents = keys
             .iter()
@@ -177,8 +172,6 @@ impl MonitoringFleet {
         let prior_key = URL_SAFE_NO_PAD.encode([9u8; 32]);
         let prior_op = load::<Node>(&self.auth.store, &key("node", &[9u8; 32]))
             .unwrap()
-            .unwrap()
-            .listing
             .unwrap()
             .operation_id;
         let nodes = json!({
@@ -317,12 +310,12 @@ fn record_cycle_ignores_staging_and_disabled_nodes_so_promotion_starts_clean() {
     let saved: Node = load(&fleet.auth.store, &key("node", &staged_key))
         .unwrap()
         .unwrap();
-    assert_eq!(saved.admission, Admission::Accepting);
+    assert_eq!(saved.admission(), Admission::Accepting);
     assert!(matches!(
-        saved.listing.unwrap().state,
-        ListingState::Listed {
+        saved.state(),
+        NodeState::Listed {
             status: Status::Canary,
-            ref withdrawn,
+            withdrawn,
         } if withdrawn.is_empty()
     ));
 }

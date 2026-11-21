@@ -1,5 +1,5 @@
 use super::{
-    Listing, ListingState,
+    NodeState,
     monitoring::{Cycle, SUSTAINED, reports},
     publication::{Publication, Publisher},
     topology::{Role, Status},
@@ -19,20 +19,20 @@ enum Verdict {
     Observe,
 }
 
-fn has_quorum(listing: &Listing, reporting: &[Cycle]) -> bool {
+fn has_quorum(node: &Node, reporting: &[Cycle]) -> bool {
     // An overseas path cannot speak for the node's own zone. A lone reporter
     // can raise an alert, but cannot change traffic or clear an override.
-    reporting.len() >= 2 && reporting.iter().any(|v| v.zone == listing.spec.zone)
+    reporting.len() >= 2 && reporting.iter().any(|v| v.zone == node.spec.zone)
 }
 
-fn consensus(listing: &Listing, role: Role, reporting: &[Cycle]) -> Verdict {
-    if !has_quorum(listing, reporting) {
+fn consensus(node: &Node, role: Role, reporting: &[Cycle]) -> Verdict {
+    if !has_quorum(node, reporting) {
         return Verdict::Observe;
     }
     let mut failures = true;
     let mut successes = true;
     for cycle in reporting {
-        let count = sample(cycle, listing, role);
+        let count = sample(cycle, node, role);
         failures &= count <= -SUSTAINED;
         successes &= count >= SUSTAINED;
     }
@@ -45,8 +45,8 @@ fn consensus(listing: &Listing, role: Role, reporting: &[Cycle]) -> Verdict {
     }
 }
 
-fn corroborated_failure(listing: &Listing, role: Role, reporting: &[Cycle]) -> bool {
-    has_quorum(listing, reporting) && reporting.iter().all(|c| sample(c, listing, role) < 0)
+fn corroborated_failure(node: &Node, role: Role, reporting: &[Cycle]) -> bool {
+    has_quorum(node, reporting) && reporting.iter().all(|c| sample(c, node, role) < 0)
 }
 
 fn burst_counts(nodes: &[Node], reporting: &[Cycle]) -> (usize, usize) {
@@ -55,18 +55,18 @@ fn burst_counts(nodes: &[Node], reporting: &[Cycle]) -> (usize, usize) {
     // Measure fleet-wide fault bursts strictly against currently serving active
     // roles so single-vantage jitter, already-withdrawn roles, draining nodes,
     // and unproven canaries cannot blind automatic failover on small fleets.
-    for listing in nodes.iter().filter_map(|n| n.listing.as_ref()) {
-        let ListingState::Listed {
+    for node in nodes {
+        let NodeState::Listed {
             status: Status::Active,
             withdrawn,
-        } = &listing.state
+        } = node.state()
         else {
             continue;
         };
-        if listing.maintenance.is_some() {
+        if node.maintenance().is_some() {
             continue;
         }
-        let mut roles = listing
+        let mut roles = node
             .spec
             .roles
             .iter()
@@ -77,7 +77,7 @@ fn burst_counts(nodes: &[Node], reporting: &[Cycle]) -> (usize, usize) {
             continue;
         }
         serving += 1;
-        if roles.any(|role| corroborated_failure(listing, role, reporting)) {
+        if roles.any(|role| corroborated_failure(node, role, reporting)) {
             failing += 1;
         }
     }
@@ -86,7 +86,7 @@ fn burst_counts(nodes: &[Node], reporting: &[Cycle]) -> (usize, usize) {
 
 fn next_withdrawn(
     nodes: &[Node],
-    listing: &Listing,
+    node: &Node,
     status: Status,
     withdrawn: &BTreeSet<Role>,
     reporting: &[Cycle],
@@ -94,13 +94,13 @@ fn next_withdrawn(
 ) -> (BTreeSet<Role>, bool) {
     let mut roles = withdrawn.clone();
     let mut suppressed = false;
-    for &role in &listing.spec.roles {
-        match consensus(listing, role, reporting) {
+    for &role in &node.spec.roles {
+        match consensus(node, role, reporting) {
             Verdict::Recover => {
                 roles.remove(&role);
             }
             Verdict::Withdraw
-                if status != Status::Active || alternative(nodes, listing, role, reporting) =>
+                if status != Status::Active || alternative(nodes, node, role, reporting) =>
             {
                 if burst {
                     suppressed |= !roles.contains(&role);
@@ -113,35 +113,32 @@ fn next_withdrawn(
     }
     (roles, suppressed)
 }
-fn sample(cycle: &Cycle, listing: &Listing, role: Role) -> i8 {
+fn sample(cycle: &Cycle, node: &Node, role: Role) -> i8 {
     cycle
         .nodes
-        .get(&listing.spec.node_key)
-        .filter(|s| s.observation.operation_id == listing.operation_id)
+        .get(&node.spec.node_key)
+        .filter(|s| s.observation.operation_id == node.operation_id)
         .and_then(|s| s.streak.get(&role))
         .copied()
         .unwrap_or(0)
 }
 
-fn alternative(nodes: &[Node], subject: &Listing, role: Role, reporting: &[Cycle]) -> bool {
-    nodes
-        .iter()
-        .filter_map(|node| node.listing.as_ref())
-        .any(|l| {
-            let ListingState::Listed {
-                status: Status::Active,
-                withdrawn,
-            } = &l.state
-            else {
-                return false;
-            };
-            l.spec.node_key != subject.spec.node_key
-                && l.spec.zone == subject.spec.zone
-                && l.maintenance.is_none()
-                && l.spec.roles.contains(&role)
-                && !withdrawn.contains(&role)
-                && reporting.iter().all(|c| sample(c, l, role) > 0)
-        })
+fn alternative(nodes: &[Node], subject: &Node, role: Role, reporting: &[Cycle]) -> bool {
+    nodes.iter().any(|candidate| {
+        let NodeState::Listed {
+            status: Status::Active,
+            withdrawn,
+        } = candidate.state()
+        else {
+            return false;
+        };
+        candidate.spec.node_key != subject.spec.node_key
+            && candidate.spec.zone == subject.spec.zone
+            && candidate.maintenance().is_none()
+            && candidate.spec.roles.contains(&role)
+            && !withdrawn.contains(&role)
+            && reporting.iter().all(|c| sample(c, candidate, role) > 0)
+    })
 }
 
 impl<R: Store, E: Environment> Authority<R, E> {
@@ -169,28 +166,25 @@ impl<R: Store, E: Environment> Authority<R, E> {
         let operation = format!("health-{}", now / super::monitoring::CYCLE_SECONDS);
         let mut suppressed = false;
         for index in 0..nodes.len() {
-            let Some(listing) = nodes[index].listing.as_ref() else {
+            let NodeState::Listed { status, withdrawn } = nodes[index].state() else {
                 continue;
             };
-            let ListingState::Listed { status, withdrawn } = &listing.state else {
-                continue;
-            };
-            if listing.maintenance.is_some() {
+            if nodes[index].maintenance().is_some() {
                 continue;
             }
             let (roles, blocked) =
-                next_withdrawn(&nodes, listing, *status, withdrawn, &reporting, burst);
+                next_withdrawn(&nodes, &nodes[index], *status, withdrawn, &reporting, burst);
             suppressed |= blocked;
             if roles != *withdrawn {
-                tracing::warn!(event="fleet_health_override", operation_id=%operation, node_id=%listing.spec.node_key, before=?withdrawn, after=?roles);
+                tracing::warn!(event="fleet_health_override", operation_id=%operation, node_id=%nodes[index].spec.node_key, before=?withdrawn, after=?roles);
                 let node = &mut nodes[index];
-                let Some(ListingState::Listed { withdrawn, .. }) =
-                    node.listing.as_mut().map(|l| &mut l.state)
-                else {
-                    return Err(crate::Fault::Invalid.into());
-                };
-                *withdrawn = roles;
-                node.apply_listing()?;
+                node.update_lifecycle(|n| {
+                    let NodeState::Listed { withdrawn, .. } = n.state else {
+                        return Err(crate::Fault::Invalid.into());
+                    };
+                    *withdrawn = roles;
+                    Ok(())
+                })?;
                 save(&mut self.store, &key("node", &node.key), node)?;
             }
         }

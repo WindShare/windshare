@@ -26,20 +26,7 @@ fn browser_session_authorizes_two_enrolled_nodes_with_independent_receipts() {
         };
         let invitation_token = invite.issue(&signer).unwrap();
         assert!(service.device_invitation(&invitation_token).is_err());
-        save(
-            &mut service.store,
-            &key("node", &node),
-            &Node {
-                listing: None,
-                key: node,
-                zone: Zone::Global,
-                region: "region".into(),
-                admission: windshare_relay_access::usage::Admission::Accepting,
-                anonymous: false,
-                version: 1,
-            },
-        )
-        .unwrap();
+        service.seed_node(node, Zone::Global, "region");
         let token = if cookie.is_empty() {
             let approved = service
                 .device_sign_in("source", &invitation_token, "sender", password)

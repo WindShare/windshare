@@ -38,7 +38,7 @@ impl ResumeFleet {
         attach(
             &mut auth.store,
             target.clone(),
-            ListingState::Listed {
+            NodeState::Listed {
                 status: initial,
                 withdrawn: BTreeSet::new(),
             },
@@ -87,7 +87,7 @@ impl ResumeFleet {
     }
 
     fn manage(&mut self, node_key: &str, action: Action) -> anyhow::Result<()> {
-        let operation_id = self.node(node_key).listing.unwrap().operation_id;
+        let operation_id = self.node(node_key).operation_id;
         self.auth.manage(
             &self.admin,
             &Manage {
@@ -100,7 +100,7 @@ impl ResumeFleet {
     }
 
     fn promote(&mut self, node_key: &str, status: Status) -> anyhow::Result<()> {
-        let operation_id = self.node(node_key).listing.unwrap().operation_id;
+        let operation_id = self.node(node_key).operation_id;
         let observed = digest(&publication::current(&self.auth.store).unwrap().envelope).unwrap();
         self.auth.promote(
             &self.admin,
@@ -135,10 +135,10 @@ fn resume_restores_draining_node_immediately_without_mirror_propagation() {
 
     // No CN vantage has reported yet, so mainland mirrors are lagging/unknown.
     fleet.manage(&target_key, Action::Drain).unwrap();
-    assert_eq!(fleet.node(&target_key).admission, Admission::Draining);
+    assert_eq!(fleet.node(&target_key).admission(), Admission::Draining);
     assert_eq!(fleet.entry("target").status, Status::Draining);
 
-    // promote() rejects Draining listings with Invalid rather than verification_required or mirror_lag.
+    // promote() rejects Draining nodes with Invalid rather than verification_required or mirror_lag.
     let err = fleet.promote(&target_key, Status::Active).unwrap_err();
     assert!(matches!(err.downcast_ref::<Fault>(), Some(Fault::Invalid)));
 
@@ -147,7 +147,7 @@ fn resume_restores_draining_node_immediately_without_mirror_propagation() {
     let events = super::observability::capture_events(|| {
         fleet.manage(&target_key, Action::Resume).unwrap();
     });
-    assert_eq!(fleet.node(&target_key).admission, Admission::Accepting);
+    assert_eq!(fleet.node(&target_key).admission(), Admission::Accepting);
     assert_eq!(fleet.entry("target").status, Status::Active);
     assert_eq!(fleet.serial(), serial_before_resume + 1);
     let intent_events = super::observability::events_named(&events, "node_intent_changed");
@@ -180,8 +180,10 @@ fn resume_rejects_canary_staging_and_disabled_nodes() {
         Some(Fault::Denied { reason }) if reason == "mirror_lag"
     ));
     fleet.report_current_mirror();
+    let canary_version = fleet.node(&canary_key).version;
     fleet.promote(&canary_key, Status::Active).unwrap();
     assert_eq!(fleet.entry("target").status, Status::Active);
+    assert_eq!(fleet.node(&canary_key).version, canary_version);
 
     // Disabled nodes reject Action::Resume and require re-verification before promote().
     fleet
@@ -242,14 +244,14 @@ fn resume_preserves_maintenance_hold_and_stun_only_admission() {
         .unwrap();
     fleet.manage(&target_key, Action::Resume).unwrap();
     // Intent becomes Active, but the active maintenance hold keeps traffic draining until release.
-    assert_eq!(fleet.node(&target_key).admission, Admission::Draining);
+    assert_eq!(fleet.node(&target_key).admission(), Admission::Draining);
     assert_eq!(fleet.entry("target").status, Status::Draining);
 
     fleet
         .auth
         .maintenance_hold(&op, false, &fleet.signer)
         .unwrap();
-    assert_eq!(fleet.node(&target_key).admission, Admission::Accepting);
+    assert_eq!(fleet.node(&target_key).admission(), Admission::Accepting);
     assert_eq!(fleet.entry("target").status, Status::Active);
 
     // STUN-only nodes drained by an aborted upgrade resume to Active while staying relay-draining.
@@ -276,5 +278,5 @@ fn resume_preserves_maintenance_hold_and_stun_only_admission() {
     stun_fleet.manage(&stun_key, Action::Resume).unwrap();
     assert_eq!(stun_fleet.entry("target").status, Status::Active);
     assert_eq!(stun_fleet.entry("target").spec.roles, [Role::Stun]);
-    assert_eq!(stun_fleet.node(&stun_key).admission, Admission::Draining);
+    assert_eq!(stun_fleet.node(&stun_key).admission(), Admission::Draining);
 }

@@ -43,7 +43,7 @@ impl MaintenanceFleet {
             attach(
                 &mut auth.store,
                 node.clone(),
-                ListingState::Listed {
+                NodeState::Listed {
                     status: Status::Active,
                     withdrawn: BTreeSet::new(),
                 },
@@ -100,7 +100,7 @@ impl MaintenanceFleet {
     }
 
     fn manage_node(&mut self, node_key: &str, action: Action) -> anyhow::Result<()> {
-        let operation_id = self.node(node_key).listing.unwrap().operation_id;
+        let operation_id = self.node(node_key).operation_id;
         self.auth.manage(
             &self.admin,
             &Manage {
@@ -129,7 +129,7 @@ impl MaintenanceFleet {
         for index in [0, 1] {
             let mut nodes = serde_json::Map::new();
             for (spec, roles) in [(&self.target, target_roles), (&self.spare, spare_roles)] {
-                let op = self.node(&spec.node_key).listing.unwrap().operation_id;
+                let op = self.node(&spec.node_key).operation_id;
                 nodes.insert(
                     spec.node_key.clone(),
                     json!({
@@ -211,16 +211,15 @@ fn abort_maintenance_on_listed_node_keeps_draining_and_fences_aborted_id() {
 
     // Fail-closed: node remains draining rather than automatically returning to Active.
     let node = fleet.node(&fleet.target.node_key);
-    let listing = node.listing.unwrap();
-    assert!(listing.maintenance.is_none());
+    assert!(node.maintenance().is_none());
     assert!(matches!(
-        listing.state,
-        ListingState::Listed {
+        node.state(),
+        NodeState::Listed {
             status: Status::Draining,
-            ref withdrawn,
+            withdrawn,
         } if withdrawn.is_empty()
     ));
-    assert_eq!(node.admission, Admission::Draining);
+    assert_eq!(node.admission(), Admission::Draining);
     assert_eq!(
         fleet.find_entry("primary").unwrap().status,
         Status::Draining
@@ -301,7 +300,7 @@ fn abort_maintenance_resumes_health_checks_and_allows_explicit_resume() {
     let target_key = fleet.target.node_key.clone();
     fleet.manage_node(&target_key, Action::Resume).unwrap();
     assert_eq!(
-        fleet.node(&fleet.target.node_key).admission,
+        fleet.node(&fleet.target.node_key).admission(),
         Admission::Accepting
     );
     let resumed = fleet.find_entry("primary").unwrap();
@@ -325,7 +324,7 @@ fn abort_maintenance_on_disabled_node_completes_disable_and_unlocks_verify_and_r
         .manage_node(&target_key, Action::Disable { early_cutoff: true })
         .unwrap();
     let version_during_hold = fleet.node(&target_key).version;
-    assert_eq!(fleet.node(&target_key).admission, Admission::Draining);
+    assert_eq!(fleet.node(&target_key).admission(), Admission::Draining);
     assert!(fleet.find_entry("primary").is_some());
     assert!(
         fleet
@@ -342,13 +341,13 @@ fn abort_maintenance_on_disabled_node_completes_disable_and_unlocks_verify_and_r
     assert_eq!(aborted[0]["fields"]["disabled"], true);
 
     let node = fleet.node(&target_key);
-    assert_eq!(node.admission, Admission::Disabled);
+    assert_eq!(node.admission(), Admission::Disabled);
     assert_eq!(node.version, version_during_hold + 1);
-    assert!(node.listing.unwrap().maintenance.is_none());
+    assert!(node.maintenance().is_none());
     assert!(fleet.find_entry("primary").is_none());
 
     fleet.manage_node(&target_key, Action::Verify).unwrap();
-    let staging_op = fleet.node(&target_key).listing.unwrap().operation_id;
+    let staging_op = fleet.node(&target_key).operation_id;
     fleet
         .auth
         .cancel_draft(&fleet.admin, &target_key, &staging_op)
@@ -407,7 +406,7 @@ fn abort_maintenance_requires_admin_and_rejects_stale_maintenance_or_listing_ids
         "listing_changed",
     );
     assert_eq!(
-        fleet.node(&fleet.target.node_key).admission,
+        fleet.node(&fleet.target.node_key).admission(),
         Admission::Accepting
     );
 
@@ -415,11 +414,7 @@ fn abort_maintenance_requires_admin_and_rejects_stale_maintenance_or_listing_ids
         .auth
         .maintenance_hold(&first, true, &fleet.signer)
         .unwrap();
-    let current_op = fleet
-        .node(&fleet.target.node_key)
-        .listing
-        .unwrap()
-        .operation_id;
+    let current_op = fleet.node(&fleet.target.node_key).operation_id;
     assert!(
         fleet
             .auth
@@ -468,12 +463,7 @@ fn abort_maintenance_requires_admin_and_rejects_stale_maintenance_or_listing_ids
         "listing_changed",
     );
     assert_eq!(
-        fleet
-            .node(&fleet.target.node_key)
-            .listing
-            .unwrap()
-            .maintenance
-            .as_deref(),
+        fleet.node(&fleet.target.node_key).maintenance(),
         Some(second.operation_id.as_str())
     );
 
@@ -529,7 +519,7 @@ fn maintenance_hold_withdraws_stateless_stun_until_release() {
     attach(
         &mut fleet.auth.store,
         stun_only,
-        ListingState::Listed {
+        NodeState::Listed {
             status: Status::Active,
             withdrawn: BTreeSet::new(),
         },

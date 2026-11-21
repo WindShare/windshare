@@ -106,7 +106,7 @@ test('the local Worker preserves account and node policy across signed reports a
   await update('anonymous_sharing', true);
   await call('/v1/admin/nodes/policy', { key: node, change: { field: 'admission', value: 'accepting' } }, { admin: true, method: 'PUT', status: 400 });
   const existing = (await call('/v1/admin/nodes', enrollment, { admin: true })).value;
-  assert.equal(existing.zone, 'cn');
+  assert.equal(existing.spec.zone, 'cn');
   assert(existing.admission === 'draining' && existing.anonymous && existing.version === 2);
   const batch = {
     id: [...randomBytes(16)], node, issuer: [...Buffer.from(trust.root, 'base64url')],

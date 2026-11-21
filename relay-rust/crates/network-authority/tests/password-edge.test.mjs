@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { fixture } from './local-worker.mjs';
 
 test('the Worker runs password hashing and rate limits across edge and Durable Object boundaries', async t => {
-  const { worker, mf, trust, nodeKey, node, requests, mirrors, enrollment } = await fixture(t, {}, { existingEnrollment: true });
+  const { worker, mf, trust, nodeKey, node, activeNodeKey, activeNode, requests, mirrors, enrollment } = await fixture(t, {}, { activeNode: true });
   // Hashed console bundles are immutable while HTML entrypoints remain uncached.
   const consolePage = await worker.fetch('https://localhost/console');
   assert.equal(consolePage.status, 200);
@@ -184,16 +184,16 @@ test('the Worker runs password hashing and rate limits across edge and Durable O
   const discovered = (await call('/v1/admin/nodes/discover', { url: enrollment.url }, { admin: true })).value;
   assert.equal(discovered.node_key, enrollment.node_key);
   const staged = (await call('/v1/admin/nodes', enrollment, { admin: true })).value;
-  assert.equal(staged.listing.state.check.kind, 'queued');
-  await call('/v1/admin/nodes/cancel', { node_key: enrollment.node_key, operation_id: staged.listing.operation_id }, { admin: true });
+  assert.equal(staged.state.check.kind, 'queued');
+  await call('/v1/admin/nodes/cancel', { node_key: enrollment.node_key, operation_id: staged.operation_id }, { admin: true });
   const replacement = (await call('/v1/admin/nodes', enrollment, { admin: true })).value;
-  assert.notEqual(replacement.listing.operation_id, staged.listing.operation_id);
-  await call('/v1/admin/nodes/cancel', { node_key: enrollment.node_key, operation_id: staged.listing.operation_id }, { admin: true, status: 409 });
+  assert.notEqual(replacement.operation_id, staged.operation_id);
+  await call('/v1/admin/nodes/cancel', { node_key: enrollment.node_key, operation_id: staged.operation_id }, { admin: true, status: 409 });
   const mirrorURLs = [release.link_host, release.backup_entry].map(origin => origin + '/.well-known/windshare-network');
   for (const url of mirrorURLs) mirrors.set(url, release.snapshot);
   const promotion = () => worker.fetch('https://localhost/v1/admin/nodes/promote', {
     method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'https://localhost', Cookie: adminCookie, 'X-CSRF-Token': csrf },
-    body: JSON.stringify({ node_key: enrollment.node_key, operation_id: replacement.listing.operation_id, status: 'canary' }),
+    body: JSON.stringify({ node_key: enrollment.node_key, operation_id: replacement.operation_id, status: 'canary' }),
   });
   // Matching mirrors reach the DO. This local Worker has no production directory signing seed.
   const matched = await promotion();
@@ -204,20 +204,28 @@ test('the Worker runs password hashing and rate limits across edge and Durable O
   const lagging = await promotion();
   assert.equal(lagging.status, 403);
   assert.equal((await lagging.json()).reason, 'mirror_lag');
-  const invitePayload = Buffer.from(JSON.stringify({
-    node, issuer: [...Buffer.from(trust.root, 'base64url')],
-    enrollment: [...randomBytes(16)], origin: 'https://relay.example',
-    device: 'Laptop', code: 'ABCD-EFGH', expires_ms: Date.now() + 60_000,
-  }));
-  const invitation = Buffer.concat([
-    invitePayload,
-    sign(null, Buffer.concat([Buffer.from('windshare/device-invitation/v1\0'), invitePayload]), nodeKey),
-  ]).toString('base64url');
+  const signInvitation = (targetNode, targetKey, origin) => {
+    const invitePayload = Buffer.from(JSON.stringify({
+      node: targetNode, issuer: [...Buffer.from(trust.root, 'base64url')],
+      enrollment: [...randomBytes(16)], origin,
+      device: 'Laptop', code: 'ABCD-EFGH', expires_ms: Date.now() + 60_000,
+    }));
+    return Buffer.concat([
+      invitePayload,
+      sign(null, Buffer.concat([Buffer.from('windshare/device-invitation/v1\0'), invitePayload]), targetKey),
+    ]).toString('base64url');
+  };
+  const stagedInvitation = signInvitation(node, nodeKey, 'https://relay.example');
   const blocked = await call('/v1/device/approve', {
-    invitation, login: { username: 'alice', password: firstPassword },
+    invitation: stagedInvitation, login: { username: 'alice', password: firstPassword },
   }, { source: '198.51.100.12', status: 403 });
   assert.equal(blocked.value.reason, 'node_unavailable');
-  await call('/v1/admin/nodes/cancel', { node_key: enrollment.node_key, operation_id: replacement.listing.operation_id }, { admin: true });
+  await call('/v1/admin/nodes/cancel', { node_key: enrollment.node_key, operation_id: replacement.operation_id }, { admin: true });
+  const cancelled = await call('/v1/device/approve', {
+    invitation: stagedInvitation, login: { username: 'alice', password: firstPassword },
+  }, { source: '198.51.100.12', status: 403 });
+  assert.equal(cancelled.value.reason, 'node_unavailable');
+  const invitation = signInvitation(activeNode, activeNodeKey, 'https://active.example');
   const approved = await call('/v1/device/approve', {
     invitation, login: { username: 'alice', password: firstPassword },
   }, { source: '198.51.100.12' });

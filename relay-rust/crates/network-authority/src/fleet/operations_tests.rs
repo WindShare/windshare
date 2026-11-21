@@ -41,7 +41,7 @@ impl Fleet {
             attach(
                 &mut auth.store,
                 node.clone(),
-                ListingState::Listed {
+                NodeState::Listed {
                     status: Status::Active,
                     withdrawn: BTreeSet::new(),
                 },
@@ -92,8 +92,7 @@ impl Fleet {
                 let id = crate::fleet::topology::public_key(&spec.node_key).unwrap();
                 let op = load::<Node>(&self.auth.store, &key("node", &id))
                     .unwrap()
-                    .and_then(|n| n.listing)
-                    .map_or_else(|| spec.alias.clone(), |l| l.operation_id);
+                    .map_or_else(|| spec.alias.clone(), |n| n.operation_id);
                 nodes.insert(
                     spec.node_key.clone(),
                     json!({
@@ -139,7 +138,7 @@ impl Fleet {
     }
 
     fn manage(&mut self, action: Action) -> anyhow::Result<()> {
-        let operation_id = self.target_node().listing.unwrap().operation_id;
+        let operation_id = self.target_node().operation_id;
         self.auth.manage(
             &self.admin,
             &Manage {
@@ -174,7 +173,7 @@ impl Fleet {
     }
 
     fn promote_target(&mut self, status: Status) -> anyhow::Result<()> {
-        let operation_id = self.target_node().listing.unwrap().operation_id;
+        let operation_id = self.target_node().operation_id;
         let observed = digest(
             &crate::fleet::publication::current(&self.auth.store)
                 .unwrap()
@@ -327,7 +326,7 @@ fn maintenance_serializes_the_fleet_and_releases_to_current_intent() {
             &SigningKey::from_bytes(&[11; 32]).verifying_key().to_bytes(),
         )
         .unwrap();
-    assert_eq!(node.node.admission, Admission::Disabled);
+    assert_eq!(node.admission, Admission::Disabled);
     assert!(!node.cutoff_ready);
     assert!(
         fleet
@@ -393,7 +392,7 @@ fn normal_removal_requires_fresh_signed_zero_and_offline_nodes_receive_the_final
     assert_eq!(status(&mut fleet.auth, 0, 0), disabled);
     let replacement = fleet.auth.stage(&fleet.admin, fleet.target).unwrap();
     assert!(replacement.version > disabled.version);
-    assert_eq!(replacement.admission, Admission::Draining);
+    assert_eq!(replacement.admission(), Admission::Draining);
 }
 
 #[test]
@@ -425,14 +424,14 @@ fn stun_only_node_disappears_and_recovers_without_ever_accepting_relay_traffic()
     let node = attach(
         &mut fleet.auth.store,
         fleet.target.clone(),
-        ListingState::Listed {
+        NodeState::Listed {
             status: Status::Active,
             withdrawn: BTreeSet::new(),
         },
         fleet.target.alias.clone(),
     )
     .unwrap();
-    assert_eq!(node.admission, Admission::Draining);
+    assert_eq!(node.admission(), Admission::Draining);
     for _ in 0..3 {
         fleet.observe(&[
             (0, [true, false], [true, true]),
@@ -468,22 +467,19 @@ fn disable_verify_promote_clears_withdrawn_overrides_and_staging_streaks() {
         fleet.observe(&[(0, bad_relay, ok), (1, bad_relay, ok)]);
     }
     assert_eq!(fleet.entry().status, Status::Draining);
-    assert_eq!(fleet.target_node().admission, Admission::Draining);
+    assert_eq!(fleet.target_node().admission(), Admission::Draining);
 
     // Changing listed operator intent without re-verification preserves active health overrides
     // and does not wait for mirror propagation.
     fleet.manage(Action::Drain).unwrap();
     fleet.manage(Action::Resume).unwrap();
     assert_eq!(fleet.entry().status, Status::Draining);
-    assert_eq!(fleet.target_node().admission, Admission::Draining);
+    assert_eq!(fleet.target_node().admission(), Admission::Draining);
 
     fleet
         .manage(Action::Disable { early_cutoff: true })
         .unwrap();
-    assert!(matches!(
-        fleet.target_node().listing.unwrap().state,
-        ListingState::Disabled
-    ));
+    assert!(matches!(fleet.target_node().state(), NodeState::Disabled));
     assert!(fleet.find_entry().is_none());
     assert!(
         fleet
@@ -499,14 +495,14 @@ fn disable_verify_promote_clears_withdrawn_overrides_and_staging_streaks() {
     fleet.pass_staging_probe();
     fleet.promote_target(Status::Active).unwrap();
 
-    assert_eq!(fleet.target_node().admission, Admission::Accepting);
+    assert_eq!(fleet.target_node().admission(), Admission::Accepting);
     assert_eq!(fleet.entry().status, Status::Active);
     assert_eq!(fleet.entry().spec.roles, [Role::Relay, Role::Stun]);
     assert!(matches!(
-        fleet.target_node().listing.unwrap().state,
-        ListingState::Listed {
+        fleet.target_node().state(),
+        NodeState::Listed {
             status: Status::Active,
-            ref withdrawn,
+            withdrawn,
         } if withdrawn.is_empty()
     ));
 
@@ -516,7 +512,7 @@ fn disable_verify_promote_clears_withdrawn_overrides_and_staging_streaks() {
         .auth
         .evaluate_health(&fleet.agents, &fleet.signer, &mut head)
         .unwrap();
-    assert_eq!(fleet.target_node().admission, Admission::Accepting);
+    assert_eq!(fleet.target_node().admission(), Admission::Accepting);
     assert_eq!(fleet.entry().status, Status::Active);
 
     // A STUN-only node recovers back into the signed directory after Disable -> Verify -> Promote.
@@ -525,7 +521,7 @@ fn disable_verify_promote_clears_withdrawn_overrides_and_staging_streaks() {
     attach(
         &mut fleet.auth.store,
         fleet.target.clone(),
-        ListingState::Listed {
+        NodeState::Listed {
             status: Status::Active,
             withdrawn: BTreeSet::new(),
         },
@@ -547,7 +543,7 @@ fn disable_verify_promote_clears_withdrawn_overrides_and_staging_streaks() {
 
     assert_eq!(fleet.entry().status, Status::Active);
     assert_eq!(fleet.entry().spec.roles, [Role::Stun]);
-    assert_eq!(fleet.target_node().admission, Admission::Draining);
+    assert_eq!(fleet.target_node().admission(), Admission::Draining);
 }
 
 #[test]
@@ -581,7 +577,7 @@ fn disable_during_maintenance_does_not_republish_withdrawn_stun() {
         .maintenance_hold(&hold, false, &fleet.signer)
         .unwrap();
     assert!(fleet.find_entry().is_none());
-    assert_eq!(fleet.target_node().admission, Admission::Disabled);
+    assert_eq!(fleet.target_node().admission(), Admission::Disabled);
 
     // STUN-only nodes have no relay sessions to drain and stay omitted when disabled under hold.
     let mut fleet = Fleet::new();
@@ -589,7 +585,7 @@ fn disable_during_maintenance_does_not_republish_withdrawn_stun() {
     attach(
         &mut fleet.auth.store,
         fleet.target.clone(),
-        ListingState::Listed {
+        NodeState::Listed {
             status: Status::Active,
             withdrawn: BTreeSet::new(),
         },
@@ -631,7 +627,7 @@ fn disable_during_maintenance_does_not_republish_withdrawn_stun() {
         .maintenance_hold(&stun_hold, false, &fleet.signer)
         .unwrap();
     assert!(fleet.find_entry().is_none());
-    assert_eq!(fleet.target_node().admission, Admission::Disabled);
+    assert_eq!(fleet.target_node().admission(), Admission::Disabled);
 }
 
 struct MultiNodeFleet {
@@ -686,7 +682,7 @@ impl MultiNodeFleet {
             attach(
                 &mut fleet.auth.store,
                 node.clone(),
-                ListingState::Listed {
+                NodeState::Listed {
                     status,
                     withdrawn: BTreeSet::new(),
                 },
@@ -919,7 +915,7 @@ fn disable_rejects_staging_drafts_without_discarding_enrollment() {
         .auth
         .stage(&fleet.admin, provisional_spec.clone())
         .unwrap();
-    let provisional_op = provisional.listing.as_ref().unwrap().operation_id.clone();
+    let provisional_op = provisional.operation_id;
     report_zero_shares(&mut fleet.auth, &provisional_key, provisional.version);
     assert!(
         fleet
@@ -938,41 +934,6 @@ fn disable_rejects_staging_drafts_without_discarding_enrollment() {
             .unwrap()
             .is_none()
     );
-
-    // PriorPolicy draft rejects Disable so cancelling still restores its prior Admission.
-    let prior_key = SigningKey::from_bytes(&[62; 32]);
-    let prior_id = prior_key.verifying_key().to_bytes();
-    let prior_node = Node {
-        listing: None,
-        key: prior_id,
-        zone: Zone::Cn,
-        region: "shanghai".into(),
-        admission: Admission::Accepting,
-        anonymous: false,
-        version: 4,
-    };
-    save(&mut fleet.auth.store, &key("node", &prior_id), &prior_node).unwrap();
-    let prior_spec = spec_for_key("prior-policy-draft", &prior_key);
-    let staged_prior = fleet.auth.stage(&fleet.admin, prior_spec.clone()).unwrap();
-    let prior_op = staged_prior.listing.as_ref().unwrap().operation_id.clone();
-    report_zero_shares(&mut fleet.auth, &prior_key, staged_prior.version);
-    assert!(
-        fleet
-            .auth
-            .node_by_key(&fleet.admin, &prior_id)
-            .unwrap()
-            .cutoff_ready
-    );
-    assert_staging_disable_rejected(&mut fleet, &prior_spec.node_key, &prior_op);
-    fleet
-        .auth
-        .cancel_draft(&fleet.admin, &prior_spec.node_key, &prior_op)
-        .unwrap();
-    let restored: Node = load(&fleet.auth.store, &key("node", &prior_id))
-        .unwrap()
-        .unwrap();
-    assert!(restored.listing.is_none());
-    assert_eq!(restored.admission, Admission::Accepting);
 }
 
 #[test]
@@ -1010,7 +971,7 @@ fn disable_is_idempotent_when_disabled_and_rejects_reverification_staging() {
 
     fleet.manage(Action::Verify).unwrap();
     let verify_node = fleet.target_node();
-    let verify_op = verify_node.listing.unwrap().operation_id;
+    let verify_op = verify_node.operation_id;
     let target_signing = SigningKey::from_bytes(&[11; 32]);
     report_zero_shares(&mut fleet.auth, &target_signing, verify_node.version);
     assert!(
@@ -1026,8 +987,5 @@ fn disable_is_idempotent_when_disabled_and_rejects_reverification_staging() {
         .auth
         .cancel_draft(&fleet.admin, &target_key, &verify_op)
         .unwrap();
-    assert!(matches!(
-        fleet.target_node().listing.unwrap().state,
-        ListingState::Disabled
-    ));
+    assert!(matches!(fleet.target_node().state(), NodeState::Disabled));
 }

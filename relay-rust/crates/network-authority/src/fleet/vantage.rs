@@ -1,5 +1,5 @@
 use super::{
-    EVIDENCE_SECONDS, ListingState, Verification,
+    EVIDENCE_SECONDS, NodeState, Verification,
     signature::verify_bytes,
     topology::{Role, Spec, public_key},
 };
@@ -198,13 +198,10 @@ impl<R: Store, E: Environment> Authority<R, E> {
         let mut selected = None;
         for (_, raw) in self.store.scan("node/", None)? {
             let node: Node = serde_json::from_str(&raw)?;
-            let Some(listing) = &node.listing else {
-                continue;
-            };
-            if listing.spec.zone != agent.zone {
+            if node.spec.zone != agent.zone {
                 continue;
             }
-            let ListingState::Staging { check, .. } = &listing.state else {
+            let NodeState::Staging { check, .. } = node.state() else {
                 continue;
             };
             let due = match check {
@@ -224,9 +221,8 @@ impl<R: Store, E: Environment> Authority<R, E> {
         };
         save(&mut self.store, &claim_key, &poll.at)?;
         let lease = B64.encode(self.environment.random::<16>()?);
-        let listing = node.listing.as_mut().ok_or(Fault::Invalid)?;
         let until = (now + probe::LIFETIME).min(self.signing.generation.expires_at);
-        let tickets = if listing.spec.roles.contains(&Role::Relay) {
+        let tickets = if node.spec.roles.contains(&Role::Relay) {
             poll.shares
                 .iter()
                 .map(|share| self.probe_ticket(&node.key, share, now, until))
@@ -234,29 +230,32 @@ impl<R: Store, E: Environment> Authority<R, E> {
         } else {
             Vec::new()
         };
-        let ListingState::Staging { check, .. } = &mut listing.state else {
-            return Err(Fault::Invalid.into());
-        };
-        let failures = match check {
-            Verification::Failed { failures, .. } | Verification::Running { failures, .. } => {
-                *failures
-            }
-            _ => 0,
-        };
-        *check = Verification::Running {
-            vantage_key: agent.key.clone(),
-            lease: lease.clone(),
-            until,
-            failures,
-        };
+        node.update_lifecycle(|n| {
+            let NodeState::Staging { check, .. } = n.state else {
+                return Err(Fault::Invalid.into());
+            };
+            let failures = match check {
+                Verification::Failed { failures, .. } | Verification::Running { failures, .. } => {
+                    *failures
+                }
+                _ => 0,
+            };
+            *check = Verification::Running {
+                vantage_key: agent.key.clone(),
+                lease: lease.clone(),
+                until,
+                failures,
+            };
+            Ok(())
+        })?;
         let work = Work {
-            operation_id: listing.operation_id.clone(),
+            operation_id: node.operation_id.clone(),
             lease,
-            spec: listing.spec.clone(),
+            spec: node.spec.clone(),
             origins,
             tickets,
         };
-        tracing::info!(event="verification_claimed",operation_id=%listing.operation_id,node_id=%listing.spec.node_key,vantage=%agent.id);
+        tracing::info!(event="verification_claimed",operation_id=%node.operation_id,node_id=%node.spec.node_key,vantage=%agent.id);
         save(&mut self.store, &key("node", &node.key), &node)?;
         Ok(Some(work))
     }
@@ -301,41 +300,44 @@ impl<R: Store, E: Environment> Authority<R, E> {
         );
         let record = key("node", &public_key(&result.node_key)?);
         let mut node: Node = load(&self.store, &record)?.ok_or(Fault::NodeNotFound)?;
-        let listing = node.listing.as_mut().ok_or(Fault::Invalid)?;
-        let ListingState::Staging { check, .. } = &mut listing.state else {
-            return Err(Fault::Invalid.into());
-        };
-        let Verification::Running {
-            vantage_key,
-            lease,
-            until,
-            failures,
-        } = check
-        else {
-            return Err(Fault::Invalid.into());
-        };
-        ensure!(
-            listing.spec.zone == agent.zone
-                && *vantage_key == agent.key
-                && *lease == result.lease
-                && now < *until,
-            Fault::Invalid
-        );
-        tracing::info!(event="verification_completed",operation_id=%listing.operation_id,node_id=%result.node_key,vantage=%agent.id,outcome=?result.outcome);
-        let consecutive = failures.saturating_add(1);
-        *check = match result.outcome {
-            ProbeOutcome::Released => Verification::Queued,
-            ProbeOutcome::Passed => Verification::Passed {
-                vantage_key: agent.key.clone(),
-                at: now,
-            },
-            ProbeOutcome::Failed { reason } => Verification::Failed {
-                vantage_key: agent.key.clone(),
-                at: now,
-                reason,
-                failures: consecutive,
-            },
-        };
+        let outcome = result.outcome;
+        node.update_lifecycle(|n| {
+            let NodeState::Staging { check, .. } = n.state else {
+                return Err(Fault::Invalid.into());
+            };
+            let Verification::Running {
+                vantage_key,
+                lease,
+                until,
+                failures,
+            } = check
+            else {
+                return Err(Fault::Invalid.into());
+            };
+            ensure!(
+                n.spec.zone == agent.zone
+                    && *vantage_key == agent.key
+                    && *lease == result.lease
+                    && now < *until,
+                Fault::Invalid
+            );
+            tracing::info!(event="verification_completed",operation_id=%n.operation_id,node_id=%result.node_key,vantage=%agent.id,?outcome);
+            let consecutive = failures.saturating_add(1);
+            *check = match outcome {
+                ProbeOutcome::Released => Verification::Queued,
+                ProbeOutcome::Passed => Verification::Passed {
+                    vantage_key: agent.key.clone(),
+                    at: now,
+                },
+                ProbeOutcome::Failed { reason } => Verification::Failed {
+                    vantage_key: agent.key.clone(),
+                    at: now,
+                    reason,
+                    failures: consecutive,
+                },
+            };
+            Ok(())
+        })?;
         save(&mut self.store, &record, &node)
     }
 }

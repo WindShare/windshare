@@ -1,41 +1,40 @@
 use super::*;
 use crate::fleet::{
-    Listing, ListingState,
+    NodeState,
     maintenance::Operation,
     topology::{Role, Spec, Status},
 };
-use windshare_relay_access::usage::{Admission, REPORT_INTERVAL_SECONDS};
+use windshare_relay_access::usage::REPORT_INTERVAL_SECONDS;
 
 fn draining_node(key: [u8; 32], operation_id: &str) -> Node {
     let encoded_key = URL_SAFE_NO_PAD.encode(key);
-    Node {
-        listing: Some(Listing {
-            spec: Spec {
-                node_key: encoded_key,
-                alias: "skew-relay".into(),
-                relay: "https://skew-relay.example".into(),
-                roles: vec![Role::Relay],
-                stun: vec![],
-                zone: Zone::Global,
-                region: "skew-test".into(),
-                provider: "test".into(),
-                operator: "official".into(),
-                capacity_mbps: 100,
-            },
-            operation_id: operation_id.into(),
-            state: ListingState::Listed {
-                status: Status::Draining,
-                withdrawn: std::collections::BTreeSet::new(),
-            },
-            maintenance: Some(operation_id.into()),
-        }),
-        version: 2,
-        key,
-        zone: Zone::Global,
-        region: "skew-test".into(),
-        anonymous: true,
-        admission: Admission::Draining,
-    }
+    let mut node = Node::new(
+        Spec {
+            node_key: encoded_key,
+            alias: "skew-relay".into(),
+            relay: "https://skew-relay.example".into(),
+            roles: vec![Role::Relay],
+            stun: vec![],
+            zone: Zone::Global,
+            region: "skew-test".into(),
+            provider: "test".into(),
+            operator: "official".into(),
+            capacity_mbps: 100,
+        },
+        operation_id.into(),
+        NodeState::Listed {
+            status: Status::Draining,
+            withdrawn: std::collections::BTreeSet::new(),
+        },
+        2,
+    )
+    .unwrap();
+    node.update_lifecycle(|n| {
+        *n.maintenance = Some(operation_id.into());
+        Ok(())
+    })
+    .unwrap();
+    node
 }
 
 fn sign_report(

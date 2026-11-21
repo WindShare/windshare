@@ -121,22 +121,37 @@ impl Environment for Clock {
         Ok([self.next; N])
     }
 }
-// Historical enrollments had no directory metadata. Tests seed that state before exercising governance or bootstrap.
-struct NodeEnrollment {
-    key: [u8; 32],
-    zone: Zone,
-    region: String,
+fn listed_node(key: [u8; 32], zone: Zone, region: &str) -> Node {
+    let alias = format!("n{:02x}{:02x}", key[0], key[1]);
+    let spec = crate::fleet::topology::Spec {
+        alias: alias.clone(),
+        node_key: URL_SAFE_NO_PAD.encode(key),
+        relay: format!("https://{alias}.example"),
+        stun: Vec::new(),
+        roles: vec![crate::fleet::topology::Role::Relay],
+        zone,
+        region: region.into(),
+        provider: "test".into(),
+        operator: "official".into(),
+        capacity_mbps: 100,
+    };
+    Node::new(
+        spec,
+        "seed-op".into(),
+        crate::fleet::NodeState::Listed {
+            status: crate::fleet::topology::Status::Active,
+            withdrawn: std::collections::BTreeSet::new(),
+        },
+        1,
+    )
+    .unwrap()
 }
+
 impl Authority<Memory, Clock> {
-    fn enroll_node(&mut self, session: &str, record: &NodeEnrollment) -> Result<Node> {
-        self.require_admin(session)?;
-        let path = key("node", &record.key);
-        if let Some(node) = load(&self.store, &path)? {
-            return Ok(node);
-        }
-        let node = Node::enrolled(record.key, record.zone, record.region.clone());
-        save(&mut self.store, &path, &node)?;
-        Ok(node)
+    fn seed_node(&mut self, id: [u8; 32], zone: Zone, region: &str) -> Node {
+        let node = listed_node(id, zone, region);
+        save(&mut self.store, &key("node", &id), &node).unwrap();
+        node
     }
 }
 
@@ -404,20 +419,7 @@ fn late_reports_charge_the_original_day_and_restart_retries_do_not_double_charge
     let session = authority.register("source", registration(1)).unwrap();
     let node = SigningKey::from_bytes(&[3; 32]);
     let node_key = node.verifying_key().to_bytes();
-    save(
-        &mut authority.store,
-        &key("node", &node_key),
-        &Node {
-            listing: None,
-            version: 1,
-            key: node_key,
-            zone: Zone::Global,
-            region: "test".into(),
-            anonymous: true,
-            admission: windshare_relay_access::usage::Admission::Accepting,
-        },
-    )
-    .unwrap();
+    authority.seed_node(node_key, Zone::Global, "test");
     let settings = Settings {
         daily_bytes: 1000,
         ..Settings::default()
@@ -710,20 +712,7 @@ fn usage_report_rejects_invalid_monthly_relay_budget() {
     let mut authority = fixture();
     let node = SigningKey::from_bytes(&[9; 32]);
     let node_key = node.verifying_key().to_bytes();
-    save(
-        &mut authority.store,
-        &key("node", &node_key),
-        &Node {
-            listing: None,
-            version: 1,
-            key: node_key,
-            zone: Zone::Global,
-            region: "test".into(),
-            anonymous: true,
-            admission: windshare_relay_access::usage::Admission::Accepting,
-        },
-    )
-    .unwrap();
+    authority.seed_node(node_key, Zone::Global, "test");
     for budget in [
         windshare_relay_access::usage::MonthlyBudget {
             bytes: 1024,

@@ -12,7 +12,7 @@ import { usePage } from '../ui/location'
 import { AuthorityClient } from './api'
 import { EnrollNode } from './onboarding'
 import { encode } from './identity'
-import type { NodeDetails, RelayNode, Restrictions, Snapshot } from './model'
+import type { NodeDetails, Restrictions, Snapshot } from './model'
 import { LookupNode, NodeDetail, Nodes } from './nodes'
 import { Accounts } from './accounts'
 import { LookupShare, Reports } from './restrictions'
@@ -44,7 +44,7 @@ function Dashboard({ api, snapshot, update, refresh, loadMoreNodes, retry, refre
   const [reportRevision, setReportRevision] = useState({ list: 0, detail: 0 })
   const [nodeRevision, setNodeRevision] = useState(0)
 
-  function saveNode(next: RelayNode) {
+  function saveNode(next: NodeDetails) {
     const key = encode(next.key)
     update(current => ({ ...current, node_page: { ...current.node_page,
       entries: current.node_page.entries.map(entry => encode(entry.key) === key && next.version >= entry.version

@@ -316,11 +316,8 @@ fn admin_routes(
         }
         (Method::Put, "/v1/admin/nodes/policy") => {
             let update = parse::<NodePolicyRequest>(bytes)?;
-            serde_json::to_value(authority.set_node_policy(
-                &session,
-                &update.key,
-                update.change,
-            )?)?
+            let node = authority.set_node_policy(&session, &update.key, update.change)?;
+            serde_json::to_value(authority.node_details(node)?)?
         }
         (Method::Post, "/v1/admin/blocks") => {
             authority.block(&session, parse::<Block>(bytes)?)?;

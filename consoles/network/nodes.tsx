@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback } from 'react'
 import { FleetControls, ProbeResults, ProbeWarnings } from './fleet/operations'
 import { Verification } from './verification'
 import { useAction, useResource } from '../ui/activity'
@@ -6,12 +6,11 @@ import { message } from '../ui/locale'
 import { useCopy, useLocale } from '../ui/use-locale'
 import { sharedCopy } from '../ui/locales'
 import { networkCopy } from './locales'
-import { Confirm } from '../ui/forms'
 import { BackLink, Badge, Bytes, DateStamp, EmptyState, Notice, ReadError } from '../ui/layout'
 import { Icon, type IconName } from '../ui/Icon'
 import type { AuthorityClient } from './api'
 import { encode } from './identity'
-import { servesRelay, type LoadReport, type NodeDetails, type NodePage, type NodeSpec, type PolicyChange, type Publication, type RelayNode } from './model'
+import { servesRelay, type LoadReport, type NodeDetails, type NodePage, type NodeSpec, type NodeState, type PolicyChange, type Publication, type RelayNode } from './model'
 
 type Directory = Publication | null | undefined
 type BadgeTone = 'neutral' | 'good' | 'warning' | 'info'
@@ -19,8 +18,7 @@ type BadgeTone = 'neutral' | 'good' | 'warning' | 'info'
 const STAGING_TONES = { queued: 'neutral', running: 'neutral', passed: 'good', failed: 'warning' } as const
 
 function relayPolicyStatus(node: RelayNode, t: typeof networkCopy.en): { tone: BadgeTone; label: string } {
-  const { listing } = node
-  if (!listing || servesRelay(node)) {
+  if (servesRelay(node)) {
     return {
       tone: node.admission === 'accepting' ? 'good' : 'warning',
       label: t.admissions[node.admission],
@@ -28,9 +26,9 @@ function relayPolicyStatus(node: RelayNode, t: typeof networkCopy.en): { tone: B
   }
   // Authority keeps STUN-only fleet nodes at admission=draining (fail-closed for relay)
   // so they reject public relay traffic while remaining eligible for probes and maintenance.
-  if (listing.state.kind === 'disabled') return { tone: 'warning', label: t.admissions.disabled }
-  if (listing.maintenance) return { tone: 'info', label: t.maintenance }
-  if (listing.state.kind === 'listed' && listing.state.status === 'draining') {
+  if (node.state.kind === 'disabled') return { tone: 'warning', label: t.admissions.disabled }
+  if (node.maintenance) return { tone: 'info', label: t.maintenance }
+  if (node.state.kind === 'listed' && node.state.status === 'draining') {
     return { tone: 'warning', label: t.states.draining }
   }
   return { tone: 'neutral', label: t.stunOnly }
@@ -44,10 +42,10 @@ function RelayPolicyCell({ node }: { node: RelayNode }) {
     <small>{servesRelay(node) ? `${access} · v${node.version}` : `v${node.version}`}</small></>
 }
 
-function Listing({ directory, id, listing }: { directory: Directory; id: string; listing?: RelayNode['listing'] }) {
+function DirectoryStatus({ directory, id, state }: { directory: Directory; id: string; state: NodeState }) {
   const t = useCopy(networkCopy)
-  if (listing?.state.kind === 'staging') {
-    const { kind } = listing.state.check
+  if (state.kind === 'staging') {
+    const { kind } = state.check
     let note = t.notListed
     if (directory === undefined) note = t.checkingMirror
     else if (directory === null) note = t.unverified
@@ -110,10 +108,10 @@ export function Nodes({ page, directory, loading, loadMore }: {
             return <tr key={id}>
               <th scope="row"><a className="node-link" href={'#node/' + id}>
                 <span className="row-icon"><Icon name="server" size={19} /></span>
-                <span>{node.listing?.spec.alias || node.region || t.zones[node.zone]}<small>{t.zones[node.zone]} · <code>{id.slice(0, 8)}</code></small></span></a></th>
+                <span>{node.spec.alias}<small>{t.zones[node.spec.zone]} · <code>{id.slice(0, 8)}</code></small></span></a></th>
               <td data-label={t.savedRelayPolicy}><div><RelayPolicyCell node={node} /></div></td>
               <td data-label={t.lastReport}><div><Latest report={node.report} /></div></td>
-              <td data-label={t.directory}><div><Listing directory={directory} id={id} listing={node.listing} />{directory && <ProbeWarnings node={node} directory={directory} />}</div></td>
+              <td data-label={t.directory}><div><DirectoryStatus directory={directory} id={id} state={node.state} />{directory && <ProbeWarnings node={node} directory={directory} />}</div></td>
             </tr>
           })}</tbody>
         </table>
@@ -123,7 +121,7 @@ export function Nodes({ page, directory, loading, loadMore }: {
   </div>
 }
 
-type NodeDetailActions = { refresh: () => Promise<void>; directory: Directory; api: AuthorityClient; saved: (node: RelayNode) => void }
+type NodeDetailActions = { refresh: () => Promise<void>; directory: Directory; api: AuthorityClient; saved: (node: NodeDetails) => void }
 
 export function LookupNode({ id, api, directory, saved, refresh }: NodeDetailActions & { id: string }) {
   const t = useCopy(networkCopy)
@@ -131,7 +129,7 @@ export function LookupNode({ id, api, directory, saved, refresh }: NodeDetailAct
   const resource = useResource(read)
   const node = resource.value
   if (node) return <NodeDetail node={node} api={api} directory={directory} refresh={refresh} saved={next => {
-    resource.update(previous => previous && { ...previous, ...next })
+    resource.update(() => next)
     saved(next)
   }} />
   return <div className="view"><BackLink href="#nodes">{t.backToNodes}</BackLink><h1>{t.nodeDetails}</h1>
@@ -153,8 +151,7 @@ function NodeSpecFacts({ spec }: { spec: NodeSpec }) {
 }
 
 export function NodeDetail({ node, directory, api, saved, refresh }: NodeDetailActions & { node: NodeDetails }) {
-  const { report } = node
-  const [confirmPause, setConfirmPause] = useState(false)
+  const { report, spec } = node
   const t = useCopy(networkCopy)
   const action = useAction()
   const id = encode(node.key)
@@ -167,11 +164,11 @@ export function NodeDetail({ node, directory, api, saved, refresh }: NodeDetailA
     })
   }
   return <div className="view"><BackLink href="#nodes">{t.backToNodes}</BackLink>
-    <h1>{node.listing?.spec.alias || node.region || t.zones[node.zone]}</h1>
+    <h1>{spec.alias}</h1>
     <div className="node-detail-grid"><section className="panel padded"><h2>{t.nodeDetails}</h2>
-      <dl className="facts">{node.listing && <NodeSpecFacts spec={node.listing.spec} />}
-        <dt>{t.region}</dt><dd>{node.region}</dd><dt>{t.zone}</dt><dd>{t.zones[node.zone]}</dd><dt>{t.publicKey}</dt><dd><code>{id}</code></dd>
-        <dt>{t.directory}</dt><dd><Listing directory={directory} id={id} listing={node.listing} /></dd>
+      <dl className="facts"><NodeSpecFacts spec={spec} />
+        <dt>{t.region}</dt><dd>{spec.region}</dd><dt>{t.zone}</dt><dd>{t.zones[spec.zone]}</dd><dt>{t.publicKey}</dt><dd><code>{id}</code></dd>
+        <dt>{t.directory}</dt><dd><DirectoryStatus directory={directory} id={id} state={node.state} /></dd>
         <dt>{t.lastReport}</dt><dd>{report ? <DateStamp millis={report.reported_at * 1000} /> : t.awaitingReport}</dd>
         {report?.load.relay_budget && <><dt>{t.relayBudget}</dt><dd><Bytes value={report.load.relay_budget.bytes} /> · {t.resetsDay(report.load.relay_budget.reset_day_utc)}</dd></>}
         {report && <><dt>{t.appliedPolicy}</dt><dd>v{report.load.applied_policy_version} / v{node.version}</dd>
@@ -180,20 +177,14 @@ export function NodeDetail({ node, directory, api, saved, refresh }: NodeDetailA
           {t.sessions(report.load.active_sessions)} · {t.relayed} <Bytes value={report.load.forwarded_bytes} /> · {t.refusals(report.load.admission_refusals)}</dd></>}
       </dl></section>
     <section className="panel padded"><div className="section-title"><h2>{t.savedNodePolicy}</h2><Badge>v{node.version}</Badge></div>
-      <div className="setting-row"><div><h3>{t.publicRelay}</h3><p>{relayPolicy.label}</p></div>
-        {!node.listing && <button className="secondary" disabled={action.busy} onClick={() => node.admission === 'disabled'
-          ? change({ field: 'admission', value: 'accepting' }) : setConfirmPause(true)}>{node.admission === 'disabled' ? t.enableRelay : t.disable}</button>}</div>
+      <div className="setting-row"><div><h3>{t.publicRelay}</h3><p>{relayPolicy.label}</p></div></div>
       {hasRelay && <div className="setting-row"><div><h3>{t.anonymousSharing}</h3><p>{node.anonymous ? t.allowed : t.accountRequired}</p></div>
         <button className="secondary" disabled={action.busy} onClick={() => change({ field: 'anonymous_sharing', value: !node.anonymous })}>
           {node.anonymous ? t.requireAccount : t.allowAnonymous}</button></div>}
       <Notice feedback={action.feedback} />
     </section></div>
-    {node.listing && <Verification node={node} api={api} refresh={refresh} />}
-    {node.listing && <FleetControls node={node} api={api} refresh={refresh} />}
-    {directory && <ProbeResults operation={node.listing?.operation_id} id={id} directory={directory} />}
-    {confirmPause && <Confirm title={t.confirmPause} confirm={t.disable} onCancel={() => setConfirmPause(false)}
-      onConfirm={() => { setConfirmPause(false); change({ field: 'admission', value: 'disabled' }) }}>
-      <p>{t.pauseConsequences}</p>
-    </Confirm>}
+    <Verification node={node} api={api} refresh={refresh} />
+    <FleetControls node={node} api={api} refresh={refresh} />
+    {directory && <ProbeResults operation={node.operation_id} id={id} directory={directory} />}
   </div>
 }

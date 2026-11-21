@@ -76,18 +76,15 @@ fn node_policy_versions_survive_same_second_changes_and_disabled_reports() {
         .initialize("once", "once", "admin", "correct horse battery")
         .unwrap();
     let node = SigningKey::from_bytes(&[43; 32]);
-    let key = node.verifying_key().to_bytes();
-    let enrollment = |zone| NodeEnrollment {
-        key,
-        zone,
-        region: "cn-test".into(),
-    };
-    let enrolled = authority
-        .enroll_node(&admin, &enrollment(Zone::Cn))
-        .unwrap();
+    let node_key = node.verifying_key().to_bytes();
+    let enrolled = authority.seed_node(node_key, Zone::Cn, "cn-test");
     assert!(
-        enrolled.admission == windshare_relay_access::usage::Admission::Accepting
+        enrolled.admission() == windshare_relay_access::usage::Admission::Accepting
             && !enrolled.anonymous
+    );
+    assert!(
+        serde_json::from_str::<NodePolicyChange>(r#"{"field":"admission","value":"disabled"}"#)
+            .is_err()
     );
     let account = authority
         .register("source", registration(1))
@@ -95,51 +92,53 @@ fn node_policy_versions_survive_same_second_changes_and_disabled_reports() {
         .account;
     let bytes = batch(&authority, &node, account, 1, 2, 0);
     assert_eq!(status(&mut authority, &bytes).1.version, 1);
-    authority
-        .set_node_policy(
-            &admin,
-            &key,
-            NodePolicyChange::Admission(windshare_relay_access::usage::Admission::Disabled),
-        )
+    let changed = authority
+        .set_node_policy(&admin, &node_key, NodePolicyChange::AnonymousSharing(true))
         .unwrap();
+    assert!(
+        changed.admission() == windshare_relay_access::usage::Admission::Accepting
+            && changed.anonymous
+    );
+    assert_eq!(changed.version, 2);
+    let repeated = authority
+        .set_node_policy(&admin, &node_key, NodePolicyChange::AnonymousSharing(true))
+        .unwrap();
+    assert_eq!(repeated.version, 2);
+
+    let mut disabled_node: Node = load(&authority.store, &key("node", &node_key))
+        .unwrap()
+        .unwrap();
+    disabled_node
+        .update_lifecycle(|n| {
+            *n.state = crate::fleet::NodeState::Disabled;
+            Ok(())
+        })
+        .unwrap();
+    save(
+        &mut authority.store,
+        &key("node", &node_key),
+        &disabled_node,
+    )
+    .unwrap();
     let disabled = status(&mut authority, &bytes).1;
-    assert_eq!(disabled.version, 2);
+    assert_eq!(disabled.version, 3);
     assert_eq!(
         disabled.admission,
         windshare_relay_access::usage::Admission::Disabled
     );
-    let existing = authority
-        .enroll_node(&admin, &enrollment(Zone::Global))
+    let toggled_disabled = authority
+        .set_node_policy(&admin, &node_key, NodePolicyChange::AnonymousSharing(false))
         .unwrap();
-    assert_eq!(existing.zone, Zone::Cn);
     assert!(
-        existing.admission == windshare_relay_access::usage::Admission::Disabled
-            && !existing.anonymous
+        toggled_disabled.admission() == windshare_relay_access::usage::Admission::Disabled
+            && !toggled_disabled.anonymous
+            && toggled_disabled.version == 4
     );
-    let changed = authority
-        .set_node_policy(&admin, &key, NodePolicyChange::AnonymousSharing(true))
-        .unwrap();
+    let reported = status(&mut authority, &bytes).1;
+    assert_eq!(reported.version, 4);
     assert!(
-        changed.admission == windshare_relay_access::usage::Admission::Disabled
-            && changed.anonymous
-    );
-    assert_eq!(changed.version, 3);
-    let repeated = authority
-        .set_node_policy(&admin, &key, NodePolicyChange::AnonymousSharing(true))
-        .unwrap();
-    assert_eq!(repeated.version, 3);
-    authority
-        .set_node_policy(
-            &admin,
-            &key,
-            NodePolicyChange::Admission(windshare_relay_access::usage::Admission::Accepting),
-        )
-        .unwrap();
-    let restored = status(&mut authority, &bytes).1;
-    assert_eq!(restored.version, 4);
-    assert!(
-        restored.admission == windshare_relay_access::usage::Admission::Accepting
-            && restored.anonymous
+        reported.admission == windshare_relay_access::usage::Admission::Disabled
+            && !reported.anonymous
     );
 }
 
@@ -305,16 +304,7 @@ fn node_details_and_load_remain_reachable_beyond_the_console_page() {
     for i in 1..=1001u16 {
         let mut id = [0; 32];
         id[..2].copy_from_slice(&i.to_be_bytes());
-        authority
-            .enroll_node(
-                &admin,
-                &NodeEnrollment {
-                    key: id,
-                    zone: Zone::Global,
-                    region: "local".into(),
-                },
-            )
-            .unwrap();
+        authority.seed_node(id, Zone::Global, "local");
     }
 
     let snapshot = authority.console(&admin).unwrap();
@@ -328,16 +318,7 @@ fn node_details_and_load_remain_reachable_beyond_the_console_page() {
     let mut last = [0; 32];
     last[0] = 255;
     // Insert a key that sorts after every seeded node's encoded public key.
-    authority
-        .enroll_node(
-            &admin,
-            &NodeEnrollment {
-                key: last,
-                zone: Zone::Cn,
-                region: "additional".into(),
-            },
-        )
-        .unwrap();
+    authority.seed_node(last, Zone::Cn, "additional");
     let now = authority.environment.now;
     let load = Load {
         relay_budget: None,
@@ -369,7 +350,7 @@ fn node_details_and_load_remain_reachable_beyond_the_console_page() {
         .unwrap();
     let detail = authority.node_by_key(&admin, &last).unwrap();
     let report = detail.report.unwrap();
-    assert_eq!(detail.node.zone, Zone::Cn);
+    assert_eq!(detail.node.spec.zone, Zone::Cn);
     assert_eq!(report.created_at, now - 1);
     assert_eq!(report.reported_at, now);
     assert_eq!(report.load.forwarded_bytes, load.forwarded_bytes);

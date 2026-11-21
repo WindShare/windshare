@@ -41,20 +41,8 @@ fn requested_page(
 #[test]
 fn oversized_restrictions_paginate_without_blocking_usage_or_status() {
     let mut authority = fixture();
-    let admin = authority
-        .initialize("once", "once", "admin", "correct horse battery")
-        .unwrap();
     let node = SigningKey::from_bytes(&[3; 32]);
-    authority
-        .enroll_node(
-            &admin,
-            &NodeEnrollment {
-                key: node.verifying_key().to_bytes(),
-                zone: Zone::Global,
-                region: "test".into(),
-            },
-        )
-        .unwrap();
+    authority.seed_node(node.verifying_key().to_bytes(), Zone::Global, "test");
     let session = authority.register("source", registration(1)).unwrap();
     let mut expected = Restrictions::default();
     for i in 0..8192u16 {

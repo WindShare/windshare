@@ -6,30 +6,29 @@ import { RequestError } from '../../ui/request'
 import { useCopy } from '../../ui/use-locale'
 import { networkCopy } from '../locales'
 import type { AuthorityClient } from '../api'
-import { servesRelay, type FleetAction, type Listing, type NodeDetails, type Publication } from '../model'
+import { servesRelay, type FleetAction, type NodeDetails, type NodeState, type Publication } from '../model'
 
 const CERTIFICATE_WARNING_SECONDS = 14 * 86400
 const LISTED_STATUS_TONES = { active: 'good', canary: 'info', draining: 'warning' } as const
 
 export function ProbeWarnings({ node, directory }: { node: NodeDetails; directory: Publication }) {
   const t = useCopy(networkCopy)
-  const listing = node.listing
-  if (!listing || listing.state.kind !== 'listed') return null
+  if (node.state.kind !== 'listed') return null
   const rows = directory.vantages.filter(v => !directory.silent_vantages.includes(v.id) &&
-    v.nodes[listing.spec.node_key]?.operation_id === listing.operation_id)
+    v.nodes[node.spec.node_key]?.operation_id === node.operation_id)
   const expiring = rows.some(v => {
-    const expiry = v.nodes[listing.spec.node_key].tls_expires
+    const expiry = v.nodes[node.spec.node_key].tls_expires
     return expiry !== null && expiry - v.at <= CERTIFICATE_WARNING_SECONDS
   })
   const failed = rows.filter(v => {
-    const s = v.nodes[listing.spec.node_key]
+    const s = v.nodes[node.spec.node_key]
     return !s.tcp || !s.https || s.relay === false || s.stun === false
   })
   return <>{expiring && <Badge tone="warning">{t.tlsExpiring}</Badge>}
     {failed.length > 0 && <Badge tone="warning">{t.probeWarning} · {failed.map(v => v.id).join(', ')}</Badge>}</>
 }
 
-export function ProbeResults({ id, operation, directory }: { id: string; operation: string | undefined; directory: Publication }) {
+export function ProbeResults({ id, operation, directory }: { id: string; operation: string; directory: Publication }) {
   const t = useCopy(networkCopy)
   const rows = directory.vantages.filter(v => v.nodes[id] && v.nodes[id].operation_id === operation)
   if (!rows.length) return null
@@ -91,7 +90,7 @@ function FleetConfirmDialogs({ pending, aborting, onCancelPending, onConfirmPend
 }
 
 function fleetStatusBadge(
-  state: Exclude<Listing['state'], { kind: 'staging' }>,
+  state: Exclude<NodeState, { kind: 'staging' }>,
   t: typeof networkCopy.en,
 ): { tone: 'good' | 'info' | 'warning'; label: string } {
   if (state.kind === 'disabled') return { tone: 'warning', label: t.admissions.disabled }
@@ -103,14 +102,13 @@ export function FleetControls({ node, api, refresh }: { node: NodeDetails; api: 
   const action = useAction()
   const [pending, setPending] = useState<PendingAction | null>(null)
   const [aborting, setAborting] = useState<string | null>(null)
-  const listing = node.listing
-  if (!listing || listing.state.kind === 'staging') return null
-  const { spec, state, operation_id, maintenance } = listing
+  if (node.state.kind === 'staging') return null
+  const { spec, state, operation_id, maintenance } = node
   const disabled = state.kind === 'disabled'
   const listed = state.kind === 'listed' ? state : null
   const hasRelay = servesRelay(node)
   const status = fleetStatusBadge(state, t)
-  const canPromoteActive = Boolean(listed && listed.status === 'canary' && node.admission !== 'disabled')
+  const canPromoteActive = Boolean(listed && listed.status === 'canary')
   const canResume = listed?.status === 'draining'
   const canDrain = Boolean(hasRelay && listed && listed.status !== 'draining')
   function promoteActive() {

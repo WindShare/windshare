@@ -1,12 +1,13 @@
 use super::{
-    Listing, ListingState,
+    NodeState,
     operations::Admission,
     publication::{self, Publisher},
-    topology::{Role, Status as ListingStatus, public_key},
+    topology::{Role, Status as TopologyStatus, public_key},
     vantage::{ORIGIN_COUNT, Work},
 };
 use crate::{
     Authority, Environment, Fault, Node, Store,
+    nodes::NodeMutation,
     store::{key, load, save},
 };
 use anyhow::{Result, ensure};
@@ -43,38 +44,37 @@ fn complete_key(node_key: &str, operation_id: &str) -> String {
 /// aborted operation ID so late runner requests cannot reclaim it.
 pub(super) fn abort(
     store: &mut impl Store,
-    listing: &mut Listing,
+    node: &mut NodeMutation<'_>,
     operation_id: &str,
     maintenance_id: &str,
 ) -> Result<()> {
     ensure!(
-        valid_operation_id(maintenance_id)
-            && !matches!(listing.state, ListingState::Staging { .. }),
+        valid_operation_id(maintenance_id) && !matches!(node.state, NodeState::Staging { .. }),
         Fault::Invalid
     );
     ensure!(
-        listing.maintenance.as_deref() == Some(maintenance_id),
+        node.maintenance.as_deref() == Some(maintenance_id),
         Fault::Conflict {
             reason: "listing_changed".into()
         }
     );
-    listing.maintenance = None;
-    if let ListingState::Listed { status, .. } = &mut listing.state {
+    *node.maintenance = None;
+    if let NodeState::Listed { status, .. } = node.state {
         // Fail closed after an aborted upgrade: keep the node draining until
         // an operator verifies the host and explicitly resumes it.
-        *status = ListingStatus::Draining;
+        *status = TopologyStatus::Draining;
     }
     save(
         store,
-        &complete_key(&listing.spec.node_key, maintenance_id),
+        &complete_key(&node.spec.node_key, maintenance_id),
         &true,
     )?;
     tracing::warn!(
         event = "maintenance_hold_aborted",
         operation_id = %operation_id,
         maintenance_id = %maintenance_id,
-        node_id = %listing.spec.node_key,
-        disabled = matches!(listing.state, ListingState::Disabled),
+        node_id = %node.spec.node_key,
+        disabled = matches!(node.state, NodeState::Disabled),
     );
     Ok(())
 }
@@ -99,27 +99,29 @@ impl<R: Store, E: Environment> Authority<R, E> {
         publisher: &Publisher,
     ) -> Result<Status> {
         let mut node = self.maintenance_node(cmd)?;
-        let listing = node.listing.as_mut().ok_or(Fault::Invalid)?;
-        let owner = listing.maintenance.as_deref();
-        let done = complete_key(&listing.spec.node_key, &cmd.operation_id);
+        let owner = node.maintenance();
+        let done = complete_key(&node.spec.node_key, &cmd.operation_id);
         if acquire {
             ensure!(
-                listing.status().is_some() && self.store.get(&done)?.is_none(),
+                node.status().is_some() && self.store.get(&done)?.is_none(),
                 Fault::Invalid
             );
-            if owner == Some(&cmd.operation_id) {
+            if owner == Some(cmd.operation_id.as_str()) {
                 return self.maintenance_status(cmd);
             }
             for (_, raw) in self.store.scan("node/", None)? {
                 let other: Node = serde_json::from_str(&raw)?;
                 ensure!(
-                    other.listing.is_none_or(|l| l.maintenance.is_none()),
+                    other.maintenance().is_none(),
                     Fault::Conflict {
                         reason: "maintenance_in_progress".into()
                     }
                 );
             }
-            listing.maintenance = Some(cmd.operation_id.clone());
+            node.update_lifecycle(|n| {
+                *n.maintenance = Some(cmd.operation_id.clone());
+                Ok(())
+            })?;
         } else {
             if owner.is_none() {
                 // A timed-out acquire can still arrive after its matching release.
@@ -129,17 +131,19 @@ impl<R: Store, E: Environment> Authority<R, E> {
                 return self.maintenance_status(cmd);
             }
             ensure!(
-                owner == Some(&cmd.operation_id),
+                owner == Some(cmd.operation_id.as_str()),
                 Fault::Conflict {
                     reason: "maintenance_owner".into()
                 }
             );
-            listing.maintenance = None;
+            node.update_lifecycle(|n| {
+                *n.maintenance = None;
+                Ok(())
+            })?;
             save(&mut self.store, &done, &true)?;
         }
-        node.apply_listing()?;
         save(&mut self.store, &cmd.record()?, &node)?;
-        tracing::info!(event="maintenance_hold_changed",operation_id=%cmd.operation_id,node_id=%cmd.node_key,held=acquire,admission=?node.admission,version=node.version);
+        tracing::info!(event="maintenance_hold_changed",operation_id=%cmd.operation_id,node_id=%cmd.node_key,held=acquire,admission=?node.admission(),version=node.version);
         publication::current(&self.store)?.project(
             &mut self.store,
             publisher,
@@ -153,9 +157,8 @@ impl<R: Store, E: Environment> Authority<R, E> {
     /// Returns only the requested node's signed drain and session counters.
     pub fn maintenance_status(&self, cmd: &Operation) -> Result<Status> {
         let node = self.maintenance_node(cmd)?;
-        let listing = node.listing.as_ref().ok_or(Fault::Invalid)?;
-        let admission = node.admission;
-        let held = listing.maintenance.as_ref() == Some(&cmd.operation_id);
+        let admission = node.admission();
+        let held = node.maintenance() == Some(cmd.operation_id.as_str());
         let policy_version = node.version;
         let report = self.node_details(node)?.report;
         let confirmed = admission == Admission::Draining
@@ -182,10 +185,9 @@ impl<R: Store, E: Environment> Authority<R, E> {
         origins: [String; ORIGIN_COUNT],
     ) -> Result<Work> {
         let node = self.maintenance_node(cmd)?;
-        let listing = node.listing.ok_or(Fault::Invalid)?;
         ensure!(
-            listing.maintenance.as_ref() == Some(&cmd.operation_id)
-                && node.admission == Admission::Draining,
+            node.maintenance() == Some(cmd.operation_id.as_str())
+                && node.admission() == Admission::Draining,
             Fault::Invalid
         );
         ensure!(
@@ -199,7 +201,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
         );
         let now = self.environment.now();
         let until = (now + probe::LIFETIME).min(self.signing.generation.expires_at);
-        let tickets = if listing.spec.roles.contains(&Role::Relay) {
+        let tickets = if node.spec.roles.contains(&Role::Relay) {
             shares
                 .iter()
                 .map(|id| self.probe_ticket(&node.key, id, now, until))
@@ -208,7 +210,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
             Vec::new()
         };
         Ok(Work {
-            spec: listing.spec,
+            spec: node.spec,
             origins,
             tickets,
             operation_id: cmd.operation_id.clone(),

@@ -26,20 +26,11 @@ use topology::{Spec, Status, public_key};
 pub const EVIDENCE_SECONDS: u64 = 15 * 60;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Listing {
-    pub spec: Spec,
-    pub operation_id: String,
-    pub state: ListingState,
-    #[serde(default)]
-    pub maintenance: Option<String>,
-}
-#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub enum ListingState {
+pub enum NodeState {
     Disabled,
     Staging {
         check: Verification,
-        #[serde(default)]
         enrollment: DraftEnrollment,
     },
     Listed {
@@ -48,15 +39,11 @@ pub enum ListingState {
         withdrawn: BTreeSet<topology::Role>,
     },
 }
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DraftEnrollment {
-    #[default]
-    Legacy,
-    Existing,
     Provisional,
-    PriorPolicy(operations::Admission),
-    DisabledListing,
+    Disabled,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -89,43 +76,14 @@ pub struct Promote {
     pub status: Status,
 }
 
-impl Listing {
-    pub const fn status(&self) -> Option<Status> {
-        match self.state {
-            ListingState::Listed { status, .. } => Some(status),
-            ListingState::Staging { .. } | ListingState::Disabled => None,
-        }
-    }
-}
-
 pub(super) fn attach(
     store: &mut impl Store,
     spec: Spec,
-    state: ListingState,
+    state: NodeState,
     operation_id: String,
 ) -> Result<Node> {
-    let id = public_key(&spec.node_key)?;
-    let record = key("node", &id);
-    let mut node = load::<Node>(store, &record)?
-        .unwrap_or_else(|| Node::enrolled(id, spec.zone, spec.region.clone()));
-    node.zone = spec.zone;
-    node.region.clone_from(&spec.region);
-    let state = match node.admission {
-        operations::Admission::Disabled => ListingState::Disabled,
-        operations::Admission::Draining => ListingState::Listed {
-            status: Status::Draining,
-            withdrawn: BTreeSet::new(),
-        },
-        operations::Admission::Accepting => state,
-    };
-    node.listing = Some(Listing {
-        spec,
-        operation_id,
-        state,
-        maintenance: None,
-    });
-    node.apply_listing()?;
-    save(store, &record, &node)?;
+    let node = Node::new(spec, operation_id, state, 1)?;
+    save(store, &key("node", &node.key), &node)?;
     Ok(node)
 }
 
@@ -140,17 +98,14 @@ impl<R: Store, E: Environment> Authority<R, E> {
             Fault::Invalid
         );
         let record = key("node", &public_key(&spec.node_key)?);
-        let existing: Option<Node> = load(&self.store, &record)?;
-        if let Some(node) = &existing
-            && let Some(listing) = &node.listing
-        {
+        if let Some(node) = load::<Node>(&self.store, &record)? {
             ensure!(
-                listing.spec == spec,
+                node.spec == spec,
                 Fault::Conflict {
                     reason: "listing_changed".into()
                 }
             );
-            return Ok(node.clone());
+            return Ok(node);
         }
         let directory = publication::current(&self.store)?;
         directory.check_alias(&spec)?;
@@ -160,32 +115,15 @@ impl<R: Store, E: Environment> Authority<R, E> {
         }
         let mut count = 0;
         for (_, value) in self.store.scan("node/", None)? {
-            if let Some(listing) = serde_json::from_str::<Node>(&value)?.listing {
-                occupied.add(&listing.spec)?;
-                count += 1;
-            }
+            let node: Node = serde_json::from_str(&value)?;
+            occupied.add(&node.spec)?;
+            count += 1;
         }
         ensure!(count < topology::MAX_NODES, Fault::Invalid);
         occupied.add(&spec)?;
-        let (mut node, enrollment) = match existing {
-            Some(node) => {
-                let previous = node.admission;
-                (node, DraftEnrollment::PriorPolicy(previous))
-            }
-            None => (self.new_fleet_node(&spec)?, DraftEnrollment::Provisional),
-        };
         let operation_id = B64.encode(self.environment.random::<16>()?);
         tracing::info!(event="node_staged", %operation_id, node_id=%spec.node_key, alias=%spec.alias);
-        node.set_admission(operations::Admission::Draining)?;
-        node.listing = Some(Listing {
-            spec,
-            operation_id,
-            maintenance: None,
-            state: ListingState::Staging {
-                check: Verification::Queued,
-                enrollment,
-            },
-        });
+        let node = self.new_staged_node(spec, operation_id)?;
         save(&mut self.store, &record, &node)?;
         Ok(node)
     }
@@ -203,38 +141,24 @@ impl<R: Store, E: Environment> Authority<R, E> {
         let Some(mut node) = load::<Node>(&self.store, &record)? else {
             return Ok(());
         };
-        let Some(listing) = node.listing.take() else {
-            return Ok(());
-        };
-        let ListingState::Staging { enrollment, .. } = listing.state else {
+        let NodeState::Staging { enrollment, .. } = node.state() else {
             return Err(Fault::Conflict {
                 reason: "listing_changed".into(),
             }
             .into());
         };
         ensure!(
-            listing.operation_id == operation_id,
+            node.operation_id == operation_id,
             Fault::Conflict {
                 reason: "listing_changed".into()
             }
         );
-        if matches!(enrollment, DraftEnrollment::Legacy) {
-            publication::withdraw_legacy_alias(&mut self.store, &listing.spec.alias)?;
-        }
-        match enrollment {
-            DraftEnrollment::Existing | DraftEnrollment::Legacy => {
-                save(&mut self.store, &record, &node)?;
-            }
-            DraftEnrollment::PriorPolicy(previous) => {
-                node.set_admission(previous)?;
-                save(&mut self.store, &record, &node)?;
-            }
-            DraftEnrollment::DisabledListing => {
-                node.listing = Some(Listing {
-                    state: ListingState::Disabled,
-                    ..listing
-                });
-                node.apply_listing()?;
+        match *enrollment {
+            DraftEnrollment::Disabled => {
+                node.update_lifecycle(|n| {
+                    *n.state = NodeState::Disabled;
+                    Ok(())
+                })?;
                 save(&mut self.store, &record, &node)?;
             }
             DraftEnrollment::Provisional => self.retire_fleet_node(node)?,
@@ -259,50 +183,45 @@ impl<R: Store, E: Environment> Authority<R, E> {
         let now = self.environment.now();
         let record = key("node", &public_key(node_key)?);
         let mut node: Node = load(&self.store, &record)?.ok_or(Fault::NodeNotFound)?;
-        let listing = node.listing.as_mut().ok_or(Fault::Invalid)?;
         ensure!(
-            listing.operation_id == command.operation_id,
+            node.operation_id == command.operation_id,
             Fault::Conflict {
                 reason: "listing_changed".into()
             }
         );
-        if listing.status() == Some(status) {
+        if node.status() == Some(status) {
             return Ok(());
         }
-        match &listing.state {
-            ListingState::Staging {
+        match node.state() {
+            NodeState::Staging {
                 check: Verification::Passed { at, vantage_key },
                 ..
             } => ensure!(
                 now.saturating_sub(*at) <= EVIDENCE_SECONDS
                     && agents
                         .iter()
-                        .any(|agent| agent.key == *vantage_key && agent.zone == listing.spec.zone),
+                        .any(|agent| agent.key == *vantage_key && agent.zone == node.spec.zone),
                 Fault::Denied {
                     reason: "verification_required".into()
                 }
             ),
-            ListingState::Staging { .. } | ListingState::Disabled => {
+            NodeState::Staging { .. } | NodeState::Disabled => {
                 return Err(Fault::Denied {
                     reason: "verification_required".into(),
                 }
                 .into());
             }
-            ListingState::Listed {
+            NodeState::Listed {
                 status: Status::Canary,
                 ..
             } => ensure!(status == Status::Active, Fault::Invalid),
-            // Draining listings are already published and return to active service via
+            // Draining nodes are already published and return to active service via
             // manage(Action::Resume) without blocking on mirror-freshness checks.
-            ListingState::Listed {
+            NodeState::Listed {
                 status: Status::Active | Status::Draining,
                 ..
             } => return Err(Fault::Invalid.into()),
         }
-        ensure!(
-            node.admission != operations::Admission::Disabled,
-            Fault::Invalid
-        );
         let mut publication = publication::current(&self.store)?;
         ensure!(
             publication::digest(&publication.envelope)? == observed_digest
@@ -311,22 +230,22 @@ impl<R: Store, E: Environment> Authority<R, E> {
                 reason: "mirror_lag".into()
             }
         );
-        publication.reserve(&listing.spec)?;
-        node.zone = listing.spec.zone;
-        node.region.clone_from(&listing.spec.region);
-        match &mut listing.state {
-            ListingState::Listed {
-                status: current, ..
-            } => *current = status,
-            ListingState::Staging { .. } | ListingState::Disabled => {
-                listing.state = ListingState::Listed {
-                    status,
-                    withdrawn: BTreeSet::new(),
-                };
+        publication.reserve(&node.spec)?;
+        node.update_lifecycle(|n| {
+            match n.state {
+                NodeState::Listed {
+                    status: current, ..
+                } => *current = status,
+                NodeState::Staging { .. } | NodeState::Disabled => {
+                    *n.state = NodeState::Listed {
+                        status,
+                        withdrawn: BTreeSet::new(),
+                    };
+                }
             }
-        }
-        tracing::info!(event="node_promoted",operation_id=%listing.operation_id,node_id=%node_key,?status);
-        node.apply_listing()?;
+            Ok(())
+        })?;
+        tracing::info!(event="node_promoted",operation_id=%node.operation_id,node_id=%node_key,?status);
         save(&mut self.store, &record, &node)?;
         publication.project(&mut self.store, signer, now, &command.operation_id)
     }

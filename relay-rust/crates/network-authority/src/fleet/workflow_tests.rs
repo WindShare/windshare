@@ -1,6 +1,6 @@
 use super::*;
 use crate::fleet::{
-    ListingState,
+    NodeState,
     publication::{Publication, Publisher, Release, digest},
     signature::Envelope,
     topology::{Spec, Status},
@@ -73,30 +73,26 @@ fn cn_agent(key: &SigningKey) -> Agent {
 }
 
 #[test]
-fn importing_preserves_policies_alias_bindings_and_renews_only_once() {
+fn importing_seeds_listed_nodes_alias_bindings_and_renews_only_once() {
     let mut auth = fixture();
     let admin = auth
         .initialize("init", "init", "operator", "reasonable password")
         .unwrap();
     let (release, signer, history) = directory();
-    let prior = Node {
-        listing: None,
-        key: [9; 32],
-        zone: Zone::Global,
-        region: "prior".into(),
-        admission: windshare_relay_access::usage::Admission::Disabled,
-        anonymous: true,
-        version: 19,
-    };
-    save(&mut auth.store, &key("node", &prior.key), &prior).unwrap();
     let mut publication = Publication::bootstrap(&mut auth.store, &release, &[&history]).unwrap();
-    let imported: Node = load(&auth.store, &key("node", &prior.key))
-        .unwrap()
-        .unwrap();
+    let imported: Node = load(&auth.store, &key("node", &[9; 32])).unwrap().unwrap();
     assert!(
-        imported.admission == windshare_relay_access::usage::Admission::Disabled
-            && imported.anonymous
-            && imported.version == 19
+        imported.admission() == windshare_relay_access::usage::Admission::Accepting
+            && !imported.anonymous
+            && imported.version == 1
+            && imported.spec.zone == Zone::Cn
+            && matches!(
+                imported.state(),
+                NodeState::Listed {
+                    status: Status::Active,
+                    withdrawn,
+                } if withdrawn.is_empty()
+            )
     );
     assert_eq!(publication.revision().unwrap().serial, 4);
     let mut candidate: Spec = serde_json::from_value(spec("new", 7)).unwrap();
@@ -241,10 +237,10 @@ fn a_verified_staging_node_requires_current_mirrors_before_publication() {
     assert_eq!(data.public_stun, old_stun);
     let saved: Node = load(&auth.store, &key("node", &node.key)).unwrap().unwrap();
     assert!(matches!(
-        saved.listing.unwrap().state,
-        ListingState::Listed {
+        saved.state(),
+        NodeState::Listed {
             status: Status::Canary,
-            ref withdrawn,
+            withdrawn,
         } if withdrawn.is_empty()
     ));
     assert_removed_alias_stays_bound(&mut auth, &admin, &signer, candidate, &work.operation_id);
@@ -271,11 +267,7 @@ fn draft_conflicts_and_withdrawal_are_scoped_to_one_operation() {
         matches!(auth.stage(&admin,candidate.clone()).unwrap_err().downcast_ref::<Fault>(),Some(Fault::Conflict { reason }) if reason == "stun_bound")
     );
     candidate.stun = vec!["stun:new.example:3478".into()];
-    let draft = auth
-        .stage(&admin, candidate.clone())
-        .unwrap()
-        .listing
-        .unwrap();
+    let draft = auth.stage(&admin, candidate.clone()).unwrap();
     let mut duplicate: Spec = serde_json::from_value(spec("other", 8)).unwrap();
     duplicate.stun.clone_from(&candidate.stun);
     duplicate.roles.clone_from(&candidate.roles);
@@ -289,11 +281,7 @@ fn draft_conflicts_and_withdrawal_are_scoped_to_one_operation() {
     auth.cancel_draft(&admin, &candidate.node_key, &draft.operation_id)
         .unwrap();
     candidate.relay = "https://correct.example".into();
-    let next = auth
-        .stage(&admin, candidate.clone())
-        .unwrap()
-        .listing
-        .unwrap();
+    let next = auth.stage(&admin, candidate.clone()).unwrap();
     assert_ne!(draft.operation_id, next.operation_id);
     assert!(
         auth.cancel_draft(&admin, &candidate.node_key, &draft.operation_id)
@@ -314,11 +302,7 @@ fn failed_checks_back_off_and_a_replacement_draft_rejects_old_results() {
     let (release, _, history) = directory();
     Publication::bootstrap(&mut auth.store, &release, &[&history]).unwrap();
     let candidate: Spec = serde_json::from_value(spec("retry", 7)).unwrap();
-    let draft = auth
-        .stage(&admin, candidate.clone())
-        .unwrap()
-        .listing
-        .unwrap();
+    let draft = auth.stage(&admin, candidate.clone()).unwrap();
     let key = SigningKey::from_bytes(&[11; 32]);
     let agents = [cn_agent(&key)];
     let poll = |auth: &mut Authority<Memory, Clock>| {
@@ -405,39 +389,6 @@ fn deployment_rejects_invalid_vantage_configuration_as_a_server_error() {
     ] {
         assert!(serde_json::from_value::<Agent>(invalid).is_err());
     }
-}
-
-#[test]
-fn withdrawing_an_older_draft_releases_its_unpublished_alias_and_preserves_admission() {
-    let mut auth = fixture();
-    let admin = auth
-        .initialize("init", "init", "operator", "reasonable password")
-        .unwrap();
-    Publication::load_or_import(&mut auth.store).unwrap();
-    let mut candidate: Spec = serde_json::from_value(spec("old-draft", 7)).unwrap();
-    let node = auth.stage(&admin, candidate.clone()).unwrap();
-    let record = key("node", &node.key);
-    let mut old_node = serde_json::to_value(&node).unwrap();
-    old_node["listing"]["state"]
-        .as_object_mut()
-        .unwrap()
-        .remove("enrollment");
-    old_node["anonymous"] = json!(true);
-    save(&mut auth.store, &record, &old_node).unwrap();
-    let mut old_head: Value = load(&auth.store, "directory/current").unwrap().unwrap();
-    old_head["aliases"][&candidate.alias] = json!("wss://old-draft.example/v2/ws");
-    save(&mut auth.store, "directory/current", &old_head).unwrap();
-
-    auth.cancel_draft(
-        &admin,
-        &candidate.node_key,
-        &node.listing.unwrap().operation_id,
-    )
-    .unwrap();
-    let saved: Node = load(&auth.store, &record).unwrap().unwrap();
-    assert!(saved.listing.is_none() && saved.anonymous);
-    candidate.relay = "https://replacement.example".into();
-    auth.stage(&admin, candidate).unwrap();
 }
 
 #[test]

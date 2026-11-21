@@ -132,12 +132,11 @@ impl<R: Store, E: Environment> Authority<R, E> {
         for (_, raw) in self.store.scan("node/", None)? {
             // Only listed nodes participate in periodic fleet monitoring; staging drafts
             // have dedicated enrollment verification and disabled nodes are out of service.
-            if let Some(listing) = serde_json::from_str::<Node>(&raw)?.listing
-                && listing.status().is_some()
-            {
+            let node: Node = serde_json::from_str(&raw)?;
+            if node.status().is_some() {
                 nodes.push(Target {
-                    operation_id: listing.operation_id,
-                    spec: listing.spec,
+                    operation_id: node.operation_id,
+                    spec: node.spec,
                 });
             }
         }
@@ -202,12 +201,9 @@ impl<R: Store, E: Environment> Authority<R, E> {
             let Some(node) = load::<Node>(&self.store, &key("node", &public_key(&id)?))? else {
                 continue;
             };
-            let Some(listing) = node.listing else {
-                continue;
-            };
             // Ignore non-listed nodes rather than rejecting the whole cycle so concurrent
             // disables stay harmless and staging drafts cannot accumulate failure streaks.
-            if listing.status().is_none() || listing.operation_id != observation.operation_id {
+            if node.status().is_none() || node.operation_id != observation.operation_id {
                 continue;
             }
             let old = previous
@@ -220,7 +216,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
                 (Role::Stun, observation.stun),
             ] {
                 ensure!(
-                    listing.spec.roles.contains(&role) == verdict.is_some(),
+                    node.spec.roles.contains(&role) == verdict.is_some(),
                     Fault::Invalid
                 );
                 if let Some(pass) = verdict {

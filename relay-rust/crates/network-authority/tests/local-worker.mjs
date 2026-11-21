@@ -37,7 +37,7 @@ export function signedDescriptor(host, nodeKey, node, overrides = {}) {
 export async function fixture(
   t,
   extra = {},
-  { existingEnrollment = false, outbound = null, testControl = false, manualAlarm = false } = {},
+  { activeNode = false, outbound = null, testControl = false, manualAlarm = false } = {},
 ) {
   const keys = await mkdtemp(join(tmpdir(), 'windshare-password-edge-test-'));
   t.after(() => rm(keys, { recursive: true, force: true }));
@@ -46,18 +46,39 @@ export async function fixture(
   const build = resolve(crate, process.env.AUTHORITY_TEST_BUILD || 'build');
   const nodeKey = generateKeyPairSync('ed25519').privateKey;
   const node = createPublicKey(nodeKey).export({ type: 'spki', format: 'der' }).subarray(-32);
+  const activeNodeKey = generateKeyPairSync('ed25519').privateKey;
+  const activeNodeBytes = createPublicKey(activeNodeKey).export({ type: 'spki', format: 'der' }).subarray(-32);
   const host = 'relay.example';
   const base = 'https://' + host;
   const requests = [];
   const mirrors = new Map();
-  // Rehydrate the pre-P3 approval for the password flow from the same SQLite row
-  // an upgraded deployment would retain. The test module exists only in Miniflare.
-  const legacy = { key: [...node], zone: 'global', region: 'edge-test', enabled: true, anonymous: false, version: 1 };
-  const useWrapper = existingEnrollment || testControl || manualAlarm;
-  const seedLegacySql = existingEnrollment
+  // Seed an active listed node in SQLite so device-login flows can exercise an
+  // accepting node without requiring a production directory signing seed.
+  const activeRecord = {
+    key: [...activeNodeBytes],
+    spec: {
+      alias: 'active-edge',
+      node_key: activeNodeBytes.toString('base64url'),
+      relay: 'https://active.example',
+      stun: [],
+      roles: ['relay'],
+      zone: 'global',
+      region: 'edge-test',
+      provider: 'test',
+      operator: 'official',
+      capacity_mbps: 10,
+    },
+    operation_id: 'active-edge-seed',
+    state: { kind: 'listed', status: 'active', withdrawn: [] },
+    maintenance: null,
+    anonymous: false,
+    version: 1,
+  };
+  const useWrapper = activeNode || testControl || manualAlarm;
+  const seedActiveSql = activeNode
     ? `const sql = state.storage.sql;
         sql.exec('CREATE TABLE IF NOT EXISTS authority_records(key TEXT PRIMARY KEY,value TEXT NOT NULL) STRICT');
-        sql.exec('INSERT OR IGNORE INTO authority_records VALUES (?, ?)', ${JSON.stringify('node/' + node.toString('base64url'))}, ${JSON.stringify(JSON.stringify(legacy))});`
+        sql.exec('INSERT OR IGNORE INTO authority_records VALUES (?, ?)', ${JSON.stringify('node/' + activeNodeBytes.toString('base64url'))}, ${JSON.stringify(JSON.stringify(activeRecord))});`
     : '';
   const bootstrap = useWrapper ? [{ type: 'ESModule', path: join(build, 'fixture.mjs'), contents: `
     import worker, { NetworkAuthority } from './index.js';
@@ -66,7 +87,7 @@ export async function fixture(
       constructor(state, env) {
         this.state = state;
         this.kvFailCount = 0;
-        ${seedLegacySql}
+        ${seedActiveSql}
         const self = this;
         const wrappedEnv = new Proxy(env, {
           get(target, prop) {
@@ -170,5 +191,5 @@ export async function fixture(
   const worker = await mf.getWorker('authority');
   const enrollment = { url: base, node_key: node.toString('base64url'), alias: 'test-node', zone: 'global',
     region: 'edge-test', provider: 'test', roles: ['relay'], capacity_mbps: 5 };
-  return { worker, mf, trust, keys, nodeKey, node: [...node], requests, mirrors, enrollment };
+  return { worker, mf, trust, keys, nodeKey, node: [...node], activeNodeKey, activeNode: [...activeNodeBytes], requests, mirrors, enrollment };
 }

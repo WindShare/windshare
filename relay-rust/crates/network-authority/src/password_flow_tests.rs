@@ -51,20 +51,7 @@ fn independent_random_salts_prevent_cookie_resurrection_and_verify_legacy_hashes
 
     let signer = SigningKey::from_bytes(&[9; 32]);
     let node = signer.verifying_key().to_bytes();
-    save(
-        &mut authority.store,
-        &key("node", &node),
-        &Node {
-            listing: None,
-            key: node,
-            zone: Zone::Global,
-            region: "test".into(),
-            admission: windshare_relay_access::usage::Admission::Accepting,
-            anonymous: false,
-            version: 1,
-        },
-    )
-    .unwrap();
+    authority.seed_node(node, Zone::Global, "test");
     let invite = Invitation {
         node,
         issuer: authority.signing.generation.issuer,

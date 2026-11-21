@@ -1,10 +1,11 @@
 use super::{
-    DraftEnrollment, Listing, ListingState, Verification,
+    DraftEnrollment, NodeState, Verification,
     publication::{self, Publication, Publisher},
     topology::{Entry, Role, Status, public_key},
 };
 use crate::{
     Authority, Environment, Fault, Node, Store,
+    nodes::NodeMutation,
     store::{key, load, save},
 };
 use anyhow::{Result, ensure};
@@ -32,50 +33,41 @@ pub enum Action {
     AbortMaintenance { maintenance_id: String },
 }
 
-impl Listing {
-    fn resume(&mut self) -> Result<bool> {
-        match &mut self.state {
-            ListingState::Listed {
-                status: status @ Status::Draining,
-                ..
-            } => {
-                *status = Status::Active;
-                Ok(true)
-            }
-            // Resuming an already-active listing is idempotent so retries and
-            // concurrent admin tabs converge cleanly. Canary rollouts must advance
-            // through promote() so mirror freshness is verified first.
-            ListingState::Listed {
-                status: Status::Active,
-                ..
-            } => Ok(false),
-            ListingState::Listed {
-                status: Status::Canary,
-                ..
-            }
-            | ListingState::Staging { .. }
-            | ListingState::Disabled => Err(Fault::Invalid.into()),
+fn resume_state(state: &mut NodeState) -> Result<bool> {
+    match state {
+        NodeState::Listed {
+            status: status @ Status::Draining,
+            ..
+        } => {
+            *status = Status::Active;
+            Ok(true)
         }
+        // Resuming an already-active node is idempotent so retries and
+        // concurrent admin tabs converge cleanly. Canary rollouts must advance
+        // through promote() so mirror freshness is verified first.
+        NodeState::Listed {
+            status: Status::Active,
+            ..
+        } => Ok(false),
+        NodeState::Listed {
+            status: Status::Canary,
+            ..
+        }
+        | NodeState::Staging { .. }
+        | NodeState::Disabled => Err(Fault::Invalid.into()),
     }
+}
 
-    pub(super) fn relay_drained(&self) -> bool {
-        self.maintenance.is_some()
-            || matches!(
-                &self.state,
-                ListingState::Listed { status, withdrawn }
-                    if *status == Status::Draining || withdrawn.contains(&Role::Relay)
-            )
-    }
-
+impl Node {
     pub(super) fn entry(&self) -> Option<Entry> {
-        match &self.state {
-            ListingState::Staging { .. } => None,
-            ListingState::Disabled => {
+        match self.state() {
+            NodeState::Staging { .. } => None,
+            NodeState::Disabled => {
                 // The verified binary switch owns a temporary drain even when an operator
                 // queues a disable. Keep only the relay alias resolvable until that
                 // operation releases it; stateless STUN has no sessions to drain and must
                 // not reappear after disabling a previously health-withdrawn node.
-                if self.maintenance.is_none() || !self.spec.roles.contains(&Role::Relay) {
+                if self.maintenance().is_none() || !self.spec.roles.contains(&Role::Relay) {
                     return None;
                 }
                 let mut spec = self.spec.clone();
@@ -86,11 +78,11 @@ impl Listing {
                     status: Status::Draining,
                 })
             }
-            ListingState::Listed { status, withdrawn } => {
+            NodeState::Listed { status, withdrawn } => {
                 let mut spec = self.spec.clone();
                 // Stateless STUN has no sessions to drain; withdraw it while a verified
                 // binary switch holds maintenance, matching disabled-under-maintenance.
-                if self.maintenance.is_some() || withdrawn.contains(&Role::Stun) {
+                if self.maintenance().is_some() || withdrawn.contains(&Role::Stun) {
                     spec.roles.retain(|r| *r != Role::Stun);
                     spec.stun.clear();
                 }
@@ -108,26 +100,6 @@ impl Listing {
     }
 }
 
-impl Node {
-    pub(super) fn apply_listing(&mut self) -> Result<()> {
-        let Some(listing) = &self.listing else {
-            return Ok(());
-        };
-        let admission = match listing.state {
-            ListingState::Disabled if listing.maintenance.is_some() => Admission::Draining,
-            ListingState::Disabled => Admission::Disabled,
-            ListingState::Staging { .. } => Admission::Draining,
-            ListingState::Listed { .. }
-                if listing.relay_drained() || !listing.spec.roles.contains(&Role::Relay) =>
-            {
-                Admission::Draining
-            }
-            ListingState::Listed { .. } => Admission::Accepting,
-        };
-        self.set_admission(admission)
-    }
-}
-
 impl Publication {
     pub(crate) fn project(
         &mut self,
@@ -139,7 +111,7 @@ impl Publication {
         let mut nodes = Vec::new();
         for (_, raw) in store.scan("node/", None)? {
             let node: Node = serde_json::from_str(&raw)?;
-            if let Some(entry) = node.listing.and_then(|l| l.entry()) {
+            if let Some(entry) = node.entry() {
                 nodes.push(entry);
             }
         }
@@ -175,125 +147,138 @@ impl Publication {
 }
 
 impl<R: Store, E: Environment> Authority<R, E> {
-    pub(super) fn new_fleet_node(&self, spec: &super::topology::Spec) -> Result<Node> {
+    pub(super) fn new_staged_node(
+        &self,
+        spec: super::topology::Spec,
+        operation_id: String,
+    ) -> Result<Node> {
         let id = public_key(&spec.node_key)?;
-        let mut node = Node::enrolled(id, spec.zone, spec.region.clone());
-        if let Some(policy) = load::<windshare_relay_access::usage::NodePolicy>(
+        let version = if let Some(policy) = load::<windshare_relay_access::usage::NodePolicy>(
             &self.store,
             &key("retired-node", &id),
         )? {
-            // The same installed node retains its durable anti-rollback barrier on re-enrollment.
-            node.version = policy.version;
-            node.admission = Admission::Disabled;
+            // Retired nodes were frozen at Admission::Disabled; staging enters
+            // Admission::Draining, so advance the anti-rollback barrier explicitly.
+            policy.version.checked_add(1).ok_or(Fault::Invalid)?
         } else {
-            node.admission = Admission::Draining;
-        }
-        Ok(node)
+            1
+        };
+        Node::new(
+            spec,
+            operation_id,
+            NodeState::Staging {
+                check: Verification::Queued,
+                enrollment: DraftEnrollment::Provisional,
+            },
+            version,
+        )
     }
 
     pub(super) fn retire_fleet_node(&mut self, mut node: Node) -> Result<()> {
-        node.set_admission(Admission::Disabled)?;
-        save(
-            &mut self.store,
-            &key("retired-node", &node.key),
-            &node.policy(),
-        )?;
+        let policy = node.retired_policy()?;
+        save(&mut self.store, &key("retired-node", &node.key), &policy)?;
         self.store.delete(&key("node", &node.key))?;
         self.store.delete(&key("node-load", &node.key))?;
         self.live_loads.remove(&node.key);
         Ok(())
     }
 
-    /// # Errors
-    /// Requires the current listing and signed drain evidence before destructive transitions.
-    pub fn manage(&mut self, session: &str, cmd: &Manage, signer: &Publisher) -> Result<()> {
-        self.require_admin(session)?;
-        let record = key("node", &public_key(&cmd.node_key)?);
-        let mut node: Node = load(&self.store, &record)?.ok_or(Fault::NodeNotFound)?;
-        let drained = self.node_details(node.clone())?.cutoff_ready;
-        let listing = node.listing.as_mut().ok_or(Fault::Invalid)?;
-        ensure!(
-            listing.operation_id == cmd.operation_id,
-            Fault::Conflict {
-                reason: "listing_changed".into()
-            }
-        );
+    fn apply_manage_action(
+        &mut self,
+        node: &mut NodeMutation<'_>,
+        cmd: &Manage,
+        drained: bool,
+    ) -> Result<bool> {
         match &cmd.action {
             Action::Drain => {
-                let ListingState::Listed { status, .. } = &mut listing.state else {
+                let NodeState::Listed { status, .. } = node.state else {
                     return Err(Fault::Invalid.into());
                 };
                 *status = Status::Draining;
             }
-            Action::Resume => {
-                if !listing.resume()? {
-                    return Ok(());
-                }
-            }
-            &Action::Disable { early_cutoff } => match listing.state {
-                ListingState::Listed { .. } => {
+            Action::Resume => return resume_state(node.state),
+            &Action::Disable { early_cutoff } => match node.state {
+                NodeState::Listed { .. } => {
                     ensure!(
                         early_cutoff || drained,
                         Fault::Conflict {
                             reason: "drain_pending".into()
                         }
                     );
-                    listing.state = ListingState::Disabled;
+                    *node.state = NodeState::Disabled;
                 }
-                // Disabling an already-disabled listing is idempotent so retries and
+                // Disabling an already-disabled node is idempotent so retries and
                 // concurrent admin tabs converge without tripping a stale drain check.
-                ListingState::Disabled => return Ok(()),
+                NodeState::Disabled => return Ok(false),
                 // Staging drafts carry rollback metadata and must leave via promote or cancel_draft.
-                ListingState::Staging { .. } => return Err(Fault::Invalid.into()),
+                NodeState::Staging { .. } => return Err(Fault::Invalid.into()),
             },
-            &Action::Remove { early_cutoff } => {
-                ensure!(
-                    matches!(listing.state, ListingState::Disabled)
-                        && listing.maintenance.is_none(),
-                    Fault::Invalid
-                );
-                ensure!(
-                    early_cutoff || drained,
-                    Fault::Conflict {
-                        reason: "drain_pending".into()
-                    }
-                );
-                self.retire_fleet_node(node)?;
-                tracing::info!(event="node_removed", operation_id=%cmd.operation_id,node_id=%cmd.node_key,early_cutoff);
-                return Ok(());
-            }
             Action::Verify => {
                 ensure!(
-                    matches!(listing.state, ListingState::Disabled)
-                        && listing.maintenance.is_none(),
+                    matches!(node.state, NodeState::Disabled) && node.maintenance.is_none(),
                     Fault::Invalid
                 );
-                listing.operation_id = super::B64.encode(self.environment.random::<16>()?);
-                listing.state = ListingState::Staging {
+                *node.operation_id = super::B64.encode(self.environment.random::<16>()?);
+                *node.state = NodeState::Staging {
                     check: Verification::Queued,
-                    enrollment: DraftEnrollment::DisabledListing,
+                    enrollment: DraftEnrollment::Disabled,
                 };
             }
             &Action::RestoreRole { role } => {
-                let ListingState::Listed { withdrawn, .. } = &mut listing.state else {
+                let NodeState::Listed { withdrawn, .. } = node.state else {
                     return Err(Fault::Invalid.into());
                 };
-                ensure!(listing.spec.roles.contains(&role), Fault::Invalid);
+                ensure!(node.spec.roles.contains(&role), Fault::Invalid);
                 withdrawn.remove(&role);
                 super::monitoring::reset_evidence(&mut self.store, &cmd.node_key, role)?;
             }
             Action::AbortMaintenance { maintenance_id } => {
                 super::maintenance::abort(
                     &mut self.store,
-                    listing,
+                    node,
                     &cmd.operation_id,
                     maintenance_id,
                 )?;
             }
+            Action::Remove { .. } => unreachable!("remove handled before lifecycle mutation"),
         }
-        node.apply_listing()?;
+        Ok(true)
+    }
+
+    /// # Errors
+    /// Requires the current node operation ID and signed drain evidence before destructive transitions.
+    pub fn manage(&mut self, session: &str, cmd: &Manage, signer: &Publisher) -> Result<()> {
+        self.require_admin(session)?;
+        let record = key("node", &public_key(&cmd.node_key)?);
+        let mut node: Node = load(&self.store, &record)?.ok_or(Fault::NodeNotFound)?;
+        let drained = self.node_details(node.clone())?.cutoff_ready;
+        ensure!(
+            node.operation_id == cmd.operation_id,
+            Fault::Conflict {
+                reason: "listing_changed".into()
+            }
+        );
+        if let &Action::Remove { early_cutoff } = &cmd.action {
+            ensure!(
+                matches!(node.state(), NodeState::Disabled) && node.maintenance().is_none(),
+                Fault::Invalid
+            );
+            ensure!(
+                early_cutoff || drained,
+                Fault::Conflict {
+                    reason: "drain_pending".into()
+                }
+            );
+            self.retire_fleet_node(node)?;
+            tracing::info!(event="node_removed", operation_id=%cmd.operation_id,node_id=%cmd.node_key,early_cutoff);
+            return Ok(());
+        }
+        let changed = node.update_lifecycle(|n| self.apply_manage_action(n, cmd, drained))?;
+        if !changed {
+            return Ok(());
+        }
         save(&mut self.store, &record, &node)?;
-        tracing::info!(event="node_intent_changed", operation_id=%cmd.operation_id,node_id=%cmd.node_key, action=?cmd.action, admission=?node.admission,version=node.version);
+        tracing::info!(event="node_intent_changed", operation_id=%cmd.operation_id,node_id=%cmd.node_key, action=?cmd.action, admission=?node.admission(),version=node.version);
         publication::current(&self.store)?.project(
             &mut self.store,
             signer,
