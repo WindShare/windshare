@@ -19,25 +19,35 @@ pub const CONNECTION_PENDING_FLOWS: usize = 64;
 pub const SUBMITTED_DATA_FRAMES: usize = 2;
 pub const SUBMITTED_DATA_BYTES: usize = 2 * MAX_DATA_BYTES;
 // ToReceiver carries bulk file fragments on each receiver's dedicated ledger.
-pub const RECEIVER_DELIVERY_WINDOW: flow::Counts =
+pub const TO_RECEIVER_DELIVERY_WINDOW: flow::Counts =
     flow::Counts::new(16, 16 * MAX_DATA_BYTES as u64);
 // Every receiver's ToSender flow shares the sender connection's ledger and
 // carries only small control/request envelopes. Sizing each flow to 8 frames
 // (matching the receiver block broker's default concurrency) and 1 full frame
 // of bytes lets all 31 business receivers hold their full window concurrently
-// without join-order starvation, while keeping half the sender byte pool free
-// for settling flows.
-pub const SENDER_DELIVERY_WINDOW: flow::Counts = flow::Counts::new(8, MAX_DATA_BYTES as u64);
+// without join-order starvation. At full occupancy (31 * 8 = 248 frames) half
+// the sender byte pool stays free while the 256-frame connection bound leaves
+// 6 ordinary plus 2 startup frames for light settling churn; heavier churn
+// waits for WS2S or the 5s settlement timeout.
+pub const TO_SENDER_DELIVERY_WINDOW: flow::Counts = flow::Counts::new(8, MAX_DATA_BYTES as u64);
 const STARTUP_RESERVE_FRAMES: u64 = 2;
 const SHARE_MAX_RECEIVERS: u64 = SHARE_BUSINESS_CONNECTIONS as u64 - 1;
+pub const SHARE_MAX_SESSIONS: usize = 64;
+const CONNECTION_RETAINED_FLOWS: usize = 64;
 const _: () = assert!(
-    SENDER_DELIVERY_WINDOW.frames * SHARE_MAX_RECEIVERS
-        <= CONNECTION_DATA_FRAMES as u64 - STARTUP_RESERVE_FRAMES
-        && SENDER_DELIVERY_WINDOW.encoded_bytes * SHARE_MAX_RECEIVERS
+    TO_SENDER_DELIVERY_WINDOW.frames > 0
+        && TO_SENDER_DELIVERY_WINDOW.encoded_bytes >= MAX_DATA_BYTES as u64
+        && TO_RECEIVER_DELIVERY_WINDOW.frames > 0
+        && TO_RECEIVER_DELIVERY_WINDOW.encoded_bytes >= MAX_DATA_BYTES as u64
+        && TO_SENDER_DELIVERY_WINDOW.frames * SHARE_MAX_RECEIVERS
+            <= CONNECTION_DATA_FRAMES as u64 - STARTUP_RESERVE_FRAMES
+        && TO_SENDER_DELIVERY_WINDOW.encoded_bytes * SHARE_MAX_RECEIVERS
             <= CONNECTION_DATA_BYTES as u64 - STARTUP_RESERVE_FRAMES * MAX_DATA_BYTES as u64
-        && SENDER_DELIVERY_WINDOW.frames <= FLOW_PENDING_FRAMES as u64
-        && RECEIVER_DELIVERY_WINDOW.frames <= FLOW_PENDING_FRAMES as u64
-        && SHARE_MAX_RECEIVERS <= CONNECTION_PENDING_FLOWS as u64
+        && TO_SENDER_DELIVERY_WINDOW.frames <= FLOW_PENDING_FRAMES as u64
+        && TO_RECEIVER_DELIVERY_WINDOW.frames <= FLOW_PENDING_FRAMES as u64
+        && SHARE_MAX_RECEIVERS <= SHARE_MAX_SESSIONS as u64
+        && SHARE_MAX_RECEIVERS <= CONNECTION_RETAINED_FLOWS as u64
+        && CONNECTION_RETAINED_FLOWS <= CONNECTION_PENDING_FLOWS
 );
 const MAX_DATA_BYTES: usize =
     windshare_relay_core::sessions::OpaqueHeader::MAX_ENCODED_BYTES as usize;
@@ -173,8 +183,8 @@ pub fn limits() -> share::Limits {
             concurrent: SHARE_CONTROL_CONNECTIONS,
             attempts: SHARE_CONNECTION_ATTEMPTS,
         },
-        sessions: 64,
-        retained_flows_per_connection: 64,
+        sessions: SHARE_MAX_SESSIONS,
+        retained_flows_per_connection: CONNECTION_RETAINED_FLOWS,
         retirement: share::RetirementPolicy::PhysicalRelease,
         delivery: flow::Limits::new(
             flow::Counts::new(CONNECTION_DATA_FRAMES as u64, CONNECTION_DATA_BYTES as u64),

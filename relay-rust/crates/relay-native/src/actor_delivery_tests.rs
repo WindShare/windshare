@@ -41,11 +41,14 @@ async fn join(host: &Harness, id: u64) -> (Writer, RelaySessionId) {
 
 async fn joined(host: &mut Harness, id: u64) -> (Writer, RelaySessionId) {
     // The vectors declare 16 frames. Toward the shared sender, ToSender uses
-    // the bounded SENDER_DELIVERY_WINDOW (1 startup + 7 ordinary = 8 frames).
+    // the bounded TO_SENDER_DELIVERY_WINDOW (1 startup + 7 ordinary = 8 frames).
     // Toward the receiver, 14 ordinary plus startup leave one protected slot.
     let (mut receiver, session) = join(host, id).await;
     for (writer, granted) in [
-        (&mut receiver, crate::config::SENDER_DELIVERY_WINDOW.frames),
+        (
+            &mut receiver,
+            crate::config::TO_SENDER_DELIVERY_WINDOW.frames,
+        ),
         (&mut host.sender, 15),
     ] {
         let mut frames = 0;
@@ -588,7 +591,7 @@ impl DefaultCapacityShare {
     }
 
     async fn join_and_idle(&mut self, id: u64) -> (u64, Writer, RelaySessionId) {
-        let target = crate::config::SENDER_DELIVERY_WINDOW;
+        let target = crate::config::TO_SENDER_DELIVERY_WINDOW;
         let (mut receiver, session) = self.join(id).await;
         let first = read_grant(&mut receiver).await;
         let second = read_grant(&mut receiver).await;
@@ -636,7 +639,7 @@ async fn read_grant(writer: &mut Writer) -> Counts {
 #[tokio::test]
 async fn all_business_receivers_get_equal_sender_windows_and_stay_isolated() {
     // Every business receiver (up to 31) must join and hold the full
-    // SENDER_DELIVERY_WINDOW regardless of join order while earlier siblings
+    // TO_SENDER_DELIVERY_WINDOW regardless of join order while earlier siblings
     // idle, and active consumption must refill only the active flow without
     // leaking grants to idle siblings.
     const RECEIVERS: u64 = 31;
@@ -683,16 +686,17 @@ async fn all_business_receivers_get_equal_sender_windows_and_stay_isolated() {
 async fn settling_receivers_do_not_block_replacement_admissions_on_shared_sender() {
     const RECEIVERS: u64 = 31;
     const CHURN: usize = 3;
-    let target = crate::config::SENDER_DELIVERY_WINDOW;
+    let target = crate::config::TO_SENDER_DELIVERY_WINDOW;
     let mut share = DefaultCapacityShare::start().await;
     let mut receivers = Vec::new();
     for id in 3..3 + RECEIVERS {
         receivers.push(share.join_and_idle(id).await);
     }
 
-    // Disconnect 3 receivers with unacknowledged submitted frames (leaving
-    // them Settling on the sender ledger without WS2S) and close their
-    // sockets to free business connection slots.
+    // Light settling churn: disconnect 3 receivers with one unacknowledged
+    // submitted frame each (3 frames total, within the 6 ordinary + 2 startup
+    // frame headroom left at 31 * 8 = 248 / 256) and close their sockets to
+    // free business connection slots without sending WS2S.
     for _ in 0..CHURN {
         let (id, receiver, session) = receivers.pop().unwrap();
         let pending = opaque(session);

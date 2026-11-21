@@ -21,7 +21,7 @@ use windshare_relay_access::{Attribution, Principal, entitlement::Class};
 use windshare_relay_core::{flow::FlowKey, sessions::SessionKey};
 
 const TICK: Duration = Duration::from_millis(5);
-const MAX_SESSIONS: usize = crate::config::MAX_RESIDENT_SHARES * 64;
+const MAX_SESSIONS: usize = crate::config::MAX_RESIDENT_SHARES * crate::config::SHARE_MAX_SESSIONS;
 const MAX_FRAME: u64 = windshare_relay_core::sessions::OpaqueHeader::MAX_ENCODED_BYTES as u64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
