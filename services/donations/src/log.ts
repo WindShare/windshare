@@ -1,10 +1,27 @@
-import type { DonationProvider } from './model'
+import type { AdminConfigPatch, DonationProvider } from './model'
 
 export type WebhookRejectionReason =
   | 'invalid_signature'
   | 'afdian_verify_failed'
   | 'invalid_payload'
   | 'body_too_large'
+
+export type AfdianOrderSkippedEvent =
+  | { readonly outTradeNo: string; readonly reason: 'order_not_found' }
+  | { readonly outTradeNo: string; readonly reason: 'order_not_paid'; readonly orderStatus: number }
+
+export type NowPaymentsIntentFallbackEvent =
+  | {
+    readonly paymentId: string
+    readonly orderId: string
+    readonly reason: 'not_found_or_expired'
+  }
+  | {
+    readonly paymentId: string
+    readonly orderId: string
+    readonly reason: 'lookup_failed'
+    readonly upstreamStatus: number
+  }
 
 function emit(level: 'info' | 'warn', event: string, fields: Record<string, unknown>): void {
   const line = JSON.stringify({ event, ...fields })
@@ -52,10 +69,34 @@ export function logWebhookReceived(fields: {
 export function logWebhookRejected(fields: {
   readonly provider: DonationProvider
   readonly reason: WebhookRejectionReason
+  readonly externalId?: string
+  readonly upstreamReason?: string
 }): void {
-  emit('warn', 'donation.webhook_rejected', {
+  const payload: Record<string, unknown> = {
     provider: fields.provider,
     reason: fields.reason,
+  }
+  if (fields.externalId !== undefined) {
+    payload.external_id = fields.externalId
+  }
+  if (fields.upstreamReason !== undefined) {
+    payload.upstream_reason = fields.upstreamReason
+  }
+  emit('warn', 'donation.webhook_rejected', payload)
+}
+
+export function logAfdianOrderSkipped(fields: AfdianOrderSkippedEvent): void {
+  if (fields.reason === 'order_not_found') {
+    emit('warn', 'donation.afdian_order_skipped', {
+      out_trade_no: fields.outTradeNo,
+      reason: fields.reason,
+    })
+    return
+  }
+  emit('info', 'donation.afdian_order_skipped', {
+    out_trade_no: fields.outTradeNo,
+    reason: fields.reason,
+    order_status: fields.orderStatus,
   })
 }
 
@@ -78,6 +119,23 @@ export function logNowPaymentsPartiallyPaid(fields: {
     payment_id: fields.paymentId,
     order_id: fields.orderId,
     price_currency: fields.priceCurrency,
+  })
+}
+
+export function logNowPaymentsIntentFallback(fields: NowPaymentsIntentFallbackEvent): void {
+  if (fields.reason === 'lookup_failed') {
+    emit('warn', 'donation.nowpayments_intent_fallback', {
+      payment_id: fields.paymentId,
+      order_id: fields.orderId,
+      reason: fields.reason,
+      upstream_status: fields.upstreamStatus,
+    })
+    return
+  }
+  emit('warn', 'donation.nowpayments_intent_fallback', {
+    payment_id: fields.paymentId,
+    order_id: fields.orderId,
+    reason: fields.reason,
   })
 }
 
@@ -129,6 +187,23 @@ export function logAdminAfdianSynced(fields: {
     deduplicated: fields.deduplicated,
     deferred: fields.deferred,
   })
+}
+
+export function logAdminConfigUpdated(patch: AdminConfigPatch): void {
+  const fields: Record<string, unknown> = {}
+  if (patch.minPublicCnyMinor !== undefined) {
+    fields.min_public_cny_minor = patch.minPublicCnyMinor
+  }
+  if (patch.minPublicUsdMinor !== undefined) {
+    fields.min_public_usd_minor = patch.minPublicUsdMinor
+  }
+  if (patch.moderationEnabled !== undefined) {
+    fields.moderation_enabled = patch.moderationEnabled
+  }
+  if (patch.cryptoCheckoutPaused !== undefined) {
+    fields.crypto_checkout_paused = patch.cryptoCheckoutPaused
+  }
+  emit('info', 'donation.admin_config_updated', fields)
 }
 
 export function logAdminLogin(fields: {

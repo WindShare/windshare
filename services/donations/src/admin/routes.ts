@@ -14,6 +14,7 @@ import {
 } from '../http'
 import {
   logAdminAfdianSynced,
+  logAdminConfigUpdated,
   logAdminLogin,
   logAfdianSponsorLookupFallback,
   logDonationModerated,
@@ -526,7 +527,11 @@ async function handleAdminConfigPatch(request: Request, env: DonationsEnv): Prom
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(patch),
   })
-  return adminJsonResponse(await upstream.json(), upstream.status)
+  const payload = await upstream.json()
+  if (upstream.ok) {
+    logAdminConfigUpdated(patch)
+  }
+  return adminJsonResponse(payload, upstream.status)
 }
 
 async function handleAuthenticatedAdminMutation(

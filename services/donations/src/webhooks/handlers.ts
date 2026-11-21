@@ -8,8 +8,10 @@ import {
   readBoundedText,
 } from '../http'
 import {
+  logAfdianOrderSkipped,
   logAfdianSponsorLookupFallback,
   logDonationCommitted,
+  logNowPaymentsIntentFallback,
   logNowPaymentsPartiallyPaid,
   logWebhookReceived,
   logWebhookRejected,
@@ -154,18 +156,54 @@ export function toAfdianCommitInput(
   }
 }
 
+type CryptoIntentLookupResult =
+  | { readonly kind: 'found'; readonly intent: CryptoCheckoutIntent }
+  | { readonly kind: 'missing' }
+  | { readonly kind: 'lookup_failed'; readonly status: number }
+
 async function lookupCryptoIntent(
   env: DonationsEnv,
   intentId: string,
   nowSec: number,
-): Promise<CryptoCheckoutIntent | null> {
+): Promise<CryptoIntentLookupResult> {
   const stub = getWallStub(env)
   const response = await stub.fetch(
     `https://donation-wall.internal/internal/crypto-intents/${encodeURIComponent(intentId)}?nowSec=${nowSec}`,
   )
-  if (!response.ok) return null
+  if (!response.ok) {
+    return { kind: 'lookup_failed', status: response.status }
+  }
   const body = await response.json() as { intent: CryptoCheckoutIntent | null }
-  return body.intent
+  if (body.intent === null) {
+    return { kind: 'missing' }
+  }
+  return { kind: 'found', intent: body.intent }
+}
+
+async function resolveNowPaymentsIntent(
+  env: DonationsEnv,
+  paymentId: string,
+  orderId: string | null,
+  nowSec: number,
+): Promise<CryptoCheckoutIntent | null> {
+  if (orderId === null) return null
+  const lookup = await lookupCryptoIntent(env, orderId, nowSec)
+  if (lookup.kind === 'found') return lookup.intent
+  if (lookup.kind === 'missing') {
+    logNowPaymentsIntentFallback({
+      paymentId,
+      orderId,
+      reason: 'not_found_or_expired',
+    })
+    return null
+  }
+  logNowPaymentsIntentFallback({
+    paymentId,
+    orderId,
+    reason: 'lookup_failed',
+    upstreamStatus: lookup.status,
+  })
+  return null
 }
 
 function afdianAckResponse(): Response {
@@ -260,13 +298,28 @@ export async function handleAfdianWebhook(
     fetchFn: deps.fetchFn,
   })
   if (!orderLookup.ok) {
-    logWebhookRejected({ provider: 'afdian', reason: 'afdian_verify_failed' })
+    logWebhookRejected({
+      provider: 'afdian',
+      reason: 'afdian_verify_failed',
+      externalId: webhook.outTradeNo,
+      upstreamReason: orderLookup.reason,
+    })
     // Return 502 (not ec: 200) so Afdian retries after transient verification errors.
     return jsonResponse({ error: 'afdian_verify_failed' }, 502, NO_STORE_HEADERS)
   }
 
   const matchedOrder = orderLookup.orders.find(item => item.outTradeNo === webhook.outTradeNo)
-  if (matchedOrder === undefined || matchedOrder.status !== AFDIAN_PAID_STATUS) {
+  if (matchedOrder === undefined) {
+    // Log before ACK so silent drops caused by upstream lag or parsing mismatches remain traceable.
+    logAfdianOrderSkipped({ outTradeNo: webhook.outTradeNo, reason: 'order_not_found' })
+    return afdianAckResponse()
+  }
+  if (matchedOrder.status !== AFDIAN_PAID_STATUS) {
+    logAfdianOrderSkipped({
+      outTradeNo: webhook.outTradeNo,
+      reason: 'order_not_paid',
+      orderStatus: matchedOrder.status,
+    })
     return afdianAckResponse()
   }
 
@@ -427,7 +480,7 @@ export async function handleNowPaymentsWebhook(
   }
 
   const now = deps.nowSec()
-  const intent = ipn.orderId !== null ? await lookupCryptoIntent(env, ipn.orderId, now) : null
+  const intent = await resolveNowPaymentsIntent(env, ipn.paymentId, ipn.orderId, now)
   await commitDonationToWall(
     env,
     {
