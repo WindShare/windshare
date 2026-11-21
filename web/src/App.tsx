@@ -4,6 +4,7 @@ import { useCopy } from './ui/preferences/use-preferences'
 import { lazy, Suspense, useRef, useSyncExternalStore } from 'react'
 import { PortalApp } from './ui/portal/PortalApp'
 import { DetailSheet } from './ui/controls/DetailSheet'
+import { RouteErrorBoundary } from './ui/controls/RouteErrorBoundary'
 import { PortalIcon } from './ui/portal/PortalIcon'
 import { usePortalCopy } from './ui/portal/locales/use-portal-copy'
 import { isDonatePathname } from './ui/donate/route'
@@ -16,7 +17,12 @@ export default function App({ owner }: { readonly owner: DocumentOwner }) {
   const t = useCopy(shellCopy)
   const snapshot = useSyncExternalStore(owner.subscribe, owner.getSnapshot, owner.getSnapshot)
   if (typeof window !== 'undefined' && isDonatePathname(window.location.pathname)) {
-    return <Suspense fallback={null}><DonatePage /></Suspense>
+    return <RouteErrorBoundary
+      fallback={<DonateLoadFallback />}
+      onError={error => console.error({ event: 'donate_route_load_failed', error })}
+    >
+      <Suspense fallback={null}><DonatePage /></Suspense>
+    </RouteErrorBoundary>
   }
   if (snapshot.view === 'receiver' && snapshot.runtime !== null) return <snapshot.runtime.View />
   if (snapshot.view === 'opening') return <main className="document-opening">
@@ -25,6 +31,20 @@ export default function App({ owner }: { readonly owner: DocumentOwner }) {
     <StartupStatus owner={owner} snapshot={snapshot} />
   </main>
   return <PortalApp controller={owner} downloads={<DocumentDownloads owner={owner} snapshot={snapshot} />} />
+}
+
+function DonateLoadFallback() {
+  const t = useCopy(shellCopy)
+  // Reloading fetches fresh HTML and asset hashes so both transient chunk errors
+  // and post-deploy stale chunk URLs recover without hitting React.lazy's rejected cache.
+  return <main className="document-opening">
+    <header><a href="/">WindShare</a><LanguageSelect /></header>
+    <h1>{t.donateTitle}</h1>
+    <div role="alert">
+      <p>{t.donateLoadFailed}</p>
+      <button className="portal-btn-primary" type="button" onClick={() => window.location.reload()}>{t.reload}</button>
+    </div>
+  </main>
 }
 
 function StartupStatus({ owner, snapshot }: { readonly owner: DocumentOwner; readonly snapshot: DocumentSnapshot }) {

@@ -4,6 +4,7 @@ import {
   createCryptoIntent,
   fetchDonationWall,
   parseCryptoIntentResponse,
+  parsePublicWallResponse,
 } from '../../src/ui/donate/api'
 
 describe('donate API request signal composition', () => {
@@ -145,5 +146,90 @@ describe('donate crypto intent response validation', () => {
       intentId: 'intent-ok',
       invoiceUrl: 'https://nowpayments.io/payment/?iid=ok',
     })
+  })
+})
+
+describe('donate public wall response validation', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  const validEntry = {
+    id: 'don_1',
+    provider: 'afdian',
+    displayName: 'Alice',
+    amountMinor: 1000,
+    currency: 'CNY',
+    minorDigits: 2,
+    message: 'Keep going!',
+    donatedAt: 1_700_000_000,
+  }
+
+  it('accepts valid wall payloads including forward-compatible unknown provider names', () => {
+    const wall = {
+      version: 3,
+      moderationEnabled: false,
+      entries: [
+        validEntry,
+        {
+          ...validEntry,
+          id: 'don_2',
+          provider: 'github_sponsors',
+          displayName: null,
+          message: null,
+        },
+      ],
+    }
+
+    expect(parsePublicWallResponse(wall)).toEqual(wall)
+  })
+
+  it('rejects malformed envelopes, invalid entry fields, and out-of-range Date timestamps', () => {
+    const outOfDateRangeSeconds = 10_000_000_000_000
+    for (const malformed of [
+      null,
+      [],
+      'not-an-object',
+      {},
+      { version: 1, moderationEnabled: false },
+      { version: '1', moderationEnabled: false, entries: [] },
+      { version: Number.NaN, moderationEnabled: false, entries: [] },
+      { version: 1, moderationEnabled: 'false', entries: [] },
+      { version: 1, moderationEnabled: false, entries: [null] },
+      { version: 1, moderationEnabled: false, entries: [{ ...validEntry, id: '' }] },
+      { version: 1, moderationEnabled: false, entries: [{ ...validEntry, provider: '   ' }] },
+      { version: 1, moderationEnabled: false, entries: [{ ...validEntry, displayName: 123 }] },
+      { version: 1, moderationEnabled: false, entries: [{ ...validEntry, amountMinor: -1 }] },
+      { version: 1, moderationEnabled: false, entries: [{ ...validEntry, amountMinor: Number.NaN }] },
+      { version: 1, moderationEnabled: false, entries: [{ ...validEntry, currency: '' }] },
+      { version: 1, moderationEnabled: false, entries: [{ ...validEntry, minorDigits: Number.POSITIVE_INFINITY }] },
+      { version: 1, moderationEnabled: false, entries: [{ ...validEntry, message: 42 }] },
+      { version: 1, moderationEnabled: false, entries: [{ ...validEntry, donatedAt: '1700000000' }] },
+      { version: 1, moderationEnabled: false, entries: [{ ...validEntry, donatedAt: Number.NaN }] },
+      { version: 1, moderationEnabled: false, entries: [{ ...validEntry, donatedAt: Number.POSITIVE_INFINITY }] },
+      { version: 1, moderationEnabled: false, entries: [{ ...validEntry, donatedAt: outOfDateRangeSeconds }] },
+    ]) {
+      expect(parsePublicWallResponse(malformed)).toBeNull()
+    }
+  })
+
+  it('throws DonateApiError(invalid_response) when fetchDonationWall receives malformed 2xx payloads', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      Response.json({ version: 1, moderationEnabled: false, entries: [{ ...validEntry, donatedAt: 1e13 }] }, { status: 200 }),
+    )
+    await expect(fetchDonationWall()).rejects.toMatchObject({
+      name: 'DonateApiError',
+      status: 200,
+      code: 'invalid_response',
+    })
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response('<html>captive portal</html>', { status: 200 }),
+    )
+    await expect(fetchDonationWall()).rejects.toBeInstanceOf(DonateApiError)
+
+    const validWall = { version: 2, moderationEnabled: true, entries: [validEntry] }
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(Response.json(validWall, { status: 200 }))
+    await expect(fetchDonationWall()).resolves.toEqual(validWall)
   })
 })

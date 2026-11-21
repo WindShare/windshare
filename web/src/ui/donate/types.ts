@@ -1,4 +1,5 @@
-export type DonationProvider = 'afdian' | 'kofi' | 'nowpayments'
+export type KnownDonationProvider = 'afdian' | 'kofi' | 'nowpayments'
+export type DonationProvider = KnownDonationProvider | (string & {})
 
 export interface PublicWallEntry {
   readonly id: string

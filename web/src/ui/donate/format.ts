@@ -16,6 +16,9 @@ const CURRENCY_SYMBOLS: Readonly<Record<string, string>> = Object.freeze({
   JPY: '¥',
 })
 
+const MS_PER_SECOND = 1000
+// ECMAScript Date valid time value bound is ±8.64e15 ms (±8.64e12 s).
+export const MAX_EPOCH_SECONDS = 8_640_000_000_000
 const SECONDS_PER_MINUTE = 60
 const SECONDS_PER_HOUR = 3600
 const SECONDS_PER_DAY = 86_400
@@ -87,12 +90,28 @@ export function parseCryptoAmountInput(raw: string): CryptoAmountValidation {
   return { ok: true, normalized, amountMinor }
 }
 
+export function isValidEpochSeconds(value: number): boolean {
+  return Number.isFinite(value) && Math.abs(value) <= MAX_EPOCH_SECONDS
+}
+
+export function formatIsoTimestamp(epochSeconds: number): string | undefined {
+  if (!isValidEpochSeconds(epochSeconds)) {
+    return undefined
+  }
+  const date = new Date(epochSeconds * MS_PER_SECOND)
+  return Number.isFinite(date.getTime()) ? date.toISOString() : undefined
+}
+
 export function formatRelativeTime(
   donatedAtSec: number,
   nowSec: number,
   language: Language,
 ): string {
-  const elapsed = Math.max(0, Math.floor(nowSec - donatedAtSec))
+  if (!isValidEpochSeconds(donatedAtSec)) {
+    return ''
+  }
+  const safeNow = Number.isFinite(nowSec) ? nowSec : donatedAtSec
+  const elapsed = Math.max(0, Math.floor(safeNow - donatedAtSec))
   if (elapsed < SECONDS_PER_MINUTE) {
     return language === 'zh-CN' ? '刚刚' : 'just now'
   }
@@ -108,7 +127,7 @@ export function formatRelativeTime(
   if (days < RELATIVE_DAY_LIMIT) {
     return language === 'zh-CN' ? `${days} 天前` : `${days}d ago`
   }
-  const date = new Date(donatedAtSec * 1000)
+  const date = new Date(donatedAtSec * MS_PER_SECOND)
   const year = date.getUTCFullYear()
   const month = String(date.getUTCMonth() + 1).padStart(2, '0')
   const day = String(date.getUTCDate()).padStart(2, '0')

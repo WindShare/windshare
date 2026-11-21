@@ -1,5 +1,11 @@
 import { DONATE_API_ORIGIN } from './config'
-import type { CryptoIntentRequest, CryptoIntentResponse, PublicWallResponse } from './types'
+import { isValidEpochSeconds } from './format'
+import type {
+  CryptoIntentRequest,
+  CryptoIntentResponse,
+  PublicWallEntry,
+  PublicWallResponse,
+} from './types'
 
 const WALL_TIMEOUT_MS = 6_000
 const INTENT_TIMEOUT_MS = 10_000
@@ -7,6 +13,22 @@ const INVALID_RESPONSE_ERROR_CODE = 'invalid_response'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === 'string'
+}
+
+function isNonNegativeFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+}
+
+function isValidWallTimestamp(value: unknown): value is number {
+  return typeof value === 'number' && isValidEpochSeconds(value)
 }
 
 function isValidCheckoutHttpsUrl(raw: unknown): raw is string {
@@ -23,6 +45,58 @@ function isValidCheckoutHttpsUrl(raw: unknown): raw is string {
   } catch {
     return false
   }
+}
+
+function parsePublicWallEntry(raw: unknown): PublicWallEntry | null {
+  if (!isRecord(raw)) return null
+  const {
+    id,
+    provider,
+    displayName,
+    amountMinor,
+    currency,
+    minorDigits,
+    message,
+    donatedAt,
+  } = raw
+  if (
+    !isNonEmptyString(id)
+    || !isNonEmptyString(provider)
+    || !isNullableString(displayName)
+    || !isNonNegativeFiniteNumber(amountMinor)
+    || !isNonEmptyString(currency)
+    || !isNonNegativeFiniteNumber(minorDigits)
+    || !isNullableString(message)
+    || !isValidWallTimestamp(donatedAt)
+  ) {
+    return null
+  }
+  return {
+    id,
+    provider,
+    displayName,
+    amountMinor,
+    currency,
+    minorDigits,
+    message,
+    donatedAt,
+  }
+}
+
+export function parsePublicWallResponse(raw: unknown): PublicWallResponse | null {
+  if (!isRecord(raw)) return null
+  const { version, moderationEnabled, entries } = raw
+  if (typeof version !== 'number' || !Number.isFinite(version)) return null
+  if (typeof moderationEnabled !== 'boolean') return null
+  if (!Array.isArray(entries)) return null
+
+  const parsedEntries: PublicWallEntry[] = []
+  for (const item of entries) {
+    const entry = parsePublicWallEntry(item)
+    if (entry === null) return null
+    parsedEntries.push(entry)
+  }
+  return { version, moderationEnabled, entries: parsedEntries }
 }
 
 export function parseCryptoIntentResponse(raw: unknown): CryptoIntentResponse | null {
@@ -76,19 +150,34 @@ function composeRequestSignal(timeoutMs: number, signal?: AbortSignal): AbortSig
   return signal === undefined ? timeoutSignal : AbortSignal.any([signal, timeoutSignal])
 }
 
+async function readJsonPayload(response: Response, requestSignal: AbortSignal): Promise<unknown> {
+  try {
+    return await response.json()
+  } catch (error) {
+    if (requestSignal.aborted) throw error
+    throw new DonateApiError(response.status, INVALID_RESPONSE_ERROR_CODE, null)
+  }
+}
+
 export async function fetchDonationWall(
   options: WallFetchOptions = {},
 ): Promise<PublicWallResponse> {
+  const requestSignal = composeRequestSignal(WALL_TIMEOUT_MS, options.signal)
   const response = await fetch(`${DONATE_API_ORIGIN}/v1/donations/wall`, {
     method: 'GET',
     ...(options.cache === undefined ? {} : { cache: options.cache }),
-    signal: composeRequestSignal(WALL_TIMEOUT_MS, options.signal),
+    signal: requestSignal,
   })
   if (!response.ok) {
     const details = await readErrorDetails(response)
     throw new DonateApiError(response.status, details.code, details.retryAfterSeconds)
   }
-  return await response.json() as PublicWallResponse
+  const body = await readJsonPayload(response, requestSignal)
+  const parsed = parsePublicWallResponse(body)
+  if (parsed === null) {
+    throw new DonateApiError(response.status, INVALID_RESPONSE_ERROR_CODE, null)
+  }
+  return parsed
 }
 
 export async function createCryptoIntent(
@@ -106,13 +195,7 @@ export async function createCryptoIntent(
     const details = await readErrorDetails(response)
     throw new DonateApiError(response.status, details.code, details.retryAfterSeconds)
   }
-  let body: unknown
-  try {
-    body = await response.json()
-  } catch (error) {
-    if (requestSignal.aborted) throw error
-    throw new DonateApiError(response.status, INVALID_RESPONSE_ERROR_CODE, null)
-  }
+  const body = await readJsonPayload(response, requestSignal)
   const parsed = parseCryptoIntentResponse(body)
   if (parsed === null) {
     throw new DonateApiError(response.status, INVALID_RESPONSE_ERROR_CODE, null)

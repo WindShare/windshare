@@ -6,8 +6,10 @@ import {
   canCreateCryptoIntent,
 } from '../../src/ui/donate/config'
 import {
+  MAX_EPOCH_SECONDS,
   countCodePoints,
   formatDonationAmount,
+  formatIsoTimestamp,
   formatRelativeTime,
   parseCryptoAmountInput,
 } from '../../src/ui/donate/format'
@@ -39,6 +41,13 @@ describe('donate pure formatting and validation helpers', () => {
     expect(formatRelativeTime(now - 7200, now, 'en')).toBe('2h ago')
     expect(formatRelativeTime(now - 3 * 86_400, now, 'en')).toBe('3d ago')
     expect(formatRelativeTime(now - 40 * 86_400, now, 'en')).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    expect(formatRelativeTime(Number.NaN, now, 'en')).toBe('')
+    expect(formatRelativeTime(MAX_EPOCH_SECONDS + 1, now, 'en')).toBe('')
+    expect(formatIsoTimestamp(1_700_000_000)).toBe('2023-11-14T22:13:20.000Z')
+    expect(formatIsoTimestamp(Number.NaN)).toBeUndefined()
+    expect(formatIsoTimestamp(Number.POSITIVE_INFINITY)).toBeUndefined()
+    expect(formatIsoTimestamp(MAX_EPOCH_SECONDS + 1)).toBeUndefined()
+    expect(formatIsoTimestamp(-(MAX_EPOCH_SECONDS + 1))).toBeUndefined()
     expect(countCodePoints('风😀')).toBe(2)
   })
 

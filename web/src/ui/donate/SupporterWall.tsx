@@ -1,5 +1,5 @@
 import { usePreferences } from '../preferences/use-preferences'
-import { formatDonationAmount, formatRelativeTime } from './format'
+import { formatDonationAmount, formatIsoTimestamp, formatRelativeTime } from './format'
 import { useDonateCopy } from './locales/use-donate-copy'
 import type { DonationProvider, PublicWallEntry } from './types'
 
@@ -26,6 +26,8 @@ function providerLabel(
       return t.providerKofi
     case 'nowpayments':
       return t.providerNowpayments
+    default:
+      return provider
   }
 }
 
@@ -101,7 +103,7 @@ export function SupporterWall({
               entry.minorDigits,
             )
             const relative = formatRelativeTime(entry.donatedAt, nowSec, language)
-            const iso = new Date(entry.donatedAt * 1000).toISOString()
+            const iso = formatIsoTimestamp(entry.donatedAt)
 
             return (
               <li
