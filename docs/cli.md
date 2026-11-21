@@ -37,7 +37,7 @@ wind relay cancel <url>
 wind config import <file|-> [--front-url <url>] [-v|--verbose]
 ```
 
-- `relay onboard` pairs this device with the relay owner. Confirm the device name and code in the browser. `relay add` uses public admission when available, or accepts a service key with `--access-key`.
+- `relay onboard` pairs this device in the browser (via service-account sign-in when advertised, or as the relay owner). `relay add` uses public admission when available, pairs when restricted, or accepts a service key with `--access-key`.
 - In automatic mode, new relays are enabled while a candidate slot is free. In selected mode, new relays start disabled. `relay list` shows the shared CLI/desktop settings. Use `relay frontend` to select a receiver website after pairing.
 - `relay cancel` abandons an unfinished enrollment and revokes its issued credential; it fails when nothing is pending for that relay.
 - `config import` validates and replaces the saved sharing configuration from a JSON file or stdin (`-`).

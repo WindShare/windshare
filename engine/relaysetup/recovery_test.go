@@ -77,7 +77,7 @@ func TestCancellationInterruptsAnActiveApprovalAndSerializesStorage(t *testing.T
 		Wait: func(ctx context.Context, _ time.Duration) error { close(waiting); <-ctx.Done(); return ctx.Err() },
 	})
 	result := make(chan error, 1)
-	request := Request{URL: saved.Pending.RelayURL, Operation: AddProfile, NoBrowser: true}
+	request := Request{URL: saved.Pending.RelayURL, Operation: AddProfile}
 	go func() { _, err := service.Run(t.Context(), request, nil); result <- err }()
 	<-waiting
 	if _, err := service.Run(t.Context(), request, nil); !errors.Is(err, ErrSetupRunning) {

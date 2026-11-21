@@ -44,9 +44,9 @@ func TestRelaySetupRejectsInvalidNamesBeforeOperation(t *testing.T) {
 func TestRelaySetupPreservesExplicitDeviceName(t *testing.T) {
 	const name = "  Ricky's 笔记本  "
 	app := &App{}
-	request, outcome := app.parseRelaySetupRequest("add", []string{"https://relay.example", "--name", name})
-	if outcome != requestParseReady || request.DeviceName != name {
-		t.Fatalf("explicit name was rewritten: outcome=%v name=%q", outcome, request.DeviceName)
+	command, outcome := app.parseRelaySetupRequest("add", []string{"https://relay.example", "--name", name})
+	if outcome != requestParseReady || command.request.DeviceName != name {
+		t.Fatalf("explicit name was rewritten: outcome=%v name=%q", outcome, command.request.DeviceName)
 	}
 }
 
@@ -76,9 +76,9 @@ func TestRelaySetupDeviceNameFailureTakesPrecedenceOverCancellation(t *testing.T
 		}
 	})
 	// Exercise the wrapped engine error independently of CLI preflight.
-	code := app.runRelaySetup(ctx, engine.RelaySetupRequest{
+	code := app.runRelaySetup(ctx, relaySetupCommand{request: engine.RelaySetupRequest{
 		URL: relayURL, DeviceName: "   ", Operation: relaysetup.AddProfile,
-	})
+	}})
 	if code != ExitUsage || ctx.Err() == nil || stdout.Len() != 0 {
 		t.Fatalf("exit=%d cancelled=%v stdout=%q", code, ctx.Err(), stdout.String())
 	}

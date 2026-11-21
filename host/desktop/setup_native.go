@@ -45,7 +45,7 @@ func (setup nativeSetup) run(ctx context.Context, input SetupInput, progress fun
 	}
 	installed, err := setup.service.Run(ctx, relaysetup.Request{
 		URL: input.RelayURL, Operation: input.RelayOperation, AccessKey: input.AccessKey,
-		DeviceName: relaysetup.DefaultDeviceName("WindShare desktop"), NoBrowser: true,
+		DeviceName: relaysetup.DefaultDeviceName("WindShare desktop"),
 	}, progress)
 	if err == nil {
 		result.RelayURL, result.RelaySaved = installed.RelayURL, true

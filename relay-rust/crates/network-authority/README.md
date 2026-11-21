@@ -55,7 +55,7 @@ response confirms acceptance. Its timeout is 15 seconds.
    Enable the mainland node's relay service only after account admission and usage
    replies work; then publish its relay role.
 
-After an enabled native node receives a verified usage reply advertising browser login, Desktop offers **Sign in to this service** when adding it. The authority serves `/device`, and the node serves `/device/complete`. Keep both routes on their respective public HTTPS origins.
+After an enabled native node receives a verified usage reply advertising browser login, Desktop and the CLI offer service-account sign-in when adding it. The authority serves `/device`, and the node serves `/device/complete`. Keep both routes on their respective public HTTPS origins.
 
 The console records enrollment and the most recent signed report separately. It
 marks a node published only when the live mirror matches the verified release

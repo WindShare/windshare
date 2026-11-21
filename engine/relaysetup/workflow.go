@@ -16,7 +16,7 @@ type workflow struct {
 
 func (run *workflow) emit(progress func(Progress), event Progress) {
 	run.dependencies.Log.Info("relay_setup", "stage", event.Stage, "operation_id", event.OperationID,
-		"enrollment_id", event.EnrollmentID, "retry_after", event.RetryAfter)
+		"enrollment_id", event.EnrollmentID, "service_login", event.ServiceLogin != nil, "retry_after", event.RetryAfter)
 	if progress != nil {
 		progress(event)
 	}
@@ -36,7 +36,7 @@ func (run *workflow) execute(ctx context.Context, request Request, progress func
 		if !saved.Pending.matches(request) {
 			return Result{}, ErrPendingSetup
 		}
-		return run.continueEnrollment(ctx, saved, progress, request.NoBrowser)
+		return run.continueEnrollment(ctx, saved, progress)
 	}
 	if request.AccessKey != "" {
 		return run.install(ctx, saved.SettingsRevision(), saved.CredentialProfile(request.URL, request.AccessKey))
@@ -90,5 +90,5 @@ func (run *workflow) execute(ctx context.Context, request Request, progress func
 	if err != nil {
 		return Result{}, err
 	}
-	return run.continueEnrollment(ctx, saved, progress, request.NoBrowser)
+	return run.continueEnrollment(ctx, saved, progress)
 }

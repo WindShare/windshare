@@ -60,7 +60,7 @@ const usageText = `Usage:
 
   ` + commandmeta.Name + ` relay add <url> [--access-key <key>] [--name <device>] [--no-browser]
   ` + commandmeta.Name + ` relay onboard <url> [--name <device>] [--no-browser]
-      Pair this device in the relay console. New relays are enabled when a slot is available.
+      Pair this device in the browser. New relays are enabled when a slot is available.
   ` + commandmeta.Name + ` relay list | mode <automatic|selected> | enable|disable <url> | frontend <url|default>
   ` + commandmeta.Name + ` relay cancel <url>
       Cancel a pending enrollment.
@@ -110,6 +110,7 @@ type App struct {
 	networkSetup            *platformsetup.Service
 	loadShareConfig         func() (relayconfig.Config, error)
 	saveShareConfig         func(relayconfig.Config) error
+	openBrowser             func(context.Context, string) error
 }
 
 // Main 是 os 进程入口的接线:真实标准流 + 终止信号取消(Ctrl-C、SIGTERM、
@@ -131,12 +132,12 @@ func Main() int {
 		networkSetup:    platformsetup.New(),
 		loadShareConfig: relayconfig.Load,
 		saveShareConfig: relayconfig.Save,
+		openBrowser:     openRelayBrowser,
 	}
 	interrupts := make(chan os.Signal, interruptSignalBuffer)
 	defer notifyTerminationSignals(interrupts, signal.Ignored)()
 	app.engineConfig.RelaySetup.Store = relaysetup.FileStore{Settings: relayconfig.FileStore{}}
 	app.engineConfig.TURNDependencies.Cache = turncache.FileStore{Settings: relayconfig.FileStore{}}
-	app.engineConfig.RelaySetup.OpenBrowser = openRelayBrowser
 	code := runCLIWithInterruptEscalation(
 		interrupts,
 		os.Exit,
