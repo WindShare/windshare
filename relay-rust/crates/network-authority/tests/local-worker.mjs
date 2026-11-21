@@ -11,7 +11,30 @@ const crate = fileURLToPath(new URL('../', import.meta.url));
 const { Miniflare, Log, LogLevel, convertV4MiniflareOptions } =
   createRequire(new URL('../../relay-cloudflare/package.json', import.meta.url))('miniflare');
 
-export async function fixture(t, extra = {}, { existingEnrollment = false } = {}) {
+export function signedDescriptor(host, nodeKey, node, overrides = {}) {
+  const rawNode = Buffer.isBuffer(node) ? node : Buffer.from(node);
+  const now = Math.floor(Date.now() / 1000);
+  const payload = Buffer.from(JSON.stringify({
+    version: 2,
+    node_key: rawNode.toString('base64url'),
+    node_id: createHash('sha256').update('windshare/node-identity/v1\0').update(rawNode).digest('base64url'),
+    relay_endpoint: 'wss://' + host + '/v2/ws',
+    zone: 'global',
+    region: 'edge-test',
+    services: { relay: true, stun: false },
+    stun: [],
+    issued_at: now,
+    expires_at: now + 300,
+    ...overrides,
+  }));
+  return {
+    version: 2,
+    descriptor: payload.toString('base64url'),
+    signature: sign(null, Buffer.concat([Buffer.from('windshare/node-descriptor/v2\0'), payload]), nodeKey).toString('base64url'),
+  };
+}
+
+export async function fixture(t, extra = {}, { existingEnrollment = false, outbound = null } = {}) {
   const keys = await mkdtemp(join(tmpdir(), 'windshare-password-edge-test-'));
   t.after(() => rm(keys, { recursive: true, force: true }));
   execFileSync('cargo', ['run', '--quiet', '--locked', '--bin', 'network-authority-keys', '--', keys, '1'], { cwd: crate });
@@ -50,28 +73,26 @@ export async function fixture(t, extra = {}, { existingEnrollment = false } = {}
         assert.equal(request.headers.get('Authorization'), null);
         assert.equal(request.headers.get('X-CSRF-Token'), null);
         const url = new URL(request.url);
+        if (outbound) {
+          const custom = await outbound(request, url);
+          if (custom) return custom;
+        }
         if (mirrors.has(url.href)) return Response.json(mirrors.get(url.href));
         if (url.hostname === 'cloudflare-dns.com') {
           assert.equal(url.searchParams.get('name'), host);
           return Response.json({ Status: 0, TC: false, Answer: url.searchParams.get('type') === '1' ? [{ type: 1, data: '1.1.1.1' }] : [] });
         }
         if (url.href !== base + '/.well-known/windshare') throw Error('Unexpected outbound request ' + url.href);
-        const now = Math.floor(Date.now() / 1000);
-        const payload = Buffer.from(JSON.stringify({ version: 2, node_key: node.toString('base64url'),
-          node_id: createHash('sha256').update('windshare/node-identity/v1\0').update(node).digest('base64url'),
-          relay_endpoint: 'wss://' + host + '/v2/ws', zone: 'global', region: 'edge-test',
-          services: { relay: true, stun: false }, stun: [], issued_at: now, expires_at: now + 300 }));
-        return Response.json({ version: 2, descriptor: payload.toString('base64url'),
-          signature: sign(null, Buffer.concat([Buffer.from('windshare/node-descriptor/v2\0'), payload]), nodeKey).toString('base64url') });
+        return Response.json(signedDescriptor(host, nodeKey, node));
       },
       kvNamespaces: ['DIRECTORY'],
       bindings: {
-        ...extra,
         API_ORIGIN: 'https://localhost',
         AUTHORITY_ROOT: trust.root,
         AUTHORITY_CERTIFICATE: trust.certificate,
         AUTHORITY_SIGNING_SEED: (await readFile(join(keys, 'online-1.seed'), 'utf8')).trim(),
         INITIALIZATION_TOKEN: 'local-initialization-token',
+        ...extra,
       },
       durableObjects: { AUTHORITY: { className: existingEnrollment ? 'ExistingEnrollment' : 'NetworkAuthority', useSQLite: true } },
     }],
