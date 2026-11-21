@@ -55,7 +55,9 @@ func TestAssemblerAdmissionTombstoneCapacityAndExpiryEdges(t *testing.T) {
 	full, _ := NewAssembler(session, hierarchy, func() time.Time { return now })
 	for index := range MaxFragmentTombstones {
 		full.recordTombstones[assemblyKey{
-			operation: flowID[protocolsession.OperationID](byte(index%250 + 1)),
+			// Operation 110 stays out of the table: its record tombstones would
+			// be superseded by the operation tombstone cancelling it adds.
+			operation: flowID[protocolsession.OperationID](byte(index%100 + 120)),
 			record:    records.RecordID{byte(index / 250), byte(index%250 + 1)},
 		}] = now.Add(time.Hour)
 	}

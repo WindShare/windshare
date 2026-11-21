@@ -262,8 +262,22 @@ func (a *Assembler) terminateOperationLocked(operationID protocolsession.Operati
 			a.releaseRecordLocked(key)
 		}
 	}
-	if _, exists := a.operationTombs[operationID]; !exists && len(a.recordTombstones)+len(a.operationTombs) >= MaxFragmentTombstones {
+	// The operation tombstone rejects every fragment of the operation for at
+	// least as long as any of its record tombstones, so those records no longer
+	// need their own slots. Keeping both charged each completed block twice and
+	// let a sustained transfer exhaust the table in half the time it needs.
+	var superseded []assemblyKey
+	for key := range a.recordTombstones {
+		if key.operation == operationID {
+			superseded = append(superseded, key)
+		}
+	}
+	if _, exists := a.operationTombs[operationID]; !exists &&
+		len(a.recordTombstones)-len(superseded)+len(a.operationTombs) >= MaxFragmentTombstones {
 		return ErrReassemblyBudget
+	}
+	for _, key := range superseded {
+		delete(a.recordTombstones, key)
 	}
 	a.operationTombs[operationID] = now.Add(FragmentTombstone)
 	return nil
