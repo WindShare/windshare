@@ -461,6 +461,57 @@ describe('provider protocol signing, parsing, and outbound adapters', () => {
     })
     expect(validRes).toEqual({ ok: true, invoiceUrl: 'https://nowpayments.io/payment/?iid=intent-2' })
   })
+
+  it('cancels unread outbound response bodies on non-2xx and redirect responses without masking the status reason', async () => {
+    const createTrackedResponse = (status: number, cancelError?: Error) => {
+      let cancelled = false
+      const body = new ReadableStream<Uint8Array>({
+        cancel() {
+          cancelled = true
+          if (cancelError !== undefined) {
+            return Promise.reject(cancelError)
+          }
+        },
+      })
+      return {
+        response: new Response(body, { status }),
+        wasCancelled: () => cancelled,
+      }
+    }
+
+    const redirectTracked = createTrackedResponse(302)
+    const redirectResult = await queryAfdianOrders({
+      userId: 'creator',
+      token: 'tok',
+      outTradeNo: 'ORD-302',
+      nowSec: 1700000000,
+      fetchFn: async () => redirectTracked.response,
+    })
+    expect(redirectResult).toEqual({ ok: false, reason: 'unexpected_redirect_302' })
+    expect(redirectTracked.wasCancelled()).toBe(true)
+
+    const errorTracked = createTrackedResponse(503)
+    const errorResult = await queryAfdianOrders({
+      userId: 'creator',
+      token: 'tok',
+      outTradeNo: 'ORD-503',
+      nowSec: 1700000000,
+      fetchFn: async () => errorTracked.response,
+    })
+    expect(errorResult).toEqual({ ok: false, reason: 'http_503' })
+    expect(errorTracked.wasCancelled()).toBe(true)
+
+    const brokenCancelTracked = createTrackedResponse(502, new Error('stream already reset'))
+    const brokenCancelResult = await queryAfdianOrders({
+      userId: 'creator',
+      token: 'tok',
+      outTradeNo: 'ORD-502',
+      nowSec: 1700000000,
+      fetchFn: async () => brokenCancelTracked.response,
+    })
+    expect(brokenCancelResult).toEqual({ ok: false, reason: 'http_502' })
+    expect(brokenCancelTracked.wasCancelled()).toBe(true)
+  })
 })
 
 describe('WallStore SQLite persistence, caching, rate limiting, and pagination', () => {

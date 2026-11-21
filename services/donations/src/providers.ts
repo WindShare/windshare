@@ -54,11 +54,13 @@ async function postJsonOutbound(
     return { ok: false, reason: 'network_or_timeout' }
   }
 
-  if (response.status >= 300 && response.status < 400) {
-    return { ok: false, reason: `unexpected_redirect_${response.status}` }
-  }
   if (!response.ok) {
-    return { ok: false, reason: `http_${response.status}` }
+    // Explicitly cancel unconsumed error/redirect streams so workerd releases subrequest resources immediately.
+    await response.body?.cancel().catch(() => undefined)
+    const reason = response.status >= 300 && response.status < 400
+      ? `unexpected_redirect_${response.status}`
+      : `http_${response.status}`
+    return { ok: false, reason }
   }
 
   try {
