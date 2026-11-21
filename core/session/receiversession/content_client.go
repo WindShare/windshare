@@ -441,7 +441,11 @@ func (lane *receiverBlockLane) fetchReservedBlock(
 	if err != nil {
 		return records.BlockRecord{}, err
 	}
-	defer func() { err = operation.finish(ctx, err) }()
+	defer func() {
+		if err = operation.finish(ctx, err); err != nil {
+			record = records.BlockRecord{}
+		}
+	}()
 	operation.capacity = capacity
 	return operation.receive(ctx, demand, received)
 }
@@ -513,7 +517,7 @@ func (operation *receiverBlockOperation) retire(reason contentflow.CancelReason)
 	rpcErr := operation.lane.rpc.CancelAndEnd(operation.call, reason)
 	assemblyErr := operation.lane.assembler.RetireOperation(operation.call.ID())
 	operation.call.RecordTraceCleanup(assemblyErr)
-	return errors.Join(assemblyErr, rpcErr)
+	return errors.Join(rpcErr, assemblyErr)
 }
 
 func (operation *receiverBlockOperation) receive(

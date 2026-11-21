@@ -2,6 +2,7 @@ package contentflow
 
 import (
 	"encoding/binary"
+	"errors"
 	"testing"
 	"time"
 
@@ -69,6 +70,21 @@ func TestAssemblerSuppressesInOperationDuplicateUntilRetired(t *testing.T) {
 	replay, err := assembler.AcceptAuthenticated(fragment)
 	if err != nil || replay.Status != FragmentDuplicate || replay.ReceivedBytes != 0 {
 		t.Fatalf("in-operation replay: %+v err=%v", replay, err)
+	}
+	conflicting, err := FragmentRecord(operation, []byte("different-length-block"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	conflictingPlaintext := flowMessagePlaintext(t, conflicting[0])
+	copy(conflictingPlaintext[20:36], fragment[20:36])
+	if _, err := assembler.AcceptAuthenticated(conflictingPlaintext); !errors.Is(err, ErrFragmentConflict) {
+		t.Fatalf("completed-record geometry conflict err=%v", err)
+	}
+	if len(assembler.completedRecords) != 0 {
+		t.Fatalf("completed records retained after geometry conflict: %d", len(assembler.completedRecords))
+	}
+	if result, err := assembler.AcceptAuthenticated(fragment); err != nil || result.Status != RecordComplete {
+		t.Fatalf("status=%v err=%v", result.Status, err)
 	}
 	if err := assembler.RetireOperation(operation); err != nil {
 		t.Fatal(err)

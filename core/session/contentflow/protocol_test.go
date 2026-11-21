@@ -234,9 +234,8 @@ func TestAssemblerTimeoutCancelAndThreeTierBudget(t *testing.T) {
 		}
 	}
 	now = now.Add(FragmentInactivityTimeout)
-	timedOut := assembler.SweepTimeouts()
-	if !slices.Equal(timedOut, []protocolsession.OperationID{operation}) {
-		t.Fatalf("timeouts=%x", timedOut)
+	if _, err := assembler.AcceptAuthenticated(flowMessagePlaintext(t, messages[1])); !errors.Is(err, ErrFragmentInactivity) {
+		t.Fatalf("timed-out accept error=%v", err)
 	}
 	if assembler.ActiveRecords() != 0 {
 		t.Fatalf("timed-out active records=%d", assembler.ActiveRecords())
@@ -282,7 +281,7 @@ func TestUnrelatedFragmentCannotConsumeAnotherOperationsTimeoutSignal(t *testing
 	activeOperation := flowID[protocolsession.OperationID](225)
 	partial, _ := FragmentRecord(timedOutOperation, bytes.Repeat([]byte{1}, MaxFragmentPayloadBytes+1))
 	active, _ := FragmentRecord(activeOperation, []byte("active"))
-	hierarchy, _ := reassemblyHierarchy(t, ReassemblyLimits{Bytes: 1 << 20, Records: 4})
+	hierarchy, accounts := reassemblyHierarchy(t, ReassemblyLimits{Bytes: 1 << 20, Records: 4})
 	assembler, _ := NewAssembler(flowID[protocolsession.ProtocolSessionID](226), hierarchy, func() time.Time { return now })
 	if _, err := assembler.AcceptAuthenticated(flowMessagePlaintext(t, partial[0])); err != nil {
 		t.Fatal(err)
@@ -292,21 +291,16 @@ func TestUnrelatedFragmentCannotConsumeAnotherOperationsTimeoutSignal(t *testing
 	if err != nil || result.Status != RecordComplete {
 		t.Fatalf("unrelated operation status=%d err=%v", result.Status, err)
 	}
-	if timedOut := assembler.SweepTimeouts(); !slices.Equal(timedOut, []protocolsession.OperationID{timedOutOperation}) {
-		t.Fatalf("timeout signal was consumed by unrelated traffic: %x", timedOut)
-	}
-
-	secondTimedOut := flowID[protocolsession.OperationID](227)
-	second, _ := FragmentRecord(secondTimedOut, bytes.Repeat([]byte{2}, MaxFragmentPayloadBytes+1))
-	if _, err := assembler.AcceptAuthenticated(flowMessagePlaintext(t, second[0])); err != nil {
-		t.Fatal(err)
-	}
-	now = now.Add(FragmentInactivityTimeout)
-	if _, err := assembler.AcceptAuthenticated(flowMessagePlaintext(t, second[1])); !errors.Is(err, ErrFragmentInactivity) {
-		t.Fatalf("expired operation accepted a late completing fragment: %v", err)
+	if _, err := assembler.AcceptAuthenticated(flowMessagePlaintext(t, partial[1])); !errors.Is(err, ErrFragmentInactivity) {
+		t.Fatalf("timeout signal was consumed by unrelated traffic: %v", err)
 	}
 	if assembler.ActiveRecords() != 0 {
 		t.Fatalf("timed-out operation retained active records=%d", assembler.ActiveRecords())
+	}
+	for _, account := range accounts {
+		if usage := account.Usage(); usage != (ReassemblyUsage{}) {
+			t.Fatalf("timed-out operation leaked budget=%+v", usage)
+		}
 	}
 }
 

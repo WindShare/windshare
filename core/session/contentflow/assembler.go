@@ -1,7 +1,6 @@
 package contentflow
 
 import (
-	"bytes"
 	"errors"
 	"slices"
 	"sync"
@@ -43,10 +42,17 @@ type assemblyState struct {
 	reservation      *reassemblyReservation
 }
 
+type completedRecord struct {
+	count uint32
+	total uint32
+}
+
 // Assembler owns active block-fragment reassembly and its three-tier memory
 // budget. Cross-operation late-arrival suppression and retained-identity
 // backpressure belong solely to protocolsession.OperationTable, so Assembler
-// keeps no post-retirement tombstones and drops per-operation state on retire.
+// keeps no post-retirement tombstones. Callers must retire the operation at the
+// protocol layer before calling RetireOperation (or Close) to drop in-operation
+// state and avoid retaining completedRecords entries.
 type Assembler struct {
 	sessionID protocolsession.ProtocolSessionID
 	hierarchy ReassemblyHierarchy
@@ -56,7 +62,7 @@ type Assembler struct {
 	closed           bool
 	records          map[assemblyKey]*assemblyState
 	operationBytes   map[protocolsession.OperationID]uint64
-	completedRecords map[protocolsession.OperationID]map[records.RecordID]struct{}
+	completedRecords map[protocolsession.OperationID]map[records.RecordID]completedRecord
 }
 
 func NewAssembler(sessionID protocolsession.ProtocolSessionID, hierarchy ReassemblyHierarchy, now func() time.Time) (*Assembler, error) {
@@ -73,7 +79,7 @@ func NewAssembler(sessionID protocolsession.ProtocolSessionID, hierarchy Reassem
 		sessionID: sessionID, hierarchy: hierarchy, now: now,
 		records:          make(map[assemblyKey]*assemblyState),
 		operationBytes:   make(map[protocolsession.OperationID]uint64),
-		completedRecords: make(map[protocolsession.OperationID]map[records.RecordID]struct{}),
+		completedRecords: make(map[protocolsession.OperationID]map[records.RecordID]completedRecord),
 	}, nil
 }
 
@@ -105,13 +111,22 @@ func (a *Assembler) acceptAuthenticated(plaintext []byte, capacity *AssemblyCapa
 		}
 	}
 	now := a.now()
-	for key, state := range a.records {
-		if key.operation == fragment.OperationID && !now.Before(state.progressDeadline) {
-			a.retireOperationLocked(fragment.OperationID)
-			return AssemblyResult{}, ErrFragmentInactivity
+	if a.operationBytes[fragment.OperationID] > 0 {
+		for key, state := range a.records {
+			if key.operation == fragment.OperationID && !now.Before(state.progressDeadline) {
+				a.retireOperationLocked(fragment.OperationID)
+				return AssemblyResult{}, ErrFragmentInactivity
+			}
 		}
 	}
-	if _, complete := a.completedRecords[fragment.OperationID][fragment.RecordID]; complete {
+	if completed, ok := a.completedRecords[fragment.OperationID][fragment.RecordID]; ok {
+		if completed.count != fragment.Count || completed.total != fragment.TotalLength {
+			a.retireOperationLocked(fragment.OperationID)
+			return AssemblyResult{}, ErrFragmentConflict
+		}
+		// The completed record already passed SHA-256 RecordID verification and
+		// left the assembly buffer; replays matching its geometry stay idempotent
+		// without retaining the sealed object for byte-level comparison.
 		return AssemblyResult{Status: FragmentDuplicate, OperationID: fragment.OperationID, RecordID: fragment.RecordID}, nil
 	}
 	key := assemblyKey{operation: fragment.OperationID, record: fragment.RecordID}
@@ -148,8 +163,9 @@ func (a *Assembler) acceptAuthenticated(plaintext []byte, capacity *AssemblyCapa
 	// The completed buffer leaves the assembly table. A pre-dispatch reservation
 	// remains with its physical attempt through authentication and cancellation.
 	object := state.buffer
+	completed := completedRecord{count: state.count, total: state.total}
 	a.releaseRecordLocked(key)
-	a.markRecordCompletedLocked(fragment.OperationID, fragment.RecordID)
+	a.markRecordCompletedLocked(fragment.OperationID, fragment.RecordID, completed)
 	return AssemblyResult{Status: RecordComplete, OperationID: fragment.OperationID, RecordID: fragment.RecordID, Object: object, ReceivedBytes: uint64(len(fragment.Payload))}, nil
 }
 
@@ -207,30 +223,6 @@ func (a *Assembler) RetireOperation(operationID protocolsession.OperationID) err
 	return nil
 }
 
-func (a *Assembler) SweepTimeouts() []protocolsession.OperationID {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.closed {
-		return nil
-	}
-	now := a.now()
-	timedOut := make(map[protocolsession.OperationID]struct{})
-	for key, state := range a.records {
-		if !now.Before(state.progressDeadline) {
-			timedOut[key.operation] = struct{}{}
-		}
-	}
-	result := make([]protocolsession.OperationID, 0, len(timedOut))
-	for operationID := range timedOut {
-		a.retireOperationLocked(operationID)
-		result = append(result, operationID)
-	}
-	slices.SortFunc(result, func(left, right protocolsession.OperationID) int {
-		return bytes.Compare(left.Bytes(), right.Bytes())
-	})
-	return result
-}
-
 func (a *Assembler) ActiveRecords() int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -238,6 +230,9 @@ func (a *Assembler) ActiveRecords() int {
 }
 
 func (a *Assembler) activeOperationRecordsLocked(operationID protocolsession.OperationID) int {
+	if a.operationBytes[operationID] == 0 {
+		return 0
+	}
 	count := 0
 	for key := range a.records {
 		if key.operation == operationID {
@@ -247,13 +242,13 @@ func (a *Assembler) activeOperationRecordsLocked(operationID protocolsession.Ope
 	return count
 }
 
-func (a *Assembler) markRecordCompletedLocked(operationID protocolsession.OperationID, recordID records.RecordID) {
-	completed := a.completedRecords[operationID]
-	if completed == nil {
-		completed = make(map[records.RecordID]struct{}, 1)
-		a.completedRecords[operationID] = completed
+func (a *Assembler) markRecordCompletedLocked(operationID protocolsession.OperationID, recordID records.RecordID, completed completedRecord) {
+	recordsByID := a.completedRecords[operationID]
+	if recordsByID == nil {
+		recordsByID = make(map[records.RecordID]completedRecord, 1)
+		a.completedRecords[operationID] = recordsByID
 	}
-	completed[recordID] = struct{}{}
+	recordsByID[recordID] = completed
 }
 
 func (a *Assembler) releaseRecordLocked(key assemblyKey) {
@@ -272,9 +267,11 @@ func (a *Assembler) releaseRecordLocked(key assemblyKey) {
 }
 
 func (a *Assembler) retireOperationLocked(operationID protocolsession.OperationID) {
-	for key := range a.records {
-		if key.operation == operationID {
-			a.releaseRecordLocked(key)
+	if a.operationBytes[operationID] > 0 {
+		for key := range a.records {
+			if key.operation == operationID {
+				a.releaseRecordLocked(key)
+			}
 		}
 	}
 	delete(a.completedRecords, operationID)
