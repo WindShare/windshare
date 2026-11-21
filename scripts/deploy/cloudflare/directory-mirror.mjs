@@ -2,7 +2,27 @@ import { compare, directoryRevision } from './directory-revision.mjs';
 
 const mirrors = new WeakMap();
 const EDGE_TTL = 60;
+const DEPLOYMENT_BINDING = 'WINDSHARE_DEPLOYMENT';
+const CACHE_PATH = '/.windshare-cache/last-directory';
+const FALLBACK_CACHE_KEY = 'https://directory-mirror.windshare.internal' + CACHE_PATH;
 const PUBLIC = { 'Access-Control-Allow-Origin': '*', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' };
+
+// Use one zone-canonical Cache API key across all hostnames (e.g. windshare.cc and ws.ourworld.top)
+// so shared isolate state (state.last, retryAt, restored) stays 1:1 with the persisted entry.
+function canonicalCacheKey(env) {
+  const raw = env?.[DEPLOYMENT_BINDING];
+  if (typeof raw !== 'string') return FALLBACK_CACHE_KEY;
+  try {
+    const endpoint = JSON.parse(raw)?.endpoint;
+    if (typeof endpoint !== 'string') return FALLBACK_CACHE_KEY;
+    const url = new URL(endpoint);
+    return url.protocol === 'https:' || url.protocol === 'http:'
+      ? new URL(CACHE_PATH, url.origin).href
+      : FALLBACK_CACHE_KEY;
+  } catch {
+    return FALLBACK_CACHE_KEY;
+  }
+}
 const usable = (revision, now) => revision && revision.start <= now && now < revision.until;
 function atLeast(candidate, floor) {
   if (!floor) return true;
@@ -67,21 +87,20 @@ function persist(context, cache, key, copy, now) {
     headers: { 'Cache-Control': 'public, max-age=' + Math.ceil((copy.revision.until - now) / 1000) },
   })).catch(error => {
     copy.retryAt = Date.now() + EDGE_TTL * 1000;
-    console.warn('directory_cache_write_failed', { generation: copy.revision.generation, serial: copy.revision.serial, error: String(error) });
+    console.warn('directory_cache_write_failed', { cacheKey: key, generation: copy.revision.generation, serial: copy.revision.serial, error: String(error) });
   }));
 }
 
 export async function serveDirectory(request, env, context, cache = globalThis.caches?.default) {
   if (!['GET', 'HEAD'].includes(request.method)) return new Response(null, { status: 405, headers: { ...PUBLIC, Allow: 'GET, HEAD', 'Cache-Control': 'no-store' } });
-  const key = new URL('/.windshare-cache/last-directory', request.url).href;
   let state = mirrors.get(env);
   if (!state) {
     // Store only resolved plain data across requests; never share pending I/O promises across IoContexts.
-    state = { last: null, restored: false, bundle: undefined, kv: null };
+    state = { cacheKey: canonicalCacheKey(env), last: null, restored: false, bundle: undefined, kv: null };
     mirrors.set(env, state);
   }
   const restoreTask = !state.restored && env.DIRECTORY && cache
-    ? restore(cache, key).then(copy => {
+    ? restore(cache, state.cacheKey).then(copy => {
       adoptLast(state, copy);
       state.restored = true;
     }).catch(() => {})
@@ -103,7 +122,7 @@ export async function serveDirectory(request, env, context, cache = globalThis.c
   const useBundle = usable(bundle, now) && (!last || compare(bundle, last.revision) >= 0);
   const revision = useLast ? last.revision : useBundle ? bundle : null;
   if (!revision) return unavailable();
-  if (useLast) persist(context, cache, key, last, now);
+  if (useLast) persist(context, cache, state.cacheKey, last, now);
   let body = null;
   if (request.method === 'GET') {
     if (useLast) body = last.body;
