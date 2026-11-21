@@ -528,5 +528,7 @@ mod fleet_route;
 mod monitoring;
 #[path = "operations_tests.rs"]
 mod operations;
+#[path = "../host/fleet/public_directory_tests.rs"]
+mod public_directory;
 #[path = "../host/fleet/reconcile_tests.rs"]
 mod reconcile;

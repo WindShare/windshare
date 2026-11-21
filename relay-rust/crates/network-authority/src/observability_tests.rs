@@ -97,7 +97,7 @@ impl Drop for CaptureGuard {
     }
 }
 
-fn capture_events(exercise: impl FnOnce()) -> Vec<RecordedEvent> {
+pub(super) fn capture_events(exercise: impl FnOnce()) -> Vec<RecordedEvent> {
     install_capture_subscriber();
     let buffer = CaptureBuffer::default();
     let guard = CaptureGuard::enter(Arc::clone(&buffer));
@@ -106,7 +106,7 @@ fn capture_events(exercise: impl FnOnce()) -> Vec<RecordedEvent> {
     buffer.lock().unwrap().clone()
 }
 
-fn events_named<'a>(events: &'a [RecordedEvent], name: &str) -> Vec<&'a Value> {
+pub(super) fn events_named<'a>(events: &'a [RecordedEvent], name: &str) -> Vec<&'a Value> {
     events
         .iter()
         .filter(|(_, entry)| entry["fields"]["event"] == name)

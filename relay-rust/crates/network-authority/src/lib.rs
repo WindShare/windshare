@@ -85,6 +85,9 @@ mod directory_reconcile;
 #[path = "host/fleet/route.rs"]
 mod fleet_route;
 #[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "host/fleet/public_directory.rs"]
+mod public_directory;
+#[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "host/telemetry.rs"]
 mod telemetry;
 #[cfg(test)]
