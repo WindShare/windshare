@@ -31,7 +31,6 @@ fn policy() -> NodePolicy {
     NodePolicy {
         version: 5,
         admission: windshare_relay_access::usage::Admission::Disabled,
-        probe_account: windshare_relay_access::probe::PROBE_ACCOUNT,
         anonymous: false,
     }
 }

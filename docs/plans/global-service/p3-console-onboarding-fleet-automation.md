@@ -81,7 +81,7 @@ follow in P4.
   confirmation to clear an automatic health override (never overriding an explicit operator
   `draining` or `disabled` state).
 - Replace binary node pause (`enabled: bool`) with `NodePolicy` admission states (`accepting`,
-  `draining`, `disabled`) and the designated `probe_account`. Cut the authority and nodes over
+  `draining`, `disabled`). Cut the authority and nodes over
   together. In a one-time SQLite transaction, migrate stored policies in `access_authorities`
   from `true` to `accepting` and `false` to `disabled`, preserving each issuer's highest trusted
   signing generation, policy version and anonymous-sharing setting. A draining node stays resolvable

@@ -100,7 +100,6 @@ impl Reporter {
         };
         ensure!(
             policy.version > 0
-                && policy.probe_account == windshare_relay_access::probe::PROBE_ACCOUNT
                 && entitlements.len() <= STATUS_BATCH_ENTRIES
                 && entitlements.iter().all(|entry| {
                     entry.entitlement.valid_snapshot(reply.issued_at)

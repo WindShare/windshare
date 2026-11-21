@@ -158,7 +158,6 @@ pub enum Admission {
 pub struct NodePolicy {
     pub version: u64,
     pub admission: Admission,
-    pub probe_account: AccountId,
     pub anonymous: bool,
 }
 

@@ -353,7 +353,6 @@ impl FakeAuthority {
                 policy: NodePolicy {
                     version: 1,
                     admission: windshare_relay_access::usage::Admission::Accepting,
-                    probe_account: windshare_relay_access::probe::PROBE_ACCOUNT,
                     anonymous: true,
                 },
             }

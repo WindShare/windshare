@@ -170,7 +170,6 @@ fn set_admission(
             policy: Some(NodePolicy {
                 version,
                 admission,
-                probe_account: windshare_relay_access::probe::PROBE_ACCOUNT,
                 anonymous: true,
             }),
         })

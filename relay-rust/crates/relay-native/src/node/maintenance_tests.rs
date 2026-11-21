@@ -5,7 +5,7 @@ use crate::{
     storage::{Database, Persistence},
     test_support::{Fixture, capture_events, work},
 };
-use windshare_relay_access::{probe, trust::Generation, usage::NodePolicy};
+use windshare_relay_access::{trust::Generation, usage::NodePolicy};
 use windshare_relay_core::share::{Responsibility, Restore, ShareRelay};
 
 fn draining_node(temp: &tempfile::TempDir) -> (Configuration, String, Database) {
@@ -44,7 +44,6 @@ fn draining_node(temp: &tempfile::TempDir) -> (Configuration, String, Database) 
                 version: 7,
                 admission: Admission::Draining,
                 anonymous: true,
-                probe_account: probe::PROBE_ACCOUNT,
             }),
         },
         vec![],
@@ -231,7 +230,6 @@ fn busy_sqlite_defers_enter_and_waits_for_transient_lock_release() {
                 version: 9,
                 admission: Admission::Draining,
                 anonymous: true,
-                probe_account: probe::PROBE_ACCOUNT,
             }),
         },
         vec![],

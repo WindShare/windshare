@@ -19,7 +19,6 @@ fn newer_policy_revokes_forwarding_and_older_reports_cannot_restore_it() {
         policy: Some(windshare_relay_access::usage::NodePolicy {
             version,
             admission,
-            probe_account: windshare_relay_access::probe::PROBE_ACCOUNT,
             anonymous: true,
         }),
     };
@@ -295,7 +294,6 @@ fn registration_retries_generation_mismatches_and_revalidates_cached_proof() {
             policy: Some(windshare_relay_access::usage::NodePolicy {
                 version: 1,
                 admission: windshare_relay_access::usage::Admission::Disabled,
-                probe_account: windshare_relay_access::probe::PROBE_ACCOUNT,
                 anonymous: false,
             }),
         })
@@ -613,7 +611,6 @@ fn registration_checks_the_probe_grant_against_this_node_and_share() {
                         version,
                         admission: Admission::Draining,
                         anonymous: true,
-                        probe_account: probe::PROBE_ACCOUNT,
                     }),
                 })
                 .unwrap();
@@ -639,7 +636,6 @@ fn registration_checks_the_probe_grant_against_this_node_and_share() {
                 version: 3,
                 admission: Admission::Disabled,
                 anonymous: true,
-                probe_account: probe::PROBE_ACCOUNT,
             }),
         })
         .unwrap();
@@ -751,7 +747,6 @@ fn controller_scoped_probes_use_reserved_admission_and_bypass_principal_share_ca
                 version: 1,
                 admission: Admission::Accepting,
                 anonymous: true,
-                probe_account: windshare_relay_access::probe::PROBE_ACCOUNT,
             }),
         })
         .unwrap();
@@ -802,7 +797,6 @@ fn probe_reserved_priority_requires_matching_scope_and_enabled_node() {
                 version: 2,
                 admission: Admission::Disabled,
                 anonymous: true,
-                probe_account: windshare_relay_access::probe::PROBE_ACCOUNT,
             }),
         })
         .unwrap();
@@ -831,7 +825,6 @@ fn reported_policy_and_status_lists_exclude_controller_scoped_probes() {
                 version: 7,
                 admission: Admission::Draining,
                 anonymous: true,
-                probe_account: windshare_relay_access::probe::PROBE_ACCOUNT,
             }),
         })
         .unwrap();

@@ -104,7 +104,6 @@ impl Node {
             version: self.version,
             admission: self.admission(),
             anonymous: self.anonymous,
-            probe_account: windshare_relay_access::probe::PROBE_ACCOUNT,
         }
     }
 
@@ -118,7 +117,6 @@ impl Node {
             version: self.version,
             admission: Admission::Disabled,
             anonymous: self.anonymous,
-            probe_account: windshare_relay_access::probe::PROBE_ACCOUNT,
         })
     }
 
