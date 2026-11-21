@@ -37,6 +37,7 @@ export interface ReceiverProgress {
   readonly capacityAccumulatedWaitMilliseconds: number
   readonly capacityWaitAttempts: number
   readonly capacityWaitVisible: boolean
+  readonly bandwidthWaitVisible: boolean
   readonly transferJobId: string
   readonly outputSessionId?: string
 }
@@ -157,6 +158,7 @@ export const EMPTY_PROGRESS: ReceiverProgress = Object.freeze({
   capacityAccumulatedWaitMilliseconds: 0,
   capacityWaitAttempts: 0,
   capacityWaitVisible: false,
+  bandwidthWaitVisible: false,
   transferJobId: '',
 })
 

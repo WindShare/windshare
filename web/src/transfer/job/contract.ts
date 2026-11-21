@@ -128,6 +128,7 @@ export interface TransferProgress {
   readonly capacityAccumulatedWaitMilliseconds: number
   readonly capacityWaitAttempts: number
   readonly capacityWaitVisible: boolean
+  readonly bandwidthWaitVisible: boolean
   readonly partial: boolean
   readonly transferJobId: string
   readonly outputSessionId?: string

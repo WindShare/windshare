@@ -295,6 +295,36 @@ export class LaneSet {
     return [...this.#lanes.values()].filter((candidate) => routes.allows(candidate.route)).length
   }
 
+  isBandwidthWaiting(routes: BlockRouteEligibility): boolean {
+    if (this.#closed || this.#admissionLifetime.signal.aborted) return false
+    return this.#admissions.isBandwidthWaiting(routes)
+  }
+
+  subscribeBandwidthWait(routes: BlockRouteEligibility, listener: (waiting: boolean) => void): () => void {
+    let active = true
+    let waiting = this.isBandwidthWaiting(routes)
+    const publish = () => {
+      if (!active) return
+      const next = this.isBandwidthWaiting(routes)
+      if (next === waiting) return
+      waiting = next
+      try { listener(next) } catch { /* Bandwidth-wait observation is passive. */ }
+    }
+    try { listener(waiting) } catch { /* Bandwidth-wait observation is passive. */ }
+    if (!active || this.#closed || this.#admissionLifetime.signal.aborted) return () => undefined
+    const unsubscribeState = this.#admissions.subscribeState(publish)
+    const unsubscribeRoutes = routes.subscribe(publish)
+    const onRetire = () => publish()
+    this.#admissionLifetime.signal.addEventListener('abort', onRetire, { once: true })
+    return () => {
+      if (!active) return
+      active = false
+      unsubscribeState()
+      unsubscribeRoutes()
+      this.#admissionLifetime.signal.removeEventListener('abort', onRetire)
+    }
+  }
+
   waitForContentAdmission(signal?: AbortSignal): Promise<void> {
     return this.#waitForContentAvailability(undefined, signal)
   }

@@ -52,6 +52,8 @@ export const stage: typeof English = {
   unavailableHint: '无法恢复连接，下载进度已保留。请重新打开原分享链接。',
   senderCapacity: '等待发送方腾出传输通道',
   senderCapacityHint: '发送方有可用通道后，下载将自动继续。',
+  relayBandwidth: '正在等待中转带宽',
+  relayBandwidthHint: '中转带宽繁忙，有可用带宽后下载将自动继续。',
   shareEnded: '分享已结束',
   shareEndedHint: '继续接收需要新的分享链接。本地保留的结果仍可使用。',
   storage: '存储空间不足',

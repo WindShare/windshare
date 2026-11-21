@@ -113,6 +113,8 @@ function blockingStage(blocking: TaskBlocking, language: Language): StageCopy {
       blocking.description ?? t.unavailableHint, blocking.kind)
     case 'sender-capacity': return stage('waiting', t.senderCapacity,
       blocking.description ?? t.senderCapacityHint, blocking.kind)
+    case 'relay-bandwidth': return stage('waiting', t.relayBandwidth,
+      blocking.description ?? t.relayBandwidthHint, blocking.kind)
     case 'share-ended': return stage('needs-action', t.shareEnded,
       blocking.description ?? t.shareEndedHint, blocking.kind)
     case 'storage': return stage('needs-action', t.storage,

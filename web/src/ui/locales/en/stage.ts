@@ -50,6 +50,8 @@ export const stage = {
   unavailableHint: 'The connection could not be restored. Retained progress remains available; reopen the original link to reconnect.',
   senderCapacity: 'Waiting for sender capacity',
   senderCapacityHint: 'The download continues automatically when the sender has capacity.',
+  relayBandwidth: 'Waiting for relay bandwidth',
+  relayBandwidthHint: 'Relay bandwidth is busy. The download continues automatically when bandwidth becomes available.',
   shareEnded: 'The share has ended',
   shareEndedHint: 'Remote content needs a new share link. Retained local results remain available.',
   storage: 'More storage is needed',

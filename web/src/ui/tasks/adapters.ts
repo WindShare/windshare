@@ -41,8 +41,7 @@ export function activeTaskFacts(input: Readonly<{
         ? Object.freeze({ ...presented, disabledReason: admission.reason ?? 'actionUnavailable' as const })
         : presented
     })),
-    blocking: input.blocking ?? (progress.capacityWaitVisible && progress.capacityWaitingFiles > 0
-      ? Object.freeze({ kind: 'sender-capacity' }) : null),
+    blocking: activeBlocking(input.blocking, progress),
     readiness: 'matching-share',
     completeness: completenessFromFacts(state, progress),
     publication: publicationFromLifecycle(state),
@@ -101,6 +100,15 @@ export function retainedTaskFacts(
       ? Object.freeze({ kind: 'local-finalization' })
       : Object.freeze({ kind: 'retained', continuation: operation.continuation }),
   })
+}
+
+const SENDER_CAPACITY_BLOCKING: TaskBlocking = Object.freeze({ kind: 'sender-capacity' })
+const RELAY_BANDWIDTH_BLOCKING: TaskBlocking = Object.freeze({ kind: 'relay-bandwidth' })
+
+function activeBlocking(blocking: TaskBlocking | null | undefined, progress: ReceiverProgress): TaskBlocking | null {
+  if (blocking != null) return blocking
+  if (progress.capacityWaitVisible && progress.capacityWaitingFiles > 0) return SENDER_CAPACITY_BLOCKING
+  return progress.bandwidthWaitVisible ? RELAY_BANDWIDTH_BLOCKING : null
 }
 
 function completenessFromFacts(state: ReceiveLifecycleState, progress: ReceiverProgress | null): TaskCompleteness {

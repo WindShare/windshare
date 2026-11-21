@@ -15,6 +15,8 @@ export class LaneCapacityBackoff {
 
   constructor(wake: () => void) { this.#wake = wake }
 
+  get isReady(): boolean { return this.#state.kind === 'ready' }
+
   readiness(now: number, inflight: number): 'ready' | 'recoverable' | 'waiting' {
     const state = this.#state
     if (state.kind === 'ready') return 'ready'
