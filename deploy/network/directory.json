@@ -2,9 +2,9 @@
   "format": 1,
   "network": "windshare",
   "generation": 1,
-  "serial": 3,
-  "issued_at": "2026-11-18T05:51:16Z",
-  "expires_at": "2027-02-11T05:51:16Z",
+  "serial": 4,
+  "issued_at": "2026-11-21T03:30:00Z",
+  "expires_at": "2027-02-14T03:30:00Z",
   "nodes": [
     {
       "alias": "cn1",
@@ -41,6 +41,24 @@
       "capacity_mbps": 100,
       "status": "active",
       "node_key": "yM0qdyqhI-FnJLu9HgDSqhkKbY6TVCSCDY5lOYg9yfM"
+    },
+    {
+      "alias": "eu1",
+      "relay": "https://eu1.windshare.cc",
+      "stun": [
+        "stun:eu1.windshare.cc:3478"
+      ],
+      "roles": [
+        "relay",
+        "stun"
+      ],
+      "zone": "global",
+      "region": "eu-frankfurt",
+      "provider": "gtt",
+      "operator": "official",
+      "capacity_mbps": 300,
+      "status": "active",
+      "node_key": "ocHtVFd4Wreja0Mc2pFuIdV3FMteZL20zlswU2Y-5tQ"
     }
   ],
   "public_stun": []
