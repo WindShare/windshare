@@ -4,8 +4,9 @@ import { receiveOperationHandleRecord } from '../workspace/records'
 import { WORKSPACE_HANDLE_PACKAGE_OBJECT, type WorkspaceStageTraceListener } from '../workspace/stages'
 import { TargetOwnershipUnknownError } from '../persistent-tree/errors'
 import { ProgressiveZipArchive } from '../progressive-zip/archive'
+import { acquireArtifactWriter, type ArtifactReaderLease } from './export-readers'
 import { openNativeObject } from './native-object/client'
-import type { NativeObjectFactory } from './native-object/contracts'
+import type { NativeObjectFactory, NativeObjectIO } from './native-object/contracts'
 import { ObjectCheckpointCoordinator } from './native-object/coordinator'
 import { IndexedDbTaskCheckpointStore } from './task-checkpoint/indexeddb-store'
 import type { TaskObjectRef } from './task-checkpoint/model'
@@ -39,15 +40,19 @@ export async function openOriginPrivateProgressiveZipBackend(options:
   Parameters<typeof openOriginPrivateWorkspaceBackend>[0] & {
     readonly nativeObjectFactory?: NativeObjectFactory
     readonly onNativeTrace?: WorkspaceStageTraceListener
+    readonly writerLease?: ArtifactReaderLease
   },
 ): Promise<OriginPrivateProgressiveZipBackend> {
-  const intent = await validateReceiveIntent(options.receiveIntent)
-  if (intent.plan.kind !== 'workspace-then-publish') throw new TypeError('Expected workspace intent')
-  const object = await progressiveZipObjectRef(intent)
-  const backend = await openOriginPrivateWorkspaceBackend(options)
+  let ownedWriterLease = options.writerLease
+  let backend: OriginPrivateWorkspaceBackend | undefined
   let store: IndexedDbTaskCheckpointStore | undefined
   let coordinator: ObjectCheckpointCoordinator | undefined
   try {
+    const intent = await validateReceiveIntent(options.receiveIntent)
+    if (intent.plan.kind !== 'workspace-then-publish') throw new TypeError('Expected workspace intent')
+    const object = await progressiveZipObjectRef(intent)
+    ownedWriterLease ??= await acquireArtifactWriter(object.operationId)
+    backend = await openOriginPrivateWorkspaceBackend(options)
     const root = new OriginPrivateWorkspaceRoot({
       operationId: intent.operationId, receiveIntentDigest: intent.digest,
       workspaceBindingDigest: intent.plan.workspace.digest, authorityRef: intent.plan.workspace.repositoryRef,
@@ -86,7 +91,19 @@ export async function openOriginPrivateProgressiveZipBackend(options:
     const activeLease = await options.operationRepository.readLease(intent.operationId)
     if (activeLease === undefined) throw new TypeError('ZIP writer lost operation ownership')
     store = await IndexedDbTaskCheckpointStore.open(object, options.checkpointDatabaseName, activeLease.leaseId)
-    const io = await (options.nativeObjectFactory ?? openNativeObject)(handle)
+    const rawIo = await (options.nativeObjectFactory ?? openNativeObject)(handle)
+    const writerLease = ownedWriterLease
+    // Release writer exclusion as soon as the native OPFS handle closes (pause, finalize, or failure)
+    // so subsequent handoff readers or local cleanup on the same operation never deadlock.
+    const io: NativeObjectIO = {
+      writeAt: (offset, bytes) => rawIo.writeAt(offset, bytes),
+      truncate: length => rawIo.truncate(length),
+      size: () => rawIo.size(),
+      flush: () => rawIo.flush(),
+      close: async () => {
+        try { await rawIo.close() } finally { writerLease.release() }
+      },
+    }
     coordinator = new ObjectCheckpointCoordinator({
       io, operationId: object.operationId, objectId: object.objectId,
       trace: event => options.onNativeTrace?.({
@@ -109,24 +126,27 @@ export async function openOriginPrivateProgressiveZipBackend(options:
         ? intent.selection.rules.paths.map(path => path.split('/')) : [],
     })
     const ownedStore = store
+    const ownedBackend = backend
     let closed = false
     return Object.freeze({
-      ...backend, materialization: backend.materialization, packages: backend.packages,
-      packagedArtifacts: backend.packagedArtifacts, finalCheckpoints: backend.finalCheckpoints,
-      cleanup: backend.cleanup, object, archive, store: ownedStore, handle,
+      ...ownedBackend, materialization: ownedBackend.materialization, packages: ownedBackend.packages,
+      packagedArtifacts: ownedBackend.packagedArtifacts, finalCheckpoints: ownedBackend.finalCheckpoints,
+      cleanup: ownedBackend.cleanup, object, archive, store: ownedStore, handle,
       close: async () => {
         if (closed) return
         closed = true
         try { await archive.close() } finally {
+          writerLease.release()
           ownedStore.close()
-          await backend.close()
+          await ownedBackend.close()
         }
       },
     })
   } catch (error) {
     await coordinator?.close().catch(() => undefined)
+    ownedWriterLease?.release()
     store?.close()
-    await backend.close().catch(() => undefined)
+    await backend?.close().catch(() => undefined)
     throw error
   }
 }

@@ -4,6 +4,7 @@ import type { WorkspaceContinuationInput, WorkspaceContinuationAuthorityOptions 
 import type { WorkspaceOperationStages } from '../../src/output/workspace/stages'
 import type { TaskCheckpointStore } from '../../src/output/origin-private/task-checkpoint/store'
 import type { ReopenResources } from '../../src/output/resume/reopen/model'
+import { acquireArtifactReader } from '../../src/output/origin-private/export-readers'
 
 const state = vi.hoisted(() => {
   const object = { operationId: 'operation', objectId: 'archive', handleId: 'handle', kind: 'zip-archive' }
@@ -53,5 +54,36 @@ describe('quota-paused partial ZIP reopen', () => {
     expect(state.budget).not.toHaveBeenCalled()
     expect(state.backend).not.toHaveBeenCalled()
     expect(admit).not.toHaveBeenCalled()
+  })
+
+  it('refuses writer continuation before mutating lifecycle state while an export reader is active', async () => {
+    state.budget.mockReset()
+    state.backend.mockReset()
+    const reader = await acquireArtifactReader('operation')
+    try {
+      const resources: ReopenResources = {}
+      const lifecycle = { kind: 'resumable-receive', payloadKind: 'workspace-archive', objectId: 'archive',
+        checkpointGeneration: 2n, generation: 8n }
+      const input = {
+        repository: { readHandle: async () => ({ operationId: 'operation', ownedObjectId: 'archive' }) },
+        snapshot: { lifecycle, operation: { receiveIntent: {
+          operationId: 'operation', selection: { rules: { mode: 'node-id' } },
+        } } }, resources,
+      } as unknown as WorkspaceContinuationInput
+      const admit = vi.fn()
+      await expect(reopenProgressiveZipContinuation(input, {} as WorkspaceContinuationAuthorityOptions,
+        { progressive: { admit } } as unknown as WorkspaceOperationStages, false, false))
+        .rejects.toMatchObject({ name: 'InvalidStateError' })
+      expect(state.budget).not.toHaveBeenCalled()
+      expect(admit).not.toHaveBeenCalled()
+      expect(state.backend).not.toHaveBeenCalled()
+
+      // Another partial export remains allowed while a reader holds shared access.
+      const partial = await reopenProgressiveZipContinuation(input, {} as WorkspaceContinuationAuthorityOptions,
+        { progressive: { admit } } as unknown as WorkspaceOperationStages, false, true)
+      expect(partial.partialContinuation).toBe(state.reader)
+    } finally {
+      reader.release()
+    }
   })
 })

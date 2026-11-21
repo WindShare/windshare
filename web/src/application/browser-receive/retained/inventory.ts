@@ -2,7 +2,8 @@ import { readRetainedBrowserDeliveries, retainedBrowserDeliveryActions, type Bro
 import { hasBrowserDeliveryStaging } from '../../../output/model/browser-delivery'
 import type { runRetainedBrowserFolderAction } from '../fsa/local-delivery'
 import { canForgetReceiveOperationHistory } from '../../../output/resume/operation-history'
-import { pickPartialExport, supportsPartialExport } from '../../../output/capability/partial-export'
+import { artifactRequestedName } from '../../../output/model/artifact-name'
+import { preparePartialExport, supportsPartialExport } from '../../../output/capability/partial-export'
 import { dispatchRetainedAuthorityAction } from './action-dispatch'
 import { lifecycleFailureFact, type FailureFact } from '../../../diagnostics/incident'
 import { IndexedDbReceiveResumeSource } from '../../../output/browser/indexeddb-resume-state'
@@ -383,7 +384,7 @@ async function performOrdinaryRetainedAction(
   failures?: OutputFailureSinks,
 ): Promise<RetainedReceiveActionResult> {
   const partialDestination = action === 'save-partial'
-    ? await pickPartialExport(windowPort)
+    ? await preparePartialExport(windowPort)
     : undefined
   const dispatch = await dispatchRetainedAuthorityAction(
     authority,
@@ -418,8 +419,18 @@ async function performOrdinaryRetainedAction(
         return withRetainedOperationClose(continuation.operation, async () => {
           const { saveProgressivePartial } = await import('../../../output/portable/partial-export')
           signal.throwIfAborted()
-          await saveProgressivePartial(continuation.operation.partialContinuation,
-            partialDestination, signal)
+          const destination = partialDestination.kind === 'browser-download'
+            ? Object.freeze({
+                ...partialDestination,
+                suggestedName: artifactRequestedName(continuation.operation.intent.artifact),
+              })
+            : partialDestination
+          await saveProgressivePartial(
+            continuation.operation.partialContinuation,
+            destination,
+            signal,
+            diagnosticsFor('origin_private', options.outputTrace, failures),
+          )
           return Object.freeze({ kind: 'completed' as const })
         })
       }

@@ -61,9 +61,16 @@ export interface PackagedArtifactHandoffContext {
   readonly packageDigest: string
 }
 
+export interface PartialArtifactHandoffContext {
+  readonly attemptKind: 'partial'
+  readonly operationId: string
+  readonly attemptId: string
+}
+
 export type BrowserHandoffContext =
   | PortableHandoffContext
   | PackagedArtifactHandoffContext
+  | PartialArtifactHandoffContext
 
 export interface BrowserHandoffRequest {
   readonly context: BrowserHandoffContext
@@ -595,7 +602,7 @@ function validateHandoffRequest(request: BrowserHandoffRequest): void {
   if (request.context.operationId.length === 0 || request.context.attemptId.length === 0) {
     throw new TypeError('Browser handoff requires stable operation and attempt identities')
   }
-  if (request.context.attemptKind === 'portable') return
+  if (request.context.attemptKind !== 'workspace') return
   if (request.context.packageDigest.length === 0) {
     throw new TypeError('Packaged artifact handoff context is invalid')
   }

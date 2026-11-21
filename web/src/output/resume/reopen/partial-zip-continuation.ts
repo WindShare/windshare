@@ -59,8 +59,19 @@ export async function* readCompleteZipEntries(store: TaskCheckpointStore): Async
       const layout = entry.zipLayout
       if (layout === undefined) throw new TypeError('Retained ZIP entry lost its layout')
       afterSequence = layout.sequence
-      const crc32 = completeZipEntryCrc(entry.ranges, layout.exactSize)
-      if (crc32 !== undefined) yield { entry, payloadOffset: layout.payloadOffset, length: layout.exactSize, crc32 }
+      const span = completeEntrySpan(entry, layout)
+      if (span !== undefined) yield span
     }
   }
+}
+
+function completeEntrySpan(
+  entry: import('../../origin-private/task-checkpoint/model').TaskEntry,
+  layout: NonNullable<import('../../origin-private/task-checkpoint/model').TaskEntry['zipLayout']>,
+): CompleteZipEntrySpan | undefined {
+  if (entry.revisionFailure !== undefined) return undefined
+  const crc32 = completeZipEntryCrc(entry.ranges, layout.exactSize)
+  return crc32 === undefined
+    ? undefined
+    : { entry, payloadOffset: layout.payloadOffset, length: layout.exactSize, crc32 }
 }

@@ -1,5 +1,6 @@
 import { openRetainedZipPartialReader } from './partial-zip-continuation'
 import { OriginPrivateWorkspaceBudgetAuthority } from '../../origin-private/admission'
+import { acquireArtifactWriter } from '../../origin-private/export-readers'
 import { openOriginPrivateProgressiveZipBackend, progressiveZipObjectRef } from '../../origin-private/progressive-backend'
 import { IndexedDbTaskCheckpointStore } from '../../origin-private/task-checkpoint/indexeddb-store'
 import { verifyProgressiveZipRecovery, verifyProgressiveZipSelection } from '../progressive-checkpoint'
@@ -32,23 +33,34 @@ export async function reopenProgressiveZipContinuation(
     input.resources.partialReader = partialContinuation
     return { lifecycle: input.snapshot.lifecycle, stages, partialContinuation }
   }
-  // A retained claim is fenced by the newly acquired task lease, even if the old tab crashed.
-  const budget = await OriginPrivateWorkspaceBudgetAuthority.open(intent.operationId, {
-    estimate: options.estimateWorkspaceStorage, now: options.now,
-    ...(options.workspaceBudgetDatabaseName === undefined ? {} : { databaseName: options.workspaceBudgetDatabaseName }),
-  })
-  const admittedContent = await stages.progressive.admit({ claim: requested => budget.reclaim(requested, input.lease) })
-  input.resources.reclaimedClaim = admittedContent.claim
-  const backend = await openOriginPrivateProgressiveZipBackend({
-    receiveIntent: intent, operationRepository: input.repository, namespace: input.target.namespace,
-    contentGate: admittedContent.gate,
-    budgetClaim: requireOriginPrivateBudgetClaim(admittedContent.claim, intent.operationId),
-    ...(options.checkpointDatabaseName === undefined ? {} : { checkpointDatabaseName: options.checkpointDatabaseName }),
-    ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
-  })
-  input.resources.receiveBackend = backend
-  return Object.freeze({
-    lifecycle: await stages.progressive.runtime.lifecycle(), stages, admittedContent,
-    progressiveContinuation: Object.freeze({ backend, requirement }),
-  })
+  // Fence against active file-backed partial-export readers before mutating lifecycle or budget state.
+  const writerLease = await acquireArtifactWriter(intent.operationId)
+  let handedToBackend = false
+  try {
+    // A retained claim is fenced by the newly acquired task lease, even if the old tab crashed.
+    const budget = await OriginPrivateWorkspaceBudgetAuthority.open(intent.operationId, {
+      estimate: options.estimateWorkspaceStorage, now: options.now,
+      ...(options.workspaceBudgetDatabaseName === undefined ? {} : { databaseName: options.workspaceBudgetDatabaseName }),
+    })
+    const admittedContent = await stages.progressive.admit({ claim: requested => budget.reclaim(requested, input.lease) })
+    input.resources.reclaimedClaim = admittedContent.claim
+    const budgetClaim = requireOriginPrivateBudgetClaim(admittedContent.claim, intent.operationId)
+    handedToBackend = true
+    const backend = await openOriginPrivateProgressiveZipBackend({
+      receiveIntent: intent, operationRepository: input.repository, namespace: input.target.namespace,
+      contentGate: admittedContent.gate,
+      budgetClaim,
+      writerLease,
+      ...(options.checkpointDatabaseName === undefined ? {} : { checkpointDatabaseName: options.checkpointDatabaseName }),
+      ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
+    })
+    input.resources.receiveBackend = backend
+    return Object.freeze({
+      lifecycle: await stages.progressive.runtime.lifecycle(), stages, admittedContent,
+      progressiveContinuation: Object.freeze({ backend, requirement }),
+    })
+  } catch (error) {
+    if (!handedToBackend) writerLease.release()
+    throw error
+  }
 }
