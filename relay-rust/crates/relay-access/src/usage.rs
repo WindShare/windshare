@@ -21,11 +21,53 @@ pub struct UsageRecord {
     pub bytes: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BudgetError {
+    ResetDayOutOfRange,
+    BytesOutOfRange,
+}
+
+impl core::fmt::Display for BudgetError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::ResetDayOutOfRange => f.write_str("billing reset day must be 1..28 UTC"),
+            Self::BytesOutOfRange => f.write_str("relay budget exceeds storage range"),
+        }
+    }
+}
+
+impl core::error::Error for BudgetError {}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct MonthlyBudget {
     pub bytes: u64,
     pub reset_day_utc: u8,
+}
+
+impl MonthlyBudget {
+    pub const MIN_RESET_DAY_UTC: u8 = 1;
+    pub const MAX_RESET_DAY_UTC: u8 = 28;
+    // Matches the signed 64-bit SQLite ledger range on relay nodes.
+    pub const MAX_BYTES: u64 = i64::MAX.cast_unsigned();
+
+    /// # Errors
+    /// Rejects reset days outside `1..=28` UTC and budgets above the signed 64-bit storage range.
+    pub const fn validate(self) -> Result<(), BudgetError> {
+        if self.reset_day_utc < Self::MIN_RESET_DAY_UTC
+            || self.reset_day_utc > Self::MAX_RESET_DAY_UTC
+        {
+            return Err(BudgetError::ResetDayOutOfRange);
+        }
+        if self.bytes > Self::MAX_BYTES {
+            return Err(BudgetError::BytesOutOfRange);
+        }
+        Ok(())
+    }
+
+    pub const fn valid(self) -> bool {
+        self.validate().is_ok()
+    }
 }
 
 /// Lightweight node-health counters piggybacked on authority usage reports.
@@ -87,6 +129,7 @@ impl Batch {
                 .resident_accounts
                 .iter()
                 .all(|account| *account != [0; 16])
+            && self.load.relay_budget.is_none_or(MonthlyBudget::valid)
     }
 }
 
@@ -134,3 +177,7 @@ pub struct SignedReply {
     pub certificate: String,
     pub body: String,
 }
+
+#[cfg(test)]
+#[path = "usage_tests.rs"]
+mod tests;

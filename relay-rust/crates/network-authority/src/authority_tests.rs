@@ -676,3 +676,58 @@ fn global_creation_rate_limit_preserves_innocent_source_state_and_reports_remain
         .unwrap();
     assert!(matches!(fault, Fault::RateLimited { retry_after: 500 }));
 }
+
+#[test]
+fn usage_report_rejects_invalid_monthly_relay_budget() {
+    let mut authority = fixture();
+    let node = SigningKey::from_bytes(&[9; 32]);
+    let node_key = node.verifying_key().to_bytes();
+    save(
+        &mut authority.store,
+        &key("node", &node_key),
+        &Node {
+            listing: None,
+            version: 1,
+            key: node_key,
+            zone: Zone::Global,
+            region: "test".into(),
+            anonymous: true,
+            enabled: true,
+        },
+    )
+    .unwrap();
+    for budget in [
+        windshare_relay_access::usage::MonthlyBudget {
+            bytes: 1024,
+            reset_day_utc: 0,
+        },
+        windshare_relay_access::usage::MonthlyBudget {
+            bytes: windshare_relay_access::usage::MonthlyBudget::MAX_BYTES + 1,
+            reset_day_utc: 15,
+        },
+    ] {
+        let invalid = Batch {
+            id: [5; 16],
+            node: node_key,
+            issuer: authority.signing.generation.issuer,
+            created_at: authority.environment.now(),
+            records: vec![],
+            resident_accounts: vec![],
+            shares: vec![],
+            load: Load {
+                relay_budget: Some(budget),
+                active_sessions: 0,
+                wire_bytes: 0,
+                forwarded_bytes: 0,
+                admission_refusals: 0,
+            },
+        };
+        let signed = trust::sign(USAGE_DOMAIN, &serde_json::to_vec(&invalid).unwrap(), &node);
+        let fault = authority
+            .usage(&signed)
+            .unwrap_err()
+            .downcast::<Fault>()
+            .unwrap();
+        assert!(matches!(fault, Fault::Invalid));
+    }
+}

@@ -119,14 +119,7 @@ impl Settings {
             "public daily budget exceeds storage range"
         );
         if let Some(budget) = self.relay_budget {
-            ensure!(
-                (1..=28).contains(&budget.reset_day_utc),
-                "billing reset day must be 1..28 UTC"
-            );
-            ensure!(
-                i64::try_from(budget.bytes).is_ok(),
-                "relay budget exceeds storage range"
-            );
+            budget.validate()?;
         }
         self.access.generations()
     }

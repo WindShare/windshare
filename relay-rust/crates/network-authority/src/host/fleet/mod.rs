@@ -177,7 +177,7 @@ impl NetworkAuthority {
         }
         kv.put(KV_KEY, body)?.execute().await?;
         db.put(DELIVERED, &digest).map_err(failure)?;
-        tracing::info!(event="directory_kv_published",operation_id=%digest);
+        tracing::info!(event="directory_kv_published",revision=%digest);
         Ok(())
     }
 }

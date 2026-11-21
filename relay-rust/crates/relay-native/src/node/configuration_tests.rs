@@ -54,3 +54,28 @@ fn shipped_self_hosted_example_is_valid() {
     .unwrap();
     assert!(read(&value).1.is_ok());
 }
+
+#[test]
+fn invalid_relay_budget_reports_field_specific_validation_errors() {
+    let mut bad_day = fixture();
+    bad_day["node"]["relay_budget"] = json!({"bytes": 1024, "reset_day_utc": 29});
+    assert!(
+        read(&bad_day)
+            .1
+            .err()
+            .expect("reset day outside 1..=28 must fail")
+            .to_string()
+            .contains("billing reset day must be 1..28 UTC")
+    );
+
+    let mut oversized = fixture();
+    oversized["node"]["relay_budget"] = json!({"bytes": u64::MAX, "reset_day_utc": 1});
+    assert!(
+        read(&oversized)
+            .1
+            .err()
+            .expect("budget above i64::MAX must fail")
+            .to_string()
+            .contains("relay budget exceeds storage range")
+    );
+}
