@@ -34,10 +34,15 @@ function toReadyWallState(response: PublicWallResponse): WallViewState {
 function toDegradedWallState(prev: WallViewState): WallViewState {
   return {
     ...prev,
-    // Keep previously loaded entries intact if a silent background refresh fails.
+    // Keep previously loaded entries intact if a subsequent refresh fails.
     status: prev.status === 'ready' ? 'ready' : 'degraded',
     refreshing: false,
   }
+}
+
+function toRefreshingWallState(prev: WallViewState): WallViewState {
+  if (prev.status === 'loading' || prev.refreshing) return prev
+  return { ...prev, refreshing: true }
 }
 
 export default function DonatePage() {
@@ -50,61 +55,56 @@ export default function DonatePage() {
   }))
 
   const lastFetchAtRef = useRef(0)
-  const inFlightRef = useRef(false)
-  const mountedRef = useRef(true)
+  // Single synchronous owner for the in-flight wall request so manual clicks
+  // promote a silent refresh into visible progress and unmount aborts cleanly.
+  const activeRequestRef = useRef<AbortController | null>(null)
 
-  const handleManualRefresh = useCallback(() => {
-    if (inFlightRef.current) return
-    inFlightRef.current = true
+  const startWallFetch = useCallback((bypassCache: boolean) => {
+    if (activeRequestRef.current !== null) return
+
+    const controller = new AbortController()
+    activeRequestRef.current = controller
     lastFetchAtRef.current = Date.now()
-    setWall(prev => ({ ...prev, refreshing: prev.status !== 'loading' }))
-    void fetchDonationWall({ cache: 'no-cache' })
+    void fetchDonationWall({
+      ...(bypassCache ? { cache: 'no-cache' } : {}),
+      signal: controller.signal,
+    })
       .then(response => {
-        if (mountedRef.current) setWall(toReadyWallState(response))
+        if (!controller.signal.aborted) setWall(toReadyWallState(response))
       })
       .catch(() => {
-        if (mountedRef.current) setWall(toDegradedWallState)
+        if (!controller.signal.aborted) setWall(toDegradedWallState)
       })
       .finally(() => {
-        inFlightRef.current = false
+        if (activeRequestRef.current === controller) activeRequestRef.current = null
       })
   }, [])
 
+  const handleManualRefresh = useCallback(() => {
+    // Promote an already in-flight silent refresh to visible progress instead
+    // of swallowing the click or discarding its RTT with an abort-and-retry.
+    setWall(toRefreshingWallState)
+    startWallFetch(true)
+  }, [startWallFetch])
+
   useEffect(() => {
-    mountedRef.current = true
-
-    const fetchInBackground = (bypassCache: boolean) => {
-      if (inFlightRef.current) return
-      inFlightRef.current = true
-      lastFetchAtRef.current = Date.now()
-      void fetchDonationWall(bypassCache ? { cache: 'no-cache' } : {})
-        .then(response => {
-          if (mountedRef.current) setWall(toReadyWallState(response))
-        })
-        .catch(() => {
-          if (mountedRef.current) setWall(toDegradedWallState)
-        })
-        .finally(() => {
-          inFlightRef.current = false
-        })
-    }
-
-    fetchInBackground(submittedFromCheckout)
+    startWallFetch(submittedFromCheckout)
 
     const triggerThrottledRefresh = () => {
       if (document.visibilityState !== 'visible') return
       if (Date.now() - lastFetchAtRef.current < SILENT_REFRESH_THROTTLE_MS) return
-      fetchInBackground(true)
+      startWallFetch(true)
     }
 
     document.addEventListener('visibilitychange', triggerThrottledRefresh)
     window.addEventListener('focus', triggerThrottledRefresh)
     return () => {
-      mountedRef.current = false
+      activeRequestRef.current?.abort()
+      activeRequestRef.current = null
       document.removeEventListener('visibilitychange', triggerThrottledRefresh)
       window.removeEventListener('focus', triggerThrottledRefresh)
     }
-  }, [submittedFromCheckout])
+  }, [submittedFromCheckout, startWallFetch])
 
   return (
     <div className="portal-root">
