@@ -108,7 +108,7 @@ export default function DonatePage() {
 
   return (
     <div className="portal-root">
-      <PortalHeader anchorPrefix="/" />
+      <PortalHeader currentPage="donate" />
       <main className="donate-main">
         <div className="portal-container donate-grid">
           <DonateActions submittedFromCheckout={submittedFromCheckout} />

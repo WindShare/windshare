@@ -13,6 +13,7 @@
 .portal-nav { display: flex; align-items: center; gap: 24px; }
 .portal-nav a { display: inline-flex; align-items: center; min-height: 44px; color: var(--portal-muted); font-size: 13px; text-decoration: none; white-space: nowrap; transition: color 160ms; }
 .portal-nav a:hover { color: var(--portal-text); }
+.portal-nav a[aria-current="page"] { color: var(--portal-text); font-weight: 550; }
 .portal-header-actions { display: flex; align-items: center; gap: 12px; }
 .portal-repository-link { font-size: 12px; gap: 8px; }
 .portal-open-source { padding-left: 8px; border-left: 1px solid var(--portal-border); color: var(--portal-dim); font-size: 11px; }
@@ -20,6 +21,7 @@
 .portal-mobile-nav > .portal-popover-panel { padding: 8px; }
 .portal-mobile-links a { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 48px; padding: 10px 12px; color: var(--portal-text); text-decoration: none; font-size: 14px; border-radius: 6px; }
 .portal-mobile-links a:hover { background: var(--portal-surface-raised); }
+.portal-mobile-links a[aria-current="page"] { background: var(--portal-wash); color: var(--portal-accent); font-weight: 550; }
 
 .portal-footer { padding: 30px 0; border-top: 1px solid var(--portal-border-soft); }
 .portal-footer-inner, .portal-footer-left, .portal-footer-brand, .portal-footer-links { display: flex; align-items: center; }

@@ -42,7 +42,11 @@ export function SupporterWall({
   const t = useDonateCopy()
 
   return (
-    <section className="donate-card donate-wall-card" aria-label={t.wallRegion}>
+    <section
+      className="donate-card donate-wall-card"
+      aria-label={t.wallRegion}
+      aria-busy={status === 'loading'}
+    >
       <div className="donate-wall-header">
         <div className="donate-wall-title-group">
           <h2 className="donate-wall-heading">{t.wallHeading}</h2>
@@ -61,14 +65,14 @@ export function SupporterWall({
       </div>
 
       {status === 'loading' && (
-        <ul className="donate-skeleton-list" aria-busy="true">
+        <div className="donate-skeleton-list" aria-hidden="true">
           {SKELETON_ROWS.map(key => (
-            <li key={key} className="donate-skeleton-row">
+            <div key={key} className="donate-skeleton-row">
               <div className="donate-skeleton-bar donate-skeleton-head" />
               <div className="donate-skeleton-bar donate-skeleton-line" />
-            </li>
+            </div>
           ))}
-        </ul>
+        </div>
       )}
 
       {status === 'degraded' && (

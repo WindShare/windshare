@@ -270,7 +270,9 @@
 
 .donate-input:focus,
 .donate-textarea:focus {
-  outline: none;
+  /* Keep a solid transparent outline so forced-colors/high-contrast mode renders a focus ring when box-shadow is stripped. */
+  outline: 2px solid transparent;
+  outline-offset: 2px;
   border-color: var(--portal-accent);
   box-shadow: 0 0 0 3px var(--portal-focus-wash);
 }
@@ -607,6 +609,16 @@
 
   .donate-card {
     padding: 22px;
+  }
+}
+
+/* Expand compact utility buttons to comfortable touch targets only on narrow or
+   coarse-pointer devices, preserving restrained visual density on desktop. */
+@media (max-width: 600px), (pointer: coarse) {
+  .donate-copy-btn,
+  .donate-refresh-btn {
+    min-height: 44px;
+    padding-inline: 12px;
   }
 }
 
