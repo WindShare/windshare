@@ -30,17 +30,23 @@ export function createInMemoryWallStoreWithDb(): { readonly store: WallStore; re
       return []
     },
   }
+  let inTx = false
   const runTx = <T,>(closure: () => T): T => {
-    // node:sqlite supports nested SAVEPOINT transactions cleanly.
-    db.exec('SAVEPOINT wall_tx')
+    // Enforce flat transaction boundaries so tests catch any accidental nested runTx calls.
+    if (inTx) {
+      throw new Error('nested WallStore transaction detected')
+    }
+    inTx = true
+    db.exec('BEGIN')
     try {
       const result = closure()
-      db.exec('RELEASE SAVEPOINT wall_tx')
+      db.exec('COMMIT')
       return result
     } catch (error) {
-      db.exec('ROLLBACK TO SAVEPOINT wall_tx')
-      db.exec('RELEASE SAVEPOINT wall_tx')
+      db.exec('ROLLBACK')
       throw error
+    } finally {
+      inTx = false
     }
   }
   return { store: new WallStore(sqlPort, runTx), db }

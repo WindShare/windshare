@@ -356,54 +356,60 @@ export class WallStore {
     return this.cachedWall
   }
 
-  consumeRateLimit(scope: RateLimitScope, clientIp: string, nowSec: number): RateLimitDecision {
+  private consumeRateLimitInTx(
+    scope: RateLimitScope,
+    clientIp: string,
+    nowSec: number,
+  ): RateLimitDecision {
     const policy = RATE_LIMIT_POLICIES[scope]
     const ipKey = `${scope}:ip:${clientIp}`
     const globalKey = policy.global === undefined ? null : `${scope}:global`
 
-    return this.runTx(() => {
-      this.sql.exec(
-        `DELETE FROM rate_limits WHERE bucket_key IN (
-          SELECT bucket_key FROM rate_limits WHERE updated_at <= ? LIMIT ?
-        )`,
-        nowSec - RATE_LIMIT_STALE_SECONDS,
-        CLEANUP_BATCH_SIZE,
+    this.sql.exec(
+      `DELETE FROM rate_limits WHERE bucket_key IN (
+        SELECT bucket_key FROM rate_limits WHERE updated_at <= ? LIMIT ?
+      )`,
+      nowSec - RATE_LIMIT_STALE_SECONDS,
+      CLEANUP_BATCH_SIZE,
+    )
+
+    const ipRow = firstRow(this.sql.exec(
+      'SELECT tokens, updated_at FROM rate_limits WHERE bucket_key = ?',
+      ipKey,
+    ))
+    const ipEval = evaluateBucket(ipRow, policy.ip, nowSec)
+
+    const globalEval = policy.global !== undefined && globalKey !== null
+      ? evaluateBucket(
+        firstRow(this.sql.exec(
+          'SELECT tokens, updated_at FROM rate_limits WHERE bucket_key = ?',
+          globalKey,
+        )),
+        policy.global,
+        nowSec,
       )
+      : null
 
-      const ipRow = firstRow(this.sql.exec(
-        'SELECT tokens, updated_at FROM rate_limits WHERE bucket_key = ?',
-        ipKey,
-      ))
-      const ipEval = evaluateBucket(ipRow, policy.ip, nowSec)
+    const retryAfterSeconds = Math.max(
+      ipEval.retryAfterSeconds,
+      globalEval?.retryAfterSeconds ?? 0,
+    )
+    if (retryAfterSeconds > 0) {
+      return { allowed: false, retryAfterSeconds }
+    }
 
-      const globalEval = policy.global !== undefined && globalKey !== null
-        ? evaluateBucket(
-          firstRow(this.sql.exec(
-            'SELECT tokens, updated_at FROM rate_limits WHERE bucket_key = ?',
-            globalKey,
-          )),
-          policy.global,
-          nowSec,
-        )
-        : null
+    const upsertSql = `INSERT INTO rate_limits (bucket_key, tokens, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(bucket_key) DO UPDATE SET tokens = excluded.tokens, updated_at = excluded.updated_at`
+    this.sql.exec(upsertSql, ipKey, ipEval.available - 1, nowSec)
+    if (globalKey !== null && globalEval !== null) {
+      this.sql.exec(upsertSql, globalKey, globalEval.available - 1, nowSec)
+    }
+    return { allowed: true, retryAfterSeconds: 0 }
+  }
 
-      const retryAfterSeconds = Math.max(
-        ipEval.retryAfterSeconds,
-        globalEval?.retryAfterSeconds ?? 0,
-      )
-      if (retryAfterSeconds > 0) {
-        return { allowed: false, retryAfterSeconds }
-      }
-
-      const upsertSql = `INSERT INTO rate_limits (bucket_key, tokens, updated_at)
-        VALUES (?, ?, ?)
-        ON CONFLICT(bucket_key) DO UPDATE SET tokens = excluded.tokens, updated_at = excluded.updated_at`
-      this.sql.exec(upsertSql, ipKey, ipEval.available - 1, nowSec)
-      if (globalKey !== null && globalEval !== null) {
-        this.sql.exec(upsertSql, globalKey, globalEval.available - 1, nowSec)
-      }
-      return { allowed: true, retryAfterSeconds: 0 }
-    })
+  consumeRateLimit(scope: RateLimitScope, clientIp: string, nowSec: number): RateLimitDecision {
+    return this.runTx(() => this.consumeRateLimitInTx(scope, clientIp, nowSec))
   }
 
   createCryptoIntent(input: CreateCryptoIntentInput): CreateIntentResult {
@@ -412,7 +418,7 @@ export class WallStore {
       if (config.cryptoCheckoutPaused) {
         return { ok: false, code: 'crypto_checkout_paused' }
       }
-      const rateLimit = this.consumeRateLimit('crypto', input.clientIp, input.nowSec)
+      const rateLimit = this.consumeRateLimitInTx('crypto', input.clientIp, input.nowSec)
       if (!rateLimit.allowed) {
         return { ok: false, code: 'rate_limited', retryAfterSeconds: rateLimit.retryAfterSeconds }
       }
