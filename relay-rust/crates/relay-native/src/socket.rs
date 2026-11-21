@@ -49,6 +49,7 @@ pub async fn serve(
                 share: upgrade.share,
                 bearer: upgrade.admission.bearer().cloned(),
                 usage: upgrade.admission.usage.clone(),
+                share_attribution: upgrade.admission.share_attribution(),
             },
         ),
         upgrade.buffered,

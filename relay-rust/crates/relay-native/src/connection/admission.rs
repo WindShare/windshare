@@ -89,6 +89,7 @@ pub struct Admission {
     connection: ConnectionRef,
     slot: Mutex<Slot>,
     bearer: OnceLock<Bearer>,
+    share_attribution: Arc<OnceLock<windshare_relay_access::Attribution>>,
 }
 
 impl Capacity {
@@ -144,6 +145,7 @@ impl Capacity {
             connection,
             slot: Mutex::new(Slot::Control),
             bearer: OnceLock::new(),
+            share_attribution: Arc::new(OnceLock::new()),
         }))
     }
 }
@@ -225,6 +227,9 @@ impl Admission {
     }
     pub(crate) fn bearer(&self) -> Option<&Bearer> {
         self.bearer.get()
+    }
+    pub(crate) fn share_attribution(&self) -> Arc<OnceLock<windshare_relay_access::Attribution>> {
+        Arc::clone(&self.share_attribution)
     }
     pub const fn source(&self) -> IpAddr {
         self.source

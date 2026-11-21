@@ -6,7 +6,11 @@ use crate::node::{
 };
 use crate::storage::Persistence;
 use anyhow::{Result, anyhow};
-use std::{io, sync::atomic::Ordering, task::Poll};
+use std::{
+    io,
+    sync::{Arc, OnceLock, atomic::Ordering},
+    task::Poll,
+};
 use windshare_relay_access::Attribution;
 use windshare_relay_core::identifiers::ShareId;
 
@@ -15,6 +19,7 @@ pub struct WriteOrigin {
     pub(crate) share: ShareId,
     pub(crate) bearer: Option<Bearer>,
     pub(crate) usage: Meter,
+    pub(crate) share_attribution: Arc<OnceLock<Attribution>>,
 }
 
 impl WriteOrigin {
@@ -22,8 +27,13 @@ impl WriteOrigin {
         Limits {
             monthly: settings.relay_budget.map(|budget| budget.bytes),
             public_daily: settings.contribution.daily_bytes.filter(|_| {
-                access.egress_owner(self.share, self.bearer.as_ref(), self.usage.attribution())
-                    != Some(true)
+                access.egress_owner(
+                    self.share,
+                    self.bearer.as_ref(),
+                    self.usage
+                        .attribution()
+                        .or_else(|| self.share_attribution.get().copied()),
+                ) != Some(true)
             }),
         }
     }

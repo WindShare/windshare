@@ -8,6 +8,7 @@ impl WriteOrigin {
             share: windshare_relay_core::identifiers::ShareId::new([3; 12]).unwrap(),
             bearer: None,
             usage: usage::Meter::default(),
+            share_attribution: std::sync::Arc::default(),
         }
     }
 }
@@ -100,6 +101,7 @@ fn public_and_owner_node(
         share: windshare_relay_core::identifiers::ShareId::new([5; 12]).unwrap(),
         bearer: Some(access::Bearer::new("owner-token")),
         usage: usage::Meter::default(),
+        share_attribution: std::sync::Arc::default(),
     };
     (directory, node, WriteOrigin::test_public(), owner_origin)
 }

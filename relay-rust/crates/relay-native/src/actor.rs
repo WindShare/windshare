@@ -122,9 +122,7 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
         self.enforce_access()?;
         loop {
             self.enforce_access_if_changed()?;
-            if self.authority.is_none() && self.ports.is_empty() && self.commit.is_none() {
-                self.residency = None;
-            }
+            self.sync_residency();
             self.idle.store(
                 self.ports.is_empty()
                     && self.commit.is_none()
@@ -163,6 +161,7 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
                             // A JOIN can use descriptor bytes only from a confirmed
                             // transaction, including after a lost receipt is retried.
                             self.authority = authority;
+                            self.sync_residency();
                             WorkResult::Complete
                         }
                         Err(error) => {

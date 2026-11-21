@@ -344,3 +344,355 @@ async fn cancelled_connection_supervisor_keeps_host_lease_until_children_exit() 
             .is_ok()
     );
 }
+
+struct SignedShare {
+    signing_key: ed25519_dalek::SigningKey,
+    share_id: ShareId,
+    pk_hash: [u8; 16],
+    share_instance: [u8; 16],
+    descriptor: Vec<u8>,
+    descriptor_digest: [u8; 32],
+    resume_token_hash: [u8; 32],
+    receive_capacity: [u8; 16],
+    relay: windshare_relay_core::identifiers::RelayIdentity,
+}
+
+impl SignedShare {
+    fn new(seed: u8, relay: windshare_relay_core::identifiers::RelayIdentity) -> Self {
+        use sha2::{Digest as _, Sha256};
+
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[seed; 32]);
+        let public = signing_key.verifying_key().to_bytes();
+        let pk_hash: [u8; 16] = Sha256::new()
+            .chain_update(b"windshare/v2 sender-key\0")
+            .chain_update(public)
+            .finalize()[..16]
+            .try_into()
+            .unwrap();
+        let share_id_bytes: [u8; 12] = Sha256::new()
+            .chain_update(b"windshare/v2 share-id\0")
+            .chain_update(pk_hash)
+            .finalize()[..12]
+            .try_into()
+            .unwrap();
+        let descriptor = vec![seed; 32];
+        let descriptor_digest: [u8; 32] = Sha256::digest(&descriptor).into();
+        let mut receive_capacity = [0u8; 16];
+        receive_capacity[..8].copy_from_slice(&16u64.to_be_bytes());
+        receive_capacity[8..].copy_from_slice(&(64u64 * 1024).to_be_bytes());
+        Self {
+            signing_key,
+            share_id: ShareId::new(share_id_bytes).unwrap(),
+            pk_hash,
+            share_instance: [seed; 16],
+            descriptor,
+            descriptor_digest,
+            resume_token_hash: [seed; 32],
+            receive_capacity,
+            relay,
+        }
+    }
+
+    fn register_init(&self) -> Vec<u8> {
+        let mut frame = Vec::with_capacity(132);
+        frame.extend_from_slice(b"WS2R");
+        frame.extend_from_slice(&[2, 0, 0, 0]);
+        frame.extend_from_slice(self.share_id.as_bytes());
+        frame.extend_from_slice(&self.share_instance);
+        frame.extend_from_slice(&self.pk_hash);
+        frame.extend_from_slice(&self.descriptor_digest);
+        frame.extend_from_slice(&self.resume_token_hash);
+        frame.extend_from_slice(&self.receive_capacity);
+        frame
+    }
+
+    fn register_proof(&self, challenge: &[u8]) -> Vec<u8> {
+        use ed25519_dalek::Signer as _;
+
+        let mut preimage = Vec::new();
+        preimage.extend_from_slice(b"windshare/v2 relay-register\0");
+        preimage.extend_from_slice(self.share_id.as_bytes());
+        preimage.extend_from_slice(&self.share_instance);
+        preimage.extend_from_slice(&self.pk_hash);
+        preimage.extend_from_slice(&self.descriptor_digest);
+        preimage.extend_from_slice(&self.resume_token_hash);
+        preimage.extend_from_slice(self.relay.as_bytes());
+        preimage.extend_from_slice(&challenge[8..64]);
+        preimage.extend_from_slice(&self.receive_capacity);
+        let signature = self.signing_key.sign(&preimage);
+        let mut frame = Vec::with_capacity(104);
+        frame.extend_from_slice(b"WS2P");
+        frame.extend_from_slice(&[2, 0, 0, 0]);
+        frame.extend_from_slice(&self.signing_key.verifying_key().to_bytes());
+        frame.extend_from_slice(&signature.to_bytes());
+        frame
+    }
+
+    fn descriptor_upload(&self) -> Vec<u8> {
+        let mut frame = Vec::with_capacity(12 + self.descriptor.len());
+        frame.extend_from_slice(b"WS2U");
+        frame.extend_from_slice(&[2, 0, 0, 0]);
+        frame.extend_from_slice(&u32::try_from(self.descriptor.len()).unwrap().to_be_bytes());
+        frame.extend_from_slice(&self.descriptor);
+        frame
+    }
+
+    fn stop_init(&self, stop_id: [u8; 16]) -> Vec<u8> {
+        let mut frame = Vec::with_capacity(100);
+        frame.extend_from_slice(b"WS2X");
+        frame.extend_from_slice(&[2, 0, 0, 0]);
+        frame.extend_from_slice(self.share_id.as_bytes());
+        frame.extend_from_slice(&self.share_instance);
+        frame.extend_from_slice(&self.pk_hash);
+        frame.extend_from_slice(self.relay.as_bytes());
+        frame.extend_from_slice(&stop_id);
+        frame
+    }
+
+    fn stop_proof(&self, stop_id: [u8; 16], challenge: &[u8]) -> Vec<u8> {
+        use ed25519_dalek::Signer as _;
+
+        let mut preimage = Vec::new();
+        preimage.extend_from_slice(b"windshare/v2 relay-stop\0");
+        preimage.extend_from_slice(self.share_id.as_bytes());
+        preimage.extend_from_slice(&self.share_instance);
+        preimage.extend_from_slice(&self.pk_hash);
+        preimage.extend_from_slice(self.relay.as_bytes());
+        preimage.extend_from_slice(&stop_id);
+        preimage.extend_from_slice(&challenge[8..64]);
+        let signature = self.signing_key.sign(&preimage);
+        let mut frame = Vec::with_capacity(104);
+        frame.extend_from_slice(b"WS2V");
+        frame.extend_from_slice(&[2, 0, 0, 0]);
+        frame.extend_from_slice(&self.signing_key.verifying_key().to_bytes());
+        frame.extend_from_slice(&signature.to_bytes());
+        frame
+    }
+}
+
+fn registry_with_single_share_quota(path: &Path) -> (Registry, &'static str) {
+    use crate::node::access::Policy;
+    use windshare_relay_access::{Credential, CredentialState, Digest};
+
+    const SECRET: &str = "single-share-service-key";
+    let endpoint = Endpoint::parse("ws://localhost:8787/v2/ws").unwrap();
+    let store = Database::open(path, endpoint.identity).unwrap();
+    let node = crate::node::Runtime::default();
+    node.access
+        .configure(Policy {
+            anonymous: false,
+            shares_per_principal: 1,
+            credentials: vec![Credential {
+                principal: [7; 16],
+                id: [7; 16],
+                name: "guest".to_owned(),
+                digest: Digest::of(SECRET.as_bytes()),
+                created_at: 0,
+                last_used_at: None,
+                state: CredentialState::Active,
+            }],
+            ..Policy::default()
+        })
+        .unwrap();
+    let registry = Registry {
+        node,
+        actors: Mutex::new(BTreeMap::new()),
+        store,
+        endpoint,
+        environment: NativeEnvironment::new().unwrap(),
+    };
+    (registry, SECRET)
+}
+
+async fn connect_share(
+    registry: &Registry,
+    share: ShareId,
+    conn_id: u64,
+    secret: Option<&str>,
+) -> (Arc<Handle>, connection::Writer) {
+    let handle = registry.attach(share, Authenticated).unwrap();
+    let admission = crate::test_support::socket_admission();
+    if let Some(secret) = secret {
+        let mut bearer = crate::node::access::Bearer::new(secret);
+        registry.node.access.admission_priority(
+            share,
+            Some(&mut bearer),
+            registry.environment.now().0 / 1000,
+        );
+        admission.set_bearer(bearer);
+    }
+    let (port, writer, _) = connection::channel(reference(conn_id), registry.node.clone());
+    handle
+        .tx
+        .send(Event::Connected(
+            reference(conn_id),
+            Box::new(port.with_admission(&admission)),
+        ))
+        .await
+        .unwrap();
+    (handle, writer)
+}
+
+async fn read_frame(writer: &mut connection::Writer) -> Vec<u8> {
+    timeout(TEST_BUDGET, writer.recv())
+        .await
+        .unwrap()
+        .expect("expected relay control frame")
+}
+
+async fn publish_share(
+    registry: &Registry,
+    share: &SignedShare,
+    conn_id: u64,
+    secret: &str,
+) -> (Arc<Handle>, connection::Writer) {
+    let (handle, mut writer) = connect_share(registry, share.share_id, conn_id, Some(secret)).await;
+    handle
+        .tx
+        .send(Event::Control(reference(conn_id), share.register_init()))
+        .await
+        .unwrap();
+    let challenge = read_frame(&mut writer).await;
+    assert_eq!(&challenge[..4], b"WS2Q");
+    handle
+        .tx
+        .send(Event::Control(
+            reference(conn_id),
+            share.register_proof(&challenge),
+        ))
+        .await
+        .unwrap();
+    handle
+        .tx
+        .send(Event::Control(
+            reference(conn_id),
+            share.descriptor_upload(),
+        ))
+        .await
+        .unwrap();
+    let registered = read_frame(&mut writer).await;
+    assert_eq!(&registered[..4], b"WS2K");
+    (handle, writer)
+}
+
+async fn stop_share(
+    registry: &Registry,
+    share: &SignedShare,
+    conn_id: u64,
+    stop_id: [u8; 16],
+) -> (Arc<Handle>, connection::Writer) {
+    let (handle, mut writer) = connect_share(registry, share.share_id, conn_id, None).await;
+    handle
+        .tx
+        .send(Event::Control(reference(conn_id), share.stop_init(stop_id)))
+        .await
+        .unwrap();
+    let challenge = read_frame(&mut writer).await;
+    assert_eq!(&challenge[..4], b"WS2Q");
+    handle
+        .tx
+        .send(Event::Control(
+            reference(conn_id),
+            share.stop_proof(stop_id, &challenge),
+        ))
+        .await
+        .unwrap();
+    let stopped = read_frame(&mut writer).await;
+    assert_eq!(&stopped[..4], b"WS2Y");
+    (handle, writer)
+}
+
+#[tokio::test]
+async fn stop_releases_principal_residency_for_queued_share_without_unrelated_eviction() {
+    use windshare_relay_core::error_frame::ErrorFrame;
+
+    let directory = tempfile::tempdir().unwrap();
+    let (registry, secret) =
+        registry_with_single_share_quota(&directory.path().join("authority.sqlite"));
+    let share_a = SignedShare::new(11, registry.endpoint.identity);
+    let share_b = SignedShare::new(22, registry.endpoint.identity);
+
+    let (handle_a, _sender_a) = publish_share(&registry, &share_a, 1, secret).await;
+
+    // Share B queues in `registry.actors` and is refused while share A holds the sole slot.
+    let (handle_b, mut queued_b) =
+        connect_share(&registry, share_b.share_id, 2, Some(secret)).await;
+    handle_b
+        .tx
+        .send(Event::Control(reference(2), share_b.register_init()))
+        .await
+        .unwrap();
+    let refusal = read_frame(&mut queued_b).await;
+    assert_eq!(
+        refusal,
+        ErrorFrame::AccessUnavailable(
+            windshare_relay_core::error_frame::RetryAfter::from_millis(1_000).unwrap()
+        )
+        .encode()
+    );
+    drop(queued_b);
+    drop(handle_b);
+
+    // Stopping share A must release its residency before STOPPED even while its actor stays resident.
+    let (stop_handle, _stopper) = stop_share(&registry, &share_a, 3, [9; 16]).await;
+    assert_eq!(registry.actors.lock().unwrap().len(), 2);
+
+    // Retrying share B hits the existing-actor fast path in `Registry::attach` without evicting A.
+    let (_published_b, _sender_b) = publish_share(&registry, &share_b, 4, secret).await;
+    assert_eq!(registry.actors.lock().unwrap().len(), 2);
+
+    // A stale REGISTER on stopped share A must return Stopped instead of reserving a slot.
+    let (stale_a, mut stale_writer) =
+        connect_share(&registry, share_a.share_id, 5, Some(secret)).await;
+    stale_a
+        .tx
+        .send(Event::Control(reference(5), share_a.register_init()))
+        .await
+        .unwrap();
+    assert_eq!(
+        read_frame(&mut stale_writer).await,
+        ErrorFrame::Stopped.encode()
+    );
+
+    drop(stale_a);
+    drop(stop_handle);
+    drop(handle_a);
+    registry.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn stale_register_on_restarted_stopped_share_does_not_leak_residency() {
+    use windshare_relay_core::error_frame::ErrorFrame;
+
+    let directory = tempfile::tempdir().unwrap();
+    let db_path = directory.path().join("authority.sqlite");
+    let (registry, secret) = registry_with_single_share_quota(&db_path);
+    let share_a = SignedShare::new(33, registry.endpoint.identity);
+    let share_b = SignedShare::new(44, registry.endpoint.identity);
+
+    let (handle_a, _sender_a) = publish_share(&registry, &share_a, 1, secret).await;
+    let (stop_handle, _stopper) = stop_share(&registry, &share_a, 2, [8; 16]).await;
+    drop(stop_handle);
+    drop(handle_a);
+    registry.shutdown().await.unwrap();
+    drop(registry);
+
+    let (restarted, secret) = registry_with_single_share_quota(&db_path);
+    let (stale_a, mut stale_writer) =
+        connect_share(&restarted, share_a.share_id, 3, Some(secret)).await;
+    stale_a
+        .tx
+        .send(Event::Control(reference(3), share_a.register_init()))
+        .await
+        .unwrap();
+    assert_eq!(
+        read_frame(&mut stale_writer).await,
+        ErrorFrame::Stopped.encode()
+    );
+    drop(stale_writer);
+
+    // Even with stopped share A still held in `actors`, share B can claim the sole slot.
+    let (_published_b, _sender_b) = publish_share(&restarted, &share_b, 4, secret).await;
+    drop(stale_a);
+    restarted.shutdown().await.unwrap();
+}

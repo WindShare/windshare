@@ -9,7 +9,7 @@ use crate::config::{
 };
 use crate::node::{Runtime, access::Bearer};
 use anyhow::{Result, ensure};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use windshare_relay_access::Attribution;
 mod pending;
 use tokio::sync::{Semaphore, mpsc, watch};
@@ -45,6 +45,7 @@ pub enum Closure {
 /// Dropping it aborts the connection; orderly terminal replies use `finish`.
 pub struct Outbox {
     bearer: Option<Bearer>,
+    share_attribution: Arc<OnceLock<Attribution>>,
     source: Option<std::net::IpAddr>,
     connection: ConnectionRef,
     pending: pending::Queues,
@@ -68,6 +69,7 @@ pub fn channel(
     let (closure, closing) = watch::channel(Closure::Open);
     let outbox = Outbox {
         bearer: None,
+        share_attribution: Arc::new(OnceLock::new()),
         source: None,
         connection,
         pending: pending::Queues::default(),
@@ -89,8 +91,12 @@ impl Outbox {
     }
     pub fn with_admission(mut self, admission: &Admission) -> Self {
         self.bearer = admission.bearer().cloned();
+        self.share_attribution = admission.share_attribution();
         self.source = Some(admission.source());
         self
+    }
+    pub(crate) fn retain_share_attribution(&self, attribution: Attribution) {
+        let _ = self.share_attribution.set(attribution);
     }
     pub(crate) const fn bearer(&self) -> Option<&Bearer> {
         self.bearer.as_ref()

@@ -62,6 +62,39 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
         Ok(())
     }
 
+    fn has_terminal_authority(&self) -> bool {
+        self.authority
+            .as_ref()
+            .is_some_and(|stored| stored.record().live_attribution().is_none())
+    }
+
+    // Permanent STOP records stay in SQLite without retaining a live residency slot;
+    // a vacant share only holds provisional residency while registration is active.
+    pub(super) fn sync_residency(&mut self) {
+        let release = match self.authority.as_ref() {
+            Some(stored) => stored.record().live_attribution().is_none(),
+            None => self.ports.is_empty() && self.commit.is_none(),
+        };
+        if release && let Some(residency) = self.residency.take() {
+            let attribution = residency.attribution();
+            let stopped = self.has_terminal_authority();
+            if stopped {
+                // Already-admitted sockets (such as an uncredentialed STOP draining
+                // WS2Y/Close) keep this share's owner-egress attribution after the
+                // concurrency slot is freed.
+                for port in self.ports.values() {
+                    port.retain_share_attribution(attribution);
+                }
+            }
+            tracing::debug!(
+                event = "share_residency_released",
+                share = ?self.identity.share,
+                ?attribution,
+                stopped,
+            );
+        }
+    }
+
     pub(super) fn authorize(&mut self, request: &RegistrationRequest) -> RegistrationDecision {
         let connection = request.connection();
         let Some(port) = self.ports.get(&connection) else {
@@ -81,7 +114,9 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
                 if residency.attribution() != attribution {
                     decision = RegistrationDecision::Denied;
                 }
-            } else {
+            } else if !self.has_terminal_authority() {
+                // Stopping/Stopped records cannot become live again; let the kernel
+                // return StopPending/Stopped/Occupied without reserving a slot.
                 match self.node.access.reserve(self.identity.share, attribution) {
                     Ok(residency) => self.residency = Some(residency),
                     Err(refusal) => decision = refusal,
