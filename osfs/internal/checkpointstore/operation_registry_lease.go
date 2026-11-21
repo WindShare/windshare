@@ -80,7 +80,7 @@ func (registry *OperationRegistry) AcquireOperationLease(
 	if err != nil {
 		return nil, err
 	}
-	record, _, err := registry.readOperation(operation)
+	record, _, _, err := registry.readOperation(operation)
 	if err != nil {
 		return nil, errors.Join(err, lease.Close())
 	}

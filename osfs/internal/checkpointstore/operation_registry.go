@@ -64,15 +64,17 @@ const (
 	ActiveLookupNeedsAttention
 	ActiveLookupAmbiguous
 	ActiveLookupShareStopped
+	ActiveLookupSelectionMismatch
 )
 
 func (state ActiveLookupState) Valid() bool {
-	return state >= ActiveLookupNone && state <= ActiveLookupShareStopped
+	return state >= ActiveLookupNone && state <= ActiveLookupSelectionMismatch
 }
 
 type ActiveLookup struct {
 	state         ActiveLookupState
 	record        checkpointmodel.OrdinaryOperationRecord
+	intent        transfer.ReceiveIntent
 	recoveryProof ReservationRecoveryProof
 	lease         *OperationRegistryLease
 }
@@ -80,6 +82,9 @@ type ActiveLookup struct {
 func (lookup ActiveLookup) State() ActiveLookupState { return lookup.state }
 func (lookup ActiveLookup) Record() checkpointmodel.OrdinaryOperationRecord {
 	return lookup.record
+}
+func (lookup ActiveLookup) Intent() transfer.ReceiveIntent {
+	return lookup.intent
 }
 func (lookup ActiveLookup) RecoveryProof() ReservationRecoveryProof {
 	return lookup.recoveryProof.Clone()
@@ -379,23 +384,24 @@ func (registry *OperationRegistry) lookupActiveLocked(
 	if parseErr != nil || readErr != nil || len(indexDigest) != sha256.Size {
 		return ActiveLookup{state: ActiveLookupAmbiguous}, nil
 	}
-	record, encoded, recordErr := registry.readOperation(operation)
+	record, intent, encoded, recordErr := registry.readOperation(operation)
 	if recordErr != nil || record.ActiveOperationKey() != key || !record.Lifecycle().ParticipatesInActiveLookup() ||
 		!validActiveIndexDigest(indexDigest, record, encoded) {
 		return ActiveLookup{state: ActiveLookupAmbiguous}, nil
 	}
-	return registry.lookupOperationRecord(record)
+	return registry.lookupOperationRecord(record, intent)
 }
 
 // LookupOperation takes the same exact lease as automatic continuation without
-// inspecting or replacing the selection's automatic match. When match rejects a
-// candidate record, LookupOperation reports absence before checking state or
-// acquiring a lease so unrelated operations are never locked or mutated.
+// inspecting or replacing the selection's automatic match. When the retained
+// operation belongs to another selection, LookupOperation reports
+// ActiveLookupSelectionMismatch before inspecting lifecycle state or acquiring
+// a lease so unrelated operations are never locked or mutated.
 func (registry *OperationRegistry) LookupOperation(
 	operation receivecontract.OperationID,
-	match func(checkpointmodel.OrdinaryOperationRecord) bool,
+	selection transfer.SelectionSpec,
 ) (ActiveLookup, error) {
-	if !registry.valid() || operation.IsZero() {
+	if !registry.valid() || operation.IsZero() || selection.IsZero() {
 		return ActiveLookup{}, transfer.ErrInvalidOutputBinding
 	}
 	directory, err := openExistingDirectory(registry.operations, operationNamespaceName(operation))
@@ -405,61 +411,64 @@ func (registry *OperationRegistry) LookupOperation(
 	if err != nil {
 		return ActiveLookup{}, repositoryError("open selected ordinary operation", err)
 	}
-	record, _, err := readAndCloseOperation(directory, operation)
+	record, intent, _, err := readAndCloseOperation(directory, operation)
 	if err != nil {
 		return ActiveLookup{}, err
 	}
 	if !record.Lifecycle().ParticipatesInActiveLookup() {
 		return ActiveLookup{state: ActiveLookupNone}, nil
 	}
-	if match != nil && !match(record) {
-		return ActiveLookup{state: ActiveLookupNone}, nil
+	if !sameSelection(intent.SelectionSpec(), selection) {
+		return ActiveLookup{state: ActiveLookupSelectionMismatch, record: record, intent: intent}, nil
 	}
-	return registry.lookupOperationRecord(record)
+	return registry.lookupOperationRecord(record, intent)
 }
 
-func (registry *OperationRegistry) lookupOperationRecord(record checkpointmodel.OrdinaryOperationRecord) (ActiveLookup, error) {
+func (registry *OperationRegistry) lookupOperationRecord(
+	record checkpointmodel.OrdinaryOperationRecord,
+	intent transfer.ReceiveIntent,
+) (ActiveLookup, error) {
 	operation := record.OperationID()
 	if record.Lifecycle() == checkpointmodel.OrdinaryOperationShareStopped {
-		return ActiveLookup{state: ActiveLookupShareStopped, record: record}, nil
+		return ActiveLookup{state: ActiveLookupShareStopped, record: record, intent: intent}, nil
 	}
 	if record.Lifecycle() == checkpointmodel.OrdinaryOperationNeedsAttention {
 		proof, proofErr := registry.recoveryProof(record)
 		if proofErr != nil {
-			return ActiveLookup{state: ActiveLookupAmbiguous, record: record}, nil
+			return ActiveLookup{state: ActiveLookupAmbiguous, record: record, intent: intent}, nil
 		}
-		return ActiveLookup{state: ActiveLookupNeedsAttention, record: record, recoveryProof: proof}, nil
+		return ActiveLookup{state: ActiveLookupNeedsAttention, record: record, intent: intent, recoveryProof: proof}, nil
 	}
 	lease, leaseErr := registry.acquireOperationLease(operation)
 	if leaseErr != nil {
 		if errors.Is(leaseErr, outputcap.ErrNamespaceLockBusy) {
-			return ActiveLookup{state: ActiveLookupAlreadyRunning, record: record}, nil
+			return ActiveLookup{state: ActiveLookupAlreadyRunning, record: record, intent: intent}, nil
 		}
-		return ActiveLookup{state: ActiveLookupAmbiguous, record: record}, nil
+		return ActiveLookup{state: ActiveLookupAmbiguous, record: record, intent: intent}, nil
 	}
-	current, _, readErr := registry.readOperation(operation)
+	current, currentIntent, _, readErr := registry.readOperation(operation)
 	if readErr != nil || !sameOrdinaryRecord(current, record) {
 		_ = lease.Close()
-		return ActiveLookup{state: ActiveLookupAmbiguous, record: record}, nil
+		return ActiveLookup{state: ActiveLookupAmbiguous, record: record, intent: intent}, nil
 	}
 	proof, proofErr := registry.recoveryProof(current)
 	if proofErr != nil {
 		_ = lease.Close()
-		return ActiveLookup{state: ActiveLookupAmbiguous, record: record}, nil
+		return ActiveLookup{state: ActiveLookupAmbiguous, record: record, intent: intent}, nil
 	}
 	held, transitionErr := checkpointmodel.NextOrdinaryOperationRecord(current, checkpointmodel.NextOrdinaryOperationRecordSpec{
 		Lifecycle: current.Lifecycle(), Lease: checkpointmodel.OrdinaryLeaseHeld, ClosedReason: current.ClosedReason(),
 	})
 	if transitionErr != nil {
 		_ = lease.Close()
-		return ActiveLookup{state: ActiveLookupAmbiguous, record: record}, nil
+		return ActiveLookup{state: ActiveLookupAmbiguous, record: record, intent: intent}, nil
 	}
 	if err := registry.replaceOperation(current, held); err != nil {
 		_ = lease.Close()
-		return ActiveLookup{state: ActiveLookupNeedsAttention, record: record, recoveryProof: proof}, nil
+		return ActiveLookup{state: ActiveLookupNeedsAttention, record: record, intent: intent, recoveryProof: proof}, nil
 	}
 	lease.record = held
-	return ActiveLookup{state: ActiveLookupReopenable, record: held, recoveryProof: proof, lease: lease}, nil
+	return ActiveLookup{state: ActiveLookupReopenable, record: held, intent: currentIntent, recoveryProof: proof, lease: lease}, nil
 }
 
 func (admission *ActiveAdmission) Create(

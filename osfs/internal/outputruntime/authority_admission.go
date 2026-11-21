@@ -93,6 +93,7 @@ const (
 	FilesystemOutputRuntimeReleaseLiveFile
 	FilesystemOutputRuntimeLiveRetention
 	FilesystemOutputRuntimeMapName
+	FilesystemOutputRuntimeSelectOperation
 )
 
 type FilesystemOutputRuntimeDecision uint8
@@ -117,6 +118,7 @@ const (
 	FilesystemOutputRuntimeNeedsAttention
 	FilesystemOutputRuntimeIsolatedFailure
 	FilesystemOutputRuntimeCleanupPending
+	FilesystemOutputRuntimeSelectionMismatch
 )
 
 type FilesystemCheckpointDecision uint8

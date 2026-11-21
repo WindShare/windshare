@@ -20,8 +20,8 @@ func (authority *Authority) traceSelectedOperationMismatch(
 		ReceiveIntentDigest:  intent.Digest(),
 		ReceiveOperationID:   record.OperationID(),
 		RuntimeComponent:     FilesystemOutputRuntimeSession,
-		RuntimeOperation:     FilesystemOutputRuntimeAdmitDestination,
-		RuntimeDecision:      FilesystemOutputRuntimeRejected,
+		RuntimeOperation:     FilesystemOutputRuntimeSelectOperation,
+		RuntimeDecision:      FilesystemOutputRuntimeSelectionMismatch,
 	})
 }
 

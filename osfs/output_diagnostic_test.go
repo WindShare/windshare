@@ -31,4 +31,19 @@ func TestDiagnosticPreservesNativeFailureAndDestinationCapabilities(t *testing.T
 	if source.DiagnosticRecord().Payload().Get("runtime_operation").Text() != "unknown_255" {
 		t.Fatal("new native operation discarded")
 	}
+
+	mismatch := FilesystemOutputTrace{
+		Operation:            TraceRuntimeDecision,
+		DestinationBindingID: outputcap.DestinationBindingID{2},
+		ReceiveOperationID:   receivecontract.OperationID{3},
+		RuntimeComponent:     FilesystemOutputRuntimeSession,
+		RuntimeOperation:     FilesystemOutputRuntimeSelectOperation,
+		RuntimeDecision:      FilesystemOutputRuntimeSelectionMismatch,
+	}.DiagnosticRecord()
+	mp := mismatch.Payload()
+	if mp.Get("runtime_operation").Text() != "select_operation" ||
+		mp.Get("runtime_decision").Text() != "selection_mismatch" ||
+		mp.Get("live_cleanup_ticket_count").Present() {
+		t.Fatalf("selection mismatch diagnostic = %+v", mp)
+	}
 }

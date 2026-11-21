@@ -120,9 +120,7 @@ func (authority *Authority) SelectOperation(ctx context.Context, selection trans
 	var activeAdmission checkpointstore.ActiveAdmission
 	var registryLookup checkpointstore.ActiveLookup
 	if selector.Kind() == receivecontract.OperationByID {
-		registryLookup, err = authority.registry.LookupOperation(selector.ID(), func(record checkpointmodel.OrdinaryOperationRecord) bool {
-			return authority.selectedOperationMatches(record, selection)
-		})
+		registryLookup, err = authority.registry.LookupOperation(selector.ID(), selection)
 		key = registryLookup.Record().ActiveOperationKey()
 	} else {
 		activeAdmission, registryLookup, err = authority.registry.BeginActive(key)
@@ -134,6 +132,10 @@ func (authority *Authority) SelectOperation(ctx context.Context, selection trans
 		)
 	}
 	switch registryLookup.State() {
+	case checkpointstore.ActiveLookupSelectionMismatch:
+		authority.stage = authorityStageLookupStopped
+		authority.traceSelectedOperationMismatch(registryLookup.Record(), registryLookup.Intent())
+		return ActiveLookup{authority: authority, kind: ActiveLookupNotFound}, nil
 	case checkpointstore.ActiveLookupNone:
 		if selector.Kind() == receivecontract.OperationByID {
 			authority.stage = authorityStageLookupStopped
@@ -161,9 +163,9 @@ func (authority *Authority) SelectOperation(ctx context.Context, selection trans
 		return ActiveLookup{authority: authority, kind: ActiveLookupReopened, operation: operation}, nil
 	case checkpointstore.ActiveLookupShareStopped:
 		authority.stage = authorityStageLookupStopped
-		intent, err := registryLookup.Record().VerifyIntent(transfer.DecodeReceiveIntent)
-		if err != nil || !sameSelection(intent.SelectionSpec(), selection) {
-			return ActiveLookup{}, errors.Join(transfer.ErrInvalidOutputBinding, err)
+		intent := registryLookup.Intent()
+		if intent.IsZero() || !sameSelection(intent.SelectionSpec(), selection) {
+			return ActiveLookup{}, transfer.ErrInvalidOutputBinding
 		}
 		return ActiveLookup{}, ErrOutputShareStopped
 	case checkpointstore.ActiveLookupAlreadyRunning:
@@ -188,23 +190,16 @@ func (authority *Authority) SelectOperation(ctx context.Context, selection trans
 	}
 }
 
-// selectedOperationMatches filters an ID lookup before taking a lease or
-// exposing another operation's state. Corrupt intent bytes pass through so
-// lookup still diagnoses or quarantines them instead of hiding corruption.
-func (authority *Authority) selectedOperationMatches(
-	record checkpointmodel.OrdinaryOperationRecord,
-	selection transfer.SelectionSpec,
-) bool {
-	intent, err := record.VerifyIntent(transfer.DecodeReceiveIntent)
-	if err != nil || sameSelection(intent.SelectionSpec(), selection) {
-		return true
-	}
-	authority.traceSelectedOperationMismatch(record, intent)
-	return false
-}
-
 func (authority *Authority) selectLiveOperationLocked(selection transfer.SelectionSpec, selector receivecontract.OperationSelection, key checkpointmodel.ActiveOperationKey, operationID receivecontract.OperationID) (ActiveLookup, error) {
-	blocked, err := authority.retainedSelectionBlocked(selection, selector)
+	var (
+		blocked bool
+		err     error
+	)
+	if selector.Kind() == receivecontract.OperationByID {
+		blocked, err = authority.retainedOperationBlocked(selection, selector.ID())
+	} else {
+		blocked, err = authority.retainedSelectionBlocked(selection)
+	}
 	if err != nil {
 		return ActiveLookup{}, err
 	}
@@ -236,7 +231,11 @@ func (authority *Authority) reopenOperationLocked(
 		return nil, 0, transfer.ErrInvalidOutputBinding
 	}
 	record := lookup.Record()
-	intent, err := record.VerifyIntent(transfer.DecodeReceiveIntent)
+	intent := lookup.Intent()
+	var err error
+	if intent.IsZero() {
+		err = checkpointmodel.ErrInvalidOrdinaryOperation
+	}
 	proof := lookup.RecoveryProof()
 	var reservation receivecontract.DestinationReservation
 	var direct bool

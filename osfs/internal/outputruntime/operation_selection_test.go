@@ -269,6 +269,51 @@ func TestSelectedOperationOnLiveOnlyDestination(t *testing.T) {
 			t.Fatalf("downgraded matching ID = %v (%v), %v", lookup.Kind(), lookup.StateReason(), err)
 		}
 	})
+
+	t.Run("downgraded destination isolates unrelated corrupt operations", func(t *testing.T) {
+		root := newRuntimeTestRootSpec(t).path
+		healthy := openOrdinaryResumeSession(t, root, 0xb6, 4)
+		corrupt := openOrdinaryResumeSession(t, root, 0xb7, 4)
+		for _, fixture := range []ordinaryResumeSessionFixture{healthy, corrupt} {
+			if err := fixture.transaction.WriteRange(ctx, 0, []byte("da")); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := fixture.transaction.Checkpoint(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := fixture.session.PauseTree(ctx, transfer.JobPauseInterrupted); err != nil {
+				t.Fatal(err)
+			}
+			if err := fixture.authority.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		corruptRecordPath := filepath.Join(root, checkpointstore.ControlDirectory,
+			checkpointstore.OrdinaryRegistryDirectoryV1, "operations",
+			bytesToHex(corrupt.intent.OperationID().Bytes()), "record")
+		if err := os.WriteFile(corruptRecordPath, []byte("corrupt record"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		// A healthy ID with another selection stays NotFound despite the corrupt sibling.
+		lookup, traces, err := selectLive(t, root, nativeReservationTestSelection(t, 0xb8), healthy.intent.OperationID())
+		if err != nil || lookup.Kind() != ActiveLookupNotFound {
+			t.Fatalf("healthy mismatched ID with corrupt sibling = %v, %v", lookup.Kind(), err)
+		}
+		assertSelectionMismatchTrace(t, traces, healthy.intent)
+
+		// An absent ID also stays NotFound despite the corrupt sibling.
+		lookup, _, err = selectLive(t, root, nativeReservationTestSelection(t, 0xb8), receivecontract.OperationID{0xb9})
+		if err != nil || lookup.Kind() != ActiveLookupNotFound {
+			t.Fatalf("absent ID with corrupt sibling = %v, %v", lookup.Kind(), err)
+		}
+
+		// Selecting the corrupt ID itself fails closed as RecoveryUnavailable.
+		lookup, _, err = selectLive(t, root, corrupt.intent.SelectionSpec(), corrupt.intent.OperationID())
+		if err != nil || lookup.Kind() != ActiveLookupNeedsAttention || lookup.StateReason() != FilesystemOutputStateRecoveryUnavailable {
+			t.Fatalf("corrupt target ID = %v (%v), %v", lookup.Kind(), lookup.StateReason(), err)
+		}
+	})
 }
 
 func assertSelectionMismatchTrace(t *testing.T, traces []FilesystemOutputTrace, intent transfer.ReceiveIntent) {
@@ -276,8 +321,8 @@ func assertSelectionMismatchTrace(t *testing.T, traces []FilesystemOutputTrace, 
 	for _, event := range traces {
 		if event.Operation == TraceRuntimeDecision &&
 			event.RuntimeComponent == FilesystemOutputRuntimeSession &&
-			event.RuntimeOperation == FilesystemOutputRuntimeAdmitDestination &&
-			event.RuntimeDecision == FilesystemOutputRuntimeRejected &&
+			event.RuntimeOperation == FilesystemOutputRuntimeSelectOperation &&
+			event.RuntimeDecision == FilesystemOutputRuntimeSelectionMismatch &&
 			event.ReceiveOperationID == intent.OperationID() &&
 			event.ReceiveIntentDigest == intent.Digest() &&
 			!event.DestinationBindingID.IsZero() &&
