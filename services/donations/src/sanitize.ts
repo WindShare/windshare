@@ -9,8 +9,11 @@ import {
 const MAX_INFERRED_MINOR_DIGITS = 4
 const ISO_CURRENCY_PATTERN = /^[A-Z]{3}$/
 const DECIMAL_AMOUNT_PATTERN = /^(\d+)(?:\.(\d+))?$/
-const ZERO_WIDTH_PATTERN = /[\u200B-\u200D\u2060\uFEFF]/g
-const COLLAPSIBLE_WHITESPACE_PATTERN = /[\r\n\t]+/g
+// Strip invisible formatting characters and Unicode BiDi controls so untrusted UGC
+// cannot spoof visual reading order (e.g. RLO) or split URL/PII detection patterns.
+const INVISIBLE_FORMAT_PATTERN = /[\u00AD\u200B-\u200D\u2060\uFEFF]/g
+const BIDI_CONTROL_PATTERN = /[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g
+const COLLAPSIBLE_WHITESPACE_PATTERN = /[\r\n\t\u2028\u2029]+/g
 
 // Linear-time patterns without nested quantifiers to stay ReDoS-safe on untrusted UGC.
 const EXTERNAL_URL_PATTERN = /(?:https?:\/\/|ftp:\/\/|\bwww\.[a-z0-9-]|\b(?:t\.me|telegram\.me|discord\.gg|wa\.me|bit\.ly|tinyurl\.com)\/)/i
@@ -55,7 +58,8 @@ export function sanitizePlainText(
 ): string | null {
   if (raw === null || raw === undefined) return null
   const cleaned = stripControlChars(raw)
-    .replace(ZERO_WIDTH_PATTERN, '')
+    .replace(INVISIBLE_FORMAT_PATTERN, '')
+    .replace(BIDI_CONTROL_PATTERN, '')
     .replace(COLLAPSIBLE_WHITESPACE_PATTERN, ' ')
     .trim()
   if (cleaned.length === 0) return null

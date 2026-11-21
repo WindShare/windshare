@@ -1,7 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import { parseAllowedOrigins, type DonationsEnv } from '../src/env'
+import {
+  MIN_PUBLIC_CNY_MINOR,
+  MIN_PUBLIC_USD_MINOR,
+  defaultDonationConfig,
+} from '../src/model'
 import { handleWorkerFetch } from '../src/router'
-import { parseFixedPointAmount, sanitizePlainText } from '../src/sanitize'
+import {
+  containsContactPii,
+  containsExternalUrl,
+  determineInitialVisibility,
+  parseFixedPointAmount,
+  sanitizePlainText,
+} from '../src/sanitize'
 import { constantTimeEqual, hmacSha256Hex, hmacSha512Hex, md5Hex } from '../src/verify'
 
 function createStubEnv(): DonationsEnv {
@@ -34,6 +45,50 @@ describe('donations worker scaffold', () => {
     expect(sanitizePlainText('  hello\u0000\u200B\nworld  ', 32)).toBe('hello world')
     expect(sanitizePlainText('😀😀😀😀', 3)).toBe('😀😀😀')
     expect(sanitizePlainText('   \n\t  ', 32)).toBeNull()
+  })
+
+  it('strips Unicode BiDi controls and soft hyphens and collapses LS/PS before moderation checks', () => {
+    const allBidiControls = '\u061C\u200E\u200F\u202A\u202B\u202C\u202D\u202E\u2066\u2067\u2068\u2069'
+    expect(sanitizePlainText(`${allBidiControls}Alice\u00AD`, 32)).toBe('Alice')
+    expect(sanitizePlainText(`${allBidiControls}\u2028\u2029`, 32)).toBeNull()
+    expect(sanitizePlainText('line1\u2028line2\u2029line3', 32)).toBe('line1 line2 line3')
+    expect(sanitizePlainText('a\r\n\u2028\u2029b', 32)).toBe('a b')
+
+    const bidiUrl = sanitizePlainText('https:\u200E//spam.example', 140)
+    const softHyphenUrl = sanitizePlainText('https:\u00AD//spam.example', 140)
+    const bidiEmail = sanitizePlainText('a\u200E@b.com', 140)
+    const bidiPhone = sanitizePlainText('138\u200E1234\u00AD5678', 140)
+    const separatorPhone = sanitizePlainText('138\u20281234\u20295678', 140)
+
+    expect(bidiUrl).toBe('https://spam.example')
+    expect(softHyphenUrl).toBe('https://spam.example')
+    expect(bidiEmail).toBe('a@b.com')
+    expect(bidiPhone).toBe('13812345678')
+    expect(separatorPhone).toBe('138 1234 5678')
+
+    expect(containsExternalUrl(bidiUrl)).toBe(true)
+    expect(containsExternalUrl(softHyphenUrl)).toBe(true)
+    expect(containsContactPii(bidiEmail)).toBe(true)
+    expect(containsContactPii(bidiPhone)).toBe(true)
+    expect(containsContactPii(separatorPhone)).toBe(true)
+
+    const config = defaultDonationConfig()
+    expect(determineInitialVisibility({
+      amountMinor: MIN_PUBLIC_USD_MINOR,
+      currency: 'USD',
+      displayName: sanitizePlainText('\u202EAlice', 32),
+      message: bidiUrl,
+      isPublic: true,
+      config,
+    })).toEqual({ kind: 'pending_review', reason: 'url_detected' })
+    expect(determineInitialVisibility({
+      amountMinor: MIN_PUBLIC_CNY_MINOR,
+      currency: 'CNY',
+      displayName: 'Bob',
+      message: bidiPhone,
+      isPublic: true,
+      config,
+    })).toEqual({ kind: 'pending_review', reason: 'pii_detected' })
   })
 
   it('parses fixed-point amounts accurately for known and unknown currencies', () => {
