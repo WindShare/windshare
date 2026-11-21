@@ -65,7 +65,6 @@ export default defineConfig([
             '**/connectivity/**',
             '**/crypto/**',
             '**/network/**',
-            '!**/deploy/network/release.json',
             '**/output/**',
             '**/protocol/**',
             '**/receiver/**',

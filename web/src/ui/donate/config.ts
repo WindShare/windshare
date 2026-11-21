@@ -1,13 +1,16 @@
-import { backup_entry, link_host } from '../../../../deploy/network/release.json'
-
+// Hosted donation backend contract (services/donations/wrangler.toml).
+// Kept independent from deploy/network/release.json so forks and custom
+// networks do not misclassify their own frontend origins as allowed by
+// donate.windshare.cc CORS policy.
 export const DONATE_API_ORIGIN = 'https://donate.windshare.cc'
 export const AFDIAN_ORDER_URL = 'https://afdian.com/order/create?user_id=735de47ce57c11f1b2c95254001e7c00'
 export const KOFI_PAGE_URL = 'https://ko-fi.com/windshare'
-export const OFFICIAL_DONATE_PAGE_URL = `${new URL(backup_entry).origin}/donate`
+export const OFFICIAL_DONATE_PAGE_URL = 'https://windshare.cc/donate'
 
-export const OFFICIAL_DONATE_ORIGINS: ReadonlySet<string> = new Set(
-  [link_host, backup_entry].map(entry => new URL(entry).origin),
-)
+export const OFFICIAL_DONATE_ORIGINS: ReadonlySet<string> = new Set([
+  'https://ws.ourworld.top',
+  'https://windshare.cc',
+])
 
 export interface FallbackWallet {
   readonly ticker: string
@@ -40,11 +43,20 @@ export const SELF_HOST_FALLBACK_WALLETS: readonly FallbackWallet[] = Object.free
   },
 ])
 
-export function canCreateCryptoIntent(origin: string): boolean {
+export interface CryptoIntentOriginOptions {
+  readonly allowLocalhost?: boolean
+}
+
+export function canCreateCryptoIntent(
+  origin: string,
+  options: CryptoIntentOriginOptions = {},
+): boolean {
   if (OFFICIAL_DONATE_ORIGINS.has(origin)) return true
+  if (!options.allowLocalhost) return false
   try {
-    const { hostname } = new URL(origin)
-    return hostname === 'localhost' || hostname === '127.0.0.1'
+    const { protocol, hostname } = new URL(origin)
+    return (protocol === 'http:' || protocol === 'https:')
+      && (hostname === 'localhost' || hostname === '127.0.0.1')
   } catch {
     return false
   }

@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { AFDIAN_QR_MODULES, AFDIAN_QR_PATH, decodeAfdianQrMatrix } from '../../src/ui/donate/afdian-qr'
 import {
+  OFFICIAL_DONATE_ORIGINS,
+  OFFICIAL_DONATE_PAGE_URL,
+  canCreateCryptoIntent,
+} from '../../src/ui/donate/config'
+import {
   countCodePoints,
   formatDonationAmount,
   formatRelativeTime,
@@ -47,5 +52,31 @@ describe('donate pure formatting and validation helpers', () => {
       expect(matrix[x]).toBe(1)
     }
     expect(AFDIAN_QR_PATH.startsWith('M4 4h7v1h-7z')).toBe(true)
+  })
+})
+
+describe('donate crypto intent origin policy', () => {
+  it('allows only hosted official origins by default and rejects localhost in production builds', () => {
+    expect(OFFICIAL_DONATE_PAGE_URL).toBe('https://windshare.cc/donate')
+    expect([...OFFICIAL_DONATE_ORIGINS]).toEqual([
+      'https://ws.ourworld.top',
+      'https://windshare.cc',
+    ])
+
+    expect(canCreateCryptoIntent('https://ws.ourworld.top')).toBe(true)
+    expect(canCreateCryptoIntent('https://windshare.cc')).toBe(true)
+    expect(canCreateCryptoIntent('http://localhost:5173')).toBe(false)
+    expect(canCreateCryptoIntent('http://127.0.0.1:4173')).toBe(false)
+    expect(canCreateCryptoIntent('https://share.example.com')).toBe(false)
+    expect(canCreateCryptoIntent('https://ws.ourworld.top.evil.example')).toBe(false)
+    expect(canCreateCryptoIntent('not-a-url')).toBe(false)
+  })
+
+  it('allows HTTP(S) loopback origins only when explicitly enabled for local development', () => {
+    expect(canCreateCryptoIntent('http://localhost:5173', { allowLocalhost: true })).toBe(true)
+    expect(canCreateCryptoIntent('http://127.0.0.1:4173', { allowLocalhost: true })).toBe(true)
+    expect(canCreateCryptoIntent('https://localhost:8443', { allowLocalhost: true })).toBe(true)
+    expect(canCreateCryptoIntent('file://localhost', { allowLocalhost: true })).toBe(false)
+    expect(canCreateCryptoIntent('https://share.example.com', { allowLocalhost: true })).toBe(false)
   })
 })

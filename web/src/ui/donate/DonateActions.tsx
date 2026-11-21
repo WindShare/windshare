@@ -272,7 +272,7 @@ export function DonateActions({
   const defaultChannel: DonateChannel = language === 'zh-CN' ? 'afdian' : 'kofi'
   const activeChannel = selectedChannel ?? defaultChannel
   const hostedCryptoAllowed = typeof window !== 'undefined'
-    && canCreateCryptoIntent(window.location.origin)
+    && canCreateCryptoIntent(window.location.origin, { allowLocalhost: import.meta.env.DEV })
 
   const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
     let nextIndex: number | null = null
