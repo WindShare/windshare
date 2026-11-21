@@ -1,6 +1,6 @@
 import { ADMIN_APP_CSS, ADMIN_APP_JS, ADMIN_HTML } from './admin/assets'
 import { handleAdminApi } from './admin/routes'
-import { parseAllowedOrigins, type DonationsEnv } from './env'
+import { parseAllowedOrigins, resolveCryptoCheckoutApiKey, type DonationsEnv } from './env'
 import {
   DONATION_WALL_INSTANCE_NAME,
   MAX_CRYPTO_INTENT_BODY_BYTES,
@@ -130,7 +130,8 @@ async function handleCreateCryptoIntent(
   }
   const cors = cryptoCorsHeaders(origin)
 
-  if (!env.NOWPAYMENTS_API_KEY) {
+  const nowPaymentsApiKey = resolveCryptoCheckoutApiKey(env)
+  if (nowPaymentsApiKey === null) {
     return jsonResponse({ error: 'crypto_not_configured' }, 503, cors)
   }
   if (!hasMediaType(request, 'application/json')) {
@@ -194,7 +195,7 @@ async function handleCreateCryptoIntent(
 
   const apiOrigin = normalizeApiOrigin(env.DONATE_API_ORIGIN)
   const invoice = await createNowPaymentsInvoice({
-    apiKey: env.NOWPAYMENTS_API_KEY,
+    apiKey: nowPaymentsApiKey,
     priceAmountUsd: Number(formatUsdMinorForInvoice(intent.requestedUsdMinor)),
     orderId: intent.intentId,
     ipnCallbackUrl: `${apiOrigin}/v1/donations/webhooks/nowpayments`,

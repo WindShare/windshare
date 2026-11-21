@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseAllowedOrigins, type DonationsEnv } from '../src/env'
+import { parseAllowedOrigins, resolveCryptoCheckoutApiKey, type DonationsEnv } from '../src/env'
 import {
   MIN_PUBLIC_CNY_MINOR,
   MIN_PUBLIC_USD_MINOR,
@@ -13,7 +13,13 @@ import {
   parseFixedPointAmount,
   sanitizePlainText,
 } from '../src/sanitize'
-import { constantTimeEqual, hmacSha256Hex, hmacSha512Hex, md5Hex } from '../src/verify'
+import {
+  computeNowPaymentsSignature,
+  constantTimeEqual,
+  hmacSha256Hex,
+  hmacSha512Hex,
+  md5Hex,
+} from '../src/verify'
 
 function createStubEnv(): DonationsEnv {
   const namespace = {
@@ -150,5 +156,151 @@ describe('donations worker scaffold', () => {
 
     const missing = await handleWorkerFetch(new Request('https://donate.windshare.cc/unknown'), env)
     expect(missing.status).toBe(404)
+  })
+
+  it('requires both NOWPayments secrets for crypto checkout while allowing IPN settlement without API key', async () => {
+    const allowedOrigin = 'https://windshare.cc'
+    const apiOrigin = 'https://donate.windshare.cc'
+    const ipnSecret = 'test-nowpayments-ipn-secret'
+    const apiKey = 'test-nowpayments-api-key'
+
+    let doCalls = 0
+    let outboundCalls = 0
+    let committedExternalId: string | null = null
+
+    const createEnv = (overrides: Partial<DonationsEnv>): DonationsEnv => {
+      const namespace = {
+        idFromName: (name: string) => ({ toString: () => name }),
+        get: () => ({
+          fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+            doCalls += 1
+            const req = input instanceof Request ? input : new Request(input, init)
+            const pathname = new URL(req.url).pathname
+            if (pathname === '/internal/crypto-intents') {
+              return Response.json(
+                {
+                  intent: {
+                    intentId: 'intent-ready-1',
+                    displayName: 'Crypto Fan',
+                    message: 'Thanks!',
+                    requestedUsdMinor: 1000,
+                    returnOrigin: allowedOrigin,
+                    createdAt: 1_700_000_000,
+                    expiresAt: 1_700_604_800,
+                  },
+                },
+                { status: 201 },
+              )
+            }
+            if (pathname.startsWith('/internal/crypto-intents/')) {
+              return Response.json({ intent: null }, { status: 200 })
+            }
+            if (pathname === '/internal/donations/commit') {
+              const body = await req.json() as { input: { externalId: string } }
+              committedExternalId = body.input.externalId
+              return Response.json(
+                {
+                  record: {
+                    id: 'don-1',
+                    provider: 'nowpayments',
+                    externalId: body.input.externalId,
+                    displayName: null,
+                    amountMinor: 1000,
+                    currency: 'USD',
+                    minorDigits: 2,
+                    message: null,
+                    visibility: { kind: 'published' },
+                    donatedAt: 1_700_000_000,
+                  },
+                  deduplicated: false,
+                },
+                { status: 200 },
+              )
+            }
+            return Response.json({ error: 'not_found' }, { status: 404 })
+          },
+        }),
+      } as unknown as DurableObjectNamespace
+
+      return {
+        ...createStubEnv(),
+        DONATION_WALL: namespace,
+        ...overrides,
+      }
+    }
+
+    const postIntent = (env: DonationsEnv) => handleWorkerFetch(
+      new Request(`${apiOrigin}/v1/donations/crypto-intents`, {
+        method: 'POST',
+        headers: {
+          Origin: allowedOrigin,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ amountUsd: '10', displayName: 'Crypto Fan', message: 'Thanks!' }),
+      }),
+      env,
+      {
+        nowSec: () => 1_700_000_000,
+        fetchFn: async () => {
+          outboundCalls += 1
+          return Response.json({ invoice_url: 'https://nowpayments.io/payment/?iid=intent-ready-1' })
+        },
+      },
+    )
+
+    const partialConfigs: Array<Partial<DonationsEnv>> = [
+      {},
+      { NOWPAYMENTS_API_KEY: apiKey },
+      { NOWPAYMENTS_API_KEY: apiKey, NOWPAYMENTS_IPN_SECRET: '' },
+      { NOWPAYMENTS_IPN_SECRET: ipnSecret },
+      { NOWPAYMENTS_API_KEY: '', NOWPAYMENTS_IPN_SECRET: ipnSecret },
+    ]
+    for (const partial of partialConfigs) {
+      const env = createEnv(partial)
+      expect(resolveCryptoCheckoutApiKey(env)).toBeNull()
+      const res = await postIntent(env)
+      expect(res.status).toBe(503)
+      expect(res.headers.get('access-control-allow-origin')).toBe(allowedOrigin)
+      expect(res.headers.get('cache-control')).toBe('no-store')
+      expect(await res.json()).toEqual({ error: 'crypto_not_configured' })
+    }
+    expect(doCalls).toBe(0)
+    expect(outboundCalls).toBe(0)
+
+    // In-flight IPN callbacks still settle when only NOWPAYMENTS_IPN_SECRET is configured.
+    const settleOnlyEnv = createEnv({ NOWPAYMENTS_IPN_SECRET: ipnSecret })
+    const ipnPayload = {
+      payment_id: 900001,
+      payment_status: 'finished',
+      order_id: 'intent-inflight-1',
+      price_amount: 10,
+      price_currency: 'usd',
+    }
+    const ipnRes = await handleWorkerFetch(
+      new Request(`${apiOrigin}/v1/donations/webhooks/nowpayments`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-nowpayments-sig': computeNowPaymentsSignature(ipnPayload, ipnSecret),
+        },
+        body: JSON.stringify(ipnPayload),
+      }),
+      settleOnlyEnv,
+      { nowSec: () => 1_700_000_000 },
+    )
+    expect(ipnRes.status).toBe(200)
+    expect(await ipnRes.json()).toEqual({ ok: true })
+    expect(committedExternalId).toBe('900001')
+
+    // Complete configuration succeeds end-to-end.
+    const completeEnv = createEnv({ NOWPAYMENTS_API_KEY: apiKey, NOWPAYMENTS_IPN_SECRET: ipnSecret })
+    expect(resolveCryptoCheckoutApiKey(completeEnv)).toBe(apiKey)
+    const okRes = await postIntent(completeEnv)
+    expect(okRes.status).toBe(201)
+    expect(await okRes.json()).toEqual({
+      intentId: 'intent-ready-1',
+      invoiceUrl: 'https://nowpayments.io/payment/?iid=intent-ready-1',
+    })
+    expect(outboundCalls).toBe(1)
   })
 })
