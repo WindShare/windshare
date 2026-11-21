@@ -4,6 +4,7 @@ package receive
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/windshare/windshare/adapters/filesystem"
@@ -48,8 +49,10 @@ func TestRedownloadPreservesAutomaticContinuationAndExactTaskSelection(t *testin
 		t.Fatal(err)
 	}
 	wrongSelection := getReopenSelection(t, false, []string{"unrelated"})
-	if _, err := resolveGetOutputOperation(ctx, wrong, &fixedGetShapeResolver{decision: shape}, wrongSelection, OutputResumeExisting, original.Intent.OperationID()); err == nil {
-		t.Fatal("operation ID accepted a different selection")
+	// A retained ID chosen with another link or selection is a request that
+	// matches no saved download, not a failed transfer session.
+	if _, err := resolveGetOutputOperation(ctx, wrong, &fixedGetShapeResolver{decision: shape}, wrongSelection, OutputResumeExisting, original.Intent.OperationID()); !errors.Is(err, ErrRetainedOutputMissing) {
+		t.Fatalf("operation ID with a different selection = %v, want retained output missing", err)
 	}
 	if err := wrong.Close(); err != nil {
 		t.Fatal(err)

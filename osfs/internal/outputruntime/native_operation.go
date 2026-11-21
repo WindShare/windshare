@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/windshare/windshare/core/transfer"
@@ -79,6 +80,10 @@ func (operation *Operation) close() error {
 	return err
 }
 
+// errOtherSelection rejects a retained operation reached by ID with another
+// link or selection. Selecting by ID reports it as no matching saved download.
+var errOtherSelection = fmt.Errorf("%w: retained operation belongs to another selection", transfer.ErrInvalidOutputBinding)
+
 func (authority *Authority) LookupActive(
 	ctx context.Context,
 	selection transfer.SelectionSpec,
@@ -144,6 +149,10 @@ func (authority *Authority) SelectOperation(ctx context.Context, selection trans
 		return ActiveLookup{authority: authority, kind: ActiveLookupCreateReady, admission: admission}, nil
 	case checkpointstore.ActiveLookupReopenable:
 		operation, stateReason, err := authority.reopenOperationLocked(ctx, selection, key, &registryLookup)
+		if selector.Kind() == receivecontract.OperationByID && errors.Is(err, errOtherSelection) {
+			authority.stage = authorityStageLookupStopped
+			return ActiveLookup{authority: authority, kind: ActiveLookupNotFound}, nil
+		}
 		if err != nil {
 			return ActiveLookup{}, diagnoseFilesystemOutputFailure(
 				FilesystemOutputFailureOperationAcquisition, err,
@@ -159,11 +168,7 @@ func (authority *Authority) SelectOperation(ctx context.Context, selection trans
 		return ActiveLookup{authority: authority, kind: ActiveLookupReopened, operation: operation}, nil
 	case checkpointstore.ActiveLookupShareStopped:
 		authority.stage = authorityStageLookupStopped
-		intent, err := registryLookup.Record().VerifyIntent(transfer.DecodeReceiveIntent)
-		if err != nil || !sameSelection(intent.SelectionSpec(), selection) {
-			return ActiveLookup{}, errors.Join(transfer.ErrInvalidOutputBinding, err)
-		}
-		return ActiveLookup{}, ErrOutputShareStopped
+		return authority.stoppedShareLookupLocked(registryLookup.Record(), selection, selector)
 	case checkpointstore.ActiveLookupAlreadyRunning:
 		authority.stage = authorityStageLookupStopped
 		return ActiveLookup{authority: authority, kind: ActiveLookupAlreadyRunning}, nil
@@ -184,6 +189,26 @@ func (authority *Authority) SelectOperation(ctx context.Context, selection trans
 	default:
 		return ActiveLookup{}, transfer.ErrInvalidOutputBinding
 	}
+}
+
+// stoppedShareLookupLocked never reopens a stopped share; an ID chosen with
+// another link or selection matches no saved download.
+func (authority *Authority) stoppedShareLookupLocked(
+	record checkpointmodel.OrdinaryOperationRecord,
+	selection transfer.SelectionSpec,
+	selector receivecontract.OperationSelection,
+) (ActiveLookup, error) {
+	intent, err := record.VerifyIntent(transfer.DecodeReceiveIntent)
+	if err != nil {
+		return ActiveLookup{}, errors.Join(transfer.ErrInvalidOutputBinding, err)
+	}
+	if !sameSelection(intent.SelectionSpec(), selection) {
+		if selector.Kind() == receivecontract.OperationByID {
+			return ActiveLookup{authority: authority, kind: ActiveLookupNotFound}, nil
+		}
+		return ActiveLookup{}, transfer.ErrInvalidOutputBinding
+	}
+	return ActiveLookup{}, ErrOutputShareStopped
 }
 
 func (authority *Authority) selectLiveOperationLocked(selection transfer.SelectionSpec, selector receivecontract.OperationSelection, key checkpointmodel.ActiveOperationKey, operationID receivecontract.OperationID) (ActiveLookup, error) {
@@ -228,7 +253,10 @@ func (authority *Authority) reopenOperationLocked(
 	// Choosing an ID with the wrong link or selection is a request error, not
 	// evidence that the retained operation lost ownership of its destination.
 	if err == nil && !sameSelection(intent.SelectionSpec(), selection) {
-		return nil, 0, errors.Join(transfer.ErrInvalidOutputBinding, lease.Close())
+		if closeErr := lease.Close(); closeErr != nil {
+			return nil, 0, errors.Join(transfer.ErrInvalidOutputBinding, closeErr)
+		}
+		return nil, 0, errOtherSelection
 	}
 	if err != nil || !direct ||
 		!validNamedReservation(reservation, intent.ArtifactSpec(), authority.binding) ||
