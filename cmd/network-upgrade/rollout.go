@@ -26,7 +26,10 @@ const (
 	probeMaxAttempts = 8
 )
 
-var errDeferred = errors.New("node is still draining, upgrade deferred")
+var (
+	errDeferred     = errors.New("node is still draining, upgrade deferred")
+	errDrainExpired = errors.New("drain deadline expired before node became idle")
+)
 
 type maintenanceTarget interface {
 	policy(context.Context, string) (drainStatus, error)
@@ -36,7 +39,20 @@ type maintenanceTarget interface {
 
 type rollout struct {
 	maintenanceTarget
-	wait func(context.Context, time.Duration) error
+	wait           func(context.Context, time.Duration) error
+	drainTimeout   time.Duration
+	attemptTimeout time.Duration
+}
+
+func timeoutOr(override, fallback time.Duration) time.Duration {
+	if override > 0 {
+		return override
+	}
+	return fallback
+}
+
+func isDrainExpired(parent, drain context.Context) bool {
+	return parent.Err() == nil && errors.Is(context.Cause(drain), errDrainExpired)
 }
 
 func (r rollout) upgrade(ctx context.Context, log *slog.Logger) error {
@@ -49,13 +65,23 @@ func (r rollout) upgrade(ctx context.Context, log *slog.Logger) error {
 		return errors.Join(err, release)
 	}
 	log.Info("maintenance drain requested", "policy_version", status.Version)
-	drain, cancel := context.WithTimeout(ctx, drainDeadline)
-	start, err := r.enter(drain, status)
-	cancel()
+	start, err := r.enter(ctx, status)
 	restore := context.WithoutCancel(ctx)
 	if err != nil {
 		log.Info("node remains on current release", "error", err)
-		return errors.Join(err, r.release(restore, log, time.Now().Add(releaseBudget)))
+		if releaseErr := r.release(restore, log, time.Now().Add(releaseBudget)); releaseErr != nil {
+			log.Error("maintenance hold release failed, hold may remain active", "error", releaseErr)
+			return errors.Join(err, releaseErr)
+		}
+		// Only a cleanly released drain timeout may exit busyExit (75); any failed
+		// cleanup leaves a fleet-blocking hold and must exit fatal (1).
+		if errors.Is(err, errDrainExpired) {
+			if ctx.Err() != nil {
+				return errors.Join(err, ctx.Err())
+			}
+			return errDeferred
+		}
+		return err
 	}
 	log.Info("local admission fenced")
 	return r.finish(ctx, log, start, "switch")
@@ -91,35 +117,57 @@ func (r rollout) finish(ctx context.Context, log *slog.Logger, start time.Time, 
 	return errors.Join(err, r.release(restore, log, rollbackUntil.Add(releaseBudget)))
 }
 
-func (r rollout) enter(ctx context.Context, status drainStatus) (time.Time, error) {
-	ticks := time.NewTicker(statusPoll)
-	defer ticks.Stop()
+func (r rollout) enter(parent context.Context, status drainStatus) (time.Time, error) {
+	// Wrap DeadlineExceeded in the timeout cause so HTTP clients returning either
+	// ctx.Err() or context.Cause(ctx) stay distinguishable from non-timeout errors.
+	drainCause := fmt.Errorf("%w: %w", errDrainExpired, context.DeadlineExceeded)
+	drain, cancel := context.WithTimeoutCause(parent, timeoutOr(r.drainTimeout, drainDeadline), drainCause)
+	defer cancel()
 	for {
 		if !status.Held {
 			return time.Time{}, errors.New("maintenance ownership changed")
 		}
 		if status.Confirmed {
-			start := time.Now()
-			attempt, cancel := context.WithTimeout(ctx, enterTimeout)
-			err := r.local(attempt, "enter", strconv.FormatUint(status.Version, 10), strconv.FormatInt(reconnectBudget.Milliseconds(), 10))
-			cancel()
-			if err == nil {
-				return start, nil
-			}
-			if !busy(err) {
-				return time.Time{}, err
+			start, entered, err := r.tryEnter(parent, drain, status.Version)
+			if err != nil || entered {
+				return start, err
 			}
 		}
-		select {
-		case <-ctx.Done():
-			return time.Time{}, errors.Join(errDeferred, ctx.Err())
-		case <-ticks.C:
+		if err := r.sleep(drain, statusPoll); err != nil {
+			if isDrainExpired(parent, drain) {
+				return time.Time{}, errDrainExpired
+			}
+			return time.Time{}, err
 		}
 		var err error
-		if status, err = r.policy(ctx, "status"); err != nil {
+		if status, err = r.policy(drain, "status"); err != nil {
+			if isDrainExpired(parent, drain) && errors.Is(err, context.DeadlineExceeded) {
+				return time.Time{}, errDrainExpired
+			}
 			return time.Time{}, err
 		}
 	}
+}
+
+func (r rollout) tryEnter(parent, drain context.Context, version uint64) (time.Time, bool, error) {
+	start := time.Now()
+	attempt, cancel := context.WithTimeout(drain, timeoutOr(r.attemptTimeout, enterTimeout))
+	err := r.local(attempt, "enter", strconv.FormatUint(version, 10), strconv.FormatInt(reconnectBudget.Milliseconds(), 10))
+	attemptErr := attempt.Err()
+	cancel()
+	if err == nil {
+		return start, true, nil
+	}
+	if busy(err) {
+		return time.Time{}, false, nil
+	}
+	if attemptErr != nil && isDrainExpired(parent, drain) {
+		return time.Time{}, false, errDrainExpired
+	}
+	if parent.Err() != nil && !errors.Is(err, parent.Err()) {
+		return time.Time{}, false, errors.Join(err, parent.Err())
+	}
+	return time.Time{}, false, err
 }
 
 func busy(err error) bool {
