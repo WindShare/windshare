@@ -1,12 +1,12 @@
 # P2 — Authority, accounts, and fair relaying
 
-Part of the [Global Network Plan](global-network.md#6-phases).
+Part of the [Global Network Plan](../../plans/global-service/global-network.md#6-phases).
 
 Account admission and fair relaying enable mainland service and public promotion.
 
 - Authority: a new Cloudflare Worker host (`relay-rust/crates/network-authority`, Durable Object
   SQLite, reusing `relay-access`) at `authority.windshare.cc`. Clients and nodes always call
-  `api.<filed-domain>` (see [Hosts and domains](global-network.md#4-hosts-and-domains)), because `workers.dev` is
+  `api.<filed-domain>` (see [Hosts and domains](../../plans/global-service/global-network.md#4-hosts-and-domains)), because `workers.dev` is
   unreachable from mainland China.
 - The first deployment prints a one-time initialization link: open it, set the administrator's
   username and password, and land signed in. The link expires once used.

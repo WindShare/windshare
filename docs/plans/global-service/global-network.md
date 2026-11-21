@@ -368,7 +368,8 @@ Directory payload, signed as exact bytes with Ed25519 so no JSON canonicalizatio
 
 Account admission and fair relaying enable mainland service and public promotion.
 
-See [P2 implementation plan](p2-authority-accounts-fair-relaying.md).
+Implementation status (2026-11-21): implemented and archived in
+[P2 implementation plan](../../.archive/2026.11.21/p2-authority-accounts-fair-relaying.md).
 
 ### P3 — Console onboarding and fleet automation
 
