@@ -3,6 +3,8 @@ type FrameDecoder = Pick<HTMLVideoElement,
   'addEventListener' | 'removeEventListener' |
   'requestVideoFrameCallback' | 'cancelVideoFrameCallback'>
 
+type SeekPhase = 'idle' | 'seeking' | 'seeked' | 'stale-while-seeking' | 'reseeked'
+
 // The range preview selects an exact sample PTS; browser media pipelines can
 // round that rational timestamp to microseconds.
 const MEDIA_TIME_ROUNDING_SECONDS = 1 / 1_000_000
@@ -32,6 +34,7 @@ export function observeVideoFrame(
   let closed = false
   let callbackId: number | undefined
   let deadline: ReturnType<typeof setTimeout> | undefined
+  let seekPhase: SeekPhase = 'idle'
 
   const close = () => {
     closed = true
@@ -40,6 +43,7 @@ export function observeVideoFrame(
     pauseDeadline()
     visibility?.removeEventListener('visibilitychange', visibilityChanged)
     video.removeEventListener('loadedmetadata', seek)
+    video.removeEventListener('seeked', seekCompleted)
     video.removeEventListener('error', fail)
   }
   const finish = () => {
@@ -66,13 +70,41 @@ export function observeVideoFrame(
     pauseDeadline()
     armDeadline()
   }
-  const seek = () => {
-    if (closed) return
+  const requestFrame = () => {
+    if (closed || callbackId !== undefined) return
     try {
-      if (video.currentTime !== frameTimeSeconds) video.currentTime = frameTimeSeconds
+      callbackId = video.requestVideoFrameCallback(frame)
     } catch {
       fail()
     }
+  }
+  const assignCurrentTime = () => {
+    try {
+      video.currentTime = frameTimeSeconds
+    } catch {
+      fail()
+    }
+  }
+  const reseek = () => {
+    // Chromium uses a one-shot compositor callback per requestVideoFrameCallback.
+    // If an earlier frame consumes it while a paused seek presents the target
+    // frame, re-arming afterwards never fires unless re-sought once.
+    seekPhase = 'reseeked'
+    requestFrame()
+    if (closed) return
+    assignCurrentTime()
+  }
+  const seek = () => {
+    if (closed) return
+    requestFrame()
+    if (closed || seekPhase !== 'idle' || video.currentTime === frameTimeSeconds) return
+    seekPhase = 'seeking'
+    assignCurrentTime()
+  }
+  const seekCompleted = () => {
+    if (closed) return
+    if (seekPhase === 'seeking') seekPhase = 'seeked'
+    else if (seekPhase === 'stale-while-seeking') reseek()
   }
   const frame: VideoFrameRequestCallback = (_now, metadata) => {
     if (closed) return
@@ -84,20 +116,19 @@ export function observeVideoFrame(
     // loadeddata/seeked can precede the compositor's target frame. A callback
     // can also still describe the initial frame after currentTime has changed.
     requestFrame()
-  }
-  const requestFrame = () => {
-    try {
-      callbackId = video.requestVideoFrameCallback(frame)
-    } catch {
-      fail()
-    }
+    if (closed) return
+    if (seekPhase === 'seeking') seekPhase = 'stale-while-seeking'
+    else if (seekPhase === 'seeked') reseek()
   }
 
   video.addEventListener('loadedmetadata', seek)
+  video.addEventListener('seeked', seekCompleted)
   video.addEventListener('error', fail)
   visibility?.addEventListener('visibilitychange', visibilityChanged)
   armDeadline()
-  requestFrame()
+  // Defer registration until seek() when a seek is needed so the pre-seek
+  // initial frame cannot consume the one-shot compositor callback early.
   if (video.readyState >= video.HAVE_METADATA) seek()
+  else if (video.currentTime === frameTimeSeconds) requestFrame()
   return close
 }
