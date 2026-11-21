@@ -67,6 +67,24 @@ test('the Worker runs password hashing and rate limits across edge and Durable O
   const payload = decode(release.snapshot.payload), grant = decode(release.snapshot.certificate.payload);
   const usable = Date.now() + 300_000 >= Date.parse(payload.issued_at) && Date.now() < Math.min(Date.parse(grant.expires_at), Date.parse(payload.expires_at) + 7 * 86400_000);
   assert.equal(cold.status, usable ? 200 : 503);
+  // Unknown paths under fleet prefixes return 404 without entering fleet dispatch or directory import.
+  for (const unknownPath of ['/v1/vantage/unknown', '/v1/maintenance/unknown']) {
+    const unknown = await worker.fetch('https://localhost' + unknownPath, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    assert.equal(unknown.status, 404, unknownPath);
+  }
+  const unknownInternal = await object.fetch('https://authority/internal/fleet/unknown', {
+    method: 'POST',
+    body: '{}',
+  });
+  assert.equal(unknownInternal.status, 404);
+  const wrongMethod = await worker.fetch('https://localhost/v1/admin/nodes/manage', {
+    method: 'GET',
+  });
+  assert.equal(wrongMethod.status, 404);
   const tick = await object.fetch('https://authority/internal/fleet/tick', { method: 'POST', body: '{}' });
   assert.equal(tick.status, 200);
   assert.equal(tick.headers.get('x-directory-published'), '1');

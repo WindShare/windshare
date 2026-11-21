@@ -110,12 +110,8 @@ impl DurableObject for NetworkAuthority {
         } else {
             return Response::error("request too large", 413);
         };
-        if request.path().starts_with("/internal/fleet/")
-            || request.path().starts_with("/v1/vantage/")
-            || request.path().starts_with("/v1/maintenance/")
-            || request.path() == "/v1/admin/nodes/manage"
-        {
-            return self.fleet(&request, &bytes).await;
+        if let Some(route) = fleet::Route::parse(&request.path()) {
+            return self.fleet(route, &request, &bytes).await;
         }
         match request.path().as_str() {
             "/v1/accounts/email" => return self.email(&request, &bytes, None).await,

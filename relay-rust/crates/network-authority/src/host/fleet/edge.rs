@@ -1,4 +1,7 @@
-use super::{DIRECTORY_PATH, internal, release};
+use super::{
+    DIRECTORY_PATH, internal, release,
+    route::{AdminRoute, Route},
+};
 use crate::fleet::{
     Promote,
     descriptor::{self, MAX_DESCRIPTOR},
@@ -110,7 +113,7 @@ pub(in crate::host) async fn handle_edge(mut req: Request, env: &Env) -> Result<
     let cookie = req.headers().get("Cookie")?;
     let csrf = req.headers().get("X-CSRF-Token")?;
     let auth = (cookie.as_deref(), csrf.as_deref());
-    let mut verified = internal(env, "prepare", auth, &json!({})).await?;
+    let mut verified = internal(env, Route::Admin(AdminRoute::Prepare), auth, &json!({})).await?;
     if verified.status_code() != 200 {
         return Ok(verified);
     }
@@ -130,7 +133,7 @@ pub(in crate::host) async fn handle_edge(mut req: Request, env: &Env) -> Result<
         }
         return internal(
             env,
-            "promote",
+            Route::Admin(AdminRoute::Promote),
             auth,
             &json!({"command":command,"observed_digest":crate::fleet::publication::digest(&expected).map_err(failure)?}),
         )
@@ -184,7 +187,7 @@ pub(in crate::host) async fn handle_edge(mut req: Request, env: &Env) -> Result<
         operator: "official".into(),
         capacity_mbps: command.capacity_mbps,
     };
-    internal(env, "stage", auth, &spec).await
+    internal(env, Route::Admin(AdminRoute::Stage), auth, &spec).await
 }
 fn invalid() -> Result<Response> {
     routes::fault(&Fault::Invalid).map_err(failure)
