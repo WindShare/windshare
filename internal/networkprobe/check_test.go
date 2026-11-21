@@ -5,6 +5,9 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -109,5 +112,116 @@ func TestBindingRetriesLossAndFallsBackToReachableFamily(t *testing.T) {
 	defer winner.Close()
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func newTestShares(t *testing.T) [OriginCount]SyntheticShare {
+	t.Helper()
+	var shares [OriginCount]SyntheticShare
+	for i := range shares {
+		share, err := NewShare()
+		if err != nil {
+			t.Fatal(err)
+		}
+		shares[i] = share
+	}
+	return shares
+}
+
+func TestCheckRelayOriginsRunsInParallel(t *testing.T) {
+	t.Parallel()
+	origins := []string{"https://one.example", "https://two.example", "https://three.example"}
+	tickets := []string{"ticket-0", "ticket-1", "ticket-2"}
+	shares := newTestShares(t)
+
+	started := make(chan struct{}, OriginCount)
+	release := make(chan struct{})
+	var (
+		mu   sync.Mutex
+		seen = make(map[string]string, OriginCount)
+	)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- checkRelayOrigins(ctx, origins, tickets, shares, func(originCtx context.Context, share SyntheticShare, origin, ticket string) error {
+			mu.Lock()
+			seen[origin] = ticket
+			mu.Unlock()
+			var matched bool
+			for i, wantOrigin := range origins {
+				if origin == wantOrigin && share.ID() == shares[i].ID() && ticket == tickets[i] {
+					matched = true
+				}
+			}
+			if !matched {
+				return errors.New("mismatched origin, share, or ticket")
+			}
+			started <- struct{}{}
+			select {
+			case <-release:
+				return nil
+			case <-originCtx.Done():
+				return originCtx.Err()
+			}
+		})
+	}()
+
+	// All three exchanges must be in flight simultaneously before any completes.
+	for range OriginCount {
+		select {
+		case <-started:
+		case <-ctx.Done():
+			t.Fatal("origin probes did not start concurrently")
+		}
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("checkRelayOrigins failed: %v", err)
+	}
+	if len(seen) != OriginCount {
+		t.Fatalf("checked %d origins, want %d", len(seen), OriginCount)
+	}
+}
+
+func TestCheckRelayOriginsCancelsSiblingsWaitsForCleanupAndPreservesRootCause(t *testing.T) {
+	t.Parallel()
+	origins := []string{"https://one.example", "https://two.example", "https://three.example"}
+	tickets := []string{"ticket-0", "ticket-1", "ticket-2"}
+	shares := newTestShares(t)
+	rootErr := errors.New("origin policy rejected")
+
+	siblingsReady := make(chan struct{}, OriginCount-1)
+	var cleanupsFinished atomic.Int32
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+
+	err := checkRelayOrigins(ctx, origins, tickets, shares, func(originCtx context.Context, _ SyntheticShare, origin, _ string) error {
+		if origin == origins[1] {
+			for range OriginCount - 1 {
+				select {
+				case <-siblingsReady:
+				case <-originCtx.Done():
+					return originCtx.Err()
+				}
+			}
+			return rootErr
+		}
+		siblingsReady <- struct{}{}
+		<-originCtx.Done()
+		// Simulate bounded STOP cleanup running after sibling cancellation.
+		time.Sleep(15 * time.Millisecond)
+		cleanupsFinished.Add(1)
+		return originCtx.Err()
+	})
+	if !errors.Is(err, rootErr) {
+		t.Fatalf("error = %v, want root cause %v", err, rootErr)
+	}
+	if !strings.Contains(err.Error(), origins[1]) {
+		t.Fatalf("error = %q, want failing origin %q", err.Error(), origins[1])
+	}
+	if got := cleanupsFinished.Load(); got != OriginCount-1 {
+		t.Fatalf("finished %d sibling cleanups before return, want %d", got, OriginCount-1)
 	}
 }

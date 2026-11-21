@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -43,10 +44,12 @@ func newTestChallenge(purpose v2.ChallengePurpose) v2.Challenge {
 	return challenge
 }
 
-func startStalledJoinRelay(t *testing.T, hangStop bool) (*httptest.Server, *atomic.Bool, *atomic.Bool) {
+func startStalledJoinRelay(t *testing.T, hangStop bool) (*httptest.Server, *atomic.Bool, *atomic.Bool, <-chan struct{}) {
 	t.Helper()
 	var stopAttempted atomic.Bool
 	var stopCompleted atomic.Bool
+	joinStalled := make(chan struct{})
+	var signalJoin sync.Once
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v2/ws", func(w http.ResponseWriter, r *http.Request) {
 		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: []string{"*"}})
@@ -91,6 +94,7 @@ func startStalledJoinRelay(t *testing.T, hangStop bool) (*httptest.Server, *atom
 			}
 		case "WS2J":
 			// Stall the receiver path so the probe hits its exchange deadline.
+			signalJoin.Do(func() { close(joinStalled) })
 			<-ctx.Done()
 		case "WS2X":
 			stopAttempted.Store(true)
@@ -118,11 +122,11 @@ func startStalledJoinRelay(t *testing.T, hangStop bool) (*httptest.Server, *atom
 	})
 	server := httptest.NewTLSServer(mux)
 	t.Cleanup(server.Close)
-	return server, &stopAttempted, &stopCompleted
+	return server, &stopAttempted, &stopCompleted, joinStalled
 }
 
 func TestSyntheticShareTimeoutStopsShareWithinOuterDeadline(t *testing.T) {
-	server, stopAttempted, stopCompleted := startStalledJoinRelay(t, false)
+	server, stopAttempted, stopCompleted, _ := startStalledJoinRelay(t, false)
 	share, err := NewShare()
 	if err != nil {
 		t.Fatal(err)
@@ -141,7 +145,7 @@ func TestSyntheticShareTimeoutStopsShareWithinOuterDeadline(t *testing.T) {
 }
 
 func TestSyntheticShareHangingStopDoesNotOverrunOuterDeadline(t *testing.T) {
-	server, stopAttempted, stopCompleted := startStalledJoinRelay(t, true)
+	server, stopAttempted, stopCompleted, _ := startStalledJoinRelay(t, true)
 	share, err := NewShare()
 	if err != nil {
 		t.Fatal(err)
@@ -165,5 +169,42 @@ func TestSyntheticShareHangingStopDoesNotOverrunOuterDeadline(t *testing.T) {
 	// If defer Stop ignored the outer deadline, it would add stopCleanupBudget (3s).
 	if elapsed >= timeout+stopCleanupBudget/2 {
 		t.Fatalf("exchange overran outer deadline: elapsed=%v, timeout=%v", elapsed, timeout)
+	}
+}
+
+func TestCheckRelayOriginsFailFastStopsRegisteredSiblings(t *testing.T) {
+	server, stopAttempted, stopCompleted, joinStalled := startStalledJoinRelay(t, false)
+	shares := newTestShares(t)
+	origins := []string{"https://one.example", "https://two.example", "https://three.example"}
+	tickets := []string{"ticket-0", "ticket-1", "ticket-2"}
+	rootErr := errors.New("origin rejected")
+
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+
+	// Origin 0 registers and stalls in DialReceiver; once the server observes
+	// WS2J, Origin 1 fails fast so we verify canceling the sibling still runs
+	// its defer STOP cleanly inside the outer deadline.
+	err := checkRelayOrigins(ctx, origins, tickets, shares, func(originCtx context.Context, share SyntheticShare, origin, ticket string) error {
+		switch origin {
+		case origins[0]:
+			return share.exchange(originCtx, server.Client(), server.URL, origin, ticket)
+		case origins[1]:
+			select {
+			case <-joinStalled:
+				return rootErr
+			case <-originCtx.Done():
+				return originCtx.Err()
+			}
+		default:
+			<-originCtx.Done()
+			return originCtx.Err()
+		}
+	})
+	if !errors.Is(err, rootErr) {
+		t.Fatalf("error = %v, want %v", err, rootErr)
+	}
+	if !stopAttempted.Load() || !stopCompleted.Load() {
+		t.Fatalf("sibling stop attempted=%v completed=%v, want both true", stopAttempted.Load(), stopCompleted.Load())
 	}
 }

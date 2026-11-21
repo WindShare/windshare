@@ -518,3 +518,73 @@ func TestSwitchAndVerifyBacksOffAndCapsProbeAttempts(t *testing.T) {
 		t.Fatalf("total backoff %v must fit within switchBudget %v", totalDelay, switchBudget)
 	}
 }
+
+func TestSwitchAndVerifyCapsSingleAttemptAndRetriesWithinStageBudget(t *testing.T) {
+	t.Parallel()
+	if verifyAttemptTimeout <= 0 || verifyAttemptTimeout >= switchBudget || verifyAttemptTimeout >= rollbackBudget {
+		t.Fatalf("verifyAttemptTimeout %v must be positive and fit strictly inside switch (%v) and rollback (%v) budgets",
+			verifyAttemptTimeout, switchBudget, rollbackBudget)
+	}
+	discard := slog.New(slog.NewTextHandler(io.Discard, nil))
+	perAttempt := 30 * time.Millisecond
+	stageUntil := time.Now().Add(2 * time.Second)
+	var attempts int
+	f := &fakeTarget{held: true, version: 82}
+	f.onStep = func(ctx context.Context, step string) error {
+		if step != "probe" {
+			return nil
+		}
+		attempts++
+		deadline, ok := ctx.Deadline()
+		if !ok || !deadline.Before(stageUntil) {
+			t.Errorf("attempt %d deadline %v (ok=%v) was not bounded below stage deadline %v", attempts, deadline, ok, stageUntil)
+		}
+		if attempts == 1 {
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		return nil
+	}
+	r := rollout{
+		maintenanceTarget: f,
+		verifyTimeout:     perAttempt,
+		wait:              func(ctx context.Context, _ time.Duration) error { return ctx.Err() },
+	}
+	if err := r.switchAndVerify(t.Context(), discard, "switch", stageUntil); err != nil {
+		t.Fatalf("switchAndVerify failed after single stalled attempt: %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("probe attempts = %d, want 2", attempts)
+	}
+}
+
+func TestSwitchAndVerifyAttemptTimeoutDoesNotExtendStageDeadline(t *testing.T) {
+	t.Parallel()
+	discard := slog.New(slog.NewTextHandler(io.Discard, nil))
+	stageUntil := time.Now().Add(40 * time.Millisecond)
+	var attempts int
+	f := &fakeTarget{held: true, version: 83}
+	f.onStep = func(ctx context.Context, step string) error {
+		if step != "probe" {
+			return nil
+		}
+		attempts++
+		deadline, ok := ctx.Deadline()
+		if !ok || deadline.After(stageUntil) {
+			t.Errorf("attempt deadline %v (ok=%v) exceeded stage deadline %v", deadline, ok, stageUntil)
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	r := rollout{
+		maintenanceTarget: f,
+		verifyTimeout:     5 * time.Second,
+	}
+	err := r.switchAndVerify(t.Context(), discard, "switch", stageUntil)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want %v", err, context.DeadlineExceeded)
+	}
+	if attempts != 1 {
+		t.Fatalf("probe attempts = %d, want 1", attempts)
+	}
+}

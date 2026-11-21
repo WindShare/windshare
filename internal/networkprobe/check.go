@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/windshare/windshare/core/networkendpoint"
@@ -66,13 +67,53 @@ func check(ctx context.Context, client *http.Client, work Work, shares [OriginCo
 		if !descriptor.Services.Relay || len(work.Origins) != OriginCount || len(work.Tickets) != OriginCount {
 			return errors.New("missing relay checks")
 		}
-		for i, origin := range work.Origins {
-			if err := shares[i].exchange(ctx, client, node.Relay, origin, work.Tickets[i]); err != nil {
-				return fmt.Errorf("relay (%s): %w", origin, err)
-			}
+		if err := checkRelayOrigins(ctx, work.Origins, work.Tickets, shares, func(originCtx context.Context, share SyntheticShare, origin, ticket string) error {
+			return share.exchange(originCtx, client, node.Relay, origin, ticket)
+		}); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+type originExchange func(context.Context, SyntheticShare, string, string) error
+
+// Run the independent origin probes concurrently so cross-border RTTs do not
+// multiply sequentially across tight upgrade budgets. Cancel siblings on the
+// first failure while holding the lock so the root-cause error is preserved,
+// and wait for every goroutine so sibling STOP cleanups finish before return.
+func checkRelayOrigins(
+	ctx context.Context,
+	origins, tickets []string,
+	shares [OriginCount]SyntheticShare,
+	exchange originExchange,
+) error {
+	if len(origins) != OriginCount || len(tickets) != OriginCount {
+		return errors.New("missing relay checks")
+	}
+	groupCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var (
+		wg       sync.WaitGroup
+		firstMu  sync.Mutex
+		firstErr error
+	)
+	for i, origin := range origins {
+		wg.Go(func() {
+			err := exchange(groupCtx, shares[i], origin, tickets[i])
+			if err == nil {
+				return
+			}
+			firstMu.Lock()
+			if firstErr == nil {
+				firstErr = fmt.Errorf("relay (%s): %w", origin, err)
+				cancel()
+			}
+			firstMu.Unlock()
+		})
+	}
+	wg.Wait()
+	return firstErr
 }
 
 func relayOrigin(raw string) (*url.URL, error) {

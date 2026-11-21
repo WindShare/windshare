@@ -24,6 +24,10 @@ const (
 	// bounding synthetic shares a broken candidate can leak before rollback.
 	probeMaxBackoff  = 4 * time.Second
 	probeMaxAttempts = 8
+	// Cap each verify attempt so a post-handshake stall cannot burn the entire
+	// switch/rollback budget without leaving room for a retry, while leaving
+	// headroom for a concurrent cross-border 3-origin probe plus STOP cleanup.
+	verifyAttemptTimeout = 8 * time.Second
 )
 
 var (
@@ -50,6 +54,7 @@ type rollout struct {
 	wait           func(context.Context, time.Duration) error
 	drainTimeout   time.Duration
 	attemptTimeout time.Duration
+	verifyTimeout  time.Duration
 }
 
 func timeoutOr(override, fallback time.Duration) time.Duration {
@@ -271,9 +276,13 @@ func (r rollout) switchAndVerify(parent context.Context, log *slog.Logger, actio
 	if err := r.localUntilReady(ctx, log, action); err != nil {
 		return err
 	}
+	perAttempt := timeoutOr(r.verifyTimeout, verifyAttemptTimeout)
 	backoff := retryInterval
 	for attempt := 1; ; attempt++ {
-		err := r.verify(ctx)
+		attemptCtx, stopAttempt := context.WithTimeout(ctx, perAttempt)
+		err := r.verify(attemptCtx)
+		attemptTimedOut := attemptCtx.Err() != nil && ctx.Err() == nil
+		stopAttempt()
 		if err == nil {
 			return nil
 		}
@@ -283,7 +292,7 @@ func (r rollout) switchAndVerify(parent context.Context, log *slog.Logger, actio
 		if attempt >= probeMaxAttempts {
 			return fmt.Errorf("probe failed after %d attempts: %w", attempt, err)
 		}
-		log.Warn("probe attempt failed, backing off", "action", action, "attempt", attempt, "next_delay", backoff, "error", err)
+		log.Warn("probe attempt failed, backing off", "action", action, "attempt", attempt, "attempt_timed_out", attemptTimedOut, "next_delay", backoff, "error", err)
 		if waitErr := r.sleep(ctx, backoff); waitErr != nil {
 			return errors.Join(err, waitErr)
 		}
