@@ -1,9 +1,10 @@
 use super::*;
 use crate::fleet::{
     Promote, attach,
-    monitoring::CYCLE_SECONDS,
+    monitoring::{CYCLE_SECONDS, MIN_CYCLE_SECONDS},
     operations::{Action, Admission, Manage},
     topology::Role,
+    vantage::SILENT_SECONDS,
 };
 use std::collections::BTreeSet;
 
@@ -160,6 +161,58 @@ impl MonitoringFleet {
             )
             .unwrap();
     }
+    fn active_status(&self) -> Status {
+        crate::fleet::publication::current(&self.auth.store)
+            .unwrap()
+            .payload()
+            .unwrap()
+            .nodes
+            .into_iter()
+            .find(|entry| entry.spec.node_key == self.active.node_key)
+            .unwrap()
+            .status
+    }
+
+    fn active_report(&self, vantage: usize, reported_at: u64, active_roles: [bool; 2]) -> Proof {
+        let prior_key = URL_SAFE_NO_PAD.encode([9u8; 32]);
+        let prior_op = load::<Node>(&self.auth.store, &key("node", &[9u8; 32]))
+            .unwrap()
+            .unwrap()
+            .listing
+            .unwrap()
+            .operation_id;
+        let nodes = json!({
+            self.active.node_key.clone(): {
+                "operation_id": self.active.alias, "tcp": true, "https": true,
+                "tls_expires": reported_at + 86400,
+                "relay": active_roles[0], "stun": active_roles[1]
+            },
+            prior_key: {
+                "operation_id": prior_op, "tcp": true, "https": true,
+                "tls_expires": reported_at + 86400,
+                "relay": true, "stun": null
+            },
+        });
+        proof(
+            &self.keys[vantage],
+            b"windshare/fleet-cycle/v1\0",
+            &json!({"at": reported_at, "mirror": self.head_digest(), "nodes": nodes}),
+        )
+    }
+
+    fn observe_active_after(&mut self, delta: u64, vantages: &[usize], active_roles: [bool; 2]) {
+        self.auth.environment.now += delta;
+        let at = self.auth.environment.now;
+        for &vantage in vantages {
+            let report = self.active_report(vantage, at, active_roles);
+            self.auth.record_cycle(&self.agents, &report).unwrap();
+            assert!(self.auth.record_cycle(&self.agents, &report).is_err());
+        }
+        let mut head = crate::fleet::publication::current(&self.auth.store).unwrap();
+        self.auth
+            .evaluate_health(&self.agents, &self.signer, &mut head)
+            .unwrap();
+    }
 }
 
 #[test]
@@ -180,7 +233,7 @@ fn fleet_targets_include_only_listed_nodes() {
     let heartbeat = proof(
         &fleet.keys[0],
         b"windshare/fleet-cycle/v1\0",
-        &json!({"cycle": at / CYCLE_SECONDS, "at": at, "mirror": observed, "nodes": {}}),
+        &json!({"at": at, "mirror": observed, "nodes": {}}),
     );
     fleet.auth.record_cycle(&fleet.agents, &heartbeat).unwrap();
     fleet.verify_and_promote_staged(Status::Canary, &observed);
@@ -231,7 +284,7 @@ fn record_cycle_ignores_staging_and_disabled_nodes_so_promotion_starts_clean() {
             let report = proof(
                 &fleet.keys[index],
                 b"windshare/fleet-cycle/v1\0",
-                &json!({"cycle": at / CYCLE_SECONDS, "at": at, "mirror": mirror, "nodes": nodes}),
+                &json!({"at": at, "mirror": mirror, "nodes": nodes}),
             );
             fleet.auth.record_cycle(&fleet.agents, &report).unwrap();
         }
@@ -272,4 +325,55 @@ fn record_cycle_ignores_staging_and_disabled_nodes_so_promotion_starts_clean() {
             ref withdrawn,
         } if withdrawn.is_empty()
     ));
+}
+
+#[test]
+fn cycle_spacing_and_streaks_track_receipt_elapsed_time_across_epoch_boundaries() {
+    let mut fleet = MonitoringFleet::new();
+    let bad_relay = [false, true];
+    let boundary = (fleet.auth.environment.now / CYCLE_SECONDS + 2) * CYCLE_SECONDS;
+
+    // Start 1 s before a 300 s UTC boundary (bucket N), jump across two buckets on
+    // the next report (bucket N+2 after +302 s), then land inside bucket N+2 again
+    // after +298 s. Elapsed receipt time preserves streaks without false 400s.
+    fleet.auth.environment.now = boundary - 1;
+    fleet.observe_active_after(0, &[0, 1], bad_relay);
+    assert_eq!(fleet.active_status(), Status::Active);
+
+    fleet.observe_active_after(CYCLE_SECONDS + 2, &[0, 1], bad_relay);
+    assert_eq!(fleet.active_status(), Status::Active);
+
+    fleet.observe_active_after(CYCLE_SECONDS - 2, &[0, 1], bad_relay);
+    assert_eq!(fleet.active_status(), Status::Draining);
+
+    // Reports arriving sooner than MIN_CYCLE_SECONDS are rejected, and a previously
+    // accepted fast-clock (+80 s) proof cannot be replayed once spacing elapses.
+    let mut fleet = MonitoringFleet::new();
+    let t0 = fleet.auth.environment.now;
+    let fast_initial = fleet.active_report(0, t0 + 80, bad_relay);
+    fleet
+        .auth
+        .record_cycle(&fleet.agents, &fast_initial)
+        .unwrap();
+
+    fleet.auth.environment.now = t0 + MIN_CYCLE_SECONDS - 1;
+    let too_soon = fleet.active_report(0, fleet.auth.environment.now, bad_relay);
+    assert!(fleet.auth.record_cycle(&fleet.agents, &too_soon).is_err());
+
+    fleet.auth.environment.now = t0 + MIN_CYCLE_SECONDS;
+    assert!(
+        fleet
+            .auth
+            .record_cycle(&fleet.agents, &fast_initial)
+            .is_err()
+    );
+    let spaced = fleet.active_report(0, fleet.auth.environment.now, bad_relay);
+    fleet.auth.record_cycle(&fleet.agents, &spaced).unwrap();
+
+    // Exceeding SILENT_SECONDS resets accumulated streaks instead of carrying stale evidence.
+    let mut fleet = MonitoringFleet::new();
+    fleet.observe_active_after(CYCLE_SECONDS, &[0, 1], bad_relay);
+    fleet.observe_active_after(CYCLE_SECONDS, &[0, 1], bad_relay);
+    fleet.observe_active_after(SILENT_SECONDS + 1, &[0, 1], bad_relay);
+    assert_eq!(fleet.active_status(), Status::Active);
 }

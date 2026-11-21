@@ -223,11 +223,11 @@ func TestFleetCycleSendsOneSignedAggregateAndOnlyCNChecksItsMirror(t *testing.T)
 				}
 				switch action {
 				case "targets":
-					_ = json.NewEncoder(w).Encode(map[string]any{"cycle": 41, "zone": zone, "nodes": nodes, "origins": []string{}})
+					_ = json.NewEncoder(w).Encode(map[string]any{"zone": zone, "nodes": nodes, "origins": []string{}})
 				case "cycle":
 					reports++
 					var report struct {
-						Cycle  uint64
+						At     int64
 						Mirror *string
 						Nodes  map[string]networkprobe.Observation
 					}
@@ -235,7 +235,7 @@ func TestFleetCycleSendsOneSignedAggregateAndOnlyCNChecksItsMirror(t *testing.T)
 						t.Error(err)
 						return
 					}
-					if report.Cycle != 41 || len(report.Nodes) != 2 {
+					if report.At <= 0 || len(report.Nodes) != 2 {
 						t.Errorf("aggregate: %+v", report)
 					}
 					if zone == "cn" && (report.Mirror == nil || *report.Mirror != digest) || zone == "global" && report.Mirror != nil {
@@ -262,5 +262,98 @@ func TestFleetCycleSendsOneSignedAggregateAndOnlyCNChecksItsMirror(t *testing.T)
 				t.Fatalf("%d aggregate reports, %d mirror reads", reports, mirrorReads)
 			}
 		})
+	}
+}
+
+func TestMonitorLoopWaitsFullIntervalAfterCycleCompletes(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	const interval = 40 * time.Millisecond
+	var firstFinished, secondStarted time.Time
+	calls := 0
+	monitorLoop(ctx, interval, func(context.Context) error {
+		calls++
+		if calls == 1 {
+			time.Sleep(30 * time.Millisecond)
+			firstFinished = time.Now()
+			return nil
+		}
+		secondStarted = time.Now()
+		cancel()
+		return nil
+	})
+	if calls != 2 {
+		t.Fatalf("calls = %d; want 2", calls)
+	}
+	if gap := secondStarted.Sub(firstFinished); gap < interval-5*time.Millisecond {
+		t.Fatalf("post-completion wait = %v; want at least %v", gap, interval)
+	}
+}
+
+func TestFleetCycleBoundsMirrorInsideCycleBudget(t *testing.T) {
+	directory, _ := mirrorFixture(t)
+	b64 := base64.RawURLEncoding
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "offline", http.StatusServiceUnavailable)
+	})
+	mux.HandleFunc("GET /.well-known/windshare-network", func(_ http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	})
+	node := httptest.NewTLSServer(mux)
+	defer node.Close()
+
+	signing := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{29}, 32))
+	nodes := []networkprobe.Target{{
+		OperationID: "op-mirror-bound",
+		Node: nodedirectory.Node{
+			NodeKey: b64.EncodeToString(bytes.Repeat([]byte{10}, 32)),
+			Relay:   node.URL + "/",
+			Roles:   []string{"relay"},
+		},
+	}}
+	var reported struct {
+		Mirror *string
+		Nodes  map[string]networkprobe.Observation
+	}
+	service := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch strings.TrimPrefix(r.URL.Path, "/v1/vantage/") {
+		case "targets":
+			_ = json.NewEncoder(w).Encode(map[string]any{"zone": "cn", "nodes": nodes, "origins": []string{}})
+		case "cycle":
+			var proof struct{ Payload string }
+			if err := json.NewDecoder(r.Body).Decode(&proof); err != nil {
+				t.Error(err)
+				return
+			}
+			body, err := b64.DecodeString(proof.Payload)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			if err := json.Unmarshal(body, &reported); err != nil {
+				t.Error(err)
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer service.Close()
+
+	a := agent{
+		key:       signing,
+		client:    node.Client(),
+		authority: service.Client(),
+		config:    &networkconfig.Config{LinkHost: node.URL, Directory: directory, Authority: &account.Config{URL: service.URL}},
+	}
+	start := time.Now()
+	if err := a.fleetCycleWithBudget(t.Context(), 500*time.Millisecond, 30*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed >= 400*time.Millisecond {
+		t.Fatalf("hung mirror was not bounded inside mirrorBudget: elapsed %v", elapsed)
+	}
+	if reported.Mirror != nil || len(reported.Nodes) != 1 {
+		t.Fatalf("expected nil mirror and 1 node observation after mirror timeout, got %+v", reported)
 	}
 }

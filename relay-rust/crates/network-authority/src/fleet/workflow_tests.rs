@@ -122,6 +122,45 @@ fn assert_scoped_tickets(auth: &Authority<Memory, Clock>, tickets: &[String], no
     }
 }
 
+fn assert_removed_alias_stays_bound(
+    auth: &mut Authority<Memory, Clock>,
+    admin: &str,
+    signer: &Publisher,
+    candidate: Spec,
+    operation_id: &str,
+) {
+    for action in [
+        crate::fleet::operations::Action::Disable { early_cutoff: true },
+        crate::fleet::operations::Action::Remove { early_cutoff: true },
+    ] {
+        auth.manage(
+            admin,
+            &crate::fleet::operations::Manage {
+                node_key: candidate.node_key.clone(),
+                operation_id: operation_id.to_owned(),
+                action,
+            },
+            signer,
+        )
+        .unwrap();
+    }
+    let mut rebind = candidate;
+    rebind.node_key = URL_SAFE_NO_PAD.encode([27; 32]);
+    rebind.relay = "https://replacement.example".into();
+    assert!(matches!(
+        auth.stage(admin, rebind).unwrap_err().downcast_ref::<Fault>(),
+        Some(Fault::Conflict { reason }) if reason == "alias_bound"
+    ));
+}
+
+fn probe_origins(release: &Release) -> [String; 3] {
+    [
+        release.link_host.clone(),
+        release.backup_entry.clone(),
+        "https://other.example".into(),
+    ]
+}
+
 #[test]
 fn a_verified_staging_node_requires_current_mirrors_before_publication() {
     let mut auth = fixture();
@@ -145,17 +184,16 @@ fn a_verified_staging_node_requires_current_mirrors_before_publication() {
             &json!({"at":at,"shares": shares}),
         )
     };
-    let origins = || {
-        [
-            release.link_host.clone(),
-            release.backup_entry.clone(),
-            "https://other.example".into(),
-        ]
-    };
     let start = poll(now);
-    assert!(auth.claim(&[], &start, origins()).is_err());
-    let work = auth.claim(&agents, &start, origins()).unwrap().unwrap();
-    assert!(auth.claim(&agents, &start, origins()).is_err());
+    assert!(auth.claim(&[], &start, probe_origins(&release)).is_err());
+    let work = auth
+        .claim(&agents, &start, probe_origins(&release))
+        .unwrap()
+        .unwrap();
+    assert!(
+        auth.claim(&agents, &start, probe_origins(&release))
+            .is_err()
+    );
     assert_eq!(work.spec, candidate);
     assert_eq!(work.tickets.len(), shares.len());
     assert_scoped_tickets(&auth, &work.tickets, &node.key);
@@ -183,8 +221,15 @@ fn a_verified_staging_node_requires_current_mirrors_before_publication() {
     assert!(promote(&mut auth, &publication.envelope, &agents).is_err());
     auth.environment.now += 1;
     let at = auth.environment.now;
-    auth.record_cycle(&agents, &proof(&probe_key, b"windshare/fleet-cycle/v1\0",
-        &json!({"at":at, "cycle":at/300, "mirror":digest(&publication.envelope).unwrap(), "nodes":{}}))).unwrap();
+    auth.record_cycle(
+        &agents,
+        &proof(
+            &probe_key,
+            b"windshare/fleet-cycle/v1\0",
+            &json!({"at":at, "mirror":digest(&publication.envelope).unwrap(), "nodes":{}}),
+        ),
+    )
+    .unwrap();
     assert!(promote(&mut auth, &publication.envelope, &[]).is_err());
     promote(&mut auth, &publication.envelope, &agents).unwrap();
     let promoted = crate::fleet::publication::current(&auth.store).unwrap();
@@ -202,28 +247,7 @@ fn a_verified_staging_node_requires_current_mirrors_before_publication() {
             ref withdrawn,
         } if withdrawn.is_empty()
     ));
-    for action in [
-        crate::fleet::operations::Action::Disable { early_cutoff: true },
-        crate::fleet::operations::Action::Remove { early_cutoff: true },
-    ] {
-        auth.manage(
-            &admin,
-            &crate::fleet::operations::Manage {
-                node_key: candidate.node_key.clone(),
-                operation_id: work.operation_id.clone(),
-                action,
-            },
-            &signer,
-        )
-        .unwrap();
-    }
-    let mut rebind = candidate;
-    rebind.node_key = URL_SAFE_NO_PAD.encode([27; 32]);
-    rebind.relay = "https://replacement.example".into();
-    assert!(
-        matches!(auth.stage(&admin,rebind).unwrap_err().downcast_ref::<Fault>(),
-        Some(Fault::Conflict {reason}) if reason=="alias_bound")
-    );
+    assert_removed_alias_stays_bound(&mut auth, &admin, &signer, candidate, &work.operation_id);
 }
 #[test]
 fn draft_conflicts_and_withdrawal_are_scoped_to_one_operation() {
@@ -418,10 +442,7 @@ fn withdrawing_an_older_draft_releases_its_unpublished_alias_and_preserves_admis
 
 #[test]
 fn vantage_liveness_tracks_authority_receipt_time_separately_from_poll_replay_clock() {
-    use crate::fleet::{
-        monitoring::CYCLE_SECONDS,
-        vantage::{SILENT_SECONDS, mainland_current, silent},
-    };
+    use crate::fleet::vantage::{SILENT_SECONDS, mainland_current, silent};
 
     let mut auth = fixture();
     let admin = auth
@@ -453,20 +474,19 @@ fn vantage_liveness_tracks_authority_receipt_time_separately_from_poll_replay_cl
             &json!({"at": at, "shares": shares}),
         )
     };
-    let cycle = |key: &SigningKey, at: u64, number: u64| {
+    let cycle = |key: &SigningKey, at: u64| {
         proof(
             key,
             b"windshare/fleet-cycle/v1\0",
-            &json!({"at": at, "cycle": number, "mirror": expected, "nodes": {}}),
+            &json!({"at": at, "mirror": expected, "nodes": {}}),
         )
     };
 
     let t0 = auth.environment.now();
-    let number = t0 / CYCLE_SECONDS;
     // Slow agent reports 80 s behind authority; fast agent reports 80 s ahead.
-    auth.record_cycle(&agents, &cycle(&slow_key, t0 - 80, number))
+    auth.record_cycle(&agents, &cycle(&slow_key, t0 - 80))
         .unwrap();
-    auth.record_cycle(&agents, &cycle(&fast_key, t0 + 80, number))
+    auth.record_cycle(&agents, &cycle(&fast_key, t0 + 80))
         .unwrap();
     // Claiming a lease still rejects non-increasing client poll timestamps.
     assert!(

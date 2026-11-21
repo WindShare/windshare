@@ -106,7 +106,7 @@ impl Fleet {
             let proof = proof(
                 &self.keys[index],
                 b"windshare/fleet-cycle/v1\0",
-                &json!({"cycle":at/CYCLE_SECONDS,"at":at,"mirror":mirror,"nodes":nodes}),
+                &json!({"at":at,"mirror":mirror,"nodes":nodes}),
             );
             self.auth.record_cycle(&self.agents, &proof).unwrap();
             assert!(self.auth.record_cycle(&self.agents, &proof).is_err());
@@ -724,7 +724,7 @@ impl MultiNodeFleet {
             let proof = proof(
                 &self.keys[vantage],
                 b"windshare/fleet-cycle/v1\0",
-                &json!({"cycle": at / CYCLE_SECONDS, "at": at, "mirror": null, "nodes": nodes}),
+                &json!({"at": at, "mirror": null, "nodes": nodes}),
             );
             self.auth.record_cycle(&self.agents, &proof).unwrap();
         }

@@ -1,6 +1,6 @@
 use super::{
     topology::{MAX_NODES, Role, Spec, public_key},
-    vantage::{Agent, FRESH_SECONDS, Proof},
+    vantage::{Agent, FRESH_SECONDS, Proof, SILENT_SECONDS},
 };
 use crate::{
     Authority, Environment, Fault, Node, Store, Zone,
@@ -11,6 +11,14 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 pub const CYCLE_SECONDS: u64 = 5 * 60;
+// Exceeds 2 * FRESH_SECONDS so any previously accepted signed report is already
+// outside the freshness window once the next cycle becomes eligible.
+pub const MIN_CYCLE_SECONDS: u64 = 4 * 60;
+const _: () = assert!(
+    MIN_CYCLE_SECONDS > 2 * FRESH_SECONDS
+        && MIN_CYCLE_SECONDS < CYCLE_SECONDS
+        && CYCLE_SECONDS < SILENT_SECONDS
+);
 const ASSIGN_DOMAIN: &[u8] = b"windshare/fleet-targets/v1\0";
 pub(super) const REPORT_DOMAIN: &[u8] = b"windshare/fleet-cycle/v1\0";
 pub(super) const SUSTAINED: i8 = 3;
@@ -22,7 +30,6 @@ struct Request {
 #[derive(Serialize)]
 pub struct Targets {
     pub zone: Zone,
-    pub cycle: u64,
     pub nodes: Vec<Target>,
     pub origins: [String; super::vantage::ORIGIN_COUNT],
 }
@@ -46,7 +53,6 @@ pub struct Observation {
 #[serde(deny_unknown_fields)]
 struct Report {
     at: u64,
-    cycle: u64,
     mirror: Option<String>,
     nodes: BTreeMap<String, Observation>,
 }
@@ -61,7 +67,6 @@ pub struct Cycle {
     pub id: String,
     pub zone: Zone,
     pub at: u64,
-    pub cycle: u64,
     pub mirror: Option<String>,
     pub nodes: BTreeMap<String, Sample>,
 }
@@ -138,21 +143,19 @@ impl<R: Store, E: Environment> Authority<R, E> {
         }
         Ok(Targets {
             zone: agent.zone,
-            cycle: now / CYCLE_SECONDS,
             nodes,
             origins,
         })
     }
 
     /// # Errors
-    /// Rejects forged, oversized, stale or duplicate cycles. Streaks count distinct consecutive cycles.
+    /// Rejects forged, oversized, stale or too-frequent reports. Streaks continue while receipt
+    /// spacing stays within `SILENT_SECONDS`.
     pub fn record_cycle(&mut self, agents: &[Agent], proof: &Proof) -> Result<()> {
         let (agent, report) = proof.open::<Report>(agents, REPORT_DOMAIN)?;
         let now = self.environment.now();
-        let current = now / CYCLE_SECONDS;
         ensure!(
             now.abs_diff(report.at) <= FRESH_SECONDS
-                && (current.saturating_sub(1)..=current).contains(&report.cycle)
                 && report.nodes.len() <= MAX_NODES
                 && report.mirror.as_ref().is_none_or(|m| public_key(m).is_ok())
                 && self
@@ -161,12 +164,39 @@ impl<R: Store, E: Environment> Authority<R, E> {
                     .is_none(),
             Fault::Invalid
         );
-        let previous = latest(&self.store, agent)?;
-        ensure!(
-            previous.as_ref().is_none_or(|c| c.cycle < report.cycle),
-            Fault::Invalid
-        );
-        let previous = previous.filter(|c| c.cycle + 1 == report.cycle && c.zone == agent.zone);
+        let previous = match latest(&self.store, agent)? {
+            Some(cycle) if now.saturating_sub(cycle.at) < MIN_CYCLE_SECONDS => {
+                tracing::warn!(
+                    event = "fleet_cycle_rejected",
+                    vantage = %agent.id,
+                    reason = "too_frequent",
+                    elapsed = now.saturating_sub(cycle.at),
+                    min_seconds = MIN_CYCLE_SECONDS
+                );
+                return Err(Fault::Invalid.into());
+            }
+            Some(cycle)
+                if cycle.zone == agent.zone && now.saturating_sub(cycle.at) <= SILENT_SECONDS =>
+            {
+                Some(cycle)
+            }
+            Some(cycle) => {
+                let reason = if cycle.zone == agent.zone {
+                    "silent_gap"
+                } else {
+                    "zone_changed"
+                };
+                tracing::info!(
+                    event = "fleet_streak_reset",
+                    vantage = %agent.id,
+                    reason,
+                    elapsed = now.saturating_sub(cycle.at),
+                    silent_seconds = SILENT_SECONDS
+                );
+                None
+            }
+            None => None,
+        };
         let mut nodes = BTreeMap::new();
         for (id, observation) in report.nodes {
             let Some(node) = load::<Node>(&self.store, &key("node", &public_key(&id)?))? else {
@@ -201,7 +231,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
                     counts.insert(role, count);
                 }
             }
-            tracing::info!(event="fleet_probe", operation_id=%observation.operation_id, node_id=%id, vantage=%agent.id, cycle=report.cycle, relay=?observation.relay,stun=?observation.stun,tls_expires=?observation.tls_expires);
+            tracing::info!(event="fleet_probe", operation_id=%observation.operation_id, node_id=%id, vantage=%agent.id, at=now, relay=?observation.relay, stun=?observation.stun, tls_expires=?observation.tls_expires);
             nodes.insert(
                 id,
                 Sample {
@@ -216,7 +246,6 @@ impl<R: Store, E: Environment> Authority<R, E> {
             &Cycle {
                 id: agent.id.clone(),
                 zone: agent.zone,
-                cycle: report.cycle,
                 at: now,
                 mirror: report.mirror,
                 nodes,
