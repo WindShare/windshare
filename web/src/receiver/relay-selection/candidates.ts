@@ -2,6 +2,14 @@ import type { RelayAdmission } from '../relay-admission'
 
 export const MAXIMUM_RECEIVER_RELAYS = 8
 export type RelayCandidateSource = readonly string[] | RelayCandidates
+export type RelayExpansionStatus = 'complete' | 'incomplete'
+export interface RelayExpansionOptions {
+  readonly explicit?: boolean
+}
+export type RelayExpansionRunner = (
+  emit: (bases: readonly string[]) => void,
+  options: RelayExpansionOptions,
+) => Promise<RelayExpansionStatus | void>
 
 export function receiverRelayBases(values: readonly string[]): readonly string[] {
   const unique = [...new Set(values.map(value => value.trim()))]
@@ -9,35 +17,56 @@ export function receiverRelayBases(values: readonly string[]): readonly string[]
   return Object.freeze(unique)
 }
 
-/** Owns one bounded expansion, independently of retries and protocol generations. */
+/**
+ * Owns candidate relay discovery across retries and protocol generations.
+ * Transient expansion failures stay retryable instead of locking the share.
+ */
 export class RelayCandidates {
   #bases: readonly string[]
   readonly #listeners = new Set<(bases: readonly string[]) => void>()
-  readonly settled: Promise<void>
   readonly admission: RelayAdmission | undefined
-  #failure: unknown
+  readonly #runner: RelayExpansionRunner | undefined
+  #current: Promise<unknown>
   #expanding: boolean
+  #complete: boolean
 
-  constructor(initial: readonly string[], expansion?: Promise<readonly string[]> | ((emit: (bases: readonly string[]) => void) => Promise<void>), admission?: RelayAdmission) {
+  constructor(
+    initial: readonly string[],
+    expansion?: Promise<readonly string[]> | RelayExpansionRunner,
+    admission?: RelayAdmission,
+  ) {
     this.admission = admission
-    this.#expanding = expansion !== undefined
     this.#bases = initial.length === 0 && expansion ? [] : receiverRelayBases(initial)
-    const emit = (additional: readonly string[]) => {
-      if (!additional.some(base => !this.#bases.includes(base))) return
-      this.#bases = receiverRelayBases([...this.#bases, ...additional])
-      for (const listener of this.#listeners) listener(this.#bases)
+    if (typeof expansion === 'function') {
+      this.#runner = expansion
+      this.#expanding = false
+      this.#complete = false
+      this.#current = Promise.resolve(undefined)
+      // Opening a share is an explicit user action; subsequent automatic retries
+      // default to non-explicit so directory backoff still prevents mirror storms.
+      this.#start({ explicit: true })
+    } else if (expansion !== undefined) {
+      this.#runner = undefined
+      this.#expanding = true
+      this.#complete = true
+      this.#current = expansion.then(this.#emit)
+        .then(() => undefined, (error: unknown) => error)
+        .finally(() => { this.#expanding = false })
+    } else {
+      this.#runner = undefined
+      this.#expanding = false
+      this.#complete = true
+      this.#current = Promise.resolve(undefined)
     }
-    const pending = typeof expansion === 'function' ? expansion(emit) : expansion?.then(emit)
-    this.settled = pending ? pending.catch((error: unknown) => { this.#failure = error })
-      .finally(() => { this.#expanding = false }) : Promise.resolve()
   }
 
   get bases(): readonly string[] { return this.#bases }
   get expanding(): boolean { return this.#expanding }
+  get settled(): Promise<void> { return this.#current.then(() => undefined) }
 
-  async all(): Promise<readonly string[]> {
-    await this.settled
-    if (this.#bases.length === 0) throw this.#failure ?? new Error('No known relay endpoints')
+  async all(options: RelayExpansionOptions = {}): Promise<readonly string[]> {
+    const failure = await this.#start(options)
+    if (this.#bases.length === 0) throw failure ?? new Error('No known relay endpoints')
     return this.#bases
   }
 
@@ -45,6 +74,35 @@ export class RelayCandidates {
     this.#listeners.add(listener)
     listener(this.#bases)
     return () => { this.#listeners.delete(listener) }
+  }
+
+  readonly #emit = (additional: readonly string[]): void => {
+    if (!additional.some(base => !this.#bases.includes(base))) return
+    this.#bases = receiverRelayBases([...this.#bases, ...additional])
+    for (const listener of this.#listeners) listener(this.#bases)
+  }
+
+  #start(options: RelayExpansionOptions): Promise<unknown> {
+    const runner = this.#runner
+    if (this.#complete || runner === undefined || this.#expanding) return this.#current
+    this.#expanding = true
+    let pending: Promise<RelayExpansionStatus | void>
+    try {
+      pending = runner(this.#emit, options)
+    } catch (error) {
+      pending = Promise.reject(error)
+    }
+    const run = pending.then(
+      status => {
+        if (status !== 'incomplete') this.#complete = true
+        return undefined
+      },
+      (error: unknown) => error,
+    ).finally(() => {
+      this.#expanding = false
+    })
+    this.#current = run
+    return run
   }
 }
 

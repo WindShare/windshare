@@ -32,7 +32,8 @@ export function joinBrowserRelays(
       options.observe?.(observation)
     },
     connect: attempt => relayRecovery.race(attempt.signal,
-      (relayBase, relaySignal) => connect(relayBase, relaySignal, attempt), close),
+      (relayBase, relaySignal) => connect(relayBase, relaySignal, attempt), close,
+      { explicit: attempt.explicitRetry }),
   })
 
   async function connect(relayBase: string, attemptSignal: AbortSignal, attempt: InitialJoinAttempt): Promise<BrowserRelayJoin> {

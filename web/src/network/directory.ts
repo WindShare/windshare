@@ -22,6 +22,10 @@ export type DirectoryObservation = {
   readonly transition: 'storage_fallback'
   readonly failure: DOMException
 }
+export interface DirectoryRefreshOptions {
+  readonly explicit?: boolean
+}
+
 export interface NetworkDirectoryOptions {
   readonly network: string
   readonly roots: readonly NetworkRoot[]
@@ -43,6 +47,19 @@ export class NetworkDirectory {
   readonly #monotonicNow: () => number
   readonly #lifetime = new AbortController()
   readonly #snapshotListeners = new Set<() => void>()
+  readonly #networkAvailable = () => {
+    if (this.#lifetime.signal.aborted) return
+    this.#networkGeneration += 1
+    if (this.#failures === 0) return
+    // Network connectivity returned; stale offline backoff must not stall recovery.
+    this.#failures = 0
+    this.#retryAt = 0
+    if (this.#timer !== undefined) {
+      clearTimeout(this.#timer)
+      this.#timer = undefined
+    }
+    if (!this.#pending) void this.refresh().catch(() => undefined)
+  }
   readonly ready: Promise<void>
   #snapshot: NetworkSnapshot | undefined
   #pending: Promise<void> | undefined
@@ -50,6 +67,7 @@ export class NetworkDirectory {
   #timer: ReturnType<typeof setTimeout> | undefined
   #retryAt = 0
   #failures = 0
+  #networkGeneration = 0
   #refreshSequence = 0
 
   constructor(options: NetworkDirectoryOptions) {
@@ -59,6 +77,7 @@ export class NetworkDirectory {
     this.#monotonicNow = options.monotonicNow ?? (() => performance.now())
     this.#initialized = this.#initialize()
     this.ready = this.#initialized.then(() => undefined)
+    globalThis.addEventListener?.('online', this.#networkAvailable)
     this.ready.then(() => this.refresh()).catch(() => undefined)
   }
 
@@ -98,10 +117,12 @@ export class NetworkDirectory {
     return cache
   }
 
-  async refresh(aliases: readonly string[] = []): Promise<void> {
+  async refresh(aliases: readonly string[] = [], options: DirectoryRefreshOptions = {}): Promise<void> {
     const cache = await this.#initialized
     this.#lifetime.signal.throwIfAborted()
-    if (!this.#pending && this.#failures > 0 && this.#monotonicNow() < this.#retryAt) throw new Error('Network refresh is in backoff')
+    if (!this.#pending && !options.explicit && this.#failures > 0 && this.#monotonicNow() < this.#retryAt) {
+      throw new Error('Network refresh is in backoff')
+    }
     for (const alias of aliases) this.#targets.add(alias)
     this.#pending ??= Promise.resolve().then(() => this.#refresh(cache))
     return this.#pending
@@ -109,6 +130,7 @@ export class NetworkDirectory {
 
   async #refresh(cache: DirectoryCache): Promise<void> {
     const operationId = `directory-refresh-${++this.#refreshSequence}`
+    const networkGeneration = this.#networkGeneration
     let deadline: ReturnType<typeof operationDeadlineSignal> | undefined
     try {
       deadline = operationDeadlineSignal(this.#lifetime.signal, REFRESH_TIMEOUT_MS, new DOMException('Directory refresh timed out', 'TimeoutError'))
@@ -130,6 +152,14 @@ export class NetworkDirectory {
         }
       }
       if (accepted) return
+      if (networkGeneration !== this.#networkGeneration) {
+        // Connectivity changed while this pass was in flight; do not lock the new
+        // network behind stale offline backoff.
+        this.#failures = 0
+        this.#retryAt = 0
+        this.#schedule(0)
+        throw last
+      }
       this.#failures++
       const backoff = Math.min(MAXIMUM_BACKOFF_MS, MINIMUM_BACKOFF_MS * 2 ** Math.min(this.#failures - 1, 10))
       this.#retryAt = this.#monotonicNow() + backoff
@@ -200,6 +230,7 @@ export class NetworkDirectory {
 
   close(): void {
     this.#lifetime.abort()
+    globalThis.removeEventListener?.('online', this.#networkAvailable)
     if (this.#timer !== undefined) {
       clearTimeout(this.#timer)
       this.#timer = undefined

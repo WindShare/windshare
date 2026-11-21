@@ -44,7 +44,7 @@ describe('first usable relay', () => {
         if (endpoint === 'invalid') throw failure
         stalledSignal = signal
         return slow.promise
-      }, close, isShareRecoveryFailure)
+      }, close, { fatal: isShareRecoveryFailure })
     await expect(task).rejects.toMatchObject({
       name: RelayEndpointFailure.name, relayBase: 'invalid', cause: failure,
     })
@@ -122,5 +122,27 @@ describe('first usable relay', () => {
         return endpoint
       },
       async () => undefined)).resolves.toBe('good')
+  })
+
+  it('retries transient candidate expansion failures without locking subsequent rounds', async () => {
+    const seenOptions: boolean[] = []
+    let attempt = 0
+    const source = new RelayCandidates([], async (emit, options) => {
+      seenOptions.push(Boolean(options.explicit))
+      attempt += 1
+      if (attempt === 1) throw new Error('offline')
+      if (attempt === 2) throw new Error('Network refresh is in backoff')
+      emit(['resolved'])
+      return 'complete'
+    })
+    await expect(firstUsableRelay(source, new AbortController().signal, async endpoint => endpoint, async () => undefined))
+      .rejects.toThrow('offline')
+    await expect(firstUsableRelay(source, new AbortController().signal, async endpoint => endpoint, async () => undefined))
+      .rejects.toThrow('backoff')
+    await expect(firstUsableRelay(source, new AbortController().signal, async endpoint => endpoint, async () => undefined,
+      { expansion: { explicit: true } })).resolves.toBe('resolved')
+    await expect(source.all({ explicit: true })).resolves.toEqual(['resolved'])
+    expect(attempt).toBe(3)
+    expect(seenOptions).toEqual([true, false, true])
   })
 })

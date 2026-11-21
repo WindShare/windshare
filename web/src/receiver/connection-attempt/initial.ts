@@ -8,6 +8,7 @@ const MAXIMUM_ATTEMPT_MILLISECONDS = 30_000
 
 export interface InitialJoinAttempt {
   readonly signal: AbortSignal
+  readonly explicitRetry: boolean
   trackHandshake(relayBase: string, channel: FrameChannel, signal: AbortSignal): () => void
 }
 
@@ -15,6 +16,7 @@ interface AttemptOptions<T> {
   readonly parent: AbortSignal
   readonly deadline: number
   readonly now: () => number
+  readonly explicitRetry?: boolean
   readonly connect: (attempt: InitialJoinAttempt) => Promise<T>
   readonly close: (value: T) => Promise<void>
   readonly onBandwidthWait: (milliseconds: number) => void
@@ -30,6 +32,7 @@ export async function runInitialJoinAttempt<T>(options: AttemptOptions<T>): Prom
   const handshakes = new Map<FrameChannel, { relayBase: string; signal: AbortSignal }>()
   const attempt: InitialJoinAttempt = {
     signal,
+    explicitRetry: options.explicitRetry ?? false,
     trackHandshake(relayBase, channel, candidateSignal) {
       handshakes.set(channel, { relayBase, signal: candidateSignal })
       return () => { handshakes.delete(channel) }

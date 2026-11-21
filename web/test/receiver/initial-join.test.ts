@@ -1,5 +1,11 @@
+import { readFileSync } from 'node:fs'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { InitialJoinControl, InitialJoinUnavailableError, runInitialJoin, type InitialJoinState } from '../../src/receiver/initial-join'
+import { resolveLinkRelays } from '../../src/application/network/resolve'
+import { encodeSuite02CapabilityKey } from '../../src/crypto/suite02-link'
+import { MemoryDirectoryCache } from '../../src/network/directory-cache'
+import { NetworkDirectory } from '../../src/network/directory'
+import type { NetworkRoot } from '../../src/network/node-directory'
 import { RelayReceiverError } from '../../src/transport/relay/receiver'
 import { RELAY_ERROR } from '../../src/transport/relay/protocol'
 import { SenderObjectError } from '../../src/crypto/sender-object'
@@ -8,6 +14,13 @@ import { RelayCandidates } from '../../src/receiver/relay-selection/candidates'
 import { RelayRecovery } from '../../src/receiver/relay-selection/recovery'
 import { RelayPolicyDeniedError, RELAY_POLICY_RETRY_MS } from '../../src/receiver/relay-admission'
 import { systemReconnectClock } from '../../src/receiver/recovery-clock'
+
+const directoryVectors = JSON.parse(readFileSync(new URL('../../../testdata/network/directory.json', import.meta.url), 'utf8')) as {
+  network: string; now: string; roots: NetworkRoot[]; entries: { name: string; envelope: unknown; valid: boolean }[]
+}
+function directoryEnvelope(name: string): string {
+  return JSON.stringify(directoryVectors.entries.find(entry => entry.name === name)!.envelope)
+}
 
 afterEach(() => vi.useRealTimers())
 
@@ -206,6 +219,141 @@ describe('initial receiver waiting', () => {
     await vi.advanceTimersByTimeAsync(0)
     expect(close).toHaveBeenCalledWith('late')
     expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('recovers an unknown alias link on explicit retry after offline directory backoff', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(0)
+    const clock = { now: () => Date.now(), sleep: systemReconnectClock.sleep }
+    const control = new InitialJoinControl()
+    const lifetime = new AbortController()
+    const vectorNow = Date.parse(directoryVectors.now)
+    let offline = true
+    let directoryCalls = 0
+    const directory = new NetworkDirectory({
+      network: directoryVectors.network,
+      roots: directoryVectors.roots,
+      mirrors: ['https://mirror.example/directory'],
+      now: () => vectorNow,
+      monotonicNow: () => Date.now(),
+      cache: new MemoryDirectoryCache(),
+      fetch: async () => {
+        directoryCalls++
+        if (offline) throw new Error('offline')
+        return new Response(directoryEnvelope('valid'))
+      },
+    })
+    try {
+      // Seed failure backoff (60s after two failures) before opening the new-alias link.
+      await expect(directory.refresh()).rejects.toThrow('offline')
+      expect(directoryCalls).toBe(1)
+
+      const key = await encodeSuite02CapabilityKey(new Uint8Array(16), new Uint8Array(16))
+      const candidates = resolveLinkRelays({ ...key, relays: [], nodeAliases: ['jp1'] }, directory)
+      const relayRecovery = new RelayRecovery(candidates, clock)
+      const states: InitialJoinState[] = []
+      const dial = vi.fn(async (relayBase: string) => `connected:${relayBase}`)
+      const close = async () => undefined
+      let task: Promise<string> | undefined
+      try {
+        task = runInitialJoin({
+          clock, control, signal: lifetime.signal, relayRecovery, close,
+          connect: attempt => relayRecovery.race(attempt.signal, dial, close, { explicit: attempt.explicitRetry }),
+          onState: state => states.push(state),
+        })
+
+        // Opening the link performs one explicit probe; automatic retries inside the 30s window stay in backoff.
+        await vi.advanceTimersByTimeAsync(30_000)
+        expect(states.at(-1)).toEqual({ kind: 'paused', reason: 'unreachable' })
+        expect(directoryCalls).toBe(2)
+        expect(dial).not.toHaveBeenCalled()
+
+        // Network recovers while still well inside the 60s directory backoff; clicking Retry must recover immediately.
+        offline = false
+        control.request('retry')
+        await vi.advanceTimersByTimeAsync(0)
+        await expect(task).resolves.toBe('connected:https://jp1.example')
+        expect(directoryCalls).toBe(3)
+        expect(dial).toHaveBeenCalledTimes(1)
+      } finally {
+        lifetime.abort()
+        await task?.catch(() => undefined)
+      }
+    } finally {
+      directory.close()
+    }
+  })
+
+  it('wakes an active offline initial join on browser online without bypassing server cooldowns', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(0)
+    const online = new EventTarget()
+    vi.stubGlobal('addEventListener', online.addEventListener.bind(online))
+    vi.stubGlobal('removeEventListener', online.removeEventListener.bind(online))
+    const clock = { now: () => Date.now(), sleep: systemReconnectClock.sleep }
+    const control = new InitialJoinControl()
+    const lifetime = new AbortController()
+    const vectorNow = Date.parse(directoryVectors.now)
+    const key = await encodeSuite02CapabilityKey(new Uint8Array(16), new Uint8Array(16))
+    let offline = true
+    let directoryCalls = 0
+    const directory = new NetworkDirectory({
+      network: directoryVectors.network,
+      roots: directoryVectors.roots,
+      mirrors: ['https://mirror.example/directory'],
+      now: () => vectorNow,
+      monotonicNow: () => Date.now(),
+      cache: new MemoryDirectoryCache(),
+      fetch: async () => {
+        directoryCalls++
+        if (offline) throw new Error('offline')
+        return new Response(directoryEnvelope('valid'))
+      },
+    })
+    let task: Promise<string> | undefined
+    let cooledTask: Promise<string> | undefined
+    try {
+      const candidates = resolveLinkRelays({ ...key, relays: [], nodeAliases: ['jp1'] }, directory)
+      const relayRecovery = new RelayRecovery(candidates, clock)
+      const dial = vi.fn(async (relayBase: string) => `connected:${relayBase}`)
+      const close = async () => undefined
+      task = runInitialJoin({
+        clock, control, signal: lifetime.signal, relayRecovery, close,
+        connect: attempt => relayRecovery.race(attempt.signal, dial, close, { explicit: attempt.explicitRetry }),
+      })
+
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(dial).not.toHaveBeenCalled()
+      expect(directoryCalls).toBe(1)
+
+      offline = false
+      online.dispatchEvent(new Event('online'))
+      await vi.advanceTimersByTimeAsync(0)
+      await expect(task).resolves.toBe('connected:https://jp1.example')
+      expect(directoryCalls).toBe(2)
+
+      // Online events must still honor mandatory relay RetryAfter cooldowns.
+      const cooledConnect = vi.fn()
+        .mockRejectedValueOnce(new RelayReceiverError('capacity exhausted', { relayError: {
+          code: RELAY_ERROR.admission, retryAfterMilliseconds: 30_000,
+        } }))
+        .mockResolvedValue('after-cooldown')
+      cooledTask = runInitialJoin({
+        clock, signal: lifetime.signal, windowMilliseconds: 60_000,
+        connect: cooledConnect, close: async () => undefined,
+      })
+      await vi.advanceTimersByTimeAsync(0)
+      online.dispatchEvent(new Event('online'))
+      await vi.advanceTimersByTimeAsync(29_999)
+      expect(cooledConnect).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(1)
+      await expect(cooledTask).resolves.toBe('after-cooldown')
+    } finally {
+      lifetime.abort()
+      await Promise.allSettled([task, cooledTask])
+      directory.close()
+      vi.unstubAllGlobals()
+    }
   })
 })
 

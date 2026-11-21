@@ -39,10 +39,25 @@ export class InitialJoinUnavailableError extends Error {
 export class InitialJoinControl {
   #choose: ((choice: JoinChoice) => void) | undefined
   readonly #wake = new RecoveryWake()
+  #explicit = false
 
   request(choice: JoinChoice): void {
-    this.#choose?.(choice)
+    if (this.#choose !== undefined) {
+      this.#choose(choice)
+      return
+    }
+    this.#explicit = true
     this.#wake.request()
+  }
+
+  wake(): void {
+    this.#wake.request()
+  }
+
+  consumeExplicit(): boolean {
+    const explicit = this.#explicit
+    this.#explicit = false
+    return explicit
   }
 
   sleep(clock: ReconnectClock, milliseconds: number, signal: AbortSignal): Promise<void> {
@@ -59,7 +74,9 @@ export class InitialJoinControl {
     try {
       return await new Promise<JoinChoice>((resolve, reject) => {
         this.#choose = choice => {
-          if (accept(choice)) resolve(choice)
+          if (!accept(choice)) return
+          this.#explicit = true
+          resolve(choice)
         }
         abort = () => reject(signal.reason)
         signal.addEventListener('abort', abort, { once: true })
@@ -95,6 +112,11 @@ class InitialJoinRecovery<T> {
   readonly #options: InitialJoinAttemptOptions<T>
   readonly #clock: ReconnectClock
   readonly #window: number
+  readonly #wake = new RecoveryWake()
+  readonly #networkAvailable = () => {
+    if (this.#options.control !== undefined) this.#options.control.wake()
+    else this.#wake.request()
+  }
   #deadline: number
   #continuous = false
   #attempt = 0
@@ -109,11 +131,16 @@ class InitialJoinRecovery<T> {
   }
 
   async run(): Promise<T> {
-    while (true) {
-      this.#options.signal.throwIfAborted()
-      await this.#ensureWindow()
-      this.#publish(this.#continuous ? { kind: 'waiting', reason: 'sender' } : { kind: 'connecting' })
-      try { return await this.#connect() } catch (error) { await this.#recover(error) }
+    globalThis.addEventListener?.('online', this.#networkAvailable)
+    try {
+      while (true) {
+        this.#options.signal.throwIfAborted()
+        await this.#ensureWindow()
+        this.#publish(this.#continuous ? { kind: 'waiting', reason: 'sender' } : { kind: 'connecting' })
+        try { return await this.#connect() } catch (error) { await this.#recover(error) }
+      }
+    } finally {
+      globalThis.removeEventListener?.('online', this.#networkAvailable)
     }
   }
 
@@ -166,10 +193,12 @@ class InitialJoinRecovery<T> {
 
   async #connect(): Promise<T> {
     this.#attempt += 1
+    const explicitRetry = this.#options.control?.consumeExplicit() ?? false
     this.#observe({ transition: 'attempt_started' })
     const connected = await runInitialJoinAttempt({
       deadline: this.#continuous ? Infinity : this.#deadline,
       parent: this.#options.signal, now: () => this.#clock.now(),
+      explicitRetry,
       connect: this.#options.connect, close: this.#options.close,
       onRelayFailure: (base, failure) => this.#options.relayRecovery?.recordFailure(base, failure),
       onBandwidthWait: milliseconds => {
@@ -217,11 +246,11 @@ class InitialJoinRecovery<T> {
 
   async #sleep(required: number, retryAt: number): Promise<void> {
     const { control, signal } = this.#options
-    // A retry click cannot bypass the node's capacity or authorization deadline.
+    // A retry click or online transition cannot bypass the node's capacity or authorization deadline.
     if (required > 0) await this.#clock.sleep(required, signal)
     const remaining = Math.max(0, retryAt - this.#clock.now())
     if (remaining <= 0) return
-    if (control === undefined) await this.#clock.sleep(remaining, signal)
+    if (control === undefined) await this.#wake.sleep(this.#clock, remaining, signal)
     else await control.sleep(this.#clock, remaining, signal)
   }
 

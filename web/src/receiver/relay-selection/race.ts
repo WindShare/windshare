@@ -1,4 +1,10 @@
-import { relayCandidates, type RelayCandidateSource } from './candidates'
+import { relayCandidates, type RelayCandidateSource, type RelayExpansionOptions } from './candidates'
+
+export interface FirstUsableRelayOptions {
+  readonly fatal?: (error: unknown) => boolean
+  readonly eligible?: (relayBase: string) => boolean
+  readonly expansion?: RelayExpansionOptions
+}
 
 export class RelayEndpointFailure extends Error {
   readonly relayBase: string
@@ -15,9 +21,9 @@ export async function firstUsableRelay<T>(
   signal: AbortSignal,
   connect: (relayBase: string, signal: AbortSignal) => Promise<T>,
   close: (value: T) => Promise<void>,
-  fatal?: (error: unknown) => boolean,
-  eligible: (relayBase: string) => boolean = () => true,
+  options: FirstUsableRelayOptions = {},
 ): Promise<T> {
+  const { fatal, eligible = () => true, expansion } = options
   signal.throwIfAborted()
   const candidates = relayCandidates(source)
   const controllers: AbortController[] = []
@@ -68,7 +74,7 @@ export async function firstUsableRelay<T>(
           void attempt(base).then(resolve, error => { failures.push(error) }).finally(() => { pending--; finish() })
         }
       })
-      void candidates.all().catch(error => { failures.push(error) }).finally(() => { settled = true; finish() })
+      void candidates.all(expansion).catch(error => { failures.push(error) }).finally(() => { settled = true; finish() })
       void terminal.catch(reject)
     })
   } catch (error) {

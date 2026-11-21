@@ -1,4 +1,6 @@
-import { relayCandidates, type RelayCandidateSource, type RelayCandidates } from './candidates'
+import {
+  relayCandidates, type RelayCandidateSource, type RelayCandidates, type RelayExpansionOptions,
+} from './candidates'
 import { firstUsableRelay, RelayEndpointFailure } from './race'
 import { systemReconnectClock, type ReconnectClock } from '../recovery-clock'
 import {
@@ -25,11 +27,16 @@ export class RelayRecovery {
     signal: AbortSignal,
     connect: (base: string, signal: AbortSignal) => Promise<T>,
     close: (value: T) => Promise<void>,
+    expansion?: RelayExpansionOptions,
   ): Promise<T> {
     try {
       return await firstUsableRelay(this.candidates, signal,
         (base, candidateSignal) => this.attempt(base, candidateSignal, () => connect(base, candidateSignal)),
-        close, isShareRecoveryFailure, base => this.#blockingRejection(base, this.#clock.now()) === undefined)
+        close, {
+          fatal: isShareRecoveryFailure,
+          eligible: base => this.#blockingRejection(base, this.#clock.now()) === undefined,
+          ...(expansion === undefined ? {} : { expansion }),
+        })
     } catch (failure) {
       signal.throwIfAborted()
       throw this.#selectionFailure(failure)

@@ -288,3 +288,138 @@ describe('root-authorized network directory', () => {
     }
   })
 })
+
+describe('network directory recovery and alias retries', () => {
+  it('allows explicit refresh and browser online recovery to clear backoff while keeping automatic backoff intact', async () => {
+    const online = new EventTarget()
+    vi.stubGlobal('addEventListener', online.addEventListener.bind(online))
+    vi.stubGlobal('removeEventListener', online.removeEventListener.bind(online))
+    try {
+      const monotonic = 1_000
+      let offline = true
+      let calls = 0
+      const directory = new NetworkDirectory({ network: vectors.network, roots: vectors.roots,
+        mirrors: ['https://mirror.example/directory'], now: () => now, monotonicNow: () => monotonic,
+        cache: new MemoryDirectoryCache(),
+        fetch: async () => {
+          calls++
+          if (offline) throw new Error('offline')
+          return new Response(envelope('valid'))
+        },
+      })
+      directories.push(directory)
+      await expect(directory.refresh()).rejects.toThrow('offline')
+      expect(calls).toBe(1)
+      await expect(directory.refresh(['jp1'])).rejects.toThrow('backoff')
+      expect(calls).toBe(1)
+
+      offline = false
+      await directory.refresh(['jp1'], { explicit: true })
+      expect(calls).toBe(2)
+      expect(directory.snapshot?.nodes[0]?.alias).toBe('jp1')
+
+      // Healthy directories must not spend mirror fetches on routine online events.
+      online.dispatchEvent(new Event('online'))
+      await Promise.resolve()
+      expect(calls).toBe(2)
+
+      // Enter failure backoff again, then recover immediately on browser online.
+      offline = true
+      await expect(directory.refresh()).rejects.toThrow('offline')
+      expect(calls).toBe(3)
+      await expect(directory.refresh()).rejects.toThrow('backoff')
+
+      offline = false
+      online.dispatchEvent(new Event('online'))
+      await vi.waitFor(() => expect(calls).toBe(4))
+      await directory.refresh()
+      expect(calls).toBe(5)
+
+      directory.close()
+      online.dispatchEvent(new Event('online'))
+      await Promise.resolve()
+      expect(calls).toBe(5)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+  it('does not apply stale backoff when browser online fires during an in-flight offline failure', async () => {
+    const online = new EventTarget()
+    vi.stubGlobal('addEventListener', online.addEventListener.bind(online))
+    vi.stubGlobal('removeEventListener', online.removeEventListener.bind(online))
+    try {
+      let rejectFirst!: (error: unknown) => void
+      let enteredFirst!: () => void
+      const firstStarted = new Promise<void>(resolve => { enteredFirst = resolve })
+      let calls = 0
+      const directory = new NetworkDirectory({ network: vectors.network, roots: vectors.roots,
+        mirrors: ['https://mirror.example/directory'], now: () => now, monotonicNow: () => 1_000,
+        cache: new MemoryDirectoryCache(),
+        fetch: () => {
+          calls++
+          if (calls === 1) {
+            enteredFirst()
+            return new Promise<Response>((_resolve, reject) => { rejectFirst = reject })
+          }
+          return Promise.resolve(new Response(envelope('valid')))
+        },
+      })
+      directories.push(directory)
+      const first = directory.refresh(['jp1'])
+      await firstStarted
+      online.dispatchEvent(new Event('online'))
+      rejectFirst(new Error('offline before reconnect'))
+      await expect(first).rejects.toThrow('offline before reconnect')
+      // Stale failure from before the online event must not enter backoff.
+      await directory.refresh(['jp1'])
+      expect(calls).toBe(2)
+      expect(directory.snapshot?.nodes[0]?.alias).toBe('jp1')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+  it('recovers unknown aliases on explicit retry without re-querying mirrors for absent aliases during automatic retries', async () => {
+    const monotonic = 1_000
+    let offline = true
+    let calls = 0
+    const directory = new NetworkDirectory({ network: vectors.network, roots: vectors.roots,
+      mirrors: ['https://mirror.example/directory'], now: () => now, monotonicNow: () => monotonic,
+      cache: new MemoryDirectoryCache(),
+      fetch: async () => {
+        calls++
+        if (offline) throw new Error('offline')
+        return new Response(envelope('valid'))
+      },
+    })
+    directories.push(directory)
+    await expect(directory.refresh()).rejects.toThrow('offline')
+    expect(calls).toBe(1)
+
+    const key = await encodeSuite02CapabilityKey(new Uint8Array(16), new Uint8Array(16))
+    const candidates = resolveLinkRelays({ ...key, relays: [], nodeAliases: ['jp1'] }, directory)
+    // Opening the link performs one explicit probe; still offline, so it enters backoff.
+    await expect(candidates.all()).rejects.toThrow('offline')
+    expect(calls).toBe(2)
+    // Automatic retries stay gated by backoff without hammering mirrors.
+    await expect(candidates.all()).rejects.toThrow('backoff')
+    expect(calls).toBe(2)
+
+    // Network comes back inside backoff; an explicit retry recovers immediately.
+    offline = false
+    await expect(candidates.all({ explicit: true })).resolves.toEqual(['https://jp1.example'])
+    expect(calls).toBe(3)
+    // Once all aliases resolve, later calls do not hit mirrors again.
+    await expect(candidates.all({ explicit: true })).resolves.toEqual(['https://jp1.example'])
+    expect(calls).toBe(3)
+
+    // A genuinely absent alias queries mirrors once, skips automatic retries on the same snapshot,
+    // and probes again only on an explicit retry.
+    const absent = resolveLinkRelays({ ...key, relays: [], nodeAliases: ['ghost'] }, directory)
+    await expect(absent.all()).rejects.toThrow('No known relay endpoints')
+    expect(calls).toBe(4)
+    await expect(absent.all()).rejects.toThrow('No known relay endpoints')
+    expect(calls).toBe(4)
+    await expect(absent.all({ explicit: true })).rejects.toThrow('No known relay endpoints')
+    expect(calls).toBe(5)
+  })
+})
