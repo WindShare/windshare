@@ -196,15 +196,22 @@ impl<R: Store, E: Environment> Authority<R, E> {
                 };
                 *status = Status::Draining;
             }
-            Action::Disable { early_cutoff } => {
-                ensure!(
-                    early_cutoff || drained,
-                    Fault::Conflict {
-                        reason: "drain_pending".into()
-                    }
-                );
-                listing.state = ListingState::Disabled;
-            }
+            Action::Disable { early_cutoff } => match listing.state {
+                ListingState::Listed { .. } => {
+                    ensure!(
+                        early_cutoff || drained,
+                        Fault::Conflict {
+                            reason: "drain_pending".into()
+                        }
+                    );
+                    listing.state = ListingState::Disabled;
+                }
+                // Disabling an already-disabled listing is idempotent so retries and
+                // concurrent admin tabs converge without tripping a stale drain check.
+                ListingState::Disabled => return Ok(()),
+                // Staging drafts carry rollback metadata and must leave via promote or cancel_draft.
+                ListingState::Staging { .. } => return Err(Fault::Invalid.into()),
+            },
             Action::Remove { early_cutoff } => {
                 ensure!(
                     matches!(listing.state, ListingState::Disabled)

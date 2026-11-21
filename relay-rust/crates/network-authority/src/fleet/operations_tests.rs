@@ -859,3 +859,175 @@ fn corroborated_multi_node_burst_suppresses_withdrawal_even_with_healthy_alterna
     assert_eq!(fleet.entry("us1").status, Status::Draining);
     assert_eq!(fleet.entry("us1").spec.roles, [Role::Relay]);
 }
+
+fn report_zero_shares(auth: &mut Authority<Memory, Clock>, signing: &SigningKey, version: u64) {
+    auth.environment.now += 1;
+    let batch = Batch {
+        id: [7; 16],
+        node: signing.verifying_key().to_bytes(),
+        issuer: auth.signing.generation.issuer,
+        created_at: auth.environment.now,
+        records: vec![],
+        resident_accounts: vec![],
+        shares: vec![],
+        load: Load {
+            applied_policy_version: version,
+            resident_shares: 0,
+            relay_budget: None,
+            active_sessions: 0,
+            wire_bytes: 0,
+            forwarded_bytes: 0,
+            admission_refusals: 0,
+        },
+    };
+    let signed = trust::sign(USAGE_DOMAIN, &serde_json::to_vec(&batch).unwrap(), signing);
+    assert!(matches!(reply(auth, &signed), ReportResult::Status { .. }));
+}
+
+fn assert_staging_disable_rejected(fleet: &mut Fleet, node_key: &str, operation_id: &str) {
+    for early_cutoff in [false, true] {
+        let err = fleet
+            .auth
+            .manage(
+                &fleet.admin,
+                &Manage {
+                    node_key: node_key.into(),
+                    operation_id: operation_id.into(),
+                    action: Action::Disable { early_cutoff },
+                },
+                &fleet.signer,
+            )
+            .unwrap_err();
+        assert!(matches!(err.downcast_ref::<Fault>(), Some(Fault::Invalid)));
+    }
+}
+
+fn spec_for_key(alias: &str, signing: &SigningKey) -> Spec {
+    let mut value = spec(alias, 0);
+    value["node_key"] = json!(URL_SAFE_NO_PAD.encode(signing.verifying_key().to_bytes()));
+    serde_json::from_value(value).unwrap()
+}
+
+#[test]
+fn disable_rejects_staging_drafts_without_discarding_enrollment() {
+    let mut fleet = Fleet::new();
+
+    // Provisional draft stays staging and cancellable even after reporting zero shares.
+    let provisional_key = SigningKey::from_bytes(&[61; 32]);
+    let provisional_spec = spec_for_key("provisional-draft", &provisional_key);
+    let provisional = fleet
+        .auth
+        .stage(&fleet.admin, provisional_spec.clone())
+        .unwrap();
+    let provisional_op = provisional.listing.as_ref().unwrap().operation_id.clone();
+    report_zero_shares(&mut fleet.auth, &provisional_key, provisional.version);
+    assert!(
+        fleet
+            .auth
+            .node_by_key(&fleet.admin, &provisional.key)
+            .unwrap()
+            .cutoff_ready
+    );
+    assert_staging_disable_rejected(&mut fleet, &provisional_spec.node_key, &provisional_op);
+    fleet
+        .auth
+        .cancel_draft(&fleet.admin, &provisional_spec.node_key, &provisional_op)
+        .unwrap();
+    assert!(
+        load::<Node>(&fleet.auth.store, &key("node", &provisional.key))
+            .unwrap()
+            .is_none()
+    );
+
+    // PriorPolicy draft rejects Disable so cancelling still restores its prior Admission.
+    let prior_key = SigningKey::from_bytes(&[62; 32]);
+    let prior_id = prior_key.verifying_key().to_bytes();
+    let prior_node = Node {
+        listing: None,
+        key: prior_id,
+        zone: Zone::Cn,
+        region: "shanghai".into(),
+        admission: Admission::Accepting,
+        anonymous: false,
+        version: 4,
+    };
+    save(&mut fleet.auth.store, &key("node", &prior_id), &prior_node).unwrap();
+    let prior_spec = spec_for_key("prior-policy-draft", &prior_key);
+    let staged_prior = fleet.auth.stage(&fleet.admin, prior_spec.clone()).unwrap();
+    let prior_op = staged_prior.listing.as_ref().unwrap().operation_id.clone();
+    report_zero_shares(&mut fleet.auth, &prior_key, staged_prior.version);
+    assert!(
+        fleet
+            .auth
+            .node_by_key(&fleet.admin, &prior_id)
+            .unwrap()
+            .cutoff_ready
+    );
+    assert_staging_disable_rejected(&mut fleet, &prior_spec.node_key, &prior_op);
+    fleet
+        .auth
+        .cancel_draft(&fleet.admin, &prior_spec.node_key, &prior_op)
+        .unwrap();
+    let restored: Node = load(&fleet.auth.store, &key("node", &prior_id))
+        .unwrap()
+        .unwrap();
+    assert!(restored.listing.is_none());
+    assert_eq!(restored.admission, Admission::Accepting);
+}
+
+#[test]
+fn disable_is_idempotent_when_disabled_and_rejects_reverification_staging() {
+    let mut fleet = Fleet::new();
+    fleet
+        .manage(Action::Disable { early_cutoff: true })
+        .unwrap();
+    let disabled_version = fleet.target_node().version;
+    let disabled_serial = crate::fleet::publication::current(&fleet.auth.store)
+        .unwrap()
+        .revision()
+        .unwrap()
+        .serial;
+    let target_id = fleet.target_node().key;
+    assert!(
+        !fleet
+            .auth
+            .node_by_key(&fleet.admin, &target_id)
+            .unwrap()
+            .cutoff_ready
+    );
+    for early_cutoff in [false, true] {
+        fleet.manage(Action::Disable { early_cutoff }).unwrap();
+    }
+    assert_eq!(fleet.target_node().version, disabled_version);
+    assert_eq!(
+        crate::fleet::publication::current(&fleet.auth.store)
+            .unwrap()
+            .revision()
+            .unwrap()
+            .serial,
+        disabled_serial
+    );
+
+    fleet.manage(Action::Verify).unwrap();
+    let verify_node = fleet.target_node();
+    let verify_op = verify_node.listing.unwrap().operation_id;
+    let target_signing = SigningKey::from_bytes(&[11; 32]);
+    report_zero_shares(&mut fleet.auth, &target_signing, verify_node.version);
+    assert!(
+        fleet
+            .auth
+            .node_by_key(&fleet.admin, &target_id)
+            .unwrap()
+            .cutoff_ready
+    );
+    let target_key = fleet.target.node_key.clone();
+    assert_staging_disable_rejected(&mut fleet, &target_key, &verify_op);
+    fleet
+        .auth
+        .cancel_draft(&fleet.admin, &target_key, &verify_op)
+        .unwrap();
+    assert!(matches!(
+        fleet.target_node().listing.unwrap().state,
+        ListingState::Disabled
+    ));
+}
