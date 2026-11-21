@@ -19,12 +19,17 @@ type nodeState struct {
 	expires   time.Time
 	anonymous bool
 	available bool
-	refs      int
-	cancel    context.CancelFunc
+}
+
+type nodePoller struct {
+	refs   int
+	cancel context.CancelFunc
 }
 
 // nodePolicyCache owns relay node descriptor discovery and anonymous-admission
-// caching independently of account credential state.
+// caching independently of account credential state. Active polling follows
+// pending-attribution demand, while verified signed policies remain reusable
+// until signature expiry or directory key rotation.
 // Lock ordering with Service: Service.mu -> nodePolicyCache.mu.
 type nodePolicyCache struct {
 	ctx         context.Context
@@ -34,7 +39,8 @@ type nodePolicyCache struct {
 	resolveNode func(string) (Node, bool)
 	onChange    func()
 	mu          sync.Mutex
-	entries     map[string]*nodeState
+	policies    map[string]nodeState
+	pollers     map[string]*nodePoller
 }
 
 func newNodePolicyCache(
@@ -52,7 +58,8 @@ func newNodePolicyCache(
 		now:         now,
 		resolveNode: resolveNode,
 		onChange:    onChange,
-		entries:     make(map[string]*nodeState),
+		policies:    make(map[string]nodeState),
+		pollers:     make(map[string]*nodePoller),
 	}
 }
 
@@ -62,68 +69,89 @@ func (cache *nodePolicyCache) retain(address string) {
 	}
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
-	state := cache.entries[address]
-	if state == nil {
-		state = &nodeState{}
-		cache.entries[address] = state
-	}
-	state.refs++
-	if state.cancel != nil {
+	if poller := cache.pollers[address]; poller != nil {
+		poller.refs++
 		return
 	}
 	nodeCtx, cancel := context.WithCancel(cache.ctx)
-	state.cancel = cancel
+	poller := &nodePoller{refs: 1, cancel: cancel}
+	cache.pollers[address] = poller
 	cache.workers.Go(func() {
-		cache.pollNode(nodeCtx, address, state)
+		cache.pollNode(nodeCtx, address, poller)
 	})
 }
 
 func (cache *nodePolicyCache) release(address string) {
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
-	state := cache.entries[address]
-	if state == nil {
+	poller := cache.pollers[address]
+	if poller == nil {
 		return
 	}
-	if state.refs > 0 {
-		state.refs--
+	if poller.refs > 0 {
+		poller.refs--
 	}
-	if state.refs > 0 {
+	if poller.refs > 0 {
 		return
 	}
-	if state.cancel != nil {
-		state.cancel()
-		state.cancel = nil
-	}
-	delete(cache.entries, address)
+	poller.cancel()
+	delete(cache.pollers, address)
+	cache.pruneExpiredPoliciesLocked(cache.now())
 }
 
-func (state *nodeState) permits(key [32]byte, now time.Time) bool {
-	return state != nil && state.key == key &&
-		state.expires.After(now) && state.anonymous && state.available
+func (state nodeState) permits(key [32]byte, now time.Time) bool {
+	return state.key == key && state.expires.After(now) && state.anonymous && state.available
 }
 
 func (cache *nodePolicyCache) permitsAnonymous(address string, node Node) bool {
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
-	return cache.entries[address].permits(node.Key, cache.now())
+	policy, ok := cache.policies[address]
+	if !ok {
+		return false
+	}
+	if policy.permits(node.Key, cache.now()) {
+		return true
+	}
+	// Evict expired, key-mismatched, or non-permitting entries on read so
+	// callers immediately rediscover against the node's current directory key.
+	delete(cache.policies, address)
+	return false
+}
+
+func (cache *nodePolicyCache) pruneExpiredPoliciesLocked(now time.Time) {
+	for address, policy := range cache.policies {
+		if !policy.expires.After(now) {
+			delete(cache.policies, address)
+		}
+	}
 }
 
 func (cache *nodePolicyCache) put(address string, state *nodeState) {
 	cache.mu.Lock()
-	cache.entries[address] = state
+	if state == nil {
+		delete(cache.policies, address)
+	} else {
+		cache.policies[address] = *state
+	}
 	cache.mu.Unlock()
 }
 
-func (cache *nodePolicyCache) len() int {
+func (cache *nodePolicyCache) pollerCount() int {
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
-	return len(cache.entries)
+	return len(cache.pollers)
 }
 
-func (cache *nodePolicyCache) pollNode(ctx context.Context, address string, state *nodeState) {
+func (cache *nodePolicyCache) policyCount() int {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	return len(cache.policies)
+}
+
+func (cache *nodePolicyCache) pollNode(ctx context.Context, address string, poller *nodePoller) {
 	for {
-		cache.refreshNode(ctx, address, state)
+		cache.refreshNode(ctx, address, poller)
 		timer := time.NewTimer(RefreshInterval)
 		select {
 		case <-ctx.Done():
@@ -134,9 +162,14 @@ func (cache *nodePolicyCache) pollNode(ctx context.Context, address string, stat
 	}
 }
 
-func (cache *nodePolicyCache) refreshNode(ctx context.Context, address string, state *nodeState) {
+func (cache *nodePolicyCache) refreshNode(ctx context.Context, address string, poller *nodePoller) {
 	node, official := cache.resolveNode(address)
 	if !official {
+		cache.mu.Lock()
+		if cache.pollers[address] == poller && ctx.Err() == nil {
+			delete(cache.policies, address)
+		}
+		cache.mu.Unlock()
 		return
 	}
 	descriptor, err := cache.discover(ctx, address, node.Key)
@@ -146,14 +179,21 @@ func (cache *nodePolicyCache) refreshNode(ctx context.Context, address string, s
 	changed := false
 	permits := false
 	cache.mu.Lock()
-	if cache.entries[address] == state && ctx.Err() == nil {
+	if cache.pollers[address] == poller && ctx.Err() == nil {
 		now := cache.now()
-		before := state.permits(node.Key, now)
-		state.key = node.Key
-		state.expires = time.Unix(int64(descriptor.ExpiresAt), 0)
-		state.anonymous = descriptor.Anonymous
-		state.available = descriptor.Available && descriptor.Services.Relay
-		permits = state.permits(node.Key, now)
+		before := cache.policies[address].permits(node.Key, now)
+		next := nodeState{
+			key:       node.Key,
+			expires:   time.Unix(int64(descriptor.ExpiresAt), 0),
+			anonymous: descriptor.Anonymous,
+			available: descriptor.Available && descriptor.Services.Relay,
+		}
+		permits = next.permits(node.Key, now)
+		if permits {
+			cache.policies[address] = next
+		} else {
+			delete(cache.policies, address)
+		}
 		changed = before != permits
 	}
 	cache.mu.Unlock()
