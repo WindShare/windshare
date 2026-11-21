@@ -171,7 +171,7 @@ func (s *Set) allocateRescueLocked(pending *pendingAdmission, now time.Time) {
 	if pending.order.Distance > 0 || len(pending.attempted) >= MaxDemandAttempts {
 		return
 	}
-	ordered, _ := s.eligiblePendingLanesLocked(pending, false)
+	ordered, _, _ := s.eligiblePendingLanesLocked(pending, false)
 	if len(ordered) == 0 {
 		return
 	}

@@ -50,7 +50,10 @@ func (s *Set) RecoveryDemand() []Identity {
 	defer s.mu.Unlock()
 	var result []Identity
 	for _, pending := range s.pending {
-		if pending.done || pending.ctx.Err() != nil || pending.blocked != CapacityRoute {
+		// Backed-off lanes still leave no ready path for an exhausted read, so
+		// previously failed generations remain eligible for path recovery.
+		if pending.done || pending.ctx.Err() != nil ||
+			(pending.blocked != CapacityRoute && pending.blocked != CapacityBackoff) {
 			continue
 		}
 		for identity := range pending.attempted {

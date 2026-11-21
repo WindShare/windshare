@@ -3,6 +3,7 @@ package lanes
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -204,5 +205,161 @@ func TestCongestionWaitRemainsCancelable(t *testing.T) {
 			t.Fatal(err)
 		}
 		set.Close()
+	})
+}
+
+func TestCongestionBackoffExposesNetworkWaitingDemandWhilePreservingCooldown(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		set := newBoundaryLaneSet(t, 139)
+		descriptor := transferDescriptor(t, 1)
+		demand := validDemand(t, descriptor, 0)
+		wantBytes := blockDemandBytes(demand)
+		var primaryCalls atomic.Int32
+		_ = set.Add(Identity{ID: 1, Epoch: 1}, RouteRelay, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
+			primaryCalls.Add(1)
+			return records.BlockRecord{}, congestedBlock(15*time.Second, nil)
+		}))
+		done := make(chan error, 1)
+		go func() {
+			_, err := set.Fetch(t.Context(), Request{Demand: demand, Validate: validateTransferRecord(demand)})
+			done <- err
+		}()
+		synctest.Wait()
+		if primaryCalls.Load() != 1 {
+			t.Fatalf("primary calls=%d, want 1", primaryCalls.Load())
+		}
+		got := set.SchedulingDemand()
+		if got.QueuedBlocks != 1 || got.InFlightBytes != 0 || got.CapacityWaitingBytes != 0 || got.NetworkWaitingBytes != wantBytes {
+			t.Fatalf("cooldown demand=%+v, want queued=1 inflight=0 capacity=0 network=%d", got, wantBytes)
+		}
+		if recovery := set.RecoveryDemand(); len(recovery) != 0 {
+			t.Fatalf("cooldown falsely requested path recovery: %v", recovery)
+		}
+		time.Sleep(5 * time.Second)
+		synctest.Wait()
+		if primaryCalls.Load() != 1 {
+			t.Fatalf("primary bypassed cooldown: calls=%d", primaryCalls.Load())
+		}
+		_ = set.Add(Identity{ID: 2, Epoch: 1}, RouteRelay, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
+			return transferRecord(t, descriptor, 0), nil
+		}))
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+		if primaryCalls.Load() != 1 {
+			t.Fatalf("backup takeover disturbed primary cooldown: calls=%d", primaryCalls.Load())
+		}
+		if after := set.SchedulingDemand(); after.QueuedBlocks != 0 || after.NetworkWaitingBytes != 0 {
+			t.Fatalf("settled demand=%+v", after)
+		}
+		set.Close()
+	})
+}
+
+func TestCongestionBackoffPreservesBackpressureSuspensionAndFailedRouteRecovery(t *testing.T) {
+	t.Run("consumer backpressure wins over cooldown", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			set := newBoundaryLaneSet(t, 140)
+			descriptor := transferDescriptor(t, 1)
+			demand := validDemand(t, descriptor, 0)
+			wantBytes := blockDemandBytes(demand)
+			var blocked atomic.Bool
+			changed := make(chan struct{})
+			_ = set.Add(Identity{ID: 1, Epoch: 1}, RouteRelay, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
+				blocked.Store(true)
+				return records.BlockRecord{}, congestedBlock(15*time.Second, nil)
+			}))
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() {
+				_, err := set.Fetch(ctx, Request{Demand: demand, Validate: validateTransferRecord(demand), Ready: func() CapacityReadiness {
+					if blocked.Load() {
+						return CapacityReadiness{Kind: CapacityConsumer, Changed: changed}
+					}
+					return CapacityReadiness{Kind: CapacityReady}
+				}})
+				done <- err
+			}()
+			synctest.Wait()
+			got := set.SchedulingDemand()
+			if got.NetworkWaitingBytes != 0 || got.CapacityWaitingBytes != wantBytes {
+				t.Fatalf("backpressure demand=%+v, want network=0 capacity=%d", got, wantBytes)
+			}
+			cancel()
+			if err := <-done; !errors.Is(err, context.Canceled) {
+				t.Fatal(err)
+			}
+		})
+	})
+
+	t.Run("suspended relay stays route-blocked", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			set := newBoundaryLaneSet(t, 141)
+			descriptor := transferDescriptor(t, 1)
+			demand := validDemand(t, descriptor, 0)
+			identity := Identity{ID: 1, Epoch: 1}
+			_ = set.Add(identity, RouteRelay, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
+				return records.BlockRecord{}, congestedBlock(15*time.Second, nil)
+			}))
+			if _, err := set.SuspendContent(identity); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() {
+				_, err := set.Fetch(ctx, Request{Demand: demand, Validate: validateTransferRecord(demand)})
+				done <- err
+			}()
+			synctest.Wait()
+			if got := set.SchedulingDemand(); got.QueuedBlocks != 1 || got.NetworkWaitingBytes != 0 {
+				t.Fatalf("suspended demand=%+v, want queued=1 network=0", got)
+			}
+			cancel()
+			if err := <-done; !errors.Is(err, context.Canceled) {
+				t.Fatal(err)
+			}
+		})
+	})
+
+	t.Run("failed direct generation retains recovery demand during relay cooldown", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			set := newBoundaryLaneSet(t, 142)
+			supply, err := set.ExpectRoute(RouteDirect)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer supply.Close()
+			descriptor := transferDescriptor(t, 1)
+			demand := validDemand(t, descriptor, 0)
+			wantBytes := blockDemandBytes(demand)
+			direct := Identity{ID: 2, Epoch: 1}
+			relay := Identity{ID: 1, Epoch: 1}
+			_ = set.Add(direct, RouteDirect, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
+				return records.BlockRecord{}, retiredBlockFailure()
+			}))
+			_ = set.Add(relay, RouteRelay, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
+				return records.BlockRecord{}, congestedBlock(15*time.Second, nil)
+			}))
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() {
+				_, err := set.Fetch(ctx, Request{Demand: demand, Validate: validateTransferRecord(demand)})
+				done <- err
+			}()
+			synctest.Wait()
+			if got := set.SchedulingDemand(); got.NetworkWaitingBytes != wantBytes {
+				t.Fatalf("mixed demand=%+v, want network=%d", got, wantBytes)
+			}
+			if got := set.RecoveryDemand(); !slices.Equal(got, []Identity{direct}) {
+				t.Fatalf("recovery demand=%v, want [%v]", got, direct)
+			}
+			cancel()
+			if err := <-done; !errors.Is(err, context.Canceled) {
+				t.Fatal(err)
+			}
+		})
 	})
 }
