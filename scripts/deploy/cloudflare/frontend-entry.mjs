@@ -6,7 +6,7 @@ const RELEASE_VERSION = /^v[0-9]+\.[0-9]+\.[0-9]+$/;
 const ASSET_NAME = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,179}$/;
 
 export default {
-  async fetch(request, env, context) {
+  async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname.startsWith('/downloads/')) {
       if (request.method !== 'GET' && request.method !== 'HEAD') return new Response(null, { status: 405, headers: { Allow: 'GET, HEAD' } });
@@ -20,7 +20,7 @@ export default {
         headers: { Location: `${RELEASES}/download/${version}/${asset}`, 'Cache-Control': 'public, max-age=300' },
       });
     }
-    if (url.pathname === '/.well-known/windshare-network') return serveDirectory(request, env, context);
+    if (url.pathname === '/.well-known/windshare-network') return serveDirectory(request, env);
     return env.ASSETS.fetch(request);
   },
 };

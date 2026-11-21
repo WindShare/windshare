@@ -149,189 +149,167 @@ test('frontend post-deploy verification retries stale state and lagging SaaS rou
     'saas_route_pending',
   ]);
 });
-test('published mirror compares signed revisions and only persists a changed copy', async t => {
+test('published mirror serves newer KV revisions with a 60s TTL and falls back cleanly on outage', async t => {
   let now = Date.parse(vectors.now);
   t.mock.method(Date, 'now', () => now);
+  const warnings = [];
+  t.mock.method(console, 'warn', (event, fields) => warnings.push({ event, ...fields }));
   const baseline = signed('valid'), newer = signed('new_generation');
-  let current = signed('older_serial'), saved, writes = 0, reads = 0;
-  const cache = { async put(key, value) { writes++; saved = await value.text(); },
-    async match() { return saved && new Response(saved); } };
-  const pending = [];
-  const context = { waitUntil(promise) { pending.push(promise); } };
-  const env = { BUNDLED_DIRECTORY_REVISION: JSON.stringify(await directoryRevision(baseline)),
-    DIRECTORY: { get(key, options) { assert.deepEqual(options, { cacheTtl: 60 }); return current; } },
-    ASSETS: { fetch: async () => { reads++; return new Response(baseline); } } };
+  let current = signed('older_serial'), kvError = null, reads = 0;
+  const env = {
+    BUNDLED_DIRECTORY_REVISION: JSON.stringify(await directoryRevision(baseline)),
+    DIRECTORY: {
+      async get(key, options) {
+        assert.equal(key, 'windshare-network');
+        assert.deepEqual(options, { cacheTtl: 60 });
+        if (kvError) throw kvError;
+        return current;
+      },
+    },
+    ASSETS: { fetch: async () => { reads++; return new Response(baseline); } },
+  };
   const request = new Request('https://windshare.cc/.well-known/windshare-network');
-  const serve = (req = request, bindings = env) => serveDirectory(req, bindings, context, cache);
+  const serve = (req = request, bindings = env) => serveDirectory(req, bindings);
+
   assert.equal(await (await serve()).text(), baseline);
   current = newer;
-  assert.equal(await (await serve()).text(), newer);
+  const live = await serve();
+  assert.equal(await live.text(), newer);
+  assert.equal(live.headers.get('cache-control'), 'public, max-age=60');
   assert.equal(await (await serve(new Request(request, { method: 'HEAD' }))).text(), '');
-  await Promise.all(pending);
-  assert.equal(writes, 1);
   assert.equal(reads, 1);
+
+  // Clearing KV or encountering a KV outage falls back to the valid bundled snapshot without sticky state.
   current = null;
-  assert.equal(await (await serve(request, { ...env })).text(), newer);
+  assert.equal(await (await serve()).text(), baseline);
+  kvError = new Error('kv outage');
+  assert.equal(await (await serve()).text(), baseline);
+  kvError = null;
+  assert.equal(warnings.filter(w => w.event === 'directory_kv_read_failed').length, 1);
+
+  // Once both KV and bundled revisions expire, the mirror returns an uncached 503.
+  current = newer;
   now = (await directoryRevision(newer)).until + 1;
   const unavailable = await serve();
   assert.equal(unavailable.status, 503);
   assert.equal(unavailable.headers.get('cache-control'), 'no-store');
+  assert.equal(unavailable.headers.get('retry-after'), '30');
 });
-test('a temporary Cache API failure retries the same live revision after the edge TTL', async t => {
-  let now = Date.parse(vectors.now), writes = 0, pending;
+
+test('mirror self-heals immediately after a bad high-revision KV write without locking out valid snapshots', async t => {
+  let now = Date.parse(vectors.now);
   t.mock.method(Date, 'now', () => now);
-  t.mock.method(console, 'warn', () => {});
-  const bytes = signed('valid');
-  const env = { DIRECTORY: { get: async () => bytes }, BUNDLED_DIRECTORY_REVISION: 'null' };
-  const cache = { match: async () => null, async put() { if (++writes === 1) throw new Error('temporarily unavailable'); } };
-  const ctx = { waitUntil(promise) { pending = promise; } };
-  const request = new Request('https://windshare.cc/.well-known/windshare-network');
-  const read = async () => {
-    assert.equal(await (await serveDirectory(request, env, ctx, cache)).text(), bytes);
-    await pending;
+  const baseline = signed('valid'), newer = signed('new_generation'), expiredHigh = signed('expired_generation');
+  const encodeJson = value => Buffer.from(JSON.stringify(value)).toString('base64url');
+  const forgedHigh = JSON.stringify({
+    payload: encodeJson({
+      format: 1, network: 'test', generation: 999, serial: 1,
+      issued_at: '2026-11-12T23:00:00Z', expires_at: '2026-11-14T00:00:00Z',
+    }),
+    certificate: {
+      root: 'primary',
+      payload: encodeJson({
+        format: 1, network: 'test', generation: 999, key: 'forged',
+        not_before: '2026-11-12T00:00:00Z', expires_at: '2026-12-13T00:00:00Z',
+      }),
+      signature: 'bad',
+    },
+    signature: 'bad',
+  });
+  let current = forgedHigh;
+  const env = {
+    BUNDLED_DIRECTORY_REVISION: JSON.stringify(await directoryRevision(baseline)),
+    DIRECTORY: { get: async () => current },
+    ASSETS: { fetch: async () => new Response(baseline) },
   };
-  await read();
-  await read();
-  assert.equal(writes, 1);
-  now += 60_000;
-  await read();
-  await read();
-  assert.equal(writes, 2);
-});
-test('mirror isolates request I/O promises, merges cold restores monotonically, and isolates cache writes', async t => {
-  t.mock.method(Date, 'now', () => Date.parse(vectors.now));
-  const baseline = signed('valid'), newer = signed('new_generation');
   const request = new Request('https://windshare.cc/.well-known/windshare-network');
 
-  // 1. A stalled/canceled request on cold start must not poison subsequent requests' restore or bundle fetch.
-  let matchCalls = 0, assetCalls = 0;
-  const cache = {
-    match: () => (++matchCalls === 1 ? new Promise(() => {}) : Promise.resolve(null)),
-    put: async () => {},
+  // Even if an unverified high revision enters KV, responses stay short-cached and never latch monotonically.
+  const poisoned = await serveDirectory(request, env);
+  assert.equal(await poisoned.text(), forgedHigh);
+  assert.equal(poisoned.headers.get('cache-control'), 'public, max-age=60');
+
+  // Restoring KV to the real lower generation or clearing KV immediately recovers.
+  current = newer;
+  assert.equal(await (await serveDirectory(request, env)).text(), newer);
+  current = null;
+  assert.equal(await (await serveDirectory(request, env)).text(), baseline);
+
+  // An expired high-revision KV copy never locks out a still-usable bundled snapshot.
+  now = (await directoryRevision(expiredHigh)).until + 1;
+  current = expiredHigh;
+  assert.equal(await (await serveDirectory(request, env)).text(), baseline);
+});
+
+test('directoryRevision enforces structural bounds and rejects mismatched KV networks', async t => {
+  t.mock.method(Date, 'now', () => Date.parse(vectors.now));
+  const warnings = [];
+  t.mock.method(console, 'warn', (event, fields) => warnings.push({ event, ...fields }));
+  const encodeJson = value => Buffer.from(JSON.stringify(value)).toString('base64url');
+  const envelope = (payload, grant) => JSON.stringify({
+    payload: encodeJson(payload),
+    certificate: { root: 'primary', payload: encodeJson(grant), signature: 'sig' },
+    signature: 'sig',
+  });
+  const baseGrant = {
+    format: 1, network: 'test', generation: 1, key: 'key',
+    not_before: '2026-11-12T00:00:00Z', expires_at: '2026-12-13T00:00:00Z',
   };
+  const basePayload = {
+    format: 1, network: 'test', generation: 1, serial: 42,
+    issued_at: '2026-11-12T23:00:00Z', expires_at: '2026-11-14T00:00:00Z',
+  };
+
+  // Production release export parses cleanly.
+  const production = readFileSync(new URL('../../../deploy/network/windshare-network.json', import.meta.url), 'utf8');
+  const prodRev = await directoryRevision(production);
+  assert.equal(prodRev.network, 'windshare');
+
+  // Generation forgery, excessive lifetimes, pre-grant issuance, and non-string timestamps are rejected.
+  await assert.rejects(directoryRevision(signed('generation_forgery')), /Invalid directory revision/);
+  await assert.rejects(directoryRevision(envelope({ ...basePayload, expires_at: '2027-03-01T00:00:00Z' }, baseGrant)), /Invalid directory revision/);
+  await assert.rejects(directoryRevision(envelope(basePayload, { ...baseGrant, expires_at: '2027-06-01T00:00:00Z' })), /Invalid directory revision/);
+  await assert.rejects(directoryRevision(envelope({ ...basePayload, issued_at: '2026-11-11T00:00:00Z' }, baseGrant)), /Invalid directory revision/);
+  await assert.rejects(directoryRevision(envelope({ ...basePayload, expires_at: 2099 }, baseGrant)), /Invalid directory revision/);
+  await assert.rejects(directoryRevision(envelope({ ...basePayload, format: 2 }, baseGrant)), /Invalid directory revision/);
+
+  // A KV envelope for another network cannot displace the bundled network snapshot.
+  const baseline = signed('valid');
+  const wrongNetwork = envelope(
+    { ...basePayload, network: 'staging', generation: 99, serial: 1 },
+    { ...baseGrant, network: 'staging', generation: 99 },
+  );
+  const env = {
+    BUNDLED_DIRECTORY_REVISION: JSON.stringify(await directoryRevision(baseline)),
+    DIRECTORY: { get: async () => wrongNetwork },
+    ASSETS: { fetch: async () => new Response(baseline) },
+  };
+  const request = new Request('https://windshare.cc/.well-known/windshare-network');
+  assert.equal(await (await serveDirectory(request, env)).text(), baseline);
+  assert.deepEqual(warnings, []);
+});
+
+test('mirror isolates stalled ASSETS fetches across requests', async t => {
+  t.mock.method(Date, 'now', () => Date.parse(vectors.now));
+  const baseline = signed('valid');
+  const request = new Request('https://windshare.cc/.well-known/windshare-network');
+
+  // A stalled/canceled request on cold start must not poison subsequent requests' bundle fetch.
+  let assetCalls = 0;
   const env = {
     DIRECTORY: { get: async () => null },
     ASSETS: { fetch: () => (++assetCalls === 1 ? new Promise(() => {}) : Promise.resolve(new Response(baseline))) },
   };
-  // Request 1 hangs forever inside its own cache.match and ASSETS.fetch (like an aborted workerd IoContext).
-  const req1 = serveDirectory(request, env, null, cache);
-  const req2 = await serveDirectory(request, env, null, cache);
+  const req1 = serveDirectory(request, env);
+  const req2 = await serveDirectory(request, env);
   assert.equal(req2.status, 200);
   assert.equal(await req2.text(), baseline);
-  // Request 3 hits cached plain data without re-running cache.match or ASSETS.fetch.
-  const req3 = await serveDirectory(request, env, null, cache);
+  // Request 3 hits cached plain data without re-running ASSETS.fetch.
+  const req3 = await serveDirectory(request, env);
   assert.equal(req3.status, 200);
   assert.equal(await req3.text(), baseline);
-  assert.equal(matchCalls, 2);
   assert.equal(assetCalls, 2);
   void req1;
-
-  // 2. Late cold-start restore resolving with an older revision must not downgrade a newer KV revision.
-  let releaseSlowRestore, mergeMatchCalls = 0, mergeKv = newer;
-  const slowRestore = new Promise(resolve => { releaseSlowRestore = resolve; });
-  const mergeCache = {
-    match: () => (++mergeMatchCalls === 1 ? slowRestore : Promise.resolve(null)),
-    put: async () => {},
-  };
-  const mergeEnv = {
-    DIRECTORY: { get: async () => mergeKv },
-    BUNDLED_DIRECTORY_REVISION: 'null',
-  };
-  const slowReq = serveDirectory(request, mergeEnv, null, mergeCache);
-  const fastReq = await serveDirectory(request, mergeEnv, null, mergeCache);
-  assert.equal(await fastReq.text(), newer);
-  releaseSlowRestore(new Response(baseline));
-  assert.equal(await (await slowReq).text(), newer);
-  mergeKv = null;
-  assert.equal(await (await serveDirectory(request, mergeEnv, null, mergeCache)).text(), newer);
-
-  // 3. A stalled waitUntil cache.put on an earlier revision must not block persisting a newer revision.
-  let putCalls = 0, persisted = null, writeKv = baseline;
-  const writeEnv = {
-    DIRECTORY: { get: async () => writeKv },
-    BUNDLED_DIRECTORY_REVISION: 'null',
-  };
-  const writeCache = {
-    match: async () => null,
-    put: async (key, value) => {
-      if (++putCalls === 1) return new Promise(() => {});
-      persisted = await value.text();
-    },
-  };
-  const waits = [];
-  const ctx = { waitUntil(promise) { waits.push(promise); } };
-  assert.equal(await (await serveDirectory(request, writeEnv, ctx, writeCache)).text(), baseline);
-  writeKv = newer;
-  assert.equal(await (await serveDirectory(request, writeEnv, ctx, writeCache)).text(), newer);
-  await waits[1];
-  assert.equal(putCalls, 2);
-  assert.equal(persisted, newer);
-});
-
-test('multi-hostname mirror shares one canonical Cache API key across origins and cold restarts', async t => {
-  t.mock.method(Date, 'now', () => Date.parse(vectors.now));
-  const baseline = signed('valid'), newer = signed('new_generation');
-  const bundledRevision = JSON.stringify(await directoryRevision(baseline));
-  const linkReq = new Request('https://ws.ourworld.top/.well-known/windshare-network');
-  const backupReq = new Request('https://windshare.cc/.well-known/windshare-network');
-  const createCache = () => {
-    const entries = new Map();
-    let writes = 0;
-    return {
-      entries,
-      get writes() { return writes; },
-      async put(key, value) { writes++; entries.set(String(key), await value.text()); },
-      async match(key) {
-        const hit = entries.get(String(key));
-        return hit === undefined ? null : new Response(hit);
-      },
-    };
-  };
-
-  // 1. Anchors the canonical cache key to the zone primary endpoint from WINDSHARE_DEPLOYMENT.
-  const cache = createCache();
-  const pending = [];
-  const context = { waitUntil(promise) { pending.push(promise); } };
-  const deployment = JSON.stringify({ endpoint: 'https://windshare.cc' });
-  const warmEnv = {
-    [STATE_BINDING]: deployment,
-    BUNDLED_DIRECTORY_REVISION: bundledRevision,
-    DIRECTORY: { get: async () => newer },
-    ASSETS: { fetch: async () => new Response(baseline) },
-  };
-  assert.equal(await (await serveDirectory(linkReq, warmEnv, context, cache)).text(), newer);
-  assert.equal(await (await serveDirectory(backupReq, warmEnv, context, cache)).text(), newer);
-  await Promise.all(pending);
-  assert.equal(cache.writes, 1);
-  assert.deepEqual([...cache.entries.keys()], ['https://windshare.cc/.windshare-cache/last-directory']);
-
-  // Cold restart during a KV outage restores the persisted copy regardless of which hostname arrives first.
-  const outageEnv = () => ({
-    [STATE_BINDING]: deployment,
-    BUNDLED_DIRECTORY_REVISION: bundledRevision,
-    DIRECTORY: { get: async () => { throw new Error('kv outage'); } },
-    ASSETS: { fetch: async () => new Response(baseline) },
-  });
-  assert.equal(await (await serveDirectory(backupReq, outageEnv(), context, cache)).text(), newer);
-  assert.equal(await (await serveDirectory(linkReq, outageEnv(), context, cache)).text(), newer);
-
-  // 2. Falls back to a shared canonical internal key when deployment metadata is absent or malformed.
-  for (const metadata of [undefined, '{not-json']) {
-    const fallbackCache = createCache();
-    const fallbackPending = [];
-    const fallbackCtx = { waitUntil(promise) { fallbackPending.push(promise); } };
-    const envWith = get => ({
-      ...(metadata !== undefined ? { [STATE_BINDING]: metadata } : {}),
-      BUNDLED_DIRECTORY_REVISION: bundledRevision,
-      DIRECTORY: { get },
-      ASSETS: { fetch: async () => new Response(baseline) },
-    });
-    assert.equal(await (await serveDirectory(linkReq, envWith(async () => newer), fallbackCtx, fallbackCache)).text(), newer);
-    await Promise.all(fallbackPending);
-    assert.equal(fallbackCache.writes, 1);
-    assert.deepEqual([...fallbackCache.entries.keys()], ['https://directory-mirror.windshare.internal/.windshare-cache/last-directory']);
-    assert.equal(await (await serveDirectory(backupReq, envWith(async () => null), fallbackCtx, fallbackCache)).text(), newer);
-  }
 });
 
 test('frontend inputs normalize optional KV bindings and reject malformed IDs', () => {
@@ -430,12 +408,12 @@ test('transient ASSETS 5xx does not poison bundled directory cache while 404 and
     DIRECTORY: { get: async () => null },
     ASSETS: { fetch: async () => prodResponses[prodAssetCalls++]() },
   };
-  assert.equal((await serveDirectory(request, prodEnv, null, null)).status, 503);
-  assert.equal((await serveDirectory(request, prodEnv, null, null)).status, 503);
-  const prodRecovered = await serveDirectory(request, prodEnv, null, null);
+  assert.equal((await serveDirectory(request, prodEnv)).status, 503);
+  assert.equal((await serveDirectory(request, prodEnv)).status, 503);
+  const prodRecovered = await serveDirectory(request, prodEnv);
   assert.equal(prodRecovered.status, 200);
   assert.equal(await prodRecovered.text(), baseline);
-  const prodCached = await serveDirectory(request, prodEnv, null, null);
+  const prodCached = await serveDirectory(request, prodEnv);
   assert.equal(prodCached.status, 200);
   assert.equal(await prodCached.text(), baseline);
   assert.equal(prodAssetCalls, 3);
@@ -450,9 +428,9 @@ test('transient ASSETS 5xx does not poison bundled directory cache while 404 and
         : new Response(baseline)),
     },
   };
-  assert.equal(await (await serveDirectory(request, devEnv, null, null)).text(), older);
-  assert.equal(await (await serveDirectory(request, devEnv, null, null)).text(), baseline);
-  assert.equal(await (await serveDirectory(request, devEnv, null, null)).text(), baseline);
+  assert.equal(await (await serveDirectory(request, devEnv)).text(), older);
+  assert.equal(await (await serveDirectory(request, devEnv)).text(), baseline);
+  assert.equal(await (await serveDirectory(request, devEnv)).text(), baseline);
   assert.equal(devAssetCalls, 2);
 
   // 3. Definitive absence (404 and 200 text/html SPA fallback) remains memoized across requests.
@@ -462,8 +440,8 @@ test('transient ASSETS 5xx does not poison bundled directory cache while 404 and
   ]) {
     let absentCalls = 0;
     const absentEnv = { ASSETS: { fetch: async () => { absentCalls++; return makeAbsent(); } } };
-    assert.equal((await serveDirectory(request, absentEnv, null, null)).status, 503);
-    assert.equal((await serveDirectory(request, absentEnv, null, null)).status, 503);
+    assert.equal((await serveDirectory(request, absentEnv)).status, 503);
+    assert.equal((await serveDirectory(request, absentEnv)).status, 503);
     assert.equal(absentCalls, 1);
   }
 
@@ -476,6 +454,8 @@ test('transient ASSETS 5xx does not poison bundled directory cache while 404 and
 
 test('oversized KV payloads are rejected without pinning isolate memory and recovery clears KV cache', async t => {
   t.mock.method(Date, 'now', () => Date.parse(vectors.now));
+  const warnings = [];
+  t.mock.method(console, 'warn', (event, fields) => warnings.push({ event, ...fields }));
   const baseline = signed('valid'), newer = signed('new_generation');
   const bundledRevision = JSON.stringify(await directoryRevision(baseline));
   const oversizedAscii = 'x'.repeat(MAX_BYTES + 1);
@@ -495,49 +475,52 @@ test('oversized KV payloads are rejected without pinning isolate memory and reco
   await assert.rejects(directoryRevision(oversizedAscii), /wire limit/);
   assert.equal(encodedCount(oversizedAscii), 0);
 
-  // Repeated oversized ASCII KV values fall back cleanly with zero TextEncoder allocations.
+  // Repeated oversized ASCII KV values fall back cleanly with zero TextEncoder allocations and one warning.
   current = oversizedAscii;
-  assert.equal(await (await serveDirectory(request, env, null, null)).text(), baseline);
-  assert.equal(await (await serveDirectory(request, env, null, null)).text(), baseline);
+  assert.equal(await (await serveDirectory(request, env)).text(), baseline);
+  assert.equal(await (await serveDirectory(request, env)).text(), baseline);
   assert.equal(encodedCount(oversizedAscii), 0);
+  assert.equal(warnings.filter(w => w.event === 'directory_kv_rejected' && w.reason === 'wire_limit').length, 1);
 
   // Multi-byte UTF-8 payloads that exceed MAX_BYTES are never memoized in state.kv.
   current = oversizedUtf8;
-  assert.equal(await (await serveDirectory(request, env, null, null)).text(), baseline);
-  assert.equal(await (await serveDirectory(request, env, null, null)).text(), baseline);
+  assert.equal(await (await serveDirectory(request, env)).text(), baseline);
+  assert.equal(await (await serveDirectory(request, env)).text(), baseline);
   assert.equal(encodedCount(oversizedUtf8), 2);
+  assert.equal(warnings.filter(w => w.event === 'directory_kv_rejected' && w.reason === 'wire_limit').length, 2);
 
   // Within-limit rejected payloads stay memoized so repeat requests do not re-evaluate them.
   current = invalidSmall;
-  assert.equal(await (await serveDirectory(request, env, null, null)).text(), baseline);
+  assert.equal(await (await serveDirectory(request, env)).text(), baseline);
   const smallFirstCalls = encodedCount(invalidSmall);
   assert.ok(smallFirstCalls > 0);
-  assert.equal(await (await serveDirectory(request, env, null, null)).text(), baseline);
+  assert.equal(await (await serveDirectory(request, env)).text(), baseline);
   assert.equal(encodedCount(invalidSmall), smallFirstCalls);
+  assert.equal(warnings.filter(w => w.event === 'directory_kv_rejected' && w.reason === 'invalid_revision').length, 1);
 
   // Receiving an oversized KV value clears any prior cached KV entry.
   current = oversizedAscii;
-  assert.equal(await (await serveDirectory(request, env, null, null)).text(), baseline);
+  assert.equal(await (await serveDirectory(request, env)).text(), baseline);
   assert.equal(encodedCount(oversizedAscii), 0);
   current = invalidSmall;
-  assert.equal(await (await serveDirectory(request, env, null, null)).text(), baseline);
+  assert.equal(await (await serveDirectory(request, env)).text(), baseline);
   assert.equal(encodedCount(invalidSmall), smallFirstCalls * 2);
 
-  // Clearing KV (null) or recovering to state.last.body also clears state.kv.
+  // Clearing KV (null) or switching to a valid KV copy also clears prior rejected KV cache.
   current = null;
-  assert.equal(await (await serveDirectory(request, env, null, null)).text(), baseline);
+  assert.equal(await (await serveDirectory(request, env)).text(), baseline);
   current = invalidSmall;
-  assert.equal(await (await serveDirectory(request, env, null, null)).text(), baseline);
+  assert.equal(await (await serveDirectory(request, env)).text(), baseline);
   assert.equal(encodedCount(invalidSmall), smallFirstCalls * 3);
 
   current = newer;
-  assert.equal(await (await serveDirectory(request, env, null, null)).text(), newer);
+  assert.equal(await (await serveDirectory(request, env)).text(), newer);
   current = invalidSmall;
-  assert.equal(await (await serveDirectory(request, env, null, null)).text(), newer);
+  assert.equal(await (await serveDirectory(request, env)).text(), baseline);
   assert.equal(encodedCount(invalidSmall), smallFirstCalls * 4);
   current = newer;
-  assert.equal(await (await serveDirectory(request, env, null, null)).text(), newer);
+  assert.equal(await (await serveDirectory(request, env)).text(), newer);
   current = invalidSmall;
-  assert.equal(await (await serveDirectory(request, env, null, null)).text(), newer);
+  assert.equal(await (await serveDirectory(request, env)).text(), baseline);
   assert.equal(encodedCount(invalidSmall), smallFirstCalls * 5);
 });
