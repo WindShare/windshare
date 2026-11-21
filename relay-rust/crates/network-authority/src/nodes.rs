@@ -88,7 +88,7 @@ pub struct NodeDetails {
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct NodeLoadReport {
     pub created_at: u64,
-    pub reported_at: Option<u64>,
+    pub reported_at: u64,
     pub load: Load,
 }
 
@@ -108,9 +108,11 @@ impl NodeDetails {
 
 impl NodeLoadReport {
     pub(crate) const fn confirms(&self, policy_version: u64, now: u64) -> bool {
+        // Measure confirmation freshness on the authority receipt clock rather than
+        // comparing the node's local wall clock against `now`.
         policy_version > 0
             && self.load.applied_policy_version == policy_version
-            && self.created_at.abs_diff(now) <= 2 * REPORT_INTERVAL_SECONDS
+            && now.saturating_sub(self.reported_at) <= 2 * REPORT_INTERVAL_SECONDS
     }
 }
 

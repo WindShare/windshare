@@ -23,7 +23,7 @@ export type PolicyChange = { field: 'admission'; value: Admission } | { field: '
 
 export interface LoadReport {
   created_at: number
-  reported_at: number | null
+  reported_at: number
   load: { resident_shares: number; applied_policy_version: number; relay_budget?: { bytes: number; reset_day_utc: number }; active_sessions: number; forwarded_bytes: number; admission_refusals: number; wire_bytes: number }
 }
 export interface NodeDetails extends RelayNode { report: LoadReport | null; cutoff_ready: boolean }

@@ -33,15 +33,10 @@ function Listing({ directory, id, listing }: { directory: Directory; id: string;
     <small>{t.directoryVersion(directory.generation, directory.serial)}</small></>
 }
 
-function ReportTime({ report }: { report: LoadReport }) {
-  const t = useCopy(networkCopy)
-  return report.reported_at == null ? t.noReceiptTime : <DateStamp millis={report.reported_at * 1000} />
-}
-
 function Latest({ report }: { report: LoadReport | null }) {
   const t = useCopy(networkCopy)
   if (!report) return <span>{t.awaitingReport}</span>
-  return <><ReportTime report={report} /><small>{t.sessions(report.load.active_sessions)} · {t.relayed} <Bytes value={report.load.forwarded_bytes} /></small></>
+  return <><DateStamp millis={report.reported_at * 1000} /><small>{t.sessions(report.load.active_sessions)} · {t.relayed} <Bytes value={report.load.forwarded_bytes} /></small></>
 }
 
 function NodeOverview({ nodes, complete, directory }: {
@@ -137,7 +132,7 @@ export function NodeDetail({ node, directory, api, saved, refresh }: NodeDetailA
     <div className="node-detail-grid"><section className="panel padded"><h2>{t.nodeDetails}</h2>
       <dl className="facts"><dt>{t.region}</dt><dd>{node.region}</dd><dt>{t.zone}</dt><dd>{t.zones[node.zone]}</dd><dt>{t.publicKey}</dt><dd><code>{id}</code></dd>
         <dt>{t.directory}</dt><dd><Listing directory={directory} id={id} listing={node.listing} /></dd>
-        <dt>{t.lastReport}</dt><dd>{report ? <ReportTime report={report} /> : t.awaitingReport}</dd>
+        <dt>{t.lastReport}</dt><dd>{report ? <DateStamp millis={report.reported_at * 1000} /> : t.awaitingReport}</dd>
         {report?.load.relay_budget && <><dt>{t.relayBudget}</dt><dd><Bytes value={report.load.relay_budget.bytes} /> · {t.resetsDay(report.load.relay_budget.reset_day_utc)}</dd></>}
         {report && <><dt>{t.appliedPolicy}</dt><dd>v{report.load.applied_policy_version} / v{node.version}</dd>
           <dt>{t.residentShares}</dt><dd>{report.load.resident_shares}</dd>

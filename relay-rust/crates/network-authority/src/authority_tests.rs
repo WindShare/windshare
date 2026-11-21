@@ -9,6 +9,8 @@ mod device_login;
 mod fleet_workflow;
 #[path = "governance_tests.rs"]
 mod governance;
+#[path = "node_load_tests.rs"]
+mod node_load;
 #[path = "observability_tests.rs"]
 mod observability;
 #[path = "password_flow_tests.rs"]
@@ -475,7 +477,7 @@ fn late_reports_charge_the_original_day_and_restart_retries_do_not_double_charge
             .report
             .unwrap()
             .reported_at,
-        Some(authority.environment.now)
+        authority.environment.now
     );
 
     // Changing the daily allowance limit advances every account's state version immediately.

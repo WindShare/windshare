@@ -2,8 +2,8 @@
 match path {
     "/assets/device-JgzaUkT0.js" => Some((include_str!("assets/device-JgzaUkT0.js"), "text/javascript; charset=utf-8")),
     "/assets/identity-DaoS8ut4.js" => Some((include_str!("assets/identity-DaoS8ut4.js"), "text/javascript; charset=utf-8")),
+    "/assets/index-CGqKX2Ec.js" => Some((include_str!("assets/index-CGqKX2Ec.js"), "text/javascript; charset=utf-8")),
     "/assets/index-D7mc2f70.css" => Some((include_str!("assets/index-D7mc2f70.css"), "text/css; charset=utf-8")),
-    "/assets/index-DzKBFzIp.js" => Some((include_str!("assets/index-DzKBFzIp.js"), "text/javascript; charset=utf-8")),
     "/assets/layout-DkL5uAA6.css" => Some((include_str!("assets/layout-DkL5uAA6.css"), "text/css; charset=utf-8")),
     "/assets/layout-PhsVwBC9.js" => Some((include_str!("assets/layout-PhsVwBC9.js"), "text/javascript; charset=utf-8")),
     "/assets/report-T6qYMBH-.js" => Some((include_str!("assets/report-T6qYMBH-.js"), "text/javascript; charset=utf-8")),

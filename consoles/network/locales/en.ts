@@ -63,7 +63,6 @@ export const en = {
   listed: 'Listed',
   notListed: 'Not listed',
   directoryVersion: (generation: number, serial: number) => `Directory ${generation}.${serial}`,
-  noReceiptTime: 'Receipt time unavailable',
   awaitingReport: 'Awaiting first report',
   sessions: (count: number) => sessionCount(count),
   refusals: (count: number) => `${number.format(count)} ${count === 1 ? 'refusal' : 'refusals'}`,

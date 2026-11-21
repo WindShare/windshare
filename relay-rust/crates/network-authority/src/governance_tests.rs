@@ -353,7 +353,7 @@ fn node_details_and_load_remain_reachable_beyond_the_console_page() {
         &key("node-load", &last),
         &NodeLoadReport {
             created_at: now - 1,
-            reported_at: Some(now),
+            reported_at: now,
             load: load.clone(),
         },
     )
@@ -371,7 +371,7 @@ fn node_details_and_load_remain_reachable_beyond_the_console_page() {
     let report = detail.report.unwrap();
     assert_eq!(detail.node.zone, Zone::Cn);
     assert_eq!(report.created_at, now - 1);
-    assert_eq!(report.reported_at, Some(now));
+    assert_eq!(report.reported_at, now);
     assert_eq!(report.load.forwarded_bytes, load.forwarded_bytes);
     assert_eq!(row.report.as_ref().unwrap().reported_at, report.reported_at);
     assert!(authority.nodes("", None).is_err());

@@ -30,30 +30,48 @@ impl<R: Store, E: Environment> Authority<R, E> {
     pub fn usage(&mut self, signed: &[u8]) -> Result<SignedReply> {
         let mut batch: Batch = parse_signed(signed)?;
         let now = self.environment.now();
-        ensure!(
-            batch.valid() && batch.created_at <= now + trust::CLOCK_SKEW,
-            Fault::Invalid
-        );
-        let policy = match self.authenticate_node(batch.issuer, batch.node, USAGE_DOMAIN, signed)? {
+        // Classify before stripping probe records so a probe-only usage batch
+        // still receives a usage receipt and clears the node's outbox row.
+        let usage = !batch.records.is_empty();
+        ensure!(batch.valid(), Fault::Invalid);
+        let reporting = self.authenticate_node(batch.issuer, batch.node, USAGE_DOMAIN, signed)?;
+        // Queued accounting batches can arrive after an outage, so only future
+        // skew is bounded. Live status heartbeats must sit within the symmetric
+        // clock-skew window so stale signed status batches cannot be replayed.
+        let fresh = if usage {
+            batch.created_at <= now.saturating_add(trust::CLOCK_SKEW)
+        } else {
+            batch.created_at.abs_diff(now) <= trust::CLOCK_SKEW
+        };
+        if !fresh {
+            tracing::warn!(
+                event = "node_report_clock_skew",
+                node = ?batch.node,
+                batch = ?batch.id,
+                usage,
+                created_at = batch.created_at,
+                now,
+                max_skew = trust::CLOCK_SKEW,
+            );
+            return Err(Fault::Invalid.into());
+        }
+        let policy = match reporting {
             ReportingNode::Enrolled(policy) => policy,
             ReportingNode::Retired(policy) => {
                 // An offline node may first learn of an early cutoff after removal.
                 // Give it the final policy without granting access to any user records.
-                let reply = if batch.records.is_empty() {
+                let reply = if usage {
+                    ReportResult::UsageReceived
+                } else {
                     ReportResult::Status {
                         entitlements: vec![],
                         restriction_version: 0,
                         policy,
                     }
-                } else {
-                    ReportResult::UsageReceived
                 };
                 return self.sign_reply(RESPONSE_DOMAIN, batch.node, batch.id, now, reply);
             }
         };
-        // Filter only after authenticating the complete report. A probe-only usage
-        // batch still needs a usage receipt so the node can retire its outbox row.
-        let usage = !batch.records.is_empty();
         let probe = windshare_relay_access::probe::PROBE_ACCOUNT;
         batch.records.retain(|entry| entry.account != probe);
         batch.resident_accounts.retain(|account| *account != probe);
@@ -244,26 +262,19 @@ impl<R: Store, E: Environment> Authority<R, E> {
         let load_key = key("node-load", &batch.node);
         let persisted = load::<NodeLoadReport>(&self.store, &load_key)?;
         let baseline = merge_load_report(persisted.clone(), self.live_loads.get(&batch.node));
-        let next = match baseline {
-            Some(previous) if batch.created_at < previous.created_at => NodeLoadReport {
-                reported_at: Some(now.max(previous.reported_at.unwrap_or(0))),
-                ..previous
-            },
-            previous => NodeLoadReport {
-                created_at: batch.created_at,
-                reported_at: Some(
-                    now.max(previous.and_then(|entry| entry.reported_at).unwrap_or(0)),
-                ),
-                load: batch.load.clone(),
-            },
+        // Only live status heartbeats reach this path; trust receipt order rather
+        // than node wall clocks so backward NTP steps never hide drain progress.
+        let next = NodeLoadReport {
+            created_at: batch.created_at,
+            reported_at: baseline.map_or(now, |entry| now.max(entry.reported_at)),
+            load: batch.load.clone(),
         };
         // Keep per-minute heartbeats in isolate memory and persist coarse checkpoints
         // so idle nodes do not consume Durable Object row-write quota every minute.
         let checkpoint_due = persisted.as_ref().is_none_or(|stored| {
             stored.load.applied_policy_version != next.load.applied_policy_version
                 || (stored.load.resident_shares == 0) != (next.load.resident_shares == 0)
-                || now.saturating_sub(stored.reported_at.unwrap_or(0))
-                    >= NODE_LOAD_CHECKPOINT_SECONDS
+                || now.saturating_sub(stored.reported_at) >= NODE_LOAD_CHECKPOINT_SECONDS
         });
         if checkpoint_due {
             save(&mut self.store, &load_key, &next)?;

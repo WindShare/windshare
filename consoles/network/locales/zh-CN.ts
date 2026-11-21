@@ -64,7 +64,6 @@ export const zhCN = {
   listed: '已收录',
   notListed: '未收录',
   directoryVersion: (generation: number, serial: number) => `目录版本 ${generation}.${serial}`,
-  noReceiptTime: '接收时间未知',
   awaitingReport: '等待首次上报',
   sessions: (count: number) => `${number.format(count)} 个会话`,
   refusals: (count: number) => `拒绝接入 ${number.format(count)} 次`,
