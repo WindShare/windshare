@@ -202,6 +202,16 @@ export function logAdminLogin(fields: {
   })
 }
 
+export function logAdminSecretRejected(fields: {
+  readonly reason: 'too_short'
+  readonly minLength: number
+}): void {
+  emit('warn', 'donation.admin_secret_rejected', {
+    reason: fields.reason,
+    min_length: fields.minLength,
+  })
+}
+
 export function logAdminStorageError(fields: {
   readonly method: string
   readonly pathname: string

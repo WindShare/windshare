@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto'
-import type { DonationsEnv } from '../env'
+import { MIN_ADMIN_PASSWORD_LENGTH, resolveAdminPassword, type DonationsEnv } from '../env'
 import {
   ADMIN_COOKIE_NAME,
   MAX_ADMIN_BODY_BYTES,
@@ -16,6 +16,7 @@ import {
   logAdminAfdianSynced,
   logAdminConfigUpdated,
   logAdminLogin,
+  logAdminSecretRejected,
   logAdminStorageError,
   logAfdianSponsorLookupFallback,
   logDonationModerated,
@@ -569,12 +570,19 @@ async function dispatchAdminApi(
   url: URL,
   deps: RuntimeDeps,
 ): Promise<Response> {
-  // Fail closed across every admin route when the shared secret is absent or deleted so
-  // existing cookies cannot survive disabling admin access.
-  const adminPassword = env.DONATE_ADMIN_PASSWORD
-  if (!adminPassword) {
+  // Fail closed across every admin route when the shared secret is absent, deleted, or below
+  // the minimum high-entropy length so disabled or weak admin configuration never admits access.
+  const resolvedSecret = resolveAdminPassword(env)
+  if (!resolvedSecret.ok) {
+    if (resolvedSecret.reason === 'too_short') {
+      logAdminSecretRejected({
+        reason: resolvedSecret.reason,
+        minLength: MIN_ADMIN_PASSWORD_LENGTH,
+      })
+    }
     return adminJsonResponse({ error: 'admin_not_configured' }, 503)
   }
+  const adminPassword = resolvedSecret.password
 
   const { method } = request
   const { pathname } = url

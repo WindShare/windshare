@@ -40,17 +40,20 @@ interface BucketPolicy {
   readonly windowSeconds: number
 }
 
-const RATE_LIMIT_POLICIES: Readonly<Record<RateLimitScope, {
+interface ScopeRateLimitPolicy {
   readonly ip: BucketPolicy
-  readonly global: BucketPolicy
-}>> = Object.freeze({
+  readonly global?: BucketPolicy
+}
+
+const RATE_LIMIT_POLICIES: Readonly<Record<RateLimitScope, ScopeRateLimitPolicy>> = Object.freeze({
   crypto: {
     ip: { capacity: 10, windowSeconds: 60 },
     global: { capacity: 120, windowSeconds: 60 },
   },
   admin_login: {
+    // Omit a shared global bucket so unauthenticated callers cannot lock out the operator;
+    // distributed guessing is bounded by requiring a high-entropy DONATE_ADMIN_PASSWORD.
     ip: { capacity: 5, windowSeconds: 300 },
-    global: { capacity: 20, windowSeconds: 300 },
   },
 })
 
@@ -353,10 +356,10 @@ export class WallStore {
     return this.cachedWall
   }
 
-  consumeDualRateLimit(scope: RateLimitScope, clientIp: string, nowSec: number): RateLimitDecision {
+  consumeRateLimit(scope: RateLimitScope, clientIp: string, nowSec: number): RateLimitDecision {
     const policy = RATE_LIMIT_POLICIES[scope]
     const ipKey = `${scope}:ip:${clientIp}`
-    const globalKey = `${scope}:global`
+    const globalKey = policy.global === undefined ? null : `${scope}:global`
 
     return this.runTx(() => {
       this.sql.exec(
@@ -371,25 +374,34 @@ export class WallStore {
         'SELECT tokens, updated_at FROM rate_limits WHERE bucket_key = ?',
         ipKey,
       ))
-      const globalRow = firstRow(this.sql.exec(
-        'SELECT tokens, updated_at FROM rate_limits WHERE bucket_key = ?',
-        globalKey,
-      ))
-
       const ipEval = evaluateBucket(ipRow, policy.ip, nowSec)
-      const globalEval = evaluateBucket(globalRow, policy.global, nowSec)
-      if (ipEval.retryAfterSeconds > 0 || globalEval.retryAfterSeconds > 0) {
-        return {
-          allowed: false,
-          retryAfterSeconds: Math.max(ipEval.retryAfterSeconds, globalEval.retryAfterSeconds),
-        }
+
+      const globalEval = policy.global !== undefined && globalKey !== null
+        ? evaluateBucket(
+          firstRow(this.sql.exec(
+            'SELECT tokens, updated_at FROM rate_limits WHERE bucket_key = ?',
+            globalKey,
+          )),
+          policy.global,
+          nowSec,
+        )
+        : null
+
+      const retryAfterSeconds = Math.max(
+        ipEval.retryAfterSeconds,
+        globalEval?.retryAfterSeconds ?? 0,
+      )
+      if (retryAfterSeconds > 0) {
+        return { allowed: false, retryAfterSeconds }
       }
 
       const upsertSql = `INSERT INTO rate_limits (bucket_key, tokens, updated_at)
         VALUES (?, ?, ?)
         ON CONFLICT(bucket_key) DO UPDATE SET tokens = excluded.tokens, updated_at = excluded.updated_at`
       this.sql.exec(upsertSql, ipKey, ipEval.available - 1, nowSec)
-      this.sql.exec(upsertSql, globalKey, globalEval.available - 1, nowSec)
+      if (globalKey !== null && globalEval !== null) {
+        this.sql.exec(upsertSql, globalKey, globalEval.available - 1, nowSec)
+      }
       return { allowed: true, retryAfterSeconds: 0 }
     })
   }
@@ -400,7 +412,7 @@ export class WallStore {
       if (config.cryptoCheckoutPaused) {
         return { ok: false, code: 'crypto_checkout_paused' }
       }
-      const rateLimit = this.consumeDualRateLimit('crypto', input.clientIp, input.nowSec)
+      const rateLimit = this.consumeRateLimit('crypto', input.clientIp, input.nowSec)
       if (!rateLimit.allowed) {
         return { ok: false, code: 'rate_limited', retryAfterSeconds: rateLimit.retryAfterSeconds }
       }

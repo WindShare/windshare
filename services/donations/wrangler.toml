@@ -30,4 +30,4 @@ enabled = true
 # - KOFI_VERIFICATION_TOKEN
 # - NOWPAYMENTS_API_KEY
 # - NOWPAYMENTS_IPN_SECRET
-# - DONATE_ADMIN_PASSWORD
+# - DONATE_ADMIN_PASSWORD (high-entropy secret, >= 24 chars; e.g. `openssl rand -base64 32`)

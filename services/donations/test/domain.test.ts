@@ -684,23 +684,22 @@ describe('WallStore SQLite persistence, caching, rate limiting, and pagination',
     expect(new Set(ids).size).toBe(3)
   })
 
-  it('enforces dual-layer IP and global rate limits and lazily cleans expired intents/sessions', () => {
+  it('enforces per-IP admin login limits without global lockout and lazily cleans expired intents/sessions', () => {
     const store = createInMemoryWallStore()
     const now = 1_700_000_000
 
     // Exhaust per-IP admin login bucket (5 attempts).
     for (let i = 0; i < 5; i += 1) {
-      expect(store.consumeDualRateLimit('admin_login', 'client-a', now).allowed).toBe(true)
+      expect(store.consumeRateLimit('admin_login', 'client-a', now).allowed).toBe(true)
     }
-    const blockedIp = store.consumeDualRateLimit('admin_login', 'client-a', now)
+    const blockedIp = store.consumeRateLimit('admin_login', 'client-a', now)
     expect(blockedIp.allowed).toBe(false)
     expect(blockedIp.retryAfterSeconds).toBeGreaterThan(0)
 
-    // Rotating IPs still hit the global cap (20 total across all IPs).
-    for (let i = 0; i < 15; i += 1) {
-      expect(store.consumeDualRateLimit('admin_login', `client-rot-${i}`, now).allowed).toBe(true)
+    // Rotating IPs must never lock out admin login via a shared global bucket.
+    for (let i = 0; i < 25; i += 1) {
+      expect(store.consumeRateLimit('admin_login', `client-rot-${i}`, now).allowed).toBe(true)
     }
-    expect(store.consumeDualRateLimit('admin_login', 'client-rot-99', now).allowed).toBe(false)
 
     const createdIntent = store.createCryptoIntent({
       clientIp: 'client-crypto',
@@ -934,9 +933,9 @@ describe('WallStore rate-limit eviction indexing', () => {
     expect(planDetails.some(detail => detail.includes('idx_rate_limits_updated_at'))).toBe(true)
     expect(planDetails.some(detail => detail.includes('SCAN rate_limits'))).toBe(false)
 
-    expect(store.consumeDualRateLimit('crypto', 'stale-ip', now).allowed).toBe(true)
-    expect(store.consumeDualRateLimit('crypto', 'fresh-ip', now + 1800).allowed).toBe(true)
-    expect(store.consumeDualRateLimit('crypto', 'trigger-ip', now + 3600).allowed).toBe(true)
+    expect(store.consumeRateLimit('crypto', 'stale-ip', now).allowed).toBe(true)
+    expect(store.consumeRateLimit('crypto', 'fresh-ip', now + 1800).allowed).toBe(true)
+    expect(store.consumeRateLimit('crypto', 'trigger-ip', now + 3600).allowed).toBe(true)
 
     const remainingKeys = (db.prepare(
       'SELECT bucket_key FROM rate_limits ORDER BY bucket_key',

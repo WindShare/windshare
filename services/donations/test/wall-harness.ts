@@ -95,7 +95,7 @@ export function createWallNamespaceFromStore(
     },
     consumeAdminLoginRateLimit: async (clientIp: string, nowSec: number) => {
       track()
-      return store.consumeDualRateLimit('admin_login', clientIp, nowSec)
+      return store.consumeRateLimit('admin_login', clientIp, nowSec)
     },
     createAdminSession: async (input: CreateAdminSessionInput) => {
       track()

@@ -53,6 +53,26 @@ export interface DonationsEnv {
   readonly DONATE_ADMIN_PASSWORD?: string
 }
 
+export const MIN_ADMIN_PASSWORD_LENGTH = 24
+
+export type AdminPasswordResolution =
+  | { readonly ok: true; readonly password: string }
+  | { readonly ok: false; readonly reason: 'missing' | 'too_short' }
+
+export function resolveAdminPassword(env: DonationsEnv): AdminPasswordResolution {
+  // Admin login deliberately omits a shared global rate-limit bucket so unauthenticated
+  // callers cannot lock out the operator; distributed guessing resistance therefore relies
+  // on a high-entropy secret (24 chars matches the lower bound of 128-bit base64).
+  const raw = env.DONATE_ADMIN_PASSWORD
+  if (!raw) {
+    return { ok: false, reason: 'missing' }
+  }
+  if (raw.trim().length < MIN_ADMIN_PASSWORD_LENGTH) {
+    return { ok: false, reason: 'too_short' }
+  }
+  return { ok: true, password: raw }
+}
+
 export function resolveCryptoCheckoutApiKey(env: DonationsEnv): string | null {
   // Require both invoice creation and IPN verification secrets before accepting new
   // checkouts so paid orders cannot stall in unverified 503 webhooks. Webhook settlement

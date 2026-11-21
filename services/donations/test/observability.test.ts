@@ -299,4 +299,40 @@ describe('structured observability logs on failure, fallback, and admin config p
       'invalid_payload',
     ])
   })
+
+  it('logs admin_secret_rejected when DONATE_ADMIN_PASSWORD is below the minimum length', async () => {
+    const logs = captureStructuredLogs()
+    const { env } = createObservabilityHarness()
+
+    const shortSecret = randomBytes(8).toString('hex')
+    const shortEnv: DonationsEnv = { ...env, DONATE_ADMIN_PASSWORD: shortSecret }
+    const shortRes = await handleWorkerFetch(
+      new Request(`${API_ORIGIN}/v1/admin/session`),
+      shortEnv,
+      { nowSec: () => NOW_SEC },
+    )
+    expect(shortRes.status).toBe(503)
+    expect(await shortRes.json()).toEqual({ error: 'admin_not_configured' })
+
+    // Missing secret is intentional disablement and should not emit secret-rejection warnings.
+    const missingEnv: DonationsEnv = { ...env, DONATE_ADMIN_PASSWORD: '' }
+    const missingRes = await handleWorkerFetch(
+      new Request(`${API_ORIGIN}/v1/admin/session`),
+      missingEnv,
+      { nowSec: () => NOW_SEC },
+    )
+    expect(missingRes.status).toBe(503)
+
+    const secretWarnings = logs.filter(entry => entry.payload.event === 'donation.admin_secret_rejected')
+    expect(secretWarnings).toEqual([
+      {
+        level: 'warn',
+        payload: {
+          event: 'donation.admin_secret_rejected',
+          reason: 'too_short',
+          min_length: 24,
+        },
+      },
+    ])
+  })
 })

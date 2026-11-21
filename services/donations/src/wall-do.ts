@@ -66,7 +66,7 @@ export class DonationWall extends DurableObject<DonationsEnv> implements Donatio
   }
 
   consumeAdminLoginRateLimit(clientIp: string, nowSec: number): RateLimitDecision {
-    return this.store.consumeDualRateLimit('admin_login', clientIp, nowSec)
+    return this.store.consumeRateLimit('admin_login', clientIp, nowSec)
   }
 
   createAdminSession(input: CreateAdminSessionInput): AdminSessionRecord {
