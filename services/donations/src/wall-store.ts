@@ -125,6 +125,8 @@ const SCHEMA_STATEMENTS: readonly string[] = [
     tokens REAL NOT NULL,
     updated_at INTEGER NOT NULL
   )`,
+  `CREATE INDEX IF NOT EXISTS idx_rate_limits_updated_at
+    ON rate_limits (updated_at)`,
   `CREATE TABLE IF NOT EXISTS donation_config (
     singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
     min_public_cny_minor INTEGER NOT NULL,

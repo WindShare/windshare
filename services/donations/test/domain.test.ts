@@ -50,7 +50,7 @@ import {
 } from '../src/verify'
 import { WallStore, matchesIfNoneMatch, type SqlStoragePort } from '../src/wall-store'
 
-function createInMemoryWallStore(): WallStore {
+function createInMemoryWallStoreWithDb(): { readonly store: WallStore; readonly db: DatabaseSync } {
   const db = new DatabaseSync(':memory:')
   const sqlPort: SqlStoragePort = {
     exec(query: string, ...bindings: unknown[]): Iterable<Record<string, unknown>> {
@@ -77,7 +77,11 @@ function createInMemoryWallStore(): WallStore {
       throw error
     }
   }
-  return new WallStore(sqlPort, runTx)
+  return { store: new WallStore(sqlPort, runTx), db }
+}
+
+function createInMemoryWallStore(): WallStore {
+  return createInMemoryWallStoreWithDb().store
 }
 
 describe('sanitization, fixed-point money, and visibility classification', () => {
@@ -877,6 +881,32 @@ describe('WallStore SQLite persistence, caching, rate limiting, and pagination',
     }], 1006)
     expect(dupOnly[0]?.deduplicated).toBe(true)
     expect(store.getPublicWallSnapshot().version).toBe(versionBefore + 1)
+  })
+})
+
+describe('WallStore rate-limit eviction indexing', () => {
+  it('indexes rate_limits(updated_at) for stale bucket eviction without full table scans', () => {
+    const { store, db } = createInMemoryWallStoreWithDb()
+    const now = 1_700_000_000
+
+    const plan = db.prepare(
+      `EXPLAIN QUERY PLAN
+       DELETE FROM rate_limits WHERE bucket_key IN (
+         SELECT bucket_key FROM rate_limits WHERE updated_at <= ? LIMIT ?
+       )`,
+    ).all(now - 3600, 32) as Array<{ detail: string }>
+    const planDetails = plan.map(row => row.detail)
+    expect(planDetails.some(detail => detail.includes('idx_rate_limits_updated_at'))).toBe(true)
+    expect(planDetails.some(detail => detail.includes('SCAN rate_limits'))).toBe(false)
+
+    expect(store.consumeDualRateLimit('crypto', 'stale-ip', now).allowed).toBe(true)
+    expect(store.consumeDualRateLimit('crypto', 'fresh-ip', now + 1800).allowed).toBe(true)
+    expect(store.consumeDualRateLimit('crypto', 'trigger-ip', now + 3600).allowed).toBe(true)
+
+    const remainingKeys = (db.prepare(
+      'SELECT bucket_key FROM rate_limits ORDER BY bucket_key',
+    ).all() as Array<{ bucket_key: string }>).map(row => row.bucket_key)
+    expect(remainingKeys).toEqual(['crypto:global', 'crypto:ip:fresh-ip', 'crypto:ip:trigger-ip'])
   })
 })
 
