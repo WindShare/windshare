@@ -38,11 +38,12 @@ const (
 )
 
 type agent struct {
-	key        ed25519.PrivateKey
-	config     *networkconfig.Config
-	client     *http.Client
-	authority  *http.Client
-	lastPollAt int64
+	key           ed25519.PrivateKey
+	config        *networkconfig.Config
+	client        *http.Client
+	authority     *http.Client
+	now           func() time.Time
+	lastClaimedAt int64
 }
 
 func main() {
@@ -124,14 +125,23 @@ func (a *agent) mirror(ctx context.Context) *string {
 	return &value
 }
 
-// Keep poll timestamps strictly monotonic across small backward NTP clock steps
-// so replay checks on the authority do not stall until wall time catches up.
-func (a *agent) nextPollTimestamp(now time.Time) int64 {
-	ts := now.Unix()
-	if ts <= a.lastPollAt {
-		ts = a.lastPollAt + 1
+func (a *agent) currentTime() time.Time {
+	if a.now != nil {
+		return a.now()
 	}
-	a.lastPollAt = ts
+	return time.Now()
+}
+
+// Compute a poll timestamp strictly after the last authority-persisted claim so
+// small backward NTP steps do not fail replay checks. Only successful claims
+// advance lastClaimedAt, matching the authority's vantage-lease persistence;
+// latching earlier would wedge polling in the future if a fast RTC is rejected
+// before NTP steps the clock back.
+func (a *agent) pollTimestamp(now time.Time) int64 {
+	ts := now.Unix()
+	if a.lastClaimedAt > 0 && ts <= a.lastClaimedAt {
+		return a.lastClaimedAt + 1
+	}
 	return ts
 }
 
@@ -162,9 +172,15 @@ func (a *agent) cycle(ctx context.Context) error {
 		ids[i] = share.ID()
 	}
 	var work *networkprobe.Work
-	if err := a.post(ctx, "poll", pollDomain, map[string]any{"at": a.nextPollTimestamp(time.Now()), "shares": ids}, &work); err != nil || work == nil {
+	now := a.currentTime()
+	pollAt := a.pollTimestamp(now)
+	if wallAt := now.Unix(); pollAt > wallAt {
+		slog.Warn("vantage poll timestamp clamped after backward clock step", "wall_at", wallAt, "poll_at", pollAt, "last_claimed_at", a.lastClaimedAt)
+	}
+	if err := a.post(ctx, "poll", pollDomain, map[string]any{"at": pollAt, "shares": ids}, &work); err != nil || work == nil {
 		return err
 	}
+	a.lastClaimedAt = pollAt
 	probe, cancel := context.WithTimeout(ctx, checkTimeout)
 	failure := networkprobe.Check(probe, a.client, *work, shares)
 	cancel()
@@ -179,7 +195,7 @@ func (a *agent) cycle(ctx context.Context) error {
 	slog.Info("enrollment verification", "operation_id", work.OperationID, "node_id", work.Node.NodeKey, "error", failure)
 	report, stop := context.WithTimeout(context.WithoutCancel(ctx), reportTimeout)
 	defer stop()
-	return a.post(report, "result", resultDomain, map[string]any{"at": time.Now().Unix(), "lease": work.Lease, "node_key": work.Node.NodeKey, "outcome": outcome}, nil)
+	return a.post(report, "result", resultDomain, map[string]any{"at": a.currentTime().Unix(), "lease": work.Lease, "node_key": work.Node.NodeKey, "outcome": outcome}, nil)
 }
 
 func (a *agent) post(ctx context.Context, path, domain string, body, out any) error {
