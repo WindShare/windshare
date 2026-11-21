@@ -84,11 +84,21 @@ pub(crate) fn reports(store: &impl Store, agents: &[Agent]) -> Result<Vec<Cycle>
     Ok(result)
 }
 
-pub(super) fn reset_evidence(store: &mut impl Store, node: &str, role: Role) -> Result<()> {
+pub(super) fn reset_evidence(store: &mut impl Store, node: &str, role: Option<Role>) -> Result<()> {
     for (key, raw) in store.scan("fleet-cycle/", None)? {
         let mut cycle: Cycle = serde_json::from_str(&raw)?;
-        if let Some(sample) = cycle.nodes.get_mut(node) {
-            sample.streak.remove(&role);
+        let Some(sample) = cycle.nodes.get_mut(node) else {
+            continue;
+        };
+        let changed = match role {
+            Some(role) => sample.streak.remove(&role).is_some(),
+            None if !sample.streak.is_empty() => {
+                sample.streak.clear();
+                true
+            }
+            None => false,
+        };
+        if changed {
             save(store, &key, &cycle)?;
         }
     }

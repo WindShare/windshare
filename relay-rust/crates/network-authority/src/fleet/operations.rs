@@ -32,33 +32,50 @@ pub enum Action {
 
 impl Listing {
     pub(super) fn relay_drained(&self) -> bool {
-        self.status() == Some(Status::Draining)
-            || self.withdrawn.contains(&Role::Relay)
-            || self.maintenance.is_some()
+        self.maintenance.is_some()
+            || matches!(
+                &self.state,
+                ListingState::Listed { status, withdrawn }
+                    if *status == Status::Draining || withdrawn.contains(&Role::Relay)
+            )
     }
 
     pub(super) fn entry(&self) -> Option<Entry> {
-        // The verified binary switch owns a temporary drain even when an operator
-        // queues a disable. Keep the alias resolvable until that operation releases it.
-        let intent = if self.maintenance.is_some() {
-            Status::Draining
-        } else {
-            self.status()?
-        };
-        let mut spec = self.spec.clone();
-        if self.withdrawn.contains(&Role::Stun) {
-            spec.roles.retain(|r| *r != Role::Stun);
-            spec.stun.clear();
+        match &self.state {
+            ListingState::Staging { .. } => None,
+            ListingState::Disabled => {
+                // The verified binary switch owns a temporary drain even when an operator
+                // queues a disable. Keep only the relay alias resolvable until that
+                // operation releases it; stateless STUN has no sessions to drain and must
+                // not reappear after disabling a previously health-withdrawn node.
+                if self.maintenance.is_none() || !self.spec.roles.contains(&Role::Relay) {
+                    return None;
+                }
+                let mut spec = self.spec.clone();
+                spec.roles.retain(|r| *r == Role::Relay);
+                spec.stun.clear();
+                Some(Entry {
+                    spec,
+                    status: Status::Draining,
+                })
+            }
+            ListingState::Listed { status, withdrawn } => {
+                let mut spec = self.spec.clone();
+                if withdrawn.contains(&Role::Stun) {
+                    spec.roles.retain(|r| *r != Role::Stun);
+                    spec.stun.clear();
+                }
+                if spec.roles.is_empty() {
+                    return None;
+                }
+                let status = if self.relay_drained() {
+                    Status::Draining
+                } else {
+                    *status
+                };
+                Some(Entry { spec, status })
+            }
         }
-        if spec.roles.is_empty() {
-            return None;
-        }
-        let status = if self.relay_drained() {
-            Status::Draining
-        } else {
-            intent
-        };
-        Some(Entry { spec, status })
     }
 }
 
@@ -174,10 +191,10 @@ impl<R: Store, E: Environment> Authority<R, E> {
         );
         match cmd.action {
             Action::Drain => {
-                ensure!(listing.status().is_some(), Fault::Invalid);
-                listing.state = ListingState::Listed {
-                    status: Status::Draining,
+                let ListingState::Listed { status, .. } = &mut listing.state else {
+                    return Err(Fault::Invalid.into());
                 };
+                *status = Status::Draining;
             }
             Action::Disable { early_cutoff } => {
                 ensure!(
@@ -217,12 +234,12 @@ impl<R: Store, E: Environment> Authority<R, E> {
                 };
             }
             Action::RestoreRole { role } => {
-                ensure!(
-                    listing.status().is_some() && listing.spec.roles.contains(&role),
-                    Fault::Invalid
-                );
-                listing.withdrawn.remove(&role);
-                super::monitoring::reset_evidence(&mut self.store, &cmd.node_key, role)?;
+                let ListingState::Listed { withdrawn, .. } = &mut listing.state else {
+                    return Err(Fault::Invalid.into());
+                };
+                ensure!(listing.spec.roles.contains(&role), Fault::Invalid);
+                withdrawn.remove(&role);
+                super::monitoring::reset_evidence(&mut self.store, &cmd.node_key, Some(role))?;
             }
         }
         node.apply_listing()?;

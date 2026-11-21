@@ -1,11 +1,12 @@
 use super::*;
 use crate::fleet::{
-    attach,
+    Promote, attach,
     maintenance::Operation,
     monitoring::CYCLE_SECONDS,
     operations::{Action, Admission, Manage},
     topology::{Entry, Role},
 };
+use std::collections::BTreeSet;
 
 struct Fleet {
     auth: Authority<Memory, Clock>,
@@ -42,6 +43,7 @@ impl Fleet {
                 node.clone(),
                 ListingState::Listed {
                     status: Status::Active,
+                    withdrawn: BTreeSet::new(),
                 },
                 alias.into(),
             )
@@ -78,19 +80,33 @@ impl Fleet {
     fn observe(&mut self, reports: &[(usize, [bool; 2], [bool; 2])]) {
         self.auth.environment.now += CYCLE_SECONDS;
         let at = self.auth.environment.now;
+        let mirror = digest(
+            &crate::fleet::publication::current(&self.auth.store)
+                .unwrap()
+                .envelope,
+        )
+        .unwrap();
         for &(index, target, spare) in reports {
             let mut nodes = serde_json::Map::new();
             for (spec, roles) in [(&self.target, target), (&self.spare, spare)] {
-                nodes.insert(spec.node_key.clone(), json!({
-                    "operation_id": spec.alias, "tcp":true, "https":true, "tls_expires": at + 86400,
-                    "relay": spec.roles.contains(&Role::Relay).then_some(roles[0]),
-                    "stun": spec.roles.contains(&Role::Stun).then_some(roles[1])
-                }));
+                let id = crate::fleet::topology::public_key(&spec.node_key).unwrap();
+                let op = load::<Node>(&self.auth.store, &key("node", &id))
+                    .unwrap()
+                    .and_then(|n| n.listing)
+                    .map_or_else(|| spec.alias.clone(), |l| l.operation_id);
+                nodes.insert(
+                    spec.node_key.clone(),
+                    json!({
+                        "operation_id": op, "tcp":true, "https":true, "tls_expires": at + 86400,
+                        "relay": spec.roles.contains(&Role::Relay).then_some(roles[0]),
+                        "stun": spec.roles.contains(&Role::Stun).then_some(roles[1])
+                    }),
+                );
             }
             let proof = proof(
                 &self.keys[index],
                 b"windshare/fleet-cycle/v1\0",
-                &json!({"cycle":at/CYCLE_SECONDS,"at":at,"mirror":null,"nodes":nodes}),
+                &json!({"cycle":at/CYCLE_SECONDS,"at":at,"mirror":mirror,"nodes":nodes}),
             );
             self.auth.record_cycle(&self.agents, &proof).unwrap();
             assert!(self.auth.record_cycle(&self.agents, &proof).is_err());
@@ -101,7 +117,14 @@ impl Fleet {
             .unwrap();
     }
 
-    fn entry(&self) -> Entry {
+    fn target_node(&self) -> Node {
+        let id = crate::fleet::topology::public_key(&self.target.node_key).unwrap();
+        load::<Node>(&self.auth.store, &key("node", &id))
+            .unwrap()
+            .unwrap()
+    }
+
+    fn find_entry(&self) -> Option<Entry> {
         crate::fleet::publication::current(&self.auth.store)
             .unwrap()
             .payload()
@@ -109,16 +132,64 @@ impl Fleet {
             .nodes
             .into_iter()
             .find(|e| e.spec.alias == self.target.alias)
-            .unwrap()
     }
+
+    fn entry(&self) -> Entry {
+        self.find_entry().unwrap()
+    }
+
     fn manage(&mut self, action: Action) -> anyhow::Result<()> {
+        let operation_id = self.target_node().listing.unwrap().operation_id;
         self.auth.manage(
             &self.admin,
             &Manage {
                 node_key: self.target.node_key.clone(),
-                operation_id: self.target.alias.clone(),
+                operation_id,
                 action,
             },
+            &self.signer,
+        )
+    }
+
+    fn pass_staging_probe(&mut self) {
+        self.auth.environment.now += 1;
+        let at = self.auth.environment.now;
+        let shares = [[1u8; 12], [2u8; 12], [3u8; 12]];
+        let poll = proof(
+            &self.keys[0],
+            b"windshare/vantage-poll/v1\0",
+            &json!({"at": at, "shares": shares}),
+        );
+        let work = self
+            .auth
+            .claim(&self.agents, &poll, Default::default())
+            .unwrap()
+            .unwrap();
+        let outcome = proof(
+            &self.keys[0],
+            b"windshare/vantage-result/v1\0",
+            &json!({"at": at, "node_key": self.target.node_key, "lease": work.lease, "outcome": {"kind": "passed"}}),
+        );
+        self.auth.complete_probe(&self.agents, &outcome).unwrap();
+    }
+
+    fn promote_target(&mut self, status: Status) -> anyhow::Result<()> {
+        let operation_id = self.target_node().listing.unwrap().operation_id;
+        let observed = digest(
+            &crate::fleet::publication::current(&self.auth.store)
+                .unwrap()
+                .envelope,
+        )
+        .unwrap();
+        self.auth.promote(
+            &self.admin,
+            &Promote {
+                node_key: self.target.node_key.clone(),
+                operation_id,
+                status,
+            },
+            &self.agents,
+            &observed,
             &self.signer,
         )
     }
@@ -356,6 +427,7 @@ fn stun_only_node_disappears_and_recovers_without_ever_accepting_relay_traffic()
         fleet.target.clone(),
         ListingState::Listed {
             status: Status::Active,
+            withdrawn: BTreeSet::new(),
         },
         fleet.target.alias.clone(),
     )
@@ -385,4 +457,179 @@ fn stun_only_node_disappears_and_recovers_without_ever_accepting_relay_traffic()
     }
     assert_eq!(fleet.entry().status, Status::Active);
     assert_eq!(fleet.entry().spec.roles, [Role::Stun]);
+}
+
+#[test]
+fn disable_verify_promote_clears_withdrawn_overrides_and_staging_streaks() {
+    let mut fleet = Fleet::new();
+    let ok = [true, true];
+    let bad_relay = [false, true];
+    for _ in 0..3 {
+        fleet.observe(&[(0, bad_relay, ok), (1, bad_relay, ok)]);
+    }
+    assert_eq!(fleet.entry().status, Status::Draining);
+    assert_eq!(fleet.target_node().admission, Admission::Draining);
+
+    // Changing listed operator intent without re-verification preserves active health overrides.
+    fleet.manage(Action::Drain).unwrap();
+    fleet.observe(&[(0, bad_relay, ok), (1, bad_relay, ok)]);
+    fleet.promote_target(Status::Active).unwrap();
+    assert_eq!(fleet.entry().status, Status::Draining);
+    assert_eq!(fleet.target_node().admission, Admission::Draining);
+
+    fleet
+        .manage(Action::Disable { early_cutoff: true })
+        .unwrap();
+    assert!(matches!(
+        fleet.target_node().listing.unwrap().state,
+        ListingState::Disabled
+    ));
+    assert!(fleet.find_entry().is_none());
+    assert!(
+        fleet
+            .manage(Action::RestoreRole { role: Role::Relay })
+            .is_err()
+    );
+
+    fleet.manage(Action::Verify).unwrap();
+    let all_bad = [false, false];
+    for _ in 0..3 {
+        fleet.observe(&[(0, all_bad, ok), (1, all_bad, ok)]);
+    }
+    fleet.pass_staging_probe();
+    fleet.promote_target(Status::Active).unwrap();
+
+    assert_eq!(fleet.target_node().admission, Admission::Accepting);
+    assert_eq!(fleet.entry().status, Status::Active);
+    assert_eq!(fleet.entry().spec.roles, [Role::Relay, Role::Stun]);
+    assert!(matches!(
+        fleet.target_node().listing.unwrap().state,
+        ListingState::Listed {
+            status: Status::Active,
+            ref withdrawn,
+        } if withdrawn.is_empty()
+    ));
+
+    // Pre-verification staging failures must not re-withdraw the freshly promoted node.
+    let mut head = crate::fleet::publication::current(&fleet.auth.store).unwrap();
+    fleet
+        .auth
+        .evaluate_health(&fleet.agents, &fleet.signer, &mut head)
+        .unwrap();
+    assert_eq!(fleet.target_node().admission, Admission::Accepting);
+    assert_eq!(fleet.entry().status, Status::Active);
+
+    // A STUN-only node recovers back into the signed directory after Disable -> Verify -> Promote.
+    let mut fleet = Fleet::new();
+    fleet.target.roles = vec![Role::Stun];
+    attach(
+        &mut fleet.auth.store,
+        fleet.target.clone(),
+        ListingState::Listed {
+            status: Status::Active,
+            withdrawn: BTreeSet::new(),
+        },
+        "stun-only".into(),
+    )
+    .unwrap();
+    for _ in 0..3 {
+        fleet.observe(&[(0, [true, false], ok), (1, [true, false], ok)]);
+    }
+    assert!(fleet.find_entry().is_none());
+
+    fleet
+        .manage(Action::Disable { early_cutoff: true })
+        .unwrap();
+    fleet.manage(Action::Verify).unwrap();
+    fleet.observe(&[(0, ok, ok), (1, ok, ok)]);
+    fleet.pass_staging_probe();
+    fleet.promote_target(Status::Active).unwrap();
+
+    assert_eq!(fleet.entry().status, Status::Active);
+    assert_eq!(fleet.entry().spec.roles, [Role::Stun]);
+    assert_eq!(fleet.target_node().admission, Admission::Draining);
+}
+
+#[test]
+fn disable_during_maintenance_does_not_republish_withdrawn_stun() {
+    let mut fleet = Fleet::new();
+    let ok = [true, true];
+    let bad_stun = [true, false];
+    for _ in 0..3 {
+        fleet.observe(&[(0, bad_stun, ok), (1, bad_stun, ok)]);
+    }
+    assert_eq!(fleet.entry().spec.roles, [Role::Relay]);
+    assert_eq!(fleet.entry().spec.stun, Vec::<String>::new());
+
+    let hold = Operation {
+        node_key: fleet.target.node_key.clone(),
+        operation_id: "upgrade-with-disable".into(),
+    };
+    fleet
+        .auth
+        .maintenance_hold(&hold, true, &fleet.signer)
+        .unwrap();
+    fleet
+        .manage(Action::Disable { early_cutoff: true })
+        .unwrap();
+    assert_eq!(fleet.entry().status, Status::Draining);
+    assert_eq!(fleet.entry().spec.roles, [Role::Relay]);
+    assert_eq!(fleet.entry().spec.stun, Vec::<String>::new());
+
+    fleet
+        .auth
+        .maintenance_hold(&hold, false, &fleet.signer)
+        .unwrap();
+    assert!(fleet.find_entry().is_none());
+    assert_eq!(fleet.target_node().admission, Admission::Disabled);
+
+    // STUN-only nodes have no relay sessions to drain and stay omitted when disabled under hold.
+    let mut fleet = Fleet::new();
+    fleet.target.roles = vec![Role::Stun];
+    attach(
+        &mut fleet.auth.store,
+        fleet.target.clone(),
+        ListingState::Listed {
+            status: Status::Active,
+            withdrawn: BTreeSet::new(),
+        },
+        "stun-maintenance".into(),
+    )
+    .unwrap();
+    for _ in 0..3 {
+        fleet.observe(&[(0, bad_stun, ok), (1, bad_stun, ok)]);
+    }
+    assert!(fleet.find_entry().is_none());
+
+    let stun_hold = Operation {
+        node_key: fleet.target.node_key.clone(),
+        operation_id: "upgrade-stun-only".into(),
+    };
+    fleet
+        .auth
+        .maintenance_hold(&stun_hold, true, &fleet.signer)
+        .unwrap();
+    fleet
+        .manage(Action::Disable { early_cutoff: true })
+        .unwrap();
+    assert!(fleet.find_entry().is_none());
+    assert_eq!(
+        fleet
+            .auth
+            .maintenance_probe(
+                &stun_hold,
+                &[[1; 12], [2; 12], [3; 12]],
+                ["a", "b", "c"].map(String::from),
+            )
+            .unwrap()
+            .tickets,
+        Vec::<String>::new()
+    );
+
+    fleet
+        .auth
+        .maintenance_hold(&stun_hold, false, &fleet.signer)
+        .unwrap();
+    assert!(fleet.find_entry().is_none());
+    assert_eq!(fleet.target_node().admission, Admission::Disabled);
 }

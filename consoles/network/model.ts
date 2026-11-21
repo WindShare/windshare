@@ -7,11 +7,12 @@ export type Admission = 'accepting' | 'draining' | 'disabled'
 export type FleetAction = { kind: 'drain' | 'verify' } | { kind: 'disable' | 'remove'; early_cutoff: boolean } | { kind: 'restore_role'; role: Role }
 export interface Listing {
   maintenance: string | null
-  withdrawn: Role[]
   operation_id: string
   spec: Omit<Enrollment, 'url'> & { relay: string }
-  state: { kind: 'listed'; status: TrafficStatus | 'draining' } | { kind: 'disabled' } | { kind: 'staging'; check:
-    { kind: 'queued' | 'running' } | { kind: 'passed'; at: number } | { kind: 'failed'; reason: string } }
+  state:
+    | { kind: 'listed'; status: TrafficStatus | 'draining'; withdrawn: Role[] }
+    | { kind: 'disabled' }
+    | { kind: 'staging'; check: { kind: 'queued' | 'running' } | { kind: 'passed'; at: number } | { kind: 'failed'; reason: string } }
 }
 export interface RelayNode { key: number[]; zone: Zone; region: string; admission: Admission; anonymous: boolean; version: number; listing: Listing | null }
 export type PolicyChange = { field: 'admission'; value: Admission } | { field: 'anonymous_sharing'; value: boolean }

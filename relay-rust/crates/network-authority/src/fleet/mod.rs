@@ -31,8 +31,6 @@ pub struct Listing {
     pub operation_id: String,
     pub state: ListingState,
     #[serde(default)]
-    pub withdrawn: BTreeSet<topology::Role>,
-    #[serde(default)]
     pub maintenance: Option<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -46,6 +44,8 @@ pub enum ListingState {
     },
     Listed {
         status: Status,
+        #[serde(default)]
+        withdrawn: BTreeSet<topology::Role>,
     },
 }
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
@@ -92,7 +92,7 @@ pub struct Promote {
 impl Listing {
     pub const fn status(&self) -> Option<Status> {
         match self.state {
-            ListingState::Listed { status } => Some(status),
+            ListingState::Listed { status, .. } => Some(status),
             ListingState::Staging { .. } | ListingState::Disabled => None,
         }
     }
@@ -114,6 +114,7 @@ pub(super) fn attach(
         operations::Admission::Disabled => ListingState::Disabled,
         operations::Admission::Draining => ListingState::Listed {
             status: Status::Draining,
+            withdrawn: BTreeSet::new(),
         },
         operations::Admission::Accepting => state,
     };
@@ -121,7 +122,6 @@ pub(super) fn attach(
         spec,
         operation_id,
         state,
-        withdrawn: BTreeSet::new(),
         maintenance: None,
     });
     node.apply_listing()?;
@@ -180,7 +180,6 @@ impl<R: Store, E: Environment> Authority<R, E> {
         node.listing = Some(Listing {
             spec,
             operation_id,
-            withdrawn: BTreeSet::new(),
             maintenance: None,
             state: ListingState::Staging {
                 check: Verification::Queued,
@@ -270,30 +269,32 @@ impl<R: Store, E: Environment> Authority<R, E> {
         if listing.status() == Some(status) {
             return Ok(());
         }
-        let eligible = match &listing.state {
+        let from_staging = match &listing.state {
             ListingState::Staging {
                 check: Verification::Passed { at, vantage_key },
                 ..
-            } => {
-                now.saturating_sub(*at) <= EVIDENCE_SECONDS
-                    && agents
-                        .iter()
-                        .any(|agent| agent.key == *vantage_key && agent.zone == listing.spec.zone)
+            } if now.saturating_sub(*at) <= EVIDENCE_SECONDS
+                && agents
+                    .iter()
+                    .any(|agent| agent.key == *vantage_key && agent.zone == listing.spec.zone) =>
+            {
+                true
             }
             ListingState::Listed {
                 status: Status::Canary,
-            } => status == Status::Active,
+                ..
+            } if status == Status::Active => false,
             ListingState::Listed {
                 status: Status::Draining,
-            } => true,
-            _ => false,
-        };
-        ensure!(
-            eligible,
-            Fault::Denied {
-                reason: "verification_required".into()
+                ..
+            } => false,
+            _ => {
+                return Err(Fault::Denied {
+                    reason: "verification_required".into(),
+                }
+                .into());
             }
-        );
+        };
         ensure!(
             node.admission != operations::Admission::Disabled,
             Fault::Invalid
@@ -309,7 +310,22 @@ impl<R: Store, E: Environment> Authority<R, E> {
         publication.reserve(&listing.spec)?;
         node.zone = listing.spec.zone;
         node.region.clone_from(&listing.spec.region);
-        listing.state = ListingState::Listed { status };
+        match &mut listing.state {
+            ListingState::Listed {
+                status: current, ..
+            } => *current = status,
+            ListingState::Staging { .. } | ListingState::Disabled => {
+                listing.state = ListingState::Listed {
+                    status,
+                    withdrawn: BTreeSet::new(),
+                };
+            }
+        }
+        if from_staging {
+            // Fresh verification supersedes any failure streaks accumulated while staging
+            // under this operation_id so the next health pass starts from a clean slate.
+            monitoring::reset_evidence(&mut self.store, node_key, None)?;
+        }
         tracing::info!(event="node_promoted",operation_id=%listing.operation_id,node_id=%node_key,?status);
         node.apply_listing()?;
         save(&mut self.store, &record, &node)?;

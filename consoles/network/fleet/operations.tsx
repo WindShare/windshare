@@ -73,10 +73,10 @@ export function FleetControls({ node, api, refresh }: { node: NodeDetails; api: 
   return <section className="panel padded stack"><h2>{t.fleetOperations}</h2>
     {listing.maintenance && <Badge tone="info">{disabled ? t.disableAfterMaintenance : t.maintenance} · {listing.maintenance}</Badge>}
     <div className="actions">
-      {!disabled && listing.state.kind === 'listed' && listing.state.status !== 'draining' &&
+      {listing.state.kind === 'listed' && listing.state.status !== 'draining' &&
         <button className="secondary" disabled={action.busy} onClick={() => run({ kind: 'drain' })}>{t.drain}</button>}
       {disabled && <button className="secondary" disabled={action.busy || Boolean(listing.maintenance)} onClick={() => run({ kind: 'verify' })}>{t.verifyAgain}</button>}
-      {listing.withdrawn.map(role => <button key={role} className="secondary" disabled={action.busy}
+      {listing.state.kind === 'listed' && listing.state.withdrawn.map(role => <button key={role} className="secondary" disabled={action.busy}
         onClick={() => run({ kind: 'restore_role', role })}>{t.restoreService(role.toUpperCase())}</button>)}
       <button className="secondary" disabled={action.busy || (disabled && Boolean(listing.maintenance))}
         onClick={() => node.cutoff_ready ? run({ kind: next, early_cutoff: false }) : setCutoff(next)}>{disabled ? t.removeNode : t.disable}</button>

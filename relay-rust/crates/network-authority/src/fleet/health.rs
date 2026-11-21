@@ -1,5 +1,5 @@
 use super::{
-    Listing,
+    Listing, ListingState,
     monitoring::{Cycle, SUSTAINED, reports},
     publication::{Publication, Publisher},
     topology::{Role, Status},
@@ -54,11 +54,17 @@ fn alternative(nodes: &[Node], subject: &Listing, role: Role, reporting: &[Cycle
         .iter()
         .filter_map(|node| node.listing.as_ref())
         .any(|l| {
+            let ListingState::Listed {
+                status: Status::Active,
+                withdrawn,
+            } = &l.state
+            else {
+                return false;
+            };
             l.spec.node_key != subject.spec.node_key
                 && l.spec.zone == subject.spec.zone
-                && l.status() == Some(Status::Active)
                 && l.spec.roles.contains(&role)
-                && !l.withdrawn.contains(&role)
+                && !withdrawn.contains(&role)
                 && (role != Role::Relay || !l.relay_drained())
                 && reporting.iter().all(|c| sample(c, l, role) > 0)
         })
@@ -104,10 +110,13 @@ impl<R: Store, E: Environment> Authority<R, E> {
             let Some(listing) = nodes[index].listing.as_ref() else {
                 continue;
             };
-            if listing.status().is_none() || listing.maintenance.is_some() {
+            let ListingState::Listed { status, withdrawn } = &listing.state else {
+                continue;
+            };
+            if listing.maintenance.is_some() {
                 continue;
             }
-            let mut roles = listing.withdrawn.clone();
+            let mut roles = withdrawn.clone();
             for &role in &listing.spec.roles {
                 match consensus(listing, role, &reporting) {
                     Verdict::Recover => {
@@ -115,7 +124,7 @@ impl<R: Store, E: Environment> Authority<R, E> {
                     }
                     Verdict::Withdraw
                         if !burst
-                            && (listing.status() != Some(Status::Active)
+                            && (*status != Status::Active
                                 || alternative(&nodes, listing, role, &reporting)) =>
                     {
                         roles.insert(role);
@@ -123,13 +132,15 @@ impl<R: Store, E: Environment> Authority<R, E> {
                     _ => {}
                 }
             }
-            if roles != listing.withdrawn {
-                tracing::warn!(event="fleet_health_override", operation_id=%operation, node_id=%listing.spec.node_key, before=?listing.withdrawn, after=?roles);
+            if roles != *withdrawn {
+                tracing::warn!(event="fleet_health_override", operation_id=%operation, node_id=%listing.spec.node_key, before=?withdrawn, after=?roles);
                 let node = &mut nodes[index];
-                node.listing
-                    .as_mut()
-                    .ok_or(crate::Fault::Invalid)?
-                    .withdrawn = roles;
+                let Some(ListingState::Listed { withdrawn, .. }) =
+                    node.listing.as_mut().map(|l| &mut l.state)
+                else {
+                    return Err(crate::Fault::Invalid.into());
+                };
+                *withdrawn = roles;
                 node.apply_listing()?;
                 save(&mut self.store, &key("node", &node.key), node)?;
             }

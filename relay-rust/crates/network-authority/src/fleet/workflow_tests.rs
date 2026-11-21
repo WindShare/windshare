@@ -198,8 +198,9 @@ fn a_verified_staging_node_requires_current_mirrors_before_publication() {
     assert!(matches!(
         saved.listing.unwrap().state,
         ListingState::Listed {
-            status: Status::Canary
-        }
+            status: Status::Canary,
+            ref withdrawn,
+        } if withdrawn.is_empty()
     ));
     for action in [
         crate::fleet::operations::Action::Disable { early_cutoff: true },
