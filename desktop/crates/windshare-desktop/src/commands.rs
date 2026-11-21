@@ -77,6 +77,7 @@ impl Desktop {
             }
             Action::ConfigureShare(id) => self.configure_share(id, window, cx),
             Action::OpenAccount => self.open_account(window, cx),
+            Action::ReloadAccountSelection => self.reload_account_selection(),
             Action::ChooseShareRelays(id) => self.open_sharing_setup(Some(id), window, cx),
             Action::SettingsSection(section) => self.select_settings_section(section, window, cx),
             Action::ResumeShare(id) => self.resume_native_share(id),

@@ -35,6 +35,7 @@ pub(super) fn account_feedback_banner(
                 "rate_limited" => Some(Text::AccountRateLimited),
                 "invalid_account_input" => Some(Text::InvalidAccountInput),
                 "account_service_unreachable" => Some(Text::AccountUnavailable),
+                "account_storage_error" => Some(Text::AccountStorageError),
                 _ if matches!(
                     page,
                     AccountPage::Registration | AccountPage::Email(EmailPurpose::Registration, _)

@@ -146,6 +146,7 @@ fn degraded_and_denied_states_surface_on_ambient_pages_only() {
     for (state, allowance) in [
         (AccountState::Ready, Allowance::Spent),
         (AccountState::TemporarilyUnavailable, Allowance::Stale),
+        (AccountState::StorageError, Allowance::Stale),
         (AccountState::Denied, Allowance::Stale),
     ] {
         let status = account_status(true, state, allowance);

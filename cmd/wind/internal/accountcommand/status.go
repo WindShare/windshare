@@ -31,6 +31,11 @@ func Describe(value account.Snapshot) string {
 		return "Refreshing account access…"
 	case account.Unavailable:
 		return "Account service temporarily unavailable; retrying automatically."
+	case account.StorageError:
+		if value.Reason != "" {
+			return "Local account file needs repair (" + value.Reason + "). Repair or remove it, then retry."
+		}
+		return "Local account file needs repair. Repair or remove it, then retry."
 	case account.Denied:
 		return "Official-service access denied: " + value.Reason
 	case account.Ready:

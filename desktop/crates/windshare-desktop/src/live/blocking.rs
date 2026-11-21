@@ -5,7 +5,7 @@ use crate::{
 };
 use gpui::{Div, prelude::*, px};
 use std::time::{Duration, SystemTime};
-use windshare_host::{BlockingReason, CreationBlock, RecoveryAction};
+use windshare_host::{AccountState, BlockingReason, CreationBlock, RecoveryAction};
 use windshare_ui::{ButtonStyle, Icon, Theme, column, row};
 
 const BLOCKED_CARD_WIDTH: f32 = 560.;
@@ -57,6 +57,9 @@ impl Desktop {
             Some(windshare_host::ShareAuthorization::Official)
         );
         let account = self.account_view().filter(|_| official);
+        if let Some(view) = account.filter(|view| view.status.state == AccountState::StorageError) {
+            return Self::account_storage_error_share(theme, share, &view.status.reason, cx);
+        }
         let (label, action) = match (official, account) {
             (_, Some(view)) => (
                 crate::account::AccountPage::entry(view).1,
@@ -108,6 +111,58 @@ impl Desktop {
                             cx,
                         )),
                 ),
+        )
+    }
+
+    fn account_storage_error_share(
+        theme: Theme,
+        share: &Share,
+        reason: &str,
+        cx: &Context<Self>,
+    ) -> Div {
+        let locale = language(cx);
+        let mut card = theme
+            .card()
+            .w_full()
+            .max_w(px(BLOCKED_CARD_WIDTH))
+            .p(px(28.))
+            .gap(px(20.))
+            .child(theme.heading(locale.text(Text::SetupNeedsAttention), 24.))
+            .child(theme.label(share.name.clone(), 16.))
+            .child(theme.caption(locale.text(Text::OfficialAccountStorageError)));
+        if !reason.is_empty() {
+            card = card.child(theme.caption(reason.to_owned()));
+        }
+        column().w_full().items_center().py(px(24.)).child(
+            card.child(
+                row()
+                    .gap(px(10.))
+                    .flex_wrap()
+                    .child(Self::button(
+                        "other-relays",
+                        locale.text(Text::ChooseRelays),
+                        Icon::Sliders,
+                        ButtonStyle::Primary,
+                        Action::ChooseShareRelays(share.id),
+                        cx,
+                    ))
+                    .child(Self::button(
+                        "reload-account",
+                        locale.text(Text::RetryConnection),
+                        Icon::Refresh,
+                        ButtonStyle::Secondary,
+                        Action::ReloadAccountSelection,
+                        cx,
+                    ))
+                    .child(Self::button(
+                        "cancel-authorization",
+                        locale.text(Text::Cancel),
+                        Icon::Close,
+                        ButtonStyle::Quiet,
+                        Action::StopShare(share.id),
+                        cx,
+                    )),
+            ),
         )
     }
 

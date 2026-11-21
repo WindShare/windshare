@@ -65,6 +65,12 @@ func (service *Service) Register(ctx context.Context) (err error) {
 				challengeID = record.Proof.Challenge.ID
 			}
 			slog.Warn("account_registration_failed", "challenge_id", challengeID, "error", err)
+			if isLocalStoreError(err) {
+				service.mu.Lock()
+				service.recordStorageErrorLocked(err)
+				service.mu.Unlock()
+				return
+			}
 			service.transition(record, RegistrationRequired, "", time.Time{})
 		}
 	}()

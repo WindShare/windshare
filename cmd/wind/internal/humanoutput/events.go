@@ -53,7 +53,7 @@ func formatRelayRecovery(event appobs.RelayRecovering, symbols Symbols) terminal
 		case serviceauthority.AdmissionPendingSetup:
 			return statusLine(symbols.Relay, "Setting up official-service access; your selection is retained.", terminalcanvas.StyleDefault)
 		case serviceauthority.AdmissionUserActionRequired:
-			return statusLine(symbols.Warning, "Official-service access requires account registration or verification.", terminalcanvas.StyleWarning)
+			return statusLine(symbols.Warning, "Official-service access requires attention before continuing.", terminalcanvas.StyleWarning)
 		case serviceauthority.AdmissionExpired:
 			return statusLine(symbols.Relay, "Refreshing account access; this share will continue automatically.", terminalcanvas.StyleDefault)
 		case serviceauthority.AdmissionTemporaryFailure:

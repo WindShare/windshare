@@ -223,7 +223,9 @@ impl AccountDialog {
             && self.view.status.account.is_empty()
             && !matches!(
                 self.view.status.state,
-                AccountState::Registering { .. } | AccountState::Denied
+                AccountState::Registering { .. }
+                    | AccountState::Denied
+                    | AccountState::StorageError
             )
     }
 

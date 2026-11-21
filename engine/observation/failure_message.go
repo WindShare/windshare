@@ -44,6 +44,7 @@ const (
 	MessageRelayRouteNotFound
 	MessageRelayStopped
 	MessageRelayAccessDenied
+	MessageAccountStorageError
 
 	// messageKeyLimit must stay last; it is not a valid key.
 	messageKeyLimit
@@ -91,6 +92,7 @@ var safeMessageKeyNames = [...]string{
 	MessageRelayRouteNotFound:            "relay_route_not_found",
 	MessageRelayStopped:                  "relay_stopped",
 	MessageRelayAccessDenied:             "relay_access_denied",
+	MessageAccountStorageError:           "account_storage_error",
 }
 
 // The sentinel guards the table length; the registry test also rejects holes

@@ -24,8 +24,12 @@ impl AccountView {
             .map(|_| self.nickname_change_local.as_str())
     }
 
-    pub fn can_edit_profile(&self) -> bool {
-        !self.status.account.is_empty() && self.status.state != AccountState::Denied
+    pub const fn can_edit_profile(&self) -> bool {
+        !self.status.account.is_empty()
+            && !matches!(
+                self.status.state,
+                AccountState::Denied | AccountState::StorageError
+            )
     }
 
     pub const fn busy(&self) -> bool {
@@ -116,6 +120,7 @@ pub enum AccountState {
     RefreshRequired,
     Refreshing,
     TemporarilyUnavailable,
+    StorageError,
     Denied,
 }
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]

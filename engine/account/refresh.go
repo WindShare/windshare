@@ -53,10 +53,13 @@ func (service *Service) wakeRefreshLocked() {
 	}
 }
 
+const persistentStoreFailureThreshold = 2
+
 type refreshSchedule struct {
-	observed Record
-	next     time.Time
-	retry    time.Duration
+	observed      Record
+	next          time.Time
+	retry         time.Duration
+	storeFailures int
 }
 
 func (service *Service) run() {
@@ -110,9 +113,10 @@ func (service *Service) pollLocked(ctx context.Context, schedule *refreshSchedul
 	}
 	record, err := service.syncSelection(ctx, read, nil)
 	if err != nil {
-		service.scheduleNextRefresh(schedule, beforeRead, err)
+		service.handleLocalPollFailure(schedule, beforeRead, err)
 		return
 	}
+	schedule.storeFailures = 0
 	if scope == refreshExisting && record.Credential == nil {
 		if !schedule.next.IsZero() {
 			state, reason := service.cachedState(record)
@@ -136,6 +140,24 @@ func (service *Service) pollLocked(ctx context.Context, schedule *refreshSchedul
 		service.transition(record, Refreshing, "", time.Time{})
 	}
 	_, err = service.refreshRecord(ctx, record)
+	service.scheduleNextRefresh(schedule, record, err)
+}
+
+func (service *Service) handleLocalPollFailure(schedule *refreshSchedule, record Record, err error) {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		schedule.storeFailures = 0
+		service.scheduleNextRefresh(schedule, record, err)
+		return
+	}
+	schedule.storeFailures++
+	if isLocalStoreError(err) || schedule.storeFailures >= persistentStoreFailureThreshold {
+		service.mu.Lock()
+		service.recordStorageErrorLocked(err)
+		service.mu.Unlock()
+		schedule.retry = MinimumRetry
+		schedule.next = service.config.Now().Add(PollInterval)
+		return
+	}
 	service.scheduleNextRefresh(schedule, record, err)
 }
 

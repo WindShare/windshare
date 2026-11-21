@@ -160,8 +160,14 @@ func (source *Source) ReserveRegistrationAuthorization() serviceauthority.Regist
 	}
 	if share.selectionErr != nil {
 		// Unreadable state can conceal a different login or an explicit denial.
+		// Surface persistent local file errors for user repair instead of looping
+		// forever in temporary-failure wait.
+		state := serviceauthority.AdmissionTemporaryFailure
+		if isLocalStoreError(share.selectionErr) || service.state == StorageError {
+			state = serviceauthority.AdmissionUserActionRequired
+		}
 		return serviceauthority.RegistrationAuthorization{
-			State: serviceauthority.AdmissionTemporaryFailure, Changed: service.changed, Cause: share.selectionErr,
+			State: state, Changed: service.changed, Cause: share.selectionErr,
 		}
 	}
 	authorization := source.selectAuthorizationLocked(node)
@@ -273,6 +279,8 @@ func (source *Source) selectAuthorizationLocked(node Node) serviceauthority.Regi
 			service.refreshCredentialLocked(share.credential)
 		}
 		authorization.State = serviceauthority.AdmissionExpired
+	case service.state == StorageError:
+		authorization.State, authorization.Cause = serviceauthority.AdmissionUserActionRequired, errors.New(service.reason)
 	case service.state == Unavailable:
 		authorization.State, authorization.Cause = serviceauthority.AdmissionTemporaryFailure, errors.New(service.reason)
 	case record.Credential != nil:
@@ -287,6 +295,9 @@ func (source *Source) selectAuthorizationLocked(node Node) serviceauthority.Regi
 // node discovery cannot downgrade it and lock out account-only nodes. Once
 // renewal enters failure backoff, permitted anonymous nodes remain usable.
 func (share *ShareAuthorization) allowsAnonymousFallbackLocked(record Record) bool {
+	if share.service.state == StorageError {
+		return false
+	}
 	if record.Credential == nil {
 		return true
 	}

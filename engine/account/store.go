@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"reflect"
@@ -11,6 +12,19 @@ import (
 
 	"github.com/windshare/windshare/engine/internal/statefile"
 )
+
+var (
+	// ErrInvalidState reports a corrupt, oversized, or mismatched local account
+	// file that requires manual repair instead of retrying automatically.
+	ErrInvalidState = errors.New("invalid account state")
+	// ErrUnreadableState reports a local account file that cannot be read due
+	// to filesystem permissions or an unexpected file type.
+	ErrUnreadableState = errors.New("account state unreadable")
+)
+
+func isLocalStoreError(err error) bool {
+	return errors.Is(err, ErrInvalidState) || errors.Is(err, ErrUnreadableState)
+}
 
 type FileStore struct{ Path string }
 
@@ -22,7 +36,7 @@ func (store FileStore) Load(ctx context.Context) (Record, error) {
 		return Record{}, err
 	}
 	if store.Path == "" {
-		return Record{}, errors.New("account storage path is empty")
+		return Record{}, fmt.Errorf("%w: account storage path is empty", ErrInvalidState)
 	}
 	data, err := readRecord(store.Path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -33,7 +47,7 @@ func (store FileStore) Load(ctx context.Context) (Record, error) {
 	}
 	var record Record
 	if json.Unmarshal(data, &record) != nil {
-		return Record{}, errors.New("invalid account state")
+		return Record{}, ErrInvalidState
 	}
 	return record, nil
 }
@@ -41,7 +55,7 @@ func (store FileStore) Load(ctx context.Context) (Record, error) {
 func (store FileStore) Update(ctx context.Context, apply func(Record) (Record, error)) (Record, error) {
 	var result Record
 	if store.Path == "" {
-		return result, errors.New("account storage path is empty")
+		return result, fmt.Errorf("%w: account storage path is empty", ErrInvalidState)
 	}
 	err := statefile.WithLock(ctx, store.Path, func() error {
 		var previous Record
@@ -50,7 +64,7 @@ func (store FileStore) Update(ctx context.Context, apply func(Record) (Record, e
 			return err
 		}
 		if err == nil && json.Unmarshal(data, &previous) != nil {
-			return errors.New("invalid account state")
+			return ErrInvalidState
 		}
 		result, err = apply(cloneRecord(previous))
 		if err != nil {
@@ -65,21 +79,40 @@ func (store FileStore) Update(ctx context.Context, apply func(Record) (Record, e
 		}
 		return statefile.Write(ctx, store.Path, data)
 	})
+	if errors.Is(err, os.ErrPermission) && !isLocalStoreError(err) {
+		return result, fmt.Errorf("%w: %w", ErrUnreadableState, err)
+	}
 	return result, err
 }
 
 func readRecord(path string) ([]byte, error) {
 	file, err := os.Open(path)
 	if err != nil {
+		if errors.Is(err, os.ErrPermission) {
+			return nil, fmt.Errorf("%w: %w", ErrUnreadableState, err)
+		}
 		return nil, err
 	}
 	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%w: account state must be a regular file", ErrUnreadableState)
+	}
 	const maximumRecordBytes = 16 << 10
 	data, err := io.ReadAll(io.LimitReader(file, maximumRecordBytes+1))
-	if len(data) > maximumRecordBytes {
-		return nil, errors.New("account state too large")
+	if err != nil {
+		if errors.Is(err, os.ErrPermission) {
+			return nil, fmt.Errorf("%w: %w", ErrUnreadableState, err)
+		}
+		return nil, err
 	}
-	return data, err
+	if len(data) > maximumRecordBytes {
+		return nil, fmt.Errorf("%w: account state too large", ErrInvalidState)
+	}
+	return data, nil
 }
 
 type MemoryStore struct {

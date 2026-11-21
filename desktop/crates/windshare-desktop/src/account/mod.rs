@@ -165,7 +165,9 @@ impl AccountTracker {
             && view.status.account.is_empty()
             && !matches!(
                 view.status.state,
-                AccountState::Registering { .. } | AccountState::Denied
+                AccountState::Registering { .. }
+                    | AccountState::Denied
+                    | AccountState::StorageError
             )
     }
 

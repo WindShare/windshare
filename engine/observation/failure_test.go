@@ -56,7 +56,7 @@ func TestSelectionCollisionContextPreservesBothPaths(t *testing.T) {
 }
 
 func TestFailureRegistryIsClosedAndComplete(t *testing.T) {
-	for code := FailureUnexpected; code <= FailureShareStopped; code++ {
+	for code := FailureUnexpected; code <= FailureAccountStorageError; code++ {
 		name, nameOK := code.Name()
 		key, keyOK := code.MessageKey()
 		keyName, keyNameOK := key.Name()
@@ -68,7 +68,7 @@ func TestFailureRegistryIsClosedAndComplete(t *testing.T) {
 	if _, err := NewFailure(0); err == nil {
 		t.Fatal("accepted zero failure code")
 	}
-	if _, err := NewFailure(FailureShareStopped + 1); err == nil {
+	if _, err := NewFailure(FailureAccountStorageError + 1); err == nil {
 		t.Fatal("accepted unknown failure code")
 	}
 }

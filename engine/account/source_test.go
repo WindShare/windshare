@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -72,16 +73,28 @@ type interruptedSelectionStore struct {
 	err error
 }
 
+func (store *interruptedSelectionStore) setError(err error) {
+	store.mu.Lock()
+	store.err = err
+	store.mu.Unlock()
+}
+
+func (store *interruptedSelectionStore) currentError() error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	return store.err
+}
+
 func (store *interruptedSelectionStore) Load(ctx context.Context) (Record, error) {
-	if store.err != nil {
-		return Record{}, store.err
+	if err := store.currentError(); err != nil {
+		return Record{}, err
 	}
 	return store.MemoryStore.Load(ctx)
 }
 
 func (store *interruptedSelectionStore) Update(ctx context.Context, change func(Record) (Record, error)) (Record, error) {
-	if store.err != nil {
-		return Record{}, store.err
+	if err := store.currentError(); err != nil {
+		return Record{}, err
 	}
 	return store.MemoryStore.Update(ctx, change)
 }
@@ -263,5 +276,207 @@ func TestLoggedInShareWaitsForTicketRenewalBeforeAnonymousFallback(t *testing.T)
 			}
 			requireBearer(t, global, "")
 		})
+	})
+}
+
+func TestCorruptOrUnreadableAccountStoreRequiresActionWithoutAnonymousFallback(t *testing.T) {
+	for _, scenario := range []struct {
+		name  string
+		setup func(*testing.T, string, Config, session)
+	}{
+		{
+			name: "invalid json",
+			setup: func(t *testing.T, path string, _ Config, _ session) {
+				if err := os.WriteFile(path, []byte("{not-json"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "oversized file",
+			setup: func(t *testing.T, path string, _ Config, _ session) {
+				if err := os.WriteFile(path, []byte(strings.Repeat(" ", 17<<10)), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "directory instead of file",
+			setup: func(t *testing.T, path string, _ Config, _ session) {
+				if err := os.Mkdir(path, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "wrong issuer",
+			setup: func(t *testing.T, path string, _ Config, _ session) {
+				if err := os.WriteFile(path, []byte(`{"issuer":"another-issuer"}`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "invalid certificate",
+			setup: func(t *testing.T, path string, _ Config, _ session) {
+				if err := os.WriteFile(path, []byte(`{"certificate":"not-a-generation"}`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			config, issued := accountFixture(t)
+			path := filepath.Join(t.TempDir(), "account.json")
+			scenario.setup(t, path, config, issued)
+			config.Store = FileStore{Path: path}
+
+			service := testService(t, config)
+			service.nodes.put("primary", &nodeState{key: [32]byte{1}, anonymous: true, available: true, expires: config.Now().Add(time.Hour)})
+			if snapshot, _ := service.Snapshot(); snapshot.State != StorageError || snapshot.Reason == "" {
+				t.Fatalf("startup snapshot = %+v, want storage_error", snapshot)
+			}
+
+			share := service.NewShareAuthorization(t.Context())
+			defer share.Close()
+			source := &Source{share: share, address: "primary"}
+			got := source.ReserveRegistrationAuthorization()
+			if got.State != serviceauthority.AdmissionUserActionRequired || got.Bearer != "" || got.Changed == nil || !isLocalStoreError(got.Cause) {
+				t.Fatalf("corrupt store authorization = %+v, want user_action_required without anonymous fallback", got)
+			}
+			if code := CommandErrorCode(got.Cause); code != "account_storage_error" {
+				t.Fatalf("CommandErrorCode = %q, want account_storage_error", code)
+			}
+
+			if err := os.RemoveAll(path); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := config.Store.Update(t.Context(), func(Record) (Record, error) {
+				return cachedRecord(issued), nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := service.ReloadSelection(t.Context()); err != nil {
+				t.Fatalf("reload after repair failed: %v", err)
+			}
+			select {
+			case <-got.Changed:
+			default:
+				t.Fatal("repairing account store did not wake waiting share")
+			}
+			if snapshot, _ := service.Snapshot(); snapshot.State != Ready {
+				t.Fatalf("recovered snapshot = %+v, want ready", snapshot)
+			}
+			requireBearer(t, source, issued.Ticket)
+		})
+	}
+}
+
+func TestCorruptingAccountStoreAfterHealthyLoadRecoversWhenRestored(t *testing.T) {
+	config, issued := accountFixture(t)
+	path := filepath.Join(t.TempDir(), "account.json")
+	config.Store = FileStore{Path: path}
+	if _, err := config.Store.Update(t.Context(), func(Record) (Record, error) {
+		return cachedRecord(issued), nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	validBytes, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	service := testService(t, config)
+	service.nodes.put("primary", &nodeState{key: [32]byte{1}, anonymous: true, available: true, expires: config.Now().Add(time.Hour)})
+	if err := os.WriteFile(path, []byte("{corrupt"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	share := service.NewShareAuthorization(t.Context())
+	defer share.Close()
+	source := &Source{share: share, address: "primary"}
+	waiting := source.ReserveRegistrationAuthorization()
+	if waiting.State != serviceauthority.AdmissionUserActionRequired || waiting.Bearer != "" {
+		t.Fatalf("corrupted store after healthy load = %+v, want user_action_required", waiting)
+	}
+	if snapshot, _ := service.Snapshot(); snapshot.State != StorageError {
+		t.Fatalf("snapshot = %+v, want storage_error", snapshot)
+	}
+
+	// Restoring the exact same account must still clear StorageError and resume.
+	if err := os.WriteFile(path, validBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ReloadSelection(t.Context()); err != nil {
+		t.Fatalf("reload after restoring identical record failed: %v", err)
+	}
+	select {
+	case <-waiting.Changed:
+	default:
+		t.Fatal("restoring identical account record did not wake waiting share")
+	}
+	if snapshot, _ := service.Snapshot(); snapshot.State != Ready {
+		t.Fatalf("snapshot after restoring identical record = %+v, want ready", snapshot)
+	}
+	requireBearer(t, source, issued.Ticket)
+}
+
+func TestPersistentStoreReadErrorEscalatesToUserActionAndRecovers(t *testing.T) {
+	config, issued := accountFixture(t)
+	synctest.Test(t, func(t *testing.T) {
+		issuedAt, start := config.Now(), time.Now()
+		config.Now = func() time.Time { return issuedAt.Add(time.Since(start)) }
+		store := &interruptedSelectionStore{err: errors.New("persistent disk i/o error")}
+		store.record = cachedRecord(issued)
+		config.Store = store
+
+		service := testService(t, config)
+		service.nodes.put("primary", &nodeState{key: [32]byte{1}, anonymous: true, available: true, expires: config.Now().Add(time.Hour)})
+		share := service.NewShareAuthorization(t.Context())
+		defer share.Close()
+		source := share.Source("primary")
+		synctest.Wait()
+
+		first := source.ReserveRegistrationAuthorization()
+		if first.State != serviceauthority.AdmissionTemporaryFailure || first.Bearer != "" {
+			t.Fatalf("first read failure = %+v, want temporary failure", first)
+		}
+
+		time.Sleep(MinimumRetry)
+		synctest.Wait()
+		select {
+		case <-first.Changed:
+		default:
+			t.Fatal("escalation to storage_error did not wake waiting share")
+		}
+		escalated := source.ReserveRegistrationAuthorization()
+		if escalated.State != serviceauthority.AdmissionUserActionRequired || escalated.Bearer != "" {
+			t.Fatalf("persistent read failure = %+v, want user_action_required", escalated)
+		}
+		if snapshot, _ := service.Snapshot(); snapshot.State != StorageError {
+			t.Fatalf("snapshot = %+v, want storage_error", snapshot)
+		}
+
+		// Repeated polls on the same broken store must not spuriously wake waiters.
+		time.Sleep(PollInterval)
+		synctest.Wait()
+		select {
+		case <-escalated.Changed:
+			t.Fatal("unchanged storage_error spuriously woke waiters")
+		default:
+		}
+
+		store.setError(nil)
+		time.Sleep(PollInterval)
+		synctest.Wait()
+		select {
+		case <-escalated.Changed:
+		default:
+			t.Fatal("store recovery did not wake waiting share")
+		}
+		if snapshot, _ := service.Snapshot(); snapshot.State != Ready {
+			t.Fatalf("recovered snapshot = %+v, want ready", snapshot)
+		}
+		requireBearer(t, source, issued.Ticket)
 	})
 }

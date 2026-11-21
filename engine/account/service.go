@@ -81,7 +81,11 @@ func New(config Config) (*Service, error) {
 	cancelCache()
 	service.mu.Lock()
 	if err != nil {
-		service.state, service.reason = Unavailable, err.Error()
+		if isLocalStoreError(err) {
+			service.state, service.reason = StorageError, err.Error()
+		} else {
+			service.state, service.reason = Unavailable, err.Error()
+		}
 	} else {
 		service.adoptLocked(record)
 	}
@@ -202,7 +206,7 @@ func (service *Service) Snapshot() (Snapshot, <-chan struct{}) {
 func (service *Service) transition(record Record, state State, reason string, retry time.Time) {
 	service.mu.Lock()
 	// A local read can adopt a new selection while an authority request is in flight.
-	if !sameIdentity(service.record, record) {
+	if !sameIdentity(service.record, record) || service.state == StorageError {
 		service.mu.Unlock()
 		slog.Debug("account_state_transition_superseded", "state", state)
 		return

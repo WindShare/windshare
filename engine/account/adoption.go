@@ -61,14 +61,15 @@ func (service *Service) adoptLocked(record Record) {
 		service.rememberDenialLocked(record, record.Denial)
 	}
 	record = service.withDenialLocked(record)
+	recoveredStorage := service.state == StorageError
 	selectionChanged := !sameIdentity(service.record, record)
 	service.record = record
-	if selectionChanged || service.state == "" {
-		// Progress and retry deadlines belong to the previous selection.
+	if selectionChanged || service.state == "" || recoveredStorage {
+		// Progress and retry deadlines belong to the previous selection or local store failure.
 		service.state, service.reason = service.cachedState(record)
 		service.registrationPermille, service.retryAt = 0, time.Time{}
 	}
-	if selectionChanged {
+	if selectionChanged || recoveredStorage {
 		slog.Debug("account_selection_adopted", "state", service.state, "has_credential", record.Credential != nil)
 		service.wakeRefreshLocked()
 	}
@@ -77,6 +78,18 @@ func (service *Service) adoptLocked(record Record) {
 			retained.record = cloneRecord(record)
 		}
 	}
+}
+
+func (service *Service) recordStorageErrorLocked(err error) {
+	reason := err.Error()
+	if service.state == StorageError && service.reason == reason {
+		return
+	}
+	previous := service.state
+	service.state, service.reason = StorageError, reason
+	service.registrationPermille, service.retryAt = 0, time.Time{}
+	service.notifyLocked()
+	slog.Warn("account_storage_error", "from", previous, "reason", reason)
 }
 
 func (service *Service) cachedState(record Record) (State, string) {

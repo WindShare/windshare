@@ -207,6 +207,8 @@ func (runner Runner) register(ctx context.Context) error {
 				return errors.New("the account changed, run wind account status to check it")
 			case "account_denied":
 				return errors.New("this account was denied access to the official relay service")
+			case "account_storage_error":
+				return errors.New("local account file is unreadable or invalid; repair or remove it and try again")
 			default:
 				return errors.New("could not create your account, please try again")
 			}

@@ -104,6 +104,12 @@ impl Desktop {
         }
     }
 
+    pub(crate) fn reload_account_selection(&self) {
+        if let Runtime::Native(session) = &self.runtime {
+            session.controller.reload_account_selection();
+        }
+    }
+
     pub(crate) fn refresh_account(&mut self, cx: &mut Context<Self>) {
         if let Some(view) = self.account_view()
             && !self.account.busy(view)

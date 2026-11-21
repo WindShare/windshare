@@ -232,7 +232,9 @@ func (visitor eventVisitor) VisitWarning(event appobs.Warning) error {
 
 func (visitor eventVisitor) VisitCommandFailed(event clievent.CommandFailed) error {
 	message := failureMessage(event.Failure())
-	if clievent.CommandOf(event) == clievent.CommandShare && event.Failure().Code() == appobs.FailureNetworkUnavailable {
+	if clievent.CommandOf(event) == clievent.CommandShare &&
+		(event.Failure().Code() == appobs.FailureNetworkUnavailable ||
+			event.Failure().Code() == appobs.FailureAccountStorageError) {
 		message += " Alternatively, " + ConfigureRelaysGuidance + "."
 	}
 	visitor.renderer.finish(statusLine(visitor.symbols().Failure, "Error: "+message, terminalcanvas.StyleError))

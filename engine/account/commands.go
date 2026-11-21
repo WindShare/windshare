@@ -24,6 +24,8 @@ func CommandErrorCode(err error) string {
 		return "email_code_rejected"
 	case errors.Is(err, ErrSuperseded):
 		return "account_changed"
+	case isLocalStoreError(err):
+		return "account_storage_error"
 	}
 	if remote, ok := errors.AsType[*fault](err); ok {
 		switch remote.Kind {

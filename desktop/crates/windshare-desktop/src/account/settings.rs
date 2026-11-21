@@ -33,6 +33,7 @@ const fn status_badge(view: &AccountView) -> (Text, Tone) {
         | AccountState::Refreshing
         | AccountState::Registering { .. } => (Text::AccountStatusUpdating, Tone::Neutral),
         AccountState::TemporarilyUnavailable => (Text::AccountStatusUnavailable, Tone::Rose),
+        AccountState::StorageError => (Text::AccountStatusStorageError, Tone::Rose),
         AccountState::Denied => (Text::AccountStatusDenied, Tone::Rose),
         AccountState::PendingSetup | AccountState::RegistrationRequired => {
             (Text::SetUpAccount, Tone::Neutral)
@@ -162,7 +163,9 @@ impl Desktop {
             AccountState::Ready if view.status.allowance == Allowance::Available => None,
             AccountState::Ready if view.status.allowance == Allowance::Spent => Some(Tone::Peach),
             AccountState::EmailRequired => Some(Tone::Peach),
-            AccountState::TemporarilyUnavailable | AccountState::Denied => Some(Tone::Rose),
+            AccountState::TemporarilyUnavailable
+            | AccountState::StorageError
+            | AccountState::Denied => Some(Tone::Rose),
             AccountState::Registering { .. } => Some(Tone::Mint),
             _ => None,
         }
@@ -172,6 +175,9 @@ impl Desktop {
         let Some(view) = self.account_view() else {
             return column();
         };
+        if view.status.state == AccountState::StorageError {
+            return Self::account_storage_error_page(theme, view, cx);
+        }
         if view.status.account.is_empty() {
             return self.account_onboarding_page(theme, view, cx);
         }
@@ -206,6 +212,52 @@ impl Desktop {
                 this.open_account_modal(page, window, cx);
                 cx.notify();
             }))
+    }
+
+    fn account_storage_error_page(theme: Theme, view: &AccountView, cx: &Context<Self>) -> Div {
+        let locale = language(cx);
+        let (badge_label, badge_tone) = status_badge(view);
+        let retry = Self::button(
+            "reload-account-selection",
+            locale.text(Text::RetryConnection),
+            Icon::Refresh,
+            ButtonStyle::Primary,
+            crate::model::Action::ReloadAccountSelection,
+            cx,
+        );
+        let mut details = column()
+            .flex_1()
+            .min_w_0()
+            .gap(px(5.))
+            .child(
+                row()
+                    .flex_wrap()
+                    .gap(px(10.))
+                    .child(theme.heading(locale.text(Text::Account), 18.))
+                    .child(theme.badge(locale.text(badge_label), badge_tone)),
+            )
+            .child(
+                theme
+                    .caption(locale.text(Text::AccountStorageError))
+                    .text_color(Tone::Rose.text(theme)),
+            );
+        if !view.status.reason.is_empty() {
+            details = details.child(theme.caption(view.status.reason.clone()));
+        }
+        column().gap(px(SECTION_GAP)).child(
+            theme
+                .card()
+                .px(px(CARD_PADDING_X))
+                .py(px(CARD_PADDING_Y))
+                .gap(px(18.))
+                .child(
+                    row()
+                        .gap(px(14.))
+                        .child(theme.icon_tile(Icon::Shield, Tone::Rose, ONBOARDING_ICON_SIZE))
+                        .child(details),
+                )
+                .child(row().child(retry)),
+        )
     }
 
     fn account_onboarding_page(&self, theme: Theme, view: &AccountView, cx: &Context<Self>) -> Div {
@@ -347,7 +399,9 @@ impl Desktop {
             AccountState::Ready if view.status.allowance == Allowance::Available => Tone::Mint,
             AccountState::Ready if view.status.allowance == Allowance::Spent => Tone::Peach,
             AccountState::EmailRequired => Tone::Peach,
-            AccountState::TemporarilyUnavailable | AccountState::Denied => Tone::Rose,
+            AccountState::TemporarilyUnavailable
+            | AccountState::StorageError
+            | AccountState::Denied => Tone::Rose,
             _ => Tone::Neutral,
         };
         let reset = (view.status.state == AccountState::Ready && !view.reset_local.is_empty())
@@ -423,7 +477,9 @@ impl Desktop {
             _ => {
                 let text_tone = if matches!(
                     view.status.state,
-                    AccountState::TemporarilyUnavailable | AccountState::Denied
+                    AccountState::TemporarilyUnavailable
+                        | AccountState::StorageError
+                        | AccountState::Denied
                 ) {
                     Tone::Rose.text(theme)
                 } else {

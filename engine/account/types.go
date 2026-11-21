@@ -60,6 +60,7 @@ const (
 	RefreshRequired      State = "refresh_required"
 	Refreshing           State = "refreshing"
 	Unavailable          State = "temporarily_unavailable"
+	StorageError         State = "storage_error"
 	Denied               State = "denied"
 )
 

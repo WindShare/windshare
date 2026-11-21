@@ -4,7 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
-	"errors"
+	"fmt"
 	"maps"
 	"reflect"
 	"time"
@@ -27,7 +27,7 @@ func (service *Service) load(ctx context.Context) (Record, error) {
 	}
 	issuer := base64.RawURLEncoding.EncodeToString(service.config.Root[:])
 	if record.Issuer != "" && record.Issuer != issuer {
-		return Record{}, errors.New("account store belongs to another issuer")
+		return Record{}, fmt.Errorf("%w: account store belongs to another issuer", ErrInvalidState)
 	}
 	if record.Certificate != "" {
 		service.mu.Lock()
@@ -35,7 +35,7 @@ func (service *Service) load(ctx context.Context) (Record, error) {
 		service.mu.Unlock()
 		if !verified {
 			if _, err := serviceauthority.VerifyGeneration(record.Certificate, service.config.Root); err != nil {
-				return Record{}, err
+				return Record{}, fmt.Errorf("%w: %w", ErrInvalidState, err)
 			}
 			service.mu.Lock()
 			service.verifiedCertificate = record.Certificate
@@ -58,12 +58,17 @@ func (service *Service) syncSelection(ctx context.Context, read func(context.Con
 	service.mu.Unlock()
 	record, err := read(ctx)
 	if err != nil {
+		if isLocalStoreError(err) {
+			service.mu.Lock()
+			service.recordStorageErrorLocked(err)
+			service.mu.Unlock()
+		}
 		return Record{}, err
 	}
 	service.mu.Lock()
 	defer service.mu.Unlock()
 	record = service.withDenialLocked(record)
-	changed := !reflect.DeepEqual(service.record, record)
+	changed := service.state == StorageError || !reflect.DeepEqual(service.record, record)
 	if changed {
 		service.adoptLocked(record)
 	}
@@ -87,7 +92,7 @@ func (service *Service) initialize(ctx context.Context) (Record, error) {
 	return service.config.Store.Update(ctx, func(record Record) (Record, error) {
 		issuer := base64.RawURLEncoding.EncodeToString(service.config.Root[:])
 		if record.Issuer != "" && record.Issuer != issuer {
-			return Record{}, serviceauthority.ErrSignature
+			return Record{}, fmt.Errorf("%w: %w", ErrInvalidState, serviceauthority.ErrSignature)
 		}
 		record.Issuer = issuer
 		if record.Credential == nil && record.SetupSecret == "" {

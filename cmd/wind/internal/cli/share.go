@@ -93,8 +93,16 @@ func (a *App) runShare(ctx context.Context, args []string) (code int) {
 	}
 	if authRequired {
 		if accounts := a.application.Accounts(); accounts != nil {
-			if snapshot, _ := accounts.Snapshot(); snapshot.State == account.RegistrationRequired || snapshot.State == account.EmailRequired {
+			snapshot, _ := accounts.Snapshot()
+			switch snapshot.State {
+			case account.RegistrationRequired, account.EmailRequired:
 				a.writeCompleteLine("%s", accountcommand.Describe(snapshot))
+			case account.StorageError:
+				if snapshot.Reason != "" {
+					a.writeCompleteLine("Account: %s", snapshot.Reason)
+				}
+				emitShareKnownFailure(runtime, ExitFailure, appobs.FailureAccountStorageError)
+				return ExitFailure
 			}
 		}
 		emitShareKnownFailure(runtime, ExitNetwork, appobs.FailureRelayAccessDenied)

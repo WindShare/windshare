@@ -225,3 +225,131 @@ func TestShareFailsFastWhenOfficialAccountActionIsRequired(t *testing.T) {
 		})
 	}
 }
+
+func TestShareFailsFastWhenLocalAccountStoreIsInvalid(t *testing.T) {
+	var directoryFixture struct {
+		Now     time.Time
+		Roots   []struct{ ID, Key string }
+		Entries []struct{ Envelope json.RawMessage }
+	}
+	dirData, err := os.ReadFile("../../../../testdata/network/directory.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(dirData, &directoryFixture); err != nil {
+		t.Fatal(err)
+	}
+	dirKey, err := base64.RawURLEncoding.DecodeString(directoryFixture.Roots[0].Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var authorityFixture struct {
+		Root string
+	}
+	authData, err := os.ReadFile("../../../../testdata/network/authority.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(authData, &authorityFixture); err != nil {
+		t.Fatal(err)
+	}
+	rootKey, err := serviceauthority.PublicKey(authorityFixture.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, scenario := range []struct {
+		name  string
+		setup func(*testing.T, string)
+	}{
+		{
+			name: "invalid json",
+			setup: func(t *testing.T, path string) {
+				if err := os.WriteFile(path, []byte("{corrupt"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "non-regular file",
+			setup: func(t *testing.T, path string) {
+				if err := os.Mkdir(path, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), cliShareCancellationTimeout)
+			defer cancel()
+
+			dir := t.TempDir()
+			file := filepath.Join(dir, "file.txt")
+			if err := os.WriteFile(file, []byte("needs local repair"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			accountPath := filepath.Join(dir, "config.json.account.json")
+			scenario.setup(t, accountPath)
+
+			var stdout, stderr bytes.Buffer
+			trace := newRecordingUserTrace()
+			app := &App{
+				Stdout: &stdout, Stderr: &stderr, Stdin: strings.NewReader(""),
+				clock:           newSystemCommandClock(func() time.Time { return directoryFixture.Now }),
+				loadShareConfig: func() (relayconfig.Config, error) { return relayconfig.Config{}, nil },
+				engineConfig: engine.Config{
+					Network: &networkconfig.Config{
+						LinkHost: "https://front.example",
+						Directory: networkdirectory.Config{
+							Network:  "test",
+							Roots:    []nodedirectory.Root{{ID: directoryFixture.Roots[0].ID, Key: dirKey}},
+							Embedded: directoryFixture.Entries[0].Envelope,
+							Fetch: func(context.Context, string) ([]byte, error) {
+								return directoryFixture.Entries[0].Envelope, nil
+							},
+						},
+						Authority: &account.Config{
+							URL:   "https://api.example",
+							Root:  rootKey,
+							Store: account.FileStore{Path: accountPath},
+							Now:   func() time.Time { return directoryFixture.Now },
+							Client: staticAccountClient(func(request *http.Request) (*http.Response, error) {
+								t.Errorf("corrupt local account store contacted remote authority %s", request.URL.Path)
+								return nil, context.Canceled
+							}),
+						},
+					},
+					Share: engine.ShareDependencies{
+						PollNetwork: func(ctx context.Context, _ func()) { <-ctx.Done() },
+					},
+				},
+				openUserTrace: func(runtrace.Target, clievent.Command, runtrace.Config, runtrace.Dependencies) (userTraceRecorder, error) {
+					return trace, nil
+				},
+			}
+			code := app.Run(ctx, []string{"share", file, "--trace", filepath.Join(dir, "share.ndjson")})
+			if code != ExitFailure || stdout.Len() != 0 {
+				t.Fatalf("exit=%d want=%d stdout=%q stderr=%q", code, ExitFailure, stdout.String(), stderr.String())
+			}
+			for _, want := range []string{"local account file", "--relay"} {
+				if !strings.Contains(stderr.String(), want) {
+					t.Fatalf("stderr=%q missing %q", stderr.String(), want)
+				}
+			}
+			trace.mu.Lock()
+			defer trace.mu.Unlock()
+			var failures int
+			for _, event := range trace.events {
+				if failed, ok := event.(clievent.CommandFailed); ok {
+					failures++
+					if failed.Failure().Code() != appobs.FailureAccountStorageError {
+						t.Fatalf("failure code = %v, want account storage error", failed.Failure().Code())
+					}
+				}
+			}
+			if failures != 1 {
+				t.Fatalf("command failures = %d, want 1", failures)
+			}
+		})
+	}
+}

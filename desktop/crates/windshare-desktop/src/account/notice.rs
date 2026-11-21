@@ -52,7 +52,9 @@ const fn should_show_account_notice(
             demand.official_auth_wait
         }
         AccountState::Registering { .. } => demand.preparing,
-        AccountState::TemporarilyUnavailable | AccountState::Denied => true,
+        AccountState::TemporarilyUnavailable
+        | AccountState::StorageError
+        | AccountState::Denied => true,
     }
 }
 
@@ -65,6 +67,7 @@ pub fn account_status_summary(view: &AccountView, locale: Language) -> String {
         AccountState::RefreshRequired => Text::AccountRefreshRequired,
         AccountState::Refreshing => Text::AccountRefreshing,
         AccountState::TemporarilyUnavailable => Text::AccountUnavailable,
+        AccountState::StorageError => Text::AccountStorageError,
         AccountState::Denied => Text::AccountDenied,
         AccountState::Ready => match value.allowance {
             Allowance::Spent => Text::AccountSpent,

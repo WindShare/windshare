@@ -126,3 +126,21 @@ fn reconnect_keeps_selections_and_creates_not_yet_admitted() {
             .all(|operation| operation.share().is_some())
     );
 }
+
+#[test]
+fn account_storage_error_deserializes_and_disables_profile_edits() {
+    let view: crate::AccountView = serde_json::from_value(serde_json::json!({
+        "status": {
+            "active": true,
+            "state": "storage_error",
+            "account": "acct-1",
+            "allowance": "stale",
+            "remaining_bytes": 0,
+            "reason": "invalid account state"
+        }
+    }))
+    .unwrap();
+    assert_eq!(view.status.state, crate::AccountState::StorageError);
+    assert_eq!(view.status.reason, "invalid account state");
+    assert!(!view.can_edit_profile());
+}

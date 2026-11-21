@@ -245,4 +245,17 @@ func TestAccountStatusAndErrors(t *testing.T) {
 	if code := runner.Run(context.Background(), []string{"email", "alice@example.test"}); code != ResultFailure {
 		t.Fatal("authority failure lost")
 	}
+	output.Reset()
+	storageService := &commandService{
+		value:   account.Snapshot{State: account.StorageError, Reason: account.ErrInvalidState.Error()},
+		failure: account.ErrInvalidState,
+	}
+	storageRunner := Runner{Service: storageService, Output: output}
+	if code := storageRunner.Run(context.Background(), []string{"status"}); code != ResultOK || !strings.Contains(output.String(), "Local account file needs repair") {
+		t.Fatalf("storage status returned %d output=%q", code, output.String())
+	}
+	output.Reset()
+	if code := storageRunner.Run(context.Background(), []string{"register"}); code != ResultFailure || !strings.Contains(output.String(), "local account file is unreadable or invalid") {
+		t.Fatalf("storage register returned %d output=%q", code, output.String())
+	}
 }
