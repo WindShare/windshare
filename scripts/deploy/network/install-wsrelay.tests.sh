@@ -2,7 +2,10 @@
 set -euo pipefail
 
 readonly script_dir=$(cd -- "$(dirname -- "$0")" && pwd)
+readonly repo_root=$(cd -- "$script_dir/../../.." && pwd)
 readonly source_script="$script_dir/install-wsrelay.sh"
+readonly unit_file="$repo_root/deploy/network/windshare-network.service"
+readonly rollout_file="$repo_root/cmd/network-upgrade/rollout.go"
 readonly node_key="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 readonly rev_a="1111111111111111111111111111111111111111"
 readonly rev_b="2222222222222222222222222222222222222222"
@@ -47,10 +50,11 @@ prepare_harness() {
     grep -Fq "readonly config=\"$base/node.json\"" "$wrapped" || fail "failed to rewrite config in harness"
     chmod 0755 "$wrapped"
 
-    local real_id real_readlink real_install
+    local real_id real_readlink real_install real_sleep
     real_id=$(command -v id)
     real_readlink=$(command -v readlink)
     real_install=$(command -v install)
+    real_sleep=$(command -v sleep)
 
     cat >"$bin_dir/id" <<EOF
 #!/usr/bin/env bash
@@ -121,6 +125,9 @@ if [[ \${1:-} == show ]]; then
             count=\$(<"\$state/poll_count")
             count=\$((count + 1))
             printf '%s\n' "\$count" >"\$state/poll_count"
+            if [[ -n \${FAKE_SYSTEMCTL_DELAY:-} ]]; then
+                "$real_sleep" "\$FAKE_SYSTEMCTL_DELAY"
+            fi
             mapfile -t polls <"\$state/polls"
             idx=\$((count - 1))
             if (( idx >= \${#polls[@]} )); then
@@ -147,6 +154,14 @@ exit 97
 EOF
     chmod 0755 "$bin_dir"/*
     printf '0\n' >"$state_dir/poll_count"
+}
+
+override_restart_wait() {
+    local wrapped=$1 seconds=$2
+    sed "s|^readonly restart_wait_seconds=[0-9][0-9]*\$|readonly restart_wait_seconds=$seconds|" "$wrapped" >"$wrapped.tmp"
+    mv -f "$wrapped.tmp" "$wrapped"
+    chmod 0755 "$wrapped"
+    grep -Fq "readonly restart_wait_seconds=$seconds" "$wrapped" || fail "failed to override restart_wait_seconds"
 }
 
 run_case_same_binary_waits_for_fresh_invocation() (
@@ -189,6 +204,8 @@ run_case_rollback_fails_when_invocation_never_advances() (
 
     local root_path="$tmp/opt/windshare-network"
     prepare_harness "$tmp" "$root_path"
+    # Isolate poll-cap verification from slow MSYS2 subprocess startup on busy hosts.
+    override_restart_wait "$tmp/install.sh" 60
     mkdir -p "$root_path/releases/$rev_a"
     make_fake_wsrelay "$root_path/releases/$rev_a/wsrelay"
     ln -sfn -- "$root_path/releases/$rev_a" "$root_path/current"
@@ -210,9 +227,67 @@ run_case_rollback_fails_when_invocation_never_advances() (
     local status=0 output
     output=$(PATH="$tmp/bin:$PATH" "$tmp/install.sh" rollback "$op" "$node_key" 2>&1) || status=$?
     [[ $status != 0 ]] || fail "rollback unexpectedly succeeded against retiring PID"
+    [[ $output == *"restart_timeout old_invocation=inv-retiring invocation=inv-retiring pid=101 polls=50"* ]] \
+        || fail "missing restart_timeout diagnostic: $output"
     [[ $output == *"selected binary did not start"* ]] || fail "unexpected rollback error: $output"
     [[ $(cat "$tmp/mock/poll_count") == 50 ]] || fail "expected 50 polls before timeout, got $(cat "$tmp/mock/poll_count")"
     printf 'PASS: rollback rejects retiring previous PID when InvocationID stays unchanged\n'
+)
+
+run_case_restart_timeout_contract_and_wall_clock_deadline() (
+    local stop_raw stop_sec wait_sec poll_interval max_polls switch_sec
+    stop_raw=$(sed -n 's/^TimeoutStopSec=\([0-9][0-9]*\)s\?$/\1/p' "$unit_file")
+    [[ -n $stop_raw ]] || fail "windshare-network.service must declare TimeoutStopSec"
+    stop_sec=$stop_raw
+
+    wait_sec=$(sed -n 's/^readonly restart_wait_seconds=\([0-9][0-9]*\)$/\1/p' "$source_script")
+    poll_interval=$(sed -n 's/^readonly restart_poll_interval=\([0-9.]*\)$/\1/p' "$source_script")
+    max_polls=$(sed -n 's/^readonly restart_max_polls=\([0-9][0-9]*\)$/\1/p' "$source_script")
+    switch_sec=$(sed -n 's/^[[:space:]]*switchBudget[[:space:]]*=[[:space:]]*\([0-9][0-9]*\) \* time\.Second$/\1/p' "$rollout_file")
+    [[ -n $wait_sec && -n $poll_interval && -n $max_polls && -n $switch_sec ]] \
+        || fail "failed to parse restart timeout budget constants"
+
+    # Keep at least 2s after systemd SIGKILL for fresh spawn, and room inside switchBudget for enter + probe.
+    (( stop_sec + 2 <= wait_sec )) || fail "restart_wait_seconds ($wait_sec) must exceed TimeoutStopSec ($stop_sec) by >= 2s"
+    (( wait_sec + 4 <= switch_sec )) || fail "restart_wait_seconds ($wait_sec) leaves insufficient room inside switchBudget ($switch_sec)"
+    awk -v polls="$max_polls" -v interval="$poll_interval" -v wait="$wait_sec" \
+        'BEGIN { exit (polls * interval + 1e-9 >= wait) ? 0 : 1 }' \
+        || fail "restart_max_polls ($max_polls) * restart_poll_interval ($poll_interval) < restart_wait_seconds ($wait_sec)"
+
+    local tmp
+    tmp=$(mktemp -d)
+    trap 'rm -rf -- "$tmp"' EXIT
+
+    local root_path="$tmp/opt/windshare-network"
+    prepare_harness "$tmp" "$root_path"
+    override_restart_wait "$tmp/install.sh" 1
+
+    mkdir -p "$root_path/releases/$rev_a"
+    make_fake_wsrelay "$root_path/releases/$rev_a/wsrelay"
+    ln -sfn -- "$root_path/releases/$rev_a" "$root_path/current"
+
+    local canonical_a sha_a
+    canonical_a=$(realpath -e "$root_path/releases/$rev_a")
+    sha_a=$(sha256sum "$canonical_a/wsrelay" | awk '{print $1}')
+
+    printf 'inv-stalled\n' >"$tmp/mock/current_invocation"
+    printf '101\n' >"$tmp/mock/current_pid"
+    printf '%s/wsrelay\n' "$canonical_a" >"$tmp/mock/proc/101.exe"
+    printf 'inv_first|inv-stalled|101|%s/wsrelay\n' "$canonical_a" >"$tmp/mock/polls"
+
+    local op="op-wall-clock-deadline-01"
+    PATH="$tmp/bin:$PATH" "$tmp/install.sh" stage "$op" "$node_key" "$rev_a" "$sha_a" <"$canonical_a/wsrelay"
+
+    # Simulate slow systemctl show (1s per poll) so wall-clock deadline stops the loop well before 50 polls.
+    local status=0 output polls
+    output=$(FAKE_SYSTEMCTL_DELAY=1 PATH="$tmp/bin:$PATH" "$tmp/install.sh" switch "$op" "$node_key" 2>&1) || status=$?
+    polls=$(cat "$tmp/mock/poll_count")
+    [[ $status != 0 && $output == *"selected binary did not start"* ]] \
+        || fail "expected wall-clock timeout failure, got status=$status output=$output"
+    (( polls >= 1 && polls <= 3 )) || fail "expected wall-clock deadline to cap slow polls (<=3), got $polls"
+    [[ $output == *"restart_timeout old_invocation=inv-stalled invocation=inv-stalled pid=101 polls=$polls"* ]] \
+        || fail "missing wall-clock restart_timeout diagnostic: $output"
+    printf 'PASS: TimeoutStopSec/restart_wait/switchBudget contract and wall-clock deadline\n'
 )
 
 run_case_empty_old_invocation_requires_non_empty_new_invocation() (
@@ -575,6 +650,7 @@ run_case_recover_hold_states_and_guards() (
 
 run_case_same_binary_waits_for_fresh_invocation
 run_case_rollback_fails_when_invocation_never_advances
+run_case_restart_timeout_contract_and_wall_clock_deadline
 run_case_empty_old_invocation_requires_non_empty_new_invocation
 run_case_symlinked_root_and_releases_canonicalized
 run_case_enter_switch_release_lifecycle_and_guards

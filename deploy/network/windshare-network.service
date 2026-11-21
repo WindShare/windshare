@@ -9,6 +9,9 @@ Group=windshare-network
 ExecStart=/opt/windshare-network/current/wsrelay --config /etc/windshare-network/node.json
 Restart=on-failure
 RestartSec=3
+# Bound graceful shutdown below install-wsrelay.sh's restart wait and SENDER_GRACE (60s);
+# wsrelay storage and flock leases remain crash-safe if systemd falls back to SIGKILL.
+TimeoutStopSec=6s
 LimitNOFILE=65536
 StateDirectory=windshare-network
 UMask=0077

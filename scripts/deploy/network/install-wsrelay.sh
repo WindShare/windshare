@@ -6,6 +6,11 @@ readonly config=/etc/windshare-network/node.json
 readonly unit=windshare-network.service
 readonly account=windshare-network
 readonly busy=75
+# Exceed windshare-network.service TimeoutStopSec (6s) so SIGKILL fallback and
+# fresh spawn finish before failing, while staying inside network-upgrade's switchBudget (18s).
+readonly restart_wait_seconds=10
+readonly restart_poll_interval=0.2
+readonly restart_max_polls=50
 
 die() { echo "wsrelay installation: $*" >&2; exit 1; }
 [[ $(id -u) == 0 ]] || die "root required"
@@ -38,13 +43,15 @@ gate() {
     as_service "$previous/wsrelay" "$1" "$config" "$node" "$operation" "${@:2}"
 }
 restart() {
-    local release=$1 old_invocation status invocation pid line attempt
+    local release=$1 old_invocation status invocation pid line attempt deadline
     ln -sfn -- "$release" "$root/.switch-$operation"
     mv -Tf -- "$root/.switch-$operation" "$current"
     old_invocation=$(systemctl show --property=InvocationID --value "$unit" 9>&-)
     systemctl restart --no-block "$unit" 9>&-
     # Require a fresh InvocationID so same-binary restarts cannot match a still-retiring MainPID.
-    for ((attempt=0;attempt<50;attempt++)); do
+    # Bound by both wall-clock deadline (in case systemctl show stalls) and poll count.
+    deadline=$((SECONDS + restart_wait_seconds))
+    for ((attempt=1;attempt<=restart_max_polls;attempt++)); do
         status=$(systemctl show --property=InvocationID --property=MainPID "$unit" 9>&-)
         invocation= pid=
         while IFS= read -r line; do
@@ -56,8 +63,12 @@ restart() {
         if [[ -n $invocation && $invocation != "$old_invocation" && $pid =~ ^[1-9][0-9]*$ && $(readlink "/proc/$pid/exe") == "$release/wsrelay" ]]; then
             return 0
         fi
-        sleep 0.1
+        if (( attempt >= restart_max_polls || SECONDS >= deadline )); then
+            break
+        fi
+        sleep "$restart_poll_interval"
     done
+    log "restart_timeout old_invocation=${old_invocation:-none} invocation=${invocation:-none} pid=${pid:-0} polls=$attempt"
     die "selected binary did not start"
 }
 
