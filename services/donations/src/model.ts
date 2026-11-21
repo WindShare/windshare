@@ -81,6 +81,25 @@ export interface PublicWallResponse {
   readonly entries: readonly PublicWallEntry[]
 }
 
+export type PublicWallReadResult =
+  | { readonly notModified: true; readonly etag: string }
+  | { readonly notModified: false; readonly etag: string; readonly json: string }
+
+export interface CreateCryptoIntentInput {
+  readonly clientIp: string
+  readonly displayName: string | null
+  readonly message: string | null
+  readonly requestedUsdMinor: number
+  readonly returnOrigin: string
+  readonly nowSec: number
+}
+
+export interface CreateAdminSessionInput {
+  readonly sessionHash: string
+  readonly csrfToken: string
+  readonly nowSec: number
+}
+
 export interface DonationConfig {
   readonly minPublicCnyMinor: number
   readonly minPublicUsdMinor: number

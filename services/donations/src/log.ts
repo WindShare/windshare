@@ -10,22 +10,17 @@ export type AfdianOrderSkippedEvent =
   | { readonly outTradeNo: string; readonly reason: 'order_not_found' }
   | { readonly outTradeNo: string; readonly reason: 'order_not_paid'; readonly orderStatus: number }
 
-export type NowPaymentsIntentFallbackEvent =
-  | {
-    readonly paymentId: string
-    readonly orderId: string
-    readonly reason: 'not_found_or_expired'
-  }
-  | {
-    readonly paymentId: string
-    readonly orderId: string
-    readonly reason: 'lookup_failed'
-    readonly upstreamStatus: number
-  }
+export interface NowPaymentsIntentFallbackEvent {
+  readonly paymentId: string
+  readonly orderId: string
+  readonly reason: 'not_found_or_expired'
+}
 
-function emit(level: 'info' | 'warn', event: string, fields: Record<string, unknown>): void {
+function emit(level: 'info' | 'warn' | 'error', event: string, fields: Record<string, unknown>): void {
   const line = JSON.stringify({ event, ...fields })
-  if (level === 'warn') {
+  if (level === 'error') {
+    console.error(line)
+  } else if (level === 'warn') {
     console.warn(line)
   } else {
     console.log(line)
@@ -123,15 +118,6 @@ export function logNowPaymentsPartiallyPaid(fields: {
 }
 
 export function logNowPaymentsIntentFallback(fields: NowPaymentsIntentFallbackEvent): void {
-  if (fields.reason === 'lookup_failed') {
-    emit('warn', 'donation.nowpayments_intent_fallback', {
-      payment_id: fields.paymentId,
-      order_id: fields.orderId,
-      reason: fields.reason,
-      upstream_status: fields.upstreamStatus,
-    })
-    return
-  }
   emit('warn', 'donation.nowpayments_intent_fallback', {
     payment_id: fields.paymentId,
     order_id: fields.orderId,
@@ -213,5 +199,21 @@ export function logAdminLogin(fields: {
   emit(fields.ok ? 'info' : 'warn', 'donation.admin_login', {
     ok: fields.ok,
     reason: fields.reason,
+  })
+}
+
+export function logAdminStorageError(fields: {
+  readonly method: string
+  readonly pathname: string
+  readonly message: string
+  readonly retryable: boolean
+  readonly overloaded: boolean
+}): void {
+  emit('error', 'donation.admin_storage_error', {
+    method: fields.method,
+    pathname: fields.pathname,
+    message: fields.message,
+    retryable: fields.retryable,
+    overloaded: fields.overloaded,
   })
 }

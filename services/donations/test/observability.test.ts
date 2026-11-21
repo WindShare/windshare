@@ -1,9 +1,14 @@
 import { randomBytes } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { DonationsEnv } from '../src/env'
-import { defaultDonationConfig, type CommitDonationInput } from '../src/model'
+import type { CommitDonationInput } from '../src/model'
 import { handleWorkerFetch } from '../src/router'
 import { computeNowPaymentsSignature } from '../src/verify'
+import {
+  createInMemoryWallStore,
+  createWallNamespaceFromStore,
+  type AsyncWallStub,
+} from './wall-harness'
 
 const API_ORIGIN = 'https://donate.windshare.cc'
 const NOW_SEC = 1_700_000_000
@@ -11,89 +16,37 @@ const AFDIAN_SECRET = 'test-afdian-webhook-secret'
 const NOWPAYMENTS_IPN_SECRET = 'test-nowpayments-ipn-secret'
 
 interface LogRecord {
-  readonly level: 'info' | 'warn'
+  readonly level: 'info' | 'warn' | 'error'
   readonly payload: Record<string, unknown>
-}
-
-interface HarnessOptions {
-  readonly intentLookupResponse?: (intentId: string) => Response
-  readonly configPatchResponse?: () => Response
 }
 
 function captureStructuredLogs(): LogRecord[] {
   const logs: LogRecord[] = []
-  const push = (level: 'info' | 'warn') => (line: unknown) => {
+  const push = (level: 'info' | 'warn' | 'error') => (line: unknown) => {
     if (typeof line !== 'string') return
     logs.push({ level, payload: JSON.parse(line) as Record<string, unknown> })
   }
   vi.spyOn(console, 'log').mockImplementation(push('info'))
   vi.spyOn(console, 'warn').mockImplementation(push('warn'))
+  vi.spyOn(console, 'error').mockImplementation(push('error'))
   return logs
 }
 
-function createObservabilityHarness(options: HarnessOptions = {}) {
+function createObservabilityHarness(overrides: Partial<AsyncWallStub> = {}) {
+  const store = createInMemoryWallStore()
   const adminPassword = randomBytes(16).toString('hex')
-  let activeSessionHash: string | null = null
-  let activeCsrfToken: string | null = null
   const commits: CommitDonationInput[] = []
 
-  const dispatchInternal = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const req = input instanceof Request ? input : new Request(input, init)
-    const { pathname } = new URL(req.url)
-    if (pathname === '/internal/donations/exists') {
-      return Response.json({ exists: false }, { status: 200 })
-    }
-    if (pathname.startsWith('/internal/crypto-intents/')) {
-      const intentId = decodeURIComponent(pathname.slice('/internal/crypto-intents/'.length))
-      return options.intentLookupResponse?.(intentId) ?? Response.json({ intent: null }, { status: 200 })
-    }
-    if (pathname === '/internal/donations/commit') {
-      const body = await req.json() as { input: CommitDonationInput }
-      commits.push(body.input)
-      return Response.json({
-        record: {
-          id: `don-${commits.length}`,
-          provider: body.input.provider,
-          externalId: body.input.externalId,
-          displayName: body.input.displayName,
-          amountMinor: body.input.amountMinor,
-          currency: body.input.currency,
-          minorDigits: body.input.minorDigits,
-          message: body.input.message,
-          visibility: { kind: 'published' },
-          donatedAt: NOW_SEC,
-        },
-        deduplicated: false,
-      })
-    }
-    if (pathname === '/internal/admin/rate-limit') {
-      return Response.json({ allowed: true, retryAfterSeconds: 0 }, { status: 200 })
-    }
-    if (pathname === '/internal/admin/sessions') {
-      const body = await req.json() as { sessionHash: string; csrfToken: string }
-      activeSessionHash = body.sessionHash
-      activeCsrfToken = body.csrfToken
-      return Response.json({ csrfToken: body.csrfToken, expiresAt: NOW_SEC + 3600 }, { status: 201 })
-    }
-    if (pathname === '/internal/admin/sessions/verify') {
-      const body = await req.json() as { sessionHash: string }
-      if (body.sessionHash === activeSessionHash && activeCsrfToken !== null) {
-        return Response.json({ valid: true, csrfToken: activeCsrfToken, expiresAt: NOW_SEC + 3600 }, { status: 200 })
-      }
-      return Response.json({ valid: false }, { status: 401 })
-    }
-    if (pathname === '/internal/admin/config') {
-      if (options.configPatchResponse !== undefined) return options.configPatchResponse()
-      return Response.json({ config: defaultDonationConfig() }, { status: 200 })
-    }
-    return Response.json({ error: 'not_found' }, { status: 404 })
-  }
-
   const env: DonationsEnv = {
-    DONATION_WALL: {
-      idFromName: (name: string) => ({ toString: () => name }),
-      get: () => ({ fetch: dispatchInternal }),
-    } as unknown as DurableObjectNamespace,
+    DONATION_WALL: createWallNamespaceFromStore(store, {
+      overrides: {
+        commitDonation: async (input, nowSec) => {
+          commits.push(input)
+          return store.commitDonation(input, nowSec)
+        },
+        ...overrides,
+      },
+    }),
     AFDIAN_USER_ID: 'creator',
     AFDIAN_TOKEN: 'afdian-token',
     AFDIAN_WEBHOOK_SECRET: AFDIAN_SECRET,
@@ -119,7 +72,7 @@ function createObservabilityHarness(options: HarnessOptions = {}) {
     return { cookie, csrf: data.csrfToken }
   }
 
-  return { env, commits, loginAdmin }
+  return { store, env, commits, loginAdmin }
 }
 
 afterEach(() => {
@@ -187,14 +140,15 @@ describe('structured observability logs on failure, fallback, and admin config p
     })
   })
 
-  it('logs NOWPayments intent fallback only when order_id is present and distinguishes DO failures', async () => {
+  it('logs NOWPayments intent fallback when expired and propagates DO RPC outages for provider retry', async () => {
     const logs = captureStructuredLogs()
     const { env, commits } = createObservabilityHarness({
-      intentLookupResponse: intentId => (
-        intentId === 'intent-do-err'
-          ? Response.json({ error: 'internal' }, { status: 503 })
-          : Response.json({ intent: null }, { status: 200 })
-      ),
+      getCryptoIntent: async (intentId) => {
+        if (intentId === 'intent-do-err') {
+          throw new Error('storage unavailable')
+        }
+        return null
+      },
     })
 
     const sendIpn = (payload: Record<string, unknown>) => handleWorkerFetch(
@@ -218,13 +172,13 @@ describe('structured observability logs on failure, fallback, and admin config p
       price_currency: 'usd',
     })).status).toBe(200)
 
-    expect((await sendIpn({
+    await expect(sendIpn({
       payment_id: 7002,
       payment_status: 'finished',
       order_id: 'intent-do-err',
       price_amount: 12,
       price_currency: 'usd',
-    })).status).toBe(200)
+    })).rejects.toThrow('storage unavailable')
 
     expect((await sendIpn({
       payment_id: 7003,
@@ -233,7 +187,7 @@ describe('structured observability logs on failure, fallback, and admin config p
       price_currency: 'usd',
     })).status).toBe(200)
 
-    expect(commits).toHaveLength(3)
+    expect(commits).toHaveLength(2)
     expect(commits.every(item => item.displayName === null && item.message === null)).toBe(true)
 
     const fallbackLogs = logs.filter(entry => entry.payload.event === 'donation.nowpayments_intent_fallback')
@@ -247,30 +201,21 @@ describe('structured observability logs on failure, fallback, and admin config p
           reason: 'not_found_or_expired',
         },
       },
-      {
-        level: 'warn',
-        payload: {
-          event: 'donation.nowpayments_intent_fallback',
-          payment_id: '7002',
-          order_id: 'intent-do-err',
-          reason: 'lookup_failed',
-          upstream_status: 503,
-        },
-      },
     ])
   })
 
-  it('logs applied fields on successful admin config patches and stays silent on failed updates', async () => {
+  it('logs applied fields on successful admin config patches and logs storage errors on DO RPC failure', async () => {
     const logs = captureStructuredLogs()
     let failUpstream = false
-    const { env, loginAdmin } = createObservabilityHarness({
-      configPatchResponse: () => (
-        failUpstream
-          ? Response.json({ error: 'storage_error' }, { status: 500 })
-          : Response.json({ config: { ...defaultDonationConfig(), moderationEnabled: true, minPublicUsdMinor: 1000 } })
-      ),
+    const harness = createObservabilityHarness({
+      patchAdminConfig: async (patch) => {
+        if (failUpstream) {
+          throw new Error('storage_error')
+        }
+        return harness.store.patchConfig(patch)
+      },
     })
-    const auth = await loginAdmin()
+    const auth = await harness.loginAdmin()
 
     const patchConfig = (body: Record<string, unknown>) => handleWorkerFetch(
       new Request(`${API_ORIGIN}/v1/admin/donations/config`, {
@@ -283,14 +228,14 @@ describe('structured observability logs on failure, fallback, and admin config p
         },
         body: JSON.stringify(body),
       }),
-      env,
+      harness.env,
       { nowSec: () => NOW_SEC },
     )
 
     expect((await patchConfig({ moderationEnabled: true, minPublicUsdMinor: 1000 })).status).toBe(200)
     expect((await patchConfig({ moderationEnabled: 'invalid' })).status).toBe(400)
     failUpstream = true
-    expect((await patchConfig({ cryptoCheckoutPaused: true })).status).toBe(500)
+    expect((await patchConfig({ cryptoCheckoutPaused: true })).status).toBe(503)
 
     const configLogs = logs.filter(entry => entry.payload.event === 'donation.admin_config_updated')
     expect(configLogs).toEqual([
@@ -303,5 +248,6 @@ describe('structured observability logs on failure, fallback, and admin config p
         },
       },
     ])
+    expect(logs.some(entry => entry.level === 'error' && entry.payload.event === 'donation.admin_storage_error')).toBe(true)
   })
 })

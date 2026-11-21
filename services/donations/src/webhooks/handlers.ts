@@ -1,7 +1,7 @@
 import type { DonationsEnv } from '../env'
 import {
-  DONATION_WALL_INSTANCE_NAME,
   MAX_WEBHOOK_BODY_BYTES,
+  getDonationWallStub,
   hasMediaType,
   jsonResponse,
   parseJsonObject,
@@ -49,21 +49,12 @@ export interface RuntimeDeps {
   readonly nowSec: () => number
 }
 
-function getWallStub(env: DonationsEnv): DurableObjectStub {
-  return env.DONATION_WALL.get(env.DONATION_WALL.idFromName(DONATION_WALL_INSTANCE_NAME))
-}
-
 async function donationExistsInWall(
   env: DonationsEnv,
   provider: DonationProvider,
   externalId: string,
 ): Promise<boolean> {
-  const stub = getWallStub(env)
-  const query = new URLSearchParams({ provider, externalId }).toString()
-  const response = await stub.fetch(`https://donation-wall.internal/internal/donations/exists?${query}`)
-  if (!response.ok) return false
-  const body = await response.json() as { exists: boolean }
-  return body.exists
+  return getDonationWallStub(env).hasDonation(provider, externalId)
 }
 
 export async function findExistingDonationsInWall(
@@ -72,17 +63,8 @@ export async function findExistingDonationsInWall(
   externalIds: readonly string[],
 ): Promise<Set<string>> {
   if (externalIds.length === 0) return new Set()
-  const stub = getWallStub(env)
-  const response = await stub.fetch('https://donation-wall.internal/internal/donations/exists-batch', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ provider, externalIds }),
-  })
-  if (!response.ok) {
-    throw new Error(`Donation batch existence check failed with status ${response.status}`)
-  }
-  const body = await response.json() as { existingIds: string[] }
-  return new Set(body.existingIds)
+  const existingIds = await getDonationWallStub(env).findExistingExternalIds(provider, externalIds)
+  return new Set(existingIds)
 }
 
 function logCommitResult(result: CommitDonationResult): void {
@@ -102,16 +84,7 @@ async function commitDonationToWall(
   input: CommitDonationInput,
   nowSec: number,
 ): Promise<CommitDonationResult> {
-  const stub = getWallStub(env)
-  const response = await stub.fetch('https://donation-wall.internal/internal/donations/commit', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ input, nowSec }),
-  })
-  if (!response.ok) {
-    throw new Error(`Donation commit failed with status ${response.status}`)
-  }
-  const result = await response.json() as CommitDonationResult
+  const result = await getDonationWallStub(env).commitDonation(input, nowSec)
   logCommitResult(result)
   return result
 }
@@ -122,20 +95,11 @@ export async function commitDonationsBatchToWall(
   nowSec: number,
 ): Promise<CommitDonationResult[]> {
   if (inputs.length === 0) return []
-  const stub = getWallStub(env)
-  const response = await stub.fetch('https://donation-wall.internal/internal/donations/commit-batch', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ inputs, nowSec }),
-  })
-  if (!response.ok) {
-    throw new Error(`Donation batch commit failed with status ${response.status}`)
-  }
-  const body = await response.json() as { results: CommitDonationResult[] }
-  for (const result of body.results) {
+  const results = await getDonationWallStub(env).commitDonationsBatch(inputs, nowSec)
+  for (const result of results) {
     logCommitResult(result)
   }
-  return body.results
+  return results
 }
 
 export function toAfdianCommitInput(
@@ -156,30 +120,6 @@ export function toAfdianCommitInput(
   }
 }
 
-type CryptoIntentLookupResult =
-  | { readonly kind: 'found'; readonly intent: CryptoCheckoutIntent }
-  | { readonly kind: 'missing' }
-  | { readonly kind: 'lookup_failed'; readonly status: number }
-
-async function lookupCryptoIntent(
-  env: DonationsEnv,
-  intentId: string,
-  nowSec: number,
-): Promise<CryptoIntentLookupResult> {
-  const stub = getWallStub(env)
-  const response = await stub.fetch(
-    `https://donation-wall.internal/internal/crypto-intents/${encodeURIComponent(intentId)}?nowSec=${nowSec}`,
-  )
-  if (!response.ok) {
-    return { kind: 'lookup_failed', status: response.status }
-  }
-  const body = await response.json() as { intent: CryptoCheckoutIntent | null }
-  if (body.intent === null) {
-    return { kind: 'missing' }
-  }
-  return { kind: 'found', intent: body.intent }
-}
-
 async function resolveNowPaymentsIntent(
   env: DonationsEnv,
   paymentId: string,
@@ -187,21 +127,12 @@ async function resolveNowPaymentsIntent(
   nowSec: number,
 ): Promise<CryptoCheckoutIntent | null> {
   if (orderId === null) return null
-  const lookup = await lookupCryptoIntent(env, orderId, nowSec)
-  if (lookup.kind === 'found') return lookup.intent
-  if (lookup.kind === 'missing') {
-    logNowPaymentsIntentFallback({
-      paymentId,
-      orderId,
-      reason: 'not_found_or_expired',
-    })
-    return null
-  }
+  const intent = await getDonationWallStub(env).getCryptoIntent(orderId, nowSec)
+  if (intent !== null) return intent
   logNowPaymentsIntentFallback({
     paymentId,
     orderId,
-    reason: 'lookup_failed',
-    upstreamStatus: lookup.status,
+    reason: 'not_found_or_expired',
   })
   return null
 }

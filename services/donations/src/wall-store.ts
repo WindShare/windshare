@@ -14,6 +14,8 @@ import {
   type AdminVisibilityCommand,
   type CommitDonationInput,
   type CommitDonationResult,
+  type CreateAdminSessionInput,
+  type CreateCryptoIntentInput,
   type CryptoCheckoutIntent,
   type DonationConfig,
   type DonationProvider,
@@ -385,14 +387,7 @@ export class WallStore {
     })
   }
 
-  createCryptoIntent(input: {
-    readonly clientIp: string
-    readonly displayName: string | null
-    readonly message: string | null
-    readonly requestedUsdMinor: number
-    readonly returnOrigin: string
-    readonly nowSec: number
-  }): CreateIntentResult {
+  createCryptoIntent(input: CreateCryptoIntentInput): CreateIntentResult {
     return this.runTx(() => {
       const { config } = this.readConfigRow()
       if (config.cryptoCheckoutPaused) {
@@ -577,11 +572,7 @@ export class WallStore {
     })
   }
 
-  createAdminSession(input: {
-    readonly sessionHash: string
-    readonly csrfToken: string
-    readonly nowSec: number
-  }): AdminSessionRecord {
+  createAdminSession(input: CreateAdminSessionInput): AdminSessionRecord {
     return this.runTx(() => {
       this.sql.exec(
         `DELETE FROM admin_sessions WHERE session_hash IN (
@@ -622,7 +613,7 @@ export class WallStore {
     this.sql.exec('DELETE FROM admin_sessions WHERE session_hash = ?', sessionHash)
   }
 
-  listAdminDonations(afterCursor: string | null, rawLimit?: number): AdminDonationsPage {
+  listAdminDonations(afterCursor: string | null, rawLimit?: number | null): AdminDonationsPage {
     const limit = Math.min(
       MAX_ADMIN_PAGE_LIMIT,
       Math.max(1, rawLimit ?? DEFAULT_ADMIN_PAGE_LIMIT),

@@ -1,4 +1,5 @@
 import { ADMIN_CSP } from './admin/assets'
+import type { DonationWallRpc, DonationsEnv } from './env'
 
 export const MAX_CRYPTO_INTENT_BODY_BYTES = 8 * 1024
 export const MAX_WEBHOOK_BODY_BYTES = 64 * 1024
@@ -7,6 +8,10 @@ export const DONATION_WALL_INSTANCE_NAME = 'global'
 // __Host- binds the admin session cookie to this host (Secure, Path=/, no Domain)
 // so sibling *.windshare.cc origins cannot shadow it via a Domain=.windshare.cc cookie.
 export const ADMIN_COOKIE_NAME = '__Host-windshare_donate_admin'
+
+export function getDonationWallStub(env: DonationsEnv): DurableObjectStub<DonationWallRpc> {
+  return env.DONATION_WALL.get(env.DONATION_WALL.idFromName(DONATION_WALL_INSTANCE_NAME))
+}
 
 export type BodyReadResult =
   | { readonly ok: true; readonly text: string }

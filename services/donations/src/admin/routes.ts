@@ -2,10 +2,10 @@ import { randomBytes } from 'node:crypto'
 import type { DonationsEnv } from '../env'
 import {
   ADMIN_COOKIE_NAME,
-  DONATION_WALL_INSTANCE_NAME,
   MAX_ADMIN_BODY_BYTES,
   adminJsonResponse,
   getClientIp,
+  getDonationWallStub,
   hasMediaType,
   isSameOriginRequest,
   parseCookie,
@@ -16,6 +16,7 @@ import {
   logAdminAfdianSynced,
   logAdminConfigUpdated,
   logAdminLogin,
+  logAdminStorageError,
   logAfdianSponsorLookupFallback,
   logDonationModerated,
   logWebhookRejected,
@@ -28,8 +29,6 @@ import {
   type AdminSessionRecord,
   type AdminVisibilityCommand,
   type CommitDonationInput,
-  type DonationRecord,
-  type WallVisibility,
 } from '../model'
 import {
   lookupAfdianSponsorNameDirect,
@@ -59,8 +58,10 @@ interface AuthenticatedSession extends AdminSessionRecord {
   readonly sessionHash: string
 }
 
-function getWallStub(env: DonationsEnv): DurableObjectStub {
-  return env.DONATION_WALL.get(env.DONATION_WALL.idFromName(DONATION_WALL_INSTANCE_NAME))
+function parseOptionalIntParam(raw: string | null): number | null {
+  if (raw === null || raw.trim().length === 0) return null
+  const parsed = Number(raw)
+  return Number.isSafeInteger(parsed) ? parsed : null
 }
 
 function buildSessionCookie(token: string, maxAgeSeconds: number): string {
@@ -82,16 +83,9 @@ async function authenticateAdmin(
   const token = parseCookie(request.headers.get('Cookie'), ADMIN_COOKIE_NAME)
   if (token === null) return null
   const sessionHash = deriveAdminSessionHash(adminPassword, token)
-  const stub = getWallStub(env)
-  const response = await stub.fetch('https://donation-wall.internal/internal/admin/sessions/verify', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sessionHash, nowSec }),
-  })
-  if (!response.ok) return null
-  const body = await response.json() as { valid: boolean; csrfToken: string; expiresAt: number }
-  if (!body.valid) return null
-  return { sessionHash, csrfToken: body.csrfToken, expiresAt: body.expiresAt }
+  const session = await getDonationWallStub(env).verifyAdminSession(sessionHash, nowSec)
+  if (session === null) return null
+  return { sessionHash, csrfToken: session.csrfToken, expiresAt: session.expiresAt }
 }
 
 function verifyAdminMutationGuards(
@@ -142,20 +136,15 @@ async function handleAdminLogin(
 
   const password = typeof parsedBody.data.password === 'string' ? parsedBody.data.password : ''
   const nowSec = deps.nowSec()
-  const stub = getWallStub(env)
+  const stub = getDonationWallStub(env)
 
-  const limitRes = await stub.fetch('https://donation-wall.internal/internal/admin/rate-limit', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ clientIp: getClientIp(request), nowSec }),
-  })
-  if (limitRes.status === 429) {
-    const limitBody = await limitRes.json() as { retryAfterSeconds: number }
+  const limit = await stub.consumeAdminLoginRateLimit(getClientIp(request), nowSec)
+  if (!limit.allowed) {
     logAdminLogin({ ok: false, reason: 'rate_limited' })
     return adminJsonResponse(
-      { error: 'rate_limited', retryAfterSeconds: limitBody.retryAfterSeconds },
+      { error: 'rate_limited', retryAfterSeconds: limit.retryAfterSeconds },
       429,
-      { 'Retry-After': String(limitBody.retryAfterSeconds) },
+      { 'Retry-After': String(limit.retryAfterSeconds) },
     )
   }
 
@@ -167,12 +156,7 @@ async function handleAdminLogin(
   const sessionToken = randomBytes(32).toString('base64url')
   const csrfToken = randomBytes(32).toString('base64url')
   const sessionHash = deriveAdminSessionHash(adminPassword, sessionToken)
-  const createRes = await stub.fetch('https://donation-wall.internal/internal/admin/sessions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sessionHash, csrfToken, nowSec }),
-  })
-  const created = await createRes.json() as AdminSessionRecord
+  const created = await stub.createAdminSession({ sessionHash, csrfToken, nowSec })
 
   logAdminLogin({ ok: true, reason: 'authenticated' })
   return adminJsonResponse(
@@ -469,30 +453,22 @@ async function handleVisibilityMutation(
     return adminJsonResponse({ error: 'invalid_visibility_command' }, 400)
   }
 
-  const stub = getWallStub(env)
-  const upstream = await stub.fetch(
-    `https://donation-wall.internal/internal/admin/donations/${encodeURIComponent(donationId)}/visibility`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ command, nowSec: deps.nowSec() }),
-    },
+  const result = await getDonationWallStub(env).moderateDonationVisibility(
+    donationId,
+    command,
+    deps.nowSec(),
   )
-  const payload = await upstream.json() as
-    | { error: string }
-    | { record: DonationRecord; fromVisibility: WallVisibility; toVisibility: WallVisibility }
-
-  if (!upstream.ok || 'error' in payload) {
-    return adminJsonResponse(payload, upstream.status)
+  if (!result.ok) {
+    return adminJsonResponse({ error: result.code }, result.code === 'not_found' ? 404 : 409)
   }
 
   logDonationModerated({
-    donationId: payload.record.id,
+    donationId: result.record.id,
     action: command.action,
-    fromVisibility: payload.fromVisibility.kind,
-    toVisibility: payload.toVisibility.kind,
+    fromVisibility: result.fromVisibility.kind,
+    toVisibility: result.toVisibility.kind,
   })
-  return adminJsonResponse({ record: payload.record }, 200)
+  return adminJsonResponse({ record: result.record }, 200)
 }
 
 function extractVisibilityDonationId(pathname: string): { readonly matched: false } | { readonly matched: true; readonly donationId: string | null } {
@@ -521,17 +497,9 @@ async function handleAdminConfigPatch(request: Request, env: DonationsEnv): Prom
   if (patch === null) {
     return adminJsonResponse({ error: 'invalid_config_patch' }, 400)
   }
-  const stub = getWallStub(env)
-  const upstream = await stub.fetch('https://donation-wall.internal/internal/admin/config', {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(patch),
-  })
-  const payload = await upstream.json()
-  if (upstream.ok) {
-    logAdminConfigUpdated(patch)
-  }
-  return adminJsonResponse(payload, upstream.status)
+  const config = await getDonationWallStub(env).patchAdminConfig(patch)
+  logAdminConfigUpdated(patch)
+  return adminJsonResponse({ config }, 200)
 }
 
 async function handleAuthenticatedAdminMutation(
@@ -548,12 +516,7 @@ async function handleAuthenticatedAdminMutation(
   const { pathname } = url
 
   if (method === 'POST' && pathname === '/v1/admin/logout') {
-    const stub = getWallStub(env)
-    await stub.fetch('https://donation-wall.internal/internal/admin/sessions/revoke', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionHash: session.sessionHash }),
-    })
+    await getDonationWallStub(env).revokeAdminSession(session.sessionHash)
     return adminJsonResponse({ ok: true }, 200, {
       'Set-Cookie': buildSessionCookie('', 0),
     })
@@ -580,7 +543,22 @@ async function handleAuthenticatedAdminMutation(
   return null
 }
 
-export async function handleAdminApi(
+function summarizeStorageError(error: unknown): {
+  readonly message: string
+  readonly retryable: boolean
+  readonly overloaded: boolean
+} {
+  const message = error instanceof Error ? error.message : String(error)
+  const retryable = typeof error === 'object'
+    && error !== null
+    && (error as { retryable?: unknown }).retryable === true
+  const overloaded = typeof error === 'object'
+    && error !== null
+    && (error as { overloaded?: unknown }).overloaded === true
+  return { message, retryable, overloaded }
+}
+
+async function dispatchAdminApi(
   request: Request,
   env: DonationsEnv,
   url: URL,
@@ -606,9 +584,7 @@ export async function handleAdminApi(
   }
 
   if (method === 'GET' && pathname === '/v1/admin/session') {
-    const stub = getWallStub(env)
-    const configRes = await stub.fetch('https://donation-wall.internal/internal/admin/config')
-    const { config } = await configRes.json() as { config: unknown }
+    const config = await getDonationWallStub(env).getAdminConfig()
     return adminJsonResponse({
       authenticated: true,
       csrfToken: session.csrfToken,
@@ -618,17 +594,34 @@ export async function handleAdminApi(
   }
 
   if (method === 'GET' && pathname === '/v1/admin/donations') {
-    const stub = getWallStub(env)
-    const query = url.searchParams.toString()
-    const suffix = query.length > 0 ? `?${query}` : ''
-    const upstream = await stub.fetch(
-      `https://donation-wall.internal/internal/admin/donations${suffix}`,
-    )
-    return adminJsonResponse(await upstream.json(), upstream.status)
+    const after = url.searchParams.get('after')
+    const limit = parseOptionalIntParam(url.searchParams.get('limit'))
+    const page = await getDonationWallStub(env).listAdminDonations(after, limit)
+    return adminJsonResponse(page, 200)
   }
 
   const mutationResponse = await handleAuthenticatedAdminMutation(request, env, url, session, deps)
   if (mutationResponse !== null) return mutationResponse
 
   return adminJsonResponse({ error: 'not_found' }, 404)
+}
+
+export async function handleAdminApi(
+  request: Request,
+  env: DonationsEnv,
+  url: URL,
+  deps: RuntimeDeps,
+): Promise<Response> {
+  try {
+    return await dispatchAdminApi(request, env, url, deps)
+  } catch (error) {
+    // Fail closed with structured admin headers instead of leaking an unhandled Worker error
+    // whenever Durable Object RPC rejects (storage outage, overload, or reset).
+    logAdminStorageError({
+      method: request.method,
+      pathname: url.pathname,
+      ...summarizeStorageError(error),
+    })
+    return adminJsonResponse({ error: 'service_unavailable' }, 503)
+  }
 }

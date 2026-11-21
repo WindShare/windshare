@@ -1,5 +1,47 @@
+import type {
+  AdminConfigPatch,
+  AdminDonationsPage,
+  AdminSessionRecord,
+  AdminVisibilityCommand,
+  CommitDonationInput,
+  CommitDonationResult,
+  CreateAdminSessionInput,
+  CreateCryptoIntentInput,
+  CryptoCheckoutIntent,
+  DonationConfig,
+  DonationProvider,
+  PublicWallReadResult,
+} from './model'
+import type {
+  CreateIntentResult,
+  ModerateVisibilityResult,
+  RateLimitDecision,
+} from './wall-store'
+
+export interface DonationWallRpc extends Rpc.DurableObjectBranded {
+  getPublicWall(ifNoneMatch: string | null): PublicWallReadResult
+  createCryptoIntent(input: CreateCryptoIntentInput): CreateIntentResult
+  getCryptoIntent(intentId: string, nowSec: number): CryptoCheckoutIntent | null
+  hasDonation(provider: DonationProvider, externalId: string): boolean
+  findExistingExternalIds(provider: DonationProvider, externalIds: readonly string[]): string[]
+  commitDonation(input: CommitDonationInput, nowSec: number): CommitDonationResult
+  commitDonationsBatch(inputs: readonly CommitDonationInput[], nowSec: number): CommitDonationResult[]
+  consumeAdminLoginRateLimit(clientIp: string, nowSec: number): RateLimitDecision
+  createAdminSession(input: CreateAdminSessionInput): AdminSessionRecord
+  verifyAdminSession(sessionHash: string, nowSec: number): AdminSessionRecord | null
+  revokeAdminSession(sessionHash: string): void
+  getAdminConfig(): DonationConfig
+  patchAdminConfig(patch: AdminConfigPatch): DonationConfig
+  listAdminDonations(afterCursor: string | null, rawLimit: number | null): AdminDonationsPage
+  moderateDonationVisibility(
+    donationId: string,
+    command: AdminVisibilityCommand,
+    nowSec: number,
+  ): ModerateVisibilityResult
+}
+
 export interface DonationsEnv {
-  readonly DONATION_WALL: DurableObjectNamespace
+  readonly DONATION_WALL: DurableObjectNamespace<DonationWallRpc>
   readonly AFDIAN_USER_ID: string
   readonly KOFI_HANDLE: string
   readonly ALLOWED_ORIGINS: string

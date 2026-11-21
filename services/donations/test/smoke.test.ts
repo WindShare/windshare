@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { parseAllowedOrigins, resolveCryptoCheckoutApiKey, type DonationsEnv } from '../src/env'
+import {
+  parseAllowedOrigins,
+  resolveCryptoCheckoutApiKey,
+  type DonationWallRpc,
+  type DonationsEnv,
+} from '../src/env'
 import {
   MIN_PUBLIC_CNY_MINOR,
   MIN_PUBLIC_USD_MINOR,
@@ -25,12 +30,13 @@ function createStubEnv(): DonationsEnv {
   const namespace = {
     idFromName: (name: string) => ({ toString: () => name }),
     get: () => ({
-      fetch: async () => Response.json(
-        { version: 0, moderationEnabled: false, entries: [] },
-        { headers: { ETag: '"wall-v0"' } },
-      ),
+      getPublicWall: async () => ({
+        notModified: false as const,
+        etag: '"wall-v0"',
+        json: JSON.stringify({ version: 0, moderationEnabled: false, entries: [] }),
+      }),
     }),
-  } as unknown as DurableObjectNamespace
+  } as unknown as DurableObjectNamespace<DonationWallRpc>
 
   return {
     DONATION_WALL: namespace,
@@ -172,55 +178,46 @@ describe('donations worker scaffold', () => {
       const namespace = {
         idFromName: (name: string) => ({ toString: () => name }),
         get: () => ({
-          fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+          createCryptoIntent: async () => {
             doCalls += 1
-            const req = input instanceof Request ? input : new Request(input, init)
-            const pathname = new URL(req.url).pathname
-            if (pathname === '/internal/crypto-intents') {
-              return Response.json(
-                {
-                  intent: {
-                    intentId: 'intent-ready-1',
-                    displayName: 'Crypto Fan',
-                    message: 'Thanks!',
-                    requestedUsdMinor: 1000,
-                    returnOrigin: allowedOrigin,
-                    createdAt: 1_700_000_000,
-                    expiresAt: 1_700_604_800,
-                  },
-                },
-                { status: 201 },
-              )
+            return {
+              ok: true as const,
+              intent: {
+                intentId: 'intent-ready-1',
+                displayName: 'Crypto Fan',
+                message: 'Thanks!',
+                requestedUsdMinor: 1000,
+                returnOrigin: allowedOrigin,
+                createdAt: 1_700_000_000,
+                expiresAt: 1_700_604_800,
+              },
             }
-            if (pathname.startsWith('/internal/crypto-intents/')) {
-              return Response.json({ intent: null }, { status: 200 })
+          },
+          getCryptoIntent: async () => {
+            doCalls += 1
+            return null
+          },
+          commitDonation: async (input: { externalId: string }) => {
+            doCalls += 1
+            committedExternalId = input.externalId
+            return {
+              record: {
+                id: 'don-1',
+                provider: 'nowpayments' as const,
+                externalId: input.externalId,
+                displayName: null,
+                amountMinor: 1000,
+                currency: 'USD',
+                minorDigits: 2,
+                message: null,
+                visibility: { kind: 'published' as const },
+                donatedAt: 1_700_000_000,
+              },
+              deduplicated: false,
             }
-            if (pathname === '/internal/donations/commit') {
-              const body = await req.json() as { input: { externalId: string } }
-              committedExternalId = body.input.externalId
-              return Response.json(
-                {
-                  record: {
-                    id: 'don-1',
-                    provider: 'nowpayments',
-                    externalId: body.input.externalId,
-                    displayName: null,
-                    amountMinor: 1000,
-                    currency: 'USD',
-                    minorDigits: 2,
-                    message: null,
-                    visibility: { kind: 'published' },
-                    donatedAt: 1_700_000_000,
-                  },
-                  deduplicated: false,
-                },
-                { status: 200 },
-              )
-            }
-            return Response.json({ error: 'not_found' }, { status: 404 })
           },
         }),
-      } as unknown as DurableObjectNamespace
+      } as unknown as DurableObjectNamespace<DonationWallRpc>
 
       return {
         ...createStubEnv(),

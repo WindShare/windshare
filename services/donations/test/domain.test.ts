@@ -1,5 +1,4 @@
 import { randomBytes } from 'node:crypto'
-import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { describe, expect, it } from 'vitest'
 import type { DonationsEnv } from '../src/env'
 import {
@@ -9,8 +8,6 @@ import {
   applyVisibilityCommand,
   clampDonatedAt,
   defaultDonationConfig,
-  type CommitDonationInput,
-  type DonationProvider,
   type DonationRecord,
   type PublicWallResponse,
   type WallVisibility,
@@ -48,41 +45,12 @@ import {
   verifyKofiToken,
   verifyNowPaymentsSignature,
 } from '../src/verify'
-import { WallStore, matchesIfNoneMatch, type SqlStoragePort } from '../src/wall-store'
-
-function createInMemoryWallStoreWithDb(): { readonly store: WallStore; readonly db: DatabaseSync } {
-  const db = new DatabaseSync(':memory:')
-  const sqlPort: SqlStoragePort = {
-    exec(query: string, ...bindings: unknown[]): Iterable<Record<string, unknown>> {
-      const stmt = db.prepare(query)
-      const params = bindings as SQLInputValue[]
-      const trimmed = query.trimStart().toUpperCase()
-      if (trimmed.startsWith('SELECT')) {
-        return stmt.all(...params) as Record<string, unknown>[]
-      }
-      stmt.run(...params)
-      return []
-    },
-  }
-  const runTx = <T,>(closure: () => T): T => {
-    // node:sqlite supports nested SAVEPOINT transactions cleanly.
-    db.exec('SAVEPOINT wall_tx')
-    try {
-      const result = closure()
-      db.exec('RELEASE SAVEPOINT wall_tx')
-      return result
-    } catch (error) {
-      db.exec('ROLLBACK TO SAVEPOINT wall_tx')
-      db.exec('RELEASE SAVEPOINT wall_tx')
-      throw error
-    }
-  }
-  return { store: new WallStore(sqlPort, runTx), db }
-}
-
-function createInMemoryWallStore(): WallStore {
-  return createInMemoryWallStoreWithDb().store
-}
+import { matchesIfNoneMatch } from '../src/wall-store'
+import {
+  createInMemoryWallStore,
+  createInMemoryWallStoreWithDb,
+  createWallNamespaceFromStore,
+} from './wall-harness'
 
 describe('sanitization, fixed-point money, and visibility classification', () => {
   it('parses decimal strings, JSON numbers, scientific notation, and unknown currencies safely', () => {
@@ -663,39 +631,11 @@ describe('WallStore SQLite persistence, caching, rate limiting, and pagination',
     const origin = 'https://donate.windshare.cc'
     let doCalls = 0
 
-    const dispatchInternal = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-      doCalls += 1
-      const req = input instanceof Request ? input : new Request(input, init)
-      const pathname = new URL(req.url).pathname
-      if (pathname === '/internal/admin/rate-limit') {
-        const body = await req.json() as { clientIp: string; nowSec: number }
-        const decision = store.consumeDualRateLimit('admin_login', body.clientIp, body.nowSec)
-        return Response.json(decision, { status: decision.allowed ? 200 : 429 })
-      }
-      if (pathname === '/internal/admin/sessions') {
-        const body = await req.json() as { sessionHash: string; csrfToken: string; nowSec: number }
-        return Response.json(store.createAdminSession(body), { status: 201 })
-      }
-      if (pathname === '/internal/admin/sessions/verify') {
-        const body = await req.json() as { sessionHash: string; nowSec: number }
-        const session = store.verifyAdminSession(body.sessionHash, body.nowSec)
-        return session === null
-          ? Response.json({ valid: false }, { status: 401 })
-          : Response.json({ valid: true, ...session }, { status: 200 })
-      }
-      if (pathname === '/internal/admin/config') {
-        return Response.json({ config: store.getConfig() }, { status: 200 })
-      }
-      if (pathname === '/internal/admin/donations') {
-        return Response.json(store.listAdminDonations(null), { status: 200 })
-      }
-      return Response.json({ error: 'not_found' }, { status: 404 })
-    }
-
-    const wallNamespace = {
-      idFromName: (name: string) => ({ toString: () => name }),
-      get: () => ({ fetch: dispatchInternal }),
-    } as unknown as DurableObjectNamespace
+    const wallNamespace = createWallNamespaceFromStore(store, {
+      onCall: () => {
+        doCalls += 1
+      },
+    })
 
     const createEnv = (adminSecret?: string): DonationsEnv => ({
       DONATION_WALL: wallNamespace,
@@ -918,51 +858,18 @@ function createSyncHarness() {
   const counts = { doCalls: 0, orderCalls: 0, sponsorPageCalls: 0, sponsorDirectCalls: 0 }
   const committedBatches: string[][] = []
 
-  const dispatchInternal = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    counts.doCalls += 1
-    const req = input instanceof Request ? input : new Request(input, init)
-    const url = new URL(req.url)
-    const { pathname } = url
-    if (pathname === '/internal/admin/rate-limit') {
-      const body = await req.json() as { clientIp: string; nowSec: number }
-      return Response.json(store.consumeDualRateLimit('admin_login', body.clientIp, body.nowSec), { status: 200 })
-    }
-    if (pathname === '/internal/admin/sessions') {
-      const body = await req.json() as { sessionHash: string; csrfToken: string; nowSec: number }
-      return Response.json(store.createAdminSession(body), { status: 201 })
-    }
-    if (pathname === '/internal/admin/sessions/verify') {
-      const body = await req.json() as { sessionHash: string; nowSec: number }
-      const session = store.verifyAdminSession(body.sessionHash, body.nowSec)
-      return session === null
-        ? Response.json({ valid: false }, { status: 401 })
-        : Response.json({ valid: true, ...session }, { status: 200 })
-    }
-    if (pathname === '/internal/donations/exists') {
-      const provider = url.searchParams.get('provider') as DonationProvider
-      const externalId = url.searchParams.get('externalId') ?? ''
-      return Response.json({ exists: store.hasDonation(provider, externalId) }, { status: 200 })
-    }
-    if (pathname === '/internal/donations/commit') {
-      const body = await req.json() as { input: CommitDonationInput; nowSec: number }
-      return Response.json(store.commitDonation(body.input, body.nowSec), { status: 200 })
-    }
-    if (pathname === '/internal/donations/exists-batch') {
-      const body = await req.json() as { provider: DonationProvider; externalIds: string[] }
-      return Response.json({ existingIds: store.findExistingExternalIds(body.provider, body.externalIds) }, { status: 200 })
-    }
-    if (pathname === '/internal/donations/commit-batch') {
-      const body = await req.json() as { inputs: CommitDonationInput[]; nowSec: number }
-      committedBatches.push(body.inputs.map(item => item.externalId))
-      return Response.json({ results: store.commitDonationsBatch(body.inputs, body.nowSec) }, { status: 200 })
-    }
-    return Response.json({ error: 'not_found' }, { status: 404 })
-  }
-
-  const wallNamespace = {
-    idFromName: (name: string) => ({ toString: () => name }),
-    get: () => ({ fetch: dispatchInternal }),
-  } as unknown as DurableObjectNamespace
+  const wallNamespace = createWallNamespaceFromStore(store, {
+    onCall: () => {
+      counts.doCalls += 1
+    },
+    overrides: {
+      commitDonationsBatch: async (inputs, nowSec) => {
+        counts.doCalls += 1
+        committedBatches.push(inputs.map(item => item.externalId))
+        return store.commitDonationsBatch(inputs, nowSec)
+      },
+    },
+  })
 
   const env: DonationsEnv = {
     DONATION_WALL: wallNamespace,

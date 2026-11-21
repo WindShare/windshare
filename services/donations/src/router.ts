@@ -2,10 +2,10 @@ import { ADMIN_APP_CSS, ADMIN_APP_JS, ADMIN_HTML } from './admin/assets'
 import { handleAdminApi } from './admin/routes'
 import { parseAllowedOrigins, resolveCryptoCheckoutApiKey, type DonationsEnv } from './env'
 import {
-  DONATION_WALL_INSTANCE_NAME,
   MAX_CRYPTO_INTENT_BODY_BYTES,
   adminSecurityHeaders,
   getClientIp,
+  getDonationWallStub,
   hasMediaType,
   jsonResponse,
   parseJsonObject,
@@ -15,7 +15,6 @@ import { logCryptoIntentCreated, logCryptoInvoiceFailed } from './log'
 import {
   MAX_DISPLAY_NAME_CODEPOINTS,
   MAX_MESSAGE_CODEPOINTS,
-  type CryptoCheckoutIntent,
 } from './model'
 import { createNowPaymentsInvoice, type FetchLike } from './providers'
 import {
@@ -69,23 +68,18 @@ function handleAdminAssetRoute(method: string, pathname: string): Response | nul
 }
 
 async function handlePublicWall(request: Request, env: DonationsEnv): Promise<Response> {
-  const stub = env.DONATION_WALL.get(env.DONATION_WALL.idFromName(DONATION_WALL_INSTANCE_NAME))
-  const headers = new Headers()
-  const ifNoneMatch = request.headers.get('If-None-Match')
-  if (ifNoneMatch !== null) headers.set('If-None-Match', ifNoneMatch)
-
-  const upstream = await stub.fetch('https://donation-wall.internal/internal/wall', {
-    method: 'GET',
-    headers,
+  const result = await getDonationWallStub(env).getPublicWall(request.headers.get('If-None-Match'))
+  const headers = new Headers({
+    'Access-Control-Allow-Origin': '*',
+    'Cache-Control': PUBLIC_WALL_CACHE_CONTROL,
+    ETag: result.etag,
+    'X-Content-Type-Options': 'nosniff',
   })
-  const responseHeaders = new Headers(upstream.headers)
-  responseHeaders.set('Access-Control-Allow-Origin', '*')
-  responseHeaders.set('Cache-Control', PUBLIC_WALL_CACHE_CONTROL)
-  responseHeaders.set('X-Content-Type-Options', 'nosniff')
-  return new Response(upstream.body, {
-    status: upstream.status,
-    headers: responseHeaders,
-  })
+  if (result.notModified) {
+    return new Response(null, { status: 304, headers })
+  }
+  headers.set('Content-Type', 'application/json; charset=utf-8')
+  return new Response(result.json, { status: 200, headers })
 }
 
 function cryptoCorsHeaders(origin: string): Record<string, string> {
@@ -165,28 +159,26 @@ async function handleCreateCryptoIntent(
     MAX_MESSAGE_CODEPOINTS,
   )
 
-  const stub = env.DONATION_WALL.get(env.DONATION_WALL.idFromName(DONATION_WALL_INSTANCE_NAME))
-  const doResponse = await stub.fetch('https://donation-wall.internal/internal/crypto-intents', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      clientIp: getClientIp(request),
-      displayName,
-      message,
-      requestedUsdMinor,
-      returnOrigin: origin,
-      nowSec: deps.nowSec(),
-    }),
+  const created = await getDonationWallStub(env).createCryptoIntent({
+    clientIp: getClientIp(request),
+    displayName,
+    message,
+    requestedUsdMinor,
+    returnOrigin: origin,
+    nowSec: deps.nowSec(),
   })
-  if (!doResponse.ok) {
-    const errPayload = await doResponse.json()
-    const extra: Record<string, string> = { ...cors }
-    const retryAfter = doResponse.headers.get('Retry-After')
-    if (retryAfter !== null) extra['Retry-After'] = retryAfter
-    return jsonResponse(errPayload, doResponse.status, extra)
+  if (!created.ok) {
+    if (created.code === 'crypto_checkout_paused') {
+      return jsonResponse({ error: created.code }, 503, cors)
+    }
+    return jsonResponse(
+      { error: created.code, retryAfterSeconds: created.retryAfterSeconds },
+      429,
+      { ...cors, 'Retry-After': String(created.retryAfterSeconds) },
+    )
   }
 
-  const { intent } = await doResponse.json() as { intent: CryptoCheckoutIntent }
+  const { intent } = created
   logCryptoIntentCreated({
     intentId: intent.intentId,
     requestedUsdMinor: intent.requestedUsdMinor,
