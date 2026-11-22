@@ -287,7 +287,55 @@ func noReplaceError(err error) error {
 	return err
 }
 
+// Windows antivirus and search-indexer minifilters routinely hold handles on
+// freshly written files or directories for 10-200ms, causing rename handle
+// opens or NtSetInformationFile calls to return ACCESS_DENIED or
+// SHARING_VIOLATION. Total wait stays tightly bounded (315ms across 6 waits)
+// because outputcap.Directory operations carry no context and permanent ACL
+// errors also surface as ERROR_ACCESS_DENIED.
+var windowsRenameBackoff = [...]time.Duration{
+	5 * time.Millisecond,
+	10 * time.Millisecond,
+	20 * time.Millisecond,
+	40 * time.Millisecond,
+	80 * time.Millisecond,
+	160 * time.Millisecond,
+}
+
+func retryWindowsRename(attempt func() error, wait func(time.Duration)) error {
+	err := attempt()
+	if !isTransientWindowsRenameError(err) {
+		return err
+	}
+	for _, delay := range windowsRenameBackoff {
+		wait(delay)
+		err = attempt()
+		if !isTransientWindowsRenameError(err) {
+			return err
+		}
+	}
+	return err
+}
+
+func isTransientWindowsRenameError(err error) bool {
+	if err == nil || errors.Is(err, outputcap.ErrUnsafeNamespace) {
+		return false
+	}
+	return errors.Is(err, windows.ERROR_ACCESS_DENIED) ||
+		errors.Is(err, windows.ERROR_SHARING_VIOLATION)
+}
+
 func renameFile(from *file, to *directory, name string, replace bool) error {
+	return renameFileWithWait(from, to, name, replace, time.Sleep)
+}
+
+func renameFileWithWait(from *file, to *directory, name string, replace bool, wait func(time.Duration)) error {
+	return retryWindowsRename(func() error {
+		return renameFileOnce(from, to, name, replace)
+	}, wait)
+}
+
+func renameFileOnce(from *file, to *directory, name string, replace bool) error {
 	opened, err := openFileAt(from.parent, from.name, os.O_RDWR, 0)
 	if err != nil {
 		return err
@@ -300,7 +348,18 @@ func renameFile(from *file, to *directory, name string, replace bool) error {
 	}
 	return renameHandle(windows.Handle(opened.Fd()), to, name, replace)
 }
+
 func renameDirectory(from, to *directory, name string) error {
+	return renameDirectoryWithWait(from, to, name, time.Sleep)
+}
+
+func renameDirectoryWithWait(from, to *directory, name string, wait func(time.Duration)) error {
+	return retryWindowsRename(func() error {
+		return renameDirectoryOnce(from, to, name)
+	}, wait)
+}
+
+func renameDirectoryOnce(from, to *directory, name string) error {
 	f, err := openWindowsPath(from.path, os.O_RDWR, true)
 	if err != nil {
 		return err
