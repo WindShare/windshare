@@ -26,7 +26,7 @@ func wideCatalogIdentity[T ~[IdentityBytes]byte](seed byte) T {
 	return identity
 }
 
-func wideCatalogBudgets(tb testing.TB, prefix string, width int) (*BudgetAccount, *BudgetAccount, *BudgetAccount) {
+func wideCatalogBudgets(tb testing.TB, prefix string, width int) (*BudgetAccount, *BudgetAccount, *BudgetAccount, *BudgetAccount) {
 	tb.Helper()
 	limits := BudgetLimits{
 		ActiveScans: 4,
@@ -43,8 +43,9 @@ func wideCatalogBudgets(tb testing.TB, prefix string, width int) (*BudgetAccount
 	}
 	process := newAccount("process", limits)
 	share := newAccount("share", limits)
+	startup := newAccount("startup", limits)
 	session := newAccount("session", limits)
-	return process, share, session
+	return process, share, startup, session
 }
 
 func wideCatalogStore(
@@ -132,7 +133,7 @@ func pageObjectDigest(tb testing.TB, store *CatalogStore, directory CommittedDir
 func exerciseCatalogWidth(tb testing.TB, width int) wideCatalogMetrics {
 	tb.Helper()
 	share := wideCatalogIdentity[ShareInstance](17)
-	process, shareBudget, session := wideCatalogBudgets(tb, "wide-catalog", width)
+	process, shareBudget, startup, session := wideCatalogBudgets(tb, "wide-catalog", width)
 	store := wideCatalogStore(tb, share, process, shareBudget)
 	defer func() {
 		if err := store.Close(); err != nil {
@@ -152,10 +153,9 @@ func exerciseCatalogWidth(tb testing.TB, width int) wideCatalogMetrics {
 	if err != nil {
 		tb.Fatal(err)
 	}
-	if rootAuthority, err := store.CommitSyntheticRoot(context.Background(), rootCommit, session); err != nil || rootAuthority.IsZero() {
+	if rootAuthority, err := store.CommitSyntheticRoot(context.Background(), rootCommit, startup); err != nil || rootAuthority.IsZero() {
 		tb.Fatalf("commit synthetic root: authority=%v err=%v", !rootAuthority.IsZero(), err)
 	}
-	var peakSession atomic.Uint64
 	scanner := DirectoryScannerFunc(func(ctx context.Context, request ScanRequest) (ScanResult, error) {
 		for index := width - 1; index >= 0; index-- {
 			child, err := benchmarkWideScannedFile(index)
@@ -164,13 +164,6 @@ func exerciseCatalogWidth(tb testing.TB, width int) wideCatalogMetrics {
 			}
 			if err := request.Children.Add(ctx, child); err != nil {
 				return ScanResult{}, err
-			}
-			used := session.Snapshot().Used.MemoryBytes
-			for {
-				peak := peakSession.Load()
-				if used <= peak || peakSession.CompareAndSwap(peak, used) {
-					break
-				}
 			}
 		}
 		return ScanResult{}, nil
@@ -183,8 +176,9 @@ func exerciseCatalogWidth(tb testing.TB, width int) wideCatalogMetrics {
 	if committed.EntryCount() != uint64(width) || committed.PageCount() != wantPages {
 		tb.Fatalf("wide catalog geometry: entries=%d pages=%d", committed.EntryCount(), committed.PageCount())
 	}
-	if session.Snapshot().Used != (ResourceUsage{}) {
-		tb.Fatalf("completed catalog scan retained session budget: %+v", session.Snapshot().Used)
+	sessionSnapshot := session.Snapshot()
+	if sessionSnapshot.Used != (ResourceUsage{}) {
+		tb.Fatalf("completed catalog scan retained session budget: %+v", sessionSnapshot.Used)
 	}
 	firstPage, found, err := store.Page(context.Background(), directory, committed.Generation(), 0)
 	if err != nil || !found || len(firstPage.Entries()) == 0 || firstPage.Entries()[0].Name() != "file-0000000" {
@@ -207,7 +201,7 @@ func exerciseCatalogWidth(tb testing.TB, width int) wideCatalogMetrics {
 	return wideCatalogMetrics{
 		entries:               uint64(width),
 		pages:                 committed.PageCount(),
-		peakSessionMemory:     peakSession.Load(),
+		peakSessionMemory:     sessionSnapshot.Peak.MemoryBytes,
 		retainedCatalogMemory: retained.MemoryBytes,
 	}
 }

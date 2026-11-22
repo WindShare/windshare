@@ -143,17 +143,20 @@ func (observe SourceOmissionObserverFunc) ObserveSourceOmissions(value SourceOmi
 }
 
 // admitSortedSiblings withholds every sibling group whose names collide under
-// portable matching and returns the memory bytes no longer retained after
-// filtering (omitted records plus any transient pre-NFC raw spellings).
-func admitSortedSiblings(items []scannedNode) ([]NodeRecord, uint64, []SourceOmission, uint64) {
-	if len(items) == 0 {
+// portable matching in place, avoiding a duplicate NodeRecord slice while
+// returning the memory bytes released from omitted records.
+func admitSortedSiblings(
+	records []NodeRecord,
+	rawNames map[int]string,
+) ([]NodeRecord, uint64, []SourceOmission, uint64) {
+	if len(records) == 0 {
 		return nil, 0, nil, 0
 	}
-	firstByKey := make(map[string]int, len(items))
+	firstByKey := make(map[string]int, len(records))
 	var collidingGroups map[string][]int
 	var colliding []bool
-	for index, item := range items {
-		key := siblingCollisionKey(item.record.Entry().Name())
+	for index := range records {
+		key := siblingCollisionKey(records[index].Entry().Name())
 		first, exists := firstByKey[key]
 		if !exists {
 			firstByKey[key] = index
@@ -161,7 +164,7 @@ func admitSortedSiblings(items []scannedNode) ([]NodeRecord, uint64, []SourceOmi
 		}
 		if collidingGroups == nil {
 			collidingGroups = make(map[string][]int)
-			colliding = make([]bool, len(items))
+			colliding = make([]bool, len(records))
 		}
 		if !colliding[first] {
 			colliding[first] = true
@@ -170,15 +173,15 @@ func admitSortedSiblings(items []scannedNode) ([]NodeRecord, uint64, []SourceOmi
 		colliding[index] = true
 		collidingGroups[key] = append(collidingGroups[key], index)
 	}
-
-	var releasedBytes uint64
 	if len(collidingGroups) == 0 {
-		admitted := make([]NodeRecord, len(items))
-		for index, item := range items {
-			admitted[index] = item.record
-			releasedBytes += item.extra
+		return records, 0, nil, 0
+	}
+
+	rawNameFor := func(index int) string {
+		if raw, ok := rawNames[index]; ok {
+			return raw
 		}
-		return admitted, 0, nil, releasedBytes
+		return records[index].Entry().Name()
 	}
 
 	keys := make([]string, 0, len(collidingGroups))
@@ -192,31 +195,38 @@ func admitSortedSiblings(items []scannedNode) ([]NodeRecord, uint64, []SourceOmi
 	for _, key := range keys {
 		members := collidingGroups[key]
 		slices.SortFunc(members, func(left, right int) int {
-			return strings.Compare(items[left].rawName, items[right].rawName)
+			return strings.Compare(rawNameFor(left), rawNameFor(right))
 		})
 		omittedCount += uint64(len(members))
 		if len(samples) >= MaxSourceOmissionSamples {
 			continue
 		}
-		firstName := items[members[0]].rawName
-		secondName := items[members[1]].rawName
+		firstName := rawNameFor(members[0])
+		secondName := rawNameFor(members[1])
 		samples = append(samples, NewSiblingCollisionOmission(firstName, secondName))
 		for _, member := range members[1:] {
 			if len(samples) >= MaxSourceOmissionSamples {
 				break
 			}
-			samples = append(samples, NewSiblingCollisionOmission(items[member].rawName, firstName))
+			samples = append(samples, NewSiblingCollisionOmission(rawNameFor(member), firstName))
 		}
 	}
 
-	admitted := make([]NodeRecord, 0, len(items)-int(omittedCount))
-	for index, item := range items {
-		releasedBytes += item.extra
+	var omittedBytes uint64
+	kept := 0
+	for index := range records {
 		if colliding[index] {
-			releasedBytes += item.record.EstimatedMemoryBytes()
+			omittedBytes += records[index].EstimatedMemoryBytes()
 			continue
 		}
-		admitted = append(admitted, item.record)
+		if kept != index {
+			records[kept] = records[index]
+		}
+		kept++
 	}
-	return admitted, omittedCount, samples, releasedBytes
+	clear(records[kept:])
+	if kept == 0 {
+		return nil, omittedCount, samples, omittedBytes
+	}
+	return records[:kept], omittedCount, samples, omittedBytes
 }

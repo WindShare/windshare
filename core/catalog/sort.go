@@ -42,12 +42,6 @@ func (child ScannedChild) nodeRecord(parent DirectoryID) (NodeRecord, error) {
 	}
 }
 
-type scannedNode struct {
-	record  NodeRecord
-	rawName string
-	extra   uint64
-}
-
 type directorySortResult struct {
 	records        []NodeRecord
 	omittedCount   uint64
@@ -56,12 +50,15 @@ type directorySortResult struct {
 
 // directorySorter collects scanned children in memory under the attempt's
 // resource meter, rejects duplicate node identities, withholds portable-name
-// sibling collision groups, and emits admitted records in canonical byte order.
+// sibling collision groups in place, and emits admitted records in canonical
+// byte order.
 type directorySorter struct {
-	parent  DirectoryID
-	meter   ResourceMeter
-	seenIDs map[NodeID]struct{}
-	items   []scannedNode
+	parent       DirectoryID
+	meter        ResourceMeter
+	seenIDs      map[NodeID]struct{}
+	records      []NodeRecord
+	rawNames     map[int]string
+	rawNameBytes uint64
 }
 
 func newDirectorySorter(parent DirectoryID, meter ResourceMeter) (*directorySorter, error) {
@@ -96,7 +93,14 @@ func (s *directorySorter) Add(ctx context.Context, child ScannedChild) error {
 		return err
 	}
 	s.seenIDs[node.NodeID()] = struct{}{}
-	s.items = append(s.items, scannedNode{record: node, rawName: child.Name, extra: extra})
+	if extra > 0 {
+		if s.rawNames == nil {
+			s.rawNames = make(map[int]string)
+		}
+		s.rawNames[len(s.records)] = child.Name
+		s.rawNameBytes += extra
+	}
+	s.records = append(s.records, node)
 	return nil
 }
 
@@ -104,9 +108,19 @@ func (s *directorySorter) Finish(ctx context.Context) (directorySortResult, erro
 	if err := ctx.Err(); err != nil {
 		return directorySortResult{}, err
 	}
-	admitted, omittedCount, samples, releasedBytes := admitSortedSiblings(s.items)
-	s.items = nil
+	records := s.records
+	rawNames := s.rawNames
+	releasedBytes := s.rawNameBytes
+	// Drop deduplication state before collision filtering so seenIDs does not
+	// overlap with transient name-key maps.
 	s.seenIDs = nil
+	s.records = nil
+	s.rawNames = nil
+	s.rawNameBytes = 0
+
+	admitted, omittedCount, samples, omittedBytes := admitSortedSiblings(records, rawNames)
+	rawNames = nil
+	releasedBytes += omittedBytes
 	if releasedBytes > 0 {
 		if err := s.meter.Release(ResourceUsage{MemoryBytes: releasedBytes}); err != nil {
 			return directorySortResult{}, err
@@ -126,6 +140,8 @@ func (s *directorySorter) Close() {
 	if s == nil {
 		return
 	}
-	s.items = nil
+	s.records = nil
 	s.seenIDs = nil
+	s.rawNames = nil
+	s.rawNameBytes = 0
 }

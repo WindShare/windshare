@@ -172,6 +172,8 @@ func validateDirectoryCommit(instance ShareInstance, commit DirectoryCommit, syn
 	return nil
 }
 
+const pageEncodingReservationBytes = uint64(CatalogPageMemoryOverhead + MaxCatalogPayloadBytes)
+
 func (s *CatalogStore) commitDirectoryLocked(
 	ctx context.Context,
 	commit DirectoryCommit,
@@ -204,25 +206,30 @@ func (s *CatalogStore) commitDirectoryLocked(
 	}
 	s.mu.RUnlock()
 
-	pages, committed, pageBytes, childrenBytes, err := s.buildDirectoryPages(
-		ctx, commit, sessionBudget,
-	)
-	if err != nil {
-		return CommittedDirectory{}, nil, err
-	}
-
 	var dirNodeBytes uint64
 	if !dirExists {
 		dirNodeBytes = commit.directory.EstimatedMemoryBytes()
 	}
-	additionalMemory := memoryDirectoryOverhead + dirNodeBytes + pageBytes
+	var childrenBytes uint64
+	for _, child := range commit.children {
+		childrenBytes += child.EstimatedMemoryBytes()
+	}
+	// Reserve entry slots and directory/node memory before encoding pages so
+	// direct commits fail before allocating page payloads and incremental page
+	// charges transfer directly into the retained store reservation.
+	upfrontMemory := memoryDirectoryOverhead + dirNodeBytes
 	if !childrenPreCharged {
-		additionalMemory += childrenBytes
+		upfrontMemory += childrenBytes
 	}
 	if err := meter.Consume(ResourceUsage{
 		Entries:     uint64(len(commit.children)),
-		MemoryBytes: additionalMemory,
+		MemoryBytes: upfrontMemory,
 	}); err != nil {
+		return CommittedDirectory{}, nil, err
+	}
+
+	pages, committed, pageBytes, err := s.buildDirectoryPages(ctx, commit, meter)
+	if err != nil {
 		return CommittedDirectory{}, nil, err
 	}
 
@@ -308,13 +315,13 @@ func (s *CatalogStore) validateExistingCommitLocked(
 func (s *CatalogStore) buildDirectoryPages(
 	ctx context.Context,
 	commit DirectoryCommit,
-	sessionBudget *BudgetAccount,
-) ([]PagePayload, CommittedDirectory, uint64, uint64, error) {
+	meter *attemptResourceMeter,
+) ([]PagePayload, CommittedDirectory, uint64, error) {
 	directoryID, _ := commit.directory.DirectoryID()
 	var validator DirectoryGenerationValidator
 
 	if len(commit.children) == 0 {
-		page, payload, err := s.encodeSinglePage(
+		payload, _, pageBytes, err := encodeAndAcceptPage(
 			CatalogPageSpec{
 				ShareInstance: s.shareInstance,
 				DirectoryID:   directoryID,
@@ -322,48 +329,43 @@ func (s *CatalogStore) buildDirectoryPages(
 				Terminal:      true,
 				OmittedCount:  commit.omittedCount,
 			},
-			sessionBudget,
+			&validator,
+			meter,
 		)
 		if err != nil {
-			return nil, CommittedDirectory{}, 0, 0, err
-		}
-		if err := validator.AcceptPage(page); err != nil {
-			return nil, CommittedDirectory{}, 0, 0, err
+			return nil, CommittedDirectory{}, 0, err
 		}
 		committed, err := validator.Finish()
 		if err != nil {
-			return nil, CommittedDirectory{}, 0, 0, err
+			return nil, CommittedDirectory{}, 0, err
 		}
-		pageBytes := memoryPageOverhead + uint64(len(payload.encoded))
-		return []PagePayload{payload}, committed, pageBytes, 0, nil
+		return []PagePayload{payload}, committed, pageBytes, nil
 	}
 
 	var (
-		pages         []PagePayload
-		previous      PageCommitment
-		lastName      string
-		pageBytes     uint64
-		childrenBytes uint64
-		consumed      int
-		pageIndex     uint32
+		pages     []PagePayload
+		previous  PageCommitment
+		lastName  string
+		pageBytes uint64
+		consumed  int
+		pageIndex uint32
 	)
 	for consumed < len(commit.children) {
 		if err := ctx.Err(); err != nil {
-			return nil, CommittedDirectory{}, 0, 0, err
+			return nil, CommittedDirectory{}, 0, err
 		}
-		entries, addedBytes, err := collectPageEntries(
+		entries, err := collectPageEntries(
 			directoryID, commit.children, &consumed, &lastName,
 		)
 		if err != nil {
-			return nil, CommittedDirectory{}, 0, 0, err
+			return nil, CommittedDirectory{}, 0, err
 		}
-		childrenBytes += addedBytes
 		terminal := consumed == len(commit.children)
 		omitted := uint64(0)
 		if terminal {
 			omitted = commit.omittedCount
 		}
-		page, payload, err := s.encodeSinglePage(
+		payload, commitment, retainedBytes, err := encodeAndAcceptPage(
 			CatalogPageSpec{
 				ShareInstance: s.shareInstance,
 				DirectoryID:   directoryID,
@@ -374,36 +376,51 @@ func (s *CatalogStore) buildDirectoryPages(
 				Terminal:      terminal,
 				OmittedCount:  omitted,
 			},
-			sessionBudget,
+			&validator,
+			meter,
 		)
 		if err != nil {
-			return nil, CommittedDirectory{}, 0, 0, err
-		}
-		if err := validator.AcceptPage(page); err != nil {
-			return nil, CommittedDirectory{}, 0, 0, err
+			return nil, CommittedDirectory{}, 0, err
 		}
 		pages = append(pages, payload)
-		pageBytes += memoryPageOverhead + uint64(len(payload.encoded))
-		previous = page.Commitment()
+		pageBytes += retainedBytes
+		previous = commitment
 		pageIndex++
 	}
 	committed, err := validator.Finish()
 	if err != nil {
-		return nil, CommittedDirectory{}, 0, 0, err
+		return nil, CommittedDirectory{}, 0, err
 	}
-	return pages, committed, pageBytes, childrenBytes, nil
+	return pages, committed, pageBytes, nil
 }
 
-func (s *CatalogStore) encodeSinglePage(spec CatalogPageSpec, sessionBudget *BudgetAccount) (CatalogPage, PagePayload, error) {
-	memory, err := ReserveHierarchy(
-		s.hierarchy(sessionBudget),
-		ResourceUsage{MemoryBytes: CatalogPageMemoryOverhead + MaxCatalogPayloadBytes},
-	)
-	if err != nil {
-		return CatalogPage{}, PagePayload{}, err
+// encodeAndAcceptPage reserves worst-case page encoding memory on the commit
+// meter before allocating wire bytes, then shrinks to the retained payload size
+// once the decoded CatalogPage is validated and discarded.
+func encodeAndAcceptPage(
+	spec CatalogPageSpec,
+	validator *DirectoryGenerationValidator,
+	meter *attemptResourceMeter,
+) (PagePayload, PageCommitment, uint64, error) {
+	if err := meter.Consume(ResourceUsage{MemoryBytes: pageEncodingReservationBytes}); err != nil {
+		return PagePayload{}, PageCommitment{}, 0, err
 	}
-	defer memory.Release()
-	return NewCatalogPage(spec)
+	page, payload, err := NewCatalogPage(spec)
+	if err != nil {
+		_ = meter.Release(ResourceUsage{MemoryBytes: pageEncodingReservationBytes})
+		return PagePayload{}, PageCommitment{}, 0, err
+	}
+	if err := validator.AcceptPage(page); err != nil {
+		_ = meter.Release(ResourceUsage{MemoryBytes: pageEncodingReservationBytes})
+		return PagePayload{}, PageCommitment{}, 0, err
+	}
+	retainedBytes := memoryPageOverhead + uint64(len(payload.encoded))
+	if pageEncodingReservationBytes > retainedBytes {
+		if err := meter.Release(ResourceUsage{MemoryBytes: pageEncodingReservationBytes - retainedBytes}); err != nil {
+			return PagePayload{}, PageCommitment{}, 0, err
+		}
+	}
+	return payload, page.Commitment(), retainedBytes, nil
 }
 
 func collectPageEntries(
@@ -411,7 +428,7 @@ func collectPageEntries(
 	children []NodeRecord,
 	consumed *int,
 	lastName *string,
-) ([]Entry, uint64, error) {
+) ([]Entry, error) {
 	remaining := len(children) - *consumed
 	limit := min(MaxCatalogPageEntries, remaining)
 	entries := make([]Entry, 0, limit)
@@ -419,18 +436,16 @@ func collectPageEntries(
 	// one maximum-sized next name so encoded pages never exceed MaxCatalogPayloadBytes.
 	const pageEnvelopeBudgetBytes, entryEncodingBudgetBytes = 512, 128
 	remainingBytes := MaxCatalogPayloadBytes - pageEnvelopeBudgetBytes
-	var childrenBytes uint64
 	for range limit {
 		record := children[*consumed]
 		if !record.valid() || record.Parent() != parent {
-			return nil, 0, errors.New("catalog child record is invalid or has another parent")
+			return nil, errors.New("catalog child record is invalid or has another parent")
 		}
 		entry := record.Entry()
 		if *consumed > 0 && *lastName >= entry.Name() {
-			return nil, 0, ErrPageSequence
+			return nil, ErrPageSequence
 		}
 		entries = append(entries, entry)
-		childrenBytes += record.EstimatedMemoryBytes()
 		*lastName = entry.Name()
 		*consumed++
 		remainingBytes -= len(entry.Name()) + entryEncodingBudgetBytes
@@ -438,5 +453,5 @@ func collectPageEntries(
 			break
 		}
 	}
-	return entries, childrenBytes, nil
+	return entries, nil
 }

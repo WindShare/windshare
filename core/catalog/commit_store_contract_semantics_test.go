@@ -2,7 +2,9 @@ package catalog
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
+	"fmt"
 	"math"
 	"testing"
 )
@@ -406,5 +408,129 @@ func TestRunAttemptContainsAdmissionAndPostScanValidationFailures(t *testing.T) 
 	})
 	if _, err := candidate.ListChildren(context.Background(), directory, candidateSession, ScanOptions{}, overflow); !errors.Is(err, ErrPageLimit) {
 		t.Fatalf("omission overflow error = %v", err)
+	}
+}
+
+func multiPageScannedFile(t *testing.T, index int) ScannedChild {
+	t.Helper()
+	name := fmt.Sprintf("item-%04d", index)
+	locator, err := NewSourceReference([]byte("object:" + name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := NewSourceIdentity([]byte("source:" + name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := NewVersionCandidate([]byte("version:" + name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var id FileID
+	binary.BigEndian.PutUint64(id[8:], uint64(index)+1)
+	return ScannedChild{
+		FileID: id, Name: name, SourceReference: locator, SourceIdentity: identity,
+		VersionCandidate: candidate, ExpectedSize: uint64(index),
+	}
+}
+
+func TestCommitReservesPageBudgetIncrementallyAndTracksPeakUsage(t *testing.T) {
+	const entryCount = MaxCatalogPageEntries*2 + 8
+
+	store, _, share := newStore(t, nil)
+	defer store.Close()
+	startup := generousBudget(t, "startup")
+	directory := prepareScannableDirectory(t, store, startup, 243, 244)
+	session := generousBudget(t, "peak-session")
+	var scanOnlyPeak uint64
+	scanner := DirectoryScannerFunc(func(ctx context.Context, request ScanRequest) (ScanResult, error) {
+		for index := range entryCount {
+			if err := request.Children.Add(ctx, multiPageScannedFile(t, index)); err != nil {
+				return ScanResult{}, err
+			}
+		}
+		scanOnlyPeak = session.Snapshot().Used.MemoryBytes
+		return ScanResult{}, nil
+	})
+	committed, err := store.ListChildren(context.Background(), directory, session, ScanOptions{}, scanner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if committed.PageCount() != 3 {
+		t.Fatalf("page count = %d, want 3", committed.PageCount())
+	}
+	sessionSnap := session.Snapshot()
+	if sessionSnap.Used != (ResourceUsage{}) {
+		t.Fatalf("completed scan retained session budget: %+v", sessionSnap.Used)
+	}
+	if sessionSnap.Peak.MemoryBytes <= scanOnlyPeak {
+		t.Fatalf("session peak %d did not capture post-scan page building above scan-only peak %d", sessionSnap.Peak.MemoryBytes, scanOnlyPeak)
+	}
+	// Exact directory retained bytes = scanOnlyPeak + memoryDirectoryOverhead + all encoded pages.
+	var encodedPageBytes uint64
+	for pageIndex := uint32(0); pageIndex < committed.PageCount(); pageIndex++ {
+		payload, found, err := store.PagePayload(context.Background(), directory, committed.Generation(), pageIndex)
+		if err != nil || !found {
+			t.Fatalf("load page %d: found=%v err=%v", pageIndex, found, err)
+		}
+		encodedPageBytes += memoryPageOverhead + uint64(len(payload.encoded))
+	}
+	if wantMinPeak := scanOnlyPeak + memoryDirectoryOverhead + encodedPageBytes; sessionSnap.Peak.MemoryBytes < wantMinPeak {
+		t.Fatalf("session peak %d < retained working set %d", sessionSnap.Peak.MemoryBytes, wantMinPeak)
+	}
+	if share.Snapshot().Peak.MemoryBytes < share.Snapshot().Used.MemoryBytes {
+		t.Fatalf("share peak %d < retained %d", share.Snapshot().Peak.MemoryBytes, share.Snapshot().Used.MemoryBytes)
+	}
+
+	// A session that fits all scanned children plus one encoding page, but not
+	// the full multi-page batch, must reject during page building without
+	// publishing or leaking session budget.
+	tightStore, _, _ := newStore(t, nil)
+	defer tightStore.Close()
+	tightDirectory := prepareScannableDirectory(t, tightStore, generousBudget(t, "tight-startup"), 245, 246)
+	tightLimit := scanOnlyPeak + memoryDirectoryOverhead + pageEncodingReservationBytes + encodedPageBytes/2
+	tightSession, err := NewBudgetAccount("tight-page-session", BudgetLimits{
+		ActiveScans: 4, ScanWork: 100_000, Entries: 100_000, MemoryBytes: tightLimit,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tightStore.ListChildren(context.Background(), tightDirectory, tightSession, ScanOptions{}, scanner); !errors.Is(err, ErrBudgetExceeded) {
+		t.Fatalf("tight multi-page commit error = %v", err)
+	}
+	if _, exists, err := tightStore.Directory(context.Background(), tightDirectory); err != nil || exists {
+		t.Fatalf("over-budget directory published: exists=%v err=%v", exists, err)
+	}
+	if tightSession.Snapshot().Used != (ResourceUsage{}) {
+		t.Fatalf("rejected multi-page commit leaked session budget: %+v", tightSession.Snapshot().Used)
+	}
+
+	// Direct CommitDirectory must charge children before building any page.
+	directStore, _, _ := newStore(t, nil)
+	defer directStore.Close()
+	parent := selectedDirectory(t, idValue[DirectoryID](247), 248, "direct")
+	parentID, _ := parent.DirectoryID()
+	children := make([]NodeRecord, 0, entryCount)
+	for index := range entryCount {
+		record, err := multiPageScannedFile(t, index).nodeRecord(parentID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		children = append(children, record)
+	}
+	directSession, err := NewBudgetAccount("direct-tight-session", BudgetLimits{
+		ActiveScans: 4, ScanWork: 100_000, Entries: 100_000, MemoryBytes: pageEncodingReservationBytes * 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	directCommit := DirectoryCommit{
+		directory: parent, generation: idValue[DirectoryGeneration](249), children: children,
+	}
+	if _, err := directStore.CommitDirectory(context.Background(), directCommit, directSession); !errors.Is(err, ErrBudgetExceeded) {
+		t.Fatalf("direct over-budget commit error = %v", err)
+	}
+	if directSession.Snapshot().Peak.MemoryBytes != 0 || directSession.Snapshot().Used != (ResourceUsage{}) {
+		t.Fatalf("direct commit allocated page budget before upfront child charge: %+v", directSession.Snapshot())
 	}
 }

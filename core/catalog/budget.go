@@ -71,6 +71,7 @@ type BudgetSnapshot struct {
 	Name   string
 	Limits BudgetLimits
 	Used   ResourceUsage
+	Peak   ResourceUsage
 }
 
 type BudgetAccount struct {
@@ -78,6 +79,7 @@ type BudgetAccount struct {
 	name   string
 	limits ResourceUsage
 	used   ResourceUsage
+	peak   ResourceUsage
 }
 
 func NewBudgetAccount(name string, limits BudgetLimits) (*BudgetAccount, error) {
@@ -104,7 +106,16 @@ func (a *BudgetAccount) Snapshot() BudgetSnapshot {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return BudgetSnapshot{Name: a.name, Limits: BudgetLimits(a.limits), Used: a.used}
+	return BudgetSnapshot{Name: a.name, Limits: BudgetLimits(a.limits), Used: a.used, Peak: a.peak}
+}
+
+func maxUsage(left, right ResourceUsage) ResourceUsage {
+	return ResourceUsage{
+		ActiveScans: max(left.ActiveScans, right.ActiveScans),
+		ScanWork:    max(left.ScanWork, right.ScanWork),
+		Entries:     max(left.Entries, right.Entries),
+		MemoryBytes: max(left.MemoryBytes, right.MemoryBytes),
+	}
 }
 
 func addUsage(left, right ResourceUsage) (ResourceUsage, bool) {
@@ -134,6 +145,7 @@ func (a *BudgetAccount) add(usage ResourceUsage) error {
 		return fmt.Errorf("%w: %s", ErrBudgetExceeded, a.name)
 	}
 	a.used = next
+	a.peak = maxUsage(a.peak, next)
 	return nil
 }
 

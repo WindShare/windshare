@@ -200,3 +200,61 @@ func TestSiblingAdmissionRejectsIdentityReuseBeforePublishingOmissions(t *testin
 		t.Fatalf("invalid directory published: found=%t err=%v", found, err)
 	}
 }
+
+func TestDirectorySorterInPlaceAdmissionReleasesRawNamesAndAllCollidingBatches(t *testing.T) {
+	t.Run("non-colliding NFD releases extra raw spelling bytes", func(t *testing.T) {
+		hierarchy, meter := sorterTestHierarchy(t, 1<<20)
+		defer meter.Close()
+		sorter, err := newDirectorySorter(idValue[DirectoryID](115), meter)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer sorter.Close()
+		if err := sorter.Add(t.Context(), scannedFile(t, 134, "cafe\u0301.txt", 1)); err != nil {
+			t.Fatal(err)
+		}
+		before := hierarchy.Session.Snapshot().Used.MemoryBytes
+		result, err := sorter.Finish(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(result.records) != 1 || result.records[0].Entry().Name() != "caf\u00e9.txt" || result.omittedCount != 0 {
+			t.Fatalf("non-colliding NFD result = %+v", result)
+		}
+		after := hierarchy.Session.Snapshot().Used.MemoryBytes
+		if after != result.records[0].EstimatedMemoryBytes() || after >= before {
+			t.Fatalf("NFD raw bytes not released: before=%d after=%d want=%d", before, after, result.records[0].EstimatedMemoryBytes())
+		}
+	})
+
+	t.Run("all-colliding batch returns empty slice and releases all bytes", func(t *testing.T) {
+		hierarchy, meter := sorterTestHierarchy(t, 1<<20)
+		defer meter.Close()
+		sorter, err := newDirectorySorter(idValue[DirectoryID](116), meter)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer sorter.Close()
+		for _, child := range []ScannedChild{
+			scannedFile(t, 135, "caf\u00e9.txt", 1),
+			scannedFile(t, 136, "cafe\u0301.txt", 1),
+		} {
+			if err := sorter.Add(t.Context(), child); err != nil {
+				t.Fatal(err)
+			}
+		}
+		result, err := sorter.Finish(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.records != nil || result.omittedCount != 2 || len(result.omittedSamples) != 2 {
+			t.Fatalf("all-colliding result = %+v", result)
+		}
+		if !strings.Contains(result.omittedSamples[0].Detail, "U+00E9") || !strings.Contains(result.omittedSamples[0].Detail, "U+0065 U+0301") {
+			t.Fatalf("collision detail lost differing scalars: %+v", result.omittedSamples)
+		}
+		if used := hierarchy.Session.Snapshot().Used.MemoryBytes; used != 0 {
+			t.Fatalf("all-colliding batch retained memory: %d", used)
+		}
+	})
+}
