@@ -164,17 +164,6 @@
   line-height: 1.65;
 }
 
-.donate-region-note {
-  margin: 0;
-  padding: 10px 13px;
-  border: 1px solid var(--portal-border-soft);
-  border-radius: 9px;
-  background: var(--portal-inset);
-  color: var(--portal-dim);
-  font-size: 12px;
-  line-height: 1.6;
-}
-
 .donate-crypto-form {
   display: flex;
   flex-direction: column;

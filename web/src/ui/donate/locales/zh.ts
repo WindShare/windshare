@@ -18,7 +18,6 @@ export const zh: typeof en = {
 
   kofiCta: '前往 Ko-fi',
   kofiNotice: '满 $5 的公开打赏与留言将自动同步至致谢墙。',
-  kofiRegionNote: '中国大陆 PayPal 账户之间无法互相付款，大陆用户建议选择微信 / 支付宝（爱发电）。',
 
   cryptoAmountLabel: '赞助金额（USD）',
   cryptoCustom: '自定义',

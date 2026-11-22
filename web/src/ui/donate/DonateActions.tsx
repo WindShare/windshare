@@ -480,7 +480,6 @@ export function DonateActions({
               <PortalIcon name="arrow" size={18} />
             </a>
             <p className="donate-note">{t.kofiNotice}</p>
-            <p className="donate-region-note">{t.kofiRegionNote}</p>
           </div>
         )}
 

@@ -17,7 +17,6 @@ export const en = {
 
   kofiCta: 'Open Ko-fi',
   kofiNotice: 'Public tips of $5+ sync to the supporter wall automatically.',
-  kofiRegionNote: 'Mainland China PayPal accounts cannot pay each other — use WeChat / Alipay instead.',
 
   cryptoAmountLabel: 'Amount (USD)',
   cryptoCustom: 'Custom',
