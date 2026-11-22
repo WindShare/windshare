@@ -158,6 +158,12 @@ func (n *NativePeerConnectivity) runMaintenance(ctx context.Context, prev <-chan
 		var unsubscribe func()
 		networkChanges, unsubscribe = subscriber.Subscribe()
 		defer unsubscribe()
+		// Sync the current generation only after subscribing so transitions before
+		// or during subscription cannot be missed; applySnapshot deduplicates
+		// monotonically if the same generation also arrives on networkChanges.
+		if n.applySnapshot(subscriber.Current()) && n.hasActiveMaintenance() {
+			n.Maintain(ctx)
+		}
 	}
 	ticker := time.NewTicker(MaintenanceInterval)
 	defer ticker.Stop()
@@ -171,8 +177,7 @@ func (n *NativePeerConnectivity) runMaintenance(ctx context.Context, prev <-chan
 				networkChanges = nil
 				continue
 			}
-			n.applySnapshot(snapshot)
-			if n.hasActiveMaintenance() {
+			if n.applySnapshot(snapshot) && n.hasActiveMaintenance() {
 				n.Maintain(ctx)
 			}
 		case <-discoveryChanges:

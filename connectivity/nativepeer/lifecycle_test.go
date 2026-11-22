@@ -210,6 +210,75 @@ func TestRunSessionSharesWatcherAndPublishesNetworkChangesImmediately(t *testing
 	cancel()
 	wg.Wait()
 }
+
+func TestRetainMaintenanceSyncsMissedNetworkGenerationOnSubscribe(t *testing.T) {
+	now := time.Unix(600, 0)
+	var clockMu sync.Mutex
+	clock := func() time.Time { clockMu.Lock(); defer clockMu.Unlock(); return now }
+	advance := func(d time.Duration) { clockMu.Lock(); now = now.Add(d); clockMu.Unlock() }
+
+	source := &countingNetworkSource{state: networkstate.State{Addresses: []networkstate.Address{{IP: netip.MustParseAddr("192.0.2.1"), InterfaceIndex: 1}}}}
+	watcher := networkstate.NewWatcher(networkstate.WatcherConfig{Source: source, Debounce: time.Nanosecond, Interval: time.Hour, Now: clock})
+	defer watcher.Close()
+
+	if snap, err := watcher.Snapshot(context.Background()); err != nil || snap.GenerationID() != 1 {
+		t.Fatalf("baseline snapshot = (%d, %v)", snap.GenerationID(), err)
+	}
+
+	native := newTestConnectivity(t, Config{Monitor: watcher, Now: clock, Reachability: reachability.New(reachability.Config{Now: clock})})
+	defer native.Close(context.Background())
+
+	session := [16]byte{7}
+	pathID := v2signal.PeerPathID{8}
+	// Use content=false with no lease so MaintenanceInterval ticks would not
+	// invoke Maintain; catching up must come from post-subscribe snapshot sync.
+	changes, err := native.SetDemand(session, pathID, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Cold-start RetainMaintenance adopts baseline generation 1 without emitting
+	// a spurious network-change notice.
+	releaseBaseline := native.RetainMaintenance()
+	deadline := time.Now().Add(250 * time.Millisecond)
+	for native.NetworkGeneration() != 1 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := native.NetworkGeneration(); got != 1 {
+		releaseBaseline()
+		t.Fatalf("baseline generation = %d, want 1", got)
+	}
+	releaseBaseline()
+	select {
+	case change := <-changes:
+		t.Fatalf("cold-start baseline emitted unexpected change: %+v", change)
+	default:
+	}
+
+	// Advance the shared watcher while no maintainer is subscribed, then retain
+	// maintenance again and verify the missed transition is delivered immediately.
+	source.mu.Lock()
+	source.state.ResumeSequence++
+	source.mu.Unlock()
+	if _, _, err := watcher.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	advance(time.Millisecond)
+	if snap, changed, err := watcher.Step(context.Background()); err != nil || !changed || snap.GenerationID() != 2 {
+		t.Fatalf("network change step = (%d, %t, %v)", snap.GenerationID(), changed, err)
+	}
+
+	release := native.RetainMaintenance()
+	defer release()
+	select {
+	case change := <-changes:
+		if change.NetworkGenerationID != 2 {
+			t.Fatalf("caught-up change = %+v, want generation 2", change)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatalf("RetainMaintenance did not immediately sync missed generation 2 (current=%d)", native.NetworkGeneration())
+	}
+}
 func TestIdleUsesOnlyBoundedPreviouslySelectedProfileAndOwnerCloseJoinsGenerationCleanup(t *testing.T) {
 	h := newHarness(t)
 	h.native.Idle(context.Background(), [16]byte{1}, v2signal.PeerPathID{2}, h.now)

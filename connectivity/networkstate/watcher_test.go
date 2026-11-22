@@ -182,3 +182,43 @@ func TestWatcherCloseClosesSubscribers(t *testing.T) {
 		t.Fatal("Close did not close subscriber channel")
 	}
 }
+
+func TestWatcherInitialPollSharesConcurrentColdStartSnapshot(t *testing.T) {
+	now := time.Unix(3000, 0)
+	clock := func() time.Time { return now }
+
+	for range 16 {
+		source := &countingSource{block: make(chan struct{})}
+		source.setIP("10.0.0.2")
+		watcher := NewWatcher(WatcherConfig{
+			Source:   source,
+			Debounce: time.Nanosecond,
+			Interval: time.Hour,
+			Now:      clock,
+		})
+
+		done := make(chan error, 1)
+		go func() {
+			snap, err := watcher.Snapshot(context.Background())
+			if err == nil && snap.GenerationID() != 1 {
+				t.Errorf("cold-start generation = %d, want 1", snap.GenerationID())
+			}
+			done <- err
+		}()
+		for source.calls.Load() == 0 {
+			time.Sleep(time.Millisecond)
+		}
+		_, unsub := watcher.Subscribe()
+		close(source.block)
+		if err := <-done; err != nil {
+			unsub()
+			watcher.Close()
+			t.Fatal(err)
+		}
+		unsub()
+		watcher.Close()
+		if calls := source.calls.Load(); calls != 1 {
+			t.Fatalf("concurrent cold-start Snapshot + Subscribe calls = %d, want 1", calls)
+		}
+	}
+}

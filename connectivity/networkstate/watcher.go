@@ -234,9 +234,7 @@ func (w *Watcher) run(ctx context.Context, prev <-chan struct{}, done chan struc
 		w.pollMu.Unlock()
 	}()
 
-	if w.needsInitialPoll() {
-		_, _, _ = w.Step(ctx)
-	}
+	w.initialPoll(ctx)
 	ticker := time.NewTicker(w.interval)
 	defer ticker.Stop()
 	for {
@@ -247,6 +245,17 @@ func (w *Watcher) run(ctx context.Context, prev <-chan struct{}, done chan struc
 			_, _, _ = w.Step(ctx)
 		}
 	}
+}
+
+// initialPoll rechecks freshness under pollMu so loop startup shares a
+// concurrent cold-start Snapshot/Poll instead of issuing a second OS query.
+func (w *Watcher) initialPoll(ctx context.Context) {
+	w.pollMu.Lock()
+	defer w.pollMu.Unlock()
+	if ctx.Err() != nil || !w.needsInitialPoll() {
+		return
+	}
+	_, _, _ = w.pollLocked(ctx, w.now())
 }
 
 func (w *Watcher) needsInitialPoll() bool {

@@ -46,6 +46,7 @@ type NetworkMonitor interface {
 
 type networkSubscriber interface {
 	Subscribe() (<-chan networkstate.Snapshot, func())
+	Current() networkstate.Snapshot
 }
 type Config struct {
 	Admission           *Admission
@@ -243,14 +244,17 @@ func (n *NativePeerConnectivity) snapshot(ctx context.Context) (networkstate.Sna
 	return snapshot, nil
 }
 
-func (n *NativePeerConnectivity) applySnapshot(snapshot networkstate.Snapshot) {
+// applySnapshot advances local network generation monotonically. It returns
+// true only when an established generation transitions to a newer one so
+// maintenance callers reconcile active paths without duplicating baseline setup.
+func (n *NativePeerConnectivity) applySnapshot(snapshot networkstate.Snapshot) bool {
 	if snapshot.GenerationID() == 0 {
-		return
+		return false
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.closed || snapshot.GenerationID() <= n.generation {
-		return
+		return false
 	}
 
 	previous := n.generation
@@ -278,7 +282,9 @@ func (n *NativePeerConnectivity) applySnapshot(snapshot networkstate.Snapshot) {
 			}
 			n.notifyLocked(key.session, path, Change{NetworkGenerationID: n.generation})
 		}
+		return true
 	}
+	return false
 }
 
 // Maintain is called by the demand owner. It never creates a PeerConnection or
