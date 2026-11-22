@@ -1,9 +1,6 @@
-//! A generation owns its admission and delivery responsibility even after its
-//! socket disappears. Exact records and conservative reservations are exclusive;
-//! secondary indexes never decide whether a generation still exists.
+//! Per-connection admission, control state and delivery ledgers.
 use super::{
     AttemptLimiter, ConnectionRef, Identity, Limits,
-    checkpoint_tracking::Changes,
     deadlines::{Deadlines, Key},
 };
 use crate::{
@@ -13,35 +10,39 @@ use crate::{
 };
 use alloc::{boxed::Box, collections::BTreeMap};
 
-mod checkpoint;
 mod control;
 pub(in crate::share) use control::{Connection, Phase as ConnectionPhase};
-mod retirement;
 mod transitions;
 
-pub use retirement::{ConnectionUsage, RetirementPolicy};
-pub(super) use retirement::{Detached, RetirementProgress};
+/// How a detached business generation frees its admission slot after queue cleanup.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RetirementPolicy {
+    /// Wait for explicit host `Input::Closed` confirming transport buffer release.
+    PhysicalRelease,
+    /// Release the slot as soon as unsubmitted queues are discarded (for hosts
+    /// without a transport buffer-release callback, such as Cloudflare DO).
+    AfterDiscard,
+}
 
-// Control ingress stays small; delivery storage is allocated only on business admission.
-#[derive(Debug)]
-enum Delivery {
-    Exact(Box<ConnectionLedger<Journal>>),
-    Unavailable(crate::flow::Counts),
+/// Active connection counts across business and control admission pools.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ConnectionUsage {
+    pub business: usize,
+    pub controls: usize,
 }
 
 #[derive(Debug)]
 enum Generation {
     Control {
         socket: Connection,
-        deadline: UnixMillis,
     },
     Business {
         socket: Connection,
         ledger: Box<ConnectionLedger<Journal>>,
     },
     Detached {
-        delivery: Delivery,
-        state: Detached,
+        ledger: Box<ConnectionLedger<Journal>>,
+        released: bool,
     },
 }
 
@@ -62,31 +63,15 @@ impl Generation {
 
     fn ledger(&self) -> Option<&ConnectionLedger<Journal>> {
         match self {
-            Self::Business { ledger, .. }
-            | Self::Detached {
-                delivery: Delivery::Exact(ledger),
-                ..
-            } => Some(ledger),
-            Self::Control { .. }
-            | Self::Detached {
-                delivery: Delivery::Unavailable(_),
-                ..
-            } => None,
+            Self::Business { ledger, .. } | Self::Detached { ledger, .. } => Some(ledger),
+            Self::Control { .. } => None,
         }
     }
 
     fn ledger_mut(&mut self) -> Option<&mut ConnectionLedger<Journal>> {
         match self {
-            Self::Business { ledger, .. }
-            | Self::Detached {
-                delivery: Delivery::Exact(ledger),
-                ..
-            } => Some(ledger),
-            Self::Control { .. }
-            | Self::Detached {
-                delivery: Delivery::Unavailable(_),
-                ..
-            } => None,
+            Self::Business { ledger, .. } | Self::Detached { ledger, .. } => Some(ledger),
+            Self::Control { .. } => None,
         }
     }
 }
@@ -97,7 +82,6 @@ pub(super) struct Generations {
     limits: Limits,
     entries: BTreeMap<ConnectionRef, Generation>,
     attempts: AttemptLimiter,
-    changes: Changes,
     deadlines: Deadlines,
 }
 
@@ -108,7 +92,6 @@ impl Generations {
             limits,
             entries: BTreeMap::new(),
             attempts,
-            changes: Changes::Disabled,
             deadlines: Deadlines::new(),
         }
     }
@@ -129,32 +112,95 @@ impl Generations {
         self.entries.values().filter_map(Generation::ledger)
     }
 
+    #[cfg(feature = "hibernation")]
     pub fn ledger_ids(&self) -> impl Iterator<Item = ConnectionRef> + '_ {
         self.entries
             .iter()
             .filter_map(|(&id, entry)| entry.ledger().map(|_| id))
     }
 
-    pub fn record_ids(&self) -> impl Iterator<Item = ConnectionRef> + '_ {
-        self.entries.iter().filter_map(|(&id, entry)| {
-            (!matches!(
-                entry,
-                Generation::Detached {
-                    delivery: Delivery::Unavailable(_),
-                    ..
-                }
-            ))
-            .then_some(id)
+    #[cfg(feature = "hibernation")]
+    pub fn established_ids(&self) -> impl Iterator<Item = ConnectionRef> + '_ {
+        self.entries.iter().filter_map(|(&id, entry)| match entry {
+            Generation::Business { socket, .. } if socket.liveness().is_some() => Some(id),
+            _ => None,
         })
     }
 
-    pub fn control_deadline(&self, connection: &ConnectionRef) -> Option<UnixMillis> {
-        match self.entries.get(connection)? {
-            Generation::Control { deadline, .. } => Some(*deadline),
+    #[cfg(feature = "hibernation")]
+    pub fn established_entry(
+        &self,
+        connection: ConnectionRef,
+    ) -> Option<(crate::heartbeat::Liveness, &ConnectionLedger<Journal>)> {
+        match self.entries.get(&connection)? {
+            Generation::Business { socket, ledger } => Some((socket.liveness()?, ledger.as_ref())),
             _ => None,
         }
     }
 
+    #[cfg(feature = "hibernation")]
+    pub fn restore_established(
+        &mut self,
+        connection: ConnectionRef,
+        liveness: crate::heartbeat::Liveness,
+        ledger: ConnectionLedger<Journal>,
+    ) {
+        let socket = Connection::established(liveness);
+        socket.synchronize_deadlines(connection, &mut self.deadlines);
+        self.deadlines
+            .set(Key::Ledger(connection), ledger.deadline());
+        self.entries.insert(
+            connection,
+            Generation::Business {
+                socket,
+                ledger: Box::new(ledger),
+            },
+        );
+    }
+
+    #[cfg(test)]
+    pub fn control_deadline(&self, connection: &ConnectionRef) -> Option<UnixMillis> {
+        self.deadlines.get(Key::Control(*connection))
+    }
+
+    #[cfg(test)]
+    pub fn is_detached(&self, connection: &ConnectionRef) -> bool {
+        matches!(
+            self.entries.get(connection),
+            Some(Generation::Detached { .. })
+        )
+    }
+
+    pub fn usage(&self) -> ConnectionUsage {
+        let mut usage = ConnectionUsage::default();
+        for entry in self.entries.values() {
+            match entry {
+                Generation::Control { .. } => usage.controls += 1,
+                Generation::Business { .. } | Generation::Detached { .. } => usage.business += 1,
+            }
+        }
+        usage
+    }
+
+    pub fn released(&self) -> impl Iterator<Item = ConnectionRef> + '_ {
+        self.entries.iter().filter_map(|(&id, entry)| {
+            matches!(entry, Generation::Detached { released: true, .. }).then_some(id)
+        })
+    }
+
+    pub fn detached_ids(&self) -> impl Iterator<Item = ConnectionRef> + '_ {
+        self.entries
+            .iter()
+            .filter_map(|(&id, entry)| matches!(entry, Generation::Detached { .. }).then_some(id))
+    }
+
+    pub fn has_detached(&self) -> bool {
+        self.entries
+            .values()
+            .any(|entry| matches!(entry, Generation::Detached { .. }))
+    }
+
+    #[cfg(feature = "hibernation")]
     pub fn connected_count(&self) -> usize {
         self.entries
             .values()
@@ -162,6 +208,7 @@ impl Generations {
             .count()
     }
 
+    #[cfg(feature = "hibernation")]
     pub fn retained_count(&self) -> usize {
         self.entries
             .values()
@@ -172,56 +219,12 @@ impl Generations {
     pub fn unsettled_count(&self) -> usize {
         self.entries
             .values()
-            .filter(|entry| match entry {
-                Generation::Detached {
-                    delivery: Delivery::Unavailable(bound),
-                    ..
-                } => *bound != crate::flow::Counts::ZERO,
-                _ => entry
+            .filter(|entry| {
+                entry
                     .ledger()
-                    .is_some_and(|ledger| ledger.metadata_usage().retained_flows != 0),
+                    .is_some_and(|ledger| ledger.metadata_usage().retained_flows != 0)
             })
             .count()
-    }
-
-    pub fn enable_checkpoints(&mut self) {
-        for entry in self.entries.values_mut() {
-            if let Some(ledger) = entry.ledger_mut() {
-                let _ = ledger.take_checkpoint_change();
-            }
-        }
-        self.changes = Changes::tracking(self.record_ids(), true);
-    }
-
-    pub const fn checkpoint_changes(&self) -> Option<&super::checkpoint_tracking::Pending> {
-        self.changes.pending()
-    }
-
-    pub fn acknowledge_checkpoints(&mut self) {
-        self.changes.acknowledge();
-    }
-
-    pub const fn attempts(&self) -> super::admission::AttemptState {
-        self.attempts.state()
-    }
-
-    pub fn has_record(&self, connection: &ConnectionRef) -> bool {
-        self.entries.get(connection).is_some_and(|entry| {
-            !matches!(
-                entry,
-                Generation::Detached {
-                    delivery: Delivery::Unavailable(_),
-                    ..
-                }
-            )
-        })
-    }
-
-    fn schedule_retirement(&mut self, connection: ConnectionRef) {
-        let deadline = self
-            .retirement_state(&connection)
-            .and_then(Detached::deadline);
-        self.deadlines.set(Key::Retirement(connection), deadline);
     }
 
     pub fn next_deadline(&self) -> Option<(UnixMillis, Key)> {
@@ -232,8 +235,7 @@ impl Generations {
         self.deadlines.expired(now)
     }
 
-    /// Every exact-accounting mutation also updates its recovery projection and
-    /// deadline. Callers cannot forget the retired generation's manifest charge.
+    /// Every exact-accounting mutation also refreshes its deadline index.
     pub fn update_ledger<R>(
         &mut self,
         connection: ConnectionRef,
@@ -241,21 +243,8 @@ impl Generations {
         observer: &mut impl Observer,
     ) -> Option<R> {
         let entry = self.entries.get_mut(&connection)?;
-        let retired = matches!(
-            entry,
-            Generation::Detached {
-                state: Detached::RiskRetained { .. },
-                ..
-            }
-        );
         let ledger = entry.ledger_mut()?;
         let result = change(ledger);
-        if self.changes.enabled() && ledger.take_checkpoint_change() {
-            self.changes.changed(connection);
-            if retired {
-                self.changes.retention_changed();
-            }
-        }
         for observation in ledger.observer_mut().0.drain(..) {
             observer.observe(observation);
         }

@@ -64,7 +64,6 @@ impl<O: Observer> ConnectionLedger<O> {
                 Some(_) => return Ok(()),
                 None => {
                     ledger.receive_capacity = Some(capacity);
-                    ledger.checkpoint_changed = true;
                 }
             }
             ledger.record(

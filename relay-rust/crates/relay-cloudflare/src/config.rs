@@ -6,7 +6,7 @@ use windshare_relay_core::{
     flow::{self, Counts},
     identifiers::{RelayIdentity, ShareId},
     sessions::OpaqueHeader,
-    share::{CheckpointBudget, Limits, RetirementPolicy},
+    share::{AttachmentBudget, Limits, RetirementPolicy},
 };
 
 pub const WEBSOCKET_PATH: &str = "/v2/ws";
@@ -27,9 +27,6 @@ const CONNECTION_FRAMES: u64 = 16;
 // ordinary fourteen-frame pool. Startup capacity remains independently reserved.
 const SESSION_WINDOW_FRAMES: u64 = 2;
 const SETTLEMENT_TIMEOUT: Duration = Duration::from_secs(5);
-// The probes establish no safer physical-buffer TTL. Prefer immediate replacement
-// after quiescence; the attempt-rate budget still bounds reconnect admission.
-const LOST_GENERATION_RISK_RETENTION: Duration = Duration::ZERO;
 const RELAY_IDENTITY_DOMAIN: &[u8] = b"windshare/v2 relay-identity\0";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -105,13 +102,10 @@ pub fn limits() -> Limits {
         },
         sessions: RETAINED_FLOWS,
         retained_flows_per_connection: RETAINED_FLOWS,
-        // This is an admission-risk policy, never a receipt for hidden buffers.
-        retirement: RetirementPolicy::Bounded {
-            admission_grace: Duration::ZERO,
-            risk_retention: LOST_GENERATION_RISK_RETENTION,
-            generations: MAX_BUSINESS_CONNECTIONS,
-            residual: capacity(CONNECTION_FRAMES * MAX_BUSINESS_CONNECTIONS as u64),
-        },
+        // Cloudflare buffers are hidden behind the Worker API; release slots
+        // once all in-flight flows have been discarded rather than awaiting a
+        // physical write-loop exit.
+        retirement: RetirementPolicy::AfterDiscard,
         delivery: flow::Limits::new(
             capacity(CONNECTION_FRAMES),
             capacity(2),
@@ -122,8 +116,8 @@ pub fn limits() -> Limits {
     }
 }
 
-pub const fn budget() -> CheckpointBudget {
-    CheckpointBudget::new(ATTACHMENT_BYTES, ATTACHMENT_ENVELOPE_BYTES)
+pub const fn budget() -> AttachmentBudget {
+    AttachmentBudget::new(ATTACHMENT_BYTES, ATTACHMENT_ENVELOPE_BYTES)
         .expect("bounded binary attachment")
 }
 

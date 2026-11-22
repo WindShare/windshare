@@ -45,7 +45,7 @@ fn wake(
         connections,
         sessions: &sessions,
     };
-    let (engine, action) = ShareLifecycle::restore(
+    let (engine, action) = ShareLifecycle::restore_hibernated(
         fixture.relay(),
         fixture.share(),
         restoration,

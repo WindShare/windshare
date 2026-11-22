@@ -4,9 +4,10 @@ const RECEIVERS: usize = 8;
 const LARGE_SESSION_LIMIT: usize = 128;
 
 #[test]
-fn handshake_metadata_and_checkpoint_size_do_not_scale_with_session_limit() {
+fn handshake_metadata_and_snapshot_size_do_not_scale_with_session_limit() {
     let fixture = Fixture::new();
-    let mut checkpoint_bytes = None;
+    #[cfg(feature = "hibernation")]
+    let mut snapshot_bytes = None;
     for sessions in [
         1,
         LARGE_SESSION_LIMIT,
@@ -18,12 +19,12 @@ fn handshake_metadata_and_checkpoint_size_do_not_scale_with_session_limit() {
         let (mut relay, _) = Relay::restore(
             fixture.identity(1),
             limits,
-            &Restore::restarted(None, Responsibility::Released { previous: None }),
+            None,
             Trace::default(),
             fixture.at,
         )
         .unwrap();
-        for id in 1..=RECEIVERS as u64 + 1 {
+        for id in 2..=RECEIVERS as u64 + 1 {
             assert_eq!(
                 relay
                     .handle(Input::Connected(connection(id)), fixture.at)
@@ -38,13 +39,21 @@ fn handshake_metadata_and_checkpoint_size_do_not_scale_with_session_limit() {
                     .is_some()
             );
         }
-        let encoded = relay.checkpoint().unwrap().encode();
-        if let Some(expected) = &checkpoint_bytes {
-            assert_eq!(&encoded, expected);
-        } else {
-            checkpoint_bytes = Some(encoded.clone());
+        fixture.register(&mut relay);
+        #[cfg(feature = "hibernation")]
+        {
+            let encoded = relay
+                .snapshot_connection(connection(1))
+                .unwrap()
+                .unwrap()
+                .encode();
+            if let Some(expected) = &snapshot_bytes {
+                assert_eq!(&encoded, expected);
+            } else {
+                snapshot_bytes = Some(encoded.clone());
+            }
+            ConnectionSnapshot::decode(&encoded, limits).unwrap();
         }
-        Checkpoint::decode(&encoded, limits).unwrap();
     }
 }
 
@@ -57,7 +66,7 @@ fn sharing_allocates_sender_fanout_and_one_slot_per_receiver() {
     let (mut relay, _) = Relay::restore(
         fixture.identity(1),
         limits,
-        &Restore::restarted(None, Responsibility::Released { previous: None }),
+        None,
         Trace::default(),
         fixture.at,
     )

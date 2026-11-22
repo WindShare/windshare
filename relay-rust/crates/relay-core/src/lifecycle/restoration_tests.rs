@@ -220,16 +220,8 @@ fn restoration_refuses_records_of_another_relay_or_share() {
             RestoreError::ForeignShare,
         ),
     ] {
-        let restored = ShareLifecycle::restore(
-            relay,
-            share,
-            Restoration::restarted(stored),
-            incarnation,
-            (),
-            fixture.at,
-            |_, _| {},
-        )
-        .err();
+        let restored =
+            ShareLifecycle::restore(relay, share, stored, incarnation, (), fixture.at).err();
         assert_eq!(restored, Some(error));
     }
     let published = fixture.register(&mut fixture.engine());
@@ -238,11 +230,10 @@ fn restoration_refuses_records_of_another_relay_or_share() {
         let restored = ShareLifecycle::restore(
             fixture.relay(),
             other_share,
-            Restoration::restarted(Some(record)),
+            Some(record),
             restarted(),
             (),
             fixture.at,
-            |_, _| {},
         )
         .err();
         assert_eq!(restored, Some(RestoreError::ForeignShare));

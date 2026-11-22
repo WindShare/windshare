@@ -1,5 +1,6 @@
 use super::*;
 
+#[cfg(feature = "hibernation")]
 #[test]
 fn hibernation_preserves_credit_receipts_identity_and_connection_deadlines() {
     let fixture = Fixture::new();
@@ -7,7 +8,10 @@ fn hibernation_preserves_credit_receipts_identity_and_connection_deadlines() {
     let stored = fixture.register(&mut relay);
     let (key, flows) = fixture.join(&mut relay, 2);
     let receipt = receive(&mut relay, key, fixture.at);
-    assert!(matches!(relay.checkpoint(), Err(Error::CheckpointBusy)));
+    assert!(matches!(
+        relay.snapshot_connection(key.sender()),
+        Err(Error::CheckpointBusy)
+    ));
     assert_eq!(
         relay
             .submit(&receipt, fixture.at, |_| Submission::Complete)
@@ -15,15 +19,15 @@ fn hibernation_preserves_credit_receipts_identity_and_connection_deadlines() {
         None
     );
     activate(&mut relay, key, fixture.at);
-    let encoded = relay.checkpoint().unwrap().encode();
-    let checkpoint = Checkpoint::decode(&encoded, Fixture::limits()).unwrap();
-    let (mut restored, step) = Relay::restore(
+    let snapshots = snapshot_all(&relay);
+    let (mut restored, step) = Relay::restore_hibernated(
         fixture.identity(2),
         Fixture::limits(),
-        &Restore {
-            authority: Authority::Known(Some(stored)),
+        &Hibernated {
+            record: Some(stored),
+            last_session: relay.last_session(),
             surviving: &[key.sender(), key.receiver()],
-            responsibility: Responsibility::Checkpoint(&checkpoint),
+            connections: &snapshots,
         },
         Trace::default(),
         fixture.at,
@@ -70,6 +74,7 @@ fn hibernation_preserves_credit_receipts_identity_and_connection_deadlines() {
     );
 }
 
+#[cfg(feature = "hibernation")]
 #[test]
 fn retired_occupancy_survives_hibernation_and_keeps_original_cleanup_deadline() {
     let fixture = Fixture::new();
@@ -94,15 +99,15 @@ fn retired_occupancy_survives_hibernation_and_keeps_original_cleanup_deadline() 
         let _ = relay.handle(Input::Discarded(flow), fixture.at);
     }
     let deadline = relay.deadline().unwrap();
-    let checkpoint =
-        Checkpoint::decode(&relay.checkpoint().unwrap().encode(), Fixture::limits()).unwrap();
-    let (mut restored, _) = Relay::restore(
+    let snapshots = snapshot_all(&relay);
+    let (mut restored, _) = Relay::restore_hibernated(
         fixture.identity(2),
         Fixture::limits(),
-        &Restore {
-            authority: Authority::Known(Some(stored)),
+        &Hibernated {
+            record: Some(stored),
+            last_session: relay.last_session(),
             surviving: &[key.sender(), key.receiver()],
-            responsibility: Responsibility::Checkpoint(&checkpoint),
+            connections: &snapshots,
         },
         Trace::default(),
         UnixMillis(fixture.at.0 + 100),
@@ -118,38 +123,30 @@ fn retired_occupancy_survives_hibernation_and_keeps_original_cleanup_deadline() 
     );
 }
 
+#[cfg(feature = "hibernation")]
 #[test]
-fn snapshot_bounds_and_missing_delivery_state_fail_closed() {
+fn snapshot_bounds_and_incarnation_reuse_fail_closed() {
     let fixture = Fixture::new();
     let mut relay = fixture.relay();
     let stored = fixture.register(&mut relay);
-    let bytes = relay.checkpoint().unwrap().encode();
+    let bytes = relay
+        .snapshot_connection(connection(1))
+        .unwrap()
+        .unwrap()
+        .encode();
     for truncated in [&bytes[..0], &bytes[..1], &bytes[..bytes.len() - 1]] {
-        assert!(Checkpoint::decode(truncated, Fixture::limits()).is_err());
+        assert!(ConnectionSnapshot::decode(truncated, Fixture::limits()).is_err());
     }
+    let snapshot = ConnectionSnapshot::decode(&bytes, Fixture::limits()).unwrap();
     assert!(
-        Relay::restore(
-            fixture.identity(2),
-            Fixture::limits(),
-            &Restore {
-                authority: Authority::Known(Some(stored)),
-                surviving: &[connection(1)],
-                responsibility: Responsibility::Unknown
-            },
-            Trace::default(),
-            fixture.at
-        )
-        .is_err()
-    );
-    let checkpoint = Checkpoint::decode(&bytes, Fixture::limits()).unwrap();
-    assert!(
-        Relay::restore(
+        Relay::restore_hibernated(
             fixture.identity(1),
             Fixture::limits(),
-            &Restore {
-                authority: Authority::Known(Some(stored)),
+            &Hibernated {
+                record: Some(stored),
+                last_session: 0,
                 surviving: &[connection(1)],
-                responsibility: Responsibility::Checkpoint(&checkpoint)
+                connections: &[snapshot],
             },
             Trace::default(),
             fixture.at

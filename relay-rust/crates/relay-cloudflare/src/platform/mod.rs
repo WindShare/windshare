@@ -64,7 +64,10 @@ impl ShareRelayObject {
 
     fn with_runtime<T>(
         &self,
-        action: impl FnOnce(&mut Ready, &mut CloudflareHost<'_>) -> HostResult<T>,
+        action: impl FnOnce(
+            &mut crate::runtime::Runtime<trace::Trace>,
+            &mut CloudflareHost<'_>,
+        ) -> HostResult<T>,
     ) -> HostResult<T> {
         let mut loaded = self.loaded.borrow_mut();
         let Loaded::Ready(ready) = &mut *loaded else {
@@ -74,8 +77,9 @@ impl ShareRelayObject {
             state: &self.state,
             database: ready.database.clone(),
             identity: ready.identity,
+            image: &mut ready.image,
         };
-        action(ready, &mut host)
+        action(&mut ready.runtime, &mut host)
     }
 
     fn recover_after_failure(&self, error: &anyhow::Error) {
@@ -138,14 +142,14 @@ impl ShareRelayObject {
 
     fn accept(&self, req: &Request, route: &config::Route) -> HostResult<Response> {
         self.initialize(Some(route))?;
-        self.with_runtime(|ready, host| {
+        self.with_runtime(|runtime, host| {
             // Existing authority is restored independently of this request. A
             // different public hostname must not evict its healthy connections.
-            if ready.image.check_route(route).is_err() {
+            if host.image.check_route(route).is_err() {
                 return api(Response::error("relay endpoint identity mismatch", 400));
             }
-            let connection = ready.image.allocate()?;
-            host.database.put(IMAGE, &ready.image)?;
+            let connection = host.image.allocate()?;
+            host.database.put(IMAGE, host.image)?;
             let pair = api(WebSocketPair::new())?;
             let tag = persistence::tag(connection);
             let digest = api(req.headers().get(access::CREDENTIAL_HEADER))?;
@@ -155,7 +159,7 @@ impl ShareRelayObject {
                 tags.push(credential_tag.as_str());
             }
             self.state.accept_websocket_with_tags(&pair.server, &tags);
-            ready.runtime.event(host, Input::Connected(connection))?;
+            runtime.event(host, Input::Connected(connection))?;
             api(Response::from_websocket(pair.client))
         })
     }
@@ -225,9 +229,9 @@ impl ShareRelayObject {
     fn disconnected(&self, ws: &WebSocket) -> HostResult<()> {
         self.initialize(None)?;
         let connection = io::connection(&self.state, ws)?;
-        self.with_runtime(|ready, host| {
+        self.with_runtime(|runtime, host| {
             host.close(connection)?;
-            ready.runtime.event(host, Input::Disconnected(connection))
+            runtime.event(host, Input::Disconnected(connection))
         })
     }
 }
@@ -264,13 +268,13 @@ impl DurableObject for ShareRelayObject {
                     .ok_or_else(|| failure("zero stop identifier"))?;
             let result = (|| {
                 self.initialize(None)?;
-                self.with_runtime(|ready, host| {
+                self.with_runtime(|runtime, host| {
                     // Fence an authorization response still in flight when revocation arrived.
-                    ready.database.put(
+                    host.database.put(
                         &format!("access-stop:{}", access::text_id(&credential)),
                         &true,
                     )?;
-                    ready.runtime.event(
+                    runtime.event(
                         host,
                         Input::Terminate {
                             credential,
@@ -310,7 +314,7 @@ impl DurableObject for ShareRelayObject {
             WebSocketIncomingMessage::Binary(bytes)
                 if FrameKind::classify(&bytes) == FrameKind::Opaque =>
             {
-                self.with_runtime(|ready, host| ready.runtime.forward(host, connection, bytes))
+                self.with_runtime(|runtime, host| runtime.forward(host, connection, bytes))
             }
             WebSocketIncomingMessage::Binary(bytes) => {
                 let control = if bytes.len() > config::MAX_CONTROL_BYTES {
@@ -320,18 +324,18 @@ impl DurableObject for ShareRelayObject {
                 };
                 match control {
                     Control::Ready(input) => {
-                        self.with_runtime(|ready, host| ready.runtime.event(host, input))
+                        self.with_runtime(|runtime, host| runtime.event(host, input))
                     }
                     Control::Authorize(request) => {
                         let decision = self.registration_access(&ws, &request).await;
-                        self.with_runtime(|ready, host| {
+                        self.with_runtime(|runtime, host| {
                             let decision = match decision {
                                 RegistrationDecision::Granted(
                                     windshare_relay_core::access::Attribution::Credential {
                                         credential,
                                         ..
                                     },
-                                ) if ready
+                                ) if host
                                     .database
                                     .get::<bool>(&format!(
                                         "access-stop:{}",
@@ -344,14 +348,14 @@ impl DurableObject for ShareRelayObject {
                                 decision => decision,
                             };
                             let authorization = request.resolve(decision, host.now());
-                            ready.runtime.event(host, Input::Register(authorization))
+                            runtime.event(host, Input::Register(authorization))
                         })
                     }
                 }
             }
-            WebSocketIncomingMessage::String(_) => self.with_runtime(|ready, host| {
+            WebSocketIncomingMessage::String(_) => self.with_runtime(|runtime, host| {
                 host.close(connection)?;
-                ready.runtime.event(host, Input::Disconnected(connection))
+                runtime.event(host, Input::Disconnected(connection))
             }),
         };
         self.finish(result).await
@@ -382,7 +386,7 @@ impl DurableObject for ShareRelayObject {
         self.alarm.set(AlarmState::Known(None));
         let result = (|| {
             self.initialize(None)?;
-            self.with_runtime(|ready, host| ready.runtime.event(host, Input::Tick))?;
+            self.with_runtime(|runtime, host| runtime.event(host, Input::Tick))?;
             api(Response::empty())
         })();
         self.finish(result).await

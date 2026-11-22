@@ -56,7 +56,7 @@ fn insufficient_receiver_capacity_rolls_back_both_startup_directions() {
     let (mut relay, _) = Relay::restore(
         fixture.identity(1),
         limits,
-        &Restore::restarted(None, Responsibility::Released { previous: None }),
+        None,
         Trace::default(),
         fixture.at,
     )
@@ -73,7 +73,7 @@ fn insufficient_receiver_capacity_rolls_back_both_startup_directions() {
         ));
         for destination in [connection(1), connection(receiver)] {
             assert_eq!(ledger_of(&relay, destination).usage(), Usage::default());
-            assert_eq!(ledger_of(&relay, destination).checkpoint_flows().count(), 0);
+            assert_eq!(ledger_of(&relay, destination).flows().count(), 0);
         }
     }
     assert_eq!(
@@ -119,6 +119,7 @@ fn asymmetric_connection_capacity_and_host_policy_both_bound_grants() {
     assert_eq!(grants(&another).len(), 2);
 }
 
+#[cfg(feature = "hibernation")]
 #[test]
 fn hibernation_retains_each_capacity_and_all_outstanding_budget() {
     let fixture = Fixture::new();
@@ -136,15 +137,15 @@ fn hibernation_retains_each_capacity_and_all_outstanding_budget() {
     );
     activate(&mut relay, up.session(), fixture.at);
     let before = ledger_of(&relay, up.destination()).usage();
-    let checkpoint =
-        Checkpoint::decode(&relay.checkpoint().unwrap().encode(), Fixture::limits()).unwrap();
-    let (mut restored, step) = Relay::restore(
+    let snapshots = snapshot_all(&relay);
+    let (mut restored, step) = Relay::restore_hibernated(
         fixture.identity(2),
         Fixture::limits(),
-        &Restore {
-            authority: Authority::Known(Some(stored)),
+        &Hibernated {
+            record: Some(stored),
+            last_session: relay.last_session(),
             surviving: &[connection(1), connection(2)],
-            responsibility: Responsibility::Checkpoint(&checkpoint),
+            connections: &snapshots,
         },
         Trace::default(),
         fixture.at,

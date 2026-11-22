@@ -1,13 +1,10 @@
-use super::{Connection, ConnectionRef, Delivery, Detached, Generation, Generations};
+use super::{Connection, ConnectionRef, Generation, Generations};
 use crate::share::{
     Error,
     deadlines::{Deadlines, Key},
 };
 use crate::{
-    clock::UnixMillis,
-    flow::{ConnectionLedger, Counts},
-    observation::Journal,
-    sessions::SessionKey,
+    clock::UnixMillis, flow::ConnectionLedger, observation::Journal, sessions::SessionKey,
 };
 use alloc::{boxed::Box, vec::Vec};
 
@@ -31,12 +28,7 @@ impl Generations {
         now: UnixMillis,
     ) -> Result<(), Error> {
         self.check_control_admission(connection)?;
-        let previous = self.attempts.state();
-        let accepted = self.attempts.attempt(now);
-        if self.attempts.state() != previous {
-            self.changes.retention_changed();
-        }
-        if !accepted {
+        if !self.attempts.attempt(now) {
             return Err(Error::HandshakeRate);
         }
         let socket = Connection::open(self.identity.relay, connection, now);
@@ -44,8 +36,7 @@ impl Generations {
         let deadline = now.saturating_add(crate::share::admission::CONTROL_LIFETIME);
         self.deadlines.set(Key::Control(connection), Some(deadline));
         self.entries
-            .insert(connection, Generation::Control { socket, deadline });
-        self.changes.inserted(connection);
+            .insert(connection, Generation::Control { socket });
         Ok(())
     }
 
@@ -80,34 +71,28 @@ impl Generations {
             },
         );
         self.deadlines.set(Key::Control(connection), None);
-        self.changes.changed(connection);
-        self.changes.retention_changed();
         Ok(())
     }
 
     /// The share revokes authority before detaching. Only control admission can
-    /// disappear here: a business generation keeps its exact delivery ledger.
-    pub(in crate::share) fn detach(&mut self, connection: ConnectionRef, now: UnixMillis) {
+    /// disappear here: a business generation keeps its delivery ledger until cleanup.
+    pub(in crate::share) fn detach(&mut self, connection: ConnectionRef) {
         let Some(entry) = self.entries.remove(&connection) else {
             return;
         };
         clear_socket_deadlines(connection, &mut self.deadlines);
         match entry {
-            Generation::Control { .. } => self.changes.removed(connection),
+            Generation::Control { .. } => {}
             Generation::Business { ledger, .. } => {
                 self.entries.insert(
                     connection,
                     Generation::Detached {
-                        delivery: Delivery::Exact(ledger),
-                        state: self.limits.retirement.detached(now),
+                        ledger,
+                        released: false,
                     },
                 );
-                self.schedule_retirement(connection);
-                self.changes.changed(connection);
-                self.changes.retention_changed();
             }
             detached @ Generation::Detached { .. } => {
-                // Duplicate loss reports cannot restart the fixed grace.
                 self.entries.insert(connection, detached);
             }
         }
@@ -121,61 +106,51 @@ impl Generations {
         now: UnixMillis,
         observer: &mut impl crate::observation::Observer,
     ) -> Vec<SessionKey> {
-        let Some(Generation::Detached { delivery, state }) = self.entries.get_mut(&connection)
+        let Some(Generation::Detached { ledger, released }) = self.entries.get_mut(&connection)
         else {
             return Vec::new();
         };
-        let affected = match delivery {
-            Delivery::Exact(ledger) => {
-                let affected = ledger
-                    .checkpoint_flows()
-                    .map(|(flow, _)| flow.session())
-                    .collect();
-                let _ = ledger.confirm_closed(connection, now);
-                for event in ledger.observer_mut().0.drain(..) {
-                    observer.observe(event);
-                }
-                self.changes.changed(connection);
-                affected
-            }
-            Delivery::Unavailable(bound) => {
-                *bound = Counts::ZERO;
-                Vec::new()
-            }
-        };
-        *state = Detached::Released;
-        self.changes.retention_changed();
-        self.deadlines.set(Key::Retirement(connection), None);
+        let affected = ledger.flows().map(|(flow, _)| flow.session()).collect();
+        let _ = ledger.confirm_closed(connection, now);
+        for event in ledger.observer_mut().0.drain(..) {
+            observer.observe(event);
+        }
+        *released = true;
         self.deadlines.set(Key::Ledger(connection), None);
         affected
     }
 
-    /// Called after cross-generation queue quiescence. Empty accounting alone
-    /// never authorizes collection of a communicating or unretired generation.
+    /// Called after cross-generation queue quiescence for `PhysicalRelease` hosts.
     pub(in crate::share) fn collect(&mut self, connection: ConnectionRef) -> bool {
         let Some(Generation::Detached {
-            delivery,
-            state: Detached::Released | Detached::RiskRetained { .. },
+            ledger,
+            released: true,
         }) = self.entries.get(&connection)
         else {
             return false;
         };
-        let empty = match delivery {
-            Delivery::Exact(ledger) => ledger.metadata_usage().retained_flows == 0,
-            Delivery::Unavailable(bound) => *bound == Counts::ZERO,
-        };
-        if !empty {
+        if ledger.metadata_usage().retained_flows != 0 {
             return false;
         }
         self.remove_detached(connection);
         true
     }
 
-    pub(super) fn remove_detached(&mut self, connection: ConnectionRef) {
+    /// Called after cross-generation queue quiescence for `AfterDiscard` hosts.
+    pub(in crate::share) fn release_after_discard(&mut self, connection: ConnectionRef) -> bool {
+        let Some(Generation::Detached { ledger, .. }) = self.entries.get(&connection) else {
+            return false;
+        };
+        if !ledger.queues_discarded() {
+            return false;
+        }
+        self.remove_detached(connection);
+        true
+    }
+
+    fn remove_detached(&mut self, connection: ConnectionRef) {
         self.entries.remove(&connection);
-        self.deadlines.set(Key::Retirement(connection), None);
         self.deadlines.set(Key::Ledger(connection), None);
-        self.changes.removed(connection);
     }
 }
 

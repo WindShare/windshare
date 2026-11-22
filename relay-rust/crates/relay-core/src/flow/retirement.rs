@@ -234,7 +234,6 @@ impl<O: Observer> ConnectionLedger<O> {
             ledger.usage = super::Usage::default();
             ledger.startup_used = Counts::ZERO;
             ledger.state = ConnectionState::Closed;
-            ledger.checkpoint_changed = true;
             ledger.next_expiration = None;
             ledger.record(input, Decision::Closed { reclaimed }, now);
             Ok(reclaimed)
@@ -251,7 +250,6 @@ impl<O: Observer> ConnectionLedger<O> {
             && now >= request.deadline
         {
             self.state = ConnectionState::Closing(request);
-            self.checkpoint_changed = true;
             self.record(Input::Tick, Decision::Closing(request), now);
         }
     }

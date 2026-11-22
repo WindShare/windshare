@@ -126,14 +126,7 @@ impl<O: Observer> ShareRelay<O> {
         now: UnixMillis,
         step: &mut RelayStep,
     ) -> Result<(), Error> {
-        let handshake = self
-            .generations
-            .challenge(connection, seed, now)
-            .inspect_err(|error| {
-                if *error == Error::InvalidCheckpoint {
-                    self.disconnect(connection, now, step);
-                }
-            })?;
+        let handshake = self.generations.challenge(connection, seed, now)?;
         self.handshake_step(connection, handshake, now, step);
         Ok(())
     }
@@ -144,11 +137,7 @@ impl<O: Observer> ShareRelay<O> {
         admission: Admission,
         step: &mut RelayStep,
     ) {
-        if !self.generations.offer_admission(
-            connection,
-            admission,
-            self.lifecycle.ownership_record(),
-        ) {
+        if !self.generations.offer_admission(connection, admission) {
             return;
         }
         step.outputs.push(Output::ChallengeNeeded(ChallengeRequest {
@@ -351,7 +340,7 @@ impl<O: Observer> ShareRelay<O> {
         step: &mut RelayStep,
     ) {
         self.disconnect(connection, now, step);
-        self.generations.detach(connection, now);
+        self.generations.detach(connection);
         self.progress_retirements(now);
         self.trace(Some(connection), RelayDecision::Disconnected, now);
     }

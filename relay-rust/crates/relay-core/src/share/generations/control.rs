@@ -1,5 +1,5 @@
 //! Control state is never mutably borrowed by the share coordinator. Every
-//! protocol transition updates its recovery projection and expiry index here.
+//! protocol transition updates its expiry index here.
 use super::{Generation, Generations};
 use crate::{
     access::Attribution,
@@ -8,12 +8,10 @@ use crate::{
     handshake::{Admission, ControlHandshake, Outcome, Step},
     heartbeat::{ConnectionProbe, Liveness},
     identifiers::RelayIdentity,
-    lifecycle::{ConnectionRef, OperationId, Record},
+    lifecycle::{ConnectionRef, OperationId},
     share::{
         Error,
-        checkpoint::ConnectionRole,
         deadlines::{Deadlines, Key},
-        handshake_checkpoint::{self, Binding, HandshakeCheckpoint},
     },
 };
 use alloc::boxed::Box;
@@ -32,12 +30,11 @@ pub(in crate::share) enum Phase {
 enum Role {
     Handshake {
         handshake: Box<ControlHandshake>,
-        transcript: HandshakeCheckpoint,
+        fresh_attribution: Option<Attribution>,
     },
     Admitting {
         handshake: Box<ControlHandshake>,
         admission: Box<Admission>,
-        transcript: HandshakeCheckpoint,
     },
     Established(Liveness),
     Stopping,
@@ -55,8 +52,16 @@ impl Connection {
         Self {
             role: Role::Handshake {
                 handshake: Box::new(ControlHandshake::open(relay, connection, now)),
-                transcript: HandshakeCheckpoint::new(now),
+                fresh_attribution: None,
             },
+            reservation: None,
+        }
+    }
+
+    #[cfg(feature = "hibernation")]
+    pub(super) const fn established(liveness: Liveness) -> Self {
+        Self {
+            role: Role::Established(liveness),
             reservation: None,
         }
     }
@@ -98,10 +103,9 @@ impl Connection {
 
     pub const fn fresh_attribution(&self) -> Option<Attribution> {
         match &self.role {
-            Role::Handshake { transcript, .. } => match transcript.binding {
-                Binding::Fresh(attribution) => Some(attribution),
-                _ => None,
-            },
+            Role::Handshake {
+                fresh_attribution, ..
+            } => *fresh_attribution,
             _ => None,
         }
     }
@@ -119,38 +123,6 @@ impl Connection {
         if self.phase() == Phase::Closing {
             deadlines.set(Key::Control(connection), None);
         }
-    }
-
-    pub(super) fn checkpoint(&self) -> ConnectionRole {
-        match &self.role {
-            Role::Handshake { transcript, .. } | Role::Admitting { transcript, .. } => {
-                ConnectionRole::Handshake(transcript.clone())
-            }
-            Role::Established(liveness) => ConnectionRole::Established(*liveness),
-            Role::Stopping => ConnectionRole::Stopping,
-            Role::Closing => ConnectionRole::Closing,
-        }
-    }
-
-    pub(super) fn restore(
-        relay: RelayIdentity,
-        connection: ConnectionRef,
-        role: &ConnectionRole,
-    ) -> Option<Self> {
-        let role = match role {
-            ConnectionRole::Handshake(transcript) => Role::Handshake {
-                handshake: Box::new(ControlHandshake::open(relay, connection, transcript.opened)),
-                transcript: transcript.clone(),
-            },
-            ConnectionRole::Established(liveness) => Role::Established(*liveness),
-            ConnectionRole::Stopping => Role::Stopping,
-            ConnectionRole::Closing => Role::Closing,
-            ConnectionRole::Detached(_) => return None,
-        };
-        Some(Self {
-            role,
-            reservation: None,
-        })
     }
 
     fn complete(&mut self, outcome: &Outcome<'_>, now: UnixMillis) {
@@ -176,11 +148,13 @@ impl Generations {
         if socket.phase() != Phase::AwaitingFirstFrame {
             return Err(Error::Unavailable);
         }
-        let Role::Handshake { transcript, .. } = &mut socket.role else {
+        let Role::Handshake {
+            fresh_attribution, ..
+        } = &mut socket.role
+        else {
             unreachable!("first frame requires a handshake");
         };
-        transcript.binding = Binding::Fresh(attribution);
-        self.changes.changed(connection);
+        *fresh_attribution = Some(attribution);
         Ok(())
     }
 
@@ -195,26 +169,14 @@ impl Generations {
             .get_mut(&connection)
             .and_then(Generation::socket_mut)
             .ok_or(Error::UnknownConnection)?;
-        let Role::Handshake {
-            handshake,
-            transcript,
-        } = &mut socket.role
-        else {
+        let Role::Handshake { handshake, .. } = &mut socket.role else {
             return Err(Error::Unavailable);
         };
         let step = handshake.receive(frame, now);
-        let recorded = if handshake.phase() == crate::handshake::Phase::Finished {
-            Ok(())
-        } else {
-            transcript.frame(now, frame)
-        };
         if let Step::Complete(outcome) = &step {
             socket.complete(outcome, now);
         }
-        // A failed transcript append still follows a protocol mutation.
-        self.changes.changed(connection);
         socket.synchronize_deadlines(connection, &mut self.deadlines);
-        recorded?;
         Ok(step)
     }
 
@@ -222,7 +184,6 @@ impl Generations {
         &mut self,
         connection: ConnectionRef,
         admission: Admission,
-        ownership: Option<Record>,
     ) -> bool {
         let Some(socket) = self
             .entries
@@ -232,27 +193,17 @@ impl Generations {
             return false;
         };
         let role = core::mem::replace(&mut socket.role, Role::Closing);
-        let Role::Handshake {
-            handshake,
-            mut transcript,
-        } = role
-        else {
+        let Role::Handshake { handshake, .. } = role else {
             socket.role = role;
             return false;
         };
-        match &admission {
-            Admission::Fresh(reservation) => socket.reservation = Some(reservation.id()),
-            Admission::Resume(_) => {
-                transcript.binding = Binding::Resume(handshake_checkpoint::ownership(ownership));
-            }
-            Admission::Stop => {}
+        if let Admission::Fresh(reservation) = &admission {
+            socket.reservation = Some(reservation.id());
         }
         socket.role = Role::Admitting {
             handshake,
             admission: Box::new(admission),
-            transcript,
         };
-        self.changes.changed(connection);
         socket.synchronize_deadlines(connection, &mut self.deadlines);
         true
     }
@@ -268,14 +219,10 @@ impl Generations {
             .get_mut(&connection)
             .and_then(Generation::socket_mut)
             .ok_or(Error::UnknownConnection)?;
-        if let Role::Admitting { transcript, .. } = &mut socket.role {
-            transcript.challenge(now, seed.checkpoint())?;
-        }
         let role = core::mem::replace(&mut socket.role, Role::Closing);
         let Role::Admitting {
             mut handshake,
             admission,
-            transcript,
         } = role
         else {
             socket.role = role;
@@ -284,12 +231,11 @@ impl Generations {
         let step = handshake.admit(*admission, seed, now);
         socket.role = Role::Handshake {
             handshake,
-            transcript,
+            fresh_attribution: None,
         };
         if let Step::Complete(outcome) = &step {
             socket.complete(outcome, now);
         }
-        self.changes.changed(connection);
         socket.synchronize_deadlines(connection, &mut self.deadlines);
         Ok(step)
     }
@@ -302,32 +248,8 @@ impl Generations {
         else {
             return false;
         };
-        // Reservation identity is reconstructed by replay, not an independent record.
         socket.reservation = None;
         true
-    }
-
-    pub(in crate::share) fn replay_handshake(
-        &mut self,
-        connection: ConnectionRef,
-        transcript: &HandshakeCheckpoint,
-    ) -> Result<(), Error> {
-        let socket = self
-            .entries
-            .get_mut(&connection)
-            .and_then(Generation::socket_mut)
-            .ok_or(Error::InvalidCheckpoint)?;
-        *socket = Connection::open(self.identity.relay, connection, transcript.opened);
-        let Role::Handshake {
-            transcript: replay, ..
-        } = &mut socket.role
-        else {
-            unreachable!("opened handshake");
-        };
-        replay.binding = transcript.binding;
-        self.changes.changed(connection);
-        socket.synchronize_deadlines(connection, &mut self.deadlines);
-        Ok(())
     }
 
     pub(in crate::share) fn accept_probe(
@@ -348,7 +270,6 @@ impl Generations {
             return Err(Error::ProbeNonce);
         }
         liveness.accepted_inbound(now);
-        self.changes.changed(connection);
         self.deadlines
             .set(Key::Liveness(connection), Some(liveness.deadline()));
         Ok(())
@@ -366,7 +287,6 @@ impl Generations {
             && let Role::Established(liveness) = &mut socket.role
             && liveness.accepted_inbound(now)
         {
-            self.changes.changed(connection);
             self.deadlines
                 .set(Key::Liveness(connection), Some(liveness.deadline()));
         }
@@ -384,7 +304,6 @@ impl Generations {
             return false;
         }
         socket.role = Role::Closing;
-        self.changes.changed(connection);
         socket.synchronize_deadlines(connection, &mut self.deadlines);
         true
     }

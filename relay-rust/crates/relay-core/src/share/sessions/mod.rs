@@ -1,6 +1,4 @@
-//! Session admissions, route indexes and their recovery projection have one owner.
-//! The coordinator can read entries, but transitions cannot escape expiry and
-//! receiver-record tracking.
+//! Session admissions, route indexes and deadline scheduling have one owner.
 use crate::{
     clock::UnixMillis,
     flow::{FlowKey, Phase as FlowPhase},
@@ -10,7 +8,6 @@ use crate::{
     sessions::{Effects, Event, Phase, Session, SessionKey},
     share::{
         Error,
-        checkpoint_tracking::{Changes, Pending},
         deadlines::{Deadlines, Key},
     },
 };
@@ -35,7 +32,6 @@ pub(super) struct Sessions {
     entries: BTreeMap<RelaySessionId, Entry>,
     routes: BTreeMap<(ConnectionRef, RelaySessionId), FlowKey>,
     last_issued: u64,
-    changes: Changes,
     deadlines: Deadlines,
 }
 
@@ -45,7 +41,6 @@ impl Sessions {
             entries: BTreeMap::new(),
             routes: BTreeMap::new(),
             last_issued,
-            changes: Changes::Disabled,
             deadlines: Deadlines::new(),
         }
     }
@@ -62,6 +57,13 @@ impl Sessions {
         self.last_issued
     }
 
+    #[cfg(feature = "hibernation")]
+    pub const fn advance_last_issued(&mut self, seen: u64) {
+        if seen > self.last_issued {
+            self.last_issued = seen;
+        }
+    }
+
     pub fn allocate(&mut self, limit: usize) -> Result<RelaySessionId, Error> {
         let admitted = self
             .entries
@@ -73,7 +75,6 @@ impl Sessions {
         }
         let next = self.last_issued.checked_add(1).ok_or(Error::Capacity)?;
         self.last_issued = next;
-        self.changes.retention_changed();
         Ok(RelaySessionId::new(next.to_be_bytes()).expect("nonzero sequence"))
     }
 
@@ -85,7 +86,6 @@ impl Sessions {
         }
         self.deadlines
             .set(Key::Session(key.wire_id()), session.deadline());
-        self.changes.changed(key.receiver());
         self.entries.insert(
             key.wire_id(),
             Entry {
@@ -106,12 +106,7 @@ impl Sessions {
         observer: &mut impl Observer,
     ) -> Option<Effects> {
         let entry = self.entries.get_mut(&id)?;
-        let before = self.changes.enabled().then(|| entry.session.snapshot());
         let effects = entry.session.handle(lifecycle, event, now, observer);
-        if before.is_some_and(|snapshot| snapshot != entry.session.snapshot()) {
-            // A session snapshot is encoded with its receiver's generation.
-            self.changes.changed(entry.session.key().receiver());
-        }
         self.deadlines
             .set(Key::Session(id), entry.session.deadline());
         if effects.retirement.is_some() {
@@ -161,6 +156,7 @@ impl Sessions {
         }
     }
 
+    #[cfg(feature = "hibernation")]
     pub fn restore_routes(
         &mut self,
         connection: ConnectionRef,
@@ -189,18 +185,5 @@ impl Sessions {
 
     pub fn expire(&mut self, now: UnixMillis) -> Option<Key> {
         self.deadlines.expired(now)
-    }
-
-    pub fn enable_checkpoints(&mut self) {
-        // Enabling generation tracking captures every receiver record and the manifest.
-        self.changes = Changes::tracking([], false);
-    }
-
-    pub const fn checkpoint_changes(&self) -> Option<&Pending> {
-        self.changes.pending()
-    }
-
-    pub fn acknowledge_checkpoints(&mut self) {
-        self.changes.acknowledge();
     }
 }

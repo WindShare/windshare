@@ -81,7 +81,7 @@ impl Fixture {
         let (relay, step) = Relay::restore(
             self.identity(1),
             Self::limits(),
-            &Restore::restarted(None, Responsibility::Released { previous: None }),
+            None,
             Trace::default(),
             self.at,
         )
@@ -609,17 +609,11 @@ mod ordering;
 #[path = "ownership_tests.rs"]
 mod ownership;
 
-#[path = "handshake_restore_tests.rs"]
-mod handshakes;
-
 #[path = "recovery_tests.rs"]
 mod recovery;
 
 #[path = "liveness_tests.rs"]
 mod liveness;
-
-#[path = "partial_recovery_tests.rs"]
-mod partial_recovery;
 
 #[path = "capacity_tests.rs"]
 mod capacity;
@@ -627,20 +621,32 @@ mod capacity;
 #[path = "metadata_tests.rs"]
 mod metadata;
 
-#[path = "checkpoint_tests.rs"]
-mod checkpoints;
-
 #[path = "settlement_tests.rs"]
 mod settlement;
 
-#[path = "responsibility_tests.rs"]
-mod responsibility;
+#[path = "retirement_tests.rs"]
+mod retirement;
+
+#[cfg(feature = "hibernation")]
+#[path = "hibernation_tests.rs"]
+mod hibernation;
 
 #[path = "access_tests.rs"]
 mod access;
 
 #[path = "stopping_tests.rs"]
 mod stopping;
+
+#[cfg(feature = "hibernation")]
+fn snapshot_all(relay: &Relay) -> Vec<ConnectionSnapshot> {
+    relay
+        .established_connections()
+        .map(|conn| {
+            let encoded = relay.snapshot_connection(conn).unwrap().unwrap().encode();
+            ConnectionSnapshot::decode(&encoded, relay.limits).unwrap()
+        })
+        .collect()
+}
 
 fn assert_business_capacity_refused(
     fixture: &Fixture,

@@ -20,53 +20,35 @@ pub struct AttemptRate {
     pub refill: Duration,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct AttemptState {
-    pub tokens: u32,
-    pub updated: UnixMillis,
-}
-
 #[derive(Clone, Copy, Debug)]
 pub struct AttemptLimiter {
     burst: u32,
     refill_millis: NonZeroU64,
-    state: AttemptState,
+    tokens: u32,
+    updated: UnixMillis,
 }
 
 impl AttemptLimiter {
     /// # Errors
     /// Refuses zero or unrepresentable rate bounds.
     pub fn new(rate: AttemptRate, now: UnixMillis) -> Result<Self, Error> {
-        Self::restore(
-            rate,
-            AttemptState {
-                tokens: rate.burst,
-                updated: now,
-            },
-        )
-    }
-
-    pub(super) fn restore(rate: AttemptRate, state: AttemptState) -> Result<Self, Error> {
         let refill_millis = u64::try_from(rate.refill.as_millis())
             .ok()
             .and_then(NonZeroU64::new)
             .ok_or(Error::Configuration)?;
-        if rate.burst == 0 || state.tokens > rate.burst {
+        if rate.burst == 0 {
             return Err(Error::Configuration);
         }
         Ok(Self {
             burst: rate.burst,
             refill_millis,
-            state,
+            tokens: rate.burst,
+            updated: now,
         })
     }
 
     pub const fn burst(&self) -> u32 {
         self.burst
-    }
-
-    pub(super) const fn state(self) -> AttemptState {
-        self.state
     }
 
     /// A backwards clock neither replenishes tokens nor moves the refill origin.
@@ -78,20 +60,19 @@ impl AttemptLimiter {
     /// and subsequent refills for higher-priority callers.
     pub fn attempt_with_reserve(&mut self, now: UnixMillis, reserve: u32) -> bool {
         let interval = self.refill_millis.get();
-        let elapsed = now.0.saturating_sub(self.state.updated.0);
+        let elapsed = now.0.saturating_sub(self.updated.0);
         let refill = elapsed / interval;
         if refill != 0 {
-            self.state.tokens = self
-                .state
+            self.tokens = self
                 .tokens
                 .saturating_add(u32::try_from(refill).unwrap_or(u32::MAX))
                 .min(self.burst);
-            self.state.updated.0 = now.0 - elapsed % interval;
+            self.updated.0 = now.0 - elapsed % interval;
         }
-        if self.state.tokens <= reserve {
+        if self.tokens <= reserve {
             return false;
         }
-        self.state.tokens -= 1;
+        self.tokens -= 1;
         true
     }
 }
@@ -102,10 +83,6 @@ impl<O: Observer> ShareRelay<O> {
         connection: ConnectionRef,
         now: UnixMillis,
     ) -> Result<(), Error> {
-        // Replay of an admitted handshake must preserve its original reservation.
-        if self.generations.ledger(&connection).is_some() {
-            return Ok(());
-        }
         if let Err(error) = self.generations.admit_business(connection) {
             if error == Error::Capacity {
                 self.trace(

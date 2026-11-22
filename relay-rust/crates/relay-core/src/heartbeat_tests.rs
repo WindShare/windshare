@@ -68,6 +68,7 @@ fn heartbeat_decoders_require_exact_headers_lengths_and_nonzero_nonces() {
     );
 }
 
+#[cfg(feature = "hibernation")]
 #[test]
 fn checkpoint_keeps_nonce_evidence_and_absolute_deadline() {
     let mut live = Liveness::established(UnixMillis(10));

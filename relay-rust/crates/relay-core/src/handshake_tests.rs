@@ -17,7 +17,7 @@ use crate::{
     descriptor_upload::DescriptorUpload,
     error_frame::ErrorFrame,
     identifiers::RelayIdentity,
-    lifecycle::{Action, ConnectionRef, Event, Incarnation, Restoration, ShareLifecycle},
+    lifecycle::{Action, ConnectionRef, Event, Incarnation, ShareLifecycle},
     registration::{RegisterInit, RegistrationMode},
     stop::StopInit,
     test_vectors::{
@@ -46,11 +46,10 @@ fn admission(
     let (mut lifecycle, _) = ShareLifecycle::restore(
         relay,
         init.registration().route().share_id(),
-        Restoration::restarted(None),
+        None,
         Incarnation::new([1; 16]).unwrap(),
         (),
         now,
-        |_, _| {},
     )
     .unwrap();
     let connection = connection();

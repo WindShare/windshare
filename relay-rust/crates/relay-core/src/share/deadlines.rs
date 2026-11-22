@@ -9,7 +9,6 @@ pub(super) enum Key {
     Liveness(ConnectionRef),
     Session(RelaySessionId),
     Ledger(ConnectionRef),
-    Retirement(ConnectionRef),
 }
 
 // Updating one connection must not scan every session on each forwarded frame.
@@ -24,6 +23,11 @@ impl Deadlines {
             by_key: BTreeMap::new(),
             ordered: BTreeSet::new(),
         }
+    }
+
+    #[cfg(test)]
+    pub fn get(&self, key: Key) -> Option<UnixMillis> {
+        self.by_key.get(&key).copied().map(UnixMillis)
     }
 
     pub fn next_entry(&self) -> Option<(UnixMillis, Key)> {

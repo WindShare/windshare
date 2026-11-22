@@ -6,6 +6,10 @@ license.workspace = true
 publish.workspace = true
 description = "Transport-independent WindShare relay control semantics"
 
+[features]
+# Opt-in state snapshots for hosts that hibernate live WebSockets (e.g. Cloudflare DO).
+hibernation = []
+
 [dependencies]
 windshare-relay-access = { path = "../relay-access" }
 ed25519-dalek = { version = "3.0.0", default-features = false }

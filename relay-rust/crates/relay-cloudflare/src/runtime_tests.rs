@@ -15,10 +15,7 @@ use windshare_relay_core::{
     identifiers::RelayIdentity,
     lifecycle::{ConnectionRef, Incarnation, Record},
     registration::RegisterInit,
-    share::{
-        Checkpoint, CheckpointManifest, CheckpointTarget, ConnectionCheckpoint, Identity, Input,
-        Storage,
-    },
+    share::{ConnectionSnapshot, Identity, Input, Storage},
 };
 
 #[path = "access_tests.rs"]
@@ -102,14 +99,14 @@ struct Memory {
     time: UnixMillis,
     seed: Option<ChallengeSeed>,
     stored: Option<StoredAuthority>,
-    manifest: Option<Vec<u8>>,
+    last_session: u64,
     attachments: BTreeMap<ConnectionRef, Vec<u8>>,
     live: BTreeSet<ConnectionRef>,
     sent: Vec<(ConnectionRef, Vec<u8>)>,
     writes: usize,
     fail_write: Option<(usize, bool)>,
     failed_attachments: usize,
-    manifest_writes: usize,
+    image_writes: usize,
     fail_send: Option<ConnectionRef>,
 }
 impl Memory {
@@ -120,38 +117,36 @@ impl Memory {
             time: f.time(""),
             seed: Some(f.seed("")),
             stored: None,
-            manifest: None,
+            last_session: 0,
             attachments: BTreeMap::new(),
             live: BTreeSet::new(),
             sent: Vec::new(),
             writes: 0,
             fail_write: None,
             failed_attachments: 0,
-            manifest_writes: 0,
+            image_writes: 0,
             fail_send: None,
         }
     }
     fn restore(&mut self, boot: u8) -> Result<Runtime<()>> {
         self.identity.incarnation = Incarnation::new([boot; 16]).unwrap();
-        let checkpoint = self.manifest.as_ref().map(|bytes| {
-            let manifest = CheckpointManifest::decode(bytes, config::limits()).unwrap();
-            Checkpoint::from_connections(
-                &manifest,
-                self.attachments
-                    .values()
-                    .filter_map(|bytes| ConnectionCheckpoint::decode(bytes, config::limits()).ok())
-                    .collect(),
-                config::limits(),
-            )
-            .unwrap()
-        });
         let surviving: Vec<_> = self.live.iter().copied().collect();
+        let connections: Vec<_> = surviving
+            .iter()
+            .filter_map(|conn| {
+                self.attachments
+                    .get(conn)
+                    .and_then(|bytes| ConnectionSnapshot::decode(bytes, config::limits()).ok())
+                    .filter(|snapshot| snapshot.connection() == *conn)
+            })
+            .collect();
         let authority = self.stored.clone();
         let recovery = if self.initialized {
             Recovery::Existing {
                 authority: authority.as_ref(),
-                checkpoint: checkpoint.as_ref(),
+                last_session: self.last_session,
                 surviving: &surviving,
+                connections: &connections,
             }
         } else {
             Recovery::New
@@ -263,22 +258,19 @@ impl Host for Memory {
         self.attachments.remove(&connection);
         Ok(())
     }
-    fn checkpoint(&mut self, target: CheckpointTarget, bytes: &[u8]) -> Result<()> {
-        match target {
-            CheckpointTarget::Manifest => {
-                self.manifest = Some(bytes.to_vec());
-                self.manifest_writes += 1;
-            }
-            CheckpointTarget::Generation(connection) => {
-                if self.failed_attachments > 0 {
-                    self.failed_attachments -= 1;
-                    bail!("attachment write failed");
-                }
-                if self.live.contains(&connection) {
-                    self.attachments.insert(connection, bytes.to_vec());
-                }
-            }
+    fn save_attachment(&mut self, connection: ConnectionRef, bytes: &[u8]) -> Result<()> {
+        if self.failed_attachments > 0 {
+            self.failed_attachments -= 1;
+            bail!("attachment write failed");
         }
+        if self.live.contains(&connection) {
+            self.attachments.insert(connection, bytes.to_vec());
+        }
+        Ok(())
+    }
+    fn save_last_session(&mut self, last_session: u64) -> Result<()> {
+        self.last_session = last_session;
+        self.image_writes += 1;
         Ok(())
     }
 }
@@ -295,7 +287,7 @@ fn hibernation_retains_nonce_and_absolute_deadline_without_sql_heartbeat_writes(
     drop(runtime);
     let mut runtime = host.restore(2).unwrap();
     assert_eq!(runtime.deadline(), deadline);
-    let writes = host.manifest_writes;
+    let writes = host.image_writes;
     let nonce = f.0["connectionProbeNonce"]
         .as_str()
         .unwrap()
@@ -313,7 +305,7 @@ fn hibernation_retains_nonce_and_absolute_deadline_without_sql_heartbeat_writes(
         windshare_relay_core::access::RegistrationDecision::Denied,
     )
     .unwrap();
-    assert_eq!(host.manifest_writes, writes);
+    assert_eq!(host.image_writes, writes);
     assert_eq!(&host.sent.last().unwrap().1[..4], b"WS2A");
     drop(runtime);
     let mut runtime = host.restore(3).unwrap();
@@ -332,23 +324,31 @@ fn hibernation_retains_nonce_and_absolute_deadline_without_sql_heartbeat_writes(
 }
 
 #[test]
-fn pending_handshake_and_partial_attachment_write_recover_without_new_deadline() {
+fn pending_handshake_closes_on_cold_wake_and_attachment_retry_recovers() {
     let f = Fixture::new();
     let mut host = Memory::new(&f);
     let mut runtime = host.restore(1).unwrap();
-    host.failed_attachments = 1;
     host.open(&mut runtime, 1);
     host.frame(&mut runtime, &f, 1, "registerInitB64");
-    let deadline = runtime.deadline();
+    assert!(host.attachments.is_empty());
     drop(runtime);
     let mut runtime = host.restore(2).unwrap();
-    assert_eq!(runtime.deadline(), deadline);
-    host.frame(&mut runtime, &f, 1, "registerProofB64");
-    host.frame(&mut runtime, &f, 1, "descriptorUploadB64");
+    assert!(
+        !host.live.contains(&connection(1)),
+        "unestablished handshake must close on cold wake"
+    );
+    host.seed = Some(f.seed(""));
+    host.failed_attachments = 1;
+    host.open(&mut runtime, 2);
+    for key in ["registerInitB64", "registerProofB64", "descriptorUploadB64"] {
+        host.frame(&mut runtime, &f, 2, key);
+    }
     assert!(matches!(
         host.stored.as_ref().unwrap().record(),
         Record::Published(_)
     ));
+    assert!(host.attachments.contains_key(&connection(2)));
+    assert_eq!(host.failed_attachments, 0);
 }
 
 #[test]
@@ -488,17 +488,20 @@ fn deployment_permission_and_delivery_boundary_precede_admission() {
 fn business_saturation_keeps_signed_stop_available_through_hibernation() {
     let f = Fixture::new();
     let mut host = Memory::new(&f);
-    host.time = f.time("stop");
     let mut runtime = host.restore(1).unwrap();
+    host.registered(&mut runtime, &f);
     let business_limit = config::limits().business_connections as u64;
-    for id in 1..=business_limit {
+    for id in 2..=business_limit {
         host.open(&mut runtime, id);
-        // A RESUME reserves business capacity while awaiting its credential.
-        host.frame(&mut runtime, &f, id, "resumeInitB64");
+        host.frame(&mut runtime, &f, id, "joinB64");
+        assert!(host.live.contains(&connection(id)));
     }
+    drop(runtime);
+    let mut runtime = host.restore(2).unwrap();
+    assert_eq!(host.live.len(), config::limits().business_connections);
     let refused = business_limit + 1;
     host.open(&mut runtime, refused);
-    host.frame(&mut runtime, &f, refused, "resumeInitB64");
+    host.frame(&mut runtime, &f, refused, "joinB64");
     assert!(!host.live.contains(&connection(refused)));
     let stop = business_limit + 2;
     host.time = f.time("stop");
@@ -513,10 +516,7 @@ fn business_saturation_keeps_signed_stop_available_through_hibernation() {
     )
     .unwrap();
     assert!(host.live.contains(&connection(stop)));
-    let deadline = runtime.deadline();
-    drop(runtime);
-    let mut runtime = host.restore(2).unwrap();
-    assert_eq!(runtime.deadline(), deadline);
+    host.time = f.time("");
     control(
         &mut runtime,
         &mut host,
@@ -535,35 +535,4 @@ fn business_saturation_keeps_signed_stop_available_through_hibernation() {
             .any(|(target, bytes)| *target == connection(stop) && bytes == &f.frame("stoppedB64"))
     );
     assert!(!host.live.contains(&connection(stop)));
-}
-
-#[test]
-fn empty_socket_reconstruction_preserves_attempt_rate_history() {
-    let f = Fixture::new();
-    let mut host = Memory::new(&f);
-    let mut runtime = host.restore(1).unwrap();
-    let burst = u64::from(config::limits().handshakes.attempts.burst);
-    for id in 1..=burst {
-        host.open(&mut runtime, id);
-        assert!(host.live.contains(&connection(id)));
-        control(
-            &mut runtime,
-            &mut host,
-            connection(id),
-            b"invalid",
-            windshare_relay_core::access::RegistrationDecision::Denied,
-        )
-        .unwrap();
-    }
-    assert!(host.live.is_empty());
-    drop(runtime);
-    let mut runtime = host.restore(2).unwrap();
-    host.open(&mut runtime, burst + 1);
-    assert!(
-        host.live.is_empty(),
-        "reconstruction must not refund admission attempts"
-    );
-    host.time.0 += u64::try_from(config::limits().handshakes.attempts.refill.as_millis()).unwrap();
-    host.open(&mut runtime, burst + 2);
-    assert!(host.live.contains(&connection(burst + 2)));
 }

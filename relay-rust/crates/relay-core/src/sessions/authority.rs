@@ -87,12 +87,14 @@ impl SessionKey {
 
     /// Whether both keys claim one routing ID or one issued admission, either
     /// of which an actor hands out once.
+    #[cfg(feature = "hibernation")]
     pub(crate) fn collides(self, other: Self) -> bool {
         self.wire_id == other.wire_id
             || (self.admitted_by == other.admitted_by
                 && self.admission_sequence == other.admission_sequence)
     }
 
+    #[cfg(feature = "hibernation")]
     pub(crate) const fn admitted_by(self) -> Incarnation {
         self.admitted_by
     }
@@ -119,6 +121,7 @@ pub struct ForwardPermit {
 }
 
 impl ForwardPermit {
+    #[cfg(feature = "hibernation")]
     pub(crate) const fn restored(session: SessionKey, direction: Direction) -> Self {
         Self { session, direction }
     }

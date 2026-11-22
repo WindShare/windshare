@@ -154,11 +154,10 @@ fn authenticated_stop_must_match_actor_and_cannot_replace_another_authenticated_
         let (mut engine, _) = ShareLifecycle::restore(
             relay,
             share,
-            Restoration::restarted(None),
+            None,
             restarted(),
             Recorder::default(),
             fixture.at,
-            |_, _| {},
         )
         .unwrap();
         assert_eq!(

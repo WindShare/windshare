@@ -155,19 +155,15 @@ impl Fixture {
         incarnation: Incarnation,
         at: UnixMillis,
     ) -> Result<(ShareLifecycle<Recorder>, Action<'static>), RestoreError> {
-        let restoration = Restoration {
-            record: stored.map(|record| Record::decode(record.encode().as_bytes()).unwrap()),
-            connections: surviving,
-            sessions: &[],
-        };
-        ShareLifecycle::restore(
+        let record = stored.map(|record| Record::decode(record.encode().as_bytes()).unwrap());
+        ShareLifecycle::restore_inner(
             self.relay(),
             self.share(),
-            restoration,
+            record,
+            surviving,
             incarnation,
             Recorder::default(),
             at,
-            |index, outcome| panic!("no snapshot {index} was recorded: {outcome:?}"),
         )
     }
 

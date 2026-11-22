@@ -9,8 +9,8 @@ use windshare_relay_core::{
     share::Identity,
 };
 
-// Delivery responsibility requires its independent manifest, even with no sockets.
-const LIFECYCLE_SCHEMA: u32 = 3;
+// Image stores endpoint identity, monotonic connection allocator, and session watermark.
+const LIFECYCLE_SCHEMA: u32 = 4;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Image {
@@ -19,6 +19,7 @@ pub struct Image {
     share: [u8; 12],
     relay: [u8; 32],
     last_connection: u64,
+    pub last_session: u64,
 }
 
 impl Image {
@@ -29,6 +30,7 @@ impl Image {
             share: *route.share.as_bytes(),
             relay: *route.relay.as_bytes(),
             last_connection: 0,
+            last_session: 0,
         }
     }
 

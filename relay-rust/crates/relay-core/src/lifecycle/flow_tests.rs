@@ -51,6 +51,7 @@ fn ledger(
     ledger
 }
 
+#[cfg(feature = "hibernation")]
 fn restore_ledger(
     fixture: &Fixture,
     destination: ConnectionRef,
@@ -406,5 +407,6 @@ mod authority;
 #[path = "flow_capacity_tests.rs"]
 mod capacity;
 
+#[cfg(feature = "hibernation")]
 #[path = "flow_storage_tests.rs"]
 mod storage;

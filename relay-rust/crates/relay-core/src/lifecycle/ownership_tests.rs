@@ -304,11 +304,10 @@ fn an_authenticated_resume_learns_whether_any_route_remains() {
     let (mut foreign, _) = ShareLifecycle::restore(
         fixture.relay(),
         ShareId::new([0x5a; 12]).unwrap(),
-        Restoration::restarted(None),
+        None,
         Incarnation::new([1; 16]).unwrap(),
         (),
         at,
-        |_, _| {},
     )
     .unwrap();
     let late = engine.handle(Event::Resume(resumption), deadline);
@@ -377,11 +376,10 @@ fn resume_admission_refuses_before_a_challenge_when_it_can_never_commit() {
     let (mut wrong_actor, _) = ShareLifecycle::restore(
         fixture.relay(),
         ShareId::new([0x5a; 12]).unwrap(),
-        Restoration::restarted(None),
+        None,
         Incarnation::new([1; 16]).unwrap(),
         Recorder::default(),
         at,
-        |_, _| {},
     )
     .unwrap();
     assert_eq!(

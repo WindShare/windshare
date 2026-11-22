@@ -6,7 +6,7 @@ use crate::{
     test_support::{Fixture, capture_events, work},
 };
 use windshare_relay_access::{trust::Generation, usage::NodePolicy};
-use windshare_relay_core::share::{Responsibility, Restore, ShareRelay};
+use windshare_relay_core::share::ShareRelay;
 
 fn draining_node(temp: &tempfile::TempDir) -> (Configuration, String, Database) {
     let issuer = [3u8; 32];
@@ -166,17 +166,8 @@ fn already_disconnected_sender_must_have_time_for_rollback_and_redial() {
     let db = Database::open(&path, id.relay).unwrap();
     let published = db.execute(id.share, &fixture.works()[0]).unwrap().unwrap();
     let now = fixture.now(false);
-    let (_, step) = ShareRelay::restore(
-        id,
-        limits(),
-        &Restore::restarted(
-            Some(published.record()),
-            Responsibility::Released { previous: None },
-        ),
-        Trace,
-        now,
-    )
-    .unwrap();
+    let (_, step) =
+        ShareRelay::restore(id, limits(), Some(published.record()), Trace, now).unwrap();
     let stored = db
         .execute(id.share, &work(step).operation)
         .unwrap()

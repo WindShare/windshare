@@ -86,7 +86,7 @@ impl<S: Persistence, E: Environment> Actor<S, E> {
         let (relay, initial) = ShareRelay::restore(
             identity,
             limits(),
-            &restored,
+            restored,
             NodeTrace::new(node.metrics.clone()),
             environment.now(),
         )

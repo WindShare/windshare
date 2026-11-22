@@ -268,14 +268,9 @@ impl<O: Observer> ShareRelay<O> {
             // its scheduler only after the ledger accepted the release evidence.
             step.outputs.push(Output::DeliveryReady(connection));
         }
-        let retirement_affected = self.generations.retirement_state(&connection).is_some()
-            || self
-                .generations
-                .retirement_state(&flow.permit().source())
-                .is_some();
         self.collect_session(flow.session(), now, step);
         self.collect_ledger(flow.destination(), now);
-        if retirement_affected {
+        if self.generations.has_detached() {
             self.progress_retirements(now);
         }
         Ok(())

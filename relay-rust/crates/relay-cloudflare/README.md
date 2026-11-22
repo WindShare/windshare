@@ -11,9 +11,10 @@ Committed registrations retain principal and credential attribution. RESUME and 
 keep independent authority, and frame forwarding performs no account lookup. Revocation can
 also queue durable termination of the credential's existing shares, preventing later RESUME.
 
-Share storage retains endpoint identity, connection allocation, authority and checkpoint
-manifests. Attachments retain protocol state and delivery ledgers through hibernation; opaque
-payloads never enter SQLite. Alarms enforce original deadlines and durable STOP barriers.
+Share storage retains endpoint identity, connection allocation, session watermark, and
+authority. Attachments retain established connection state and delivery ledgers through
+hibernation; unestablished handshakes reconnect cleanly on cold wake, and opaque payloads
+never enter SQLite. Alarms enforce original deadlines and durable STOP barriers.
 Each share has eight business slots and a separate eight-socket control reserve.
 Do not delete storage to update code.
 

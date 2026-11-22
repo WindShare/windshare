@@ -83,6 +83,7 @@ impl<'a> Reader<'a> {
         Ok(*field)
     }
 
+    #[cfg(feature = "hibernation")]
     pub fn take(&mut self, length: usize) -> Result<&'a [u8], FrameError> {
         let (value, rest) = self
             .rest

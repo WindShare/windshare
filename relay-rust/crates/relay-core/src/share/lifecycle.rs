@@ -158,12 +158,10 @@ impl<O: Observer> ShareRelay<O> {
                     StopCleanup::Owner(connection) => {
                         connections.push(connection);
                         for ledger in self.generations.ledgers() {
-                            connections.extend(ledger.checkpoint_flows().filter_map(
-                                |(flow, _)| {
-                                    (flow.session().sender() == connection)
-                                        .then_some(flow.session().receiver())
-                                },
-                            ));
+                            connections.extend(ledger.flows().filter_map(|(flow, _)| {
+                                (flow.session().sender() == connection)
+                                    .then_some(flow.session().receiver())
+                            }));
                         }
                     }
                     StopCleanup::Reservation(id) => {

@@ -15,6 +15,7 @@ pub use capacity::CapacityWait;
 mod effect;
 mod frames;
 mod observation;
+#[cfg(feature = "hibernation")]
 mod snapshot;
 
 pub use authority::{
@@ -28,6 +29,7 @@ pub use frames::{
     encode_descriptor,
 };
 pub use observation::{Decision, Observation, Observer};
+#[cfg(feature = "hibernation")]
 pub use snapshot::{EncodedSnapshot, MAX_SNAPSHOT_BYTES, SessionSnapshot};
 
 use crate::{
@@ -113,6 +115,7 @@ impl Session {
     }
 
     /// Reinstalls a snapshot the restoring lifecycle has already validated.
+    #[cfg(feature = "hibernation")]
     pub(crate) const fn restored(snapshot: SessionSnapshot) -> Self {
         Self {
             key: snapshot.key,
@@ -146,6 +149,7 @@ impl Session {
     ///
     /// `None` once retired: drop the recorded snapshot, keeping only what
     /// late-frame handling needs.
+    #[cfg(feature = "hibernation")]
     pub const fn snapshot(&self) -> Option<SessionSnapshot> {
         match self.state {
             State::Live(stage) => Some(SessionSnapshot {

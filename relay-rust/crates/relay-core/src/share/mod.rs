@@ -1,30 +1,23 @@
 //! Shared, no-I/O orchestration of one share. Hosts own sockets, payloads and
 //! scheduling; this module owns cross-domain ordering and exact callback identity.
 //!
-//! Generation and session owners keep their mutation journals and deadline indexes
-//! private. This coordinator merges their projections at one checkpoint boundary.
-//!
 //! `handle` emits storage/send/cleanup commands. Storage completions return as
 //! inputs. `submit` is deliberately synchronous: revalidation, charging and host
 //! handoff occur under the same exclusive borrow, without an await or cached grant.
 
 mod admission;
 pub use admission::{AttemptLimiter, AttemptRate, HandshakeLimits};
-mod checkpoint;
-mod checkpoint_codec;
-mod checkpoint_tracking;
 mod connections;
 mod deadlines;
 mod delivery;
 mod generations;
-mod handshake_checkpoint;
-mod handshake_restore;
+#[cfg(feature = "hibernation")]
+mod hibernation;
 mod lifecycle;
 mod liveness;
-mod responsibility;
 mod restoration;
 mod retirement;
-use generations::{ConnectionPhase, Detached, Generations};
+use generations::{ConnectionPhase, Generations};
 pub use generations::{ConnectionUsage, RetirementPolicy};
 mod session_workflow;
 mod sessions;
@@ -35,10 +28,8 @@ mod types;
 #[path = "share_tests.rs"]
 mod tests;
 
-pub use checkpoint::{Checkpoint, CheckpointBudget, ConnectionCheckpoint};
-pub use checkpoint_tracking::{CheckpointFlush, CheckpointTarget, CheckpointWriteError};
-pub use responsibility::CheckpointManifest;
-pub use restoration::{Authority, Responsibility, Restore};
+#[cfg(feature = "hibernation")]
+pub use hibernation::{AttachmentBudget, ConnectionSnapshot, Hibernated};
 pub use types::*;
 
 use crate::{
@@ -72,7 +63,6 @@ pub struct ShareRelay<O> {
     last_work: u64,
     tasks: VecDeque<Task>,
     stop_barrier: Option<crate::lifecycle::StopWork>,
-    checkpointing: checkpoint_tracking::Checkpointing,
     observer: O,
 }
 
@@ -269,7 +259,6 @@ impl<O: Observer> ShareRelay<O> {
                 Key::Session(id) => {
                     self.session_event(id, crate::sessions::Event::Tick, now, step);
                 }
-                Key::Retirement(_) => self.progress_retirements(now),
                 Key::Ledger(connection) => {
                     let _ = self.generations.update_ledger(
                         connection,

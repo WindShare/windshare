@@ -1,35 +1,66 @@
 use super::*;
-use windshare_relay_core::sessions::SessionSnapshot;
+use crate::{
+    config::limits,
+    environment::Trace,
+    test_support::{Fixture, connection, work},
+};
+use windshare_relay_core::share::{Control, Input, Output, ShareRelay, WorkResult};
 
-fn session_key(share: u8, session_id: u64) -> SessionKey {
-    const FORMAT: u8 = 1;
-    const ACTIVE: u8 = 3;
-
-    let mut encoded = Vec::new();
-    encoded.extend_from_slice(&[FORMAT, ACTIVE]);
-    encoded.extend_from_slice(&[1; 32]);
-    encoded.extend_from_slice(&[share; 12]);
-    encoded.extend_from_slice(&[1; 16]);
-    encoded.extend_from_slice(&session_id.to_be_bytes());
-    encoded.extend_from_slice(&1_u64.to_be_bytes());
-    // Sender ConnectionRef: big-endian (id, generation).
-    encoded.extend_from_slice(&1_u64.to_be_bytes());
-    encoded.extend_from_slice(&1_u64.to_be_bytes());
-    encoded.extend_from_slice(&[1; 16]);
-    // Receiver ConnectionRef: big-endian (id, generation).
-    encoded.extend_from_slice(&(session_id + 1).to_be_bytes());
-    encoded.extend_from_slice(&1_u64.to_be_bytes());
-    encoded.extend_from_slice(&session_id.to_be_bytes());
-
-    SessionSnapshot::decode(&encoded)
-        .expect("valid active session snapshot")
-        .key()
+fn session_keys<const N: usize>() -> [SessionKey; N] {
+    let fixture = Fixture::new();
+    let at = fixture.now(false);
+    let (mut relay, _) =
+        ShareRelay::restore(fixture.identity(), limits(), None, Trace, at).unwrap();
+    fixture.begin(&mut relay, false);
+    let _ = relay.handle(
+        Input::Control {
+            connection: connection(1),
+            frame: &fixture.bytes("registerProofB64"),
+        },
+        at,
+    );
+    let publication = work(relay.handle(
+        Input::Control {
+            connection: connection(1),
+            frame: &fixture.bytes("descriptorUploadB64"),
+        },
+        at,
+    ));
+    let _ = relay.handle(
+        Input::Completed {
+            id: publication.id,
+            result: WorkResult::Complete,
+        },
+        at,
+    );
+    let join = fixture.bytes("joinB64");
+    std::array::from_fn(|index| {
+        let receiver = connection(index as u64 + 2);
+        let _ = relay.handle(Input::Connected(receiver), at);
+        let step = relay.handle(
+            Input::Control {
+                connection: receiver,
+                frame: &join,
+            },
+            at,
+        );
+        step.outputs
+            .into_iter()
+            .find_map(|output| match output {
+                Output::Send {
+                    control: Control::Descriptor { session, .. },
+                    ..
+                } => Some(session),
+                _ => None,
+            })
+            .expect("admitted session key")
+    })
 }
 
 #[test]
 fn session_lifecycle_merges_overlapping_intervals_and_buckets_throughput() {
     let metrics = Metrics::default();
-    let key = session_key(1, 1);
+    let [key] = session_keys();
     let base = Instant::now();
 
     metrics.begin(key);
@@ -75,10 +106,7 @@ fn session_lifecycle_merges_overlapping_intervals_and_buckets_throughput() {
 #[test]
 fn sibling_sessions_track_independently_and_handle_edge_rates() {
     let metrics = Metrics::default();
-    let low = session_key(2, 1);
-    let mid = session_key(2, 2);
-    let idle = session_key(2, 3);
-    let instant = session_key(2, 4);
+    let [low, mid, idle, instant] = session_keys();
     let base = Instant::now();
 
     for key in [low, mid, idle, instant] {
@@ -107,7 +135,7 @@ fn sibling_sessions_track_independently_and_handle_edge_rates() {
 #[test]
 fn wire_refusals_and_untracked_forwards_accumulate_independently() {
     let metrics = Metrics::default();
-    let unknown = session_key(3, 1);
+    let [unknown] = session_keys();
     let base = Instant::now();
 
     metrics.wire(128);
@@ -132,8 +160,7 @@ fn wire_refusals_and_untracked_forwards_accumulate_independently() {
 #[test]
 fn forwarding_recorder_bypasses_global_session_lock_and_evicts_ended_handles() {
     let metrics = Metrics::default();
-    let first = session_key(4, 1);
-    let second = session_key(4, 2);
+    let [first, second] = session_keys();
     let base = Instant::now();
 
     metrics.begin(first);

@@ -1,28 +1,14 @@
-//! Share-level retirement coordination: a source can own queued work on other
-//! destinations. The generation registry owns local transitions and risk limits.
-use super::generations::RetirementProgress;
-use super::{ConnectionRef, ConnectionUsage, Error, Limits, Observer, RelayDecision, ShareRelay};
-use crate::{clock::UnixMillis, flow::Counts};
+//! Share-level retirement coordination: a detached source can still own
+//! unsubmitted queues on sibling destinations until discard confirmation.
+use super::{
+    ConnectionRef, ConnectionUsage, Observer, RelayDecision, RetirementPolicy, ShareRelay,
+};
+use crate::clock::UnixMillis;
 use alloc::vec::Vec;
-
-impl Limits {
-    pub(super) fn generation_limit(self) -> Result<usize, Error> {
-        self.retirement.validate()?;
-        self.business_connections
-            .checked_add(self.handshakes.concurrent)
-            .and_then(|value| value.checked_add(self.retirement.generations()))
-            .ok_or(Error::Configuration)
-    }
-}
 
 impl<O: Observer> ShareRelay<O> {
     pub fn connection_usage(&self) -> ConnectionUsage {
         self.generations.usage()
-    }
-
-    /// None means exact delivery accounting is available or no responsibility remains.
-    pub fn unavailable_reservation(&self, connection: ConnectionRef) -> Option<Counts> {
-        self.generations.unavailable_reservation(connection)
     }
 
     pub(super) fn generation_quiescent(&self, connection: ConnectionRef) -> bool {
@@ -49,59 +35,14 @@ impl<O: Observer> ShareRelay<O> {
         for connection in released {
             self.collect_ledger(connection, now);
         }
-        let pending = self.generations.due_retirements(now);
-        for connection in pending {
-            if !self.generation_quiescent(connection) {
-                continue;
-            }
-            match self.generations.progress_retirement(connection, now) {
-                RetirementProgress::Waiting => {}
-                RetirementProgress::Blocked {
-                    usage,
-                    residual,
-                    generation_limit,
-                    residual_limit,
-                    expires_at,
-                } => {
-                    self.trace(
-                        Some(connection),
-                        RelayDecision::RetirementBlocked {
-                            usage,
-                            residual,
-                            generation_limit,
-                            residual_limit,
-                            expires_at,
-                        },
-                        now,
-                    );
-                }
-                RetirementProgress::Retired {
-                    residual,
-                    expires_at,
-                } => {
-                    self.trace(
-                        Some(connection),
-                        RelayDecision::Retired {
-                            residual,
-                            expires_at,
-                        },
-                        now,
-                    );
-                    self.collect_ledger(connection, now);
-                }
-                RetirementProgress::RiskExpired {
-                    residual,
-                    expires_at,
-                } => {
+        if self.limits.retirement == RetirementPolicy::AfterDiscard {
+            let detached: Vec<_> = self.generations.detached_ids().collect();
+            for connection in detached {
+                if self.generation_quiescent(connection)
+                    && self.generations.release_after_discard(connection)
+                {
                     self.sessions.release_destination(connection);
-                    self.trace(
-                        Some(connection),
-                        RelayDecision::RetirementRiskExpired {
-                            residual,
-                            expires_at,
-                        },
-                        now,
-                    );
+                    self.trace(Some(connection), RelayDecision::ResponsibilityReleased, now);
                 }
             }
         }

@@ -41,6 +41,7 @@ pub use record::{
     EncodedRecord, GraceRoute, MAX_RECORD_BYTES, OwnedRoute, PublishedRoute, Record, RecordError,
     RestoreError, StoppedShare,
 };
+#[cfg(feature = "hibernation")]
 pub use restoration::{Restoration, SessionRestore};
 pub use session::Joined;
 pub use stopping::{PendingStop, StopAcknowledgement, StopCleanup, StopResult, StopStep, StopWork};
@@ -96,28 +97,8 @@ impl<O: Observer> ShareLifecycle<O> {
         &mut self.observer
     }
 
-    /// Constructs the share actor for `relay` and `share` from `restoration`:
-    /// the stored record and whatever outlived the previous actor. Every
-    /// restore, including a replacement inside one process, needs a fresh
-    /// `incarnation`; it fences old host callbacks, never live authority.
-    ///
-    /// A committed registration survives even when its completion or REGISTERED
-    /// was lost. A published route re-adopts its stored ownership when the owner
-    /// survived, without a write; otherwise it returns `Action::Detached`, the
-    /// only deadline a restore derives, which the host persists so no later
-    /// restore extends it. A stored grace keeps its deadline, even a past one
-    /// that the next event or timer lapses. A stopping record resumes exact
-    /// authority revocation and queue discard before final persistence and STOPPED.
-    /// Delivery settlement remains independent of this lifecycle, even when stopped.
-    ///
-    /// Before returning, `install` receives one [`SessionRestore`] for each
-    /// surviving session snapshot, by its index. Only a snapshot of the
-    /// re-adopted ownership whose receiver survived, whose admission is still
-    /// within its original deadline and that no sibling contradicts becomes a
-    /// `Session` again, keeping its permits; every other one is retired alone.
-    /// Delivery ledger restoration belongs after this call:
-    /// open flows then revalidate against reinstated sessions, and a retired
-    /// snapshot's flows settle like any other retirement.
+    /// Constructs the share actor for `relay` and `share` from its durable `record`
+    /// after a cold start or process restart (with no surviving sockets).
     ///
     /// # Errors
     ///
@@ -126,13 +107,54 @@ impl<O: Observer> ShareLifecycle<O> {
     pub fn restore(
         relay: RelayIdentity,
         share: ShareId,
+        record: Option<Record>,
+        incarnation: Incarnation,
+        observer: O,
+        now: UnixMillis,
+    ) -> Result<(Self, Action<'static>), RestoreError> {
+        Self::restore_inner(relay, share, record, &[], incarnation, observer, now)
+    }
+
+    /// Constructs the share actor over surviving hibernated sockets and their
+    /// recorded session snapshots.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`RestoreError`] when the record names another relay or share,
+    /// or was minted by `incarnation`.
+    #[cfg(feature = "hibernation")]
+    pub fn restore_hibernated(
+        relay: RelayIdentity,
+        share: ShareId,
         restoration: Restoration<'_>,
         incarnation: Incarnation,
         observer: O,
         now: UnixMillis,
         install: impl FnMut(usize, SessionRestore),
     ) -> Result<(Self, Action<'static>), RestoreError> {
-        match restoration.record {
+        let (mut lifecycle, action) = Self::restore_inner(
+            relay,
+            share,
+            restoration.record,
+            restoration.connections,
+            incarnation,
+            observer,
+            now,
+        )?;
+        lifecycle.restore_sessions(&restoration, now, install);
+        Ok((lifecycle, action))
+    }
+
+    fn restore_inner(
+        relay: RelayIdentity,
+        share: ShareId,
+        record: Option<Record>,
+        connections: &[ConnectionRef],
+        incarnation: Incarnation,
+        observer: O,
+        now: UnixMillis,
+    ) -> Result<(Self, Action<'static>), RestoreError> {
+        match record {
             Some(record) if record.relay() != relay => return Err(RestoreError::ForeignRelay),
             Some(record) if record.share() != share => return Err(RestoreError::ForeignShare),
             Some(Record::Stopping(pending))
@@ -154,8 +176,7 @@ impl<O: Observer> ShareLifecycle<O> {
             state: State::Vacant,
             observer,
         };
-        let (action, operation, connection) =
-            lifecycle.install(restoration.record, restoration.connections, now);
+        let (action, operation, connection) = lifecycle.install(record, connections, now);
         let phase = lifecycle.phase();
         lifecycle.observe(
             now,
@@ -165,7 +186,6 @@ impl<O: Observer> ShareLifecycle<O> {
             phase,
             decision(&action),
         );
-        lifecycle.restore_sessions(&restoration, now, install);
         Ok((lifecycle, action))
     }
 

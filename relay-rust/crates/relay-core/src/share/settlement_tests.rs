@@ -239,6 +239,7 @@ fn consumed_cannot_prove_queue_discard_and_replayed_ack_cannot_touch_reused_slot
     assert_ne!(next.wire_id(), key.wire_id());
 }
 
+#[cfg(feature = "hibernation")]
 #[test]
 fn hibernated_wire_ack_after_deadline_cannot_reopen_a_closing_connection() {
     let fixture = Fixture::new();
@@ -249,15 +250,15 @@ fn hibernated_wire_ack_after_deadline_cannot_reopen_a_closing_connection() {
     cancel(&mut relay, key, fixture.at);
     discard(&mut relay, &flows, fixture.at);
     let deadline = relay.deadline().unwrap();
-    let checkpoint =
-        Checkpoint::decode(&relay.checkpoint().unwrap().encode(), Fixture::limits()).unwrap();
-    let (mut restored, _) = Relay::restore(
+    let snapshots = snapshot_all(&relay);
+    let (mut restored, _) = Relay::restore_hibernated(
         fixture.identity(2),
         Fixture::limits(),
-        &Restore {
-            authority: Authority::Known(Some(stored)),
+        &Hibernated {
+            record: Some(stored),
+            last_session: relay.last_session(),
             surviving: &[key.sender(), key.receiver()],
-            responsibility: Responsibility::Checkpoint(&checkpoint),
+            connections: &snapshots,
         },
         Trace::default(),
         fixture.at,

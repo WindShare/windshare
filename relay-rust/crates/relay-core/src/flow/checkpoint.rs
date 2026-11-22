@@ -1,7 +1,6 @@
 //! A connection's complete delivery responsibility, including retired flows.
 use super::{
-    ConnectionLedger, ConnectionState, Counts, Delivery, FlowKey, Limits, Observer,
-    ReceiveCapacity, delivery::State,
+    ConnectionLedger, ConnectionState, Counts, Delivery, Limits, Observer, ReceiveCapacity,
 };
 use crate::{clock::UnixMillis, identifiers::RelayIdentity, lifecycle::ConnectionRef};
 use alloc::vec::Vec;
@@ -29,17 +28,9 @@ impl LedgerCheckpoint {
     pub const fn destination(&self) -> ConnectionRef {
         self.destination
     }
-    pub(crate) fn flows(&self) -> impl Iterator<Item = FlowKey> + '_ {
-        self.entries.iter().map(|entry| entry.key)
-    }
 }
 
 impl<O: Observer> ConnectionLedger<O> {
-    // The aggregate drains this after each operation, independently of diagnostic logging.
-    pub(crate) const fn take_checkpoint_change(&mut self) -> bool {
-        core::mem::replace(&mut self.checkpoint_changed, false)
-    }
-
     /// A hibernating host cannot retain an application payload queue.
     ///
     /// # Errors
@@ -138,14 +129,7 @@ impl<O: Observer> ConnectionLedger<O> {
         // A final receipt may have removed the last flow after closure was requested.
         // That does not rescind the pending close or reopen a confirmed closed lifetime.
         ledger.state = checkpoint.state;
-        ledger.checkpoint_changed = false;
         Ok(ledger)
-    }
-
-    pub(crate) fn checkpoint_flows(&self) -> impl Iterator<Item = (FlowKey, bool)> + '_ {
-        self.entries
-            .iter()
-            .map(|entry| (entry.key, entry.state == State::Open))
     }
 }
 

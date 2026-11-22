@@ -263,6 +263,7 @@ mod revocation;
 #[path = "session_authority_tests.rs"]
 mod authority;
 
+#[cfg(feature = "hibernation")]
 #[path = "session_restoration_tests.rs"]
 mod restoration;
 

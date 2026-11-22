@@ -314,16 +314,31 @@ fn partial_consumption_and_cleanup_retries_cannot_delay_the_oldest_retirement() 
     );
     assert_eq!(ledger.close_request(), Some(close));
     assert_eq!(ledger.usage().total(), Counts::ZERO);
-    let mut restored = restore_ledger(&fixture, two.destination(), &ledger);
-    assert_eq!(restored.close_request(), Some(close));
-    assert_eq!(
-        restored.confirm_closed(two.destination(), deadline),
-        Ok(Counts::ZERO)
-    );
-    let mut closed = restore_ledger(&fixture, two.destination(), &restored);
-    let replacement = join(&fixture, &mut engine, connection(4, 1), 3, deadline);
-    let route = replacement
-        .check_route(&engine, Direction::ToSender, deadline)
-        .unwrap();
-    assert_eq!(closed.open(&route, deadline), Err(FlowRefusal::Closed));
+    #[cfg(feature = "hibernation")]
+    {
+        let mut restored = restore_ledger(&fixture, two.destination(), &ledger);
+        assert_eq!(restored.close_request(), Some(close));
+        assert_eq!(
+            restored.confirm_closed(two.destination(), deadline),
+            Ok(Counts::ZERO)
+        );
+        let mut closed = restore_ledger(&fixture, two.destination(), &restored);
+        let replacement = join(&fixture, &mut engine, connection(4, 1), 3, deadline);
+        let route = replacement
+            .check_route(&engine, Direction::ToSender, deadline)
+            .unwrap();
+        assert_eq!(closed.open(&route, deadline), Err(FlowRefusal::Closed));
+    }
+    #[cfg(not(feature = "hibernation"))]
+    {
+        assert_eq!(
+            ledger.confirm_closed(two.destination(), deadline),
+            Ok(Counts::ZERO)
+        );
+        let replacement = join(&fixture, &mut engine, connection(4, 1), 3, deadline);
+        let route = replacement
+            .check_route(&engine, Direction::ToSender, deadline)
+            .unwrap();
+        assert_eq!(ledger.open(&route, deadline), Err(FlowRefusal::Closed));
+    }
 }

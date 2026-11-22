@@ -445,12 +445,7 @@ fn a_silent_receiver_loses_authority_without_refunding_debt_or_closing_siblings(
         relay.delivery_usage(silent.receiver()).unwrap().submitted,
         before.submitted
     );
-    assert!(
-        relay
-            .generations
-            .retirement_state(&silent.receiver())
-            .is_none()
-    );
+    assert!(!relay.generations.is_detached(&silent.receiver()));
     assert!(
         relay
             .submit(
@@ -463,6 +458,7 @@ fn a_silent_receiver_loses_authority_without_refunding_debt_or_closing_siblings(
     );
 }
 
+#[cfg(feature = "hibernation")]
 #[test]
 fn repeated_hibernation_preserves_original_expiry_nonce_and_delivery_debt() {
     let fixture = Fixture::new();
@@ -476,15 +472,15 @@ fn repeated_hibernation_preserves_original_expiry_nonce_and_delivery_debt() {
     let expires = at.saturating_add(CONNECTION_SILENCE_TIMEOUT);
     let usage = relay.delivery_usage(key.sender());
     for incarnation in 2..=3 {
-        let checkpoint =
-            Checkpoint::decode(&relay.checkpoint().unwrap().encode(), Fixture::limits()).unwrap();
-        let (restored, step) = Relay::restore(
+        let snapshots = snapshot_all(&relay);
+        let (restored, step) = Relay::restore_hibernated(
             fixture.identity(incarnation),
             Fixture::limits(),
-            &Restore {
-                authority: Authority::Known(Some(stored)),
+            &Hibernated {
+                record: Some(stored),
+                last_session: relay.last_session(),
                 surviving: &[key.sender(), key.receiver()],
-                responsibility: Responsibility::Checkpoint(&checkpoint),
+                connections: &snapshots,
             },
             Trace::default(),
             UnixMillis(expires.0 - u64::from(4 - incarnation)),
@@ -495,19 +491,20 @@ fn repeated_hibernation_preserves_original_expiry_nonce_and_delivery_debt() {
         assert_eq!(restored.delivery_usage(key.sender()), usage);
         relay = restored;
     }
-    let checkpoint =
-        Checkpoint::decode(&relay.checkpoint().unwrap().encode(), Fixture::limits()).unwrap();
+    let snapshots = snapshot_all(&relay);
+    let last_session = relay.last_session();
     assert_eq!(
         probe(&mut relay, key.receiver(), 7, UnixMillis(expires.0 - 1)).refusal,
         Some(Error::ProbeNonce)
     );
-    let (mut resumed, _) = Relay::restore(
+    let (mut resumed, _) = Relay::restore_hibernated(
         fixture.identity(4),
         Fixture::limits(),
-        &Restore {
-            authority: Authority::Known(Some(stored)),
+        &Hibernated {
+            record: Some(stored),
+            last_session,
             surviving: &[key.sender(), key.receiver()],
-            responsibility: Responsibility::Checkpoint(&checkpoint),
+            connections: &snapshots,
         },
         Trace::default(),
         UnixMillis(expires.0 - 1),
@@ -523,13 +520,14 @@ fn repeated_hibernation_preserves_original_expiry_nonce_and_delivery_debt() {
         deadline(&resumed, key.receiver()),
         received_at.saturating_add(CONNECTION_SILENCE_TIMEOUT)
     );
-    let (restored, step) = Relay::restore(
+    let (restored, step) = Relay::restore_hibernated(
         fixture.identity(4),
         Fixture::limits(),
-        &Restore {
-            authority: Authority::Known(Some(stored)),
+        &Hibernated {
+            record: Some(stored),
+            last_session,
             surviving: &[key.sender(), key.receiver()],
-            responsibility: Responsibility::Checkpoint(&checkpoint),
+            connections: &snapshots,
         },
         Trace::default(),
         expires,

@@ -1,8 +1,12 @@
 use super::{
-    storage::{Database, MANIFEST, api},
+    storage::{Database, IMAGE, api},
     trace::Trace,
 };
-use crate::{config, persistence, runtime::Host};
+use crate::{
+    config,
+    persistence::{self, Image},
+    runtime::Host,
+};
 use anyhow::{Result, anyhow, ensure};
 use js_sys::{ArrayBuffer, Uint8Array};
 use wasm_bindgen::JsCast;
@@ -11,7 +15,7 @@ use windshare_relay_core::{
     challenge::ChallengeSeed,
     clock::UnixMillis,
     lifecycle::{ConnectionRef, Incarnation},
-    share::{CheckpointTarget, Identity, Storage},
+    share::{Identity, Storage},
 };
 use worker::{State, WebSocket, worker_sys::ext::WebSocketExt};
 
@@ -96,6 +100,7 @@ pub struct CloudflareHost<'a> {
     pub state: &'a State,
     pub database: Database,
     pub identity: Identity,
+    pub image: &'a mut Image,
 }
 
 impl Host for CloudflareHost<'_> {
@@ -138,23 +143,26 @@ impl Host for CloudflareHost<'_> {
         Ok(())
     }
 
-    fn checkpoint(&mut self, target: CheckpointTarget, bytes: &[u8]) -> Result<()> {
-        match target {
-            CheckpointTarget::Manifest => self.database.put_bytes(MANIFEST, bytes),
-            CheckpointTarget::Generation(connection) => {
-                if let Some(ws) = socket(self.state, connection) {
-                    ensure!(
-                        bytes.len() <= config::budget().payload_bytes(),
-                        "attachment budget"
-                    );
-                    // Use a typed byte array, avoiding serde's JS number-array expansion.
-                    // serializeAttachment itself enforces the actual structured-clone limit.
-                    ws.as_ref()
-                        .serialize_attachment(Uint8Array::from(bytes).into())
-                        .map_err(|error| anyhow!("attachment rejected: {error:?}"))?;
-                }
-                Ok(())
-            }
+    fn save_attachment(&mut self, connection: ConnectionRef, bytes: &[u8]) -> Result<()> {
+        if let Some(ws) = socket(self.state, connection) {
+            ensure!(
+                bytes.len() <= config::budget().payload_bytes(),
+                "attachment budget"
+            );
+            // Use a typed byte array, avoiding serde's JS number-array expansion.
+            // serializeAttachment itself enforces the actual structured-clone limit.
+            ws.as_ref()
+                .serialize_attachment(Uint8Array::from(bytes).into())
+                .map_err(|error| anyhow!("attachment rejected: {error:?}"))?;
         }
+        Ok(())
+    }
+
+    fn save_last_session(&mut self, last_session: u64) -> Result<()> {
+        let mut updated = self.image.clone();
+        updated.last_session = last_session;
+        self.database.put(IMAGE, &updated)?;
+        self.image.last_session = last_session;
+        Ok(())
     }
 }

@@ -16,7 +16,7 @@ use windshare_relay_core::{
     flow::Counts,
     identifiers::RelaySessionId,
     sessions::{Direction, OpaqueHeader, SessionKey},
-    share::{Control, Input, Output, Responsibility, Restore, WorkResult},
+    share::{Control, Input, Output, WorkResult},
 };
 
 struct Scenario {
@@ -36,14 +36,8 @@ impl Scenario {
         let mut identity = fixture.identity();
         identity.incarnation =
             windshare_relay_core::lifecycle::Incarnation::new([incarnation; 16]).unwrap();
-        let (mut relay, _) = ShareRelay::restore(
-            identity,
-            limits(),
-            &Restore::restarted(None, Responsibility::Released { previous: None }),
-            Trace,
-            fixture.now(true),
-        )
-        .unwrap();
+        let (mut relay, _) =
+            ShareRelay::restore(identity, limits(), None, Trace, fixture.now(true)).unwrap();
         fixture.begin(&mut relay, true);
         fixture.begin(&mut relay, false);
         let at = fixture.now(false);

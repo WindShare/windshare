@@ -20,8 +20,11 @@
 mod accounting;
 mod capacity;
 pub use capacity::ReceiveCapacity;
+#[cfg(feature = "hibernation")]
 mod checkpoint;
+#[cfg(feature = "hibernation")]
 mod checkpoint_codec;
+#[cfg(feature = "hibernation")]
 pub use checkpoint::{CheckpointError, LedgerCheckpoint};
 mod consumed;
 pub use consumed::DeliveryConsumed;
@@ -135,13 +138,16 @@ pub struct ConnectionLedger<O> {
     startup_used: Counts,
     state: ConnectionState,
     next_expiration: Option<CloseRequest>,
-    checkpoint_changed: bool,
     observer: O,
 }
 
 impl<O: Observer> ConnectionLedger<O> {
     pub(crate) const fn observer_mut(&mut self) -> &mut O {
         &mut self.observer
+    }
+
+    pub(crate) fn flows(&self) -> impl Iterator<Item = (FlowKey, Phase)> + '_ {
+        self.entries.iter().map(|entry| (entry.key, entry.phase()))
     }
 
     /// Starts accounting for a newly opened physical connection, never a live reset.
@@ -169,7 +175,6 @@ impl<O: Observer> ConnectionLedger<O> {
             startup_used: Counts::ZERO,
             state: ConnectionState::Open,
             next_expiration: None,
-            checkpoint_changed: false,
             observer,
         })
     }
@@ -248,7 +253,6 @@ impl<O: Observer> ConnectionLedger<O> {
 
     fn replace(&mut self, slot: usize, next: Option<Delivery>) {
         let before = self.entries.get(slot);
-        self.checkpoint_changed = self.checkpoint_changed || before != next;
         self.usage = self.usage.replace(
             before.map_or_else(Usage::default, Delivery::usage),
             next.map_or_else(Usage::default, Delivery::usage),

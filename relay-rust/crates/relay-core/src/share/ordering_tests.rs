@@ -1,7 +1,8 @@
 use super::*;
 
+#[cfg(feature = "hibernation")]
 #[test]
-fn stopping_restore_waits_for_queue_discard_but_not_retained_generations() {
+fn stopping_restore_closes_surviving_sockets_and_commits_stopped() {
     let fixture = Fixture::new();
     let mut relay = fixture.relay();
     fixture.prepare_stop(&mut relay);
@@ -14,69 +15,39 @@ fn stopping_restore_waits_for_queue_discard_but_not_retained_generations() {
             .refusal,
         None
     );
-    let checkpoint =
-        Checkpoint::decode(&relay.checkpoint().unwrap().encode(), Fixture::limits()).unwrap();
+    let snapshots = snapshot_all(&relay);
+    let last_session = relay.last_session();
     let intent = work(&fixture.stop(&mut relay));
     let record = next_record(&intent);
-    for surviving in [&[key.sender(), key.receiver()][..], &[]] {
-        let (mut restored, step) = Relay::restore(
+    for (surviving, connections) in [
+        (&[key.sender(), key.receiver()][..], snapshots.as_slice()),
+        (&[], &[]),
+    ] {
+        let (mut restored, step) = Relay::restore_hibernated(
             fixture.identity(2),
             Fixture::limits(),
-            &Restore {
-                authority: Authority::Known(Some(record)),
+            &Hibernated {
+                record: Some(record),
+                last_session,
                 surviving,
-                responsibility: Responsibility::Checkpoint(&checkpoint),
+                connections,
             },
             Trace::default(),
             fixture.at,
         )
         .unwrap();
-        assert!(
-            !step
-                .outputs
-                .iter()
-                .any(|output| matches!(output, Output::Work(_)))
-        );
-        if !surviving.is_empty() {
+        for &peer in surviving {
             assert!(
-                step.outputs.iter().any(
-                    |output| matches!(output, Output::Close(value) if *value == key.receiver())
-                )
-            );
-        }
-        for participant in [key.sender(), key.receiver()] {
-            let disconnected = restored.handle(Input::Disconnected(participant), fixture.at);
-            assert!(
-                !disconnected
-                    .outputs
+                step.outputs
                     .iter()
-                    .any(|output| matches!(output, Output::Work(_)))
+                    .any(|output| matches!(output, Output::Close(value) if *value == peer))
             );
         }
-        let discards: Vec<_> = step
-            .outputs
-            .iter()
-            .filter_map(|output| match output {
-                Output::Discard(flow) => Some(*flow),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(discards.len(), 2);
-        let first = restored.handle(Input::Discarded(discards[0]), fixture.at);
-        assert!(
-            !first
-                .outputs
-                .iter()
-                .any(|output| matches!(output, Output::Work(_)))
-        );
-        let commit = work(&restored.handle(Input::Discarded(discards[1]), fixture.at));
+        let commit = work(&step);
         assert!(matches!(next_record(&commit), Record::Stopped(_)));
         let _ = complete(&mut restored, &commit, fixture.at);
-        assert_eq!(
-            ledger_of(&restored, key.sender()).usage().submitted,
-            Counts::new(1, 21)
-        );
-        assert!(restored.checkpoint().is_ok());
+        assert_eq!(restored.lifecycle.phase(), crate::lifecycle::Phase::Stopped);
+        assert!(restored.established_connections().next().is_none());
     }
 }
 
@@ -267,7 +238,7 @@ fn startup_exhaustion_does_not_leak_credit_and_reclaimed_capacity_admits_again()
     let (mut relay, _) = Relay::restore(
         fixture.identity(1),
         limits,
-        &Restore::restarted(None, Responsibility::Released { previous: None }),
+        None,
         Trace::default(),
         fixture.at,
     )
@@ -327,23 +298,27 @@ fn stale_completion_and_generation_feedback_cannot_release_new_occupancy() {
         fixture.at,
     );
     assert!(stale.outputs.is_empty());
-    let snapshot = relay.checkpoint().unwrap();
-    let (mut restored, _) = Relay::restore(
-        fixture.identity(2),
-        Fixture::limits(),
-        &Restore {
-            authority: Authority::Known(Some(next_record(&durable))),
-            surviving: &[key.sender(), key.receiver()],
-            responsibility: Responsibility::Checkpoint(&snapshot),
-        },
-        Trace::default(),
-        fixture.at,
-    )
-    .unwrap();
-    assert_eq!(
-        restored
-            .submit(&receipt, fixture.at, |_| panic!("duplicate handoff"))
-            .refusal,
-        Some(Error::Flow(crate::flow::Refusal::SubmissionOrder))
-    );
+    #[cfg(feature = "hibernation")]
+    {
+        let snapshots = snapshot_all(&relay);
+        let (mut restored, _) = Relay::restore_hibernated(
+            fixture.identity(2),
+            Fixture::limits(),
+            &Hibernated {
+                record: Some(next_record(&durable)),
+                last_session: relay.last_session(),
+                surviving: &[key.sender(), key.receiver()],
+                connections: &snapshots,
+            },
+            Trace::default(),
+            fixture.at,
+        )
+        .unwrap();
+        assert_eq!(
+            restored
+                .submit(&receipt, fixture.at, |_| panic!("duplicate handoff"))
+                .refusal,
+            Some(Error::Flow(crate::flow::Refusal::SubmissionOrder))
+        );
+    }
 }

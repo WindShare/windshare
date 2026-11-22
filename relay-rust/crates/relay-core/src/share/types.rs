@@ -38,11 +38,11 @@ pub enum Error {
     ProbeNonce,
     Configuration,
     Restore(crate::lifecycle::RestoreError),
+    #[cfg(feature = "hibernation")]
     InvalidCheckpoint,
-    MissingAuthority,
-    MissingResponsibility,
+    #[cfg(feature = "hibernation")]
     CheckpointBusy,
-    CheckpointDisabled,
+    #[cfg(feature = "hibernation")]
     CheckpointCapacity,
     Flow(crate::flow::Refusal),
     Frame(crate::wire::FrameError),

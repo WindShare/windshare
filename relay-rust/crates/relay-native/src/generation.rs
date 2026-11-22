@@ -12,10 +12,7 @@ use tokio::{
     task::{AbortHandle, JoinHandle},
 };
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
-use windshare_relay_core::{
-    lifecycle::Record,
-    share::{Identity, Responsibility, Restore},
-};
+use windshare_relay_core::{lifecycle::Record, share::Identity};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Phase {
@@ -53,7 +50,7 @@ impl Recovery {
         })
     }
 
-    pub fn restore(self, identity: Identity, record: Option<Record>) -> Result<Restore<'static>> {
+    pub fn restore(self, identity: Identity, record: Option<Record>) -> Result<Option<Record>> {
         match self.0 {
             Evidence::Vacant { host_generation } => {
                 // Native transports use abortive close and never export buffer
@@ -81,10 +78,7 @@ impl Recovery {
                     cause = "actor_cleanup");
             }
         }
-        Ok(Restore::restarted(
-            record,
-            Responsibility::Released { previous: None },
-        ))
+        Ok(record)
     }
 }
 

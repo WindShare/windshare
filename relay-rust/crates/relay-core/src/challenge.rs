@@ -40,13 +40,6 @@ pub struct ChallengeSeed {
 }
 
 impl ChallengeSeed {
-    pub(crate) fn checkpoint(&self) -> [u8; 48] {
-        let mut bytes = [0; 48];
-        bytes[..16].copy_from_slice(self.id.as_bytes());
-        bytes[16..].copy_from_slice(self.nonce.as_bytes());
-        bytes
-    }
-
     /// Returns `None` when either value is all zeros, which the wire reserves
     /// and only a broken random source produces.
     pub fn new(id: [u8; 16], nonce: [u8; 32]) -> Option<Self> {

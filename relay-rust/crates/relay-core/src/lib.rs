@@ -7,9 +7,9 @@
 //! before host handoff; retirement cannot refund bytes still held by a transport.
 //!
 //! Hosts provide time, entropy, capacity and I/O. Opaque payloads never enter the
-//! engine. Aggregate checkpoints restore surviving authority and outstanding
-//! delivery together; lower-level state machines remain independently testable.
-//! All decisions use [`observation::Observer`].
+//! engine. With the optional `hibernation` feature, hosts that hibernate live
+//! sockets can snapshot and restore established connections; lower-level state
+//! machines remain independently testable. All decisions use [`observation::Observer`].
 
 #![no_std]
 

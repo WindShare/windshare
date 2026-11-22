@@ -45,25 +45,7 @@ pub enum RelayDecision {
         deadline: UnixMillis,
     },
     ResponsibilityReleased,
-    RecoveryIsolated {
-        reserved: flow::Counts,
-    },
-    Retired {
-        residual: flow::Counts,
-        expires_at: UnixMillis,
-    },
-    /// Policy accounting ended without a consumption or physical-release receipt.
-    RetirementRiskExpired {
-        residual: flow::Counts,
-        expires_at: UnixMillis,
-    },
-    RetirementBlocked {
-        usage: crate::share::ConnectionUsage,
-        residual: flow::Counts,
-        generation_limit: usize,
-        residual_limit: flow::Counts,
-        expires_at: UnixMillis,
-    },
+    #[cfg(feature = "hibernation")]
     ResponsibilityRestored {
         communicating: bool,
         usage: flow::Usage,
@@ -98,15 +80,8 @@ pub enum RelayDecision {
         connections: usize,
         retained_generations: usize,
     },
+    #[cfg(feature = "hibernation")]
     InvalidSnapshot,
-    CheckpointingEnabled {
-        payload_bytes: usize,
-    },
-    CheckpointsFlushed {
-        connections: usize,
-        encoded_bytes: usize,
-    },
-    CheckpointWriteFailed,
     Rejected(crate::share::Error),
 }
 

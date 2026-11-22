@@ -7,10 +7,7 @@ use windshare_relay_core::{
     identifiers::RelayIdentity,
     lifecycle::{ConnectionRef, Incarnation},
     registration::RegisterInit,
-    share::{
-        Identity, Input, Output, RelayStep, Responsibility, Restore, ShareRelay, Storage, Work,
-        WorkResult,
-    },
+    share::{Identity, Input, Output, RelayStep, ShareRelay, Storage, Work, WorkResult},
 };
 
 pub struct Fixture(pub serde_json::Value);
@@ -59,14 +56,8 @@ impl Fixture {
         }
     }
     pub fn works(&self) -> Vec<Storage> {
-        let (mut relay, _) = ShareRelay::restore(
-            self.identity(),
-            limits(),
-            &Restore::restarted(None, Responsibility::Released { previous: None }),
-            Trace,
-            self.now(true),
-        )
-        .unwrap();
+        let (mut relay, _) =
+            ShareRelay::restore(self.identity(), limits(), None, Trace, self.now(true)).unwrap();
         self.begin(&mut relay, true);
         self.begin(&mut relay, false);
         let _ = relay.handle(

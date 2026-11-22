@@ -14,7 +14,7 @@ fn bounded(fixture: &Fixture, business: usize, controls: usize) -> Relay {
     Relay::restore(
         fixture.identity(1),
         limits,
-        &Restore::restarted(None, Responsibility::Released { previous: None }),
+        None,
         Trace::default(),
         fixture.at,
     )
@@ -96,44 +96,33 @@ fn full_business_budget_allows_authenticated_stop_without_refunding_delivery() {
     assert_eq!(relay.connection_usage().controls, 0);
 }
 
+#[cfg(feature = "hibernation")]
 #[test]
-fn hibernation_preserves_stop_capacity_beside_unreleased_business_generations() {
+fn hibernation_preserves_stop_capacity_beside_saturated_business_connections() {
     let fixture = Fixture::new();
     let mut relay = bounded(&fixture, 2, 1);
     let stored = fixture.register(&mut relay);
     let (session, flows) = fixture.join(&mut relay, 2);
     submit_frames(&mut relay, session, flows[0], 1, fixture.at);
-    let detached = relay.handle(Input::Disconnected(session.receiver()), fixture.at);
-    for output in detached.outputs {
-        if let Output::Discard(flow) = output {
-            let _ = relay.handle(Input::Discarded(flow), fixture.at);
-        }
-    }
-    fixture.prepare_stop(&mut relay);
-    let deadline = relay.generations.control_deadline(&connection(99)).unwrap();
-    let checkpoint =
-        Checkpoint::decode(&relay.checkpoint().unwrap().encode(), relay.limits).unwrap();
-    let (mut restored, _) = Relay::restore(
+    let snapshots = snapshot_all(&relay);
+    let (mut restored, _) = Relay::restore_hibernated(
         fixture.identity(2),
         relay.limits,
-        &Restore {
-            authority: Authority::Known(Some(stored)),
-            surviving: &[session.sender(), connection(99)],
-            responsibility: Responsibility::Checkpoint(&checkpoint),
+        &Hibernated {
+            record: Some(stored),
+            last_session: relay.last_session(),
+            surviving: &[session.sender(), session.receiver()],
+            connections: &snapshots,
         },
         Trace::default(),
         fixture.at,
     )
     .unwrap();
     assert_eq!(restored.connection_usage().business, 2);
+    assert_eq!(restored.connection_usage().controls, 0);
+    assert_business_capacity_refused(&fixture, &mut restored, connection(10), fixture.at);
+    fixture.prepare_stop(&mut restored);
     assert_eq!(restored.connection_usage().controls, 1);
-    assert_eq!(
-        restored
-            .generations
-            .control_deadline(&connection(99))
-            .unwrap(),
-        deadline
-    );
     let stop = fixture.stop(&mut restored);
     assert!(finish_stop(&mut restored, stop, fixture.at));
     assert_eq!(
@@ -172,7 +161,7 @@ fn reserved_control_capacity_still_requires_a_valid_sender_proof() {
 }
 
 #[test]
-fn control_concurrency_and_attempt_rate_remain_bounded_across_reconstruction() {
+fn control_concurrency_and_attempt_rate_remain_bounded() {
     let fixture = Fixture::new();
     let mut limits = Fixture::limits();
     limits.handshakes = HandshakeLimits {
@@ -185,7 +174,7 @@ fn control_concurrency_and_attempt_rate_remain_bounded_across_reconstruction() {
     let (mut relay, _) = Relay::restore(
         fixture.identity(1),
         limits,
-        &Restore::restarted(None, Responsibility::Released { previous: None }),
+        None,
         Trace::default(),
         fixture.at,
     )
@@ -210,15 +199,6 @@ fn control_concurrency_and_attempt_rate_remain_bounded_across_reconstruction() {
         None
     );
     let _ = relay.handle(Input::Closed(connection(2)), fixture.at);
-    let checkpoint = Checkpoint::decode(&relay.checkpoint().unwrap().encode(), limits).unwrap();
-    let (mut relay, _) = Relay::restore(
-        fixture.identity(2),
-        limits,
-        &Restore::restarted(None, Responsibility::Checkpoint(&checkpoint)),
-        Trace::default(),
-        fixture.at,
-    )
-    .unwrap();
     assert_eq!(
         relay
             .handle(
@@ -238,43 +218,6 @@ fn control_concurrency_and_attempt_rate_remain_bounded_across_reconstruction() {
         None
     );
     assert_eq!(relay.connection_usage().business, 0);
-}
-
-#[test]
-fn a_control_handshake_does_not_renew_its_first_frame_deadline_on_hibernation() {
-    let fixture = Fixture::new();
-    let mut relay = bounded(&fixture, 1, 1);
-    let _ = relay.handle(Input::Connected(connection(1)), fixture.at);
-    let deadline = relay.deadline().unwrap();
-    let checkpoint = relay.checkpoint().unwrap();
-    let (mut relay, _) = Relay::restore(
-        fixture.identity(2),
-        relay.limits,
-        &Restore {
-            authority: Authority::Known(None),
-            surviving: &[connection(1)],
-            responsibility: Responsibility::Checkpoint(&checkpoint),
-        },
-        Trace::default(),
-        UnixMillis(deadline.0 - 1),
-    )
-    .unwrap();
-    assert_eq!(relay.deadline(), Some(deadline));
-    let expired = relay.handle(Input::Tick, deadline);
-    assert!(
-        expired
-            .outputs
-            .iter()
-            .any(|output| matches!(output, Output::Close(target) if *target == connection(1)))
-    );
-    let _ = relay.handle(Input::Disconnected(connection(1)), deadline);
-    assert_eq!(relay.connection_usage().controls, 0);
-    assert_eq!(
-        relay
-            .handle(Input::Connected(connection(2)), deadline)
-            .refusal,
-        None
-    );
 }
 
 #[test]
@@ -301,52 +244,6 @@ fn pending_stop_storage_cannot_hold_a_control_socket_indefinitely() {
             .handle(Input::Connected(connection(100)), deadline)
             .refusal,
         None
-    );
-}
-
-#[test]
-fn lost_control_records_never_create_payload_debt_and_terminal_sockets_are_reclosed() {
-    let fixture = Fixture::new();
-    let mut relay = bounded(&fixture, 1, 1);
-    let _ = relay.handle(Input::Connected(connection(1)), fixture.at);
-    let manifest = relay.checkpoint_manifest().unwrap();
-    let missing = Checkpoint::from_connections(&manifest, Vec::new(), relay.limits).unwrap();
-    let (restored, step) = Relay::restore(
-        fixture.identity(2),
-        relay.limits,
-        &Restore {
-            authority: Authority::Known(None),
-            surviving: &[connection(1)],
-            responsibility: Responsibility::Checkpoint(&missing),
-        },
-        Trace::default(),
-        fixture.at,
-    )
-    .unwrap();
-    assert!(
-        step.outputs
-            .iter()
-            .any(|output| matches!(output, Output::Close(target) if *target == connection(1)))
-    );
-    assert_eq!(restored.connection_usage(), ConnectionUsage::default());
-    relay.close(connection(1), &mut RelayStep::default());
-    let checkpoint = relay.checkpoint().unwrap();
-    let (_, step) = Relay::restore(
-        fixture.identity(2),
-        relay.limits,
-        &Restore {
-            authority: Authority::Known(None),
-            surviving: &[connection(1)],
-            responsibility: Responsibility::Checkpoint(&checkpoint),
-        },
-        Trace::default(),
-        fixture.at,
-    )
-    .unwrap();
-    assert!(
-        step.outputs
-            .iter()
-            .any(|output| matches!(output, Output::Close(target) if *target == connection(1)))
     );
 }
 

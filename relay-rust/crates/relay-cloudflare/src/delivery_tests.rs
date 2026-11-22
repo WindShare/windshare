@@ -103,7 +103,7 @@ fn bidirectional_windows_survive_hibernation_without_sql_or_replay_credit() {
     let mut runtime = host.restore(1).unwrap();
     host.registered(&mut runtime, &f);
     let session = join(&mut host, &mut runtime, &f, 2);
-    let mut writes = (host.writes, host.manifest_writes);
+    let mut writes = (host.writes, host.image_writes);
     let initial = [grants(&host, 1, session), grants(&host, 2, session)];
     let mut total = Counts::ZERO;
     for batch in 0..12 {
@@ -123,11 +123,11 @@ fn bidirectional_windows_survive_hibernation_without_sql_or_replay_credit() {
         }
         // Both complete envelopes still occupy the full window before consumption.
         let before = [grants(&host, 1, session), grants(&host, 2, session)];
-        assert_eq!((host.writes, host.manifest_writes), writes);
+        assert_eq!((host.writes, host.image_writes), writes);
         drop(runtime);
         host.time.0 += 10;
         runtime = host.restore(u8::try_from(batch + 2).unwrap()).unwrap();
-        writes = (host.writes, host.manifest_writes);
+        writes = (host.writes, host.image_writes);
         assert_eq!(
             [grants(&host, 1, session), grants(&host, 2, session)],
             before
@@ -152,7 +152,7 @@ fn bidirectional_windows_survive_hibernation_without_sql_or_replay_credit() {
             [grants(&host, 1, session), grants(&host, 2, session)],
             after
         );
-        assert_eq!((host.writes, host.manifest_writes), writes);
+        assert_eq!((host.writes, host.image_writes), writes);
     }
 }
 
@@ -274,7 +274,7 @@ fn receiver_loss_and_hibernation_discard_late_ingress_without_closing_siblings()
             runtime = host.restore(boot).unwrap();
         }
         let before = host.sent.len();
-        let writes = (host.writes, host.manifest_writes);
+        let writes = (host.writes, host.image_writes);
         forward(&mut host, &mut runtime, 1, retired, 1);
         admit(&mut host, &mut runtime, &f, retired);
         assert_eq!(
@@ -282,7 +282,7 @@ fn receiver_loss_and_hibernation_discard_late_ingress_without_closing_siblings()
             before,
             "discarded inputs cannot forward or grant credit"
         );
-        assert_eq!((host.writes, host.manifest_writes), writes);
+        assert_eq!((host.writes, host.image_writes), writes);
         assert!(host.live.contains(&connection(1)));
         assert!(host.live.contains(&connection(3)));
         for source in [3, 1] {
@@ -323,31 +323,24 @@ fn uncertain_payload_handoff_retires_only_its_destination_and_dependent_flow() {
 }
 
 #[test]
-fn lost_inventory_never_becomes_first_creation_with_or_without_authority_or_sockets() {
+fn lost_owner_attachment_transitions_to_grace_and_preserves_authority() {
     let f = Fixture::new();
-    for published in [false, true] {
-        for sockets in [false, true] {
-            let mut host = Memory::new(&f);
-            let mut runtime = host.restore(1).unwrap();
-            if published {
-                host.registered(&mut runtime, &f);
-                let session = join(&mut host, &mut runtime, &f, 2);
-                forward(&mut host, &mut runtime, 2, session, 1);
-            } else {
-                host.open(&mut runtime, 1);
-            }
-            drop(runtime);
-            host.manifest = None;
-            if !sockets {
-                host.live.clear();
-                host.attachments.clear();
-            }
-            let before = host.sent.len();
-            assert!(host.restore(2).is_err());
-            assert_eq!(host.sent.len(), before);
-            assert!(host.manifest.is_none());
-        }
-    }
+    let mut host = Memory::new(&f);
+    let mut runtime = host.restore(1).unwrap();
+    host.registered(&mut runtime, &f);
+    let session = join(&mut host, &mut runtime, &f, 2);
+    forward(&mut host, &mut runtime, 2, session, 1);
+    drop(runtime);
+    host.attachments.remove(&connection(1));
+    let _runtime = host.restore(2).unwrap();
+    assert!(!host.live.contains(&connection(1)));
+    assert!(!host.live.contains(&connection(2)));
+    assert!(matches!(
+        host.stored.as_ref().unwrap().record(),
+        Record::Grace(_)
+    ));
+    assert!(host.stored.as_ref().unwrap().descriptor().is_some());
+    assert_eq!(host.last_session, 1);
 }
 
 #[test]

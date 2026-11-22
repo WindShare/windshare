@@ -83,6 +83,7 @@ pub(crate) struct Liveness {
 }
 
 impl Liveness {
+    #[cfg(feature = "hibernation")]
     pub const ENCODED_BYTES: usize = 3 * size_of::<u64>();
 
     pub fn established(now: UnixMillis) -> Self {
@@ -123,6 +124,7 @@ impl Liveness {
         true
     }
 
+    #[cfg(feature = "hibernation")]
     pub fn encode(self) -> [u8; Self::ENCODED_BYTES] {
         let mut writer = Writer::new();
         writer
@@ -132,6 +134,7 @@ impl Liveness {
         writer.into_frame()
     }
 
+    #[cfg(feature = "hibernation")]
     pub fn decode(bytes: &[u8]) -> Result<Self, FrameError> {
         let mut body = wire::Reader::new(bytes);
         let last_probe_nonce = u64::from_be_bytes(body.array()?);

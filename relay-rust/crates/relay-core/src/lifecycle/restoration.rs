@@ -5,8 +5,9 @@
 //! receivers keep forwarding. Only state that the record, the surviving
 //! connections and sibling snapshots all agree on becomes live again.
 
+use crate::clock::UnixMillis;
+#[cfg(feature = "hibernation")]
 use crate::{
-    clock::UnixMillis,
     join::SESSION_ADMISSION_TIMEOUT,
     sessions::{
         EndReason, Retirement, RetirementReason, Session, SessionKey, SessionSnapshot,
@@ -15,14 +16,14 @@ use crate::{
 };
 
 use super::{
-    Action, ConnectionRef, Decision, GraceRoute, ObservedEvent, Observer, OperationId,
-    PublishedRegistration, Record, SENDER_GRACE, ShareLifecycle, State, StopWork,
+    Action, ConnectionRef, GraceRoute, Observer, OperationId, PublishedRegistration, Record,
+    SENDER_GRACE, ShareLifecycle, State, StopWork,
 };
+#[cfg(feature = "hibernation")]
+use super::{Decision, ObservedEvent};
 
-/// What a restore rebuilds one share's actor from.
-///
-/// Storage always survives. Hibernation also keeps sockets and the session
-/// snapshots hosts record beside them; a process restart keeps neither.
+/// What a hibernating restore rebuilds one share's actor from.
+#[cfg(feature = "hibernation")]
 #[derive(Clone, Copy, Debug)]
 pub struct Restoration<'s> {
     /// What storage holds for the share; `None` only when no record exists.
@@ -34,18 +35,8 @@ pub struct Restoration<'s> {
     pub sessions: &'s [SessionSnapshot],
 }
 
-impl Restoration<'static> {
-    /// After a process restart only storage survives.
-    pub const fn restarted(record: Option<Record>) -> Self {
-        Self {
-            record,
-            connections: &[],
-            sessions: &[],
-        }
-    }
-}
-
 /// Restore's decision for one surviving session snapshot.
+#[cfg(feature = "hibernation")]
 #[derive(Debug, Eq, PartialEq)]
 pub enum SessionRestore {
     /// The same admission, with its permits and original deadline. Store it
@@ -109,6 +100,7 @@ impl<O: Observer> ShareLifecycle<O> {
 
     /// Decides every surviving snapshot, in order, before any event can
     /// change the installed state they are checked against.
+    #[cfg(feature = "hibernation")]
     pub(super) fn restore_sessions(
         &mut self,
         restoration: &Restoration<'_>,
@@ -146,6 +138,7 @@ impl<O: Observer> ShareLifecycle<O> {
         }
     }
 
+    #[cfg(feature = "hibernation")]
     fn check_snapshot(
         &self,
         index: usize,
@@ -183,6 +176,7 @@ impl<O: Observer> ShareLifecycle<O> {
     }
 
     /// Faults no admission of this share can have, whatever state survived.
+    #[cfg(feature = "hibernation")]
     fn snapshot_fault(
         &self,
         index: usize,

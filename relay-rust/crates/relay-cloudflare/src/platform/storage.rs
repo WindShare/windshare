@@ -8,7 +8,6 @@ use windshare_relay_core::{
 use worker::{SqlStorage, SqlStorageValue, State};
 
 pub const IMAGE: &str = "identity";
-pub const MANIFEST: &str = "manifest";
 const AUTHORITY: &str = "authority";
 
 pub fn api<T>(result: worker::Result<T>) -> Result<T> {
@@ -63,7 +62,7 @@ impl Database {
 
     pub fn new_image(&self, fresh: Option<&crate::config::Route>) -> Result<Image> {
         ensure!(
-            self.bytes(AUTHORITY)?.is_none() && self.bytes(MANIFEST)?.is_none(),
+            self.bytes(AUTHORITY)?.is_none(),
             "identity missing from nonempty storage"
         );
         Ok(Image::new(
@@ -72,9 +71,7 @@ impl Database {
     }
 
     pub fn uninitialized(&self) -> Result<bool> {
-        Ok(self.bytes(IMAGE)?.is_none()
-            && self.bytes(AUTHORITY)?.is_none()
-            && self.bytes(MANIFEST)?.is_none())
+        Ok(self.bytes(IMAGE)?.is_none() && self.bytes(AUTHORITY)?.is_none())
     }
 
     pub fn authority(&self, identity: Identity) -> Result<Option<StoredAuthority>> {

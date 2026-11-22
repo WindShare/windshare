@@ -119,6 +119,7 @@ fn unused_startup_bytes_do_not_block_admission_when_ordinary_capacity_is_free() 
     assert_eq!(ledger.regular_used(), Counts::ZERO);
 }
 
+#[cfg(feature = "hibernation")]
 #[test]
 fn smaller_declarations_protect_startup_capacity_through_restore() {
     let fixture = Fixture::new();
