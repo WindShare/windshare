@@ -46,6 +46,7 @@ func OpenReceiverSession(parent context.Context, config Config, receiver Receive
 	}
 	ctx, cancel := context.WithCancel(parent)
 	s := &ReceiverSession{owner: owner, config: receiver, ctx: ctx, cancel: cancel, ready: make(chan struct{}), done: make(chan struct{})}
+	s.attachControls()
 	s.startTURN(receiver)
 	s.mu.Lock()
 	err = s.startDirectLocked()
@@ -72,6 +73,12 @@ func OpenReceiverSession(parent context.Context, config Config, receiver Receive
 		close(s.done)
 	}()
 	return s, nil
+}
+
+func (s *ReceiverSession) attachControls() {
+	if controls, ok := s.config.Lanes.(PeerPathControlSession); ok {
+		s.owner.bindPeerPathControls(receiverSessionID(s.config.Lanes), controls)
+	}
 }
 
 func (s *ReceiverSession) detachControls() {

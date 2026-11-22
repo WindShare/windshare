@@ -25,15 +25,19 @@ const (
 	UserRelayRoutes
 )
 
-func (owner *PeerSet) openDirect(ctx context.Context, receiver ReceiverConfig) (*Path, error) {
-	var sessionID protocolsession.ProtocolSessionID
-	if session, ok := receiver.Lanes.(interface {
+func receiverSessionID(lanes v2peer.ReceiverLaneSession) protocolsession.ProtocolSessionID {
+	if session, ok := lanes.(interface {
 		ProtocolSessionID() protocolsession.ProtocolSessionID
 	}); ok {
-		sessionID = session.ProtocolSessionID()
+		return session.ProtocolSessionID()
 	}
-	var controls PeerPathControlSession
-	if session, ok := receiver.Lanes.(PeerPathControlSession); ok {
+	return protocolsession.ProtocolSessionID{}
+}
+
+func (owner *PeerSet) openDirect(ctx context.Context, receiver ReceiverConfig) (*Path, error) {
+	sessionID := receiverSessionID(receiver.Lanes)
+	var controls PeerPathControlSender
+	if session, ok := receiver.Lanes.(PeerPathControlSender); ok {
 		controls = session
 	}
 	pathConfig := PathConfig{Purpose: receiver.Purpose, SessionID: sessionID, Demand: receiver.Demand, StopAfterWave: receiver.StopAfterWave,

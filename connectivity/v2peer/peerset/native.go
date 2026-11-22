@@ -21,7 +21,6 @@ func (p *Path) maintainResources(ctx context.Context, done chan<- struct{}) {
 		return
 	}
 	defer native.RetainMaintenance()()
-	p.bindControls()
 	nextRefresh := time.Time{}
 	for {
 		now := p.owner.config.Clock.Now()
@@ -107,23 +106,30 @@ func (p *Path) setResourceActive(active bool) {
 	}
 }
 
-func (p *Path) bindControls() {
-	if p.config.Controls == nil {
+// PeerPathControl is session-scoped; bind the demuxing handler once per session
+// rather than per Path so concurrent direct paths never overwrite the session
+// slot or pin retired Path instances in the callback closure.
+func (s *PeerSet) bindPeerPathControls(session protocolsession.ProtocolSessionID, controls PeerPathControlSession) {
+	if controls == nil {
 		return
 	}
-	p.config.Controls.SetPeerPathControlHandler(func(_ context.Context, body []byte) error {
-		control, err := protocolsession.DecodePeerPathControl(body)
-		if err != nil {
-			return nil
-		}
-		p.owner.mu.Lock()
-		path := p.owner.paths[pathKey{p.key.session, v2signal.PeerPathID(control.PeerPathID)}]
-		p.owner.mu.Unlock()
-		if path != nil && path.config.Native != nil {
-			path.config.Native.ApplyControl([16]byte(path.key.session), body)
-		}
+	controls.SetPeerPathControlHandler(func(_ context.Context, body []byte) error {
+		s.applyPeerPathControl(session, body)
 		return nil
 	})
+}
+
+func (s *PeerSet) applyPeerPathControl(session protocolsession.ProtocolSessionID, body []byte) {
+	control, err := protocolsession.DecodePeerPathControl(body)
+	if err != nil {
+		return
+	}
+	s.mu.Lock()
+	path := s.paths[pathKey{session, v2signal.PeerPathID(control.PeerPathID)}]
+	s.mu.Unlock()
+	if path != nil && path.config.Native != nil {
+		path.config.Native.ApplyControl([16]byte(path.key.session), body)
+	}
 }
 func (p *Path) handleNativeChange(ctx context.Context, change nativepeer.Change) {
 

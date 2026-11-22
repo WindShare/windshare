@@ -68,9 +68,13 @@ type Config struct {
 	Random   io.Reader
 }
 
-type PeerPathControlSession interface {
-	SetPeerPathControlHandler(func(context.Context, []byte) error)
+type PeerPathControlSender interface {
 	SendPeerPathControl(context.Context, []byte) error
+}
+
+type PeerPathControlSession interface {
+	PeerPathControlSender
+	SetPeerPathControlHandler(func(context.Context, []byte) error)
 }
 
 // ContentLaneOwner keeps adopted data transports under session ownership;
@@ -85,7 +89,7 @@ type PathConfig struct {
 	Budget        *Budget
 	ICE           iceconfig.Connection
 	Native        *nativepeer.NativePeerConnectivity
-	Controls      PeerPathControlSession
+	Controls      PeerPathControlSender
 	SessionID     protocolsession.ProtocolSessionID
 	PeerPathID    v2signal.PeerPathID
 	Start         Starter
