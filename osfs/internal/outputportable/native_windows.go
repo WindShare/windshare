@@ -8,12 +8,174 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
+	"syscall"
 	"time"
 	"unsafe"
 
 	"github.com/windshare/windshare/osfs/internal/outputcap"
 	"golang.org/x/sys/windows"
 )
+
+const (
+	windowsExtendedPrefix    = `\\?\`
+	windowsExtendedUNCPrefix = `\\?\UNC\`
+	// Keep the extended-length prefix near Win32 MAX_PATH so child handle opens
+	// continue to work without hitting legacy 260-character path limits.
+	windowsShortFinalPathLimit = 240
+)
+
+type fileAttributeTagInfo struct {
+	FileAttributes uint32
+	ReparseTag     uint32
+}
+
+// A caller-named container whose final component is a Windows directory symlink
+// (mklink /D) or directory junction / mount point (mklink /J) is resolved once
+// through the kernel, while other reparse points such as cloud placeholders
+// stay rejected. Non-link containers pass through unchanged, and every entry
+// inside the container stays no-follow.
+func resolveContainerTarget(
+	path string,
+	info os.FileInfo,
+	follow func(string) (os.FileInfo, error),
+) (string, os.FileInfo, error) {
+	link, err := isWindowsContainerLink(path, info)
+	if err != nil {
+		return "", nil, errors.Join(outputcap.ErrUnsafeNamespace, err)
+	}
+	if !link {
+		if !info.IsDir() {
+			return "", nil, outputcap.ErrUnsafeNamespace
+		}
+		return path, info, nil
+	}
+	followed, err := follow(path)
+	if err != nil || !followed.IsDir() {
+		return "", nil, errors.Join(outputcap.ErrUnsafeNamespace, err)
+	}
+	resolved, err := windowsResolvedContainerPath(path)
+	if err != nil {
+		return "", nil, errors.Join(outputcap.ErrUnsafeNamespace, err)
+	}
+	target, err := os.Lstat(resolved)
+	if err != nil || !target.IsDir() || isWindowsReparsePoint(target) || !os.SameFile(followed, target) {
+		return "", nil, errors.Join(outputcap.ErrUnsafeNamespace, err)
+	}
+	return resolved, followed, nil
+}
+
+func isWindowsReparsePoint(info os.FileInfo) bool {
+	if info.Mode()&os.ModeSymlink != 0 {
+		return true
+	}
+	native, ok := info.Sys().(*syscall.Win32FileAttributeData)
+	return ok && native.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+func isWindowsContainerLink(path string, info os.FileInfo) (bool, error) {
+	if info.Mode()&os.ModeSymlink != 0 {
+		return true, nil
+	}
+	if !isWindowsReparsePoint(info) {
+		return false, nil
+	}
+	tag, err := windowsReparseTag(path)
+	if err != nil {
+		return false, err
+	}
+	return tag == windows.IO_REPARSE_TAG_SYMLINK || tag == windows.IO_REPARSE_TAG_MOUNT_POINT, nil
+}
+
+func windowsReparseTag(path string) (uint32, error) {
+	encoded, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return 0, err
+	}
+	handle, err := windows.CreateFile(
+		encoded,
+		0,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		nil,
+		windows.OPEN_EXISTING,
+		windows.FILE_FLAG_OPEN_REPARSE_POINT|windows.FILE_FLAG_BACKUP_SEMANTICS,
+		0,
+	)
+	if err != nil {
+		return 0, err
+	}
+	defer windows.CloseHandle(handle)
+	var tagInfo fileAttributeTagInfo
+	err = windows.GetFileInformationByHandleEx(
+		handle,
+		windows.FileAttributeTagInfo,
+		(*byte)(unsafe.Pointer(&tagInfo)),
+		uint32(unsafe.Sizeof(tagInfo)),
+	)
+	if err != nil {
+		return 0, err
+	}
+	if tagInfo.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT == 0 {
+		return 0, nil
+	}
+	return tagInfo.ReparseTag, nil
+}
+
+func windowsResolvedContainerPath(path string) (string, error) {
+	encoded, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return "", err
+	}
+	// Open without FILE_FLAG_OPEN_REPARSE_POINT so the kernel follows symlinks
+	// and junctions in one step and returns the resolved target handle.
+	handle, err := windows.CreateFile(
+		encoded,
+		windows.FILE_READ_ATTRIBUTES,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		nil,
+		windows.OPEN_EXISTING,
+		windows.FILE_FLAG_BACKUP_SEMANTICS,
+		0,
+	)
+	if err != nil {
+		return "", err
+	}
+	defer windows.CloseHandle(handle)
+	var info windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(handle, &info); err != nil {
+		return "", err
+	}
+	if info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY == 0 ||
+		info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+		return "", outputcap.ErrUnsafeNamespace
+	}
+	buffer := make([]uint16, initialResolvedPathUnits)
+	for {
+		length, err := windows.GetFinalPathNameByHandle(handle, &buffer[0], uint32(len(buffer)), 0)
+		if err != nil {
+			return "", err
+		}
+		if length < uint32(len(buffer)) {
+			return normalizeWindowsFinalPath(windows.UTF16ToString(buffer[:length])), nil
+		}
+		buffer = make([]uint16, length+1)
+	}
+}
+
+func normalizeWindowsFinalPath(path string) string {
+	if rest, ok := strings.CutPrefix(path, windowsExtendedUNCPrefix); ok {
+		stripped := `\\` + rest
+		if len(stripped) < windowsShortFinalPathLimit {
+			return stripped
+		}
+		return path
+	}
+	if rest, ok := strings.CutPrefix(path, windowsExtendedPrefix); ok &&
+		len(rest) >= 3 && rest[1] == ':' && rest[2] == '\\' && len(rest) < windowsShortFinalPathLimit {
+		return rest
+	}
+	return path
+}
 
 func setDirectoryTimes(d *directory, t time.Time) error { return d.root.Chtimes(".", t, t) }
 

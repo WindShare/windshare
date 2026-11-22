@@ -22,24 +22,42 @@ type Platform struct {
 }
 
 func Open(path string, create bool) (outputcap.Platform, error) {
+	return openContainer(path, create, os.Stat)
+}
+
+func openContainer(
+	path string,
+	create bool,
+	follow func(string) (os.FileInfo, error),
+) (outputcap.Platform, error) {
 	absolute, err := filepath.Abs(path)
 	if err != nil {
 		return nil, err
 	}
-	disposition := outputcap.CallerProvidedContainer
-	if create {
-		if _, err := os.Lstat(absolute); errors.Is(err, fs.ErrNotExist) {
-			if err := os.MkdirAll(absolute, 0o755); err != nil {
-				return nil, err
-			}
-			disposition = outputcap.AuthorityCreatedRoot
+	info, err := os.Lstat(absolute)
+	if create && errors.Is(err, fs.ErrNotExist) {
+		if err := os.MkdirAll(absolute, 0o755); err != nil {
+			return nil, err
 		}
+		// A directory created here must be opened without following links.
+		root, err := openDirectory(absolute)
+		if err != nil {
+			return nil, err
+		}
+		return &Platform{root: root, disposition: outputcap.AuthorityCreatedRoot}, nil
 	}
-	root, err := openDirectory(absolute)
 	if err != nil {
 		return nil, err
 	}
-	return &Platform{root: root, disposition: disposition}, nil
+	resolved, expected, err := resolveContainerTarget(absolute, info, follow)
+	if err != nil {
+		return nil, err
+	}
+	root, err := openVerifiedDirectory(resolved, expected)
+	if err != nil {
+		return nil, err
+	}
+	return &Platform{root: root, disposition: outputcap.CallerProvidedContainer}, nil
 }
 
 func (platform *Platform) Root() outputcap.Directory { return platform.root }
