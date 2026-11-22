@@ -3,7 +3,7 @@ import type { en } from './en'
 
 export const zh: typeof en = {
   title: '赞助 WindShare',
-  subtitle: '开源免费的端到端加密文件分享工具，自愿赞助用于项目维护与中转节点成本。',
+  subtitle: '开源免费，感谢每一份支持。',
   actionRegion: '赞助渠道',
   wallRegion: '最新致谢墙',
   channelsLabel: '赞助方式',

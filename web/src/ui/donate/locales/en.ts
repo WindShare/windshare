@@ -2,7 +2,7 @@ import { MAX_DISPLAY_NAME_CODEPOINTS, MAX_MESSAGE_CODEPOINTS } from '../format'
 
 export const en = {
   title: 'Support WindShare',
-  subtitle: 'Open-source, end-to-end encrypted file sharing. Voluntary donations sustain development and relay infrastructure.',
+  subtitle: 'Free and open source. Thank you for every bit of support.',
   actionRegion: 'Donation channels',
   wallRegion: 'Recent supporters',
   channelsLabel: 'Payment methods',
