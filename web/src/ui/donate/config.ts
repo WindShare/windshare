@@ -12,34 +12,62 @@ export const OFFICIAL_DONATE_ORIGINS: ReadonlySet<string> = new Set([
   'https://windshare.cc',
 ])
 
-export interface FallbackWallet {
+export type CryptoWalletId = 'btc' | 'eth' | 'sol' | 'sui' | 'bch' | 'usdt'
+
+export interface DirectCryptoWallet {
+  readonly id: CryptoWalletId
   readonly ticker: string
+  readonly name: string
   readonly network: string
   readonly address: string
 }
 
-// Isolated self-hosted wallets shown only on self-deployed origins where hosted
-// Crypto checkout intents are not allowed by CORS origin policy.
-export const SELF_HOST_FALLBACK_WALLETS: readonly FallbackWallet[] = Object.freeze([
+export const DEFAULT_DIRECT_WALLET_ID: CryptoWalletId = 'btc'
+
+// Isolated self-custody wallets shared across official direct transfers and
+// self-hosted origins where hosted NOWPayments intents are disallowed by CORS.
+export const DIRECT_CRYPTO_WALLETS: readonly DirectCryptoWallet[] = Object.freeze([
   {
-    ticker: 'USDC / SOL',
-    network: 'Solana',
-    address: 'A5ZvjhS8rbajgEoZ5MPMeFKbMVBjTngJE2KDqSFd8YZU',
-  },
-  {
-    ticker: 'USDT',
-    network: 'TRON · TRC20',
-    address: 'THJzAL1ZQuVrn5cGPaecCnp7PfTr9Eh4mm',
-  },
-  {
+    id: 'btc',
     ticker: 'BTC',
+    name: 'Bitcoin',
     network: 'Bitcoin',
     address: 'bc1p8f5ar05p08e3ut8k6r25v0tu5tewq4qw7mnx87w34m9fzpkqpc7saq3aeh',
   },
   {
+    id: 'eth',
     ticker: 'ETH',
+    name: 'Ethereum',
     network: 'Ethereum',
     address: '0x5eebb308017317b059b11b00aa90ad2a21feb256',
+  },
+  {
+    id: 'sol',
+    ticker: 'SOL',
+    name: 'Solana',
+    network: 'Solana',
+    address: 'A5ZvjhS8rbajgEoZ5MPMeFKbMVBjTngJE2KDqSFd8YZU',
+  },
+  {
+    id: 'sui',
+    ticker: 'SUI',
+    name: 'Sui',
+    network: 'Sui',
+    address: '0x21c41c0a31ea5a30a3e7644d045c7f565fb8478efded149e0da0bc1516410539',
+  },
+  {
+    id: 'bch',
+    ticker: 'BCH',
+    name: 'Bitcoin Cash',
+    network: 'Bitcoin Cash',
+    address: 'qzxgwva627638dwk42wcc99ef89am2jnzvr3nfa9m2',
+  },
+  {
+    id: 'usdt',
+    ticker: 'USDT',
+    name: 'Tether',
+    network: 'TRON · TRC20',
+    address: 'THJzAL1ZQuVrn5cGPaecCnp7PfTr9Eh4mm',
   },
 ])
 

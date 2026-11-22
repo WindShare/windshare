@@ -277,6 +277,13 @@
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--portal-error) 18%, transparent);
 }
 
+.donate-error-block {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
 .donate-error {
   margin: 0;
   color: var(--portal-error);
@@ -284,95 +291,270 @@
   line-height: 1.5;
 }
 
-.donate-selfhost-head {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+.donate-inline-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--portal-accent);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: color 160ms;
 }
 
-.donate-secondary-btn {
-  align-self: flex-start;
+.donate-inline-action:hover {
+  color: var(--portal-text);
 }
 
-.donate-wallet-list {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+.donate-inline-action svg {
+  transition: transform 180ms var(--portal-ease);
 }
 
-.donate-wallet-row {
-  padding: 12px 14px;
-  border: 1px solid var(--portal-border-soft);
-  border-radius: 10px;
-  background: var(--portal-inset);
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+.donate-inline-action:hover svg {
+  transform: translateX(2px);
 }
 
-.donate-wallet-meta {
+/* Official-origin Crypto sub-mode switcher (hairline underline to avoid nested pills). */
+.donate-crypto-modes {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 20px;
+  border-bottom: 1px solid var(--portal-border-soft);
+}
+
+.donate-crypto-mode-btn {
+  position: relative;
+  padding: 2px 0 11px;
+  border: 0;
+  background: transparent;
+  color: var(--portal-muted);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 160ms;
+}
+
+.donate-crypto-mode-btn:hover {
+  color: var(--portal-text);
+}
+
+.donate-crypto-mode-btn[aria-pressed="true"] {
+  color: var(--portal-text);
+  font-weight: 600;
+}
+
+.donate-crypto-mode-btn[aria-pressed="true"]::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--portal-accent);
+}
+
+/* Direct on-chain transfer panel */
+.donate-direct-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  animation: portal-arrive 180ms var(--portal-ease);
+}
+
+.donate-coin-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
 }
 
-.donate-wallet-ticker {
-  font-size: 12.5px;
+.donate-coin-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid var(--portal-border);
+  border-radius: 10px;
+  background: var(--portal-inset);
+  color: var(--portal-muted);
+  font: inherit;
+  font-size: 13px;
   font-weight: 600;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition: color 160ms, background-color 160ms, border-color 160ms, box-shadow 160ms;
+}
+
+.donate-coin-btn:hover {
   color: var(--portal-text);
+  background: var(--portal-hover);
+  border-color: var(--portal-border-strong);
 }
 
-.donate-wallet-network {
-  font-size: 11px;
-  color: var(--portal-dim);
+.donate-coin-btn[aria-checked="true"] {
+  background: var(--portal-wash);
+  border-color: var(--portal-accent);
+  color: var(--portal-text);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--portal-accent) 28%, transparent);
 }
 
-.donate-wallet-address-line {
+.donate-coin-ticker {
+  line-height: 1;
+}
+
+.donate-wallet-card {
+  display: grid;
+  grid-template-columns: 162px minmax(0, 1fr);
+  grid-template-areas:
+    'qr head'
+    'qr address'
+    'qr action';
+  grid-template-rows: auto 1fr auto;
+  align-items: start;
+  column-gap: 18px;
+  row-gap: 10px;
+  padding: 18px;
+  border: 1px solid var(--portal-border-soft);
+  border-radius: 12px;
+  background: var(--portal-inset);
+}
+
+.donate-wallet-head {
+  grid-area: head;
+  align-self: start;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.donate-wallet-ticker {
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--portal-text);
+  line-height: 1.2;
+}
+
+.donate-wallet-network-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border: 1px solid var(--portal-border);
+  border-radius: 999px;
+  background: var(--portal-surface);
+  color: var(--portal-muted);
+  font-size: 11.5px;
+  font-weight: 550;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+.donate-wallet-qr-col {
+  grid-area: qr;
+  align-self: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+}
+
+.donate-wallet-qr-frame {
+  box-sizing: border-box;
+  width: 162px;
+  height: 162px;
+  padding: 7px;
+  border: 1px solid var(--portal-border-soft);
+  border-radius: 10px;
+  background: #ffffff;
+}
+
+.donate-wallet-qr-hint {
+  color: var(--portal-dim);
+  font-size: 11.5px;
+  line-height: 1.3;
+  text-align: center;
+}
+
+.donate-wallet-address-box {
+  grid-area: address;
+  align-self: center;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--portal-border);
+  border-radius: 9px;
+  background: var(--portal-surface);
 }
 
 .donate-wallet-address {
-  min-width: 0;
+  display: block;
   font-family: var(--portal-code-font);
-  font-size: 11px;
-  color: var(--portal-muted);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--portal-text);
   overflow-wrap: anywhere;
+  word-break: break-all;
+  user-select: all;
 }
 
-.donate-copy-btn {
-  flex-shrink: 0;
-  min-height: 30px;
-  padding: 4px 10px;
-  border: 1px solid var(--portal-border);
-  border-radius: 6px;
+.donate-wallet-copy-btn {
+  grid-area: action;
+  align-self: end;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  width: 100%;
+  min-height: 42px;
+  padding: 8px 14px;
+  border: 1px solid var(--portal-border-strong);
+  border-radius: 9px;
   background: var(--portal-surface);
   color: var(--portal-text);
   font: inherit;
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 550;
   cursor: pointer;
   transition: color 160ms, background-color 160ms, border-color 160ms;
 }
 
-.donate-copy-btn:hover {
+.donate-wallet-copy-btn:hover {
   background: var(--portal-wash);
-}
-
-.donate-copy-btn[data-status="copied"] {
   border-color: var(--portal-accent);
   color: var(--portal-accent);
 }
 
-.donate-copy-btn[data-status="failed"] {
+.donate-wallet-copy-btn[data-status="copied"] {
+  background: var(--portal-wash);
+  border-color: var(--portal-accent);
+  color: var(--portal-accent);
+}
+
+.donate-wallet-copy-btn[data-status="failed"] {
   border-color: var(--portal-error);
   color: var(--portal-error);
+}
+
+.donate-selfhost-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 6px;
+  row-gap: 2px;
+}
+
+.donate-selfhost-link {
+  min-height: auto;
+  gap: 5px;
+  font-size: 12.5px;
 }
 
 /* Supporter Wall */
@@ -604,10 +786,15 @@
 /* Expand compact utility buttons to comfortable touch targets only on narrow or
    coarse-pointer devices, preserving restrained visual density on desktop. */
 @media (max-width: 600px), (pointer: coarse) {
-  .donate-copy-btn,
+  .donate-wallet-copy-btn,
   .donate-refresh-btn {
     min-height: 44px;
-    padding-inline: 12px;
+    padding-inline: 14px;
+  }
+
+  .donate-crypto-mode-btn {
+    min-height: 40px;
+    padding-block: 8px 11px;
   }
 }
 
@@ -631,9 +818,8 @@
   }
 }
 
-/* Switch from equal-width segments to content-proportional tabs whenever the
-   actions card cannot comfortably fit three equal columns (mobile and narrow
-   two-column desktop), allowing wrapped lines on extreme narrow widths. */
+/* Switch from equal-width segments to content-proportional tabs and stack the
+   direct wallet QR card vertically whenever the actions card gets narrow. */
 @container donate-actions (max-width: 420px) {
   .donate-tabs {
     display: flex;
@@ -644,5 +830,32 @@
     white-space: normal;
     text-align: center;
     line-height: 1.25;
+  }
+
+  .donate-coin-btn {
+    gap: 6px;
+    padding: 8px 6px;
+    font-size: 12.5px;
+  }
+
+  .donate-wallet-card {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto;
+    grid-template-areas:
+      'head'
+      'qr'
+      'address'
+      'action';
+    row-gap: 14px;
+    padding: 16px;
+  }
+
+  .donate-wallet-head {
+    justify-content: center;
+  }
+
+  .donate-wallet-qr-frame {
+    width: 176px;
+    height: 176px;
   }
 }
