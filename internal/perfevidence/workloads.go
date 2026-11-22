@@ -147,14 +147,13 @@ func wideCatalogWorkload() Workload {
 	contracts := make([]BenchmarkContract, 0, 2)
 	for _, entries := range []int{10_000, 100_000} {
 		contracts = append(contracts, contract(
-			fmt.Sprintf("BenchmarkExtremeWidthCatalogSpill/entries=%07d/run_bytes=1048576", entries),
-			"entries/op", "pages/op", "sort-spill-written-bytes/op", "sort-object-commits/op",
-			"peak-sort-objects", "scan-peak-session-bytes", "retained-catalog-bytes/op",
+			fmt.Sprintf("BenchmarkWideCatalog/entries=%07d", entries),
+			"entries/op", "pages/op", "scan-peak-session-bytes", "retained-catalog-bytes/op",
 		))
 	}
 	return Workload{
-		ID: "extreme-width-catalog", ModuleDir: "core", Package: "./catalog",
-		Benchmark: "BenchmarkExtremeWidthCatalogSpill", BenchTime: fixedCatalogIterations, Contracts: contracts,
+		ID: "wide-catalog", ModuleDir: "core", Package: "./catalog",
+		Benchmark: "BenchmarkWideCatalog", BenchTime: fixedCatalogIterations, Contracts: contracts,
 	}
 }
 

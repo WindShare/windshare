@@ -171,7 +171,7 @@ func newSyntheticCapacityFixture(t *testing.T, fileCount uint64) *syntheticCapac
 		t.Fatal(err)
 	}
 	catalogStore, err := catalog.NewCatalogStore(catalog.StoreConfig{
-		ShareInstance: share, Backend: catalog.NewMemoryCatalogBackend(),
+		ShareInstance: share,
 		ProcessBudget: processBudget, ShareBudget: shareBudget, FailureEncoder: sealedCatalog,
 	})
 	if err != nil {

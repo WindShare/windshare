@@ -5,7 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"os"
+	"io/fs"
 	"time"
 )
 
@@ -82,7 +82,6 @@ func (r DirectoryFailureRecord) valid() error {
 }
 
 // FailurePayload carries the bytes committed with a directory scan failure.
-// Its digest lets the backend check payload integrity on replay.
 type FailurePayload struct {
 	encoded    []byte
 	commitment [sha256.Size]byte
@@ -108,210 +107,6 @@ func (function FailureEncoderFunc) EncodeFailure(record DirectoryFailureRecord) 
 	return function(record)
 }
 
-type memoryFailure struct {
-	record  DirectoryFailureRecord
-	payload []byte
-	usage   ResourceUsage
-}
-
-func (b *MemoryCatalogBackend) CommitFailure(
-	ctx context.Context,
-	record DirectoryFailureRecord,
-	payload FailurePayload,
-	meter ResourceMeter,
-	prepare func(ResourceUsage) error,
-) (FailurePreparation, error) {
-	if err := ctx.Err(); err != nil {
-		return FailurePreparation{}, err
-	}
-	if err := record.valid(); err != nil || payload.IsZero() || meter == nil || prepare == nil {
-		return FailurePreparation{}, errors.Join(errors.New("catalog failure commit is invalid"), err)
-	}
-	charge := ResourceUsage{MemoryBytes: memoryObjectOverhead*2 + uint64(len(payload.encoded))}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.closed {
-		return FailurePreparation{}, ErrCatalogClosed
-	}
-	attempts := b.failures[record.directory]
-	if existing, found := attempts[record.attempt]; found {
-		candidate := sha256.Sum256(existing.payload)
-		if existing.record != record || candidate != payload.commitment {
-			return FailurePreparation{}, ErrGenerationConflict
-		}
-		return FailurePreparation{Record: record, Existing: true}, nil
-	}
-	if len(attempts) >= maxFailureAttemptsPerDirectory {
-		return FailurePreparation{}, ErrBudgetExceeded
-	}
-	records := make([]DirectoryFailureRecord, 0, len(attempts))
-	for _, failure := range attempts {
-		records = append(records, failure.record)
-	}
-	tail, err := validateFailureChain(records)
-	if err != nil || tail != record.previousAttempt {
-		return FailurePreparation{}, errors.Join(ErrGenerationConflict, err)
-	}
-	if err := meter.Consume(charge); err != nil {
-		return FailurePreparation{}, err
-	}
-	if err := prepare(charge); err != nil {
-		return FailurePreparation{}, err
-	}
-	if attempts == nil {
-		attempts = make(map[ScanAttemptID]memoryFailure)
-		b.failures[record.directory] = attempts
-	}
-	attempts[record.attempt] = memoryFailure{record: record, payload: payload.Bytes(), usage: charge}
-	return FailurePreparation{Record: record, Usage: charge}, nil
-}
-
-func (b *MemoryCatalogBackend) LoadFailurePayload(
-	ctx context.Context,
-	directory DirectoryID,
-	attempt ScanAttemptID,
-) (FailurePayload, bool, error) {
-	if err := ctx.Err(); err != nil {
-		return FailurePayload{}, false, err
-	}
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	if b.closed {
-		return FailurePayload{}, false, ErrCatalogClosed
-	}
-	failure, found := b.failures[directory][attempt]
-	if !found {
-		return FailurePayload{}, false, nil
-	}
-	payload, err := NewFailurePayload(failure.payload)
-	return payload, err == nil, err
-}
-
-func (b *MemoryCatalogBackend) ReplayFailures(ctx context.Context, yield func(DirectoryFailureRecord, bool) error) error {
-	if yield == nil {
-		return errors.New("catalog failure replay requires a consumer")
-	}
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	if b.closed {
-		return ErrCatalogClosed
-	}
-	for _, attempts := range b.failures {
-		if len(attempts) > maxFailureAttemptsPerDirectory {
-			return ErrCorruptCatalogStorage
-		}
-		records := make([]DirectoryFailureRecord, 0, len(attempts))
-		for _, failure := range attempts {
-			records = append(records, failure.record)
-		}
-		tail, err := validateFailureChain(records)
-		if err != nil {
-			return err
-		}
-		for _, failure := range attempts {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			if err := yield(failure.record, failure.record.attempt == tail); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func validateFailureChain(records []DirectoryFailureRecord) (ScanAttemptID, error) {
-	if len(records) == 0 {
-		return ScanAttemptID{}, nil
-	}
-	byAttempt := make(map[ScanAttemptID]DirectoryFailureRecord, len(records))
-	successors := make(map[ScanAttemptID]ScanAttemptID, len(records))
-	roots := 0
-	for _, record := range records {
-		if err := record.valid(); err != nil {
-			return ScanAttemptID{}, ErrCorruptCatalogStorage
-		}
-		if _, duplicate := byAttempt[record.attempt]; duplicate {
-			return ScanAttemptID{}, ErrCorruptCatalogStorage
-		}
-		byAttempt[record.attempt] = record
-		if record.previousAttempt.IsZero() {
-			roots++
-			continue
-		}
-		if _, fork := successors[record.previousAttempt]; fork {
-			return ScanAttemptID{}, ErrCorruptCatalogStorage
-		}
-		successors[record.previousAttempt] = record.attempt
-	}
-	if roots != 1 {
-		return ScanAttemptID{}, ErrCorruptCatalogStorage
-	}
-	var tail ScanAttemptID
-	tails := 0
-	for attempt := range byAttempt {
-		if _, hasSuccessor := successors[attempt]; !hasSuccessor {
-			tail = attempt
-			tails++
-		}
-	}
-	if tails != 1 {
-		return ScanAttemptID{}, ErrCorruptCatalogStorage
-	}
-	visited := 0
-	for current := tail; !current.IsZero(); {
-		record, found := byAttempt[current]
-		if !found {
-			return ScanAttemptID{}, ErrCorruptCatalogStorage
-		}
-		visited++
-		if visited > len(records) {
-			return ScanAttemptID{}, ErrCorruptCatalogStorage
-		}
-		current = record.previousAttempt
-	}
-	if visited != len(records) {
-		return ScanAttemptID{}, ErrCorruptCatalogStorage
-	}
-	return tail, nil
-}
-
-func (s *CatalogStore) restoreFailureAuthority(ctx context.Context) error {
-	return s.backend.ReplayFailures(ctx, func(record DirectoryFailureRecord, active bool) error {
-		if record.share != s.shareInstance {
-			return ErrCorruptCatalogStorage
-		}
-		identity := scanAttemptIdentity{directory: record.directory, attempt: record.attempt}
-		if _, duplicate := s.usedAttempts[identity]; duplicate {
-			return ErrCorruptCatalogStorage
-		}
-		if _, duplicate := s.usedGenerations[record.generation]; duplicate {
-			return ErrCorruptCatalogStorage
-		}
-		s.usedAttempts[identity] = struct{}{}
-		s.usedGenerations[record.generation] = struct{}{}
-		if !active {
-			return nil
-		}
-		if s.attempts[record.directory] != nil {
-			return ErrCorruptCatalogStorage
-		}
-		failure := directoryFailureFromRecord(record, errors.New("recovered catalog directory failure"))
-		done := make(chan struct{})
-		close(done)
-		attempt := &scanAttempt{
-			id: record.attempt, generation: record.generation, directory: record.directory,
-			previous: record.previousAttempt, done: done, completed: true, err: failure,
-			retryable: record.Retryable(), failure: failure,
-		}
-		if record.Retryable() {
-			attempt.retryAt = s.clock.Now().Add(record.retryAfter)
-		}
-		s.attempts[record.directory] = attempt
-		return nil
-	})
-}
-
 func (s *CatalogStore) persistAttemptFailure(
 	attempt *scanAttempt,
 	cause error,
@@ -332,27 +127,32 @@ func (s *CatalogStore) persistAttemptFailure(
 	if err := errors.Join(encodeErr, releaseErr); err != nil {
 		return nil, err
 	}
-	var retained *BudgetReservation
-	prepared, err := s.backend.CommitFailure(
-		attempt.ctx, record, payload, attempt.resources,
-		func(usage ResourceUsage) error {
-			var retainErr error
-			retained, retainErr = attempt.resources.retain(usage, session)
-			return retainErr
-		},
-	)
-	if err != nil {
-		retained.Release()
+	if payload.IsZero() {
+		return nil, errors.New("catalog failure encoder returned an empty payload")
+	}
+	charge := ResourceUsage{MemoryBytes: memoryFailureOverhead + uint64(len(payload.encoded))}
+	if err := attempt.resources.Consume(charge); err != nil {
 		return nil, err
 	}
-	if !prepared.Existing {
-		if retained == nil || !retained.active() {
-			return nil, errors.New("catalog failure publication lost its retained budget")
-		}
-		s.mu.Lock()
-		s.held = append(s.held, retained)
-		s.mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil, ErrCatalogClosed
 	}
+	attempts := s.failures[record.directory]
+	if len(attempts) >= maxFailureAttemptsPerDirectory {
+		return nil, ErrBudgetExceeded
+	}
+	retained, err := attempt.resources.retain(charge, session)
+	if err != nil {
+		return nil, err
+	}
+	if attempts == nil {
+		attempts = make(map[ScanAttemptID]committedFailure)
+		s.failures[record.directory] = attempts
+	}
+	attempts[record.attempt] = committedFailure{record: record, payload: payload}
+	s.held = append(s.held, retained)
 	return directoryFailureFromRecord(record, cause), nil
 }
 
@@ -361,7 +161,7 @@ func classifyFailureKind(cause error) FailureKind {
 	switch {
 	case errors.Is(cause, ErrDirectoryStale):
 		return FailureKindStale
-	case errors.Is(cause, os.ErrPermission):
+	case errors.Is(cause, fs.ErrPermission):
 		return FailureKindPermission
 	case errors.Is(cause, ErrSiblingCollision):
 		return FailureKindCollision
@@ -396,20 +196,22 @@ func (s *CatalogStore) FailurePayload(
 	directory DirectoryID,
 	attempt ScanAttemptID,
 ) (FailurePayload, bool, error) {
-	if s.isClosed() {
+	if err := ctx.Err(); err != nil {
+		return FailurePayload{}, false, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed {
 		return FailurePayload{}, false, ErrCatalogClosed
 	}
-	payload, found, err := s.backend.LoadFailurePayload(ctx, directory, attempt)
-	if err != nil || !found {
-		return FailurePayload{}, found, err
+	failure, found := s.failures[directory][attempt]
+	if !found {
+		return FailurePayload{}, false, nil
 	}
-	s.mu.Lock()
-	_, known := s.usedAttempts[scanAttemptIdentity{directory: directory, attempt: attempt}]
-	s.mu.Unlock()
-	if !known {
-		return FailurePayload{}, false, ErrCorruptCatalogStorage
+	if _, known := s.usedAttempts[scanAttemptIdentity{directory: directory, attempt: attempt}]; !known {
+		return FailurePayload{}, false, errors.New("catalog failure payload lacks attempt authority")
 	}
-	return payload, true, nil
+	return failure.payload, true, nil
 }
 
 func (s *CatalogStore) completeFailedAttemptLocked(attempt *scanAttempt, resultErr error) {

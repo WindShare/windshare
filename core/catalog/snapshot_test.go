@@ -24,15 +24,6 @@ func (testFailureEncoder) EncodeFailure(record DirectoryFailureRecord) (FailureP
 	return NewFailurePayload(encoded.Bytes())
 }
 
-func mustTestPagePayload(t *testing.T, page CatalogPage) PagePayload {
-	t.Helper()
-	payload, err := encodePagePayload(page)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return payload
-}
-
 func testEntries(t *testing.T, start, count int) []Entry {
 	t.Helper()
 	entries := make([]Entry, count)

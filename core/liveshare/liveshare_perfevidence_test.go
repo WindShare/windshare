@@ -27,12 +27,6 @@ type readyVirtualCatalogSource struct {
 	openOps     atomic.Uint64
 }
 
-type readyUnusedSpillFactory struct{}
-
-func (readyUnusedSpillFactory) NewWorkspace(context.Context, catalog.SpillRequest) (catalog.SpillWorkspace, error) {
-	return nil, errors.New("ready path requested post-ready catalog spill storage")
-}
-
 func (source *readyVirtualCatalogSource) SelectedRoots() []catalog.NodeRecord {
 	return append([]catalog.NodeRecord(nil), source.selected...)
 }
@@ -135,7 +129,7 @@ func prepareVirtualReady(descendants uint64) (readyMeasurement, func() error, er
 	catalogState, err := prepareSenderCatalog(context.Background(), SenderConfig{CatalogBudget: testCatalogBudget(), CacheBudget: testCacheBudget(),
 		ChunkSize: catalog.DefaultChunkSize,
 		Now:       func() time.Time { return time.Unix(1_700_000_000, 0) },
-	}, random, sender, authority, readyUnusedSpillFactory{})
+	}, random, sender, authority)
 	if err != nil {
 		authority.destroy()
 		return readyMeasurement{}, nil, errors.Join(err, sender.Close())

@@ -5,123 +5,17 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
-	"io"
-	"math/bits"
-	"path/filepath"
 	"sync/atomic"
 	"testing"
 )
 
-const catalogSortRunBytes = uint64(1 << 20)
-
 var catalogWidths = [...]int{10_000, 100_000}
 
-type spillProbe struct {
-	delegate     *FileSpillFactory
-	writtenBytes atomic.Uint64
-	commits      atomic.Uint64
-	liveObjects  atomic.Uint64
-	peakObjects  atomic.Uint64
-}
-
-func newSpillProbe(root string) *spillProbe {
-	return &spillProbe{delegate: NewFileSpillFactory(root)}
-}
-
-func (probe *spillProbe) Recover(ctx context.Context, share ShareInstance) error {
-	return probe.delegate.Recover(ctx, share)
-}
-
-func (probe *spillProbe) Destroy(share ShareInstance) error {
-	return probe.delegate.Destroy(share)
-}
-
-func (probe *spillProbe) NewWorkspace(ctx context.Context, request SpillRequest) (SpillWorkspace, error) {
-	workspace, err := probe.delegate.NewWorkspace(ctx, request)
-	if err != nil {
-		return nil, err
-	}
-	return &spillWorkspace{delegate: workspace, probe: probe}, nil
-}
-
-func (probe *spillProbe) committedObject() {
-	live := probe.liveObjects.Add(1)
-	probe.commits.Add(1)
-	for {
-		peak := probe.peakObjects.Load()
-		if live <= peak || probe.peakObjects.CompareAndSwap(peak, live) {
-			return
-		}
-	}
-}
-
-type spillWorkspace struct {
-	delegate SpillWorkspace
-	probe    *spillProbe
-}
-
-func (workspace *spillWorkspace) Create(ctx context.Context) (SpillWriter, error) {
-	writer, err := workspace.delegate.Create(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return &spillWriter{delegate: writer, probe: workspace.probe}, nil
-}
-
-func (workspace *spillWorkspace) Close() error { return workspace.delegate.Close() }
-
-type spillWriter struct {
-	delegate SpillWriter
-	probe    *spillProbe
-}
-
-func (writer *spillWriter) Write(data []byte) (int, error) {
-	written, err := writer.delegate.Write(data)
-	writer.probe.writtenBytes.Add(uint64(written))
-	return written, err
-}
-
-func (writer *spillWriter) Commit() (SpillObject, error) {
-	object, err := writer.delegate.Commit()
-	if err != nil {
-		return nil, err
-	}
-	writer.probe.committedObject()
-	return &spillObject{delegate: object, probe: writer.probe}, nil
-}
-
-func (writer *spillWriter) Abort() error { return writer.delegate.Abort() }
-
-type spillObject struct {
-	delegate SpillObject
-	probe    *spillProbe
-	removed  atomic.Bool
-}
-
-func (object *spillObject) Open(ctx context.Context) (io.ReadCloser, error) {
-	return object.delegate.Open(ctx)
-}
-
-func (object *spillObject) Size() uint64 { return object.delegate.Size() }
-
-func (object *spillObject) Remove() error {
-	if err := object.delegate.Remove(); err != nil {
-		return err
-	}
-	if object.removed.CompareAndSwap(false, true) {
-		object.probe.liveObjects.Add(^uint64(0))
-	}
-	return nil
-}
-
 type wideCatalogMetrics struct {
-	entries             uint64
-	pages               uint32
-	sortBytesWritten    uint64
-	sortObjectCommits   uint64
-	peakSortObjects     uint64
-	peakSessionMemory   uint64
-	retainedCatalogDisk uint64
+	entries               uint64
+	pages                 uint32
+	peakSessionMemory     uint64
+	retainedCatalogMemory uint64
 }
 
 func wideCatalogIdentity[T ~[IdentityBytes]byte](seed byte) T {
@@ -138,8 +32,7 @@ func wideCatalogBudgets(tb testing.TB, prefix string, width int) (*BudgetAccount
 		ActiveScans: 4,
 		ScanWork:    uint64(width)*4 + 64,
 		Entries:     uint64(width) + 64,
-		MemoryBytes: 32 << 20,
-		SpillBytes:  2 << 30,
+		MemoryBytes: DefaultShareCatalogMemory,
 	}
 	newAccount := func(name string, accountLimits BudgetLimits) *BudgetAccount {
 		account, err := NewBudgetAccount(prefix+"-"+name, accountLimits)
@@ -150,30 +43,21 @@ func wideCatalogBudgets(tb testing.TB, prefix string, width int) (*BudgetAccount
 	}
 	process := newAccount("process", limits)
 	share := newAccount("share", limits)
-	sessionLimits := limits
-	sessionLimits.MemoryBytes = 8 << 20
-	session := newAccount("session", sessionLimits)
+	session := newAccount("session", limits)
 	return process, share, session
 }
 
 func wideCatalogStore(
 	tb testing.TB,
-	root string,
 	share ShareInstance,
 	process, shareBudget *BudgetAccount,
-	spill SpillFactory,
-	sortRunBytes uint64,
-) (*CatalogStore, *FileCatalogBackend) {
+) *CatalogStore {
 	tb.Helper()
-	backend, err := NewFileCatalogBackend(FileCatalogBackendConfig{Root: root, ShareInstance: share})
-	if err != nil {
-		tb.Fatal(err)
-	}
 	var attempts atomic.Uint32
 	var generations atomic.Uint32
 	store, err := NewCatalogStore(StoreConfig{
-		ShareInstance: share, Backend: backend, ProcessBudget: process, ShareBudget: shareBudget,
-		FailureEncoder: testFailureEncoder{}, SpillFactory: spill, SortRunBytes: sortRunBytes,
+		ShareInstance: share, ProcessBudget: process, ShareBudget: shareBudget,
+		FailureEncoder: testFailureEncoder{},
 		AttemptIDs: ScanAttemptIDGeneratorFunc(func() (ScanAttemptID, error) {
 			id := wideCatalogIdentity[ScanAttemptID](79)
 			binary.BigEndian.PutUint32(id[12:], attempts.Add(1))
@@ -186,10 +70,9 @@ func wideCatalogStore(
 		}),
 	})
 	if err != nil {
-		_ = backend.Close()
 		tb.Fatal(err)
 	}
-	return store, backend
+	return store
 }
 
 func selectedWideDirectory(root, directory DirectoryID) (NodeRecord, error) {
@@ -246,12 +129,11 @@ func pageObjectDigest(tb testing.TB, store *CatalogStore, directory CommittedDir
 	return digest
 }
 
-func exerciseCatalogWidth(tb testing.TB, root string, width int, sortRunBytes uint64) wideCatalogMetrics {
+func exerciseCatalogWidth(tb testing.TB, width int) wideCatalogMetrics {
 	tb.Helper()
 	share := wideCatalogIdentity[ShareInstance](17)
 	process, shareBudget, session := wideCatalogBudgets(tb, "wide-catalog", width)
-	spill := newSpillProbe(filepath.Join(root, "sort"))
-	store, backend := wideCatalogStore(tb, root, share, process, shareBudget, spill, sortRunBytes)
+	store := wideCatalogStore(tb, share, process, shareBudget)
 	defer func() {
 		if err := store.Close(); err != nil {
 			tb.Error(err)
@@ -314,74 +196,45 @@ func exerciseCatalogWidth(tb testing.TB, root string, width int, sortRunBytes ui
 	if err != nil || !found || !lastPage.Terminal() || len(lastEntries) == 0 || lastEntries[len(lastEntries)-1].Name() != wantLast {
 		tb.Fatalf("last sorted page: found=%v terminal=%v err=%v", found, lastPage.Terminal(), err)
 	}
-	beforeDigest := pageObjectDigest(tb, store, committed)
-	if spill.commits.Load() < 3 {
-		tb.Fatalf("width %d did not exercise external spill: commits=%d", width, spill.commits.Load())
+	firstDigest := pageObjectDigest(tb, store, committed)
+	if secondDigest := pageObjectDigest(tb, store, committed); secondDigest != firstDigest {
+		tb.Fatal("page payload replay changed committed bytes")
 	}
-	maxMetadataObjects := uint64(4*bits.Len(uint(width)) + 8)
-	if spill.peakObjects.Load() > maxMetadataObjects {
-		tb.Fatalf("sort metadata grew with width: peak=%d limit=%d", spill.peakObjects.Load(), maxMetadataObjects)
-	}
-	retainedCatalogDisk := shareBudget.Snapshot().Used.SpillBytes
-	if retainedCatalogDisk == 0 {
-		tb.Fatal("file catalog retained no durable bytes")
-	}
-
-	// Closing only the backend models handle eviction. Reopening must re-admit
-	// the durable catalog and replay byte-identical sealed page objects.
-	if err := backend.Close(); err != nil {
-		tb.Fatal(err)
-	}
-	recoveredProcess, recoveredShare, recoveredSession := wideCatalogBudgets(tb, "wide-catalog-recovered", width)
-	recovered, _ := wideCatalogStore(
-		tb, root, share, recoveredProcess, recoveredShare,
-		NewFileSpillFactory(filepath.Join(root, "sort")), sortRunBytes,
-	)
-	defer func() {
-		if err := recovered.Close(); err != nil {
-			tb.Error(err)
-		}
-	}()
-	if rootAuthority, err := recovered.CommitSyntheticRoot(context.Background(), rootCommit, recoveredSession); err != nil || rootAuthority.IsZero() {
-		tb.Fatalf("recover synthetic root: authority=%v err=%v", !rootAuthority.IsZero(), err)
-	}
-	replayed, found, err := recovered.Directory(context.Background(), directory)
-	if err != nil || !found || replayed != committed {
-		tb.Fatalf("recovered directory: found=%v err=%v", found, err)
-	}
-	if afterDigest := pageObjectDigest(tb, recovered, replayed); afterDigest != beforeDigest {
-		tb.Fatal("restart changed sealed page object bytes")
-	}
-	if recoveredShare.Snapshot().Used.Entries != uint64(width+1) ||
-		recoveredShare.Snapshot().Used.SpillBytes != retainedCatalogDisk {
-		tb.Fatalf("recovered catalog budget = %+v", recoveredShare.Snapshot().Used)
+	retained := shareBudget.Snapshot().Used
+	if retained.Entries != uint64(width+1) || retained.MemoryBytes == 0 {
+		tb.Fatalf("retained catalog budget = %+v", retained)
 	}
 	return wideCatalogMetrics{
-		entries: uint64(width), pages: committed.PageCount(), sortBytesWritten: spill.writtenBytes.Load(),
-		sortObjectCommits: spill.commits.Load(), peakSortObjects: spill.peakObjects.Load(),
-		peakSessionMemory: peakSession.Load(), retainedCatalogDisk: retainedCatalogDisk,
+		entries:               uint64(width),
+		pages:                 committed.PageCount(),
+		peakSessionMemory:     peakSession.Load(),
+		retainedCatalogMemory: retained.MemoryBytes,
 	}
 }
 
-func BenchmarkExtremeWidthCatalogSpill(b *testing.B) {
+func TestLongWideCatalogScale(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping wide-catalog scale test in -short mode")
+	}
+	metrics := exerciseCatalogWidth(t, 100_000)
+	if metrics.entries != 100_000 || metrics.pages == 0 || metrics.retainedCatalogMemory == 0 {
+		t.Fatalf("unexpected wide catalog metrics: %+v", metrics)
+	}
+}
+
+func BenchmarkWideCatalog(b *testing.B) {
 	for _, width := range catalogWidths {
-		b.Run(fmt.Sprintf("entries=%07d/run_bytes=%07d", width, catalogSortRunBytes), func(b *testing.B) {
-			base := b.TempDir()
+		b.Run(fmt.Sprintf("entries=%07d", width), func(b *testing.B) {
 			b.ReportAllocs()
 			var last wideCatalogMetrics
 			b.ResetTimer()
-			for iteration := range b.N {
-				last = exerciseCatalogWidth(
-					b, filepath.Join(base, fmt.Sprintf("iteration-%d", iteration)), width, catalogSortRunBytes,
-				)
+			for range b.N {
+				last = exerciseCatalogWidth(b, width)
 			}
 			b.ReportMetric(float64(last.entries), "entries/op")
 			b.ReportMetric(float64(last.pages), "pages/op")
-			b.ReportMetric(float64(last.sortBytesWritten), "sort-spill-written-bytes/op")
-			b.ReportMetric(float64(last.sortObjectCommits), "sort-object-commits/op")
-			b.ReportMetric(float64(last.peakSortObjects), "peak-sort-objects")
 			b.ReportMetric(float64(last.peakSessionMemory), "scan-peak-session-bytes")
-			b.ReportMetric(float64(last.retainedCatalogDisk), "retained-catalog-bytes/op")
+			b.ReportMetric(float64(last.retainedCatalogMemory), "retained-catalog-bytes/op")
 		})
 	}
 }

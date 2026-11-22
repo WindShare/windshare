@@ -33,9 +33,6 @@ func TestSharingSubjectProjectionUsesFrozenHumanDisplayFact(t *testing.T) {
 		Relays:           []string{"ws://127.0.0.1:8484"},
 		ChunkSize:        catalog.MinChunkSize,
 		RevisionCapacity: capacityOwner.Coordinator(),
-		CatalogStorage: liveshare.CatalogStorageFactoryFunc(func(context.Context, catalog.ShareInstance) (catalog.CatalogBackend, error) {
-			return catalog.NewMemoryCatalogBackend(), nil
-		}),
 	}))
 	if err != nil {
 		t.Fatal(err)

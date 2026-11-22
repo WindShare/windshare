@@ -150,83 +150,43 @@ func TestSnapshotConstructorsRejectMalformedSemanticChains(t *testing.T) {
 	}
 }
 
-func TestMemoryBackendRejectsInvalidTransactionLifecycles(t *testing.T) {
-	backend := NewMemoryCatalogBackend()
-	meter, err := newAttemptResourceMeter(BudgetHierarchy{
-		Process: generousBudget(t, "validation-process"),
-		Share:   generousBudget(t, "validation-share"),
-		Session: generousBudget(t, "validation-session"),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer meter.Close()
+func TestCatalogStoreRejectsCancelledAndClosedReads(t *testing.T) {
+	store, _, _ := newStore(t, nil)
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := backend.BeginDirectory(cancelled, idValue[DirectoryID](1), idValue[DirectoryGeneration](2), meter); !errors.Is(err, context.Canceled) {
-		t.Fatalf("cancelled begin error = %v", err)
-	}
-	if _, err := backend.BeginDirectory(context.Background(), DirectoryID{}, DirectoryGeneration{}, meter); err == nil {
-		t.Fatal("identity-free transaction was accepted")
-	}
-	tx, err := backend.BeginDirectory(context.Background(), idValue[DirectoryID](1), idValue[DirectoryGeneration](2), meter)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := tx.PutDirectory(NodeRecord{}); err == nil {
-		t.Fatal("invalid directory was staged")
-	}
-	if err := tx.PutChild(NodeRecord{}); err == nil {
-		t.Fatal("invalid child was staged")
-	}
-	if err := tx.PutPage(CatalogPage{}, PagePayload{}); err == nil {
-		t.Fatal("invalid page was staged")
-	}
-	if _, err := tx.Prepare(context.Background()); err == nil {
-		t.Fatal("incomplete transaction committed")
-	}
-	if err := tx.Abort(); err != nil {
-		t.Fatal(err)
-	}
-	if err := tx.PutDirectory(NodeRecord{}); err == nil {
-		t.Fatal("finished transaction accepted more state")
-	}
-	if _, _, err := backend.LoadDirectory(cancelled, idValue[DirectoryID](1)); !errors.Is(err, context.Canceled) {
+	if _, _, err := store.Directory(cancelled, idValue[DirectoryID](1)); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled directory load = %v", err)
 	}
-	if _, _, err := backend.LoadPagePayload(cancelled, idValue[DirectoryID](1), idValue[DirectoryGeneration](2), 0); !errors.Is(err, context.Canceled) {
+	if _, _, err := store.PagePayload(cancelled, idValue[DirectoryID](1), idValue[DirectoryGeneration](2), 0); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled page load = %v", err)
 	}
-	if _, _, err := backend.LoadNode(cancelled, idValue[NodeID](1)); !errors.Is(err, context.Canceled) {
+	if _, _, err := store.Node(cancelled, idValue[NodeID](1)); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled node load = %v", err)
 	}
-	if err := backend.Close(); err != nil {
+	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if backend.directories != nil || backend.nodes != nil {
-		t.Fatal("closed memory backend retained catalog state after its budget was released")
+	if store.directories != nil || store.nodes != nil || store.failures != nil {
+		t.Fatal("closed store retained catalog state after its budget was released")
 	}
-	if _, err := backend.BeginDirectory(context.Background(), idValue[DirectoryID](1), idValue[DirectoryGeneration](2), meter); !errors.Is(err, ErrCatalogClosed) {
-		t.Fatalf("closed begin = %v", err)
-	}
-	if _, _, err := backend.LoadDirectory(context.Background(), idValue[DirectoryID](1)); !errors.Is(err, ErrCatalogClosed) {
+	if _, _, err := store.Directory(context.Background(), idValue[DirectoryID](1)); !errors.Is(err, ErrCatalogClosed) {
 		t.Fatalf("closed directory load = %v", err)
 	}
-	if _, _, err := backend.LoadPagePayload(context.Background(), idValue[DirectoryID](1), idValue[DirectoryGeneration](2), 0); !errors.Is(err, ErrCatalogClosed) {
+	if _, _, err := store.PagePayload(context.Background(), idValue[DirectoryID](1), idValue[DirectoryGeneration](2), 0); !errors.Is(err, ErrCatalogClosed) {
 		t.Fatalf("closed page load = %v", err)
 	}
-	if _, _, err := backend.LoadNode(context.Background(), idValue[NodeID](1)); !errors.Is(err, ErrCatalogClosed) {
+	if _, _, err := store.Node(context.Background(), idValue[NodeID](1)); !errors.Is(err, ErrCatalogClosed) {
 		t.Fatalf("closed node load = %v", err)
 	}
 }
 
 func TestBudgetAccountsRejectInvalidHierarchiesAndOverflow(t *testing.T) {
 	if DefaultSessionBudgetLimits().ActiveScans != DefaultSessionActiveScans ||
-		DefaultShareBudgetLimits().SpillBytes != DefaultShareCatalogSpill ||
+		DefaultShareBudgetLimits().MemoryBytes != DefaultShareCatalogMemory ||
 		DefaultProcessBudgetLimits().Entries != DefaultProcessCommittedEntries {
 		t.Fatal("catalog default budget profile drifted from the frozen limits")
 	}
-	if _, err := NewBudgetAccount("", BudgetLimits{ActiveScans: 1, ScanWork: 1, Entries: 1, MemoryBytes: 1, SpillBytes: 1}); err == nil {
+	if _, err := NewBudgetAccount("", BudgetLimits{ActiveScans: 1, ScanWork: 1, Entries: 1, MemoryBytes: 1}); err == nil {
 		t.Fatal("unnamed budget was accepted")
 	}
 	if _, err := NewBudgetAccount("zero", BudgetLimits{}); err == nil {

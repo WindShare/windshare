@@ -8,32 +8,51 @@ import (
 	"sync"
 )
 
-// ScanAttemptLedgerBytes conservatively accounts for both attempt and
-// generation replay guards retained for the share lifetime.
-const ScanAttemptLedgerBytes = 96
+var (
+	ErrCatalogClosed      = errors.New("catalog store is closed")
+	ErrGenerationConflict = errors.New("catalog directory generation conflicts with committed state")
+)
+
+const (
+	// ScanAttemptLedgerBytes conservatively accounts for both attempt and
+	// generation replay guards retained for the share lifetime.
+	ScanAttemptLedgerBytes  = 96
+	memoryDirectoryOverhead = uint64(128)
+	memoryPageOverhead      = uint64(128)
+	memoryFailureOverhead   = uint64(128)
+)
+
+type committedDirectoryState struct {
+	committed CommittedDirectory
+	pages     []PagePayload
+}
+
+type committedFailure struct {
+	record  DirectoryFailureRecord
+	payload FailurePayload
+}
 
 type CatalogStore struct {
 	shareInstance  ShareInstance
-	backend        CatalogBackend
 	processBudget  *BudgetAccount
 	shareBudget    *BudgetAccount
 	failureEncoder FailureEncoder
-	spillFactory   SpillFactory
-	sortRunBytes   uint64
 	clock          Clock
 	attemptIDs     ScanAttemptIDGenerator
 	generations    DirectoryGenerationGenerator
 
-	commitMu             sync.Mutex
-	mu                   sync.Mutex
-	closed               bool
-	held                 []*BudgetReservation
-	recoveredReservation *BudgetReservation
-	committedRoot        *committedRootState
-	attempts             map[DirectoryID]*scanAttempt
-	usedAttempts         map[scanAttemptIdentity]struct{}
-	usedGenerations      map[DirectoryGeneration]struct{}
-	scanWG               sync.WaitGroup
+	commitMu        sync.Mutex
+	mu              sync.RWMutex
+	closed          bool
+	held            []*BudgetReservation
+	committedRoot   *committedRootState
+	directories     map[DirectoryID]committedDirectoryState
+	nodes           map[NodeID]NodeRecord
+	failures        map[DirectoryID]map[ScanAttemptID]committedFailure
+	attempts        map[DirectoryID]*scanAttempt
+	usedAttempts    map[scanAttemptIdentity]struct{}
+	usedGenerations map[DirectoryGeneration]struct{}
+	scanWG          sync.WaitGroup
 }
 
 type scanAttemptIdentity struct {
@@ -41,10 +60,10 @@ type scanAttemptIdentity struct {
 	attempt   ScanAttemptID
 }
 
-func NewCatalogStore(config StoreConfig) (result *CatalogStore, resultErr error) {
-	if config.ShareInstance.IsZero() || config.Backend == nil || config.ProcessBudget == nil ||
+func NewCatalogStore(config StoreConfig) (*CatalogStore, error) {
+	if config.ShareInstance.IsZero() || config.ProcessBudget == nil ||
 		config.ShareBudget == nil || config.FailureEncoder == nil {
-		return nil, errors.New("catalog store requires share identity, backend, budgets, and failure sealer")
+		return nil, errors.New("catalog store requires share identity, budgets, and failure sealer")
 	}
 	if config.ProcessBudget == config.ShareBudget {
 		return nil, errors.New("catalog store process and share budgets must be distinct")
@@ -58,63 +77,21 @@ func NewCatalogStore(config StoreConfig) (result *CatalogStore, resultErr error)
 	if config.Generations == nil {
 		config.Generations = randomCatalogIdentities{}
 	}
-	cleanupDefaultSpill := false
-	if config.SpillFactory == nil {
-		factory, err := defaultCatalogSpillFactory(config.Backend)
-		if err != nil {
-			return nil, err
-		}
-		config.SpillFactory = factory
-		cleanupDefaultSpill = true
-	}
-	defer func() {
-		if cleanupDefaultSpill {
-			if lifecycle, ok := config.SpillFactory.(SpillLifecycle); ok {
-				resultErr = errors.Join(resultErr, lifecycle.Destroy(config.ShareInstance))
-			}
-		}
-	}()
-	if config.SortRunBytes == 0 {
-		config.SortRunBytes = DefaultSortRunMemoryBytes
-	}
-	if lifecycle, ok := config.SpillFactory.(SpillLifecycle); ok {
-		if err := lifecycle.Recover(context.Background(), config.ShareInstance); err != nil {
-			return nil, fmt.Errorf("recover catalog spill storage: %w", err)
-		}
-	}
-	recovered, err := config.Backend.Recover(context.Background())
-	if err != nil {
-		return nil, fmt.Errorf("recover catalog backend: %w", err)
-	}
-	var recoveredReservation *BudgetReservation
-	if recovered != (ResourceUsage{}) {
-		recoveredReservation, err = reserveAccounts(
-			[]*BudgetAccount{config.ProcessBudget, config.ShareBudget}, recovered,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("admit recovered catalog state: %w", err)
-		}
-	}
-	store := &CatalogStore{
-		shareInstance: config.ShareInstance, backend: config.Backend,
-		processBudget: config.ProcessBudget, shareBudget: config.ShareBudget,
-		failureEncoder: config.FailureEncoder,
-		spillFactory:   config.SpillFactory, sortRunBytes: config.SortRunBytes,
-		clock: config.Clock, attemptIDs: config.AttemptIDs, generations: config.Generations,
-		attempts: make(map[DirectoryID]*scanAttempt), usedAttempts: make(map[scanAttemptIdentity]struct{}),
-		usedGenerations: make(map[DirectoryGeneration]struct{}), recoveredReservation: recoveredReservation,
-	}
-	if recoveredReservation != nil {
-		store.held = append(store.held, recoveredReservation)
-	}
-	if err := store.restoreFailureAuthority(context.Background()); err != nil {
-		if recoveredReservation != nil {
-			recoveredReservation.Release()
-		}
-		return nil, fmt.Errorf("restore catalog failure authority: %w", err)
-	}
-	cleanupDefaultSpill = false
-	return store, nil
+	return &CatalogStore{
+		shareInstance:   config.ShareInstance,
+		processBudget:   config.ProcessBudget,
+		shareBudget:     config.ShareBudget,
+		failureEncoder:  config.FailureEncoder,
+		clock:           config.Clock,
+		attemptIDs:      config.AttemptIDs,
+		generations:     config.Generations,
+		directories:     make(map[DirectoryID]committedDirectoryState),
+		nodes:           make(map[NodeID]NodeRecord),
+		failures:        make(map[DirectoryID]map[ScanAttemptID]committedFailure),
+		attempts:        make(map[DirectoryID]*scanAttempt),
+		usedAttempts:    make(map[scanAttemptIdentity]struct{}),
+		usedGenerations: make(map[DirectoryGeneration]struct{}),
+	}, nil
 }
 
 func (s *CatalogStore) hierarchy(session *BudgetAccount) BudgetHierarchy {
@@ -122,14 +99,16 @@ func (s *CatalogStore) hierarchy(session *BudgetAccount) BudgetHierarchy {
 }
 
 func (s *CatalogStore) Directory(ctx context.Context, directory DirectoryID) (CommittedDirectory, bool, error) {
-	if s.isClosed() {
+	if err := ctx.Err(); err != nil {
+		return CommittedDirectory{}, false, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed {
 		return CommittedDirectory{}, false, ErrCatalogClosed
 	}
-	committed, found, err := s.backend.LoadDirectory(ctx, directory)
-	if err == nil && found && (committed.ShareInstance() != s.shareInstance || committed.DirectoryID() != directory) {
-		return CommittedDirectory{}, false, ErrCorruptCatalogStorage
-	}
-	return committed, found, err
+	state, found := s.directories[directory]
+	return state.committed, found, nil
 }
 
 func (s *CatalogStore) Page(ctx context.Context, directory DirectoryID, generation DirectoryGeneration, index uint32) (CatalogPage, bool, error) {
@@ -142,34 +121,42 @@ func (s *CatalogStore) Page(ctx context.Context, directory DirectoryID, generati
 }
 
 func (s *CatalogStore) PagePayload(ctx context.Context, directory DirectoryID, generation DirectoryGeneration, index uint32) (PagePayload, bool, error) {
-	if s.isClosed() {
-		return PagePayload{}, false, ErrCatalogClosed
-	}
-	payload, found, err := s.backend.LoadPagePayload(ctx, directory, generation, index)
-	if err != nil || !found {
+	if err := ctx.Err(); err != nil {
 		return PagePayload{}, false, err
 	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed {
+		return PagePayload{}, false, ErrCatalogClosed
+	}
+	state, found := s.directories[directory]
+	if !found || state.committed.generation != generation || uint64(index) >= uint64(len(state.pages)) {
+		return PagePayload{}, false, nil
+	}
+	payload := state.pages[index]
 	address := PageAddress{ShareInstance: s.shareInstance, DirectoryID: directory, Generation: generation, PageIndex: index}
 	if payload.IsZero() || payload.Address() != address {
-		return PagePayload{}, false, ErrCorruptCatalogStorage
+		return PagePayload{}, false, ErrInvalidPagePayload
 	}
 	return payload, true, nil
 }
 
 func (s *CatalogStore) Node(ctx context.Context, id NodeID) (NodeRecord, bool, error) {
-	if s.isClosed() {
+	if err := ctx.Err(); err != nil {
+		return NodeRecord{}, false, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed {
 		return NodeRecord{}, false, ErrCatalogClosed
 	}
-	record, found, err := s.backend.LoadNode(ctx, id)
-	if err == nil && found && record.NodeID() != id {
-		return NodeRecord{}, false, ErrCorruptCatalogStorage
-	}
-	return record, found, err
+	record, found := s.nodes[id]
+	return record, found, nil
 }
 
 func (s *CatalogStore) isClosed() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.closed
 }
 
@@ -184,7 +171,6 @@ func (s *CatalogStore) Close() error {
 	s.closed = true
 	held := s.held
 	s.held = nil
-	s.recoveredReservation = nil
 	s.committedRoot = nil
 	attempts := make([]*scanAttempt, 0, len(s.attempts))
 	for _, attempt := range s.attempts {
@@ -192,6 +178,9 @@ func (s *CatalogStore) Close() error {
 			attempts = append(attempts, attempt)
 		}
 	}
+	s.directories = nil
+	s.nodes = nil
+	s.failures = nil
 	s.attempts = nil
 	s.usedAttempts = nil
 	s.usedGenerations = nil
@@ -201,19 +190,10 @@ func (s *CatalogStore) Close() error {
 		attempt.cancel()
 	}
 	s.scanWG.Wait()
-	var closeErr error
-	if destroyable, ok := s.backend.(interface{ Destroy() error }); ok {
-		closeErr = destroyable.Destroy()
-	} else {
-		closeErr = s.backend.Close()
-	}
 	for _, reservation := range held {
 		reservation.Release()
 	}
-	if lifecycle, ok := s.spillFactory.(SpillLifecycle); ok {
-		closeErr = errors.Join(closeErr, lifecycle.Destroy(s.shareInstance))
-	}
-	return closeErr
+	return nil
 }
 
 func (s *CatalogStore) ListChildren(ctx context.Context, directory DirectoryID, sessionBudget *BudgetAccount, options ScanOptions, scanner DirectoryScanner) (CommittedDirectory, error) {
@@ -348,13 +328,11 @@ func (s *CatalogStore) awaitAttempt(
 		s.mu.Lock()
 		attempt.waiters--
 		s.detachProgressLocked(attempt, subscription, false, ctx.Err())
-		if !attempt.completed {
-			if attempt.waiters == 0 {
-				if s.attempts[attempt.directory] == attempt {
-					delete(s.attempts, attempt.directory)
-				}
-				attempt.cancel()
+		if !attempt.completed && attempt.waiters == 0 {
+			if s.attempts[attempt.directory] == attempt {
+				delete(s.attempts, attempt.directory)
 			}
+			attempt.cancel()
 		}
 		s.mu.Unlock()
 		_ = finishScanProgressSubscription(subscription)
@@ -386,10 +364,13 @@ func (s *CatalogStore) runAttempt(attempt *scanAttempt, directory NodeRecord, se
 			resultErr = fmt.Errorf("catalog scanner panicked: %v\n%s", recovered, debug.Stack())
 		}
 		if resultErr != nil {
-			s.mu.Lock()
+			s.mu.RLock()
 			eligible := !s.closed && s.attempts[attempt.directory] == attempt
-			s.mu.Unlock()
+			s.mu.RUnlock()
 			if eligible {
+				// Release transient scan work and buffered child memory before reserving
+				// space to encode and retain the failure payload.
+				attempt.resources.reset()
 				failure, err := s.persistAttemptFailure(attempt, resultErr, sessionBudget)
 				if err == nil {
 					attempt.failure = failure
@@ -408,19 +389,7 @@ func (s *CatalogStore) runAttempt(attempt *scanAttempt, directory NodeRecord, se
 		resultErr = err
 		return
 	}
-	workspace, err := s.spillFactory.NewWorkspace(attemptContext, SpillRequest{
-		ShareInstance: s.shareInstance, AttemptID: attempt.id,
-	})
-	if err != nil {
-		resultErr = err
-		return
-	}
-	defer func() {
-		resultErr = errors.Join(resultErr, workspace.Close())
-	}()
-	sorter, err := newDirectorySorter(
-		attempt.directory, workspace, attempt.resources, s.hierarchy(sessionBudget), s.sortRunBytes,
-	)
+	sorter, err := newDirectorySorter(attempt.directory, attempt.resources)
 	if err != nil {
 		resultErr = err
 		return
@@ -447,23 +416,21 @@ func (s *CatalogStore) runAttempt(attempt *scanAttempt, directory NodeRecord, se
 		return
 	}
 	if result.OmittedCount > MaxDirectoryEntries || sortResult.omittedCount > MaxDirectoryEntries-result.OmittedCount {
-		_ = sortResult.nodes.Release(attempt.resources)
 		resultErr = fmt.Errorf("%w: directory %x exceeds its entry limit", ErrPageLimit, attempt.directory)
 		return
 	}
 	commit := DirectoryCommit{
 		directory:    directory,
 		generation:   attempt.generation,
-		children:     sortResult.nodes,
+		children:     sortResult.records,
 		omittedCount: result.OmittedCount + sortResult.omittedCount,
 	}
 	if err := validateDirectoryCommit(s.shareInstance, commit, false); err != nil {
-		_ = sortResult.nodes.Release(attempt.resources)
 		resultErr = err
 		return
 	}
 	s.commitMu.Lock()
-	committed, _, err = s.commitDirectoryLocked(attemptContext, commit, sessionBudget, attempt.resources)
+	committed, _, err = s.commitDirectoryLocked(attemptContext, commit, sessionBudget, attempt.resources, true)
 	s.commitMu.Unlock()
 	if err != nil {
 		resultErr = err

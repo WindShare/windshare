@@ -30,12 +30,11 @@ const (
 	DefaultShareCommittedEntries   = 4_194_304
 	DefaultProcessCommittedEntries = 16_777_216
 
-	DefaultSessionCatalogMemory = uint64(16) << 20
-	DefaultShareCatalogMemory   = uint64(64) << 20
+	// Memory limits bound retained authoritative NodeRecord/PagePayload state and
+	// transient directory sorting in memory for live share instances.
+	DefaultSessionCatalogMemory = uint64(64) << 20
+	DefaultShareCatalogMemory   = uint64(128) << 20
 	DefaultProcessCatalogMemory = uint64(512) << 20
-
-	DefaultShareCatalogSpill   = uint64(2) << 30
-	DefaultProcessCatalogSpill = uint64(16) << 30
 )
 
 type ResourceUsage struct {
@@ -43,7 +42,6 @@ type ResourceUsage struct {
 	ScanWork    uint64
 	Entries     uint64
 	MemoryBytes uint64
-	SpillBytes  uint64
 }
 
 type BudgetLimits ResourceUsage
@@ -51,21 +49,21 @@ type BudgetLimits ResourceUsage
 func DefaultSessionBudgetLimits() BudgetLimits {
 	return BudgetLimits{
 		ActiveScans: DefaultSessionActiveScans, ScanWork: DefaultSessionScanWork,
-		Entries: math.MaxUint64, MemoryBytes: DefaultSessionCatalogMemory, SpillBytes: math.MaxUint64,
+		Entries: math.MaxUint64, MemoryBytes: DefaultSessionCatalogMemory,
 	}
 }
 
 func DefaultShareBudgetLimits() BudgetLimits {
 	return BudgetLimits{
 		ActiveScans: DefaultShareActiveScans, ScanWork: DefaultShareScanWork,
-		Entries: DefaultShareCommittedEntries, MemoryBytes: DefaultShareCatalogMemory, SpillBytes: DefaultShareCatalogSpill,
+		Entries: DefaultShareCommittedEntries, MemoryBytes: DefaultShareCatalogMemory,
 	}
 }
 
 func DefaultProcessBudgetLimits() BudgetLimits {
 	return BudgetLimits{
 		ActiveScans: DefaultProcessActiveScans, ScanWork: DefaultProcessScanWork,
-		Entries: DefaultProcessCommittedEntries, MemoryBytes: DefaultProcessCatalogMemory, SpillBytes: DefaultProcessCatalogSpill,
+		Entries: DefaultProcessCommittedEntries, MemoryBytes: DefaultProcessCatalogMemory,
 	}
 }
 
@@ -87,7 +85,7 @@ func NewBudgetAccount(name string, limits BudgetLimits) (*BudgetAccount, error) 
 		return nil, errors.New("catalog budget account requires a name")
 	}
 	converted := ResourceUsage(limits)
-	if converted.ActiveScans == 0 || converted.ScanWork == 0 || converted.Entries == 0 || converted.MemoryBytes == 0 || converted.SpillBytes == 0 {
+	if converted.ActiveScans == 0 || converted.ScanWork == 0 || converted.Entries == 0 || converted.MemoryBytes == 0 {
 		return nil, errors.New("catalog budget limits must all be positive")
 	}
 	return &BudgetAccount{name: name, limits: converted}, nil
@@ -110,19 +108,19 @@ func (a *BudgetAccount) Snapshot() BudgetSnapshot {
 }
 
 func addUsage(left, right ResourceUsage) (ResourceUsage, bool) {
-	if left.ActiveScans > math.MaxUint64-right.ActiveScans || left.ScanWork > math.MaxUint64-right.ScanWork || left.Entries > math.MaxUint64-right.Entries ||
-		left.MemoryBytes > math.MaxUint64-right.MemoryBytes || left.SpillBytes > math.MaxUint64-right.SpillBytes {
+	if left.ActiveScans > math.MaxUint64-right.ActiveScans || left.ScanWork > math.MaxUint64-right.ScanWork ||
+		left.Entries > math.MaxUint64-right.Entries || left.MemoryBytes > math.MaxUint64-right.MemoryBytes {
 		return ResourceUsage{}, false
 	}
 	return ResourceUsage{
-		ActiveScans: left.ActiveScans + right.ActiveScans, ScanWork: left.ScanWork + right.ScanWork, Entries: left.Entries + right.Entries,
-		MemoryBytes: left.MemoryBytes + right.MemoryBytes, SpillBytes: left.SpillBytes + right.SpillBytes,
+		ActiveScans: left.ActiveScans + right.ActiveScans, ScanWork: left.ScanWork + right.ScanWork,
+		Entries: left.Entries + right.Entries, MemoryBytes: left.MemoryBytes + right.MemoryBytes,
 	}, true
 }
 
 func usageWithin(used, limit ResourceUsage) bool {
-	return used.ActiveScans <= limit.ActiveScans && used.ScanWork <= limit.ScanWork && used.Entries <= limit.Entries &&
-		used.MemoryBytes <= limit.MemoryBytes && used.SpillBytes <= limit.SpillBytes
+	return used.ActiveScans <= limit.ActiveScans && used.ScanWork <= limit.ScanWork &&
+		used.Entries <= limit.Entries && used.MemoryBytes <= limit.MemoryBytes
 }
 
 func (a *BudgetAccount) add(usage ResourceUsage) error {
@@ -147,8 +145,8 @@ func (a *BudgetAccount) release(usage ResourceUsage) {
 
 func subtractUsage(left, right ResourceUsage) ResourceUsage {
 	return ResourceUsage{
-		ActiveScans: left.ActiveScans - right.ActiveScans, ScanWork: left.ScanWork - right.ScanWork, Entries: left.Entries - right.Entries,
-		MemoryBytes: left.MemoryBytes - right.MemoryBytes, SpillBytes: left.SpillBytes - right.SpillBytes,
+		ActiveScans: left.ActiveScans - right.ActiveScans, ScanWork: left.ScanWork - right.ScanWork,
+		Entries: left.Entries - right.Entries, MemoryBytes: left.MemoryBytes - right.MemoryBytes,
 	}
 }
 
@@ -230,8 +228,6 @@ func (r *BudgetReservation) Grow(usage ResourceUsage) error {
 }
 
 // Shrink releases a known subset while keeping the logical reservation live.
-// External merge passes use it when an input run is deleted, so the spill
-// budget measures peak bytes on disk instead of cumulative I/O.
 func (r *BudgetReservation) Shrink(usage ResourceUsage) error {
 	if r == nil {
 		return errors.New("catalog budget reservation is nil")
@@ -242,8 +238,7 @@ func (r *BudgetReservation) Shrink(usage ResourceUsage) error {
 		return errors.New("catalog budget reservation is already released")
 	}
 	if usage.ActiveScans > r.usage.ActiveScans || usage.ScanWork > r.usage.ScanWork ||
-		usage.Entries > r.usage.Entries || usage.MemoryBytes > r.usage.MemoryBytes ||
-		usage.SpillBytes > r.usage.SpillBytes {
+		usage.Entries > r.usage.Entries || usage.MemoryBytes > r.usage.MemoryBytes {
 		return errors.New("catalog budget shrink exceeds its reservation")
 	}
 	r.usage = subtractUsage(r.usage, usage)
@@ -263,8 +258,7 @@ func (r *BudgetReservation) keep(usage ResourceUsage) error {
 		return errors.New("catalog budget reservation is already released")
 	}
 	if usage.ActiveScans > r.usage.ActiveScans || usage.ScanWork > r.usage.ScanWork ||
-		usage.Entries > r.usage.Entries || usage.MemoryBytes > r.usage.MemoryBytes ||
-		usage.SpillBytes > r.usage.SpillBytes {
+		usage.Entries > r.usage.Entries || usage.MemoryBytes > r.usage.MemoryBytes {
 		r.mu.Unlock()
 		return errors.New("catalog retained usage exceeds its staging reservation")
 	}
@@ -361,12 +355,9 @@ func (randomCatalogIdentities) NewDirectoryGeneration() (DirectoryGeneration, er
 
 type StoreConfig struct {
 	ShareInstance  ShareInstance
-	Backend        CatalogBackend
 	ProcessBudget  *BudgetAccount
 	ShareBudget    *BudgetAccount
 	FailureEncoder FailureEncoder
-	SpillFactory   SpillFactory
-	SortRunBytes   uint64
 	Clock          Clock
 	AttemptIDs     ScanAttemptIDGenerator
 	Generations    DirectoryGenerationGenerator

@@ -387,53 +387,9 @@ function Invoke-RequiredWindowsNativeTestsAsStandardUser {
     }
 }
 
-# Platform-neutral wide-catalog fsync scale suites (TestLong* in core/catalog)
-# are owned by Linux release and weekly gates; running them on hosted Windows
-# NTFS adds ~3 minutes of virtual-disk FlushFileBuffers overhead without adding
-# Windows-specific coverage (dirpublish rename tests live in their own package
-# and run in full; core/catalog still runs in -short mode here).
-$windowsShortOnlyReleasePackages = @(
-    'github.com/windshare/windshare/core/catalog'
-)
-
 function Invoke-ExtractedWindowsModuleTests {
-    $allPackages = @(& $goExecutable list ./...)
-    if ($LASTEXITCODE -ne 0 -or $allPackages.Count -eq 0) {
-        throw "discover extracted module packages failed with code $LASTEXITCODE"
-    }
-
-    $shortOnlyLookup = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-    foreach ($packagePath in $windowsShortOnlyReleasePackages) {
-        [void]$shortOnlyLookup.Add($packagePath)
-    }
-
-    $shortOnlyPackages = [Collections.Generic.List[string]]::new()
-    $fullPackages = [Collections.Generic.List[string]]::new()
-    foreach ($packagePath in $allPackages) {
-        $trimmed = ([string]$packagePath).Trim()
-        if ([string]::IsNullOrWhiteSpace($trimmed)) {
-            continue
-        }
-        if ($shortOnlyLookup.Contains($trimmed)) {
-            $shortOnlyPackages.Add($trimmed)
-        } else {
-            $fullPackages.Add($trimmed)
-        }
-    }
-    if ($shortOnlyPackages.Count -ne $shortOnlyLookup.Count) {
-        throw "expected short-only release packages were not all found in extracted module (found=$($shortOnlyPackages.Count), want=$($shortOnlyLookup.Count))"
-    }
-    if ($fullPackages.Count -eq 0) {
-        throw 'extracted module produced no full-test packages'
-    }
-
-    [string[]]$shortOnlyTargets = $shortOnlyPackages.ToArray()
-    [string[]]$fullTargets = $fullPackages.ToArray()
-    Invoke-Step 'GOWORK=off go test -short core/catalog (extracted module)' {
-        & $goExecutable test -short -count=1 "-timeout=$moduleSuiteTestTimeout" $shortOnlyTargets
-    }
-    Invoke-Step 'GOWORK=off go test extracted module (excluding Linux-owned catalog scale suites)' {
-        & $goExecutable test -count=1 "-timeout=$moduleSuiteTestTimeout" $fullTargets
+    Invoke-Step 'GOWORK=off go test extracted module' {
+        & $goExecutable test -count=1 "-timeout=$moduleSuiteTestTimeout" ./...
     }
 }
 

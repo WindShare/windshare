@@ -133,9 +133,6 @@ func (o *observations) emit(value Observation) {
 	}
 }
 
-func (o *observations) TraceCatalogStorage(value liveshare.CatalogStorageTrace) {
-	o.control.Diagnostics.Record(value)
-}
 func (o *observations) TraceRootPrefetch(value liveshare.RootPrefetchTrace) {
 	o.control.Diagnostics.Record(value)
 }

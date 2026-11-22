@@ -215,6 +215,60 @@ func TestPackagePolicyEnforcesCoreAndModuleBoundaries(t *testing.T) {
 				Module:     &listedModule{Path: repositoryModulePath},
 			},
 		},
+		{
+			name: "production core cannot directly import os",
+			pkg: listedPackage{
+				ImportPath: coreImportPath + "/catalog",
+				Imports:    []string{"os"},
+				Module:     &listedModule{Path: repositoryModulePath},
+			},
+			wantProblem: "prohibited OS filesystem/process capability os",
+		},
+		{
+			name: "production core cannot directly import filepath",
+			pkg: listedPackage{
+				ImportPath: coreImportPath + "/liveshare",
+				Imports:    []string{"path/filepath"},
+				Module:     &listedModule{Path: repositoryModulePath},
+			},
+			wantProblem: "prohibited host filesystem path capability path/filepath",
+		},
+		{
+			name: "production core cannot directly import x/sys",
+			pkg: listedPackage{
+				ImportPath: coreImportPath + "/liveshare",
+				Imports:    []string{"golang.org/x/sys/windows"},
+				Module:     &listedModule{Path: repositoryModulePath},
+			},
+			wantProblem: "prohibited platform syscall capability golang.org/x/sys/windows",
+		},
+		{
+			name: "production core cannot import internal test helper",
+			pkg: listedPackage{
+				ImportPath: coreImportPath + "/catalog",
+				Imports:    []string{coreImportPath + "/internal/testvec"},
+				Module:     &listedModule{Path: repositoryModulePath},
+			},
+			wantProblem: "production core package imports test helper",
+		},
+		{
+			name: "internal test helper may directly import os and x/sys",
+			pkg: listedPackage{
+				ImportPath: coreImportPath + "/internal/testoutputroot",
+				Imports:    []string{"os", "path/filepath", "golang.org/x/sys/windows"},
+				Module:     &listedModule{Path: repositoryModulePath},
+			},
+		},
+		{
+			name:  "core test delta may directly import os and filepath",
+			scope: testDeltaScope,
+			pkg: listedPackage{
+				ImportPath: coreImportPath + "/catalog [" + coreImportPath + "/catalog.test]",
+				ForTest:    coreImportPath + "/catalog",
+				Imports:    []string{"os", "path/filepath"},
+				Module:     &listedModule{Path: repositoryModulePath},
+			},
+		},
 	}
 
 	for _, test := range tests {

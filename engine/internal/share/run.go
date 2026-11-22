@@ -92,8 +92,8 @@ func (s *activeShare) run(ctx, resourceContext context.Context, request Request)
 	config := liveshare.SenderConfig{
 		Source: o.sourceFactory(request.Source), Relays: urls, ChunkSize: request.ChunkSize,
 		Random: d.Control.Random, Now: d.Control.Now,
-		CatalogTracer: o, RootPrefetchTracer: o,
-		RevisionCapacity: d.RevisionCapacity, CatalogBudget: d.CatalogBudget, CacheBudget: d.CacheBudget,
+		RootPrefetchTracer: o,
+		RevisionCapacity:   d.RevisionCapacity, CatalogBudget: d.CatalogBudget, CacheBudget: d.CacheBudget,
 	}
 	if d.Control.Diagnostics.Enabled() {
 		config.RevisionTracer = o

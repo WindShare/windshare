@@ -48,6 +48,19 @@ var prohibitedPackageCapabilities = []pathFamily{
 	{Root: "net/smtp", Capability: "SMTP transport"},
 }
 
+// Production core packages must stay free of direct host OS, filesystem path,
+// and syscall dependencies; only internal test-helper packages may touch them.
+var coreProductionForbiddenDirectImports = []pathFamily{
+	{Root: "os", Capability: "OS filesystem/process"},
+	{Root: "path/filepath", Capability: "host filesystem path"},
+	{Root: "golang.org/x/sys", Capability: "platform syscall"},
+}
+
+var coreTestHelperPackages = map[string]struct{}{
+	coreImportPath + "/internal/testoutputroot": {},
+	coreImportPath + "/internal/testvec":        {},
+}
+
 var prohibitedModuleCapabilities = []pathFamily{
 	{Root: "github.com/coder/websocket", Capability: "WebSocket transport"},
 	{Root: "github.com/gorilla/websocket", Capability: "WebSocket transport"},
@@ -299,7 +312,7 @@ func packagePolicyViolations(scope graphScope, pkg listedPackage) []string {
 				repositoryModulePath,
 			)}
 		}
-		return append(coreDirectImportViolations(scope, pkg.Imports),
+		return append(coreDirectImportViolations(scope, logicalImportPath, pkg.Imports),
 			sessionDependencyViolations(scope, logicalImportPath, pkg.Imports)...)
 	}
 
@@ -347,8 +360,9 @@ func packagePolicyViolations(scope graphScope, pkg listedPackage) []string {
 	return nil
 }
 
-func coreDirectImportViolations(scope graphScope, imports []string) []string {
+func coreDirectImportViolations(scope graphScope, logicalImportPath string, imports []string) []string {
 	var violations []string
+	_, isTestHelper := coreTestHelperPackages[logicalImportPath]
 	for _, importedPath := range imports {
 		if family, ok := matchingFamily(importedPath, prohibitedPackageCapabilities); ok {
 			violations = append(violations, fmt.Sprintf(
@@ -365,6 +379,24 @@ func coreDirectImportViolations(scope graphScope, imports []string) []string {
 				importedPath,
 				capability.Reason,
 			))
+			continue
+		}
+		if scope == productionScope && !isTestHelper {
+			if family, ok := matchingFamily(importedPath, coreProductionForbiddenDirectImports); ok {
+				violations = append(violations, fmt.Sprintf(
+					"directly imports prohibited %s capability %s",
+					family.Capability,
+					importedPath,
+				))
+				continue
+			}
+			if _, helper := coreTestHelperPackages[importedPath]; helper {
+				violations = append(violations, fmt.Sprintf(
+					"production core package imports test helper %s",
+					importedPath,
+				))
+				continue
+			}
 		}
 	}
 	return violations

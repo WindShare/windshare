@@ -1,10 +1,8 @@
 package catalog
 
 import (
-	"bytes"
-	"context"
-	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/windshare/windshare/core/internal/unicode15"
@@ -144,233 +142,81 @@ func (observe SourceOmissionObserverFunc) ObserveSourceOmissions(value SourceOmi
 	}
 }
 
-const (
-	admissionIdentityKey byte = iota
-	admissionNameKey
-)
-
-type candidateRecord struct {
-	collisionKey []byte
-	rawName      []byte
-}
-
-func candidateFromRecord(record sortRecord) (candidateRecord, error) {
-	if len(record.key) < 2 || record.key[0] != admissionNameKey || len(record.payload) != 0 {
-		return candidateRecord{}, fmt.Errorf("%w: malformed sibling admission record", ErrCorruptCatalogStorage)
+// admitSortedSiblings withholds every sibling group whose names collide under
+// portable matching and returns the memory bytes no longer retained after
+// filtering (omitted records plus any transient pre-NFC raw spellings).
+func admitSortedSiblings(items []scannedNode) ([]NodeRecord, uint64, []SourceOmission, uint64) {
+	if len(items) == 0 {
+		return nil, 0, nil, 0
 	}
-	collisionKey, rawName, valid := bytes.Cut(record.key[1:], []byte{0})
-	if !valid || len(collisionKey) == 0 || len(rawName) == 0 {
-		return candidateRecord{}, fmt.Errorf("%w: malformed candidate sort key", ErrCorruptCatalogStorage)
-	}
-	return candidateRecord{collisionKey: collisionKey, rawName: rawName}, nil
-}
-
-func nextCandidateRecord(ctx context.Context, cursor *sortCursor) (candidateRecord, bool, error) {
-	record, ok, err := cursor.next(ctx)
-	if err != nil || !ok {
-		return candidateRecord{}, false, err
-	}
-	candidate, err := candidateFromRecord(record)
-	return candidate, err == nil, err
-}
-
-// Identities sort before names so duplicate IDs fail before any collision group
-// can be admitted as an omission. A single lightweight index bounds both checks.
-func firstCandidateRecord(ctx context.Context, cursor *sortCursor) (candidateRecord, bool, error) {
-	var previous [IdentityBytes]byte
-	hasPrevious := false
-	for {
-		record, ok, err := cursor.next(ctx)
-		if err != nil || !ok {
-			return candidateRecord{}, false, err
-		}
-		if len(record.key) == 0 || record.key[0] != admissionIdentityKey {
-			candidate, err := candidateFromRecord(record)
-			return candidate, err == nil, err
-		}
-		if len(record.key) != IdentityBytes+1 || len(record.payload) != 0 {
-			return candidateRecord{}, false, fmt.Errorf("%w: malformed node identity sort key", ErrCorruptCatalogStorage)
-		}
-		if hasPrevious && bytes.Equal(previous[:], record.key[1:]) {
-			return candidateRecord{}, false, ErrSiblingCollision
-		}
-		copy(previous[:], record.key[1:])
-		hasPrevious = true
-	}
-}
-
-type pendingCandidate struct {
-	collisionKey []byte
-	rawName      []byte
-	lease        *BudgetReservation
-}
-
-func retainCandidate(record candidateRecord, cursor *sortCursor) pendingCandidate {
-	// Transfer the current cursor reservation with its bytes. Copying the name
-	// and reserving it again would charge and allocate twice for every sibling.
-	pending := pendingCandidate{
-		collisionKey: record.collisionKey,
-		rawName:      record.rawName,
-		lease:        cursor.lease,
-	}
-	cursor.lease = nil
-	return pending
-}
-
-func (p *pendingCandidate) release() {
-	if p.lease != nil {
-		p.lease.Release()
-		p.lease = nil
-	}
-	p.collisionKey = nil
-	p.rawName = nil
-}
-
-type collisionOmissionCollector struct {
-	names   *externalSorter
-	count   uint64
-	samples []SourceOmission
-}
-
-func (c *collisionOmissionCollector) record(ctx context.Context, name, other string) error {
-	canonical := unicode15.NormalizeNFC(name)
-	if err := c.names.add(ctx, sortRecord{key: []byte(canonical)}); err != nil {
-		return err
-	}
-	c.count++
-	if len(c.samples) < MaxSourceOmissionSamples {
-		c.samples = append(c.samples, NewSiblingCollisionOmission(name, other))
-	}
-	return nil
-}
-
-func (s *directorySorter) collectSiblingOmissions(
-	ctx context.Context,
-	admission SpillObject,
-) (uint64, []SourceOmission, error) {
-	cursor, err := newSortCursor(ctx, admission, s.hierarchy)
-	if err != nil {
-		return 0, nil, err
-	}
-	defer cursor.close()
-
-	first, ok, err := firstCandidateRecord(ctx, cursor)
-	if err != nil || !ok {
-		return 0, nil, err
-	}
-	pending := retainCandidate(first, cursor)
-	defer pending.release()
-
-	collector := collisionOmissionCollector{names: s.omittedNames}
-	colliding := false
-	for {
-		next, nextOK, err := nextCandidateRecord(ctx, cursor)
-		if err != nil {
-			return 0, nil, err
-		}
-		if !nextOK {
-			return collector.count, collector.samples, nil
-		}
-		if !bytes.Equal(pending.collisionKey, next.collisionKey) {
-			pending.release()
-			pending = retainCandidate(next, cursor)
-			colliding = false
+	firstByKey := make(map[string]int, len(items))
+	var collidingGroups map[string][]int
+	var colliding []bool
+	for index, item := range items {
+		key := siblingCollisionKey(item.record.Entry().Name())
+		first, exists := firstByKey[key]
+		if !exists {
+			firstByKey[key] = index
 			continue
 		}
-		// Retain only the first name of a group, regardless of its width. Every
-		// member gets an exclusion key, but node payloads never enter this pass.
-		firstName, nextName := string(pending.rawName), string(next.rawName)
-		if !colliding {
-			if err := collector.record(ctx, firstName, nextName); err != nil {
-				return 0, nil, err
+		if collidingGroups == nil {
+			collidingGroups = make(map[string][]int)
+			colliding = make([]bool, len(items))
+		}
+		if !colliding[first] {
+			colliding[first] = true
+			collidingGroups[key] = append(collidingGroups[key], first)
+		}
+		colliding[index] = true
+		collidingGroups[key] = append(collidingGroups[key], index)
+	}
+
+	var releasedBytes uint64
+	if len(collidingGroups) == 0 {
+		admitted := make([]NodeRecord, len(items))
+		for index, item := range items {
+			admitted[index] = item.record
+			releasedBytes += item.extra
+		}
+		return admitted, 0, nil, releasedBytes
+	}
+
+	keys := make([]string, 0, len(collidingGroups))
+	for key := range collidingGroups {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+
+	var omittedCount uint64
+	var samples []SourceOmission
+	for _, key := range keys {
+		members := collidingGroups[key]
+		slices.SortFunc(members, func(left, right int) int {
+			return strings.Compare(items[left].rawName, items[right].rawName)
+		})
+		omittedCount += uint64(len(members))
+		if len(samples) >= MaxSourceOmissionSamples {
+			continue
+		}
+		firstName := items[members[0]].rawName
+		secondName := items[members[1]].rawName
+		samples = append(samples, NewSiblingCollisionOmission(firstName, secondName))
+		for _, member := range members[1:] {
+			if len(samples) >= MaxSourceOmissionSamples {
+				break
 			}
-			colliding = true
-		}
-		if err := collector.record(ctx, nextName, firstName); err != nil {
-			return 0, nil, err
+			samples = append(samples, NewSiblingCollisionOmission(items[member].rawName, firstName))
 		}
 	}
-}
 
-// Filtering joins two forward-only streams. Repeated canonical names retain one
-// exclusion per node, including NFC/NFD aliases, so every colliding item stays
-// out of the share without buffering a group or rewriting node payloads.
-type admittedNodeSource struct {
-	source       sortedNodeSource
-	names        SpillObject
-	omittedCount uint64
-}
-
-func (s admittedNodeSource) Count() uint64 { return s.source.Count() - s.omittedCount }
-
-func (s admittedNodeSource) Open(ctx context.Context) (NodeRecordIterator, error) {
-	nodes, err := s.source.Open(ctx)
-	if err != nil {
-		return nil, err
-	}
-	names, err := newSortCursor(ctx, s.names, s.source.hierarchy)
-	if err != nil {
-		return nil, errors.Join(err, nodes.Close())
-	}
-	first, err := nextOmittedName(ctx, names)
-	if err != nil {
-		names.close()
-		return nil, errors.Join(err, nodes.Close())
-	}
-	return &admittedNodeIterator{nodes: nodes, names: names, nextName: first}, nil
-}
-
-func (s admittedNodeSource) Release(meter ResourceMeter) error {
-	return errors.Join(s.source.Release(meter), releaseSpillObject(s.names, meter))
-}
-
-func nextOmittedName(ctx context.Context, cursor *sortCursor) ([]byte, error) {
-	record, ok, err := cursor.next(ctx)
-	if err != nil || !ok {
-		return nil, err
-	}
-	if len(record.key) == 0 || len(record.payload) != 0 {
-		return nil, fmt.Errorf("%w: malformed sibling exclusion", ErrCorruptCatalogStorage)
-	}
-	return record.key, nil
-}
-
-type admittedNodeIterator struct {
-	nodes    NodeRecordIterator
-	names    *sortCursor
-	nextName []byte
-}
-
-func (i *admittedNodeIterator) Next(ctx context.Context) (NodeRecord, bool, error) {
-	for {
-		node, ok, err := i.nodes.Next(ctx)
-		if err != nil {
-			return NodeRecord{}, false, err
+	admitted := make([]NodeRecord, 0, len(items)-int(omittedCount))
+	for index, item := range items {
+		releasedBytes += item.extra
+		if colliding[index] {
+			releasedBytes += item.record.EstimatedMemoryBytes()
+			continue
 		}
-		if !ok {
-			if i.nextName != nil {
-				return NodeRecord{}, false, fmt.Errorf("%w: unmatched sibling exclusion", ErrCorruptCatalogStorage)
-			}
-			return NodeRecord{}, false, nil
-		}
-		if i.nextName == nil {
-			return node, true, nil
-		}
-		switch bytes.Compare(i.nextName, []byte(node.Entry().Name())) {
-		case -1:
-			return NodeRecord{}, false, fmt.Errorf("%w: unmatched sibling exclusion", ErrCorruptCatalogStorage)
-		case 0:
-			i.nextName, err = nextOmittedName(ctx, i.names)
-			if err != nil {
-				return NodeRecord{}, false, err
-			}
-		default:
-			return node, true, nil
-		}
+		admitted = append(admitted, item.record)
 	}
-}
-
-func (i *admittedNodeIterator) Close() error {
-	i.names.close()
-	return i.nodes.Close()
+	return admitted, omittedCount, samples, releasedBytes
 }

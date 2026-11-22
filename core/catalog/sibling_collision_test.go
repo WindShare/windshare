@@ -9,20 +9,15 @@ import (
 	"testing"
 )
 
-func newTinyRunStore(t *testing.T) *CatalogStore {
+func newCollisionTestStore(t *testing.T) *CatalogStore {
 	t.Helper()
 	var attempt atomic.Uint32
 	var generation atomic.Uint32
 	store, err := NewCatalogStore(StoreConfig{
 		ShareInstance:  idValue[ShareInstance](1),
-		Backend:        NewMemoryCatalogBackend(),
 		ProcessBudget:  generousBudget(t, "process"),
 		ShareBudget:    generousBudget(t, "share"),
 		FailureEncoder: testFailureEncoder{},
-		SpillFactory:   NewFileSpillFactory(t.TempDir()),
-		// Force every record to flush and merge through external spill runs so
-		// multi-run portable-name collision groups are exercised deterministically.
-		SortRunBytes: 1,
 		AttemptIDs: ScanAttemptIDGeneratorFunc(func() (ScanAttemptID, error) {
 			return idValue[ScanAttemptID](byte(attempt.Add(1))), nil
 		}),
@@ -36,8 +31,8 @@ func newTinyRunStore(t *testing.T) *CatalogStore {
 	return store
 }
 
-func TestExternalSortWithholdsCollidingSiblingGroupsAcrossSpillRuns(t *testing.T) {
-	store := newTinyRunStore(t)
+func TestDirectorySortWithholdsCollidingSiblingGroups(t *testing.T) {
+	store := newCollisionTestStore(t)
 	defer store.Close()
 	session := generousBudget(t, "session")
 	directory := prepareScannableDirectory(t, store, session, 110, 112)
@@ -118,7 +113,7 @@ func TestExternalSortWithholdsCollidingSiblingGroupsAcrossSpillRuns(t *testing.T
 }
 
 func TestAllCollidingDirectoryCommitsEmptyTerminalPageWithOmittedCount(t *testing.T) {
-	store := newTinyRunStore(t)
+	store := newCollisionTestStore(t)
 	defer store.Close()
 	session := generousBudget(t, "session")
 	directory := prepareScannableDirectory(t, store, session, 110, 112)
@@ -142,7 +137,7 @@ func TestAllCollidingDirectoryCommitsEmptyTerminalPageWithOmittedCount(t *testin
 }
 
 func TestWideCollisionGroupBoundsSamplesAndSuppressesPublicationOnPageLimit(t *testing.T) {
-	store := newTinyRunStore(t)
+	store := newCollisionTestStore(t)
 	defer store.Close()
 	session := generousBudget(t, "session")
 	directory := prepareScannableDirectory(t, store, session, 110, 112)
@@ -179,7 +174,7 @@ func TestWideCollisionGroupBoundsSamplesAndSuppressesPublicationOnPageLimit(t *t
 		t.Fatalf("committed=%+v count=%d samples=%d", committed, count, len(samples))
 	}
 
-	overflowStore := newTinyRunStore(t)
+	overflowStore := newCollisionTestStore(t)
 	defer overflowStore.Close()
 	overflowDirectory := prepareScannableDirectory(t, overflowStore, session, 185, 186)
 	publishedOnFailure := false

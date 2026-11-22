@@ -3,51 +3,20 @@ package catalog
 import (
 	"context"
 	"errors"
+	"math"
 	"testing"
 )
 
-type contractReadBackend struct {
-	CatalogBackend
-	recover         func(context.Context) (ResourceUsage, error)
-	replayFailures  func(context.Context, func(DirectoryFailureRecord, bool) error) error
-	loadDirectory   func(context.Context, DirectoryID) (CommittedDirectory, bool, error)
-	loadPagePayload func(context.Context, DirectoryID, DirectoryGeneration, uint32) (PagePayload, bool, error)
-	loadNode        func(context.Context, NodeID) (NodeRecord, bool, error)
-}
-
-func (b contractReadBackend) Recover(ctx context.Context) (ResourceUsage, error) {
-	if b.recover != nil {
-		return b.recover(ctx)
+func commitContractFixture(t *testing.T) (NodeRecord, NodeRecord) {
+	t.Helper()
+	root := idValue[DirectoryID](200)
+	parent := selectedDirectory(t, root, 201, "parent")
+	parentID, _ := parent.DirectoryID()
+	child, err := scannedFile(t, 202, "child", 1).nodeRecord(parentID)
+	if err != nil {
+		t.Fatal(err)
 	}
-	return b.CatalogBackend.Recover(ctx)
-}
-
-func (b contractReadBackend) ReplayFailures(ctx context.Context, visit func(DirectoryFailureRecord, bool) error) error {
-	if b.replayFailures != nil {
-		return b.replayFailures(ctx, visit)
-	}
-	return b.CatalogBackend.ReplayFailures(ctx, visit)
-}
-
-func (b contractReadBackend) LoadDirectory(ctx context.Context, directory DirectoryID) (CommittedDirectory, bool, error) {
-	if b.loadDirectory != nil {
-		return b.loadDirectory(ctx, directory)
-	}
-	return b.CatalogBackend.LoadDirectory(ctx, directory)
-}
-
-func (b contractReadBackend) LoadPagePayload(ctx context.Context, directory DirectoryID, generation DirectoryGeneration, index uint32) (PagePayload, bool, error) {
-	if b.loadPagePayload != nil {
-		return b.loadPagePayload(ctx, directory, generation, index)
-	}
-	return b.CatalogBackend.LoadPagePayload(ctx, directory, generation, index)
-}
-
-func (b contractReadBackend) LoadNode(ctx context.Context, id NodeID) (NodeRecord, bool, error) {
-	if b.loadNode != nil {
-		return b.loadNode(ctx, id)
-	}
-	return b.CatalogBackend.LoadNode(ctx, id)
+	return parent, child
 }
 
 func TestAttemptResourceMeterOwnsReservationLifecycle(t *testing.T) {
@@ -65,9 +34,6 @@ func TestAttemptResourceMeterOwnsReservationLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := meter.reopen(hierarchy); err == nil {
-		t.Fatal("an open meter accepted a second reservation")
-	}
 	if _, err := meter.retain(ResourceUsage{MemoryBytes: 1}, session); err == nil {
 		t.Fatal("meter retained usage it had never reserved")
 	}
@@ -81,13 +47,6 @@ func TestAttemptResourceMeterOwnsReservationLifecycle(t *testing.T) {
 	if _, err := meter.retain(ResourceUsage{}, session); err == nil {
 		t.Fatal("closed meter transferred ownership")
 	}
-	if err := meter.reopen(BudgetHierarchy{}); err == nil {
-		t.Fatal("meter reopened without budget owners")
-	}
-	if err := meter.reopen(hierarchy); err != nil {
-		t.Fatalf("reopen after publication rollback: %v", err)
-	}
-	meter.Close()
 
 	wrongSession := generousBudget(t, "meter-wrong-session")
 	meter, err = newAttemptResourceMeter(hierarchy)
@@ -103,34 +62,91 @@ func TestAttemptResourceMeterOwnsReservationLifecycle(t *testing.T) {
 	meter.Close()
 }
 
+func TestBudgetReservationRejectsInvalidStateTransitions(t *testing.T) {
+	var nilAccount *BudgetAccount
+	if err := nilAccount.add(ResourceUsage{Entries: 1}); err == nil {
+		t.Fatal("nil account admitted usage")
+	}
+	if _, err := reserveAccounts(nil, ResourceUsage{}); err == nil {
+		t.Fatal("empty account list created a reservation")
+	}
+	var nilReservation *BudgetReservation
+	if nilReservation.active() {
+		t.Fatal("nil reservation reported active")
+	}
+	if err := nilReservation.Grow(ResourceUsage{Entries: 1}); err == nil {
+		t.Fatal("nil reservation grew")
+	}
+	if err := nilReservation.Shrink(ResourceUsage{Entries: 1}); err == nil {
+		t.Fatal("nil reservation shrank")
+	}
+	if err := nilReservation.keep(ResourceUsage{}); err == nil {
+		t.Fatal("nil reservation kept usage")
+	}
+	if err := nilReservation.dropAccount(nil); err == nil {
+		t.Fatal("nil reservation dropped an account")
+	}
+
+	process := generousBudget(t, "edge-process")
+	share := generousBudget(t, "edge-share")
+	session := generousBudget(t, "edge-session")
+	reservation, err := ReserveHierarchy(
+		BudgetHierarchy{Process: process, Share: share, Session: session},
+		ResourceUsage{MemoryBytes: 10},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reservation.active() {
+		t.Fatal("live reservation reported inactive")
+	}
+	if err := reservation.Grow(ResourceUsage{MemoryBytes: math.MaxUint64}); !errors.Is(err, ErrBudgetExceeded) {
+		t.Fatalf("overflow Grow = %v", err)
+	}
+	if err := reservation.Shrink(ResourceUsage{MemoryBytes: 11}); err == nil {
+		t.Fatal("shrink exceeding reservation succeeded")
+	}
+	reservation.Release()
+	reservation.Release()
+	if reservation.active() {
+		t.Fatal("released reservation reported active")
+	}
+	if err := reservation.Grow(ResourceUsage{MemoryBytes: 1}); err == nil {
+		t.Fatal("released reservation grew")
+	}
+	if err := reservation.Shrink(ResourceUsage{}); err == nil {
+		t.Fatal("released reservation shrank")
+	}
+	if err := reservation.keep(ResourceUsage{}); err == nil {
+		t.Fatal("released reservation kept usage")
+	}
+	if err := reservation.dropAccount(session); err == nil {
+		t.Fatal("released reservation dropped an account")
+	}
+}
+
 func TestCommitAdmissionRejectsInvalidOwnershipAndClosedStores(t *testing.T) {
-	parent, child := faultCommitFixture(t)
+	parent, child := commitContractFixture(t)
 	generation := idValue[DirectoryGeneration](210)
 	valid := DirectoryCommit{
-		directory: parent, generation: generation, children: newSliceNodeSource([]NodeRecord{child}),
+		directory: parent, generation: generation, children: []NodeRecord{child},
 	}
 	if err := validateDirectoryCommit(ShareInstance{}, valid, false); err == nil {
 		t.Fatal("commit without a share identity was accepted")
 	}
 	if err := validateDirectoryCommit(idValue[ShareInstance](1), DirectoryCommit{
 		directory: parent, generation: generation,
-		children: faultNodeSource{count: MaxDirectoryEntries + 1},
-	}, false); !errors.Is(err, ErrPageLimit) {
-		t.Fatalf("oversized commit error = %v", err)
-	}
-	if err := validateDirectoryCommit(idValue[ShareInstance](1), DirectoryCommit{
-		directory: parent, generation: generation,
-		children: faultNodeSource{count: 1}, omittedCount: MaxDirectoryEntries,
+		children: []NodeRecord{child}, omittedCount: MaxDirectoryEntries,
 	}, false); !errors.Is(err, ErrPageLimit) {
 		t.Fatalf("entry plus omission overflow error = %v", err)
 	}
 	if err := validateDirectoryCommit(idValue[ShareInstance](1), DirectoryCommit{
-		directory: parent, generation: generation, children: newSliceNodeSource(nil), synthetic: true,
+		directory: parent, generation: generation, synthetic: true,
 	}, true); err == nil {
 		t.Fatal("synthetic commit accepted a non-synthetic directory")
 	}
 
-	store, _, _ := newStore(t, NewMemoryCatalogBackend(), nil)
+	store, _, _ := newStore(t, nil)
 	if _, err := store.CommitDirectory(context.Background(), valid, nil); err == nil {
 		t.Fatal("directory commit without a session budget was admitted")
 	}
@@ -157,211 +173,88 @@ func TestCommitAdmissionRejectsInvalidOwnershipAndClosedStores(t *testing.T) {
 	}
 }
 
-func TestExistingCommitReplayValidatesEveryDurableBinding(t *testing.T) {
-	backend := NewMemoryCatalogBackend()
-	store, _, _ := newStore(t, backend, nil)
+func TestExistingCommitReplayValidatesEveryBinding(t *testing.T) {
+	store, _, _ := newStore(t, nil)
 	defer store.Close()
-	parent, child := faultCommitFixture(t)
+	parent, child := commitContractFixture(t)
 	generation := idValue[DirectoryGeneration](214)
 	commit := DirectoryCommit{
-		directory: parent, generation: generation, children: newSliceNodeSource([]NodeRecord{child}),
+		directory: parent, generation: generation, children: []NodeRecord{child},
 	}
 	existing, err := store.CommitDirectory(context.Background(), commit, generousBudget(t, "publish-session"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	injected := errors.New("injected durable read failure")
 	otherChild, err := scannedFile(t, 215, "other", 1).nodeRecord(parent.directoryID)
 	if err != nil {
 		t.Fatal(err)
 	}
+	storedState := store.directories[parent.directoryID]
 
-	tests := []struct {
-		name     string
-		backend  CatalogBackend
-		commit   DirectoryCommit
-		existing CommittedDirectory
-		want     error
-	}{
-		{
-			name: "committed identity mismatch", backend: backend,
-			commit: commit, existing: func() CommittedDirectory {
-				value := existing
-				value.shareInstance = idValue[ShareInstance](216)
-				return value
-			}(), want: ErrGenerationConflict,
-		},
-		{
-			name: "directory read failure", backend: contractReadBackend{CatalogBackend: backend,
-				loadNode: func(context.Context, NodeID) (NodeRecord, bool, error) { return NodeRecord{}, false, injected }},
-			commit: commit, existing: existing, want: injected,
-		},
-		{
-			name: "directory record missing", backend: contractReadBackend{CatalogBackend: backend,
-				loadNode: func(context.Context, NodeID) (NodeRecord, bool, error) { return NodeRecord{}, false, nil }},
-			commit: commit, existing: existing, want: ErrGenerationConflict,
-		},
-		{
-			name: "source open failure", backend: backend,
-			commit:   DirectoryCommit{directory: parent, generation: generation, children: faultNodeSource{count: 1, openErr: injected}},
-			existing: existing, want: injected,
-		},
-		{
-			name: "page read failure", backend: contractReadBackend{CatalogBackend: backend,
-				loadPagePayload: func(context.Context, DirectoryID, DirectoryGeneration, uint32) (PagePayload, bool, error) {
-					return PagePayload{}, false, injected
-				}},
-			commit: commit, existing: existing, want: injected,
-		},
-		{
-			name: "page missing", backend: contractReadBackend{CatalogBackend: backend,
-				loadPagePayload: func(context.Context, DirectoryID, DirectoryGeneration, uint32) (PagePayload, bool, error) {
-					return PagePayload{}, false, nil
-				}},
-			commit: commit, existing: existing, want: ErrCorruptCatalogStorage,
-		},
-		{
-			name: "source read failure", backend: backend,
-			commit: DirectoryCommit{directory: parent, generation: generation,
-				children: faultNodeSource{count: 1, iterator: &faultNodeIterator{nextErr: injected}}},
-			existing: existing, want: injected,
-		},
-		{
-			name: "entry mismatch", backend: backend,
-			commit: DirectoryCommit{directory: parent, generation: generation,
-				children: newSliceNodeSource([]NodeRecord{otherChild})},
-			existing: existing, want: ErrGenerationConflict,
-		},
-		{
-			name: "child read failure", backend: contractReadBackend{CatalogBackend: backend,
-				loadNode: func(ctx context.Context, id NodeID) (NodeRecord, bool, error) {
-					if id == child.NodeID() {
-						return NodeRecord{}, false, injected
-					}
-					return backend.LoadNode(ctx, id)
-				}},
-			commit: commit, existing: existing, want: injected,
-		},
-		{
-			name: "child record missing", backend: contractReadBackend{CatalogBackend: backend,
-				loadNode: func(ctx context.Context, id NodeID) (NodeRecord, bool, error) {
-					if id == child.NodeID() {
-						return NodeRecord{}, false, nil
-					}
-					return backend.LoadNode(ctx, id)
-				}},
-			commit: commit, existing: existing, want: ErrGenerationConflict,
-		},
-		{
-			name: "directory count contradicts page count", backend: backend,
-			commit: commit, existing: func() CommittedDirectory {
-				value := existing
-				value.pageCount = 0
-				return value
-			}(), want: ErrCorruptCatalogStorage,
-		},
-		{
-			name: "source exceeds declared count", backend: backend,
-			commit: DirectoryCommit{directory: parent, generation: generation,
-				children: faultNodeSource{count: 0, iterator: &faultNodeIterator{extra: &child}}},
-			existing: CommittedDirectory{
-				shareInstance: store.shareInstance, directoryID: parent.directoryID, generation: generation,
-			}, want: ErrGenerationConflict,
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			store.backend = test.backend
-			_, got := store.validateExistingCommit(context.Background(), test.commit, test.existing, nil)
-			if !errors.Is(got, test.want) {
-				t.Fatalf("validation error = %v; want %v", got, test.want)
-			}
-		})
-	}
-	store.backend = backend
-}
-
-func TestCatalogReadAPIsRejectBackendIdentitySubstitution(t *testing.T) {
-	backend := NewMemoryCatalogBackend()
-	store, _, _ := newStore(t, backend, nil)
-	defer store.Close()
-	injected := errors.New("injected page read failure")
-	directory := idValue[DirectoryID](217)
-	generation := idValue[DirectoryGeneration](218)
-	store.backend = contractReadBackend{CatalogBackend: backend,
-		loadDirectory: func(context.Context, DirectoryID) (CommittedDirectory, bool, error) {
-			return CommittedDirectory{shareInstance: store.shareInstance, directoryID: idValue[DirectoryID](219)}, true, nil
-		},
-	}
-	if _, _, err := store.Directory(context.Background(), directory); !errors.Is(err, ErrCorruptCatalogStorage) {
-		t.Fatalf("substituted directory error = %v", err)
-	}
-
-	_, other, err := NewCatalogPage(CatalogPageSpec{
-		ShareInstance: store.shareInstance, DirectoryID: idValue[DirectoryID](219),
-		Generation: generation, Terminal: true,
+	t.Run("committed identity mismatch", func(t *testing.T) {
+		mutated := storedState
+		mutated.committed.shareInstance = idValue[ShareInstance](216)
+		if _, err := store.validateExistingCommitLocked(commit, mutated); !errors.Is(err, ErrGenerationConflict) {
+			t.Fatalf("identity mismatch = %v", err)
+		}
 	})
-	if err != nil {
-		t.Fatal(err)
+	t.Run("entry mismatch", func(t *testing.T) {
+		other := DirectoryCommit{directory: parent, generation: generation, children: []NodeRecord{otherChild}}
+		if _, err := store.validateExistingCommitLocked(other, storedState); !errors.Is(err, ErrGenerationConflict) {
+			t.Fatalf("entry mismatch = %v", err)
+		}
+	})
+	t.Run("directory record missing", func(t *testing.T) {
+		delete(store.nodes, parent.NodeID())
+		defer func() { store.nodes[parent.NodeID()] = parent }()
+		if _, err := store.validateExistingCommitLocked(commit, storedState); !errors.Is(err, ErrGenerationConflict) {
+			t.Fatalf("missing directory node = %v", err)
+		}
+	})
+	t.Run("child record missing", func(t *testing.T) {
+		delete(store.nodes, child.NodeID())
+		defer func() { store.nodes[child.NodeID()] = child }()
+		if _, err := store.validateExistingCommitLocked(commit, storedState); !errors.Is(err, ErrGenerationConflict) {
+			t.Fatalf("missing child node = %v", err)
+		}
+	})
+	t.Run("corrupt page payload", func(t *testing.T) {
+		corrupt := storedState
+		corrupt.pages = []PagePayload{{encoded: []byte{0xff}}}
+		if _, err := store.validateExistingCommitLocked(commit, corrupt); !errors.Is(err, ErrInvalidPagePayload) {
+			t.Fatalf("corrupt page payload = %v", err)
+		}
+	})
+	t.Run("page count shorter than children", func(t *testing.T) {
+		short := storedState
+		short.pages = nil
+		if _, err := store.validateExistingCommitLocked(commit, short); !errors.Is(err, ErrGenerationConflict) {
+			t.Fatalf("short pages = %v", err)
+		}
+	})
+	if got, err := store.validateExistingCommitLocked(commit, storedState); err != nil || got != existing {
+		t.Fatalf("valid replay = %+v err=%v", got, err)
 	}
-	store.backend = contractReadBackend{CatalogBackend: backend,
-		loadPagePayload: func(context.Context, DirectoryID, DirectoryGeneration, uint32) (PagePayload, bool, error) {
-			return other, true, nil
-		},
-	}
-	if _, _, err := store.PagePayload(context.Background(), directory, generation, 0); !errors.Is(err, ErrCorruptCatalogStorage) {
-		t.Fatalf("substituted page error = %v", err)
-	}
-
-	store.backend = contractReadBackend{CatalogBackend: backend,
-		loadPagePayload: func(context.Context, DirectoryID, DirectoryGeneration, uint32) (PagePayload, bool, error) {
-			return PagePayload{}, false, injected
-		},
-	}
-	if _, _, err := store.PagePayload(context.Background(), directory, generation, 0); !errors.Is(err, injected) {
-		t.Fatalf("page payload read error = %v", err)
-	}
-
-	record := selectedDirectory(t, idValue[DirectoryID](220), 221, "substitute")
-	store.backend = contractReadBackend{CatalogBackend: backend,
-		loadNode: func(context.Context, NodeID) (NodeRecord, bool, error) { return record, true, nil },
-	}
-	if _, _, err := store.Node(context.Background(), idValue[NodeID](222)); !errors.Is(err, ErrCorruptCatalogStorage) {
-		t.Fatalf("substituted node error = %v", err)
-	}
-	store.backend = backend
-}
-
-type contractSpillFactory struct {
-	recoverErr   error
-	destroyErr   error
-	workspace    SpillWorkspace
-	workspaceErr error
-}
-
-func (f contractSpillFactory) Recover(context.Context, ShareInstance) error { return f.recoverErr }
-func (f contractSpillFactory) Destroy(ShareInstance) error                  { return f.destroyErr }
-func (f contractSpillFactory) NewWorkspace(context.Context, SpillRequest) (SpillWorkspace, error) {
-	return f.workspace, f.workspaceErr
 }
 
 type contractScanWork func(uint64) error
 
 func (work contractScanWork) Consume(units uint64) error { return work(units) }
 
-func contractStoreConfig(t *testing.T, backend CatalogBackend, spill SpillFactory) StoreConfig {
+func contractStoreConfig(t *testing.T) StoreConfig {
 	t.Helper()
 	return StoreConfig{
-		ShareInstance: idValue[ShareInstance](230), Backend: backend,
-		ProcessBudget: generousBudget(t, "contract-process"), ShareBudget: generousBudget(t, "contract-share"),
-		FailureEncoder: testFailureEncoder{}, SpillFactory: spill,
+		ShareInstance:  idValue[ShareInstance](230),
+		ProcessBudget:  generousBudget(t, "contract-process"),
+		ShareBudget:    generousBudget(t, "contract-share"),
+		FailureEncoder: testFailureEncoder{},
 	}
 }
 
 func contractBudget(t *testing.T, name string, memory uint64) *BudgetAccount {
 	t.Helper()
 	account, err := NewBudgetAccount(name, BudgetLimits{
-		ActiveScans: 8, ScanWork: 8, Entries: 8, MemoryBytes: memory, SpillBytes: 8,
+		ActiveScans: 8, ScanWork: 8, Entries: 8, MemoryBytes: memory,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -369,50 +262,8 @@ func contractBudget(t *testing.T, name string, memory uint64) *BudgetAccount {
 	return account
 }
 
-func TestCatalogStoreRecoveryIsAtomicAcrossBackendSpillAndBudget(t *testing.T) {
-	injected := errors.New("injected recovery failure")
-	backend := NewMemoryCatalogBackend()
-	config := contractStoreConfig(t, backend, contractSpillFactory{recoverErr: injected})
-	if _, err := NewCatalogStore(config); !errors.Is(err, injected) {
-		t.Fatalf("spill recovery error = %v", err)
-	}
-
-	config = contractStoreConfig(t, contractReadBackend{CatalogBackend: backend,
-		recover: func(context.Context) (ResourceUsage, error) { return ResourceUsage{}, injected },
-	}, contractSpillFactory{})
-	if _, err := NewCatalogStore(config); !errors.Is(err, injected) {
-		t.Fatalf("backend recovery error = %v", err)
-	}
-
-	config = contractStoreConfig(t, contractReadBackend{CatalogBackend: backend,
-		recover: func(context.Context) (ResourceUsage, error) { return ResourceUsage{MemoryBytes: 2}, nil },
-	}, contractSpillFactory{})
-	config.ProcessBudget = contractBudget(t, "limited-process", 1)
-	config.ShareBudget = contractBudget(t, "limited-share", 1)
-	if _, err := NewCatalogStore(config); !errors.Is(err, ErrBudgetExceeded) {
-		t.Fatalf("recovered-state admission error = %v", err)
-	}
-
-	process := generousBudget(t, "rollback-process")
-	share := generousBudget(t, "rollback-share")
-	config = contractStoreConfig(t, contractReadBackend{CatalogBackend: backend,
-		recover: func(context.Context) (ResourceUsage, error) { return ResourceUsage{MemoryBytes: 1}, nil },
-		replayFailures: func(context.Context, func(DirectoryFailureRecord, bool) error) error {
-			return injected
-		},
-	}, contractSpillFactory{})
-	config.ProcessBudget = process
-	config.ShareBudget = share
-	if _, err := NewCatalogStore(config); !errors.Is(err, injected) {
-		t.Fatalf("failure-authority replay error = %v", err)
-	}
-	if process.Snapshot().Used != (ResourceUsage{}) || share.Snapshot().Used != (ResourceUsage{}) {
-		t.Fatal("failed recovery retained recovered-state budget")
-	}
-}
-
-func TestCatalogCloseCancelsUnfinishedAttemptsBeforeStorage(t *testing.T) {
-	store, _, _ := newStore(t, NewMemoryCatalogBackend(), nil)
+func TestCatalogCloseCancelsUnfinishedAttempts(t *testing.T) {
+	store, _, _ := newStore(t, nil)
 	attemptContext, cancel := context.WithCancel(context.Background())
 	attempt := &scanAttempt{ctx: attemptContext, cancel: cancel}
 	store.attempts[idValue[DirectoryID](231)] = attempt
@@ -425,9 +276,8 @@ func TestCatalogCloseCancelsUnfinishedAttemptsBeforeStorage(t *testing.T) {
 	store.completeAttempt(&scanAttempt{completed: true}, CommittedDirectory{}, nil)
 }
 
-func TestListChildrenPreservesKnownAuthorityAndReadFailureTaxonomy(t *testing.T) {
-	backend := NewMemoryCatalogBackend()
-	store, _, _ := newStore(t, backend, nil)
+func TestListChildrenPreservesKnownAuthority(t *testing.T) {
+	store, _, _ := newStore(t, nil)
 	defer store.Close()
 	session := generousBudget(t, "list-session")
 	directory := prepareScannableDirectory(t, store, session, 232, 233)
@@ -439,59 +289,27 @@ func TestListChildrenPreservesKnownAuthorityAndReadFailureTaxonomy(t *testing.T)
 	if committed, err := store.ListChildren(context.Background(), root, session, ScanOptions{}, never); err != nil || committed.DirectoryID() != root {
 		t.Fatalf("known directory replay = %+v, %v", committed, err)
 	}
-
-	injected := errors.New("injected catalog read failure")
-	store.backend = contractReadBackend{CatalogBackend: backend,
-		loadDirectory: func(context.Context, DirectoryID) (CommittedDirectory, bool, error) {
-			return CommittedDirectory{}, false, injected
-		},
-	}
-	if _, err := store.ListChildren(context.Background(), directory, session, ScanOptions{}, never); !errors.Is(err, injected) {
-		t.Fatalf("directory read error = %v", err)
-	}
-
-	store.backend = contractReadBackend{CatalogBackend: backend,
-		loadNode: func(context.Context, NodeID) (NodeRecord, bool, error) { return NodeRecord{}, false, injected },
-	}
-	if _, err := store.ListChildren(context.Background(), directory, session, ScanOptions{}, never); !errors.Is(err, injected) {
-		t.Fatalf("node read error = %v", err)
-	}
-
-	wrong := selectedDirectory(t, root, 234, "wrong")
-	store.backend = contractReadBackend{CatalogBackend: backend,
-		loadNode: func(context.Context, NodeID) (NodeRecord, bool, error) { return wrong, true, nil },
-	}
+	store.mu.Lock()
+	original := store.nodes[directory.NodeID()]
+	store.nodes[directory.NodeID()] = selectedDirectory(t, root, 234, "wrong")
+	store.mu.Unlock()
 	if _, err := store.ListChildren(context.Background(), directory, session, ScanOptions{}, never); err == nil {
 		t.Fatal("directory listing accepted a substituted node record")
 	}
-
-	store.backend = contractReadBackend{CatalogBackend: backend,
-		loadNode: func(ctx context.Context, id NodeID) (NodeRecord, bool, error) {
-			record, found, err := backend.LoadNode(ctx, id)
-			store.mu.Lock()
-			store.closed = true
-			store.mu.Unlock()
-			return record, found, err
-		},
-	}
-	if _, err := store.ListChildren(context.Background(), directory, session, ScanOptions{}, never); !errors.Is(err, ErrCatalogClosed) {
-		t.Fatalf("close-after-read error = %v", err)
-	}
 	store.mu.Lock()
-	store.closed = false
+	store.nodes[directory.NodeID()] = original
 	store.mu.Unlock()
-	store.backend = backend
 }
 
 func TestScanAdmissionAndChildSinkEnforceLocalBudgetAndContext(t *testing.T) {
-	store, _, _ := newStore(t, NewMemoryCatalogBackend(), nil)
+	store, _, _ := newStore(t, nil)
 	defer store.Close()
 	limitedSession := contractBudget(t, "limited-session", 1)
 	if _, err := store.admitAttempt(idValue[DirectoryID](235), ScanAttemptID{}, limitedSession); !errors.Is(err, ErrBudgetExceeded) {
 		t.Fatalf("session ledger admission error = %v", err)
 	}
 
-	config := contractStoreConfig(t, NewMemoryCatalogBackend(), contractSpillFactory{})
+	config := contractStoreConfig(t)
 	config.ProcessBudget = contractBudget(t, "ledger-process", 1)
 	config.ShareBudget = contractBudget(t, "ledger-share", 1)
 	limitedStore, err := NewCatalogStore(config)
@@ -545,7 +363,7 @@ func TestScanAdmissionAndChildSinkEnforceLocalBudgetAndContext(t *testing.T) {
 func commitStoreMissingContext() context.Context { return nil }
 
 func TestRunAttemptContainsAdmissionAndPostScanValidationFailures(t *testing.T) {
-	store, _, _ := newStore(t, NewMemoryCatalogBackend(), nil)
+	store, _, _ := newStore(t, nil)
 	session := generousBudget(t, "run-session")
 	admission, err := ReserveHierarchy(store.hierarchy(session), ResourceUsage{ActiveScans: 1})
 	if err != nil {
@@ -576,37 +394,17 @@ func TestRunAttemptContainsAdmissionAndPostScanValidationFailures(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	for _, test := range []struct {
-		name    string
-		spill   SpillFactory
-		scanner DirectoryScanner
-	}{
-		{
-			name: "nil workspace", spill: contractSpillFactory{},
-			scanner: DirectoryScannerFunc(func(context.Context, ScanRequest) (ScanResult, error) {
-				return ScanResult{}, nil
-			}),
-		},
-		{
-			name: "omission overflow", spill: NewFileSpillFactory(t.TempDir()),
-			scanner: DirectoryScannerFunc(func(context.Context, ScanRequest) (ScanResult, error) {
-				return ScanResult{OmittedCount: MaxDirectoryEntries + 1}, nil
-			}),
-		},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			backend := NewMemoryCatalogBackend()
-			config := contractStoreConfig(t, backend, test.spill)
-			candidate, err := NewCatalogStore(config)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer candidate.Close()
-			candidateSession := generousBudget(t, "candidate-session")
-			directory := prepareScannableDirectory(t, candidate, candidateSession, 241, 242)
-			if _, err := candidate.ListChildren(context.Background(), directory, candidateSession, ScanOptions{}, test.scanner); err == nil {
-				t.Fatal("invalid scan attempt completed successfully")
-			}
-		})
+	candidate, err := NewCatalogStore(contractStoreConfig(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer candidate.Close()
+	candidateSession := generousBudget(t, "candidate-session")
+	directory := prepareScannableDirectory(t, candidate, candidateSession, 241, 242)
+	overflow := DirectoryScannerFunc(func(context.Context, ScanRequest) (ScanResult, error) {
+		return ScanResult{OmittedCount: MaxDirectoryEntries + 1}, nil
+	})
+	if _, err := candidate.ListChildren(context.Background(), directory, candidateSession, ScanOptions{}, overflow); !errors.Is(err, ErrPageLimit) {
+		t.Fatalf("omission overflow error = %v", err)
 	}
 }

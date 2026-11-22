@@ -134,12 +134,6 @@ func newSenderPreparationHarness(t *testing.T) senderPreparationHarness {
 			RevisionCapacity: newTestRevisionCapacity(t),
 			ChunkSize:        catalog.MinChunkSize,
 			Now:              func() time.Time { return time.Unix(1_700_000_000, 0) },
-			CatalogStorage: CatalogStorageFactoryFunc(func(
-				context.Context,
-				catalog.ShareInstance,
-			) (catalog.CatalogBackend, error) {
-				return catalog.NewMemoryCatalogBackend(), nil
-			}),
 		},
 		random:       &lockedReader{reader: mathrand.New(mathrand.NewSource(17))},
 		dependencies: productionSenderPreparationDependencies(),
@@ -169,7 +163,7 @@ func TestPrepareSenderCatalogRejectsInvalidDependencyAndStateBoundaries(t *testi
 
 		_, err := prepareSenderCatalog(
 			context.Background(), harness.config, harness.random, harness.sender,
-			harness.authority, nil,
+			harness.authority,
 		)
 		if err == nil {
 			t.Fatal("a catalog store without share authority was accepted")
@@ -185,7 +179,7 @@ func TestPrepareSenderCatalogRejectsInvalidDependencyAndStateBoundaries(t *testi
 
 		_, err := prepareSenderCatalog(
 			context.Background(), harness.config, harness.random, harness.sender,
-			harness.authority, nil,
+			harness.authority,
 		)
 		if err == nil {
 			t.Fatal("a synthetic root without a generation was accepted")
@@ -202,7 +196,7 @@ func TestPrepareSenderCatalogRejectsInvalidDependencyAndStateBoundaries(t *testi
 
 		_, err := prepareSenderCatalog(
 			ctx, harness.config, harness.random, harness.sender,
-			harness.authority, nil,
+			harness.authority,
 		)
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("cancelled root commit = %v", err)
@@ -218,7 +212,7 @@ func TestPrepareSenderCatalogRejectsInvalidDependencyAndStateBoundaries(t *testi
 
 		_, err := prepareSenderCatalog(
 			context.Background(), harness.config, harness.random, harness.sender,
-			harness.authority, nil,
+			harness.authority,
 		)
 		if err == nil || !strings.Contains(err.Error(), "descriptor key") {
 			t.Fatalf("invalid descriptor authority = %v", err)
@@ -272,7 +266,7 @@ func TestPrepareSenderContentRejectsZeroShareAuthority(t *testing.T) {
 	}
 	defer authority.destroy()
 	if _, err := prepareSenderCatalog(
-		context.Background(), config, random, sender, authority, nil,
+		context.Background(), config, random, sender, authority,
 	); err != nil {
 		t.Fatal(err)
 	}

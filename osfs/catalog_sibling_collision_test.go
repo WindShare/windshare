@@ -43,11 +43,9 @@ func commitSourceDirectory(
 	}
 	store, err := catalog.NewCatalogStore(catalog.StoreConfig{
 		ShareInstance:  share,
-		Backend:        catalog.NewMemoryCatalogBackend(),
 		ProcessBudget:  process,
 		ShareBudget:    shareBudget,
 		FailureEncoder: testCatalogSealer{},
-		SpillFactory:   catalog.NewFileSpillFactory(t.TempDir()),
 	})
 	if err != nil {
 		t.Fatal(err)

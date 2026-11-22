@@ -4,14 +4,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
 )
 
-func TestLongNamesFitPagePayloadsAndSurviveRestart(t *testing.T) {
+func TestLongNamesFitPagePayloads(t *testing.T) {
 	for _, scenario := range []struct {
 		name       string
 		nameBytes  int
@@ -23,27 +22,17 @@ func TestLongNamesFitPagePayloadsAndSurviveRestart(t *testing.T) {
 		t.Run(scenario.name, func(t *testing.T) {
 			ctx := context.Background()
 			fixture := newCatalogObjectFixture(t)
-			disk := t.TempDir()
-			openStore := func() (*catalog.CatalogStore, *catalog.FileCatalogBackend) {
-				backend, err := catalog.NewFileCatalogBackend(catalog.FileCatalogBackendConfig{
-					Root: filepath.Join(disk, "catalog"), ShareInstance: fixture.share,
-				})
-				if err != nil {
-					t.Fatal(err)
-				}
-				process, _ := catalog.NewBudgetAccount("process", catalog.DefaultProcessBudgetLimits())
-				share, _ := catalog.NewBudgetAccount("share", catalog.DefaultShareBudgetLimits())
-				store, err := catalog.NewCatalogStore(catalog.StoreConfig{
-					ShareInstance: fixture.share, Backend: backend, ProcessBudget: process, ShareBudget: share,
-					FailureEncoder: CatalogFailureEncoder{},
-					SpillFactory:   catalog.NewFileSpillFactory(filepath.Join(disk, "sort")),
-				})
-				if err != nil {
-					t.Fatal(err)
-				}
-				return store, backend
+			process, _ := catalog.NewBudgetAccount("process", catalog.DefaultProcessBudgetLimits())
+			share, _ := catalog.NewBudgetAccount("share", catalog.DefaultShareBudgetLimits())
+			store, err := catalog.NewCatalogStore(catalog.StoreConfig{
+				ShareInstance:  fixture.share,
+				ProcessBudget:  process,
+				ShareBudget:    share,
+				FailureEncoder: CatalogFailureEncoder{},
+			})
+			if err != nil {
+				t.Fatal(err)
 			}
-			store, backend := openStore()
 			defer store.Close()
 			session, _ := catalog.NewBudgetAccount("session", catalog.DefaultSessionBudgetLimits())
 			root, directory := directoryID(t, 1), directoryID(t, 2)
@@ -94,21 +83,15 @@ func TestLongNamesFitPagePayloadsAndSurviveRestart(t *testing.T) {
 			if total != scenario.childCount {
 				t.Fatalf("paged catalog lost entries: got %d", total)
 			}
-			// Reopen through disk metadata: variable page counts must retain the
-			// exact committed payloads without another scan or encode.
-			if err := backend.Close(); err != nil {
-				t.Fatal(err)
-			}
-			recovered, _ := openStore()
-			defer recovered.Close()
-			actual, found, err := recovered.Directory(ctx, directory)
+			// Subsequent lookups must retain the exact committed payloads without rescanning.
+			actual, found, err := store.Directory(ctx, directory)
 			if err != nil || !found || actual != committed {
-				t.Fatalf("recovered geometry changed: found=%v err=%v", found, err)
+				t.Fatalf("committed geometry changed: found=%v err=%v", found, err)
 			}
 			for index := range committed.PageCount() {
-				object, found, err := recovered.PagePayload(ctx, directory, generation, index)
+				object, found, err := store.PagePayload(ctx, directory, generation, index)
 				if err != nil || !found || !bytes.Equal(object.Bytes(), before[index]) {
-					t.Fatalf("recovered page %d changed: found=%v err=%v", index, found, err)
+					t.Fatalf("committed page %d changed: found=%v err=%v", index, found, err)
 				}
 			}
 		})

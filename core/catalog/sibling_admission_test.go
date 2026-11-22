@@ -10,25 +10,39 @@ import (
 	"testing"
 )
 
-func TestNonCollidingDirectoryFitsSinglePayloadSortBudget(t *testing.T) {
-	const (
-		childCount   = 32
-		locatorBytes = 16 << 10
-		spillLimit   = 768 << 10
-	)
-	// These opaque locators fit comfortably once, but a second full payload
-	// stream would exceed the same budget before the directory could commit.
-	hierarchy, meter := sorterBudget(t, 4<<20, spillLimit)
-	defer meter.Close()
-	probe := newSpillProbe(t.TempDir())
-	workspace, err := probe.NewWorkspace(t.Context(), SpillRequest{
-		ShareInstance: idValue[ShareInstance](1), AttemptID: idValue[ScanAttemptID](2),
-	})
+func sorterTestHierarchy(t *testing.T, memoryBytes uint64) (BudgetHierarchy, *attemptResourceMeter) {
+	t.Helper()
+	newAccount := func(name string) *BudgetAccount {
+		account, err := NewBudgetAccount(name, BudgetLimits{
+			ActiveScans: 4, ScanWork: 1_000, Entries: 1_000, MemoryBytes: memoryBytes,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return account
+	}
+	hierarchy := BudgetHierarchy{
+		Process: newAccount("sort-process"),
+		Share:   newAccount("sort-share"),
+		Session: newAccount("sort-session"),
+	}
+	meter, err := newAttemptResourceMeter(hierarchy)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer workspace.Close()
-	sorter, err := newDirectorySorter(idValue[DirectoryID](200), workspace, meter, hierarchy, DefaultSortRunMemoryBytes)
+	return hierarchy, meter
+}
+
+func TestNonCollidingDirectoryFitsSinglePayloadMemoryBudget(t *testing.T) {
+	const (
+		childCount   = 32
+		locatorBytes = 16 << 10
+		memoryLimit  = 768 << 10
+	)
+	// These opaque locators fit comfortably once in memory, while double-charging
+	// them across sort and admission would exceed the same budget.
+	hierarchy, meter := sorterTestHierarchy(t, memoryLimit)
+	sorter, err := newDirectorySorter(idValue[DirectoryID](200), meter)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,39 +67,20 @@ func TestNonCollidingDirectoryFitsSinglePayloadSortBudget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("healthy directory exceeded its single-payload budget: %v", err)
 	}
-	if result.omittedCount != 0 || result.nodes.Count() != childCount {
-		t.Fatalf("entries=%d omitted=%d", result.nodes.Count(), result.omittedCount)
+	if result.omittedCount != 0 || len(result.records) != childCount {
+		t.Fatalf("entries=%d omitted=%d", len(result.records), result.omittedCount)
 	}
-	iterator, err := result.nodes.Open(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	var got []string
-	for {
-		node, ok, err := iterator.Next(t.Context())
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !ok {
-			break
-		}
+	got := make([]string, 0, len(result.records))
+	for _, node := range result.records {
 		got = append(got, node.Entry().Name())
 		if !bytes.Equal(node.SourceReference().Bytes(), locator.Bytes()) {
 			t.Fatal("admission changed the source locator")
 		}
 	}
-	if err := iterator.Close(); err != nil {
-		t.Fatal(err)
-	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("names=%v want=%v", got, want)
 	}
-	if err := result.nodes.Release(meter); err != nil {
-		t.Fatal(err)
-	}
-	if written := probe.writtenBytes.Load(); written > spillLimit {
-		t.Fatalf("healthy directory rewrote node payloads: %d bytes", written)
-	}
+	meter.Close()
 	for _, account := range []*BudgetAccount{hierarchy.Process, hierarchy.Share, hierarchy.Session} {
 		if usage := account.Snapshot().Used; usage != (ResourceUsage{}) {
 			t.Fatalf("admission retained %s resources: %+v", account.Name(), usage)
@@ -94,7 +89,7 @@ func TestNonCollidingDirectoryFitsSinglePayloadSortBudget(t *testing.T) {
 }
 
 func TestSiblingAdmissionFiltersCanonicalDuplicatesInDisplayOrder(t *testing.T) {
-	store := newTinyRunStore(t)
+	store := newCollisionTestStore(t)
 	defer store.Close()
 	session := generousBudget(t, "session")
 	directory := prepareScannableDirectory(t, store, session, 110, 112)
@@ -127,68 +122,56 @@ func TestSiblingAdmissionFiltersCanonicalDuplicatesInDisplayOrder(t *testing.T) 
 	}
 }
 
-func TestSiblingExclusionFailuresReleaseCursorReservations(t *testing.T) {
-	for name, exclusion := range map[string]sortRecord{
-		"before-node": {key: []byte("a")},
-		"after-nodes": {key: []byte("z")},
-		"empty-name":  {},
-		"payload":     {key: []byte("b"), payload: []byte("unexpected")},
+func TestDirectorySorterValidatesInputsAndReleasesOmittedMemory(t *testing.T) {
+	var nilSorter *directorySorter
+	nilSorter.Close()
+	if _, err := newDirectorySorter(idValue[DirectoryID](110), nil); err == nil {
+		t.Fatal("sorter accepted a nil resource meter")
+	}
+	hierarchy, meter := sorterTestHierarchy(t, 1<<20)
+	defer meter.Close()
+	sorter, err := newDirectorySorter(idValue[DirectoryID](110), meter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := sorter.Add(cancelled, scannedFile(t, 130, "a", 1)); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled Add = %v", err)
+	}
+	if err := sorter.Add(t.Context(), ScannedChild{}); err == nil {
+		t.Fatal("sorter accepted an invalid child")
+	}
+	// Add two colliding children including one decomposed NFD spelling so extra
+	// pre-NFC bytes and omitted node bytes are both released on Finish.
+	for _, child := range []ScannedChild{
+		scannedFile(t, 131, "caf\u00e9.txt", 1),
+		scannedFile(t, 132, "cafe\u0301.txt", 1),
+		scannedFile(t, 133, "kept.txt", 1),
 	} {
-		t.Run(name, func(t *testing.T) {
-			hierarchy, meter := sorterBudget(t, 1<<20, 1<<20)
-			defer meter.Close()
-			node, err := scannedFile(t, 130, "b", 1).nodeRecord(idValue[DirectoryID](110))
-			if err != nil {
-				t.Fatal(err)
-			}
-			encoded, err := encodeNodeRecord(node)
-			if err != nil {
-				t.Fatal(err)
-			}
-			object := func(record sortRecord) *fakeSpillObject {
-				var buffer bytes.Buffer
-				if err := writeSortRecord(&buffer, record, meter); err != nil {
-					t.Fatal(err)
-				}
-				return &fakeSpillObject{data: buffer.Bytes(), size: uint64(buffer.Len())}
-			}
-			source := admittedNodeSource{
-				source: sortedNodeSource{
-					object: object(sortRecord{key: []byte("b"), payload: encoded}),
-					count:  1, hierarchy: hierarchy,
-				},
-				names: object(exclusion), omittedCount: 1,
-			}
-			iterator, failure := source.Open(t.Context())
-			if failure == nil {
-				for {
-					_, ok, err := iterator.Next(t.Context())
-					if err != nil || !ok {
-						failure = err
-						break
-					}
-				}
-				if err := iterator.Close(); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if !errors.Is(failure, ErrCorruptCatalogStorage) {
-				t.Fatalf("invalid exclusion err=%v", failure)
-			}
-			if err := source.Release(meter); err != nil {
-				t.Fatal(err)
-			}
-			for _, account := range []*BudgetAccount{hierarchy.Process, hierarchy.Share, hierarchy.Session} {
-				if usage := account.Snapshot().Used; usage != (ResourceUsage{}) {
-					t.Fatalf("failed filter retained %s resources: %+v", account.Name(), usage)
-				}
-			}
-		})
+		if err := sorter.Add(t.Context(), child); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := sorter.Finish(cancelled); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled Finish = %v", err)
+	}
+	beforeFinish := hierarchy.Session.Snapshot().Used.MemoryBytes
+	result, err := sorter.Finish(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.records) != 1 || result.records[0].Entry().Name() != "kept.txt" || result.omittedCount != 2 {
+		t.Fatalf("sort result = %+v", result)
+	}
+	afterFinish := hierarchy.Session.Snapshot().Used.MemoryBytes
+	if afterFinish != result.records[0].EstimatedMemoryBytes() || afterFinish >= beforeFinish {
+		t.Fatalf("memory accounting before=%d after=%d want=%d", beforeFinish, afterFinish, result.records[0].EstimatedMemoryBytes())
 	}
 }
 
 func TestSiblingAdmissionRejectsIdentityReuseBeforePublishingOmissions(t *testing.T) {
-	store := newTinyRunStore(t)
+	store := newCollisionTestStore(t)
 	defer store.Close()
 	session := generousBudget(t, "session")
 	directory := prepareScannableDirectory(t, store, session, 110, 112)

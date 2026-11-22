@@ -26,20 +26,8 @@ func TestSyntheticRootCommitSortsOnlySelectedRootRecords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	iterator, err := commit.children.Open(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer iterator.Close()
-	first, ok, err := iterator.Next(context.Background())
-	if err != nil || !ok {
-		t.Fatal("missing first selected root")
-	}
-	second, ok, err := iterator.Next(context.Background())
-	if err != nil || !ok {
-		t.Fatal("missing second selected root")
-	}
-	if first.Entry().Name() != "alpha" || second.Entry().Name() != "zeta" || !commit.Directory().IsSyntheticRoot() {
+	if len(commit.children) != 2 || commit.children[0].Entry().Name() != "alpha" ||
+		commit.children[1].Entry().Name() != "zeta" || !commit.Directory().IsSyntheticRoot() {
 		t.Fatalf("synthetic root commit = %+v", commit)
 	}
 }
@@ -91,7 +79,7 @@ func TestSyntheticRootCommitRejectsOmittedSelections(t *testing.T) {
 		t.Fatal(err)
 	}
 	commit.omittedCount = 1
-	store, _, _ := newStore(t, NewMemoryCatalogBackend(), nil)
+	store, _, _ := newStore(t, nil)
 	defer store.Close()
 	if _, err := store.CommitSyntheticRoot(context.Background(), commit, generousBudget(t, "startup")); err == nil {
 		t.Fatal("synthetic root hid selected roots behind OmittedCount")
@@ -100,7 +88,7 @@ func TestSyntheticRootCommitRejectsOmittedSelections(t *testing.T) {
 
 func TestConflictingSyntheticRootCannotPublishBeforeAuthorityCheck(t *testing.T) {
 	share := idValue[ShareInstance](1)
-	store, _, _ := newStore(t, NewMemoryCatalogBackend(), nil)
+	store, _, _ := newStore(t, nil)
 	defer store.Close()
 	startup := generousBudget(t, "startup")
 	firstRoot := idValue[DirectoryID](30)

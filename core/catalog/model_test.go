@@ -29,9 +29,8 @@ func idValue[T ~[IdentityBytes]byte](value byte) T {
 
 func committedRootForTest(t *testing.T, share ShareInstance, root DirectoryID) CommittedRoot {
 	t.Helper()
-	backend := NewMemoryCatalogBackend()
 	store, err := NewCatalogStore(StoreConfig{
-		ShareInstance: share, Backend: backend,
+		ShareInstance: share,
 		ProcessBudget: generousBudget(t, "descriptor-process"), ShareBudget: generousBudget(t, "descriptor-share"),
 		FailureEncoder: testFailureEncoder{},
 	})

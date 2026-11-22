@@ -25,7 +25,7 @@ import (
 	"github.com/windshare/windshare/engine/relayprofile"
 )
 
-func TestPrepareShareSenderEmitsSourceCatalogStorageMilestonesWithoutSlog(t *testing.T) {
+func TestPrepareShareSenderEmitsSourceMilestonesWithoutSlogOrTempCatalog(t *testing.T) {
 	tempRoot := t.TempDir()
 	for _, name := range []string{"TEMP", "TMP", "TMPDIR"} {
 		t.Setenv(name, tempRoot)
@@ -67,19 +67,19 @@ func TestPrepareShareSenderEmitsSourceCatalogStorageMilestonesWithoutSlog(t *tes
 		t.Fatalf("catalog producer bypassed the injected diagnostic sink: %q", legacyOutput.String())
 	}
 
-	var operations []string
+	var stages []string
 	stream.Close()
 	for record := range stream.Records() {
-		if record.Name() == "catalog_storage" {
-			operations = append(operations, record.Payload().Get("operation").Text())
+		if record.Name() == "share_workflow" {
+			stages = append(stages, record.Payload().Get("stage").Text())
 		}
 	}
-	wantOperations := []string{
-		"creating", "cleaning", "cleaned", "created",
-		"recovering", "recovered", "cleaning", "cleaned",
+	wantStages := []string{"source_acquiring", "source_acquired", "share_stopping", "share_stopped"}
+	if !slices.Equal(stages, wantStages) {
+		t.Fatalf("share workflow stages = %v, want %v", stages, wantStages)
 	}
-	if !slices.Equal(operations, wantOperations) {
-		t.Fatalf("catalog storage milestones = %v, want %v", operations, wantOperations)
+	if entries, err := os.ReadDir(tempRoot); err != nil || len(entries) != 1 || entries[0].Name() != "shared.txt" {
+		t.Fatalf("live catalog preparation created unexpected temp entries: entries=%v err=%v", entries, err)
 	}
 }
 

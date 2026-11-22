@@ -105,7 +105,6 @@ for release_gate in "$linux_gate" "$windows_gate"; do
   assert_contains "$release_gate" './scripts/ci/_releaseassets -source'
 done
 assert_contains "$linux_gate" './scripts/ci/_piondeps -reproduce'
-assert_contains "$windows_gate" "'github.com/windshare/windshare/core/catalog'"
 
 assert_contains "$linux_gate" '"$install_root/wind" --help'
 assert_not_contains "$linux_gate" '"$install_root/windshare"'

@@ -39,8 +39,6 @@ type SenderConfig struct {
 	Random             io.Reader
 	Now                func() time.Time
 	ScanAdmission      DirectoryScanAdmission
-	CatalogStorage     CatalogStorageFactory
-	CatalogTracer      CatalogStorageTracer
 	RootPrefetchTracer RootPrefetchTracer
 	RevisionTracer     content.RevisionTracer
 	CapacityTracer     revisioncapacity.Tracer
@@ -184,7 +182,7 @@ func prepareSender(
 		return nil, err
 	}
 	defer authority.destroy()
-	catalogState, err := prepareSenderCatalog(ctx, config, random, sender, authority, nil)
+	catalogState, err := prepareSenderCatalog(ctx, config, random, sender, authority)
 	if err != nil {
 		return nil, err
 	}
@@ -258,7 +256,6 @@ func prepareSenderCatalog(
 	random *lockedReader,
 	sender *PreparedSender,
 	authority senderAuthority,
-	spillFactory catalog.SpillFactory,
 ) (senderCatalog, error) {
 	shareBudget, err := catalog.NewBudgetAccount("live-share", catalog.DefaultShareBudgetLimits())
 	if err != nil {
@@ -268,42 +265,13 @@ func prepareSenderCatalog(
 	if err != nil {
 		return senderCatalog{}, err
 	}
-	tracer := config.CatalogTracer
-	storageFactory := config.CatalogStorage
-	if storageFactory == nil {
-		storageFactory = productionCatalogStorageFactory(tracer)
-	}
-	traceCatalogStorage(tracer, CatalogStorageTrace{
-		Operation: CatalogStorageCreating, ShareInstance: authority.shareInstance,
-	})
-	backend, err := storageFactory.Create(ctx, authority.shareInstance)
-	traceCatalogStorage(tracer, CatalogStorageTrace{
-		Operation: CatalogStorageCreated, ShareInstance: authority.shareInstance,
-		Cause: catalogStorageCause(err),
-	})
-	if err != nil {
-		return senderCatalog{}, fmt.Errorf("create live catalog storage: %w", err)
-	}
-	if backend == nil {
-		return senderCatalog{}, errors.New("live catalog storage factory returned a nil backend")
-	}
-	if _, owned := backend.(*ownedCatalogBackend); !owned {
-		backend = &observedCatalogBackend{
-			CatalogBackend: backend, share: authority.shareInstance, tracer: tracer,
-		}
-	}
 	sender.catalogStore, err = catalog.NewCatalogStore(catalog.StoreConfig{
-		ShareInstance: authority.shareInstance, Backend: backend,
-		ProcessBudget: config.CatalogBudget, ShareBudget: shareBudget, FailureEncoder: catalogflow.CatalogFailureEncoder{}, SpillFactory: spillFactory,
+		ShareInstance:  authority.shareInstance,
+		ProcessBudget:  config.CatalogBudget,
+		ShareBudget:    shareBudget,
+		FailureEncoder: catalogflow.CatalogFailureEncoder{},
 	})
 	if err != nil {
-		if catalogStorageCause(err) == CatalogStorageCauseBudgetExceeded {
-			traceCatalogStorage(tracer, CatalogStorageTrace{
-				Operation: CatalogStorageBudgetRejected, ShareInstance: authority.shareInstance,
-				Cause: CatalogStorageCauseBudgetExceeded,
-			})
-		}
-		_ = backend.Close()
 		return senderCatalog{}, err
 	}
 	selectedRoots := sender.source.SelectedRoots()

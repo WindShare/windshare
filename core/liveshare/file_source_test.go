@@ -234,9 +234,14 @@ func (file *objectStableFile) Close() error {
 
 func objectSenderConfig(t *testing.T, source *objectFileSource) SenderConfig {
 	t.Helper()
-	return SenderConfig{Source: source, Relays: []string{"ws://source.test"}, ChunkSize: catalog.MinChunkSize, RevisionCapacity: newTestRevisionCapacity(t), CatalogBudget: testCatalogBudget(), CacheBudget: testCacheBudget(), CatalogStorage: CatalogStorageFactoryFunc(func(context.Context, catalog.ShareInstance) (catalog.CatalogBackend, error) {
-		return catalog.NewMemoryCatalogBackend(), nil
-	})}
+	return SenderConfig{
+		Source:           source,
+		Relays:           []string{"ws://source.test"},
+		ChunkSize:        catalog.MinChunkSize,
+		RevisionCapacity: newTestRevisionCapacity(t),
+		CatalogBudget:    testCatalogBudget(),
+		CacheBudget:      testCacheBudget(),
+	}
 }
 
 func prepareObjectSender(t *testing.T, source *objectFileSource) *PreparedSender {
@@ -426,6 +431,7 @@ func TestFileSourceRollbackOwnsReturnedSourceAndPreservesCleanupFailure(t *testi
 			cleanup := errors.New("source cleanup failed")
 			source.closeErr = cleanup
 			config := objectSenderConfig(t, source)
+			wantErr := injected
 			switch phase {
 			case "factory":
 				config.Source = FileSourceFactoryFunc(func(ctx context.Context, value FileSourceContext) (FileSource, error) {
@@ -433,13 +439,20 @@ func TestFileSourceRollbackOwnsReturnedSourceAndPreservesCleanupFailure(t *testi
 					return owned, errors.Join(err, injected)
 				})
 			case "catalog":
-				config.CatalogStorage = CatalogStorageFactoryFunc(func(context.Context, catalog.ShareInstance) (catalog.CatalogBackend, error) { return nil, injected })
+				tightBudget, err := catalog.NewBudgetAccount("tight-catalog", catalog.BudgetLimits{
+					ActiveScans: 1, ScanWork: 1, Entries: 1, MemoryBytes: 1,
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				config.CatalogBudget = tightBudget
+				wantErr = catalog.ErrBudgetExceeded
 			case "content":
 				config.preparation = productionSenderPreparationDependencies()
 				config.preparation.sessionAuthKey = func(*content.KeyTree) (content.DerivedKey, error) { return content.DerivedKey{}, injected }
 			}
 			sender, err := PrepareSender(context.Background(), config)
-			if sender != nil || !errors.Is(err, injected) || !errors.Is(err, cleanup) {
+			if sender != nil || !errors.Is(err, wantErr) || !errors.Is(err, cleanup) {
 				t.Fatalf("preparation rollback = %v, %v", sender, err)
 			}
 			if source.closed != 1 || source.closedWhileActive || config.CatalogBudget.Snapshot().Used != (catalog.ResourceUsage{}) {
@@ -583,7 +596,7 @@ func TestFileSourceRejectsUnknownRequiredMetadataWithoutPublishingGuesses(t *tes
 		t.Fatalf("unknown exact size published a guessed file: committed=%v err=%v", committed, err)
 	}
 	after := config.CatalogBudget.Snapshot().Used
-	if after.Entries != initial.Entries || after.ActiveScans != 0 || after.SpillBytes != 0 || source.opens != 0 {
+	if after.Entries != initial.Entries || after.ActiveScans != 0 || source.opens != 0 {
 		t.Fatalf("failed metadata discovery retained provisional authority: initial=%+v after=%+v", initial, after)
 	}
 	if err := sender.Close(); err != nil {

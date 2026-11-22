@@ -129,7 +129,7 @@ func newVerticalFixtureWithContent(t *testing.T, data []byte, chunkSize uint32) 
 	shareBudget, _ := catalog.NewBudgetAccount("share", catalog.DefaultShareBudgetLimits())
 	startupBudget, _ := catalog.NewBudgetAccount("startup", catalog.DefaultSessionBudgetLimits())
 	store, err := catalog.NewCatalogStore(catalog.StoreConfig{
-		ShareInstance: fixture.share, Backend: catalog.NewMemoryCatalogBackend(),
+		ShareInstance: fixture.share,
 		ProcessBudget: processBudget, ShareBudget: shareBudget, FailureEncoder: objects,
 	})
 	if err != nil {

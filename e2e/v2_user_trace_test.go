@@ -480,7 +480,7 @@ func v5ValidFilesystemCheckpointDecision(event, decision string) bool {
 func v5KnownObserverLossCategory(value string) bool {
 	switch value {
 	case "relay_lifecycle", "webrtc_lifecycle", "sender_attempt", "receiver_termination", "lane_settlement",
-		"protocol_operation", "transfer_lifecycle", "filesystem_output", "catalog_storage", "root_prefetch",
+		"protocol_operation", "transfer_lifecycle", "filesystem_output", "root_prefetch",
 		"sender_capacity", "sender_revision", "native_connectivity", "command_adapter", "engine_observation":
 		return true
 	default:

@@ -16,12 +16,8 @@ import (
 const scanProgressTestDeadline = 30 * time.Second
 
 func TestScanProgressCoalescesBackpressureWithoutBlockingScan(t *testing.T) {
-	store, _, _ := newStore(t, NewMemoryCatalogBackend(), nil)
+	store, _, _ := newStore(t, nil)
 	defer store.Close()
-	// The shared fixture's tiny sort run intentionally exercises spill behavior.
-	// Keep that disk-bound concern out of this concurrency test so reaching the
-	// publish boundary measures observer backpressure rather than Windows fsyncs.
-	store.sortRunBytes = DefaultSortRunMemoryBytes
 	session := generousBudget(t, "progress-session")
 	directory := prepareScannableDirectory(t, store, session, 181, 183)
 
@@ -96,7 +92,7 @@ func TestScanProgressCoalescesBackpressureWithoutBlockingScan(t *testing.T) {
 }
 
 func TestScanProgressCancellationStopsLastSharedAttempt(t *testing.T) {
-	store, _, _ := newStore(t, NewMemoryCatalogBackend(), nil)
+	store, _, _ := newStore(t, nil)
 	defer store.Close()
 	session := generousBudget(t, "progress-cancel-session")
 	directory := prepareScannableDirectory(t, store, session, 184, 186)
@@ -134,7 +130,7 @@ func TestScanProgressCancellationStopsLastSharedAttempt(t *testing.T) {
 }
 
 func TestScanProgressObserverFailureIsWaiterLocalAndNeverPersisted(t *testing.T) {
-	store, _, _ := newStore(t, NewMemoryCatalogBackend(), nil)
+	store, _, _ := newStore(t, nil)
 	defer store.Close()
 	session := generousBudget(t, "progress-failure-session")
 	directory := prepareScannableDirectory(t, store, session, 187, 189)

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,7 +15,7 @@ func generousBudget(t *testing.T, name string) *BudgetAccount {
 	t.Helper()
 	account, err := NewBudgetAccount(name, BudgetLimits{
 		ActiveScans: 100, ScanWork: 100_000, Entries: 100_000,
-		MemoryBytes: 64 << 20, SpillBytes: 256 << 20,
+		MemoryBytes: 64 << 20,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -36,7 +35,7 @@ func rootCommit(t *testing.T, instance ShareInstance, root DirectoryID, generati
 			t.Fatal(createErr)
 		}
 		return DirectoryCommit{
-			directory: rootRecord, generation: generation, children: newSliceNodeSource(children), synthetic: true,
+			directory: rootRecord, generation: generation, children: children, synthetic: true,
 		}
 	}
 	return commit
@@ -54,16 +53,18 @@ func commitSyntheticRoot(t *testing.T, store *CatalogStore, commit DirectoryComm
 	return root
 }
 
-func newStore(t *testing.T, backend CatalogBackend, clock Clock) (*CatalogStore, *BudgetAccount, *BudgetAccount) {
+func newStore(t *testing.T, clock Clock) (*CatalogStore, *BudgetAccount, *BudgetAccount) {
 	t.Helper()
 	process := generousBudget(t, "process")
 	share := generousBudget(t, "share")
 	var nextAttempt atomic.Uint32
 	var nextGeneration atomic.Uint32
 	store, err := NewCatalogStore(StoreConfig{
-		ShareInstance: idValue[ShareInstance](1), Backend: backend,
-		ProcessBudget: process, ShareBudget: share, FailureEncoder: testFailureEncoder{},
-		Clock: clock, SortRunBytes: 512,
+		ShareInstance:  idValue[ShareInstance](1),
+		ProcessBudget:  process,
+		ShareBudget:    share,
+		FailureEncoder: testFailureEncoder{},
+		Clock:          clock,
 		AttemptIDs: ScanAttemptIDGeneratorFunc(func() (ScanAttemptID, error) {
 			return idValue[ScanAttemptID](byte(nextAttempt.Add(1))), nil
 		}),
@@ -75,33 +76,6 @@ func newStore(t *testing.T, backend CatalogBackend, clock Clock) (*CatalogStore,
 		t.Fatal(err)
 	}
 	return store, process, share
-}
-
-func TestDefaultMemoryStoreSpillNamespacesArePrivate(t *testing.T) {
-	first, _, _ := newStore(t, NewMemoryCatalogBackend(), nil)
-	second, _, _ := newStore(t, NewMemoryCatalogBackend(), nil)
-	firstSpill, firstOK := first.spillFactory.(*FileSpillFactory)
-	secondSpill, secondOK := second.spillFactory.(*FileSpillFactory)
-	if !firstOK || !secondOK || !firstSpill.ownedRoot || !secondSpill.ownedRoot || firstSpill.root == secondSpill.root {
-		t.Fatalf("default spill roots are not private: %#v / %#v", firstSpill, secondSpill)
-	}
-	for _, path := range []string{firstSpill.shareRoot(first.shareInstance), secondSpill.shareRoot(second.shareInstance)} {
-		if info, err := os.Stat(path); err != nil || !info.IsDir() {
-			t.Fatalf("private spill root %q: info=%v err=%v", path, info, err)
-		}
-	}
-	if err := first.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(firstSpill.root); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("closed store retained private spill root: %v", err)
-	}
-	if info, err := os.Stat(secondSpill.shareRoot(second.shareInstance)); err != nil || !info.IsDir() {
-		t.Fatalf("closing first store damaged second root: info=%v err=%v", info, err)
-	}
-	if err := second.Close(); err != nil {
-		t.Fatal(err)
-	}
 }
 
 func scannedFile(t *testing.T, id byte, name string, size uint64) ScannedChild {
@@ -143,7 +117,7 @@ func selectedDirectory(t *testing.T, root DirectoryID, id byte, name string) Nod
 func TestBudgetReservationIsHierarchicalTransferableAndRollbackSafe(t *testing.T) {
 	process := generousBudget(t, "process")
 	share, _ := NewBudgetAccount("share", BudgetLimits{
-		ActiveScans: 2, ScanWork: 2, Entries: 2, MemoryBytes: 20, SpillBytes: 20,
+		ActiveScans: 2, ScanWork: 2, Entries: 2, MemoryBytes: 20,
 	})
 	session := generousBudget(t, "session")
 	reservation, err := ReserveHierarchy(
@@ -179,52 +153,30 @@ func TestBudgetReservationIsHierarchicalTransferableAndRollbackSafe(t *testing.T
 	}
 }
 
-type failingBackend struct {
-	CatalogBackend
-	failPublish atomic.Bool
-}
-
-func (b *failingBackend) BeginDirectory(ctx context.Context, directory DirectoryID, generation DirectoryGeneration, meter ResourceMeter) (BackendTransaction, error) {
-	transaction, err := b.CatalogBackend.BeginDirectory(ctx, directory, generation, meter)
-	if err != nil {
-		return nil, err
-	}
-	return &failingTransaction{BackendTransaction: transaction, failPublish: &b.failPublish}, nil
-}
-
-type failingTransaction struct {
-	BackendTransaction
-	failPublish *atomic.Bool
-}
-
-func (t *failingTransaction) Publish(ctx context.Context) (CommittedDirectory, error) {
-	if t.failPublish.Load() {
-		return CommittedDirectory{}, errors.New("injected publish failure")
-	}
-	return t.BackendTransaction.Publish(ctx)
-}
-
 func TestCatalogStorePublishesPagesAndBudgetOnlyAfterAtomicCommit(t *testing.T) {
-	backend := &failingBackend{CatalogBackend: NewMemoryCatalogBackend()}
-	backend.failPublish.Store(true)
-	store, process, share := newStore(t, backend, nil)
+	store, process, share := newStore(t, nil)
+	tightSession, err := NewBudgetAccount("tight-session", BudgetLimits{
+		ActiveScans: 1, ScanWork: 1, Entries: 1, MemoryBytes: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	session := generousBudget(t, "session")
 	root := idValue[DirectoryID](2)
 	commit := rootCommit(t, idValue[ShareInstance](1), root, idValue[DirectoryGeneration](3), []NodeRecord{
 		selectedDirectory(t, root, 4, "selected"),
 	})
-	if failed, err := store.CommitSyntheticRoot(context.Background(), commit, session); err == nil || !failed.IsZero() {
-		t.Fatal("injected publish failure created a committed-root capability")
+	if failed, err := store.CommitSyntheticRoot(context.Background(), commit, tightSession); !errors.Is(err, ErrBudgetExceeded) || !failed.IsZero() {
+		t.Fatalf("budget-rejected commit = %+v, %v", failed, err)
 	}
 	if _, ok, err := store.Directory(context.Background(), root); err != nil || ok {
 		t.Fatalf("failed generation was visible: ok=%v err=%v", ok, err)
 	}
 	if process.Snapshot().Used != (ResourceUsage{}) || share.Snapshot().Used != (ResourceUsage{}) ||
-		session.Snapshot().Used != (ResourceUsage{}) {
+		tightSession.Snapshot().Used != (ResourceUsage{}) {
 		t.Fatal("failed transaction leaked budget")
 	}
 
-	backend.failPublish.Store(false)
 	committedRoot := commitSyntheticRoot(t, store, commit, session)
 	directory, ok, err := store.Directory(context.Background(), root)
 	if err != nil || !ok || directory.PageCount() != 1 || directory.EntryCount() != 1 {
@@ -286,7 +238,7 @@ func prepareScannableDirectory(t *testing.T, store *CatalogStore, session *Budge
 }
 
 func TestListChildrenSingleflightSortsStreamAndReplaysPages(t *testing.T) {
-	store, _, _ := newStore(t, NewMemoryCatalogBackend(), nil)
+	store, _, _ := newStore(t, nil)
 	defer store.Close()
 	session := generousBudget(t, "session")
 	directory := prepareScannableDirectory(t, store, session, 40, 42)
@@ -347,7 +299,7 @@ func TestListChildrenSingleflightSortsStreamAndReplaysPages(t *testing.T) {
 
 func TestListChildrenFailureAuthorityRetryAndStaleDoNotPublish(t *testing.T) {
 	clock := &fakeClock{now: time.Unix(100, 0)}
-	store, _, _ := newStore(t, NewMemoryCatalogBackend(), clock)
+	store, _, _ := newStore(t, clock)
 	defer store.Close()
 	session := generousBudget(t, "session")
 	directory := prepareScannableDirectory(t, store, session, 60, 62)
@@ -374,7 +326,7 @@ func TestListChildrenFailureAuthorityRetryAndStaleDoNotPublish(t *testing.T) {
 		t.Fatal("explicit cooled retry did not start a new attempt")
 	}
 
-	staleStore, _, _ := newStore(t, NewMemoryCatalogBackend(), nil)
+	staleStore, _, _ := newStore(t, nil)
 	defer staleStore.Close()
 	staleSession := generousBudget(t, "stale-session")
 	other := prepareScannableDirectory(t, staleStore, staleSession, 70, 72)
@@ -393,7 +345,7 @@ func TestListChildrenFailureAuthorityRetryAndStaleDoNotPublish(t *testing.T) {
 }
 
 func TestListChildrenCancelsLastWaiterAndContainsPanics(t *testing.T) {
-	store, _, _ := newStore(t, NewMemoryCatalogBackend(), nil)
+	store, _, _ := newStore(t, nil)
 	defer store.Close()
 	session := generousBudget(t, "session")
 	directory := prepareScannableDirectory(t, store, session, 80, 82)
@@ -418,7 +370,7 @@ func TestListChildrenCancelsLastWaiterAndContainsPanics(t *testing.T) {
 	}
 	<-finished
 
-	panicStore, _, _ := newStore(t, NewMemoryCatalogBackend(), nil)
+	panicStore, _, _ := newStore(t, nil)
 	defer panicStore.Close()
 	panicSession := generousBudget(t, "panic-session")
 	panicDirectory := prepareScannableDirectory(t, panicStore, panicSession, 90, 92)
@@ -431,7 +383,7 @@ func TestListChildrenCancelsLastWaiterAndContainsPanics(t *testing.T) {
 }
 
 func TestScanChildSinkSerializesConcurrentProducersAndRejectsLateUse(t *testing.T) {
-	store, _, _ := newStore(t, NewMemoryCatalogBackend(), nil)
+	store, _, _ := newStore(t, nil)
 	defer store.Close()
 	session := generousBudget(t, "session")
 	directory := prepareScannableDirectory(t, store, session, 93, 95)
@@ -470,13 +422,13 @@ func TestScanChildSinkSerializesConcurrentProducersAndRejectsLateUse(t *testing.
 	}
 }
 
-func TestExternalSortRejectsNodeIdentityCollisions(t *testing.T) {
+func TestDirectorySortRejectsNodeIdentityCollisions(t *testing.T) {
 	for name, children := range map[string][]ScannedChild{
 		"distinct-names":  {scannedFile(t, 102, "a", 1), scannedFile(t, 102, "b", 1)},
 		"colliding-names": {scannedFile(t, 103, "README", 1), scannedFile(t, 103, "Readme", 1)},
 	} {
 		t.Run(name, func(t *testing.T) {
-			store, _, _ := newStore(t, NewMemoryCatalogBackend(), nil)
+			store, _, _ := newStore(t, nil)
 			defer store.Close()
 			session := generousBudget(t, "session")
 			directory := prepareScannableDirectory(t, store, session, 110, 112)
@@ -507,7 +459,7 @@ func TestExternalSortRejectsNodeIdentityCollisions(t *testing.T) {
 func TestShareBudgetSurvivesSessionReconnect(t *testing.T) {
 	process := generousBudget(t, "process")
 	share, err := NewBudgetAccount("share", BudgetLimits{
-		ActiveScans: 10, ScanWork: 100, Entries: 2, MemoryBytes: 1 << 20, SpillBytes: 1 << 20,
+		ActiveScans: 10, ScanWork: 100, Entries: 2, MemoryBytes: 1 << 20,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -515,8 +467,10 @@ func TestShareBudgetSurvivesSessionReconnect(t *testing.T) {
 	var attempt atomic.Uint32
 	var generation atomic.Uint32
 	store, err := NewCatalogStore(StoreConfig{
-		ShareInstance: idValue[ShareInstance](1), Backend: NewMemoryCatalogBackend(),
-		ProcessBudget: process, ShareBudget: share, FailureEncoder: testFailureEncoder{}, SortRunBytes: 256,
+		ShareInstance:  idValue[ShareInstance](1),
+		ProcessBudget:  process,
+		ShareBudget:    share,
+		FailureEncoder: testFailureEncoder{},
 		AttemptIDs: ScanAttemptIDGeneratorFunc(func() (ScanAttemptID, error) {
 			return idValue[ScanAttemptID](byte(attempt.Add(1))), nil
 		}),

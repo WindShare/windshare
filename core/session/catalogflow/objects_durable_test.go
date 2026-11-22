@@ -6,7 +6,6 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"errors"
-	"path/filepath"
 	"sync/atomic"
 	"testing"
 
@@ -252,23 +251,16 @@ func TestAddressedSenderServesOnlyTheCommittedPage(t *testing.T) {
 	}
 }
 
-func TestCommittedFailurePayloadSurvivesRestart(t *testing.T) {
+func TestCommittedFailurePayloadReplaysWithoutRescan(t *testing.T) {
 	fixture := newCatalogObjectFixture(t)
-	rootPath := t.TempDir()
 	objects := CatalogFailureEncoder{}
 	process, _ := catalog.NewBudgetAccount("process", catalog.DefaultProcessBudgetLimits())
 	shareBudget, _ := catalog.NewBudgetAccount("share", catalog.DefaultShareBudgetLimits())
 	session, _ := catalog.NewBudgetAccount("session", catalog.DefaultSessionBudgetLimits())
-	backend, err := catalog.NewFileCatalogBackend(catalog.FileCatalogBackendConfig{
-		Root: filepath.Join(rootPath, "catalog"), ShareInstance: fixture.share,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	var attempts atomic.Uint32
 	store, err := catalog.NewCatalogStore(catalog.StoreConfig{
-		ShareInstance: fixture.share, Backend: backend, ProcessBudget: process, ShareBudget: shareBudget,
-		FailureEncoder: objects, SpillFactory: catalog.NewFileSpillFactory(filepath.Join(rootPath, "sort")),
+		ShareInstance: fixture.share, ProcessBudget: process, ShareBudget: shareBudget,
+		FailureEncoder: objects,
 		AttemptIDs: catalog.ScanAttemptIDGeneratorFunc(func() (catalog.ScanAttemptID, error) {
 			return scanAttemptID(t, byte(130+attempts.Add(1))), nil
 		}),
@@ -293,40 +285,19 @@ func TestCommittedFailurePayloadSurvivesRestart(t *testing.T) {
 	}
 	firstObject, found, err := store.FailurePayload(context.Background(), firstDirectory, firstFailure.AttemptID)
 	if err != nil || !found {
-		t.Fatalf("first durable object: found=%v err=%v", found, err)
+		t.Fatalf("first committed failure object: found=%v err=%v", found, err)
 	}
 	if _, err := store.ListChildren(context.Background(), secondDirectory, session, catalog.ScanOptions{}, scanner); err == nil {
 		t.Fatal("second permanent failure was accepted")
 	}
-	if err := backend.Close(); err != nil {
-		t.Fatal(err)
-	}
 
-	restartObjects := CatalogFailureEncoder{}
-	recoveredProcess, _ := catalog.NewBudgetAccount("recovered-process", catalog.DefaultProcessBudgetLimits())
-	recoveredShare, _ := catalog.NewBudgetAccount("recovered-share", catalog.DefaultShareBudgetLimits())
-	recoveredSession, _ := catalog.NewBudgetAccount("recovered-session", catalog.DefaultSessionBudgetLimits())
-	recoveredBackend, err := catalog.NewFileCatalogBackend(catalog.FileCatalogBackendConfig{
-		Root: filepath.Join(rootPath, "catalog"), ShareInstance: fixture.share,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	recovered, err := catalog.NewCatalogStore(catalog.StoreConfig{
-		ShareInstance: fixture.share, Backend: recoveredBackend,
-		ProcessBudget: recoveredProcess, ShareBudget: recoveredShare, FailureEncoder: restartObjects,
-		SpillFactory: catalog.NewFileSpillFactory(filepath.Join(rootPath, "sort")),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	var rescans atomic.Int32
 	never := catalog.DirectoryScannerFunc(func(context.Context, catalog.ScanRequest) (catalog.ScanResult, error) {
 		rescans.Add(1)
-		return catalog.ScanResult{}, errors.New("recovered failure reached scanner")
+		return catalog.ScanResult{}, errors.New("committed failure reached scanner")
 	})
 	source, err := NewCatalogStoreSource(CatalogStoreSourceConfig{
-		ShareInstance: fixture.share, Store: recovered, SessionBudget: recoveredSession, Scanner: never,
+		ShareInstance: fixture.share, Store: store, SessionBudget: session, Scanner: never,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -335,17 +306,17 @@ func TestCommittedFailurePayloadSurvivesRestart(t *testing.T) {
 	result, err := source.LoadPage(context.Background(), request, nil)
 	if err != nil || result.failure == nil || result.failure.record.AttemptID != firstFailure.AttemptID ||
 		!bytes.Equal(result.failure.payload, firstObject.Bytes()) {
-		t.Fatalf("recovered failure result = %+v err=%v", result, err)
+		t.Fatalf("replayed failure result = %+v err=%v", result, err)
 	}
 	service, _ := NewAddressedSenderService(fixture.share, source)
 	served, err := service.Serve(context.Background(), request, nil)
 	if err != nil || !bytes.Equal(served, firstObject.Bytes()) {
-		t.Fatalf("restarted service changed failure bytes: %v", err)
+		t.Fatalf("addressed service changed failure bytes: %v", err)
 	}
 	verifier := CatalogPayloadDecoder{}
 	verified, err := verifier.Verify(context.Background(), fixture.share, request, served)
 	if err != nil || verified.Failure == nil || verified.Failure.AttemptID != firstFailure.AttemptID {
-		t.Fatalf("verified recovered failure = %+v err=%v", verified, err)
+		t.Fatalf("verified replayed failure = %+v err=%v", verified, err)
 	}
 	failureGeneration := generationID(t, 153)
 	laterRequest, _ := NewListRequest(firstDirectory, &failureGeneration, 1)
@@ -353,19 +324,18 @@ func TestCommittedFailurePayloadSurvivesRestart(t *testing.T) {
 		t.Fatalf("failure object answered a later-page request: %v", err)
 	}
 	if rescans.Load() != 0 {
-		t.Fatalf("restart rescanned: %d", rescans.Load())
+		t.Fatalf("replayed permanent failure rescanned: %d", rescans.Load())
 	}
-	if recoveredShare.Snapshot().Used == (catalog.ResourceUsage{}) {
-		t.Fatal("recovered durable authority was not budgeted")
+	if shareBudget.Snapshot().Used == (catalog.ResourceUsage{}) {
+		t.Fatal("committed failure authority was not budgeted")
 	}
-	if err := recovered.Close(); err != nil {
+	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if recoveredProcess.Snapshot().Used != (catalog.ResourceUsage{}) ||
-		recoveredShare.Snapshot().Used != (catalog.ResourceUsage{}) {
-		t.Fatal("closing recovered store did not release durable authority budget")
+	if process.Snapshot().Used != (catalog.ResourceUsage{}) ||
+		shareBudget.Snapshot().Used != (catalog.ResourceUsage{}) {
+		t.Fatal("closing store did not release committed failure budget")
 	}
-	_ = store.Close()
 }
 
 type addressedSourceFunc func(context.Context, ListRequest) (PageResult, error)

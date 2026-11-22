@@ -197,7 +197,6 @@ func rendererEvents(t *testing.T) []visibilityExpectation {
 	filesystem := diagnosticEvent("filesystem_output", nil)
 	senderTerminalSend := diagnosticEvent("sender_terminal_send_observed", nil)
 	senderSessionTerminated := diagnosticEvent("sender_session_terminated", nil)
-	catalogStorage := diagnosticEvent("catalog_storage", nil)
 	rootPrefetch := diagnosticEvent("root_prefetch", nil)
 	protocolOperation := diagnosticEvent("protocol_operation", diagnostics.Fields{
 		"stage": diagnostics.Text("receiver_failed"), "cause": diagnostics.Text("deadline"), "request_kind": diagnostics.Text("release_lease"), "operation_elapsed_ms": diagnostics.Uint(30_000)})
@@ -224,7 +223,6 @@ func rendererEvents(t *testing.T) []visibilityExpectation {
 		{"filesystem output", filesystem, false, false, false, false},
 		{"sender terminal send", senderTerminalSend, false, false, false, false},
 		{"sender session terminated", senderSessionTerminated, false, false, false, false},
-		{"catalog storage", catalogStorage, false, false, false, false},
 		{"root prefetch", rootPrefetch, false, false, false, false},
 		{"protocol operation failure", protocolOperation, false, true, false, false},
 	}

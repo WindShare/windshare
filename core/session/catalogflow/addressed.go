@@ -103,7 +103,7 @@ func (source *CatalogStoreSource) loadFirstPage(
 		return PageResult{}, err
 	}
 	if !found {
-		return PageResult{}, catalog.ErrCorruptCatalogStorage
+		return PageResult{}, ErrObjectIdentity
 	}
 	return PageResult{failure: &addressedDirectoryFailure{record: wireFailure, payload: object.Bytes()}}, nil
 }
@@ -193,7 +193,7 @@ func (service *AddressedSenderService) authenticateDirectoryFailure(
 	}
 	expected, err := EncodeDirectoryFailure(failure.record)
 	if err != nil || !bytes.Equal(failure.payload, expected) {
-		return nil, errors.Join(catalog.ErrCorruptCatalogStorage, err)
+		return nil, errors.Join(ErrObjectIdentity, err)
 	}
 	return expected, nil
 }

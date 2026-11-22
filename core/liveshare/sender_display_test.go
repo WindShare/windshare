@@ -117,9 +117,6 @@ func prepareDisplaySender(t *testing.T, paths []string) *PreparedSender {
 	sender, err := PrepareSender(context.Background(), SenderConfig{CatalogBudget: testCatalogBudget(), CacheBudget: testCacheBudget(),
 		RevisionCapacity: newTestRevisionCapacity(t),
 		Source:           testFileSource(paths), Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.MinChunkSize,
-		CatalogStorage: CatalogStorageFactoryFunc(func(context.Context, catalog.ShareInstance) (catalog.CatalogBackend, error) {
-			return catalog.NewMemoryCatalogBackend(), nil
-		}),
 	})
 	if err != nil {
 		t.Fatal(err)

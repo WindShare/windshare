@@ -4,13 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"io"
 	"testing"
 	"time"
 )
 
 func TestDirectDirectoryCommitIsPageAddressedIdempotentAndConflictSafe(t *testing.T) {
-	store, _, _ := newStore(t, NewMemoryCatalogBackend(), nil)
+	store, _, _ := newStore(t, nil)
 	defer store.Close()
 	session := generousBudget(t, "session")
 	root := idValue[DirectoryID](130)
@@ -33,7 +32,7 @@ func TestDirectDirectoryCommitIsPageAddressedIdempotentAndConflictSafe(t *testin
 	}
 	commit := DirectoryCommit{
 		directory: firstRecord, generation: idValue[DirectoryGeneration](136),
-		children: newSliceNodeSource([]NodeRecord{alpha, zeta}), omittedCount: 2,
+		children: []NodeRecord{alpha, zeta}, omittedCount: 2,
 	}
 	if commit.Directory() != firstRecord || commit.Generation() != idValue[DirectoryGeneration](136) ||
 		commit.EntryCount() != 2 || commit.OmittedCount() != 2 {
@@ -55,15 +54,24 @@ func TestDirectDirectoryCommitIsPageAddressedIdempotentAndConflictSafe(t *testin
 	changed, _ := scannedFile(t, 137, "changed", 3).nodeRecord(firstDirectory)
 	conflict := DirectoryCommit{
 		directory: firstRecord, generation: commit.generation,
-		children: newSliceNodeSource([]NodeRecord{changed}),
+		children: []NodeRecord{changed},
 	}
 	if _, err := store.CommitDirectory(context.Background(), conflict, session); !errors.Is(err, ErrGenerationConflict) {
 		t.Fatalf("same-generation conflict = %v", err)
 	}
 
+	// Reusing an already committed child NodeID under another directory must fail atomically.
+	foreignChild, _ := scannedFile(t, 134, "reused", 1).nodeRecord(secondDirectory)
+	foreignCommit := DirectoryCommit{
+		directory: secondRecord, generation: idValue[DirectoryGeneration](137),
+		children: []NodeRecord{foreignChild},
+	}
+	if _, err := store.CommitDirectory(context.Background(), foreignCommit, session); !errors.Is(err, ErrGenerationConflict) {
+		t.Fatalf("foreign child node collision = %v", err)
+	}
+
 	empty := DirectoryCommit{
 		directory: secondRecord, generation: idValue[DirectoryGeneration](138),
-		children: newSliceNodeSource(nil),
 	}
 	emptyCommitted, err := store.CommitDirectory(context.Background(), empty, session)
 	if err != nil || emptyCommitted.EntryCount() != 0 || emptyCommitted.PageCount() != 1 {
@@ -80,69 +88,12 @@ func TestDirectDirectoryCommitIsPageAddressedIdempotentAndConflictSafe(t *testin
 	}
 }
 
-func TestCatalogCodecRoundTripsPrivateRecordsAndRejectsCorruption(t *testing.T) {
+func TestCatalogPageCodecRoundTripsAndRejectsMalformedWireBytes(t *testing.T) {
 	modified, _ := NewModifiedTime(10, 123_000_000, TimePrecisionMilliseconds)
 	parent := idValue[DirectoryID](140)
 	fileChild := scannedFile(t, 141, "file", 42)
 	fileChild.ModifiedTime = modified
 	fileRecord, _ := fileChild.nodeRecord(parent)
-	directoryChild := scannedDirectory(t, 142, "directory")
-	directoryChild.ModifiedTime = modified
-	directoryRecord, _ := directoryChild.nodeRecord(parent)
-	synthetic, _ := NewSyntheticRootNodeRecord(idValue[DirectoryID](143))
-	for _, record := range []NodeRecord{fileRecord, directoryRecord, synthetic} {
-		encoded, err := encodeNodeRecord(record)
-		if err != nil {
-			t.Fatal(err)
-		}
-		decoded, err := decodeNodeRecord(encoded)
-		if err != nil || decoded != record {
-			t.Fatalf("node round trip = %+v err=%v", decoded, err)
-		}
-	}
-	if _, err := restoreModifiedTime(storedModifiedTime{Seconds: 1}); !errors.Is(err, ErrCorruptCatalogStorage) {
-		t.Fatalf("absent modified time with data = %v", err)
-	}
-	if _, err := restoreModifiedTime(storedModifiedTime{Present: true, Precision: 99}); !errors.Is(err, ErrCorruptCatalogStorage) {
-		t.Fatalf("invalid modified precision = %v", err)
-	}
-
-	valid, err := encodeNodeRecord(fileRecord)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for name, value := range map[string]storedNode{
-		"schema": {
-			Schema: 99,
-		},
-		"synthetic-parent": {
-			Schema: catalogStorageSchema, Kind: uint8(NodeKindDirectory), ID: synthetic.NodeID().Bytes(),
-			Parent: idValue[DirectoryID](1).Bytes(), SyntheticRoot: true,
-		},
-		"directory-file-fields": {
-			Schema: catalogStorageSchema, Kind: uint8(NodeKindDirectory), ID: directoryRecord.NodeID().Bytes(),
-			Parent: parent.Bytes(), Name: "directory", SourceIdentity: []byte("source"),
-			VersionCandidate: []byte("unexpected"), SourceReference: []byte("object:directory"),
-		},
-		"file-without-candidate": {
-			Schema: catalogStorageSchema, Kind: uint8(NodeKindFile), ID: fileRecord.NodeID().Bytes(),
-			Parent: parent.Bytes(), Name: "file", SourceIdentity: []byte("source"), SourceReference: []byte("object:file"),
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			encoded, err := catalogStorageEnc.Marshal(value)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := decodeNodeRecord(encoded); !errors.Is(err, ErrCorruptCatalogStorage) {
-				t.Fatalf("corrupt node accepted: %v", err)
-			}
-		})
-	}
-	if _, err := decodeNodeRecord(append(valid, 0)); !errors.Is(err, ErrCorruptCatalogStorage) {
-		t.Fatalf("non-canonical node accepted: %v", err)
-	}
-
 	page, payload, err := NewCatalogPage(CatalogPageSpec{
 		ShareInstance: idValue[ShareInstance](1), DirectoryID: parent,
 		Generation: idValue[DirectoryGeneration](144), Entries: []Entry{fileRecord.Entry()}, Terminal: true,
@@ -175,97 +126,6 @@ func TestCatalogCodecRoundTripsPrivateRecordsAndRejectsCorruption(t *testing.T) 
 	malformed, _ := pageWireEnc.Marshal(stored)
 	if _, err := DecodeCatalogPage(malformed); !errors.Is(err, ErrInvalidPagePayload) {
 		t.Fatalf("malformed page sequence accepted: %v", err)
-	}
-}
-
-func TestFileSpillLifecycleAndFinishedObjects(t *testing.T) {
-	factory := NewFileSpillFactory(t.TempDir())
-	share := idValue[ShareInstance](1)
-	attempt := idValue[ScanAttemptID](2)
-	cancelled, cancel := context.WithCancel(context.Background())
-	cancel()
-	if err := factory.Recover(cancelled, share); !errors.Is(err, context.Canceled) {
-		t.Fatalf("cancelled recovery = %v", err)
-	}
-	if err := factory.Recover(context.Background(), ShareInstance{}); err == nil {
-		t.Fatal("zero-share recovery succeeded")
-	}
-	if err := factory.Destroy(ShareInstance{}); err == nil {
-		t.Fatal("zero-share cleanup succeeded")
-	}
-	if _, err := factory.NewWorkspace(cancelled, SpillRequest{ShareInstance: share, AttemptID: attempt}); !errors.Is(err, context.Canceled) {
-		t.Fatalf("cancelled workspace = %v", err)
-	}
-	if _, err := factory.NewWorkspace(context.Background(), SpillRequest{}); err == nil {
-		t.Fatal("identity-free workspace succeeded")
-	}
-	if err := factory.Recover(context.Background(), share); err != nil {
-		t.Fatal(err)
-	}
-	workspace, err := factory.NewWorkspace(context.Background(), SpillRequest{ShareInstance: share, AttemptID: attempt})
-	if err != nil {
-		t.Fatal(err)
-	}
-	writer, err := workspace.Create(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := writer.Write([]byte("aborted")); err != nil {
-		t.Fatal(err)
-	}
-	if err := writer.Abort(); err != nil {
-		t.Fatal(err)
-	}
-	if err := writer.Abort(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := writer.Write(nil); err == nil {
-		t.Fatal("finished writer accepted data")
-	}
-	if _, err := writer.Commit(); err == nil {
-		t.Fatal("aborted writer committed")
-	}
-
-	writer, _ = workspace.Create(context.Background())
-	if _, err := writer.Write([]byte("payload")); err != nil {
-		t.Fatal(err)
-	}
-	object, err := writer.Commit()
-	if err != nil || object.Size() != 7 {
-		t.Fatalf("committed spill object size=%d err=%v", object.Size(), err)
-	}
-	if _, err := object.Open(cancelled); !errors.Is(err, context.Canceled) {
-		t.Fatalf("cancelled object open = %v", err)
-	}
-	reader, err := object.Open(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	data, err := io.ReadAll(reader)
-	if err != nil || string(data) != "payload" {
-		t.Fatalf("spill payload = %q err=%v", data, err)
-	}
-	_ = reader.Close()
-	if err := object.Remove(); err != nil {
-		t.Fatal(err)
-	}
-	if err := object.Remove(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := object.Open(context.Background()); err == nil {
-		t.Fatal("removed object reopened")
-	}
-	if err := workspace.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := workspace.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := workspace.Create(context.Background()); err == nil {
-		t.Fatal("closed workspace created a writer")
-	}
-	if err := factory.Destroy(share); err != nil {
-		t.Fatal(err)
 	}
 }
 
@@ -324,9 +184,12 @@ func TestScanFailureConstructorsAndAttemptAdmissionAxes(t *testing.T) {
 			process := generousBudget(t, "process")
 			share := generousBudget(t, "share")
 			store, err := NewCatalogStore(StoreConfig{
-				ShareInstance: idValue[ShareInstance](1), Backend: NewMemoryCatalogBackend(),
-				ProcessBudget: process, ShareBudget: share, FailureEncoder: testFailureEncoder{},
-				AttemptIDs: generators.attemptIDs, Generations: generators.generations,
+				ShareInstance:  idValue[ShareInstance](1),
+				ProcessBudget:  process,
+				ShareBudget:    share,
+				FailureEncoder: testFailureEncoder{},
+				AttemptIDs:     generators.attemptIDs,
+				Generations:    generators.generations,
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -355,7 +218,7 @@ func TestScanFailureConstructorsAndAttemptAdmissionAxes(t *testing.T) {
 
 func TestAttemptFailureReuseConcurrencyAndWorkAdmission(t *testing.T) {
 	t.Run("permanent failure", func(t *testing.T) {
-		store, _, _ := newStore(t, NewMemoryCatalogBackend(), nil)
+		store, _, _ := newStore(t, nil)
 		defer store.Close()
 		session := generousBudget(t, "session")
 		directory := prepareScannableDirectory(t, store, session, 160, 162)
@@ -381,8 +244,11 @@ func TestAttemptFailureReuseConcurrencyAndWorkAdmission(t *testing.T) {
 			var attempts byte
 			var generations byte
 			store, err := NewCatalogStore(StoreConfig{
-				ShareInstance: idValue[ShareInstance](1), Backend: NewMemoryCatalogBackend(),
-				ProcessBudget: process, ShareBudget: share, FailureEncoder: testFailureEncoder{}, Clock: clock,
+				ShareInstance:  idValue[ShareInstance](1),
+				ProcessBudget:  process,
+				ShareBudget:    share,
+				FailureEncoder: testFailureEncoder{},
+				Clock:          clock,
 				AttemptIDs: ScanAttemptIDGeneratorFunc(func() (ScanAttemptID, error) {
 					if !reuseAttempt {
 						attempts++
@@ -419,7 +285,7 @@ func TestAttemptFailureReuseConcurrencyAndWorkAdmission(t *testing.T) {
 	}
 
 	t.Run("active scan and work", func(t *testing.T) {
-		store, _, _ := newStore(t, NewMemoryCatalogBackend(), nil)
+		store, _, _ := newStore(t, nil)
 		defer store.Close()
 		rootSession := generousBudget(t, "root-session")
 		root := idValue[DirectoryID](170)
@@ -433,7 +299,7 @@ func TestAttemptFailureReuseConcurrencyAndWorkAdmission(t *testing.T) {
 			},
 		), rootSession)
 		session, _ := NewBudgetAccount("limited-session", BudgetLimits{
-			ActiveScans: 1, ScanWork: 2, Entries: 100, MemoryBytes: 1 << 20, SpillBytes: 1 << 20,
+			ActiveScans: 1, ScanWork: 2, Entries: 100, MemoryBytes: 1 << 20,
 		})
 		started := make(chan struct{})
 		release := make(chan struct{})
@@ -463,7 +329,7 @@ func TestAttemptFailureReuseConcurrencyAndWorkAdmission(t *testing.T) {
 		<-firstResult
 
 		workSession, _ := NewBudgetAccount("work-session", BudgetLimits{
-			ActiveScans: 1, ScanWork: 1, Entries: 100, MemoryBytes: 1 << 20, SpillBytes: 1 << 20,
+			ActiveScans: 1, ScanWork: 1, Entries: 100, MemoryBytes: 1 << 20,
 		})
 		workScanner := DirectoryScannerFunc(func(ctx context.Context, request ScanRequest) (ScanResult, error) {
 			return ScanResult{}, request.Children.Add(ctx, scannedFile(t, 174, "file", 1))
@@ -480,12 +346,12 @@ func TestStoreRejectsInvalidAndClosedOperations(t *testing.T) {
 		t.Fatal("empty store configuration was accepted")
 	}
 	if _, err := NewCatalogStore(StoreConfig{
-		ShareInstance: idValue[ShareInstance](1), Backend: NewMemoryCatalogBackend(),
+		ShareInstance: idValue[ShareInstance](1),
 		ProcessBudget: process, ShareBudget: process, FailureEncoder: testFailureEncoder{},
 	}); err == nil {
 		t.Fatal("aliased budgets were accepted")
 	}
-	store, _, _ := newStore(t, NewMemoryCatalogBackend(), nil)
+	store, _, _ := newStore(t, nil)
 	session := generousBudget(t, "session")
 	scanner := DirectoryScannerFunc(func(context.Context, ScanRequest) (ScanResult, error) {
 		return ScanResult{}, errors.New("must not scan")
@@ -525,7 +391,7 @@ func TestStoreRejectsInvalidAndClosedOperations(t *testing.T) {
 }
 
 func TestEmptyStreamingScanAndLowLevelAdmissionBranches(t *testing.T) {
-	store, _, _ := newStore(t, NewMemoryCatalogBackend(), nil)
+	store, _, _ := newStore(t, nil)
 	defer store.Close()
 	session := generousBudget(t, "session")
 	directory := prepareScannableDirectory(t, store, session, 180, 181)
@@ -567,36 +433,8 @@ func TestEmptyStreamingScanAndLowLevelAdmissionBranches(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer meter.Close()
-	if _, err := newExternalSorter(nil, meter, hierarchy, 1, true); err == nil {
-		t.Fatal("storage-free sorter was accepted")
-	}
-	factory := NewFileSpillFactory(t.TempDir())
-	if err := factory.Recover(context.Background(), idValue[ShareInstance](1)); err != nil {
-		t.Fatal(err)
-	}
-	workspace, err := factory.NewWorkspace(context.Background(), SpillRequest{
-		ShareInstance: idValue[ShareInstance](1), AttemptID: idValue[ScanAttemptID](1),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer workspace.Close()
-	sorter, err := newExternalSorter(workspace, meter, hierarchy, 0, true)
-	if err != nil || sorter.runBytes != DefaultSortRunMemoryBytes {
-		t.Fatalf("default sorter = %+v err=%v", sorter, err)
-	}
-
-	memory := NewMemoryCatalogBackend()
-	cancelled, cancel := context.WithCancel(context.Background())
-	cancel()
-	if _, err := memory.Recover(cancelled); !errors.Is(err, context.Canceled) {
-		t.Fatalf("cancelled memory recovery = %v", err)
-	}
-	if err := memory.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := memory.Recover(context.Background()); !errors.Is(err, ErrCatalogClosed) {
-		t.Fatalf("closed memory recovery = %v", err)
+	if _, err := newDirectorySorter(directory, nil); err == nil {
+		t.Fatal("meter-free sorter was accepted")
 	}
 	collector := &scanChildCollector{work: scanWorkMeter{store: store, resources: meter}, count: MaxDirectoryEntries}
 	if err := collector.Add(context.Background(), scannedFile(t, 185, "overflow", 1)); !errors.Is(err, ErrPageLimit) {

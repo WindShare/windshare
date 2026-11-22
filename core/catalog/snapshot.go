@@ -126,7 +126,7 @@ func NewSyntheticRootCommit(spec SyntheticRootCommitSpec) (DirectoryCommit, erro
 		return DirectoryCommit{}, err
 	}
 	return DirectoryCommit{
-		directory: root, generation: spec.Generation, children: newSliceNodeSource(selected), synthetic: true,
+		directory: root, generation: spec.Generation, children: selected, synthetic: true,
 	}, nil
 }
 

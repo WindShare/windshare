@@ -24,7 +24,7 @@ go test -run '^$' -bench '^BenchmarkName$' -benchmem -benchtime=... -count=1 -ti
 ```
 
 The workloads cover liveshare ready scaling and real-disk readiness, file-local content, multi-lane
-transfer, extreme-width catalog spill, relay registration wire cost, and Pion chunk transfer. Exact
+transfer, wide catalog materialization, relay registration wire cost, and Pion chunk transfer. Exact
 benchmark rows, metrics, and behavioral oracles are versioned with the runner.
 
 Cache insertion timing excludes prior capacity admission and partitioning.
@@ -82,9 +82,7 @@ and the three recovery metrics from `reopened`.
 
 ## Progressive discovery
 
-The sender publishes a NodeID hash index with each immutable directory generation. Budgeted
-membership filters skip unrelated generations; exact records remain on disk. Index bytes share
-the generation's atomic publication, integrity validation, and spill accounting.
+Each directory generation commits immutable wire-encoded pages and sender-private `NodeRecord` entries directly in memory under bounded process, share, and session budgets, without temporary disk files or external spill storage.
 
 When a folder download pauses, compare file-queue starvation with directory request latency.
 A completed-file count equal to the discovered-file count can mean discovery has fallen behind;
