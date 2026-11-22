@@ -1,691 +1,337 @@
-import type { CommittedDirectory } from '../catalog/page-store'
-import type { CatalogEntry } from '../catalog/records'
+import type { CatalogClient } from '../catalog/client'
+import type { ShareDescriptor } from '../catalog/records'
 import type { FrozenSelectionPolicy } from '../catalog/selection'
-import { encodeBase64Url } from '../crypto/bytes'
-import {
-  snapshotMaterializationDirectory,
-  validateDirectoryAdmissionBinding,
-  type DirectoryAdmission,
-  type DirectoryAdmissionScope,
-} from './directory-admission'
-import {
-  OutputPausedError,
-  type AuthenticatedDirectory,
-  type DirectoryCursor,
-  type DirectoryWork,
-  type PendingFile,
-  type TransferJobOptions,
-  type TransferJobResult,
-} from './job/contract'
-import {
-  artifactDirectoryPath,
-  artifactFilePath,
-  artifactLayoutClass,
-} from './job/artifact-path'
-import {
-  isolatedDirectoryOutputFailure,
-  normalizeFileTransferFailure,
-} from './job/failures'
-import { TransferAdmissionFailureError } from './job/admission-error'
-import { JobDiscovery } from './job/discovery'
-import { transferFile } from './job/file-transfer'
-import {
-  createDirectTreeCoordinateContract,
-  sameMaterializationRootRelativePath,
-  snapshotMaterializationRootRelativePath,
-  snapshotSourceAuthenticationPath,
-  type DirectTreeCoordinateContract,
-  type DirectTreeDirectoryProjection,
-  type DirectTreeFileProjection,
-} from './job/coordinate/direct-tree'
-import {
-  createTransferJobId,
-  snapshotTransferJobId,
-  validateTransferJobIntent,
-} from './job/identity'
-import {
-  transferJobLimits,
-  type TransferJobLimits,
-} from './job/limits'
-import { TransferObservers } from './job/observers'
-import { ExactPreparationCollector } from './job/preparation'
-import {
-  AsyncBoundedQueue,
-  bindOutputScheduling,
-  type BoundOutputScheduling,
-} from './job/scheduler'
-import { collectExactSingleFileEvidence } from './job/single-file-evidence'
-import { JobRootAuthority } from './job/root'
-import { CatalogTraversalGuard } from './job/traversal'
-import { newFileQueue, runDiscoveryWorkers, runPreparedFileWorkers } from './job/workers'
-import type { PerformanceFilePipelineObservation } from '../diagnostics/performance/performance-runtime-observations'
-import type { PerformanceSummaryObservations } from '../diagnostics/performance/performance-summary'
-import { SelectionMeasureTracker, type SelectionMeasure } from './measure'
-import {
-  snapshotDirectoryMaterializationRequest,
-  type ExactPreparationEvidence,
-  type IncrementalDirectoryOutput,
-  type MaterializationSummary,
-  type PlanExecution,
-} from './output/session'
-import { TransferProgressLedger } from './progress/ledger'
-import { observeTransferContent } from './progress/content'
-import type { ProgressChange } from './progress/observation'
-import { JobFailureAuthority } from './job-failure-authority'
-import { TransferJobMaterialization } from './job-materialization'
-import { outputSettlementTimeoutMilliseconds } from './settlement/output'
-import { TransferJobSettlement } from './job-settlement'
-import {
-  DirectorySettlementLedger,
-  stabilizeDirectorySettlementLifecycle,
-} from './settlement/directory-ledger'
-import { RevisionCapacityCoordinator } from './revision-capacity/public'
+import type { BlockRangeReader, ContentLaneStatus } from '../content/broker'
+import type { RevisionReader } from '../content/session-services'
+import { discoverSelection, type DiscoveredFile } from './discovery'
+import { transferSingleFile, type SingleFileTransferOutcome } from './file-transfer'
+import type { TransferOutputSession } from './output-port'
+import { TransferProgressTracker, type TransferProgress } from './progress'
+import { createTaskId } from './selection'
+import type {
+  MissingFileWarning,
+  ReceiveContentWarning,
+  ReceivePauseReason,
+  SafeRenamedSummary,
+  SourceRevisionFailure,
+  SourceRevisionFailures,
+} from './state'
 
-export * from './job/public'
-export * from './revision-capacity/public'
+const MAX_MISSING_WARNINGS = 20
+const MAX_SOURCE_FAILURES = 20
 
+export interface TransferJobOptions {
+  readonly transferJobId?: string
+  readonly descriptor: ShareDescriptor
+  readonly catalog: CatalogClient
+  readonly selection: FrozenSelectionPolicy
+  readonly revisions: RevisionReader
+  readonly broker: BlockRangeReader
+  readonly lanes?: ContentLaneStatus
+  readonly output: TransferOutputSession
+  readonly stripSingleFilePrefix?: boolean
+  readonly onProgress?: (progress: TransferProgress) => void
+}
+
+export type TransferJobStatus =
+  | 'completed'
+  | 'paused'
+  | 'stopped'
+  | 'partial'
+  | 'source-changed'
+  | 'failed'
+
+export interface TransferJobResult {
+  readonly status: TransferJobStatus
+  readonly pauseReason?: ReceivePauseReason
+  readonly completedFiles: bigint
+  readonly completedBytes: bigint
+  readonly discoveredFiles: bigint
+  readonly discoveredBytes: bigint
+  readonly discoveryComplete: boolean
+  readonly failedFiles: bigint
+  readonly failedDirectories: bigint
+  readonly sourceRevisionFailures?: SourceRevisionFailures
+  readonly contentWarning?: ReceiveContentWarning
+  readonly safeRenamed?: SafeRenamedSummary
+  readonly error?: unknown
+}
 
 /**
- * Tree and workspace plans retain bounded discovery/content overlap, while
- * prepared plans freeze exact authenticated catalog evidence before their
- * output port becomes reachable.
+ * Coordinates progressive catalog discovery and bounded concurrent file transfers
+ * against any `TransferOutputSession` backend.
  */
 export class TransferJob {
+  readonly transferJobId: string
   readonly #options: TransferJobOptions
-  readonly #selection: FrozenSelectionPolicy
-  readonly #limits: TransferJobLimits
-  readonly #lifetime = new AbortController()
-  readonly #measure = new SelectionMeasureTracker()
-  readonly #failures: JobFailureAuthority
-  readonly #traversal: CatalogTraversalGuard
-  readonly #discovery: JobDiscovery
-  readonly #root: JobRootAuthority
-  readonly #materialization: TransferJobMaterialization
-  readonly #settlement: TransferJobSettlement
-  readonly #transferJobId: string
-  readonly #outputSettlementTimeoutMilliseconds: number
-  readonly #progress = new TransferProgressLedger()
-  readonly #capacity: RevisionCapacityCoordinator
-  #directories: DirectorySettlementLedger | undefined
-  #externalAbortCleanup: (() => void) | undefined
-  #directoryScope: DirectoryAdmissionScope | undefined
-  #directoryOutput: IncrementalDirectoryOutput | undefined
-  #directTreeCoordinates: DirectTreeCoordinateContract | undefined
-  #execution: PlanExecution | undefined
-  #outputScheduling: BoundOutputScheduling | undefined
-  #performance: PerformanceSummaryObservations | undefined
-  #intent: TransferJobOptions['intent'] | undefined
-  #observers: TransferObservers | undefined
-  #preparation: ExactPreparationEvidence | undefined
-  #externalCancellationRequested = false
-  #started = false
+  readonly #abort = new AbortController()
+  readonly #tracker: TransferProgressTracker
+  #paused = false
+  #pauseReason: ReceivePauseReason = 'user'
+  #stopped = false
+  #firstError: unknown
+  #discoveryComplete = false
+  #discoveryFailed = false
+  #sourceChangedCount = 0n
+  readonly #sourceFailures: SourceRevisionFailure[] = []
+  readonly #missingFiles: MissingFileWarning[] = []
+  #completedFiles = 0n
+  #completedBytes = 0n
+  #discoveredFiles = 0n
+  #discoveredBytes = 0n
+  #failedFiles = 0n
+  #failedDirectories = 0n
 
   constructor(options: TransferJobOptions) {
+    this.transferJobId = options.transferJobId ?? createTaskId()
     this.#options = options
-    this.#selection = 'snapshot' in options.selection
-      ? options.selection.snapshot()
-      : options.selection
-    this.#limits = transferJobLimits(options)
-    this.#outputSettlementTimeoutMilliseconds = outputSettlementTimeoutMilliseconds(
-      options.outputSettlementTimeoutMilliseconds,
+    this.#tracker = new TransferProgressTracker(
+      this.transferJobId,
+      progress => options.onProgress?.(progress),
+      options.output.sessionId,
     )
-    this.#transferJobId = snapshotTransferJobId(options.transferJobId ?? createTransferJobId())
-    this.#capacity = new RevisionCapacityCoordinator({
-      revisions: options.revisions,
-      broker: observeTransferContent(options.broker, {
-        remainingWork: () => {
-          const snapshot = this.#progress.snapshot(this.#measure.snapshot())
-          const bytes = Number(snapshot.measure.discoveredBytes - snapshot.materializedBytes)
-          return { bytes: Math.max(0, bytes), known: snapshot.measure.discovery === 'complete' && Number.isSafeInteger(bytes) }
-        },
-        received: bytes => this.#progress.receiveObjectBytes(bytes),
-        updated: () => this.#emitProgress('counters'),
-      }),
-    }, {
-      ...options.revisionCapacity,
-      onProgress: snapshot => {
-        this.#progress.observeCapacityWait(snapshot)
-        this.#emitProgress()
-      },
-      onTrace: event => this.#observers?.capacityWait(event),
-    })
-    this.#failures = new JobFailureAuthority({
-      selection: this.#selection,
-      signal: this.#lifetime.signal,
-      measure: this.#measure,
-      progress: this.#progress,
-      observers: () => this.#observers,
-      emitProgress: () => this.#emitProgress(),
-      ...(options.incidentScope === undefined ? {} : { incidentScope: options.incidentScope }),
-    })
-    this.#root = new JobRootAuthority(options, this.#selection, this.#lifetime.signal)
-    this.#traversal = new CatalogTraversalGuard(
-      options.descriptor.shareInstance,
-      this.#limits.catalogNodeClaims,
-    )
-    this.#discovery = new JobDiscovery({
-      catalog: options.catalog,
-      selection: this.#selection,
-      traversal: this.#traversal,
-      explicitTargets: this.#failures.explicitTargets,
-      signal: this.#lifetime.signal,
-      rootCommitted: () => this.#root.committed,
-      observeSelectedFile: entry => this.#publishMeasure(this.#measure.observeUniqueFile(entry.expectedSize)),
-      recordDirectoryFailure: (identity, error) => this.#failures.recordDiscoveryDirectory(identity, error),
-      authenticateDirectory: (cursor, committed, parent) =>
-        this.#authenticateDirectory(cursor, committed, parent),
-      projectFile: sourcePath => this.#projectFile(sourcePath),
-      generationCommitted: (cursor, committed) => this.#pinDiscoveryGeneration(cursor, committed),
-      observeSourceOmissions: count => this.#publishMeasure(this.#measure.observeSourceOmissions(count)),
-      prepareDirectory: (collector, cursor, committed, role) =>
-        this.#preparedDirectory(collector, cursor, committed, role),
-    })
-    this.#settlement = new TransferJobSettlement({
-      options,
-      lifetime: this.#lifetime,
-      measure: this.#measure,
-      failures: this.#failures,
-      progress: this.#progress,
-      transferJobId: this.#transferJobId,
-      outputSettlementTimeoutMilliseconds: this.#outputSettlementTimeoutMilliseconds,
-      intent: () => this.#requireIntent(),
-      execution: () => this.#execution,
-      preparation: () => this.#preparation,
-      observers: () => this.#observers,
-      externalCancellationRequested: () => this.#externalCancellationRequested,
-      materializationSummary: () => this.#materializationSummary(),
-      emitProgress: () => this.#emitProgress(),
-    })
-    this.#materialization = new TransferJobMaterialization({
-      signal: this.#lifetime.signal,
-      admission: options.plans,
-      root: {
-        load: () => this.#root.load(),
-        cursor: () => this.#root.cursor(),
-        authenticated: committed => this.#root.authenticated(committed),
-        direct: () => this.#root.direct(
-          (cursor, committed) => this.#authenticateDirectory(cursor, committed),
-        ),
-        singleFileEvidence: (intent, committed) => collectExactSingleFileEvidence({
-          catalog: this.#options.catalog,
-          descriptor: this.#options.descriptor,
-          selection: this.#selection,
-          artifact: intent.artifact,
-          signal: this.#lifetime.signal,
-          root: committed,
-        }),
-      },
-      discovery: {
-        createDirectFileQueue: () => newFileQueue(this.#limits),
-        run: (root, directFiles, collector) => this.#runDiscovery(root, directFiles, collector),
-        measure: () => this.#measure.snapshot(),
-        hasFailures: () => this.#failures.failureCount !== 0,
-        prepareDirectory: (collector, cursor, committed, role) =>
-          this.#preparedDirectory(collector, cursor, committed, role),
-      },
-      execution: {
-        bind: execution => {
-          this.#bindExecution(execution)
-        },
-        bindDirectoryOutput: output => {
-          this.#directoryOutput = output
-        },
-        bindDirectoryScope: scope => {
-          this.#directoryScope = scope
-        },
-        recordPreparation: evidence => {
-          this.#preparation = evidence
-        },
-        requireBound: () => this.#requireExecution(),
-        materializationStarted: () => this.#observers?.materializationStarted(),
-        finishingStarted: () => {
-          this.#progress.beginFinishing()
-          this.#emitProgress()
-        },
-        finalizeDirectories: () => this.#finalizeDirectories(),
-        transferPreparedFiles: files => this.#transferPreparedFiles(files),
-        completeWorkers: measure => this.#settlement.completeWorkers(measure),
-        settleIncompletePreparation: measure => this.#settlement.settleIncompletePreparation(measure),
-        preparationRejected: state => this.#settlement.preparationRejected(state),
-      },
-    })
   }
 
-  async run(signal?: AbortSignal): Promise<TransferJobResult> {
-    if (this.#started) throw new Error('v2 transfer job can only run once')
-    this.#started = true
-    this.#observeAbort(signal)
+  pause(reason: ReceivePauseReason = 'user'): void {
+    if (this.#paused || this.#stopped) return
+    this.#paused = true
+    this.#pauseReason = reason
+    this.#abort.abort(new DOMException('Transfer paused', 'AbortError'))
+  }
+
+  stop(): void {
+    if (this.#stopped) return
+    this.#stopped = true
+    this.#abort.abort(new DOMException('Transfer stopped', 'AbortError'))
+  }
+
+  progress(): TransferProgress {
+    return this.#tracker.snapshot()
+  }
+
+  async run(externalSignal?: AbortSignal): Promise<TransferJobResult> {
+    const onExternalAbort = () => this.stop()
+    if (externalSignal?.aborted) this.stop()
+    externalSignal?.addEventListener('abort', onExternalAbort, { once: true })
+    const unsubscribeBandwidth = this.#observeLanes()
+    const maxWorkers = Math.max(1, this.#options.output.capabilities.maxConcurrentFiles)
+    const active = new Set<Promise<void>>()
+
     try {
-      const intent = await validateTransferJobIntent(
-        this.#options.intent,
-        this.#options.descriptor,
-        this.#selection,
-      )
-      this.#intent = intent
-      this.#directories = new DirectorySettlementLedger({
-        retention: this.#isNativeZip() ? 'durable-at-admission' : 'after-content',
-        maximumAdmissions: this.#limits.directoryAdmissions,
-        recordFailure: (identity, reason) => this.#recordDirectoryFailure(identity, reason),
-        ...(this.#options.incidentScope === undefined
-          ? {}
-          : { incidentScope: this.#options.incidentScope }),
-      })
-      this.#directTreeCoordinates = intent.plan.kind === 'direct-tree'
-        ? await createDirectTreeCoordinateContract(intent)
-        : undefined
-      this.#observers = new TransferObservers({
-        intent,
-        transferJobId: this.#transferJobId,
-        ...(this.#options.protocol === undefined ? {} : { protocol: this.#options.protocol }),
-        lanes: this.#options.lanes,
-        ...(this.#options.incidentScope === undefined
-          ? {}
-          : { incidentScope: this.#options.incidentScope }),
-        ...(this.#options.observeProgress === undefined ? {} : { observeProgress: this.#options.observeProgress }),
-        readProgress: () => this.#progress.snapshot(this.#measure.snapshot(), this.#execution?.output.identity.outputSessionId),
-        ...(this.#options.onMeasure === undefined ? {} : { onMeasure: this.#options.onMeasure }),
-        ...(this.#options.trace === undefined ? {} : { trace: this.#options.trace }),
-      })
-      this.#observers.intentFrozen(artifactLayoutClass(intent))
-      this.#emitProgress()
-      return await this.#materialization.run(intent)
+      await this.#runDiscoveryLoop(active, maxWorkers)
+      await this.#finalizeDiscovery()
     } catch (error) {
-      if (this.#intent === undefined) throw this.#admissionFailure(error)
-      if (this.#execution?.planKind === 'direct-tree' &&
-          this.#execution.terminalSettlementInitiated?.() === true) {
-        // The DirectTree lifecycle owner already crossed its terminal cut. Re-entering
-        // Pause would replace the initiating projector/finalization failure and could
-        // publish a second ordinary lifecycle over a retained pending outcome.
-        throw error
-      }
-      return this.#settlement.settleRunFailure(error)
+      this.#handleDiscoveryError(error)
     } finally {
-      this.#externalAbortCleanup?.()
-      this.#observers?.completePerformance()
+      await Promise.allSettled(active)
+      unsubscribeBandwidth?.()
+      externalSignal?.removeEventListener('abort', onExternalAbort)
     }
+
+    return this.#buildResult()
   }
 
-  async #runDiscovery(
-    root: DirectoryWork,
-    directFiles?: AsyncBoundedQueue<PendingFile>,
-    collector?: ExactPreparationCollector,
-  ): Promise<void> {
-    try {
-      await runDiscoveryWorkers({
-        root,
-        ...(directFiles === undefined ? {} : { directFiles }),
-        limits: this.#limits,
-        ...(directFiles === undefined ? {} : {
-          execution: this.#requireOutputScheduling().limits,
-          resources: this.#requireOutputScheduling().resources,
-          ...(this.#performance === undefined ? {} : { performance: this.#performance }),
-        }),
-        signal: this.#lifetime.signal,
-        abort: (error) => {
-          if (!this.#lifetime.signal.aborted) this.#lifetime.abort(error)
+  #observeLanes(): (() => void) | undefined {
+    const lanes = this.#options.lanes
+    if (lanes === undefined) return undefined
+    this.#tracker.observeContentLanes(lanes.size)
+    return lanes.subscribeBandwidthWait?.(waiting => {
+      this.#tracker.observeBandwidthWait(waiting)
+    })
+  }
+
+  async #runDiscoveryLoop(active: Set<Promise<void>>, maxWorkers: number): Promise<void> {
+    const items = discoverSelection(
+      this.#options.descriptor,
+      this.#options.catalog,
+      this.#options.selection,
+      this.#options.stripSingleFilePrefix ?? false,
+      this.#abort.signal,
+      {
+        onOmittedEntries: count => this.#tracker.observeOmittedEntries(count),
+        onDirectoryFailed: (_id, error) => this.#recordDirectoryFailure(error),
+        onFileDiscovered: file => {
+          this.#discoveredFiles += 1n
+          this.#discoveredBytes += file.entry.expectedSize
+          this.#tracker.observeFileDiscovered(file.entry.expectedSize)
         },
-        claimRoot: ({ cursor }) => this.#traversal.claimNode(cursor.id),
-        discoverDirectory: (work, replays) => this.#discovery.discoverDirectory(work, replays, collector),
-        discoveryComplete: () => { this.#finishDiscovery() },
-        observeDiscovery: event => this.#observers?.discoveryScheduling(event),
-        recordDiscoveryFailure: (identity, error) => this.#failures.recordDiscoveryDirectory(identity, error),
-        recordDirectoryFailure: (identity, error) => this.#recordDirectoryFailure(identity, error),
-        transferFile: (file, pipeline) => this.#transferFile(file, pipeline),
-        recordFileFailure: (file, error) => this.#recordFileFailure(file.entry, error),
-        observeConsequenceFailure: failure => this.#observers?.workerConsequence(
-          'discovery',
-          failure,
-          this.#execution?.output.identity.outputSessionId,
-        ),
-      })
-    } catch (error) {
-      if (!this.#lifetime.signal.aborted) this.#lifetime.abort(error)
-      throw error
-    }
-  }
-
-  #bindExecution(execution: PlanExecution): void {
-    if (this.#execution !== undefined) throw new Error('plan execution was bound more than once')
-    const stabilized = stabilizeDirectorySettlementLifecycle(execution, {
-      externalCancellationRequested: () => this.#externalCancellationRequested,
-      finalize: signal => this.#finalizeDirectories(signal),
-    })
-    this.#execution = stabilized
-    // Acquisition may finish after Pause. Install its settlement owner before
-    // observing cancellation so the job can retain the owned recovery cut.
-    this.#lifetime.signal.throwIfAborted()
-    if (stabilized.planKind === 'direct-tree') {
-      this.#performance = stabilized.performance
-      this.#observers?.bindPerformance(stabilized.performance)
-    }
-    this.#outputScheduling = bindOutputScheduling({
-      limits: this.#limits,
-      profile: stabilized.output.executionProfile,
-      output: stabilized.output,
-      ...(stabilized.planKind === 'direct-tree' && stabilized.performance !== undefined
-        ? { performance: stabilized.performance }
-        : {}),
-    })
-  }
-
-  async #pinDiscoveryGeneration(cursor: DirectoryCursor, committed: CommittedDirectory): Promise<void> {
-    const execution = this.#execution
-    if (execution?.planKind === 'workspace-then-publish') {
-      await execution.discoveryGeneration?.(
-        cursor.idText, encodeBase64Url(committed.generation), cursor.path, this.#lifetime.signal,
-      )
-    }
-  }
-
-  #publishMeasure(measure: SelectionMeasure): SelectionMeasure {
-    this.#observers?.measure(measure)
-    this.#emitProgress(measure.discovery === 'open' ? 'counters' : 'transition')
-    return measure
-  }
-
-  async #authenticateDirectory(
-    cursor: DirectoryCursor,
-    committed: CommittedDirectory,
-    parent?: AuthenticatedDirectory,
-  ): Promise<AuthenticatedDirectory> {
-    await this.#pinDiscoveryGeneration(cursor, committed)
-    const coordinates = this.#directTreeCoordinates
-    if (coordinates === undefined) {
-      const intent = this.#requireIntent()
-      if (intent.plan.kind !== 'workspace-then-publish' || intent.artifact.kind !== 'zip-archive') {
-        return this.#authenticatedReference(cursor, committed)
-      }
-      const logicalArtifactPath = artifactDirectoryPath(intent, cursor.path)
-      if (logicalArtifactPath.length === 0) return this.#authenticatedReference(cursor, committed)
-      return this.#admitDirectory(cursor, committed, {
-        kind: 'materialize', logicalArtifactPath,
-        sourceAuthenticationPath: snapshotSourceAuthenticationPath(cursor.path),
-        relativePath: snapshotMaterializationRootRelativePath(logicalArtifactPath),
-      }, parent)
-    }
-    const projection = coordinates.projectDirectory(cursor.path)
-    return projection.kind === 'reference'
-      ? this.#authenticatedReference(cursor, committed, projection)
-      : this.#admitDirectory(cursor, committed, projection, parent)
-  }
-
-  async #admitDirectory(
-    cursor: DirectoryCursor,
-    committed: CommittedDirectory,
-    projection: Extract<DirectTreeDirectoryProjection, { kind: 'materialize' }>,
-    parent?: AuthenticatedDirectory,
-  ): Promise<AuthenticatedDirectory> {
-    this.#requireDirectories().reserveAdmission()
-    const output = this.#directoryOutput
-    const scope = this.#directoryScope
-    const execution = this.#execution
-    if (output === undefined || scope === undefined || execution === undefined) {
-      throw new OutputPausedError('incremental directory authority is unavailable')
-    }
-    const root = scope.rootExpectation
-    const isExpectedRoot = root.kind === 'materialized-directory' &&
-      root.directoryId === cursor.idText &&
-      sameMaterializationRootRelativePath(root.relativePath, projection.relativePath)
-    if (!isExpectedRoot && parent?.kind !== 'materialized') {
-      throw new OutputPausedError('child directory lacks its authenticated parent receipt')
-    }
-    if (isExpectedRoot && parent?.kind === 'materialized') {
-      throw new OutputPausedError('materialized root unexpectedly inherited a parent receipt')
-    }
-    const directory = snapshotMaterializationDirectory({
-      directoryId: cursor.idText,
-      generation: encodeBase64Url(committed.generation),
-      path: projection.relativePath,
-      ...(!isExpectedRoot && parent?.kind === 'materialized'
-        ? { parentAdmission: parent.admission }
-        : {}),
-      ...(cursor.modifiedTime === undefined ? {} : { modifiedTime: cursor.modifiedTime }),
-    })
-    const request = snapshotDirectoryMaterializationRequest({
-      directory,
-      sourceAuthenticationPath: projection.sourceAuthenticationPath,
-      logicalArtifactPath: projection.logicalArtifactPath,
-    })
-    let returned: DirectoryAdmission
-    try {
-      returned = await output.admitDirectory(request, this.#lifetime.signal)
-    } catch (error) {
-      const isolated = isolatedDirectoryOutputFailure(
-        error,
-        execution.output.capabilities.fileFailureIsolation,
-        cursor.idText,
-        this.#options.incidentScope,
-      )
-      throw isolated ?? error
-    }
-    const admission = validateDirectoryAdmissionBinding(scope, directory, returned)
-    await this.#requireDirectories().retain(output, admission, this.#lifetime.signal)
-    this.#observers?.directoryAdmitted({
-      admittedDirectoryCount: this.#requireDirectories().admissionClaims,
-      layoutClass: scope.layout,
-    })
-    return Object.freeze({
-      kind: 'materialized',
-      directoryId: cursor.idText,
-      generation: encodeBase64Url(committed.generation),
-      sourceAuthenticationPath: projection.sourceAuthenticationPath,
-      logicalArtifactPath: projection.logicalArtifactPath,
-      materializationRelativePath: projection.relativePath,
-      admission,
-      ...(directory.modifiedTime === undefined ? {} : { modifiedTime: directory.modifiedTime }),
-    })
-  }
-
-  #authenticatedReference(
-    cursor: DirectoryCursor,
-    committed: CommittedDirectory,
-    projection?: Extract<DirectTreeDirectoryProjection, { kind: 'reference' }>,
-  ): AuthenticatedDirectory {
-    const sourceAuthenticationPath = projection?.sourceAuthenticationPath ??
-      snapshotSourceAuthenticationPath(cursor.path)
-    const logicalArtifactPath = projection?.logicalArtifactPath ??
-      artifactDirectoryPath(this.#requireIntent(), cursor.path)
-    return Object.freeze({
-      kind: 'reference',
-      directoryId: cursor.idText,
-      generation: encodeBase64Url(committed.generation),
-      sourceAuthenticationPath,
-      logicalArtifactPath,
-      ...(cursor.modifiedTime === undefined ? {} : { modifiedTime: cursor.modifiedTime }),
-    })
-  }
-
-  #projectFile(sourcePath: readonly string[]): DirectTreeFileProjection {
-    const coordinates = this.#directTreeCoordinates
-    if (coordinates !== undefined) return coordinates.projectFile(sourcePath)
-    const sourceAuthenticationPath = snapshotSourceAuthenticationPath(sourcePath)
-    const logicalArtifactPath = artifactFilePath(this.#requireIntent(), sourceAuthenticationPath)
-    return Object.freeze({
-      sourceAuthenticationPath,
-      logicalArtifactPath,
-      relativePath: snapshotMaterializationRootRelativePath(logicalArtifactPath),
-    })
-  }
-
-  #preparedDirectory(
-    collector: ExactPreparationCollector,
-    cursor: DirectoryCursor,
-    committed: CommittedDirectory,
-    role: 'selected' | 'ancestor',
-  ): AuthenticatedDirectory {
-    const artifactPath = artifactDirectoryPath(this.#requireIntent(), cursor.path)
-    return artifactPath.length === 0
-      ? collector.referenceDirectory(cursor, committed, artifactPath)
-      : collector.materializeDirectory(cursor, committed, artifactPath, role)
-  }
-
-  async #finalizeDirectories(signal: AbortSignal = this.#lifetime.signal): Promise<void> {
-    const output = this.#directoryOutput
-    if (output === undefined) return
-    await this.#requireDirectories().finalize(
-      output, signal, this.#requireExecution().output.capabilities.fileFailureIsolation,
+      },
     )
-  }
 
-  async #transferPreparedFiles(files: readonly PendingFile[]): Promise<void> {
-    try {
-      await runPreparedFileWorkers({
-        files,
-        limits: this.#limits,
-        execution: this.#requireOutputScheduling().limits,
-        resources: this.#requireOutputScheduling().resources,
-        ...(this.#performance === undefined ? {} : { performance: this.#performance }),
-        signal: this.#lifetime.signal,
-        abort: (error) => {
-          if (!this.#lifetime.signal.aborted) this.#lifetime.abort(error)
-        },
-        transferFile: (file, pipeline) => this.#transferFile(file, pipeline),
-        recordFileFailure: (file, error) => this.#recordFileFailure(file.entry, error),
-        observeConsequenceFailure: failure => this.#observers?.workerConsequence(
-          'prepared-files',
-          failure,
-          this.#execution?.output.identity.outputSessionId,
-        ),
-      })
-    } catch (error) {
-      if (!this.#lifetime.signal.aborted) this.#lifetime.abort(error)
-      throw error
+    for await (const item of items) {
+      if (this.#paused || this.#stopped) break
+      if (item.kind === 'directory') {
+        await this.#ensureDirectory(item)
+        continue
+      }
+      while (active.size >= maxWorkers && !this.#paused && !this.#stopped) {
+        await Promise.race(active)
+      }
+      if (this.#paused || this.#stopped) break
+      const task = this.#runFile(item).finally(() => active.delete(task))
+      active.add(task)
     }
   }
 
-  async #transferFile(
-    file: PendingFile,
-    pipeline?: PerformanceFilePipelineObservation,
-  ): Promise<void> {
-    const execution = this.#requireExecution()
-    let materializedBytes = 0n
-    const continuation = await transferFile({
-      descriptor: this.#options.descriptor,
-      revisions: this.#capacity.revisions,
-      broker: this.#capacity.broker,
-      output: this.#requireOutputScheduling().output,
-      ...(execution.planKind === 'direct-tree'
-        ? { directTreeCoordinates: this.#requireDirectTreeCoordinates() }
-        : {}),
-      signal: this.#lifetime.signal,
-      outputSettlementTimeoutMilliseconds: this.#outputSettlementTimeoutMilliseconds,
-      ...(this.#options.checkpointClock === undefined ? {} : { checkpointClock: this.#options.checkpointClock }),
-      ...(this.#options.onCheckpointObservation === undefined ? {} : { onCheckpointObservation: event => {
-        this.#options.onCheckpointObservation?.({ ...event, operationId: this.#requireIntent().operationId,
-          transferJobId: this.#transferJobId, fileId: file.entry.idText })
-      } }),
-      ...(pipeline === undefined ? {} : { performancePipeline: pipeline }),
-      ...(this.#options.incidentScope === undefined
-        ? {}
-        : { incidentScope: this.#options.incidentScope }),
-      onRevisionReadmission: event => this.#observers?.revisionReadmission(file.entry.idText, event),
-      onInitialCoverage: coverage => {
-        materializedBytes = coverage.acceptedBytes
-        this.#progress.observeMaterializedFile(file.entry.idText, materializedBytes)
-        this.#emitProgress('counters')
-      },
-      onWriteAcknowledged: (bytes) => {
-        materializedBytes += bytes
-        this.#progress.observeMaterializedFile(file.entry.idText, materializedBytes)
-        this.#progress.acknowledgeWrite(bytes)
-        this.#emitProgress('counters')
-      },
-      onRecoverableAcknowledged: (bytes) => {
-        this.#progress.acknowledgeRecoverable(bytes)
-        this.#emitProgress('counters')
-      },
-      onSettlement: settlement => {
-        this.#progress.settleFile(file.entry.idText, settlement)
-        this.#emitProgress(settlement.kind === 'completed' ? 'counters' : 'transition')
+  async #ensureDirectory(item: Extract<Awaited<ReturnType<typeof discoverSelection>> extends AsyncGenerator<infer T> ? T : never, { kind: 'directory' }>): Promise<void> {
+    if (this.#options.output.ensureDirectory === undefined) return
+    try {
+      await this.#options.output.ensureDirectory({
+        directoryId: item.entry.idText,
+        path: item.relativePath,
+        ...(item.entry.modifiedTime === undefined ? {} : {
+          modifiedTimeMilliseconds: item.entry.modifiedTime.seconds * 1_000n,
+        }),
+      }, this.#abort.signal)
+    } catch (error) {
+      if (this.#paused || this.#stopped) return
+      this.#recordDirectoryFailure(error)
+    }
+  }
+
+  #recordDirectoryFailure(error: unknown): void {
+    this.#discoveryFailed = true
+    this.#failedDirectories += 1n
+    this.#firstError ??= error
+    this.#tracker.observeDirectoryFailed()
+  }
+
+  async #finalizeDiscovery(): Promise<void> {
+    if (!this.#paused && !this.#stopped && !this.#discoveryFailed) {
+      this.#discoveryComplete = true
+      this.#tracker.observeDiscoverySettled('complete')
+      await this.#options.output.markDiscoveryComplete?.()
+      return
+    }
+    if (this.#discoveryFailed) {
+      this.#tracker.observeDiscoverySettled('failed')
+    }
+  }
+
+  #handleDiscoveryError(error: unknown): void {
+    if (this.#paused || this.#stopped) return
+    this.#discoveryFailed = true
+    this.#firstError ??= error
+    this.#tracker.observeDiscoverySettled('failed')
+  }
+
+  async #runFile(file: DiscoveredFile): Promise<void> {
+    const outcome = await transferSingleFile({
+      revisions: this.#options.revisions,
+      broker: this.#options.broker,
+      output: this.#options.output,
+      signal: this.#abort.signal,
+      isPaused: () => this.#paused,
+      isStopped: () => this.#stopped,
+      onInitialCoverage: bytes => this.#tracker.observeInitialCoverage(bytes),
+      onObjectBytes: bytes => this.#tracker.observeObjectBytes(bytes),
+      onWritten: bytes => this.#tracker.observeWritten(bytes),
+      onCapacityWait: (delta, ms, attempt) => this.#tracker.observeCapacityWait(delta, ms, attempt),
+      remainingWork: () => {
+        const snap = this.#tracker.snapshot()
+        const rem = Number(snap.discoveredBytes - snap.materializedBytes)
+        return { bytes: Math.max(0, rem), known: this.#discoveryComplete && Number.isSafeInteger(rem) }
       },
     }, file)
-    if (continuation !== undefined) this.#settlement.recordFileContinuation(file.entry, continuation)
+
+    this.#applyFileOutcome(file, outcome)
   }
 
-  #admissionFailure(error: unknown): TransferAdmissionFailureError {
-    const normalized = normalizeFileTransferFailure(error, {
-      stage: 'authority_selection',
-      ...(this.#externalCancellationRequested ? { signal: this.#lifetime.signal } : {}),
-      ...(this.#options.incidentScope === undefined
-        ? {}
-        : { incidentScope: this.#options.incidentScope }),
-    })
-    return new TransferAdmissionFailureError(normalized.kind === 'canceled'
-      ? Object.freeze({ kind: 'canceled' })
+  #applyFileOutcome(file: DiscoveredFile, outcome: SingleFileTransferOutcome): void {
+    switch (outcome.kind) {
+      case 'completed':
+        this.#completedFiles += 1n
+        this.#completedBytes += outcome.size
+        this.#tracker.observeFileCompleted(outcome.size)
+        return
+      case 'paused':
+        this.pause(outcome.reason)
+        return
+      case 'stopped':
+        this.stop()
+        return
+      case 'source-changed':
+        this.#failedFiles += 1n
+        this.#sourceChangedCount += 1n
+        this.#tracker.observeFileFailed()
+        this.#recordSourceFailure(file, 'source-changed')
+        this.#recordMissing(file.relativePath, 'source-changed')
+        return
+      case 'source-unavailable':
+        this.#failedFiles += 1n
+        this.#firstError ??= outcome.error
+        this.#tracker.observeFileFailed()
+        this.#recordSourceFailure(file, 'source-unavailable')
+        this.#recordMissing(file.relativePath, 'source-unavailable')
+        return
+      case 'failed':
+        this.#failedFiles += 1n
+        this.#firstError ??= outcome.error
+        this.#tracker.observeFileFailed()
+        this.#recordMissing(file.relativePath, 'file-failed')
+        return
+    }
+  }
+
+  #recordSourceFailure(file: DiscoveredFile, reason: 'source-changed' | 'source-unavailable'): void {
+    if (this.#sourceFailures.length >= MAX_SOURCE_FAILURES) return
+    this.#sourceFailures.push(Object.freeze({
+      entryId: file.entry.idText,
+      path: file.relativePath,
+      sourcePath: file.sourcePath,
+      reason,
+    }))
+  }
+
+  #recordMissing(path: readonly string[], reason: MissingFileWarning['reason']): void {
+    if (this.#missingFiles.length >= MAX_MISSING_WARNINGS) return
+    this.#missingFiles.push(Object.freeze({ path, reason }))
+  }
+
+  #buildResult(): TransferJobResult {
+    const safeRenamed = this.#options.output.safeRenamedSummary?.()
+    const sourceRevisionFailures: SourceRevisionFailures | undefined = this.#sourceFailures.length === 0
+      ? undefined
       : Object.freeze({
-          kind: 'fault',
-          classification: normalized.diagnostic.classification,
-        }))
-  }
+          shareInstance: this.#options.descriptor.shareInstanceId,
+          count: this.#sourceChangedCount > 0n ? this.#sourceChangedCount : BigInt(this.#sourceFailures.length),
+          files: Object.freeze([...this.#sourceFailures]),
+        })
+    const contentWarning: ReceiveContentWarning | undefined = this.#missingFiles.length === 0
+      ? undefined
+      : Object.freeze({
+          selectedFileCount: this.#discoveredFiles,
+          completedFileCount: this.#completedFiles,
+          missingFiles: Object.freeze([...this.#missingFiles]),
+        })
 
-  #isNativeZip(): boolean {
-    return this.#intent?.plan.kind === 'workspace-then-publish' && this.#intent.artifact.kind === 'zip-archive'
-  }
-
-  #recordDirectoryFailure(identity: string, reason: unknown): void {
-    this.#failures.recordDirectory(identity, reason)
-  }
-
-  #recordFileFailure(entry: Extract<CatalogEntry, { kind: 'file' }>, reason: unknown): void {
-    this.#failures.recordFile(entry, reason)
-  }
-
-  #finishDiscovery(): SelectionMeasure {
-    return this.#failures.finishDiscovery()
-  }
-
-  #materializationSummary(): MaterializationSummary {
-    const directoryCount = this.#isNativeZip() ? this.#requireDirectories().directoryCount :
-      this.#preparation?.directoryCount ?? this.#requireDirectories().directoryCount
-    const fileCount = BigInt(this.#progress.completedFiles)
+    const status = this.#resolveStatus()
     return Object.freeze({
-      entryCount: directoryCount + fileCount,
-      fileCount,
-      directoryCount,
-      rawBytes: this.#progress.completedBytes,
+      status,
+      ...(status === 'paused' ? { pauseReason: this.#pauseReason } : {}),
+      completedFiles: this.#completedFiles,
+      completedBytes: this.#completedBytes,
+      discoveredFiles: this.#discoveredFiles,
+      discoveredBytes: this.#discoveredBytes,
+      discoveryComplete: this.#discoveryComplete,
+      failedFiles: this.#failedFiles,
+      failedDirectories: this.#failedDirectories,
+      ...(sourceRevisionFailures === undefined ? {} : { sourceRevisionFailures }),
+      ...(contentWarning === undefined ? {} : { contentWarning }),
+      ...(safeRenamed === undefined ? {} : { safeRenamed }),
+      ...(this.#firstError === undefined ? {} : { error: this.#firstError }),
     })
   }
 
-  #emitProgress(change: ProgressChange = 'transition'): void {
-    this.#observers?.progress(change)
-  }
-
-  #requireIntent(): TransferJobOptions['intent'] {
-    if (this.#intent === undefined) throw new Error('validated receive intent is unavailable')
-    return this.#intent
-  }
-
-  #requireDirectTreeCoordinates(): DirectTreeCoordinateContract {
-    if (this.#directTreeCoordinates === undefined) {
-      throw new Error('DirectTree coordinate contract is unavailable')
+  #resolveStatus(): TransferJobStatus {
+    if (this.#paused) return 'paused'
+    if (this.#stopped) return this.#completedFiles > 0n ? 'partial' : 'stopped'
+    if (this.#failedFiles === 0n && this.#failedDirectories === 0n && !this.#discoveryFailed) {
+      return 'completed'
     }
-    return this.#directTreeCoordinates
-  }
-
-  #requireDirectories(): DirectorySettlementLedger {
-    if (this.#directories === undefined) throw new Error('directory settlement ledger is unavailable')
-    return this.#directories
-  }
-
-  #requireExecution(): PlanExecution {
-    if (this.#execution === undefined) throw new Error('plan execution is unavailable')
-    return this.#execution
-  }
-
-  #requireOutputScheduling(): BoundOutputScheduling {
-    if (this.#outputScheduling === undefined) throw new Error('output scheduling is unavailable')
-    return this.#outputScheduling
-  }
-
-  #observeAbort(signal?: AbortSignal): void {
-    if (signal === undefined) return
-    const abort = () => {
-      if (this.#lifetime.signal.aborted) return
-      this.#externalCancellationRequested = true
-      this.#lifetime.abort(signal.reason ?? new DOMException('Transfer aborted', 'AbortError'))
+    if (this.#completedFiles === 0n && this.#sourceChangedCount > 0n) {
+      return 'source-changed'
     }
-    signal.addEventListener('abort', abort, { once: true })
-    this.#externalAbortCleanup = () => signal.removeEventListener('abort', abort)
-    if (signal.aborted) abort()
+    return this.#completedFiles > 0n ? 'partial' : 'failed'
   }
 }

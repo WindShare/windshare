@@ -15,7 +15,7 @@ describe('diagnostic context projection', () => {
       }),
       lifecycle: source({
         generation: 2n,
-        state: 'resumable-receive',
+        state: 'paused',
         operationId: 'private',
       }),
       progress: source({
@@ -38,7 +38,7 @@ describe('diagnostic context projection', () => {
       }),
       output: source({
         generation: 12n,
-        planKind: 'workspace-then-publish',
+        planKind: 'opfs',
         handle: {},
       }),
       protocol: source({
@@ -51,7 +51,7 @@ describe('diagnostic context projection', () => {
 
     expect(context).toEqual({
       controller: { generation: '1', phase: 'awaiting_key' },
-      lifecycle: { generation: '2', state: 'resumable_receive' },
+      lifecycle: { generation: '2', state: 'paused' },
       progress: {
         generation: '3',
         discovery: 'failed',
@@ -71,7 +71,7 @@ describe('diagnostic context projection', () => {
       },
       output: {
         generation: '12',
-        plan_kind: 'workspace_then_publish',
+        plan_kind: 'opfs',
       },
       protocol: { generation: '18446744073709551615' },
     })
@@ -92,7 +92,7 @@ describe('diagnostic context projection', () => {
       },
       lifecycle: source({
         generation: -1n,
-        state: 'published',
+        state: 'saved',
       }),
       progress: source({
         generation: 1n,
@@ -113,12 +113,12 @@ describe('diagnostic context projection', () => {
       }),
       output: source({
         generation: 7n,
-        planKind: 'workspace-then-publish',
+        planKind: 'opfs',
       }),
     })
 
     expect(context).toEqual({
-      output: { generation: '7', plan_kind: 'workspace_then_publish' },
+      output: { generation: '7', plan_kind: 'opfs' },
     })
   })
 })

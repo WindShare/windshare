@@ -1,5 +1,5 @@
-import type { RetainedReceiveAction, RetainedReceiveOperation } from '../../application/receive/contracts'
-import { retainedContinuationReadiness } from '../../application/receive/retained/readiness'
+import type { ReceiveAction, RetainedTaskSnapshot } from '../../application/receive/contracts'
+import { retainedTaskReadiness } from '../../application/receive/admission'
 import type { TaskSnapshot } from '../controller/projections'
 import type { TaskAction, TaskPresentation } from '../tasks'
 import type { TaskComposition } from './task-composition'
@@ -26,11 +26,12 @@ type SelectionRetainedMatch =
   | { readonly kind: 'none' }
 
 function isCompleteLocalRetained(
-  operation: RetainedReceiveOperation,
+  retained: RetainedTaskSnapshot,
   task: TaskPresentation,
 ): boolean {
-  // Transient action busy state disables the button in place; it does not invalidate the local artifact.
-  return (operation.continuation === 'retry-download' || operation.continuation === 'save-artifact') &&
+  const hasLocalArtifact = retained.lifecycle.kind === 'ready-to-save' ||
+    (retained.lifecycle.kind === 'download-started' && retained.lifecycle.retained)
+  return hasLocalArtifact &&
     task.completeness === 'complete' &&
     task.primaryAction !== null &&
     task.primaryAction.target.kind === 'retained'
@@ -38,7 +39,7 @@ function isCompleteLocalRetained(
 
 function retainedAction(
   task: TaskPresentation,
-  action: RetainedReceiveAction,
+  action: ReceiveAction,
 ): TaskAction | null {
   if (task.primaryAction?.target.kind === 'retained' && task.primaryAction.target.action === action) {
     return task.primaryAction
@@ -49,40 +50,39 @@ function retainedAction(
 }
 
 function isTransientlyBusyContinuation(
-  operation: RetainedReceiveOperation,
+  retained: RetainedTaskSnapshot,
   task: TaskPresentation,
   snapshot: WorkspaceTaskSnapshot,
 ): boolean {
   const { pending } = snapshot.retained
   if (pending === null) return false
-  if (pending.operationId === task.operationId && pending.action === 'continue') return true
-  if (operation.unavailableReason !== undefined) return false
-  const needsRemote = retainedContinuationReadiness(operation, snapshot.share?.shareInstance ?? null) !== 'local'
+  if (pending.taskId === task.operationId && pending.action === 'continue') return true
+  if (retained.activeElsewhere) return false
+  const needsRemote = retainedTaskReadiness(retained, snapshot.share?.shareInstance ?? null) !== 'local'
   return !needsRemote || (snapshot.connection.kind !== 'ended' && snapshot.connection.kind !== 'unavailable')
 }
 
 function isContinuableRetained(
-  operation: RetainedReceiveOperation,
+  retained: RetainedTaskSnapshot,
   task: TaskPresentation,
   snapshot: WorkspaceTaskSnapshot,
 ): boolean {
   if (task.stage === 'handed-to-browser') return false
-  // Check the explicit continue action rather than any enabled primaryAction; when
-  // remote continuation is disabled, presentation promotes local fallbacks like
-  // save-partial that must not displace a complete local copy.
   const continuation = retainedAction(task, 'continue')
   if (continuation === null) return false
-  return continuation.disabledReason === null || isTransientlyBusyContinuation(operation, task, snapshot)
+  return continuation.disabledReason === null || isTransientlyBusyContinuation(retained, task, snapshot)
 }
 
 function retainedBannerFor(task: TaskPresentation): WorkspaceRetainedBanner | null {
   if (task.stage === 'handed-to-browser') return null
   const primary = task.primaryAction
-  if (task.stage === 'ready-to-save' &&
-      primary !== null &&
-      primary.disabledReason === null &&
-      primary.target.kind === 'retained' &&
-      primary.target.action === 'save') {
+  if (
+    task.stage === 'ready-to-save' &&
+    primary !== null &&
+    primary.disabledReason === null &&
+    primary.target.kind === 'retained' &&
+    primary.target.action === 'save'
+  ) {
     return Object.freeze({ kind: 'ready-to-save', task, action: primary })
   }
   const continuation = retainedAction(task, 'continue')
@@ -92,31 +92,30 @@ function retainedBannerFor(task: TaskPresentation): WorkspaceRetainedBanner | nu
   return null
 }
 
-function selectionOperation(
+function selectionTask(
   task: TaskPresentation,
   snapshot: WorkspaceTaskSnapshot,
-  selectionDigest: string,
-): RetainedReceiveOperation | null {
+  key: string,
+): RetainedTaskSnapshot | null {
   const shareInstance = snapshot.share?.shareInstance
   if (shareInstance === undefined) return null
-  return snapshot.retained.operations.find(candidate =>
-    candidate.operationId === task.operationId &&
+  return snapshot.retained.tasks.find(candidate =>
+    candidate.taskId === task.operationId &&
     candidate.shareInstance === shareInstance &&
-    candidate.selectionDigest === selectionDigest) ?? null
+    candidate.selectionKey === key) ?? null
 }
 
 function resolveSelectionRetained(snapshot: WorkspaceTaskSnapshot): SelectionRetainedMatch {
-  const selectionDigest = snapshot.output.offers?.selectionDigest
-  if (snapshot.current !== null || snapshot.share === null || selectionDigest === undefined) {
+  const key = snapshot.output.offers?.selectionKey
+  if (snapshot.current !== null || snapshot.share === null || key === undefined) {
     return { kind: 'none' }
   }
   let fallbackBanner: WorkspaceRetainedBanner | null = null
   for (const task of snapshot.tasks) {
-    const operation = selectionOperation(task, snapshot, selectionDigest)
-    if (operation === null) continue
-    if (isCompleteLocalRetained(operation, task)) return { kind: 'local-complete', task }
-    // A newer continuable attempt for the same selection supersedes older local copies so reopen surfaces Continue.
-    if (isContinuableRetained(operation, task, snapshot)) {
+    const retained = selectionTask(task, snapshot, key)
+    if (retained === null) continue
+    if (isCompleteLocalRetained(retained, task)) return { kind: 'local-complete', task }
+    if (isContinuableRetained(retained, task, snapshot)) {
       const banner = fallbackBanner ?? retainedBannerFor(task)
       return banner === null ? { kind: 'pending-continuation' } : { kind: 'banner', banner }
     }
@@ -128,11 +127,11 @@ function resolveSelectionRetained(snapshot: WorkspaceTaskSnapshot): SelectionRet
 function currentMatchesSelection(snapshot: WorkspaceTaskSnapshot): boolean {
   const { share, current, output, retained } = snapshot
   if (share === null || current === null) return false
-  const currentSelectionDigest = output.offers?.selectionDigest
-  const taskSelectionDigest = output.receiveIntent?.selection.digest ??
-    retained.operations.find(operation => operation.operationId === current.operationId)?.selectionDigest
-  if (taskSelectionDigest !== undefined && currentSelectionDigest !== undefined) {
-    return taskSelectionDigest === currentSelectionDigest
+  const currentKey = output.offers?.selectionKey
+  const taskKey = output.activeSelectionKey ??
+    retained.tasks.find(candidate => candidate.taskId === current.operationId)?.selectionKey
+  if (taskKey !== undefined && taskKey !== null && currentKey !== undefined) {
+    return taskKey === currentKey
   }
   return share.kind !== 'browser'
 }
@@ -142,8 +141,8 @@ function isSettlingWorkspaceHandoff(snapshot: WorkspaceTaskSnapshot): boolean {
   const lifecycle = output.lifecycle
   return current !== null &&
     lifecycle?.kind === 'download-started' &&
-    lifecycle.attemptKind === 'workspace' &&
-    current.operationId === lifecycle.operationId &&
+    lifecycle.retained &&
+    current.operationId === lifecycle.taskId &&
     (activeReceiveOperationId === current.operationId || retained.kind === 'loading' || retained.kind === 'unloaded')
 }
 
@@ -153,8 +152,8 @@ function findShareRetainedBanner(snapshot: WorkspaceTaskSnapshot): WorkspaceReta
   for (const task of tasks) {
     const banner = retainedBannerFor(task)
     if (banner === null) continue
-    const matchesShare = retained.operations.some(operation =>
-      operation.operationId === task.operationId && operation.shareInstance === share.shareInstance)
+    const matchesShare = retained.tasks.some(candidate =>
+      candidate.taskId === task.operationId && candidate.shareInstance === share.shareInstance)
     if (matchesShare) return banner
   }
   return null

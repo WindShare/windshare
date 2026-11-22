@@ -1,35 +1,7 @@
 import { BrowserReceiverGateway } from '../../src/application/browser-share/gateway'
-import type { FrozenSelectionPolicy } from '../../src/catalog/selection'
 import { BrowserOfferChannelFactory } from '../../src/connectivity/peer-offer'
 import { SessionSignalingRoute } from '../../src/connectivity/session-signaling'
-import { encodeBase64Url } from '../../src/crypto/bytes'
-import { bindReceiveIntent } from '../../src/output/planning/binding'
-import type { EnvironmentOffers, ResolvedArtifactAction } from '../../src/output/planning/contracts'
-import { createEnvironmentOffers, materializationRouteIdentity } from '../../src/output/planning/guarantees'
-import { offerArtifacts } from '../../src/output/planning/offers'
-import { reconcileArtifactChoice } from '../../src/output/planning/reconciliation'
-import {
-  AUTHORITY_REFERENCE_BYTES,
-  browserHandoffGuarantees,
-  createOperationID,
-  createOutputSessionID,
-  createSelectionSpec,
-  createWorkspaceBinding,
-  createWorkspaceID,
-  selectionRulesSpecFromPolicy,
-  type ReceiveIntent,
-  type SelectionSpec,
-} from '../../src/transfer/intent'
-import {
-  initialReceiveLifecycleState,
-  nextReceiveLifecycleState,
-  type ReceiveLifecycleState,
-  type ReceiveLifecycleStatePayload,
-} from '../../src/transfer/lifecycle/state'
-import type { PlanExecutionAuthority, WorkspaceExecution } from '../../src/transfer/output/session'
-import { discoverAuthenticatedSelection, SelectionProjectionController } from '../../src/transfer/projection'
-import type { SelectionProjectionState } from '../../src/transfer/projection/contracts'
-import { createPlanExecutionAuthority } from '../../src/transfer/settlement/plan-authority'
+import { createTaskId } from '../../src/transfer/selection'
 
 import type {
   HotSwitchPageEvent,
@@ -48,11 +20,6 @@ import {
   OutputFence,
   PagePeerRecoveryHarness,
 } from './hot-switch-page-transfer'
-
-const HOT_SWITCH_RECEIPT_DOMAIN = 'windshare/e2e/hot-switch-receipt/v1'
-const STREAM_TARGET_OFFER_ID = 'hot-switch-managed-atomic-stream'
-const WORKSPACE_ROUTE_ID = 'hot-switch-workspace'
-const TEXT_ENCODER = new TextEncoder()
 
 type JoinedReceiver = Awaited<ReturnType<BrowserReceiverGateway['join']>>
 type DownloadActivation = ReturnType<JoinedReceiver['beginDownloadConnectivity']>
@@ -74,12 +41,6 @@ interface HotSwitchWindow extends Window {
   __windshareReleaseHotSwitchAdmission?: () => void
   __windshareReleaseHotSwitchOutput?: () => void
   __windshareSealHotSwitchRelayCut?: () => Promise<void>
-}
-
-interface BoundHotSwitchOperation {
-  readonly intent: ReceiveIntent
-  readonly plans: PlanExecutionAuthority
-  readonly selection: FrozenSelectionPolicy
 }
 
 export function startHotSwitchPageTransfer(input: HotSwitchPageTransferRuntimeInput): void {
@@ -108,9 +69,7 @@ export function startHotSwitchPageTransfer(input: HotSwitchPageTransferRuntimeIn
     peerRelease,
     outputFence,
     peerHarness,
-    () => {
-      runtimeTerminalPublished = true
-    },
+    () => { runtimeTerminalPublished = true },
   )
   transferTask.catch(async (error: unknown) => {
     if (runtimeTerminalPublished) return
@@ -137,49 +96,39 @@ async function runTransfer(
   try {
     const gateway = createGateway(input, bridge, relayCut, peerRelease, peerHarness)
     joined = await gateway.join(input.key, window.location.href)
-    const operation = await bindHotSwitchOperation(
-      input,
-      joined,
-      delivery,
-      outputFence,
-    )
+    const selection = joined.selection.snapshot()
+    const shape = await joined.inspectSelection(selection, new AbortController().signal)
+    if (shape.kind !== 'single-file') {
+      throw new Error('Hot-switch fixture requires a single-file share')
+    }
+    const output = delivery.outputSession(createTaskId(), outputFence)
     activation = joined.beginDownloadConnectivity()
     deliveryStarted = true
-    const result = await joined.transferJob(
-      operation.plans,
-      operation.intent,
-      activation,
-      { selection: operation.selection },
-    ).run()
+    const result = await joined.createTransferJob(output, activation, {
+      selection,
+      stripSingleFilePrefix: true,
+    }).run()
     const received = await delivery.snapshot()
+    const failures: ObservedTransferFailure[] = (result.sourceRevisionFailures?.files ?? []).map(failure => ({
+      kind: 'file',
+      id: failure.entryId,
+      reason: failure.reason,
+    }))
     const jobOutcome = {
-      status: result.worker.status,
-      failures: result.worker.failures.map((failure): ObservedTransferFailure => (
-        failure.kind === 'file'
-          ? {
-              kind: 'file',
-              id: failure.fileId,
-              reason: failure.classification.materializationFailureReason,
-            }
-          : {
-              kind: 'directory',
-              id: failure.directoryId,
-              reason: failure.classification.materializationFailureReason,
-            }
-      )),
-      failureCount: result.worker.failureCount,
-      omittedFailureCount: result.worker.omittedFailureCount,
+      status: result.status === 'completed' ? 'Succeeded' : 'CompletedWithErrors',
+      failures,
+      failureCount: Number(result.failedFiles + result.failedDirectories),
+      omittedFailureCount: 0,
     } as const
-    const succeeded = jobOutcome.status === 'Succeeded' &&
-      result.lifecycle.kind === 'published' &&
-      received.bytes === input.transferBytes && received.sha256 === input.expectedHash
+    const succeeded = result.status === 'completed' &&
+      received.bytes === input.transferBytes &&
+      received.sha256 === input.expectedHash
     await bridge.publish({
       kind: 'delivery',
       outcome: succeeded ? 'succeeded' : 'failed',
       evidence: deliveryEvidence(input, received, succeeded ? 'succeeded' : 'failed'),
       jobOutcome,
-      ...(result.abortReason === undefined ? {} : { failureMessage: bridge.describe(result.abortReason) }),
-      ...(result.failureTrigger === undefined ? {} : { failureClassification: result.failureTrigger }),
+      ...(result.error === undefined ? {} : { failureMessage: bridge.describe(result.error) }),
     })
   } catch (error) {
     runtimeError = bridge.describe(error)
@@ -202,207 +151,6 @@ async function runTransfer(
       ...(runtimeError === undefined ? {} : { error: runtimeError }),
     })
   }
-}
-
-async function bindHotSwitchOperation(
-  input: HotSwitchPageTransferRuntimeInput,
-  joined: JoinedReceiver,
-  delivery: DeliveryBuffer,
-  outputFence: OutputFence,
-): Promise<BoundHotSwitchOperation> {
-  const selection = joined.selection.snapshot()
-  const selectionSpec = await createSelectionSpec({
-    shareInstance: joined.descriptor.shareInstanceId,
-    syntheticRoot: joined.descriptor.syntheticRootId,
-    rules: selectionRulesSpecFromPolicy(selection),
-  })
-  const projection = new SelectionProjectionController()
-  let current = projection.beginSelection(selectionSpec, Object.freeze({
-    protocolSessionId: joined.protocolSessionIdentity,
-  }))
-  for await (const state of discoverAuthenticatedSelection(
-    projection,
-    joined.projectionSource(selection),
-    new AbortController().signal,
-  )) {
-    // Iterator snapshots come from the reducer, so retaining the latest state
-    // observes progress without constructing a parallel fixture projection.
-    current = state
-  }
-  if (current.discovery.kind !== 'complete' || current.projection.proof.kind !== 'single-file') {
-    throw new Error('Hot-switch fixture requires a complete single-file projection')
-  }
-
-  const environment = createEnvironmentOffers({
-    targets: [{
-      routeId: STREAM_TARGET_OFFER_ID,
-      kind: 'browser-handoff',
-      guarantees: browserHandoffGuarantees(),
-      persistence: 'none',
-      supportsWorkspacePackage: true,
-      supportsPortableArtifact: true,
-      objectUrlLeaseMilliseconds: 60_000n,
-      hardMaximumOutputBytes: BigInt(input.transferBytes),
-    }],
-    workspace: {
-      routeId: WORKSPACE_ROUTE_ID,
-      kind: 'origin-private-workspace',
-      persistence: 'durable-owned-repository',
-      minimumQuotaReserveBytes: 0n,
-      quotaAvailabilityEstimateBytes: BigInt(input.transferBytes) * 4n,
-    },
-  })
-  const { action } = await resolveHotSwitchWorkspaceChoice(
-    selectionSpec,
-    current,
-    environment,
-  )
-
-  const workspace = await createWorkspaceBinding({
-    operationId: createOperationID(),
-    workspaceId: createWorkspaceID(),
-    artifact: action.artifact,
-    repositoryRef: randomAuthorityReference(),
-  })
-  const bound = await bindReceiveIntent({
-    selection: selectionSpec,
-    action,
-    candidate: {
-      kind: 'workspace-binding',
-      workspaceRouteId: WORKSPACE_ROUTE_ID,
-      publicationTargetRouteId: STREAM_TARGET_OFFER_ID,
-      workspace,
-    },
-  })
-  if (bound.intent.plan.kind !== 'workspace-then-publish') {
-    throw new Error('Hot-switch intent binding did not remain workspace-then-publish')
-  }
-  const intent = bound.intent
-  const plans = await createPlanExecutionAuthority({
-    intent,
-    routes: {
-      workspaceOriginal: {
-        admit: async (routeIntent, _evidence, signal) => {
-          signal.throwIfAborted()
-          const output = delivery.outputSession(createOutputSessionID(), outputFence)
-          const execution: WorkspaceExecution = Object.freeze({
-            planKind: 'workspace-then-publish' as const,
-            output,
-            settle: async (
-              _request: Parameters<WorkspaceExecution['settle']>[0],
-              settlementSignal: AbortSignal,
-            ) => {
-              settlementSignal.throwIfAborted()
-              return lifecycleState(routeIntent, {
-                kind: 'published',
-                receiptDigest: await operationReceipt(routeIntent, 'published'),
-                cleanupState: 'clean',
-              })
-            },
-            pause: async (
-              request: Parameters<WorkspaceExecution['pause']>[0],
-              settlementSignal: AbortSignal,
-            ) => {
-              settlementSignal.throwIfAborted()
-              await output.pauseActiveTransaction(request.reason)
-              settlementSignal.throwIfAborted()
-              return lifecycleState(routeIntent, {
-                kind: 'discarded',
-                cleanupReceiptDigest: await operationReceipt(routeIntent, 'discarded'),
-              })
-            },
-          })
-          return Object.freeze({ kind: 'accepted' as const, execution })
-        },
-      },
-      lifecycle: {
-        settleExecutionAdmissionFailure: async (routeIntent, _reason, signal) => {
-          signal.throwIfAborted()
-          return lifecycleState(routeIntent, {
-            kind: 'discarded',
-            cleanupReceiptDigest: await operationReceipt(routeIntent, 'discarded'),
-          })
-        },
-        recordSettlementUnknown: async (routeIntent, signal) => {
-          signal.throwIfAborted()
-          const state = lifecycleState(routeIntent, {
-            kind: 'needs-attention',
-            reason: 'target-ownership-unknown',
-            lastVerifiedRecordDigest: await operationReceipt(routeIntent, 'settlement-unknown'),
-          })
-          if (state.kind !== 'needs-attention') {
-            throw new TypeError('Unknown stream settlement must require attention')
-          }
-          return state
-        },
-      },
-    },
-  })
-  return Object.freeze({ intent, plans, selection })
-}
-
-async function resolveHotSwitchWorkspaceChoice(
-  selection: SelectionSpec,
-  state: SelectionProjectionState,
-  environment: EnvironmentOffers,
-): Promise<Readonly<{
-  action: ResolvedArtifactAction
-  suggestedName: string
-}>> {
-  const offers = await offerArtifacts(
-    state.projection,
-    state.discovery,
-    environment,
-  )
-  if (offers.kind !== 'artifact-actions') {
-    throw new Error(`Hot-switch stream offer is unavailable: ${offers.kind}`)
-  }
-  const offered = offers.primary
-  if (offered.choice.operation !== 'download-original' ||
-      offered.route.kind !== 'workspace-then-publish' ||
-      offered.choice.artifactKind !== 'original-file' || offered.suggestedName === null) {
-    throw new Error('Hot-switch fixture received an incompatible artifact choice')
-  }
-  const resolution = await reconcileArtifactChoice({
-    choice: offered.choice,
-    preferredRoute: materializationRouteIdentity(offered.route),
-    expectedSelectionDigest: selection.digest,
-    projection: state.projection,
-    discovery: state.discovery,
-    environment,
-    previousObservation: null,
-  })
-  if (resolution.kind !== 'resolved' || resolution.action.artifact.kind !== 'original-file') {
-    throw new Error(`Hot-switch artifact choice did not resolve: ${resolution.kind}`)
-  }
-  return Object.freeze({ action: resolution.action, suggestedName: offered.suggestedName })
-}
-
-function lifecycleState(
-  intent: ReceiveIntent,
-  payload: ReceiveLifecycleStatePayload,
-): ReceiveLifecycleState {
-  return nextReceiveLifecycleState(
-    initialReceiveLifecycleState({
-      operationId: intent.operationId,
-      receiveIntentDigest: intent.digest,
-    }),
-    payload,
-  )
-}
-
-function randomAuthorityReference(): string {
-  const bytes = new Uint8Array(AUTHORITY_REFERENCE_BYTES)
-  crypto.getRandomValues(bytes)
-  return encodeBase64Url(bytes)
-}
-
-async function operationReceipt(intent: ReceiveIntent, purpose: string): Promise<string> {
-  const digest = await crypto.subtle.digest(
-    'SHA-256',
-    TEXT_ENCODER.encode(`${HOT_SWITCH_RECEIPT_DOMAIN}\n${intent.digest}\n${purpose}`),
-  )
-  return encodeBase64Url(new Uint8Array(digest))
 }
 
 function createGateway(
@@ -439,7 +187,7 @@ function createGateway(
     offersFactory: () => gatedOffers,
     nativePeerUsable: () => input.nativePeerUsable,
     connectivityTrace: {
-      current: (event) => {
+      current: event => {
         const observed = event.eventName === 'peer_attempt'
           ? { kind: 'attempt' as const, evidence: projectAttemptEvidence(event) }
           : { kind: 'recovery' as const, evidence: projectRecoveryEvidence(event) }
@@ -454,7 +202,7 @@ function createGateway(
             random: () => 0,
           },
         }),
-    onBlockDispatched: (observation) => {
+    onBlockDispatched: observation => {
       relayCut.dispatch({
         dispatchSequence: observation.dispatchSequence,
         laneId: observation.laneId,
@@ -463,8 +211,8 @@ function createGateway(
       })
       if (observation.route === 'application-relay') peerRelease.release()
     },
-    onContentLaneAdmitted: (observation) => relayCut.admit(observation),
-    onContentLaneDetached: (observation) => {
+    onContentLaneAdmitted: observation => relayCut.admit(observation),
+    onContentLaneDetached: observation => {
       relayCut.detach(observation)
       peerHarness?.observeDetachment(observation)
     },

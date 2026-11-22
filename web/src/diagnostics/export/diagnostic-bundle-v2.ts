@@ -23,12 +23,12 @@ import {
   utcRfc3339,
 } from './json'
 import { snapshotTraceEventObservationV2 } from './trace-event-v2'
-import type {
-  CorrelatedLocalOutputOperationFailureV1,
-  LocalOutputOperationFailureV1,
-} from '../../output/diagnostics/local-output-failure'
 import type { CorrelationV1 } from './correlation-v1'
-import { hasBoundedOutputExceptionEvidence } from './local-output-failure-v1'
+import {
+  hasBoundedOutputExceptionEvidence,
+  type CorrelatedLocalOutputOperationFailureV1,
+  type LocalOutputOperationFailureV1,
+} from './local-output-failure-v1'
 
 export const DIAGNOSTIC_BUNDLE_SCHEMA_VERSION = 2 as const
 

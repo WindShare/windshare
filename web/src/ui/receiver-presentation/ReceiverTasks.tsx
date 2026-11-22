@@ -5,14 +5,12 @@ import type { ReceiverController } from '../controller'
 import { taskActions } from '../experience/task-actions'
 import { downloadScopeLabel } from '../experience/share-presentation'
 import { resolveWorkspaceTaskLayout } from '../experience/retained-match'
-import { presentNewReceiveOperation } from '../lifecycle-presentation'
 import { presentSavingActions } from '../saving'
 import { SavingControls } from '../saving/SavingControls'
 import { InAppBrowserHint } from '../saving/InAppBrowserHint'
 import { DetailSheet } from '../controls/DetailSheet'
 import { TaskCard, TaskDetails, type TaskViewActions } from '../tasks/TaskView'
 import { TaskDownloads, TaskSourceDetails } from '../experience/TaskDownloads'
-import { isReceiveOutputDelivered } from '../../application/receive/completion'
 
 const noSubscription = () => () => undefined
 
@@ -31,20 +29,28 @@ function renderSavingControls(controller: ReceiverController, snapshot: TaskSnap
   const { current, draft, output, startAdmission } = snapshot
   const language = output.language
   const saving = presentSavingActions({
-    offers: output.offers, actionLabel,
+    offers: output.offers,
+    actionLabel,
     blockedBy: draft.empty ? 'emptySelection' : startAdmission.reason,
   }, language)
-  return <SavingControls model={saving} activation={output.activationPresentation}
+  return <SavingControls
+    model={saving}
+    activation={output.activationPresentation}
     currentTaskContext={current !== null && !draft.empty && !startAdmission.allowed && saving.disabledReason !== null
-      ? { operationId: current.operationId, reason: saving.disabledReason } : null}
+      ? { operationId: current.operationId, reason: saving.disabledReason }
+      : null}
     actionLabel={actionLabel}
-    choose={choice => controller.chooseArtifact(choice.offered.choice.choiceId)}
-    retry={() => controller.retryOutputConfirmation()} cancel={() => controller.cancelPreparing()}
-    onIntent={action => controller.recordExperienceIntent(action)} />
+    choose={choice => controller.chooseArtifact(choice.choice.choiceId)}
+    retry={() => controller.retryOutputConfirmation()}
+    cancel={() => controller.cancelPreparing()}
+    onIntent={action => controller.recordExperienceIntent(action)}
+  />
 }
 
 export function ReceiverDownloads({ controller, open, onOpenChange, ...entry }: {
-  readonly controller: ReceiverController; readonly open: boolean; readonly onOpenChange: (open: boolean) => void
+  readonly controller: ReceiverController
+  readonly open: boolean
+  readonly onOpenChange: (open: boolean) => void
   readonly entryLabel?: string
   readonly entryDescription?: string
 }) {
@@ -52,7 +58,14 @@ export function ReceiverDownloads({ controller, open, onOpenChange, ...entry }: 
   useSyncExternalStore(history.subscribe, history.getSnapshot, history.getSnapshot)
   const source = controller.presentation.task
   const snapshot = useSyncExternalStore(open ? source.subscribe : noSubscription, source.getSnapshot, source.getSnapshot)
-  return <TaskDownloads tasks={snapshot.tasks} snapshot={snapshot} controller={controller} open={open} onOpenChange={onOpenChange} {...entry} />
+  return <TaskDownloads
+    tasks={snapshot.tasks}
+    snapshot={snapshot}
+    controller={controller}
+    open={open}
+    onOpenChange={onOpenChange}
+    {...entry}
+  />
 }
 
 export function ReceiverPrimarySaving({ controller }: { readonly controller: ReceiverController }) {
@@ -85,9 +98,11 @@ export function ReceiverActivity({ controller, openDownloads }: {
     ...baseActions,
     perform: action => {
       // A repeated handoff click strongly indicates the first browser save was blocked or missed.
-      if (action.disabledReason === null &&
-          primaryTask?.stage === 'handed-to-browser' &&
-          action.target.action === 'redownload') {
+      if (
+        action.disabledReason === null &&
+        primaryTask?.stage === 'handed-to-browser' &&
+        action.target.action === 'redownload'
+      ) {
         setHandoffHelpOpenId(primaryTask.operationId)
       }
       baseActions.perform(action)
@@ -95,8 +110,6 @@ export function ReceiverActivity({ controller, openDownloads }: {
   }
   const closeDetails = () => { controller.recordExperienceIntent('close-details'); setDetailsOperationId(null) }
   const actionLabel = repeatRemoteLabel ? t.downloadAgain : downloadScopeLabel(share, snapshot.draft, t)
-  const delivered = isReceiveOutputDelivered(snapshot.output.lifecycle)
-  const newOperation = delivered ? null : presentNewReceiveOperation({ plan: snapshot.output.plan, lifecycle: snapshot.output.lifecycle }, snapshot.output.language)
   const bannerLabel = banner === null ? null : retainedBannerLabel(banner, t)
   return <>
     {hasContent && <InAppBrowserHint />}
@@ -104,12 +117,21 @@ export function ReceiverActivity({ controller, openDownloads }: {
       <span>{bannerLabel}</span>
       <button type="button" onClick={() => actions.perform(banner.action)}>{banner.action.label}</button>
     </div>}
-    {primaryTask !== null && <TaskCard task={primaryTask} actions={actions} busy={snapshot.retained.pending !== null} onDetails={element => {
-      invoker.current = element; controller.recordExperienceIntent('open-task-details'); setDetailsOperationId(primaryTask.operationId)
-    }} />}
-    {primaryTask?.stage === 'handed-to-browser' && <details className="handoff-help"
+    {primaryTask !== null && <TaskCard
+      task={primaryTask}
+      actions={actions}
+      busy={snapshot.retained.pending !== null}
+      onDetails={element => {
+        invoker.current = element
+        controller.recordExperienceIntent('open-task-details')
+        setDetailsOperationId(primaryTask.operationId)
+      }}
+    />}
+    {primaryTask?.stage === 'handed-to-browser' && <details
+      className="handoff-help"
       open={handoffHelpOpen}
-      onToggle={event => setHandoffHelpOpenId(event.currentTarget.open ? primaryTask.operationId : null)}>
+      onToggle={event => setHandoffHelpOpenId(event.currentTarget.open ? primaryTask.operationId : null)}
+    >
       <summary>{copy.downloads.handoffHelp}</summary>
       <p>{copy.downloads.handoffHelpHint}</p>
     </details>}
@@ -117,9 +139,9 @@ export function ReceiverActivity({ controller, openDownloads }: {
       <summary>{actionLabel}</summary>
       {renderSavingControls(controller, snapshot, actionLabel)}
     </details>}
-    {snapshot.startAdmission.canReleaseCurrent && <p className="new-operation"><button type="button" onClick={() => controller.startNewReceiveOperation()}>{t.startAnother}</button></p>}
-    {newOperation !== null && <details className="new-operation"><summary>{newOperation.title}</summary><p>{newOperation.description}</p>
-      <button type="button" onClick={() => controller.startNewReceiveOperation()}>{newOperation.actionLabel}</button></details>}
+    {snapshot.startAdmission.canReleaseCurrent && <p className="new-operation">
+      <button type="button" onClick={() => controller.startNewReceiveOperation()}>{t.startAnother}</button>
+    </p>}
     {details && primaryTask !== null && <DetailSheet title={primaryTask.objectLabel} onClose={closeDetails} returnFocus={invoker}>
       <TaskDetails task={primaryTask} actions={actions} busy={snapshot.retained.pending !== null}>
         <TaskSourceDetails operationId={primaryTask.operationId} snapshot={snapshot} controller={controller} />

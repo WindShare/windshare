@@ -1,7 +1,6 @@
 export { ReceiverApp } from './ReceiverApp'
 export { captureLocation, ReceiverController } from './controller'
 export * from './artifact-presentation'
-export * from './lifecycle-presentation'
 export * from './model'
 export * from './output'
 export * from '../application/receive/contracts'

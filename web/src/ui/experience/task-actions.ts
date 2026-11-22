@@ -6,7 +6,7 @@ export function taskActions(controller: ReceiverController): TaskViewActions {
     perform: action => {
       if (action.disabledReason !== null) return
       if (action.target.kind === 'active') controller.performLifecycleAction(action.target.action)
-      else controller.performRetainedAction(action.target.operation, action.target.action)
+      else controller.performRetainedAction(action.target.task, action.target.action)
     },
   }
 }

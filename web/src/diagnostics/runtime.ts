@@ -19,7 +19,7 @@ import type { IncidentHistoryReadPort } from './incident/history'
 import type { IncidentLink } from './incident/reporter'
 import type {
   LocalOutputOperationFailureReadPort,
-} from '../output/diagnostics/local-output-failure'
+} from './export/local-output-failure-v1'
 import type {
   TraceCaptureSnapshot,
   TraceCoreStatus,

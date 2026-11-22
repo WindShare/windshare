@@ -17,7 +17,7 @@ export type FileRevisionReadmissionPayloadV1 = Readonly<{
   file_id: string
   previous_revision: string
   current_revision: string
-  decision: import('../../transfer/job/file-authority').FileRevisionReadmissionObservation['decision']
+  decision: 'reuse' | 'restart' | 'reject'
   comparison_reason: import('../../content/revision-comparison').RevisionComparison['reason']
   retained_bytes: string
   reused_bytes: string

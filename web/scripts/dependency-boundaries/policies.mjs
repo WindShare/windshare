@@ -45,7 +45,7 @@ export const BOUNDARY_POLICIES = Object.freeze([
     name: 'presentation delegates output ownership to the application',
     roots: ['ui'],
     publicSurfaces: [OUTPUT_PUBLIC_SURFACE],
-    forbidden: ['application/browser-receive'],
+    forbidden: [],
     // Commands and diagnostic services own their effects. Public models remain
     // traversable so a forwarding module cannot conceal private output access.
     stopAt: ['application', 'diagnostics'],

@@ -1,212 +1,147 @@
-import type { ReceiveBlockReason } from './admission'
-import type { ReceiveOperationDisplay } from '../../output/model/operation-display'
-import type { FailureFact } from '../../diagnostics/incident'
+import type { ArtifactOffers, ReceiveOperationDisplay, SaveBackendKind } from '../../output/model'
+import type { TransferProgress } from '../../transfer/progress'
 import type {
-  OutputFailureBindingLease,
-  OutputFailureSinks,
-} from '../../output/diagnostics'
-import type { BoundReceiveIntent, CandidateMaterializationBinding } from '../../output/planning/binding'
-import type { EnvironmentOffers, ResolvedArtifactAction } from '../../output/planning/contracts'
-import type { OfferedArtifactChoice } from '../../output/model/artifacts/choices'
-import type { ReceiveOperationContinuation } from '../../output/model/continuation'
-import type { ReceiveLifecycleState } from '../../output/workspace'
-import type {
-  RecoverySummary,
-} from '../../transfer/lifecycle/recovery-summary'
-import type { ArtifactChoiceID, ReceiveIntent } from '../../transfer/intent'
-import type { PlanExecutionAuthority } from '../../transfer/output/session'
-import type { LifecycleUserAction, ActiveReceiveControl, WorkspaceUsage } from './actions'
+  ReceiveLifecycleState,
+  SafeRenamedSummary,
+  SourceRevisionFailure,
+  SourceRevisionFailures,
+} from '../../transfer/state'
 
-export type PresentationSourceOutcome =
-  | 'picker_refused'
-  | 'caller_cancelled'
-  | 'stale_replacement'
-  | 'native_fault'
+export type ReceiveBlockReason =
+  | 'connectFirst'
+  | 'emptySelection'
+  | 'downloading'
+  | 'busy'
+  | 'matchingShare'
+  | 'shareEnded'
+  | 'connectionUnavailable'
+  | 'activeInAnotherTab'
+  | 'actionUnavailable'
 
-export class PresentationSourceError extends Error {
-  readonly outcome: PresentationSourceOutcome
-
-  constructor(outcome: PresentationSourceOutcome, cause: unknown) {
-    super('Browser receive source reported a closed presentation outcome', { cause })
-    this.name = 'PresentationSourceError'
-    this.outcome = outcome
-  }
+export interface ReceiveAdmission {
+  readonly allowed: boolean
+  readonly reason: ReceiveBlockReason | null
 }
 
-export function presentationSourceOutcome(error: unknown): PresentationSourceOutcome {
-  return error instanceof PresentationSourceError ? error.outcome : 'native_fault'
-}
-
-export interface LifecycleMutation {
-  readonly lifecycle: ReceiveLifecycleState
-  readonly workspaceUsage?: WorkspaceUsage | null
-  readonly activeControls?: readonly ActiveReceiveControl[]
-  readonly resumeTransfer?: boolean
-  /** Action outcome is separate from the durable state that survived the attempt. */
-  readonly actionOutcome?: LifecycleActionOutcome
-  readonly recoverySummary?: RecoverySummary
-}
-
-export type LifecycleActionOutcome =
-  | Readonly<{ kind: 'completed' }>
-  | Readonly<{ kind: 'failed'; error: unknown }>
-
-export interface BoundReceiveOperation {
-  readonly display?: ReceiveOperationDisplay
-  readonly intent: ReceiveIntent
-  /** Plans and job identity are replaced together only at an explicit continuation boundary. */
-  readonly plans: PlanExecutionAuthority
-  readonly transferJobId: string
-  readonly lifecycle: ReceiveLifecycleState
-  /** Subscribe before reading lifecycle; notifications never settle the execution lifetime. */
-  subscribeLifecycle(listener: (state: ReceiveLifecycleState) => void): () => void
-  readonly activeControls: readonly ActiveReceiveControl[]
-  readonly initialWorkspaceUsage?: WorkspaceUsage | null
-
-  /**
-   * The runtime-local binding prevents output sessions that span retries from
-   * retaining the authority of whichever presentation attempt created them.
-   */
-  bindOutputFailures?(failures: OutputFailureSinks | undefined): OutputFailureBindingLease
-
-  /** Picker-bearing publication retries must start inside this synchronous call. */
-  startLifecycleAction(
-    action: Exclude<LifecycleUserAction, ActiveReceiveControl>,
-    lifecycle: ReceiveLifecycleState,
-  ): LifecycleMutation | PromiseLike<LifecycleMutation>
-
-  resolveWorkspaceUsage(
-    lifecycle: ReceiveLifecycleState,
-  ): WorkspaceUsage | null | PromiseLike<WorkspaceUsage | null>
-  settleTransferAdmissionFailure(
-    reason: unknown,
-  ): LifecycleMutation | PromiseLike<LifecycleMutation>
-  detach(): void | PromiseLike<void>
-}
-
-export interface OwnedActivationAuthority {
-  readonly intent: ReceiveIntent
-  readonly lifecycle: ReceiveLifecycleState
-
-  /** Durable effects remain owned until settlement records their terminal disposition. */
-  settleActivationFailure(reason: unknown): Promise<LifecycleMutation>
-  detach(): void | PromiseLike<void>
-}
-
-/**
- * A successful bound-operation return is the activation linearization point.
- * Routes must represent uncertain or retained pre-return effects as owned-effects.
- * Retryable-precut certifies both proven absence and that this same presentation
- * authority is ready for another commit; an ordinary rejection ends the authority.
- * Once the durable cut may have occurred, neither retryable-precut nor rejection is valid.
- */
-export type RouteCommitResult =
-  | Readonly<{
-      kind: 'bound-operation'
-      operation: BoundReceiveOperation
-      display?: ReceiveOperationDisplay
-    }>
-  | Readonly<{
-      kind: 'owned-effects'
-      cause: unknown
-      authority: OwnedActivationAuthority
-    }>
-  | Readonly<{
-      kind: 'retryable-precut'
-      /** Present when candidate preparation minted the receiver-local operation identity. */
-      receiverOperationId?: string
-    }>
-
-export interface RouteCommitInput {
-  readonly display?: ReceiveOperationDisplay
-  readonly action: ResolvedArtifactAction
-  /** Attempt cancellation is separate from releasing the reusable presentation authority. */
-  readonly signal: AbortSignal
-
-  /**
-   * The route supplies only canonical candidate data. The coordinator owns the
-   * final identity/observation fence and is the sole receive-intent binder.
-   */
-  readonly freezeAtFence: (
-    candidate: CandidateMaterializationBinding,
-  ) => Promise<BoundReceiveIntent>
-}
-
-export interface ArtifactPresentationAuthority {
-  /** Workspace and portable are ready immediately; picker-backed routes settle later. */
-  readonly ready: Promise<void>
-  /** A retryable-precut result is the only outcome that permits another call. */
-  commit(input: RouteCommitInput): Promise<RouteCommitResult>
-  /** Non-cancellable picker work remains observed and drained after this pre-commit release. */
-  release(reason: unknown): void | PromiseLike<void>
-}
-
-export type RetainedReceiveAction =
-  | 'save-partial'
+export type ReceiveAction =
+  | 'pause'
+  | 'stop'
   | 'continue'
   | 'save'
+  | 'save-partial'
   | 'redownload'
   | 'discard'
   | 'delete'
   | 'forget'
 
-export type RetainedReceiveActionResult =
-  | Readonly<{ kind: 'completed' }>
-  | Readonly<{
-      kind: 'receive-continuation'
-      runtime: BoundReceiveOperation
-    }>
+export type RetainedReadiness =
+  | 'local'
+  | 'matching-share'
+  | 'different-share'
+  | 'original-link-required'
 
-export interface RetainedReceiveOperation {
-  readonly display?: ReceiveOperationDisplay
-  readonly shareInstance?: string
-  readonly selectionDigest?: string
-  readonly operationId: string
-  readonly receiveIntentDigest: string
-  readonly lifecycleGeneration: bigint
+export interface RetainedTaskSnapshot {
+  readonly taskId: string
+  readonly shareInstance: string
+  readonly selectionKey: string
+  readonly backend: SaveBackendKind
   readonly lifecycle: ReceiveLifecycleState
-  readonly continuation: ReceiveOperationContinuation
-  readonly actions: readonly RetainedReceiveAction[]
-  readonly sourceRevisionFailures?: import('../../transfer/lifecycle/source-revision').SourceRevisionFailures
-  readonly recoverySummary?: RecoverySummary
-  readonly unavailableReason?: ReceiveBlockReason
+  readonly display?: ReceiveOperationDisplay
+  readonly safeRenamed?: SafeRenamedSummary
+  readonly sourceRevisionFailures?: SourceRevisionFailures
+  readonly actions: readonly ReceiveAction[]
+  readonly activeElsewhere: boolean
+  readonly canSavePartial: boolean
 }
 
-export interface RetainedReceiveInventory {
-  readonly operations: readonly RetainedReceiveOperation[]
-  /** Source-reviewed facts; the coordinator never infers incident admission from React state. */
-  readonly presentationFailures: readonly FailureFact[]
-
-  /**
-   * The operation object is an opaque inventory-owned token. Implementations reject
-   * copied projections so presentation can never reconstruct persisted authority.
-   */
-  act(
-    operation: RetainedReceiveOperation,
-    action: RetainedReceiveAction,
-    signal: AbortSignal,
-    failures?: OutputFailureSinks,
-  ): PromiseLike<RetainedReceiveActionResult>
-  close(): void
+export interface PendingRetainedAction {
+  readonly taskId: string
+  readonly action: ReceiveAction
 }
 
-export interface RetainedReceiveInventoryPort {
-  list(
-    signal: AbortSignal,
-    failures?: OutputFailureSinks,
-  ): PromiseLike<RetainedReceiveInventory>
+export interface RetainedInventorySnapshot {
+  readonly kind: 'unloaded' | 'loading' | 'empty' | 'available' | 'failed'
+  readonly tasks: readonly RetainedTaskSnapshot[]
+  readonly pending: PendingRetainedAction | null
 }
 
-export interface ReceiveCompositionPort {
-  readonly retained: RetainedReceiveInventoryPort
+export const EMPTY_RETAINED_INVENTORY: RetainedInventorySnapshot = Object.freeze({
+  kind: 'unloaded',
+  tasks: Object.freeze([]),
+  pending: null,
+})
 
-  environment(signal: AbortSignal): EnvironmentOffers | PromiseLike<EnvironmentOffers>
-
-  /** The implementation must start any picker before this call returns. */
-  startArtifactAuthority(
-    offered: OfferedArtifactChoice,
-    preClickRanking: readonly ArtifactChoiceID[],
-    failures?: OutputFailureSinks,
-    display?: ReceiveOperationDisplay,
-  ): ArtifactPresentationAuthority
+export interface ActiveActivationSnapshot {
+  readonly kind: 'waiting-picker' | 'committing'
+  readonly choiceId: string
+  readonly suggestedName: string
 }
+
+export interface ReceiveRuntimeSnapshot {
+  readonly offers: ArtifactOffers | null
+  readonly activation: ActiveActivationSnapshot | null
+  readonly activeTaskId: string | null
+  readonly activeSelectionKey: string | null
+  readonly backend: SaveBackendKind | null
+  readonly lifecycle: ReceiveLifecycleState | null
+  readonly display: ReceiveOperationDisplay | null
+  readonly safeRenamed: SafeRenamedSummary | null
+  readonly sourceRevisionFailures: SourceRevisionFailures | null
+  readonly progress: TransferProgress
+  readonly actions: readonly ReceiveAction[]
+  readonly interruption: 'pause' | 'stop' | null
+  readonly retained: RetainedInventorySnapshot
+}
+
+export interface ReceiveReplacementTarget {
+  readonly task: RetainedTaskSnapshot
+  readonly failure: SourceRevisionFailure
+}
+
+export type PreviewTraceEvent = Readonly<{
+  name: 'preview_transition'
+  transition: 'deferred'
+  previewId: number
+  shareInstanceId: string
+  fileId: string
+  error: unknown
+}>
+
+export type ReceiverTraceEvent =
+  | PreviewTraceEvent
+  | Readonly<{ name: 'join_transition'; transition: 'started' | 'joined' | 'failed' | 'stale_replacement' }>
+  | Readonly<{
+      name: 'receiver_experience'
+      transition: 'task'
+      operationId: string
+      generation: bigint
+      stage: string
+      reason: string
+      attention: boolean
+      completeness: string
+      publication: string
+      elapsedMilliseconds: number | null
+    }>
+  | Readonly<{
+      name: 'receiver_experience'
+      transition: 'saving'
+      projectionEpoch: bigint | null
+      choiceId: string | null
+      outcome: string | null
+      reason: string
+    }>
+  | Readonly<{
+      name: 'receiver_experience'
+      transition: 'intent'
+      action: string
+      operationId: string | null
+      generation: bigint
+    }>
+  | Readonly<{
+      name: 'receiver_experience'
+      transition: 'ownership'
+      state: 'releasing' | 'released' | 'release-failed'
+      operationId: string
+      generation: bigint
+      lifecycleKind: ReceiveLifecycleState['kind']
+    }>

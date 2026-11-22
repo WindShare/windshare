@@ -1,110 +1,81 @@
 import type { Language } from '../preferences/model'
 import { receiverCopy } from '../locales/receiver'
-import type { ReceiveBlockReason } from '../../application/receive/admission'
-import type { LifecycleActionPresentation } from '../lifecycle-presentation'
-import type { RetainedReceiveAction, RetainedReceiveOperation } from '../../application/receive/contracts'
+import type { ReceiveAction, ReceiveBlockReason, RetainedTaskSnapshot } from '../../application/receive/contracts'
+import type { SaveBackendKind } from '../../output/model'
 import type { TaskAction, TaskRecoveryReadiness } from './model'
 
-export function activeTaskAction(action: LifecycleActionPresentation, planKind: string, language: Language = 'en'): TaskAction<ReceiveBlockReason> {
-  const t = receiverCopy[language].actions
+export function activeTaskAction(
+  action: ReceiveAction,
+  backend: SaveBackendKind,
+  language: Language = 'en',
+): TaskAction<ReceiveBlockReason> {
   return Object.freeze({
-    id: action.kind,
-    label: action.kind === 'pause' ? t.pause : action.label,
-    destructive: action.destructive,
+    id: action,
+    label: actionLabel(action, language),
+    destructive: isDestructiveAction(action),
     disabledReason: null,
-    consequence: activeConsequence(action, planKind, language),
-    target: Object.freeze({ kind: 'active', action: action.kind }),
+    consequence: actionConsequence(action, backend, language),
+    target: Object.freeze({ kind: 'active', action }),
   })
-}
-
-function activeConsequence(action: LifecycleActionPresentation, planKind: string, language: Language): string | null {
-  const t = receiverCopy[language].actions
-  if (action.kind === 'pause') return t.pauseHint
-  if (action.kind === 'stop') return stopConsequence(planKind, language)
-  if (action.kind === 'delete' || action.kind === 'discard') {
-    return t.deleteHint
-  }
-  if (action.kind === 'redownload') return action.destructive ? t.restartHint : t.saveAgainHint
-  return null
 }
 
 export function retainedTaskAction(
-  operation: RetainedReceiveOperation,
-  action: RetainedReceiveAction,
+  task: RetainedTaskSnapshot,
+  action: ReceiveAction,
   readiness: TaskRecoveryReadiness,
   language: Language = 'en',
 ): TaskAction<ReceiveBlockReason> {
-  const remote = action === 'continue' || (action === 'redownload' && operation.recoverySummary !== undefined)
   let disabledReason: ReceiveBlockReason | null = null
-  if (remote && (readiness === 'original-link-required' || readiness === 'different-share')) {
+  if (action === 'continue' && (readiness === 'original-link-required' || readiness === 'different-share')) {
     disabledReason = 'matchingShare'
-  } else if (remote) {
-    disabledReason = operation.unavailableReason ?? null
   }
-  const cleanupOnly = operation.continuation === 'retry-cleanup'
-  const destructive = action === 'discard' || action === 'delete' ||
-    (action === 'redownload' && operation.recoverySummary !== undefined)
+  if (task.activeElsewhere) disabledReason = 'activeInAnotherTab'
+
   return Object.freeze({
     id: action,
-    label: retainedLabel(operation, action, language),
-    destructive: destructive && !cleanupOnly,
+    label: actionLabel(action, language),
+    destructive: isDestructiveAction(action),
     disabledReason,
-    consequence: retainedConsequence(operation, action, language),
-    target: Object.freeze({ kind: 'retained', operation, action }),
+    consequence: actionConsequence(action, task.backend, language),
+    target: Object.freeze({ kind: 'retained', task, action }),
   })
 }
 
-function stopConsequence(planKind: string, language: Language): string {
-  const t = receiverCopy[language].actions
-  switch (planKind) {
-    case 'direct-tree': return t.stopFolder
-    case 'workspace-then-publish': return t.stopWorkspace
-    default: return t.stopPortable
-  }
+function isDestructiveAction(action: ReceiveAction): boolean {
+  return action === 'discard' || action === 'delete'
 }
 
-function retainedLabel(
-  operation: RetainedReceiveOperation,
-  action: RetainedReceiveAction,
-  language: Language,
-): string {
+function actionLabel(action: ReceiveAction, language: Language): string {
   const t = receiverCopy[language].actions
   switch (action) {
-    case 'save-partial': return t.savePartial
-    case 'continue': return continuationLabel(operation, language)
+    case 'pause': return t.pause
+    case 'stop': return receiverCopy[language].lifecycle.stopAction
+    case 'continue': return t.resume
     case 'save': return t.save
-    case 'redownload': return operation.recoverySummary === undefined ? t.downloadAgain : t.restartIncomplete
-    case 'forget': return t.forget
+    case 'save-partial': return t.savePartial
+    case 'redownload': return t.downloadAgain
     case 'discard': return t.discardOutput
-    case 'delete':
-      if (operation.continuation === 'retry-cleanup') return t.retryCleanup
-      return t.deleteRetained
+    case 'delete': return t.deleteRetained
+    case 'forget': return t.forget
   }
 }
 
-function continuationLabel(operation: RetainedReceiveOperation, language: Language): string {
-  const t = receiverCopy[language].actions
-  if (operation.continuation === 'resume-start') return operation.lifecycle.kind === 'resumable-start' &&
-    operation.lifecycle.reason === 'paused' ? t.resume : t.retryDownload
-  if (operation.continuation === 'resume-local-finalization' || operation.continuation === 'resume-package') return t.finishSave
-  return operation.recoverySummary === undefined ? t.resume : t.resumePartial
-}
-
-function retainedConsequence(operation: RetainedReceiveOperation, action: RetainedReceiveAction, language: Language): string | null {
+function actionConsequence(
+  action: ReceiveAction,
+  backend: SaveBackendKind,
+  language: Language,
+): string | null {
   const t = receiverCopy[language].actions
   switch (action) {
-    case 'save-partial':
-      return t.savePartialHint
+    case 'pause': return t.pauseHint
+    case 'stop':
+      if (backend === 'fsa') return t.stopFolder
+      return backend === 'opfs' ? t.stopWorkspace : t.stopPortable
+    case 'save-partial': return t.savePartialHint
+    case 'redownload': return t.saveAgainHint
+    case 'discard': return t.discardOutputHint
+    case 'delete': return t.deleteRetainedHint
     case 'forget': return t.forgetHint
-    case 'discard':
-      return t.discardOutputHint
-    case 'delete':
-      return operation.continuation === 'retry-cleanup'
-        ? t.retryCleanupHint
-        : t.deleteRetainedHint
-    case 'redownload':
-      return operation.recoverySummary === undefined ? t.saveAgainHint
-        : t.restartIncompleteHint
     default: return null
   }
 }

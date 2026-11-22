@@ -1,25 +1,29 @@
 import { EMPTY_PROGRESS } from '../model'
-import type { ReceiveLifecycleState, ReceiveLifecycleStatePayload } from '../../transfer/lifecycle/state'
+import type { ReceiveLifecycleState, ReceiveStatePayload } from '../../transfer/state'
 import type { TaskFacts } from './model'
 
-const FIXTURE_OPERATION_ID = '1'.repeat(32)
-const FIXTURE_INTENT_DIGEST = '2'.repeat(64)
+const FIXTURE_TASK_ID = '1'.repeat(32)
 const FIXTURE_TIME = 1_700_000_000_000
 
-function lifecycle(payload: ReceiveLifecycleStatePayload): ReceiveLifecycleState {
+function lifecycle(payload: ReceiveStatePayload): ReceiveLifecycleState {
+  const finished = ['saved', 'download-started', 'ready-to-save', 'partial'].includes(payload.kind)
   return Object.freeze({
-    operationId: FIXTURE_OPERATION_ID, receiveIntentDigest: FIXTURE_INTENT_DIGEST,
-    generation: 1n, ...payload,
-    ...(['published', 'download-started', 'waiting-to-save'].includes(payload.kind) ? {
-      timing: { startedAtMilliseconds: FIXTURE_TIME, resultReadyAtMilliseconds: FIXTURE_TIME + 125_000 },
-    } : {}),
-  })
+    taskId: FIXTURE_TASK_ID,
+    generation: 1n,
+    ...payload,
+    timing: Object.freeze({
+      startedAtMilliseconds: FIXTURE_TIME,
+      activeMilliseconds: finished ? 125_000 : 0,
+      ...(finished ? { finishedAtMilliseconds: FIXTURE_TIME + 125_000 } : {}),
+    }),
+  }) as ReceiveLifecycleState
 }
 
 /** Synthetic identities and domain-shaped facts keep the gallery free of capabilities. */
 export function taskFixture(overrides: Partial<TaskFacts> = {}): TaskFacts {
   return Object.freeze({
-    lifecycle: lifecycle({ kind: 'receiving', activeLeaseId: '3'.repeat(32) }),
+    lifecycle: lifecycle({ kind: 'downloading', phase: 'receiving' }),
+    backend: 'fsa',
     display: Object.freeze({ objectLabel: 'Summer photos', destinationLabel: 'Downloads', createdAtMilliseconds: FIXTURE_TIME }),
     actions: Object.freeze([]),
     blocking: null,
@@ -27,13 +31,17 @@ export function taskFixture(overrides: Partial<TaskFacts> = {}): TaskFacts {
     completeness: 'unknown',
     publication: 'unpublished',
     progress: Object.freeze({
-      ...EMPTY_PROGRESS, discoveredFiles: 12, discoveredBytes: 6_710_886n,
-      writtenBytes: 2_000_000n, materializedBytes: 2_000_000n, completedFiles: 3, completedBytes: 1_500_000n,
+      ...EMPTY_PROGRESS,
+      discoveredFiles: 12,
+      discoveredBytes: 6_710_886n,
+      writtenBytes: 2_000_000n,
+      materializedBytes: 2_000_000n,
+      completedFiles: 3,
+      completedBytes: 1_500_000n,
     }),
     safeRenamed: null,
     details: Object.freeze([]),
     interruption: null,
-    execution: Object.freeze({ kind: 'active' }),
     ...overrides,
   })
 }
@@ -44,15 +52,19 @@ export const TASK_FIXTURES: Readonly<Record<string, TaskFacts>> = Object.freeze(
   'sender-capacity': taskFixture({ blocking: Object.freeze({ kind: 'sender-capacity' }) }),
   'relay-bandwidth': taskFixture({ blocking: Object.freeze({ kind: 'relay-bandwidth' }) }),
   'partial-ready': taskFixture({
-    lifecycle: lifecycle({ kind: 'waiting-to-save', packageDigest: '4'.repeat(64) }),
+    backend: 'opfs',
+    lifecycle: lifecycle({ kind: 'ready-to-save', size: 1_500_000n, fileName: 'Summer photos.zip' }),
     completeness: 'partial',
   }),
   'browser-handoff': taskFixture({
-    lifecycle: lifecycle({ kind: 'download-started', attemptKind: 'portable', attemptId: '5'.repeat(32) }),
+    backend: 'portable',
+    lifecycle: lifecycle({ kind: 'download-started', retained: false, fileName: 'Summer photos.zip' }),
     publication: 'browser-handoff',
   }),
   'saved-cleanup': taskFixture({
-    lifecycle: lifecycle({ kind: 'published', receiptDigest: '6'.repeat(64), cleanupState: 'cleanup-pending' }),
-    completeness: 'complete', publication: 'saved',
+    backend: 'fsa',
+    lifecycle: lifecycle({ kind: 'saved', savedFiles: 12n, savedBytes: 6_710_886n }),
+    completeness: 'complete',
+    publication: 'saved',
   }),
 })

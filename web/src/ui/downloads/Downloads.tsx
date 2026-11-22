@@ -1,4 +1,4 @@
-import type { RetainedReceiveInventorySnapshot } from '../../application/receive/retained/model'
+import type { RetainedInventorySnapshot } from '../../application/receive/contracts'
 import { receiverCopy } from '../locales/receiver'
 import { useCopy } from '../preferences/use-preferences'
 import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
@@ -10,7 +10,7 @@ import { ReceiverIcon } from '../receiver-presentation/ReceiverIcon'
 export function Downloads({ tasks, actions, inventory, busy, details, entryLabel, entryDescription, onIntent, onRetry, open, onOpenChange }: {
   readonly tasks: readonly TaskPresentation[]
   readonly actions: TaskViewActions
-  readonly inventory: RetainedReceiveInventorySnapshot['kind']
+  readonly inventory: RetainedInventorySnapshot['kind']
   readonly busy: boolean
   readonly details?: (operationId: string) => ReactNode
   readonly entryLabel?: string

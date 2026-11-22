@@ -1,19 +1,10 @@
 # Browser application runtime
 
-`browser-share/` assembles catalog storage, relay admission, reconnect supervision,
-and transfer discovery. `browser-receive/` coordinates installed FSA, workspace,
-portable, and retained-operation routes. Storage implementations,
-journals, checkpoint validation, and file ownership remain in `output/`.
+`browser-share/` owns share joining, catalog paging, and reconnect supervision.
+`receive/` owns the single `ReceiveCoordinator` orchestrating offer planning,
+active transfers, and retained browser downloads over `output/`.
+`diagnostics/` connects runtime observations to the diagnostic bundle exporter.
 
-`BrowserReceiveApplication` in `receive/application.ts` assembles the receive coordinators, exposes
-task commands and read-only observations, and owns their shutdown. UI adapters
-subscribe and format facts; UI snapshots and action labels never authorize execution.
-`diagnostics/` connects application observations to the diagnostic services.
-
-Durable pause or terminal observations do not end a running writer's lifetime.
-Handoffs await execution settlement and detachment. Picker-bearing commands start
-synchronously in the caller's user-action stack.
-
-The resolved dependency gate keeps application and reusable modules independent
-of UI/React, keeps protocol contracts below runtime implementations, and prevents
-UI code from assembling output routes or reaching storage ownership implementations.
+The dependency boundary gate keeps `application/`, `transfer/`, and `output/`
+independent of UI/React, keeps `transfer/` independent of `output/`, and limits
+UI imports from `output/` to pure types in `output/model/`.

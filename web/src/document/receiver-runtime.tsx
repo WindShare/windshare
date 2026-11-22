@@ -2,28 +2,40 @@ import { browserPreferences } from '../ui/preferences/browser'
 import '../App.css'
 import type { DocumentRuntime } from './owner'
 import type { DocumentDiagnostics } from './diagnostics'
-import { createBrowserReceiveComposition, type BrowserReceiveWindow } from '../application/browser-receive/composition'
+import type { BrowserOutputWindow } from '../output/backends/contract'
 import { BrowserReceiverGateway } from '../application/browser-share/gateway'
 import { BuiltinNetwork } from '../application/network/builtin'
 import { networkObserver, authorityObserver } from '../application/network/diagnostics'
-import { createCatalogStorageObserver, createConnectivityTraceSource, createOutputTraceSource, createProtocolTraceSource, createReceiverTraceSource } from '../application/diagnostics/receive-trace'
+import {
+  createCatalogStorageObserver,
+  createConnectivityTraceSource,
+  createOutputTraceSource,
+  createProtocolTraceSource,
+  createReceiverTraceSource,
+} from '../application/diagnostics/receive-trace'
 import { ReceiverController } from '../ui/controller'
 import { ReceiverApp } from '../ui/ReceiverApp'
 import { ReceiverDownloads } from '../ui/receiver-presentation/ReceiverTasks'
 
-export function createReceiverRuntime(windowPort: Window, diagnosticOwner: DocumentDiagnostics, pageUrl: string): DocumentRuntime {
+export function createReceiverRuntime(
+  windowPort: Window,
+  diagnosticOwner: DocumentDiagnostics,
+  pageUrl: string,
+): DocumentRuntime {
   const { diagnostics } = diagnosticOwner
   const outputTrace = createOutputTraceSource(diagnostics.trace)
-  const receive = createBrowserReceiveComposition(windowPort as BrowserReceiveWindow, {
-    outputTrace, localOutputFailures: diagnostics.localOutputFailures,
-  })
   const network = new BuiltinNetwork(networkObserver(diagnostics.trace), authorityObserver(diagnostics.trace))
   const controller = new ReceiverController(new BrowserReceiverGateway({
-    network, protocolTrace: createProtocolTraceSource(diagnostics.trace, diagnostics.failures),
+    network,
+    protocolTrace: createProtocolTraceSource(diagnostics.trace, diagnostics.failures),
     connectivityTrace: createConnectivityTraceSource(diagnostics.trace),
     onCatalogStorageFallback: createCatalogStorageObserver(diagnostics.trace),
   }), {
-    receive, preferences: browserPreferences, trace: createReceiverTraceSource(diagnostics.trace), incidents: diagnostics.incidents,
+    windowPort: windowPort as unknown as BrowserOutputWindow,
+    outputTrace,
+    preferences: browserPreferences,
+    trace: createReceiverTraceSource(diagnostics.trace),
+    incidents: diagnostics.incidents,
   })
   diagnosticOwner.context.read = controller.getDiagnosticSnapshot
   controller.initialize({ capabilityInput: null, pageUrl })

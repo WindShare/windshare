@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
 import { CapabilityNavigation, type CapabilityJoinOutcome } from '../../src/application/browser-share/capability-navigation'
-import { deferred } from './v2-receiver-orchestration-fixture'
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej })
+  return { promise, resolve, reject }
+}
 
 describe('capability navigation ownership', () => {
   it('starts the first join immediately and reuses both pending and completed joins', async () => {

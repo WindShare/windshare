@@ -1,8 +1,6 @@
-import type { ReceiveBlockReason } from '../application/receive/admission'
-import type { RetainedReceiveInventorySnapshot } from '../application/receive/retained/model'
+import type { ReceiveBlockReason, RetainedInventorySnapshot } from '../application/receive/contracts'
 import type { OutputPresentationSnapshot } from './output'
 
-/** Shell navigation is separate from the receive lifecycle owned by W2-E. */
 export type ReceiverPhase = 'awaiting-key' | 'joining' | 'browsing' | 'failed'
 
 export interface BrowseRow {
@@ -21,7 +19,6 @@ export interface Breadcrumb {
 export interface ReceiverProgress {
   readonly receivedObjectBytes: bigint
   readonly phase: 'receiving' | 'finishing'
-  /** Accepted output payload includes retained coverage; it does not assert restart durability. */
   readonly materializedBytes: bigint
   readonly discoveredFiles: number
   readonly discoveredBytes: bigint
@@ -44,11 +41,7 @@ export interface ReceiverProgress {
 
 export type PreviewSnapshot =
   | { readonly state: 'idle' }
-  | {
-      readonly state: 'loading'
-      readonly fileId: string
-      readonly name: string
-    }
+  | { readonly state: 'loading'; readonly fileId: string; readonly name: string }
   | {
       readonly state: 'image'
       readonly fileId: string
@@ -69,24 +62,12 @@ export type PreviewSnapshot =
       readonly width: number
       readonly height: number
       readonly durationSeconds: number
-      // The slider position: the seconds the latest seek requested (not the
-      // keyframe presented for it), or on open the keyframe seek(0) chose.
       readonly requestedSeconds: number
-      // The decoder element's time for the presented sample; not shown.
       readonly decodeSeconds: number
       readonly seeking: boolean
-      // Why the latest seek showed no new frame. The preview stays open on the
-      // previous frame, with the download still available, and
-      // requestedSeconds is rolled back to the position requested for that
-      // frame.
       readonly failure: string | null
     }
-  | {
-      readonly state: 'error'
-      readonly fileId: string
-      readonly name: string
-      readonly message: string
-    }
+  | { readonly state: 'error'; readonly fileId: string; readonly name: string; readonly message: string }
 
 export type ShareIdentity =
   | Readonly<{ kind: 'photo' | 'video' | 'file'; shareInstance: string; name: string; file: BrowseRow }>
@@ -108,7 +89,6 @@ export interface SelectionDraft {
   readonly empty: boolean
 }
 
-/** Raw provider details have already passed through the capability redactor. */
 export type ReceiverFailure = string | Readonly<{ kind: 'blocked'; reason: ReceiveBlockReason }> |
   Readonly<{ kind: 'source-changed' }> | Readonly<{ kind: 'invalidLink' | 'secureContext'; detail: string }>
 
@@ -137,7 +117,7 @@ export interface ReceiverSnapshot {
   readonly progress: ReceiverProgress
   readonly preview: PreviewSnapshot
   readonly output: OutputPresentationSnapshot
-  readonly retained: RetainedReceiveInventorySnapshot
+  readonly retained: RetainedInventorySnapshot
 }
 
 export const EMPTY_PROGRESS: ReceiverProgress = Object.freeze({

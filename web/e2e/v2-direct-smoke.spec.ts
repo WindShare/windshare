@@ -36,6 +36,7 @@ const ARCHIVE_NAME = `${DIRECTORY_NAME}.zip`
 const DOWNLOAD_TIMEOUT_MILLISECONDS = 20_000
 const TRACE_CORRELATION_TIMEOUT_MILLISECONDS = 10_000
 const BASE64URL_IDENTITY_PATTERN = /^[A-Za-z0-9_-]{22}$/u
+const DECIMAL_OPERATION_ID_PATTERN = /^[1-9]\d*$/u
 const RECONSTRUCTION_HARNESS_PATH = '/test/browser/diagnostics-reconstruction-harness.ts'
 
 test('receives and recovers downloads through the real sender and relay', async ({ browserName, page }, testInfo) => {
@@ -184,7 +185,7 @@ test('receives and recovers downloads through the real sender and relay', async 
     )
     if (joined === null) throw new Error('Shared protocol correlation disappeared after observation')
     expect(joined.correlation.protocolSessionId).toMatch(BASE64URL_IDENTITY_PATTERN)
-    expect(joined.correlation.protocolOperationId).toMatch(BASE64URL_IDENTITY_PATTERN)
+    expect(joined.correlation.protocolOperationId).toMatch(DECIMAL_OPERATION_ID_PATTERN)
     // Each exporter owns its envelope version. Cross-runtime reconstruction
     // depends on shared protocol identities and request kinds, not version parity.
     expect(joined.browser).toMatchObject({ event: 'protocol_operation' })
@@ -237,8 +238,8 @@ test('receives and recovers downloads through the real sender and relay', async 
       .not.toBe(reconstructionJoin?.sender.runtimeRunId)
     expect(reconstruction).toMatchObject({
       incidentConsoleCount: 1,
-      actionErrorName: 'AggregateError',
-      restoredLifecycle: 'resumable-receive',
+      actionErrorName: 'InvalidStateError',
+      restoredLifecycle: 'paused',
     })
     assertFSAReconstruction(reconstructionRecords)
     for (const forbidden of [
@@ -367,12 +368,15 @@ function findSharedProtocolCorrelation(
 }
 
 function protocolEnvelope(value: unknown): ProtocolEnvelopeView | null {
-  const candidate = isRecord(value) && value.line_type === 'trace_event'
+  const isBrowserTraceEvent = isRecord(value) && value.line_type === 'trace_event'
+  const candidate = isBrowserTraceEvent
     ? value.record
     : value
   if (!isRecord(candidate) ||
       candidate.event !== 'protocol_operation' ||
-      typeof candidate.schema_version !== 'number' ||
+      (isBrowserTraceEvent
+        ? typeof candidate.schema_version !== 'number'
+        : candidate.schema_version !== undefined && typeof candidate.schema_version !== 'number') ||
       typeof candidate.runtime_run_id !== 'string' ||
       !isRecord(candidate.correlation) ||
       typeof candidate.correlation.protocol_session_id !== 'string' ||
@@ -425,41 +429,18 @@ function assertFSAReconstruction(records: readonly unknown[]): void {
           operation: 'reopen',
           exception: {
             errorName: 'InvalidStateError',
-            message: expect.stringContaining('another WindShare task'),
+            message: expect.stringContaining('another WindShare tab'),
           },
         },
       },
-      contributors: [{
-        count: '1',
-        representative: {
-          kind: 'native_output_failure',
-          stage: 'continuation',
-          recovery_disposition: 'resumable_receive',
-        },
-      }],
-      consequences: [{
-        count: '1',
-        representative: {
-          kind: 'native_output_failure',
-          stage: 'cleanup',
-          recovery_disposition: 'needs_attention',
-          evidence: {
-            operation: 'cleanup',
-            exception: {
-              errorName: 'InvalidStateError',
-              message: expect.stringContaining('generation or lease changed'),
-            },
-          },
-        },
-      }],
-      fact_count: '3',
+      fact_count: '1',
       overflow_fact_count: '0',
       diagnostics_health_at_seal: zeroHealth,
       context: {
         controller: { phase: 'browsing' },
-        lifecycle: { state: 'resumable_receive' },
+        lifecycle: { state: 'paused' },
         progress: { file_errors: '1' },
-        output: { plan_kind: 'direct_tree' },
+        output: { plan_kind: 'fsa' },
       },
     },
   })
@@ -494,20 +475,8 @@ function assertFSAReconstruction(records: readonly unknown[]): void {
     backend: 'file_system_access',
     transition: 'failed',
   })
-  const continuationIndex = eventIndex('continuation', {
-    backend: 'file_system_access',
-    transition: 'admission_failed',
-  })
-  const cleanupIndex = eventIndex('cleanup', {
-    backend: 'file_system_access',
-    transition: 'failed',
-  })
-  const actionIndex = eventIndex('retained_action', { transition: 'failed' })
   expect(protocolIndex).toBeGreaterThanOrEqual(0)
   expect(reopenIndex).toBeGreaterThan(protocolIndex)
-  expect(continuationIndex).toBeGreaterThan(reopenIndex)
-  expect(cleanupIndex).toBeGreaterThan(continuationIndex)
-  expect(actionIndex).toBeGreaterThan(cleanupIndex)
 }
 
 function isProtocolMessageKind(value: unknown): value is ProtocolMessageKindV1 {

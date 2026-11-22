@@ -5,7 +5,6 @@ import { createBrowserDiagnosticsComposition } from '../../../src/application/di
 import { createIncidentReporter } from '../../../src/diagnostics/incident/reporter'
 import { MAX_PENDING_INCIDENT_CONTEXTS } from '../../../src/diagnostics/incident/pending-scopes'
 import { createIncidentRecordProjector, createRuntimeRunIdentity } from '../../../src/diagnostics/export/projector'
-import { normalizeFileTransferFailure, FileOutputError } from '../../../src/transfer/job/failures'
 import { isBoundedDiagnosticExceptionProjection, MAX_EXCEPTION_TEXT_BYTES } from '../../../src/diagnostics/exception'
 
 function fact(message: string, lane = 1) {
@@ -44,37 +43,17 @@ describe('bounded cause retention', () => {
     scope.close()
   })
 
-  it('creates references for the receiving owner even when separate issuers reuse scope numbers', () => {
+  it('rejects fact references recorded under another incident scope', () => {
     const first = createIncidentScopeIssuer().open('receive')
     const second = createIncidentScopeIssuer().open('receive')
-    const original = normalizeFileTransferFailure(new FileOutputError('write denied', 'output-write-failed'), { incidentScope: first.handle })
-    expect(original.kind).toBe('fault')
-    if (original.kind !== 'fault') return
-    const moved = normalizeFileTransferFailure(original.diagnostic, { incidentScope: second.handle })
-    expect(moved.kind).toBe('fault')
-    if (moved.kind !== 'fault') return
-    expect(moved.factRef).not.toBe(original.factRef)
-    expect(moved.factRef?.scope).toBe(second.identity)
-    expect(moved.fact.evidence).toBe(original.fact.evidence)
+    const ref = first.facts.record(fact('write denied'), 'contributor')
     const accumulator = createFailureFactAccumulator(second.identity)
-    expect(() => accumulator.record(original.factRef!)).toThrow('another incident scope')
-    accumulator.record(moved.factRef!)
-    expect(accumulator.seal(moved.factRef!).trigger.fact.evidence).toBe(original.fact.evidence)
-    const repeated = normalizeFileTransferFailure(moved.diagnostic, { incidentScope: second.handle })
-    if (repeated.kind === 'fault') expect(repeated.factRef).toBe(moved.factRef)
-    first.close(); second.close()
-  })
-
-  it('preserves independent cleanup evidence without giving it cancellation authority', () => {
-    const recorded: string[] = []
-    const scope = createIncidentScopeIssuer().open('receive', { factRecorded: value => recorded.push(value.relation) })
-    const abort = new AbortController()
-    abort.abort(new Error('user stopped'))
-    const failure = normalizeFileTransferFailure(new Error('cleanup failed'), { signal: abort.signal, incidentScope: scope.handle })
-    expect(failure.kind).toBe('canceled')
-    expect(failure.diagnostic).toBe(abort.signal.reason)
-    expect(recorded).toEqual(['consequence'])
-    scope.close()
+    expect(() => accumulator.record(ref)).toThrow('another incident scope')
+    const movedRef = second.facts.record(fact('write denied'), 'contributor')
+    accumulator.record(movedRef)
+    expect(accumulator.seal(movedRef).trigger.fact.evidence?.exception.message).toBe('write denied')
+    first.close()
+    second.close()
   })
 
   it('bounds a burst and exposes omitted observations while retaining the most recent explanations', () => {

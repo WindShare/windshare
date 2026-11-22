@@ -16,10 +16,6 @@ import {
   type PresentationDecision,
 } from '../../src/diagnostics/incident'
 import { RemoteOperationError } from '../../src/content/session-operations'
-import type {
-  AuthenticatedDiscoveryRequest,
-  AuthenticatedDiscoverySource,
-} from '../../src/transfer/projection/coordinator'
 import { BrowserNavigationCoordinator } from '../../src/ui/controller/navigation'
 import { captureLocation, ReceiverController } from '../../src/ui/controller'
 import type {
@@ -29,7 +25,6 @@ import type {
   JoinedBrowserShare,
 } from '../../src/application/browser-share/gateway'
 import type { ReceiverSnapshot } from '../../src/ui/model'
-import { INERT_TEST_RECEIVE_COMPOSITION } from './v2-receive-fixture'
 
 const firstChild = directoryEntry(2, 'first', 'First')
 const secondChild = directoryEntry(3, 'second', 'Second')
@@ -99,13 +94,8 @@ class NavigableJoinedShare {
     return () => undefined
   }
 
-  projectionSource(): AuthenticatedDiscoverySource {
-    return Object.freeze({
-      discover: async function* (request: AuthenticatedDiscoveryRequest) {
-        yield* []
-        return Object.freeze({ kind: 'complete' as const, settledTargets: request.unsettledTargets })
-      },
-    })
+  inspectSelection() {
+    return Promise.resolve(Object.freeze({ kind: 'empty' as const }))
   }
 
   async close(): Promise<void> {}
@@ -407,7 +397,6 @@ describe('v2 receiver capability lifecycle', () => {
       },
     } as unknown as BrowserReceiverGateway
     const controller = new ReceiverController(gateway, {
-      receive: INERT_TEST_RECEIVE_COMPOSITION,
       onSecurityMilestone: (milestone) => milestones.push(milestone),
     })
     controller.initialize({ capabilityInput: null, pageUrl: 'https://receiver.invalid/s/share' })
@@ -434,9 +423,7 @@ async function readyController(): Promise<{
   const gateway = {
     join: async () => joined as unknown as JoinedBrowserShare,
   } as unknown as BrowserReceiverGateway
-  const controller = new ReceiverController(gateway, {
-    receive: INERT_TEST_RECEIVE_COMPOSITION,
-  })
+  const controller = new ReceiverController(gateway)
   controller.initialize({ capabilityInput: 'key', pageUrl: 'https://receiver.invalid/s/share' })
   await vi.waitFor(() => expect(controller.getSnapshot().phase).toBe('browsing'))
   return { controller, joined }

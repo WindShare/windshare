@@ -15,26 +15,14 @@ export type ControllerContextPhase =
   (typeof CONTROLLER_CONTEXT_PHASES)[number]
 
 export const LIFECYCLE_CONTEXT_STATES = Object.freeze([
-  'intent-frozen',
-  'resumable-start',
   'preparing',
-  'receiving',
-  'resumable-receive',
-  'source-invalidated',
-  'finalizing-tree',
-  'materialization-sealed',
-  'packaging',
-  'resumable-package',
-  'artifact-sealed',
-  'waiting-to-save',
-  'publishing-managed',
-  'handing-off',
-  'published',
+  'downloading',
+  'paused',
+  'ready-to-save',
   'download-started',
-  'partial-directory',
-  'restart-required',
-  'discarded',
-  'needs-attention',
+  'saved',
+  'partial',
+  'failed',
 ] as const)
 
 export type LifecycleContextState =
@@ -50,9 +38,9 @@ export type ProgressDiscoveryState =
   (typeof PROGRESS_DISCOVERY_STATES)[number]
 
 export const OUTPUT_PLAN_KINDS = Object.freeze([
-  'direct-tree',
-  'workspace-then-publish',
-  'portable-handoff',
+  'fsa',
+  'opfs',
+  'portable',
 ] as const)
 
 export type OutputPlanKind = (typeof OUTPUT_PLAN_KINDS)[number]
@@ -121,26 +109,14 @@ export interface DiagnosticContextV1 {
   readonly lifecycle?: Readonly<{
     generation: string
     state:
-      | 'intent_frozen'
       | 'preparing'
-      | 'receiving'
-      | 'resumable_receive'
-      | 'resumable_start'
-      | 'source_invalidated'
-      | 'finalizing_tree'
-      | 'materialization_sealed'
-      | 'packaging'
-      | 'resumable_package'
-      | 'artifact_sealed'
-      | 'waiting_to_save'
-      | 'publishing_managed'
-      | 'handing_off'
-      | 'published'
+      | 'downloading'
+      | 'paused'
+      | 'ready_to_save'
       | 'download_started'
-      | 'partial_directory'
-      | 'restart_required'
-      | 'discarded'
-      | 'needs_attention'
+      | 'saved'
+      | 'partial'
+      | 'failed'
   }>
   readonly progress?: Readonly<{
     generation: string
@@ -161,11 +137,7 @@ export interface DiagnosticContextV1 {
   }>
   readonly output?: Readonly<{
     generation: string
-    plan_kind:
-      | 'direct_tree'
-      | 'direct_atomic'
-      | 'workspace_then_publish'
-      | 'portable_handoff'
+    plan_kind: 'fsa' | 'opfs' | 'portable'
   }>
   readonly protocol?: Readonly<{
     generation: string

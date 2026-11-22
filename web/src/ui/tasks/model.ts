@@ -1,12 +1,14 @@
-import type { ReceiveBlockReason } from '../../application/receive/admission'
-import type { ReceiveLifecycleState } from '../../transfer/lifecycle/state'
-import type { ReceiveOperationDisplay } from '../../output/model/operation-display'
-import type { SafeRenamedSummary } from '../../transfer/lifecycle/safe-names'
-import type { LifecycleUserAction } from '../../application/receive/actions'
+import type {
+  ReceiveAction,
+  ReceiveBlockReason,
+  RetainedReadiness,
+  RetainedTaskSnapshot,
+} from '../../application/receive/contracts'
+import type { ReceiveOperationDisplay, SaveBackendKind } from '../../output/model'
+import type { ReceiveLifecycleState, SafeRenamedSummary } from '../../transfer/state'
 import type { ReceiverProgress } from '../model'
-import type { RetainedReceiveAction, RetainedReceiveOperation } from '../../application/receive/contracts'
 
-export type TaskRecoveryReadiness = import('../../application/receive/retained/readiness').RetainedContinuationReadiness
+export type TaskRecoveryReadiness = RetainedReadiness
 
 export interface TaskBlocking {
   readonly kind: 'reconnecting' | 'unavailable' | 'sender-capacity' | 'relay-bandwidth' | 'share-ended' | 'storage'
@@ -14,8 +16,8 @@ export interface TaskBlocking {
 }
 
 export type TaskActionTarget =
-  | Readonly<{ kind: 'active'; action: LifecycleUserAction }>
-  | Readonly<{ kind: 'retained'; operation: RetainedReceiveOperation; action: RetainedReceiveAction }>
+  | Readonly<{ kind: 'active'; action: ReceiveAction }>
+  | Readonly<{ kind: 'retained'; task: RetainedTaskSnapshot; action: ReceiveAction }>
 
 export interface TaskAction<Reason extends string = string> {
   readonly id: string
@@ -28,12 +30,22 @@ export interface TaskAction<Reason extends string = string> {
 
 export type TaskCompleteness = 'unknown' | 'incomplete' | 'partial' | 'complete'
 export type TaskPublication = 'unpublished' | 'browser-handoff' | 'saved'
-export type TaskStage = 'preparing' | 'downloading' | 'waiting' | 'paused' | 'finishing' |
-  'ready-to-save' | 'handed-to-browser' | 'saved' | 'needs-action' | 'cancelled' | 'failed'
+export type TaskStage =
+  | 'preparing'
+  | 'downloading'
+  | 'waiting'
+  | 'paused'
+  | 'finishing'
+  | 'ready-to-save'
+  | 'handed-to-browser'
+  | 'saved'
+  | 'needs-action'
+  | 'cancelled'
+  | 'failed'
 
-/** Display facts cannot grant a storage action: every action retains its owner-issued target. */
 export interface TaskFacts {
   readonly lifecycle: ReceiveLifecycleState
+  readonly backend: SaveBackendKind
   readonly display: ReceiveOperationDisplay | null
   readonly actions: readonly TaskAction<ReceiveBlockReason>[]
   readonly blocking: TaskBlocking | null
@@ -43,10 +55,7 @@ export interface TaskFacts {
   readonly progress: ReceiverProgress | null
   readonly safeRenamed: SafeRenamedSummary | null
   readonly details: readonly string[]
-  readonly interruption: 'pause' | 'stop' | 'finish' | null
-  readonly execution: Readonly<{ kind: 'active' }> |
-    Readonly<{ kind: 'retained'; continuation: import('../../output/model/continuation').ReceiveOperationContinuation }> |
-    Readonly<{ kind: 'local-finalization' }>
+  readonly interruption: 'pause' | 'stop' | null
 }
 
 export interface TaskProgressPresentation {

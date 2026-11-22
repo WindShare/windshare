@@ -1,15 +1,17 @@
 import type { CatalogEntry } from '../../catalog/records'
-import type { SourceRevisionFailure } from '../../transfer/lifecycle/source-revision'
+import type { SourceRevisionFailure } from '../../transfer/state'
 import type { BrowseDirectory, BrowsePage, JoinedBrowserShare } from './gateway'
-import type { RetainedReceiveOperation } from '../receive/contracts'
+import type { RetainedTaskSnapshot } from '../receive/contracts'
 
 type ReplacementShare = Pick<JoinedBrowserShare, 'descriptor' | 'rootDirectory' | 'childDirectory' | 'page'>
 
 export async function findReplacementFile(
-  joined: ReplacementShare, operation: RetainedReceiveOperation,
-  failure: SourceRevisionFailure, signal: AbortSignal,
+  joined: ReplacementShare,
+  task: RetainedTaskSnapshot,
+  failure: SourceRevisionFailure,
+  signal: AbortSignal,
 ): Promise<Readonly<{ entry: CatalogEntry; page: BrowsePage; directories: readonly BrowseDirectory[] }>> {
-  const failures = operation.sourceRevisionFailures
+  const failures = task.sourceRevisionFailures
   if (failures === undefined || !failures.files.includes(failure) ||
       failures.shareInstance !== joined.descriptor.shareInstanceId) {
     throw new DOMException('Open the matching share before downloading the current version', 'InvalidStateError')
@@ -30,12 +32,14 @@ export async function findReplacementFile(
 }
 
 async function findNamedEntry(
-  joined: ReplacementShare, directory: BrowseDirectory, name: string, signal: AbortSignal,
+  joined: ReplacementShare,
+  directory: BrowseDirectory,
+  name: string,
+  signal: AbortSignal,
 ): Promise<Readonly<{ entry: CatalogEntry; page: BrowsePage }>> {
   let pageIndex = 0
   for (;;) {
     signal.throwIfAborted()
-    // Refresh each directory once, then page the authenticated generation consistently.
     const page = await joined.page(directory, pageIndex, { signal, explicitRetry: pageIndex === 0 })
     signal.throwIfAborted()
     const entry = page.entries.find(candidate => candidate.name === name)

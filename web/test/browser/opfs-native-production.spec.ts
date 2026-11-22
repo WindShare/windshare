@@ -6,7 +6,7 @@ import { expect, test } from '@playwright/test'
 import { build, preview } from 'vite'
 
 const WEB_ROOT = fileURLToPath(new URL('../../', import.meta.url))
-const SUPPORT_ENTRY = join(WEB_ROOT, 'src/output/origin-private/native-object/support.ts')
+const SUPPORT_ENTRY = join(WEB_ROOT, 'src/output/native-object/support.ts')
 const BUNDLE_NAME = 'native-support.js'
 const PAGE_NAME = 'native-support.html'
 const CONTENT_SECURITY_POLICY = "default-src 'self'; img-src 'self' data:; worker-src 'self' blob:"
@@ -48,7 +48,7 @@ test('production native capability probe runs under a same-origin Worker policy'
     const response = await page.goto(`${origin}/${PAGE_NAME}`)
     expect(response?.headers()['content-security-policy']).toBe(CONTENT_SECURITY_POLICY)
     const supported = await page.evaluate(async path => {
-      const probe = await import(path) as typeof import('../../src/output/origin-private/native-object/support')
+      const probe = await import(path) as typeof import('../../src/output/native-object/support')
       return probe.probeNativeObjectSupport(window)
     }, `/${BUNDLE_NAME}`)
     // Chromium is required here: a failed capability probe must fail, never skip this regression.

@@ -7,8 +7,7 @@ import { DetailSheet } from '../controls/DetailSheet'
 import { ReceiverIcon } from '../receiver-presentation/ReceiverIcon'
 
 function isSameChoice(left: SavingChoice | null, right: SavingChoice): boolean {
-  return left !== null &&
-    left.offered.choice.choiceId === right.offered.choice.choiceId
+  return left !== null && left.choice.choiceId === right.choice.choiceId
 }
 
 function collectSheetNotes(outcomes: readonly SavingOutcome[]): readonly string[] {
@@ -88,7 +87,6 @@ export function SavingControls({ model, activation, currentTaskContext, actionLa
         <p>{activation.description}</p>
       </div>
       <div className="task-actions">
-        {activation.kind === 'retry' && <button className="primary-action" type="button" onClick={retry}>{activation.label}</button>}
         {activation.kind !== 'committing' && <button className="quiet-action" type="button" onClick={cancel}>{t.cancel}</button>}
       </div>
     </div> : <div className="saving-decision">
@@ -122,7 +120,7 @@ export function SavingControls({ model, activation, currentTaskContext, actionLa
         {outcome.alternatives.length > 0 && <details className="saving-advanced">
           <summary>{t.moreOptions}</summary>
           {outcome.alternatives.map(choice => <Choice
-            key={choice.offered.choice.choiceId}
+            key={choice.choice.choiceId}
             choice={choice} recommended={isSameChoice(model.primary, choice)}
             sharedDisabledReason={disabledReason} choose={commit} />)}
         </details>}

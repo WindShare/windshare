@@ -481,7 +481,7 @@ const VALID_OBSERVATIONS: readonly TraceEventObservationV2[] = [
   observation('lifecycle_action_transition', {
     transition: 'completed',
     action: 'continue',
-    lifecycle_state: 'receiving',
+    lifecycle_state: 'downloading',
     operation_id: OPERATION_ID, generation: '3', artifact_id: SELECTION_DIGEST,
     checkpoint_id: SELECTION_DIGEST, checkpoint_generation: '2',
     task_settlement: 'unsettled', retention: 'reconcile', cleanup: 'settled',

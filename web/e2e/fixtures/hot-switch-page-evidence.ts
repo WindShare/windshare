@@ -10,13 +10,8 @@ import type {
   PeerAttemptTraceEvent,
   PeerRecoveryTraceEvent,
 } from '../../src/connectivity/diagnostics'
-import { SingleFileStreamOutputSession } from '../../src/output/streams/single-file'
-import type {
-  BeginOutputFileResult,
-  OutputFileRequest,
-  OutputFileTransaction,
-  OutputSession,
-} from '../../src/transfer/output/session'
+import { bigintToSafeNumber } from '../../src/content/geometry'
+import type { TransferFileRequest, TransferOutputFile, TransferOutputSession } from '../../src/transfer/output-port'
 
 export class EvidenceBridge {
   readonly #bridge: (event: HotSwitchPageEvent) => Promise<void>
@@ -42,8 +37,6 @@ export class EvidenceBridge {
   }
 
   async terminalFailure(): Promise<string | undefined> {
-    // Observer callbacks deliberately do not block product control flow. The
-    // terminal drains their serialized bridge so a rejected event cannot vanish.
     await this.#queue
     return this.#failure
   }
@@ -89,13 +82,8 @@ export class RelayCutEvidence {
   }
 
   async #publishIneligibility(): Promise<void> {
-    if (
-      !this.#sealed || this.#ineligibilityPublished || this.#activeRelayLanes.size !== 0
-    ) return
+    if (!this.#sealed || this.#ineligibilityPublished || this.#activeRelayLanes.size !== 0) return
     this.#ineligibilityPublished = true
-    // The scheduler can exclude the relay only after its lane has detached.
-    // Capture that page-local boundary synchronously once the physical cut is
-    // sealed; delivery through the asynchronous bridge must never move it.
     await this.#bridge.publish({
       kind: 'relay-ineligible',
       dispatchSequenceBoundary: this.#latestDispatchSequence,
@@ -104,67 +92,51 @@ export class RelayCutEvidence {
 }
 
 export class DeliveryBuffer {
-  readonly #chunks: Uint8Array[] = []
+  #buffer: Uint8Array<ArrayBuffer> = new Uint8Array(0)
+  #writtenBytes = 0
 
   outputSession(
-    outputSessionId: string,
+    sessionId: string,
     outputFence: OutputFence,
-  ): DirectAtomicStreamOutput {
-    const session = new SingleFileStreamOutputSession(
-      outputSessionId,
-      new WritableStream<Uint8Array>({
-        write: async (chunk) => {
-          await outputFence.waitForWrite()
-          this.#chunks.push(chunk.slice())
-        },
+  ): TransferOutputSession {
+    return Object.freeze({
+      sessionId,
+      capabilities: Object.freeze({
+        maxConcurrentFiles: 1,
+        supportsResume: false,
+        checkpointIntervalBytes: 64n * 1024n * 1024n,
+        checkpointIntervalMilliseconds: 60_000,
       }),
-    )
-    return new DirectAtomicStreamOutput(session)
+      openFile: async (request: TransferFileRequest, signal: AbortSignal): Promise<TransferOutputFile> => {
+        signal.throwIfAborted()
+        const exactSize = bigintToSafeNumber(request.exactSize, 'hot-switch delivery size')
+        this.#buffer = new Uint8Array(exactSize)
+        this.#writtenBytes = 0
+        return Object.freeze({
+          completedRanges: Object.freeze([]),
+          alreadyCompleted: false,
+          writeAt: async (offset: bigint, data: Uint8Array) => {
+            await outputFence.waitForWrite()
+            const start = bigintToSafeNumber(offset, 'hot-switch write offset')
+            this.#buffer.set(data, start)
+            this.#writtenBytes = Math.max(this.#writtenBytes, start + data.byteLength)
+          },
+          checkpoint: () => Promise.resolve(),
+          commit: () => Promise.resolve(),
+          pause: () => Promise.resolve(),
+          abort: () => Promise.resolve(),
+        })
+      },
+    })
   }
 
   async snapshot(): Promise<{ readonly bytes: number; readonly sha256: string }> {
-    const length = this.#chunks.reduce((total, chunk) => total + chunk.byteLength, 0)
-    const bytes = new Uint8Array(length)
-    let offset = 0
-    for (const chunk of this.#chunks) {
-      bytes.set(chunk, offset)
-      offset += chunk.byteLength
-    }
-    const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))
+    const view = this.#buffer.subarray(0, this.#writtenBytes)
+    const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', view))
     return Object.freeze({
-      bytes: length,
-      sha256: Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join(''),
+      bytes: view.byteLength,
+      sha256: Array.from(digest, byte => byte.toString(16).padStart(2, '0')).join(''),
     })
-  }
-}
-
-export class DirectAtomicStreamOutput implements OutputSession {
-  readonly identity
-  readonly capabilities
-  readonly executionProfile
-  readonly #session: OutputSession
-  #transaction: OutputFileTransaction | undefined
-
-  constructor(session: OutputSession) {
-    this.#session = session
-    this.identity = session.identity
-    this.capabilities = session.capabilities
-    this.executionProfile = session.executionProfile
-  }
-
-  async beginFile(
-    request: OutputFileRequest,
-    signal: AbortSignal,
-  ): Promise<BeginOutputFileResult> {
-    const opened = await this.#session.beginFile(request, signal)
-    this.#transaction = opened.transaction
-    return opened
-  }
-
-  async pauseActiveTransaction(reason: unknown): Promise<void> {
-    // OutputSession intentionally owns no job-wide pause. The plan route retains
-    // the one transaction it opened so rollback remains at the authority boundary.
-    await this.#transaction?.pause(reason)
   }
 }
 
@@ -172,13 +144,9 @@ export function projectAttemptEvidence(
   event: PeerAttemptTraceEvent,
 ): HotSwitchPeerAttemptEvidence {
   const { correlation, ...payload } = event
-  // The browser-test bridge keeps copied bytes instead of inventing a second
-  // diagnostic encoding path; production JSON encoding remains projector-owned.
   return Object.freeze({
     ...payload,
-    protocolSessionIdBytes: Object.freeze([
-      ...correlation.protocolSessionId.copyBytes(),
-    ]),
+    protocolSessionIdBytes: Object.freeze([...correlation.protocolSessionId.copyBytes()]),
     peerPathIdBytes: Object.freeze([...correlation.peerPathId.copyBytes()]),
     attemptIdBytes: Object.freeze([...correlation.peerAttemptId.copyBytes()]),
     ...(correlation.protocolOperationId === undefined
@@ -188,12 +156,7 @@ export function projectAttemptEvidence(
         }),
     ...(correlation.lane === undefined
       ? {}
-      : {
-          lane: Object.freeze({
-            laneId: correlation.lane.id,
-            laneEpoch: correlation.lane.epoch,
-          }),
-        }),
+      : { lane: Object.freeze({ laneId: correlation.lane.id, laneEpoch: correlation.lane.epoch }) }),
   }) as HotSwitchPeerAttemptEvidence
 }
 
@@ -219,32 +182,21 @@ function projectRecoveryCorrelation(
   correlation: PeerRecoveryTraceEvent['correlation'],
 ) {
   return {
-    protocolSessionIdBytes: Object.freeze([
-      ...correlation.protocolSessionId.copyBytes(),
-    ]),
+    protocolSessionIdBytes: Object.freeze([...correlation.protocolSessionId.copyBytes()]),
     peerPathIdBytes: Object.freeze([...correlation.peerPathId.copyBytes()]),
     ...(correlation.peerAttemptId === undefined
       ? {}
-      : {
-          attemptIdBytes: Object.freeze([
-            ...correlation.peerAttemptId.copyBytes(),
-          ]),
-        }),
+      : { attemptIdBytes: Object.freeze([...correlation.peerAttemptId.copyBytes()]) }),
     ...(correlation.lane === undefined
       ? {}
-      : {
-          lane: Object.freeze({
-            laneId: correlation.lane.id,
-            laneEpoch: correlation.lane.epoch,
-          }),
-        }),
+      : { lane: Object.freeze({ laneId: correlation.lane.id, laneEpoch: correlation.lane.epoch }) }),
   }
 }
 
 function describeFailure(reason: unknown, maximumDepth: number, depth = 0): string {
   if (depth >= maximumDepth) return '[nested failure truncated]'
   if (reason instanceof AggregateError) {
-    const nested = reason.errors.map((error) => describeFailure(error, maximumDepth, depth + 1))
+    const nested = reason.errors.map(error => describeFailure(error, maximumDepth, depth + 1))
     const summary = `${reason.name}: ${reason.message}`
     const failures = nested.length === 0 ? summary : `${summary}; errors=[${nested.join(' | ')}]`
     return reason.cause === undefined

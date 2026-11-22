@@ -1,23 +1,31 @@
-import { ReceiverProjections } from '../../../src/ui/controller/projections'
-import { ReceiverDownloads } from '../../../src/ui/receiver-presentation/ReceiverTasks'
 import { useState } from 'react'
-import { presentReceiveOutput } from '../../../src/ui/output'
-import { browserPreferences, initializeBrowserPreferences } from '../../../src/ui/preferences/browser'
 import { createRoot, type Root } from 'react-dom/client'
 import { flushSync } from 'react-dom'
-import { PortalApp } from '../../../src/ui/portal/PortalApp'
+import type { ReceiveAction, RetainedTaskSnapshot } from '../../../src/application/receive/contracts'
+import type { SaveBackendKind } from '../../../src/output/model'
+import type { ReceiveLifecycleState } from '../../../src/transfer/state'
 import { ReceiverApp } from '../../../src/ui/ReceiverApp'
 import type { ReceiverController } from '../../../src/ui/controller'
-import type { ReceiverSnapshot } from '../../../src/ui/model'
-import { EMPTY_PREVIEW } from '../../../src/ui/model'
-import { gallerySnapshot, photoPreview, ROOT_ROWS, SCENARIOS, type CompletedDownloadScenario, type GallerySnapshot, type Scenario } from './fixtures'
-import { syntheticVideo } from './video'
+import { ReceiverProjections } from '../../../src/ui/controller/projections'
+import { EMPTY_PREVIEW, type ReceiverSnapshot } from '../../../src/ui/model'
+import { presentReceiveOutput } from '../../../src/ui/output'
+import { PortalApp } from '../../../src/ui/portal/PortalApp'
+import { usePortalCopy } from '../../../src/ui/portal/locales/use-portal-copy'
+import { browserPreferences, initializeBrowserPreferences } from '../../../src/ui/preferences/browser'
+import { ReceiverDownloads } from '../../../src/ui/receiver-presentation/ReceiverTasks'
 import { TASK_FIXTURES } from '../../../src/ui/tasks/fixtures'
-import type { ReceiveLifecycleState } from '../../../src/output/workspace'
-import type { RetainedReceiveAction, RetainedReceiveOperation } from '../../../src/application/receive/contracts'
 import '../../../src/index.css'
 import '../../../src/App.css'
-import { usePortalCopy } from '../../../src/ui/portal/locales/use-portal-copy'
+import {
+  gallerySnapshot,
+  photoPreview,
+  ROOT_ROWS,
+  SCENARIOS,
+  type CompletedDownloadScenario,
+  type GallerySnapshot,
+  type Scenario,
+} from './fixtures'
+import { syntheticVideo } from './video'
 
 let root: Root | undefined
 let active: GalleryController | undefined
@@ -31,42 +39,62 @@ class GalleryController {
   readonly intents: string[] = []
   #videoUrl: string | undefined
   holdVideoSeeks = false
-  // The requested position of the frame on the canvas, as the production
-  // controller tracks it for rollback.
   #presentedSeconds = 0
+  readonly presentation: ReceiverProjections
+  ensureDownloads = async () => undefined
+
+  constructor(snapshot: GallerySnapshot) {
+    this.#output = snapshot.output
+    this.#snapshot = { ...snapshot, output: this.#presentOutput() }
+    this.presentation = new ReceiverProjections(
+      this.#snapshot,
+      this.retainedActionAdmission,
+      this.activeLifecycleActionAdmission,
+    )
+    this.#unsubscribe = browserPreferences.subscribe(() => {
+      if (browserPreferences.getSnapshot().language !== this.#snapshot.output.language) {
+        this.#publish({ output: this.#presentOutput() })
+      }
+    })
+  }
+
   close = () => {
     this.#unsubscribe()
     if (this.#videoUrl !== undefined) URL.revokeObjectURL(this.#videoUrl)
   }
-  readonly presentation: ReceiverProjections
-  ensureDownloads = async () => undefined
-  constructor(snapshot: GallerySnapshot) {
-    this.#output = snapshot.output
-    this.#snapshot = { ...snapshot, output: this.#presentOutput() }
-    this.presentation = new ReceiverProjections(this.#snapshot, this.retainedActionAdmission, this.activeLifecycleActionAdmission)
-    this.#unsubscribe = browserPreferences.subscribe(() => {
-      if (browserPreferences.getSnapshot().language !== this.#snapshot.output.language) this.#publish({ output: this.#presentOutput() })
-    })
-  }
+
   getSnapshot = () => this.#snapshot
+
   subscribe = (listener: () => void) => {
     this.#listeners.add(listener)
     return () => this.#listeners.delete(listener)
   }
+
   #publish(patch: Partial<ReceiverSnapshot>) {
     this.#snapshot = { ...this.#snapshot, ...patch }
     this.presentation.commit(this.#snapshot)
     for (const listener of this.#listeners) listener()
   }
+
   recordExperienceIntent = (action: string) => { this.intents.push(action) }
   submitKey = () => { this.intents.push('submit-key') }
+
   toggleSelection = (id: string) => {
     this.intents.push('toggle:' + id)
     const rows = this.#snapshot.rows.map(row => row.id === id
-      ? { ...row, selection: row.selection === 'selected' ? 'unselected' as const : 'selected' as const } : row)
-    this.#publish({ rows, draft: { ...this.#snapshot.draft, mode: 'selection', scope: 'selected',
-      empty: !rows.some(row => row.selection !== 'unselected') } })
+      ? { ...row, selection: row.selection === 'selected' ? 'unselected' as const : 'selected' as const }
+      : row)
+    this.#publish({
+      rows,
+      draft: {
+        ...this.#snapshot.draft,
+        mode: 'selection',
+        scope: 'selected',
+        empty: !rows.some(row => row.selection !== 'unselected'),
+      },
+    })
   }
+
   enterSelectionMode = () => this.#publish({ draft: { ...this.#snapshot.draft, mode: 'selection', scope: 'selected' } })
   exitSelectionMode = () => this.#publish({ draft: { ...this.#snapshot.draft, mode: 'scope', scope: 'current-folder', empty: false } })
   clearSelection = () => this.#publish({
@@ -79,8 +107,12 @@ class GalleryController {
   })
   openDirectory = (id: string) => {
     this.intents.push('open-directory:' + id)
-    this.#publish({ breadcrumbs: [{ id: 'root', name: 'Summer photos' }, { id, name: 'Selected folder' }],
-      rows: [{ id: 'child', kind: 'file', name: 'Portrait.png', expectedSize: 524_288n, selection: 'selected' }], pageIndex: 0, pageCount: 1 })
+    this.#publish({
+      breadcrumbs: [{ id: 'root', name: 'Summer photos' }, { id, name: 'Selected folder' }],
+      rows: [{ id: 'child', kind: 'file', name: 'Portrait.png', expectedSize: 524_288n, selection: 'selected' }],
+      pageIndex: 0,
+      pageCount: 1,
+    })
   }
   openBreadcrumb = () => this.#publish({ breadcrumbs: [{ id: 'root', name: 'Summer photos' }], rows: ROOT_ROWS, pageCount: 2 })
   showPage = (pageIndex: number) => {
@@ -88,6 +120,7 @@ class GalleryController {
     this.#publish({ pageIndex, rows: ROOT_ROWS.map(row => ({ ...row, id: row.id + '-page-' + pageIndex })) })
   }
   retryDirectory = () => this.#publish({ browse: { kind: 'ready', error: null } })
+
   previewFile = (id: string) => {
     this.intents.push('preview:' + id)
     if (this.#snapshot.share?.kind === 'video') {
@@ -95,16 +128,24 @@ class GalleryController {
       this.#publish({ preview: { state: 'loading', fileId: id, name } })
       syntheticVideo().then(video => {
         this.#videoUrl = video.url
-        this.#publish({ preview: { state: 'video', fileId: id, name, ...video, presentationId: 2,
-          requestedSeconds: 0, decodeSeconds: 0, seeking: false, failure: null } })
+        this.#publish({
+          preview: {
+            state: 'video', fileId: id, name, ...video, presentationId: 2,
+            requestedSeconds: 0, decodeSeconds: 0, seeking: false, failure: null,
+          },
+        })
       }).catch(() => this.previewMediaFailed())
       return
     }
-    this.#publish({ preview: this.#snapshot.share?.kind === 'file'
-      ? { state: 'error', fileId: id, name: this.#snapshot.share.name, message: 'This format cannot be previewed in this browser.' }
-      : photoPreview(true, id) })
+    this.#publish({
+      preview: this.#snapshot.share?.kind === 'file'
+        ? { state: 'error', fileId: id, name: this.#snapshot.share.name, message: 'This format cannot be previewed in this browser.' }
+        : photoPreview(true, id),
+    })
   }
+
   cancelPreview = () => this.#publish({ preview: EMPTY_PREVIEW })
+
   seekPreview = (seconds: number) => {
     this.intents.push('seek:' + seconds)
     const preview = this.#snapshot.preview
@@ -112,8 +153,7 @@ class GalleryController {
     this.#publish({ preview: { ...preview, requestedSeconds: seconds, seeking: true, failure: null } })
     if (!this.holdVideoSeeks) this.completeVideoSeek(seconds).catch(() => this.previewMediaFailed())
   }
-  // decodeSeconds is the decoder time of the presented keyframe; it defaults to
-  // the request, and differs from it for a seek between keyframes.
+
   completeVideoSeek = async (seconds: number, decoderUrl?: string, decodeSeconds = seconds) => {
     const preview = this.#snapshot.preview
     if (preview.state !== 'video') throw new Error('No video preview is open')
@@ -121,25 +161,30 @@ class GalleryController {
     if (this.#snapshot.preview !== preview) return
     URL.revokeObjectURL(this.#videoUrl!)
     this.#videoUrl = URL.createObjectURL(bytes)
-    // Like production previewSnapshot, a new presentation carries no failure.
-    this.#publish({ preview: { ...preview, seeking: false, failure: null, requestedSeconds: seconds, decodeSeconds,
-      presentationId: preview.presentationId + 1, url: decoderUrl ?? this.#videoUrl } })
+    this.#publish({
+      preview: {
+        ...preview, seeking: false, failure: null, requestedSeconds: seconds, decodeSeconds,
+        presentationId: preview.presentationId + 1, url: decoderUrl ?? this.#videoUrl,
+      },
+    })
   }
-  // The production controller rolls back to the requested position of the
-  // presented frame on failure.
+
   failVideoSeek = (message: string) => {
     const preview = this.#snapshot.preview
     if (preview.state !== 'video') throw new Error('No video preview is open')
     this.#publish({ preview: { ...preview, seeking: false, failure: message, requestedSeconds: this.#presentedSeconds } })
   }
+
   previewMediaPresented = (id: number) => {
     this.intents.push('presented:' + id)
     const preview = this.#snapshot.preview
     if (preview.state === 'video' && preview.presentationId === id) this.#presentedSeconds = preview.requestedSeconds
   }
+
   previewMediaFailed = () => {
     this.#publish({ preview: { state: 'error', fileId: 'photo', name: 'Photo', message: 'The browser could not decode this preview.' } })
   }
+
   chooseArtifact = (id: string) => { this.intents.push('choose:' + id) }
   retryOutputConfirmation = () => { this.intents.push('retry-output') }
   cancelPreparing = () => { this.intents.push('cancel-preparing') }
@@ -148,46 +193,75 @@ class GalleryController {
   activeLifecycleActionAdmission = () => ({ allowed: true, reason: null })
   canRetainCurrentOperation = false
   retainCurrentOperation = async () => false
-  performRetainedAction = (operation: RetainedReceiveOperation, action: RetainedReceiveAction) => {
-    this.intents.push(`retained:${operation.operationId}:${action}`)
+
+  performRetainedAction = (task: RetainedTaskSnapshot, action: ReceiveAction) => {
+    this.intents.push(`retained:${task.taskId}:${action}`)
   }
+
   completeDownload = (kind: CompletedDownloadScenario) => {
     const facts = TASK_FIXTURES[kind === 'published' ? 'saved-cleanup' : 'browser-handoff']!
     const source = facts.lifecycle
     let lifecycle: ReceiveLifecycleState = source
-    let continuation: RetainedReceiveOperation['continuation'] = 'history-only'
-    if (source.kind === 'published') {
-      lifecycle = { ...source, cleanupState: 'clean' }
+    let backend: SaveBackendKind = 'portable'
+    let actions: readonly ReceiveAction[] = ['forget']
+    if (kind === 'published') {
+      backend = 'fsa'
     } else if (kind === 'workspace' && source.kind === 'download-started') {
-      lifecycle = { ...source, attemptKind: 'workspace', packageDigest: 'fixture-package' }
-      continuation = 'retry-download'
+      lifecycle = { ...source, retained: true }
+      backend = 'opfs'
+      actions = ['redownload', 'delete']
     }
-    const display = { objectLabel: this.#snapshot.share?.name ?? 'Shared files',
+    const display = {
+      objectLabel: this.#snapshot.share?.name ?? 'Shared files',
       createdAtMilliseconds: facts.display!.createdAtMilliseconds,
-      ...(kind === 'published' ? { destinationLabel: 'Downloads' } : {}) }
-    this.#output = { ...this.#output, lifecycle }
+      ...(kind === 'published' ? { destinationLabel: 'Downloads' } : {}),
+    }
+    this.#output = {
+      ...this.#output,
+      backend,
+      lifecycle,
+      actions,
+      activeTaskId: null,
+      activeSelectionKey: 'gallery-selection',
+    }
+    const retainedTask: RetainedTaskSnapshot = {
+      taskId: lifecycle.taskId,
+      shareInstance: this.#snapshot.share?.shareInstance ?? 'gallery-share',
+      selectionKey: 'gallery-selection',
+      backend,
+      lifecycle,
+      display,
+      actions,
+      activeElsewhere: false,
+      canSavePartial: false,
+    }
     this.#publish({
       activeReceiveOperationId: null,
       startAdmission: { allowed: true, reason: null, canReleaseCurrent: false },
       taskDisplay: display,
       output: this.#presentOutput(),
-      retained: { ...this.#snapshot.retained, operations: [
-        ...this.#snapshot.retained.operations.filter(operation => operation.operationId !== lifecycle.operationId),
-        { operationId: lifecycle.operationId, receiveIntentDigest: lifecycle.receiveIntentDigest,
-          lifecycleGeneration: lifecycle.generation, lifecycle, display, continuation,
-          actions: kind === 'workspace' ? ['redownload', 'delete'] : ['forget'] },
-      ] },
+      retained: {
+        ...this.#snapshot.retained,
+        tasks: [
+          ...this.#snapshot.retained.tasks.filter(task => task.taskId !== lifecycle.taskId),
+          retainedTask,
+        ],
+      },
     })
   }
+
   advanceProgress = (progress: Partial<ReceiverSnapshot['progress']>) => {
     this.#publish({ progress: { ...this.#snapshot.progress, ...progress } })
   }
+
   updatePathActivity = (pathActivity: ReceiverSnapshot['pathActivity']) => this.#publish({ pathActivity })
   updateConnection = (connection: ReceiverSnapshot['connection']) => this.#publish({ connection })
+
   requestReconnect = () => {
     this.intents.push('reconnect-now')
     this.updateConnection({ kind: 'reconnecting', activity: { kind: 'connecting' } })
   }
+
   startNewReceiveOperation = () => undefined
   prepareReplacementDownload = () => undefined
 }
@@ -197,14 +271,16 @@ export async function mountGallery(scenario: Scenario = 'folder'): Promise<void>
   active?.close()
   initializeBrowserPreferences()
   active = new GalleryController(await gallerySnapshot(scenario))
-  // Vite may give dynamic imports distinct module URLs; bind evidence to the mounted controller.
-  Object.assign(window, { windshareGalleryEvidence: galleryEvidence,
+  Object.assign(window, {
+    windshareGalleryEvidence: galleryEvidence,
     windshareCompleteDownload: active.completeDownload,
     windshareAdvanceProgress: active.advanceProgress,
     windshareUpdatePathActivity: active.updatePathActivity,
     windshareUpdateConnection: active.updateConnection,
-    windshareHoldVideoSeeks: holdVideoSeeks, windshareCompleteVideoSeek: completeVideoSeek,
-    windshareFailVideoSeek: active.failVideoSeek })
+    windshareHoldVideoSeeks: holdVideoSeeks,
+    windshareCompleteVideoSeek: completeVideoSeek,
+    windshareFailVideoSeek: active.failVideoSeek,
+  })
   const container = document.createElement('div')
   container.dataset.galleryScenario = scenario
   const toolbar = document.createElement('nav')
@@ -220,14 +296,20 @@ export async function mountGallery(scenario: Scenario = 'folder'): Promise<void>
   toolbar.append(label)
   document.body.replaceChildren(toolbar, container)
   root = createRoot(container)
-  // Test data supplies snapshots and records intents; every rendered control is
-  // the production receiver, with no networking or destination authority.
   const controller = active as unknown as ReceiverController
   function PortalSurface() {
     const [open, setOpen] = useState(false)
     const copy = usePortalCopy()
-    return <PortalApp controller={controller} downloads={<ReceiverDownloads controller={controller} open={open} onOpenChange={setOpen}
-      entryLabel={copy.downloads} entryDescription={copy.downloadsDescription} />} />
+    return <PortalApp
+      controller={controller}
+      downloads={<ReceiverDownloads
+        controller={controller}
+        open={open}
+        onOpenChange={setOpen}
+        entryLabel={copy.downloads}
+        entryDescription={copy.downloadsDescription}
+      />}
+    />
   }
   flushSync(() => root!.render(scenario.startsWith('portal') ? <PortalSurface /> : <ReceiverApp controller={controller} />))
 }
@@ -242,7 +324,7 @@ export function galleryEvidence() {
   const snapshot = active!.getSnapshot()
   return {
     intents: [...active!.intents],
-    taskId: snapshot.output.lifecycle?.operationId ?? null,
+    taskId: snapshot.output.lifecycle?.taskId ?? null,
     taskLabel: snapshot.taskDisplay?.objectLabel ?? null,
     taskBytes: snapshot.progress.writtenBytes.toString(),
     draftEmpty: snapshot.draft.empty,

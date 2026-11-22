@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from 'vitest'
 import { BrowserCapabilityIntake } from '../../src/ui/capability/intake'
 import { ReceiverController } from '../../src/ui/controller'
 import { BrowserReceiverGateway } from '../../src/application/browser-share/gateway'
-import { INERT_TEST_RECEIVE_COMPOSITION } from './v2-receive-fixture'
 
 describe('capability presentation intake', () => {
   it('activates direct and pasted links before the first connection milestone', async () => {
@@ -10,7 +9,6 @@ describe('capability presentation intake', () => {
     const intake = new BrowserCapabilityIntake(start)
     const observed: number[] = []
     const controller = new ReceiverController(new BrowserReceiverGateway(), {
-      receive: INERT_TEST_RECEIVE_COMPOSITION,
       capabilityIntake: intake,
       trace: { current: event => {
         if (event.name === 'join_transition' && event.transition === 'started') observed.push(start.mock.calls.length)
@@ -34,7 +32,6 @@ describe('capability presentation intake', () => {
 
   it('does not let unavailable presentation consumers prevent joining', async () => {
     const controller = new ReceiverController(new BrowserReceiverGateway(), {
-      receive: INERT_TEST_RECEIVE_COMPOSITION,
       capabilityIntake: { accept() { throw new Error('presentation unavailable') } },
     })
     controller.initialize({ pageUrl: 'https://receiver.invalid/', capabilityInput: null })

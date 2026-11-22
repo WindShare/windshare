@@ -15,7 +15,7 @@ import type {
   IncidentScopeOwner,
 } from '../diagnostics/incident/scope'
 import type { JoinedBrowserShare } from '../application/browser-share/gateway'
-import type { PreviewTraceEvent } from '../application/receive/observation/contracts'
+import type { PreviewTraceEvent } from '../application/receive/contracts'
 import type { DomainTraceSource } from '../diagnostics/trace/ports'
 import { EMPTY_PREVIEW, type ReceiverSnapshot } from './model'
 import {

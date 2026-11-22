@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { PreviewRuntimeError } from '../../src/preview/preview'
 import { VideoPreviewError } from '../../src/preview/mp4-range'
-import { ReceiveSourceInvalidatedError } from '../../src/application/receive/errors'
+import { FaultScope, SourceFaultCode, TransferFaultError, sourceFault } from '../../src/transfer/fault'
 import { PreviewController } from '../../src/ui/preview-controller'
 import type { JoinedBrowserShare } from '../../src/application/browser-share/gateway'
 import {
@@ -82,7 +82,7 @@ describe('v2 preview seek failure presentation', () => {
 
   it.each([
     ['a short broker range read', () => new PreviewRuntimeError('Preview range ended before its exact length')],
-    ['a source invalidation', () => new ReceiveSourceInvalidatedError(new Error('revision changed'))],
+    ['a source invalidation', () => new TransferFaultError(sourceFault(FaultScope.FileLocal, SourceFaultCode.RevisionChanged), 'revision changed')],
     ['a non-retryable remote operation error', () => remoteOperationError(false)],
     ['a retryable remote operation error', () => remoteOperationError(true)],
     ['a non-retryable remote revision error', () => nonRetryableRemoteRevisionError()],

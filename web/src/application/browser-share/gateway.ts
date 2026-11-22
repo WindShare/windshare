@@ -25,7 +25,6 @@ import type {
 import type { Suite02CapabilityLink } from '../../crypto/suite02-link'
 import { capabilityFromInput } from './capability-input'
 import { encodeBase64Url } from '../../crypto/bytes'
-import { bindLocalOutputFailureProtocolAttempt } from '../../output/diagnostics'
 import { BrowserSessionFactory } from '../../receiver/session-factory'
 import { joinBrowserRelays } from '../../receiver/browser-join'
 import type { InitialJoinOptions } from '../../receiver/initial-join'
@@ -42,12 +41,10 @@ import type {
   BlockRouteObservation,
 } from '../../content/broker'
 import { FilePreview } from '../../preview/preview'
+import { inspectSelectionShape, type SelectionShape } from '../../transfer/discovery'
 import { TransferJob, type TransferJobOptions } from '../../transfer/job'
-import { type ReceiveIntent } from '../../transfer/intent'
-import type { PlanExecutionAuthority } from '../../transfer/output/session'
-import type { AuthenticatedDiscoverySource } from '../../transfer/projection/coordinator'
+import type { TransferOutputSession } from '../../transfer/output-port'
 import { type RelayReceiverConnection } from '../../transport/relay/receiver'
-import { JoinedProjectionSource } from './discovery/source'
 
 export interface BrowseDirectory {
   readonly id: Uint8Array<ArrayBuffer>
@@ -188,50 +185,25 @@ export class JoinedBrowserShare {
     return this.#supervisor.subscribeProtocolGeneration(listener)
   }
 
-  projectionSource(
+  inspectSelection(
     selection: FrozenSelectionPolicy,
-    explicitRetry = false,
-  ): AuthenticatedDiscoverySource {
-    return new JoinedProjectionSource({
-      descriptor: this.descriptor,
-      catalog: this.#catalog,
-      selection,
-      protocolSessionId: () => this.#supervisor.protocolSessionId,
-      explicitRetry,
-    })
+    signal: AbortSignal,
+  ): Promise<SelectionShape> {
+    return inspectSelectionShape(this.descriptor, this.#catalog, selection, signal)
   }
 
-  transferJob(
-    plans: PlanExecutionAuthority,
-    intent: ReceiveIntent,
+  createTransferJob(
+    output: TransferOutputSession,
     connectivity: ConnectivityActivation,
-    callbacks: Partial<Pick<
+    options: Partial<Pick<
       TransferJobOptions,
-      | 'observeProgress'
-      | 'onMeasure'
-      | 'trace'
-      | 'transferJobId'
-      | 'incidentScope'
-      | 'outputSettlementDeadline'
+      'transferJobId' | 'onProgress' | 'stripSingleFilePrefix'
     >> & {
       readonly selection?: FrozenSelectionPolicy
     } = {},
   ): TransferJob {
-    const protocolGeneration = this.#supervisor.generationId
-    const protocolSessionIdentity = this.#supervisor.protocolSessionIdentity
     const content = this.#supervisor.content.forRoutes(connectivity.routes)
-    const { selection = this.selection.snapshot(), ...jobCallbacks } = callbacks
-    if (callbacks.incidentScope !== undefined && callbacks.transferJobId !== undefined) {
-      try {
-        bindLocalOutputFailureProtocolAttempt(callbacks.incidentScope, {
-          transferJobId: callbacks.transferJobId,
-          protocolSessionIdentity,
-          protocolGeneration,
-        })
-      } catch {
-        // Correlation is observational and cannot prevent transfer construction.
-      }
-    }
+    const { selection = this.selection.snapshot(), ...jobOptions } = options
     return new TransferJob({
       descriptor: this.descriptor,
       catalog: this.#catalog,
@@ -239,16 +211,8 @@ export class JoinedBrowserShare {
       revisions: content.revisions,
       broker: content.broker,
       lanes: content.lanes,
-      revisionCapacity: Object.freeze({
-        generation: this.#supervisor,
-      }),
-      plans,
-      intent,
-      protocol: Object.freeze({
-        sessionId: this.#supervisor.protocolSessionId,
-        generation: protocolGeneration,
-      }),
-      ...jobCallbacks,
+      output,
+      ...jobOptions,
     })
   }
 

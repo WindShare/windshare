@@ -17,7 +17,7 @@ import type { RevisionReader } from '../../src/content/session-services'
 import { AutomaticPhotoDeferredError } from '../../src/preview/automatic-photo'
 import { ImagePreviewError } from '../../src/preview/image-header'
 import { VideoPreviewError, type Mp4Segment, type PreviewRangeSource } from '../../src/preview/mp4-range'
-import { ReceiveSourceInvalidatedError } from '../../src/application/receive/errors'
+import { FaultScope, SourceFaultCode, TransferFaultError, sourceFault } from '../../src/transfer/fault'
 import {
   FilePreview,
   isPositionLocalPreviewFailure,
@@ -563,7 +563,10 @@ describe('position-local preview failure classification', () => {
   it('treats only a bounded MP4 parser rejection as local to the requested position', () => {
     expect(isPositionLocalPreviewFailure(new VideoPreviewError('MP4 sample geometry exceeds the preview limits'))).toBe(true)
     expect(isPositionLocalPreviewFailure(new PreviewRuntimeError('preview integrity failed'))).toBe(false)
-    expect(isPositionLocalPreviewFailure(new ReceiveSourceInvalidatedError(new Error('revision changed')))).toBe(false)
+    expect(isPositionLocalPreviewFailure(new TransferFaultError(
+      sourceFault(FaultScope.FileLocal, SourceFaultCode.RevisionChanged),
+      'revision changed',
+    ))).toBe(false)
     expect(isPositionLocalPreviewFailure(new DOMException('aborted', 'AbortError'))).toBe(false)
     expect(isPositionLocalPreviewFailure(new Error('range read failed'))).toBe(false)
     expect(isPositionLocalPreviewFailure(undefined)).toBe(false)

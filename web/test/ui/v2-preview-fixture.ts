@@ -13,10 +13,6 @@ import type { CatalogScanProgressListener } from '../../src/catalog/client'
 import { SelectionPolicy } from '../../src/catalog/selection'
 import { type ConnectivityActivation, ConnectivityRouteAuthority } from '../../src/connectivity/receiver-policy'
 import type { FilePreview } from '../../src/preview/preview'
-import type {
-  AuthenticatedDiscoveryRequest,
-  AuthenticatedDiscoverySource,
-} from '../../src/transfer/projection/coordinator'
 import { EMPTY_PREVIEW, type ReceiverSnapshot } from '../../src/ui/model'
 import type { BrowseDirectory } from '../../src/application/browser-share/gateway'
 
@@ -99,8 +95,13 @@ export class FakeJoined {
     return () => undefined
   }
 
-  projectionSource(): AuthenticatedDiscoverySource {
-    return completedProjectionSource()
+  inspectSelection() {
+    return Promise.resolve(Object.freeze({
+      kind: 'single-file' as const,
+      file: this.entry,
+      sourcePath: Object.freeze([this.entry.name]),
+      exactBytes: this.entry.expectedSize,
+    }))
   }
 
   beginPreviewConnectivity(): ConnectivityActivation {
@@ -364,13 +365,4 @@ export function directPreviewSnapshot(): ReceiverSnapshot {
   return {
     preview: EMPTY_PREVIEW,
   } as ReceiverSnapshot
-}
-
-export function completedProjectionSource(): AuthenticatedDiscoverySource {
-  return Object.freeze({
-    discover: async function* (request: AuthenticatedDiscoveryRequest) {
-      yield* []
-      return Object.freeze({ kind: 'complete' as const, settledTargets: request.unsettledTargets })
-    },
-  })
 }

@@ -1,8 +1,8 @@
-import type { TransferProgress } from '../transfer/job'
+import type { TransferProgress } from '../transfer/progress'
 import { EMPTY_SELECTION_DRAFT } from './draft/model'
 import { EMPTY_OUTPUT_PRESENTATION } from './output'
 import { EMPTY_PROGRESS, EMPTY_PREVIEW, type ReceiverProgress } from './model'
-import { EMPTY_RETAINED_INVENTORY } from '../application/receive/retained/model'
+import { EMPTY_RETAINED_INVENTORY } from '../application/receive/contracts'
 import type { ReceiverDiagnosticSnapshot } from '../diagnostics/export/context'
 import type { CatalogEntry } from '../catalog/records'
 import type { SelectionPolicy } from '../catalog/selection'
@@ -150,7 +150,7 @@ export function isAbortError(error: unknown): boolean {
 
 export function receiverDiagnosticSnapshot(snapshot: ReceiverSnapshot, generation: bigint): ReceiverDiagnosticSnapshot {
   const lifecycle = snapshot.output.lifecycle
-  const plan = snapshot.output.plan
+  const backend = snapshot.output.backend
   const progress = snapshot.progress
   return Object.freeze({
     controller: Object.freeze({
@@ -184,12 +184,12 @@ export function receiverDiagnosticSnapshot(snapshot: ReceiverSnapshot, generatio
       capacityWaitAttempts: BigInt(progress.capacityWaitAttempts),
       capacityWaitVisible: progress.capacityWaitVisible,
     }),
-    ...(plan === null
+    ...(backend === null
       ? {}
       : {
           output: Object.freeze({
             generation,
-            planKind: plan.kind,
+            planKind: backend,
           }),
         }),
   })

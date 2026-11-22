@@ -1,10 +1,9 @@
-import type { ArtifactOffers } from '../../output/model/artifacts/offers'
-import type { OfferedArtifactChoice } from '../../output/model/artifacts/choices'
+import type { ArtifactChoice, ArtifactOffers } from '../../output/model/offers'
 
 export type SavingOutcomeKind = 'original-file' | 'folder' | 'zip'
 
 export interface SavingChoice {
-  readonly offered: OfferedArtifactChoice
+  readonly choice: ArtifactChoice
   readonly label: string
   readonly outcome: SavingOutcomeKind
   readonly summary: string
@@ -22,7 +21,7 @@ export interface SavingOutcome {
 
 export interface SavingPresentationTransition {
   readonly name: 'receiver.saving.recommendation'
-  readonly projection_epoch: ArtifactOffers['projectionEpoch'] | null
+  readonly projection_epoch: bigint | null
   readonly choice_id: string | null
   readonly outcome: SavingOutcomeKind | null
   readonly reason: string
@@ -39,3 +38,5 @@ export interface SavingActionPresentation {
   readonly recommendation: string | null
   readonly transition: SavingPresentationTransition
 }
+
+export type SavingOffersInput = ArtifactOffers

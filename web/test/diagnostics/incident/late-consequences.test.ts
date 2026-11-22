@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from 'vitest'
-import { normalizeFileTransferFailure } from '../../../src/transfer/job/failures'
 import { createIncidentReporter } from '../../../src/diagnostics/incident/reporter'
 import {
   createIncidentPolicy, createIncidentScopeIssuer, excludedPresentationDecision,
@@ -19,13 +18,8 @@ describe('late incident consequences', () => {
     const first = root(fixture, 'unrelated failure')
     const stopped = root(fixture, 'root failure')
     const retained = fixture.reporter.history.snapshot()
-    const abort = new AbortController()
-    abort.abort(new Error('stop requested'))
-    const concurrent = new Error('independent cleanup failure')
     for (let index = 0; index < 256; index++) {
-      expect(normalizeFileTransferFailure(concurrent, {
-        signal: abort.signal, incidentScope: stopped.handle,
-      })).toEqual({ kind: 'canceled', diagnostic: abort.signal.reason })
+      stopped.facts.record(cleanup('independent cleanup failure'), 'consequence')
     }
     expect(fixture.reporter.history.snapshot()).toEqual(retained)
     expect(fixture.reporter.history.last()).toBe(retained[1])
@@ -55,9 +49,7 @@ describe('late incident consequences', () => {
     const stopped = fixture.reporter.openScope('receive')
     fixture.reporter.submitDecision(stopped.handle, excludedPresentationDecision('receive', 'user_stopped'))
     stopped.close()
-    const abort = new AbortController()
-    abort.abort(new Error('stop'))
-    normalizeFileTransferFailure(new Error('cleanup after user stop'), { signal: abort.signal, incidentScope: stopped.handle })
+    stopped.facts.record(cleanup('cleanup after user stop'), 'consequence')
     expect(fixture.reporter.history.snapshot()).toHaveLength(1)
     expect(fixture.reporter.history.consequencesSnapshot()).toEqual([])
     expect(fixture.evidence.snapshot().records.some(record =>

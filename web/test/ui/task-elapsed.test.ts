@@ -13,12 +13,17 @@ it.each([
 
 it('uses recorded result timing, not creation time or a new render timestamp', () => {
   const facts = TASK_FIXTURES['saved-cleanup']!
-  const timed = { ...facts, lifecycle: { ...facts.lifecycle,
-    timing: { startedAtMilliseconds: 1_000, resultReadyAtMilliseconds: 126_000 } } }
+  const timed = {
+    ...facts,
+    lifecycle: {
+      ...facts.lifecycle,
+      timing: { startedAtMilliseconds: 1_000, activeMilliseconds: 125_000, finishedAtMilliseconds: 126_000 },
+    },
+  }
   expect(presentTask(timed).elapsedMilliseconds).toBe(125_000)
   expect(presentTask({ ...timed, display: { objectLabel: 'Changed label', createdAtMilliseconds: 10 } })
     .elapsedMilliseconds).toBe(125_000)
   const { timing, ...lifecycle } = timed.lifecycle
-  expect(timing.resultReadyAtMilliseconds).toBe(126_000)
+  expect(timing.finishedAtMilliseconds).toBe(126_000)
   expect(presentTask({ ...timed, lifecycle }).elapsedMilliseconds).toBeNull()
 })

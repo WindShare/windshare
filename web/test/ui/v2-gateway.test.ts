@@ -100,11 +100,7 @@ import { defaultICEEndpointPool } from '../../src/connectivity/ice-policy/defaul
 import { resolveLinkRelays } from '../../src/application/network/resolve'
 import type { CommittedDirectory } from '../../src/catalog/page-store'
 import type { CatalogPage } from '../../src/catalog/records'
-import { offerArtifacts } from '../../src/output/planning/offers'
-import {
-  createSelectionSpec,
-  selectionRulesSpecFromPolicy,
-} from '../../src/transfer/intent'
+import { planArtifactOffers } from '../../src/output/backends/contract'
 import { createCatalogStorageObserver } from '../../src/application/diagnostics/receive-trace'
 import { validateTraceEventPayloadV2 } from '../../src/diagnostics/export/trace-event-payload-v2'
 import type { TraceEventObservationV2 } from '../../src/diagnostics/trace/model'
@@ -115,18 +111,6 @@ import {
   type BrowseDirectory,
   type CatalogStorageObservation,
 } from '../../src/application/browser-share/gateway'
-import {
-  discoverAuthenticatedSelection,
-  RetryableProjectionDiscoveryError,
-} from '../../src/transfer/projection/coordinator'
-import { nextProjectionEpoch } from '../../src/transfer/projection/model'
-import { SelectionProjectionController } from '../../src/transfer/projection/reducer'
-import { type SelectionProjectionState } from '../../src/transfer/projection/contracts'
-import {
-  environment,
-  handoffTarget,
-  workspaceOffer,
-} from '../output/planning/fixture'
 
 describe('v2 browser gateway connectivity injection', () => {
   beforeEach(() => {
@@ -285,35 +269,7 @@ describe('v2 joined-share projection authority', () => {
     expect(unsubscribe).toHaveBeenCalledOnce()
   })
 
-  it('turns a reconnect generation change into an explicit retryable projection fence', async () => {
-    const supervisor = { protocolSessionId: 'session-1' }
-    const joined = new JoinedBrowserShare({
-      descriptor: {
-        syntheticRoot: identity(4),
-        syntheticRootId: 'root',
-      } as never,
-      supervisor: supervisor as never,
-      catalog: {} as never,
-      recoveryIdentity: 'projection-fence',
-    })
-    const source = joined.projectionSource(joined.selection.snapshot())
-    supervisor.protocolSessionId = 'session-2'
-
-    const discovery = source.discover({
-      epoch: nextProjectionEpoch(0n),
-      selectionDigest: 'selection',
-      retainedGenerations: Object.freeze([]),
-      unsettledTargets: Object.freeze([]),
-      signal: new AbortController().signal,
-    })
-
-    await expect(discovery.next()).rejects.toMatchObject({
-      name: RetryableProjectionDiscoveryError.name,
-      reason: 'receiver-reconnecting',
-    })
-  })
-
-  it('preserves the sole shared folder identity and recommends its single-object workspace ZIP', async () => {
+  it('preserves the sole shared folder identity and recommends its single-object OPFS ZIP', async () => {
     const fixture = projectionCatalogFixture()
     const supervisor = { protocolSessionId: 'session-1' }
     const joined = new JoinedBrowserShare({
@@ -327,71 +283,33 @@ describe('v2 joined-share projection authority', () => {
       catalog: fixture.catalog as never,
       recoveryIdentity: 'share-wide-projection',
     })
-    const frozenSelection = joined.selection.snapshot()
-    const selection = await createSelectionSpec({
-      shareInstance: fixture.shareInstanceId,
-      syntheticRoot: fixture.syntheticRootId,
-      rules: selectionRulesSpecFromPolicy(frozenSelection),
+    const shape = await joined.inspectSelection(joined.selection.snapshot(), new AbortController().signal)
+    expect(shape).toEqual({
+      kind: 'tree',
+      suggestedName: 'shared',
+      knownFileCount: 1,
+      knownBytes: 68n,
+      complete: true,
     })
-    const controller = new SelectionProjectionController()
-    controller.beginSelection(selection)
-    const states: SelectionProjectionState[] = []
-
-    for await (const state of discoverAuthenticatedSelection(
-      controller,
-      joined.projectionSource(frozenSelection),
-      new AbortController().signal,
-    )) {
-      states.push(state)
-    }
-
-    const final = states.at(-1)
-    if (final === undefined) throw new Error('projection did not publish completion')
-    expect(states.map((state) => state.projection.unsettledTargets.length)).toEqual([1, 0, 0, 0])
-    expect(final).toMatchObject({
-      discovery: { kind: 'complete' },
-      projection: {
-        unsettledTargets: [],
-        proof: {
-          kind: 'tree',
-          layoutBasis: { kind: 'complete-directory', anchor: { sourcePath: 'shared' } },
-        },
-        metrics: { byteCountLowerBound: 68n },
-        workspaceCostObservation: { version: 1 },
+    const offered = planArtifactOffers({
+      epoch: 1n,
+      selectionKey: 'selection-key',
+      shape,
+      capabilities: {
+        indexedDb: true,
+        fsa: false,
+        opfs: true,
+        portable: true,
+        availableStorageBytes: 100n * 1024n * 1024n,
       },
     })
-
-    const cost = final.projection.workspaceCostObservation
-    if (cost === undefined) throw new Error('completed discovery omitted workspace costs')
-    expect(cost.archiveBytes).toBeGreaterThan(final.projection.metrics.byteCountLowerBound)
-    expect(cost.peakOwnedBytes).toBe(cost.archiveBytes + cost.durableMetadataBytes)
-    const offered = await offerArtifacts(
-      final.projection,
-      final.discovery,
-      environment({
-        targets: [handoffTarget()],
-        workspace: workspaceOffer(),
-      }),
-    )
-    if (offered.kind !== 'artifact-actions') throw new Error('share-wide ZIP was not offered')
-    expect(offered.zip?.route.kind).toBe('workspace-then-publish')
+    if (offered.kind !== 'ready') throw new Error('share-wide ZIP was not offered')
+    expect(offered.zip?.backend).toBe('opfs')
     expect(offered.primary).toMatchObject({
       suggestedName: 'shared.zip',
-      choice: {
-        operation: 'download-zip',
-        artifactKind: 'zip-archive',
-        recovery: 'workspace-resumable',
-        plan: { kind: 'workspace-then-publish' },
-      },
-      route: {
-        kind: 'workspace-then-publish',
-        workspace: { kind: 'origin-private-workspace' },
-        publicationTarget: { kind: 'browser-handoff' },
-      },
-      sizeProjection: {
-        raw: { kind: 'exact', bytes: 68n },
-        artifact: { kind: 'exact' },
-      },
+      backend: 'opfs',
+      artifactKind: 'zip-archive',
+      resumable: true,
     })
   })
 })
@@ -436,10 +354,10 @@ function projectionCatalogFixture() {
       if (generation === undefined) throw new Error('unexpected projection directory')
       return generation.committed
     },
-    pages: (committed: CommittedDirectory) => {
+    page: async (committed: CommittedDirectory) => {
       const generation = generations.get(committed.directoryIdText)
       if (generation === undefined) throw new Error('unexpected committed projection generation')
-      return catalogPages(generation.page)
+      return generation.page
     },
   })
   return Object.freeze({
@@ -488,10 +406,6 @@ function committedCatalogGeneration(input: {
     }),
     page,
   })
-}
-
-async function* catalogPages(page: CatalogPage): AsyncGenerator<CatalogPage> {
-  yield page
 }
 
 function commitment(seed: number): Uint8Array<ArrayBuffer> {

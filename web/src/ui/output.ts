@@ -1,60 +1,63 @@
 import type { Language, UIPreferences } from './preferences/model'
-import { receiverCopy } from './locales/receiver'
-import { EMPTY_RECEIVE_RUNTIME, type ReceiveRuntimeSnapshot, type ReceiveRuntimeState, type TransferResultProjection } from '../application/receive/state'
 import {
-  presentArtifactActivation, presentArtifactOffers,
-  type ArtifactActivationPresentation, type ArtifactOfferPresentation,
-} from './artifact-presentation'
-import { presentReceiveLifecycle, type ReceiveLifecyclePresentation } from './lifecycle-presentation'
-import { presentTransferResult, type TransferResultPresentation } from './transfer-result'
+  EMPTY_RETAINED_INVENTORY,
+  type ActiveActivationSnapshot,
+  type ReceiveAction,
+  type ReceiveRuntimeSnapshot,
+} from '../application/receive/contracts'
+import type { ArtifactOffers, SaveBackendKind } from '../output/model'
+import { EMPTY_TRANSFER_PROGRESS } from '../transfer/progress'
+import type { ReceiveLifecycleState, SafeRenamedSummary, SourceRevisionFailures } from '../transfer/state'
+import { presentActivation, type ArtifactActivationPresentation } from './artifact-presentation'
 
-export interface OutputPresentationSnapshot extends Omit<ReceiveRuntimeSnapshot, 'transferResult' | 'activeOfferedChoice'> {
+export interface OutputPresentationSnapshot {
   readonly language: Language
-  readonly offerPresentation: ArtifactOfferPresentation | null
+  readonly offers: ArtifactOffers | null
+  readonly activation: ActiveActivationSnapshot | null
   readonly activationPresentation: ArtifactActivationPresentation | null
-  readonly lifecyclePresentation: ReceiveLifecyclePresentation | null
-  readonly transferResultPresentation: TransferResultPresentation | null
+  readonly activeTaskId: string | null
+  readonly activeSelectionKey: string | null
+  readonly backend: SaveBackendKind | null
+  readonly lifecycle: ReceiveLifecycleState | null
+  readonly safeRenamed: SafeRenamedSummary | null
+  readonly sourceRevisionFailures: SourceRevisionFailures | null
+  readonly actions: readonly ReceiveAction[]
+  readonly interruption: 'pause' | 'stop' | null
 }
 
-export function presentReceiveOutput(facts: ReceiveRuntimeSnapshot, language: Language = 'en'): OutputPresentationSnapshot {
-  const { activeOfferedChoice, transferResult, ...snapshot } = facts
-  const lifecyclePresentation = facts.lifecycle === null || facts.resolvedArtifact === null || facts.plan === null
-    ? null
-    : presentReceiveLifecycle({
-        state: facts.lifecycle, artifact: facts.resolvedArtifact, plan: facts.plan,
-        workspaceUsage: facts.workspaceUsage, activeControls: facts.activeControls,
-        interruption: facts.receiveInterruption,
-        recoverySummary: facts.recoverySummary, writerOpenPause: facts.writerOpenPause,
-      }, language)
-  return Object.freeze({
-    ...snapshot, language,
-    workspaceUsage: lifecyclePresentation?.usage == null ? null : Object.freeze({
-      ownedBytes: lifecyclePresentation.usage.ownedBytes,
-      ...(lifecyclePresentation.usage.maximumBytes === undefined ? {} : { maximumBytes: lifecyclePresentation.usage.maximumBytes }),
-    }),
-    offerPresentation: facts.offers === null ? null : presentArtifactOffers(facts.offers, language),
-    activationPresentation: presentArtifactActivation(facts.activation, activeOfferedChoice, language),
-    lifecyclePresentation,
-    transferResultPresentation: transferResult === null ? null :
-      presentSourceCoverage(transferResult,
-        presentTransferResult(transferResult.worker, transferResult.lifecycle, language), language),
-  })
-}
+export const EMPTY_RECEIVE_RUNTIME: ReceiveRuntimeSnapshot = Object.freeze({
+  offers: null,
+  activation: null,
+  activeTaskId: null,
+  activeSelectionKey: null,
+  backend: null,
+  lifecycle: null,
+  display: null,
+  safeRenamed: null,
+  sourceRevisionFailures: null,
+  progress: EMPTY_TRANSFER_PROGRESS,
+  actions: Object.freeze([]),
+  interruption: null,
+  retained: EMPTY_RETAINED_INVENTORY,
+})
 
-function presentSourceCoverage(
-  transfer: TransferResultProjection,
-  presentation: TransferResultPresentation,
-  language: Language,
-): TransferResultPresentation {
-  const t = receiverCopy[language].progress
-  const omitted = transfer.measure.sourceOmittedEntries
-  if (omitted === 0n) return presentation
+export function presentReceiveOutput(
+  runtime: ReceiveRuntimeSnapshot,
+  language: Language = 'en',
+): OutputPresentationSnapshot {
   return Object.freeze({
-    title: presentation.tone === 'success' ? t.completedSkipped : presentation.title,
-    tone: 'warning',
-    lines: Object.freeze([...presentation.lines,
-      t.omitted(omitted),
-    ]),
+    language,
+    offers: runtime.offers,
+    activation: runtime.activation,
+    activationPresentation: presentActivation(runtime.activation, language),
+    activeTaskId: runtime.activeTaskId,
+    activeSelectionKey: runtime.activeSelectionKey,
+    backend: runtime.backend,
+    lifecycle: runtime.lifecycle,
+    safeRenamed: runtime.safeRenamed,
+    sourceRevisionFailures: runtime.sourceRevisionFailures,
+    actions: runtime.actions,
+    interruption: runtime.interruption,
   })
 }
 
@@ -63,37 +66,4 @@ export const EMPTY_OUTPUT_PRESENTATION = presentReceiveOutput(EMPTY_RECEIVE_RUNT
 export interface PresentationPreferences {
   getSnapshot(): Pick<UIPreferences, 'language'>
   subscribe(listener: () => void): () => void
-}
-
-/** Rendering can be replaced or detached without changing the task's authority. */
-export class OutputPresentationController {
-  readonly #listeners = new Set<() => void>()
-  readonly #unsubscribe: () => void
-  readonly #unsubscribePreferences: (() => void) | undefined
-  #snapshot: OutputPresentationSnapshot
-
-  constructor(runtime: Pick<ReceiveRuntimeState, 'getSnapshot' | 'subscribe'>, preferences?: PresentationPreferences) {
-    const project = () => presentReceiveOutput(runtime.getSnapshot(), preferences?.getSnapshot().language)
-    const refresh = () => {
-      this.#snapshot = project()
-      for (const listener of this.#listeners) listener()
-    }
-    this.#snapshot = project()
-    this.#unsubscribe = runtime.subscribe(refresh)
-    this.#unsubscribePreferences = preferences?.subscribe(() => {
-      if (preferences.getSnapshot().language !== this.#snapshot.language) refresh()
-    })
-  }
-
-  readonly getSnapshot = (): OutputPresentationSnapshot => this.#snapshot
-  readonly subscribe = (listener: () => void): (() => void) => {
-    this.#listeners.add(listener)
-    return () => this.#listeners.delete(listener)
-  }
-
-  close(): void {
-    this.#unsubscribe()
-    this.#unsubscribePreferences?.()
-    this.#listeners.clear()
-  }
 }

@@ -6,13 +6,13 @@ import {
   type CheckpointFaultCode as CheckpointFaultCodeValue,
   type Fault,
   type OutputFaultCode as OutputFaultCodeValue,
-} from '../../transfer/failure/fault'
+} from '../../transfer/fault'
 import type {
-  NeedsAttentionReason,
-  PartialDirectoryReason,
+  ReceiveFailureReason,
   ReceiveLifecycleState,
-  RestartRequiredReason,
-} from '../../transfer/lifecycle/state'
+  ReceivePartialReason,
+  ReceivePauseReason,
+} from '../../transfer/state'
 import {
   CONNECTIVITY_FAILURE_SCOPES,
   TYPED_PEER_ERROR_CODES,
@@ -130,10 +130,9 @@ export type NativeFailureClass = (typeof NATIVE_FAILURE_CLASSES)[number]
 
 type ReceiveLifecycleKind = ReceiveLifecycleState['kind']
 type LifecycleFailureReason =
-  | Extract<ReceiveLifecycleState, { kind: 'resumable-start' }>['reason']
-  | PartialDirectoryReason
-  | RestartRequiredReason
-  | NeedsAttentionReason
+  | ReceivePauseReason
+  | ReceivePartialReason
+  | ReceiveFailureReason
 
 export interface FailureFactByKind {
   readonly fault: Readonly<{ fault: Fault }>
@@ -175,42 +174,20 @@ export type FailureFact<Kind extends FailureFactKind = FailureFactKind> =
     : never
 
 const lifecycleKinds = [
-  'intent-frozen',
-  'resumable-start',
   'preparing',
-  'receiving',
-  'resumable-receive',
-  'source-invalidated',
-  'finalizing-tree',
-  'materialization-sealed',
-  'packaging',
-  'resumable-package',
-  'artifact-sealed',
-  'waiting-to-save',
-  'publishing-managed',
-  'handing-off',
-  'published',
+  'downloading',
+  'paused',
+  'ready-to-save',
   'download-started',
-  'partial-directory',
-  'restart-required',
-  'discarded',
-  'needs-attention',
+  'saved',
+  'partial',
+  'failed',
 ] as const satisfies readonly ReceiveLifecycleKind[]
 
 const lifecycleReasonsByKind = {
-  'resumable-start': ['paused', 'failed'],
-  'partial-directory': ['failures', 'stopped'],
-  'restart-required': [
-    'portable-aborted',
-    'source-revision-changed',
-    'preparation-invalidated',
-    'content-session-ended',
-  ],
-  'needs-attention': [
-    'target-ownership-unknown',
-    'publication-unknown',
-    'cleanup-unknown',
-  ],
+  paused: ['user', 'interrupted', 'storage-full', 'permission-needed'],
+  partial: ['failures', 'stopped'],
+  failed: ['source-changed', 'cancelled', 'session-ended', 'error'],
 } as const
 
 const outputFaultCodes = Object.values(OutputFaultCode) as readonly OutputFaultCodeValue[]
@@ -508,18 +485,9 @@ function isLifecycleReason(
   kind: ReceiveLifecycleKind,
   reason: unknown,
 ): reason is LifecycleFailureReason | undefined {
-  if (kind === 'resumable-start') {
-    return isMember(lifecycleReasonsByKind[kind], reason)
-  }
-  if (kind === 'partial-directory') {
-    return isMember(lifecycleReasonsByKind[kind], reason)
-  }
-  if (kind === 'restart-required') {
-    return isMember(lifecycleReasonsByKind[kind], reason)
-  }
-  if (kind === 'needs-attention') {
-    return isMember(lifecycleReasonsByKind[kind], reason)
-  }
+  if (kind === 'paused') return isMember(lifecycleReasonsByKind.paused, reason)
+  if (kind === 'partial') return isMember(lifecycleReasonsByKind.partial, reason)
+  if (kind === 'failed') return isMember(lifecycleReasonsByKind.failed, reason)
   return reason === undefined
 }
 

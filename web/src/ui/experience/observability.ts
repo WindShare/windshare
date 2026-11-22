@@ -19,21 +19,35 @@ export class ReceiverExperienceObservability {
       for (const task of composeTasks(snapshot).tasks) {
         const current = task.transition
         if (compareTaskTransition(this.#tasks.get(task.operationId) ?? null, current) !== null) {
-          observer(Object.freeze({ name: 'receiver_experience', transition: 'task',
-            operationId: current.operation_id, generation: current.generation,
-            stage: current.stage, reason: current.reason, attention: current.attention,
-            completeness: current.completeness, publication: current.publication,
-            elapsedMilliseconds: task.elapsedMilliseconds }))
+          observer(Object.freeze({
+            name: 'receiver_experience',
+            transition: 'task',
+            operationId: current.operation_id,
+            generation: current.generation,
+            stage: current.stage,
+            reason: current.reason,
+            attention: current.attention,
+            completeness: current.completeness,
+            publication: current.publication,
+            elapsedMilliseconds: task.elapsedMilliseconds,
+          }))
         }
         tasks.set(task.operationId, current)
       }
       this.#tasks = tasks
-      const current = presentSavingActions({ offers: snapshot.output.offers,
-        blockedBy: snapshot.startAdmission.reason }).transition
+      const current = presentSavingActions({
+        offers: snapshot.output.offers,
+        blockedBy: snapshot.startAdmission.reason,
+      }).transition
       if (compareSavingTransition(this.#saving, current) !== null) {
-        observer(Object.freeze({ name: 'receiver_experience', transition: 'saving',
-          projectionEpoch: current.projection_epoch, choiceId: current.choice_id,
-          outcome: current.outcome, reason: current.reason }))
+        observer(Object.freeze({
+          name: 'receiver_experience',
+          transition: 'saving',
+          projectionEpoch: current.projection_epoch,
+          choiceId: current.choice_id,
+          outcome: current.outcome,
+          reason: current.reason,
+        }))
       }
       this.#saving = current
     } catch {
@@ -41,12 +55,19 @@ export class ReceiverExperienceObservability {
     }
   }
 
-  intent(action: string, snapshot: ReceiverSnapshot,
-    operation?: Readonly<{ operationId: string; generation: bigint }>): void {
+  intent(
+    action: string,
+    snapshot: ReceiverSnapshot,
+    operation?: Readonly<{ operationId: string; generation: bigint }>,
+  ): void {
     try {
-      this.#source?.current?.(Object.freeze({ name: 'receiver_experience', transition: 'intent',
-        action, operationId: operation?.operationId ?? snapshot.output.receiveIntent?.operationId ?? null,
-        generation: operation?.generation ?? snapshot.output.lifecycle?.generation ?? 0n }))
+      this.#source?.current?.(Object.freeze({
+        name: 'receiver_experience',
+        transition: 'intent',
+        action,
+        operationId: operation?.operationId ?? snapshot.output.lifecycle?.taskId ?? null,
+        generation: operation?.generation ?? snapshot.output.lifecycle?.generation ?? 0n,
+      }))
     } catch {
       // A diagnostic sink cannot change whether a user's action is admitted.
     }

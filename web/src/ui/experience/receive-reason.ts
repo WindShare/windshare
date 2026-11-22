@@ -1,4 +1,4 @@
-import type { ReceiveBlockReason } from '../../application/receive/admission'
+import type { ReceiveBlockReason } from '../../application/receive/contracts'
 import type { Language } from '../preferences/model'
 import { receiverCopy } from '../locales/receiver'
 

@@ -4,51 +4,23 @@ import { createBrowserDiagnosticsComposition } from '../../src/application/diagn
 import type { IncidentRecordV2 } from '../../src/diagnostics/export/incident-record-v2'
 import {
   createFailureIdentity,
+  incidentPresentationDecision,
+  nativeOutputFailureFact,
   type ProtocolMessageKindV1,
 } from '../../src/diagnostics/incident'
-import { prepareFSAOperationBindingTransition } from '../../src/output/browser/indexeddb-root-binding'
-import { IndexedDbReceiveOperationRepository } from '../../src/output/browser/indexeddb-repository'
-import { fsaRootMutationLockName } from '../../src/output/browser/namespace-mutation'
-import {
-  type OutputDiagnosticsPorts,
-  type OutputFailureSinks,
-} from '../../src/output/diagnostics'
-import { PersistedReceiveOperationReopenAuthority } from '../../src/output/resume/reopen-authority'
-import { receiveOperationResumeDescriptor } from '../../src/output/resume/descriptor'
-import {
-  decodeStoredReceiveLifecycleState,
-  storedReceiveLifecycleState,
-} from '../../src/output/workspace/state-codec'
-import {
-  type ReceiveLifecycleState,
-} from '../../src/output/workspace'
-import {
-  createDirectTreePlan,
-  createFSANamedEntryReservation,
-  createReceiveIntent,
-  createSelectionSpec,
-  createSingleFileDirectoryTreeArtifact,
-  deriveArtifactChoiceIdentity,
-  type ReceiveIntent,
-} from '../../src/transfer/intent'
-import { FSAReceiveOperation } from '../../src/application/browser-receive/fsa/operation'
-import { RetainedInventoryCoordinator } from '../../src/application/receive/retained/coordinator'
-import type { JoinedBrowserShare } from '../../src/application/browser-share/gateway'
-import type { ReceiverDiagnosticSnapshot } from '../../src/diagnostics/export/context'
-import type {
-  ReceiveCompositionPort,
-  RetainedReceiveInventory,
-  RetainedReceiveOperation,
-} from '../../src/application/receive/contracts'
 import {
   createOutputTraceSource,
   createProtocolTraceSource,
-  createReceiverTraceSource,
 } from '../../src/application/diagnostics/receive-trace'
+import type { ReceiverDiagnosticSnapshot } from '../../src/diagnostics/export/context'
+import { reopenFSASession } from '../../src/output/backends/fsa'
+import { ReceiveStore } from '../../src/output/store/database'
+import { acquireTaskLock } from '../../src/output/store/tab-lock'
+import type { ReceiveTaskRecord } from '../../src/output/store/types'
+import { classifyNativeError } from '../../src/transfer/fault'
+import { initialReceiveState, transitionReceiveState, type ReceiveLifecycleState } from '../../src/transfer/state'
+
 const EVIDENCE_CLOCK_MILLISECONDS = Date.parse('2026-08-19T09:00:00.000Z')
-const ACTION_TIMEOUT_MILLISECONDS = 5_000
-const PRIVATE_REOPEN_DETAIL = 'private FSA continuation detail C:/receiver/secret.txt'
-const PRIVATE_CLEANUP_DETAIL = 'private lease cleanup detail /receiver/secret.txt'
 const PRIVATE_FIXTURE_NAME = 'private-fixture.bin'
 
 export interface FSAReconstructionCorrelation {
@@ -66,66 +38,56 @@ export interface FSAReconstructionResult {
 }
 
 export type FSAReconstructionAttempt =
-  | Readonly<{
-      kind: 'unavailable'
-      reason: 'origin-private-storage-unavailable'
-    }>
-  | Readonly<{
-      kind: 'reconstructed'
-      result: FSAReconstructionResult
-    }>
+  | Readonly<{ kind: 'unavailable'; reason: 'origin-private-storage-unavailable' }>
+  | Readonly<{ kind: 'reconstructed'; result: FSAReconstructionResult }>
 
 /**
- * Reproduces the failure at the real FSA reopen/settlement seam while keeping the
- * network operation external. The caller supplies a tuple observed from the live
- * browser/sender exchange so this bundle and the sender artifact share authority.
- * Origin-private storage is fixture authority, not part of that live receive; its
- * absence therefore yields an explicit unsupported result instead of rewriting a
- * successful product outcome as a reconstruction failure.
+ * Reproduces a real cross-tab lock conflict when reopening a paused FSA task against
+ * `ReceiveStore` + `navigator.locks`, verifying that diagnostic bundles preserve typed
+ * failure context and protocol correlation without leaking private file names or paths.
  */
 export async function reconstructFSAContinuationFailure(
   input: FSAReconstructionCorrelation,
 ): Promise<FSAReconstructionAttempt> {
   const getDirectory = reconstructionDirectory()
   if (getDirectory === undefined) {
-    return Object.freeze({
-      kind: 'unavailable',
-      reason: 'origin-private-storage-unavailable',
-    })
+    return Object.freeze({ kind: 'unavailable', reason: 'origin-private-storage-unavailable' })
   }
   const correlation = protocolCorrelation(input)
-  const intent = await directTreeIntent()
-  const databaseName = `windshare-w6-reconstruction-${crypto.randomUUID()}`
+  const taskId = identity(4)
+  const databaseName = `windshare-reconstruction-${crypto.randomUUID()}`
   const parent = await getDirectory()
-  const repository = await IndexedDbReceiveOperationRepository.open(databaseName)
-  const stableLifecycle = resumableReceive(intent, 4n)
-  const binding = await prepareFSAOperationBindingTransition({
-    repository,
-    intent,
-    parent,
-    preClickRanking: [(await deriveArtifactChoiceIdentity(intent.artifact, intent.plan)).id],
+  const store = await ReceiveStore.open(databaseName)
+  const paused = transitionReceiveState(initialReceiveState(taskId, EVIDENCE_CLOCK_MILLISECONDS), {
+    kind: 'paused',
+    reason: 'user',
+    completedFiles: 1n,
+    completedBytes: 16n,
+    retainedBytes: 16n,
+    discoveredFiles: 1n,
+    discoveredBytes: 16n,
+    discoveryComplete: true,
+  }, EVIDENCE_CLOCK_MILLISECONDS + 10)
+  const taskRecord: ReceiveTaskRecord = Object.freeze({
+    taskId,
+    shareInstance: identity(1),
+    selectionKey: 'reconstruction-selection',
+    selection: { shareInstance: identity(1), syntheticRoot: identity(2), defaultSelected: true, rules: [] },
+    artifact: { kind: 'directory-tree' as const, name: PRIVATE_FIXTURE_NAME, singleFileId: identity(3), singleFilePath: [PRIVATE_FIXTURE_NAME], singleFileSize: 16n },
+    backend: 'fsa' as const,
+    lifecycle: paused,
+    target: { kind: 'fsa' as const, parentHandle: parent, reservedName: PRIVATE_FIXTURE_NAME, collisionIndex: 0, singleFile: true },
+    discoveryComplete: true,
+    updatedAt: EVIDENCE_CLOCK_MILLISECONDS + 10,
   })
-  await repository.commitTransition({
-    operationId: intent.operationId,
-    records: [
-      ...(binding.transition.records ?? []),
-      await storedReceiveLifecycleState(stableLifecycle),
-    ],
-    ...(binding.transition.handles === undefined
-      ? {}
-      : { handles: binding.transition.handles }),
-  })
-  repository.close()
+  await store.putTask(taskRecord)
 
   let clockMilliseconds = EVIDENCE_CLOCK_MILLISECONDS
-  let lifecycle: ReceiveLifecycleState = stableLifecycle
+  let lifecycle: ReceiveLifecycleState = paused
   const incidentConsole: unknown[] = []
   const snapshot = (): ReceiverDiagnosticSnapshot => Object.freeze({
     controller: Object.freeze({ generation: 7n, phase: 'browsing' }),
-    lifecycle: Object.freeze({
-      generation: lifecycle.generation,
-      state: lifecycle.kind,
-    }),
+    lifecycle: Object.freeze({ generation: lifecycle.generation, state: lifecycle.kind }),
     progress: Object.freeze({
       generation: 7n,
       discovery: 'complete',
@@ -143,14 +105,12 @@ export async function reconstructFSAContinuationFailure(
       capacityWaitAttempts: 0n,
       capacityWaitVisible: false,
     }),
-    output: Object.freeze({ generation: 7n, planKind: 'direct-tree' }),
+    output: Object.freeze({ generation: 7n, planKind: 'fsa' }),
   })
   const diagnostics = createBrowserDiagnosticsComposition({
     build: browserBuildSnapshot(),
     secureContext: globalThis.isSecureContext,
-    consoleSink: Object.freeze({
-      error: (record: IncidentRecordV2) => incidentConsole.push(record),
-    }),
+    consoleSink: Object.freeze({ error: (record: IncidentRecordV2) => incidentConsole.push(record) }),
     controllerSnapshot: snapshot,
     randomBytes: length => identityBytes(211, length),
     clock: Object.freeze({
@@ -171,105 +131,36 @@ export async function reconstructFSAContinuationFailure(
   clockMilliseconds += 1
 
   const outputTrace = createOutputTraceSource(diagnostics.trace)
-  const operation = retainedOperation(intent, stableLifecycle)
-  let listCount = 0
-  const inventory: RetainedReceiveInventory = Object.freeze({
-    operations: Object.freeze([operation]),
-    presentationFailures: Object.freeze([]),
-    act: async (
-      _operation: RetainedReceiveOperation,
-      action: Parameters<RetainedReceiveInventory['act']>[1],
-      signal: AbortSignal,
-      failures?: OutputFailureSinks,
-    ) => {
-      if (action !== 'continue') throw new TypeError('reconstruction requires continuation')
-      signal.throwIfAborted()
-      const outputDiagnostics = diagnosticsFor(outputTrace, failures)
-      const reopen = new PersistedReceiveOperationReopenAuthority({
-        repositoryFactory: () => IndexedDbReceiveOperationRepository.open(databaseName),
-        clock: { now: () => clockMilliseconds },
-        diagnostics: outputDiagnostics,
-      })
-      const reopened = await reopen.reopen(
-        requiredDescriptor(stableLifecycle),
-        'continue',
-        failures,
-        'preserve',
-      )
-      if (reopened.kind !== 'direct-tree') {
-        throw new TypeError('FSA reconstruction reopened a non-FSA operation')
-      }
-      const releaseRootLock = await holdFSARootLock(parent)
-      try {
-        await FSAReceiveOperation.reopen(reopened, outputDiagnostics)
-        throw new Error('FSA continuation unexpectedly reopened')
-      } catch (error) {
-        await releaseRootLock()
-        lifecycle = await readLifecycle(databaseName, intent.operationId)
-        // Losing the lease at this cut models the owned close failure that follows
-        // the primary reopen/continuation result; it must remain a consequence.
-        await removeLease(databaseName, intent.operationId, reopened.lease.leaseId)
-        let cleanupError: unknown
-        try {
-          await reopened.close()
-        } catch (errorClosingAuthority) {
-          // The reopen authority owns both the native cleanup classification and
-          // its trace event; this harness must not duplicate that evidence.
-          cleanupError = errorClosingAuthority
-        }
-        if (cleanupError !== undefined) {
-          throw new AggregateError(
-            [error, cleanupError],
-            `${PRIVATE_REOPEN_DETAIL}; ${PRIVATE_CLEANUP_DETAIL}`,
-            { cause: error },
-          )
-        }
-        throw error
-      }
-    },
-    close: () => undefined,
-  })
-  const emptyInventory: RetainedReceiveInventory = Object.freeze({
-    operations: Object.freeze([]),
-    presentationFailures: Object.freeze([]),
-    act: () => Promise.reject(new TypeError('empty inventory has no actions')),
-    close: () => undefined,
-  })
-  const receive = Object.freeze({
-    retained: Object.freeze({
-      list: async () => {
-        listCount += 1
-        return listCount === 1 ? inventory : emptyInventory
-      },
-    }),
-  }) as unknown as ReceiveCompositionPort
-  const joined = Object.freeze({
-    descriptor: Object.freeze({
-      shareInstanceId: intent.selection.shareInstance,
-      syntheticRootId: intent.selection.syntheticRoot,
-    }),
-    protocolSessionId: input.protocolSessionId,
-  }) as unknown as JoinedBrowserShare
+  const competingLock = await acquireTaskLock(taskId)
+  const scope = diagnostics.incidents.openScope('retained_action')
   let actionError: unknown
-  const coordinator = new RetainedInventoryCoordinator({
-    receive,
-    isDisposed: () => false,
-    currentJoinedShare: () => joined,
-    continuationBlocked: () => false,
-    adoptContinuation: () => Promise.reject(new Error('failed continuation cannot be adopted')),
-    ownsRuntime: () => false,
-    publish: () => undefined,
-    trace: createReceiverTraceSource(diagnostics.trace),
-    onActionError: error => { actionError = error },
-    incidents: diagnostics.incidents,
-  })
+  try {
+    await reopenFSASession({
+      task: taskRecord,
+      store,
+      allowPermissionPrompt: false,
+      diagnostics: { backend: 'file_system_access', trace: outputTrace },
+    })
+    throw new Error('FSA reopen unexpectedly succeeded while another tab held the Web Lock')
+  } catch (error) {
+    actionError = error
+    const trigger = scope.facts.record(nativeOutputFailureFact({
+      stage: 'reopen',
+      recoveryDisposition: 'resumable_receive',
+      nativeClass: classifyNativeError(error),
+      operation: 'reopen',
+      error,
+    }), 'contributor')
+    diagnostics.incidents.submitDecision(scope.handle, incidentPresentationDecision('retained_action', 'failed', trigger))
+  } finally {
+    scope.close()
+    await competingLock.release()
+    lifecycle = (await store.getTask(taskId))?.lifecycle ?? paused
+    store.close()
+    await deleteDatabase(databaseName)
+  }
 
-  await coordinator.load()
-  coordinator.perform(operation, 'continue')
-  await waitFor(() => actionError !== undefined && diagnostics.runtime.inspectLastFailure() !== null)
-  coordinator.close(new DOMException('evidence completed', 'AbortError'))
   const bundle = diagnostics.runtime.export()
-
   return Object.freeze({
     kind: 'reconstructed',
     result: Object.freeze({
@@ -277,11 +168,7 @@ export async function reconstructFSAContinuationFailure(
       incidentConsoleCount: incidentConsole.length,
       actionErrorName: actionError instanceof Error ? actionError.name : 'unknown',
       restoredLifecycle: lifecycle.kind,
-      forbiddenSentinels: Object.freeze([
-        PRIVATE_REOPEN_DETAIL,
-        PRIVATE_CLEANUP_DETAIL,
-        PRIVATE_FIXTURE_NAME,
-      ]),
+      forbiddenSentinels: Object.freeze([PRIVATE_FIXTURE_NAME]),
     }),
   })
 }
@@ -297,154 +184,6 @@ function protocolCorrelation(input: FSAReconstructionCorrelation) {
   })
 }
 
-function retainedOperation(
-  intent: ReceiveIntent,
-  lifecycle: ReturnType<typeof resumableReceive>,
-): RetainedReceiveOperation {
-  return Object.freeze({
-    operationId: intent.operationId,
-    receiveIntentDigest: intent.digest,
-    lifecycleGeneration: lifecycle.generation,
-    lifecycle,
-    continuation: 'resume-receive',
-    actions: Object.freeze(['continue'] as const),
-  })
-}
-
-function diagnosticsFor(
-  trace: ReturnType<typeof createOutputTraceSource>,
-  failures: OutputFailureSinks | undefined,
-): OutputDiagnosticsPorts {
-  return Object.freeze({
-    backend: 'file_system_access',
-    trace,
-    ...(failures === undefined ? {} : { failures }),
-  })
-}
-
-async function waitFor(predicate: () => boolean): Promise<void> {
-  const deadline = performance.now() + ACTION_TIMEOUT_MILLISECONDS
-  while (!predicate()) {
-    if (performance.now() >= deadline) {
-      throw new Error('FSA reconstruction did not produce an incident')
-    }
-    await new Promise(resolve => setTimeout(resolve, 0))
-  }
-}
-
-async function directTreeIntent(): Promise<ReceiveIntent> {
-  const selection = await createSelectionSpec({
-    shareInstance: identity(1),
-    syntheticRoot: identity(2),
-    rules: { mode: 'node-id', defaultSelected: true, rules: [] },
-  })
-  const artifact = await createSingleFileDirectoryTreeArtifact({
-    fileId: identity(3),
-    sourcePath: PRIVATE_FIXTURE_NAME,
-    outputName: PRIVATE_FIXTURE_NAME,
-  })
-  const reservation = await createFSANamedEntryReservation({
-    operationId: identity(4),
-    reservationId: identity(5),
-    artifact,
-    authorityRef: identity(6, 32),
-    logicalReservedName: PRIVATE_FIXTURE_NAME,
-    physicalName: PRIVATE_FIXTURE_NAME,
-    collisionIndex: 0,
-  })
-  return createReceiveIntent({
-    selection,
-    artifact,
-    plan: await createDirectTreePlan(artifact, reservation),
-  })
-}
-
-function resumableReceive(
-  intent: ReceiveIntent,
-  generation: bigint,
-): Extract<ReceiveLifecycleState, {
-  readonly kind: 'resumable-receive'
-  readonly payloadKind: 'file-set'
-}> {
-  return Object.freeze({
-    kind: 'resumable-receive',
-    payloadKind: 'file-set',
-    operationId: intent.operationId,
-    receiveIntentDigest: intent.digest,
-    generation,
-    checkpointSetDigest: identity(60, 32),
-    completedFileCount: 1n,
-    retainedBytes: 16n,
-    completedBytes: 16n,
-    selectionFacts: Object.freeze({
-      discoveredFileCount: 1n,
-      discoveredBytes: 16n,
-      discovery: 'complete',
-    }),
-  })
-}
-
-function requiredDescriptor(
-  lifecycle: ReceiveLifecycleState,
-) {
-  const descriptor = receiveOperationResumeDescriptor(lifecycle)
-  if (descriptor === undefined) throw new Error('reconstruction lifecycle has no continuation')
-  return descriptor
-}
-
-async function holdFSARootLock(
-  parent: FileSystemDirectoryHandle,
-): Promise<() => Promise<void>> {
-  let acquired!: () => void
-  const acquiredSignal = new Promise<void>(resolve => { acquired = resolve })
-  let release!: () => void
-  const releaseSignal = new Promise<void>(resolve => { release = resolve })
-  const completion = navigator.locks.request(
-    await fsaRootMutationLockName(parent),
-    { mode: 'exclusive' },
-    async () => {
-      acquired()
-      await releaseSignal
-    },
-  )
-  await acquiredSignal
-  return async () => {
-    release()
-    await completion
-  }
-}
-
-async function readLifecycle(
-  databaseName: string,
-  operationId: string,
-): Promise<ReceiveLifecycleState> {
-  const repository = await IndexedDbReceiveOperationRepository.open(databaseName)
-  try {
-    const record = await repository.readLifecycle(operationId)
-    if (record === undefined) throw new Error('restored FSA lifecycle is missing')
-    return decodeStoredReceiveLifecycleState(record)
-  } finally {
-    repository.close()
-  }
-}
-
-async function removeLease(
-  databaseName: string,
-  operationId: string,
-  leaseId: string,
-): Promise<void> {
-  const repository = await IndexedDbReceiveOperationRepository.open(databaseName)
-  try {
-    await repository.commitTransition({
-      operationId,
-      expectedLeaseId: leaseId,
-      lease: { kind: 'delete', leaseId },
-    })
-  } finally {
-    repository.close()
-  }
-}
-
 function identity(seed: number, length = 16): string {
   return encodeBase64Url(identityBytes(seed, length))
 }
@@ -457,6 +196,14 @@ function reconstructionDirectory(): (() => Promise<FileSystemDirectoryHandle>) |
   const target = globalThis as typeof globalThis & Readonly<{
     __windshareReconstructionDirectory?: () => Promise<FileSystemDirectoryHandle>
   }>
-  const getDirectory = target.__windshareReconstructionDirectory
-  return getDirectory
+  return target.__windshareReconstructionDirectory
+}
+
+function deleteDatabase(name: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.deleteDatabase(name)
+    req.onsuccess = () => resolve()
+    req.onerror = () => reject(req.error)
+    req.onblocked = () => resolve()
+  })
 }

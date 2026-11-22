@@ -1,15 +1,11 @@
 import type { Language } from '../preferences/model'
-import type { ReceiveAdmission } from '../../application/receive/admission'
-import { presentReceiveReason } from '../experience/receive-reason'
-import type { ReceiveLifecycleState } from '../../transfer/lifecycle/state'
-import type { ReceiveOperationDisplay } from '../../output/model/operation-display'
+import type { ReceiveAction, ReceiveAdmission, RetainedTaskSnapshot } from '../../application/receive/contracts'
+import { retainedTaskReadiness } from '../../application/receive/admission'
+import type { ReceiveOperationDisplay } from '../../output/model'
+import type { ReceiveLifecycleState } from '../../transfer/state'
 import type { ReceiverProgress } from '../model'
-import type { RetainedReceiveOperationSnapshot, PendingRetainedReceiveActionSnapshot } from '../../application/receive/retained/model'
-import type { RetainedReceiveAction } from '../../application/receive/contracts'
 import type { OutputPresentationSnapshot } from '../output'
 import { activeTaskAction, retainedTaskAction } from './actions'
-import { recoverySummaryDescription } from '../resumable-file-set-presentation'
-import { retainedContinuationReadiness } from '../../application/receive/retained/readiness'
 import type { TaskBlocking, TaskCompleteness, TaskFacts, TaskPublication, TaskRecoveryReadiness } from './model'
 
 export function activeTaskFacts(input: Readonly<{
@@ -17,25 +13,20 @@ export function activeTaskFacts(input: Readonly<{
   progress: ReceiverProgress
   display?: ReceiveOperationDisplay | null
   blocking?: TaskBlocking | null
-  actionAdmission?: (action: import('../../application/receive/actions').LifecycleUserAction) => ReceiveAdmission
+  actionAdmission?: (action: ReceiveAction) => ReceiveAdmission
 }>, language: Language = 'en'): TaskFacts | null {
   const { output, progress } = input
   const state = output.lifecycle
-  if (state === null) return null
-  const lifecycle = output.lifecyclePresentation
-  const details = [
-    ...(output.transferResultPresentation?.lines ?? []),
-    ...(output.recoverySummary === null ? [] : [recoverySummaryDescription(output.recoverySummary, language)]),
-    ...(lifecycle?.writerOpenPause === null || lifecycle?.writerOpenPause === undefined
-      ? [] : [lifecycle.writerOpenPause.description]),
-    ...(lifecycle?.usage === null || lifecycle?.usage === undefined ? [] : [lifecycle.usage.label]),
-  ]
+  if (state === null || output.backend === null) return null
+
+  const backend = output.backend
   return Object.freeze({
     lifecycle: state,
+    backend,
     display: input.display ?? null,
-    actions: Object.freeze((lifecycle?.actions ?? []).map(action => {
-      const presented = activeTaskAction(action, output.plan?.kind ?? '', language)
-      const admission = input.actionAdmission?.(action.kind)
+    actions: Object.freeze(output.actions.map(action => {
+      const presented = activeTaskAction(action, backend, language)
+      const admission = input.actionAdmission?.(action)
       return admission !== undefined && !admission.allowed
         ? Object.freeze({ ...presented, disabledReason: admission.reason ?? 'actionUnavailable' as const })
         : presented
@@ -46,50 +37,39 @@ export function activeTaskFacts(input: Readonly<{
     publication: publicationFromLifecycle(state),
     progress,
     safeRenamed: output.safeRenamed,
-    details: Object.freeze(details),
-    interruption: output.receiveInterruption?.operation ?? null,
-    execution: Object.freeze({ kind: 'active' }),
+    details: Object.freeze([]),
+    interruption: output.interruption,
   })
 }
 
 export function retainedTaskFacts(
-  operation: RetainedReceiveOperationSnapshot,
-  readiness: TaskRecoveryReadiness = retainedContinuationReadiness(operation, null),
+  task: RetainedTaskSnapshot,
+  readiness: TaskRecoveryReadiness = retainedTaskReadiness(task, null),
   execution: Readonly<{
-    pending?: PendingRetainedReceiveActionSnapshot | null
     blocking?: TaskBlocking | null
-    admission?: (action: RetainedReceiveAction) => ReceiveAdmission
+    admission?: (action: ReceiveAction) => ReceiveAdmission
   }> = {},
   language: Language = 'en',
 ): TaskFacts {
-  const details: string[] = []
-  const localWork = execution.pending?.operationId === operation.operationId &&
-    execution.pending.action === 'continue' &&
-    (operation.continuation === 'resume-package' || operation.continuation === 'resume-local-finalization')
-    ? 'finalizing' : 'idle'
-  if (operation.recoverySummary !== undefined) details.push(recoverySummaryDescription(operation.recoverySummary, language))
-  if (operation.unavailableReason !== undefined) details.push(presentReceiveReason(operation.unavailableReason, language))
   return Object.freeze({
-    lifecycle: operation.lifecycle,
-    display: operation.display ?? null,
-    actions: Object.freeze(operation.actions.map(action => {
-      const presented = retainedTaskAction(operation, action, readiness, language)
+    lifecycle: task.lifecycle,
+    backend: task.backend,
+    display: task.display ?? null,
+    actions: Object.freeze(task.actions.map(action => {
+      const presented = retainedTaskAction(task, action, readiness, language)
       const admission = execution.admission?.(action)
       return admission !== undefined && !admission.allowed
-        ? Object.freeze({ ...presented, disabledReason: admission.reason ?? 'destinationBusy' as const })
+        ? Object.freeze({ ...presented, disabledReason: admission.reason ?? 'busy' as const })
         : presented
     })),
     blocking: execution.blocking ?? null,
     readiness,
-    completeness: completenessFromFacts(operation.lifecycle, null),
-    publication: publicationFromLifecycle(operation.lifecycle),
+    completeness: completenessFromFacts(task.lifecycle, null),
+    publication: publicationFromLifecycle(task.lifecycle),
     progress: null,
-    safeRenamed: null,
-    details: Object.freeze(details),
+    safeRenamed: task.safeRenamed ?? null,
+    details: Object.freeze([]),
     interruption: null,
-    execution: localWork === 'finalizing'
-      ? Object.freeze({ kind: 'local-finalization' })
-      : Object.freeze({ kind: 'retained', continuation: operation.continuation }),
   })
 }
 
@@ -103,22 +83,24 @@ function activeBlocking(blocking: TaskBlocking | null | undefined, progress: Rec
 }
 
 function completenessFromFacts(state: ReceiveLifecycleState, progress: ReceiverProgress | null): TaskCompleteness {
-  // Paused receives remain resumable rather than finalized partial archives.
-  if (state.kind === 'resumable-start' || state.kind === 'resumable-receive') return 'incomplete'
-  if (state.contentWarning !== undefined || state.kind === 'partial-directory') return 'partial'
+  if (state.kind === 'paused') return 'incomplete'
+  if (state.contentWarning !== undefined || state.kind === 'partial') return 'partial'
   if (progress !== null && (progress.fileErrors > 0 || progress.selectionErrors > 0 ||
-      progress.failedDirectories > 0 || progress.discovery === 'failed')) return 'partial'
-  // Publication proves that an artifact is ready. Its retained warning separately records selection omissions.
-  if (['published', 'artifact-sealed', 'waiting-to-save', 'download-started',
-    'publishing-managed', 'handing-off', 'materialization-sealed', 'packaging',
-    'resumable-package'].includes(state.kind)) return 'complete'
+      progress.failedDirectories > 0 || progress.discovery === 'failed')) {
+    return 'partial'
+  }
+  if (state.kind === 'saved' || state.kind === 'ready-to-save' || state.kind === 'download-started') {
+    return 'complete'
+  }
   if (progress !== null && progress.discovery === 'complete' &&
       progress.completedFiles === progress.discoveredFiles &&
-      progress.completedBytes === progress.discoveredBytes) return 'complete'
+      progress.completedBytes === progress.discoveredBytes) {
+    return 'complete'
+  }
   return 'unknown'
 }
 
 function publicationFromLifecycle(state: ReceiveLifecycleState): TaskPublication {
-  if (state.kind === 'published' || state.kind === 'partial-directory') return 'saved'
+  if (state.kind === 'saved' || state.kind === 'partial') return 'saved'
   return state.kind === 'download-started' ? 'browser-handoff' : 'unpublished'
 }

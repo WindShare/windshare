@@ -13,157 +13,110 @@ export interface StageCopy {
 export function resolveTaskStage(facts: TaskFacts, language: Language = 'en'): StageCopy {
   const t = receiverCopy[language].stage
   const state = facts.lifecycle
-  if (facts.execution.kind === 'local-finalization') return stage('finishing', t.finishingLocally,
-    t.finishingLocallyHint, 'local-finalization-active')
-  if (state.kind === 'published' || state.kind === 'partial-directory') {
-    return savedStage(facts, language)
+
+  if (facts.interruption !== null) {
+    return stage('finishing', facts.interruption === 'pause' ? t.pausing : t.stopping, t.settling, facts.interruption)
   }
-  if (state.kind === 'download-started') return stage('handed-to-browser',
-    facts.completeness === 'partial' ? t.partialHandoff
-      : t.handoff,
-    t.handoffHint, state.kind)
-  if (state.kind === 'waiting-to-save') return stage('ready-to-save', t.readyToSave,
-    facts.completeness === 'partial'
-      ? t.partialLocal
-      : t.resultLocal, state.kind)
-  if (facts.execution.kind === 'retained') return retainedStage(facts, facts.execution.continuation, language)
-  if (facts.interruption === 'finish') return stage('finishing', t.slowFinish,
-    t.slowFinishHint,
-    'settlement-deadline')
-  if (facts.interruption !== null) return stage('finishing',
-    facts.interruption === 'pause' ? t.pausing : t.stopping,
-    t.settling, facts.interruption)
-  if (state.kind === 'receiving') return activeReceivingStage(facts, language)
-  return executionStage(facts, language)
+
+  switch (state.kind) {
+    case 'preparing':
+      return stage('preparing', t.preparing, t.preparingHint, state.kind)
+    case 'downloading':
+      return downloadingStage(facts, state, language)
+    case 'paused':
+      return pausedStage(facts, state, language)
+    case 'ready-to-save':
+      return stage(
+        'ready-to-save',
+        t.readyToSave,
+        facts.completeness === 'partial' ? t.partialLocal : t.resultLocal,
+        state.kind,
+      )
+    case 'download-started':
+      return stage(
+        'handed-to-browser',
+        facts.completeness === 'partial' ? t.partialHandoff : t.handoff,
+        t.handoffHint,
+        state.kind,
+      )
+    case 'saved':
+    case 'partial': {
+      const description = facts.display?.destinationLabel === undefined
+        ? t.savedHint
+        : t.savedTo(destinationLabel(facts.display.destinationLabel, language))
+      return stage(
+        'saved',
+        state.kind === 'partial' || facts.completeness === 'partial' ? t.partiallySaved : t.saved,
+        description,
+        state.kind,
+      )
+    }
+    case 'failed':
+      return failedStage(state.reason, language)
+  }
 }
 
-function savedStage(facts: TaskFacts, language: Language): StageCopy {
+function downloadingStage(
+  facts: TaskFacts,
+  state: Extract<TaskFacts['lifecycle'], { kind: 'downloading' }>,
+  language: Language,
+): StageCopy {
   const t = receiverCopy[language].stage
-  const description = facts.display?.destinationLabel === undefined
-    ? t.savedHint : t.savedTo(destinationLabel(facts.display.destinationLabel, language))
-  return stage('saved', facts.completeness === 'partial' ? t.partiallySaved : t.saved, description, facts.lifecycle.kind)
+  if (state.phase === 'finalizing' || facts.progress?.phase === 'finishing') {
+    return stage('finishing', t.finishing, t.finishingHint, 'finalizing')
+  }
+  if (facts.blocking !== null) return blockingStage(facts.blocking, language)
+  return stage('downloading', t.downloading, t.downloadingHint, 'downloading')
 }
 
-function retainedStage(facts: TaskFacts, continuation: import('../../output/model/continuation').ReceiveOperationContinuation, language: Language): StageCopy {
+function pausedStage(
+  facts: TaskFacts,
+  state: Extract<TaskFacts['lifecycle'], { kind: 'paused' }>,
+  language: Language,
+): StageCopy {
   const t = receiverCopy[language].stage
-  switch (continuation) {
-    case 'resume-start': return startupStage(facts, language)
-    case 'cleanup-only': return executionStage(facts, language)
-    case 'resume-receive': return pausedStage(facts, language)
-    case 'resume-package':
-    case 'resume-local-finalization': return stage('paused', t.localFinishReady,
-      t.localFinishReadyHint, continuation)
-    case 'save-artifact':
-    case 'retry-download': return stage('ready-to-save', t.readyToSave,
-      t.retainedReadyHint, continuation)
-    case 'retry-cleanup': return stage('needs-action', t.cleanup,
-      t.cleanupHint, continuation)
-    case 'needs-attention': return stage('needs-action', t.needsAction,
-      t.needsActionHint, continuation)
-    case 'history-only': throw new TypeError('History-only operation requires settled publication facts')
+  if (facts.blocking !== null && (facts.blocking.kind === 'share-ended' || facts.blocking.kind === 'unavailable')) {
+    return blockingStage(facts.blocking, language)
   }
+  if (facts.readiness === 'original-link-required' || facts.readiness === 'different-share') {
+    return stage('needs-action', t.openToContinue, t.openToContinueHint, facts.readiness)
+  }
+  if (state.reason === 'storage-full') {
+    return stage('needs-action', t.storageFull, t.storageFullHint, 'storage-full')
+  }
+  if (state.reason === 'permission-needed') {
+    return stage('needs-action', t.needsAction, t.pausedHint, 'permission-needed')
+  }
+  return stage('paused', t.paused, t.pausedHint, state.reason)
+}
+
+function failedStage(
+  reason: Extract<TaskFacts['lifecycle'], { kind: 'failed' }>['reason'],
+  language: Language,
+): StageCopy {
+  const t = receiverCopy[language].stage
+  if (reason === 'source-changed') {
+    return stage('failed', t.sourceChanged, receiverCopy[language].lifecycle.sourceChangedHint, 'source_invalidated')
+  }
+  if (reason === 'cancelled') {
+    return stage('cancelled', t.cancelled, t.discardedHint, reason)
+  }
+  if (reason === 'session-ended') {
+    return stage('failed', t.newAttempt, t.sessionEnded, reason)
+  }
+  return stage('failed', t.newAttempt, t.restart, reason)
 }
 
 function blockingStage(blocking: TaskBlocking, language: Language): StageCopy {
   const t = receiverCopy[language].stage
   switch (blocking.kind) {
-    case 'reconnecting': return stage('waiting', t.reconnecting,
-      blocking.description ?? t.reconnectKeepOpen, blocking.kind)
-    case 'unavailable': return stage('needs-action', t.unavailable,
-      blocking.description ?? t.unavailableHint, blocking.kind)
-    case 'sender-capacity': return stage('waiting', t.senderCapacity,
-      blocking.description ?? t.senderCapacityHint, blocking.kind)
-    case 'relay-bandwidth': return stage('waiting', t.relayBandwidth,
-      blocking.description ?? t.relayBandwidthHint, blocking.kind)
-    case 'share-ended': return stage('needs-action', t.shareEnded,
-      blocking.description ?? t.shareEndedHint, blocking.kind)
-    case 'storage': return stage('needs-action', t.storage,
-      blocking.description ?? t.storageHint, blocking.kind)
+    case 'reconnecting': return stage('waiting', t.reconnecting, blocking.description ?? t.reconnectKeepOpen, blocking.kind)
+    case 'unavailable': return stage('needs-action', t.unavailable, blocking.description ?? t.unavailableHint, blocking.kind)
+    case 'sender-capacity': return stage('waiting', t.senderCapacity, blocking.description ?? t.senderCapacityHint, blocking.kind)
+    case 'relay-bandwidth': return stage('waiting', t.relayBandwidth, blocking.description ?? t.relayBandwidthHint, blocking.kind)
+    case 'share-ended': return stage('needs-action', t.shareEnded, blocking.description ?? t.shareEndedHint, blocking.kind)
+    case 'storage': return stage('needs-action', t.storage, blocking.description ?? t.storageHint, blocking.kind)
   }
-}
-
-function executionStage(facts: TaskFacts, language: Language): StageCopy {
-  const t = receiverCopy[language].stage
-  const state = facts.lifecycle
-  switch (state.kind) {
-    case 'intent-frozen':
-    case 'preparing': return stage('preparing', t.preparing, t.preparingHint, state.kind)
-    case 'receiving': return receivingStage(language)
-    case 'resumable-start': return startupStage(facts, language)
-    case 'resumable-receive':
-    case 'resumable-package': return pausedStage(facts, language)
-    case 'finalizing-tree':
-    case 'materialization-sealed':
-    case 'packaging':
-    case 'artifact-sealed':
-    case 'publishing-managed':
-    case 'handing-off': return finishingStage(state.kind, language)
-    case 'needs-attention': return stage('needs-action', t.needsAction, attentionDescription(state.reason, language), state.reason)
-    case 'restart-required': return stage('failed', t.newAttempt, restartDescription(state.reason, language), state.reason)
-    case 'source-invalidated': return stage('failed', t.sourceChanged, receiverCopy[language].lifecycle.sourceChangedHint, state.kind)
-    case 'discarded': return stage('cancelled', t.cancelled, t.discardedHint, state.kind)
-    default: throw new TypeError('settled task must be resolved before execution stage')
-  }
-}
-
-function activeReceivingStage(facts: TaskFacts, language: Language): StageCopy {
-  if (facts.progress?.phase === 'finishing') return finishingStage('local-finalization', language)
-  if (facts.blocking !== null) return blockingStage(facts.blocking, language)
-  return receivingStage(language)
-}
-
-function startupStage(facts: TaskFacts, language: Language): StageCopy {
-  const t = receiverCopy[language].stage
-  if (facts.readiness === 'original-link-required' || facts.readiness === 'different-share') {
-    return stage('needs-action', t.openToRetry,
-      t.openToRetryHint, facts.readiness)
-  }
-  const paused = facts.lifecycle.kind === 'resumable-start' && facts.lifecycle.reason === 'paused'
-  return stage(paused ? 'paused' : 'needs-action', paused ? t.pausedAtStart : t.startFailed,
-    t.startRetained, 'resumable-start')
-}
-
-function receivingStage(language: Language): StageCopy {
-  const t = receiverCopy[language].stage
-  return stage('downloading', t.downloading, t.downloadingHint, 'receiving')
-}
-
-function pausedStage(facts: TaskFacts, language: Language): StageCopy {
-  const t = receiverCopy[language].stage
-  const state = facts.lifecycle
-  if (state.kind !== 'resumable-package' && facts.blocking !== null &&
-      (facts.blocking.kind === 'share-ended' || facts.blocking.kind === 'unavailable')) return blockingStage(facts.blocking, language)
-  if (facts.readiness === 'original-link-required' || facts.readiness === 'different-share') {
-    return stage('needs-action', t.openToContinue,
-      t.openToContinueHint, facts.readiness)
-  }
-  if (state.kind === 'resumable-receive' && state.payloadKind === 'workspace-archive' && state.pauseReason === 'storage-pressure') {
-    return stage('needs-action', t.storageFull, t.storageFullHint, 'storage-pressure')
-  }
-  return stage('paused', t.paused, facts.readiness === 'local'
-    ? t.localOnly
-    : t.pausedHint, state.kind)
-}
-
-function finishingStage(kind: string, language: Language): StageCopy {
-  const t = receiverCopy[language].stage
-  let headline = t.finishing
-  if (kind === 'packaging') headline = t.packaging
-  if (kind === 'handing-off') headline = t.startingBrowser
-  return stage('finishing', headline, t.finishingHint, kind)
-}
-
-function attentionDescription(reason: string, language: Language): string {
-  const t = receiverCopy[language].stage
-  if (reason === 'publication-unknown') return t.unconfirmed
-  if (reason === 'target-ownership-unknown') return t.unknownOwner
-  return t.unknownCleanup
-}
-
-function restartDescription(reason: string, language: Language): string {
-  const t = receiverCopy[language].stage
-  if (reason === 'content-session-ended') return t.sessionEnded
-  return t.restart
 }
 
 function stage(taskStage: TaskStage, headline: string, description: string, reason: string): StageCopy {

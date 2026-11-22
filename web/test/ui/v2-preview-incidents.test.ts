@@ -5,7 +5,7 @@ import { FakeTraceTime } from '../diagnostics/trace/test-support'
 import { PreviewRuntimeError } from '../../src/preview/preview'
 import { REVISION_CODE_QUOTA } from '../../src/content/flow'
 import { EMPTY_PREVIEW } from '../../src/ui/model'
-import { ReceiveSourceInvalidatedError } from '../../src/application/receive/errors'
+import { FaultScope, SourceFaultCode, TransferFaultError, sourceFault } from '../../src/transfer/fault'
 import { VideoPreviewError } from '../../src/preview/mp4-range'
 import { PreviewController } from '../../src/ui/preview-controller'
 import type { JoinedBrowserShare } from '../../src/application/browser-share/gateway'
@@ -384,7 +384,9 @@ describe('v2 preview local failure incidents', () => {
     previews.mediaPresented(presentationId())
     previews.seek(3)
     await turn()
-    joined.seekResult = () => { throw new ReceiveSourceInvalidatedError(new Error('revision changed')) }
+    joined.seekResult = () => {
+      throw new TransferFaultError(sourceFault(FaultScope.FileLocal, SourceFaultCode.RevisionChanged), 'revision changed')
+    }
     previews.seek(6)
     await turn()
 

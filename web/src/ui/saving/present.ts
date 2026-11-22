@@ -1,10 +1,15 @@
-import type { ReceiveBlockReason } from '../../application/receive/admission'
+import type { ReceiveBlockReason } from '../../application/receive/contracts'
 import { presentReceiveReason } from '../experience/receive-reason'
 import type { Language } from '../preferences/model'
 import { receiverCopy } from '../locales/receiver'
-import type { ArtifactOffers } from '../../output/model/artifacts/offers'
-import type { OfferedArtifactChoice } from '../../output/model/artifacts/choices'
-import type { SavingActionPresentation, SavingChoice, SavingOutcome, SavingOutcomeKind, SavingPresentationTransition } from './model'
+import type { ArtifactChoice, ArtifactOffers } from '../../output/model/offers'
+import type {
+  SavingActionPresentation,
+  SavingChoice,
+  SavingOutcome,
+  SavingOutcomeKind,
+  SavingPresentationTransition,
+} from './model'
 
 interface SavingRequest {
   readonly offers: ArtifactOffers | null
@@ -12,24 +17,23 @@ interface SavingRequest {
   readonly blockedBy?: ReceiveBlockReason | null
 }
 
-/** Eligibility and route ranking are supplied by the planner, never inferred from browser identity. */
 export function presentSavingActions(input: SavingRequest, language: Language = 'en'): SavingActionPresentation {
   const offers = input.offers
-  if (offers === null || offers.kind !== 'artifact-actions') return unavailable(input, language)
+  if (offers === null || offers.kind !== 'ready') return unavailable(input, language)
+
   const choices = uniqueChoices([
-    offers.primary, ...offers.alternatives,
+    offers.primary,
+    ...offers.alternatives,
     ...(offers.zip === null ? [] : [offers.zip]),
   ])
-  const primaryOffer = choices.find(choice => choice.choice.artifactKind === 'original-file') ??
-    choices.find(choice => choice.choice.artifactKind === 'directory-tree') ??
-    offers.zip ?? offers.primary
   const disabledReason = presentReceiveReason(input.blockedBy ?? null, language)
-  const primary = savingChoice(primaryOffer, disabledReason, language, input.actionLabel)
+  const primary = savingChoice(offers.primary, disabledReason, language, input.actionLabel)
   const alternatives = groupOutcomes(choices, offers, disabledReason, language)
   const totalChoiceCount = alternatives.reduce((count, group) => count + 1 + group.alternatives.length, 0)
   let reason = 'eligible-route'
   if (primary.outcome === 'original-file') reason = 'original-file-default'
   if (primary.outcome === 'folder') reason = 'hierarchy-preserving-default'
+
   return Object.freeze({
     primary,
     alternatives,
@@ -43,8 +47,8 @@ export function presentSavingActions(input: SavingRequest, language: Language = 
 }
 
 function groupOutcomes(
-  choices: readonly OfferedArtifactChoice[],
-  offers: Extract<ArtifactOffers, { kind: 'artifact-actions' }>,
+  choices: readonly ArtifactChoice[],
+  offers: Extract<ArtifactOffers, { kind: 'ready' }>,
   disabledReason: string | null,
   language: Language,
 ): readonly SavingOutcome[] {
@@ -53,14 +57,9 @@ function groupOutcomes(
     const candidates = choices.filter(choice => outcome(choice) === kind)
     if (candidates.length === 0) continue
     const primary = kind === 'zip' ? offers.zip ?? candidates[0]! : candidates[0]!
-    // Only materially different saving processes stay visible within one result.
-    const seen = new Set([consequenceIdentity(primary)])
-    const alternatives = candidates.filter(candidate => {
-      const identity = consequenceIdentity(candidate)
-      if (seen.has(identity)) return false
-      seen.add(identity)
-      return true
-    }).map(choice => savingChoice(choice, disabledReason, language))
+    const alternatives = candidates
+      .filter(candidate => candidate.choiceId !== primary.choiceId)
+      .map(choice => savingChoice(choice, disabledReason, language))
     result.push(Object.freeze({
       kind,
       label: outcomeLabel(kind, language),
@@ -72,16 +71,16 @@ function groupOutcomes(
 }
 
 function savingChoice(
-  offered: OfferedArtifactChoice,
+  choice: ArtifactChoice,
   disabledReason: string | null,
   language: Language,
   actionLabel?: string,
 ): SavingChoice {
-  const kind = outcome(offered)
-  const copy = routeCopy(offered, kind, language)
+  const kind = outcome(choice)
+  const copy = routeCopy(choice, kind, language)
   return Object.freeze({
-    offered,
-    label: actionLabel ?? choiceLabel(offered, language),
+    choice,
+    label: actionLabel ?? choiceLabel(choice, language),
     outcome: kind,
     summary: copy.summary,
     badges: Object.freeze(copy.badges),
@@ -90,75 +89,60 @@ function savingChoice(
   })
 }
 
-function choiceLabel(offered: OfferedArtifactChoice, language: Language): string {
+function choiceLabel(choice: ArtifactChoice, language: Language): string {
   const t = receiverCopy[language].saving
-  switch (outcome(offered)) {
+  switch (outcome(choice)) {
     case 'original-file':
-      return offered.route.kind === 'workspace-then-publish' ? t.resumableDownload : t.downloadOriginal
+      return choice.backend === 'opfs' ? t.resumableDownload : t.downloadOriginal
     case 'folder':
       return t.saveFolder
     case 'zip':
-      return offered.route.kind === 'workspace-then-publish' ? t.downloadZip : t.quickZip
+      return choice.backend === 'opfs' ? t.downloadZip : t.quickZip
   }
 }
 
 function routeCopy(
-  offered: OfferedArtifactChoice,
+  choice: ArtifactChoice,
   kind: SavingOutcomeKind,
   language: Language,
 ): Readonly<{ summary: string; badges: string[]; notes: string[] }> {
   const t = receiverCopy[language].saving
-  switch (offered.route.kind) {
-    case 'direct-tree':
-      return {
-        summary: offered.route.target.kind === 'fsa-parent-directory'
-          ? t.directFolderSummary
-          : t.folderSummary,
-        badges: [t.keepsFolders, t.resumable],
-        notes: offered.route.target.kind === 'fsa-parent-directory'
-          ? [
-              t.directPause,
-              t.resumeSpace,
-            ]
-          : [t.waitCheckpoint],
-      }
-    case 'workspace-then-publish':
-      if (kind === 'zip') {
-        return {
+  if (choice.backend === 'fsa') {
+    return {
+      summary: t.directFolderSummary,
+      badges: [t.keepsFolders, t.resumable],
+      notes: [t.directPause],
+    }
+  }
+  if (choice.backend === 'opfs') {
+    return kind === 'zip'
+      ? {
           summary: t.workspaceZip,
           badges: [t.largeFiles, t.resumable, t.singleZip],
-          notes: [
-            t.zipExport,
-            t.clearingData,
-          ],
+          notes: [t.zipExport, t.clearingData],
         }
-      }
-      return {
-        summary: t.workspaceFile,
-        badges: [t.largeFiles, t.resumable],
-        notes: [
-          t.longDownloads,
-          t.clearingData,
-        ],
-      }
-    case 'portable-handoff':
-      return kind === 'zip'
-        ? {
-            summary: t.portableZip,
-            badges: [t.quick, t.singleZip, t.noResume],
-            notes: [t.tabCancels],
-          }
-        : {
-            summary: t.portableFile,
-            badges: [t.quick, t.noResume],
-            notes: [t.tabCancels],
-          }
+      : {
+          summary: t.workspaceFile,
+          badges: [t.largeFiles, t.resumable],
+          notes: [t.longDownloads, t.clearingData],
+        }
   }
+  return kind === 'zip'
+    ? {
+        summary: t.portableZip,
+        badges: [t.quick, t.singleZip, t.noResume],
+        notes: [t.tabCancels],
+      }
+    : {
+        summary: t.portableFile,
+        badges: [t.quick, t.noResume],
+        notes: [t.tabCancels],
+      }
 }
 
-function outcome(offered: OfferedArtifactChoice): SavingOutcomeKind {
-  if (offered.choice.artifactKind === 'directory-tree') return 'folder'
-  return offered.choice.artifactKind === 'zip-archive' ? 'zip' : 'original-file'
+function outcome(choice: ArtifactChoice): SavingOutcomeKind {
+  if (choice.artifactKind === 'directory-tree') return 'folder'
+  return choice.artifactKind === 'zip-archive' ? 'zip' : 'original-file'
 }
 
 function outcomeLabel(kind: SavingOutcomeKind, language: Language): string {
@@ -167,15 +151,11 @@ function outcomeLabel(kind: SavingOutcomeKind, language: Language): string {
   return kind === 'folder' ? t.folderResult : t.zipResult
 }
 
-function consequenceIdentity(choice: OfferedArtifactChoice): string {
-  return `${choice.route.kind}:${choice.choice.recovery}`
-}
-
-function uniqueChoices(choices: readonly OfferedArtifactChoice[]): readonly OfferedArtifactChoice[] {
+function uniqueChoices(choices: readonly ArtifactChoice[]): readonly ArtifactChoice[] {
   const seen = new Set<string>()
   return choices.filter(choice => {
-    if (seen.has(choice.choice.choiceId)) return false
-    seen.add(choice.choice.choiceId)
+    if (seen.has(choice.choiceId)) return false
+    seen.add(choice.choiceId)
     return true
   })
 }
@@ -183,15 +163,15 @@ function uniqueChoices(choices: readonly OfferedArtifactChoice[]): readonly Offe
 function unavailable(input: SavingRequest, language: Language): SavingActionPresentation {
   const t = receiverCopy[language].saving
   const offers = input.offers
-  const reason = offers === null ? 'confirming-selected-content' : offers.kind
+  const reason = offers === null ? 'confirming' : offers.kind
   const copy = unavailableDescription(offers, language)
   return Object.freeze({
     primary: null,
     alternatives: Object.freeze([]),
     hasAlternatives: false,
     disabledReason: presentReceiveReason(input.blockedBy ?? null, language) ?? copy,
-    retry: reason === 'retry-confirmation',
-    desktopGuidance: offers?.kind === 'no-safe-destination' ? t.desktopGuidance : null,
+    retry: reason === 'retry-required',
+    desktopGuidance: offers?.kind === 'unavailable' ? t.desktopGuidance : null,
     recommendation: null,
     transition: transition(offers, null, reason, input.blockedBy),
   })
@@ -200,22 +180,27 @@ function unavailable(input: SavingRequest, language: Language): SavingActionPres
 function unavailableDescription(offers: ArtifactOffers | null, language: Language): string {
   const t = receiverCopy[language].saving
   if (offers?.kind === 'selection-empty') return t.selectToDownload
-  if (offers?.kind === 'retry-confirmation') return t.confirmFailed
-  if (offers?.kind !== 'no-safe-destination') return t.preparingOptions
-  if (offers.reason === 'workspace-limit-exceeded') return t.storageFull
+  if (offers?.kind === 'retry-required') return t.confirmFailed
+  if (offers?.kind !== 'unavailable') return t.preparingOptions
+  if (offers.reason === 'storage-full') return t.storageFull
   if (offers.reason === 'portable-limit-exceeded') return t.tooLarge
   return t.cannotSave
 }
 
-function transition(offers: ArtifactOffers | null, primary: SavingChoice | null, reason: string, blockedBy?: ReceiveBlockReason | null): SavingPresentationTransition {
-  const choiceId = primary?.offered.choice.choiceId ?? null
+function transition(
+  offers: ArtifactOffers | null,
+  primary: SavingChoice | null,
+  reason: string,
+  blockedBy?: ReceiveBlockReason | null,
+): SavingPresentationTransition {
+  const choiceId = primary?.choice.choiceId ?? null
   return Object.freeze({
     name: 'receiver.saving.recommendation',
-    projection_epoch: offers?.projectionEpoch ?? null,
+    projection_epoch: offers?.epoch ?? null,
     choice_id: choiceId,
     outcome: primary?.outcome ?? null,
     reason,
-    fingerprint: [offers?.selectionDigest, choiceId, reason, blockedBy].join(':'),
+    fingerprint: [offers?.selectionKey, choiceId, reason, blockedBy].join(':'),
   })
 }
 

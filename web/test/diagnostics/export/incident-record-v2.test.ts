@@ -6,7 +6,7 @@ import {
   FaultScope,
   OutputFaultCode,
   outputFault,
-} from '../../../src/transfer/failure/fault'
+} from '../../../src/transfer/fault'
 import {
   createFailureFactAccumulator,
   createFailureIdentity,
@@ -209,21 +209,21 @@ describe('IncidentRecordV2 projection', () => {
         stage: 'output_write',
         recoveryDisposition: 'retryable',
         fault: outputFault(
-          FaultScope.OutputPause,
-          OutputFaultCode.StateIO,
+          FaultScope.FileLocal,
+          OutputFaultCode.WriteFailed,
         ),
       }),
       nativeOutputFailureFact({
         stage: 'output_write',
         recoveryDisposition: 'terminal',
         nativeClass: 'not_allowed',
-        code: OutputFaultCode.UnsupportedFilesystem,
+        code: OutputFaultCode.StorageUnavailable,
       }),
       lifecycleFailureFact({
         stage: 'lifecycle_action',
         recoveryDisposition: 'restart_required',
-        kind: 'restart-required',
-        reason: 'source-revision-changed',
+        kind: 'failed',
+        reason: 'source-changed',
       }),
     ])
 
@@ -231,8 +231,8 @@ describe('IncidentRecordV2 projection', () => {
     expect(record.payload.trigger.payload).toEqual({
       fault: {
         domain: 'output',
-        scope: 'output_pause',
-        code: 'state_io',
+        scope: 'file_local',
+        code: 'write_failed',
       },
     })
     const representatives = record.payload.contributors.map(
@@ -243,15 +243,15 @@ describe('IncidentRecordV2 projection', () => {
     )?.payload).toEqual({
       native_output_failure: {
         native_class: 'not_allowed',
-        code: 'unsupported_filesystem',
+        code: 'storage_unavailable',
       },
     })
     expect(representatives.find(
       (factValue) => factValue.kind === 'lifecycle_failure',
     )?.payload).toEqual({
       lifecycle_failure: {
-        state: 'restart_required',
-        reason: 'source_revision_changed',
+        state: 'failed',
+        reason: 'source_changed',
       },
     })
   })
@@ -259,11 +259,11 @@ describe('IncidentRecordV2 projection', () => {
   it('exports failed startup as retryable initialization with its retained state', () => {
     const facts = sealFacts([lifecycleFailureFact({
       stage: 'output_initialization', recoveryDisposition: 'retryable',
-      kind: 'resumable-start', reason: 'failed',
+      kind: 'paused', reason: 'interrupted',
     })])
     expect(projector().project(input(facts)).record.payload.trigger).toMatchObject({
       stage: 'output_initialization', recovery_disposition: 'retryable',
-      payload: { lifecycle_failure: { state: 'resumable_start', reason: 'failed' } },
+      payload: { lifecycle_failure: { state: 'paused', reason: 'interrupted' } },
     })
   })
 

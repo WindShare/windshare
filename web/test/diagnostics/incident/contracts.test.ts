@@ -5,7 +5,7 @@ import {
   FaultScope,
   OutputFaultCode,
   outputFault,
-} from '../../../src/transfer/failure/fault'
+} from '../../../src/transfer/fault'
 import {
   FAILURE_FACT_KINDS,
   FAILURE_IDENTITY_KINDS,
@@ -300,13 +300,13 @@ describe('incident frozen contracts', () => {
     expect(isFailureFact(faultFailureFact({
       stage: 'output_write',
       recoveryDisposition: 'retryable',
-      fault: outputFault(FaultScope.OutputPause, OutputFaultCode.StateIO),
+      fault: outputFault(FaultScope.FileLocal, OutputFaultCode.WriteFailed),
     }))).toBe(true)
     expect(() => faultFailureFact({
       stage: 'output_write',
       recoveryDisposition: 'terminal',
       fault: Object.freeze({
-        ...outputFault(FaultScope.OutputPause, OutputFaultCode.StateIO),
+        ...outputFault(FaultScope.FileLocal, OutputFaultCode.WriteFailed),
         message: 'private path',
       }),
     })).toThrow(/normalized fault/)
@@ -315,32 +315,32 @@ describe('incident frozen contracts', () => {
       stage: 'checkpoint',
       recoveryDisposition: 'retryable',
       nativeClass: 'data',
-      code: CheckpointFaultCode.CorruptRecord,
+      code: CheckpointFaultCode.Invalid,
     }))).toBe(true)
     expect(() => nativeOutputFailureFact({
       stage: 'output_write',
       recoveryDisposition: 'retryable',
       nativeClass: 'data',
-      code: CheckpointFaultCode.CorruptRecord,
+      code: CheckpointFaultCode.Invalid,
     })).toThrow(/stage/)
     expect(isFailureFact(nativeOutputFailureFact({
       stage: 'output_write',
       recoveryDisposition: 'retryable',
       nativeClass: 'quota_exceeded',
-      code: OutputFaultCode.ResourceBudget,
+      code: OutputFaultCode.QuotaExceeded,
     }))).toBe(true)
 
     expect(isFailureFact(lifecycleFailureFact({
       stage: 'lifecycle_action',
       recoveryDisposition: 'restart_required',
-      kind: 'restart-required',
-      reason: 'content-session-ended',
+      kind: 'failed',
+      reason: 'session-ended',
     }))).toBe(true)
     expect(() => lifecycleFailureFact({
       stage: 'lifecycle_action',
       recoveryDisposition: 'terminal',
-      kind: 'published',
-      reason: 'content-session-ended',
+      kind: 'saved',
+      reason: 'session-ended',
     })).toThrow(/invalid/)
   })
 })

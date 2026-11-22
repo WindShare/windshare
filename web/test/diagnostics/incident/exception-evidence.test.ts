@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { faultFailureFact, isFailureFact, unclassifiedFailureFact } from '../../../src/diagnostics/incident/fact'
 import { MAX_EXCEPTION_BYTES, MAX_EXCEPTION_TEXT_BYTES, projectDiagnosticException } from '../../../src/diagnostics/exception'
 import { captureFailureEvidence } from '../../../src/diagnostics/failure/evidence'
-import { catalogFault, CatalogFaultCode, FaultScope } from '../../../src/transfer/failure/fault'
+import { FaultScope, OutputFaultCode, outputFault } from '../../../src/transfer/fault'
 
 const context = { stage: 'authority_activation', recoveryDisposition: 'terminal' } as const
 
@@ -11,7 +11,7 @@ describe('classification-independent exception evidence', () => {
     const error = new Error('initial failure', { cause: new Error('initial cause') })
     error.stack = 'initial stack'
     const fact = faultFailureFact({ ...context,
-      fault: catalogFault(FaultScope.SessionTerminal, CatalogFaultCode.InvalidGeneration), error,
+      fault: outputFault(FaultScope.Job, OutputFaultCode.WriteFailed), error,
       operation: 'catalog.accept', context: { directory: 'directory-a', expectedPage: 2, actualPage: 3 },
     })
     error.message = 'changed'

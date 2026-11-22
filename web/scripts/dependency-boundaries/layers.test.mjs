@@ -13,7 +13,7 @@ function violations(entries) {
 }
 
 test('application and reusable modules reject presentation even through a shared barrel', () => {
-  for (const root of ['application/receive/runtime.ts', 'output/store.ts', 'diagnostics/context.ts']) {
+  for (const root of ['application/receive/coordinator.ts', 'output/store/database.ts', 'diagnostics/context.ts']) {
     assert.ok(violations([
       [root, ['contracts/barrel.ts']],
       ['contracts/barrel.ts', ['ui/model.ts']],
@@ -38,16 +38,17 @@ test('protocol sessions and wire codecs cannot reach connectivity implementation
   ]), [])
 })
 
-test('UI may invoke application commands, but cannot assemble output routes or access storage', () => {
+test('UI may invoke application commands, but cannot reach output storage implementations directly', () => {
   assert.deepEqual(violations([
-    ['ui/controller.ts', ['application/receive/application.ts', 'transfer/lifecycle/state.ts']],
-    ['application/receive/application.ts', ['output/workspace/repository.ts']],
-    ['output/workspace/repository.ts', ['transfer/lifecycle/state.ts']],
-    ['transfer/lifecycle/state.ts', []],
+    ['ui/controller.ts', ['application/receive/coordinator.ts', 'transfer/state.ts']],
+    ['application/receive/coordinator.ts', ['output/store/database.ts']],
+    ['output/store/database.ts', ['transfer/state.ts']],
+    ['transfer/state.ts', []],
   ]), [])
   for (const target of [
-    'application/browser-receive/composition.ts', 'output/workspace/repository.ts',
-    'output/file-system-access/session.ts', 'output/file-system-access/execution/resource-owner.ts',
+    'output/store/database.ts',
+    'output/backends/fsa.ts',
+    'output/backends/opfs.ts',
   ]) {
     assert.ok(violations([
       ['ui/controller.ts', ['contracts/barrel.ts']],

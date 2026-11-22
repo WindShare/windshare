@@ -1,26 +1,17 @@
 import { encodeBase64Url } from '../../src/crypto/bytes'
-import { offerArtifacts } from '../../src/output/planning/offers'
-import { type SelectionProjectionV1 } from '../../src/transfer/projection/contracts'
-import { createSelectionSpec, type ArtifactChoiceID } from '../../src/transfer/intent'
-import { nextProjectionEpoch } from '../../src/transfer/projection/model'
-import {
-  createBrowserReceiveComposition,
-  type BrowserReceiveWindow,
-} from '../../src/application/browser-receive/composition'
-import { presentArtifactChoice } from '../../src/ui/artifact-presentation'
-import {
-  AuthorityActivationCoordinator,
-} from '../../src/application/receive/activation/coordinator'
-import type { ActiveProjection } from '../../src/application/receive/discovery'
-import { ControllerObservability } from '../../src/application/receive/observation/coordinator'
+import { SelectionPolicy } from '../../src/catalog/selection'
+import type { JoinedBrowserShare } from '../../src/application/browser-share/gateway'
+import { ReceiveCoordinator } from '../../src/application/receive/coordinator'
+import type { BrowserOutputWindow } from '../../src/output/backends/contract'
+import { presentSavingActions } from '../../src/ui/saving'
 
 const ACTION_BUTTON_ID = 'windshare-artifact-action-activation'
-const ACTION_LABEL = 'Save using original folder hierarchy'
+const ACTION_LABEL = 'Save to folder'
 
 export interface ArtifactChoiceActivationProof {
   readonly actionLabel: string
   readonly selectedArtifactKind: string
-  readonly selectedPlanKind: string
+  readonly selectedBackend: string
   readonly pickerCallsBeforeClick: number
   readonly pickerCalls: number
   readonly pickerMode: string | null
@@ -30,7 +21,6 @@ export interface ArtifactChoiceActivationProof {
   readonly firstChoiceAccepted: boolean
   readonly reentrantChoiceAccepted: boolean
   readonly repeatedChoiceAccepted: boolean
-  readonly adoptionPreparationCalls: number
   readonly authorityReleased: boolean
 }
 
@@ -38,21 +28,18 @@ let proof: ArtifactChoiceActivationProof | undefined
 let completion: Promise<void> | undefined
 
 /**
- * The harness stops at acquired authority because namespace mutation belongs to
- * the FSA owner. This browser cut owns only the product click-to-picker boundary.
+ * Verifies the real Chromium user-activation boundary: clicking the folder download action
+ * synchronously calls `showDirectoryPicker({ mode: 'readwrite' })` before the handler returns.
  */
 export async function installArtifactActionActivationHarness(): Promise<ArtifactChoiceActivationProof> {
   document.getElementById(ACTION_BUTTON_ID)?.remove()
-  const parent = await originPrivateRoot()
+  const parent = await navigator.storage.getDirectory()
   let pickerCalls = 0
-  let adoptionPreparationCalls = 0
   let actionReturned = false
-  const activeChoice: { choiceId?: ArtifactChoiceID } = {}
-  const coordinatorOwner: { current?: AuthorityActivationCoordinator } = {}
+  let choiceId = ''
+  const coordinatorHolder: { current?: ReceiveCoordinator } = {}
   let complete: (() => void) | undefined
-  completion = new Promise<void>((resolve) => {
-    complete = resolve
-  })
+  completion = new Promise<void>(resolve => { complete = resolve })
 
   Object.defineProperty(window, 'showDirectoryPicker', {
     configurable: true,
@@ -64,42 +51,52 @@ export async function installArtifactActionActivationHarness(): Promise<Artifact
         pickerMode: options.mode ?? null,
         userActivationWasActive: navigator.userActivation.isActive,
         pickerStartedBeforeActionReturned: !actionReturned,
-        reentrantChoiceAccepted: activeChoice.choiceId === undefined
-          ? false
-          : coordinatorOwner.current?.choose(activeChoice.choiceId) ?? false,
+        reentrantChoiceAccepted: coordinatorHolder.current?.startDownload(choiceId) ?? false,
       })
       return Promise.resolve(parent)
     },
   })
 
-  const composition = createBrowserReceiveComposition(window as BrowserReceiveWindow)
-  const selection = await createSelectionSpec({
-    shareInstance: identity(1),
-    syntheticRoot: identity(2),
-    rules: { mode: 'node-id', defaultSelected: true, rules: [] },
+  const joined = {
+    descriptor: {
+      shareInstanceId: identity(1),
+      syntheticRootId: identity(2),
+    },
+    selection: new SelectionPolicy(true),
+    inspectSelection: async () => ({
+      kind: 'tree' as const,
+      suggestedName: 'photos',
+      knownFileCount: 2,
+      knownBytes: 128n,
+      complete: true,
+    }),
+  } as unknown as JoinedBrowserShare
+
+  const coordinator = new ReceiveCoordinator({
+    windowPort: window as unknown as BrowserOutputWindow,
+    databaseName: `windshare-activation-${crypto.randomUUID()}`,
+    currentJoinedShare: () => joined,
   })
-  const projection = treeProjection(selection.digest)
-  const discovery = Object.freeze({ kind: 'discovering' as const })
-  const environment = await composition.environment(new AbortController().signal)
-  const offered = await offerArtifacts(projection, discovery, environment)
-  if (offered.kind !== 'artifact-actions') {
-    throw new TypeError('Browser composition did not offer an artifact action')
+  coordinatorHolder.current = coordinator
+  coordinator.refreshOffers(joined)
+  await waitUntil(() => coordinator!.getSnapshot().offers?.kind === 'ready')
+
+  const offers = coordinator.getSnapshot().offers
+  if (offers?.kind !== 'ready') throw new TypeError('Offers did not become ready')
+  const fsaChoice = [offers.primary, ...offers.alternatives].find(candidate => candidate.backend === 'fsa')
+  if (fsaChoice === undefined) throw new TypeError('Browser environment did not offer FSA folder route')
+  choiceId = fsaChoice.choiceId
+  const saving = presentSavingActions({ offers })
+  const presented = saving.primary
+  if (presented === null || presented.choice.choiceId !== fsaChoice.choiceId) {
+    throw new TypeError('FSA folder choice is not the primary saving action')
   }
-  const choice = [offered.primary, ...offered.alternatives]
-    .find(candidate => candidate.route.kind === 'direct-tree')
-  if (choice === undefined || choice.choice.artifactKind !== 'directory-tree') {
-    throw new TypeError('Browser composition did not offer FSA DirectoryTree')
-  }
-  activeChoice.choiceId = choice.choice.choiceId
-  const presented = presentArtifactChoice(choice)
-  if (presented.label !== ACTION_LABEL) {
-    throw new TypeError('FSA DirectoryTree product label changed unexpectedly')
-  }
+  if (presented.label !== ACTION_LABEL) throw new TypeError('FSA folder label changed unexpectedly')
 
   proof = freezeProof({
     actionLabel: presented.label,
-    selectedArtifactKind: choice.choice.artifactKind,
-    selectedPlanKind: choice.choice.plan.kind,
+    selectedArtifactKind: fsaChoice.artifactKind,
+    selectedBackend: fsaChoice.backend,
     pickerCallsBeforeClick: pickerCalls,
     pickerCalls,
     pickerMode: null,
@@ -109,67 +106,23 @@ export async function installArtifactActionActivationHarness(): Promise<Artifact
     firstChoiceAccepted: false,
     reentrantChoiceAccepted: false,
     repeatedChoiceAccepted: false,
-    adoptionPreparationCalls,
     authorityReleased: false,
   })
-
-  const joined = Object.freeze({}) as ActiveProjection['joined']
-  const state = Object.freeze({ projection, discovery })
-  const active: ActiveProjection = {
-    revision: 1,
-    joined,
-    selection,
-    frozenSelection: Object.freeze({}) as ActiveProjection['frozenSelection'],
-    epoch: projection.epoch,
-    controller: new AbortController(),
-    protocolSessionId: identity(4),
-    state,
-    environment,
-  }
-  let publishPlanning: (() => void) | undefined
-  const planningPublished = new Promise<void>((resolve) => { publishPlanning = resolve })
-  const coordinator = new AuthorityActivationCoordinator({
-    receive: composition,
-    activeReceive: {
-      prepareAdoption: () => {
-        adoptionPreparationCalls += 1
-        proof = freezeProof({ ...requiredProof(), adoptionPreparationCalls })
-        throw new Error('unresolved choice must not prepare adoption')
-      },
-    },
-    observability: new ControllerObservability({}),
-    currentProjection: () => active,
-    currentJoinedShare: () => joined,
-    choiceBlocked: () => false,
-    retryProjection: () => undefined,
-    publishProjection: () => publishPlanning?.(),
-    adoptReceiveIntent: () => false,
-    refreshRetainedInventory: () => undefined,
-    publishActionError: () => undefined,
-    planner: async () => offered,
-    createActivationId: () => identity(5),
-  })
-  coordinatorOwner.current = coordinator
-  coordinator.observeProjection(active)
-  await planningPublished
 
   const button = document.createElement('button')
   button.id = ACTION_BUTTON_ID
   button.type = 'button'
   button.textContent = presented.label
-  button.addEventListener('click', (event) => {
+  button.addEventListener('click', event => {
     proof = freezeProof({ ...requiredProof(), clickWasTrusted: event.isTrusted })
     try {
-      const firstChoiceAccepted = coordinator?.choose(choice.choice.choiceId) ?? false
-      const repeatedChoiceAccepted = coordinator?.choose(choice.choice.choiceId) ?? false
+      const firstChoiceAccepted = coordinator?.startDownload(choiceId) ?? false
+      const repeatedChoiceAccepted = coordinator?.startDownload(choiceId) ?? false
       actionReturned = true
-      proof = freezeProof({
-        ...requiredProof(),
-        firstChoiceAccepted,
-        repeatedChoiceAccepted,
-      })
-      Promise.resolve().then(() => {
-        coordinator?.close('activation boundary proven')
+      proof = freezeProof({ ...requiredProof(), firstChoiceAccepted, repeatedChoiceAccepted })
+      Promise.resolve().then(async () => {
+        coordinator?.cancelActivation()
+        await coordinator?.dispose()
         proof = freezeProof({ ...requiredProof(), authorityReleased: true })
         complete?.()
       })
@@ -187,49 +140,16 @@ export async function readArtifactActionActivationProof(): Promise<ArtifactChoic
   return requiredProof()
 }
 
-function treeProjection(selectionDigest: string): SelectionProjectionV1 {
-  const directoryId = identity(3)
-  const selectedRoot = Object.freeze({
-    kind: 'directory' as const,
-    directoryId,
-    sourcePath: 'photos',
-    catalogName: 'photos',
-  })
-  return Object.freeze({
-    version: 1 as const,
-    epoch: nextProjectionEpoch(0n),
-    selectionDigest,
-    selectedRoots: Object.freeze([selectedRoot]),
-    selectedRootCountLowerBound: 1,
-    selectedRootsTruncated: false,
-    generations: Object.freeze([]),
-    metrics: Object.freeze({
-      fileCountLowerBound: 1,
-      directoryCountLowerBound: 1,
-      byteCountLowerBound: 1n,
-    }),
-    unsettledTargets: Object.freeze([]),
-    proof: Object.freeze({
-      kind: 'tree' as const,
-      selectedRoots: Object.freeze([selectedRoot]),
-      selectedRootCountLowerBound: 1,
-      selectedRootsTruncated: false,
-      layoutBasis: Object.freeze({ kind: 'unsettled' as const }),
-    }),
-  })
-}
-
-async function originPrivateRoot(): Promise<FileSystemDirectoryHandle> {
-  const storage = navigator.storage as StorageManager & {
-    getDirectory(): Promise<FileSystemDirectoryHandle>
+async function waitUntil(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (predicate()) return
+    await new Promise(resolve => setTimeout(resolve, 10))
   }
-  return storage.getDirectory()
+  throw new Error('Timed out waiting for artifact offers')
 }
 
 function identity(seed: number): string {
-  const bytes = new Uint8Array(16)
-  bytes[0] = seed
-  bytes[bytes.length - 1] = seed ^ 0xff
+  const bytes = new Uint8Array(16).fill(seed)
   return encodeBase64Url(bytes)
 }
 

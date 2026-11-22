@@ -37,7 +37,7 @@ import { TraceSwitch, type TraceActivationStore } from '../../diagnostics/trace/
 import {
   BoundedLocalOutputOperationFailureHistory,
   type LocalOutputOperationFailureDiagnosticsPort,
-} from '../../output/diagnostics/local-output-failure'
+} from '../../diagnostics/export/local-output-failure-v1'
 
 const RUNTIME_RUN_ID_BYTES = 16
 

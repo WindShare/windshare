@@ -11,10 +11,14 @@ export function TaskSourceDetails({ operationId, snapshot, controller }: {
   readonly snapshot: Pick<ReceiverSnapshot, 'retained' | 'output'>
   readonly controller: ReceiverController
 }) {
-  const operation = snapshot.retained.operations.find(candidate => candidate.operationId === operationId)
-  return operation === undefined ? null : <SourceRevisionFailuresPanel operation={operation}
-    busy={snapshot.retained.pending !== null}
-    prepareReplacement={failure => controller.prepareReplacementDownload(operation, failure)} />
+  const task = snapshot.retained.tasks.find(candidate => candidate.taskId === operationId)
+  return task === undefined
+    ? null
+    : <SourceRevisionFailuresPanel
+        task={task}
+        busy={snapshot.retained.pending !== null}
+        prepareReplacement={failure => controller.prepareReplacementDownload(task, failure)}
+      />
 }
 
 export function TaskDownloads({ tasks, snapshot, controller, entryLabel, entryDescription, open, onOpenChange }: {
@@ -27,12 +31,20 @@ export function TaskDownloads({ tasks, snapshot, controller, entryLabel, entryDe
   readonly onOpenChange?: (open: boolean) => void
 }) {
   const [localOpen, setLocalOpen] = useState(false)
-  return <Downloads open={open ?? localOpen} onOpenChange={next => {
-    (onOpenChange ?? setLocalOpen)(next)
-    if (next) void controller.ensureDownloads()
-  }} tasks={tasks} actions={taskActions(controller)}
+  return <Downloads
+    open={open ?? localOpen}
+    onOpenChange={next => {
+      (onOpenChange ?? setLocalOpen)(next)
+      if (next) void controller.ensureDownloads()
+    }}
+    tasks={tasks}
+    actions={taskActions(controller)}
     inventory={snapshot.retained.kind}
     onRetry={() => { void controller.ensureDownloads() }}
-    busy={snapshot.retained.pending !== null} {...(entryLabel === undefined ? {} : { entryLabel })} {...(entryDescription === undefined ? {} : { entryDescription })} onIntent={action => controller.recordExperienceIntent(action)}
-    details={operationId => <TaskSourceDetails operationId={operationId} snapshot={snapshot} controller={controller} />} />
+    busy={snapshot.retained.pending !== null}
+    {...(entryLabel === undefined ? {} : { entryLabel })}
+    {...(entryDescription === undefined ? {} : { entryDescription })}
+    onIntent={action => controller.recordExperienceIntent(action)}
+    details={operationId => <TaskSourceDetails operationId={operationId} snapshot={snapshot} controller={controller} />}
+  />
 }

@@ -45,26 +45,14 @@ const AUTHORITY_ACTIVATION_CONTEXT_KEYS = [
   'plan_kind',
 ] as const
 const LIFECYCLE_STATES = [
-  'intent_frozen',
   'preparing',
-  'receiving',
-  'resumable_receive',
-  'resumable_start',
-  'source_invalidated',
-  'finalizing_tree',
-  'materialization_sealed',
-  'packaging',
-  'resumable_package',
-  'artifact_sealed',
-  'waiting_to_save',
-  'publishing_managed',
-  'handing_off',
-  'published',
+  'downloading',
+  'paused',
+  'ready_to_save',
   'download_started',
-  'partial_directory',
-  'restart_required',
-  'discarded',
-  'needs_attention',
+  'saved',
+  'partial',
+  'failed',
 ] as const
 
 const MAXIMUM_EXPERIENCE_TRACE_FIELD_LENGTH = 512

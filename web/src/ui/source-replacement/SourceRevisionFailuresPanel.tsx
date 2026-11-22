@@ -1,15 +1,15 @@
 import { receiverCopy } from '../locales/receiver'
 import { useCopy } from '../preferences/use-preferences'
-import type { SourceRevisionFailure } from '../../transfer/lifecycle/source-revision'
-import type { RetainedReceiveOperation } from '../../application/receive/contracts'
+import type { SourceRevisionFailure } from '../../transfer/state'
+import type { RetainedTaskSnapshot } from '../../application/receive/contracts'
 
 export function SourceRevisionFailuresPanel(props: {
-  readonly operation: RetainedReceiveOperation
+  readonly task: RetainedTaskSnapshot
   readonly busy: boolean
   readonly prepareReplacement: (failure: SourceRevisionFailure) => void
 }) {
   const t = useCopy(receiverCopy).result
-  const failures = props.operation.sourceRevisionFailures
+  const failures = props.task.sourceRevisionFailures
   if (failures === undefined) return null
   const hidden = failures.count - BigInt(failures.files.length)
   return <section aria-label={t.replacementFiles}>

@@ -1,11 +1,10 @@
 import { expect, test, type Page } from '@playwright/test'
 import { BROWSER_CONTRACT_HOST_PATH } from './contract-host'
-
 import { requireOriginPrivateStorage } from './browser-storage-support'
 import type { ArtifactChoiceActivationProof } from './artifact-action-user-activation-harness'
 
 const HARNESS_PATH = '/test/browser/artifact-action-user-activation-harness.ts'
-const ACTION_LABEL = 'Save using original folder hierarchy'
+const ACTION_LABEL = 'Save to folder'
 
 test('explicit DirectoryTree action starts one picker in the trusted Chromium activation stack', async ({
   browserName,
@@ -18,10 +17,9 @@ test('explicit DirectoryTree action starts one picker in the trusted Chromium ac
   expect(beforeClick).toMatchObject({
     actionLabel: ACTION_LABEL,
     selectedArtifactKind: 'directory-tree',
-    selectedPlanKind: 'direct-tree',
+    selectedBackend: 'fsa',
     pickerCallsBeforeClick: 0,
     pickerCalls: 0,
-    adoptionPreparationCalls: 0,
   })
 
   await page.getByRole('button', { name: ACTION_LABEL, exact: true }).click()
@@ -29,7 +27,7 @@ test('explicit DirectoryTree action starts one picker in the trusted Chromium ac
   expect(await readProof(page)).toEqual({
     actionLabel: ACTION_LABEL,
     selectedArtifactKind: 'directory-tree',
-    selectedPlanKind: 'direct-tree',
+    selectedBackend: 'fsa',
     pickerCallsBeforeClick: 0,
     pickerCalls: 1,
     pickerMode: 'readwrite',
@@ -39,20 +37,19 @@ test('explicit DirectoryTree action starts one picker in the trusted Chromium ac
     firstChoiceAccepted: true,
     reentrantChoiceAccepted: false,
     repeatedChoiceAccepted: false,
-    adoptionPreparationCalls: 0,
     authorityReleased: true,
   })
 })
 
 async function installHarness(page: Page): Promise<ArtifactChoiceActivationProof> {
-  return page.evaluate(async (path) => {
+  return page.evaluate(async path => {
     const harness = await import(path) as typeof import('./artifact-action-user-activation-harness')
     return harness.installArtifactActionActivationHarness()
   }, HARNESS_PATH)
 }
 
 async function readProof(page: Page): Promise<ArtifactChoiceActivationProof> {
-  return page.evaluate(async (path) => {
+  return page.evaluate(async path => {
     const harness = await import(path) as typeof import('./artifact-action-user-activation-harness')
     return harness.readArtifactActionActivationProof()
   }, HARNESS_PATH)

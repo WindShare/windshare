@@ -5,7 +5,6 @@ import { ReceiverController } from '../../src/ui/controller'
 import { PreviewController } from '../../src/ui/preview-controller'
 import { EMPTY_PREVIEW } from '../../src/ui/model'
 import type { BrowseDirectory, BrowserReceiverGateway, JoinedBrowserShare } from '../../src/application/browser-share/gateway'
-import { INERT_TEST_RECEIVE_COMPOSITION } from './v2-receive-fixture'
 import {
   entry,
   FakeJoined,
@@ -14,7 +13,6 @@ import {
   turn,
   waitFor,
   directPreviewSnapshot,
-  completedProjectionSource
 } from './v2-preview-fixture'
 
 afterEach(() => vi.unstubAllGlobals())
@@ -129,7 +127,7 @@ describe('v2 preview click controller boundary', () => {
     const gateway = {
       join: async () => joined as unknown as JoinedBrowserShare,
     } as unknown as BrowserReceiverGateway
-    const controller = new ReceiverController(gateway, { receive: INERT_TEST_RECEIVE_COMPOSITION })
+    const controller = new ReceiverController(gateway)
     controller.initialize({ capabilityInput: 'key', pageUrl: 'https://receiver.invalid/s/share' })
     await waitFor(() => controller.getSnapshot().phase === 'browsing')
     expect(controller.getSnapshot().phase).toBe('browsing')
@@ -172,7 +170,7 @@ describe('v2 preview click controller boundary', () => {
     const gateway = {
       join: async () => joined as unknown as JoinedBrowserShare,
     } as unknown as BrowserReceiverGateway
-    const controller = new ReceiverController(gateway, { receive: INERT_TEST_RECEIVE_COMPOSITION })
+    const controller = new ReceiverController(gateway)
     controller.initialize({ capabilityInput: 'key', pageUrl: 'https://receiver.invalid/s/share' })
     await waitFor(() => {
       const browse = controller.getSnapshot().browse
@@ -196,7 +194,7 @@ describe('v2 preview click controller boundary', () => {
     const gateway = {
       join: () => new Promise<JoinedBrowserShare>((resolve) => pending.push(resolve)),
     } as unknown as BrowserReceiverGateway
-    const controller = new ReceiverController(gateway, { receive: INERT_TEST_RECEIVE_COMPOSITION })
+    const controller = new ReceiverController(gateway)
 
     controller.initialize({ capabilityInput: 'first-key', pageUrl: 'https://receiver.invalid/s/share' })
     await waitFor(() => pending.length === 1)
@@ -245,7 +243,7 @@ describe('v2 preview click controller boundary', () => {
           entries: [entry],
         }
       },
-      projectionSource: () => completedProjectionSource(),
+      inspectSelection: () => new Promise<never>(() => undefined),
       subscribeCatalogScanProgress: () => () => undefined,
       subscribePathActivity: () => () => undefined,
       subscribeConnection: (listener: (value: { kind: 'connected' }) => void) => { listener({ kind: 'connected' }); return () => undefined },
@@ -253,30 +251,15 @@ describe('v2 preview click controller boundary', () => {
       close: async () => undefined,
     } as unknown as JoinedBrowserShare
     const gateway = { join: async () => joined } as unknown as BrowserReceiverGateway
-    const controller = new ReceiverController(gateway, {
-      receive: {
-        retained: {
-          list: () => Promise.resolve(Object.freeze({
-            operations: Object.freeze([]),
-            presentationFailures: Object.freeze([]),
-            act: () => Promise.reject(new DOMException('No retained operation', 'InvalidStateError')),
-            close: () => undefined,
-          })),
-        },
-        environment: () => new Promise<never>(() => undefined),
-        startArtifactAuthority: () => {
-          throw new Error('output authority must not start from selection projection')
-        },
-      },
-    })
+    const controller = new ReceiverController(gateway)
 
     controller.initialize({ capabilityInput: 'key', pageUrl: 'https://receiver.invalid/s/share' })
     await waitFor(() => controller.getSnapshot().rows.length === 1)
-    expect(controller.getSnapshot().output.projection).toBeNull()
+    expect(controller.getSnapshot().output.offers?.kind).toBe('confirming')
     controller.toggleSelection(entry.idText)
     expect(controller.getSnapshot().rows[0]?.selection).toBe('selected')
     expect(controller.getSnapshot().selectedVisibleFiles).toBe(1)
-    expect(controller.getSnapshot().output.projection).toBeNull()
+    expect(controller.getSnapshot().output.offers?.kind).toBe('confirming')
     await controller.dispose()
   })
 })

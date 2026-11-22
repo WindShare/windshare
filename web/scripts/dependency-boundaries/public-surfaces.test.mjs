@@ -51,14 +51,14 @@ test('public models remain traversable and cannot conceal private dependencies',
   ])
 })
 
-test('forbidden application paths take precedence over presentation service stops', () => {
+test('presentation services can call output while direct private output imports remain forbidden', () => {
   const graph = new Map([
-    ['ui/view.ts', ['application/receive/commands.ts', 'diagnostics/service.ts', 'application/browser-receive/composition.ts']],
-    ['application/receive/commands.ts', ['output/private/writer.ts']],
-    ['diagnostics/service.ts', ['output/private/store.ts']],
+    ['ui/view.ts', ['application/receive/coordinator.ts', 'diagnostics/service.ts', 'output/backends/fsa.ts']],
+    ['application/receive/coordinator.ts', ['output/store/database.ts']],
+    ['diagnostics/service.ts', ['output/store/database.ts']],
   ])
   assert.deepEqual(findBoundaryViolations(graph, presentation), [
-    ['ui/view.ts', 'application/browser-receive/composition.ts'],
+    ['ui/view.ts', 'output/backends/fsa.ts'],
   ])
 })
 
