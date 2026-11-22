@@ -345,7 +345,7 @@ fn admin_session_cookie_and_lifetime_match_shared_console_policy() {
         .to_owned();
     assert!(
         set_cookie.contains(&format!(
-            "HttpOnly; SameSite=Strict; Path=/api; Secure; Max-Age={}",
+            "Path=/api; HttpOnly; Secure; SameSite=Strict; Max-Age={}",
             ADMIN_SESSION_LIFETIME_MS / 1_000
         )),
         "{set_cookie}"
@@ -402,4 +402,71 @@ fn admin_session_cookie_and_lifetime_match_shared_console_policy() {
             .status,
         StatusCode::UNAUTHORIZED
     );
+}
+
+#[test]
+fn native_console_aligns_error_codes_and_enrollment_payload_contract() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("node.sqlite");
+    let identity = Identity::generate().unwrap();
+    let console = open(&db, &identity, &Policy::default());
+    let setup = json!({"token":identity.initialization_token(),"password":"development-password"});
+    let session = post(&console, "/api/initialize", &setup, "")
+        .cookie
+        .unwrap();
+
+    let invalid = post(
+        &console,
+        "/api/credentials",
+        &json!({"name":"   "}),
+        &session,
+    );
+    assert_eq!(invalid.status, StatusCode::BAD_REQUEST);
+    assert_eq!(invalid.body["error"], "invalid_name");
+
+    let secret = [17_u8; 32];
+    let enrolled = post(
+        &console,
+        "/api/enrollments",
+        &json!({
+            "device_name":"Workstation",
+            "claim_digest":text_id(&Digest::of(&secret).0),
+        }),
+        "",
+    );
+    assert_eq!(enrolled.status, StatusCode::OK);
+    let pending = console
+        .dispatch(&Method::GET, "/api/enrollments", &json!({}), &session, 100)
+        .unwrap();
+    assert_eq!(pending.body["enrollments"][0]["created_at"], 100);
+
+    assert_eq!(
+        post(
+            &console,
+            "/api/enrollments/approve",
+            &enrolled.body,
+            &session
+        )
+        .status,
+        StatusCode::OK
+    );
+    let claim_body = json!({
+        "enrollment_id": enrolled.body["enrollment_id"],
+        "claim_secret": text_id(&secret),
+    });
+    let claimed = post(&console, "/api/enrollments/claim", &claim_body, "");
+    assert_eq!(claimed.status, StatusCode::OK);
+    assert_eq!(claimed.body["expires_at"], enrolled.body["expires_at"]);
+    let key = claimed.body["access_key"].as_str().unwrap();
+
+    let installed = post(&console, "/api/enrollments/installed", &claim_body, "");
+    assert_eq!(installed.status, StatusCode::OK);
+    assert!(installed.body.get("managed_turn").is_none());
+    assert!(admitted(&console, key));
+
+    assert_eq!(
+        post(&console, "/api/enrollments/cancel", &claim_body, "").status,
+        StatusCode::OK
+    );
+    assert!(!admitted(&console, key));
 }

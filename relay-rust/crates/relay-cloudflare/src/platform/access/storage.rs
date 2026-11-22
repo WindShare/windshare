@@ -1,12 +1,11 @@
-use super::{failure, text_id};
+use super::failure;
 use serde::{Serialize, de::DeserializeOwned};
 use windshare_relay_access::{Credential, Digest};
-use windshare_relay_console::credentials::{
-    CREDENTIAL_HISTORY_PAGE_SIZE, RevokedCredentialPosition,
-};
+use windshare_relay_console::{credentials::RevokedCredentialPosition, text_id};
 use worker::{Result, SqlStorage, SqlStorageValue, State};
 
 const CREDENTIAL_ROWS: &str = "key GLOB 'credential:*'";
+const ENROLLMENT_ROWS: &str = "key GLOB 'enrollment:*'";
 const ACTIVE_CREDENTIALS: &str = "json_extract(value, '$.state') = 'Active'";
 const REVOKED_AT: &str = "json_extract(value, '$.state.Revoked.at')";
 const TERMINATION_BATCH_SIZE: i64 = 32;
@@ -95,9 +94,22 @@ impl Database {
             vec![],
         )
     }
+    pub fn pending_enrollments(&self) -> Result<usize> {
+        let rows = self.0.exec(
+            &format!(
+                "SELECT count(*) FROM access_entries WHERE {ENROLLMENT_ROWS} AND expires IS NOT NULL"
+            ),
+            None,
+        )?;
+        match rows.raw().next().transpose()?.as_deref() {
+            Some([SqlStorageValue::Integer(count)]) => usize::try_from(*count).map_err(failure),
+            _ => Err(failure("invalid enrollment count")),
+        }
+    }
     pub fn revoked_credentials(
         &self,
         after: Option<&RevokedCredentialPosition>,
+        limit: usize,
     ) -> Result<Vec<Credential>> {
         let revoked = format!("{CREDENTIAL_ROWS} AND {REVOKED_AT} IS NOT NULL");
         self.0.exec(
@@ -107,8 +119,8 @@ impl Database {
             ),
             None,
         )?;
-        let read = |filter: &str, order: &str, mut args: Vec<SqlStorageValue>, limit: usize| {
-            args.push(i64::try_from(limit).map_err(failure)?.into());
+        let read = |filter: &str, order: &str, mut args: Vec<SqlStorageValue>, take: usize| {
+            args.push(i64::try_from(take).map_err(failure)?.into());
             self.read_credentials(
                 &format!(
                     "SELECT value FROM access_entries INDEXED BY access_revoked_credentials
@@ -117,7 +129,6 @@ impl Database {
                 args,
             )
         };
-        let limit = CREDENTIAL_HISTORY_PAGE_SIZE + 1;
         let order = format!("{REVOKED_AT} DESC, key DESC");
         let Some(after) = after else {
             return read("", &order, vec![], limit);

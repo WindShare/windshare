@@ -1,9 +1,9 @@
-use super::{Rejected, Result};
+use super::Result;
 use crate::node::access::{BoundAccount, DeviceCredential, DeviceKeys};
 use anyhow::ensure;
-use hyper::StatusCode;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use windshare_relay_access::{Credential, Enrollment, EnrollmentState};
+use windshare_relay_console::http::ConsoleError;
 
 const ACTIVE_CREDENTIALS: &str = "json_extract(body, '$.state') = 'Active'";
 
@@ -76,7 +76,7 @@ pub(super) fn throttle(db: &Connection, scope: &str, limit: u32, now: u64) -> Re
     let changed=db.execute("INSERT INTO console_attempts VALUES(?1,?2,1) ON CONFLICT(scope) DO UPDATE SET attempts=attempts+1 WHERE attempts<?3",
         params![scope,i64::try_from(now+WINDOW_MS)?,limit])?;
     if changed == 0 {
-        return Err(Rejected(StatusCode::TOO_MANY_REQUESTS, "slow_down", WINDOW_MS).into());
+        return Err(ConsoleError::too_many_requests("slow_down", WINDOW_MS).into());
     }
     Ok(())
 }

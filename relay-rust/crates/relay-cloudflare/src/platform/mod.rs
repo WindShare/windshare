@@ -180,7 +180,7 @@ impl ShareRelayObject {
                 "{}",
                 json!({"event":"registration_route_refused",
                 "operation_id":persistence::tag(connection),
-                "share_id":access::text_id(route.share_id().as_bytes())})
+                "share_id":windshare_relay_console::text_id(route.share_id().as_bytes())})
             );
             return RegistrationDecision::Denied;
         }
@@ -192,7 +192,7 @@ impl ShareRelayObject {
         let Some(digest) = digest else {
             return RegistrationDecision::Denied;
         };
-        let body = json!({"digest":digest, "share_id":access::text_id(request.registration().route().share_id().as_bytes()),
+        let body = json!({"digest":digest, "share_id":windshare_relay_console::text_id(request.registration().route().share_id().as_bytes()),
             "operation_id":persistence::tag(connection)});
         let resolve = async {
             let request = Request::new_with_init(
@@ -219,7 +219,7 @@ impl ShareRelayObject {
                 worker::console_log!(
                     "{}",
                     json!({"event":"registration_access_unavailable",
-                    "operation_id":persistence::tag(connection),"share_id":access::text_id(request.registration().route().share_id().as_bytes()),"reason":error.to_string()})
+                    "operation_id":persistence::tag(connection),"share_id":windshare_relay_console::text_id(request.registration().route().share_id().as_bytes()),"reason":error.to_string()})
                 );
                 RegistrationDecision::SERVICE_UNAVAILABLE
             }
@@ -249,7 +249,10 @@ impl DurableObject for ShareRelayObject {
     async fn fetch(&self, mut req: Request) -> Result<Response> {
         if req.method() == Method::Post && req.path() == "/internal/terminate" {
             let body: serde_json::Value = req.json().await?;
-            let credential = access::parse_id::<16>(body["credential_id"].as_str().unwrap_or(""))?;
+            let credential = windshare_relay_console::parse_id::<16>(
+                body["credential_id"].as_str().unwrap_or(""),
+            )
+            .ok_or_else(|| failure("invalid identifier"))?;
             let database = storage::Database::open(&self.state).map_err(failure)?;
             // Empty targets need no runtime, but must retain the same fence as
             // live targets. Unknown or damaged authority must still fail closed.
@@ -257,7 +260,10 @@ impl DurableObject for ShareRelayObject {
             {
                 database
                     .put(
-                        &format!("access-stop:{}", access::text_id(&credential)),
+                        &format!(
+                            "access-stop:{}",
+                            windshare_relay_console::text_id(&credential)
+                        ),
                         &true,
                     )
                     .map_err(failure)?;
@@ -271,7 +277,10 @@ impl DurableObject for ShareRelayObject {
                 self.with_runtime(|runtime, host| {
                     // Fence an authorization response still in flight when revocation arrived.
                     host.database.put(
-                        &format!("access-stop:{}", access::text_id(&credential)),
+                        &format!(
+                            "access-stop:{}",
+                            windshare_relay_console::text_id(&credential)
+                        ),
                         &true,
                     )?;
                     runtime.event(
@@ -339,7 +348,7 @@ impl DurableObject for ShareRelayObject {
                                     .database
                                     .get::<bool>(&format!(
                                         "access-stop:{}",
-                                        access::text_id(&credential)
+                                        windshare_relay_console::text_id(&credential)
                                     ))?
                                     .unwrap_or(false) =>
                                 {

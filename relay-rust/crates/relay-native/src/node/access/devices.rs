@@ -208,17 +208,6 @@ impl Service {
             .map(CredentialEntry::snapshot)
     }
 
-    pub(crate) fn has_credential(
-        &self,
-        id: CredentialId,
-        matches_state: impl Fn(CredentialState) -> bool,
-    ) -> bool {
-        self.credential_index()
-            .entries
-            .iter()
-            .any(|entry| entry.value.id == id && matches_state(entry.value.state))
-    }
-
     pub(crate) fn active_credentials(&self) -> Vec<Credential> {
         self.credential_index()
             .active_inventory()

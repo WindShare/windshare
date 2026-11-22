@@ -1,4 +1,4 @@
-use super::{Console, Reply, Result, database, field, refusal};
+use super::{Console, Reply, Result, database};
 use rusqlite::{Connection, params};
 use serde_json::{Value, json};
 use windshare_relay_access::{
@@ -6,6 +6,7 @@ use windshare_relay_access::{
     device_login::{Approval, Invitation},
     trust::Generation,
 };
+use windshare_relay_console::http::{ConsoleError, required_str};
 
 impl Console {
     fn login_authority(&self, now: u64) -> Option<(&str, Generation)> {
@@ -42,24 +43,24 @@ impl Console {
         })?))
     }
     pub(super) fn approve_account(&self, db: &Connection, body: &Value, now: u64) -> Result<Reply> {
-        let denied = || refusal(Refusal::AccessDenied);
+        let denied = || ConsoleError::from_refusal(Refusal::AccessDenied);
         let (_, generation) = self.login_authority(now / 1000).ok_or_else(denied)?;
         let grant = Approval::verify(
-            field(body, "approval")?,
+            required_str(body, "approval")?,
             generation,
             self.0.node_key.verifying_key().to_bytes(),
             now,
         )
         .map_err(|_| denied())?;
         let mut e = database::enrollment(db, &grant.enrollment)?
-            .ok_or_else(|| refusal(Refusal::Expired))?;
+            .ok_or_else(|| ConsoleError::from_refusal(Refusal::Expired))?;
         let binding = crate::node::access::BoundAccount {
             issuer: grant.issuer,
             account: grant.account,
         };
         if e.state == EnrollmentState::Pending {
             super::devices::require_credential_capacity(db)?;
-            e.approve(e.id, now).map_err(refusal)?;
+            e.approve(e.id, now).map_err(ConsoleError::from_refusal)?;
             db.execute(
                 "INSERT INTO console_account_bindings(credential,issuer,account) VALUES(?1,?2,?3)",
                 params![

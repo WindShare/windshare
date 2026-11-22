@@ -55,7 +55,7 @@ pub async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     let digest = req.headers().get("Authorization")?.and_then(|header| {
         header
             .strip_prefix("Bearer ")
-            .map(|key| access::text_id(&Digest::of(key.as_bytes()).0))
+            .map(|key| windshare_relay_console::text_id(&Digest::of(key.as_bytes()).0))
     });
     let mut forwarded = req.clone_mut()?;
     // Only a digest crosses the edge. It identifies a credential; it never caches permission.

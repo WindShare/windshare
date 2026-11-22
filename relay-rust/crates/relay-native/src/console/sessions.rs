@@ -1,16 +1,23 @@
-use super::{Console, Digest, Rejected, Reply, Result, database, field, invalid, random};
+use super::{Console, Digest, Reply, Result, database, random};
 use argon2::{
     Argon2,
     password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
 };
-use hyper::StatusCode;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
-use windshare_relay_console::{ADMIN_SESSION_LIFETIME_MS, text_id};
+use windshare_relay_console::{
+    ADMIN_SESSION_LIFETIME_MS,
+    http::{ConsoleError, required_str},
+    text_id,
+};
 
 const MIN_PASSWORD: usize = 12;
 const MAX_PASSWORD: usize = 256;
 const MAX_LOGIN_ATTEMPTS: u32 = 12;
+
+const fn invalid() -> ConsoleError {
+    ConsoleError::bad_request("invalid_request")
+}
 
 pub(super) fn initialized(db: &Connection) -> Result<bool> {
     Ok(
@@ -78,10 +85,12 @@ fn verify_stored_password(db: &Connection, password: &str) -> Result<bool> {
 
 impl Console {
     pub(super) fn initialize(&self, db: &Connection, body: &Value, now: u64) -> Result<Reply> {
-        if initialized(db)? || Digest::of(field(body, "token")?.as_bytes()) != self.0.bootstrap {
-            return Err(Rejected(StatusCode::FORBIDDEN, "initialization_consumed", 0).into());
+        if initialized(db)?
+            || Digest::of(required_str(body, "token")?.as_bytes()) != self.0.bootstrap
+        {
+            return Err(ConsoleError::forbidden("initialization_consumed").into());
         }
-        let hash = hash_password(field(body, "password")?)?;
+        let hash = hash_password(required_str(body, "password")?)?;
         db.execute("INSERT INTO console_owner VALUES(1,?1)", [hash])?;
         tracing::info!(event = "node_administrator_initialized");
         sign_in(db, now)
@@ -89,21 +98,21 @@ impl Console {
 
     pub(super) fn login(db: &Connection, body: &Value, now: u64) -> Result<Reply> {
         database::throttle(db, "login", MAX_LOGIN_ATTEMPTS, now)?;
-        if !verify_stored_password(db, field(body, "password")?)? {
-            return Err(Rejected(StatusCode::UNAUTHORIZED, "invalid_password", 0).into());
+        if !verify_stored_password(db, required_str(body, "password")?)? {
+            return Err(ConsoleError::unauthorized("invalid_password").into());
         }
         sign_in(db, now)
     }
 
     pub(super) fn change_password(db: &Connection, body: &Value, now: u64) -> Result<Reply> {
         database::throttle(db, "password_change", MAX_LOGIN_ATTEMPTS, now)?;
-        let current = field(body, "current_password")?;
-        let next = field(body, "new_password")?;
+        let current = required_str(body, "current_password")?;
+        let next = required_str(body, "new_password")?;
         if !(MIN_PASSWORD..=MAX_PASSWORD).contains(&next.len()) {
             return Err(invalid().into());
         }
         if !verify_stored_password(db, current)? {
-            return Err(Rejected(StatusCode::FORBIDDEN, "invalid_password", 0).into());
+            return Err(ConsoleError::forbidden("invalid_password").into());
         }
         let hash = hash_password(next)?;
         db.execute("UPDATE console_owner SET password=?1 WHERE id=1", [hash])?;

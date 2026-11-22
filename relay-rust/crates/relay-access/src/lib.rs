@@ -17,7 +17,9 @@ pub use attribution::{AccountId, Attribution, CredentialId, Issuer, Principal};
 mod enrollment;
 
 pub use credential::{Credential, CredentialState, Digest, Refusal};
-pub use enrollment::{ENROLLMENT_LIFETIME_MS, Enrollment, EnrollmentState, POLL_INTERVAL_MS, Poll};
+pub use enrollment::{
+    ENROLLMENT_LIFETIME_MS, Enrollment, EnrollmentState, POLL_INTERVAL_MS, Poll, validate_name,
+};
 
 pub const PRIVATE_PRINCIPAL: &str = "owner";
 pub const ANONYMOUS_PRINCIPAL: &str = "anonymous";

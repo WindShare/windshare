@@ -34,6 +34,17 @@ pub enum Poll {
     Installed { credential: [u8; 16] },
 }
 
+/// Names must be short display labels without control characters.
+///
+/// # Errors
+/// Returns [`Refusal::InvalidName`] when empty, over 128 bytes, or containing control characters.
+pub fn validate_name(name: &str) -> Result<(), Refusal> {
+    if name.trim().is_empty() || name.len() > MAX_NAME_BYTES || name.chars().any(char::is_control) {
+        return Err(Refusal::InvalidName);
+    }
+    Ok(())
+}
+
 impl Enrollment {
     /// # Errors
     /// Names must be short display labels without control characters.
@@ -44,12 +55,7 @@ impl Enrollment {
         claim_digest: Digest,
         now: u64,
     ) -> Result<Self, Refusal> {
-        if device_name.trim().is_empty()
-            || device_name.len() > MAX_NAME_BYTES
-            || device_name.chars().any(char::is_control)
-        {
-            return Err(Refusal::InvalidName);
-        }
+        validate_name(&device_name)?;
         Ok(Self {
             id,
             user_code,
