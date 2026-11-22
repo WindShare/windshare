@@ -111,6 +111,12 @@ func receiveWarning(code receive.FailureCode, cause error) appobs.Failure {
 }
 
 func (p workflowProjection) receiverTermination(value receive.PeerTerminated) bool {
+	// A caller stop tears down the runtime, lanes and peer together; whatever the
+	// peer retains from that teardown is a consequence of the stop, not a failure
+	// to warn about. The trace record keeps the retained classes.
+	if value.LocalStop == receive.ReceiverLocalStopCaller {
+		return true
+	}
 	for _, cause := range value.Value.RetainedCauseClasses() {
 		if failure, ok := ProjectReceiverCauseClass(cause); ok {
 			return p.emit(appobs.NewWarning(p.workflow, failure))

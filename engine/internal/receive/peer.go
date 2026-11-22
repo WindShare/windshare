@@ -322,6 +322,21 @@ type receiverRuntimeCloser interface{ Close() }
 type receiverLocalStop struct {
 	mu     sync.Mutex
 	reason ReceiverLocalStopReason
+	caller context.Context
+}
+
+// bindCaller attributes stops to the caller once ctx ends. Peers observe that
+// cancellation directly, usually before settlement records it, and teardown it
+// starts (such as runtime replacement) is a consequence of the caller stop.
+func (stop *receiverLocalStop) bindCaller(ctx context.Context) {
+	if stop == nil {
+		return
+	}
+	stop.mu.Lock()
+	if stop.caller == nil {
+		stop.caller = ctx
+	}
+	stop.mu.Unlock()
 }
 
 func (stop *receiverLocalStop) record(reason ReceiverLocalStopReason) {
@@ -331,6 +346,9 @@ func (stop *receiverLocalStop) record(reason ReceiverLocalStopReason) {
 	stop.mu.Lock()
 	if stop.reason == 0 {
 		stop.reason = reason
+		if stop.callerEnded() {
+			stop.reason = ReceiverLocalStopCaller
+		}
 	}
 	stop.mu.Unlock()
 }
@@ -342,9 +360,16 @@ func (stop *receiverLocalStop) snapshot() ReceiverLocalStopReason {
 	stop.mu.Lock()
 	defer stop.mu.Unlock()
 	if stop.reason == 0 {
+		if stop.callerEnded() {
+			return ReceiverLocalStopCaller
+		}
 		return ReceiverLocalStopNone
 	}
 	return stop.reason
+}
+
+func (stop *receiverLocalStop) callerEnded() bool {
+	return stop.caller != nil && stop.caller.Err() != nil
 }
 
 type receiverPeerSetupPhase string
@@ -395,6 +420,7 @@ func (a *runner) startReceiverPeer(
 	requirement receiverPeerRequirement,
 	options ...receiverPeerOptions,
 ) *activeReceiverPeer {
+	localStop.bindCaller(ctx)
 	starter, err := a.newReceiverPeerStarter(observation, localStop, requirement == receiverPeerRequired, options...)
 	if adapter, ok := starter.(receiverPeerFactoryAdapter); ok && len(options) > 0 {
 		adapter.options = options[0]
