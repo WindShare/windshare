@@ -23,9 +23,8 @@ import (
 )
 
 const (
-	InitialCheckingBudget = 40 * time.Second
-	MaximumPaths          = 64
-	WaveLifetime          = 120 * time.Second
+	MaximumPaths = 64
+	WaveLifetime = 120 * time.Second
 )
 
 type AttemptRequest struct {
@@ -88,7 +87,6 @@ type pathResources struct {
 	profileStage                  int
 	primaryProfile, backupProfile icepolicy.AttemptICEProfile
 	endpointIDs, failureDomains   []string
-	lastURLs                      []string
 }
 type NativePeerConnectivity struct {
 	mu                    sync.Mutex

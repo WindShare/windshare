@@ -2,6 +2,8 @@ package pionpeer
 
 import (
 	"fmt"
+	"io"
+	"strings"
 
 	"github.com/pion/logging"
 )
@@ -53,6 +55,12 @@ func (l providerLogger) Warnf(format string, args ...any) {
 	l.Warn(fmt.Sprintf(format, args...))
 }
 func (l providerLogger) Error(message string) {
+	// Late packets arriving while a shared UDP mux connection is closing trigger
+	// io.ErrClosedPipe in upstream pion/ice; downgrade routine shutdown drops here.
+	if strings.Contains(message, "Failed to write packet:") && strings.Contains(message, io.ErrClosedPipe.Error()) {
+		l.LeveledLogger.Trace(message)
+		return
+	}
 	l.observe(Diagnostic{Scope: l.scope, Severity: "error", Message: message})
 	l.LeveledLogger.Error(message)
 }

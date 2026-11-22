@@ -1,49 +1,33 @@
 # Pion fork follow-up
 
-Updated: 2026-11-22. Pinned baselines: ICE `v4.4.8`, WebRTC `v4.2.26`,
-SCTP `v1.12.0`. Exact commits and checksums live in
+Updated: 2026-11-23. Official upstream dependencies: ICE `v4.4.8`, WebRTC
+`v4.2.26`, TURN `v5.1.3`. Only SCTP `v1.12.0` remains pinned under
+`third_party/pion/sctp`; exact commit and checksums live in
 [the manifest](../third_party/pion/manifest.json).
 
-The local upgrade is separate from upstream contribution work. No upstream issue
-or PR was submitted as part of this upgrade; earlier proposals still have no
-submission links recorded here.
+## Retired local forks
 
-## Changes absorbed from upstream
+- `pion/turn`, `pion/ice`, and `pion/webrtc` forks have been removed.
+- Mapped external UDP and passive TCP reachability candidates are emitted at the
+  WindShare Trickle ICE boundary (`connectivity/pionpeer`) on top of upstream
+  `SetICEUDPMux` and `SetICETCPMux`.
+- Routine `io.ErrClosedPipe` shutdown packet drops from upstream `UDPMuxDefault`
+  are downgraded in WindShare's injected Pion logger (`connectivity/pionpeer/logging.go`).
 
-- Universal UDP mux initialization now completes before the reader starts; the
-  local initialization patch has been removed.
-- ICE owns gathering generations and peer-reflexive STUN check priorities. Local
-  mapped candidates carry the captured generation; provider
-  interface preferences compose with the upstream priority calculation.
-- Shared UDP writes now have a cancellation grace period. Exclusive idle refresh
-  interrupts immediately so socket handoff does not inherit that delay.
-
-## Remaining contribution candidates
+## Remaining contribution candidate
 
 | Area | Local difference | Next upstream work |
 | --- | --- | --- |
-| ICE/WebRTC TCP srflx | Preserve TCP type and socket address through parsing and conversion | Separate ICE fix, then WebRTC conversion fix |
-| STUN socket ownership | Local-endpoint-scoped gathering and explicit cancellable cache refresh | Discuss small socket/context APIs; keep ownership and leases in WindShare |
-| ICE priorities | Frozen base-address order without losing TCP direction or prflx type preference | Discuss an interface-preference extension point |
-| Initial ICE checks | Initial exploration window independent of connected failure detection | Propose ICE option, then WebRTC setting |
-| External mappings | Verified external IP **and port**, bound to the real socket and gathering generation | Discuss endpoint model; retain candidate-type/network filtering |
-| ICE UDP mux closed-conn drops | Log `io.ErrClosedPipe` late packets at trace level instead of error | Submit narrow upstream fix and remove local patch; one-off exception, do not add further log-suppression patches |
-| SCTP RACK | Lost retransmissions remain eligible for recovery; ambiguous retry ACKs are rejected | Submit focused recovery fix with [recorded evidence](../testdata/connectivity/webrtc/stall-20261022/README.md) |
+| SCTP RACK | Lost retransmissions remain eligible for recovery; ambiguous retry ACKs are rejected | Submit focused recovery fix to `pion/sctp` with [recorded evidence](../testdata/connectivity/webrtc/stall-20261022/README.md) |
 
 ## Maintenance
 
-Before proposing a change, check upstream main and existing issues/PRs. Submit
-one problem per branch, with a minimal reproduction and upstream-native tests.
-Do not include dependency upgrades or WindShare policy in a protocol fix.
-Do not add further Pion log-suppression patches under `third_party/pion/`;
-route or filter provider console noise through WindShare's injected Pion logger instead.
+Do not reintroduce `pion/ice` or `pion/webrtc` forks or log-suppression patches
+under `third_party/pion/`; keep product policy and logger filtering in WindShare.
 
-For local changes, update source, patch and manifest together. Run
-`go run ./scripts/ci/_piondeps -reproduce`, affected race tests and
-`make ci-parallel`; dependency upgrades also rerun socket/selected-pair payload
-and Chromium/Pion evidence. The [provider fixtures](../testdata/provider-capabilities/README.md)
-prove local mechanics, not public connectivity rates.
+For local SCTP changes, update source, patch and manifest together. Run
+`go run ./scripts/ci/_piondeps -reproduce`, `go test -short -race github.com/pion/sctp`,
+and `make hygiene`.
 
-After an upstream fix reaches the adopted release, remove its local patch and
-refresh provenance. Record actual submission/merge links here; a merged PR alone
-does not remove the shipped maintenance burden.
+Once the upstream SCTP RACK fix reaches an adopted release, remove
+`third_party/pion/` and `scripts/ci/_piondeps/` completely.

@@ -10,16 +10,13 @@ import (
 	"net/netip"
 	"slices"
 	"sync"
-	"time"
 
 	"github.com/pion/ice/v4"
 )
 
 const (
-	DefaultCapacity       = 64
-	MaxAddressesPerPath   = 16
-	DefaultIdleInterval   = 15 * time.Second
-	DefaultRefreshTimeout = 500 * time.Millisecond
+	DefaultCapacity     = 64
+	MaxAddressesPerPath = 16
 )
 
 var (
@@ -34,11 +31,9 @@ var (
 type ListenPacket func(network, address string) (net.PacketConn, error)
 
 type Config struct {
-	Capacity       int
-	ListenPacket   ListenPacket
-	ListenTCP      func(network, address string) (net.Listener, error)
-	IdleInterval   time.Duration
-	RefreshTimeout time.Duration
+	Capacity     int
+	ListenPacket ListenPacket
+	ListenTCP    func(network, address string) (net.Listener, error)
 	// Observe must publish promptly; it is never called while holding the authority lock.
 	Observe func(Event)
 }
@@ -57,7 +52,6 @@ type pathSockets struct {
 	tcp       *TCPMux
 	refs      int
 	owner     iceOwnership
-	idle      *idleTask
 	closing   *socketClosure
 }
 
@@ -77,12 +71,6 @@ type Authority struct {
 func New(config Config) *Authority {
 	if config.Capacity <= 0 {
 		config.Capacity = DefaultCapacity
-	}
-	if config.IdleInterval <= 0 {
-		config.IdleInterval = DefaultIdleInterval
-	}
-	if config.RefreshTimeout <= 0 {
-		config.RefreshTimeout = DefaultRefreshTimeout
 	}
 	if config.ListenTCP == nil {
 		config.ListenTCP = net.Listen
@@ -172,7 +160,10 @@ func (a *Authority) acquireLocked(key pathKey, addresses []netip.Addr) (*Lease, 
 			_ = mux.Close()
 			return nil, fmt.Errorf("allocate %s endpoint: %w", network, err)
 		}
-		mux.endpoints = append(mux.endpoints, ice.NewUniversalUDPMuxDefault(ice.UniversalUDPMuxParams{UDPConn: conn}))
+		mux.endpoints = append(mux.endpoints, ice.NewUDPMuxDefault(ice.UDPMuxParams{
+			UDPConn: conn,
+			Logger:  newUDPMuxLogger(),
+		}))
 	}
 	entry := &pathSockets{key: key, addresses: addresses, mux: mux, refs: 1}
 	a.paths[key] = entry
@@ -187,11 +178,6 @@ func (a *Authority) Retire(generation uint64) {
 	if generation > a.retiredThrough {
 		a.retiredThrough = generation
 		a.notifyLocked()
-		for _, entry := range a.paths {
-			if entry.key.generation <= generation && entry.idle != nil {
-				entry.idle.cancel()
-			}
-		}
 	}
 }
 

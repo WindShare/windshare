@@ -17,10 +17,6 @@ import (
 	"github.com/windshare/windshare/connectivity/socketauthority"
 )
 
-// InitialCheckingTimeout follows RFC 8863's default transaction window. It
-// deliberately does not extend failure detection after a pair was connected.
-const InitialCheckingTimeout = 39500 * time.Millisecond
-
 type MappedEndpoint struct {
 	Local    netip.AddrPort
 	External netip.AddrPort
@@ -29,17 +25,16 @@ type MappedEndpoint struct {
 
 // AttemptConfig is a value snapshot; referenced lists are copied before creation.
 type AttemptConfig struct {
-	ProtocolSessionID      [16]byte
-	PeerPathID             [16]byte
-	AttemptID              [16]byte
-	NetworkGenerationID    uint64
-	ICEProfileID           string
-	ICE                    iceconfig.Connection
-	InitialCheckingTimeout time.Duration
-	TCPProfile             TCPProfile
-	SocketLease            *socketauthority.Lease
-	MappedEndpoints        []MappedEndpoint
-	Observe                func(Event)
+	ProtocolSessionID   [16]byte
+	PeerPathID          [16]byte
+	AttemptID           [16]byte
+	NetworkGenerationID uint64
+	ICEProfileID        string
+	ICE                 iceconfig.Connection
+	TCPProfile          TCPProfile
+	SocketLease         *socketauthority.Lease
+	MappedEndpoints     []MappedEndpoint
+	Observe             func(Event)
 	// allowLoopback is package-private so only local in-package ICE handshake
 	// tests can opt into loopback sockets/candidates; production stays RFC 8445.
 	allowLoopback bool
@@ -70,6 +65,7 @@ type Connection struct {
 	lease     *socketauthority.Lease
 	release   func()
 	request   AttemptConfig
+	mapped    []MappedEndpoint
 	closeOnce sync.Once
 	closeErr  error
 }
@@ -108,16 +104,9 @@ func NewPeerConnection(configuration pion.Configuration, request AttemptConfig) 
 		_ = lease.Close()
 		return nil, err
 	}
-	mapped, mappedTCP, err := mapAttemptEndpoints(request.MappedEndpoints, endpoints, lease.TCPEndpoints(), capability)
+	mapped, err := mapAttemptEndpoints(request.MappedEndpoints, endpoints, lease.TCPEndpoints(), capability)
 	if err != nil {
 		return fail(err)
-	}
-	initialTimeout := request.InitialCheckingTimeout
-	if initialTimeout == 0 {
-		initialTimeout = InitialCheckingTimeout
-	}
-	if initialTimeout < InitialCheckingTimeout {
-		return fail(errors.New("initial ICE checking budget is below PAC minimum"))
 	}
 	var settings pion.SettingEngine
 	settings.SetICEUDPMux(mux)
@@ -126,15 +115,9 @@ func NewPeerConnection(configuration pion.Configuration, request AttemptConfig) 
 	}
 	settings.SetIPFilter(localEndpointFilter(endpoints))
 	settings.SetICEMulticastDNSMode(ice.MulticastDNSModeQueryOnly)
-	providerConfig := ice.ProviderConfig{
-		SrflxMux: mux, InitialCheckingTimeout: initialTimeout, MappedUDPEndpoints: mapped,
-		MappedTCPEndpoints: mappedTCP, TCPMappedMux: lease.TCP(),
-		LocalAddressOrder: localAddressOrder(endpoints),
-	}
 	configureNetworkTypes(&settings, lease, capability)
 	configureICE(&configuration, request.ICE)
-	connection := &Connection{lease: lease, release: release, request: request}
-	settings.SetICEProviderConfig(providerConfig)
+	connection := &Connection{lease: lease, release: release, request: request, mapped: mapped}
 	settings.LoggerFactory = providerLoggerFactory{LoggerFactory: logging.NewDefaultLoggerFactory(), observe: connection.observeDiagnostic}
 	pc, err := pion.NewAPI(pion.WithSettingEngine(settings)).NewPeerConnection(configuration)
 	if err != nil {
@@ -269,28 +252,33 @@ func (c *Connection) SelectedPair() (PairFacts, bool) {
 	return facts, true
 }
 
-func mapAttemptEndpoints(requested []MappedEndpoint, endpoints, tcpEndpoints []netip.AddrPort, capability TCPCapability) ([]ice.MappedEndpoint, []ice.MappedEndpoint, error) {
-	mapped := make([]ice.MappedEndpoint, 0, len(requested))
-	var mappedTCP []ice.MappedEndpoint
+func mapAttemptEndpoints(requested []MappedEndpoint, endpoints, tcpEndpoints []netip.AddrPort, capability TCPCapability) ([]MappedEndpoint, error) {
+	mapped := make([]MappedEndpoint, 0, len(requested))
 	for _, endpoint := range requested {
+		protocol := endpoint.Protocol
+		if protocol == "" {
+			protocol = "udp"
+		}
 		bases := endpoints
-		if endpoint.Protocol == "tcp" {
+		switch protocol {
+		case "tcp":
 			bases = tcpEndpoints
 			if (!capability.IPv4 && endpoint.Local.Addr().Is4()) || (!capability.IPv6 && endpoint.Local.Addr().Is6()) {
 				continue
 			}
-		} else if endpoint.Protocol != "" && endpoint.Protocol != "udp" {
-			return nil, nil, errors.New("unsupported mapped endpoint protocol")
+		case "udp":
+		default:
+			return nil, errors.New("unsupported mapped endpoint protocol")
 		}
-		if !slices.Contains(bases, endpoint.Local) || !endpoint.External.IsValid() || endpoint.External.Port() == 0 || endpoint.External.Addr().Is4() != endpoint.Local.Addr().Is4() {
-			return nil, nil, errors.New("mapped endpoint does not belong to attempt socket")
+		if !slices.Contains(bases, endpoint.Local) || !endpoint.External.IsValid() || endpoint.External.Port() == 0 ||
+			endpoint.External.Addr().Is4() != endpoint.Local.Addr().Is4() || endpoint.External == endpoint.Local {
+			return nil, errors.New("mapped endpoint does not belong to attempt socket")
 		}
-		value := ice.MappedEndpoint{Local: endpoint.Local, External: endpoint.External}
-		if endpoint.Protocol == "tcp" {
-			mappedTCP = append(mappedTCP, value)
-		} else {
-			mapped = append(mapped, value)
-		}
+		mapped = append(mapped, MappedEndpoint{
+			Local:    netip.AddrPortFrom(endpoint.Local.Addr().Unmap(), endpoint.Local.Port()),
+			External: netip.AddrPortFrom(endpoint.External.Addr().Unmap(), endpoint.External.Port()),
+			Protocol: protocol,
+		})
 	}
-	return mapped, mappedTCP, nil
+	return mapped, nil
 }

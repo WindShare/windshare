@@ -96,9 +96,8 @@ func TestLocalFixedSTUNSocketLifecycleBaseline(t *testing.T) {
 			if stable && (pairs[0].LocalPort != pairs[1].LocalPort || pairs[0].RemotePort != pairs[1].RemotePort) {
 				t.Fatalf("stable endpoints changed: %+v", pairs)
 			}
-			// The remote srflx port must have real STUN provenance. Default Pion
-			// may select its separate host socket locally through peer-reflexive
-			// checks; the stable arm must use the STUN socket on both sides.
+			// Both arms must exercise real STUN gathering; the stable arm retains
+			// its leased local host ports across replacement via upstream UDPMux.
 			sources := []netip.AddrPort{await(t, observed), await(t, observed)}
 			for {
 				select {
@@ -111,10 +110,10 @@ func TestLocalFixedSTUNSocketLifecycleBaseline(t *testing.T) {
 		collected:
 			for _, pair := range pairs {
 				var ports []uint16
-				if stable || pair.RemoteType == "srflx" {
+				if pair.RemoteType == "srflx" {
 					ports = append(ports, pair.RemotePort)
 				}
-				if stable || pair.LocalType == "srflx" {
+				if pair.LocalType == "srflx" {
 					ports = append(ports, pair.LocalPort)
 				}
 				for _, port := range ports {
@@ -123,7 +122,7 @@ func TestLocalFixedSTUNSocketLifecycleBaseline(t *testing.T) {
 						found = found || source.Port() == port
 					}
 					if !found {
-						t.Fatalf("selected port %d absent from STUN sources %v", port, sources)
+						t.Fatalf("selected srflx port %d absent from STUN sources %v", port, sources)
 					}
 				}
 			}

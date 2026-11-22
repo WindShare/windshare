@@ -77,7 +77,7 @@ func testTCPMapping(t *testing.T, address string) {
 		return true
 	})
 	pair, ok := left.SelectedPair()
-	if !sawUDP || !sawMapped || !ok || pair.Protocol != "tcp" || pair.RemoteType != "srflx" || pair.RemotePort != external.Port() || external.Port() == internal.Port() {
+	if !sawUDP || !sawMapped || !ok || pair.Protocol != "tcp" || pair.RemoteType != "host" || pair.RemotePort != external.Port() || external.Port() == internal.Port() {
 		t.Fatalf("TCP remapping proof UDP=%v mapped=%v pair=%+v selected=%v", sawUDP, sawMapped, pair, ok)
 	}
 }

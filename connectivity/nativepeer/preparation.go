@@ -213,7 +213,7 @@ func (p *PreparedAttempt) connect(ctx context.Context) (*pionpeer.Connection, er
 	}
 	config := pionpeer.AttemptConfig{ProtocolSessionID: p.key.session, PeerPathID: [16]byte(p.key.path), AttemptID: [16]byte(p.request.Binding.AttemptID),
 		NetworkGenerationID: path.generation, ICEProfileID: p.profile.ID(), ICE: iceConfiguration, SocketLease: path.lease, MappedEndpoints: n.mappedLocked(path),
-		InitialCheckingTimeout: InitialCheckingBudget, TCPProfile: remoteProfile}
+		TCPProfile: remoteProfile}
 	observer := n.attemptObserver(p.key, path, p.profile, p.request.Binding)
 	config.Observe = func(event pionpeer.Event) {
 		observer(event)

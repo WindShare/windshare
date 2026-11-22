@@ -9,7 +9,6 @@ type iceOwnership uint8
 
 const (
 	iceUnclaimed iceOwnership = iota
-	iceClaiming
 	iceActive
 )
 
@@ -25,7 +24,7 @@ func (l *Lease) unavailableLocked() error {
 	return nil
 }
 
-// Claim transfers exclusive keepalive ownership to one ICE agent. The returned
+// Claim transfers exclusive ICE ownership for this path lease. The returned
 // release must run after PeerConnection.Close completes, before replacement.
 func (l *Lease) Claim() (*Mux, func(), error) {
 	if l == nil {
@@ -41,32 +40,11 @@ func (l *Lease) Claim() (*Mux, func(), error) {
 		a.mu.Unlock()
 		return nil, nil, ErrActive
 	}
-	// Reserve before unlocking so another claimant cannot enter the gap between
-	// stopping background discovery and handing the same socket to ICE.
-	l.entry.owner = iceClaiming
-	idle := l.entry.idle
-	if idle != nil {
-		idle.cancel()
-	}
+	l.entry.owner = iceActive
 	a.mu.Unlock()
 	started := time.Now()
 	l.observe(Event{Kind: SocketHandoffStarted, Result: "pending"})
-	if idle != nil {
-		<-idle.done
-	}
-	a.mu.Lock()
-	l.entry.idle = nil
-	err := l.unavailableLocked()
-	if err != nil {
-		l.entry.owner = iceUnclaimed
-	} else {
-		l.entry.owner = iceActive
-	}
-	a.mu.Unlock()
-	l.observe(Event{Kind: SocketHandoffFinished, Duration: time.Since(started), Result: socketResult(err)})
-	if err != nil {
-		return nil, nil, err
-	}
+	l.observe(Event{Kind: SocketHandoffFinished, Duration: time.Since(started), Result: socketResult(nil)})
 	var once sync.Once
 	return l.entry.mux, func() {
 		once.Do(func() {

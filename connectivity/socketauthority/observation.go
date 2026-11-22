@@ -11,7 +11,6 @@ import (
 type EventKind string
 
 const (
-	STUNRefreshFinished   EventKind = "stun_refresh_finished"
 	SocketHandoffStarted  EventKind = "socket_handoff_started"
 	SocketHandoffFinished EventKind = "socket_handoff_finished"
 )

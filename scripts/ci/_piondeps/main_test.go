@@ -49,19 +49,19 @@ func TestLineEndingNormalization(t *testing.T) {
 }
 
 func TestModuleBindingsRejectUnselectedOrUnpinnedSources(t *testing.T) {
-	module := sourceModule{Name: "ice", Path: "github.com/pion/ice/v4", Version: "v4.2.7"}
-	valid := "module example.com/product\nrequire github.com/pion/ice/v4 v4.2.7\nreplace github.com/pion/ice/v4 => ./third_party/pion/ice\n"
+	module := sourceModule{Name: "sctp", Path: "github.com/pion/sctp", Version: "v1.12.0"}
+	valid := "module example.com/product\nrequire github.com/pion/sctp v1.12.0\nreplace github.com/pion/sctp => ./third_party/pion/sctp\n"
 	if err := verifyModuleBindings([]byte(valid), []sourceModule{module}); err != nil {
 		t.Fatal(err)
 	}
 	cases := map[string]string{
-		"wrong version":      strings.Replace(valid, "v4.2.7", "v4.2.6", 1),
-		"missing require":    strings.Replace(valid, "require github.com/pion/ice/v4 v4.2.7\n", "", 1),
+		"wrong version":      strings.Replace(valid, "v1.12.0", "v1.11.1", 1),
+		"missing require":    strings.Replace(valid, "require github.com/pion/sctp v1.12.0\n", "", 1),
 		"missing replace":    strings.Split(valid, "replace")[0],
-		"other directory":    strings.Replace(valid, "./third_party/pion/ice", "../ice", 1),
-		"versioned override": strings.Replace(valid, "replace github.com/pion/ice/v4", "replace github.com/pion/ice/v4 v4.2.7", 1),
-		"remote fork":        strings.Replace(valid, "./third_party/pion/ice", "example.com/ice/v4 v4.2.7", 1),
-		"duplicate override": valid + "replace github.com/pion/ice/v4 v4.2.8 => ../ice\n",
+		"other directory":    strings.Replace(valid, "./third_party/pion/sctp", "../sctp", 1),
+		"versioned override": strings.Replace(valid, "replace github.com/pion/sctp", "replace github.com/pion/sctp v1.12.0", 1),
+		"remote fork":        strings.Replace(valid, "./third_party/pion/sctp", "example.com/sctp v1.12.0", 1),
+		"duplicate override": valid + "replace github.com/pion/sctp v1.12.1 => ../sctp\n",
 		"invalid module":     "invalid syntax",
 	}
 	for name, raw := range cases {

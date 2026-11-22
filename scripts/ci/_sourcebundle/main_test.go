@@ -228,7 +228,7 @@ func TestRunBuildsDeterministicExactCommitArchive(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(second.extractPath, "untracked-after-clean.txt")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("archive consumed untracked worktree file: stat err = %v", err)
 	}
-	for _, required := range []string{"third_party/pion/ice/ice.go", "third_party/pion/ice/LICENSE", "internal/perfevidence/evidence.go", "spikes/webrtc/spike.go"} {
+	for _, required := range []string{"third_party/pion/sctp/sctp.go", "third_party/pion/sctp/LICENSE", "internal/perfevidence/evidence.go", "spikes/webrtc/spike.go"} {
 		if _, err := os.Stat(filepath.Join(second.extractPath, filepath.FromSlash(required))); err != nil {
 			t.Fatalf("source bundle omitted %s: %v", required, err)
 		}
@@ -299,17 +299,17 @@ func newModuleRepository(t *testing.T) (string, string) {
 
 func moduleFixtureContents() map[string]string {
 	return map[string]string{
-		"third_party/pion/ice/go.mod":       "module example.com/ice\n\ngo 1.25.0\n",
-		"third_party/pion/ice/ice.go":       "package ice\nfunc Check() {}\n",
-		"third_party/pion/ice/LICENSE":      "MIT License\n",
+		"third_party/pion/sctp/go.mod":      "module example.com/sctp\n\ngo 1.25.0\n",
+		"third_party/pion/sctp/sctp.go":     "package sctp\nfunc Check() {}\n",
+		"third_party/pion/sctp/LICENSE":     "MIT License\n",
 		".testcoverage.yml":                 "threshold: 1\n",
 		"LICENSE":                           "GNU AFFERO GENERAL PUBLIC LICENSE\nVersion 3, 19 November 2007\n",
 		"NOTICE":                            "WindShare\nSPDX-License-Identifier: AGPL-3.0-or-later\n",
 		"README.md":                         "fixture readme\n",
 		"core/README.md":                    "core fixture readme\n",
-		"go.mod":                            "module " + modulePath + "\n\ngo 1.25.0\nrequire example.com/ice v0.0.0\nreplace example.com/ice => ./third_party/pion/ice\n",
+		"go.mod":                            "module " + modulePath + "\n\ngo 1.25.0\nrequire example.com/sctp v0.0.0\nreplace example.com/sctp => ./third_party/pion/sctp\n",
 		"go.sum":                            "example.com/dependency v1.0.0 h1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n",
-		"cmd/wind/main.go":                  "package main\nimport \"example.com/ice\"\nfunc main() { ice.Check() }\n",
+		"cmd/wind/main.go":                  "package main\nimport \"example.com/sctp\"\nfunc main() { sctp.Check() }\n",
 		"core/link/link.go":                 "package link\n",
 		"core/testvectors/README.md":        "vectors\n",
 		"core/testvectors/inventory.txt":    "canonical.json\n",

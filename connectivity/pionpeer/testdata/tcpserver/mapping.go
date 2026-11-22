@@ -1,23 +1,13 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"net"
-	"net/netip"
 	"strings"
 	"time"
-
-	"github.com/pion/ice/v4"
 )
 
-type mappedListener struct {
-	mux   *ice.TCPMuxDefault
-	local netip.AddrPort
-}
-
-func (m mappedListener) GetConnForEndpoint(ufrag string, local netip.AddrPort) (net.PacketConn, error) {
-	return m.mux.GetConnByUfrag(ufrag, local.Addr().Is6(), net.IP(local.Addr().AsSlice()))
-}
 func forwardTCP(listener net.Listener, internal net.Addr) {
 	for {
 		incoming, err := listener.Accept()
@@ -41,11 +31,17 @@ func forwardTCP(listener net.Listener, internal net.Addr) {
 		}()
 	}
 }
-func mappedOnlySDP(sdp string) string {
+
+func mappedOnlySDP(sdp, address string, localPort, externalPort int) string {
+	from := fmt.Sprintf(" %s %d ", address, localPort)
+	to := fmt.Sprintf(" %s %d ", address, externalPort)
 	var lines []string
 	for _, line := range strings.Split(sdp, "\r\n") {
-		if strings.HasPrefix(line, "a=candidate:") && !strings.Contains(line, " typ srflx") {
-			continue
+		if strings.HasPrefix(line, "a=candidate:") {
+			if !strings.Contains(line, from) {
+				continue
+			}
+			line = strings.Replace(line, from, to, 1)
 		}
 		lines = append(lines, line)
 	}

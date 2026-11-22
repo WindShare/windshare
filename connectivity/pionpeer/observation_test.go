@@ -5,7 +5,6 @@ import (
 	"net/netip"
 	"sync"
 	"testing"
-	"time"
 
 	pion "github.com/pion/webrtc/v4"
 	"github.com/windshare/windshare/connectivity/socketauthority"
@@ -115,15 +114,11 @@ func TestOptionalTCPFailureDoesNotPreventUDPAttempt(t *testing.T) {
 		t.Fatal("capacity failure created listener")
 	}
 }
-func TestInitialBudgetAndMappingProtocolValidation(t *testing.T) {
+func TestMappingProtocolValidation(t *testing.T) {
 	authority := socketauthority.New(socketauthority.Config{})
 	defer authority.Close()
 	lease := testLease(t, authority, 1, "127.0.0.1")
-	request := AttemptConfig{ProtocolSessionID: lease.SessionID(), NetworkGenerationID: 1, PeerPathID: lease.PathID(), SocketLease: lease, InitialCheckingTimeout: time.Second, allowLoopback: true}
-	if _, err := NewPeerConnection(pion.Configuration{}, request); err == nil {
-		t.Fatal("premature PAC ceiling accepted")
-	}
-	request.InitialCheckingTimeout = 40 * time.Second
+	request := AttemptConfig{ProtocolSessionID: lease.SessionID(), NetworkGenerationID: 1, PeerPathID: lease.PathID(), SocketLease: lease, allowLoopback: true}
 	request.MappedEndpoints = []MappedEndpoint{{Local: lease.Endpoints()[0], External: netip.MustParseAddrPort("203.0.113.1:1"), Protocol: "unknown"}}
 	if _, err := NewPeerConnection(pion.Configuration{}, request); err == nil {
 		t.Fatal("unknown mapped protocol accepted")

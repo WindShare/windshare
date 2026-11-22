@@ -86,6 +86,7 @@ func main() {
 		settings.SetICETCPMux(mux)
 		settings.DisableActiveTCP(true)
 		var forwarder net.Listener
+		var localPort, externalPort int
 		if r.URL.Query().Get("mapped") == "1" {
 			forwarder, err = net.Listen(listenNetwork, net.JoinHostPort(address, "0"))
 			if err != nil {
@@ -93,9 +94,8 @@ func main() {
 				http.Error(w, err.Error(), 500)
 				return
 			}
-			local := listener.Addr().(*net.TCPAddr).AddrPort()
-			external := forwarder.Addr().(*net.TCPAddr).AddrPort()
-			settings.SetICEProviderConfig(ice.ProviderConfig{TCPMappedMux: mappedListener{mux, local}, MappedTCPEndpoints: []ice.MappedEndpoint{{Local: local, External: external}}})
+			localPort = listener.Addr().(*net.TCPAddr).Port
+			externalPort = forwarder.Addr().(*net.TCPAddr).Port
 			go forwardTCP(forwarder, listener.Addr())
 		}
 		pc, err := pion.NewAPI(pion.WithSettingEngine(settings)).NewPeerConnection(pion.Configuration{})
@@ -156,7 +156,7 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		description := *pc.LocalDescription()
 		if forwarder != nil {
-			description.SDP = mappedOnlySDP(description.SDP)
+			description.SDP = mappedOnlySDP(description.SDP, address, localPort, externalPort)
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"id": id, "answer": description})
 	})

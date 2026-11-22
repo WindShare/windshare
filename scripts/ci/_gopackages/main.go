@@ -45,12 +45,8 @@ var approvedModuleMetadataPaths = map[string]struct{}{
 	"testdata/connectivity/sctp-rack-public-20261030/go.sum": {},
 	// Pinned upstream dependency projections are owned by _piondeps and its
 	// reproducible patch gate; WindShare wrappers remain in the root sets.
-	"third_party/pion/ice/go.mod":    {},
-	"third_party/pion/ice/go.sum":    {},
-	"third_party/pion/webrtc/go.mod": {},
-	"third_party/pion/webrtc/go.sum": {},
-	"third_party/pion/sctp/go.mod":   {},
-	"third_party/pion/sctp/go.sum":   {},
+	"third_party/pion/sctp/go.mod": {},
+	"third_party/pion/sctp/go.sum": {},
 }
 
 var moduleMetadataPathspecs = []string{

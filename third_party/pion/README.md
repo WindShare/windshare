@@ -1,41 +1,16 @@
-# Pinned Pion provider adaptation
+# Pinned Pion SCTP patch
 
-WindShare carries source projections of Pion ICE v4.4.8, WebRTC v4.2.26
-and SCTP v1.12.0. Exact
-upstream commits, Go checksums and file hashes are in `manifest.json`; upstream
-MIT licenses and SPDX notices remain beside the sources. These nested dependency
-modules are separate from WindShare's single production Go module and coverage set.
+WindShare uses official upstream Pion ICE (`v4.4.8`) and WebRTC (`v4.2.26`),
+carrying only a minimal source projection of Pion SCTP (`v1.12.0`). Exact
+upstream commit, Go checksum and file hashes are in `manifest.json`; upstream
+MIT licenses and SPDX notices remain beside the sources. This nested dependency
+module is separate from WindShare's single production Go module and coverage set.
 
-The narrow patches in `patches/` add:
+The narrow patch in `patches/sctp.patch` adds:
 
-- A PeerConnection setting for the ICE provider capability snapshot.
-- Shared physical socket gathering for host and server-reflexive candidates,
-  including explicit local-endpoint selection for multiple interfaces/families.
-- Immutable allocated external UDP/TCP IP **and port** candidates bound to the real base,
-  collected only when server-reflexive candidates and their network types are enabled.
-- Correct TCP type and socket address preservation for mapped server-reflexive candidates.
-- Initial checking time independent of connected disconnection/failure timers.
-- Base-address ordering composed with ICE-TCP direction preferences before candidate
-  admission and signaling, including dynamic active TCP; repeated candidates keep unique scores.
-- Explicit STUN cache-bypassing refresh; upstream owns response transaction validation.
-- Late packets for an already closed shared-socket connection are dropped at trace level,
-  not logged as errors, while its address mapping awaits removal (one-off upstream
-  candidate; do not add further log-suppression patches here—route Pion logging through
-  WindShare instead).
-- Mapped candidates retain their gathering generation; stale
-  results release their sockets instead of entering a newer generation.
-- Idle STUN refresh interrupts blocked writes immediately before socket handoff,
-  without inheriting the shared mux's cancellation grace period.
 - SCTP RACK recovery of lost retransmissions using the latest send time, with
   minimum-RTT rejection of ambiguous retry acknowledgements. Congestion limits
   and retransmission timeouts are unchanged; [evidence](../../testdata/connectivity/webrtc/stall-20261022/README.md).
-
-Socket, demand, mapping and retry policy remain in WindShare. Production uses
-independent sockets per peer path; cross-path shared remote-tuple demultiplexing
-is not supported. TCP is restricted to the exact capability profiles and local
-proof scope documented in [provider capability evidence](../../testdata/provider-capabilities/README.md).
-Initial gathering uses Pion's default GatherOnce; active TCP is filtered to the
-same immutable local address snapshot, so provider regathering cannot escape it.
 
 Verify the shipped projection without network access:
 
@@ -47,11 +22,10 @@ Reproduce it from checksum-verified upstream modules in a temporary directory:
 
 ```sh
 go run ./scripts/ci/_piondeps -reproduce
-go test -race github.com/pion/ice/v4 github.com/pion/sctp ./connectivity/socketauthority ./connectivity/pionpeer ./transport/webrtc
+go test -race github.com/pion/sctp ./connectivity/socketauthority ./connectivity/pionpeer ./transport/webrtc
 ```
 
-Reproduction reads the module cache and applies patches only to temporary copies.
-Dependency upgrades must update the reviewed projection, patches and manifest and
-rerun the socket, selected-pair and authenticated payload evidence. The source
-distribution must include these nested modules; a canonical Go proxy module zip
-cannot carry this local replacement build.
+Reproduction reads the module cache and applies `patches/sctp.patch` only to a
+temporary copy. Dependency upgrades must update the reviewed projection, patch
+and manifest and revalidate SCTP recovery evidence. The source distribution must
+include this nested module until the upstream SCTP fix is merged and adopted.

@@ -122,9 +122,6 @@ func (p *Path) awaitMappingOpportunity(wave recoveryWave) bool {
 	}
 	delay := max(min(MappingOpportunityDelay, WaveBudget-MinimumAttemptOpportunity)-now.Sub(wave.started), 0)
 	p.setResourceActive(true)
-	if p.config.Native != nil {
-		p.config.Native.Idle(p.ctx, [16]byte(p.key.session), p.key.path, now.Add(delay))
-	}
 	return p.wait(delay)
 }
 func (p *Path) prepareOpportunity(wave *recoveryWave) (*attemptOpportunity, *Result) {
@@ -250,9 +247,6 @@ func (p *Path) afterAttempt(wave *recoveryWave, result Result, admitted bool) *R
 		return nil
 	}
 	delay := time.Duration(wave.attempts) * time.Second
-	if p.deferred != nil && p.config.Native != nil {
-		p.config.Native.Idle(p.ctx, [16]byte(p.key.session), p.key.path, p.owner.config.Clock.Now().Add(delay))
-	}
 	if !p.wait(delay) {
 		return &Result{Stopped: true}
 	}

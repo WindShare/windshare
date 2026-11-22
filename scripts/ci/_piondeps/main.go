@@ -37,9 +37,7 @@ type manifest struct {
 }
 
 var providerModules = map[string]string{
-	"ice":    "github.com/pion/ice/v4",
-	"webrtc": "github.com/pion/webrtc/v4",
-	"sctp":   "github.com/pion/sctp",
+	"sctp": "github.com/pion/sctp",
 }
 
 func main() {
@@ -75,7 +73,7 @@ func verify(root string, reproduce bool) error {
 		return err
 	}
 	if len(sources.Modules) != len(providerModules) {
-		return errors.New("provider source manifest must contain ice, webrtc and sctp")
+		return errors.New("provider source manifest must contain sctp")
 	}
 	moduleFile, err := os.ReadFile(filepath.Join(root, "go.mod"))
 	if err != nil {

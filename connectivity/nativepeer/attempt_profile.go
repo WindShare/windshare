@@ -42,7 +42,6 @@ func (n *NativePeerConnectivity) selectProfileLocked(snapshot networkstate.Snaps
 		}
 	}
 	if path.profileStage == 2 {
-		path.lastURLs = path.backupProfile.URLs()
 		return path.backupProfile
 	}
 	profile := icepolicy.SelectAttemptProfile(pool, selection, facts)
@@ -56,7 +55,6 @@ func (n *NativePeerConnectivity) selectProfileLocked(snapshot networkstate.Snaps
 		path.backupProfile = profile
 		path.profileStage = 2
 	}
-	path.lastURLs = profile.URLs()
 	path.endpointIDs = append(path.endpointIDs, profile.EndpointIDs()...)
 	path.failureDomains = append(path.failureDomains, profile.FailureDomains()...)
 
@@ -96,7 +94,11 @@ func (n *NativePeerConnectivity) recordSelectedMapping(key pathKey, path *pathRe
 			if fact.Endpoint.Protocol == reachability.TCP {
 				protocol = "tcp"
 			}
-			if pair.LocalAddress == fact.External.Addr().String() && pair.LocalPort == fact.External.Port() && pair.Protocol == protocol {
+			// Synthesized mapped candidates share the local host socket in upstream Pion,
+			// so the selected local pair may report either the external mapping or its local base.
+			if pair.Protocol == protocol &&
+				((pair.LocalAddress == fact.External.Addr().String() && pair.LocalPort == fact.External.Port()) ||
+					(pair.LocalAddress == fact.Endpoint.Local.Addr().String() && pair.LocalPort == fact.Endpoint.Local.Port())) {
 				current.mappedLocal = fact.Endpoint.Local
 				current.mappedProtocol = fact.Endpoint.Protocol
 				break

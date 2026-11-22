@@ -302,13 +302,9 @@ func TestRetainMaintenanceSyncsMissedNetworkGenerationOnSubscribe(t *testing.T) 
 		t.Fatalf("RetainMaintenance did not immediately sync missed generation 2 (current=%d)", native.NetworkGeneration())
 	}
 }
-func TestIdleUsesOnlyBoundedPreviouslySelectedProfileAndOwnerCloseJoinsGenerationCleanup(t *testing.T) {
+func TestOwnerCloseJoinsGenerationCleanup(t *testing.T) {
 	h := newHarness(t)
-	h.native.Idle(context.Background(), [16]byte{1}, v2signal.PeerPathID{2}, h.now)
 	_, _ = h.native.NewPeerConnection(context.Background(), request(1))
-	path := h.native.paths[pathKey{[16]byte{1}, v2signal.PeerPathID{2}}]
-	path.lastURLs = []string{"bad-url", "stun:127.0.0.1:zero", "stun:127.0.0.1:0", "stun:127.0.0.1:1"}
-	h.native.Idle(context.Background(), [16]byte{1}, v2signal.PeerPathID{2}, h.now)
 	if err := h.native.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}

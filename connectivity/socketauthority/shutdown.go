@@ -15,22 +15,15 @@ func (c *socketClosure) wait() error {
 }
 
 // startCloseLocked keeps closing paths in the capacity ledger until physical
-// sockets and their idle workers have stopped. Acquire can wait on just this path.
+// sockets have stopped. Acquire can wait on just this path.
 func (a *Authority) startCloseLocked(entry *pathSockets) *socketClosure {
 	if entry.closing != nil {
 		return entry.closing
 	}
 	closing := &socketClosure{done: make(chan struct{})}
 	entry.closing = closing
-	idle := entry.idle
-	if idle != nil {
-		idle.cancel()
-	}
 	go func() {
 		err := entry.close()
-		if idle != nil {
-			<-idle.done
-		}
 		a.mu.Lock()
 		delete(a.paths, entry.key)
 		a.socketCount -= entry.socketCount()

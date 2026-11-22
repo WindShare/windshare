@@ -67,7 +67,7 @@ func TestFreshAttemptsFreezeProfileAndReuseExactSocketWithinGeneration(t *testin
 	}
 	_, _ = h.native.NewPeerConnection(context.Background(), request(2))
 	a, b := h.requests[0], h.requests[1]
-	if a.SocketLease != b.SocketLease || a.SocketLease.Endpoints()[0] != b.SocketLease.Endpoints()[0] || a.AttemptID == b.AttemptID || a.InitialCheckingTimeout < 40*time.Second {
+	if a.SocketLease != b.SocketLease || a.SocketLease.Endpoints()[0] != b.SocketLease.Endpoints()[0] || a.AttemptID == b.AttemptID {
 		t.Fatal(a, b)
 	}
 	if a.ICEProfileID == "" || a.ProtocolSessionID != first.ProtocolSessionID || a.NetworkGenerationID != 1 || len(a.ICE.DiscoveryURLs()) != 0 {

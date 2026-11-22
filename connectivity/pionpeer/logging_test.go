@@ -23,6 +23,7 @@ func TestProviderWarningsRetainAttemptCorrelationWithoutTracingRoutinePackets(t 
 	ice.Warnf("binding %d rejected", 7)
 	ice.Error("allocation failed")
 	ice.Errorf("server %s unavailable", "test")
+	ice.Errorf("Failed to write packet: %v", io.ErrClosedPipe)
 	factory.NewLogger("dtls").Warn("not an ICE diagnostic")
 	if len(events) != 4 {
 		t.Fatalf("unexpected diagnostics: %+v", events)
