@@ -58,11 +58,19 @@ assert_contains "$console_bundle" 'test "$(git rev-parse HEAD)" = "$EXPECTED_REF
 assert_contains "$console_bundle" 'pnpm -C consoles run verify:dist "$APP"'
 assert_contains "$linux_web" 'pnpm -C consoles verify:dist'
 assert_contains "$windows_web" 'pnpm -C consoles verify:dist'
-assert_contains "$workflow" 'scripts/ci/linux/release.sh "$RELEASE_VERSION" "$RELEASE_COMMIT_SHA" linux-ext4'
-assert_contains "$workflow" 'scripts/ci/windows/release.ps1 -Version $env:RELEASE_VERSION -CommitSHA $env:RELEASE_COMMIT_SHA -NativeProfile windows-ntfs'
+assert_contains "$workflow" 'scripts/ci/linux/release.sh "$RELEASE_VERSION" "$RELEASE_COMMIT_SHA" linux-ext4 verify'
+assert_contains "$workflow" 'scripts/ci/linux/release.sh "$RELEASE_VERSION" "$RELEASE_COMMIT_SHA" "" package'
+assert_contains "$workflow" 'scripts/ci/windows/release.ps1 -Version $env:RELEASE_VERSION -CommitSHA $env:RELEASE_COMMIT_SHA -NativeProfile windows-ntfs -Mode verify'
+assert_contains "$workflow" 'scripts/ci/windows/release.ps1 -Version $env:RELEASE_VERSION -CommitSHA $env:RELEASE_COMMIT_SHA -Mode package'
 assert_contains "$workflow" 'group: release-linux-${{ needs.release.outputs.version }}'
+assert_contains "$workflow" 'group: release-linux-binaries-${{ needs.release.outputs.version }}'
 assert_contains "$workflow" 'group: release-windows-${{ needs.release.outputs.version }}'
+assert_contains "$workflow" 'group: release-windows-binaries-${{ needs.release.outputs.version }}'
 assert_contains "$workflow" 'group: release-publish-${{ needs.release.outputs.version }}'
+assert_contains "$workflow" '- linux-binaries'
+assert_contains "$workflow" '- windows-binaries'
+assert_contains "$workflow" 'test "$packaged_sha" = "$LINUX_VERIFY_SHA"'
+assert_contains "$workflow" 'test "$packaged_sha" = "$WINDOWS_VERIFY_SHA"'
 [ "$(grep -Ec '^[[:space:]]+contents:[[:space:]]+write[[:space:]]*$' "$workflow")" -eq 1 ] ||
   fail "exactly one release job must receive contents: write"
 
@@ -104,7 +112,7 @@ assert_precedes "$linux_gate" 'bash "$release_repository/scripts/ci/native-outpu
   'go test -count=1 -timeout="$module_suite_test_timeout" ./...'
 assert_precedes "$windows_gate" './scripts/install/windows/install.ps1 -Destination $cliInstallRoot' \
   '& $goExecutable test -count=1 "-timeout=$moduleSuiteTestTimeout" ./...'
-assert_precedes "$windows_gate" '        Invoke-RequiredWindowsNativeTestsAsStandardUser' \
+assert_precedes "$windows_gate" 'Invoke-RequiredWindowsNativeTestsAsStandardUser' \
   '& $goExecutable test -count=1 "-timeout=$moduleSuiteTestTimeout" ./...'
 
 assert_contains "$weekly" 'scripts/ci/linux/release.sh'
@@ -119,6 +127,8 @@ retired_paths=(
   scripts/ci/windows/root-release-graph.ps1
   scripts/ci/core-release-ref.sh
   scripts/ci/_coremodulezip/main.go
+  scripts/ci/release-archive.tests.ps1
+  scripts/ci/release-archive.tests.sh
 )
 for retired_path in "${retired_paths[@]}"; do
   [ ! -e "$retired_path" ] || fail "retired release path still exists: $retired_path"

@@ -7,11 +7,27 @@ import (
 	"fmt"
 	"os"
 	"path"
-	"path/filepath"
 	"strings"
 
 	"golang.org/x/mod/modfile"
 )
+
+const (
+	metadataFileMaxBytes = 4 << 20
+	vectorDirectorySlash = "core/testvectors/"
+)
+
+var metadataPaths = map[string]struct{}{
+	"go.mod":                         {},
+	"LICENSE":                        {},
+	"NOTICE":                         {},
+	"core/testvectors/inventory.txt": {},
+}
+
+func isMetadataPath(relativePath string) bool {
+	_, ok := metadataPaths[relativePath]
+	return ok
+}
 
 func auditCommittedProjection(files []committedFile) error {
 	seenFiles := make(map[string]struct{}, len(files))
@@ -31,48 +47,38 @@ func auditCommittedProjection(files []committedFile) error {
 func requireEmptyDirectory(directory string) error {
 	entries, err := os.ReadDir(directory)
 	if err != nil {
-		return fmt.Errorf("read staging directory: %w", err)
+		return fmt.Errorf("read target directory: %w", err)
 	}
 	if len(entries) != 0 {
-		return fmt.Errorf("staging directory is not empty: %s", directory)
+		return fmt.Errorf("target directory is not empty: %s", directory)
 	}
 	return nil
 }
 
-func validateReleaseMetadata(stageDirectory string) error {
-	for _, relativePath := range requiredFiles {
-		info, err := os.Stat(filepath.Join(stageDirectory, filepath.FromSlash(relativePath)))
-		if err != nil {
-			return fmt.Errorf("required release file %s: %w", relativePath, err)
-		}
-		if !info.Mode().IsRegular() || info.Size() == 0 {
-			return fmt.Errorf("required release file is empty or irregular: %s", relativePath)
-		}
-	}
-
-	goMod, err := os.ReadFile(filepath.Join(stageDirectory, "go.mod"))
-	if err != nil {
-		return fmt.Errorf("read go.mod: %w", err)
+func validateReleaseMetadata(metadata map[string][]byte, files []committedFile) error {
+	goMod, ok := metadata["go.mod"]
+	if !ok || len(goMod) == 0 {
+		return errors.New("required release file is missing or empty: go.mod")
 	}
 	if actual := modfile.ModulePath(goMod); actual != modulePath {
 		return fmt.Errorf("go.mod module path is %q, want %q", actual, modulePath)
 	}
-	if err := requireText(filepath.Join(stageDirectory, "LICENSE"), "GNU AFFERO GENERAL PUBLIC LICENSE", "Version 3, 19 November 2007"); err != nil {
+	if err := requireText("LICENSE", metadata["LICENSE"], "GNU AFFERO GENERAL PUBLIC LICENSE", "Version 3, 19 November 2007"); err != nil {
 		return err
 	}
-	if err := requireText(filepath.Join(stageDirectory, "NOTICE"), "WindShare", "SPDX-License-Identifier: AGPL-3.0-or-later"); err != nil {
+	if err := requireText("NOTICE", metadata["NOTICE"], "WindShare", "SPDX-License-Identifier: AGPL-3.0-or-later"); err != nil {
 		return err
 	}
-	if err := validateVectorInventory(stageDirectory); err != nil {
-		return err
+	inventoryBytes, ok := metadata["core/testvectors/inventory.txt"]
+	if !ok || len(inventoryBytes) == 0 {
+		return errors.New("required release file is missing or empty: core/testvectors/inventory.txt")
 	}
-	return nil
+	return validateVectorInventory(inventoryBytes, files)
 }
 
-func requireText(filePath string, required ...string) error {
-	content, err := os.ReadFile(filePath)
-	if err != nil {
-		return fmt.Errorf("read %s: %w", filePath, err)
+func requireText(filePath string, content []byte, required ...string) error {
+	if len(content) == 0 {
+		return fmt.Errorf("required release file is missing or empty: %s", filePath)
 	}
 	for _, text := range required {
 		if !bytes.Contains(content, []byte(text)) {
@@ -82,17 +88,9 @@ func requireText(filePath string, required ...string) error {
 	return nil
 }
 
-func validateVectorInventory(stageDirectory string) error {
-	vectorDirectory := filepath.Join(stageDirectory, "core", "testvectors")
-	inventoryPath := filepath.Join(vectorDirectory, "inventory.txt")
-	inventory, err := os.Open(inventoryPath)
-	if err != nil {
-		return fmt.Errorf("open testvector inventory: %w", err)
-	}
-	defer inventory.Close()
-
+func validateVectorInventory(inventoryBytes []byte, files []committedFile) error {
 	expected := make(map[string]struct{})
-	scanner := bufio.NewScanner(inventory)
+	scanner := bufio.NewScanner(bytes.NewReader(inventoryBytes))
 	for scanner.Scan() {
 		entry := strings.TrimSpace(scanner.Text())
 		if entry == "" || strings.HasPrefix(entry, "#") {
@@ -114,36 +112,15 @@ func validateVectorInventory(stageDirectory string) error {
 	}
 
 	actual := make(map[string]struct{})
-	err = filepath.WalkDir(vectorDirectory, func(filePath string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return fmt.Errorf("inspect testvector path %s: %w", filePath, walkErr)
+	for _, file := range files {
+		if !strings.HasPrefix(file.relativePath, vectorDirectorySlash) {
+			continue
 		}
-		if filePath == vectorDirectory {
-			return nil
+		relativeVector := strings.TrimPrefix(file.relativePath, vectorDirectorySlash)
+		if path.Ext(relativeVector) != ".json" {
+			continue
 		}
-		relativePath, err := filepath.Rel(vectorDirectory, filePath)
-		if err != nil {
-			return fmt.Errorf("relativize testvector path %s: %w", filePath, err)
-		}
-		normalized := filepath.ToSlash(relativePath)
-		if path.Ext(normalized) != ".json" {
-			return nil
-		}
-		if entry.IsDir() {
-			return fmt.Errorf("testvector JSON path is irregular: %s", normalized)
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return fmt.Errorf("inspect testvector %s: %w", normalized, err)
-		}
-		if !info.Mode().IsRegular() {
-			return fmt.Errorf("testvector JSON path is irregular: %s", normalized)
-		}
-		actual[normalized] = struct{}{}
-		return nil
-	})
-	if err != nil {
-		return fmt.Errorf("read testvector directory: %w", err)
+		actual[relativeVector] = struct{}{}
 	}
 	if difference := setDifference(expected, actual); len(difference) != 0 {
 		return fmt.Errorf("testvector inventory names missing files: %s", strings.Join(difference, ", "))

@@ -9,13 +9,14 @@ import (
 	"os"
 	"os/exec"
 	"path"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 
 	"golang.org/x/mod/module"
 )
+
+type blobConsumer func(file committedFile, size int64, body io.Reader) error
 
 func committedModuleFiles(repositoryRoot, commitSHA string) ([]committedFile, error) {
 	objectType, err := gitOutput(repositoryRoot, "cat-file", "-t", commitSHA)
@@ -87,11 +88,11 @@ func parseCommittedModuleFiles(output []byte) ([]committedFile, error) {
 		}
 		header, gitPathBytes, found := bytes.Cut(record, []byte{'\t'})
 		if !found {
-			return nil, fmt.Errorf("Git returned a malformed tree record: %q", record)
+			return nil, fmt.Errorf("git returned a malformed tree record: %q", record)
 		}
 		fields := strings.Fields(string(header))
 		if len(fields) != 3 {
-			return nil, fmt.Errorf("Git returned a malformed tree header: %q", header)
+			return nil, fmt.Errorf("git returned a malformed tree header: %q", header)
 		}
 		mode, objectType, objectID := fields[0], fields[1], fields[2]
 		if objectType != "blob" || (mode != "100644" && mode != "100755") {
@@ -101,11 +102,10 @@ func parseCommittedModuleFiles(output []byte) ([]committedFile, error) {
 			return nil, fmt.Errorf("committed module path has an invalid object ID: %s", gitPathBytes)
 		}
 
-		fullGitPath := string(gitPathBytes)
-		if strings.Contains(fullGitPath, "\\") {
-			return nil, fmt.Errorf("Git returned a non-canonical path: %q", fullGitPath)
+		relativePath := string(gitPathBytes)
+		if strings.Contains(relativePath, "\\") {
+			return nil, fmt.Errorf("git returned a non-canonical path: %q", relativePath)
 		}
-		relativePath := fullGitPath
 		if !isSafeModulePath(relativePath) {
 			return nil, fmt.Errorf("invalid root module path: %q", relativePath)
 		}
@@ -140,9 +140,9 @@ func isSafeModulePath(filePath string) bool {
 	return module.CheckFilePath(filePath) == nil
 }
 
-func stageFiles(repositoryRoot, stageDirectory string, files []committedFile) (stageErr error) {
-	// Git startup dominates source staging on Windows. Batch requests amortize
-	// that cost while still reading the exact object IDs from the commit tree.
+func streamCommittedBlobs(repositoryRoot string, files []committedFile, consume blobConsumer) (streamErr error) {
+	// One batched cat-file stream avoids per-file Git startup overhead on
+	// Windows and writes archives directly from commit blobs without staging.
 	command := gitCommand(repositoryRoot, "cat-file", "--batch", "--buffer")
 	var requests strings.Builder
 	for _, file := range files {
@@ -161,83 +161,50 @@ func stageFiles(repositoryRoot, stageDirectory string, files []committedFile) (s
 		return fmt.Errorf("start git cat-file --batch: %w", err)
 	}
 	defer func() {
-		if stageErr != nil {
+		if streamErr != nil {
 			// A Git launcher may have handed the pipe to a child that is still
 			// writing, so close the pipe before reaping the process.
 			_ = output.Close()
 			_ = command.Process.Kill()
 		}
 		waitErr := command.Wait()
-		if stageErr == nil {
-			stageErr = waitErr
+		if streamErr == nil {
+			streamErr = waitErr
 		}
-		if stageErr != nil {
+		if streamErr != nil {
 			if message := strings.TrimSpace(stderr.String()); message != "" {
-				stageErr = fmt.Errorf("%w: %s", stageErr, message)
+				streamErr = fmt.Errorf("%w: %s", streamErr, message)
 			}
-			stageErr = fmt.Errorf("git cat-file --batch: %w", stageErr)
+			streamErr = fmt.Errorf("git cat-file --batch: %w", streamErr)
 		}
 	}()
 
 	responses := bufio.NewReader(output)
-	if err := stageCommittedFiles(stageDirectory, files, responses); err != nil {
-		return err
+	for _, file := range files {
+		if !isSafeModulePath(file.relativePath) {
+			return fmt.Errorf("invalid committed module path: %q", file.relativePath)
+		}
+		if err := consumeCommittedBlob(responses, file, consume); err != nil {
+			return fmt.Errorf("stream %s from Git blob %s: %w", file.relativePath, file.objectID, err)
+		}
 	}
 	_, err = responses.ReadByte()
-	switch err {
-	case io.EOF:
+	if errors.Is(err, io.EOF) {
 		return nil
-	case nil:
+	}
+	if err == nil {
 		return errors.New("unexpected output after the last Git blob")
-	default:
-		return fmt.Errorf("finish Git blob responses: %w", err)
 	}
+	return fmt.Errorf("finish Git blob responses: %w", err)
 }
 
-func stageCommittedFiles(stageDirectory string, files []committedFile, responses *bufio.Reader) error {
-	for _, file := range files {
-		relativePath := file.relativePath
-		if !isSafeModulePath(relativePath) {
-			return fmt.Errorf("invalid staged module path: %q", relativePath)
-		}
-		destinationPath := filepath.Join(stageDirectory, filepath.FromSlash(relativePath))
-		if err := os.MkdirAll(filepath.Dir(destinationPath), 0o755); err != nil {
-			return fmt.Errorf("create staging parent for %s: %w", relativePath, err)
-		}
-		if err := stageCommittedBlob(responses, file.objectID, destinationPath); err != nil {
-			return err
-		}
-		if file.executable {
-			if err := os.Chmod(destinationPath, 0o755); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func stageCommittedBlob(responses *bufio.Reader, objectID, destinationPath string) error {
-	destination, err := os.OpenFile(destinationPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
-	if err != nil {
-		return fmt.Errorf("create %s: %w", destinationPath, err)
-	}
-	copyErr := copyCommittedBlob(responses, objectID, destination)
-	if err := errors.Join(copyErr, destination.Close()); err != nil {
-		return errors.Join(
-			fmt.Errorf("stage %s from Git blob %s: %w", destinationPath, objectID, err),
-			os.Remove(destinationPath),
-		)
-	}
-	return nil
-}
-
-func copyCommittedBlob(responses *bufio.Reader, objectID string, destination io.Writer) error {
+func consumeCommittedBlob(responses *bufio.Reader, file committedFile, consume blobConsumer) error {
 	header, err := responses.ReadString('\n')
 	if err != nil {
 		return fmt.Errorf("read blob header: %w", err)
 	}
 	fields := strings.Fields(header)
-	if len(fields) != 3 || fields[0] != objectID || fields[1] != "blob" {
+	if len(fields) != 3 || fields[0] != file.objectID || fields[1] != "blob" {
 		return fmt.Errorf("unexpected blob header %q", header)
 	}
 	size, err := strconv.ParseInt(fields[2], 10, 64)
@@ -246,8 +213,12 @@ func copyCommittedBlob(responses *bufio.Reader, objectID string, destination io.
 	}
 	// Git frames arbitrary bytes by length, so payload newlines belong to the
 	// blob. Only the newline after exactly size bytes separates responses.
-	if _, err := io.CopyN(destination, responses, size); err != nil {
-		return fmt.Errorf("copy blob bytes: %w", err)
+	limited := &io.LimitedReader{R: responses, N: size}
+	if err := consume(file, size, limited); err != nil {
+		return err
+	}
+	if limited.N != 0 {
+		return fmt.Errorf("blob consumer left %d unread bytes", limited.N)
 	}
 	delimiter, err := responses.ReadByte()
 	if err != nil {

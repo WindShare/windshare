@@ -43,14 +43,6 @@ function ConvertTo-TestWindowsNativeArgument([string]$Value) {
     } $Value
 }
 
-function Select-TestWindowsNativeGoApplication([object[]]$Candidates) {
-    return & $windowsNativeModule {
-        param([object[]]$ApplicationCandidates)
-        Select-WindowsNativeCoordinatorGoApplication `
-            -Candidates $ApplicationCandidates
-    } $Candidates
-}
-
 function New-TestWindowsNativeCoordinatorReleaseRoot(
     [string]$BasePath,
     [string]$LeafName
@@ -101,13 +93,6 @@ function Assert-FileContains([string]$Path, [string]$Expected) {
     }
 }
 
-function Assert-FileDoesNotContain([string]$Path, [string]$Forbidden) {
-    $content = [IO.File]::ReadAllText($Path)
-    if ($content.Contains($Forbidden, [StringComparison]::Ordinal)) {
-        throw "$Path contains forbidden release contract text: $Forbidden"
-    }
-}
-
 $requiredSelectors = @(Get-WindowsNativeRequiredTestSelectors)
 if ($requiredSelectors.Count -ne 2) {
     throw 'required native test selectors drifted from the release contract'
@@ -120,11 +105,15 @@ $portableSelector = @($requiredSelectors | Where-Object {
 })
 if ($coreSelector.Count -ne 1 -or
     $portableSelector.Count -ne 1 -or
+    $coreSelector[0].BinaryName -cne 'osfs.test.exe' -or
+    $coreSelector[0].ImportPath -cne 'github.com/windshare/windshare/osfs' -or
+    $portableSelector[0].BinaryName -cne 'outputportable.test.exe' -or
+    $portableSelector[0].ImportPath -cne 'github.com/windshare/windshare/osfs/internal/outputportable' -or
     (Get-WindowsNativeRequiredTestExpression -TestNames $coreSelector[0].TestNames) -cne
         '^(TestNativeOutputDestinationCapabilities|TestNativeOutputProcessRestartKeepsRanges|TestNativeOutputRetainedCandidateListAndReopen|TestNativeLiveOutputPublishesWithoutRecoveryAuthority)$' -or
     (Get-WindowsNativeRequiredTestExpression -TestNames $portableSelector[0].TestNames) -cne
         '^(TestTaskLockIsProcessExclusiveAndRecoversAfterExit|TestOrdinaryFilesPublishWithoutLinksAndNeverOverwrite|TestWindowsModifiedTimePreservesNativePrecisionAndHandleIdentity)$') {
-    throw 'required native tests are not bound to their owning package selectors'
+    throw 'required native tests are not bound to their owning package selectors and precompiled binaries'
 }
 $requiredTests = @($requiredSelectors | ForEach-Object { $_.TestNames })
 $lockTestName = 'TestTaskLockIsProcessExclusiveAndRecoversAfterExit'
@@ -231,131 +220,34 @@ if (-not [string]::Equals(
     throw 'native release root base is not canonical CommonApplicationData'
 }
 
-$originalGoToolchain = [Environment]::GetEnvironmentVariable('GOTOOLCHAIN', 'Process')
-try {
-    $env:GOTOOLCHAIN = 'local'
-    $currentToolchain = Get-WindowsNativeCoordinatorGoToolchain `
-        -CoordinatorExecutable $coordinatorGoExecutable
-} finally {
-    if ($null -eq $originalGoToolchain) {
-        Remove-Item Env:GOTOOLCHAIN -ErrorAction SilentlyContinue
-    } else {
-        $env:GOTOOLCHAIN = $originalGoToolchain
-    }
-}
-Write-Output ('-- coordinator Go command diagnostics: candidate_count={0}, selected_version={1}' -f @(
-    $currentToolchain.CandidateCount,
-    $currentToolchain.SelectedVersion
-))
-if ($currentToolchain.CandidateCount -lt 1 -or
-    $currentToolchain.GoExecutable -isnot [string] -or
-    [string]::IsNullOrWhiteSpace($currentToolchain.SelectedVersion) -or
-    $currentToolchain.GoExecutable.Contains("`n", [StringComparison]::Ordinal) -or
-    $currentToolchain.GoExecutable.Contains("`r", [StringComparison]::Ordinal) -or
-    -not [string]::Equals(
-    (Join-Path $currentToolchain.GoRoot 'bin\go.exe'),
-    $currentToolchain.GoExecutable,
-    [StringComparison]::OrdinalIgnoreCase
-)) {
-    throw 'coordinator Go toolchain discovery did not preserve the exact go env GOROOT binding'
-}
-
-$selectorRoot = Join-Path ([IO.Path]::GetTempPath()) (
-    'windshare-go-selector-{0}' -f [Guid]::NewGuid().ToString('N')
+$reparseTreeRoot = Join-Path ([IO.Path]::GetTempPath()) (
+    'windshare-native-reparse-check-{0}' -f [Guid]::NewGuid().ToString('N')
 )
-$firstCommandRoot = Join-Path $selectorRoot 'first'
-$secondCommandRoot = Join-Path $selectorRoot 'second'
-$selectorCommandName = 'windshare-go-selector.cmd'
-New-Item -ItemType Directory -Path $firstCommandRoot | Out-Null
-New-Item -ItemType Directory -Path $secondCommandRoot | Out-Null
-[IO.File]::WriteAllText((Join-Path $firstCommandRoot $selectorCommandName), '@exit /b 0')
-[IO.File]::WriteAllText((Join-Path $secondCommandRoot $selectorCommandName), '@exit /b 0')
-$originalPath = $env:PATH
+$reparseCheckedDir = Join-Path $reparseTreeRoot 'checked'
+$reparseTarget = Join-Path $reparseTreeRoot 'target'
+$reparseLink = Join-Path $reparseCheckedDir 'junction'
+New-Item -ItemType Directory -Path @($reparseCheckedDir, $reparseTarget) | Out-Null
 try {
-    $env:PATH = $firstCommandRoot + [IO.Path]::PathSeparator + $secondCommandRoot
-    $orderedCandidates = @(
-        Get-Command $selectorCommandName -CommandType Application -All -ErrorAction Stop
-    )
-    $selectedCandidate = Select-TestWindowsNativeGoApplication `
-        -Candidates $orderedCandidates
-    if ($selectedCandidate.CandidateCount -ne 2 -or
-        $selectedCandidate.GoExecutable -isnot [string] -or
-        -not [string]::Equals(
-            $selectedCandidate.GoExecutable,
-            (Join-Path $firstCommandRoot $selectorCommandName),
-            [StringComparison]::OrdinalIgnoreCase
-        )) {
-        throw 'Go application selection did not preserve first PATH candidate precedence'
-    }
-} finally {
-    $env:PATH = $originalPath
-    if (Test-Path -LiteralPath $selectorRoot) {
-        Remove-Item -LiteralPath $selectorRoot -Recurse -Force
-    }
-}
-
-$toolchainCopyRoot = Join-Path ([IO.Path]::GetTempPath()) (
-    'windshare-native-toolchain-copy-{0}' -f [Guid]::NewGuid().ToString('N')
-)
-$syntheticGoRoot = Join-Path $toolchainCopyRoot 'source-go'
-$syntheticGoBin = Join-Path $syntheticGoRoot 'bin'
-$syntheticGoNested = Join-Path $syntheticGoRoot 'pkg\tool\windows_amd64'
-$stagedSyntheticGoRoot = Join-Path $toolchainCopyRoot 'staged-go'
-New-Item -ItemType Directory -Path $syntheticGoBin | Out-Null
-New-Item -ItemType Directory -Path $syntheticGoNested | Out-Null
-$syntheticGoExecutable = Join-Path $syntheticGoBin 'go.exe'
-[IO.File]::WriteAllText($syntheticGoExecutable, 'synthetic-go')
-[IO.File]::WriteAllText(
-    (Join-Path $syntheticGoNested 'compile.exe'),
-    'synthetic-compile'
-)
-try {
-    $stagedSyntheticToolchain = Copy-WindowsNativeGoToolchain `
-        -Toolchain ([pscustomobject]@{
-            GoRoot = $syntheticGoRoot
-            GoExecutable = $syntheticGoExecutable
-        }) `
-        -DestinationRoot $stagedSyntheticGoRoot
-    if (-not [string]::Equals(
-        $stagedSyntheticToolchain.GoRoot,
-        [IO.Path]::GetFullPath($stagedSyntheticGoRoot),
-        [StringComparison]::OrdinalIgnoreCase
-    ) -or [IO.File]::ReadAllText(
-        (Join-Path $stagedSyntheticGoRoot 'pkg\tool\windows_amd64\compile.exe')
-    ) -cne 'synthetic-compile') {
-        throw 'staged Go toolchain copy did not preserve its root layout and files'
-    }
     Assert-WindowsNativeTreeHasNoReparsePoints `
-        -RootPath $stagedSyntheticGoRoot `
-        -Label 'synthetic staged GOROOT'
-    $reparseTarget = Join-Path $toolchainCopyRoot 'reparse-target'
-    $reparsePath = Join-Path $stagedSyntheticGoRoot 'reparse-probe'
-    New-Item -ItemType Directory -Path $reparseTarget | Out-Null
-    New-Item -ItemType Junction -Path $reparsePath -Target $reparseTarget | Out-Null
+        -RootPath $reparseCheckedDir `
+        -Label 'clean binaries dir'
+    New-Item -ItemType Junction -Path $reparseLink -Target $reparseTarget | Out-Null
     try {
         Assert-ThrowsContaining `
-            'reparse point in staged GOROOT' `
+            'reparse point in binaries dir' `
             'contains a reparse point' {
                 Assert-WindowsNativeTreeHasNoReparsePoints `
-                    -RootPath $stagedSyntheticGoRoot `
-                    -Label 'synthetic staged GOROOT'
+                    -RootPath $reparseCheckedDir `
+                    -Label 'clean binaries dir'
             }
     } finally {
-        if (Test-Path -LiteralPath $reparsePath) {
-            [IO.Directory]::Delete($reparsePath, $false)
+        if (Test-Path -LiteralPath $reparseLink) {
+            [IO.Directory]::Delete($reparseLink, $false)
         }
     }
-    Assert-Throws 'pre-existing staged GOROOT' {
-        Copy-WindowsNativeGoToolchain `
-            -Toolchain ([pscustomobject]@{
-                GoRoot = $syntheticGoRoot
-                GoExecutable = $syntheticGoExecutable
-            }) `
-            -DestinationRoot $stagedSyntheticGoRoot
-    }
 } finally {
-    if (Test-Path -LiteralPath $toolchainCopyRoot) {
-        Remove-Item -LiteralPath $toolchainCopyRoot -Recurse -Force
+    if (Test-Path -LiteralPath $reparseTreeRoot) {
+        Remove-Item -LiteralPath $reparseTreeRoot -Recurse -Force
     }
 }
 
@@ -480,7 +372,7 @@ try {
     $workerAccessSID = 'S-1-5-32-545'
     $ownedRoot.WorkerSID = $workerAccessSID
     $icacls = Join-Path $env:SystemRoot 'System32\icacls.exe'
-    & $icacls $ownedRoot.RootPath '/grant:r' "*${workerAccessSID}:(OI)(CI)RX" '/T' '/Q' | Out-Null
+    & $icacls $ownedRoot.RootPath '/grant:r' "*${workerAccessSID}:RX" '/Q' | Out-Null
     if ($LASTEXITCODE -ne 0) {
         throw "worker root-access contract setup failed with code $LASTEXITCODE"
     }
@@ -532,26 +424,16 @@ try {
 
 $credentialCommandLineMaximumCharacters = 1023
 $githubTemporaryRoot = 'C:\ProgramData\windshare-release-{0}' -f ('a' * 32)
+$githubBinariesRoot = [IO.Path]::Combine($githubTemporaryRoot, 'windows-native-binaries')
 $githubWorkerRoot = [IO.Path]::Combine($githubTemporaryRoot, 'windows-native-worker')
-$githubWorkerScript = [IO.Path]::Combine(
-    $githubWorkerRoot,
-    'worker.ps1'
-)
-$githubArtifactRoot = [IO.Path]::Combine($githubTemporaryRoot, 'extracted-module')
+$githubWorkerScript = [IO.Path]::Combine($githubBinariesRoot, 'worker.ps1')
 $githubPowerShellExecutable = 'C:\Program Files\PowerShell\7\pwsh.exe'
-$githubGoExecutable = [IO.Path]::Combine(
-    $githubTemporaryRoot,
-    'go-toolchain',
-    'bin',
-    'go.exe'
-)
 $githubWorkerSID = 'S-1-5-21-1234567890-1234567890-1234567890-1001'
 $githubArgumentLine = New-WindowsNativeWorkerArgumentLine `
     -PowerShellExecutable $githubPowerShellExecutable `
     -WorkerScript $githubWorkerScript `
-    -ArtifactRoot $githubArtifactRoot `
+    -BinariesRoot $githubBinariesRoot `
     -WorkRoot $githubWorkerRoot `
-    -GoExecutable $githubGoExecutable `
     -ExpectedUserSID $githubWorkerSID
 $expectedGithubArgumentLine = @(
     '-NoLogo',
@@ -561,12 +443,10 @@ $expectedGithubArgumentLine = @(
     'Bypass',
     '-File',
     ('"{0}"' -f $githubWorkerScript),
-    '-ArtifactRoot',
-    ('"{0}"' -f $githubArtifactRoot),
+    '-BinariesRoot',
+    ('"{0}"' -f $githubBinariesRoot),
     '-WorkRoot',
     ('"{0}"' -f $githubWorkerRoot),
-    '-GoExecutable',
-    ('"{0}"' -f $githubGoExecutable),
     '-ExpectedUserSID',
     ('"{0}"' -f $githubWorkerSID)
 ) -join ' '
@@ -588,9 +468,8 @@ Assert-ThrowsContaining `
         New-WindowsNativeWorkerArgumentLine `
             -PowerShellExecutable $githubPowerShellExecutable `
             -WorkerScript $githubWorkerScript `
-            -ArtifactRoot ('D:\' + ('a' * 900)) `
+            -BinariesRoot ('D:\' + ('a' * 900)) `
             -WorkRoot $githubWorkerRoot `
-            -GoExecutable $githubGoExecutable `
             -ExpectedUserSID $githubWorkerSID
     }
 Assert-ThrowsContaining `
@@ -599,9 +478,8 @@ Assert-ThrowsContaining `
         New-WindowsNativeWorkerArgumentLine `
             -PowerShellExecutable $githubPowerShellExecutable `
             -WorkerScript $githubWorkerScript `
-            -ArtifactRoot ($githubArtifactRoot + "`nchild") `
+            -BinariesRoot ($githubBinariesRoot + "`nchild") `
             -WorkRoot $githubWorkerRoot `
-            -GoExecutable $githubGoExecutable `
             -ExpectedUserSID $githubWorkerSID
     }
 Assert-ThrowsContaining `
@@ -610,9 +488,8 @@ Assert-ThrowsContaining `
         New-WindowsNativeWorkerArgumentLine `
             -PowerShellExecutable $githubPowerShellExecutable `
             -WorkerScript ($githubWorkerScript + '"') `
-            -ArtifactRoot $githubArtifactRoot `
+            -BinariesRoot $githubBinariesRoot `
             -WorkRoot $githubWorkerRoot `
-            -GoExecutable $githubGoExecutable `
             -ExpectedUserSID $githubWorkerSID
     }
 
@@ -621,14 +498,59 @@ $writableProbeRoot = Join-Path ([IO.Path]::GetTempPath()) (
 )
 New-Item -ItemType Directory -Path $writableProbeRoot | Out-Null
 try {
-    Assert-Throws 'writable artifact root' {
-        Assert-WindowsNativeReadOnlyDirectory -Path $writableProbeRoot -Label 'contract artifact'
+    Assert-Throws 'writable binaries root' {
+        Assert-WindowsNativeReadOnlyDirectory -Path $writableProbeRoot -Label 'contract binaries'
     }
     if (@(Get-ChildItem -LiteralPath $writableProbeRoot -Force).Count -ne 0) {
         throw 'write-denial probe did not remove its unexpected artifact'
     }
 } finally {
     Remove-Item -LiteralPath $writableProbeRoot -Recurse -Force
+}
+
+$rawTest2JsonRoot = Join-Path ([IO.Path]::GetTempPath()) (
+    'windshare-test2json-contract-{0}' -f [Guid]::NewGuid().ToString('N')
+)
+New-Item -ItemType Directory -Path $rawTest2JsonRoot | Out-Null
+try {
+    $rawStdoutPath = Join-Path $rawTest2JsonRoot 'binary-stdout.log'
+    $rawStderrPath = Join-Path $rawTest2JsonRoot 'binary-stderr.log'
+    $binaryExitCode = Invoke-WindowsNativeTestBinary `
+        -BinaryPath $coordinatorGoExecutable `
+        -WorkingDirectory $rawTest2JsonRoot `
+        -Arguments @('version') `
+        -StdoutPath $rawStdoutPath `
+        -StderrPath $rawStderrPath
+    if ($binaryExitCode -isnot [int] -or $binaryExitCode -ne 0) {
+        throw "Invoke-WindowsNativeTestBinary did not return a singular zero int exit code: $($binaryExitCode | Out-String)"
+    }
+    if (-not ([IO.File]::ReadAllText($rawStdoutPath)).StartsWith('go version ', [StringComparison]::Ordinal)) {
+        throw 'Invoke-WindowsNativeTestBinary did not capture raw stdout'
+    }
+
+    $rawTest2JsonFile = Join-Path $rawTest2JsonRoot 'framed.log'
+    $frameMarker = [char]0x16
+    $rawContent = @(
+        "${frameMarker}=== RUN   TestTaskLockIsProcessExclusiveAndRecoversAfterExit",
+        "${frameMarker}--- PASS: TestTaskLockIsProcessExclusiveAndRecoversAfterExit (0.01s)",
+        "${frameMarker}PASS"
+    ) -join "`n"
+    [IO.File]::WriteAllText($rawTest2JsonFile, $rawContent + "`n", [Text.UTF8Encoding]::new($false))
+    $convertedLines = @(ConvertFrom-WindowsNativeTest2JsonOutput `
+        -GoExecutable $coordinatorGoExecutable `
+        -PackageImportPath 'github.com/windshare/windshare/osfs/internal/outputportable' `
+        -RawOutputPath $rawTest2JsonFile)
+    $convertedEvents = @(ConvertFrom-WindowsNativeTestJSONLines -Lines $convertedLines)
+    Assert-WindowsNativeTestEvents `
+        -ExitCode 0 `
+        -Events $convertedEvents `
+        -RequiredTests @($lockTestName) `
+        -SelectorPackage './osfs/internal/outputportable' `
+        -SelectorExpression '^TestTaskLockIsProcessExclusiveAndRecoversAfterExit$'
+} finally {
+    if (Test-Path -LiteralPath $rawTest2JsonRoot) {
+        Remove-Item -LiteralPath $rawTest2JsonRoot -Recurse -Force
+    }
 }
 
 $passingEvents = @($requiredTests | ForEach-Object {
@@ -744,7 +666,6 @@ Assert-ThrowsContaining 'zero-test package selector' 'selector ran zero tests: p
         -SelectorExpression '^(TestTaskLockIsProcessExclusiveAndRecoversAfterExit)$'
 }
 
-
 $nativeModulePath = Join-Path $PSScriptRoot 'certify.psm1'
 foreach ($requiredModuleText in @(
     'CreateDirectoryW',
@@ -757,14 +678,10 @@ foreach ($requiredModuleText in @(
     '[Environment+SpecialFolder]::CommonApplicationData',
     'CoordinatorReleaseRootLeafPattern',
     'Assert-WindowsNativeCoordinatorReleaseRoot -Ownership $Ownership',
-    '$selectedPath = [string]$selected.Path',
-    '& $resolvedGoExecutable env GOROOT',
-    'Copying into the already protected release root',
-    'Copy-Item',
     'Assert-WindowsNativeTreeHasNoReparsePoints',
     'Set-WindowsNativeTreeMutationDeny',
-    'FileSystemAccessRule',
-    'staged Go executable length differs from the coordinator executable'
+    'ConvertFrom-WindowsNativeTest2JsonOutput',
+    'FileSystemAccessRule'
 )) {
     Assert-FileContains -Path $nativeModulePath -Expected $requiredModuleText
 }
@@ -796,32 +713,17 @@ if ($interopInitializerIndex -lt 0 -or
 $nativeWorkerPath = Join-Path $PSScriptRoot 'worker.ps1'
 foreach ($requiredWorkerText in @(
     "`$moduleSuiteTestTimeout = '30m'",
-    '"-timeout=$moduleSuiteTestTimeout"',
-    "`$env:GOPROXY = 'https://proxy.golang.org'",
-    "`$env:GOSUMDB = 'sum.golang.org'",
-    "`$env:GOPRIVATE = ''",
-    "`$env:GONOSUMDB = ''",
-    "`$env:GONOPROXY = ''",
-    "`$env:GOINSECURE = ''",
-    "`$env:GOTELEMETRY = 'off'",
+    '"-test.timeout=$moduleSuiteTestTimeout"',
+    "'-test.v=test2json'",
     '[Environment+SpecialFolder]::UserProfile',
     '$env:USERPROFILE = $resolvedUserProfile',
     '$env:HOME = $resolvedUserProfile',
     '$env:HOMEDRIVE = $homeDrive',
     '$env:HOMEPATH = $homePath',
-    '$env:GOTMPDIR = $goTempRoot',
-    '$env:GOROOT = $resolvedGoRoot',
     '-- standard-user profile and identity environment verified',
-    '-- standard-user NTFS roots, artifact immutability, and staged GOROOT immutability verified',
-    "-Label 'staged GOROOT'",
+    '-- standard-user NTFS roots and precompiled test binary immutability verified',
     'Assert-WindowsNativeTreeHasNoReparsePoints',
-    '& $resolvedGoExecutable env GOROOT',
-    '-- standard-user Go toolchain verified:',
-    "@('GOOS', 'GOARCH', 'CGO_ENABLED', 'GOEXPERIMENT')",
-    'Get-WindowsNativeRequiredTestSelectors',
-    '$selectorPackage = [string]$selector.PackageArgument',
-    "'-run', `$testExpression, `$selectorPackage",
-    '-SelectorPackage $selectorPackage'
+    'Get-WindowsNativeRequiredTestSelectors'
 )) {
     Assert-FileContains -Path $nativeWorkerPath -Expected $requiredWorkerText
 }

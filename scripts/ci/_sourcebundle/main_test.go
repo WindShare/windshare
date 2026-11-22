@@ -2,7 +2,9 @@ package main
 
 import (
 	"archive/zip"
-	"bytes"
+	"crypto/sha256"
+	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,7 +24,6 @@ func TestValidateConfiguration(t *testing.T) {
 	valid := configuration{
 		repositoryRoot: "repo",
 		commitSHA:      strings.Repeat("a", 40),
-		stageDirectory: "stage",
 		zipPath:        "module.zip",
 		extractPath:    "extract",
 		version:        testModuleVersion,
@@ -122,7 +123,9 @@ func TestParseCommittedModuleFiles(t *testing.T) {
 
 func TestCommittedModuleFilesIgnoreIndexAndWorktree(t *testing.T) {
 	repositoryRoot, commitSHA := newModuleRepository(t)
-	writeFile(t, filepath.Join(repositoryRoot, "README.md"), "mutated worktree\n")
+	writeFile(t, filepath.Join(repositoryRoot, "README.md"), "staged index mutation\n")
+	runGit(t, repositoryRoot, "add", "--", "README.md")
+	writeFile(t, filepath.Join(repositoryRoot, "core/README.md"), "unstaged worktree mutation\n")
 	writeFile(t, filepath.Join(repositoryRoot, "untracked.txt"), "untracked\n")
 
 	files, err := committedModuleFiles(repositoryRoot, commitSHA)
@@ -133,15 +136,22 @@ func TestCommittedModuleFilesIgnoreIndexAndWorktree(t *testing.T) {
 	if contains(paths, "untracked.txt") {
 		t.Fatal("untracked file entered committed projection")
 	}
-	stage := filepath.Join(t.TempDir(), "stage")
-	if err := os.Mkdir(stage, 0o755); err != nil {
-		t.Fatal(err)
+	blobs := make(map[string]string, len(files))
+	if err := streamCommittedBlobs(repositoryRoot, files, func(file committedFile, _ int64, body io.Reader) error {
+		content, readErr := io.ReadAll(body)
+		if readErr != nil {
+			return readErr
+		}
+		blobs[file.relativePath] = string(content)
+		return nil
+	}); err != nil {
+		t.Fatalf("streamCommittedBlobs: %v", err)
 	}
-	if err := stageFiles(repositoryRoot, stage, files); err != nil {
-		t.Fatalf("stageFiles: %v", err)
+	if got := blobs["README.md"]; got != "fixture readme\n" {
+		t.Fatalf("streamed README = %q, want committed bytes", got)
 	}
-	if got := readFile(t, filepath.Join(stage, "README.md")); got != "fixture readme\n" {
-		t.Fatalf("staged README = %q", got)
+	if got := blobs["core/README.md"]; got != "core fixture readme\n" {
+		t.Fatalf("streamed core/README.md = %q, want committed bytes", got)
 	}
 }
 
@@ -164,30 +174,22 @@ func TestAuditCommittedProjectionRequiresReleaseIdentity(t *testing.T) {
 func TestValidateReleaseMetadataAndVectorInventory(t *testing.T) {
 	t.Parallel()
 
-	stage := t.TempDir()
-	writeModuleFixture(t, stage)
-	if err := validateReleaseMetadata(stage); err != nil {
+	fixture := moduleFixtureContents()
+	files := make([]committedFile, 0, len(fixture))
+	metadata := make(map[string][]byte, len(metadataPaths))
+	for filePath, content := range fixture {
+		files = append(files, committedFile{relativePath: filePath})
+		if isMetadataPath(filePath) {
+			metadata[filePath] = []byte(content)
+		}
+	}
+	if err := validateReleaseMetadata(metadata, files); err != nil {
 		t.Fatalf("validateReleaseMetadata: %v", err)
 	}
 
-	writeFile(t, filepath.Join(stage, "core/testvectors/extra.json"), "{}\n")
-	if err := validateReleaseMetadata(stage); err == nil || !strings.Contains(err.Error(), "missing inventory entries") {
+	extraFiles := append(files, committedFile{relativePath: "core/testvectors/extra.json"})
+	if err := validateReleaseMetadata(metadata, extraFiles); err == nil || !strings.Contains(err.Error(), "missing inventory entries") {
 		t.Fatalf("extra vector error = %v", err)
-	}
-}
-
-func TestSourceInputPreservesNestedDependencies(t *testing.T) {
-	t.Parallel()
-	stage := t.TempDir()
-	writeModuleFixture(t, stage)
-	accepted, err := validateSourceInput(stage)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, required := range []string{"third_party/pion/ice/go.mod", "third_party/pion/ice/LICENSE", "third_party/pion/ice/ice.go", "internal/perfevidence/go.mod", "spikes/webrtc/go.mod"} {
-		if !contains(accepted, required) {
-			t.Fatalf("source bundle omitted %s", required)
-		}
 	}
 }
 
@@ -199,7 +201,10 @@ func TestRunBuildsDeterministicExactCommitArchive(t *testing.T) {
 	if err := run(first); err != nil {
 		t.Fatalf("first run: %v", err)
 	}
-	writeFile(t, filepath.Join(repositoryRoot, "README.md"), "uncommitted mutation\n")
+	writeFile(t, filepath.Join(repositoryRoot, "README.md"), "staged mutation after clean proof\n")
+	runGit(t, repositoryRoot, "add", "--", "README.md")
+	writeFile(t, filepath.Join(repositoryRoot, "core/README.md"), "unstaged mutation after clean proof\n")
+	writeFile(t, filepath.Join(repositoryRoot, "untracked-after-clean.txt"), "untracked\n")
 	if err := run(second); err != nil {
 		t.Fatalf("second run: %v", err)
 	}
@@ -212,10 +217,16 @@ func TestRunBuildsDeterministicExactCommitArchive(t *testing.T) {
 		t.Fatal(err)
 	}
 	if firstDigest != secondDigest {
-		t.Fatalf("archive digest changed across worktree mutation: %x != %x", firstDigest, secondDigest)
+		t.Fatalf("archive digest changed across index/worktree mutation: %x != %x", firstDigest, secondDigest)
 	}
 	if got := readFile(t, filepath.Join(second.extractPath, "README.md")); got != "fixture readme\n" {
+		t.Fatalf("archive used staged index bytes: %q", got)
+	}
+	if got := readFile(t, filepath.Join(second.extractPath, "core/README.md")); got != "core fixture readme\n" {
 		t.Fatalf("archive used worktree bytes: %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(second.extractPath, "untracked-after-clean.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("archive consumed untracked worktree file: stat err = %v", err)
 	}
 	for _, required := range []string{"third_party/pion/ice/ice.go", "third_party/pion/ice/LICENSE", "internal/perfevidence/evidence.go", "spikes/webrtc/spike.go"} {
 		if _, err := os.Stat(filepath.Join(second.extractPath, filepath.FromSlash(required))); err != nil {
@@ -229,7 +240,6 @@ func TestRunBuildsDeterministicExactCommitArchive(t *testing.T) {
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("source rebuild with local nested dependency: %s: %v", output, err)
 	}
-
 }
 
 func TestRunRemovesFailedArchiveWithoutDeletingUnownedFile(t *testing.T) {
@@ -244,13 +254,28 @@ func TestRunRemovesFailedArchiveWithoutDeletingUnownedFile(t *testing.T) {
 	}
 }
 
+func TestRunRejectsEmptyRequiredFileAndRemovesPartialArchive(t *testing.T) {
+	repositoryRoot, _ := newModuleRepository(t)
+	writeFile(t, filepath.Join(repositoryRoot, "NOTICE"), "")
+	runGit(t, repositoryRoot, "add", "--", "NOTICE")
+	runGit(t, repositoryRoot, "commit", "--quiet", "-m", "empty notice")
+	commitSHA := strings.TrimSpace(gitOutputForTest(t, repositoryRoot, "rev-parse", "HEAD"))
+
+	config := newRunConfiguration(t, repositoryRoot, commitSHA, "empty-required")
+	if err := run(config); err == nil || !strings.Contains(err.Error(), "required release file is empty") {
+		t.Fatalf("run error = %v, want empty required file error", err)
+	}
+	if _, err := os.Stat(config.zipPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed run left partial zip behind: %v", err)
+	}
+}
+
 func newRunConfiguration(t *testing.T, repositoryRoot, commitSHA, name string) configuration {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), name)
 	return configuration{
 		repositoryRoot: repositoryRoot,
 		commitSHA:      commitSHA,
-		stageDirectory: filepath.Join(root, "stage"),
 		zipPath:        filepath.Join(root, "module.zip"),
 		extractPath:    filepath.Join(root, "extract"),
 		version:        testModuleVersion,
@@ -263,16 +288,17 @@ func newModuleRepository(t *testing.T) (string, string) {
 	runGit(t, repositoryRoot, "init", "--quiet")
 	runGit(t, repositoryRoot, "config", "user.email", "release-tests@example.invalid")
 	runGit(t, repositoryRoot, "config", "user.name", "Release Tests")
-	writeModuleFixture(t, repositoryRoot)
+	for filePath, content := range moduleFixtureContents() {
+		writeFile(t, filepath.Join(repositoryRoot, filepath.FromSlash(filePath)), content)
+	}
 	runGit(t, repositoryRoot, "add", ".")
 	runGit(t, repositoryRoot, "commit", "--quiet", "-m", "fixture")
 	commitSHA := strings.TrimSpace(gitOutputForTest(t, repositoryRoot, "rev-parse", "HEAD"))
 	return repositoryRoot, commitSHA
 }
 
-func writeModuleFixture(t *testing.T, root string) {
-	t.Helper()
-	files := map[string]string{
+func moduleFixtureContents() map[string]string {
+	return map[string]string{
 		"third_party/pion/ice/go.mod":       "module example.com/ice\n\ngo 1.25.0\n",
 		"third_party/pion/ice/ice.go":       "package ice\nfunc Check() {}\n",
 		"third_party/pion/ice/LICENSE":      "MIT License\n",
@@ -280,6 +306,7 @@ func writeModuleFixture(t *testing.T, root string) {
 		"LICENSE":                           "GNU AFFERO GENERAL PUBLIC LICENSE\nVersion 3, 19 November 2007\n",
 		"NOTICE":                            "WindShare\nSPDX-License-Identifier: AGPL-3.0-or-later\n",
 		"README.md":                         "fixture readme\n",
+		"core/README.md":                    "core fixture readme\n",
 		"go.mod":                            "module " + modulePath + "\n\ngo 1.25.0\nrequire example.com/ice v0.0.0\nreplace example.com/ice => ./third_party/pion/ice\n",
 		"go.sum":                            "example.com/dependency v1.0.0 h1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n",
 		"cmd/wind/main.go":                  "package main\nimport \"example.com/ice\"\nfunc main() { ice.Check() }\n",
@@ -291,9 +318,6 @@ func writeModuleFixture(t *testing.T, root string) {
 		"internal/perfevidence/evidence.go": "package perfevidence\n",
 		"spikes/webrtc/go.mod":              "module example.com/webrtc\n\ngo 1.25.0\n",
 		"spikes/webrtc/spike.go":            "package webrtc\n",
-	}
-	for filePath, content := range files {
-		writeFile(t, filepath.Join(root, filepath.FromSlash(filePath)), content)
 	}
 }
 
@@ -312,6 +336,22 @@ func assertCanonicalZipPrefix(t *testing.T, zipPath, prefix string) {
 			t.Fatalf("zip entry %q lacks prefix %q", file.Name, prefix)
 		}
 	}
+}
+
+func fileDigest(filePath string) ([sha256.Size]byte, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return [sha256.Size]byte{}, err
+	}
+	defer file.Close()
+
+	digest := sha256.New()
+	if _, err := io.Copy(digest, file); err != nil {
+		return [sha256.Size]byte{}, err
+	}
+	var result [sha256.Size]byte
+	copy(result[:], digest.Sum(nil))
+	return result, nil
 }
 
 func treeRecords(records ...string) []byte {
@@ -344,22 +384,18 @@ func readFile(t *testing.T, filePath string) string {
 
 func runGit(t *testing.T, repositoryRoot string, arguments ...string) {
 	t.Helper()
-	if _, err := gitOutputForTestWithError(repositoryRoot, arguments...); err != nil {
+	if _, err := gitOutput(repositoryRoot, arguments...); err != nil {
 		t.Fatalf("git %s: %v", strings.Join(arguments, " "), err)
 	}
 }
 
 func gitOutputForTest(t *testing.T, repositoryRoot string, arguments ...string) string {
 	t.Helper()
-	output, err := gitOutputForTestWithError(repositoryRoot, arguments...)
+	output, err := gitOutput(repositoryRoot, arguments...)
 	if err != nil {
 		t.Fatalf("git %s: %v", strings.Join(arguments, " "), err)
 	}
 	return string(output)
-}
-
-func gitOutputForTestWithError(repositoryRoot string, arguments ...string) ([]byte, error) {
-	return gitOutput(repositoryRoot, arguments...)
 }
 
 func TestValidateExactProjection(t *testing.T) {
@@ -375,34 +411,20 @@ func TestValidateExactProjection(t *testing.T) {
 	}
 }
 
-func TestCreateModuleZipRejectsExistingOutput(t *testing.T) {
+func TestBuildSourceBundleRejectsExistingOutput(t *testing.T) {
 	t.Parallel()
-	stage := t.TempDir()
-	writeFile(t, filepath.Join(stage, "go.mod"), "module "+modulePath+"\n")
+	repositoryRoot, commitSHA := newModuleRepository(t)
+	files, err := committedModuleFiles(repositoryRoot, commitSHA)
+	if err != nil {
+		t.Fatal(err)
+	}
 	zipPath := filepath.Join(t.TempDir(), "module.zip")
 	writeFile(t, zipPath, "sentinel")
-	err := createSourceBundle(zipPath, module.Version{Path: modulePath, Version: testModuleVersion}, stage, nil)
+	_, err = buildSourceBundle(repositoryRoot, zipPath, module.Version{Path: modulePath, Version: testModuleVersion}, files)
 	if err == nil || !strings.Contains(err.Error(), "create source bundle") {
-		t.Fatalf("createModuleZip error = %v", err)
+		t.Fatalf("buildSourceBundle error = %v", err)
 	}
 	if got := readFile(t, zipPath); got != "sentinel" {
 		t.Fatalf("existing output changed: %q", got)
-	}
-}
-
-func TestFileDigest(t *testing.T) {
-	t.Parallel()
-	filePath := filepath.Join(t.TempDir(), "value")
-	writeFile(t, filePath, "windshare")
-	first, err := fileDigest(filePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := fileDigest(filePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(first[:], second[:]) {
-		t.Fatal("stable file produced unstable digest")
 	}
 }

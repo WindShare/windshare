@@ -3,15 +3,13 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
+	"io"
 	"strings"
 	"testing"
 )
 
-func TestCopyCommittedBlobPreservesBinaryAndEmptyFrames(t *testing.T) {
+func TestConsumeCommittedBlobPreservesBinaryAndEmptyFrames(t *testing.T) {
 	t.Parallel()
 
 	const binaryID = "1111111111111111111111111111111111111111"
@@ -20,30 +18,44 @@ func TestCopyCommittedBlobPreservesBinaryAndEmptyFrames(t *testing.T) {
 	replies := fmt.Sprintf("%s blob %d\n%s\n%s blob 0\n\n", binaryID, len(payload), payload, emptyID)
 	responses := bufio.NewReader(strings.NewReader(replies))
 
-	var destination bytes.Buffer
-	if err := copyCommittedBlob(responses, binaryID, &destination); err != nil {
+	var binaryBytes bytes.Buffer
+	if err := consumeCommittedBlob(responses, committedFile{relativePath: "binary.dat", objectID: binaryID}, func(_ committedFile, size int64, body io.Reader) error {
+		if size != int64(len(payload)) {
+			return fmt.Errorf("size = %d, want %d", size, len(payload))
+		}
+		_, err := io.Copy(&binaryBytes, body)
+		return err
+	}); err != nil {
 		t.Fatal(err)
 	}
-	if destination.String() != payload {
-		t.Fatal("binary blob changed during staging")
+	if binaryBytes.String() != payload {
+		t.Fatal("binary blob changed during streaming")
 	}
-	destination.Reset()
-	if err := copyCommittedBlob(responses, emptyID, &destination); err != nil {
+
+	var emptyBytes bytes.Buffer
+	if err := consumeCommittedBlob(responses, committedFile{relativePath: "empty.dat", objectID: emptyID}, func(_ committedFile, size int64, body io.Reader) error {
+		if size != 0 {
+			return fmt.Errorf("size = %d, want 0", size)
+		}
+		_, err := io.Copy(&emptyBytes, body)
+		return err
+	}); err != nil {
 		t.Fatal(err)
 	}
-	if destination.Len() != 0 {
+	if emptyBytes.Len() != 0 {
 		t.Fatal("empty blob received bytes from another frame")
 	}
 }
 
-func TestStageCommittedBlobDiscardsInvalidFrame(t *testing.T) {
+func TestConsumeCommittedBlobRejectsInvalidFrames(t *testing.T) {
 	t.Parallel()
 
 	const blobID = "1111111111111111111111111111111111111111"
 	const otherID = "2222222222222222222222222222222222222222"
 	for _, test := range []struct {
-		name  string
-		reply string
+		name    string
+		reply   string
+		consume blobConsumer
 	}{
 		{name: "missing", reply: blobID + " missing\n"},
 		{name: "wrong object", reply: otherID + " blob 0\n\n"},
@@ -51,16 +63,25 @@ func TestStageCommittedBlobDiscardsInvalidFrame(t *testing.T) {
 		{name: "negative size", reply: blobID + " blob -1\n\n"},
 		{name: "short payload", reply: blobID + " blob 5\nabc"},
 		{name: "invalid delimiter", reply: blobID + " blob 3\nabc!"},
+		{
+			name:  "unread bytes",
+			reply: blobID + " blob 3\nabc\n",
+			consume: func(_ committedFile, _ int64, _ io.Reader) error {
+				return nil
+			},
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			destination := filepath.Join(t.TempDir(), "blob")
 			responses := bufio.NewReader(strings.NewReader(test.reply))
-
-			if err := stageCommittedBlob(responses, blobID, destination); err == nil {
-				t.Fatal("staged an invalid blob frame")
+			consumer := test.consume
+			if consumer == nil {
+				consumer = func(_ committedFile, _ int64, body io.Reader) error {
+					_, err := io.Copy(io.Discard, body)
+					return err
+				}
 			}
-			if _, err := os.Stat(destination); !errors.Is(err, os.ErrNotExist) {
-				t.Fatalf("invalid blob left a staged file: stat error %v", err)
+			if err := consumeCommittedBlob(responses, committedFile{relativePath: "blob", objectID: blobID}, consumer); err == nil {
+				t.Fatal("accepted an invalid blob frame")
 			}
 		})
 	}

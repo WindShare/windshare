@@ -12,29 +12,56 @@ if ! command -v go >/dev/null 2>&1; then
   echo "release requires the local Go toolchain on PATH" >&2
   exit 1
 fi
-if ! govulncheck_executable="$(command -v govulncheck)" ||
-  [ ! -x "$govulncheck_executable" ]; then
-  echo "release requires developer-installed govulncheck on PATH" >&2
-  exit 1
-fi
-# Native certification needs the same coordinator toolchain path; publish the
-# locally resolved Go command without retaining it.
-WINDSHARE_GO_EXECUTABLE="$(command -v go)"
-export WINDSHARE_GO_EXECUTABLE
 source scripts/ci/release-checkout.sh
-if [ "$#" -lt 2 ] || [ "$#" -gt 3 ]; then
-  echo "usage: scripts/ci/linux/release.sh <version> <commit-sha> [linux-ext4]" >&2
+if [ "$#" -lt 2 ] || [ "$#" -gt 4 ]; then
+  echo "usage: scripts/ci/linux/release.sh <version> <commit-sha> [linux-ext4] [all|verify|package]" >&2
   exit 2
 fi
 release_version="$1"
 release_commit="$2"
 native_profile="${3:-}"
+release_mode="${4:-all}"
 if [[ ! "$release_commit" =~ ^[0-9a-f]{40}$ ]]; then
   echo "release commit must be an exact lowercase 40-character SHA" >&2
   exit 2
 fi
+case "$release_mode" in
+  all|verify|package) ;;
+  *)
+    echo "unsupported POSIX release mode: $release_mode" >&2
+    exit 2
+    ;;
+esac
+
+run_verify=false
+run_package=false
+if [ "$release_mode" = "all" ] || [ "$release_mode" = "verify" ]; then
+  run_verify=true
+fi
+if [ "$release_mode" = "all" ] || [ "$release_mode" = "package" ]; then
+  run_package=true
+fi
+
+govulncheck_executable=""
+if [ "$run_verify" = true ]; then
+  if ! govulncheck_executable="$(command -v govulncheck)" ||
+    [ ! -x "$govulncheck_executable" ]; then
+    echo "release requires developer-installed govulncheck on PATH" >&2
+    exit 1
+  fi
+fi
+# Native certification needs the same coordinator toolchain path; publish the
+# locally resolved Go command without retaining it.
+WINDSHARE_GO_EXECUTABLE="$(command -v go)"
+export WINDSHARE_GO_EXECUTABLE
+
 host_kernel="$(uname -s)"
-if [ "$host_kernel" = "Linux" ] && [ -z "$native_profile" ]; then
+if [ "$release_mode" = "package" ]; then
+  if [ -n "$native_profile" ]; then
+    echo "POSIX release package mode does not execute native certification profiles" >&2
+    exit 2
+  fi
+elif [ "$host_kernel" = "Linux" ] && [ -z "$native_profile" ]; then
   # A Linux release sweep is certification evidence, so silently omitting the
   # native profile would make the local gate weaker than the hosted release.
   native_profile="linux-ext4"
@@ -54,14 +81,18 @@ fi
 module_suite_test_timeout="30m"
 
 windshare_assert_exact_release_checkout "$repository_root" "$release_commit"
-echo "-- exact release checkout contract"
-bash scripts/ci/release-checkout.tests.sh
+if [ "$run_verify" = true ]; then
+  echo "-- exact release checkout contract"
+  bash scripts/ci/release-checkout.tests.sh
+fi
 linux_release_environment=false
 if [ "$host_kernel" = "Linux" ]; then
-  echo "-- release-ref resolver contract"
-  bash scripts/ci/release-ref.tests.sh
-  echo "-- Linux private-temp helper contract"
-  bash scripts/ci/native-output/linux/environment.tests.sh
+  if [ "$run_verify" = true ]; then
+    echo "-- release-ref resolver contract"
+    bash scripts/ci/release-ref.tests.sh
+    echo "-- Linux private-temp helper contract"
+    bash scripts/ci/native-output/linux/environment.tests.sh
+  fi
   source scripts/ci/native-output/linux/environment.sh
   windshare_linux_prepare_release_environment "$repository_root"
   temporary_base="$WINDSHARE_LINUX_RELEASE_TEMP_PARENT"
@@ -75,7 +106,6 @@ else
   fi
   temporary_root="$(mktemp -d "$temporary_base/windshare-release.XXXXXXXX")"
 fi
-stage_directory="$temporary_root/committed-module"
 zip_path="$temporary_root/source.zip"
 artifact_root="$temporary_root/extracted-module"
 release_repository="$temporary_root/release-repository"
@@ -113,18 +143,18 @@ echo "== release =="
 source scripts/ci/release-environment.sh
 windshare_prepare_release_go_environment "$temporary_root"
 
-echo "-- private Go environment contract"
-bash scripts/ci/release-environment.tests.sh
-echo "-- commit-bound archive contract"
-bash scripts/ci/release-archive.tests.sh
+if [ "$run_verify" = true ]; then
+  echo "-- private Go environment contract"
+  bash scripts/ci/release-environment.tests.sh
 
-echo "-- GOWORK=off go vet release helper"
-go vet ./scripts/ci/_sourcebundle
-echo "-- GOWORK=off go test release helper"
-go test -count=1 ./scripts/ci/_sourcebundle ./scripts/ci/_releaseassets
-# Helper tests are allowed to execute code, so re-prove the verifier checkout
-# before compiling the archive builder that supplies release evidence.
-windshare_assert_exact_release_checkout "$repository_root" "$release_commit"
+  echo "-- GOWORK=off go vet release helper"
+  go vet ./scripts/ci/_sourcebundle
+  echo "-- GOWORK=off go test release helper"
+  go test -count=1 ./scripts/ci/_sourcebundle ./scripts/ci/_releaseassets
+  # Helper tests are allowed to execute code, so re-prove the verifier checkout
+  # before compiling the archive builder that supplies release evidence.
+  windshare_assert_exact_release_checkout "$repository_root" "$release_commit"
+fi
 
 echo "-- materialize private exact-commit verifier checkout"
 windshare_create_exact_release_checkout \
@@ -134,16 +164,24 @@ windshare_create_exact_release_checkout \
   "${WINDSHARE_RELEASE_VERIFIER_PATHS[@]}"
 
 echo "-- construct deterministic source bundle ($release_version at $release_commit)"
-(
+bundle_output="$(
   cd "$release_repository"
   go run ./scripts/ci/_sourcebundle \
     -repo "$release_repository" \
     -commit "$release_commit" \
-    -stage "$stage_directory" \
     -zip "$zip_path" \
     -extract "$artifact_root" \
     -version "$release_version"
-)
+)"
+printf '%s\n' "$bundle_output"
+source_bundle_digest="$(printf '%s\n' "$bundle_output" | sed -n 's/^sha256=\([0-9a-f]\{64\}\)$/\1/p')"
+if [[ ! "$source_bundle_digest" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "source bundle builder did not report a valid SHA-256 digest" >&2
+  exit 1
+fi
+if [ -n "${WINDSHARE_RELEASE_SOURCE_SHA256_FILE:-}" ]; then
+  printf '%s\n' "$source_bundle_digest" >"$WINDSHARE_RELEASE_SOURCE_SHA256_FILE"
+fi
 
 case "$artifact_root" in
   "$repository_root"/*)
@@ -162,58 +200,70 @@ fi
 
   echo "-- pinned provider source and patch reproduction (source bundle)"
   go run ./scripts/ci/_piondeps -reproduce
-  echo "-- GOWORK=off go mod tidy -diff (extracted module)"
-  go mod tidy -diff
-  echo "-- GOWORK=off go mod verify (extracted module)"
-  go mod verify
-  echo "-- GOWORK=off go list ./... (extracted module)"
-  go list ./...
-  echo "-- core production dependency boundary (extracted module)"
-  go run ./scripts/ci/_coreboundary
-  go run ./scripts/ci/_engineboundary
-  echo "-- GOWORK=off go vet ./... (extracted module)"
-  go vet ./...
-  echo "-- GOWORK=off go build ./... (extracted module)"
-  go build ./...
-  echo "-- govulncheck (extracted module)"
-  # The setup boundary owns scanner upgrades; the repository depends only on
-  # govulncheck's stable source-scan package-pattern contract.
-  "$govulncheck_executable" ./...
-
-  echo "-- install wind CLI from the extracted release revision"
-  install_root="$temporary_root/installed-cli"
-  install -d -m 0700 -- "$install_root"
-  bash scripts/install/install.sh "$install_root"
-  test -x "$install_root/wind"
-  "$install_root/wind" --help >/dev/null
 )
 
-if [ "$native_profile" = "linux-ext4" ]; then
-  windshare_assert_exact_release_file_projection \
-    "$release_repository" \
-    "$release_commit" \
-    scripts/ci/native-output/linux/certify.sh \
-    scripts/ci/native-output/linux/root-worker.sh
-  bash "$release_repository/scripts/ci/native-output/linux/certify.sh" \
-    "$artifact_root" \
-    "$temporary_root"
+if [ "$run_verify" = true ]; then
+  (
+    cd "$artifact_root"
+    export GOWORK=off
+
+    echo "-- GOWORK=off go mod tidy -diff (extracted module)"
+    go mod tidy -diff
+    echo "-- GOWORK=off go mod verify (extracted module)"
+    go mod verify
+    echo "-- GOWORK=off go list ./... (extracted module)"
+    go list ./...
+    echo "-- core production dependency boundary (extracted module)"
+    go run ./scripts/ci/_coreboundary
+    go run ./scripts/ci/_engineboundary
+    echo "-- GOWORK=off go vet ./... (extracted module)"
+    go vet ./...
+    echo "-- GOWORK=off go build ./... (extracted module)"
+    go build ./...
+    echo "-- govulncheck (extracted module)"
+    # The setup boundary owns scanner upgrades; the repository depends only on
+    # govulncheck's stable source-scan package-pattern contract.
+    "$govulncheck_executable" ./...
+
+    echo "-- install wind CLI from the extracted release revision"
+    install_root="$temporary_root/installed-cli"
+    install -d -m 0700 -- "$install_root"
+    bash scripts/install/install.sh "$install_root"
+    test -x "$install_root/wind"
+    "$install_root/wind" --help >/dev/null
+  )
+
+  if [ "$native_profile" = "linux-ext4" ]; then
+    windshare_assert_exact_release_file_projection \
+      "$release_repository" \
+      "$release_commit" \
+      scripts/ci/native-output/linux/certify.sh \
+      scripts/ci/native-output/linux/root-worker.sh
+    bash "$release_repository/scripts/ci/native-output/linux/certify.sh" \
+      "$artifact_root" \
+      "$temporary_root"
+  fi
 fi
 
-# Package verified source bytes before tests can mutate them.
-assets_root="${WINDSHARE_RELEASE_ASSETS:-$temporary_root/assets}"
-(
-  cd "$release_repository"
-  go run ./scripts/ci/_releaseassets -source "$artifact_root" -source-zip "$zip_path" \
-    -out "$assets_root" -version "$release_version" -commit "$release_commit"
-)
+if [ "$run_package" = true ]; then
+  # Package verified source bytes before tests can mutate them.
+  assets_root="${WINDSHARE_RELEASE_ASSETS:-$temporary_root/assets}"
+  (
+    cd "$release_repository"
+    go run ./scripts/ci/_releaseassets -source "$artifact_root" -source-zip "$zip_path" \
+      -out "$assets_root" -version "$release_version" -commit "$release_commit"
+  )
+fi
 
-# Module tests execute arbitrary repository code and can mutate their source tree.
-# Keeping them last prevents later consumers from silently validating changed bytes.
-(
-  cd "$artifact_root"
-  export GOWORK=off
-  echo "-- GOWORK=off go test ./... (extracted module)"
-  go test -count=1 -timeout="$module_suite_test_timeout" ./...
-)
+if [ "$run_verify" = true ]; then
+  # Module tests execute arbitrary repository code and can mutate their source tree.
+  # Keeping them last prevents later consumers from silently validating changed bytes.
+  (
+    cd "$artifact_root"
+    export GOWORK=off
+    echo "-- GOWORK=off go test ./... (extracted module)"
+    go test -count=1 -timeout="$module_suite_test_timeout" ./...
+  )
+fi
 
 echo "== release: PASS in ${SECONDS}s =="

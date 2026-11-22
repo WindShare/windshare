@@ -9,7 +9,10 @@ param(
 
     [string]$CommitSHA = '',
 
-    [string]$NativeProfile = ''
+    [string]$NativeProfile = '',
+
+    [ValidateSet('all', 'verify', 'package')]
+    [string]$Mode = 'all'
 )
 
 Set-StrictMode -Version Latest
@@ -19,11 +22,17 @@ if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {
 }
 
 if ([string]::IsNullOrWhiteSpace($Version) -or $CommitSHA -cnotmatch '^[0-9a-f]{40}$') {
-    throw 'usage: scripts/ci/windows/release.ps1 -Version <version> -CommitSHA <40-char-sha> [-NativeProfile windows-ntfs]'
+    throw 'usage: scripts/ci/windows/release.ps1 -Version <version> -CommitSHA <40-char-sha> [-NativeProfile windows-ntfs] [-Mode all|verify|package]'
 }
 if ($NativeProfile -cnotin @('', 'windows-ntfs')) {
     throw "unsupported Windows release native profile: $NativeProfile"
 }
+if ($Mode -ceq 'package' -and $NativeProfile -cne '') {
+    throw 'Windows release package mode does not execute native certification profiles'
+}
+
+$runVerify = $Mode -cin @('all', 'verify')
+$runPackage = $Mode -cin @('all', 'package')
 
 # The extracted osfs suite legitimately approaches Go's 10-minute default on
 # hosted Windows. The workflow job remains the outer hang bound; this package
@@ -38,22 +47,22 @@ $repositoryRoot = [IO.Path]::GetFullPath($repositoryRoot)
 $originalLocation = Get-Location
 $temporaryRoot = ''
 $temporaryRootOwnership = $null
-$stageDirectory = ''
 $zipPath = ''
 $artifactRoot = ''
 $releaseRepository = ''
 $gateStopwatch = [Diagnostics.Stopwatch]::StartNew()
 $releaseEnvironmentState = $null
 
-# The native worker must copy the same local GOROOT used by the coordinator,
-# so resolve the developer/runner toolchain once before crossing that token boundary.
 $goApplication = @(Get-Command go -CommandType Application -ErrorAction Stop)[0]
 $goExecutable = [IO.Path]::GetFullPath($goApplication.Path)
-$govulncheckApplications = @(Get-Command govulncheck -CommandType Application -All -ErrorAction Ignore)
-if ($govulncheckApplications.Count -eq 0) {
-    throw 'release requires developer-installed govulncheck on PATH'
+$govulncheckExecutable = ''
+if ($runVerify) {
+    $govulncheckApplications = @(Get-Command govulncheck -CommandType Application -All -ErrorAction Ignore)
+    if ($govulncheckApplications.Count -eq 0) {
+        throw 'release requires developer-installed govulncheck on PATH'
+    }
+    $govulncheckExecutable = [IO.Path]::GetFullPath($govulncheckApplications[0].Path)
 }
-$govulncheckExecutable = [IO.Path]::GetFullPath($govulncheckApplications[0].Path)
 Import-Module (Join-Path $ciRoot 'release-environment.psm1') -Force
 Import-Module (Join-Path $ciRoot 'release-checkout.psm1') -Force
 Import-Module (Join-Path $ciRoot 'native-output/windows/certify.psm1') -Force
@@ -104,15 +113,21 @@ function New-EphemeralWindowsUserPassword {
 function Grant-EphemeralWindowsUserAccess(
     [string]$Path,
     [string]$UserSID,
-    [ValidateSet('ReadExecute', 'MutableDirectory')]
+    [ValidateSet('RootTraverse', 'ReadExecute', 'MutableDirectory')]
     [string]$AccessProfile
 ) {
-    $accessExpression = switch ($AccessProfile) {
-        'ReadExecute' { '(OI)(CI)RX' }
-        'MutableDirectory' { '(OI)(CI)(M,DC)' }
-    }
     $icacls = Join-Path $env:SystemRoot 'System32\icacls.exe'
-    & $icacls $Path '/grant:r' "*${UserSID}:$accessExpression" '/T' '/Q'
+    switch ($AccessProfile) {
+        'RootTraverse' {
+            & $icacls $Path '/grant:r' "*${UserSID}:RX" '/Q'
+        }
+        'ReadExecute' {
+            & $icacls $Path '/grant:r' "*${UserSID}:(OI)(CI)RX" '/T' '/Q'
+        }
+        'MutableDirectory' {
+            & $icacls $Path '/grant:r' "*${UserSID}:(OI)(CI)(M,DC)" '/T' '/Q'
+        }
+    }
     if ($LASTEXITCODE -ne 0) {
         throw "grant $AccessProfile access to the ephemeral native worker failed with code $LASTEXITCODE"
     }
@@ -218,69 +233,69 @@ function Invoke-RequiredWindowsNativeTestsAsStandardUser {
             throw 'native release root ownership was not established before worker access'
         }
 
-        $coordinatorToolchain = Get-WindowsNativeCoordinatorGoToolchain `
-            -CoordinatorExecutable $goExecutable
-        Write-Output ('-- selected coordinator Go application: candidates={0}, version={1}' -f @(
-            $coordinatorToolchain.CandidateCount,
-            $coordinatorToolchain.SelectedVersion
-        ))
-        $stagedToolchain = Copy-WindowsNativeGoToolchain `
-            -Toolchain $coordinatorToolchain `
-            -DestinationRoot (Join-Path $temporaryRoot 'go-toolchain')
-        Write-Output "-- staged coordinator GOROOT inside the protected native release root: $($stagedToolchain.GoRoot)"
-
+        $binariesRoot = Join-Path $temporaryRoot 'windows-native-binaries'
         $workerRoot = Join-Path $temporaryRoot 'windows-native-worker'
-        New-Item -ItemType Directory -Path $workerRoot | Out-Null
+        New-Item -ItemType Directory -Path @($binariesRoot, $workerRoot) | Out-Null
+
+        # Precompiling the required test binaries under the coordinator avoids
+        # duplicating GOROOT and mirrors Linux loop-ext4 certification.
+        $requiredSelectors = @(Get-WindowsNativeRequiredTestSelectors)
+        Write-Output '-- compile Windows native certification test binaries'
+        foreach ($selector in $requiredSelectors) {
+            $binaryOutput = Join-Path $binariesRoot ([string]$selector.BinaryName)
+            & $goExecutable test -c -o $binaryOutput ([string]$selector.PackageArgument)
+            if ($LASTEXITCODE -ne 0) {
+                throw "compile Windows native test binary for $($selector.PackageArgument) exited with code $LASTEXITCODE"
+            }
+        }
+
         $workerVerifierPaths = @(
             'scripts/ci/native-output/windows/certify.psm1',
             'scripts/ci/native-output/windows/worker.ps1'
         )
-        # Extracted release tests execute under the coordinator token and can
-        # locate this temp root through their Go caches. Re-prove the two late
-        # worker inputs immediately before copying them across the token boundary.
+        # Re-prove the two late worker inputs immediately before copying them
+        # into the worker's immutable read-only binaries directory.
         Assert-ExactReleaseFileProjection `
             -RepositoryRoot $releaseRepository `
             -ExpectedCommit $CommitSHA `
             -VerifierPaths $workerVerifierPaths
         foreach ($helperPath in $workerVerifierPaths) {
-            $helperName = Split-Path -Leaf $helperPath
             Copy-Item `
                 -LiteralPath (Join-Path $releaseRepository $helperPath) `
-                -Destination $workerRoot
+                -Destination $binariesRoot
         }
+
         Grant-EphemeralWindowsUserAccess `
             -Path $temporaryRoot `
             -UserSID $userSID `
-            -AccessProfile ReadExecute
+            -AccessProfile RootTraverse
         $temporaryRootOwnership.WorkerSID = $userSID
-        $artifactMutationDeny = Set-WindowsNativeTreeMutationDeny `
-            -RootPath $artifactRoot `
+        Grant-EphemeralWindowsUserAccess `
+            -Path $binariesRoot `
             -UserSID $userSID `
-            -Label 'the extracted artifact'
-        $toolchainMutationDeny = Set-WindowsNativeTreeMutationDeny `
-            -RootPath $stagedToolchain.GoRoot `
+            -AccessProfile ReadExecute
+        $binariesMutationDeny = Set-WindowsNativeTreeMutationDeny `
+            -RootPath $binariesRoot `
             -UserSID $userSID `
-            -Label 'the staged GOROOT'
-        Write-Output ('-- installed mutation-only deny ACLs: artifact_entries={0}, staged_goroot_entries={1}' -f @(
-            $artifactMutationDeny.EntryCount,
-            $toolchainMutationDeny.EntryCount
+            -Label 'the native test binaries'
+        Write-Output ('-- installed mutation-only deny ACLs: binaries_entries={0}' -f @(
+            $binariesMutationDeny.EntryCount
         ))
-        # The output root opens a directory handle with FILE_DELETE_CHILD.  icacls
+        # The output root opens a directory handle with FILE_DELETE_CHILD. icacls
         # Modify does not imply that directory right, so grant it explicitly while
-        # keeping the broader release root and immutable trees read/execute-only.
+        # keeping the release root and immutable binaries read/execute-only.
         Grant-EphemeralWindowsUserAccess `
             -Path $workerRoot `
             -UserSID $userSID `
             -AccessProfile MutableDirectory
 
         $powershellExecutable = [IO.Path]::GetFullPath((Get-Process -Id $PID).Path)
-        $workerScript = Join-Path $workerRoot 'worker.ps1'
+        $workerScript = Join-Path $binariesRoot 'worker.ps1'
         $workerArgumentLine = New-WindowsNativeWorkerArgumentLine `
             -PowerShellExecutable $powershellExecutable `
             -WorkerScript $workerScript `
-            -ArtifactRoot $artifactRoot `
+            -BinariesRoot $binariesRoot `
             -WorkRoot $workerRoot `
-            -GoExecutable $stagedToolchain.GoExecutable `
             -ExpectedUserSID $userSID
         $stdoutPath = Join-Path $workerRoot 'worker-stdout.log'
         $stderrPath = Join-Path $workerRoot 'worker-stderr.log'
@@ -316,9 +331,36 @@ function Invoke-RequiredWindowsNativeTestsAsStandardUser {
                 Write-Output "[native worker stderr] $_"
             }
         }
+
+        for ($selectorIndex = 0; $selectorIndex -lt $requiredSelectors.Count; $selectorIndex++) {
+            $selector = $requiredSelectors[$selectorIndex]
+            $selectorLogID = '{0:D2}' -f ($selectorIndex + 1)
+            $rawOutputPath = Join-Path $workerRoot "native-test-raw-$selectorLogID.log"
+            $exitCodePath = Join-Path $workerRoot "native-test-exit-$selectorLogID.txt"
+            $jsonLogPath = Join-Path $workerRoot "native-test-events-$selectorLogID.jsonl"
+            if (-not (Test-Path -LiteralPath $exitCodePath -PathType Leaf)) {
+                throw "standard-user Windows/NTFS native worker omitted exit status for $($selector.PackageArgument)"
+            }
+            $binaryExitCode = [int]([IO.File]::ReadAllText($exitCodePath).Trim())
+            $jsonLines = @(ConvertFrom-WindowsNativeTest2JsonOutput `
+                -GoExecutable $goExecutable `
+                -PackageImportPath ([string]$selector.ImportPath) `
+                -RawOutputPath $rawOutputPath)
+            $jsonLines | Set-Content -LiteralPath $jsonLogPath -Encoding utf8
+            $jsonLines | ForEach-Object { Write-Output $_ }
+            $events = @(ConvertFrom-WindowsNativeTestJSONLines -Lines $jsonLines)
+            $testExpression = Get-WindowsNativeRequiredTestExpression -TestNames @($selector.TestNames)
+            Assert-WindowsNativeTestEvents `
+                -ExitCode $binaryExitCode `
+                -Events $events `
+                -RequiredTests @($selector.TestNames) `
+                -SelectorPackage ([string]$selector.PackageArgument) `
+                -SelectorExpression $testExpression
+        }
         if ($process.ExitCode -ne 0) {
             throw "standard-user Windows/NTFS native worker exited with code $($process.ExitCode)"
         }
+        Write-Output '-- required Windows/NTFS certification passed under the standard-user token'
     } finally {
         $cleanupErrors = [Collections.Generic.List[string]]::new()
         try {
@@ -358,37 +400,34 @@ try {
         )
         New-Item -ItemType Directory -Path $temporaryRoot | Out-Null
     }
-    $stageDirectory = Join-Path $temporaryRoot 'committed-module'
     $zipPath = Join-Path $temporaryRoot 'source.zip'
     $artifactRoot = Join-Path $temporaryRoot 'extracted-module'
     $releaseRepository = Join-Path $temporaryRoot 'release-repository'
     $releaseEnvironmentState = Enter-ReleaseGoEnvironment -ReleaseRoot $temporaryRoot
     Set-Location $repositoryRoot
     $currentPowerShell = [IO.Path]::GetFullPath((Get-Process -Id $PID).Path)
-    Invoke-Step 'exact release checkout contract' {
-        & $currentPowerShell -NoLogo -NoProfile -NonInteractive -File `
-            (Join-Path $ciRoot 'release-checkout.tests.ps1')
+    if ($runVerify) {
+        Invoke-Step 'exact release checkout contract' {
+            & $currentPowerShell -NoLogo -NoProfile -NonInteractive -File `
+                (Join-Path $ciRoot 'release-checkout.tests.ps1')
+        }
+        Invoke-Step 'private Go environment contract' {
+            & $currentPowerShell -NoLogo -NoProfile -NonInteractive -File `
+                (Join-Path $ciRoot 'release-environment.tests.ps1')
+        }
+        Invoke-Step 'GOWORK=off go vet release helper' {
+            & $goExecutable vet ./scripts/ci/_sourcebundle
+        }
+        Invoke-Step 'GOWORK=off go test release helper' {
+            & $goExecutable test -count=1 ./scripts/ci/_sourcebundle ./scripts/ci/_releaseassets
+        }
+        Invoke-Step 'Windows first-setup contract (fake firewall commands)' {
+            & $currentPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/install/windows/network.tests.ps1
+        }
+        # Helper tests execute repository code. Re-proving the clean exact checkout
+        # prevents a test from replacing the later archive builder in place.
+        Assert-ExactReleaseCheckout -RepositoryRoot $repositoryRoot -ExpectedCommit $CommitSHA
     }
-    Invoke-Step 'private Go environment contract' {
-        & $currentPowerShell -NoLogo -NoProfile -NonInteractive -File `
-            (Join-Path $ciRoot 'release-environment.tests.ps1')
-    }
-    Invoke-Step 'commit-bound archive contract' {
-        & $currentPowerShell -NoLogo -NoProfile -NonInteractive -File `
-            (Join-Path $ciRoot 'release-archive.tests.ps1')
-    }
-    Invoke-Step 'GOWORK=off go vet release helper' {
-        & $goExecutable vet ./scripts/ci/_sourcebundle
-    }
-    Invoke-Step 'GOWORK=off go test release helper' {
-        & $goExecutable test -count=1 ./scripts/ci/_sourcebundle ./scripts/ci/_releaseassets
-    }
-    Invoke-Step 'Windows first-setup contract (fake firewall commands)' {
-        & $currentPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/install/windows/network.tests.ps1
-    }
-    # Helper tests execute repository code. Re-proving the clean exact checkout
-    # prevents a test from replacing the later archive builder in place.
-    Assert-ExactReleaseCheckout -RepositoryRoot $repositoryRoot -ExpectedCommit $CommitSHA
     Invoke-Step 'materialize private exact-commit verifier checkout' {
         New-ExactReleaseCheckout `
             -SourceRepository $repositoryRoot `
@@ -396,15 +435,31 @@ try {
             -Destination $releaseRepository `
             -VerifierPaths (Get-ReleaseVerifierPaths)
     }
+    $sourceBundleDigest = ''
     Invoke-Step "construct deterministic source bundle ($Version at $CommitSHA)" {
         Set-Location $releaseRepository
-        & $goExecutable run ./scripts/ci/_sourcebundle `
+        $bundleOutput = @(& $goExecutable run ./scripts/ci/_sourcebundle `
             -repo $releaseRepository `
             -commit $CommitSHA `
-            -stage $stageDirectory `
             -zip $zipPath `
             -extract $artifactRoot `
-            -version $Version
+            -version $Version)
+        foreach ($line in $bundleOutput) {
+            Write-Output $line
+            if ([string]$line -cmatch '^sha256=([0-9a-f]{64})$') {
+                $script:sourceBundleDigest = $matches[1]
+            }
+        }
+    }
+    if ($sourceBundleDigest -cnotmatch '^[0-9a-f]{64}$') {
+        throw 'source bundle builder did not report a valid SHA-256 digest'
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:WINDSHARE_RELEASE_SOURCE_SHA256_FILE)) {
+        [IO.File]::WriteAllText(
+            $env:WINDSHARE_RELEASE_SOURCE_SHA256_FILE,
+            "$sourceBundleDigest`n",
+            [Text.UTF8Encoding]::new($false)
+        )
     }
 
     $resolvedArtifactRoot = [IO.Path]::GetFullPath($artifactRoot)
@@ -420,44 +475,50 @@ try {
 
     Set-Location $artifactRoot
     Invoke-Step 'pinned provider source and patch reproduction (source bundle)' { & $goExecutable run ./scripts/ci/_piondeps -reproduce }
-    Invoke-Step 'GOWORK=off go mod tidy -diff (extracted module)' { & $goExecutable mod tidy -diff }
-    Invoke-Step 'GOWORK=off go mod verify (extracted module)' { & $goExecutable mod verify }
-    Invoke-Step 'GOWORK=off go list ./... (extracted module)' { & $goExecutable list ./... }
-    Invoke-Step 'core production dependency boundary (extracted module)' {
-        & $goExecutable run ./scripts/ci/_coreboundary
-        if ($LASTEXITCODE -ne 0) { throw "Core dependency boundary failed" }
-        & $goExecutable run ./scripts/ci/_engineboundary
+    if ($runVerify) {
+        Invoke-Step 'GOWORK=off go mod tidy -diff (extracted module)' { & $goExecutable mod tidy -diff }
+        Invoke-Step 'GOWORK=off go mod verify (extracted module)' { & $goExecutable mod verify }
+        Invoke-Step 'GOWORK=off go list ./... (extracted module)' { & $goExecutable list ./... }
+        Invoke-Step 'core production dependency boundary (extracted module)' {
+            & $goExecutable run ./scripts/ci/_coreboundary
+            if ($LASTEXITCODE -ne 0) { throw "Core dependency boundary failed" }
+            & $goExecutable run ./scripts/ci/_engineboundary
+        }
+        Invoke-Step 'GOWORK=off go vet ./... (extracted module)' { & $goExecutable vet ./... }
+        Invoke-Step 'GOWORK=off go build ./... (extracted module)' { & $goExecutable build ./... }
+        Invoke-Step 'govulncheck (extracted module)' {
+            # The setup boundary owns scanner upgrades; the repository depends only
+            # on govulncheck's stable source-scan package-pattern contract.
+            & $govulncheckExecutable ./...
+        }
+        $cliInstallRoot = Join-Path $temporaryRoot 'installed-cli'
+        New-Item -ItemType Directory -Path $cliInstallRoot | Out-Null
+        Invoke-Step 'install wind from the supported source installation entry' {
+            & ./scripts/install/windows/install.ps1 -Destination $cliInstallRoot -Firewall Skip `
+                -StateDirectory (Join-Path $temporaryRoot 'setup-state')
+        }
+        Invoke-Step 'execute the installed wind CLI' {
+            & (Join-Path $cliInstallRoot 'wind.exe') --help | Out-Null
+        }
+        if ($NativeProfile -ceq 'windows-ntfs') {
+            Invoke-RequiredWindowsNativeTestsAsStandardUser
+        }
     }
-    Invoke-Step 'GOWORK=off go vet ./... (extracted module)' { & $goExecutable vet ./... }
-    Invoke-Step 'GOWORK=off go build ./... (extracted module)' { & $goExecutable build ./... }
-    Invoke-Step 'govulncheck (extracted module)' {
-        # The setup boundary owns scanner upgrades; the repository depends only
-        # on govulncheck's stable source-scan package-pattern contract.
-        & $govulncheckExecutable ./...
+    if ($runPackage) {
+        $assetsRoot = if ([string]::IsNullOrEmpty($env:WINDSHARE_RELEASE_ASSETS)) { Join-Path $temporaryRoot 'assets' } else { $env:WINDSHARE_RELEASE_ASSETS }
+        Invoke-Step 'build release binaries and preserve verified source bundle' {
+            Set-Location $releaseRepository
+            & $goExecutable run ./scripts/ci/_releaseassets -source $artifactRoot -source-zip $zipPath `
+                -out $assetsRoot -version $Version -commit $CommitSHA
+        }
     }
-    $cliInstallRoot = Join-Path $temporaryRoot 'installed-cli'
-    New-Item -ItemType Directory -Path $cliInstallRoot | Out-Null
-    Invoke-Step 'install wind from the supported source installation entry' {
-        & ./scripts/install/windows/install.ps1 -Destination $cliInstallRoot -Firewall Skip `
-            -StateDirectory (Join-Path $temporaryRoot 'setup-state')
-    }
-    Invoke-Step 'execute the installed wind CLI' {
-        & (Join-Path $cliInstallRoot 'wind.exe') --help | Out-Null
-    }
-    if ($NativeProfile -ceq 'windows-ntfs') {
-        Invoke-RequiredWindowsNativeTestsAsStandardUser
-    }
-    $assetsRoot = if ([string]::IsNullOrEmpty($env:WINDSHARE_RELEASE_ASSETS)) { Join-Path $temporaryRoot 'assets' } else { $env:WINDSHARE_RELEASE_ASSETS }
-    Invoke-Step 'build release binaries and preserve verified source bundle' {
-        Set-Location $releaseRepository
-        & $goExecutable run ./scripts/ci/_releaseassets -source $artifactRoot -source-zip $zipPath `
-            -out $assetsRoot -version $Version -commit $CommitSHA
-    }
-    Set-Location $artifactRoot
-    # Module tests execute arbitrary repository code and can mutate their source tree.
-    # Keeping them last prevents later consumers from silently validating changed bytes.
-    Invoke-Step 'GOWORK=off go test ./... (extracted module)' {
-        & $goExecutable test -count=1 "-timeout=$moduleSuiteTestTimeout" ./...
+    if ($runVerify) {
+        Set-Location $artifactRoot
+        # Module tests execute arbitrary repository code and can mutate their source tree.
+        # Keeping them last prevents later consumers from silently validating changed bytes.
+        Invoke-Step 'GOWORK=off go test ./... (extracted module)' {
+            & $goExecutable test -count=1 "-timeout=$moduleSuiteTestTimeout" ./...
+        }
     }
 } finally {
     $cleanupErrors = [Collections.Generic.List[string]]::new()

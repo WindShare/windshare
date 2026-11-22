@@ -4,6 +4,8 @@ $ErrorActionPreference = 'Stop'
 $script:RequiredWindowsNativeTestSelectors = @(
     [pscustomobject]@{
         PackageArgument = './osfs'
+        ImportPath = 'github.com/windshare/windshare/osfs'
+        BinaryName = 'osfs.test.exe'
         TestNames = @(
             'TestNativeOutputDestinationCapabilities',
             'TestNativeOutputProcessRestartKeepsRanges',
@@ -13,6 +15,8 @@ $script:RequiredWindowsNativeTestSelectors = @(
     },
     [pscustomobject]@{
         PackageArgument = './osfs/internal/outputportable'
+        ImportPath = 'github.com/windshare/windshare/osfs/internal/outputportable'
+        BinaryName = 'outputportable.test.exe'
         TestNames = @(
             'TestTaskLockIsProcessExclusiveAndRecoversAfterExit',
             'TestOrdinaryFilesPublishWithoutLinksAndNeverOverwrite',
@@ -461,197 +465,6 @@ function Set-WindowsNativeTreeMutationDeny {
     }
 }
 
-function Select-WindowsNativeCoordinatorGoApplication {
-    [CmdletBinding()]
-    [OutputType([object])]
-    param(
-        [Parameter(Mandatory)]
-        [AllowEmptyCollection()]
-        [object[]]$Candidates
-    )
-
-    if ($Candidates.Count -eq 0) {
-        throw 'no Go application command is available on PATH'
-    }
-    $selected = $Candidates[0]
-    if ($selected -isnot [Management.Automation.ApplicationInfo]) {
-        throw 'first Go command candidate is not an ApplicationInfo'
-    }
-    $selectedPath = [string]$selected.Path
-    if ([string]::IsNullOrWhiteSpace($selectedPath) -or
-        -not [IO.Path]::IsPathFullyQualified($selectedPath)) {
-        throw 'first Go application candidate has no absolute executable path'
-    }
-    return [pscustomobject]@{
-        CandidateCount = $Candidates.Count
-        GoExecutable = [IO.Path]::GetFullPath($selectedPath)
-    }
-}
-
-function Get-WindowsNativeCoordinatorGoToolchain {
-    [CmdletBinding()]
-    [OutputType([object])]
-    param(
-        [Parameter(Mandatory)]
-        [string]$CoordinatorExecutable
-    )
-
-    # The platform entrypoint has already locked and authenticated this file.
-    # Re-resolving PATH here would reopen toolchain selection during certification.
-    if (-not [IO.Path]::IsPathFullyQualified($CoordinatorExecutable)) {
-        throw 'coordinator Go executable must be an absolute authority path'
-    }
-    $resolvedGoExecutable = [IO.Path]::GetFullPath($CoordinatorExecutable)
-    if (-not (Test-Path -LiteralPath $resolvedGoExecutable -PathType Leaf)) {
-        throw 'selected coordinator Go executable is not an existing file'
-    }
-    $goRootOutput = @(& $resolvedGoExecutable env GOROOT)
-    $goRootExitCode = $LASTEXITCODE
-    if ($goRootExitCode -ne 0) {
-        throw "resolve coordinator GOROOT failed with code $goRootExitCode"
-    }
-    $goRootValues = @($goRootOutput | ForEach-Object {
-        ([string]$_).Trim()
-    } | Where-Object {
-        -not [string]::IsNullOrWhiteSpace($_)
-    })
-    if ($goRootValues.Count -ne 1) {
-        throw "coordinator Go executable reported $($goRootValues.Count) GOROOT values, want exactly one"
-    }
-
-    # Hosted setup-go installations may themselves sit behind a trusted cache
-    # junction. Only the copied destination is part of the worker boundary.
-    $resolvedGoRoot = Resolve-WindowsNativeLocalFixedNTFSDirectoryLocation `
-        -Path $goRootValues[0] `
-        -Label 'coordinator GOROOT'
-    $expectedGoExecutable = Join-Path $resolvedGoRoot 'bin\go.exe'
-    if (-not (Test-Path -LiteralPath $expectedGoExecutable -PathType Leaf)) {
-        throw 'coordinator GOROOT has no bin\go.exe'
-    }
-    $resolvedExpectedGoExecutable = [IO.Path]::GetFullPath(
-        (Resolve-Path -LiteralPath $expectedGoExecutable).Path
-    )
-    if (-not [string]::Equals(
-        $resolvedGoExecutable,
-        $resolvedExpectedGoExecutable,
-        [StringComparison]::OrdinalIgnoreCase
-    )) {
-        throw 'coordinator Go executable is not the bin\go.exe reported by its GOROOT'
-    }
-
-    $goVersionOutput = @(& $resolvedGoExecutable version)
-    $goVersionExitCode = $LASTEXITCODE
-    $goVersionValues = @($goVersionOutput | ForEach-Object {
-        ([string]$_).Trim()
-    } | Where-Object {
-        -not [string]::IsNullOrWhiteSpace($_)
-    })
-    if ($goVersionExitCode -ne 0 -or $goVersionValues.Count -ne 1) {
-        throw "resolve coordinator Go version failed with code $goVersionExitCode"
-    }
-
-    return [pscustomobject]@{
-        PSTypeName = 'WindShare.WindowsNativeCoordinatorGoToolchain'
-        CandidateCount = 1
-        SelectedVersion = $goVersionValues[0]
-        GoRoot = $resolvedGoRoot
-        GoExecutable = $resolvedGoExecutable
-    }
-}
-
-function Copy-WindowsNativeGoToolchain {
-    [CmdletBinding()]
-    [OutputType([object])]
-    param(
-        [Parameter(Mandatory)]
-        [object]$Toolchain,
-
-        [Parameter(Mandatory)]
-        [string]$DestinationRoot
-    )
-
-    $sourceRoot = Resolve-WindowsNativeLocalFixedNTFSDirectoryLocation `
-        -Path ([string]$Toolchain.GoRoot) `
-        -Label 'coordinator GOROOT'
-    $sourceGoExecutable = [IO.Path]::GetFullPath(
-        (Resolve-Path -LiteralPath ([string]$Toolchain.GoExecutable)).Path
-    )
-    $expectedSourceGoExecutable = [IO.Path]::GetFullPath(
-        (Resolve-Path -LiteralPath (Join-Path $sourceRoot 'bin\go.exe')).Path
-    )
-    if (-not [string]::Equals(
-        $sourceGoExecutable,
-        $expectedSourceGoExecutable,
-        [StringComparison]::OrdinalIgnoreCase
-    )) {
-        throw 'coordinator toolchain executable does not belong to its GOROOT'
-    }
-    if (-not [IO.Path]::IsPathFullyQualified($DestinationRoot)) {
-        throw 'staged GOROOT must be an absolute path'
-    }
-    $resolvedDestinationRoot = [IO.Path]::GetFullPath($DestinationRoot)
-    $destinationParentInfo = [IO.Directory]::GetParent($resolvedDestinationRoot)
-    if ($null -eq $destinationParentInfo) {
-        throw 'staged GOROOT has no parent directory'
-    }
-    $destinationParent = Resolve-WindowsNativeLocalFixedNTFSDirectory `
-        -Path $destinationParentInfo.FullName `
-        -Label 'staged GOROOT parent'
-    if (-not [string]::Equals(
-        $destinationParent,
-        $destinationParentInfo.FullName,
-        [StringComparison]::OrdinalIgnoreCase
-    )) {
-        throw 'staged GOROOT parent does not resolve to its canonical path'
-    }
-    $directorySeparator = [IO.Path]::DirectorySeparatorChar
-    if ([string]::Equals(
-        $sourceRoot,
-        $resolvedDestinationRoot,
-        [StringComparison]::OrdinalIgnoreCase
-    ) -or $resolvedDestinationRoot.StartsWith(
-        $sourceRoot + $directorySeparator,
-        [StringComparison]::OrdinalIgnoreCase
-    ) -or $sourceRoot.StartsWith(
-        $resolvedDestinationRoot + $directorySeparator,
-        [StringComparison]::OrdinalIgnoreCase
-    )) {
-        throw 'coordinator and staged GOROOT paths must be disjoint'
-    }
-    if (Test-Path -LiteralPath $resolvedDestinationRoot) {
-        throw 'staged GOROOT destination already exists'
-    }
-
-    # Copying into the already protected release root gives every toolchain file
-    # the release boundary's DACL without weakening the setup-go toolcache.
-    Copy-Item `
-        -LiteralPath $sourceRoot `
-        -Destination $resolvedDestinationRoot `
-        -Recurse `
-        -Force
-    $stagedGoRoot = Resolve-WindowsNativeLocalFixedNTFSDirectory `
-        -Path $resolvedDestinationRoot `
-        -Label 'staged GOROOT'
-    Assert-WindowsNativeTreeHasNoReparsePoints `
-        -RootPath $stagedGoRoot `
-        -Label 'staged GOROOT'
-    $stagedGoExecutable = Join-Path $stagedGoRoot 'bin\go.exe'
-    if (-not (Test-Path -LiteralPath $stagedGoExecutable -PathType Leaf)) {
-        throw 'staged GOROOT has no bin\go.exe'
-    }
-    $sourceGoLength = ([IO.FileInfo]::new($sourceGoExecutable)).Length
-    $stagedGoLength = ([IO.FileInfo]::new($stagedGoExecutable)).Length
-    if ($sourceGoLength -ne $stagedGoLength) {
-        throw 'staged Go executable length differs from the coordinator executable'
-    }
-
-    return [pscustomobject]@{
-        PSTypeName = 'WindShare.WindowsNativeStagedGoToolchain'
-        GoRoot = $stagedGoRoot
-        GoExecutable = [IO.Path]::GetFullPath($stagedGoExecutable)
-    }
-}
-
 function Get-WindowsNativeCommonApplicationDataRoot {
     [CmdletBinding()]
     [OutputType([string])]
@@ -747,20 +560,29 @@ function Assert-WindowsNativeCoordinatorReleaseRoot {
         throw 'native release root DACL is not protected'
     }
 
-    $expectedRights = @{}
+    $ownerInheritance = [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor `
+        [Security.AccessControl.InheritanceFlags]::ObjectInherit
+    $expectedRules = @{}
     foreach ($sidValue in @(
         $coordinatorSID,
         $script:SystemSID,
         $script:AdministratorsSID
     ) | Select-Object -Unique) {
-        $expectedRights[$sidValue] = [Security.AccessControl.FileSystemRights]::FullControl
+        $expectedRules[$sidValue] = [pscustomobject]@{
+            Rights = [Security.AccessControl.FileSystemRights]::FullControl
+            Inheritance = $ownerInheritance
+        }
     }
     $workerSIDProperty = $Ownership.PSObject.Properties['WorkerSID']
     if ($null -ne $workerSIDProperty -and
         -not [string]::IsNullOrWhiteSpace([string]$workerSIDProperty.Value)) {
-        $expectedRights[[string]$workerSIDProperty.Value] = `
-            [Security.AccessControl.FileSystemRights]::ReadAndExecute -bor `
-            [Security.AccessControl.FileSystemRights]::Synchronize
+        # Grant non-inheriting traversal on the release root so the standard-user
+        # worker can reach only its explicitly granted child directories.
+        $expectedRules[[string]$workerSIDProperty.Value] = [pscustomobject]@{
+            Rights = [Security.AccessControl.FileSystemRights]::ReadAndExecute -bor `
+                [Security.AccessControl.FileSystemRights]::Synchronize
+            Inheritance = [Security.AccessControl.InheritanceFlags]::None
+        }
     }
 
     $rules = @($acl.GetAccessRules(
@@ -768,19 +590,17 @@ function Assert-WindowsNativeCoordinatorReleaseRoot {
         $true,
         [Security.Principal.SecurityIdentifier]
     ))
-    if ($rules.Count -ne $expectedRights.Count) {
-        throw "native release root has $($rules.Count) access rules, want $($expectedRights.Count)"
+    if ($rules.Count -ne $expectedRules.Count) {
+        throw "native release root has $($rules.Count) access rules, want $($expectedRules.Count)"
     }
-    $requiredInheritance = [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor `
-        [Security.AccessControl.InheritanceFlags]::ObjectInherit
     foreach ($rule in $rules) {
         $ruleSID = $rule.IdentityReference.Value
-        if (-not $expectedRights.ContainsKey($ruleSID) -or
+        if (-not $expectedRules.ContainsKey($ruleSID) -or
             $rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow -or
             $rule.IsInherited -or
-            $rule.InheritanceFlags -ne $requiredInheritance -or
+            $rule.InheritanceFlags -ne $expectedRules[$ruleSID].Inheritance -or
             $rule.PropagationFlags -ne [Security.AccessControl.PropagationFlags]::None -or
-            [int64]$rule.FileSystemRights -ne [int64]$expectedRights[$ruleSID]) {
+            [int64]$rule.FileSystemRights -ne [int64]$expectedRules[$ruleSID].Rights) {
             throw "native release root has an unexpected access rule for $ruleSID"
         }
     }
@@ -929,13 +749,10 @@ function New-WindowsNativeWorkerArgumentLine {
         [string]$WorkerScript,
 
         [Parameter(Mandatory)]
-        [string]$ArtifactRoot,
+        [string]$BinariesRoot,
 
         [Parameter(Mandatory)]
         [string]$WorkRoot,
-
-        [Parameter(Mandatory)]
-        [string]$GoExecutable,
 
         [Parameter(Mandatory)]
         [string]$ExpectedUserSID
@@ -944,9 +761,8 @@ function New-WindowsNativeWorkerArgumentLine {
     $pathArguments = @(
         [pscustomobject]@{ Label = 'PowerShell executable'; Value = $PowerShellExecutable },
         [pscustomobject]@{ Label = 'native worker script'; Value = $WorkerScript },
-        [pscustomobject]@{ Label = 'extracted artifact root'; Value = $ArtifactRoot },
-        [pscustomobject]@{ Label = 'native worker root'; Value = $WorkRoot },
-        [pscustomobject]@{ Label = 'Go executable'; Value = $GoExecutable }
+        [pscustomobject]@{ Label = 'native test binaries root'; Value = $BinariesRoot },
+        [pscustomobject]@{ Label = 'native worker root'; Value = $WorkRoot }
     )
     foreach ($pathArgument in $pathArguments) {
         Assert-WindowsNativeWorkerArgumentValue `
@@ -971,12 +787,10 @@ function New-WindowsNativeWorkerArgumentLine {
         'Bypass',
         '-File',
         (ConvertTo-WindowsNativeArgument $WorkerScript),
-        '-ArtifactRoot',
-        (ConvertTo-WindowsNativeArgument $ArtifactRoot),
+        '-BinariesRoot',
+        (ConvertTo-WindowsNativeArgument $BinariesRoot),
         '-WorkRoot',
         (ConvertTo-WindowsNativeArgument $WorkRoot),
-        '-GoExecutable',
-        (ConvertTo-WindowsNativeArgument $GoExecutable),
         '-ExpectedUserSID',
         (ConvertTo-WindowsNativeArgument $ExpectedUserSID)
     ) -join ' '
@@ -998,6 +812,8 @@ function Get-WindowsNativeRequiredTestSelectors {
     return @($script:RequiredWindowsNativeTestSelectors | ForEach-Object {
         [pscustomobject]@{
             PackageArgument = [string]$_.PackageArgument
+            ImportPath = [string]$_.ImportPath
+            BinaryName = [string]$_.BinaryName
             TestNames = @($_.TestNames)
         }
     })
@@ -1062,6 +878,127 @@ function Assert-WindowsNativeReadOnlyDirectory {
         if (Test-Path -LiteralPath $probePath) {
             Remove-Item -LiteralPath $probePath -Force
         }
+    }
+}
+
+function Invoke-WindowsNativeTestBinary {
+    [CmdletBinding()]
+    [OutputType([int])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$BinaryPath,
+
+        [Parameter(Mandatory)]
+        [string]$WorkingDirectory,
+
+        [Parameter(Mandatory)]
+        [string[]]$Arguments,
+
+        [Parameter(Mandatory)]
+        [string]$StdoutPath,
+
+        [Parameter(Mandatory)]
+        [string]$StderrPath
+    )
+
+    $startInfo = [Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $BinaryPath
+    $startInfo.WorkingDirectory = $WorkingDirectory
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    foreach ($argument in $Arguments) {
+        $startInfo.ArgumentList.Add($argument)
+    }
+
+    $process = [Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    $stdoutStream = $null
+    $stderrStream = $null
+    try {
+        if (-not $process.Start()) {
+            throw "native test binary did not start: $BinaryPath"
+        }
+        $stdoutStream = [IO.File]::Create($StdoutPath)
+        $stderrStream = [IO.File]::Create($StderrPath)
+        $stdoutCopy = $process.StandardOutput.BaseStream.CopyToAsync($stdoutStream)
+        $stderrCopy = $process.StandardError.BaseStream.CopyToAsync($stderrStream)
+        $process.WaitForExit()
+        [void]$stdoutCopy.GetAwaiter().GetResult()
+        [void]$stderrCopy.GetAwaiter().GetResult()
+        return [int]$process.ExitCode
+    } finally {
+        if ($null -ne $stdoutStream) {
+            $stdoutStream.Dispose()
+        }
+        if ($null -ne $stderrStream) {
+            $stderrStream.Dispose()
+        }
+        $process.Dispose()
+    }
+}
+
+function ConvertFrom-WindowsNativeTest2JsonOutput {
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$GoExecutable,
+
+        [Parameter(Mandatory)]
+        [string]$PackageImportPath,
+
+        [Parameter(Mandatory)]
+        [string]$RawOutputPath
+    )
+
+    if (-not (Test-Path -LiteralPath $RawOutputPath -PathType Leaf)) {
+        throw "native test raw output file is missing: $RawOutputPath"
+    }
+    $startInfo = [Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $GoExecutable
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardInput = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.StandardOutputEncoding = [Text.UTF8Encoding]::new($false)
+    $startInfo.StandardErrorEncoding = [Text.UTF8Encoding]::new($false)
+    $startInfo.ArgumentList.Add('tool')
+    $startInfo.ArgumentList.Add('test2json')
+    $startInfo.ArgumentList.Add('-t')
+    $startInfo.ArgumentList.Add('-p')
+    $startInfo.ArgumentList.Add($PackageImportPath)
+
+    $process = [Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    try {
+        if (-not $process.Start()) {
+            throw 'go tool test2json did not start'
+        }
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        $rawStream = [IO.File]::OpenRead($RawOutputPath)
+        try {
+            $rawStream.CopyTo($process.StandardInput.BaseStream)
+        } finally {
+            $rawStream.Dispose()
+            $process.StandardInput.Close()
+        }
+        $process.WaitForExit()
+        $stdout = $stdoutTask.GetAwaiter().GetResult()
+        $stderr = $stderrTask.GetAwaiter().GetResult().Trim()
+        if ($process.ExitCode -ne 0) {
+            throw "go tool test2json exited with code $($process.ExitCode): $stderr"
+        }
+        $trimmed = $stdout.TrimEnd([char[]]"`r`n")
+        if ($trimmed.Length -eq 0) {
+            return @()
+        }
+        return @($trimmed -split '\r?\n')
+    } finally {
+        $process.Dispose()
     }
 }
 
@@ -1222,12 +1159,12 @@ Export-ModuleMember -Function @(
     'Assert-WindowsNativeStandardUserIdentity',
     'Assert-WindowsNativeTestEvents',
     'Assert-WindowsNativeTreeHasNoReparsePoints',
+    'ConvertFrom-WindowsNativeTest2JsonOutput',
     'ConvertFrom-WindowsNativeTestJSONLines',
-    'Copy-WindowsNativeGoToolchain',
-    'Get-WindowsNativeCoordinatorGoToolchain',
     'Get-WindowsNativeCommonApplicationDataRoot',
     'Get-WindowsNativeRequiredTestExpression',
     'Get-WindowsNativeRequiredTestSelectors',
+    'Invoke-WindowsNativeTestBinary',
     'New-WindowsNativeCoordinatorReleaseRoot',
     'New-WindowsNativeWorkerArgumentLine',
     'Remove-WindowsNativeEphemeralUserProfile',

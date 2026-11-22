@@ -1,19 +1,19 @@
 package main
 
 import (
+	"crypto/sha256"
 	"errors"
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"golang.org/x/mod/module"
 )
 
-// release-archive builds and extracts the complete supported source bundle.
+// _sourcebundle builds and extracts the complete supported source bundle.
 // Nested pinned dependency modules are required build inputs, never omitted.
-// Reading commit blobs excludes worktree and caller-controlled workspace state.
+// Reading commit blobs excludes worktree, index, and workspace state.
 
 const modulePath = "github.com/windshare/windshare"
 
@@ -31,7 +31,6 @@ var requiredFiles = []string{
 type configuration struct {
 	repositoryRoot string
 	commitSHA      string
-	stageDirectory string
 	zipPath        string
 	extractPath    string
 	version        string
@@ -43,11 +42,15 @@ type committedFile struct {
 	executable   bool
 }
 
+type builtBundle struct {
+	zipDigest   [sha256.Size]byte
+	fileDigests map[string][sha256.Size]byte
+}
+
 func main() {
 	config := configuration{}
 	flag.StringVar(&config.repositoryRoot, "repo", "", "repository root")
 	flag.StringVar(&config.commitSHA, "commit", "", "exact lowercase 40-character release commit SHA")
-	flag.StringVar(&config.stageDirectory, "stage", "", "empty directory for committed module sources")
 	flag.StringVar(&config.zipPath, "zip", "", "source bundle output path")
 	flag.StringVar(&config.extractPath, "extract", "", "empty directory for the extracted module")
 	flag.StringVar(&config.version, "version", "", "root module semantic version")
@@ -75,25 +78,9 @@ func run(config configuration) (runErr error) {
 		return err
 	}
 
-	if err := os.MkdirAll(config.stageDirectory, 0o755); err != nil {
-		return fmt.Errorf("create staging directory: %w", err)
-	}
-	if err := requireEmptyDirectory(config.stageDirectory); err != nil {
-		return err
-	}
-	if err := stageFiles(config.repositoryRoot, config.stageDirectory, files); err != nil {
-		return err
-	}
-	if err := validateReleaseMetadata(config.stageDirectory); err != nil {
-		return err
-	}
-	projectedPaths, err := validateSourceInput(config.stageDirectory)
-	if err != nil {
-		return err
-	}
-
 	version := module.Version{Path: modulePath, Version: config.version}
-	if err := createSourceBundle(config.zipPath, version, config.stageDirectory, files); err != nil {
+	bundle, err := buildSourceBundle(config.repositoryRoot, config.zipPath, version, files)
+	if err != nil {
 		return err
 	}
 	archiveValidated := false
@@ -103,54 +90,21 @@ func run(config configuration) (runErr error) {
 		}
 	}()
 
-	// A second construction proves byte determinism instead of trusting file
-	// timestamps or platform-specific archive defaults.
-	secondZip := config.zipPath + ".determinism-check"
-	if err := createSourceBundle(secondZip, version, config.stageDirectory, files); err != nil {
+	if err := extractSourceBundle(
+		config.zipPath,
+		config.extractPath,
+		version,
+		committedFilePaths(files),
+		bundle.fileDigests,
+	); err != nil {
 		return err
-	}
-	defer func() {
-		if err := os.Remove(secondZip); err != nil && !errors.Is(err, os.ErrNotExist) {
-			// A leaked verifier makes the release workspace ambiguous, so its
-			// cleanup failure also invalidates publication of the primary zip.
-			archiveValidated = false
-			runErr = errors.Join(runErr, fmt.Errorf("remove determinism-check source bundle: %w", err))
-		}
-	}()
-	firstDigest, err := fileDigest(config.zipPath)
-	if err != nil {
-		return err
-	}
-	secondDigest, err := fileDigest(secondZip)
-	if err != nil {
-		return err
-	}
-	if firstDigest != secondDigest {
-		return errors.New("source bundle is not byte-deterministic")
-	}
-
-	if err := extractSourceBundle(config.zipPath, config.extractPath, version, projectedPaths); err != nil {
-		return err
-	}
-	for _, relativePath := range projectedPaths {
-		staged, err := fileDigest(filepath.Join(config.stageDirectory, filepath.FromSlash(relativePath)))
-		if err != nil {
-			return err
-		}
-		extracted, err := fileDigest(filepath.Join(config.extractPath, filepath.FromSlash(relativePath)))
-		if err != nil {
-			return err
-		}
-		if staged != extracted {
-			return fmt.Errorf("extracted source differs: %s", relativePath)
-		}
 	}
 	archiveValidated = true
 
 	fmt.Printf("source=%s@%s\n", modulePath, config.version)
 	fmt.Printf("commit=%s\n", config.commitSHA)
 	fmt.Printf("files=%d\n", len(files))
-	fmt.Printf("sha256=%x\n", firstDigest)
+	fmt.Printf("sha256=%x\n", bundle.zipDigest)
 	return nil
 }
 
@@ -158,7 +112,6 @@ func validateConfiguration(config configuration) error {
 	for name, value := range map[string]string{
 		"repo":    config.repositoryRoot,
 		"commit":  config.commitSHA,
-		"stage":   config.stageDirectory,
 		"zip":     config.zipPath,
 		"extract": config.extractPath,
 		"version": config.version,

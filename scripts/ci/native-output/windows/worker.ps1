@@ -1,13 +1,10 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [string]$ArtifactRoot,
+    [string]$BinariesRoot,
 
     [Parameter(Mandatory)]
     [string]$WorkRoot,
-
-    [Parameter(Mandatory)]
-    [string]$GoExecutable,
 
     [Parameter(Mandatory)]
     [string]$ExpectedUserSID
@@ -21,9 +18,8 @@ if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {
 
 Import-Module (Join-Path $PSScriptRoot 'certify.psm1') -Force
 
-# Native certification is itself a substantial osfs suite. Keep it on the same
-# package bound as extracted-module validation so Go's default cannot preempt the
-# release gate's explicit worker and workflow limits.
+# Native certification runs precompiled test binaries under an unprivileged
+# token, mirroring Linux loop-ext4 certification without duplicating GOROOT.
 $moduleSuiteTestTimeout = '30m'
 
 function Assert-WritableExistingDirectory([string]$Path, [string]$Label) {
@@ -110,182 +106,80 @@ $env:HOMEDRIVE = $homeDrive
 $env:HOMEPATH = $homePath
 Write-Output '-- standard-user profile and identity environment verified'
 
-$resolvedArtifactRoot = Resolve-WindowsNativeLocalFixedNTFSDirectory `
-    -Path $ArtifactRoot `
-    -Label 'extracted artifact root'
+$resolvedBinariesRoot = Resolve-WindowsNativeLocalFixedNTFSDirectory `
+    -Path $BinariesRoot `
+    -Label 'native test binaries root'
 $resolvedWorkRoot = Resolve-WindowsNativeLocalFixedNTFSDirectory `
     -Path $WorkRoot `
     -Label 'native worker root'
-if (-not [IO.Path]::IsPathFullyQualified($GoExecutable)) {
-    throw 'Go executable must be an absolute path'
-}
-$resolvedGoExecutable = [IO.Path]::GetFullPath($GoExecutable)
-$goExecutableInfo = [IO.FileInfo]::new($resolvedGoExecutable)
-if ($null -eq $goExecutableInfo.Directory -or
-    $null -eq $goExecutableInfo.Directory.Parent) {
-    throw 'Go executable does not have a GOROOT parent'
-}
-$resolvedGoRoot = Resolve-WindowsNativeLocalFixedNTFSDirectory `
-    -Path $goExecutableInfo.Directory.Parent.FullName `
-    -Label 'staged GOROOT'
 Assert-WindowsNativeTreeHasNoReparsePoints `
-    -RootPath $resolvedGoRoot `
-    -Label 'staged GOROOT'
-$expectedGoExecutable = Join-Path $resolvedGoRoot 'bin\go.exe'
-if (-not (Test-Path -LiteralPath $expectedGoExecutable -PathType Leaf)) {
-    throw 'staged GOROOT has no bin\go.exe'
-}
-$resolvedExpectedGoExecutable = [IO.Path]::GetFullPath(
-    (Resolve-Path -LiteralPath $expectedGoExecutable).Path
-)
-if (-not [string]::Equals(
-    $resolvedGoExecutable,
-    $resolvedExpectedGoExecutable,
-    [StringComparison]::OrdinalIgnoreCase
-)) {
-    throw 'Go executable is not the staged GOROOT bin\go.exe'
-}
+    -RootPath $resolvedBinariesRoot `
+    -Label 'native test binaries root'
 Assert-DisjointWindowsNativeRoots `
-    -LeftPath $resolvedArtifactRoot `
-    -LeftLabel 'extracted artifact root' `
+    -LeftPath $resolvedBinariesRoot `
+    -LeftLabel 'native test binaries root' `
     -RightPath $resolvedWorkRoot `
     -RightLabel 'native worker root'
-Assert-DisjointWindowsNativeRoots `
-    -LeftPath $resolvedArtifactRoot `
-    -LeftLabel 'extracted artifact root' `
-    -RightPath $resolvedGoRoot `
-    -RightLabel 'staged GOROOT'
-Assert-DisjointWindowsNativeRoots `
-    -LeftPath $resolvedWorkRoot `
-    -LeftLabel 'native worker root' `
-    -RightPath $resolvedGoRoot `
-    -RightLabel 'staged GOROOT'
 
-$releaseRoot = [IO.Directory]::GetParent($resolvedArtifactRoot)
-if ($null -eq $releaseRoot) {
-    throw 'extracted artifact root has no protected release parent'
-}
-foreach ($rootPath in @($resolvedWorkRoot, $resolvedGoRoot)) {
-    $rootParent = [IO.Directory]::GetParent($rootPath)
-    if ($null -eq $rootParent -or -not [string]::Equals(
-        $rootParent.FullName,
-        $releaseRoot.FullName,
-        [StringComparison]::OrdinalIgnoreCase
-    )) {
-        throw 'artifact, worker, and staged GOROOT must be direct siblings in the protected release root'
-    }
-}
-Assert-WindowsNativeReadOnlyDirectory `
-    -Path $resolvedArtifactRoot `
-    -Label 'extracted artifact root'
-Assert-WindowsNativeReadOnlyDirectory `
-    -Path $resolvedGoRoot `
-    -Label 'staged GOROOT'
-Write-Output '-- standard-user NTFS roots, artifact immutability, and staged GOROOT immutability verified'
-
-$goModPath = Join-Path $resolvedArtifactRoot 'go.mod'
-if (-not (Test-Path -LiteralPath $goModPath -PathType Leaf)) {
-    throw 'extracted module artifact has no go.mod'
-}
-$goModStream = [IO.File]::OpenRead($goModPath)
-$goModStream.Dispose()
-
-$testTempRoot = Join-Path $resolvedWorkRoot 'test-temp'
-$goBuildCache = Join-Path $resolvedWorkRoot 'go-build-cache'
-$goModuleCache = Join-Path $resolvedWorkRoot 'go-module-cache'
-$goPath = Join-Path $resolvedWorkRoot 'go-path'
-$goTempRoot = Join-Path $resolvedWorkRoot 'go-temp'
-Initialize-WritableDirectory $testTempRoot 'test temporary directory'
-Initialize-WritableDirectory $goBuildCache 'Go build cache'
-Initialize-WritableDirectory $goModuleCache 'Go module cache'
-Initialize-WritableDirectory $goPath 'Go workspace cache'
-Initialize-WritableDirectory $goTempRoot 'Go tool temporary directory'
-
-$env:TEMP = $testTempRoot
-$env:TMP = $testTempRoot
-$env:GOCACHE = $goBuildCache
-$env:GOMODCACHE = $goModuleCache
-$env:GOPATH = $goPath
-$env:GOTMPDIR = $goTempRoot
-$env:GOENV = 'off'
-$env:GOFLAGS = ''
-$env:GOTOOLCHAIN = 'local'
-$env:GOWORK = 'off'
-$env:GOROOT = $resolvedGoRoot
-$env:GOPROXY = 'https://proxy.golang.org'
-$env:GOSUMDB = 'sum.golang.org'
-$env:GOPRIVATE = ''
-$env:GONOSUMDB = ''
-$env:GONOPROXY = ''
-$env:GOINSECURE = ''
-$env:GOTELEMETRY = 'off'
-# UseNewEnvironment blocks coordinator state but may expose machine-scope
-# targeting defaults. Establish the native host contract explicitly here.
-foreach ($name in @('GOOS', 'GOARCH', 'CGO_ENABLED', 'GOEXPERIMENT')) {
-    if (Test-Path -LiteralPath "Env:$name") {
-        Remove-Item -LiteralPath "Env:$name"
-    }
-}
-
-$reportedGoRootOutput = @(& $resolvedGoExecutable env GOROOT)
-$reportedGoRootExitCode = $LASTEXITCODE
-$reportedGoRootValues = @($reportedGoRootOutput | ForEach-Object {
-    ([string]$_).Trim()
-} | Where-Object {
-    -not [string]::IsNullOrWhiteSpace($_)
-})
-if ($reportedGoRootExitCode -ne 0 -or $reportedGoRootValues.Count -ne 1) {
-    throw "staged GOROOT identity check failed with code $reportedGoRootExitCode"
-}
-$reportedGoRoot = Resolve-WindowsNativeLocalFixedNTFSDirectory `
-    -Path $reportedGoRootValues[0] `
-    -Label 'Go-reported staged GOROOT'
-if (-not [string]::Equals(
-    $reportedGoRoot,
-    $resolvedGoRoot,
+$binariesParent = [IO.Directory]::GetParent($resolvedBinariesRoot)
+$workParent = [IO.Directory]::GetParent($resolvedWorkRoot)
+if ($null -eq $binariesParent -or $null -eq $workParent -or -not [string]::Equals(
+    $binariesParent.FullName,
+    $workParent.FullName,
     [StringComparison]::OrdinalIgnoreCase
 )) {
-    throw "Go reported GOROOT $reportedGoRoot, want staged root $resolvedGoRoot"
+    throw 'native test binaries and worker root must be direct siblings in the protected release root'
 }
-$goVersionOutput = @(& $resolvedGoExecutable version 2>&1)
-$goVersionExitCode = $LASTEXITCODE
-if ($goVersionExitCode -ne 0 -or $goVersionOutput.Count -eq 0) {
-    throw "Go toolchain identity check failed with code $goVersionExitCode"
-}
-Write-Output "-- standard-user Go toolchain verified: $($goVersionOutput -join ' ')"
+Assert-WindowsNativeReadOnlyDirectory `
+    -Path $resolvedBinariesRoot `
+    -Label 'native test binaries root'
+Write-Output '-- standard-user NTFS roots and precompiled test binary immutability verified'
 
-Set-Location $resolvedArtifactRoot
+$testTempRoot = Join-Path $resolvedWorkRoot 'test-temp'
+Initialize-WritableDirectory $testTempRoot 'test temporary directory'
+$env:TEMP = $testTempRoot
+$env:TMP = $testTempRoot
+
 $requiredSelectors = @(Get-WindowsNativeRequiredTestSelectors)
+$firstFailureExitCode = 0
 for ($selectorIndex = 0; $selectorIndex -lt $requiredSelectors.Count; $selectorIndex++) {
     $selector = $requiredSelectors[$selectorIndex]
     $selectorPackage = [string]$selector.PackageArgument
+    $selectorBinaryName = [string]$selector.BinaryName
     $selectorTests = @($selector.TestNames)
     $testExpression = Get-WindowsNativeRequiredTestExpression -TestNames $selectorTests
+    $binaryPath = Join-Path $resolvedBinariesRoot $selectorBinaryName
+    if (-not (Test-Path -LiteralPath $binaryPath -PathType Leaf)) {
+        throw "native test binary is missing: $binaryPath"
+    }
     $selectorLogID = '{0:D2}' -f ($selectorIndex + 1)
-    $jsonLogPath = Join-Path $resolvedWorkRoot "native-test-events-$selectorLogID.jsonl"
-    $goStderrPath = Join-Path $resolvedWorkRoot "native-test-stderr-$selectorLogID.log"
-    $goArguments = @(
-        'test', '-json', '-count=1', "-timeout=$moduleSuiteTestTimeout",
-        '-run', $testExpression, $selectorPackage
-    )
+    $rawOutputPath = Join-Path $resolvedWorkRoot "native-test-raw-$selectorLogID.log"
+    $stderrPath = Join-Path $resolvedWorkRoot "native-test-stderr-$selectorLogID.log"
+    $exitCodePath = Join-Path $resolvedWorkRoot "native-test-exit-$selectorLogID.txt"
 
-    Write-Output "-- required Windows/NTFS native selector: package=$selectorPackage expression=$testExpression"
-    $jsonLines = @(& $resolvedGoExecutable @goArguments 2> $goStderrPath)
-    $nativeExitCode = $LASTEXITCODE
-    $jsonLines | Set-Content -LiteralPath $jsonLogPath -Encoding utf8
-    $jsonLines | ForEach-Object { Write-Output $_ }
-    if (Test-Path -LiteralPath $goStderrPath) {
-        Get-Content -LiteralPath $goStderrPath | ForEach-Object {
-            Write-Output "[go test stderr] $_"
+    Write-Output "-- required Windows/NTFS native selector: package=$selectorPackage binary=$selectorBinaryName expression=$testExpression"
+    $binaryExitCode = Invoke-WindowsNativeTestBinary `
+        -BinaryPath $binaryPath `
+        -WorkingDirectory $testTempRoot `
+        -Arguments @(
+            '-test.v=test2json',
+            '-test.count=1',
+            "-test.timeout=$moduleSuiteTestTimeout",
+            "-test.run=$testExpression"
+        ) `
+        -StdoutPath $rawOutputPath `
+        -StderrPath $stderrPath
+    [IO.File]::WriteAllText($exitCodePath, [string]$binaryExitCode, [Text.UTF8Encoding]::new($false))
+    if ((Test-Path -LiteralPath $stderrPath) -and ([IO.FileInfo]::new($stderrPath)).Length -gt 0) {
+        Get-Content -LiteralPath $stderrPath | ForEach-Object {
+            Write-Output "[native test stderr] $_"
         }
     }
-
-    $events = @(ConvertFrom-WindowsNativeTestJSONLines -Lines $jsonLines)
-    Assert-WindowsNativeTestEvents `
-        -ExitCode $nativeExitCode `
-        -Events $events `
-        -RequiredTests $selectorTests `
-        -SelectorPackage $selectorPackage `
-        -SelectorExpression $testExpression
+    if ($binaryExitCode -ne 0 -and $firstFailureExitCode -eq 0) {
+        $firstFailureExitCode = $binaryExitCode
+    }
 }
-Write-Output '-- required Windows/NTFS certification passed under the standard-user token'
+if ($firstFailureExitCode -ne 0) {
+    exit $firstFailureExitCode
+}
+Write-Output '-- required Windows/NTFS precompiled native tests completed under the standard-user token'
