@@ -1,0 +1,81 @@
+name: Set up cached govulncheck
+description: Resolve the latest govulncheck release and cache its compiled binary by exact Go and module version.
+
+runs:
+  using: composite
+  steps:
+    # Resolve @latest on every run so a new upstream release immediately owns a
+    # new cache key. Installation uses the resolved version to prevent a release
+    # published between resolution and compilation from poisoning the cache.
+    - name: Resolve current govulncheck version
+      id: resolve
+      shell: bash
+      env:
+        GOWORK: "off"
+        GOTOOLCHAIN: local
+      run: |
+        set -euo pipefail
+        version="$(go list -m -f '{{.Version}}' golang.org/x/vuln@latest)"
+        if [[ -z "$version" ]]; then
+          echo "failed to resolve golang.org/x/vuln@latest" >&2
+          exit 1
+        fi
+        go_version="$(go env GOVERSION)"
+        if [[ -z "$go_version" ]]; then
+          echo "failed to resolve Go toolchain version" >&2
+          exit 1
+        fi
+        {
+          printf 'version=%s\n' "$version"
+          printf 'go_version=%s\n' "$go_version"
+        } >> "$GITHUB_OUTPUT"
+
+    # Exact-only restoration is intentional: a prefix fallback could execute a
+    # stale vulnerability scanner after @latest resolves to a newer release.
+    - name: Restore cached govulncheck
+      id: cache
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ runner.temp }}/govulncheck
+        key: govulncheck-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.resolve.outputs.go_version }}-${{ steps.resolve.outputs.version }}
+
+    - name: Install resolved govulncheck
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        GOBIN: ${{ runner.temp }}/govulncheck
+        GOWORK: "off"
+        GOTOOLCHAIN: local
+        GOVULNCHECK_VERSION: ${{ steps.resolve.outputs.version }}
+      run: |
+        set -euo pipefail
+        if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
+          GOBIN="$(cygpath -w "$GOBIN")"
+          export GOBIN
+        fi
+        mkdir -p "$GOBIN"
+        go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
+
+    - name: Expose govulncheck on PATH
+      shell: bash
+      env:
+        GOBIN: ${{ runner.temp }}/govulncheck
+      run: |
+        set -euo pipefail
+        if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
+          gobin_native="$(cygpath -w "$GOBIN")"
+          test -x "$GOBIN/govulncheck.exe"
+          printf '%s\n' "$gobin_native" >> "$GITHUB_PATH"
+        else
+          test -x "$GOBIN/govulncheck"
+          printf '%s\n' "$GOBIN" >> "$GITHUB_PATH"
+        fi
+
+    # Save immediately after a cold install so a newly released scanner stays
+    # cached even when a real finding fails the later scan step.
+    - name: Save cached govulncheck
+      if: steps.cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v6
+      with:
+        path: ${{ runner.temp }}/govulncheck
+        key: ${{ steps.cache.outputs.cache-primary-key }}

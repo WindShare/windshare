@@ -198,8 +198,15 @@ fi
   cd "$artifact_root"
   export GOWORK=off
 
-  echo "-- pinned provider source and patch reproduction (source bundle)"
-  go run ./scripts/ci/_piondeps -reproduce
+  if [ "$run_verify" = true ]; then
+    echo "-- pinned provider source and patch reproduction (source bundle)"
+    go run ./scripts/ci/_piondeps -reproduce
+  else
+    # Packaging mode verifies pinned hashes and go.mod bindings locally; Linux
+    # verification owns full upstream patch replay against the same source SHA.
+    echo "-- pinned provider source projection (source bundle)"
+    go run ./scripts/ci/_piondeps
+  fi
 )
 
 if [ "$run_verify" = true ]; then

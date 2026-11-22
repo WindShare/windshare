@@ -86,13 +86,13 @@ jobs:
           cache: false
       - name: Prepare Rust native relay toolchain
         run: rustup toolchain install stable --profile minimal
-      - name: Install latest govulncheck
-        env:
-          GOBIN: ${{ runner.temp }}/go-tools
-        run: |
-          mkdir -p "$GOBIN"
-          go install golang.org/x/vuln/cmd/govulncheck@latest
-          echo "$GOBIN" >> "$GITHUB_PATH"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: relay-rust -> .target
+          cache-bin: false
+          cmd-format: rustup run stable {0}
+      - name: Set up cached govulncheck
+        uses: ./.github/actions/setup-govulncheck
       - name: Verify signed directory for official distribution
         if: vars.OFFICIAL_NETWORK_ENABLED == 'true'
         run: go run ./cmd/network-sign verify
@@ -102,6 +102,9 @@ jobs:
           RELEASE_VERSION: ${{ needs.release.outputs.version }}
           RELEASE_COMMIT_SHA: ${{ needs.release.outputs.commit_sha }}
           WINDSHARE_RELEASE_SOURCE_SHA256_FILE: ${{ runner.temp }}/source-bundle.sha256
+          # Reuse the cached Cargo target directory for test-only relay-native
+          # builds inside the extracted module; packaging jobs remain clean-room.
+          CARGO_TARGET_DIR: ${{ github.workspace }}/relay-rust/.target
         run: |
           set -euo pipefail
           bash scripts/ci/linux/release.sh "$RELEASE_VERSION" "$RELEASE_COMMIT_SHA" linux-ext4 verify
@@ -192,17 +195,13 @@ jobs:
           cache: false
       - name: Prepare Rust native relay toolchain
         run: rustup toolchain install stable --profile minimal
-      - name: Install latest govulncheck
-        shell: pwsh
-        env:
-          GOBIN: ${{ runner.temp }}/go-tools
-        run: |
-          New-Item -ItemType Directory -Force -Path $env:GOBIN | Out-Null
-          & go install golang.org/x/vuln/cmd/govulncheck@latest
-          if ($LASTEXITCODE -ne 0) {
-              throw "govulncheck installation exited with code $LASTEXITCODE"
-          }
-          Add-Content -LiteralPath $env:GITHUB_PATH -Value $env:GOBIN -Encoding utf8
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: relay-rust -> .target
+          cache-bin: false
+          cmd-format: rustup run stable {0}
+      - name: Set up cached govulncheck
+        uses: ./.github/actions/setup-govulncheck
       - name: Verify native-output helper contract
         shell: pwsh
         run: ./scripts/ci/native-output/windows/certify.tests.ps1
@@ -213,6 +212,9 @@ jobs:
           RELEASE_VERSION: ${{ needs.release.outputs.version }}
           RELEASE_COMMIT_SHA: ${{ needs.release.outputs.commit_sha }}
           WINDSHARE_RELEASE_SOURCE_SHA256_FILE: ${{ runner.temp }}/source-bundle.sha256
+          # Reuse the cached Cargo target directory for test-only relay-native
+          # builds inside the extracted module; packaging jobs remain clean-room.
+          CARGO_TARGET_DIR: ${{ github.workspace }}\relay-rust\.target
         run: |
           ./scripts/ci/windows/release.ps1 -Version $env:RELEASE_VERSION -CommitSHA $env:RELEASE_COMMIT_SHA -NativeProfile windows-ntfs -Mode verify
           $digest = (Get-Content -LiteralPath $env:WINDSHARE_RELEASE_SOURCE_SHA256_FILE -Raw).Trim()

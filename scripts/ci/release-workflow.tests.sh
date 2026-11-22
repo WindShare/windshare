@@ -87,15 +87,25 @@ assert_contains "$workflow" 'gh release create "$RELEASE_VERSION" --verify-tag'
 assert_contains "$workflow" 'cmp "$ASSET_ROOT/release-linux/windshare-$RELEASE_VERSION-source.zip"'
 assert_contains "$workflow" 'if-no-files-found: error'
 
+assert_contains "$workflow" 'uses: ./.github/actions/setup-govulncheck'
+assert_not_contains "$workflow" 'go install golang.org/x/vuln/cmd/govulncheck@latest'
+assert_contains "$workflow" 'uses: Swatinem/rust-cache@v2'
+assert_contains "$workflow" 'CARGO_TARGET_DIR:'
+assert_contains "$weekly" 'uses: ./.github/actions/setup-govulncheck'
+assert_not_contains "$weekly" 'go install golang.org/x/vuln/cmd/govulncheck@latest'
+assert_contains "$weekly" 'CARGO_TARGET_DIR:'
+
 for release_gate in "$linux_gate" "$windows_gate"; do
   assert_contains "$release_gate" 'mod tidy -diff'
   assert_contains "$release_gate" 'mod verify'
   assert_contains "$release_gate" './scripts/ci/_coreboundary'
   assert_contains "$release_gate" 'build ./...'
   assert_contains "$release_gate" 'test'
-  assert_contains "$release_gate" './scripts/ci/_piondeps -reproduce'
+  assert_contains "$release_gate" './scripts/ci/_piondeps'
   assert_contains "$release_gate" './scripts/ci/_releaseassets -source'
 done
+assert_contains "$linux_gate" './scripts/ci/_piondeps -reproduce'
+assert_contains "$windows_gate" "'github.com/windshare/windshare/core/catalog'"
 
 assert_contains "$linux_gate" '"$install_root/wind" --help'
 assert_not_contains "$linux_gate" '"$install_root/windshare"'
@@ -111,9 +121,9 @@ assert_precedes "$linux_gate" 'bash scripts/install/install.sh "$install_root"' 
 assert_precedes "$linux_gate" 'bash "$release_repository/scripts/ci/native-output/linux/certify.sh"' \
   'go test -count=1 -timeout="$module_suite_test_timeout" ./...'
 assert_precedes "$windows_gate" './scripts/install/windows/install.ps1 -Destination $cliInstallRoot' \
-  '& $goExecutable test -count=1 "-timeout=$moduleSuiteTestTimeout" ./...'
+  'Invoke-ExtractedWindowsModuleTests'
 assert_precedes "$windows_gate" 'Invoke-RequiredWindowsNativeTestsAsStandardUser' \
-  '& $goExecutable test -count=1 "-timeout=$moduleSuiteTestTimeout" ./...'
+  'Invoke-ExtractedWindowsModuleTests'
 
 assert_contains "$weekly" 'scripts/ci/linux/release.sh'
 assert_contains "$weekly" 'scripts/ci/windows/release.ps1'

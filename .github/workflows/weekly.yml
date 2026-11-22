@@ -324,23 +324,27 @@ jobs:
           cache: false
       - name: Prepare Rust native relay toolchain
         run: rustup toolchain install stable --profile minimal
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: relay-rust -> .target
+          cache-bin: false
+          cmd-format: rustup run stable {0}
       - name: Prepare standalone Linux relay build
         run: |
           rustup target add --toolchain stable x86_64-unknown-linux-musl
           sudo apt-get update
           sudo apt-get install -y musl-tools
-      - name: Install latest govulncheck
-        env:
-          GOBIN: ${{ runner.temp }}/go-tools
-        run: |
-          mkdir -p "$GOBIN"
-          go install golang.org/x/vuln/cmd/govulncheck@latest
-          echo "$GOBIN" >> "$GITHUB_PATH"
+      - name: Set up cached govulncheck
+        uses: ./.github/actions/setup-govulncheck
       - name: Build and probe the native relay container
         run: |
           docker build -f deploy/wsrelay/Dockerfile -t windshare-relay-check .
           docker run --rm windshare-relay-check --help
       - name: Certify the exact weekly root artifact on loop-ext4
+        env:
+          # Reuse the cached Cargo target directory for test-only relay-native
+          # builds; _releaseassets strips CARGO_TARGET_DIR for clean-room packaging.
+          CARGO_TARGET_DIR: ${{ github.workspace }}/relay-rust/.target
         run: bash scripts/ci/linux/release.sh v0.0.0 "$GITHUB_SHA" linux-ext4
 
   native-output-windows:
@@ -359,17 +363,17 @@ jobs:
           cache: false
       - name: Prepare Rust native relay toolchain
         run: rustup toolchain install stable --profile minimal
-      - name: Install latest govulncheck
-        shell: pwsh
-        env:
-          GOBIN: ${{ runner.temp }}/go-tools
-        run: |
-          New-Item -ItemType Directory -Force -Path $env:GOBIN | Out-Null
-          & go install golang.org/x/vuln/cmd/govulncheck@latest
-          if ($LASTEXITCODE -ne 0) {
-              throw "govulncheck installation exited with code $LASTEXITCODE"
-          }
-          Add-Content -LiteralPath $env:GITHUB_PATH -Value $env:GOBIN -Encoding utf8
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: relay-rust -> .target
+          cache-bin: false
+          cmd-format: rustup run stable {0}
+      - name: Set up cached govulncheck
+        uses: ./.github/actions/setup-govulncheck
       - name: Certify the exact weekly root artifact on NTFS
         shell: pwsh
+        env:
+          # Reuse the cached Cargo target directory for test-only relay-native
+          # builds; _releaseassets strips CARGO_TARGET_DIR for clean-room packaging.
+          CARGO_TARGET_DIR: ${{ github.workspace }}\relay-rust\.target
         run: ./scripts/ci/windows/release.ps1 -Version v0.0.0 -CommitSHA $env:GITHUB_SHA -NativeProfile windows-ntfs
