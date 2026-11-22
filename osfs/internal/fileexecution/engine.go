@@ -246,12 +246,7 @@ func (engine *Engine) transactionStart(
 		return transfer.FileStart{}, err
 	}
 	wasResumed := len(resumed) == 1 && resumed[0]
-	transaction, err := WrapPartialFileTransaction(
-		engine.newResumablePartialFileTransaction(file, destination, ownedFile, binding, record, wasResumed),
-	)
-	if err != nil {
-		return transfer.FileStart{}, err
-	}
+	transaction := engine.newResumablePartialFileTransaction(file, destination, ownedFile, binding, record, wasResumed)
 	// Best-effort resume trusts private staged ranges across restarts. Detecting
 	// arbitrary external edits would require rereading them; public delivery
 	// receipts never enter this path.
@@ -269,9 +264,9 @@ func (engine *Engine) newResumablePartialFileTransaction(
 	binding transfer.MaterializedFileBinding,
 	record checkpointmodel.Record,
 	resumed ...bool,
-) *resumablePartialFileTransaction {
+) *PartialFileTransaction {
 	pending, _ := content.NewRangeSet(nil)
-	return &resumablePartialFileTransaction{
+	return &PartialFileTransaction{
 		engine: engine, materialization: file, destination: destination, file: ownedFile,
 		binding: binding, record: record, pending: pending, state: transactionOpen,
 		resumed:            len(resumed) == 1 && resumed[0],

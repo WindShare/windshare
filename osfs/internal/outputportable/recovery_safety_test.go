@@ -42,7 +42,7 @@ func TestTaskLockExcludesAnotherOpenAndReleasesForRestart(t *testing.T) {
 	if err := reopened.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if capabilities, err := first.(*Platform).DestinationCapabilities(); err != nil || !capabilities.RangeRecovery().Supported() || !capabilities.OperationRecovery().Supported() {
+	if capabilities, err := first.(*Platform).DestinationCapabilities(); err != nil || !capabilities.SafePublish().Supported() || !capabilities.OperationRecovery().Supported() {
 		t.Fatalf("ordinary files cannot retain progress: %v", err)
 	}
 	if first.(*Platform).IdentityScheme() != outputcap.IdentitySchemePortableWitnessV1 || first.RootOpenDisposition() != outputcap.AuthorityCreatedRoot {

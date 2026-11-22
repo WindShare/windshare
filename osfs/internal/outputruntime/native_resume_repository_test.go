@@ -113,13 +113,13 @@ func openOrdinaryResumeFileWithTracer(
 	seed byte,
 	exactSize uint64,
 	reopen bool,
-	tracer FilesystemOutputTracer,
+	tracer Tracer,
 ) ordinaryResumeSessionFixture {
 	t.Helper()
 	return openNamedResumeFile(t, root, seed, exactSize, reopen, "resume.bin", openOutputRuntimeTestPlatform, tracer)
 }
 
-func openNamedResumeFile(t *testing.T, root string, seed byte, exactSize uint64, reopen bool, name string, factory PlatformFactory, tracer FilesystemOutputTracer) ordinaryResumeSessionFixture {
+func openNamedResumeFile(t *testing.T, root string, seed byte, exactSize uint64, reopen bool, name string, factory PlatformFactory, tracer Tracer) ordinaryResumeSessionFixture {
 	t.Helper()
 	fileID := incrementalTestIdentity16[catalog.FileID](seed + 1)
 	rules, err := transfer.NewSelectionRules(false, []transfer.SelectionOverride{{
@@ -144,9 +144,8 @@ func openNamedResumeFile(t *testing.T, root string, seed byte, exactSize uint64,
 	if err != nil {
 		t.Fatal(err)
 	}
-	mode, err := authority.BindDestination(context.Background())
-	if err != nil || !mode.Resumable() {
-		t.Fatalf("bind = %+v, %v", mode, err)
+	if err := authority.BindDestination(context.Background()); err != nil {
+		t.Fatalf("bind = %v", err)
 	}
 	lookup, err := authority.LookupActive(context.Background(), selection)
 	if err != nil {
@@ -154,12 +153,12 @@ func openNamedResumeFile(t *testing.T, root string, seed byte, exactSize uint64,
 	}
 	var operation *Operation
 	if reopen {
-		if lookup.Kind() != ActiveLookupReopened {
+		if lookup.Kind() != LookupReopened {
 			t.Fatalf("reopen lookup = %d", lookup.Kind())
 		}
 		operation = lookup.Operation()
 	} else {
-		if lookup.Kind() != ActiveLookupCreateReady {
+		if lookup.Kind() != LookupCreateReady {
 			t.Fatalf("lookup = %d", lookup.Kind())
 		}
 		operation, err = authority.CreateOperation(context.Background(), lookup, artifact)
@@ -778,10 +777,10 @@ func TestCheckpointReconciliationTraceIsTerminalAndOncePerAttempt(t *testing.T) 
 		initial := openOrdinaryResumeSession(t, root, 0x91, 4)
 		pauseOrdinaryResumeFixture(t, initial)
 
-		var events []FilesystemOutputTrace
+		var events []Trace
 		reopened := openOrdinaryResumeFileWithTracer(
 			t, root, 0x91, 4, true,
-			FilesystemOutputTraceFunc(func(event FilesystemOutputTrace) {
+			TraceFunc(func(event Trace) {
 				if event.Operation == TraceCheckpointReconciled {
 					events = append(events, event)
 				}
@@ -798,11 +797,11 @@ func TestCheckpointReconciliationTraceIsTerminalAndOncePerAttempt(t *testing.T) 
 		initial := openOrdinaryResumeSession(t, root, 0xa1, 4)
 		pauseOrdinaryResumeFixture(t, initial)
 
-		var events []FilesystemOutputTrace
+		var events []Trace
 		repository, err := NewNativeResumeRepository(
 			root,
 			openOutputRuntimeTestPlatform,
-			FilesystemOutputTraceFunc(func(event FilesystemOutputTrace) {
+			TraceFunc(func(event Trace) {
 				if event.Operation == TraceCheckpointReconciled {
 					events = append(events, event)
 				}
@@ -820,9 +819,9 @@ func TestCheckpointReconciliationTraceIsTerminalAndOncePerAttempt(t *testing.T) 
 			t.Fatalf("resume snapshot = (%+v, %v)", snapshot, err)
 		}
 		if len(events) != 1 || events[0].Failed ||
-			events[0].RuntimeComponent != FilesystemOutputRuntimeCheckpoint ||
-			events[0].RuntimeOperation != FilesystemOutputRuntimeReconcileCheckpoints ||
-			events[0].RuntimeDecision != FilesystemOutputRuntimeReconciled ||
+			events[0].RuntimeComponent != RuntimeCheckpoint ||
+			events[0].RuntimeOperation != RuntimeReconcileCheckpoints ||
+			events[0].RuntimeDecision != RuntimeReconciled ||
 			events[0].ReceiveOperationID != initial.intent.OperationID() ||
 			!events[0].SessionID.IsZero() {
 			t.Fatalf("resume reconciliation events = %+v", events)
@@ -839,18 +838,18 @@ func TestExplicitInventoryTracesFailureDeferredByOrdinaryReopen(t *testing.T) {
 	pauseOrdinaryResumeFixture(t, initial)
 	retainUnobservableCheckpointCandidate(t, root, initial.intent)
 
-	var getEvents []FilesystemOutputTrace
+	var getEvents []Trace
 	authority := newNativeReservationTestAuthority(t, root)
-	authority.tracer = FilesystemOutputTraceFunc(func(event FilesystemOutputTrace) {
+	authority.tracer = TraceFunc(func(event Trace) {
 		if event.Operation == TraceCheckpointReconciled {
 			getEvents = append(getEvents, event)
 		}
 	})
-	if _, err := authority.BindDestination(context.Background()); err != nil {
+	if err := authority.BindDestination(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	lookup, err := authority.LookupActive(context.Background(), initial.intent.SelectionSpec())
-	if err != nil || lookup.Kind() != ActiveLookupReopened {
+	if err != nil || lookup.Kind() != LookupReopened {
 		t.Fatalf("get failure lookup = (%d, %v)", lookup.Kind(), err)
 	}
 	session, err := authority.OpenOperation(context.Background(), lookup.Operation())
@@ -867,11 +866,11 @@ func TestExplicitInventoryTracesFailureDeferredByOrdinaryReopen(t *testing.T) {
 		t.Fatalf("ordinary reopen enumerated checkpoints: %+v", getEvents)
 	}
 
-	var resumeEvents []FilesystemOutputTrace
+	var resumeEvents []Trace
 	repository, err := NewNativeResumeRepository(
 		root,
 		openOutputRuntimeTestPlatform,
-		FilesystemOutputTraceFunc(func(event FilesystemOutputTrace) {
+		TraceFunc(func(event Trace) {
 			if event.Operation == TraceCheckpointReconciled {
 				resumeEvents = append(resumeEvents, event)
 			}
@@ -897,19 +896,19 @@ func TestExplicitInventoryTracesFailureDeferredByOrdinaryReopen(t *testing.T) {
 func assertFailedCheckpointReconciliationTrace(
 	t *testing.T,
 	path string,
-	events []FilesystemOutputTrace,
+	events []Trace,
 	intent transfer.ReceiveIntent,
 	wantZeroSession bool,
 ) {
 	t.Helper()
 	if len(events) != 1 || !events[0].Failed ||
-		events[0].RuntimeComponent != FilesystemOutputRuntimeCheckpoint ||
-		events[0].RuntimeOperation != FilesystemOutputRuntimeReconcileCheckpoints ||
-		events[0].RuntimeDecision != FilesystemOutputRuntimeRejected ||
+		events[0].RuntimeComponent != RuntimeCheckpoint ||
+		events[0].RuntimeOperation != RuntimeReconcileCheckpoints ||
+		events[0].RuntimeDecision != RuntimeRejected ||
 		events[0].ReceiveOperationID != intent.OperationID() ||
 		events[0].SessionID.IsZero() != wantZeroSession ||
-		events[0].FailureStage != FilesystemOutputFailureCheckpointReconciliation ||
-		events[0].ReconciliationStep != FilesystemCheckpointCandidateObservation {
+		events[0].FailureStage != FailureCheckpoint ||
+		events[0].ReconciliationStep != CheckpointCandidateObservation {
 		t.Fatalf("%s failed reconciliation events = %+v", path, events)
 	}
 }

@@ -199,11 +199,11 @@ func TestPartialFileTransactionFaultBoundariesDoNotInventDurability(t *testing.T
 		}
 	})
 
-	for name, configure := range map[string]func(*resumablePartialFileTransaction, *memoryDestination){
-		"publication failure": func(_ *resumablePartialFileTransaction, destination *memoryDestination) {
+	for name, configure := range map[string]func(*PartialFileTransaction, *memoryDestination){
+		"publication failure": func(_ *PartialFileTransaction, destination *memoryDestination) {
 			destination.publishErr = operationErr
 		},
-		"parent sync failure": func(_ *resumablePartialFileTransaction, destination *memoryDestination) {
+		"parent sync failure": func(_ *PartialFileTransaction, destination *memoryDestination) {
 			destination.syncErr = operationErr
 		},
 	} {
@@ -315,7 +315,7 @@ func TestPartialFileTransactionFaultBoundariesDoNotInventDurability(t *testing.T
 func newCoveragePartialFileTransaction(
 	t *testing.T,
 	exactSize uint64,
-) (*resumablePartialFileTransaction, *memoryCheckpointRepository, *memoryPlatform, *memoryDestination) {
+) (*PartialFileTransaction, *memoryCheckpointRepository, *memoryPlatform, *memoryDestination) {
 	t.Helper()
 	fixture := newExecutionFixture(t, exactSize)
 	repository := &memoryCheckpointRepository{}
@@ -330,13 +330,9 @@ func newCoveragePartialFileTransaction(
 	if !ok {
 		t.Fatal("fixture did not start a file transaction")
 	}
-	wrapper, ok := fileTransaction.(*PartialFileTransaction)
+	transaction, ok := fileTransaction.(*PartialFileTransaction)
 	if !ok {
 		t.Fatalf("transaction = %T", fileTransaction)
-	}
-	transaction, ok := wrapper.strategy.(*resumablePartialFileTransaction)
-	if !ok {
-		t.Fatalf("transaction strategy = %T", wrapper.strategy)
 	}
 	return transaction, repository, platform, destination
 }

@@ -9,8 +9,7 @@ $script:RequiredWindowsNativeTestSelectors = @(
         TestNames = @(
             'TestNativeOutputDestinationCapabilities',
             'TestNativeOutputProcessRestartKeepsRanges',
-            'TestNativeOutputRetainedCandidateListAndReopen',
-            'TestNativeLiveOutputPublishesWithoutRecoveryAuthority'
+            'TestNativeOutputRetainedCandidateListAndReopen'
         )
     },
     [pscustomobject]@{

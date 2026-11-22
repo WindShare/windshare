@@ -110,7 +110,7 @@ if ($coreSelector.Count -ne 1 -or
     $portableSelector[0].BinaryName -cne 'outputportable.test.exe' -or
     $portableSelector[0].ImportPath -cne 'github.com/windshare/windshare/osfs/internal/outputportable' -or
     (Get-WindowsNativeRequiredTestExpression -TestNames $coreSelector[0].TestNames) -cne
-        '^(TestNativeOutputDestinationCapabilities|TestNativeOutputProcessRestartKeepsRanges|TestNativeOutputRetainedCandidateListAndReopen|TestNativeLiveOutputPublishesWithoutRecoveryAuthority)$' -or
+        '^(TestNativeOutputDestinationCapabilities|TestNativeOutputProcessRestartKeepsRanges|TestNativeOutputRetainedCandidateListAndReopen)$' -or
     (Get-WindowsNativeRequiredTestExpression -TestNames $portableSelector[0].TestNames) -cne
         '^(TestTaskLockIsProcessExclusiveAndRecoversAfterExit|TestOrdinaryFilesPublishWithoutLinksAndNeverOverwrite|TestWindowsModifiedTimePreservesNativePrecisionAndHandleIdentity)$') {
     throw 'required native tests are not bound to their owning package selectors and precompiled binaries'
@@ -564,8 +564,6 @@ $jsonEvents = @(ConvertFrom-WindowsNativeTestJSONLines -Lines @(
     '{"Action":"pass","Test":"TestNativeOutputProcessRestartKeepsRanges"}',
     '{"Action":"run","Test":"TestNativeOutputRetainedCandidateListAndReopen"}',
     '{"Action":"pass","Test":"TestNativeOutputRetainedCandidateListAndReopen"}',
-    '{"Action":"run","Test":"TestNativeLiveOutputPublishesWithoutRecoveryAuthority"}',
-    '{"Action":"pass","Test":"TestNativeLiveOutputPublishesWithoutRecoveryAuthority"}',
     '{"Action":"run","Test":"TestTaskLockIsProcessExclusiveAndRecoversAfterExit"}',
     '{"Action":"pass","Test":"TestTaskLockIsProcessExclusiveAndRecoversAfterExit"}',
     '{"Action":"run","Test":"TestOrdinaryFilesPublishWithoutLinksAndNeverOverwrite"}',

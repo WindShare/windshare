@@ -144,21 +144,32 @@ func TestPublishedTransferCompletesAfterReleaseAcknowledgementLoss(t *testing.T)
 	}
 	defer continuation.Close()
 	out := testoutputroot.New(t)
-	output, err := osfs.NewFilesystemOutputAuthority(osfs.FilesystemOutputAuthorityConfig{RootPath: out.RootPath, CreateRoot: out.CreateRoot})
+	output, err := osfs.NewOutputAuthority(osfs.OutputConfig{RootPath: out.RootPath, CreateRoot: out.CreateRoot})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer output.Close()
+	if err := output.BindDestination(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	rules, _ := transfer.NewSelectionRules(true, nil)
 	selection, err := transfer.NewSelectionSpec(runtime.Descriptor().ShareInstance(), runtime.Descriptor().SyntheticRoot(), rules)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reservation, err := output.ReserveDirectTree(t.Context(), selection, receivecontract.NewCatalogRootDirectoryTree())
+	lookup, err := output.SelectOperation(t.Context(), selection, receivecontract.AutomaticOperation())
+	if err != nil || lookup.Kind() != osfs.OutputLookupCreateReady {
+		t.Fatalf("lookup = (%d, %v)", lookup.Kind(), err)
+	}
+	artifact, err := receivecontract.NewResultRootDirectoryTree(receivecontract.NewSyntheticSelectionResultRoot())
 	if err != nil {
 		t.Fatal(err)
 	}
-	intent, ok := reservation.ReceiveIntent()
+	operation, err := lookup.Create(t.Context(), artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, ok := operation.ReceiveIntent()
 	if !ok {
 		t.Fatal("missing reservation")
 	}
@@ -166,7 +177,7 @@ func TestPublishedTransferCompletesAfterReleaseAcknowledgementLoss(t *testing.T)
 	job, err := transfer.NewTransferJob(transfer.TransferJobConfig{
 		ReceiveIntent: intent, JobID: id, Session: continuation,
 		Catalog: continuation, Revisions: gatedRevisionRelease{Session: continuation, response: gate},
-		Blocks: continuation, Materializer: output,
+		Blocks: continuation, Materializer: operation,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -201,12 +212,9 @@ func TestPublishedTransferCompletesAfterReleaseAcknowledgementLoss(t *testing.T)
 	if err := output.Close(); err != nil {
 		t.Fatal(err)
 	}
-	resume, err := osfs.NewFilesystemResumeStateAuthority(osfs.FilesystemResumeRoot{RootPath: out.RootPath})
-	if err != nil {
-		t.Fatal(err)
-	}
-	inventory, err := resume.ListResumeState(t.Context())
-	if err != nil || inventory.Status() != osfs.ResumeStateListReady || inventory.UnknownEntries() || len(inventory.Summaries()) != 0 {
+	resume := osfs.NewRecoveryAuthority(out.RootPath)
+	inventory, err := resume.List(t.Context())
+	if err != nil || inventory.Status() != osfs.RecoveryListReady || inventory.UnknownEntries() || len(inventory.Summaries()) != 0 {
 		t.Fatalf("completed download retained recovery state: inventory=%+v err=%v", inventory, err)
 	}
 }

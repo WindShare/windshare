@@ -219,7 +219,7 @@ func publicResumeItem(
 	return item
 }
 
-func TestRepositoryResumeStateAuthorityProjectsOrdinaryInventory(t *testing.T) {
+func TestRecoveryAuthorityProjectsOrdinaryInventory(t *testing.T) {
 	fixture := newPublicOrdinaryFixture(t, 0x31)
 	resumable := publicResumeItem(
 		t, "result/partial", resumeauthority.ItemResumable, resumeauthority.ItemBlockNone,
@@ -233,80 +233,41 @@ func TestRepositoryResumeStateAuthorityProjectsOrdinaryInventory(t *testing.T) {
 		cleanup: resumeauthority.CleanupComplete,
 	}
 	store := &publicOrdinaryStore{header: fixture.header, lease: lease}
-	authority, err := newResumeStateAuthority(store)
-	if err != nil {
-		t.Fatal(err)
-	}
+	authority := newRecoveryAuthorityWithStore(store)
 
-	inventory, err := authority.ListResumeState(context.Background())
+	inventory, err := authority.List(context.Background())
 	summaries := inventory.Summaries()
-	if err != nil || inventory.Status() != ResumeStateListReady ||
+	if err != nil || inventory.Status() != RecoveryListReady ||
 		inventory.UnknownEntries() || len(summaries) != 1 {
 		t.Fatalf("inventory = (%+v, %v)", inventory, err)
 	}
 	summary := summaries[0]
 	items := summary.Items()
-	if !summary.Valid() || !summary.Resumable() ||
+	if !summary.Valid() ||
 		summary.OperationID() != fixture.operation ||
 		summary.ReceiveIntentDigest() != fixture.intent ||
 		summary.StateGeneration() != 1 ||
-		summary.State() != ResumeOperationResumable ||
+		summary.State() != RecoveryOperationResumable ||
 		len(items) != 2 ||
 		items[0].CanonicalPath() != "result/blocked" ||
-		items[0].State() != ResumeItemBlocked ||
-		items[0].BlockReason() != ResumeItemBlockPublicationUnknown ||
-		items[1].State() != ResumeItemResumable {
+		items[0].State() != RecoveryItemBlocked ||
+		items[0].BlockReason() != RecoveryItemBlockPublicationUnknown ||
+		items[1].State() != RecoveryItemResumable {
 		t.Fatalf("summary = %+v, items=%+v", summary, items)
 	}
-
-	items[0] = ResumeStateItem{}
-	summaries[0] = ResumeStateSummary{}
-	if summary.Items()[0].CanonicalPath() != "result/blocked" ||
-		inventory.Summaries()[0].OperationID() != fixture.operation {
-		t.Fatal("public projections exposed mutable backing storage")
-	}
-	if ResumeOperationResumable.String() != "resumable" ||
-		ResumeItemBlocked.String() != "item-blocked" ||
-		ResumeItemBlockPublicationUnknown.String() != "publication-unknown" ||
-		ResumeItemBlockRevisionConflict.String() != "revision-conflict" ||
-		ResumeOperationState(0).String() != "" ||
-		ResumeItemState(0).String() != "" ||
-		ResumeItemBlockReason(0).String() != "" {
-		t.Fatal("resume vocabulary is not stable")
-	}
 }
 
-func TestResumeStateProjectionPreservesRevisionConflictAsItemLocal(t *testing.T) {
-	item, err := resumeauthority.NewItem(
-		"result/conflicted.bin",
-		resumeauthority.ItemBlocked,
-		resumeauthority.ItemBlockRevisionConflict,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	projected := projectResumeStateItem(item)
-	if projected.State() != ResumeItemBlocked ||
-		projected.BlockReason() != ResumeItemBlockRevisionConflict ||
-		projected.BlockReason().String() != "revision-conflict" {
-		t.Fatalf("revision conflict projection = %+v", projected)
-	}
-}
-
-func TestRepositoryResumeStateAuthoritySurfacesBusyAndUnknownInventory(t *testing.T) {
+func TestRecoveryAuthoritySurfacesBusyAndUnknownInventory(t *testing.T) {
 	fixture := newPublicOrdinaryFixture(t, 0x41)
 	store := &publicOrdinaryStore{
 		header: fixture.header, unknown: true, busy: true,
 	}
-	authority, err := newResumeStateAuthority(store)
-	if err != nil {
-		t.Fatal(err)
-	}
-	inventory, err := authority.ListResumeState(context.Background())
+	authority := newRecoveryAuthorityWithStore(store)
+	inventory, err := authority.List(context.Background())
 	summaries := inventory.Summaries()
-	if err != nil || inventory.Status() != ResumeStateListNeedsAttention ||
+	if err != nil || inventory.Status() != RecoveryListNeedsAttention ||
 		!inventory.UnknownEntries() || len(summaries) != 1 ||
-		!summaries[0].Busy() || summaries[0].State() != ResumeOperationIncomplete {
+		!summaries[0].Busy() || summaries[0].State() != RecoveryOperationIncomplete {
 		t.Fatalf("busy inventory = (%+v, %v)", inventory, err)
 	}
 	if store.acquires != 1 {
@@ -314,22 +275,20 @@ func TestRepositoryResumeStateAuthoritySurfacesBusyAndUnknownInventory(t *testin
 	}
 }
 
-func TestRepositoryResumeStateAuthorityDeindexesBeforeSafeDiscard(t *testing.T) {
+func TestRecoveryAuthorityDeindexesBeforeSafeDiscard(t *testing.T) {
 	fixture := newPublicOrdinaryFixture(t, 0x51)
-	wantReport := FilesystemCompatibleNameReport{
+	wantReport := CompatibleNameReport{
 		RepairedCount: 2, ReportName: "windshare-names-abc-1-0.json", PageCount: 1,
 	}
 	lease := &publicOrdinaryLease{
-		header: fixture.header, cleanup: resumeauthority.CleanupComplete, nameReport: wantReport,
+		header: fixture.header, cleanup: resumeauthority.CleanupComplete,
+		nameReport: wantReport,
 	}
-	authority, err := newResumeStateAuthority(&publicOrdinaryStore{
+	authority := newRecoveryAuthorityWithStore(&publicOrdinaryStore{
 		header: fixture.header, lease: lease,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	summary, err := authority.Discard(context.Background(), fixture.operation)
-	if err != nil || summary.State() != ResumeOperationDiscarded ||
+	if err != nil || summary.State() != RecoveryOperationDiscarded ||
 		summary.CompatibleNameReport() != wantReport ||
 		!slices.Equal(lease.transitions, []checkpointmodel.OrdinaryLifecycleEvent{
 			checkpointmodel.OrdinaryLifecycleDiscard,
@@ -341,12 +300,12 @@ func TestRepositoryResumeStateAuthorityDeindexesBeforeSafeDiscard(t *testing.T) 
 	pendingLease := &publicOrdinaryLease{
 		header: pendingFixture.header, cleanup: resumeauthority.CleanupPending,
 	}
-	pendingAuthority, _ := newResumeStateAuthority(&publicOrdinaryStore{
+	pendingAuthority := newRecoveryAuthorityWithStore(&publicOrdinaryStore{
 		header: pendingFixture.header, lease: pendingLease,
 	})
 	pending, err := pendingAuthority.Discard(context.Background(), pendingFixture.operation)
-	if err != nil || pending.State() != ResumeOperationCleanupPending ||
-		pending.NeedsAttentionReason() != FilesystemOutputStateCleanupUncertain ||
+	if err != nil || pending.State() != RecoveryOperationCleanupPending ||
+		pending.NeedsAttentionReason() != RecoveryReasonCleanupUncertain ||
 		!slices.Equal(pendingLease.transitions, []checkpointmodel.OrdinaryLifecycleEvent{
 			checkpointmodel.OrdinaryLifecycleDiscard,
 			checkpointmodel.OrdinaryLifecycleCleanupFailed,
@@ -355,17 +314,14 @@ func TestRepositoryResumeStateAuthorityDeindexesBeforeSafeDiscard(t *testing.T) 
 	}
 }
 
-func TestRepositoryResumeStateAuthorityRejectsInvalidPublicBoundaries(t *testing.T) {
-	if _, err := newResumeStateAuthority(nil); !errors.Is(err, ErrResumeStateContract) {
-		t.Fatalf("nil store error = %v", err)
-	}
-	var authority *RepositoryResumeStateAuthority
-	if _, err := authority.ListResumeState(context.Background()); !errors.Is(err, ErrResumeStateContract) {
+func TestRecoveryAuthorityRejectsInvalidBoundaries(t *testing.T) {
+	var authority *RecoveryAuthority
+	if _, err := authority.List(context.Background()); !errors.Is(err, ErrRecoveryContract) {
 		t.Fatalf("nil list error = %v", err)
 	}
 	if _, err := authority.Discard(
 		context.Background(), receivecontract.OperationID{},
-	); !errors.Is(err, ErrResumeStateContract) {
+	); !errors.Is(err, ErrRecoveryContract) {
 		t.Fatalf("nil discard error = %v", err)
 	}
 }

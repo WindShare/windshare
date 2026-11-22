@@ -25,7 +25,7 @@ func TestCompositeRuntimeTransferJobPublishesDurableFilesystemOutput(t *testing.
 	}
 	outputFixture := testoutputroot.New(t)
 	outputRoot := outputFixture.RootPath
-	authority, err := osfs.NewFilesystemOutputAuthority(osfs.FilesystemOutputAuthorityConfig{
+	authority, err := osfs.NewOutputAuthority(osfs.OutputConfig{
 		RootPath: outputRoot, CreateRoot: outputFixture.CreateRoot,
 	})
 	if err != nil {
@@ -46,21 +46,30 @@ func TestCompositeRuntimeTransferJobPublishesDurableFilesystemOutput(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	reservation, err := authority.ReserveDirectTree(
-		context.Background(), selection, receivecontract.NewCatalogRootDirectoryTree(),
-	)
+	if err := authority.BindDestination(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	lookup, err := authority.SelectOperation(context.Background(), selection, receivecontract.AutomaticOperation())
+	if err != nil || lookup.Kind() != osfs.OutputLookupCreateReady {
+		t.Fatalf("native lookup = (%d, %v)", lookup.Kind(), err)
+	}
+	artifact, err := receivecontract.NewResultRootDirectoryTree(receivecontract.NewSyntheticSelectionResultRoot())
 	if err != nil {
 		t.Fatal(err)
 	}
-	intent, ok := reservation.ReceiveIntent()
-	if !ok || reservation.Kind() != osfs.NativeDirectTreeReserved {
-		t.Fatalf("native reservation = %d", reservation.Kind())
+	operation, err := lookup.Create(context.Background(), artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, ok := operation.ReceiveIntent()
+	if !ok {
+		t.Fatal("native operation omitted receive intent")
 	}
 	jobID, err := transfer.NewTransferJobID()
 	if err != nil {
 		t.Fatal(err)
 	}
-	job, err := receiver.NewTransferJob(intent, jobID, authority, nil)
+	job, err := receiver.NewTransferJob(intent, jobID, operation, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

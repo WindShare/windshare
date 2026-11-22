@@ -44,19 +44,6 @@ func NewFileAuthority(
 	return &FileAuthority{directories: directories, objects: objects, sessionID: sessionID}, nil
 }
 
-// NewLiveFileAuthority binds destinations for a live-only transaction. Public
-// publication compares and links the retained stage handle directly, so there
-// is no checkpoint object store or second ownership witness.
-func NewLiveFileAuthority(
-	directories *Authority,
-	sessionID transfer.OutputSessionID,
-) (*FileAuthority, error) {
-	if directories == nil || sessionID.IsZero() {
-		return nil, ErrInvalidConfiguration
-	}
-	return &FileAuthority{directories: directories, sessionID: sessionID}, nil
-}
-
 func (authority *FileAuthority) BindFile(
 	ctx context.Context,
 	file transfer.MaterializationFile,
@@ -108,10 +95,6 @@ func (authority *FileAuthority) BindFile(
 		target:    file.Target(),
 		leaf:      locator.leaf,
 	}, nil
-}
-
-type nativeOwnedSource interface {
-	NativeFile() outputcap.MutableFile
 }
 
 type fileDestination struct {
@@ -217,39 +200,6 @@ func (destination *fileDestination) withParent(
 	}
 	observation, operationErr := operation(parent)
 	return observation, errors.Join(operationErr, cleanup())
-}
-
-func (destination *fileDestination) observeFinalAgainstFile(
-	parent outputcap.Directory,
-	owned outputcap.FileIdentity,
-	expectation fileexecution.FinalExpectation,
-) (fileexecution.FinalObservation, error) {
-	kind, exact, err := parent.ClassifyExactEntry(destination.leaf)
-	if err != nil {
-		return fileexecution.FinalObservation{}, err
-	}
-	if !exact {
-		return fileexecution.ObserveFinal(fileexecution.FinalUnsafe)
-	}
-	if kind == outputcap.EntryAbsent {
-		return fileexecution.ObserveFinal(fileexecution.FinalAbsent)
-	}
-	if kind != outputcap.EntryRegularFile {
-		return fileexecution.ObserveFinal(fileexecution.FinalUnsafe)
-	}
-	final, err := parent.OpenObservedFile(destination.leaf, false)
-	if err != nil || final == nil {
-		return fileexecution.FinalObservation{}, errors.Join(err, outputcap.ErrUnsafeNamespace, closeRuntimeFile(final))
-	}
-	same, sameErr := final.SameFile(owned)
-	size, sizeErr := final.Size()
-	if sameErr != nil || sizeErr != nil {
-		return fileexecution.FinalObservation{}, errors.Join(sameErr, sizeErr, final.Close())
-	}
-	if !same || size != expectation.ExactSize() {
-		return finalObservationWithClose(fileexecution.FinalCollision, final)
-	}
-	return finalObservationWithClose(fileexecution.FinalMatchesPublication, final)
 }
 
 func (destination *fileDestination) observeFinalAtParent(

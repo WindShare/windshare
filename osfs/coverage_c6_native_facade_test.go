@@ -7,134 +7,142 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
+	"github.com/windshare/windshare/osfs/internal/outputcap"
 )
 
-func TestCoverageC6FilesystemOutputFacadeProjectsLeaseAndPersistedRootDisposition(t *testing.T) {
+func TestCoverageC6OutputAuthorityProjectsLeaseAndDiagnostics(t *testing.T) {
+	ctx := context.Background()
 	root := filepath.Join(t.TempDir(), "authority-created-output")
-	var traceMu sync.Mutex
-	var traces []FilesystemOutputTrace
-	tracer := FilesystemOutputTraceFunc(func(event FilesystemOutputTrace) {
-		traceMu.Lock()
-		traces = append(traces, event)
-		traceMu.Unlock()
-	})
-	authority, err := NewFilesystemOutputAuthority(FilesystemOutputAuthorityConfig{
-		RootPath: root, CreateRoot: true, Tracer: tracer,
-	})
+	stream, err := diagnostics.NewStream(256, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	intent := coverageC6FilesystemIntent(t, authority, 0xa1)
+	cfg := OutputConfig{RootPath: root, CreateRoot: true, Diagnostics: stream.Sink()}
+	authority, err := NewOutputAuthority(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation := reserveTestOperation(t, authority, 0xa1)
+	intent, ok := operation.ReceiveIntent()
+	if !ok {
+		t.Fatal("created operation omitted receive intent")
+	}
 
-	first, err := authority.OpenDirectTree(context.Background(), intent)
+	first, err := operation.OpenDirectTree(ctx, intent)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.Capabilities().Durability == transfer.DurabilityNone {
-		_, _ = first.PauseTree(context.Background(), transfer.JobPauseInterrupted)
-		_ = authority.Close()
-		t.Skip("persisted lease/disposition assertions require restart recovery")
-	}
-	contender, err := NewFilesystemOutputAuthority(FilesystemOutputAuthorityConfig{
-		RootPath: root, CreateRoot: true, Tracer: tracer,
-	})
+	contender, err := NewOutputAuthority(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := contender.BindDestination(context.Background()); err != nil {
+	if err := contender.BindDestination(ctx); err != nil {
 		t.Fatal(err)
 	}
-	lookup, err := contender.LookupActive(context.Background(), intent.SelectionSpec())
-	if err != nil || lookup.Kind() != FilesystemOutputLookupAlreadyRunning {
-		t.Fatalf("staged facade contention = (%d, %v)", lookup.Kind(), err)
+	lookup, err := contender.SelectOperation(ctx, intent.SelectionSpec(), receivecontract.AutomaticOperation())
+	if err != nil || lookup.Kind() != OutputLookupAlreadyRunning {
+		t.Fatalf("staged authority contention = (%d, %v)", lookup.Kind(), err)
 	}
 	if err := contender.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := first.PauseTree(context.Background(), transfer.JobPauseInterrupted); err != nil {
+	if _, err := first.PauseTree(ctx, transfer.JobPauseInterrupted); err != nil {
 		t.Fatal(err)
 	}
 	if err := authority.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reopener, err := NewFilesystemOutputAuthority(FilesystemOutputAuthorityConfig{
-		RootPath: root, CreateRoot: true, Tracer: tracer,
-	})
+	reopener, err := NewOutputAuthority(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reservation, err := reopener.ReserveDirectTree(
-		context.Background(), intent.SelectionSpec(), receivecontract.NewCatalogRootDirectoryTree(),
-	)
-	if err != nil || reservation.Kind() != NativeDirectTreeReopened {
-		t.Fatalf("facade reservation was not reopened: (%d, %v)", reservation.Kind(), err)
+	if err := reopener.BindDestination(ctx); err != nil {
+		t.Fatal(err)
 	}
-	reopenedIntent, ok := reservation.ReceiveIntent()
+	reopenedLookup, err := reopener.SelectOperation(ctx, intent.SelectionSpec(), receivecontract.AutomaticOperation())
+	if err != nil || reopenedLookup.Kind() != OutputLookupReopened {
+		t.Fatalf("reopen lookup = (%d, %v)", reopenedLookup.Kind(), err)
+	}
+	reopenedIntent, ok := reopenedLookup.Operation().ReceiveIntent()
 	if !ok || !reopenedIntent.EqualCanonical(intent) {
-		t.Fatal("facade reopen changed its frozen intent")
+		t.Fatal("reopen changed its frozen intent")
 	}
-	reopened, err := reopener.OpenDirectTree(context.Background(), reopenedIntent)
+	reopened, err := reopenedLookup.Operation().OpenDirectTree(ctx, reopenedIntent)
 	if err != nil {
-		t.Fatalf("facade lease was not released: %v", err)
+		t.Fatalf("lease was not released: %v", err)
 	}
-	if _, err := reopened.PauseTree(context.Background(), transfer.JobPauseInterrupted); err != nil {
+	if _, err := reopened.PauseTree(ctx, transfer.JobPauseInterrupted); err != nil {
 		t.Fatal(err)
 	}
 	if err := reopener.Close(); err != nil {
 		t.Fatal(err)
 	}
+	stream.Close()
 
-	traceMu.Lock()
-	defer traceMu.Unlock()
-	var destinationAdmitted, pauseMilestones int
-	for _, event := range traces {
-		if event.ReceiveIntentDigest != intent.Digest() && !event.ReceiveIntentDigest.IsZero() {
-			t.Fatalf("trace crossed receive-intent authority: %+v", event)
-		}
-		if event.Operation != TraceRuntimeDecision {
+	wantIntent := diagnostics.Identity(intent.Digest().Bytes()).Text()
+	wantOp := diagnostics.Identity(intent.OperationID().Bytes()).Text()
+	var destinationBound, destinationAdmitted, pauseMilestones int
+	for record := range stream.Records() {
+		if record.Name() != "filesystem_output" {
 			continue
 		}
-		switch event.RuntimeOperation {
-		case FilesystemOutputRuntimeAdmitDestination:
-			if event.ReceiveOperationID.IsZero() {
+		corr := record.Correlation()
+		if gotIntent := corr.Get("receive_intent_digest").Text(); gotIntent != "" && gotIntent != wantIntent {
+			t.Fatalf("diagnostic crossed receive-intent authority: %+v", record)
+		}
+		payload := record.Payload()
+		if payload.Get("operation").Text() != "runtime_decision" {
+			continue
+		}
+		switch payload.Get("runtime_operation").Text() {
+		case "admit_destination":
+			if corr.Get("receive_operation_id").Text() == "" {
 				// Binding precedes operation allocation and reports destination-wide proofs.
-				if !event.DestinationCapabilities.Valid() || !event.ExecutionMode.Valid() {
-					t.Fatalf("destination binding omitted capability evidence: %+v", event)
+				caps := payload.Get("capabilities")
+				if !caps.Get("safe_publish").Get("supported").Bool() ||
+					!caps.Get("operation_recovery").Get("supported").Bool() ||
+					payload.Get("identity_scheme").Text() != string(outputcap.IdentitySchemePortableWitnessV1) {
+					t.Fatalf("destination binding omitted capability or identity_scheme evidence: %+v", payload)
 				}
+				destinationBound++
 				continue
 			}
 			destinationAdmitted++
-			if event.RuntimeDecision != FilesystemOutputRuntimeAdmitted ||
-				event.ReceiveOperationID != intent.OperationID() {
-				t.Fatalf("destination admission trace = %+v", event)
+			if payload.Get("runtime_decision").Text() != "admitted" ||
+				corr.Get("receive_operation_id").Text() != wantOp {
+				t.Fatalf("destination admission diagnostic = %+v", record)
 			}
-		case FilesystemOutputRuntimePauseTree:
+		case "pause_tree":
 			pauseMilestones++
-			if event.ReceiveOperationID != intent.OperationID() || event.SessionID.IsZero() {
-				t.Fatalf("pause trace = %+v", event)
+			if corr.Get("receive_operation_id").Text() != wantOp ||
+				corr.Get("output_session_id").Text() == "" {
+				t.Fatalf("pause diagnostic = %+v", record)
 			}
 		}
 	}
-	if destinationAdmitted != 2 || pauseMilestones < 2 {
+	if destinationBound < 3 || destinationAdmitted != 2 || pauseMilestones < 2 {
 		t.Fatalf(
-			"facade trace counts destination-admitted/pause = %d/%d",
-			destinationAdmitted, pauseMilestones,
+			"diagnostic counts bound/admitted/pause = %d/%d/%d",
+			destinationBound, destinationAdmitted, pauseMilestones,
 		)
 	}
 }
 
-func TestCoverageC6FilesystemOutputFacadeRejectsNonTreeArtifactWithoutCreatingAuthority(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "must-remain-absent")
-	authority, err := NewFilesystemOutputAuthority(FilesystemOutputAuthorityConfig{
-		RootPath: root, CreateRoot: true,
-	})
+func TestCoverageC6OutputAuthorityRejectsNonTreeArtifact(t *testing.T) {
+	ctx := context.Background()
+	root := filepath.Join(t.TempDir(), "output-root")
+	authority, err := NewOutputAuthority(OutputConfig{RootPath: root, CreateRoot: true})
 	if err != nil {
+		t.Fatal(err)
+	}
+	defer authority.Close()
+	if err := authority.BindDestination(ctx); err != nil {
 		t.Fatal(err)
 	}
 	rules, err := transfer.NewSelectionRules(true, nil)
@@ -149,27 +157,34 @@ func TestCoverageC6FilesystemOutputFacadeRejectsNonTreeArtifactWithoutCreatingAu
 	if err != nil {
 		t.Fatal(err)
 	}
+	lookup, err := authority.SelectOperation(ctx, selection, receivecontract.AutomaticOperation())
+	if err != nil || lookup.Kind() != OutputLookupCreateReady {
+		t.Fatalf("lookup = (%d, %v)", lookup.Kind(), err)
+	}
 	artifact, err := receivecontract.NewOriginalFileArtifact(
 		coverageC6Identity[catalog.FileID](0xa4), "source.bin", "source.bin",
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reservation, err := authority.ReserveDirectTree(context.Background(), selection, artifact)
-	if reservation.Kind() != 0 || !errors.Is(err, transfer.ErrInvalidOutputBinding) {
-		t.Fatalf("non-tree facade reservation = (%d, %v)", reservation.Kind(), err)
+	if _, err := lookup.Create(ctx, artifact); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
+		t.Fatalf("non-tree creation = %v, want invalid binding", err)
 	}
-	if _, err := os.Lstat(root); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("rejected artifact created native root authority: %v", err)
+	if entries, err := os.ReadDir(root); err != nil || len(entries) != 1 || entries[0].Name() != ".windshare-output" {
+		t.Fatalf("rejected artifact created public output: %v, %v", entries, err)
 	}
 }
 
-func coverageC6FilesystemIntent(
+func reserveTestOperation(
 	t *testing.T,
-	authority *FilesystemOutputAuthority,
+	authority *OutputAuthority,
 	seed byte,
-) transfer.ReceiveIntent {
+) *OutputOperation {
 	t.Helper()
+	ctx := context.Background()
+	if err := authority.BindDestination(ctx); err != nil {
+		t.Fatal(err)
+	}
 	rules, err := transfer.NewSelectionRules(true, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -182,17 +197,21 @@ func coverageC6FilesystemIntent(
 	if err != nil {
 		t.Fatal(err)
 	}
-	reservation, err := authority.ReserveDirectTree(
-		context.Background(), selection, receivecontract.NewCatalogRootDirectoryTree(),
+	lookup, err := authority.SelectOperation(ctx, selection, receivecontract.AutomaticOperation())
+	if err != nil || lookup.Kind() != OutputLookupCreateReady {
+		t.Fatalf("lookup = (%d, %v)", lookup.Kind(), err)
+	}
+	artifact, err := receivecontract.NewResultRootDirectoryTree(
+		receivecontract.NewSyntheticSelectionResultRoot(),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	intent, ok := reservation.ReceiveIntent()
-	if !ok {
-		t.Fatalf("native DirectTree reservation kind = %d", reservation.Kind())
+	operation, err := lookup.Create(ctx, artifact)
+	if err != nil {
+		t.Fatal(err)
 	}
-	return intent
+	return operation
 }
 
 func coverageC6Identity[T ~[catalog.IdentityBytes]byte](seed byte) T {

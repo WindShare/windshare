@@ -1,33 +1,28 @@
 package destinationauthority
 
 import (
-	"context"
 	"errors"
 	"io"
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/osfs/internal/outputcap"
 )
 
 func TestBoundDestinationProjectsCheckpointAuthorityOnlyWhileOpen(t *testing.T) {
 	var nilAuthority *BoundDestination
-	if nilAuthority.Binding().Valid() || nilAuthority.LiveCleanupProfile() != 0 {
+	if nilAuthority.Binding().Valid() || nilAuthority.IdentityScheme() != "" {
 		t.Fatal("nil authority exposed retained state")
 	}
 	if _, err := nilAuthority.FileCheckpointOwnership(outputcap.CallerProvidedContainer); !errors.Is(err, ErrInvalidConfiguration) {
 		t.Fatalf("nil checkpoint ownership error = %v", err)
 	}
-	if _, err := (Binding{}).ExecutionMode(); !errors.Is(err, ErrInvalidBinding) {
-		t.Fatalf("zero binding mode error = %v", err)
-	}
 
 	platform := newDestinationPlatform()
-	authority := bindFakeDestination(t, platform, &destinationJournal{})
+	authority := bindFakeDestination(t, platform)
 	binding := authority.Binding()
-	if authority.LiveCleanupProfile() != checkpointmodel.LiveCleanupWindowsNTFSV1 {
-		t.Fatalf("cleanup profile = %d", authority.LiveCleanupProfile())
+	if authority.IdentityScheme() != outputcap.IdentitySchemePortableWitnessV1 {
+		t.Fatalf("identity scheme = %q", authority.IdentityScheme())
 	}
 	for _, disposition := range []outputcap.RootOpenDisposition{
 		outputcap.CallerProvidedContainer,
@@ -46,7 +41,7 @@ func TestBoundDestinationProjectsCheckpointAuthorityOnlyWhileOpen(t *testing.T) 
 	if err := authority.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if authority.LiveCleanupProfile() != 0 || authority.Binding().Valid() {
+	if authority.IdentityScheme() != "" || authority.Binding().Valid() {
 		t.Fatal("closed authority exposed retained state")
 	}
 	if _, err := authority.FileCheckpointOwnership(outputcap.CallerProvidedContainer); !errors.Is(err, ErrAuthorityClosed) {
@@ -99,7 +94,7 @@ func TestReservationValuesAndClosedExecutionFailClosed(t *testing.T) {
 	}
 
 	platform := newDestinationPlatform()
-	authority := bindFakeDestination(t, platform, &destinationJournal{})
+	authority := bindFakeDestination(t, platform)
 	reserved, err := authority.ReserveTopLevel(
 		reservationRequest(t, singleFileArtifact(t), &reservationClaimer{}),
 	)
@@ -136,7 +131,7 @@ func TestReservationValuesAndClosedExecutionFailClosed(t *testing.T) {
 	}
 }
 
-func TestLiveCleanupPublicationGuardsPreserveRecordedEvidence(t *testing.T) {
+func TestPublicationGuardsRejectInvalidInputs(t *testing.T) {
 	var nilAuthority *BoundDestination
 	source := &destinationFile{}
 	if _, err := nilAuthority.PublishFileNoReplace(source, "file.bin"); !errors.Is(err, ErrInvalidConfiguration) {
@@ -144,54 +139,6 @@ func TestLiveCleanupPublicationGuardsPreserveRecordedEvidence(t *testing.T) {
 	}
 	if _, err := nilAuthority.PublishFileNoReplace(nil, "file.bin"); !errors.Is(err, ErrInvalidReservation) {
 		t.Fatalf("nil source error = %v", err)
-	}
-	if _, _, err := nilAuthority.CreateLiveCleanupStage(
-		context.Background(), nil, checkpointmodel.LiveCleanupTicket{},
-	); !errors.Is(err, ErrInvalidConfiguration) {
-		t.Fatalf("zero cleanup ticket error = %v", err)
-	}
-	if err := nilAuthority.RemoveLiveCleanupStage(checkpointmodel.LiveCleanupTicket{}, source); !errors.Is(err, ErrInvalidConfiguration) {
-		t.Fatalf("zero cleanup removal error = %v", err)
-	}
-
-	platform := newDestinationPlatform()
-	journal := &destinationJournal{}
-	authority := bindFakeDestination(t, platform, journal)
-	parent := destinationRootLiveStageParent(platform)
-	committed := cleanupTicket(t, checkpointmodel.LiveCleanupTicketCommitted, 7)
-	if _, _, err := authority.CreateLiveCleanupStage(
-		context.Background(), parent,
-		cleanupTicket(t, checkpointmodel.LiveCleanupStageCreated, 8),
-	); !errors.Is(err, ErrInvalidConfiguration) {
-		t.Fatalf("already-created ticket error = %v", err)
-	}
-	if err := authority.RemoveLiveCleanupStage(committed, source); !errors.Is(err, ErrInvalidConfiguration) {
-		t.Fatalf("uncreated cleanup removal error = %v", err)
-	}
-	nonce := make([]byte, checkpointmodel.LiveCleanupNonceBytesV1)
-	nonce[0] = 1
-	mismatched, err := checkpointmodel.NewLiveCleanupTicket(checkpointmodel.LiveCleanupTicketSpec{
-		Nonce:      nonce,
-		ExactSize:  1,
-		Profile:    checkpointmodel.LiveCleanupLinuxExt4V1,
-		Generation: 1,
-		State:      checkpointmodel.LiveCleanupTicketCommitted,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := authority.CreateLiveCleanupStage(
-		context.Background(), parent, mismatched,
-	); !errors.Is(err, ErrInvalidConfiguration) {
-		t.Fatalf("foreign cleanup profile error = %v", err)
-	}
-	if err := authority.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := authority.CreateLiveCleanupStage(
-		context.Background(), parent, committed,
-	); !errors.Is(err, ErrAuthorityClosed) {
-		t.Fatalf("closed cleanup creation error = %v", err)
 	}
 }
 

@@ -28,9 +28,6 @@ var (
 type IdentitySchemeID = checkpointmodel.IdentitySchemeID
 
 const (
-	IdentitySchemeLinuxHandleV2     = checkpointmodel.IdentitySchemeLinuxHandleV2
-	IdentitySchemeWindowsObjectIDV1 = checkpointmodel.IdentitySchemeWindowsObjectIDV1
-	IdentitySchemeDarwinObjectIDV1  = checkpointmodel.IdentitySchemeDarwinObjectIDV1
 	IdentitySchemePortableWitnessV1 = checkpointmodel.IdentitySchemePortableWitnessV1
 )
 
@@ -113,22 +110,6 @@ func NewDestinationBindingID(
 		return DestinationBindingID{}, ErrInvalidDestinationBindingID
 	}
 	return id, nil
-}
-
-// NewProcessDestinationBindingID allocates an identity that cannot be recreated
-// from a path or stale private files. The retained root handle remains authority.
-func NewProcessDestinationBindingID(nonce []byte) (DestinationBindingID, error) {
-	if len(nonce) != DestinationBindingIDBytes {
-		return DestinationBindingID{}, ErrInvalidDestinationBindingID
-	}
-	var zero [DestinationBindingIDBytes]byte
-	if string(nonce) == string(zero[:]) {
-		return DestinationBindingID{}, ErrInvalidDestinationBindingID
-	}
-	hash := sha256.New()
-	writeRootBindingClaim(hash, []byte("windshare/process-destination-authority-id/v1"))
-	writeRootBindingClaim(hash, nonce)
-	return DestinationBindingIDFromBytes(hash.Sum(nil))
 }
 
 func DestinationBindingIDFromBytes(raw []byte) (DestinationBindingID, error) {

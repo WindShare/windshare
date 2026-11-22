@@ -4,13 +4,11 @@ package commandprojection
 import (
 	"errors"
 
-	"github.com/windshare/windshare/adapters/filesystem"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/engine"
 	appobs "github.com/windshare/windshare/engine/observation"
-	"github.com/windshare/windshare/osfs"
 )
 
 var ErrInvalidProjection = errors.New("command presentation is invalid")
@@ -32,9 +30,6 @@ func projectFileOutcomes(value transfer.FileOutcomeSummary) appobs.FileOutcomes 
 }
 func NormalizeRelayOrigin(raw string) (appobs.RelayOrigin, error) {
 	return engine.NormalizeRelayOrigin(raw)
-}
-func SealFilesystemOutputFailure(value osfs.FilesystemOutputDiagnostic) (error, bool) {
-	return filesystem.SealFilesystemOutputFailure(value)
 }
 func ProjectProgress(value transfer.ReceiveProgressSnapshot, visible bool) (appobs.ProgressSnapshot, error) {
 	return engine.DescribeProgressSnapshot(value, visible)

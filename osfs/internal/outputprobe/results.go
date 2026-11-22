@@ -11,12 +11,10 @@ import (
 type Results struct {
 	SafePublish       error
 	OperationRecovery error
-	RangeRecovery     error
-	CrashCleanup      error
 }
 
 func (results Results) Err() error {
-	return errors.Join(results.SafePublish, results.OperationRecovery, results.RangeRecovery, results.CrashCleanup)
+	return errors.Join(results.SafePublish, results.OperationRecovery)
 }
 
 func (results Results) Capabilities() (outputcap.DestinationCapabilities, error) {
@@ -26,8 +24,6 @@ func (results Results) Capabilities() (outputcap.DestinationCapabilities, error)
 	}{
 		{results.SafePublish, outputcap.CapabilityReasonUnsafePublication},
 		{results.OperationRecovery, outputcap.CapabilityReasonUnverifiableOperationRecovery},
-		{results.RangeRecovery, outputcap.CapabilityReasonUnverifiableRangeRecovery},
-		{results.CrashCleanup, outputcap.CapabilityReasonUnverifiableCrashCleanup},
 	}
 	var evidence [len(facts)]outputcap.CapabilityEvidence
 	for index, fact := range facts {
@@ -44,5 +40,5 @@ func (results Results) Capabilities() (outputcap.DestinationCapabilities, error)
 			return outputcap.DestinationCapabilities{}, fact.err
 		}
 	}
-	return outputcap.NewDestinationCapabilities(evidence[0], evidence[1], evidence[2], evidence[3])
+	return outputcap.NewDestinationCapabilities(evidence[0], evidence[1])
 }

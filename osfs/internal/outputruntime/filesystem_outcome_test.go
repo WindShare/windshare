@@ -21,7 +21,7 @@ func (failure outcomeNativeFailure) NativeErrorClass() outputcap.NativeErrorClas
 	return failure.class
 }
 
-func TestFilesystemOutputDiagnosticFreezesPrimaryBeforeCleanupJoin(t *testing.T) {
+func TestOutputDiagnosticFreezesPrimaryBeforeCleanupJoin(t *testing.T) {
 	primaryCanary := outcomeNativeFailure{
 		class: outputcap.NativeErrorAccessDenied,
 		text:  "primary provider path content capability canary",
@@ -30,25 +30,22 @@ func TestFilesystemOutputDiagnosticFreezesPrimaryBeforeCleanupJoin(t *testing.T)
 		class: outputcap.NativeErrorSharingViolation,
 		text:  "cleanup provider path content capability canary",
 	}
-	primary := diagnoseFilesystemOutputFailure(
-		FilesystemOutputFailureNativeDurability,
-		primaryCanary,
-	)
-	joined := freezeFilesystemOutputFailure(primary, cleanupCanary)
-	diagnostic, ok := FilesystemOutputDiagnosticFor(joined)
-	if !ok || diagnostic.Stage != FilesystemOutputFailureNativeDurability ||
-		diagnostic.NativeErrorClass != FilesystemNativeErrorAccessDenied {
+	primary := DiagnoseFailure(FailureDurability, primaryCanary)
+	joined := freezeFailure(primary, cleanupCanary)
+	diagnostic, ok := DiagnosticFor(joined)
+	if !ok || diagnostic.Stage != FailureDurability ||
+		diagnostic.NativeErrorClass != outputcap.NativeErrorAccessDenied {
 		t.Fatalf("joined diagnostic = (%+v, %t)", diagnostic, ok)
 	}
 	if !errors.Is(joined, primaryCanary) || !errors.Is(joined, cleanupCanary) {
 		t.Fatalf("joined cause identity was lost: %v", joined)
 	}
-	causes := errors.Unwrap(joined).(interface{ Unwrap() []error }).Unwrap()
-	cleanupDiagnostic, ok := FilesystemOutputDiagnosticFor(causes[1])
-	if !ok || cleanupDiagnostic.Stage != FilesystemOutputFailureAuthorityClose ||
-		cleanupDiagnostic.NativeErrorClass != FilesystemNativeErrorSharingViolation ||
-		!errors.Is(causes[1], cleanupCanary) || errors.Is(causes[1], primaryCanary) {
-		t.Fatalf("cleanup diagnostic was hidden behind primary: (%+v, %v)", cleanupDiagnostic, causes[1])
+	cleanup := FailureForStage(joined, FailureClose)
+	cleanupDiagnostic, ok := DiagnosticFor(cleanup)
+	if !ok || cleanupDiagnostic.Stage != FailureClose ||
+		cleanupDiagnostic.NativeErrorClass != outputcap.NativeErrorSharingViolation ||
+		!errors.Is(cleanup, cleanupCanary) || errors.Is(cleanup, primaryCanary) {
+		t.Fatalf("cleanup diagnostic was hidden behind primary: (%+v, %v)", cleanupDiagnostic, cleanup)
 	}
 	for _, safe := range []string{
 		diagnostic.Stage.String(),
@@ -62,181 +59,126 @@ func TestFilesystemOutputDiagnosticFreezesPrimaryBeforeCleanupJoin(t *testing.T)
 	}
 }
 
-func TestFilesystemOutputClosedVocabulariesRejectUnknownValues(t *testing.T) {
-	if FilesystemOutputFailureStage(0).Valid() ||
-		FilesystemOutputFailureStage(255).Valid() ||
-		FilesystemCheckpointReconciliationStep(0).Valid() ||
-		FilesystemCheckpointReconciliationStep(255).Valid() ||
-		FilesystemNativeErrorClass(0).Valid() ||
-		FilesystemNativeErrorClass(255).Valid() ||
-		FilesystemOutputStateReason(0).Valid() ||
-		FilesystemOutputStateReason(255).Valid() {
+func TestOutputClosedVocabulariesRejectUnknownValues(t *testing.T) {
+	if FailureStage(0).Valid() || FailureStage(255).Valid() ||
+		CheckpointReconciliationStep(0).Valid() ||
+		CheckpointReconciliationStep(255).Valid() ||
+		NativeErrorClass(0).Valid() ||
+		NativeErrorClass(255).Valid() {
 		t.Fatal("unknown filesystem outcome value escaped its closed vocabulary")
 	}
 }
 
-func TestFilesystemOutputVocabularyPreservesRecoveryDecisions(t *testing.T) {
-	for _, test := range []struct {
-		value FilesystemOutputFailureStage
-		text  string
-	}{
-		{FilesystemOutputFailureDestinationBinding, "destination_binding"},
-		{FilesystemOutputFailureInventoryPaging, "inventory_paging"},
-		{FilesystemOutputFailureActiveLookup, "active_lookup"},
-		{FilesystemOutputFailureOperationAcquisition, "operation_acquisition"},
-		{FilesystemOutputFailureOperationAdmission, "operation_admission"},
-		{FilesystemOutputFailureCheckpointReconciliation, "checkpoint_reconciliation"},
-		{FilesystemOutputFailureNativeDurability, "native_durability"},
-		{FilesystemOutputFailureAuthorityClose, "authority_close"},
-	} {
-		if got := test.value.String(); got != test.text {
-			t.Fatalf("failure stage %d = %q, want %q", test.value, got, test.text)
-		}
-	}
-	if got := FilesystemOutputFailureStage(255).String(); got != "" {
-		t.Fatalf("unknown failure stage = %q", got)
-	}
-
+func TestOutputVocabularyPreservesRecoveryDecisions(t *testing.T) {
 	for _, test := range []struct {
 		source checkpointstore.ReconciliationStep
-		value  FilesystemCheckpointReconciliationStep
+		value  CheckpointReconciliationStep
 		text   string
 	}{
-		{checkpointstore.ReconciliationCandidateObservation, FilesystemCheckpointCandidateObservation, "candidate_observation"},
-		{checkpointstore.ReconciliationStageDurability, FilesystemCheckpointStageDurability, "stage_durability"},
-		{checkpointstore.ReconciliationNamespaceDurability, FilesystemCheckpointNamespaceDurability, "namespace_durability"},
-		{checkpointstore.ReconciliationRecordPromotion, FilesystemCheckpointRecordPromotion, "record_promotion"},
+		{checkpointstore.ReconciliationCandidateObservation, CheckpointCandidateObservation, "candidate_observation"},
+		{checkpointstore.ReconciliationStageDurability, CheckpointStageDurability, "stage_durability"},
+		{checkpointstore.ReconciliationNamespaceDurability, CheckpointNamespaceDurability, "namespace_durability"},
+		{checkpointstore.ReconciliationRecordPromotion, CheckpointRecordPromotion, "record_promotion"},
 	} {
-		if got := filesystemReconciliationStep(test.source); got != test.value || got.String() != test.text {
+		if got := reconciliationStepFromStore(test.source); got != test.value || got.String() != test.text {
 			t.Fatalf("reconciliation step %d = (%d, %q)", test.source, got, got.String())
 		}
 	}
-	if got := filesystemReconciliationStep(255); got != 0 || got.String() != "" {
+	if got := reconciliationStepFromStore(255); got != 0 || got.String() != "" {
 		t.Fatalf("unknown reconciliation step = (%d, %q)", got, got.String())
 	}
 
 	for _, test := range []struct {
-		source outputcap.NativeErrorClass
-		value  FilesystemNativeErrorClass
-		text   string
-	}{
-		{outputcap.NativeErrorAccessDenied, FilesystemNativeErrorAccessDenied, "access_denied"},
-		{outputcap.NativeErrorSharingViolation, FilesystemNativeErrorSharingViolation, "sharing_violation"},
-		{outputcap.NativeErrorNotFound, FilesystemNativeErrorNotFound, "not_found"},
-		{outputcap.NativeErrorInvalidHandle, FilesystemNativeErrorInvalidHandle, "invalid_handle"},
-		{outputcap.NativeErrorUnsupported, FilesystemNativeErrorUnsupported, "unsupported"},
-		{outputcap.NativeErrorIO, FilesystemNativeErrorIO, "io"},
-		{outputcap.NativeErrorUnknown, FilesystemNativeErrorUnknown, "unknown"},
-	} {
-		if got := filesystemNativeErrorClass(test.source); got != test.value || got.String() != test.text {
-			t.Fatalf("native class %d = (%d, %q)", test.source, got, got.String())
-		}
-	}
-	if got := filesystemNativeErrorClass(255); got != 0 || got.String() != "" {
-		t.Fatalf("unknown native class = (%d, %q)", got, got.String())
-	}
-
-	for _, test := range []struct {
 		source checkpointmodel.OrdinaryClosedReason
-		value  FilesystemOutputStateReason
-		text   string
+		value  AttentionReason
 	}{
-		{checkpointmodel.OrdinaryReasonNone, FilesystemOutputStateReasonNone, "none"},
-		{checkpointmodel.OrdinaryReasonDestinationOwnershipUnknown, FilesystemOutputStateDestinationOwnershipUnknown, "destination_ownership_unknown"},
-		{checkpointmodel.OrdinaryReasonRegistryOwnershipUnknown, FilesystemOutputStateRegistryOwnershipUnknown, "registry_ownership_unknown"},
-		{checkpointmodel.OrdinaryReasonLeaseOwnershipUnknown, FilesystemOutputStateLeaseOwnershipUnknown, "lease_ownership_unknown"},
-		{checkpointmodel.OrdinaryReasonOperationOwnershipUnknown, FilesystemOutputStateOperationOwnershipUnknown, "operation_ownership_unknown"},
-		{checkpointmodel.OrdinaryReasonCleanupUncertain, FilesystemOutputStateCleanupUncertain, "cleanup_uncertain"},
+		{checkpointmodel.OrdinaryReasonNone, AttentionNone},
+		{checkpointmodel.OrdinaryReasonDestinationOwnershipUnknown, AttentionDestination},
+		{checkpointmodel.OrdinaryReasonRegistryOwnershipUnknown, AttentionRegistry},
+		{checkpointmodel.OrdinaryReasonLeaseOwnershipUnknown, AttentionLease},
+		{checkpointmodel.OrdinaryReasonOperationOwnershipUnknown, AttentionOperation},
+		{checkpointmodel.OrdinaryReasonCleanupUncertain, AttentionCleanup},
 	} {
-		if got := filesystemOutputStateReason(test.source); got != test.value || got.String() != test.text {
-			t.Fatalf("state reason %d = (%d, %q)", test.source, got, got.String())
+		if got := attentionReasonFromClosed(test.source); got != test.value {
+			t.Fatalf("attention reason %d = %q, want %q", test.source, got, test.value)
 		}
 	}
-	if got := filesystemOutputStateReason(255); got != 0 || got.String() != "" {
-		t.Fatalf("unknown state reason = (%d, %q)", got, got.String())
+	if got := attentionReasonFromClosed(255); got != "" {
+		t.Fatalf("unknown attention reason = %q", got)
 	}
 }
 
-func TestDiagnoseFilesystemOutputFailurePreservesFirstSafeEvidence(t *testing.T) {
+func TestDiagnoseFailurePreservesFirstSafeEvidence(t *testing.T) {
 	providerFailure := outcomeNativeFailure{
 		class: outputcap.NativeErrorAccessDenied,
 		text:  "provider path content capability canary",
 	}
-	diagnosed := DiagnoseFilesystemOutputFailure(
-		FilesystemOutputFailureNativeDurability,
-		providerFailure,
-	)
-	diagnostic, ok := FilesystemOutputDiagnosticFor(diagnosed)
-	if !ok || diagnostic.Stage != FilesystemOutputFailureNativeDurability ||
-		diagnostic.NativeErrorClass != FilesystemNativeErrorAccessDenied ||
+	diagnosed := DiagnoseFailure(FailureDurability, providerFailure)
+	diagnostic, ok := DiagnosticFor(diagnosed)
+	if !ok || diagnostic.Stage != FailureDurability ||
+		diagnostic.NativeErrorClass != outputcap.NativeErrorAccessDenied ||
 		!errors.Is(diagnosed, providerFailure) {
 		t.Fatalf("native durability diagnosis = (%+v, %t, %v)", diagnostic, ok, diagnosed)
 	}
 
-	rediagnosed := DiagnoseFilesystemOutputFailure(
-		FilesystemOutputFailureDestinationBinding,
-		diagnosed,
-	)
-	retained, ok := FilesystemOutputDiagnosticFor(rediagnosed)
+	rediagnosed := DiagnoseFailure(FailureDestinationBinding, diagnosed)
+	retained, ok := DiagnosticFor(rediagnosed)
 	if !ok || retained != diagnostic || !errors.Is(rediagnosed, providerFailure) {
 		t.Fatalf("rediagnosed failure replaced first evidence = (%+v, %t, %v)", retained, ok, rediagnosed)
 	}
 
 	cleanupFailure := errors.New("cleanup failure canary")
-	closeOnly := freezeFilesystemOutputFailure(nil, cleanupFailure)
-	closeDiagnostic, ok := FilesystemOutputDiagnosticFor(closeOnly)
-	if !ok || closeDiagnostic.Stage != FilesystemOutputFailureAuthorityClose ||
+	closeOnly := freezeFailure(nil, cleanupFailure)
+	closeDiagnostic, ok := DiagnosticFor(closeOnly)
+	if !ok || closeDiagnostic.Stage != FailureClose ||
 		!errors.Is(closeOnly, cleanupFailure) {
 		t.Fatalf("close-only diagnosis = (%+v, %t, %v)", closeDiagnostic, ok, closeOnly)
 	}
 	primaryFailure := errors.New("primary failure canary")
-	joined := freezeFilesystemOutputFailure(primaryFailure, cleanupFailure)
-	if diagnostic, ok := FilesystemOutputDiagnosticFor(joined); !ok || diagnostic.Stage != FilesystemOutputFailureAuthorityClose ||
+	joined := freezeFailure(primaryFailure, cleanupFailure)
+	if diagnostic, ok := DiagnosticFor(joined); !ok || diagnostic.Stage != FailureClose ||
 		!errors.Is(joined, primaryFailure) || !errors.Is(joined, cleanupFailure) {
 		t.Fatalf("joined failure lost independently classified cleanup = %v", joined)
 	}
-	if got := freezeFilesystemOutputFailure(primaryFailure, nil); got != primaryFailure {
+	if got := freezeFailure(primaryFailure, nil); got != primaryFailure {
 		t.Fatalf("nil cleanup changed primary identity: %v", got)
 	}
 	for _, canceled := range []error{context.Canceled, context.DeadlineExceeded} {
-		if got := DiagnoseFilesystemOutputFailure(FilesystemOutputFailureNativeDurability, canceled); got != canceled {
+		if got := DiagnoseFailure(FailureDurability, canceled); got != canceled {
 			t.Fatalf("cancellation identity changed: %v", got)
 		}
 	}
 }
 
-func TestFilesystemOutputDiagnosticRejectsPartialOrMisplacedEvidence(t *testing.T) {
-	for _, diagnostic := range []FilesystemOutputDiagnostic{
+func TestOutputDiagnosticRejectsPartialOrMisplacedEvidence(t *testing.T) {
+	for _, diagnostic := range []Diagnostic{
 		{},
-		{Stage: FilesystemOutputFailureDestinationBinding, ReconciliationStep: 255},
-		{Stage: FilesystemOutputFailureDestinationBinding, ReconciliationStep: FilesystemCheckpointCandidateObservation},
-		{Stage: FilesystemOutputFailureDestinationBinding, NativeErrorClass: 255},
-		{Stage: FilesystemOutputFailureDestinationBinding, FaultDomain: 1},
+		{Stage: FailureDestinationBinding, ReconciliationStep: 255},
+		{Stage: FailureDestinationBinding, ReconciliationStep: CheckpointCandidateObservation},
+		{Stage: FailureDestinationBinding, NativeErrorClass: 255},
+		{Stage: FailureDestinationBinding, FaultDomain: 1},
 	} {
 		if diagnostic.Valid() {
-			t.Fatalf("invalid filesystem diagnostic was admitted: %+v", diagnostic)
+			t.Fatalf("invalid diagnostic was admitted: %+v", diagnostic)
 		}
 	}
-	if diagnostic := (FilesystemOutputDiagnostic{
-		Stage:              FilesystemOutputFailureCheckpointReconciliation,
-		ReconciliationStep: FilesystemCheckpointCandidateObservation,
+	if diagnostic := (Diagnostic{
+		Stage:              FailureCheckpoint,
+		ReconciliationStep: CheckpointCandidateObservation,
 	}); !diagnostic.Valid() {
 		t.Fatalf("complete reconciliation diagnostic was rejected: %+v", diagnostic)
 	}
 }
 
-func TestFilesystemOutputDiagnosticNilCarrierFailsClosed(t *testing.T) {
-	var failure *filesystemOutputDiagnosticError
+func TestOutputDiagnosticNilCarrierFailsClosed(t *testing.T) {
+	var failure *diagnosticError
 	if got := failure.Error(); got != "filesystem output failed" {
 		t.Fatalf("nil diagnostic error = %q", got)
 	}
 	if cause := failure.Unwrap(); cause != nil {
 		t.Fatalf("nil diagnostic cause = %v", cause)
 	}
-	if diagnostic := failure.FilesystemOutputDiagnostic(); diagnostic != (FilesystemOutputDiagnostic{}) {
-		t.Fatalf("nil diagnostic carrier = %+v", diagnostic)
-	}
-	if diagnostic, ok := FilesystemOutputDiagnosticFor(failure); ok || diagnostic != (FilesystemOutputDiagnostic{}) {
+	if diagnostic, ok := DiagnosticFor(failure); ok || diagnostic != (Diagnostic{}) {
 		t.Fatalf("nil diagnostic projection = (%+v, %t)", diagnostic, ok)
 	}
 }

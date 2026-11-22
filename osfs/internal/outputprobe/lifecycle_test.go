@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestClosedWorkspaceRejectsOperationsUntilRecovery(t *testing.T) {
+func TestClosedWorkspaceRejectsOperations(t *testing.T) {
 	for _, test := range []struct {
 		name         string
 		populated    bool
@@ -18,7 +18,6 @@ func TestClosedWorkspaceRejectsOperationsUntilRecovery(t *testing.T) {
 		{name: "close-empty", wantLeftover: true},
 		{name: "close-populated", populated: true, wantLeftover: true},
 		{name: "cleanup-success", populated: true, cleanup: true},
-		{name: "cleanup-file-failure", populated: true, cleanup: true, fault: "remove-file:stage", wantLeftover: true},
 		{name: "cleanup-directory-failure", cleanup: true, fault: "remove-directory:" + probeTestName(1), wantLeftover: true},
 		{name: "cleanup-sync-failure", cleanup: true, fault: "sync-directory"},
 	} {
@@ -26,7 +25,7 @@ func TestClosedWorkspaceRejectsOperationsUntilRecovery(t *testing.T) {
 			root := newProbeTestRoot()
 			workspace := newProbeTestWorkspace(t, root, 1)
 			if test.populated {
-				if err := workspace.SafePublish(SizedDataLinks); err != nil {
+				if err := workspace.OperationRecovery(); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -53,10 +52,8 @@ func TestClosedWorkspaceRejectsOperationsUntilRecovery(t *testing.T) {
 			}{
 				{"clear", workspace.Clear},
 				{"cleanup", workspace.Cleanup},
-				{"safe-publish", func() error { return workspace.SafePublish(SizedDataLinks) }},
-				{"range-recovery", workspace.RangeRecovery},
+				{"file-publication", workspace.FilePublication},
 				{"operation-recovery", workspace.OperationRecovery},
-				{"verify-files", workspace.VerifyFiles},
 				{"verify-file", func() error { return workspace.VerifyFile(StageName, true) }},
 				{"keep-nil-file", func() error { return workspace.KeepFile(StageName, nil) }},
 			} {
@@ -76,16 +73,8 @@ func TestClosedWorkspaceRejectsOperationsUntilRecovery(t *testing.T) {
 			if exists != test.wantLeftover {
 				t.Fatalf("leftover exists=%t, want %t", exists, test.wantLeftover)
 			}
-			if exists && test.populated && len(leftover.files) != 3 {
+			if exists && test.populated && len(leftover.directories) != 2 {
 				t.Fatal("closed workspace changed retained artifacts")
-			}
-			assertProbeHandlesReleased(t, root)
-
-			if err := Recover(root, probeTestNames(root), SizedDataLinks); err != nil {
-				t.Fatalf("fresh inspection could not recover leftovers: %v", err)
-			}
-			if len(root.object.directories) != 0 {
-				t.Fatal("recovery left probe artifacts")
 			}
 			assertProbeHandlesReleased(t, root)
 		})
@@ -95,10 +84,10 @@ func TestClosedWorkspaceRejectsOperationsUntilRecovery(t *testing.T) {
 func TestClearRetainsLiveWitnessesForRetryAndReuse(t *testing.T) {
 	root := newProbeTestRoot()
 	workspace := newProbeTestWorkspace(t, root, 1)
-	if err := workspace.SafePublish(EmptyDataLinks); err != nil {
+	if err := workspace.OperationRecovery(); err != nil {
 		t.Fatal(err)
 	}
-	root.system.fault = "remove-file:stage"
+	root.system.fault = "remove-directory:candidate"
 	if err := workspace.Clear(); !errors.Is(err, errInjected) {
 		t.Fatalf("first clear error=%v", err)
 	}
@@ -108,7 +97,7 @@ func TestClearRetainsLiveWitnessesForRetryAndReuse(t *testing.T) {
 	if err := workspace.Clear(); err != nil {
 		t.Fatalf("empty live workspace could not be cleared: %v", err)
 	}
-	if err := workspace.SafePublish(EmptyDataLinks); err != nil {
+	if err := workspace.OperationRecovery(); err != nil {
 		t.Fatalf("cleared workspace could not reuse probe names: %v", err)
 	}
 	if err := workspace.Cleanup(); err != nil {

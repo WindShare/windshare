@@ -353,7 +353,6 @@ func (capture *fileAuthorityClaimCapture) BeginFile(
 type fileAuthorityFixtureOptions struct {
 	nested      bool
 	preexisting bool
-	live        bool
 }
 
 type fileAuthorityFixture struct {
@@ -383,12 +382,7 @@ func newFileAuthorityFixture(t *testing.T, options fileAuthorityFixtureOptions) 
 	t.Cleanup(func() { _ = directories.Close() })
 	objects := newFileAuthorityObjects(platform)
 	sessionID := testIdentity[transfer.OutputSessionID](151)
-	var authority *FileAuthority
-	if options.live {
-		authority, err = NewLiveFileAuthority(directories, sessionID)
-	} else {
-		authority, err = NewFileAuthority(directories, objects, sessionID)
-	}
+	authority, err := NewFileAuthority(directories, objects, sessionID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -840,40 +834,11 @@ func TestFileAuthoritySyncAndCloseRetainParentGuardSemantics(t *testing.T) {
 	}
 }
 
-type liveFileAuthorityOwned struct {
-	*fileAuthorityOwnedFile
-	native outputcap.MutableFile
-}
-
-func (file *liveFileAuthorityOwned) NativeFile() outputcap.MutableFile {
-	if file == nil {
-		return nil
-	}
-	return file.native
-}
-
-func TestLiveFileAuthorityPublishesOnlyTheRetainedStageIdentity(t *testing.T) {
-	sessionID := testIdentity[transfer.OutputSessionID](151)
-	if _, err := NewLiveFileAuthority(nil, sessionID); !errors.Is(err, ErrInvalidConfiguration) {
-		t.Fatalf("nil live directory authority error = %v", err)
-	}
-	platform := newFileAuthorityPlatform()
-	directories, err := New(platform, Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer directories.Close()
-	if _, err := NewLiveFileAuthority(directories, transfer.OutputSessionID{}); !errors.Is(err, ErrInvalidConfiguration) {
-		t.Fatalf("zero live session error = %v", err)
-	}
-
-	fixture := newFileAuthorityFixture(t, fileAuthorityFixtureOptions{live: true})
-	if fixture.capture.bindErr != nil || fixture.destination == nil {
-		t.Fatalf("live binding destination=%T error=%v", fixture.destination, fixture.capture.bindErr)
-	}
+func TestFileDestinationWithExactParentRevalidatesParent(t *testing.T) {
+	fixture := newFileAuthorityFixture(t, fileAuthorityFixtureOptions{nested: true, preexisting: true})
 	destination, ok := fixture.destination.(*fileDestination)
 	if !ok {
-		t.Fatalf("live destination type = %T", fixture.destination)
+		t.Fatalf("destination type = %T", fixture.destination)
 	}
 	if err := destination.WithExactParent(context.Background(), nil); !errors.Is(err, ErrInvalidClaim) {
 		t.Fatalf("nil parent callback error = %v", err)
@@ -884,72 +849,6 @@ func TestLiveFileAuthorityPublishesOnlyTheRetainedStageIdentity(t *testing.T) {
 		return nil
 	}); err != nil || !parentVisited {
 		t.Fatalf("parent visit = (%t, %v)", parentVisited, err)
-	}
-	if observed, err := fixture.destination.ObserveFinalPresence(context.Background()); err != nil ||
-		observed.Condition() != fileexecution.FinalAbsent {
-		t.Fatalf("initial final = (%v, %v)", observed.Condition(), err)
-	}
-
-	stageNode := &fakeNode{id: 900, size: fileAuthorityExactSize}
-	owned := &liveFileAuthorityOwned{
-		fileAuthorityOwnedFile: &fileAuthorityOwnedFile{object: fixture.object},
-		native:                 &fakeFile{node: stageNode},
-	}
-	if observed, err := observePublicationForTest(destination,
-		context.Background(), owned, fixture.expectation,
-	); err != nil || observed.Condition() != fileexecution.FinalAbsent {
-		t.Fatalf("pre-publish owned final = (%v, %v)", observed.Condition(), err)
-	}
-	observed, err := publishForTest(fixture.destination,
-		context.Background(), owned, fixture.expectation,
-	)
-	if err != nil || observed.Condition() != fileexecution.FinalMatchesPublication {
-		t.Fatalf("live publish = (%v, %v)", observed.Condition(), err)
-	}
-	if observed, err = observePublicationForTest(destination,
-		context.Background(), owned, fixture.expectation,
-	); err != nil || observed.Condition() != fileexecution.FinalMatchesPublication {
-		t.Fatalf("published owned final = (%v, %v)", observed.Condition(), err)
-	}
-	if observed, err = publishForTest(fixture.destination,
-		context.Background(), owned, fixture.expectation,
-	); err != nil || observed.Condition() != fileexecution.FinalMatchesPublication {
-		t.Fatalf("idempotent live publish = (%v, %v)", observed.Condition(), err)
-	}
-	if observed, err = fixture.destination.ObserveFinalPresence(context.Background()); err != nil ||
-		observed.Condition() != fileexecution.FinalCollision {
-		t.Fatalf("presence-only final = (%v, %v)", observed.Condition(), err)
-	}
-
-	if _, err := observePublicationForTest(destination,
-		context.Background(),
-		&fileAuthorityOwnedFile{object: fixture.object},
-		fixture.expectation,
-	); !errors.Is(err, ErrInvalidClaim) {
-		t.Fatalf("non-native live object error = %v", err)
-	}
-	otherObject, _ := fileAuthorityObject(t, 0x92)
-	if _, err := publishForTest(fixture.destination,
-		context.Background(),
-		&liveFileAuthorityOwned{
-			fileAuthorityOwnedFile: &fileAuthorityOwnedFile{object: otherObject},
-			native:                 owned.native,
-		},
-		fixture.expectation,
-	); !errors.Is(err, ErrInvalidClaim) {
-		t.Fatalf("foreign live object error = %v", err)
-	}
-
-	fixture.platform.mu.Lock()
-	fixture.parent.entries[fixture.leaf] = fakeEntry{
-		kind: outputcap.EntryRegularFile,
-		node: &fakeNode{id: 901, size: fileAuthorityExactSize},
-	}
-	fixture.platform.mu.Unlock()
-	if observed, err = observePublicationForTest(destination,
-		context.Background(), owned, fixture.expectation,
-	); err != nil || observed.Condition() != fileexecution.FinalCollision {
-		t.Fatalf("replaced live final = (%v, %v)", observed.Condition(), err)
 	}
 }
 
@@ -963,20 +862,6 @@ func publishForTest(
 		var publishErr error
 		observed, publishErr = publication.PublishNoReplace(ctx)
 		return publishErr
-	})
-	return observed, err
-}
-
-func observePublicationForTest(
-	destination fileexecution.FileDestination,
-	ctx context.Context,
-	owned fileexecution.OwnedFile,
-	expectation fileexecution.FinalExpectation,
-) (observed fileexecution.FinalObservation, err error) {
-	err = destination.WithPublication(ctx, owned, expectation, func(publication fileexecution.FilePublication) error {
-		var observeErr error
-		observed, observeErr = publication.Observe(ctx)
-		return observeErr
 	})
 	return observed, err
 }

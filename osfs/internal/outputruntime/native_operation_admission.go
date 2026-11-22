@@ -10,43 +10,40 @@ import (
 	"github.com/windshare/windshare/osfs/internal/destinationauthority"
 )
 
-type ActiveLookupKind uint8
+type LookupKind uint8
 
 const (
-	ActiveLookupCreateReady ActiveLookupKind = iota + 1
-	ActiveLookupNotFound
-	ActiveLookupReopened
-	ActiveLookupAlreadyRunning
-	ActiveLookupNeedsAttention
-	ActiveLookupAmbiguous
+	LookupCreateReady LookupKind = iota + 1
+	LookupNotFound
+	LookupReopened
+	LookupAlreadyRunning
+	LookupNeedsAttention
+	LookupAmbiguous
 )
 
-func (kind ActiveLookupKind) Valid() bool {
-	return kind >= ActiveLookupCreateReady && kind <= ActiveLookupAmbiguous
-}
-
-// ActiveLookup is an opaque continuation. Only CreateReady retains admission
-// authority; NotFound cannot create a replacement for an explicitly selected ID.
-// A reopened result retains the exact operation lease and top-level capability.
+// ActiveLookup is an opaque continuation. Only LookupCreateReady retains
+// admission authority; LookupNotFound cannot create a replacement for an
+// explicitly selected ID. A reopened result retains the exact operation lease
+// and top-level capability.
 type ActiveLookup struct {
-	authority   *Authority
-	kind        ActiveLookupKind
-	admission   *heldAdmission
-	operation   *Operation
-	stateReason FilesystemOutputStateReason
+	authority *Authority
+	kind      LookupKind
+	admission *heldAdmission
+	operation *Operation
+	attention AttentionReason
 }
 
-func (lookup ActiveLookup) Kind() ActiveLookupKind { return lookup.kind }
+func (lookup ActiveLookup) Kind() LookupKind { return lookup.kind }
 
-func (lookup ActiveLookup) StateReason() FilesystemOutputStateReason {
-	if lookup.kind != ActiveLookupNeedsAttention {
-		return 0
+func (lookup ActiveLookup) Attention() AttentionReason {
+	if lookup.kind != LookupNeedsAttention {
+		return AttentionNone
 	}
-	return lookup.stateReason
+	return lookup.attention
 }
 
 func (lookup ActiveLookup) Operation() *Operation {
-	if lookup.kind != ActiveLookupReopened {
+	if lookup.kind != LookupReopened {
 		return nil
 	}
 	return lookup.operation
@@ -57,38 +54,24 @@ type heldAdmission struct {
 	key         checkpointmodel.ActiveOperationKey
 	selection   transfer.SelectionSpec
 	durable     *checkpointstore.ActiveAdmission
-	volatile    *volatileReservationClaimer
 	operation   receivecontract.OperationID
 }
 
 func (admission *heldAdmission) prepare(operation receivecontract.OperationID) error {
-	if admission == nil || operation.IsZero() || !admission.operation.IsZero() {
+	if admission == nil || admission.durable == nil || operation.IsZero() || !admission.operation.IsZero() {
 		return transfer.ErrInvalidOutputBinding
 	}
-	if admission.durable != nil {
-		if err := admission.durable.PrepareCandidate(operation); err != nil {
-			return err
-		}
-		admission.operation = operation
-		return nil
+	if err := admission.durable.PrepareCandidate(operation); err != nil {
+		return err
 	}
 	admission.operation = operation
-	if admission.volatile == nil {
-		return transfer.ErrInvalidOutputBinding
-	}
 	return nil
 }
 
 func (admission *heldAdmission) BeginReservation(
 	spec destinationauthority.ReservationClaimSpec,
 ) (destinationauthority.ReservationClaimHandle, destinationauthority.ReservationMetadataClaimOutcome, error) {
-	if admission == nil || admission.operation.IsZero() || spec.OperationID != admission.operation {
-		return nil, 0, transfer.ErrInvalidOutputBinding
-	}
-	if admission.volatile != nil {
-		return admission.volatile.BeginReservation(spec)
-	}
-	if admission.durable == nil {
+	if admission == nil || admission.durable == nil || admission.operation.IsZero() || spec.OperationID != admission.operation {
 		return nil, 0, transfer.ErrInvalidOutputBinding
 	}
 	// A public collision rolls the exact candidate back and prepares it again,
@@ -109,10 +92,7 @@ func (admission *heldAdmission) close() error {
 	if admission.durable != nil {
 		err = errors.Join(err, admission.durable.Close())
 	}
-	if admission.volatile != nil {
-		err = errors.Join(err, admission.volatile.Close())
-	}
-	admission.durable, admission.volatile = nil, nil
+	admission.durable = nil
 	admission.selection = transfer.SelectionSpec{}
 	admission.key = checkpointmodel.ActiveOperationKey{}
 	admission.operation = receivecontract.OperationID{}

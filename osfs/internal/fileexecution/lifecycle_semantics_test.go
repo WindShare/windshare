@@ -6,11 +6,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
-	"github.com/windshare/windshare/osfs/internal/outputcap"
 )
 
 func TestOwnedLifecycleValuesNeverManufactureCleanupAuthority(t *testing.T) {
@@ -35,27 +33,6 @@ func TestOwnedLifecycleValuesNeverManufactureCleanupAuthority(t *testing.T) {
 		if err != nil || observation.Condition() != condition || !observation.valid() {
 			t.Fatalf("final condition %d = (%+v, %v)", condition, observation, err)
 		}
-	}
-
-	var file *LiveOwnedFile
-	if !file.ObjectID().IsZero() || file.NativeFile() != nil ||
-		file.CleanupTicket().Valid() {
-		t.Fatal("nil live file exposed owned evidence")
-	}
-	if _, err := file.WriteAt([]byte("x"), 0); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
-		t.Fatalf("nil live write = %v", err)
-	}
-	if err := file.Sync(); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
-		t.Fatalf("nil live sync = %v", err)
-	}
-	if err := file.SetModifiedTime(catalog.ModifiedTime{}); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
-		t.Fatalf("nil live metadata = %v", err)
-	}
-	if err := file.Close(); err != nil {
-		t.Fatalf("nil live close = %v", err)
-	}
-	if _, err := NewLiveOwnedFile(object, nil, checkpointmodel.LiveCleanupTicket{}); !errors.Is(err, ErrInvalidConfiguration) {
-		t.Fatalf("invalid live owned file = %v", err)
 	}
 }
 
@@ -88,17 +65,17 @@ func TestTransactionHelpersPreserveTypedLifecycleSemantics(t *testing.T) {
 			t.Fatalf("quarantine reason %d = %d, want %d", test.reason, got, test.want)
 		}
 	}
-	var resumable *resumablePartialFileTransaction
+	var resumable *PartialFileTransaction
 	if resumable.Binding() != (transfer.MaterializedFileBinding{}) {
 		t.Fatal("nil resumable transaction exposed a binding")
 	}
-	if err := resumable.WriteRange(context.Background(), 0, nil); !errors.Is(err, ErrInvalidConfiguration) {
+	if err := resumable.WriteRange(context.Background(), 0, nil); !errors.Is(err, ErrTransactionClosed) {
 		t.Fatalf("nil resumable write = %v", err)
 	}
-	if _, err := resumable.Checkpoint(context.Background()); !errors.Is(err, ErrInvalidConfiguration) {
+	if _, err := resumable.Checkpoint(context.Background()); !errors.Is(err, ErrTransactionClosed) {
 		t.Fatalf("nil resumable checkpoint = %v", err)
 	}
-	if _, err := resumable.Commit(context.Background()); !errors.Is(err, ErrInvalidConfiguration) {
+	if _, err := resumable.Commit(context.Background()); !errors.Is(err, ErrTransactionClosed) {
 		t.Fatalf("nil resumable commit = %v", err)
 	}
 }

@@ -34,15 +34,15 @@ func TestNativeResumePresenceRejectsForeignOrUnavailablePrivateState(t *testing.
 	}
 	if _, err := failed.Page(context.Background(), resumeauthority.PageCursor{}, 1); !errors.Is(err, failure) {
 		t.Fatalf("page platform failure = %v", err)
-	} else if diagnostic, ok := FilesystemOutputDiagnosticFor(err); !ok ||
-		diagnostic.Stage != FilesystemOutputFailureDestinationBinding {
+	} else if diagnostic, ok := DiagnosticFor(err); !ok ||
+		diagnostic.Stage != FailureDestinationBinding {
 		t.Fatalf("page platform diagnostic = (%+v, %t)", diagnostic, ok)
 	}
 	operation := incrementalTestIdentity16[receivecontract.OperationID](0xd1)
 	if _, err := failed.Acquire(context.Background(), operation); !errors.Is(err, failure) {
 		t.Fatalf("acquire platform failure = %v", err)
-	} else if diagnostic, ok := FilesystemOutputDiagnosticFor(err); !ok ||
-		diagnostic.Stage != FilesystemOutputFailureDestinationBinding {
+	} else if diagnostic, ok := DiagnosticFor(err); !ok ||
+		diagnostic.Stage != FailureDestinationBinding {
 		t.Fatalf("acquire platform diagnostic = (%+v, %t)", diagnostic, ok)
 	}
 
@@ -200,7 +200,7 @@ func TestResultRootResumeDispositionUsesAuthorityCreatedRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	authority := newNativeReservationTestAuthority(t, root)
-	if _, err := authority.BindDestination(context.Background()); err != nil {
+	if err := authority.BindDestination(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	lookup, err := authority.LookupActive(context.Background(), selection)

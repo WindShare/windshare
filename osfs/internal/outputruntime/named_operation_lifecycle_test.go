@@ -26,7 +26,7 @@ type ordinaryLifecycleFixture struct {
 func openOrdinaryLifecycleFixture(t *testing.T, seed byte) ordinaryLifecycleFixture {
 	t.Helper()
 	authority := newNativeReservationTestAuthority(t, newRuntimeTestRootSpec(t).path)
-	if _, err := authority.BindDestination(context.Background()); err != nil {
+	if err := authority.BindDestination(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	selection := nativeReservationTestSelection(t, seed)
@@ -130,8 +130,8 @@ func TestOrdinaryLifecycleRecorderSeparatesCommandOutcomeFromDurableCleanup(t *t
 		}
 	}
 
-	var traces []FilesystemOutputTrace
-	fixture.authority.tracer = FilesystemOutputTraceFunc(func(event FilesystemOutputTrace) {
+	var traces []Trace
+	fixture.authority.tracer = TraceFunc(func(event Trace) {
 		traces = append(traces, event)
 	})
 	// Simulate losing the private file-state capability after every final was
@@ -149,7 +149,7 @@ func TestOrdinaryLifecycleRecorderSeparatesCommandOutcomeFromDurableCleanup(t *t
 		record.ClosedReason() != checkpointmodel.OrdinaryReasonCleanupUncertain {
 		t.Fatalf("cleanup failure lifecycle = (%d, %d)", record.Lifecycle(), record.ClosedReason())
 	}
-	if len(traces) != 1 || traces[0].RuntimeDecision != FilesystemOutputRuntimeCleanupPending ||
+	if len(traces) != 1 || traces[0].RuntimeDecision != RuntimeCleanupPending ||
 		!traces[0].Failed {
 		t.Fatalf("cleanup trace = %+v", traces)
 	}

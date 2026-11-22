@@ -2,7 +2,6 @@ package destinationauthority
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"io"
 	"path/filepath"
@@ -12,7 +11,6 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
-	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/osfs/internal/outputcap"
 )
 
@@ -20,15 +18,13 @@ func TestBindDestinationRetainsAuthorityAndOwnsCloseOrder(t *testing.T) {
 	order := []string{}
 	platform := newDestinationPlatform()
 	platform.closeOrder = &order
-	journal := &destinationJournal{order: &order}
-	authority := bindFakeDestination(t, platform, journal)
+	authority := bindFakeDestination(t, platform)
 
 	if !authority.Binding().Valid() || platform.capCalls != 1 || platform.guardCalls != 1 {
 		t.Fatalf("binding=%+v capabilities=%d guards=%d", authority.Binding(), platform.capCalls, platform.guardCalls)
 	}
-	mode, err := authority.Binding().ExecutionMode()
-	if err != nil || mode != outputcap.ExecutionResumable {
-		t.Fatalf("mode=%v err=%v", mode, err)
+	if err := authority.Binding().Capabilities().ValidateSupport(); err != nil {
+		t.Fatalf("capabilities support = %v", err)
 	}
 	if err := authority.OpenResumableState(func(control outputcap.Directory) (io.Closer, error) {
 		if control == nil {
@@ -46,25 +42,25 @@ func TestBindDestinationRetainsAuthorityAndOwnsCloseOrder(t *testing.T) {
 	if err := authority.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := strings.Join(order, ","), "resumable,journal,platform"; got != want {
+	if got, want := strings.Join(order, ","), "resumable,platform"; got != want {
 		t.Fatalf("close order=%q want=%q", got, want)
 	}
-	if authority.Binding().Valid() || !platform.closed || !journal.closed {
-		t.Fatalf("closed binding=%+v platform=%t journal=%t", authority.Binding(), platform.closed, journal.closed)
+	if authority.Binding().Valid() || !platform.closed {
+		t.Fatalf("closed binding=%+v platform=%t", authority.Binding(), platform.closed)
 	}
-	if err := authority.Close(); err != nil || len(order) != 3 {
+	if err := authority.Close(); err != nil || len(order) != 2 {
 		t.Fatalf("idempotent close err=%v order=%v", err, order)
 	}
 }
 
 func TestBindDestinationReadsExistingIdentityAndRejectsInvalidConfiguration(t *testing.T) {
 	platform := newDestinationPlatform()
-	first := bindFakeDestination(t, platform, &destinationJournal{})
+	first := bindFakeDestination(t, platform)
 	firstID := first.Binding().ID()
 	if err := first.Close(); err != nil {
 		t.Fatal(err)
 	}
-	second := bindFakeDestination(t, platform, &destinationJournal{})
+	second := bindFakeDestination(t, platform)
 	defer second.Close()
 	if second.Binding().ID() != firstID || platform.capCalls != 2 {
 		t.Fatalf("reopened id=%v want=%v capability calls=%d", second.Binding().ID(), firstID, platform.capCalls)
@@ -74,57 +70,55 @@ func TestBindDestinationReadsExistingIdentityAndRejectsInvalidConfiguration(t *t
 		t.Fatalf("empty bind error=%v", err)
 	}
 	if _, err := BindDestination(BindConfig{
-		Platform: platform, DisplayPath: ".", OpenLiveCleanupJournal: fakeJournalOpener(&destinationJournal{}),
+		Platform: platform, DisplayPath: ".",
 	}); !errors.Is(err, ErrInvalidConfiguration) {
 		t.Fatalf("relative display path error=%v", err)
 	}
 	withoutSources := struct{ outputcap.Platform }{Platform: platform}
 	if _, err := BindDestination(BindConfig{
 		Platform: withoutSources, DisplayPath: filepath.Clean(t.TempDir()),
-		OpenLiveCleanupJournal: fakeJournalOpener(&destinationJournal{}),
 	}); !errors.Is(err, ErrInvalidConfiguration) {
 		t.Fatalf("missing capability source error=%v", err)
 	}
 }
 
-func TestBindDestinationChecksOptionalNativeMethodSetsOnlyWhenClaimed(t *testing.T) {
+func TestBindDestinationRejectsUnsupportedCapabilitiesBeforeNamespaceWork(t *testing.T) {
 	platform := &destinationPlatformWithoutNative{destinationPlatform: newDestinationPlatform()}
 	if _, err := BindDestination(BindConfig{
 		Platform: platform, DisplayPath: filepath.Clean(t.TempDir()),
-		OpenLiveCleanupJournal: fakeJournalOpener(&destinationJournal{}),
 	}); !errors.Is(err, ErrInvalidConfiguration) {
 		t.Fatalf("claimed native methods error=%v", err)
 	}
 
 	unsafe, _ := outputcap.UnsupportedCapability(outputcap.CapabilityReasonUnsafePublication)
-	cleanup, _ := outputcap.UnsupportedCapability(outputcap.CapabilityReasonCleanupOwnershipUnknown)
+	unverifiable, _ := outputcap.UnsupportedCapability(outputcap.CapabilityReasonUnverifiableOperationRecovery)
 	supported := outputcap.SupportedCapability()
-	platform.capabilities, _ = outputcap.NewDestinationCapabilities(unsafe, supported, supported, cleanup)
-	beforeGuards := platform.guardCalls
-	authority, err := BindDestination(BindConfig{
-		Platform: platform, DisplayPath: filepath.Clean(t.TempDir()),
-		OpenLiveCleanupJournal: fakeJournalOpener(&destinationJournal{}),
-	})
-	if authority != nil || !errors.Is(err, outputcap.ErrOrdinaryOutputUnsupported) || platform.guardCalls != beforeGuards {
-		t.Fatalf("unsafe destination must be rejected before namespace work: %v", err)
+
+	for name, testCase := range map[string]struct {
+		capabilities outputcap.DestinationCapabilities
+		wantErr      error
+	}{
+		"unsafe publication":    {capabilities: mustDestinationCapabilities(t, unsafe, supported), wantErr: outputcap.ErrOrdinaryOutputUnsupported},
+		"unverifiable recovery": {capabilities: mustDestinationCapabilities(t, supported, unverifiable), wantErr: outputcap.ErrRecoverableOutputUnsupported},
+	} {
+		t.Run(name, func(t *testing.T) {
+			platform.capabilities = testCase.capabilities
+			beforeGuards := platform.guardCalls
+			authority, err := BindDestination(BindConfig{
+				Platform: platform, DisplayPath: filepath.Clean(t.TempDir()),
+			})
+			if authority != nil || !errors.Is(err, testCase.wantErr) || platform.guardCalls != beforeGuards {
+				t.Fatalf("unsupported destination must be rejected before namespace work: %v", err)
+			}
+		})
 	}
 }
 
-func TestBoundDestinationRejectsReplacedRootAndLiveOnlyRegistry(t *testing.T) {
+func TestBoundDestinationRejectsReplacedRoot(t *testing.T) {
 	platform := newDestinationPlatform()
-	unsupported, _ := outputcap.UnsupportedCapability(outputcap.CapabilityReasonUnverifiableOperationRecovery)
-	supported := outputcap.SupportedCapability()
-	platform.capabilities, _ = outputcap.NewDestinationCapabilities(supported, unsupported, supported, supported)
-	authority := bindFakeDestination(t, platform, &destinationJournal{})
+	authority := bindFakeDestination(t, platform)
 	defer authority.Close()
 
-	called := false
-	if err := authority.OpenResumableState(func(outputcap.Directory) (io.Closer, error) {
-		called = true
-		return orderedCloser{order: &[]string{}}, nil
-	}); !errors.Is(err, ErrInvalidConfiguration) || called {
-		t.Fatalf("live-only registry err=%v called=%t", err, called)
-	}
 	platform.guardRoot = &destinationNode{id: 99, identity: []byte("foreign-root"), entries: map[string]*destinationNode{}}
 	_, err := authority.ReserveTopLevel(reservationRequest(t, singleFileArtifact(t), &reservationClaimer{}))
 	if !errors.Is(err, ErrRetainedRootChanged) {
@@ -132,24 +126,9 @@ func TestBoundDestinationRejectsReplacedRootAndLiveOnlyRegistry(t *testing.T) {
 	}
 }
 
-func TestBindDestinationDowngradesOnlyCleanupOnBoundedNegativeProof(t *testing.T) {
-	for _, state := range []LiveCleanupBatchState{LiveCleanupBatchUnverifiable} {
-		platform := newDestinationPlatform()
-		authority := bindFakeDestination(t, platform, &destinationJournal{snapshot: LiveCleanupBatch{State: state}})
-		facts := authority.Binding().Capabilities()
-		if !facts.SafePublish().Supported() || !facts.OperationRecovery().Supported() ||
-			!facts.RangeRecovery().Supported() || facts.CrashCleanup().Supported() {
-			t.Fatalf("state=%v facts=%+v", state, facts)
-		}
-		if err := authority.Close(); err != nil {
-			t.Fatal(err)
-		}
-	}
-}
-
 func TestReserveSingleFileClaimsMetadataWhilePublicNameStaysAbsent(t *testing.T) {
 	platform := newDestinationPlatform()
-	authority := bindFakeDestination(t, platform, &destinationJournal{})
+	authority := bindFakeDestination(t, platform)
 	defer authority.Close()
 	claimer := &reservationClaimer{collisions: 2}
 	reserved, err := authority.ReserveTopLevel(reservationRequest(t, singleFileArtifact(t), claimer))
@@ -179,7 +158,7 @@ func TestReserveSingleFileClaimsMetadataWhilePublicNameStaysAbsent(t *testing.T)
 
 func TestTopLevelReservationsExposeOnlyFreshlyRevalidatedExecutionRoots(t *testing.T) {
 	platform := newDestinationPlatform()
-	authority := bindFakeDestination(t, platform, &destinationJournal{})
+	authority := bindFakeDestination(t, platform)
 	defer authority.Close()
 
 	single, err := authority.ReserveTopLevel(reservationRequest(t, singleFileArtifact(t), &reservationClaimer{}))
@@ -260,7 +239,7 @@ func TestReservationClaimSpecRejectsNonCanonicalCandidate(t *testing.T) {
 
 func TestReserveSingleFileRollsBackOccupiedClaimAndBoundsAttempts(t *testing.T) {
 	platform := newDestinationPlatform()
-	authority := bindFakeDestination(t, platform, &destinationJournal{})
+	authority := bindFakeDestination(t, platform)
 	defer authority.Close()
 	platform.root.entries["file.txt"] = &destinationNode{id: 50, file: &destinationFile{}}
 	claimer := &reservationClaimer{}
@@ -281,7 +260,7 @@ func TestReserveSingleFileRollsBackOccupiedClaimAndBoundsAttempts(t *testing.T) 
 
 func TestReserveRejectsContradictoryMetadataCollision(t *testing.T) {
 	platform := newDestinationPlatform()
-	authority := bindFakeDestination(t, platform, &destinationJournal{})
+	authority := bindFakeDestination(t, platform)
 	defer authority.Close()
 	claimer := &reservationClaimer{collisions: 1, collisionHandle: true}
 	if _, err := authority.ReserveTopLevel(reservationRequest(t, singleFileArtifact(t), claimer)); !errors.Is(err, ErrReservationIndeterminate) || len(claimer.claims) != 1 || !claimer.claims[0].closed {
@@ -291,7 +270,7 @@ func TestReserveRejectsContradictoryMetadataCollision(t *testing.T) {
 
 func TestReserveDirectoryCreatesOrdinaryRootAndReopensExactIdentity(t *testing.T) {
 	platform := newDestinationPlatform()
-	authority := bindFakeDestination(t, platform, &destinationJournal{})
+	authority := bindFakeDestination(t, platform)
 	defer authority.Close()
 	claimer := &reservationClaimer{}
 	reserved, err := authority.ReserveTopLevel(reservationRequest(t, resultRootArtifact(t), claimer))
@@ -334,7 +313,7 @@ func TestReserveDirectoryCreatesOrdinaryRootAndReopensExactIdentity(t *testing.T
 
 func TestReserveDirectoryReleasesProvenCollisionButPreservesIndeterminate(t *testing.T) {
 	platform := newDestinationPlatform()
-	authority := bindFakeDestination(t, platform, &destinationJournal{})
+	authority := bindFakeDestination(t, platform)
 	defer authority.Close()
 	platform.root.entries[receivecontract.DefaultResultRootName] = &destinationNode{
 		id: 40, identity: []byte("foreign"), entries: map[string]*destinationNode{},
@@ -355,41 +334,14 @@ func TestReserveDirectoryReleasesProvenCollisionButPreservesIndeterminate(t *tes
 	}
 }
 
-func TestPublicationAndCleanupStageRespectRecordCuts(t *testing.T) {
+func TestPublicationRespectsNoReplaceContract(t *testing.T) {
 	platform := newDestinationPlatform()
-	journal := &destinationJournal{}
-	authority := bindFakeDestination(t, platform, journal)
+	authority := bindFakeDestination(t, platform)
 	defer authority.Close()
 	source := &destinationFile{}
 	outcome, err := authority.PublishFileNoReplace(source, "result.bin")
 	if err != nil || outcome != outputcap.PublishNoReplaceCommitted {
 		t.Fatalf("publish outcome=%v err=%v", outcome, err)
-	}
-	ticket := cleanupTicket(t, checkpointmodel.LiveCleanupTicketCommitted, 1)
-	parent := destinationRootLiveStageParent(platform)
-	stage, created, err := authority.CreateLiveCleanupStage(context.Background(), parent, ticket)
-	if err != nil || stage == nil || created.State() != checkpointmodel.LiveCleanupStageCreated ||
-		journal.tickets[ticket.StageName()].State() != checkpointmodel.LiveCleanupStageCreated {
-		t.Fatalf("stage=%v created=%+v err=%v journal=%+v", stage, created, err, journal.tickets)
-	}
-	if err := authority.RemoveLiveCleanupStage(created, stage); err != nil {
-		t.Fatal(err)
-	}
-	if _, present := journal.tickets[ticket.StageName()]; present {
-		t.Fatalf("ticket still present: %+v", journal.tickets)
-	}
-	if _, present := authority.proof.(*destinationDirectory).node.entries[ticket.StageName()]; present {
-		t.Fatalf("cleanup stage still present")
-	}
-	_ = stage.Close()
-
-	platform.createStageErr = errDestinationFake
-	failed := cleanupTicket(t, checkpointmodel.LiveCleanupTicketCommitted, 2)
-	if _, _, err := authority.CreateLiveCleanupStage(context.Background(), parent, failed); !errors.Is(err, errDestinationFake) {
-		t.Fatalf("create failure=%v", err)
-	}
-	if recorded := journal.tickets[failed.StageName()]; recorded.State() != checkpointmodel.LiveCleanupTicketCommitted {
-		t.Fatalf("record-before-stage evidence=%+v", recorded)
 	}
 	platform.fileOutcome, platform.fileErr = outputcap.PublishNoReplaceCommitted, errDestinationFake
 	if outcome, err := authority.PublishFileNoReplace(source, "uncertain.bin"); outcome != outputcap.PublishNoReplaceIndeterminate || !errors.Is(err, ErrReservationIndeterminate) {
@@ -397,116 +349,31 @@ func TestPublicationAndCleanupStageRespectRecordCuts(t *testing.T) {
 	}
 }
 
-func TestLiveCleanupStageUsesExactParentAndReconcilesInterruptedCuts(t *testing.T) {
-	t.Run("exact nested parent", func(t *testing.T) {
-		platform := newDestinationPlatform()
-		journal := &destinationJournal{}
-		authority := bindFakeDestination(t, platform, journal)
-		defer authority.Close()
-
-		root := &destinationDirectory{platform: platform, node: platform.guardRoot}
-		nestedValue, err := root.CreateDirectory("nested", false)
-		if err != nil {
-			t.Fatal(err)
-		}
-		nested := nestedValue.(*destinationDirectory)
-		parent := &destinationLiveStageParent{directory: nested}
-		ticket := cleanupTicket(t, checkpointmodel.LiveCleanupTicketCommitted, 11)
-		stage, created, err := authority.CreateLiveCleanupStage(
-			context.Background(), parent, ticket,
-		)
-		if err != nil || parent.calls != 1 || platform.stageParent != nested.node || stage == nil {
-			t.Fatalf("nested stage = (calls %d parent %p want %p stage %T, %v)",
-				parent.calls, platform.stageParent, nested.node, stage, err)
-		}
-		if err := authority.RemoveLiveCleanupStage(created, stage); err != nil {
-			t.Fatal(err)
-		}
-		_ = stage.Close()
-		_ = nested.Close()
-	})
-
-	for name, configure := range map[string]func(*destinationLiveStageParent, error){
-		"record before native create": func(parent *destinationLiveStageParent, crash error) {
-			parent.before = crash
-		},
-		"native create before reducer promotion": func(parent *destinationLiveStageParent, crash error) {
-			parent.after = crash
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			platform := newDestinationPlatform()
-			journal := &destinationJournal{}
-			authority := bindFakeDestination(t, platform, journal)
-			defer authority.Close()
-			parent := destinationRootLiveStageParent(platform)
-			crash := errors.New("simulated process cut")
-			configure(parent, crash)
-			ticket := cleanupTicket(t, checkpointmodel.LiveCleanupTicketCommitted, 12)
-
-			stage, _, err := authority.CreateLiveCleanupStage(
-				context.Background(), parent, ticket,
-			)
-			if stage != nil || !errors.Is(err, crash) ||
-				journal.tickets[ticket.StageName()].State() != checkpointmodel.LiveCleanupTicketCommitted {
-				t.Fatalf("interrupted create = (stage %T ticket %+v, %v)",
-					stage, journal.tickets[ticket.StageName()], err)
-			}
-			journal.snapshot = LiveCleanupBatch{
-				State: LiveCleanupBatchComplete, Tickets: []checkpointmodel.LiveCleanupTicket{ticket},
-			}
-			capabilities, _, err := reconcileLiveCleanup(
-				journal, authority.proof, platform.capabilities, platform.profile,
-			)
-			if err != nil || !capabilities.CrashCleanup().Supported() {
-				t.Fatalf("interrupted create reconciliation = (%+v, %v)", capabilities, err)
-			}
-			if _, present := journal.tickets[ticket.StageName()]; present {
-				t.Fatal("reconciliation retained an owned crash ticket")
-			}
-			if kind, _, err := authority.proof.ClassifyExactEntry(ticket.StageName()); err != nil || kind != outputcap.EntryAbsent {
-				t.Fatalf("reconciliation stage = (%d, %v)", kind, err)
-			}
-		})
+func mustDestinationCapabilities(
+	t *testing.T,
+	safePublish outputcap.CapabilityEvidence,
+	operationRecovery outputcap.CapabilityEvidence,
+) outputcap.DestinationCapabilities {
+	t.Helper()
+	capabilities, err := outputcap.NewDestinationCapabilities(safePublish, operationRecovery)
+	if err != nil {
+		t.Fatal(err)
 	}
+	return capabilities
 }
 
 func bindFakeDestination(
 	t *testing.T,
 	platform outputcap.Platform,
-	journal *destinationJournal,
 ) *BoundDestination {
 	t.Helper()
-	if journal.snapshot.State == 0 {
-		journal.snapshot.State = LiveCleanupBatchComplete
-	}
 	authority, err := BindDestination(BindConfig{
 		Platform: platform, DisplayPath: filepath.Clean(t.TempDir()),
-		OpenLiveCleanupJournal: fakeJournalOpener(journal),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return authority
-}
-
-func fakeJournalOpener(journal LiveCleanupJournal) LiveCleanupJournalOpener {
-	return func(control outputcap.Directory) (LiveCleanupJournalHandle, error) {
-		kind, exact, err := control.ClassifyExactEntry(checkpointmodel.LiveCleanupNamespaceV1)
-		if err != nil || !exact {
-			return LiveCleanupJournalHandle{}, errors.Join(errDestinationFake, err)
-		}
-		if kind == outputcap.EntryAbsent {
-			proof, createErr := control.CreateDirectory(checkpointmodel.LiveCleanupNamespaceV1, true)
-			if createErr != nil {
-				return LiveCleanupJournalHandle{}, createErr
-			}
-			if syncErr := errors.Join(proof.Sync(), control.Sync(), proof.Close()); syncErr != nil {
-				return LiveCleanupJournalHandle{}, syncErr
-			}
-		}
-		return NewLiveCleanupJournalHandle(journal)
-	}
 }
 
 func reservationRequest(

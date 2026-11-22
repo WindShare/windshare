@@ -3,15 +3,11 @@ package outputruntime
 import (
 	"context"
 	"errors"
-	"io/fs"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
-	"github.com/windshare/windshare/osfs/internal/checkpointstore"
 	"github.com/windshare/windshare/osfs/internal/outputcap"
 	"github.com/windshare/windshare/osfs/internal/resumeauthority"
 )
@@ -35,39 +31,6 @@ func TestNativeResumeRepositoryRejectsInvalidAndCancelledBoundaries(t *testing.T
 	}
 	if _, err := repository.Acquire(context.Background(), receivecontract.OperationID{}); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
 		t.Fatalf("zero acquire = %v", err)
-	}
-}
-
-func TestNativeResumeInventoryDoesNotCreateRegistryForLiveOnlyDestination(t *testing.T) {
-	root := newRuntimeTestRootSpec(t).path
-	factory := func(path string, create bool) (outputcap.Platform, error) {
-		base, err := openOutputRuntimeTestPlatform(path, create)
-		if err != nil {
-			return nil, err
-		}
-		return &liveOnlyRuntimePlatform{Platform: base}, nil
-	}
-	authority, err := New(Config{RootPath: root, PlatformFactory: factory})
-	if err != nil {
-		t.Fatal(err)
-	}
-	mode, err := authority.BindDestination(context.Background())
-	if err != nil || !mode.LiveOnly() {
-		t.Fatalf("live bind = %+v, %v", mode, err)
-	}
-	if err := authority.Close(); err != nil {
-		t.Fatal(err)
-	}
-	repository, _ := NewNativeResumeRepository(root, factory, nil)
-	page, err := repository.Page(context.Background(), resumeauthority.PageCursor{}, 1)
-	if err != nil || len(page.Headers()) != 0 {
-		t.Fatalf("live page = %d, %v", len(page.Headers()), err)
-	}
-	if _, err := os.Stat(filepath.Join(
-		root, checkpointstore.ControlDirectory,
-		checkpointstore.OrdinaryRegistryDirectoryV1,
-	)); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("resume inventory created ordinary registry: %v", err)
 	}
 }
 

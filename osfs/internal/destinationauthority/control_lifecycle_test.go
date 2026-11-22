@@ -2,11 +2,9 @@ package destinationauthority
 
 import (
 	"bytes"
-	"errors"
 	"path/filepath"
 	"testing"
 
-	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/osfs/internal/outputcap"
 )
 
@@ -90,13 +88,11 @@ func bindRecyclingDestination(
 	recycler PrivateStateRecycler,
 ) *BoundDestination {
 	t.Helper()
-	journal := &destinationJournal{snapshot: LiveCleanupBatch{State: LiveCleanupBatchComplete}}
 	authority, err := BindDestination(BindConfig{
-		Platform:               platform,
-		DisplayPath:            filepath.Clean(t.TempDir()),
-		OpenLiveCleanupJournal: fakeJournalOpener(journal),
-		RecyclePrivateState:    recycler,
-		ControlUseNonceSource:  bytes.NewReader(bytes.Repeat([]byte{nonce}, controlParticipantNonceBytes)),
+		Platform:              platform,
+		DisplayPath:           filepath.Clean(t.TempDir()),
+		RecyclePrivateState:   recycler,
+		ControlUseNonceSource: bytes.NewReader(bytes.Repeat([]byte{nonce}, controlParticipantNonceBytes)),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -104,28 +100,6 @@ func bindRecyclingDestination(
 	return authority
 }
 
-func recycleFakePrivateState(control outputcap.Directory) (bool, error) {
-	kind, exact, err := control.ClassifyExactEntry(checkpointmodel.LiveCleanupNamespaceV1)
-	if err != nil || !exact {
-		return false, err
-	}
-	if kind == outputcap.EntryAbsent {
-		return true, nil
-	}
-	if kind != outputcap.EntryDirectory {
-		return false, nil
-	}
-	proof, err := openExactPrivateDirectory(control, checkpointmodel.LiveCleanupNamespaceV1)
-	if err != nil {
-		return false, err
-	}
-	names, namesErr := proof.Names(1)
-	if namesErr != nil || len(names) != 0 {
-		return false, errors.Join(namesErr, proof.Close())
-	}
-	removeErr := control.RemoveDirectory(checkpointmodel.LiveCleanupNamespaceV1, proof)
-	if removeErr == nil {
-		removeErr = control.Sync()
-	}
-	return removeErr == nil, errors.Join(removeErr, proof.Close())
+func recycleFakePrivateState(outputcap.Directory) (bool, error) {
+	return true, nil
 }

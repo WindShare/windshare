@@ -13,25 +13,20 @@ import (
 	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/osfs/internal/checkpointstore"
 	"github.com/windshare/windshare/osfs/internal/destinationauthority"
-	"github.com/windshare/windshare/osfs/internal/fileexecution"
 	"github.com/windshare/windshare/osfs/internal/namestore"
-	"github.com/windshare/windshare/osfs/internal/outputcap"
 	"github.com/windshare/windshare/osfs/internal/outputnames"
 )
 
 type Operation struct {
 	authority    *Authority
 	key          checkpointmodel.ActiveOperationKey
-	mode         outputcap.ExecutionMode
 	intent       transfer.ReceiveIntent
 	topLevel     *destinationauthority.TopLevelReservation
 	claim        destinationauthority.ReservationClaim
 	lease        *checkpointstore.OperationRegistryLease
-	volatile     *volatileReservationClaimer
 	reopened     bool
 	opened       bool
 	closed       bool
-	liveFiles    *fileexecution.LiveFiles
 	names        *outputnames.Mapper
 	nameStore    *namestore.Store
 	nameReportMu sync.Mutex
@@ -45,13 +40,6 @@ func (operation *Operation) ReceiveIntent() (transfer.ReceiveIntent, bool) {
 	return operation.intent, true
 }
 
-func (operation *Operation) ExecutionMode() ExecutionMode {
-	if operation == nil || operation.closed {
-		return ExecutionMode{}
-	}
-	return ExecutionMode{mode: operation.mode}
-}
-
 func (operation *Operation) close() error {
 	if operation == nil || operation.closed {
 		return nil
@@ -60,10 +48,6 @@ func (operation *Operation) close() error {
 	// The public capability closes before releasing operation/name ownership, so
 	// another admission cannot observe a half-owned operation.
 	var err error
-	if operation.liveFiles != nil {
-		err = operation.liveFiles.Close()
-		operation.liveFiles = nil
-	}
 	if operation.topLevel != nil {
 		err = errors.Join(err, operation.topLevel.Close())
 		operation.topLevel = nil
@@ -71,10 +55,6 @@ func (operation *Operation) close() error {
 	if operation.lease != nil {
 		err = errors.Join(err, operation.lease.Close())
 		operation.lease = nil
-	}
-	if operation.volatile != nil {
-		err = errors.Join(err, operation.volatile.Close())
-		operation.volatile = nil
 	}
 	return err
 }
@@ -86,7 +66,16 @@ func (authority *Authority) LookupActive(
 	return authority.SelectOperation(ctx, selection, receivecontract.AutomaticOperation())
 }
 
-func (authority *Authority) SelectOperation(ctx context.Context, selection transfer.SelectionSpec, selector receivecontract.OperationSelection) (ActiveLookup, error) {
+func (authority *Authority) SelectOperation(
+	ctx context.Context,
+	selection transfer.SelectionSpec,
+	selector receivecontract.OperationSelection,
+) (result ActiveLookup, resultErr error) {
+	defer func() {
+		if resultErr != nil && !errors.Is(resultErr, ErrShareStopped) {
+			resultErr = DiagnoseFailure(FailureLookup, resultErr)
+		}
+	}()
 	if authority == nil || ctx == nil || selection.IsZero() || !selector.Valid() {
 		return ActiveLookup{}, transfer.ErrInvalidOutputBinding
 	}
@@ -96,7 +85,7 @@ func (authority *Authority) SelectOperation(ctx context.Context, selection trans
 	authority.mu.Lock()
 	defer authority.mu.Unlock()
 	if authority.closed || authority.stage != authorityStageBound ||
-		authority.destination == nil || !authority.binding.Valid() || !authority.mode.Valid() {
+		authority.destination == nil || !authority.binding.Valid() || authority.registry == nil {
 		return ActiveLookup{}, transfer.ErrInvalidOutputBinding
 	}
 	key, err := checkpointmodel.NewActiveOperationKeyV1(selection.Digest(), authority.binding.AuthorityRef())
@@ -111,12 +100,6 @@ func (authority *Authority) SelectOperation(ctx context.Context, selection trans
 		}
 		key = checkpointmodel.IsolatedOperationKey(operationID)
 	}
-	if authority.mode == outputcap.ExecutionLiveOnly {
-		return authority.selectLiveOperationLocked(selection, selector, key, operationID)
-	}
-	if authority.mode != outputcap.ExecutionResumable || authority.registry == nil {
-		return ActiveLookup{}, transfer.ErrInvalidOutputBinding
-	}
 	var activeAdmission checkpointstore.ActiveAdmission
 	var registryLookup checkpointstore.ActiveLookup
 	if selector.Kind() == receivecontract.OperationByID {
@@ -126,8 +109,8 @@ func (authority *Authority) SelectOperation(ctx context.Context, selection trans
 		activeAdmission, registryLookup, err = authority.registry.BeginActive(key)
 	}
 	if err != nil {
-		return ActiveLookup{}, diagnoseFilesystemOutputFailure(
-			FilesystemOutputFailureActiveLookup,
+		return ActiveLookup{}, DiagnoseFailure(
+			FailureLookup,
 			checkpointRuntimeError(ctx, "begin active ordinary operation", err),
 		)
 	}
@@ -135,89 +118,55 @@ func (authority *Authority) SelectOperation(ctx context.Context, selection trans
 	case checkpointstore.ActiveLookupSelectionMismatch:
 		authority.stage = authorityStageLookupStopped
 		authority.traceSelectedOperationMismatch(registryLookup.Record(), registryLookup.Intent())
-		return ActiveLookup{authority: authority, kind: ActiveLookupNotFound}, nil
+		return ActiveLookup{authority: authority, kind: LookupNotFound}, nil
 	case checkpointstore.ActiveLookupNone:
 		if selector.Kind() == receivecontract.OperationByID {
 			authority.stage = authorityStageLookupStopped
-			return ActiveLookup{authority: authority, kind: ActiveLookupNotFound}, nil
+			return ActiveLookup{authority: authority, kind: LookupNotFound}, nil
 		}
 		admission := &heldAdmission{
 			key: key, selection: selection, durable: &activeAdmission, operationID: operationID,
 		}
 		authority.admission, authority.stage = admission, authorityStageLookupHeld
-		return ActiveLookup{authority: authority, kind: ActiveLookupCreateReady, admission: admission}, nil
+		return ActiveLookup{authority: authority, kind: LookupCreateReady, admission: admission}, nil
 	case checkpointstore.ActiveLookupReopenable:
-		operation, stateReason, err := authority.reopenOperationLocked(ctx, selection, key, &registryLookup)
+		operation, attention, err := authority.reopenOperationLocked(ctx, selection, key, &registryLookup)
 		if err != nil {
-			return ActiveLookup{}, diagnoseFilesystemOutputFailure(
-				FilesystemOutputFailureOperationAcquisition, err,
-			)
+			return ActiveLookup{}, DiagnoseFailure(FailureOpen, err)
 		}
-		if stateReason != 0 {
+		if attention != AttentionNone {
 			authority.stage = authorityStageLookupStopped
 			return ActiveLookup{
-				authority: authority, kind: ActiveLookupNeedsAttention, stateReason: stateReason,
+				authority: authority, kind: LookupNeedsAttention, attention: attention,
 			}, nil
 		}
 		authority.operation, authority.stage = operation, authorityStageOperationReady
-		return ActiveLookup{authority: authority, kind: ActiveLookupReopened, operation: operation}, nil
+		return ActiveLookup{authority: authority, kind: LookupReopened, operation: operation}, nil
 	case checkpointstore.ActiveLookupShareStopped:
 		authority.stage = authorityStageLookupStopped
 		intent := registryLookup.Intent()
 		if intent.IsZero() || !sameSelection(intent.SelectionSpec(), selection) {
 			return ActiveLookup{}, transfer.ErrInvalidOutputBinding
 		}
-		return ActiveLookup{}, ErrOutputShareStopped
+		return ActiveLookup{}, ErrShareStopped
 	case checkpointstore.ActiveLookupAlreadyRunning:
 		authority.stage = authorityStageLookupStopped
-		return ActiveLookup{authority: authority, kind: ActiveLookupAlreadyRunning}, nil
+		return ActiveLookup{authority: authority, kind: LookupAlreadyRunning}, nil
 	case checkpointstore.ActiveLookupNeedsAttention:
-		reason := filesystemOutputStateReason(registryLookup.Record().ClosedReason())
-		if reason == 0 || reason == FilesystemOutputStateReasonNone {
-			return ActiveLookup{}, diagnoseFilesystemOutputFailure(
-				FilesystemOutputFailureActiveLookup, transfer.ErrInvalidOutputBinding,
-			)
+		attention := attentionReasonFromClosed(registryLookup.Record().ClosedReason())
+		if !attention.Valid() {
+			return ActiveLookup{}, DiagnoseFailure(FailureLookup, transfer.ErrInvalidOutputBinding)
 		}
 		authority.stage = authorityStageLookupStopped
 		return ActiveLookup{
-			authority: authority, kind: ActiveLookupNeedsAttention, stateReason: reason,
+			authority: authority, kind: LookupNeedsAttention, attention: attention,
 		}, nil
 	case checkpointstore.ActiveLookupAmbiguous:
 		authority.stage = authorityStageLookupStopped
-		return ActiveLookup{authority: authority, kind: ActiveLookupAmbiguous}, nil
+		return ActiveLookup{authority: authority, kind: LookupAmbiguous}, nil
 	default:
 		return ActiveLookup{}, transfer.ErrInvalidOutputBinding
 	}
-}
-
-func (authority *Authority) selectLiveOperationLocked(selection transfer.SelectionSpec, selector receivecontract.OperationSelection, key checkpointmodel.ActiveOperationKey, operationID receivecontract.OperationID) (ActiveLookup, error) {
-	var (
-		blocked bool
-		err     error
-	)
-	if selector.Kind() == receivecontract.OperationByID {
-		blocked, err = authority.retainedOperationBlocked(selection, selector.ID())
-	} else {
-		blocked, err = authority.retainedSelectionBlocked(selection)
-	}
-	if err != nil {
-		return ActiveLookup{}, err
-	}
-	if blocked {
-		authority.stage = authorityStageLookupStopped
-		return ActiveLookup{authority: authority, kind: ActiveLookupNeedsAttention, stateReason: FilesystemOutputStateRecoveryUnavailable}, nil
-	}
-	if selector.Kind() == receivecontract.OperationByID {
-		authority.stage = authorityStageLookupStopped
-		return ActiveLookup{authority: authority, kind: ActiveLookupNotFound}, nil
-	}
-	claimer, err := newVolatileReservationClaimer(authority.binding.AuthorityRef())
-	if err != nil {
-		return ActiveLookup{}, err
-	}
-	admission := &heldAdmission{key: key, selection: selection, volatile: claimer, operationID: operationID}
-	authority.admission, authority.stage = admission, authorityStageLookupHeld
-	return ActiveLookup{authority: authority, kind: ActiveLookupCreateReady, admission: admission}, nil
 }
 
 func (authority *Authority) reopenOperationLocked(
@@ -225,10 +174,10 @@ func (authority *Authority) reopenOperationLocked(
 	selection transfer.SelectionSpec,
 	key checkpointmodel.ActiveOperationKey,
 	lookup *checkpointstore.ActiveLookup,
-) (*Operation, FilesystemOutputStateReason, error) {
+) (*Operation, AttentionReason, error) {
 	lease := lookup.TakeLease()
 	if lease == nil {
-		return nil, 0, transfer.ErrInvalidOutputBinding
+		return nil, AttentionNone, transfer.ErrInvalidOutputBinding
 	}
 	record := lookup.Record()
 	intent := lookup.Intent()
@@ -245,7 +194,7 @@ func (authority *Authority) reopenOperationLocked(
 	// A selection mismatch here is a binding or index mismatch, not evidence
 	// that the retained operation lost ownership of its destination.
 	if err == nil && !sameSelection(intent.SelectionSpec(), selection) {
-		return nil, 0, errors.Join(transfer.ErrInvalidOutputBinding, lease.Close())
+		return nil, AttentionNone, errors.Join(transfer.ErrInvalidOutputBinding, lease.Close())
 	}
 	if err != nil || !direct ||
 		!validNamedReservation(reservation, intent.ArtifactSpec(), authority.binding) ||
@@ -254,9 +203,9 @@ func (authority *Authority) reopenOperationLocked(
 		attentionErr := requireOperationAttention(lease, checkpointmodel.OrdinaryReasonOperationOwnershipUnknown)
 		closeErr := lease.Close()
 		if attentionErr != nil || closeErr != nil {
-			return nil, 0, checkpointRuntimeError(ctx, "quarantine invalid ordinary operation", errors.Join(err, attentionErr, closeErr))
+			return nil, AttentionNone, checkpointRuntimeError(ctx, "quarantine invalid ordinary operation", errors.Join(err, attentionErr, closeErr))
 		}
-		return nil, FilesystemOutputStateOperationOwnershipUnknown, nil
+		return nil, AttentionOperation, nil
 	}
 	topLevel, err := authority.destination.ReopenTopLevel(destinationauthority.ExpectedReservation{
 		Reservation: reservation, PersistentIdentityClaim: proof.PersistentIdentity(),
@@ -266,21 +215,21 @@ func (authority *Authority) reopenOperationLocked(
 		attentionErr := requireOperationAttention(lease, checkpointmodel.OrdinaryReasonDestinationOwnershipUnknown)
 		closeErr := lease.Close()
 		if attentionErr != nil || closeErr != nil {
-			return nil, 0, errors.Join(
+			return nil, AttentionNone, errors.Join(
 				runtimeOutputError(ctx, transferfault.OutputOwnership, "reopen exact top-level reservation", err),
 				checkpointRuntimeError(ctx, "persist reopen attention", errors.Join(attentionErr, closeErr)),
 			)
 		}
-		return nil, FilesystemOutputStateDestinationOwnershipUnknown, nil
+		return nil, AttentionDestination, nil
 	}
 	operation := &Operation{
-		authority: authority, key: key, mode: authority.mode, intent: intent,
+		authority: authority, key: key, intent: intent,
 		topLevel: topLevel, claim: proof.Claim(), lease: lease, reopened: true,
 	}
 	if err := operation.validate(authority); err != nil {
-		return nil, 0, errors.Join(err, topLevel.Close(), lease.Close())
+		return nil, AttentionNone, errors.Join(err, topLevel.Close(), lease.Close())
 	}
-	return operation, 0, nil
+	return operation, AttentionNone, nil
 }
 
 func requireOperationAttention(
@@ -290,7 +239,11 @@ func requireOperationAttention(
 	return transitionOutputOperation(lease, checkpointmodel.OrdinaryLifecycleRequireAttention, reason)
 }
 
-func transitionOutputOperation(lease *checkpointstore.OperationRegistryLease, event checkpointmodel.OrdinaryLifecycleEvent, reason checkpointmodel.OrdinaryClosedReason) error {
+func transitionOutputOperation(
+	lease *checkpointstore.OperationRegistryLease,
+	event checkpointmodel.OrdinaryLifecycleEvent,
+	reason checkpointmodel.OrdinaryClosedReason,
+) error {
 	if lease == nil {
 		return transfer.ErrInvalidOutputBinding
 	}
@@ -317,7 +270,10 @@ func (authority *Authority) CreateOperation(
 	ctx context.Context,
 	lookup ActiveLookup,
 	artifact receivecontract.ArtifactSpec,
-) (*Operation, error) {
+) (_ *Operation, resultErr error) {
+	defer func() {
+		resultErr = DiagnoseFailure(FailureCreate, resultErr)
+	}()
 	if authority == nil || ctx == nil || artifact.IsZero() {
 		return nil, transfer.ErrInvalidOutputBinding
 	}
@@ -327,7 +283,7 @@ func (authority *Authority) CreateOperation(
 	authority.mu.Lock()
 	defer authority.mu.Unlock()
 	if authority.closed || authority.stage != authorityStageLookupHeld ||
-		lookup.authority != authority || lookup.kind != ActiveLookupCreateReady ||
+		lookup.authority != authority || lookup.kind != LookupCreateReady ||
 		lookup.admission == nil || lookup.admission != authority.admission ||
 		!validNamedArtifact(artifact) {
 		return nil, transfer.ErrInvalidOutputBinding
@@ -361,47 +317,33 @@ func (authority *Authority) CreateOperation(
 	plan, planErr := receivecontract.NewDirectTreePlan(artifact, reservation)
 	intent, intentErr := transfer.NewReceiveIntent(admission.selection, artifact, plan)
 	if planErr != nil || intentErr != nil {
-		err := authority.failReservedAdmissionLocked(ctx, topLevel, errors.Join(planErr, intentErr))
-		return nil, err
+		return nil, authority.failReservedAdmissionLocked(ctx, topLevel, errors.Join(planErr, intentErr))
 	}
 	claim := topLevel.MetadataClaim()
-	operationClaim := claim
-	var lease *checkpointstore.OperationRegistryLease
-	var volatile *volatileReservationClaimer
-	switch authority.mode {
-	case outputcap.ExecutionResumable:
-		if admission.durable == nil {
-			return nil, authority.failReservedAdmissionLocked(ctx, topLevel, transfer.ErrInvalidOutputBinding)
-		}
-		locator, locatorErr := checkpointmodel.NewReservationClaimLocator(
-			[sha256.Size]byte(claim.Token), claim.Generation+1,
-		)
-		record, recordErr := checkpointmodel.NewOrdinaryOperationRecord(checkpointmodel.OrdinaryOperationRecordSpec{
-			ActiveKey: admission.key, Intent: intent, ReservationClaim: locator,
-			LifecycleGeneration: 1, Lifecycle: checkpointmodel.OrdinaryOperationActive,
-			Lease: checkpointmodel.OrdinaryLeaseHeld, ClosedReason: checkpointmodel.OrdinaryReasonNone,
-		})
-		if locatorErr != nil || recordErr != nil {
-			return nil, authority.failCommittedAdmissionLocked(
-				ctx, topLevel, errors.Join(locatorErr, recordErr),
-			)
-		}
-		lease, err = admission.durable.Create(record, claim)
-		if err != nil {
-			return nil, authority.failCommittedAdmissionLocked(ctx, topLevel, err)
-		}
-		operationClaim = destinationauthority.ReservationClaim{
-			Token: claim.Token, Generation: locator.Generation(),
-		}
-	case outputcap.ExecutionLiveOnly:
-		volatile = admission.volatile
-		admission.volatile = nil
-	default:
+	if admission.durable == nil {
 		return nil, authority.failReservedAdmissionLocked(ctx, topLevel, transfer.ErrInvalidOutputBinding)
 	}
+	locator, locatorErr := checkpointmodel.NewReservationClaimLocator(
+		[sha256.Size]byte(claim.Token), claim.Generation+1,
+	)
+	record, recordErr := checkpointmodel.NewOrdinaryOperationRecord(checkpointmodel.OrdinaryOperationRecordSpec{
+		ActiveKey: admission.key, Intent: intent, ReservationClaim: locator,
+		LifecycleGeneration: 1, Lifecycle: checkpointmodel.OrdinaryOperationActive,
+		Lease: checkpointmodel.OrdinaryLeaseHeld, ClosedReason: checkpointmodel.OrdinaryReasonNone,
+	})
+	if locatorErr != nil || recordErr != nil {
+		return nil, authority.failCommittedAdmissionLocked(ctx, topLevel, errors.Join(locatorErr, recordErr))
+	}
+	lease, err := admission.durable.Create(record, claim)
+	if err != nil {
+		return nil, authority.failCommittedAdmissionLocked(ctx, topLevel, err)
+	}
+	operationClaim := destinationauthority.ReservationClaim{
+		Token: claim.Token, Generation: locator.Generation(),
+	}
 	operation := &Operation{
-		authority: authority, key: admission.key, mode: authority.mode, intent: intent,
-		topLevel: topLevel, claim: operationClaim, lease: lease, volatile: volatile,
+		authority: authority, key: admission.key, intent: intent,
+		topLevel: topLevel, claim: operationClaim, lease: lease,
 	}
 	if err := operation.validate(authority); err != nil {
 		closeErr := operation.close()
@@ -471,9 +413,6 @@ func (authority *Authority) failReservedAdmissionLocked(
 ) error {
 	admission := authority.admission
 	var stateErr, closeErr error
-	// Live-only has no durable candidate and can release its volatile claim while
-	// its result-root capability is still exact. A resumable reservation is never
-	// cleanly rolled back here because name binding already crossed that proof cut.
 	if admission != nil && admission.durable != nil {
 		stateErr = admission.durable.RequireAttention()
 	}
@@ -491,7 +430,12 @@ func (authority *Authority) failReservedAdmissionLocked(
 func (authority *Authority) OpenOperation(
 	ctx context.Context,
 	operation *Operation,
-) (transfer.DirectTreeSession, error) {
+) (_ transfer.DirectTreeSession, resultErr error) {
+	defer func() {
+		if resultErr != nil && !errors.Is(resultErr, ErrShareStopped) {
+			resultErr = DiagnoseFailure(FailureOpen, resultErr)
+		}
+	}()
 	if authority == nil || ctx == nil || operation == nil {
 		return nil, transfer.ErrInvalidOutputBinding
 	}
@@ -506,7 +450,7 @@ func (authority *Authority) OpenOperation(
 	}
 	if operation.lease != nil && operation.lease.Record().Lifecycle() == checkpointmodel.OrdinaryOperationShareStopped {
 		authority.mu.Unlock()
-		return nil, ErrOutputShareStopped
+		return nil, ErrShareStopped
 	}
 	if err := operation.validate(authority); err != nil {
 		var stateErr error
@@ -533,13 +477,13 @@ func (authority *Authority) OpenOperation(
 	}
 	operation.opened = true
 	authority.mu.Unlock()
-	authority.trace(FilesystemOutputTrace{
+	authority.trace(Trace{
 		Operation:           TraceRuntimeDecision,
 		ReceiveIntentDigest: operation.intent.Digest(),
 		ReceiveOperationID:  operation.intent.OperationID(),
-		RuntimeComponent:    FilesystemOutputRuntimeSession,
-		RuntimeOperation:    FilesystemOutputRuntimeAdmitDestination,
-		RuntimeDecision:     FilesystemOutputRuntimeAdmitted,
+		RuntimeComponent:    RuntimeSession,
+		RuntimeOperation:    RuntimeAdmitDestination,
+		RuntimeDecision:     RuntimeAdmitted,
 	})
 
 	session, err := authority.openNamedOperation(ctx, operation)
@@ -556,8 +500,8 @@ func (authority *Authority) OpenOperation(
 
 func (operation *Operation) validate(authority *Authority) error {
 	if operation == nil || operation.closed || authority == nil || operation.authority != authority ||
-		operation.key.IsZero() || !operation.mode.Valid() || operation.mode != authority.mode ||
-		operation.intent.IsZero() || operation.topLevel == nil || !operation.claim.Valid() {
+		operation.key.IsZero() || operation.intent.IsZero() || operation.topLevel == nil ||
+		!operation.claim.Valid() || operation.lease == nil {
 		return transfer.ErrInvalidOutputBinding
 	}
 	reservation, direct := operation.intent.MaterializationPlan().DestinationReservation()
@@ -573,32 +517,19 @@ func (operation *Operation) validate(authority *Authority) error {
 	if err != nil || key != operation.key && checkpointmodel.IsolatedOperationKey(operation.intent.OperationID()) != operation.key {
 		return errors.Join(transfer.ErrInvalidOutputBinding, err)
 	}
-	switch operation.mode {
-	case outputcap.ExecutionResumable:
-		// A new reservation retains its reservation-bound claim while the registry
-		// advances the durable proof once; an exact reopen already carries that
-		// operation-bound generation. No caller may supply any other relationship.
-		if topClaim.Generation != operation.claim.Generation &&
-			topClaim.Generation+1 != operation.claim.Generation {
-			return transfer.ErrInvalidOutputBinding
-		}
-		if operation.lease == nil {
-			return transfer.ErrInvalidOutputBinding
-		}
-		record := operation.lease.Record()
-		if !record.Valid() ||
-			record.ActiveOperationKey() != operation.key ||
-			record.ReceiveIntentDigest() != operation.intent.Digest() ||
-			record.ReservationClaim().Token() != [sha256.Size]byte(operation.claim.Token) ||
-			record.ReservationClaim().Generation() != operation.claim.Generation {
-			return transfer.ErrInvalidOutputBinding
-		}
-	case outputcap.ExecutionLiveOnly:
-		if topClaim != operation.claim ||
-			operation.volatile == nil || operation.volatile.closed || operation.lease != nil {
-			return transfer.ErrInvalidOutputBinding
-		}
-	default:
+	// A new reservation retains its reservation-bound claim while the registry
+	// advances the durable proof once; an exact reopen already carries that
+	// operation-bound generation. No caller may supply any other relationship.
+	if topClaim.Generation != operation.claim.Generation &&
+		topClaim.Generation+1 != operation.claim.Generation {
+		return transfer.ErrInvalidOutputBinding
+	}
+	record := operation.lease.Record()
+	if !record.Valid() ||
+		record.ActiveOperationKey() != operation.key ||
+		record.ReceiveIntentDigest() != operation.intent.Digest() ||
+		record.ReservationClaim().Token() != [sha256.Size]byte(operation.claim.Token) ||
+		record.ReservationClaim().Generation() != operation.claim.Generation {
 		return transfer.ErrInvalidOutputBinding
 	}
 	return nil

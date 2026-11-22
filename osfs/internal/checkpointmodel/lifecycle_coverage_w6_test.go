@@ -28,7 +28,7 @@ func TestCheckpointAuthorityCodecsRejectEveryFreshProcessPrefix(t *testing.T) {
 	}
 
 	ownership, err := NewOwnership(OwnershipSpec{
-		Materializer: MaterializerNativeTree, IdentityScheme: IdentitySchemeWindowsObjectIDV1,
+		Materializer: MaterializerNativeTree, IdentityScheme: IdentitySchemePortableWitnessV1,
 		AuthorityRef:        bytes.Repeat([]byte{0xf2}, 32),
 		RootOpenDisposition: CallerProvidedContainer,
 	})

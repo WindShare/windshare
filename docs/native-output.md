@@ -14,8 +14,6 @@ Scheduling uses accepted ranges. Restart-reusable progress includes only persist
 
 Source names are preserved when the destination accepts them. Names rejected by the destination or colliding with WindShare's private namespace at the saved root (`.windshare-output*` in the destination container, `.wsresume*` inside a result root) receive a stable compatible spelling, retaining usable extensions; saved mappings are reused on resume. Completion or discard exports `windshare-names-*.json` beside the result, recording original and saved paths before private mappings are removed. Ordinary names and collision suffixes need no mapping report.
 
-Live-only files release their stages on delivery. On supported roots, crash cleanup drains a bounded batch at each destination bind; a backlog does not disable cleanup. Unrecognized objects are preserved.
-
 Shared owners: `destinationauthority` (reservations), `outputruntime` (task lifetime), `outputsession` (attempt settlement), `fileexecution` (file lifecycle), `checkpointstore` (records), `outputnames`/`namestore` (destination spelling and recovery), and `resumeauthority` (inventory and discard). The production backend is `outputportable`; platform-specific files supply native primitives within that shared implementation.
 
 See [CLI recovery](cli.md#resume) and [validation](validation.md).

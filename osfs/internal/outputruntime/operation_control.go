@@ -10,8 +10,6 @@ import (
 	"github.com/windshare/windshare/osfs/internal/resumeauthority"
 )
 
-var ErrOutputShareStopped = errors.New("retained output belongs to a stopped share")
-
 func (operation *Operation) Idle() bool {
 	if operation == nil || operation.authority == nil {
 		return false
@@ -35,7 +33,7 @@ func (operation *Operation) RecordShareStopped(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if !operation.idleLocked() || operation.mode != outputcap.ExecutionResumable || operation.lease == nil {
+	if !operation.idleLocked() || operation.lease == nil {
 		return transfer.ErrInvalidOutputBinding
 	}
 	if operation.lease.Record().Lifecycle() == checkpointmodel.OrdinaryOperationShareStopped {
@@ -52,18 +50,8 @@ func (operation *Operation) Discard(ctx context.Context) error {
 		return err
 	}
 	authority := operation.authority
-	id, mode := operation.intent.OperationID(), operation.mode
+	id := operation.intent.OperationID()
 	operation.setNameReport(outputcap.CompatibleNameReport{})
-	if mode == outputcap.ExecutionLiveOnly {
-		if operation.names != nil && operation.nameStore != nil {
-			summary, err := operation.nameStore.Export(operation.names, namesRoot(operation.topLevel), authority.destination.WithPublicContainer)
-			if err != nil {
-				return err
-			}
-			operation.setNameReport(summary)
-		}
-		return authority.Close()
-	}
 	// End the live lease before the shared recovery workflow acquires the exact
 	// operation. It revalidates persisted identity before deleting private state.
 	if err := authority.Close(); err != nil {
@@ -73,6 +61,7 @@ func (operation *Operation) Discard(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	repository.diagnostics = authority.diagnostics
 	recovery, err := resumeauthority.New(repository)
 	if err != nil {
 		return err

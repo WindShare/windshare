@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/osfs/internal/checkpointstore"
 )
@@ -22,7 +23,7 @@ func pausedPortableFileAt(t *testing.T, root string, size uint64) (string, trans
 	t.Helper()
 	ctx := context.Background()
 	authority, operation, intent := openPublicOrdinaryOperation(t, root, 0x61)
-	session, err := authority.OpenOperation(ctx, operation)
+	session, err := operation.OpenDirectTree(ctx, intent)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,19 +122,20 @@ func TestPortablePublicationCrashReconcilesWithoutWritableStage(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			authority, err := NewFilesystemOutputAuthority(FilesystemOutputAuthorityConfig{RootPath: root})
+			authority, err := NewOutputAuthority(OutputConfig{RootPath: root})
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer authority.Close()
-			if _, err := authority.BindDestination(ctx); err != nil {
+			if err := authority.BindDestination(ctx); err != nil {
 				t.Fatal(err)
 			}
-			lookup, err := authority.LookupActive(ctx, intent.SelectionSpec())
-			if err != nil {
-				t.Fatal(err)
+			lookup, err := authority.SelectOperation(ctx, intent.SelectionSpec(), receivecontract.AutomaticOperation())
+			if err != nil || lookup.Kind() != OutputLookupReopened {
+				t.Fatalf("reopen lookup = (%v, %v)", lookup.Kind(), err)
 			}
-			session, err := authority.OpenOperation(ctx, lookup.Operation())
+			reopenedIntent, _ := lookup.Operation().ReceiveIntent()
+			session, err := lookup.Operation().OpenDirectTree(ctx, reopenedIntent)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -182,12 +184,9 @@ func TestPortableDiscardPreservesReplacedPartial(t *testing.T) {
 	if err := os.WriteFile(stage, []byte("external"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	recovery, err := NewFilesystemResumeStateAuthority(FilesystemResumeRoot{RootPath: root})
-	if err != nil {
-		t.Fatal(err)
-	}
-	result, err := recovery.Discard(ctx, intent.OperationID())
-	if err == nil && result.State() == ResumeOperationDiscarded {
+	recoveryAuthority := NewRecoveryAuthority(root)
+	result, err := recoveryAuthority.Discard(ctx, intent.OperationID())
+	if err == nil && result.State() == RecoveryOperationDiscarded {
 		t.Fatal("uncertain partial was declared discarded")
 	}
 	if actual, err := os.ReadFile(stage); err != nil || string(actual) != "external" {

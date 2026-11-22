@@ -27,7 +27,7 @@ func TestPortableReservationRenamesExistingNativeAlias(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer authority.Close()
-	if _, err := authority.BindDestination(ctx); err != nil {
+	if err := authority.BindDestination(ctx); err != nil {
 		t.Fatal(err)
 	}
 	selection := nativeReservationTestSelection(t, 0x31)

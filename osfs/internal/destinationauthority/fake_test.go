@@ -1,7 +1,6 @@
 package destinationauthority
 
 import (
-	"context"
 	"errors"
 	"io"
 	"io/fs"
@@ -11,7 +10,6 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
-	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/osfs/internal/outputcap"
 )
 
@@ -33,36 +31,30 @@ type destinationPlatform struct {
 	guardRoot    *destinationNode
 	nextID       uint64
 	capabilities outputcap.DestinationCapabilities
-	profile      checkpointmodel.LiveCleanupNativeProfile
 	guardCalls   int
 	capCalls     int
 	closeOrder   *[]string
 	closed       bool
 
+	bindIdentityErr  error
 	directoryOutcome outputcap.PublishNoReplaceOutcome
 	directoryErr     error
 	fileOutcome      outputcap.PublishNoReplaceOutcome
 	fileErr          error
-	createStageErr   error
-	stageParent      *destinationNode
 }
 
 func newDestinationPlatform() *destinationPlatform {
 	supported := outputcap.SupportedCapability()
-	capabilities, _ := outputcap.NewDestinationCapabilities(supported, supported, supported, supported)
+	capabilities, _ := outputcap.NewDestinationCapabilities(supported, supported)
 	root := &destinationNode{id: 1, identity: []byte("root-identity"), entries: map[string]*destinationNode{}}
 	return &destinationPlatform{
 		root: root, guardRoot: root, nextID: 2, capabilities: capabilities,
-		profile: checkpointmodel.LiveCleanupWindowsNTFSV1,
 	}
 }
 
 func (platform *destinationPlatform) DestinationCapabilities() (outputcap.DestinationCapabilities, error) {
 	platform.capCalls++
 	return platform.capabilities, nil
-}
-func (platform *destinationPlatform) LiveCleanupNativeProfile() checkpointmodel.LiveCleanupNativeProfile {
-	return platform.profile
 }
 func (platform *destinationPlatform) Root() outputcap.Directory {
 	return &destinationDirectory{platform: platform, node: platform.root}
@@ -78,7 +70,7 @@ func (*destinationPlatform) RootBinding() (outputcap.OutputRootBinding, error) {
 	return outputcap.OutputRootBinding{}, errDestinationFake
 }
 func (*destinationPlatform) IdentityScheme() outputcap.IdentitySchemeID {
-	return outputcap.IdentitySchemeWindowsObjectIDV1
+	return outputcap.IdentitySchemePortableWitnessV1
 }
 func (*destinationPlatform) Durability() transfer.DurabilityLevel {
 	return transfer.DurabilityProcessRestart
@@ -110,36 +102,6 @@ func (*destinationGuard) Close() error                    { return nil }
 type destinationDirectory struct {
 	platform *destinationPlatform
 	node     *destinationNode
-}
-
-type destinationLiveStageParent struct {
-	directory outputcap.Directory
-	before    error
-	after     error
-	calls     int
-}
-
-func (parent *destinationLiveStageParent) WithExactParent(
-	ctx context.Context,
-	operation func(outputcap.Directory) error,
-) error {
-	if parent == nil || ctx == nil || operation == nil || parent.directory == nil {
-		return errDestinationFake
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	parent.calls++
-	if parent.before != nil {
-		return parent.before
-	}
-	return errors.Join(operation(parent.directory), parent.after)
-}
-
-func destinationRootLiveStageParent(platform *destinationPlatform) *destinationLiveStageParent {
-	return &destinationLiveStageParent{
-		directory: &destinationDirectory{platform: platform, node: platform.guardRoot},
-	}
 }
 
 func (directory *destinationDirectory) Close() error {
@@ -345,31 +307,6 @@ func (directory *destinationDirectory) PublishFileNoReplace(outputcap.FileIdenti
 	}
 	return outputcap.PublishNoReplaceCommitted, directory.platform.fileErr
 }
-func (directory *destinationDirectory) CreateProcessStage(stage outputcap.Directory, name string, size int64) (outputcap.MutableFile, error) {
-	directory.platform.stageParent = directory.node
-	file, err := stage.CreateFile(name, false, size)
-	return file, errors.Join(err, directory.platform.createStageErr)
-}
-
-func (directory *destinationDirectory) CreateLiveCleanupStage(proof outputcap.Directory, ticket checkpointmodel.LiveCleanupTicket) error {
-	if directory.platform.createStageErr != nil {
-		return directory.platform.createStageErr
-	}
-	directory.platform.stageParent = directory.node
-	target := proof.(*destinationDirectory)
-	file := &destinationFile{size: ticket.ExactSize()}
-	target.node.entries[ticket.StageName()] = &destinationNode{id: directory.platform.nextID, file: file}
-	directory.platform.nextID++
-	return nil
-}
-func (directory *destinationDirectory) RemoveLiveCleanupStage(ticket checkpointmodel.LiveCleanupTicket, expected outputcap.FileIdentity) error {
-	node := directory.node.entries[ticket.StageName()]
-	if node == nil || node.file != expected {
-		return outputcap.ErrUnsafeNamespace
-	}
-	delete(directory.node.entries, ticket.StageName())
-	return nil
-}
 
 type destinationEntryReference struct {
 	node *destinationNode
@@ -424,52 +361,6 @@ func (lock *destinationLock) Close() error {
 	defer lock.platform.mu.Unlock()
 	lock.closed = true
 	lock.file.locked = false
-	return nil
-}
-
-type destinationJournal struct {
-	snapshot    LiveCleanupBatch
-	tickets     map[string]checkpointmodel.LiveCleanupTicket
-	closed      bool
-	order       *[]string
-	snapshotErr error
-	createErr   error
-	replaceErr  error
-	deleteErr   error
-}
-
-func (journal *destinationJournal) ReadBatch(int) (LiveCleanupBatch, error) {
-	return journal.snapshot, journal.snapshotErr
-}
-func (journal *destinationJournal) Create(ticket checkpointmodel.LiveCleanupTicket) error {
-	if journal.createErr != nil {
-		return journal.createErr
-	}
-	if journal.tickets == nil {
-		journal.tickets = map[string]checkpointmodel.LiveCleanupTicket{}
-	}
-	journal.tickets[ticket.StageName()] = ticket
-	return nil
-}
-func (journal *destinationJournal) Replace(previous, next checkpointmodel.LiveCleanupTicket) error {
-	if journal.replaceErr != nil {
-		return journal.replaceErr
-	}
-	journal.tickets[previous.StageName()] = next
-	return nil
-}
-func (journal *destinationJournal) Delete(ticket checkpointmodel.LiveCleanupTicket) error {
-	if journal.deleteErr != nil {
-		return journal.deleteErr
-	}
-	delete(journal.tickets, ticket.StageName())
-	return nil
-}
-func (journal *destinationJournal) Close() error {
-	journal.closed = true
-	if journal.order != nil {
-		*journal.order = append(*journal.order, "journal")
-	}
 	return nil
 }
 
@@ -536,6 +427,9 @@ func (closer orderedCloser) Close() error {
 }
 
 func (platform *destinationPlatform) BindDestinationIdentity(control outputcap.Directory) (outputcap.DestinationBindingID, error) {
+	if platform.bindIdentityErr != nil {
+		return outputcap.DestinationBindingID{}, platform.bindIdentityErr
+	}
 	rootClaim, err := platform.Root().(*destinationDirectory).PersistentDirectoryIdentityClaim()
 	if err != nil {
 		return outputcap.DestinationBindingID{}, err

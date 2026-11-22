@@ -123,7 +123,7 @@ func TestReservationValidationRejectsEveryUntrustedCoordinate(t *testing.T) {
 
 func TestReservationReducerRejectsContradictoryClaimCuts(t *testing.T) {
 	platform := newDestinationPlatform()
-	authority := bindFakeDestination(t, platform, &destinationJournal{})
+	authority := bindFakeDestination(t, platform)
 	defer authority.Close()
 	root := platform.Root()
 	binding := authority.Binding()
@@ -206,7 +206,7 @@ func TestReservationReducerRejectsContradictoryClaimCuts(t *testing.T) {
 
 func TestTopLevelExecutionGuardRevalidatesContainerAndResultIdentity(t *testing.T) {
 	platform := newDestinationPlatform()
-	authority := bindFakeDestination(t, platform, &destinationJournal{})
+	authority := bindFakeDestination(t, platform)
 	single, err := authority.ReserveTopLevel(
 		reservationRequest(t, singleFileArtifact(t), &reservationClaimer{}),
 	)
@@ -288,7 +288,7 @@ func TestPersistentIdentityAndExactOpenRejectWeakNativeEvidence(t *testing.T) {
 func requestReservation(t *testing.T, request ReservationRequest) receivecontract.DestinationReservation {
 	t.Helper()
 	platform := newDestinationPlatform()
-	authority := bindFakeDestination(t, platform, &destinationJournal{})
+	authority := bindFakeDestination(t, platform)
 	defer authority.Close()
 	reserved, err := authority.ReserveTopLevel(request)
 	if err != nil {

@@ -20,7 +20,7 @@ func (destination *fileDestination) WithPublication(
 	operation func(fileexecution.FilePublication) error,
 ) error {
 	object, err := checkpointmodel.ObjectIDFromBytes(expectation.ObjectIdentity().Bytes())
-	if err != nil || owned != nil && owned.ObjectID() != object || owned == nil && destination.objects == nil || operation == nil {
+	if err != nil || owned != nil && owned.ObjectID() != object || destination.objects == nil || operation == nil {
 		return directoryBoundaryError(ctx, errors.Join(ErrInvalidClaim, err))
 	}
 	_, err = destination.withParent(ctx, func(parent outputcap.Directory) (fileexecution.FinalObservation, error) {
@@ -67,16 +67,9 @@ func (publication *filePublication) Observe(ctx context.Context) (fileexecution.
 	if err := publication.validate(ctx); err != nil {
 		return fileexecution.FinalObservation{}, err
 	}
-	if publication.destination.objects != nil {
-		return publication.destination.observeFinalAtParent(
-			ctx, publication.parent, publication.object, publication.expectation,
-		)
-	}
-	source, ok := publication.owned.(nativeOwnedSource)
-	if !ok || source.NativeFile() == nil {
-		return fileexecution.FinalObservation{}, ErrInvalidClaim
-	}
-	return publication.destination.observeFinalAgainstFile(publication.parent, source.NativeFile(), publication.expectation)
+	return publication.destination.observeFinalAtParent(
+		ctx, publication.parent, publication.object, publication.expectation,
+	)
 }
 
 func (publication *filePublication) PublishNoReplace(ctx context.Context) (fileexecution.FinalObservation, error) {
@@ -95,14 +88,7 @@ func (publication *filePublication) PublishNoReplace(ctx context.Context) (filee
 		return fileexecution.ObserveFinal(fileexecution.FinalUnsafe)
 	}
 	if kind != outputcap.EntryAbsent {
-		if destination.objects != nil {
-			return destination.observeFinalAtParent(ctx, parent, object, expectation)
-		}
-		source, ok := owned.(nativeOwnedSource)
-		if !ok || source.NativeFile() == nil {
-			return fileexecution.FinalObservation{}, ErrInvalidClaim
-		}
-		return destination.observeFinalAgainstFile(parent, source.NativeFile(), expectation)
+		return destination.observeFinalAtParent(ctx, parent, object, expectation)
 	}
 	// A moved stage can disappear before its delivery receipt is recorded.
 	// Recovery may observe and sync that final without a writable source, but
@@ -110,31 +96,14 @@ func (publication *filePublication) PublishNoReplace(ctx context.Context) (filee
 	if owned == nil {
 		return fileexecution.FinalObservation{}, ErrInvalidClaim
 	}
-	var linked outputcap.ObservedFile
-	var publishErr error
-	if destination.objects != nil {
-		linked, publishErr = destination.objects.PublishOwnedNoReplace(
-			ctx, object, expectation.ExactSize(), parent, destination.leaf,
-		)
-	} else {
-		source, ok := owned.(nativeOwnedSource)
-		if !ok || source.NativeFile() == nil {
-			return fileexecution.FinalObservation{}, ErrInvalidClaim
-		}
-		linked, publishErr = parent.LinkFileNoReplace(source.NativeFile(), destination.leaf)
-	}
+	linked, publishErr := destination.objects.PublishOwnedNoReplace(
+		ctx, object, expectation.ExactSize(), parent, destination.leaf,
+	)
 	if publishErr == nil && linked == nil {
 		publishErr = outputcap.ErrUnsafeNamespace
 	}
 	linkedCloseErr := closeRuntimeFile(linked)
-	var observed fileexecution.FinalObservation
-	var observeErr error
-	if destination.objects != nil {
-		observed, observeErr = destination.observeFinalAtParent(ctx, parent, object, expectation)
-	} else {
-		source := owned.(nativeOwnedSource)
-		observed, observeErr = destination.observeFinalAgainstFile(parent, source.NativeFile(), expectation)
-	}
+	observed, observeErr := destination.observeFinalAtParent(ctx, parent, object, expectation)
 	return observed, errors.Join(publishErr, linkedCloseErr, observeErr)
 }
 

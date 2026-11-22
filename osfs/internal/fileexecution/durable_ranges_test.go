@@ -25,7 +25,7 @@ func TestConfirmedRangesRequireDataAndRecordDurability(t *testing.T) {
 			if !ok {
 				t.Fatal("no writable transaction")
 			}
-			strategy := transaction.(*PartialFileTransaction).strategy.(*resumablePartialFileTransaction)
+			strategy := transaction.(*PartialFileTransaction)
 			owned := strategy.file.(*memoryOwnedFile)
 			if err := transaction.WriteRange(ctx, 0, []byte("abcd")); err != nil {
 				t.Fatal(err)

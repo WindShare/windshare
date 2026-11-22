@@ -36,8 +36,8 @@ func TestNativeInterruptedCheckpointCleanupCompletesAndDiscards(t *testing.T) {
 				pauseOrdinaryResumeFixture(t, fixture)
 				candidate := interruptNativeCheckpointImage(t, root, shape)
 
-				var events []FilesystemOutputTrace
-				tracer := FilesystemOutputTraceFunc(func(event FilesystemOutputTrace) {
+				var events []Trace
+				tracer := TraceFunc(func(event Trace) {
 					events = append(events, event)
 				})
 				if action != "discard-partial" {

@@ -15,7 +15,7 @@ func TestCertifiedBindingKeepsRepositoryAndRecordAuthorityDistinct(t *testing.T)
 	record := mustCanonicalRecord(t, spec)
 	ownership, err := NewOwnership(OwnershipSpec{
 		Materializer:        spec.MaterializerKind,
-		IdentityScheme:      IdentitySchemeLinuxHandleV2,
+		IdentityScheme:      IdentitySchemePortableWitnessV1,
 		AuthorityRef:        spec.AuthorityRef,
 		RootOpenDisposition: AuthorityCreatedRoot,
 	})
@@ -32,7 +32,7 @@ func TestCertifiedBindingKeepsRepositoryAndRecordAuthorityDistinct(t *testing.T)
 	if binding.Ownership() != ownership || binding.OperationID() != spec.OperationID ||
 		binding.ReceiveIntentDigest() != spec.ReceiveIntentDigest ||
 		binding.MaterializationBindingDigest() != spec.MaterializationBindingDigest ||
-		binding.Ownership().IdentityScheme() != IdentitySchemeLinuxHandleV2 ||
+		binding.Ownership().IdentityScheme() != IdentitySchemePortableWitnessV1 ||
 		binding.Ownership().RootOpenDisposition() != AuthorityCreatedRoot {
 		t.Fatal("binding lost certified repository ownership")
 	}
@@ -76,7 +76,7 @@ func TestCertifiedBindingKeepsRepositoryAndRecordAuthorityDistinct(t *testing.T)
 func TestOwnershipDecoderRejectsAuthenticatedUnknownRootDisposition(t *testing.T) {
 	ownership, err := NewOwnership(OwnershipSpec{
 		Materializer:        MaterializerNativeTree,
-		IdentityScheme:      IdentitySchemeWindowsObjectIDV1,
+		IdentityScheme:      IdentitySchemePortableWitnessV1,
 		AuthorityRef:        bytes.Repeat([]byte{0x91}, sha256.Size),
 		RootOpenDisposition: CallerProvidedContainer,
 	})

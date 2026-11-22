@@ -11,9 +11,6 @@ const (
 
 	// MaximumResultNameReservationAttemptsV1 admits collision indexes 0 through 31.
 	MaximumResultNameReservationAttemptsV1 = uint32(32)
-	// MaximumLiveCleanupTicketsPerBindV1 bounds one binding's cleanup work, not the
-	// journal's size. Later bindings continue draining the remaining tickets.
-	MaximumLiveCleanupTicketsPerBindV1 = uint32(256)
 )
 
 // ShapeProbeBudget bounds authenticated metadata work before shape resolution

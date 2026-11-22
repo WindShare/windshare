@@ -15,7 +15,6 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/transfer"
-	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/osfs/internal/outputcap"
 )
 
@@ -145,11 +144,7 @@ type portableRuntimePlatform struct {
 
 func (*portableRuntimePlatform) DestinationCapabilities() (outputcap.DestinationCapabilities, error) {
 	supported := outputcap.SupportedCapability()
-	return outputcap.NewDestinationCapabilities(supported, supported, supported, supported)
-}
-
-func (*portableRuntimePlatform) LiveCleanupNativeProfile() checkpointmodel.LiveCleanupNativeProfile {
-	return checkpointmodel.LiveCleanupLinuxExt4V1
+	return outputcap.NewDestinationCapabilities(supported, supported)
 }
 
 func (platform *portableRuntimePlatform) RootOpenDisposition() outputcap.RootOpenDisposition {
@@ -203,10 +198,7 @@ func (platform *portableRuntimePlatform) RootBinding() (outputcap.OutputRootBind
 }
 
 func (*portableRuntimePlatform) IdentityScheme() outputcap.IdentitySchemeID {
-	// The runtime state codec accepts only production identityScheme IDs. The
-	// portable double reuses one valid ID solely to exercise codec/state policy;
-	// native identityScheme itself remains owned by the long tests.
-	return outputcap.IdentitySchemeLinuxHandleV2
+	return outputcap.IdentitySchemePortableWitnessV1
 }
 
 func (*portableRuntimePlatform) Durability() transfer.DurabilityLevel {
@@ -563,34 +555,6 @@ func (directory *portableRuntimeDirectory) CreateOrdinaryOutputStage(
 		return err
 	}
 	return file.Close()
-}
-
-func (directory *portableRuntimeDirectory) CreateProcessStage(stage outputcap.Directory, name string, size int64) (outputcap.MutableFile, error) {
-	return stage.CreateFile(name, false, size)
-}
-
-func (directory *portableRuntimeDirectory) CreateLiveCleanupStage(
-	proof outputcap.Directory,
-	ticket checkpointmodel.LiveCleanupTicket,
-) error {
-	if !ticket.Valid() || proof == nil {
-		return outputcap.ErrUnsafeNamespace
-	}
-	file, err := proof.CreateFile(ticket.StageName(), false, int64(ticket.ExactSize()))
-	if err != nil {
-		return err
-	}
-	return file.Close()
-}
-
-func (directory *portableRuntimeDirectory) RemoveLiveCleanupStage(
-	ticket checkpointmodel.LiveCleanupTicket,
-	expected outputcap.FileIdentity,
-) error {
-	if !ticket.Valid() {
-		return outputcap.ErrUnsafeNamespace
-	}
-	return directory.RemoveFile(ticket.StageName(), expected)
 }
 
 func (directory *portableRuntimeDirectory) ReservePublicDirectoryNoReplace(

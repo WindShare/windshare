@@ -14,14 +14,14 @@ func (authority *Authority) traceSelectedOperationMismatch(
 	record checkpointmodel.OrdinaryOperationRecord,
 	intent transfer.ReceiveIntent,
 ) {
-	authority.trace(FilesystemOutputTrace{
+	authority.trace(Trace{
 		Operation:            TraceRuntimeDecision,
 		DestinationBindingID: authority.binding.ID(),
 		ReceiveIntentDigest:  intent.Digest(),
 		ReceiveOperationID:   record.OperationID(),
-		RuntimeComponent:     FilesystemOutputRuntimeSession,
-		RuntimeOperation:     FilesystemOutputRuntimeSelectOperation,
-		RuntimeDecision:      FilesystemOutputRuntimeSelectionMismatch,
+		RuntimeComponent:     RuntimeSession,
+		RuntimeOperation:     RuntimeSelectOperation,
+		RuntimeDecision:      RuntimeSelectionMismatch,
 	})
 }
 
@@ -35,14 +35,14 @@ func (authority *Authority) traceCheckpointReconciled(
 	if authority == nil || intent.IsZero() {
 		return
 	}
-	event := FilesystemOutputTrace{
+	event := Trace{
 		Operation:                         TraceCheckpointReconciled,
 		ReceiveIntentDigest:               intent.Digest(),
 		ReceiveOperationID:                intent.OperationID(),
 		SessionID:                         sessionID,
-		RuntimeComponent:                  FilesystemOutputRuntimeCheckpoint,
-		RuntimeOperation:                  FilesystemOutputRuntimeReconcileCheckpoints,
-		RuntimeDecision:                   FilesystemOutputRuntimeReconciled,
+		RuntimeComponent:                  RuntimeCheckpoint,
+		RuntimeOperation:                  RuntimeReconcileCheckpoints,
+		RuntimeDecision:                   RuntimeReconciled,
 		CheckpointRecordCount:             recordCount,
 		CheckpointReclaimedCandidateCount: reclaimedCandidates,
 	}
@@ -54,11 +54,8 @@ func (authority *Authority) traceCheckpointReconciled(
 		}
 	}
 	if reconciliationErr != nil {
-		diagnostic := filesystemOutputDiagnostic(
-			FilesystemOutputFailureCheckpointReconciliation,
-			reconciliationErr,
-		)
-		event.RuntimeDecision = FilesystemOutputRuntimeRejected
+		diagnostic := buildDiagnostic(FailureCheckpoint, reconciliationErr)
+		event.RuntimeDecision = RuntimeRejected
 		event.FailureStage = diagnostic.Stage
 		event.ReconciliationStep = diagnostic.ReconciliationStep
 		event.NativeErrorClass = diagnostic.NativeErrorClass
@@ -69,7 +66,7 @@ func (authority *Authority) traceCheckpointReconciled(
 	} else if checkpointstore.RecoveryBlocked(attention) {
 		// Repository attention proves neither a path nor a lineage. Report only
 		// the closed aggregate decision so unsafe names never cross the trace boundary.
-		event.RuntimeDecision = FilesystemOutputRuntimeNeedsAttention
+		event.RuntimeDecision = RuntimeNeedsAttention
 		event.Failed = true
 	}
 	authority.trace(event)
@@ -79,12 +76,12 @@ func (authority *Authority) outputSessionRuntimeTrace() outputsession.TraceSink 
 	return outputsession.TraceSinkFunc(func(event outputsession.TraceEvent) {
 		decision := runtimeSessionDecision(event.Decision)
 		if event.Operation == outputsession.OperationCommitFile && event.Decision == outputsession.TraceSettled {
-			decision = FilesystemOutputRuntimeSucceeded
+			decision = RuntimeSucceeded
 		}
-		projected := FilesystemOutputTrace{
+		projected := Trace{
 			Operation: TraceRuntimeDecision, ReceiveIntentDigest: event.ReceiveIntentDigest,
 			ReceiveOperationID: event.ReceiveOperationID, SessionID: event.SessionID,
-			RuntimeComponent: FilesystemOutputRuntimeSession,
+			RuntimeComponent: RuntimeSession,
 			RuntimeOperation: runtimeSessionOperation(event.Operation),
 			RuntimeDecision:  decision,
 			OperationID:      event.OperationID, ClaimID: uint64(event.ClaimID),
@@ -104,9 +101,9 @@ func (authority *Authority) directoryRuntimeTrace(
 	sessionID transfer.OutputSessionID,
 ) func(directoryauthority.TraceEvent) {
 	return func(event directoryauthority.TraceEvent) {
-		authority.trace(FilesystemOutputTrace{
+		authority.trace(Trace{
 			Operation: TraceRuntimeDecision, ReceiveIntentDigest: intent, SessionID: sessionID,
-			RuntimeComponent: FilesystemOutputRuntimeDirectory,
+			RuntimeComponent: RuntimeDirectory,
 			RuntimeOperation: runtimeDirectoryOperation(event.Operation),
 			RuntimeDecision:  runtimeDirectoryDecision(event.Outcome),
 			ClaimID:          uint64(event.ClaimID), Failed: event.Outcome == directoryauthority.TraceMutationAmbiguous,
@@ -116,48 +113,46 @@ func (authority *Authority) directoryRuntimeTrace(
 
 func (authority *Authority) fileRuntimeTrace() fileexecution.TraceSink {
 	return fileexecution.TraceSinkFunc(func(event fileexecution.TraceEvent) {
-		projected := FilesystemOutputTrace{
+		projected := Trace{
 			Operation: TraceRuntimeDecision, ReceiveIntentDigest: event.IntentDigest,
 			ReceiveOperationID: event.OperationID, SessionID: event.SessionID, FileID: event.FileID,
-			RuntimeComponent:   FilesystemOutputRuntimeFile,
+			RuntimeComponent:   RuntimeFile,
 			RuntimeOperation:   runtimeFileOperation(event.Operation),
 			RuntimeDecision:    runtimeFileDecision(event.Outcome),
 			CheckpointDecision: runtimeCheckpointDecision(event.Decision),
 			OperationID:        event.Sequence,
-			PreviousRevision:   event.PreviousRevision, CurrentRevision: event.CurrentRevision, RecoveryReason: event.RecoveryReason, ReusedBytes: event.ReusedBytes, RetainedBytes: event.RetainedBytes,
-			RetainedLiveFileCount: event.RetainedLiveFiles,
+			PreviousRevision:   event.PreviousRevision, CurrentRevision: event.CurrentRevision,
+			RecoveryReason: event.RecoveryReason, ReusedBytes: event.ReusedBytes, RetainedBytes: event.RetainedBytes,
 		}
 		applyRuntimeFault(&projected, event.Fault)
 		authority.trace(projected)
 	})
 }
 
-func runtimeCheckpointDecision(
-	decision checkpointmodel.CheckpointLineageDecision,
-) FilesystemCheckpointDecision {
+func runtimeCheckpointDecision(decision checkpointmodel.CheckpointLineageDecision) CheckpointDecision {
 	switch decision {
 	case checkpointmodel.CheckpointLineageDecisionAbsent:
-		return FilesystemCheckpointAbsent
+		return CheckpointAbsent
 	case checkpointmodel.CheckpointLineageDecisionMetadataMatch:
-		return FilesystemCheckpointMetadataMatch
+		return CheckpointMetadataMatch
 	case checkpointmodel.CheckpointLineageDecisionExact:
-		return FilesystemCheckpointExact
+		return CheckpointExact
 	case checkpointmodel.CheckpointLineageDecisionRevisionConflict:
-		return FilesystemCheckpointRevisionConflict
+		return CheckpointRevisionConflict
 	case checkpointmodel.CheckpointLineageDecisionReuseStateBlocked:
-		return FilesystemCheckpointReuseStateBlocked
+		return CheckpointReuseStateBlocked
 	case checkpointmodel.CheckpointLineageDecisionRevisionEvidenceUnavailable:
-		return FilesystemCheckpointRevisionEvidenceUnavailable
+		return CheckpointRevisionEvidenceUnavailable
 	case checkpointmodel.CheckpointLineageDecisionOwnershipConflict:
-		return FilesystemCheckpointOwnershipConflict
+		return CheckpointOwnershipConflict
 	case checkpointmodel.CheckpointLineageDecisionInvalid:
-		return FilesystemCheckpointInvalid
+		return CheckpointInvalid
 	default:
 		return 0
 	}
 }
 
-func applyRuntimeFault(event *FilesystemOutputTrace, value transferfault.Fault) {
+func applyRuntimeFault(event *Trace, value transferfault.Fault) {
 	if event == nil || !value.Valid() {
 		return
 	}
@@ -167,135 +162,131 @@ func applyRuntimeFault(event *FilesystemOutputTrace, value transferfault.Fault) 
 	event.Failed = true
 }
 
-func runtimeSessionOperation(operation outputsession.OperationKind) FilesystemOutputRuntimeOperation {
+func runtimeSessionOperation(operation outputsession.OperationKind) RuntimeOperation {
 	switch operation {
 	case outputsession.OperationAdmitDirectory:
-		return FilesystemOutputRuntimeAdmitDirectory
+		return RuntimeAdmitDirectory
 	case outputsession.OperationFinalizeDirectory:
-		return FilesystemOutputRuntimeFinalizeDirectory
+		return RuntimeFinalizeDirectory
 	case outputsession.OperationBeginFile:
-		return FilesystemOutputRuntimeBeginFile
+		return RuntimeBeginFile
 	case outputsession.OperationWriteRange:
-		return FilesystemOutputRuntimeWriteRange
+		return RuntimeWriteRange
 	case outputsession.OperationCheckpointFile:
-		return FilesystemOutputRuntimeCheckpointFile
+		return RuntimeCheckpointFile
 	case outputsession.OperationCommitFile:
-		return FilesystemOutputRuntimeCommitFile
+		return RuntimeCommitFile
 	case outputsession.OperationPauseFile:
-		return FilesystemOutputRuntimePauseFile
+		return RuntimePauseFile
 	case outputsession.OperationRetireFile:
-		return FilesystemOutputRuntimeRetireFile
+		return RuntimeRetireFile
 	case outputsession.OperationPauseTree:
-		return FilesystemOutputRuntimePauseTree
+		return RuntimePauseTree
 	case outputsession.OperationFinalizeTree:
-		return FilesystemOutputRuntimeFinalizeTree
+		return RuntimeFinalizeTree
 	case outputsession.OperationFirstWrite:
-		return FilesystemOutputRuntimeFirstWrite
+		return RuntimeFirstWrite
 	default:
 		return 0
 	}
 }
 
-func runtimeSessionDecision(decision outputsession.TraceDecision) FilesystemOutputRuntimeDecision {
+func runtimeSessionDecision(decision outputsession.TraceDecision) RuntimeDecision {
 	switch decision {
 	case outputsession.TraceReserved:
-		return FilesystemOutputRuntimeReserved
+		return RuntimeReserved
 	case outputsession.TraceCoalesced:
-		return FilesystemOutputRuntimeCoalesced
+		return RuntimeCoalesced
 	case outputsession.TraceRejected:
-		return FilesystemOutputRuntimeRejected
+		return RuntimeRejected
 	case outputsession.TraceRolledBack:
-		return FilesystemOutputRuntimeRolledBack
+		return RuntimeRolledBack
 	case outputsession.TraceAdmitted:
-		return FilesystemOutputRuntimeAdmitted
+		return RuntimeAdmitted
 	case outputsession.TraceActive:
-		return FilesystemOutputRuntimeActive
+		return RuntimeActive
 	case outputsession.TraceSealed:
-		return FilesystemOutputRuntimeSealed
+		return RuntimeSealed
 	case outputsession.TraceSettled:
-		return FilesystemOutputRuntimeSettled
+		return RuntimeSettled
 	case outputsession.TraceAmbiguous:
-		return FilesystemOutputRuntimeAmbiguous
+		return RuntimeAmbiguous
 	case outputsession.TraceDraining:
-		return FilesystemOutputRuntimeDraining
+		return RuntimeDraining
 	case outputsession.TraceClosed:
-		return FilesystemOutputRuntimeClosed
+		return RuntimeClosed
 	case outputsession.TraceCollision:
-		return FilesystemOutputRuntimeCollision
+		return RuntimeCollision
 	default:
 		return 0
 	}
 }
 
-func runtimeDirectoryOperation(operation directoryauthority.TraceOperation) FilesystemOutputRuntimeOperation {
+func runtimeDirectoryOperation(operation directoryauthority.TraceOperation) RuntimeOperation {
 	switch operation {
 	case directoryauthority.TraceMaterializeDirectory:
-		return FilesystemOutputRuntimeMaterializeDirectory
+		return RuntimeMaterializeDirectory
 	case directoryauthority.TraceFinalizeDirectory:
-		return FilesystemOutputRuntimeFinalizeDirectory
+		return RuntimeFinalizeDirectory
 	default:
 		return 0
 	}
 }
 
-func runtimeDirectoryDecision(outcome directoryauthority.TraceOutcome) FilesystemOutputRuntimeDecision {
+func runtimeDirectoryDecision(outcome directoryauthority.TraceOutcome) RuntimeDecision {
 	switch outcome {
 	case directoryauthority.TraceSucceeded:
-		return FilesystemOutputRuntimeSucceeded
+		return RuntimeSucceeded
 	case directoryauthority.TraceIsolatedFailure:
-		return FilesystemOutputRuntimeIsolatedFailure
+		return RuntimeIsolatedFailure
 	case directoryauthority.TraceNoMutation:
-		return FilesystemOutputRuntimeNoChange
+		return RuntimeNoChange
 	case directoryauthority.TraceMutationAmbiguous:
-		return FilesystemOutputRuntimeAmbiguous
+		return RuntimeAmbiguous
 	default:
 		return 0
 	}
 }
 
-func runtimeFileOperation(operation fileexecution.TraceOperation) FilesystemOutputRuntimeOperation {
+func runtimeFileOperation(operation fileexecution.TraceOperation) RuntimeOperation {
 	switch operation {
 	case fileexecution.TraceBeginFile:
-		return FilesystemOutputRuntimeBeginFile
+		return RuntimeBeginFile
 	case fileexecution.TraceCreateOwnedFile:
-		return FilesystemOutputRuntimeCreateOwnedFile
+		return RuntimeCreateOwnedFile
 	case fileexecution.TraceRecoverFile:
-		return FilesystemOutputRuntimeRecoverFile
+		return RuntimeRecoverFile
 	case fileexecution.TraceWriteRange:
-		return FilesystemOutputRuntimeWriteRange
+		return RuntimeWriteRange
 	case fileexecution.TraceCheckpoint:
-		return FilesystemOutputRuntimeCheckpointFile
+		return RuntimeCheckpointFile
 	case fileexecution.TracePublish:
-		return FilesystemOutputRuntimePublishFile
+		return RuntimePublishFile
 	case fileexecution.TracePause:
-		return FilesystemOutputRuntimePauseFile
+		return RuntimePauseFile
 	case fileexecution.TraceRetire:
-		return FilesystemOutputRuntimeRetireFile
+		return RuntimeRetireFile
 	case fileexecution.TraceItemBlocked:
-		return FilesystemOutputRuntimeQuarantineFile
+		return RuntimeQuarantineFile
 	case fileexecution.TraceDeliveryReceipt:
-		return FilesystemOutputRuntimeDeliveryReceipt
-	case fileexecution.TraceReleaseLiveFile:
-		return FilesystemOutputRuntimeReleaseLiveFile
-	case fileexecution.TraceLiveRetention:
-		return FilesystemOutputRuntimeLiveRetention
+		return RuntimeDeliveryReceipt
 	default:
 		return 0
 	}
 }
 
-func runtimeFileDecision(outcome fileexecution.TraceOutcome) FilesystemOutputRuntimeDecision {
+func runtimeFileDecision(outcome fileexecution.TraceOutcome) RuntimeDecision {
 	switch outcome {
 	case fileexecution.TraceSucceeded:
-		return FilesystemOutputRuntimeSucceeded
+		return RuntimeSucceeded
 	case fileexecution.TraceReconciled:
-		return FilesystemOutputRuntimeReconciled
+		return RuntimeReconciled
 	case fileexecution.TraceCollision:
-		return FilesystemOutputRuntimeCollision
+		return RuntimeCollision
 	case fileexecution.TraceNoChange:
-		return FilesystemOutputRuntimeNoChange
+		return RuntimeNoChange
 	case fileexecution.TraceNeedsAttention:
-		return FilesystemOutputRuntimeNeedsAttention
+		return RuntimeNeedsAttention
 	default:
 		return 0
 	}

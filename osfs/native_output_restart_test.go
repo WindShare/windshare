@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/osfs/internal/outputcap"
 )
 
@@ -23,8 +24,9 @@ func TestNativeOutputProcessRestartKeepsRanges(t *testing.T) {
 	ctx := context.Background()
 	if os.Getenv(nativeTransferChild) == "1" {
 		root := os.Getenv(nativeOutputCrashRootEnvironment)
-		output, operation, intent := openPublicOrdinaryOperation(t, root, nativeTransferSeed)
-		session, err := output.OpenOperation(ctx, operation)
+		authority, operation, intent := openPublicOrdinaryOperation(t, root, nativeTransferSeed)
+		_ = authority
+		session, err := operation.OpenDirectTree(ctx, intent)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -71,7 +73,7 @@ func TestNativeOutputProcessRestartKeepsRanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mode, err := outputcap.SelectExecutionMode(caps); err != nil || mode != outputcap.ExecutionResumable {
+	if err := caps.ValidateSupport(); err != nil {
 		t.Skipf("destination lacks restart evidence: %v", err)
 	}
 	ready := filepath.Join(base, "ready")
@@ -88,19 +90,20 @@ func TestNativeOutputProcessRestartKeepsRanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	output, err := NewFilesystemOutputAuthority(FilesystemOutputAuthorityConfig{RootPath: root})
+	authority, err := NewOutputAuthority(OutputConfig{RootPath: root})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer output.Close()
-	if _, err := output.BindDestination(ctx); err != nil {
+	defer authority.Close()
+	if err := authority.BindDestination(ctx); err != nil {
 		t.Fatal(err)
 	}
-	lookup, err := output.LookupActive(ctx, intent.SelectionSpec())
-	if err != nil || lookup.Kind() != FilesystemOutputLookupReopened {
+	lookup, err := authority.SelectOperation(ctx, intent.SelectionSpec(), receivecontract.AutomaticOperation())
+	if err != nil || lookup.Kind() != OutputLookupReopened {
 		t.Fatalf("lookup=%v %v", lookup.Kind(), err)
 	}
-	session, err := output.OpenOperation(ctx, lookup.Operation())
+	reopenedIntent, _ := lookup.Operation().ReceiveIntent()
+	session, err := lookup.Operation().OpenDirectTree(ctx, reopenedIntent)
 	if err != nil {
 		t.Fatal(err)
 	}

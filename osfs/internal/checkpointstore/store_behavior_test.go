@@ -277,7 +277,7 @@ func TestOwnershipMarkerRejectsAmbiguousInstallCuts(t *testing.T) {
 	failure := errors.New("marker operation failed")
 	ownership, err := checkpointmodel.NewOwnership(checkpointmodel.OwnershipSpec{
 		Materializer:        checkpointmodel.MaterializerNativeTree,
-		IdentityScheme:      checkpointmodel.IdentitySchemeWindowsObjectIDV1,
+		IdentityScheme:      checkpointmodel.IdentitySchemePortableWitnessV1,
 		AuthorityRef:        bytes.Repeat([]byte{0x81}, receivecontract.AuthorityRefBytes),
 		RootOpenDisposition: checkpointmodel.CallerProvidedContainer,
 	})

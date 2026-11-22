@@ -15,7 +15,7 @@ func TestBindingSeparatesDisplayPathFromDestinationAuthority(t *testing.T) {
 		t.Fatal(err)
 	}
 	supported := outputcap.SupportedCapability()
-	facts, err := outputcap.NewDestinationCapabilities(supported, supported, supported, supported)
+	facts, err := outputcap.NewDestinationCapabilities(supported, supported)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,26 +24,27 @@ func TestBindingSeparatesDisplayPathFromDestinationAuthority(t *testing.T) {
 		path = filepath.Clean(t.TempDir())
 	}
 	binding, err := NewBinding(id, facts, path)
-	mode, modeErr := binding.ExecutionMode()
-	if err != nil || modeErr != nil || !binding.Valid() || binding.ID() != id ||
-		mode != outputcap.ExecutionResumable || binding.DisplayPath() != path ||
+	if err != nil || !binding.Valid() || binding.ID() != id ||
+		binding.Capabilities().ValidateSupport() != nil || binding.DisplayPath() != path ||
 		!bytes.Equal(binding.AuthorityRef().Bytes(), id.Bytes()) {
-		t.Fatalf("binding = %+v, %v/%v", binding, err, modeErr)
+		t.Fatalf("binding = %+v, %v", binding, err)
 	}
-	liveUnsupported, _ := outputcap.UnsupportedCapability(outputcap.CapabilityReasonUnverifiableRangeRecovery)
-	liveFacts, _ := outputcap.NewDestinationCapabilities(supported, supported, liveUnsupported, supported)
-	liveBinding, err := NewBinding(id, liveFacts, path)
-	liveMode, liveModeErr := liveBinding.ExecutionMode()
-	if err != nil || liveModeErr != nil || liveMode != outputcap.ExecutionLiveOnly {
-		t.Fatalf("live binding = %+v, %v/%v", liveBinding, err, liveModeErr)
+	unverifiable, _ := outputcap.UnsupportedCapability(outputcap.CapabilityReasonUnverifiableOperationRecovery)
+	unverifiableFacts, _ := outputcap.NewDestinationCapabilities(supported, unverifiable)
+	unverifiableBinding, err := NewBinding(id, unverifiableFacts, path)
+	if err != nil {
+		t.Fatalf("binding must retain independently reported facts: %v", err)
+	}
+	if err := unverifiableBinding.Capabilities().ValidateSupport(); !errors.Is(err, outputcap.ErrRecoverableOutputUnsupported) {
+		t.Fatalf("unverifiable recovery error = %v", err)
 	}
 	unsafe, _ := outputcap.UnsupportedCapability(outputcap.CapabilityReasonUnsafePublication)
-	unsafeFacts, _ := outputcap.NewDestinationCapabilities(unsafe, supported, supported, supported)
+	unsafeFacts, _ := outputcap.NewDestinationCapabilities(unsafe, supported)
 	unsafeBinding, err := NewBinding(id, unsafeFacts, path)
 	if err != nil {
 		t.Fatalf("binding must retain independently reported facts: %v", err)
 	}
-	if _, err := unsafeBinding.ExecutionMode(); !errors.Is(err, outputcap.ErrOrdinaryOutputUnsupported) {
-		t.Fatalf("unsafe mode error = %v", err)
+	if err := unsafeBinding.Capabilities().ValidateSupport(); !errors.Is(err, outputcap.ErrOrdinaryOutputUnsupported) {
+		t.Fatalf("unsafe publication error = %v", err)
 	}
 }

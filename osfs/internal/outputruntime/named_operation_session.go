@@ -12,7 +12,6 @@ import (
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/osfs/internal/checkpointstore"
-	"github.com/windshare/windshare/osfs/internal/deliveryreceipts"
 	"github.com/windshare/windshare/osfs/internal/destinationauthority"
 	"github.com/windshare/windshare/osfs/internal/directoryauthority"
 	"github.com/windshare/windshare/osfs/internal/fileexecution"
@@ -71,11 +70,18 @@ func (resources *operationOutputResources) ReleaseOutputSession(context.Context)
 	return resources.err
 }
 
-func (resources *operationOutputResources) RecordTreeSettlement(ctx context.Context, kind transfer.DirectTreeSettlementKind, outcome transfer.DirectTreeOutcome, snapshot outputsession.TreeSettlementSnapshot) error {
+func (resources *operationOutputResources) RecordTreeSettlement(
+	ctx context.Context,
+	kind transfer.DirectTreeSettlementKind,
+	outcome transfer.DirectTreeOutcome,
+	snapshot outputsession.TreeSettlementSnapshot,
+) error {
 	var exported namestore.ReportSummary
 	if kind == transfer.DirectTreeSettlementSuccess {
 		operation := resources.operation
-		summary, err := operation.nameStore.Export(operation.names, namesRoot(operation.topLevel), operation.authority.destination.WithPublicContainer)
+		summary, err := operation.nameStore.Export(
+			operation.names, namesRoot(operation.topLevel), operation.authority.destination.WithPublicContainer,
+		)
 		if err != nil {
 			return err
 		}
@@ -160,12 +166,10 @@ func (authority *Authority) openNamedOperation(
 	}
 	resources.repository = repository
 	resources.store = store
-	if operation.mode == outputcap.ExecutionResumable {
-		resources.lifecycle, err = newOrdinaryLifecycleRecorder(operation, store, repository, sessionID)
-		if err != nil {
-			_ = resources.ReleaseOutputSession(context.Background())
-			return nil, checkpointRuntimeError(ctx, "compose ordinary lifecycle reducer", err)
-		}
+	resources.lifecycle, err = newOrdinaryLifecycleRecorder(operation, store, repository, sessionID)
+	if err != nil {
+		_ = resources.ReleaseOutputSession(context.Background())
+		return nil, checkpointRuntimeError(ctx, "compose ordinary lifecycle reducer", err)
 	}
 	session, err := outputsession.New(outputsession.Config{
 		Intent: intent, SessionID: sessionID, Capabilities: capabilities, ReceiptSecret: secret[:],
@@ -186,32 +190,11 @@ func (authority *Authority) namedFileExecutor(
 	directories *directoryauthority.Authority,
 	sessionID transfer.OutputSessionID,
 ) (outputsession.FileExecutor, *checkpointstore.Repository, *checkpointstore.FileExecutionStore, error) {
-	if authority == nil || authority.destination == nil || operation == nil || directories == nil ||
-		sessionID.IsZero() {
+	if authority == nil || authority.destination == nil || operation == nil || operation.lease == nil ||
+		directories == nil || sessionID.IsZero() {
 		return nil, nil, nil, runtimeDependencyError(
 			"compose named file transaction", transfer.ErrInvalidOutputBinding,
 		)
-	}
-	if operation.mode == outputcap.ExecutionLiveOnly {
-		fileAuthority, err := directoryauthority.NewLiveFileAuthority(directories, sessionID)
-		if err != nil {
-			return nil, nil, nil, runtimeDependencyError("bind live-only file destinations", err)
-		}
-		if operation.liveFiles == nil {
-			receipts := deliveryreceipts.New()
-			operation.liveFiles, err = fileexecution.NewLiveFiles(receipts, operation.intent, authority.fileRuntimeTrace())
-			if err != nil {
-				return nil, nil, nil, errors.Join(err, receipts.Close())
-			}
-		}
-		return &liveFileExecutor{
-			files: operation.liveFiles, runtime: authority, authority: authority.destination,
-			intent: operation.intent, sessionID: sessionID,
-			directories: fileAuthority, random: authority.random,
-		}, nil, nil, nil
-	}
-	if operation.mode != outputcap.ExecutionResumable || operation.lease == nil {
-		return nil, nil, nil, runtimeDependencyError("compose named file transaction", transfer.ErrInvalidOutputBinding)
 	}
 	ownership, err := authority.destination.FileCheckpointOwnership(operation.topLevel.RootOpenDisposition())
 	if err != nil {
@@ -233,11 +216,11 @@ func (authority *Authority) namedFileExecutor(
 	}
 	store, err := storeFactory(&repository, checkpointstore.InheritFinalParent)
 	if err != nil {
-		primary := diagnoseFilesystemOutputFailure(
-			FilesystemOutputFailureCheckpointReconciliation,
+		primary := DiagnoseFailure(
+			FailureCheckpoint,
 			checkpointRuntimeError(context.Background(), "reconcile ordinary file repository", err),
 		)
-		return nil, nil, nil, freezeFilesystemOutputFailure(primary, repository.Close())
+		return nil, nil, nil, freezeFailure(primary, repository.Close())
 	}
 	fileAuthority, err := directoryauthority.NewFileAuthority(directories, store, sessionID)
 	if err != nil {
@@ -254,15 +237,6 @@ func (authority *Authority) namedFileExecutor(
 	return newFileExecutionAdapter(engine), &repository, store, nil
 }
 
-func ordinaryLifecycleInterface(
-	recorder *ordinaryLifecycleRecorder,
-) outputsession.TreeLifecycleRecorder {
-	if recorder == nil {
-		return nil
-	}
-	return recorder
-}
-
 type ordinaryLifecycleRecorder struct {
 	mu         sync.Mutex
 	operation  *Operation
@@ -277,7 +251,7 @@ func newOrdinaryLifecycleRecorder(
 	repository *checkpointstore.Repository,
 	sessionID transfer.OutputSessionID,
 ) (*ordinaryLifecycleRecorder, error) {
-	if operation == nil || operation.lease == nil || operation.mode != outputcap.ExecutionResumable ||
+	if operation == nil || operation.lease == nil ||
 		operation.lease.Record().Lifecycle() != checkpointmodel.OrdinaryOperationActive ||
 		store == nil || repository == nil || sessionID.IsZero() {
 		return nil, transfer.ErrInvalidOutputBinding
@@ -288,20 +262,20 @@ func newOrdinaryLifecycleRecorder(
 }
 
 func (recorder *ordinaryLifecycleRecorder) traceCleanup(
-	decision FilesystemOutputRuntimeDecision,
+	decision RuntimeDecision,
 	failed bool,
 ) {
 	if recorder == nil || recorder.operation == nil || recorder.operation.authority == nil {
 		return
 	}
 	intent := recorder.operation.intent
-	recorder.operation.authority.trace(FilesystemOutputTrace{
+	recorder.operation.authority.trace(Trace{
 		Operation:                         TraceRuntimeDecision,
 		ReceiveIntentDigest:               intent.Digest(),
 		ReceiveOperationID:                intent.OperationID(),
 		SessionID:                         recorder.sessionID,
-		RuntimeComponent:                  FilesystemOutputRuntimeCheckpoint,
-		RuntimeOperation:                  FilesystemOutputRuntimeCleanup,
+		RuntimeComponent:                  RuntimeCheckpoint,
+		RuntimeOperation:                  RuntimeCleanup,
 		CheckpointReclaimedCandidateCount: recorder.store.ReclaimedCandidateCount(),
 		RuntimeDecision:                   decision,
 		Failed:                            failed,
@@ -389,7 +363,7 @@ func (recorder *ordinaryLifecycleRecorder) cleanupTerminal(ctx context.Context) 
 		// An unlink that reached the parent but failed its sync is durability
 		// uncertain, not a license to recreate the deleted row. After a crash the
 		// filesystem exposes either the completed row for retry or no private state.
-		recorder.traceCleanup(FilesystemOutputRuntimeSucceeded, false)
+		recorder.traceCleanup(RuntimeSucceeded, false)
 		recorder.store = nil
 		recorder.repository = nil
 		return nil
@@ -416,67 +390,8 @@ func (recorder *ordinaryLifecycleRecorder) cleanupTerminal(ctx context.Context) 
 	}
 	// The published command result remains truthful. The durable row carries the
 	// cleanup failure for explicit list/discard repair without retracting finals.
-	recorder.traceCleanup(FilesystemOutputRuntimeCleanupPending, true)
+	recorder.traceCleanup(RuntimeCleanupPending, true)
 	return nil
-}
-
-type liveFileExecutor struct {
-	files       *fileexecution.LiveFiles
-	runtime     *Authority
-	authority   *destinationauthority.BoundDestination
-	intent      transfer.ReceiveIntent
-	sessionID   transfer.OutputSessionID
-	directories *directoryauthority.FileAuthority
-	random      io.Reader
-}
-
-func (executor *liveFileExecutor) BeginFile(
-	ctx context.Context,
-	claim outputsession.FileClaim,
-) (outputsession.FileBeginObservation, error) {
-	if executor == nil || executor.runtime == nil || executor.authority == nil ||
-		executor.directories == nil || ctx == nil ||
-		executor.intent.IsZero() || executor.sessionID.IsZero() || executor.random == nil {
-		return outputsession.FileBeginObservation{Cut: outputsession.MutationNoChange}, transfer.ErrInvalidOutputBinding
-	}
-	file := claim.File()
-	destination, err := executor.directories.BindFile(ctx, file, claim.DestinationPath())
-	if err != nil {
-		return outputsession.FileBeginObservation{Cut: outputsession.MutationNoChange}, err
-	}
-	start, err := executor.files.Begin(ctx, file, destination, func() (*fileexecution.PartialFileTransaction, error) {
-		owned, cleanup, err := executor.createOwnedStage(ctx, destination, file.ExpectedSize())
-		if err != nil {
-			return nil, errors.Join(err, destination.Close())
-		}
-		transaction, err := fileexecution.NewLivePartialFileTransaction(
-			file, destination, owned,
-			func(current *fileexecution.LiveOwnedFile) error {
-				err := cleanup(current)
-				decision := FilesystemOutputRuntimeSucceeded
-				if err != nil {
-					decision = FilesystemOutputRuntimeCleanupPending
-				}
-				executor.runtime.trace(FilesystemOutputTrace{
-					Operation:           TraceRuntimeDecision,
-					ReceiveIntentDigest: executor.intent.Digest(),
-					ReceiveOperationID:  executor.intent.OperationID(),
-					SessionID:           executor.sessionID,
-					RuntimeComponent:    FilesystemOutputRuntimeCheckpoint,
-					RuntimeOperation:    FilesystemOutputRuntimeCleanup,
-					RuntimeDecision:     decision,
-					Failed:              err != nil,
-				})
-				return err
-			},
-		)
-		if err != nil {
-			return nil, errors.Join(err, owned.Close(), destination.Close())
-		}
-		return transaction, nil
-
-	})
-	return observeFileStart(start, err)
 }
 
 func newOutputSessionID(random io.Reader) (transfer.OutputSessionID, error) {
@@ -490,9 +405,7 @@ func newOutputSessionID(random io.Reader) (transfer.OutputSessionID, error) {
 	return transfer.OutputSessionIDFromBytes(raw)
 }
 
-func operationSessionCapabilities(
-	operation *Operation,
-) (transfer.DirectTreeCapabilities, error) {
+func operationSessionCapabilities(operation *Operation) (transfer.DirectTreeCapabilities, error) {
 	if operation == nil || operation.topLevel == nil {
 		return transfer.DirectTreeCapabilities{}, transfer.ErrInvalidOutputBinding
 	}
@@ -500,13 +413,11 @@ func operationSessionCapabilities(
 	if !binding.Valid() {
 		return transfer.DirectTreeCapabilities{}, transfer.ErrInvalidOutputBinding
 	}
-	durability := transfer.DurabilityNone
-	if operation.mode == outputcap.ExecutionResumable {
-		durability = operation.authority.destination.RecoveryDurability()
-	}
 	return transfer.NewDirectTreeCapabilities(transfer.DirectTreeCapabilities{
-		Durability: durability, RandomWrite: true,
-		FileFailureIsolation: true, ModifiedTime: true,
+		Durability:           operation.authority.destination.RecoveryDurability(),
+		RandomWrite:          true,
+		FileFailureIsolation: true,
+		ModifiedTime:         true,
 	})
 }
 
@@ -555,23 +466,32 @@ func validateNamedOperationIntent(
 		reservation.EntryKind() != entry.EntryKind() {
 		return transfer.ErrInvalidOutputBinding
 	}
-	projector, err := transfer.OrdinaryOutputArtifactPathProjector(intent)
-	if err != nil {
-		return err
-	}
-	_ = projector
-	return nil
+	_, err := transfer.OrdinaryOutputArtifactPathProjector(intent)
+	return err
 }
 
 func namesRoot(topLevel *destinationauthority.TopLevelReservation) outputnames.Root {
 	entry := topLevel.ReservedEntry()
-	return outputnames.Root{RequestedName: entry.RequestedName(), ReservedName: entry.LogicalReservedName(), PhysicalName: entry.PhysicalName(), Kind: entry.EntryKind()}
+	return outputnames.Root{
+		RequestedName: entry.RequestedName(),
+		ReservedName:  entry.LogicalReservedName(),
+		PhysicalName:  entry.PhysicalName(),
+		Kind:          entry.EntryKind(),
+	}
 }
 
-func newOperationNames(intent transfer.ReceiveIntent, topLevel *destinationauthority.TopLevelReservation, lease *checkpointstore.OperationRegistryLease, fresh bool, trace func(outputnames.Trace)) (*outputnames.Mapper, *namestore.Store, error) {
+func newOperationNames(
+	intent transfer.ReceiveIntent,
+	topLevel *destinationauthority.TopLevelReservation,
+	lease *checkpointstore.OperationRegistryLease,
+	fresh bool,
+	trace func(outputnames.Trace),
+) (*outputnames.Mapper, *namestore.Store, error) {
 	store := namestore.New(lease, intent.OperationID().Bytes(), fresh)
-	mapper, err := outputnames.New(intent.OperationID().Bytes(), namesRoot(topLevel), store,
-		outputnames.GuardedNamespace{Acquire: topLevel.AcquirePublicOperationGuard}, trace)
+	mapper, err := outputnames.New(
+		intent.OperationID().Bytes(), namesRoot(topLevel), store,
+		outputnames.GuardedNamespace{Acquire: topLevel.AcquirePublicOperationGuard}, trace,
+	)
 	return mapper, store, err
 }
 
@@ -580,10 +500,10 @@ func (operation *Operation) prepareNames() error {
 		return nil
 	}
 	mapper, store, err := newOperationNames(operation.intent, operation.topLevel, operation.lease, !operation.reopened, func(event outputnames.Trace) {
-		operation.authority.trace(FilesystemOutputTrace{
+		operation.authority.trace(Trace{
 			Operation: TraceRuntimeDecision, ReceiveIntentDigest: operation.intent.Digest(),
-			ReceiveOperationID: operation.intent.OperationID(), RuntimeComponent: FilesystemOutputRuntimeSession,
-			RuntimeOperation: FilesystemOutputRuntimeMapName, RuntimeDecision: FilesystemOutputRuntimeReserved,
+			ReceiveOperationID: operation.intent.OperationID(), RuntimeComponent: RuntimeSession,
+			RuntimeOperation: RuntimeMapName, RuntimeDecision: RuntimeReserved,
 			LogicalPath: event.LogicalPath, PhysicalPath: event.PhysicalPath,
 			NameMappingAttempt: event.Attempt, NameMappingReused: event.Reused,
 		})
@@ -594,10 +514,10 @@ func (operation *Operation) prepareNames() error {
 	operation.names, operation.nameStore = mapper, store
 	root := namesRoot(operation.topLevel)
 	if root.ReservedName != root.PhysicalName {
-		operation.authority.trace(FilesystemOutputTrace{
+		operation.authority.trace(Trace{
 			Operation: TraceRuntimeDecision, ReceiveIntentDigest: operation.intent.Digest(),
-			ReceiveOperationID: operation.intent.OperationID(), RuntimeComponent: FilesystemOutputRuntimeSession,
-			RuntimeOperation: FilesystemOutputRuntimeMapName, RuntimeDecision: FilesystemOutputRuntimeReserved,
+			ReceiveOperationID: operation.intent.OperationID(), RuntimeComponent: RuntimeSession,
+			RuntimeOperation: RuntimeMapName, RuntimeDecision: RuntimeReserved,
 			LogicalPath: root.RequestedName, PhysicalPath: root.PhysicalName, NameMappingReused: operation.reopened,
 		})
 	}

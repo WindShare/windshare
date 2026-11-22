@@ -8,20 +8,20 @@ import (
 	"github.com/windshare/windshare/osfs/internal/resumeauthority"
 )
 
-func TestResumeStateAuthorityIsSeparateFromOutputSessionLifecycle(t *testing.T) {
+func TestRecoveryAuthorityIsSeparateFromOutputSessionLifecycle(t *testing.T) {
 	outputSession := reflect.TypeFor[transfer.DirectTreeSession]()
 	if _, exists := outputSession.MethodByName("Discard"); exists {
 		t.Fatal("output session gained resume-state deletion authority")
 	}
-	resumeAuthority := reflect.TypeFor[ResumeStateAuthority]()
-	for _, method := range []string{"ListResumeState", "Discard"} {
-		if _, exists := resumeAuthority.MethodByName(method); !exists {
-			t.Fatalf("explicit resume authority lost %s", method)
+	recoveryAuthority := reflect.TypeFor[*RecoveryAuthority]()
+	for _, method := range []string{"List", "Discard"} {
+		if _, exists := recoveryAuthority.MethodByName(method); !exists {
+			t.Fatalf("explicit recovery authority lost %s", method)
 		}
 	}
 	for _, retired := range []string{"Recover", "InstallReceipt", "ReplaceLifecycle"} {
-		if _, exists := resumeAuthority.MethodByName(retired); exists {
-			t.Fatalf("public resume authority retained terminal/history method %s", retired)
+		if _, exists := recoveryAuthority.MethodByName(retired); exists {
+			t.Fatalf("public recovery authority retained terminal/history method %s", retired)
 		}
 	}
 }

@@ -11,171 +11,118 @@ import (
 	"github.com/windshare/windshare/osfs/internal/outputcap"
 )
 
-type FilesystemOutputFailureStage uint8
+var ErrShareStopped = errors.New("retained output belongs to a stopped share")
+
+type FailureStage uint8
 
 const (
-	FilesystemOutputFailureDestinationBinding FilesystemOutputFailureStage = iota + 1
-	FilesystemOutputFailureInventoryPaging
-	FilesystemOutputFailureActiveLookup
-	FilesystemOutputFailureOperationAcquisition
-	FilesystemOutputFailureOperationAdmission
-	FilesystemOutputFailureCheckpointReconciliation
-	FilesystemOutputFailureNativeDurability
-	FilesystemOutputFailureAuthorityClose
+	FailureDestinationBinding FailureStage = iota + 1
+	FailureInventory
+	FailureLookup
+	FailureOpen
+	FailureCreate
+	FailureCheckpoint
+	FailureDurability
+	FailureClose
 )
 
-func (stage FilesystemOutputFailureStage) Valid() bool {
-	return stage >= FilesystemOutputFailureDestinationBinding &&
-		stage <= FilesystemOutputFailureAuthorityClose
+func (stage FailureStage) Valid() bool {
+	return stage >= FailureDestinationBinding && stage <= FailureClose
 }
 
-func (stage FilesystemOutputFailureStage) String() string {
+func (stage FailureStage) String() string {
 	switch stage {
-	case FilesystemOutputFailureDestinationBinding:
+	case FailureDestinationBinding:
 		return "destination_binding"
-	case FilesystemOutputFailureInventoryPaging:
-		return "inventory_paging"
-	case FilesystemOutputFailureActiveLookup:
-		return "active_lookup"
-	case FilesystemOutputFailureOperationAcquisition:
-		return "operation_acquisition"
-	case FilesystemOutputFailureOperationAdmission:
-		return "operation_admission"
-	case FilesystemOutputFailureCheckpointReconciliation:
-		return "checkpoint_reconciliation"
-	case FilesystemOutputFailureNativeDurability:
-		return "native_durability"
-	case FilesystemOutputFailureAuthorityClose:
-		return "authority_close"
+	case FailureInventory:
+		return "inventory"
+	case FailureLookup:
+		return "lookup"
+	case FailureOpen:
+		return "open"
+	case FailureCreate:
+		return "create"
+	case FailureCheckpoint:
+		return "checkpoint"
+	case FailureDurability:
+		return "durability"
+	case FailureClose:
+		return "close"
 	default:
 		return ""
 	}
 }
 
-type FilesystemCheckpointReconciliationStep uint8
+type AttentionReason string
 
 const (
-	FilesystemCheckpointCandidateObservation FilesystemCheckpointReconciliationStep = iota + 1
-	FilesystemCheckpointStageDurability
-	FilesystemCheckpointNamespaceDurability
-	FilesystemCheckpointRecordPromotion
+	AttentionNone        AttentionReason = ""
+	AttentionDestination AttentionReason = "destination-ownership-unknown"
+	AttentionRegistry    AttentionReason = "registry-ownership-unknown"
+	AttentionLease       AttentionReason = "lease-ownership-unknown"
+	AttentionOperation   AttentionReason = "operation-ownership-unknown"
+	AttentionCleanup     AttentionReason = "cleanup-uncertain"
 )
 
-func (step FilesystemCheckpointReconciliationStep) Valid() bool {
-	return step >= FilesystemCheckpointCandidateObservation &&
-		step <= FilesystemCheckpointRecordPromotion
+func (reason AttentionReason) Valid() bool {
+	switch reason {
+	case AttentionDestination, AttentionRegistry, AttentionLease, AttentionOperation, AttentionCleanup:
+		return true
+	default:
+		return false
+	}
 }
 
-func (step FilesystemCheckpointReconciliationStep) String() string {
+type CheckpointReconciliationStep uint8
+
+const (
+	CheckpointCandidateObservation CheckpointReconciliationStep = iota + 1
+	CheckpointStageDurability
+	CheckpointNamespaceDurability
+	CheckpointRecordPromotion
+)
+
+func (step CheckpointReconciliationStep) Valid() bool {
+	return step >= CheckpointCandidateObservation && step <= CheckpointRecordPromotion
+}
+
+func (step CheckpointReconciliationStep) String() string {
 	switch step {
-	case FilesystemCheckpointCandidateObservation:
+	case CheckpointCandidateObservation:
 		return "candidate_observation"
-	case FilesystemCheckpointStageDurability:
+	case CheckpointStageDurability:
 		return "stage_durability"
-	case FilesystemCheckpointNamespaceDurability:
+	case CheckpointNamespaceDurability:
 		return "namespace_durability"
-	case FilesystemCheckpointRecordPromotion:
+	case CheckpointRecordPromotion:
 		return "record_promotion"
 	default:
 		return ""
 	}
 }
 
-type FilesystemNativeErrorClass uint8
+type NativeErrorClass = outputcap.NativeErrorClass
 
-const (
-	FilesystemNativeErrorAccessDenied FilesystemNativeErrorClass = iota + 1
-	FilesystemNativeErrorSharingViolation
-	FilesystemNativeErrorNotFound
-	FilesystemNativeErrorInvalidHandle
-	FilesystemNativeErrorUnsupported
-	FilesystemNativeErrorIO
-	FilesystemNativeErrorUnknown
-)
-
-func (class FilesystemNativeErrorClass) Valid() bool {
-	return class >= FilesystemNativeErrorAccessDenied && class <= FilesystemNativeErrorUnknown
-}
-
-func (class FilesystemNativeErrorClass) String() string {
-	switch class {
-	case FilesystemNativeErrorAccessDenied:
-		return "access_denied"
-	case FilesystemNativeErrorSharingViolation:
-		return "sharing_violation"
-	case FilesystemNativeErrorNotFound:
-		return "not_found"
-	case FilesystemNativeErrorInvalidHandle:
-		return "invalid_handle"
-	case FilesystemNativeErrorUnsupported:
-		return "unsupported"
-	case FilesystemNativeErrorIO:
-		return "io"
-	case FilesystemNativeErrorUnknown:
-		return "unknown"
-	default:
-		return ""
-	}
-}
-
-type FilesystemOutputStateReason uint8
-
-const (
-	FilesystemOutputStateReasonNone FilesystemOutputStateReason = iota + 1
-	FilesystemOutputStateDestinationOwnershipUnknown
-	FilesystemOutputStateRegistryOwnershipUnknown
-	FilesystemOutputStateLeaseOwnershipUnknown
-	FilesystemOutputStateOperationOwnershipUnknown
-	FilesystemOutputStateCleanupUncertain
-	FilesystemOutputStateRecoveryUnavailable
-)
-
-func (reason FilesystemOutputStateReason) Valid() bool {
-	return reason >= FilesystemOutputStateReasonNone &&
-		reason <= FilesystemOutputStateRecoveryUnavailable
-}
-
-func (reason FilesystemOutputStateReason) String() string {
-	switch reason {
-	case FilesystemOutputStateReasonNone:
-		return "none"
-	case FilesystemOutputStateDestinationOwnershipUnknown:
-		return "destination_ownership_unknown"
-	case FilesystemOutputStateRegistryOwnershipUnknown:
-		return "registry_ownership_unknown"
-	case FilesystemOutputStateLeaseOwnershipUnknown:
-		return "lease_ownership_unknown"
-	case FilesystemOutputStateOperationOwnershipUnknown:
-		return "operation_ownership_unknown"
-	case FilesystemOutputStateRecoveryUnavailable:
-		return "recovery_unavailable"
-	case FilesystemOutputStateCleanupUncertain:
-		return "cleanup_uncertain"
-	default:
-		return ""
-	}
-}
-
-// FilesystemOutputDiagnostic is intentionally value-only. Provider errors stay
-// behind the runtime boundary while callers receive enough closed context to
-// distinguish durable state from a failed recovery attempt.
-type FilesystemOutputDiagnostic struct {
-	Stage              FilesystemOutputFailureStage
-	ReconciliationStep FilesystemCheckpointReconciliationStep
-	NativeErrorClass   FilesystemNativeErrorClass
+// Diagnostic is intentionally value-only. Provider errors stay behind the
+// runtime boundary while callers receive enough closed context to distinguish
+// durable state from a failed recovery attempt.
+type Diagnostic struct {
+	Stage              FailureStage
+	ReconciliationStep CheckpointReconciliationStep
+	NativeErrorClass   NativeErrorClass
 	FaultDomain        uint8
 	NormalizedScope    uint8
 	NormalizedCode     uint16
 }
 
-func (diagnostic FilesystemOutputDiagnostic) Valid() bool {
+func (diagnostic Diagnostic) Valid() bool {
 	if !diagnostic.Stage.Valid() {
 		return false
 	}
 	if diagnostic.ReconciliationStep != 0 {
 		if !diagnostic.ReconciliationStep.Valid() ||
-			diagnostic.Stage != FilesystemOutputFailureCheckpointReconciliation &&
-				diagnostic.Stage != FilesystemOutputFailureNativeDurability {
+			diagnostic.Stage != FailureCheckpoint &&
+				diagnostic.Stage != FailureDurability {
 			return false
 		}
 	}
@@ -191,119 +138,139 @@ func (diagnostic FilesystemOutputDiagnostic) Valid() bool {
 	return faultZero || faultComplete
 }
 
-type filesystemOutputDiagnosticError struct {
-	diagnostic FilesystemOutputDiagnostic
+type diagnosticError struct {
+	diagnostic Diagnostic
 	cause      error
 }
 
-func (failure *filesystemOutputDiagnosticError) Error() string {
+func (failure *diagnosticError) Error() string {
 	if failure == nil || !failure.diagnostic.Valid() {
 		return "filesystem output failed"
 	}
 	return fmt.Sprintf("filesystem output failed at %s", failure.diagnostic.Stage)
 }
 
-func (failure *filesystemOutputDiagnosticError) Unwrap() error {
+func (failure *diagnosticError) Unwrap() error {
 	if failure == nil {
 		return nil
 	}
 	return failure.cause
 }
 
-func (failure *filesystemOutputDiagnosticError) FilesystemOutputDiagnostic() FilesystemOutputDiagnostic {
-	if failure == nil {
-		return FilesystemOutputDiagnostic{}
+func DiagnosticFor(err error) (Diagnostic, bool) {
+	failure, ok := errors.AsType[*diagnosticError](err)
+	if !ok || failure == nil {
+		return Diagnostic{}, false
 	}
-	return failure.diagnostic
+	return failure.diagnostic, failure.diagnostic.Valid()
 }
 
-type filesystemOutputDiagnosticCarrier interface {
-	FilesystemOutputDiagnostic() FilesystemOutputDiagnostic
-}
+const (
+	maximumFailureDepth = 64
+	maximumFailureNodes = 1024
+)
 
-func FilesystemOutputDiagnosticFor(err error) (FilesystemOutputDiagnostic, bool) {
-	var carrier filesystemOutputDiagnosticCarrier
-	if !errors.As(err, &carrier) {
-		return FilesystemOutputDiagnostic{}, false
+// FailureForStage extracts causes owned by one failure stage from an error tree.
+// A FailureClose boundary claims every cause inside it so release failures stay
+// separate from earlier operation failures.
+func FailureForStage(cause error, stage FailureStage) error {
+	if cause == nil || !stage.Valid() {
+		return nil
 	}
-	diagnostic := carrier.FilesystemOutputDiagnostic()
-	return diagnostic, diagnostic.Valid()
+	budget := maximumFailureNodes
+	return failureForStage(cause, stage, 0, &budget)
 }
 
-func DiagnoseFilesystemOutputFailure(stage FilesystemOutputFailureStage, cause error) error {
-	return diagnoseFilesystemOutputFailure(stage, cause)
+func failureForStage(cause error, stage FailureStage, depth int, budget *int) error {
+	if cause == nil || depth >= maximumFailureDepth || *budget == 0 {
+		return nil
+	}
+	*budget--
+	//nolint:errorlint
+	if annotated, ok := cause.(*diagnosticError); ok && annotated != nil && annotated.diagnostic.Valid() {
+		if annotated.diagnostic.Stage == stage {
+			return annotated
+		}
+		if annotated.diagnostic.Stage == FailureClose {
+			// Release boundaries own every error inside them; non-close queries must not pierce them.
+			return nil
+		}
+	}
+	//nolint:errorlint
+	switch value := cause.(type) {
+	case interface{ Unwrap() []error }:
+		var selected []error
+		for _, child := range value.Unwrap() {
+			if match := failureForStage(child, stage, depth+1, budget); match != nil {
+				selected = append(selected, match)
+			}
+		}
+		return errors.Join(selected...)
+	case interface{ Unwrap() error }:
+		return failureForStage(value.Unwrap(), stage, depth+1, budget)
+	default:
+		return nil
+	}
 }
 
-func diagnoseFilesystemOutputFailure(stage FilesystemOutputFailureStage, cause error) error {
+func DiagnoseFailure(stage FailureStage, cause error) error {
 	if cause == nil {
 		return nil
 	}
-	if stage == FilesystemOutputFailureAuthorityClose {
+	if stage == FailureClose {
 		// A release failure is independent of the operation that initiated
 		// shutdown. Keep this boundary even when its cause has earlier evidence
 		// or includes cancellation alongside another close failure.
-		diagnostic := filesystemOutputDiagnostic(stage, cause)
+		diagnostic := buildDiagnostic(stage, cause)
 		diagnostic.Stage = stage
 		diagnostic.ReconciliationStep = 0
-		return &filesystemOutputDiagnosticError{diagnostic: diagnostic, cause: cause}
+		return &diagnosticError{diagnostic: diagnostic, cause: cause}
 	}
 	if errors.Is(cause, context.Canceled) || errors.Is(cause, context.DeadlineExceeded) {
 		return cause
 	}
-	if existing, ok := FilesystemOutputDiagnosticFor(cause); ok {
-		return &filesystemOutputDiagnosticError{diagnostic: existing, cause: cause}
+	if _, existing := DiagnosticFor(cause); existing {
+		return cause
 	}
-	diagnostic := filesystemOutputDiagnostic(stage, cause)
-	return &filesystemOutputDiagnosticError{diagnostic: diagnostic, cause: cause}
+	diagnostic := buildDiagnostic(stage, cause)
+	return &diagnosticError{diagnostic: diagnostic, cause: cause}
 }
 
-func freezeFilesystemOutputFailure(primary, cleanup error) error {
+func freezeFailure(primary, cleanup error) error {
 	if cleanup == nil {
 		return primary
 	}
-	cleanup = diagnoseFilesystemOutputFailure(FilesystemOutputFailureAuthorityClose, cleanup)
+	cleanup = DiagnoseFailure(FailureClose, cleanup)
 	if primary == nil {
 		return cleanup
-	}
-	if diagnostic, ok := FilesystemOutputDiagnosticFor(primary); ok {
-		return &filesystemOutputDiagnosticError{
-			diagnostic: diagnostic,
-			cause:      errors.Join(primary, cleanup),
-		}
 	}
 	return errors.Join(primary, cleanup)
 }
 
-func filesystemOutputDiagnostic(
-	stage FilesystemOutputFailureStage,
-	cause error,
-) FilesystemOutputDiagnostic {
-	diagnostic := FilesystemOutputDiagnostic{Stage: stage}
+func buildDiagnostic(stage FailureStage, cause error) Diagnostic {
+	diagnostic := Diagnostic{Stage: stage}
 	if reconciliation, ok := errors.AsType[*checkpointstore.ReconciliationError](cause); ok {
-		diagnostic.ReconciliationStep = filesystemReconciliationStep(reconciliation.Step())
+		diagnostic.ReconciliationStep = reconciliationStepFromStore(reconciliation.Step())
 		if reconciliation.Step() == checkpointstore.ReconciliationStageDurability ||
 			reconciliation.Step() == checkpointstore.ReconciliationNamespaceDurability {
-			diagnostic.Stage = FilesystemOutputFailureNativeDurability
+			diagnostic.Stage = FailureDurability
 		}
 		if native, ok := reconciliation.NativeClass(); ok {
-			diagnostic.NativeErrorClass = filesystemNativeErrorClass(native)
+			diagnostic.NativeErrorClass = native
 		}
-		applyFilesystemDiagnosticFault(&diagnostic, reconciliation.Fault())
+		applyDiagnosticFault(&diagnostic, reconciliation.Fault())
 		return diagnostic
 	}
 	if native, ok := outputcap.ClassifyNativeError(cause); ok {
-		diagnostic.NativeErrorClass = filesystemNativeErrorClass(native)
+		diagnostic.NativeErrorClass = native
 	}
 	if value, ok := transferfault.NormalizeBoundaryError(cause).Fault(); ok {
-		applyFilesystemDiagnosticFault(&diagnostic, value)
+		applyDiagnosticFault(&diagnostic, value)
 	}
 	return diagnostic
 }
 
-func applyFilesystemDiagnosticFault(
-	diagnostic *FilesystemOutputDiagnostic,
-	value transferfault.Fault,
-) {
+func applyDiagnosticFault(diagnostic *Diagnostic, value transferfault.Fault) {
 	if diagnostic == nil || !value.Valid() {
 		return
 	}
@@ -312,61 +279,36 @@ func applyFilesystemDiagnosticFault(
 	diagnostic.NormalizedCode = value.Code()
 }
 
-func filesystemReconciliationStep(
-	step checkpointstore.ReconciliationStep,
-) FilesystemCheckpointReconciliationStep {
+func reconciliationStepFromStore(step checkpointstore.ReconciliationStep) CheckpointReconciliationStep {
 	switch step {
 	case checkpointstore.ReconciliationCandidateObservation:
-		return FilesystemCheckpointCandidateObservation
+		return CheckpointCandidateObservation
 	case checkpointstore.ReconciliationStageDurability:
-		return FilesystemCheckpointStageDurability
+		return CheckpointStageDurability
 	case checkpointstore.ReconciliationNamespaceDurability:
-		return FilesystemCheckpointNamespaceDurability
+		return CheckpointNamespaceDurability
 	case checkpointstore.ReconciliationRecordPromotion:
-		return FilesystemCheckpointRecordPromotion
+		return CheckpointRecordPromotion
 	default:
 		return 0
 	}
 }
 
-func filesystemNativeErrorClass(class outputcap.NativeErrorClass) FilesystemNativeErrorClass {
-	switch class {
-	case outputcap.NativeErrorAccessDenied:
-		return FilesystemNativeErrorAccessDenied
-	case outputcap.NativeErrorSharingViolation:
-		return FilesystemNativeErrorSharingViolation
-	case outputcap.NativeErrorNotFound:
-		return FilesystemNativeErrorNotFound
-	case outputcap.NativeErrorInvalidHandle:
-		return FilesystemNativeErrorInvalidHandle
-	case outputcap.NativeErrorUnsupported:
-		return FilesystemNativeErrorUnsupported
-	case outputcap.NativeErrorIO:
-		return FilesystemNativeErrorIO
-	case outputcap.NativeErrorUnknown:
-		return FilesystemNativeErrorUnknown
-	default:
-		return 0
-	}
-}
-
-func filesystemOutputStateReason(
-	reason checkpointmodel.OrdinaryClosedReason,
-) FilesystemOutputStateReason {
+func attentionReasonFromClosed(reason checkpointmodel.OrdinaryClosedReason) AttentionReason {
 	switch reason {
 	case checkpointmodel.OrdinaryReasonNone:
-		return FilesystemOutputStateReasonNone
+		return AttentionNone
 	case checkpointmodel.OrdinaryReasonDestinationOwnershipUnknown:
-		return FilesystemOutputStateDestinationOwnershipUnknown
+		return AttentionDestination
 	case checkpointmodel.OrdinaryReasonRegistryOwnershipUnknown:
-		return FilesystemOutputStateRegistryOwnershipUnknown
+		return AttentionRegistry
 	case checkpointmodel.OrdinaryReasonLeaseOwnershipUnknown:
-		return FilesystemOutputStateLeaseOwnershipUnknown
+		return AttentionLease
 	case checkpointmodel.OrdinaryReasonOperationOwnershipUnknown:
-		return FilesystemOutputStateOperationOwnershipUnknown
+		return AttentionOperation
 	case checkpointmodel.OrdinaryReasonCleanupUncertain:
-		return FilesystemOutputStateCleanupUncertain
+		return AttentionCleanup
 	default:
-		return 0
+		return ""
 	}
 }

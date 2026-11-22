@@ -40,7 +40,7 @@ func probeDestinationCapabilities(root outputcap.Directory) (capabilities output
 			capabilities = outputcap.DestinationCapabilities{}
 		}
 	}()
-	results := outputprobe.Results{CrashCleanup: outputcap.ErrRecoverableOutputUnsupported}
+	var results outputprobe.Results
 	for _, fact := range []struct {
 		name   string
 		probe  func() error
@@ -60,9 +60,9 @@ func probeDestinationCapabilities(root outputcap.Directory) (capabilities output
 			return capabilities, fmt.Errorf("probe portable %s: %w", fact.name, *fact.result)
 		}
 		if results.SafePublish != nil {
-			// Both task records and range checkpoints need the same no-replace
-			// installation as public files; none can bypass a missing primitive.
-			results.OperationRecovery, results.RangeRecovery = results.SafePublish, results.SafePublish
+			// Task records and checkpoints need the same no-replace primitive as
+			// public files; none can bypass a missing publication primitive.
+			results.OperationRecovery = results.SafePublish
 			break
 		}
 	}

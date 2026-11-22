@@ -9,17 +9,7 @@ import (
 
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
-	"github.com/windshare/windshare/osfs/internal/outputcap"
 )
-
-type dispositionPlatform struct {
-	outputcap.Platform
-	disposition outputcap.RootOpenDisposition
-}
-
-func (platform dispositionPlatform) RootOpenDisposition() outputcap.RootOpenDisposition {
-	return platform.disposition
-}
 
 func newDirectoryAdmissionSecret(random io.Reader) ([sha256.Size]byte, error) {
 	var secret [sha256.Size]byte
@@ -33,17 +23,6 @@ func newDirectoryAdmissionSecret(random io.Reader) ([sha256.Size]byte, error) {
 		return [sha256.Size]byte{}, transfer.ErrInvalidOutputBinding
 	}
 	return secret, nil
-}
-
-func runtimeRootDisposition(disposition outputcap.RootOpenDisposition) FilesystemOutputRootDisposition {
-	switch disposition {
-	case outputcap.AuthorityCreatedRoot:
-		return FilesystemOutputAuthorityCreatedRoot
-	case outputcap.CallerProvidedContainer:
-		return FilesystemOutputCallerProvidedContainer
-	default:
-		return ""
-	}
 }
 
 func runtimeOutputError(
@@ -70,4 +49,26 @@ func runtimeDependencyError(operation string, cause error) error {
 		return nil
 	}
 	return transferfault.Wrap(transferfault.DependencyContractFault(), fmt.Errorf("%s: %w", operation, cause))
+}
+
+func checkpointRuntimeError(ctx context.Context, operation string, cause error) error {
+	if cause == nil {
+		return nil
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if errors.Is(cause, context.Canceled) || errors.Is(cause, context.DeadlineExceeded) {
+		return cause
+	}
+	return transferfault.Wrap(checkpointRuntimeFault(cause), fmt.Errorf("%s: %w", operation, cause))
+}
+
+func checkpointRuntimeFault(cause error) transferfault.Fault {
+	value, ok := transferfault.NormalizeBoundaryError(cause).Fault()
+	if !ok || value.Domain() != transferfault.DomainCheckpoint ||
+		value.Scope() != transferfault.ScopeOutputPause {
+		return transferfault.DependencyContractFault()
+	}
+	return value
 }

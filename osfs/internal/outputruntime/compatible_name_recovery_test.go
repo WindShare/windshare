@@ -115,7 +115,7 @@ func TestMappedNamesCleanupRestartsAfterResultIdentityRetirement(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = authority.Close() })
-	if _, err := authority.BindDestination(ctx); err != nil {
+	if err := authority.BindDestination(ctx); err != nil {
 		t.Fatal(err)
 	}
 	layout, err := receivecontract.NewCompleteDirectoryResultRoot(incrementalTestIdentity16[catalog.DirectoryID](0x71), "folder?")

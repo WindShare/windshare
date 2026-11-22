@@ -9,7 +9,7 @@ import (
 )
 
 func TestOutputRootBindingOwnsCanonicalCertifiedIdentity(t *testing.T) {
-	identityScheme, err := NewIdentitySchemeID(string(IdentitySchemeLinuxHandleV2))
+	identityScheme, err := NewIdentitySchemeID(string(IdentitySchemePortableWitnessV1))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,20 +57,20 @@ func TestOutputRootBindingRejectsIncompleteOrOversizedClaims(t *testing.T) {
 	}{
 		"missing identityScheme": {volume: []byte("volume"), object: []byte("object")},
 		"missing volume": {
-			identityScheme: IdentitySchemeLinuxHandleV2,
+			identityScheme: IdentitySchemePortableWitnessV1,
 			object:         []byte("object"),
 		},
 		"oversized volume": {
-			identityScheme: IdentitySchemeLinuxHandleV2,
+			identityScheme: IdentitySchemePortableWitnessV1,
 			volume:         oversized,
 			object:         []byte("object"),
 		},
 		"missing object": {
-			identityScheme: IdentitySchemeLinuxHandleV2,
+			identityScheme: IdentitySchemePortableWitnessV1,
 			volume:         []byte("volume"),
 		},
 		"oversized object": {
-			identityScheme: IdentitySchemeLinuxHandleV2,
+			identityScheme: IdentitySchemePortableWitnessV1,
 			volume:         []byte("volume"),
 			object:         oversized,
 		},

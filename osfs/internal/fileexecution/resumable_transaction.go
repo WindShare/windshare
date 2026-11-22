@@ -11,21 +11,24 @@ import (
 	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
 )
 
-func (transaction *resumablePartialFileTransaction) MetadataWarnings() []MetadataWarning {
+func (transaction *PartialFileTransaction) MetadataWarnings() []MetadataWarning {
 	transaction.mu.Lock()
 	defer transaction.mu.Unlock()
 	return append([]MetadataWarning(nil), transaction.warnings...)
 }
 
-func (transaction *resumablePartialFileTransaction) Binding() transfer.MaterializedFileBinding {
+func (transaction *PartialFileTransaction) Binding() transfer.MaterializedFileBinding {
 	if transaction == nil {
 		return transfer.MaterializedFileBinding{}
 	}
 	return transaction.binding
 }
 
-func (transaction *resumablePartialFileTransaction) WriteRange(ctx context.Context, offset uint64, data []byte) error {
-	if transaction == nil || transaction.engine == nil {
+func (transaction *PartialFileTransaction) WriteRange(ctx context.Context, offset uint64, data []byte) error {
+	if transaction == nil {
+		return fileContractError(ErrTransactionClosed)
+	}
+	if transaction.engine == nil {
 		return fileContractError(ErrInvalidConfiguration)
 	}
 	sequence := transaction.engine.nextSequence()
@@ -40,7 +43,7 @@ func (transaction *resumablePartialFileTransaction) WriteRange(ctx context.Conte
 	return err
 }
 
-func (transaction *resumablePartialFileTransaction) writeRangeLocked(ctx context.Context, offset uint64, data []byte) error {
+func (transaction *PartialFileTransaction) writeRangeLocked(ctx context.Context, offset uint64, data []byte) error {
 	if err := transaction.validateOpen(ctx); err != nil {
 		return err
 	}
@@ -85,8 +88,11 @@ func (transaction *resumablePartialFileTransaction) writeRangeLocked(ctx context
 	return nil
 }
 
-func (transaction *resumablePartialFileTransaction) Commit(ctx context.Context) (transfer.FileSettlement, error) {
-	if transaction == nil || transaction.engine == nil {
+func (transaction *PartialFileTransaction) Commit(ctx context.Context) (transfer.FileSettlement, error) {
+	if transaction == nil {
+		return transfer.FileSettlement{}, fileContractError(ErrTransactionClosed)
+	}
+	if transaction.engine == nil {
 		return transfer.FileSettlement{}, fileContractError(ErrInvalidConfiguration)
 	}
 	sequence := transaction.engine.nextSequence()
@@ -106,7 +112,7 @@ func (transaction *resumablePartialFileTransaction) Commit(ctx context.Context) 
 	return settlement, err
 }
 
-func (transaction *resumablePartialFileTransaction) commitLocked(ctx context.Context) (transfer.FileSettlement, error) {
+func (transaction *PartialFileTransaction) commitLocked(ctx context.Context) (transfer.FileSettlement, error) {
 	checkpoint, err := transaction.checkpointLocked(ctx)
 	if err != nil {
 		return transfer.FileSettlement{}, err
@@ -136,7 +142,7 @@ func (transaction *resumablePartialFileTransaction) commitLocked(ctx context.Con
 	return transaction.publishFromDurableState(ctx, true)
 }
 
-func (transaction *resumablePartialFileTransaction) recoverPublication(ctx context.Context, retry bool) (transfer.FileStart, error) {
+func (transaction *PartialFileTransaction) recoverPublication(ctx context.Context, retry bool) (transfer.FileStart, error) {
 	transaction.mu.Lock()
 	settlement, err := transaction.publishFromDurableState(ctx, retry)
 	published := transaction.record.Phase() == checkpointmodel.PhasePublished
@@ -148,7 +154,7 @@ func (transaction *resumablePartialFileTransaction) recoverPublication(ctx conte
 	return settlementStart(settlement, err)
 }
 
-func (transaction *resumablePartialFileTransaction) publishFromDurableState(
+func (transaction *PartialFileTransaction) publishFromDurableState(
 	ctx context.Context,
 	retry bool,
 ) (transfer.FileSettlement, error) {
@@ -227,7 +233,7 @@ func (transaction *resumablePartialFileTransaction) publishFromDurableState(
 	return settlement, err
 }
 
-func (transaction *resumablePartialFileTransaction) quarantineAndSettleLocked(
+func (transaction *PartialFileTransaction) quarantineAndSettleLocked(
 	ctx context.Context,
 	reason checkpointmodel.QuarantineReason,
 ) (transfer.FileSettlement, error) {
@@ -245,14 +251,17 @@ func (transaction *resumablePartialFileTransaction) quarantineAndSettleLocked(
 	return settlement, err
 }
 
-func (transaction *resumablePartialFileTransaction) Pause(
+func (transaction *PartialFileTransaction) Pause(
 	ctx context.Context,
 	reason transfer.FilePauseReason,
 ) (transfer.FileSettlement, error) {
 	if !reason.Valid() {
 		return transfer.FileSettlement{}, fileContractError(transfer.ErrInvalidOutputSettlement)
 	}
-	if transaction == nil || transaction.engine == nil {
+	if transaction == nil {
+		return transfer.FileSettlement{}, fileContractError(ErrTransactionClosed)
+	}
+	if transaction.engine == nil {
 		return transfer.FileSettlement{}, fileContractError(ErrInvalidConfiguration)
 	}
 	sequence := transaction.engine.nextSequence()
@@ -268,7 +277,7 @@ func (transaction *resumablePartialFileTransaction) Pause(
 	return settlement, err
 }
 
-func (transaction *resumablePartialFileTransaction) pauseLocked(
+func (transaction *PartialFileTransaction) pauseLocked(
 	ctx context.Context,
 ) (transfer.FileSettlement, error) {
 	if transaction.record.Phase() == checkpointmodel.PhasePublishing && transaction.state == transactionOpen {
@@ -294,7 +303,7 @@ func (transaction *resumablePartialFileTransaction) pauseLocked(
 	return settlement, err
 }
 
-func (transaction *resumablePartialFileTransaction) Retire(
+func (transaction *PartialFileTransaction) Retire(
 	ctx context.Context,
 	reason transfer.FileRetireReason,
 ) (transfer.FileSettlement, error) {
@@ -307,7 +316,10 @@ func (transaction *resumablePartialFileTransaction) Retire(
 	default:
 		return transfer.FileSettlement{}, fileContractError(ErrRetirementUnauthorized)
 	}
-	if transaction == nil || transaction.engine == nil {
+	if transaction == nil {
+		return transfer.FileSettlement{}, fileContractError(ErrTransactionClosed)
+	}
+	if transaction.engine == nil {
 		return transfer.FileSettlement{}, fileContractError(ErrInvalidConfiguration)
 	}
 	sequence := transaction.engine.nextSequence()
@@ -323,7 +335,7 @@ func (transaction *resumablePartialFileTransaction) Retire(
 	return settlement, err
 }
 
-func (transaction *resumablePartialFileTransaction) retireLocked(
+func (transaction *PartialFileTransaction) retireLocked(
 	ctx context.Context,
 	retirement checkpointmodel.RetirementReason,
 ) (transfer.FileSettlement, error) {
@@ -362,7 +374,7 @@ func (transaction *resumablePartialFileTransaction) retireLocked(
 	return settlement, err
 }
 
-func (transaction *resumablePartialFileTransaction) validateOpen(ctx context.Context) error {
+func (transaction *PartialFileTransaction) validateOpen(ctx context.Context) error {
 	if ctx == nil {
 		return fileContractError(ErrInvalidConfiguration)
 	}
@@ -380,7 +392,7 @@ func (transaction *resumablePartialFileTransaction) validateOpen(ctx context.Con
 	return nil
 }
 
-func (transaction *resumablePartialFileTransaction) cleanupOwned(ctx context.Context) error {
+func (transaction *PartialFileTransaction) cleanupOwned(ctx context.Context) error {
 	for _, step := range []RetirementStep{
 		RetirementRemoveStage, RetirementSyncStageNamespace,
 		RetirementRemoveAnchor, RetirementSyncAnchorNamespace,
@@ -393,7 +405,7 @@ func (transaction *resumablePartialFileTransaction) cleanupOwned(ctx context.Con
 	return nil
 }
 
-func (transaction *resumablePartialFileTransaction) closeFileLocked(ctx context.Context) error {
+func (transaction *PartialFileTransaction) closeFileLocked(ctx context.Context) error {
 	if transaction.flushTimer != nil {
 		transaction.flushTimer.Stop()
 		transaction.flushTimer = nil
@@ -403,14 +415,14 @@ func (transaction *resumablePartialFileTransaction) closeFileLocked(ctx context.
 	return err
 }
 
-func (transaction *resumablePartialFileTransaction) closeDestinationLocked(ctx context.Context) error {
+func (transaction *PartialFileTransaction) closeDestinationLocked(ctx context.Context) error {
 	err := collaboratorError(ctx, closeDestination(transaction.destination))
 	transaction.destination = nil
 	transaction.state = transactionClosed
 	return err
 }
 
-func (transaction *resumablePartialFileTransaction) closeResourcesLocked(ctx context.Context) error {
+func (transaction *PartialFileTransaction) closeResourcesLocked(ctx context.Context) error {
 	return joinFailures(ctx, transaction.closeFileLocked(ctx), transaction.closeDestinationLocked(ctx))
 }
 

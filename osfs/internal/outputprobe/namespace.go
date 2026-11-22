@@ -1,3 +1,4 @@
+// Package outputprobe owns live destination capability proofs and exact-object cleanup.
 package outputprobe
 
 import (
@@ -11,24 +12,18 @@ import (
 )
 
 const (
-	NamePrefix          = outputcap.ControlDirectoryName + ".probe-"
-	ReservedPrefix      = outputcap.ControlDirectoryName + ".probe"
-	RandomBytes         = 16
-	AllocationAttempts  = 16
-	MaximumLeftovers    = 64
-	StageName           = "stage"
-	PublicStageName     = "live-stage"
-	AnchorName          = "anchor"
-	PublicationName     = "publication"
-	RecordName          = "record"
-	TemporaryRecordName = "record.tmp"
-	CandidateName       = "candidate"
-	InstalledName       = "installed"
+	NamePrefix         = outputcap.ControlDirectoryName + ".probe-"
+	ReservedPrefix     = outputcap.ControlDirectoryName + ".probe"
+	RandomBytes        = 16
+	AllocationAttempts = 16
+	StageName          = "stage"
+	AnchorName         = "anchor"
+	PublicationName    = "publication"
+	CandidateName      = "candidate"
+	InstalledName      = "installed"
 )
 
-var fileRemovalOrder = [...]string{
-	PublicStageName, StageName, PublicationName, AnchorName, TemporaryRecordName, RecordName,
-}
+var fileRemovalOrder = [...]string{StageName, PublicationName, AnchorName}
 var directoryRemovalOrder = [...]string{CandidateName, InstalledName}
 
 func NewName(random io.Reader) (string, error) {

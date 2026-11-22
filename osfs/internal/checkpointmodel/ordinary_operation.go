@@ -517,3 +517,12 @@ func writeOrdinaryOptionalFrame(writer interface{ Write([]byte) (int, error) }, 
 	_, _ = writer.Write(length[:])
 	_, _ = writer.Write(value)
 }
+
+func allZero(raw []byte) bool {
+	for _, value := range raw {
+		if value != 0 {
+			return false
+		}
+	}
+	return true
+}

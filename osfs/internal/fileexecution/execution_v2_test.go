@@ -67,7 +67,7 @@ func newExecutionFixture(t *testing.T, exactSize uint64) executionFixture {
 	}
 	ownership, err := checkpointmodel.NewOwnership(checkpointmodel.OwnershipSpec{
 		Materializer:        checkpointmodel.MaterializerNativeTree,
-		IdentityScheme:      checkpointmodel.IdentitySchemeWindowsObjectIDV1,
+		IdentityScheme:      checkpointmodel.IdentitySchemePortableWitnessV1,
 		AuthorityRef:        authority.Bytes(),
 		RootOpenDisposition: checkpointmodel.CallerProvidedContainer,
 	})

@@ -116,7 +116,7 @@ func TestFailedIdleFlushKeepsPriorCheckpointAndClosesOnPause(t *testing.T) {
 	if err := transaction.WriteRange(ctx, 4, []byte("tail")); err != nil {
 		t.Fatal(err)
 	}
-	owned := transaction.(*PartialFileTransaction).strategy.(*resumablePartialFileTransaction).file.(*memoryOwnedFile)
+	owned := transaction.(*PartialFileTransaction).file.(*memoryOwnedFile)
 	syncFailure := errors.New("data sync failed")
 	owned.syncErr = syncFailure
 	timer.fire()

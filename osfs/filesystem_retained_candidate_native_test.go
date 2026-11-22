@@ -53,8 +53,8 @@ func newRetainedCandidateFixture(
 	t.Helper()
 	ctx := context.Background()
 	root := filepath.Join(t.TempDir(), name)
-	output, operation, intent := openPublicOrdinaryOperation(t, root, seed)
-	session, err := output.OpenOperation(ctx, operation)
+	authority, operation, intent := openPublicOrdinaryOperation(t, root, seed)
+	session, err := operation.OpenDirectTree(ctx, intent)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func newRetainedCandidateFixture(
 		settlement.Kind() != transfer.DirectTreeSettlementPaused {
 		t.Fatalf("initial tree pause = (%d, %v)", settlement.Kind(), err)
 	}
-	if err := output.Close(); err != nil {
+	if err := authority.Close(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -101,17 +101,14 @@ func newRetainedCandidateFixture(
 func listRetainedCandidate(
 	t *testing.T,
 	fixture retainedCandidateFixture,
-) ResumeStateAuthority {
+) *RecoveryAuthority {
 	t.Helper()
-	resume, err := NewFilesystemResumeStateAuthority(FilesystemResumeRoot{RootPath: fixture.root})
-	if err != nil {
-		t.Fatal(err)
-	}
-	inventory, err := resume.ListResumeState(context.Background())
+	resume := NewRecoveryAuthority(fixture.root)
+	inventory, err := resume.List(context.Background())
 	summaries := inventory.Summaries()
-	if err != nil || inventory.Status() != ResumeStateListReady ||
+	if err != nil || inventory.Status() != RecoveryListReady ||
 		len(summaries) != 1 || summaries[0].OperationID() != fixture.intent.OperationID() ||
-		summaries[0].State() != ResumeOperationResumable || !summaries[0].Resumable() ||
+		summaries[0].State() != RecoveryOperationResumable ||
 		summaries[0].ReceiveIntentDigest() != fixture.intent.Digest() {
 		t.Fatalf("retained candidate inventory = (%+v, %v)", inventory, err)
 	}
@@ -125,28 +122,24 @@ func reopenRetainedCandidateOutput(
 ) {
 	t.Helper()
 	ctx := context.Background()
-	reopened, err := NewFilesystemOutputAuthority(FilesystemOutputAuthorityConfig{
-		RootPath: fixture.root,
-	})
+	reopened, err := NewOutputAuthority(OutputConfig{RootPath: fixture.root})
 	if err != nil {
 		t.Fatal(err)
 	}
-	mode, err := reopened.BindDestination(ctx)
-	if err != nil || !mode.Resumable() {
-		t.Fatalf("reopen bind = (%+v, %v)", mode, err)
+	if err := reopened.BindDestination(ctx); err != nil {
+		t.Fatalf("reopen bind = %v", err)
 	}
-	lookup, err := reopened.LookupActive(ctx, fixture.intent.SelectionSpec())
-	if err != nil || lookup.Kind() != FilesystemOutputLookupReopened ||
-		lookup.StateReason() != 0 {
+	lookup, err := reopened.SelectOperation(ctx, fixture.intent.SelectionSpec(), receivecontract.AutomaticOperation())
+	if err != nil || lookup.Kind() != OutputLookupReopened ||
+		lookup.Attention() != OutputAttentionNone {
 		t.Fatalf("retained candidate lookup = (%d, %s, %v)",
-			lookup.Kind(), lookup.StateReason(), err)
+			lookup.Kind(), lookup.Attention(), err)
 	}
 	reopenedIntent, present := lookup.Operation().ReceiveIntent()
-	if !present || !reopenedIntent.EqualCanonical(fixture.intent) ||
-		!lookup.Operation().ExecutionMode().Resumable() {
+	if !present || !reopenedIntent.EqualCanonical(fixture.intent) {
 		t.Fatalf("retained candidate operation identity = (%+v, %t)", reopenedIntent, present)
 	}
-	resumedSession, err := reopened.OpenOperation(ctx, lookup.Operation())
+	resumedSession, err := lookup.Operation().OpenDirectTree(ctx, reopenedIntent)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,18 +190,18 @@ func reopenRetainedCandidateOutput(
 
 func discardRetainedCandidate(
 	t *testing.T,
-	resume ResumeStateAuthority,
+	resume *RecoveryAuthority,
 	operation receivecontract.OperationID,
 ) {
 	t.Helper()
-	exact, err := resume.ListResumeState(context.Background())
+	exact, err := resume.List(context.Background())
 	exactSummaries := exact.Summaries()
 	if err != nil || len(exactSummaries) != 1 ||
-		exactSummaries[0].OperationID() != operation || !exactSummaries[0].Resumable() {
+		exactSummaries[0].OperationID() != operation || exactSummaries[0].State() != RecoveryOperationResumable {
 		t.Fatalf("exact pre-discard snapshot = (%+v, %v)", exact, err)
 	}
 	discarded, err := resume.Discard(context.Background(), operation)
-	if err != nil || discarded.State() != ResumeOperationDiscarded ||
+	if err != nil || discarded.State() != RecoveryOperationDiscarded ||
 		discarded.OperationID() != operation {
 		t.Fatalf("exact discard = (%+v, %v)", discarded, err)
 	}
@@ -397,9 +390,7 @@ func openRetainedCandidateRepository(
 	switch platform.(interface {
 		IdentityScheme() outputcap.IdentitySchemeID
 	}).IdentityScheme() {
-	case outputcap.IdentitySchemeWindowsObjectIDV1, outputcap.IdentitySchemePortableWitnessV1:
-		profile = checkpointstore.InheritFinalParent
-	case outputcap.IdentitySchemeLinuxHandleV2, outputcap.IdentitySchemeDarwinObjectIDV1:
+	case outputcap.IdentitySchemePortableWitnessV1:
 		profile = checkpointstore.InheritFinalParent
 	default:
 		_ = errors.Join(repository.Close(), lease.Close(), registry.Close(), control.Close(), platform.Close())

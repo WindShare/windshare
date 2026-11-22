@@ -44,19 +44,12 @@ type CapabilityReason uint8
 const (
 	CapabilityReasonNone CapabilityReason = iota + 1
 	CapabilityReasonUnsupportedFilesystem
-	CapabilityReasonNetworkFilesystem
-	CapabilityReasonUserspaceFilesystem
-	CapabilityReasonCloudPlaceholder
-	CapabilityReasonReparseOrNestedMount
 	CapabilityReasonUnsafePublication
 	CapabilityReasonUnverifiableOperationRecovery
-	CapabilityReasonUnverifiableRangeRecovery
-	CapabilityReasonUnverifiableCrashCleanup
-	CapabilityReasonCleanupOwnershipUnknown
 )
 
 func (reason CapabilityReason) Valid() bool {
-	return reason >= CapabilityReasonNone && reason <= CapabilityReasonCleanupOwnershipUnknown
+	return reason >= CapabilityReasonNone && reason <= CapabilityReasonUnverifiableOperationRecovery
 }
 
 func (reason CapabilityReason) String() string {
@@ -65,24 +58,10 @@ func (reason CapabilityReason) String() string {
 		return "none"
 	case CapabilityReasonUnsupportedFilesystem:
 		return "unsupported-filesystem"
-	case CapabilityReasonNetworkFilesystem:
-		return "network-filesystem"
-	case CapabilityReasonUserspaceFilesystem:
-		return "userspace-filesystem"
-	case CapabilityReasonCloudPlaceholder:
-		return "cloud-placeholder"
-	case CapabilityReasonReparseOrNestedMount:
-		return "reparse-or-nested-mount"
 	case CapabilityReasonUnsafePublication:
 		return "unsafe-publication"
 	case CapabilityReasonUnverifiableOperationRecovery:
 		return "operation-recovery-unverifiable"
-	case CapabilityReasonUnverifiableRangeRecovery:
-		return "range-recovery-unverifiable"
-	case CapabilityReasonUnverifiableCrashCleanup:
-		return "crash-cleanup-unverifiable"
-	case CapabilityReasonCleanupOwnershipUnknown:
-		return "cleanup-ownership-unknown"
 	default:
 		return ""
 	}
@@ -115,24 +94,20 @@ func (evidence CapabilityEvidence) Valid() bool {
 		(evidence.fact == CapabilitySupported) == (evidence.reason == CapabilityReasonNone)
 }
 
-// DestinationCapabilities keeps independent proofs independent. In particular,
-// failure to prove restart recovery cannot erase a proven no-replace publish.
+// DestinationCapabilities keeps the two probed destination primitives explicit:
+// atomic no-replace file publication and atomic no-replace directory installation.
 type DestinationCapabilities struct {
 	safePublish       CapabilityEvidence
 	operationRecovery CapabilityEvidence
-	rangeRecovery     CapabilityEvidence
-	crashCleanup      CapabilityEvidence
 }
 
 func NewDestinationCapabilities(
 	safePublish CapabilityEvidence,
 	operationRecovery CapabilityEvidence,
-	rangeRecovery CapabilityEvidence,
-	crashCleanup CapabilityEvidence,
 ) (DestinationCapabilities, error) {
 	capabilities := DestinationCapabilities{
-		safePublish: safePublish, operationRecovery: operationRecovery,
-		rangeRecovery: rangeRecovery, crashCleanup: crashCleanup,
+		safePublish:       safePublish,
+		operationRecovery: operationRecovery,
 	}
 	if !capabilities.Valid() {
 		return DestinationCapabilities{}, ErrInvalidDestinationCapabilities
@@ -146,58 +121,23 @@ func (capabilities DestinationCapabilities) SafePublish() CapabilityEvidence {
 func (capabilities DestinationCapabilities) OperationRecovery() CapabilityEvidence {
 	return capabilities.operationRecovery
 }
-func (capabilities DestinationCapabilities) RangeRecovery() CapabilityEvidence {
-	return capabilities.rangeRecovery
-}
-func (capabilities DestinationCapabilities) CrashCleanup() CapabilityEvidence {
-	return capabilities.crashCleanup
-}
 func (capabilities DestinationCapabilities) Valid() bool {
-	return capabilities.safePublish.Valid() && capabilities.operationRecovery.Valid() &&
-		capabilities.rangeRecovery.Valid() && capabilities.crashCleanup.Valid()
+	return capabilities.safePublish.Valid() && capabilities.operationRecovery.Valid()
 }
 
-type ExecutionMode uint8
-
-const (
-	ExecutionResumable ExecutionMode = iota + 1
-	ExecutionLiveOnly
-)
-
-const (
-	ExecutionModeResumable = ExecutionResumable
-	ExecutionModeLiveOnly  = ExecutionLiveOnly
-)
-
-func (mode ExecutionMode) Valid() bool {
-	return mode == ExecutionResumable || mode == ExecutionLiveOnly
-}
-
-func (mode ExecutionMode) String() string {
-	switch mode {
-	case ExecutionResumable:
-		return "resumable"
-	case ExecutionLiveOnly:
-		return "live-only"
-	default:
-		return ""
-	}
-}
-
-// SelectExecutionMode keeps safe current-process publication independent from
-// restart authority. Missing restart evidence selects a lifecycle that retains
-// live handles and never treats abandoned private names as recovery authority.
-func SelectExecutionMode(capabilities DestinationCapabilities) (ExecutionMode, error) {
+// ValidateSupport verifies that the destination supports both atomic no-replace
+// file publication and directory installation required for ordinary output.
+func (capabilities DestinationCapabilities) ValidateSupport() error {
 	if !capabilities.Valid() {
-		return 0, ErrInvalidDestinationCapabilities
+		return ErrInvalidDestinationCapabilities
 	}
 	if !capabilities.safePublish.Supported() {
-		return 0, ErrOrdinaryOutputUnsupported
+		return ErrOrdinaryOutputUnsupported
 	}
-	if capabilities.operationRecovery.Supported() && capabilities.rangeRecovery.Supported() {
-		return ExecutionResumable, nil
+	if !capabilities.operationRecovery.Supported() {
+		return ErrRecoverableOutputUnsupported
 	}
-	return ExecutionLiveOnly, nil
+	return nil
 }
 
 // PublishNoReplaceOutcome describes publication, independently of its error.

@@ -23,8 +23,8 @@ import (
 	"github.com/windshare/windshare/engine/internal/receive"
 	"github.com/windshare/windshare/engine/networkdirectory"
 	appobs "github.com/windshare/windshare/engine/observation"
+	"github.com/windshare/windshare/engine/output"
 	"github.com/windshare/windshare/engine/relayprofile"
-	"github.com/windshare/windshare/osfs"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
 	wsrtc "github.com/windshare/windshare/transport/webrtc"
@@ -171,14 +171,14 @@ func (failure untrustedUnwrapper) Error() string { return failure.secret }
 func (failure untrustedUnwrapper) Unwrap() error { return failure.child }
 
 type untrustedFilesystemDiagnosticCarrier struct {
-	diagnostic osfs.FilesystemOutputDiagnostic
+	diagnostic filesystem.OutputFailureDiagnostic
 }
 
 func (failure untrustedFilesystemDiagnosticCarrier) Error() string {
 	return "filesystem output failed"
 }
 
-func (failure untrustedFilesystemDiagnosticCarrier) FilesystemOutputDiagnostic() osfs.FilesystemOutputDiagnostic {
+func (failure untrustedFilesystemDiagnosticCarrier) OutputDiagnostic() filesystem.OutputFailureDiagnostic {
 	return failure.diagnostic
 }
 
@@ -192,7 +192,7 @@ func TestSealedFilesystemFailuresPreserveClosedOutputAndCheckpointCodes(t *testi
 		name  string
 		fault transferfault.Fault
 		code  appobs.FailureCode
-		stage osfs.FilesystemOutputFailureStage
+		stage output.FailureStage
 	}, 0, int(transferfault.OutputContract)+int(transferfault.CheckpointStateIO))
 	for code := transferfault.OutputStateIO; code <= transferfault.OutputContract; code++ {
 		fault, err := transferfault.NewOutput(transferfault.ScopeOutputPause, code)
@@ -203,11 +203,11 @@ func TestSealedFilesystemFailuresPreserveClosedOutputAndCheckpointCodes(t *testi
 			name  string
 			fault transferfault.Fault
 			code  appobs.FailureCode
-			stage osfs.FilesystemOutputFailureStage
+			stage output.FailureStage
 		}{
 			name: fmt.Sprintf("output/%d", code), fault: fault,
 			code:  appobs.FailureCode(uint16(appobs.FailureOutputStateIO) + uint16(code) - 1),
-			stage: osfs.FilesystemOutputFailureOperationAdmission,
+			stage: output.FailureCreate,
 		})
 	}
 	for code := transferfault.CheckpointBusy; code <= transferfault.CheckpointStateIO; code++ {
@@ -219,21 +219,21 @@ func TestSealedFilesystemFailuresPreserveClosedOutputAndCheckpointCodes(t *testi
 			name  string
 			fault transferfault.Fault
 			code  appobs.FailureCode
-			stage osfs.FilesystemOutputFailureStage
+			stage output.FailureStage
 		}{
 			name: fmt.Sprintf("checkpoint/%d", code), fault: fault,
 			code:  appobs.FailureCode(uint16(appobs.FailureCheckpointBusy) + uint16(code) - 1),
-			stage: osfs.FilesystemOutputFailureCheckpointReconciliation,
+			stage: output.FailureCheckpoint,
 		})
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			diagnostic := osfs.FilesystemOutputDiagnostic{
+			diagnostic := filesystem.OutputFailureDiagnostic{
 				Stage: test.stage, FaultDomain: uint8(test.fault.Domain()),
 				NormalizedScope: uint8(test.fault.Scope()), NormalizedCode: test.fault.Code(),
 			}
-			sealed, ok := filesystem.SealFilesystemOutputFailure(diagnostic)
+			sealed, ok := filesystem.SealOutputFailure(diagnostic)
 			if !ok {
 				t.Fatal("valid filesystem diagnostic was not sealed")
 			}
@@ -253,12 +253,12 @@ func TestFilesystemFailureAuthorityIsExactAndPrimary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	primaryDiagnostic := osfs.FilesystemOutputDiagnostic{
-		Stage:       osfs.FilesystemOutputFailureOperationAcquisition,
+	primaryDiagnostic := filesystem.OutputFailureDiagnostic{
+		Stage:       output.FailureOpen,
 		FaultDomain: uint8(primaryFault.Domain()), NormalizedScope: uint8(primaryFault.Scope()),
 		NormalizedCode: primaryFault.Code(),
 	}
-	sealed, ok := filesystem.SealFilesystemOutputFailure(primaryDiagnostic)
+	sealed, ok := filesystem.SealOutputFailure(primaryDiagnostic)
 	if !ok {
 		t.Fatal("valid primary diagnostic was not sealed")
 	}
@@ -269,8 +269,8 @@ func TestFilesystemFailureAuthorityIsExactAndPrimary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cleanup, ok := filesystem.SealFilesystemOutputFailure(osfs.FilesystemOutputDiagnostic{
-		Stage:       osfs.FilesystemOutputFailureAuthorityClose,
+	cleanup, ok := filesystem.SealOutputFailure(filesystem.OutputFailureDiagnostic{
+		Stage:       output.FailureClose,
 		FaultDomain: uint8(cleanupFault.Domain()), NormalizedScope: uint8(cleanupFault.Scope()),
 		NormalizedCode: cleanupFault.Code(),
 	})

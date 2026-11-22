@@ -49,12 +49,9 @@ func TestPortablePublicationCollisionRetainsDiscardAuthority(t *testing.T) {
 
 	// A definite no-replace collision must restore ownership before the live
 	// handle closes, so a later discard can still remove only the staged data.
-	recovery, err := NewFilesystemResumeStateAuthority(FilesystemResumeRoot{RootPath: root})
-	if err != nil {
-		t.Fatal(err)
-	}
-	result, err := recovery.Discard(ctx, intent.OperationID())
-	if err != nil || result.State() != ResumeOperationDiscarded {
+	recoveryAuthority := NewRecoveryAuthority(root)
+	result, err := recoveryAuthority.Discard(ctx, intent.OperationID())
+	if err != nil || result.State() != RecoveryOperationDiscarded {
 		t.Fatalf("discard after publication collision: %v %v", result.State(), err)
 	}
 	if _, err := os.Stat(stage); !errors.Is(err, os.ErrNotExist) {

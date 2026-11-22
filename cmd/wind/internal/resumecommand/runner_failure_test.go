@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/windshare/windshare/adapters/filesystem"
 	"github.com/windshare/windshare/engine/output"
-	"github.com/windshare/windshare/osfs"
 )
 
 func TestRunnerFailsClosedAtInjectedPresentationBoundaries(t *testing.T) {
@@ -62,55 +62,43 @@ func TestRunnerFailsClosedAtInjectedPresentationBoundaries(t *testing.T) {
 	})
 }
 
-type resumeDiagnosticTestError struct {
-	diagnostic osfs.FilesystemOutputDiagnostic
-}
-
-func (failure resumeDiagnosticTestError) Error() string {
-	return "provider path and capability canary"
-}
-
-func (failure resumeDiagnosticTestError) FilesystemOutputDiagnostic() osfs.FilesystemOutputDiagnostic {
-	return failure.diagnostic
-}
-
 func TestResumeListFailureStageMatrixIsClosedAndPathFree(t *testing.T) {
 	tests := []struct {
 		name       string
-		diagnostic osfs.FilesystemOutputDiagnostic
+		diagnostic filesystem.OutputFailureDiagnostic
 		stage      output.FailureStage
 		reason     string
 		fields     []string
 	}{
 		{
 			name: "destination binding",
-			diagnostic: osfs.FilesystemOutputDiagnostic{
-				Stage: osfs.FilesystemOutputFailureDestinationBinding,
+			diagnostic: filesystem.OutputFailureDiagnostic{
+				Stage: output.FailureDestinationBinding,
 			},
 			stage:  output.FailureDestinationBinding,
 			reason: resumeDestinationBindingReason,
 		},
 		{
 			name: "inventory paging",
-			diagnostic: osfs.FilesystemOutputDiagnostic{
-				Stage: osfs.FilesystemOutputFailureInventoryPaging,
+			diagnostic: filesystem.OutputFailureDiagnostic{
+				Stage: output.FailureInventory,
 			},
 			stage:  output.FailureInventory,
 			reason: resumeInventoryPagingReason,
 		},
 		{
 			name: "operation acquisition",
-			diagnostic: osfs.FilesystemOutputDiagnostic{
-				Stage: osfs.FilesystemOutputFailureOperationAcquisition,
+			diagnostic: filesystem.OutputFailureDiagnostic{
+				Stage: output.FailureOpen,
 			},
 			stage:  output.FailureOpen,
 			reason: resumeOperationAcquisitionReason,
 		},
 		{
 			name: "checkpoint reconciliation",
-			diagnostic: osfs.FilesystemOutputDiagnostic{
-				Stage:              osfs.FilesystemOutputFailureCheckpointReconciliation,
-				ReconciliationStep: osfs.FilesystemCheckpointRecordPromotion,
+			diagnostic: filesystem.OutputFailureDiagnostic{
+				Stage:              output.FailureCheckpoint,
+				ReconciliationStep: filesystem.CheckpointRecordPromotion,
 			},
 			stage:  output.FailureCheckpoint,
 			reason: resumeCheckpointReconcileReason,
@@ -118,10 +106,10 @@ func TestResumeListFailureStageMatrixIsClosedAndPathFree(t *testing.T) {
 		},
 		{
 			name: "native durability",
-			diagnostic: osfs.FilesystemOutputDiagnostic{
-				Stage:              osfs.FilesystemOutputFailureNativeDurability,
-				ReconciliationStep: osfs.FilesystemCheckpointStageDurability,
-				NativeErrorClass:   osfs.FilesystemNativeErrorAccessDenied,
+			diagnostic: filesystem.OutputFailureDiagnostic{
+				Stage:              output.FailureDurability,
+				ReconciliationStep: filesystem.CheckpointStageDurability,
+				NativeErrorClass:   filesystem.NativeErrorAccessDenied,
 			},
 			stage:  output.FailureDurability,
 			reason: resumeNativeDurabilityReason,
@@ -132,8 +120,8 @@ func TestResumeListFailureStageMatrixIsClosedAndPathFree(t *testing.T) {
 		},
 		{
 			name: "authority close",
-			diagnostic: osfs.FilesystemOutputDiagnostic{
-				Stage: osfs.FilesystemOutputFailureAuthorityClose,
+			diagnostic: filesystem.OutputFailureDiagnostic{
+				Stage: output.FailureClose,
 			},
 			stage:  output.FailureClose,
 			reason: resumeAuthorityCloseReason,
@@ -142,7 +130,10 @@ func TestResumeListFailureStageMatrixIsClosedAndPathFree(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			app, stdout, _ := newResumeTestApp()
-			cause, _ := output.SealFailure(resumeDiagnosticTestError{diagnostic: test.diagnostic}, output.FailureDiagnostic{Stage: test.stage})
+			cause, ok := filesystem.SealOutputFailure(test.diagnostic)
+			if !ok {
+				t.Fatalf("diagnostic %+v was not sealed", test.diagnostic)
+			}
 			app.resumeInventories = &fakeResumeStateInventoryOpener{err: cause}
 			result := app.Run(context.Background(), []string{
 				"resume", "list", "-o", t.TempDir(),

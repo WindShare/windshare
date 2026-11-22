@@ -18,9 +18,6 @@ const (
 	CallerProvidedContainer RootOpenDisposition = "caller-provided-container"
 	AuthorityCreatedRoot    RootOpenDisposition = "authority-created-root"
 
-	IdentitySchemeLinuxHandleV2     IdentitySchemeID = "linux/ext4/handle/v2"
-	IdentitySchemeWindowsObjectIDV1 IdentitySchemeID = "windows/ntfs/object-id/v1"
-	IdentitySchemeDarwinObjectIDV1  IdentitySchemeID = "darwin/apfs/object-id/v1"
 	IdentitySchemePortableWitnessV1 IdentitySchemeID = "portable/witness/v1"
 
 	ownershipDomain            = "windshare/file-checkpoint-ownership/v2"
@@ -50,7 +47,7 @@ type IdentitySchemeID string
 func NewIdentitySchemeID(value string) (IdentitySchemeID, error) {
 	identityScheme := IdentitySchemeID(value)
 	switch identityScheme {
-	case IdentitySchemeLinuxHandleV2, IdentitySchemeWindowsObjectIDV1, IdentitySchemeDarwinObjectIDV1, IdentitySchemePortableWitnessV1:
+	case IdentitySchemePortableWitnessV1:
 		return identityScheme, nil
 	default:
 		return "", fmt.Errorf("%w: filesystem identityScheme ID", ErrInvalidOwnership)

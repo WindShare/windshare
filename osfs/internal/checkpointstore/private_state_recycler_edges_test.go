@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/osfs/internal/outputcap"
 )
 
@@ -16,28 +15,14 @@ func TestPrivateStateRecyclerAcceptsMissingCurrentGenerationState(t *testing.T) 
 		t.Fatalf("nil control recycle = (%t, %v)", empty, err)
 	}
 
-	t.Run("both namespaces absent", func(t *testing.T) {
+	t.Run("ordinary namespace absent", func(t *testing.T) {
 		control := newMemoryDirectory()
 		if empty, err := RecyclePrivateState(control); err != nil || !empty {
 			t.Fatalf("empty control recycle = (%t, %v)", empty, err)
 		}
 	})
 
-	t.Run("ordinary namespace absent", func(t *testing.T) {
-		control := newMemoryDirectory()
-		journal, err := OpenLiveCleanupJournal(control)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := journal.Close(); err != nil {
-			t.Fatal(err)
-		}
-		if empty, err := RecyclePrivateState(control); err != nil || !empty {
-			t.Fatalf("cleanup-only recycle = (%t, %v)", empty, err)
-		}
-	})
-
-	t.Run("cleanup namespace absent", func(t *testing.T) {
+	t.Run("ordinary namespace empty", func(t *testing.T) {
 		control := newMemoryDirectory()
 		registry, err := OpenOperationRegistry(control)
 		if err != nil {
@@ -53,39 +38,35 @@ func TestPrivateStateRecyclerAcceptsMissingCurrentGenerationState(t *testing.T) 
 }
 
 func TestPrivateStateRecyclerPreservesUnrecognizedOrNonemptyShapes(t *testing.T) {
-	tests := map[string]func(*memoryDirectory, *OperationRegistry, *LiveCleanupJournal){
-		"unknown registry entry": func(control *memoryDirectory, _ *OperationRegistry, _ *LiveCleanupJournal) {
+	tests := map[string]func(*memoryDirectory, *OperationRegistry){
+		"unknown registry entry": func(control *memoryDirectory, _ *OperationRegistry) {
 			root := control.dirs[OrdinaryRegistryDirectoryV1]
 			root.dirs["foreign"] = newMemoryDirectory()
 		},
-		"malformed active child": func(_ *memoryDirectory, registry *OperationRegistry, _ *LiveCleanupJournal) {
+		"malformed active child": func(_ *memoryDirectory, registry *OperationRegistry) {
 			registry.active.(*memoryDirectory).dirs["NOT-LOWER-HEX"] = newMemoryDirectory()
 		},
-		"candidate child is a file": func(_ *memoryDirectory, registry *OperationRegistry, _ *LiveCleanupJournal) {
+		"candidate child is a file": func(_ *memoryDirectory, registry *OperationRegistry) {
 			name := strings.Repeat("a", 64)
 			registry.candidates.(*memoryDirectory).files[name] = &memoryFileData{}
 		},
-		"claim registry is nonempty": func(_ *memoryDirectory, registry *OperationRegistry, _ *LiveCleanupJournal) {
+		"claim registry is nonempty": func(_ *memoryDirectory, registry *OperationRegistry) {
 			registry.claims.(*memoryDirectory).files["claim"] = &memoryFileData{}
 		},
-		"unknown lease": func(_ *memoryDirectory, registry *OperationRegistry, _ *LiveCleanupJournal) {
+		"unknown lease": func(_ *memoryDirectory, registry *OperationRegistry) {
 			registry.leases.(*memoryDirectory).files["foreign.lock"] = &memoryFileData{}
 		},
-		"lease carrier has wrong kind": func(_ *memoryDirectory, registry *OperationRegistry, _ *LiveCleanupJournal) {
+		"lease carrier has wrong kind": func(_ *memoryDirectory, registry *OperationRegistry) {
 			name := strings.Repeat("b", 32) + ordinaryOperationLockSuffix
 			registry.leases.(*memoryDirectory).dirs[name] = newMemoryDirectory()
-		},
-		"cleanup ticket remains": func(control *memoryDirectory, _ *OperationRegistry, _ *LiveCleanupJournal) {
-			proof := control.dirs[checkpointmodel.LiveCleanupNamespaceV1]
-			proof.dirs[liveCleanupTicketsDirectory].files["ticket"] = &memoryFileData{}
 		},
 	}
 
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
-			control, registry, journal := recyclerFixture(t)
-			mutate(control, &registry, &journal)
-			closeRecyclerFixture(t, &registry, &journal)
+			control, registry := recyclerFixture(t)
+			mutate(control, &registry)
+			closeRecyclerFixture(t, &registry)
 			if empty, err := RecyclePrivateState(control); err != nil || empty {
 				t.Fatalf("recycle result = (%t, %v)", empty, err)
 			}
@@ -94,7 +75,7 @@ func TestPrivateStateRecyclerPreservesUnrecognizedOrNonemptyShapes(t *testing.T)
 }
 
 func TestPrivateStateRecyclerRecognizesEveryStableLockCarrier(t *testing.T) {
-	control, registry, journal := recyclerFixture(t)
+	control, registry := recyclerFixture(t)
 	for name := range map[string]struct{}{
 		strings.Repeat("1", 32) + ordinaryOperationLockSuffix: {},
 		strings.Repeat("2", 64) + ordinaryActiveLockSuffix:    {},
@@ -108,7 +89,7 @@ func TestPrivateStateRecyclerRecognizesEveryStableLockCarrier(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	closeRecyclerFixture(t, &registry, &journal)
+	closeRecyclerFixture(t, &registry)
 	if empty, err := RecyclePrivateState(control); err != nil || !empty {
 		t.Fatalf("stable-lock recycle = (%t, %v)", empty, err)
 	}
@@ -153,22 +134,6 @@ func TestPrivateStateRecyclerPropagatesInspectionFailures(t *testing.T) {
 		}
 		if empty, err := RecyclePrivateState(control); empty || !errors.Is(err, errRecyclerFake) {
 			t.Fatalf("ordinary inspection = (%t, %v)", empty, err)
-		}
-	})
-
-	t.Run("cleanup classification", func(t *testing.T) {
-		base := newMemoryDirectory()
-		control := &recyclerFaultDirectory{
-			Directory: base,
-			classify: func(name string) (outputcap.EntryKind, bool, error) {
-				if name == checkpointmodel.LiveCleanupNamespaceV1 {
-					return outputcap.EntryAbsent, false, errRecyclerFake
-				}
-				return base.ClassifyExactEntry(name)
-			},
-		}
-		if empty, err := RecyclePrivateState(control); empty || !errors.Is(err, errRecyclerFake) {
-			t.Fatalf("cleanup inspection = (%t, %v)", empty, err)
 		}
 	})
 
@@ -244,104 +209,9 @@ func TestPrivateStateRecyclerPropagatesInspectionFailures(t *testing.T) {
 			t.Fatalf("bounded empty check = (%t, %v)", empty, err)
 		}
 	})
-
-	for name, namesErr := range map[string]error{
-		"bounded proof": outputcap.ErrUnsafeNamespace,
-		"proof failure": errRecyclerFake,
-	} {
-		t.Run(name, func(t *testing.T) {
-			control := newMemoryDirectory()
-			proof, err := control.CreateDirectory(checkpointmodel.LiveCleanupNamespaceV1, true)
-			if err != nil {
-				t.Fatal(err)
-			}
-			parent := &recyclerFaultDirectory{
-				Directory: control,
-				openDirectory: func(string, bool) (outputcap.Directory, error) {
-					return &recyclerFaultDirectory{
-						Directory: proof,
-						names: func(int) ([]string, error) {
-							return nil, namesErr
-						},
-					}, nil
-				},
-			}
-			empty, err := recycleLiveCleanupJournal(parent)
-			if empty {
-				t.Fatal("uninspectable proof was recycled")
-			}
-			if errors.Is(namesErr, outputcap.ErrUnsafeNamespace) {
-				if err != nil {
-					t.Fatalf("bounded proof error = %v", err)
-				}
-			} else if !errors.Is(err, namesErr) {
-				t.Fatalf("proof error = %v", err)
-			}
-		})
-	}
 }
 
 func TestPrivateStateRecyclerPropagatesMutationFailures(t *testing.T) {
-	t.Run("cleanup ticket namespace has wrong kind", func(t *testing.T) {
-		control := newMemoryDirectory()
-		proof, err := control.CreateDirectory(checkpointmodel.LiveCleanupNamespaceV1, true)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := proof.CreateFile(liveCleanupTicketsDirectory, true, 0); err != nil {
-			t.Fatal(err)
-		}
-		if empty, err := recycleLiveCleanupJournal(control); err != nil || empty {
-			t.Fatalf("wrong ticket kind = (%t, %v)", empty, err)
-		}
-	})
-
-	t.Run("cleanup ticket removal", func(t *testing.T) {
-		control := newMemoryDirectory()
-		journal, err := OpenLiveCleanupJournal(control)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := journal.Close(); err != nil {
-			t.Fatal(err)
-		}
-		proof := control.dirs[checkpointmodel.LiveCleanupNamespaceV1]
-		parent := &recyclerFaultDirectory{
-			Directory: control,
-			openDirectory: func(string, bool) (outputcap.Directory, error) {
-				return &recyclerFaultDirectory{
-					Directory: proof,
-					removeDirectory: func(string, outputcap.Directory) error {
-						return errRecyclerFake
-					},
-				}, nil
-			},
-		}
-		if empty, err := recycleLiveCleanupJournal(parent); empty || !errors.Is(err, errRecyclerFake) {
-			t.Fatalf("ticket removal = (%t, %v)", empty, err)
-		}
-	})
-
-	t.Run("cleanup proof removal", func(t *testing.T) {
-		control := newMemoryDirectory()
-		journal, err := OpenLiveCleanupJournal(control)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := journal.Close(); err != nil {
-			t.Fatal(err)
-		}
-		parent := &recyclerFaultDirectory{
-			Directory: control,
-			removeDirectory: func(string, outputcap.Directory) error {
-				return errRecyclerFake
-			},
-		}
-		if empty, err := recycleLiveCleanupJournal(parent); empty || !errors.Is(err, errRecyclerFake) {
-			t.Fatalf("proof removal = (%t, %v)", empty, err)
-		}
-	})
-
 	t.Run("ordinary root removal", func(t *testing.T) {
 		control := newMemoryDirectory()
 		registry, err := OpenOperationRegistry(control)

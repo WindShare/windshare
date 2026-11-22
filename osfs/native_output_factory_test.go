@@ -29,9 +29,8 @@ func TestNativeOutputDestinationCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mode, err := outputcap.SelectExecutionMode(capabilities)
-	if err != nil || mode != outputcap.ExecutionResumable {
-		t.Fatalf("local destination cannot retain restart progress: mode=%v err=%v", mode, err)
+	if err := capabilities.ValidateSupport(); err != nil {
+		t.Fatalf("local destination cannot retain restart progress: err=%v", err)
 	}
 	reopened, err := openNativeOutputPlatform(path, false)
 	if err != nil {

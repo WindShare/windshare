@@ -13,7 +13,6 @@ import (
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
-	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/osfs/internal/checkpointstore"
 	"github.com/windshare/windshare/osfs/internal/outputcap"
 )
@@ -41,13 +40,29 @@ func TestStagedAuthorityCreatesAndExactlyReopensNamedOperation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			first := newNativeReservationTestAuthority(t, root.path)
-			mode, err := first.BindDestination(context.Background())
-			if err != nil || !mode.Resumable() {
-				t.Fatalf("bind mode = (%+v, %v)", mode, err)
+			var events []Trace
+			first, err := New(Config{
+				RootPath:        root.path,
+				PlatformFactory: openOutputRuntimeTestPlatform,
+				Tracer:          TraceFunc(func(event Trace) { events = append(events, event) }),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := first.BindDestination(context.Background()); err != nil {
+				t.Fatalf("bind = %v", err)
+			}
+			var admittedScheme outputcap.IdentitySchemeID
+			for _, event := range events {
+				if event.RuntimeOperation == RuntimeAdmitDestination {
+					admittedScheme = event.IdentityScheme
+				}
+			}
+			if admittedScheme != outputcap.IdentitySchemePortableWitnessV1 {
+				t.Fatalf("admitted identity scheme = %q, want %q", admittedScheme, outputcap.IdentitySchemePortableWitnessV1)
 			}
 			lookup, err := first.LookupActive(context.Background(), selection)
-			if err != nil || lookup.Kind() != ActiveLookupCreateReady {
+			if err != nil || lookup.Kind() != LookupCreateReady {
 				t.Fatalf("initial lookup = (%d, %v)", lookup.Kind(), err)
 			}
 			operation, err := first.CreateOperation(context.Background(), lookup, artifact)
@@ -90,11 +105,11 @@ func TestStagedAuthorityCreatesAndExactlyReopensNamedOperation(t *testing.T) {
 			}
 
 			second := newNativeReservationTestAuthority(t, root.path)
-			if _, err := second.BindDestination(context.Background()); err != nil {
+			if err := second.BindDestination(context.Background()); err != nil {
 				t.Fatal(err)
 			}
 			reopened, err := second.LookupActive(context.Background(), selection)
-			if err != nil || reopened.Kind() != ActiveLookupReopened {
+			if err != nil || reopened.Kind() != LookupReopened {
 				t.Fatalf("reopened lookup = (%d, %v)", reopened.Kind(), err)
 			}
 			reopenedOperation := reopened.Operation()
@@ -120,10 +135,10 @@ func TestControlNamespaceIsRecycledOnlyAfterLastBoundAuthorityCloses(t *testing.
 	root := newRuntimeTestRootSpec(t)
 	first := newNativeReservationTestAuthority(t, root.path)
 	second := newNativeReservationTestAuthority(t, root.path)
-	if _, err := first.BindDestination(context.Background()); err != nil {
+	if err := first.BindDestination(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := second.BindDestination(context.Background()); err != nil {
+	if err := second.BindDestination(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if err := first.Close(); err != nil {
@@ -153,7 +168,7 @@ func TestNamedResultRootSessionDoesNotDuplicateReservedRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	authority := newNativeReservationTestAuthority(t, root.path)
-	if _, err := authority.BindDestination(context.Background()); err != nil {
+	if err := authority.BindDestination(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	defer authority.Close()
@@ -249,7 +264,7 @@ func TestStagedAuthorityReservedSuffixIsFrozenAcrossReopen(t *testing.T) {
 				t.Fatal(err)
 			}
 			first := newNativeReservationTestAuthority(t, root.path)
-			if _, err := first.BindDestination(context.Background()); err != nil {
+			if err := first.BindDestination(context.Background()); err != nil {
 				t.Fatal(err)
 			}
 			lookup, err := first.LookupActive(context.Background(), selection)
@@ -271,11 +286,11 @@ func TestStagedAuthorityReservedSuffixIsFrozenAcrossReopen(t *testing.T) {
 				t.Fatal(err)
 			}
 			second := newNativeReservationTestAuthority(t, root.path)
-			if _, err := second.BindDestination(context.Background()); err != nil {
+			if err := second.BindDestination(context.Background()); err != nil {
 				t.Fatal(err)
 			}
 			reopened, err := second.LookupActive(context.Background(), selection)
-			if err != nil || reopened.Kind() != ActiveLookupReopened {
+			if err != nil || reopened.Kind() != LookupReopened {
 				t.Fatalf("suffix reopen = (%d, %v)", reopened.Kind(), err)
 			}
 			reopenedIntent, ok := reopened.Operation().ReceiveIntent()
@@ -302,7 +317,7 @@ func TestStagedAuthorityBusyLookupStopsBeforeShapeOrReservation(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := newNativeReservationTestAuthority(t, root.path)
-	if _, err := first.BindDestination(context.Background()); err != nil {
+	if err := first.BindDestination(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	lookup, err := first.LookupActive(context.Background(), selection)
@@ -314,11 +329,11 @@ func TestStagedAuthorityBusyLookupStopsBeforeShapeOrReservation(t *testing.T) {
 	}
 
 	second := newNativeReservationTestAuthority(t, root.path)
-	if _, err := second.BindDestination(context.Background()); err != nil {
+	if err := second.BindDestination(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	busy, err := second.LookupActive(context.Background(), selection)
-	if err != nil || busy.Kind() != ActiveLookupAlreadyRunning {
+	if err != nil || busy.Kind() != LookupAlreadyRunning {
 		t.Fatalf("busy lookup = (%d, %v)", busy.Kind(), err)
 	}
 	if _, err := second.CreateOperation(context.Background(), busy, artifact); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
@@ -335,7 +350,7 @@ func TestStagedAuthorityBusyLookupStopsBeforeShapeOrReservation(t *testing.T) {
 func TestStagedAuthorityLeavesSingleFileAbsentUntilPublication(t *testing.T) {
 	root := newRuntimeTestRootSpec(t)
 	authority := newNativeReservationTestAuthority(t, root.path)
-	if _, err := authority.BindDestination(context.Background()); err != nil {
+	if err := authority.BindDestination(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	selection := nativeReservationTestSelection(t, 0x41)
@@ -359,153 +374,6 @@ func TestStagedAuthorityLeavesSingleFileAbsentUntilPublication(t *testing.T) {
 		t.Fatalf("single-file reservation materialized final name: %v", err)
 	}
 	if err := authority.Close(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestStagedAuthorityLiveOnlyNeverOpensOperationRegistry(t *testing.T) {
-	root := newRuntimeTestRootSpec(t)
-	factoryCalls := 0
-	factory := func(path string, create bool) (outputcap.Platform, error) {
-		factoryCalls++
-		base, err := openOutputRuntimeTestPlatform(path, create)
-		if err != nil {
-			return nil, err
-		}
-		return &liveOnlyRuntimePlatform{Platform: base}, nil
-	}
-	authority, err := New(Config{RootPath: root.path, PlatformFactory: factory})
-	if err != nil {
-		t.Fatal(err)
-	}
-	mode, err := authority.BindDestination(context.Background())
-	if err != nil || !mode.LiveOnly() {
-		t.Fatalf("live-only bind = (%+v, %v)", mode, err)
-	}
-	selection := nativeReservationTestSelection(t, 0x51)
-	artifact, err := receivecontract.NewSingleFileDirectoryTree(
-		incrementalTestIdentity16[catalog.FileID](0x53), "live.bin", "live.bin",
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	lookup, err := authority.LookupActive(context.Background(), selection)
-	if err != nil || lookup.Kind() != ActiveLookupCreateReady {
-		t.Fatalf("live lookup = (%d, %v)", lookup.Kind(), err)
-	}
-	operation, err := authority.CreateOperation(context.Background(), lookup, artifact)
-	if err != nil {
-		t.Fatal(err)
-	}
-	session, err := authority.OpenOperation(context.Background(), operation)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := session.PauseTree(context.Background(), transfer.JobPauseInterrupted); err != nil {
-		t.Fatal(err)
-	}
-	if factoryCalls != 1 {
-		t.Fatalf("platform opens = %d, want 1", factoryCalls)
-	}
-	if _, err := os.Stat(filepath.Join(root.path, ".windshare-output", checkpointstore.OrdinaryRegistryDirectoryV1)); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("live-only ordinary registry exists: %v", err)
-	}
-	if err := authority.Close(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-type liveOnlyRuntimePlatform struct {
-	outputcap.Platform
-}
-
-func (*liveOnlyRuntimePlatform) DestinationCapabilities() (outputcap.DestinationCapabilities, error) {
-	supported := outputcap.SupportedCapability()
-	unsupported, err := outputcap.UnsupportedCapability(outputcap.CapabilityReasonUnverifiableOperationRecovery)
-	if err != nil {
-		return outputcap.DestinationCapabilities{}, err
-	}
-	return outputcap.NewDestinationCapabilities(supported, unsupported, unsupported, supported)
-}
-
-func (platform *liveOnlyRuntimePlatform) LiveCleanupNativeProfile() checkpointmodel.LiveCleanupNativeProfile {
-	return platform.Platform.(interface {
-		LiveCleanupNativeProfile() checkpointmodel.LiveCleanupNativeProfile
-	}).LiveCleanupNativeProfile()
-}
-
-func TestCatalogRootFacadeConvergesOnNamedOrdinaryLifecycle(t *testing.T) {
-	root := newRuntimeTestRootSpec(t)
-	selection := nativeReservationTestSelection(t, 0x59)
-	artifact := receivecontract.NewCatalogRootDirectoryTree()
-	first := newNativeReservationTestAuthority(t, root.path)
-	reserved, err := first.ReserveDirectTree(context.Background(), selection, artifact)
-	if err != nil || reserved.Kind() != NativeDirectTreeReserved {
-		t.Fatalf("facade reservation = (%d, %v)", reserved.Kind(), err)
-	}
-	intent, ok := reserved.ReceiveIntent()
-	if !ok {
-		t.Fatal("facade reservation omitted its frozen intent")
-	}
-	layout, named := intent.ArtifactSpec().DirectoryTree()
-	if !named || layout.Kind() != receivecontract.DirectoryTreeResultRoot {
-		t.Fatalf("facade persisted unbounded artifact kind %d", layout.Kind())
-	}
-	if first.stage != authorityStageOperationReady || first.destination == nil ||
-		first.registry == nil || first.operation == nil {
-		t.Fatal("facade bypassed the staged ordinary authority")
-	}
-	if _, err := os.Stat(filepath.Join(
-		root.path, checkpointstore.ControlDirectory, retiredAggregateCheckpointDirectory,
-	)); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("facade touched legacy checkpoint namespace: %v", err)
-	}
-	session, err := first.OpenDirectTree(context.Background(), intent)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := session.PauseTree(context.Background(), transfer.JobPauseInterrupted); err != nil {
-		t.Fatal(err)
-	}
-	if err := first.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	second := newNativeReservationTestAuthority(t, root.path)
-	reopened, err := second.ReserveDirectTree(context.Background(), selection, artifact)
-	if err != nil || reopened.Kind() != NativeDirectTreeReopened {
-		t.Fatalf("facade reopen = (%d, %v)", reopened.Kind(), err)
-	}
-	reopenedIntent, ok := reopened.ReceiveIntent()
-	if !ok || !reopenedIntent.EqualCanonical(intent) {
-		t.Fatal("facade reopen changed its frozen intent or reserved name")
-	}
-	if err := second.Close(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestCatalogRootFacadeReportsRetainedOperationAsNeedsAttention(t *testing.T) {
-	root := newRuntimeTestRootSpec(t)
-	selection := nativeReservationTestSelection(t, 0x5a)
-	artifact := receivecontract.NewCatalogRootDirectoryTree()
-	first := newNativeReservationTestAuthority(t, root.path)
-	if reserved, err := first.ReserveDirectTree(context.Background(), selection, artifact); err != nil ||
-		reserved.Kind() != NativeDirectTreeReserved {
-		t.Fatalf("first facade reservation = (%d, %v)", reserved.Kind(), err)
-	}
-	second := newNativeReservationTestAuthority(t, root.path)
-	busy, err := second.ReserveDirectTree(context.Background(), selection, artifact)
-	if err != nil || busy.Kind() != NativeDirectTreeNeedsAttention {
-		t.Fatalf("busy facade reservation = (%d, %v)", busy.Kind(), err)
-	}
-	if _, ok := busy.ReceiveIntent(); ok {
-		t.Fatal("busy facade leaked a mergeable intent")
-	}
-	if err := second.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := first.Close(); err != nil {
 		t.Fatal(err)
 	}
 }

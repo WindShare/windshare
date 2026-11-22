@@ -23,7 +23,7 @@ func (directory rejectedPublicDirectoryReservation) ReservePublicDirectoryNoRepl
 
 func TestResultRootRejectionRollsBackBoundClaim(t *testing.T) {
 	platform := newDestinationPlatform()
-	authority := bindFakeDestination(t, platform, &destinationJournal{})
+	authority := bindFakeDestination(t, platform)
 	defer authority.Close()
 	claimer := &reservationClaimer{}
 	root := rejectedPublicDirectoryReservation{
@@ -43,7 +43,7 @@ func TestResultRootRejectionRollsBackBoundClaim(t *testing.T) {
 
 func TestTopLevelReservationRepairsContainerControlPrefixAndKeepsRecoveryPrefix(t *testing.T) {
 	platform := newDestinationPlatform()
-	authority := bindFakeDestination(t, platform, &destinationJournal{})
+	authority := bindFakeDestination(t, platform)
 	defer authority.Close()
 
 	for _, name := range []string{".windshare-output", ".WINDSHARE-OUTPUT", ".windshare-output.probe-abc"} {

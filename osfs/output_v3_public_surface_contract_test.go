@@ -20,105 +20,50 @@ import (
 	"github.com/windshare/windshare/osfs/internal/outputcap"
 )
 
-var _ transfer.DirectTreeMaterializer = (*FilesystemOutputAuthority)(nil)
+var _ transfer.DirectTreeMaterializer = (*OutputOperation)(nil)
 
-func TestFilesystemOutputAuthorityExportsOnlyIntentionalSurface(t *testing.T) {
-	authorityType := reflect.TypeFor[*FilesystemOutputAuthority]()
+func TestOutputAuthorityExportsOnlyIntentionalSurface(t *testing.T) {
+	authorityType := reflect.TypeFor[*OutputAuthority]()
 	methods := make([]string, 0, authorityType.NumMethod())
 	for method := range authorityType.Methods() {
 		methods = append(methods, method.Name)
 	}
-	if want := []string{"BindDestination", "Close", "CreateOperation", "LookupActive", "OpenDirectTree", "OpenOperation", "ReserveDirectTree", "SelectOperation"}; !slices.Equal(methods, want) {
-		t.Fatalf("public filesystem output-authority methods = %v, want %v", methods, want)
+	if want := []string{"BindDestination", "Close", "SelectOperation"}; !slices.Equal(methods, want) {
+		t.Fatalf("public output-authority methods = %v, want %v", methods, want)
 	}
 
-	method, found := authorityType.MethodByName("OpenDirectTree")
-	if !found || method.Type.NumOut() != 2 ||
-		method.Type.Out(0) != reflect.TypeFor[transfer.DirectTreeSession]() ||
-		method.Type.Out(1) != reflect.TypeFor[error]() {
-		t.Fatalf("OpenDirectTree signature = %v", method.Type)
+	recoveryType := reflect.TypeFor[*RecoveryAuthority]()
+	recoveryMethods := make([]string, 0, recoveryType.NumMethod())
+	for method := range recoveryType.Methods() {
+		recoveryMethods = append(recoveryMethods, method.Name)
 	}
-	reservation, found := authorityType.MethodByName("ReserveDirectTree")
-	if !found || reservation.Type.NumOut() != 2 ||
-		reservation.Type.Out(0) != reflect.TypeFor[NativeDirectTreeReservation]() ||
-		reservation.Type.Out(1) != reflect.TypeFor[error]() {
-		t.Fatalf("ReserveDirectTree signature = %v", reservation.Type)
-	}
-
-	stagedSignatures := map[string]struct {
-		inputs  int
-		outputs []reflect.Type
-	}{
-		"BindDestination": {inputs: 2, outputs: []reflect.Type{
-			reflect.TypeFor[FilesystemOutputExecutionMode](), reflect.TypeFor[error](),
-		}},
-		"LookupActive": {inputs: 3, outputs: []reflect.Type{
-			reflect.TypeFor[FilesystemOutputLookup](), reflect.TypeFor[error](),
-		}},
-		"CreateOperation": {inputs: 4, outputs: []reflect.Type{
-			reflect.TypeFor[FilesystemOutputOperation](), reflect.TypeFor[error](),
-		}},
-		"OpenOperation": {inputs: 3, outputs: []reflect.Type{
-			reflect.TypeFor[transfer.DirectTreeSession](), reflect.TypeFor[error](),
-		}},
-		"Close": {inputs: 1, outputs: []reflect.Type{reflect.TypeFor[error]()}},
-	}
-	for name, expected := range stagedSignatures {
-		method, found := authorityType.MethodByName(name)
-		if !found || method.Type.NumIn() != expected.inputs || method.Type.NumOut() != len(expected.outputs) {
-			t.Fatalf("%s signature = %v", name, method.Type)
-		}
-		for index, output := range expected.outputs {
-			if method.Type.Out(index) != output {
-				t.Fatalf("%s output %d = %v, want %v", name, index, method.Type.Out(index), output)
-			}
-		}
+	if want := []string{"Discard", "List"}; !slices.Equal(recoveryMethods, want) {
+		t.Fatalf("public recovery-authority methods = %v, want %v", recoveryMethods, want)
 	}
 }
 
-func TestFilesystemOutputStagedValuesDoNotLeakAuthorityInternals(t *testing.T) {
+func TestOutputValuesDoNotLeakAuthorityInternals(t *testing.T) {
+	forbidden := []reflect.Type{
+		reflect.TypeFor[outputcap.Directory](),
+		reflect.TypeFor[outputcap.Platform](),
+		reflect.TypeFor[*checkpointstore.OperationRegistry](),
+		reflect.TypeFor[*destinationauthority.BoundDestination](),
+	}
 	for _, value := range []reflect.Type{
-		reflect.TypeFor[FilesystemOutputExecutionMode](),
-		reflect.TypeFor[FilesystemOutputLookup](),
-		reflect.TypeFor[FilesystemOutputOperation](),
+		reflect.TypeFor[OutputAuthority](),
+		reflect.TypeFor[OutputLookup](),
+		reflect.TypeFor[OutputOperation](),
+		reflect.TypeFor[RecoveryAuthority](),
 	} {
 		for field := range value.Fields() {
 			if field.IsExported() {
 				t.Fatalf("%s exports field %s", value, field.Name)
-			}
-			forbidden := []reflect.Type{
-				reflect.TypeFor[outputcap.Directory](),
-				reflect.TypeFor[outputcap.Platform](),
-				reflect.TypeFor[*checkpointstore.OperationRegistry](),
-				reflect.TypeFor[*destinationauthority.BoundDestination](),
 			}
 			for _, rejected := range forbidden {
 				if field.Type == rejected || field.Type.AssignableTo(rejected) {
 					t.Fatalf("%s field %s leaks %s", value, field.Name, rejected)
 				}
 			}
-		}
-	}
-}
-
-func TestFilesystemOutputAuthorityConfigContainsOnlyPathPolicyAndTracer(t *testing.T) {
-	configType := reflect.TypeFor[FilesystemOutputAuthorityConfig]()
-	want := []struct {
-		name   string
-		typeOf reflect.Type
-	}{
-		{name: "RootPath", typeOf: reflect.TypeFor[string]()},
-		{name: "CreateRoot", typeOf: reflect.TypeFor[bool]()},
-		{name: "Tracer", typeOf: reflect.TypeFor[FilesystemOutputTracer]()},
-	}
-	if configType.NumField() != len(want) {
-		t.Fatalf("filesystem output-authority config fields = %d, want %d", configType.NumField(), len(want))
-	}
-	for index, expected := range want {
-		field := configType.Field(index)
-		if field.Name != expected.name || field.Type != expected.typeOf {
-			t.Fatalf("filesystem output-authority config field %d = %s %s, want %s %s",
-				index, field.Name, field.Type, expected.name, expected.typeOf)
 		}
 	}
 }
@@ -137,6 +82,7 @@ func TestFilesystemOutputForbiddenSurfaceIsAbsent(t *testing.T) {
 		"ErrOutputTransactionLimit":         {},
 		"ErrReservedOutputPath":             {},
 		"ErrUnsupportedOutputVolume":        {},
+		"FilesystemOutputAuthority":         {},
 		"FilesystemOutputCreated":           {},
 		"FilesystemOutputFilePhase":         {},
 		"FilesystemOutputOpen":              {},
@@ -146,10 +92,15 @@ func TestFilesystemOutputForbiddenSurfaceIsAbsent(t *testing.T) {
 		"FilesystemOutputRequest":           {},
 		"FilesystemOutputSession":           {},
 		"FilesystemOutputStateInstallStage": {},
+		"FilesystemOutputTrace":             {},
 		"MaxFilesystemOutputTransactions":   {},
+		"NativeDirectTreeReservation":       {},
+		"NewFilesystemOutputAuthority":      {},
+		"NewFilesystemResumeStateAuthority": {},
 		"OpenOrCreate":                      {},
 		"OutputObjectIDGenerator":           {},
 		"OutputSessionIDGenerator":          {},
+		"ResumeStateAuthority":              {},
 		"CheckpointIdentityEqual":           {},
 		"RecoverFileCheckpoint":             {},
 		"SelectVerifiedProgress":            {},
@@ -194,6 +145,8 @@ func TestFilesystemOutputRetiredStatePackagesAreAbsent(t *testing.T) {
 		"resumestate",
 		filepath.Join("internal", "resumestate"),
 		filepath.Join("internal", "outputnamespace"),
+		filepath.Join("internal", "incrementaladmission"),
+		filepath.Join("internal", "deliveryreceipts"),
 	} {
 		path := filepath.Join(packageDirectory, relative)
 		if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
@@ -204,6 +157,8 @@ func TestFilesystemOutputRetiredStatePackagesAreAbsent(t *testing.T) {
 		"github.com/windshare/windshare/osfs/resumestate",
 		"github.com/windshare/windshare/osfs/internal/resumestate",
 		"github.com/windshare/windshare/osfs/internal/outputnamespace",
+		"github.com/windshare/windshare/osfs/internal/incrementaladmission",
+		"github.com/windshare/windshare/osfs/internal/deliveryreceipts",
 	}
 	err := filepath.WalkDir(packageDirectory, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {

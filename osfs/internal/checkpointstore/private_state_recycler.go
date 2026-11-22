@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/osfs/internal/outputcap"
 )
 
@@ -23,55 +22,7 @@ func RecyclePrivateState(control outputcap.Directory) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("recycle ordinary private state: %w", err)
 	}
-	if !ordinaryEmpty {
-		return false, nil
-	}
-	cleanupEmpty, err := recycleLiveCleanupJournal(control)
-	if err != nil {
-		return false, fmt.Errorf("recycle live cleanup state: %w", err)
-	}
-	if !cleanupEmpty {
-		return false, nil
-	}
-	return true, nil
-}
-
-func recycleLiveCleanupJournal(control outputcap.Directory) (empty bool, resultErr error) {
-	proof, found, safe, err := openRecycleDirectory(control, checkpointmodel.LiveCleanupNamespaceV1)
-	if err != nil || !safe || !found {
-		return safe, err
-	}
-	proofOwned := true
-	defer func() {
-		if proofOwned {
-			resultErr = errors.Join(resultErr, proof.Close())
-		}
-	}()
-	names, err := proof.Names(2)
-	if errors.Is(err, outputcap.ErrUnsafeNamespace) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	if len(names) != 1 || names[0] != liveCleanupTicketsDirectory {
-		return false, nil
-	}
-	tickets, found, safe, err := openRecycleDirectory(proof, liveCleanupTicketsDirectory)
-	if err != nil || !safe || !found {
-		return false, err
-	}
-	if empty, err := recycleDirectoryIsEmpty(tickets); err != nil || !empty {
-		return false, errors.Join(err, tickets.Close())
-	}
-	if err := removeEmptyDirectory(proof, liveCleanupTicketsDirectory, tickets); err != nil {
-		return false, err
-	}
-	proofOwned = false
-	if err := removeEmptyDirectory(control, checkpointmodel.LiveCleanupNamespaceV1, proof); err != nil {
-		return false, err
-	}
-	return true, nil
+	return ordinaryEmpty, nil
 }
 
 func recycleOrdinaryRegistry(control outputcap.Directory) (empty bool, resultErr error) {

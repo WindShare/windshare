@@ -8,7 +8,6 @@ import (
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/engine/output"
-	"github.com/windshare/windshare/osfs"
 )
 
 const (
@@ -74,8 +73,8 @@ type resumeDiscardRequest struct {
 
 type resumeFailureDetail struct {
 	Stage          output.FailureStage
-	Reconciliation osfs.FilesystemCheckpointReconciliationStep
-	NativeClass    osfs.FilesystemNativeErrorClass
+	Reconciliation filesystem.CheckpointReconciliationStep
+	NativeClass    filesystem.NativeErrorClass
 }
 
 func (detail resumeFailureDetail) Valid() bool {
@@ -85,7 +84,7 @@ func (detail resumeFailureDetail) Valid() bool {
 }
 func presentFailureDetail(failure *engine.RecoveryFailure) resumeFailureDetail {
 	detail := resumeFailureDetail{Stage: failure.Detail.Stage}
-	if native, ok := filesystem.FailureDiagnostic(failure.Cause); ok {
+	if native, ok := filesystem.FailureDetailFor(failure.Cause); ok {
 		detail.Reconciliation, detail.NativeClass = native.ReconciliationStep, native.NativeErrorClass
 	}
 	return detail

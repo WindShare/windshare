@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
-	"github.com/windshare/windshare/osfs/internal/outputcap"
 )
 
 func TestNativeAdapterNormalizesFailuresAtOneBoundary(t *testing.T) {
@@ -84,32 +83,6 @@ func TestNativeAdapterNormalizesFailuresAtOneBoundary(t *testing.T) {
 		context.Background(), "deadline checkpoint", context.DeadlineExceeded,
 	); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("deadline checkpoint boundary = %v", err)
-	}
-}
-
-func TestNativeRootDispositionProjectionKeepsPersistedAuthorityClosed(t *testing.T) {
-	tests := []struct {
-		native outputcap.RootOpenDisposition
-		trace  FilesystemOutputRootDisposition
-	}{
-		{
-			native: outputcap.CallerProvidedContainer,
-			trace:  FilesystemOutputCallerProvidedContainer,
-		},
-		{
-			native: outputcap.AuthorityCreatedRoot,
-			trace:  FilesystemOutputAuthorityCreatedRoot,
-		},
-		{native: outputcap.RootOpenDisposition("future"), trace: ""},
-	}
-	for _, test := range tests {
-		if got := runtimeRootDisposition(test.native); got != test.trace {
-			t.Fatalf("root disposition %q projected as %q, want %q", test.native, got, test.trace)
-		}
-	}
-	wrapped := dispositionPlatform{disposition: outputcap.AuthorityCreatedRoot}
-	if wrapped.RootOpenDisposition() != outputcap.AuthorityCreatedRoot {
-		t.Fatal("runtime platform lost the persisted root-open disposition")
 	}
 }
 

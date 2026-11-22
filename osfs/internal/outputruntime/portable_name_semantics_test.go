@@ -44,7 +44,7 @@ func testPortableOutputNames(t *testing.T, rootName, subdir string, names []stri
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = authority.Close() })
-	if _, err := authority.BindDestination(ctx); err != nil {
+	if err := authority.BindDestination(ctx); err != nil {
 		t.Fatal(err)
 	}
 	selection := nativeReservationTestSelection(t, 0x51)
@@ -209,11 +209,11 @@ func testPortableOutputNames(t *testing.T, rootName, subdir string, names []stri
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := authority.BindDestination(ctx); err != nil {
+			if err := authority.BindDestination(ctx); err != nil {
 				t.Fatal(err)
 			}
 			lookup, err := authority.LookupActive(ctx, selection)
-			if err != nil || lookup.Kind() != ActiveLookupReopened {
+			if err != nil || lookup.Kind() != LookupReopened {
 				t.Fatalf("reopen = %v, %v", lookup.Kind(), err)
 			}
 			operation = lookup.Operation()

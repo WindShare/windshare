@@ -43,16 +43,23 @@ func TestDestinationCapabilitiesUseActualPrimitivesWithoutHardLinks(t *testing.T
 				}
 			} else {
 				if err != nil || capabilities.SafePublish().Supported() != test.wantSafe ||
-					(capabilities.OperationRecovery().Supported() && capabilities.RangeRecovery().Supported()) != test.wantRecovery ||
-					capabilities.CrashCleanup().Supported() {
+					capabilities.OperationRecovery().Supported() != test.wantRecovery {
 					t.Fatalf("capabilities = %+v, %v", capabilities, err)
 				}
-				mode, modeErr := outputcap.SelectExecutionMode(capabilities)
-				if !test.wantSafe && !errors.Is(modeErr, outputcap.ErrOrdinaryOutputUnsupported) {
-					t.Fatalf("unsupported publication was admitted: %s, %v", mode, modeErr)
-				}
-				if test.wantSafe && !test.wantRecovery && (modeErr != nil || mode != outputcap.ExecutionLiveOnly) {
-					t.Fatalf("independent publication was revoked: %s, %v", mode, modeErr)
+				supportErr := capabilities.ValidateSupport()
+				switch {
+				case !test.wantSafe:
+					if !errors.Is(supportErr, outputcap.ErrOrdinaryOutputUnsupported) {
+						t.Fatalf("unsupported publication was admitted: %v", supportErr)
+					}
+				case !test.wantRecovery:
+					if !errors.Is(supportErr, outputcap.ErrRecoverableOutputUnsupported) {
+						t.Fatalf("unsupported directory installation was admitted: %v", supportErr)
+					}
+				default:
+					if supportErr != nil {
+						t.Fatalf("supported destination rejected: %v", supportErr)
+					}
 				}
 			}
 			entries, err := os.ReadDir(path)
@@ -73,8 +80,7 @@ func TestDestinationCapabilitiesCacheFactsButRetryIO(t *testing.T) {
 	calls := 0
 	injected := errors.New("probe I/O failed")
 	supported := outputcap.SupportedCapability()
-	unsupported, _ := outputcap.UnsupportedCapability(outputcap.CapabilityReasonUnverifiableCrashCleanup)
-	expected, _ := outputcap.NewDestinationCapabilities(supported, supported, supported, unsupported)
+	expected, _ := outputcap.NewDestinationCapabilities(supported, supported)
 	probe := func(outputcap.Directory) (outputcap.DestinationCapabilities, error) {
 		calls++
 		if calls == 1 {

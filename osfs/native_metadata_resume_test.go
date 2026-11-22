@@ -9,8 +9,10 @@ import (
 	"testing"
 
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/fault"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 func TestOrdinaryResumeAdmitsReopenedMetadataToCurrentRevision(t *testing.T) {
@@ -25,7 +27,7 @@ func testOrdinaryMetadataResume(t *testing.T, metadata content.SourceMetadata) {
 	ctx := context.Background()
 	root := t.TempDir()
 	authority, operation, intent := openPublicOrdinaryOperation(t, root, 0x61)
-	session, err := authority.OpenOperation(ctx, operation)
+	session, err := operation.OpenDirectTree(ctx, intent)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,25 +76,38 @@ func testOrdinaryMetadataResume(t *testing.T, metadata content.SourceMetadata) {
 		t.Fatal(err)
 	}
 
-	var events []FilesystemOutputTrace
+	stream, err := diagnostics.NewStream(256, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var records []diagnostics.Record
+	drainRecords := func() {
+		for {
+			select {
+			case record := <-stream.Records():
+				records = append(records, record)
+			default:
+				return
+			}
+		}
+	}
 	reopen := func() {
 		t.Helper()
-		authority, err = NewFilesystemOutputAuthority(FilesystemOutputAuthorityConfig{RootPath: root,
-			Tracer: FilesystemOutputTraceFunc(func(event FilesystemOutputTrace) { events = append(events, event) }),
-		})
+		authority, err = NewOutputAuthority(OutputConfig{RootPath: root, Diagnostics: stream.Sink()})
 		if err != nil {
 			t.Fatal(err)
 		}
 		opened := authority
 		t.Cleanup(func() { _ = opened.Close() })
-		if _, err := authority.BindDestination(ctx); err != nil {
+		if err := authority.BindDestination(ctx); err != nil {
 			t.Fatal(err)
 		}
-		lookup, err := authority.LookupActive(ctx, intent.SelectionSpec())
-		if err != nil {
-			t.Fatal(err)
+		lookup, err := authority.SelectOperation(ctx, intent.SelectionSpec(), receivecontract.AutomaticOperation())
+		if err != nil || lookup.Kind() != OutputLookupReopened {
+			t.Fatalf("reopen lookup = (%v, %v)", lookup.Kind(), err)
 		}
-		session, err = authority.OpenOperation(ctx, lookup.Operation())
+		reopenedIntent, _ := lookup.Operation().ReceiveIntent()
+		session, err = lookup.Operation().OpenDirectTree(ctx, reopenedIntent)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -108,6 +123,9 @@ func testOrdinaryMetadataResume(t *testing.T, metadata content.SourceMetadata) {
 	current = content.BindRevisionMetadata(current, metadata)
 	file = nativeDirectTreeFileWithDescriptor(t, session, intent, current, "resume.bin", parent)
 	start, err = session.BeginFile(ctx, file)
+	drainRecords()
+	wantPrev := diagnostics.Identity(previous.FileRevision().Bytes()).Text()
+	wantCur := diagnostics.Identity(current.FileRevision().Bytes()).Text()
 	if metadata != previous.SourceMetadata() {
 		wantReason := content.ComparisonMetadataChanged
 		if metadata.IsZero() {
@@ -125,9 +143,10 @@ func testOrdinaryMetadataResume(t *testing.T, metadata content.SourceMetadata) {
 			}
 		}
 		retained := false
-		for _, event := range events {
-			if event.PreviousRevision == previous.FileRevision() && event.CurrentRevision == current.FileRevision() &&
-				event.RetainedBytes == 4 && event.RecoveryReason == wantReason {
+		for _, record := range records {
+			p := record.Payload()
+			if p.Get("previous_revision").Text() == wantPrev && p.Get("current_revision").Text() == wantCur &&
+				p.Get("retained_bytes").Uint() == 4 && p.Get("recovery_reason").Text() == string(wantReason) {
 				retained = true
 			}
 		}
@@ -154,6 +173,8 @@ func testOrdinaryMetadataResume(t *testing.T, metadata content.SourceMetadata) {
 		current = content.BindRevisionMetadata(current, previous.SourceMetadata())
 		file = nativeDirectTreeFileWithDescriptor(t, session, intent, current, "resume.bin", parent)
 		start, err = session.BeginFile(ctx, file)
+		drainRecords()
+		wantCur = diagnostics.Identity(current.FileRevision().Bytes()).Text()
 	}
 	if err != nil {
 		t.Fatal(err)
@@ -167,9 +188,10 @@ func testOrdinaryMetadataResume(t *testing.T, metadata content.SourceMetadata) {
 		t.Fatalf("resume replaced the owned partial: %v", err)
 	}
 	found := false
-	for _, event := range events {
-		if event.PreviousRevision == previous.FileRevision() && event.CurrentRevision == current.FileRevision() &&
-			event.ReusedBytes == 4 {
+	for _, record := range records {
+		p := record.Payload()
+		if p.Get("previous_revision").Text() == wantPrev && p.Get("current_revision").Text() == wantCur &&
+			p.Get("reused_bytes").Uint() == 4 {
 			found = true
 		}
 	}

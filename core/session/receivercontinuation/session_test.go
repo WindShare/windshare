@@ -200,21 +200,32 @@ func TestTransferKeepsOutputAndConfirmedProgressAcrossFreshSession(t *testing.T)
 	}
 	defer continuation.Close()
 	out := testoutputroot.New(t)
-	output, err := osfs.NewFilesystemOutputAuthority(osfs.FilesystemOutputAuthorityConfig{RootPath: out.RootPath, CreateRoot: out.CreateRoot})
+	output, err := osfs.NewOutputAuthority(osfs.OutputConfig{RootPath: out.RootPath, CreateRoot: out.CreateRoot})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer output.Close()
+	if err := output.BindDestination(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	rules, _ := transfer.NewSelectionRules(true, nil)
 	selection, err := transfer.NewSelectionSpec(runtime.Descriptor().ShareInstance(), runtime.Descriptor().SyntheticRoot(), rules)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reservation, err := output.ReserveDirectTree(context.Background(), selection, receivecontract.NewCatalogRootDirectoryTree())
+	lookup, err := output.SelectOperation(context.Background(), selection, receivecontract.AutomaticOperation())
+	if err != nil || lookup.Kind() != osfs.OutputLookupCreateReady {
+		t.Fatalf("lookup = (%d, %v)", lookup.Kind(), err)
+	}
+	artifact, err := receivecontract.NewResultRootDirectoryTree(receivecontract.NewSyntheticSelectionResultRoot())
 	if err != nil {
 		t.Fatal(err)
 	}
-	intent, ok := reservation.ReceiveIntent()
+	operation, err := lookup.Create(context.Background(), artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, ok := operation.ReceiveIntent()
 	if !ok {
 		t.Fatal("missing reservation")
 	}
@@ -232,7 +243,7 @@ func TestTransferKeepsOutputAndConfirmedProgressAcrossFreshSession(t *testing.T)
 		}
 		return err
 	}}
-	liveOutput := &singleOpenMaterializer{materializer: output}
+	liveOutput := &singleOpenMaterializer{materializer: operation}
 	job, err := transfer.NewTransferJob(transfer.TransferJobConfig{ReceiveIntent: intent, JobID: id, Session: continuation, Catalog: continuation, Revisions: continuation, Blocks: reader, Materializer: liveOutput, RevisionWait: &revisionwait.Config{GenerationFence: continuation}})
 	if err != nil {
 		t.Fatal(err)

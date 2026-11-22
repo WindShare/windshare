@@ -17,8 +17,11 @@ const (
 	CheckpointInterval  = 2 * time.Second
 )
 
-func (transaction *resumablePartialFileTransaction) Accept(ctx context.Context) (transfer.FileProgress, error) {
-	if transaction == nil || transaction.engine == nil {
+func (transaction *PartialFileTransaction) Accept(ctx context.Context) (transfer.FileProgress, error) {
+	if transaction == nil {
+		return transfer.FileProgress{}, fileContractError(ErrTransactionClosed)
+	}
+	if transaction.engine == nil {
 		return transfer.FileProgress{}, fileContractError(ErrInvalidConfiguration)
 	}
 	transaction.mu.Lock()
@@ -64,7 +67,7 @@ func (transaction *resumablePartialFileTransaction) Accept(ctx context.Context) 
 	return transfer.NewFileProgress(progress, persisted)
 }
 
-func (transaction *resumablePartialFileTransaction) flushOnDeadline() {
+func (transaction *PartialFileTransaction) flushOnDeadline() {
 	transaction.mu.Lock()
 	if transaction.state != transactionOpen {
 		transaction.mu.Unlock()
@@ -79,8 +82,11 @@ func (transaction *resumablePartialFileTransaction) flushOnDeadline() {
 		traceOutcomeForError(err), previous, next, traceFault(err)))
 }
 
-func (transaction *resumablePartialFileTransaction) Checkpoint(ctx context.Context) (transfer.VerifiedRanges, error) {
-	if transaction == nil || transaction.engine == nil {
+func (transaction *PartialFileTransaction) Checkpoint(ctx context.Context) (transfer.VerifiedRanges, error) {
+	if transaction == nil {
+		return transfer.VerifiedRanges{}, fileContractError(ErrTransactionClosed)
+	}
+	if transaction.engine == nil {
 		return transfer.VerifiedRanges{}, fileContractError(ErrInvalidConfiguration)
 	}
 	sequence := transaction.engine.nextSequence()
@@ -95,7 +101,7 @@ func (transaction *resumablePartialFileTransaction) Checkpoint(ctx context.Conte
 	return checkpoint, err
 }
 
-func (transaction *resumablePartialFileTransaction) checkpointLocked(ctx context.Context) (transfer.VerifiedRanges, error) {
+func (transaction *PartialFileTransaction) checkpointLocked(ctx context.Context) (transfer.VerifiedRanges, error) {
 	if err := transaction.validateOpen(ctx); err != nil {
 		return transfer.VerifiedRanges{}, err
 	}

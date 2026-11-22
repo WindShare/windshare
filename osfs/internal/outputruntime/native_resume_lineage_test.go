@@ -107,11 +107,11 @@ func TestNativeResumeRepositoryAttentionClosesOperationWithoutInventingAnItem(t 
 
 	retainOpaqueCheckpointShard(t, root, fixture.intent.OperationID())
 
-	var events []FilesystemOutputTrace
+	var events []Trace
 	repository, err := NewNativeResumeRepository(
 		root,
 		openOutputRuntimeTestPlatform,
-		FilesystemOutputTraceFunc(func(event FilesystemOutputTrace) {
+		TraceFunc(func(event Trace) {
 			if event.Operation == TraceCheckpointReconciled {
 				events = append(events, event)
 			}
@@ -144,9 +144,9 @@ func TestNativeResumeRepositoryAttentionClosesOperationWithoutInventingAnItem(t 
 			summary.State(), summary.NeedsAttentionReason(), err)
 	}
 	if len(events) != 1 || !events[0].Failed ||
-		events[0].RuntimeComponent != FilesystemOutputRuntimeCheckpoint ||
-		events[0].RuntimeOperation != FilesystemOutputRuntimeReconcileCheckpoints ||
-		events[0].RuntimeDecision != FilesystemOutputRuntimeNeedsAttention ||
+		events[0].RuntimeComponent != RuntimeCheckpoint ||
+		events[0].RuntimeOperation != RuntimeReconcileCheckpoints ||
+		events[0].RuntimeDecision != RuntimeNeedsAttention ||
 		events[0].ReceiveOperationID != fixture.intent.OperationID() ||
 		events[0].CheckpointRecordCount != 1 ||
 		events[0].CheckpointDecision != 0 || events[0].FailureStage != 0 ||
@@ -166,18 +166,18 @@ func TestNativeReopenDefersUnrelatedRepositoryInventory(t *testing.T) {
 	pauseOrdinaryResumeFixture(t, fixture)
 	retainOpaqueCheckpointShard(t, root, fixture.intent.OperationID())
 
-	var events []FilesystemOutputTrace
+	var events []Trace
 	authority := newNativeReservationTestAuthority(t, root)
-	authority.tracer = FilesystemOutputTraceFunc(func(event FilesystemOutputTrace) {
+	authority.tracer = TraceFunc(func(event Trace) {
 		if event.Operation == TraceCheckpointReconciled {
 			events = append(events, event)
 		}
 	})
-	if _, err := authority.BindDestination(context.Background()); err != nil {
+	if err := authority.BindDestination(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	lookup, err := authority.LookupActive(context.Background(), fixture.intent.SelectionSpec())
-	if err != nil || lookup.Kind() != ActiveLookupReopened {
+	if err != nil || lookup.Kind() != LookupReopened {
 		t.Fatalf("attention lookup = kind %d err %v", lookup.Kind(), err)
 	}
 	session, err := authority.OpenOperation(context.Background(), lookup.Operation())

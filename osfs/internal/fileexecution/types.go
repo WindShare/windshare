@@ -12,7 +12,6 @@ import (
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
-	"github.com/windshare/windshare/osfs/internal/outputcap"
 )
 
 const MaximumObjectAllocationAttempts = 8
@@ -285,93 +284,6 @@ type OwnedFile interface {
 	SetModifiedTime(catalog.ModifiedTime) error
 	MetadataMatches(uint64, catalog.ModifiedTime) (bool, error)
 	Close() error
-}
-
-// LiveOwnedFile retains a single public-profile data object. A certified cleanup
-// ticket may outlive it; process ownership instead ends with its retained handles.
-// Neither lifecycle can manufacture durable ranges.
-type LiveOwnedFile struct {
-	object  checkpointmodel.ObjectID
-	file    outputcap.MutableFile
-	ticket  checkpointmodel.LiveCleanupTicket
-	release func() error
-}
-
-func NewLiveOwnedFile(
-	object checkpointmodel.ObjectID,
-	file outputcap.MutableFile,
-	ticket checkpointmodel.LiveCleanupTicket,
-) (*LiveOwnedFile, error) {
-	if object.IsZero() || file == nil || !ticket.Valid() ||
-		ticket.State() != checkpointmodel.LiveCleanupStageCreated {
-		return nil, ErrInvalidConfiguration
-	}
-	return &LiveOwnedFile{object: object, file: file, ticket: ticket}, nil
-}
-
-// NewProcessOwnedFile retains a live native object and its resource owner without
-// manufacturing a cleanup ticket or restart identity.
-func NewProcessOwnedFile(object checkpointmodel.ObjectID, file outputcap.MutableFile, release func() error) (*LiveOwnedFile, error) {
-	if object.IsZero() || file == nil || release == nil {
-		return nil, ErrInvalidConfiguration
-	}
-	return &LiveOwnedFile{object: object, file: file, release: release}, nil
-}
-
-func (file *LiveOwnedFile) ObjectID() checkpointmodel.ObjectID {
-	if file == nil {
-		return checkpointmodel.ObjectID{}
-	}
-	return file.object
-}
-func (file *LiveOwnedFile) NativeFile() outputcap.MutableFile {
-	if file == nil {
-		return nil
-	}
-	return file.file
-}
-func (file *LiveOwnedFile) CleanupTicket() checkpointmodel.LiveCleanupTicket {
-	if file == nil {
-		return checkpointmodel.LiveCleanupTicket{}
-	}
-	return file.ticket
-}
-func (file *LiveOwnedFile) WriteAt(value []byte, offset int64) (int, error) {
-	if file == nil || file.file == nil {
-		return 0, outputcap.ErrUnsafeNamespace
-	}
-	return file.file.WriteAt(value, offset)
-}
-func (file *LiveOwnedFile) Sync() error {
-	if file == nil || file.file == nil {
-		return outputcap.ErrUnsafeNamespace
-	}
-	return file.file.Sync()
-}
-func (file *LiveOwnedFile) SetModifiedTime(modified catalog.ModifiedTime) error {
-	if file == nil || file.file == nil {
-		return outputcap.ErrUnsafeNamespace
-	}
-	return file.file.SetModifiedTime(modified)
-}
-func (file *LiveOwnedFile) MetadataMatches(size uint64, modified catalog.ModifiedTime) (bool, error) {
-	if file == nil || file.file == nil {
-		return false, outputcap.ErrUnsafeNamespace
-	}
-	return file.file.MetadataMatches(size, modified)
-}
-func (file *LiveOwnedFile) Close() error {
-	if file == nil || file.file == nil {
-		return nil
-	}
-	var err error
-	if file.release != nil {
-		err = file.release()
-	} else {
-		err = file.file.Close()
-	}
-	file.file, file.release = nil, nil
-	return err
 }
 
 type Platform interface {

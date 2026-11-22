@@ -15,7 +15,6 @@ import (
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/engine/output"
 	"github.com/windshare/windshare/engine/recovery"
-	"github.com/windshare/windshare/osfs"
 )
 
 const nativeResumeControlDirectoryName = ".windshare-output"
@@ -50,7 +49,7 @@ func TestFilesystemResumeInventoryNeverCreatesAMissingRequestedRoot(t *testing.T
 func TestFilesystemResumeInventoryRestartsAndDiscardsExactOperationWithoutDeletingForeignObjects(t *testing.T) {
 	ctx := context.Background()
 	root := newResumeCertifiedOutputTestRoot(t)
-	output, intent := createNativeResumeOperation(t, ctx, root, 1)
+	authority, intent := createNativeResumeOperation(t, ctx, root, 1)
 	reservation, ok := intent.MaterializationPlan().DestinationReservation()
 	if !ok {
 		t.Fatal("operation omitted its named destination reservation")
@@ -60,7 +59,7 @@ func TestFilesystemResumeInventoryRestartsAndDiscardsExactOperationWithoutDeleti
 	if err := os.WriteFile(foreignPath, foreignContent, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := output.Close(); err != nil {
+	if err := authority.Close(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -103,8 +102,8 @@ func TestFilesystemResumeInventoryRestartsAndDiscardsExactOperationWithoutDeleti
 func TestFilesystemResumeInventoryReportsLeaseContentionWithoutCheckpointGuessing(t *testing.T) {
 	ctx := context.Background()
 	root := newResumeCertifiedOutputTestRoot(t)
-	output, _ := createNativeResumeOperation(t, ctx, root, 2)
-	t.Cleanup(func() { _ = output.Close() })
+	authority, _ := createNativeResumeOperation(t, ctx, root, 2)
+	t.Cleanup(func() { _ = authority.Close() })
 
 	inventory, err := recovery.Inspect(ctx, Recovery(root))
 	if err != nil {
@@ -115,7 +114,7 @@ func TestFilesystemResumeInventoryReportsLeaseContentionWithoutCheckpointGuessin
 		len(snapshot.Operations[0].BlockedItems) != 0 {
 		t.Fatalf("busy snapshot=(%+v, %v)", snapshot, err)
 	}
-	if result := inventory.Discard(ctx, snapshot.Operations[0].ID); !errors.Is(result.Err, osfs.ErrResumeStateBusy) && result.Failure.Kind != recovery.FailureBusy {
+	if result := inventory.Discard(ctx, snapshot.Operations[0].ID); !errors.Is(result.Err, recovery.ErrBusy) && result.Failure.Kind != recovery.FailureBusy {
 		t.Fatalf("busy discard result=%+v", result)
 	}
 }
@@ -143,11 +142,9 @@ func createNativeResumeOperation(
 	ctx context.Context,
 	root string,
 	seed byte,
-) (*osfs.FilesystemOutputAuthority, transfer.ReceiveIntent) {
+) (output.Authority, transfer.ReceiveIntent) {
 	t.Helper()
-	output, err := osfs.NewFilesystemOutputAuthority(osfs.FilesystemOutputAuthorityConfig{
-		RootPath: root, CreateRoot: true,
-	})
+	authority, err := FilesystemOutput{RootPath: root, CreateRoot: true}.NewOutputAuthority(output.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,13 +160,13 @@ func createNativeResumeOperation(
 	if err != nil {
 		t.Fatal(err)
 	}
-	mode, err := output.BindDestination(ctx)
-	if err != nil || !mode.Resumable() {
+	mode, err := authority.BindDestination(ctx)
+	if err != nil || mode != output.OutputResumable {
 		t.Fatalf("destination mode = (%+v, %v)", mode, err)
 	}
-	lookup, err := output.SelectOperation(ctx, selection, receivecontract.AutomaticOperation())
-	if err != nil || lookup.Kind() != osfs.FilesystemOutputLookupCreateReady {
-		t.Fatalf("active lookup = (%d, %v)", lookup.Kind(), err)
+	lookup, err := authority.SelectOperation(ctx, selection, receivecontract.AutomaticOperation())
+	if err != nil || lookup.Kind != output.OutputLookupCreateReady || lookup.Reservation == nil {
+		t.Fatalf("active lookup = (%+v, %v)", lookup, err)
 	}
 	artifact, err := receivecontract.NewResultRootDirectoryTree(
 		receivecontract.NewSyntheticSelectionResultRoot(),
@@ -177,15 +174,11 @@ func createNativeResumeOperation(
 	if err != nil {
 		t.Fatal(err)
 	}
-	operation, err := output.CreateOperation(ctx, lookup, artifact)
+	operation, err := lookup.Reservation.Create(ctx, artifact)
 	if err != nil {
 		t.Fatal(err)
 	}
-	intent, ok := operation.ReceiveIntent()
-	if !ok {
-		t.Fatal("created operation omitted its frozen receive intent")
-	}
-	return output, intent
+	return authority, operation.Intent
 }
 
 func newResumeCertifiedOutputTestRoot(t *testing.T) string {
@@ -209,6 +202,7 @@ func newResumeCertifiedOutputTestRoot(t *testing.T) string {
 	})
 	return reserved
 }
+
 func TestFilesystemRecoveryStaleSelectionCannotDiscardReplacementOperation(t *testing.T) {
 	ctx := context.Background()
 	root := newResumeCertifiedOutputTestRoot(t)

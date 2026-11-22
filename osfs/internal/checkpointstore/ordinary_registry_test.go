@@ -3,7 +3,6 @@ package checkpointstore
 import (
 	"bytes"
 	"errors"
-	"io/fs"
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
@@ -553,56 +552,6 @@ func TestOperationRegistryAdmissionCandidateRollbackAndAttentionAreExact(t *test
 	}
 }
 
-func TestLiveCleanupJournalBoundedBatchAndCompareGeneration(t *testing.T) {
-	control := newMemoryDirectory()
-	journal, err := OpenLiveCleanupJournal(control)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer journal.Close()
-	first := liveCleanupTicketFixture(t, 0x51)
-	second := liveCleanupTicketFixture(t, 0x52)
-	if err := journal.Create(first); err != nil {
-		t.Fatal(err)
-	}
-	if err := journal.Create(second); err != nil {
-		t.Fatal(err)
-	}
-	if snapshot, err := journal.ReadBatch(1); err != nil || snapshot.State != destinationauthority.LiveCleanupBatchPartial || len(snapshot.Tickets) != 1 {
-		t.Fatalf("partial batch = %+v, %v", snapshot, err)
-	}
-	if snapshot, err := journal.ReadBatch(2); err != nil || snapshot.State != destinationauthority.LiveCleanupBatchComplete || len(snapshot.Tickets) != 2 {
-		t.Fatalf("complete snapshot = %+v, %v", snapshot, err)
-	}
-	if syncs := directorySyncCalls(journal.tickets.(*memoryDirectory)); syncs < 2 {
-		t.Fatalf("ticket creates were not directory-synced: %d", syncs)
-	}
-	created, _ := checkpointmodel.ReduceLiveCleanupTicket(first, checkpointmodel.LiveCleanupRecordStageCreated)
-	if err := journal.Replace(first, created); err != nil {
-		t.Fatal(err)
-	}
-	if err := journal.Replace(first, created); !errors.Is(err, checkpointmodel.ErrRecordBinding) {
-		t.Fatalf("stale replace = %v", err)
-	}
-	if err := journal.Delete(created); err != nil {
-		t.Fatal(err)
-	}
-	if err := journal.Delete(created); err != nil {
-		t.Fatalf("idempotent delete = %v", err)
-	}
-	if _, err := ReadFile(journal.tickets, liveCleanupTicketName(created)); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("deleted ticket = %v", err)
-	}
-
-	journal.tickets.(*memoryDirectory).files["opaque"] = &memoryFileData{bytes: []byte("opaque")}
-	if snapshot, err := journal.ReadBatch(2); err != nil || snapshot.State != destinationauthority.LiveCleanupBatchUnverifiable {
-		t.Fatalf("unknown snapshot = %+v, %v", snapshot, err)
-	}
-	if _, err := ReadFile(journal.tickets, "opaque"); err != nil {
-		t.Fatalf("unknown ticket mutated: %v", err)
-	}
-}
-
 type ordinaryRegistryTestFixture struct {
 	intent      transfer.ReceiveIntent
 	key         checkpointmodel.ActiveOperationKey
@@ -682,19 +631,6 @@ func mustReservationClaimLocator(t *testing.T, claim destinationauthority.Reserv
 		t.Fatal(err)
 	}
 	return locator
-}
-
-func liveCleanupTicketFixture(t *testing.T, fill byte) checkpointmodel.LiveCleanupTicket {
-	t.Helper()
-	ticket, err := checkpointmodel.NewLiveCleanupTicket(checkpointmodel.LiveCleanupTicketSpec{
-		Nonce: bytes.Repeat([]byte{fill}, checkpointmodel.LiveCleanupNonceBytesV1), ExactSize: uint64(fill),
-		Profile: checkpointmodel.LiveCleanupWindowsNTFSV1, Generation: 1,
-		State: checkpointmodel.LiveCleanupTicketCommitted,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return ticket
 }
 
 func TestReadOnlyInventoryCannotHideAdmissionBeforeOperationRecord(t *testing.T) {

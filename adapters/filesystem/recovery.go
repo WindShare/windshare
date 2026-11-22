@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 
-	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/engine/output"
 	"github.com/windshare/windshare/engine/recovery"
@@ -13,65 +12,76 @@ import (
 
 // Recovery binds no handles until an operation is invoked. Native list and
 // discard each reacquire the selected destination and release it before return.
-func Recovery(rootPath string) *FilesystemAuthority {
-	return &FilesystemAuthority{rootPath: rootPath}
+func Recovery(rootPath string) recovery.Authority {
+	return &recoveryAuthority{native: osfs.NewRecoveryAuthority(rootPath)}
 }
 
-type FilesystemAuthority struct{ rootPath string }
-
-func (authority *FilesystemAuthority) native() (osfs.ResumeStateAuthority, error) {
-	if authority == nil {
-		return nil, recovery.ErrContract
-	}
-	return osfs.NewFilesystemResumeStateAuthority(osfs.FilesystemResumeRoot{RootPath: authority.rootPath})
+type recoveryAuthority struct {
+	native *osfs.RecoveryAuthority
 }
 
-func (authority *FilesystemAuthority) List(ctx context.Context) (recovery.Snapshot, error) {
-	native, err := authority.native()
+var _ recovery.Authority = (*recoveryAuthority)(nil)
+
+func (authority *recoveryAuthority) List(ctx context.Context) (recovery.Snapshot, error) {
+	inventory, err := authority.native.List(ctx)
 	if err != nil {
-		return recovery.Snapshot{}, sealFilesystemOutputFailure(err)
+		return recovery.Snapshot{}, sealRecoveryError(err)
 	}
-	inventory, err := native.ListResumeState(ctx)
-	if err != nil {
-		return recovery.Snapshot{}, sealFilesystemOutputFailure(err)
-	}
-	return projectStateInventory(inventory)
+	return projectRecoveryInventory(inventory)
 }
 
-func (authority *FilesystemAuthority) Discard(ctx context.Context, id receivecontract.OperationID) (recovery.DiscardReport, error) {
-	native, err := authority.native()
-	if err != nil {
-		return recovery.DiscardReport{}, sealFilesystemOutputFailure(err)
-	}
-	summary, discardErr := native.Discard(ctx, id)
+func (authority *recoveryAuthority) Discard(
+	ctx context.Context,
+	id receivecontract.OperationID,
+) (recovery.DiscardReport, error) {
+	summary, discardErr := authority.native.Discard(ctx, id)
+	discardErr = sealRecoveryError(discardErr)
 	if !summary.Valid() {
-		return recovery.DiscardReport{}, sealFilesystemOutputFailure(discardErr)
+		return recovery.DiscardReport{}, discardErr
 	}
 	report, projectionErr := projectDiscardSummary(summary)
-	return report, errors.Join(projectionErr, sealFilesystemOutputFailure(discardErr))
+	return report, errors.Join(projectionErr, discardErr)
 }
 
-type nativeSummaryView interface {
-	OperationID() receivecontract.OperationID
-	ReceiveIntentDigest() transfer.ReceiveIntentDigest
-	State() osfs.ResumeOperationState
-	StateGeneration() uint64
-	NeedsAttentionReason() osfs.FilesystemOutputStateReason
-	Items() []osfs.ResumeStateItem
-	Busy() bool
-	CompatibleNameReport() osfs.FilesystemCompatibleNameReport
-	Valid() bool
+func sealRecoveryError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, osfs.ErrRecoveryContract) && !errors.Is(err, recovery.ErrContract) {
+		err = errors.Join(recovery.ErrContract, err)
+	}
+	return sealOutputError(err)
 }
 
-type nativeItemView interface {
-	CanonicalPath() string
-	State() osfs.ResumeItemState
-	BlockReason() osfs.ResumeItemBlockReason
-	DiagnosticReference() string
+func projectRecoveryInventory(inventory osfs.RecoveryInventory) (recovery.Snapshot, error) {
+	switch inventory.Status() {
+	case osfs.RecoveryListReady, osfs.RecoveryListNeedsAttention:
+	default:
+		return recovery.Snapshot{}, recovery.ErrContract
+	}
+	summaries := inventory.Summaries()
+	operations := make([]recovery.Operation, 0, len(summaries))
+	for _, summary := range summaries {
+		operation, err := projectRecoverySummary(summary)
+		if err != nil {
+			return recovery.Snapshot{}, err
+		}
+		operations = append(operations, operation)
+	}
+	snapshot, err := recovery.NewSnapshot(operations, inventory.UnknownEntries())
+	if err != nil {
+		return recovery.Snapshot{}, err
+	}
+	needsAttention := snapshot.NeedsAttention()
+	if (inventory.Status() == osfs.RecoveryListReady && needsAttention) ||
+		(inventory.Status() == osfs.RecoveryListNeedsAttention && !needsAttention) {
+		return recovery.Snapshot{}, recovery.ErrContract
+	}
+	return snapshot, nil
 }
 
-func projectStateSummary(summary nativeSummaryView) (recovery.Operation, error) {
-	if summary == nil || !summary.Valid() || summary.OperationID().IsZero() ||
+func projectRecoverySummary(summary osfs.RecoverySummary) (recovery.Operation, error) {
+	if !summary.Valid() || summary.OperationID().IsZero() ||
 		summary.ReceiveIntentDigest().IsZero() || summary.StateGeneration() == 0 {
 		return recovery.Operation{}, recovery.ErrContract
 	}
@@ -79,13 +89,9 @@ func projectStateSummary(summary nativeSummaryView) (recovery.Operation, error) 
 	if err != nil {
 		return recovery.Operation{}, err
 	}
-	reason := summary.NeedsAttentionReason()
-	attention := recovery.AttentionNone
-	if reason != osfs.FilesystemOutputStateReasonNone {
-		if !reason.Valid() {
-			return recovery.Operation{}, recovery.ErrContract
-		}
-		attention = recovery.AttentionReason(reason.String())
+	attention, err := projectAttentionReason(summary.NeedsAttentionReason())
+	if err != nil {
+		return recovery.Operation{}, err
 	}
 	operation := recovery.Operation{
 		ID:        summary.OperationID(),
@@ -94,7 +100,7 @@ func projectStateSummary(summary nativeSummaryView) (recovery.Operation, error) 
 		Running:   summary.Busy(),
 	}
 	for _, item := range summary.Items() {
-		if item.State() != osfs.ResumeItemBlocked {
+		if item.State() != osfs.RecoveryItemBlocked {
 			continue
 		}
 		blocked, err := projectBlockedItem(item)
@@ -109,17 +115,61 @@ func projectStateSummary(summary nativeSummaryView) (recovery.Operation, error) 
 	return operation, nil
 }
 
-func projectOperationState(state osfs.ResumeOperationState) (recovery.OperationState, error) {
+func projectDiscardSummary(summary osfs.RecoverySummary) (recovery.DiscardReport, error) {
+	if !summary.Valid() || summary.OperationID().IsZero() {
+		return recovery.DiscardReport{}, recovery.ErrContract
+	}
+	attention, err := projectAttentionReason(summary.NeedsAttentionReason())
+	if err != nil {
+		return recovery.DiscardReport{}, err
+	}
+	nameReport := summary.CompatibleNameReport()
+	report := recovery.DiscardReport{
+		ID:        summary.OperationID(),
+		Attention: attention,
+		CompatibleNameReport: output.CompatibleNameReport{
+			RepairedCount: nameReport.RepairedCount,
+			ReportName:    nameReport.ReportName,
+			PageCount:     nameReport.PageCount,
+		},
+	}
+	switch summary.State() {
+	case osfs.RecoveryOperationDiscarded:
+		report.Status = recovery.Discarded
+	case osfs.RecoveryOperationCleanupPending:
+		report.Status = recovery.DiscardCleanupPending
+	case osfs.RecoveryOperationNeedsAttention:
+		report.Status = recovery.DiscardNeedsAttention
+	default:
+		return recovery.DiscardReport{}, recovery.ErrContract
+	}
+	for _, item := range summary.Items() {
+		if item.State() != osfs.RecoveryItemBlocked {
+			continue
+		}
+		blocked, err := projectBlockedItem(item)
+		if err != nil {
+			return recovery.DiscardReport{}, err
+		}
+		report.BlockedItems = append(report.BlockedItems, blocked)
+	}
+	if !report.Valid() {
+		return recovery.DiscardReport{}, recovery.ErrContract
+	}
+	return report, nil
+}
+
+func projectOperationState(state osfs.RecoveryOperationState) (recovery.OperationState, error) {
 	switch state {
-	case osfs.ResumeOperationIncomplete:
+	case osfs.RecoveryOperationIncomplete:
 		return recovery.OperationIncomplete, nil
-	case osfs.ResumeOperationResumable:
+	case osfs.RecoveryOperationResumable:
 		return recovery.OperationResumable, nil
-	case osfs.ResumeOperationShareStopped:
+	case osfs.RecoveryOperationShareStopped:
 		return recovery.OperationShareStopped, nil
-	case osfs.ResumeOperationCleanupPending:
+	case osfs.RecoveryOperationCleanupPending:
 		return recovery.OperationCleanupPending, nil
-	case osfs.ResumeOperationRecoveryUnavailable, osfs.ResumeOperationNeedsAttention:
+	case osfs.RecoveryOperationNeedsAttention:
 		return recovery.OperationNeedsAttention, nil
 	default:
 		// Terminal cleanup leaves no resumable operation to list.
@@ -127,8 +177,27 @@ func projectOperationState(state osfs.ResumeOperationState) (recovery.OperationS
 	}
 }
 
-func projectBlockedItem(item nativeItemView) (recovery.BlockedItem, error) {
-	if item == nil || item.State() != osfs.ResumeItemBlocked {
+func projectAttentionReason(reason osfs.RecoveryClosedReason) (recovery.AttentionReason, error) {
+	switch reason {
+	case osfs.RecoveryReasonNone:
+		return recovery.AttentionNone, nil
+	case osfs.RecoveryReasonDestinationOwnership:
+		return recovery.AttentionDestination, nil
+	case osfs.RecoveryReasonRegistryOwnership:
+		return recovery.AttentionRegistry, nil
+	case osfs.RecoveryReasonLeaseOwnership:
+		return recovery.AttentionLease, nil
+	case osfs.RecoveryReasonOperationOwnership:
+		return recovery.AttentionOperation, nil
+	case osfs.RecoveryReasonCleanupUncertain:
+		return recovery.AttentionCleanup, nil
+	default:
+		return "", recovery.ErrContract
+	}
+}
+
+func projectBlockedItem(item osfs.RecoveryItem) (recovery.BlockedItem, error) {
+	if item.State() != osfs.RecoveryItemBlocked {
 		return recovery.BlockedItem{}, recovery.ErrContract
 	}
 	reason, err := projectBlockedReason(item.BlockReason())
@@ -142,7 +211,7 @@ func projectBlockedItem(item nativeItemView) (recovery.BlockedItem, error) {
 	}
 	// A diagnostic reference identifies a corrupt control record. It is authority
 	// evidence, not a user artifact path, so it is intentionally never projected.
-	if !projected.PathKnown && item.DiagnosticReference() == "" {
+	if !projected.PathKnown && item.Reference() == "" {
 		return recovery.BlockedItem{}, recovery.ErrContract
 	}
 	if !projected.Valid() {
@@ -151,92 +220,17 @@ func projectBlockedItem(item nativeItemView) (recovery.BlockedItem, error) {
 	return projected, nil
 }
 
-func projectBlockedReason(reason osfs.ResumeItemBlockReason) (recovery.BlockedReason, error) {
+func projectBlockedReason(reason osfs.RecoveryItemBlockReason) (recovery.BlockedReason, error) {
 	switch reason {
-	case osfs.ResumeItemBlockPublicationUnknown:
+	case osfs.RecoveryItemBlockPublicationUnknown:
 		return recovery.BlockedPublicationUnknown, nil
-	case osfs.ResumeItemBlockCheckpointInvalid:
+	case osfs.RecoveryItemBlockCheckpointInvalid:
 		return recovery.BlockedCheckpointInvalid, nil
-	case osfs.ResumeItemBlockOwnedObjectUnknown:
+	case osfs.RecoveryItemBlockOwnedObjectUnknown:
 		return recovery.BlockedOwnedObjectUnknown, nil
-	case osfs.ResumeItemBlockRevisionConflict:
+	case osfs.RecoveryItemBlockRevisionConflict:
 		return recovery.BlockedRevisionConflict, nil
 	default:
 		return 0, recovery.ErrContract
 	}
-}
-
-func projectDiscardSummary(summary nativeSummaryView) (recovery.DiscardReport, error) {
-	if summary == nil || !summary.Valid() || summary.OperationID().IsZero() {
-		return recovery.DiscardReport{}, recovery.ErrContract
-	}
-	reason := summary.NeedsAttentionReason()
-	attention := recovery.AttentionNone
-	if reason != osfs.FilesystemOutputStateReasonNone {
-		if !reason.Valid() {
-			return recovery.DiscardReport{}, recovery.ErrContract
-		}
-		attention = recovery.AttentionReason(reason.String())
-	}
-	nameReport := summary.CompatibleNameReport()
-	report := recovery.DiscardReport{
-		ID:        summary.OperationID(),
-		Attention: attention,
-		CompatibleNameReport: output.CompatibleNameReport{
-			RepairedCount: nameReport.RepairedCount,
-			ReportName:    nameReport.ReportName,
-			PageCount:     nameReport.PageCount,
-		},
-	}
-	switch summary.State() {
-	case osfs.ResumeOperationDiscarded:
-		report.Status = recovery.Discarded
-	case osfs.ResumeOperationCleanupPending:
-		report.Status = recovery.DiscardCleanupPending
-	case osfs.ResumeOperationNeedsAttention:
-		report.Status = recovery.DiscardNeedsAttention
-	default:
-		return recovery.DiscardReport{}, recovery.ErrContract
-	}
-	for _, item := range summary.Items() {
-		if item.State() != osfs.ResumeItemBlocked {
-			continue
-		}
-		blocked, err := projectBlockedItem(item)
-		if err != nil {
-			return recovery.DiscardReport{}, sealFilesystemOutputFailure(err)
-		}
-		report.BlockedItems = append(report.BlockedItems, blocked)
-	}
-	if !report.Valid() {
-		return recovery.DiscardReport{}, recovery.ErrContract
-	}
-	return report, nil
-}
-
-func projectStateInventory(inventory osfs.ResumeStateInventory) (recovery.Snapshot, error) {
-	switch inventory.Status() {
-	case osfs.ResumeStateListReady, osfs.ResumeStateListNeedsAttention:
-	default:
-		return recovery.Snapshot{}, recovery.ErrContract
-	}
-	summaries := inventory.Summaries()
-	operations := make([]recovery.Operation, 0, len(summaries))
-	for index := range summaries {
-		operation, err := projectStateSummary(summaries[index])
-		if err != nil {
-			return recovery.Snapshot{}, sealFilesystemOutputFailure(err)
-		}
-		operations = append(operations, operation)
-	}
-	snapshot, err := recovery.NewSnapshot(operations, inventory.UnknownEntries())
-	if err != nil {
-		return recovery.Snapshot{}, sealFilesystemOutputFailure(err)
-	}
-	needsAttention := snapshot.NeedsAttention()
-	if (inventory.Status() == osfs.ResumeStateListReady && needsAttention) ||
-		(inventory.Status() == osfs.ResumeStateListNeedsAttention && !needsAttention) {
-		return recovery.Snapshot{}, recovery.ErrContract
-	}
-	return snapshot, nil
 }

@@ -115,7 +115,7 @@ func openNativeDirectTreeTestSession(
 	seed byte,
 ) (transfer.ReceiveIntent, transfer.DirectTreeSession, transfer.DirectoryAdmission) {
 	t.Helper()
-	authority, err := NewFilesystemOutputAuthority(FilesystemOutputAuthorityConfig{RootPath: root})
+	authority, err := NewOutputAuthority(OutputConfig{RootPath: root})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,11 @@ func openNativeDirectTreeTestSession(
 			t.Errorf("close native output authority: %v", err)
 		}
 	})
-	intent := coverageC6FilesystemIntent(t, authority, seed)
+	operation := reserveTestOperation(t, authority, seed)
+	intent, ok := operation.ReceiveIntent()
+	if !ok {
+		t.Fatal("operation omitted receive intent")
+	}
 	layout, directoryTree := intent.ArtifactSpec().DirectoryTree()
 	resultRoot, namedRoot := layout.ResultRoot()
 	reservation, reserved := intent.MaterializationPlan().DestinationReservation()
@@ -136,7 +140,7 @@ func openNativeDirectTreeTestSession(
 		reservation.Guarantees().Profile() != receivecontract.GuaranteeNativeTree {
 		t.Fatalf("native CLI layout was not explicit: artifact=%v plan=%v", intent.ArtifactSpec().Kind(), intent.MaterializationPlan().Kind())
 	}
-	session, err := authority.OpenDirectTree(context.Background(), intent)
+	session, err := operation.OpenDirectTree(context.Background(), intent)
 	if err != nil {
 		t.Fatal(err)
 	}

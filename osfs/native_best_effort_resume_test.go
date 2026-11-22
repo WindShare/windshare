@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 func TestPortableResumeKeepsDeliveryAfterPublicFileMoves(t *testing.T) {
@@ -18,7 +19,7 @@ func TestPortableResumeKeepsDeliveryAfterPublicFileMoves(t *testing.T) {
 			ctx := context.Background()
 			root := t.TempDir()
 			a, op, intent := openPublicOrdinaryOperation(t, root, 0x31)
-			s, err := a.OpenOperation(ctx, op)
+			s, err := op.OpenDirectTree(ctx, intent)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -55,19 +56,20 @@ func TestPortableResumeKeepsDeliveryAfterPublicFileMoves(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			a, err = NewFilesystemOutputAuthority(FilesystemOutputAuthorityConfig{RootPath: root})
+			a, err = NewOutputAuthority(OutputConfig{RootPath: root})
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer a.Close()
-			if _, err := a.BindDestination(ctx); err != nil {
+			if err := a.BindDestination(ctx); err != nil {
 				t.Fatal(err)
 			}
-			lookup, err := a.LookupActive(ctx, intent.SelectionSpec())
-			if err != nil {
-				t.Fatal(err)
+			lookup, err := a.SelectOperation(ctx, intent.SelectionSpec(), receivecontract.AutomaticOperation())
+			if err != nil || lookup.Kind() != OutputLookupReopened {
+				t.Fatalf("reopen lookup = (%v, %v)", lookup.Kind(), err)
 			}
-			s, err = a.OpenOperation(ctx, lookup.Operation())
+			reopenedIntent, _ := lookup.Operation().ReceiveIntent()
+			s, err = lookup.Operation().OpenDirectTree(ctx, reopenedIntent)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -94,7 +96,7 @@ func runPortableResumeAcceptsMtimeDriftAndFlushesPause(t *testing.T, root string
 	t.Helper()
 	ctx := context.Background()
 	a, op, intent := openPublicOrdinaryOperation(t, root, 0x51)
-	s, err := a.OpenOperation(ctx, op)
+	s, err := op.OpenDirectTree(ctx, intent)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,19 +141,20 @@ func runPortableResumeAcceptsMtimeDriftAndFlushesPause(t *testing.T, root string
 	if err != nil || stages != 1 {
 		t.Fatalf("stages=%d %v", stages, err)
 	}
-	a, err = NewFilesystemOutputAuthority(FilesystemOutputAuthorityConfig{RootPath: root})
+	a, err = NewOutputAuthority(OutputConfig{RootPath: root})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer a.Close()
-	if _, err := a.BindDestination(ctx); err != nil {
+	if err := a.BindDestination(ctx); err != nil {
 		t.Fatal(err)
 	}
-	lookup, err := a.LookupActive(ctx, intent.SelectionSpec())
-	if err != nil {
-		t.Fatal(err)
+	lookup, err := a.SelectOperation(ctx, intent.SelectionSpec(), receivecontract.AutomaticOperation())
+	if err != nil || lookup.Kind() != OutputLookupReopened {
+		t.Fatalf("reopen lookup = (%v, %v)", lookup.Kind(), err)
 	}
-	s, err = a.OpenOperation(ctx, lookup.Operation())
+	reopenedIntent, _ := lookup.Operation().ReceiveIntent()
+	s, err = lookup.Operation().OpenDirectTree(ctx, reopenedIntent)
 	if err != nil {
 		t.Fatal(err)
 	}

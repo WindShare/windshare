@@ -24,8 +24,6 @@ const (
 	TraceRetire
 	TraceItemBlocked
 	TraceDeliveryReceipt
-	TraceReleaseLiveFile
-	TraceLiveRetention
 )
 
 type TraceOutcome uint8
@@ -41,23 +39,22 @@ const (
 // Task and logical file identities correlate recovery decisions across restarts
 // without making diagnostics a source of filesystem authority.
 type TraceEvent struct {
-	FileID            catalog.FileID
-	OperationID       receivecontract.OperationID
-	IntentDigest      transfer.ReceiveIntentDigest
-	SessionID         transfer.OutputSessionID
-	Sequence          uint64
-	Operation         TraceOperation
-	Outcome           TraceOutcome
-	Previous          checkpointmodel.Phase
-	Next              checkpointmodel.Phase
-	Decision          checkpointmodel.CheckpointLineageDecision
-	Fault             fault.Fault
-	RetainedLiveFiles uint64
-	PreviousRevision  content.FileRevision
-	CurrentRevision   content.FileRevision
-	RecoveryReason    content.RevisionComparisonReason
-	ReusedBytes       uint64
-	RetainedBytes     uint64
+	FileID           catalog.FileID
+	OperationID      receivecontract.OperationID
+	IntentDigest     transfer.ReceiveIntentDigest
+	SessionID        transfer.OutputSessionID
+	Sequence         uint64
+	Operation        TraceOperation
+	Outcome          TraceOutcome
+	Previous         checkpointmodel.Phase
+	Next             checkpointmodel.Phase
+	Decision         checkpointmodel.CheckpointLineageDecision
+	Fault            fault.Fault
+	PreviousRevision content.FileRevision
+	CurrentRevision  content.FileRevision
+	RecoveryReason   content.RevisionComparisonReason
+	ReusedBytes      uint64
+	RetainedBytes    uint64
 }
 
 type TraceSink interface{ TraceFileExecution(TraceEvent) }
@@ -155,12 +152,12 @@ func traceOperationForSettlement(
 	return operation
 }
 
-func (transaction *resumablePartialFileTransaction) traceEvent(sequence uint64, operation TraceOperation, outcome TraceOutcome, previous, next checkpointmodel.Phase, value fault.Fault) TraceEvent {
+func (transaction *PartialFileTransaction) traceEvent(sequence uint64, operation TraceOperation, outcome TraceOutcome, previous, next checkpointmodel.Phase, value fault.Fault) TraceEvent {
 	event := transaction.engine.traceEvent(sequence, operation, outcome, previous, next, value)
 	event.FileID = transaction.binding.FileID()
 	return event
 }
-func (transaction *resumablePartialFileTransaction) traceReceipt(err error) {
+func (transaction *PartialFileTransaction) traceReceipt(err error) {
 	transaction.engine.emit(transaction.traceEvent(transaction.engine.nextSequence(), TraceDeliveryReceipt,
 		traceOutcomeForError(err), checkpointmodel.PhasePublished, checkpointmodel.PhasePublished, traceFault(err)))
 }

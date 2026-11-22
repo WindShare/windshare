@@ -13,14 +13,14 @@ import (
 func TestLinuxTmpfsDefaultOutputRetainsRangesAcrossReopen(t *testing.T) {
 	t.Parallel()
 	root := linuxPublicTmpfsRoot(t)
-	authority, err := NewFilesystemOutputAuthority(FilesystemOutputAuthorityConfig{RootPath: root})
+	authority, err := NewOutputAuthority(OutputConfig{RootPath: root})
 	if err != nil {
 		t.Fatal(err)
 	}
-	mode, bindErr := authority.BindDestination(context.Background())
+	bindErr := authority.BindDestination(context.Background())
 	closeErr := authority.Close()
-	if bindErr != nil || closeErr != nil || !mode.Resumable() {
-		t.Fatalf("tmpfs lost portable recovery: mode=%+v bind=%v close=%v", mode, bindErr, closeErr)
+	if bindErr != nil || closeErr != nil {
+		t.Fatalf("tmpfs lost portable recovery: bind=%v close=%v", bindErr, closeErr)
 	}
 	runPortableResumeAcceptsMtimeDriftAndFlushesPause(t, root)
 }

@@ -10,7 +10,7 @@ func TestOwnershipRoundTripBindsRootDisposition(t *testing.T) {
 	for _, disposition := range []RootOpenDisposition{CallerProvidedContainer, AuthorityCreatedRoot} {
 		t.Run(string(disposition), func(t *testing.T) {
 			ownership, err := NewOwnership(OwnershipSpec{
-				Materializer: MaterializerNativeTree, IdentityScheme: IdentitySchemeWindowsObjectIDV1,
+				Materializer: MaterializerNativeTree, IdentityScheme: IdentitySchemePortableWitnessV1,
 				AuthorityRef:        bytes.Repeat([]byte{0x41}, 32),
 				RootOpenDisposition: disposition,
 			})
@@ -25,7 +25,7 @@ func TestOwnershipRoundTripBindsRootDisposition(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if restored != ownership || restored.IdentityScheme() != IdentitySchemeWindowsObjectIDV1 ||
+			if restored != ownership || restored.IdentityScheme() != IdentitySchemePortableWitnessV1 ||
 				restored.RootOpenDisposition() != disposition ||
 				!bytes.Equal(restored.CanonicalBytes(), ownership.CanonicalBytes()) {
 				t.Fatal("ownership round trip changed the certified binding")
@@ -36,7 +36,7 @@ func TestOwnershipRoundTripBindsRootDisposition(t *testing.T) {
 
 func TestOwnershipRejectsMissingUnknownAndTamperedIdentityScheme(t *testing.T) {
 	valid, err := NewOwnership(OwnershipSpec{
-		Materializer: MaterializerNativeTree, IdentityScheme: IdentitySchemeLinuxHandleV2,
+		Materializer: MaterializerNativeTree, IdentityScheme: IdentitySchemePortableWitnessV1,
 		AuthorityRef:        bytes.Repeat([]byte{0x51}, 32),
 		RootOpenDisposition: CallerProvidedContainer,
 	})
@@ -44,14 +44,14 @@ func TestOwnershipRejectsMissingUnknownAndTamperedIdentityScheme(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := NewOwnership(OwnershipSpec{
-		Materializer: MaterializerNativeTree, IdentityScheme: IdentitySchemeLinuxHandleV2,
+		Materializer: MaterializerNativeTree, IdentityScheme: IdentitySchemePortableWitnessV1,
 		AuthorityRef:        bytes.Repeat([]byte{0x51}, 32),
 		RootOpenDisposition: "future-value",
 	}); !errors.Is(err, ErrInvalidOwnership) {
 		t.Fatalf("unknown disposition error = %v", err)
 	}
 	if _, err := NewOwnership(OwnershipSpec{
-		Materializer: MaterializerNativeTree, IdentityScheme: IdentitySchemeLinuxHandleV2,
+		Materializer: MaterializerNativeTree, IdentityScheme: IdentitySchemePortableWitnessV1,
 		AuthorityRef:        bytes.Repeat([]byte{0x51}, 31),
 		RootOpenDisposition: CallerProvidedContainer,
 	}); !errors.Is(err, ErrInvalidOwnership) {

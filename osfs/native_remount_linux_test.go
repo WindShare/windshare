@@ -13,6 +13,7 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 // The CI harness unmounts a disposable FAT/exFAT image between process phases.
@@ -79,14 +80,13 @@ func remountIdentity(t *testing.T, path string) [2]uint64 {
 func recoverRemountedOperation(t *testing.T, root, action string) {
 	t.Helper()
 	ctx := context.Background()
-	authority, err := NewFilesystemOutputAuthority(FilesystemOutputAuthorityConfig{RootPath: root})
+	authority, err := NewOutputAuthority(OutputConfig{RootPath: root})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer authority.Close()
-	mode, err := authority.BindDestination(ctx)
-	if err != nil || !mode.Resumable() {
-		t.Fatalf("remount recovery admission: %+v %v", mode, err)
+	if err := authority.BindDestination(ctx); err != nil {
+		t.Fatalf("remount recovery admission: %v", err)
 	}
 	rules, err := transfer.NewSelectionRules(true, nil)
 	if err != nil {
@@ -97,9 +97,9 @@ func recoverRemountedOperation(t *testing.T, root, action string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	lookup, err := authority.LookupActive(ctx, selection)
-	if err != nil || lookup.Kind() != FilesystemOutputLookupReopened {
-		t.Fatalf("lost operation after remount: kind=%v reason=%v error=%v", lookup.Kind(), lookup.StateReason(), err)
+	lookup, err := authority.SelectOperation(ctx, selection, receivecontract.AutomaticOperation())
+	if err != nil || lookup.Kind() != OutputLookupReopened {
+		t.Fatalf("lost operation after remount: kind=%v reason=%v error=%v", lookup.Kind(), lookup.Attention(), err)
 	}
 	intent, ok := lookup.Operation().ReceiveIntent()
 	if !ok {
@@ -110,12 +110,9 @@ func recoverRemountedOperation(t *testing.T, root, action string) {
 		if err := authority.Close(); err != nil {
 			t.Fatal(err)
 		}
-		recovery, err := NewFilesystemResumeStateAuthority(FilesystemResumeRoot{RootPath: root})
-		if err != nil {
-			t.Fatal(err)
-		}
-		result, err := recovery.Discard(ctx, intent.OperationID())
-		if err != nil || result.State() != ResumeOperationDiscarded {
+		recoveryAuthority := NewRecoveryAuthority(root)
+		result, err := recoveryAuthority.Discard(ctx, intent.OperationID())
+		if err != nil || result.State() != RecoveryOperationDiscarded {
 			t.Fatalf("remount discard: %+v %v", result, err)
 		}
 		if _, err := os.Stat(stage); !errors.Is(err, os.ErrNotExist) {
@@ -124,7 +121,7 @@ func recoverRemountedOperation(t *testing.T, root, action string) {
 		assertRemountRetirement(t, root, nativeDirectTreeResultRoot(t, root, intent), false)
 		return
 	}
-	session, err := authority.OpenOperation(ctx, lookup.Operation())
+	session, err := lookup.Operation().OpenDirectTree(ctx, intent)
 	if err != nil {
 		t.Fatal(err)
 	}

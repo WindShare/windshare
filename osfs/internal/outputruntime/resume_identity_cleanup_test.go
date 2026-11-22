@@ -119,7 +119,7 @@ func createIdentityCleanupOperation(t *testing.T, root string) (*NativeResumeRep
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = authority.Close() })
-	if _, err := authority.BindDestination(ctx); err != nil {
+	if err := authority.BindDestination(ctx); err != nil {
 		t.Fatal(err)
 	}
 	lookup, err := authority.LookupActive(ctx, nativeReservationTestSelection(t, 0x71))

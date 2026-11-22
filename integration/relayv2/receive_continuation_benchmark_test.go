@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/windshare/windshare/adapters/filesystem"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/liveshare"
@@ -21,6 +22,7 @@ import (
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/core/transfer/revisionwait"
 	"github.com/windshare/windshare/engine"
+	"github.com/windshare/windshare/engine/output"
 	"github.com/windshare/windshare/engine/relayprofile"
 	"github.com/windshare/windshare/internal/testoutputroot"
 	"github.com/windshare/windshare/internal/testscenario"
@@ -169,28 +171,27 @@ func runReceiveEvidenceSample(
 	defer continuation.Close()
 
 	root := testoutputroot.New(b)
-	output, err := osfs.NewFilesystemOutputAuthority(osfs.FilesystemOutputAuthorityConfig{
-		RootPath: root.RootPath, CreateRoot: root.CreateRoot,
-	})
+	authority, err := filesystem.FilesystemOutput{RootPath: root.RootPath, CreateRoot: root.CreateRoot}.NewOutputAuthority(output.Config{})
 	if err != nil {
 		b.Fatal(err)
 	}
 	defer func() {
-		if err := output.Close(); err != nil {
+		if err := authority.Close(); err != nil {
 			b.Error(err)
 		}
 	}()
-	intent, err := reserveReceiveEvidenceOutput(ctx, runtime.Descriptor(), output)
+	operation, err := reserveReceiveEvidenceOutput(ctx, runtime.Descriptor(), authority)
 	if err != nil {
 		b.Fatal(err)
 	}
+	intent := operation.Intent
 	id, err := transfer.NewTransferJobID()
 	if err != nil {
 		b.Fatal(err)
 	}
 	config := transfer.TransferJobConfig{
 		ReceiveIntent: intent, JobID: id, Session: continuation, Catalog: continuation,
-		Revisions: continuation, Blocks: continuation, Materializer: output,
+		Revisions: continuation, Blocks: continuation, Materializer: operation.Materializer,
 		RevisionWait: &revisionwait.Config{GenerationFence: continuation},
 	}
 	var recovery receiveRecoveryEvidence
@@ -227,22 +228,31 @@ func runReceiveEvidenceSample(
 	return recovery
 }
 
-func reserveReceiveEvidenceOutput(ctx context.Context, descriptor catalog.ShareDescriptor, output *osfs.FilesystemOutputAuthority) (transfer.ReceiveIntent, error) {
+func reserveReceiveEvidenceOutput(ctx context.Context, descriptor catalog.ShareDescriptor, authority output.Authority) (output.Operation, error) {
+	if _, err := authority.BindDestination(ctx); err != nil {
+		return output.Operation{}, err
+	}
 	rules, err := transfer.NewSelectionRules(true, nil)
 	if err != nil {
-		return transfer.ReceiveIntent{}, err
+		return output.Operation{}, err
 	}
 	selection, err := transfer.NewSelectionSpec(descriptor.ShareInstance(), descriptor.SyntheticRoot(), rules)
 	if err != nil {
-		return transfer.ReceiveIntent{}, err
+		return output.Operation{}, err
 	}
-	reservation, err := output.ReserveDirectTree(ctx, selection, receivecontract.NewCatalogRootDirectoryTree())
+	lookup, err := authority.SelectOperation(ctx, selection, receivecontract.AutomaticOperation())
 	if err != nil {
-		return transfer.ReceiveIntent{}, err
+		return output.Operation{}, err
 	}
-	intent, ok := reservation.ReceiveIntent()
-	if !ok {
-		return transfer.ReceiveIntent{}, errors.New("missing native receive benchmark output reservation")
+	if lookup.Kind == output.OutputLookupReopened {
+		return lookup.Operation, nil
 	}
-	return intent, nil
+	if lookup.Kind != output.OutputLookupCreateReady || lookup.Reservation == nil {
+		return output.Operation{}, errors.New("missing native receive benchmark output reservation")
+	}
+	artifact, err := receivecontract.NewResultRootDirectoryTree(receivecontract.NewSyntheticSelectionResultRoot())
+	if err != nil {
+		return output.Operation{}, err
+	}
+	return lookup.Reservation.Create(ctx, artifact)
 }

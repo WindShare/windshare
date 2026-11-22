@@ -42,23 +42,34 @@ func testTransferReadmission(t *testing.T, changeStage func(string) error) {
 	defer continuation.Close()
 
 	root := testoutputroot.New(t)
-	output, err := osfs.NewFilesystemOutputAuthority(osfs.FilesystemOutputAuthorityConfig{
+	output, err := osfs.NewOutputAuthority(osfs.OutputConfig{
 		RootPath: root.RootPath, CreateRoot: root.CreateRoot,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer output.Close()
+	if err := output.BindDestination(ctx); err != nil {
+		t.Fatal(err)
+	}
 	rules, _ := transfer.NewSelectionRules(true, nil)
 	selection, err := transfer.NewSelectionSpec(runtime.Descriptor().ShareInstance(), runtime.Descriptor().SyntheticRoot(), rules)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reservation, err := output.ReserveDirectTree(ctx, selection, receivecontract.NewCatalogRootDirectoryTree())
+	lookup, err := output.SelectOperation(ctx, selection, receivecontract.AutomaticOperation())
+	if err != nil || lookup.Kind() != osfs.OutputLookupCreateReady {
+		t.Fatalf("lookup = (%d, %v)", lookup.Kind(), err)
+	}
+	artifact, err := receivecontract.NewResultRootDirectoryTree(receivecontract.NewSyntheticSelectionResultRoot())
 	if err != nil {
 		t.Fatal(err)
 	}
-	intent, ok := reservation.ReceiveIntent()
+	operation, err := lookup.Create(ctx, artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, ok := operation.ReceiveIntent()
 	if !ok {
 		t.Fatal("missing destination reservation")
 	}
@@ -150,7 +161,7 @@ func testTransferReadmission(t *testing.T, changeStage func(string) error) {
 	}
 	job, err := transfer.NewTransferJob(transfer.TransferJobConfig{
 		ReceiveIntent: intent, JobID: id, Session: continuation, Catalog: continuation, Revisions: continuation,
-		Blocks: reader, Materializer: output, Tracer: tracer, RevisionWait: &revisionwait.Config{GenerationFence: continuation},
+		Blocks: reader, Materializer: operation, Tracer: tracer, RevisionWait: &revisionwait.Config{GenerationFence: continuation},
 	})
 	if err != nil {
 		t.Fatal(err)

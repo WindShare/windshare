@@ -2,8 +2,9 @@ package outputprobe
 
 import (
 	"errors"
-	"github.com/windshare/windshare/osfs/internal/outputcap"
 	"testing"
+
+	"github.com/windshare/windshare/osfs/internal/outputcap"
 )
 
 func TestCapabilityEvidenceRemainsOrthogonal(t *testing.T) {
@@ -30,22 +31,6 @@ func TestCapabilityEvidenceRemainsOrthogonal(t *testing.T) {
 			},
 			reason: outputcap.CapabilityReasonUnverifiableOperationRecovery,
 		},
-		{
-			name: "range recovery",
-			set:  func(results *Results, err error) { results.RangeRecovery = err },
-			fact: func(capabilities outputcap.DestinationCapabilities) outputcap.CapabilityEvidence {
-				return capabilities.RangeRecovery()
-			},
-			reason: outputcap.CapabilityReasonUnverifiableRangeRecovery,
-		},
-		{
-			name: "crash cleanup",
-			set:  func(results *Results, err error) { results.CrashCleanup = err },
-			fact: func(capabilities outputcap.DestinationCapabilities) outputcap.CapabilityEvidence {
-				return capabilities.CrashCleanup()
-			},
-			reason: outputcap.CapabilityReasonUnverifiableCrashCleanup,
-		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -57,7 +42,6 @@ func TestCapabilityEvidenceRemainsOrthogonal(t *testing.T) {
 			}
 			evidence := []outputcap.CapabilityEvidence{
 				capabilities.SafePublish(), capabilities.OperationRecovery(),
-				capabilities.RangeRecovery(), capabilities.CrashCleanup(),
 			}
 			unsupported := 0
 			for _, current := range evidence {
@@ -83,7 +67,7 @@ func TestCapabilityEvidenceRemainsOrthogonal(t *testing.T) {
 
 func TestTransientProbeFailureDoesNotBecomeUnsupported(t *testing.T) {
 	failure := errors.New("temporary I/O failure")
-	for _, result := range []Results{{SafePublish: failure}, {OperationRecovery: failure}, {RangeRecovery: failure}, {CrashCleanup: failure}} {
+	for _, result := range []Results{{SafePublish: failure}, {OperationRecovery: failure}} {
 		capabilities, err := result.Capabilities()
 		if !errors.Is(err, failure) || capabilities.Valid() {
 			t.Fatalf("transient probe = %+v, %v", capabilities, err)

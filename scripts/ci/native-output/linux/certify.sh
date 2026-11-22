@@ -145,7 +145,6 @@ for required_test in \
   TestNativeOutputDestinationCapabilities \
   TestNativeOutputProcessRestartKeepsRanges \
   TestNativeOutputRetainedCandidateListAndReopen \
-  TestNativeLiveOutputPublishesWithoutRecoveryAuthority \
   TestTaskLockIsProcessExclusiveAndRecoversAfterExit \
   TestOrdinaryFilesPublishWithoutLinksAndNeverOverwrite \
   TestSetModifiedTimePreservesNanosecondsAccessTimeAndHandleIdentity; do

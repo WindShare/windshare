@@ -24,7 +24,7 @@ func TestPortableOutputSeparatesResultRootAndContainerReservedNamespaces(t *test
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = authority.Close() })
-	if _, err := authority.BindDestination(ctx); err != nil {
+	if err := authority.BindDestination(ctx); err != nil {
 		t.Fatal(err)
 	}
 
@@ -160,7 +160,7 @@ func TestPortableOutputRepairsTopLevelControlNameAndPreservesTopLevelMarkerName(
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { _ = authority.Close() })
-		if _, err := authority.BindDestination(ctx); err != nil {
+		if err := authority.BindDestination(ctx); err != nil {
 			t.Fatal(err)
 		}
 		anchor := incrementalTestIdentity16[catalog.DirectoryID](0x61)
@@ -268,7 +268,7 @@ func TestPortableOutputRepairsTopLevelControlNameAndPreservesTopLevelMarkerName(
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { _ = authority.Close() })
-		if _, err := authority.BindDestination(ctx); err != nil {
+		if err := authority.BindDestination(ctx); err != nil {
 			t.Fatal(err)
 		}
 
@@ -335,7 +335,7 @@ func TestPortableOutputRepairsTopLevelControlNameAndPreservesTopLevelMarkerName(
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { _ = controlAuthority.Close() })
-		if _, err := controlAuthority.BindDestination(ctx); err != nil {
+		if err := controlAuthority.BindDestination(ctx); err != nil {
 			t.Fatal(err)
 		}
 		controlFileID := incrementalTestIdentity16[catalog.FileID](0x95)
@@ -366,7 +366,7 @@ func TestDiscardExportsAndSurfacesCompatibleNameReportAndRetryResetsStaleReport(
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = authority.Close() })
-	if _, err := authority.BindDestination(ctx); err != nil {
+	if err := authority.BindDestination(ctx); err != nil {
 		t.Fatal(err)
 	}
 

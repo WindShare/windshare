@@ -14,12 +14,10 @@ import (
 
 func TestControlLifecycleAbortsFailedBindingParticipant(t *testing.T) {
 	platform := newDestinationPlatform()
+	platform.bindIdentityErr = errDestinationFake
 	_, err := BindDestination(BindConfig{
-		Platform:    platform,
-		DisplayPath: filepath.Clean(t.TempDir()),
-		OpenLiveCleanupJournal: func(outputcap.Directory) (LiveCleanupJournalHandle, error) {
-			return LiveCleanupJournalHandle{}, errDestinationFake
-		},
+		Platform:              platform,
+		DisplayPath:           filepath.Clean(t.TempDir()),
 		RecyclePrivateState:   recycleFakePrivateState,
 		ControlUseNonceSource: bytes.NewReader(bytes.Repeat([]byte{0x71}, controlParticipantNonceBytes)),
 	})
@@ -31,6 +29,7 @@ func TestControlLifecycleAbortsFailedBindingParticipant(t *testing.T) {
 		t.Fatalf("failed bind retained participant markers = %v", participants.entries)
 	}
 
+	platform.bindIdentityErr = nil
 	authority := bindRecyclingDestination(t, platform, 0x72, recycleFakePrivateState)
 	if err := authority.Close(); err != nil {
 		t.Fatal(err)
@@ -52,13 +51,11 @@ func TestControlLifecycleRetriesAnUnlockedNonceCollision(t *testing.T) {
 		bytes.Repeat([]byte{0x81}, controlParticipantNonceBytes),
 		bytes.Repeat([]byte{0x82}, controlParticipantNonceBytes)...,
 	)
-	journal := &destinationJournal{snapshot: LiveCleanupBatch{State: LiveCleanupBatchComplete}}
 	restarted, err := BindDestination(BindConfig{
-		Platform:               platform,
-		DisplayPath:            filepath.Clean(t.TempDir()),
-		OpenLiveCleanupJournal: fakeJournalOpener(journal),
-		RecyclePrivateState:    recycleFakePrivateState,
-		ControlUseNonceSource:  bytes.NewReader(nonces),
+		Platform:              platform,
+		DisplayPath:           filepath.Clean(t.TempDir()),
+		RecyclePrivateState:   recycleFakePrivateState,
+		ControlUseNonceSource: bytes.NewReader(nonces),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -83,13 +80,11 @@ func TestControlLifecycleRejectsMalformedParticipantBeforeJoining(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	journal := &destinationJournal{snapshot: LiveCleanupBatch{State: LiveCleanupBatchComplete}}
 	_, err = BindDestination(BindConfig{
-		Platform:               platform,
-		DisplayPath:            filepath.Clean(t.TempDir()),
-		OpenLiveCleanupJournal: fakeJournalOpener(journal),
-		RecyclePrivateState:    recycleFakePrivateState,
-		ControlUseNonceSource:  bytes.NewReader(bytes.Repeat([]byte{0x92}, controlParticipantNonceBytes)),
+		Platform:              platform,
+		DisplayPath:           filepath.Clean(t.TempDir()),
+		RecyclePrivateState:   recycleFakePrivateState,
+		ControlUseNonceSource: bytes.NewReader(bytes.Repeat([]byte{0x92}, controlParticipantNonceBytes)),
 	})
 	if !errors.Is(err, outputcap.ErrUnsafeNamespace) {
 		t.Fatalf("malformed participant bind error = %v", err)

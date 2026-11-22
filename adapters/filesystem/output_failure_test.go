@@ -1,94 +1,71 @@
 package filesystem
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"testing"
 
-	"github.com/windshare/windshare/core/transfer"
-	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/engine/output"
 	"github.com/windshare/windshare/osfs"
 )
 
-type testFilesystemDiagnostic struct {
-	value osfs.FilesystemOutputDiagnostic
-}
-
-func (d *testFilesystemDiagnostic) Error() string { return "native failure" }
-func (d *testFilesystemDiagnostic) FilesystemOutputDiagnostic() osfs.FilesystemOutputDiagnostic {
-	return d.value
-}
-
-type failingNativeAuthority struct {
-	nativeFilesystemOutputAuthority
-	cause error
-}
-
-func (a failingNativeAuthority) BindDestination(context.Context) (osfs.FilesystemOutputExecutionMode, error) {
-	return osfs.FilesystemOutputExecutionMode{}, a.cause
-}
-func (a failingNativeAuthority) SelectOperation(context.Context, transfer.SelectionSpec, receivecontract.OperationSelection) (osfs.FilesystemOutputLookup, error) {
-	return osfs.FilesystemOutputLookup{}, a.cause
-}
-func (a failingNativeAuthority) CreateOperation(context.Context, osfs.FilesystemOutputLookup, receivecontract.ArtifactSpec) (osfs.FilesystemOutputOperation, error) {
-	return osfs.FilesystemOutputOperation{}, a.cause
-}
-func (a failingNativeAuthority) Close() error { return a.cause }
-
-func TestNativeFailureProjectionSeparatesCleanupRegardlessOfCauseOrder(t *testing.T) {
-	primary := &testFilesystemDiagnostic{value: osfs.FilesystemOutputDiagnostic{Stage: osfs.FilesystemOutputFailureCheckpointReconciliation}}
-	closeA := &testFilesystemDiagnostic{value: osfs.FilesystemOutputDiagnostic{Stage: osfs.FilesystemOutputFailureAuthorityClose}}
-	closeB := &testFilesystemDiagnostic{value: osfs.FilesystemOutputDiagnostic{Stage: osfs.FilesystemOutputFailureAuthorityClose}}
+func TestSealedFailureSeparatesCleanupRegardlessOfCauseOrder(t *testing.T) {
+	primaryCause := errors.New("checkpoint promotion failed")
+	closeCauseA := errors.New("close repository failed")
+	closeCauseB := errors.New("close destination failed")
+	primary, ok := output.SealFailure(primaryCause, output.FailureDiagnostic{Stage: output.FailureCheckpoint})
+	if !ok {
+		t.Fatal("primary diagnostic was not sealed")
+	}
+	closeA, ok := output.SealFailure(closeCauseA, output.FailureDiagnostic{Stage: output.FailureClose})
+	if !ok {
+		t.Fatal("closeA diagnostic was not sealed")
+	}
+	closeB, ok := output.SealFailure(closeCauseB, output.FailureDiagnostic{Stage: output.FailureClose})
+	if !ok {
+		t.Fatal("closeB diagnostic was not sealed")
+	}
 	for _, causes := range [][]error{{primary, closeA, closeB}, {closeA, primary, closeB}} {
-		original := fmt.Errorf("native operation: %w", errors.Join(causes...))
-		projected := sealFilesystemOutputFailure(original)
-		if !errors.Is(projected, original) || projected.Error() != original.Error() {
-			t.Fatalf("native error context changed: %v", projected)
-		}
-		cleanup := output.FailureForStage(projected, output.FailureClose)
-		if !errors.Is(cleanup, closeA) || !errors.Is(cleanup, closeB) || errors.Is(cleanup, primary) {
+		joined := fmt.Errorf("native operation: %w", errors.Join(causes...))
+		cleanup := output.FailureForStage(joined, output.FailureClose)
+		if !errors.Is(cleanup, closeCauseA) || !errors.Is(cleanup, closeCauseB) || errors.Is(cleanup, primaryCause) {
 			t.Fatalf("cleanup claimed unrelated work: %v", cleanup)
 		}
 	}
+	if sealed := sealOutputError(osfs.ErrOutputShareStopped); !errors.Is(sealed, output.ErrShareStopped) {
+		t.Fatalf("share-stopped normalization = %v", sealed)
+	}
+	if sealed := sealOutputError(osfs.ErrOutputBusy); !errors.Is(sealed, output.ErrBusy) {
+		t.Fatalf("busy normalization = %v", sealed)
+	}
 }
 
-func TestFilesystemAdapterSealsNativeDiagnosticWithoutReplacingCause(t *testing.T) {
-	diagnostic := osfs.FilesystemOutputDiagnostic{Stage: osfs.FilesystemOutputFailureAuthorityClose}
-	cause := &testFilesystemDiagnostic{value: diagnostic}
-	native := failingNativeAuthority{cause: cause}
-	authority := &filesystemOutputAuthority{native: native}
-	operations := []func() error{
-		func() error { _, err := authority.BindDestination(context.Background()); return err },
-		func() error {
-			_, err := authority.SelectOperation(context.Background(), transfer.SelectionSpec{}, receivecontract.AutomaticOperation())
-			return err
-		},
-		func() error {
-			_, err := (filesystemReservation{authority: native}).Create(context.Background(), receivecontract.ArtifactSpec{})
-			return err
-		},
-		authority.Close,
+func TestSealedFailurePreservesAdapterDetailWithoutLeakingForgedWrappers(t *testing.T) {
+	sealed, ok := SealOutputFailure(OutputFailureDiagnostic{
+		Stage:              output.FailureDurability,
+		ReconciliationStep: CheckpointStageDurability,
+		NativeErrorClass:   NativeErrorAccessDenied,
+	})
+	if !ok {
+		t.Fatal("valid diagnostic was not sealed")
 	}
-	for _, operation := range operations {
-		err := operation()
-		got, ok := output.DiagnosticFor(err)
-		if !ok || got.Stage != output.FailureClose || !errors.Is(err, cause) || err.Error() != cause.Error() {
-			t.Fatalf("diagnostic=%+v present=%v error=%v", got, ok, err)
-		}
-		if _, ok := output.DiagnosticFor(fmt.Errorf("arbitrary wrapper: %w", err)); ok {
-			t.Fatal("direct proof traversed untrusted wrapper")
-		}
+	got, present := output.DiagnosticFor(sealed)
+	if !present || got.Stage != output.FailureDurability {
+		t.Fatalf("diagnostic=%+v present=%v", got, present)
 	}
-	if _, ok := output.DiagnosticFor(cause); ok {
-		t.Fatal("arbitrary provider forged native diagnostic")
+	if _, forged := output.DiagnosticFor(fmt.Errorf("arbitrary wrapper: %w", sealed)); forged {
+		t.Fatal("direct proof traversed untrusted wrapper")
 	}
-	if _, ok := output.DiagnosticFor((error)(nil)); ok {
-		t.Fatal("nil diagnostic carrier accepted")
+	detail, ok := FailureDetailFor(sealed)
+	if !ok || !detail.Valid() || detail.Stage != output.FailureDurability ||
+		detail.ReconciliationStep != CheckpointStageDurability ||
+		detail.NativeErrorClass != NativeErrorAccessDenied {
+		t.Fatalf("detail=%+v ok=%v", detail, ok)
 	}
-	unknown := errors.New("opaque provider failure")
-	if sealFilesystemOutputFailure(unknown) != unknown || sealFilesystemOutputFailure(nil) != nil {
-		t.Fatal("unclassified errors changed identity")
+	if _, ok := FailureDetailFor(errors.New("opaque provider failure")); ok {
+		t.Fatal("opaque error produced native failure detail")
+	}
+	if _, ok := SealOutputFailure(OutputFailureDiagnostic{}); ok {
+		t.Fatal("zero diagnostic was sealed")
 	}
 }
