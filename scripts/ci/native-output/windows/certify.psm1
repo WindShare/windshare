@@ -13,9 +13,9 @@ $script:RequiredWindowsNativeTestSelectors = @(
         )
     },
     [pscustomobject]@{
-        PackageArgument = './osfs/internal/outputportable'
-        ImportPath = 'github.com/windshare/windshare/osfs/internal/outputportable'
-        BinaryName = 'outputportable.test.exe'
+        PackageArgument = './osfs/internal/output'
+        ImportPath = 'github.com/windshare/windshare/osfs/internal/output'
+        BinaryName = 'output.test.exe'
         TestNames = @(
             'TestTaskLockIsProcessExclusiveAndRecoversAfterExit',
             'TestOrdinaryFilesPublishWithoutLinksAndNeverOverwrite',

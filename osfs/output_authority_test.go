@@ -7,7 +7,7 @@ import (
 
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
-	"github.com/windshare/windshare/osfs/internal/outputruntime"
+	"github.com/windshare/windshare/osfs/internal/output"
 )
 
 func TestOutputAuthorityRejectsNilReceiver(t *testing.T) {
@@ -49,21 +49,6 @@ func TestOutputOutcomeVocabularyIsClosed(t *testing.T) {
 		}
 	}
 
-	reconciliationSteps := []struct {
-		value CheckpointReconciliationStep
-		name  string
-	}{
-		{CheckpointCandidateObservation, "candidate_observation"},
-		{CheckpointStageDurability, "stage_durability"},
-		{CheckpointNamespaceDurability, "namespace_durability"},
-		{CheckpointRecordPromotion, "record_promotion"},
-	}
-	for _, step := range reconciliationSteps {
-		if !step.value.Valid() || step.value.String() != step.name {
-			t.Fatalf("reconciliation step %d = %q, want %q", step.value, step.value, step.name)
-		}
-	}
-
 	nativeClasses := []struct {
 		value NativeErrorClass
 		name  string
@@ -83,26 +68,15 @@ func TestOutputOutcomeVocabularyIsClosed(t *testing.T) {
 	}
 
 	if OutputFailureStage(0).Valid() || OutputFailureStage(255).Valid() ||
-		CheckpointReconciliationStep(0).Valid() ||
-		CheckpointReconciliationStep(255).Valid() ||
 		NativeErrorClass(0).Valid() || NativeErrorClass(255).Valid() {
 		t.Fatal("unknown native outcome value was accepted")
 	}
-	if OutputFailureStage(255).String() != "" ||
-		CheckpointReconciliationStep(255).String() != "" ||
-		NativeErrorClass(255).String() != "" {
+	if OutputFailureStage(255).String() != "" || NativeErrorClass(255).String() != "" {
 		t.Fatal("native outcome vocabulary is not fail-closed")
 	}
-	if (OutputDiagnostic{
-		Stage:              OutputFailureInventory,
-		ReconciliationStep: CheckpointCandidateObservation,
-	}).Valid() {
-		t.Fatal("reconciliation evidence was accepted outside reconciliation or durability")
-	}
 	if !(OutputDiagnostic{
-		Stage:              OutputFailureDurability,
-		ReconciliationStep: CheckpointNamespaceDurability,
-		NativeErrorClass:   NativeErrorSharingViolation,
+		Stage:            OutputFailureDurability,
+		NativeErrorClass: NativeErrorSharingViolation,
 	}).Valid() {
 		t.Fatal("closed native diagnostic was rejected")
 	}
@@ -128,7 +102,7 @@ func TestOutputDiagnosticForAdmitsOnlyCompleteBoundedEvidence(t *testing.T) {
 	if _, ok := OutputDiagnosticFor(errors.New("untyped provider failure")); ok {
 		t.Fatal("untyped provider failure acquired diagnostic authority")
 	}
-	runtimeFailure := outputruntime.DiagnoseFailure(
+	runtimeFailure := output.DiagnoseFailure(
 		OutputFailureInventory,
 		errors.New("registry paging failure"),
 	)

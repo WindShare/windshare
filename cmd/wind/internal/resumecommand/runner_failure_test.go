@@ -97,24 +97,20 @@ func TestResumeListFailureStageMatrixIsClosedAndPathFree(t *testing.T) {
 		{
 			name: "checkpoint reconciliation",
 			diagnostic: filesystem.OutputFailureDiagnostic{
-				Stage:              output.FailureCheckpoint,
-				ReconciliationStep: filesystem.CheckpointRecordPromotion,
+				Stage: output.FailureCheckpoint,
 			},
 			stage:  output.FailureCheckpoint,
 			reason: resumeCheckpointReconcileReason,
-			fields: []string{`reconciliation_stage="record_promotion"`},
 		},
 		{
 			name: "native durability",
 			diagnostic: filesystem.OutputFailureDiagnostic{
-				Stage:              output.FailureDurability,
-				ReconciliationStep: filesystem.CheckpointStageDurability,
-				NativeErrorClass:   filesystem.NativeErrorAccessDenied,
+				Stage:            output.FailureDurability,
+				NativeErrorClass: filesystem.NativeErrorAccessDenied,
 			},
 			stage:  output.FailureDurability,
 			reason: resumeNativeDurabilityReason,
 			fields: []string{
-				`reconciliation_stage="stage_durability"`,
 				`native_error_class="access_denied"`,
 			},
 		},

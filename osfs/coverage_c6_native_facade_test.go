@@ -13,7 +13,6 @@ import (
 	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
-	"github.com/windshare/windshare/osfs/internal/outputcap"
 )
 
 func TestCoverageC6OutputAuthorityProjectsLeaseAndDiagnostics(t *testing.T) {
@@ -107,7 +106,7 @@ func TestCoverageC6OutputAuthorityProjectsLeaseAndDiagnostics(t *testing.T) {
 				caps := payload.Get("capabilities")
 				if !caps.Get("safe_publish").Get("supported").Bool() ||
 					!caps.Get("operation_recovery").Get("supported").Bool() ||
-					payload.Get("identity_scheme").Text() != string(outputcap.IdentitySchemePortableWitnessV1) {
+					payload.Get("identity_scheme").Text() != "portable-witness-v1" {
 					t.Fatalf("destination binding omitted capability or identity_scheme evidence: %+v", payload)
 				}
 				destinationBound++
@@ -170,8 +169,8 @@ func TestCoverageC6OutputAuthorityRejectsNonTreeArtifact(t *testing.T) {
 	if _, err := lookup.Create(ctx, artifact); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
 		t.Fatalf("non-tree creation = %v, want invalid binding", err)
 	}
-	if entries, err := os.ReadDir(root); err != nil || len(entries) != 1 || entries[0].Name() != ".windshare-output" {
-		t.Fatalf("rejected artifact created public output: %v, %v", entries, err)
+	if entries, err := os.ReadDir(root); err != nil || len(entries) != 0 {
+		t.Fatalf("rejected artifact created output entries: %v, %v", entries, err)
 	}
 }
 

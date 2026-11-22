@@ -2,14 +2,14 @@
 set -euo pipefail
 
 if [ "$#" -ne 6 ]; then
-  echo "usage: root-worker.sh <loop-device> <mountpoint> <osfs-test-binary> <outputportable-test-binary> <uid> <gid>" >&2
+  echo "usage: root-worker.sh <loop-device> <mountpoint> <osfs-test-binary> <output-test-binary> <uid> <gid>" >&2
   exit 2
 fi
 
 loop_device="$1"
 mountpoint_path="$2"
 osfs_test_binary="$3"
-outputportable_test_binary="$4"
+output_test_binary="$4"
 receiver_uid="$5"
 receiver_gid="$6"
 
@@ -25,13 +25,13 @@ if [[ ! "$loop_device" =~ ^/dev/loop[0-9]+$ ]] ||
 fi
 if [ ! -d "$mountpoint_path" ] || [ -L "$mountpoint_path" ] ||
    [ ! -f "$osfs_test_binary" ] || [ -L "$osfs_test_binary" ] ||
-   [ ! -f "$outputportable_test_binary" ] || [ -L "$outputportable_test_binary" ]; then
+   [ ! -f "$output_test_binary" ] || [ -L "$output_test_binary" ]; then
   echo "Linux native root worker requires no-follow fixture paths" >&2
   exit 2
 fi
 mountpoint_path="$(cd -- "$mountpoint_path" && pwd -P)"
 osfs_test_binary="$(cd -- "$(dirname -- "$osfs_test_binary")" && pwd -P)/$(basename -- "$osfs_test_binary")"
-outputportable_test_binary="$(cd -- "$(dirname -- "$outputportable_test_binary")" && pwd -P)/$(basename -- "$outputportable_test_binary")"
+output_test_binary="$(cd -- "$(dirname -- "$output_test_binary")" && pwd -P)/$(basename -- "$output_test_binary")"
 
 root_mounted=false
 cleanup() {
@@ -56,7 +56,7 @@ root_mounted=true
 install -d -o 0 -g 0 -m 0755 -- \
   "$mountpoint_path/test"
 install -o 0 -g 0 -m 0555 -- "$osfs_test_binary" "$mountpoint_path/test/osfs.test"
-install -o 0 -g 0 -m 0555 -- "$outputportable_test_binary" "$mountpoint_path/test/outputportable.test"
+install -o 0 -g 0 -m 0555 -- "$output_test_binary" "$mountpoint_path/test/output.test"
 install -d -o "$receiver_uid" -g "$receiver_gid" -m 0700 -- \
   "$mountpoint_path/receiver" \
   "$mountpoint_path/receiver/test-temp"
@@ -80,5 +80,5 @@ run_native_test_binary() {
 
 # No procfs or device nodes: timestamps and child-process locks must work on
 # the opened files, independently of an ambient /proc or /dev namespace.
-run_native_test_binary /test/outputportable.test '^(TestTaskLockIsProcessExclusiveAndRecoversAfterExit|TestOrdinaryFilesPublishWithoutLinksAndNeverOverwrite|TestSetModifiedTimePreservesNanosecondsAccessTimeAndHandleIdentity)$'
+run_native_test_binary /test/output.test '^(TestTaskLockIsProcessExclusiveAndRecoversAfterExit|TestOrdinaryFilesPublishWithoutLinksAndNeverOverwrite|TestSetModifiedTimePreservesNanosecondsAccessTimeAndHandleIdentity)$'
 run_native_test_binary /test/osfs.test '^(TestNativeOutputDestinationCapabilities|TestNativeOutputProcessRestartKeepsRanges|TestNativeOutputRetainedCandidateListAndReopen)$'

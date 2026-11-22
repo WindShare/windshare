@@ -72,20 +72,18 @@ type resumeDiscardRequest struct {
 }
 
 type resumeFailureDetail struct {
-	Stage          output.FailureStage
-	Reconciliation filesystem.CheckpointReconciliationStep
-	NativeClass    filesystem.NativeErrorClass
+	Stage       output.FailureStage
+	NativeClass filesystem.NativeErrorClass
 }
 
 func (detail resumeFailureDetail) Valid() bool {
 	return (detail.Stage == 0 || detail.Stage.Valid()) &&
-		(detail.Reconciliation == 0 || detail.Reconciliation.Valid()) &&
 		(detail.NativeClass == 0 || detail.NativeClass.Valid())
 }
 func presentFailureDetail(failure *engine.RecoveryFailure) resumeFailureDetail {
 	detail := resumeFailureDetail{Stage: failure.Detail.Stage}
 	if native, ok := filesystem.FailureDetailFor(failure.Cause); ok {
-		detail.Reconciliation, detail.NativeClass = native.ReconciliationStep, native.NativeErrorClass
+		detail.NativeClass = native.NativeErrorClass
 	}
 	return detail
 }

@@ -60,16 +60,15 @@ func (failure Failure) Error() string {
 func (failure Failure) Unwrap() error { return failure.Cause }
 
 type Result struct {
-	OutputAttention      recovery.AttentionReason
-	Recovery             RecoveryOutcome
-	Transfer             transfer.JobResult
-	Operation            receivecontract.OperationID
-	Job                  transfer.TransferJobID
-	Destination          string
-	DestinationAdjusted  bool
-	CompatibleNameReport output.CompatibleNameReport
-	Elapsed              time.Duration
-	Connectivity         downloadmetrics.Snapshot
+	OutputAttention     recovery.AttentionReason
+	Recovery            RecoveryOutcome
+	Transfer            transfer.JobResult
+	Operation           receivecontract.OperationID
+	Job                 transfer.TransferJobID
+	Destination         string
+	DestinationAdjusted bool
+	Elapsed             time.Duration
+	Connectivity        downloadmetrics.Snapshot
 }
 type SettlementInput struct {
 	Result                                                                    transfer.JobResult
@@ -77,7 +76,6 @@ type SettlementInput struct {
 	Elapsed                                                                   time.Duration
 	Destination                                                               string
 	DestinationAdjusted                                                       bool
-	CompatibleNameReport                                                      output.CompatibleNameReport
 	Operation                                                                 receivecontract.OperationID
 	Job                                                                       transfer.TransferJobID
 	Connectivity                                                              downloadmetrics.Snapshot
@@ -116,8 +114,7 @@ func settlePreparationFailure(step stepOutcome, failure Failure, contextErr, cle
 func Settle(input SettlementInput) (task.Completion[Result], error) {
 	r := input.Result
 	if r.TerminationInterruption != 0 && !r.TerminationInterruption.Valid() ||
-		r.SettlementInterruption != 0 && !r.SettlementInterruption.Valid() ||
-		!input.CompatibleNameReport.Valid() {
+		r.SettlementInterruption != 0 && !r.SettlementInterruption.Valid() {
 		return task.Completion[Result]{}, ErrInvalidResult
 	}
 	outcome := task.OutcomeFailed
@@ -158,7 +155,7 @@ func Settle(input SettlementInput) (task.Completion[Result], error) {
 	}
 	result := task.Completion[Result]{
 		Outcome: outcome, FailureClass: class, CleanupError: input.CleanupError,
-		Value: Result{Transfer: r, Operation: input.Operation, Job: input.Job, Destination: input.Destination, DestinationAdjusted: input.DestinationAdjusted, CompatibleNameReport: input.CompatibleNameReport, Elapsed: input.Elapsed, Connectivity: input.Connectivity},
+		Value: Result{Transfer: r, Operation: input.Operation, Job: input.Job, Destination: input.Destination, DestinationAdjusted: input.DestinationAdjusted, Elapsed: input.Elapsed, Connectivity: input.Connectivity},
 	}
 	if outcome != task.OutcomeSuccess {
 		// The typed reason keeps application precedence while the error tree retains

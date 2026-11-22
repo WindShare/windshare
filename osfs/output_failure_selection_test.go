@@ -6,16 +6,16 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/windshare/windshare/osfs/internal/outputruntime"
+	"github.com/windshare/windshare/osfs/internal/output"
 )
 
 func TestOutputFailureSelectionSeparatesPrimaryAndReleaseCauses(t *testing.T) {
 	primaryCause := errors.New("primary failure")
 	nativeCloseCause := errors.New("native authority release failure")
 	otherCloseCause := errors.New("secondary release failure")
-	primary := outputruntime.DiagnoseFailure(OutputFailureCheckpoint, primaryCause)
-	nativeClose := outputruntime.DiagnoseFailure(OutputFailureClose, nativeCloseCause)
-	otherClose := outputruntime.DiagnoseFailure(OutputFailureClose, otherCloseCause)
+	primary := output.DiagnoseFailure(OutputFailureCheckpoint, primaryCause)
+	nativeClose := output.DiagnoseFailure(OutputFailureClose, nativeCloseCause)
+	otherClose := output.DiagnoseFailure(OutputFailureClose, otherCloseCause)
 	mixed := fmt.Errorf("recovery: %w", errors.Join(primary, otherClose, nativeClose))
 	selected := OutputFailureForStage(mixed, OutputFailureClose)
 	if !errors.Is(selected, otherCloseCause) || !errors.Is(selected, nativeCloseCause) || errors.Is(selected, primaryCause) {
@@ -32,8 +32,8 @@ func TestOutputFailureSelectionSeparatesPrimaryAndReleaseCauses(t *testing.T) {
 func TestOutputCloseAnnotationOwnsAllReleaseCausesInsideIt(t *testing.T) {
 	earlierCause := errors.New("checkpoint close failed")
 	otherCloseCause := errors.New("registry close failed")
-	earlierDiagnostic := outputruntime.DiagnoseFailure(OutputFailureDurability, earlierCause)
-	closeBoundary := outputruntime.DiagnoseFailure(
+	earlierDiagnostic := output.DiagnoseFailure(OutputFailureDurability, earlierCause)
+	closeBoundary := output.DiagnoseFailure(
 		OutputFailureClose,
 		errors.Join(context.Canceled, earlierDiagnostic, otherCloseCause),
 	)

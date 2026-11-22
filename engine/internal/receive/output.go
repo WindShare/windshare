@@ -11,7 +11,6 @@ var errGetOutputAdapterContract = output.ErrContract
 
 type OutputMode = output.Mode
 type OutputLookupKind = output.LookupKind
-type OutputCompatibleNameReport = output.CompatibleNameReport
 type OutputOperation = output.Operation
 type OutputReservation = output.Reservation
 type OutputLookup = output.Lookup

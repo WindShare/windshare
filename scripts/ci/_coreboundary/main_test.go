@@ -524,7 +524,7 @@ func (l *recordingGraphLister) List(
 }
 
 func TestNativeStorageIsOnlyAllowedInCoreTestGraphDelta(t *testing.T) {
-	for _, path := range []string{"/osfs", "/osfs/internal/checkpointstore"} {
+	for _, path := range []string{"/osfs", "/osfs/internal/output"} {
 		pkg := listedPackage{ImportPath: repositoryModulePath + path, Module: &listedModule{Path: repositoryModulePath}}
 		if got := packagePolicyViolations(productionScope, pkg); len(got) == 0 {
 			t.Fatal("native storage entered core production")

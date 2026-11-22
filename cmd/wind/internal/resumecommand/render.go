@@ -75,9 +75,6 @@ func renderResumeFailureDetail(output *strings.Builder, detail resumeFailureDeta
 		return
 	}
 	fmt.Fprintf(output, " stage=%q", detail.Stage.String())
-	if detail.Reconciliation != 0 {
-		fmt.Fprintf(output, " reconciliation_stage=%q", detail.Reconciliation.String())
-	}
 	if detail.NativeClass != 0 {
 		fmt.Fprintf(output, " native_error_class=%q", detail.NativeClass.String())
 	}
@@ -176,17 +173,6 @@ func (textRenderer) DiscardReport(itemNumber int, report resumeDiscardReport) (s
 	)
 	if report.Attention != "" {
 		fmt.Fprintf(&output, " reason=%q", report.Attention)
-	}
-	if !report.CompatibleNameReport.Empty() {
-		fmt.Fprintf(
-			&output,
-			" repaired_names=%d name_report=%q",
-			report.CompatibleNameReport.RepairedCount,
-			report.CompatibleNameReport.ReportName,
-		)
-		if report.CompatibleNameReport.PageCount > 1 {
-			fmt.Fprintf(&output, " name_report_pages=%d", report.CompatibleNameReport.PageCount)
-		}
 	}
 	output.WriteByte('\n')
 	for _, item := range report.BlockedItems {

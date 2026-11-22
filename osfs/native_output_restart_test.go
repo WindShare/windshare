@@ -11,7 +11,7 @@ import (
 
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
-	"github.com/windshare/windshare/osfs/internal/outputcap"
+	"github.com/windshare/windshare/osfs/internal/output"
 )
 
 const (
@@ -58,17 +58,11 @@ func TestNativeOutputProcessRestartKeepsRanges(t *testing.T) {
 	if err := os.Mkdir(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	preflight, err := openNativeOutputPlatform(root, false)
+	preflight, _, err := output.OpenContainer(root, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	source, ok := preflight.(interface {
-		DestinationCapabilities() (outputcap.DestinationCapabilities, error)
-	})
-	if !ok {
-		t.Fatal("missing destination capabilities")
-	}
-	caps, err := source.DestinationCapabilities()
+	caps, err := output.ProbeDestination(preflight)
 	_ = preflight.Close()
 	if err != nil {
 		t.Fatal(err)

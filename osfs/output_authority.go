@@ -6,7 +6,7 @@ import (
 	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
-	"github.com/windshare/windshare/osfs/internal/outputruntime"
+	"github.com/windshare/windshare/osfs/internal/output"
 )
 
 type OutputConfig struct {
@@ -18,15 +18,14 @@ type OutputConfig struct {
 // OutputAuthority owns native best-effort resumable destination storage without
 // depending on application-layer engine ports.
 type OutputAuthority struct {
-	runtime *outputruntime.Authority
+	runtime *output.Authority
 }
 
 func NewOutputAuthority(cfg OutputConfig) (*OutputAuthority, error) {
-	runtimeAuthority, err := outputruntime.New(outputruntime.Config{
-		RootPath:        cfg.RootPath,
-		CreateRoot:      cfg.CreateRoot,
-		Diagnostics:     cfg.Diagnostics,
-		PlatformFactory: openNativeOutputPlatform,
+	runtimeAuthority, err := output.New(output.Config{
+		RootPath:    cfg.RootPath,
+		CreateRoot:  cfg.CreateRoot,
+		Diagnostics: cfg.Diagnostics,
 	})
 	if err != nil {
 		return nil, err
@@ -36,7 +35,7 @@ func NewOutputAuthority(cfg OutputConfig) (*OutputAuthority, error) {
 
 func (authority *OutputAuthority) BindDestination(ctx context.Context) error {
 	if authority == nil || authority.runtime == nil {
-		return outputruntime.DiagnoseFailure(outputruntime.FailureDestinationBinding, transfer.ErrInvalidOutputBinding)
+		return output.DiagnoseFailure(output.FailureDestinationBinding, transfer.ErrInvalidOutputBinding)
 	}
 	return authority.runtime.BindDestination(ctx)
 }
@@ -47,7 +46,7 @@ func (authority *OutputAuthority) SelectOperation(
 	selector receivecontract.OperationSelection,
 ) (OutputLookup, error) {
 	if authority == nil || authority.runtime == nil {
-		return OutputLookup{}, outputruntime.DiagnoseFailure(outputruntime.FailureLookup, transfer.ErrInvalidOutputBinding)
+		return OutputLookup{}, output.DiagnoseFailure(output.FailureLookup, transfer.ErrInvalidOutputBinding)
 	}
 	native, err := authority.runtime.SelectOperation(ctx, selection, selector)
 	if err != nil {
@@ -65,7 +64,7 @@ func (authority *OutputAuthority) Close() error {
 
 type OutputLookup struct {
 	authority *OutputAuthority
-	native    outputruntime.ActiveLookup
+	native    output.ActiveLookup
 }
 
 func (lookup OutputLookup) Kind() OutputLookupKind           { return lookup.native.Kind() }
@@ -84,7 +83,7 @@ func (lookup OutputLookup) Create(
 	artifact receivecontract.ArtifactSpec,
 ) (*OutputOperation, error) {
 	if lookup.authority == nil || lookup.authority.runtime == nil {
-		return nil, outputruntime.DiagnoseFailure(outputruntime.FailureCreate, transfer.ErrInvalidOutputBinding)
+		return nil, output.DiagnoseFailure(output.FailureCreate, transfer.ErrInvalidOutputBinding)
 	}
 	native, err := lookup.authority.runtime.CreateOperation(ctx, lookup.native, artifact)
 	if err != nil {
@@ -93,11 +92,11 @@ func (lookup OutputLookup) Create(
 	return &OutputOperation{runtime: lookup.authority.runtime, native: native}, nil
 }
 
-// OutputOperation holds a frozen receive intent and its native output lease,
+// OutputOperation holds a frozen receive intent and its native output lock,
 // directly implementing transfer.DirectTreeMaterializer.
 type OutputOperation struct {
-	runtime *outputruntime.Authority
-	native  *outputruntime.Operation
+	runtime *output.Authority
+	native  *output.Operation
 }
 
 var _ transfer.DirectTreeMaterializer = (*OutputOperation)(nil)
@@ -114,11 +113,11 @@ func (operation *OutputOperation) OpenDirectTree(
 	intent transfer.ReceiveIntent,
 ) (transfer.DirectTreeSession, error) {
 	if operation == nil || operation.runtime == nil || operation.native == nil {
-		return nil, outputruntime.DiagnoseFailure(outputruntime.FailureOpen, transfer.ErrInvalidOutputBinding)
+		return nil, output.DiagnoseFailure(output.FailureOpen, transfer.ErrInvalidOutputBinding)
 	}
 	owned, ok := operation.native.ReceiveIntent()
 	if !ok || !owned.EqualCanonical(intent) {
-		return nil, outputruntime.DiagnoseFailure(outputruntime.FailureOpen, transfer.ErrInvalidOutputBinding)
+		return nil, output.DiagnoseFailure(output.FailureOpen, transfer.ErrInvalidOutputBinding)
 	}
 	return operation.runtime.OpenOperation(ctx, operation.native)
 }
@@ -139,11 +138,4 @@ func (operation *OutputOperation) Discard(ctx context.Context) error {
 		return transfer.ErrInvalidOutputBinding
 	}
 	return operation.native.Discard(ctx)
-}
-
-func (operation *OutputOperation) CompatibleNameReport() CompatibleNameReport {
-	if operation == nil || operation.native == nil {
-		return CompatibleNameReport{}
-	}
-	return operation.native.CompatibleNameReport()
 }

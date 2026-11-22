@@ -109,12 +109,16 @@ func TestPOSIXStabilityPlatformConstructorsAndBinderEdgeCases(t *testing.T) {
 	}
 	_ = revSource.Close()
 
-	// openNativeOutputPlatform
-	platform, err := openNativeOutputPlatform(root, false)
+	// Native output destination binding on POSIX.
+	outputAuth, err := NewOutputAuthority(OutputConfig{RootPath: root})
 	if err != nil {
-		t.Fatalf("openNativeOutputPlatform error = %v", err)
+		t.Fatalf("NewOutputAuthority error = %v", err)
 	}
-	_ = platform.Close()
+	if err := outputAuth.BindDestination(context.Background()); err != nil {
+		_ = outputAuth.Close()
+		t.Fatalf("BindDestination error = %v", err)
+	}
+	_ = outputAuth.Close()
 
 	// POSIXStabilityBinder edge cases
 	binder := POSIXStabilityBinder{}

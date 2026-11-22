@@ -42,9 +42,8 @@ func TestSealedFailureSeparatesCleanupRegardlessOfCauseOrder(t *testing.T) {
 
 func TestSealedFailurePreservesAdapterDetailWithoutLeakingForgedWrappers(t *testing.T) {
 	sealed, ok := SealOutputFailure(OutputFailureDiagnostic{
-		Stage:              output.FailureDurability,
-		ReconciliationStep: CheckpointStageDurability,
-		NativeErrorClass:   NativeErrorAccessDenied,
+		Stage:            output.FailureDurability,
+		NativeErrorClass: NativeErrorAccessDenied,
 	})
 	if !ok {
 		t.Fatal("valid diagnostic was not sealed")
@@ -58,7 +57,6 @@ func TestSealedFailurePreservesAdapterDetailWithoutLeakingForgedWrappers(t *test
 	}
 	detail, ok := FailureDetailFor(sealed)
 	if !ok || !detail.Valid() || detail.Stage != output.FailureDurability ||
-		detail.ReconciliationStep != CheckpointStageDurability ||
 		detail.NativeErrorClass != NativeErrorAccessDenied {
 		t.Fatalf("detail=%+v ok=%v", detail, ok)
 	}

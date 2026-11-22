@@ -43,7 +43,7 @@ if [ -e "$native_root" ] || [ -L "$native_root" ]; then
 fi
 install -d -m 0700 -- "$native_root"
 osfs_test_binary="$native_root/osfs.test"
-outputportable_test_binary="$native_root/outputportable.test"
+output_test_binary="$native_root/output.test"
 image="$native_root/ext4.img"
 mountpoint_path="$native_root/mount"
 events="$native_root/events.json"
@@ -65,7 +65,7 @@ compile_static_test_binary() {
 # Strong inode identities are not part of best-effort recovery.
 echo "-- compile static Linux native certification binaries"
 compile_static_test_binary ./osfs "$osfs_test_binary"
-compile_static_test_binary ./osfs/internal/outputportable "$outputportable_test_binary"
+compile_static_test_binary ./osfs/internal/output "$output_test_binary"
 
 echo "-- construct ext4 output fixture"
 truncate -s 128M -- "$image"
@@ -125,7 +125,7 @@ set +e
 timeout --signal=TERM --kill-after=30s 25m \
   sudo -n unshare --mount --propagation private --fork --kill-child \
     bash "$script_root/root-worker.sh" \
-      "$loop_device" "$mountpoint_path" "$osfs_test_binary" "$outputportable_test_binary" \
+      "$loop_device" "$mountpoint_path" "$osfs_test_binary" "$output_test_binary" \
       "$(id -u)" "$(id -g)" \
   | "$WINDSHARE_GO_EXECUTABLE" tool test2json -t \
   | tee "$events"

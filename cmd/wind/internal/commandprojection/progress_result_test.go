@@ -307,40 +307,6 @@ func TestShareAndCommandFailureProjectionNeverDeriveExitFromRenderer(t *testing.
 	}
 }
 
-func TestProjectReceiveResultPreservesAndValidatesCompatibleNameReport(t *testing.T) {
-	projected, err := ProjectReceiveResult(engine.TaskCompletion[engine.ReceiveResult]{
-		Outcome: engine.OutcomeSuccess,
-		Value: engine.ReceiveResult{
-			Destination: "out",
-			CompatibleNameReport: engine.OutputCompatibleNameReport{
-				RepairedCount: 3, ReportName: "windshare-names-abc-1-0.json", PageCount: 2,
-			},
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if report, ok := projected.CompatibleNameReport(); !ok || report.RepairedCount != 3 || report.PageCount != 2 || report.ReportName.Text() != "windshare-names-abc-1-0.json" {
-		t.Fatalf("projected compatible name report = (%+v, %t)", report, ok)
-	}
-	for _, invalid := range []engine.OutputCompatibleNameReport{
-		{RepairedCount: 1},
-		{ReportName: "windshare-names-abc-1-0.json"},
-		{PageCount: 1},
-		{RepairedCount: 1, ReportName: "windshare-names-abc-1-0.json"},
-	} {
-		if _, err := ProjectReceiveResult(engine.TaskCompletion[engine.ReceiveResult]{
-			Outcome: engine.OutcomeSuccess,
-			Value: engine.ReceiveResult{
-				Destination:          "out",
-				CompatibleNameReport: invalid,
-			},
-		}); err != ErrInvalidProjection {
-			t.Fatalf("invalid compatible name report %+v err = %v, want %v", invalid, err, ErrInvalidProjection)
-		}
-	}
-}
-
 func successfulJobResult(t *testing.T) transfer.JobResult {
 	t.Helper()
 	settlement, err := transfer.NewDirectTreeSettlement(transfer.DirectTreeSettlementSuccess)

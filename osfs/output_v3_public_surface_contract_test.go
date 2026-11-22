@@ -15,9 +15,6 @@ import (
 	"testing"
 
 	"github.com/windshare/windshare/core/transfer"
-	"github.com/windshare/windshare/osfs/internal/checkpointstore"
-	"github.com/windshare/windshare/osfs/internal/destinationauthority"
-	"github.com/windshare/windshare/osfs/internal/outputcap"
 )
 
 var _ transfer.DirectTreeMaterializer = (*OutputOperation)(nil)
@@ -42,13 +39,7 @@ func TestOutputAuthorityExportsOnlyIntentionalSurface(t *testing.T) {
 	}
 }
 
-func TestOutputValuesDoNotLeakAuthorityInternals(t *testing.T) {
-	forbidden := []reflect.Type{
-		reflect.TypeFor[outputcap.Directory](),
-		reflect.TypeFor[outputcap.Platform](),
-		reflect.TypeFor[*checkpointstore.OperationRegistry](),
-		reflect.TypeFor[*destinationauthority.BoundDestination](),
-	}
+func TestOutputValuesDoNotExportInternalFields(t *testing.T) {
 	for _, value := range []reflect.Type{
 		reflect.TypeFor[OutputAuthority](),
 		reflect.TypeFor[OutputLookup](),
@@ -59,11 +50,6 @@ func TestOutputValuesDoNotLeakAuthorityInternals(t *testing.T) {
 			if field.IsExported() {
 				t.Fatalf("%s exports field %s", value, field.Name)
 			}
-			for _, rejected := range forbidden {
-				if field.Type == rejected || field.Type.AssignableTo(rejected) {
-					t.Fatalf("%s field %s leaks %s", value, field.Name, rejected)
-				}
-			}
 		}
 	}
 }
@@ -72,39 +58,12 @@ func TestFilesystemOutputForbiddenSurfaceIsAbsent(t *testing.T) {
 	forbidden := map[string]struct{}{
 		"AdmitSelection":                    {},
 		"EnsureDirectory":                   {},
-		"ErrLegacyOutputState":              {},
-		"ErrOutputFileActive":               {},
-		"ErrOutputInspectionLimit":          {},
-		"ErrOutputIntentUnsafe":             {},
-		"ErrOutputRootUnsafe":               {},
-		"ErrOutputSessionActive":            {},
-		"ErrOutputSessionClosed":            {},
-		"ErrOutputTransactionLimit":         {},
-		"ErrReservedOutputPath":             {},
-		"ErrUnsupportedOutputVolume":        {},
+		"CompatibleNameReport":              {},
+		"CheckpointReconciliationStep":      {},
 		"FilesystemOutputAuthority":         {},
-		"FilesystemOutputCreated":           {},
-		"FilesystemOutputFilePhase":         {},
-		"FilesystemOutputOpen":              {},
-		"FilesystemOutputOpenKind":          {},
-		"FilesystemOutputRecoveryAction":    {},
-		"FilesystemOutputReopened":          {},
-		"FilesystemOutputRequest":           {},
-		"FilesystemOutputSession":           {},
-		"FilesystemOutputStateInstallStage": {},
-		"FilesystemOutputTrace":             {},
-		"MaxFilesystemOutputTransactions":   {},
-		"NativeDirectTreeReservation":       {},
 		"NewFilesystemOutputAuthority":      {},
 		"NewFilesystemResumeStateAuthority": {},
-		"OpenOrCreate":                      {},
-		"OutputObjectIDGenerator":           {},
-		"OutputSessionIDGenerator":          {},
 		"ResumeStateAuthority":              {},
-		"CheckpointIdentityEqual":           {},
-		"RecoverFileCheckpoint":             {},
-		"SelectVerifiedProgress":            {},
-		"ValidateCheckpointTransition":      {},
 	}
 	packageDirectory := outputPackageDirectory(t)
 	entries, err := os.ReadDir(packageDirectory)
@@ -141,45 +100,29 @@ func TestFilesystemOutputForbiddenSurfaceIsAbsent(t *testing.T) {
 
 func TestFilesystemOutputRetiredStatePackagesAreAbsent(t *testing.T) {
 	packageDirectory := outputPackageDirectory(t)
-	for _, relative := range []string{
+	retired := []string{
 		"resumestate",
-		filepath.Join("internal", "resumestate"),
-		filepath.Join("internal", "outputnamespace"),
-		filepath.Join("internal", "incrementaladmission"),
-		filepath.Join("internal", "deliveryreceipts"),
-	} {
+		filepath.Join("internal", "checkpointmodel"),
+		filepath.Join("internal", "checkpointstore"),
+		filepath.Join("internal", "destinationauthority"),
+		filepath.Join("internal", "directoryauthority"),
+		filepath.Join("internal", "fileexecution"),
+		filepath.Join("internal", "namestore"),
+		filepath.Join("internal", "outputcap"),
+		filepath.Join("internal", "outputfault"),
+		filepath.Join("internal", "outputnames"),
+		filepath.Join("internal", "outputportable"),
+		filepath.Join("internal", "outputprobe"),
+		filepath.Join("internal", "outputruntime"),
+		filepath.Join("internal", "outputsession"),
+		filepath.Join("internal", "recoverywitness"),
+		filepath.Join("internal", "resumeauthority"),
+	}
+	for _, relative := range retired {
 		path := filepath.Join(packageDirectory, relative)
 		if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
 			t.Fatalf("retired state package still exists at %s: %v", path, err)
 		}
-	}
-	retiredImports := []string{
-		"github.com/windshare/windshare/osfs/resumestate",
-		"github.com/windshare/windshare/osfs/internal/resumestate",
-		"github.com/windshare/windshare/osfs/internal/outputnamespace",
-		"github.com/windshare/windshare/osfs/internal/incrementaladmission",
-		"github.com/windshare/windshare/osfs/internal/deliveryreceipts",
-	}
-	err := filepath.WalkDir(packageDirectory, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.IsDir() || filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		contents, readErr := os.ReadFile(path)
-		if readErr != nil {
-			return readErr
-		}
-		for _, retiredImport := range retiredImports {
-			if strings.Contains(string(contents), retiredImport) {
-				t.Errorf("retired state import %q remains in %s", retiredImport, path)
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
 }
 

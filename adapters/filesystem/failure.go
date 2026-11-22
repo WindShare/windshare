@@ -9,15 +9,6 @@ import (
 	"github.com/windshare/windshare/osfs"
 )
 
-type CheckpointReconciliationStep = osfs.CheckpointReconciliationStep
-
-const (
-	CheckpointCandidateObservation = osfs.CheckpointCandidateObservation
-	CheckpointStageDurability      = osfs.CheckpointStageDurability
-	CheckpointNamespaceDurability  = osfs.CheckpointNamespaceDurability
-	CheckpointRecordPromotion      = osfs.CheckpointRecordPromotion
-)
-
 type NativeErrorClass = osfs.NativeErrorClass
 
 const (
@@ -33,24 +24,16 @@ const (
 // OutputFailureDiagnostic holds value-only native failure evidence for sealing
 // or presentation at the filesystem adapter boundary.
 type OutputFailureDiagnostic struct {
-	Stage              output.FailureStage
-	ReconciliationStep CheckpointReconciliationStep
-	NativeErrorClass   NativeErrorClass
-	FaultDomain        uint8
-	NormalizedScope    uint8
-	NormalizedCode     uint16
+	Stage            output.FailureStage
+	NativeErrorClass NativeErrorClass
+	FaultDomain      uint8
+	NormalizedScope  uint8
+	NormalizedCode   uint16
 }
 
 func (diagnostic OutputFailureDiagnostic) Valid() bool {
 	if !diagnostic.Stage.Valid() {
 		return false
-	}
-	if diagnostic.ReconciliationStep != 0 {
-		if !diagnostic.ReconciliationStep.Valid() ||
-			diagnostic.Stage != output.FailureCheckpoint &&
-				diagnostic.Stage != output.FailureDurability {
-			return false
-		}
 	}
 	if diagnostic.NativeErrorClass != 0 && !diagnostic.NativeErrorClass.Valid() {
 		return false
@@ -79,9 +62,8 @@ func SealOutputFailure(diagnostic OutputFailureDiagnostic) (error, bool) {
 		return nil, false
 	}
 	cause := &sealedNativeDetail{detail: FailureDetail{
-		Stage:              diagnostic.Stage,
-		ReconciliationStep: diagnostic.ReconciliationStep,
-		NativeErrorClass:   diagnostic.NativeErrorClass,
+		Stage:            diagnostic.Stage,
+		NativeErrorClass: diagnostic.NativeErrorClass,
 	}}
 	failure, _ := observation.ProjectNormalizedFault(
 		diagnostic.FaultDomain, diagnostic.NormalizedScope, diagnostic.NormalizedCode,
@@ -91,28 +73,25 @@ func SealOutputFailure(diagnostic OutputFailureDiagnostic) (error, bool) {
 	})
 }
 
-// FailureDetail retains provider reconciliation and OS error classes for host
-// CLI rendering without making callers depend directly on osfs.
+// FailureDetail retains provider OS error classes for host CLI rendering
+// without making callers depend directly on osfs.
 type FailureDetail struct {
-	Stage              output.FailureStage
-	ReconciliationStep CheckpointReconciliationStep
-	NativeErrorClass   NativeErrorClass
+	Stage            output.FailureStage
+	NativeErrorClass NativeErrorClass
 }
 
 func (detail FailureDetail) Valid() bool {
 	return (detail.Stage == 0 || detail.Stage.Valid()) &&
-		(detail.ReconciliationStep == 0 || detail.ReconciliationStep.Valid()) &&
 		(detail.NativeErrorClass == 0 || detail.NativeErrorClass.Valid())
 }
 
-// FailureDetailFor extracts native reconciliation and OS error classification
-// from a sealed output or recovery failure.
+// FailureDetailFor extracts native OS error classification from a sealed output
+// or recovery failure.
 func FailureDetailFor(cause error) (FailureDetail, bool) {
 	if diagnostic, ok := osfs.OutputDiagnosticFor(cause); ok {
 		return FailureDetail{
-			Stage:              projectFailureStage(diagnostic.Stage),
-			ReconciliationStep: diagnostic.ReconciliationStep,
-			NativeErrorClass:   diagnostic.NativeErrorClass,
+			Stage:            projectFailureStage(diagnostic.Stage),
+			NativeErrorClass: diagnostic.NativeErrorClass,
 		}, true
 	}
 	if sealed, ok := errors.AsType[*sealedNativeDetail](cause); ok && sealed != nil && sealed.detail.Valid() {

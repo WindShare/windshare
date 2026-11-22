@@ -13,7 +13,7 @@ import (
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
-	"github.com/windshare/windshare/osfs/internal/checkpointstore"
+	"github.com/windshare/windshare/osfs/internal/output"
 )
 
 func TestRecoveryAuthorityListsAbsentOrdinaryStateWithoutMutation(t *testing.T) {
@@ -24,7 +24,7 @@ func TestRecoveryAuthorityListsAbsentOrdinaryStateWithoutMutation(t *testing.T) 
 		len(inventory.Summaries()) != 0 || inventory.UnknownEntries() {
 		t.Fatalf("absent inventory = (%+v, %v)", inventory, err)
 	}
-	_, err = os.Lstat(filepath.Join(root, checkpointstore.ControlDirectory))
+	_, err = os.Lstat(filepath.Join(root, output.ControlDirName))
 	if !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("read-only resume list created control state: %v", err)
 	}

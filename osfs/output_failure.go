@@ -1,88 +1,75 @@
 package osfs
 
 import (
-	"github.com/windshare/windshare/osfs/internal/outputcap"
-	"github.com/windshare/windshare/osfs/internal/outputfault"
-	"github.com/windshare/windshare/osfs/internal/outputruntime"
+	"github.com/windshare/windshare/osfs/internal/output"
 	"github.com/windshare/windshare/osfs/internal/pathfailure"
-	"github.com/windshare/windshare/osfs/internal/resumeauthority"
 )
 
 var (
-	ErrOutOfRange         = outputfault.ErrOutOfRange
-	ErrPathEscape         = outputfault.ErrPathEscape
+	ErrOutOfRange         = output.ErrOutOfRange
+	ErrPathEscape         = output.ErrPathEscape
 	ErrPathTooLong        = pathfailure.ErrTooLong
-	ErrOutputShareStopped = outputruntime.ErrShareStopped
-	ErrOutputBusy         = resumeauthority.ErrBusy
-	ErrRecoveryContract   = resumeauthority.ErrInvalidContract
+	ErrOutputShareStopped = output.ErrShareStopped
+	ErrOutputBusy         = output.ErrBusy
+	ErrRecoveryContract   = output.ErrInvalidContract
 )
 
-type OutputFailureStage = outputruntime.FailureStage
+type OutputFailureStage = output.FailureStage
 
 const (
-	OutputFailureDestinationBinding = outputruntime.FailureDestinationBinding
-	OutputFailureInventory          = outputruntime.FailureInventory
-	OutputFailureLookup             = outputruntime.FailureLookup
-	OutputFailureOpen               = outputruntime.FailureOpen
-	OutputFailureCreate             = outputruntime.FailureCreate
-	OutputFailureCheckpoint         = outputruntime.FailureCheckpoint
-	OutputFailureDurability         = outputruntime.FailureDurability
-	OutputFailureClose              = outputruntime.FailureClose
+	OutputFailureDestinationBinding = output.FailureDestinationBinding
+	OutputFailureInventory          = output.FailureInventory
+	OutputFailureLookup             = output.FailureLookup
+	OutputFailureOpen               = output.FailureOpen
+	OutputFailureCreate             = output.FailureCreate
+	OutputFailureCheckpoint         = output.FailureCheckpoint
+	OutputFailureDurability         = output.FailureDurability
+	OutputFailureClose              = output.FailureClose
 )
 
-type OutputLookupKind = outputruntime.LookupKind
+type OutputLookupKind = output.LookupKind
 
 const (
-	OutputLookupCreateReady    = outputruntime.LookupCreateReady
-	OutputLookupNotFound       = outputruntime.LookupNotFound
-	OutputLookupReopened       = outputruntime.LookupReopened
-	OutputLookupAlreadyRunning = outputruntime.LookupAlreadyRunning
-	OutputLookupNeedsAttention = outputruntime.LookupNeedsAttention
-	OutputLookupAmbiguous      = outputruntime.LookupAmbiguous
+	OutputLookupCreateReady    = output.LookupCreateReady
+	OutputLookupNotFound       = output.LookupNotFound
+	OutputLookupReopened       = output.LookupReopened
+	OutputLookupAlreadyRunning = output.LookupAlreadyRunning
+	OutputLookupNeedsAttention = output.LookupNeedsAttention
+	OutputLookupAmbiguous      = output.LookupAmbiguous
 )
 
-type OutputAttentionReason = outputruntime.AttentionReason
+type OutputAttentionReason = output.AttentionReason
 
 const (
-	OutputAttentionNone        = outputruntime.AttentionNone
-	OutputAttentionDestination = outputruntime.AttentionDestination
-	OutputAttentionRegistry    = outputruntime.AttentionRegistry
-	OutputAttentionLease       = outputruntime.AttentionLease
-	OutputAttentionOperation   = outputruntime.AttentionOperation
-	OutputAttentionCleanup     = outputruntime.AttentionCleanup
+	OutputAttentionNone        = output.AttentionNone
+	OutputAttentionDestination = output.AttentionDestination
+	OutputAttentionRegistry    = output.AttentionRegistry
+	OutputAttentionLease       = output.AttentionLease
+	OutputAttentionOperation   = output.AttentionOperation
+	OutputAttentionCleanup     = output.AttentionCleanup
 )
 
-type CheckpointReconciliationStep = outputruntime.CheckpointReconciliationStep
+type NativeErrorClass = output.NativeErrorClass
 
 const (
-	CheckpointCandidateObservation = outputruntime.CheckpointCandidateObservation
-	CheckpointStageDurability      = outputruntime.CheckpointStageDurability
-	CheckpointNamespaceDurability  = outputruntime.CheckpointNamespaceDurability
-	CheckpointRecordPromotion      = outputruntime.CheckpointRecordPromotion
+	NativeErrorAccessDenied     = output.NativeErrorAccessDenied
+	NativeErrorSharingViolation = output.NativeErrorSharingViolation
+	NativeErrorNotFound         = output.NativeErrorNotFound
+	NativeErrorInvalidHandle    = output.NativeErrorInvalidHandle
+	NativeErrorUnsupported      = output.NativeErrorUnsupported
+	NativeErrorIO               = output.NativeErrorIO
+	NativeErrorUnknown          = output.NativeErrorUnknown
 )
 
-type NativeErrorClass = outputcap.NativeErrorClass
+type OutputDiagnostic = output.Diagnostic
 
-const (
-	NativeErrorAccessDenied     = outputcap.NativeErrorAccessDenied
-	NativeErrorSharingViolation = outputcap.NativeErrorSharingViolation
-	NativeErrorNotFound         = outputcap.NativeErrorNotFound
-	NativeErrorInvalidHandle    = outputcap.NativeErrorInvalidHandle
-	NativeErrorUnsupported      = outputcap.NativeErrorUnsupported
-	NativeErrorIO               = outputcap.NativeErrorIO
-	NativeErrorUnknown          = outputcap.NativeErrorUnknown
-)
-
-type CompatibleNameReport = outputcap.CompatibleNameReport
-type OutputDiagnostic = outputruntime.Diagnostic
-
-// OutputDiagnosticFor returns native reconciliation and OS-error detail from a
-// failure without exposing provider paths or handles.
+// OutputDiagnosticFor returns native OS-error detail from a failure without
+// exposing provider paths or handles.
 func OutputDiagnosticFor(err error) (OutputDiagnostic, bool) {
-	return outputruntime.DiagnosticFor(err)
+	return output.DiagnosticFor(err)
 }
 
 // OutputFailureForStage extracts causes owned by one native output failure stage.
 func OutputFailureForStage(err error, stage OutputFailureStage) error {
-	return outputruntime.FailureForStage(err, stage)
+	return output.FailureForStage(err, stage)
 }

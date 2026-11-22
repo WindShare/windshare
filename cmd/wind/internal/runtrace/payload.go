@@ -30,7 +30,6 @@ type transferSettledPayload struct {
 	Drift                string                `json:"drift"`
 	ResultElapsedMS      string                `json:"result_elapsed_ms"`
 	DestinationAdjusted  bool                  `json:"destination_adjusted"`
-	RepairedNames        string                `json:"repaired_names,omitempty"`
 	FileOutcomes         wire.FileOutcomes     `json:"file_outcomes"`
 	DirectoryFailures    string                `json:"directory_failures"`
 	OmittedDiagnostics   string                `json:"omitted_diagnostics"`

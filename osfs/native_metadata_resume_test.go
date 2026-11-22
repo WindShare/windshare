@@ -60,7 +60,7 @@ func testOrdinaryMetadataResume(t *testing.T, metadata content.SourceMetadata) {
 		if err != nil {
 			return err
 		}
-		if !entry.IsDir() && filepath.Ext(path) == ".stage" {
+		if !entry.IsDir() && filepath.Ext(path) == ".part" {
 			if stagePath != "" {
 				t.Fatal("more than one partial output")
 			}

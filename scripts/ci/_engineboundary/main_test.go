@@ -64,7 +64,7 @@ func TestSourceGateChecksInactivePlatformsAndLeavesTestsAtTheirOwnedBoundary(t *
 }
 
 func TestCoreWrappersCannotLaunderStorageImplementationTypes(t *testing.T) {
-	for _, path := range []string{"/osfs", "/core/osfs", "/adapters/filesystem", "/osfs/internal/outputruntime"} {
+	for _, path := range []string{"/osfs", "/core/osfs", "/adapters/filesystem", "/osfs/internal/output"} {
 		t.Run(path, func(t *testing.T) {
 			native := types.NewPackage(module+path, "native")
 			concrete := types.NewNamed(types.NewTypeName(token.NoPos, native, "Diagnostic", nil), types.NewStruct(nil, nil), nil)

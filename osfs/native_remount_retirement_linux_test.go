@@ -17,7 +17,7 @@ func assertRemountRetirement(t *testing.T, root, result string, delivered bool) 
 			t.Fatalf("retirement changed unrelated data in %s: %q %v", directory, actual, err)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(root, ".windshare-output")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(root, ".windshare-tmp")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("terminal operation retained its private namespace: %v", err)
 	}
 	entries, err := os.ReadDir(result)

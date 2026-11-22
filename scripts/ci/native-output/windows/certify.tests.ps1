@@ -101,14 +101,14 @@ $coreSelector = @($requiredSelectors | Where-Object {
     $_.PackageArgument -ceq './osfs'
 })
 $portableSelector = @($requiredSelectors | Where-Object {
-    $_.PackageArgument -ceq './osfs/internal/outputportable'
+    $_.PackageArgument -ceq './osfs/internal/output'
 })
 if ($coreSelector.Count -ne 1 -or
     $portableSelector.Count -ne 1 -or
     $coreSelector[0].BinaryName -cne 'osfs.test.exe' -or
     $coreSelector[0].ImportPath -cne 'github.com/windshare/windshare/osfs' -or
-    $portableSelector[0].BinaryName -cne 'outputportable.test.exe' -or
-    $portableSelector[0].ImportPath -cne 'github.com/windshare/windshare/osfs/internal/outputportable' -or
+    $portableSelector[0].BinaryName -cne 'output.test.exe' -or
+    $portableSelector[0].ImportPath -cne 'github.com/windshare/windshare/osfs/internal/output' -or
     (Get-WindowsNativeRequiredTestExpression -TestNames $coreSelector[0].TestNames) -cne
         '^(TestNativeOutputDestinationCapabilities|TestNativeOutputProcessRestartKeepsRanges|TestNativeOutputRetainedCandidateListAndReopen)$' -or
     (Get-WindowsNativeRequiredTestExpression -TestNames $portableSelector[0].TestNames) -cne
@@ -538,14 +538,14 @@ try {
     [IO.File]::WriteAllText($rawTest2JsonFile, $rawContent + "`n", [Text.UTF8Encoding]::new($false))
     $convertedLines = @(ConvertFrom-WindowsNativeTest2JsonOutput `
         -GoExecutable $coordinatorGoExecutable `
-        -PackageImportPath 'github.com/windshare/windshare/osfs/internal/outputportable' `
+        -PackageImportPath 'github.com/windshare/windshare/osfs/internal/output' `
         -RawOutputPath $rawTest2JsonFile)
     $convertedEvents = @(ConvertFrom-WindowsNativeTestJSONLines -Lines $convertedLines)
     Assert-WindowsNativeTestEvents `
         -ExitCode 0 `
         -Events $convertedEvents `
         -RequiredTests @($lockTestName) `
-        -SelectorPackage './osfs/internal/outputportable' `
+        -SelectorPackage './osfs/internal/output' `
         -SelectorExpression '^TestTaskLockIsProcessExclusiveAndRecoversAfterExit$'
 } finally {
     if (Test-Path -LiteralPath $rawTest2JsonRoot) {
@@ -652,15 +652,15 @@ Assert-Throws 'missing top-level pass' {
 Assert-Throws 'empty JSON event stream' {
     Assert-WindowsNativeTestEvents -ExitCode 0 -Events @() -RequiredTests $requiredTests
 }
-Assert-ThrowsContaining 'zero-test package selector' 'selector ran zero tests: package=./osfs/internal/outputportable' {
+Assert-ThrowsContaining 'zero-test package selector' 'selector ran zero tests: package=./osfs/internal/output' {
     Assert-WindowsNativeTestEvents `
         -ExitCode 0 `
         -Events @(
-            [pscustomobject]@{ Action = 'start'; Package = 'example/outputportable' },
-            [pscustomobject]@{ Action = 'pass'; Package = 'example/outputportable' }
+            [pscustomobject]@{ Action = 'start'; Package = 'example/output' },
+            [pscustomobject]@{ Action = 'pass'; Package = 'example/output' }
         ) `
         -RequiredTests @('TestTaskLockIsProcessExclusiveAndRecoversAfterExit') `
-        -SelectorPackage './osfs/internal/outputportable' `
+        -SelectorPackage './osfs/internal/output' `
         -SelectorExpression '^(TestTaskLockIsProcessExclusiveAndRecoversAfterExit)$'
 }
 

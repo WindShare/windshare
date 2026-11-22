@@ -4,14 +4,13 @@ package osfs
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/windshare/windshare/core/transfer"
-	"github.com/windshare/windshare/core/transfer/receivecontract"
-	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
-	"github.com/windshare/windshare/osfs/internal/checkpointstore"
+	"github.com/windshare/windshare/osfs/internal/output"
 )
 
 func pausedPortableFile(t *testing.T, size uint64) (string, transfer.ReceiveIntent) {
@@ -59,7 +58,7 @@ func onlyPortableStage(t *testing.T, root string) string {
 		if err != nil {
 			return err
 		}
-		if !entry.IsDir() && filepath.Ext(path) == ".stage" {
+		if !entry.IsDir() && filepath.Ext(path) == ".part" {
 			if found != "" {
 				t.Fatal("multiple staged data objects")
 			}
@@ -73,123 +72,28 @@ func onlyPortableStage(t *testing.T, root string) string {
 	return found
 }
 
-func TestPortablePublicationCrashReconcilesWithoutWritableStage(t *testing.T) {
-	for _, replaced := range []bool{false, true} {
-		t.Run(map[bool]string{false: "published before receipt", true: "replacement before receipt"}[replaced], func(t *testing.T) {
-			ctx := context.Background()
-			root, intent := pausedPortableFile(t, 4)
-			repository, policy, closeRepository := openRetainedCandidateRepository(t, root, intent)
-			store, err := checkpointstore.NewFileExecutionStoreWithStagePolicy(repository, policy)
-			if err != nil {
-				t.Fatal(err)
-			}
-			slots, attention, err := store.Inventory()
-			if err != nil || len(slots) != 1 || len(attention) != 0 {
-				t.Fatalf("checkpoint inventory = (%+v, %+v, %v)", slots, attention, err)
-			}
-			previous, exact := slots[0].Record()
-			if !exact {
-				t.Fatal("checkpoint has no exact lineage")
-			}
-			publishing, err := checkpointmodel.AdvanceState(previous, previous.StateGeneration()+1, checkpointmodel.PhasePublishing, checkpointmodel.CommitVerified, 0, 0, 0)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := repository.Replace(previous, publishing); err != nil {
-				t.Fatal(err)
-			}
-			final := filepath.Join(nativeDirectTreeResultRoot(t, root, intent), "file.bin")
-			platform, err := openNativeOutputPlatform(filepath.Dir(final), false)
-			if err != nil {
-				t.Fatal(err)
-			}
-			published, publishErr := store.PublishOwnedNoReplace(ctx, publishing.OwnedObjectID(), 4, platform.Root(), "file.bin")
-			if publishErr != nil {
-				t.Fatal(publishErr)
-			}
-			if err := published.Close(); err != nil {
-				t.Fatal(err)
-			}
-			if err := platform.Close(); err != nil {
-				t.Fatal(err)
-			}
-			closeRepository()
-			if replaced {
-				if err := os.Rename(final, final+".moved"); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(final, []byte("user"), 0o600); err != nil {
-					t.Fatal(err)
-				}
-			}
-			authority, err := NewOutputAuthority(OutputConfig{RootPath: root})
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer authority.Close()
-			if err := authority.BindDestination(ctx); err != nil {
-				t.Fatal(err)
-			}
-			lookup, err := authority.SelectOperation(ctx, intent.SelectionSpec(), receivecontract.AutomaticOperation())
-			if err != nil || lookup.Kind() != OutputLookupReopened {
-				t.Fatalf("reopen lookup = (%v, %v)", lookup.Kind(), err)
-			}
-			reopenedIntent, _ := lookup.Operation().ReceiveIntent()
-			session, err := lookup.Operation().OpenDirectTree(ctx, reopenedIntent)
-			if err != nil {
-				t.Fatal(err)
-			}
-			admission := admitRetainedCandidateRoot(t, session, intent, 0x62)
-			file := nativeDirectTreeTestFile(t, session, intent, 0x63, "file.bin", 4, admission)
-			start, err := session.BeginFile(ctx, file)
-			if err != nil {
-				t.Fatal(err)
-			}
-			settlement, ok := start.ImmediateSettlement()
-			if !ok {
-				t.Fatal("crash reconciliation started another writable copy")
-			}
-			want := transfer.FilePreviouslyPublished
-			if replaced {
-				want = transfer.FileCollision
-			}
-			if settlement.Kind() != want {
-				t.Fatalf("settlement %v, want %v", settlement.Kind(), want)
-			}
-			_, found, err := session.(transfer.DeliveryHistory).LookupDelivery(ctx, file.Descriptor().FileID(), file.MaterializationRelativePath().String())
-			if err != nil || found == replaced {
-				t.Fatalf("receipt did not match publication evidence: %v %v", found, err)
-			}
-			wantData := "data"
-			if replaced {
-				wantData = "user"
-			}
-			if actual, err := os.ReadFile(final); err != nil || string(actual) != wantData {
-				t.Fatalf("public bytes changed: %q %v", actual, err)
-			}
-			if _, err := session.PauseTree(ctx, transfer.JobPauseShutdown); err != nil {
-				t.Fatal(err)
-			}
-		})
-	}
-}
-
-func TestPortableDiscardPreservesReplacedPartial(t *testing.T) {
+func TestPortableDiscardRemovesOnlyPrivateScratchAndPreservesPublicFiles(t *testing.T) {
 	ctx := context.Background()
 	root, intent := pausedPortableFile(t, 8)
+	resultRoot := nativeDirectTreeResultRoot(t, root, intent)
+	foreignPath := filepath.Join(resultRoot, "user-owned.txt")
+	if err := os.WriteFile(foreignPath, []byte("keep-me"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	stage := onlyPortableStage(t, root)
-	if err := os.Rename(stage, stage+".saved"); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(stage, []byte("external"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+
 	recoveryAuthority := NewRecoveryAuthority(root)
 	result, err := recoveryAuthority.Discard(ctx, intent.OperationID())
-	if err == nil && result.State() == RecoveryOperationDiscarded {
-		t.Fatal("uncertain partial was declared discarded")
+	if err != nil || result.State() != RecoveryOperationDiscarded {
+		t.Fatalf("discard = (%+v, %v), want discarded", result, err)
 	}
-	if actual, err := os.ReadFile(stage); err != nil || string(actual) != "external" {
-		t.Fatalf("discard removed a replacement: %q %v", actual, err)
+	if _, err := os.Stat(stage); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("staged .part survived discard: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, output.ControlDirName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("empty control directory survived discard: %v", err)
+	}
+	if actual, err := os.ReadFile(foreignPath); err != nil || string(actual) != "keep-me" {
+		t.Fatalf("discard mutated foreign file: %q %v", actual, err)
 	}
 }

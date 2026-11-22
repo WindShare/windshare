@@ -4,52 +4,43 @@ package osfs
 
 import (
 	"context"
-	"errors"
+	"encoding/hex"
+	"os"
 	"path/filepath"
-	"slices"
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
-	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
-	"github.com/windshare/windshare/osfs/internal/checkpointstore"
-	"github.com/windshare/windshare/osfs/internal/outputcap"
+	"github.com/windshare/windshare/osfs/internal/output"
 )
 
 const retainedCandidateExactSize = 8
 
 type retainedCandidateFixture struct {
-	root      string
-	intent    transfer.ReceiveIntent
-	candidate checkpointmodel.Record
-	rootSeed  byte
-	fileSeed  byte
+	root     string
+	intent   transfer.ReceiveIntent
+	rootSeed byte
+	fileSeed byte
 }
 
 func TestNativeOutputRetainedCandidateListAndReopen(t *testing.T) {
-	listFixture := newRetainedCandidateFixture(t, "list-from-candidate", 0x71)
+	listFixture := newRetainedCandidateFixture(t, "list-from-torn-tail", 0x71)
 	listResume := listRetainedCandidate(t, listFixture)
-	assertRetainedCandidatePromoted(t, listFixture)
 	discardRetainedCandidate(t, listResume, listFixture.intent.OperationID())
 
-	getFixture := newRetainedCandidateFixture(t, "get-from-candidate", 0x81)
+	getFixture := newRetainedCandidateFixture(t, "get-from-torn-tail", 0x81)
 	reopenRetainedCandidateOutput(t, getFixture, false)
 	reopenRetainedCandidateOutput(t, getFixture, true)
 
 	sharedFixture := newRetainedCandidateFixture(t, "list-then-get", 0x91)
 	sharedResume := listRetainedCandidate(t, sharedFixture)
-	assertRetainedCandidatePromoted(t, sharedFixture)
 	reopenRetainedCandidateOutput(t, sharedFixture, true)
 	discardRetainedCandidate(t, sharedResume, sharedFixture.intent.OperationID())
 }
 
-func newRetainedCandidateFixture(
-	t *testing.T,
-	name string,
-	seed byte,
-) retainedCandidateFixture {
+func newRetainedCandidateFixture(t *testing.T, name string, seed byte) retainedCandidateFixture {
 	t.Helper()
 	ctx := context.Background()
 	root := filepath.Join(t.TempDir(), name)
@@ -91,17 +82,26 @@ func newRetainedCandidateFixture(
 		t.Fatal(err)
 	}
 
-	candidate := retainSemanticCandidate(t, root, intent)
+	// Simulate an interrupted trailing journal append after a valid checkpoint.
+	journalPath := filepath.Join(root, output.ControlDirName, hex.EncodeToString(intent.OperationID().Bytes()), "state.log")
+	f, err := os.OpenFile(journalPath, os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("deadbeef {\"k\":\"partial\",\"truncated"); err != nil {
+		_ = f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
 	return retainedCandidateFixture{
-		root: root, intent: intent, candidate: candidate,
-		rootSeed: rootSeed, fileSeed: fileSeed,
+		root: root, intent: intent, rootSeed: rootSeed, fileSeed: fileSeed,
 	}
 }
 
-func listRetainedCandidate(
-	t *testing.T,
-	fixture retainedCandidateFixture,
-) *RecoveryAuthority {
+func listRetainedCandidate(t *testing.T, fixture retainedCandidateFixture) *RecoveryAuthority {
 	t.Helper()
 	resume := NewRecoveryAuthority(fixture.root)
 	inventory, err := resume.List(context.Background())
@@ -115,11 +115,7 @@ func listRetainedCandidate(
 	return resume
 }
 
-func reopenRetainedCandidateOutput(
-	t *testing.T,
-	fixture retainedCandidateFixture,
-	continueFile bool,
-) {
+func reopenRetainedCandidateOutput(t *testing.T, fixture retainedCandidateFixture, continueFile bool) {
 	t.Helper()
 	ctx := context.Background()
 	reopened, err := NewOutputAuthority(OutputConfig{RootPath: fixture.root})
@@ -130,10 +126,8 @@ func reopenRetainedCandidateOutput(
 		t.Fatalf("reopen bind = %v", err)
 	}
 	lookup, err := reopened.SelectOperation(ctx, fixture.intent.SelectionSpec(), receivecontract.AutomaticOperation())
-	if err != nil || lookup.Kind() != OutputLookupReopened ||
-		lookup.Attention() != OutputAttentionNone {
-		t.Fatalf("retained candidate lookup = (%d, %s, %v)",
-			lookup.Kind(), lookup.Attention(), err)
+	if err != nil || lookup.Kind() != OutputLookupReopened || lookup.Attention() != OutputAttentionNone {
+		t.Fatalf("retained candidate lookup = (%d, %s, %v)", lookup.Kind(), lookup.Attention(), err)
 	}
 	reopenedIntent, present := lookup.Operation().ReceiveIntent()
 	if !present || !reopenedIntent.EqualCanonical(fixture.intent) {
@@ -146,7 +140,7 @@ func reopenRetainedCandidateOutput(
 	if !continueFile {
 		if settlement, pauseErr := resumedSession.PauseTree(ctx, transfer.JobPauseInterrupted); pauseErr != nil ||
 			settlement.Kind() != transfer.DirectTreeSettlementPaused {
-			t.Fatalf("candidate proof tree pause = (%d, %v)", settlement.Kind(), pauseErr)
+			t.Fatalf("tree pause = (%d, %v)", settlement.Kind(), pauseErr)
 		}
 		if err := reopened.Close(); err != nil {
 			t.Fatal(err)
@@ -165,11 +159,10 @@ func reopenRetainedCandidateOutput(
 	}
 	resumedTransaction, resumedDurable, ok := resumedStart.Transaction()
 	ranges := resumedDurable.Ranges().Ranges()
-	if !ok || len(ranges) != 1 || ranges[0].Offset != 0 ||
-		ranges[0].End != uint64(len("partdo")) {
+	if !ok || len(ranges) != 1 || ranges[0].Offset != 0 || ranges[0].End != 4 {
 		t.Fatalf("resumed durable ranges = (%v, transaction=%t)", ranges, ok)
 	}
-	if err := resumedTransaction.WriteRange(ctx, uint64(len("partdo")), []byte("ne")); err != nil {
+	if err := resumedTransaction.WriteRange(ctx, 4, []byte("done")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := resumedTransaction.Checkpoint(ctx); err != nil {
@@ -188,11 +181,7 @@ func reopenRetainedCandidateOutput(
 	}
 }
 
-func discardRetainedCandidate(
-	t *testing.T,
-	resume *RecoveryAuthority,
-	operation receivecontract.OperationID,
-) {
+func discardRetainedCandidate(t *testing.T, resume *RecoveryAuthority, operation receivecontract.OperationID) {
 	t.Helper()
 	exact, err := resume.List(context.Background())
 	exactSummaries := exact.Summaries()
@@ -201,28 +190,8 @@ func discardRetainedCandidate(
 		t.Fatalf("exact pre-discard snapshot = (%+v, %v)", exact, err)
 	}
 	discarded, err := resume.Discard(context.Background(), operation)
-	if err != nil || discarded.State() != RecoveryOperationDiscarded ||
-		discarded.OperationID() != operation {
+	if err != nil || discarded.State() != RecoveryOperationDiscarded || discarded.OperationID() != operation {
 		t.Fatalf("exact discard = (%+v, %v)", discarded, err)
-	}
-}
-
-func assertRetainedCandidatePromoted(t *testing.T, fixture retainedCandidateFixture) {
-	t.Helper()
-	repository, _, closeRepository := openRetainedCandidateRepository(t, fixture.root, fixture.intent)
-	defer closeRepository()
-	promoted, err := repository.Reopen(fixture.candidate.RecordID())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if promoted.CommitState() != checkpointmodel.CommitVerified ||
-		promoted.Phase() != fixture.candidate.Phase() ||
-		promoted.StateGeneration() != fixture.candidate.StateGeneration() ||
-		promoted.CheckpointGeneration() != fixture.candidate.CheckpointGeneration() ||
-		promoted.OperationID() != fixture.intent.OperationID() ||
-		promoted.ReceiveIntentDigest() != fixture.intent.Digest() ||
-		!slices.Equal(promoted.VerifiedRanges(), fixture.candidate.VerifiedRanges()) {
-		t.Fatalf("promoted candidate = %+v, want identity/generation/ranges from %+v", promoted, fixture.candidate)
 	}
 }
 
@@ -251,163 +220,4 @@ func admitRetainedCandidateRoot(
 		t.Fatal(err)
 	}
 	return admission
-}
-
-func retainSemanticCandidate(
-	t *testing.T,
-	root string,
-	intent transfer.ReceiveIntent,
-) checkpointmodel.Record {
-	t.Helper()
-	repository, profile, closeRepository := openRetainedCandidateRepository(t, root, intent)
-	defer closeRepository()
-	store, err := checkpointstore.NewFileExecutionStoreWithStagePolicy(repository, profile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	slots, attention, err := store.Inventory()
-	if err != nil || len(slots) != 1 || len(attention) != 0 {
-		t.Fatalf("retained candidate inventory = (%+v, %+v, %v)", slots, attention, err)
-	}
-	stable, exact := slots[0].Record()
-	if !exact {
-		t.Fatal("retained candidate has no exact lineage")
-	}
-	active, err := checkpointmodel.AdvanceState(
-		stable,
-		stable.StateGeneration()+1,
-		checkpointmodel.PhaseActive,
-		checkpointmodel.CommitVerified,
-		stable.QuarantineReason(),
-		stable.QuarantineOrigin(),
-		stable.RetirementReason(),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := repository.Replace(stable, active); err != nil {
-		t.Fatal(err)
-	}
-	owned, _, err := store.OpenOwnedFile(
-		context.Background(), active.OwnedObjectID(), active.ExactSize(), true,
-	)
-	if err != nil || owned == nil {
-		t.Fatalf("open retained stage = (%T, %v)", owned, err)
-	}
-	if written, err := owned.WriteAt([]byte("do"), int64(len("part"))); err != nil ||
-		written != len("do") {
-		t.Fatalf("extend retained stage = (%d, %v)", written, err)
-	}
-	// Closing without Sync reproduces the semantic cut: the candidate record is
-	// durable while recovery still owns the stage durability decision.
-	if err := owned.Close(); err != nil {
-		t.Fatal(err)
-	}
-	candidate, err := checkpointmodel.AdvanceGeneration(
-		active,
-		[]checkpointmodel.Range{{Offset: 0, End: uint64(len("partdo"))}},
-		checkpointmodel.PhaseActive,
-		checkpointmodel.CommitCandidate,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := repository.Replace(active, candidate); err != nil {
-		t.Fatal(err)
-	}
-	reopened, err := repository.Reopen(candidate.RecordID())
-	if err != nil || reopened.CommitState() != checkpointmodel.CommitCandidate {
-		t.Fatalf("semantic candidate cut = (%+v, %v)", reopened, err)
-	}
-	return reopened
-}
-
-func openRetainedCandidateRepository(
-	t *testing.T,
-	root string,
-	intent transfer.ReceiveIntent,
-) (*checkpointstore.Repository, checkpointstore.StagePolicy, func()) {
-	t.Helper()
-	platform, err := openNativeOutputPlatform(root, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	control, err := platform.Root().OpenDirectory(checkpointstore.ControlDirectory, true)
-	if err != nil {
-		_ = platform.Close()
-		t.Fatal(err)
-	}
-	registry, err := checkpointstore.OpenOperationRegistry(control)
-	if err != nil {
-		_ = errors.Join(control.Close(), platform.Close())
-		t.Fatal(err)
-	}
-	lease, err := registry.AcquireOperationLease(intent.OperationID())
-	if err != nil {
-		_ = errors.Join(registry.Close(), control.Close(), platform.Close())
-		t.Fatal(err)
-	}
-	reservation, ok := intent.MaterializationPlan().DestinationReservation()
-	if !ok {
-		t.Fatal("retained candidate intent omitted its destination reservation")
-	}
-	var disposition outputcap.RootOpenDisposition
-	switch reservation.EntryKind() {
-	case receivecontract.ContainerEntrySingleFile:
-		disposition = outputcap.CallerProvidedContainer
-	case receivecontract.ContainerEntryResultRoot:
-		disposition = outputcap.AuthorityCreatedRoot
-	default:
-		t.Fatalf("unexpected retained-candidate entry kind %d", reservation.EntryKind())
-	}
-	ownership, err := checkpointmodel.NewOwnership(checkpointmodel.OwnershipSpec{
-		Materializer: checkpointmodel.MaterializerNativeTree,
-		IdentityScheme: platform.(interface {
-			IdentityScheme() outputcap.IdentitySchemeID
-		}).IdentityScheme(),
-		AuthorityRef:        reservation.AuthorityRef().Bytes(),
-		RootOpenDisposition: disposition,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	binding, err := checkpointmodel.NewBinding(
-		ownership,
-		intent.OperationID(),
-		intent.Digest(),
-		intent.BindingDigest(),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	repositoryValue, err := checkpointstore.OpenOrdinaryFileRepository(lease, binding, false)
-	if err != nil {
-		_ = errors.Join(lease.Close(), registry.Close(), control.Close(), platform.Close())
-		t.Fatal(err)
-	}
-	repository := &repositoryValue
-	var profile checkpointstore.StagePolicy
-	switch platform.(interface {
-		IdentityScheme() outputcap.IdentitySchemeID
-	}).IdentityScheme() {
-	case outputcap.IdentitySchemePortableWitnessV1:
-		profile = checkpointstore.InheritFinalParent
-	default:
-		_ = errors.Join(repository.Close(), lease.Close(), registry.Close(), control.Close(), platform.Close())
-		t.Fatalf("unexpected retained-candidate identityScheme %q", platform.(interface {
-			IdentityScheme() outputcap.IdentitySchemeID
-		}).IdentityScheme())
-	}
-	closeRepository := func() {
-		if closeErr := errors.Join(
-			repository.Close(),
-			lease.Close(),
-			registry.Close(),
-			control.Close(),
-			platform.Close(),
-		); closeErr != nil {
-			t.Errorf("close retained-candidate repository: %v", closeErr)
-		}
-	}
-	return repository, profile, closeRepository
 }

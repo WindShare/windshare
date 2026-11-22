@@ -33,7 +33,7 @@ const (
 	v2ResumeFileCount        = 2
 	v2ResumeFileBytes        = 8 << 20
 	v2FailureLogStreamBytes  = 4 << 10
-	v2OutputControlDirectory = ".windshare-output"
+	v2OutputControlDirectory = ".windshare-tmp"
 
 	v2PionRelayCutPayloadBytes  int64 = 1 << 20
 	v2PionRelayCutBlockBytes          = 4 << 10

@@ -17,7 +17,7 @@ import (
 	"github.com/windshare/windshare/engine/recovery"
 )
 
-const nativeResumeControlDirectoryName = ".windshare-output"
+const nativeResumeControlDirectoryName = ".windshare-tmp"
 
 func TestFilesystemResumeInventoryBindsExplicitRootWithoutCreatingGlobalState(t *testing.T) {
 	root := newResumeCertifiedOutputTestRoot(t)

@@ -9,46 +9,57 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/windshare/windshare/osfs/internal/checkpointstore"
-	"github.com/windshare/windshare/osfs/internal/outputcap"
+	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 func TestPortablePublicationCollisionRetainsDiscardAuthority(t *testing.T) {
 	ctx := context.Background()
 	root, intent := pausedPortableFile(t, 4)
 	stage := onlyPortableStage(t, root)
-	repository, policy, closeRepository := openRetainedCandidateRepository(t, root, intent)
-	store, err := checkpointstore.NewFileExecutionStoreWithStagePolicy(repository, policy)
-	if err != nil {
-		t.Fatal(err)
-	}
-	slots, attention, err := store.Inventory()
-	if err != nil || len(slots) != 1 || len(attention) != 0 {
-		t.Fatalf("checkpoint inventory: %v %v %v", slots, attention, err)
-	}
-	record, exact := slots[0].Record()
-	if !exact {
-		t.Fatal("checkpoint has no exact lineage")
-	}
 	final := filepath.Join(nativeDirectTreeResultRoot(t, root, intent), "file.bin")
 	if err := os.WriteFile(final, []byte("user"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	platform, err := openNativeOutputPlatform(filepath.Dir(final), false)
+
+	authority, err := NewOutputAuthority(OutputConfig{RootPath: root})
 	if err != nil {
 		t.Fatal(err)
 	}
-	published, err := store.PublishOwnedNoReplace(ctx, record.OwnedObjectID(), 4, platform.Root(), "file.bin")
-	if published != nil || !errors.Is(err, outputcap.ErrNamespaceCollision) {
-		t.Fatalf("publication collision: %v %v", published, err)
-	}
-	if err := platform.Close(); err != nil {
+	if err := authority.BindDestination(ctx); err != nil {
 		t.Fatal(err)
 	}
-	closeRepository()
+	lookup, err := authority.SelectOperation(ctx, intent.SelectionSpec(), receivecontract.AutomaticOperation())
+	if err != nil || lookup.Kind() != OutputLookupReopened {
+		t.Fatalf("reopen lookup = (%v, %v)", lookup.Kind(), err)
+	}
+	reopenedIntent, _ := lookup.Operation().ReceiveIntent()
+	session, err := lookup.Operation().OpenDirectTree(ctx, reopenedIntent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admission := admitRetainedCandidateRoot(t, session, intent, 0x62)
+	file := nativeDirectTreeTestFile(t, session, intent, 0x63, "file.bin", 4, admission)
+	start, err := session.BeginFile(ctx, file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, _, ok := start.Transaction()
+	if !ok {
+		t.Fatalf("expected resumable transaction before commit collision, got %+v", start)
+	}
+	settlement, err := tx.Commit(ctx)
+	if err != nil || settlement.Kind() != transfer.FileCollision {
+		t.Fatalf("commit collision = (%v, %v), want FileCollision", settlement.Kind(), err)
+	}
+	if _, err := session.PauseTree(ctx, transfer.JobPauseShutdown); err != nil {
+		t.Fatal(err)
+	}
+	if err := authority.Close(); err != nil {
+		t.Fatal(err)
+	}
 
-	// A definite no-replace collision must restore ownership before the live
-	// handle closes, so a later discard can still remove only the staged data.
+	// Discard must delete only private staged data and preserve the user's colliding file.
 	recoveryAuthority := NewRecoveryAuthority(root)
 	result, err := recoveryAuthority.Discard(ctx, intent.OperationID())
 	if err != nil || result.State() != RecoveryOperationDiscarded {

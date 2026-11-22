@@ -2,110 +2,76 @@ package osfs
 
 import (
 	"context"
-	"path/filepath"
 
-	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
-	"github.com/windshare/windshare/osfs/internal/checkpointmodel"
-	"github.com/windshare/windshare/osfs/internal/outputruntime"
-	"github.com/windshare/windshare/osfs/internal/resumeauthority"
+	"github.com/windshare/windshare/osfs/internal/output"
 )
 
 type (
-	RecoveryInventory       = resumeauthority.Inventory
-	RecoverySummary         = resumeauthority.Summary
-	RecoveryItem            = resumeauthority.Item
-	RecoveryListStatus      = resumeauthority.ListStatus
-	RecoveryOperationState  = resumeauthority.OperationState
-	RecoveryItemState       = resumeauthority.ItemState
-	RecoveryItemBlockReason = resumeauthority.ItemBlockReason
-	RecoveryClosedReason    = checkpointmodel.OrdinaryClosedReason
+	RecoveryInventory       = output.RecoveryInventory
+	RecoverySummary         = output.RecoverySummary
+	RecoveryItem            = output.RecoveryItem
+	RecoveryListStatus      = output.RecoveryListStatus
+	RecoveryOperationState  = output.RecoveryOperationState
+	RecoveryItemState       = output.RecoveryItemState
+	RecoveryItemBlockReason = output.RecoveryItemBlockReason
+	RecoveryClosedReason    = output.AttentionReason
 )
 
 const (
-	RecoveryListReady          = resumeauthority.ListReady
-	RecoveryListNeedsAttention = resumeauthority.ListNeedsAttention
+	RecoveryListReady          = output.RecoveryListReady
+	RecoveryListNeedsAttention = output.RecoveryListNeedsAttention
 
-	RecoveryOperationIncomplete     = resumeauthority.OperationIncomplete
-	RecoveryOperationResumable      = resumeauthority.OperationResumable
-	RecoveryOperationShareStopped   = resumeauthority.OperationShareStopped
-	RecoveryOperationCleanupPending = resumeauthority.OperationCleanupPending
-	RecoveryOperationNeedsAttention = resumeauthority.OperationNeedsAttention
-	RecoveryOperationDiscarded      = resumeauthority.OperationDiscarded
+	RecoveryOperationIncomplete     = output.RecoveryOperationIncomplete
+	RecoveryOperationResumable      = output.RecoveryOperationResumable
+	RecoveryOperationShareStopped   = output.RecoveryOperationShareStopped
+	RecoveryOperationCleanupPending = output.RecoveryOperationCleanupPending
+	RecoveryOperationNeedsAttention = output.RecoveryOperationNeedsAttention
+	RecoveryOperationDiscarded      = output.RecoveryOperationDiscarded
 
-	RecoveryItemIncomplete = resumeauthority.ItemIncomplete
-	RecoveryItemResumable  = resumeauthority.ItemResumable
-	RecoveryItemPublished  = resumeauthority.ItemPublished
-	RecoveryItemFailed     = resumeauthority.ItemFailed
-	RecoveryItemBlocked    = resumeauthority.ItemBlocked
+	RecoveryItemIncomplete = output.RecoveryItemIncomplete
+	RecoveryItemResumable  = output.RecoveryItemResumable
+	RecoveryItemPublished  = output.RecoveryItemPublished
+	RecoveryItemFailed     = output.RecoveryItemFailed
+	RecoveryItemBlocked    = output.RecoveryItemBlocked
 
-	RecoveryItemBlockNone               = resumeauthority.ItemBlockNone
-	RecoveryItemBlockPublicationUnknown = resumeauthority.ItemBlockPublicationUnknown
-	RecoveryItemBlockCheckpointInvalid  = resumeauthority.ItemBlockCheckpointInvalid
-	RecoveryItemBlockOwnedObjectUnknown = resumeauthority.ItemBlockOwnedObjectUnknown
-	RecoveryItemBlockRevisionConflict   = resumeauthority.ItemBlockRevisionConflict
+	RecoveryItemBlockNone               = output.RecoveryItemBlockNone
+	RecoveryItemBlockPublicationUnknown = output.RecoveryItemBlockPublicationUnknown
+	RecoveryItemBlockCheckpointInvalid  = output.RecoveryItemBlockCheckpointInvalid
+	RecoveryItemBlockOwnedObjectUnknown = output.RecoveryItemBlockOwnedObjectUnknown
+	RecoveryItemBlockRevisionConflict   = output.RecoveryItemBlockRevisionConflict
 
-	RecoveryReasonNone                 = checkpointmodel.OrdinaryReasonNone
-	RecoveryReasonDestinationOwnership = checkpointmodel.OrdinaryReasonDestinationOwnershipUnknown
-	RecoveryReasonRegistryOwnership    = checkpointmodel.OrdinaryReasonRegistryOwnershipUnknown
-	RecoveryReasonLeaseOwnership       = checkpointmodel.OrdinaryReasonLeaseOwnershipUnknown
-	RecoveryReasonOperationOwnership   = checkpointmodel.OrdinaryReasonOperationOwnershipUnknown
-	RecoveryReasonCleanupUncertain     = checkpointmodel.OrdinaryReasonCleanupUncertain
+	RecoveryReasonNone                 = output.AttentionNone
+	RecoveryReasonDestinationOwnership = output.AttentionDestination
+	RecoveryReasonRegistryOwnership    = output.AttentionRegistry
+	RecoveryReasonLeaseOwnership       = output.AttentionLease
+	RecoveryReasonOperationOwnership   = output.AttentionOperation
+	RecoveryReasonCleanupUncertain     = output.AttentionCleanup
 )
 
-// RecoveryAuthority inspects and discards retained native ordinary-v1 state.
-// It binds no handles until List or Discard is called, and each call reacquires
-// destination ownership afresh and releases it on return.
+// RecoveryAuthority inspects and discards retained native receive state.
+// It binds no handles until List or Discard is called, and releases them on return.
 type RecoveryAuthority struct {
 	rootPath string
-	store    resumeauthority.Store
 }
 
 func NewRecoveryAuthority(rootPath string) *RecoveryAuthority {
 	return &RecoveryAuthority{rootPath: rootPath}
 }
 
-func newRecoveryAuthorityWithStore(store resumeauthority.Store) *RecoveryAuthority {
-	return &RecoveryAuthority{store: store}
-}
-
-func (authority *RecoveryAuthority) open() (*resumeauthority.Authority, error) {
-	if authority == nil {
-		return nil, ErrRecoveryContract
-	}
-	store := authority.store
-	if store == nil {
-		if authority.rootPath == "" || !filepath.IsAbs(authority.rootPath) {
-			return nil, transfer.ErrInvalidOutputBinding
-		}
-		var err error
-		store, err = outputruntime.NewNativeResumeRepository(
-			filepath.Clean(authority.rootPath),
-			openNativeOutputPlatform,
-			nil,
-		)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return resumeauthority.New(store)
-}
-
 func (authority *RecoveryAuthority) List(ctx context.Context) (RecoveryInventory, error) {
-	native, err := authority.open()
-	if err != nil {
-		return RecoveryInventory{}, err
+	if authority == nil {
+		return RecoveryInventory{}, ErrRecoveryContract
 	}
-	return native.List(ctx)
+	return output.ListOperations(ctx, authority.rootPath)
 }
 
 func (authority *RecoveryAuthority) Discard(
 	ctx context.Context,
 	id receivecontract.OperationID,
 ) (RecoverySummary, error) {
-	native, err := authority.open()
-	if err != nil {
-		return RecoverySummary{}, err
+	if authority == nil {
+		return RecoverySummary{}, ErrRecoveryContract
 	}
-	return native.Discard(ctx, id)
+	return output.DiscardOperation(ctx, authority.rootPath, id)
 }

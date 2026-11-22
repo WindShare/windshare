@@ -132,7 +132,7 @@ func runPortableResumeAcceptsMtimeDriftAndFlushesPause(t *testing.T, root string
 		if err != nil {
 			return err
 		}
-		if !entry.IsDir() && filepath.Ext(path) == ".stage" {
+		if !entry.IsDir() && filepath.Ext(path) == ".part" {
 			stages++
 			return os.Chtimes(path, time.Now(), time.Now().Add(time.Hour))
 		}

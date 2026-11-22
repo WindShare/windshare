@@ -135,15 +135,6 @@ func (control outputOperationControl) Discard(ctx context.Context) error {
 	return sealOutputError(control.operation.Discard(ctx))
 }
 
-func (control outputOperationControl) CompatibleNameReport() output.CompatibleNameReport {
-	report := control.operation.CompatibleNameReport()
-	return output.CompatibleNameReport{
-		RepairedCount: report.RepairedCount,
-		ReportName:    report.ReportName,
-		PageCount:     report.PageCount,
-	}
-}
-
 var _ output.OperationControl = outputOperationControl{}
 
 func projectOperation(native *osfs.OutputOperation, absRoot string) (output.Operation, error) {

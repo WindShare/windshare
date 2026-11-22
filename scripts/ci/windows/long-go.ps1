@@ -26,6 +26,6 @@ Invoke-Step 'catalog long suites' {
     go run ./scripts/ci/_gotestsuite -run '^TestLong' ./core/catalog
 }
 Invoke-Step 'output runtime long suites' {
-    go run ./scripts/ci/_gotestsuite -run '^TestLong' ./osfs/internal/outputruntime
+    go run ./scripts/ci/_gotestsuite -run '^TestLong' ./osfs/internal/output
 }
 Write-Output ('== long-go: PASS in {0:mm\:ss} ==' -f $gateStopwatch.Elapsed)

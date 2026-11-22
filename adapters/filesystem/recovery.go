@@ -5,7 +5,6 @@ import (
 	"errors"
 
 	"github.com/windshare/windshare/core/transfer/receivecontract"
-	"github.com/windshare/windshare/engine/output"
 	"github.com/windshare/windshare/engine/recovery"
 	"github.com/windshare/windshare/osfs"
 )
@@ -123,15 +122,9 @@ func projectDiscardSummary(summary osfs.RecoverySummary) (recovery.DiscardReport
 	if err != nil {
 		return recovery.DiscardReport{}, err
 	}
-	nameReport := summary.CompatibleNameReport()
 	report := recovery.DiscardReport{
 		ID:        summary.OperationID(),
 		Attention: attention,
-		CompatibleNameReport: output.CompatibleNameReport{
-			RepairedCount: nameReport.RepairedCount,
-			ReportName:    nameReport.ReportName,
-			PageCount:     nameReport.PageCount,
-		},
 	}
 	switch summary.State() {
 	case osfs.RecoveryOperationDiscarded:

@@ -93,7 +93,7 @@ echo "-- Linux loop-ext4 certification contract"
 certifier="scripts/ci/native-output/linux/certify.sh"
 root_worker="scripts/ci/native-output/linux/root-worker.sh"
 assert_contains "$certifier" 'compile_static_test_binary ./osfs "$osfs_test_binary"'
-assert_contains "$certifier" 'compile_static_test_binary ./osfs/internal/outputportable "$outputportable_test_binary"'
+assert_contains "$certifier" 'compile_static_test_binary ./osfs/internal/output "$output_test_binary"'
 assert_contains "$certifier" 'mkfs.ext4 -q -F -I 256 -m 0'
 assert_contains "$certifier" 'sudo -n unshare --mount --propagation private --fork --kill-child'
 assert_contains "$certifier" 'bash "$script_root/root-worker.sh"'
@@ -108,6 +108,6 @@ assert_contains "$certifier" '"Action":"fail"'
 assert_contains "$root_worker" 'TMPDIR=/receiver/test-temp'
 assert_contains "$root_worker" '--userspec="$receiver_uid:$receiver_gid"'
 assert_contains "$root_worker" '/test/osfs.test'
-assert_contains "$root_worker" '/test/outputportable.test'
+assert_contains "$root_worker" '/test/output.test'
 
 echo "Linux native-output environment tests: PASS"
