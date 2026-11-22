@@ -7,7 +7,6 @@ import { BrowserReceiverGateway } from '../application/browser-share/gateway'
 import { BuiltinNetwork } from '../application/network/builtin'
 import { networkObserver, authorityObserver } from '../application/network/diagnostics'
 import {
-  createCatalogStorageObserver,
   createConnectivityTraceSource,
   createOutputTraceSource,
   createProtocolTraceSource,
@@ -29,7 +28,6 @@ export function createReceiverRuntime(
     network,
     protocolTrace: createProtocolTraceSource(diagnostics.trace, diagnostics.failures),
     connectivityTrace: createConnectivityTraceSource(diagnostics.trace),
-    onCatalogStorageFallback: createCatalogStorageObserver(diagnostics.trace),
   }), {
     windowPort: windowPort as unknown as BrowserOutputWindow,
     outputTrace,

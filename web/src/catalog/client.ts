@@ -18,7 +18,6 @@ import {
   CatalogPageStoreError,
   type CachedDirectoryFailure,
   type CatalogPageStore,
-  type CatalogPageStoreScope,
   type CommittedDirectory,
 } from './page-store'
 
@@ -185,19 +184,6 @@ export class CatalogClient {
     return page
   }
 
-  async hasCommittedName(
-    directory: CommittedDirectory,
-    name: string,
-    signal?: AbortSignal,
-  ): Promise<boolean> {
-    this.#requireOpen()
-    signal?.throwIfAborted()
-    const present = await this.#store.hasCommittedName(directory, name)
-    this.#requireOpen()
-    signal?.throwIfAborted()
-    return present
-  }
-
   async *entries(
     directory: CommittedDirectory,
     signal?: AbortSignal,
@@ -208,18 +194,6 @@ export class CatalogClient {
         yield entry
       }
     }
-  }
-
-  async evictCache(): Promise<void> {
-    this.#requireOpen()
-    if (this.#inflight.size !== 0) {
-      throw new CatalogClientError('Catalog cache cannot be evicted while a directory load is active')
-    }
-    const evict = this.#store.evictShare
-    if (evict === undefined) {
-      throw new CatalogClientError('Catalog page store does not support explicit cache eviction')
-    }
-    await evict.call(this.#store)
   }
 
   close(): void {
@@ -237,7 +211,7 @@ export class CatalogClient {
     }
     // An operation is allowed to ignore AbortSignal at the transport boundary.
     // Keep storage alive until its eventual completion observes cancellation and
-    // removes staged authority; closing IndexedDB first would make cleanup fail.
+    // removes staged authority; closing the store first would make cleanup fail.
     Promise.allSettled(calls.map((call) => call.promise))
       .then(() => this.#store.close())
       .catch(() => undefined)
@@ -451,7 +425,7 @@ export class CatalogClient {
       signal.throwIfAborted()
       if (cachedFailure !== undefined) this.#admitRetry(cachedFailure, explicitRetry)
       return this.#loadRemote(directoryId, directoryIdText, signal)
-    }, this.#store.coordinationScope)
+    })
   }
 
   #admitRetry(cached: CachedDirectoryFailure, explicitRetry: boolean): void {
@@ -557,14 +531,8 @@ export async function withCatalogLoadLock<T>(
   identity: string,
   signal: AbortSignal,
   operation: () => Promise<T>,
-  scope: CatalogPageStoreScope = 'cross-context',
 ): Promise<T> {
   signal.throwIfAborted()
-  // Page-local stores are never shared across tabs; skipping Web Locks avoids
-  // both unnecessary cross-tab contention and SecurityError when storage is denied.
-  if (scope === 'cross-context' && typeof navigator !== 'undefined' && navigator.locks !== undefined) {
-    return navigator.locks.request(identity, { mode: 'exclusive', signal }, operation)
-  }
   const previous = PROCESS_CATALOG_LOAD_TAILS.get(identity) ?? Promise.resolve()
   let release!: () => void
   const gate = new Promise<void>((resolve) => {

@@ -5,7 +5,6 @@ const captured = vi.hoisted(() => ({
   factoryOptions: [] as Array<Record<string, unknown>>,
   supervisorOptions: [] as Array<Record<string, unknown>>,
   catalogOptions: [] as Array<Record<string, unknown>>,
-  openCatalogPageStore: vi.fn(),
 }))
 
 vi.mock('../../src/crypto/suite02-link', () => ({
@@ -38,10 +37,6 @@ vi.mock('../../src/catalog/records', async (importOriginal) => {
     })),
   }
 })
-
-vi.mock('../../src/catalog/page-store', () => ({
-  openCatalogPageStore: captured.openCatalogPageStore,
-}))
 
 vi.mock('../../src/catalog/client', () => ({
   CatalogClient: class {
@@ -98,18 +93,14 @@ vi.mock('../../src/receiver/supervisor', () => ({
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import { defaultICEEndpointPool } from '../../src/connectivity/ice-policy/defaults'
 import { resolveLinkRelays } from '../../src/application/network/resolve'
-import type { CommittedDirectory } from '../../src/catalog/page-store'
+import { MemoryCatalogPageStore, type CommittedDirectory } from '../../src/catalog/page-store'
 import type { CatalogPage } from '../../src/catalog/records'
 import { planArtifactOffers } from '../../src/output/backends/contract'
-import { createCatalogStorageObserver } from '../../src/application/diagnostics/receive-trace'
-import { validateTraceEventPayloadV2 } from '../../src/diagnostics/export/trace-event-payload-v2'
-import type { TraceEventObservationV2 } from '../../src/diagnostics/trace/model'
 import {
   BrowseNavigationError,
   BrowserReceiverGateway,
   JoinedBrowserShare,
   type BrowseDirectory,
-  type CatalogStorageObservation,
 } from '../../src/application/browser-share/gateway'
 
 describe('v2 browser gateway connectivity injection', () => {
@@ -118,11 +109,6 @@ describe('v2 browser gateway connectivity injection', () => {
     captured.factoryOptions.length = 0
     captured.supervisorOptions.length = 0
     captured.catalogOptions.length = 0
-    captured.openCatalogPageStore.mockReset()
-    captured.openCatalogPageStore.mockResolvedValue({
-      store: { coordinationScope: 'cross-context', close: vi.fn() },
-      mode: 'indexeddb',
-    })
   })
 
   it('forwards lazy protocol and connectivity traces through every generation boundary', async () => {
@@ -161,49 +147,7 @@ describe('v2 browser gateway connectivity injection', () => {
     expect(options?.onBlockFetched).toBe(onBlockFetched)
     expect(options?.onContentLaneAdmitted).toBe(onContentLaneAdmitted)
     expect(options?.onContentLaneDetached).toBe(onContentLaneDetached)
-    await joined.close()
-  })
-
-  it('joins with the fallback memory catalog store and emits a validated storage_fallback trace', async () => {
-    const denial = new DOMException('Storage denied', 'SecurityError')
-    const fallbackStore = { coordinationScope: 'process', close: vi.fn() }
-    captured.openCatalogPageStore.mockResolvedValueOnce({
-      store: fallbackStore,
-      mode: 'memory',
-      fallback: { reason: 'storage-denied', failure: denial },
-    })
-    const events: TraceEventObservationV2[] = []
-    const observations: CatalogStorageObservation[] = []
-    const traceObserver = createCatalogStorageObserver({ current: event => events.push(event) })
-    const gateway = new BrowserReceiverGateway({
-      network: { resolve: resolveLinkRelays, icePool: defaultICEEndpointPool },
-      onCatalogStorageFallback: event => {
-        observations.push(event)
-        traceObserver(event)
-        throw new Error('observer failures cannot abort join')
-      },
-    })
-
-    const joined = await gateway.join(
-      'https://receiver.test/s/share#key',
-      'https://receiver.test/s/share',
-    )
-
-    expect(captured.catalogOptions.at(-1)?.store).toBe(fallbackStore)
-    expect(observations).toEqual([{
-      shareInstanceId: 'share-instance',
-      transition: 'storage_fallback',
-      reason: 'storage-denied',
-      failure: denial,
-    }])
-    expect(events).toHaveLength(1)
-    expect(events[0]?.eventName).toBe('catalog_storage')
-    expect(() => validateTraceEventPayloadV2(events[0]!.eventName, events[0]!.payload)).not.toThrow()
-    expect(events[0]?.payload).toMatchObject({
-      share_instance_id: 'share-instance',
-      transition: 'storage_fallback',
-      reason: 'storage_denied',
-    })
+    expect(captured.catalogOptions.at(-1)?.store).toBeInstanceOf(MemoryCatalogPageStore)
     await joined.close()
   })
 })

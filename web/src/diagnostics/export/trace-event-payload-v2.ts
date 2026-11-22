@@ -50,7 +50,6 @@ export { validateCorrelationV1 } from './trace-payload-validation'
 const EVENT_PAYLOAD_VALIDATORS = Object.freeze({
   network_directory: validateNetworkDirectory,
   authority_blocks: validateAuthorityBlocks,
-  catalog_storage: validateCatalogStorage,
   join_transition: validateJoin,
   receiver_experience: validateReceiverExperience,
   browse_transition: validateBrowse,
@@ -112,18 +111,6 @@ function validateNetworkDirectory(payload: UnknownRecord): void {
   }
   for (const field of ['generation', 'serial', 'trusted_until_ms']) {
     if (payload[field] !== undefined) integerBetween(payload[field], 0, Number.MAX_SAFE_INTEGER, field)
-  }
-}
-
-function validateCatalogStorage(payload: UnknownRecord): void {
-  exactKeys(payload, ['share_instance_id', 'transition', 'reason'], ['failure_detail'], 'catalog storage')
-  member(payload.transition, ['storage_fallback'], 'catalog storage transition')
-  member(payload.reason, ['storage_unavailable', 'storage_denied'], 'catalog storage reason')
-  if (typeof payload.share_instance_id !== 'string' || payload.share_instance_id.length === 0 || payload.share_instance_id.length > 2048) {
-    throw new TypeError('Invalid catalog storage share instance')
-  }
-  if (payload.failure_detail !== undefined && (typeof payload.failure_detail !== 'string' || payload.failure_detail.length > 2048)) {
-    throw new TypeError('Invalid catalog storage trace text')
   }
 }
 

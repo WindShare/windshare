@@ -256,32 +256,7 @@ describe('v2 catalog multi-receiver ownership', () => {
     second.close()
   })
 
-  it('exposes committed-generation name membership without refetching the directory', async () => {
-    const fixture = catalogVectorFixture()
-    const store = new MemoryCatalogPageStore()
-    let fetches = 0
-    const client = new CatalogClient({
-      descriptor: fixture.descriptor,
-      operations: {
-        fetchPage: async () => {
-          fetches += 1
-          return fixture.catalogPayload
-        },
-      },
-      store,
-    })
-    const committed = await client.loadDirectory(fixture.directoryId)
-    const firstPage = await client.page(committed, 0)
-    const firstName = firstPage.entries[0]?.name
-    if (firstName === undefined) throw new Error('catalog vector has no entry')
-
-    await expect(client.hasCommittedName(committed, firstName)).resolves.toBe(true)
-    await expect(client.hasCommittedName(committed, 'definitely-missing')).resolves.toBe(false)
-    expect(fetches).toBe(1)
-    client.close()
-  })
-
-  it('keeps the fallback lock published when a queued receiver cancels', async () => {
+  it('keeps the process-local lock published when a queued receiver cancels', async () => {
     let releaseFirst!: () => void
     const firstGate = new Promise<void>((resolve) => {
       releaseFirst = resolve
@@ -433,7 +408,6 @@ function catalogVectorFixture(): {
 }
 
 class ObservedCatalogStore implements CatalogPageStore {
-  readonly coordinationScope = 'process' as const
   readonly #inner = new MemoryCatalogPageStore()
   readonly #stageGate: Promise<void> | undefined
   readonly #stageFailure: unknown
@@ -462,10 +436,6 @@ class ObservedCatalogStore implements CatalogPageStore {
 
   loadPage(directory: CommittedDirectory, pageIndex: number): Promise<CatalogPage | undefined> {
     return this.#inner.loadPage(directory, pageIndex)
-  }
-
-  hasCommittedName(directory: CommittedDirectory, name: string): Promise<boolean> {
-    return this.#inner.hasCommittedName(directory, name)
   }
 
   begin(directoryIdText: string): Promise<void> {

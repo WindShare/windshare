@@ -1,91 +1,100 @@
 import { catalogNameCollisionKey } from './path-policy'
-import type { CatalogPage } from './records'
 import {
-  catalogPageMetadataCharge,
-  DEFAULT_CATALOG_CACHE_BUDGET_LIMITS,
-  validateCatalogBudgetLimits,
-  type CatalogCacheBudgetLimits,
-} from './cache-budget'
-import { IndexedDbCatalogPageStore } from './indexeddb-page-store'
-import {
-  isSameCommittedGeneration,
-  requireCachedFailure,
-  snapshotCachedFailure,
-  snapshotDirectory,
-  CatalogPageStoreError,
-  type CachedDirectoryFailure,
-  type CatalogPageStore,
-  type CatalogPageStoreScope,
-  type CommittedDirectory,
-} from './page-store-contracts'
+  CATALOG_IDENTITY_BYTES,
+  CATALOG_PAGE_ENTRIES,
+  MAX_CATALOG_PAYLOAD_BYTES,
+  type CatalogPage,
+  type DirectoryFailure,
+} from './records'
 
-export {
-  CatalogPageStoreError,
-  type CachedDirectoryFailure,
-  type CatalogPageStore,
-  type CatalogPageStoreErrorKind,
-  type CatalogPageStoreResourceScope,
-  type CatalogPageStoreScope,
-  type CommittedDirectory,
-} from './page-store-contracts'
-export { IndexedDbCatalogPageStore } from './indexeddb-page-store'
-export {
-  catalogPageMetadataCharge,
-  DEFAULT_CATALOG_CACHE_BUDGET_LIMITS,
-  type CatalogCacheBudgetLimits,
-} from './cache-budget'
+const CATALOG_PAGE_RECORD_BASE_BYTES = 16 * 1024
+const CATALOG_ENTRY_RECORD_BYTES = 512
+const CATALOG_AUTHENTICATED_BYTES_MULTIPLIER = 4
+const MAX_SHARE_CATALOG_ENTRIES = 4_194_304
+const MAX_SHARE_CATALOG_METADATA_BYTES = 2 * 1024 * 1024 * 1024
 
-const DEFAULT_CATALOG_DATABASE_NAME = 'windshare-v2-catalog'
+export interface CommittedDirectory {
+  readonly directoryIdText: string
+  readonly generationText: string
+  /** Raw authenticated identities are the authority; text is only a display/key projection. */
+  readonly directoryId: Uint8Array<ArrayBuffer>
+  readonly generation: Uint8Array<ArrayBuffer>
+  readonly pageCount: number
+  readonly entryCount: number
+  readonly omittedCount: bigint
+  readonly terminalCommitment: Uint8Array<ArrayBuffer>
+}
+
+export interface CachedDirectoryFailure {
+  readonly failure: DirectoryFailure
+  /** Null denotes a permanent authenticated failure. */
+  readonly retryAtMilliseconds: number | null
+}
+
+export interface CatalogPageStore {
+  loadDirectory(directoryIdText: string): Promise<CommittedDirectory | undefined>
+  loadFailure(directoryIdText: string): Promise<CachedDirectoryFailure | undefined>
+  loadPage(directory: CommittedDirectory, pageIndex: number): Promise<CatalogPage | undefined>
+  begin(directoryIdText: string): Promise<void>
+  stage(page: CatalogPage): Promise<void>
+  commit(directory: CommittedDirectory): Promise<void>
+  storeFailure(cached: CachedDirectoryFailure): Promise<void>
+  abort(directoryIdText: string): Promise<void>
+  close(): void
+}
+
+export type CatalogPageStoreErrorKind =
+  | 'authenticated-ownership'
+  | 'resource-limit'
+  | 'local-storage'
+
+export class CatalogPageStoreError extends Error {
+  readonly kind: CatalogPageStoreErrorKind
+
+  constructor(
+    kind: CatalogPageStoreErrorKind,
+    message: string,
+    options?: ErrorOptions,
+  ) {
+    super(message, options)
+    this.name = 'CatalogPageStoreError'
+    this.kind = kind
+  }
+}
 
 export interface MemoryCatalogCacheBudgetLimits {
   readonly maxEntries: number
   readonly maxMetadataBytes: number
 }
 
-// Page-local fallback storage resides in the tab heap, so its default cap stays
-// tighter than the disk-backed browser-profile cache to avoid tab OOM.
+// Bounds in-tab heap usage per live share; committed directories stay intact
+// for progressive discovery and replay until the share closes.
 export const DEFAULT_MEMORY_CATALOG_CACHE_BUDGET_LIMITS: MemoryCatalogCacheBudgetLimits = Object.freeze({
   maxEntries: 524_288,
   maxMetadataBytes: 256 * 1024 * 1024,
 })
-
-export type CatalogPageStoreFallbackReason = 'storage-unavailable' | 'storage-denied'
-
-export interface CatalogPageStoreFallback {
-  readonly reason: CatalogPageStoreFallbackReason
-  readonly failure?: unknown
-}
-
-export interface OpenCatalogPageStoreOptions {
-  readonly databaseName?: string
-  readonly limits?: CatalogCacheBudgetLimits
-  readonly memoryLimits?: MemoryCatalogCacheBudgetLimits
-  readonly openIndexedDb?: (
-    shareInstanceId: string,
-    databaseName: string,
-    limits: CatalogCacheBudgetLimits,
-  ) => Promise<CatalogPageStore>
-}
-
-export type OpenedCatalogPageStore =
-  | Readonly<{
-      store: CatalogPageStore
-      mode: 'indexeddb'
-      fallback?: undefined
-    }>
-  | Readonly<{
-      store: CatalogPageStore
-      mode: 'memory'
-      fallback: CatalogPageStoreFallback
-    }>
 
 interface DirectoryBudgetCharge {
   entries: number
   metadataBytes: number
 }
 
+export function catalogPageMetadataCharge(page: CatalogPage): number {
+  if (
+    !Number.isSafeInteger(page.encodedBytes) ||
+    page.encodedBytes <= 0 ||
+    page.encodedBytes > MAX_CATALOG_PAYLOAD_BYTES ||
+    page.entries.length > CATALOG_PAGE_ENTRIES
+  ) {
+    throw new CatalogPageStoreError('local-storage', 'Catalog page has an invalid memory footprint')
+  }
+  // Account for the decoded page object alongside node/name ownership index entries.
+  return CATALOG_PAGE_RECORD_BASE_BYTES +
+    page.entries.length * CATALOG_ENTRY_RECORD_BYTES +
+    page.encodedBytes * CATALOG_AUTHENTICATED_BYTES_MULTIPLIER
+}
+
 export class MemoryCatalogPageStore implements CatalogPageStore {
-  readonly coordinationScope: CatalogPageStoreScope = 'process'
   readonly #limits: MemoryCatalogCacheBudgetLimits
   readonly #directories = new Map<string, CommittedDirectory>()
   readonly #failures = new Map<string, CachedDirectoryFailure>()
@@ -114,15 +123,6 @@ export class MemoryCatalogPageStore implements CatalogPageStore {
     pageIndex: number,
   ): Promise<CatalogPage | undefined> {
     return this.#pages.get(directory.directoryIdText)?.get(directory.generationText)?.get(pageIndex)
-  }
-
-  async hasCommittedName(directory: CommittedDirectory, name: string): Promise<boolean> {
-    const committed = this.#directories.get(directory.directoryIdText)
-    if (committed === undefined || !isSameCommittedGeneration(committed, directory)) {
-      throw committedGenerationUnavailable()
-    }
-    return this.#nameOwners.get(directory.directoryIdText)?.get(catalogNameCollisionKey(name)) ===
-      directory.generationText
   }
 
   async begin(directoryIdText: string): Promise<void> {
@@ -160,7 +160,6 @@ export class MemoryCatalogPageStore implements CatalogPageStore {
       throw new CatalogPageStoreError(
         'resource-limit',
         'Catalog cache exceeded its share entry or metadata budget',
-        { resourceScope: 'share' },
       )
     }
     for (const node of pendingNodes) this.#nodeOwners.set(node, page.directoryIdText)
@@ -207,105 +206,7 @@ export class MemoryCatalogPageStore implements CatalogPageStore {
     }
   }
 
-  async evictShare(): Promise<void> {
-    this.#directories.clear()
-    this.#failures.clear()
-    this.#pages.clear()
-    this.#nodeOwners.clear()
-    this.#nameOwners.clear()
-    this.#directoryCharges.clear()
-    this.#entries = 0
-    this.#metadataBytes = 0
-  }
-
-  async evictOldestInactiveShare(): Promise<boolean> {
-    return false
-  }
-
   close(): void {}
-}
-
-/**
- * Opens durable cross-context catalog storage when browser storage policy permits it,
- * falling back to a bounded page-local store only when storage APIs are absent or
- * explicitly denied (`SecurityError`). Runtime database failures and upgrade blocks
- * still surface so corrupted or contested durable stores are never silently masked.
- */
-export async function openCatalogPageStore(
-  shareInstanceId: string,
-  options: OpenCatalogPageStoreOptions = {},
-): Promise<OpenedCatalogPageStore> {
-  const databaseName = options.databaseName ?? DEFAULT_CATALOG_DATABASE_NAME
-  if (shareInstanceId.length === 0 || databaseName.length === 0) {
-    throw new TypeError('Catalog page store requires share and database identities')
-  }
-  const limits = validateCatalogBudgetLimits(options.limits ?? DEFAULT_CATALOG_CACHE_BUDGET_LIMITS)
-  const memoryLimits = validateMemoryBudgetLimits(
-    options.memoryLimits ?? DEFAULT_MEMORY_CATALOG_CACHE_BUDGET_LIMITS,
-  )
-  if (options.openIndexedDb === undefined) {
-    const availability = checkBrowserCatalogStorageAvailability()
-    if (availability.kind !== 'available') {
-      return memoryFallbackResult(
-        memoryLimits,
-        availability.kind === 'denied' ? 'storage-denied' : 'storage-unavailable',
-        availability.kind === 'denied' ? availability.failure : undefined,
-      )
-    }
-  }
-  try {
-    const open = options.openIndexedDb ?? IndexedDbCatalogPageStore.open
-    const store = await open(shareInstanceId, databaseName, limits)
-    return Object.freeze({ store, mode: 'indexeddb' as const })
-  } catch (failure) {
-    if (isStoragePolicyDenial(failure)) {
-      return memoryFallbackResult(memoryLimits, 'storage-denied', failure)
-    }
-    throw failure
-  }
-}
-
-type BrowserCatalogStorageAvailability =
-  | { readonly kind: 'available' }
-  | { readonly kind: 'unavailable' }
-  | { readonly kind: 'denied'; readonly failure: DOMException }
-
-function checkBrowserCatalogStorageAvailability(): BrowserCatalogStorageAvailability {
-  try {
-    if (!('indexedDB' in globalThis)) return { kind: 'unavailable' }
-    const idb = globalThis.indexedDB
-    if (idb === undefined || idb === null || typeof idb.open !== 'function') {
-      return { kind: 'unavailable' }
-    }
-    if (typeof navigator === 'undefined') return { kind: 'unavailable' }
-    const locks = navigator.locks
-    if (locks === undefined || locks === null || typeof locks.request !== 'function') {
-      return { kind: 'unavailable' }
-    }
-    return { kind: 'available' }
-  } catch (failure) {
-    if (isStoragePolicyDenial(failure)) return { kind: 'denied', failure }
-    throw failure
-  }
-}
-
-function memoryFallbackResult(
-  memoryLimits: MemoryCatalogCacheBudgetLimits,
-  reason: CatalogPageStoreFallbackReason,
-  failure?: unknown,
-): OpenedCatalogPageStore {
-  return Object.freeze({
-    store: new MemoryCatalogPageStore(memoryLimits),
-    mode: 'memory' as const,
-    fallback: Object.freeze({
-      reason,
-      ...(failure === undefined ? {} : { failure }),
-    }),
-  })
-}
-
-function isStoragePolicyDenial(failure: unknown): failure is DOMException {
-  return failure instanceof DOMException && failure.name === 'SecurityError'
 }
 
 function validateMemoryBudgetLimits(
@@ -316,8 +217,8 @@ function validateMemoryBudgetLimits(
     limits.maxEntries <= 0 ||
     !Number.isSafeInteger(limits.maxMetadataBytes) ||
     limits.maxMetadataBytes <= 0 ||
-    limits.maxEntries > DEFAULT_CATALOG_CACHE_BUDGET_LIMITS.entriesPerShare ||
-    limits.maxMetadataBytes > DEFAULT_CATALOG_CACHE_BUDGET_LIMITS.metadataBytesPerShare
+    limits.maxEntries > MAX_SHARE_CATALOG_ENTRIES ||
+    limits.maxMetadataBytes > MAX_SHARE_CATALOG_METADATA_BYTES
   ) {
     throw new CatalogPageStoreError(
       'local-storage',
@@ -327,11 +228,68 @@ function validateMemoryBudgetLimits(
   return Object.freeze({ ...limits })
 }
 
-function committedGenerationUnavailable(): CatalogPageStoreError {
-  return new CatalogPageStoreError(
-    'local-storage',
-    'Catalog directory generation is no longer committed',
-  )
+function snapshotDirectory(directory: CommittedDirectory): CommittedDirectory {
+  const directoryId = requireCatalogIdentity(directory.directoryId, 'directory ID')
+  const generation = requireCatalogIdentity(directory.generation, 'directory generation')
+  return Object.freeze({
+    directoryIdText: directory.directoryIdText,
+    generationText: directory.generationText,
+    directoryId,
+    generation,
+    pageCount: directory.pageCount,
+    entryCount: directory.entryCount,
+    omittedCount: directory.omittedCount,
+    terminalCommitment: directory.terminalCommitment.slice(),
+  })
+}
+
+function requireCatalogIdentity(
+  value: Uint8Array<ArrayBuffer>,
+  label: string,
+): Uint8Array<ArrayBuffer> {
+  if (!(value instanceof Uint8Array) || value.byteLength !== CATALOG_IDENTITY_BYTES ||
+      value.every((byte) => byte === 0)) {
+    throw new CatalogPageStoreError(
+      'authenticated-ownership',
+      `${label} is not a non-zero ${CATALOG_IDENTITY_BYTES}-byte identity`,
+    )
+  }
+  return value.slice()
+}
+
+function snapshotCachedFailure(cached: CachedDirectoryFailure): CachedDirectoryFailure {
+  requireCachedFailure(cached)
+  const failure = cached.failure
+  return Object.freeze({
+    failure: Object.freeze({
+      shareInstance: failure.shareInstance.slice(),
+      directoryId: failure.directoryId.slice(),
+      directoryIdText: failure.directoryIdText,
+      attemptId: failure.attemptId.slice(),
+      attemptIdText: failure.attemptIdText,
+      code: failure.code,
+      kind: failure.kind,
+      retryable: failure.retryable,
+      ...(failure.retryAfterMilliseconds === undefined
+        ? {}
+        : { retryAfterMilliseconds: failure.retryAfterMilliseconds }),
+    }),
+    retryAtMilliseconds: cached.retryAtMilliseconds,
+  })
+}
+
+function requireCachedFailure(cached: CachedDirectoryFailure): void {
+  const retryAt = cached.retryAtMilliseconds
+  if (
+    cached.failure.directoryIdText.length === 0 ||
+    (cached.failure.retryable && (retryAt === null || !Number.isFinite(retryAt))) ||
+    (!cached.failure.retryable && retryAt !== null)
+  ) {
+    throw new CatalogPageStoreError(
+      'local-storage',
+      'Cached directory failure has inconsistent retry authority',
+    )
+  }
 }
 
 function ownershipFailure(message: string): CatalogPageStoreError {
