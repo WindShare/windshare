@@ -96,7 +96,7 @@ func TestOutputAuthorityLifecycleAndNilGuards(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "facade-values")
 	authority, operation, intent := openPublicOrdinaryOperation(t, root, 0xe1)
 	received, ok := operation.ReceiveIntent()
-	if !ok || !received.EqualCanonical(intent) {
+	if !ok || !received.Equal(intent) {
 		t.Fatal("operation changed the frozen intent")
 	}
 	session, err := operation.OpenDirectTree(context.Background(), intent)

@@ -35,8 +35,8 @@ type journalRecord struct {
 	Kind string `json:"k"`
 
 	// Meta record ("meta")
-	Intent          []byte `json:"intent,omitempty"`
-	SelectionDigest string `json:"sel,omitempty"`
+	Intent          json.RawMessage `json:"intent,omitempty"`
+	SelectionDigest string          `json:"sel,omitempty"`
 	Redownload      bool   `json:"redl,omitempty"`
 	Lifecycle       string `json:"life,omitempty"`
 	Attention       string `json:"attn,omitempty"`
@@ -157,8 +157,8 @@ func decodeTaskHeader(rec journalRecord) (taskHeader, error) {
 	if rec.Kind != "meta" || len(rec.Intent) == 0 || rec.StateGen == 0 {
 		return taskHeader{}, fmt.Errorf("%w: missing meta header", errJournalCorrupt)
 	}
-	intent, err := transfer.DecodeReceiveIntent(rec.Intent)
-	if err != nil {
+	var intent transfer.ReceiveIntent
+	if err := json.Unmarshal(rec.Intent, &intent); err != nil {
 		return taskHeader{}, fmt.Errorf("%w: decode intent: %w", errJournalCorrupt, err)
 	}
 	return taskHeader{
@@ -322,7 +322,7 @@ func decodeID16[T ~[catalog.IdentityBytes]byte](encoded string) (T, error) {
 	return out, nil
 }
 
-func metaToRecord(meta taskMeta, includeIntent bool) journalRecord {
+func metaToRecord(meta taskMeta, includeIntent bool) (journalRecord, error) {
 	rec := journalRecord{
 		Kind:      "meta",
 		Lifecycle: meta.Lifecycle,
@@ -330,11 +330,15 @@ func metaToRecord(meta taskMeta, includeIntent bool) journalRecord {
 		StateGen:  meta.StateGen,
 	}
 	if includeIntent {
-		rec.Intent = meta.Intent.CanonicalBytes()
+		encoded, err := json.Marshal(meta.Intent)
+		if err != nil {
+			return journalRecord{}, err
+		}
+		rec.Intent = encoded
 		rec.SelectionDigest = hex.EncodeToString(meta.SelectionDigest[:])
 		rec.Redownload = meta.Redownload
 	}
-	return rec
+	return rec, nil
 }
 
 func nameToRecord(m NameMapping) journalRecord {

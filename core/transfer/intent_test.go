@@ -2,8 +2,6 @@ package transfer
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/base64"
 	"errors"
 	"testing"
 
@@ -23,56 +21,7 @@ func crossRuntimeOpaque(seed byte) []byte {
 	return value
 }
 
-func TestReceiveIntentCrossRuntimeCanonicalGolden(t *testing.T) {
-	share := crossRuntimeID[catalog.ShareInstance](1)
-	root := crossRuntimeID[catalog.DirectoryID](2)
-	rules, err := NewSelectionRules(true, []SelectionOverride{
-		{FileID: crossRuntimeID[catalog.FileID](5), Selected: false},
-		{DirectoryID: crossRuntimeID[catalog.DirectoryID](4), Selected: true},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	selection, err := NewSelectionSpec(share, root, rules)
-	if err != nil {
-		t.Fatal(err)
-	}
-	artifact := receivecontract.NewCatalogRootDirectoryTree()
-	operationBytes := crossRuntimeID[receivecontract.OperationID](10)
-	operation, err := receivecontract.OperationIDFromBytes(operationBytes[:])
-	if err != nil {
-		t.Fatal(err)
-	}
-	reservationBytes := crossRuntimeID[receivecontract.DestinationReservationID](11)
-	reservationID, err := receivecontract.DestinationReservationIDFromBytes(reservationBytes[:])
-	if err != nil {
-		t.Fatal(err)
-	}
-	authority, err := receivecontract.AuthorityRefFromBytes(crossRuntimeOpaque(12))
-	if err != nil {
-		t.Fatal(err)
-	}
-	reservation, err := receivecontract.NewNativeContainerRootReservation(
-		operation, reservationID, artifact, authority,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	plan, err := receivecontract.NewDirectTreePlan(artifact, reservation)
-	if err != nil {
-		t.Fatal(err)
-	}
-	intent, err := NewReceiveIntent(selection, artifact, plan)
-	if err != nil {
-		t.Fatal(err)
-	}
-	const expectedDigest = "Ba2NNvQt_PzBm9ybyhyXHSFPrGSDE_Q2SXCH1YH7fPM"
-	if encoded := base64.RawURLEncoding.EncodeToString(intent.Digest().Bytes()); encoded != expectedDigest {
-		t.Fatalf("digest=%s want=%s", encoded, expectedDigest)
-	}
-}
-
-func TestReceiveIntentCanonicalBindsSelectionArtifactAndPlan(t *testing.T) {
+func TestReceiveIntentBindsSelectionArtifactAndPlanDeterministically(t *testing.T) {
 	share := transferID[catalog.ShareInstance](31)
 	root := transferID[catalog.DirectoryID](32)
 	file := transferID[catalog.FileID](33)
@@ -93,20 +42,8 @@ func TestReceiveIntentCanonicalBindsSelectionArtifactAndPlan(t *testing.T) {
 	}
 	left := receiveIntentFixture(t, share, root, rulesA, 1)
 	right := receiveIntentFixture(t, share, root, rulesB, 1)
-	if !left.EqualCanonical(right) || left.Digest() != right.Digest() {
+	if !left.Equal(right) || left.Digest() != right.Digest() {
 		t.Fatal("equivalent selection maps produced different ReceiveIntent identity")
-	}
-
-	expected := append([]byte(receiveIntentDomain), 0, ReceiveIntentV4)
-	expected = appendCanonicalField(expected, left.SelectionSpec().CanonicalBytes())
-	expected = appendCanonicalField(expected, left.ArtifactSpec().CanonicalBytes())
-	expected = appendCanonicalField(expected, left.MaterializationPlan().CanonicalBytes())
-	if !bytes.Equal(left.CanonicalBytes(), expected) {
-		t.Fatalf("canonical bytes=%x want=%x", left.CanonicalBytes(), expected)
-	}
-	sum := sha256.Sum256(expected)
-	if left.Digest() != ReceiveIntentDigest(sum) {
-		t.Fatalf("digest=%x want=%x", left.Digest(), sum)
 	}
 	if left.OperationID() != left.MaterializationPlan().OperationID() ||
 		left.BindingDigest() != left.MaterializationPlan().BindingDigest() {
@@ -114,7 +51,7 @@ func TestReceiveIntentCanonicalBindsSelectionArtifactAndPlan(t *testing.T) {
 	}
 
 	differentOperation := receiveIntentFixture(t, share, root, rulesA, 2)
-	if left.EqualCanonical(differentOperation) || left.Digest() == differentOperation.Digest() {
+	if left.Equal(differentOperation) || left.Digest() == differentOperation.Digest() {
 		t.Fatal("different stable operations shared ReceiveIntent identity")
 	}
 }
@@ -142,13 +79,9 @@ func TestReceiveIntentRejectsMismatchedOrIncompleteContracts(t *testing.T) {
 	if _, err := NewReceiveIntent(valid.SelectionSpec(), valid.ArtifactSpec(), receivecontract.MaterializationPlan{}); !errors.Is(err, ErrInvalidReceiveIntent) {
 		t.Fatalf("zero plan error=%v", err)
 	}
-
-	malformed := valid
-	malformed.encoded = append([]byte(nil), valid.encoded...)
-	malformed.encoded[len(malformed.encoded)-1] ^= 1
-	if malformed.EqualCanonical(valid) || valid.EqualCanonical(malformed) ||
-		malformed.EqualCanonical(malformed) || (ReceiveIntent{}).EqualCanonical(ReceiveIntent{}) {
-		t.Fatal("malformed ReceiveIntent compared as canonical authority")
+	if (ReceiveIntent{}).Equal(valid) || valid.Equal(ReceiveIntent{}) ||
+		(ReceiveIntent{}).Equal(ReceiveIntent{}) {
+		t.Fatal("zero ReceiveIntent compared equal")
 	}
 }
 
@@ -157,11 +90,6 @@ func TestReceiveIntentAndRunIdentityAccessorsAreDefensive(t *testing.T) {
 	root := transferID[catalog.DirectoryID](52)
 	rules, _ := NewSelectionRules(true, nil)
 	intent := receiveIntentFixture(t, share, root, rules, 4)
-	canonical := intent.CanonicalBytes()
-	canonical[0] ^= 0xff
-	if bytes.Equal(canonical, intent.CanonicalBytes()) {
-		t.Fatal("canonical bytes leaked mutable storage")
-	}
 	digestBytes := intent.Digest().Bytes()
 	digestBytes[0] ^= 0xff
 	if bytes.Equal(digestBytes, intent.Digest().Bytes()) {

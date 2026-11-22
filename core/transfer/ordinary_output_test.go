@@ -29,13 +29,13 @@ func TestOrdinaryOutputSelectionPreservesCanonicalSelectionBytes(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		before := selection.CanonicalBytes()
+		before := selection.Digest()
 		input, err := selection.OrdinaryOutputSelection()
 		if err != nil || input.Digest() != [32]byte(selection.Digest()) {
 			t.Fatalf("input digest=%x err=%v", input.Digest(), err)
 		}
-		if !bytes.Equal(before, selection.CanonicalBytes()) {
-			t.Fatal("shape lowering mutated canonical SelectionSpec bytes")
+		if before != selection.Digest() {
+			t.Fatal("shape lowering mutated SelectionSpec digest")
 		}
 	}
 }
@@ -81,8 +81,7 @@ func TestOrdinaryOutputArtifactUsesExistingCanonicalConstructors(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			got, err := MaterializeOrdinaryOutputShape(test.decision)
-			if err != nil || !bytes.Equal(got.CanonicalBytes(), test.want.CanonicalBytes()) ||
-				got.Digest() != test.want.Digest() {
+			if err != nil || got.Digest() != test.want.Digest() {
 				t.Fatalf("artifact digest=%x want=%x err=%v", got.Digest(), test.want.Digest(), err)
 			}
 
@@ -152,7 +151,7 @@ func TestOrdinaryOutputArtifactProjectorConsumesIntentWithoutChangingCanonicalBy
 	}
 	plan, _ := receivecontract.NewDirectTreePlan(artifact, reservation)
 	intent, _ := NewReceiveIntent(selection, artifact, plan)
-	before := intent.CanonicalBytes()
+	before := intent.Digest()
 
 	projector, err := OrdinaryOutputArtifactPathProjector(intent)
 	if err != nil {
@@ -171,8 +170,8 @@ func TestOrdinaryOutputArtifactProjectorConsumesIntentWithoutChangingCanonicalBy
 	if !ok || path.String() != "file.bin" {
 		t.Fatalf("projection=%+v path=%q", projection, path.String())
 	}
-	if !bytes.Equal(before, intent.CanonicalBytes()) {
-		t.Fatal("projector construction mutated canonical ReceiveIntent bytes")
+	if before != intent.Digest() {
+		t.Fatal("projector construction mutated ReceiveIntent digest")
 	}
 }
 

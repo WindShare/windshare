@@ -173,7 +173,7 @@ func TestResolveGetOutputOperationReopensBeforeShapeAndRefusesConcurrentLease(t 
 		t.Fatal(err)
 	}
 	if reopened.lookup != getOutputLookupReopened || reopenResolver.calls != 0 ||
-		!reopened.operation.Intent.EqualCanonical(first.operation.Intent) {
+		!reopened.operation.Intent.Equal(first.operation.Intent) {
 		t.Fatalf("reopened admission=%+v shape_calls=%d", reopened, reopenResolver.calls)
 	}
 
@@ -478,7 +478,7 @@ func TestResolveGetOutputOperationRejectsConcurrentAutomaticCreateDuringShapePro
 		t.Fatalf("third automatic admission failed: %v", err)
 	}
 	if reopened.lookup != getOutputLookupReopened || reopenResolver.calls != 0 ||
-		!reopened.operation.Intent.EqualCanonical(firstAdmitted.operation.Intent) {
+		!reopened.operation.Intent.Equal(firstAdmitted.operation.Intent) {
 		t.Fatalf("third admission = %+v, want reopen of %x", reopened, firstAdmitted.operation.Intent.OperationID().Bytes())
 	}
 }

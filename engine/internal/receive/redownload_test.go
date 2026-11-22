@@ -38,7 +38,7 @@ func TestRedownloadPreservesAutomaticContinuationAndExactTaskSelection(t *testin
 	if fresh.Intent.OperationID() == original.Intent.OperationID() || fresh.Destination == original.Destination || !fresh.DestinationAdjusted {
 		t.Fatal("redownload inherited the original identity or destination")
 	}
-	if automatic := admit(OutputCreateOrResume, receivecontract.OperationID{}); !automatic.Intent.EqualCanonical(original.Intent) {
+	if automatic := admit(OutputCreateOrResume, receivecontract.OperationID{}); !automatic.Intent.Equal(original.Intent) {
 		t.Fatal("redownload replaced automatic continuation")
 	}
 	wrong, err := (filesystem.FilesystemOutput{RootPath: root}).NewOutputAuthority(OutputConfig{})
@@ -58,7 +58,7 @@ func TestRedownloadPreservesAutomaticContinuationAndExactTaskSelection(t *testin
 		t.Fatal(err)
 	}
 	for _, expected := range []getOutputOperation{original, fresh} {
-		if retried := admit(OutputResumeExisting, expected.Intent.OperationID()); !retried.Intent.EqualCanonical(expected.Intent) {
+		if retried := admit(OutputResumeExisting, expected.Intent.OperationID()); !retried.Intent.Equal(expected.Intent) {
 			t.Fatal("retry selected the wrong operation")
 		}
 	}

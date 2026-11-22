@@ -219,8 +219,7 @@ func (r *jobRun) finish(ctx context.Context) JobResult {
 	return JobResult{
 		Outcome: outcome, Settlement: r.settlement,
 		TransferJobID: r.job.jobID, ReceiveIntentDigest: r.job.intent.Digest(), ReceiveIntent: r.job.intent,
-		SelectionObservation: r.selectionObservation,
-		Progress:             progress, Directories: directories, Files: files,
+		Progress: progress, Directories: directories, Files: files,
 		OmittedDirectoryFailures: omittedDirectories, OmittedFileFailures: omittedFiles,
 		RevisionCleanupFailures:        r.revisionCleanupFailures,
 		OmittedRevisionCleanupFailures: r.omittedRevisionCleanupFailures,

@@ -2,6 +2,7 @@ package receivecontract
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 )
 
@@ -66,6 +67,27 @@ func copyIdentity(destination, raw []byte) bool {
 	return true
 }
 
+func marshalIdentityHex(raw []byte) ([]byte, error) {
+	if !nonZero(raw) {
+		return nil, ErrInvalidReceiveContract
+	}
+	encoded := make([]byte, hex.EncodedLen(len(raw)))
+	hex.Encode(encoded, raw)
+	return encoded, nil
+}
+
+func unmarshalIdentityHex(destination, text []byte) error {
+	if len(text) != hex.EncodedLen(len(destination)) {
+		return ErrInvalidReceiveContract
+	}
+	decoded := make([]byte, len(destination))
+	if _, err := hex.Decode(decoded, text); err != nil || !nonZero(decoded) {
+		return ErrInvalidReceiveContract
+	}
+	copy(destination, decoded)
+	return nil
+}
+
 func (id OperationID) Bytes() []byte              { return clone(id[:]) }
 func (id DestinationReservationID) Bytes() []byte { return clone(id[:]) }
 func (id AuthorityRef) Bytes() []byte             { return clone(id[:]) }
@@ -77,3 +99,29 @@ func (id DestinationReservationID) IsZero() bool { return id == DestinationReser
 func (id AuthorityRef) IsZero() bool             { return id == AuthorityRef{} }
 func (id ArtifactDigest) IsZero() bool           { return id == ArtifactDigest{} }
 func (id BindingDigest) IsZero() bool            { return id == BindingDigest{} }
+
+func (id OperationID) MarshalText() ([]byte, error)              { return marshalIdentityHex(id[:]) }
+func (id DestinationReservationID) MarshalText() ([]byte, error) { return marshalIdentityHex(id[:]) }
+func (id AuthorityRef) MarshalText() ([]byte, error)             { return marshalIdentityHex(id[:]) }
+func (id ArtifactDigest) MarshalText() ([]byte, error)           { return marshalIdentityHex(id[:]) }
+func (id BindingDigest) MarshalText() ([]byte, error)            { return marshalIdentityHex(id[:]) }
+
+func (id *OperationID) UnmarshalText(text []byte) error {
+	return unmarshalIdentityHex(id[:], text)
+}
+
+func (id *DestinationReservationID) UnmarshalText(text []byte) error {
+	return unmarshalIdentityHex(id[:], text)
+}
+
+func (id *AuthorityRef) UnmarshalText(text []byte) error {
+	return unmarshalIdentityHex(id[:], text)
+}
+
+func (id *ArtifactDigest) UnmarshalText(text []byte) error {
+	return unmarshalIdentityHex(id[:], text)
+}
+
+func (id *BindingDigest) UnmarshalText(text []byte) error {
+	return unmarshalIdentityHex(id[:], text)
+}

@@ -1,6 +1,7 @@
 package transfer
 
 import (
+	"encoding/json"
 	"errors"
 	"slices"
 	"testing"
@@ -9,28 +10,7 @@ import (
 	"github.com/windshare/windshare/core/content"
 )
 
-func TestSelectionObservationByteBoundaryOwnsItsInput(t *testing.T) {
-	observationBytes := make([]byte, SelectionObservationV1Bytes)
-	observationBytes[0] = 21
-	observation, err := SelectionObservationV1FromBytes(observationBytes)
-	if err != nil {
-		t.Fatal(err)
-	}
-	observationBytes[0] = 22
-	observationCopy := observation.Bytes()
-	observationCopy[0] = 23
-	if observation.Bytes()[0] != 21 {
-		t.Fatal("selection observation retained caller-owned byte storage")
-	}
-	if _, err := SelectionObservationV1FromBytes(make([]byte, SelectionObservationV1Bytes-1)); !errors.Is(err, ErrInvalidSelectionObservation) {
-		t.Fatalf("short selection observation error = %v", err)
-	}
-	if _, err := SelectionObservationV1FromBytes(make([]byte, SelectionObservationV1Bytes)); !errors.Is(err, ErrInvalidSelectionObservation) {
-		t.Fatalf("zero selection observation error = %v", err)
-	}
-}
-
-func TestSelectionSpecIsOrderedAndImmutable(t *testing.T) {
+func TestSelectionSpecIsOrderedAndRoundTripsJSON(t *testing.T) {
 	share := transferID[catalog.ShareInstance](41)
 	root := transferID[catalog.DirectoryID](42)
 	rulesA, err := NewPathSelectionRules([]string{"z.bin", "a.bin"})
@@ -46,13 +26,21 @@ func TestSelectionSpecIsOrderedAndImmutable(t *testing.T) {
 		t.Fatal(err)
 	}
 	requestB, err := NewSelectionSpec(share, root, rulesB)
-	if err != nil || !slices.Equal(requestA.Bytes(), requestB.Bytes()) {
+	if err != nil || !requestA.Equal(requestB) || requestA.Digest() != requestB.Digest() {
 		t.Fatalf("path-order normalization failed: %v", err)
 	}
-	requestBytes := requestA.Bytes()
-	requestBytes[0] ^= 0xff
-	if slices.Equal(requestBytes, requestA.Bytes()) {
-		t.Fatal("canonical request exposed internal byte storage")
+	encoded, err := json.Marshal(requestA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded SelectionSpec
+	if err := json.Unmarshal(encoded, &decoded); err != nil || !decoded.Equal(requestA) {
+		t.Fatalf("selection json round-trip = (%v, equal=%t)", err, decoded.Equal(requestA))
+	}
+	digestBytes := requestA.Digest().Bytes()
+	digestBytes[0] ^= 0xff
+	if slices.Equal(digestBytes, requestA.Digest().Bytes()) {
+		t.Fatal("selection digest exposed internal byte storage")
 	}
 
 	invalidRules := SelectionRules{}

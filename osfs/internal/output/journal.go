@@ -52,7 +52,11 @@ func createTaskJournal(opDir *Dir, meta taskMeta, now func() time.Time) (*taskJo
 		lastSync: now(),
 		now:      now,
 	}
-	rec := metaToRecord(meta, true)
+	rec, err := metaToRecord(meta, true)
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
 	if err := j.appendLocked(rec, true); err != nil {
 		_ = f.Close()
 		return nil, err
@@ -152,7 +156,11 @@ func (j *taskJournal) recordLifecycle(lifecycle string, attention AttentionReaso
 	next.Lifecycle = lifecycle
 	next.Attention = attention
 	next.StateGen++
-	return j.appendLocked(metaToRecord(next, false), true)
+	rec, err := metaToRecord(next, false)
+	if err != nil {
+		return err
+	}
+	return j.appendLocked(rec, true)
 }
 
 func (j *taskJournal) recordName(mapping NameMapping) error {
@@ -284,7 +292,11 @@ func (j *taskJournal) compactLocked() error {
 		lines++
 		return nil
 	}
-	if err := writeRec(metaToRecord(j.state.meta, true)); err != nil {
+	metaRec, err := metaToRecord(j.state.meta, true)
+	if err != nil {
+		return err
+	}
+	if err := writeRec(metaRec); err != nil {
 		return err
 	}
 	for _, m := range j.state.names {

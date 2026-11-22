@@ -2,6 +2,9 @@ package receivecontract
 
 import (
 	"bytes"
+	"encoding/hex"
+	"encoding/json"
+	"io"
 	"strings"
 	"unicode/utf8"
 
@@ -13,9 +16,7 @@ const (
 	resultRootLayoutDomain = "windshare/result-root-layout/v1"
 
 	DefaultResultRootName   = "windshare"
-	DefaultArchiveName      = "windshare.zip"
 	PartialSelectionSuffix  = "-selection"
-	ArchiveExtension        = ".zip"
 	ResultNamePolicy        = "windshare/result-name/v2-unicode-15.0.0"
 	MaxResultComponentBytes = catalog.MaxNameBytes
 	CollisionSuffixHexChars = 10
@@ -24,9 +25,7 @@ const (
 type ArtifactKind uint8
 
 const (
-	ArtifactOriginalFile ArtifactKind = iota + 1
-	ArtifactDirectoryTree
-	ArtifactZipArchive
+	ArtifactDirectoryTree ArtifactKind = 1
 )
 
 type DirectoryTreeLayoutKind uint8
@@ -52,14 +51,6 @@ const (
 	ResultRootSyntheticAnchor
 )
 
-type ZipEncoding uint8
-
-const ZipEncodingStore ZipEncoding = 1
-
-type ArtifactCompleteness uint8
-
-const ArtifactCompleteOnly ArtifactCompleteness = 1
-
 type OriginalFileSpec struct {
 	FileID        catalog.FileID
 	SourcePath    string
@@ -78,38 +69,14 @@ type ResultRootLayout struct {
 	directoryID catalog.DirectoryID
 	sourcePath  string
 	name        string
-	encoded     []byte
-}
-
-type ZipArchiveSpec struct {
-	Layout        ResultRootLayout
-	SuggestedName string
-	Encoding      ZipEncoding
-	Completeness  ArtifactCompleteness
+	valid       bool
 }
 
 type ArtifactSpec struct {
 	kind      ArtifactKind
-	original  OriginalFileSpec
 	directory DirectoryTreeLayout
-	zip       ZipArchiveSpec
-	encoded   []byte
 	digest    ArtifactDigest
-}
-
-func NewOriginalFileArtifact(file catalog.FileID, sourcePath, suggestedName string) (ArtifactSpec, error) {
-	canonicalPath, leaf, err := canonicalSourcePath(sourcePath)
-	if err != nil || file.IsZero() || suggestedName != leaf || canonicalComponent(suggestedName) != nil {
-		return ArtifactSpec{}, ErrInvalidReceiveContract
-	}
-	original := OriginalFileSpec{FileID: file, SourcePath: canonicalPath, SuggestedName: suggestedName}
-	encoded := canonicalRecord(artifactSpecDomain,
-		[]byte{byte(ArtifactOriginalFile)},
-		frame(file.Bytes()),
-		frame(canonicalPathBytes(canonicalPath)),
-		frame([]byte(suggestedName)),
-	)
-	return artifact(ArtifactOriginalFile, original, DirectoryTreeLayout{}, ZipArchiveSpec{}, encoded), nil
+	valid     bool
 }
 
 func NewSingleFileDirectoryTree(file catalog.FileID, sourcePath, outputName string) (ArtifactSpec, error) {
@@ -125,7 +92,7 @@ func NewSingleFileDirectoryTree(file catalog.FileID, sourcePath, outputName stri
 }
 
 func NewResultRootDirectoryTree(layout ResultRootLayout) (ArtifactSpec, error) {
-	if !layout.valid() {
+	if !layout.valid {
 		return ArtifactSpec{}, ErrInvalidReceiveContract
 	}
 	return newDirectoryTreeArtifact(DirectoryTreeLayout{kind: DirectoryTreeResultRoot, resultRoot: layout})
@@ -139,44 +106,21 @@ func NewCatalogRootDirectoryTree() ArtifactSpec {
 	return result
 }
 
-func NewZipArchiveArtifact(layout ResultRootLayout) (ArtifactSpec, error) {
-	if !layout.valid() {
-		return ArtifactSpec{}, ErrInvalidReceiveContract
-	}
-	name, err := AppendProtectedSuffix(layout.Name(), ArchiveExtension)
-	if err != nil {
-		return ArtifactSpec{}, err
-	}
-	zip := ZipArchiveSpec{
-		Layout: layout, SuggestedName: name,
-		Encoding: ZipEncodingStore, Completeness: ArtifactCompleteOnly,
-	}
-	encoded := canonicalRecord(artifactSpecDomain,
-		[]byte{byte(ArtifactZipArchive)},
-		frame(layout.CanonicalBytes()),
-		frame([]byte(name)),
-		frame([]byte{byte(ZipEncodingStore)}),
-		frame([]byte{byte(ArtifactCompleteOnly)}),
-	)
-	return artifact(ArtifactZipArchive, OriginalFileSpec{}, DirectoryTreeLayout{}, zip, encoded), nil
-}
-
 func newDirectoryTreeArtifact(layout DirectoryTreeLayout) (ArtifactSpec, error) {
 	if !layout.valid() {
 		return ArtifactSpec{}, ErrInvalidReceiveContract
 	}
-	encoded := canonicalRecord(artifactSpecDomain,
-		[]byte{byte(ArtifactDirectoryTree)}, frame(layout.canonicalBytes()),
-	)
-	return artifact(ArtifactDirectoryTree, OriginalFileSpec{}, layout, ZipArchiveSpec{}, encoded), nil
-}
-
-func artifact(kind ArtifactKind, original OriginalFileSpec, directory DirectoryTreeLayout, zip ZipArchiveSpec, encoded []byte) ArtifactSpec {
-	sum := digest(encoded)
+	sum := digest(canonicalRecord(
+		artifactSpecDomain,
+		[]byte{byte(ArtifactDirectoryTree)},
+		frame(layout.digestBytes()),
+	))
 	return ArtifactSpec{
-		kind: kind, original: original, directory: directory, zip: zip,
-		encoded: clone(encoded), digest: ArtifactDigest(sum),
-	}
+		kind:      ArtifactDirectoryTree,
+		directory: layout,
+		digest:    ArtifactDigest(sum),
+		valid:     true,
+	}, nil
 }
 
 func NewCompleteDirectoryResultRoot(directory catalog.DirectoryID, sourcePath string) (ResultRootLayout, error) {
@@ -223,7 +167,6 @@ func newResultRootLayout(
 	if canonicalComponent(name) != nil {
 		return ResultRootLayout{}, ErrInvalidReceiveContract
 	}
-	anchor := []byte{byte(anchorKind)}
 	switch {
 	case class == ResultRootSyntheticSelection && anchorKind == ResultRootSyntheticAnchor &&
 		directory.IsZero() && sourcePath == "" && name == DefaultResultRootName:
@@ -240,17 +183,12 @@ func newResultRootLayout(
 		if err != nil || name != expected {
 			return ResultRootLayout{}, ErrInvalidReceiveContract
 		}
-		anchor = append(anchor, frame(directory.Bytes())...)
-		anchor = append(anchor, frame(canonicalPathBytes(sourcePath))...)
 	default:
 		return ResultRootLayout{}, ErrInvalidReceiveContract
 	}
-	encoded := canonicalRecord(resultRootLayoutDomain,
-		frame([]byte{byte(class)}), frame(anchor), frame([]byte(name)),
-	)
 	return ResultRootLayout{
 		class: class, anchorKind: anchorKind, directoryID: directory,
-		sourcePath: sourcePath, name: name, encoded: encoded,
+		sourcePath: sourcePath, name: name, valid: true,
 	}, nil
 }
 
@@ -320,7 +258,18 @@ func canonicalPathBytes(path string) []byte {
 	return encoded
 }
 
-func (layout DirectoryTreeLayout) canonicalBytes() []byte {
+func (layout ResultRootLayout) digestBytes() []byte {
+	anchor := []byte{byte(layout.anchorKind)}
+	if layout.anchorKind == ResultRootDirectoryAnchor {
+		anchor = append(anchor, frame(layout.directoryID.Bytes())...)
+		anchor = append(anchor, frame(canonicalPathBytes(layout.sourcePath))...)
+	}
+	return canonicalRecord(resultRootLayoutDomain,
+		frame([]byte{byte(layout.class)}), frame(anchor), frame([]byte(layout.name)),
+	)
+}
+
+func (layout DirectoryTreeLayout) digestBytes() []byte {
 	encoded := []byte{byte(layout.kind)}
 	switch layout.kind {
 	case DirectoryTreeSingleFile:
@@ -328,7 +277,7 @@ func (layout DirectoryTreeLayout) canonicalBytes() []byte {
 		encoded = append(encoded, frame(canonicalPathBytes(layout.singleFile.SourcePath))...)
 		encoded = append(encoded, frame([]byte(layout.singleFile.SuggestedName))...)
 	case DirectoryTreeResultRoot:
-		encoded = append(encoded, frame(layout.resultRoot.CanonicalBytes())...)
+		encoded = append(encoded, frame(layout.resultRoot.digestBytes())...)
 	case DirectoryTreeCatalogRoot:
 	}
 	return encoded
@@ -341,53 +290,26 @@ func (layout DirectoryTreeLayout) valid() bool {
 		return err == nil && path == layout.singleFile.SourcePath && !layout.singleFile.FileID.IsZero() &&
 			leaf == layout.singleFile.SuggestedName
 	case DirectoryTreeResultRoot:
-		return layout.resultRoot.valid()
+		return layout.resultRoot.valid
 	case DirectoryTreeCatalogRoot:
-		return layout.singleFile == (OriginalFileSpec{}) && !layout.resultRoot.valid()
+		return layout.singleFile == (OriginalFileSpec{}) && !layout.resultRoot.valid
 	default:
 		return false
 	}
 }
 
-func (layout ResultRootLayout) valid() bool {
-	if len(layout.encoded) == 0 {
-		return false
-	}
-	rebuilt, err := newResultRootLayout(
-		layout.class, layout.anchorKind, layout.directoryID, layout.sourcePath, layout.name,
-	)
-	return err == nil && bytes.Equal(layout.encoded, rebuilt.encoded)
-}
-
-func (artifact ArtifactSpec) valid() bool {
-	if artifact.digest.IsZero() || len(artifact.encoded) == 0 {
-		return false
-	}
-	return ArtifactDigest(digest(artifact.encoded)) == artifact.digest
-}
-
 func (artifact ArtifactSpec) Kind() ArtifactKind                 { return artifact.kind }
 func (artifact ArtifactSpec) Digest() ArtifactDigest             { return artifact.digest }
-func (artifact ArtifactSpec) CanonicalBytes() []byte             { return clone(artifact.encoded) }
-func (artifact ArtifactSpec) IsZero() bool                       { return !artifact.valid() }
+func (artifact ArtifactSpec) IsZero() bool                       { return !artifact.valid }
 func (layout DirectoryTreeLayout) Kind() DirectoryTreeLayoutKind { return layout.kind }
 func (layout ResultRootLayout) Class() ResultRootClass           { return layout.class }
 func (layout ResultRootLayout) AnchorKind() ResultRootAnchorKind { return layout.anchorKind }
 func (layout ResultRootLayout) DirectoryID() catalog.DirectoryID { return layout.directoryID }
 func (layout ResultRootLayout) SourcePath() string               { return layout.sourcePath }
 func (layout ResultRootLayout) Name() string                     { return layout.name }
-func (layout ResultRootLayout) CanonicalBytes() []byte           { return clone(layout.encoded) }
-
-func (artifact ArtifactSpec) OriginalFile() (OriginalFileSpec, bool) {
-	return artifact.original, artifact.valid() && artifact.kind == ArtifactOriginalFile
-}
 
 func (artifact ArtifactSpec) DirectoryTree() (DirectoryTreeLayout, bool) {
-	return artifact.directory, artifact.valid() && artifact.kind == ArtifactDirectoryTree
-}
-
-func (artifact ArtifactSpec) ZipArchive() (ZipArchiveSpec, bool) {
-	return artifact.zip, artifact.valid() && artifact.kind == ArtifactZipArchive
+	return artifact.directory, artifact.valid && artifact.kind == ArtifactDirectoryTree
 }
 
 func (layout DirectoryTreeLayout) SingleFile() (OriginalFileSpec, bool) {
@@ -396,4 +318,149 @@ func (layout DirectoryTreeLayout) SingleFile() (OriginalFileSpec, bool) {
 
 func (layout DirectoryTreeLayout) ResultRoot() (ResultRootLayout, bool) {
 	return layout.resultRoot, layout.valid() && layout.kind == DirectoryTreeResultRoot
+}
+
+type artifactSpecJSON struct {
+	Layout     string          `json:"layout"`
+	SingleFile *singleFileJSON `json:"single_file,omitempty"`
+	ResultRoot *resultRootJSON `json:"result_root,omitempty"`
+}
+
+type singleFileJSON struct {
+	FileID        string `json:"file_id"`
+	SourcePath    string `json:"source_path"`
+	SuggestedName string `json:"suggested_name"`
+}
+
+type resultRootJSON struct {
+	Class       string `json:"class"`
+	DirectoryID string `json:"directory_id,omitempty"`
+	SourcePath  string `json:"source_path,omitempty"`
+}
+
+func (artifact ArtifactSpec) MarshalJSON() ([]byte, error) {
+	if artifact.IsZero() {
+		return nil, ErrInvalidReceiveContract
+	}
+	var payload artifactSpecJSON
+	switch artifact.directory.kind {
+	case DirectoryTreeSingleFile:
+		single := artifact.directory.singleFile
+		payload.Layout = "single_file"
+		payload.SingleFile = &singleFileJSON{
+			FileID:        hex.EncodeToString(single.FileID.Bytes()),
+			SourcePath:    single.SourcePath,
+			SuggestedName: single.SuggestedName,
+		}
+	case DirectoryTreeResultRoot:
+		root := artifact.directory.resultRoot
+		payload.Layout = "result_root"
+		var className string
+		switch root.class {
+		case ResultRootCompleteDirectory:
+			className = "complete_directory"
+		case ResultRootDirectorySelection:
+			className = "directory_selection"
+		case ResultRootSyntheticSelection:
+			className = "synthetic_selection"
+		default:
+			return nil, ErrInvalidReceiveContract
+		}
+		dto := &resultRootJSON{Class: className, SourcePath: root.sourcePath}
+		if !root.directoryID.IsZero() {
+			dto.DirectoryID = hex.EncodeToString(root.directoryID.Bytes())
+		}
+		payload.ResultRoot = dto
+	case DirectoryTreeCatalogRoot:
+		payload.Layout = "catalog_root"
+	default:
+		return nil, ErrInvalidReceiveContract
+	}
+	return json.Marshal(payload)
+}
+
+func (artifact *ArtifactSpec) UnmarshalJSON(data []byte) error {
+	var payload artifactSpecJSON
+	if err := decodeStrictJSON(data, &payload); err != nil {
+		return ErrInvalidReceiveContract
+	}
+	switch payload.Layout {
+	case "single_file":
+		if payload.SingleFile == nil || payload.ResultRoot != nil {
+			return ErrInvalidReceiveContract
+		}
+		rawID, err := hex.DecodeString(payload.SingleFile.FileID)
+		if err != nil {
+			return ErrInvalidReceiveContract
+		}
+		fileID, err := catalog.FileIDFromBytes(rawID)
+		if err != nil {
+			return ErrInvalidReceiveContract
+		}
+		rebuilt, err := NewSingleFileDirectoryTree(fileID, payload.SingleFile.SourcePath, payload.SingleFile.SuggestedName)
+		if err != nil {
+			return err
+		}
+		*artifact = rebuilt
+		return nil
+	case "result_root":
+		if payload.ResultRoot == nil || payload.SingleFile != nil {
+			return ErrInvalidReceiveContract
+		}
+		var layout ResultRootLayout
+		var err error
+		switch payload.ResultRoot.Class {
+		case "complete_directory", "directory_selection":
+			rawID, hexErr := hex.DecodeString(payload.ResultRoot.DirectoryID)
+			if hexErr != nil {
+				return ErrInvalidReceiveContract
+			}
+			dirID, idErr := catalog.DirectoryIDFromBytes(rawID)
+			if idErr != nil {
+				return ErrInvalidReceiveContract
+			}
+			if payload.ResultRoot.Class == "complete_directory" {
+				layout, err = NewCompleteDirectoryResultRoot(dirID, payload.ResultRoot.SourcePath)
+			} else {
+				layout, err = NewDirectorySelectionResultRoot(dirID, payload.ResultRoot.SourcePath)
+			}
+		case "synthetic_selection":
+			if payload.ResultRoot.DirectoryID != "" || payload.ResultRoot.SourcePath != "" {
+				return ErrInvalidReceiveContract
+			}
+			layout = NewSyntheticSelectionResultRoot()
+		default:
+			return ErrInvalidReceiveContract
+		}
+		if err != nil {
+			return err
+		}
+		rebuilt, err := NewResultRootDirectoryTree(layout)
+		if err != nil {
+			return err
+		}
+		*artifact = rebuilt
+		return nil
+	case "catalog_root":
+		if payload.SingleFile != nil || payload.ResultRoot != nil {
+			return ErrInvalidReceiveContract
+		}
+		*artifact = NewCatalogRootDirectoryTree()
+		return nil
+	default:
+		return ErrInvalidReceiveContract
+	}
+}
+
+func decodeStrictJSON(data []byte, dst any) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
+		return err
+	}
+	var trailing any
+	if err := dec.Decode(&trailing); err != io.EOF {
+		return ErrInvalidReceiveContract
+	}
+	return nil
 }

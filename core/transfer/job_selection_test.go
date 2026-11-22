@@ -192,7 +192,6 @@ func TestTransferJobPausesWithoutAdmittingFailedRootPrefix(t *testing.T) {
 
 	result := job.Run(context.Background())
 	if result.Outcome != DirectTreeOutcomePaused || len(result.Directories) != 1 ||
-		!result.SelectionObservation.IsZero() ||
 		result.TerminationFault != mustCatalogFault(fault.ScopeSessionTerminal, fault.CatalogInvalidGeneration) ||
 		len(revisions.order) != 0 || output.pauseCalls != 1 || output.completeCalls != 0 {
 		t.Fatalf("result=%+v revision opens=%v", result, revisions.order)

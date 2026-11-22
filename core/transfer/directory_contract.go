@@ -70,7 +70,7 @@ type DirectoryAdmissionScope struct {
 }
 
 func NewDirectoryAdmissionScope(intent ReceiveIntent) (DirectoryAdmissionScope, error) {
-	if !intent.valid() {
+	if intent.IsZero() {
 		return DirectoryAdmissionScope{}, ErrInvalidDirectoryAdmission
 	}
 	artifact := intent.ArtifactSpec()
@@ -428,6 +428,19 @@ func appendDirectoryAdmissionRootExpectation(
 	}
 	target = appendDirectoryAdmissionFrame(target, root.DirectoryID().Bytes())
 	return appendDirectoryAdmissionFrame(target, canonicalDirectoryAdmissionPath(root.Path()))
+}
+
+func appendCanonicalUint64Count(destination []byte, count uint64) []byte {
+	var encoded [8]byte
+	binary.BigEndian.PutUint64(encoded[:], count)
+	return append(destination, encoded[:]...)
+}
+
+func appendCanonicalField(destination, value []byte) []byte {
+	var length [8]byte
+	binary.BigEndian.PutUint64(length[:], uint64(len(value)))
+	destination = append(destination, length[:]...)
+	return append(destination, value...)
 }
 
 func appendDirectoryAdmissionFrame(target, value []byte) []byte {

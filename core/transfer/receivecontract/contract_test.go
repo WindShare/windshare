@@ -2,6 +2,7 @@ package receivecontract
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -81,15 +82,27 @@ func TestIdentityValuesRejectMissingAuthorityAndDefendBytes(t *testing.T) {
 	if _, err := BindingDigestFromBytes(make([]byte, AuthorityRefBytes)); !errors.Is(err, ErrInvalidReceiveContract) {
 		t.Fatalf("zero binding digest error=%v", err)
 	}
-}
 
-func TestArtifactVariantsPreserveOneCanonicalLayout(t *testing.T) {
-	file := contractID[catalog.FileID](10)
-	directory := contractID[catalog.DirectoryID](11)
-	original, err := NewOriginalFileArtifact(file, "docs/report.txt", "report.txt")
+	// Text round-trip and rejection of zero/malformed hex.
+	text, err := operation.MarshalText()
 	if err != nil {
 		t.Fatal(err)
 	}
+	var decodedOp OperationID
+	if err := decodedOp.UnmarshalText(text); err != nil || decodedOp != operation {
+		t.Fatalf("operation text round-trip = (%x, %v)", decodedOp, err)
+	}
+	if _, err := (OperationID{}).MarshalText(); !errors.Is(err, ErrInvalidReceiveContract) {
+		t.Fatalf("zero operation marshal error=%v", err)
+	}
+	if err := decodedOp.UnmarshalText([]byte("zz")); !errors.Is(err, ErrInvalidReceiveContract) {
+		t.Fatalf("invalid hex unmarshal error=%v", err)
+	}
+}
+
+func TestArtifactVariantsPreserveDistinctDigestsAndJSONRoundTrip(t *testing.T) {
+	file := contractID[catalog.FileID](10)
+	directory := contractID[catalog.DirectoryID](11)
 	single, err := NewSingleFileDirectoryTree(file, "docs/report.txt", "report.txt")
 	if err != nil {
 		t.Fatal(err)
@@ -98,39 +111,56 @@ func TestArtifactVariantsPreserveOneCanonicalLayout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	completeTree, err := NewResultRootDirectoryTree(complete)
+	if err != nil {
+		t.Fatal(err)
+	}
 	selected, err := NewDirectorySelectionResultRoot(directory, "docs")
 	if err != nil {
 		t.Fatal(err)
 	}
-	synthetic := NewSyntheticSelectionResultRoot()
 	resultTree, err := NewResultRootDirectoryTree(selected)
 	if err != nil {
 		t.Fatal(err)
 	}
-	catalogTree := NewCatalogRootDirectoryTree()
-	archive, err := NewZipArchiveArtifact(complete)
+	synthetic := NewSyntheticSelectionResultRoot()
+	syntheticTree, err := NewResultRootDirectoryTree(synthetic)
 	if err != nil {
 		t.Fatal(err)
 	}
+	catalogTree := NewCatalogRootDirectoryTree()
 
-	if original.Kind() != ArtifactOriginalFile || original.Digest().IsZero() || original.IsZero() ||
-		single.Kind() != ArtifactDirectoryTree || resultTree.Kind() != ArtifactDirectoryTree ||
-		catalogTree.Kind() != ArtifactDirectoryTree || archive.Kind() != ArtifactZipArchive {
-		t.Fatal("artifact discriminant or digest mismatch")
+	for name, artifact := range map[string]ArtifactSpec{
+		"single":    single,
+		"complete":  completeTree,
+		"selection": resultTree,
+		"synthetic": syntheticTree,
+		"catalog":   catalogTree,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if artifact.Kind() != ArtifactDirectoryTree || artifact.Digest().IsZero() || artifact.IsZero() {
+				t.Fatalf("invalid artifact=%+v", artifact)
+			}
+			encoded, err := json.Marshal(artifact)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decoded ArtifactSpec
+			if err := json.Unmarshal(encoded, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if decoded.Digest() != artifact.Digest() || decoded.IsZero() {
+				t.Fatalf("json round-trip digest=%x want=%x", decoded.Digest(), artifact.Digest())
+			}
+		})
 	}
-	originalValue, ok := original.OriginalFile()
-	if !ok || originalValue.FileID != file || originalValue.SourcePath != "docs/report.txt" ||
-		originalValue.SuggestedName != "report.txt" {
-		t.Fatalf("original=%+v ok=%v", originalValue, ok)
-	}
-	if _, ok := original.DirectoryTree(); ok {
-		t.Fatal("original exposed directory payload")
-	}
+
 	singleLayout, ok := single.DirectoryTree()
 	if !ok || singleLayout.Kind() != DirectoryTreeSingleFile {
 		t.Fatalf("single layout=%+v ok=%v", singleLayout, ok)
 	}
-	if value, ok := singleLayout.SingleFile(); !ok || value != originalValue {
+	if value, ok := singleLayout.SingleFile(); !ok || value.FileID != file ||
+		value.SourcePath != "docs/report.txt" || value.SuggestedName != "report.txt" {
 		t.Fatalf("single file=%+v ok=%v", value, ok)
 	}
 	resultLayout, ok := resultTree.DirectoryTree()
@@ -143,15 +173,8 @@ func TestArtifactVariantsPreserveOneCanonicalLayout(t *testing.T) {
 		synthetic.Name() != DefaultResultRootName || synthetic.DirectoryID() != (catalog.DirectoryID{}) {
 		t.Fatalf("synthetic=%+v", synthetic)
 	}
-	zip, ok := archive.ZipArchive()
-	if !ok || zip.Layout.Name() != "docs" || zip.SuggestedName != "docs.zip" ||
-		zip.Encoding != ZipEncodingStore || zip.Completeness != ArtifactCompleteOnly {
-		t.Fatalf("zip=%+v ok=%v", zip, ok)
-	}
-	canonical := archive.CanonicalBytes()
-	canonical[0] ^= 0xff
-	if bytes.Equal(canonical, archive.CanonicalBytes()) || bytes.Equal(selected.CanonicalBytes(), synthetic.CanonicalBytes()) {
-		t.Fatal("canonical artifact bytes were mutable or variants collided")
+	if resultTree.Digest() == syntheticTree.Digest() || completeTree.Digest() == resultTree.Digest() {
+		t.Fatal("distinct artifact variants collided on digest")
 	}
 
 	longName := strings.Repeat("界", 84)
@@ -159,17 +182,17 @@ func TestArtifactVariantsPreserveOneCanonicalLayout(t *testing.T) {
 	if err != nil || len([]byte(protected)) > MaxResultComponentBytes || !strings.HasSuffix(protected, PartialSelectionSuffix) {
 		t.Fatalf("protected=%q bytes=%d err=%v", protected, len([]byte(protected)), err)
 	}
-	invalidOriginals := []struct{ path, name string }{
+	invalidSingles := []struct{ path, name string }{
 		{"docs/report.txt", "other.txt"}, {"docs/../report.txt", "report.txt"},
 		{"docs/a\u202eb", "a\u202eb"}, {"", ""},
 	}
-	for _, test := range invalidOriginals {
-		if _, err := NewOriginalFileArtifact(file, test.path, test.name); !errors.Is(err, ErrInvalidReceiveContract) {
-			t.Fatalf("invalid original %+v error=%v", test, err)
+	for _, test := range invalidSingles {
+		if _, err := NewSingleFileDirectoryTree(file, test.path, test.name); !errors.Is(err, ErrInvalidReceiveContract) {
+			t.Fatalf("invalid single %+v error=%v", test, err)
 		}
 	}
-	if _, err := NewOriginalFileArtifact(file, "docs/.wsresume-file", ".wsresume-file"); err != nil {
-		t.Fatalf("valid logical marker-shaped original file rejected: %v", err)
+	if _, err := NewSingleFileDirectoryTree(file, "docs/.wsresume-file", ".wsresume-file"); err != nil {
+		t.Fatalf("valid logical marker-shaped single file rejected: %v", err)
 	}
 	if _, err := NewSingleFileDirectoryTree(catalog.FileID{}, "report.txt", "report.txt"); !errors.Is(err, ErrInvalidReceiveContract) {
 		t.Fatalf("zero single-file error=%v", err)
@@ -180,13 +203,10 @@ func TestArtifactVariantsPreserveOneCanonicalLayout(t *testing.T) {
 	if _, err := NewResultRootDirectoryTree(ResultRootLayout{}); !errors.Is(err, ErrInvalidReceiveContract) {
 		t.Fatalf("zero result-root error=%v", err)
 	}
-	if _, err := NewZipArchiveArtifact(ResultRootLayout{}); !errors.Is(err, ErrInvalidReceiveContract) {
-		t.Fatalf("zero zip root error=%v", err)
-	}
 	if _, err := AppendProtectedSuffix("name", ""); !errors.Is(err, ErrInvalidReceiveContract) {
 		t.Fatalf("empty suffix error=%v", err)
 	}
-	if _, ok := (ArtifactSpec{}).OriginalFile(); ok || !(ArtifactSpec{}).IsZero() {
+	if _, ok := (ArtifactSpec{}).DirectoryTree(); ok || !(ArtifactSpec{}).IsZero() {
 		t.Fatal("zero artifact exposed a variant")
 	}
 }
@@ -197,12 +217,10 @@ func TestReservationsBindingsAndPlansAreClosed(t *testing.T) {
 	authority := mustIdentity(AuthorityRefFromBytes(contractOpaque(23)))
 	file := contractID[catalog.FileID](27)
 	directory := contractID[catalog.DirectoryID](28)
-	original, _ := NewOriginalFileArtifact(file, "report.txt", "report.txt")
 	single, _ := NewSingleFileDirectoryTree(file, "report.txt", "report.txt")
 	root, _ := NewDirectorySelectionResultRoot(directory, "docs")
 	tree, _ := NewResultRootDirectoryTree(root)
 	catalogTree := NewCatalogRootDirectoryTree()
-	archive, _ := NewZipArchiveArtifact(root)
 
 	nativeRoot, err := NewNativeContainerRootReservation(operation, reservationID, catalogTree, authority)
 	if err != nil {
@@ -210,100 +228,60 @@ func TestReservationsBindingsAndPlansAreClosed(t *testing.T) {
 	}
 	singleName, _ := CollisionName(operation, "report.txt", 1, true)
 	nativeEntry, err := NewNativeNamedEntryReservation(
-		operation,
-		reservationID,
-		single,
-		authority,
-		singleName,
-		singleName,
-		1,
+		operation, reservationID, single, authority, singleName, singleName, 1,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	resultName, _ := CollisionName(operation, "docs-selection", 2, false)
 	resultEntry, err := NewNativeNamedEntryReservation(
-		operation,
-		reservationID,
-		tree,
-		authority,
-		resultName,
-		resultName,
-		2,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	atomicName, _ := CollisionName(operation, "report.txt", 3, true)
-	atomic, err := NewManagedAtomicReservation(
-		operation, reservationID, original, authority, NameUserChosen, "report.txt", atomicName, 3,
+		operation, reservationID, tree, authority, resultName, resultName, 2,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	if nativeRoot.Kind() != ReservationContainerRoot || nativeRoot.OperationID() != operation ||
-		nativeRoot.ID() != reservationID || nativeRoot.AuthorityKind() != AuthorityNativeContainer ||
-		nativeRoot.AuthorityRef() != authority || nativeRoot.Guarantees() != NativeTreeGuarantees() ||
+		nativeRoot.ID() != reservationID || nativeRoot.AuthorityRef() != authority ||
 		nativeRoot.ArtifactDigest() != catalogTree.Digest() || nativeRoot.Digest().IsZero() {
 		t.Fatalf("native root=%+v", nativeRoot)
 	}
 	if nativeEntry.Kind() != ReservationNamedContainerEntry || nativeEntry.EntryKind() != ContainerEntrySingleFile ||
 		nativeEntry.RequestedName() != "report.txt" || nativeEntry.LogicalReservedName() != singleName ||
-		nativeEntry.PhysicalName() != singleName ||
-		nativeEntry.CollisionIndex() != 1 || resultEntry.Guarantees() != NativeTreeGuarantees() ||
-		atomic.Kind() != ReservationAtomicTarget || atomic.RequestedName() != "report.txt" ||
-		atomic.ReservedName() != atomicName || atomic.Guarantees().NameChooser() != NameUserChosen {
+		nativeEntry.PhysicalName() != singleName || nativeEntry.CollisionIndex() != 1 {
 		t.Fatal("reservation variant fields mismatch")
 	}
-	if atomic.Guarantees().Profile() != GuaranteeManagedAtomic ||
-		atomic.Guarantees().Replacement() != ReplacementAtomicNoReplace ||
-		atomic.Guarantees().Delivery() != DeliveryManagedTarget ||
-		atomic.Guarantees().TargetVisibility() != TargetHiddenUntilVerifiedPublication ||
-		atomic.Guarantees().ArtifactAvailability() != ArtifactVerifiedCompleteOnly ||
-		atomic.Guarantees().CleanupContract() != CleanupRollbackToAbsentBeforePublication {
-		t.Fatalf("atomic guarantees=%+v", atomic.Guarantees())
-	}
-	if _, err := ManagedAtomicGuarantees(NameChooser(0xff)); !errors.Is(err, ErrInvalidReceiveContract) {
-		t.Fatalf("invalid managed guarantee error=%v", err)
-	}
 
-	directTree, err := NewDirectTreePlan(catalogTree, nativeRoot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := NewDirectTreePlan(single, nativeEntry); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := NewDirectTreePlan(tree, resultEntry); err != nil {
-		t.Fatal(err)
-	}
-	directAtomic, err := NewDirectAtomicPlan(original, atomic)
-	if err != nil {
-		t.Fatal(err)
-	}
-	plans := []struct {
-		plan        MaterializationPlan
-		kind        MaterializationPlanKind
-		preparation PreparationPolicy
+	cases := []struct {
+		name        string
+		artifact    ArtifactSpec
+		reservation DestinationReservation
 	}{
-		{directTree, PlanDirectTree, PreparationNone},
-		{directAtomic, PlanDirectAtomic, PreparationNone},
+		{"catalog-root", catalogTree, nativeRoot},
+		{"single-file", single, nativeEntry},
+		{"result-root", tree, resultEntry},
 	}
-	for _, test := range plans {
-		if test.plan.IsZero() || test.plan.Kind() != test.kind || test.plan.Preparation() != test.preparation ||
-			test.plan.OperationID() != operation || test.plan.ArtifactDigest().IsZero() ||
-			test.plan.BindingDigest().IsZero() || len(test.plan.CanonicalBytes()) == 0 {
-			t.Fatalf("plan=%+v", test.plan)
-		}
-	}
-	if value, ok := directTree.DestinationReservation(); !ok || value.Digest() != nativeRoot.Digest() {
-		t.Fatalf("direct binding=%+v ok=%v", value, ok)
-	}
-	canonical := atomic.CanonicalBytes()
-	canonical[0] ^= 0xff
-	if bytes.Equal(canonical, atomic.CanonicalBytes()) {
-		t.Fatal("binding canonical storage or validity mismatch")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			plan, err := NewDirectTreePlan(tc.artifact, tc.reservation)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if plan.IsZero() || plan.Kind() != PlanDirectTree ||
+				plan.OperationID() != operation || plan.ArtifactDigest() != tc.artifact.Digest() ||
+				plan.BindingDigest() != tc.reservation.Digest() {
+				t.Fatalf("plan=%+v", plan)
+			}
+			raw, err := json.Marshal(plan)
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoded, err := UnmarshalMaterializationPlanJSON(raw, tc.artifact)
+			if err != nil || decoded.BindingDigest() != plan.BindingDigest() ||
+				decoded.OperationID() != plan.OperationID() {
+				t.Fatalf("plan json round-trip=(%+v, %v)", decoded, err)
+			}
+		})
 	}
 
 	if unchanged, err := CollisionName(operation, "report.txt", 0, true); err != nil || unchanged != "report.txt" {
@@ -316,24 +294,9 @@ func TestReservationsBindingsAndPlansAreClosed(t *testing.T) {
 		t.Fatalf("result tree accepted as container root: %v", err)
 	}
 	if _, err := NewNativeNamedEntryReservation(
-		operation,
-		reservationID,
-		single,
-		authority,
-		"wrong.txt",
-		"wrong.txt",
-		1,
+		operation, reservationID, single, authority, "wrong.txt", "wrong.txt", 1,
 	); !errors.Is(err, ErrInvalidReceiveContract) {
 		t.Fatalf("wrong collision name accepted: %v", err)
-	}
-	if _, err := NewManagedAtomicReservation(operation, reservationID, tree, authority, NameApplicationChosen, "docs-selection", "docs-selection", 0); !errors.Is(err, ErrInvalidReceiveContract) {
-		t.Fatalf("tree accepted as atomic artifact: %v", err)
-	}
-	if _, err := NewManagedAtomicReservation(operation, reservationID, archive, authority, NameApplicationChosen, "renamed.zip", "renamed.zip", 0); !errors.Is(err, ErrInvalidReceiveContract) {
-		t.Fatalf("application-named atomic target accepted a foreign artifact name: %v", err)
-	}
-	if _, err := NewDirectAtomicPlan(archive, atomic); !errors.Is(err, ErrInvalidReceiveContract) {
-		t.Fatalf("mismatched atomic reservation accepted: %v", err)
 	}
 	if !(MaterializationPlan{}).IsZero() || (MaterializationPlan{}).OperationID() != (OperationID{}) ||
 		(MaterializationPlan{}).ArtifactDigest() != (ArtifactDigest{}) ||
@@ -346,7 +309,6 @@ func TestReceiveContractArtifactEdgeCases(t *testing.T) {
 	file := contractID[catalog.FileID](27)
 	directory := contractID[catalog.DirectoryID](28)
 
-	// AppendProtectedSuffix edge cases
 	if _, err := AppendProtectedSuffix("", ".zip"); !errors.Is(err, ErrInvalidReceiveContract) {
 		t.Fatal("empty base allowed")
 	}
@@ -366,25 +328,11 @@ func TestReceiveContractArtifactEdgeCases(t *testing.T) {
 		t.Fatal("oversized suffix allowed")
 	}
 
-	// NewZipArchiveArtifact with invalid layout
-	if _, err := NewZipArchiveArtifact(ResultRootLayout{}); !errors.Is(err, ErrInvalidReceiveContract) {
-		t.Fatal("invalid layout zip allowed")
-	}
-
-	// NewCompleteDirectoryResultRoot & NewDirectorySelectionResultRoot with invalid params
 	if _, err := NewCompleteDirectoryResultRoot(catalog.DirectoryID{}, "folder"); !errors.Is(err, ErrInvalidReceiveContract) {
 		t.Fatal("zero directory id allowed")
 	}
 	if _, err := NewDirectorySelectionResultRoot(catalog.DirectoryID{}, "folder"); !errors.Is(err, ErrInvalidReceiveContract) {
 		t.Fatal("zero directory id allowed")
-	}
-
-	// NewOriginalFileArtifact & NewSingleFileDirectoryTree with invalid params
-	if _, err := NewOriginalFileArtifact(catalog.FileID{}, "file.txt", "file.txt"); !errors.Is(err, ErrInvalidReceiveContract) {
-		t.Fatal("zero file id original allowed")
-	}
-	if _, err := NewOriginalFileArtifact(file, "folder/file.txt", "wrong.txt"); !errors.Is(err, ErrInvalidReceiveContract) {
-		t.Fatal("mismatched suggested name allowed")
 	}
 	if _, err := NewSingleFileDirectoryTree(catalog.FileID{}, "file.txt", "file.txt"); !errors.Is(err, ErrInvalidReceiveContract) {
 		t.Fatal("zero file id single allowed")
@@ -393,18 +341,31 @@ func TestReceiveContractArtifactEdgeCases(t *testing.T) {
 		t.Fatal("mismatched output name allowed")
 	}
 
-	// ResultRootLayout getters and zero checks
 	root, err := NewDirectorySelectionResultRoot(directory, "docs")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if root.Class() != ResultRootDirectorySelection || root.AnchorKind() != ResultRootDirectoryAnchor ||
-		root.DirectoryID() != directory || root.SourcePath() != "docs" || root.Name() != "docs-selection" ||
-		len(root.CanonicalBytes()) == 0 {
+		root.DirectoryID() != directory || root.SourcePath() != "docs" || root.Name() != "docs-selection" {
 		t.Fatalf("result root getters drifted: %+v", root)
 	}
 	synthetic := NewSyntheticSelectionResultRoot()
 	if synthetic.Class() != ResultRootSyntheticSelection || synthetic.AnchorKind() != ResultRootSyntheticAnchor {
 		t.Fatalf("synthetic root getters drifted: %+v", synthetic)
+	}
+
+	// Malformed JSON inputs must fail closed.
+	for _, raw := range []string{
+		`{}`,
+		`{"layout":"unknown"}`,
+		`{"layout":"catalog_root","extra":true}`,
+		`{"layout":"catalog_root"} trailing`,
+		`{"layout":"single_file","single_file":{"file_id":"bad","source_path":"a","suggested_name":"a"}}`,
+		`{"layout":"result_root","result_root":{"class":"synthetic_selection","source_path":"x"}}`,
+	} {
+		var dst ArtifactSpec
+		if err := json.Unmarshal([]byte(raw), &dst); err == nil {
+			t.Fatalf("malformed artifact json %s accepted", raw)
+		}
 	}
 }

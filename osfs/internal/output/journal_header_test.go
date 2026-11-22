@@ -68,7 +68,7 @@ func TestReadJournalHeaderReadsOnlyImmutableFirstRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("readJournalHeader = %v, want nil", err)
 	}
-	if !header.Intent.EqualCanonical(intent) ||
+	if !header.Intent.Equal(intent) ||
 		header.SelectionDigest != intent.SelectionSpec().Digest() ||
 		header.Redownload {
 		t.Fatalf("readJournalHeader mismatch: got %+v, want intent=%x redownload=false", header, intent.Digest())

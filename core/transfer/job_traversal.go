@@ -232,7 +232,6 @@ type jobRun struct {
 	settlement                     DirectTreeSettlement
 	admitted                       bool
 	needsAttention                 bool
-	selectionObservation           SelectionObservationV1
 	selectionResolutionFailure     error
 	missingSelectionPaths          []string
 	matchedPaths                   map[string]struct{}

@@ -69,7 +69,7 @@ func TestCoverageC6OutputAuthorityProjectsLeaseAndDiagnostics(t *testing.T) {
 		t.Fatalf("reopen lookup = (%d, %v)", reopenedLookup.Kind(), err)
 	}
 	reopenedIntent, ok := reopenedLookup.Operation().ReceiveIntent()
-	if !ok || !reopenedIntent.EqualCanonical(intent) {
+	if !ok || !reopenedIntent.Equal(intent) {
 		t.Fatal("reopen changed its frozen intent")
 	}
 	reopened, err := reopenedLookup.Operation().OpenDirectTree(ctx, reopenedIntent)
@@ -133,7 +133,7 @@ func TestCoverageC6OutputAuthorityProjectsLeaseAndDiagnostics(t *testing.T) {
 	}
 }
 
-func TestCoverageC6OutputAuthorityRejectsNonTreeArtifact(t *testing.T) {
+func TestCoverageC6OutputAuthorityRejectsZeroArtifact(t *testing.T) {
 	ctx := context.Background()
 	root := filepath.Join(t.TempDir(), "output-root")
 	authority, err := NewOutputAuthority(OutputConfig{RootPath: root, CreateRoot: true})
@@ -160,14 +160,8 @@ func TestCoverageC6OutputAuthorityRejectsNonTreeArtifact(t *testing.T) {
 	if err != nil || lookup.Kind() != OutputLookupCreateReady {
 		t.Fatalf("lookup = (%d, %v)", lookup.Kind(), err)
 	}
-	artifact, err := receivecontract.NewOriginalFileArtifact(
-		coverageC6Identity[catalog.FileID](0xa4), "source.bin", "source.bin",
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := lookup.Create(ctx, artifact); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
-		t.Fatalf("non-tree creation = %v, want invalid binding", err)
+	if _, err := lookup.Create(ctx, receivecontract.ArtifactSpec{}); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
+		t.Fatalf("zero artifact creation = %v, want invalid binding", err)
 	}
 	if entries, err := os.ReadDir(root); err != nil || len(entries) != 0 {
 		t.Fatalf("rejected artifact created output entries: %v, %v", entries, err)

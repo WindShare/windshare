@@ -144,10 +144,7 @@ type JobResult struct {
 	TransferJobID       TransferJobID
 	ReceiveIntentDigest ReceiveIntentDigest
 	ReceiveIntent       ReceiveIntent
-	// SelectionObservation is diagnostic only and is normally zero for the
-	// incremental path, which does not materialize a whole-tree snapshot.
-	SelectionObservation           SelectionObservationV1
-	Progress                       ReceiveProgressSnapshot
+	Progress            ReceiveProgressSnapshot
 	Directories                    []DirectoryJobFailure
 	Files                          []FileJobFailure
 	OmittedDirectoryFailures       uint64
@@ -271,7 +268,7 @@ type TransferJob struct {
 
 func NewTransferJob(config TransferJobConfig) (*TransferJob, error) {
 	intent := config.ReceiveIntent
-	if !intent.valid() || intent.MaterializationPlan().Kind() != receivecontract.PlanDirectTree ||
+	if intent.IsZero() || intent.MaterializationPlan().Kind() != receivecontract.PlanDirectTree ||
 		config.JobID.IsZero() ||
 		config.Catalog == nil || config.Revisions == nil || config.Blocks == nil || config.Materializer == nil ||
 		config.SettlementTimeout < 0 || config.SettlementTimeout > MaximumOutputSettlementTimeout ||

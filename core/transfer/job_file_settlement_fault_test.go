@@ -1,7 +1,6 @@
 package transfer
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -664,11 +663,10 @@ func TestTransferJobValidationEmptySelectionAndFailureBranches(t *testing.T) {
 		t.Fatal(err)
 	}
 	if emptyJob.JobID() != baseConfig.JobID ||
-		!emptyJob.ReceiveIntent().EqualCanonical(baseConfig.ReceiveIntent) ||
+		!emptyJob.ReceiveIntent().Equal(baseConfig.ReceiveIntent) ||
 		emptyJob.ReceiveIntentDigest() != baseConfig.ReceiveIntent.Digest() ||
 		emptyJob.ReceiveIntent().SelectionMode() != emptyRules.Mode() ||
-		len(emptyJob.ReceiveIntent().SelectionSpec().Digest().Bytes()) != SelectionSpecDigestBytes ||
-		!bytes.Equal(emptyJob.ReceiveIntent().Bytes(), baseConfig.ReceiveIntent.CanonicalBytes()) {
+		len(emptyJob.ReceiveIntent().SelectionSpec().Digest().Bytes()) != SelectionSpecDigestBytes {
 		t.Fatal("job accessors lost immutable receive authority")
 	}
 	if result := emptyJob.Run(context.Background()); result.Outcome != DirectTreeOutcomeSuccess || result.Progress.ConnectionSizeClass() != ConnectionSizeSmall || emptyOutput.finished != DirectTreeOutcomeSuccess {

@@ -134,9 +134,7 @@ func openNativeDirectTreeTestSession(
 	if !directoryTree || layout.Kind() != receivecontract.DirectoryTreeResultRoot || !namedRoot ||
 		resultRoot.Class() != receivecontract.ResultRootSyntheticSelection ||
 		intent.MaterializationPlan().Kind() != receivecontract.PlanDirectTree || !reserved ||
-		reservation.AuthorityKind() != receivecontract.AuthorityNativeContainer ||
-		reservation.EntryKind() != receivecontract.ContainerEntryResultRoot ||
-		reservation.Guarantees().Profile() != receivecontract.GuaranteeNativeTree {
+		reservation.EntryKind() != receivecontract.ContainerEntryResultRoot {
 		t.Fatalf("native CLI layout was not explicit: artifact=%v plan=%v", intent.ArtifactSpec().Kind(), intent.MaterializationPlan().Kind())
 	}
 	session, err := operation.OpenDirectTree(context.Background(), intent)

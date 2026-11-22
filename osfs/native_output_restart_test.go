@@ -4,6 +4,7 @@ package osfs
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -46,7 +47,11 @@ func TestNativeOutputProcessRestartKeepsRanges(t *testing.T) {
 		if _, err := transaction.Checkpoint(ctx); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(os.Getenv(nativeTransferIntent), intent.CanonicalBytes(), 0o600); err != nil {
+		encodedIntent, err := json.Marshal(intent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(os.Getenv(nativeTransferIntent), encodedIntent, 0o600); err != nil {
 			t.Fatal(err)
 		}
 		signalNativeOutputCrashCut(t, os.Getenv(nativeOutputCrashReadyEnvironment))
@@ -80,8 +85,8 @@ func TestNativeOutputProcessRestartKeepsRanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	intent, err := transfer.DecodeReceiveIntent(encoded)
-	if err != nil {
+	var intent transfer.ReceiveIntent
+	if err := json.Unmarshal(encoded, &intent); err != nil {
 		t.Fatal(err)
 	}
 	authority, err := NewOutputAuthority(OutputConfig{RootPath: root})

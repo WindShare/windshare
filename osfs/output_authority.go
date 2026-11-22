@@ -116,7 +116,7 @@ func (operation *OutputOperation) OpenDirectTree(
 		return nil, output.DiagnoseFailure(output.FailureOpen, transfer.ErrInvalidOutputBinding)
 	}
 	owned, ok := operation.native.ReceiveIntent()
-	if !ok || !owned.EqualCanonical(intent) {
+	if !ok || !owned.Equal(intent) {
 		return nil, output.DiagnoseFailure(output.FailureOpen, transfer.ErrInvalidOutputBinding)
 	}
 	return operation.runtime.OpenOperation(ctx, operation.native)

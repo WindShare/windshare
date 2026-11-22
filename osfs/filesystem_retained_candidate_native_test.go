@@ -130,7 +130,7 @@ func reopenRetainedCandidateOutput(t *testing.T, fixture retainedCandidateFixtur
 		t.Fatalf("retained candidate lookup = (%d, %s, %v)", lookup.Kind(), lookup.Attention(), err)
 	}
 	reopenedIntent, present := lookup.Operation().ReceiveIntent()
-	if !present || !reopenedIntent.EqualCanonical(fixture.intent) {
+	if !present || !reopenedIntent.Equal(fixture.intent) {
 		t.Fatalf("retained candidate operation identity = (%+v, %t)", reopenedIntent, present)
 	}
 	resumedSession, err := lookup.Operation().OpenDirectTree(ctx, reopenedIntent)

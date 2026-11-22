@@ -52,7 +52,7 @@ const (
 type getOperationMaterializer struct{ operation OutputOperation }
 
 func (m getOperationMaterializer) OpenDirectTree(ctx context.Context, intent transfer.ReceiveIntent) (transfer.DirectTreeSession, error) {
-	if !m.operation.Valid() || intent.IsZero() || !intent.EqualCanonical(m.operation.Intent) {
+	if !m.operation.Valid() || intent.IsZero() || !intent.Equal(m.operation.Intent) {
 		return nil, transfer.ErrInvalidOutputBinding
 	}
 	return m.operation.Materializer.OpenDirectTree(ctx, intent)

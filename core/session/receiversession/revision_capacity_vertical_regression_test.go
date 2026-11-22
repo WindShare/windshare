@@ -519,7 +519,7 @@ func (output *syntheticCapacityOutput) OpenDirectTree(
 	_ context.Context,
 	intent transfer.ReceiveIntent,
 ) (transfer.DirectTreeSession, error) {
-	if !intent.EqualCanonical(output.intent) {
+	if !intent.Equal(output.intent) {
 		return nil, transfer.ErrInvalidOutputBinding
 	}
 	return output, nil

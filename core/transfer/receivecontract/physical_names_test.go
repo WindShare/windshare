@@ -1,14 +1,14 @@
 package receivecontract
 
 import (
-	"bytes"
+	"encoding/json"
 	"errors"
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
 )
 
-func TestNativePhysicalNameSurvivesCanonicalPlanRoundTrip(t *testing.T) {
+func TestNativePhysicalNameSurvivesJSONPlanRoundTrip(t *testing.T) {
 	operation := mustIdentity(OperationIDFromBytes(contractStable(20)))
 	reservationID := mustIdentity(DestinationReservationIDFromBytes(contractStable(22)))
 	authority := mustIdentity(AuthorityRefFromBytes(contractOpaque(23)))
@@ -24,8 +24,12 @@ func TestNativePhysicalNameSurvivesCanonicalPlanRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	decoded, err := DecodeMaterializationPlan(plan.CanonicalBytes(), artifact)
-	if err != nil || !bytes.Equal(decoded.CanonicalBytes(), plan.CanonicalBytes()) {
+	encoded, err := json.Marshal(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := UnmarshalMaterializationPlanJSON(encoded, artifact)
+	if err != nil || decoded.BindingDigest() != plan.BindingDigest() {
 		t.Fatalf("decode: %v", err)
 	}
 	restored, ok := decoded.DestinationReservation()
