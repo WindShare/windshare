@@ -84,10 +84,11 @@ impl Desktop {
             Action::UseSavedSettings(id) => self.use_saved_settings(id),
             Action::ToggleShare(id) => self.toggle_preview_share(id),
             Action::ToggleTransfer(index) => self.toggle_preview_transfer(index),
-            Action::ToggleSetting(index) => {
-                if let Some(setting) = self.settings.get_mut(index) {
-                    *setting = !*setting;
-                }
+            Action::SetNotifications(choice) => {
+                crate::preferences::select_notifications(choice, cx);
+            }
+            Action::TogglePreviewTransferDetails => {
+                self.preview_transfer_details = !self.preview_transfer_details;
             }
             Action::SetAppearance(choice) => crate::preferences::select_appearance(choice, cx),
             Action::SetShareAnimation(choice) => {

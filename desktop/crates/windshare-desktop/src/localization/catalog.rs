@@ -249,6 +249,8 @@ messages! {
     PreviewStatus => ("UI preview · Sample files", "UI 预览 · 示例文件"),
     Notifications => ("Notifications", "轻提示"),
     NotificationsDetail => ("Show a brief notification when an action finishes.", "操作完成后显示轻量通知。"),
+    NotificationsSaveFailed => ("Notifications changed but could not be saved. Please retry.", "轻提示设置已切换，但无法保存，请重试。"),
+    NotificationsLoadFailed => ("Could not read the saved notifications setting. Using On.", "无法读取已保存的轻提示设置，暂时保持开启。"),
     TransferDetails => ("Transfer details", "传输详情"),
     TransferDetailsDescription => ("Show speed and estimated time remaining.", "显示速度与预计剩余时间。"),
     InterfaceExperience => ("Interface & experience", "界面与体验"),

@@ -45,7 +45,7 @@ pub struct Desktop {
     pub overlays: Vec<OverlayFrame>,
     pub link_disclosure: LinkDisclosure,
     pub toast: Option<(usize, Text)>,
-    pub settings: [bool; 2],
+    pub preview_transfer_details: bool,
     pub browser_trace: bool,
     pub dialog_sequence: usize,
     toast_sequence: usize,
@@ -143,7 +143,7 @@ impl Desktop {
             overlays: Vec::new(),
             link_disclosure: LinkDisclosure::default(),
             toast: None,
-            settings: [true, true],
+            preview_transfer_details: true,
             browser_trace: false,
             dialog_sequence: 0,
             toast_sequence: 0,
@@ -184,7 +184,11 @@ impl Desktop {
     }
 
     pub fn notify(&mut self, message: Text, cx: &mut Context<Self>) {
-        if !self.settings[0] {
+        if !cx
+            .global::<crate::preferences::NotificationsSettings>()
+            .choice
+            .enabled()
+        {
             return;
         }
         self.toast_sequence += 1;

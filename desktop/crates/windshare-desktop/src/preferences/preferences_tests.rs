@@ -49,6 +49,18 @@ fn share_animation_defaults_to_whirl_and_survives_restart() {
 }
 
 #[test]
+fn notifications_default_to_enabled_and_survive_restart() {
+    assert_eq!(
+        NotificationsPreference::default(),
+        NotificationsPreference::Enabled
+    );
+    assert_round_trip(&[
+        NotificationsPreference::Enabled,
+        NotificationsPreference::Disabled,
+    ]);
+}
+
+#[test]
 fn appearance_and_language_save_independently() {
     let directory = tempfile::tempdir().unwrap();
     let language_path = directory.path().join(LanguageChoice::KEY);

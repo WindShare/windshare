@@ -84,14 +84,15 @@ impl Desktop {
                             } else {
                                 locale.text(Text::Transferring)
                             }))
-                            .when(self.settings[1] && !paused && !complete, |el| {
-                                el.child(theme.caption(
-                                    locale.transfer_rate(
+                            .when(
+                                self.preview_transfer_details && !paused && !complete,
+                                |el| {
+                                    el.child(theme.caption(locale.transfer_rate(
                                         transfer.rate_mbps,
                                         transfer.remaining_seconds,
-                                    ),
-                                ))
-                            }),
+                                    )))
+                                },
+                            ),
                     ),
             )
             .child(

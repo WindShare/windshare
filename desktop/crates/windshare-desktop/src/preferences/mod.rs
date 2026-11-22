@@ -1,10 +1,12 @@
 mod appearance;
 mod diagnostics;
+mod notifications;
 mod share_animation;
 mod share_animation_view;
 mod view;
 
 pub use appearance::{AppearanceSettings, select_appearance};
+pub use notifications::{NotificationsPreference, NotificationsSettings, select_notifications};
 pub use share_animation::{ShareAnimationSettings, select_share_animation};
 
 use std::{
@@ -12,6 +14,11 @@ use std::{
     io::{self, Write},
     path::{Path, PathBuf},
 };
+
+// Match relayconfig's lowercase "windshare" config root so desktop UI settings
+// and shared CLI/host configuration stay in one folder on case-sensitive OSes.
+const CONFIG_DIRECTORY: &str = "windshare";
+const PREFERENCES_DIRECTORY: &str = "desktop";
 
 pub trait PreferenceChoice: Copy + Default {
     const KEY: &'static str;
@@ -34,10 +41,12 @@ pub struct Preference<C> {
 
 impl<C: PreferenceChoice> Preference<C> {
     pub fn load() -> Self {
-        Self::load_from(
-            dirs::config_dir()
-                .map(|directory| directory.join("WindShare").join("desktop").join(C::KEY)),
-        )
+        Self::load_from(dirs::config_dir().map(|directory| {
+            directory
+                .join(CONFIG_DIRECTORY)
+                .join(PREFERENCES_DIRECTORY)
+                .join(C::KEY)
+        }))
     }
 
     fn load_from(path: Option<PathBuf>) -> Self {
@@ -136,6 +145,7 @@ pub fn init(cx: &mut gpui::App) {
     cx.set_global(appearance.choice);
     cx.set_global(appearance);
     cx.set_global(ShareAnimationSettings::load());
+    cx.set_global(NotificationsSettings::load());
 }
 
 #[cfg(test)]

@@ -2,6 +2,7 @@ use crate::localization::{Language, Text, language};
 use crate::{
     desktop::Desktop,
     model::{Action, Page, SettingsSection},
+    preferences::{NotificationsPreference, NotificationsSettings, Persistence},
 };
 use gpui::{Animation, AnimationExt, Div, ease_out_quint, prelude::*, px};
 use std::time::Duration;
@@ -112,18 +113,6 @@ impl Desktop {
 
     fn general_settings(&self, theme: Theme, cx: &Context<Self>) -> Div {
         let locale = language(cx);
-        let settings = [
-            (
-                locale.text(Text::Notifications),
-                locale.text(Text::NotificationsDetail),
-                Icon::Bell,
-            ),
-            (
-                locale.text(Text::TransferDetails),
-                locale.text(Text::TransferDetailsDescription),
-                Icon::Activity,
-            ),
-        ];
         column()
             .gap(px(20.))
             .child(Self::appearance_card(theme, cx))
@@ -135,39 +124,101 @@ impl Desktop {
                     .gap(px(10.))
                     .child(theme.heading(locale.text(Text::InterfaceExperience), 22.))
                     .child(Self::share_animation_setting(theme, cx))
-                    .children(
-                        settings
-                            .into_iter()
-                            .enumerate()
-                            .filter(|(index, _)| self.runtime.is_preview() || *index != 1)
-                            .map(|(index, (title, detail, symbol))| {
-                                row()
-                                    .gap(px(18.))
-                                    .py(px(24.))
-                                    .border_t_1()
-                                    .border_color(theme.border())
-                                    .child(theme.icon_tile(symbol, Tone::Neutral, 44.))
-                                    .child(
-                                        column()
-                                            .flex_1()
-                                            .gap(px(7.))
-                                            .child(theme.heading(title, 17.))
-                                            .child(theme.caption(detail)),
-                                    )
-                                    .child(Self::setting_switch(
-                                        theme,
-                                        ("setting", index),
-                                        title,
-                                        self.settings[index],
-                                        Some(Action::ToggleSetting(index)),
-                                        cx,
-                                    ))
-                            }),
-                    ),
+                    .child(Self::notifications_setting(theme, cx))
+                    .when(self.runtime.is_preview(), |el| {
+                        el.child(self.transfer_details_setting(theme, cx))
+                    }),
             )
             .when(self.runtime.is_preview(), |el| {
                 el.child(Self::component_preview(theme, cx))
             })
+    }
+
+    fn notifications_setting(theme: Theme, cx: &Context<Self>) -> Div {
+        let settings = cx.global::<NotificationsSettings>();
+        let locale = language(cx);
+        let enabled = settings.choice.enabled();
+        let title = locale.text(Text::Notifications);
+        column()
+            .py(px(24.))
+            .gap(px(12.))
+            .border_t_1()
+            .border_color(theme.border())
+            .child(
+                row()
+                    .gap(px(18.))
+                    .child(theme.icon_tile(Icon::Bell, Tone::Neutral, 44.))
+                    .child(
+                        column()
+                            .flex_1()
+                            .gap(px(7.))
+                            .child(theme.heading(title, 17.))
+                            .child(theme.caption(locale.text(Text::NotificationsDetail))),
+                    )
+                    .child(Self::setting_switch(
+                        theme,
+                        "notifications-setting",
+                        title,
+                        enabled,
+                        Some(Action::SetNotifications(
+                            NotificationsPreference::from_enabled(!enabled),
+                        )),
+                        cx,
+                    )),
+            )
+            .when(settings.persistence != Persistence::Saved, |el| {
+                let message = match settings.persistence {
+                    Persistence::LoadFailed => Text::NotificationsLoadFailed,
+                    _ => Text::NotificationsSaveFailed,
+                };
+                el.child(
+                    row()
+                        .flex_wrap()
+                        .gap(px(12.))
+                        .child(
+                            theme
+                                .caption(locale.text(message))
+                                .text_color(Tone::Rose.text(theme)),
+                        )
+                        .child(
+                            Self::button(
+                                "retry-notifications",
+                                locale.text(Text::RetrySave),
+                                Icon::Settings,
+                                ButtonStyle::Secondary,
+                                Action::SetNotifications(settings.choice),
+                                cx,
+                            )
+                            .compact(),
+                        ),
+                )
+            })
+    }
+
+    fn transfer_details_setting(&self, theme: Theme, cx: &Context<Self>) -> Div {
+        let locale = language(cx);
+        let title = locale.text(Text::TransferDetails);
+        row()
+            .gap(px(18.))
+            .py(px(24.))
+            .border_t_1()
+            .border_color(theme.border())
+            .child(theme.icon_tile(Icon::Activity, Tone::Neutral, 44.))
+            .child(
+                column()
+                    .flex_1()
+                    .gap(px(7.))
+                    .child(theme.heading(title, 17.))
+                    .child(theme.caption(locale.text(Text::TransferDetailsDescription))),
+            )
+            .child(Self::setting_switch(
+                theme,
+                "transfer-details-setting",
+                title,
+                self.preview_transfer_details,
+                Some(Action::TogglePreviewTransferDetails),
+                cx,
+            ))
     }
 
     fn component_preview(theme: Theme, cx: &Context<Self>) -> Div {
