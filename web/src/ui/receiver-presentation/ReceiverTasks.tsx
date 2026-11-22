@@ -102,7 +102,7 @@ export function ReceiverActivity({ controller, openDownloads }: {
     {hasContent && <InAppBrowserHint />}
     {banner !== null && <div className="continuation-suggestion">
       <span>{bannerLabel}</span>
-      <button type="button" onClick={() => { if (banner.task.primaryAction !== null) actions.perform(banner.task.primaryAction) }}>{banner.task.primaryAction?.label}</button>
+      <button type="button" onClick={() => actions.perform(banner.action)}>{banner.action.label}</button>
     </div>}
     {primaryTask !== null && <TaskCard task={primaryTask} actions={actions} busy={snapshot.retained.pending !== null} onDetails={element => {
       invoker.current = element; controller.recordExperienceIntent('open-task-details'); setDetailsOperationId(primaryTask.operationId)

@@ -9,6 +9,7 @@ export type WorkspaceTaskSnapshot = TaskSnapshot & TaskComposition
 export interface WorkspaceRetainedBanner {
   readonly kind: 'continue' | 'ready-to-save'
   readonly task: TaskPresentation
+  readonly action: TaskAction
 }
 
 export interface WorkspaceTaskLayout {
@@ -17,6 +18,12 @@ export interface WorkspaceTaskLayout {
   readonly repeatRemoteLabel: boolean
   readonly banner: WorkspaceRetainedBanner | null
 }
+
+type SelectionRetainedMatch =
+  | { readonly kind: 'local-complete'; readonly task: TaskPresentation }
+  | { readonly kind: 'banner'; readonly banner: WorkspaceRetainedBanner }
+  | { readonly kind: 'pending-continuation' }
+  | { readonly kind: 'none' }
 
 function isCompleteLocalRetained(
   operation: RetainedReceiveOperation,
@@ -68,22 +75,54 @@ function isContinuableRetained(
   return continuation.disabledReason === null || isTransientlyBusyContinuation(operation, task, snapshot)
 }
 
-function findCompleteLocalMatch(snapshot: WorkspaceTaskSnapshot): TaskPresentation | null {
-  const { share, current, tasks, retained, output } = snapshot
-  const currentSelectionDigest = output.offers?.selectionDigest
-  if (current !== null || share === null || currentSelectionDigest === undefined) return null
-  for (const task of tasks) {
-    const operation = retained.operations.find(candidate => candidate.operationId === task.operationId)
-    if (operation === undefined ||
-        operation.shareInstance !== share.shareInstance ||
-        operation.selectionDigest !== currentSelectionDigest) {
-      continue
-    }
-    if (isCompleteLocalRetained(operation, task)) return task
-    // A newer continuable attempt for the same selection supersedes older local copies so reopen surfaces Continue.
-    if (isContinuableRetained(operation, task, snapshot)) return null
+function retainedBannerFor(task: TaskPresentation): WorkspaceRetainedBanner | null {
+  if (task.stage === 'handed-to-browser') return null
+  const primary = task.primaryAction
+  if (task.stage === 'ready-to-save' &&
+      primary !== null &&
+      primary.disabledReason === null &&
+      primary.target.kind === 'retained' &&
+      (primary.target.action === 'save' || primary.target.action === 'save-staged-files')) {
+    return Object.freeze({ kind: 'ready-to-save', task, action: primary })
+  }
+  const continuation = retainedAction(task, 'continue')
+  if (continuation !== null && continuation.disabledReason === null) {
+    return Object.freeze({ kind: 'continue', task, action: continuation })
   }
   return null
+}
+
+function selectionOperation(
+  task: TaskPresentation,
+  snapshot: WorkspaceTaskSnapshot,
+  selectionDigest: string,
+): RetainedReceiveOperation | null {
+  const shareInstance = snapshot.share?.shareInstance
+  if (shareInstance === undefined) return null
+  return snapshot.retained.operations.find(candidate =>
+    candidate.operationId === task.operationId &&
+    candidate.shareInstance === shareInstance &&
+    candidate.selectionDigest === selectionDigest) ?? null
+}
+
+function resolveSelectionRetained(snapshot: WorkspaceTaskSnapshot): SelectionRetainedMatch {
+  const selectionDigest = snapshot.output.offers?.selectionDigest
+  if (snapshot.current !== null || snapshot.share === null || selectionDigest === undefined) {
+    return { kind: 'none' }
+  }
+  let fallbackBanner: WorkspaceRetainedBanner | null = null
+  for (const task of snapshot.tasks) {
+    const operation = selectionOperation(task, snapshot, selectionDigest)
+    if (operation === null) continue
+    if (isCompleteLocalRetained(operation, task)) return { kind: 'local-complete', task }
+    // A newer continuable attempt for the same selection supersedes older local copies so reopen surfaces Continue.
+    if (isContinuableRetained(operation, task, snapshot)) {
+      const banner = fallbackBanner ?? retainedBannerFor(task)
+      return banner === null ? { kind: 'pending-continuation' } : { kind: 'banner', banner }
+    }
+    fallbackBanner ??= retainedBannerFor(task)
+  }
+  return fallbackBanner === null ? { kind: 'none' } : { kind: 'banner', banner: fallbackBanner }
 }
 
 function currentMatchesSelection(snapshot: WorkspaceTaskSnapshot): boolean {
@@ -108,32 +147,28 @@ function isSettlingWorkspaceHandoff(snapshot: WorkspaceTaskSnapshot): boolean {
     (activeReceiveOperationId === current.operationId || retained.kind === 'loading' || retained.kind === 'unloaded')
 }
 
-function retainedBannerKind(task: TaskPresentation): WorkspaceRetainedBanner['kind'] | null {
-  if (task.stage === 'handed-to-browser' ||
-      task.primaryAction === null ||
-      task.primaryAction.disabledReason !== null ||
-      task.primaryAction.target.kind !== 'retained') {
-    return null
-  }
-  const { action } = task.primaryAction.target
-  if (task.stage === 'ready-to-save') {
-    return action === 'save' || action === 'save-staged-files' ? 'ready-to-save' : null
-  }
-  return action === 'continue' ? 'continue' : null
-}
-
-function findRetainedBanner(snapshot: WorkspaceTaskSnapshot): WorkspaceRetainedBanner | null {
+function findShareRetainedBanner(snapshot: WorkspaceTaskSnapshot): WorkspaceRetainedBanner | null {
   const { share, tasks, retained } = snapshot
   if (share === null) return null
   for (const task of tasks) {
-    const kind = retainedBannerKind(task)
-    if (kind === null) continue
+    const banner = retainedBannerFor(task)
+    if (banner === null) continue
     const matchesShare = retained.operations.some(operation =>
       operation.operationId === task.operationId && operation.shareInstance === share.shareInstance)
-    if (!matchesShare) continue
-    return Object.freeze({ kind, task })
+    if (matchesShare) return banner
   }
   return null
+}
+
+function resolveRetainedBanner(
+  snapshot: WorkspaceTaskSnapshot,
+  selectionMatch: SelectionRetainedMatch,
+  primaryTask: TaskPresentation | null,
+): WorkspaceRetainedBanner | null {
+  if (primaryTask !== null) return null
+  if (selectionMatch.kind === 'banner') return selectionMatch.banner
+  if (selectionMatch.kind === 'pending-continuation') return null
+  return findShareRetainedBanner(snapshot)
 }
 
 /**
@@ -144,7 +179,8 @@ function findRetainedBanner(snapshot: WorkspaceTaskSnapshot): WorkspaceRetainedB
  */
 export function resolveWorkspaceTaskLayout(snapshot: WorkspaceTaskSnapshot): WorkspaceTaskLayout {
   const { share, current, output } = snapshot
-  const completedLocalMatch = findCompleteLocalMatch(snapshot)
+  const selectionMatch = resolveSelectionRetained(snapshot)
+  const completedLocalMatch = selectionMatch.kind === 'local-complete' ? selectionMatch.task : null
   const primaryTask = current ?? completedLocalMatch
   const matchesSelection = completedLocalMatch !== null || currentMatchesSelection(snapshot)
   const hasActionableLocalResult = primaryTask !== null && matchesSelection &&
@@ -159,7 +195,7 @@ export function resolveWorkspaceTaskLayout(snapshot: WorkspaceTaskSnapshot): Wor
   const collapseRemoteSaving = share !== null && noPendingActivation && hasActionableLocalResult
   const singleFileDelivered = share !== null && share.kind !== 'browser' && noPendingActivation &&
     (primaryTask?.stage === 'saved' || primaryTask?.stage === 'handed-to-browser')
-  const banner = primaryTask === null ? findRetainedBanner(snapshot) : null
+  const banner = resolveRetainedBanner(snapshot, selectionMatch, primaryTask)
   return Object.freeze({
     primaryTask,
     collapseRemoteSaving,

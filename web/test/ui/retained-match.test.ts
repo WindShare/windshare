@@ -16,6 +16,7 @@ const SHARE_ID = identityText(1)
 const OTHER_SHARE_ID = identityText(2)
 const SELECTION_A = identityText(3, 32)
 const SELECTION_B = identityText(4, 32)
+const SELECTION_C = identityText(5, 32)
 
 function workspaceHandoff(operationId: string, partial = false): ReceiveLifecycleState {
   return Object.freeze({
@@ -150,6 +151,55 @@ function pausedPartialZipOp(idSeed: number, createdAtMilliseconds = 2_000): Reta
     continuation: 'resume-receive',
     actions: ['continue', 'discard', 'save-partial'],
     display: Object.freeze({ objectLabel: 'photo.jpg', createdAtMilliseconds }),
+  })
+}
+
+function pausedBrowserFolderOp(
+  idSeed: number,
+  options: Readonly<{
+    createdAtMilliseconds?: number
+    selectionDigest?: string
+    stagedCompleteFiles?: number
+    cleanupPendingFiles?: number
+    actions: RetainedReceiveOperation['actions']
+  }>,
+): RetainedReceiveOperation {
+  const operationId = identityText(idSeed)
+  const receiveIntentDigest = identityText(idSeed + 1, 32)
+  const lifecycle: ReceiveLifecycleState = {
+    operationId,
+    receiveIntentDigest,
+    generation: 2n,
+    kind: 'resumable-receive',
+    payloadKind: 'file-set',
+    checkpointSetDigest: identityText(idSeed + 2, 32),
+    completedFileCount: 1n,
+    completedBytes: 256n,
+    retainedBytes: 512n,
+    selectionFacts: Object.freeze({ discoveredFileCount: 2n, discoveredBytes: 1024n, discovery: 'complete' }),
+  }
+  return retainedOp({
+    operationId,
+    lifecycle,
+    continuation: 'resume-receive',
+    actions: options.actions,
+    selectionDigest: options.selectionDigest ?? SELECTION_A,
+    display: Object.freeze({ objectLabel: '2 files', createdAtMilliseconds: options.createdAtMilliseconds ?? 2_000 }),
+    browserDelivery: Object.freeze({
+      operationId,
+      receiveIntentDigest,
+      receivingFiles: 0,
+      incompleteStagedFiles: 0,
+      stagedCompleteFiles: options.stagedCompleteFiles ?? 0,
+      copyingFiles: 0,
+      cleanupPendingFiles: options.cleanupPendingFiles ?? 0,
+      targetSavedFiles: 0,
+      discardedFiles: 0,
+      recoverableBytes: 256n,
+      stagedBytes: 256n,
+      reservedStagingBytes: 0n,
+      targetSavedBytes: 0n,
+    }),
   })
 }
 
@@ -613,7 +663,141 @@ describe('resolveWorkspaceTaskLayout continuation precedence', () => {
     expect(layout.banner?.kind).toBe('continue')
     expect(layout.banner?.task.operationId).toBe(newerLocalFinish.operationId)
     expect(layout.banner?.task.primaryAction?.id).toBe('continue')
+    expect(layout.banner?.action.id).toBe('continue')
 
     await cleanup()
+  })
+
+  it('prefers the current selection continuation over a newer paused task from another selection and falls back when unmatched', () => {
+    const folderShare = {
+      kind: 'browser' as const,
+      shareInstance: SHARE_ID,
+      name: 'Photos',
+      homeDirectoryId: 'root',
+      singleFolder: true,
+    }
+    const olderCompleteA = completeLocalOp(62, 1_000)
+    const pausedA = pausedStartOp(64, 2_000)
+    const newerPausedB = { ...pausedStartOp(66, 3_000), selectionDigest: SELECTION_B }
+    const operations = [olderCompleteA, pausedA, newerPausedB]
+
+    const layoutA = resolveWorkspaceTaskLayout(workspaceSnapshot({
+      share: folderShare,
+      output: { ...EMPTY_OUTPUT_PRESENTATION, offers: offersFor(SELECTION_A) },
+      retained: { kind: 'available', pending: null, operations },
+    }))
+    expect(layoutA.primaryTask).toBeNull()
+    expect(layoutA.collapseRemoteSaving).toBe(false)
+    expect(layoutA.banner?.kind).toBe('continue')
+    expect(layoutA.banner?.task.operationId).toBe(pausedA.operationId)
+    expect(layoutA.banner?.action.id).toBe('continue')
+
+    const layoutAWithoutLocalCopy = resolveWorkspaceTaskLayout(workspaceSnapshot({
+      share: folderShare,
+      output: { ...EMPTY_OUTPUT_PRESENTATION, offers: offersFor(SELECTION_A) },
+      retained: { kind: 'available', pending: null, operations: [pausedA, newerPausedB] },
+    }))
+    expect(layoutAWithoutLocalCopy.banner?.task.operationId).toBe(pausedA.operationId)
+    expect(layoutAWithoutLocalCopy.banner?.action.id).toBe('continue')
+
+    const layoutC = resolveWorkspaceTaskLayout(workspaceSnapshot({
+      share: folderShare,
+      output: { ...EMPTY_OUTPUT_PRESENTATION, offers: offersFor(SELECTION_C) },
+      retained: { kind: 'available', pending: null, operations },
+    }))
+    expect(layoutC.primaryTask).toBeNull()
+    expect(layoutC.banner?.kind).toBe('continue')
+    expect(layoutC.banner?.task.operationId).toBe(newerPausedB.operationId)
+    expect(layoutC.banner?.action.id).toBe('continue')
+  })
+
+  it('passes the exact continue action to the banner even when another retained action is primary', () => {
+    const olderCompleteA = completeLocalOp(70, 1_000)
+    const cleanupAndContinueA = pausedBrowserFolderOp(72, {
+      createdAtMilliseconds: 2_000,
+      selectionDigest: SELECTION_A,
+      cleanupPendingFiles: 1,
+      actions: ['cleanup-staging', 'continue', 'discard'],
+    })
+    const newerPausedB = { ...pausedStartOp(76, 3_000), selectionDigest: SELECTION_B }
+
+    const snapshot = workspaceSnapshot({
+      retained: { kind: 'available', pending: null, operations: [olderCompleteA, cleanupAndContinueA, newerPausedB] },
+    })
+    const matchedTask = snapshot.tasks.find(task => task.operationId === cleanupAndContinueA.operationId)
+    expect(matchedTask?.primaryAction?.id).toBe('cleanup-staging')
+
+    const layout = resolveWorkspaceTaskLayout(snapshot)
+    expect(layout.primaryTask).toBeNull()
+    expect(layout.collapseRemoteSaving).toBe(false)
+    expect(layout.banner?.kind).toBe('continue')
+    expect(layout.banner?.task.operationId).toBe(cleanupAndContinueA.operationId)
+    expect(layout.banner?.action.id).toBe('continue')
+  })
+
+  it('keeps other selection banners suppressed while continuing the matched selection task', async () => {
+    const olderCompleteA = completeLocalOp(78, 1_000)
+    const pausedA = pausedStartOp(80, 2_000)
+    const newerPausedB = { ...pausedStartOp(82, 3_000), selectionDigest: SELECTION_B }
+    const { coordinator, admission, cleanup } = await openTestCoordinator([newerPausedB, pausedA, olderCompleteA])
+
+    const targetA = coordinator.getSnapshot().operations.find(op => op.operationId === pausedA.operationId)!
+    coordinator.perform(targetA, 'continue')
+    const during = resolveWorkspaceTaskLayout(
+      workspaceSnapshot({ retained: coordinator.getSnapshot() }, admission),
+    )
+    expect(during.primaryTask).toBeNull()
+    expect(during.collapseRemoteSaving).toBe(false)
+    expect(during.banner).toBeNull()
+
+    await cleanup()
+  })
+
+  it('preserves ready-to-save staged folder precedence online and offline per selection', async () => {
+    const olderCompleteA = completeLocalOp(84, 1_000)
+    const stagedA = pausedBrowserFolderOp(86, {
+      createdAtMilliseconds: 2_000,
+      selectionDigest: SELECTION_A,
+      stagedCompleteFiles: 1,
+      actions: ['save-staged-files', 'continue', 'discard'],
+    })
+    const newerStagedB = pausedBrowserFolderOp(90, {
+      createdAtMilliseconds: 3_000,
+      selectionDigest: SELECTION_B,
+      stagedCompleteFiles: 1,
+      actions: ['save-staged-files', 'continue', 'discard'],
+    })
+
+    const online = resolveWorkspaceTaskLayout(workspaceSnapshot({
+      retained: { kind: 'available', pending: null, operations: [olderCompleteA, stagedA, newerStagedB] },
+    }))
+    expect(online.primaryTask).toBeNull()
+    expect(online.banner?.kind).toBe('ready-to-save')
+    expect(online.banner?.task.operationId).toBe(stagedA.operationId)
+    expect(online.banner?.action.id).toBe('save-staged-files')
+
+    const { coordinator, admission, cleanup } = await openTestCoordinator(
+      [newerStagedB, stagedA, olderCompleteA],
+      () => 'reconnectContinue',
+    )
+    const offline = { kind: 'unavailable' as const, reason: 'recovery-exhausted' as const }
+    const offlineWithComplete = resolveWorkspaceTaskLayout(
+      workspaceSnapshot({ connection: offline, retained: coordinator.getSnapshot() }, admission),
+    )
+    expect(offlineWithComplete.primaryTask?.operationId).toBe(olderCompleteA.operationId)
+    expect(offlineWithComplete.collapseRemoteSaving).toBe(true)
+    expect(offlineWithComplete.banner).toBeNull()
+    await cleanup()
+
+    const { coordinator: withoutComplete, admission: withoutCompleteAdmission, cleanup: cleanupWithoutComplete } =
+      await openTestCoordinator([newerStagedB, stagedA], () => 'reconnectContinue')
+    const offlineWithoutComplete = resolveWorkspaceTaskLayout(
+      workspaceSnapshot({ connection: offline, retained: withoutComplete.getSnapshot() }, withoutCompleteAdmission),
+    )
+    expect(offlineWithoutComplete.primaryTask).toBeNull()
+    expect(offlineWithoutComplete.banner?.kind).toBe('ready-to-save')
+    expect(offlineWithoutComplete.banner?.task.operationId).toBe(stagedA.operationId)
+    expect(offlineWithoutComplete.banner?.action.id).toBe('save-staged-files')
+    await cleanupWithoutComplete()
   })
 })
