@@ -333,6 +333,8 @@ describe('provider protocol signing, parsing, and outbound adapters', () => {
     expect('verificationToken' in parsed.payload).toBe(false)
     expect(parsed.payload.isPublic).toBe(false)
     expect(isSupportedKofiType('Donation')).toBe(true)
+    expect(isSupportedKofiType('Tip')).toBe(true)
+    expect(isSupportedKofiType('Subscription')).toBe(true)
     expect(isSupportedKofiType('Shop Order')).toBe(false)
   })
 

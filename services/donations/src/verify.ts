@@ -266,7 +266,8 @@ export function parseKofiWebhookPayload(
 }
 
 export function isSupportedKofiType(type: string): boolean {
-  return type === 'Donation' || type === 'Subscription'
+  // Ko-fi's webhook docs rebranded one-off donations to "Tip" while live payloads still send "Donation".
+  return type === 'Donation' || type === 'Tip' || type === 'Subscription'
 }
 
 export function sortJsonKeysRecursively(value: unknown): unknown {
