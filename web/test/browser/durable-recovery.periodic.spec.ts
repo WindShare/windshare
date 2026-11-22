@@ -167,7 +167,9 @@ test('DirectTree recovery preserves only verified work across a Chromium process
         durableAfterSettlement: 'published',
       },
       workerStatus: 'Succeeded',
-      revisionRequests: ['completed.bin', 'large.bin', 'pending-small.bin'],
+      // Locally committed files short-circuit before openRevision on resume, so
+      // only incomplete entries reopen source handles after process termination.
+      revisionRequests: ['large.bin', 'pending-small.bin'],
       durableRangesBeforeFetch: [
         { file: 'completed.bin', ranges: ['0:4'] },
         { file: 'large.bin', ranges: ['0:4'] },
