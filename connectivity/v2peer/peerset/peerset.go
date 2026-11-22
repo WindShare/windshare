@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/windshare/windshare/connectivity/iceconfig"
 	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/connectivity/v2signal"
@@ -87,7 +86,6 @@ type ContentLaneOwner interface {
 type PathConfig struct {
 	Purpose       v2signal.ConnectionPurpose
 	Budget        *Budget
-	ICE           iceconfig.Connection
 	Native        *nativepeer.NativePeerConnectivity
 	Controls      PeerPathControlSender
 	SessionID     protocolsession.ProtocolSessionID
@@ -175,11 +173,7 @@ func (s *PeerSet) Open(ctx context.Context, config PathConfig) (*Path, error) {
 	}
 	var supply *transferlanes.RouteSupply
 	if config.Content != nil {
-		route := transferlanes.RouteDirect
-		if _, relayed := config.ICE.Relay(); relayed {
-			route = transferlanes.RouteTURN
-		}
-		supply, err = config.Content.LaneSet().ExpectRoute(route)
+		supply, err = config.Content.LaneSet().ExpectRoute(transferlanes.RouteDirect)
 		if err != nil {
 			cancel()
 			slot.Close()

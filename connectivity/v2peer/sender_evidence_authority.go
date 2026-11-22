@@ -47,12 +47,6 @@ func (a *senderEvidenceAuthority) reset() {
 		clear(a.latest)
 	}
 }
-func (a *senderEvidenceAuthority) retirePath(path v2signal.PeerPathID) {
-	if binding, exists := a.latest[path]; exists {
-		delete(a.claims, binding)
-		delete(a.latest, path)
-	}
-}
 func (a *senderEvidenceAuthority) retainedIdentityCount() int {
 	if a == nil {
 		return 0

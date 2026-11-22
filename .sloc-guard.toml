@@ -22,7 +22,6 @@ exclude = [
   # Native adapters in connectivity/ and transport/ remain under normal source limits.
   "third_party/pion/ice/**",
   "third_party/pion/webrtc/**",
-  "third_party/pion/turn/**",
   "third_party/pion/sctp/**",
 ]
 

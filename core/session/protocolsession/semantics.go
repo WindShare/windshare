@@ -14,7 +14,6 @@ import (
 	"golang.org/x/text/unicode/norm"
 
 	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/session/turncontrol"
 )
 
 const IdentityBytes = catalog.IdentityBytes
@@ -154,7 +153,7 @@ func validateSenderControlSemantic(
 		_, err = DecodeOperationFailure(semantic)
 	case MessageScanProgress:
 		_, err = DecodeScanProgress(semantic)
-	case MessagePeerPathControl, MessageTURNControl:
+	case MessagePeerPathControl:
 		err = ValidateSessionControlBody(kind, semantic)
 	case MessageSessionTerminal:
 		_, err = DecodeSessionTerminal(semantic)
@@ -176,9 +175,6 @@ func ValidateSessionControlBody(kind MessageKind, body []byte) error {
 	switch kind {
 	case MessagePeerPathControl:
 		_, err := DecodePeerPathControl(body)
-		return err
-	case MessageTURNControl:
-		_, err := turncontrol.Decode(body)
 		return err
 	default:
 		return ErrUnknownMessageKind

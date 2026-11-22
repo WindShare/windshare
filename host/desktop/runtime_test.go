@@ -14,9 +14,7 @@ import (
 
 	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/engine/relayconfig"
-	"github.com/windshare/windshare/engine/relayprofile"
 	"github.com/windshare/windshare/engine/relaysetup"
-	"github.com/windshare/windshare/engine/turncache"
 )
 
 func TestHostReadinessAndJoinedShutdownAreIndependentOfConfiguration(t *testing.T) {
@@ -131,11 +129,8 @@ func TestUnavailableLogStorageDoesNotPreventSharingHostStartup(t *testing.T) {
 	}
 }
 
-func TestHostStartRoutesRelayEnrollmentThroughEngineAndPopulatesTURNCache(t *testing.T) {
-	const (
-		accessKey = "device-credential"
-		serviceID = "cf-service"
-	)
+func TestHostStartRoutesRelayEnrollmentThroughEngine(t *testing.T) {
+	const accessKey = "device-credential"
 	var (
 		mu         sync.Mutex
 		deviceName string
@@ -162,9 +157,7 @@ func TestHostStartRoutesRelayEnrollmentThroughEngineAndPopulatesTURNCache(t *tes
 		case "/api/enrollments/claim":
 			response = map[string]string{"access_key": accessKey, "credential_id": "device"}
 		case "/api/enrollments/installed":
-			response = map[string]any{"managed_turn": []any{map[string]any{
-				"service_id": serviceID, "relay_url": origin, "enabled": true,
-			}}}
+			response = map[string]any{"ok": true}
 		default:
 			t.Errorf("unexpected setup request: %s", r.URL.Path)
 			http.NotFound(w, r)
@@ -212,11 +205,5 @@ func TestHostStartRoutesRelayEnrollmentThroughEngineAndPopulatesTURNCache(t *tes
 	mu.Unlock()
 	if gotName != wantName {
 		t.Fatalf("device_name = %q, want %q", gotName, wantName)
-	}
-	capability, err := (turncache.FileStore{Settings: relayconfig.FileStore{Path: configPath}}).Load(
-		relayprofile.Candidate{PublicURL: server.URL, AccessKey: accessKey},
-	)
-	if err != nil || capability == nil || capability.ServiceID != serviceID || !capability.Enabled {
-		t.Fatalf("managed TURN capability was not persisted to turncache: cap=%+v err=%v", capability, err)
 	}
 }

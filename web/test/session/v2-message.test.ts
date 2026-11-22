@@ -25,13 +25,13 @@ function identity(first: number): Uint8Array<ArrayBuffer> {
 describe('v2 session wire registry', () => {
   it.each(Object.entries(MESSAGE_KIND).filter(([, kind]) => kind !== MESSAGE_KIND.blockFragment))(
     'decodes the registered %s control message', (_name, kind) => {
-      const sessionControl = kind === MESSAGE_KIND.sessionTerminal || kind === MESSAGE_KIND.peerPathControl || kind === MESSAGE_KIND.turnControl
+      const sessionControl = kind === MESSAGE_KIND.sessionTerminal || kind === MESSAGE_KIND.peerPathControl
       const encoded = encodeMessage(kind, sessionControl ? undefined : identity(1), encodeBody(null))
       expect(decodeMessage(encoded.plaintext)).toEqual(encoded)
     },
   )
 
-  it.each([0n, 21n, 255n, 0xffffffffffffffffn, BigInt(MESSAGE_KIND.blockFragment)])(
+  it.each([0n, 20n, 21n, 255n, 0xffffffffffffffffn, BigInt(MESSAGE_KIND.blockFragment)])(
     'rejects unknown kinds and the data codec on the control path: %s', kind => {
       const plaintext = encodeCanonicalCbor(new Map<number, unknown>([[0, kind], [1, null], [2, null]]))
       expect(() => decodeMessage(plaintext)).toThrow('unknown or uses the wrong codec')

@@ -13,7 +13,6 @@ import (
 	"github.com/windshare/windshare/engine/account"
 	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/relaysetup"
-	"github.com/windshare/windshare/engine/turn"
 )
 
 func TestRepeatAuthorizationRetainsSelectionWithoutResurrectingFailedTask(t *testing.T) {
@@ -198,7 +197,6 @@ func officialAccountFixture(t *testing.T, accounts *stubOfficialAccount) (*Appli
 			replacement.finish()
 			return nil
 		},
-		configure:   func(turn.Settings) error { return nil },
 		load:        func() (relayconfig.Config, error) { return configured(), nil },
 		log:         func(string, any) {},
 		cancelSetup: func(context.Context, string) error { return nil },

@@ -24,7 +24,7 @@ func TestObservationMilestonesRespectAdmissionAndSettlementSemantics(t *testing.
 	}{
 		{"share published", "share", "ready", wire.EmptyPayload{}, "sender_ready", testrun.OutcomeSucceeded},
 		{"candidate is not admission", "share", "peer_attempt", diagnosticMilestonePayload{Stage: "datachannel-open"}, "", ""},
-		{"TURN is not direct", "share", "peer_attempt", diagnosticMilestonePayload{Stage: "admitted", Route: "turn"}, "", ""},
+		{"non-direct route is not direct", "share", "peer_attempt", diagnosticMilestonePayload{Stage: "admitted", Route: "relay"}, "", ""},
 		{"direct admission", "share", "peer_attempt", diagnosticMilestonePayload{Stage: "admitted", Route: "direct"}, "sender_direct_lane", testrun.OutcomeSucceeded},
 		{"relay ownership", "get", "receive_relay_content_claimed", diagnosticMilestonePayload{}, "receiver_relay_content", testrun.OutcomeSucceeded},
 		{"decision is not another claim", "get", "receive_admission_decision", diagnosticMilestonePayload{}, "", ""},

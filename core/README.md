@@ -15,10 +15,10 @@ The pre-v1 package API makes no compatibility promise; a separate module would o
 | `senderobject/`, `senderauth/` | Sealed sender-object envelopes and canonical Ed25519 signature acceptance |
 | `catalog/` | Directory generations/pages, durable catalog backend and spill, path policy, source errors/omissions |
 | `content/`, `content/records/` | File revisions, range leases, key tree, authenticated records, single-lock handle pool |
-| `framechannel/`, `session/` | Transport-neutral channels, `sendersession`/`receiversession` runtimes, `catalogflow`/`contentflow`, TURN controls |
+| `framechannel/`, `session/` | Transport-neutral channels, `sendersession`/`receiversession` runtimes, `catalogflow`/`contentflow`, peer path controls |
 | `transfer/` | Receive contracts (`receivecontract/`, `ordinaryoutput/`), job lifecycle, `BlockBroker`, `lanes/` scheduling, `fault/` |
 | `liveshare/` | Composition of sender and receiver runtimes (`PrepareSender`, `PrepareReceiver`, `ReceiveCapacity`) |
-| `capacityledger/`, `observationstream/`, `diagnostics/`, `diagnosticerror/`, `connectionpath/`, `downloadmetrics/` | Scalar capacity ledgers, bounded observation queues, source diagnostics, path milestones, download metrics |
+| `capacityledger/`, `observationstream/`, `diagnostics/`, `diagnosticerror/`, `downloadmetrics/` | Scalar capacity ledgers, bounded observation queues, source diagnostics, download metrics |
 | [`testvectors/`](testvectors/), `internal/` | Go/TypeScript/Rust interoperability vectors (`inventory.txt`), HKDF, pinned Unicode 15, contract harnesses |
 
 ## Ownership and boundaries

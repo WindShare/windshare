@@ -142,7 +142,6 @@ export class ReceiverGenerationFactory {
           ? {}
           : { connectivityTrace: options.connectivityTrace }),
         peerRecovery: options.peerRecovery,
-        onTurnObservation: (event) => options.pathActivity.turn(generationId, event),
         onContentLaneAdmitted: (lane) => {
           options.pathActivity.admitted(generationId, lane)
           options.onContentLaneAdmitted?.(lane)

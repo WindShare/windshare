@@ -36,8 +36,6 @@ func (s *Set) attestBlock(state *laneState, record records.BlockRecord) Block {
 		switch state.route {
 		case RouteDirect:
 			route = downloadmetrics.Direct
-		case RouteTURN:
-			route = downloadmetrics.TURN
 		case RouteRelay:
 			route = downloadmetrics.ApplicationRelay
 		}
@@ -68,7 +66,7 @@ func (s *Set) ContentActivity() []ContentActivity {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	result := make([]ContentActivity, 0, int(RouteTURN))
+	result := make([]ContentActivity, 0, int(RouteDirect))
 	activityByRoute := s.contentActivity
 	for _, lane := range s.lanes {
 		if !lane.retired {
@@ -79,46 +77,6 @@ func (s *Set) ContentActivity() []ContentActivity {
 	for _, activity := range activityByRoute {
 		if activity.UsefulBytes != 0 || activity.AdmittedLanes != 0 {
 			result = append(result, activity)
-		}
-	}
-	return result
-}
-
-const UnhelpfulLaneWindow = 30 * time.Second
-
-const UnhelpfulLaneRateRatio = 1.5
-
-type Measurement struct {
-	UsefulBytes  uint64
-	Unhelpful    bool
-	BusyTime     time.Duration
-	PendingBytes uint64
-}
-
-// MeasureLane reuses completed content measurements; it never generates probes.
-// Retire only an idle, sampled route with a demonstrably faster alternative.
-func (s *Set) MeasureLane(identity Identity) Measurement {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	state := s.lanes[identity.ID]
-	if state == nil || state.identity != identity {
-		return Measurement{}
-	}
-	result := Measurement{UsefulBytes: state.usefulBytes, BusyTime: state.performance.BusyTime(s.now()), PendingBytes: state.performance.PendingBytes}
-	lastUseful := state.lastUsefulAt
-	if lastUseful.IsZero() {
-		lastUseful = state.admittedAt
-	}
-	if state.inflight != 0 || !state.performance.HasSuccessfulSample ||
-		s.now().Sub(lastUseful) < UnhelpfulLaneWindow {
-		return result
-	}
-	for _, other := range s.lanes {
-		if other != state && !other.retired && s.contentSuspensions[other.identity.ID] == nil &&
-			other.performance.HasSuccessfulSample && other.performance.BytesPerSecond > state.performance.BytesPerSecond*UnhelpfulLaneRateRatio &&
-			!other.lastUsefulAt.IsZero() && s.now().Sub(other.lastUsefulAt) < UnhelpfulLaneWindow {
-			result.Unhelpful = true
-			break
 		}
 	}
 	return result

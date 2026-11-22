@@ -14,7 +14,6 @@ import (
 	"github.com/windshare/windshare/engine/internal/configjson"
 	"github.com/windshare/windshare/engine/internal/statefile"
 	"github.com/windshare/windshare/engine/relayprofile"
-	"github.com/windshare/windshare/engine/turn"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 )
 
@@ -32,33 +31,21 @@ var (
 )
 
 type Config struct {
-	ManagedTURNPolicies []turn.ManagedPolicy
-	TURN                turn.ManualSettings
-	FrontURL            string
-	Profiles            []relayprofile.Candidate
-	ActiveRelays        []string
-	ConfiguredOnly      bool
+	FrontURL       string
+	Profiles       []relayprofile.Candidate
+	ActiveRelays   []string
+	ConfiguredOnly bool
 }
 
 // Missing settings are an editable configuration, with the same explicit empty
 // profile set that the persisted format requires. Malformed documents still fail.
 func emptyConfig() Config { return Config{Profiles: []relayprofile.Candidate{}} }
 
-// TURNSettings projects only authority and policy; unrelated application settings
-// cannot become a dependency of runtime TURN configuration.
-func (config Config) TURNSettings() turn.Settings {
-	return (turn.Settings{Manual: config.TURN, Managed: turn.ManagedSettings{
-		Relays: config.Profiles, Policies: config.ManagedTURNPolicies,
-	}}).Clone()
-}
-
 type document struct {
-	ManagedTURNPolicies []turn.ManagedPolicy `json:"managed_turn_policies,omitempty"`
-	TURN                *turn.ManualSettings `json:"turn,omitempty"`
-	FrontURL            string               `json:"front_url,omitempty"`
-	Profiles            []savedRelay         `json:"profiles"`
-	ActiveRelays        []string             `json:"active_relays,omitempty"`
-	ConfiguredOnly      bool                 `json:"configured_relays_only,omitempty"`
+	FrontURL       string       `json:"front_url,omitempty"`
+	Profiles       []savedRelay `json:"profiles"`
+	ActiveRelays   []string     `json:"active_relays,omitempty"`
+	ConfiguredOnly bool         `json:"configured_relays_only,omitempty"`
 }
 type savedRelay struct {
 	URL             string `json:"url"`
@@ -123,10 +110,7 @@ func Decode(reader io.Reader) (Config, error) {
 		}
 		return Config{}, ErrConfig
 	}
-	result := Config{ManagedTURNPolicies: disk.ManagedTURNPolicies, FrontURL: disk.FrontURL, ActiveRelays: disk.ActiveRelays, ConfiguredOnly: disk.ConfiguredOnly}
-	if disk.TURN != nil {
-		result.TURN = *disk.TURN
-	}
+	result := Config{FrontURL: disk.FrontURL, ActiveRelays: disk.ActiveRelays, ConfiguredOnly: disk.ConfiguredOnly}
 	if disk.Profiles != nil {
 		result.Profiles = make([]relayprofile.Candidate, 0, len(disk.Profiles))
 	}
@@ -154,8 +138,6 @@ func (config Config) validateFields() error {
 		len(config.ActiveRelays) > relayset.MaximumEndpoints {
 		return ErrConfig
 	}
-	// Diagnose saved addresses before projecting them into TURN settings, where
-	// an unrelated wrapper would obscure the profile the user needs to repair.
 	saved := map[string]bool{}
 	for index, profile := range config.Profiles {
 		endpoint, err := v2.NormalizeRelayEndpoint(profile.PublicURL)
@@ -171,9 +153,6 @@ func (config Config) validateFields() error {
 	}
 	if _, err := relayprofile.PublicURLs(config.Profiles); err != nil {
 		return ErrConfig
-	}
-	if err := config.TURNSettings().Validate(); err != nil {
-		return errors.Join(ErrConfig, err)
 	}
 	seen := map[string]bool{}
 	for index, address := range config.ActiveRelays {

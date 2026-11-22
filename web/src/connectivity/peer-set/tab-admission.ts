@@ -21,7 +21,6 @@ export class PeerTabCapacityTimeoutError extends DOMException {
 }
 interface WaitingAttempt {
   readonly purpose: import('../signaling-codec').ConnectionPurpose
-  readonly route: 'direct' | 'turn'
   readonly receiver: object
   readonly endpoints: number
   readonly signal: AbortSignal
@@ -57,7 +56,7 @@ export class PeerTabAdmission {
     this.#endpoints = this.#policy.stunEndpointsPerInterval
   }
 
-  acquire(receiver: object, endpoints: number, waitMilliseconds: number, signal: AbortSignal, route: 'direct' | 'turn' = 'direct', purpose: import('../signaling-codec').ConnectionPurpose = 'initial'): Promise<PeerTabAdmissionPermit> {
+  acquire(receiver: object, endpoints: number, waitMilliseconds: number, signal: AbortSignal, purpose: import('../signaling-codec').ConnectionPurpose = 'initial'): Promise<PeerTabAdmissionPermit> {
     signal.throwIfAborted()
     if (!Number.isInteger(endpoints) || endpoints < 0 || endpoints > 2 ||
       !Number.isFinite(waitMilliseconds) || waitMilliseconds < 0) {
@@ -66,7 +65,7 @@ export class PeerTabAdmission {
     if (this.#queued >= this.#policy.queuedAttempts) return Promise.reject(capacityTimeout())
     return new Promise((resolve, reject) => {
       const pending: WaitingAttempt = {
-        receiver, endpoints, signal, route, purpose, expiresAt: this.#clock.now() + waitMilliseconds,
+        receiver, endpoints, signal, purpose, expiresAt: this.#clock.now() + waitMilliseconds,
         resolve, reject, abort: () => {
           this.#remove(pending)
           reject(signal.reason)
@@ -156,7 +155,7 @@ export class PeerTabAdmission {
     }).catch(() => undefined)
   }
   #refillDelay(pending: WaitingAttempt): number {
-    const reserve = pending.route === 'turn' || pending.purpose === 'throughput' ? 1 : 0
+    const reserve = pending.purpose === 'throughput' ? 1 : 0
     if (this.#active >= this.#policy.concurrentAttempts - reserve) return Number.POSITIVE_INFINITY
     return Math.max((1 + reserve - this.#starts) * this.#policy.intervalMilliseconds / this.#policy.startsPerInterval,
       (pending.endpoints - this.#endpoints) * this.#policy.intervalMilliseconds / this.#policy.stunEndpointsPerInterval, 0)

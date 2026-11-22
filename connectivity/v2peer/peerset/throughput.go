@@ -96,9 +96,6 @@ func (s *ReceiverSession) throughputPaths(lanes *transferlanes.Set) ([]throughpu
 	targets := make(map[throughput.PathIdentity]*Path)
 	pending := false
 	for _, path := range ordered {
-		if _, relayed := path.config.ICE.Relay(); relayed {
-			continue
-		}
 		lane, admitted := path.Lane()
 		if !admitted {
 			pending = true
@@ -152,7 +149,7 @@ func (s *ReceiverSession) pathFinished(result Result) {
 	}
 	if result.Scope != protocolsession.PeerFailureSessionTerminal {
 		s.owner.mu.Lock()
-		recoverable := len(s.owner.paths) > 0 || s.turn != nil
+		recoverable := len(s.owner.paths) > 0
 		s.owner.mu.Unlock()
 		if recoverable {
 			return

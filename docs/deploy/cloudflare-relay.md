@@ -85,7 +85,7 @@ Optionally stop that credential's existing shares on this relay; this also block
 Established direct transfers remain independent. Revocation also stops that device's
 TURN issuance and queues outstanding credentials for provider revocation; delegated
 credentials remain usable until confirmation or expiry. The console shows this
-progress. Losing a client key requires enrolling again. See [TURN controls](../turn.md).
+progress. Losing a client key requires enrolling again.
 
 Switch `CLOUDFLARE_DEPLOYMENT_MODE` and rerun to move between `full` and `relay-only`.
 Both modes retain access and share storage. `CLOUDFLARE_RELAY_ENABLED=false` disables automatic

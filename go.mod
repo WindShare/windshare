@@ -10,8 +10,6 @@ replace github.com/pion/ice/v4 => ./third_party/pion/ice
 
 replace github.com/pion/webrtc/v4 => ./third_party/pion/webrtc
 
-replace github.com/pion/turn/v5 => ./third_party/pion/turn
-
 replace github.com/pion/sctp => ./third_party/pion/sctp
 
 require (
@@ -27,7 +25,6 @@ require (
 	github.com/pion/logging v0.2.4
 	github.com/pion/stun/v4 v4.0.1
 	github.com/pion/transport/v5 v5.1.4
-	github.com/pion/turn/v5 v5.1.3
 	// Native transport and connectivity own Pion; core remains transport-neutral.
 	// The pinned source projection preserves provider capabilities across upgrades.
 	github.com/pion/webrtc/v4 v4.2.26
@@ -59,6 +56,7 @@ require (
 	github.com/pion/sctp v1.12.0 // indirect
 	github.com/pion/sdp/v3 v3.0.20 // indirect
 	github.com/pion/srtp/v3 v3.1.3 // indirect
+	github.com/pion/turn/v5 v5.1.3 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	golang.org/x/crypto v0.54.0 // indirect

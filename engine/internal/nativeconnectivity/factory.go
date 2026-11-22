@@ -10,14 +10,12 @@ import (
 	pion "github.com/pion/webrtc/v4"
 	"github.com/windshare/windshare/connectivity/icepolicy"
 	"github.com/windshare/windshare/connectivity/nativepeer"
-	"github.com/windshare/windshare/connectivity/turnpath"
 	"github.com/windshare/windshare/connectivity/v2peer"
 	wsrtc "github.com/windshare/windshare/transport/webrtc"
 )
 
 type SenderConfig struct {
 	Capacity       *Capacity
-	TURN           turnpath.Accounts
 	Now            func() time.Time
 	Diagnostics    bool
 	ObserveChannel func(*wsrtc.Channel)
@@ -42,7 +40,6 @@ func senderConfig(config SenderConfig) (v2peer.Config, error) {
 		return v2peer.Config{}, err
 	}
 	result := v2peer.Config{
-		TURN:          config.TURN,
 		Configuration: v2peer.DefaultConfiguration(),
 		Native:        native,
 		Now:           config.Now,

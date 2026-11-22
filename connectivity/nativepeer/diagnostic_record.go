@@ -54,11 +54,6 @@ func (value Observation) DiagnosticRecord() diag.Record {
 		fields["kind"], fields["state"], at = diag.Text(p.Milestone), diag.Text(p.State), p.At
 		providerDiagnosticFields(fields, p)
 	}
-	if t := value.TURN; t != nil {
-		fields["kind"], at = diag.Text("turn_path"), t.At
-		fields["turn"] = diag.Object(diag.Fields{"provider": diag.Text(t.Provider), "account": diag.Text(t.Account), "profile": diag.Text(t.Profile),
-			"milestone": diag.Text(t.Milestone.String()), "reason": diag.Text(t.Reason), "useful_bytes": diag.Uint(t.UsefulBytes)})
-	}
 	if p := value.Parallelism; p != nil {
 		d, o := p.Decision, p.Demand
 		fields["kind"], at = diag.Text("parallelism"), p.At
@@ -115,15 +110,7 @@ func diagnosticProtocol(value reachability.Protocol) string {
 	}
 }
 
-func diagnosticLocalRoute(address netip.Addr) diag.Value {
-	if !address.IsValid() {
-		return diag.Text("system")
-	}
-	return diag.Text(address.String())
-}
-
 func providerDiagnosticFields(fields diag.Fields, p *pionpeer.Event) {
-
 	if d := p.Diagnostic; d != nil {
 		fields["diagnostic"] = diag.Object(diag.Fields{"scope": diag.Text(d.Scope), "severity": diag.Text(d.Severity), "message": diag.Text(d.Message)})
 	}
@@ -138,23 +125,4 @@ func providerDiagnosticFields(fields diag.Fields, p *pionpeer.Event) {
 			"local_port": diag.Number(float64(pair.LocalPort)), "remote_port": diag.Number(float64(pair.RemotePort)),
 			"pair_rtt_ms": diag.Millis(pair.RoundTripTime)})
 	}
-	if p.TURNService != nil {
-		fields["turn"] = providerTURNDiagnostic(p)
-	}
-}
-
-func providerTURNDiagnostic(p *pionpeer.Event) diag.Value {
-	t := diag.Fields{"provider": diag.Text(p.TURNService.Provider), "account": diag.Text(p.TURNService.Account), "profile": diag.Text(p.TURNService.Profile), "reason": diag.Text(p.TURNCleanup.Reason())}
-	if r := p.TURN; r != nil {
-		t["resources"] = diag.Object(diag.Fields{"active_sockets": diag.Int(int64(r.ActiveSockets)), "opened_sockets": diag.Uint(r.OpenedSockets),
-			"transport_sent_bytes": diag.Uint(r.TransportSent), "transport_received_bytes": diag.Uint(r.TransportReceived)})
-	}
-	if b := p.TURNBinding; b != nil {
-		t["binding"] = diag.Object(diag.Fields{"status": diag.Text(b.Status.String()), "code": diag.Number(float64(b.Code)),
-			"channel": diag.Number(float64(b.Channel)), "peer": diag.Text(b.PeerAddress), "allocation": diag.Text(b.RelayedAddress)})
-	}
-	if r := p.TURNRoute; r != nil {
-		t["route"] = diag.Object(diag.Fields{"server": diag.Text(r.Server), "local": diagnosticLocalRoute(r.LocalAddress), "outcome": diag.Text(r.Outcome)})
-	}
-	return diag.Object(t)
 }

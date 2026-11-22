@@ -23,7 +23,7 @@ func TestDownloadRecoveryCountsUniqueRevisionRangesAndActiveFallbackWait(t *test
 	now = now.Add(time.Hour)
 	wait = m.Pending()
 	now = now.Add(2 * time.Second)
-	m.Delivered("revision-a", 50, 150, TURN)
+	m.Delivered("revision-a", 50, 150, ApplicationRelay)
 	now = now.Add(time.Second)
 	wait()
 	m.Delivered("revision-a", 0, 150, ApplicationRelay)
@@ -31,7 +31,7 @@ func TestDownloadRecoveryCountsUniqueRevisionRangesAndActiveFallbackWait(t *test
 	m.Availability(true)
 	got := m.Snapshot(true)
 	if got.FirstDirectElapsed == nil || *got.FirstDirectElapsed != 0 || got.FallbackStall != 5*time.Second ||
-		got.DirectBytes != 100 || got.TURNBytes != 50 || got.ApplicationRelayBytes != 100 ||
+		got.DirectBytes != 100 || got.ApplicationRelayBytes != 150 ||
 		got.DirectFraction == nil || *got.DirectFraction != 0.4 || got.Incomplete || !got.Final {
 		t.Fatalf("%+v", got)
 	}
@@ -73,9 +73,9 @@ func TestIntervalUnionClockRegressionAndInvalidEvidence(t *testing.T) {
 	now := time.Unix(0, 0)
 	m := New("ranges", func() time.Time { return now }, false)
 	m.Delivered("r", 10, 20, Direct)
-	m.Delivered("r", 30, 40, TURN)
+	m.Delivered("r", 30, 40, Direct)
 	m.Delivered("r", 0, 50, ApplicationRelay)
-	if got := m.Snapshot(false); got.DirectBytes != 10 || got.TURNBytes != 10 || got.ApplicationRelayBytes != 30 {
+	if got := m.Snapshot(false); got.DirectBytes != 20 || got.ApplicationRelayBytes != 30 {
 		t.Fatal(got)
 	}
 	m.Delivered("", 0, 1, Direct)

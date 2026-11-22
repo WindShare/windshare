@@ -63,15 +63,14 @@ The root `go.mod` owns WindShare's production Go packages; pinned Pion dependenc
 │   ├── builtinnetwork/, networkconfig/, networkdirectory/ Built-in network wiring, trust config, and directory refresh
 │   ├── relayprofile/              Relay selection and saved credentials
 │   ├── relayconfig/, relaysetup/  Saved relay/frontend settings, discovery, device enrollment, and installation
-│   ├── turn/, turncache/          TURN settings/status contracts and relay-scoped capability cache
-│   └── internal/                 Share/receive/recovery workflows, native connectivity, network, and TURN runtime
+│   └── internal/                 Share/receive/recovery workflows, native connectivity, and network runtime
 ├── host/desktop/                 Go engine ownership, share/setup commands, authenticated loopback control
 ├── cmd/
 │   ├── wind/                     CLI requests, presentation, recovery interaction, and exit-code mapping
 │   ├── windshare-host/           Go shared library; C ABI for desktop host lifetime and result buffers
 │   ├── network-sign/             Offline root authorization and online directory signing CLI
 │   └── testprocessowner/         Test-only bounded process supervisor
-├── connectivity/                 E2E signaling, PeerSet/Pion orchestration, ICE/TURN/socket/gateway policies, and relay admission
+├── connectivity/                 E2E signaling, PeerSet/Pion orchestration, ICE/socket/gateway policies, and relay admission
 ├── transport/
 │   ├── relayv2/                  Relay registration and multiplexed FrameChannel lifecycle
 │   └── webrtc/                   Pion FrameChannels and terminal lifecycle
@@ -101,7 +100,7 @@ The root `go.mod` owns WindShare's production Go packages; pinned Pion dependenc
 ├── e2e/                          Process-level Go end-to-end tests
 ├── spikes/                       R0 feasibility and isolated Pion↔Chromium evidence
 ├── testdata/                     Browser/output evidence, ICE policy/topology, and provider capabilities
-├── third_party/pion/              Pinned ICE/WebRTC/TURN/SCTP sources, patches, and reproducibility manifest
+├── third_party/pion/              Pinned ICE/WebRTC/SCTP sources, patches, and reproducibility manifest
 ├── deploy/
 │   ├── network/                  Signed network manifests, history, and Caddy templates
 │   └── wsrelay/                  Native relay container image

@@ -12,7 +12,6 @@ export default defineConfig({
   testMatch: [
     'v2-direct-hot-switch.weekly.spec.ts',
     'v2-direct-recovery.weekly.spec.ts',
-    'v2-local-turn.network.spec.ts',
   ],
   outputDir: 'test-results/network-routes',
   fullyParallel: false,

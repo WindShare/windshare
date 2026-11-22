@@ -10,7 +10,6 @@ import (
 
 	pion "github.com/pion/webrtc/v4"
 	"github.com/windshare/windshare/connectivity/nativepeer"
-	"github.com/windshare/windshare/connectivity/turnpath"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
 
@@ -101,7 +100,6 @@ func (function DataChannelAdapterFunc) WrapDataChannel(
 }
 
 type Config struct {
-	TURN               turnpath.Accounts
 	Native             *nativepeer.NativePeerConnectivity
 	Configuration      pion.Configuration
 	PeerConnections    PeerConnectionFactory
@@ -120,7 +118,6 @@ type Config struct {
 }
 
 type Factory struct {
-	turn                  turnpath.Accounts
 	native                *nativepeer.NativePeerConnectivity
 	configuration         pion.Configuration
 	peerConnections       PeerConnectionFactory
@@ -206,7 +203,6 @@ func NewFactory(config Config) (*Factory, error) {
 		return nil, errors.Join(ErrConfig, err)
 	}
 	factory := &Factory{
-		turn:          config.TURN,
 		native:        config.Native,
 		configuration: config.Configuration, peerConnections: config.PeerConnections,
 		dataChannels:      config.DataChannels,
@@ -354,7 +350,6 @@ type senderHandler struct {
 	inboxMu sync.Mutex
 	closed  bool
 	ingress sync.WaitGroup
-	turn    *turnpath.Sender
 
 	mu       sync.Mutex
 	attempts map[peerOperation]*peerAttempt

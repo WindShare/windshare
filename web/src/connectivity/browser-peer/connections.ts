@@ -11,7 +11,7 @@ export interface BrowserPeerConnectionsOptions {
   readonly browser?: BrowserIdentity
 }
 
-/** Session-owned: direct and TURN attempts share a bounded compatibility downgrade. */
+/** Session-owned: peer attempts share a bounded compatibility downgrade. */
 export class BrowserPeerConnections {
   readonly #create: (configuration: RTCConfiguration) => RTCPeerConnection
   #policy: ReceiveBufferPolicy
@@ -32,7 +32,7 @@ export class BrowserPeerConnections {
         errorName: cause instanceof Error ? cause.name.slice(0, MAXIMUM_BROWSER_ERROR_NAME_CHARACTERS) : 'none' })
     }
     // WindShare peers support BUNDLE. Gathering per media type would multiply
-    // ICE sockets and TURN allocations merely to obtain a shared socket buffer.
+    // ICE sockets merely to obtain a shared socket buffer.
     const create = () => this.#create({ ...structuredClone(configuration), bundlePolicy: 'max-bundle' })
     const peer = create()
     report({ kind: 'receive-buffer', strategy: policy.strategy, stage: 'selected',

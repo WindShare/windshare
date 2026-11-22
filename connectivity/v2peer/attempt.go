@@ -9,7 +9,6 @@ import (
 	"time"
 
 	pion "github.com/pion/webrtc/v4"
-	"github.com/windshare/windshare/connectivity/turnpath"
 	"github.com/windshare/windshare/connectivity/v2peer/internal/candidatewriter"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -50,8 +49,6 @@ func (rejection *peerOperationRejection) Error() string { return rejection.messa
 func (rejection *peerOperationRejection) Unwrap() error { return rejection.cause }
 
 type peerAttemptConfig struct {
-	turn       *turnpath.Sender
-	turnLease  *turnpath.AuthorizedPath
 	factory    *Factory
 	session    sendersession.PeerSession
 	operation  protocolsession.OperationID
@@ -276,7 +273,6 @@ type attemptExecution struct {
 	children          sync.WaitGroup
 	phaseContext      context.Context
 	transport         *ownedPeerDataChannel
-	turnAdmission     *turnpath.Admission
 	transportFailure  peerChannelFailure
 	openTransition    <-chan struct{}
 	candidateWriter   *candidatewriter.Writer
@@ -382,7 +378,6 @@ func (execution *attemptExecution) negotiate() error {
 func (execution *attemptExecution) close(result error) error {
 	execution.candidateWriter.Stop()
 	defer execution.candidateWriter.Close()
-	execution.turnAdmission.Close()
 	execution.attempt.stop(result)
 	execution.attempt.phases.terminate(result)
 	var teardown peerTransportTeardown

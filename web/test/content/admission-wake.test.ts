@@ -112,7 +112,7 @@ describe('admission wake ownership', () => {
     expect(probe.purpose).toBe('probe')
     expect(vi.getTimerCount()).toBe(0)
     probe.close('completed')
-    lanes.splice(1, 1, lane(3, 'turn', BLOCK_BYTES))
+    lanes.splice(1, 1, lane(3, 'application-relay', BLOCK_BYTES))
     lanes[1]!.performance.lastAttempt = undefined
     sampled = undefined
     const next = request(work(2, controller.signal)).then(value => { sampled = value; return value })

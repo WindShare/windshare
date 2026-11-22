@@ -32,7 +32,7 @@ const (
 )
 
 // TerminalConnectivity is defined at the session consumer boundary. Core never
-// learns provider, TURN, relay-node, or path-cost details; it only coordinates
+// learns provider, relay-node, or path-cost details; it only coordinates
 // monotonic share termination with the owner of those resources.
 type TerminalConnectivity interface {
 	// StopRecovery must return promptly after preventing new registration or

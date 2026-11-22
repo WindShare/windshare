@@ -115,12 +115,7 @@ func (a *Application) admitAfter(op *operation, previous <-chan struct{}) {
 }
 
 func (a *Application) runAdmission(ctx context.Context, op *operation, trace diagnostics.Sink) {
-	// TURN configuration is engine-wide. Serialize admission without blocking
-	// control requests, and allow queued selections to be cancelled immediately.
-	select {
-	case a.admissions <- struct{}{}:
-		defer func() { <-a.admissions }()
-	case <-ctx.Done():
+	if ctx.Err() != nil {
 		a.completeAdmission(ctx, op, terminal{})
 		return
 	}
@@ -138,9 +133,6 @@ func (a *Application) prepareAdmission(ctx context.Context, op *operation, trace
 	}
 	if err != nil {
 		return configurationBlocked("configuration_required", err)
-	}
-	if err := a.deps.configure(config.TURNSettings()); err != nil {
-		return configurationBlocked("settings_unavailable", err)
 	}
 	if ctx.Err() != nil {
 		return terminal{}

@@ -16,7 +16,7 @@ WINDSHARE_CONTRACT_PORT="$CHROMIUM_PERIODIC_CONTRACT_PORT" pnpm -C web run test:
 echo "-- progressive catalog paging"
 pnpm -C web run test:browser:progressive
 
-echo "-- direct and TURN relay-cut routes"
+echo "-- direct relay-cut routes"
 pnpm -C web run test:browser:network
 
 echo "-- browser and Pion interoperability"

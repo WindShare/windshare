@@ -133,7 +133,6 @@ export class LaneSet {
   readonly #idleWaiters = new Set<() => void>()
   readonly #work = new Set<Promise<BlockRecord>>()
   readonly #admissionLifetime = new AbortController()
-  readonly #useful = new Map<number, { bytes: number; admittedAt: number; lastAt: number | undefined }>()
   readonly #waiters = new Set<PendingLane>()
   readonly #dispatchSequence: BlockDispatchSequenceAuthority
   readonly #onBlockDispatched: (observation: BlockDispatchObservation) => void
@@ -171,7 +170,6 @@ export class LaneSet {
     const receive = new BlockReceiveWindow(this.#now)
     const unsubscribeReceive = receive.subscribeAvailable(() => this.wakeContent())
     this.#lanes.set(lane.id, { lane, laneEpoch, route, inflight: 0, failed: false, performance, sampling: new LaneSampling(), receive, unsubscribeReceive })
-    this.#useful.set(lane.id, { bytes: 0, admittedAt: this.#now(), lastAt: undefined })
     this.requests.add({ id: lane.id, epoch: laneEpoch, route, content: receive })
     this.#wakeWaiters()
   }
@@ -197,7 +195,6 @@ export class LaneSet {
     }
     this.#lanes.delete(laneId)
     this.#draining.delete(laneId)
-    this.#useful.delete(laneId)
     this.requests.remove(laneId)
     this.#wakeWaiters()
   }
@@ -253,23 +250,6 @@ export class LaneSet {
 
   laneIds(): readonly number[] {
     return Object.freeze([...this.#lanes.keys()])
-  }
-
-  measureLane(laneId: number, laneEpoch: number): { usefulBytes: number; unhelpful: boolean; busyMilliseconds: number; pendingBytes: number } {
-    const state = this.#lanes.get(laneId)
-    const useful = this.#useful.get(laneId)
-    if (state === undefined || state.laneEpoch !== laneEpoch || useful === undefined) return { usefulBytes: 0, unhelpful: false, busyMilliseconds: 0, pendingBytes: 0 }
-    const quietWindowMs = 30_000
-    const minimumRateRatio = 1.5
-    const sampledIdle = state.performance.hasSuccessfulSample && state.inflight === 0 &&
-      this.#now() - (useful.lastAt ?? useful.admittedAt) >= quietWindowMs
-    const unhelpful = sampledIdle && [...this.#lanes.values()].some((other) => {
-      const recent = this.#useful.get(other.lane.id)?.lastAt
-      return other !== state && !other.failed && recent !== undefined && this.#now() - recent < quietWindowMs &&
-        other.performance.hasSuccessfulSample && other.performance.bytesPerSecond > state.performance.bytesPerSecond * minimumRateRatio
-    })
-    return { usefulBytes: useful.bytes, unhelpful,
-      busyMilliseconds: state.performance.busyMilliseconds(this.#now()), pendingBytes: state.performance.pendingBytes }
   }
 
   sampleLane(laneId: number, laneEpoch: number): void {
@@ -516,9 +496,6 @@ export class LaneSet {
     // A retired route may finish valid content, but cannot attest which replacement path carried it.
     if (this.#lanes.get(state.lane.id) !== state) return
     deliveredRoutes.set(record, state.route)
-    const useful = this.#useful.get(state.lane.id)!
-    useful.bytes = Math.min(Number.MAX_SAFE_INTEGER, useful.bytes + record.data.byteLength)
-    useful.lastAt = this.#now()
     try {
       this.#onBlockFetched(Object.freeze({ ...observation, usefulBytes: record.data.byteLength }))
     } catch {

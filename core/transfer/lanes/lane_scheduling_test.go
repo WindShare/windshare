@@ -222,46 +222,6 @@ func TestLaneSchedulingRescueRespectsRouteAndSuspension(t *testing.T) {
 	lanes.attempts.Done()
 }
 
-func TestLaneMeasurementRequiresAnIdleSampleAndUsefulAlternative(t *testing.T) {
-	now := time.Unix(100, 0)
-	lanes, err := New(Config{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](124), Now: func() time.Time { return now }})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer lanes.Close()
-	for _, id := range []uint32{1, 2} {
-		if err := lanes.Add(Identity{ID: id}, RouteTURN, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
-			return records.BlockRecord{}, nil
-		})); err != nil {
-			t.Fatal(err)
-		}
-	}
-	slow, fast := lanes.lanes[1], lanes.lanes[2]
-	slow.performance = lanescheduling.Performance{HasSuccessfulSample: true, BytesPerSecond: 100}
-	fast.performance = lanescheduling.Performance{HasSuccessfulSample: true, BytesPerSecond: 200}
-	fast.lastUsefulAt = now
-	if lanes.MeasureLane(slow.identity).Unhelpful {
-		t.Fatal("new route did not receive an exploration window")
-	}
-	now = now.Add(UnhelpfulLaneWindow)
-	if lanes.MeasureLane(slow.identity).Unhelpful {
-		t.Fatal("idle alternative justified retirement")
-	}
-	fast.lastUsefulAt = now
-	if !lanes.MeasureLane(slow.identity).Unhelpful {
-		t.Fatal("sampled route that never won retained resources indefinitely")
-	}
-	slow.inflight = 1
-	if lanes.MeasureLane(slow.identity).Unhelpful {
-		t.Fatal("active request was retired")
-	}
-	slow.inflight = 0
-	slow.lastUsefulAt, slow.usefulBytes = now, 123
-	if measurement := lanes.MeasureLane(slow.identity); measurement.Unhelpful || measurement.UsefulBytes != 123 {
-		t.Fatalf("useful route was retired: %+v", measurement)
-	}
-}
-
 // Real receipt evidence avoids manufacturing scheduling capacity from authentication counters.
 func seedDelivery(state *laneState, bytes uint64, elapsed time.Duration, now time.Time) {
 	permit := state.receive.TryReserve(bytes, now.Add(-elapsed))

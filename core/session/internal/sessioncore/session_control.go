@@ -12,12 +12,8 @@ func (runtime *Runtime) SetPeerPathControlHandler(handler func(context.Context, 
 	runtime.peerPathControls.set(handler)
 }
 
-func (runtime *Runtime) SetTURNControlHandler(handler func(context.Context, []byte) error) {
-	runtime.turnControls.set(handler)
-}
-
 // Each control family owns its callback while sharing authentication and lane
-// delivery. Replacing a path handler cannot disconnect TURN delegation.
+// delivery.
 type sessionControlHandler struct {
 	mu       sync.RWMutex
 	callback func(context.Context, []byte) error

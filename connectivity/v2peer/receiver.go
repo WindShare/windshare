@@ -8,8 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/windshare/windshare/connectivity/iceconfig"
-
 	pion "github.com/pion/webrtc/v4"
 	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/v2peer/internal/candidatewriter"
@@ -245,10 +243,6 @@ func (factory *ReceiverFactory) Start(
 
 // StartPreparedBinding transfers an admitted preparation into one timed attempt.
 func (factory *ReceiverFactory) StartPreparedBinding(parent context.Context, signaling ReceiverSignaling, lanes ReceiverLaneSession, binding v2signal.Binding, prepared *nativepeer.PreparedAttempt) (*ReceiverAttempt, error) {
-	return factory.startPreparedConnection(parent, signaling, lanes, binding, prepared, iceconfig.Connection{})
-}
-
-func (factory *ReceiverFactory) startPreparedConnection(parent context.Context, signaling ReceiverSignaling, lanes ReceiverLaneSession, binding v2signal.Binding, prepared *nativepeer.PreparedAttempt, ice iceconfig.Connection) (*ReceiverAttempt, error) {
 	if factory == nil || signaling == nil || lanes == nil || parent == nil || binding.Validate() != nil {
 		return nil, ErrConfig
 	}
@@ -276,7 +270,7 @@ func (factory *ReceiverFactory) startPreparedConnection(parent context.Context, 
 	}); ok {
 		sessionID = session.ProtocolSessionID()
 	}
-	request := nativepeer.AttemptRequest{Configuration: factory.configuration, ICE: ice, ProtocolSessionID: [16]byte(sessionID), Binding: binding}
+	request := nativepeer.AttemptRequest{Configuration: factory.configuration, ProtocolSessionID: [16]byte(sessionID), Binding: binding}
 	var peer ReceiverPeerConnection
 	if factory.peerConnections != nil {
 		peer, err = factory.peerConnections.NewReceiverPeerConnection(phaseContext, request)

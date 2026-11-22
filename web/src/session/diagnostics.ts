@@ -184,7 +184,7 @@ export type ContentSchedulingTraceEvent = Readonly<{
   dispatchSequence: number
   fileId: string
   localBlockIndex: bigint
-  route: 'application-relay' | 'direct' | 'turn'
+  route: 'application-relay' | 'direct'
   purpose: import('../content/scheduling/exploration').DispatchPurpose
   deliveryEvidence?: 'unknown' | 'recent' | 'stale'
   rescueReason?: import('../content/scheduling/exploration').RescueReason
@@ -259,6 +259,5 @@ export function protocolMessageKindV1(kind: MessageKind): ProtocolMessageKindV1 
     case MESSAGE_KIND.peerAnswer: return 'peer_answer'
     case MESSAGE_KIND.peerCandidate: return 'peer_candidate'
     case MESSAGE_KIND.peerPathControl: return 'peer_path_control'
-    case MESSAGE_KIND.turnControl: return 'turn_control'
   }
 }

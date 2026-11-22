@@ -1,23 +1,11 @@
 package pionpeer
 
 import (
-	"net"
 	"net/netip"
-	"strconv"
 
 	"github.com/pion/ice/v4"
 	pion "github.com/pion/webrtc/v4"
-	"github.com/windshare/windshare/core/connectionpath"
 )
-
-func (c *Connection) observeTURNCleanup(outcome connectionpath.CleanupOutcome) {
-	if c.request.Observe == nil {
-		return
-	}
-	event := c.event(outcome.EventKind(), "")
-	event.TURNCleanup = outcome
-	c.request.Observe(event)
-}
 
 type CandidateFacts struct {
 	Priority uint32
@@ -65,12 +53,6 @@ func (c *Connection) OnICECandidate(callback func(*pion.ICECandidate)) {
 	})
 }
 func (c *Connection) observeSelectedPair(pair *pion.ICECandidatePair) {
-	if pair != nil && c.turnGathering != nil {
-		if address, err := netip.ParseAddrPort(net.JoinHostPort(pair.Local.Address, strconv.Itoa(int(pair.Local.Port)))); err == nil {
-			c.turnGathering.Select(address)
-		}
-		c.selectTURNPair(pair)
-	}
 	if c.request.Observe == nil || pair == nil {
 		return
 	}

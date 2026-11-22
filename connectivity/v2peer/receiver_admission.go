@@ -21,7 +21,7 @@ type PeerRouteObserver interface {
 func selectedPeerRoute(peer ReceiverPeerConnection) (transferlanes.Route, error) {
 	if observer, ok := peer.(PeerRouteObserver); ok {
 		route, valid := observer.SelectedPeerRoute()
-		if valid && (route == transferlanes.RouteDirect || route == transferlanes.RouteTURN) {
+		if valid && route == transferlanes.RouteDirect {
 			return route, nil
 		}
 		return 0, ErrNegotiation
@@ -39,7 +39,7 @@ func selectedPeerRoute(peer ReceiverPeerConnection) (transferlanes.Route, error)
 		return 0, errors.Join(ErrNegotiation, err)
 	}
 	if pair.Local.Typ == pion.ICECandidateTypeRelay || pair.Remote.Typ == pion.ICECandidateTypeRelay {
-		return transferlanes.RouteTURN, nil
+		return 0, ErrNegotiation
 	}
 	return transferlanes.RouteDirect, nil
 }

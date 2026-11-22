@@ -15,7 +15,7 @@ See [`docs/protocol.md`](../docs/protocol.md), [`docs/browser-downloads.md`](../
 | `src/crypto/`, `src/protocol/` | Suite-02 links/key hierarchy, sealed-object auth, canonical CBOR/text, control payloads |
 | `src/contracts/`, `src/session/` | `FrameChannel` contracts and protocol session runtime |
 | `src/catalog/`, `src/content/` | Progressive catalog paging/cache, revisions, range brokering, and lane scheduling |
-| `src/transport/`, `src/connectivity/`, `src/receiver/` | Relay/WebRTC channels, signaling, peer/TURN adoption, and reconnect supervision |
+| `src/transport/`, `src/connectivity/`, `src/receiver/` | Relay/WebRTC channels, signaling, peer adoption, and reconnect supervision |
 | `src/network/` | Signed node directory and network authority verification/caching |
 | `src/transfer/` | Receive intent, progressive discovery, job lifecycle, checkpoints, and settlement |
 | `src/output/` | Artifact authority, FSA/OPFS/portable output, and recovery persistence |

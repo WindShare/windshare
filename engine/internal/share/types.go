@@ -13,7 +13,6 @@ import (
 	"github.com/windshare/windshare/connectivity/icepolicy"
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/connectivity/senderrelay"
-	"github.com/windshare/windshare/connectivity/turnpath"
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
@@ -94,7 +93,6 @@ type Relay interface {
 
 type Dependencies struct {
 	Clock            senderrelay.Clock
-	TURN             turnpath.Accounts
 	Control          task.Control
 	Controller       *Controller
 	RevisionCapacity *content.HandlePool

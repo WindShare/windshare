@@ -23,7 +23,7 @@ test('application and reusable modules reject presentation even through a shared
 })
 
 test('protocol sessions and wire codecs cannot reach connectivity implementations', () => {
-  for (const root of ['session/runtime.ts', 'protocol/turn-control.ts']) {
+  for (const root of ['session/runtime.ts', 'protocol/peer-path-control.ts']) {
     assert.ok(violations([
       [root, ['contracts/barrel.ts']],
       ['contracts/barrel.ts', ['connectivity/peer.ts']],
@@ -31,9 +31,9 @@ test('protocol sessions and wire codecs cannot reach connectivity implementation
     ]).some(chain => chain[0] === root && chain.at(-1) === 'connectivity/peer.ts'))
   }
   assert.deepEqual(violations([
-    ['session/runtime.ts', ['protocol/turn-control.ts', 'contracts/relay-delivery-observation.ts']],
-    ['connectivity/peer.ts', ['session/runtime.ts', 'protocol/turn-control.ts']],
-    ['protocol/turn-control.ts', []],
+    ['session/runtime.ts', ['protocol/peer-path-control.ts', 'contracts/relay-delivery-observation.ts']],
+    ['connectivity/peer.ts', ['session/runtime.ts', 'protocol/peer-path-control.ts']],
+    ['protocol/peer-path-control.ts', []],
     ['contracts/relay-delivery-observation.ts', []],
   ]), [])
 })

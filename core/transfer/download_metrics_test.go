@@ -71,7 +71,7 @@ func TestDownloadMetricsSurviveGenerationAndLaneEpochReplacement(t *testing.T) {
 	relay := makeLanes(91)
 	defer relay.Close()
 	relayBroker := metricsBroker(t, relay, descriptor, metrics)
-	if err := relay.Add(transferlanes.Identity{ID: 1, Epoch: 1}, transferlanes.RouteTURN, lane); err != nil {
+	if err := relay.Add(transferlanes.Identity{ID: 1, Epoch: 1}, transferlanes.RouteRelay, lane); err != nil {
 		t.Fatal(err)
 	}
 	// Same immutable revision under fresh protocol: no duplicate useful credit.
@@ -80,7 +80,7 @@ func TestDownloadMetricsSurviveGenerationAndLaneEpochReplacement(t *testing.T) {
 	}
 	got := metrics.Snapshot(true)
 	if got.FirstDirectElapsed == nil || *got.FirstDirectElapsed != 10*time.Millisecond || got.DirectBytes != chunk ||
-		got.TURNBytes != chunk || got.DirectFraction == nil || *got.DirectFraction != 0.5 || got.Incomplete {
+		got.ApplicationRelayBytes != chunk || got.DirectFraction == nil || *got.DirectFraction != 0.5 || got.Incomplete {
 		t.Fatal(got)
 	}
 }

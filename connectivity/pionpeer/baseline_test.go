@@ -132,7 +132,7 @@ func TestLocalFixedSTUNSocketLifecycleBaseline(t *testing.T) {
 				"fixture": name, "topology": "local-udp4-loopback-single-stun", "scope": "transport-payload-download-reconstruction",
 				"download_connectivity": map[string]any{
 					"download_id": snapshot.DownloadID, "first_direct_elapsed_ms": elapsed,
-					"direct_bytes": strconv.FormatUint(snapshot.DirectBytes, 10), "turn_bytes": "0", "application_relay_bytes": "0", "unknown_bytes": "0",
+					"direct_bytes": strconv.FormatUint(snapshot.DirectBytes, 10), "application_relay_bytes": "0", "unknown_bytes": "0",
 					"direct_fraction": snapshot.DirectFraction, "fallback_stall_ms": strconv.FormatInt(snapshot.FallbackStall.Milliseconds(), 10), "incomplete": snapshot.Incomplete, "final": snapshot.Final,
 				},
 				"selected_pairs": pairs, "stun_sources": sources,

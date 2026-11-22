@@ -20,7 +20,7 @@ function fixture() {
     performance: new LanePerformance(), sampling: new LaneSampling(), receive: new BlockReceiveWindow(Date.now),
     unsubscribeReceive() {}, inflight: 0, failed: false,
   })
-  const fast = lane(1, 'turn'), unknown = lane(2, 'application-relay')
+  const fast = lane(1, 'direct'), unknown = lane(2, 'application-relay')
   const sample = fast.receive.tryAcquire(BLOCK)!
   vi.setSystemTime(100); sample.receive(BLOCK); sample.close()
   const backlog = fast.receive.tryAcquire(4 * BLOCK)!

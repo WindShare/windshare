@@ -37,10 +37,6 @@ func (a *App) runShare(ctx context.Context, args []string) (code int) {
 		return ExitFailure
 	}
 	defer closeApp(&code)
-	if err := a.application.ConfigureTURN(request.sharing.TURNSettings()); err != nil {
-		a.writeCompleteLine("share: TURN configuration: %v", err)
-		return ExitUsage
-	}
 
 	// Ctrl+C means explicitly stop publishing this share. Its cleanup lifetime
 	// belongs to the engine and therefore outlives this command's canceled wait.

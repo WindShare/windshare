@@ -164,11 +164,11 @@ describe('browser receive buffer negotiation recovery', () => {
       expect(fixture.created()).toBe(1)
       expect(fixture.facts).toContainEqual(expect.objectContaining({ kind: 'receive-buffer', stage: 'disabled' }))
 
-      // TURN creates another offer factory, but must inherit this session's downgrade.
-      const turn = new BrowserOfferChannelFactory({ peerConnections: fixture.connections,
-        configuration: { iceTransportPolicy: 'relay', iceServers: [{ urls: 'turn:example.test' }] } })
+      // Another offer factory must inherit this session's downgrade.
+      const nextFactory = new BrowserOfferChannelFactory({ peerConnections: fixture.connections,
+        configuration: { iceServers: [] } })
       const route = new ControlledRoute()
-      const retry = turn.offer(route, fixture.controller.signal, fixture.observer)
+      const retry = nextFactory.offer(route, fixture.controller.signal, fixture.observer)
       await settle()
       route.push(answerSignal())
       await settle()
@@ -255,11 +255,14 @@ describe('browser offer lifecycle', () => {
     const unsubscribe = channel.subscribePathRoute?.((route) => routes.push(route))
     fixture.peer.ice.select('relay')
     await settle()
-    expect(channel.pathRoute).toBe('turn')
+    expect(channel.pathRoute).toBeUndefined()
+    fixture.peer.ice.select('srflx')
+    await settle()
+    expect(channel.pathRoute).toBe('direct')
     fixture.peer.ice.select(null)
     await settle()
     expect(channel.pathRoute).toBeUndefined()
-    expect(routes).toEqual(['turn', undefined])
+    expect(routes).toEqual([undefined, 'direct', undefined])
     unsubscribe?.()
     await channel.close()
   })

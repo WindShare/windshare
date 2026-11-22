@@ -10,7 +10,6 @@ import (
 	"github.com/windshare/windshare/engine/account"
 	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/relaysetup"
-	"github.com/windshare/windshare/engine/turn"
 )
 
 const (
@@ -51,7 +50,6 @@ type dependencies struct {
 	start           func(context.Context, engine.ShareRequest) (shareTask, error)
 	close           func(context.Context) error
 	load            func() (relayconfig.Config, error)
-	configure       func(turn.Settings) error
 	setup           func(context.Context, SetupInput, func(relaysetup.Progress)) (SetupResult, error)
 	cancelSetup     func(context.Context, string) error
 	log             func(string, any)
@@ -111,7 +109,6 @@ type Application struct {
 	operations      map[string]*operation
 	deps            dependencies
 	closing         bool
-	admissions      chan struct{}
 	work            sync.WaitGroup
 	readers         sync.WaitGroup
 	subscribers     map[*subscription]struct{}
@@ -130,7 +127,7 @@ func newApplication(sessionID string, deps dependencies) *Application {
 	a := &Application{
 		accountRequests: make(map[string][32]byte),
 		sessionID:       sessionID, operations: make(map[string]*operation), deps: deps,
-		admissions: make(chan struct{}, 1), subscribers: make(map[*subscription]struct{}),
+		subscribers:   make(map[*subscription]struct{}),
 		setup:         SetupView{State: "idle"},
 		setupRequests: make(map[string]setupCommand),
 	}

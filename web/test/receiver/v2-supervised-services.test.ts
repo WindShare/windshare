@@ -219,7 +219,7 @@ describe('v2 supervised content generations', () => {
     })
     const second = generationFixture(2, stable, async function* () {
       now += 20
-      yield { offset: 2n, data: Uint8Array.of(3, 4), authenticatedRoute: 'turn' }
+      yield { offset: 2n, data: Uint8Array.of(3, 4), authenticatedRoute: 'application-relay' }
     })
     const provider = Object.assign(new SwitchingGenerationProvider(first.generation, second.generation), {
       downloadMetrics: () => metrics,
@@ -235,7 +235,7 @@ describe('v2 supervised content generations', () => {
     await reader.next()
     await reader.next()
     expect(scoped.lanes.downloadConnectivity?.(true)).toMatchObject({
-      direct_bytes: '2', turn_bytes: '2', direct_fraction: 0.5,
+      direct_bytes: '2', application_relay_bytes: '2', direct_fraction: 0.5,
       fallback_stall_ms: 50, first_direct_elapsed_ms: 0, final: true, incomplete: false,
     })
     await opened.release()

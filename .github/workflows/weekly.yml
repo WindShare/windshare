@@ -140,7 +140,7 @@ jobs:
         run: pnpm -C web test:browser:progressive
 
   browser-network:
-    name: Direct and TURN relay-cut routes (Linux)
+    name: Direct relay-cut routes (Linux)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -168,12 +168,7 @@ jobs:
         uses: ./.github/actions/setup-browser
         with:
           browsers: chromium
-      - name: Prepare managed TURN Worker
-        run: |
-          rustup target add wasm32-unknown-unknown
-          cargo install worker-build --version 0.8.7 --locked
-          npm ci --prefix relay-rust/crates/relay-cloudflare
-      - name: Run direct and TURN relay-cut routes
+      - name: Run direct relay-cut routes
         run: pnpm -C web test:browser:network
       - name: Preserve network failure diagnostics
         if: failure()

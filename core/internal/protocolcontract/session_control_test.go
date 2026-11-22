@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/session/turncontrol"
 )
 
 type sessionControlVector struct {
@@ -25,7 +24,7 @@ type sessionControlVector struct {
 
 func sessionControlCases(t *testing.T, f *fixture) []any {
 	t.Helper()
-	header := turncontrol.Header{SessionID: [16]byte{1}, OwnerPathID: [16]byte{2}, Sequence: 3}
+	sessionID := [16]byte{1}
 	path := protocolsession.PeerPathControl{
 		PeerPathID: [16]byte{2}, NetworkGenerationID: [16]byte{3}, ControlSequence: 4,
 		Kind: protocolsession.PeerPathDemand, ValidFor: time.Minute, HoldFor: time.Second,
@@ -39,18 +38,6 @@ func sessionControlCases(t *testing.T, f *fixture) []any {
 	if err != nil {
 		t.Fatal(err)
 	}
-	turnDemand, err := turncontrol.Encode(turncontrol.Demand{Authority: header, HoldFor: time.Minute})
-	if err != nil {
-		t.Fatal(err)
-	}
-	grant, err := turncontrol.Encode(turncontrol.Grant{
-		Authority: header, PathID: [16]byte{4}, Provider: "coturn", Account: "home", Profile: "primary",
-		CredentialKind: turncontrol.Expiring, Username: "123:user", Password: "delegated-password",
-		ValidFor: time.Hour, URLs: []string{"turn:example.org:3478?transport=udp"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	var result []any
 	for index, control := range []struct {
 		name      string
@@ -60,8 +47,6 @@ func sessionControlCases(t *testing.T, f *fixture) []any {
 	}{
 		{"peer-path-demand", protocolsession.MessagePeerPathControl, protocolsession.DirectionReceiverToSender, demand},
 		{"peer-path-mapping-ready", protocolsession.MessagePeerPathControl, protocolsession.DirectionSenderToReceiver, ready},
-		{"turn-demand", protocolsession.MessageTURNControl, protocolsession.DirectionReceiverToSender, turnDemand},
-		{"turn-grant", protocolsession.MessageTURNControl, protocolsession.DirectionSenderToReceiver, grant},
 	} {
 		message, err := protocolsession.NewMessage(control.kind, nil, control.body)
 		if err != nil {
@@ -74,7 +59,7 @@ func sessionControlCases(t *testing.T, f *fixture) []any {
 		result = append(result, sessionControlVector{
 			Name: control.name, Kind: control.kind, Direction: control.direction,
 			BodyB64: b64(control.body), PlaintextB64: b64(plaintext), SenderPublicKeyB64: b64(f.edPublic),
-			ShareInstanceB64: b64(f.shareInstance), ProtocolSessionIDB64: b64(header.SessionID[:]),
+			ShareInstanceB64: b64(f.shareInstance), ProtocolSessionIDB64: b64(sessionID[:]),
 			LaneID: 7, LaneEpoch: 2, Sequence: strconv.Itoa(index + 10),
 		})
 	}

@@ -58,8 +58,8 @@ func TestRelayAddressDiagnosticsPreserveCauseAndConfigurationField(t *testing.T)
 					t.Errorf("repair detail %q missing: %v", detail, err)
 				}
 			}
-			if strings.Contains(err.Error(), "secret-canary") || strings.Contains(err.Error(), "TURN") {
-				t.Fatalf("address diagnostic includes unrelated configuration: %v", err)
+			if strings.Contains(err.Error(), "secret-canary") {
+				t.Fatalf("address diagnostic includes secret material: %v", err)
 			}
 		})
 	}

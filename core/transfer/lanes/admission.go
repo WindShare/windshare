@@ -75,9 +75,6 @@ func (s *Set) admitLaneLocked(state *laneState, demand Demand, claim CapacityCla
 
 func laneCompletionCost(state *laneState, bytes uint64, now time.Time) float64 {
 	factor := 1.0
-	if state.route == RouteTURN {
-		factor = lanescheduling.UserRelayCostFactor
-	}
 	if state.route == RouteRelay {
 		factor = lanescheduling.RelayCostFactor
 	}

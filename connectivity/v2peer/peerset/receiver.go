@@ -10,20 +10,12 @@ import (
 
 type ReceiverConfig struct {
 	Purpose       v2signal.ConnectionPurpose
-	Routes        ReceiverRoutes
 	Factory       *v2peer.ReceiverFactory
 	Signaling     v2peer.ReceiverSignaling
 	Lanes         v2peer.ReceiverLaneSession
 	Demand        Demand
 	StopAfterWave bool
 }
-
-type ReceiverRoutes uint8
-
-const (
-	DirectRoutes ReceiverRoutes = iota
-	UserRelayRoutes
-)
 
 func receiverSessionID(lanes v2peer.ReceiverLaneSession) protocolsession.ProtocolSessionID {
 	if session, ok := lanes.(interface {

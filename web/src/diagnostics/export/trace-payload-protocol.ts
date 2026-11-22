@@ -342,7 +342,7 @@ function validateProviderFact(input: unknown): void {
     'receive-buffer': ['kind', 'strategy', 'stage', 'reason', 'errorName'],
     state: ['kind', 'phase', 'state', 'elapsedMs'],
     candidate: ['kind', 'candidateType', 'protocol', 'family', 'interfaceClass', 'endpoint', 'disposition'],
-    'selected-pair': ['kind', 'route', 'localType', 'remoteType', 'protocol', 'clientToTurnProtocol', 'family', 'rttMs', 'ageMs', 'switchReason'],
+    'selected-pair': ['kind', 'route', 'localType', 'remoteType', 'protocol', 'family', 'rttMs', 'ageMs', 'switchReason'],
     'ice-error': ['kind', 'code', 'endpoint'],
     profile: ['kind', 'networkGenerationID', 'profileID', 'side', 'endpointIDs'],
     'observer-loss': ['kind', 'count'],
@@ -533,7 +533,7 @@ export function validateContentRetry(payload: UnknownRecord): void {
     return
   }
   member(payload.reason, ['untried_lane', 'recovered_lane'], 'content retry reason')
-  member(payload.route, ['application-relay', 'direct', 'turn'], 'content retry route')
+  member(payload.route, ['application-relay', 'direct'], 'content retry route')
   decimalFields(payload, ['dispatch_sequence', 'successful_blocks'], 'content retry')
   if (payload.reason === 'recovered_lane') {
     decimalUint64(payload.successful_blocks_at_failure, 'content recovery evidence')
@@ -549,7 +549,7 @@ export function validateContentScheduling(payload: UnknownRecord): void {
   ], ['admission', 'delivery_evidence', 'rescue_reason'], 'content scheduling payload')
   decimalFields(payload, ['dispatch_sequence', 'block_index', 'pending_bytes'], 'content scheduling')
   canonicalIdentity(payload.file_id, 'content scheduling file')
-  member(payload.route, ['application-relay', 'direct', 'turn'], 'content scheduling route')
+  member(payload.route, ['application-relay', 'direct'], 'content scheduling route')
   member(payload.purpose, ['content', 'probe', 'sample', 'rescue', 'capacity-recovery'], 'content scheduling purpose')
   if (payload.delivery_evidence !== undefined) {
     member(payload.delivery_evidence, ['unknown', 'recent', 'stale'], 'content delivery evidence')
@@ -597,7 +597,7 @@ export function validateRequestScheduling(payload: UnknownRecord): void {
     'expected_ms', 'elapsed_ms', 'pending_requests'], [], 'request scheduling payload')
   decimalFields(payload, ['request_sequence'], 'request scheduling')
   member(payload.request_kind, ['open_revisions', 'list_children', 'renew_lease', 'release_lease'], 'request kind')
-  member(payload.route, ['application-relay', 'direct', 'turn'], 'request route')
+  member(payload.route, ['application-relay', 'direct'], 'request route')
   member(payload.transition, ['dispatched', 'completed', 'failed', 'cancelled'], 'request transition')
   for (const key of ['expected_ms', 'elapsed_ms', 'pending_requests']) {
     integerBetween(payload[key], 0, Number.MAX_SAFE_INTEGER, key)

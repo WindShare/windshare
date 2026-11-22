@@ -27,7 +27,7 @@ func TestContentRoutePolicyCoversInitialAdditionalAndReplacementLanes(t *testing
 			record := transferRecord(t, descriptor, 0)
 			var callsMu sync.Mutex
 			called := make(map[Route]int)
-			routes := []Route{RouteRelay, RouteDirect, RouteTURN}
+			routes := []Route{RouteRelay, RouteDirect}
 			addRoutes := func(firstID, epoch uint32) {
 				t.Helper()
 				for index, route := range routes {

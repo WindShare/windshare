@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/engine/relayconfig"
-	"github.com/windshare/windshare/engine/turn"
 )
 
 func TestCheckpointDoesNotRewriteSettingsAndCorruptionIsIsolated(t *testing.T) {
@@ -33,7 +32,7 @@ func TestCheckpointDoesNotRewriteSettingsAndCorruptionIsIsolated(t *testing.T) {
 		t.Fatal("operation has no independent record", err)
 	}
 	imported := initial.Config
-	imported.ManagedTURNPolicies = []turn.ManagedPolicy{{RelayURL: initial.Profiles[0].PublicURL, LocalBudgetBytes: 99}}
+	imported.FrontURL = "https://updated.example"
 	if err := settings.Save(imported); err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +42,7 @@ func TestCheckpointDoesNotRewriteSettingsAndCorruptionIsIsolated(t *testing.T) {
 		t.Fatal("import lost operation or settings", snapshot, err)
 	}
 	if snapshot.Pending.SettingsRevision == snapshot.SettingsRevision() {
-		t.Fatal("budget edits were excluded from revision")
+		t.Fatal("settings edits were excluded from revision")
 	}
 	if err := os.WriteFile(journal, []byte("broken checkpoint"), 0o600); err != nil {
 		t.Fatal(err)
@@ -91,9 +90,7 @@ func TestCheckpointDecoderRejectsIllegalStagePayloads(t *testing.T) {
 			t.Fatalf("accepted invalid %s checkpoint", input.stage)
 		}
 	}
-	for _, field := range []string{"pending_setup", "managed_turn"} {
-		if _, err := relayconfig.Decode(strings.NewReader(`{"profiles":[],"` + field + `":{}}`)); err == nil {
-			t.Fatal("runtime state accepted as settings", field)
-		}
+	if _, err := relayconfig.Decode(strings.NewReader(`{"profiles":[],"pending_setup":{}}`)); err == nil {
+		t.Fatal("runtime state accepted as settings")
 	}
 }

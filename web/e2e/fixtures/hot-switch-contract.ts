@@ -20,13 +20,13 @@ export interface HotSwitchDispatch {
   readonly dispatchSequence: number
   readonly laneId: number
   readonly laneEpoch: number
-  readonly route: 'application-relay' | 'direct' | 'turn'
+  readonly route: 'application-relay' | 'direct'
 }
 
 export interface HotSwitchLaneObservation {
   readonly laneId: number
   readonly laneEpoch: number
-  readonly route: 'application-relay' | 'direct' | 'turn'
+  readonly route: 'application-relay' | 'direct'
 }
 
 export function sameLaneIdentity(

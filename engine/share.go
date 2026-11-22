@@ -98,9 +98,6 @@ func (engine *Engine) StartShare(ctx context.Context, request ShareRequest) (*Sh
 				}
 			})
 		}
-		var stopDiscovery func()
-		dependencies.TURN, stopDiscovery = engine.turn.ForShare(ctx, request.RelayIntent.Candidates())
-		defer stopDiscovery()
 		dependencies.Control = control
 		execution.Diagnostics = control.Diagnostics
 		return share.Run(ctx, execution, dependencies)

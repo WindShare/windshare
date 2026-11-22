@@ -1,7 +1,7 @@
 {
   "version": 1,
   "kind": "v2-session-controls",
-  "description": "Independent reachability and TURN session messages, with envelope authentication and distinct message kinds.",
+  "description": "Authenticated reachability session control messages with envelope authentication.",
   "cases": [
     {
       "name": "peer-path-demand",
@@ -28,32 +28,6 @@
       "laneId": 7,
       "laneEpoch": 2,
       "sequence": "11"
-    },
-    {
-      "name": "turn-demand",
-      "kind": 20,
-      "direction": 0,
-      "bodyB64": "hgQBUAEAAAAAAAAAAAAAAAAAAABQAgAAAAAAAAAAAAAAAAAAAAMZ6mA=",
-      "plaintextB64": "owAUAfYChgQBUAEAAAAAAAAAAAAAAAAAAABQAgAAAAAAAAAAAAAAAAAAAAMZ6mA=",
-      "senderPublicKeyB64": "Kay64UG8yvCyLhqU000LxzYeUm0L/hLIl5S8kyKWbdc=",
-      "shareInstanceB64": "QEFCQ0RFRkdISUpLTE1OTw==",
-      "protocolSessionIdB64": "AQAAAAAAAAAAAAAAAAAAAA==",
-      "laneId": 7,
-      "laneEpoch": 2,
-      "sequence": "12"
-    },
-    {
-      "name": "turn-grant",
-      "kind": 20,
-      "direction": 1,
-      "bodyB64": "jwQCUAEAAAAAAAAAAAAAAAAAAABQAgAAAAAAAAAAAAAAAAAAAANQBAAAAAAAAAAAAAAAAAAAAFAAAAAAAAAAAAAAAAAAAAAAZmNvdHVybmRob21lZ3ByaW1hcnkCaDEyMzp1c2VycmRlbGVnYXRlZC1wYXNzd29yZBoANu6AgXgjdHVybjpleGFtcGxlLm9yZzozNDc4P3RyYW5zcG9ydD11ZHA=",
-      "plaintextB64": "owAUAfYCjwQCUAEAAAAAAAAAAAAAAAAAAABQAgAAAAAAAAAAAAAAAAAAAANQBAAAAAAAAAAAAAAAAAAAAFAAAAAAAAAAAAAAAAAAAAAAZmNvdHVybmRob21lZ3ByaW1hcnkCaDEyMzp1c2VycmRlbGVnYXRlZC1wYXNzd29yZBoANu6AgXgjdHVybjpleGFtcGxlLm9yZzozNDc4P3RyYW5zcG9ydD11ZHA=",
-      "senderPublicKeyB64": "Kay64UG8yvCyLhqU000LxzYeUm0L/hLIl5S8kyKWbdc=",
-      "shareInstanceB64": "QEFCQ0RFRkdISUpLTE1OTw==",
-      "protocolSessionIdB64": "AQAAAAAAAAAAAAAAAAAAAA==",
-      "laneId": 7,
-      "laneEpoch": 2,
-      "sequence": "13"
     }
   ]
 }

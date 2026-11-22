@@ -1,6 +1,6 @@
 # WindShare connectivity
 
-`github.com/windshare/windshare/connectivity/...` owns native peer negotiation, demand-driven multipath orchestration, ICE/gateway/socket/TURN path policies, and relay registration/admission outside [`core`](../core/). Application workflows in [`engine`](../engine/) assemble these packages over [`transport`](../transport/) channels.
+`github.com/windshare/windshare/connectivity/...` owns native peer negotiation, demand-driven multipath orchestration, ICE/gateway/socket path policies, and relay registration/admission outside [`core`](../core/). Application workflows in [`engine`](../engine/) assemble these packages over [`transport`](../transport/) channels.
 
 ## Package layout
 
@@ -14,8 +14,6 @@
 | `socketauthority/` | Bounded, independent per-path UDP/TCP socket ownership and leases |
 | `reachability/`, `reachability/gateway/` | Gateway port-mapping leases and reachability refresh |
 | `iceconfig/`, `icepolicy/` | Immutable ICE inputs and candidate/endpoint selection policy |
-| `turnpath/` | TURN delegation, renewal, recovery, replacement, and path admission |
-| `turncapacity/`, `turnroute/` | Shared TURN admission/handoff capacity and per-generation route planning |
 | `relayplan/` | Bounded deterministic relay candidate selection |
 | `senderrelay/`, `relayset/` | Per-relay registration/recovery and coordinated multi-relay session admission |
 

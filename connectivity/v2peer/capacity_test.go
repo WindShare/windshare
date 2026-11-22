@@ -9,7 +9,6 @@ import (
 
 	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/socketauthority"
-	"github.com/windshare/windshare/connectivity/turncapacity"
 )
 
 type addressedPacket struct {
@@ -44,9 +43,6 @@ func newTestNative(t *testing.T, config nativepeer.Config) *nativepeer.NativePee
 	t.Helper()
 	if config.Admission == nil {
 		config.Admission = nativepeer.NewAdmission(nativepeer.AdmissionClock{})
-	}
-	if config.TURNCapacity == nil {
-		config.TURNCapacity = turncapacity.NewPool()
 	}
 	if config.Sockets == nil {
 		config.Sockets = testSocketAuthority(t, 0)

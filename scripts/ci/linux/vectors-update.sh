@@ -8,9 +8,6 @@ echo "== vectors-update =="
 echo "-- update signed network directory vectors"
 UPDATE_NETWORK_VECTORS=1 go test -count=1 ./core/nodedirectory -run 'Test(BrowserDirectory|TextEdge)Vectors'
 
-echo "-- update TURN control vectors"
-go test -count=1 ./core/session/turncontrol -update
-
 echo "-- update diagnostic-correlation vectors"
 go test -count=1 ./engine/observation/wire -run 'TestDiagnosticCorrelationVectors' -update
 echo "-- update protocol-contract vectors"

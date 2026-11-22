@@ -157,9 +157,9 @@ describe('content path policy authority', () => {
     await connectivity.close()
   })
 
-  it('retires a direct lane synchronously when its selected pair changes to TURN', async () => {
+  it('retires a direct lane synchronously when its selected pair is lost', async () => {
     let calls = 0
-    const listeners = new Set<(route: 'direct' | 'turn' | undefined) => void>()
+    const listeners = new Set<(route: 'direct' | undefined) => void>()
     const close = vi.fn(async () => undefined)
     const { connectivity, lanes } = fixture({
       offer: async (route, signal, observer) => {
@@ -179,7 +179,7 @@ describe('content path policy authority', () => {
     const activation = connectivity.begin('download')
     await waitForMicrotaskCondition('direct lane publication', () => lanes.eligibleSize(activation.routes) === 1)
     await turn()
-    for (const listener of listeners) listener('turn')
+    for (const listener of listeners) listener(undefined)
     expect(lanes.eligibleSize(activation.routes)).toBe(0)
     expect(listeners.size).toBe(0)
     await waitForMicrotaskCondition('same-owner route replacement', () => calls === 2)
@@ -207,7 +207,6 @@ describe('content path policy authority', () => {
     expect(offers.calls).toBe(0)
     expect(activation.routes.allows('application-relay')).toBe(true)
     expect(activation.routes.allows('direct')).toBe(false)
-    expect(activation.routes.allows('turn')).toBe(false)
     activation.close()
     await connectivity.close()
   })
@@ -221,7 +220,6 @@ describe('content path policy authority', () => {
     expect(lanes.laneIds()).toEqual([1, grant.laneId])
     expect(lanes.eligibleSize(activation.routes)).toBe(0)
     expect(activation.routes.allows('direct')).toBe(true)
-    expect(activation.routes.allows('turn')).toBe(false)
     activation.close()
     await connectivity.close()
   })
@@ -229,8 +227,6 @@ describe('content path policy authority', () => {
 
 class FakeSession {
   subscribePeerPathControls(): () => void { return () => undefined }
-  subscribeTurnControls(): () => void { return () => undefined }
-  async sendTurnControl(): Promise<void> {}
   readonly pathControls: ReturnType<typeof decodePeerPathControl>[] = []
   async sendPeerPathControl(body: Uint8Array): Promise<void> {
     this.pathControls.push(decodePeerPathControl(body))

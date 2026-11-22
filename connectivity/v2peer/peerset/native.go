@@ -45,7 +45,7 @@ func (p *Path) maintainResources(ctx context.Context, done chan<- struct{}) {
 	}
 }
 func (p *Path) sendControl(ctx context.Context, kind protocolsession.PeerPathControlKind) {
-	if _, relayed := p.config.ICE.Relay(); relayed || p.config.Controls == nil || p.config.Native == nil {
+	if p.config.Controls == nil || p.config.Native == nil {
 		return
 	}
 	body, err := p.config.Native.Control([16]byte(p.key.session), p.key.path, kind, p.mappingDemand())
@@ -59,13 +59,11 @@ func (p *Path) resourceDemand(direct bool) {
 	}
 	p.mu.Lock()
 	admitted := direct || p.lane.ID != 0
-	_, relayed := p.config.ICE.Relay()
-	direct = admitted && !relayed
 	p.mu.Unlock()
 	if admitted {
-		p.config.Native.SetAdmitted([16]byte(p.key.session), p.key.path, direct)
+		p.config.Native.SetAdmitted([16]byte(p.key.session), p.key.path, true)
 	}
-	_, _ = p.config.Native.SetDemand([16]byte(p.key.session), p.key.path, p.mappingDemand(), direct)
+	_, _ = p.config.Native.SetDemand([16]byte(p.key.session), p.key.path, p.mappingDemand(), admitted)
 	p.mu.Lock()
 	p.networkGeneration = p.config.Native.Generation([16]byte(p.key.session), p.key.path)
 	p.mu.Unlock()
@@ -92,8 +90,7 @@ func (p *Path) mappingReady() bool { p.mu.Lock(); defer p.mu.Unlock(); return p.
 func (p *Path) mappingDemand() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	_, relayed := p.config.ICE.Relay()
-	return !relayed && p.demand == ContentDemand && p.resourceActive
+	return p.demand == ContentDemand && p.resourceActive
 }
 func (p *Path) setResourceActive(active bool) {
 	p.mu.Lock()

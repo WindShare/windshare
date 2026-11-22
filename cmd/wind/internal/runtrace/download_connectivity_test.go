@@ -18,7 +18,7 @@ func TestDownloadConnectivityFinalExportUsesExistingTransferSettlement(t *testin
 	metrics.Availability(false)
 	done := metrics.Pending()
 	now = now.Add(2 * time.Second)
-	metrics.Delivered("r", 10, 20, downloadmetrics.TURN)
+	metrics.Delivered("r", 10, 20, downloadmetrics.ApplicationRelay)
 	done()
 	event, err := base.WithDownloadConnectivity(metrics.Snapshot(true))
 	if err != nil {
@@ -32,7 +32,7 @@ func TestDownloadConnectivityFinalExportUsesExistingTransferSettlement(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"event":"transfer_settled"`, `"download_connectivity":{`, `"first_direct_elapsed_ms":"0"`, `"direct_bytes":"10"`, `"turn_bytes":"10"`, `"direct_fraction":0.5`, `"fallback_stall_ms":"2000"`, `"final":true`} {
+	for _, want := range []string{`"event":"transfer_settled"`, `"download_connectivity":{`, `"first_direct_elapsed_ms":"0"`, `"direct_bytes":"10"`, `"application_relay_bytes":"10"`, `"direct_fraction":0.5`, `"fallback_stall_ms":"2000"`, `"final":true`} {
 		if !strings.Contains(string(encoded), want) {
 			t.Fatalf("%s missing %s", encoded, want)
 		}

@@ -39,8 +39,8 @@ describe('browser receive buffer compatibility', () => {
   it('bundles receive-only media with data without mutating caller configuration', () => {
     const fixture = connectionsFixture()
     const configuration: RTCConfiguration = {
-      iceServers: [{ urls: ['turn:example.test'], username: 'user', credential: 'credential' }],
-      iceTransportPolicy: 'relay', bundlePolicy: 'balanced',
+      iceServers: [{ urls: ['stun:example.test'] }],
+      bundlePolicy: 'balanced',
     }
     const before = structuredClone(configuration)
     const connection = fixture.connections.create(configuration, fixture.observe)

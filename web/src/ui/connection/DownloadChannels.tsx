@@ -5,13 +5,7 @@ import { connectedChannelCount } from './path-presentation'
 
 const ROUTE_LABEL = {
   direct: 'direct',
-  turn: 'turn',
   'application-relay': 'applicationRelay',
-} as const
-
-const TURN_STATE = {
-  available: 'turnAvailable', connecting: 'turnConnecting', retrying: 'turnRetrying', ready: 'turnReady',
-  retired: 'turnRetired', unavailable: 'turnUnavailable', withdrawn: 'turnWithdrawn',
 } as const
 
 export function DownloadChannels({ path }: { readonly path: ReceiverPathActivitySnapshot }) {
@@ -28,7 +22,6 @@ export function DownloadChannels({ path }: { readonly path: ReceiverPathActivity
           <div className="download-channel-identity">
             <strong>{t.channel(lane.laneId)}</strong>
             <span>{t[ROUTE_LABEL[lane.route]]}</span>
-            {lane.turnService !== undefined && <span>{lane.turnService.provider} · {lane.turnService.profile}</span>}
           </div>
           <div className="download-channel-state">
             <span className="download-channel-connected">{t.connected}</span>
@@ -38,12 +31,5 @@ export function DownloadChannels({ path }: { readonly path: ReceiverPathActivity
           </div>
         </li>)}
       </ul>}
-    {path.turnServices !== undefined && <ul className="download-channels-list" aria-label={t.turnServices}>
-      {path.turnServices.map(service => <li key={service.profile}>
-        <strong>{service.profile}</strong> · {service.provider ?? 'TURN'} · {t[TURN_STATE[service.state]]}
-        {service.usefulBytes !== undefined && <span> · {t.receivedMiB((service.usefulBytes / (1024 * 1024)).toFixed(2))}</span>}
-        {service.reason !== undefined && <span> · {service.reason}</span>}
-      </li>)}
-    </ul>}
   </section>
 }

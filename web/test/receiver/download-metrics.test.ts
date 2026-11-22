@@ -15,7 +15,7 @@ describe('per-download connectivity accounting', () => {
     now += 60_000
     end = metrics.pending()
     now += 2_000
-    metrics.delivered('revision-a', 50n, 150n, 'turn')
+    metrics.delivered('revision-a', 50n, 150n, 'application-relay')
     now += 1_000
     end()
     metrics.delivered('revision-a', 0n, 150n, 'application-relay')
@@ -23,8 +23,8 @@ describe('per-download connectivity accounting', () => {
     metrics.availability(true)
     const final = metrics.snapshot(true)
     expect(final).toMatchObject({
-      first_direct_elapsed_ms: 0, direct_bytes: '100', turn_bytes: '50',
-      application_relay_bytes: '100', direct_fraction: 0.4, fallback_stall_ms: 5_000,
+      first_direct_elapsed_ms: 0, direct_bytes: '100',
+      application_relay_bytes: '150', direct_fraction: 0.4, fallback_stall_ms: 5_000,
       incomplete: false, final: true,
     })
     now += 60_000
@@ -52,9 +52,9 @@ describe('per-download connectivity accounting', () => {
     let now = 10
     const metrics = new DownloadMetrics('ranges', false, () => now)
     metrics.delivered('r', 10n, 20n, 'direct')
-    metrics.delivered('r', 30n, 40n, 'turn')
+    metrics.delivered('r', 30n, 40n, 'application-relay')
     metrics.delivered('r', 0n, 50n, 'application-relay')
-    expect(metrics.snapshot()).toMatchObject({ direct_bytes: '10', turn_bytes: '10', application_relay_bytes: '30' })
+    expect(metrics.snapshot()).toMatchObject({ direct_bytes: '10', application_relay_bytes: '40' })
     now = 0
     metrics.availability(true)
     expect(metrics.snapshot().incomplete).toBe(true)

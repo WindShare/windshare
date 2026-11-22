@@ -17,11 +17,10 @@ func TestProviderWarningsRetainAttemptCorrelationWithoutTracingRoutinePackets(t 
 	base := logging.NewDefaultLoggerFactory()
 	base.Writer = io.Discard
 	factory := providerLoggerFactory{LoggerFactory: base, observe: connection.observeDiagnostic}
-	turn := factory.NewLogger("turnc")
-	turn.Debug("routine packet")
-	turn.Warn("binding rejected")
-	turn.Warnf("binding %d rejected", 7)
 	ice := factory.NewLogger("ice")
+	ice.Debug("routine packet")
+	ice.Warn("binding rejected")
+	ice.Warnf("binding %d rejected", 7)
 	ice.Error("allocation failed")
 	ice.Errorf("server %s unavailable", "test")
 	factory.NewLogger("dtls").Warn("not an ICE diagnostic")
@@ -34,12 +33,12 @@ func TestProviderWarningsRetainAttemptCorrelationWithoutTracingRoutinePackets(t 
 			event.ICEProfileID != "test-profile" || event.At.IsZero() {
 			t.Fatalf("uncorrelated provider failure: %+v", event)
 		}
-		scope, severity := "turnc", "warning"
+		severity := "warning"
 		if i >= 2 {
-			scope, severity = "ice", "error"
+			severity = "error"
 		}
 		if event.Milestone != "provider_diagnostic" || event.State != "" || event.Diagnostic == nil ||
-			event.Diagnostic.Scope != scope || event.Diagnostic.Severity != severity || event.Diagnostic.Message == "" {
+			event.Diagnostic.Scope != "ice" || event.Diagnostic.Severity != severity || event.Diagnostic.Message == "" {
 			t.Fatalf("failure scope lost: %+v", event)
 		}
 	}

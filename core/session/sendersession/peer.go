@@ -72,8 +72,8 @@ func silentSenderPeerAdmission() PeerAdmissionResult {
 
 // PeerSession is the transport-neutral authority granted to one
 // connectivity-owned peer handler. Operation-scoped signaling is restricted to
-// answers and candidates. Session-scoped path and TURN controls are required so
-// wrappers cannot silently disable path maintenance or TURN delegation.
+// answers and candidates. Session-scoped path controls are required so
+// wrappers cannot silently disable path maintenance.
 // AdmitPeerChannel admits only into the ProtocolSession that created this
 // authority and consumes the candidate channel: core closes it exactly once on
 // failure, while successful attachment transfers close authority to the lane.
@@ -93,12 +93,9 @@ type PeerSession interface {
 		PeerAdmissionControl,
 	) (PeerAdmissionResult, error)
 
-	// Each control family owns an independent callback for the handler's Run
-	// lifetime. Passing nil removes only that family's callback.
+	// Passing nil removes the path-control callback for the handler's Run lifetime.
 	SetPeerPathControlHandler(func(context.Context, []byte) error)
 	SendPeerPathControl(context.Context, []byte) error
-	SetTURNControlHandler(func(context.Context, []byte) error)
-	SendTURNControl(context.Context, []byte) error
 }
 
 // PeerHandler owns provider policy, SDP/ICE interpretation, and physical

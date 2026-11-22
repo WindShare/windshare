@@ -9,8 +9,6 @@ import (
 	"net/url"
 
 	"github.com/windshare/windshare/engine/relayconfig"
-	"github.com/windshare/windshare/engine/relayprofile"
-	"github.com/windshare/windshare/engine/turn"
 )
 
 type enrollmentResponse struct {
@@ -79,13 +77,7 @@ func (run *workflow) enroll(ctx context.Context, saved Snapshot, progress func(P
 }
 func (run *workflow) confirm(ctx context.Context, saved Snapshot, progress func(Progress)) (Result, error) {
 	pending := saved.Pending
-	var response struct {
-		Services []struct {
-			turn.Capability
-			RelayURL string `json:"relay_url"`
-		} `json:"managed_turn"`
-	}
-	requestedAt := run.dependencies.Now()
+	var response struct{}
 	for {
 		current, err := run.dependencies.Store.Load()
 		if err != nil {
@@ -120,15 +112,6 @@ func (run *workflow) confirm(ctx context.Context, saved Snapshot, progress func(
 		run.dependencies.Log.Info("relay_installation_commit_failed", "operation_id", pending.OperationID,
 			"enrollment_id", pending.enrollment().ID, "credential_id", pending.credential().ID, "reason", err)
 		return Result{}, err
-	}
-	if run.dependencies.Cache != nil && len(response.Services) == 1 {
-		discovered := response.Services[0]
-		if sameRelay(discovered.RelayURL, pending.RelayURL) && discovered.Validate() == nil {
-			candidate := relayprofile.Candidate{PublicURL: pending.RelayURL, AccessKey: pending.credential().AccessKey}
-			if err := run.dependencies.Cache.Save(ctx, candidate, discovered.Capability, requestedAt); err != nil {
-				run.dependencies.Log.Debug("relay_setup_cache_failed", "operation_id", pending.OperationID, "reason", err)
-			}
-		}
 	}
 	run.emit(progress, Progress{Stage: "installed", OperationID: pending.OperationID, EnrollmentID: pending.enrollment().ID})
 	run.dependencies.Log.Info("relay_configuration_installed", "operation_id", pending.OperationID,

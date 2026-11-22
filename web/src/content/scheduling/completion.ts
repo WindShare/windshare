@@ -5,7 +5,6 @@ export const MINIMUM_SAMPLE_MILLISECONDS = 1
 export const EVIDENCE_LIFETIME_MILLISECONDS = 1000
 const MAXIMUM_ESTIMATE_MILLISECONDS = 60 * 60 * 1000
 const RELAY_COST_FACTOR = 1.1
-const USER_RELAY_COST_FACTOR = 1.05
 const STALE_EVIDENCE_COST_FACTOR = 2
 
 export type DeliverySample =
@@ -52,9 +51,8 @@ function boundedEstimate(milliseconds: number, minimum: number): number {
   return Math.min(MAXIMUM_ESTIMATE_MILLISECONDS, Math.max(minimum, milliseconds))
 }
 
-export function completionCost(milliseconds: number, route: 'direct' | 'turn' | 'application-relay'): number {
-  if (route === 'direct') return milliseconds
-  return milliseconds * (route === 'turn' ? USER_RELAY_COST_FACTOR : RELAY_COST_FACTOR)
+export function completionCost(milliseconds: number, route: 'direct' | 'application-relay'): number {
+  return route === 'direct' ? milliseconds : milliseconds * RELAY_COST_FACTOR
 }
 
 /** Old observations can justify one bounded revalidation, never a fresh pipeline. */

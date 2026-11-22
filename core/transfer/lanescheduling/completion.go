@@ -10,7 +10,6 @@ const (
 	MinimumSampleTime       = time.Millisecond
 	EvidenceLifetime        = time.Second
 	MaximumEstimate         = time.Hour
-	UserRelayCostFactor     = 1.05
 	RelayCostFactor         = 1.1
 	StaleEvidenceCostFactor = 2
 )

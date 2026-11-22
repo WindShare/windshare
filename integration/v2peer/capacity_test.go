@@ -5,14 +5,12 @@ import (
 	"testing"
 
 	"github.com/windshare/windshare/connectivity/nativepeer"
-	"github.com/windshare/windshare/connectivity/turncapacity"
 )
 
 func newCapacityNative(t *testing.T) *nativepeer.NativePeerConnectivity {
 	t.Helper()
 	native, err := nativepeer.New(nativepeer.Config{
-		Admission:    nativepeer.NewAdmission(nativepeer.AdmissionClock{}),
-		TURNCapacity: turncapacity.NewPool(),
+		Admission: nativepeer.NewAdmission(nativepeer.AdmissionClock{}),
 	})
 	if err != nil {
 		t.Fatal(err)

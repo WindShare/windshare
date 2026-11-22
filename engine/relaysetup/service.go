@@ -11,9 +11,6 @@ import (
 	"net/http"
 	"sync"
 	"time"
-
-	"github.com/windshare/windshare/engine/relayprofile"
-	"github.com/windshare/windshare/engine/turn"
 )
 
 type Operation string
@@ -46,16 +43,12 @@ type Store interface {
 	Load() (Snapshot, error)
 	Update(context.Context, func(*Snapshot) error) (Snapshot, error)
 }
-type DiscoveryCache interface {
-	Save(context.Context, relayprofile.Candidate, turn.Capability, time.Time) error
-}
 
 type HTTPClient interface {
 	Do(*http.Request) (*http.Response, error)
 }
 type Dependencies struct {
 	Store  Store
-	Cache  DiscoveryCache
 	HTTP   HTTPClient
 	Now    func() time.Time
 	Random io.Reader

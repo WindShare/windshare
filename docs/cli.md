@@ -6,7 +6,7 @@
 
 `wind` shares local files and directories, downloads capability links, enrolls or imports relay settings,
 and inspects or discards unfinished downloads. Capability links and split keys are written to stdout;
-progress, prompts, and diagnostics go to stderr. See [installation](installation.md) and [TURN services](turn.md).
+progress, prompts, and diagnostics go to stderr. See [installation](installation.md).
 
 ## Maintenance
 
@@ -41,7 +41,7 @@ wind config import <file|-> [--front-url <url>] [-v|--verbose]
 - In automatic mode, new relays are enabled while a candidate slot is free. In selected mode, new relays start disabled. `relay list` shows the shared CLI/desktop settings. Use `relay frontend` to select a receiver website after pairing.
 - `relay cancel` abandons an unfinished enrollment and revokes its issued credential; it fails when nothing is pending for that relay.
 - `config import` validates and replaces the saved sharing configuration from a JSON file or stdin (`-`).
-- Settings live in `windshare/config.json` under the user configuration directory (or `WINDSHARE_CONFIG`). Alongside it, `config.json.state/` holds pending enrollment, TURN discovery, and network rollback protection.
+- Settings live in `windshare/config.json` under the user configuration directory (or `WINDSHARE_CONFIG`). Alongside it, `config.json.state/` holds pending enrollment and network rollback protection.
 
 ```json
 {
@@ -51,8 +51,6 @@ wind config import <file|-> [--front-url <url>] [-v|--verbose]
   "configured_relays_only": true
 }
 ```
-
-Optional `managed_turn_policies` and manual `turn` sections live in the same file; see [Cloudflare deployment](deploy/cloudflare-relay.md) and [TURN services](turn.md).
 
 ## Download
 
@@ -72,7 +70,7 @@ wind get <link> [-o <directory>] [--only <path>]... [--redownload] [--key <key>]
 
 | `--connectivity` | Behavior |
 |---|---|
-| `auto` | Schedules content across available relay, direct WebRTC, and TURN lanes. |
+| `auto` | Schedules content across available relay and direct WebRTC lanes. |
 | `relay-only` | Transfers content only through application relays; creates no ICE connections. |
 | `p2p-only` | Uses relays for signaling and transfers content only over direct WebRTC paths. |
 
@@ -114,4 +112,4 @@ Traces record lifecycle, connectivity, catalog, content, and provider diagnostic
 | Resume inventory and discard | [`cmd/wind/internal/resumecommand`](../cmd/wind/internal/resumecommand/), [`engine/recovery`](../engine/recovery/), [`adapters/filesystem`](../adapters/filesystem/) |
 | Terminal events and rendering | [`cmd/wind/internal/clievent`](../cmd/wind/internal/clievent/), [`cmd/wind/internal/commandprojection`](../cmd/wind/internal/commandprojection/), [`cmd/wind/internal/humanoutput`](../cmd/wind/internal/humanoutput/), [`cmd/wind/internal/terminalcanvas`](../cmd/wind/internal/terminalcanvas/) |
 | NDJSON run trace | [`cmd/wind/internal/runtrace`](../cmd/wind/internal/runtrace/), [`core/testvectors`](../core/testvectors/) |
-| Share, receive, and TURN runtime | [`engine`](../engine/), [`osfs`](../osfs/) |
+| Share and receive runtime | [`engine`](../engine/), [`osfs`](../osfs/) |

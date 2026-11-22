@@ -19,10 +19,10 @@ const ALL_ROUTES: BlockRouteEligibility = Object.freeze({
   subscribe: () => () => undefined,
 })
 
-function onlyRoute(route: 'application-relay' | 'direct' | 'turn'): BlockRouteEligibility {
+function onlyRoute(route: 'application-relay' | 'direct'): BlockRouteEligibility {
   return Object.freeze({
     active: true,
-    allows: (candidate: 'application-relay' | 'direct' | 'turn') => candidate === route,
+    allows: (candidate: 'application-relay' | 'direct') => candidate === route,
     assertActive: () => undefined,
     subscribe: () => () => undefined,
   })

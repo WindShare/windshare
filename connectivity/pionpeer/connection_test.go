@@ -33,7 +33,7 @@ func testSessionLease(t *testing.T, authority *socketauthority.Authority, sessio
 }
 func testConnection(t *testing.T, lease *socketauthority.Lease, urls []string, mapped []MappedEndpoint) *Connection {
 	t.Helper()
-	configuration, err := iceconfig.New(urls, nil, iceconfig.AllCandidates)
+	configuration, err := iceconfig.New(urls)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,7 +333,7 @@ func TestProviderRejectsMismatchedAndConcurrentResources(t *testing.T) {
 	if err = connection.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = iceconfig.New([]string{"invalid:url"}, nil, iceconfig.AllCandidates); err == nil {
+	if _, err = iceconfig.New([]string{"invalid:url"}); err == nil {
 		t.Fatal("invalid URL accepted")
 	}
 }
@@ -387,7 +387,7 @@ func TestProviderExcludesLoopbackByDefault(t *testing.T) {
 				return nil, err
 			}
 			local := &net.UDPAddr{IP: net.IP(nonLoopback.AsSlice()), Port: conn.LocalAddr().(*net.UDPAddr).Port}
-			return turnTestLocalSocket{PacketConn: conn, local: local}, nil
+			return localAddrPacketConn{PacketConn: conn, local: local}, nil
 		}})
 		defer sockets.Close()
 		lease, err := sockets.Acquire([16]byte{1}, 1, pathID(2), []netip.Addr{nonLoopback})
@@ -432,3 +432,10 @@ func TestProviderExcludesLoopbackByDefault(t *testing.T) {
 		}
 	})
 }
+
+type localAddrPacketConn struct {
+	net.PacketConn
+	local net.Addr
+}
+
+func (c localAddrPacketConn) LocalAddr() net.Addr { return c.local }

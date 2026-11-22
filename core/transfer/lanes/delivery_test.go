@@ -13,7 +13,7 @@ import (
 )
 
 func TestFrontierSelectionDoesNotPromoteUnmeasuredBootstrap(t *testing.T) {
-	for _, route := range []Route{RouteDirect, RouteTURN, RouteRelay} {
+	for _, route := range []Route{RouteDirect, RouteRelay} {
 		t.Run(strconv.Itoa(int(route)), func(t *testing.T) {
 			set := newBoundaryLaneSet(t, 141)
 			now := time.Unix(1, 0)
@@ -54,7 +54,7 @@ func TestNormalDeliveryDoesNotAllocateRescueIntents(t *testing.T) {
 	original.permit.Close()
 	original.permit = state.receive.TryReserve(blockDemandBytes(demand), now)
 	defer original.permit.Close()
-	_ = set.Add(Identity{ID: 2}, RouteTURN, source)
+	_ = set.Add(Identity{ID: 2}, RouteRelay, source)
 	if set.queueRescue(t.Context(), Request{Demand: demand}, attempted, original) != nil || len(set.pending) != 0 {
 		t.Fatal("healthy startup allocated speculative work")
 	}
@@ -81,7 +81,7 @@ func TestRescueFollowsTheConsumerFrontier(t *testing.T) {
 		}()
 		<-started
 		var rescued atomic.Bool
-		_ = set.Add(Identity{ID: 2}, RouteTURN, laneFunction(func(_ context.Context, input Demand) (records.BlockRecord, error) {
+		_ = set.Add(Identity{ID: 2}, RouteRelay, laneFunction(func(_ context.Context, input Demand) (records.BlockRecord, error) {
 			rescued.Store(true)
 			return transferRecord(t, descriptor, input.Index), nil
 		}))
@@ -111,7 +111,7 @@ func TestQueuedRescueReceivesCreditBeforeReadAheadAndWithdrawsUnusedAdmission(t 
 	descriptor := transferDescriptor(t, 4)
 	demand := validDemand(t, descriptor, 0)
 	bytes := blockDemandBytes(demand)
-	for id, route := range []Route{RouteDirect, RouteTURN, RouteRelay} {
+	for id, route := range []Route{RouteDirect, RouteDirect, RouteRelay} {
 		_ = set.Add(Identity{ID: uint32(id + 1)}, route, laneFunction(func(context.Context, Demand) (records.BlockRecord, error) {
 			t.Fatal("allocation must not dispatch")
 			return records.BlockRecord{}, nil

@@ -57,7 +57,7 @@ describe('delivery evidence and allocation', () => {
     first.close(); warm.close()
   })
 
-  it.each<ContentLane['route']>(['direct', 'turn', 'application-relay'])(
+  it.each<ContentLane['route']>(['direct', 'application-relay'])(
     'protects the frontier using recent %s evidence despite a numerically cheaper unknown lane', route => {
       let now = 0
       const measured = lane(1, route, () => now)
@@ -66,7 +66,7 @@ describe('delivery evidence and allocation', () => {
       warm.receive(MIB); warm.close()
       const pending = measured.receive.tryAcquire(MIB)!
       measured.inflight = 1
-      const unknown = lane(2, route === 'direct' ? 'turn' : 'direct', () => now)
+      const unknown = lane(2, route === 'direct' ? 'application-relay' : 'direct', () => now)
       expect(measured.receive.estimateCompletion(MIB).milliseconds).toBe(400)
       expect(unknown.receive.estimateCompletion(MIB).milliseconds).toBe(250)
       const selected = new ContentAllocation().select([work], [unknown, measured], now, () => true)
@@ -99,7 +99,7 @@ describe('delivery evidence and allocation', () => {
     now = 10
     warm.receive(MIB); warm.close()
     now += EVIDENCE_LIFETIME_MILLISECONDS + 1
-    const current = lane(2, 'turn', () => now)
+    const current = lane(2, 'application-relay', () => now)
     const recent = current.receive.tryAcquire(MIB)!
     now += 200
     recent.receive(MIB); recent.close()
@@ -130,7 +130,7 @@ describe('delivery evidence and allocation', () => {
   })
 
   it('starts immediately when the only usable route has no evidence', () => {
-    const cold = lane(1, 'turn', () => 0)
+    const cold = lane(1, 'application-relay', () => 0)
     const selected = new ContentAllocation().select([work], [cold], 0, () => true)
     expect(selected.kind === 'dispatch' && selected.assignment.lane).toBe(cold)
   })

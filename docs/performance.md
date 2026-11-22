@@ -144,8 +144,8 @@ Desktop Chromium on Windows/Linux negotiates one receive-only video transceiver 
 the DataChannel, with `max-bundle`, to obtain Chromium's larger shared UDP receive buffer.
 It captures and sends no media. This is an implementation-specific compatibility measure;
 `receive-buffer` provider facts report selection/negotiation, not a measured kernel buffer size.
-Native description failures disable it for subsequent attempts in that receiver session,
-including TURN; ordinary recovery budgets and relay availability still govern progress.
+Native description failures disable it for subsequent attempts in that receiver session;
+ordinary recovery budgets and relay availability still govern progress.
 Other browsers/platforms use data-only negotiation. Recheck browser/Pion interop after browser
 upgrades (`pnpm --dir web run test:browser:interop --project chrome --headed` selects installed Chrome).
 

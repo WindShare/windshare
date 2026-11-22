@@ -1,7 +1,7 @@
 import type { FrameChannel } from '../contracts/channel'
 import type { WebRTCFrameChannel } from '../transport/webrtc'
 
-export type PeerPathRoute = 'direct' | 'turn' | undefined
+export type PeerPathRoute = 'direct' | undefined
 
 export interface PeerChannel extends FrameChannel {
   readonly pathRoute?: PeerPathRoute

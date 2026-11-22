@@ -49,14 +49,14 @@ func (value CommandFailed) Failure() appobs.Failure { return value.failure }
 func (value CommandFailed) Validate() error { return validateCommandFailed(value) }
 
 type downloadConnectivity struct {
-	id                           appobs.TransferJobID
-	first                        time.Duration
-	firstKnown                   bool
-	direct, turn, relay, unknown uint64
-	fraction                     float64
-	fractionKnown                bool
-	stall                        time.Duration
-	incomplete, final            bool
+	id                     appobs.TransferJobID
+	first                  time.Duration
+	firstKnown             bool
+	direct, relay, unknown uint64
+	fraction               float64
+	fractionKnown          bool
+	stall                  time.Duration
+	incomplete, final      bool
 }
 
 type TransferSettled struct {
@@ -73,7 +73,7 @@ func (value TransferSettled) WithDownloadConnectivity(snapshot downloadmetrics.S
 	if err != nil || snapshot.FallbackStall < 0 {
 		return TransferSettled{}, ErrInvalidEvent
 	}
-	c := downloadConnectivity{id: id, direct: snapshot.DirectBytes, turn: snapshot.TURNBytes,
+	c := downloadConnectivity{id: id, direct: snapshot.DirectBytes,
 		relay: snapshot.ApplicationRelayBytes, unknown: snapshot.UnknownBytes, stall: snapshot.FallbackStall,
 		incomplete: snapshot.Incomplete, final: snapshot.Final}
 	if snapshot.FirstDirectElapsed != nil {
@@ -100,7 +100,7 @@ func (value TransferSettled) DownloadConnectivity() (downloadmetrics.Snapshot, b
 	if !c.id.Valid() {
 		return downloadmetrics.Snapshot{}, false
 	}
-	result := downloadmetrics.Snapshot{DownloadID: c.id.Hex(), DirectBytes: c.direct, TURNBytes: c.turn,
+	result := downloadmetrics.Snapshot{DownloadID: c.id.Hex(), DirectBytes: c.direct,
 		ApplicationRelayBytes: c.relay, UnknownBytes: c.unknown, FallbackStall: c.stall, Incomplete: c.incomplete, Final: c.final}
 	if c.firstKnown {
 		first := c.first

@@ -78,7 +78,6 @@ describe('incident frozen contracts', () => {
       'peer_answer',
       'peer_candidate',
       'peer_path_control',
-      'turn_control',
     ])
     expect(PROTOCOL_REQUEST_KINDS_V1).toEqual([
       'list_children',

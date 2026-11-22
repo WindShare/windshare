@@ -23,7 +23,6 @@ import (
 	"github.com/windshare/windshare/engine/builtinnetwork"
 	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/relaysetup"
-	"github.com/windshare/windshare/engine/turncache"
 	"github.com/windshare/windshare/internal/platformsetup"
 )
 
@@ -137,7 +136,6 @@ func Main() int {
 	interrupts := make(chan os.Signal, interruptSignalBuffer)
 	defer notifyTerminationSignals(interrupts, signal.Ignored)()
 	app.engineConfig.RelaySetup.Store = relaysetup.FileStore{Settings: relayconfig.FileStore{}}
-	app.engineConfig.TURNDependencies.Cache = turncache.FileStore{Settings: relayconfig.FileStore{}}
 	code := runCLIWithInterruptEscalation(
 		interrupts,
 		os.Exit,

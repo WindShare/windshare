@@ -574,7 +574,7 @@ func validateKindDirection(direction Direction, kind MessageKind) error {
 		case MessageCatalogResult, MessageOpenResults, MessageBlockFragment,
 			MessageOperationError, MessageSessionTerminal, MessageLaneAttach,
 			MessageScanProgress, MessageOperationComplete, MessageLeaseResult,
-			MessagePeerAnswer, MessagePeerCandidate, MessagePeerPathControl, MessageTURNControl:
+			MessagePeerAnswer, MessagePeerCandidate, MessagePeerPathControl:
 			return nil
 		}
 	}

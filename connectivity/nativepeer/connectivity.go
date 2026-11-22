@@ -12,18 +12,14 @@ import (
 	"time"
 
 	pion "github.com/pion/webrtc/v4"
-	"github.com/windshare/windshare/connectivity/iceconfig"
 	"github.com/windshare/windshare/connectivity/icepolicy"
 	"github.com/windshare/windshare/connectivity/networkstate"
 	"github.com/windshare/windshare/connectivity/pionpeer"
 	"github.com/windshare/windshare/connectivity/reachability"
 	"github.com/windshare/windshare/connectivity/reachability/gateway"
 	"github.com/windshare/windshare/connectivity/socketauthority"
-	"github.com/windshare/windshare/connectivity/turncapacity"
-	"github.com/windshare/windshare/connectivity/turnroute"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/observationstream"
-	"github.com/windshare/windshare/core/session/turncontrol"
 )
 
 const (
@@ -33,13 +29,11 @@ const (
 )
 
 type AttemptRequest struct {
-	Configuration      pion.Configuration
-	ICE                iceconfig.Connection
-	ProtocolSessionID  [16]byte
-	ReplacesPeerPathID [16]byte
-	Binding            v2signal.Binding
-	OnTURNRecovery     func(turncontrol.RecoveryReason)
+	Configuration     pion.Configuration
+	ProtocolSessionID [16]byte
+	Binding           v2signal.Binding
 }
+
 // NetworkMonitor provides concurrency-safe network state polling.
 type NetworkMonitor interface {
 	Poll(context.Context, time.Time) (networkstate.Snapshot, bool, error)
@@ -51,7 +45,6 @@ type networkSubscriber interface {
 }
 type Config struct {
 	Admission           *Admission
-	TURNCapacity        *turncapacity.Pool
 	Connect             func(pion.Configuration, pionpeer.AttemptConfig) (*pionpeer.Connection, error)
 	Monitor             NetworkMonitor
 	Sockets             *socketauthority.Authority
@@ -114,8 +107,6 @@ type NativePeerConnectivity struct {
 	closed                bool
 	prewarmed             map[[16]byte]bool
 	config                Config
-	turnResources         *turncapacity.Owner
-	turnRoutes            turnroute.Planner
 	paths                 map[pathKey]*pathResources
 	facts                 *icepolicy.FactStore
 	generation            uint64
@@ -123,10 +114,10 @@ type NativePeerConnectivity struct {
 	snapshotState         networkstate.Snapshot
 }
 
-var ErrCapacityRequired = errors.New("native connectivity requires admission and TURN capacity")
+var ErrCapacityRequired = errors.New("native connectivity requires admission")
 
 func New(config Config) (*NativePeerConnectivity, error) {
-	if config.TURNCapacity == nil || config.Admission == nil {
+	if config.Admission == nil {
 		return nil, ErrCapacityRequired
 	}
 	if config.Monitor == nil {
@@ -143,7 +134,6 @@ func New(config Config) (*NativePeerConnectivity, error) {
 	}
 	owner := &NativePeerConnectivity{
 		config:                config,
-		turnResources:         config.TURNCapacity.NewOwner(),
 		paths:                 make(map[pathKey]*pathResources),
 		prewarmed:             make(map[[16]byte]bool),
 		maintWake:             make(chan struct{}, 1),

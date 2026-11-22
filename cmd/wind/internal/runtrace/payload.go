@@ -13,7 +13,6 @@ type downloadConnectivity struct {
 	DownloadID            string   `json:"download_id"`
 	FirstDirectElapsedMS  *string  `json:"first_direct_elapsed_ms"`
 	DirectBytes           string   `json:"direct_bytes"`
-	TURNBytes             string   `json:"turn_bytes"`
 	ApplicationRelayBytes string   `json:"application_relay_bytes"`
 	UnknownBytes          string   `json:"unknown_bytes"`
 	DirectFraction        *float64 `json:"direct_fraction"`

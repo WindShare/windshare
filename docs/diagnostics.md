@@ -36,7 +36,7 @@ Correlate events across the session using:
 - `protocol_operation` & `protocol_response_send_returned`: Operation lifecycle, lane selection, and send attempts.
 - `protocol_error_received`: Authenticated protocol errors (`scope`, `code`, `retryable`, `retry_after_ms`).
 - `sender_session_terminated`: Session shutdown reason, failing component (`source`), error cause chain (`nodes`), and stack trace (`capture_stack`).
-- `peer_attempt`: WebRTC / ICE attempts and disconnect causes; admitted attempts carry the actual `route` (`direct` or `turn`). Earlier stages do not claim a route.
+- `peer_attempt`: WebRTC / ICE attempts and disconnect causes; admitted attempts carry the actual `route` (`direct`). Earlier stages do not claim a route.
 - `relay_availability`: Current ready, configured, and terminal relay counts plus whether any relay was previously ready; separate from active download paths.
 - `relay_recovering`: Per-relay attempt state and failure; sender details include connection generation, fast/slow waiting, resume/publication mode, terminal disposition, and next delay.
 - `relay_lifecycle`: Connection and channel transitions, including heartbeat probe, acknowledgement, and failure with round, timeout, and elapsed wait (round trip for an acknowledgement, inbound silence for a failure).

@@ -49,8 +49,6 @@ var approvedModuleMetadataPaths = map[string]struct{}{
 	"third_party/pion/ice/go.sum":    {},
 	"third_party/pion/webrtc/go.mod": {},
 	"third_party/pion/webrtc/go.sum": {},
-	"third_party/pion/turn/go.mod":   {},
-	"third_party/pion/turn/go.sum":   {},
 	"third_party/pion/sctp/go.mod":   {},
 	"third_party/pion/sctp/go.sum":   {},
 }

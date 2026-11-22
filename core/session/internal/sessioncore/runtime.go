@@ -27,7 +27,6 @@ func (reader *LockedReader) Read(destination []byte) (int, error) {
 
 type Runtime struct {
 	peerPathControls     sessionControlHandler
-	turnControls         sessionControlHandler
 	share                catalog.ShareInstance
 	role                 protocolsession.Role
 	sessionID            protocolsession.ProtocolSessionID
@@ -117,14 +116,9 @@ func New(config Config) (*Runtime, error) {
 		cancelLifecycle:      cancelLifecycle,
 		done:                 make(chan struct{}),
 	}
-	for kind, handler := range map[protocolsession.MessageKind]*sessionControlHandler{
-		protocolsession.MessagePeerPathControl: &runtime.peerPathControls,
-		protocolsession.MessageTURNControl:     &runtime.turnControls,
-	} {
-		if err := router.RegisterHandler(kind, handler); err != nil {
-			cancelLifecycle()
-			return nil, err
-		}
+	if err := router.RegisterHandler(protocolsession.MessagePeerPathControl, &runtime.peerPathControls); err != nil {
+		cancelLifecycle()
+		return nil, err
 	}
 	runtime.lanes = newRuntimeLanes(runtime)
 	if _, err := runtime.lanes.add(runtime.initial, config.Channel, config.Validator, true); err != nil {

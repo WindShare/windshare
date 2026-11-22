@@ -1,5 +1,4 @@
 import { decodePeerPathControl } from '../protocol/peer-path-control'
-import { decodeTurnControl } from '../protocol/turn-control'
 import { requirePeerSlot } from './peer-slots/slots'
 import { equalBytes } from '../crypto/bytes'
 import { isWellFormedUnicode } from '../protocol/text'
@@ -35,7 +34,6 @@ export const MESSAGE_KIND = Object.freeze({
   peerAnswer: 17,
   peerCandidate: 18,
   peerPathControl: 19,
-  turnControl: 20,
 } as const)
 
 export const PEER_OPERATION_CODE = Object.freeze({
@@ -300,9 +298,6 @@ export function validateSenderControlBody(kind: MessageKind, body: Uint8Array): 
     case MESSAGE_KIND.peerPathControl:
       decodePeerPathControl(body)
       return
-    case MESSAGE_KIND.turnControl:
-      decodeTurnControl(body)
-      return
     case MESSAGE_KIND.sessionTerminal:
       validateSessionTerminal(body)
       return
@@ -534,7 +529,7 @@ function requireSchema(value: unknown, label: string): void {
 
 function requireMessageIdentity(kind: MessageKind, operationId: Uint8Array | undefined): void {
   if (!MESSAGE_KINDS.has(kind)) throw new MessageError('Message kind is outside the wire registry')
-  if (kind === MESSAGE_KIND.sessionTerminal || kind === MESSAGE_KIND.peerPathControl || kind === MESSAGE_KIND.turnControl) {
+  if (kind === MESSAGE_KIND.sessionTerminal || kind === MESSAGE_KIND.peerPathControl) {
     if (operationId !== undefined) throw new MessageError('Session control has an operation ID')
     return
   }

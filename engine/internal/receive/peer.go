@@ -185,7 +185,7 @@ func (paths *receiverContentPaths) observeContent(activity []transferlanes.Conte
 		switch entry.Route {
 		case transferlanes.RouteDirect:
 			paths.direct = true
-		case transferlanes.RouteRelay, transferlanes.RouteTURN:
+		case transferlanes.RouteRelay:
 			paths.relay = true
 		}
 	}
@@ -515,11 +515,7 @@ func (adapter receiverPeerFactoryAdapter) startPeerSet(ctx context.Context, sign
 	if demand == peerset.NoDemand {
 		demand = peerset.ContentDemand
 	}
-	routes := peerset.UserRelayRoutes
-	if adapter.stopAfterWave {
-		routes = peerset.DirectRoutes
-	}
-	path, err := peerset.OpenReceiverSession(ctx, peerset.Config{Budget: adapter.options.budget, Capacity: adapter.options.capacity}, peerset.ReceiverConfig{Factory: adapter.factory, Signaling: signaling, Lanes: lanes, Demand: demand, StopAfterWave: adapter.stopAfterWave, Routes: routes})
+	path, err := peerset.OpenReceiverSession(ctx, peerset.Config{Budget: adapter.options.budget, Capacity: adapter.options.capacity}, peerset.ReceiverConfig{Factory: adapter.factory, Signaling: signaling, Lanes: lanes, Demand: demand, StopAfterWave: adapter.stopAfterWave})
 	if err != nil {
 		return nil, err
 	}

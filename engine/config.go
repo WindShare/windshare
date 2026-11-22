@@ -14,7 +14,6 @@ import (
 	"github.com/windshare/windshare/engine/networkconfig"
 	"github.com/windshare/windshare/engine/relayprofile"
 	"github.com/windshare/windshare/engine/relaysetup"
-	"github.com/windshare/windshare/engine/turn"
 )
 
 type PreparedShare = share.Prepared
@@ -51,8 +50,6 @@ type Config struct {
 	// Diagnostics receives engine-scoped infrastructure events (such as
 	// directory refreshes and frontend health checks) bound with Scope.EngineID.
 	Diagnostics         diagnostics.Sink
-	TURN                turn.Settings
-	TURNDependencies    turn.Dependencies
 	RelaySetup          relaysetup.Dependencies
 	Clock               Clock
 	Random              io.Reader

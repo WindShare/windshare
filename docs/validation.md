@@ -24,17 +24,17 @@ Make targets operate on the repository root and use the installed Go, Rust, Node
 | `make ci` | The ordinary gate set, serially. |
 | `make ci-parallel` | The same gates in three concurrent lanes: `short-go vectors rust desktop-check e2e hygiene workflow-lint sloc`, `web browser`, and `gopls lint vet`. |
 | `make ci-full` | `ci`, `long-go`, and the weekly browser supplement. |
-| `make short-go` | Pinned ICE/TURN/SCTP state tests, then non-core and core short tests with race detection and coverage verdicts. |
+| `make short-go` | Pinned ICE/SCTP state tests, then non-core and core short tests with race detection and coverage verdicts. |
 | `make race` | Short tests with race detection. |
 | `make coverage` | Short tests with coverage verdicts. |
-| `make vectors` | Shared protocol, signed network directory/authority, TURN control, signaling, and CLI trace vectors. |
+| `make vectors` | Shared protocol, signed network directory/authority, signaling, and CLI trace vectors. |
 | `make vectors-update` | Regenerates protocol vectors. |
 | `make rust` | Cargo fmt, Clippy, native tests, doctests, coverage, and wasm builds. |
 | `make desktop-check` | Desktop workspace: Cargo fmt, strict Clippy, non-UI tests (including native host ABI and artifact staging), and native build; requires Node.js, Go, a C compiler, and GPUI prerequisites. |
 | `make web` | Web and Consoles ESLint, Consoles typecheck and embedded bundle verification, Web TypeScript/Vite build, and Vitest. |
 | `make e2e` | `TestUserTraceCriticalSenderRelayReceiver` over real CLI processes. |
 | `make browser` | Chromium relay smoke and short browser contracts. |
-| `make browser-weekly` | `browser` plus Firefox/WebKit contracts, Chromium periodic contracts, progressive catalog, direct/TURN routes, and Pion interop. |
+| `make browser-weekly` | `browser` plus Firefox/WebKit contracts, Chromium periodic contracts, progressive catalog, direct relay-cut routes, and Pion interop. |
 | `make long-go` | Long E2E, integration, catalog, and output-runtime suites. |
 | `make hygiene` | gofmt, whitespace, release packaging contracts, pinned-Pion reproduction, generated Unicode tables, dependency boundaries, and package ownership. |
 | `make workflow-lint` | actionlint. |
@@ -117,7 +117,7 @@ CI calls the reusable [native output workflow](../.github/workflows/native-outpu
 - Linux and Windows integration tests;
 - named long-running Go E2E and catalog tests;
 - Linux and Windows output and process-restart tests;
-- progressive catalog, direct/TURN switching, and browser/Pion interoperability scenarios;
+- progressive catalog, direct relay-cut switching, and browser/Pion interoperability scenarios;
 - Firefox and WebKit product scenarios and component contracts (including native-size relay bursts), and periodic Chromium component contracts;
 - Windows browser and process smoke tests;
 - Linux and Windows native-output release-artifact checks, plus the Linux relay container build/probe.

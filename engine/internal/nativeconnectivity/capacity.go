@@ -4,7 +4,6 @@ import (
 	"errors"
 
 	"github.com/windshare/windshare/connectivity/nativepeer"
-	"github.com/windshare/windshare/connectivity/turncapacity"
 	"github.com/windshare/windshare/connectivity/v2peer/peerset"
 	wsrtc "github.com/windshare/windshare/transport/webrtc"
 )
@@ -17,7 +16,6 @@ var ErrCapacityRequired = errors.New("application connectivity capacity is requi
 type Capacity struct {
 	sends     *wsrtc.SendCapacity
 	admission *nativepeer.Admission
-	turn      *turncapacity.Pool
 	attempts  *peerset.Capacity
 	monitor   nativepeer.NetworkMonitor
 }
@@ -30,7 +28,6 @@ func NewCapacity(clock nativepeer.AdmissionClock, monitor nativepeer.NetworkMoni
 	return &Capacity{
 		sends:     wsrtc.NewSendCapacity(),
 		admission: nativepeer.NewAdmission(clock),
-		turn:      turncapacity.NewPool(),
 		attempts:  attempts,
 		monitor:   monitor,
 	}, nil
@@ -41,7 +38,6 @@ func (capacity *Capacity) NewNative(config nativepeer.Config) (*nativepeer.Nativ
 		return nil, ErrCapacityRequired
 	}
 	config.Admission = capacity.admission
-	config.TURNCapacity = capacity.turn
 	if config.Monitor == nil {
 		config.Monitor = capacity.monitor
 	}

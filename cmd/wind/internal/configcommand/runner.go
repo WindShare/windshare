@@ -15,7 +15,6 @@ import (
 	"github.com/windshare/windshare/cmd/wind/internal/commandinput"
 	"github.com/windshare/windshare/cmd/wind/internal/commandmeta"
 	"github.com/windshare/windshare/engine/relayconfig"
-	"github.com/windshare/windshare/engine/turn"
 )
 
 type Result uint8
@@ -128,9 +127,6 @@ func (runner Runner) Run(ctx context.Context, args []string) Result {
 	}
 	log.Info("committed", "candidate_count", len(config.Profiles), "frontend_configured", config.FrontURL != "")
 	runner.writeLine("Saved sharing configuration with %d relay candidate(s).", len(config.Profiles))
-	if len(config.TURN.Profiles) > 0 {
-		runner.writeLine("%s", turn.DelegationNotice)
-	}
 	if config.FrontURL == "" {
 		runner.writeLine("Sharing uses the built-in receiver website.")
 	} else {

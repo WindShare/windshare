@@ -23,12 +23,12 @@ func TestMessageCanonicalRoundTripAndOwnership(t *testing.T) {
 		t.Fatal(err)
 	}
 	operationID := testOperationID(1)
-	for kind := MessageListChildren; kind <= MessageTURNControl; kind++ {
+	for kind := MessageListChildren; kind <= MessagePeerPathControl; kind++ {
 		if kind == MessageBlockFragment {
 			continue
 		}
 		var id *OperationID
-		sessionControl := kind == MessageSessionTerminal || kind == MessagePeerPathControl || kind == MessageTURNControl
+		sessionControl := kind == MessageSessionTerminal || kind == MessagePeerPathControl
 		if !sessionControl {
 			id = &operationID
 		}

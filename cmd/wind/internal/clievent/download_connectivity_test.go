@@ -13,7 +13,7 @@ func TestDownloadConnectivitySealsSnapshotValues(t *testing.T) {
 	first := 2 * time.Second
 	fraction := 0.5
 	event, err := (TransferSettled{}).WithDownloadConnectivity(downloadmetrics.Snapshot{
-		DownloadID: id, FirstDirectElapsed: &first, DirectBytes: 10, TURNBytes: 5, ApplicationRelayBytes: 5,
+		DownloadID: id, FirstDirectElapsed: &first, DirectBytes: 10, ApplicationRelayBytes: 10,
 		DirectFraction: &fraction, FallbackStall: time.Second, Final: true,
 	})
 	if err != nil {

@@ -39,13 +39,12 @@ func (p *Path) recoverContentGeneration(identity transferlanes.Identity) bool {
 	}
 	p.restartCause = errContentRouteExhausted
 	binding, generation := p.binding, p.networkGeneration
-	_, relayed := p.config.ICE.Relay()
 	p.mu.Unlock()
 	p.config.Native.ObserveContentRecovery(nativepeer.Subject{
 		ProtocolSessionID: p.key.session, PeerPathID: p.key.path,
 		AttemptID: binding.AttemptID, AttemptSequence: binding.AttemptSequence,
 		NetworkGenerationID: generation,
-	}, !relayed)
+	}, true)
 	select {
 	case p.wake <- struct{}{}:
 	default:

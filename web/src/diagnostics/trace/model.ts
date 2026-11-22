@@ -306,7 +306,7 @@ export interface TraceEventPayloadByNameV2 extends ConnectionTracePayloads {
   readonly request_scheduling: Readonly<{
     request_sequence: string
     request_kind: 'open_revisions' | 'list_children' | 'renew_lease' | 'release_lease'
-    route: 'application-relay' | 'direct' | 'turn'
+    route: 'application-relay' | 'direct'
     transition: 'dispatched' | 'completed' | 'failed' | 'cancelled'
     expected_ms: number
     elapsed_ms: number

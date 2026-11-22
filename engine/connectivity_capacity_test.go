@@ -5,16 +5,13 @@ import (
 	"errors"
 	"net/netip"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/windshare/windshare/connectivity/iceconfig"
 	"github.com/windshare/windshare/connectivity/icepolicy"
 	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/networkstate"
 	"github.com/windshare/windshare/connectivity/reachability"
-	"github.com/windshare/windshare/connectivity/turncapacity"
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/connectivity/v2peer/peerset"
 	"github.com/windshare/windshare/connectivity/v2signal"
@@ -119,64 +116,6 @@ func TestEngineAdmissionSurvivesOwnerReplacementAndIsolatesOtherEngines(t *testi
 	if err := <-pending; !errors.Is(err, context.Canceled) {
 		t.Fatalf("exhausted owner escaped its queue: %v", err)
 	}
-}
-
-func TestEngineTURNCapacitySharesAcrossOwnersAndIsolatesOtherEngines(t *testing.T) {
-	var seconds atomic.Int64
-	now := func() time.Time { return time.Unix(100+seconds.Load(), 0) }
-	first := newTestEngine(t, Config{Clock: engineTestClock{now: now}})
-	second := newTestEngine(t, Config{Clock: engineTestClock{now: now}})
-	ctx, cancel := context.WithTimeout(context.Background(), capacityTestTimeout)
-	defer cancel()
-	credential, err := iceconfig.Fixed("user", "password")
-	if err != nil {
-		t.Fatal(err)
-	}
-	relay, err := iceconfig.NewRelay(iceconfig.Identity{Provider: "test", Account: "account", Profile: "profile"},
-		[]string{"turn:127.0.0.1:3478"}, credential)
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := capacityRequest()
-	request.ICE, err = iceconfig.New(nil, &relay, iceconfig.RelayCandidates)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var held []*nativepeer.PreparedAttempt
-	for range turncapacity.MaximumConnections {
-		native := capacityNative(t, first)
-		prepared, err := native.PrepareAttempt(ctx, request)
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(prepared.Close)
-		held = append(held, prepared)
-		// An admitted path keeps TURN ownership after returning its attempt slot.
-		native.SetAdmitted(request.ProtocolSessionID, request.Binding.PeerPathID, false)
-		seconds.Add(int64(nativepeer.AdmissionWindow / time.Second))
-	}
-	blocked := capacityNative(t, first)
-	wait, stop := context.WithTimeout(ctx, capacityQueueProbe)
-	prepared, err := blocked.PrepareAttempt(wait, request)
-	stop()
-	prepared.Close()
-	if !errors.Is(err, turncapacity.ErrCapacity) {
-		t.Fatalf("another native owner bypassed the Engine TURN limit: %v", err)
-	}
-	independent := capacityNative(t, second)
-	prepared, err = independent.PrepareAttempt(ctx, request)
-	if err != nil {
-		t.Fatalf("another Engine inherited full TURN capacity: %v", err)
-	}
-	prepared.Close()
-
-	held[0].Close()
-	prepared, err = blocked.PrepareAttempt(ctx, request)
-	if err != nil {
-		t.Fatalf("released TURN capacity was not reusable: %v", err)
-	}
-	prepared.Close()
 }
 
 type capacityAttempt struct {

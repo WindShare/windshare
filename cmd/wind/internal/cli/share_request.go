@@ -14,7 +14,6 @@ import (
 )
 
 type shareRequest struct {
-	sharing     relayconfig.Config
 	paths       []string
 	relayIntent relayprofile.Intent
 	link        shareLinkPresentation
@@ -97,8 +96,7 @@ func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcom
 		return shareRequest{}, requestParseUsageFailure
 	}
 	return shareRequest{
-		sharing: saved,
-		paths:   paths, relayIntent: intent,
+		paths: paths, relayIntent: intent,
 		link:      shareLinkPresentation{frontURL: frontend, splitKey: *splitKey, browserTrace: *browserTrace},
 		chunkSize: uint32(*blockSize), observation: observation,
 	}, requestParseReady
@@ -127,7 +125,7 @@ func savedConfigurationFailure(err error) string {
 	case errors.Is(err, relayconfig.ErrFrontURL), errors.Is(err, relayconfig.ErrRelayURL):
 		return err.Error()
 	case errors.Is(err, relayconfig.ErrRepeatedMember):
-		return err.Error() + "; alternatively, wind config import <file> replaces all saved settings, including TURN accounts"
+		return err.Error() + "; alternatively, wind config import <file> replaces all saved settings"
 	default:
 		return "cannot load sharing configuration; check windshare/config.json or WINDSHARE_CONFIG"
 	}

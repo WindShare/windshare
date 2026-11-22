@@ -17,7 +17,6 @@ import {
   OutputFence,
   PagePeerRecoveryHarness,
 } from '../../e2e/fixtures/hot-switch-page-transfer'
-import { parseLocalTurnReadyRecord } from '../../e2e/fixtures/local-turn-server'
 import { NetworkEventLog } from '../../e2e/fixtures/network-event-log'
 import { createCapabilityRedactor } from '../../e2e/fixtures/capability-redactor'
 import { normalizeFileTransferFailure } from '../../src/transfer/job/failures'
@@ -57,7 +56,6 @@ describe('direct weekly network fixtures', () => {
 
   it.each([
     { relay: 'cut', route: 'direct' },
-    { relay: 'cut', route: 'turn' },
     { relay: 'healthy', route: 'direct' },
   ] as const)('keeps post-fence $route demand with a $relay relay', async ({ relay, route }) => {
     vi.useFakeTimers()
@@ -198,12 +196,12 @@ describe('direct weekly network fixtures', () => {
     const observed: PeerPathRoute[] = []
     const unsubscribe = gated.subscribePathRoute?.((route) => observed.push(route))
     try {
-      for (const nextRoute of ['turn', undefined] as const) {
+      for (const nextRoute of [undefined, 'direct'] as const) {
         pathRoute = nextRoute
         for (const listener of listeners) listener(nextRoute)
         expect(gated.pathRoute).toBe(nextRoute)
       }
-      expect(observed).toEqual(['turn', undefined])
+      expect(observed).toEqual([undefined, 'direct'])
     } finally {
       unsubscribe?.()
       await gated.close()
@@ -246,45 +244,6 @@ describe('direct weekly network fixtures', () => {
     await expect(received).resolves.toEqual({ done: false, value: response })
     reader.releaseLock()
     await replacement.close()
-  })
-
-  it('accepts only the owned TURN readiness identity and loopback endpoint', () => {
-    expect(parseLocalTurnReadyRecord(JSON.stringify({
-      component: 'browser-local-turn-server',
-      scenarioId: 'chromium-turn-route',
-      operationId: 'chromium-turn-route-server',
-      milestone: 'listener-ready',
-      url: 'turn:127.0.0.1:34781?transport=udp',
-      tcpUrl: 'turn:127.0.0.1:34781?transport=tcp',
-      relayAddress: '192.0.2.10',
-      username: 'windshare-browser',
-      credential: 'windshare-local-turn',
-    }))).toMatchObject({
-      operationId: 'chromium-turn-route-server',
-      url: 'turn:127.0.0.1:34781?transport=udp',
-    })
-    expect(() => parseLocalTurnReadyRecord(JSON.stringify({
-      component: 'browser-local-turn-server',
-      scenarioId: 'chromium-turn-route',
-      operationId: 'chromium-turn-route-server',
-      milestone: 'listener-ready',
-      url: 'turn:192.0.2.1:34781?transport=udp',
-      tcpUrl: 'turn:192.0.2.1:34781?transport=tcp',
-      relayAddress: '192.0.2.10',
-      username: 'windshare-browser',
-      credential: 'windshare-local-turn',
-    }))).toThrow(/owned UDP loopback/u)
-    expect(() => parseLocalTurnReadyRecord(JSON.stringify({
-      component: 'browser-local-turn-server',
-      scenarioId: 'chromium-turn-route',
-      operationId: 'chromium-turn-route-server',
-      milestone: 'listener-ready',
-      url: 'turn:127.0.0.1:34781?transport=udp',
-      relayAddress: '127.0.0.1',
-      tcpUrl: 'turn:127.0.0.1:34781?transport=tcp',
-      username: 'windshare-browser',
-      credential: 'windshare-local-turn',
-    }))).toThrow(/usable owned IPv4 route/u)
   })
 
   it('correlates asynchronous route milestones without losing earlier events', async () => {
@@ -339,7 +298,7 @@ describe('direct weekly network fixtures', () => {
     async (arrival) => {
       const log = new NetworkEventLog()
       const cutBoundary = 27
-      const replacement = { laneId: 1, laneEpoch: 2, route: 'turn' } as const
+      const replacement = { laneId: 1, laneEpoch: 2, route: 'direct' } as const
       const dispatch = (lane: HotSwitchLaneObservation, sequence: number) => ({
         kind: 'dispatch' as const,
         observation: { ...lane, dispatchSequence: sequence },
@@ -347,7 +306,7 @@ describe('direct weekly network fixtures', () => {
       log.accept(dispatch(replacement, cutBoundary))
       // The failing weekly run carried sequences 28 through 38 on the predecessor
       // before sequence 39 proved that the renewed allocation carried content.
-      log.accept(dispatch({ laneId: 2, laneEpoch: 1, route: 'turn' }, 28))
+      log.accept(dispatch({ laneId: 2, laneEpoch: 1, route: 'direct' }, 28))
       log.accept(dispatch({ ...replacement, laneEpoch: 1 }, 38))
       const renewed = dispatch(replacement, 39)
       if (arrival === 'retained') log.accept(renewed)

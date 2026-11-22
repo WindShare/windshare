@@ -6,13 +6,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/windshare/windshare/connectivity/iceconfig"
 	"github.com/windshare/windshare/connectivity/nativepeer"
-	"github.com/windshare/windshare/connectivity/pionpeer"
 	"github.com/windshare/windshare/connectivity/socketauthority"
-	"github.com/windshare/windshare/connectivity/turnpath"
 	"github.com/windshare/windshare/connectivity/v2signal"
-	"github.com/windshare/windshare/core/session/turncontrol"
 )
 
 func (handler *senderHandler) runSessionControls(ctx context.Context) func() {
@@ -25,41 +21,10 @@ func (handler *senderHandler) runSessionControls(ctx context.Context) func() {
 	work.Go(func() {
 		handler.factory.native.RunSession(child, [16]byte(handler.session.ProtocolSessionID()), handler.session.SendPeerPathControl)
 	})
-	handler.turn = turnpath.NewSender(turnpath.SenderConfig{
-		Accounts: handler.factory.turn, SessionID: [16]byte(handler.session.ProtocolSessionID()),
-		Send: handler.session.SendTURNControl, Now: handler.factory.now,
-		Observe:           handler.factory.native.ObserveTURN,
-		NetworkGeneration: handler.factory.native.NetworkGeneration,
-		Retire: func(path [16]byte) {
-			handler.mu.Lock()
-			var attempts []*peerAttempt
-			for binding, operation := range handler.bindings {
-				if [16]byte(binding.PeerPathID) == path {
-					if attempt := handler.attempts[operation]; attempt != nil {
-						attempts = append(attempts, attempt)
-					}
-				}
-			}
-			handler.mu.Unlock()
-			for _, attempt := range attempts {
-				attempt.stop(ErrPeerPathRetired)
-				<-attempt.done
-			}
-			handler.factory.native.ClosePath([16]byte(handler.session.ProtocolSessionID()), v2signal.PeerPathID(path))
-			handler.mu.Lock()
-			handler.evidenceAuthority.retirePath(v2signal.PeerPathID(path))
-			handler.mu.Unlock()
-		},
-	})
-	handler.session.SetTURNControlHandler(func(ctx context.Context, body []byte) error { return handler.turn.Handle(ctx, body) })
-	work.Go(func() {
-		handler.turn.Run(child)
-	})
 	return func() {
 		cancel()
 		work.Wait()
 		handler.session.SetPeerPathControlHandler(nil)
-		handler.session.SetTURNControlHandler(nil)
 	}
 }
 
@@ -118,14 +83,6 @@ func (handler *senderHandler) startAttempt(
 	operation peerOperation,
 	offer v2signal.Offer,
 ) error {
-	var turnLease *turnpath.AuthorizedPath
-	if handler.turn != nil {
-		lease, _, err := handler.turn.Lookup([16]byte(offer.Binding.PeerPathID))
-		if err != nil {
-			return err
-		}
-		turnLease = lease
-	}
 	var capacityBoundary *v2signal.Binding
 	handler.mu.Lock()
 	defer func() {
@@ -181,7 +138,6 @@ func (handler *senderHandler) startAttempt(
 		return ErrReplayCapacity
 	}
 	attempt := newPeerAttempt(peerAttemptConfig{
-		turn: handler.turn, turnLease: turnLease,
 		factory: handler.factory, session: handler.session,
 		operation: operation.id, generation: operation.generation, offer: offer,
 		onDone: handler.attemptDone,
@@ -381,17 +337,6 @@ func (attempt *peerAttempt) run(ctx context.Context) error {
 	defer attempt.phases.terminate(nil)
 	attempt.recorder.negotiationDeadlineArmed()
 	request := nativepeer.AttemptRequest{Configuration: attempt.config.factory.configuration, ProtocolSessionID: [16]byte(attempt.config.session.ProtocolSessionID()), Binding: attempt.binding()}
-	if attempt.config.turnLease != nil {
-		request.ReplacesPeerPathID = attempt.config.turnLease.ReplacesPeerPathID
-		request.OnTURNRecovery = func(reason turncontrol.RecoveryReason) {
-			attempt.config.turn.Recover([16]byte(attempt.binding().PeerPathID), reason)
-		}
-		relay := attempt.config.turnLease.Relay()
-		request.ICE, err = iceconfig.New(nil, &relay, iceconfig.RelayCandidates)
-		if err != nil {
-			return attempt.finish(ctx, err, nil, false)
-		}
-	}
 	var prepared *nativepeer.PreparedAttempt
 	if attempt.config.factory.peerConnections == nil {
 		prepared, err = attempt.prepareNativeAttempt(negotiationContext, request)
@@ -422,17 +367,6 @@ func (attempt *peerAttempt) run(ctx context.Context) error {
 		return attempt.finish(ctx, errors.Join(ErrNegotiation, err), cleanup, false)
 	}
 	execution := newAttemptExecution(attempt, ctx, peer)
-	if lease := attempt.config.turnLease; lease != nil {
-		if measured, ok := peer.(interface {
-			TURNResources() (pionpeer.TURNResourceSnapshot, bool)
-		}); ok {
-			join := turnpath.WatchTransport(ctx, lease.Lease, func() turnpath.Usage {
-				snapshot, _ := measured.TURNResources()
-				return turnpath.Usage{TransportSent: snapshot.TransportSent, TransportReceived: snapshot.TransportReceived}
-			}, attempt.stop)
-			defer join()
-		}
-	}
 	execution.phaseContext = negotiationContext
 	execution.registerCallbacks()
 	result := execution.negotiate()

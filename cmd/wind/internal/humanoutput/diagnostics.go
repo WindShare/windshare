@@ -28,11 +28,8 @@ func formatPeerAttempt(record diagnostics.Record, symbols Symbols) terminalcanva
 	f := record.Payload()
 	stage := f.Get("stage").Text()
 	name := "Connection"
-	switch f.Get("route").Text() {
-	case "direct":
+	if f.Get("route").Text() == "direct" {
 		name = "Direct connection"
-	case "turn":
-		name = "TURN relay connection"
 	}
 	status, warning := peerAttemptStatus(f)
 	style, symbol := terminalcanvas.StyleMuted, symbols.Path

@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/windshare/windshare/connectivity/socketauthority"
-	"github.com/windshare/windshare/connectivity/turncapacity"
 )
 
 type addressedListener struct {
@@ -59,9 +58,6 @@ func newTestConnectivity(t *testing.T, config Config) *NativePeerConnectivity {
 	if config.Admission == nil {
 		config.Admission = NewAdmission(AdmissionClock{})
 	}
-	if config.TURNCapacity == nil {
-		config.TURNCapacity = turncapacity.NewPool()
-	}
 	native, err := New(config)
 	if err != nil {
 		t.Fatal(err)
@@ -75,13 +71,7 @@ func newTestConnectivity(t *testing.T, config Config) *NativePeerConnectivity {
 }
 
 func TestConnectivityRequiresExplicitCapacity(t *testing.T) {
-	for _, config := range []Config{
-		{},
-		{Admission: NewAdmission(AdmissionClock{})},
-		{TURNCapacity: turncapacity.NewPool()},
-	} {
-		if native, err := New(config); native != nil || !errors.Is(err, ErrCapacityRequired) {
-			t.Fatalf("missing capacity accepted: native=%v err=%v", native, err)
-		}
+	if native, err := New(Config{}); native != nil || !errors.Is(err, ErrCapacityRequired) {
+		t.Fatalf("missing capacity accepted: native=%v err=%v", native, err)
 	}
 }

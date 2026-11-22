@@ -12,13 +12,9 @@ import (
 
 	"github.com/pion/ice/v4"
 	"github.com/pion/logging"
-	"github.com/pion/turn/v5"
 	pion "github.com/pion/webrtc/v4"
 	"github.com/windshare/windshare/connectivity/iceconfig"
 	"github.com/windshare/windshare/connectivity/socketauthority"
-	"github.com/windshare/windshare/connectivity/turnroute"
-	"github.com/windshare/windshare/core/connectionpath"
-	"github.com/windshare/windshare/core/session/turncontrol"
 )
 
 // InitialCheckingTimeout follows RFC 8863's default transaction window. It
@@ -39,8 +35,6 @@ type AttemptConfig struct {
 	NetworkGenerationID    uint64
 	ICEProfileID           string
 	ICE                    iceconfig.Connection
-	TURN                   *TURNConfig
-	OnTURNRecovery         func(turncontrol.RecoveryReason)
 	InitialCheckingTimeout time.Duration
 	TCPProfile             TCPProfile
 	SocketLease            *socketauthority.Lease
@@ -54,10 +48,6 @@ type AttemptConfig struct {
 // The caller may reuse its configuration while this attempt is gathering.
 func (request AttemptConfig) snapshot() AttemptConfig {
 	request.MappedEndpoints = slices.Clone(request.MappedEndpoints)
-	if request.TURN != nil {
-		turn := *request.TURN
-		request.TURN = &turn
-	}
 	return request
 }
 
@@ -73,23 +63,15 @@ type Event struct {
 	At                  time.Time
 	Candidate           *CandidateFacts
 	Pair                *PairFacts
-	TURN                *TURNResourceSnapshot
-	TURNService         *iceconfig.Identity
-	TURNCleanup         connectionpath.CleanupOutcome
-	TURNBinding         *turn.BindingEvent
-	TURNRoute           *turnroute.Event
 }
 
 type Connection struct {
 	*pion.PeerConnection
-	lease         *socketauthority.Lease
-	release       func()
-	request       AttemptConfig
-	turn          *turnNetwork
-	turnGathering turnGatherer
-	turnRecovery  turnRecovery
-	closeOnce     sync.Once
-	closeErr      error
+	lease     *socketauthority.Lease
+	release   func()
+	request   AttemptConfig
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // NewPeerConnection acquires an exclusive attempt reference. The caller's path
@@ -99,9 +81,6 @@ func NewPeerConnection(configuration pion.Configuration, request AttemptConfig) 
 		return nil, errors.New("provider socket identity mismatch")
 	}
 	request = request.snapshot()
-	if relay, ok := request.ICE.Relay(); ok && !relay.Credentials().ValidAt(time.Now()) {
-		return nil, errors.New("TURN credentials expired before gathering")
-	}
 	lease, err := request.SocketLease.Retain()
 	if err != nil {
 		return nil, err
@@ -111,10 +90,7 @@ func NewPeerConnection(configuration pion.Configuration, request AttemptConfig) 
 		_ = lease.Close()
 		return nil, err
 	}
-	capability := TCPCapability{}
-	if request.ICE.Policy() != iceconfig.RelayCandidates {
-		capability = Capabilities(request.TCPProfile)
-	}
+	capability := Capabilities(request.TCPProfile)
 	var tcpFailure error
 	if capability.IPv4 || capability.IPv6 {
 		if tcpFailure = lease.PrepareTCP(capability.IPv6); tcpFailure != nil {
@@ -127,11 +103,7 @@ func NewPeerConnection(configuration pion.Configuration, request AttemptConfig) 
 		_ = lease.Close()
 		return nil, err
 	}
-	var turn *turnNetwork
 	fail := func(err error) (*Connection, error) {
-		if turn != nil {
-			turn.close()
-		}
 		release()
 		_ = lease.Close()
 		return nil, err
@@ -148,23 +120,11 @@ func NewPeerConnection(configuration pion.Configuration, request AttemptConfig) 
 		return fail(errors.New("initial ICE checking budget is below PAC minimum"))
 	}
 	var settings pion.SettingEngine
-	turn, err = claimTURNNetwork(request)
-	if err != nil {
-		return fail(err)
-	}
-	if turn != nil {
-		settings.SetNet(turn)
-	}
 	settings.SetICEUDPMux(mux)
 	if request.allowLoopback {
 		settings.SetIncludeLoopbackCandidate(true)
 	}
-	if request.ICE.Policy() != iceconfig.RelayCandidates {
-		settings.SetIPFilter(localEndpointFilter(endpoints))
-	}
-	// TURN control sockets follow the OS route to each server. Applying the
-	// direct-path IP filter here makes Pion allocate URL x interface sockets;
-	// unreachable VPN/virtual interfaces can then exhaust the path reservation.
+	settings.SetIPFilter(localEndpointFilter(endpoints))
 	settings.SetICEMulticastDNSMode(ice.MulticastDNSModeQueryOnly)
 	providerConfig := ice.ProviderConfig{
 		SrflxMux: mux, InitialCheckingTimeout: initialTimeout, MappedUDPEndpoints: mapped,
@@ -173,8 +133,7 @@ func NewPeerConnection(configuration pion.Configuration, request AttemptConfig) 
 	}
 	configureNetworkTypes(&settings, lease, capability)
 	configureICE(&configuration, request.ICE)
-	connection := &Connection{lease: lease, release: release, request: request, turn: turn}
-	connection.configureTURN(&providerConfig)
+	connection := &Connection{lease: lease, release: release, request: request}
 	settings.SetICEProviderConfig(providerConfig)
 	settings.LoggerFactory = providerLoggerFactory{LoggerFactory: logging.NewDefaultLoggerFactory(), observe: connection.observeDiagnostic}
 	pc, err := pion.NewAPI(pion.WithSettingEngine(settings)).NewPeerConnection(configuration)
@@ -237,33 +196,14 @@ func configureICE(configuration *pion.Configuration, connection iceconfig.Connec
 		configuration.ICEServers = []pion.ICEServer{{URLs: urls}}
 	}
 	configuration.ICETransportPolicy = pion.ICETransportPolicyAll
-	if relay, ok := connection.Relay(); ok {
-		credential := relay.Credentials()
-		configuration.ICEServers = append(configuration.ICEServers, pion.ICEServer{
-			URLs: relay.URLs(), Username: credential.Username(), Credential: credential.Password(),
-			CredentialType: pion.ICECredentialTypePassword,
-		})
-	}
-	if connection.Policy() == iceconfig.RelayCandidates {
-		configuration.ICETransportPolicy = pion.ICETransportPolicyRelay
-	}
 }
 
 func (c *Connection) event(milestone, state string) Event {
-	event := Event{
+	return Event{
 		ProtocolSessionID: c.request.ProtocolSessionID, PeerPathID: c.request.PeerPathID, AttemptID: c.request.AttemptID,
 		NetworkGenerationID: c.request.NetworkGenerationID, ICEProfileID: c.request.ICEProfileID,
 		Milestone: milestone, State: state, At: time.Now(),
 	}
-	if c.turn != nil {
-		snapshot := c.turn.snapshot()
-		event.TURN = &snapshot
-		if relay, ok := c.request.ICE.Relay(); ok {
-			identity := relay.Identity()
-			event.TURNService = &identity
-		}
-	}
-	return event
 }
 func (c *Connection) observe(milestone, state string) {
 	if c.request.Observe != nil {
@@ -291,23 +231,7 @@ func (c *Connection) OnConnectionStateChange(callback func(pion.PeerConnectionSt
 }
 func (c *Connection) Close() error {
 	c.closeOnce.Do(func() {
-		c.turnRecovery.mu.Lock()
-		c.turnRecovery.closed = true
-		c.turnRecovery.mu.Unlock()
-		if c.turn != nil {
-			var forced bool
-			// SCTP/DTLS shutdown can wait on an unresponsive peer. Retire ICE
-			// allocations first while TURN control sockets can still write.
-			c.closeErr, forced = c.turn.shutdown(c.SCTP().Transport().ICETransport().Stop)
-			c.closeErr = errors.Join(c.closeErr, c.PeerConnection.Close())
-			outcome := connectionpath.CleanupProtocol
-			if forced {
-				outcome = connectionpath.CleanupDeadline
-			}
-			c.observeTURNCleanup(outcome)
-		} else {
-			c.closeErr = c.PeerConnection.Close()
-		}
+		c.closeErr = c.PeerConnection.Close()
 		c.release()
 		c.closeErr = errors.Join(c.closeErr, c.lease.Close())
 		c.observe("provider_closed", "")

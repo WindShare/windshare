@@ -14,7 +14,6 @@ type lifecycle interface {
 	ProtocolSessionID() protocolsession.ProtocolSessionID
 	LaneIdentity() (uint32, uint32)
 	SetPeerPathControlHandler(func(context.Context, []byte) error)
-	SetTURNControlHandler(func(context.Context, []byte) error)
 }
 
 // Only lifecycle observations and explicit control-handler installation cross
@@ -55,10 +54,5 @@ func (runtime *Runtime) LaneIdentity() (uint32, uint32) {
 func (runtime *Runtime) SetPeerPathControlHandler(handler func(context.Context, []byte) error) {
 	if runtime != nil && runtime.lifecycle != nil {
 		runtime.lifecycle.SetPeerPathControlHandler(handler)
-	}
-}
-func (runtime *Runtime) SetTURNControlHandler(handler func(context.Context, []byte) error) {
-	if runtime != nil && runtime.lifecycle != nil {
-		runtime.lifecycle.SetTURNControlHandler(handler)
 	}
 }

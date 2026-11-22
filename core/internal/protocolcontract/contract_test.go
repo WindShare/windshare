@@ -267,7 +267,7 @@ func buildVectorFiles(t *testing.T) []vectorFile {
 		{Version: 1, Kind: "v2-descriptor-object", Description: "Version-3 bootstrap descriptor with canonical CBOR, AES-GCM and a sender signature.", Cases: []any{descriptor.vector()}},
 		{Version: 1, Kind: "v2-content-payloads", Description: "Canonical CBOR payloads carried by authenticated online sessions.", Cases: contentPayloadCases(t, f, block)},
 		{Version: 1, Kind: "v2-session", Description: "Canonical v2 relay endpoint/identity, purpose-bound register/resume/stop proofs, relay control-frame and proof refusals, connection probes, route controls, lane admission, X25519 transcript, traffic keys and sender controls.", Cases: sessionCases(t, f, descriptor.encoded)},
-		{Version: 1, Kind: "v2-session-controls", Description: "Independent reachability and TURN session messages, with envelope authentication and distinct message kinds.", Cases: sessionControlCases(t, f)},
+		{Version: 1, Kind: "v2-session-controls", Description: "Authenticated reachability session control messages with envelope authentication.", Cases: sessionControlCases(t, f)},
 		{Version: 1, Kind: "v2-fragment", Description: "Authenticated BLOCK_FRAGMENT fixed layout and allocation limits.", Cases: fragmentCases(f, block)},
 		{Version: 1, Kind: "name-collision-v1", Description: "Deterministic collision names preserve extensions when a complete stem scalar fits; otherwise the full name is shortened on UTF-8 scalar boundaries.", Cases: buildNameCollisionVectorCases(t)},
 		{Version: 1, Kind: "v2-semantics", Description: "R0 resource, operation-final, selection/timing, ZIP member, lifecycle and crash-commit state contracts.", Cases: semanticCases(t)},

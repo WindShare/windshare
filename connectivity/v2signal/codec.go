@@ -1,4 +1,4 @@
-// Package v2signal owns the E2E WebRTC signaling schema. Provider, TURN,
+// Package v2signal owns the E2E WebRTC signaling schema. Provider,
 // relay-node, and path-cost policy deliberately remain outside core/session.
 package v2signal
 

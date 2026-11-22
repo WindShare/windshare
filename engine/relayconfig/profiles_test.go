@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/windshare/windshare/engine/relayprofile"
-	"github.com/windshare/windshare/engine/turn"
 )
 
 func TestNewRelaysUseOnlyAvailableAutomaticSlots(t *testing.T) {
@@ -83,17 +82,13 @@ func TestManualCredentialKeepsDiscoveryAndRediscoveryCanWithdrawIt(t *testing.T)
 	}
 }
 
-func TestRemoveRelayCleansActiveSelectionAndManagedTURNPolicies(t *testing.T) {
+func TestRemoveRelayCleansActiveSelection(t *testing.T) {
 	c := Config{
 		Profiles: []relayprofile.Candidate{
 			{PublicURL: "https://one.example", AccessKey: "one-key"},
 			{PublicURL: "https://two.example", AccessKey: "two-key"},
 		},
 		ActiveRelays: []string{"https://one.example", "https://two.example"},
-		ManagedTURNPolicies: []turn.ManagedPolicy{
-			{RelayURL: "https://one.example", LocalBudgetBytes: 100},
-			{RelayURL: "https://two.example", LocalBudgetBytes: 200},
-		},
 	}
 	if err := (PreferenceEdit{Action: "remove", Value: "wss://ONE.EXAMPLE:443/"}).Apply(&c); err != nil {
 		t.Fatal(err)
@@ -106,9 +101,6 @@ func TestRemoveRelayCleansActiveSelectionAndManagedTURNPolicies(t *testing.T) {
 	}
 	if !slices.Equal(c.ActiveRelays, []string{"https://two.example"}) {
 		t.Fatalf("active relays = %v", c.ActiveRelays)
-	}
-	if len(c.ManagedTURNPolicies) != 1 || c.ManagedTURNPolicies[0].RelayURL != "https://two.example" {
-		t.Fatalf("managed TURN policies = %+v", c.ManagedTURNPolicies)
 	}
 	if err := c.RemoveRelay("https://one.example"); err == nil {
 		t.Fatal("removing an unsaved relay succeeded")

@@ -115,13 +115,7 @@ export class BrowserOfferChannelFactory implements OfferChannelFactory {
     try {
       const configuration = cloneConfiguration(this.#configuration)
       if (profile !== undefined) {
-        const trustedTurn = (configuration.iceServers ?? []).flatMap((server) => {
-          const urls = (typeof server.urls === 'string' ? [server.urls] : server.urls)
-            .filter((url) => /^turns?:/i.test(url))
-          return urls.length === 0 ? [] : [{ ...server, urls }]
-        })
-        configuration.iceServers = [...trustedTurn,
-          ...(configuration.iceTransportPolicy === 'relay' || profile.urls.length === 0 ? [] : [{ urls: [...profile.urls] }])]
+        configuration.iceServers = profile.urls.length === 0 ? [] : [{ urls: [...profile.urls] }]
       }
       connection = this.#peerConnections.create(configuration, (fact) => observer?.providerFact?.(fact))
     } catch (cause) {

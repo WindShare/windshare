@@ -3,10 +3,8 @@ package v2peer
 import (
 	"context"
 	"errors"
-	"github.com/windshare/windshare/connectivity/iceconfig"
 	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/v2signal"
-	"github.com/windshare/windshare/core/session/turncontrol"
 	"sync"
 	"sync/atomic"
 
@@ -259,17 +257,6 @@ func (attempt *ReceiverAttempt) preOperationCompletionDecision(
 
 // PrepareBinding waits for process resources without arming signaling/ICE timers.
 func (factory *ReceiverFactory) PrepareBinding(parent context.Context, lanes ReceiverLaneSession, binding v2signal.Binding) (*nativepeer.PreparedAttempt, error) {
-	return factory.PrepareConnection(parent, lanes, binding, ConnectionPath{})
-}
-
-// ConnectionPath carries authenticated handoff ownership into resource admission.
-type ConnectionPath struct {
-	ICE                iceconfig.Connection
-	ReplacesPeerPathID [16]byte
-	OnTURNRecovery     func(turncontrol.RecoveryReason)
-}
-
-func (factory *ReceiverFactory) PrepareConnection(parent context.Context, lanes ReceiverLaneSession, binding v2signal.Binding, path ConnectionPath) (*nativepeer.PreparedAttempt, error) {
 	if factory == nil || parent == nil || lanes == nil || binding.Validate() != nil {
 		return nil, ErrConfig
 	}
@@ -282,11 +269,7 @@ func (factory *ReceiverFactory) PrepareConnection(parent context.Context, lanes 
 	}); ok {
 		sessionID = session.ProtocolSessionID()
 	}
-	return factory.native.PrepareAttempt(parent, nativepeer.AttemptRequest{Configuration: factory.configuration, ICE: path.ICE, ReplacesPeerPathID: path.ReplacesPeerPathID, ProtocolSessionID: [16]byte(sessionID), Binding: binding, OnTURNRecovery: path.OnTURNRecovery})
-}
-
-func (factory *ReceiverFactory) StartPreparedConnection(parent context.Context, signaling ReceiverSignaling, lanes ReceiverLaneSession, binding v2signal.Binding, prepared *nativepeer.PreparedAttempt, ice iceconfig.Connection) (*ReceiverAttempt, error) {
-	return factory.startPreparedConnection(parent, signaling, lanes, binding, prepared, ice)
+	return factory.native.PrepareAttempt(parent, nativepeer.AttemptRequest{Configuration: factory.configuration, ProtocolSessionID: [16]byte(sessionID), Binding: binding})
 }
 
 // StartBinding executes exactly one immutable attempt. PeerSet supplies the

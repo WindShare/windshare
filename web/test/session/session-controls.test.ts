@@ -1,7 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { expect, it } from 'vitest'
 import { equalBytes } from '../../src/crypto/bytes'
-import { decodeTurnControl, encodeTurnControl } from '../../src/protocol/turn-control'
 import { decodePeerPathControl, encodePeerPathControl } from '../../src/protocol/peer-path-control'
 import {
   decodeMessage, encodeMessage, MESSAGE_KIND, validateSenderControlBody,
@@ -30,77 +29,53 @@ it.each(cases)('reconstructs the Go $name session message with its canonical bod
   expect(equalBytes(encodeMessage(message.kind, undefined, message.body).plaintext, message.plaintext)).toBe(true)
   expect(() => encodeMessage(message.kind, new Uint8Array(16).fill(1), message.body)).toThrow()
   validateSenderControlBody(message.kind, body)
-  if (message.kind === MESSAGE_KIND.turnControl) {
-    expect(equalBytes(encodeTurnControl(decodeTurnControl(body)), body)).toBe(true)
-  } else {
-    expect(equalBytes(encodePeerPathControl(decodePeerPathControl(body)), body)).toBe(true)
-  }
+  expect(equalBytes(encodePeerPathControl(decodePeerPathControl(body)), body)).toBe(true)
   expect(equalBytes(message.body, body)).toBe(true)
 })
 
 it('rejects another control family or an unsupported schema without changing decoders', () => {
   for (const vector of cases) {
-    const otherKind = vector.kind === MESSAGE_KIND.turnControl ? MESSAGE_KIND.peerPathControl : MESSAGE_KIND.turnControl
-    expect(() => validateSenderControlBody(otherKind, bytes(vector.bodyB64))).toThrow()
+    expect(() => validateSenderControlBody(MESSAGE_KIND.sessionTerminal, bytes(vector.bodyB64))).toThrow()
     const future = bytes(vector.bodyB64)
     future[1] = future[1]! + 1
     expect(() => validateSenderControlBody(vector.kind, future)).toThrow(/schema/i)
   }
 })
 
-it('sends each control through its own outer kind on the existing session lane', async () => {
+it('sends peer path control on the existing session lane', async () => {
   const { runtime, channel } = runtimeFixture()
   const path = bytes(cases.find((vector) => vector.name === 'peer-path-demand')!.bodyB64)
-  const demand = decodeTurnControl(bytes(cases.find((vector) => vector.name === 'turn-demand')!.bodyB64))
-  const turn = encodeTurnControl({ ...demand, sessionId: runtime.protocolSessionIdentity.copyBytes() })
   channel.unblock()
   try {
     await runtime.sendPeerPathControl(path)
-    await runtime.sendTurnControl(turn)
     const sent = await openSent(channel)
     expect(sent.map(({ message }) => [message.kind, message.operationId, message.body])).toEqual([
       [MESSAGE_KIND.peerPathControl, undefined, path],
-      [MESSAGE_KIND.turnControl, undefined, turn],
     ])
-    await expect(runtime.sendPeerPathControl(turn)).rejects.toThrow()
-    await expect(runtime.sendTurnControl(path)).rejects.toThrow()
     const cancellation = new AbortController()
     cancellation.abort(new Error('demand withdrawn'))
-    await expect(runtime.sendTurnControl(turn, { signal: cancellation.signal })).rejects.toThrow('demand withdrawn')
-    expect(channel.sent).toHaveLength(2)
+    await expect(runtime.sendPeerPathControl(path, { signal: cancellation.signal })).rejects.toThrow('demand withdrawn')
+    expect(channel.sent).toHaveLength(1)
   } finally {
     await runtime.close()
   }
-  await expect(runtime.sendTurnControl(turn)).rejects.toThrow()
+  await expect(runtime.sendPeerPathControl(path)).rejects.toThrow()
 })
 
-it('isolates subscriptions and keeps TURN independent of path handler and operation lifetimes', async () => {
+it('isolates peer path subscriptions from operation lifetimes and termination', async () => {
   const router = new OperationRouter(() => undefined)
   const paths: Uint8Array[] = []
-  const turns: Uint8Array[] = []
   const unsubscribePath = router.subscribePeerPathControls((body) => paths.push(body))
-  const unsubscribeTurn = router.subscribeTurnControls((body) => turns.push(body))
   const path = cases.find((vector) => vector.name === 'peer-path-mapping-ready')!
-  const turn = cases.find((vector) => vector.name === 'turn-grant')!
   const pathMessage = encodeMessage(path.kind, undefined, bytes(path.bodyB64))
-  const turnMessage = encodeMessage(turn.kind, undefined, bytes(turn.bodyB64))
   await router.route(pathMessage)
-  await router.route(turnMessage)
   expect(paths).toEqual([pathMessage.body])
-  expect(turns).toEqual([turnMessage.body])
   expect(router.active()).toEqual([])
   unsubscribePath()
   await router.route(pathMessage)
-  await router.route(turnMessage)
   expect(paths).toHaveLength(1)
-  expect(turns).toHaveLength(2)
-  unsubscribeTurn()
-  await router.route(turnMessage)
-  expect(turns).toHaveLength(2)
-  router.subscribeTurnControls((body) => turns.push(body))
+  router.subscribePeerPathControls((body) => paths.push(body))
   router.terminate(new Error('session ended'))
   await router.route(pathMessage)
-  await router.route(turnMessage)
   expect(paths).toHaveLength(1)
-  expect(turns).toHaveLength(2)
 })

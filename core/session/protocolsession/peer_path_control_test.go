@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"testing"
 	"time"
-
-	"github.com/windshare/windshare/core/session/turncontrol"
 )
 
 func TestPeerPathControlCanonicalBoundedSchema(t *testing.T) {
@@ -56,9 +54,7 @@ func TestPeerPathControlCanonicalBoundedSchema(t *testing.T) {
 }
 
 func TestSessionControlsAreSessionBoundWithoutOperationAuthority(t *testing.T) {
-	for name, kind := range map[string]MessageKind{"reachability": MessagePeerPathControl, "turn": MessageTURNControl} {
-		t.Run(name, func(t *testing.T) { testSessionControlAuthority(t, kind) })
-	}
+	testSessionControlAuthority(t, MessagePeerPathControl)
 }
 
 func testSessionControlAuthority(t *testing.T, kind MessageKind) {
@@ -70,12 +66,6 @@ func testSessionControlAuthority(t *testing.T, kind MessageKind) {
 	body, err := EncodePeerPathControl(PeerPathControl{PeerPathID: [16]byte{1}, NetworkGenerationID: [16]byte{2}, ControlSequence: 1, Kind: PeerPathRevoke})
 	if err != nil {
 		t.Fatal(err)
-	}
-	if kind == MessageTURNControl {
-		body, err = turncontrol.Encode(turncontrol.Demand{Authority: turncontrol.Header{SessionID: [16]byte{1}, OwnerPathID: [16]byte{2}, Sequence: 1}})
-		if err != nil {
-			t.Fatal(err)
-		}
 	}
 	message, err := NewMessage(kind, nil, body)
 	if err != nil {

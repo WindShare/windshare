@@ -8,7 +8,6 @@ import (
 	"github.com/windshare/windshare/connectivity/reachability"
 	"github.com/windshare/windshare/connectivity/socketauthority"
 	"github.com/windshare/windshare/connectivity/throughput"
-	"github.com/windshare/windshare/connectivity/turnpath"
 	"github.com/windshare/windshare/core/observationstream"
 )
 
@@ -37,7 +36,6 @@ type Observation struct {
 	Lifecycle    *LifecycleFacts
 	Admission    *AdmissionFacts
 	Socket       *socketauthority.Event
-	TURN         *turnpath.Event
 	Parallelism  *ParallelismFacts
 }
 
@@ -53,18 +51,6 @@ func (n *NativePeerConnectivity) ObserveParallelism(subject Subject, decision th
 	}
 	subject.Side = n.config.Side
 	n.producer.TryPublish(Observation{Subject: subject, Parallelism: &ParallelismFacts{At: n.config.Now(), Decision: decision, Demand: demand}})
-}
-
-// ObserveTURN shares the bounded native diagnostic stream while preserving the
-// path's identity even before an ICE attempt exists.
-func (n *NativePeerConnectivity) ObserveTURN(event turnpath.Event) {
-	if n == nil {
-		return
-	}
-	n.producer.TryPublish(Observation{
-		Subject: Subject{ProtocolSessionID: event.Subject.SessionID, PeerPathID: event.Subject.PathID, Side: n.config.Side},
-		TURN:    &event,
-	})
 }
 
 func (n *NativePeerConnectivity) ObserveContentRecovery(subject Subject, direct bool) {
@@ -122,22 +108,6 @@ func (n *NativePeerConnectivity) observeProvider(subject Subject, event pionpeer
 	if event.Pair != nil {
 		copy := *event.Pair
 		event.Pair = &copy
-	}
-	if event.TURN != nil {
-		copy := *event.TURN
-		event.TURN = &copy
-	}
-	if event.TURNService != nil {
-		copy := *event.TURNService
-		event.TURNService = &copy
-	}
-	if event.TURNBinding != nil {
-		copy := *event.TURNBinding
-		event.TURNBinding = &copy
-	}
-	if event.TURNRoute != nil {
-		copy := *event.TURNRoute
-		event.TURNRoute = &copy
 	}
 	n.producer.TryPublish(Observation{Subject: subject, Provider: &event})
 }

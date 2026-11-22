@@ -35,7 +35,6 @@ const (
 	MessagePeerAnswer        MessageKind = 17
 	MessagePeerCandidate     MessageKind = 18
 	MessagePeerPathControl   MessageKind = 19
-	MessageTURNControl       MessageKind = 20
 )
 
 const fragmentRoutingHeaderBytes = 20
@@ -318,12 +317,12 @@ func (m Message) operationFingerprint(direction Direction) [sha256.Size]byte {
 }
 
 func (kind MessageKind) valid() bool {
-	return kind >= MessageListChildren && kind <= MessageTURNControl
+	return kind >= MessageListChildren && kind <= MessagePeerPathControl
 }
 
 // Session controls outlive negotiation operations and never acquire their permits.
 func (kind MessageKind) isSessionControl() bool {
-	return kind == MessagePeerPathControl || kind == MessageTURNControl
+	return kind == MessagePeerPathControl
 }
 
 func (kind MessageKind) isRequest() bool {

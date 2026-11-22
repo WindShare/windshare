@@ -29,9 +29,6 @@ type laneState struct {
 	retired         bool
 	settled         bool
 	settlement      *laneSettlementCounters
-	usefulBytes     uint64
-	lastUsefulAt    time.Time
-	admittedAt      time.Time
 }
 
 type Set struct {
@@ -64,7 +61,7 @@ type Set struct {
 	settlementProducer observationstream.Producer[SettlementSummary]
 	settlementConsumer observationstream.Consumer[SettlementSummary]
 	finalSettlements   []*laneState
-	contentActivity    [RouteTURN + 1]ContentActivity
+	contentActivity    [RouteDirect + 1]ContentActivity
 	downloadMetrics    *downloadmetrics.Metrics
 }
 
@@ -110,7 +107,7 @@ func (s *Set) Add(identity Identity, route Route, lane BlockSource) error {
 	if identity.ID == 0 || !route.valid() || lane == nil {
 		return ErrInvalid
 	}
-	state := &laneState{identity: identity, route: route, lane: lane, admittedAt: s.now()}
+	state := &laneState{identity: identity, route: route, lane: lane}
 	if s.settlementObservationsEnabled() {
 		state.settlement = &laneSettlementCounters{}
 	}

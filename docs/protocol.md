@@ -75,14 +75,11 @@ After the handshake, every lane frame is an AES-256-GCM `OperationEnvelope` boun
 | Operation end | `OPERATION_COMPLETE`, `OPERATION_ERROR`, `CANCEL` |
 | Lanes | `LANE_ATTACH` |
 | Peer paths | `PEER_OFFER`, `PEER_ANSWER`, `PEER_CANDIDATE`, `PEER_PATH_CONTROL` |
-| TURN delegation | `TURN_CONTROL` |
 | Session | `SESSION_TERMINAL` |
 
-`PEER_PATH_CONTROL` (kind 19) carries reachability demand, revocation, mapping-ready
-and network-change notices. `TURN_CONTROL` (kind 20) carries availability, demand,
-credential grants, readiness, retirement, usage reports and recovery. Both are
-session-scoped controls whose message kind selects the decoder. Body schema
-versions evolve independently.
+`PEER_PATH_CONTROL` (kind 19) is a session-scoped control carrying reachability
+demand, revocation, mapping-ready, and network-change notices. Its body schema
+version evolves independently.
 
 ## Identities
 
@@ -98,7 +95,7 @@ versions evolve independently.
 | `OperationID` | One request and its responses within a session |
 | `LaneID`, `LaneEpoch` | A reusable session lane slot, and its current channel generation |
 | `RelaySessionID` | One receiver connection's route through a relay |
-| `PeerPathID`, `AttemptID` | A direct or TURN path, and one negotiation attempt on it |
+| `PeerPathID`, `AttemptID` | A direct peer path, and one negotiation attempt on it |
 | `PeerSlot`, `AttemptSequence` | A reusable session negotiation slot, and its increasing sequence across physical path replacements |
 
 ## Code

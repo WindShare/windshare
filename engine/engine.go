@@ -24,7 +24,6 @@ import (
 	"github.com/windshare/windshare/engine/internal/nativeconnectivity"
 	"github.com/windshare/windshare/engine/internal/networkruntime"
 	"github.com/windshare/windshare/engine/internal/task"
-	"github.com/windshare/windshare/engine/internal/turnruntime"
 	appobs "github.com/windshare/windshare/engine/observation"
 	"github.com/windshare/windshare/engine/relaysetup"
 )
@@ -61,7 +60,6 @@ type managedTask interface {
 // task admission stays closed even if a caller stops waiting for shutdown.
 type Engine struct {
 	relaySetup      *relaysetup.Service
-	turn            *turnruntime.Runtime
 	networkState    *networkstate.Watcher
 	network         *networkruntime.Runtime
 	mu              sync.Mutex
@@ -82,7 +80,6 @@ type Engine struct {
 }
 
 func New(config Config) (*Engine, error) {
-	config.TURN = config.TURN.Clone()
 	if config.Clock == nil {
 		config.Clock = senderrelay.SystemClock{}
 	}
@@ -140,25 +137,11 @@ func New(config Config) (*Engine, error) {
 		_ = revisions.Close()
 		return nil, fmt.Errorf("create engine identity: %w", err)
 	}
-	turnDependencies := config.TURNDependencies
-	if turnDependencies.Now == nil {
-		turnDependencies.Now = config.Clock.Now
-	}
-	turn, err := turnruntime.New(config.TURN, turnDependencies)
-	if err != nil {
-		_ = receiveCapacity.Close()
-		_ = revisions.Close()
-		return nil, err
-	}
-	if config.RelaySetup.Cache == nil {
-		config.RelaySetup.Cache = turnDependencies.Cache
-	}
 	engineID := hex.EncodeToString(identity[:])
 	engineDiagnostics := config.Diagnostics.Bind(diagnostics.Scope{EngineID: engineID})
 	network, err := networkruntime.New(config.Network, config.Clock.Now, engineID, engineDiagnostics, networkState)
 	if err != nil {
 		networkState.Close()
-		_ = turn.Close()
 		_ = receiveCapacity.Close()
 		_ = revisions.Close()
 		return nil, err
@@ -166,7 +149,6 @@ func New(config Config) (*Engine, error) {
 	return &Engine{
 		networkState: networkState,
 		network:      network,
-		turn:         turn,
 		relaySetup:   relaysetup.New(config.RelaySetup),
 		config:       config, random: random, identity: engineID,
 		revisions: revisions, catalog: catalogBudget, cache: cacheBudget, connectivity: connectivity,
@@ -261,7 +243,6 @@ func (engine *Engine) shutdown(active []managedTask) {
 	engine.networkState.Close()
 	capacityErr := engine.revisions.Close()
 	receiveCapacityErr := engine.receiveCapacity.Close()
-	turnErr := engine.turn.Close()
 	var retainedErr error
 	catalogUsage, cacheBytes := engine.catalog.Snapshot().Used, engine.cache.Used()
 	cacheErr := engine.cache.Close()
@@ -269,7 +250,7 @@ func (engine *Engine) shutdown(active []managedTask) {
 		retainedErr = &UnreleasedResourcesError{CatalogUsage: catalogUsage, CacheBytes: cacheBytes, cause: cacheErr}
 	}
 	engine.mu.Lock()
-	engine.closeErr = errors.Join(append(engine.cleanupErrors, capacityErr, receiveCapacityErr, turnErr, retainedErr)...)
+	engine.closeErr = errors.Join(append(engine.cleanupErrors, capacityErr, receiveCapacityErr, retainedErr)...)
 	engine.cleanupErrors = nil
 	engine.mu.Unlock()
 	close(engine.closed)

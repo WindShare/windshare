@@ -2,7 +2,6 @@ package relayconfig
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -11,10 +10,7 @@ import (
 	"testing"
 
 	"github.com/windshare/windshare/engine/relayprofile"
-	"github.com/windshare/windshare/engine/turn"
 )
-
-const turnAccount = `{"id":"account","provider":"turn","issuer":"static","local_budget_bytes":0,"credentials":%s}`
 
 // encoding/json keeps the last of repeated members and matches names
 // case-insensitively, so a repeated or case-variant member silently replaces an
@@ -28,11 +24,6 @@ func TestDecodeRejectsRepeatedMembersByName(t *testing.T) {
 		{`{"profiles":[{"url":"https://a.example","access_key":"secret-value","access_\u212aey":"two"}]}`, `"access_\u212aey"`, "profiles[0]"},
 		{`{"profiles":[{"url":"https://a.example"}],"profiles":[{"url":"https://secret-value.example"}]}`, `"profiles"`, "the top-level object"},
 		{`{"profiles":[{"url":"https://a.example"}],"front_url":"https://secret-value.example","Front_URL":"https://two.example"}`, `"Front_URL"`, "the top-level object"},
-		// Typed TURN fields use the same rule as relay profiles and credentials.
-		{`{"profiles":[{"url":"https://a.example"}],"turn":{"accounts":[{"id":"secret-value","id":"two","credentials":{}}]}}`, `"id"`, "turn.accounts[0]"},
-		{`{"profiles":[{"url":"https://a.example"}],"turn":{"accounts":[{"analytics":{"api_token":"secret-value","API_TOKEN":"two"}}]}}`, `"API_TOKEN"`, "turn.accounts[0].analytics"},
-		{`{"profiles":[{"url":"https://a.example"}],"turn":{"profiles":[{"urls":["turn:secret-value"],"urls":[]}]}}`, `"urls"`, "turn.profiles[0]"},
-		{`{"profiles":[{"url":"https://a.example"}],"turn":{"accounts":[],"Accounts":[]}}`, `"Accounts"`, "turn"},
 	} {
 		_, err := Decode(strings.NewReader(test.input))
 		if !errors.Is(err, ErrRepeatedMember) || !errors.Is(err, ErrConfig) {
@@ -54,58 +45,6 @@ func TestDecodeAcceptsDistinctMembersInAnyCase(t *testing.T) {
 		if _, err := Decode(strings.NewReader(input)); err != nil {
 			t.Errorf("unambiguous document was rejected: %s err=%v", input, err)
 		}
-	}
-}
-
-func TestDecodeRejectsRepeatedTURNCredentials(t *testing.T) {
-	for _, credentials := range []string{
-		`{"username":"u","password":"a","password":"b"}`,
-		`{"username":"u","password":"a","PASSWORD":"b"}`,
-		`{"username":"u","username":"u","password":"p"}`,
-	} {
-		for _, name := range []string{"credentials", "Credentials", `cr\u0065dentials`} {
-			account := strings.Replace(turnAccount, "%s", credentials, 1)
-			account = strings.Replace(account, "credentials", name, 1)
-			input := `{"profiles":[],"turn":{"accounts":[` + account + `],"profiles":[{"id":"p","account":"account","urls":["turn:turn.example:3478"]}]}}`
-			if _, err := Decode(strings.NewReader(input)); !errors.Is(err, ErrRepeatedMember) ||
-				!errors.Is(err, ErrConfig) || !strings.Contains(err.Error(), "turn.accounts[0].credentials") {
-				t.Fatalf("ambiguous credentials accepted or lost their location: %v", err)
-			}
-		}
-	}
-}
-
-func TestSaveAndUpdateRejectAmbiguousCredentialsWithoutReplacingSettings(t *testing.T) {
-	store := FileStore{Path: filepath.Join(t.TempDir(), "config.json")}
-	saved := Config{
-		Profiles: []relayprofile.Candidate{{PublicURL: "https://relay.example"}},
-		TURN: turn.ManualSettings{
-			Accounts: []turn.AccountSettings{{ID: "account", Provider: "turn", Issuer: turn.StaticIssuer,
-				Credentials: json.RawMessage(`{"username":"user","password":"password"}`)}},
-			Profiles: []turn.ProfileSettings{{ID: "profile", Account: "account", URLs: []string{"turn:turn.example:3478"}}},
-		},
-	}
-	if err := store.Save(saved); err != nil {
-		t.Fatal(err)
-	}
-	before, err := os.ReadFile(store.Path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	repeated := json.RawMessage(`{"username":"user","password":"old","PASSWORD":"new"}`)
-	saved.TURN.Accounts[0].Credentials = repeated
-	if err := store.Save(saved); !errors.Is(err, ErrRepeatedMember) || !errors.Is(err, ErrConfig) {
-		t.Fatal("programmatic save bypassed member validation:", err)
-	}
-	if _, err := store.Update(context.Background(), func(config *Config) error {
-		config.TURN.Accounts[0].Credentials = repeated
-		return nil
-	}); !errors.Is(err, ErrRepeatedMember) {
-		t.Fatal("programmatic update bypassed member validation:", err)
-	}
-	after, err := os.ReadFile(store.Path)
-	if err != nil || string(before) != string(after) {
-		t.Fatal("rejected settings changed the saved file:", err)
 	}
 }
 

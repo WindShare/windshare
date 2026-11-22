@@ -21,17 +21,24 @@ describe('shared peer admission budget', () => {
 })
 
 describe('selected pair classification', () => {
-  it('keeps TURN distinct and reports pair RTT without inventing STUN facts', () => {
+  it('classifies direct pairs, ignores relay candidates, and reports pair RTT without leaking credentials', () => {
     const stats = new Map([
       ['transport', { id: 'transport', type: 'transport', selectedCandidatePairId: 'pair' }],
       ['pair', { id: 'pair', type: 'candidate-pair', localCandidateId: 'local', remoteCandidateId: 'remote', currentRoundTripTime: 0.025 }],
-      ['local', { id: 'local', candidateType: 'relay', protocol: 'udp', relayProtocol: 'tls', address: '2001:db8::1', usernameFragment: 'private-credential' }],
+      ['local', { id: 'local', candidateType: 'host', protocol: 'udp', address: '2001:db8::1', usernameFragment: 'private-credential' }],
       ['remote', { id: 'remote', candidateType: 'srflx' }],
     ]) as unknown as RTCStatsReport
     const selected = selectedPairFact(stats, undefined, 0, 100)
-    expect(selected?.fact).toMatchObject({ route: 'turn', protocol: 'udp', clientToTurnProtocol: 'tls', rttMs: 25, family: 'ipv6', ageMs: 0 })
+    expect(selected?.fact).toMatchObject({ route: 'direct', protocol: 'udp', rttMs: 25, family: 'ipv6', ageMs: 0 })
     expect(JSON.stringify(selected)).not.toContain('private-credential')
     expect(selectedPairFact(stats, 'pair', 100, 150)?.fact.ageMs).toBe(50)
+    const relayed = new Map([
+      ['transport', { id: 'transport', type: 'transport', selectedCandidatePairId: 'pair' }],
+      ['pair', { id: 'pair', type: 'candidate-pair', localCandidateId: 'local', remoteCandidateId: 'remote' }],
+      ['local', { id: 'local', candidateType: 'relay', protocol: 'udp', address: '2001:db8::1' }],
+      ['remote', { id: 'remote', candidateType: 'srflx' }],
+    ]) as unknown as RTCStatsReport
+    expect(selectedPairFact(relayed, undefined, 0, 100)).toBeUndefined()
     expect(selectedPairFact(new Map() as unknown as RTCStatsReport, undefined, 0, 0)).toBeUndefined()
   })
 })

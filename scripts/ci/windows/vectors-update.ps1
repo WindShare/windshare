@@ -27,9 +27,6 @@ Invoke-Step 'update signed network directory vectors' {
         $env:UPDATE_NETWORK_VECTORS = $previousUpdate
     }
 }
-Invoke-Step 'update TURN control vectors' {
-    go test -count=1 ./core/session/turncontrol -update
-}
 Invoke-Step 'update diagnostic-correlation vectors' {
     go test -count=1 ./engine/observation/wire -run 'TestDiagnosticCorrelationVectors' -update
 }

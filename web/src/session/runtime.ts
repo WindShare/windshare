@@ -2,7 +2,6 @@ import { observeProtocolFailure } from './failure-diagnostics'
 import { cancellationTraceReason } from './operation-diagnostics'
 import { cancellationFromSignal } from './operations/cancellation'
 import { decodePeerPathControl } from '../protocol/peer-path-control'
-import { decodeTurnControl } from '../protocol/turn-control'
 import type { ShareDescriptor } from '../catalog/records'
 import type { FrameChannel } from '../contracts/channel'
 import type { FailureCorrelation } from '../diagnostics/incident/failure-correlation'
@@ -199,17 +198,6 @@ export class ReceiverSessionRuntime {
     options.signal?.throwIfAborted()
     decodePeerPathControl(body)
     await this.#selectLane(options.laneId).writer.send(encodeMessage(MESSAGE_KIND.peerPathControl, undefined, body), options)
-  }
-
-  subscribeTurnControls(listener: (body: Uint8Array<ArrayBuffer>) => void): () => void {
-    return this.#router.subscribeTurnControls(listener)
-  }
-
-  async sendTurnControl(body: Uint8Array, options: { readonly laneId?: number; readonly signal?: AbortSignal } = {}): Promise<void> {
-    this.#requireOpen()
-    options.signal?.throwIfAborted()
-    decodeTurnControl(body)
-    await this.#selectLane(options.laneId).writer.send(encodeMessage(MESSAGE_KIND.turnControl, undefined, body), options)
   }
 
   async requestLaneGrant(

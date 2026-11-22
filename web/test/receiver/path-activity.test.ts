@@ -8,7 +8,6 @@ afterEach(() => vi.useRealTimers())
 
 const DIRECT = { laneId: 3, laneEpoch: 2, route: 'direct' } as const
 const RELAY = { laneId: 1, laneEpoch: 0, route: 'application-relay' } as const
-const TURN = { laneId: 5, laneEpoch: 1, route: 'turn' } as const
 
 function fetched(lane: ContentLaneAdmissionObservation, usefulBytes = 12): BlockRouteObservation {
   return { ...lane, dispatchSequence: 1, fileId: 'file', localBlockIndex: 0n, usefulBytes }
@@ -23,61 +22,13 @@ function fixture() {
 }
 
 describe('receiver path activity', () => {
-  it('forgets withdrawn service state and ignores its late traffic', () => {
-    vi.useFakeTimers()
-    const { activity, latest } = fixture()
-    const service = { provider: 'coturn', account: 'owner', profile: 'primary' }
-    const lane = { ...TURN, turnService: service }
-    activity.turn(1, { ...service, pathId: 'old', state: 'connecting' })
-    activity.admitted(1, lane)
-    activity.fetched(1, fetched(lane, 1024))
-    activity.turn(1, { profile: service.profile, state: 'withdrawn' })
-    expect(latest().turnServices).toBeUndefined()
-    activity.fetched(1, fetched(lane, 1024))
-    activity.detached(1, lane)
-    activity.turn(1, { profile: service.profile, state: 'available' })
-    expect(latest().turnServices).toEqual([{ profile: service.profile, state: 'available', usefulBytes: 0 }])
-    activity.close()
-  })
-
-  it('keeps service health and useful totals through credential replacement', () => {
-    vi.useFakeTimers()
-    const { activity, facts, latest } = fixture()
-    const service = { provider: 'coturn', account: 'owner', profile: 'primary' }
-    const old = { ...TURN, turnService: service }
-    const replacement = { ...old, laneId: 7 }
-    activity.turn(1, { ...service, pathId: 'old', state: 'connecting' })
-    activity.admitted(1, old)
-    activity.turn(1, { ...service, pathId: 'old', state: 'ready' })
-    activity.fetched(1, fetched(old, 1024))
-    const updates = facts.length
-    activity.fetched(1, fetched(old, 1024))
-    expect(facts).toHaveLength(updates)
-    activity.turn(1, { ...service, pathId: 'new', state: 'connecting' })
-    expect(latest().turnServices?.[0]).toMatchObject({ state: 'ready', usefulBytes: 2048 })
-    activity.admitted(1, replacement)
-    activity.detached(1, old)
-    activity.turn(1, { ...service, pathId: 'old', state: 'retired' })
-    activity.fetched(1, fetched(replacement, 512))
-    activity.turn(1, { ...service, pathId: 'new', state: 'ready', usefulBytes: 512 })
-    expect(latest().turnServices?.[0]).toMatchObject({ state: 'ready', usefulBytes: 2560 })
-    activity.detached(1, replacement)
-    expect(latest().turnServices?.[0]).toMatchObject({ state: 'unavailable', reason: 'transport-loss' })
-    activity.turn(1, { ...service, pathId: 'new', state: 'retired' })
-    expect(latest().turnServices?.[0]).toMatchObject({ state: 'retired', usefulBytes: 2560 })
-    activity.generationInstalled(2)
-    expect(latest().turnServices).toBeUndefined()
-    activity.close()
-  })
-
   it('tracks every admitted channel and expires each channel independently without per-block rendering', async () => {
     vi.useFakeTimers()
     const { activity, facts, latest } = fixture()
     activity.admitted(1, DIRECT)
-    activity.admitted(1, TURN)
     activity.admitted(1, RELAY)
-    expect(latest().lanes).toEqual([RELAY, DIRECT, TURN].map(lane => ({ ...lane, recentContent: false })))
-    expect(connectedChannelCount(latest())).toBe('3 channels connected')
+    expect(latest().lanes).toEqual([RELAY, DIRECT].map(lane => ({ ...lane, recentContent: false })))
+    expect(connectedChannelCount(latest())).toBe('2 channels connected')
     expect(presentReceiverPathActivity(latest())).toBe('Direct connected')
     expect(Object.isFrozen(latest().lanes)).toBe(true)
     expect(Object.isFrozen(latest().lanes[0])).toBe(true)
@@ -86,7 +37,7 @@ describe('receiver path activity', () => {
     activity.fetched(1, fetched(RELAY, 0))
     expect(latest()).toBe(idle)
     activity.fetched(1, fetched(RELAY))
-    expect(latest().lanes.map(lane => lane.recentContent)).toEqual([true, false, false])
+    expect(latest().lanes.map(lane => lane.recentContent)).toEqual([true, false])
     await vi.advanceTimersByTimeAsync(1_000)
     activity.fetched(1, fetched(DIRECT))
     const updates = facts.length
@@ -95,7 +46,7 @@ describe('receiver path activity', () => {
     expect(facts).toHaveLength(updates)
     expect(presentReceiverPathActivity(latest())).toBe('Received directly and through relay in the last 5 seconds')
     await vi.advanceTimersByTimeAsync(RECENT_CONTENT_WINDOW_MILLISECONDS - 1_000)
-    expect(latest().lanes.map(lane => lane.recentContent)).toEqual([false, true, false])
+    expect(latest().lanes.map(lane => lane.recentContent)).toEqual([false, true])
     await vi.advanceTimersByTimeAsync(1_000)
     expect(latest()).toEqual(idle)
     expect(vi.getTimerCount()).toBe(0)
@@ -111,7 +62,7 @@ describe('receiver path activity', () => {
     activity.admitted(1, replacement)
     activity.detached(1, DIRECT)
     activity.fetched(1, fetched(DIRECT))
-    activity.fetched(1, fetched({ ...replacement, route: 'turn' }))
+    activity.fetched(1, fetched({ ...replacement, route: 'application-relay' }))
     activity.fetched(1, fetched(RELAY))
     expect(latest().lanes).toEqual([{ ...replacement, recentContent: false }])
     activity.generationInstalled(1)
@@ -136,18 +87,18 @@ describe('receiver path activity', () => {
     activity.close()
   })
 
-  it('removes only the disconnected channel and never labels TURN traffic as direct', () => {
+  it('removes only the disconnected channel and never labels relay traffic as direct', () => {
     vi.useFakeTimers()
     const { activity, latest } = fixture()
     activity.admitted(1, DIRECT)
-    activity.admitted(1, TURN)
+    activity.admitted(1, RELAY)
     activity.fetched(1, fetched(DIRECT))
-    activity.fetched(1, fetched(TURN))
+    activity.fetched(1, fetched(RELAY))
     activity.detached(1, DIRECT)
-    expect(latest().lanes).toEqual([{ ...TURN, recentContent: true }])
+    expect(latest().lanes).toEqual([{ ...RELAY, recentContent: true }])
     expect(connectedChannelCount(latest())).toBe('1 channel connected')
     expect(presentReceiverPathActivity(latest())).toBe('Received through relay in the last 5 seconds')
-    activity.detached(1, TURN)
+    activity.detached(1, RELAY)
     expect(connectedChannelCount(latest())).toBe('0 channels connected')
     expect(presentReceiverPathActivity(latest())).toBeNull()
     expect(vi.getTimerCount()).toBe(0)

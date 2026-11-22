@@ -29,7 +29,7 @@ Invoke-Step 'Chromium periodic component contracts' {
     pnpm -C web run test:browser:contract:periodic
 }
 Invoke-Step 'progressive catalog paging' { pnpm -C web run test:browser:progressive }
-Invoke-Step 'direct and TURN relay-cut routes' { pnpm -C web run test:browser:network }
+Invoke-Step 'direct relay-cut routes' { pnpm -C web run test:browser:network }
 Invoke-Step 'browser and Pion interoperability' { pnpm -C web run test:browser:interop }
 Invoke-Step 'Firefox and WebKit product routes' { pnpm -C web run test:browser:cross }
 Write-Output ('== browser-weekly-supplement: PASS in {0:mm\:ss} ==' -f $gateStopwatch.Elapsed)

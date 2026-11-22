@@ -7,7 +7,9 @@ import (
 	"context"
 	"net"
 	"net/netip"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestProviderMappingsRejectRetiredGatherGeneration(t *testing.T) {
@@ -20,7 +22,7 @@ func TestProviderMappingsRejectRetiredGatherGeneration(t *testing.T) {
 	}
 	for _, network := range []string{"udp", "tcp"} {
 		t.Run(network, func(t *testing.T) {
-			conn := &stunTestPacketConn{closed: make(chan struct{})}
+			conn := &generationTestPacketConn{closed: make(chan struct{})}
 			mux := &generationTestMux{conn: conn}
 			config := ProviderConfig{}
 			if network == "udp" {
@@ -78,3 +80,27 @@ func (m *generationTestMux) GetConnForEndpoint(ufrag string, _ netip.AddrPort) (
 }
 
 func (*generationTestMux) RemoveConnByUfrag(string) {}
+
+type generationTestPacketConn struct {
+	closed chan struct{}
+	once   sync.Once
+}
+
+func (conn *generationTestPacketConn) ReadFrom([]byte) (int, net.Addr, error) {
+	<-conn.closed
+	return 0, nil, net.ErrClosed
+}
+
+func (*generationTestPacketConn) WriteTo(raw []byte, _ net.Addr) (int, error) {
+	return len(raw), nil
+}
+
+func (conn *generationTestPacketConn) Close() error {
+	conn.once.Do(func() { close(conn.closed) })
+	return nil
+}
+
+func (*generationTestPacketConn) LocalAddr() net.Addr              { return &net.UDPAddr{} }
+func (*generationTestPacketConn) SetDeadline(time.Time) error      { return nil }
+func (*generationTestPacketConn) SetReadDeadline(time.Time) error  { return nil }
+func (*generationTestPacketConn) SetWriteDeadline(time.Time) error { return nil }

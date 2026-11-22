@@ -67,8 +67,8 @@ func (enc *cliEncoder) encodeTransferSettled(event clievent.TransferSettled) err
 	if metrics, ok := event.DownloadConnectivity(); ok {
 		summary := &downloadConnectivity{
 			DownloadID: metrics.DownloadID, DirectBytes: decimal(metrics.DirectBytes),
-			TURNBytes: decimal(metrics.TURNBytes), ApplicationRelayBytes: decimal(metrics.ApplicationRelayBytes),
-			UnknownBytes: decimal(metrics.UnknownBytes), DirectFraction: metrics.DirectFraction,
+			ApplicationRelayBytes: decimal(metrics.ApplicationRelayBytes),
+			UnknownBytes:          decimal(metrics.UnknownBytes), DirectFraction: metrics.DirectFraction,
 			FallbackStallMS: signedDecimal(metrics.FallbackStall.Milliseconds()),
 			Incomplete:      metrics.Incomplete, Final: metrics.Final,
 		}

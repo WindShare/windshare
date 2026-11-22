@@ -10,7 +10,7 @@ export type ContentSchedulingPayload = Readonly<{
   dispatch_sequence: string
   file_id: string
   block_index: string
-  route: 'application-relay' | 'direct' | 'turn'
+  route: 'application-relay' | 'direct'
   purpose: import('../../content/scheduling/exploration').DispatchPurpose
   delivery_evidence?: 'unknown' | 'recent' | 'stale'
   rescue_reason?: import('../../content/scheduling/exploration').RescueReason
@@ -29,7 +29,7 @@ export type ContentRetryPayload = Readonly<{
   | Readonly<{
       transition: 'retrying'
       dispatch_sequence: string
-      route: 'application-relay' | 'direct' | 'turn'
+      route: 'application-relay' | 'direct'
       successful_blocks: string
     }> & (
       | Readonly<{ reason: 'untried_lane' }>

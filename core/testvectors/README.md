@@ -29,7 +29,7 @@ Web consumers run under `make web`; Rust consumers run under `make rust`.
   canonical diagnostic projections.
 - `name-collision-v1.json`: deterministic suffixes, extension preservation and UTF-8
   truncation at component limits.
-- Signaling, TURN, portable-path and envelope fixtures cover their shared codecs
+- Signaling, portable-path and envelope fixtures cover their shared codecs
   and algorithm boundaries.
 
 Byte representations follow each file's established encoding. Integers beyond

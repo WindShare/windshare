@@ -15,15 +15,12 @@ import (
 	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/relayprofile"
 	"github.com/windshare/windshare/engine/relaysetup"
-	"github.com/windshare/windshare/engine/turn"
-	"github.com/windshare/windshare/engine/turncache"
 )
 
 func newTestNativeSetup(t *testing.T, store relayconfig.FileStore) nativeSetup {
 	t.Helper()
 	app, err := engine.New(engine.Config{
-		TURNDependencies: turn.Dependencies{Cache: turncache.FileStore{Settings: store}},
-		RelaySetup:       relaysetup.Dependencies{Store: relaysetup.FileStore{Settings: store}},
+		RelaySetup: relaysetup.Dependencies{Store: relaysetup.FileStore{Settings: store}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -182,9 +179,6 @@ func TestNativeRemoveRelayPreferencePersistsCleanConfig(t *testing.T) {
 			{PublicURL: "https://two.example", AccessKey: "two-key"},
 		},
 		ActiveRelays: []string{"https://one.example", "https://two.example"},
-		ManagedTURNPolicies: []turn.ManagedPolicy{
-			{RelayURL: "https://one.example", LocalBudgetBytes: 100},
-		},
 	}
 	if err := store.Save(initial); err != nil {
 		t.Fatal(err)
@@ -197,7 +191,7 @@ func TestNativeRemoveRelayPreferencePersistsCleanConfig(t *testing.T) {
 	}
 	saved, err := store.Load()
 	if err != nil || len(saved.Profiles) != 1 || saved.Profiles[0].PublicURL != "https://two.example" ||
-		len(saved.ActiveRelays) != 1 || len(saved.ManagedTURNPolicies) != 0 {
+		len(saved.ActiveRelays) != 1 {
 		t.Fatalf("unexpected saved config: %+v err=%v", saved, err)
 	}
 }

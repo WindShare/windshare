@@ -42,7 +42,7 @@ func isSenderControl(kind MessageKind) bool {
 	switch kind {
 	case MessageCatalogResult, MessageOpenResults, MessageOperationError, MessageSessionTerminal,
 		MessageLaneAttach, MessageScanProgress, MessageOperationComplete, MessageLeaseResult,
-		MessagePeerAnswer, MessagePeerCandidate, MessagePeerPathControl, MessageTURNControl:
+		MessagePeerAnswer, MessagePeerCandidate, MessagePeerPathControl:
 		return true
 	default:
 		return false

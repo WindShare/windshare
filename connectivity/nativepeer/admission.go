@@ -69,7 +69,6 @@ type Admission struct {
 }
 type admissionWaiter struct {
 	purpose   v2signal.ConnectionPurpose
-	relayed   bool
 	owner     *NativePeerConnectivity
 	endpoints int
 	ready     chan struct{}
@@ -98,14 +97,14 @@ func NewAdmission(clock AdmissionClock) *Admission {
 	return &Admission{clock: clock, updated: clock.Now(), starts: StartsPerWindow, endpoints: STUNEndpointsPerWindow, activeTime: float64(ActiveTimePerWindow)}
 }
 
-func (g *Admission) acquirePurpose(ctx context.Context, owner *NativePeerConnectivity, endpoints int, sockets *socketauthority.Request, observe func(AdmissionFacts), relayed bool, purpose v2signal.ConnectionPurpose) (*attemptPermit, error) {
+func (g *Admission) acquirePurpose(ctx context.Context, owner *NativePeerConnectivity, endpoints int, sockets *socketauthority.Request, observe func(AdmissionFacts), purpose v2signal.ConnectionPurpose) (*attemptPermit, error) {
 	if err := context.Cause(ctx); err != nil {
 		return nil, err
 	}
 	if endpoints < 0 || endpoints > MaximumSTUNEndpointsPerAttempt {
 		return nil, ErrAdmission
 	}
-	w := &admissionWaiter{purpose: purpose, owner: owner, endpoints: endpoints, sockets: sockets, ready: make(chan struct{}), started: g.clock.Now(), observe: observe, relayed: relayed}
+	w := &admissionWaiter{purpose: purpose, owner: owner, endpoints: endpoints, sockets: sockets, ready: make(chan struct{}), started: g.clock.Now(), observe: observe}
 	g.mu.Lock()
 	if len(g.queue) >= MaximumQueuedAttempts {
 		g.emitLocked(w, AdmissionRejected)
@@ -184,9 +183,9 @@ func (g *Admission) drainLocked() {
 	for index := 0; index < len(g.queue) && g.active < ConcurrentAttempts; {
 		w := g.queue[index]
 		reserve := 0
-		if w.relayed || w.purpose == v2signal.ThroughputExploration {
+		if w.purpose == v2signal.ThroughputExploration {
 			// Leave one whole opportunity for ordinary direct recovery, including
-			// its start token and time budget, even during TURN replacement.
+			// its start token and time budget.
 			reserve = DirectAttemptReserve
 			if g.active >= ConcurrentAttempts-reserve {
 				index++
@@ -200,10 +199,6 @@ func (g *Admission) drainLocked() {
 			delay := max(time.Duration(wait), time.Nanosecond)
 			if nextRefill == 0 || delay < nextRefill {
 				nextRefill = delay
-			}
-			if w.relayed {
-				index++
-				continue
 			}
 			return
 		}

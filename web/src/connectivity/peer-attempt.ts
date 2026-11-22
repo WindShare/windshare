@@ -59,7 +59,6 @@ export interface PeerCandidatePublication {
 export type PeerCandidatePublisher = (candidate: PeerCandidatePublication) => boolean
 
 export interface BrowserPeerAttemptExecutorOptions {
-  readonly transportRoute?: 'direct' | 'turn'
   readonly tabAdmission?: PeerTabAdmission
   readonly admissionReceiver?: object
   readonly session: ReceiverSessionRuntime
@@ -131,7 +130,6 @@ export class BrowserPeerAttemptExecutor implements PeerRecoveryAttemptFactory {
   readonly #trace: ConnectivityTraceSource | undefined
   readonly #tabAdmission: PeerTabAdmission
   readonly #admissionReceiver: object
-  readonly #transportRoute: 'direct' | 'turn'
 
   constructor(options: BrowserPeerAttemptExecutorOptions) {
     if (
@@ -147,7 +145,6 @@ export class BrowserPeerAttemptExecutor implements PeerRecoveryAttemptFactory {
     this.#trace = options.trace
     this.#tabAdmission = options.tabAdmission ?? browserPeerTabAdmission()
     this.#admissionReceiver = options.admissionReceiver ?? this
-    this.#transportRoute = options.transportRoute ?? 'direct'
   }
 
   createAttempt(context: PeerAttemptContext): PeerAttemptHandle {
@@ -190,8 +187,8 @@ export class BrowserPeerAttemptExecutor implements PeerRecoveryAttemptFactory {
       )
       resources.route = route
       permit = await this.#tabAdmission.acquire(this.#admissionReceiver,
-        this.#transportRoute === 'turn' ? 0 : context.iceProfile?.endpointIDs.length ?? 2,
-        context.admissionWaitBudgetMilliseconds ?? 0, signal, this.#transportRoute, context.purpose)
+        context.iceProfile?.endpointIDs.length ?? 2,
+        context.admissionWaitBudgetMilliseconds ?? 0, signal, context.purpose)
       signal.throwIfAborted()
       if (context.iceProfile !== undefined) route.providerFact({ kind: 'profile',
         profileID: context.iceProfile.id, networkGenerationID: context.iceProfile.networkGenerationID,

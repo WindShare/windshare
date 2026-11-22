@@ -46,7 +46,6 @@ type testPeerSession struct {
 
 	sessionControlMu   sync.Mutex
 	pathControlHandler func(context.Context, []byte) error
-	turnControlHandler func(context.Context, []byte) error
 	sessionControls    chan capturedControl
 }
 

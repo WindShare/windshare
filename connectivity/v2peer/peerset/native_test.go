@@ -229,7 +229,6 @@ func TestReceiverSessionBindsPeerPathControlOnceAcrossParallelPaths(t *testing.T
 		Signaling: blockingReceiverSignaling{},
 		Lanes:     lanes,
 		Demand:    ContentDemand,
-		Routes:    DirectRoutes,
 	})
 	if err != nil {
 		t.Fatal(err)

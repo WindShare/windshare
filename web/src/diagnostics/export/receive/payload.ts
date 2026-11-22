@@ -172,7 +172,7 @@ export function validateReceive(payload: UnknownRecord): void {
 }
 
 function validateDownloadConnectivity(payload: UnknownRecord): void {
-  const bytes = ['direct_bytes', 'turn_bytes', 'application_relay_bytes', 'unknown_bytes'] as const
+  const bytes = ['direct_bytes', 'application_relay_bytes', 'unknown_bytes'] as const
   exactKeys(payload, ['download_id', 'first_direct_elapsed_ms', ...bytes, 'direct_fraction',
     'fallback_stall_ms', 'incomplete', 'final'], [], 'download connectivity')
   if (typeof payload.download_id !== 'string' || !/^[0-9a-f-]{36}$/.test(payload.download_id)) {

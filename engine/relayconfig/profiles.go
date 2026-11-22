@@ -6,7 +6,6 @@ import (
 	"slices"
 
 	"github.com/windshare/windshare/engine/relayprofile"
-	"github.com/windshare/windshare/engine/turn"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 )
 
@@ -137,12 +136,6 @@ func (c *Config) RemoveRelay(address string) error {
 	c.Profiles = slices.Delete(slices.Clone(c.Profiles), index, index+1)
 	if active := c.enabledIndex(address); active >= 0 {
 		c.ActiveRelays = slices.Delete(slices.Clone(c.ActiveRelays), active, active+1)
-	}
-	// Managed TURN policies must reference a saved relay profile (Config.Validate).
-	if len(c.ManagedTURNPolicies) > 0 {
-		c.ManagedTURNPolicies = slices.DeleteFunc(slices.Clone(c.ManagedTURNPolicies), func(policy turn.ManagedPolicy) bool {
-			return matches(policy.RelayURL, address)
-		})
 	}
 	return nil
 }

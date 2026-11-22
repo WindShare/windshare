@@ -1,7 +1,7 @@
 # Pion fork follow-up
 
-Updated: 2026-11-20. Pinned baselines: ICE `v4.4.8`, WebRTC `v4.2.26`, TURN
-`v5.1.3`, SCTP `v1.12.0`. Exact commits and checksums live in
+Updated: 2026-11-22. Pinned baselines: ICE `v4.4.8`, WebRTC `v4.2.26`,
+SCTP `v1.12.0`. Exact commits and checksums live in
 [the manifest](../third_party/pion/manifest.json).
 
 The local upgrade is separate from upstream contribution work. No upstream issue
@@ -12,11 +12,8 @@ submission links recorded here.
 
 - Universal UDP mux initialization now completes before the reader starts; the
   local initialization patch has been removed.
-- TURN provides context-aware allocation and transaction cleanup. The local
-  allocation-method copy has been removed. WindShare still interrupts blocked
-  control writes and deletes allocations before closing their transport.
 - ICE owns gathering generations and peer-reflexive STUN check priorities. Local
-  mapped candidates and TURN routes carry the captured generation; provider
+  mapped candidates carry the captured generation; provider
   interface preferences compose with the upstream priority calculation.
 - Shared UDP writes now have a cancellation grace period. Exclusive idle refresh
   interrupts immediately so socket handoff does not inherit that delay.
@@ -30,9 +27,6 @@ submission links recorded here.
 | ICE priorities | Frozen base-address order without losing TCP direction or prflx type preference | Discuss an interface-preference extension point |
 | Initial ICE checks | Initial exploration window independent of connected failure detection | Propose ICE option, then WebRTC setting |
 | External mappings | Verified external IP **and port**, bound to the real socket and gathering generation | Discuss endpoint model; retain candidate-type/network filtering |
-| TURN routing and cleanup | Injected cancellable egress, allocation ownership, bounded release | Keep route/capacity policy in WindShare; isolate reusable lifecycle fixes |
-| TURN binding recovery | Binding expiry, stable channel numbers, bounded retries, peer-scoped fallback and observations | Separate protocol recovery fixes from product observation hooks |
-| ICE STUN writes | Bounded per-candidate writers keep permission waits outside the agent loop | Prepare a minimal blocked-permission reproduction |
 | ICE UDP mux closed-conn drops | Log `io.ErrClosedPipe` late packets at trace level instead of error | Submit narrow upstream fix and remove local patch; one-off exception, do not add further log-suppression patches |
 | SCTP RACK | Lost retransmissions remain eligible for recovery; ambiguous retry ACKs are rejected | Submit focused recovery fix with [recorded evidence](../testdata/connectivity/webrtc/stall-20261022/README.md) |
 

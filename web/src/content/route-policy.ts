@@ -1,4 +1,4 @@
-export type BlockTransportRoute = 'application-relay' | 'direct' | 'turn'
+export type BlockTransportRoute = 'application-relay' | 'direct'
 
 /** Per-consumer authority for starting new upstream content work on a route. */
 export interface BlockRouteEligibility {

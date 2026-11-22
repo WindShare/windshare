@@ -14,8 +14,6 @@ import (
 	"github.com/windshare/windshare/engine/builtinnetwork"
 	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/relaysetup"
-	"github.com/windshare/windshare/engine/turn"
-	"github.com/windshare/windshare/engine/turncache"
 	"github.com/windshare/windshare/host/desktop/logstore"
 )
 
@@ -91,10 +89,7 @@ func Start() (*Host, error) {
 	application, err := engine.New(engine.Config{
 		Network:     network,
 		Diagnostics: trace.engineDiagnostics(),
-		// Share one file-backed cache between managed TURN discovery and relay
-		// enrollment so desktop restarts and newly paired relays keep TURN ready.
-		TURNDependencies: turn.Dependencies{Cache: turncache.FileStore{Settings: store}},
-		RelaySetup:       relaysetup.Dependencies{Store: relaysetup.FileStore{Settings: store}},
+		RelaySetup:  relaysetup.Dependencies{Store: relaysetup.FileStore{Settings: store}},
 	})
 	if err != nil {
 		host.stopDiagnostics()
@@ -113,7 +108,6 @@ func Start() (*Host, error) {
 			return task, nil
 		},
 		close: application.Close, load: relayconfig.Load, log: log.Record,
-		configure:   application.ConfigureTURN,
 		setup:       setup.run,
 		cancelSetup: setup.cancel,
 		senderTrace: trace,

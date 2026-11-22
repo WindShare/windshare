@@ -123,7 +123,7 @@ func TestReceiverFirstUsableSessionRecoversWithFreeOrReassignedLane(t *testing.T
 				t.Fatalf("healthy relay could not browse during outage: entries=%d err=%v", root.EntryCount(), err)
 			}
 			// Lane allocation is transport-neutral. An independently attached
-			// channel takes the retired slot just as a direct or TURN path would.
+			// channel takes the retired slot just as a direct path would.
 			shareID, err := v2.ShareIDFromBytes(share.Registration().ShareID)
 			if err != nil {
 				t.Fatal(err)

@@ -346,9 +346,6 @@ func (s *Set) finish(
 	s.mu.Lock()
 	if selected {
 		state.settlement.addDelivered(uint64(record.DataLength()))
-		var incomplete bool
-		saturatingLaneCounter(&state.usefulBytes, uint64(record.DataLength()), &incomplete)
-		state.lastUsefulAt = s.now()
 		s.recordContentActivityLocked(state.route, uint64(record.DataLength()))
 	}
 	state.inflight--

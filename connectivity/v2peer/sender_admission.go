@@ -12,7 +12,6 @@ import (
 
 	"github.com/windshare/windshare/core/session"
 	sendersession "github.com/windshare/windshare/core/session/sendersession"
-	"github.com/windshare/windshare/core/session/turncontrol"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
@@ -304,14 +303,7 @@ func (execution *attemptExecution) acceptAdmission(
 		)
 	}
 	execution.attempt.attached.Store(true)
-	if execution.attempt.config.turnLease != nil {
-		execution.turnAdmission = execution.attempt.config.turn.Admit(
-			execution.ctx, [16]byte(execution.attempt.binding().PeerPathID),
-			turncontrol.Lane{ID: result.Lane.ID, Epoch: result.Lane.Epoch},
-			execution.channel.Done(),
-		)
-	}
-	direct := execution.attempt.config.turnLease == nil
+	direct := true
 	if source, ok := execution.peer.(interface {
 		SelectedPair() (pionpeer.PairFacts, bool)
 	}); ok {
@@ -320,16 +312,12 @@ func (execution *attemptExecution) acceptAdmission(
 		}
 	}
 	execution.attempt.config.factory.native.SetAdmitted([16]byte(execution.attempt.config.session.ProtocolSessionID()), execution.attempt.binding().PeerPathID, direct)
-	route := transferlanes.RouteTURN
-	if direct {
-		route = transferlanes.RouteDirect
-	}
 	execution.attempt.recorder.complete(
 		SenderAttemptAdmitted, execution.candidateCounts(), SenderAttemptObservation{
 			Phase:                SenderAttemptPhaseAdmission,
 			GrantOperationID:     result.GrantOperationID,
 			Lane:                 &result.Lane,
-			Route:                route,
+			Route:                transferlanes.RouteDirect,
 			AdmissionDisposition: SenderAdmissionAccepted,
 			ResponseDelivery:     SenderResponseDelivered,
 		},

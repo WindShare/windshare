@@ -24,9 +24,6 @@ Invoke-Step 'verify signed network directory vectors' {
 Invoke-Step 'verify account authority vectors' {
     go test -count=1 ./core/serviceauthority
 }
-Invoke-Step 'verify TURN control vectors' {
-    go test -count=1 ./core/session/turncontrol
-}
 Invoke-Step 'verify protocol-contract vectors' {
     go test -count=1 ./core/internal/protocolcontract
 }
