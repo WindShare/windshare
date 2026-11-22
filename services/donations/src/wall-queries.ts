@@ -97,6 +97,13 @@ export const INSERT_DONATION_SQL = `INSERT INTO donations (
   minor_digits, message, visibility_kind, visibility_json, donated_at, created_at
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
+export const REDACT_PRIVATE_DONATION_SQL = `UPDATE donations
+SET display_name = NULL,
+    message = NULL,
+    visibility_kind = ?,
+    visibility_json = ?
+WHERE id = ?`
+
 export const SELECT_MANUAL_IDEMPOTENCY_SQL = `SELECT request_hash, donation_id
 FROM manual_donation_idempotency
 WHERE idempotency_key = ?`

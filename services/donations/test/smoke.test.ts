@@ -213,7 +213,7 @@ describe('donations worker scaffold', () => {
                 visibility: { kind: 'published' as const },
                 donatedAt: 1_700_000_000,
               },
-              deduplicated: false,
+              outcome: 'inserted' as const,
             }
           },
         }),

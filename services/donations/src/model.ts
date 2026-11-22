@@ -150,10 +150,20 @@ export interface CommitDonationInput {
   readonly donatedAt: number | null
 }
 
-export interface CommitDonationResult {
-  readonly record: DonationRecord
-  readonly deduplicated: boolean
-}
+export type CommitDonationOutcome = 'inserted' | 'deduplicated' | 'redacted_private'
+
+export type NonPrivateVisibilityKind = Exclude<VisibilityKind, 'private_donor'>
+
+export type CommitDonationResult =
+  | {
+    readonly outcome: 'inserted' | 'deduplicated'
+    readonly record: DonationRecord
+  }
+  | {
+    readonly outcome: 'redacted_private'
+    readonly record: DonationRecord
+    readonly previousVisibility: NonPrivateVisibilityKind
+  }
 
 export interface CreateManualDonationInput {
   readonly provider: DonationProvider

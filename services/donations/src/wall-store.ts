@@ -25,6 +25,7 @@ import {
   type DonationConfig,
   type DonationProvider,
   type DonationRecord,
+  type NonPrivateVisibilityKind,
   type PublicWallEntry,
   type PublicWallResponse,
   type WallVisibility,
@@ -36,6 +37,7 @@ import {
   INSERT_DONATION_SQL,
   INSERT_MANUAL_IDEMPOTENCY_SQL,
   PUBLIC_WALL_PUBLISHED_SQL,
+  REDACT_PRIVATE_DONATION_SQL,
   SELECT_MANUAL_IDEMPOTENCY_SQL,
   WALL_SCHEMA_STATEMENTS,
   buildAdminDonationsQuery,
@@ -430,6 +432,29 @@ export class WallStore {
     )
   }
 
+  private redactExistingDonationAsPrivateInTx(
+    existing: DonationRecord,
+    previousVisibility: NonPrivateVisibilityKind,
+  ): CommitDonationResult {
+    const privateVisibility: WallVisibility = { kind: 'private_donor' }
+    this.sql.exec(
+      REDACT_PRIVATE_DONATION_SQL,
+      privateVisibility.kind,
+      JSON.stringify(privateVisibility),
+      existing.id,
+    )
+    return {
+      outcome: 'redacted_private',
+      record: {
+        ...existing,
+        displayName: null,
+        message: null,
+        visibility: privateVisibility,
+      },
+      previousVisibility,
+    }
+  }
+
   private insertDonationInTx(
     input: CommitDonationInput,
     config: DonationConfig,
@@ -444,7 +469,13 @@ export class WallStore {
       input.externalId,
     ))
     if (existing !== null) {
-      return { record: rowToDonationRecord(existing), deduplicated: true }
+      const existingRecord = rowToDonationRecord(existing)
+      // Authoritative provider privacy overrides any pre-existing non-private record
+      // (e.g. a manual entry published before a delayed private Ko-fi webhook arrived).
+      if (!input.isPublic && existingRecord.visibility.kind !== 'private_donor') {
+        return this.redactExistingDonationAsPrivateInTx(existingRecord, existingRecord.visibility.kind)
+      }
+      return { outcome: 'deduplicated', record: existingRecord }
     }
 
     // Enforce privacy invariant at the persistence boundary even if a caller passes text.
@@ -473,7 +504,7 @@ export class WallStore {
     }
 
     this.insertDonationRecord(record, nowSec)
-    return { record, deduplicated: false }
+    return { outcome: 'inserted', record }
   }
 
   private resolveManualIdempotencyInTx(
@@ -549,7 +580,7 @@ export class WallStore {
     return this.runTx(() => {
       const { config } = this.readConfigRow()
       const result = this.insertDonationInTx(input, config, nowSec)
-      if (!result.deduplicated) {
+      if (result.outcome !== 'deduplicated') {
         this.bumpWallVersion()
       }
       return result
@@ -564,13 +595,13 @@ export class WallStore {
     return this.runTx(() => {
       const { config } = this.readConfigRow()
       const results: CommitDonationResult[] = []
-      let insertedAny = false
+      let mutatedAny = false
       for (const input of inputs) {
         const result = this.insertDonationInTx(input, config, nowSec)
-        if (!result.deduplicated) insertedAny = true
+        if (result.outcome !== 'deduplicated') mutatedAny = true
         results.push(result)
       }
-      if (insertedAny) {
+      if (mutatedAny) {
         this.bumpWallVersion()
       }
       return results

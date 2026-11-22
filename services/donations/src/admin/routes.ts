@@ -473,7 +473,7 @@ async function handleSyncAfdian(env: DonationsEnv, deps: RuntimeDeps): Promise<R
   const results = readyInputs.length > 0
     ? await commitDonationsBatchToWall(env, readyInputs, deps.nowSec())
     : []
-  const committed = results.filter(result => !result.deduplicated).length
+  const committed = results.filter(result => result.outcome === 'inserted').length
   const deduplicated = missing.deduplicated + (results.length - committed)
 
   return finalizeAfdianSyncResponse({

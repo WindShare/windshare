@@ -77,7 +77,10 @@ function logCommitResult(result: CommitDonationResult): void {
     currency: result.record.currency,
     amountMinor: result.record.amountMinor,
     visibility: result.record.visibility.kind,
-    deduplicated: result.deduplicated,
+    outcome: result.outcome,
+    ...(result.outcome === 'redacted_private'
+      ? { previousVisibility: result.previousVisibility }
+      : {}),
   })
 }
 

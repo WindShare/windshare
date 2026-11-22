@@ -794,5 +794,40 @@ describe('admin manual donations and all-time Top 3 integration', () => {
     const secondDistinct = await secondDistinctRes.json() as { record: DonationRecord }
     expect(secondDistinct.record.id).not.toBe(secondCreated.record.id)
     expect(secondDistinct.record.externalId).not.toBe(secondCreated.record.externalId)
+
+    // A manually published Ko-fi entry is redacted and removed from wall/Top 3 once a verified private webhook arrives.
+    const manualKofiRes = await createManual({
+      amount: '500',
+      currency: 'USD',
+      provider: 'kofi',
+      displayName: 'Private Ko-fi Donor',
+      message: 'Private note accidentally entered manually',
+      externalId: 'KOFI-MANUAL-PRIV-1',
+      donatedAt: 1_760_000_500,
+    })
+    expect(manualKofiRes.status).toBe(201)
+    const wallWithManualKofiRes = await mf.dispatchFetch(`${DONATE_ORIGIN}/v1/donations/wall`)
+    const etagWithManualKofi = wallWithManualKofiRes.headers.get('etag') ?? ''
+    const wallWithManualKofi = await wallWithManualKofiRes.json() as PublicWallResponse
+    expect(wallWithManualKofi.topSupporters[0]?.displayName).toBe('Private Ko-fi Donor')
+
+    const privateWebhookRes = await postKofiWebhook({
+      kofi_transaction_id: 'KOFI-MANUAL-PRIV-1',
+      amount: '500.00',
+      currency: 'USD',
+      is_public: false,
+      from_name: 'Private Ko-fi Donor',
+      message: 'Private note',
+    })
+    expect(privateWebhookRes.status).toBe(200)
+
+    const wallAfterRedactRes = await mf.dispatchFetch(`${DONATE_ORIGIN}/v1/donations/wall`, {
+      headers: { 'If-None-Match': etagWithManualKofi },
+    })
+    expect(wallAfterRedactRes.status).toBe(200)
+    expect(wallAfterRedactRes.headers.get('etag')).not.toBe(etagWithManualKofi)
+    const wallAfterRedact = await wallAfterRedactRes.json() as PublicWallResponse
+    expect(wallAfterRedact.entries.some(e => e.displayName === 'Private Ko-fi Donor')).toBe(false)
+    expect(wallAfterRedact.topSupporters[0]?.displayName).toBe('Direct Patron')
   })
 })

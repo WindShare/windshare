@@ -1,4 +1,9 @@
-import type { AdminConfigPatch, DonationProvider } from './model'
+import type {
+  AdminConfigPatch,
+  CommitDonationOutcome,
+  DonationProvider,
+  NonPrivateVisibilityKind,
+} from './model'
 
 export type WebhookRejectionReason =
   | 'invalid_signature'
@@ -132,17 +137,22 @@ export function logDonationCommitted(fields: {
   readonly currency: string
   readonly amountMinor: number
   readonly visibility: string
-  readonly deduplicated: boolean
+  readonly outcome: CommitDonationOutcome
+  readonly previousVisibility?: NonPrivateVisibilityKind
 }): void {
-  emit('info', 'donation.committed', {
+  const payload: Record<string, unknown> = {
     donation_id: fields.donationId,
     provider: fields.provider,
     external_id: fields.externalId,
     currency: fields.currency,
     amount_minor: fields.amountMinor,
     visibility: fields.visibility,
-    deduplicated: fields.deduplicated,
-  })
+    outcome: fields.outcome,
+  }
+  if (fields.previousVisibility !== undefined) {
+    payload.previous_visibility = fields.previousVisibility
+  }
+  emit(fields.outcome === 'redacted_private' ? 'warn' : 'info', 'donation.committed', payload)
 }
 
 export function logDonationModerated(fields: {

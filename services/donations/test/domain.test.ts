@@ -575,7 +575,7 @@ describe('WallStore SQLite persistence, caching, rate limiting, and pagination',
       isPublic: true,
       donatedAt: 1000,
     }, 1000)
-    expect(first.deduplicated).toBe(false)
+    expect(first.outcome).toBe('inserted')
 
     const duplicate = store.commitDonation({
       provider: 'afdian',
@@ -588,7 +588,7 @@ describe('WallStore SQLite persistence, caching, rate limiting, and pagination',
       isPublic: true,
       donatedAt: 1005,
     }, 1005)
-    expect(duplicate.deduplicated).toBe(true)
+    expect(duplicate.outcome).toBe('deduplicated')
     expect(duplicate.record.id).toBe(first.record.id)
     expect(duplicate.record.amountMinor).toBe(1000)
 
@@ -901,7 +901,7 @@ describe('WallStore SQLite persistence, caching, rate limiting, and pagination',
       },
     ], 1005)
 
-    expect(batchResults.map(r => r.deduplicated)).toEqual([true, false, false, true])
+    expect(batchResults.map(r => r.outcome)).toEqual(['deduplicated', 'inserted', 'inserted', 'deduplicated'])
     expect(store.getPublicWallSnapshot().version).toBe(versionBefore + 1)
 
     // Re-submitting an all-duplicate batch does not bump wall_version.
@@ -916,7 +916,7 @@ describe('WallStore SQLite persistence, caching, rate limiting, and pagination',
       isPublic: true,
       donatedAt: 1006,
     }], 1006)
-    expect(dupOnly[0]?.deduplicated).toBe(true)
+    expect(dupOnly[0]?.outcome).toBe('deduplicated')
     expect(store.getPublicWallSnapshot().version).toBe(versionBefore + 1)
   })
 })
