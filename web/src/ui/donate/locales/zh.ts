@@ -26,7 +26,7 @@ export const zh: typeof en = {
   cryptoNamePlaceholder: '留空即匿名支持者',
   cryptoMessageLabel: '公开留言（可选）',
   cryptoMessagePlaceholder: '写一句想说的话…',
-  cryptoNotice: '经由 NOWPayments 收款，满 $5 链上确认完成后将自动展示于致谢墙。',
+  cryptoNotice: '满 $5 链上确认完成后将自动展示于致谢墙。',
   cryptoCta: '前往加密支付',
   cryptoSubmitting: '正在创建支付页…',
   cryptoErrInvalid: '请输入有效的美元金额（最多两位小数）。',

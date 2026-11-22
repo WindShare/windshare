@@ -25,7 +25,7 @@ export const en = {
   cryptoNamePlaceholder: 'Anonymous if left blank',
   cryptoMessageLabel: 'Public note (optional)',
   cryptoMessagePlaceholder: 'Say hello to the community…',
-  cryptoNotice: 'Payments settle via NOWPayments. Notes on tips of $5+ appear automatically once confirmed on-chain.',
+  cryptoNotice: 'Notes on tips of $5+ appear automatically once confirmed on-chain.',
   cryptoCta: 'Continue to NOWPayments',
   cryptoSubmitting: 'Creating checkout…',
   cryptoErrInvalid: 'Enter a valid USD amount with up to two decimals.',
