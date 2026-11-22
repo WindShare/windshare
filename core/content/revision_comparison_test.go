@@ -9,10 +9,8 @@ import (
 func TestSourceMetadataSeparatesReopenFromObservedChange(t *testing.T) {
 	evidence := knownRevisionEvidence(t)
 	baseline := sourceMetadata(evidence)
-	reopened := evidence
-	reopened.openInstance[0] = 1
-	if baseline.IsZero() || sourceMetadata(reopened) != baseline {
-		t.Fatal("open-instance identity contaminated source metadata")
+	if baseline.IsZero() || sourceMetadata(evidence) != baseline {
+		t.Fatal("source metadata is not deterministic for unchanged evidence")
 	}
 	mutations := map[string]func(*RevisionEvidence){
 		"share":   func(e *RevisionEvidence) { e.shareInstance[0]++ },

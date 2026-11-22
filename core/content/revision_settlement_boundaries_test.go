@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content/revisioncapacity"
 )
 
@@ -48,7 +47,7 @@ func TestResidentAdmissionFailurePreservesPublishedAuthorityAndAccounting(t *tes
 	}
 }
 
-func TestRevisionInvalidationRegistryRemainsIdempotentAcrossActiveReaders(t *testing.T) {
+func TestRevisionInvalidationRemainsIdempotentAcrossActiveReaders(t *testing.T) {
 	file, record := fileRecord(t, 1)
 	stable := &testStableFile{data: []byte{1}}
 	store, _, _ := newRevisionStore(
@@ -56,8 +55,7 @@ func TestRevisionInvalidationRegistryRemainsIdempotentAcrossActiveReaders(t *tes
 		&testClock{now: time.Unix(100, 0)}, nil, file, record,
 	)
 	session := generousSession(t, store, "reader-session")
-	lease, err := store.OpenRevision(context.Background(), file, session)
-	if err != nil {
+	if _, err := store.OpenRevision(context.Background(), file, session); err != nil {
 		t.Fatal(err)
 	}
 
@@ -66,22 +64,15 @@ func TestRevisionInvalidationRegistryRemainsIdempotentAcrossActiveReaders(t *tes
 	revision.readers = 1
 	store.readingRevisions[revision] = struct{}{}
 	identity := revision.identity()
-	cleanups, releases, invalidateErr := store.invalidateIdentityLocked(identity, revision)
-	if invalidateErr != nil || len(cleanups) != 0 {
+	cleanups, releases := store.invalidateIdentityLocked(identity, revision)
+	if len(cleanups) != 0 {
 		store.mu.Unlock()
-		t.Fatalf("reader invalidation=(cleanups=%d,%v)", len(cleanups), invalidateErr)
+		t.Fatalf("reader invalidation closed active handle prematurely: cleanups=%d", len(cleanups))
 	}
-	if err := store.recordInvalidationLocked(identity); err != nil {
+	extraCleanups, extraReleases := store.invalidateIdentityLocked(identity, revision)
+	if len(extraCleanups) != 0 || len(extraReleases) != 0 {
 		store.mu.Unlock()
-		t.Fatalf("idempotent invalidation=%v", err)
-	}
-	store.revisionAdmissionStopped = true
-	otherIdentity := revisionIdentity{
-		file: catalogID[catalog.FileID](0xb7), revision: lease.Descriptor().FileRevision(),
-	}
-	if err := store.recordInvalidationLocked(otherIdentity); !errors.Is(err, ErrQuotaExceeded) {
-		store.mu.Unlock()
-		t.Fatalf("invalidation after admission stop=%v", err)
+		t.Fatalf("repeated invalidation was not idempotent: cleanups=%d releases=%d", len(extraCleanups), len(extraReleases))
 	}
 	delete(store.readingRevisions, revision)
 	revision.readers = 0
@@ -98,9 +89,7 @@ func TestRevisionInvalidationRegistryRemainsIdempotentAcrossActiveReaders(t *tes
 	if err := cleanup.run(); err != nil {
 		t.Fatal(err)
 	}
-	if stable.closed.Load() != 1 || store.metadataBudget.Snapshot().Used != 1 ||
-		session.Snapshot().Used() != (revisioncapacity.CapacityUsage{}) {
-		t.Fatalf("invalidation cleanup closes=%d metadata=%+v capacity=%+v",
-			stable.closed.Load(), store.metadataBudget.Snapshot(), session.Snapshot())
+	if stable.closed.Load() != 1 || session.Snapshot().Used() != (revisioncapacity.CapacityUsage{}) {
+		t.Fatalf("invalidation cleanup closes=%d capacity=%+v", stable.closed.Load(), session.Snapshot())
 	}
 }

@@ -21,9 +21,6 @@ type FileSourceContext struct {
 // roots require publishable metadata; unknown sizes and unsupported stable range
 // reads fail explicitly rather than publishing guessed metadata. Descendants and
 // content are accessed only on demand. StableFile handles own their own Close.
-//
-// A source with handle-only stability must also implement
-// content.RevisionContinuitySource; omitting it asserts catalog continuity.
 type FileSource interface {
 	catalog.DirectoryScanner
 	content.RevisionSource

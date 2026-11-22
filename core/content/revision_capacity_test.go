@@ -195,12 +195,10 @@ func newCapacityTestStore(
 	source RevisionSource,
 ) *RevisionStore {
 	t.Helper()
-	deriver := testRevisionDeriver(t)
 	store, err := NewRevisionStore(RevisionStoreConfig{
 		ShareInstance: catalogID[catalog.ShareInstance](shareByte), ChunkSize: catalog.MinChunkSize,
 		Catalog: testCatalog{records: records}, Source: source, Clock: clock,
-		LeaseIDs: &sequenceIDs{}, RevisionDeriver: deriver,
-		MetadataBudget:      testRevisionMetadataBudget(t, DefaultRevisionInvalidationEntries),
+		LeaseIDs:            &sequenceIDs{},
 		CapacityCoordinator: owner.Coordinator(),
 		CapacityStore:       revisioncapacity.StoreConfig{StoreID: storeID, ShareID: shareID, Limits: limits},
 	})
@@ -211,7 +209,6 @@ func newCapacityTestStore(
 		if err := store.Close(); err != nil {
 			t.Errorf("close capacity store %s: %v", storeID, err)
 		}
-		deriver.Destroy()
 	})
 	return store
 }

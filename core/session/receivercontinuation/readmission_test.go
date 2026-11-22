@@ -12,7 +12,6 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/internal/testoutputroot"
-	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/receiversession"
 	"github.com/windshare/windshare/core/transfer"
@@ -22,12 +21,6 @@ import (
 	"github.com/windshare/windshare/osfs"
 )
 
-type handleBoundSource struct{ liveshare.FileSource }
-
-func (handleBoundSource) RevisionContinuity(catalog.NodeRecord) (content.RevisionContinuity, error) {
-	return content.OpenHandleRevisionContinuity, nil
-}
-
 func TestTransferReadmitsDurableRangesAfterSourceReopen(t *testing.T) {
 	t.Run("intact", func(t *testing.T) { testTransferReadmission(t, nil) })
 	t.Run("stage removed", func(t *testing.T) { testTransferReadmission(t, os.Remove) })
@@ -36,9 +29,7 @@ func TestTransferReadmitsDurableRangesAfterSourceReopen(t *testing.T) {
 
 func testTransferReadmission(t *testing.T, changeStage func(string) error) {
 	t.Helper()
-	f := newFixtureWithSource(t, false, func(source liveshare.FileSource) liveshare.FileSource {
-		return handleBoundSource{source}
-	})
+	f := newFixture(t)
 	runtime, channel := f.connect()
 	ctx := t.Context()
 	continuation, err := New(ctx, runtime, func(context.Context, *receiversession.Runtime) (*receiversession.Runtime, error) {

@@ -398,7 +398,7 @@ func (s *RevisionStore) ReadBlock(ctx context.Context, leaseID LeaseID, ref Bloc
 
 	destination := make([]byte, plainLength)
 	comparison, readErr := readStableBlock(ctx, revision.source, destination, offset)
-	drifted, cleanups, transitions, releases, invalidate, budgetErr := s.finishRead(revision, comparison)
+	drifted, cleanups, transitions, releases, invalidate := s.finishRead(revision, comparison)
 	for _, release := range releases {
 		_ = release.run()
 	}
@@ -413,9 +413,6 @@ func (s *RevisionStore) ReadBlock(ctx context.Context, leaseID LeaseID, ref Bloc
 	}
 	if comparison == RevisionComparisonMismatch {
 		s.traceRevision(RevisionTraceStageMismatchInvalidation, RevisionTraceCauseActiveRead, descriptor.FileID(), descriptor.FileRevision())
-	}
-	if budgetErr != nil {
-		s.traceRevision(RevisionTraceStageMetadataBudgetStop, RevisionTraceCauseMetadataBudget, descriptor.FileID(), descriptor.FileRevision())
 	}
 	if drifted {
 		return nil, ErrRevisionDrift
@@ -469,7 +466,6 @@ func (s *RevisionStore) finishRead(revision *revisionState, comparison RevisionC
 	[]revisionTransition,
 	[]capacityChargeRelease,
 	bool,
-	error,
 ) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -480,18 +476,16 @@ func (s *RevisionStore) finishRead(revision *revisionState, comparison RevisionC
 	var cleanups []revisionCleanup
 	var transitions []revisionTransition
 	var releases []capacityChargeRelease
-	var budgetErr error
 	invalidate := comparison == RevisionComparisonMismatch
 	if invalidate {
-		cleanups, releases, budgetErr = s.invalidateIdentityLocked(revision.identity(), revision)
+		cleanups, releases = s.invalidateIdentityLocked(revision.identity(), revision)
 	}
 	if !invalidate {
 		if transition, _ := s.retireRevisionIfIdleLocked(revision, s.clock.Now()); transition.kind != revisionTransitionNone {
 			transitions = append(transitions, transition)
 		}
 	}
-	_, recorded := s.invalidated[revision.identity()]
-	drifted := revision.lifecycle == revisionLifecycleInvalidated || recorded
+	drifted := revision.lifecycle == revisionLifecycleInvalidated
 	if revision.closePending && revision.readers == 0 && !revision.closed {
 		if revision.source != nil && !revision.closing {
 			revision.closing = true
@@ -500,7 +494,7 @@ func (s *RevisionStore) finishRead(revision *revisionState, comparison RevisionC
 			revision.handleCharge = revisioncapacity.StableHandleCharge{}
 		}
 	}
-	return drifted, cleanups, transitions, releases, invalidate, budgetErr
+	return drifted, cleanups, transitions, releases, invalidate
 }
 
 func (s *RevisionStore) reap(now time.Time) {

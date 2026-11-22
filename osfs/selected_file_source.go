@@ -65,14 +65,6 @@ func (source *SelectedFileSource) ScanDirectory(ctx context.Context, request cat
 	return result, classifySourceError("scan directory", request.Directory.SourceReference(), err)
 }
 
-func (source *SelectedFileSource) RevisionContinuity(record catalog.NodeRecord) (content.RevisionContinuity, error) {
-	if err := source.authorize(record); err != nil {
-		return 0, classifySourceError("select revision continuity", record.SourceReference(), err)
-	}
-	continuity, err := source.revisions.RevisionContinuity(record)
-	return continuity, classifySourceError("select revision continuity", record.SourceReference(), err)
-}
-
 func (source *SelectedFileSource) OpenStable(ctx context.Context, record catalog.NodeRecord) (content.StableFile, error) {
 	if err := source.authorize(record); err != nil {
 		return nil, classifySourceError("open stable file", record.SourceReference(), err)

@@ -3,9 +3,7 @@
 package osfs
 
 import (
-	"bytes"
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -93,8 +91,7 @@ func NewWindowsRootedRevisionSource(rootPaths []string) (*RootedRevisionSource, 
 
 // WindowsCatalogBaseline captures the private discovery candidate from the
 // already-open object. The later root-relative stable open must reproduce these
-// values; RevisionContinuity separately states whether they also prove content
-// continuity after that write-excluding handle closes.
+// values while acquiring a write-excluding handle.
 func WindowsCatalogBaseline(file *os.File) (catalog.SourceIdentity, catalog.VersionCandidate, error) {
 	if file == nil {
 		return catalog.SourceIdentity{}, catalog.VersionCandidate{}, content.ErrUnsupportedStability
@@ -136,50 +133,6 @@ func windowsCatalogObjectBaseline(file *os.File) (catalog.SourceIdentity, catalo
 		return catalog.SourceIdentity{}, catalog.VersionCandidate{}, err
 	}
 	return identity, candidate, nil
-}
-
-type windowsRevisionProfileRoot interface {
-	RevisionProfile() windowsRevisionProfile
-}
-
-func (b *WindowsStabilityBinder) RevisionContinuity(record catalog.NodeRecord) (content.RevisionContinuity, error) {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	if b.closed {
-		return 0, content.ErrRevisionStoreClosed
-	}
-	candidate := record.VersionCandidate().Bytes()
-	if len(candidate) != windowsRevisionCandidateBytes {
-		return 0, content.ErrRevisionStale
-	}
-	var token windowsMutationToken
-	copy(token.identity[:], candidate[:windowsRevisionIdentityBytes])
-	token.changeTime = int64(binary.BigEndian.Uint64(candidate[windowsRevisionIdentityBytes+16 : windowsRevisionIdentityBytes+24]))
-	token.profile = windowsRevisionProfile(candidate[windowsRevisionCandidateBytes-2])
-	if token.identity[0] != windowsIdentityFullWidth && token.identity[0] != windowsIdentityLegacy ||
-		token.profile > windowsRevisionProfileLocalReFS ||
-		!bytes.Equal(token.identity[:], record.SourceIdentity().Bytes()) ||
-		candidate[windowsRevisionCandidateBytes-1] != byte(token.continuity()) {
-		return 0, content.ErrRevisionStale
-	}
-	if token.continuity() == content.CatalogRevisionContinuity {
-		// The record's historical observation cannot strengthen a root whose
-		// current retained authority has no matching reopen profile. Decide this
-		// before the content store derives and charges the revision identity.
-		location, err := parseSourceReference(record.SourceReference())
-		if err != nil {
-			return 0, content.ErrRevisionStale
-		}
-		slot := int(location.RootSlot())
-		if slot < 0 || slot >= len(b.roots) {
-			return content.OpenHandleRevisionContinuity, nil
-		}
-		root, ok := b.roots[slot].(windowsRevisionProfileRoot)
-		if !ok || root.RevisionProfile() != token.profile {
-			return content.OpenHandleRevisionContinuity, nil
-		}
-	}
-	return token.continuity(), nil
 }
 
 func (b *WindowsStabilityBinder) BindStable(ctx context.Context, binding StableBinding) (content.StableFile, error) {

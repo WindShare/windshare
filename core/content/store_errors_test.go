@@ -38,7 +38,6 @@ func customRevisionStore(t *testing.T, nodeSource CatalogNodeSource, source Revi
 	if err != nil {
 		t.Fatal(err)
 	}
-	deriver := testRevisionDeriver(t)
 	store, err := NewRevisionStore(RevisionStoreConfig{
 		ShareInstance: catalogID[catalog.ShareInstance](1), ChunkSize: catalog.MinChunkSize,
 		Catalog: nodeSource, Source: source, Clock: clock, LeaseIDs: ids,
@@ -47,7 +46,6 @@ func customRevisionStore(t *testing.T, nodeSource CatalogNodeSource, source Revi
 			StoreID: "custom-test-store", ShareID: "custom-test-share",
 			Limits: revisioncapacity.CapacityLimits{StableHandles: 100, ActiveLeases: 100},
 		},
-		RevisionDeriver: deriver, MetadataBudget: testRevisionMetadataBudget(t, DefaultRevisionInvalidationEntries),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -55,7 +53,6 @@ func customRevisionStore(t *testing.T, nodeSource CatalogNodeSource, source Revi
 	t.Cleanup(func() {
 		_ = store.Close()
 		_ = owner.Close()
-		deriver.Destroy()
 	})
 	process := &capacityTestAccount{name: "process", snapshot: func() revisioncapacity.ScopeSnapshot { return store.CapacitySnapshot().Process() }}
 	share := &capacityTestAccount{name: "share", snapshot: func() revisioncapacity.ScopeSnapshot { return store.CapacitySnapshot().Share() }}
@@ -340,11 +337,12 @@ func TestOpenRevisionRejectsLeaseIdentityReuseWithoutClosingRevision(t *testing.
 	_ = store.Close()
 }
 
-func TestExpiredLeaseGraceUsesActualExpiryAndReusesStableRevision(t *testing.T) {
+func TestExpiredLeaseGraceUsesActualExpiryAndReopensFreshRevision(t *testing.T) {
 	clock := &testClock{now: time.Unix(100, 0)}
-	file, record := fileRecord(t, 1)
-	firstSource := &testStableFile{data: []byte{1}}
-	secondSource := &testStableFile{data: []byte{1}}
+	modified, _ := catalog.NewModifiedTime(50, 0, catalog.TimePrecisionSeconds)
+	file, record := fileRecordWithModifiedTime(t, 9, 1, modified)
+	firstSource := &testStableFile{data: []byte{1}, modified: modified}
+	secondSource := &testStableFile{data: []byte{1}, modified: modified}
 	source := &testRevisionSource{files: []*testStableFile{firstSource, secondSource}}
 	store, _, _ := customRevisionStore(t, testCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}}, source, clock, &sequenceIDs{})
 	defer store.Close()
@@ -358,8 +356,11 @@ func TestExpiredLeaseGraceUsesActualExpiryAndReusesStableRevision(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.Descriptor().FileRevision() != second.Descriptor().FileRevision() || first.ID() == second.ID() || source.Calls() != 2 || firstSource.closed.Load() != 1 {
-		t.Fatalf("stable revision reopen: first=%x second=%x calls=%d closes=%d", first.Descriptor().FileRevision(), second.Descriptor().FileRevision(), source.Calls(), firstSource.closed.Load())
+	if first.Descriptor().FileRevision() == second.Descriptor().FileRevision() || first.ID() == second.ID() || source.Calls() != 2 || firstSource.closed.Load() != 1 {
+		t.Fatalf("fresh revision reopen: first=%x second=%x calls=%d closes=%d", first.Descriptor().FileRevision(), second.Descriptor().FileRevision(), source.Calls(), firstSource.closed.Load())
+	}
+	if comparison := CompareRevisions(first.Descriptor(), second.Descriptor()); !comparison.AllowsReuse() {
+		t.Fatalf("reopen comparison=%+v, want metadata agreement", comparison)
 	}
 	if _, err := store.RenewLease(first.ID()); !errors.Is(err, ErrLeaseExpired) {
 		t.Fatalf("expired lease tombstone = %v", err)
@@ -391,9 +392,10 @@ func TestLateRelinquishmentCannotRestartDetachedRecoveryAfterExpiry(t *testing.T
 	}
 }
 
-func TestDefaultLeaseIdentityIsNonzeroAndDerivedRevisionSurvivesReopen(t *testing.T) {
-	file, record := fileRecord(t, 1)
-	stable := &testStableFile{data: []byte{1}}
+func TestDefaultIdentitiesAreNonzeroAndReopenAssignsFreshRevision(t *testing.T) {
+	modified, _ := catalog.NewModifiedTime(50, 0, catalog.TimePrecisionSeconds)
+	file, record := fileRecordWithModifiedTime(t, 9, 1, modified)
+	stable := &testStableFile{data: []byte{1}, modified: modified}
 	store, _, _ := customRevisionStore(t,
 		testCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}},
 		&testRevisionSource{files: []*testStableFile{stable}}, nil, nil,
@@ -411,8 +413,8 @@ func TestDefaultLeaseIdentityIsNonzeroAndDerivedRevisionSurvivesReopen(t *testin
 	_ = store.Close()
 
 	clock := &testClock{now: time.Unix(100, 0)}
-	firstStable := &testStableFile{data: []byte{1}}
-	secondStable := &testStableFile{data: []byte{1}}
+	firstStable := &testStableFile{data: []byte{1}, modified: modified}
+	secondStable := &testStableFile{data: []byte{1}, modified: modified}
 	reuseStore, _, _ := customRevisionStore(t, testCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}}, &testRevisionSource{files: []*testStableFile{firstStable, secondStable}}, clock, &sequenceIDs{})
 	reuseSession := generousSession(t, reuseStore, "reuse-session")
 	first, err := reuseStore.OpenRevision(context.Background(), file, reuseSession)
@@ -421,8 +423,11 @@ func TestDefaultLeaseIdentityIsNonzeroAndDerivedRevisionSurvivesReopen(t *testin
 	}
 	_ = reuseStore.EndLease(first.ID(), LeaseRelinquished)
 	second, err := reuseStore.OpenRevision(context.Background(), file, reuseSession)
-	if err != nil || first.Descriptor().FileRevision() != second.Descriptor().FileRevision() || first.ID() == second.ID() {
-		t.Fatalf("derived revision did not survive clean release: second=%+v err=%v", second, err)
+	if err != nil || first.Descriptor().FileRevision() == second.Descriptor().FileRevision() || first.ID() == second.ID() {
+		t.Fatalf("clean release reopen did not issue fresh identities: first=%+v second=%+v err=%v", first, second, err)
+	}
+	if !CompareRevisions(first.Descriptor(), second.Descriptor()).AllowsReuse() {
+		t.Fatal("reopened revision lost best-effort source metadata agreement")
 	}
 	_ = reuseStore.Close()
 }

@@ -13,7 +13,6 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"golang.org/x/sys/windows"
 )
@@ -30,8 +29,6 @@ type fakeWindowsRevisionMetadata struct {
 	path           string
 	pathErr        error
 	volumeCalls    int
-	driveType      uint32
-	driveErr       error
 }
 
 func (api *fakeWindowsRevisionMetadata) FileIdentity(windows.Handle) (windowsRevisionFileIDInfo, error) {
@@ -51,10 +48,6 @@ func (api *fakeWindowsRevisionMetadata) FinalPath(windows.Handle) (string, error
 	return api.path, api.pathErr
 }
 
-func (api *fakeWindowsRevisionMetadata) DriveType(string) (uint32, error) {
-	return api.driveType, api.driveErr
-}
-
 func windowsMetadataFixture() fakeWindowsRevisionMetadata {
 	return fakeWindowsRevisionMetadata{
 		identity: windowsRevisionFileIDInfo{VolumeSerialNumber: 9, FileID: [16]byte{1, 2, 3}},
@@ -64,55 +57,49 @@ func windowsMetadataFixture() fakeWindowsRevisionMetadata {
 			LastWriteTime: windows.Filetime{HighDateTime: 27, LowDateTime: 31},
 		},
 		basic:      windowsFileBasicInfo{LastWriteTime: windowsFiletimeUnixOffset + 1, ChangeTime: windowsFiletimeUnixOffset + 2},
-		filesystem: "NTFS", path: `C:\file.bin`, driveType: windows.DRIVE_FIXED,
+		filesystem: "NTFS", path: `C:\file.bin`,
 	}
 }
 
-func TestWindowsRevisionMetadataUsesCapabilitiesAndExplicitContinuity(t *testing.T) {
+func TestWindowsRevisionMetadataUsesCapabilities(t *testing.T) {
 	tests := []struct {
 		name      string
 		configure func(*fakeWindowsRevisionMetadata)
-		want      content.RevisionContinuity
 		wantTag   byte
 	}{
-		{"full-width local", func(*fakeWindowsRevisionMetadata) {}, content.CatalogRevisionContinuity, windowsIdentityFullWidth},
-		{"full-width local ReFS", func(api *fakeWindowsRevisionMetadata) { api.filesystem = "ReFS" }, content.CatalogRevisionContinuity, windowsIdentityFullWidth},
-		{"full-width FAT with change time", func(api *fakeWindowsRevisionMetadata) { api.filesystem = "FAT32" }, content.OpenHandleRevisionContinuity, windowsIdentityFullWidth},
-		{"full-width NAS with change time", func(api *fakeWindowsRevisionMetadata) { api.path = `\\?\UNC\nas\share\file` }, content.OpenHandleRevisionContinuity, windowsIdentityFullWidth},
-		{"full-width mapped NAS", func(api *fakeWindowsRevisionMetadata) { api.path = `Z:\file`; api.driveType = windows.DRIVE_REMOTE }, content.OpenHandleRevisionContinuity, windowsIdentityFullWidth},
-		{"unavailable locality", func(api *fakeWindowsRevisionMetadata) { api.pathErr = windows.ERROR_ACCESS_DENIED }, content.OpenHandleRevisionContinuity, windowsIdentityFullWidth},
-		{"unknown locality", func(api *fakeWindowsRevisionMetadata) { api.driveType = windows.DRIVE_UNKNOWN }, content.OpenHandleRevisionContinuity, windowsIdentityFullWidth},
-		{"failed drive probe", func(api *fakeWindowsRevisionMetadata) { api.driveErr = windows.ERROR_ACCESS_DENIED }, content.OpenHandleRevisionContinuity, windowsIdentityFullWidth},
+		{"full-width NTFS", func(*fakeWindowsRevisionMetadata) {}, windowsIdentityFullWidth},
+		{"full-width ReFS", func(api *fakeWindowsRevisionMetadata) { api.filesystem = "ReFS" }, windowsIdentityFullWidth},
+		{"full-width FAT with change time", func(api *fakeWindowsRevisionMetadata) { api.filesystem = "FAT32" }, windowsIdentityFullWidth},
 		{"full-width UNC", func(api *fakeWindowsRevisionMetadata) {
 			api.path = `\\?\UNC\nas\share\file`
 			api.filesystem = "remote"
 			api.filesystemErr = windows.ERROR_NOT_SUPPORTED
-		}, content.OpenHandleRevisionContinuity, windowsIdentityFullWidth},
+		}, windowsIdentityFullWidth},
 		{"FAT32", func(api *fakeWindowsRevisionMetadata) {
 			api.identityErr = windows.ERROR_INVALID_PARAMETER
 			api.filesystem = "FAT32"
 			api.basic.ChangeTime = 0
-		}, content.OpenHandleRevisionContinuity, windowsIdentityLegacy},
+		}, windowsIdentityLegacy},
 		{"exFAT", func(api *fakeWindowsRevisionMetadata) {
 			api.identityErr = windows.ERROR_NOT_SUPPORTED
 			api.filesystem = "exFAT"
 			api.basic.ChangeTime = 0
-		}, content.OpenHandleRevisionContinuity, windowsIdentityLegacy},
+		}, windowsIdentityLegacy},
 		{"legacy NAS", func(api *fakeWindowsRevisionMetadata) {
 			api.identityErr = windows.ERROR_INVALID_FUNCTION
 			api.filesystem = "NAS"
 			api.path = `\\nas\share\file`
-		}, content.OpenHandleRevisionContinuity, windowsIdentityLegacy},
-		{"no extended basic metadata", func(api *fakeWindowsRevisionMetadata) { api.basicErr = windows.ERROR_CALL_NOT_IMPLEMENTED }, content.OpenHandleRevisionContinuity, windowsIdentityFullWidth},
-		{"zero change time", func(api *fakeWindowsRevisionMetadata) { api.basic.ChangeTime = 0 }, content.OpenHandleRevisionContinuity, windowsIdentityFullWidth},
-		{"negative change time", func(api *fakeWindowsRevisionMetadata) { api.basic.ChangeTime = -1 }, content.OpenHandleRevisionContinuity, windowsIdentityFullWidth},
+		}, windowsIdentityLegacy},
+		{"no extended basic metadata", func(api *fakeWindowsRevisionMetadata) { api.basicErr = windows.ERROR_CALL_NOT_IMPLEMENTED }, windowsIdentityFullWidth},
+		{"zero change time", func(api *fakeWindowsRevisionMetadata) { api.basic.ChangeTime = 0 }, windowsIdentityFullWidth},
+		{"negative change time", func(api *fakeWindowsRevisionMetadata) { api.basic.ChangeTime = -1 }, windowsIdentityFullWidth},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			api := windowsMetadataFixture()
 			test.configure(&api)
-			token, directory, err := inspectWindowsObjectToken(1, &api)
-			if err != nil || directory || token.size != 4 || token.identity[0] != test.wantTag || token.continuity() != test.want {
+			token, directory, err := inspectWindowsObjectMetadata(1, &api)
+			if err != nil || directory || token.size != 4 || token.identity[0] != test.wantTag {
 				t.Fatalf("token=%+v directory=%v err=%v", token, directory, err)
 			}
 			if api.basicErr != nil && token.lastWrite != int64(uint64(api.information.LastWriteTime.HighDateTime)<<32|uint64(api.information.LastWriteTime.LowDateTime)) {
@@ -122,10 +109,8 @@ func TestWindowsRevisionMetadataUsesCapabilitiesAndExplicitContinuity(t *testing
 				t.Fatal("legacy handle identity was truncated")
 			}
 			record := windowsTestRecord(t, token, "file.bin")
-			binder := &WindowsStabilityBinder{roots: []windowsRevisionRoot{&fakeWindowsRevisionRoot{profile: token.profile}}}
-			continuity, err := binder.RevisionContinuity(record)
-			if err != nil || continuity != test.want {
-				t.Fatalf("continuity=%v err=%v", continuity, err)
+			if !token.matches(record) {
+				t.Fatalf("token did not match its own catalog record: token=%+v", token)
 			}
 		})
 	}
@@ -175,7 +160,7 @@ func TestWindowsRevisionMetadataRejectsMissingIdentityAndOperationalFailures(t *
 		t.Run(test.name, func(t *testing.T) {
 			api := windowsMetadataFixture()
 			test.configure(&api)
-			_, _, err := inspectWindowsObjectToken(1, &api)
+			_, _, err := inspectWindowsObjectMetadata(1, &api)
 			if !errors.Is(err, test.want) {
 				t.Fatalf("err=%v want=%v", err, test.want)
 			}
@@ -193,14 +178,14 @@ func TestWindowsLegacyVolumeRootIdentityAndDirectoryMetadata(t *testing.T) {
 		api.information.FileAttributes = windows.FILE_ATTRIBUTE_DIRECTORY
 		api.information.FileSizeHigh = ^uint32(0)
 		api.basic.ChangeTime = 0
-		token, directory, err := inspectWindowsObjectToken(1, &api)
+		token, directory, err := inspectWindowsObjectMetadata(1, &api)
 		if err != nil || !directory || token.size != 0 || token.identity[0] != windowsIdentityLegacy {
 			t.Fatalf("path=%q token=%+v directory=%v err=%v", path, token, directory, err)
 		}
 	}
 }
 
-func TestWindowsLegacyStableHandleSurvivesRenameWithoutClaimingReopenContinuity(t *testing.T) {
+func TestWindowsLegacyStableHandleSurvivesRename(t *testing.T) {
 	baseline := windowsTestToken(1, 4)
 	baseline.identity[0] = windowsIdentityLegacy
 	baseline.changeTime = 0
@@ -233,35 +218,6 @@ func TestWindowsLegacyStableHandleSurvivesRenameWithoutClaimingReopenContinuity(
 	if err := stable.Verify(context.Background()); !errors.Is(err, content.ErrSourceDrift) {
 		t.Fatalf("changed legacy data=%v", err)
 	}
-	if baseline.continuity() != content.OpenHandleRevisionContinuity {
-		t.Fatal("legacy metadata acquired a reopen guarantee")
-	}
-}
-
-func TestWindowsRevisionContinuityRejectsMalformedCandidate(t *testing.T) {
-	baseline := windowsTestToken(1, 4)
-	for _, mutate := range []func([]byte) []byte{
-		func(candidate []byte) []byte { return candidate[:len(candidate)-1] },
-		func(candidate []byte) []byte { candidate[len(candidate)-1] = 255; return candidate },
-		func(candidate []byte) []byte { candidate[0] = windowsIdentityLegacy; return candidate },
-		func(candidate []byte) []byte { candidate[2]++; return candidate },
-	} {
-		identity, _ := catalog.NewSourceIdentity(baseline.sourceIdentityBytes())
-		candidate, _ := catalog.NewVersionCandidate(mutate(baseline.candidateBytes()))
-		file, _ := catalog.FileIDFromBytes([]byte("1234567890123456"))
-		parent, _ := catalog.DirectoryIDFromBytes([]byte("abcdefghijklmnop"))
-		locator, _ := NewSourceReference(0, "file.bin")
-		record, err := catalog.NewFileNodeRecord(file, parent, "file.bin", locator, identity, candidate, 4, catalog.ModifiedTime{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := (&WindowsStabilityBinder{}).RevisionContinuity(record); !errors.Is(err, content.ErrRevisionStale) {
-			t.Fatalf("malformed candidate error=%v", err)
-		}
-	}
-	if modified, err := (windowsMutationToken{}).modifiedTime(); err != nil || modified.Present() {
-		t.Fatalf("missing modified time=%v err=%v", modified, err)
-	}
 }
 
 // The metadata decorator reproduces FAT's missing identity/change-time APIs,
@@ -278,7 +234,7 @@ func (api legacyWindowsNativeMetadata) BasicInformation(handle windows.Handle) (
 	return basic, err
 }
 
-func TestWindowsLegacyCapabilitiesUseRealWriteExclusionAndExposeAmbiguousReopen(t *testing.T) {
+func TestWindowsLegacyCapabilitiesUseRealWriteExclusion(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "source.bin")
 	if err := os.WriteFile(path, []byte("old!"), 0o600); err != nil {
@@ -332,11 +288,7 @@ func TestWindowsLegacyCapabilitiesUseRealWriteExclusionAndExposeAmbiguousReopen(
 	defer reopened.Close()
 	after, err := platform.Token(reopened)
 	if err != nil || !after.matches(record) {
-		t.Fatalf("expected ambiguous legacy metadata after same-size rewrite: token=%+v err=%v", after, err)
-	}
-	continuity, err := binder.RevisionContinuity(record)
-	if err != nil || continuity != content.OpenHandleRevisionContinuity {
-		t.Fatalf("ambiguous reopen acquired catalog continuity: scope=%v err=%v", continuity, err)
+		t.Fatalf("expected legacy metadata match after same-size rewrite: token=%+v err=%v", after, err)
 	}
 	next, err := binder.BindStable(context.Background(), StableBinding{File: reopened, Record: record, RelativePath: "source.bin"})
 	if err != nil {
@@ -345,28 +297,6 @@ func TestWindowsLegacyCapabilitiesUseRealWriteExclusionAndExposeAmbiguousReopen(
 	defer next.Close()
 	if _, err := next.ReadAt(context.Background(), buffer, 0); err != nil || string(buffer) != "new!" {
 		t.Fatalf("fresh locked read=%q err=%v", buffer, err)
-	}
-}
-
-func TestRootedRevisionSourceForwardsContinuityAndClosedLifetime(t *testing.T) {
-	baseline := windowsTestToken(1, 4)
-	baseline.identity[0] = windowsIdentityLegacy
-	record := windowsTestRecord(t, baseline, "file.bin")
-	source := &RootedRevisionSource{binder: &WindowsStabilityBinder{}}
-	if scope, err := source.RevisionContinuity(record); err != nil || scope != content.OpenHandleRevisionContinuity {
-		t.Fatalf("forwarded scope=%v err=%v", scope, err)
-	}
-	if err := source.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := source.RevisionContinuity(record); !errors.Is(err, content.ErrRevisionStoreClosed) {
-		t.Fatalf("closed continuity error=%v", err)
-	}
-	defaultSource := &RootedRevisionSource{binder: StabilityBinderFunc(func(context.Context, StableBinding) (content.StableFile, error) {
-		return nil, content.ErrUnsupportedStability
-	})}
-	if scope, err := defaultSource.RevisionContinuity(record); err != nil || scope != content.CatalogRevisionContinuity {
-		t.Fatalf("default binder scope=%v err=%v", scope, err)
 	}
 }
 
@@ -406,7 +336,7 @@ func TestWindowsCatalogTimestampMatchesStableHandleWithoutConfusingAbsentAndEpoc
 	}
 }
 
-func TestWindowsStableTokenUsesCachedFilesystemProfile(t *testing.T) {
+func TestWindowsStableTokenUsesCachedFilesystemMetadata(t *testing.T) {
 	for _, legacy := range []bool{false, true} {
 		api := windowsMetadataFixture()
 		if legacy {
@@ -415,67 +345,14 @@ func TestWindowsStableTokenUsesCachedFilesystemProfile(t *testing.T) {
 		file := windowsPreliminaryFile(t)
 		defer file.Close()
 		metadata := windowsRootRevisionMetadata{windowsRevisionMetadata: &api, filesystem: "NTFS"}
-		stable := nativeWindowsRevisionFile{file: file, metadata: metadata, profile: windowsRevisionProfileLocalNTFS}
+		stable := nativeWindowsRevisionFile{file: file, metadata: metadata}
 		for range 3 {
 			if _, err := stable.Token(); err != nil {
 				t.Fatal(err)
 			}
 		}
 		if api.volumeCalls != 0 {
-			t.Fatal("block verification repeated filesystem profile probes")
+			t.Fatal("block verification repeated filesystem metadata probes")
 		}
-	}
-}
-
-func TestWindowsTransientProfileObservationsDoNotChangeContentEvidence(t *testing.T) {
-	tests := []struct {
-		name           string
-		catalogProfile windowsRevisionProfile
-		rootProfile    windowsRevisionProfile
-		beforeProfile  windowsRevisionProfile
-		afterProfile   windowsRevisionProfile
-		want           content.RevisionContinuity
-	}{
-		{"catalog probe recovers", windowsRevisionProfileUnknown, windowsRevisionProfileLocalNTFS, windowsRevisionProfileLocalNTFS, windowsRevisionProfileLocalNTFS, content.OpenHandleRevisionContinuity},
-		{"root probe fails", windowsRevisionProfileLocalNTFS, windowsRevisionProfileUnknown, windowsRevisionProfileLocalNTFS, windowsRevisionProfileUnknown, content.OpenHandleRevisionContinuity},
-		{"preliminary probe recovers", windowsRevisionProfileLocalNTFS, windowsRevisionProfileLocalNTFS, windowsRevisionProfileUnknown, windowsRevisionProfileLocalNTFS, content.CatalogRevisionContinuity},
-		{"root profile differs", windowsRevisionProfileLocalNTFS, windowsRevisionProfileLocalReFS, windowsRevisionProfileLocalReFS, windowsRevisionProfileLocalReFS, content.OpenHandleRevisionContinuity},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			catalogToken := windowsTestToken(1, 4)
-			catalogToken.profile = test.catalogProfile
-			before, after, opened := catalogToken, catalogToken, catalogToken
-			before.profile, after.profile, opened.profile = test.beforeProfile, test.afterProfile, test.rootProfile
-			handle := &fakeWindowsRevisionFile{tokens: []windowsMutationToken{opened}, data: []byte("data")}
-			root := &fakeWindowsRevisionRoot{file: handle, profile: test.rootProfile}
-			binder, err := newWindowsStabilityBinder([]string{t.TempDir()}, &fakeWindowsRevisionPlatform{
-				root: root, tokens: []windowsMutationToken{before, after},
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer binder.Close()
-			record := windowsTestRecord(t, catalogToken, "file.bin")
-			if scope, err := binder.RevisionContinuity(record); err != nil || scope != test.want {
-				t.Fatalf("scope before native open=%v want=%v err=%v", scope, test.want, err)
-			}
-			preliminary := windowsPreliminaryFile(t)
-			defer preliminary.Close()
-			stable, err := binder.BindStable(context.Background(), StableBinding{File: preliminary, Record: record, RelativePath: "file.bin"})
-			if err != nil {
-				t.Fatalf("profile-only change rejected unchanged bytes: %v", err)
-			}
-			defer stable.Close()
-			buffer := make([]byte, 4)
-			if _, err := stable.ReadAt(context.Background(), buffer, 0); err != nil || string(buffer) != "data" {
-				t.Fatalf("read=%q err=%v", buffer, err)
-			}
-			changed := after
-			changed.changeTime++
-			if before.sameCatalogEvidence(changed) || changed.matches(record) {
-				t.Fatal("profile-independent comparison ignored a real content candidate change")
-			}
-		})
 	}
 }

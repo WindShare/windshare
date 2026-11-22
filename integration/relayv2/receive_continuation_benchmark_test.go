@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/session/receivercontinuation"
@@ -41,14 +40,6 @@ const (
 	evidenceUninterrupted receiveEvidenceScenario = "uninterrupted"
 	evidenceReopened      receiveEvidenceScenario = "reopened"
 )
-
-// The disk fixture's identity must change on reopen even on filesystems that
-// can ordinarily prove catalog continuity. Its metadata and bytes stay fixed.
-type handleBoundEvidenceSource struct{ liveshare.FileSource }
-
-func (handleBoundEvidenceSource) RevisionContinuity(catalog.NodeRecord) (content.RevisionContinuity, error) {
-	return content.OpenHandleRevisionContinuity, nil
-}
 
 func BenchmarkNativeReceiveContinuation(b *testing.B) {
 	sourcePath := filepath.Join(b.TempDir(), receiveEvidenceFileName)
@@ -95,15 +86,11 @@ func shareReceiveEvidenceFile(b *testing.B, trace *testscenario.Trace, sourcePat
 	sender, err := application.StartShare(b.Context(), engine.ShareRequest{
 		RelayIntent: relayprofile.UseExplicit([]relayprofile.Candidate{{PublicURL: relayURL}}),
 		Source: liveshare.FileSourceFactoryFunc(func(ctx context.Context, source liveshare.FileSourceContext) (liveshare.FileSource, error) {
-			files, err := osfs.NewSelectedFileSource(ctx, osfs.SelectedCatalogSourceConfig{
+			return osfs.NewSelectedFileSource(ctx, osfs.SelectedCatalogSourceConfig{
 				Paths: []string{sourcePath}, SyntheticRoot: source.SyntheticRoot,
 				Identities: osfs.CatalogIdentitySourceFunc(source.NewIdentity), Diagnostics: source.Diagnostics,
 				Omissions: source.Omissions,
 			})
-			if err != nil {
-				return nil, err
-			}
-			return handleBoundEvidenceSource{files}, nil
 		}),
 	})
 	if err != nil {

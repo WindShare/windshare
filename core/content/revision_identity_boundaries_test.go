@@ -93,90 +93,6 @@ func TestRevisionEvidenceImmutableProjections(t *testing.T) {
 	}
 }
 
-func TestRevisionIdentityDeriverRejectsMalformedEvidenceAndLifecycleBoundaries(t *testing.T) {
-	var nilDeriver *HMACRevisionIdentityDeriver
-	// Destroy is intentionally nil-safe so cleanup paths do not need conditional authority handling.
-	nilDeriver.Destroy()
-
-	alive, err := NewHMACRevisionIdentityDeriver(knownRevisionKey())
-	if err != nil {
-		t.Fatal(err)
-	}
-	destroyed, err := NewHMACRevisionIdentityDeriver(knownRevisionKey())
-	if err != nil {
-		t.Fatal(err)
-	}
-	destroyed.Destroy()
-	t.Cleanup(alive.Destroy)
-
-	invalidGeometry := knownRevisionEvidence(t)
-	invalidGeometry.chunkSize = 0
-	tests := []struct {
-		name     string
-		deriver  *HMACRevisionIdentityDeriver
-		evidence RevisionEvidence
-		wantErr  error
-	}{
-		{name: "nil deriver", deriver: nilDeriver, evidence: knownRevisionEvidence(t)},
-		{name: "zero evidence", deriver: alive, evidence: RevisionEvidence{}},
-		{name: "invalid geometry", deriver: alive, evidence: invalidGeometry, wantErr: ErrInvalidGeometry},
-		{name: "destroyed deriver", deriver: destroyed, evidence: knownRevisionEvidence(t), wantErr: ErrRevisionIdentityDestroyed},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			revision, deriveErr := test.deriver.DeriveRevision(test.evidence)
-			if deriveErr == nil {
-				t.Fatal("invalid derivation was accepted")
-			}
-			if test.wantErr != nil && !errors.Is(deriveErr, test.wantErr) {
-				t.Fatalf("error = %v, want %v", deriveErr, test.wantErr)
-			}
-			if !revision.IsZero() {
-				t.Fatalf("failed derivation returned revision %x", revision)
-			}
-		})
-	}
-}
-
-func TestRevisionMetadataBudgetBoundariesAndIdempotentRelease(t *testing.T) {
-	if budget, err := NewRevisionMetadataBudget(0); err == nil || budget != nil {
-		t.Fatalf("zero-capacity budget = %v, %v", budget, err)
-	}
-	var nilBudget *RevisionMetadataBudget
-	if got := nilBudget.Snapshot(); got != (RevisionMetadataSnapshot{}) {
-		t.Fatalf("nil snapshot = %+v", got)
-	}
-	if reservation, err := nilBudget.reserveInvalidation(); err == nil || reservation != nil {
-		t.Fatalf("nil reservation = %v, %v", reservation, err)
-	}
-	var nilReservation *revisionMetadataReservation
-	nilReservation.release()
-
-	budget := testRevisionMetadataBudget(t, 1)
-	reservation, err := budget.reserveInvalidation()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := budget.Snapshot(); got != (RevisionMetadataSnapshot{Capacity: 1, Used: 1}) {
-		t.Fatalf("full budget snapshot = %+v", got)
-	}
-	if extra, reserveErr := budget.reserveInvalidation(); !errors.Is(reserveErr, ErrQuotaExceeded) || extra != nil {
-		t.Fatalf("over-capacity reservation = %v, %v", extra, reserveErr)
-	}
-	copiedReservation := *reservation
-	reservation.release()
-	copiedReservation.release()
-	reservation.release()
-	if got := budget.Snapshot(); got != (RevisionMetadataSnapshot{Capacity: 1}) {
-		t.Fatalf("idempotent release snapshot = %+v", got)
-	}
-	reused, err := budget.reserveInvalidation()
-	if err != nil {
-		t.Fatalf("released capacity was not reusable: %v", err)
-	}
-	reused.release()
-}
-
 type revisionBoundaryClassifiedError struct {
 	comparison RevisionComparison
 }
@@ -280,40 +196,36 @@ func TestRevisionTraceImmutableProjections(t *testing.T) {
 	}
 }
 
-type failOnceRevisionDeriver struct {
-	mu       sync.Mutex
-	delegate RevisionIdentityDeriver
-	failure  error
-	failed   bool
+type failOnceRevisionIDs struct {
+	mu      sync.Mutex
+	failure error
+	failed  bool
 }
 
-func (d *failOnceRevisionDeriver) DeriveRevision(evidence RevisionEvidence) (FileRevision, error) {
-	d.mu.Lock()
-	if !d.failed {
-		d.failed = true
-		failure := d.failure
-		d.mu.Unlock()
+func (g *failOnceRevisionIDs) NewFileRevision() (FileRevision, error) {
+	g.mu.Lock()
+	if !g.failed {
+		g.failed = true
+		failure := g.failure
+		g.mu.Unlock()
 		return FileRevision{}, failure
 	}
-	d.mu.Unlock()
-	return d.delegate.DeriveRevision(evidence)
+	g.mu.Unlock()
+	return randomRevisionIDs{}.NewFileRevision()
 }
 
-func TestRevisionStoreDeriverFailureRollsBackAdmissionAndRemainsRetryable(t *testing.T) {
+func TestRevisionStoreRevisionIDFailureRollsBackAdmissionAndRemainsRetryable(t *testing.T) {
 	file, record := fileRecord(t, 1)
 	stable := &testStableFile{data: []byte{1}}
 	source := &testRevisionSource{files: []*testStableFile{stable}}
-	delegate := testRevisionDeriver(t)
-	sentinel := errors.New("injected revision derivation failure")
-	deriver := &failOnceRevisionDeriver{delegate: delegate, failure: sentinel}
+	sentinel := errors.New("injected revision id generation failure")
 	config := RevisionStoreConfig{
-		ShareInstance:   catalogID[catalog.ShareInstance](1),
-		ChunkSize:       catalog.MinChunkSize,
-		Catalog:         testCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}},
-		Source:          source,
-		LeaseIDs:        &sequenceIDs{},
-		RevisionDeriver: deriver,
-		MetadataBudget:  testRevisionMetadataBudget(t, 1),
+		ShareInstance: catalogID[catalog.ShareInstance](1),
+		ChunkSize:     catalog.MinChunkSize,
+		Catalog:       testCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}},
+		Source:        source,
+		RevisionIDs:   &failOnceRevisionIDs{failure: sentinel},
+		LeaseIDs:      &sequenceIDs{},
 	}
 	attachTestCapacity(t, &config,
 		revisioncapacity.CapacityLimits{StableHandles: 100, ActiveLeases: 100},
@@ -329,7 +241,6 @@ func TestRevisionStoreDeriverFailureRollsBackAdmissionAndRemainsRetryable(t *tes
 		if !closed {
 			_ = store.Close()
 		}
-		delegate.Destroy()
 	})
 
 	if _, openErr := store.OpenRevision(context.Background(), file, session); !errors.Is(openErr, sentinel) {
@@ -337,17 +248,17 @@ func TestRevisionStoreDeriverFailureRollsBackAdmissionAndRemainsRetryable(t *tes
 	}
 	if snapshot := store.CapacitySnapshot(); snapshot.Process().Used() != (revisioncapacity.CapacityUsage{}) ||
 		snapshot.Share().Used() != (revisioncapacity.CapacityUsage{}) || session.Snapshot().Used() != (revisioncapacity.CapacityUsage{}) {
-		t.Fatalf("failed derivation leaked capacity: %+v", snapshot)
+		t.Fatalf("failed revision generation leaked capacity: %+v", snapshot)
 	}
 	if source.Calls() != 0 {
-		t.Fatalf("derivation failure opened %d physical sources", source.Calls())
+		t.Fatalf("revision generation failure opened %d physical sources", source.Calls())
 	}
 
 	lease, err := store.OpenRevision(context.Background(), file, session)
 	if err != nil {
-		t.Fatalf("retry after derivation failure = %v", err)
+		t.Fatalf("retry after revision generation failure = %v", err)
 	}
-	if lease.ID().IsZero() || source.Calls() != 1 {
+	if lease.ID().IsZero() || lease.Descriptor().FileRevision().IsZero() || source.Calls() != 1 {
 		t.Fatalf("retry did not publish exactly one source-backed lease: lease=%x calls=%d", lease.ID(), source.Calls())
 	}
 	want := revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 1}

@@ -19,12 +19,11 @@ import (
 )
 
 const (
-	windowsRevisionIdentityBytes        = 25
-	windowsRevisionContentEvidenceBytes = windowsRevisionIdentityBytes + 24
-	windowsRevisionCandidateBytes       = windowsRevisionContentEvidenceBytes + 2
-	windowsFiletimeUnixOffset           = int64(116444736000000000)
-	windowsIdentityFullWidth            = byte(1)
-	windowsIdentityLegacy               = byte(2)
+	windowsRevisionIdentityBytes  = 25
+	windowsRevisionCandidateBytes = windowsRevisionIdentityBytes + 24
+	windowsFiletimeUnixOffset     = int64(116444736000000000)
+	windowsIdentityFullWidth      = byte(1)
+	windowsIdentityLegacy         = byte(2)
 )
 
 type windowsRevisionFileIDInfo struct {
@@ -88,17 +87,14 @@ func inspectWindowsFileIdentity(handle windows.Handle, information windows.ByHan
 	return identity, nil
 }
 
-// Metadata capabilities are queried on the actual handle. A filesystem name,
-// drive type, or UNC path is not evidence that a native operation is available.
-// Names constrain the documented reopen profile and guard ReFS legacy-ID
-// collisions; they never grant an otherwise missing native sharing capability.
+// Metadata capabilities are queried on the actual handle. Filesystem names
+// guard ReFS legacy-ID collisions; they never grant a missing sharing mode.
 type windowsRevisionMetadata interface {
 	FileIdentity(windows.Handle) (windowsRevisionFileIDInfo, error)
 	FileInformation(windows.Handle) (windows.ByHandleFileInformation, error)
 	BasicInformation(windows.Handle) (windowsFileBasicInfo, error)
 	Filesystem(windows.Handle) (string, error)
 	FinalPath(windows.Handle) (string, error)
-	DriveType(string) (uint32, error)
 }
 
 type nativeWindowsRevisionMetadata struct{}
@@ -131,52 +127,6 @@ func (nativeWindowsRevisionMetadata) FinalPath(handle windows.Handle) (string, e
 	return finalWindowsHandlePath(handle)
 }
 
-type windowsRevisionProfile byte
-
-const (
-	windowsRevisionProfileUnknown windowsRevisionProfile = iota
-	windowsRevisionProfileLocalNTFS
-	windowsRevisionProfileLocalReFS
-)
-
-func (nativeWindowsRevisionMetadata) DriveType(volume string) (uint32, error) {
-	root, err := windows.UTF16PtrFromString(volume + `\`)
-	if err != nil {
-		return windows.DRIVE_UNKNOWN, err
-	}
-	return windows.GetDriveType(root), nil
-}
-
-func inspectWindowsRevisionProfile(handle windows.Handle, api windowsRevisionMetadata) windowsRevisionProfile {
-	filesystem, err := api.Filesystem(handle)
-	if err != nil {
-		return windowsRevisionProfileUnknown
-	}
-	var profile windowsRevisionProfile
-	switch {
-	case strings.EqualFold(filesystem, "NTFS"):
-		profile = windowsRevisionProfileLocalNTFS
-	case strings.EqualFold(filesystem, "ReFS"):
-		profile = windowsRevisionProfileLocalReFS
-	default:
-		return windowsRevisionProfileUnknown
-	}
-	path, err := api.FinalPath(handle)
-	if err != nil {
-		return windowsRevisionProfileUnknown
-	}
-	volume := filepath.VolumeName(path)
-	if volume == "" || strings.HasPrefix(strings.ToUpper(strings.TrimPrefix(volume, `\\?\`)), `UNC\`) ||
-		(strings.HasPrefix(volume, `\\`) && !strings.HasPrefix(volume, `\\?\`)) {
-		return windowsRevisionProfileUnknown
-	}
-	driveType, err := api.DriveType(volume)
-	if err != nil || driveType != windows.DRIVE_FIXED && driveType != windows.DRIVE_REMOVABLE {
-		return windowsRevisionProfileUnknown
-	}
-	return profile
-}
-
 func finalWindowsHandlePath(handle windows.Handle) (string, error) {
 	buffer := make([]uint16, 512)
 	for {
@@ -196,7 +146,6 @@ type windowsMutationToken struct {
 	size       uint64
 	lastWrite  int64
 	changeTime int64
-	profile    windowsRevisionProfile
 }
 
 func (t windowsMutationToken) sourceIdentityBytes() []byte {
@@ -211,37 +160,18 @@ func (t windowsMutationToken) candidateBytes() []byte {
 	binary.BigEndian.PutUint64(result[windowsRevisionIdentityBytes:windowsRevisionIdentityBytes+8], t.size)
 	binary.BigEndian.PutUint64(result[windowsRevisionIdentityBytes+8:windowsRevisionIdentityBytes+16], uint64(t.lastWrite))
 	binary.BigEndian.PutUint64(result[windowsRevisionIdentityBytes+16:windowsRevisionIdentityBytes+24], uint64(t.changeTime))
-	result[windowsRevisionCandidateBytes-2] = byte(t.profile)
-	result[windowsRevisionCandidateBytes-1] = byte(t.continuity())
 	return result
-}
-
-func (t windowsMutationToken) continuity() content.RevisionContinuity {
-	// Readable ID/time fields do not grant every provider a reopen guarantee.
-	// FILE_ID_INFO promises open-handle identity; ChangeTime is a timestamp,
-	// not a generic monotonic version counter. Only the established local
-	// metadata profiles retain catalog continuity; all others still share
-	// through the write-excluding handle with an independent open identity.
-	if t.identity[0] == windowsIdentityFullWidth && t.changeTime > 0 &&
-		(t.profile == windowsRevisionProfileLocalNTFS || t.profile == windowsRevisionProfileLocalReFS) {
-		return content.CatalogRevisionContinuity
-	}
-	return content.OpenHandleRevisionContinuity
 }
 
 func (t windowsMutationToken) matches(record catalog.NodeRecord) bool {
 	candidate := record.VersionCandidate().Bytes()
-	observed := t.candidateBytes()
 	return len(candidate) == windowsRevisionCandidateBytes && t.size == record.Entry().ExpectedSize() &&
 		subtle.ConstantTimeCompare(record.SourceIdentity().Bytes(), t.sourceIdentityBytes()) == 1 &&
-		subtle.ConstantTimeCompare(candidate[:windowsRevisionContentEvidenceBytes], observed[:windowsRevisionContentEvidenceBytes]) == 1
+		subtle.ConstantTimeCompare(candidate, t.candidateBytes()) == 1
 }
 
 func (t windowsMutationToken) sameCatalogEvidence(other windowsMutationToken) bool {
-	// Optional locality/profile observations select revision lifetime, not file
-	// contents. A failed profile probe must not manufacture a content mutation.
-	return t.identity == other.identity && t.size == other.size &&
-		t.lastWrite == other.lastWrite && t.changeTime == other.changeTime
+	return t == other
 }
 
 func (t windowsMutationToken) sameOpenedRevision(other windowsMutationToken) bool {
@@ -350,17 +280,14 @@ func adoptNativeWindowsRevisionRoot(handle windows.Handle, api windowsRevisionMe
 	}
 	filesystem, filesystemErr := api.Filesystem(handle)
 	metadata := windowsRootRevisionMetadata{windowsRevisionMetadata: api, filesystem: filesystem, filesystemErr: filesystemErr}
-	return &nativeWindowsRevisionRoot{handle: handle, metadata: metadata, profile: inspectWindowsRevisionProfile(handle, metadata)}, nil
+	return &nativeWindowsRevisionRoot{handle: handle, metadata: metadata}, nil
 }
 
 type nativeWindowsRevisionRoot struct {
 	mu       sync.Mutex
 	handle   windows.Handle
 	metadata windowsRevisionMetadata
-	profile  windowsRevisionProfile
 }
-
-func (r *nativeWindowsRevisionRoot) RevisionProfile() windowsRevisionProfile { return r.profile }
 
 func (r *nativeWindowsRevisionRoot) Identity() ([windowsRevisionIdentityBytes]byte, error) {
 	r.mu.Lock()
@@ -387,7 +314,7 @@ func (r *nativeWindowsRevisionRoot) OpenStable(relative string) (windowsRevision
 		_ = windows.CloseHandle(handle)
 		return nil, errors.New("wrap Windows stable revision handle")
 	}
-	return &nativeWindowsRevisionFile{file: file, metadata: r.metadata, profile: r.profile}, nil
+	return &nativeWindowsRevisionFile{file: file, metadata: r.metadata}, nil
 }
 
 func (r *nativeWindowsRevisionRoot) Close() error {
@@ -404,18 +331,12 @@ func (r *nativeWindowsRevisionRoot) Close() error {
 type nativeWindowsRevisionFile struct {
 	file     *os.File
 	metadata windowsRevisionMetadata
-	profile  windowsRevisionProfile
 }
 
 func (f *nativeWindowsRevisionFile) Token() (windowsMutationToken, error) {
-	// Root admission cached the profile: block verification only reads the
-	// pinned file's metadata and never repeats volume/path/drive probes.
 	token, directory, err := inspectWindowsObjectMetadata(windows.Handle(f.file.Fd()), f.metadata)
 	if err == nil && directory {
 		err = content.ErrRevisionStale
-	}
-	if token.identity[0] == windowsIdentityFullWidth && token.changeTime > 0 {
-		token.profile = f.profile
 	}
 	return token, classifyWindowsIdentityError(err)
 }
@@ -440,7 +361,7 @@ func inspectWindowsMutationToken(handle windows.Handle) (windowsMutationToken, e
 }
 
 func inspectWindowsFileToken(handle windows.Handle, api windowsRevisionMetadata) (windowsMutationToken, error) {
-	token, directory, err := inspectWindowsObjectToken(handle, api)
+	token, directory, err := inspectWindowsObjectMetadata(handle, api)
 	if err == nil && directory {
 		err = content.ErrRevisionStale
 	}
@@ -448,16 +369,8 @@ func inspectWindowsFileToken(handle windows.Handle, api windowsRevisionMetadata)
 }
 
 func inspectWindowsCatalogToken(handle windows.Handle) (windowsMutationToken, error) {
-	token, _, err := inspectWindowsObjectToken(handle, nativeWindowsRevisionMetadata{})
+	token, _, err := inspectWindowsObjectMetadata(handle, nativeWindowsRevisionMetadata{})
 	return token, err
-}
-
-func inspectWindowsObjectToken(handle windows.Handle, api windowsRevisionMetadata) (windowsMutationToken, bool, error) {
-	token, directory, err := inspectWindowsObjectMetadata(handle, api)
-	if err == nil && token.identity[0] == windowsIdentityFullWidth && token.changeTime > 0 {
-		token.profile = inspectWindowsRevisionProfile(handle, api)
-	}
-	return token, directory, err
 }
 
 func inspectWindowsObjectMetadata(handle windows.Handle, api windowsRevisionMetadata) (windowsMutationToken, bool, error) {
@@ -479,8 +392,7 @@ func inspectWindowsObjectMetadata(handle windows.Handle, api windowsRevisionMeta
 			return windowsMutationToken{}, directory, err
 		}
 		// Basic metadata still describes the discovery candidate when extended
-		// change time is absent. Only the later deny-write handle proves bytes;
-		// continuity() prevents this candidate from reusing a closed revision.
+		// change time is absent; the deny-write handle proves reads while open.
 		basic = windowsFileBasicInfo{LastWriteTime: int64(uint64(information.LastWriteTime.HighDateTime)<<32 | uint64(information.LastWriteTime.LowDateTime))}
 	}
 	var size uint64

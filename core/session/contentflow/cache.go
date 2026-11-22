@@ -32,10 +32,6 @@ type revisionCacheIdentity struct {
 	revision content.FileRevision
 }
 
-func (key BlockCacheKey) revisionIdentity() revisionCacheIdentity {
-	return revisionCacheIdentity{file: key.FileID, revision: key.FileRevision}
-}
-
 type revisionWatch struct {
 	cancel context.CancelCauseFunc
 }
@@ -90,7 +86,6 @@ type SharedBlockCache struct {
 	entries  map[BlockCacheKey]*list.Element
 	lru      *list.List
 	inflight map[BlockCacheKey]*cacheCall
-	invalid  map[revisionCacheIdentity]struct{}
 	watches  map[revisionCacheIdentity]map[*revisionWatch]struct{}
 }
 
@@ -104,7 +99,7 @@ func NewSharedBlockCache(share catalog.ShareInstance, maxBytes uint64, process *
 	return &SharedBlockCache{
 		share: share, maxBytes: maxBytes, reservation: cacheReservation{budget: process},
 		entries: make(map[BlockCacheKey]*list.Element), lru: list.New(), inflight: make(map[BlockCacheKey]*cacheCall),
-		invalid: make(map[revisionCacheIdentity]struct{}), watches: make(map[revisionCacheIdentity]map[*revisionWatch]struct{}),
+		watches: make(map[revisionCacheIdentity]map[*revisionWatch]struct{}),
 	}, nil
 }
 
@@ -127,10 +122,6 @@ func (c *SharedBlockCache) get(ctx context.Context, key BlockCacheKey, load func
 	if c.closed {
 		c.mu.Unlock()
 		return cachedBlock{}, ErrServiceClosed
-	}
-	if _, invalid := c.invalid[key.revisionIdentity()]; invalid {
-		c.mu.Unlock()
-		return cachedBlock{}, content.ErrRevisionDrift
 	}
 	if element := c.entries[key]; element != nil {
 		c.lru.MoveToFront(element)
@@ -167,10 +158,6 @@ func (c *SharedBlockCache) watchRevision(
 	if c.closed {
 		c.mu.Unlock()
 		return nil, ErrServiceClosed
-	}
-	if _, invalid := c.invalid[identity]; invalid {
-		c.mu.Unlock()
-		return nil, content.ErrRevisionDrift
 	}
 	if c.watches[identity] == nil {
 		c.watches[identity] = make(map[*revisionWatch]struct{})
@@ -289,10 +276,12 @@ func (c *SharedBlockCache) removeEntryLocked(element *list.Element) {
 	c.reservation.shrink(entry.bytes)
 }
 
+// InvalidateRevision evicts cached entries, aborts in-flight loads, and cancels
+// watches for a revoked open-handle revision. RevisionStore revokes leases and
+// never reissues a random FileRevision, so the cache needs no tombstone set.
 func (c *SharedBlockCache) InvalidateRevision(file catalog.FileID, revision content.FileRevision) {
 	identity := revisionCacheIdentity{file: file, revision: revision}
 	c.mu.Lock()
-	c.invalid[identity] = struct{}{}
 	for key, element := range c.entries {
 		if key.FileID == file && key.FileRevision == revision {
 			c.removeEntryLocked(element)
@@ -340,7 +329,6 @@ func (c *SharedBlockCache) Stop() {
 			}
 			delete(c.watches, identity)
 		}
-		clear(c.invalid)
 	}
 	c.mu.Unlock()
 	for _, watch := range watches {

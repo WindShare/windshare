@@ -252,23 +252,13 @@ func newSyntheticCapacityFixture(t *testing.T, fileCount uint64) *syntheticCapac
 	}
 	revisionSource := &syntheticCapacityRevisionSource{files: files}
 	settlements := &syntheticCapacitySettlements{}
-	var revisionKey content.RevisionIdentityKey
-	revisionKey[0] = 0x51
-	revisionDeriver, err := content.NewHMACRevisionIdentityDeriver(revisionKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	metadataBudget, err := content.NewRevisionMetadataBudget(content.DefaultRevisionInvalidationEntries)
-	if err != nil {
-		t.Fatal(err)
-	}
 	revisionStore, err := content.NewRevisionStore(content.RevisionStoreConfig{
 		ShareInstance: share, ChunkSize: catalog.MinChunkSize, Catalog: catalogStore, Source: revisionSource,
 		CapacityCoordinator: owner.Coordinator(), CapacityStore: revisioncapacity.StoreConfig{
 			StoreID: "synthetic-capacity-store", ShareID: "synthetic-capacity-share",
 			Limits: revisioncapacity.DefaultShareLimits(),
 		},
-		LeaseIDs: &syntheticCapacityLeaseIDs{}, RevisionDeriver: revisionDeriver, MetadataBudget: metadataBudget,
+		LeaseIDs: &syntheticCapacityLeaseIDs{},
 		Tracer: content.RevisionTracerFunc(func(event content.RevisionTrace) {
 			if event.Stage() != content.RevisionTraceStageLeaseSettlement {
 				return
@@ -359,7 +349,6 @@ func newSyntheticCapacityFixture(t *testing.T, fileCount uint64) *syntheticCapac
 		if err := owner.Close(); err != nil {
 			t.Error(err)
 		}
-		revisionDeriver.Destroy()
 		keyTree.Destroy()
 	})
 	return &syntheticCapacityFixture{

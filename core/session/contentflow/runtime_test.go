@@ -128,16 +128,15 @@ func (ids *runtimeIDs) NewLeaseID() (content.LeaseID, error) {
 }
 
 type runtimeFixture struct {
-	share           catalog.ShareInstance
-	file            catalog.FileID
-	stable          *runtimeStableFile
-	clock           *runtimeClock
-	store           *content.RevisionStore
-	revisionDeriver *content.HMACRevisionIdentityDeriver
-	cache           *SharedBlockCache
-	service         *SenderService
-	opener          *records.Decoder
-	capacityOwner   *revisioncapacity.ProcessOwner
+	share         catalog.ShareInstance
+	file          catalog.FileID
+	stable        *runtimeStableFile
+	clock         *runtimeClock
+	store         *content.RevisionStore
+	cache         *SharedBlockCache
+	service       *SenderService
+	opener        *records.Decoder
+	capacityOwner *revisioncapacity.ProcessOwner
 }
 
 func newRuntimeFixture(t *testing.T, blocks int) runtimeFixture {
@@ -161,18 +160,8 @@ func newRuntimeFixture(t *testing.T, blocks int) runtimeFixture {
 	cache, _ := NewSharedBlockCache(share, uint64(catalog.MinChunkSize)*4, processCache)
 	clock := &runtimeClock{now: time.Unix(1_000, 0)}
 	stable := &runtimeStableFile{data: data}
-	revisionDeriver, err := content.NewHMACRevisionIdentityDeriver(content.RevisionIdentityKey{0x81})
-	if err != nil {
-		t.Fatal(err)
-	}
-	metadataBudget, err := content.NewRevisionMetadataBudget(content.DefaultRevisionInvalidationEntries)
-	if err != nil {
-		revisionDeriver.Destroy()
-		t.Fatal(err)
-	}
 	capacityOwner, err := revisioncapacity.NewProcessOwner(revisioncapacity.DefaultProcessConfig())
 	if err != nil {
-		revisionDeriver.Destroy()
 		t.Fatal(err)
 	}
 	store, err := content.NewRevisionStore(content.RevisionStoreConfig{
@@ -183,12 +172,10 @@ func newRuntimeFixture(t *testing.T, blocks int) runtimeFixture {
 			StoreID: "contentflow-runtime-store", ShareID: "contentflow-runtime-share",
 			Limits: revisioncapacity.DefaultShareLimits(),
 		},
-		Clock: clock, LeaseIDs: &runtimeIDs{}, RevisionDeriver: revisionDeriver,
-		MetadataBudget: metadataBudget, CacheInvalidator: cache,
+		Clock: clock, LeaseIDs: &runtimeIDs{}, CacheInvalidator: cache,
 	})
 	if err != nil {
 		_ = capacityOwner.Close()
-		revisionDeriver.Destroy()
 		t.Fatal(err)
 	}
 	sessionCapacity, err := store.RegisterSession(revisioncapacity.SessionConfig{
@@ -197,7 +184,6 @@ func newRuntimeFixture(t *testing.T, blocks int) runtimeFixture {
 	if err != nil {
 		_ = store.Close()
 		_ = capacityOwner.Close()
-		revisionDeriver.Destroy()
 		t.Fatal(err)
 	}
 	sealer := records.Encoder{}
@@ -210,8 +196,7 @@ func newRuntimeFixture(t *testing.T, blocks int) runtimeFixture {
 	}
 	return runtimeFixture{
 		share: share, file: file, stable: stable, clock: clock, store: store,
-		revisionDeriver: revisionDeriver,
-		cache:           cache, service: service, opener: opener, capacityOwner: capacityOwner,
+		cache: cache, service: service, opener: opener, capacityOwner: capacityOwner,
 	}
 }
 
@@ -227,7 +212,6 @@ func (fixture runtimeFixture) close(t *testing.T) {
 	if err := fixture.capacityOwner.Close(); err != nil {
 		t.Fatal(err)
 	}
-	fixture.revisionDeriver.Destroy()
 }
 
 func TestSenderServicePreservesPerItemOpenLeaseAndBlockSemantics(t *testing.T) {
@@ -509,15 +493,11 @@ func testSharedBlockCacheIsolatesConsumerCancellationAndInvalidation(t *testing.
 	case <-time.After(time.Second):
 		t.Fatal("cache invalidation waited for a loader that ignored cancellation")
 	}
-	loadsBefore := loads.Load()
-	object, err := cache.get(context.Background(), keyOne, func(context.Context) ([]byte, error) {
-		loads.Add(1)
-		return []byte("fresh"), nil
-	})
-	if !errors.Is(err, content.ErrRevisionDrift) || object.payload != "" || loads.Load() != loadsBefore {
-		t.Fatalf("permanently invalidated revision object=%q loads=%d err=%v", object, loads.Load(), err)
-	}
 	close(ignoredCancelRelease)
+	synctest.Wait()
+	if cache.UsedBytes() != 0 {
+		t.Fatalf("stale loader repopulated invalidated cache: used=%d", cache.UsedBytes())
+	}
 }
 
 type recordingOutbound struct {

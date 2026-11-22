@@ -38,7 +38,7 @@ not revoke them or wait for workers.
 
 Owners cancel and join workers before treating retained capacity as a leak.
 Receiver cleanup also joins LaneSet-owned hedges before auditing plaintext.
-Plaintext, sealed caches, invalidation metadata, and peer-attempt slots use this
+Plaintext, sealed caches, and peer-attempt slots use this
 scalar ledger. Buffer budgets retain their eviction policies; sealed caches
 aggregate entries into one hold per cache. Catalog's multi-resource metering and
 revision capacity's reclaim/quarantine state machine remain domain-specific.

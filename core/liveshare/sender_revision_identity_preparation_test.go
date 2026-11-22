@@ -1,7 +1,6 @@
 package liveshare
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	mathrand "math/rand"
@@ -11,42 +10,20 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/content/revisioncapacity"
 )
 
 type preparationRevisionTracer struct{}
 
 func (*preparationRevisionTracer) TraceRevision(content.RevisionTrace) {}
 
-func TestPrepareSenderWiresSharedCacheAndRevisionIdentityAuthorities(t *testing.T) {
+func TestPrepareSenderWiresSharedCacheAndRevisionIDs(t *testing.T) {
 	filename := filepath.Join(t.TempDir(), "selected.bin")
 	if err := os.WriteFile(filename, []byte("revision-cache-wiring"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	dependencies := productionSenderPreparationDependencies()
-	newRevisionDeriver := dependencies.newRevisionDeriver
 	newRevisionStore := dependencies.newRevisionStore
-	var capturedKey content.RevisionIdentityKey
-	var deriverConstructions int
-	var capturedDeriver *observedRevisionDeriver
-	dependencies.newRevisionDeriver = func(
-		key content.RevisionIdentityKey,
-	) (senderRevisionIdentityDeriver, error) {
-		capturedKey = key
-		deriverConstructions++
-		delegate, err := newRevisionDeriver(key)
-		if err != nil {
-			return nil, err
-		}
-		hmacDeriver, ok := delegate.(*content.HMACRevisionIdentityDeriver)
-		if !ok {
-			t.Fatalf("production revision deriver type = %T", delegate)
-		}
-		capturedDeriver = &observedRevisionDeriver{
-			delegate:  hmacDeriver,
-			destroyed: make(chan struct{}),
-		}
-		return capturedDeriver, nil
-	}
 	var capturedStoreConfig content.RevisionStoreConfig
 	dependencies.newRevisionStore = func(
 		config content.RevisionStoreConfig,
@@ -55,7 +32,9 @@ func TestPrepareSenderWiresSharedCacheAndRevisionIdentityAuthorities(t *testing.
 		return newRevisionStore(config)
 	}
 	tracer := &preparationRevisionTracer{}
-	sender, err := PrepareSender(context.Background(), SenderConfig{CatalogBudget: testCatalogBudget(), CacheBudget: testCacheBudget(),
+	sender, err := PrepareSender(context.Background(), SenderConfig{
+		CatalogBudget:    testCatalogBudget(),
+		CacheBudget:      testCacheBudget(),
 		RevisionCapacity: newTestRevisionCapacity(t),
 		Source:           testFileSource([]string{filename}),
 		Relays:           []string{"ws://127.0.0.1:8484"},
@@ -67,14 +46,16 @@ func TestPrepareSenderWiresSharedCacheAndRevisionIdentityAuthorities(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if capturedDeriver == nil || deriverConstructions != 1 {
-		t.Fatalf("revision deriver constructions = %d, deriver = %v", deriverConstructions, capturedDeriver)
+	if capturedStoreConfig.RevisionIDs == nil {
+		t.Fatal("revision store did not receive a per-open revision ID generator")
 	}
-	if capturedStoreConfig.RevisionDeriver != capturedDeriver {
-		t.Fatal("revision store did not receive the live-share-owned deriver")
+	firstRevision, err := capturedStoreConfig.RevisionIDs.NewFileRevision()
+	if err != nil || firstRevision.IsZero() {
+		t.Fatalf("first revision ID = %x, err = %v", firstRevision, err)
 	}
-	if capturedStoreConfig.MetadataBudget == nil {
-		t.Fatal("revision store did not receive a share metadata budget")
+	secondRevision, err := capturedStoreConfig.RevisionIDs.NewFileRevision()
+	if err != nil || secondRevision.IsZero() || secondRevision == firstRevision {
+		t.Fatalf("second revision ID = %x (first=%x), err = %v", secondRevision, firstRevision, err)
 	}
 	if capturedStoreConfig.CacheInvalidator != sender.cache {
 		t.Fatal("revision store and sender services did not share one cache authority")
@@ -82,57 +63,34 @@ func TestPrepareSenderWiresSharedCacheAndRevisionIdentityAuthorities(t *testing.
 	if capturedStoreConfig.Tracer != tracer {
 		t.Fatal("revision store did not receive the configured revision tracer")
 	}
-	if capturedKey == (content.RevisionIdentityKey{}) {
-		t.Fatal("sender preparation accepted a zero revision identity key")
-	}
-	if bytes.Equal(capturedKey[:], sender.capability.ReadSecret) {
-		t.Fatal("revision identity reused the capability read secret")
-	}
-	if bytes.Equal(capturedKey[:], sender.sessionAuthKey) {
-		t.Fatal("revision identity reused protocol session authority")
-	}
-
 	if err := sender.Close(); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case <-capturedDeriver.destroyed:
-	default:
-		t.Fatal("sender close retained the revision identity key")
-	}
 }
 
-func TestPrepareSenderRollbackDestroysRevisionIdentityAuthority(t *testing.T) {
+func TestPrepareSenderRollbackClosesRevisionStoreAndCache(t *testing.T) {
 	filename := filepath.Join(t.TempDir(), "selected.bin")
 	if err := os.WriteFile(filename, []byte("revision-rollback"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	dependencies := productionSenderPreparationDependencies()
-	newRevisionDeriver := dependencies.newRevisionDeriver
-	var capturedDeriver *observedRevisionDeriver
-	dependencies.newRevisionDeriver = func(
-		key content.RevisionIdentityKey,
-	) (senderRevisionIdentityDeriver, error) {
-		delegate, err := newRevisionDeriver(key)
-		if err != nil {
-			return nil, err
-		}
-		hmacDeriver, ok := delegate.(*content.HMACRevisionIdentityDeriver)
-		if !ok {
-			t.Fatalf("production revision deriver type = %T", delegate)
-		}
-		capturedDeriver = &observedRevisionDeriver{
-			delegate:  hmacDeriver,
-			destroyed: make(chan struct{}),
-		}
-		return capturedDeriver, nil
+	newRevisionStore := dependencies.newRevisionStore
+	var capturedStore *content.RevisionStore
+	dependencies.newRevisionStore = func(
+		config content.RevisionStoreConfig,
+	) (*content.RevisionStore, error) {
+		store, err := newRevisionStore(config)
+		capturedStore = store
+		return store, err
 	}
 	lateFailure := errors.New("forced late revision rollback")
 	dependencies.sessionAuthKey = func(*content.KeyTree) (content.DerivedKey, error) {
 		return content.DerivedKey{}, lateFailure
 	}
 
-	sender, err := PrepareSender(context.Background(), SenderConfig{CatalogBudget: testCatalogBudget(), CacheBudget: testCacheBudget(),
+	sender, err := PrepareSender(context.Background(), SenderConfig{
+		CatalogBudget:    testCatalogBudget(),
+		CacheBudget:      testCacheBudget(),
 		RevisionCapacity: newTestRevisionCapacity(t),
 		Source:           testFileSource([]string{filename}),
 		Relays:           []string{"ws://127.0.0.1:8484"},
@@ -143,12 +101,13 @@ func TestPrepareSenderRollbackDestroysRevisionIdentityAuthority(t *testing.T) {
 	if sender != nil || !errors.Is(err, lateFailure) {
 		t.Fatalf("late preparation result = %v, %v", sender, err)
 	}
-	if capturedDeriver == nil {
-		t.Fatal("late failure occurred before revision identity ownership transferred")
+	if capturedStore == nil {
+		t.Fatal("late failure occurred before revision store ownership transferred")
 	}
-	select {
-	case <-capturedDeriver.destroyed:
-	default:
-		t.Fatal("preparation rollback retained the revision identity key")
+	if _, err := capturedStore.RegisterSession(revisioncapacity.SessionConfig{
+		SessionID: "rollback-check",
+		Limits:    revisioncapacity.DefaultSessionLimits(),
+	}); !errors.Is(err, content.ErrRevisionStoreClosed) {
+		t.Fatalf("rolled-back revision store accepted session registration: %v", err)
 	}
 }

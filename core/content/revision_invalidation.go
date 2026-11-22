@@ -1,7 +1,6 @@
 package content
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/windshare/windshare/core/content/revisioncapacity"
@@ -20,8 +19,9 @@ func (s *RevisionStore) invalidateRevisionCache(identity revisionIdentity) {
 
 // invalidateIdentityLocked discovers and revokes every in-memory incarnation
 // of a tuple under one lock, so no reader or lease can escape tuple-global loss.
-func (s *RevisionStore) invalidateIdentityLocked(identity revisionIdentity, origin *revisionState) ([]revisionCleanup, []capacityChargeRelease, error) {
-	budgetErr := s.recordInvalidationLocked(identity)
+// Because every fresh open assigns a distinct random FileRevision, revocation
+// requires no share-lifetime tombstone table.
+func (s *RevisionStore) invalidateIdentityLocked(identity revisionIdentity, origin *revisionState) ([]revisionCleanup, []capacityChargeRelease) {
 	states := make(map[*revisionState]struct{})
 	if current := s.revisions[identity.file]; current != nil && current.identity() == identity {
 		states[current] = struct{}{}
@@ -44,27 +44,7 @@ func (s *RevisionStore) invalidateIdentityLocked(identity revisionIdentity, orig
 			cleanups = append(cleanups, cleanup)
 		}
 	}
-	return cleanups, releases, budgetErr
-}
-
-// recordInvalidationLocked couples fail-closed admission to the authoritative
-// invalidation set. The caller must hold s.mu across both decisions.
-func (s *RevisionStore) recordInvalidationLocked(identity revisionIdentity) error {
-	if _, recorded := s.invalidated[identity]; recorded {
-		return nil
-	}
-	if s.revisionAdmissionStopped {
-		return fmt.Errorf("%w: revision admission stopped", ErrQuotaExceeded)
-	}
-	reservation, err := s.metadataBudget.reserveInvalidation()
-	if err != nil {
-		// Forgetting a proven mismatch would let the derived tuple regain
-		// authority, so exhaustion permanently closes fresh admission.
-		s.revisionAdmissionStopped = true
-		return err
-	}
-	s.invalidated[identity] = reservation
-	return nil
+	return cleanups, releases
 }
 
 // invalidateStateLocked makes lifecycle loss and all lease revocations visible

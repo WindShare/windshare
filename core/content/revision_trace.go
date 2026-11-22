@@ -13,11 +13,8 @@ const (
 	RevisionTraceStageUnknown RevisionTraceStage = iota
 	RevisionTraceStageActiveReuse
 	RevisionTraceStageCleanRelease
-	RevisionTraceStageReopenMatch
 	RevisionTraceStageMismatchInvalidation
 	RevisionTraceStageUnavailableRetry
-	RevisionTraceStageInvalidationRejection
-	RevisionTraceStageMetadataBudgetStop
 	RevisionTraceStageLeaseSettlement
 	RevisionTraceStageOpenHandleBound
 	RevisionTraceStageOpenRejected
@@ -34,8 +31,6 @@ const (
 	RevisionTraceCauseModifiedTime
 	RevisionTraceCauseActiveRead
 	RevisionTraceCausePanic
-	RevisionTraceCauseKnownInvalidation
-	RevisionTraceCauseMetadataBudget
 	RevisionTraceCauseRelinquished
 	RevisionTraceCauseUndelivered
 	RevisionTraceCauseDetached
@@ -109,16 +104,10 @@ func (value RevisionTraceStage) DiagnosticName() string {
 		return "active_reuse"
 	case RevisionTraceStageCleanRelease:
 		return "clean_release"
-	case RevisionTraceStageReopenMatch:
-		return "reopen_match"
 	case RevisionTraceStageMismatchInvalidation:
 		return "mismatch_invalidation"
 	case RevisionTraceStageUnavailableRetry:
 		return "unavailable_retry"
-	case RevisionTraceStageInvalidationRejection:
-		return "invalidation_rejection"
-	case RevisionTraceStageMetadataBudgetStop:
-		return "metadata_budget_stop"
 	case RevisionTraceStageLeaseSettlement:
 		return "lease_settlement"
 	case RevisionTraceStageOpenHandleBound:
@@ -149,10 +138,6 @@ func (value RevisionTraceCause) DiagnosticName() string {
 		return "active_read"
 	case RevisionTraceCausePanic:
 		return "panic"
-	case RevisionTraceCauseKnownInvalidation:
-		return "known_invalidation"
-	case RevisionTraceCauseMetadataBudget:
-		return "metadata_budget"
 	case RevisionTraceCauseRelinquished:
 		return "relinquished"
 	case RevisionTraceCauseUndelivered:

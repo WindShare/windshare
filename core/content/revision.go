@@ -104,24 +104,6 @@ type RevisionSource interface {
 	OpenStable(context.Context, catalog.NodeRecord) (StableFile, error)
 }
 
-// RevisionContinuity bounds cryptographic identity and cache reuse. A weak
-// provider keeps one identity while its write-excluding handle is resident;
-// reopen gets a fresh identity. SourceMetadata separately permits best-effort
-// plaintext reuse and never extends ciphertext or authentication authority.
-type RevisionContinuity uint8
-
-const (
-	CatalogRevisionContinuity RevisionContinuity = iota + 1
-	OpenHandleRevisionContinuity
-)
-
-// RevisionContinuitySource refines the default RevisionSource contract, whose
-// verified catalog candidate must distinguish content changes across opens.
-// Selection occurs before handle capacity admission and must not open a file.
-type RevisionContinuitySource interface {
-	RevisionContinuity(catalog.NodeRecord) (RevisionContinuity, error)
-}
-
 type CatalogNodeSource interface {
 	Node(context.Context, catalog.NodeID) (catalog.NodeRecord, bool, error)
 }
@@ -137,6 +119,10 @@ type Clock interface {
 type wallClock struct{}
 
 func (wallClock) Now() time.Time { return time.Now() }
+
+type RevisionIDGenerator interface {
+	NewFileRevision() (FileRevision, error)
+}
 
 type LeaseIDGenerator interface {
 	NewLeaseID() (LeaseID, error)

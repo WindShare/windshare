@@ -70,10 +70,7 @@ type fakeWindowsRevisionRoot struct {
 	closeErr    error
 	identity    [windowsRevisionIdentityBytes]byte
 	identityErr error
-	profile     windowsRevisionProfile
 }
-
-func (r *fakeWindowsRevisionRoot) RevisionProfile() windowsRevisionProfile { return r.profile }
 
 func (r *fakeWindowsRevisionRoot) Identity() ([windowsRevisionIdentityBytes]byte, error) {
 	r.mu.Lock()
@@ -158,7 +155,7 @@ func windowsTestToken(seed byte, size uint64) windowsMutationToken {
 	identity[1] = seed
 	identity[len(identity)-1] = seed + 10
 	return windowsMutationToken{
-		identity: identity, size: size, profile: windowsRevisionProfileLocalNTFS,
+		identity: identity, size: size,
 		lastWrite: windowsFiletimeUnixOffset + 20_000_000, changeTime: int64(seed) + 30,
 	}
 }

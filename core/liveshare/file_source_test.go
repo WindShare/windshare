@@ -13,6 +13,7 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/core/session/contentflow"
 )
 
@@ -37,7 +38,7 @@ type objectFileSource struct {
 	sourceContext     FileSourceContext
 	payload           []byte
 	version           uint64
-	continuity        content.RevisionContinuity
+	modified          catalog.ModifiedTime
 	revoked           bool
 	missing           bool
 	unsupported       bool
@@ -57,7 +58,11 @@ type objectFileSource struct {
 }
 
 func newObjectFileSource() *objectFileSource {
-	return &objectFileSource{payload: bytes.Repeat([]byte("object bytes"), int(catalog.MinChunkSize)/6), version: 1, continuity: content.CatalogRevisionContinuity}
+	modified, err := catalog.NewModifiedTime(1_000, 0, catalog.TimePrecisionSeconds)
+	if err != nil {
+		panic(err)
+	}
+	return &objectFileSource{payload: bytes.Repeat([]byte("object bytes"), int(catalog.MinChunkSize)/6), version: 1, modified: modified}
 }
 
 func (source *objectFileSource) OpenFileSource(_ context.Context, sourceContext FileSourceContext) (FileSource, error) {
@@ -118,11 +123,11 @@ func (source *objectFileSource) ScanDirectory(ctx context.Context, request catal
 	sourceIdentity, _ := catalog.NewSourceIdentity([]byte("provider:document:82"))
 	candidate := source.candidate()
 	parent, _ := source.root.DirectoryID()
-	source.file, err = catalog.NewFileNodeRecord(file, parent, "report.bin", objectFileReference, sourceIdentity, candidate, uint64(len(source.payload)), catalog.ModifiedTime{})
+	source.file, err = catalog.NewFileNodeRecord(file, parent, "report.bin", objectFileReference, sourceIdentity, candidate, uint64(len(source.payload)), source.modified)
 	if err != nil {
 		return catalog.ScanResult{}, err
 	}
-	err = request.Children.Add(ctx, catalog.ScannedChild{FileID: file, Name: "report.bin", SourceReference: objectFileReference, SourceIdentity: sourceIdentity, VersionCandidate: candidate, ExpectedSize: uint64(len(source.payload))})
+	err = request.Children.Add(ctx, catalog.ScannedChild{FileID: file, Name: "report.bin", SourceReference: objectFileReference, SourceIdentity: sourceIdentity, VersionCandidate: candidate, ExpectedSize: uint64(len(source.payload)), ModifiedTime: source.modified})
 	return catalog.ScanResult{}, err
 }
 
@@ -144,10 +149,6 @@ func (source *objectFileSource) checkAccess(operation string, reference catalog.
 		return &catalog.SourceError{Operation: operation, Reference: reference, Failure: catalog.SourceFailureMissing, Cause: content.ErrRevisionNotFound}
 	}
 	return nil
-}
-
-func (source *objectFileSource) RevisionContinuity(catalog.NodeRecord) (content.RevisionContinuity, error) {
-	return source.continuity, nil
 }
 
 func (source *objectFileSource) OpenStable(_ context.Context, record catalog.NodeRecord) (content.StableFile, error) {
@@ -182,8 +183,8 @@ type objectStableFile struct {
 	closed  bool
 }
 
-func (file *objectStableFile) ExactSize() uint64             { return uint64(len(file.payload)) }
-func (*objectStableFile) ModifiedTime() catalog.ModifiedTime { return catalog.ModifiedTime{} }
+func (file *objectStableFile) ExactSize() uint64                  { return uint64(len(file.payload)) }
+func (file *objectStableFile) ModifiedTime() catalog.ModifiedTime { return file.source.modified }
 func (file *objectStableFile) Verify(context.Context) error {
 	file.source.mu.Lock()
 	defer file.source.mu.Unlock()
@@ -295,33 +296,64 @@ func TestFileSourceProvidesLazyDiscoveryAndOffsetReads(t *testing.T) {
 	}
 }
 
-func TestFileSourcePreservesRevisionContinuityAcrossReopen(t *testing.T) {
-	for _, continuity := range []content.RevisionContinuity{content.CatalogRevisionContinuity, content.OpenHandleRevisionContinuity} {
-		t.Run(map[content.RevisionContinuity]string{content.CatalogRevisionContinuity: "catalog", content.OpenHandleRevisionContinuity: "handle"}[continuity], func(t *testing.T) {
-			source := newObjectFileSource()
-			source.continuity = continuity
-			sender := prepareObjectSender(t, source)
-			file := discoverObjectFile(t, sender, source)
-			capacity := lifecycleSessionCapacity(t, sender.revisionStore, "object-reopen")
-			first, err := sender.revisionStore.OpenRevision(context.Background(), file, capacity)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := sender.revisionStore.EndLease(first.ID(), content.LeaseRelinquished); err != nil {
-				t.Fatal(err)
-			}
-			second, err := sender.revisionStore.OpenRevision(context.Background(), file, capacity)
-			if err != nil {
-				t.Fatal(err)
-			}
-			same := first.Descriptor().FileRevision() == second.Descriptor().FileRevision()
-			if same != (continuity == content.CatalogRevisionContinuity) || source.opens != 2 || source.handleCloses != 1 {
-				t.Fatalf("continuity %v: same=%v opens=%d closes=%d", continuity, same, source.opens, source.handleCloses)
-			}
-			if err := sender.revisionStore.EndLease(second.ID(), content.LeaseRelinquished); err != nil {
-				t.Fatal(err)
-			}
-		})
+func lifecycleSessionCapacity(
+	t *testing.T,
+	store *content.RevisionStore,
+	name string,
+) *revisioncapacity.SessionRegistration {
+	t.Helper()
+	registration, err := store.RegisterSession(revisioncapacity.SessionConfig{
+		SessionID: revisioncapacity.SessionID(name),
+		Limits:    revisioncapacity.DefaultSessionLimits(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := registration.Close(); err != nil {
+			t.Errorf("close lifecycle session capacity: %v", err)
+		}
+	})
+	return registration
+}
+
+func TestFileSourceReopenAssignsFreshRevisionWithMatchingSourceMetadata(t *testing.T) {
+	source := newObjectFileSource()
+	sender := prepareObjectSender(t, source)
+	file := discoverObjectFile(t, sender, source)
+	capacity := lifecycleSessionCapacity(t, sender.revisionStore, "object-reopen")
+	first, err := sender.revisionStore.OpenRevision(context.Background(), file, capacity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resident, err := sender.revisionStore.OpenRevision(context.Background(), file, capacity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resident.Descriptor().FileRevision() != first.Descriptor().FileRevision() || source.opens != 1 {
+		t.Fatalf("resident reuse changed revision or reopened handle: first=%x resident=%x opens=%d",
+			first.Descriptor().FileRevision(), resident.Descriptor().FileRevision(), source.opens)
+	}
+	if err := sender.revisionStore.EndLease(first.ID(), content.LeaseRelinquished); err != nil {
+		t.Fatal(err)
+	}
+	if err := sender.revisionStore.EndLease(resident.ID(), content.LeaseRelinquished); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := sender.revisionStore.OpenRevision(context.Background(), file, capacity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopened.Descriptor().FileRevision() == first.Descriptor().FileRevision() || source.opens != 2 || source.handleCloses != 1 {
+		t.Fatalf("reopen same=%v opens=%d closes=%d",
+			reopened.Descriptor().FileRevision() == first.Descriptor().FileRevision(), source.opens, source.handleCloses)
+	}
+	comparison := content.CompareRevisions(first.Descriptor(), reopened.Descriptor())
+	if !comparison.AllowsReuse() || comparison.Reason != content.ComparisonMetadataAgreement {
+		t.Fatalf("reopen comparison = %+v, want metadata agreement reuse", comparison)
+	}
+	if err := sender.revisionStore.EndLease(reopened.ID(), content.LeaseRelinquished); err != nil {
+		t.Fatal(err)
 	}
 }
 

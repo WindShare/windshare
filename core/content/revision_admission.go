@@ -7,8 +7,19 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content/revisioncapacity"
 )
+
+type randomRevisionIDs struct{}
+
+func (randomRevisionIDs) NewFileRevision() (FileRevision, error) {
+	var revision FileRevision
+	if _, err := rand.Read(revision[:]); err != nil {
+		return FileRevision{}, fmt.Errorf("generate file revision identity: %w", err)
+	}
+	return revision, nil
+}
 
 type randomLeaseIDs struct{}
 
@@ -38,6 +49,26 @@ func (r capacityChargeRelease) run() error {
 
 func capacityRevisionID(identity revisionIdentity) revisioncapacity.RevisionID {
 	return revisioncapacity.RevisionID(fmt.Sprintf("%x:%x", identity.file.Bytes(), identity.revision.Bytes()))
+}
+
+func (s *RevisionStore) newFileRevisionLocked(file catalog.FileID) (FileRevision, error) {
+	revisionID, err := s.revisionIDs.NewFileRevision()
+	if err != nil {
+		return FileRevision{}, err
+	}
+	if revisionID.IsZero() {
+		return FileRevision{}, errors.New("file revision generator returned a zero identity")
+	}
+	candidate := revisionIdentity{file: file, revision: revisionID}
+	if current := s.revisions[file]; current != nil && current.identity() == candidate {
+		return FileRevision{}, errors.New("file revision generator reused a live identity")
+	}
+	for reading := range s.readingRevisions {
+		if reading.identity() == candidate {
+			return FileRevision{}, errors.New("file revision generator reused an active reading identity")
+		}
+	}
+	return revisionID, nil
 }
 
 func (s *RevisionStore) newLeaseIDLocked() (LeaseID, error) {

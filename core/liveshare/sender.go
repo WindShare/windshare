@@ -67,22 +67,13 @@ type RuntimeFactoryConfig struct {
 	ProtocolObservations    observationstream.Producer[sessionobs.ProtocolObservation]
 }
 
-type senderRevisionIdentityDeriver interface {
-	content.RevisionIdentityDeriver
-	Destroy()
-}
-
 type senderPreparationDependencies struct {
-	newRevisionDeriver func(content.RevisionIdentityKey) (senderRevisionIdentityDeriver, error)
-	newRevisionStore   func(content.RevisionStoreConfig) (*content.RevisionStore, error)
-	sessionAuthKey     func(*content.KeyTree) (content.DerivedKey, error)
+	newRevisionStore func(content.RevisionStoreConfig) (*content.RevisionStore, error)
+	sessionAuthKey   func(*content.KeyTree) (content.DerivedKey, error)
 }
 
 func productionSenderPreparationDependencies() senderPreparationDependencies {
 	return senderPreparationDependencies{
-		newRevisionDeriver: func(key content.RevisionIdentityKey) (senderRevisionIdentityDeriver, error) {
-			return content.NewHMACRevisionIdentityDeriver(key)
-		},
 		newRevisionStore: content.NewRevisionStore,
 		sessionAuthKey: func(keys *content.KeyTree) (content.DerivedKey, error) {
 			return keys.SessionAuthKey()
@@ -104,17 +95,16 @@ type PreparedSender struct {
 	sessionAuthKey   []byte
 	random           *lockedReader
 
-	source          FileSource
-	catalogStore    *catalog.CatalogStore
-	revisionStore   *content.RevisionStore
-	revisionDeriver senderRevisionIdentityDeriver
-	keyTree         *content.KeyTree
-	cache           *contentflow.SharedBlockCache
-	catalogAccess   *senderCatalogAccess
-	runtimeFactory  senderRuntimeLifecycle
-	closed          bool
-	closeDone       chan struct{}
-	closeResult     error
+	source         FileSource
+	catalogStore   *catalog.CatalogStore
+	revisionStore  *content.RevisionStore
+	keyTree        *content.KeyTree
+	cache          *contentflow.SharedBlockCache
+	catalogAccess  *senderCatalogAccess
+	runtimeFactory senderRuntimeLifecycle
+	closed         bool
+	closeDone      chan struct{}
+	closeResult    error
 }
 
 type senderAuthority struct {
@@ -142,8 +132,7 @@ type senderCatalog struct {
 
 func PrepareSender(ctx context.Context, config SenderConfig) (*PreparedSender, error) {
 	dependencies := config.preparation
-	if dependencies.newRevisionDeriver == nil &&
-		dependencies.newRevisionStore == nil &&
+	if dependencies.newRevisionStore == nil &&
 		dependencies.sessionAuthKey == nil {
 		dependencies = productionSenderPreparationDependencies()
 	}
@@ -155,8 +144,7 @@ func prepareSender(
 	config SenderConfig,
 	dependencies senderPreparationDependencies,
 ) (result *PreparedSender, resultErr error) {
-	if dependencies.newRevisionDeriver == nil ||
-		dependencies.newRevisionStore == nil ||
+	if dependencies.newRevisionStore == nil ||
 		dependencies.sessionAuthKey == nil {
 		return nil, errors.New("live share sender preparation dependencies are incomplete")
 	}
@@ -389,31 +377,16 @@ func prepareSenderContent(
 	authority senderAuthority,
 	dependencies senderPreparationDependencies,
 ) error {
-	metadataBudget, err := content.NewRevisionMetadataBudget(content.DefaultRevisionInvalidationEntries)
-	if err != nil {
-		return err
-	}
+	var err error
 	sender.cache, err = contentflow.NewSharedBlockCache(authority.shareInstance, defaultSharedBlockCacheBytes, config.CacheBudget)
-	if err != nil {
-		return err
-	}
-
-	// Resume identity is share-scoped authority, so it must not inherit the
-	// disclosure or destruction boundary of any protocol key.
-	var revisionKey content.RevisionIdentityKey
-	defer clear(revisionKey[:])
-	if _, err := io.ReadFull(random, revisionKey[:]); err != nil {
-		return fmt.Errorf("generate revision identity key: %w", err)
-	}
-	sender.revisionDeriver, err = dependencies.newRevisionDeriver(revisionKey)
 	if err != nil {
 		return err
 	}
 	sender.revisionStore, err = dependencies.newRevisionStore(content.RevisionStoreConfig{
 		ShareInstance: authority.shareInstance, ChunkSize: config.ChunkSize, Catalog: sender.catalogStore,
 		Source: sender.source, CapacityCoordinator: config.RevisionCapacity,
-		CapacityStore:   senderRevisionCapacityStoreConfig(authority.shareInstance, config.CapacityTracer),
-		RevisionDeriver: sender.revisionDeriver, MetadataBudget: metadataBudget,
+		CapacityStore:    senderRevisionCapacityStoreConfig(authority.shareInstance, config.CapacityTracer),
+		RevisionIDs:      randomRevisionIDs{random: random},
 		CacheInvalidator: sender.cache, Tracer: config.RevisionTracer,
 	})
 	if err != nil {
@@ -426,6 +399,16 @@ func prepareSenderContent(
 	defer sessionAuthKey.Destroy()
 	sender.sessionAuthKey = sessionAuthKey.Bytes()
 	return nil
+}
+
+type randomRevisionIDs struct{ random io.Reader }
+
+func (g randomRevisionIDs) NewFileRevision() (content.FileRevision, error) {
+	identity, err := randomIdentity(g.random)
+	if err != nil {
+		return content.FileRevision{}, err
+	}
+	return content.FileRevisionFromBytes(identity[:])
 }
 
 func senderRevisionCapacityStoreConfig(share catalog.ShareInstance, tracer revisioncapacity.Tracer) revisioncapacity.StoreConfig {

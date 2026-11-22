@@ -59,7 +59,7 @@ fragment = base64url(suite 0x02 || readSecret[16] || pkHash[16])
 - **Revision**: `OPEN_REVISIONS` returns, per file, a revision descriptor (`FileRevision`, exact size, modified time, source metadata) with a time-limited lease, or a file error.
 - **Blocks**: `BlockRef = (FileID, FileRevision, LocalBlockIndex)`. Blocks have the descriptor's chunk size; the last one may be shorter. Byte ranges `[offset, end)` select blocks. A canonical `BlockRecord` is carried by one or more `BLOCK_FRAGMENT` messages identified by its payload hash. The completion message closes the result set.
 
-Revision record schema 2 carries a 32-byte opaque source-metadata token (zero means unavailable), authenticated with the descriptor. It binds share/file, provider identity/version, size, modification evidence and chunk geometry independently of open-instance nonces. Equal tokens support best-effort reuse of locally verified plaintext ranges. `RevisionContinuity` determines the lifetime of a revision identity, which can be limited to one open handle. A new identity requires checkpoint admission using the current lease.
+Revision record schema 2 carries a 32-byte opaque source-metadata token (zero means unavailable), authenticated with the descriptor. It binds share/file, provider identity/version, size, modification evidence and chunk geometry independently of each open handle's random `FileRevision`. Equal tokens support best-effort reuse of locally verified plaintext ranges across handle reopens, while concurrent readers and reconnects within resume grace share the resident handle's `FileRevision`. A new identity requires checkpoint admission using the current lease.
 
 The sender cache can serve canonical payloads across recipients. Catalog reloads verify payloads against the committed record and page hash. The block cache verifies each reload against the record identity committed by the revision read. Delivery authenticates either payload in the destination session.
 
@@ -92,7 +92,7 @@ versions evolve independently.
 | `ShareInstance` | One shared content instance, spanning descriptor, catalog, revisions, and sessions |
 | `DirectoryID`, `FileID` | Catalog nodes |
 | `DirectoryGeneration` | One committed scan of a directory |
-| `FileRevision` | One read identity within its source continuity scope |
+| `FileRevision` | One random read identity per opened file handle |
 | `LeaseID` | One read grant on an opened revision |
 | `ProtocolSessionID` | One authenticated receiver–sender session |
 | `OperationID` | One request and its responses within a session |

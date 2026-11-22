@@ -122,26 +122,6 @@ func (g *sequenceIDs) NewLeaseID() (LeaseID, error) {
 	return contentID[LeaseID](g.nextValue()), nil
 }
 
-func testRevisionDeriver(t *testing.T) *HMACRevisionIdentityDeriver {
-	t.Helper()
-	var key RevisionIdentityKey
-	key[0] = 1
-	deriver, err := NewHMACRevisionIdentityDeriver(key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return deriver
-}
-
-func testRevisionMetadataBudget(t *testing.T, capacity uint64) *RevisionMetadataBudget {
-	t.Helper()
-	budget, err := NewRevisionMetadataBudget(capacity)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return budget
-}
-
 type recordingInvalidator struct {
 	mu        sync.Mutex
 	revisions []FileRevision
@@ -244,7 +224,6 @@ func newRevisionStore(t *testing.T, source RevisionSource, clock Clock, invalida
 	if err != nil {
 		t.Fatal(err)
 	}
-	deriver := testRevisionDeriver(t)
 	store, err := NewRevisionStore(RevisionStoreConfig{
 		ShareInstance: catalogID[catalog.ShareInstance](1), ChunkSize: catalog.MinChunkSize,
 		Catalog: testCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}},
@@ -254,8 +233,7 @@ func newRevisionStore(t *testing.T, source RevisionSource, clock Clock, invalida
 			StoreID: "test-store", ShareID: "test-share",
 			Limits: revisioncapacity.CapacityLimits{StableHandles: 100, ActiveLeases: 100},
 		},
-		LeaseIDs: &sequenceIDs{}, RevisionDeriver: deriver,
-		MetadataBudget: testRevisionMetadataBudget(t, DefaultRevisionInvalidationEntries), CacheInvalidator: invalidator,
+		LeaseIDs: &sequenceIDs{}, CacheInvalidator: invalidator,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -263,7 +241,6 @@ func newRevisionStore(t *testing.T, source RevisionSource, clock Clock, invalida
 	t.Cleanup(func() {
 		_ = store.Close()
 		_ = owner.Close()
-		deriver.Destroy()
 	})
 	process := &capacityTestAccount{name: "process", snapshot: func() revisioncapacity.ScopeSnapshot { return store.CapacitySnapshot().Process() }}
 	share := &capacityTestAccount{name: "share", snapshot: func() revisioncapacity.ScopeSnapshot { return store.CapacitySnapshot().Share() }}
@@ -332,7 +309,7 @@ func TestRevisionStoreSingleflightsOpenAndCreatesIndependentLeases(t *testing.T)
 	}
 	third, err := store.OpenRevision(context.Background(), file, session)
 	if err != nil || third.ID().IsZero() || third.ID() == second.ID() ||
-		third.Descriptor().FileRevision() != second.Descriptor().FileRevision() || source.Calls() != 2 {
+		third.Descriptor().FileRevision() == second.Descriptor().FileRevision() || source.Calls() != 2 {
 		t.Fatalf("post-relinquishment reopen = %+v, %v, calls=%d", third, err, source.Calls())
 	}
 	if stable.closed.Load() != 1 {

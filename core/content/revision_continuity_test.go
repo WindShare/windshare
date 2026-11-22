@@ -2,99 +2,80 @@ package content
 
 import (
 	"context"
-	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"testing"
 	"time"
 
 	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/content/revisioncapacity"
 )
 
-type continuityRevisionSource struct {
-	*testRevisionSource
-	continuity RevisionContinuity
-	err        error
-}
+func TestOpenHandleRevisionRetainsResidentIdentityAndReopensWithFreshID(t *testing.T) {
+	modified, _ := catalog.NewModifiedTime(100, 0, catalog.TimePrecisionSeconds)
+	file, record := fileRecordWithModifiedTime(t, 1, 1, modified)
+	source := &testRevisionSource{files: []*testStableFile{
+		{data: []byte{1}, modified: modified}, {data: []byte{1}, modified: modified},
+	}}
+	store, process, _ := newRevisionStore(t, source, &testClock{now: time.Unix(100, 0)}, nil, file, record)
+	session := generousSession(t, store, "continuity")
 
-func (s *continuityRevisionSource) RevisionContinuity(catalog.NodeRecord) (RevisionContinuity, error) {
-	return s.continuity, s.err
-}
+	first, err := store.OpenRevision(context.Background(), file, session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resident, err := store.OpenRevision(context.Background(), file, session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resident.Descriptor().FileRevision() != first.Descriptor().FileRevision() || source.Calls() != 1 {
+		t.Fatal("a resident stable handle lost its shared revision")
+	}
+	if err := store.EndLease(first.ID(), LeaseRelinquished); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EndLease(resident.ID(), LeaseRelinquished); err != nil {
+		t.Fatal(err)
+	}
 
-func TestRevisionContinuityRetainsResidentProgressAndSeparatesWeakReopen(t *testing.T) {
-	for _, continuity := range []RevisionContinuity{CatalogRevisionContinuity, OpenHandleRevisionContinuity} {
-		t.Run(map[RevisionContinuity]string{CatalogRevisionContinuity: "catalog", OpenHandleRevisionContinuity: "open-handle"}[continuity], func(t *testing.T) {
-			modified, _ := catalog.NewModifiedTime(100, 0, catalog.TimePrecisionSeconds)
-			file, record := fileRecordWithModifiedTime(t, 1, 1, modified)
-			source := &continuityRevisionSource{
-				testRevisionSource: &testRevisionSource{files: []*testStableFile{
-					{data: []byte{1}, modified: modified}, {data: []byte{1}, modified: modified},
-				}},
-				continuity: continuity,
-			}
-			store, process, _ := newRevisionStore(t, source, &testClock{now: time.Unix(100, 0)}, nil, file, record)
-			session := generousSession(t, store, "continuity")
-			first, err := store.OpenRevision(context.Background(), file, session)
-			if err != nil {
-				t.Fatal(err)
-			}
-			resident, err := store.OpenRevision(context.Background(), file, session)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if resident.Descriptor().FileRevision() != first.Descriptor().FileRevision() || source.Calls() != 1 {
-				t.Fatal("a resident write-excluding handle lost its shared revision")
-			}
-			if err := store.EndLease(first.ID(), LeaseRelinquished); err != nil {
-				t.Fatal(err)
-			}
-			if err := store.EndLease(resident.ID(), LeaseRelinquished); err != nil {
-				t.Fatal(err)
-			}
-			reopened, err := store.OpenRevision(context.Background(), file, session)
-			if err != nil {
-				t.Fatal(err)
-			}
-			same := reopened.Descriptor().FileRevision() == first.Descriptor().FileRevision()
-			if same != (continuity == CatalogRevisionContinuity) {
-				t.Fatalf("reopened revision continuity=%v same=%v", continuity, same)
-			}
-			comparison := CompareRevisions(first.Descriptor(), reopened.Descriptor())
-			if first.Descriptor().SourceMetadata().IsZero() || !comparison.AllowsReuse() ||
-				comparison.Comparison != RevisionComparisonMetadataAgreement {
-				t.Fatalf("reopen lost best-effort source applicability: %+v", comparison)
-			}
-			if source.Calls() != 2 || source.files[0].closed.Load() != 1 {
-				t.Fatal("reopen did not release and reacquire exactly one stable handle")
-			}
-			if continuity == OpenHandleRevisionContinuity {
-				old, err := NewBlockRef(file, first.Descriptor().FileRevision(), 0, first.Descriptor().Geometry())
-				if err != nil {
-					t.Fatal(err)
-				}
-				if _, err := store.ReadBlock(context.Background(), reopened.ID(), old); err == nil {
-					t.Fatal("reopened handle accepted a range from the previous revision")
-				}
-			}
-			if err := store.EndLease(reopened.ID(), LeaseRelinquished); err != nil {
-				t.Fatal(err)
-			}
-			if got := process.Snapshot().Used; got != (QuotaUsage{}) {
-				t.Fatalf("reopening leaked capacity: %+v", got)
-			}
-		})
+	reopened, err := store.OpenRevision(context.Background(), file, session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopened.Descriptor().FileRevision() == first.Descriptor().FileRevision() {
+		t.Fatal("reopen reused a released handle's FileRevision")
+	}
+	comparison := CompareRevisions(first.Descriptor(), reopened.Descriptor())
+	if first.Descriptor().SourceMetadata().IsZero() || !comparison.AllowsReuse() ||
+		comparison.Comparison != RevisionComparisonMetadataAgreement {
+		t.Fatalf("reopen lost best-effort source applicability: %+v", comparison)
+	}
+	if source.Calls() != 2 || source.files[0].closed.Load() != 1 {
+		t.Fatal("reopen did not release and reacquire exactly one stable handle")
+	}
+	old, err := NewBlockRef(file, first.Descriptor().FileRevision(), 0, first.Descriptor().Geometry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ReadBlock(context.Background(), reopened.ID(), old); err == nil {
+		t.Fatal("reopened handle accepted a block ref from the previous revision")
+	}
+	if err := store.EndLease(reopened.ID(), LeaseRelinquished); err != nil {
+		t.Fatal(err)
+	}
+	if got := process.Snapshot().Used; got != (QuotaUsage{}) {
+		t.Fatalf("reopening leaked capacity: %+v", got)
 	}
 }
 
-func TestOpenHandleContinuityPreservesDetachedLeaseDuringResumeGrace(t *testing.T) {
+func TestDetachedLeasePreservesResidentRevisionDuringResumeGrace(t *testing.T) {
 	file, record := fileRecord(t, 1)
-	source := &continuityRevisionSource{
-		testRevisionSource: &testRevisionSource{files: []*testStableFile{{data: []byte{1}}}},
-		continuity:         OpenHandleRevisionContinuity,
-	}
+	source := &testRevisionSource{files: []*testStableFile{{data: []byte{1}}}}
 	store, _, _ := newRevisionStore(t, source, &testClock{now: time.Unix(100, 0)}, nil, file, record)
 	traces := make(chan RevisionTrace, 8)
 	store.tracer = RevisionTracerFunc(func(event RevisionTrace) { traces <- event })
 	session := generousSession(t, store, "reconnect")
+
 	first, err := store.OpenRevision(context.Background(), file, session)
 	if err != nil {
 		t.Fatal(err)
@@ -110,101 +91,100 @@ func TestOpenHandleContinuityPreservesDetachedLeaseDuringResumeGrace(t *testing.
 		t.Fatal(err)
 	}
 	if first.Descriptor().FileRevision() != second.Descriptor().FileRevision() || source.Calls() != 1 {
-		t.Fatal("network reconnect discarded a still-proven revision during grace")
+		t.Fatal("network reconnect discarded a still-resident revision during grace")
 	}
 }
 
-func TestRevisionContinuityFailureDoesNotAcquireSourceOrCapacity(t *testing.T) {
-	failure := errors.New("source metadata capability unavailable")
-	for _, test := range []struct {
-		name       string
-		continuity RevisionContinuity
-		err        error
-	}{
-		{name: "unknown"},
-		{name: "provider failure", continuity: CatalogRevisionContinuity, err: failure},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			file, record := fileRecord(t, 1)
-			source := &continuityRevisionSource{
-				testRevisionSource: &testRevisionSource{files: []*testStableFile{{data: []byte{1}}}},
-				continuity:         test.continuity, err: test.err,
-			}
-			store, process, _ := newRevisionStore(t, source, &testClock{now: time.Unix(100, 0)}, nil, file, record)
-			session := generousSession(t, store, "rejected")
-			_, err := store.OpenRevision(context.Background(), file, session)
-			if err == nil || (test.err != nil && !errors.Is(err, test.err)) {
-				t.Fatalf("continuity error=%v", err)
-			}
-			if source.Calls() != 0 || process.Snapshot().Used != (QuotaUsage{}) {
-				t.Fatal("failed continuity selection acquired file resources")
-			}
-		})
+func TestRepeatedInvalidationsAndStaleOpensNeverStopFreshAdmission(t *testing.T) {
+	const churnCount = 4_200
+	parent := catalogID[catalog.DirectoryID](8)
+	locator, _ := catalog.NewSourceReference([]byte("object:churn"))
+	identity, _ := catalog.NewSourceIdentity([]byte("identity"))
+	candidate, _ := catalog.NewVersionCandidate([]byte("candidate"))
+	records := make(map[catalog.NodeID]catalog.NodeRecord, churnCount+1)
+	staleFiles := make([]catalog.FileID, churnCount)
+	for index := range churnCount {
+		var file catalog.FileID
+		binary.BigEndian.PutUint64(file[8:], uint64(index+1))
+		record, err := catalog.NewFileNodeRecord(file, parent, "churn.bin", locator, identity, candidate, 1, catalog.ModifiedTime{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		records[file.NodeID()] = record
+		staleFiles[index] = file
 	}
-}
+	healthyFile, healthyRecord := fileRecordWithModifiedTime(t, 0xfe, 1, catalog.ModifiedTime{})
+	records[healthyFile.NodeID()] = healthyRecord
 
-func TestRejectedOpenHandleAttemptsDoNotExhaustShareInvalidationBudget(t *testing.T) {
-	file, record := fileRecord(t, 1)
-	source := &continuityRevisionSource{
-		testRevisionSource: &testRevisionSource{files: []*testStableFile{
-			{data: []byte{1, 2}}, {data: []byte{1, 2}}, {data: []byte{1, 2}}, {data: []byte{1}},
-		}},
-		continuity: OpenHandleRevisionContinuity,
+	source := revisionSourceFunc(func(_ context.Context, record catalog.NodeRecord) (StableFile, error) {
+		file, _ := record.FileID()
+		if file == healthyFile {
+			return &testStableFile{data: []byte{42}}, nil
+		}
+		if binary.BigEndian.Uint64(file[8:])%2 == 0 {
+			// Mismatch during open (size differs from catalog).
+			return &testStableFile{data: []byte{1, 2}}, nil
+		}
+		// Succeeds on open, then drifts during ReadBlock.
+		return &testStableFile{data: []byte{1}}, nil
+	})
+	owner, err := revisioncapacity.NewProcessOwner(revisioncapacity.ProcessConfig{
+		Limits:     revisioncapacity.CapacityLimits{StableHandles: 100, ActiveLeases: 100},
+		RetryAfter: revisioncapacity.DefaultCapacityRetryAfter,
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	invalidator := &recordingInvalidator{}
-	store, process, _ := newRevisionStore(t, source, &testClock{now: time.Unix(100, 0)}, invalidator, file, record)
-	store.metadataBudget = testRevisionMetadataBudget(t, 1)
-	session := generousSession(t, store, "stale-retry")
-	for range 3 {
-		if _, err := store.OpenRevision(context.Background(), file, session); !errors.Is(err, ErrRevisionStale) {
-			t.Fatalf("stale weak candidate error=%v", err)
+	defer owner.Close()
+	store, err := NewRevisionStore(RevisionStoreConfig{
+		ShareInstance: catalogID[catalog.ShareInstance](1), ChunkSize: catalog.MinChunkSize,
+		Catalog: testCatalog{records: records}, Source: source, Clock: &testClock{now: time.Unix(100, 0)},
+		CapacityCoordinator: owner.Coordinator(),
+		CapacityStore: revisioncapacity.StoreConfig{
+			StoreID: "churn-store", ShareID: "churn-share",
+			Limits: revisioncapacity.CapacityLimits{StableHandles: 100, ActiveLeases: 100},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	session := generousSession(t, store, "churn-session")
+
+	for index, file := range staleFiles {
+		if (index+1)%2 == 0 {
+			if _, err := store.OpenRevision(context.Background(), file, session); !errors.Is(err, ErrRevisionStale) {
+				t.Fatalf("stale open %d = %v", index, err)
+			}
+			continue
+		}
+		lease, err := store.OpenRevision(context.Background(), file, session)
+		if err != nil {
+			t.Fatalf("open before drift %d = %v", index, err)
+		}
+		store.mu.Lock()
+		stable := store.revisions[file].source.(*testStableFile)
+		store.mu.Unlock()
+		stable.drifted.Store(true)
+		ref, _ := NewBlockRef(file, lease.Descriptor().FileRevision(), 0, lease.Descriptor().Geometry())
+		if _, err := store.ReadBlock(context.Background(), lease.ID(), ref); !errors.Is(err, ErrRevisionDrift) {
+			t.Fatalf("drift read %d = %v", index, err)
 		}
 	}
-	if store.metadataBudget.Snapshot().Used != 0 || len(invalidator.revisions) != 0 ||
-		process.Snapshot().Used != (QuotaUsage{}) {
-		t.Fatal("unpublished one-use identities retained invalidation authority or resources")
-	}
-	if _, err := store.OpenRevision(context.Background(), file, session); err != nil {
-		t.Fatalf("prior rejected opens stopped fresh valid content: %v", err)
-	}
-}
 
-func TestOpenRevisionEvidenceSeparatesInstancesAndCatalogDomain(t *testing.T) {
-	evidence := knownRevisionEvidence(t)
-	deriver := testRevisionDeriver(t)
-	t.Cleanup(deriver.Destroy)
-	catalogID, err := deriver.DeriveRevision(evidence)
+	healthyLease, err := store.OpenRevision(context.Background(), healthyFile, session)
 	if err != nil {
+		t.Fatalf("healthy file blocked after %d invalidations/stale opens: %v", churnCount, err)
+	}
+	ref, _ := NewBlockRef(healthyFile, healthyLease.Descriptor().FileRevision(), 0, healthyLease.Descriptor().Geometry())
+	data, err := store.ReadBlock(context.Background(), healthyLease.ID(), ref)
+	if err != nil || len(data) != 1 || data[0] != 42 {
+		t.Fatalf("healthy file read = %v, %v", data, err)
+	}
+	if err := store.EndLease(healthyLease.ID(), LeaseRelinquished); err != nil {
 		t.Fatal(err)
 	}
-	if evidence.Continuity() != CatalogRevisionContinuity || evidence.OpenInstance() != [sha256.Size]byte{} {
-		t.Fatal("catalog evidence claimed a live instance")
-	}
-	first := evidence
-	first.openInstance[0] = 1
-	second := first
-	second.openInstance[0] = 2
-	firstID, err := deriver.DeriveRevision(first)
-	if err != nil {
-		t.Fatal(err)
-	}
-	repeatedID, err := deriver.DeriveRevision(first)
-	if err != nil {
-		t.Fatal(err)
-	}
-	secondID, err := deriver.DeriveRevision(second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if firstID == catalogID || secondID == catalogID || firstID == secondID || repeatedID != firstID {
-		t.Fatal("revision derivation failed to bind the open instance independently")
-	}
-	if first.Continuity() != OpenHandleRevisionContinuity || first.OpenInstance() == [sha256.Size]byte{} {
-		t.Fatal("open evidence lost its lifetime")
-	}
-	projected := first.OpenInstance()
-	projected[0]++
-	if first.OpenInstance() == projected {
-		t.Fatal("projected nonce mutated evidence")
+	if got := store.CapacitySnapshot().Process().Used(); got != (revisioncapacity.CapacityUsage{}) {
+		t.Fatalf("churn leaked capacity: %+v", got)
 	}
 }

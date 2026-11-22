@@ -1,29 +1,14 @@
 package content
 
 import (
-	"crypto/hmac"
-	"crypto/rand"
-	"crypto/sha256"
 	"encoding/binary"
 	"errors"
-	"sync"
 
 	"github.com/windshare/windshare/core/catalog"
 )
 
-const (
-	RevisionIdentityKeyBytes = 32
-	revisionIdentityDomain   = "windshare/file-revision/v1"
-	openRevisionDomain       = "windshare/open-file-revision/v1"
-)
-
-var ErrRevisionIdentityDestroyed = errors.New("revision identity authority is destroyed")
-
-type RevisionIdentityKey [RevisionIdentityKeyBytes]byte
-
-// RevisionEvidence binds normalized catalog evidence to the source's continuity
-// guarantee. An open-instance nonce prevents weak metadata from reusing cached
-// content records after the write-excluding handle has been released.
+// RevisionEvidence binds normalized catalog evidence used to derive best-effort
+// SourceMetadata comparison tokens across handle reopens.
 type RevisionEvidence struct {
 	shareInstance    catalog.ShareInstance
 	fileID           catalog.FileID
@@ -32,7 +17,6 @@ type RevisionEvidence struct {
 	expectedSize     uint64
 	modifiedTime     catalog.ModifiedTime
 	chunkSize        uint32
-	openInstance     [sha256.Size]byte
 }
 
 func NewRevisionEvidence(
@@ -77,108 +61,6 @@ func (e RevisionEvidence) VersionCandidate() catalog.VersionCandidate { return e
 func (e RevisionEvidence) ExpectedSize() uint64                       { return e.expectedSize }
 func (e RevisionEvidence) ModifiedTime() catalog.ModifiedTime         { return e.modifiedTime }
 func (e RevisionEvidence) ChunkSize() uint32                          { return e.chunkSize }
-
-// Continuity makes the lifetime of the evidence visible to injected derivation
-// implementations; OpenInstance is zero only for catalog-stable evidence.
-func (e RevisionEvidence) Continuity() RevisionContinuity {
-	if e.openInstance == [sha256.Size]byte{} {
-		return CatalogRevisionContinuity
-	}
-	return OpenHandleRevisionContinuity
-}
-
-func (e RevisionEvidence) OpenInstance() [sha256.Size]byte { return e.openInstance }
-
-func evidenceForSourceContinuity(source RevisionSource, record catalog.NodeRecord, evidence RevisionEvidence) (RevisionEvidence, error) {
-	provider, ok := source.(RevisionContinuitySource)
-	if !ok {
-		return evidence, nil
-	}
-	continuity, err := provider.RevisionContinuity(record)
-	if err != nil {
-		return RevisionEvidence{}, err
-	}
-	switch continuity {
-	case CatalogRevisionContinuity:
-		return evidence, nil
-	case OpenHandleRevisionContinuity:
-		// The instance belongs to one coalesced open, so all resident leases still
-		// share its revision. A reopen receives a new identity before capacity is
-		// charged and cannot reuse cached records. Saved plaintext requires a
-		// separate current-source applicability decision before resuming.
-		for evidence.openInstance == [sha256.Size]byte{} {
-			_, _ = rand.Read(evidence.openInstance[:])
-		}
-		return evidence, nil
-	default:
-		return RevisionEvidence{}, errors.New("revision source returned unknown continuity")
-	}
-}
-
-type RevisionIdentityDeriver interface {
-	DeriveRevision(RevisionEvidence) (FileRevision, error)
-}
-
-type HMACRevisionIdentityDeriver struct {
-	mu        sync.RWMutex
-	key       RevisionIdentityKey
-	destroyed bool
-}
-
-func NewHMACRevisionIdentityDeriver(key RevisionIdentityKey) (*HMACRevisionIdentityDeriver, error) {
-	var zero RevisionIdentityKey
-	if hmac.Equal(key[:], zero[:]) {
-		return nil, errors.New("revision identity key must not be zero")
-	}
-	return &HMACRevisionIdentityDeriver{key: key}, nil
-}
-
-func (d *HMACRevisionIdentityDeriver) DeriveRevision(evidence RevisionEvidence) (FileRevision, error) {
-	if d == nil {
-		return FileRevision{}, errors.New("revision identity deriver is nil")
-	}
-	if _, err := NewRevisionEvidence(
-		evidence.shareInstance, evidence.fileID, evidence.sourceIdentity, evidence.versionCandidate,
-		evidence.expectedSize, evidence.modifiedTime, evidence.chunkSize,
-	); err != nil {
-		return FileRevision{}, err
-	}
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	if d.destroyed {
-		return FileRevision{}, ErrRevisionIdentityDestroyed
-	}
-	mac := hmac.New(sha256.New, d.key[:])
-	domain := revisionIdentityDomain
-	if evidence.openInstance != [sha256.Size]byte{} {
-		domain = openRevisionDomain
-	}
-	_, _ = mac.Write([]byte(domain))
-	_, _ = mac.Write(canonicalRevisionEvidence(evidence))
-	if evidence.openInstance != [sha256.Size]byte{} {
-		_, _ = mac.Write(evidence.openInstance[:])
-	}
-	sum := mac.Sum(nil)
-	var revision FileRevision
-	copy(revision[:], sum[:len(revision)])
-	if revision.IsZero() {
-		return FileRevision{}, errors.New("revision identity derivation produced a zero identity")
-	}
-	return revision, nil
-}
-
-func (d *HMACRevisionIdentityDeriver) Destroy() {
-	if d == nil {
-		return
-	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.destroyed {
-		return
-	}
-	clear(d.key[:])
-	d.destroyed = true
-}
 
 func canonicalRevisionEvidence(evidence RevisionEvidence) []byte {
 	encoded := make([]byte, 0, 16+16+len(evidence.sourceIdentity.Bytes())+len(evidence.versionCandidate.Bytes())+64)

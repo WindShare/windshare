@@ -93,7 +93,7 @@ func (h *resumeAfterGraceHandle) Close() error {
 	return nil
 }
 
-func TestResumeAfterRelinquishmentReopensRevisionAndReusesCachedPrefix(t *testing.T) {
+func TestResumeWithinGraceReusesResidentCacheAndReopenMatchesMetadata(t *testing.T) {
 	share := flowID[catalog.ShareInstance](201)
 	file := flowID[catalog.FileID](202)
 	parent := flowID[catalog.DirectoryID](203)
@@ -115,7 +115,10 @@ func TestResumeAfterRelinquishmentReopensRevisionAndReusesCachedPrefix(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	modified := catalog.ModifiedTime{}
+	modified, err := catalog.NewModifiedTime(1_000, 0, catalog.TimePrecisionSeconds)
+	if err != nil {
+		t.Fatal(err)
+	}
 	record, err := catalog.NewFileNodeRecord(
 		file,
 		parent,
@@ -144,14 +147,6 @@ func TestResumeAfterRelinquishmentReopensRevisionAndReusesCachedPrefix(t *testin
 	}
 	clock := &runtimeClock{now: time.Unix(10_000, 0)}
 	source := &resumeAfterGraceSource{data: data, modified: modified}
-	revisionDeriver, err := content.NewHMACRevisionIdentityDeriver(content.RevisionIdentityKey{0x91})
-	if err != nil {
-		t.Fatal(err)
-	}
-	metadataBudget, err := content.NewRevisionMetadataBudget(content.DefaultRevisionInvalidationEntries)
-	if err != nil {
-		t.Fatal(err)
-	}
 	store, err := content.NewRevisionStore(content.RevisionStoreConfig{
 		ShareInstance:       share,
 		ChunkSize:           chunkSize,
@@ -164,8 +159,6 @@ func TestResumeAfterRelinquishmentReopensRevisionAndReusesCachedPrefix(t *testin
 		},
 		Clock:            clock,
 		LeaseIDs:         &runtimeIDs{},
-		RevisionDeriver:  revisionDeriver,
-		MetadataBudget:   metadataBudget,
 		CacheInvalidator: cache,
 	})
 	if err != nil {
@@ -200,7 +193,6 @@ func TestResumeAfterRelinquishmentReopensRevisionAndReusesCachedPrefix(t *testin
 		cache.Close()
 		_ = store.Close()
 		_ = capacityOwner.Close()
-		revisionDeriver.Destroy()
 	})
 
 	opened, err := firstService.Open(context.Background(), mustOpenRequest(t, file))
@@ -234,28 +226,20 @@ func TestResumeAfterRelinquishmentReopensRevisionAndReusesCachedPrefix(t *testin
 	requireResumeCapacityUsage(t, store.CapacitySnapshot().Share(), revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 1})
 	requireResumeCapacityUsage(t, firstSessionCapacity.Snapshot(), revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 1})
 
-	checkpointPrefix, err := content.NewRangeSet([]content.Range{{Offset: 0, End: uint64(chunkSize)}})
-	if err != nil {
+	// Closing the session detaches its lease so the open handle stays resident
+	// for RevisionResumeGrace and preserves both FileRevision and cache hits.
+	if err := firstService.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := firstService.Release(firstLease.ID()); err != nil {
-		t.Fatal(err)
-	}
-	requireResumeCapacityUsage(t, store.CapacitySnapshot().Process(), revisioncapacity.CapacityUsage{})
-	requireResumeCapacityUsage(t, store.CapacitySnapshot().Share(), revisioncapacity.CapacityUsage{})
-	requireResumeCapacityUsage(t, firstSessionCapacity.Snapshot(), revisioncapacity.CapacityUsage{})
-
 	if err := store.ValidateLease(firstLease.ID(), firstLease.Descriptor()); !errors.Is(err, content.ErrLeaseExpired) {
-		t.Fatalf("relinquished lease validation error=%v", err)
+		t.Fatalf("detached lease validation error=%v", err)
 	}
-	if opens, closes, reads := source.snapshot(); opens != 1 || closes != 1 || !slices.Equal(reads, []uint64{0}) {
-		t.Fatalf("post-relinquishment source lifecycle opens=%d closes=%d reads=%v", opens, closes, reads)
+	if opens, closes, reads := source.snapshot(); opens != 1 || closes != 0 || !slices.Equal(reads, []uint64{0}) {
+		t.Fatalf("detached grace lifecycle opens=%d closes=%d reads=%v", opens, closes, reads)
 	}
-	requireResumeCapacityUsage(t, store.CapacitySnapshot().Process(), revisioncapacity.CapacityUsage{})
-	requireResumeCapacityUsage(t, store.CapacitySnapshot().Share(), revisioncapacity.CapacityUsage{})
-	if cache.UsedBytes() == 0 {
-		t.Fatal("relinquishment revoked cached progress")
-	}
+	requireResumeCapacityUsage(t, store.CapacitySnapshot().Process(), revisioncapacity.CapacityUsage{StableHandles: 1})
+	requireResumeCapacityUsage(t, store.CapacitySnapshot().Share(), revisioncapacity.CapacityUsage{StableHandles: 1})
+	requireResumeCapacityUsage(t, firstSessionCapacity.Snapshot(), revisioncapacity.CapacityUsage{})
 
 	secondService, err = NewSenderService(SenderServiceConfig{
 		Store: store, SessionCapacity: secondSessionCapacity, Encoder: sealer, Cache: cache,
@@ -263,38 +247,38 @@ func TestResumeAfterRelinquishmentReopensRevisionAndReusesCachedPrefix(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
+	checkpointPrefix, err := content.NewRangeSet([]content.Range{{Offset: 0, End: uint64(chunkSize)}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	resumeRequest, err := NewOpenRequest([]OpenItem{{FileID: file, InitialRanges: checkpointPrefix}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	resumed, err := secondService.Open(context.Background(), resumeRequest)
+	graceResumed, err := secondService.Open(context.Background(), resumeRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
-	resumedItems := resumed.Items()
-	if len(resumedItems) != 1 || resumedItems[0].Failure != nil {
-		t.Fatalf("resume open results=%+v", resumedItems)
+	graceItems := graceResumed.Items()
+	if len(graceItems) != 1 || graceItems[0].Failure != nil {
+		t.Fatalf("grace resume open results=%+v", graceItems)
 	}
-	secondLease := resumedItems[0].Lease
-	if secondLease.ID() == firstLease.ID() {
-		t.Error("resume reused the released lease identity")
+	graceLease := graceItems[0].Lease
+	if graceLease.ID() == firstLease.ID() {
+		t.Error("grace resume reused the detached lease identity")
 	}
-	if secondLease.Descriptor().FileRevision() != firstLease.Descriptor().FileRevision() {
+	if graceLease.Descriptor().FileRevision() != firstLease.Descriptor().FileRevision() {
 		t.Errorf(
-			"identical frozen evidence changed revision after reopen: first=%x second=%x",
+			"resident grace handle changed revision: first=%x grace=%x",
 			firstLease.Descriptor().FileRevision(),
-			secondLease.Descriptor().FileRevision(),
+			graceLease.Descriptor().FileRevision(),
 		)
 	}
-	if opens, closes, reads := source.snapshot(); opens != 2 || closes != 1 || !slices.Equal(reads, []uint64{0}) {
-		t.Errorf("reopen source lifecycle opens=%d closes=%d reads=%v", opens, closes, reads)
+	if opens, closes, reads := source.snapshot(); opens != 1 || closes != 0 || !slices.Equal(reads, []uint64{0}) {
+		t.Errorf("grace resume source lifecycle opens=%d closes=%d reads=%v", opens, closes, reads)
 	}
-	requireResumeCapacityUsage(t, store.CapacitySnapshot().Process(), revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 1})
-	requireResumeCapacityUsage(t, store.CapacitySnapshot().Share(), revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 1})
-	requireResumeCapacityUsage(t, secondSessionCapacity.Snapshot(), revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 1})
-
 	cachedBytes := cache.UsedBytes()
-	resumedPrefix, err := NewBlockRequest(secondLease.ID(), []uint64{0})
+	resumedPrefix, err := NewBlockRequest(graceLease.ID(), []uint64{0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,13 +291,52 @@ func TestResumeAfterRelinquishmentReopensRevisionAndReusesCachedPrefix(t *testin
 		t.Fatalf("cached prefix delivery count=%d err=%v", delivered, serveErr)
 	}
 	if _, _, reads := source.snapshot(); !slices.Equal(reads, []uint64{0}) {
-		t.Errorf("new lease could not reuse cached prefix authority; source reads=%v", reads)
+		t.Errorf("grace resume could not reuse cached prefix; source reads=%v", reads)
 	}
 	if cache.UsedBytes() != cachedBytes {
 		t.Errorf("cached prefix was replaced instead of reused: before=%d after=%d", cachedBytes, cache.UsedBytes())
 	}
 
-	continuation, err := NewBlockRequest(secondLease.ID(), []uint64{1})
+	// Releasing graceLease leaves the earlier detached session's recovery grace
+	// intact until RevisionResumeGrace elapses; once expired, reopening retires
+	// the old handle and assigns a fresh FileRevision whose SourceMetadata still
+	// authorizes reuse.
+	if err := secondService.Release(graceLease.ID()); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ValidateLease(graceLease.ID(), graceLease.Descriptor()); !errors.Is(err, content.ErrLeaseExpired) {
+		t.Fatalf("relinquished lease validation error=%v", err)
+	}
+	requireResumeCapacityUsage(t, secondSessionCapacity.Snapshot(), revisioncapacity.CapacityUsage{})
+	clock.Advance(content.RevisionResumeGrace)
+
+	reopened, err := secondService.Open(context.Background(), resumeRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopenedItems := reopened.Items()
+	if len(reopenedItems) != 1 || reopenedItems[0].Failure != nil {
+		t.Fatalf("reopen results=%+v", reopenedItems)
+	}
+	reopenedLease := reopenedItems[0].Lease
+	if reopenedLease.ID() == graceLease.ID() {
+		t.Error("reopen reused the released lease identity")
+	}
+	if reopenedLease.Descriptor().FileRevision() == firstLease.Descriptor().FileRevision() {
+		t.Errorf("reopened handle reused FileRevision %x", reopenedLease.Descriptor().FileRevision())
+	}
+	comparison := content.CompareRevisions(firstLease.Descriptor(), reopenedLease.Descriptor())
+	if !comparison.AllowsReuse() || comparison.Reason != content.ComparisonMetadataAgreement {
+		t.Fatalf("reopened comparison = %+v, want metadata agreement reuse", comparison)
+	}
+	if opens, closes, reads := source.snapshot(); opens != 2 || closes != 1 || !slices.Equal(reads, []uint64{0}) {
+		t.Errorf("reopen source lifecycle opens=%d closes=%d reads=%v", opens, closes, reads)
+	}
+	requireResumeCapacityUsage(t, store.CapacitySnapshot().Process(), revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 1})
+	requireResumeCapacityUsage(t, store.CapacitySnapshot().Share(), revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 1})
+	requireResumeCapacityUsage(t, secondSessionCapacity.Snapshot(), revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 1})
+
+	continuation, err := NewBlockRequest(reopenedLease.ID(), []uint64{1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -328,6 +351,15 @@ func TestResumeAfterRelinquishmentReopensRevisionAndReusesCachedPrefix(t *testin
 	if _, _, reads := source.snapshot(); !slices.Equal(reads, []uint64{0, uint64(chunkSize)}) {
 		t.Errorf("checkpoint resume re-requested verified progress; source reads=%v", reads)
 	}
+	if err := secondService.Release(reopenedLease.ID()); err != nil {
+		t.Fatal(err)
+	}
+	if opens, closes, reads := source.snapshot(); opens != 2 || closes != 2 || !slices.Equal(reads, []uint64{0, uint64(chunkSize)}) {
+		t.Fatalf("post-relinquishment source lifecycle opens=%d closes=%d reads=%v", opens, closes, reads)
+	}
+	requireResumeCapacityUsage(t, store.CapacitySnapshot().Process(), revisioncapacity.CapacityUsage{})
+	requireResumeCapacityUsage(t, store.CapacitySnapshot().Share(), revisioncapacity.CapacityUsage{})
+	requireResumeCapacityUsage(t, secondSessionCapacity.Snapshot(), revisioncapacity.CapacityUsage{})
 }
 
 func requireResumeCapacityUsage(t *testing.T, snapshot revisioncapacity.ScopeSnapshot, expected revisioncapacity.CapacityUsage) {

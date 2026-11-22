@@ -75,9 +75,6 @@ func TestSelectedFileSourceRejectsSiblingEvenWithValidNativeEvidence(t *testing.
 	if _, err := source.OpenStable(context.Background(), forged); !errors.Is(err, content.ErrRevisionStale) {
 		t.Fatalf("selected leaf exposed its sibling: %v", err)
 	}
-	if _, err := source.RevisionContinuity(forged); !errors.Is(err, content.ErrRevisionStale) {
-		t.Fatalf("continuity accepted out-of-scope reference: %v", err)
-	}
 	if _, err := source.ScanDirectory(context.Background(), catalog.ScanRequest{Directory: forged}); !errors.Is(err, content.ErrRevisionStale) {
 		t.Fatalf("scan accepted out-of-scope reference: %v", err)
 	}
@@ -150,9 +147,6 @@ func TestSelectedFileSourcePreservesMissingObjectEvidence(t *testing.T) {
 	}
 	defer source.Close()
 	record := source.SelectedRoots()[0]
-	if _, err := source.RevisionContinuity(record); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}

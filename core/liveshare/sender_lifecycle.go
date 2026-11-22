@@ -16,14 +16,13 @@ type senderRuntimeLifecycle interface {
 }
 
 type senderOwnedResources struct {
-	runtimeFactory  senderRuntimeLifecycle
-	cache           *contentflow.SharedBlockCache
-	catalogAccess   *senderCatalogAccess
-	revisionStore   *content.RevisionStore
-	revisionDeriver senderRevisionIdentityDeriver
-	catalogStore    *catalog.CatalogStore
-	source          FileSource
-	keyTree         *content.KeyTree
+	runtimeFactory senderRuntimeLifecycle
+	cache          *contentflow.SharedBlockCache
+	catalogAccess  *senderCatalogAccess
+	revisionStore  *content.RevisionStore
+	catalogStore   *catalog.CatalogStore
+	source         FileSource
+	keyTree        *content.KeyTree
 }
 
 // Stop synchronously freezes admission, then transfers teardown to one worker.
@@ -40,14 +39,13 @@ func (sender *PreparedSender) Stop() error {
 	done := make(chan struct{})
 	sender.closeDone = done
 	resources := senderOwnedResources{
-		runtimeFactory:  sender.runtimeFactory,
-		cache:           sender.cache,
-		catalogAccess:   sender.catalogAccess,
-		revisionStore:   sender.revisionStore,
-		revisionDeriver: sender.revisionDeriver,
-		catalogStore:    sender.catalogStore,
-		source:          sender.source,
-		keyTree:         sender.keyTree,
+		runtimeFactory: sender.runtimeFactory,
+		cache:          sender.cache,
+		catalogAccess:  sender.catalogAccess,
+		revisionStore:  sender.revisionStore,
+		catalogStore:   sender.catalogStore,
+		source:         sender.source,
+		keyTree:        sender.keyTree,
 	}
 	var beginErr error
 	if resources.runtimeFactory != nil {
@@ -101,10 +99,6 @@ func (sender *PreparedSender) finishClose(
 	if resources.revisionStore != nil {
 		result = errors.Join(result, resources.revisionStore.Close())
 	}
-	if resources.revisionDeriver != nil {
-		// Store close is the join proof for every user of this injected secret.
-		resources.revisionDeriver.Destroy()
-	}
 	if resources.catalogStore != nil {
 		result = errors.Join(result, resources.catalogStore.Close())
 	}
@@ -134,7 +128,6 @@ func (sender *PreparedSender) finishClose(
 	sender.cache = nil
 	sender.catalogAccess = nil
 	sender.revisionStore = nil
-	sender.revisionDeriver = nil
 	sender.catalogStore = nil
 	sender.source = nil
 	sender.keyTree = nil

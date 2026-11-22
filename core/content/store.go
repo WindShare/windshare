@@ -20,9 +20,8 @@ type RevisionStoreConfig struct {
 	CapacityCoordinator *revisioncapacity.Coordinator
 	CapacityStore       revisioncapacity.StoreConfig
 	Clock               Clock
+	RevisionIDs         RevisionIDGenerator
 	LeaseIDs            LeaseIDGenerator
-	RevisionDeriver     RevisionIdentityDeriver
-	MetadataBudget      *RevisionMetadataBudget
 	CacheInvalidator    CacheInvalidator
 	Tracer              RevisionTracer
 }
@@ -37,31 +36,28 @@ type RevisionStore struct {
 	capacityContext  context.Context
 	capacityCancel   context.CancelFunc
 	clock            Clock
+	revisionIDs      RevisionIDGenerator
 	leaseIDs         LeaseIDGenerator
-	revisionDeriver  RevisionIdentityDeriver
-	metadataBudget   *RevisionMetadataBudget
 	invalidator      CacheInvalidator
 	tracer           RevisionTracer
 
-	mu                       sync.Mutex
-	closed                   bool
-	revisionAdmissionStopped bool
-	revisions                map[catalog.FileID]*revisionState
-	readingRevisions         map[*revisionState]struct{}
-	leases                   map[LeaseID]*leaseState
-	opening                  map[catalog.FileID]*openAttempt
-	idleRevisions            map[revisioncapacity.CandidateToken]*revisionState
-	invalidated              map[revisionIdentity]*revisionMetadataReservation
-	leaseTombstones          map[LeaseID]leaseStatus
-	leaseOrder               []LeaseID
-	leaseCursor              int
-	openWG                   sync.WaitGroup
-	readWG                   sync.WaitGroup
-	capacityWG               sync.WaitGroup
-	closeMu                  sync.Mutex
-	localCloseComplete       bool
-	localCloseErr            error
-	capacityCloseComplete    bool
+	mu                    sync.Mutex
+	closed                bool
+	revisions             map[catalog.FileID]*revisionState
+	readingRevisions      map[*revisionState]struct{}
+	leases                map[LeaseID]*leaseState
+	opening               map[catalog.FileID]*openAttempt
+	idleRevisions         map[revisioncapacity.CandidateToken]*revisionState
+	leaseTombstones       map[LeaseID]leaseStatus
+	leaseOrder            []LeaseID
+	leaseCursor           int
+	openWG                sync.WaitGroup
+	readWG                sync.WaitGroup
+	capacityWG            sync.WaitGroup
+	closeMu               sync.Mutex
+	localCloseComplete    bool
+	localCloseErr         error
+	capacityCloseComplete bool
 }
 
 const IdentityTombstoneLimit = 4_096
@@ -79,8 +75,6 @@ type revisionIdentity struct {
 	file     catalog.FileID
 	revision FileRevision
 }
-
-func (i revisionIdentity) isZero() bool { return i.file.IsZero() || i.revision.IsZero() }
 
 type revisionState struct {
 	descriptor          FileRevisionDescriptor
@@ -192,14 +186,17 @@ func (c revisionCleanup) run() (err error) {
 
 func NewRevisionStore(config RevisionStoreConfig) (*RevisionStore, error) {
 	if config.ShareInstance.IsZero() || config.Catalog == nil || config.Source == nil ||
-		config.CapacityCoordinator == nil || config.RevisionDeriver == nil || config.MetadataBudget == nil {
-		return nil, errors.New("revision store requires share identity, catalog, source, capacity coordinator, revision deriver, and metadata budget")
+		config.CapacityCoordinator == nil {
+		return nil, errors.New("revision store requires share identity, catalog, source, and capacity coordinator")
 	}
 	if _, err := NewFileGeometry(0, config.ChunkSize); err != nil {
 		return nil, err
 	}
 	if config.Clock == nil {
 		config.Clock = wallClock{}
+	}
+	if config.RevisionIDs == nil {
+		config.RevisionIDs = randomRevisionIDs{}
 	}
 	if config.LeaseIDs == nil {
 		config.LeaseIDs = randomLeaseIDs{}
@@ -208,14 +205,14 @@ func NewRevisionStore(config RevisionStoreConfig) (*RevisionStore, error) {
 	store := &RevisionStore{
 		shareInstance: config.ShareInstance, chunkSize: config.ChunkSize,
 		catalog: config.Catalog, source: config.Source,
-		clock: config.Clock, leaseIDs: config.LeaseIDs, revisionDeriver: config.RevisionDeriver,
-		metadataBudget: config.MetadataBudget, invalidator: config.CacheInvalidator, tracer: config.Tracer,
+		clock: config.Clock, revisionIDs: config.RevisionIDs, leaseIDs: config.LeaseIDs,
+		invalidator: config.CacheInvalidator, tracer: config.Tracer,
 		capacityContext: capacityContext, capacityCancel: capacityCancel,
 		capacitySessions: make(map[*revisioncapacity.SessionRegistration]struct{}),
 		revisions:        make(map[catalog.FileID]*revisionState), readingRevisions: make(map[*revisionState]struct{}),
 		leases: make(map[LeaseID]*leaseState), opening: make(map[catalog.FileID]*openAttempt),
-		idleRevisions: make(map[revisioncapacity.CandidateToken]*revisionState),
-		invalidated:   make(map[revisionIdentity]*revisionMetadataReservation), leaseTombstones: make(map[LeaseID]leaseStatus),
+		idleRevisions:   make(map[revisioncapacity.CandidateToken]*revisionState),
+		leaseTombstones: make(map[LeaseID]leaseStatus),
 	}
 	registration, err := config.CapacityCoordinator.RegisterStore(config.CapacityStore, store)
 	if err != nil {
@@ -360,16 +357,6 @@ func (s *RevisionStore) closeLocal() error {
 	s.mu.Unlock()
 	for _, session := range sessions {
 		closeErr = errors.Join(closeErr, session.Close())
-	}
-	s.mu.Lock()
-	metadata := make([]*revisionMetadataReservation, 0, len(s.invalidated))
-	for _, reservation := range s.invalidated {
-		metadata = append(metadata, reservation)
-	}
-	s.invalidated = make(map[revisionIdentity]*revisionMetadataReservation)
-	s.mu.Unlock()
-	for _, reservation := range metadata {
-		reservation.release()
 	}
 	return closeErr
 }

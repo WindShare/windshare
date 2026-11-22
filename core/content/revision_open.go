@@ -33,9 +33,7 @@ type openWorkResult struct {
 	grant      revisioncapacity.AdmissionGrant
 	comparison RevisionComparison
 	metadata   SourceMetadata
-	continuity RevisionContinuity
 	cause      RevisionTraceCause
-	rejected   bool
 	err        error
 }
 
@@ -76,11 +74,6 @@ func (s *RevisionStore) OpenRevision(
 				s.traceRevision(RevisionTraceStageActiveReuse, RevisionTraceCauseUnknown, descriptor.FileID(), descriptor.FileRevision())
 			}
 			return lease, err
-		}
-		if s.revisionAdmissionStopped {
-			s.mu.Unlock()
-			s.traceRevision(RevisionTraceStageMetadataBudgetStop, RevisionTraceCauseMetadataBudget, file, FileRevision{})
-			return RevisionLease{}, fmt.Errorf("%w: revision admission stopped", ErrQuotaExceeded)
 		}
 		if attempt := s.opening[file]; attempt != nil {
 			attempt.waiters++
@@ -168,29 +161,23 @@ func (s *RevisionStore) runOpen(ctx context.Context, attempt *openAttempt) {
 	}
 
 	s.mu.Lock()
-	_, invalidated := s.invalidated[result.identity]
-	admissionStopped := s.revisionAdmissionStopped
 	current := s.opening[attempt.file] == attempt && !s.closed
 	var err error
-	if current && !invalidated && !admissionStopped {
-		result.leaseID, err = s.newLeaseIDLocked()
+	if current {
+		var revisionID FileRevision
+		revisionID, err = s.newFileRevisionLocked(attempt.file)
+		if err == nil {
+			result.identity = revisionIdentity{file: attempt.file, revision: revisionID}
+			result.leaseID, err = s.newLeaseIDLocked()
+		}
 	}
 	s.mu.Unlock()
 	if !current {
 		result.err = context.Canceled
 		return
 	}
-	if invalidated {
-		result.rejected, result.cause, result.err = true, RevisionTraceCauseKnownInvalidation, ErrRevisionDrift
-		return
-	}
-	if admissionStopped {
-		result.rejected, result.cause = true, RevisionTraceCauseMetadataBudget
-		result.err = fmt.Errorf("%w: revision admission stopped", ErrQuotaExceeded)
-		return
-	}
 	if err != nil {
-		result.err = err
+		result.comparison, result.cause, result.err = RevisionComparisonUnavailable, RevisionTraceCauseCatalog, err
 		return
 	}
 
@@ -279,18 +266,6 @@ func (s *RevisionStore) resolveOpenIdentity(
 		result.comparison, result.cause, result.err = RevisionComparisonUnavailable, RevisionTraceCauseCatalog, err
 		return catalog.NodeRecord{}, false
 	}
-	evidence, err = evidenceForSourceContinuity(s.source, record, evidence)
-	if err != nil {
-		result.comparison, result.cause, result.err = RevisionComparisonUnavailable, RevisionTraceCauseSourceOpen, err
-		return catalog.NodeRecord{}, false
-	}
-	revisionID, err := s.revisionDeriver.DeriveRevision(evidence)
-	if err != nil {
-		result.comparison, result.cause, result.err = RevisionComparisonUnavailable, RevisionTraceCauseCatalog, err
-		return catalog.NodeRecord{}, false
-	}
-	result.identity = revisionIdentity{file: attempt.file, revision: revisionID}
-	result.continuity = evidence.Continuity()
 	result.metadata = sourceMetadata(evidence)
 	return record, true
 }
@@ -320,10 +295,6 @@ func cleanupOpenWork(stable StableFile, grant revisioncapacity.AdmissionGrant) (
 // completeOpen confirms store lifecycle, commits coordinator ownership without
 // s.mu, and then publishes the source and first lease in one local transition.
 func (s *RevisionStore) completeOpen(attempt *openAttempt, result openWorkResult) {
-	var cleanups []revisionCleanup
-	var releases []capacityChargeRelease
-	invalidateCache := false
-	metadataStopped := false
 	s.mu.Lock()
 	if attempt.completed {
 		s.mu.Unlock()
@@ -332,46 +303,14 @@ func (s *RevisionStore) completeOpen(attempt *openAttempt, result openWorkResult
 	}
 	attempt.completed = true
 	current := s.opening[attempt.file] == attempt
-	// An unpublished handle-scoped identity is never reused. Retaining its
-	// rejection would charge a new permanent tombstone for every failed retry
-	// of the same stale catalog entry, without protecting any published bytes.
-	if result.comparison == RevisionComparisonMismatch && !result.identity.isZero() &&
-		result.continuity != OpenHandleRevisionContinuity {
-		var budgetErr error
-		cleanups, releases, budgetErr = s.invalidateIdentityLocked(result.identity, nil)
-		invalidateCache = true
-		if budgetErr != nil {
-			metadataStopped = true
-			result.err = errors.Join(result.err, budgetErr)
-		}
-	}
-	if result.err == nil && result.stable != nil && current && !s.closed {
-		switch {
-		case s.revisionAdmissionStopped:
-			result.err = fmt.Errorf("%w: revision admission stopped", ErrQuotaExceeded)
-			metadataStopped = true
-		case s.invalidated[result.identity] != nil:
-			result.err = ErrRevisionDrift
-			result.rejected = true
-			result.cause = RevisionTraceCauseKnownInvalidation
-		case s.revisions[attempt.file] != nil:
-			result.err = errors.New("revision source raced an existing file revision")
-		}
+	if result.err == nil && result.stable != nil && current && !s.closed && s.revisions[attempt.file] != nil {
+		result.err = errors.New("revision source raced an existing file revision")
 	}
 	if result.err == nil && (!current || s.closed || result.stable == nil) {
 		result.err = context.Canceled
 	}
 	s.mu.Unlock()
 
-	for _, cleanup := range cleanups {
-		result.err = errors.Join(result.err, cleanup.run())
-	}
-	for _, release := range releases {
-		result.err = errors.Join(result.err, release.run())
-	}
-	if invalidateCache {
-		s.invalidateRevisionCache(result.identity)
-	}
 	if result.err == nil {
 		result.err = s.commitOpenResult(attempt, &result)
 	}
@@ -395,9 +334,6 @@ func (s *RevisionStore) completeOpen(attempt *openAttempt, result openWorkResult
 		_ = s.EndLease(abandonedLease, LeaseUndelivered)
 	}
 	s.traceOpenCompletion(result, attempt)
-	if metadataStopped {
-		s.traceRevision(RevisionTraceStageMetadataBudgetStop, RevisionTraceCauseMetadataBudget, result.identity.file, result.identity.revision)
-	}
 	close(attempt.done)
 }
 
@@ -414,7 +350,7 @@ func (s *RevisionStore) commitOpenResult(attempt *openAttempt, result *openWorkR
 	}
 
 	s.mu.Lock()
-	if s.closed || s.opening[attempt.file] != attempt || s.invalidated[result.identity] != nil || s.revisions[attempt.file] != nil {
+	if s.closed || s.opening[attempt.file] != attempt || s.revisions[attempt.file] != nil {
 		s.mu.Unlock()
 		return errors.Join(context.Canceled, cleanupCommittedOpen(result.stable, charges))
 	}
@@ -578,11 +514,7 @@ func (s *RevisionStore) finishResidentAdmission(revision *revisionState, done ch
 func (s *RevisionStore) traceOpenCompletion(result openWorkResult, attempt *openAttempt) {
 	switch result.comparison {
 	case RevisionComparisonMismatch:
-		stage := RevisionTraceStageMismatchInvalidation
-		if result.continuity == OpenHandleRevisionContinuity {
-			stage = RevisionTraceStageOpenRejected
-		}
-		s.traceRevision(stage, result.cause, result.identity.file, result.identity.revision)
+		s.traceRevision(RevisionTraceStageOpenRejected, result.cause, result.identity.file, result.identity.revision)
 		return
 	case RevisionComparisonUnavailable:
 		s.traceRevision(RevisionTraceStageUnavailableRetry, result.cause, attempt.file, result.identity.revision)
@@ -591,15 +523,7 @@ func (s *RevisionStore) traceOpenCompletion(result openWorkResult, attempt *open
 	default:
 		return
 	}
-	if result.rejected {
-		s.traceRevision(RevisionTraceStageInvalidationRejection, result.cause, attempt.file, result.identity.revision)
-		return
-	}
 	if attempt.revision != nil {
-		stage := RevisionTraceStageReopenMatch
-		if result.continuity == OpenHandleRevisionContinuity {
-			stage = RevisionTraceStageOpenHandleBound
-		}
-		s.traceRevision(stage, RevisionTraceCauseUnknown, result.identity.file, result.identity.revision)
+		s.traceRevision(RevisionTraceStageOpenHandleBound, RevisionTraceCauseUnknown, result.identity.file, result.identity.revision)
 	}
 }
