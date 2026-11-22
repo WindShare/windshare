@@ -181,10 +181,21 @@ func TestCatalogStoreRejectsCancelledAndClosedReads(t *testing.T) {
 }
 
 func TestBudgetAccountsRejectInvalidHierarchiesAndOverflow(t *testing.T) {
-	if DefaultSessionBudgetLimits().ActiveScans != DefaultSessionActiveScans ||
-		DefaultShareBudgetLimits().MemoryBytes != DefaultShareCatalogMemory ||
-		DefaultProcessBudgetLimits().Entries != DefaultProcessCommittedEntries {
+	sessionLimits := DefaultSessionBudgetLimits()
+	shareLimits := DefaultShareBudgetLimits()
+	processLimits := DefaultProcessBudgetLimits()
+	if sessionLimits.ActiveScans != DefaultSessionActiveScans ||
+		sessionLimits.MemoryBytes != DefaultSessionCatalogMemory ||
+		shareLimits.MemoryBytes != DefaultShareCatalogMemory ||
+		processLimits.Entries != DefaultProcessCommittedEntries ||
+		processLimits.MemoryBytes != DefaultProcessCatalogMemory {
 		t.Fatal("catalog default budget profile drifted from the frozen limits")
+	}
+	if sessionLimits.MemoryBytes < shareLimits.MemoryBytes || shareLimits.MemoryBytes > processLimits.MemoryBytes {
+		t.Fatalf(
+			"catalog default memory budgets invert hierarchy: session=%d share=%d process=%d",
+			sessionLimits.MemoryBytes, shareLimits.MemoryBytes, processLimits.MemoryBytes,
+		)
 	}
 	if _, err := NewBudgetAccount("", BudgetLimits{ActiveScans: 1, ScanWork: 1, Entries: 1, MemoryBytes: 1}); err == nil {
 		t.Fatal("unnamed budget was accepted")

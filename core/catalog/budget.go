@@ -31,9 +31,11 @@ const (
 	DefaultProcessCommittedEntries = 16_777_216
 
 	// Memory limits bound retained authoritative NodeRecord/PagePayload state and
-	// transient directory sorting in memory for live share instances.
-	DefaultSessionCatalogMemory = uint64(64) << 20
-	DefaultShareCatalogMemory   = uint64(128) << 20
+	// transient directory sorting in memory for live share instances. Session
+	// matches Share so any single directory that fits in an empty share can be
+	// scanned without hitting a smaller session gate first.
+	DefaultSessionCatalogMemory = uint64(256) << 20
+	DefaultShareCatalogMemory   = uint64(256) << 20
 	DefaultProcessCatalogMemory = uint64(512) << 20
 )
 

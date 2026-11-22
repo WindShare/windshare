@@ -26,14 +26,8 @@ func wideCatalogIdentity[T ~[IdentityBytes]byte](seed byte) T {
 	return identity
 }
 
-func wideCatalogBudgets(tb testing.TB, prefix string, width int) (*BudgetAccount, *BudgetAccount, *BudgetAccount, *BudgetAccount) {
+func wideCatalogBudgets(tb testing.TB, prefix string) (*BudgetAccount, *BudgetAccount, *BudgetAccount, *BudgetAccount) {
 	tb.Helper()
-	limits := BudgetLimits{
-		ActiveScans: 4,
-		ScanWork:    uint64(width)*4 + 64,
-		Entries:     uint64(width) + 64,
-		MemoryBytes: DefaultShareCatalogMemory,
-	}
 	newAccount := func(name string, accountLimits BudgetLimits) *BudgetAccount {
 		account, err := NewBudgetAccount(prefix+"-"+name, accountLimits)
 		if err != nil {
@@ -41,10 +35,10 @@ func wideCatalogBudgets(tb testing.TB, prefix string, width int) (*BudgetAccount
 		}
 		return account
 	}
-	process := newAccount("process", limits)
-	share := newAccount("share", limits)
-	startup := newAccount("startup", limits)
-	session := newAccount("session", limits)
+	process := newAccount("process", DefaultProcessBudgetLimits())
+	share := newAccount("share", DefaultShareBudgetLimits())
+	startup := newAccount("startup", DefaultSessionBudgetLimits())
+	session := newAccount("session", DefaultSessionBudgetLimits())
 	return process, share, startup, session
 }
 
@@ -133,7 +127,7 @@ func pageObjectDigest(tb testing.TB, store *CatalogStore, directory CommittedDir
 func exerciseCatalogWidth(tb testing.TB, width int) wideCatalogMetrics {
 	tb.Helper()
 	share := wideCatalogIdentity[ShareInstance](17)
-	process, shareBudget, startup, session := wideCatalogBudgets(tb, "wide-catalog", width)
+	process, shareBudget, startup, session := wideCatalogBudgets(tb, "wide-catalog")
 	store := wideCatalogStore(tb, share, process, shareBudget)
 	defer func() {
 		if err := store.Close(); err != nil {
@@ -210,8 +204,8 @@ func TestLongWideCatalogScale(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping wide-catalog scale test in -short mode")
 	}
-	metrics := exerciseCatalogWidth(t, 100_000)
-	if metrics.entries != 100_000 || metrics.pages == 0 || metrics.retainedCatalogMemory == 0 {
+	metrics := exerciseCatalogWidth(t, 200_000)
+	if metrics.entries != 200_000 || metrics.pages != 782 || metrics.retainedCatalogMemory == 0 {
 		t.Fatalf("unexpected wide catalog metrics: %+v", metrics)
 	}
 }
