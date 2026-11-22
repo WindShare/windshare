@@ -58,9 +58,16 @@ func (r DirectoryFailureRecord) DirectoryID() DirectoryID         { return r.dir
 func (r DirectoryFailureRecord) AttemptID() ScanAttemptID         { return r.attempt }
 func (r DirectoryFailureRecord) Generation() DirectoryGeneration  { return r.generation }
 func (r DirectoryFailureRecord) PreviousAttemptID() ScanAttemptID { return r.previousAttempt }
-func (r DirectoryFailureRecord) Kind() FailureKind                { return r.kind }
-func (r DirectoryFailureRecord) Retryable() bool                  { return r.kind == FailureKindTransientIO }
-func (r DirectoryFailureRecord) RetryAfter() time.Duration        { return r.retryAfter }
+func (r DirectoryFailureRecord) Kind() FailureKind { return r.kind }
+
+// Retryable reports whether a later explicit scan attempt may succeed. Budget
+// exhaustion reflects runtime capacity (concurrent scans or sibling shares),
+// not an immutable property of the directory, so it must never brick a share.
+func (r DirectoryFailureRecord) Retryable() bool {
+	return r.kind == FailureKindTransientIO || r.kind == FailureKindBudget
+}
+
+func (r DirectoryFailureRecord) RetryAfter() time.Duration { return r.retryAfter }
 
 func (r DirectoryFailureRecord) valid() error {
 	if r.share.IsZero() || r.directory.IsZero() || r.attempt.IsZero() || r.generation.IsZero() ||
@@ -117,9 +124,10 @@ func (s *CatalogStore) prepareAttemptFailure(
 	attempt *scanAttempt,
 	cause error,
 ) (preparedFailure, error) {
+	kind := classifyFailureKind(cause)
 	record, err := newDirectoryFailureRecord(
 		s.shareInstance, attempt.directory, attempt.id, attempt.generation, attempt.previous,
-		classifyFailureKind(cause), failureRetryAfter(cause),
+		kind, failureRetryAfter(kind, cause),
 	)
 	if err != nil {
 		return preparedFailure{}, err
@@ -191,12 +199,15 @@ func classifyFailureKind(cause error) FailureKind {
 	}
 }
 
-func failureRetryAfter(cause error) time.Duration {
+func failureRetryAfter(kind FailureKind, cause error) time.Duration {
+	if kind != FailureKindTransientIO && kind != FailureKindBudget {
+		return 0
+	}
 	var scanError *ScanError
 	if errors.As(cause, &scanError) && scanError.transient {
 		return scanError.cooldown
 	}
-	return 0
+	return DefaultScanRetryCooldown
 }
 
 func directoryFailureFromRecord(record DirectoryFailureRecord, cause error) *DirectoryFailure {

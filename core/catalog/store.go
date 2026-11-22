@@ -52,6 +52,11 @@ type CatalogStore struct {
 	attempts        map[DirectoryID]*scanAttempt
 	usedAttempts    map[scanAttemptIdentity]struct{}
 	usedGenerations map[DirectoryGeneration]struct{}
+	activeScans     int
+	scanSequence    uint64
+	exclusiveRetry  bool
+	retryQueue      []*scanAttempt
+	scanTurnWake    chan struct{}
 	scanWG          sync.WaitGroup
 }
 
@@ -184,6 +189,8 @@ func (s *CatalogStore) Close() error {
 	s.attempts = nil
 	s.usedAttempts = nil
 	s.usedGenerations = nil
+	s.retryQueue = nil
+	s.broadcastScanTurnLocked()
 	s.mu.Unlock()
 	s.commitMu.Unlock()
 	for _, attempt := range attempts {
@@ -390,15 +397,73 @@ func (s *CatalogStore) runAttempt(attempt *scanAttempt, directory NodeRecord, se
 		}
 		s.completeFailedAttempt(attempt, resultErr, prepared, prepareErr, sessionBudget)
 	}()
+	var overlapped bool
+	committed, overlapped, resultErr = s.runParallelScanPass(attempt, directory, sessionBudget, scanner)
+	if resultErr == nil || attemptContext.Err() != nil || !s.shouldRetryContendedBudget(resultErr, sessionBudget, overlapped) {
+		return
+	}
+	committed, resultErr = s.runExclusiveRetryPass(attempt, directory, sessionBudget, scanner)
+}
+
+func (s *CatalogStore) runParallelScanPass(
+	attempt *scanAttempt,
+	directory NodeRecord,
+	sessionBudget *BudgetAccount,
+	scanner DirectoryScanner,
+) (committed CommittedDirectory, overlapped bool, resultErr error) {
+	startSeq, hadPeer, err := s.enterParallelScan(attempt.ctx)
+	if err != nil {
+		return CommittedDirectory{}, false, err
+	}
+	var succeeded bool
+	defer func() {
+		// Release transient buffers before waking exclusive retry waiters so the
+		// woken scan observes freed capacity immediately, including on panic.
+		if !succeeded {
+			attempt.resources.reset()
+		}
+		overlapped = s.leaveParallelScan(startSeq, hadPeer)
+	}()
+	committed, resultErr = s.executeScanPass(attempt, directory, sessionBudget, scanner)
+	succeeded = resultErr == nil
+	return committed, overlapped, resultErr
+}
+
+func (s *CatalogStore) runExclusiveRetryPass(
+	attempt *scanAttempt,
+	directory NodeRecord,
+	sessionBudget *BudgetAccount,
+	scanner DirectoryScanner,
+) (CommittedDirectory, error) {
+	if err := s.enterExclusiveRetry(attempt.ctx, attempt); err != nil {
+		return CommittedDirectory{}, err
+	}
+	var succeeded bool
+	defer func() {
+		if !succeeded {
+			attempt.resources.reset()
+		}
+		s.leaveExclusiveRetry()
+	}()
+	committed, err := s.executeScanPass(attempt, directory, sessionBudget, scanner)
+	succeeded = err == nil
+	return committed, err
+}
+
+func (s *CatalogStore) executeScanPass(
+	attempt *scanAttempt,
+	directory NodeRecord,
+	sessionBudget *BudgetAccount,
+	scanner DirectoryScanner,
+) (CommittedDirectory, error) {
+	attemptContext := attempt.ctx
 	work := scanWorkMeter{store: s, resources: attempt.resources}
 	if err := work.Consume(1); err != nil {
-		resultErr = err
-		return
+		return CommittedDirectory{}, err
 	}
 	sorter, err := newDirectorySorter(attempt.directory, attempt.resources)
 	if err != nil {
-		resultErr = err
-		return
+		return CommittedDirectory{}, err
 	}
 	defer sorter.Close()
 	collector := &scanChildCollector{
@@ -413,17 +478,14 @@ func (s *CatalogStore) runAttempt(attempt *scanAttempt, directory NodeRecord, se
 	collector.Close()
 	s.publishAttemptProgress(attempt, collector.Count(), true)
 	if err != nil {
-		resultErr = err
-		return
+		return CommittedDirectory{}, err
 	}
 	sortResult, err := sorter.Finish(attemptContext)
 	if err != nil {
-		resultErr = err
-		return
+		return CommittedDirectory{}, err
 	}
 	if result.OmittedCount > MaxDirectoryEntries || sortResult.omittedCount > MaxDirectoryEntries-result.OmittedCount {
-		resultErr = fmt.Errorf("%w: directory %x exceeds its entry limit", ErrPageLimit, attempt.directory)
-		return
+		return CommittedDirectory{}, fmt.Errorf("%w: directory %x exceeds its entry limit", ErrPageLimit, attempt.directory)
 	}
 	commit := DirectoryCommit{
 		directory:    directory,
@@ -432,17 +494,144 @@ func (s *CatalogStore) runAttempt(attempt *scanAttempt, directory NodeRecord, se
 		omittedCount: result.OmittedCount + sortResult.omittedCount,
 	}
 	if err := validateDirectoryCommit(s.shareInstance, commit, false); err != nil {
-		resultErr = err
-		return
+		return CommittedDirectory{}, err
 	}
 	s.commitMu.Lock()
-	committed, _, err = s.commitDirectoryLocked(attemptContext, commit, sessionBudget, attempt.resources, true, attempt)
+	committed, _, err := s.commitDirectoryLocked(attemptContext, commit, sessionBudget, attempt.resources, true, attempt)
 	s.commitMu.Unlock()
 	if err != nil {
-		resultErr = err
-		return
+		return CommittedDirectory{}, err
 	}
 	result.PublishOmissions(sortResult.omittedCount, sortResult.omittedSamples)
+	return committed, nil
+}
+
+func (s *CatalogStore) scanTurnWakeLocked() <-chan struct{} {
+	if s.scanTurnWake == nil {
+		s.scanTurnWake = make(chan struct{})
+	}
+	return s.scanTurnWake
+}
+
+func (s *CatalogStore) broadcastScanTurnLocked() {
+	if s.scanTurnWake != nil {
+		close(s.scanTurnWake)
+		s.scanTurnWake = nil
+	}
+}
+
+func (s *CatalogStore) removeRetryWaiterLocked(target *scanAttempt) {
+	for index, queued := range s.retryQueue {
+		if queued != target {
+			continue
+		}
+		copy(s.retryQueue[index:], s.retryQueue[index+1:])
+		s.retryQueue[len(s.retryQueue)-1] = nil
+		s.retryQueue = s.retryQueue[:len(s.retryQueue)-1]
+		return
+	}
+}
+
+func (s *CatalogStore) enterParallelScan(ctx context.Context) (uint64, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, false, err
+	}
+	for {
+		s.mu.Lock()
+		if s.closed {
+			s.mu.Unlock()
+			return 0, false, ErrCatalogClosed
+		}
+		// Keep the fast path uncontended unless a budget-contended scan is
+		// waiting for or running its serialized retry turn.
+		if !s.exclusiveRetry && len(s.retryQueue) == 0 {
+			hadPeer := s.activeScans > 0
+			s.activeScans++
+			s.scanSequence++
+			startSeq := s.scanSequence
+			s.mu.Unlock()
+			return startSeq, hadPeer, nil
+		}
+		wake := s.scanTurnWakeLocked()
+		s.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return 0, false, ctx.Err()
+		case <-wake:
+		}
+	}
+}
+
+func (s *CatalogStore) leaveParallelScan(startSeq uint64, hadPeer bool) bool {
+	s.mu.Lock()
+	overlapped := hadPeer || s.scanSequence != startSeq || s.activeScans > 1
+	s.activeScans--
+	s.scanSequence++
+	if s.activeScans == 0 {
+		s.broadcastScanTurnLocked()
+	}
+	s.mu.Unlock()
+	return overlapped
+}
+
+func (s *CatalogStore) enterExclusiveRetry(ctx context.Context, attempt *scanAttempt) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return ErrCatalogClosed
+	}
+	s.retryQueue = append(s.retryQueue, attempt)
+	for {
+		if s.closed {
+			s.removeRetryWaiterLocked(attempt)
+			s.broadcastScanTurnLocked()
+			s.mu.Unlock()
+			return ErrCatalogClosed
+		}
+		if !s.exclusiveRetry && s.activeScans == 0 && len(s.retryQueue) > 0 && s.retryQueue[0] == attempt {
+			s.removeRetryWaiterLocked(attempt)
+			s.exclusiveRetry = true
+			s.activeScans++
+			s.scanSequence++
+			s.mu.Unlock()
+			return nil
+		}
+		wake := s.scanTurnWakeLocked()
+		s.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			s.mu.Lock()
+			s.removeRetryWaiterLocked(attempt)
+			s.broadcastScanTurnLocked()
+			s.mu.Unlock()
+			return ctx.Err()
+		case <-wake:
+			s.mu.Lock()
+		}
+	}
+}
+
+func (s *CatalogStore) leaveExclusiveRetry() {
+	s.mu.Lock()
+	s.activeScans--
+	s.scanSequence++
+	s.exclusiveRetry = false
+	s.broadcastScanTurnLocked()
+	s.mu.Unlock()
+}
+
+func (s *CatalogStore) shouldRetryContendedBudget(err error, sessionBudget *BudgetAccount, overlapped bool) bool {
+	var budgetErr *budgetExceededError
+	if !errors.As(err, &budgetErr) || !budgetErr.contended {
+		return false
+	}
+	// Session contention belongs to concurrent scans on that session; share or
+	// process contention can be resolved locally only when another scan ran in
+	// this store during the failed pass.
+	return budgetErr.account == sessionBudget || overlapped
 }
 
 func (s *CatalogStore) completeSucceededAttempt(attempt *scanAttempt, committed CommittedDirectory) {

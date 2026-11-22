@@ -134,6 +134,19 @@ func usageWithin(used, limit ResourceUsage) bool {
 		used.Entries <= limit.Entries && used.MemoryBytes <= limit.MemoryBytes
 }
 
+type budgetExceededError struct {
+	account   *BudgetAccount
+	contended bool
+}
+
+func (e *budgetExceededError) Error() string {
+	return fmt.Sprintf("%s: %s", ErrBudgetExceeded, e.account.name)
+}
+
+func (e *budgetExceededError) Unwrap() error {
+	return ErrBudgetExceeded
+}
+
 func (a *BudgetAccount) add(usage ResourceUsage) error {
 	if a == nil {
 		return errors.New("catalog budget hierarchy contains a nil account")
@@ -142,7 +155,10 @@ func (a *BudgetAccount) add(usage ResourceUsage) error {
 	defer a.mu.Unlock()
 	next, ok := addUsage(a.used, usage)
 	if !ok || !usageWithin(next, a.limits) {
-		return fmt.Errorf("%w: %s", ErrBudgetExceeded, a.name)
+		// Capture concurrent-scan contention atomically under the account lock so
+		// a peer scan finishing immediately afterward cannot hide that it held
+		// transient capacity at the moment of overflow.
+		return &budgetExceededError{account: a, contended: a.used.ActiveScans > 1}
 	}
 	a.used = next
 	a.peak = maxUsage(a.peak, next)

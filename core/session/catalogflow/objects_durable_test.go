@@ -8,6 +8,7 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/link"
@@ -435,6 +436,122 @@ func TestHostileCatalogObjectsAndWireFieldsFailClosed(t *testing.T) {
 	verifier := CatalogPayloadDecoder{}
 	if _, err := verifier.Verify(cancelled, fixture.share, request, []byte{1}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled verification = %v", err)
+	}
+}
+
+type stepClock struct{ now time.Time }
+
+func (c *stepClock) Now() time.Time { return c.now }
+
+func TestCatalogStoreBudgetFailureEncodesRetryableWireObjectAndRecovers(t *testing.T) {
+	fixture := newCatalogObjectFixture(t)
+	clock := &stepClock{now: time.Unix(1_700_000_000, 0)}
+	process, err := catalog.NewBudgetAccount("wire-process", catalog.DefaultProcessBudgetLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	shareBudget, err := catalog.NewBudgetAccount("wire-share", catalog.DefaultShareBudgetLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var attempts, generations atomic.Uint32
+	store, err := catalog.NewCatalogStore(catalog.StoreConfig{
+		ShareInstance:  fixture.share,
+		ProcessBudget:  process,
+		ShareBudget:    shareBudget,
+		FailureEncoder: CatalogFailureEncoder{},
+		Clock:          clock,
+		AttemptIDs: catalog.ScanAttemptIDGeneratorFunc(func() (catalog.ScanAttemptID, error) {
+			return scanAttemptID(t, byte(attempts.Add(1))), nil
+		}),
+		Generations: catalog.DirectoryGenerationGeneratorFunc(func() (catalog.DirectoryGeneration, error) {
+			return generationID(t, byte(generations.Add(1))), nil
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	generousSession, err := catalog.NewBudgetAccount("wire-generous", catalog.DefaultSessionBudgetLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tightSession, err := catalog.NewBudgetAccount("wire-tight", catalog.BudgetLimits{
+		ActiveScans: 4, ScanWork: 100, Entries: 100, MemoryBytes: catalog.MaxCatalogPayloadBytes + (32 << 10),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := directoryID(t, 180)
+	dir := directoryID(t, 181)
+	commitSelectedDirectories(t, store, fixture.share, root, []catalog.DirectoryID{dir}, generousSession)
+
+	bigRef, err := catalog.NewSourceReference(bytes.Repeat([]byte("x"), 40<<10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	scanner := catalog.DirectoryScannerFunc(func(ctx context.Context, request catalog.ScanRequest) (catalog.ScanResult, error) {
+		for index := range 3 {
+			identity, _ := catalog.NewSourceIdentity([]byte{byte(index + 1)})
+			candidate, _ := catalog.NewVersionCandidate([]byte{byte(index + 10)})
+			err := request.Children.Add(ctx, catalog.ScannedChild{
+				FileID: fileID(t, byte(190+index)), Name: "file-" + string(rune('a'+index)),
+				SourceReference: bigRef, SourceIdentity: identity, VersionCandidate: candidate, ExpectedSize: 1,
+			})
+			if err != nil {
+				return catalog.ScanResult{}, err
+			}
+		}
+		return catalog.ScanResult{}, nil
+	})
+
+	tightSource, err := NewCatalogStoreSource(CatalogStoreSourceConfig{
+		ShareInstance: fixture.share, Store: store, SessionBudget: tightSession, Scanner: scanner,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	generousSource, err := NewCatalogStoreSource(CatalogStoreSourceConfig{
+		ShareInstance: fixture.share, Store: store, SessionBudget: generousSession, Scanner: scanner,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tightService, err := NewAddressedSenderService(fixture.share, tightSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	generousService, err := NewAddressedSenderService(fixture.share, generousSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	activeService := tightService
+	client, err := NewClient(ClientConfig{
+		ShareInstance: fixture.share,
+		Transport: PageTransportFunc(func(ctx context.Context, req ListRequest) ([]byte, error) {
+			return activeService.Serve(ctx, req, nil)
+		}),
+		Verifier: CatalogPayloadDecoder{},
+		Now:      clock.Now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = client.LoadDirectory(context.Background(), dir)
+	var wireFailure DirectoryFailure
+	if !errors.As(err, &wireFailure) || wireFailure.Code != DirectoryCodeBudget ||
+		!wireFailure.Retryable || wireFailure.RetryAfter != catalog.DefaultScanRetryCooldown {
+		t.Fatalf("wire budget failure = %v, want retryable DirectoryCodeBudget", err)
+	}
+
+	activeService = generousService
+	clock.now = clock.now.Add(wireFailure.RetryAfter)
+	snapshot, err := client.LoadDirectory(context.Background(), dir)
+	if err != nil || snapshot.EntryCount() != 3 {
+		t.Fatalf("wire retry after cooldown = %+v err=%v", snapshot, err)
 	}
 }
 

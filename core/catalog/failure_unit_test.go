@@ -13,7 +13,7 @@ import (
 func testFailureRecord(t *testing.T, attempt, generation byte, previous ScanAttemptID, kind FailureKind) DirectoryFailureRecord {
 	t.Helper()
 	retryAfter := time.Duration(0)
-	if kind == FailureKindTransientIO {
+	if kind == FailureKindTransientIO || kind == FailureKindBudget {
 		retryAfter = MinScanRetryCooldown
 	}
 	record, err := newDirectoryFailureRecord(
@@ -93,6 +93,16 @@ func TestFailureRecordValidationAndClassificationRejectAmbiguousAuthority(t *tes
 	transientCause := NewTransientScanError(errors.New("retry"), MinScanRetryCooldown)
 	if got := classifyFailureKind(transientCause); got != FailureKindTransientIO {
 		t.Fatalf("classify transient = %d", got)
+	}
+	budgetRecord := testFailureRecord(t, 7, 8, transient.attempt, FailureKindBudget)
+	if !budgetRecord.Retryable() || failureRetryAfter(FailureKindBudget, ErrBudgetExceeded) != DefaultScanRetryCooldown {
+		t.Fatalf("budget failure retryability = %v / %v", budgetRecord.Retryable(), failureRetryAfter(FailureKindBudget, ErrBudgetExceeded))
+	}
+	if _, err := newDirectoryFailureRecord(
+		budgetRecord.share, budgetRecord.directory, budgetRecord.attempt, budgetRecord.generation,
+		budgetRecord.previousAttempt, FailureKindBudget, 0,
+	); err == nil {
+		t.Fatal("budget failure without retry cooldown was accepted")
 	}
 }
 
@@ -271,8 +281,9 @@ func TestPersistAttemptFailureEnforcesEncoderBudgetAndAttemptBounds(t *testing.T
 		})
 		_, listErr := store.ListChildren(context.Background(), directory, session, ScanOptions{}, scanner)
 		var failure *DirectoryFailure
-		if !errors.As(listErr, &failure) || failure.Kind != FailureKindBudget {
-			t.Fatalf("budget-exhausted scan error = %v, want persisted FailureKindBudget", listErr)
+		if !errors.As(listErr, &failure) || failure.Kind != FailureKindBudget ||
+			!failure.Transient || failure.RetryAfter != DefaultScanRetryCooldown {
+			t.Fatalf("budget-exhausted scan error = %v, want retryable persisted FailureKindBudget", listErr)
 		}
 		if _, found, err := store.FailurePayload(context.Background(), directory, failure.AttemptID); err != nil || !found {
 			t.Fatalf("persisted budget failure payload: found=%v err=%v", found, err)
