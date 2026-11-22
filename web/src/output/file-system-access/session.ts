@@ -48,7 +48,6 @@ import type {
   PersistentOutputNamespaceClaimPort,
   PersistentTreeTraceEvent,
 } from '../persistent-tree/contracts'
-import type { FileCheckpointV2 } from '../persistence/checkpoint'
 import { PersistentTreeOutputSession } from '../persistent-tree/session'
 import {
   createPersistentOutputStageAuthority,
@@ -92,7 +91,7 @@ import {
 import {
   FSASettlementLedgerAuthority,
   type FSACheckpointSettlementSnapshot,
-  type FSAResumableCheckpointEvidence,
+  type FSAResumableCheckpointSettlement,
 } from './settlement-ledger'
 import { closeFailedFSAAssembly, closeFSAOutputAuthorities } from './assembly-cleanup'
 
@@ -143,9 +142,9 @@ export interface FSAFinalSettlementObservation {
   checkpointSettlementSnapshot(
     evidence: PersistentDirectTreeMaterializationEvidence,
   ): Promise<FSACheckpointSettlementSnapshot>
-  resumableCheckpointEvidence(
-    preScanned?: readonly FileCheckpointV2[],
-  ): Promise<FSAResumableCheckpointEvidence>
+  resumableCheckpointSettlement(
+    evidence: PersistentDirectTreeMaterializationEvidence,
+  ): Promise<FSAResumableCheckpointSettlement>
   retireRecoveryMetadata(): Promise<void>
 }
 
@@ -470,8 +469,8 @@ export class FileSystemAccessOutputSession implements
       },
       checkpointSettlementSnapshot: (evidence: PersistentDirectTreeMaterializationEvidence) =>
         this.#settlementLedger.checkpointSettlementSnapshot(evidence),
-      resumableCheckpointEvidence: (preScanned?: readonly FileCheckpointV2[]) =>
-        this.#settlementLedger.resumableCheckpointEvidence(preScanned),
+      resumableCheckpointSettlement: (evidence: PersistentDirectTreeMaterializationEvidence) =>
+        this.#settlementLedger.resumableCheckpointSettlement(evidence),
       retireRecoveryMetadata: () => this.#settlementLedger.retireRecoveryMetadata(),
     })
   }

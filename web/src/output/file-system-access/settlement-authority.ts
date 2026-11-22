@@ -214,7 +214,10 @@ export class FSAOperationSettlementAuthority implements FileSystemAccessOperatio
         throw new TypeError('FSA pause requires Receiving lifecycle state')
       }
       await observation.verifyOperationBinding()
-      const snapshot = await observation.checkpointSettlementSnapshot(cut.sealEvidence())
+      const {
+        snapshot,
+        evidence: checkpointEvidence,
+      } = await observation.resumableCheckpointSettlement(cut.sealEvidence())
       const validated = validateFSASettlementEvidence({
         intent: this.#intent,
         directoryScope: this.#directoryScope,
@@ -223,7 +226,6 @@ export class FSAOperationSettlementAuthority implements FileSystemAccessOperatio
         summary: request.materialization,
         outcome: 'resumable',
       })
-      const checkpointEvidence = await observation.resumableCheckpointEvidence(snapshot.checkpoints)
       const evidence = Object.freeze({ ...validated, ...checkpointEvidence })
       const receipt = await this.#settlementReceipt('resumable-receive', request, evidence)
       const next = this.#reduce(current.state, {

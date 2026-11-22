@@ -81,11 +81,11 @@ export async function openFSASemanticOutputRepository(
   return repository as FSASemanticOutputRepository
 }
 
-export async function scanAllFSAFileCheckpoints(
+export async function forEachFSAFileCheckpointPage(
   journal: FileCheckpointJournal,
   source: 'committed' | 'candidates',
-): Promise<readonly FileCheckpointV2[]> {
-  const records: FileCheckpointV2[] = []
+  visit: (records: readonly FileCheckpointV2[]) => void,
+): Promise<void> {
   let cursor: string | undefined
   do {
     const scan = {
@@ -99,8 +99,18 @@ export async function scanAllFSAFileCheckpoints(
       scan,
       journal.binding,
     )
-    records.push(...page.records)
+    visit(page.records)
     cursor = page.nextCursor
   } while (cursor !== undefined)
+}
+
+export async function scanAllFSAFileCheckpoints(
+  journal: FileCheckpointJournal,
+  source: 'committed' | 'candidates',
+): Promise<readonly FileCheckpointV2[]> {
+  const records: FileCheckpointV2[] = []
+  await forEachFSAFileCheckpointPage(journal, source, pageRecords => {
+    records.push(...pageRecords)
+  })
   return Object.freeze(records)
 }
