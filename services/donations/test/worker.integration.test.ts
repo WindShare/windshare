@@ -589,3 +589,40 @@ describe('windshare-donations Worker + SQLite DO HTTP integration', () => {
     expect(afterLogout.status).toBe(401)
   })
 })
+
+describe('windshare-donations admin list pagination', () => {
+  it('rejects malformed admin list pagination instead of failing or restarting from page one', async () => {
+    const loginRes = await mf.dispatchFetch(`${DONATE_ORIGIN}/v1/admin/login`, {
+      method: 'POST',
+      headers: {
+        Origin: DONATE_ORIGIN,
+        'Content-Type': 'application/json',
+        'CF-Connecting-IP': '198.51.100.77',
+      },
+      body: JSON.stringify({ password: SECRETS.DONATE_ADMIN_PASSWORD }),
+    })
+    expect(loginRes.status).toBe(200)
+    const cookiePair = (loginRes.headers.get('set-cookie') ?? '').split(';', 1)[0] ?? ''
+    const list = (query: string) => mf.dispatchFetch(`${DONATE_ORIGIN}/v1/admin/donations${query}`, {
+      headers: { Cookie: cookiePair },
+    })
+
+    const fractional = await list('?limit=1.5')
+    expect(fractional.status).toBe(400)
+    expect(await fractional.json()).toEqual({ error: 'invalid_limit' })
+    expect((await list('?limit=abc')).status).toBe(400)
+    expect((await list('?limit=-1')).status).toBe(400)
+
+    const badCursor = await list('?after=not-a-cursor')
+    expect(badCursor.status).toBe(400)
+    expect(await badCursor.json()).toEqual({ error: 'invalid_cursor' })
+
+    const ok = await list('?limit=1')
+    expect(ok.status).toBe(200)
+    const page = await ok.json() as AdminDonationsPage
+    expect(page.items.length).toBeLessThanOrEqual(1)
+    if (page.nextCursor !== null) {
+      expect((await list(`?limit=1&after=${encodeURIComponent(page.nextCursor)}`)).status).toBe(200)
+    }
+  })
+})

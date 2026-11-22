@@ -37,6 +37,7 @@ import {
 } from '../providers'
 import { parseFixedPointAmount, sanitizePlainText, type ParsedMoney } from '../sanitize'
 import { constantTimeEqual, hmacSha256Hex, type AfdianOrderRecord } from '../verify'
+import { decodeAdminCursor } from '../wall-store'
 import {
   commitDonationsBatchToWall,
   findExistingDonationsInWall,
@@ -52,6 +53,7 @@ const AFDIAN_SYNC_PER_PAGE = 50
 // stay safely below the 50 external subrequests/request Workers Free limit.
 const MAX_AFDIAN_SYNC_SPONSOR_LOOKUPS = 40
 const AFDIAN_RATE_LIMIT_REASON = 'http_429'
+const PAGE_LIMIT_PATTERN = /^\d+$/
 const ADMIN_SESSION_HASH_DOMAIN = 'windshare-donations-admin-session:v1:'
 
 interface AuthenticatedSession extends AdminSessionRecord {
@@ -179,6 +181,28 @@ async function handleAdminLogin(
     200,
     { 'Set-Cookie': buildSessionCookie(sessionToken, ADMIN_SESSION_TTL_SECONDS) },
   )
+}
+
+// A malformed cursor or limit must be a client error: an unparsable cursor would otherwise
+// silently restart from the newest page, and a fractional limit reaches SQLite's LIMIT as a
+// REAL and fails the whole request with "datatype mismatch" (an unhandled 500).
+function buildAdminDonationsQuery(params: URLSearchParams): URLSearchParams | Response {
+  const forwarded = new URLSearchParams()
+  const after = params.get('after')
+  if (after !== null) {
+    if (decodeAdminCursor(after) === null) {
+      return adminJsonResponse({ error: 'invalid_cursor' }, 400)
+    }
+    forwarded.set('after', after)
+  }
+  const limit = params.get('limit')
+  if (limit !== null) {
+    if (!PAGE_LIMIT_PATTERN.test(limit)) {
+      return adminJsonResponse({ error: 'invalid_limit' }, 400)
+    }
+    forwarded.set('limit', limit)
+  }
+  return forwarded
 }
 
 function parseVisibilityCommand(data: Record<string, unknown>): AdminVisibilityCommand | null {
@@ -613,8 +637,10 @@ export async function handleAdminApi(
   }
 
   if (method === 'GET' && pathname === '/v1/admin/donations') {
+    const forwarded = buildAdminDonationsQuery(url.searchParams)
+    if (forwarded instanceof Response) return forwarded
     const stub = getWallStub(env)
-    const query = url.searchParams.toString()
+    const query = forwarded.toString()
     const suffix = query.length > 0 ? `?${query}` : ''
     const upstream = await stub.fetch(
       `https://donation-wall.internal/internal/admin/donations${suffix}`,
