@@ -66,3 +66,52 @@ func TestDirectoryReservationAndCleanupReleaseGoRoots(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestCallerSymlinkedContainerOpensItsTargetWithoutFollowingInnerLinks(t *testing.T) {
+	base := t.TempDir()
+	target := filepath.Join(base, "target")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(target, "elsewhere"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	container := filepath.Join(base, "downloads")
+	if err := os.Symlink(target, container); err != nil {
+		t.Skipf("directory symlink unavailable: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(target, "elsewhere"), filepath.Join(target, "inner")); err != nil {
+		t.Fatal(err)
+	}
+	for _, create := range []bool{false, true} {
+		p, err := Open(container, create)
+		if err != nil {
+			t.Fatalf("Open(symlinked container, create=%t) = %v", create, err)
+		}
+		if p.RootOpenDisposition() != outputcap.CallerProvidedContainer {
+			t.Fatalf("existing linked container disposition = %v", p.RootOpenDisposition())
+		}
+		d := p.Root().(*directory)
+		info, err := os.Stat(target)
+		if err != nil || !os.SameFile(d.info, info) {
+			t.Fatalf("root is not pinned to the link target: %v", err)
+		}
+		// Duplicate re-validates the pinned path; a pinned symlink would fail here.
+		duplicate, err := d.Duplicate()
+		if err != nil {
+			t.Fatalf("duplicate pinned root: %v", err)
+		}
+		if err := duplicate.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if inner, err := d.OpenDirectory("inner", false); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
+			if inner != nil {
+				_ = inner.Close()
+			}
+			t.Fatalf("inner symlink followed: %v", err)
+		}
+		if err := p.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

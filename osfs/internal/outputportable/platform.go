@@ -35,11 +35,28 @@ func Open(path string, create bool) (outputcap.Platform, error) {
 			disposition = outputcap.AuthorityCreatedRoot
 		}
 	}
-	root, err := openDirectory(absolute)
+	resolved, err := resolveContainerLink(absolute)
+	if err != nil {
+		return nil, err
+	}
+	root, err := openDirectory(resolved)
 	if err != nil {
 		return nil, err
 	}
 	return &Platform{root: root, disposition: disposition}, nil
+}
+
+// The caller names the container, so its own final link carries the same trust
+// as the intermediate links that path resolution already follows; refusing it
+// only breaks a symlinked destination or a working directory entered through
+// one. The resolved directory is then pinned by identity, and every name inside
+// it, including later reopens of this root, stays no-follow.
+func resolveContainerLink(path string) (string, error) {
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		return path, nil
+	}
+	return filepath.EvalSymlinks(path)
 }
 
 func (platform *Platform) Root() outputcap.Directory { return platform.root }
