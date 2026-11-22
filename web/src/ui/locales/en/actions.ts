@@ -16,7 +16,7 @@ export const actions = {
   finishRestoration: 'Finish filename restoration setup',
   save: 'Save',
   downloadAgain: 'Save again',
-  saveAgainHint: 'Saves the complete copy already stored in this browser without reconnecting to the sender.',
+  saveAgainHint: 'Saves the copy already stored in this browser without reconnecting to the sender.',
   restartIncomplete: 'Restart incomplete files',
   forget: 'Remove from Downloads',
   deleteHistory: 'Delete history record',
