@@ -119,7 +119,6 @@ func (s *directorySorter) Finish(ctx context.Context) (directorySortResult, erro
 	s.rawNameBytes = 0
 
 	admitted, omittedCount, samples, omittedBytes := admitSortedSiblings(records, rawNames)
-	rawNames = nil
 	releasedBytes += omittedBytes
 	if releasedBytes > 0 {
 		if err := s.meter.Release(ResourceUsage{MemoryBytes: releasedBytes}); err != nil {
