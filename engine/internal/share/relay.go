@@ -3,7 +3,6 @@ package share
 import (
 	"context"
 	"io"
-	"time"
 
 	"github.com/windshare/windshare/engine/relayprofile"
 
@@ -76,17 +75,7 @@ func relayRegistrationIdentity(material liveshare.RegistrationMaterial) (v2.Shar
 }
 
 func wakeOnNetworkChange(ctx context.Context, wake func()) {
-	monitor := networkstate.NewMonitor(nil, networkstate.DefaultDebounce)
-	ticker := time.NewTicker(networkstate.DefaultPollInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case now := <-ticker.C:
-			if _, changed, err := monitor.Poll(ctx, now); err == nil && changed {
-				wake()
-			}
-		}
-	}
+	watcher := networkstate.NewWatcher(networkstate.WatcherConfig{})
+	defer watcher.Close()
+	watcher.Watch(ctx, func(networkstate.Snapshot) { wake() })
 }

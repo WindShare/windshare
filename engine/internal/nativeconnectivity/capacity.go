@@ -19,9 +19,10 @@ type Capacity struct {
 	admission *nativepeer.Admission
 	turn      *turncapacity.Pool
 	attempts  *peerset.Capacity
+	monitor   nativepeer.NetworkMonitor
 }
 
-func NewCapacity(clock nativepeer.AdmissionClock) (*Capacity, error) {
+func NewCapacity(clock nativepeer.AdmissionClock, monitor nativepeer.NetworkMonitor) (*Capacity, error) {
 	attempts, err := peerset.NewCapacity(peerset.DefaultAttemptCapacity)
 	if err != nil {
 		return nil, err
@@ -31,6 +32,7 @@ func NewCapacity(clock nativepeer.AdmissionClock) (*Capacity, error) {
 		admission: nativepeer.NewAdmission(clock),
 		turn:      turncapacity.NewPool(),
 		attempts:  attempts,
+		monitor:   monitor,
 	}, nil
 }
 
@@ -40,6 +42,9 @@ func (capacity *Capacity) NewNative(config nativepeer.Config) (*nativepeer.Nativ
 	}
 	config.Admission = capacity.admission
 	config.TURNCapacity = capacity.turn
+	if config.Monitor == nil {
+		config.Monitor = capacity.monitor
+	}
 	return nativepeer.New(config)
 }
 

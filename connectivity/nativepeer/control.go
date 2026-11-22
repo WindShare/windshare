@@ -3,14 +3,16 @@ package nativepeer
 import (
 	"context"
 	"encoding/binary"
+	"sync"
 	"time"
 
+	"github.com/windshare/windshare/connectivity/networkstate"
 	"github.com/windshare/windshare/connectivity/pionpeer"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
-const MaintenanceInterval = 250 * time.Millisecond
+const MaintenanceInterval = time.Second
 const ControlLifetime = 60 * time.Second
 const ControlRefresh = 30 * time.Second
 
@@ -54,6 +56,9 @@ func (n *NativePeerConnectivity) ApplyControl(session [16]byte, body []byte) (pr
 			n.observeLifecycleLocked(key, path, DemandChanged, 0)
 		}
 		n.refreshDemandLocked(key, path)
+		if changed && path.content && path.lease != nil {
+			n.wakeMaintenanceLocked()
+		}
 	case protocolsession.PeerPathRevoke:
 		path.remoteDemand = true
 		path.remoteExpires = n.config.Now()
@@ -100,35 +105,173 @@ func (n *NativePeerConnectivity) Control(session [16]byte, pathID v2signal.PeerP
 	return protocolsession.EncodePeerPathControl(control)
 }
 
-// RunSession maintains demand facts only; it cannot allocate attempts.
-func (n *NativePeerConnectivity) RunSession(ctx context.Context, session [16]byte, send func(context.Context, []byte) error) {
-	timer := time.NewTicker(MaintenanceInterval)
-	defer timer.Stop()
+// RetainMaintenance keeps the owner's single background maintenance loop alive
+// while at least one session or receiver path is active. Releasing the last
+// claim stops and joins the loop before returning.
+func (n *NativePeerConnectivity) RetainMaintenance() func() {
+	n.mu.Lock()
+	if n.closed {
+		n.mu.Unlock()
+		return func() {}
+	}
+	n.maintainers++
+	if n.maintainers == 1 {
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		prev := n.maintDraining
+		n.maintCancel = cancel
+		n.maintDone = done
+		n.maintDraining = nil
+		n.maintWG.Go(func() { n.runMaintenance(ctx, prev, done) })
+	}
+	n.mu.Unlock()
+	return sync.OnceFunc(func() {
+		n.mu.Lock()
+		n.maintainers--
+		var cancel context.CancelFunc
+		var done chan struct{}
+		if n.maintainers == 0 && n.maintCancel != nil {
+			cancel, done = n.maintCancel, n.maintDone
+			n.maintCancel = nil
+			n.maintDone = nil
+			n.maintDraining = done
+		}
+		n.mu.Unlock()
+		if cancel != nil {
+			cancel()
+			<-done
+		}
+	})
+}
+
+func (n *NativePeerConnectivity) runMaintenance(ctx context.Context, prev <-chan struct{}, done chan struct{}) {
+	defer close(done)
+	if prev != nil {
+		select {
+		case <-ctx.Done():
+			return
+		case <-prev:
+		}
+	}
+	var networkChanges <-chan networkstate.Snapshot
+	if subscriber, ok := n.config.Monitor.(networkSubscriber); ok {
+		var unsubscribe func()
+		networkChanges, unsubscribe = subscriber.Subscribe()
+		defer unsubscribe()
+	}
+	ticker := time.NewTicker(MaintenanceInterval)
+	defer ticker.Stop()
+	discoveryChanges := n.config.Discovery.Changes()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-timer.C:
-			n.maintainSession(ctx, session, send)
+		case snapshot, ok := <-networkChanges:
+			if !ok {
+				networkChanges = nil
+				continue
+			}
+			n.applySnapshot(snapshot)
+			if n.hasActiveMaintenance() {
+				n.Maintain(ctx)
+			}
+		case <-discoveryChanges:
+			n.mu.Lock()
+			authority := n.config.Reachability
+			n.mu.Unlock()
+			if authority != nil {
+				authority.RefreshUnavailable()
+			}
+			if n.hasActiveMaintenance() {
+				n.Maintain(ctx)
+			}
+		case <-n.maintWake:
+			if n.hasActiveMaintenance() {
+				n.Maintain(ctx)
+			}
+		case <-ticker.C:
+			if n.hasActiveMaintenance() {
+				n.Maintain(ctx)
+			}
 		}
 	}
 }
 
-func (n *NativePeerConnectivity) maintainSession(ctx context.Context, session [16]byte, send func(context.Context, []byte) error) {
-
+func (n *NativePeerConnectivity) hasActiveMaintenance() bool {
 	n.mu.Lock()
-	active := false
-	for key, path := range n.paths {
-		if key.session == session && (path.lease != nil || path.content) {
-			active = true
-			break
+	defer n.mu.Unlock()
+	for _, path := range n.paths {
+		if path.lease != nil || path.content {
+			return true
 		}
 	}
-	n.mu.Unlock()
-	if !active {
+	return false
+}
+
+func (n *NativePeerConnectivity) wakeMaintenanceLocked() {
+	select {
+	case n.maintWake <- struct{}{}:
+	default:
+	}
+}
+
+func (n *NativePeerConnectivity) notifyLocked(session [16]byte, path *pathResources, change Change) {
+	notify(path, change)
+	if change.Remote {
 		return
 	}
-	n.Maintain(ctx)
+	for _, ch := range n.sessionWaiters[session] {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
+}
+
+func (n *NativePeerConnectivity) watchSession(session [16]byte) (<-chan struct{}, func()) {
+	ch := make(chan struct{}, 1)
+	n.mu.Lock()
+	n.nextWaiterID++
+	id := n.nextWaiterID
+	if n.sessionWaiters[session] == nil {
+		n.sessionWaiters[session] = make(map[uint64]chan struct{})
+	}
+	n.sessionWaiters[session][id] = ch
+	n.mu.Unlock()
+	return ch, sync.OnceFunc(func() {
+		n.mu.Lock()
+		if waiters := n.sessionWaiters[session]; waiters != nil {
+			delete(waiters, id)
+			if len(waiters) == 0 {
+				delete(n.sessionWaiters, session)
+			}
+		}
+		n.mu.Unlock()
+	})
+}
+
+// RunSession maintains demand facts and publishes local path notices for one
+// session without allocating a per-session maintenance ticker.
+func (n *NativePeerConnectivity) RunSession(ctx context.Context, session [16]byte, send func(context.Context, []byte) error) {
+	if ctx.Err() != nil {
+		return
+	}
+	releaseMaintenance := n.RetainMaintenance()
+	defer releaseMaintenance()
+	wake, releaseSession := n.watchSession(session)
+	defer releaseSession()
+	n.flushSessionControls(ctx, session, send)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-wake:
+			n.flushSessionControls(ctx, session, send)
+		}
+	}
+}
+
+func (n *NativePeerConnectivity) flushSessionControls(ctx context.Context, session [16]byte, send func(context.Context, []byte) error) {
 	if send == nil {
 		return
 	}

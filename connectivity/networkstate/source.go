@@ -34,6 +34,14 @@ func NewMonitor(source Source, debounce time.Duration) *Monitor {
 }
 func (m *Monitor) Current() Snapshot { m.mu.Lock(); defer m.mu.Unlock(); return m.current }
 
+// ResetPollGap clears the prior poll timestamp when a watcher pauses polling
+// while idle so resuming later is not misclassified as an OS sleep.
+func (m *Monitor) ResetPollGap() {
+	m.mu.Lock()
+	m.lastPoll = time.Time{}
+	m.mu.Unlock()
+}
+
 // Poll detects resume by an unexpectedly long observation gap. Platform route
 // and address facts are read together and never applied to an existing snapshot.
 func (m *Monitor) Poll(ctx context.Context, now time.Time) (Snapshot, bool, error) {

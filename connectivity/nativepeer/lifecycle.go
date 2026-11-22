@@ -70,12 +70,19 @@ func (n *NativePeerConnectivity) Close(ctx context.Context) error {
 		return nil
 	}
 	n.closed = true
+	cancelMaint := n.maintCancel
+	n.maintCancel = nil
+	n.maintDone = nil
 	var paths []pathKey
 	for key := range n.paths {
 		paths = append(paths, key)
 	}
 	authority := n.config.Reachability
 	n.mu.Unlock()
+	if cancelMaint != nil {
+		cancelMaint()
+	}
+	n.maintWG.Wait()
 	for _, key := range paths {
 		n.ClosePath(key.session, key.path)
 	}

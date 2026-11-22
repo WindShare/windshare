@@ -131,7 +131,15 @@ func (s *monitorSource) Snapshot(context.Context) (networkstate.State, error) { 
 func TestObserverProjectsOnlyDirectoryAttemptsAcrossNetworkChanges(t *testing.T) {
 	r := fixtureRuntime(t)
 	source := &monitorSource{}
-	r.monitor = networkstate.NewMonitor(source, time.Millisecond)
+	now := r.now()
+	watcher := networkstate.NewWatcher(networkstate.WatcherConfig{
+		Source:   source,
+		Debounce: time.Millisecond,
+		Interval: time.Hour,
+		Now:      func() time.Time { return now },
+	})
+	defer watcher.Close()
+	r.watcher = watcher
 	intent := relayprofile.Plan([]relayprofile.Candidate{{PublicURL: "https://own.example"}})
 	selection, err := r.Plan(t.Context(), intent, "")
 	if err != nil {
@@ -147,8 +155,7 @@ func TestObserverProjectsOnlyDirectoryAttemptsAcrossNetworkChanges(t *testing.T)
 	start := senderrelay.Attempt{State: senderrelay.AttemptStarted}
 	observe(node.URL, start)
 	observe(configured.URL, start)
-	now := r.now()
-	r.monitor.Poll(t.Context(), now)
+	_, _, _ = r.watcher.Step(t.Context())
 	fail := senderrelay.Attempt{State: senderrelay.AttemptFailed, Failure: &relayv2.WebSocketDialError{StatusCode: 503}, ServerRetryAt: now.Add(time.Minute)}
 	observe(node.URL, fail)
 	observe(configured.URL, fail)
@@ -170,8 +177,10 @@ func TestObserverProjectsOnlyDirectoryAttemptsAcrossNetworkChanges(t *testing.T)
 		t.Fatal(cooled, err)
 	}
 	source.state.ResumeSequence++
-	r.monitor.Poll(t.Context(), now.Add(time.Millisecond))
-	r.monitor.Poll(t.Context(), now.Add(2*time.Millisecond))
+	now = now.Add(time.Millisecond)
+	_, _, _ = r.watcher.Step(t.Context())
+	now = now.Add(time.Millisecond)
+	_, _, _ = r.watcher.Step(t.Context())
 	if r.generation() != 2 {
 		t.Fatal("test failed to change networks")
 	}
@@ -356,7 +365,7 @@ func TestObserverTriggersDirectoryRefreshOnlyWhileFailedNodeIsSchedulable(t *tes
 	synctest.Test(t, func(t *testing.T) {
 		start := time.Now()
 		now := func() time.Time { return fixture.Now.Add(time.Since(start)) }
-		r, err := New(nil, now, "", diagnostics.Sink{})
+		r, err := New(nil, now, "", diagnostics.Sink{}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

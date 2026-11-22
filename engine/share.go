@@ -4,6 +4,7 @@ import (
 	"context"
 	"slices"
 
+	"github.com/windshare/windshare/connectivity/networkstate"
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/link"
@@ -65,10 +66,16 @@ func (engine *Engine) StartShare(ctx context.Context, request ShareRequest) (*Sh
 	execution := share.Request{Source: request.Source, Relays: selection.Relays, ChunkSize: request.ChunkSize, Diagnostics: request.Diagnostics}
 	admissions := relayset.NewNetworkAdmissions(selection.Plan, engine.config.Clock, engine.network.ServerRetryAt)
 	injected := engine.config.Share
+	pollNetwork := injected.PollNetwork
+	if pollNetwork == nil {
+		pollNetwork = func(ctx context.Context, wake func()) {
+			engine.networkState.Watch(ctx, func(networkstate.Snapshot) { wake() })
+		}
+	}
 	dependencies := share.Dependencies{
 		Controller: controller, RevisionCapacity: engine.revisions.Coordinator(),
 		CatalogBudget: engine.catalog, CacheBudget: engine.cache, Connectivity: engine.connectivity,
-		Prepare: injected.Prepare, PollNetwork: injected.PollNetwork,
+		Prepare: injected.Prepare, PollNetwork: pollNetwork,
 		Attempts: admissions.Control, Clock: engine.config.Clock,
 		ICEPool: engine.network.ICEPool,
 	}

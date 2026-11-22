@@ -43,6 +43,10 @@ type AttemptRequest struct {
 type NetworkMonitor interface {
 	Poll(context.Context, time.Time) (networkstate.Snapshot, bool, error)
 }
+
+type networkSubscriber interface {
+	Subscribe() (<-chan networkstate.Snapshot, func())
+}
 type Config struct {
 	Admission           *Admission
 	TURNCapacity        *turncapacity.Pool
@@ -95,6 +99,14 @@ type NativePeerConnectivity struct {
 	mu                    sync.Mutex
 	cleanup               sync.WaitGroup
 	operations            sync.WaitGroup
+	maintWG               sync.WaitGroup
+	maintainers           int
+	maintCancel           context.CancelFunc
+	maintDone             chan struct{}
+	maintDraining         chan struct{}
+	maintWake             chan struct{}
+	sessionWaiters        map[[16]byte]map[uint64]chan struct{}
+	nextWaiterID          uint64
 	producer              observationstream.Producer[Observation]
 	observations          observationstream.Consumer[Observation]
 	closed                bool
@@ -128,7 +140,15 @@ func New(config Config) (*NativePeerConnectivity, error) {
 	if config.Now == nil {
 		config.Now = time.Now
 	}
-	owner := &NativePeerConnectivity{config: config, turnResources: config.TURNCapacity.NewOwner(), paths: make(map[pathKey]*pathResources), prewarmed: make(map[[16]byte]bool), automaticReachability: config.Reachability == nil}
+	owner := &NativePeerConnectivity{
+		config:                config,
+		turnResources:         config.TURNCapacity.NewOwner(),
+		paths:                 make(map[pathKey]*pathResources),
+		prewarmed:             make(map[[16]byte]bool),
+		maintWake:             make(chan struct{}, 1),
+		sessionWaiters:        make(map[[16]byte]map[uint64]chan struct{}),
+		automaticReachability: config.Reachability == nil,
+	}
 	if config.ObservationCapacity > 0 {
 		capacity := min(config.ObservationCapacity, DefaultObservationCapacity)
 		owner.producer, owner.observations, _ = observationstream.New[Observation](observationstream.Capacity(capacity))
@@ -183,6 +203,9 @@ func (n *NativePeerConnectivity) SetDemand(session [16]byte, path v2signal.PeerP
 		n.observeLifecycleLocked(pathKey{session, path}, resources, DemandChanged, 0)
 	}
 	n.refreshDemandLocked(pathKey{session, path}, resources)
+	if changed && resources.content && resources.lease != nil {
+		n.wakeMaintenanceLocked()
+	}
 	return resources.changes, nil
 }
 func (n *NativePeerConnectivity) Generation(session [16]byte, path v2signal.PeerPathID) uint64 {
@@ -216,10 +239,18 @@ func (n *NativePeerConnectivity) snapshot(ctx context.Context) (networkstate.Sna
 	if err != nil {
 		return snapshot, err
 	}
+	n.applySnapshot(snapshot)
+	return snapshot, nil
+}
+
+func (n *NativePeerConnectivity) applySnapshot(snapshot networkstate.Snapshot) {
+	if snapshot.GenerationID() == 0 {
+		return
+	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if n.generation == snapshot.GenerationID() {
-		return snapshot, nil
+	if n.closed || snapshot.GenerationID() <= n.generation {
+		return
 	}
 
 	previous := n.generation
@@ -239,16 +270,15 @@ func (n *NativePeerConnectivity) snapshot(ctx context.Context) (networkstate.Sna
 		if n.config.Reachability != nil {
 			n.config.Reachability.Retire(previous)
 		}
-		for _, path := range n.paths {
+		for key, path := range n.paths {
 			for attempt := range path.attempts {
 				if attempt.snapshot.GenerationID() != n.generation {
 					attempt.cancel()
 				}
 			}
-			notify(path, Change{NetworkGenerationID: n.generation})
+			n.notifyLocked(key.session, path, Change{NetworkGenerationID: n.generation})
 		}
 	}
-	return snapshot, nil
 }
 
 // Maintain is called by the demand owner. It never creates a PeerConnection or
@@ -277,10 +307,10 @@ func (n *NativePeerConnectivity) Maintain(ctx context.Context) {
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	for _, path := range n.paths {
+	for key, path := range n.paths {
 		mapped := n.hasMappingLocked(path)
 		if mapped && !path.mapped {
-			notify(path, Change{NetworkGenerationID: path.generation, MappingReady: true})
+			n.notifyLocked(key.session, path, Change{NetworkGenerationID: path.generation, MappingReady: true})
 		}
 		path.mapped = mapped
 	}

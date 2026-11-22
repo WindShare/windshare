@@ -28,7 +28,8 @@ type Runtime struct {
 	directoryError  error
 	diagnostics     diagnostics.Sink
 	now             func() time.Time
-	monitor         *networkstate.Monitor
+	watcher         *networkstate.Watcher
+	ownWatcher      bool
 	health          nodeHealth
 	selectionSeed   string
 	mu              sync.Mutex
@@ -39,18 +40,31 @@ type Runtime struct {
 	done            chan struct{}
 }
 
-func New(config *networkconfig.Config, now func() time.Time, selectionSeed string, sink diagnostics.Sink) (*Runtime, error) {
+func New(config *networkconfig.Config, now func() time.Time, selectionSeed string, sink diagnostics.Sink, watcher *networkstate.Watcher) (*Runtime, error) {
 	ctx, cancel := context.WithCancel(context.Background())
-	r := &Runtime{diagnostics: sink, now: now, selectionSeed: selectionSeed, monitor: networkstate.NewMonitor(nil, networkstate.DefaultDebounce), ctx: ctx, cancel: cancel, done: make(chan struct{})}
+	ownWatcher := watcher == nil
+	if watcher == nil {
+		watcher = networkstate.NewWatcher(networkstate.WatcherConfig{Now: now})
+	}
+	r := &Runtime{diagnostics: sink, now: now, selectionSeed: selectionSeed, watcher: watcher, ownWatcher: ownWatcher, ctx: ctx, cancel: cancel, done: make(chan struct{})}
 	if config == nil {
 		close(r.done)
 		return r, nil
 	}
 	r.config = *config
+	cleanup := func() {
+		cancel()
+		if r.directory != nil {
+			r.directory.Close()
+		}
+		if ownWatcher {
+			watcher.Close()
+		}
+	}
 	for _, frontend := range []string{config.LinkHost, config.BackupEntry} {
 		if frontend != "" {
 			if err := relayconfig.ValidateFrontURL(frontend); err != nil {
-				cancel()
+				cleanup()
 				return nil, err
 			}
 		}
@@ -71,14 +85,12 @@ func New(config *networkconfig.Config, now func() time.Time, selectionSeed strin
 		authority.Now, authority.ResolveNode, authority.Diagnostics = now, r.officialNode, sink
 		r.accounts, err = account.New(authority)
 		if err != nil {
-			cancel()
-			if r.directory != nil {
-				r.directory.Close()
-			}
+			cleanup()
 			return nil, err
 		}
 	}
-	go r.run()
+	changes, unsubscribe := r.watcher.Subscribe()
+	go r.run(changes, unsubscribe)
 	return r, nil
 }
 
@@ -89,6 +101,9 @@ func (r *Runtime) Close() {
 		r.directory.Close()
 	}
 	<-r.done
+	if r.ownWatcher {
+		r.watcher.Close()
+	}
 }
 
 type Selection struct {
@@ -195,5 +210,5 @@ func (r *Runtime) officialNode(address string) (account.Node, bool) {
 
 func (r *Runtime) generation() uint64 {
 	// The first snapshot describes the same network as a cold-start handshake.
-	return max(1, r.monitor.Current().GenerationID())
+	return max(1, r.watcher.Current().GenerationID())
 }

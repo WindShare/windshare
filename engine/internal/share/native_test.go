@@ -61,7 +61,7 @@ func nativeDependencies(t *testing.T) Dependencies {
 	if err != nil {
 		t.Fatal(err)
 	}
-	capacity, err := nativeconnectivity.NewCapacity(nativepeer.AdmissionClock{})
+	capacity, err := nativeconnectivity.NewCapacity(nativepeer.AdmissionClock{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

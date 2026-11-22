@@ -13,6 +13,7 @@ import (
 	"github.com/windshare/windshare/core/diagnostics"
 
 	"github.com/windshare/windshare/connectivity/nativepeer"
+	"github.com/windshare/windshare/connectivity/networkstate"
 	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content/revisioncapacity"
@@ -61,6 +62,7 @@ type managedTask interface {
 type Engine struct {
 	relaySetup      *relaysetup.Service
 	turn            *turnruntime.Runtime
+	networkState    *networkstate.Watcher
 	network         *networkruntime.Runtime
 	mu              sync.Mutex
 	config          Config
@@ -108,8 +110,10 @@ func New(config Config) (*Engine, error) {
 	if config.CacheBytes == 0 {
 		config.CacheBytes = contentflow.DefaultProcessBlockCacheBytes
 	}
-	connectivity, err := nativeconnectivity.NewCapacity(nativepeer.AdmissionClock{Now: config.Clock.Now})
+	networkState := networkstate.NewWatcher(networkstate.WatcherConfig{Now: config.Clock.Now})
+	connectivity, err := nativeconnectivity.NewCapacity(nativepeer.AdmissionClock{Now: config.Clock.Now}, networkState)
 	if err != nil {
+		networkState.Close()
 		return nil, err
 	}
 	catalogBudget, err := catalog.NewBudgetAccount("engine-process", config.CatalogLimits)
@@ -151,16 +155,18 @@ func New(config Config) (*Engine, error) {
 	}
 	engineID := hex.EncodeToString(identity[:])
 	engineDiagnostics := config.Diagnostics.Bind(diagnostics.Scope{EngineID: engineID})
-	network, err := networkruntime.New(config.Network, config.Clock.Now, engineID, engineDiagnostics)
+	network, err := networkruntime.New(config.Network, config.Clock.Now, engineID, engineDiagnostics, networkState)
 	if err != nil {
+		networkState.Close()
 		_ = turn.Close()
 		_ = receiveCapacity.Close()
 		_ = revisions.Close()
 		return nil, err
 	}
 	return &Engine{
-		network:    network,
-		turn:       turn,
+		networkState: networkState,
+		network:      network,
+		turn:         turn,
 		relaySetup: relaysetup.New(config.RelaySetup),
 		config:     config, random: random, identity: engineID,
 		revisions: revisions, catalog: catalogBudget, cache: cacheBudget, connectivity: connectivity,
@@ -252,6 +258,7 @@ func (engine *Engine) shutdown(active []managedTask) {
 		<-current.Done()
 	}
 	engine.network.Close()
+	engine.networkState.Close()
 	capacityErr := engine.revisions.Close()
 	receiveCapacityErr := engine.receiveCapacity.Close()
 	turnErr := engine.turn.Close()

@@ -46,7 +46,7 @@ func fixtureRuntime(t *testing.T) *Runtime {
 		t.Fatal(err)
 	}
 	key, _ := base64.RawURLEncoding.DecodeString(fixture.Roots[0].Key)
-	r, err := New(nil, func() time.Time { return fixture.Now }, "", diagnostics.Sink{})
+	r, err := New(nil, func() time.Time { return fixture.Now }, "", diagnostics.Sink{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestAliasResolutionReturnsKnownPathsBeforeRefresh(t *testing.T) {
 }
 
 func TestLibraryRuntimeHasNoImplicitInfrastructure(t *testing.T) {
-	r, err := New(nil, time.Now, "", diagnostics.Sink{})
+	r, err := New(nil, time.Now, "", diagnostics.Sink{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +189,7 @@ func TestUnreadableTrustStatePreservesExplicitRelays(t *testing.T) {
 	cause := errors.New("trust state unavailable")
 	r, err := New(&networkconfig.Config{Directory: networkdirectory.Config{
 		Network: "test", Cache: &brokenCache{err: cause},
-	}}, time.Now, "", diagnostics.Sink{})
+	}}, time.Now, "", diagnostics.Sink{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +234,7 @@ func TestEngineDiagnosticsCaptureFrontendHealthAndDirectoryInitFailure(t *testin
 		Directory:   networkdirectory.Config{Network: "test", Cache: &brokenCache{err: cause}},
 		LinkHost:    linkServer.URL,
 		BackupEntry: backupServer.URL,
-	}, time.Now, "", stream.Sink().Bind(scope))
+	}, time.Now, "", stream.Sink().Bind(scope), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -321,7 +321,7 @@ func TestEngineDiagnosticsCaptureAccountIssuanceWithoutSlog(t *testing.T) {
 			Root:  root,
 			Store: &account.MemoryStore{},
 		},
-	}, func() time.Time { return time.Unix(fixture.Now, 0) }, "", stream.Sink().Bind(scope))
+	}, func() time.Time { return time.Unix(fixture.Now, 0) }, "", stream.Sink().Bind(scope), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -387,27 +387,30 @@ func TestNetworkChangeResetsDirectoryBackoffForExplicitAliasResolve(t *testing.T
 	clock.Store(fixture.Now.UnixNano())
 	now := func() time.Time { return time.Unix(0, clock.Load()) }
 
-	r, err := New(nil, now, "", diagnostics.Sink{})
-	if err != nil {
-		t.Fatal(err)
-	}
 	source := &fakeNetworkSource{}
 	source.setIP("192.0.2.1")
-	r.monitor = networkstate.NewMonitor(source, networkstate.DefaultDebounce)
+	watcher := networkstate.NewWatcher(networkstate.WatcherConfig{
+		Source:   source,
+		Debounce: networkstate.DefaultDebounce,
+		Interval: time.Hour,
+		Now:      now,
+	})
+	defer watcher.Close()
 
 	var online atomic.Bool
-	r.directory, err = networkdirectory.New(networkdirectory.Config{
-		Network: "test",
-		Roots:   []nodedirectory.Root{{ID: fixture.Roots[0].ID, Key: ed25519.PublicKey(key)}},
-		Mirrors: []string{"https://mirror.example/directory"},
-		Now:     now,
-		Fetch: func(context.Context, string) ([]byte, error) {
-			if !online.Load() {
-				return nil, errors.New("offline")
-			}
-			return fixture.Entries[0].Envelope, nil
+	r, err := New(&networkconfig.Config{
+		Directory: networkdirectory.Config{
+			Network: "test",
+			Roots:   []nodedirectory.Root{{ID: fixture.Roots[0].ID, Key: ed25519.PublicKey(key)}},
+			Mirrors: []string{"https://mirror.example/directory"},
+			Fetch: func(context.Context, string) ([]byte, error) {
+				if !online.Load() {
+					return nil, errors.New("offline")
+				}
+				return fixture.Entries[0].Envelope, nil
+			},
 		},
-	})
+	}, now, "", diagnostics.Sink{}, watcher)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -423,18 +426,27 @@ func TestNetworkChangeResetsDirectoryBackoffForExplicitAliasResolve(t *testing.T
 		t.Fatalf("expected offline cooldown error, got %v", err)
 	}
 
-	// Initial poll establishes the baseline generation without resetting backoff.
-	r.pollNetwork(true)
+	// Initial baseline observation must not reset directory backoff.
+	if _, err := watcher.Snapshot(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	if r.directory.RetryAt().IsZero() {
 		t.Fatal("initial network poll unexpectedly cleared directory backoff")
 	}
 
-	// Switching networks after debounce clears directory backoff immediately.
+	// Switching networks after debounce clears directory backoff via the shared watcher.
 	online.Store(true)
 	source.setIP("192.0.2.2")
-	r.pollNetwork(false)
+	_, _, _ = watcher.Step(t.Context())
 	clock.Store(now().Add(networkstate.DefaultDebounce).UnixNano())
-	r.pollNetwork(false)
+	_, _, _ = watcher.Step(t.Context())
+	deadline := time.Now().Add(time.Second)
+	for !r.directory.RetryAt().IsZero() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if !r.directory.RetryAt().IsZero() {
+		t.Fatal("network change did not clear directory backoff")
+	}
 
 	known, expand, err := r.Resolve(link.Link{NodeAliases: []string{"jp1"}})
 	if err != nil {

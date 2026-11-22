@@ -59,26 +59,26 @@ func sameFrontendBase(left, right string) bool {
 		strings.TrimSuffix(first.Path, "/") == strings.TrimSuffix(second.Path, "/")
 }
 
-func (r *Runtime) run() {
+func (r *Runtime) run(changes <-chan networkstate.Snapshot, unsubscribe func()) {
 	defer close(r.done)
-	ticker := time.NewTicker(networkstate.DefaultPollInterval)
-	defer ticker.Stop()
-	for first := true; ; first = false {
-		r.pollNetwork(first)
+	defer unsubscribe()
+	_, _ = r.watcher.Snapshot(r.ctx)
+	r.checkFrontends()
+	for {
 		select {
 		case <-r.ctx.Done():
 			return
-		case <-ticker.C:
+		case _, ok := <-changes:
+			if !ok {
+				return
+			}
+			r.handleNetworkChange()
 		}
 	}
 }
 
-func (r *Runtime) pollNetwork(first bool) {
-	_, changed, err := r.monitor.Poll(r.ctx, r.now())
-	if !first && (err != nil || !changed) {
-		return
-	}
-	if !first && r.directory != nil {
+func (r *Runtime) handleNetworkChange() {
+	if r.directory != nil {
 		r.directory.NetworkChanged()
 	}
 	r.checkFrontends()

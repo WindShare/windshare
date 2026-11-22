@@ -35,7 +35,7 @@ type shareFixture struct {
 
 func newShareFixture(t *testing.T) *shareFixture {
 	t.Helper()
-	capacity, err := nativeconnectivity.NewCapacity(nativepeer.AdmissionClock{})
+	capacity, err := nativeconnectivity.NewCapacity(nativepeer.AdmissionClock{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

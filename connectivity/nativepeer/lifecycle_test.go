@@ -3,11 +3,13 @@ package nativepeer
 import (
 	"context"
 	"net/netip"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	pion "github.com/pion/webrtc/v4"
+	"github.com/windshare/windshare/connectivity/networkstate"
 	"github.com/windshare/windshare/connectivity/pionpeer"
 	"github.com/windshare/windshare/connectivity/reachability"
 	"github.com/windshare/windshare/connectivity/v2signal"
@@ -77,7 +79,7 @@ func TestSenderMaintenancePublishesOnlyNewLocalFacts(t *testing.T) {
 	h := newHarness(t)
 	session := [16]byte{1}
 	pathID := v2signal.PeerPathID{2}
-	h.native.maintainSession(context.Background(), session, nil)
+	h.native.flushSessionControls(context.Background(), session, nil)
 	changes, _ := h.native.SetDemand(session, pathID, true, false)
 	_ = changes
 	path := h.native.paths[pathKey{session, pathID}]
@@ -90,23 +92,23 @@ func TestSenderMaintenancePublishesOnlyNewLocalFacts(t *testing.T) {
 		}
 		return err
 	}
-	h.native.maintainSession(context.Background(), session, send)
+	h.native.flushSessionControls(context.Background(), session, send)
 	if len(sent) != 1 || sent[0].Kind != protocolsession.PeerPathMappingReady {
 		t.Fatal(sent)
 	}
 	notify(path, Change{Remote: true, MappingReady: true})
-	h.native.maintainSession(context.Background(), session, send)
+	h.native.flushSessionControls(context.Background(), session, send)
 	if len(sent) != 1 {
 		t.Fatal("remote mapping echoed")
 	}
 	notify(path, Change{NetworkGenerationID: 2})
-	h.native.maintainSession(context.Background(), session, send)
+	h.native.flushSessionControls(context.Background(), session, send)
 	if len(sent) != 2 || sent[1].Kind != protocolsession.PeerPathNetworkChanged {
 		t.Fatal(sent)
 	}
 	notify(path, Change{MappingReady: true})
 	notify(path, Change{NetworkGenerationID: 4})
-	h.native.maintainSession(context.Background(), session, nil)
+	h.native.flushSessionControls(context.Background(), session, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	h.native.RunSession(ctx, session, send)
@@ -123,6 +125,90 @@ func TestSenderMaintenancePublishesOnlyNewLocalFacts(t *testing.T) {
 	if _, ok := h.native.ApplyControl(session, controlBytes(t, 2, protocolsession.PeerPathDemand, ControlLifetime)); ok {
 		t.Fatal("revoked path resurrected")
 	}
+}
+
+type countingNetworkSource struct {
+	mu    sync.Mutex
+	calls atomic.Int64
+	state networkstate.State
+}
+
+func (s *countingNetworkSource) Snapshot(context.Context) (networkstate.State, error) {
+	s.calls.Add(1)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.state, nil
+}
+
+func TestRunSessionSharesWatcherAndPublishesNetworkChangesImmediately(t *testing.T) {
+	now := time.Unix(500, 0)
+	var clockMu sync.Mutex
+	clock := func() time.Time { clockMu.Lock(); defer clockMu.Unlock(); return now }
+	advance := func(d time.Duration) { clockMu.Lock(); now = now.Add(d); clockMu.Unlock() }
+
+	source := &countingNetworkSource{state: networkstate.State{Addresses: []networkstate.Address{{IP: netip.MustParseAddr("127.0.0.1"), InterfaceIndex: 1}}}}
+	watcher := networkstate.NewWatcher(networkstate.WatcherConfig{Source: source, Debounce: time.Nanosecond, Interval: time.Hour, Now: clock})
+	defer watcher.Close()
+
+	native := newTestConnectivity(t, Config{Monitor: watcher, Now: clock, Reachability: reachability.New(reachability.Config{Now: clock})})
+	defer native.Close(context.Background())
+
+	const sessions = 4
+	ctx, cancel := context.WithCancel(context.Background())
+	sent := make([]chan protocolsession.PeerPathControl, sessions)
+	var wg sync.WaitGroup
+	for i := range sessions {
+		session := [16]byte{byte(i + 1)}
+		pathID := v2signal.PeerPathID{byte(i + 10)}
+		if _, err := native.SetDemand(session, pathID, true, false); err != nil {
+			t.Fatal(err)
+		}
+		ch := make(chan protocolsession.PeerPathControl, 4)
+		sent[i] = ch
+		wg.Go(func() {
+			native.RunSession(ctx, session, func(_ context.Context, body []byte) error {
+				control, err := protocolsession.DecodePeerPathControl(body)
+				if err == nil {
+					ch <- control
+				}
+				return err
+			})
+		})
+	}
+	// Wait until the shared watcher establishes baseline generation 1, then ensure
+	// repeated Maintain calls reuse the cached snapshot without extra OS queries.
+	if _, err := watcher.Snapshot(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for range 8 {
+		native.Maintain(context.Background())
+	}
+	if calls := source.calls.Load(); calls != 1 {
+		t.Fatalf("shared watcher polls across %d sessions = %d, want 1", sessions, calls)
+	}
+
+	source.mu.Lock()
+	source.state.ResumeSequence++
+	source.mu.Unlock()
+	if _, _, err := watcher.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	advance(time.Millisecond)
+	if _, changed, err := watcher.Step(context.Background()); err != nil || !changed {
+		t.Fatalf("network change step = (%t, %v)", changed, err)
+	}
+	for i, ch := range sent {
+		select {
+		case control := <-ch:
+			if control.Kind != protocolsession.PeerPathNetworkChanged {
+				t.Fatalf("session %d control = %+v", i, control)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("session %d did not immediately emit network change", i)
+		}
+	}
+	cancel()
+	wg.Wait()
 }
 func TestIdleUsesOnlyBoundedPreviouslySelectedProfileAndOwnerCloseJoinsGenerationCleanup(t *testing.T) {
 	h := newHarness(t)

@@ -20,6 +20,7 @@ func (p *Path) maintainResources(ctx context.Context, done chan<- struct{}) {
 	if err != nil {
 		return
 	}
+	defer native.RetainMaintenance()()
 	p.bindControls()
 	nextRefresh := time.Time{}
 	for {
@@ -28,7 +29,8 @@ func (p *Path) maintainResources(ctx context.Context, done chan<- struct{}) {
 			p.sendControl(ctx, protocolsession.PeerPathDemand)
 			nextRefresh = now.Add(nativepeer.ControlRefresh)
 		}
-		timer := p.owner.config.Clock.NewTimer(nativepeer.MaintenanceInterval)
+		delay := max(nextRefresh.Sub(now), time.Nanosecond)
+		timer := p.owner.config.Clock.NewTimer(delay)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
@@ -40,7 +42,6 @@ func (p *Path) maintainResources(ctx context.Context, done chan<- struct{}) {
 			timer.Stop()
 			p.handleNativeChange(ctx, change)
 		case <-timer.C():
-			native.Maintain(ctx)
 		}
 	}
 }

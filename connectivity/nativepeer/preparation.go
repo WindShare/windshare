@@ -231,11 +231,13 @@ func (p *PreparedAttempt) connect(ctx context.Context) (*pionpeer.Connection, er
 		n.mu.Unlock()
 		return nil, err
 	}
+	leaseInstalled := false
 	if path.lease == nil || path.lease.GenerationID() != p.snapshot.GenerationID() {
 		if path.lease != nil {
 			_ = path.lease.Close()
 		}
 		path.lease = lease
+		leaseInstalled = true
 		previous := path.generation
 		path.generation = p.snapshot.GenerationID()
 		n.observeLifecycleLocked(p.key, path, NetworkChanged, previous)
@@ -280,6 +282,9 @@ func (p *PreparedAttempt) connect(ctx context.Context) (*pionpeer.Connection, er
 		}
 	}
 	n.refreshDemandLocked(p.key, path)
+	if leaseInstalled && path.content {
+		n.wakeMaintenanceLocked()
+	}
 	n.mu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return nil, err
