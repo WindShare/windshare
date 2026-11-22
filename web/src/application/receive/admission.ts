@@ -22,7 +22,6 @@ export type ReceiveBlockReason =
   | 'receiverBusy'
   | 'outputBusy'
   | 'noSavedAuthority'
-  | 'noZipAuthority'
   | 'ownershipUnknown'
   | 'abnormalReceive'
   | 'zipUnavailable'

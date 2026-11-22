@@ -6,7 +6,6 @@ import {
   DEFAULT_PORTABLE_MAXIMUM_PARTS,
   browserHandoffGuarantees,
   fsaTreeGuarantees,
-  fsaOwnedFileGuarantees,
   managedAtomicGuarantees,
   nativeTreeGuarantees,
 } from '../../../src/transfer/intent'
@@ -20,14 +19,12 @@ import { nextProjectionEpoch } from '../../../src/transfer/projection/model'
 import { createEnvironmentOffers } from '../../../src/output/planning/guarantees'
 import type {
   DestinationGuaranteeFacts,
-  DirectZipSupportFacts,
   PortableEnvironmentOffer,
   WorkspaceEnvironmentOffer,
 } from '../../../src/output/model/artifacts/destinations'
 import type {
   EnvironmentOffers,
   EnvironmentTargetOfferInput,
-  ZipRouteRecommendationPolicy,
 } from '../../../src/output/planning/contracts'
 
 export const TEST_JOB_WORKSPACE_LIMIT = 8_589_934_592n
@@ -58,37 +55,6 @@ export function fsaTarget(routeId = 'fsa'): EnvironmentTargetOfferInput {
     guarantees: guaranteeFacts(fsaTreeGuarantees()),
     persistence: 'durable-after-repository-commit',
     hardMaximumOutputBytes: null,
-  }
-}
-
-export function runtimeDirectZipSupport(): Extract<DirectZipSupportFacts, { kind: 'runtime-supported' }> {
-  return {
-    kind: 'runtime-supported',
-    capabilityDigest: identity(80, 32),
-    authority: {
-      kind: 'owned-target-session-v1',
-      recovery: 'persisted-handle-and-verified-checkpoint',
-      replacement: 'coordinated-no-replace',
-      cleanup: 'ownership-proof-required',
-    },
-    policies: {
-      zipEncoding: identity(83, 32),
-      layout: identity(84, 32),
-      checkpoint: identity(85, 32),
-      journalBudget: identity(86, 32),
-      epoch: identity(87, 32),
-    },
-  }
-}
-
-export function directZipTarget(routeId = 'direct-zip'): EnvironmentTargetOfferInput {
-  return {
-    routeId,
-    kind: 'fsa-owned-file-target',
-    guarantees: guaranteeFacts(fsaOwnedFileGuarantees()),
-    persistence: 'operation-scoped',
-    hardMaximumOutputBytes: null,
-    support: runtimeDirectZipSupport(),
   }
 }
 
@@ -161,17 +127,11 @@ export function environment(input: Readonly<{
   targets?: readonly EnvironmentTargetOfferInput[]
   workspace?: WorkspaceEnvironmentOffer | null
   portable?: PortableEnvironmentOffer | null
-  directZipSupport?: DirectZipSupportFacts
-  zipRecommendationPolicy?: ZipRouteRecommendationPolicy
 }> = {}): EnvironmentOffers {
   return createEnvironmentOffers({
     targets: input.targets ?? [],
     workspace: input.workspace ?? null,
     portable: input.portable ?? null,
-    ...(input.directZipSupport === undefined ? {} : { directZipSupport: input.directZipSupport }),
-    ...(input.zipRecommendationPolicy === undefined
-      ? {}
-      : { zipRecommendationPolicy: input.zipRecommendationPolicy }),
   })
 }
 

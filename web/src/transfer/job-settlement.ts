@@ -199,7 +199,7 @@ export class TransferJobSettlement {
       return validateCompletionLifecycle(this.#context.intent(), worker, state)
     }
 
-    if (execution.planKind === 'workspace-then-publish' || execution.planKind === 'direct-resumable-zip') {
+    if (execution.planKind === 'workspace-then-publish') {
       const state = await withDurableLifecycleSettlementTimeout(
         'settle completed durable plan execution',
         this.#context.outputSettlementTimeoutMilliseconds,

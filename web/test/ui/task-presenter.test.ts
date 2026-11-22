@@ -71,22 +71,6 @@ describe('shared task presenter', () => {
     expect(result.progress?.details).toContain('1 B newly received during this attempt.')
   })
 
-  it('keeps direct ZIP verification ahead of disconnected sender and generic finishing', () => {
-    const result = presentTask(taskFixture({
-      ...TASK_FIXTURES.verifying!, blocking: { kind: 'share-ended' },
-      progress: { ...EMPTY_PROGRESS, phase: 'finishing' },
-    }))
-    expect(result.headline).toBe('Verifying ZIP')
-  })
-
-  it('keeps direct ZIP receipt and restart-safe bytes independent', () => {
-    const result = presentTask(TASK_FIXTURES.verifying!)
-    expect(result.stage).toBe('finishing')
-    expect(result.headline).toBe('Verifying ZIP')
-    expect(result.progress?.label).toContain('1.9 MiB received')
-    expect(result.progress?.details.join(' ')).toContain('1.4 MiB safe to resume')
-  })
-
   it('does not let connection interruption or cleanup replace a local saved result', () => {
     const result = presentTask(taskFixture({
       ...TASK_FIXTURES['saved-cleanup']!,
@@ -138,14 +122,6 @@ describe('shared task presenter', () => {
     expect(presentTask(TASK_FIXTURES['saved-cleanup']!).progress).toBeNull()
     expect(presentTask(TASK_FIXTURES['browser-handoff']!).progress).toBeNull()
     expect(presentTask(TASK_FIXTURES['partial-ready']!).details.join(' ')).toContain('received')
-  })
-
-  it('does not describe an active checkpoint as final ZIP completion', () => {
-    const result = presentTask(taskFixture({
-      directZipProgress: { ...TASK_FIXTURES.verifying!.directZipProgress!, phase: 'saving-resume-position' },
-    }))
-    expect(result.stage).toBe('downloading')
-    expect(result.headline).toBe('Saving resume progress')
   })
 
   it('keeps local packaging actionable without a joined share', () => {

@@ -26,9 +26,8 @@ import type { TransferJobResult } from '../../transfer/job/contract'
 import { PersistentWriterOpenPauseRequestedError } from '../../output/execution/persistent-file-transaction'
 import type { AuthorityActivationSnapshot } from './activation/model'
 import { type ActiveReceiveControl, type ReceiveSettlementWait, type WorkspaceUsage, type PersistentWriterOpenPauseFact } from './actions'
-import type { DirectZipProgressSnapshot } from './contracts'
 import type { ProgressChange } from '../../transfer/progress/observation'
-import { folderProgressChange, directZipProgressChange } from './observation/progress-change'
+import { folderProgressChange } from './observation/progress-change'
 
 const INACTIVE_ACTIVATION: AuthorityActivationSnapshot = Object.freeze({ kind: 'inactive' })
 
@@ -52,7 +51,6 @@ export interface ReceiveRuntimeSnapshot {
   readonly activeControls: readonly ActiveReceiveControl[]
   readonly receiveInterruption: ReceiveSettlementWait | null
   readonly browserFolderProgress?: import('./contracts').BrowserFolderProgressSnapshot | null
-  readonly directZipProgress: DirectZipProgressSnapshot | null
 }
 
 export const EMPTY_RECEIVE_RUNTIME: ReceiveRuntimeSnapshot = Object.freeze({
@@ -74,8 +72,7 @@ export const EMPTY_RECEIVE_RUNTIME: ReceiveRuntimeSnapshot = Object.freeze({
   workspaceUsage: null,
   activeControls: Object.freeze([]),
   receiveInterruption: null,
-  directZipProgress: null,
-      browserFolderProgress: null,
+  browserFolderProgress: null,
 })
 
 export type TransferResultProjection = Pick<
@@ -215,7 +212,6 @@ export class ReceiveRuntimeState {
       receiveIntent: intent,
       transferResult: null,
       plan: intent.plan,
-      directZipProgress: null,
       browserFolderProgress: null,
       repairSummary: snapshotCompatibleNameRepair(repairSummary),
       recoverySummary: null,
@@ -266,7 +262,6 @@ export class ReceiveRuntimeState {
       receiveIntent: intent,
       transferResult: null,
       plan: intent.plan,
-      directZipProgress: null,
       browserFolderProgress: null,
       repairSummary: snapshotCompatibleNameRepair(repairSummary),
       recoverySummary: null,
@@ -351,20 +346,6 @@ export class ReceiveRuntimeState {
     this.#publish({
       ...this.#snapshot, browserFolderProgress: Object.freeze({ ...progress }),
     }, folderProgressChange(current, progress))
-    return true
-  }
-
-  updateDirectZipProgress(progress: DirectZipProgressSnapshot): boolean {
-    const intent = this.#snapshot.receiveIntent
-    if (intent === null || intent.plan.kind !== 'direct-resumable-zip' ||
-        progress.operationId !== intent.operationId) return false
-    requireDirectZipProgress(progress)
-    const current = this.#snapshot.directZipProgress
-    if (current !== null && progress.generation <= current.generation) return false
-    this.#publish({
-      ...this.#snapshot,
-      directZipProgress: Object.freeze({ ...progress }),
-    }, directZipProgressChange(current, progress))
     return true
   }
 
@@ -511,17 +492,6 @@ function persistentWriterOpenPauseFact(reason: unknown): PersistentWriterOpenPau
     cost: Object.freeze({ ...reason.cost }),
     purpose: reason.purpose,
   })
-}
-
-function requireDirectZipProgress(progress: DirectZipProgressSnapshot): void {
-  if (progress.operationId.length === 0 || progress.generation < 0n ||
-      progress.receivedSelectedBytes < 0n || progress.writtenSelectedBytes < 0n ||
-      progress.safeResumeBytes < 0n || progress.safeResumeBytes > progress.writtenSelectedBytes ||
-      progress.writtenSelectedBytes > progress.receivedSelectedBytes ||
-      (progress.resumeTemporarySpaceUpperBound !== undefined &&
-       progress.resumeTemporarySpaceUpperBound < 0n)) {
-    throw new TypeError('direct ZIP progress snapshot is invalid')
-  }
 }
 
 function matchingRecoverySummary(

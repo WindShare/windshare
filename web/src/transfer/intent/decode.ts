@@ -4,7 +4,6 @@ import {
   ARTIFACT_SPEC_DOMAIN,
   CanonicalDecoder,
   DESTINATION_RESERVATION_DOMAIN,
-  FSA_OWNED_FILE_BINDING_DOMAIN,
   INVALID_RECEIVE_INTENT_CANONICAL_BYTES,
   MATERIALIZATION_PLAN_DOMAIN,
   MAX_CANONICAL_PATH_ENCODING_BYTES,
@@ -23,14 +22,12 @@ import {
   browserHandoffGuarantees,
   canonicalGuarantees,
   createFSANamedEntryReservation,
-  createFSAOwnedFileBinding,
   createManagedAtomicReservation,
   createNativeContainerRootReservation,
   createNativeNamedEntryReservation,
   createPortableBinding,
   createWorkspaceBinding,
   fsaTreeGuarantees,
-  fsaOwnedFileGuarantees,
   managedAtomicGuarantees,
   managedNameChooser,
   nativeTreeGuarantees,
@@ -55,7 +52,6 @@ import {
   type DestinationReservation,
   type GuaranteeSet,
   type GuaranteeProfile,
-  type FSAOwnedFileBinding,
   type MaterializationPlan,
   type NamedContainerEntryReservation,
   type NodeIDSelectionRules,
@@ -68,7 +64,6 @@ import {
   type WorkspaceBinding,
 } from './model'
 import {
-  createDirectResumableZipPlan,
   createDirectTreePlan,
   createPortableHandoffPlan,
   createReceiveIntent,
@@ -443,38 +438,6 @@ async function decodePortableBindingBytes(
   return binding
 }
 
-async function decodeFSAOwnedFileBindingBytes(
-  encoded: CanonicalBytes,
-  artifact: ArtifactSpec,
-): Promise<FSAOwnedFileBinding> {
-  const cursor = CanonicalDecoder.record(encoded, FSA_OWNED_FILE_BINDING_DOMAIN)
-  const operationId = encodeBase64Url(cursor.readFixedFrame(STABLE_IDENTITY_BYTES))
-  const artifactDigest = encodeBase64Url(cursor.readFixedFrame(AUTHORITY_REFERENCE_BYTES))
-  const stableName = decodeCanonicalText(cursor.readFrame(MAX_RESULT_COMPONENT_BYTES))
-  const targetRef = encodeBase64Url(cursor.readFixedFrame(AUTHORITY_REFERENCE_BYTES))
-  const guarantees = decodeGuaranteeSetBytes(cursor.readFrame(cursor.remaining))
-  const policies = {
-    zipEncoding: encodeBase64Url(cursor.readFixedFrame(AUTHORITY_REFERENCE_BYTES)),
-    layout: encodeBase64Url(cursor.readFixedFrame(AUTHORITY_REFERENCE_BYTES)),
-    checkpoint: encodeBase64Url(cursor.readFixedFrame(AUTHORITY_REFERENCE_BYTES)),
-    journalBudget: encodeBase64Url(cursor.readFixedFrame(AUTHORITY_REFERENCE_BYTES)),
-    epoch: encodeBase64Url(cursor.readFixedFrame(AUTHORITY_REFERENCE_BYTES)),
-  }
-  cursor.requireDone()
-  if (artifactDigest !== artifact.digest || !sameGuarantees(guarantees, fsaOwnedFileGuarantees())) {
-    return invalidDecodedCanonicalBytes()
-  }
-  const binding = await createFSAOwnedFileBinding({
-    operationId,
-    artifact,
-    stableName,
-    targetRef,
-    policies,
-  })
-  requireDecodedCanonicalBytes(encoded, binding.canonicalBytes, 'FSA owned-file binding')
-  return binding
-}
-
 async function decodeMaterializationPlanBytes(
   encoded: CanonicalBytes,
   artifact: ArtifactSpec,
@@ -519,15 +482,6 @@ async function decodeMaterializationPlanBytes(
       plan = await createPortableHandoffPlan(artifact, portable)
       break
     }
-    case 5: {
-      const binding = await decodeFSAOwnedFileBindingBytes(
-        cursor.readFrame(cursor.remaining),
-        artifact,
-      )
-      if (cursor.readFramedByte() !== 0) invalidDecodedCanonicalBytes()
-      plan = await createDirectResumableZipPlan(artifact, binding)
-      break
-    }
     default:
       return invalidDecodedCanonicalBytes()
   }
@@ -543,7 +497,6 @@ function decodeGuaranteeSetBytes(encoded: CanonicalBytes): GuaranteeSet {
     managedAtomicGuarantees('application-chosen'),
     managedAtomicGuarantees('user-chosen'),
     browserHandoffGuarantees(),
-    fsaOwnedFileGuarantees(),
   ]
   const guarantee = candidates.find((candidate) =>
     equalBytes(encoded, canonicalGuarantees(candidate)))
@@ -560,7 +513,6 @@ function guaranteeProfileFromByte(value: number): GuaranteeProfile {
     case 2: return 'fsa-tree'
     case 3: return 'managed-atomic'
     case 4: return 'browser-handoff'
-    case 5: return 'fsa-owned-file'
     default: return invalidDecodedCanonicalBytes()
   }
 }

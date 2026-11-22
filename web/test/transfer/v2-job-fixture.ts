@@ -244,8 +244,6 @@ export async function receiveIntentFixture(input: {
       plan = await createPortableHandoffPlan(artifact, portable)
       break
     }
-    case 'direct-resumable-zip':
-      throw new TypeError('generic transfer fixture requires a dedicated direct ZIP runtime')
   }
   return createReceiveIntent({ selection: selectionSpec, artifact, plan })
 }
@@ -657,10 +655,6 @@ export function planAuthorityFixture(input: {
       }
       return execution
     },
-    openDirectResumableZip: async () => {
-      routes.push('direct-resumable-zip')
-      throw new TypeError('generic plan fixture has no direct ZIP writer runtime')
-    },
     openWorkspaceOriginal: async (intent, evidence) => {
       routes.push('workspace-then-publish')
       singleFileAdmissions.push(evidence)
@@ -935,7 +929,6 @@ function pauseState(
         expiresAt: 1000,
       })
     case 'portable-handoff': return restartState(intent, 'portable-aborted')
-    case 'direct-resumable-zip': return restartState(intent, 'target-deleted')
   }
 }
 

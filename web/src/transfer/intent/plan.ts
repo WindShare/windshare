@@ -12,7 +12,6 @@ import {
 } from './canonical'
 import {
   validateDestinationReservation,
-  validateFSAOwnedFileBinding,
   validatePortableBinding,
   validateWorkspaceBinding,
 } from './destination'
@@ -22,10 +21,8 @@ import {
   type ArtifactSpec,
   type CanonicalBytes,
   type DestinationReservation,
-  type DirectResumableZipPlan,
   type DirectTreePlan,
   type MaterializationPlan,
-  type FSAOwnedFileBinding,
   type GuaranteeProfile,
   type PortableBinding,
   type PortableHandoffPlan,
@@ -120,28 +117,6 @@ export async function createPortableHandoffPlan(
   }, canonicalBytes)
 }
 
-export async function createDirectResumableZipPlan(
-  artifactInput: ArtifactSpec,
-  bindingInput: FSAOwnedFileBinding,
-): Promise<DirectResumableZipPlan> {
-  const artifact = await validateArtifactSpec(artifactInput)
-  const binding = await validateFSAOwnedFileBinding(bindingInput, artifact)
-  if (artifact.kind !== 'zip-archive' || binding.guarantees.profile !== 'fsa-owned-file') {
-    throw new TypeError('direct-resumable-zip requires an FSA owned-file ZIP binding')
-  }
-  const canonicalBytes = canonicalRecord(MATERIALIZATION_PLAN_DOMAIN, [
-    Uint8Array.of(5),
-    frame(binding.canonicalBytes),
-    frame(Uint8Array.of(0)),
-  ])
-  return canonicalValue({
-    version: MATERIALIZATION_PLAN_VERSION,
-    kind: 'direct-resumable-zip' as const,
-    binding,
-    preparation: 'none' as const,
-  }, canonicalBytes)
-}
-
 export async function validateMaterializationPlan(
   input: MaterializationPlan,
   artifact: ArtifactSpec,
@@ -167,10 +142,6 @@ export async function validateMaterializationPlan(
       }
       rebuilt = await createPortableHandoffPlan(artifact, input.portable)
       break
-    case 'direct-resumable-zip':
-      if (input.preparation !== 'none') throw new TypeError('direct-resumable-zip preparation is invalid')
-      rebuilt = await createDirectResumableZipPlan(artifact, input.binding)
-      break
     default:
       throw new TypeError('materialization plan kind is invalid')
   }
@@ -185,8 +156,6 @@ export function materializationPlanOperationID(plan: MaterializationPlan): strin
       return plan.workspace.operationId
     case 'portable-handoff':
       return plan.portable.operationId
-    case 'direct-resumable-zip':
-      return plan.binding.operationId
   }
 }
 
@@ -198,8 +167,6 @@ export function materializationPlanArtifactDigest(plan: MaterializationPlan): st
       return plan.workspace.artifactDigest
     case 'portable-handoff':
       return plan.portable.artifactDigest
-    case 'direct-resumable-zip':
-      return plan.binding.artifactDigest
   }
 }
 
@@ -211,8 +178,6 @@ export function materializationPlanBindingDigest(plan: MaterializationPlan): str
       return plan.workspace.digest
     case 'portable-handoff':
       return plan.portable.digest
-    case 'direct-resumable-zip':
-      return plan.binding.digest
   }
 }
 
@@ -282,6 +247,5 @@ function guaranteeProfileByte(value: GuaranteeProfile): number {
     case 'fsa-tree': return 2
     case 'managed-atomic': return 3
     case 'browser-handoff': return 4
-    case 'fsa-owned-file': return 5
   }
 }

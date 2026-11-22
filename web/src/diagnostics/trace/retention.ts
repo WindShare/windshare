@@ -147,7 +147,6 @@ export function traceEventRetention(event: TraceEventObservationV2): TraceRetent
     case 'output_reservation':
     case 'checkpoint':
     case 'transfer_progress':
-    case 'direct_zip_coordination':
       return 'recent'
     case 'receive_transition':
       switch (event.payload.transition) {
@@ -162,8 +161,6 @@ export function traceEventRetention(event: TraceEventObservationV2): TraceRetent
       }
     case 'browser_delivery':
       return browserDeliveryRetention(event.payload)
-    case 'direct_zip_member_rollback':
-      return 'outcome'
     default:
       return 'milestone'
   }

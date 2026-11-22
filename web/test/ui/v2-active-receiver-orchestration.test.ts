@@ -9,7 +9,6 @@ import {
   FakeGateway,
   FakeJoinedShare,
   FakeReceiveComposition,
-  DIRECT_ZIP_ENVIRONMENT,
   FILE_ID,
   MANAGED_ENVIRONMENT,
   NO_DESTINATION_ENVIRONMENT,
@@ -74,17 +73,17 @@ describe('v2 receiver active operation orchestration', () => {
     expect(runtime.detachments).toEqual(['detached'])
   })
 
-  it('starts a fresh planning operation after the owned Direct ZIP target is deleted', async () => {
-    const receive = new FakeReceiveComposition(DIRECT_ZIP_ENVIRONMENT)
+  it('starts a fresh planning operation after a receive enters restart-required', async () => {
+    const receive = new FakeReceiveComposition(WORKSPACE_ENVIRONMENT)
     const joined = new FakeJoinedShare(true, [], 'tree')
     const controller = controllerFor(joined, receive)
     await startTransfer(controller, joined)
     const runtime = receive.startedAuthorities[0]?.runtime
     const run = joined.transferRuns[0]
-    if (runtime === undefined || run === undefined) throw new Error('Direct ZIP receive was not started')
+    if (runtime === undefined || run === undefined) throw new Error('receive was not started')
     run.resolve(next(runtime.lifecycle, {
       kind: 'restart-required',
-      reason: 'target-deleted',
+      reason: 'source-revision-changed',
       receiptDigest: identityText(77, 32),
     }))
     await waitFor(() => controller.getSnapshot().output.lifecycle?.kind === 'restart-required')

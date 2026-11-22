@@ -1,6 +1,5 @@
 import type {
   ArtifactAvailability,
-  AvailableDirectZipPolicyDigests,
   CleanupContract,
   DeliveryMode,
   GuaranteeProfile,
@@ -43,42 +42,6 @@ export type FSADirectoryContainerOffer = EnvironmentTargetOfferBase<
   'fsa-tree'
 >
 
-export interface DirectZipRuntimeAuthorityContractV1 {
-  readonly kind: 'owned-target-session-v1'
-  readonly recovery: 'persisted-handle-and-verified-checkpoint'
-  /** Origin coordination cannot exclude concurrent writes by other applications. */
-  readonly replacement: 'coordinated-no-replace'
-  readonly cleanup: 'ownership-proof-required'
-}
-
-export interface RuntimeDirectZipSupportFacts {
-  readonly kind: 'runtime-supported'
-  readonly capabilityDigest: string
-  readonly authority: DirectZipRuntimeAuthorityContractV1
-  readonly policies: AvailableDirectZipPolicyDigests
-}
-
-export type DirectZipSupportFacts =
-  | RuntimeDirectZipSupportFacts
-  | Readonly<{
-      kind: 'unavailable'
-      reason:
-        | 'runtime-not-installed'
-        | 'required-api-unavailable'
-        | 'journal-unavailable'
-        | 'handle-persistence-unavailable'
-        | 'coordination-unavailable'
-        | 'authority-contract-unavailable'
-        | 'direct-route-unsupported'
-        | 'policy-digests-unavailable'
-    }>
-
-export type FSAOwnedFileTargetOffer = EnvironmentTargetOfferBase<
-  'fsa-owned-file-target',
-  'operation-scoped',
-  'fsa-owned-file'
-> & Readonly<{ readonly support: RuntimeDirectZipSupportFacts }>
-
 export type ManagedAtomicTargetOffer = EnvironmentTargetOfferBase<
   'managed-atomic-file-target',
   'operation-scoped',
@@ -104,7 +67,6 @@ export type PrecreatedBrowserFileOffer = EnvironmentTargetOfferBase<
 export type EnvironmentTargetOffer =
   | NativeDirectoryContainerOffer
   | FSADirectoryContainerOffer
-  | FSAOwnedFileTargetOffer
   | ManagedAtomicTargetOffer
   | BrowserHandoffTargetOffer
   | PrecreatedBrowserFileOffer
@@ -112,7 +74,6 @@ export type EnvironmentTargetOffer =
 export type EnvironmentTargetKind =
   | 'native-directory-container'
   | 'fsa-parent-directory'
-  | 'fsa-owned-file-target'
   | 'managed-atomic-file-target'
   | 'browser-handoff'
   | 'precreated-browser-file'
@@ -165,12 +126,6 @@ export type FSADirectoryTargetSemantics = TargetSemanticsBase<
   'fsa-tree'
 >
 
-export type FSAOwnedFileTargetSemantics = TargetSemanticsBase<
-  'fsa-owned-file-target',
-  'operation-scoped',
-  'fsa-owned-file'
-> & Readonly<{ readonly support: RuntimeDirectZipSupportFacts }>
-
 export type ManagedAtomicTargetSemantics = TargetSemanticsBase<
   'managed-atomic-file-target',
   'operation-scoped',
@@ -190,7 +145,6 @@ export type BrowserHandoffTargetSemantics = TargetSemanticsBase<
 export type MaterializationTargetSemantics =
   | NativeDirectoryTargetSemantics
   | FSADirectoryTargetSemantics
-  | FSAOwnedFileTargetSemantics
   | ManagedAtomicTargetSemantics
   | BrowserHandoffTargetSemantics
 
@@ -226,16 +180,10 @@ export interface PortableHandoffPlanSemantics {
   readonly handoffTarget: BrowserHandoffTargetSemantics
 }
 
-export interface DirectResumableZipPlanSemantics {
-  readonly kind: 'direct-resumable-zip'
-  readonly target: FSAOwnedFileTargetSemantics
-}
-
 export type OfferedMaterializationPlanSemantics =
   | DirectTreePlanSemantics
   | WorkspaceThenPublishPlanSemantics
   | PortableHandoffPlanSemantics
-  | DirectResumableZipPlanSemantics
 
 export interface DirectTreeMaterializationRoute {
   readonly kind: 'direct-tree'
@@ -254,13 +202,7 @@ export interface PortableHandoffMaterializationRoute {
   readonly handoffTarget: BrowserHandoffTargetOffer
 }
 
-export interface DirectResumableZipMaterializationRoute {
-  readonly kind: 'direct-resumable-zip'
-  readonly target: FSAOwnedFileTargetOffer
-}
-
 export type OfferedMaterializationRoute =
   | DirectTreeMaterializationRoute
   | WorkspaceThenPublishMaterializationRoute
   | PortableHandoffMaterializationRoute
-  | DirectResumableZipMaterializationRoute

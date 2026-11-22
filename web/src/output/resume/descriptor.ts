@@ -54,13 +54,8 @@ function continuationFor(
   switch (lifecycle.kind) {
     case 'resumable-start': return 'resume-start'
     case 'source-invalidated': return 'cleanup-only'
-    case 'receiving': return 'resume-receive'
-    case 'resumable-receive': return lifecycle.payloadKind === 'direct-zip'
-      ? 'resume-direct-zip'
-      : 'resume-receive'
-    case 'authorization-required': return 'reauthorize-direct-zip'
-    case 'target-verification-required': return 'verify-direct-zip-target'
-    case 'destination-space-required': return 'retry-direct-zip-space'
+    case 'receiving':
+    case 'resumable-receive': return 'resume-receive'
     case 'materialization-sealed':
     case 'packaging':
     case 'resumable-package': return 'resume-package'

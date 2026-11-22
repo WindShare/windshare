@@ -6,7 +6,6 @@ import { LaneSet, type BlockRouteEligibility } from '../../src/content/broker'
 import { encodeBody, encodeMessage, MESSAGE_KIND, type MessageKind } from '../../src/session/message'
 import type { ReceiverSessionRuntime } from '../../src/session/runtime'
 import { createProtocolOperationIdentity, createProtocolSessionIdentity } from '../../src/session/identities'
-import { transferDirectZipFileV1, type DirectZipOrderedFileV1, type DirectZipOutputSessionV1 } from '../../src/transfer/direct-zip'
 import { contentPayload } from '../protocol/delivery-vectors'
 import { b64ToBytes, loadVectorFile, type VectorCase } from '../vectors'
 import { deferred, id, SHARE } from '../session/v2-send-fixture'
@@ -108,42 +107,5 @@ describe('revision release caller and shared-read ownership', () => {
     harness.barrier.resolve()
     await Promise.resolve()
     expect(harness.requests).not.toContain(MESSAGE_KIND.releaseLease)
-  })
-
-  it('allows cancelled direct ZIP transfer cleanup to finish even while a shared read retains its lease', async () => {
-    vi.useFakeTimers()
-    const harness = fixture()
-    try {
-      const opened = await harness.open()
-      const controller = new AbortController()
-      const reason = new DOMException('ZIP paused', 'AbortError')
-      const reachedOutput = deferred<void>()
-      const file = {
-        pending: { entry: {
-          kind: 'file', id: opened.descriptor.fileId, idText: opened.descriptor.fileIdText,
-          expectedSize: opened.descriptor.exactSize, name: 'file.txt',
-        } },
-      } as DirectZipOrderedFileV1
-      const output = {
-        beginFile: async () => {
-          controller.abort(reason)
-          reachedOutput.resolve()
-          throw reason
-        },
-      } as unknown as DirectZipOutputSessionV1
-      const transfer = expect(transferDirectZipFileV1({
-        descriptor: harness.share, revisions: { open: async () => opened },
-        broker: { readRange: () => { throw new Error('cancelled ZIP must not read') } },
-        output, signal: controller.signal, onInitialDurable: () => undefined,
-        onWriteAcknowledged: () => undefined, onComplete: () => undefined,
-      }, file)).rejects.toBe(reason)
-      await reachedOutput.promise
-      await vi.advanceTimersByTimeAsync(RELEASE_WAIT)
-      await transfer
-      expect(harness.requests).not.toContain(MESSAGE_KIND.releaseLease)
-      harness.barrier.resolve()
-      await vi.advanceTimersByTimeAsync(0)
-      expect(harness.requests).toContain(MESSAGE_KIND.releaseLease)
-    } finally { harness.close() }
   })
 })

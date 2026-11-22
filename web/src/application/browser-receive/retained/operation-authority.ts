@@ -16,7 +16,6 @@ function retainedActions(
 export function retainedOperationAuthority(
   continuation: RetainedReceiveOperation['continuation'],
   hasMutationAuthority: boolean,
-  hasDirectZipAuthority: boolean,
   hasDirectTreeRecoverySummary: boolean,
 ): Readonly<{
   actions: readonly RetainedReceiveAction[]
@@ -46,17 +45,6 @@ export function retainedOperationAuthority(
     case 'resume-package':
     case 'resume-local-finalization':
       return Object.freeze({ actions: retainedActions('continue', 'discard') })
-    case 'resume-direct-zip':
-    case 'reauthorize-direct-zip':
-    case 'verify-direct-zip-target':
-    case 'verify-direct-zip-completion':
-    case 'retry-direct-zip-space':
-      return hasDirectZipAuthority
-        ? Object.freeze({ actions: retainedActions('continue', 'delete') })
-        : Object.freeze({
-            actions: retainedActions(),
-            unavailableReason: 'noZipAuthority',
-          })
     case 'save-artifact':
       return Object.freeze({ actions: retainedActions('save', 'discard') })
     case 'retry-download':

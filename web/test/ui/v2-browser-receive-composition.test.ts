@@ -29,7 +29,6 @@ import { createSelectionSpec } from '../../src/transfer/intent'
 import {
   createBrowserReceiveComposition,
 } from '../../src/application/browser-receive/composition'
-import { createLazyBrowserDirectZipComposition } from '../../src/application/browser-receive/direct-zip/loading'
 import {
   COMPLETE_DISCOVERY,
   projection,
@@ -794,32 +793,24 @@ describe('browser receive storage policy probing', () => {
       configurable: true,
       get() { throw denial },
     })
-    const deniedIdbEnvironment = await createBrowserReceiveComposition(deniedIdbWindow, {
-      directZip: createLazyBrowserDirectZipComposition(deniedIdbWindow, {
-        openJournal: async () => { throw denial },
-      }),
-    }).environment(new AbortController().signal)
+    const deniedIdbEnvironment = await createBrowserReceiveComposition(deniedIdbWindow)
+      .environment(new AbortController().signal)
 
     expect(deniedIdbEnvironment.targets.map(target => target.kind)).toEqual(['browser-handoff'])
     expect(deniedIdbEnvironment.workspace).toBeNull()
     expect(deniedIdbEnvironment.portable).toBeNull()
-    expect(deniedIdbEnvironment.directZipSupport.kind).toBe('unavailable')
 
     const deniedLocksWindow = capableWindow(vi.fn(async () => directoryHandle()))
     Object.defineProperty(deniedLocksWindow.navigator, 'locks', {
       configurable: true,
       get() { throw denial },
     })
-    const deniedLocksEnvironment = await createBrowserReceiveComposition(deniedLocksWindow, {
-      directZip: createLazyBrowserDirectZipComposition(deniedLocksWindow, {
-        openJournal: async () => { throw denial },
-      }),
-    }).environment(new AbortController().signal)
+    const deniedLocksEnvironment = await createBrowserReceiveComposition(deniedLocksWindow)
+      .environment(new AbortController().signal)
 
     expect(deniedLocksEnvironment.targets.map(target => target.kind)).toEqual(['browser-handoff'])
     expect(deniedLocksEnvironment.workspace).toBeNull()
     expect(deniedLocksEnvironment.portable?.kind).toBe('portable-memory')
-    expect(deniedLocksEnvironment.directZipSupport.kind).toBe('unavailable')
 
     const deniedStorageWindow = capableWindow(vi.fn(async () => directoryHandle()))
     Object.defineProperty(deniedStorageWindow.navigator, 'storage', {

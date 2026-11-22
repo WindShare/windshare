@@ -122,24 +122,6 @@
       "name": "zip-portable",
       "policyAvailability": "not-required",
       "routeSupport": "available"
-    },
-    {
-      "expected": {
-        "artifactChoiceId": "0dkx9vDTzvH7B7a9EUoJBOWLCWgmVwLoFH3jjRmfHFU",
-        "canonicalBytesB64Url": "d2luZHNoYXJlL2FydGlmYWN0LWNob2ljZS92MQABAAAAAAAAAAEDAAAAAAAAAAEFAAAAAAAAAAEFAAAAAAAAAAEA"
-      },
-      "input": {
-        "artifactKind": "zip-archive",
-        "guaranteeProfile": "fsa-owned-file",
-        "materializationKind": "direct-resumable-zip",
-        "preparation": "none"
-      },
-      "name": "zip-direct-resumable",
-      "policyAvailability": {
-        "directZipEpochPolicyDigest": "cWXRxG365A-doi8JI-H2YlsavP6MppN_O9OpjACii8s",
-        "reason": "exact-reviewed-runtime-required"
-      },
-      "routeSupport": "available-exact-reviewed-platform-only"
     }
   ]
 }

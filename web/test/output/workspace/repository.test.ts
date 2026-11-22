@@ -22,8 +22,8 @@ import {
 } from '../../../src/output/workspace/state-codec'
 
 describe('IndexedDB operation repository contract', () => {
-  it('isolates V2 receive authority and Direct ZIP journal stores', () => {
-    expect(CHECKPOINT_DATABASE_VERSION).toBe(14)
+  it('isolates V2 receive authority stores', () => {
+    expect(CHECKPOINT_DATABASE_VERSION).toBe(15)
     const stores = new Map(INDEXEDDB_OPERATION_STORE_SCHEMAS.map(value => [value.name, value]))
     expect([...stores.keys()]).not.toContain('receive-operation-v1-records')
     expect(stores.get('receive-operation-v2-records')).toEqual(schema(
@@ -36,13 +36,7 @@ describe('IndexedDB operation repository contract', () => {
         ['by-kind', 'kind'],
       ],
     ))
-    expect([...stores.keys()].filter(name => name.startsWith('direct-zip-'))).toEqual([
-      'direct-zip-state-v1',
-      'direct-zip-candidates-v1',
-      'direct-zip-layout-pages-v1',
-      'direct-zip-central-pages-v1',
-      'direct-zip-epoch-pages-v1',
-    ])
+    expect([...stores.keys()].filter(name => name.startsWith('direct-zip-'))).toEqual([])
   })
 
   it('round-trips canonical lifecycle authority instead of trusting indexes', () => {

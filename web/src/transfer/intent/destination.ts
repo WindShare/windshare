@@ -1,7 +1,6 @@
 import { sha256 } from '../../crypto/digest'
 import {
   DESTINATION_RESERVATION_DOMAIN,
-  FSA_OWNED_FILE_BINDING_DOMAIN,
   NAME_COLLISION_DOMAIN,
   PORTABLE_BINDING_DOMAIN,
   TEXT_ENCODER,
@@ -24,23 +23,16 @@ import {
   DEFAULT_PORTABLE_ASSEMBLY_PART_BYTES,
   DEFAULT_PORTABLE_MAXIMUM_PARTS,
   DESTINATION_RESERVATION_VERSION,
-  DIRECT_ZIP_CANDIDATE_TOKEN_LENGTH,
-  DIRECT_ZIP_STABLE_NAME_INFIX,
-  FSA_OWNED_FILE_BINDING_VERSION,
   FSA_RESERVED_ROOT_LAYOUT_VERSION,
   MAX_RESULT_COMPONENT_BYTES,
   PORTABLE_BINDING_VERSION,
   STABLE_IDENTITY_BYTES,
-  ARCHIVE_EXTENSION,
   WORKSPACE_BINDING_VERSION,
   type ArtifactSpec,
   type AtomicTargetReservation,
-  type AvailableDirectZipPolicyDigests,
   type ContainerRootReservation,
   type DestinationReservation,
-  type DirectZipPolicyDigests,
   type GuaranteeSet,
-  type FSAOwnedFileBinding,
   type FSANamedContainerEntryReservation,
   type NamedContainerEntryReservation,
   type NativeNamedContainerEntryReservation,
@@ -60,7 +52,6 @@ import {
 } from './destination/codec'
 import {
   browserHandoffGuarantees,
-  fsaOwnedFileGuarantees,
   fsaTreeGuarantees,
   managedAtomicGuarantees,
   managedNameChooser,
@@ -73,7 +64,6 @@ export {
   authorityKindByte,
   browserHandoffGuarantees,
   canonicalGuarantees,
-  fsaOwnedFileGuarantees,
   fsaTreeGuarantees,
   managedAtomicGuarantees,
   managedNameChooser,
@@ -505,108 +495,6 @@ export async function validateWorkspaceBinding(
     throw new TypeError('workspace binding artifact digest is invalid')
   }
   return requireSameDigestRecord(input, rebuilt, 'workspace binding')
-}
-
-export function unavailableDirectZipPolicyDigests(): DirectZipPolicyDigests {
-  return Object.freeze({
-    zipEncoding: null,
-    layout: null,
-    checkpoint: null,
-    journalBudget: null,
-    epoch: null,
-  })
-}
-
-export async function createFSAOwnedFileBinding(input: {
-  readonly operationId: string
-  readonly artifact: ArtifactSpec
-  readonly stableName: string
-  readonly targetRef: string
-  readonly policies: DirectZipPolicyDigests
-}): Promise<FSAOwnedFileBinding> {
-  const artifact = await validateArtifactSpec(input.artifact)
-  if (artifact.kind !== 'zip-archive') {
-    throw new TypeError('FSA owned-file binding requires a ZIP artifact')
-  }
-  const operationId = requireIdentity(input.operationId, STABLE_IDENTITY_BYTES, 'operation')
-  const stableName = requireDirectZipStableName(input.stableName)
-  const targetRef = requireIdentity(input.targetRef, AUTHORITY_REFERENCE_BYTES, 'FSA owned target')
-  const policies = requireAvailableDirectZipPolicies(input.policies)
-  const guarantees = fsaOwnedFileGuarantees()
-  const canonicalBytes = canonicalRecord(FSA_OWNED_FILE_BINDING_DOMAIN, [
-    frame(requireIdentityBytes(operationId, STABLE_IDENTITY_BYTES, 'operation')),
-    frame(requireIdentityBytes(artifact.digest, AUTHORITY_REFERENCE_BYTES, 'artifact digest')),
-    frame(TEXT_ENCODER.encode(stableName)),
-    frame(requireIdentityBytes(targetRef, AUTHORITY_REFERENCE_BYTES, 'FSA owned target')),
-    frame(canonicalGuarantees(guarantees)),
-    frame(requireIdentityBytes(policies.zipEncoding, AUTHORITY_REFERENCE_BYTES, 'ZIP encoding policy')),
-    frame(requireIdentityBytes(policies.layout, AUTHORITY_REFERENCE_BYTES, 'direct ZIP layout policy')),
-    frame(requireIdentityBytes(policies.checkpoint, AUTHORITY_REFERENCE_BYTES, 'direct ZIP checkpoint policy')),
-    frame(requireIdentityBytes(policies.journalBudget, AUTHORITY_REFERENCE_BYTES, 'direct ZIP journal budget')),
-    frame(requireIdentityBytes(policies.epoch, AUTHORITY_REFERENCE_BYTES, 'direct ZIP epoch policy')),
-  ])
-  return canonicalDigestValue({
-    version: FSA_OWNED_FILE_BINDING_VERSION,
-    operationId,
-    artifactDigest: artifact.digest,
-    stableName,
-    targetRef,
-    guarantees,
-    policies,
-  }, await digestText(canonicalBytes), canonicalBytes)
-}
-
-export async function validateFSAOwnedFileBinding(
-  input: FSAOwnedFileBinding,
-  artifact: ArtifactSpec,
-): Promise<FSAOwnedFileBinding> {
-  if (input.version !== FSA_OWNED_FILE_BINDING_VERSION ||
-      input.artifactDigest !== artifact.digest ||
-      !sameGuarantees(input.guarantees, fsaOwnedFileGuarantees())) {
-    throw new TypeError('FSA owned-file binding contract is invalid')
-  }
-  const rebuilt = await createFSAOwnedFileBinding({
-    operationId: input.operationId,
-    artifact,
-    stableName: input.stableName,
-    targetRef: input.targetRef,
-    policies: input.policies,
-  })
-  return requireSameDigestRecord(input, rebuilt, 'FSA owned-file binding')
-}
-
-function requireAvailableDirectZipPolicies(
-  input: DirectZipPolicyDigests,
-): AvailableDirectZipPolicyDigests {
-  if (input === null || typeof input !== 'object') {
-    throw new TypeError('direct ZIP policy digests are absent')
-  }
-  const available = {
-    zipEncoding: requirePolicyDigest(input.zipEncoding, 'ZIP encoding policy'),
-    layout: requirePolicyDigest(input.layout, 'direct ZIP layout policy'),
-    checkpoint: requirePolicyDigest(input.checkpoint, 'direct ZIP checkpoint policy'),
-    journalBudget: requirePolicyDigest(input.journalBudget, 'direct ZIP journal budget'),
-    epoch: requirePolicyDigest(input.epoch, 'direct ZIP epoch policy'),
-  }
-  return Object.freeze(available)
-}
-
-function requirePolicyDigest(value: string | null, label: string): string {
-  if (value === null) throw new TypeError(label + ' digest is absent')
-  return requireIdentity(value, AUTHORITY_REFERENCE_BYTES, label)
-}
-
-function requireDirectZipStableName(value: string): string {
-  const name = requireResultName(value)
-  if (!name.endsWith(ARCHIVE_EXTENSION)) throw new TypeError('direct ZIP stable name extension is invalid')
-  const withoutExtension = name.slice(0, -ARCHIVE_EXTENSION.length)
-  const separator = withoutExtension.lastIndexOf(DIRECT_ZIP_STABLE_NAME_INFIX)
-  const token = withoutExtension.slice(separator + DIRECT_ZIP_STABLE_NAME_INFIX.length)
-  if (separator <= 0 || token.length !== DIRECT_ZIP_CANDIDATE_TOKEN_LENGTH || token.includes('=')) {
-    throw new TypeError('direct ZIP stable name token is invalid')
-  }
-  requireIdentity(token, STABLE_IDENTITY_BYTES, 'direct ZIP reservation candidate')
-  return name
 }
 
 export async function createPortableBinding(input: {

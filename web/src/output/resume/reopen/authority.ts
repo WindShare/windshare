@@ -9,7 +9,6 @@ import {
 import {
   reopenOriginPrivateWorkspaceNamespace,
 } from '../../origin-private/namespace'
-import { IndexedDbDirectZipJournalRepository } from '../../direct-zip/journal/indexeddb'
 import { openOriginPrivateWorkspaceBackend } from '../../origin-private/session'
 import {
   emitOutputTrace,
@@ -70,7 +69,6 @@ export class PersistedReceiveOperationReopenAuthority {
   readonly #leaseOptions: LeaseOptions
   readonly #acquireLease: typeof acquireBrowserReceiveOperationLease
   readonly #verifyDirectTreeBinding: typeof verifyFSAOperationBinding
-  readonly #openDirectZipJournal: () => Promise<import('../../direct-zip/journal/repository').DirectZipJournalRepository>
   readonly #reopenWorkspaceNamespace: typeof reopenOriginPrivateWorkspaceNamespace
   readonly #workspaceContinuation: WorkspaceContinuationAuthority
   readonly #diagnostics: OutputDiagnosticsPorts | undefined
@@ -87,12 +85,6 @@ export class PersistedReceiveOperationReopenAuthority {
     this.#leaseOptions = options.leaseOptions ?? {}
     this.#acquireLease = options.acquireLease ?? acquireBrowserReceiveOperationLease
     this.#verifyDirectTreeBinding = options.verifyDirectTreeBinding ?? verifyFSAOperationBinding
-    this.#openDirectZipJournal = options.openDirectZipJournal ?? (() =>
-      IndexedDbDirectZipJournalRepository.open({
-        ...(options.checkpointDatabaseName === undefined
-          ? {}
-          : { databaseName: options.checkpointDatabaseName }),
-      }))
     this.#reopenWorkspaceNamespace = options.reopenWorkspaceNamespace ??
       reopenOriginPrivateWorkspaceNamespace
     this.#workspaceContinuation = new WorkspaceContinuationAuthority({
@@ -155,13 +147,11 @@ export class PersistedReceiveOperationReopenAuthority {
         snapshot,
         lease,
         descriptor,
-        resources,
       )
       if (diagnostics !== undefined) {
         diagnostics = { ...diagnostics, backend: target.kind === 'workspace' ? 'origin_private' : 'file_system_access' }
       }
       requireMatchingRetainedFileRecovery(target, descriptor, retainedFileRecovery)
-      if (target.kind === 'direct-zip') resources.directZipJournal = target.journal
       const lifecycleAuthority = await this.#advanceLifecycle({
         repository,
         snapshot,
@@ -218,10 +208,6 @@ export class PersistedReceiveOperationReopenAuthority {
   }>> {
     let snapshot = await this.#readSnapshot(repository, descriptor)
     await assertDescriptorAuthority(descriptor, snapshot, purpose)
-    const directZipJournal = snapshot.operation.receiveIntent.plan.kind === 'direct-resumable-zip'
-      ? await this.#openDirectZipJournal()
-      : undefined
-    if (directZipJournal !== undefined) resources.directZipJournal = directZipJournal
     const lease = await this.#acquireLease(repository, descriptor.operationId, {
       ...this.#leaseOptions,
       acquireTransition: {
@@ -231,14 +217,6 @@ export class PersistedReceiveOperationReopenAuthority {
           ...(snapshot.bindingRecord === undefined ? [] : [snapshot.bindingRecord]),
         ],
       },
-      ...(directZipJournal === undefined
-        ? {}
-        : {
-            acquisitionTransitionCommitter: {
-              commitAcquisitionTransition: transition =>
-                directZipJournal.commitLeaseAcquisition(transition),
-            },
-          }),
     })
     resources.lease = lease
 
@@ -254,9 +232,7 @@ export class PersistedReceiveOperationReopenAuthority {
     snapshot: PersistedReopenSnapshot,
     lease: BrowserReceiveOperationLease,
     descriptor: ReceiveOperationResumeDescriptor,
-    resources: ReopenResources,
   ): Promise<ReopenedReceiveTarget> {
-    let openedJournal: import('../../direct-zip/journal/repository').DirectZipJournalRepository | undefined
     try {
       if (snapshot.operation.receiveIntent.plan.kind === 'direct-tree') {
         const binding = await this.#verifyDirectTreeBinding({
@@ -265,31 +241,12 @@ export class PersistedReceiveOperationReopenAuthority {
         })
         return Object.freeze({ kind: 'direct-tree', binding })
       }
-      if (snapshot.operation.receiveIntent.plan.kind === 'direct-resumable-zip') {
-        const journal = resources.directZipJournal ?? await this.#openDirectZipJournal()
-        openedJournal = journal
-        const state = await journal.readState(snapshot.operation.operationId)
-        if (state === undefined ||
-            state.checkpoint.receiveIntentDigest !== snapshot.operation.receiveIntentDigest ||
-            state.checkpoint.targetBindingDigest !== snapshot.operation.planBindingDigest) {
-          journal.close()
-          throw new TargetOwnershipUnknownError('reservation', snapshot.operation.operationId)
-        }
-        const candidate = await journal.readOperationCandidate(snapshot.operation.operationId)
-        return Object.freeze({
-          kind: 'direct-zip',
-          journal,
-          checkpoint: state.checkpoint,
-          ...(candidate === undefined ? {} : { candidate }),
-        })
-      }
       const namespace = await this.#reopenWorkspaceNamespace({
         repository,
         receiveIntent: snapshot.operation.receiveIntent,
       })
       return Object.freeze({ kind: 'workspace', namespace })
     } catch (error) {
-      openedJournal?.close()
       if (!(error instanceof TargetOwnershipUnknownError)) throw error
       return this.#throwOwnershipAttention(repository, snapshot, lease, descriptor.operationId)
     }
@@ -329,17 +286,6 @@ export class PersistedReceiveOperationReopenAuthority {
     }
     if (input.descriptor.continuation === 'resume-receive') {
       return this.#resumeReceive(input)
-    }
-    if (input.descriptor.continuation === 'resume-direct-zip' ||
-        input.descriptor.continuation === 'reauthorize-direct-zip' ||
-        input.descriptor.continuation === 'verify-direct-zip-target' ||
-        input.descriptor.continuation === 'verify-direct-zip-completion' ||
-        input.descriptor.continuation === 'retry-direct-zip-space') {
-      if (input.target.kind !== 'direct-zip') {
-        throw new TypeError('Direct ZIP continuation reopened a foreign target')
-      }
-      input.resources.directZipJournal = input.target.journal
-      return Object.freeze({ lifecycle: input.snapshot.lifecycle })
     }
     if (input.descriptor.continuation === 'resume-package') {
       return this.#resumePackage(input)
@@ -392,24 +338,17 @@ export class PersistedReceiveOperationReopenAuthority {
     if (input.snapshot.lifecycle.kind !== 'resumable-receive') {
       throw new TypeError('receive continuation lost its stable admission fallback')
     }
-    if (input.target.kind === 'direct-tree') {
-      if (input.snapshot.lifecycle.payloadKind !== 'file-set') {
-        throw new TypeError('DirectTree cannot resume a Direct ZIP checkpoint')
-      }
-      return Object.freeze({
-        lifecycle: await persistReceiveResume(
-          input.repository,
-          input.snapshot,
-          input.lease,
-        ),
-        receiveAdmissionFallback: input.snapshot.lifecycle,
-      })
+    if (input.snapshot.lifecycle.payloadKind !== 'file-set') {
+      throw new TypeError('DirectTree requires a file-set checkpoint')
     }
-    if (input.snapshot.lifecycle.payloadKind !== 'direct-zip') {
-      throw new TypeError('Direct ZIP cannot resume a file-set checkpoint')
-    }
-    input.resources.directZipJournal = input.target.journal
-    return Object.freeze({ lifecycle: input.snapshot.lifecycle })
+    return Object.freeze({
+      lifecycle: await persistReceiveResume(
+        input.repository,
+        input.snapshot,
+        input.lease,
+      ),
+      receiveAdmissionFallback: input.snapshot.lifecycle,
+    })
   }
 
   async #resumePackage(input: Readonly<{
@@ -480,10 +419,6 @@ export class PersistedReceiveOperationReopenAuthority {
         ...(retainedFileRecovery === undefined ? {} : { retainedFileRecovery }),
         ...(fallback === undefined ? {} : { receiveAdmissionFallback: fallback }),
       })
-    }
-    if (input.target.kind === 'direct-zip') {
-      input.resources.directZipJournal = input.target.journal
-      return Object.freeze({ ...base, ...input.target })
     }
     const workspaceFallback = input.lifecycleAuthority.receiveAdmissionFallback
     if (workspaceFallback?.kind === 'receiving') {

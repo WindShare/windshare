@@ -2,7 +2,7 @@ import type { Language } from './preferences/model'
 import { receiverCopy } from './locales/receiver'
 import { activationOwnsChoice } from '../application/receive/activation/model'
 import type { ArtifactChoice, ArtifactOperation, OfferedArtifactChoice } from '../output/model/artifacts/choices'
-import type { ArtifactOffers, OfferUnavailableReason, ZipRouteGroup } from '../output/model/artifacts/offers'
+import type { ArtifactOffers, OfferUnavailableReason } from '../output/model/artifacts/offers'
 import type { ProjectedByteCount } from '../output/model/artifacts/projections'
 import type { AuthorityActivationSnapshot } from '../application/receive/activation/model'
 import { formatBytes } from './progress-presentation'
@@ -21,12 +21,10 @@ export interface PresentedArtifactChoice {
 
 export type ZipModePresentation =
   | Readonly<{
-      kind: 'routes'
+      kind: 'route'
       title: string
       description: string
-      primary: PresentedArtifactChoice
-      secondary: PresentedArtifactChoice | null
-      recommendation: string
+      choice: PresentedArtifactChoice
     }>
   | Readonly<{
       kind: 'native-fallback'
@@ -229,7 +227,6 @@ function artifactChoiceLabel(choice: ArtifactChoice, suggestedName: string | nul
   const t = receiverCopy[language].artifacts
   if (choice.artifactKind === 'zip-archive') {
     switch (choice.plan.kind) {
-      case 'direct-resumable-zip': return t.zipToFolder
       case 'workspace-then-publish': return t.zipAfterReceive
       case 'portable-handoff': return t.checkZip
       case 'direct-tree':
@@ -264,9 +261,6 @@ function artifactChoiceDescription(choice: ArtifactChoice, language: Language): 
       : t.checkFileHint
   }
   if (choice.artifactKind === 'zip-archive') {
-    if (choice.plan.kind === 'direct-resumable-zip') {
-      return t.directZipHint
-    }
     return choice.recovery === 'workspace-resumable'
       ? t.workspaceZipHint
       : t.handoffZipHint
@@ -277,19 +271,17 @@ function artifactChoiceDescription(choice: ArtifactChoice, language: Language): 
 }
 
 function presentZipMode(
-  group: ZipRouteGroup | null,
+  zip: OfferedArtifactChoice | null,
   choices: readonly OfferedArtifactChoice[],
   language: Language,
 ): ZipModePresentation | null {
   const t = receiverCopy[language].artifacts
-  if (group !== null) {
+  if (zip !== null) {
     return Object.freeze({
-      kind: 'routes',
+      kind: 'route',
       title: t.zip,
       description: t.zipDescription,
-      primary: presentArtifactChoice(group.primary, language),
-      secondary: group.secondary === null ? null : presentArtifactChoice(group.secondary, language),
-      recommendation: zipRecommendationCopy(group, language),
+      choice: presentArtifactChoice(zip, language),
     })
   }
   return choices.some(choice => choice.choice.artifactKind === 'directory-tree')
@@ -299,25 +291,6 @@ function presentZipMode(
         description: t.nativeFallback,
       })
     : null
-}
-
-function zipRecommendationCopy(group: ZipRouteGroup, language: Language): string {
-  const t = receiverCopy[language].artifacts
-  if (group.recommendation.kind === 'recommended') {
-    if (group.recommendation.reason === 'workspace-within-discovered-budget') {
-      return t.zipEstimate
-    }
-    return group.recommendation.reason === 'workspace-within-policy-budget'
-      ? t.recommendWorkspace
-      : t.recommendFolder
-  }
-  switch (group.recommendation.reason) {
-    case 'only-one-route-available': return t.onlyRoute
-    case 'no-browser-zip-route': return t.nativeFallback
-    case 'discovery-incomplete': return t.stillDiscovering
-    case 'workspace-cost-unavailable': return t.unknownWorkspace
-    case 'recommendation-policy-unavailable': return t.unknownComparison
-  }
 }
 
 function projectedBytes(label: string, value: ProjectedByteCount | undefined, language: Language): string {

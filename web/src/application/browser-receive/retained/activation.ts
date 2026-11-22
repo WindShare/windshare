@@ -21,14 +21,9 @@ export async function prepareRetainedActivation(operation: RetainedReceiveOperat
     if (stored.operationId !== operation.operationId || stored.receiveIntentDigest !== operation.receiveIntentDigest) {
       throw new DOMException('Retained authorization belongs to another download', 'InvalidStateError')
     }
-    let parent: PermissionHandle
-    if (stored.receiveIntent.plan.kind === 'direct-tree') {
-      const { verifyFSAOperationBinding } = await import('../../../output/browser/indexeddb-root-binding')
-      parent = (await verifyFSAOperationBinding({ repository, intent: stored.receiveIntent })).parent
-    } else if (stored.receiveIntent.plan.kind === 'direct-resumable-zip') {
-      const { readEnvelope } = await import('../../../output/direct-zip/browser/resources')
-      parent = (await readEnvelope(repository, operation.operationId)).candidate.parentBinding.persistedHandle
-    } else return undefined
+    if (stored.receiveIntent.plan.kind !== 'direct-tree') return undefined
+    const { verifyFSAOperationBinding } = await import('../../../output/browser/indexeddb-root-binding')
+    const parent: PermissionHandle = (await verifyFSAOperationBinding({ repository, intent: stored.receiveIntent })).parent
     signal.throwIfAborted()
     return action => {
       // The native request starts in the click stack. Reopen still verifies the

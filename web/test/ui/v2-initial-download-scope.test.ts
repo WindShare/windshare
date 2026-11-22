@@ -11,7 +11,7 @@ import type { ReceiverController } from '../../src/ui/controller'
 import type { ReceiverTraceEvent } from '../../src/application/receive/observation/contracts'
 import type { BrowseDirectory, BrowsePage } from '../../src/application/browser-share/gateway'
 import {
-  controllerFor, deferred, DIRECT_ZIP_ENVIRONMENT, FakeJoinedShare, FakeReceiveComposition,
+  controllerFor, deferred, FakeJoinedShare, FakeReceiveComposition, WORKSPACE_ENVIRONMENT,
   identityText, resetOrchestrationTestEnvironment, turns, waitFor,
 } from './v2-receiver-orchestration-fixture'
 
@@ -74,7 +74,7 @@ afterEach(async () => {
 
 function setup() {
   const joined = new InitialFolderShare(true)
-  const receive = new FakeReceiveComposition(DIRECT_ZIP_ENVIRONMENT)
+  const receive = new FakeReceiveComposition(WORKSPACE_ENVIRONMENT)
   const traces: ReceiverTraceEvent[] = []
   const controller = controllerFor(joined, receive, undefined, event => traces.push(event))
   controllers.push(controller)

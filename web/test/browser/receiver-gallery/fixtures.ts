@@ -74,7 +74,7 @@ async function galleryTaskOutput(
     repositoryRef: identity(42, 32), artifact })
   const plan = await createWorkspaceThenPublishPlan(artifact, binding)
   return {
-    ...EMPTY_RECEIVE_RUNTIME, offers, lifecycle: facts.lifecycle, directZipProgress: facts.directZipProgress,
+    ...EMPTY_RECEIVE_RUNTIME, offers, lifecycle: facts.lifecycle,
     plan, resolvedArtifact: artifact, activeControls: facts.lifecycle.kind === 'receiving' ? ['pause', 'stop'] : [],
     repairSummary: scenario === 'saved-cleanup' ? {
       committedCount: 1, logicalPathSample: [['project', 'settings.cfg']],

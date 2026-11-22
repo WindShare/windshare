@@ -20,29 +20,6 @@ describe('receiver capacity wait UI', () => {
     expect(visible).toContain('Waiting for sender capacity')
     expect(cleared).not.toContain('Waiting for sender capacity')
   })
-
-  it('shows the same delayed notice beside Direct ZIP progress', () => {
-    const output: OutputPresentationSnapshot = Object.freeze({
-      ...EMPTY_OUTPUT_PRESENTATION,
-      directZipProgress: Object.freeze({
-        kind: 'direct-zip',
-        operationId: 'operation',
-        generation: 1n,
-        phase: 'receiving',
-        receivedSelectedBytes: 32n,
-        writtenSelectedBytes: 24n,
-        safeResumeBytes: 16n,
-      }),
-    })
-    const html = render(
-      progress({ materializedBytes: 24n, capacityWaitingFiles: 1, capacityWaitVisible: true }),
-      output,
-    )
-
-    expect(html).toContain('Download progress')
-    expect(html).toContain('32 B received')
-    expect(html).toContain('Waiting for sender capacity')
-  })
 })
 
 function render(

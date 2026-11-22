@@ -128,7 +128,7 @@ describe('published DirectTree metadata cleanup', () => {
     expect(await fixture.repository.readLease(fixture.intent.operationId)).toBeUndefined()
     expect(fixture.repository.recordsOfKind(RECEIVE_RECORD_CLEANUP)).toHaveLength(1)
     const continuation = receiveOperationResumeDescriptor(after)!.continuation
-    expect(retainedOperationAuthority(continuation, true, false, false).actions).not.toContain('delete')
+    expect(retainedOperationAuthority(continuation, true, false).actions).not.toContain('delete')
     expect(fixture.trace).toContainEqual(expect.objectContaining({
       eventName: 'cleanup', payload: expect.objectContaining({
         transition: 'completed', cleanup_kind: 'published_metadata',

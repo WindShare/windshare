@@ -53,12 +53,6 @@ export function probeBrowserEnvironment(
     ]),
     ...(supplemental.workspace === undefined ? {} : { workspace: supplemental.workspace }),
     ...(supplemental.portable === undefined ? {} : { portable: supplemental.portable }),
-    ...(supplemental.directZipSupport === undefined
-      ? {}
-      : { directZipSupport: supplemental.directZipSupport }),
-    ...(supplemental.zipRecommendationPolicy === undefined
-      ? {}
-      : { zipRecommendationPolicy: supplemental.zipRecommendationPolicy }),
   })
   return Object.freeze({ offers, fsaParent, browserHandoff })
 }

@@ -16,7 +16,6 @@ type RetainedAuthorityDispatch =
   | Readonly<{
       kind: 'continuation'
       continuation: AuthorityOwnedReceiveOperationContinuation
-      directZipAction: boolean
     }>
 
 /** Keeps action intent separate from the continuation runtime that takes over its leased output. */
@@ -33,9 +32,8 @@ export async function dispatchRetainedAuthorityAction(
     signal.throwIfAborted()
     return Object.freeze({ kind: 'completed' })
   }
-  const directZipAction = isDirectZipContinuation(operation.continuation)
-  if (!directZipAction && (action === 'discard' || (action === 'delete' &&
-      operation.continuation !== 'retry-cleanup'))) {
+  if (action === 'discard' || (action === 'delete' &&
+      operation.continuation !== 'retry-cleanup')) {
     await authority.discard(reference, failures)
     signal.throwIfAborted()
     return Object.freeze({ kind: 'completed' })
@@ -58,7 +56,7 @@ export async function dispatchRetainedAuthorityAction(
     signal.throwIfAborted()
     return Object.freeze({ kind: 'completed' })
   }
-  return Object.freeze({ kind: 'continuation', continuation: result.continuation, directZipAction })
+  return Object.freeze({ kind: 'continuation', continuation: result.continuation })
 }
 
 function retainedFileRecoveryFor(
@@ -67,12 +65,4 @@ function retainedFileRecoveryFor(
 ): 'preserve' | 'restart-owned-file' | undefined {
   if (operation.recoverySummary === undefined) return undefined
   return action === 'redownload' ? 'restart-owned-file' : 'preserve'
-}
-
-function isDirectZipContinuation(
-  continuation: RetainedReceiveOperation['continuation'],
-): boolean {
-  return continuation === 'resume-direct-zip' || continuation === 'reauthorize-direct-zip' ||
-    continuation === 'verify-direct-zip-target' || continuation === 'verify-direct-zip-completion' ||
-    continuation === 'retry-direct-zip-space'
 }

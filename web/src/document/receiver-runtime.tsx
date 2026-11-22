@@ -3,7 +3,6 @@ import '../App.css'
 import type { DocumentRuntime } from './owner'
 import type { DocumentDiagnostics } from './diagnostics'
 import { createBrowserReceiveComposition, type BrowserReceiveWindow } from '../application/browser-receive/composition'
-import { createLazyBrowserDirectZipComposition } from '../application/browser-receive/direct-zip/loading'
 import { BrowserReceiverGateway } from '../application/browser-share/gateway'
 import { BuiltinNetwork } from '../application/network/builtin'
 import { networkObserver, authorityObserver } from '../application/network/diagnostics'
@@ -16,7 +15,6 @@ export function createReceiverRuntime(windowPort: Window, diagnosticOwner: Docum
   const { diagnostics } = diagnosticOwner
   const outputTrace = createOutputTraceSource(diagnostics.trace)
   const receive = createBrowserReceiveComposition(windowPort as BrowserReceiveWindow, {
-    directZip: createLazyBrowserDirectZipComposition(windowPort as BrowserReceiveWindow, { outputTrace }),
     outputTrace, localOutputFailures: diagnostics.localOutputFailures,
   })
   const network = new BuiltinNetwork(networkObserver(diagnostics.trace), authorityObserver(diagnostics.trace))

@@ -15,11 +15,7 @@ import { finalFileCheckpointProof } from '../../src/output/persistence/journal'
 import { decodeMaterializedManifestV1, sealMaterializedManifest } from '../../src/output/workspace/manifest'
 import { createPublicationAttempt } from '../../src/output/workspace/aggregate'
 import { createHandoffReceipt } from '../../src/output/workspace/receipts'
-import { BROWSER_HANDOFF_OBJECT_URL_LEASE_MILLISECONDS, type ArtifactChoiceID } from '../../src/transfer/intent'
-import {
-  createDirectZipBootstrapCandidateV1, validateDirectZipBootstrapCandidateV1,
-} from '../../src/output/direct-zip/journal/records'
-import { directZipJournalBudgetDigestV1 } from '../../src/output/direct-zip/journal/budget'
+import { BROWSER_HANDOFF_OBJECT_URL_LEASE_MILLISECONDS } from '../../src/transfer/intent'
 import { encodeTaskCheckpoint, type TaskCheckpoint } from '../../src/output/origin-private/task-checkpoint/model'
 import type { TaskCheckpointStore } from '../../src/output/origin-private/task-checkpoint/store'
 import { WorkspaceProgressiveStages } from '../../src/output/workspace/stages/progressive'
@@ -98,25 +94,6 @@ describe('frozen catalog names throughout output ownership', () => {
     expect(receipt.digest).not.toBe((await createHandoffReceipt({
       ...input, suggestedName: COMPOSED_NAME, urlLeaseEndsAt: 1000, handoffStarted: true,
     })).digest)
-  })
-
-  it('reopens Direct ZIP bootstrap candidates without renaming their physical target', async () => {
-    const choiceId = identity(4, 32) as ArtifactChoiceID
-    const candidate = await createDirectZipBootstrapCandidateV1({
-      operationId: identity(1), candidateId: identity(2), leaseId: identity(3), leaseGeneration: 1n,
-      selectionCanonicalBytes: Uint8Array.of(1), artifactCanonicalBytes: Uint8Array.of(2),
-      choiceIdentityCanonicalBytes: Uint8Array.of(3), choiceId, preClickRanking: [choiceId],
-      stablePhysicalName: NAME + '.zip', ownershipNonce: identity(5, 32),
-      targetBindingDigest: identity(6, 32), parentHandleId: 'parent',
-      policies: { encodingPolicyDigest: identity(7, 32), layoutPolicyDigest: identity(8, 32),
-        checkpointPolicyDigest: identity(9, 32), epochPolicyDigest: identity(10, 32),
-        journalBudgetDigest: await directZipJournalBudgetDigestV1() },
-    })
-    const restored = await validateDirectZipBootstrapCandidateV1(structuredClone(candidate))
-    expect(restored).toEqual(candidate)
-    expect(restored.stablePhysicalName).toBe(NAME + '.zip')
-    await expect(createDirectZipBootstrapCandidateV1({ ...candidate, parentHandleId: 'e\u0301' }))
-      .rejects.toThrow('well-formed NFC Unicode')
   })
 
   it('pauses a progressive ZIP with its exact selected names and fences a different selection', async () => {

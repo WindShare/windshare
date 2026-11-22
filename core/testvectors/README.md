@@ -11,7 +11,7 @@ or recoverable output remain correctness requirements in every runtime.
 
 Browser output bindings, persistence records and UI policies belong to `web/`.
 Their fixtures live in `web/test/fixtures/output/`; native checkpoint behavior is
-tested in `osfs/`. ZIP reader interoperability belongs to `integration/outputformat/`.
+tested in `osfs/`.
 
 ## Generate and verify
 

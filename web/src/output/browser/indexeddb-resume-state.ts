@@ -6,8 +6,6 @@ import {
   type PersistedReceiveRecord,
 } from '../workspace/records'
 import {
-  RECEIVE_STATE_AUTHORIZATION_REQUIRED,
-  RECEIVE_STATE_DESTINATION_SPACE_REQUIRED,
   RECEIVE_STATE_DOWNLOAD_STARTED,
   RECEIVE_STATE_NEEDS_ATTENTION,
   RECEIVE_STATE_PARTIAL_DIRECTORY,
@@ -22,32 +20,18 @@ import {
   RECEIVE_STATE_RESUMABLE_START,
   RECEIVE_STATE_SOURCE_INVALIDATED,
   RECEIVE_STATE_WAITING_TO_SAVE,
-  RECEIVE_STATE_TARGET_VERIFICATION_REQUIRED,
   type ReceiveLifecycleState,
 } from '../../transfer/lifecycle/state'
 import { decodeStoredReceiveLifecycleState } from '../workspace/state-codec'
 import { readIncompatibleNameStatus } from './indexeddb/incompatible-name-records'
-import { IndexedDbDirectZipJournalRepository } from '../direct-zip/journal/indexeddb'
-import { readDirectZipRecoveryRequirement } from '../resume/direct-zip-checkpoint'
 import type { ReceiveOperationResumeSource } from '../resume/authority'
 import type {
   RecoverySummary,
 } from '../../transfer/lifecycle/recovery-summary'
 import { FSA_RESERVED_ROOT_LAYOUT_VERSION } from '../../transfer/intent'
 import {
-  DIRECT_ZIP_CANDIDATE_BOOTSTRAP,
-  type DirectZipBootstrapCandidateV1,
-} from '../direct-zip/journal/model'
-import {
-  directZipBootstrapResumeDescriptorV1,
-  type DirectZipBootstrapResumeDescriptorV1,
-} from '../direct-zip/journal/repository'
-import { validateDirectZipBootstrapCandidateV1 } from '../direct-zip/journal/records'
-import {
   DEFAULT_OUTPUT_CHECKPOINT_DATABASE_NAME,
   INDEXEDDB_BY_STATE_INDEX,
-  INDEXEDDB_BY_KIND_CANDIDATE_INDEX,
-  INDEXEDDB_DIRECT_ZIP_CANDIDATE_STORE,
   INDEXEDDB_RECEIVE_RECORD_STORE,
   openIndexedDbCheckpointDatabase,
   requestResult,
@@ -70,9 +54,6 @@ const INVENTORIED_STATE_BYTES = Object.freeze([
   RECEIVE_STATE_PARTIAL_DIRECTORY,
   RECEIVE_STATE_DOWNLOAD_STARTED,
   RECEIVE_STATE_NEEDS_ATTENTION,
-  RECEIVE_STATE_AUTHORIZATION_REQUIRED,
-  RECEIVE_STATE_TARGET_VERIFICATION_REQUIRED,
-  RECEIVE_STATE_DESTINATION_SPACE_REQUIRED,
 ] as const)
 
 /**
@@ -97,30 +78,6 @@ export class IndexedDbReceiveResumeSource implements ReceiveOperationResumeSourc
       await openIndexedDbCheckpointDatabase(databaseName),
       databaseName,
     )
-  }
-
-  async listDirectZipBootstrapCandidates(): Promise<readonly DirectZipBootstrapResumeDescriptorV1[]> {
-    this.#assertOpen()
-    const transaction = this.#database.transaction(
-      INDEXEDDB_DIRECT_ZIP_CANDIDATE_STORE,
-      'readonly',
-    )
-    const index = transaction.objectStore(INDEXEDDB_DIRECT_ZIP_CANDIDATE_STORE)
-      .index(INDEXEDDB_BY_KIND_CANDIDATE_INDEX)
-    const values = await collectCursorValues(
-      index.openCursor(IDBKeyRange.bound(
-        [DIRECT_ZIP_CANDIDATE_BOOTSTRAP, ''],
-        [DIRECT_ZIP_CANDIDATE_BOOTSTRAP, '\uffff'],
-      )),
-      RESUME_INVENTORY_BOUND + 1,
-    )
-    await transactionCompletion(transaction)
-    if (values.length > RESUME_INVENTORY_BOUND) {
-      throw new DOMException('Direct ZIP bootstrap inventory exceeds its bound', 'QuotaExceededError')
-    }
-    const candidates = await Promise.all(values.map(value =>
-      validateDirectZipBootstrapCandidateV1(value as DirectZipBootstrapCandidateV1)))
-    return Object.freeze(candidates.map(directZipBootstrapResumeDescriptorV1))
   }
 
   async listLifecycleStates(): Promise<readonly ReceiveLifecycleState[]> {
@@ -196,13 +153,6 @@ export class IndexedDbReceiveResumeSource implements ReceiveOperationResumeSourc
     return operation.receiveIntent.artifact.kind === 'original-file'
       ? (await import('../resume/original-checkpoint')).readOriginalFileRecoveryRequirement(operation.receiveIntent, lifecycle, this.#databaseName)
       : (await import('../resume/progressive-checkpoint')).readProgressiveZipRecoveryRequirement(operation.receiveIntent, lifecycle, this.#databaseName)
-  }
-
-  async readDirectZipRequirement(lifecycle: ReceiveLifecycleState) {
-    this.#assertOpen()
-    const journal = await IndexedDbDirectZipJournalRepository.open({ databaseName: this.#databaseName })
-    try { return await readDirectZipRecoveryRequirement(lifecycle, journal) }
-    finally { journal.close() }
   }
 
   async readSourceRevisionFailures(lifecycle: ReceiveLifecycleState) {

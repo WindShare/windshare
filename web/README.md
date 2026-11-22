@@ -18,7 +18,7 @@ See [`docs/protocol.md`](../docs/protocol.md), [`docs/browser-downloads.md`](../
 | `src/transport/`, `src/connectivity/`, `src/receiver/` | Relay/WebRTC channels, signaling, peer/TURN adoption, and reconnect supervision |
 | `src/network/` | Signed node directory and network authority verification/caching |
 | `src/transfer/` | Receive intent, progressive discovery, job lifecycle, checkpoints, and settlement |
-| `src/output/` | Artifact authority, FSA/OPFS/Direct ZIP/portable output, and recovery persistence |
+| `src/output/` | Artifact authority, FSA/OPFS/portable output, and recovery persistence |
 | `src/diagnostics/`, `src/security/` | Bounded tracing/incident export and capability redaction |
 | `src/preview/`, `src/ui/` | Image/MP4 range preview, landing portal, and browser receiver UI |
 | `src/unicode/` | Pinned Unicode 15 path normalization and case folding |

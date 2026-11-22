@@ -541,7 +541,7 @@ export const ZIP_ENCODING_POLICY_V1: ZipEncodingPolicyV1 = Object.freeze({
 // MS-DOS fields carry no zone, and by convention extractors read them as the extracting
 // machine's local time. Encoding the receiver's local wall clock therefore restores the
 // source instant on the machine that saved the ZIP. Already written fields are never
-// re-derived (see Direct ZIP replay), because the zone may have changed since.
+// re-derived on resume, because the zone may have changed since.
 function normalizeDosDateTime(
   modifiedTimeMilliseconds: bigint | undefined,
 ): { readonly dosTime: number; readonly dosDate: number } {

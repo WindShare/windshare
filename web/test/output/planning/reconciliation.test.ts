@@ -48,19 +48,19 @@ describe('artifact choice reconciliation', () => {
         },
       },
     })
-    const directIdentity = await createArtifactChoiceIdentity({
+    const portableIdentity = await createArtifactChoiceIdentity({
       artifactKind: 'zip-archive',
-      materializationKind: 'direct-resumable-zip',
-      guaranteeProfile: 'fsa-owned-file',
-      preparation: 'none',
+      materializationKind: 'portable-handoff',
+      guaranteeProfile: 'browser-handoff',
+      preparation: 'exact-artifact',
     })
-    const direct = Object.freeze({ choiceIdentity: directIdentity, choiceId: directIdentity.id })
+    const portable = Object.freeze({ choiceIdentity: portableIdentity, choiceId: portableIdentity.id })
 
     expect(workspace.choiceId).toBe('vQj0Uda3oyRmvsZcz2qN0T9-f5m99Lcn0NK-9rS2_-k')
     expect(changedObservations.choiceId).toBe(workspace.choiceId)
-    expect(direct.choiceId).toBe('0dkx9vDTzvH7B7a9EUoJBOWLCWgmVwLoFH3jjRmfHFU')
+    expect(portable.choiceId).toBe('g8oXhxfPndjraB0hohXPqNXsUl-DHFN01vqDLc7lLMM')
     expect(sameStableArtifactChoiceIdentity(workspace, changedObservations)).toBe(true)
-    expect(sameStableArtifactChoiceIdentity(workspace, direct)).toBe(false)
+    expect(sameStableArtifactChoiceIdentity(workspace, portable)).toBe(false)
   })
 
   it('progresses waiting to resolved once within one projection epoch', async () => {

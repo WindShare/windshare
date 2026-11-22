@@ -18,9 +18,7 @@ import {
   createArtifactChoiceIdentity,
   createCatalogRootDirectoryTreeArtifact,
   createDirectorySelectionResultRoot,
-  createDirectResumableZipPlan,
   createDirectTreePlan,
-  createFSAOwnedFileBinding,
   createFSANamedEntryReservation,
   createManagedAtomicReservation,
   createNativeContainerRootReservation,
@@ -37,13 +35,11 @@ import {
   createZipArchiveArtifact,
   decodeReceiveIntent,
   deriveArtifactChoiceIdentity,
-  fsaOwnedFileGuarantees,
   fsaTreeGuarantees,
   managedAtomicGuarantees,
   materializationPlanBindingDigest,
   nativeTreeGuarantees,
   receiveIntentDigest,
-  unavailableDirectZipPolicyDigests,
   validateDestinationReservation,
   validateReceiveIntent,
 } from '../../src/transfer/intent'
@@ -179,28 +175,6 @@ describe('ReceiveIntent canonical authority', () => {
       artifact: original,
     })
     const portablePlan = await createPortableHandoffPlan(original, portable)
-    await expect(createFSAOwnedFileBinding({
-      operationId,
-      artifact: archive,
-      stableName: `docs-selection.windshare-${identity(30)}.zip`,
-      targetRef: identity(31, 32),
-      policies: unavailableDirectZipPolicyDigests(),
-    })).rejects.toThrow(/absent/u)
-    // Opaque nonzero fixture digests exercise the closed codec; they are not production policy evidence.
-    const directBinding = await createFSAOwnedFileBinding({
-      operationId,
-      artifact: archive,
-      stableName: `docs-selection.windshare-${identity(30)}.zip`,
-      targetRef: identity(31, 32),
-      policies: {
-        zipEncoding: identity(32, 32),
-        layout: identity(33, 32),
-        checkpoint: identity(34, 32),
-        journalBudget: identity(35, 32),
-        epoch: identity(36, 32),
-      },
-    })
-    const directZip = await createDirectResumableZipPlan(archive, directBinding)
 
     expect(directTree.kind).toBe('direct-tree')
     expect(directTree.version).toBe(MATERIALIZATION_PLAN_VERSION)
@@ -215,11 +189,6 @@ describe('ReceiveIntent canonical authority', () => {
       fsaLayoutVersion: 0,
     } as never, resultTree)).rejects.toThrow(/layout version/u)
     expect(atomicReservation.requestedName).toBe('report.txt')
-    expect(directZip.kind).toBe('direct-resumable-zip')
-    expect(directBinding.guarantees).toEqual(fsaOwnedFileGuarantees())
-    expect((await deriveArtifactChoiceIdentity(archive, directZip)).id).toBe(
-      '0dkx9vDTzvH7B7a9EUoJBOWLCWgmVwLoFH3jjRmfHFU',
-    )
     expect((await createArtifactChoiceIdentity({
       artifactKind: 'zip-archive',
       materializationKind: 'workspace-then-publish',
@@ -268,7 +237,6 @@ describe('ReceiveIntent canonical authority', () => {
 
     for (const [artifact, plan, intentSelection] of [
       [resultTree, directTree, selectionSpec],
-      [archive, directZip, selectionSpec],
       [archive, workspacePlan, selectionSpec],
       [original, portablePlan, pathSelectionSpec],
     ] as const) {

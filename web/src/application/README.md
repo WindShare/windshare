@@ -2,7 +2,7 @@
 
 `browser-share/` assembles catalog storage, relay admission, reconnect supervision,
 and transfer discovery. `browser-receive/` coordinates installed FSA, workspace,
-portable, Direct ZIP, and retained-operation routes. Storage implementations,
+portable, and retained-operation routes. Storage implementations,
 journals, checkpoint validation, and file ownership remain in `output/`.
 
 `BrowserReceiveApplication` in `receive/application.ts` assembles the receive coordinators, exposes

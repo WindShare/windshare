@@ -195,9 +195,6 @@ const lifecycleKinds = [
   'restart-required',
   'discarded',
   'needs-attention',
-  'authorization-required',
-  'target-verification-required',
-  'destination-space-required',
 ] as const satisfies readonly ReceiveLifecycleKind[]
 
 const lifecycleReasonsByKind = {
@@ -208,7 +205,6 @@ const lifecycleReasonsByKind = {
     'source-revision-changed',
     'preparation-invalidated',
     'content-session-ended',
-    'target-deleted',
   ],
   'needs-attention': [
     'target-ownership-unknown',

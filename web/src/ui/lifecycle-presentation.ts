@@ -22,7 +22,6 @@ import {
   type CompatibleNameRepairPresentation,
 } from './compatible-name-repair-presentation'
 import { formatBytes } from './progress-presentation'
-import type { DirectZipProgressSnapshot } from '../application/receive/contracts'
 
 export interface WorkspaceUsagePresentation {
   readonly ownedBytes: bigint
@@ -37,7 +36,7 @@ export interface LifecycleActionPresentation {
 }
 
 export interface NewReceiveOperationPresentation {
-  readonly kind: 'direct-tree-to-zip' | 'deleted-direct-zip-target'
+  readonly kind: 'direct-tree-to-zip'
   readonly ariaLabel: string
   readonly title: string
   readonly description: string
@@ -59,15 +58,6 @@ export function presentNewReceiveOperation(input: Readonly<{
       title: t.selectionAsZip,
       description: t.selectionAsZipHint,
       actionLabel: t.chooseZip,
-    })
-  }
-  if (kind === 'deleted-direct-zip-target') {
-    return Object.freeze({
-      kind: 'deleted-direct-zip-target',
-      ariaLabel: t.newReceive,
-      title: t.chooseRoute,
-      description: t.chooseRouteHint,
-      actionLabel: t.chooseNewRoute,
     })
   }
   return null
@@ -106,7 +96,6 @@ export function presentReceiveLifecycle(input: Readonly<{
   repairSummary?: CompatibleNameRepairSummary | null
   recoverySummary?: RecoverySummary | null
   writerOpenPause?: PersistentWriterOpenPauseFact | null
-  directZipProgress?: DirectZipProgressSnapshot | null
   browserDelivery?: import('../output/model/browser-delivery').BrowserDeliverySummary | null
 }>, language: Language = 'en'): ReceiveLifecyclePresentation {
   const compatibleNameRepair = input.repairSummary === undefined || input.repairSummary === null
@@ -117,7 +106,6 @@ export function presentReceiveLifecycle(input: Readonly<{
         input.state,
         input.artifact,
         input.plan,
-        input.directZipProgress ?? null,
         compatibleNameRepair,
         input.recoverySummary ?? null, language,
       )
@@ -204,7 +192,6 @@ function describeLifecycle(
   state: ReceiveLifecycleState,
   artifact: ArtifactSpec,
   plan: MaterializationPlan,
-  directZipProgress: DirectZipProgressSnapshot | null,
   compatibleNameRepair: CompatibleNameRepairPresentation | null,
   recoverySummary: RecoverySummary | null,
   language: Language,
@@ -214,12 +201,7 @@ function describeLifecycle(
   tone: ReceiveLifecyclePresentation['tone']
 }> {
   const t = receiverCopy[language].lifecycle
-  const override = lifecycleOverrideCopy(
-    state,
-    plan,
-    directZipProgress,
-    compatibleNameRepair, language,
-  )
+  const override = compatibleNameLifecycleCopy(state, compatibleNameRepair, language)
   if (override !== null) return override
   const name = browserArtifactName(artifact)
   switch (state.kind) {
@@ -235,7 +217,7 @@ function describeLifecycle(
         'neutral',
       )
     case 'receiving':
-      return copy(t.receiving, receivingDescription(artifact, plan, language), 'neutral')
+      return copy(t.receiving, receivingDescription(artifact, language), 'neutral')
     case 'resumable-receive': return resumableReceiveCopy(state, plan, recoverySummary, language)
     case 'finalizing-tree':
       return copy(
@@ -295,37 +277,7 @@ function describeLifecycle(
       return copy(t.discarded, t.discardedHint, 'neutral')
     case 'needs-attention':
       return copy(t.needsAttention, needsAttentionDescription(state.reason, language), 'critical')
-    case 'authorization-required':
-      return copy(
-        t.authorization,
-        t.authorizationHint,
-        'warning',
-      )
-    case 'target-verification-required':
-      return copy(
-        t.verify,
-        t.verifyHint,
-        'warning',
-      )
-    case 'destination-space-required':
-      return copy(
-        t.space,
-        t.spaceHint,
-        'warning',
-      )
   }
-}
-
-function lifecycleOverrideCopy(
-  state: ReceiveLifecycleState,
-  plan: MaterializationPlan,
-  directZipProgress: DirectZipProgressSnapshot | null,
-  compatibleNameRepair: CompatibleNameRepairPresentation | null,
-  language: Language,
-): ReturnType<typeof copy> | null {
-  const repair = compatibleNameLifecycleCopy(state, compatibleNameRepair, language)
-  if (repair !== null) return repair
-  return state.kind === 'published' ? null : directZipProgressCopy(plan, directZipProgress, language)
 }
 
 function compatibleNameLifecycleCopy(
@@ -369,13 +321,6 @@ function resumableReceiveCopy(
   language: Language,
 ) {
   const t = receiverCopy[language].lifecycle
-  if (state.payloadKind === 'direct-zip') {
-    return copy(
-      t.continueZip,
-      t.zipSpace(formatBytes(state.safeSelectedPayloadBytes), formatBytes(state.committedArchiveLength)),
-      'warning',
-    )
-  }
   if (state.payloadKind === 'workspace-archive') {
     if (state.pauseReason === 'storage-pressure') {
       return copy(t.storageFull,
@@ -397,8 +342,7 @@ function presentLifecycleAction(kind: LifecycleUserAction, input: ReceiveActionF
   const { state, plan, artifact } = input
   switch (kind) {
     case 'pause': return action(kind, t.pauseAction)
-    case 'stop': return plan.kind === 'direct-resumable-zip'
-      ? action(kind, t.stopZip) : action(kind, t.stopAction, true)
+    case 'stop': return action(kind, t.stopAction, true)
     case 'continue': return action(kind, continueActionLabel(state, artifact, plan.kind, language))
     case 'save': return action(kind, t.saveNamed(browserArtifactName(artifact)))
     case 'save-staged-files': return action(kind, t.saveStaged)
@@ -417,12 +361,8 @@ function continueActionLabel(state: ReceiveLifecycleState, artifact: ArtifactSpe
   switch (state.kind) {
     case 'resumable-start': return state.reason === 'paused' ? t.resumeAction : t.retryDownload
     case 'resumable-receive':
-      if (state.payloadKind === 'direct-zip') return t.continueZipAction
       return plan === 'workspace-then-publish' ? t.continueReceiveAction : t.resumePartial
     case 'resumable-package': return artifact.kind === 'zip-archive' ? t.continuePackaging : t.continueFile
-    case 'authorization-required': return t.authorizeContinue
-    case 'target-verification-required': return t.verifyContinue
-    case 'destination-space-required': return t.retrySpace
     default: return t.resumeAction
   }
 }
@@ -437,8 +377,6 @@ function discardActionLabel(state: ReceiveLifecycleState, language: Language): s
 function deleteActionLabel(state: ReceiveLifecycleState, language: Language): string {
   const t = receiverCopy[language].lifecycle
   if (state.kind === 'resumable-receive') return t.deleteAfterVerify
-  if (state.kind === 'authorization-required' || state.kind === 'target-verification-required' ||
-      state.kind === 'destination-space-required') return t.verifyDelete
   return t.deleteRetained
 }
 
@@ -479,7 +417,7 @@ function lifecycleOwnsWorkspaceData(state: ReceiveLifecycleState): boolean {
   return state.kind !== 'download-started' || state.attemptKind === 'workspace'
 }
 
-function receivingDescription(artifact: ArtifactSpec, plan: MaterializationPlan, language: Language): string {
+function receivingDescription(artifact: ArtifactSpec, language: Language): string {
   const t = receiverCopy[language].lifecycle
   switch (artifact.kind) {
     case 'directory-tree':
@@ -487,9 +425,7 @@ function receivingDescription(artifact: ArtifactSpec, plan: MaterializationPlan,
     case 'original-file':
       return t.fileHint
     case 'zip-archive':
-      return plan.kind === 'direct-resumable-zip'
-        ? t.incompleteZip(plan.binding.stableName)
-        : t.zipHint
+      return t.zipHint
   }
 }
 
@@ -520,38 +456,6 @@ function restartRequiredDescription(
       return t.invalidated
     case 'content-session-ended':
       return t.ended
-    case 'target-deleted':
-      return t.targetDeleted
-  }
-}
-
-function directZipProgressCopy(
-  plan: MaterializationPlan,
-  progress: DirectZipProgressSnapshot | null,
-  language: Language,
-): ReturnType<typeof copy> | null {
-  const t = receiverCopy[language].lifecycle
-  if (plan.kind !== 'direct-resumable-zip' || progress === null) return null
-  switch (progress.phase) {
-    case 'receiving': return null
-    case 'saving-resume-position':
-      return copy(
-        t.checkpoint,
-        t.savingCheckpoint(plan.binding.stableName),
-        'neutral',
-      )
-    case 'closing':
-      return copy(
-        t.closing(plan.binding.stableName),
-        t.closingHint,
-        'neutral',
-      )
-    case 'verifying':
-      return copy(
-        t.verifying,
-        t.verifyingName(plan.binding.stableName),
-        'neutral',
-      )
   }
 }
 

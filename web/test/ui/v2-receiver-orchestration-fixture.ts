@@ -31,7 +31,6 @@ import {
   createOriginalFileArtifact,
   createReceiveIntent,
   createSelectionSpec,
-  createFSAOwnedFileBinding,
   createWorkspaceBinding,
   createWorkspaceThenPublishPlan,
   type ArtifactChoiceID,
@@ -74,11 +73,9 @@ import type {
 import type { ProtocolGenerationListener } from '../../src/receiver/supervisor'
 import {
   environment,
-  directZipTarget,
   handoffTarget,
   managedTarget,
   portableOffer,
-  runtimeDirectZipSupport,
   workspaceOffer,
 } from '../output/planning/fixture'
 
@@ -96,15 +93,6 @@ export const WORKSPACE_ENVIRONMENT = environment({
 })
 export const PORTABLE_ENVIRONMENT = environment({ targets: [handoffTarget()], portable: portableOffer() })
 export const NO_DESTINATION_ENVIRONMENT = environment()
-const DIRECT_ZIP_SUPPORT = runtimeDirectZipSupport()
-export const DIRECT_ZIP_ENVIRONMENT = environment({
-  targets: [directZipTarget()],
-  directZipSupport: DIRECT_ZIP_SUPPORT,
-  zipRecommendationPolicy: {
-    kind: 'available',
-    workspacePeakBytesThreshold: 0n,
-  },
-})
 
 const FILE_ENTRY: Extract<CatalogEntry, { kind: 'file' }> = Object.freeze({
   kind: 'file',
@@ -658,20 +646,6 @@ export async function candidateBindingForTest(
         workspaceRouteId: action.route.workspace.routeId,
         publicationTargetRouteId: action.route.publicationTarget.routeId,
         workspace,
-      })
-    }
-    case 'direct-resumable-zip': {
-      const binding = await createFSAOwnedFileBinding({
-        operationId: identityText(46),
-        artifact,
-        stableName: `selection.windshare-${identityText(47)}.zip`,
-        targetRef: identityText(48, 32),
-        policies: action.route.target.support.policies,
-      })
-      return Object.freeze({
-        kind: 'fsa-owned-file-binding',
-        targetRouteId: action.route.target.routeId,
-        binding,
       })
     }
     case 'portable-handoff':

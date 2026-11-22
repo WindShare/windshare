@@ -54,23 +54,6 @@ python3 -B -m unittest scripts/deploy/network/install_web_test.py
 echo "-- Browser dependency installation recovery"
 bash .github/actions/setup-browser/install-dependencies.tests.sh
 
-echo "-- Browser FSA reviewed support artifact syntax"
-while IFS= read -r -d '' script; do
-  node --check "$script"
-done < <(find web/scripts/browser-evidence-review/fsa-resumable-zip -type f -name '*.mjs' -print0)
-
-echo "-- Browser FSA reviewed support artifacts"
-node --test web/scripts/browser-evidence-review/fsa-resumable-zip/tests/*.test.mjs
-node web/scripts/browser-evidence-review/fsa-resumable-zip/review.mjs >/dev/null
-
-echo "-- Browser workspace ZIP review JavaScript syntax"
-while IFS= read -r -d '' script; do
-  node --check "$script"
-done < <(find web/scripts/browser-evidence/workspace-zip-recommendation -type f -name '*.mjs' -print0)
-
-echo "-- Browser workspace ZIP review contracts"
-node --test web/scripts/browser-evidence/workspace-zip-recommendation/tests/*.test.mjs
-
 echo "-- Frozen Unicode Go tables"
 node scripts/unicode15/generate-go.mjs --check
 

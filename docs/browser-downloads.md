@@ -17,7 +17,6 @@ WindShare recommends a save method based on browser capabilities, available stor
 | Save Method | Behavior |
 |---|---|
 | **Save to folder** | Preserves the folder hierarchy in a chosen local folder. Small files save directly; larger or slower files may first use browser storage (OPFS), depending on recovery costs and available staging capacity. Each staged file is copied to the folder when complete. |
-| **Save ZIP to a folder** (Direct ZIP) | Streams an uncompressed archive into a chosen folder with verified resume checkpoints. The ZIP becomes usable after closing and verification finish. Checkpointing and resuming may require temporary destination space for a copy of the saved prefix. |
 | **Browser workspace** | Retains content in OPFS, then starts a browser download when allowed; otherwise choose **Save**. Actions include **Download original** and **Receive ZIP, then save**. The retained result remains available for another export. |
 | **Browser fallback** | A browser download with a size limit may be offered as a fallback. It checks that the complete result fits before receiving. Progress cannot survive a page reload. |
 
@@ -40,13 +39,12 @@ If the sender is temporarily unreachable when opening a link, WindShare retries 
 
 Keep the original page open during an active download outage. Reconnection continues automatically, preserving the download, save destination, and reusable progress. When all connections are lost, retries start promptly and gradually slow down; server cooldowns and recovery limits still apply. **Retry now** skips the ordinary retry wait without restarting the download. During an active connection attempt or a required cooldown, the button is disabled; the page shows the current activity, waiting reason, and automatic retry countdown. Healthy direct or relay transfers continue when another relay disconnects or is excluded. A verified conflict with the current share identity still ends the session. File changes, share termination, and save errors are handled separately from network waiting.
 
-- **Available controls**: Folder downloads offer **Pause** and **Stop**. Direct ZIP and browser workspace downloads offer **Pause**; the browser fallback offers **Stop** only.
+- **Available controls**: Folder downloads offer **Pause** and **Stop**. Browser workspace downloads offer **Pause**; the browser fallback offers **Stop** only.
 - **Pause**: Saves progress supported by the chosen method and cancels that download's pending network wait. Reconnection does not resume a paused download; choose **Resume** when ready. Wait for pausing to finish before leaving the page. Remote lease cleanup runs independently after local settlement and shared-read safety; a delayed cleanup reply does not keep the download pausing.
 - **Stop**: Ends receiving and cancels that download's recovery. For folder downloads, incomplete browser staging is removed while saved files remain; complete staged files can still be saved locally. Failed cleanup can be retried.
 - **Page closure or crash recovery**: Reopen the original link to recover supported downloads from the last verified checkpoint, which may lag behind received bytes. Keep destination files unchanged and site data intact; continuing may require renewed destination permission. The browser fallback must start again after a reload.
-- If a source **reopens with a new revision**, folder and browser workspace downloads can retry the file once when metadata agrees. They reuse saved ranges and fetch the remainder under a fresh lease. Metadata agreement can miss edits that preserve size and modification evidence. Direct ZIP pauses when a reopen changes the revision. Choose **Resume** to verify the saved archive prefix and continue.
+- If a source **reopens with a new revision**, folder and browser workspace downloads can retry the file once when metadata agrees. They reuse saved ranges and fetch the remainder under a fresh lease. Metadata agreement can miss edits that preserve size and modification evidence.
 - **Save partial ZIP**: Available for retained browser-workspace ZIP tasks with completed files when the browser supports a file save picker. Exports complete files as a separate ZIP while keeping the task available for continuation.
-- **Verify saved ZIP**: For Direct ZIP tasks requiring completion verification after an interrupted write session, verifies the saved archive locally.
 
 ## Storage & Cleanup
 

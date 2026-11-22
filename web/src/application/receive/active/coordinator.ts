@@ -607,8 +607,7 @@ export class ActiveReceiveCoordinator {
     const publish = (progress: ReturnType<typeof source.getSnapshot>) => {
       if (!this.#operationIsCurrent(active)) return
       try {
-        if (progress.kind === 'browser-folder') this.#state.updateBrowserFolderProgress(progress)
-        else this.#state.updateDirectZipProgress(progress)
+        this.#state.updateBrowserFolderProgress(progress)
       } catch (error) {
         this.#reportTransferFailure(error)
       }

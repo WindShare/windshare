@@ -60,7 +60,6 @@ function guaranteeProfileByte(value: GuaranteeSet['profile']): number {
     case 'fsa-tree': return 2
     case 'managed-atomic': return 3
     case 'browser-handoff': return 4
-    case 'fsa-owned-file': return 5
   }
 }
 
@@ -69,7 +68,6 @@ function targetVisibilityByte(value: TargetVisibility): number {
     case 'hidden-until-verified-publication': return 1
     case 'committed-objects-visible': return 2
     case 'unobservable': return 3
-    case 'operation-owned-incomplete-file-visible': return 4
   }
 }
 
@@ -85,7 +83,6 @@ function cleanupContractByte(value: CleanupContract): number {
   switch (value) {
     case 'rollback-to-absent-before-publication': return 1
     case 'no-whole-target-rollback': return 2
-    case 'ownership-proof-required': return 3
     case 'no-managed-cleanup': return 4
   }
 }

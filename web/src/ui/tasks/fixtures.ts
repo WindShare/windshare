@@ -30,7 +30,6 @@ export function taskFixture(overrides: Partial<TaskFacts> = {}): TaskFacts {
       ...EMPTY_PROGRESS, discoveredFiles: 12, discoveredBytes: 6_710_886n,
       writtenBytes: 2_000_000n, materializedBytes: 2_000_000n, completedFiles: 3, completedBytes: 1_500_000n,
     }),
-    directZipProgress: null,
     fidelity: null,
     details: Object.freeze([]),
     interruption: null,
@@ -44,13 +43,6 @@ export const TASK_FIXTURES: Readonly<Record<string, TaskFacts>> = Object.freeze(
   reconnecting: taskFixture({ blocking: Object.freeze({ kind: 'reconnecting' }) }),
   'sender-capacity': taskFixture({ blocking: Object.freeze({ kind: 'sender-capacity' }) }),
   'relay-bandwidth': taskFixture({ blocking: Object.freeze({ kind: 'relay-bandwidth' }) }),
-  verifying: taskFixture({
-    directZipProgress: Object.freeze({
-      kind: 'direct-zip', operationId: FIXTURE_OPERATION_ID, generation: 1n,
-      phase: 'verifying', receivedSelectedBytes: 2_000_000n,
-      writtenSelectedBytes: 2_000_000n, safeResumeBytes: 1_500_000n,
-    }),
-  }),
   'partial-ready': taskFixture({
     lifecycle: lifecycle({ kind: 'waiting-to-save', packageDigest: '4'.repeat(64) }),
     completeness: 'partial',

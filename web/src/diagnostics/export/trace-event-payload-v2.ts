@@ -39,11 +39,6 @@ import {
   validateTransferProgress,
 } from './trace-payload-product'
 import {
-  validateDirectZipCoordination,
-  validateDirectZipMemberRollback,
-  validateDirectZipMilestone,
-} from './trace-payload-direct-zip'
-import {
   validatePerformancePhase,
   validatePerformanceSummary,
 } from './trace-payload-performance'
@@ -90,10 +85,7 @@ const EVENT_PAYLOAD_VALIDATORS = Object.freeze({
   continuation: validateContinuation,
   reopen: validateReopen,
   cleanup: validateCleanup,
-  direct_zip_milestone: validateDirectZipMilestone,
   browser_delivery: validateBrowserDelivery,
-  direct_zip_coordination: validateDirectZipCoordination,
-  direct_zip_member_rollback: validateDirectZipMemberRollback,
   retained_inventory: validateRetainedInventory,
   retained_action: validateRetainedAction,
 } satisfies Record<TraceDomainEventNameV2, (payload: UnknownRecord) => void>)

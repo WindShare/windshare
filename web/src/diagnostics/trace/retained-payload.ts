@@ -27,7 +27,6 @@ export const RETAINED_CONTINUATIONS = Object.freeze([
   'history_only',
   'resume_package',
   'resume_local_finalization',
-  'verify_direct_zip_completion',
   'save_artifact',
   'retry_download',
   'cleanup_incompatible',

@@ -5,11 +5,6 @@ import {
 } from './state'
 import type { LifecycleEvent, LifecycleReducerContext, LifecycleReduction } from './events'
 import {
-  gateDirectZipRecovery,
-  pauseDirectZip,
-  resumeDirectZipRecovery,
-} from './recovery'
-import {
   activeLeaseMismatch,
   applied,
   needsAttention,
@@ -28,15 +23,6 @@ export function reduceReceiveLifecycle(
   if (event.expectedGeneration !== state.generation || event.leaseId !== context.activeLeaseId ||
       (!authorityReacquisition && activeLeaseMismatch(state, context.activeLeaseId))) {
     return Object.freeze({ status: 'stale', state })
-  }
-  if (event.kind === 'direct-zip-pause-verified') {
-    return applied(pauseDirectZip(state, event, context))
-  }
-  if (event.kind === 'direct-zip-recovery-gated') {
-    return applied(gateDirectZipRecovery(state, event, context))
-  }
-  if (event.kind === 'direct-zip-recovery-resumed') {
-    return applied(resumeDirectZipRecovery(state, context))
   }
   switch (event.kind) {
     case 'receive-started': return applied(startReceive(state, event, context))
@@ -205,12 +191,10 @@ function resumeStable(
   context: LifecycleReducerContext,
 ): ReceiveLifecycleState {
   if (state.kind === 'resumable-receive') {
-    const directZipResume = context.planKind === 'direct-resumable-zip' &&
-      state.payloadKind === 'direct-zip'
     const fileSetResume = (context.planKind === 'direct-tree' ||
       context.planKind === 'workspace-then-publish') && state.payloadKind === 'file-set'
     const nativeZipResume = context.planKind === 'workspace-then-publish' && state.payloadKind === 'workspace-archive'
-    if (!directZipResume && !fileSetResume && !nativeZipResume) {
+    if (!fileSetResume && !nativeZipResume) {
       throw new TypeError('plan cannot resume receive state')
     }
     if (event.packageTempObjectId !== undefined) {
@@ -368,20 +352,8 @@ function restartRequired(
   const portableState = planKind === 'portable-handoff' &&
     (state.kind === 'receiving' ||
      (state.kind === 'handing-off' && state.attemptKind === 'portable'))
-  const directZipDeleted = planKind === 'direct-resumable-zip' &&
-    event.reason === 'target-deleted' &&
-    (state.kind === 'receiving' || state.kind === 'resumable-receive' ||
-     state.kind === 'authorization-required' ||
-     state.kind === 'target-verification-required' ||
-     state.kind === 'destination-space-required')
-  if (!portableState && !directZipDeleted) {
-    throw new TypeError('restart boundary is legal only for Portable or DirectResumableZip')
-  }
-  if (event.reason === 'portable-aborted' && !portableState) {
-    throw new TypeError('portable abort reason requires a portable handoff')
-  }
-  if (event.reason === 'target-deleted' && !directZipDeleted) {
-    throw new TypeError('target deletion reason requires a DirectResumableZip boundary')
+  if (!portableState) {
+    throw new TypeError('restart boundary is legal only for Portable')
   }
   return nextReceiveLifecycleState(state, {
     kind: 'restart-required',

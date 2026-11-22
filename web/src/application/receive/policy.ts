@@ -19,8 +19,7 @@ export interface ReceiveActionFacts {
 
 export function receiveLifecycleCategory(state: ReceiveLifecycleState): 'active' | 'retained' | 'terminal' {
   if (state.kind === 'resumable-start' || state.kind === 'resumable-receive' || state.kind === 'resumable-package' ||
-      state.kind === 'waiting-to-save' || state.kind === 'authorization-required' ||
-      state.kind === 'target-verification-required' || state.kind === 'destination-space-required' ||
+      state.kind === 'waiting-to-save' ||
       (state.kind === 'download-started' && state.attemptKind === 'workspace')) return 'retained'
   if (state.kind === 'published' || state.kind === 'partial-directory' ||
       state.kind === 'restart-required' || state.kind === 'source-invalidated' || state.kind === 'discarded' ||
@@ -51,20 +50,16 @@ function stableReceiveActions(
   switch (state.kind) {
     case 'resumable-start': return ['continue', 'discard']
     case 'resumable-receive':
-      if (state.payloadKind === 'direct-zip') return ['continue', 'delete']
       return plan === 'workspace-then-publish' ? ['continue', 'discard'] : ['continue', 'redownload']
     case 'resumable-package': return ['continue', 'discard']
     case 'waiting-to-save': return ['save', 'delete']
     case 'download-started': return state.attemptKind === 'workspace' ? ['redownload', 'delete'] : []
     case 'source-invalidated': return ['discard']
-    case 'authorization-required':
-    case 'target-verification-required':
-    case 'destination-space-required': return ['continue', 'delete']
     default: return []
   }
 }
 
-export type NewReceiveOperationKind = 'direct-tree-to-zip' | 'deleted-direct-zip-target'
+export type NewReceiveOperationKind = 'direct-tree-to-zip'
 
 export function newReceiveOperationKind(
   lifecycle: ReceiveLifecycleState | null,
@@ -72,7 +67,5 @@ export function newReceiveOperationKind(
 ): NewReceiveOperationKind | null {
   if (lifecycle === null || plan === null) return null
   if (plan.kind === 'direct-tree' && isTerminalLifecycleState(lifecycle)) return 'direct-tree-to-zip'
-  if (plan.kind === 'direct-resumable-zip' && lifecycle.kind === 'restart-required' &&
-      lifecycle.reason === 'target-deleted') return 'deleted-direct-zip-target'
   return null
 }

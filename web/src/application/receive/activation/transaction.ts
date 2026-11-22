@@ -70,7 +70,7 @@ export function offeredArtifactChoiceRanking(
   selected: ArtifactChoice,
 ): readonly ArtifactChoiceID[] {
   const displayed = selected.artifactKind === 'zip-archive' && offers.zip !== null
-    ? [offers.zip.primary, ...(offers.zip.secondary === null ? [] : [offers.zip.secondary])]
+    ? [offers.zip]
     : [offers.primary, ...offers.alternatives]
         .filter(candidate => candidate.choice.artifactKind !== 'zip-archive')
   const ranking = displayed.map(candidate => candidate.choice.choiceId)

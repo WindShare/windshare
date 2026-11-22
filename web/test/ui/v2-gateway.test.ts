@@ -123,10 +123,8 @@ import { nextProjectionEpoch } from '../../src/transfer/projection/model'
 import { SelectionProjectionController } from '../../src/transfer/projection/reducer'
 import { type SelectionProjectionState } from '../../src/transfer/projection/contracts'
 import {
-  directZipTarget,
   environment,
   handoffTarget,
-  runtimeDirectZipSupport,
   workspaceOffer,
 } from '../output/planning/fixture'
 
@@ -371,20 +369,12 @@ describe('v2 joined-share projection authority', () => {
       final.projection,
       final.discovery,
       environment({
-        targets: [directZipTarget(), handoffTarget()],
+        targets: [handoffTarget()],
         workspace: workspaceOffer(),
-        directZipSupport: runtimeDirectZipSupport(),
-        zipRecommendationPolicy: {
-          kind: 'available',
-          workspacePeakBytesThreshold: cost.archiveBytes + cost.durableMetadataBytes,
-        },
       }),
     )
     if (offered.kind !== 'artifact-actions') throw new Error('share-wide ZIP was not offered')
-    expect(offered.zip?.recommendation).toMatchObject({
-      kind: 'recommended', reason: 'workspace-within-policy-budget',
-    })
-    expect(offered.zip?.secondary?.route.kind).toBe('direct-resumable-zip')
+    expect(offered.zip?.route.kind).toBe('workspace-then-publish')
     expect(offered.primary).toMatchObject({
       suggestedName: 'shared.zip',
       choice: {

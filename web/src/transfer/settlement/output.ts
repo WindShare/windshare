@@ -192,8 +192,7 @@ export async function pauseFailedExecution(options: {
   const validate = options.validateState ?? ((state: ReceiveLifecycleState) => state)
   // Admission recovery can close a reopened writer, so it needs the same ownership
   // boundary even when no PlanExecution was installed.
-  const settle = options.intent.plan.kind === 'workspace-then-publish' ||
-      options.intent.plan.kind === 'direct-resumable-zip'
+  const settle = options.intent.plan.kind === 'workspace-then-publish'
     ? (operation: string, budget: SettlementBudget, run: (signal: AbortSignal) => Promise<ReceiveLifecycleState>,
         deadline?: OutputSettlementDeadline) =>
         withDurableLifecycleSettlementTimeout(operation, budget.remainingMilliseconds(), run, deadline)

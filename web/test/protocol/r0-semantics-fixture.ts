@@ -34,7 +34,6 @@ export type ReceiveLifecyclePlanName =
   | 'direct-tree'
   | 'workspace-then-publish'
   | 'portable-handoff'
-  | 'direct-resumable-zip'
 
 export interface ReceiveLifecycleTerminalState {
   readonly state: ReceiveLifecycleTerminalStateName
@@ -48,13 +47,12 @@ export interface ReceiveLifecycleSemanticsVector extends SemanticsVector {
   readonly schemaVersion: 2
   readonly terminalStates: readonly ReceiveLifecycleTerminalState[]
   readonly nonterminalRecoveryStates: readonly {
-    readonly state: 'download-started' | 'authorization-required' | 'target-verification-required' | 'destination-space-required'
-    readonly byte: 15 | 21 | 22 | 23
+    readonly state: 'download-started'
+    readonly byte: 15
     readonly plans?: readonly ReceiveLifecyclePlanName[]
   }[]
   readonly restartReasons: Readonly<Record<string, number>>
   readonly resumableReceivePayloadKinds: Readonly<Record<string, number>>
-  readonly directZipByteSemantics: Readonly<Record<string, string>>
   readonly publishedCleanupPendingRemains: 'published'
   readonly handoffNeverMeans: 'published'
   readonly completeArtifactsExclude: readonly 'partial-directory'[]
@@ -87,7 +85,6 @@ const RECEIVE_PLAN_NAMES = new Set<string>([
   'direct-tree',
   'workspace-then-publish',
   'portable-handoff',
-  'direct-resumable-zip',
 ])
 
 export function requireReceiveLifecycleSemanticsVector(
@@ -104,9 +101,8 @@ export function requireReceiveLifecycleSemanticsVector(
     throw new Error('receive lifecycle nonterminal recovery states are malformed')
   }
   if (!isIntegerRecord(value.restartReasons) ||
-      !isIntegerRecord(value.resumableReceivePayloadKinds) ||
-      !isStringRecord(value.directZipByteSemantics)) {
-    throw new Error('receive lifecycle direct-resume projections are malformed')
+      !isIntegerRecord(value.resumableReceivePayloadKinds)) {
+    throw new Error('receive lifecycle resume projections are malformed')
   }
   if (value.publishedCleanupPendingRemains !== 'published' ||
       value.handoffNeverMeans !== 'published' ||
@@ -121,21 +117,13 @@ function isNonterminalRecoveryState(
 ): value is ReceiveLifecycleSemanticsVector['nonterminalRecoveryStates'][number] {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
   const state = value as Record<string, unknown>
-  return (state.state === 'download-started' && state.byte === 15 &&
-      isArrayOf(state.plans, isReceivePlanName)) ||
-    (state.state === 'authorization-required' && state.byte === 21) ||
-    (state.state === 'target-verification-required' && state.byte === 22) ||
-    (state.state === 'destination-space-required' && state.byte === 23)
+  return state.state === 'download-started' && state.byte === 15 &&
+    isArrayOf(state.plans, isReceivePlanName)
 }
 
 function isIntegerRecord(value: unknown): value is Readonly<Record<string, number>> {
   return typeof value === 'object' && value !== null && !Array.isArray(value) &&
     Object.values(value).every((item) => typeof item === 'number' && Number.isInteger(item))
-}
-
-function isStringRecord(value: unknown): value is Readonly<Record<string, string>> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value) &&
-    Object.values(value).every((item) => typeof item === 'string')
 }
 
 function isReceiveLifecycleTerminalState(value: unknown): value is ReceiveLifecycleTerminalState {

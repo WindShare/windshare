@@ -25,7 +25,6 @@ export function presentReceiveOutput(facts: ReceiveRuntimeSnapshot, language: La
         workspaceUsage: facts.workspaceUsage, activeControls: facts.activeControls,
         interruption: facts.receiveInterruption, repairSummary: facts.repairSummary,
         recoverySummary: facts.recoverySummary, writerOpenPause: facts.writerOpenPause,
-        directZipProgress: facts.directZipProgress,
         browserDelivery: facts.browserFolderProgress?.summary ?? null,
       }, language)
   return Object.freeze({

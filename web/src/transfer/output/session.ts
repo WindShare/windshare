@@ -25,7 +25,6 @@ import {
   type MaterializationDirectory,
 } from '../directory-admission'
 import type {
-  DirectResumableZipPlan,
   DirectTreePlan,
   MaterializationPlan,
   OriginalFileArtifact,
@@ -34,11 +33,6 @@ import type {
   WorkspaceThenPublishPlan,
   ZipArchiveArtifact,
 } from '../intent'
-import type {
-  DirectZipIntent,
-  DirectZipOrderedOutputV1,
-  DirectZipOutputSessionV1,
-} from '../direct-zip/model'
 import type {
   CompletedTransferWorkerSettlement,
   PausedTransferWorkerSettlement,
@@ -133,16 +127,6 @@ export interface DirectTreeExecution extends PlanExecutionBase<DirectTreePlan> {
   stop?(request: PlanStopRequest, signal: AbortSignal): Promise<ReceiveLifecycleState>
 }
 
-export interface DirectResumableZipExecution extends
-  PlanExecutionBase<DirectResumableZipPlan, DirectZipOutputSessionV1> {
-  readonly planKind: 'direct-resumable-zip'
-  readonly ordered: DirectZipOrderedOutputV1
-  settle(
-    request: PlanSettlementRequest<SuccessfulTransferWorkerSettlement>,
-    signal: AbortSignal,
-  ): Promise<ReceiveLifecycleState>
-}
-
 export interface WorkspaceExecution extends PlanExecutionBase<WorkspaceThenPublishPlan> {
   readonly planKind: 'workspace-then-publish'
   readonly directories?: IncrementalDirectoryOutput
@@ -166,7 +150,6 @@ export interface PortableExecution extends PlanExecutionBase<PortableHandoffPlan
 
 export type PlanExecution =
   | DirectTreeExecution
-  | DirectResumableZipExecution
   | WorkspaceExecution
   | PortableExecution
 
@@ -218,10 +201,6 @@ export interface PlanExecutionAuthority {
     intent: ReceiveIntentForPlan<DirectTreePlan>,
     signal: AbortSignal,
   ): Promise<DirectTreeExecution>
-  openDirectResumableZip(
-    intent: DirectZipIntent,
-    signal: AbortSignal,
-  ): Promise<DirectResumableZipExecution>
   openWorkspaceOriginal(
     intent: ReceiveIntentForPlanArtifact<WorkspaceThenPublishPlan, OriginalFileArtifact>,
     evidence: ExactSingleFileEvidence,
@@ -275,27 +254,14 @@ export function validatePlanExecutionBinding<Execution extends PlanExecution>(
   }
   outputSessionIdentity(execution.output.identity)
   outputCapabilities(execution.output.capabilities)
-  if (execution.planKind !== 'direct-resumable-zip') {
-    outputExecutionProfile(execution.output.executionProfile)
-  }
+  outputExecutionProfile(execution.output.executionProfile)
   if (execution.planKind === 'portable-handoff' && !Array.isArray(execution.orderedFiles)) {
     throw new OutputSessionBindingError('Portable execution requires prepared file order')
   }
   if (intent.plan.kind === 'direct-tree' && !hasDirectoryPort(execution)) {
     throw new OutputSessionBindingError('DirectTree execution requires incremental directory authority')
   }
-  if (intent.plan.kind === 'direct-resumable-zip' && !hasOrderedDirectZipPort(execution)) {
-    throw new OutputSessionBindingError('DirectResumableZip execution requires ordered archive authority')
-  }
   return execution
-}
-
-function hasOrderedDirectZipPort(execution: PlanExecution): boolean {
-  if (!('ordered' in execution) || execution.ordered === undefined) return false
-  return typeof execution.ordered.beginTraversal === 'function' &&
-    typeof execution.ordered.visit === 'function' &&
-    typeof execution.ordered.finishTraversal === 'function' &&
-    typeof execution.ordered.materializationSummary === 'function'
 }
 
 function hasDirectoryPort(execution: PlanExecution): boolean {

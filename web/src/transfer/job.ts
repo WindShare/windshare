@@ -66,17 +66,14 @@ import type { PerformanceSummaryObservations } from '../diagnostics/performance/
 import { SelectionMeasureTracker, type SelectionMeasure } from './measure'
 import {
   snapshotDirectoryMaterializationRequest,
-  type DirectResumableZipExecution,
   type ExactPreparationEvidence,
   type IncrementalDirectoryOutput,
   type MaterializationSummary,
   type PlanExecution,
 } from './output/session'
-import type { DirectZipIntent } from './direct-zip'
 import { TransferProgressLedger } from './progress/ledger'
 import { observeTransferContent } from './progress/content'
 import type { ProgressChange } from './progress/observation'
-import { createDirectZipProgressObservers, runDirectZipJob } from './job-direct-zip'
 import { JobFailureAuthority } from './job-failure-authority'
 import { TransferJobMaterialization } from './job-materialization'
 import { outputSettlementTimeoutMilliseconds } from './settlement/output'
@@ -92,9 +89,9 @@ export * from './revision-capacity/public'
 
 
 /**
- * Tree and atomic plans retain bounded discovery/content overlap. Direct ZIP uses
- * a separate serial coordinator, while prepared plans freeze exact authenticated
- * catalog evidence before their output port becomes reachable.
+ * Tree and workspace plans retain bounded discovery/content overlap, while
+ * prepared plans freeze exact authenticated catalog evidence before their
+ * output port becomes reachable.
  */
 export class TransferJob {
   readonly #options: TransferJobOptions
@@ -254,9 +251,6 @@ export class TransferJob {
         settleIncompletePreparation: measure => this.#settlement.settleIncompletePreparation(measure),
         preparationRejected: state => this.#settlement.preparationRejected(state),
       },
-      directZip: {
-        run: execution => this.#runDirectZip(execution),
-      },
     })
   }
 
@@ -367,7 +361,6 @@ export class TransferJob {
       this.#performance = stabilized.performance
       this.#observers?.bindPerformance(stabilized.performance)
     }
-    if (stabilized.planKind === 'direct-resumable-zip') return
     this.#outputScheduling = bindOutputScheduling({
       limits: this.#limits,
       profile: stabilized.output.executionProfile,
@@ -375,29 +368,6 @@ export class TransferJob {
       ...(stabilized.planKind === 'direct-tree' && stabilized.performance !== undefined
         ? { performance: stabilized.performance }
         : {}),
-    })
-  }
-
-  async #runDirectZip(execution: DirectResumableZipExecution): Promise<SelectionMeasure> {
-    const intent = this.#requireIntent()
-    if (intent.plan.kind !== 'direct-resumable-zip' || intent.artifact.kind !== 'zip-archive') {
-      throw new TypeError('ordered direct ZIP run lost its frozen operation binding')
-    }
-    return runDirectZipJob({
-      catalog: this.#options.catalog,
-      descriptor: this.#options.descriptor,
-      selection: this.#selection,
-      intent: intent as DirectZipIntent,
-      revisions: this.#capacity.revisions,
-      broker: this.#capacity.broker,
-      execution,
-      maximumNodeClaims: this.#limits.catalogNodeClaims,
-      observeSourceOmissions: count => this.#publishMeasure(this.#measure.observeSourceOmissions(count)),
-      signal: this.#lifetime.signal,
-      observeSelectedFile: exactSize => this.#publishMeasure(this.#measure.observeUniqueFile(exactSize)),
-      ...createDirectZipProgressObservers(this.#progress, () => this.#emitProgress('counters')),
-      observeDiscovery: event => this.#observers?.discoveryScheduling(event),
-      finishMeasure: () => this.#publishMeasure(this.#measure.complete()),
     })
   }
 
@@ -596,9 +566,6 @@ export class TransferJob {
     pipeline?: PerformanceFilePipelineObservation,
   ): Promise<void> {
     const execution = this.#requireExecution()
-    if (execution.planKind === 'direct-resumable-zip') {
-      throw new TypeError('direct ZIP content must pass through its ordered coordinator')
-    }
     let materializedBytes = 0n
     const continuation = await transferFile({
       descriptor: this.#options.descriptor,
@@ -676,9 +643,6 @@ export class TransferJob {
   }
 
   #materializationSummary(): MaterializationSummary {
-    if (this.#execution?.planKind === 'direct-resumable-zip') {
-      return this.#execution.ordered.materializationSummary()
-    }
     const directoryCount = this.#isNativeZip() ? this.#requireDirectories().directoryCount :
       this.#preparation?.directoryCount ?? this.#requireDirectories().directoryCount
     const fileCount = BigInt(this.#progress.completedFiles)

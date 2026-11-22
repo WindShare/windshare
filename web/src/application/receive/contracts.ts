@@ -62,7 +62,7 @@ export interface BoundReceiveOperation {
   /** Subscribe before reading lifecycle; notifications never settle the execution lifetime. */
   subscribeLifecycle(listener: (state: ReceiveLifecycleState) => void): () => void
   readonly activeControls: readonly ActiveReceiveControl[]
-  readonly outputProgress?: DirectZipProgressSource | BrowserFolderProgressSource
+  readonly outputProgress?: BrowserFolderProgressSource
   readonly observeCheckpoint?: NonNullable<import('../../transfer/job/contract').TransferJobOptions['onCheckpointObservation']>
   readonly initialWorkspaceUsage?: WorkspaceUsage | null
   readonly repairProjection?: CompatibleNameRepairProjectionSource
@@ -238,29 +238,4 @@ export interface BrowserFolderProgressSnapshot {
 export interface BrowserFolderProgressSource {
   getSnapshot(): BrowserFolderProgressSnapshot
   subscribe(listener: (snapshot: BrowserFolderProgressSnapshot) => void): () => void
-}
-
-export type DirectZipProgressPhase =
-  | 'receiving'
-  | 'saving-resume-position'
-  | 'closing'
-  | 'verifying'
-
-export interface DirectZipProgressSnapshot {
-  readonly kind: 'direct-zip'
-  readonly operationId: string
-  readonly generation: bigint
-  readonly phase: DirectZipProgressPhase
-  /** Logical payload, including the retained prefix; retries do not count twice. */
-  readonly receivedSelectedBytes: bigint
-  /** Payload acknowledged by the output writer; acknowledgement alone does not prove recovery. */
-  readonly writtenSelectedBytes: bigint
-  readonly safeResumeBytes: bigint
-  readonly resumeTemporarySpaceUpperBound?: bigint
-}
-
-/** The operation owns this stream; UI observers never derive safe bytes from transfer acknowledgements. */
-export interface DirectZipProgressSource {
-  getSnapshot(): DirectZipProgressSnapshot
-  subscribe(listener: (snapshot: DirectZipProgressSnapshot) => void): () => void
 }

@@ -1,25 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import { SelectionPolicy } from '../../src/catalog/selection'
-import {
-  createDirectResumableZipPlan, createFSAOwnedFileBinding, createReceiveIntent,
-  type ReceiveIntent,
-} from '../../src/transfer/intent'
-import {
-  TransferPauseRequestedError, type DirectResumableZipExecution,
-} from '../../src/transfer/output/session'
+import { TransferPauseRequestedError } from '../../src/transfer/output/session'
 import {
   createPlanExecutionAuthority,
   type PlanExecutionRouteRegistry,
 } from '../../src/transfer/settlement/plan-authority'
 import { deferred } from './settlement-deadline'
 import {
-  catalogFixture, digestIdentity, fileEntry, identity, identityText, planAuthorityFixture, readerFixture,
+  catalogFixture, fileEntry, identity, planAuthorityFixture, readerFixture,
   receiveIntentFixture, selectOnlyFile, transferJobFixture,
 } from './v2-job-fixture'
 
 const ROUTES = [
   { planKind: 'direct-tree', artifactKind: 'directory-tree', paused: 'partial-directory' },
-  { planKind: 'direct-resumable-zip', artifactKind: 'zip-archive', paused: 'resumable-receive' },
   { planKind: 'workspace-then-publish', artifactKind: 'original-file', paused: 'resumable-receive' },
   { planKind: 'workspace-then-publish', artifactKind: 'zip-archive', paused: 'resumable-receive' },
   { planKind: 'portable-handoff', artifactKind: 'original-file', paused: 'restart-required' },
@@ -77,7 +70,7 @@ describe('production execution handoff cancellation', () => {
   )
 
   it('does not acquire output when Pause already precedes admission', async () => {
-    const f = await fixture(ROUTES[3])
+    const f = await fixture(ROUTES[2])
     f.controller.abort(new TransferPauseRequestedError())
     const result = await f.job.run(f.controller.signal)
 
@@ -96,11 +89,7 @@ async function fixture(route: typeof ROUTES[number], rejectPreparation = false) 
   const file = fileEntry(identity(11), 'payload.bin', 4n)
   const selection = route.artifactKind === 'original-file'
     ? selectOnlyFile(file) : new SelectionPolicy(true)
-  const seed = await receiveIntentFixture({
-    ...route, planKind: route.planKind === 'direct-resumable-zip' ? 'workspace-then-publish' : route.planKind,
-    selection, file,
-  })
-  const intent = route.planKind === 'direct-resumable-zip' ? await directZipIntent(seed) : seed
+  const intent = await receiveIntentFixture({ ...route, selection, file })
   const catalog = catalogFixture([{ id: identity(2), entries: [file] }])
   const readers = readerFixture([file])
   const backend = planAuthorityFixture({ rejectPreparation })
@@ -114,33 +103,6 @@ async function fixture(route: typeof ROUTES[number], rejectPreparation = false) 
   }
   const routes: PlanExecutionRouteRegistry = {
     directTree: { open: (...args) => handoff(backend.openDirectTree(...args)) },
-    directResumableZip: { open: async intent => {
-      backend.routes.push('direct-resumable-zip')
-      const execution: DirectResumableZipExecution = {
-        planKind: 'direct-resumable-zip',
-        output: {
-          identity: backend.output.identity,
-          capabilities: backend.output.capabilities,
-          beginFile: unexpectedContent,
-        },
-        ordered: {
-          beginTraversal: unexpectedContent, visit: unexpectedContent, finishTraversal: unexpectedContent,
-          materializationSummary: () => ({ entryCount: 0n, fileCount: 0n, directoryCount: 0n, rawBytes: 0n }),
-        },
-        pause: async (_request, signal) => {
-          backend.pauses.push('direct-resumable-zip')
-          backend.pauseSignals.push(signal)
-          return {
-            kind: 'resumable-receive', payloadKind: 'direct-zip',
-            operationId: intent.operationId, receiveIntentDigest: intent.digest, generation: 2n,
-            directZipCheckpointDigest: digestIdentity(50), safeSelectedPayloadBytes: 0n,
-            committedArchiveLength: 0n, checkpointPhase: 'between-members',
-          }
-        },
-        settle: unexpectedContent,
-      }
-      return handoff(Promise.resolve(execution))
-    } },
     workspaceOriginal: { admit: (...args) => handoff(backend.openWorkspaceOriginal(...args)) },
     workspaceZip: { admit: (...args) => handoff(backend.openWorkspaceZip(...args)) },
     portableOriginal: { prepare: (...args) => handoff(backend.preparePortable(...args)) },
@@ -154,24 +116,4 @@ async function fixture(route: typeof ROUTES[number], rejectPreparation = false) 
     revisions: readers.revisions, broker: readers.broker,
   })
   return { backend, catalog, readers, controller, job, entered, release }
-}
-
-async function unexpectedContent(): Promise<never> {
-  throw new Error('Canceled acquisition must not start content or publication')
-}
-
-async function directZipIntent(seed: ReceiveIntent): Promise<ReceiveIntent> {
-  const artifact = seed.artifact
-  if (artifact.kind !== 'zip-archive') throw new Error('Direct ZIP requires a ZIP artifact')
-  const binding = await createFSAOwnedFileBinding({
-    operationId: seed.operationId, artifact,
-    stableName: `windshare.windshare-${identityText(12)}.zip`, targetRef: digestIdentity(41),
-    policies: {
-      zipEncoding: digestIdentity(42), layout: digestIdentity(43), checkpoint: digestIdentity(44),
-      journalBudget: digestIdentity(45), epoch: digestIdentity(46),
-    },
-  })
-  return createReceiveIntent({
-    selection: seed.selection, artifact, plan: await createDirectResumableZipPlan(artifact, binding),
-  })
 }

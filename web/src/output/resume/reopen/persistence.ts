@@ -51,7 +51,6 @@ export async function expectedBindingRecord(
       canonicalBytes: intent.plan.workspace.canonicalBytes,
     })
   }
-  if (intent.plan.kind === 'direct-resumable-zip') return undefined
   throw new TypeError('persisted reopen does not support this materialization plan')
 }
 
@@ -71,9 +70,7 @@ export async function assertDescriptorAuthority(
   if (current === undefined) {
     throw new DOMException('Receive lifecycle has no reopen authority', 'InvalidStateError')
   }
-  const directZipLocalCandidate = descriptor.continuation === 'verify-direct-zip-completion' &&
-    snapshot.operation.receiveIntent.plan.kind === 'direct-resumable-zip'
-  if (current.continuation === 'needs-attention' && !directZipLocalCandidate) {
+  if (current.continuation === 'needs-attention') {
     throw new DOMException('Receive continuation requires explicit owner recovery', 'InvalidStateError')
   }
   if (purpose === 'continue') {
@@ -82,11 +79,7 @@ export async function assertDescriptorAuthority(
       snapshot.operation.receiveIntent.plan.kind === 'workspace-then-publish' &&
       (snapshot.operation.receiveIntent.artifact.kind === 'zip-archive' ||
        snapshot.operation.receiveIntent.artifact.kind === 'original-file')
-    const directZipReceive = current.continuation === 'resume-receive' &&
-      descriptor.continuation === 'resume-direct-zip' &&
-      snapshot.operation.receiveIntent.plan.kind === 'direct-resumable-zip'
-    if ((!nativeLocalCandidate && !directZipLocalCandidate && !directZipReceive &&
-        current.continuation !== descriptor.continuation) ||
+    if ((!nativeLocalCandidate && current.continuation !== descriptor.continuation) ||
         current.continuation === 'retry-cleanup' || current.continuation === 'cleanup-only') {
       throw new DOMException('Receive continuation is stale or inert', 'InvalidStateError')
     }
@@ -249,7 +242,6 @@ export function closeAuthority(
         ...(resources.reclaimedClaim === undefined ? [] : [resources.reclaimedClaim.release()]),
         lease.release(),
       ])
-      resources.directZipJournal?.close()
       repository.close()
       const failures = releases.filter(
         (result): result is PromiseRejectedResult => result.status === 'rejected',
@@ -278,7 +270,6 @@ export async function closeAfterFailure(
     ...(resources.reclaimedClaim === undefined ? [] : [resources.reclaimedClaim.release()]),
     ...(resources.lease === undefined ? [] : [resources.lease.release()]),
   ])
-  resources.directZipJournal?.close()
   repository.close()
   const releaseFailures = releases
     .filter((result): result is PromiseRejectedResult => result.status === 'rejected')

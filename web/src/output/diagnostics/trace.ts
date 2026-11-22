@@ -1,10 +1,5 @@
 import type { CheckpointPayloadV1 } from '../../diagnostics/trace/checkpoint-payload'
 import type {
-  DirectZipCoordinationPayloadV1,
-  DirectZipMemberRollbackPayloadV1,
-  DirectZipMilestonePayloadV1,
-} from '../../diagnostics/trace/model'
-import type {
   PerformancePhasePayloadV1,
   PerformanceSummaryPayloadV1,
 } from '../../diagnostics/trace/transfer-payload'
@@ -100,10 +95,7 @@ export interface OutputTracePayloadByName {
     lifecycle_generation?: string
     cleanup_kind?: 'published_metadata'
   }>
-  readonly direct_zip_milestone: DirectZipMilestonePayloadV1
   readonly browser_delivery: BrowserDeliveryPayloadV1
-  readonly direct_zip_coordination: DirectZipCoordinationPayloadV1
-  readonly direct_zip_member_rollback: DirectZipMemberRollbackPayloadV1
 }
 
 export type OutputTraceEventName = keyof OutputTracePayloadByName

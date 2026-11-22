@@ -9,7 +9,6 @@ const identity = { operationId: 'operation', receiveIntentDigest: 'intent', gene
 describe('receive interruption semantics', () => {
   it('exposes only the controls that each storage contract can settle', () => {
     expect(receiveInterruptionControls('direct-tree')).toEqual(['pause', 'stop'])
-    expect(receiveInterruptionControls('direct-resumable-zip')).toEqual(['pause'])
     expect(receiveInterruptionControls('workspace-then-publish')).toEqual(['pause'])
     expect(receiveInterruptionControls('portable-handoff')).toEqual(['stop'])
     expect(receiveInterruptionReason('pause')).toBeInstanceOf(TransferPauseRequestedError)

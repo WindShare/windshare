@@ -28,7 +28,6 @@ import { PersistedReceiveOperationReopenAuthority } from './authority'
 import type {
   PersistedReceiveOperationReopenAuthorityOptions,
   ReopenedDirectTreeOperation,
-  ReopenedDirectZipOperation,
   ReopenedReceiveOperation,
   ReopenedWorkspaceOperation,
 } from './model'
@@ -79,12 +78,6 @@ implements ReceiveOperationOwnedCleanupExecutor {
     failures?: OutputFailureSinks,
   ): Promise<ReceiveOperationDiscardResult> {
     if (operation.kind === 'direct-tree') return this.#cleanupDirectTree(operation, failures)
-    if (operation.kind === 'direct-zip') {
-      throw new DOMException(
-        'Direct ZIP cleanup requires the owned-file target proof authority',
-        'NotSupportedError',
-      )
-    }
     let backend: OriginPrivateRetainedArtifactBackend | undefined
     try {
       backend = await this.#openWorkspaceBackend({
@@ -200,11 +193,6 @@ export type AuthorityOwnedReceiveOperationContinuation =
       }
     }>
   | Readonly<{ kind: 'workspace-retained'; operation: ReopenedWorkspaceOperation }>
-  | Readonly<{ kind: 'direct-zip'; operation: ReopenedDirectZipOperation }>
-  | Readonly<{
-      kind: 'direct-zip-retained-cleanup'
-      operation: ReopenedDirectZipOperation
-    }>
 
 /**
  * Presentation can consume a descriptor but cannot provide an intent, binding, or
@@ -253,7 +241,6 @@ implements ReceiveOperationMutationPort<AuthorityOwnedReceiveOperationMutationRe
   ): Promise<AuthorityOwnedReceiveOperationMutationResult> {
     assertPhysicalOutputAuthority(descriptor)
     const operation = await this.#reopen.reopen(descriptor, 'cleanup', failures)
-    if (operation.kind === 'direct-zip') return directZipRetainedCleanup(operation)
     try {
       return Object.freeze({
         kind: 'cleanup',
@@ -293,7 +280,6 @@ implements ReceiveOperationMutationPort<AuthorityOwnedReceiveOperationMutationRe
   ): Promise<AuthorityOwnedReceiveOperationMutationResult> {
     assertPhysicalOutputAuthority(descriptor)
     const operation = await this.#reopen.reopen(descriptor, 'cleanup', failures)
-    if (operation.kind === 'direct-zip') return directZipRetainedCleanup(operation)
     if (operation.kind !== 'direct-tree') {
       return withClosedOperation(operation, async () => {
         throw new TypeError('terminal catch-up is exclusive to DirectTree operations')
@@ -310,17 +296,6 @@ function assertPhysicalOutputAuthority(descriptor: ReceiveOperationResumeDescrip
   if (descriptor.continuation === 'cleanup-incompatible') {
     throw new DOMException('Incompatible saved records have no physical output authority', 'InvalidStateError')
   }
-}
-
-function directZipRetainedCleanup(
-  operation: ReopenedDirectZipOperation,
-): AuthorityOwnedReceiveOperationMutationResult {
-  // Generic cleanup intentionally has no target-proof port. Ownership transfers
-  // to the injected Direct ZIP runtime, which closes this reopen authority.
-  return Object.freeze({
-    kind: 'continuation',
-    continuation: Object.freeze({ kind: 'direct-zip-retained-cleanup', operation }),
-  })
 }
 
 async function withClosedOperation<Result>(
@@ -401,9 +376,6 @@ function classifyReopenedContinuation(
 ): AuthorityOwnedReceiveOperationContinuation {
   if (operation.kind === 'direct-tree') {
     return Object.freeze({ kind: 'direct-tree-receive', operation })
-  }
-  if (operation.kind === 'direct-zip') {
-    return Object.freeze({ kind: 'direct-zip', operation })
   }
   if (operation.lifecycle.kind === 'resumable-start') {
     return Object.freeze({ kind: 'workspace-start', operation: operation as Extract<

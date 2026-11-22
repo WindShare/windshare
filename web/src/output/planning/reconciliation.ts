@@ -164,7 +164,6 @@ export function sameStableArtifactChoiceIdentity(
 function choiceGuaranteeProfile(plan: OfferedMaterializationPlanSemantics): GuaranteeProfile {
   switch (plan.kind) {
     case 'direct-tree':
-    case 'direct-resumable-zip':
       return plan.target.legalProfile
     case 'workspace-then-publish':
       return plan.publicationTarget.legalProfile
@@ -274,8 +273,6 @@ function routesWithSemantics(
       return workspaceRoutes(semantics, environment)
     case 'portable-handoff':
       return portableRoutes(semantics, environment)
-    case 'direct-resumable-zip':
-      return directZipRoutes(semantics, environment)
   }
 }
 
@@ -287,17 +284,6 @@ function directTreeRoutes(
     (target.kind === 'native-directory-container' || target.kind === 'fsa-parent-directory') &&
       sameTargetSemantics(semantics.target, target)
       ? [Object.freeze({ kind: 'direct-tree' as const, target })]
-      : []))
-}
-
-function directZipRoutes(
-  semantics: Extract<OfferedMaterializationPlanSemantics, { kind: 'direct-resumable-zip' }>,
-  environment: EnvironmentOffers,
-): readonly OfferedMaterializationRoute[] {
-  if (environment.directZipSupport.kind !== 'runtime-supported') return Object.freeze([])
-  return Object.freeze(environment.targets.flatMap((target) =>
-    target.kind === 'fsa-owned-file-target' && sameTargetSemantics(semantics.target, target)
-      ? [Object.freeze({ kind: 'direct-resumable-zip' as const, target })]
       : []))
 }
 
@@ -339,7 +325,6 @@ function portableRoutes(
 function routeFitsLowerBound(route: OfferedMaterializationRoute, lowerBound: bigint): boolean {
   switch (route.kind) {
     case 'direct-tree':
-    case 'direct-resumable-zip':
       return outputLowerBoundFits(route.target.hardMaximumOutputBytes, lowerBound)
     case 'workspace-then-publish':
       return outputLowerBoundFits(route.publicationTarget.hardMaximumOutputBytes, lowerBound)

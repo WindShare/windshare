@@ -74,8 +74,7 @@ function retainedStage(facts: TaskFacts, continuation: import('../../output/mode
   switch (continuation) {
     case 'resume-start': return startupStage(facts, language)
     case 'cleanup-only': return executionStage(facts, language)
-    case 'resume-receive':
-    case 'resume-direct-zip': return pausedStage(facts, language)
+    case 'resume-receive': return pausedStage(facts, language)
     case 'resume-package':
     case 'resume-local-finalization': return stage('paused', t.localFinishReady,
       t.localFinishReadyHint, continuation)
@@ -90,14 +89,6 @@ function retainedStage(facts: TaskFacts, continuation: import('../../output/mode
       t.removeRecordHint, continuation)
     case 'retry-cleanup': return stage('needs-action', t.cleanup,
       t.cleanupHint, continuation)
-    case 'reauthorize-direct-zip': return stage('needs-action', t.authorize,
-      t.authorizeHint, continuation)
-    case 'verify-direct-zip-target': return stage('needs-action', t.verifyDestination,
-      t.verifyZipTargetHint, continuation)
-    case 'verify-direct-zip-completion': return stage('needs-action', t.verifyZip,
-      t.verifyZipHint, continuation)
-    case 'retry-direct-zip-space': return stage('needs-action', t.freeSpace,
-      t.freeSpaceHint, continuation)
     case 'needs-attention': return stage('needs-action', t.needsAction,
       t.needsActionHint, continuation)
     case 'history-only': throw new TypeError('History-only operation requires settled publication facts')
@@ -128,16 +119,10 @@ function executionStage(facts: TaskFacts, language: Language): StageCopy {
   switch (state.kind) {
     case 'intent-frozen':
     case 'preparing': return stage('preparing', t.preparing, t.preparingHint, state.kind)
-    case 'receiving': return receivingStage(facts, language)
+    case 'receiving': return receivingStage(language)
     case 'resumable-start': return startupStage(facts, language)
     case 'resumable-receive':
     case 'resumable-package': return pausedStage(facts, language)
-    case 'authorization-required': return stage('needs-action', t.authorize,
-      t.authorizeSame, state.kind)
-    case 'target-verification-required': return stage('needs-action', t.verifyDestination,
-      t.verifyOwner, state.kind)
-    case 'destination-space-required': return stage('needs-action', t.freeSpace,
-      t.spaceResume, state.kind)
     case 'finalizing-tree':
     case 'materialization-sealed':
     case 'packaging':
@@ -153,11 +138,9 @@ function executionStage(facts: TaskFacts, language: Language): StageCopy {
 }
 
 function activeReceivingStage(facts: TaskFacts, language: Language): StageCopy {
-  const direct = facts.directZipProgress
-  if (direct !== null && direct.phase !== 'receiving' && direct.phase !== 'saving-resume-position') return receivingStage(facts, language)
   if (facts.progress?.phase === 'finishing') return finishingStage('local-finalization', language)
   if (facts.blocking !== null) return blockingStage(facts.blocking, language)
-  return receivingStage(facts, language)
+  return receivingStage(language)
 }
 
 function startupStage(facts: TaskFacts, language: Language): StageCopy {
@@ -171,17 +154,9 @@ function startupStage(facts: TaskFacts, language: Language): StageCopy {
     t.startRetained, 'resumable-start')
 }
 
-function receivingStage(facts: TaskFacts, language: Language): StageCopy {
+function receivingStage(language: Language): StageCopy {
   const t = receiverCopy[language].stage
-  const direct = facts.directZipProgress
-  if (direct === null || direct.phase === 'receiving') {
-    return stage('downloading', t.downloading, t.downloadingHint, 'receiving')
-  }
-  if (direct.phase === 'saving-resume-position') {
-    return stage('downloading', t.checkpoint, t.checkpointHint, direct.phase)
-  }
-  return stage('finishing', direct.phase === 'verifying' ? t.verifyingZip : t.finishingZip,
-    t.zipHint, direct.phase)
+  return stage('downloading', t.downloading, t.downloadingHint, 'receiving')
 }
 
 function pausedStage(facts: TaskFacts, language: Language): StageCopy {
@@ -219,7 +194,6 @@ function attentionDescription(reason: string, language: Language): string {
 function restartDescription(reason: string, language: Language): string {
   const t = receiverCopy[language].stage
   if (reason === 'content-session-ended') return t.sessionEnded
-  if (reason === 'target-deleted') return t.deleted
   return t.restart
 }
 

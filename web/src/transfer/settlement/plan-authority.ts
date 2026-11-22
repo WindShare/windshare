@@ -6,7 +6,6 @@ import {
 } from '../directory-admission'
 import {
   validateReceiveIntent,
-  type DirectResumableZipPlan,
   type DirectTreePlan,
   type OriginalFileArtifact,
   type PortableHandoffPlan,
@@ -16,7 +15,6 @@ import {
 } from '../intent'
 import {
   validatePlanExecutionBinding,
-  type DirectResumableZipExecution,
   type DirectTreeExecution,
   type ExactPreparationEvidence,
   type ExactSingleFileEvidence,
@@ -31,10 +29,6 @@ const MAXIMUM_EXACT_PREPARATION_ENTRIES = 1_000_000
 const U64_MAXIMUM = 0xffff_ffff_ffff_ffffn
 
 type DirectTreeIntent = ReceiveIntent & Readonly<{ plan: DirectTreePlan }>
-type DirectResumableZipIntent = ReceiveIntent & Readonly<{
-  plan: DirectResumableZipPlan
-  artifact: ZipArchiveArtifact
-}>
 type WorkspaceOriginalIntent = ReceiveIntent & Readonly<{
   plan: WorkspaceThenPublishPlan
   artifact: OriginalFileArtifact
@@ -49,13 +43,6 @@ type PortableZipIntent = PortableIntent & Readonly<{ artifact: ZipArchiveArtifac
 
 export interface DirectTreeExecutionRoute {
   open(intent: DirectTreeIntent, signal: AbortSignal): Promise<DirectTreeExecution>
-}
-
-export interface DirectResumableZipExecutionRoute {
-  open(
-    intent: DirectResumableZipIntent,
-    signal: AbortSignal,
-  ): Promise<DirectResumableZipExecution>
 }
 
 export interface WorkspaceOriginalExecutionRoute {
@@ -107,7 +94,6 @@ export interface ExecutionAdmissionLifecycle {
  */
 export interface PlanExecutionRouteRegistry {
   readonly directTree?: DirectTreeExecutionRoute
-  readonly directResumableZip?: DirectResumableZipExecutionRoute
   readonly workspaceOriginal?: WorkspaceOriginalExecutionRoute
   readonly workspaceZip?: WorkspaceZipExecutionRoute
   readonly portableOriginal?: PortableOriginalExecutionRoute
@@ -162,12 +148,6 @@ export async function createPlanExecutionAuthority(input: {
     openDirectTree: async (supplied, signal) => {
       const intent = await claim(supplied, 'direct-tree', signal)
       const route = routes.directTree
-      if (route === undefined) throw new PlanRouteUnavailableError(intent)
-      return validatePlanExecutionBinding(intent, await route.open(intent, signal))
-    },
-    openDirectResumableZip: async (supplied, signal) => {
-      const intent = await claim(supplied, 'direct-resumable-zip', signal)
-      const route = routes.directResumableZip
       if (route === undefined) throw new PlanRouteUnavailableError(intent)
       return validatePlanExecutionBinding(intent, await route.open(intent, signal))
     },
@@ -242,9 +222,6 @@ function snapshotRouteRegistry(input: PlanExecutionRouteRegistry): PlanExecution
     ...(input.directTree === undefined
       ? {}
       : { directTree: snapshotRoute(input.directTree, 'open') }),
-    ...(input.directResumableZip === undefined
-      ? {}
-      : { directResumableZip: snapshotRoute(input.directResumableZip, 'open') }),
     ...(input.workspaceOriginal === undefined
       ? {}
       : { workspaceOriginal: snapshotRoute(input.workspaceOriginal, 'admit') }),
@@ -399,7 +376,6 @@ function planBindingDigest(intent: ReceiveIntent): string {
     case 'direct-tree': return intent.plan.reservation.digest
     case 'workspace-then-publish': return intent.plan.workspace.digest
     case 'portable-handoff': return intent.plan.portable.digest
-    case 'direct-resumable-zip': return intent.plan.binding.digest
   }
 }
 

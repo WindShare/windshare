@@ -3,8 +3,8 @@ import { createSelectionSpec } from '../../src/transfer/intent'
 import { offerArtifacts } from '../../src/output/planning/offers'
 import { compareSavingTransition, presentSavingActions } from '../../src/ui/saving'
 import {
-  COMPLETE_DISCOVERY, directZipTarget, environment, fsaTarget, handoffTarget, identity,
-  nativeTarget, portableOffer, projection, runtimeDirectZipSupport, singleFileProof, treeProof, workspaceOffer,
+  COMPLETE_DISCOVERY, environment, fsaTarget, handoffTarget, identity,
+  nativeTarget, portableOffer, projection, singleFileProof, treeProof, workspaceOffer,
 } from '../output/planning/fixture'
 
 async function selection() {
@@ -82,23 +82,17 @@ describe('saving action presenter over eligible offers', () => {
     expect(result.alternatives.find(group => group.kind === 'zip')?.primary.summary).toContain('ZIP')
   })
 
-  it('keeps progressive ZIP enabled when exact comparison is unknown and follows existing ZIP ranking', async () => {
+  it('keeps progressive ZIP enabled while discovery is still open', async () => {
     const offers = await offerArtifacts(
       projection(await selection(), treeProof(), 1024n), { kind: 'discovering' },
-      environment({
-        targets: [directZipTarget(), handoffTarget()], workspace: workspaceOffer(),
-        directZipSupport: runtimeDirectZipSupport(),
-        zipRecommendationPolicy: { kind: 'available', workspacePeakBytesThreshold: 1_000_000n },
-      }),
+      environment({ targets: [handoffTarget()], workspace: workspaceOffer() }),
     )
     const result = presentSavingActions({ offers })
     expect(result.primary?.outcome).toBe('zip')
     expect(result.primary?.disabledReason).toBeNull()
-    expect(result.recommendation).toContain('start now')
-    expect(result.hasAlternatives).toBe(true)
-    expect(result.alternatives).toHaveLength(1)
-    expect(result.alternatives[0]?.alternatives).toHaveLength(1)
-    if (offers.kind === 'artifact-actions') expect(result.primary?.offered.choice.choiceId).toBe(offers.zip?.primary.choice.choiceId)
+    expect(result.recommendation).toBeNull()
+    expect(result.hasAlternatives).toBe(false)
+    if (offers.kind === 'artifact-actions') expect(result.primary?.offered.choice.choiceId).toBe(offers.zip?.choice.choiceId)
   })
 
   it('explains empty selection and blocks every action with the current admission reason', async () => {

@@ -1,7 +1,7 @@
 import { AsyncBoundedQueue } from '../job/scheduler'
 
 export interface DiscoverySchedulingObservation {
-  readonly queue: 'generations' | 'zip_members'
+  readonly queue: 'generations'
   readonly decision: 'waiting' | 'resumed' | 'cancelled' | 'complete'
   readonly pendingItems: number
   readonly metadataBytes: bigint

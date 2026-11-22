@@ -75,7 +75,7 @@ export async function inspectAndDiscardInvalidatedOriginal(fixture: DurableRecei
     const reference = inventory.operations[0]
     if (reference === undefined) throw new Error('Invalidated receive disappeared with retained data')
     const descriptor = reference.descriptor
-    const actions = retainedOperationAuthority(descriptor.continuation, true, false, false).actions
+    const actions = retainedOperationAuthority(descriptor.continuation, true, false).actions
     const resumed = await mutations.resume(descriptor).then(() => true, () => false)
     const cleanup = await authority.discard(reference)
     const remaining = await authority.listResumeState()

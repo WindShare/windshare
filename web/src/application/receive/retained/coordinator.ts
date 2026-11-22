@@ -25,8 +25,7 @@ import {
 
 function retainedActionNeedsShare(operation: RetainedReceiveOperation, action: RetainedReceiveAction): boolean {
   return (action === 'continue' || (action === 'redownload' && operation.recoverySummary !== undefined)) &&
-    operation.continuation !== 'resume-package' && operation.continuation !== 'resume-local-finalization' &&
-    operation.continuation !== 'verify-direct-zip-completion'
+    operation.continuation !== 'resume-package' && operation.continuation !== 'resume-local-finalization'
 }
 
 type RetainedAttempt = PresentationAttempt
@@ -568,13 +567,10 @@ export class RetainedInventoryCoordinator {
         'InvalidStateError',
       )
     }
-    const directZipReceive = intent.plan.kind === 'direct-resumable-zip' &&
-      ['resume-direct-zip', 'reauthorize-direct-zip', 'verify-direct-zip-target', 'retry-direct-zip-space']
-        .includes(pending.operation.continuation)
     const startupReceive = intent.plan.kind === 'workspace-then-publish' &&
       pending.operation.continuation === 'resume-start'
     if (
-      (!directZipReceive && !startupReceive && pending.operation.continuation !== 'resume-receive') ||
+      (!startupReceive && pending.operation.continuation !== 'resume-receive') ||
       pending.operation.operationId !== intent.operationId ||
       pending.operation.receiveIntentDigest !== intent.digest ||
       runtime.lifecycle.kind !== (startupReceive ? 'intent-frozen' : 'receiving') ||
@@ -585,7 +581,7 @@ export class RetainedInventoryCoordinator {
       runtime.lifecycle.receiveIntentDigest !== intent.digest ||
       (
         intent.plan.kind !== 'direct-tree' &&
-        intent.plan.kind !== 'workspace-then-publish' && !directZipReceive
+        intent.plan.kind !== 'workspace-then-publish'
       )
     ) {
       throw new TypeError(

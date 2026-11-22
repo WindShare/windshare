@@ -4,7 +4,6 @@ import {
   BROWSER_HANDOFF_OBJECT_URL_LEASE_MILLISECONDS,
   DEFAULT_PORTABLE_ARTIFACT_LIMIT,
   createSelectionSpec,
-  fsaOwnedFileGuarantees,
 } from '../../../src/transfer/intent'
 import {
   createEnvironmentOffers,
@@ -47,19 +46,17 @@ const REPLACEMENTS: readonly ReplacementGuarantee[] = [
 const DELIVERIES: readonly DeliveryMode[] = ['managed-target', 'browser-handoff']
 const TARGET_VISIBILITIES: readonly TargetVisibility[] = [
   'hidden-until-verified-publication', 'committed-objects-visible', 'unobservable',
-  'operation-owned-incomplete-file-visible',
 ]
 const ARTIFACT_AVAILABILITIES: readonly ArtifactAvailability[] = [
   'verified-complete-only', 'committed-objects-usable', 'handoff-only',
 ]
 const CLEANUP_AUTHORITIES: readonly CleanupContract[] = [
   'rollback-to-absent-before-publication', 'no-whole-target-rollback',
-  'ownership-proof-required', 'no-managed-cleanup',
+  'no-managed-cleanup',
 ]
 const TARGET_KINDS: readonly EnvironmentTargetKind[] = [
   'native-directory-container',
   'fsa-parent-directory',
-  'fsa-owned-file-target',
   'managed-atomic-file-target',
   'browser-handoff',
   'precreated-browser-file',
@@ -81,7 +78,6 @@ describe('environment guarantee legality', () => {
     expect(Object.fromEntries(legalCounts)).toEqual({
       'native-directory-container': 1,
       'fsa-parent-directory': 1,
-      'fsa-owned-file-target': 1,
       'managed-atomic-file-target': 2,
       'browser-handoff': 1,
       'precreated-browser-file': 0,
@@ -239,9 +235,6 @@ function expectedProfile(
     delivery: 'managed-target', targetVisibility: 'committed-objects-visible',
     artifactAvailability: 'committed-objects-usable', cleanupContract: 'no-whole-target-rollback',
   })) return 'fsa-tree'
-  if (kind === 'fsa-owned-file-target' && exact(facts, fsaOwnedFileGuarantees())) {
-    return 'fsa-owned-file'
-  }
   if (kind === 'managed-atomic-file-target' &&
       (facts.nameChooser === 'application-chosen' || facts.nameChooser === 'user-chosen') &&
       facts.replacement === 'atomic-no-replace' && facts.delivery === 'managed-target' &&

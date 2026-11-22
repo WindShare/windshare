@@ -24,11 +24,7 @@ import {
 const RESUMABLE_RECEIVE_FILE_SET = 1
 const START_PAUSED = 1
 const START_FAILED = 2
-const RESUMABLE_RECEIVE_DIRECT_ZIP = 2
 const RESUMABLE_RECEIVE_OPFS_ZIP = 3
-const DIRECT_ZIP_PHASE_BETWEEN_MEMBERS = 1
-const DIRECT_ZIP_PHASE_INSIDE_MEMBER = 2
-const DIRECT_ZIP_PHASE_CLOSING = 3
 import {
   RECEIVE_RECORD_LIFECYCLE_STATE,
   createPersistedReceiveRecord,
@@ -131,26 +127,12 @@ function lifecyclePayload(state: ReceiveLifecycleState): readonly CanonicalBytes
       canonicalFrame(canonicalU8(attentionReasonByte(state.reason))),
       digestFrame(state.lastVerifiedRecordDigest, 'last verified record digest'),
     ]
-    case 'authorization-required':
-    case 'target-verification-required':
-    case 'destination-space-required': return [
-      digestFrame(state.recoveryGateDigest, 'recovery gate digest'),
-    ]
   }
 }
 
 function resumableReceivePayload(
   state: Extract<ReceiveLifecycleState, { kind: 'resumable-receive' }>,
 ): readonly CanonicalBytes[] {
-  if (state.payloadKind === 'direct-zip') {
-    return [
-      canonicalFrame(canonicalU8(RESUMABLE_RECEIVE_DIRECT_ZIP)),
-      digestFrame(state.directZipCheckpointDigest, 'direct ZIP checkpoint digest'),
-      canonicalFrame(canonicalU64(state.safeSelectedPayloadBytes)),
-      canonicalFrame(canonicalU64(state.committedArchiveLength)),
-      canonicalFrame(canonicalU8(directZipCheckpointPhaseByte(state.checkpointPhase))),
-    ]
-  }
   if (state.payloadKind === 'workspace-archive') {
     if (state.checkpointGeneration === 0n || typeof state.discoveryComplete !== 'boolean') {
       throw new TypeError('native ZIP recovery checkpoint is invalid')
@@ -251,7 +233,6 @@ function restartReasonByte(reason: RestartRequiredReason): number {
     case 'source-revision-changed': return 3
     case 'preparation-invalidated': return 4
     case 'content-session-ended': return 5
-    case 'target-deleted': return 6
   }
 }
 
@@ -385,9 +366,6 @@ function decodePublicationState(
       reason: attentionReasonFromByte(reader.byte('attention reason')),
       lastVerifiedRecordDigest: reader.identity(32, 'last verified record digest'),
     })
-    case 21: return decodeRecoveryGateState(reader, base, 'authorization-required')
-    case 22: return decodeRecoveryGateState(reader, base, 'target-verification-required')
-    case 23: return decodeRecoveryGateState(reader, base, 'destination-space-required')
     case RECEIVE_STATE_SOURCE_INVALIDATED: return Object.freeze({
       ...base,
       kind: 'source-invalidated',
@@ -419,17 +397,6 @@ function decodeResumableReceiveState(
       ...optionalDigest(reader.frame(), 'partial receipt digest', 'partialReceiptDigest'),
     })
   }
-  if (payloadKind === RESUMABLE_RECEIVE_DIRECT_ZIP) {
-    return Object.freeze({
-      ...base,
-      kind: 'resumable-receive',
-      payloadKind: 'direct-zip',
-      directZipCheckpointDigest: reader.identity(32, 'direct ZIP checkpoint digest'),
-      safeSelectedPayloadBytes: reader.u64('safe selected payload bytes'),
-      committedArchiveLength: reader.u64('committed archive length'),
-      checkpointPhase: directZipCheckpointPhaseFromByte(reader.byte('direct ZIP checkpoint phase')),
-    })
-  }
   if (payloadKind === RESUMABLE_RECEIVE_OPFS_ZIP) {
     const objectId = reader.identity(32, 'native ZIP object ID')
     const checkpointGeneration = reader.u64('native ZIP checkpoint generation')
@@ -447,18 +414,6 @@ function decodeResumableReceiveState(
     })
   }
   throw new TypeError('resumable receive payload kind is invalid')
-}
-
-function decodeRecoveryGateState(
-  reader: LifecycleFrameReader,
-  base: DecodedLifecycleBase,
-  kind: 'authorization-required' | 'target-verification-required' | 'destination-space-required',
-): ReceiveLifecycleState {
-  return Object.freeze({
-    ...base,
-    kind,
-    recoveryGateDigest: reader.identity(32, 'recovery gate digest'),
-  })
 }
 
 function decodeHandingOffState(
@@ -633,29 +588,7 @@ function restartReasonFromByte(value: number): RestartRequiredReason {
     case 3: return 'source-revision-changed'
     case 4: return 'preparation-invalidated'
     case 5: return 'content-session-ended'
-    case 6: return 'target-deleted'
     default: throw new TypeError('restart reason is invalid')
-  }
-}
-
-function directZipCheckpointPhaseByte(
-  phase: 'between-members' | 'inside-member' | 'closing',
-): number {
-  switch (phase) {
-    case 'between-members': return DIRECT_ZIP_PHASE_BETWEEN_MEMBERS
-    case 'inside-member': return DIRECT_ZIP_PHASE_INSIDE_MEMBER
-    case 'closing': return DIRECT_ZIP_PHASE_CLOSING
-  }
-}
-
-function directZipCheckpointPhaseFromByte(
-  value: number,
-): 'between-members' | 'inside-member' | 'closing' {
-  switch (value) {
-    case DIRECT_ZIP_PHASE_BETWEEN_MEMBERS: return 'between-members'
-    case DIRECT_ZIP_PHASE_INSIDE_MEMBER: return 'inside-member'
-    case DIRECT_ZIP_PHASE_CLOSING: return 'closing'
-    default: throw new TypeError('direct ZIP checkpoint phase is invalid')
   }
 }
 

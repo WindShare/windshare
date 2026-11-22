@@ -17,12 +17,6 @@ export type RestartRequiredReason =
   | 'source-revision-changed'
   | 'preparation-invalidated'
   | 'content-session-ended'
-  | 'target-deleted'
-export type DirectZipCheckpointPhase = 'between-members' | 'inside-member' | 'closing'
-export type RecoveryGateKind =
-  | 'authorization-required'
-  | 'target-verification-required'
-  | 'destination-space-required'
 export type PartialDirectoryReason = 'failures' | 'stopped'
 export type RecoveryDiscoveryState = 'complete' | 'failed'
 
@@ -73,9 +67,6 @@ export const RECEIVE_STATE_PARTIAL_DIRECTORY = 16 as const
 export const RECEIVE_STATE_RESTART_REQUIRED = 17 as const
 export const RECEIVE_STATE_DISCARDED = 18 as const
 export const RECEIVE_STATE_NEEDS_ATTENTION = 20 as const
-export const RECEIVE_STATE_AUTHORIZATION_REQUIRED = 21 as const
-export const RECEIVE_STATE_TARGET_VERIFICATION_REQUIRED = 22 as const
-export const RECEIVE_STATE_DESTINATION_SPACE_REQUIRED = 23 as const
 export const RECEIVE_STATE_SOURCE_INVALIDATED = 24 as const
 export const RECEIVE_STATE_RESUMABLE_START = 25 as const
 
@@ -98,9 +89,6 @@ const RECEIVE_STATE_BYTES_BY_KIND = Object.freeze({
   'restart-required': RECEIVE_STATE_RESTART_REQUIRED,
   'discarded': RECEIVE_STATE_DISCARDED,
   'needs-attention': RECEIVE_STATE_NEEDS_ATTENTION,
-  'authorization-required': RECEIVE_STATE_AUTHORIZATION_REQUIRED,
-  'target-verification-required': RECEIVE_STATE_TARGET_VERIFICATION_REQUIRED,
-  'destination-space-required': RECEIVE_STATE_DESTINATION_SPACE_REQUIRED,
   'source-invalidated': RECEIVE_STATE_SOURCE_INVALIDATED,
   'resumable-start': RECEIVE_STATE_RESUMABLE_START,
 } satisfies Readonly<Record<ReceiveLifecycleState['kind'], number>>)
@@ -147,14 +135,6 @@ export type ReceiveLifecycleState =
       completedBytes: bigint
       discoveryComplete: boolean
       pauseReason?: 'storage-pressure'
-    }>
-  | Readonly<LifecycleStateBase & {
-      kind: 'resumable-receive'
-      payloadKind: 'direct-zip'
-      directZipCheckpointDigest: string
-      safeSelectedPayloadBytes: bigint
-      committedArchiveLength: bigint
-      checkpointPhase: DirectZipCheckpointPhase
     }>
   | Readonly<LifecycleStateBase & { kind: 'finalizing-tree'; activeLeaseId: string }>
   | Readonly<LifecycleStateBase & {
@@ -226,10 +206,6 @@ export type ReceiveLifecycleState =
       kind: 'needs-attention'
       reason: NeedsAttentionReason
       lastVerifiedRecordDigest: string
-    }>
-  | Readonly<LifecycleStateBase & {
-      kind: RecoveryGateKind
-      recoveryGateDigest: string
     }>
 
 type StatePayload<T> = T extends LifecycleStateBase

@@ -49,7 +49,7 @@ export function retainedTaskAction(
     (action === 'redownload' && operation.recoverySummary !== undefined)
   return Object.freeze({
     id: action,
-    label: retainedLabel(operation, action, readiness, language),
+    label: retainedLabel(operation, action, language),
     destructive: action === 'discard-incomplete-staging' || (destructive && !cleanupOnly),
     disabledReason,
     consequence: retainedConsequence(operation, action, language),
@@ -61,7 +61,6 @@ function stopConsequence(planKind: string, language: Language): string {
   const t = receiverCopy[language].actions
   switch (planKind) {
     case 'direct-tree': return t.stopFolder
-    case 'direct-resumable-zip': return t.stopZip
     case 'workspace-then-publish': return t.stopWorkspace
     default: return t.stopPortable
   }
@@ -70,7 +69,6 @@ function stopConsequence(planKind: string, language: Language): string {
 function retainedLabel(
   operation: RetainedReceiveOperation,
   action: RetainedReceiveAction,
-  readiness: TaskRecoveryReadiness,
   language: Language,
 ): string {
   const t = receiverCopy[language].actions
@@ -80,27 +78,22 @@ function retainedLabel(
     case 'discard-incomplete-staging': return t.discardStaging
     case 'save-partial': return t.savePartial
     case 'catch-up': return t.finishRestoration
-    case 'continue': return continuationLabel(operation, readiness, language)
+    case 'continue': return continuationLabel(operation, language)
     case 'save': return t.save
     case 'redownload': return operation.recoverySummary === undefined ? t.downloadAgain : t.restartIncomplete
     case 'forget': return t.forget
     case 'discard': return operation.continuation === 'cleanup-incompatible' ? t.deleteHistory : t.discardOutput
     case 'delete':
       if (operation.continuation === 'retry-cleanup') return t.retryCleanup
-      if (['resume-direct-zip', 'reauthorize-direct-zip', 'verify-direct-zip-target', 'retry-direct-zip-space'].includes(operation.continuation)) return t.deleteZip
       return t.deleteRetained
   }
 }
 
-function continuationLabel(operation: RetainedReceiveOperation, readiness: TaskRecoveryReadiness, language: Language): string {
+function continuationLabel(operation: RetainedReceiveOperation, language: Language): string {
   const t = receiverCopy[language].actions
   if (operation.continuation === 'resume-start') return operation.lifecycle.kind === 'resumable-start' &&
     operation.lifecycle.reason === 'paused' ? t.resume : t.retryDownload
-  if (readiness === 'destination-authorization-required') return t.authorizeContinue
   if (operation.continuation === 'resume-local-finalization' || operation.continuation === 'resume-package') return t.finishSave
-  if (operation.continuation === 'verify-direct-zip-target') return t.verifyContinue
-  if (operation.continuation === 'verify-direct-zip-completion') return t.verifyZip
-  if (operation.continuation === 'retry-direct-zip-space') return t.retrySpace
   return operation.recoverySummary === undefined ? t.resume : t.resumePartial
 }
 

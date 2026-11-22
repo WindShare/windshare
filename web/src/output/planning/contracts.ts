@@ -1,7 +1,6 @@
 import type { ArtifactSpec } from '../../transfer/intent'
 import type { ProjectionEpoch } from '../../transfer/projection/contracts'
 import type {
-  DirectZipSupportFacts,
   EnvironmentTargetOffer,
   WorkspaceEnvironmentOffer,
   PortableEnvironmentOffer,
@@ -19,16 +18,12 @@ export interface EnvironmentOffers {
   readonly targets: readonly EnvironmentTargetOffer[]
   readonly workspace: WorkspaceEnvironmentOffer | null
   readonly portable: PortableEnvironmentOffer | null
-  readonly directZipSupport: DirectZipSupportFacts
-  readonly zipRecommendationPolicy: ZipRouteRecommendationPolicy
 }
 
 export interface EnvironmentOffersInput {
   readonly targets: readonly EnvironmentTargetOfferInput[]
   readonly workspace?: WorkspaceEnvironmentOffer | null
   readonly portable?: PortableEnvironmentOffer | null
-  readonly directZipSupport?: DirectZipSupportFacts
-  readonly zipRecommendationPolicy?: ZipRouteRecommendationPolicy
 }
 
 export type MaterializationRouteIdentity =
@@ -42,16 +37,6 @@ export type MaterializationRouteIdentity =
       kind: 'portable'
       portableRouteId: string
       handoffTargetRouteId: string
-    }>
-
-export type ZipRouteRecommendationPolicy =
-  | Readonly<{
-      kind: 'available'
-      workspacePeakBytesThreshold: bigint
-    }>
-  | Readonly<{
-      kind: 'unavailable'
-      reason: 'workspace-threshold-unavailable' | 'invalid-workspace-threshold'
     }>
 
 export interface ResolvedArtifactAction extends StableArtifactChoiceIdentity {

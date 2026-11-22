@@ -105,20 +105,6 @@
           "preparation": "none"
         },
         {
-          "artifact": "zip-archive",
-          "artifactAvailability": "verified-complete-only",
-          "binding": "fsa-owned-file",
-          "cleanupContract": "ownership-proof-required",
-          "completion": "verified-complete-only",
-          "guaranteeProfiles": [
-            "fsa-owned-file"
-          ],
-          "layout": "result-root",
-          "plan": "direct-resumable-zip",
-          "preparation": "none",
-          "targetVisibility": "operation-owned-incomplete-file-visible"
-        },
-        {
           "artifact": "original-file",
           "binding": "origin-private-workspace",
           "completion": "sealed-then-waiting-to-save",
@@ -212,11 +198,6 @@
       "completeArtifactsExclude": [
         "partial-directory"
       ],
-      "directZipByteSemantics": {
-        "committedArchiveLength": "verified-target-prefix-bytes",
-        "receivedBytes": "selected-source-payload-bytes-received-in-live-attempt",
-        "safeResumeBytes": "selected-source-payload-bytes-covered-by-verified-checkpoint"
-      },
       "domain": "windshare/receive-lifecycle-state/v2",
       "handoffNeverMeans": "published",
       "name": "receive-lifecycle-v2",
@@ -228,18 +209,6 @@
             "portable-handoff"
           ],
           "state": "download-started"
-        },
-        {
-          "byte": 21,
-          "state": "authorization-required"
-        },
-        {
-          "byte": 22,
-          "state": "target-verification-required"
-        },
-        {
-          "byte": 23,
-          "state": "destination-space-required"
         }
       ],
       "publishedCleanupPendingRemains": "published",
@@ -247,11 +216,9 @@
         "content-session-ended": 5,
         "portable-aborted": 2,
         "preparation-invalidated": 4,
-        "source-revision-changed": 3,
-        "target-deleted": 6
+        "source-revision-changed": 3
       },
       "resumableReceivePayloadKinds": {
-        "direct-zip": 2,
         "file-set": 1,
         "opfs-zip": 3
       },
@@ -261,8 +228,7 @@
           "byte": 14,
           "plans": [
             "direct-tree",
-            "workspace-then-publish",
-            "direct-resumable-zip"
+            "workspace-then-publish"
           ],
           "state": "published"
         },
@@ -276,8 +242,7 @@
         {
           "byte": 17,
           "plans": [
-            "portable-handoff",
-            "direct-resumable-zip"
+            "portable-handoff"
           ],
           "state": "restart-required"
         },
@@ -286,8 +251,7 @@
           "plans": [
             "direct-tree",
             "workspace-then-publish",
-            "portable-handoff",
-            "direct-resumable-zip"
+            "portable-handoff"
           ],
           "state": "discarded"
         },
@@ -295,62 +259,11 @@
           "byte": 20,
           "plans": [
             "direct-tree",
-            "workspace-then-publish",
-            "direct-resumable-zip"
+            "workspace-then-publish"
           ],
           "state": "needs-attention"
         }
       ]
-    },
-    {
-      "choiceIdentity": {
-        "directZipArtifactChoiceId": "0dkx9vDTzvH7B7a9EUoJBOWLCWgmVwLoFH3jjRmfHFU",
-        "domain": "windshare/artifact-choice/v1",
-        "materializationByte": 5,
-        "workspaceZipArtifactChoiceId": "vQj0Uda3oyRmvsZcz2qN0T9-f5m99Lcn0NK-9rS2_-k"
-      },
-      "name": "direct-zip-contract-policy-v1",
-      "ownershipExtraFormat": {
-        "availability": "frozen",
-        "digest": "hnFdK_xeDeYInsyhv5i4YdU57UUcWeAGUYLTakWaZQw",
-        "domain": "windshare/direct-zip-ownership-extra/v1"
-      },
-      "policies": [
-        {
-          "availability": "frozen",
-          "digest": "LWNj2jiL6U3tTZNaLy5txjFlDSaoUzhrjT0J44r0drc",
-          "domain": "windshare/zip-encoding/v2-store-data-descriptor-owned-marker",
-          "name": "zip-encoding-v2"
-        },
-        {
-          "availability": "frozen",
-          "digest": "VSV-D1TwhzhxuCZYgx1-ZEE26oFu-mHXA4oWELOgGH4",
-          "domain": "windshare/zip-layout/v2-paged-owned-marker",
-          "name": "direct-zip-layout-v2"
-        },
-        {
-          "availability": "frozen",
-          "domain": "windshare/direct-zip-checkpoint-policy/v1",
-          "name": "direct-zip-checkpoint-v1"
-        },
-        {
-          "availability": "frozen",
-          "domain": "windshare/direct-zip-journal-budget/v1",
-          "name": "direct-zip-journal-budget-v1"
-        },
-        {
-          "automaticMinimumAdvanceBytes": "67108864",
-          "availability": "frozen",
-          "boundary": "inclusive",
-          "digest": "cWXRxG365A-doi8JI-H2YlsavP6MppN_O9OpjACii8s",
-          "domain": "windshare/direct-zip-epoch-policy/v2",
-          "name": "direct-zip-epoch-v2",
-          "requiredAdvance": "max(minimum-advance,durable-archive-prefix)",
-          "units": "archive-bytes"
-        }
-      ],
-      "processRestart": "reviewed-exact-platform-only",
-      "routeSupport": "available-exact-reviewed-platform-only"
     }
   ]
 }

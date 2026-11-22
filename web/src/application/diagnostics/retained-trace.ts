@@ -16,11 +16,6 @@ const ACTION_TRANSITIONS = Object.freeze({
 const CONTINUATIONS = Object.freeze({
   'resume-start': 'resume_start',
   'resume-receive': 'resume_receive',
-  'resume-direct-zip': 'resume_receive',
-  'reauthorize-direct-zip': 'resume_receive',
-  'verify-direct-zip-target': 'resume_receive',
-  'retry-direct-zip-space': 'resume_receive',
-  'verify-direct-zip-completion': 'verify_direct_zip_completion',
   'pending-catch-up': 'pending_catch_up',
   'restoration-available': 'restoration_available',
   'history-only': 'history_only',

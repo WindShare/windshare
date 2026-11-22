@@ -139,19 +139,6 @@ export async function createDirectoryAdmissionScope(
       rootExpectation = (await createDirectTreeCoordinateContract(intent)).rootExpectation
       break
     }
-    case 'direct-resumable-zip': {
-      if (intent.artifact.kind !== 'zip-archive') {
-        throw new DirectoryAdmissionBindingError('Direct ZIP directory admission requires a ZIP')
-      }
-      layout = 'zip-result-root'
-      const anchor = intent.artifact.layout.anchor
-      rootExpectation = materializedRootExpectation(
-        anchor.kind,
-        anchor.kind === 'directory' ? anchor.directoryId : intent.syntheticRoot,
-        [],
-      )
-      break
-    }
     case 'workspace-then-publish': {
       if (intent.artifact.kind !== 'zip-archive') {
         throw new DirectoryAdmissionBindingError('Original files do not use directory admission')

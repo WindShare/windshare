@@ -1,10 +1,5 @@
 import type { ContentRetryPayload, ContentSchedulingPayload } from './content-scheduling'
 import type { ConnectionTracePayloads } from './connection-payload'
-import type {
-  DirectZipCoordinationPayloadV1,
-  DirectZipMemberRollbackPayloadV1,
-  DirectZipMilestonePayloadV1,
-} from './direct-zip-payload'
 import type { ProtocolOperationPayloadV2 } from './protocol-payload'
 import type { BrowserDeliveryPayloadV1 } from './browser-delivery-payload'
 import type { StoragePersistencePayloadV1 } from './storage-persistence-payload'
@@ -28,12 +23,6 @@ import type {
 } from '../export/incident-record-v2'
 import type { IncidentScopeKind } from '../incident/scope'
 import type { DiagnosticExceptionProjection } from '../exception'
-
-export type {
-  DirectZipCoordinationPayloadV1,
-  DirectZipMemberRollbackPayloadV1,
-  DirectZipMilestonePayloadV1,
-} from './direct-zip-payload'
 
 export const TRACE_CAPTURE_STATES = Object.freeze([
   'idle',
@@ -88,9 +77,6 @@ export const TRACE_EVENT_NAMES_V2 = Object.freeze([
   'reopen',
   'cleanup',
   'browser_delivery',
-  'direct_zip_milestone',
-  'direct_zip_coordination',
-  'direct_zip_member_rollback',
   'retained_inventory',
   'retained_action',
   'incident_marker',
@@ -106,7 +92,6 @@ type PlanKindV1 =
   | 'direct_atomic'
   | 'workspace_then_publish'
   | 'portable_handoff'
-  | 'direct_resumable_zip'
 
 type AuthorityActivationContextV1 = Readonly<{
   activation_id: string
@@ -482,7 +467,7 @@ export interface TraceEventPayloadByNameV2 extends ConnectionTracePayloads {
         transition: 'discovery_scheduling'
         operation_id: string
         transfer_job_id: string
-        queue: 'generations' | 'zip_members'
+        queue: 'generations'
         decision: 'waiting' | 'resumed' | 'cancelled' | 'complete'
         pending_items: string
         metadata_bytes: string
@@ -631,10 +616,7 @@ export interface TraceEventPayloadByNameV2 extends ConnectionTracePayloads {
     lifecycle_generation?: string
     cleanup_kind?: 'published_metadata'
   }>
-  readonly direct_zip_milestone: DirectZipMilestonePayloadV1
   readonly browser_delivery: BrowserDeliveryPayloadV1
-  readonly direct_zip_coordination: DirectZipCoordinationPayloadV1
-  readonly direct_zip_member_rollback: DirectZipMemberRollbackPayloadV1
   readonly retained_inventory: RetainedInventoryPayloadV1
   readonly retained_action: RetainedActionPayloadV1
   readonly incident_marker: Readonly<{

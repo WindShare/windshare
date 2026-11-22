@@ -19,19 +19,18 @@ export function presentSavingActions(input: SavingRequest, language: Language = 
   if (offers === null || offers.kind !== 'artifact-actions') return unavailable(input, language)
   const choices = uniqueChoices([
     offers.primary, ...offers.alternatives,
-    ...(offers.zip === null ? [] : [offers.zip.primary, ...(offers.zip.secondary === null ? [] : [offers.zip.secondary])]),
+    ...(offers.zip === null ? [] : [offers.zip]),
   ])
   const primaryOffer = choices.find(choice => choice.choice.artifactKind === 'original-file') ??
     choices.find(choice => choice.choice.artifactKind === 'directory-tree') ??
-    offers.zip?.primary ?? offers.primary
+    offers.zip ?? offers.primary
   const disabledReason = presentReceiveReason(input.blockedBy ?? null, language)
   const primary = savingChoice(primaryOffer, disabledReason, language, input.actionLabel)
   const alternatives = groupOutcomes(choices, offers, disabledReason, language)
   const totalChoiceCount = alternatives.reduce((count, group) => count + 1 + group.alternatives.length, 0)
-  let reason: string = offers.zip?.recommendation.reason ?? 'eligible-route'
+  let reason = 'eligible-route'
   if (primary.outcome === 'original-file') reason = 'original-file-default'
   if (primary.outcome === 'folder') reason = 'hierarchy-preserving-default'
-  const recommendation = zipRecommendation(primary, offers.zip, language)
   return Object.freeze({
     primary,
     alternatives,
@@ -39,19 +38,9 @@ export function presentSavingActions(input: SavingRequest, language: Language = 
     disabledReason,
     retry: false,
     desktopGuidance: null,
-    recommendation,
+    recommendation: null,
     transition: transition(offers, primary, reason, input.blockedBy),
   })
-}
-
-function zipRecommendation(primary: SavingChoice, zip: Extract<ArtifactOffers, { kind: 'artifact-actions' }>['zip'], language: Language): string | null {
-  const t = receiverCopy[language].saving
-  if (primary.outcome !== 'zip' || zip === null) return null
-  if (zip.recommendation.reason === 'workspace-within-discovered-budget') {
-    return t.discovering
-  }
-  return zip.recommendation.kind === 'no-recommendation' && zip.recommendation.reason !== 'only-one-route-available'
-    ? t.otherZip : null
 }
 
 function groupOutcomes(
@@ -64,7 +53,7 @@ function groupOutcomes(
   for (const kind of ['original-file', 'folder', 'zip'] as const) {
     const candidates = choices.filter(choice => outcome(choice) === kind)
     if (candidates.length === 0) continue
-    const primary = kind === 'zip' ? offers.zip?.primary ?? candidates[0]! : candidates[0]!
+    const primary = kind === 'zip' ? offers.zip ?? candidates[0]! : candidates[0]!
     // Only materially different saving processes stay visible within one result.
     const seen = new Set([consequenceIdentity(primary)])
     const alternatives = candidates.filter(candidate => {
@@ -116,7 +105,6 @@ function choiceLabel(offered: OfferedArtifactChoice, language: Language): string
     case 'folder':
       return t.saveFolder
     case 'zip':
-      if (offered.route.kind === 'direct-resumable-zip') return t.saveZipFolder
       return offered.route.kind === 'workspace-then-publish' ? t.downloadZip : t.quickZip
   }
 }
@@ -153,15 +141,6 @@ function routeCopy(
               t.resumeSpace,
             ]
           : [t.waitCheckpoint],
-      }
-    case 'direct-resumable-zip':
-      return {
-        summary: t.directZipSummary,
-        badges: [t.singleZip, t.resumable, t.lessStorage],
-        notes: [
-          t.zipVerified,
-          t.zipPause,
-        ],
       }
     case 'workspace-then-publish':
       if (kind === 'zip') {

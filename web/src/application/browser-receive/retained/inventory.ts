@@ -46,7 +46,6 @@ import {
   type BrowserReceiveWindow,
 } from '../../../output/browser/environment'
 import { unavailableRoute } from '../route-contract'
-import type { BrowserDirectZipCompositionPort } from '../direct-zip'
 import { bindRuntimeOutputFailures, diagnosticsFor } from './diagnostics'
 import {
   detachRuntimeAfterFailure,
@@ -92,18 +91,9 @@ type WorkspaceReceiveContinuation = Extract<
   AuthorityOwnedReceiveOperationContinuation,
   { readonly kind: 'workspace-receive' | 'workspace-start' }
 >
-type DirectZipReceiveContinuation = Extract<
-  AuthorityOwnedReceiveOperationContinuation,
-  { readonly kind: 'direct-zip' }
->
-type DirectZipRetainedCleanupContinuation = Extract<
-  AuthorityOwnedReceiveOperationContinuation,
-  { readonly kind: 'direct-zip-retained-cleanup' }
->
 type ReceiveContinuation =
   | DirectTreeReceiveContinuation
   | WorkspaceReceiveContinuation
-  | DirectZipReceiveContinuation
 type WorkspacePackageContinuation = Extract<
   AuthorityOwnedReceiveOperationContinuation,
   { readonly kind: 'workspace-package' }
@@ -154,7 +144,6 @@ export interface BrowserRetainedCompositionOptions {
     CompatibleNameLedger,
     'readRepairSummary' | 'close'
   >>
-  readonly directZip?: BrowserDirectZipCompositionPort
 }
 
 export async function readBrowserCompatibleNameRepairSummary(
@@ -200,10 +189,9 @@ export async function listBrowserRetainedOperations(
   }
   try {
     signal.throwIfAborted()
-    await dispatchDirectZipBootstrapCandidates(source, options.directZip, signal)
     const hasMutationAuthority = options.resumeMutations !== undefined
     const authority = new ReceiveOperationResumeAuthority<AuthorityOwnedReceiveOperationMutationResult>({
-      source: sourceWithoutBootstrapCandidates(source),
+      source,
       mutations: options.resumeMutations ?? READ_ONLY_RESUME_MUTATIONS,
     })
     const inventory = await authority.listResumeState()
@@ -228,7 +216,6 @@ export async function listBrowserRetainedOperations(
         const presentation = retainedOperationAuthority(
           descriptor.continuation,
           hasMutationAuthority,
-          options.directZip !== undefined,
           reference.recoverySummary !== undefined,
         )
         const routeActions = options.resumeMutations?.forget !== undefined &&
@@ -396,24 +383,14 @@ async function performOrdinaryRetainedAction(
     failures,
   )
   if (dispatch.kind === 'completed') return dispatch
-  const { continuation, directZipAction } = dispatch
+  const { continuation } = dispatch
   const executor = options.continuationExecutor ??
     (await import('./continuation')).browserRetainedContinuationExecutor(
       windowPort,
       options.onTrace,
       options.outputTrace,
       options.localOutputFailures,
-      options.directZip,
     )
-  if (continuation.kind === 'direct-zip-retained-cleanup') {
-    return deleteRetainedDirectZip(options.directZip, continuation, signal, failures)
-  }
-  if (directZipAction && action === 'delete') {
-    if (continuation.kind !== 'direct-zip') {
-      return withFailedRetainedClose(continuation.operation, continuationMismatch())
-    }
-    return deleteRetainedDirectZip(options.directZip, continuation, signal, failures)
-  }
   switch (continuation.kind) {
     case 'workspace-progressive-zip-partial':
       if (action === 'save-partial' && partialDestination !== undefined) {
@@ -460,8 +437,7 @@ async function performOrdinaryRetainedAction(
     case 'direct-tree-receive':
     case 'workspace-start':
     case 'workspace-receive':
-    case 'direct-zip':
-      return continueRetainedReceive(executor, continuation, operation.continuation, action, signal, failures)
+      return continueRetainedReceive(executor, continuation, action, signal, failures)
     case 'workspace-package':
       return withRetainedOperationClose(continuation.operation, async () => {
         if (action !== 'continue') throw continuationMismatch()
@@ -496,27 +472,9 @@ function browserFolderStorageAction(action: RetainedReceiveAction) {
   return 'discard-staging' as const
 }
 
-function deleteRetainedDirectZip(
-  directZip: BrowserDirectZipCompositionPort | undefined,
-  continuation: DirectZipReceiveContinuation | DirectZipRetainedCleanupContinuation,
-  signal: AbortSignal,
-  failures?: OutputFailureSinks,
-): Promise<RetainedReceiveActionResult> {
-  return withRetainedOperationClose(continuation.operation, async () => {
-    if (directZip === undefined) throw unavailableRoute()
-    signal.throwIfAborted()
-    await (failures === undefined
-      ? directZip.runtime.deleteRetained(continuation.operation, signal)
-      : directZip.runtime.deleteRetained(continuation.operation, signal, failures))
-    signal.throwIfAborted()
-    return Object.freeze({ kind: 'completed' as const })
-  })
-}
-
 async function continueRetainedReceive(
   executor: BrowserRetainedContinuationExecutor,
   continuation: ReceiveContinuation,
-  sourceContinuation: RetainedReceiveOperation['continuation'],
   action: RetainedReceiveAction,
   signal: AbortSignal,
   failures?: OutputFailureSinks,
@@ -540,71 +498,10 @@ async function continueRetainedReceive(
   }
   try {
     signal.throwIfAborted()
-    if (continuation.kind === 'direct-zip' &&
-        (runtime.lifecycle.kind === 'published' || action === 'continue' &&
-          sourceContinuation === 'verify-direct-zip-completion')) {
-      // Verification can retire an incomplete final candidate. Release local
-      // authority so the refreshed inventory can offer source-backed continuation.
-      await runtime.detach()
-      return Object.freeze({ kind: 'completed' })
-    }
     return Object.freeze({ kind: 'receive-continuation', runtime })
   } catch (error) {
     return detachRuntimeAfterFailure(runtime, error)
   }
-}
-
-async function dispatchDirectZipBootstrapCandidates(
-  source: ReceiveOperationResumeSource,
-  directZip: BrowserDirectZipCompositionPort | undefined,
-  signal: AbortSignal,
-): Promise<void> {
-  const candidates = source.listDirectZipBootstrapCandidates === undefined
-    ? []
-    : await source.listDirectZipBootstrapCandidates()
-  if (candidates.length !== 0 && directZip === undefined) {
-    throw new DOMException(
-      'Retained Direct ZIP bootstrap effects require their exact recovery authority',
-      'NotSupportedError',
-    )
-  }
-  for (const candidate of candidates) {
-    signal.throwIfAborted()
-    await directZip!.runtime.dispatchBootstrapCandidate(candidate, signal)
-  }
-}
-
-function sourceWithoutBootstrapCandidates(
-  source: ReceiveOperationResumeSource,
-): ReceiveOperationResumeSource {
-  return Object.freeze({
-    listDirectZipBootstrapCandidates: () => Promise.resolve(Object.freeze([])),
-    listLifecycleStates: () => source.listLifecycleStates(),
-    ...(source.readOperationIdentity === undefined ? {} : {
-      readOperationIdentity: (lifecycle: Parameters<NonNullable<ReceiveOperationResumeSource['readOperationIdentity']>>[0]) =>
-        source.readOperationIdentity!(lifecycle),
-    }),
-    ...(source.readSourceRevisionFailures === undefined ? {} : {
-      readSourceRevisionFailures: (lifecycle: Parameters<NonNullable<ReceiveOperationResumeSource['readSourceRevisionFailures']>>[0]) =>
-        source.readSourceRevisionFailures!(lifecycle),
-    }),
-    ...(source.readProgressiveRequirement === undefined ? {} : {
-      readProgressiveRequirement: (lifecycle: Parameters<NonNullable<ReceiveOperationResumeSource['readProgressiveRequirement']>>[0]) =>
-        source.readProgressiveRequirement!(lifecycle),
-    }),
-    ...(source.readDirectZipRequirement === undefined ? {} : {
-      readDirectZipRequirement: (lifecycle: Parameters<NonNullable<ReceiveOperationResumeSource['readDirectZipRequirement']>>[0]) =>
-        source.readDirectZipRequirement!(lifecycle),
-    }),
-    ...(source.isCleanupOnly === undefined ? {} : {
-      isCleanupOnly: (operationId: string) => source.isCleanupOnly!(operationId),
-    }),
-    ...(source.readRecoverySummary === undefined
-      ? {}
-      : { readRecoverySummary: (lifecycle: Parameters<NonNullable<
-          ReceiveOperationResumeSource['readRecoverySummary']
-        >>[0]) => source.readRecoverySummary!(lifecycle) }),
-  })
 }
 
 async function repairWorkspaceInventory(

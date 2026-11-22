@@ -24,7 +24,6 @@ export const admission = {
   receiverBusy: 'Another download is using the receiver. Pause or finish it before continuing this task.',
   outputBusy: 'Another download is using the output. Pause or finish it before continuing this task.',
   noSavedAuthority: 'Saved actions are unavailable because this browser has no persisted-operation authority.',
-  noZipAuthority: 'Direct ZIP recovery authority is not installed.',
   ownershipUnknown: 'Ownership needs attention; no automatic action is safe.',
   abnormalReceive: 'The prior receive ended abnormally; use the restoration command only after confirming it will not resume.',
   zipUnavailable: 'Retained ZIP recovery is unavailable. Start a new download; the retained data has not been changed.',

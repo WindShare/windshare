@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { presentTask } from '../../src/ui/tasks'
-import { taskFixture, TASK_FIXTURES } from '../../src/ui/tasks/fixtures'
+import { taskFixture } from '../../src/ui/tasks/fixtures'
 import { EMPTY_PROGRESS } from '../../src/ui/model'
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import { storedReceiveLifecycleState, decodeStoredReceiveLifecycleState } from '../../src/output/workspace/state-codec'
@@ -36,7 +36,7 @@ describe('task progress native authority', () => {
       selectionFacts: { discovery: 'complete', discoveredFileCount: 1n, discoveredBytes: 12n * MIB },
     })
     const task = presentTask(taskFixture({
-      progress: null, directZipProgress: null, lifecycle: decodeStoredReceiveLifecycleState(record),
+      progress: null, lifecycle: decodeStoredReceiveLifecycleState(record),
     }))
     expect(task.progress?.label).toBe('3.0 MiB retained for continuation')
     expect(task.progress?.details).toContain('0 completed files retained.')
@@ -58,38 +58,6 @@ describe('task progress native authority', () => {
   it('keeps an open denominator indeterminate even with authenticated reused payload', () => {
     const task = presentTask(taskFixture({ progress: { ...resumed, discovery: 'open' } }))
     expect(task.progress).toMatchObject({ mode: 'indeterminate', percentage: null })
-  })
-
-  it('updates direct ZIP receipt between checkpoints without advancing restart-safe bytes', () => {
-    const task = presentTask(taskFixture({
-      progress: { ...resumed, materializedBytes: 60n * MIB },
-      directZipProgress: {
-        ...TASK_FIXTURES.verifying!.directZipProgress!,
-        receivedSelectedBytes: 77n * MIB,
-        writtenSelectedBytes: 60n * MIB,
-        safeResumeBytes: 32n * MIB,
-      },
-    }))
-    expect(task.progress?.percentage).toBe(77)
-    expect(task.progress?.label).toContain('77.0 MiB / 100.0 MiB received')
-    expect(task.progress?.details).toContain('60.0 MiB written or reused in the ZIP.')
-    expect(task.progress?.writtenBytes).toBe(MIB)
-    expect(task.progress?.remainingBytes).toBe(23n * MIB)
-    expect(task.progress?.details).toContain('32.0 MiB safe to resume after restart.')
-  })
-
-  it('retains saved direct ZIP progress before transfer replay rebuilds live observations', () => {
-    const task = presentTask(taskFixture({
-      progress: { ...resumed, materializedBytes: 0n },
-      directZipProgress: {
-        ...TASK_FIXTURES.verifying!.directZipProgress!,
-        receivedSelectedBytes: 64n * MIB,
-        writtenSelectedBytes: 64n * MIB,
-        safeResumeBytes: 64n * MIB,
-      },
-    }))
-    expect(task.progress?.percentage).toBe(64)
-    expect(task.progress?.details).toContain('64.0 MiB safe to resume after restart.')
   })
 
   it('shows native local finishing ahead of remote connection failure without publishing or completing a partial result', () => {

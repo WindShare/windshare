@@ -65,9 +65,6 @@ const LIFECYCLE_STATES = [
   'restart_required',
   'discarded',
   'needs_attention',
-  'authorization_required',
-  'target_verification_required',
-  'destination_space_required',
 ] as const
 
 const MAXIMUM_EXPERIENCE_TRACE_FIELD_LENGTH = 512

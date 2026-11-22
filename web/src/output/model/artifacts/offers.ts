@@ -1,34 +1,6 @@
-import type { ArtifactChoiceID, ArtifactSpec, MaterializationPlan } from '../../../transfer/intent'
+import type { ArtifactSpec, MaterializationPlan } from '../../../transfer/intent'
 import type { ProjectionEpoch, SelectionProjectionV1 } from '../../../transfer/projection/contracts'
 import type { OfferedArtifactChoice } from './choices'
-
-export type ZipRouteRecommendation =
-  | Readonly<{
-      kind: 'recommended'
-      choiceId: ArtifactChoiceID
-      reason: 'workspace-within-policy-budget' | 'workspace-within-discovered-budget' |
-        'direct-unknown-or-over-budget'
-    }>
-  | Readonly<{
-      kind: 'no-recommendation'
-      reason:
-        | 'only-one-route-available'
-        | 'no-browser-zip-route'
-        | 'discovery-incomplete'
-        | 'workspace-cost-unavailable'
-        | 'recommendation-policy-unavailable'
-    }>
-
-export interface ZipRouteGroup {
-  readonly kind: 'zip-route-group'
-  readonly primary: OfferedArtifactChoice
-  readonly secondary: OfferedArtifactChoice | null
-  readonly recommendation: ZipRouteRecommendation
-  readonly fallback: Readonly<{
-    kind: 'native-recommended' | 'none'
-    reason?: 'no-supported-browser-zip-route'
-  }>
-}
 
 export type OfferUnavailableReason =
   | 'shape-unsettled'
@@ -107,7 +79,7 @@ export interface ArtifactActionsOffer {
   readonly selectionDigest: string
   readonly primary: OfferedArtifactChoice
   readonly alternatives: readonly OfferedArtifactChoice[]
-  readonly zip: ZipRouteGroup | null
+  readonly zip: OfferedArtifactChoice | null
   readonly decision: OfferComputedDecision
 }
 

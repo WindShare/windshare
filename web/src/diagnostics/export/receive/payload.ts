@@ -9,7 +9,6 @@ export const PLAN_KINDS = [
   'direct_atomic',
   'workspace_then_publish',
   'portable_handoff',
-  'direct_resumable_zip',
 ] as const
 
 function validateRevisionReadmission(payload: UnknownRecord): void {
@@ -62,7 +61,7 @@ export function validateReceive(payload: UnknownRecord): void {
       ], [], 'discovery scheduling payload')
       canonicalIdentity(payload.operation_id, 'discovery operation ID')
       canonicalIdentity(payload.transfer_job_id, 'discovery transfer job ID')
-      member(payload.queue, ['generations', 'zip_members'], 'discovery queue')
+      member(payload.queue, ['generations'], 'discovery queue')
       member(payload.decision, ['waiting', 'resumed', 'cancelled', 'complete'], 'discovery scheduling decision')
       decimalFields(payload, ['pending_items', 'metadata_bytes', 'maximum_items', 'maximum_metadata_bytes'],
         'discovery scheduling')

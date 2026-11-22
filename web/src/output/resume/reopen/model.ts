@@ -24,11 +24,6 @@ import type {
   PersistentPausedFileRecovery,
   PersistentTreeTrace,
 } from '../../persistent-tree/contracts'
-import type {
-  DirectZipCandidateV1,
-  DirectZipCheckpointV1,
-} from '../../direct-zip/journal/model'
-import type { DirectZipJournalRepository } from '../../direct-zip/journal/repository'
 import type { PersistedReceiveRecord, ReceiveOperationV2 } from '../../workspace/records'
 import type { ReceiveOperationRepository } from '../../workspace/repository'
 import type { PlanKind, ReceiveLifecycleState } from '../../../transfer/lifecycle/state'
@@ -102,13 +97,6 @@ export interface ReopenedWorkspaceOperation extends ReopenedReceiveOperationBase
   readonly packageContinuation?: ReopenedWorkspacePackageContinuation
 }
 
-export interface ReopenedDirectZipOperation extends ReopenedReceiveOperationBase {
-  readonly kind: 'direct-zip'
-  readonly journal: DirectZipJournalRepository
-  readonly checkpoint: DirectZipCheckpointV1
-  readonly candidate?: DirectZipCandidateV1
-}
-
 export interface ReopenedProgressiveZipContinuation {
   readonly backend: import('../../origin-private/progressive-backend').OriginPrivateProgressiveZipBackend
   readonly requirement: import('../progressive-checkpoint').ProgressiveZipRecoveryRequirement
@@ -124,7 +112,6 @@ export interface ReopenedWorkspaceReceiveContinuation {
 export type ReopenedReceiveOperation =
   | ReopenedDirectTreeOperation
   | ReopenedWorkspaceOperation
-  | ReopenedDirectZipOperation
 
 export class PersistedReceiveOperationNeedsAttentionError extends DOMException {
   readonly state: Extract<ReceiveLifecycleState, { kind: 'needs-attention' }>
@@ -171,7 +158,6 @@ export interface PersistedReceiveOperationReopenAuthorityOptions {
   readonly repositoryFactory: () => Promise<ReceiveOperationRepository>
   readonly readCompatibleNameHeader?: (operationId: string) =>
     Promise<import('../../file-system-access/compatible-name/model').CompatibleNameOperationHeaderV1 | undefined>
-  readonly openDirectZipJournal?: () => Promise<DirectZipJournalRepository>
   readonly clock?: { now(): number }
   readonly leaseOptions?: LeaseOptions
   readonly acquireLease?: typeof acquireBrowserReceiveOperationLease
@@ -201,12 +187,6 @@ export interface PersistedReopenSnapshot {
 export type ReopenedReceiveTarget =
   | Readonly<{ kind: 'direct-tree'; binding: PersistedFSAOperationBinding }>
   | Readonly<{ kind: 'workspace'; namespace: OriginPrivateWorkspaceNamespace }>
-  | Readonly<{
-      kind: 'direct-zip'
-      journal: DirectZipJournalRepository
-      checkpoint: DirectZipCheckpointV1
-      candidate?: DirectZipCandidateV1
-    }>
 
 export interface ReopenResources {
   lease?: BrowserReceiveOperationLease
@@ -215,7 +195,6 @@ export interface ReopenResources {
   receiveBackend?: OriginPrivateWorkspaceBackend
   receiveBackendOpening?: Promise<OriginPrivateWorkspaceBackend>
   partialReader?: import('./partial-zip-continuation').RetainedZipPartialReader
-  directZipJournal?: DirectZipJournalRepository
   closed?: boolean
 }
 

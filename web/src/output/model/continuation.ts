@@ -1,11 +1,6 @@
 export type ReceiveOperationContinuation =
   | 'resume-start'
   | 'resume-receive'
-  | 'resume-direct-zip'
-  | 'reauthorize-direct-zip'
-  | 'verify-direct-zip-target'
-  | 'verify-direct-zip-completion'
-  | 'retry-direct-zip-space'
   | 'pending-catch-up'
   | 'restoration-available'
   | 'resume-package'

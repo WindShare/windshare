@@ -56,30 +56,6 @@ Invoke-Step 'Pinned Pion source and patch reproduction' { go run ./scripts/ci/_p
 Invoke-Step 'Committed module graph is tidy' { go mod tidy -diff }
 Invoke-Step 'Go diagnostic session contracts' { node --test scripts/ci/gopls/*.test.mjs }
 Invoke-Step 'Cloudflare deployment lifecycle' { node --test scripts/deploy/cloudflare/*.test.mjs }
-Invoke-Step 'Browser FSA reviewed support artifact syntax' {
-    $evidenceScripts = @(Get-ChildItem 'web/scripts/browser-evidence-review/fsa-resumable-zip' -Recurse -File -Filter '*.mjs')
-    foreach ($script in $evidenceScripts) {
-        & node --check $script.FullName
-        if ($LASTEXITCODE -ne 0) { throw "node --check failed for $($script.FullName)" }
-    }
-}
-Invoke-Step 'Browser FSA reviewed support artifacts' {
-    $evidenceTests = @(Get-ChildItem 'web/scripts/browser-evidence-review/fsa-resumable-zip/tests' -File -Filter '*.test.mjs')
-    & node --test @($evidenceTests.FullName)
-    if ($LASTEXITCODE -ne 0) { throw 'Browser FSA reviewed support artifact tests failed' }
-    & node web/scripts/browser-evidence-review/fsa-resumable-zip/review.mjs | Out-Null
-}
-Invoke-Step 'Browser workspace ZIP review JavaScript syntax' {
-    $evidenceScripts = @(Get-ChildItem 'web/scripts/browser-evidence/workspace-zip-recommendation' -Recurse -File -Filter '*.mjs')
-    foreach ($script in $evidenceScripts) {
-        & node --check $script.FullName
-        if ($LASTEXITCODE -ne 0) { throw "node --check failed for $($script.FullName)" }
-    }
-}
-Invoke-Step 'Browser workspace ZIP review contracts' {
-    $evidenceTests = @(Get-ChildItem 'web/scripts/browser-evidence/workspace-zip-recommendation/tests' -File -Filter '*.test.mjs')
-    & node --test @($evidenceTests.FullName)
-}
 Invoke-Step 'Frozen Unicode Go tables' { node scripts/unicode15/generate-go.mjs --check }
 Invoke-Step 'Core production dependency boundary tests' { go test ./scripts/ci/_coreboundary }
 Invoke-Step 'Core production dependency boundary' { go run ./scripts/ci/_coreboundary }

@@ -10,27 +10,24 @@ const UNSETTLED_PERCENT_LIMIT = 99n
 export function presentTaskProgress(facts: TaskFacts, language: Language = 'en'): TaskProgressPresentation | null {
   const t = receiverCopy[language].progress
   const progress = facts.progress
-  const direct = facts.directZipProgress
-  if (progress === null && direct === null) return retainedProgress(facts, language)
-  // Direct ZIP receipt advances while output writes and durable checkpoints wait.
-  // Its logical payload already includes the retained prefix after reopening.
+  if (progress === null) return retainedProgress(facts, language)
   const materialized = materializedTaskBytes(facts)
   const files = completedFileLabel(facts, language)
   const details = progressDetails(facts, language)
   const percentage = exactPercentage(facts, materialized)
-  const exact = progress?.discovery === 'complete'
+  const exact = progress.discovery === 'complete'
   const total = exact ? ` / ${formatBytes(progress.discoveredBytes)}` : ''
   const ratio = percentage === null ? '' : ` · ${percentage}%`
   return Object.freeze({
     mode: percentage === null ? 'indeterminate' : 'determinate',
     percentage,
-    sampleIdentity: progress?.transferJobId ?? '',
-    receivedObjectBytes: progress?.receivedObjectBytes ?? 0n,
-    writtenBytes: progress?.writtenBytes ?? 0n,
+    sampleIdentity: progress.transferJobId,
+    receivedObjectBytes: progress.receivedObjectBytes,
+    writtenBytes: progress.writtenBytes,
     remainingBytes: exact && facts.completeness !== 'partial'
       ? maximum(0n, progress.discoveredBytes - materialized) : null,
     status: discoveryStatus(facts, language),
-    label: `${t.amount(formatBytes(materialized) + total, direct !== null)}${ratio}${files}`,
+    label: `${t.amount(formatBytes(materialized) + total, false)}${ratio}${files}`,
     details: Object.freeze(details),
   })
 }
@@ -40,7 +37,7 @@ function materializedTaskBytes(facts: TaskFacts): bigint {
   // A settled checkpoint supersedes the attempt's last observation, including
   // interruptions before a reopened file could report its initial coverage.
   if (state.kind === 'resumable-receive' && state.payloadKind === 'file-set') return state.retainedBytes
-  return facts.directZipProgress?.receivedSelectedBytes ?? facts.progress?.materializedBytes ?? 0n
+  return facts.progress?.materializedBytes ?? 0n
 }
 
 function completedFileLabel(facts: TaskFacts, language: Language): string {
@@ -64,16 +61,13 @@ function retainedProgress(facts: TaskFacts, language: Language): TaskProgressPre
     mode: 'indeterminate', percentage: null,
     sampleIdentity: '', receivedObjectBytes: 0n, writtenBytes: 0n, remainingBytes: null, status: null,
     label: t.retainedBytes(formatBytes(retained)),
-    details: Object.freeze(state.payloadKind === 'direct-zip'
-      ? [t.continueSpace(formatBytes(state.committedArchiveLength))]
-      : [t.completedRetained(state.completedFileCount)]),
+    details: Object.freeze([t.completedRetained(state.completedFileCount)]),
   })
 }
 
 function retainedReceiveBytes(state: Extract<TaskFacts['lifecycle'], { kind: 'resumable-receive' }>): bigint {
   switch (state.payloadKind) {
     case 'file-set': return state.retainedBytes
-    case 'direct-zip': return state.safeSelectedPayloadBytes
     case 'workspace-archive': return state.completedBytes
   }
 }
@@ -118,7 +112,6 @@ function maximum(left: bigint, right: bigint): bigint { return left > right ? le
 function progressDetails(facts: TaskFacts, language: Language): string[] {
   const t = receiverCopy[language].progress
   const progress = facts.progress
-  const direct = facts.directZipProgress
   const details: string[] = []
   if (progress !== null) {
     details.push(progress.discovery === 'complete'
@@ -128,13 +121,7 @@ function progressDetails(facts: TaskFacts, language: Language): string[] {
     details.push(t.newBytes(formatBytes(progress.writtenBytes)))
     if (progress.discovery === 'failed') details.push(t.failedDirectories(progress.failedDirectories))
   }
-  if (direct !== null) {
-    details.push(t.zipWritten(formatBytes(direct.writtenSelectedBytes)))
-    details.push(t.resumeBytes(formatBytes(direct.safeResumeBytes)))
-    if (direct.resumeTemporarySpaceUpperBound !== undefined) {
-      details.push(t.resumeSpace(formatBytes(direct.resumeTemporarySpaceUpperBound)))
-    }
-  } else if (facts.browserDelivery != null) {
+  if (facts.browserDelivery != null) {
     details.push(...browserDeliveryDetails(facts.browserDelivery, facts.lifecycle, language))
   } else {
     details.push(t.receivedHint)

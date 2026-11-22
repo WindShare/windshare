@@ -35,9 +35,6 @@ export const LIFECYCLE_CONTEXT_STATES = Object.freeze([
   'restart-required',
   'discarded',
   'needs-attention',
-  'authorization-required',
-  'target-verification-required',
-  'destination-space-required',
 ] as const)
 
 export type LifecycleContextState =
@@ -56,7 +53,6 @@ export const OUTPUT_PLAN_KINDS = Object.freeze([
   'direct-tree',
   'workspace-then-publish',
   'portable-handoff',
-  'direct-resumable-zip',
 ] as const)
 
 export type OutputPlanKind = (typeof OUTPUT_PLAN_KINDS)[number]
@@ -145,9 +141,6 @@ export interface DiagnosticContextV1 {
       | 'restart_required'
       | 'discarded'
       | 'needs_attention'
-      | 'authorization_required'
-      | 'target_verification_required'
-      | 'destination_space_required'
   }>
   readonly progress?: Readonly<{
     generation: string
@@ -173,7 +166,6 @@ export interface DiagnosticContextV1 {
       | 'direct_atomic'
       | 'workspace_then_publish'
       | 'portable_handoff'
-      | 'direct_resumable_zip'
   }>
   readonly protocol?: Readonly<{
     generation: string

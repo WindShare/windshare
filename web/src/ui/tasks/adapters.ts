@@ -47,7 +47,6 @@ export function activeTaskFacts(input: Readonly<{
     publication: publicationFromLifecycle(state),
     progress,
     browserDelivery: output.browserFolderProgress?.summary ?? null,
-    directZipProgress: output.directZipProgress,
     fidelity: lifecycle?.compatibleNameRepair ?? null,
     details: Object.freeze(details),
     interruption: output.receiveInterruption?.operation ?? null,
@@ -90,7 +89,6 @@ export function retainedTaskFacts(
     publication: publicationFromLifecycle(operation.lifecycle),
     progress: null,
     browserDelivery: operation.browserDelivery ?? null,
-    directZipProgress: null,
     fidelity: operation.repairSummary === undefined ? null : presentCompatibleNameRepair({
       state: operation.lifecycle, summary: operation.repairSummary, context: 'retained-operation',
     }, language),

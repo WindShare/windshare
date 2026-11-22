@@ -519,8 +519,7 @@ describe('peer recovery terminal trace', () => {
 
 describe('retained receive trace projection', () => {
   it.each([
-    'resume-receive', 'resume-direct-zip', 'reauthorize-direct-zip',
-    'verify-direct-zip-target', 'retry-direct-zip-space', 'verify-direct-zip-completion',
+    'resume-receive',
     'pending-catch-up', 'restoration-available', 'history-only', 'resume-package',
     'resume-local-finalization', 'save-artifact', 'retry-download',
     'cleanup-incompatible', 'retry-cleanup', 'needs-attention',
@@ -538,19 +537,6 @@ describe('retained receive trace projection', () => {
       expect(projected.eventName).toBe('retained_action')
       expect(() => validateTraceEventPayloadV2(projected.eventName, projected.payload)).not.toThrow()
     }
-  })
-
-  it('distinguishes verification of a completed ZIP from receiving more content', () => {
-    const projected = projectReceiverTraceEvent({
-      name: 'receive.inventory.action.started',
-      retained_action: 'continue',
-      continuation: 'verify-direct-zip-completion',
-    })
-    expect(projected.payload).toEqual({
-      transition: 'started',
-      action: 'continue',
-      continuation: 'verify_direct_zip_completion',
-    })
   })
 
   it('keeps retained-inventory failure events closed at the typed adapter', () => {

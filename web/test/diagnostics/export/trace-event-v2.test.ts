@@ -17,8 +17,6 @@ import {
 } from '../../../src/diagnostics/export/trace-event-v2'
 import type { IncidentLink } from '../../../src/diagnostics/incident/reporter'
 import { BoundedTraceRecorder } from '../../../src/diagnostics/trace/recorder'
-import { emitOutputTrace, outputTraceEvent } from '../../../src/output/diagnostics'
-import { createOutputTraceSource } from '../../../src/application/diagnostics/receive-trace'
 import type {
   TraceDomainEventNameV2,
   TraceEventObservationV2,
@@ -531,49 +529,6 @@ const VALID_OBSERVATIONS: readonly TraceEventObservationV2[] = [
   observation('reopen', { backend: 'origin_private', transition: 'receive_recovered',
     operation_id: OPERATION_ID, lifecycle_generation: '3', checkpoint_count: '1', verified_bytes: '3' }),
   observation('cleanup', { backend: 'portable', transition: 'retryable_failure' }),
-  observation('direct_zip_milestone', {
-    operation_id: OPERATION_ID,
-    session_id: SESSION_ID,
-    plan_kind: 'direct_resumable_zip',
-    milestone: 'checkpoint_promoted',
-    checkpoint_phase: 'between_members',
-    epoch_offset_class: 'member_descriptor',
-    prefix_copy_decision: 'admit',
-    peak_space_decision: 'within_budget',
-    permission_decision: 'granted',
-    identity_decision: 'verified',
-    space_decision: 'admitted',
-    cleanup_decision: 'not_requested',
-    native_error_class: 'quota_exceeded',
-  }),
-  observation('direct_zip_coordination', {
-    operation_id: OPERATION_ID, scope: 'parent_access', transition: 'waiting',
-  }),
-  observation('direct_zip_coordination', {
-    operation_id: OPERATION_ID, scope: 'namespace', transition: 'acquired',
-    lock_name: 'windshare/fsa-namespace/v1:AQAAAAAAAAAAAAAAAAAAAA',
-  }),
-  observation('direct_zip_coordination', {
-    operation_id: OPERATION_ID, scope: 'namespace', transition: 'released',
-  }),
-  observation('direct_zip_coordination', {
-    operation_id: OPERATION_ID, scope: 'target', transition: 'failed',
-    lock_name: 'windshare/fsa-target/v1:AgAAAAAAAAAAAAAAAAAAAA',
-    native_error_name: 'InvalidStateError',
-  }),
-  ...(['requested', 'persisted', 'recovering', 'completed', 'failed'] as const).map(phase =>
-    observation('direct_zip_member_rollback', {
-      operation_id: OPERATION_ID,
-      session_id: SESSION_ID,
-      candidate_id: PATH_ID,
-      phase,
-      old_committed_length: '512',
-      new_committed_length: '128',
-      retained_selected_payload_bytes: '32',
-      member_ordinal: '1',
-      ...(phase === 'recovering' ? {} : { recovery_reason: 'metadata_unavailable' as const }),
-      ...(phase === 'failed' ? { native_error_name: 'DataError' } : {}),
-    })),
   observation('retained_inventory', { transition: 'load_started' }),
   observation('retained_inventory', { transition: 'load_completed', operation_count: '3' }),
   observation('retained_action', {
@@ -767,11 +722,6 @@ describe('closed TraceEventObservationV2 boundary', () => {
   it('rejects open text at closed-vocabulary string and array-item positions', () => {
     for (const candidate of VALID_OBSERVATIONS) {
       for (const path of stringLeafPaths(candidate)) {
-        if (path[0] === 'payload' &&
-            ((candidate.eventName === 'direct_zip_coordination' &&
-              (path[1] === 'lock_name' || path[1] === 'native_error_name')) ||
-             (candidate.eventName === 'direct_zip_member_rollback' &&
-              path[1] === 'native_error_name'))) continue
         const mutated = clone(candidate)
         setAtPath(mutated, path, PRIVATE_TEXT)
         expectRejected(mutated)
@@ -785,51 +735,6 @@ describe('closed TraceEventObservationV2 boundary', () => {
     const unknownPlan = clone(event('authority_transition', 'offers_computed'))
     ;(unknownPlan.payload.offered_plan_kinds as unknown[])[0] = PRIVATE_TEXT
     expectRejected(unknownPlan)
-  })
-
-  it('rejects ZIP rollback growth and bounds optional native error names', () => {
-    const candidate = VALID_OBSERVATIONS.find(event =>
-      event.eventName === 'direct_zip_member_rollback' && event.payload.phase === 'failed')!
-    const growth = clone(candidate)
-    growth.payload.new_committed_length = '513'
-    expectRejected(growth)
-    for (const value of ['', false, 'x'.repeat(129)]) {
-      const invalid = clone(candidate)
-      invalid.payload.native_error_name = value
-      expectRejected(invalid)
-    }
-    const bounded = clone(candidate)
-    bounded.payload.native_error_name = 'x'.repeat(128)
-    expect(() => snapshotTraceEventObservationV2(bounded as TraceEventObservationV2)).not.toThrow()
-  })
-
-  it('retains ZIP coordination identity through the output trace adapter and bounds optional names', () => {
-    const events: TraceEventObservationV2[] = []
-    const source = createOutputTraceSource({ current: event => events.push(event) })
-    const payload = {
-      operation_id: OPERATION_ID,
-      scope: 'target' as const,
-      transition: 'failed' as const,
-      lock_name: 'windshare/fsa-target/v1:AgAAAAAAAAAAAAAAAAAAAA',
-      native_error_name: 'InvalidStateError',
-    }
-    emitOutputTrace(source, () => outputTraceEvent('direct_zip_coordination', payload))
-    expect(events).toEqual([{ eventName: 'direct_zip_coordination', payload }])
-    const snapshot = snapshotTraceEventObservationV2(events[0]!)
-    expect(isDeeplyFrozen(snapshot)).toBe(true)
-
-    for (const [key, maximumLength] of [
-      ['lock_name', 512], ['native_error_name', 128],
-    ] as const) {
-      for (const value of ['', false, 'x'.repeat(maximumLength + 1)]) {
-        const invalid = clone(events[0])
-        invalid.payload[key] = value
-        expectRejected(invalid)
-      }
-      const bounded = clone(events[0])
-      bounded.payload[key] = 'x'.repeat(maximumLength)
-      expect(() => snapshotTraceEventObservationV2(bounded as TraceEventObservationV2)).not.toThrow()
-    }
   })
 
   it('keeps activation identities canonical and distinct from protocol correlation', () => {

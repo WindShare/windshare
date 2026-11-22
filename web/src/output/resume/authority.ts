@@ -5,7 +5,6 @@ import type {
 } from '../../transfer/lifecycle/recovery-summary'
 import type { PersistentPausedFileRecovery } from '../persistent-tree/contracts'
 import type { ReceiveLifecycleState } from '../../transfer/lifecycle/state'
-import type { DirectZipBootstrapResumeDescriptorV1 } from '../direct-zip/journal/repository'
 import {
   assertReceiveOperationCanContinue,
   receiveOperationResumeDescriptor,
@@ -13,7 +12,6 @@ import {
 } from './descriptor'
 
 export interface ReceiveOperationResumeSource {
-  listDirectZipBootstrapCandidates?(): Promise<readonly DirectZipBootstrapResumeDescriptorV1[]>
   listLifecycleStates(): Promise<readonly ReceiveLifecycleState[]>
   readOperationIdentity?(lifecycle: ReceiveLifecycleState): Promise<Readonly<{
     display?: import('../model/operation-display').ReceiveOperationDisplay
@@ -21,7 +19,6 @@ export interface ReceiveOperationResumeSource {
     selectionDigest?: string
   }> | undefined>
   readProgressiveRequirement?(lifecycle: ReceiveLifecycleState): Promise<import('./progressive-checkpoint').ProgressiveZipRecoveryRequirement | undefined>
-  readDirectZipRequirement?(lifecycle: ReceiveLifecycleState): Promise<import('./direct-zip-checkpoint').DirectZipRecoveryRequirement | undefined>
   readSourceRevisionFailures?(lifecycle: ReceiveLifecycleState): Promise<import('../../transfer/lifecycle/source-revision').SourceRevisionFailures | undefined>
   isCleanupOnly?(operationId: string): Promise<boolean>
   readRecoverySummary?(
@@ -106,17 +103,14 @@ export class ReceiveOperationResumeRef {
 
 export class ReceiveOperationResumeInventory {
   readonly operations: readonly ReceiveOperationResumeRef[]
-  readonly directZipBootstrapCandidates: readonly DirectZipBootstrapResumeDescriptorV1[]
   readonly #owner: ResumeReferenceOwner
 
   constructor(
     owner: ResumeReferenceOwner,
     operations: readonly ReceiveOperationResumeRef[],
-    directZipBootstrapCandidates: readonly DirectZipBootstrapResumeDescriptorV1[] = [],
   ) {
     this.#owner = owner
     this.operations = Object.freeze([...operations])
-    this.directZipBootstrapCandidates = Object.freeze([...directZipBootstrapCandidates])
   }
 
   close(): void {
@@ -138,10 +132,6 @@ export class ReceiveOperationResumeAuthority<TResult = unknown> {
   }
 
   async listResumeState(): Promise<ReceiveOperationResumeInventory> {
-    // Pre-intent filesystem effects must be surfaced before intent-backed retained work.
-    const directZipBootstrapCandidates = this.#source.listDirectZipBootstrapCandidates === undefined
-      ? []
-      : await this.#source.listDirectZipBootstrapCandidates()
     const lifecycles = await this.#source.listLifecycleStates()
     const owner: ResumeReferenceOwner = { open: true }
     const references: ReceiveOperationResumeRef[] = []
@@ -165,7 +155,7 @@ export class ReceiveOperationResumeAuthority<TResult = unknown> {
       (right.descriptor.display?.createdAtMilliseconds ?? 0) -
         (left.descriptor.display?.createdAtMilliseconds ?? 0) ||
       left.descriptor.operationId.localeCompare(right.descriptor.operationId))
-    return new ReceiveOperationResumeInventory(owner, references, directZipBootstrapCandidates)
+    return new ReceiveOperationResumeInventory(owner, references)
   }
 
   async #projectDescriptor(
@@ -184,26 +174,11 @@ export class ReceiveOperationResumeAuthority<TResult = unknown> {
     else if (nativeRequirement === 'local-finalization') {
       descriptor = Object.freeze({ ...projected, continuation: 'resume-local-finalization' as const })
     }
-    if (!cleanupOnly) descriptor = await this.#projectDirectZipRequirement(descriptor, lifecycle)
     if (!cleanupOnly && descriptor.recoveryUnavailable === undefined) {
       const sourceRevisionFailures = await this.#source.readSourceRevisionFailures?.(lifecycle)
       if (sourceRevisionFailures !== undefined) descriptor = Object.freeze({ ...descriptor, sourceRevisionFailures })
     }
     return descriptor
-  }
-
-  async #projectDirectZipRequirement(
-    descriptor: ReceiveOperationResumeDescriptor,
-    lifecycle: ReceiveLifecycleState,
-  ): Promise<ReceiveOperationResumeDescriptor> {
-    const requirement = await this.#source.readDirectZipRequirement?.(lifecycle)
-    if (requirement === undefined) return descriptor
-    const continuations = {
-      'verify-completion': 'verify-direct-zip-completion',
-      published: 'history-only',
-      receive: 'resume-direct-zip',
-    } as const
-    return Object.freeze({ ...descriptor, continuation: continuations[requirement] })
   }
 
   async resume(

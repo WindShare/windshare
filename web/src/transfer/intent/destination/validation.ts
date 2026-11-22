@@ -56,18 +56,6 @@ export function browserHandoffGuarantees(): GuaranteeSet {
   })
 }
 
-export function fsaOwnedFileGuarantees(): GuaranteeSet & Readonly<{ profile: 'fsa-owned-file' }> {
-  return guaranteeSet({
-    profile: 'fsa-owned-file',
-    nameChooser: 'application-chosen',
-    replacement: 'coordinated-no-replace',
-    delivery: 'managed-target',
-    targetVisibility: 'operation-owned-incomplete-file-visible',
-    artifactAvailability: 'verified-complete-only',
-    cleanupContract: 'ownership-proof-required',
-  }) as GuaranteeSet & Readonly<{ profile: 'fsa-owned-file' }>
-}
-
 function guaranteeSet(value: GuaranteeSet): GuaranteeSet {
   return Object.freeze({ ...value })
 }
@@ -86,9 +74,6 @@ export function snapshotGuarantees(input: GuaranteeSet): GuaranteeSet {
       break
     case 'browser-handoff':
       expected = browserHandoffGuarantees()
-      break
-    case 'fsa-owned-file':
-      expected = fsaOwnedFileGuarantees()
       break
     default:
       throw new TypeError('guarantee profile is invalid')

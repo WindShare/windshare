@@ -9,7 +9,6 @@ const PAUSE_AND_STOP = Object.freeze(['pause', 'stop'] as const)
 export function receiveInterruptionControls(plan: PlanKind): readonly ReceiveInterruption[] {
   switch (plan) {
     case 'direct-tree': return PAUSE_AND_STOP
-    case 'direct-resumable-zip':
     case 'workspace-then-publish': return PAUSE
     case 'portable-handoff': return STOP
   }
@@ -48,9 +47,6 @@ export function receiveStorageSettlement(state: ReceiveLifecycleState): ReceiveS
     case 'resumable-start':
     case 'resumable-receive':
     case 'resumable-package':
-    case 'authorization-required':
-    case 'target-verification-required':
-    case 'destination-space-required':
       return { task: 'continuable', retention: 'continuation', cleanup: 'settled' }
     case 'materialization-sealed':
     case 'artifact-sealed':
@@ -63,7 +59,7 @@ export function receiveStorageSettlement(state: ReceiveLifecycleState): ReceiveS
     case 'partial-directory':
       return { task: 'ended', retention: 'complete-results', cleanup: 'settled' }
     case 'restart-required':
-      return state.reason === 'portable-aborted' || state.reason === 'target-deleted'
+      return state.reason === 'portable-aborted'
         ? { task: 'ended', retention: 'none', cleanup: 'settled' }
         : { task: 'ended', retention: 'reconcile', cleanup: 'retryable' }
     case 'discarded':
@@ -93,7 +89,5 @@ export function receiveLifecycleStorageEvidence(state: ReceiveLifecycleState): R
     ...('checkpointSetDigest' in state ? { checkpointId: state.checkpointSetDigest } : {}),
     ...(state.kind === 'resumable-receive' && state.payloadKind === 'workspace-archive'
       ? { artifactId: state.objectId, checkpointId: state.objectId, checkpointGeneration: state.checkpointGeneration } : {}),
-    ...(state.kind === 'resumable-receive' && state.payloadKind === 'direct-zip'
-      ? { checkpointId: state.directZipCheckpointDigest } : {}),
   })
 }

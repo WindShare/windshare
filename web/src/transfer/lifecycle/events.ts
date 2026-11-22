@@ -1,13 +1,11 @@
 import type {
   DirectoryFailureReason,
-  DirectZipCheckpointPhase,
   ExternalAttemptReason,
   PackageFailureReason,
   PlanKind,
   PreparationAdmissionReason,
   ReceiveLifecycleState,
   RecoverySelectionFacts,
-  RecoveryGateKind,
   RestartRequiredReason,
 } from './state'
 
@@ -36,19 +34,6 @@ export type LifecycleEvent =
       selectionFacts: RecoverySelectionFacts
       partialReceiptDigest?: string
     }>
-  | Readonly<LifecycleEventAuthority & {
-      kind: 'direct-zip-pause-verified'
-      checkpointDigest: string
-      safeSelectedPayloadBytes: bigint
-      committedArchiveLength: bigint
-      checkpointPhase: DirectZipCheckpointPhase
-    }>
-  | Readonly<LifecycleEventAuthority & {
-      kind: 'direct-zip-recovery-gated'
-      gateKind: RecoveryGateKind
-      recoveryGateDigest: string
-    }>
-  | Readonly<LifecycleEventAuthority & { kind: 'direct-zip-recovery-resumed' }>
   | Readonly<LifecycleEventAuthority & {
       kind: 'pause-verified'
       stage: 'package'

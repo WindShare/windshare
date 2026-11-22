@@ -140,9 +140,6 @@ export type LifecycleStateV1 =
   | 'restart_required'
   | 'discarded'
   | 'needs_attention'
-  | 'authorization_required'
-  | 'target_verification_required'
-  | 'destination_space_required'
 
 export type LifecycleReasonV1 =
   | 'paused'
@@ -154,7 +151,6 @@ export type LifecycleReasonV1 =
   | 'source_revision_changed'
   | 'preparation_invalidated'
   | 'content_session_ended'
-  | 'target_deleted'
   | 'target_ownership_unknown'
   | 'publication_unknown'
   | 'cleanup_unknown'

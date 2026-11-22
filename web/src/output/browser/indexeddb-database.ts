@@ -1,4 +1,4 @@
-export const OUTPUT_DATABASE_VERSION = 14
+export const OUTPUT_DATABASE_VERSION = 15
 export const CHECKPOINT_DATABASE_VERSION = OUTPUT_DATABASE_VERSION
 export const DEFAULT_OUTPUT_DATABASE_NAME = 'windshare-output-checkpoints'
 export const DEFAULT_OUTPUT_CHECKPOINT_DATABASE_NAME = DEFAULT_OUTPUT_DATABASE_NAME
@@ -13,11 +13,6 @@ export const INDEXEDDB_RECEIVE_HANDLE_STORE = 'receive-operation-v2-handles'
 export const INDEXEDDB_RECEIVE_LEASE_STORE = 'receive-operation-v2-leases'
 export const INDEXEDDB_COMPATIBLE_NAME_OPERATION_STORE = 'compatible-name-v1-operations'
 export const INDEXEDDB_COMPATIBLE_NAME_MAPPING_STORE = 'compatible-name-v1-mappings'
-export const INDEXEDDB_DIRECT_ZIP_STATE_STORE = 'direct-zip-state-v1'
-export const INDEXEDDB_DIRECT_ZIP_CANDIDATE_STORE = 'direct-zip-candidates-v1'
-export const INDEXEDDB_DIRECT_ZIP_LAYOUT_PAGE_STORE = 'direct-zip-layout-pages-v1'
-export const INDEXEDDB_DIRECT_ZIP_CENTRAL_PAGE_STORE = 'direct-zip-central-pages-v1'
-export const INDEXEDDB_DIRECT_ZIP_EPOCH_PAGE_STORE = 'direct-zip-epoch-pages-v1'
 export const INDEXEDDB_BROWSER_SAVE_POLICY_STORE = 'browser-save-policy-v1'
 export const INDEXEDDB_BROWSER_DELIVERY_FILE_STORE = 'browser-file-delivery-v1'
 
@@ -28,8 +23,6 @@ export const INDEXEDDB_BY_KIND_INDEX = 'by-kind'
 export const INDEXEDDB_BY_REOPEN_KEY_INDEX = 'by-reopen-key'
 export const INDEXEDDB_BY_STATE_INDEX = 'by-state'
 export const INDEXEDDB_BY_OPERATION_COMMIT_ORDINAL_INDEX = 'by-operation-commit-ordinal'
-export const INDEXEDDB_BY_KIND_CANDIDATE_INDEX = 'by-kind-candidate'
-export const INDEXEDDB_BY_OPERATION_CHAIN_PAGE_INDEX = 'by-operation-chain-page'
 export const INDEXEDDB_BY_OPERATION_LINEAGE_INDEX = 'by-operation-lineage'
 export const INDEXEDDB_BY_OPERATION_OWNED_OBJECT_INDEX = 'by-operation-owned-object'
 export const INDEXEDDB_BY_OPERATION_RECORD_INDEX = 'by-operation-record'
@@ -100,26 +93,6 @@ export const INDEXEDDB_OUTPUT_STORE_SCHEMAS: readonly IndexedDbStoreSchema[] = O
   ]),
   storeSchema(INDEXEDDB_RECEIVE_LEASE_STORE, 'id', [
     indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),
-  ]),
-  storeSchema(INDEXEDDB_DIRECT_ZIP_STATE_STORE, 'id', [
-    indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),
-  ]),
-  storeSchema(INDEXEDDB_DIRECT_ZIP_CANDIDATE_STORE, 'id', [
-    indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),
-    indexSchema(INDEXEDDB_BY_OPERATION_KIND_INDEX, ['operationId', 'kindByte']),
-    indexSchema(INDEXEDDB_BY_KIND_CANDIDATE_INDEX, ['kindByte', 'id']),
-  ]),
-  storeSchema(INDEXEDDB_DIRECT_ZIP_LAYOUT_PAGE_STORE, 'id', [
-    indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),
-    indexSchema(INDEXEDDB_BY_OPERATION_CHAIN_PAGE_INDEX, ['operationId', 'chainId', 'pageOrdinal']),
-  ]),
-  storeSchema(INDEXEDDB_DIRECT_ZIP_CENTRAL_PAGE_STORE, 'id', [
-    indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),
-    indexSchema(INDEXEDDB_BY_OPERATION_CHAIN_PAGE_INDEX, ['operationId', 'chainId', 'pageOrdinal']),
-  ]),
-  storeSchema(INDEXEDDB_DIRECT_ZIP_EPOCH_PAGE_STORE, 'id', [
-    indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),
-    indexSchema(INDEXEDDB_BY_OPERATION_CHAIN_PAGE_INDEX, ['operationId', 'chainId', 'pageOrdinal']),
   ]),
   storeSchema(INDEXEDDB_OPFS_TASK_STORE, 'id', []),
   storeSchema(INDEXEDDB_OPFS_ENTRY_STORE, 'id', [

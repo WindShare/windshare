@@ -80,14 +80,6 @@ describe('Browser-local ArtifactChoiceIdentityV1 vectors', () => {
         'artifact choice canonical bytes',
       ))
       expect(identity.id).toBe(requiredString(expected.artifactChoiceId, 'artifact choice ID'))
-      if (identity.materializationKind === 'direct-resumable-zip') {
-        expect(vector.routeSupport).toBe('available-exact-reviewed-platform-only')
-        const policy = requiredRecord(vector.policyAvailability, 'direct ZIP policy availability')
-        expect(policy).toMatchObject({
-          directZipEpochPolicyDigest: 'cWXRxG365A-doi8JI-H2YlsavP6MppN_O9OpjACii8s',
-          reason: 'exact-reviewed-runtime-required',
-        })
-      }
     })
   }
 })
@@ -425,8 +417,7 @@ function artifactKind(value: string): ArtifactKind {
 
 function materializationKind(value: string): MaterializationKind {
   if (value !== 'direct-tree' &&
-      value !== 'workspace-then-publish' && value !== 'portable-handoff' &&
-      value !== 'direct-resumable-zip') {
+      value !== 'workspace-then-publish' && value !== 'portable-handoff') {
     throw new Error('materialization kind is invalid')
   }
   return value
@@ -434,7 +425,7 @@ function materializationKind(value: string): MaterializationKind {
 
 function guaranteeProfile(value: string): GuaranteeProfile {
   if (value !== 'native-tree' && value !== 'fsa-tree' && value !== 'managed-atomic' &&
-      value !== 'browser-handoff' && value !== 'fsa-owned-file') {
+      value !== 'browser-handoff') {
     throw new Error('guarantee profile is invalid')
   }
   return value

@@ -13,16 +13,6 @@ const DIRECT_TREE_PAUSE_STATES: ReadonlySet<ReceiveLifecycleState['kind']> = new
   'needs-attention',
 ])
 
-const DIRECT_ZIP_PAUSE_STATES: ReadonlySet<ReceiveLifecycleState['kind']> = new Set([
-  'resumable-receive',
-  'authorization-required',
-  'target-verification-required',
-  'destination-space-required',
-  'restart-required',
-  'discarded',
-  'needs-attention',
-])
-
 const WORKSPACE_PAUSE_STATES: ReadonlySet<ReceiveLifecycleState['kind']> = new Set([
   'resumable-receive',
   'source-invalidated',
@@ -102,11 +92,6 @@ export function validateCompletionLifecycle(
         throw new TypeError('partial DirectTree settlement must remain partial or resumable')
       }
       break
-    case 'direct-resumable-zip':
-      if (state.kind !== 'published') {
-        throw new TypeError('successful Direct ZIP settlement must be verified publication')
-      }
-      break
     case 'portable-handoff':
       if (state.kind !== 'download-started' || state.attemptKind !== 'portable') {
         throw new TypeError('PortableHandoff settlement can prove only portable DownloadStarted')
@@ -132,9 +117,6 @@ export function validatePauseLifecycle(
     case 'direct-tree':
       allowed = DIRECT_TREE_PAUSE_STATES
       break
-    case 'direct-resumable-zip':
-      allowed = DIRECT_ZIP_PAUSE_STATES
-      break
     case 'workspace-then-publish':
       allowed = worker.status === 'Succeeded'
         ? WORKSPACE_POST_MATERIALIZATION_PAUSE_STATES
@@ -148,10 +130,6 @@ export function validatePauseLifecycle(
   }
   if (!allowed.has(state.kind)) {
     throw new TypeError('plan pause returned a lifecycle state unavailable to that plan stage')
-  }
-  if (state.kind === 'resumable-receive' &&
-      ((intent.plan.kind === 'direct-resumable-zip') !== (state.payloadKind === 'direct-zip'))) {
-    throw new TypeError('plan pause returned a checkpoint payload owned by another plan')
   }
   return state
 }

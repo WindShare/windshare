@@ -157,18 +157,6 @@ describe('R0 scheduling, recovery, and lifecycle contract', () => {
           completion: 'prefix-visible',
         },
         {
-          artifact: 'zip-archive',
-          layout: 'result-root',
-          plan: 'direct-resumable-zip',
-          binding: 'fsa-owned-file',
-          guaranteeProfiles: ['fsa-owned-file'],
-          preparation: 'none',
-          completion: 'verified-complete-only',
-          targetVisibility: 'operation-owned-incomplete-file-visible',
-          artifactAvailability: 'verified-complete-only',
-          cleanupContract: 'ownership-proof-required',
-        },
-        {
           artifact: 'original-file',
           layout: 'single-file-proof',
           plan: 'workspace-then-publish',
@@ -269,17 +257,8 @@ describe('R0 receive recovery and lifecycle contract', () => {
     expect(lifecycle.terminalStates.map((state) => state.byte)).toEqual([14, 16, 17, 18, 20])
     expect(lifecycle.nonterminalRecoveryStates).toEqual([
       { state: 'download-started', byte: 15, plans: ['workspace-then-publish', 'portable-handoff'] },
-      { state: 'authorization-required', byte: 21 },
-      { state: 'target-verification-required', byte: 22 },
-      { state: 'destination-space-required', byte: 23 },
     ])
-    expect(lifecycle.restartReasons['target-deleted']).toBe(6)
-    expect(lifecycle.resumableReceivePayloadKinds).toEqual({ 'file-set': 1, 'direct-zip': 2, 'opfs-zip': 3 })
-    expect(lifecycle.directZipByteSemantics).toEqual({
-      receivedBytes: 'selected-source-payload-bytes-received-in-live-attempt',
-      safeResumeBytes: 'selected-source-payload-bytes-covered-by-verified-checkpoint',
-      committedArchiveLength: 'verified-target-prefix-bytes',
-    })
+    expect(lifecycle.resumableReceivePayloadKinds).toEqual({ 'file-set': 1, 'opfs-zip': 3 })
     expect(lifecycle.publishedCleanupPendingRemains).toBe('published')
     expect(lifecycle.handoffNeverMeans).toBe('published')
     expect(lifecycle.completeArtifactsExclude).toEqual(['partial-directory'])
@@ -308,59 +287,6 @@ describe('R0 receive recovery and lifecycle contract', () => {
       operationId: identity(16), receiveIntentDigest: identity(32), generation: 1n,
       attemptId: identity(16), packageDigest: identity(32),
     })).toBe(false)
-  })
-
-  it('freezes both reviewed policies without broadening exact-platform routing', () => {
-    expect(semantics.find((value) => value.name === 'direct-zip-contract-policy-v1')).toEqual({
-      name: 'direct-zip-contract-policy-v1',
-      routeSupport: 'available-exact-reviewed-platform-only',
-      processRestart: 'reviewed-exact-platform-only',
-      ownershipExtraFormat: {
-        domain: 'windshare/direct-zip-ownership-extra/v1',
-        availability: 'frozen',
-        digest: 'hnFdK_xeDeYInsyhv5i4YdU57UUcWeAGUYLTakWaZQw',
-      },
-      choiceIdentity: {
-        domain: 'windshare/artifact-choice/v1',
-        materializationByte: 5,
-        directZipArtifactChoiceId: '0dkx9vDTzvH7B7a9EUoJBOWLCWgmVwLoFH3jjRmfHFU',
-        workspaceZipArtifactChoiceId: 'vQj0Uda3oyRmvsZcz2qN0T9-f5m99Lcn0NK-9rS2_-k',
-      },
-      policies: [
-        {
-          name: 'zip-encoding-v2',
-          domain: 'windshare/zip-encoding/v2-store-data-descriptor-owned-marker',
-          availability: 'frozen',
-          digest: 'LWNj2jiL6U3tTZNaLy5txjFlDSaoUzhrjT0J44r0drc',
-        },
-        {
-          name: 'direct-zip-layout-v2',
-          domain: 'windshare/zip-layout/v2-paged-owned-marker',
-          availability: 'frozen',
-          digest: 'VSV-D1TwhzhxuCZYgx1-ZEE26oFu-mHXA4oWELOgGH4',
-        },
-        {
-          name: 'direct-zip-checkpoint-v1',
-          domain: 'windshare/direct-zip-checkpoint-policy/v1',
-          availability: 'frozen',
-        },
-        {
-          name: 'direct-zip-journal-budget-v1',
-          domain: 'windshare/direct-zip-journal-budget/v1',
-          availability: 'frozen',
-        },
-        {
-          name: 'direct-zip-epoch-v2',
-          domain: 'windshare/direct-zip-epoch-policy/v2',
-          availability: 'frozen',
-          automaticMinimumAdvanceBytes: '67108864',
-          requiredAdvance: 'max(minimum-advance,durable-archive-prefix)',
-          units: 'archive-bytes',
-          boundary: 'inclusive',
-          digest: 'cWXRxG365A-doi8JI-H2YlsavP6MppN_O9OpjACii8s',
-        },
-      ],
-    })
   })
 
   it('preserves unrelated catalog, source, and sender lifecycle contracts', () => {

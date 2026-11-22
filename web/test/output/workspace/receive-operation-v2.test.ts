@@ -4,10 +4,10 @@ import { encodeBase64Url } from '../../../src/crypto/bytes'
 import { canonicalRecord } from '../../../src/transfer/encoding/canonical'
 import {
   createDirectorySelectionResultRoot,
-  createDirectResumableZipPlan,
-  createFSAOwnedFileBinding,
   createReceiveIntent,
   createSelectionSpec,
+  createWorkspaceBinding,
+  createWorkspaceThenPublishPlan,
   createZipArchiveArtifact,
   deriveArtifactChoiceIdentity,
 } from '../../../src/transfer/intent'
@@ -22,7 +22,7 @@ import {
 
 describe('ReceiveOperation V2', () => {
   it('binds the derived choice identity and frozen pre-click ranking', async () => {
-    const receiveIntent = await directZipIntent()
+    const receiveIntent = await workspaceZipIntent()
     const choice = await deriveArtifactChoiceIdentity(receiveIntent.artifact, receiveIntent.plan)
     const operation = await createReceiveOperationV2({
       receiveIntent,
@@ -39,7 +39,7 @@ describe('ReceiveOperation V2', () => {
   })
 
   it('restores immutable display metadata without changing receive authority', async () => {
-    const receiveIntent = await directZipIntent()
+    const receiveIntent = await workspaceZipIntent()
     const choice = await deriveArtifactChoiceIdentity(receiveIntent.artifact, receiveIntent.plan)
     const display = { objectLabel: 'Reports selected', destinationLabel: 'Projects', createdAtMilliseconds: 123456 }
     const operation = await createReceiveOperationV2({ receiveIntent, preClickRanking: [choice.id], display })
@@ -83,7 +83,7 @@ describe('ReceiveOperation V2', () => {
   })
 
   it('rejects a record whose indexed V2 envelope disagrees with canonical authority', async () => {
-    const receiveIntent = await directZipIntent()
+    const receiveIntent = await workspaceZipIntent()
     const choice = await deriveArtifactChoiceIdentity(receiveIntent.artifact, receiveIntent.plan)
     const operation = await createReceiveOperationV2({
       receiveIntent,
@@ -97,7 +97,7 @@ describe('ReceiveOperation V2', () => {
   })
 })
 
-async function directZipIntent() {
+async function workspaceZipIntent() {
   const operationId = identity(16, 10)
   const selection = await createSelectionSpec({
     shareInstance: identity(16, 1),
@@ -107,20 +107,13 @@ async function directZipIntent() {
   const artifact = await createZipArchiveArtifact(
     createDirectorySelectionResultRoot(identity(16, 3), 'reports'),
   )
-  const binding = await createFSAOwnedFileBinding({
+  const workspace = await createWorkspaceBinding({
     operationId,
+    workspaceId: identity(16, 11),
     artifact,
-    stableName: `reports.windshare-${identity(16, 11)}.zip`,
-    targetRef: identity(32, 4),
-    policies: {
-      zipEncoding: identity(32, 5),
-      layout: identity(32, 6),
-      checkpoint: identity(32, 7),
-      journalBudget: identity(32, 8),
-      epoch: identity(32, 9),
-    },
+    repositoryRef: identity(32, 4),
   })
-  const plan = await createDirectResumableZipPlan(artifact, binding)
+  const plan = await createWorkspaceThenPublishPlan(artifact, workspace)
   return createReceiveIntent({ selection, artifact, plan })
 }
 

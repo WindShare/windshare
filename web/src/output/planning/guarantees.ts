@@ -5,12 +5,10 @@ import {
   DEFAULT_PORTABLE_MAXIMUM_PARTS,
   browserHandoffGuarantees,
   fsaTreeGuarantees,
-  fsaOwnedFileGuarantees,
   managedAtomicGuarantees,
   nativeTreeGuarantees,
 } from '../../transfer/intent'
 import type { GuaranteeProfile } from '../../transfer/intent'
-import { decodeBase64Url } from '../../crypto/bytes'
 import type { ArtifactChoiceSemantics } from '../model/artifacts/choices'
 import type {
   BrowserHandoffTargetOffer,
@@ -20,8 +18,6 @@ import type {
   EnvironmentTargetOffer,
   FSADirectoryContainerOffer,
   FSADirectoryTargetSemantics,
-  FSAOwnedFileTargetOffer,
-  FSAOwnedFileTargetSemantics,
   ManagedAtomicTargetOffer,
   ManagedAtomicTargetSemantics,
   MaterializationTargetSemantics,
@@ -34,26 +30,17 @@ import type {
   TargetAuthorityPersistence,
   WorkspaceEnvironmentOffer,
   WorkspacePlanSemantics,
-  DirectZipSupportFacts,
-  RuntimeDirectZipSupportFacts,
 } from '../model/artifacts/destinations'
 import type {
   EnvironmentOffers,
   EnvironmentOffersInput,
   EnvironmentTargetOfferInput,
   MaterializationRouteIdentity,
-  ZipRouteRecommendationPolicy,
 } from './contracts'
 
 const MAX_ENVIRONMENT_ROUTE_ID_UTF8_BYTES = 128
 const TEXT_ENCODER = new TextEncoder()
 const VALID_ENVIRONMENT_OFFERS = new WeakSet<object>()
-const UNAVAILABLE_DIRECT_ZIP_SUPPORT: DirectZipSupportFacts = Object.freeze({
-  kind: 'unavailable', reason: 'runtime-not-installed',
-})
-const UNAVAILABLE_ZIP_RECOMMENDATION_POLICY: ZipRouteRecommendationPolicy = Object.freeze({
-  kind: 'unavailable', reason: 'workspace-threshold-unavailable',
-})
 
 const PRECREATED_BROWSER_FILE_FACTS: DestinationGuaranteeFacts = Object.freeze({
   nameChooser: 'user-chosen',
@@ -73,8 +60,6 @@ export function legalGuaranteeProfile(
       return sameGuaranteeFacts(facts, nativeTreeGuarantees()) ? 'native-tree' : null
     case 'fsa-parent-directory':
       return sameGuaranteeFacts(facts, fsaTreeGuarantees()) ? 'fsa-tree' : null
-    case 'fsa-owned-file-target':
-      return sameGuaranteeFacts(facts, fsaOwnedFileGuarantees()) ? 'fsa-owned-file' : null
     case 'managed-atomic-file-target':
       return isManagedAtomicFacts(facts) ? 'managed-atomic' : null
     case 'browser-handoff':
@@ -98,29 +83,12 @@ export function createEnvironmentOffers(input: EnvironmentOffersInput): Environm
   const portable = input.portable === undefined || input.portable === null
     ? null
     : snapshotPortable(input.portable)
-  const directZipSupport = snapshotDirectZipSupport(
-    input.directZipSupport ?? UNAVAILABLE_DIRECT_ZIP_SUPPORT,
-  )
-  const zipRecommendationPolicy = snapshotZipRecommendationPolicy(
-    input.zipRecommendationPolicy ?? UNAVAILABLE_ZIP_RECOMMENDATION_POLICY,
-  )
   if (workspace !== null) requireUniqueRouteID(seen, workspace.routeId)
   if (portable !== null) requireUniqueRouteID(seen, portable.routeId)
-  const directTargets = targets.filter(
-    (target): target is FSAOwnedFileTargetOffer => target.kind === 'fsa-owned-file-target',
-  )
-  if (directTargets.length > 1) throw new TypeError('only one direct ZIP route may be installed')
-  if (directTargets.length !== 0 &&
-      (directZipSupport.kind !== 'runtime-supported' ||
-       !sameRuntimeDirectZipSupport(directTargets[0]!.support, directZipSupport))) {
-    throw new TypeError('direct ZIP target lacks its admitted runtime support facts')
-  }
   const result = Object.freeze({
     targets: Object.freeze(targets),
     workspace,
     portable,
-    directZipSupport,
-    zipRecommendationPolicy,
   })
   VALID_ENVIRONMENT_OFFERS.add(result)
   return result
@@ -153,9 +121,6 @@ export function sameTargetSemantics(
       left.hardMaximumOutputBytes !== right.hardMaximumOutputBytes ||
       left.legalProfile !== right.legalProfile ||
       !sameGuaranteeFacts(left.guarantees, right.guarantees)) return false
-  if (left.kind === 'fsa-owned-file-target' && right.kind === 'fsa-owned-file-target') {
-    return sameRuntimeDirectZipSupport(left.support, right.support)
-  }
   if (left.kind !== 'browser-handoff' || right.kind !== 'browser-handoff') return true
   return left.objectUrlLeaseMilliseconds === right.objectUrlLeaseMilliseconds &&
     left.supportsWorkspacePackage === right.supportsWorkspacePackage &&
@@ -180,8 +145,6 @@ export function materializationPlanSemantics(
         portable: portableSemantics(route.portable),
         handoffTarget: targetSemantics(route.handoffTarget),
       })
-    case 'direct-resumable-zip':
-      return Object.freeze({ kind: route.kind, target: targetSemantics(route.target) })
   }
 }
 
@@ -201,8 +164,6 @@ export function sameMaterializationPlanSemantics(
       return right.kind === 'portable-handoff' &&
         samePortableSemantics(left.portable, right.portable) &&
         sameTargetSemantics(left.handoffTarget, right.handoffTarget)
-    case 'direct-resumable-zip':
-      return right.kind === 'direct-resumable-zip' && sameTargetSemantics(left.target, right.target)
   }
 }
 
@@ -223,7 +184,6 @@ export function materializationRouteIdentity(
 ): MaterializationRouteIdentity {
   switch (route.kind) {
     case 'direct-tree':
-    case 'direct-resumable-zip':
       return Object.freeze({ kind: 'direct', targetRouteId: route.target.routeId })
     case 'workspace-then-publish':
       return Object.freeze({
@@ -264,13 +224,12 @@ function targetSemantics(
 ): NativeDirectoryTargetSemantics | FSADirectoryTargetSemantics
 function targetSemantics(target: ManagedAtomicTargetOffer): ManagedAtomicTargetSemantics
 function targetSemantics(target: BrowserHandoffTargetOffer): BrowserHandoffTargetSemantics
-function targetSemantics(target: FSAOwnedFileTargetOffer): FSAOwnedFileTargetSemantics
 function targetSemantics(
   target: ManagedAtomicTargetOffer | BrowserHandoffTargetOffer,
 ): ManagedAtomicTargetSemantics | BrowserHandoffTargetSemantics
 function targetSemantics(
   target: NativeDirectoryContainerOffer | FSADirectoryContainerOffer |
-    ManagedAtomicTargetOffer | BrowserHandoffTargetOffer | FSAOwnedFileTargetOffer,
+    ManagedAtomicTargetOffer | BrowserHandoffTargetOffer,
 ): MaterializationTargetSemantics {
   const base = {
     kind: target.kind,
@@ -286,9 +245,6 @@ function targetSemantics(
       supportsWorkspacePackage: target.supportsWorkspacePackage,
       supportsPortableArtifact: target.supportsPortableArtifact,
     }) as MaterializationTargetSemantics
-  }
-  if (target.kind === 'fsa-owned-file-target') {
-    return Object.freeze({ ...base, support: target.support }) as MaterializationTargetSemantics
   }
   return Object.freeze(base) as MaterializationTargetSemantics
 }
@@ -354,19 +310,6 @@ function snapshotTarget(input: EnvironmentTargetOfferInput): EnvironmentTargetOf
       throw new TypeError('browser handoff lease does not match the frozen finite lease')
     }
   }
-  if (input.kind === 'fsa-owned-file-target') {
-    const support = snapshotDirectZipSupport(input.support)
-    if (support.kind !== 'runtime-supported') {
-      throw new TypeError('direct ZIP target support must contain admitted runtime capabilities')
-    }
-    return Object.freeze({
-      ...input,
-      routeId,
-      guarantees,
-      legalProfile: 'fsa-owned-file' as const,
-      support,
-    })
-  }
   return Object.freeze({ ...input, routeId, guarantees, legalProfile }) as EnvironmentTargetOffer
 }
 
@@ -424,7 +367,6 @@ function requireTargetPersistence(
   const expected: Record<EnvironmentTargetKind, TargetAuthorityPersistence> = {
     'native-directory-container': 'durable-authority',
     'fsa-parent-directory': 'durable-after-repository-commit',
-    'fsa-owned-file-target': 'operation-scoped',
     'managed-atomic-file-target': 'operation-scoped',
     'browser-handoff': 'none',
     'precreated-browser-file': 'operation-scoped',
@@ -467,75 +409,8 @@ function targetKindOrder(value: EnvironmentTargetKind): number {
   switch (value) {
     case 'native-directory-container': return 1
     case 'fsa-parent-directory': return 2
-    case 'fsa-owned-file-target': return 3
     case 'managed-atomic-file-target': return 4
     case 'browser-handoff': return 5
     case 'precreated-browser-file': return 6
   }
-}
-
-function snapshotDirectZipSupport(input: DirectZipSupportFacts): DirectZipSupportFacts {
-  if (input.kind === 'unavailable') {
-    const valid = input.reason === 'runtime-not-installed' ||
-      input.reason === 'required-api-unavailable' ||
-      input.reason === 'journal-unavailable' ||
-      input.reason === 'handle-persistence-unavailable' ||
-      input.reason === 'coordination-unavailable' ||
-      input.reason === 'authority-contract-unavailable' ||
-      input.reason === 'direct-route-unsupported' ||
-      input.reason === 'policy-digests-unavailable'
-    if (!valid) throw new TypeError('direct ZIP unavailability reason is invalid')
-    return Object.freeze({ kind: input.kind, reason: input.reason })
-  }
-  if (input.kind !== 'runtime-supported' ||
-      input.authority?.kind !== 'owned-target-session-v1' ||
-      input.authority.recovery !== 'persisted-handle-and-verified-checkpoint' ||
-      input.authority.replacement !== 'coordinated-no-replace' ||
-      input.authority.cleanup !== 'ownership-proof-required') {
-    throw new TypeError('direct ZIP runtime authority contract is invalid')
-  }
-  return Object.freeze({
-    kind: input.kind,
-    capabilityDigest: requireDigest(input.capabilityDigest, 'runtime capability digest'),
-    authority: Object.freeze({ ...input.authority }),
-    policies: Object.freeze({
-      zipEncoding: requireDigest(input.policies.zipEncoding, 'ZIP encoding policy digest'),
-      layout: requireDigest(input.policies.layout, 'ZIP layout policy digest'),
-      checkpoint: requireDigest(input.policies.checkpoint, 'ZIP checkpoint policy digest'),
-      journalBudget: requireDigest(input.policies.journalBudget, 'ZIP journal policy digest'),
-      epoch: requireDigest(input.policies.epoch, 'ZIP epoch policy digest'),
-    }),
-  })
-}
-
-function snapshotZipRecommendationPolicy(
-  input: ZipRouteRecommendationPolicy,
-): ZipRouteRecommendationPolicy {
-  if (input.kind === 'unavailable') return Object.freeze({ ...input })
-  if (typeof input.workspacePeakBytesThreshold !== 'bigint' || input.workspacePeakBytesThreshold < 0n) {
-    throw new RangeError('ZIP recommendation workspace threshold is invalid')
-  }
-  return Object.freeze({ kind: 'available', workspacePeakBytesThreshold: input.workspacePeakBytesThreshold })
-}
-
-export function sameRuntimeDirectZipSupport(
-  left: RuntimeDirectZipSupportFacts,
-  right: RuntimeDirectZipSupportFacts,
-): boolean {
-  return left.capabilityDigest === right.capabilityDigest &&
-    left.authority.kind === right.authority.kind &&
-    left.authority.recovery === right.authority.recovery &&
-    left.authority.replacement === right.authority.replacement &&
-    left.authority.cleanup === right.authority.cleanup &&
-    left.policies.zipEncoding === right.policies.zipEncoding &&
-    left.policies.layout === right.policies.layout &&
-    left.policies.checkpoint === right.policies.checkpoint &&
-    left.policies.journalBudget === right.policies.journalBudget &&
-    left.policies.epoch === right.policies.epoch
-}
-
-function requireDigest(value: string, label: string): string {
-  const decoded = typeof value === 'string' ? decodeBase64Url(value) : undefined
-  if (decoded === undefined || decoded.byteLength !== 32) throw new TypeError(label + ' is invalid')
-  return value
 }

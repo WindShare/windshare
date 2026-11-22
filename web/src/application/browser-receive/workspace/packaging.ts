@@ -153,7 +153,7 @@ export class WorkspaceReceivePackaging {
   resolveWorkspaceUsage(lifecycle: ReceiveLifecycleState): WorkspaceUsage | null {
     if (lifecycle.kind === 'discarded' || lifecycle.kind === 'source-invalidated') return null
     let ownedBytes = 0n
-    if (lifecycle.kind === 'resumable-receive' && lifecycle.payloadKind !== 'direct-zip') {
+    if (lifecycle.kind === 'resumable-receive') {
       ownedBytes = lifecycle.payloadKind === 'workspace-archive' ? lifecycle.occupiedBytes : lifecycle.retainedBytes
     }
     else if (this.#packageExactBytes !== undefined &&
