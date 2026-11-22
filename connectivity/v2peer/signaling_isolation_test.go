@@ -20,8 +20,8 @@ type blockedCandidateSession struct {
 
 func (session *blockedCandidateSession) SendPeerControl(
 	ctx context.Context,
+	op protocolsession.Operation,
 	kind protocolsession.MessageKind,
-	operation protocolsession.OperationID,
 	body []byte,
 ) (protocolsession.OperationDisposition, error) {
 	if kind == protocolsession.MessagePeerCandidate {
@@ -32,7 +32,7 @@ func (session *blockedCandidateSession) SendPeerControl(
 		case <-session.release:
 		}
 	}
-	return session.testPeerSession.SendPeerControl(ctx, kind, operation, body)
+	return session.testPeerSession.SendPeerControl(ctx, op, kind, body)
 }
 
 type blockedCandidateOperation struct {
@@ -99,7 +99,7 @@ func testSenderAdmissionProgressesWhileCandidateSendIsBlocked(t *testing.T) {
 		}),
 	})
 	attempt := newPeerAttempt(peerAttemptConfig{
-		factory: factory, session: session, operation: testOperationID(132),
+		factory: factory, session: session, operation: testPeerOperation(testOperationID(132)),
 		offer:  v2signal.Offer{Binding: testBinding(133), SDP: "v=0\r\ns=receiver\r\n"},
 		onDone: func(*peerAttempt, error) {},
 	})

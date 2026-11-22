@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
-	"github.com/windshare/windshare/core/framechannel"
 	"testing"
 
 	"github.com/windshare/windshare/core/content"
@@ -12,9 +11,7 @@ import (
 )
 
 type fixedOutcomeOutbound struct {
-	result  protocolsession.ResponseSendResult
-	outcome protocolsession.SendOutcome
-	err     error
+	err error
 }
 
 type fragmentFailureOutbound struct {
@@ -25,21 +22,25 @@ type fragmentFailureOutbound struct {
 
 func (*fragmentFailureOutbound) SendControl(
 	context.Context,
+	protocolsession.Operation,
 	protocolsession.MessageKind,
-	protocolsession.OperationID,
 	[]byte,
-) (protocolsession.ResponseSendResult, error) {
-	return responseResultForTest(protocolsession.SendOutcomeDropped), errors.New("final control was not expected")
+) error {
+	return protocolsession.MarkNotSent(errors.New("final control was not expected"))
 }
 
-func (outbound *fragmentFailureOutbound) SendFragment(context.Context, protocolsession.Message) error {
+func (outbound *fragmentFailureOutbound) SendFragment(
+	context.Context,
+	protocolsession.Operation,
+	protocolsession.Message,
+) error {
 	outbound.fragmentCalls++
 	return outbound.fragmentErr
 }
 
 func (outbound *fragmentFailureOutbound) SendOperationError(
 	context.Context,
-	protocolsession.OperationID,
+	protocolsession.Operation,
 	OperationFailure,
 ) error {
 	outbound.operationError++
@@ -48,21 +49,18 @@ func (outbound *fragmentFailureOutbound) SendOperationError(
 
 func (outbound fixedOutcomeOutbound) SendControl(
 	context.Context,
+	protocolsession.Operation,
 	protocolsession.MessageKind,
-	protocolsession.OperationID,
 	[]byte,
-) (protocolsession.ResponseSendResult, error) {
-	if !outbound.result.IsZero() {
-		return outbound.result, outbound.err
-	}
-	return responseResultForTest(outbound.outcome), outbound.err
+) error {
+	return outbound.err
 }
 
-func (fixedOutcomeOutbound) SendFragment(context.Context, protocolsession.Message) error {
+func (fixedOutcomeOutbound) SendFragment(context.Context, protocolsession.Operation, protocolsession.Message) error {
 	return nil
 }
 
-func (fixedOutcomeOutbound) SendOperationError(context.Context, protocolsession.OperationID, OperationFailure) error {
+func (fixedOutcomeOutbound) SendOperationError(context.Context, protocolsession.Operation, OperationFailure) error {
 	return nil
 }
 
@@ -78,19 +76,15 @@ func TestOpenResultDeliverySettlesLeaseWithExactEvidence(t *testing.T) {
 	transportErr := errors.New("transport result is uncertain")
 	tests := []struct {
 		name             string
-		outcome          protocolsession.SendOutcome
-		result           protocolsession.ResponseSendResult
 		sendErr          error
 		wantEnd          content.LeaseEndKind
 		wantProcessError error
 	}{
-		{name: "cancel before send", outcome: protocolsession.SendOutcomeDropped, wantEnd: content.LeaseUndelivered},
-		{name: "send wins cancel", outcome: protocolsession.SendOutcomeTransportConfirmed},
-		{name: "confirmed after uncertainty with cleanup failure", result: retriedConfirmedResultForTest(), sendErr: transportErr, wantProcessError: transportErr},
-		{name: "invalid evidence", outcome: protocolsession.SendOutcomeUninitialized, sendErr: transportErr, wantEnd: content.LeaseDetached, wantProcessError: transportErr},
-		{name: "writer transport failure", outcome: protocolsession.SendOutcomeUnknown, sendErr: transportErr, wantEnd: content.LeaseDetached, wantProcessError: transportErr},
-		{name: "caller timeout", outcome: protocolsession.SendOutcomeUnknown, sendErr: context.DeadlineExceeded, wantEnd: content.LeaseDetached, wantProcessError: context.DeadlineExceeded},
-		{name: "session close before send", outcome: protocolsession.SendOutcomeDropped, sendErr: protocolsession.ErrWriterStopped, wantEnd: content.LeaseUndelivered, wantProcessError: protocolsession.ErrWriterStopped},
+		{name: "cancel before send", sendErr: protocolsession.ErrOperationSuppressed, wantEnd: content.LeaseUndelivered, wantProcessError: protocolsession.ErrOperationSuppressed},
+		{name: "send wins cancel", sendErr: nil},
+		{name: "writer transport failure", sendErr: transportErr, wantEnd: content.LeaseDetached, wantProcessError: transportErr},
+		{name: "caller timeout", sendErr: context.DeadlineExceeded, wantEnd: content.LeaseDetached, wantProcessError: context.DeadlineExceeded},
+		{name: "session close before send", sendErr: protocolsession.MarkNotSent(protocolsession.ErrWriterStopped), wantEnd: content.LeaseUndelivered, wantProcessError: protocolsession.ErrWriterStopped},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -99,7 +93,7 @@ func TestOpenResultDeliverySettlesLeaseWithExactEvidence(t *testing.T) {
 			defer cache.Close()
 			handler, err := NewSenderHandler(SenderHandlerConfig{
 				Service:  service,
-				Outbound: fixedOutcomeOutbound{outcome: test.outcome, result: test.result, err: test.sendErr},
+				Outbound: fixedOutcomeOutbound{err: test.sendErr},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -108,7 +102,8 @@ func TestOpenResultDeliverySettlesLeaseWithExactEvidence(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			processErr := handler.processOpen(context.Background(), flowID[protocolsession.OperationID](219), body)
+			op := testActiveOperation(flowID[protocolsession.OperationID](219))
+			processErr := handler.processOpen(context.Background(), op, body)
 			if !errors.Is(processErr, test.wantProcessError) || (test.wantProcessError == nil && processErr != nil) {
 				t.Fatalf("process error=%v want=%v", processErr, test.wantProcessError)
 			}
@@ -160,7 +155,7 @@ func TestFragmentOutboundFailureEmitsTheSingleLegalOperationFinal(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler.process(context.Background(), message)
+	handler.process(context.Background(), testActiveOperation(operationID), message)
 	if outbound.fragmentCalls != 1 || outbound.operationError != 1 {
 		t.Fatalf("fragment calls=%d operation errors=%d", outbound.fragmentCalls, outbound.operationError)
 	}
@@ -178,16 +173,12 @@ func TestRenewResultDeliveryDetachesEveryAmbiguousLease(t *testing.T) {
 	transportErr := errors.New("renew delivery is uncertain")
 	tests := []struct {
 		name         string
-		outcome      protocolsession.SendOutcome
-		result       protocolsession.ResponseSendResult
 		sendErr      error
 		wantDetached bool
 	}{
-		{name: "definitive drop", outcome: protocolsession.SendOutcomeDropped, wantDetached: true},
-		{name: "delivered", outcome: protocolsession.SendOutcomeTransportConfirmed},
-		{name: "confirmed retry cleanup failed", result: retriedConfirmedResultForTest(), sendErr: transportErr},
-		{name: "invalid evidence", outcome: protocolsession.SendOutcomeUninitialized, sendErr: transportErr, wantDetached: true},
-		{name: "transport uncertainty", outcome: protocolsession.SendOutcomeUnknown, sendErr: transportErr, wantDetached: true},
+		{name: "definitive drop", sendErr: protocolsession.ErrOperationSuppressed, wantDetached: true},
+		{name: "delivered", sendErr: nil},
+		{name: "transport uncertainty", sendErr: transportErr, wantDetached: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -202,7 +193,7 @@ func TestRenewResultDeliveryDetachesEveryAmbiguousLease(t *testing.T) {
 				t.Fatal(err)
 			}
 			handler, err := NewSenderHandler(SenderHandlerConfig{
-				Service: service, Outbound: fixedOutcomeOutbound{outcome: test.outcome, result: test.result, err: test.sendErr},
+				Service: service, Outbound: fixedOutcomeOutbound{err: test.sendErr},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -211,7 +202,7 @@ func TestRenewResultDeliveryDetachesEveryAmbiguousLease(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			processErr := handler.processRenew(context.Background(), flowID[protocolsession.OperationID](220), body)
+			processErr := handler.processRenew(context.Background(), testActiveOperation(flowID[protocolsession.OperationID](220)), body)
 			if !errors.Is(processErr, test.sendErr) || (test.sendErr == nil && processErr != nil) {
 				t.Fatalf("renew process error=%v want=%v", processErr, test.sendErr)
 			}
@@ -426,41 +417,4 @@ func TestReleaseReplayRemainsIdempotentAfterIdentityTombstoneRotation(t *testing
 	if ended != 0 {
 		t.Fatalf("unknown replay reached the share-scoped store: endings=%d", ended)
 	}
-}
-
-// Test doubles express the same physical boundary as production receipts.
-func responseResultForTest(outcome protocolsession.SendOutcome) protocolsession.ResponseSendResult {
-	if outcome == protocolsession.SendOutcomeUninitialized {
-		return protocolsession.ResponseSendResult{}
-	}
-	completion := protocolsession.SendCompletion{Settled: true, Outcome: outcome}
-	end := protocolsession.ResponseSendEndRetryDisallowed
-	if outcome != protocolsession.SendOutcomeDropped {
-		completion.Admitted = true
-		completion.TransportDisposition = framechannel.SendAccepted
-	}
-	if outcome == protocolsession.SendOutcomeTransportConfirmed {
-		end = protocolsession.ResponseSendEndTransportConfirmed
-	}
-	attempt, err := protocolsession.NewSettledSendAttempt(protocolsession.SendAttemptIdentity{ResponseSequence: 1, AttemptSequence: 1, LaneID: 1}, completion)
-	if err != nil {
-		panic(err)
-	}
-	result, err := protocolsession.NewResponseSendReturned(end, []protocolsession.SendAttemptSnapshot{attempt})
-	if err != nil {
-		panic(err)
-	}
-	return result
-}
-
-func retriedConfirmedResultForTest() protocolsession.ResponseSendResult {
-	first, _ := protocolsession.NewSettledSendAttempt(protocolsession.SendAttemptIdentity{ResponseSequence: 1, AttemptSequence: 1, LaneID: 1},
-		protocolsession.SendCompletion{Settled: true, Admitted: true, Outcome: protocolsession.SendOutcomeUnknown, TransportDisposition: framechannel.SendAccepted, Err: errors.New("transport uncertain")})
-	second, _ := protocolsession.NewSettledSendAttempt(protocolsession.SendAttemptIdentity{ResponseSequence: 1, AttemptSequence: 2, LaneID: 2},
-		protocolsession.SendCompletion{Settled: true, Admitted: true, Outcome: protocolsession.SendOutcomeTransportConfirmed, TransportDisposition: framechannel.SendAccepted})
-	result, err := protocolsession.NewResponseSendReturned(protocolsession.ResponseSendEndTransportConfirmed, []protocolsession.SendAttemptSnapshot{first, second})
-	if err != nil {
-		panic(err)
-	}
-	return result.WithCleanup(protocolsession.SendCleanupFailed)
 }

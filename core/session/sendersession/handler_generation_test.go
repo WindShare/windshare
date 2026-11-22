@@ -2,51 +2,46 @@ package sendersession
 
 import (
 	"context"
+	"sync/atomic"
+	"testing"
+
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/internal/sessioncore"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"sync/atomic"
-	"testing"
 )
 
-func canceledSenderIngress(
+func canceledSenderOperation(
 	t *testing.T,
 	request protocolsession.Message,
-) context.Context {
+) protocolsession.Operation {
 	t.Helper()
-	operationID, _ := request.OperationID()
-	operations, _ := protocolsession.NewOperationTable(
-		protocolsession.OperationLimits{MaxActive: 2, MaxTracked: 2}, nil,
-	)
-	admission, err := operations.ObserveInbound(protocolsession.DirectionReceiverToSender, request)
-	if err != nil {
-		t.Fatal(err)
+	id, ok := request.OperationID()
+	if !ok {
+		t.Fatal("missing operation id")
 	}
-	cancelBody, _ := contentflow.EncodeCancelReason(contentflow.CancelReasonSuperseded)
-	cancel := operationMessageForTest(t, protocolsession.MessageCancel, operationID, cancelBody)
-	if _, err := operations.ObserveInbound(protocolsession.DirectionReceiverToSender, cancel); err != nil {
-		t.Fatal(err)
+	state := newStubOperationState()
+	op := state.admit(id, request.Kind())
+	state.cancel(op.Ref())
+	if op.IsActive() || !op.IsCurrent() {
+		t.Fatal("canceled operation retained executable authority")
 	}
-	if admission.Generation.IsActive() || !admission.Generation.IsCurrent() {
-		t.Fatal("canceled ingress generation retained executable authority")
-	}
-	return protocolsession.WithOperationGeneration(context.Background(), admission.Generation)
+	return op
 }
 
 type countingCancelHandler struct{ calls atomic.Int32 }
 
-func (handler *countingCancelHandler) HandleMessage(context.Context, protocolsession.Message) error {
+func (handler *countingCancelHandler) HandleMessage(context.Context, protocolsession.Operation, protocolsession.Message) error {
 	handler.calls.Add(1)
 	return nil
 }
 
 type countingPeerCancelHandler struct{ cancels atomic.Int32 }
 
-func (*countingPeerCancelHandler) HandleMessage(context.Context, protocolsession.Message) error {
+func (*countingPeerCancelHandler) HandleMessage(context.Context, protocolsession.Operation, protocolsession.Message) error {
 	return nil
 }
 
-func (handler *countingPeerCancelHandler) Cancel(context.Context, protocolsession.OperationID) error {
+func (handler *countingPeerCancelHandler) Cancel(context.Context, protocolsession.Operation) error {
 	handler.cancels.Add(1)
 	return nil
 }
@@ -61,23 +56,14 @@ func TestCancelMuxRoutesStormToOnlyTheExactOperationOwner(t *testing.T) {
 	contentHandler := &countingCancelHandler{}
 	peer := &countingPeerCancelHandler{}
 	mux := cancelMux{catalog: catalog, content: contentHandler, peer: peer}
-	operations, _ := protocolsession.NewOperationTable(
-		protocolsession.OperationLimits{MaxActive: 128, MaxTracked: 128}, nil,
-	)
+	state := newStubOperationState()
 	cancelBody, _ := contentflow.EncodeCancelReason(contentflow.CancelReasonSuperseded)
 	routeCancel := func(seed byte, requestKind protocolsession.MessageKind) {
 		operationID := id16[protocolsession.OperationID](seed)
-		request := operationMessageForTest(t, requestKind, operationID, []byte{1})
-		admission, err := operations.ObserveInbound(protocolsession.DirectionReceiverToSender, request)
-		if err != nil {
-			t.Fatal(err)
-		}
+		op := state.admit(operationID, requestKind)
+		state.cancel(op.Ref())
 		cancel := operationMessageForTest(t, protocolsession.MessageCancel, operationID, cancelBody)
-		if _, err := operations.ObserveInbound(protocolsession.DirectionReceiverToSender, cancel); err != nil {
-			t.Fatal(err)
-		}
-		ctx := protocolsession.WithOperationGeneration(context.Background(), admission.Generation)
-		if err := mux.HandleMessage(ctx, cancel); err != nil {
+		if err := mux.HandleMessage(context.Background(), op, cancel); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -103,7 +89,7 @@ func TestSenderQueuesSuppressCanceledGenerationBeforeWorkPublication(t *testing.
 		t, protocolsession.MessageListChildren, operationID, []byte{1},
 	)
 	catalogHandler := newCatalogHandler(nil, &sessioncore.Responses{})
-	if err := catalogHandler.HandleMessage(canceledSenderIngress(t, catalogRequest), catalogRequest); err != nil {
+	if err := catalogHandler.HandleMessage(context.Background(), canceledSenderOperation(t, catalogRequest), catalogRequest); err != nil {
 		t.Fatalf("catalog stale request: %v", err)
 	}
 	if len(catalogHandler.queue) != 0 {
@@ -113,7 +99,7 @@ func TestSenderQueuesSuppressCanceledGenerationBeforeWorkPublication(t *testing.
 	laneBody, _ := protocolsession.EncodeLaneAttachRequest(0)
 	laneRequest := operationMessageForTest(t, protocolsession.MessageLaneAttach, operationID, laneBody)
 	laneHandler := newLaneGrantHandler(nil, &sessioncore.Responses{}, nil)
-	if err := laneHandler.HandleMessage(canceledSenderIngress(t, laneRequest), laneRequest); err != nil {
+	if err := laneHandler.HandleMessage(context.Background(), canceledSenderOperation(t, laneRequest), laneRequest); err != nil {
 		t.Fatalf("lane stale request: %v", err)
 	}
 	if len(laneHandler.queue) != 0 {
@@ -122,7 +108,7 @@ func TestSenderQueuesSuppressCanceledGenerationBeforeWorkPublication(t *testing.
 
 	siblingID := id16[protocolsession.OperationID](202)
 	sibling := operationMessageForTest(t, protocolsession.MessageListChildren, siblingID, []byte{1})
-	if err := catalogHandler.HandleMessage(senderIngressContext(t, sibling), sibling); err != nil {
+	if err := catalogHandler.HandleMessage(context.Background(), senderIngressOperation(t, sibling), sibling); err != nil {
 		t.Fatalf("catalog sibling: %v", err)
 	}
 	if len(catalogHandler.queue) != 1 {

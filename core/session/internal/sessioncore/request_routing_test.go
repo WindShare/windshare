@@ -38,7 +38,7 @@ func TestRequestReservationCleanupDoesNotUpdateReplacementEpoch(t *testing.T) {
 		t.Fatal(err)
 	}
 	call.requests.Complete(now.Add(time.Second))
-	call.close()
+	call.Close()
 	if got := replacement.requests.Estimate(kind, now, 0); got.Response != requestlane.InitialResponse || got.Pending != 0 {
 		t.Fatalf("late completion polluted replacement: %+v", got)
 	}

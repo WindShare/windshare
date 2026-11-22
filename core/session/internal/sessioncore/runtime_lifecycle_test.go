@@ -44,8 +44,8 @@ func TestRuntimeStoppingPrecedesFinalDonePublication(t *testing.T) {
 
 func TestUnstartedRuntimeRollsBackLaneAuthorityAndOwnedChannels(t *testing.T) {
 	runtime, initialChannel := newUnstartedRuntime(t, protocolsession.RoleSender)
-	(*Runtime)(nil).abortBeforeStart()
-	(*Runtime)(nil).close()
+	(*Runtime)(nil).AbortBeforeStart()
+	(*Runtime)(nil).Close()
 	if !errors.Is((*Runtime)(nil).Err(), session.ErrRuntimeClosed) {
 		t.Fatal("nil runtime did not report a closed authority")
 	}
@@ -128,8 +128,8 @@ func TestUnstartedRuntimeRollsBackLaneAuthorityAndOwnedChannels(t *testing.T) {
 		t.Fatal("stopping runtime retained candidate channel")
 	}
 
-	runtime.abortBeforeStart()
-	runtime.abortBeforeStart()
+	runtime.AbortBeforeStart()
+	runtime.AbortBeforeStart()
 	select {
 	case <-runtime.Done():
 	default:
@@ -204,7 +204,7 @@ func TestRuntimeComponentFailureCancelsPhysicalLaneBeforeFinish(t *testing.T) {
 			runtime, initialChannel := newUnstartedRuntime(t, protocolsession.RoleSender)
 			observed := make(chan Termination, 1)
 			runtime.terminationObserver = TerminationObserverFunc(func(event Termination) { observed <- event })
-			runtime.start(Component{RuntimeFailureSourcePeer, func(context.Context) error { return test.err }})
+			runtime.Start(Component{RuntimeFailureSourcePeer, func(context.Context) error { return test.err }})
 			select {
 			case <-runtime.Done():
 			case <-time.After(time.Second):
@@ -223,63 +223,19 @@ func TestRuntimeComponentFailureCancelsPhysicalLaneBeforeFinish(t *testing.T) {
 			if initialChannel.State() != framechannel.Closed {
 				t.Fatal("runtime finished before closing its physical lane")
 			}
-			runtime.close()
+			runtime.Close()
 		})
 	}
 }
 
-func TestOperationLaneRoutesPreserveFirstPhysicalAuthorityUntilFinal(t *testing.T) {
+func TestOperationLaneAffinityPreservesFirstPhysicalAuthorityUntilFinal(t *testing.T) {
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
-	routes := newOperationLaneRoutes()
 	operationID := id16[protocolsession.OperationID](61)
 	other := session.LaneIdentity{ID: runtime.initial.ID + 1, Epoch: 1}
-	if routes.reserve(protocolsession.OperationID{}, runtime.initial) != nil ||
-		routes.reserve(operationID, session.LaneIdentity{}) != nil {
-		t.Fatal("route accepted a zero operation or lane identity")
-	}
-	route := routes.reserve(operationID, runtime.initial)
-	if route == nil || routes.reserve(operationID, other) != nil {
-		t.Fatal("operation route did not retain its first physical lane")
-	}
-	lane, err := routes.resolveRoute(runtime.lanes, operationID, route)
-	if err != nil || lane.identity != runtime.initial {
-		t.Fatalf("resolved route = %+v, %v", lane, err)
-	}
-	routes.releaseRoute(operationID, &operationLaneRoute{preferred: other})
-	lane, err = routes.resolveRoute(runtime.lanes, operationID, route)
-	if err != nil || lane.identity != runtime.initial {
-		t.Fatalf("mismatched release changed route = %+v, %v", lane, err)
-	}
-	routes.releaseRoute(operationID, route)
-	if current := routes.current(operationID); current != nil {
-		t.Fatalf("released route was implicitly resurrected = %+v", current)
-	}
-	route = routes.reserve(operationID, runtime.initial)
-	if route == nil {
-		t.Fatal("released operation route could not be explicitly reserved")
-	}
 	otherChannel := newMemoryChannel(t)
-	authenticator := permissiveInboundAuthenticator()
-	if _, err = runtime.lanes.add(other, otherChannel, authenticator, false); err != nil {
+	if _, err := runtime.lanes.add(other, otherChannel, permissiveInboundAuthenticator(), false); err != nil {
 		t.Fatal(err)
 	}
-	runtime.lanes.mu.Lock()
-	runtime.lanes.active[runtime.initial.ID].closing = true
-	runtime.lanes.mu.Unlock()
-	if lane, err = routes.resolveRoute(runtime.lanes, operationID, route); err != nil || lane.identity != other {
-		t.Fatalf("detached-lane continuation route = %+v, %v", lane, err)
-	}
-	routes.releaseRoute(operationID, route)
-
-	var nilRoutes *operationLaneRoutes
-	nilRoutes.releaseRoute(operationID, route)
-	if nilRoutes.reserve(operationID, runtime.initial) != nil {
-		t.Fatal("nil route authority admitted an operation")
-	}
-	if current := nilRoutes.current(operationID); current != nil {
-		t.Fatalf("nil route resolution = %+v", current)
-	}
-
 	blockRequest, err := contentflow.NewBlockRequest(id16[content.LeaseID](62), []uint64{0})
 	if err != nil {
 		t.Fatal(err)
@@ -292,42 +248,49 @@ func TestOperationLaneRoutesPreserveFirstPhysicalAuthorityUntilFinal(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	firstInbound := laneInboundRouter{runtime: runtime, identity: runtime.initial}
-	if disposition, err := firstInbound.RouteInbound(context.Background(), request); err != nil || disposition != protocolsession.OperationDeliver {
+	if disposition, err := runtime.inbound.RouteInbound(runtime.initial, request); err != nil || disposition != protocolsession.OperationDeliver {
 		t.Fatalf("first physical request disposition=%d error=%v", disposition, err)
 	}
-	inbound := laneInboundRouter{runtime: runtime, identity: other}
-	if disposition, err := inbound.RouteInbound(context.Background(), request); err != nil || disposition != protocolsession.OperationDrop {
+	if disposition, err := runtime.inbound.RouteInbound(other, request); err != nil || disposition != protocolsession.OperationDrop {
 		t.Fatalf("exact cross-lane replay disposition=%d error=%v", disposition, err)
 	}
-	if retained := runtime.routes.current(operationID); retained == nil || retained.preferred != runtime.initial {
-		t.Fatalf("exact replay changed first physical authority: %+v", retained)
+	event, err := runtime.inbound.Next(context.Background())
+	if err != nil {
+		t.Fatal(err)
 	}
-	if inbound.InboundDirection() != protocolsession.DirectionReceiverToSender {
-		t.Fatal("lane router changed the shared inbound direction")
+	rec := runtime.operations.lookupRecord(event.op.Ref())
+	if rec == nil || rec.preferredLane != runtime.initial {
+		t.Fatalf("exact replay changed first physical authority: %+v", rec)
+	}
+	outbound := &Responses{runtime: runtime}
+	lease := &outboundResponseLease{record: rec, preferredLane: rec.preferredLane}
+	runtime.lanes.mu.Lock()
+	runtime.lanes.active[runtime.initial.ID].closing = true
+	runtime.lanes.mu.Unlock()
+	if lane, err := outbound.selectResponseLane(lease, nil); err != nil || lane.identity != other {
+		t.Fatalf("detached-lane continuation route = %+v, %v", lane, err)
 	}
 	if !senderResponseFinal(protocolsession.MessageOperationComplete) ||
 		senderResponseFinal(protocolsession.MessageScanProgress) {
 		t.Fatal("sender response finality changed")
 	}
-	if err := inbound.TerminateLocal(); err != nil {
+	if err := runtime.operations.TerminateLocal(); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestOperationLaneRouteCannotReviveAPathWithoutASurvivingLane(t *testing.T) {
+func TestOperationLaneAffinityCannotRevivePathWithoutSurvivingLane(t *testing.T) {
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
-	t.Cleanup(runtime.abortBeforeStart)
-	routes := newOperationLaneRoutes()
+	t.Cleanup(runtime.AbortBeforeStart)
 	operationID := id16[protocolsession.OperationID](83)
-	route := routes.reserve(operationID, runtime.initial)
-	if route == nil {
-		t.Fatal("operation route did not retain its original lane")
-	}
+	request, _ := protocolsession.NewMessage(protocolsession.MessageOpenRevisions, &operationID, []byte{0xa0})
+	op := admitTestSenderOperation(t, runtime, runtime.initial, request)
+	rec := runtime.operations.lookupRecord(op.Ref())
 	runtime.lanes.mu.Lock()
 	runtime.lanes.active[runtime.initial.ID].closing = true
 	runtime.lanes.mu.Unlock()
-	if _, err := routes.resolveRoute(runtime.lanes, operationID, route); !errors.Is(err, ErrLaneUnavailable) {
+	outbound := &Responses{runtime: runtime}
+	if _, err := outbound.selectResponseLane(&outboundResponseLease{record: rec, preferredLane: rec.preferredLane}, nil); !errors.Is(err, ErrLaneUnavailable) {
 		t.Fatalf("route without a surviving lane error = %v", err)
 	}
 }
@@ -336,7 +299,7 @@ func TestRuntimeLaneConstructionRejectsInvalidCryptographicDependencies(t *testi
 	identity := session.LaneIdentity{ID: 2, Epoch: 1}
 	t.Run("invalid runtime role", func(t *testing.T) {
 		runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
-		t.Cleanup(runtime.abortBeforeStart)
+		t.Cleanup(runtime.AbortBeforeStart)
 		runtime.role = protocolsession.Role(255)
 		if _, err := runtime.lanes.build(
 			identity, newMemoryChannel(t), permissiveInboundAuthenticator(),
@@ -346,7 +309,7 @@ func TestRuntimeLaneConstructionRejectsInvalidCryptographicDependencies(t *testi
 	})
 	t.Run("missing nonce source", func(t *testing.T) {
 		runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
-		t.Cleanup(runtime.abortBeforeStart)
+		t.Cleanup(runtime.AbortBeforeStart)
 		runtime.random = nil
 		if _, err := runtime.lanes.build(
 			identity, newMemoryChannel(t), permissiveInboundAuthenticator(),
@@ -356,7 +319,7 @@ func TestRuntimeLaneConstructionRejectsInvalidCryptographicDependencies(t *testi
 	})
 	t.Run("missing physical channel", func(t *testing.T) {
 		runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
-		t.Cleanup(runtime.abortBeforeStart)
+		t.Cleanup(runtime.AbortBeforeStart)
 		if _, err := runtime.lanes.build(
 			identity, nil, permissiveInboundAuthenticator(),
 		); err == nil {
@@ -365,7 +328,7 @@ func TestRuntimeLaneConstructionRejectsInvalidCryptographicDependencies(t *testi
 	})
 	t.Run("missing inbound authenticator", func(t *testing.T) {
 		runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
-		t.Cleanup(runtime.abortBeforeStart)
+		t.Cleanup(runtime.AbortBeforeStart)
 		if _, err := runtime.lanes.build(identity, newMemoryChannel(t), nil); err == nil {
 			t.Fatal("lane accepted a missing inbound authenticator")
 		}
@@ -450,7 +413,7 @@ func newUnstartedRuntimeWithContinuations(
 		keys.Destroy()
 		t.Fatal(err)
 	}
-	t.Cleanup(runtime.abortBeforeStart)
+	t.Cleanup(runtime.AbortBeforeStart)
 	return runtime, channel
 }
 

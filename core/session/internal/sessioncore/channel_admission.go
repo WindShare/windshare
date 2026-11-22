@@ -27,6 +27,10 @@ type HandedOffChannel struct {
 	receive <-chan framechannel.Frame
 }
 
+func HandOff(channel protocolsession.FrameChannel, receive <-chan framechannel.Frame) *HandedOffChannel {
+	return &HandedOffChannel{FrameChannel: channel, receive: receive}
+}
+
 func (channel *HandedOffChannel) Recv() <-chan framechannel.Frame { return channel.receive }
 func (channel *HandedOffChannel) CapacityWait() time.Duration {
 	if pressure, ok := channel.FrameChannel.(framechannel.CapacityPressure); ok {

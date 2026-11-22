@@ -27,8 +27,8 @@ func TestDeliveredTerminalPreservesCallerAndHardAdmissionFailures(t *testing.T) 
 	}
 	t.Run("caller cancellation", func(t *testing.T) {
 		sender, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
-		sender.start()
-		t.Cleanup(sender.close)
+		sender.Start()
+		t.Cleanup(sender.Close)
 		outbound := &Responses{runtime: sender}
 		callerContext, cancelCaller := context.WithCancel(context.Background())
 		cancelCaller()
@@ -41,16 +41,14 @@ func TestDeliveredTerminalPreservesCallerAndHardAdmissionFailures(t *testing.T) 
 	})
 	t.Run("accepted seal failure", func(t *testing.T) {
 		sender, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
-		sender.start()
-		t.Cleanup(sender.close)
+		sender.Start()
+		t.Cleanup(sender.Close)
 		outbound := &Responses{runtime: sender}
-		policyRuntime, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
 		failedChannel := newMemoryChannel(t)
 		sealErr := errors.New("terminal seal failed")
-		failedWriter, err := protocolsession.NewSessionWriter(
+		failedWriter, err := newLaneWriter(
 			failedChannel,
 			failingTerminalSealer{err: sealErr},
-			runtimeLanePolicy{runtime: policyRuntime},
 		)
 		if err != nil {
 			t.Fatal(err)

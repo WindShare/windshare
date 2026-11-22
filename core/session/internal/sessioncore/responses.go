@@ -3,159 +3,247 @@ package sessioncore
 import (
 	"context"
 	"errors"
-	"github.com/windshare/windshare/core/observationstream"
+	"sync/atomic"
+
 	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
 	sessionobs "github.com/windshare/windshare/core/session/observation"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"sync/atomic"
 )
 
 type ResponseConfig struct {
-	Settlements      observationstream.Producer[protocolsession.SendAttemptSettlement]
 	TerminalObserver func(TerminalSendObservation)
 }
 
 type Responses struct {
 	runtime          *Runtime
 	sequence         atomic.Uint64
-	settlements      observationstream.Producer[protocolsession.SendAttemptSettlement]
 	terminalObserver func(TerminalSendObservation)
 }
 
 func NewResponses(runtime *Runtime, config ResponseConfig) *Responses {
-	return &Responses{runtime: runtime,
-		settlements: config.Settlements, terminalObserver: config.TerminalObserver}
+	return &Responses{
+		runtime:          runtime,
+		terminalObserver: config.TerminalObserver,
+	}
 }
 
-func (outbound *Responses) sendControl(
+func (outbound *Responses) SendControl(
 	ctx context.Context,
+	op protocolsession.Operation,
 	kind protocolsession.MessageKind,
-	operationID protocolsession.OperationID,
 	body []byte,
-) (protocolsession.ResponseSendResult, error) {
-	return outbound.executeResponse(ctx, kind, operationID, sessionobs.ProtocolErrorForResponse(kind, body), func(transaction *outboundTransaction) (outboundLaneAttempt, error) {
-		message, err := protocolsession.NewMessage(kind, &operationID, body)
-		if err != nil {
-			return nil, err
-		}
-		return func(lane selectedLane, permit protocolsession.OutboundReplayPermit) (protocolsession.SendReceipt, error) {
-			if !permit.IsZero() {
-				return lane.writer.TryControlReplay(message, permit)
-			}
-			return lane.writer.TryAuthorizedControl(message, transaction.authority)
-		}, nil
-	})
-}
-
-// Preparation establishes immutable message inputs before the first writer
-// attempt, so malformed input never becomes a fabricated receipt.
-type responsePreparation func(*outboundTransaction) (outboundLaneAttempt, error)
-
-func (outbound *Responses) executeResponse(ctx context.Context, kind protocolsession.MessageKind, operationID protocolsession.OperationID, content sessionobs.ProtocolErrorContent, prepare responsePreparation) (protocolsession.ResponseSendResult, error) {
-	runtime := outbound.runtime
-	sequence := outbound.sequence.Add(1)
-	requestKind := protocolsession.MessageKind(0)
-	if route, err := outboundRoute(ctx, operationID); err == nil {
-		requestKind = route.requestKind
-	}
-	transaction, err := beginOutboundTransaction(outbound, ctx, operationID)
-	final := senderResponseFinal(kind)
+) error {
+	id := op.ID()
+	message, err := protocolsession.NewMessage(kind, &id, body)
 	if err != nil {
-		end := protocolsession.ResponseSendEndPreparationFailed
-		if errors.Is(err, ErrLaneUnavailable) {
-			end = protocolsession.ResponseSendEndRouteUnavailable
-		} else if errors.Is(err, session.ErrOperationMissing) {
-			end = protocolsession.ResponseSendEndAuthorityUnavailable
-		}
-		result, _ := protocolsession.NewResponseSendNotStarted(end)
-		if final {
-			cleanupErr := runtime.abandonBoundOutboundOperation(ctx, operationID)
-			result = withOutboundCleanup(result, cleanupErr)
-			err = errors.Join(err, cleanupErr)
-		}
-		outbound.traceResult(operationID, requestKind, kind, sequence, content, result)
-		return result, err
+		return outbound.failPreparation(op, kind, sessionobs.ProtocolErrorForResponse(kind, body), err)
 	}
-	transaction.responseSequence = sequence
-	transaction.responseKind = kind
-	attempt, prepareErr := prepare(transaction)
-	var result protocolsession.ResponseSendResult
-	if prepareErr != nil {
-		result, _ = protocolsession.NewResponseSendNotStarted(protocolsession.ResponseSendEndPreparationFailed)
-		err = prepareErr
-	} else {
-		result, err = transaction.Run(ctx, attempt)
-	}
-	// Resource retirement is independent of physical evidence. A cleanup error
-	// cannot turn transport confirmation into proof that a peer owns no resource.
-	if final && err == nil && result.Evidence() == protocolsession.ResponseSendEvidenceTransportConfirmed {
-		runtime.routes.releaseRoute(operationID, transaction.route)
-		result = result.WithCleanup(protocolsession.SendCleanupRouteReleased)
-	} else if final || ctx.Err() != nil || runtime.ctx.Err() != nil {
-		cleanupErr := runtime.abandonOutboundOperation(operationID, transaction.route, transaction.generation)
-		result = withOutboundCleanup(result, cleanupErr)
-		err = errors.Join(err, cleanupErr)
-	}
-	transaction.Close()
-	outbound.traceResult(operationID, transaction.route.requestKind, kind, sequence, content, result)
-	return result, err
+	return outbound.executeResponse(ctx, op, message, false, sessionobs.ProtocolErrorForResponse(kind, body))
 }
 
-func withOutboundCleanup(result protocolsession.ResponseSendResult, err error) protocolsession.ResponseSendResult {
-	if err != nil {
-		return result.WithCleanup(protocolsession.SendCleanupFailed)
+func (outbound *Responses) SendFragment(
+	ctx context.Context,
+	op protocolsession.Operation,
+	message protocolsession.Message,
+) error {
+	id, ok := message.OperationID()
+	if !ok || id != op.ID() {
+		return outbound.failPreparation(op, message.Kind(), sessionobs.ProtocolErrorContent{}, session.ErrOperationMissing)
 	}
-	return result.WithCleanup(protocolsession.SendCleanupOperationRetired)
-}
-
-func (outbound *Responses) SendControl(ctx context.Context, kind protocolsession.MessageKind, operationID protocolsession.OperationID, body []byte) (protocolsession.ResponseSendResult, error) {
-	return outbound.sendControl(ctx, kind, operationID, body)
-}
-
-func (outbound *Responses) SendFragment(ctx context.Context, message protocolsession.Message) error {
-	operationID, ok := message.OperationID()
-	if !ok {
-		return session.ErrOperationMissing
-	}
-	_, err := outbound.executeResponse(ctx, message.Kind(), operationID, sessionobs.ProtocolErrorContent{}, func(transaction *outboundTransaction) (outboundLaneAttempt, error) {
-		return func(lane selectedLane, permit protocolsession.OutboundReplayPermit) (protocolsession.SendReceipt, error) {
-			if !permit.IsZero() {
-				return lane.writer.TryDataReplay(message, permit)
-			}
-			return lane.writer.TryAuthorizedData(message, transaction.authority)
-		}, nil
-	})
-	return err
+	return outbound.executeResponse(ctx, op, message, true, sessionobs.ProtocolErrorContent{})
 }
 
 func (outbound *Responses) SendOperationError(
 	ctx context.Context,
-	operationID protocolsession.OperationID,
+	op protocolsession.Operation,
 	failure contentflow.OperationFailure,
 ) error {
 	body, err := protocolsession.EncodeOperationFailure(failure)
 	if err != nil {
-		_, sendErr := outbound.executeResponse(ctx, protocolsession.MessageOperationError, operationID, sessionobs.ProtocolErrorContent{}, func(*outboundTransaction) (outboundLaneAttempt, error) { return nil, err })
-		return sendErr
+		return outbound.failPreparation(op, protocolsession.MessageOperationError, sessionobs.ProtocolErrorContent{}, err)
 	}
-	_, err = outbound.SendControl(ctx, protocolsession.MessageOperationError, operationID, body)
-	return err
+	return outbound.SendControl(ctx, op, protocolsession.MessageOperationError, body)
 }
 
-func (outbound *Responses) traceResult(operationID protocolsession.OperationID, requestKind, responseKind protocolsession.MessageKind, sequence uint64, content sessionobs.ProtocolErrorContent, result protocolsession.ResponseSendResult) {
+func (outbound *Responses) SendTerminalAll(ctx context.Context, body []byte) error {
+	return outbound.sendTerminalAll(ctx, body)
+}
+
+func (outbound *Responses) failPreparation(
+	op protocolsession.Operation,
+	kind protocolsession.MessageKind,
+	content sessionobs.ProtocolErrorContent,
+	cause error,
+) error {
+	runtime := outbound.runtime
+	sequence := outbound.sequence.Add(1)
+	requestKind, _ := op.RequestKind()
+	if senderResponseFinal(kind) && !op.IsZero() {
+		_, _ = runtime.operations.CancelOperation(op.Ref())
+	}
+	outbound.traceResponseSend(op.ID(), requestKind, kind, sequence, session.LaneIdentity{}, sessionobs.SendStatusNotSent, 0, content)
+	return protocolsession.MarkNotSent(cause)
+}
+
+func (outbound *Responses) executeResponse(
+	ctx context.Context,
+	op protocolsession.Operation,
+	message protocolsession.Message,
+	isData bool,
+	content sessionobs.ProtocolErrorContent,
+) error {
+	runtime := outbound.runtime
+	sequence := outbound.sequence.Add(1)
+	kind := message.Kind()
+	final := senderResponseFinal(kind)
+	if op.IsZero() {
+		outbound.traceResponseSend(protocolsession.OperationID{}, 0, kind, sequence, session.LaneIdentity{}, sessionobs.SendStatusNotSent, 0, content)
+		return protocolsession.MarkNotSent(session.ErrOperationMissing)
+	}
+	lease, err := runtime.operations.BeginOutboundResponse(op.Ref(), message)
+	if err != nil {
+		requestKind, _ := op.RequestKind()
+		if final && !errors.Is(err, protocolsession.ErrOperationSuppressed) {
+			_, _ = runtime.operations.CancelOperation(op.Ref())
+		}
+		outbound.traceResponseSend(op.ID(), requestKind, kind, sequence, session.LaneIdentity{}, sessionobs.SendStatusNotSent, 0, content)
+		return err
+	}
+
+	outcome := outbound.tryResponseLanes(ctx, lease, message, isData)
+	deliveredOrUncertain := outcome.delivered || outcome.uncertain
+	abandon := !deliveredOrUncertain && (final || (ctx != nil && ctx.Err() != nil) || runtime.ctx.Err() != nil)
+	runtime.operations.CompleteOutboundResponse(lease, message, final, deliveredOrUncertain, abandon)
+	lease.releaseInFlight(deliveredOrUncertain)
+
+	status := sessionobs.SendStatusNotSent
+	var sendErr error
+	switch {
+	case outcome.delivered:
+		status = sessionobs.SendStatusConfirmed
+	case outcome.uncertain:
+		status = sessionobs.SendStatusUncertain
+		sendErr = outcome.err
+	default:
+		sendErr = protocolsession.MarkNotSent(outcome.err)
+	}
+	outbound.traceResponseSend(op.ID(), lease.requestKind, kind, sequence, outcome.lastLane, status, outcome.attempts, content)
+	return sendErr
+}
+
+type responseDeliveryOutcome struct {
+	lastLane  session.LaneIdentity
+	attempts  uint32
+	delivered bool
+	uncertain bool
+	err       error
+}
+
+func (outbound *Responses) tryResponseLanes(
+	ctx context.Context,
+	lease *outboundResponseLease,
+	message protocolsession.Message,
+	isData bool,
+) responseDeliveryOutcome {
+	runtime := outbound.runtime
+	excluded := make(map[session.LaneIdentity]struct{}, protocolsession.DefaultMaxLogicalLanes)
+	var outcome responseDeliveryOutcome
+
+	for range protocolsession.DefaultMaxLogicalLanes {
+		lane, laneErr := outbound.selectResponseLane(lease, excluded)
+		if laneErr != nil {
+			outcome.err = errors.Join(outcome.err, laneErr)
+			return outcome
+		}
+		outcome.lastLane = lane.identity
+		outcome.attempts++
+		attemptPin := runtime.operations.pinInFlight(lease.record)
+		var sendErr error
+		if isData {
+			sendErr = lane.writer.SendData(ctx, message, attemptPin)
+		} else {
+			sendErr = lane.writer.SendControl(ctx, message, attemptPin)
+		}
+		if sendErr == nil {
+			outcome.delivered = true
+			return outcome
+		}
+		outcome.err = errors.Join(outcome.err, sendErr)
+		notSent := protocolsession.IsNotSent(sendErr)
+		if !notSent {
+			outcome.uncertain = true
+		}
+		if stopErr := responseStopError(runtime, ctx, sendErr, notSent); stopErr != nil {
+			outcome.err = errors.Join(outcome.err, stopErr)
+			return outcome
+		}
+		// Sender responses (fragments, finals, PeerAnswer, PeerCandidate) are
+		// idempotent under receiver deduplication, so a failed or ambiguous lane
+		// triggers re-sealing and failover to any surviving lane.
+		if !errors.Is(sendErr, protocolsession.ErrControlQueueFull) &&
+			!errors.Is(sendErr, protocolsession.ErrDataQueueFull) {
+			runtime.lanes.markSelectedClosing(lane)
+		}
+		excluded[lane.identity] = struct{}{}
+	}
+	return outcome
+}
+
+func responseStopError(runtime *Runtime, ctx context.Context, sendErr error, notSent bool) error {
+	if runtime.ctx.Err() != nil {
+		return errors.Join(session.ErrRuntimeClosed, runtime.Err())
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if notSent && !retryableLaneFailure(sendErr) {
+		return sendErr
+	}
+	return nil
+}
+
+func (outbound *Responses) selectResponseLane(
+	lease *outboundResponseLease,
+	excluded map[session.LaneIdentity]struct{},
+) (selectedLane, error) {
+	lanes := outbound.runtime.lanes
+	preferred := lease.preferredLane
+	if preferred.Valid(true) {
+		if _, blocked := excluded[preferred]; !blocked {
+			lane, err := lanes.selectLane(&preferred)
+			if err == nil || !errors.Is(err, ErrLaneUnavailable) {
+				return lane, err
+			}
+		}
+	}
+	lane, err := lanes.selectLaneExcluding(excluded)
+	if err != nil {
+		return selectedLane{}, err
+	}
+	lease.preferredLane = lane.identity
+	outbound.runtime.operations.updatePreferredLane(lease.record, lane.identity)
+	return lane, nil
+}
+
+func (outbound *Responses) traceResponseSend(
+	operationID protocolsession.OperationID,
+	requestKind, responseKind protocolsession.MessageKind,
+	sequence uint64,
+	lane session.LaneIdentity,
+	status sessionobs.SendStatus,
+	attempts uint32,
+	content sessionobs.ProtocolErrorContent,
+) {
 	runtime := outbound.runtime
 	if !runtime.protocolOperationTracingEnabled() {
 		return
 	}
-	ctx := runtime.observationContext(operationID, requestKind)
-	if !result.Started() && !result.IsZero() {
-		runtime.protocolObservations.TryPublish(sessionobs.NewResponseSendNotStarted(ctx, sequence, responseKind, content, result))
-		return
-	}
-	if result.AttemptCount() > 1 || result.Evidence() != protocolsession.ResponseSendEvidenceTransportConfirmed ||
-		result.Cleanup() == protocolsession.SendCleanupFailed || result.End() != protocolsession.ResponseSendEndTransportConfirmed ||
+	if attempts > 1 || status != sessionobs.SendStatusConfirmed ||
 		!content.IsZero() || (requestKind != protocolsession.MessageRequestBlocks && senderResponseFinal(responseKind)) {
-		runtime.protocolObservations.TryPublish(sessionobs.NewResponseSendReturned(ctx, sequence, responseKind, content, result))
+		ctx := runtime.observationContext(operationID, requestKind)
+		runtime.protocolObservations.TryPublish(
+			sessionobs.NewResponseSendObserved(ctx, sequence, responseKind, lane, status, attempts, content),
+		)
 	}
 }

@@ -62,9 +62,8 @@ func TestReceiverPeerCandidateAndReceiveStateTransitionsFailClosed(t *testing.T)
 
 	t.Run("stale generation candidate is dropped", func(t *testing.T) {
 		fixture := newReceiverPeerTerminalFixture(t, 0xc4)
-		generation, permit := fixture.call.OperationAuthority()
-		if generation.IsZero() || permit.IsZero() {
-			t.Fatal("peer call retained no operation generation")
+		if fixture.call.Operation().IsZero() {
+			t.Fatal("peer call retained no operation handle")
 		}
 		cancelPendingCall(t, fixture.operation.rpc, fixture.call)
 		disposition, err := fixture.operation.SendCandidate(

@@ -23,9 +23,9 @@ type OperationFailure = protocolsession.OperationFailure
 // SemanticOutbound keeps operation routing and authentication at the session
 // boundary. SendControl takes a canonical CBOR body.
 type SemanticOutbound interface {
-	SendControl(ctx context.Context, kind protocolsession.MessageKind, operationID protocolsession.OperationID, body []byte) (protocolsession.ResponseSendResult, error)
-	SendFragment(ctx context.Context, message protocolsession.Message) error
-	SendOperationError(ctx context.Context, operationID protocolsession.OperationID, failure OperationFailure) error
+	SendControl(ctx context.Context, op protocolsession.Operation, kind protocolsession.MessageKind, body []byte) error
+	SendFragment(ctx context.Context, op protocolsession.Operation, message protocolsession.Message) error
+	SendOperationError(ctx context.Context, op protocolsession.Operation, failure OperationFailure) error
 }
 
 type SenderHandlerConfig struct {
@@ -37,9 +37,8 @@ type SenderHandlerConfig struct {
 }
 
 type queuedOperation struct {
-	ctx       context.Context
-	message   protocolsession.Message
-	operation handlerOperation
+	op      protocolsession.Operation
+	message protocolsession.Message
 }
 
 type SenderHandler struct {
@@ -53,32 +52,14 @@ type SenderHandler struct {
 	queueMu  sync.Mutex
 	stopping bool
 	mu       sync.Mutex
-	active   map[handlerOperation]context.CancelFunc
+	active   map[protocolsession.OperationRef]context.CancelFunc
 }
 
-// SenderHandlerLifecycle is a point-in-time view of operation ownership. It is
-// intentionally limited to counts: callers can diagnose drain boundaries without
-// acquiring the generation capabilities stored in the handler's active map.
+// SenderHandlerLifecycle is a point-in-time view of operation ownership.
 type SenderHandlerLifecycle struct {
 	ActiveOperations int
 	RunningWorkers   int
 	QueuedOperations int
-}
-
-type handlerOperation struct {
-	id         protocolsession.OperationID
-	generation protocolsession.OperationGeneration
-}
-
-func operationFromContext(
-	ctx context.Context,
-	id protocolsession.OperationID,
-) (handlerOperation, bool) {
-	generation, ok := protocolsession.OperationGenerationFromContext(ctx, id)
-	if !ok || generation.IsZero() {
-		return handlerOperation{}, false
-	}
-	return handlerOperation{id: id, generation: generation}, true
 }
 
 type fragmentOutboundFailure struct{ cause error }
@@ -103,7 +84,7 @@ func NewSenderHandler(config SenderHandlerConfig) (*SenderHandler, error) {
 		service: config.Service, outbound: config.Outbound,
 		queue: make(chan queuedOperation, config.QueueDepth), workers: make(chan struct{}, config.Workers),
 		decisionTracer: config.DecisionTracer,
-		active:         make(map[handlerOperation]context.CancelFunc),
+		active:         make(map[protocolsession.OperationRef]context.CancelFunc),
 	}, nil
 }
 
@@ -114,8 +95,6 @@ func (h *SenderHandler) LifecycleSnapshot() SenderHandlerLifecycle {
 	h.mu.Lock()
 	active := len(h.active)
 	h.mu.Unlock()
-	// Channel occupancy is concurrency-safe to sample and, unlike a goroutine
-	// counter, exactly reflects ownership of the bounded worker/queue resources.
 	return SenderHandlerLifecycle{
 		ActiveOperations: active,
 		RunningWorkers:   len(h.workers),
@@ -123,7 +102,11 @@ func (h *SenderHandler) LifecycleSnapshot() SenderHandlerLifecycle {
 	}
 }
 
-func (h *SenderHandler) HandleMessage(ctx context.Context, message protocolsession.Message) error {
+func (h *SenderHandler) HandleMessage(
+	ctx context.Context,
+	op protocolsession.Operation,
+	message protocolsession.Message,
+) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -136,23 +119,17 @@ func (h *SenderHandler) HandleMessage(ctx context.Context, message protocolsessi
 		return ErrUnexpectedMessage
 	}
 	operationID, ok := message.OperationID()
-	if !ok {
+	if !ok || op.IsZero() || op.ID() != operationID {
 		return ErrOperationIdentity
 	}
 	if kind == protocolsession.MessageCancel {
 		if _, err := DecodeCancelReason(message.Body()); err != nil {
 			return err
 		}
-	}
-	operation, ok := operationFromContext(ctx, operationID)
-	if !ok {
-		return ErrOperationIdentity
-	}
-	if kind == protocolsession.MessageCancel {
-		if !operation.generation.IsCurrent() {
+		if !op.IsCurrent() {
 			return nil
 		}
-	} else if !operation.generation.IsActive() {
+	} else if !op.IsActive() {
 		return nil
 	}
 	h.queueMu.Lock()
@@ -164,7 +141,7 @@ func (h *SenderHandler) HandleMessage(ctx context.Context, message protocolsessi
 		return ErrServiceClosed
 	}
 	select {
-	case h.queue <- queuedOperation{ctx: ctx, message: message, operation: operation}:
+	case h.queue <- queuedOperation{op: op, message: message}:
 		return nil
 	default:
 		return ErrServiceQueueFull
@@ -188,16 +165,14 @@ func (h *SenderHandler) Run(ctx context.Context) error {
 			return ctx.Err()
 		case queued := <-h.queue:
 			if queued.message.Kind() == protocolsession.MessageCancel {
-				h.cancel(queued.operation)
+				h.cancel(queued.op.Ref())
 				continue
 			}
-			if !queued.operation.generation.IsActive() {
+			if !queued.op.IsActive() {
 				continue
 			}
-			operationContext, cancel := context.WithCancel(
-				protocolsession.RetainMessageContext(ctx, queued.ctx),
-			)
-			if !h.register(queued.operation, cancel) {
+			operationContext, cancel := context.WithCancel(ctx)
+			if !h.register(queued.op.Ref(), cancel) {
 				cancel()
 				continue
 			}
@@ -206,28 +181,31 @@ func (h *SenderHandler) Run(ctx context.Context) error {
 				case h.workers <- struct{}{}:
 					defer func() { <-h.workers }()
 				case <-operationContext.Done():
-					h.unregister(queued.operation)
+					h.unregister(queued.op.Ref())
 					return
 				}
-				h.process(operationContext, queued.message)
-				h.unregister(queued.operation)
+				h.process(operationContext, queued.op, queued.message)
+				h.unregister(queued.op.Ref())
 			})
 		}
 	}
 }
 
-func (h *SenderHandler) process(ctx context.Context, message protocolsession.Message) {
-	operationID, _ := message.OperationID()
+func (h *SenderHandler) process(
+	ctx context.Context,
+	op protocolsession.Operation,
+	message protocolsession.Message,
+) {
 	var err error
 	switch message.Kind() {
 	case protocolsession.MessageOpenRevisions:
-		err = h.processOpen(ctx, operationID, message.Body())
+		err = h.processOpen(ctx, op, message.Body())
 	case protocolsession.MessageRenewLease:
-		err = h.processRenew(ctx, operationID, message.Body())
+		err = h.processRenew(ctx, op, message.Body())
 	case protocolsession.MessageReleaseLease:
-		err = h.processRelease(ctx, operationID, message.Body())
+		err = h.processRelease(ctx, op, message.Body())
 	case protocolsession.MessageRequestBlocks:
-		err = h.processBlocks(ctx, operationID, message.Body())
+		err = h.processBlocks(ctx, op, message.Body())
 	}
 	var fragmentFailure *fragmentOutboundFailure
 	if err == nil || errors.Is(err, context.Canceled) ||
@@ -238,10 +216,11 @@ func (h *SenderHandler) process(ctx context.Context, message protocolsession.Mes
 	if message.Kind() == protocolsession.MessageRequestBlocks && !errors.Is(err, errRevisionOperationScope) {
 		failure = OperationFailure{Scope: BlockErrorScope, Code: classifyBlockError(err), Message: "Block operation failed"}
 	}
-	_ = h.outbound.SendOperationError(ctx, operationID, failure)
+	_ = h.outbound.SendOperationError(ctx, op, failure)
 }
 
-func (h *SenderHandler) processOpen(ctx context.Context, operationID protocolsession.OperationID, body []byte) error {
+func (h *SenderHandler) processOpen(ctx context.Context, op protocolsession.Operation, body []byte) error {
+	operationID := op.ID()
 	request, err := DecodeOpenRequest(body)
 	if err != nil {
 		return err
@@ -255,17 +234,17 @@ func (h *SenderHandler) processOpen(ctx context.Context, operationID protocolses
 	if err != nil {
 		return errors.Join(err, h.endOpenResults(operationID, results, content.LeaseUndelivered))
 	}
-	outcome, err := h.outbound.SendControl(ctx, protocolsession.MessageOpenResults, operationID, encoded)
-	switch outcome.Evidence() {
-	case protocolsession.ResponseSendEvidenceDefinitelyNotSent:
-		return errors.Join(wrapOutboundError(err), h.endOpenResults(operationID, results, content.LeaseUndelivered))
-	case protocolsession.ResponseSendEvidenceUncertain, protocolsession.ResponseSendEvidenceUninitialized:
+	if err := h.outbound.SendControl(ctx, op, protocolsession.MessageOpenResults, encoded); err != nil {
+		if protocolsession.IsNotSent(err) {
+			return errors.Join(wrapOutboundError(err), h.endOpenResults(operationID, results, content.LeaseUndelivered))
+		}
 		return errors.Join(wrapOutboundError(err), h.endOpenResults(operationID, results, content.LeaseDetached))
 	}
-	return wrapOutboundError(err)
+	return nil
 }
 
-func (h *SenderHandler) processRenew(ctx context.Context, operationID protocolsession.OperationID, body []byte) error {
+func (h *SenderHandler) processRenew(ctx context.Context, op protocolsession.Operation, body []byte) error {
+	operationID := op.ID()
 	leaseID, err := DecodeLeaseRequest(body)
 	if err != nil {
 		return err
@@ -280,15 +259,15 @@ func (h *SenderHandler) processRenew(ctx context.Context, operationID protocolse
 		h.traceLeaseDecision(operationID, protocolsession.MessageRenewLease, leaseID, content.LeaseDetached)
 		return err
 	}
-	outcome, err := h.outbound.SendControl(ctx, protocolsession.MessageLeaseResult, operationID, encoded)
-	if outcome.Evidence() != protocolsession.ResponseSendEvidenceTransportConfirmed {
+	err = h.outbound.SendControl(ctx, op, protocolsession.MessageLeaseResult, encoded)
+	if err != nil {
 		h.service.detachLease(leaseID)
 		h.traceLeaseDecision(operationID, protocolsession.MessageRenewLease, leaseID, content.LeaseDetached)
 	}
 	return wrapOutboundError(err)
 }
 
-func (h *SenderHandler) processRelease(ctx context.Context, operationID protocolsession.OperationID, body []byte) error {
+func (h *SenderHandler) processRelease(ctx context.Context, op protocolsession.Operation, body []byte) error {
 	leaseID, err := DecodeLeaseRequest(body)
 	if err != nil {
 		return err
@@ -296,22 +275,20 @@ func (h *SenderHandler) processRelease(ctx context.Context, operationID protocol
 	if err := h.service.Release(leaseID); err != nil {
 		return wrapServiceError("release lease", err)
 	}
-	h.traceLeaseDecision(operationID, protocolsession.MessageReleaseLease, leaseID, content.LeaseRelinquished)
+	h.traceLeaseDecision(op.ID(), protocolsession.MessageReleaseLease, leaseID, content.LeaseRelinquished)
 	encoded, _ := EncodeOperationComplete(0)
-	_, err = h.outbound.SendControl(ctx, protocolsession.MessageOperationComplete, operationID, encoded)
+	err = h.outbound.SendControl(ctx, op, protocolsession.MessageOperationComplete, encoded)
 	return wrapOutboundError(err)
 }
 
-func (h *SenderHandler) processBlocks(ctx context.Context, operationID protocolsession.OperationID, body []byte) error {
+func (h *SenderHandler) processBlocks(ctx context.Context, op protocolsession.Operation, body []byte) error {
+	operationID := op.ID()
 	request, err := DecodeBlockRequest(body)
 	if err != nil {
 		return err
 	}
 	count, err := h.service.ServeBlocks(ctx, operationID, request, func(sendContext context.Context, message protocolsession.Message) error {
-		sendContext = protocolsession.RetainMessageContext(sendContext, ctx)
-		if sendErr := h.outbound.SendFragment(sendContext, message); sendErr != nil {
-			// A fragment is non-final, so an OperationError remains the one legal
-			// final that can release remote waiters and local operation authority.
+		if sendErr := h.outbound.SendFragment(sendContext, op, message); sendErr != nil {
 			return &fragmentOutboundFailure{cause: wrapOutboundError(sendErr)}
 		}
 		return nil
@@ -321,7 +298,7 @@ func (h *SenderHandler) processBlocks(ctx context.Context, operationID protocols
 		return wrapServiceError("serve blocks", err)
 	}
 	encoded, _ := EncodeOperationComplete(count)
-	_, err = h.outbound.SendControl(ctx, protocolsession.MessageOperationComplete, operationID, encoded)
+	err = h.outbound.SendControl(ctx, op, protocolsession.MessageOperationComplete, encoded)
 	return wrapOutboundError(err)
 }
 
@@ -332,25 +309,25 @@ func wrapOutboundError(err error) error {
 	return errors.Join(ErrOutboundUnavailable, err)
 }
 
-func (h *SenderHandler) register(operation handlerOperation, cancel context.CancelFunc) bool {
+func (h *SenderHandler) register(ref protocolsession.OperationRef, cancel context.CancelFunc) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if _, exists := h.active[operation]; exists {
+	if _, exists := h.active[ref]; exists {
 		return false
 	}
-	h.active[operation] = cancel
+	h.active[ref] = cancel
 	return true
 }
 
-func (h *SenderHandler) unregister(operation handlerOperation) {
+func (h *SenderHandler) unregister(ref protocolsession.OperationRef) {
 	h.mu.Lock()
-	delete(h.active, operation)
+	delete(h.active, ref)
 	h.mu.Unlock()
 }
 
-func (h *SenderHandler) cancel(operation handlerOperation) {
+func (h *SenderHandler) cancel(ref protocolsession.OperationRef) {
 	h.mu.Lock()
-	cancel := h.active[operation]
+	cancel := h.active[ref]
 	h.mu.Unlock()
 	if cancel != nil {
 		cancel()
@@ -388,7 +365,12 @@ func (h *SenderHandler) drainQueue() {
 	}
 }
 
-func RegisterSenderHandlers(router *protocolsession.RoleRouter, handler *SenderHandler) error {
+func RegisterSenderHandlers(
+	router interface {
+		RegisterHandler(protocolsession.MessageKind, protocolsession.MessageHandler) error
+	},
+	handler *SenderHandler,
+) error {
 	if router == nil || handler == nil {
 		return errors.New("content handler registration requires router and handler")
 	}

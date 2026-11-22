@@ -15,11 +15,11 @@ import (
 
 func TestConcurrentSameIDRequestsAdmitExactlyOneRouteAuthority(t *testing.T) {
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
-	handlerContexts := make(chan context.Context, 1)
-	if err := runtime.router.RegisterHandler(
+	handlerOps := make(chan protocolsession.Operation, 1)
+	if err := runtime.inbound.RegisterHandler(
 		protocolsession.MessageOpenRevisions,
-		protocolsession.MessageHandlerFunc(func(ctx context.Context, _ protocolsession.Message) error {
-			handlerContexts <- ctx
+		protocolsession.MessageHandlerFunc(func(_ context.Context, op protocolsession.Operation, _ protocolsession.Message) error {
+			handlerOps <- op
 			return nil
 		}),
 	); err != nil {
@@ -46,9 +46,7 @@ func TestConcurrentSameIDRequestsAdmitExactlyOneRouteAuthority(t *testing.T) {
 	for _, identity := range []session.LaneIdentity{runtime.initial, secondIdentity} {
 		wait.Go(func() {
 			<-start
-			disposition, err := (laneInboundRouter{
-				runtime: runtime, identity: identity,
-			}).RouteInbound(context.Background(), request)
+			disposition, err := runtime.inbound.RouteInbound(identity, request)
 			results <- result{disposition: disposition, err: err}
 		})
 	}
@@ -66,48 +64,43 @@ func TestConcurrentSameIDRequestsAdmitExactlyOneRouteAuthority(t *testing.T) {
 			t.Fatalf("same-ID admission = disposition %d, error %v", result.disposition, result.err)
 		}
 	}
-	if delivered != 1 || replayed != 1 || runtime.operations.ActiveCount() != 1 || runtime.routes.len() != 1 {
-		t.Fatalf("delivered=%d replayed=%d active=%d routes=%d",
-			delivered, replayed, runtime.operations.ActiveCount(), runtime.routes.len())
+	if delivered != 1 || replayed != 1 || runtime.operations.ActiveCount() != 1 {
+		t.Fatalf("delivered=%d replayed=%d active=%d",
+			delivered, replayed, runtime.operations.ActiveCount())
 	}
-	route := runtime.routes.current(operationID)
-	if route == nil {
-		t.Fatal("winning request has no route authority")
+	op := dispatchTestOperation(t, runtime, handlerOps)
+	rec := runtime.operations.lookupRecord(op.Ref())
+	if rec == nil || !rec.preferredLane.Valid(true) {
+		t.Fatal("winning request has no preferred lane authority")
 	}
+	winningLane := rec.preferredLane
 	conflictingBody, _ := protocolsession.EncodeBody(map[uint64]any{0: uint64(2)})
 	conflicting, _ := protocolsession.NewMessage(protocolsession.MessageOpenRevisions, &operationID, conflictingBody)
-	if disposition, err := (laneInboundRouter{
-		runtime: runtime, identity: secondIdentity,
-	}).RouteInbound(context.Background(), conflicting); disposition != protocolsession.OperationDrop ||
+	if disposition, err := runtime.inbound.RouteInbound(secondIdentity, conflicting); disposition != protocolsession.OperationDrop ||
 		!errors.Is(err, protocolsession.ErrOperationIDReused) {
 		t.Fatalf("conflicting same-ID request = disposition %d, error %v", disposition, err)
 	}
-	if runtime.routes.current(operationID) != route {
-		t.Fatal("conflicting replay replaced the first physical route authority")
+	if rec.preferredLane != winningLane {
+		t.Fatal("conflicting replay replaced the first physical lane affinity")
 	}
-	operationContext := dispatchTestOperationContext(t, runtime, handlerContexts)
-	lane, err := runtime.lanes.selectLane(&route.preferred)
+	lane, err := runtime.lanes.selectLane(&winningLane)
 	if err != nil {
 		t.Fatal(err)
 	}
 	writerContext, stopWriter := context.WithCancel(context.Background())
 	writerDone := make(chan error, 1)
 	go func() { writerDone <- lane.writer.Run(writerContext) }()
-	outbound := &Responses{
-		runtime: runtime,
-	}
-	outcome, err := outbound.SendControl(
-		operationContext,
-		protocolsession.MessageOpenResults, operationID, body,
-	)
-	if err != nil || outcome.Evidence() != protocolsession.ResponseSendEvidenceTransportConfirmed {
-		t.Fatalf("winning authority response = %+v, %v", outcome, err)
+	outbound := &Responses{runtime: runtime}
+	if err := outbound.SendControl(
+		context.Background(), op, protocolsession.MessageOpenResults, body,
+	); err != nil {
+		t.Fatalf("winning authority response = %v", err)
 	}
 	stopWriter()
 	<-writerDone
-	if runtime.routes.len() != 0 || runtime.operations.ActiveCount() != 0 || runtime.operations.TombstoneCount() != 1 {
-		t.Fatalf("final drain routes=%d active=%d tombstones=%d",
-			runtime.routes.len(), runtime.operations.ActiveCount(), runtime.operations.TombstoneCount())
+	if runtime.operations.ActiveCount() != 0 || runtime.operations.TombstoneCount() != 1 {
+		t.Fatalf("final drain active=%d tombstones=%d",
+			runtime.operations.ActiveCount(), runtime.operations.TombstoneCount())
 	}
 }
 
@@ -125,11 +118,11 @@ func testForcedHostileSameIDReuseRejectsDelayedOldRouteContext(t *testing.T) {
 		t, protocolsession.RoleSender,
 		protocolsession.OperationLimits{MaxActive: 4, MaxTracked: 4}, now,
 	)
-	handlerContexts := make(chan context.Context, 2)
-	if err := runtime.router.RegisterHandler(
+	handlerOps := make(chan protocolsession.Operation, 2)
+	if err := runtime.inbound.RegisterHandler(
 		protocolsession.MessageOpenRevisions,
-		protocolsession.MessageHandlerFunc(func(ctx context.Context, _ protocolsession.Message) error {
-			handlerContexts <- ctx
+		protocolsession.MessageHandlerFunc(func(_ context.Context, op protocolsession.Operation, _ protocolsession.Message) error {
+			handlerOps <- op
 			return nil
 		}),
 	); err != nil {
@@ -149,69 +142,61 @@ func testForcedHostileSameIDReuseRejectsDelayedOldRouteContext(t *testing.T) {
 	operationID := id16[protocolsession.OperationID](122)
 	body, _ := protocolsession.EncodeBody(map[uint64]any{0: uint64(1)})
 	request, _ := protocolsession.NewMessage(protocolsession.MessageOpenRevisions, &operationID, body)
-	inbound := laneInboundRouter{runtime: runtime, identity: runtime.initial}
-	if disposition, err := inbound.RouteInbound(context.Background(), request); err != nil ||
+	if disposition, err := runtime.inbound.RouteInbound(runtime.initial, request); err != nil ||
 		disposition != protocolsession.OperationDeliver {
 		t.Fatalf("first request = %d, %v", disposition, err)
 	}
-	oldRoute := runtime.routes.current(operationID)
-	oldContext := dispatchTestOperationContext(t, runtime, handlerContexts)
-	outbound := &Responses{
-		runtime: runtime,
+	oldOp := dispatchTestOperation(t, runtime, handlerOps)
+	outbound := &Responses{runtime: runtime}
+	if err := outbound.SendControl(
+		context.Background(), oldOp, protocolsession.MessageOpenResults, body,
+	); err != nil {
+		t.Fatalf("first final = %v", err)
 	}
-	if outcome, err := outbound.SendControl(
-		oldContext, protocolsession.MessageOpenResults, operationID, body,
-	); err != nil || outcome.Evidence() != protocolsession.ResponseSendEvidenceTransportConfirmed {
-		t.Fatalf("first final = %+v, %v", outcome, err)
-	}
-	// Receipt settlement can wake the caller before the writer's deferred
-	// admission-pin release. The hostile clock jump must begin after that release
-	// or it models retention time passing while the first send is still in flight.
 	synctest.Wait()
 	nanos.Add((protocolsession.OperationTombstoneLifetime + time.Nanosecond).Nanoseconds())
-	if disposition, err := inbound.RouteInbound(context.Background(), request); err != nil ||
+	if disposition, err := runtime.inbound.RouteInbound(runtime.initial, request); err != nil ||
 		disposition != protocolsession.OperationDeliver {
 		t.Fatalf("forced colliding request = %d, %v", disposition, err)
 	}
-	newRoute := runtime.routes.current(operationID)
-	if newRoute == nil || newRoute == oldRoute {
-		t.Fatal("forced same-ID collision did not receive distinct route authority")
+	newOp := dispatchTestOperation(t, runtime, handlerOps)
+	if oldOp.Same(newOp) {
+		t.Fatal("forced same-ID collision did not receive distinct operation token")
 	}
-	newContext := dispatchTestOperationContext(t, runtime, handlerContexts)
-	if err := outbound.SendOperationError(oldContext, operationID, contentflow.OperationFailure{
+	if err := outbound.SendOperationError(context.Background(), oldOp, contentflow.OperationFailure{
 		Scope:   contentflow.RevisionErrorScope,
 		Code:    contentflow.RevisionCodeUnreadable,
 		Message: "stale handler failure",
-	}); !errors.Is(err, session.ErrOperationMissing) {
+	}); !errors.Is(err, protocolsession.ErrOperationSuppressed) {
 		t.Fatalf("delayed old generation error = %v", err)
 	}
-	if runtime.routes.current(operationID) != newRoute || runtime.operations.ActiveCount() != 1 {
-		t.Fatalf("old context changed forced colliding generation: route=%p active=%d",
-			runtime.routes.current(operationID), runtime.operations.ActiveCount())
+	if !newOp.IsActive() || runtime.operations.ActiveCount() != 1 {
+		t.Fatalf("old op changed forced colliding generation: active=%v count=%d",
+			newOp.IsActive(), runtime.operations.ActiveCount())
 	}
-	if outcome, err := outbound.SendControl(
-		newContext, protocolsession.MessageOpenResults, operationID, body,
-	); err != nil || outcome.Evidence() != protocolsession.ResponseSendEvidenceTransportConfirmed {
-		t.Fatalf("forced colliding generation final = %+v, %v", outcome, err)
+	if err := outbound.SendControl(
+		context.Background(), newOp, protocolsession.MessageOpenResults, body,
+	); err != nil {
+		t.Fatalf("forced colliding generation final = %v", err)
 	}
-	if runtime.routes.len() != 0 || runtime.operations.ActiveCount() != 0 || runtime.operations.TombstoneCount() != 1 {
-		t.Fatalf("forced colliding generation drain routes=%d active=%d tombstones=%d",
-			runtime.routes.len(), runtime.operations.ActiveCount(), runtime.operations.TombstoneCount())
+	if runtime.operations.ActiveCount() != 0 || runtime.operations.TombstoneCount() != 1 {
+		t.Fatalf("forced colliding generation drain active=%d tombstones=%d",
+			runtime.operations.ActiveCount(), runtime.operations.TombstoneCount())
 	}
 }
 
-func dispatchTestOperationContext(
+func dispatchTestOperation(
 	t *testing.T,
 	runtime *Runtime,
-	contexts <-chan context.Context,
-) context.Context {
+	ops <-chan protocolsession.Operation,
+) protocolsession.Operation {
 	t.Helper()
-	event, err := runtime.router.Next(context.Background())
+	event, err := runtime.inbound.Next(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := runtime.router.Dispatch(context.Background(), event); err != nil {
+	if err := runtime.inbound.Dispatch(context.Background(), event); err != nil {
 		t.Fatal(err)
 	}
-	return <-contexts
+	return <-ops
 }

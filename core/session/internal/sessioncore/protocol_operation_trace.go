@@ -3,12 +3,12 @@ package sessioncore
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
 	sessionobs "github.com/windshare/windshare/core/session/observation"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"time"
 )
 
 func (client *Requests) newCall(
@@ -55,19 +55,17 @@ func (call *Call) setProtocolTraceLane(lane session.LaneIdentity, usable uint32)
 	call.stateMu.Unlock()
 }
 
-func (call *Call) recordProtocolTraceSend(completion protocolsession.SendCompletion) {
+func (call *Call) recordProtocolTraceSend(status sessionobs.SendStatus) {
 	if call == nil || !call.traceEnabled {
 		return
 	}
 	call.stateMu.Lock()
 	call.traceHasSend = true
-	call.traceSendSettled = completion.Settled
-	call.traceSendAdmitted = completion.Admitted
-	call.traceSendOutcome = completion.Outcome
+	call.traceSendStatus = status
 	call.stateMu.Unlock()
 }
 
-func (call *Call) recordProtocolTraceFailure(err error) {
+func (call *Call) RecordTraceFailure(err error) {
 	if call == nil || !call.traceEnabled || err == nil {
 		return
 	}
@@ -76,23 +74,21 @@ func (call *Call) recordProtocolTraceFailure(err error) {
 		call.traceBlockWait = *timeout
 		call.stateMu.Unlock()
 	}
-	call.recordProtocolTraceCause(protocolOperationCause(err))
+	call.RecordTraceCause(protocolOperationCause(err))
 }
 
-func (call *Call) recordProtocolTraceCleanup(err error) {
+func (call *Call) RecordTraceCleanup(err error) {
 	if call == nil || !call.traceEnabled || err == nil {
 		return
 	}
 	cause := protocolOperationCause(err)
-	// Cleanup is synchronous and owns no cancelable wait. A lifecycle-shaped
-	// error here is a failed transition, not evidence of an ordinary wakeup.
 	if cause != sessionobs.ProtocolOperationCauseNone && cause.IsLifecycle() {
 		cause = sessionobs.ProtocolOperationCauseProtocolFailure
 	}
-	call.recordProtocolTraceCause(cause)
+	call.RecordTraceCause(cause)
 }
 
-func (call *Call) recordProtocolTraceCause(cause sessionobs.ProtocolOperationCause) {
+func (call *Call) RecordTraceCause(cause sessionobs.ProtocolOperationCause) {
 	if call == nil || !call.traceEnabled {
 		return
 	}
@@ -109,12 +105,12 @@ type OperationOutcome struct {
 	Cause sessionobs.ProtocolOperationCause
 }
 
-// An owner holds terminal observation until its receive and cleanup results are
+// TerminalOwner holds terminal observation until its receive and cleanup results are
 // known. Closing the RPC sink still wakes waiters immediately, but cannot publish
 // a partial outcome that would hide a later joined fault.
 type TerminalOwner struct{ call *Call }
 
-func (call *Call) claimProtocolTermination() *TerminalOwner {
+func (call *Call) ClaimProtocolTermination() *TerminalOwner {
 	if call == nil || !call.traceEnabled {
 		return nil
 	}
@@ -132,7 +128,7 @@ func (call *Call) claimProtocolTerminationLocked() *TerminalOwner {
 	return owner
 }
 
-func (owner *TerminalOwner) finish(runtime *Runtime, outcome OperationOutcome) {
+func (owner *TerminalOwner) Finish(runtime *Runtime, outcome OperationOutcome) {
 	if owner == nil || runtime == nil {
 		return
 	}
@@ -145,12 +141,14 @@ func (call *Call) protocolOperationTrace(now time.Time) (sessionobs.ProtocolOper
 	return call.protocolOperationTerminationTrace(now, nil, OperationOutcome{})
 }
 
-func (call *Call) protocolOperationTerminationTrace(now time.Time, owner *TerminalOwner, outcome OperationOutcome) (sessionobs.ProtocolOperationObservation, bool) {
+func (call *Call) protocolOperationTerminationTrace(
+	now time.Time,
+	owner *TerminalOwner,
+	outcome OperationOutcome,
+) (sessionobs.ProtocolOperationObservation, bool) {
 	if call == nil || !call.traceEnabled {
 		return sessionobs.ProtocolOperationObservation{}, false
 	}
-	// continuationLane takes laneMu before stateMu, so trace snapshotting follows
-	// the same order and cannot invert locks during concurrent shutdown.
 	call.laneMu.Lock()
 	lane := call.lane
 	call.stateMu.Lock()
@@ -164,8 +162,6 @@ func (call *Call) protocolOperationTerminationTrace(now time.Time, owner *Termin
 	switch {
 	case owner != nil:
 		stage, cause = outcome.Stage, cause.Merge(outcome.Cause)
-		// Supersession owns a canceled block wait, not missing RPC authority.
-		// Peer owners can separately prove an ordinary operation-closed wakeup.
 		if outcome.Cause == sessionobs.ProtocolOperationCauseSuperseded && cause == sessionobs.ProtocolOperationCauseOperationClosed {
 			stage = sessionobs.ProtocolOperationReceiverFailed
 		}
@@ -185,25 +181,42 @@ func (call *Call) protocolOperationTerminationTrace(now time.Time, owner *Termin
 		stage = sessionobs.ProtocolOperationReceiverCompleted
 	}
 	event := sessionobs.ProtocolOperationObservation{
-		Stage: stage, OperationID: call.id, RequestKind: call.requestKind,
-		ResponseKind: call.traceResponseKind, HasResponse: call.traceHasResponse,
-		Lane: lane, HasLane: lane.Valid(true), HasSend: call.traceHasSend,
-		SendSettled: call.traceSendSettled, SendAdmitted: call.traceSendAdmitted,
-		SendOutcome: call.traceSendOutcome, ResponseCount: call.traceResponseCount,
-		DeadlineRemainingMillis: call.traceDeadlineMillis, HasDeadline: call.traceHasDeadline,
-		OperationElapsedMillis: durationMillis(now.Sub(call.traceStarted)),
-		UsableLanesAtSelection: call.traceUsableAtSelection,
-		Cause:                  cause,
-		RequestScheduling:      call.requests.Estimate(),
-		BlockWait:              call.traceBlockWait,
+		Stage:                   stage,
+		OperationID:             call.id,
+		RequestKind:             call.requestKind,
+		ResponseKind:            call.traceResponseKind,
+		HasResponse:             call.traceHasResponse,
+		Lane:                    lane,
+		HasLane:                 lane.Valid(true),
+		HasSend:                 call.traceHasSend,
+		SendStatus:              call.traceSendStatus,
+		ResponseCount:           call.traceResponseCount,
+		DeadlineRemainingMillis: call.traceDeadlineMillis,
+		HasDeadline:             call.traceHasDeadline,
+		OperationElapsedMillis:  durationMillis(now.Sub(call.traceStarted)),
+		UsableLanesAtSelection:  call.traceUsableAtSelection,
+		Cause:                   cause,
+		RequestScheduling:       call.requests.Estimate(),
+		BlockWait:               call.traceBlockWait,
 	}
 	call.stateMu.Unlock()
 	call.laneMu.Unlock()
 	return event, true
 }
 
-func (runtime *Runtime) observationContext(operationID protocolsession.OperationID, kind protocolsession.MessageKind) sessionobs.ProtocolObservationContext {
-	return sessionobs.ProtocolObservationContext{Correlation: sessionobs.ProtocolObservationCorrelation{Role: runtime.role, ProtocolSessionID: runtime.sessionID, OperationID: operationID, RequestKind: kind}, ObservedAt: runtime.now()}
+func (runtime *Runtime) observationContext(
+	operationID protocolsession.OperationID,
+	kind protocolsession.MessageKind,
+) sessionobs.ProtocolObservationContext {
+	return sessionobs.ProtocolObservationContext{
+		Correlation: sessionobs.ProtocolObservationCorrelation{
+			Role:              runtime.role,
+			ProtocolSessionID: runtime.sessionID,
+			OperationID:       operationID,
+			RequestKind:       kind,
+		},
+		ObservedAt: runtime.now(),
+	}
 }
 
 func (runtime *Runtime) traceProtocolOperation(event sessionobs.ProtocolOperationObservation) {
@@ -222,11 +235,13 @@ func (runtime *Runtime) protocolOperationTracingEnabled() bool {
 }
 
 func retainProtocolOperationObservation(event sessionobs.ProtocolOperationObservation) bool {
-	if event.Stage == sessionobs.ProtocolOperationReceiverWaitingActiveCapacity || event.Stage == sessionobs.ProtocolOperationReceiverWaitingRetainedCapacity || event.Stage == sessionobs.ProtocolOperationReceiverAdmissionReady {
+	if event.Stage == sessionobs.ProtocolOperationReceiverWaitingActiveCapacity ||
+		event.Stage == sessionobs.ProtocolOperationReceiverWaitingRetainedCapacity ||
+		event.Stage == sessionobs.ProtocolOperationReceiverAdmissionReady {
 		return true
 	}
 	if event.Cause != sessionobs.ProtocolOperationCauseNone ||
-		(event.HasSend && (!event.SendSettled || !event.SendAdmitted || event.SendOutcome != protocolsession.SendOutcomeTransportConfirmed)) ||
+		(event.HasSend && event.SendStatus != sessionobs.SendStatusConfirmed) ||
 		(event.HasResponse && event.ResponseKind == protocolsession.MessageOperationError) {
 		return true
 	}
@@ -245,8 +260,6 @@ func remainingDeadlineMillis(ctx context.Context, now time.Time) (uint64, bool) 
 	if remaining <= 0 {
 		return 0, true
 	}
-	// Round up so a newly-created 30 second budget remains recognizable as
-	// 30000ms instead of becoming 29999ms due to sub-millisecond setup work.
 	millis := remaining / time.Millisecond
 	if remaining%time.Millisecond != 0 {
 		millis++
@@ -258,22 +271,23 @@ func durationMillis(value time.Duration) uint64 {
 	if value <= 0 {
 		return 0
 	}
-	millis := value / time.Millisecond
-	return uint64(millis)
+	return uint64(value / time.Millisecond)
 }
 
 func (client *Requests) waitRequestCapacity(ctx context.Context, call *Call) error {
-	var observer func(protocolsession.OperationCapacityWaitReason)
+	var observer func(operationCapacityWaitReason)
 	waited := false
 	if call.traceEnabled {
-		observer = func(reason protocolsession.OperationCapacityWaitReason) {
+		observer = func(reason operationCapacityWaitReason) {
 			waited = true
 			stage := sessionobs.ProtocolOperationReceiverWaitingRetainedCapacity
-			if reason == protocolsession.OperationWaitingActiveCapacity {
+			if reason == operationWaitingActiveCapacity {
 				stage = sessionobs.ProtocolOperationReceiverWaitingActiveCapacity
 			}
 			client.runtime.traceProtocolOperation(sessionobs.ProtocolOperationObservation{
-				Stage: stage, OperationID: call.id, RequestKind: call.requestKind,
+				Stage:                  stage,
+				OperationID:            call.id,
+				RequestKind:            call.requestKind,
 				OperationElapsedMillis: durationMillis(client.runtime.now().Sub(call.traceStarted)),
 			})
 		}
@@ -281,7 +295,9 @@ func (client *Requests) waitRequestCapacity(ctx context.Context, call *Call) err
 	err := client.runtime.operations.WaitForCapacity(ctx, observer)
 	if waited && err == nil {
 		client.runtime.traceProtocolOperation(sessionobs.ProtocolOperationObservation{
-			Stage: sessionobs.ProtocolOperationReceiverAdmissionReady, OperationID: call.id, RequestKind: call.requestKind,
+			Stage:                  sessionobs.ProtocolOperationReceiverAdmissionReady,
+			OperationID:            call.id,
+			RequestKind:            call.requestKind,
 			OperationElapsedMillis: durationMillis(client.runtime.now().Sub(call.traceStarted)),
 		})
 	}

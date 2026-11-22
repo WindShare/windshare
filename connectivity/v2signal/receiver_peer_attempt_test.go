@@ -1,138 +1,73 @@
 package v2signal
 
 import (
-	"errors"
-	"github.com/windshare/windshare/core/session/protocolsession"
 	"testing"
-	"time"
+
+	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
-func TestRetiredPeerContinuationSurvivesOperationGC(t *testing.T) {
-	now := time.Unix(1, 0)
-	table, err := protocolsession.NewOperationTableWithContinuations(protocolsession.OperationLimits{MaxActive: 4, MaxTracked: 4}, func() time.Time { return now }, ReceiverControlValidator{})
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestReceiverControlValidatorClassifiesPeerAttemptContinuations(t *testing.T) {
+	validator := ReceiverControlValidator{}
 	binding := testBinding()
-	oldID := protocolsession.OperationID{1}
-	offer := func(id protocolsession.OperationID, b Binding) protocolsession.Message {
-		body, e := EncodeOffer(Offer{Binding: b, SDP: "v=0"})
-		if e != nil {
-			t.Fatal(e)
-		}
-		m, e := protocolsession.NewMessage(protocolsession.MessagePeerOffer, &id, body)
-		if e != nil {
-			t.Fatal(e)
-		}
-		return m
-	}
-	admitted, err := table.ObserveInbound(protocolsession.DirectionReceiverToSender, offer(oldID, binding))
+	offerBody, err := EncodeOffer(Offer{Binding: binding, SDP: "v=0"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = table.CancelGeneration(admitted.Generation); err != nil {
-		t.Fatal(err)
+	contract, tracked, err := validator.BeginOperationContinuation(protocolsession.MessagePeerOffer, offerBody)
+	if err != nil || !tracked || contract == nil {
+		t.Fatalf("begin continuation: tracked=%v err=%v", tracked, err)
 	}
-	now = now.Add(protocolsession.OperationTombstoneLifetime + time.Millisecond)
-	current := binding
-	current.AttemptSequence++
-	current.AttemptID[0]++
-	currentID := protocolsession.OperationID{2}
-	currentAdmission, err := table.ObserveInbound(protocolsession.DirectionReceiverToSender, offer(currentID, current))
+	authority, ok := contract.(protocolsession.PeerAttemptAuthority)
+	if !ok {
+		t.Fatalf("contract %T does not expose PeerAttemptAuthority", contract)
+	}
+	wantBinding := protocolBinding(binding)
+	if got := authority.PeerAttemptBinding(); got != wantBinding {
+		t.Fatalf("peer attempt binding=%+v want %+v", got, wantBinding)
+	}
+
+	answerBody, err := EncodeAnswer(Answer{Binding: binding, SDP: "v=0"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	continuation := func(id protocolsession.OperationID, b Binding, kind protocolsession.MessageKind) protocolsession.Message {
-		var body []byte
-		var e error
-		switch kind {
-		case protocolsession.MessagePeerAnswer:
-			body, e = EncodeAnswer(Answer{Binding: b, SDP: "v=0"})
-		case protocolsession.MessagePeerCandidate:
-			body, e = EncodeCandidate(Candidate{Binding: b, Candidate: "candidate:late"})
-		default:
-			pb := protocolBinding(b)
-			body, e = protocolsession.EncodeOperationFailure(protocolsession.OperationFailure{Scope: protocolsession.OperationScopePeer, Code: protocolsession.PeerOperationCodeAuthentication, Message: "late failure", PeerAttempt: &pb})
-		}
-		if e != nil {
-			t.Fatal(e)
-		}
-		m, e := protocolsession.NewMessage(kind, &id, body)
-		if e != nil {
-			t.Fatal(e)
-		}
-		return m
+	candidateBody, err := EncodeCandidate(Candidate{Binding: binding, Candidate: "candidate:late"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, kind := range []protocolsession.MessageKind{protocolsession.MessagePeerAnswer, protocolsession.MessagePeerCandidate, protocolsession.MessageOperationError} {
-		if d, e := table.Observe(protocolsession.DirectionSenderToReceiver, continuation(oldID, binding, kind)); e != nil || d != protocolsession.OperationDrop {
-			t.Fatalf("late %d: %d %v", kind, d, e)
-		}
-		unknown := protocolsession.OperationID{3}
-		future := current
-		future.AttemptSequence++
-		otherPath := binding
-		otherPath.PeerPathID[0]++
-		otherPath.PeerSlot++
-		for _, wrong := range []Binding{future, otherPath} {
-			if _, e := table.Observe(protocolsession.DirectionSenderToReceiver, continuation(unknown, wrong, kind)); !errors.Is(e, protocolsession.ErrUnknownOperation) {
-				t.Fatalf("unknown binding %d: %v", kind, e)
-			}
-		}
-		if _, e := table.Observe(protocolsession.DirectionSenderToReceiver, continuation(unknown, current, kind)); !errors.Is(e, protocolsession.ErrUnknownOperation) {
-			t.Fatalf("current wrong operation %d: %v", kind, e)
-		}
-		if _, e := table.Observe(protocolsession.DirectionSenderToReceiver, continuation(currentID, binding, kind)); !errors.Is(e, protocolsession.ErrConflictingContinuation) {
-			t.Fatalf("wrong current binding %d: %v", kind, e)
+	failureBody, err := protocolsession.EncodeOperationFailure(protocolsession.OperationFailure{
+		Scope: protocolsession.OperationScopePeer, Code: protocolsession.PeerOperationCodeAuthentication,
+		Message: "late failure", PeerAttempt: &wantBinding,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		kind protocolsession.MessageKind
+		body []byte
+	}{
+		{protocolsession.MessagePeerOffer, offerBody},
+		{protocolsession.MessagePeerAnswer, answerBody},
+		{protocolsession.MessagePeerCandidate, candidateBody},
+	} {
+		got, classified, err := validator.ClassifyPeerAttemptContinuation(tc.kind, tc.body)
+		if err != nil || !classified || got != wantBinding {
+			t.Fatalf("classify kind=%d: got=%+v classified=%v err=%v", tc.kind, got, classified, err)
 		}
 	}
-	if d, e := table.Observe(protocolsession.DirectionReceiverToSender, offer(protocolsession.OperationID{4}, binding)); e != nil || d != protocolsession.OperationDrop {
-		t.Fatalf("superseded offer: %d %v", d, e)
+	if decodedFailure, err := protocolsession.DecodeOperationFailure(failureBody); err != nil || decodedFailure.PeerAttempt == nil || *decodedFailure.PeerAttempt != wantBinding {
+		t.Fatalf("decode peer failure: %+v err=%v", decodedFailure, err)
 	}
-	if table.ActiveCount() != 1 || table.TombstoneCount() != 0 || table.Terminated() {
-		t.Fatal("late traffic changed fresh authority")
+	if _, tracked, err := contract.ClassifyOperationContinuation(protocolsession.MessagePeerCandidate, candidateBody); err != nil || !tracked {
+		t.Fatalf("candidate continuation: tracked=%v err=%v", tracked, err)
 	}
-	// Repeated tombstone collection retains a bounded path boundary and must
-	// never hide an older live attempt behind a later retired watermark.
-	for sequence := uint64(3); sequence < 131; sequence++ {
-		next := binding
-		next.AttemptSequence = sequence
-		next.AttemptID[0] = byte(sequence)
-		id := protocolsession.OperationID{byte(sequence), 1}
-		admission, e := table.ObserveInbound(protocolsession.DirectionReceiverToSender, offer(id, next))
-		if e != nil {
-			t.Fatal(e)
-		}
-		if e = table.CancelGeneration(admission.Generation); e != nil {
-			t.Fatal(e)
-		}
-		now = now.Add(protocolsession.OperationTombstoneLifetime + time.Millisecond)
+	other := binding
+	other.AttemptSequence++
+	other.AttemptID[0]++
+	otherCandidate, err := EncodeCandidate(Candidate{Binding: other, Candidate: "candidate:other"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	wrongID := protocolsession.OperationID{250}
-	if _, e := table.Observe(protocolsession.DirectionSenderToReceiver, continuation(wrongID, current, protocolsession.MessageOperationError)); !errors.Is(e, protocolsession.ErrUnknownOperation) {
-		t.Fatal("live older sequence lost exact operation protection", e)
-	}
-	if e := table.CancelGeneration(currentAdmission.Generation); e != nil {
-		t.Fatal(e)
-	}
-	now = now.Add(protocolsession.OperationTombstoneLifetime + time.Millisecond)
-	if d, e := table.Observe(protocolsession.DirectionSenderToReceiver, continuation(wrongID, current, protocolsession.MessageOperationError)); e != nil || d != protocolsession.OperationDrop {
-		t.Fatal("retired older sequence was not collected", d, e)
-	}
-	// Physical replacements reuse the slot's monotonic sequence, even after
-	// all per-operation tombstones have been collected.
-	for index := 1; index <= 32; index++ {
-		next := binding
-		next.PeerPathID[0] += byte(index)
-		next.AttemptSequence = uint64(131 + index)
-		admission, e := table.ObserveInbound(protocolsession.DirectionReceiverToSender, offer(protocolsession.OperationID{byte(index), 2}, next))
-		if e != nil {
-			t.Fatal(e)
-		} else if e = table.CancelGeneration(admission.Generation); e != nil {
-			t.Fatal(e)
-		}
-		now = now.Add(protocolsession.OperationTombstoneLifetime + time.Millisecond)
-		if d, e := table.Observe(protocolsession.DirectionReceiverToSender, offer(oldID, binding)); e != nil || d != protocolsession.OperationDrop {
-			t.Fatal("replacement resurrected an old physical path", d, e)
-		}
+	if _, _, err := contract.ClassifyOperationContinuation(protocolsession.MessagePeerCandidate, otherCandidate); err == nil {
+		t.Fatal("mismatched binding candidate was accepted")
 	}
 }

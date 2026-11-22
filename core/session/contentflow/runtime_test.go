@@ -507,20 +507,94 @@ type failingSemanticOutbound struct {
 	operationErrors atomic.Int32
 }
 
-func (outbound *failingSemanticOutbound) SendControl(
-	context.Context,
-	protocolsession.MessageKind,
-	protocolsession.OperationID,
-	[]byte,
-) (protocolsession.ResponseSendResult, error) {
-	return responseResultForTest(protocolsession.SendOutcomeUnknown), outbound.err
+type stubOperationState struct {
+	mu      sync.Mutex
+	next    uint64
+	active  map[protocolsession.OperationRef]protocolsession.MessageKind
+	current map[protocolsession.OperationRef]protocolsession.MessageKind
 }
 
-func (outbound *failingSemanticOutbound) SendFragment(context.Context, protocolsession.Message) error {
+func newStubOperationState() *stubOperationState {
+	return &stubOperationState{
+		active:  make(map[protocolsession.OperationRef]protocolsession.MessageKind),
+		current: make(map[protocolsession.OperationRef]protocolsession.MessageKind),
+	}
+}
+
+func (s *stubOperationState) admit(id protocolsession.OperationID, kind protocolsession.MessageKind) protocolsession.Operation {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.next++
+	ref := protocolsession.OperationRef{ID: id, Token: s.next}
+	s.active[ref] = kind
+	s.current[ref] = kind
+	return protocolsession.NewOperation(ref, s)
+}
+
+func (s *stubOperationState) cancel(ref protocolsession.OperationRef) {
+	s.mu.Lock()
+	delete(s.active, ref)
+	s.mu.Unlock()
+}
+
+func (s *stubOperationState) Active(ref protocolsession.OperationRef) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.active[ref]
+	return ok
+}
+
+func (s *stubOperationState) Current(ref protocolsession.OperationRef) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.current[ref]
+	return ok
+}
+
+func (s *stubOperationState) RequestKind(ref protocolsession.OperationRef) (protocolsession.MessageKind, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	kind, ok := s.current[ref]
+	return kind, ok
+}
+
+func (s *stubOperationState) PeerAttemptBinding(protocolsession.OperationRef) (protocolsession.PeerAttemptBinding, bool) {
+	return protocolsession.PeerAttemptBinding{}, false
+}
+
+func testActiveOperation(id protocolsession.OperationID) protocolsession.Operation {
+	return newStubOperationState().admit(id, protocolsession.MessageOpenRevisions)
+}
+
+type stubRegistrar struct {
+	handlers map[protocolsession.MessageKind]protocolsession.MessageHandler
+}
+
+func (r *stubRegistrar) RegisterHandler(kind protocolsession.MessageKind, h protocolsession.MessageHandler) error {
+	if r.handlers == nil {
+		r.handlers = make(map[protocolsession.MessageKind]protocolsession.MessageHandler)
+	}
+	if _, exists := r.handlers[kind]; exists {
+		return protocolsession.ErrHandlerRegistered
+	}
+	r.handlers[kind] = h
+	return nil
+}
+
+func (outbound *failingSemanticOutbound) SendControl(
+	context.Context,
+	protocolsession.Operation,
+	protocolsession.MessageKind,
+	[]byte,
+) error {
 	return outbound.err
 }
 
-func (outbound *failingSemanticOutbound) SendOperationError(context.Context, protocolsession.OperationID, OperationFailure) error {
+func (outbound *failingSemanticOutbound) SendFragment(context.Context, protocolsession.Operation, protocolsession.Message) error {
+	return outbound.err
+}
+
+func (outbound *failingSemanticOutbound) SendOperationError(context.Context, protocolsession.Operation, OperationFailure) error {
 	outbound.operationErrors.Add(1)
 	return outbound.err
 }
@@ -532,15 +606,15 @@ func newRecordingOutbound() *recordingOutbound {
 	}
 }
 
-func (outbound *recordingOutbound) SendControl(_ context.Context, kind protocolsession.MessageKind, _ protocolsession.OperationID, _ []byte) (protocolsession.ResponseSendResult, error) {
+func (outbound *recordingOutbound) SendControl(_ context.Context, _ protocolsession.Operation, kind protocolsession.MessageKind, _ []byte) error {
 	outbound.controls <- kind
-	return responseResultForTest(protocolsession.SendOutcomeTransportConfirmed), nil
+	return nil
 }
-func (outbound *recordingOutbound) SendFragment(_ context.Context, message protocolsession.Message) error {
+func (outbound *recordingOutbound) SendFragment(_ context.Context, _ protocolsession.Operation, message protocolsession.Message) error {
 	outbound.fragments <- message
 	return nil
 }
-func (outbound *recordingOutbound) SendOperationError(_ context.Context, _ protocolsession.OperationID, failure OperationFailure) error {
+func (outbound *recordingOutbound) SendOperationError(_ context.Context, _ protocolsession.Operation, failure OperationFailure) error {
 	outbound.failures <- failure
 	return nil
 }
@@ -554,21 +628,6 @@ func operationMessage(t *testing.T, kind protocolsession.MessageKind, operation 
 	return message
 }
 
-func senderMessageContext(t *testing.T, message protocolsession.Message) context.Context {
-	t.Helper()
-	operations, err := protocolsession.NewOperationTable(
-		protocolsession.OperationLimits{MaxActive: 4, MaxTracked: 4}, nil,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	admission, err := operations.ObserveInbound(protocolsession.DirectionReceiverToSender, message)
-	if err != nil || admission.Disposition != protocolsession.OperationDeliver {
-		t.Fatalf("admit sender handler message: disposition=%d error=%v", admission.Disposition, err)
-	}
-	return protocolsession.WithOperationGeneration(context.Background(), admission.Generation)
-}
-
 func TestSenderHandlerDispatchesWithoutOwningRouterOrWriter(t *testing.T) {
 	fixture := newRuntimeFixture(t, 1)
 	defer fixture.close(t)
@@ -580,11 +639,12 @@ func TestSenderHandlerDispatchesWithoutOwningRouterOrWriter(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- handler.Run(ctx) }()
+	state := newStubOperationState()
 	request, _ := NewOpenRequest([]OpenItem{{FileID: fixture.file}})
 	body, _ := EncodeOpenRequest(request)
 	operation := flowID[protocolsession.OperationID](71)
 	openMessage := operationMessage(t, protocolsession.MessageOpenRevisions, operation, body)
-	if err := handler.HandleMessage(senderMessageContext(t, openMessage), openMessage); err != nil {
+	if err := handler.HandleMessage(context.Background(), state.admit(operation, protocolsession.MessageOpenRevisions), openMessage); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -597,8 +657,9 @@ func TestSenderHandlerDispatchesWithoutOwningRouterOrWriter(t *testing.T) {
 	}
 
 	invalidBody, _ := protocolsession.EncodeBody([]any{[]byte{1}})
-	invalidRenew := operationMessage(t, protocolsession.MessageRenewLease, flowID[protocolsession.OperationID](72), invalidBody)
-	if err := handler.HandleMessage(senderMessageContext(t, invalidRenew), invalidRenew); err != nil {
+	invalidID := flowID[protocolsession.OperationID](72)
+	invalidRenew := operationMessage(t, protocolsession.MessageRenewLease, invalidID, invalidBody)
+	if err := handler.HandleMessage(context.Background(), state.admit(invalidID, protocolsession.MessageRenewLease), invalidRenew); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -615,42 +676,47 @@ func TestSenderHandlerDispatchesWithoutOwningRouterOrWriter(t *testing.T) {
 	}
 	directLease := directResults.Items()[0].Lease
 	leaseRequestBody, _ := EncodeLeaseRequest(directLease.ID())
-	handler.process(context.Background(), operationMessage(t, protocolsession.MessageRenewLease, flowID[protocolsession.OperationID](173), leaseRequestBody))
+	id173 := flowID[protocolsession.OperationID](173)
+	handler.process(context.Background(), state.admit(id173, protocolsession.MessageRenewLease), operationMessage(t, protocolsession.MessageRenewLease, id173, leaseRequestBody))
 	if failure := <-outbound.failures; failure.Scope != RevisionErrorScope {
 		t.Fatalf("early renew failure scope=%d", failure.Scope)
 	}
 	fixture.clock.Advance(content.LeaseRenewWindow + time.Second)
-	handler.process(context.Background(), operationMessage(t, protocolsession.MessageRenewLease, flowID[protocolsession.OperationID](74), leaseRequestBody))
+	id74 := flowID[protocolsession.OperationID](74)
+	handler.process(context.Background(), state.admit(id74, protocolsession.MessageRenewLease), operationMessage(t, protocolsession.MessageRenewLease, id74, leaseRequestBody))
 	if kind := <-outbound.controls; kind != protocolsession.MessageLeaseResult {
 		t.Fatalf("renew control kind=%d", kind)
 	}
 	blockRequest, _ := NewBlockRequest(directLease.ID(), []uint64{0})
 	blockBody, _ := EncodeBlockRequest(blockRequest)
-	handler.process(context.Background(), operationMessage(t, protocolsession.MessageRequestBlocks, flowID[protocolsession.OperationID](75), blockBody))
+	id75 := flowID[protocolsession.OperationID](75)
+	handler.process(context.Background(), state.admit(id75, protocolsession.MessageRequestBlocks), operationMessage(t, protocolsession.MessageRequestBlocks, id75, blockBody))
 	if kind := <-outbound.controls; kind != protocolsession.MessageOperationComplete {
 		t.Fatalf("block final kind=%d", kind)
 	}
 	if len(outbound.fragments) == 0 {
 		t.Fatal("block handler emitted no fragments")
 	}
-	handler.process(context.Background(), operationMessage(t, protocolsession.MessageReleaseLease, flowID[protocolsession.OperationID](76), leaseRequestBody))
+	id76 := flowID[protocolsession.OperationID](76)
+	handler.process(context.Background(), state.admit(id76, protocolsession.MessageReleaseLease), operationMessage(t, protocolsession.MessageReleaseLease, id76, leaseRequestBody))
 	if kind := <-outbound.controls; kind != protocolsession.MessageOperationComplete {
 		t.Fatalf("release final kind=%d", kind)
 	}
 
-	operations, _ := protocolsession.NewOperationTable(protocolsession.OperationLimits{MaxActive: 16, MaxTracked: 32}, nil)
-	router, _ := protocolsession.NewRoleRouter(protocolsession.RoleSender, operations)
+	router := &stubRegistrar{}
 	if err := RegisterSenderHandlers(router, handler); err != nil {
 		t.Fatalf("register content handlers: %v", err)
 	}
 	if err := RegisterSenderHandlers(router, handler); err == nil {
 		t.Fatal("duplicate content handler registration accepted")
 	}
-	if err := handler.HandleMessage(context.Background(), operationMessage(t, protocolsession.MessageCatalogResult, flowID[protocolsession.OperationID](73), completeBody(t))); !errors.Is(err, ErrUnexpectedMessage) {
+	id73 := flowID[protocolsession.OperationID](73)
+	if err := handler.HandleMessage(context.Background(), state.admit(id73, protocolsession.MessageOpenRevisions), operationMessage(t, protocolsession.MessageCatalogResult, id73, completeBody(t))); !errors.Is(err, ErrUnexpectedMessage) {
 		t.Fatalf("unexpected kind error=%v", err)
 	}
 	invalidCancel, _ := protocolsession.EncodeBody([]any{uint64(0)})
-	if err := handler.HandleMessage(context.Background(), operationMessage(t, protocolsession.MessageCancel, flowID[protocolsession.OperationID](77), invalidCancel)); !errors.Is(err, ErrInvalidCancelRequest) {
+	id77 := flowID[protocolsession.OperationID](77)
+	if err := handler.HandleMessage(context.Background(), state.admit(id77, protocolsession.MessageOpenRevisions), operationMessage(t, protocolsession.MessageCancel, id77, invalidCancel)); !errors.Is(err, ErrInvalidCancelRequest) {
 		t.Fatalf("invalid cancel reason error=%v", err)
 	}
 	cancel()
@@ -676,8 +742,9 @@ func TestOutboundFailureStaysAtTheSessionBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler.process(context.Background(), operationMessage(
-		t, protocolsession.MessageReleaseLease, flowID[protocolsession.OperationID](78), body,
+	id78 := flowID[protocolsession.OperationID](78)
+	handler.process(context.Background(), testActiveOperation(id78), operationMessage(
+		t, protocolsession.MessageReleaseLease, id78, body,
 	))
 	if outbound.operationErrors.Load() != 0 {
 		t.Fatal("transport failure was reflected as a semantic operation error")
@@ -699,12 +766,15 @@ func TestSenderHandlerQueueAndServiceValidationFailuresAreBounded(t *testing.T) 
 	handler, _ := NewSenderHandler(SenderHandlerConfig{Service: fixture.service, Outbound: newRecordingOutbound(), QueueDepth: 1, Workers: 1})
 	request, _ := NewOpenRequest([]OpenItem{{FileID: fixture.file}})
 	body, _ := EncodeOpenRequest(request)
-	first := operationMessage(t, protocolsession.MessageOpenRevisions, flowID[protocolsession.OperationID](81), body)
-	second := operationMessage(t, protocolsession.MessageOpenRevisions, flowID[protocolsession.OperationID](82), body)
-	if err := handler.HandleMessage(senderMessageContext(t, first), first); err != nil {
+	state := newStubOperationState()
+	id81 := flowID[protocolsession.OperationID](81)
+	id82 := flowID[protocolsession.OperationID](82)
+	first := operationMessage(t, protocolsession.MessageOpenRevisions, id81, body)
+	second := operationMessage(t, protocolsession.MessageOpenRevisions, id82, body)
+	if err := handler.HandleMessage(context.Background(), state.admit(id81, protocolsession.MessageOpenRevisions), first); err != nil {
 		t.Fatal(err)
 	}
-	if err := handler.HandleMessage(senderMessageContext(t, second), second); !errors.Is(err, ErrServiceQueueFull) {
+	if err := handler.HandleMessage(context.Background(), state.admit(id82, protocolsession.MessageOpenRevisions), second); !errors.Is(err, ErrServiceQueueFull) {
 		t.Fatalf("queue overflow error=%v", err)
 	}
 	if _, err := NewSenderHandler(SenderHandlerConfig{}); err == nil {
@@ -890,7 +960,8 @@ func TestBlockHandlerKeepsRevisionFailuresOutOfTheBlockErrorDomain(t *testing.T)
 	}
 	request, _ := NewBlockRequest(lease.ID(), []uint64{0})
 	body, _ := EncodeBlockRequest(request)
-	handler.process(context.Background(), operationMessage(t, protocolsession.MessageRequestBlocks, flowID[protocolsession.OperationID](184), body))
+	id184 := flowID[protocolsession.OperationID](184)
+	handler.process(context.Background(), testActiveOperation(id184), operationMessage(t, protocolsession.MessageRequestBlocks, id184, body))
 	select {
 	case failure := <-outbound.failures:
 		if failure.Scope != RevisionErrorScope || failure.Code != RevisionCodeDrift {
@@ -902,7 +973,8 @@ func TestBlockHandlerKeepsRevisionFailuresOutOfTheBlockErrorDomain(t *testing.T)
 	unknownLease := flowID[content.LeaseID](185)
 	unknownRequest, _ := NewBlockRequest(unknownLease, []uint64{0})
 	unknownBody, _ := EncodeBlockRequest(unknownRequest)
-	handler.process(context.Background(), operationMessage(t, protocolsession.MessageRequestBlocks, flowID[protocolsession.OperationID](186), unknownBody))
+	id186 := flowID[protocolsession.OperationID](186)
+	handler.process(context.Background(), testActiveOperation(id186), operationMessage(t, protocolsession.MessageRequestBlocks, id186, unknownBody))
 	select {
 	case failure := <-outbound.failures:
 		if failure.Scope != RevisionErrorScope || failure.Code != RevisionCodeInvalidLease {

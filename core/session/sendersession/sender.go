@@ -320,10 +320,13 @@ func (factory *Factory) acceptClient(
 			wire.AbortBeforeStart()
 		}
 	}()
-	outbound, err := newResponses(wire, factory.terminalObserver.sendObserver(), factory.protocolObservations)
-	if err != nil {
-		return nil, err
+	var responseConfig sessioncore.ResponseConfig
+	if sendObserver := factory.terminalObserver.sendObserver(); sendObserver != nil {
+		responseConfig.TerminalObserver = func(event sessioncore.TerminalSendObservation) {
+			observeSenderTerminalSend(sendObserver, event)
+		}
 	}
+	outbound := sessioncore.NewResponses(wire, responseConfig)
 	laneRegistry, err := protocolsession.NewLaneRegistry(protocolsession.LaneRegistryConfig{
 		ShareInstance: factory.share, ProtocolSessionID: sessionID,
 		ReceiverToSender: keys.ReceiverToSender(), SenderSigningKey: factory.privateKey,

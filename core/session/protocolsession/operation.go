@@ -1,11 +1,13 @@
 package protocolsession
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
-	"sync"
 	"time"
+
+	framechannel "github.com/windshare/windshare/core/framechannel"
 )
 
 // Role determines, rather than merely documents, the only directions a runtime
@@ -16,102 +18,6 @@ const (
 	RoleReceiver Role = iota
 	RoleSender
 )
-
-const (
-	OperationTombstoneLifetime = 30 * time.Second
-	// Each logical lane owns bounded control/data queues plus one physical send.
-	// A larger count cannot be produced by a conforming runtime.
-	MaximumOperationPins = uint32(DefaultMaxLogicalLanes * (ControlQueueFrameLimit + DataQueueFrameLimit + 1))
-)
-
-var (
-	ErrInvalidRole            = errors.New("protocolsession: invalid role")
-	ErrInvalidDirection       = errors.New("protocolsession: message kind is invalid for direction")
-	ErrUnknownOperation       = errors.New("protocolsession: message refers to an unknown operation")
-	ErrOperationIDReused      = errors.New("protocolsession: operation identity was reused")
-	ErrUnexpectedOperation    = errors.New("protocolsession: message is invalid for the operation")
-	ErrConflictingFinal       = errors.New("protocolsession: operation final conflicts with its tombstone")
-	ErrSessionTerminated      = errors.New("protocolsession: session is terminal")
-	ErrActiveOperationBudget  = errors.New("protocolsession: active operation budget exhausted")
-	ErrTrackedOperationBudget = errors.New("protocolsession: tracked operation budget exhausted")
-	ErrOperationPinBudget     = errors.New("protocolsession: operation in-flight pin budget exhausted")
-)
-
-type OperationLimits struct {
-	MaxActive int
-	// MaxTracked bounds retained identities, including the slots reserved by
-	// active operations for their eventual completion or cancellation.
-	MaxTracked int
-}
-
-// OperationDisposition tells a router whether a valid message is new, an
-// idempotent late arrival, or the authenticated end of the entire session.
-type OperationDisposition uint8
-
-const (
-	OperationDeliver OperationDisposition = iota
-	OperationDrop
-	OperationSessionTerminal
-)
-
-type activeOperation struct {
-	requestKind        MessageKind
-	requestFingerprint [32]byte
-	answerSeen         bool
-	answerFingerprint  [32]byte
-	authority          *operationAuthority
-}
-
-type operationTombstone struct {
-	expiresAt          time.Time
-	requestKind        MessageKind
-	requestFingerprint [32]byte
-	finalKind          MessageKind
-	fingerprint        [32]byte
-	cancelled          bool
-	authority          *operationAuthority
-}
-
-// OperationTable is the cross-lane source of truth for operation identity.
-// Its clock is injectable because tombstone expiry must be deterministic in
-// tests and must not be inferred from relay time.
-type OperationTable struct {
-	mu sync.Mutex
-
-	now             func() time.Time
-	limits          OperationLimits
-	continuations   OperationContinuationClassifier
-	active          map[OperationID]activeOperation
-	tombstones      map[OperationID]operationTombstone
-	terminal        bool
-	peerSlots       map[uint8]*retiredPeerSlot
-	capacityChanged chan struct{}
-}
-
-func NewOperationTable(limits OperationLimits, now func() time.Time) (*OperationTable, error) {
-	return NewOperationTableWithContinuations(limits, now, nil)
-}
-
-func NewOperationTableWithContinuations(
-	limits OperationLimits,
-	now func() time.Time,
-	continuations OperationContinuationClassifier,
-) (*OperationTable, error) {
-	if limits.MaxActive <= 0 || limits.MaxTracked <= 0 {
-		return nil, fmt.Errorf("protocolsession: invalid operation limits: %+v", limits)
-	}
-	if now == nil {
-		now = time.Now
-	}
-	return &OperationTable{
-		now:           now,
-		limits:        limits,
-		continuations: continuations,
-		active:        make(map[OperationID]activeOperation),
-		tombstones:    make(map[OperationID]operationTombstone),
-		peerSlots:     make(map[uint8]*retiredPeerSlot),
-	}, nil
-}
 
 func (role Role) InboundDirection() (Direction, error) {
 	switch role {
@@ -135,407 +41,215 @@ func (role Role) OutboundDirection() (Direction, error) {
 	return DirectionReceiverToSender, nil
 }
 
-// Observe atomically validates direction, request/response multiplicity, final
-// uniqueness, cancellation races, and the 30-second late-arrival window.
-func (table *OperationTable) Observe(direction Direction, message Message) (OperationDisposition, error) {
-	if table == nil {
-		return OperationDrop, errors.New("protocolsession: nil operation table")
-	}
-	table.mu.Lock()
-	disposition, reservation, err := table.observeAdmissionLocked(direction, message)
-	if err == nil && disposition == OperationDeliver && reservation != nil {
-		reservation.settleLocked(true)
-	}
-	notification := table.authenticatedOperationViolationNotificationLocked(message)
-	table.mu.Unlock()
-	notification.deliver()
-	return disposition, err
-}
-
-// ObserveInbound returns sender response authority in the same critical section
-// that creates or advances the inbound operation. This prevents cancellation or
-// same-ID reuse from changing the generation between observation and minting.
-func (table *OperationTable) ObserveInbound(direction Direction, message Message) (InboundAdmission, error) {
-	if table == nil {
-		return InboundAdmission{Disposition: OperationDrop}, errors.New("protocolsession: nil operation table")
-	}
-
-	table.mu.Lock()
-	disposition, reservation, err := table.observeAdmissionLocked(direction, message)
-	admission := InboundAdmission{Disposition: disposition}
-	if err != nil || disposition != OperationDeliver {
-		notification := table.authenticatedOperationViolationNotificationLocked(message)
-		table.mu.Unlock()
-		notification.deliver()
-		return admission, err
-	}
-	operationID, ok := message.OperationID()
-	if !ok {
-		table.mu.Unlock()
-		return admission, nil
-	}
-	authority := table.operationAuthority(operationID)
-	if authority == nil {
-		table.mu.Unlock()
-		return admission, ErrUnknownOperation
-	}
-	admission.Generation = OperationGeneration{
-		table: table, authority: authority, operationID: operationID,
-	}
-	if direction != DirectionReceiverToSender {
-		admission.continuation = reservation
-		table.mu.Unlock()
-		return admission, nil
-	}
-	admission.Outbound = OutboundOperationPermit{
-		table: table, authority: authority, direction: DirectionSenderToReceiver,
-		operationID: operationID,
-	}
-	admission.continuation = reservation
-	table.mu.Unlock()
-	return admission, nil
-}
-
-func (table *OperationTable) observeAdmissionLocked(
-	direction Direction,
-	message Message,
-) (OperationDisposition, *operationContinuationReservation, error) {
-	table.pruneExpired()
-
-	// A terminal is a monotonic session state, not another operation final. Once
-	// accepted, every lane drops later authenticated traffic instead of allowing
-	// it to perturb already-terminated state.
-	if table.terminal {
-		return OperationDrop, nil, nil
-	}
-	if err := validateKindDirection(direction, message.kind); err != nil {
-		return OperationDrop, nil, err
-	}
-	if message.kind.isSessionControl() {
-		return OperationDeliver, nil, nil
-	}
-	if message.kind == MessageSessionTerminal {
-		table.terminal = true
-		clear(table.active)
-		clear(table.tombstones)
-		table.notifyCapacityLocked()
-		return OperationSessionTerminal, nil, nil
-	}
-
-	operationID, ok := message.OperationID()
-	if !ok {
-		return OperationDrop, nil, ErrInvalidOperationID
-	}
-	if err := table.validatePeerAttemptLocked(table.operationAuthority(operationID), direction, message); err != nil {
-		return OperationDrop, nil, err
-	}
-	if tombstone, found := table.tombstones[operationID]; found {
-		if tracked, err := table.acceptLateContinuationLocked(tombstone.authority, direction, message); tracked {
-			return OperationDrop, nil, err
-		}
-		if tombstone.requestKind == 0 {
-			if tracked, err := table.acceptUnboundLateContinuationLocked(
-				tombstone.authority, direction, message,
-			); tracked {
-				return OperationDrop, nil, err
-			}
-		}
-		disposition, err := table.observeTombstone(operationID, tombstone, direction, message)
-		return disposition, nil, err
-	}
-
-	active, found := table.active[operationID]
-	if !found {
-		if table.dropsRetiredPeerLocked(message) {
-			return OperationDrop, nil, nil
-		}
-		disposition, err := table.beginOperation(operationID, direction, message)
-		return disposition, nil, err
-	}
-	disposition, err := table.advanceOperation(operationID, active, direction, message)
-	if err != nil || disposition != OperationDeliver {
-		return disposition, nil, err
-	}
-	reservation, drop, err := table.reserveActiveContinuationLocked(active.authority, direction, message)
-	if err != nil {
-		return OperationDrop, nil, err
-	}
-	if drop {
-		return OperationDrop, nil, nil
-	}
-	return disposition, reservation, nil
-}
-
-// AdmitOutbound atomically performs the normal operation transition. Initial
-// receiver requests mint an opaque replay capability so a settled ambiguous send
-// can establish dependency order on a replacement lane; normal duplicate
-// admission still has no path to that capability.
-func (table *OperationTable) AdmitOutbound(
-	direction Direction,
-	message Message,
-	permit OutboundOperationPermit,
-) (OutboundAdmission, error) {
-	if table == nil {
-		return OutboundAdmission{Disposition: OperationDrop}, errors.New("protocolsession: nil operation table")
-	}
-	table.mu.Lock()
-	defer table.mu.Unlock()
-	requiresPermit := direction == DirectionSenderToReceiver ||
-		(direction == DirectionReceiverToSender && !message.kind.isRequest() && message.kind != MessageLaneAttach)
-	if requiresPermit && !message.kind.isSessionControl() {
-		table.pruneExpired()
-		operationID, ok := message.OperationID()
-		if !ok || permit.table != table || permit.authority == nil ||
-			permit.direction != direction || permit.operationID != operationID {
-			return OutboundAdmission{Disposition: OperationDrop}, ErrOperationIDReused
-		}
-		current := table.operationAuthority(operationID)
-		if current != permit.authority {
-			// A genuine capability can become stale after cancel/expiry. That is an
-			// item-local suppression, not a malformed permit or lane failure.
-			return OutboundAdmission{Disposition: OperationDrop}, nil
-		}
-		if current.pins >= MaximumOperationPins {
-			return OutboundAdmission{Disposition: OperationDrop}, ErrOperationPinBudget
-		}
-	}
-	disposition, continuation, err := table.observeAdmissionLocked(direction, message)
-	admission := OutboundAdmission{Disposition: disposition}
-	if err != nil || disposition != OperationDeliver {
-		return admission, err
-	}
-	operationID, ok := message.OperationID()
-	if !ok {
-		return admission, nil
-	}
-	authority := table.operationAuthority(operationID)
-	if authority == nil {
-		return admission, ErrUnknownOperation
-	}
-	admission.Generation = OperationGeneration{
-		table: table, authority: authority, operationID: operationID,
-	}
-	admission.continuation = continuation
-	if direction == DirectionReceiverToSender {
-		admission.Operation = OutboundOperationPermit{
-			table: table, authority: authority, direction: direction, operationID: operationID,
-		}
-	}
-	if direction == DirectionSenderToReceiver || message.kind == MessageCancel ||
-		(direction == DirectionReceiverToSender && message.kind.isRequest()) {
-		admission.Replay = OutboundReplayPermit{
-			table: table, authority: authority, direction: direction, kind: message.kind,
-			operationID: operationID, fingerprint: message.operationFingerprint(direction),
-		}
-	}
-	// Sender transactions hold a separate generation lease across lane retries;
-	// receiver requests/continuations rely on this writer-owned pin.
-	admission.pin = table.pinLocked(operationID, authority, direction == DirectionReceiverToSender)
-	return admission, nil
-}
-
-func (table *OperationTable) pinLocked(
-	operationID OperationID,
-	authority *operationAuthority,
-	refresh bool,
-) *outboundAdmissionPin {
-	authority.pins++
-	return &outboundAdmissionPin{
-		table: table, authority: authority, operationID: operationID, refresh: refresh,
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value Role) DiagnosticName() string {
+	switch value {
+	case RoleReceiver:
+		return "receiver"
+	case RoleSender:
+		return "sender"
+	default:
+		return "unknown_" + strconv.FormatUint(uint64(value), 10)
 	}
 }
 
-func (table *OperationTable) operationAuthority(operationID OperationID) *operationAuthority {
-	if active, ok := table.active[operationID]; ok {
-		return active.authority
-	}
-	return table.tombstones[operationID].authority
+const (
+	OperationTombstoneLifetime = 30 * time.Second
+
+	ControlQueueFrameLimit    = 256
+	ControlQueueByteLimit     = 4 * 1024 * 1024
+	DataQueueFrameLimit       = 1024
+	DataQueueByteLimit        = 64 * 1024 * 1024
+	MaximumDataBurst          = 8
+	MaximumControlBurst       = 8
+	RouterControlQueueLimit   = 256
+	RouterDataQueueLimit      = 1024
+	RouterMaximumControlBurst = 8
+)
+
+var (
+	ErrInvalidRole            = errors.New("protocolsession: invalid role")
+	ErrInvalidDirection       = errors.New("protocolsession: message kind is invalid for direction")
+	ErrUnknownOperation       = errors.New("protocolsession: message refers to an unknown operation")
+	ErrOperationIDReused      = errors.New("protocolsession: operation identity was reused")
+	ErrUnexpectedOperation    = errors.New("protocolsession: message is invalid for the operation")
+	ErrConflictingFinal       = errors.New("protocolsession: operation final conflicts with its tombstone")
+	ErrSessionTerminated      = errors.New("protocolsession: session is terminal")
+	ErrActiveOperationBudget  = errors.New("protocolsession: active operation budget exhausted")
+	ErrTrackedOperationBudget = errors.New("protocolsession: tracked operation budget exhausted")
+	ErrNilRuntimeDependency   = errors.New("protocolsession: runtime dependency must not be nil")
+	ErrRouterControlFull      = errors.New("protocolsession: inbound control queue is full")
+	ErrRouterDataFull         = errors.New("protocolsession: inbound data queue is full")
+	ErrHandlerRegistered      = errors.New("protocolsession: message kind already has a handler")
+	ErrHandlerMissing         = errors.New("protocolsession: message kind has no handler")
+	ErrControlQueueFull       = errors.New("protocolsession: control queue capacity exceeded")
+	ErrDataQueueFull          = errors.New("protocolsession: data queue capacity exceeded")
+	ErrWriterTerminal         = errors.New("protocolsession: writer accepted a terminal message")
+	ErrWriterStopped          = errors.New("protocolsession: writer is stopped")
+	ErrMessageClass           = errors.New("protocolsession: message submitted to the wrong writer queue")
+	ErrEnvelopeRejected       = errors.New("protocolsession: inbound envelope rejected")
+	ErrInboundSemantic        = errors.New("protocolsession: inbound message semantic validation failed")
+	ErrInboundRejected        = errors.New("protocolsession: inbound message rejected")
+	ErrPeerSessionTerminal    = errors.New("protocolsession: peer ended the session")
+	ErrNotSent                = errors.New("protocolsession: message was not handed to transport")
+	ErrOperationSuppressed    = errors.New("protocolsession: outbound message suppressed for retired or duplicate operation")
+)
+
+// IsOperationCapacityError identifies a retryable refusal before any operation
+// authority or wire delivery exists.
+func IsOperationCapacityError(err error) bool {
+	return errors.Is(err, ErrActiveOperationBudget) || errors.Is(err, ErrTrackedOperationBudget)
 }
 
-// TerminateLocal closes operation admission before a queued terminal reaches a
-// transport. This keeps a slow or blocked Send from leaving a locally terminal
-// session able to accept new cross-lane work.
-func (table *OperationTable) TerminateLocal() error {
-	if table == nil {
-		return errors.New("protocolsession: nil operation table")
-	}
-	table.mu.Lock()
-	defer table.mu.Unlock()
-	if table.terminal {
-		return ErrSessionTerminated
-	}
-	table.terminal = true
-	clear(table.active)
-	clear(table.tombstones)
-	table.notifyCapacityLocked()
-	return nil
+type notSentError struct{ cause error }
+
+func (err *notSentError) Error() string { return err.cause.Error() }
+func (err *notSentError) Unwrap() error { return err.cause }
+func (err *notSentError) Is(target error) bool {
+	return target == ErrNotSent
 }
 
-func (table *OperationTable) Terminated() bool {
-	if table == nil {
-		return false
+// MarkNotSent tags an error proved to have failed before transport acquired the frame.
+func MarkNotSent(cause error) error {
+	if cause == nil {
+		return ErrNotSent
 	}
-	table.mu.Lock()
-	defer table.mu.Unlock()
-	return table.terminal
+	if errors.Is(cause, ErrNotSent) {
+		return cause
+	}
+	return &notSentError{cause: cause}
 }
 
-func (table *OperationTable) ActiveCount() int {
-	table.mu.Lock()
-	defer table.mu.Unlock()
-	return len(table.active)
+// IsNotSent reports whether the frame is proved never to have reached the transport.
+func IsNotSent(err error) bool {
+	return errors.Is(err, ErrNotSent) || errors.Is(err, ErrOperationSuppressed)
 }
 
-func (table *OperationTable) TombstoneCount() int {
-	table.mu.Lock()
-	defer table.mu.Unlock()
-	table.pruneExpired()
-	return len(table.tombstones)
+// FrameChannel is defined where it is consumed. Retaining the parent Frame and
+// ChannelState types keeps transport adapters wire-neutral.
+type FrameChannel interface {
+	Send(ctx context.Context, frame framechannel.Frame) error
+	SendTerminal(ctx context.Context, frame framechannel.Frame) error
+	Recv() <-chan framechannel.Frame
+	State() framechannel.ChannelState
+	Close() error
 }
 
-func (table *OperationTable) beginOperation(
-	operationID OperationID,
-	direction Direction,
-	message Message,
-) (OperationDisposition, error) {
-	if message.kind == MessageCancel {
-		// A cancel can race ahead of a request on another lane. Remembering it
-		// makes that race idempotent instead of resurrecting canceled work.
-		if err := table.addTombstone(operationID, direction, message, true, 0, [32]byte{}, nil); err != nil {
-			return OperationDrop, err
-		}
-		return OperationDeliver, nil
-	}
-	if direction != DirectionReceiverToSender || (!message.kind.isRequest() && message.kind != MessageLaneAttach) {
-		return OperationDrop, ErrUnknownOperation
-	}
-	if len(table.active) >= table.limits.MaxActive {
-		return OperationDrop, ErrActiveOperationBudget
-	}
-	if len(table.active)+len(table.tombstones) >= table.limits.MaxTracked {
-		return OperationDrop, ErrTrackedOperationBudget
-	}
-	authority, err := table.newOperationAuthority(message)
-	if err != nil {
-		return OperationDrop, err
-	}
-	if err := table.admitPeerAttemptLocked(authority); err != nil {
-		return OperationDrop, err
-	}
-	table.active[operationID] = activeOperation{
-		requestKind: message.kind, requestFingerprint: message.operationFingerprint(direction),
-		authority: authority,
-	}
-	return OperationDeliver, nil
+type OperationLimits struct {
+	MaxActive int
+	// MaxTracked bounds retained identities, including slots reserved by active
+	// operations for their eventual completion or cancellation.
+	MaxTracked int
 }
 
-func (table *OperationTable) newOperationAuthority(message Message) (*operationAuthority, error) {
-	authority := &operationAuthority{}
-	if table.continuations == nil {
-		return authority, nil
-	}
-	continuation, tracked, err := table.continuations.BeginOperationContinuation(message.kind, message.Body())
-	if err != nil {
-		return nil, err
-	}
-	if !tracked {
-		return authority, nil
-	}
-	state, err := newOperationContinuationState(continuation)
-	if err != nil {
-		return nil, err
-	}
-	authority.continuations = state
-	return authority, nil
+// RouterLimits permits lower local admission limits without changing wire limits.
+type RouterLimits struct {
+	ControlFrames int
+	DataFrames    int
 }
 
-func (table *OperationTable) advanceOperation(
-	operationID OperationID,
-	active activeOperation,
-	direction Direction,
-	message Message,
-) (OperationDisposition, error) {
-	if message.kind == MessageCancel {
-		if err := table.finishOperation(operationID, active, direction, message, true); err != nil {
-			return OperationDrop, err
-		}
-		return OperationDeliver, nil
-	}
-	if message.kind.isRequest() {
-		if active.requestKind == message.kind &&
-			active.requestFingerprint == message.operationFingerprint(direction) {
-			return OperationDrop, nil
-		}
-		return OperationDrop, ErrOperationIDReused
-	}
-	if message.kind == MessageLaneAttach && direction == DirectionReceiverToSender {
-		return OperationDrop, ErrOperationIDReused
-	}
-	if !messageAllowedForOperation(active.requestKind, message.kind) {
-		return OperationDrop, fmt.Errorf("%w: %d cannot answer %d", ErrUnexpectedOperation, message.kind, active.requestKind)
-	}
-	if message.kind.isFinal() || (active.requestKind == MessageLaneAttach && message.kind == MessageLaneAttach) {
-		if err := table.finishOperation(operationID, active, direction, message, false); err != nil {
-			return OperationDrop, err
-		}
-	}
-	if active.requestKind == MessagePeerOffer && message.kind == MessagePeerAnswer {
-		return table.observePeerAnswer(operationID, active, direction, message)
-	}
-	return OperationDeliver, nil
+var DefaultRouterLimits = RouterLimits{
+	ControlFrames: RouterControlQueueLimit,
+	DataFrames:    RouterDataQueueLimit,
 }
 
-func (table *OperationTable) observePeerAnswer(
-	operationID OperationID,
-	active activeOperation,
-	direction Direction,
-	message Message,
-) (OperationDisposition, error) {
-	fingerprint := message.operationFingerprint(direction)
-	if !active.answerSeen {
-		active.answerSeen = true
-		active.answerFingerprint = fingerprint
-		table.active[operationID] = active
-		return OperationDeliver, nil
-	}
-	if active.answerFingerprint == fingerprint {
-		return OperationDrop, nil
-	}
-	active.authority.recordSenderOperationViolationLocked(
-		direction, AuthenticatedOperationViolationConflictingPeerAnswer,
-	)
-	return OperationDrop, ErrOperationIDReused
+// OperationDisposition reports whether an authenticated message is delivered,
+// idempotently dropped, or terminates the session.
+type OperationDisposition uint8
+
+const (
+	OperationDeliver OperationDisposition = iota
+	OperationDrop
+	OperationSessionTerminal
+)
+
+// OperationRef uniquely identifies one admitted operation instance within a session.
+// Token is a session-local strictly monotonic counter, so reusing an expired
+// wire OperationID still yields a distinct comparable key.
+type OperationRef struct {
+	ID    OperationID
+	Token uint64
 }
 
-func (table *OperationTable) finishOperation(
-	operationID OperationID,
-	active activeOperation,
-	direction Direction,
-	message Message,
-	cancelled bool,
-) error {
-	if err := table.addTombstone(
-		operationID, direction, message, cancelled,
-		active.requestKind, active.requestFingerprint, active.authority,
-	); err != nil {
-		return err
-	}
-	table.retirePeerAttemptLocked(active.authority)
-	clearContinuationReplayLocked(active.authority)
-	delete(table.active, operationID)
-	table.notifyCapacityLocked()
-	return nil
+func (ref OperationRef) IsZero() bool { return ref.ID.IsZero() || ref.Token == 0 }
+
+// OperationState is the read-only authority query backing an explicit Operation handle.
+type OperationState interface {
+	Active(OperationRef) bool
+	Current(OperationRef) bool
+	RequestKind(OperationRef) (MessageKind, bool)
+	PeerAttemptBinding(OperationRef) (PeerAttemptBinding, bool)
 }
 
-func deferredContinuationMatches(existing, candidate *operationAuthority) bool {
-	if !existing.hasDeferredContinuationScope {
-		return true
-	}
-	return candidate.continuations != nil &&
-		candidate.continuations.scope == existing.deferredContinuationScope
+// Operation is an explicit, comparable handle passed to message handlers and
+// outbound response calls, replacing implicit context.Value capability smuggling.
+type Operation struct {
+	ref   OperationRef
+	state OperationState
 }
 
-func messageAllowedForOperation(requestKind, messageKind MessageKind) bool {
+func NewOperation(ref OperationRef, state OperationState) Operation {
+	return Operation{ref: ref, state: state}
+}
+
+func (op Operation) Ref() OperationRef         { return op.ref }
+func (op Operation) ID() OperationID           { return op.ref.ID }
+func (op Operation) Token() uint64             { return op.ref.Token }
+func (op Operation) IsZero() bool              { return op.ref.IsZero() || op.state == nil }
+func (op Operation) Same(other Operation) bool { return !op.IsZero() && op == other }
+func (op Operation) IsActive() bool            { return !op.IsZero() && op.state.Active(op.ref) }
+func (op Operation) IsCurrent() bool           { return !op.IsZero() && op.state.Current(op.ref) }
+
+func (op Operation) RequestKind() (MessageKind, bool) {
+	if op.IsZero() {
+		return 0, false
+	}
+	return op.state.RequestKind(op.ref)
+}
+
+func (op Operation) PeerAttemptBinding() (PeerAttemptBinding, bool) {
+	if op.IsZero() {
+		return PeerAttemptBinding{}, false
+	}
+	return op.state.PeerAttemptBinding(op.ref)
+}
+
+// MessageHandler consumes authenticated messages with an explicit Operation handle.
+// Handlers should admit work into their own bounded queue and return promptly.
+type MessageHandler interface {
+	HandleMessage(context.Context, Operation, Message) error
+}
+
+type MessageHandlerFunc func(context.Context, Operation, Message) error
+
+func (f MessageHandlerFunc) HandleMessage(ctx context.Context, op Operation, message Message) error {
+	return f(ctx, op, message)
+}
+
+// PeerSessionTerminalError retains the authenticated terminal message for callers
+// that decode diagnostics while still supporting errors.Is classification.
+type PeerSessionTerminalError struct {
+	message Message
+}
+
+func NewPeerSessionTerminalError(message Message) *PeerSessionTerminalError {
+	return &PeerSessionTerminalError{message: message}
+}
+
+func (terminal *PeerSessionTerminalError) Error() string { return ErrPeerSessionTerminal.Error() }
+func (terminal *PeerSessionTerminalError) Unwrap() error { return ErrPeerSessionTerminal }
+func (terminal *PeerSessionTerminalError) Message() Message {
+	return terminal.message
+}
+
+func (terminal *PeerSessionTerminalError) Terminal() (SessionTerminal, error) {
+	if terminal == nil || terminal.message.Kind() != MessageSessionTerminal {
+		return SessionTerminal{}, ErrInvalidSessionTerminal
+	}
+	return DecodeSessionTerminal(terminal.message.Body())
+}
+
+func MessageAllowedForOperation(requestKind, messageKind MessageKind) bool {
 	if messageKind == MessageOperationError {
 		return true
 	}
@@ -559,14 +273,14 @@ func messageAllowedForOperation(requestKind, messageKind MessageKind) bool {
 	}
 }
 
-func validateKindDirection(direction Direction, kind MessageKind) error {
-	if !kind.valid() {
+func ValidateKindDirection(direction Direction, kind MessageKind) error {
+	if !kind.Valid() {
 		return ErrUnknownMessageKind
 	}
 	switch direction {
 	case DirectionReceiverToSender:
-		if kind.isRequest() || kind == MessageCancel || kind == MessageOperationError || kind == MessageLaneAttach ||
-			kind == MessagePeerCandidate || kind.isSessionControl() {
+		if kind.IsRequest() || kind == MessageCancel || kind == MessageOperationError || kind == MessageLaneAttach ||
+			kind == MessagePeerCandidate || kind.IsSessionControl() {
 			return nil
 		}
 	case DirectionSenderToReceiver:
@@ -579,16 +293,4 @@ func validateKindDirection(direction Direction, kind MessageKind) error {
 		}
 	}
 	return fmt.Errorf("%w: direction=%d kind=%d", ErrInvalidDirection, direction, kind)
-}
-
-// DiagnosticName belongs to the source vocabulary; recorders accept new values.
-func (value Role) DiagnosticName() string {
-	switch value {
-	case RoleReceiver:
-		return "receiver"
-	case RoleSender:
-		return "sender"
-	default:
-		return "unknown_" + strconv.FormatUint(uint64(value), 10)
-	}
 }

@@ -3,19 +3,32 @@ package sessioncore
 import (
 	"context"
 	"errors"
-	"github.com/windshare/windshare/core/framechannel"
-	"github.com/windshare/windshare/core/session"
-	"github.com/windshare/windshare/core/session/contentflow"
-	"github.com/windshare/windshare/core/session/protocolsession"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/windshare/windshare/core/framechannel"
+	"github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session/contentflow"
+	sessionobs "github.com/windshare/windshare/core/session/observation"
+	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
 type failingRuntimeLaneChannel struct {
 	*memoryChannel
-	err error
+	err   error
+	sends atomic.Int32
+}
+
+func (channel *failingRuntimeLaneChannel) Send(context.Context, framechannel.Frame) error {
+	channel.sends.Add(1)
+	return channel.err
+}
+
+func (channel *failingRuntimeLaneChannel) SendTerminal(context.Context, framechannel.Frame) error {
+	channel.sends.Add(1)
+	return channel.err
 }
 
 type blockingRuntimeLaneChannel struct {
@@ -53,12 +66,20 @@ func (channel *countingRuntimeLaneChannel) SendTerminal(ctx context.Context, fra
 	return channel.Send(ctx, frame)
 }
 
-func (channel *failingRuntimeLaneChannel) Send(context.Context, framechannel.Frame) error {
-	return channel.err
-}
-
-func (channel *failingRuntimeLaneChannel) SendTerminal(context.Context, framechannel.Frame) error {
-	return channel.err
+func admitTestSenderOperation(
+	t *testing.T,
+	runtime *Runtime,
+	identity session.LaneIdentity,
+	request protocolsession.Message,
+) protocolsession.Operation {
+	t.Helper()
+	admission, err := runtime.operations.ObserveInbound(
+		protocolsession.DirectionReceiverToSender, identity, request,
+	)
+	if err != nil || admission.disposition != protocolsession.OperationDeliver || admission.op.IsZero() {
+		t.Fatalf("admit sender operation: disposition=%d err=%v", admission.disposition, err)
+	}
+	return admission.op
 }
 
 func TestSenderControlTransactionAggregatesAttemptsAndDrainsAuthority(t *testing.T) {
@@ -66,15 +87,17 @@ func TestSenderControlTransactionAggregatesAttemptsAndDrainsAuthority(t *testing
 		name            string
 		firstUnknown    bool
 		secondDelivered bool
-		wantOutcome     protocolsession.ResponseSendEvidence
+		wantStatus      sessionobs.SendStatus
+		wantNotSent     bool
 		wantError       bool
 	}{
-		{name: "unknown then delivered", firstUnknown: true, secondDelivered: true, wantOutcome: protocolsession.ResponseSendEvidenceTransportConfirmed},
-		{name: "unknown then dropped", firstUnknown: true, wantOutcome: protocolsession.ResponseSendEvidenceUncertain, wantError: true},
-		{name: "all pretransport dropped", wantOutcome: protocolsession.ResponseSendEvidenceDefinitelyNotSent, wantError: true},
+		{name: "unknown then delivered", firstUnknown: true, secondDelivered: true, wantStatus: sessionobs.SendStatusConfirmed},
+		{name: "unknown then dropped", firstUnknown: true, wantStatus: sessionobs.SendStatusUncertain, wantError: true},
+		{name: "all pretransport dropped", wantStatus: sessionobs.SendStatusNotSent, wantNotSent: true, wantError: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			runtime, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
+			recorder := newProtocolTraceRecorder(runtime)
 			initial, err := runtime.lanes.selectLane(&runtime.initial)
 			if err != nil {
 				t.Fatal(err)
@@ -113,13 +136,11 @@ func TestSenderControlTransactionAggregatesAttemptsAndDrainsAuthority(t *testing
 			request, _ := protocolsession.NewMessage(
 				protocolsession.MessageRequestBlocks, &operationID, []byte{0xa1, 0x00, 0x01},
 			)
-			operationContext, _ := testOutboundOperationContext(t, runtime, firstIdentity, request)
+			op := admitTestSenderOperation(t, runtime, firstIdentity, request)
 			body, _ := contentflow.EncodeOperationComplete(1)
-			outbound := &Responses{
-				runtime: runtime,
-			}
-			outcome, sendErr := outbound.SendControl(
-				operationContext, protocolsession.MessageOperationComplete, operationID, body,
+			outbound := &Responses{runtime: runtime}
+			sendErr := outbound.SendControl(
+				context.Background(), op, protocolsession.MessageOperationComplete, body,
 			)
 			stopWriters()
 			if firstDone != nil {
@@ -128,37 +149,40 @@ func TestSenderControlTransactionAggregatesAttemptsAndDrainsAuthority(t *testing
 			if secondDone != nil {
 				<-secondDone
 			}
-			if outcome.Evidence() != test.wantOutcome || (sendErr != nil) != test.wantError {
-				t.Fatalf("result=%+v error=%v", outcome, sendErr)
+			if (sendErr != nil) != test.wantError || protocolsession.IsNotSent(sendErr) != test.wantNotSent {
+				t.Fatalf("sendErr=%v wantError=%v wantNotSent=%v", sendErr, test.wantError, test.wantNotSent)
+			}
+			facts := recorder.facts()
+			if len(facts) != 1 {
+				t.Fatalf("facts=%+v", facts)
+			}
+			observed, ok := facts[0].(sessionobs.ResponseSendObserved)
+			if !ok || observed.Status() != test.wantStatus {
+				t.Fatalf("observed=%+v wantStatus=%v", facts[0], test.wantStatus)
 			}
 			if test.firstUnknown {
-				wantCount, lastLane := 1, firstIdentity.ID
+				wantAttempts := uint32(1)
+				wantLane := firstIdentity
 				if test.secondDelivered {
-					wantCount, lastLane = 2, runtime.initial.ID
+					wantAttempts = 2
+					wantLane = runtime.initial
 				}
-				if outcome.AttemptCount() != wantCount {
-					t.Fatalf("attempt count=%d want=%d", outcome.AttemptCount(), wantCount)
-				}
-				firstAttempt, _ := outcome.Attempt(0)
-				lastAttempt, _ := outcome.Attempt(wantCount - 1)
-				if firstAttempt.Identity().LaneID != firstIdentity.ID || lastAttempt.Identity().LaneID != lastLane ||
-					firstAttempt.Cause().Kind() != protocolsession.SendAttemptCauseTransportFailure {
-					t.Fatalf("attempts lost lane or failure evidence: first=%+v last=%+v", firstAttempt, lastAttempt)
+				if observed.Attempts() != wantAttempts || observed.Lane() != wantLane {
+					t.Fatalf("observed attempts=%d lane=%+v want attempts=%d lane=%+v",
+						observed.Attempts(), observed.Lane(), wantAttempts, wantLane)
 				}
 			}
 			if errors.Is(sendErr, session.ErrRuntimeClosed) {
 				t.Fatalf("live-session attempt exhaustion was misclassified as runtime closure: %v", sendErr)
 			}
-			if runtime.routes.len() != 0 || runtime.operations.ActiveCount() != 0 || runtime.operations.TombstoneCount() != 1 {
-				t.Fatalf("routes=%d active=%d tombstones=%d", runtime.routes.len(), runtime.operations.ActiveCount(), runtime.operations.TombstoneCount())
+			if runtime.operations.ActiveCount() != 0 || runtime.operations.TombstoneCount() != 1 {
+				t.Fatalf("active=%d tombstones=%d", runtime.operations.ActiveCount(), runtime.operations.TombstoneCount())
 			}
 		})
 	}
 }
 
-func TestOutboundTransactionAttemptsExactlyEveryFullLaneIdentityOnce(t *testing.T) {
-	const errorBytesPerLaneBound = 160
-
+func TestOutboundResponseAttemptsEveryUsableLaneOnceOnExhaustion(t *testing.T) {
 	var nanos atomic.Int64
 	nanos.Store(time.Unix(1, 0).UnixNano())
 	now := func() time.Time { return time.Unix(0, nanos.Load()) }
@@ -171,22 +195,26 @@ func TestOutboundTransactionAttemptsExactlyEveryFullLaneIdentityOnce(t *testing.
 	if err := initialChannel.Close(); err != nil {
 		t.Fatal(err)
 	}
-	physicalFailure := errors.New("physical lane rejected frame")
+	physicalFailure := framechannel.RejectSend(errors.New("physical lane rejected frame"))
+	channels := make([]*failingRuntimeLaneChannel, 0, protocolsession.DefaultMaxLogicalLanes-1)
+	writerContext, stopWriters := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	initialLane, _ := runtime.lanes.selectLane(&runtime.initial)
+	wg.Go(func() { _ = initialLane.writer.Run(writerContext) })
 	for laneIndex := 1; laneIndex < protocolsession.DefaultMaxLogicalLanes; laneIndex++ {
 		base, peer := newMemoryChannelPair()
 		t.Cleanup(func() { _ = peer.Close() })
+		ch := &failingRuntimeLaneChannel{memoryChannel: base, err: physicalFailure}
+		channels = append(channels, ch)
 		identity := session.LaneIdentity{
 			ID:    uint32(laneIndex + 1),
 			Epoch: uint32(protocolsession.DefaultMaxLogicalLanes + laneIndex),
 		}
-		if _, err := runtime.lanes.add(
-			identity,
-			&failingRuntimeLaneChannel{memoryChannel: base, err: physicalFailure},
-			permissiveInboundAuthenticator(),
-			false,
-		); err != nil {
+		lane, err := runtime.lanes.add(identity, ch, permissiveInboundAuthenticator(), false)
+		if err != nil {
 			t.Fatalf("add lane %+v: %v", identity, err)
 		}
+		wg.Go(func() { _ = lane.writer.Run(writerContext) })
 	}
 
 	operationID := id16[protocolsession.OperationID](115)
@@ -198,101 +226,22 @@ func TestOutboundTransactionAttemptsExactlyEveryFullLaneIdentityOnce(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	operationContext, _ := testOutboundOperationContext(t, runtime, runtime.initial, request)
-	transaction, err := beginOutboundTransaction(&Responses{runtime: runtime}, operationContext, operationID)
-	if err != nil {
-		t.Fatal(err)
+	op := admitTestSenderOperation(t, runtime, runtime.initial, request)
+	body, _ := contentflow.EncodeOperationComplete(0)
+	outbound := &Responses{runtime: runtime}
+	sendErr := outbound.SendControl(context.Background(), op, protocolsession.MessageOperationComplete, body)
+	stopWriters()
+	wg.Wait()
+	if sendErr == nil {
+		t.Fatal("exhausted response unexpectedly succeeded")
 	}
-	transactionClosed := false
-	defer func() {
-		if !transactionClosed {
-			transaction.Close()
-		}
-	}()
-
-	attempted := make([]session.LaneIdentity, 0, protocolsession.DefaultMaxLogicalLanes)
-	outcome, runErr := transaction.Run(operationContext, func(
-		lane selectedLane,
-		_ protocolsession.OutboundReplayPermit,
-	) (protocolsession.SendReceipt, error) {
-		attempted = append(attempted, lane.identity)
-		physicalErr := lane.channel.Send(
-			operationContext,
-			framechannel.Frame{byte(len(attempted))},
-		)
-		if physicalErr == nil {
-			return protocolsession.SendReceipt{}, errors.New("physical lane unexpectedly accepted frame")
-		}
-		return protocolsession.SendReceipt{}, errors.Join(protocolsession.ErrWriterStopped, physicalErr)
-	})
-	if outcome.Evidence() != protocolsession.ResponseSendEvidenceDefinitelyNotSent || runErr == nil ||
-		!errors.Is(runErr, protocolsession.ErrWriterStopped) || !errors.Is(runErr, ErrLaneUnavailable) {
-		t.Fatalf("exhausted transaction result=%+v error=%v", outcome, runErr)
-	}
-	if len(attempted) != protocolsession.DefaultMaxLogicalLanes {
-		t.Fatalf("physical attempts=%d, want %d", len(attempted), protocolsession.DefaultMaxLogicalLanes)
-	}
-	seen := make(map[session.LaneIdentity]int, protocolsession.DefaultMaxLogicalLanes)
-	for _, identity := range attempted {
-		seen[identity]++
-		if seen[identity] != 1 {
-			t.Fatalf("full lane identity %+v was attempted %d times", identity, seen[identity])
+	for index, ch := range channels {
+		if ch.sends.Load() != 1 {
+			t.Fatalf("lane %d attempted %d times, want 1", index+2, ch.sends.Load())
 		}
 	}
-	if len(seen) != protocolsession.DefaultMaxLogicalLanes {
-		t.Fatalf("unique full lane identities=%d, want %d", len(seen), protocolsession.DefaultMaxLogicalLanes)
-	}
-	var countLeaves func(error) int
-	countLeaves = func(err error) int {
-		if err == nil {
-			return 0
-		}
-		if joined, ok := err.(interface{ Unwrap() []error }); ok {
-			count := 0
-			for _, child := range joined.Unwrap() {
-				count += countLeaves(child)
-			}
-			return count
-		}
-		if wrapped, ok := err.(interface{ Unwrap() error }); ok {
-			return countLeaves(wrapped.Unwrap())
-		}
-		return 1
-	}
-	wantLeaves := protocolsession.DefaultMaxLogicalLanes*2 + 1
-	if leaves := countLeaves(runErr); leaves != wantLeaves ||
-		len(runErr.Error()) > protocolsession.DefaultMaxLogicalLanes*errorBytesPerLaneBound {
-		t.Fatalf("bounded error aggregation leaves=%d bytes=%d", leaves, len(runErr.Error()))
-	}
-	if runtime.routes.len() != 1 || runtime.operations.ActiveCount() != 1 {
-		t.Fatalf("pre-drain routes=%d active=%d", runtime.routes.len(), runtime.operations.ActiveCount())
-	}
-	if err := runtime.abandonOutboundOperation(
-		operationID,
-		transaction.route,
-		transaction.generation,
-	); err != nil {
-		t.Fatal(err)
-	}
-	if runtime.routes.len() != 0 || runtime.operations.ActiveCount() != 0 ||
-		runtime.operations.TombstoneCount() != 1 {
-		t.Fatalf(
-			"authority drain routes=%d active=%d tombstones=%d",
-			runtime.routes.len(), runtime.operations.ActiveCount(), runtime.operations.TombstoneCount(),
-		)
-	}
-	nanos.Add((protocolsession.OperationTombstoneLifetime + time.Nanosecond).Nanoseconds())
-	if runtime.operations.TombstoneCount() != 1 {
-		t.Fatal("transaction lease did not retain exact authority through exhaustion")
-	}
-	transaction.Close()
-	transactionClosed = true
-	if runtime.operations.TombstoneCount() != 1 {
-		t.Fatal("lease release did not grant the tombstone a full post-settlement lifetime")
-	}
-	nanos.Add((protocolsession.OperationTombstoneLifetime + time.Nanosecond).Nanoseconds())
-	if runtime.operations.TombstoneCount() != 0 {
-		t.Fatal("released transaction lease retained expired authority")
+	if runtime.operations.ActiveCount() != 0 || runtime.operations.TombstoneCount() != 1 {
+		t.Fatalf("active=%d tombstones=%d", runtime.operations.ActiveCount(), runtime.operations.TombstoneCount())
 	}
 	select {
 	case <-runtime.ctx.Done():
@@ -324,25 +273,23 @@ func TestFragmentFailureRetainsRouteUntilOperationErrorDrainsAuthority(t *testin
 	request, _ := protocolsession.NewMessage(
 		protocolsession.MessageRequestBlocks, &operationID, []byte{0xa1, 0x00, 0x01},
 	)
-	operationContext, _ := testOutboundOperationContext(t, runtime, firstIdentity, request)
+	op := admitTestSenderOperation(t, runtime, firstIdentity, request)
 	fragments, _ := contentflow.FragmentRecord(operationID, []byte("record"))
-	outbound := &Responses{
-		runtime: runtime,
-	}
-	if err := outbound.SendFragment(operationContext, fragments[0]); err == nil {
+	outbound := &Responses{runtime: runtime}
+	if err := outbound.SendFragment(context.Background(), op, fragments[0]); err == nil {
 		t.Fatal("all-lane fragment failure unexpectedly succeeded")
 	}
 	<-writerDone
-	if runtime.routes.len() != 1 || runtime.operations.ActiveCount() != 1 {
-		t.Fatalf("fragment failure prematurely drained route=%d active=%d", runtime.routes.len(), runtime.operations.ActiveCount())
+	if !op.IsActive() || runtime.operations.ActiveCount() != 1 {
+		t.Fatalf("fragment failure prematurely drained op: active=%d", runtime.operations.ActiveCount())
 	}
-	if err := outbound.SendOperationError(operationContext, operationID, contentflow.OperationFailure{
+	if err := outbound.SendOperationError(context.Background(), op, contentflow.OperationFailure{
 		Scope: contentflow.BlockErrorScope, Code: contentflow.BlockCodeTimeout, Message: "Block failed",
 	}); err == nil {
 		t.Fatal("all-lane operation error unexpectedly succeeded")
 	}
-	if runtime.routes.len() != 0 || runtime.operations.ActiveCount() != 0 || runtime.operations.TombstoneCount() != 1 {
-		t.Fatalf("routes=%d active=%d tombstones=%d", runtime.routes.len(), runtime.operations.ActiveCount(), runtime.operations.TombstoneCount())
+	if op.IsActive() || runtime.operations.ActiveCount() != 0 || runtime.operations.TombstoneCount() != 1 {
+		t.Fatalf("active=%d tombstones=%d", runtime.operations.ActiveCount(), runtime.operations.TombstoneCount())
 	}
 }
 
@@ -381,18 +328,16 @@ func TestUnsettledCallerCancelDoesNotMigrateOrTerminateSession(t *testing.T) {
 	request, _ := protocolsession.NewMessage(
 		protocolsession.MessageRequestBlocks, &operationID, []byte{0xa1, 0x00, 0x01},
 	)
-	operationContext, _ := testOutboundOperationContext(t, runtime, blockedIdentity, request)
+	op := admitTestSenderOperation(t, runtime, blockedIdentity, request)
 	fragments, _ := contentflow.FragmentRecord(operationID, []byte("record"))
 	outbound := &Responses{runtime: runtime}
-	sendContext, cancelSend := context.WithCancel(operationContext)
+	sendContext, cancelSend := context.WithCancel(context.Background())
 	sendDone := make(chan error, 1)
-	go func() { sendDone <- outbound.SendFragment(sendContext, fragments[0]) }()
+	go func() { sendDone <- outbound.SendFragment(sendContext, op, fragments[0]) }()
 	<-blockedChannel.started
 	cancelBody, _ := contentflow.EncodeCancelReason(contentflow.CancelReasonLaneRace)
 	cancelMessage, _ := protocolsession.NewMessage(protocolsession.MessageCancel, &operationID, cancelBody)
-	if disposition, err := (laneInboundRouter{
-		runtime: runtime, identity: fallbackIdentity,
-	}).RouteInbound(context.Background(), cancelMessage); err != nil || disposition != protocolsession.OperationDeliver {
+	if disposition, err := runtime.inbound.RouteInbound(fallbackIdentity, cancelMessage); err != nil || disposition != protocolsession.OperationDeliver {
 		t.Fatalf("inbound cancel disposition=%d error=%v", disposition, err)
 	}
 	cancelSend()
@@ -402,8 +347,8 @@ func TestUnsettledCallerCancelDoesNotMigrateOrTerminateSession(t *testing.T) {
 	if fallbackChannel.sends.Load() != 0 {
 		t.Fatalf("unsettled transaction migrated %d time(s)", fallbackChannel.sends.Load())
 	}
-	if runtime.routes.len() != 0 || runtime.operations.ActiveCount() != 0 || runtime.operations.TombstoneCount() != 1 {
-		t.Fatalf("routes=%d active=%d tombstones=%d", runtime.routes.len(), runtime.operations.ActiveCount(), runtime.operations.TombstoneCount())
+	if runtime.operations.ActiveCount() != 0 || runtime.operations.TombstoneCount() != 1 {
+		t.Fatalf("active=%d tombstones=%d", runtime.operations.ActiveCount(), runtime.operations.TombstoneCount())
 	}
 	select {
 	case <-runtime.ctx.Done():
@@ -414,85 +359,22 @@ func TestUnsettledCallerCancelDoesNotMigrateOrTerminateSession(t *testing.T) {
 	secondRequest, _ := protocolsession.NewMessage(
 		protocolsession.MessageRequestBlocks, &secondOperation, []byte{0xa1, 0x00, 0x02},
 	)
-	secondContext, _ := testOutboundOperationContext(t, runtime, fallbackIdentity, secondRequest)
+	secondOp := admitTestSenderOperation(t, runtime, fallbackIdentity, secondRequest)
 	secondFragments, _ := contentflow.FragmentRecord(secondOperation, []byte("second-record"))
-	if err := outbound.SendFragment(secondContext, secondFragments[0]); err != nil {
+	if err := outbound.SendFragment(context.Background(), secondOp, secondFragments[0]); err != nil {
 		t.Fatalf("second operation fragment: %v", err)
 	}
 	completeBody, _ := contentflow.EncodeOperationComplete(1)
-	if outcome, err := outbound.SendControl(
-		secondContext, protocolsession.MessageOperationComplete, secondOperation, completeBody,
-	); err != nil || outcome.Evidence() != protocolsession.ResponseSendEvidenceTransportConfirmed {
-		t.Fatalf("second operation result=%+v error=%v", outcome, err)
+	if err := outbound.SendControl(
+		context.Background(), secondOp, protocolsession.MessageOperationComplete, completeBody,
+	); err != nil {
+		t.Fatalf("second operation error=%v", err)
 	}
-	if runtime.routes.len() != 0 || runtime.operations.ActiveCount() != 0 || runtime.operations.TombstoneCount() != 2 {
-		t.Fatalf("post-cancel continuation routes=%d active=%d tombstones=%d", runtime.routes.len(), runtime.operations.ActiveCount(), runtime.operations.TombstoneCount())
+	if runtime.operations.ActiveCount() != 0 || runtime.operations.TombstoneCount() != 2 {
+		t.Fatalf("post-cancel continuation active=%d tombstones=%d", runtime.operations.ActiveCount(), runtime.operations.TombstoneCount())
 	}
 	close(blockedChannel.release)
 	stopWriters()
 	<-blockedDone
 	<-fallbackDone
-}
-
-func TestSettledUnknownWithoutReplayAuthorityFailClosesSession(t *testing.T) {
-	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
-	operationID := id16[protocolsession.OperationID](113)
-	request, _ := protocolsession.NewMessage(
-		protocolsession.MessageRequestBlocks, &operationID, []byte{0xa1, 0x00, 0x01},
-	)
-	operationContext, _ := testOutboundOperationContext(t, runtime, runtime.initial, request)
-	transaction, err := beginOutboundTransaction(
-		&Responses{runtime: runtime}, operationContext, operationID,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	outcome, err := transaction.Run(context.Background(), func(
-		selectedLane,
-		protocolsession.OutboundReplayPermit,
-	) (protocolsession.SendReceipt, error) {
-		return protocolsession.SendReceipt{}, nil
-	})
-	transaction.Close()
-	if !outcome.IsZero() || !errors.Is(err, errOutboundReplayAuthority) {
-		t.Fatalf("result=%+v error=%v", outcome, err)
-	}
-	select {
-	case <-runtime.ctx.Done():
-	default:
-		t.Fatal("missing replay authority did not terminate the session")
-	}
-	if runtime.routes.len() != 0 || !runtime.operations.Terminated() || runtime.operations.ActiveCount() != 0 {
-		t.Fatalf("routes=%d terminal=%v active=%d", runtime.routes.len(), runtime.operations.Terminated(), runtime.operations.ActiveCount())
-	}
-}
-
-func testOutboundOperationContext(
-	t *testing.T,
-	runtime *Runtime,
-	identity session.LaneIdentity,
-	request protocolsession.Message,
-) (context.Context, *operationLaneRoute) {
-	t.Helper()
-	operationID, ok := request.OperationID()
-	if !ok {
-		t.Fatal("test request has no operation identity")
-	}
-	route := runtime.routes.reserve(operationID, identity)
-	if route != nil {
-		route.requestKind = request.Kind()
-	}
-	if route == nil {
-		t.Fatal("operation route was not reserved")
-	}
-	admission, err := runtime.operations.ObserveInbound(
-		protocolsession.DirectionReceiverToSender, request,
-	)
-	if err != nil || admission.Disposition != protocolsession.OperationDeliver || admission.Outbound.IsZero() {
-		runtime.routes.releaseRoute(operationID, route)
-		t.Fatalf("operation admission=%+v error=%v", admission, err)
-	}
-	ctx := protocolsession.WithOperationGeneration(context.Background(), admission.Generation)
-	ctx = protocolsession.WithOutboundOperationPermit(ctx, admission.Outbound)
-	return bindOutboundRoute(ctx, operationID, route), route
 }

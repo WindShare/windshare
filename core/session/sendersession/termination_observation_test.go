@@ -63,7 +63,7 @@ func TestTerminalSendObserverPanicCannotEscape(t *testing.T) {
 	observeSenderTerminalSend(observer, sessioncore.TerminalSendObservation{
 		ProtocolSessionID: id16[protocolsession.ProtocolSessionID](32),
 		Lane:              session.LaneIdentity{ID: 1},
-		Settled:           true, Outcome: protocolsession.SendOutcomeDropped, TransportDisposition: framechannel.SendAccepted,
+		Settled:           true, Outcome: sessionobs.SenderTerminalSendOutcomeDropped, TransportDisposition: framechannel.SendAccepted,
 	})
 	if observations != 1 {
 		t.Fatalf("observations=%d", observations)

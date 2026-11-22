@@ -118,7 +118,7 @@ func (runtime *Runtime) terminateWithFailure(cause TerminationCause, err error, 
 	}
 	claim := runtime.claimTermination(cause)
 	if err != nil {
-		runtime.recordError(err)
+		runtime.RecordError(err)
 	}
 	// Error inspection and diagnostic consumers must never delay cancellation.
 	runtime.cancelContext()

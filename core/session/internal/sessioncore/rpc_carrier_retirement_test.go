@@ -30,8 +30,8 @@ func TestRPCPendingControlWakesWhenRequestCarrierRetires(t *testing.T) {
 				if err := rpc.Register(); err != nil {
 					t.Fatal(err)
 				}
-				runtime.start()
-				defer runtime.close()
+				runtime.Start()
+				defer runtime.Close()
 				defer rpc.Close()
 				body, _ := protocolsession.EncodeBody(map[uint64]any{0: uint64(1)})
 				call, err := rpc.Begin(t.Context(), kind, body)
@@ -70,17 +70,17 @@ func TestRPCUsesResponseAuthenticatedBeforeCarrierRetirement(t *testing.T) {
 		if err := rpc.Register(); err != nil {
 			t.Fatal(err)
 		}
-		runtime.start()
-		defer runtime.close()
+		runtime.Start()
+		defer runtime.Close()
 		defer rpc.Close()
 		body, _ := protocolsession.EncodeBody(map[uint64]any{0: uint64(1)})
 		call, err := rpc.Begin(t.Context(), protocolsession.MessageListChildren, body)
 		if err != nil {
 			t.Fatal(err)
 		}
-		generation, _ := call.OperationAuthority()
+		op := call.Operation()
 		response, _ := protocolsession.NewMessage(protocolsession.MessageCatalogResult, new(call.ID()), body)
-		if err := rpc.HandleMessage(protocolsession.WithOperationGeneration(t.Context(), generation), response); err != nil {
+		if err := rpc.HandleMessage(t.Context(), op, response); err != nil {
 			t.Fatal(err)
 		}
 		_ = carrier.Close()

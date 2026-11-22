@@ -110,7 +110,7 @@ func EncodeBody(value any) ([]byte, error) {
 // Binary block fragments use DecodeMessage because their operation identity is
 // part of the fixed fragment header rather than the CBOR wrapper.
 func NewMessage(kind MessageKind, operationID *OperationID, body []byte) (Message, error) {
-	if !kind.valid() {
+	if !kind.Valid() {
 		return Message{}, fmt.Errorf("%w: %d", ErrUnknownMessageKind, kind)
 	}
 	if kind == MessageBlockFragment {
@@ -195,7 +195,7 @@ func DecodeMessage(plaintext []byte) (Message, error) {
 // EncodeMessage returns a copy so callers cannot mutate a queued message after
 // it has passed lifecycle validation.
 func EncodeMessage(message Message) ([]byte, error) {
-	if len(message.plaintext) == 0 || !message.kind.valid() {
+	if len(message.plaintext) == 0 || !message.kind.Valid() {
 		return nil, ErrInvalidMessage
 	}
 	return bytes.Clone(message.plaintext), nil
@@ -237,7 +237,7 @@ func decodeOperationID(encoded cbor.RawMessage) (*OperationID, error) {
 }
 
 func validateMessageIdentity(kind MessageKind, operationID *OperationID) error {
-	if kind == MessageSessionTerminal || kind.isSessionControl() {
+	if kind == MessageSessionTerminal || kind.IsSessionControl() {
 		if operationID != nil {
 			return fmt.Errorf("%w: session control must not have an operation identity", ErrInvalidOperationID)
 		}
@@ -303,7 +303,7 @@ func validateCBORValue(value any) error {
 	}
 }
 
-func (m Message) operationFingerprint(direction Direction) [sha256.Size]byte {
+func (m Message) OperationFingerprint(direction Direction) [sha256.Size]byte {
 	body := m.body
 	preimage := make([]byte, 0, 2+IdentityBytes+len(body))
 	preimage = append(preimage, byte(direction), byte(m.kind))
@@ -316,16 +316,16 @@ func (m Message) operationFingerprint(direction Direction) [sha256.Size]byte {
 	return sha256.Sum256(preimage)
 }
 
-func (kind MessageKind) valid() bool {
+func (kind MessageKind) Valid() bool {
 	return kind >= MessageListChildren && kind <= MessagePeerPathControl
 }
 
 // Session controls outlive negotiation operations and never acquire their permits.
-func (kind MessageKind) isSessionControl() bool {
+func (kind MessageKind) IsSessionControl() bool {
 	return kind == MessagePeerPathControl
 }
 
-func (kind MessageKind) isRequest() bool {
+func (kind MessageKind) IsRequest() bool {
 	switch kind {
 	case MessageListChildren, MessageOpenRevisions, MessageRenewLease,
 		MessageReleaseLease, MessageRequestBlocks, MessagePeerOffer:
@@ -335,7 +335,7 @@ func (kind MessageKind) isRequest() bool {
 	}
 }
 
-func (kind MessageKind) isFinal() bool {
+func (kind MessageKind) IsFinal() bool {
 	switch kind {
 	case MessageCatalogResult, MessageOpenResults, MessageCancel,
 		MessageOperationError, MessageOperationComplete, MessageLeaseResult:

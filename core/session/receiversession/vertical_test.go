@@ -775,26 +775,26 @@ type verticalPeerHandler struct {
 
 func (handler *verticalPeerHandler) HandleMessage(
 	ctx context.Context,
+	op protocolsession.Operation,
 	message protocolsession.Message,
 ) error {
-	operation, ok := message.OperationID()
-	if !ok {
+	if op.IsZero() {
 		return session.ErrRuntimeConfig
 	}
 	switch message.Kind() {
 	case protocolsession.MessagePeerOffer:
 		if bytes.Equal(message.Body(), handler.rejectedOffer) {
 			return handler.session.FailPeerOperation(
-				ctx, operation, protocolsession.PeerOperationCodeNegotiation, "Peer negotiation failed",
+				ctx, op, protocolsession.PeerOperationCodeNegotiation, "Peer negotiation failed",
 			)
 		}
 		if _, err := handler.session.SendPeerControl(
-			ctx, protocolsession.MessagePeerAnswer, operation, handler.answer,
+			ctx, op, protocolsession.MessagePeerAnswer, handler.answer,
 		); err != nil {
 			return err
 		}
 		_, err := handler.session.SendPeerControl(
-			ctx, protocolsession.MessagePeerCandidate, operation, handler.localCandidate,
+			ctx, op, protocolsession.MessagePeerCandidate, handler.localCandidate,
 		)
 		return err
 	case protocolsession.MessagePeerCandidate:
@@ -807,9 +807,9 @@ func (handler *verticalPeerHandler) HandleMessage(
 
 func (handler *verticalPeerHandler) Cancel(
 	_ context.Context,
-	operation protocolsession.OperationID,
+	op protocolsession.Operation,
 ) error {
-	handler.canceled <- operation
+	handler.canceled <- op.ID()
 	return nil
 }
 

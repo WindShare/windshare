@@ -231,7 +231,7 @@ func TestSenderCleanupResidueProducesOnlyClosedDiagnostic(t *testing.T) {
 	attempt := newPeerAttempt(peerAttemptConfig{
 		factory:   factory,
 		session:   newTestPeerSession(211),
-		operation: testOperationID(212),
+		operation: testPeerOperation(testOperationID(212)),
 		offer:     v2signal.Offer{Binding: testBinding(213), SDP: "v=0\r\n"},
 	})
 	attempt.recorder.begin()

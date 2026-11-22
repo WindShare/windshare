@@ -5,42 +5,21 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
-	"github.com/windshare/windshare/core/framechannel"
-	"github.com/windshare/windshare/core/session/contentflow"
-	"github.com/windshare/windshare/core/session/protocolsession"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
+
+	"github.com/windshare/windshare/core/framechannel"
+	"github.com/windshare/windshare/core/session/contentflow"
+	"github.com/windshare/windshare/core/session/protocolsession"
 )
-
-type authoritylessOutboundPolicy struct{}
-
-func (authoritylessOutboundPolicy) AdmitOutbound(
-	protocolsession.Message,
-	protocolsession.OutboundOperationPermit,
-) (protocolsession.OutboundAdmission, error) {
-	return protocolsession.OutboundAdmission{Disposition: protocolsession.OperationDeliver}, nil
-}
-
-func (authoritylessOutboundPolicy) AcceptOutboundReplay(
-	protocolsession.Message,
-	protocolsession.OutboundReplayPermit,
-) (protocolsession.OutboundAdmission, error) {
-	return protocolsession.OutboundAdmission{Disposition: protocolsession.OperationDrop}, nil
-}
-
-func (authoritylessOutboundPolicy) AcceptOutboundTerminal() error { return nil }
-
-func (authoritylessOutboundPolicy) OutboundDirection() protocolsession.Direction {
-	return protocolsession.DirectionReceiverToSender
-}
 
 func TestRPCBeginPublishesAuthorityAfterFastResponseWasAlreadyDispatched(t *testing.T) {
 	runtime, channel := newUnstartedRuntime(t, protocolsession.RoleReceiver)
 	rpc := NewRequests(runtime, bytes.NewReader(bytes.Repeat([]byte{0x73}, protocolsession.IdentityBytes)))
-	if err := rpc.register(runtime.router); err != nil {
+	if err := rpc.Register(); err != nil {
 		t.Fatal(err)
 	}
 	operationID := issuedOperationID(0x73, 1)
@@ -54,17 +33,17 @@ func TestRPCBeginPublishesAuthorityAfterFastResponseWasAlreadyDispatched(t *test
 	var responseOnce sync.Once
 	channel.onSend = func(framechannel.Frame) {
 		responseOnce.Do(func() {
-			disposition, routeErr := runtime.router.RouteInbound(context.Background(), response)
+			disposition, routeErr := runtime.inbound.RouteInbound(runtime.initial, response)
 			if routeErr != nil || disposition != protocolsession.OperationDeliver {
 				t.Errorf("fast response admission: disposition=%d error=%v", disposition, routeErr)
 				return
 			}
-			event, nextErr := runtime.router.Next(context.Background())
+			event, nextErr := runtime.inbound.Next(context.Background())
 			if nextErr != nil {
 				t.Errorf("fast response dequeue: %v", nextErr)
 				return
 			}
-			if dispatchErr := runtime.router.Dispatch(context.Background(), event); dispatchErr != nil {
+			if dispatchErr := runtime.inbound.Dispatch(context.Background(), event); dispatchErr != nil {
 				t.Errorf("fast response dispatch: %v", dispatchErr)
 				return
 			}
@@ -83,59 +62,19 @@ func TestRPCBeginPublishesAuthorityAfterFastResponseWasAlreadyDispatched(t *test
 		<-writerDone
 	}()
 
-	call, err := rpc.begin(context.Background(), protocolsession.MessageListChildren, []byte{0xa0})
+	call, err := rpc.Begin(context.Background(), protocolsession.MessageListChildren, []byte{0xa0})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = rpc.cancelAndEnd(call, contentflow.CancelReasonOutputAbort) }()
+	defer func() { _ = rpc.CancelAndEnd(call, contentflow.CancelReasonOutputAbort) }()
 	select {
 	case <-dispatched:
 	default:
 		t.Fatal("request send returned before the synchronous response dispatch")
 	}
-	message, err := rpc.await(context.Background(), call)
+	message, err := rpc.Await(context.Background(), call)
 	if err != nil || message.Kind() != protocolsession.MessageCatalogResult {
 		t.Fatalf("fast response result: kind=%d error=%v", message.Kind(), err)
-	}
-}
-
-func TestRPCBeginFailClosesAuthoritylessAdmittedCompletion(t *testing.T) {
-	runtime, channel := newUnstartedRuntime(t, protocolsession.RoleReceiver)
-	binding := protocolsession.EnvelopeBinding{
-		ShareInstance: runtime.share, ProtocolSessionID: runtime.sessionID,
-		LaneID: runtime.initial.ID, LaneEpoch: runtime.initial.Epoch,
-		Direction: protocolsession.DirectionReceiverToSender,
-	}
-	sealer, err := protocolsession.NewEnvelopeSealer(
-		runtime.keys.ReceiverToSender(), binding, &deterministicReader{next: 0x81},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	writer, err := protocolsession.NewSessionWriter(channel, sealer, authoritylessOutboundPolicy{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	runtime.lanes.mu.Lock()
-	runtime.lanes.active[runtime.initial.ID].writer = writer
-	runtime.lanes.mu.Unlock()
-	writerContext, stopWriter := context.WithCancel(context.Background())
-	writerDone := make(chan error, 1)
-	go func() { writerDone <- writer.Run(writerContext) }()
-	defer func() {
-		stopWriter()
-		<-writerDone
-	}()
-	rpc := NewRequests(runtime, bytes.NewReader(bytes.Repeat([]byte{0x82}, 8)))
-	if _, err := rpc.begin(context.Background(), protocolsession.MessageListChildren, []byte{0xa0}); !errors.Is(err, errRPCOperationAuthority) {
-		t.Fatalf("authorityless admitted completion error=%v", err)
-	}
-	rpc.mu.Lock()
-	calls := len(rpc.calls)
-	rpc.mu.Unlock()
-	if calls != 0 || !runtime.operations.Terminated() || runtime.ctx.Err() == nil {
-		t.Fatalf("authority failure calls=%d terminal=%v canceled=%v",
-			calls, runtime.operations.Terminated(), runtime.ctx.Err())
 	}
 }
 
@@ -171,7 +110,7 @@ func TestRPCBeginCancellationAfterAdmissionQueuesOneExactCancel(t *testing.T) {
 	requestContext, cancelRequest := context.WithCancel(context.Background())
 	result := make(chan error, 1)
 	go func() {
-		_, err := rpc.begin(requestContext, protocolsession.MessageListChildren, []byte{0xa0})
+		_, err := rpc.Begin(requestContext, protocolsession.MessageListChildren, []byte{0xa0})
 		result <- err
 	}()
 	<-firstSendStarted
@@ -222,33 +161,32 @@ func testRPCFinalWinsCleanupPreservesFingerprintAndCannotCancelHostileSameIDGene
 	rpc := NewRequests(runtime, bytes.NewReader(bytes.Repeat([]byte{0x84}, 8)))
 	operationID := issuedOperationID(0x84, 1)
 	request, _ := protocolsession.NewMessage(protocolsession.MessageListChildren, &operationID, []byte{0xa0})
-	requestReceipt, err := lane.writer.TryControl(request)
+	firstOp, maxCont, hasLimit, releaseFirst, err := runtime.operations.AdmitOutboundRequest(request, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	first := requestReceipt.Await(context.Background())
-	if first.Outcome != protocolsession.SendOutcomeTransportConfirmed || !first.Admitted {
-		t.Fatalf("first request completion=%+v", first)
+	if err := lane.writer.SendControl(context.Background(), request, releaseFirst); err != nil {
+		t.Fatal(err)
 	}
 	call := &Call{
 		id: operationID, messages: make(chan operationResponse, 1), lane: runtime.initial,
 	}
-	if !call.setAuthority(first.Generation, first.Operation) {
+	if !call.setAuthority(firstOp, maxCont, hasLimit) {
 		t.Fatal("failed to bind first generation")
 	}
 	rpc.calls[operationID] = call
 	final, _ := protocolsession.NewMessage(protocolsession.MessageCatalogResult, &operationID, []byte{0xa0})
-	if _, err := runtime.operations.ObserveInbound(protocolsession.DirectionSenderToReceiver, final); err != nil {
+	if _, err := runtime.operations.ObserveInbound(protocolsession.DirectionSenderToReceiver, runtime.initial, final); err != nil {
 		t.Fatal(err)
 	}
 	if err := rpc.admitCancellation(call, contentflow.CancelReasonOutputAbort); err != nil {
 		t.Fatalf("final-wins cleanup: %v", err)
 	}
 	if physicalSends.Load() != 1 {
-		t.Fatalf("final-wins cleanup emitted %d wire cancels", physicalSends.Load())
+		t.Fatalf("final-wins cleanup emitted %d wire cancels", physicalSends.Load()-1)
 	}
-	if disposition, err := runtime.operations.Observe(protocolsession.DirectionSenderToReceiver, final); err != nil || disposition != protocolsession.OperationDrop {
-		t.Fatalf("exact final fingerprint changed: disposition=%d error=%v", disposition, err)
+	if admission, err := runtime.operations.ObserveInbound(protocolsession.DirectionSenderToReceiver, runtime.initial, final); err != nil || admission.disposition != protocolsession.OperationDrop {
+		t.Fatalf("exact final fingerprint changed: disposition=%d error=%v", admission.disposition, err)
 	}
 	conflictingBody, _ := protocolsession.EncodeBody(map[uint64]any{0: uint64(1)})
 	conflicting, err := protocolsession.NewMessage(
@@ -257,31 +195,29 @@ func testRPCFinalWinsCleanupPreservesFingerprintAndCannotCancelHostileSameIDGene
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runtime.operations.Observe(protocolsession.DirectionSenderToReceiver, conflicting); !errors.Is(err, protocolsession.ErrConflictingFinal) {
+	if _, err := runtime.operations.ObserveInbound(protocolsession.DirectionSenderToReceiver, runtime.initial, conflicting); !errors.Is(err, protocolsession.ErrConflictingFinal) {
 		t.Fatalf("conflicting final error=%v", err)
 	}
 
-	// Honest issuers never reuse an OperationID. This forced reuse models a
-	// hostile peer after the bounded replay window and exercises local ABA safety.
-	// Receipt settlement precedes the writer's deferred pin release, so fake time
-	// must remain fixed until that cleanup is durably blocked again.
 	synctest.Wait()
 	now = now.Add(protocolsession.OperationTombstoneLifetime + time.Nanosecond)
 	_ = runtime.operations.TombstoneCount()
-	secondReceipt, err := lane.writer.TryControl(request)
+	secondOp, _, _, releaseSecond, err := runtime.operations.AdmitOutboundRequest(request, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second := secondReceipt.Await(context.Background())
-	if second.Outcome != protocolsession.SendOutcomeTransportConfirmed || !second.Generation.IsActive() {
-		t.Fatalf("forced second generation: %+v", second)
+	if err := lane.writer.SendControl(context.Background(), request, releaseSecond); err != nil {
+		t.Fatal(err)
 	}
-	if err := rpc.cancelAndEnd(call, contentflow.CancelReasonOutputAbort); err != nil {
+	if !secondOp.IsActive() {
+		t.Fatal("forced second generation was not active")
+	}
+	if err := rpc.CancelAndEnd(call, contentflow.CancelReasonOutputAbort); err != nil {
 		t.Fatalf("stale generation cleanup: %v", err)
 	}
-	if !second.Generation.IsActive() || runtime.operations.ActiveCount() != 1 || physicalSends.Load() != 2 {
+	if !secondOp.IsActive() || runtime.operations.ActiveCount() != 1 || physicalSends.Load() != 2 {
 		t.Fatalf("stale cleanup changed second generation active=%v count=%d sends=%d",
-			second.Generation.IsActive(), runtime.operations.ActiveCount(), physicalSends.Load())
+			secondOp.IsActive(), runtime.operations.ActiveCount(), physicalSends.Load())
 	}
 }
 
@@ -296,7 +232,7 @@ func testRPCQueuedStaleResponseCannotCrossSameIDGeneration(t *testing.T) {
 		protocolsession.OperationLimits{MaxActive: 2, MaxTracked: 2},
 		func() time.Time { return now },
 	)
-	t.Cleanup(runtime.abortBeforeStart)
+	t.Cleanup(runtime.AbortBeforeStart)
 	lane, err := runtime.lanes.selectLane(&runtime.initial)
 	if err != nil {
 		t.Fatal(err)
@@ -309,7 +245,7 @@ func testRPCQueuedStaleResponseCannotCrossSameIDGeneration(t *testing.T) {
 		<-writerDone
 	})
 	rpc := NewRequests(runtime, bytes.NewReader(bytes.Repeat([]byte{0x85}, 8)))
-	if err := rpc.register(runtime.router); err != nil {
+	if err := rpc.Register(); err != nil {
 		t.Fatal(err)
 	}
 	operationID := issuedOperationID(0x85, 1)
@@ -319,26 +255,24 @@ func testRPCQueuedStaleResponseCannotCrossSameIDGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	beginGeneration := func() (*Call, protocolsession.OperationGeneration) {
-		receipt, sendErr := lane.writer.TryControl(request)
-		if sendErr != nil {
-			t.Fatal(sendErr)
+	beginGeneration := func() (*Call, protocolsession.Operation) {
+		op, maxCont, hasLimit, release, admitErr := runtime.operations.AdmitOutboundRequest(request, nil)
+		if admitErr != nil {
+			t.Fatal(admitErr)
 		}
-		completion := receipt.Await(context.Background())
-		if completion.Outcome != protocolsession.SendOutcomeTransportConfirmed || !completion.Admitted ||
-			completion.Generation.IsZero() || completion.Operation.IsZero() {
-			t.Fatalf("same-ID request completion=%+v", completion)
+		if sendErr := lane.writer.SendControl(context.Background(), request, release); sendErr != nil {
+			t.Fatal(sendErr)
 		}
 		call := &Call{
 			id: operationID, messages: make(chan operationResponse, 1), lane: runtime.initial,
 		}
-		if !call.setAuthority(completion.Generation, completion.Operation) {
+		if !call.setAuthority(op, maxCont, hasLimit) {
 			t.Fatal("failed to bind same-ID generation")
 		}
-		return call, completion.Generation
+		return call, op
 	}
 
-	callA, generationA := beginGeneration()
+	callA, opA := beginGeneration()
 	rpc.calls[operationID] = callA
 	responseA, err := protocolsession.NewMessage(
 		protocolsession.MessageCatalogResult, &operationID, []byte{0xa0},
@@ -346,31 +280,28 @@ func testRPCQueuedStaleResponseCannotCrossSameIDGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if disposition, err := runtime.router.RouteInbound(context.Background(), responseA); err != nil || disposition != protocolsession.OperationDeliver {
+	if disposition, err := runtime.inbound.RouteInbound(runtime.initial, responseA); err != nil || disposition != protocolsession.OperationDeliver {
 		t.Fatalf("queue generation A response: disposition=%d error=%v", disposition, err)
 	}
-	if generationA.IsActive() || runtime.operations.ActiveCount() != 0 || runtime.operations.TombstoneCount() != 1 {
+	if opA.IsActive() || runtime.operations.ActiveCount() != 0 || runtime.operations.TombstoneCount() != 1 {
 		t.Fatalf("generation A final lifecycle active=%v activeCount=%d tombstones=%d",
-			generationA.IsActive(), runtime.operations.ActiveCount(), runtime.operations.TombstoneCount())
+			opA.IsActive(), runtime.operations.ActiveCount(), runtime.operations.TombstoneCount())
 	}
-	if disposition, err := runtime.operations.Observe(
-		protocolsession.DirectionSenderToReceiver, responseA,
-	); err != nil || disposition != protocolsession.OperationDrop {
-		t.Fatalf("generation A exact tombstone: disposition=%d error=%v", disposition, err)
+	if admission, err := runtime.operations.ObserveInbound(
+		protocolsession.DirectionSenderToReceiver, runtime.initial, responseA,
+	); err != nil || admission.disposition != protocolsession.OperationDrop {
+		t.Fatalf("generation A exact tombstone: disposition=%d error=%v", admission.disposition, err)
 	}
 
-	// Receipt settlement precedes the writer's deferred pin release. Keep fake
-	// time still until that cleanup finishes so the test cannot refresh A's
-	// tombstone after jumping past its lifetime.
 	synctest.Wait()
 	now = now.Add(protocolsession.OperationTombstoneLifetime + time.Nanosecond)
 	_ = runtime.operations.TombstoneCount()
-	callB, generationB := beginGeneration()
-	if generationA.Same(generationB) || !generationB.IsActive() {
-		t.Fatalf("generation B authority A=%+v B=%+v", generationA, generationB)
+	callB, opB := beginGeneration()
+	if opA.Same(opB) || !opB.IsActive() {
+		t.Fatalf("generation B authority A=%+v B=%+v", opA.Ref(), opB.Ref())
 	}
 	rpc.calls[operationID] = callB
-	if err := rpc.cancelAndEnd(callA, contentflow.CancelReasonOutputAbort); err != nil {
+	if err := rpc.CancelAndEnd(callA, contentflow.CancelReasonOutputAbort); err != nil {
 		t.Fatalf("generation A cleanup after B admission: %v", err)
 	}
 	select {
@@ -378,21 +309,21 @@ func testRPCQueuedStaleResponseCannotCrossSameIDGeneration(t *testing.T) {
 	default:
 		t.Fatal("generation A cleanup did not close its exact response sink")
 	}
-	if generation, authority := callA.operationAuthority(); !generation.IsZero() || !authority.IsZero() {
+	if !callA.Operation().IsZero() {
 		t.Fatal("generation A cleanup retained operation authority")
 	}
 	rpc.mu.Lock()
 	retainedB := rpc.calls[operationID] == callB
 	rpc.mu.Unlock()
-	if !retainedB || !generationB.IsActive() {
-		t.Fatalf("generation A cleanup changed B: retained=%v active=%v", retainedB, generationB.IsActive())
+	if !retainedB || !opB.IsActive() {
+		t.Fatalf("generation A cleanup changed B: retained=%v active=%v", retainedB, opB.IsActive())
 	}
 
-	staleEvent, err := runtime.router.Next(context.Background())
+	staleEvent, err := runtime.inbound.Next(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := runtime.router.Dispatch(context.Background(), staleEvent); err != nil {
+	if err := runtime.inbound.Dispatch(context.Background(), staleEvent); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -403,8 +334,8 @@ func testRPCQueuedStaleResponseCannotCrossSameIDGeneration(t *testing.T) {
 	rpc.mu.Lock()
 	retainedB = rpc.calls[operationID] == callB
 	rpc.mu.Unlock()
-	if !retainedB || !generationB.IsActive() {
-		t.Fatalf("stale dispatch changed B: retained=%v active=%v", retainedB, generationB.IsActive())
+	if !retainedB || !opB.IsActive() {
+		t.Fatalf("stale dispatch changed B: retained=%v active=%v", retainedB, opB.IsActive())
 	}
 
 	bodyB, err := protocolsession.EncodeBody(map[uint64]any{0: uint64(2)})
@@ -417,21 +348,21 @@ func testRPCQueuedStaleResponseCannotCrossSameIDGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if disposition, err := runtime.router.RouteInbound(context.Background(), responseB); err != nil || disposition != protocolsession.OperationDeliver {
+	if disposition, err := runtime.inbound.RouteInbound(runtime.initial, responseB); err != nil || disposition != protocolsession.OperationDeliver {
 		t.Fatalf("queue generation B response: disposition=%d error=%v", disposition, err)
 	}
-	eventB, err := runtime.router.Next(context.Background())
+	eventB, err := runtime.inbound.Next(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := runtime.router.Dispatch(context.Background(), eventB); err != nil {
+	if err := runtime.inbound.Dispatch(context.Background(), eventB); err != nil {
 		t.Fatal(err)
 	}
-	received, err := rpc.await(context.Background(), callB)
+	received, err := rpc.Await(context.Background(), callB)
 	if err != nil || !bytes.Equal(received.Body(), bodyB) {
 		t.Fatalf("generation B response body=%x error=%v", received.Body(), err)
 	}
-	rpc.end(callB)
+	rpc.End(callB)
 	rpc.mu.Lock()
 	remainingCalls := len(rpc.calls)
 	rpc.mu.Unlock()

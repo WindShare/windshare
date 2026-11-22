@@ -86,9 +86,11 @@ func (relaysetTerminal) Cleanup(context.Context) error { return nil }
 
 type relaysetPeer struct{}
 
-func (relaysetPeer) HandleMessage(context.Context, protocolsession.Message) error { return nil }
-func (relaysetPeer) Cancel(context.Context, protocolsession.OperationID) error    { return nil }
-func (relaysetPeer) Run(ctx context.Context) error                                { <-ctx.Done(); return ctx.Err() }
+func (relaysetPeer) HandleMessage(context.Context, protocolsession.Operation, protocolsession.Message) error {
+	return nil
+}
+func (relaysetPeer) Cancel(context.Context, protocolsession.Operation) error { return nil }
+func (relaysetPeer) Run(ctx context.Context) error                           { <-ctx.Done(); return ctx.Err() }
 
 type relaysetAdmission struct {
 	Endpoint string                    `json:"endpoint"`

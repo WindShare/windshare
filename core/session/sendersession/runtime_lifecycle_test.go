@@ -62,54 +62,54 @@ func TestServiceHandlersEnforceBoundedQueuesAndSharedDirectoryFailureSchema(t *t
 	laneRequest, _ := protocolsession.NewMessage(protocolsession.MessageLaneAttach, &operationID, laneBody)
 
 	catalogHandler := newCatalogHandler(nil, &sessioncore.Responses{})
-	if err := catalogHandler.HandleMessage(context.Background(), terminal); !errors.Is(err, contentflow.ErrUnexpectedMessage) {
+	if err := catalogHandler.HandleMessage(context.Background(), protocolsession.Operation{}, terminal); !errors.Is(err, contentflow.ErrUnexpectedMessage) {
 		t.Fatalf("catalog wrong-kind error = %v", err)
 	}
-	listContext := senderIngressContext(t, list)
+	listOp := senderIngressOperation(t, list)
 	for range cap(catalogHandler.queue) {
-		if err := catalogHandler.HandleMessage(listContext, list); err != nil {
+		if err := catalogHandler.HandleMessage(context.Background(), listOp, list); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := catalogHandler.HandleMessage(listContext, list); !errors.Is(err, contentflow.ErrServiceQueueFull) {
+	if err := catalogHandler.HandleMessage(context.Background(), listOp, list); !errors.Is(err, contentflow.ErrServiceQueueFull) {
 		t.Fatalf("catalog queue overflow error = %v", err)
 	}
 
 	laneHandler := newLaneGrantHandler(nil, &sessioncore.Responses{}, edgeErrorReader{})
-	if err := laneHandler.HandleMessage(context.Background(), terminal); !errors.Is(err, session.ErrRuntimeConfig) {
+	if err := laneHandler.HandleMessage(context.Background(), protocolsession.Operation{}, terminal); !errors.Is(err, session.ErrRuntimeConfig) {
 		t.Fatalf("lane wrong-kind error = %v", err)
 	}
-	laneContext := senderIngressContext(t, laneRequest)
+	laneOp := senderIngressOperation(t, laneRequest)
 	for range cap(laneHandler.queue) {
-		if err := laneHandler.HandleMessage(laneContext, laneRequest); err != nil {
+		if err := laneHandler.HandleMessage(context.Background(), laneOp, laneRequest); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := laneHandler.HandleMessage(laneContext, laneRequest); !errors.Is(err, session.ErrOperationOverflow) {
+	if err := laneHandler.HandleMessage(context.Background(), laneOp, laneRequest); !errors.Is(err, session.ErrOperationOverflow) {
 		t.Fatalf("lane queue overflow error = %v", err)
 	}
 	malformedHandler := newLaneGrantHandler(nil, &sessioncore.Responses{}, edgeErrorReader{})
 	malformed, _ := protocolsession.NewMessage(protocolsession.MessageLaneAttach, &operationID, body)
-	if err := malformedHandler.HandleMessage(senderIngressContext(t, malformed), malformed); err != nil {
+	if err := malformedHandler.HandleMessage(context.Background(), senderIngressOperation(t, malformed), malformed); err != nil {
 		t.Fatal(err)
 	}
 	if err := malformedHandler.Run(context.Background()); err == nil {
 		t.Fatal("malformed queued lane request did not fail its handler")
 	}
-	if err := laneHandler.process(context.Background(), laneRequest); !errors.Is(err, io.ErrUnexpectedEOF) {
+	if err := laneHandler.process(context.Background(), laneOp, laneRequest); !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatalf("lane grant nonce error = %v", err)
 	}
 
 	var cancelled bool
 	cancelID := id16[protocolsession.OperationID](82)
-	cancelKey := catalogOperationKey{id: cancelID}
-	catalogHandler.active[cancelKey] = func() { cancelled = true }
-	catalogHandler.cancel(cancelKey)
-	if !cancelled || catalogHandler.add(cancelKey, func() {}) {
+	cancelRef := protocolsession.OperationRef{ID: cancelID, Token: 1}
+	catalogHandler.active[cancelRef] = func() { cancelled = true }
+	catalogHandler.cancel(cancelRef)
+	if !cancelled || catalogHandler.add(cancelRef, func() {}) {
 		t.Fatal("catalog operation cancellation lost duplicate authority")
 	}
-	catalogHandler.remove(cancelKey)
-	if err := (cancelMux{catalog: catalogHandler}).HandleMessage(context.Background(), terminal); !errors.Is(err, session.ErrRuntimeConfig) {
+	catalogHandler.remove(cancelRef)
+	if err := (cancelMux{catalog: catalogHandler}).HandleMessage(context.Background(), protocolsession.Operation{}, terminal); !errors.Is(err, session.ErrRuntimeConfig) {
 		t.Fatalf("cancel without operation error = %v", err)
 	}
 

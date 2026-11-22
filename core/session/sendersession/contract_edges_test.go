@@ -4,15 +4,31 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
+	"testing"
+	"time"
+
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/internal/sessioncore"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"sync"
-	"testing"
-	"time"
 )
+
+type stubHandlerRegistrar struct {
+	handlers map[protocolsession.MessageKind]protocolsession.MessageHandler
+}
+
+func (r *stubHandlerRegistrar) RegisterHandler(kind protocolsession.MessageKind, h protocolsession.MessageHandler) error {
+	if r.handlers == nil {
+		r.handlers = make(map[protocolsession.MessageKind]protocolsession.MessageHandler)
+	}
+	if _, exists := r.handlers[kind]; exists {
+		return protocolsession.ErrHandlerRegistered
+	}
+	r.handlers[kind] = h
+	return nil
+}
 
 func TestRegisterSenderHandlersPropagatesEveryOwnershipConflict(t *testing.T) {
 	duplicateKinds := []protocolsession.MessageKind{
@@ -24,22 +40,13 @@ func TestRegisterSenderHandlersPropagatesEveryOwnershipConflict(t *testing.T) {
 	}
 	for _, duplicate := range duplicateKinds {
 		t.Run(fmt.Sprintf("kind-%d", duplicate), func(t *testing.T) {
-			operations, err := protocolsession.NewOperationTable(
-				protocolsession.OperationLimits{MaxActive: 16, MaxTracked: 16}, nil,
-			)
-			if err != nil {
-				t.Fatal(err)
-			}
-			router, err := protocolsession.NewRoleRouter(protocolsession.RoleSender, operations)
-			if err != nil {
-				t.Fatal(err)
-			}
+			router := &stubHandlerRegistrar{}
 			if err := router.RegisterHandler(duplicate, protocolsession.MessageHandlerFunc(
-				func(context.Context, protocolsession.Message) error { return nil },
+				func(context.Context, protocolsession.Operation, protocolsession.Message) error { return nil },
 			)); err != nil {
 				t.Fatal(err)
 			}
-			err = registerSenderHandlers(
+			err := registerSenderHandlers(
 				router,
 				&catalogHandler{},
 				&contentflow.SenderHandler{},
@@ -70,32 +77,30 @@ func TestCatalogHandlerSuppressesDuplicateWorkAndCancelsQueuedOperations(t *test
 		}
 		return message
 	}
+	state := newStubOperationState()
 	duplicateMessage := listMessage(duplicateID)
-	duplicateContext := senderIngressContext(t, duplicateMessage)
-	duplicateKey, _ := catalogKey(duplicateContext, duplicateID)
-	if !handler.add(duplicateKey, func() {}) {
+	duplicateOp := state.admit(duplicateID, protocolsession.MessageListChildren)
+	if !handler.add(duplicateOp.Ref(), func() {}) {
 		t.Fatal("failed to seed active catalog operation")
 	}
 	queuedMessage := listMessage(queuedID)
-	queuedContext := senderIngressContext(t, queuedMessage)
-	barrierMessage := listMessage(barrierID)
-	barrierContext := senderIngressContext(t, barrierMessage)
-	barrierKey, _ := catalogKey(barrierContext, barrierID)
+	queuedOp := state.admit(queuedID, protocolsession.MessageListChildren)
+	barrierOp := state.admit(barrierID, protocolsession.MessageListChildren)
 	barrierReached := make(chan struct{})
 	var barrierOnce sync.Once
-	if !handler.add(barrierKey, func() { barrierOnce.Do(func() { close(barrierReached) }) }) {
+	if !handler.add(barrierOp.Ref(), func() { barrierOnce.Do(func() { close(barrierReached) }) }) {
 		t.Fatal("failed to seed catalog barrier")
 	}
 	for _, queued := range []struct {
-		ctx     context.Context
+		op      protocolsession.Operation
 		message protocolsession.Message
 	}{
-		{duplicateContext, duplicateMessage},
-		{queuedContext, queuedMessage},
-		{queuedContext, operationMessageForTest(t, protocolsession.MessageCancel, queuedID, validCancelBody(t))},
-		{barrierContext, operationMessageForTest(t, protocolsession.MessageCancel, barrierID, validCancelBody(t))},
+		{duplicateOp, duplicateMessage},
+		{queuedOp, queuedMessage},
+		{queuedOp, operationMessageForTest(t, protocolsession.MessageCancel, queuedID, validCancelBody(t))},
+		{barrierOp, operationMessageForTest(t, protocolsession.MessageCancel, barrierID, validCancelBody(t))},
 	} {
-		if err := handler.HandleMessage(queued.ctx, queued.message); err != nil {
+		if err := handler.HandleMessage(context.Background(), queued.op, queued.message); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -112,7 +117,7 @@ func TestCatalogHandlerSuppressesDuplicateWorkAndCancelsQueuedOperations(t *test
 	if err := <-result; !errors.Is(err, context.Canceled) {
 		t.Fatalf("catalog handler cancellation error = %v", err)
 	}
-	if err := handler.progressObserver(context.Background(), queuedID).ObserveScanProgress(
+	if err := handler.progressObserver(queuedOp).ObserveScanProgress(
 		context.Background(), catalog.ScanProgress{},
 	); !errors.Is(err, protocolsession.ErrInvalidScanProgress) {
 		t.Fatalf("zero scan attempt error = %v", err)
@@ -125,8 +130,7 @@ func TestSenderPeerSessionRejectsMissingAuthorityAndExposesExactIdentity(t *test
 		t.Fatal("empty peer authority exposed a nonzero identity")
 	}
 	if _, err := empty.SendPeerControl(
-		context.Background(), protocolsession.MessagePeerAnswer,
-		protocolsession.OperationID{}, nil,
+		context.Background(), protocolsession.Operation{}, protocolsession.MessagePeerAnswer, nil,
 	); !errors.Is(err, session.ErrRuntimeConfig) {
 		t.Fatalf("empty peer control error = %v", err)
 	}
@@ -136,7 +140,7 @@ func TestSenderPeerSessionRejectsMissingAuthorityAndExposesExactIdentity(t *test
 		t.Fatalf("empty peer admission error = %v", err)
 	}
 	if err := empty.FailPeerOperation(
-		context.Background(), protocolsession.OperationID{},
+		context.Background(), protocolsession.Operation{},
 		protocolsession.PeerOperationCodeNegotiation, "missing",
 	); !errors.Is(err, session.ErrRuntimeConfig) {
 		t.Fatalf("empty peer failure error = %v", err)

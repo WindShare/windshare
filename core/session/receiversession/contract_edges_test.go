@@ -419,9 +419,9 @@ func TestMalformedPeerResponseCancelsExactGenerationAndDrainsSenderAttempt(t *te
 				t.Fatalf("sender observed malformed offer ID=%x, want %x", observed, malformedID)
 			}
 			malformedCall := malformed.call
-			malformedGeneration, _ := malformedCall.OperationAuthority()
-			if malformedGeneration.IsZero() || !malformedGeneration.IsActive() {
-				t.Fatal("malformed peer attempt has no active generation")
+			malformedOp := malformedCall.Operation()
+			if malformedOp.IsZero() || !malformedOp.IsActive() {
+				t.Fatal("malformed peer attempt has no active operation")
 			}
 
 			sibling := openTestPeerOperation(t, receiver)
@@ -432,12 +432,12 @@ func TestMalformedPeerResponseCancelsExactGenerationAndDrainsSenderAttempt(t *te
 			if observed := waitPeerOperationID(t, handler.offers, "sibling offer"); observed != siblingID {
 				t.Fatalf("sender observed sibling offer ID=%x, want %x", observed, siblingID)
 			}
-			siblingGeneration, _ := sibling.call.OperationAuthority()
+			siblingOp := sibling.call.Operation()
 
 			handler.mu.Lock()
-			malformedContext := handler.attempts[malformedID].ctx
+			malformedAttempt := handler.attempts[malformedID]
 			handler.mu.Unlock()
-			if _, err := handler.session.SendPeerControl(malformedContext, malformedKind, malformedID, []byte{1}); err != nil {
+			if _, err := handler.session.SendPeerControl(malformedAttempt.ctx, malformedAttempt.op, malformedKind, []byte{1}); err != nil {
 				t.Fatal(err)
 			}
 			malformedTermination := requireReceiverPeerTermination(
@@ -461,8 +461,7 @@ func TestMalformedPeerResponseCancelsExactGenerationAndDrainsSenderAttempt(t *te
 				t.Fatalf("sender stopped peer ID=%x, want %x", stopped, malformedID)
 			}
 
-			retiredGeneration, retiredAuthority := malformedCall.OperationAuthority()
-			callClosed, queuedResponses := retiredGeneration.IsZero() && retiredAuthority.IsZero(), 0
+			callClosed, queuedResponses := malformedCall.Operation().IsZero(), 0
 			if !callClosed || queuedResponses != 0 {
 				t.Fatalf("malformed RPC sink closed=%v queued=%d", callClosed, queuedResponses)
 			}
@@ -472,11 +471,11 @@ func TestMalformedPeerResponseCancelsExactGenerationAndDrainsSenderAttempt(t *te
 			if !facadeClosed || stillReceiving {
 				t.Fatalf("malformed peer facade closed=%v receiving=%v", facadeClosed, stillReceiving)
 			}
-			if !malformedGeneration.IsCurrent() || malformedGeneration.IsActive() {
-				t.Fatalf("malformed generation current=%v active=%v",
-					malformedGeneration.IsCurrent(), malformedGeneration.IsActive())
+			if !malformedOp.IsCurrent() || malformedOp.IsActive() {
+				t.Fatalf("malformed operation current=%v active=%v",
+					malformedOp.IsCurrent(), malformedOp.IsActive())
 			}
-			if requestKind, ok := malformedGeneration.RequestKind(); !ok || requestKind != protocolsession.MessagePeerOffer {
+			if requestKind, ok := malformedOp.RequestKind(); !ok || requestKind != protocolsession.MessagePeerOffer {
 				t.Fatalf("malformed tombstone request kind=%d present=%v", requestKind, ok)
 			}
 			trackedRequests(receiver.rpc).mu.Lock()
@@ -490,7 +489,7 @@ func TestMalformedPeerResponseCancelsExactGenerationAndDrainsSenderAttempt(t *te
 				t.Fatalf("post-malformed lifecycle badRPC=%v siblingRPC=%v calls=%d attempts=%d watchers=%d cancels=%d",
 					retainedMalformed, retainedSibling, activeRPCCalls, attempts, watchers, malformedCancels)
 			}
-			if !siblingGeneration.IsActive() {
+			if !siblingOp.IsActive() {
 				t.Fatal("malformed operation revoked its sibling")
 			}
 
@@ -563,6 +562,7 @@ func peerOperationControl(
 
 type trackedSenderPeerAttempt struct {
 	ctx  context.Context
+	op   protocolsession.Operation
 	done chan struct{}
 }
 
@@ -595,6 +595,7 @@ func newTrackedSenderPeerHandler(
 
 func (handler *trackedSenderPeerHandler) HandleMessage(
 	ctx context.Context,
+	op protocolsession.Operation,
 	message protocolsession.Message,
 ) error {
 	operationID, ok := message.OperationID()
@@ -607,7 +608,7 @@ func (handler *trackedSenderPeerHandler) HandleMessage(
 	if message.Kind() != protocolsession.MessagePeerOffer {
 		return session.ErrRuntimeConfig
 	}
-	attempt := &trackedSenderPeerAttempt{ctx: ctx, done: make(chan struct{})}
+	attempt := &trackedSenderPeerAttempt{ctx: ctx, op: op, done: make(chan struct{})}
 	handler.mu.Lock()
 	if handler.stopping || handler.attempts[operationID] != nil {
 		handler.mu.Unlock()
@@ -630,15 +631,16 @@ func (handler *trackedSenderPeerHandler) HandleMessage(
 		return nil
 	}
 	_, err := handler.session.SendPeerControl(
-		ctx, protocolsession.MessagePeerAnswer, operationID, handler.validAnswer,
+		ctx, op, protocolsession.MessagePeerAnswer, handler.validAnswer,
 	)
 	return err
 }
 
 func (handler *trackedSenderPeerHandler) Cancel(
 	_ context.Context,
-	operationID protocolsession.OperationID,
+	op protocolsession.Operation,
 ) error {
+	operationID := op.ID()
 	handler.mu.Lock()
 	handler.cancelCalls[operationID]++
 	attempt := handler.attempts[operationID]

@@ -19,9 +19,9 @@ func TestRuntimeDoneFollowsLaneCryptoDestructionAndReferenceRelease(t *testing.T
 	}
 	sealer, opener, writer := lane.sealer, lane.opener, lane.writer
 
-	runtime.start()
-	runtime.beginClose()
-	runtime.waitClosed()
+	runtime.Start()
+	runtime.BeginClose()
+	runtime.WaitClosed()
 
 	select {
 	case <-writer.Done():
@@ -34,7 +34,7 @@ func TestRuntimeDoneFollowsLaneCryptoDestructionAndReferenceRelease(t *testing.T
 		t.Fatal("runtime completed before its pump/writer lane join")
 	}
 	if lane.sealer != nil || lane.opener != nil || lane.writer != nil ||
-		lane.pump != nil || lane.channel != nil || lane.ctx != nil || lane.cancel != nil {
+		lane.validator != nil || lane.channel != nil || lane.ctx != nil || lane.cancel != nil {
 		t.Fatalf("closed runtime lane retained dependency references: %+v", lane)
 	}
 	if _, err := sealer.Seal(nil); !errors.Is(err, protocolsession.ErrEnvelopeClosed) {
@@ -112,12 +112,12 @@ func TestNaturalLaneDetachReleasesRetainedLaneReferences(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	runtime.start()
+	runtime.Start()
 	if !runtime.lanes.detach(initial.identity) {
 		t.Fatal("live initial lane did not detach")
 	}
 	if initial.sealer != nil || initial.opener != nil || initial.writer != nil ||
-		initial.pump != nil || initial.channel != nil || initial.ctx != nil || initial.cancel != nil {
+		initial.validator != nil || initial.channel != nil || initial.ctx != nil || initial.cancel != nil {
 		t.Fatalf("naturally detached lane retained dependency references: %+v", initial)
 	}
 	if _, err := sealer.NextSequence(); !errors.Is(err, protocolsession.ErrEnvelopeClosed) {
@@ -131,15 +131,15 @@ func TestNaturalLaneDetachReleasesRetainedLaneReferences(t *testing.T) {
 		t.Fatal("detaching one lane closed a runtime with another usable lane")
 	default:
 	}
-	runtime.beginClose()
-	runtime.waitClosed()
+	runtime.BeginClose()
+	runtime.WaitClosed()
 }
 
 func TestUnstartedLaneDetachSynchronouslyReleasesOwnedDependencies(t *testing.T) {
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
 	detachCalls := 0
 	var detachedIdentity session.LaneIdentity
-	runtime.lanes.setDetachHook(func(identity session.LaneIdentity) {
+	runtime.ConfigureLanes(nil, func(identity session.LaneIdentity) {
 		detachCalls++
 		detachedIdentity = identity
 	})
@@ -168,7 +168,7 @@ func TestUnstartedLaneDetachSynchronouslyReleasesOwnedDependencies(t *testing.T)
 		t.Fatalf("repeated unstarted detach result changed hook count=%d", detachCalls)
 	}
 	if lane.sealer != nil || lane.opener != nil || lane.writer != nil ||
-		lane.pump != nil || lane.channel != nil || lane.ctx != nil || lane.cancel != nil {
+		lane.validator != nil || lane.channel != nil || lane.ctx != nil || lane.cancel != nil {
 		t.Fatalf("unstarted detached lane retained dependency references: %+v", lane)
 	}
 	if _, err := sealer.NextSequence(); !errors.Is(err, protocolsession.ErrEnvelopeClosed) {
@@ -199,7 +199,7 @@ func TestUnstartedLastLaneDetachPublishesHookAndCancelsRuntime(t *testing.T) {
 	}
 	detachCalls := 0
 	var detachedIdentity session.LaneIdentity
-	runtime.lanes.setDetachHook(func(identity session.LaneIdentity) {
+	runtime.ConfigureLanes(nil, func(identity session.LaneIdentity) {
 		detachCalls++
 		detachedIdentity = identity
 	})
@@ -231,10 +231,10 @@ func TestRuntimeConstructionAbortDestroysUnstartedLaneCrypto(t *testing.T) {
 	runtime.lanes.mu.Unlock()
 	sealer, opener := lane.sealer, lane.opener
 
-	runtime.abortBeforeStart()
+	runtime.AbortBeforeStart()
 
 	if lane.sealer != nil || lane.opener != nil || lane.writer != nil ||
-		lane.pump != nil || lane.channel != nil {
+		lane.validator != nil || lane.channel != nil {
 		t.Fatalf("aborted runtime lane retained dependency references: %+v", lane)
 	}
 	if _, err := sealer.NextSequence(); !errors.Is(err, protocolsession.ErrEnvelopeClosed) {

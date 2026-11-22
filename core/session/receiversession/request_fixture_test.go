@@ -136,8 +136,7 @@ func deliverCallResponse(call *sessioncore.Call, message protocolsession.Message
 	if !ok {
 		return session.ErrOperationMissing
 	}
-	generation, _ := call.OperationAuthority()
-	return client.(*trackedRequestClient).HandleMessage(protocolsession.WithOperationGeneration(context.Background(), generation), message)
+	return client.(*trackedRequestClient).HandleMessage(context.Background(), call.Operation(), message)
 }
 
 func assertRequestsRetired(t *testing.T, rpc requestClient) {
@@ -146,8 +145,7 @@ func assertRequestsRetired(t *testing.T, rpc requestClient) {
 	client.mu.Lock()
 	defer client.mu.Unlock()
 	for _, call := range client.calls {
-		generation, authority := call.OperationAuthority()
-		if !generation.IsZero() || !authority.IsZero() {
+		if !call.Operation().IsZero() {
 			t.Fatalf("request %x retained operation authority", call.ID())
 		}
 	}
@@ -162,7 +160,7 @@ func cancelPendingCall(t *testing.T, rpc requestClient, call *sessioncore.Call) 
 	}
 }
 
-func (client *trackedRequestClient) SendContinuation(ctx context.Context, call *sessioncore.Call, kind protocolsession.MessageKind, body []byte) (protocolsession.SendOutcome, error) {
+func (client *trackedRequestClient) SendContinuation(ctx context.Context, call *sessioncore.Call, kind protocolsession.MessageKind, body []byte) (protocolsession.OperationDisposition, error) {
 	if kind == protocolsession.MessageCancel && client.cancelGate != nil {
 		<-client.cancelGate
 	}

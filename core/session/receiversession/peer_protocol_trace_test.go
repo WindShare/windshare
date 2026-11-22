@@ -31,8 +31,7 @@ func assertReceiverPeerProtocolTrace(t *testing.T, fixture receiverPeerTerminalF
 		event.OperationID != fixture.operation.OperationID() ||
 		event.ProtocolSessionID != fixture.runtime.ProtocolSessionID() ||
 		event.RequestKind != protocolsession.MessagePeerOffer ||
-		!event.HasSend || !event.SendSettled || !event.SendAdmitted ||
-		event.SendOutcome != protocolsession.SendOutcomeTransportConfirmed {
+		!event.HasSend || event.SendStatus != sessionobs.SendStatusConfirmed {
 		t.Fatalf("terminal observation = %+v, want stage %v cause %v", event, stage, cause)
 	}
 }

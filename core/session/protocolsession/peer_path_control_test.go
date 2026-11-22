@@ -57,10 +57,6 @@ func TestSessionControlsAreSessionBoundWithoutOperationAuthority(t *testing.T) {
 
 func testSessionControlAuthority(t *testing.T, kind MessageKind) {
 	t.Helper()
-	table, err := NewOperationTable(OperationLimits{MaxActive: 1, MaxTracked: 2}, time.Now)
-	if err != nil {
-		t.Fatal(err)
-	}
 	body, err := EncodePeerPathControl(PeerPathControl{PeerPathID: [16]byte{1}, NetworkGenerationID: [16]byte{2}, ControlSequence: 1, Kind: PeerPathRevoke})
 	if err != nil {
 		t.Fatal(err)
@@ -69,26 +65,17 @@ func testSessionControlAuthority(t *testing.T, kind MessageKind) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !message.Kind().IsSessionControl() {
+		t.Fatalf("kind %d should be session control", kind)
+	}
 	id := OperationID{1}
 	if _, err := NewMessage(kind, &id, body); err == nil {
 		t.Fatal("path control acquired operation identity")
 	}
 	for _, direction := range []Direction{DirectionReceiverToSender, DirectionSenderToReceiver} {
-		admission, err := table.AdmitOutbound(direction, message, OutboundOperationPermit{})
-		if err != nil || admission.Disposition != OperationDeliver || !admission.Generation.IsZero() {
-			t.Fatalf("outbound=%+v %v", admission, err)
+		if err := ValidateKindDirection(direction, kind); err != nil {
+			t.Fatalf("direction %d rejected session control: %v", direction, err)
 		}
-		inbound, err := table.ObserveInbound(direction, message)
-		if err != nil || inbound.Disposition != OperationDeliver || !inbound.Generation.IsZero() {
-			t.Fatalf("inbound=%+v %v", inbound, err)
-		}
-	}
-	if err := table.TerminateLocal(); err != nil {
-		t.Fatal(err)
-	}
-	admitted, err := table.ObserveInbound(DirectionReceiverToSender, message)
-	if err != nil || admitted.Disposition != OperationDrop {
-		t.Fatalf("post-terminal=%+v %v", admitted, err)
 	}
 }
 

@@ -18,22 +18,20 @@ func TestResponseWithoutLaneAndMalformedFailureReleaseRoute(t *testing.T) {
 		t.Fatal(err)
 	}
 	sender.lanes.detach(identity)
-	if err := outbound.SendFragment(context.Background(), fragments[0]); !errors.Is(err, session.ErrOperationMissing) {
-		t.Fatalf("fragment without lane error = %v", err)
+	if err := outbound.SendFragment(context.Background(), protocolsession.Operation{}, fragments[0]); !errors.Is(err, session.ErrOperationMissing) {
+		t.Fatalf("fragment without operation authority error = %v", err)
 	}
 	invalidFailureID := id16[protocolsession.OperationID](76)
-	invalidFailureRoute := sender.routes.reserve(invalidFailureID, identity)
-	if invalidFailureRoute == nil {
-		t.Fatal("failed to reserve invalid failure route")
+	request, _ := protocolsession.NewMessage(protocolsession.MessageRequestBlocks, &invalidFailureID, []byte{0xa0})
+	admission, err := sender.operations.ObserveInbound(protocolsession.DirectionReceiverToSender, identity, request)
+	if err != nil || admission.op.IsZero() {
+		t.Fatalf("admit request: %v", err)
 	}
-	invalidFailureContext := bindOutboundRoute(context.Background(), invalidFailureID, invalidFailureRoute)
-	if err := outbound.SendOperationError(invalidFailureContext, invalidFailureID, contentflow.OperationFailure{}); err == nil {
+	if err := outbound.SendOperationError(context.Background(), admission.op, contentflow.OperationFailure{}); err == nil {
 		t.Fatal("invalid operation failure was sent")
 	}
-	sender.routes.mu.Lock()
-	_, retainedInvalidFailure := sender.routes.routes[invalidFailureID]
-	sender.routes.mu.Unlock()
-	if retainedInvalidFailure {
-		t.Fatal("invalid operation failure retained its lane route")
+	if admission.op.IsActive() || sender.operations.ActiveCount() != 0 || sender.operations.TombstoneCount() != 1 {
+		t.Fatalf("invalid operation failure retained active operation: active=%d tombstones=%d",
+			sender.operations.ActiveCount(), sender.operations.TombstoneCount())
 	}
 }

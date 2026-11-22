@@ -131,11 +131,7 @@ func (operation *PeerOperation) SendCandidate(
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	outcome, err := operation.rpc.SendContinuation(ctx, call, protocolsession.MessagePeerCandidate, body)
-	if outcome == protocolsession.SendOutcomeDropped {
-		return protocolsession.OperationDrop, err
-	}
-	return protocolsession.OperationDeliver, err
+	return operation.rpc.SendContinuation(ctx, call, protocolsession.MessagePeerCandidate, body)
 }
 
 func (operation *PeerOperation) Receive(ctx context.Context) PeerReceiveResult {
@@ -293,18 +289,14 @@ func (operation *PeerOperation) cancelExact(ctx context.Context, call *sessionco
 		return nil
 	}
 	body, err := contentflow.EncodeCancelReason(contentflow.CancelReasonSuperseded)
-	outcome := protocolsession.SendOutcomeDropped
 	if err == nil {
-		outcome, err = operation.rpc.SendContinuation(ctx, call, protocolsession.MessageCancel, body)
+		_, err = operation.rpc.SendContinuation(ctx, call, protocolsession.MessageCancel, body)
 	}
-	if outcome == protocolsession.SendOutcomeDropped {
-		generation, _ := call.OperationAuthority()
-		err = errors.Join(err, sessioncore.FinalizeLocalCancelIfDropped(
-			operation.rpc.Runtime(), generation, outcome,
-		))
+	if err != nil {
+		return errors.Join(err, operation.rpc.CancelAndEnd(call, contentflow.CancelReasonSuperseded))
 	}
 	operation.rpc.End(call)
-	return err
+	return nil
 }
 
 func (operation *PeerOperation) claimTerminal(

@@ -3,35 +3,39 @@ package sessioncore
 import (
 	"context"
 	"errors"
-	"fmt"
+
+	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
 	sessionobs "github.com/windshare/windshare/core/session/observation"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
-type rpcRequestSendError struct {
-	outcome  protocolsession.SendOutcome
-	admitted bool
-	cause    error
+func RevisionOperationCause(code uint16) (error, bool) {
+	switch code {
+	case contentflow.RevisionCodeStale:
+		return content.ErrRevisionStale, true
+	case contentflow.RevisionCodeNotFound:
+		return content.ErrRevisionNotFound, true
+	case contentflow.RevisionCodeUnreadable:
+		return content.ErrRevisionUnreadable, true
+	case contentflow.RevisionCodeUnsupportedStability:
+		return content.ErrUnsupportedStability, true
+	case contentflow.RevisionCodeQuota:
+		return content.ErrQuotaExceeded, true
+	case contentflow.RevisionCodeLeaseExpired:
+		return content.ErrLeaseExpired, true
+	case contentflow.RevisionCodeDrift:
+		return content.ErrRevisionDrift, true
+	case contentflow.RevisionCodeInvalidLease:
+		return content.ErrInvalidLease, true
+	default:
+		return nil, false
+	}
 }
-
-func (failure *rpcRequestSendError) Error() string {
-	return fmt.Sprintf("send operation request: %v", failure.cause)
-}
-
-func (failure *rpcRequestSendError) Unwrap() error { return failure.cause }
 
 func RequestProvenNotDelivered(err error) bool {
-	var failure *rpcRequestSendError
-	return errors.As(err, &failure) && failure.outcome == protocolsession.SendOutcomeDropped && !failure.admitted
-}
-
-func newRPCRequestSendError(outcome protocolsession.SendOutcome, admitted bool, cause error) error {
-	if cause == nil {
-		cause = session.ErrRuntimeClosed
-	}
-	return &rpcRequestSendError{outcome: outcome, admitted: admitted, cause: cause}
+	return protocolsession.IsNotSent(err)
 }
 
 func rpcDeliveryError(runtime *Runtime, notDelivered error, cause error) error {
@@ -42,31 +46,22 @@ func rpcDeliveryError(runtime *Runtime, notDelivered error, cause error) error {
 }
 
 func (runtime *Runtime) failRPCOperationAuthority() error {
-	_ = runtime.router.TerminateLocal()
+	_ = runtime.operations.TerminateLocal()
 	runtime.terminateRuntimeFailed(errRPCOperationAuthority)
 	return errRPCOperationAuthority
 }
 
-func (runtime *Runtime) reconcileLocalCancel(
-	generation protocolsession.OperationGeneration,
-) error {
-	err := runtime.operations.CancelGeneration(generation)
+func (runtime *Runtime) reconcileLocalCancel(ref protocolsession.OperationRef) (bool, error) {
+	transitioned, err := runtime.operations.CancelOperation(ref)
 	if err == nil {
-		return nil
+		return transitioned, nil
 	}
-	// Failure to retain a cancellation tombstone would leak active authority and
-	// make a later ID collision ambiguous. Fail-closing atomically clears the
-	// table instead of continuing a session whose at-most-once state is unknown.
-	_ = runtime.router.TerminateLocal()
+	_ = runtime.operations.TerminateLocal()
 	runtime.terminateRuntimeFailed(err)
-	return err
+	return false, err
 }
 
 func protocolOperationCause(err error) sessionobs.ProtocolOperationCause {
-	// Inspect joined components independently: errors.Is on the whole tree would
-	// let a cancellation component erase an unrelated protocol or cleanup fault.
-	// Only canonical lifecycle leaves prove a benign wakeup; an opaque Is match
-	// cannot make a collaborator's own error harmless.
 	switch wrapped := err.(type) { //nolint:errorlint // Inspect one node at a time so every joined fault is classified.
 	case interface{ Unwrap() []error }:
 		cause := sessionobs.ProtocolOperationCauseNone

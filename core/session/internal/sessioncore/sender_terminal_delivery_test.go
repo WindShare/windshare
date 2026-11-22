@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/session"
+	sessionobs "github.com/windshare/windshare/core/session/observation"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"io"
 	"sync"
@@ -173,7 +174,7 @@ func TestTerminalPostAdmissionWriterStopRequiresNoUsableReplacement(t *testing.T
 				}
 				observation := <-observed
 				if observation.TransportDisposition != 0 ||
-					observation.Outcome != protocolsession.SendOutcomeDropped ||
+					observation.Outcome != sessionobs.SenderTerminalSendOutcomeDropped ||
 					observation.NaturallyRetired != test.wantRetired {
 					t.Fatalf("post-admission retirement observation=%+v", observation)
 				}
@@ -266,7 +267,7 @@ func TestTerminalClaimRejectedByLaneCancellationRequiresNoUsableReplacement(t *t
 				observation := <-observed
 				if !observation.Settled ||
 					observation.TransportDisposition != framechannel.SendRejected ||
-					observation.Outcome != protocolsession.SendOutcomeDropped ||
+					observation.Outcome != sessionobs.SenderTerminalSendOutcomeDropped ||
 					observation.NaturallyRetired != test.wantRetired {
 					t.Fatalf("cancellation rejection observation=%+v", observation)
 				}
@@ -372,7 +373,7 @@ func TestTerminalQueuedBehindRetiredPrecedingSendRequiresNoUsableReplacement(t *
 
 				writerResult := make(chan error, 1)
 				go func() { writerResult <- recipients[0].writer.Run(context.Background()) }()
-				if _, err := recipients[0].writer.TryControl(precedingControl); err != nil {
+				if err := recipients[0].writer.EnqueueControl(precedingControl, nil); err != nil {
 					t.Fatalf("queue preceding control: %v", err)
 				}
 				// Hold the preceding send inside FrameChannel.Send so TryTerminal admits
@@ -407,7 +408,7 @@ func TestTerminalQueuedBehindRetiredPrecedingSendRequiresNoUsableReplacement(t *
 				observation := <-observed
 				if !observation.Settled ||
 					observation.TransportDisposition != 0 ||
-					observation.Outcome != protocolsession.SendOutcomeDropped ||
+					observation.Outcome != sessionobs.SenderTerminalSendOutcomeDropped ||
 					observation.NaturallyRetired != test.wantRetired {
 					t.Fatalf("preceding-send observation=%+v", observation)
 				}

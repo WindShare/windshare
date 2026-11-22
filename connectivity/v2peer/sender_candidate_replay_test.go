@@ -19,16 +19,17 @@ const (
 )
 
 type senderCandidateHarness struct {
-	handler          *senderHandler
-	peer             *testPeerConnection
-	session          *testPeerSession
-	operation        protocolsession.OperationID
-	operationContext context.Context
-	binding          v2signal.Binding
-	attempt          *peerAttempt
-	cancel           context.CancelFunc
-	runDone          chan error
-	stopOnce         sync.Once
+	handler   *senderHandler
+	peer      *testPeerConnection
+	session   *testPeerSession
+	operation protocolsession.OperationID
+	op        protocolsession.Operation
+	ctx       context.Context
+	binding   v2signal.Binding
+	attempt   *peerAttempt
+	cancel    context.CancelFunc
+	runDone   chan error
+	stopOnce  sync.Once
 }
 
 func newSenderCandidateHarness(t *testing.T, maxCandidates int) *senderCandidateHarness {
@@ -61,9 +62,9 @@ func newSenderCandidateHarness(t *testing.T, maxCandidates int) *senderCandidate
 		t.Fatal(err)
 	}
 	offer := testMessage(t, protocolsession.MessagePeerOffer, operation, offerBody)
-	operationContext := testPeerMessageContext(t, ctx, offer)
-	operationKey := testPeerOperationFromContext(t, operationContext, operation)
-	if err := handler.HandleMessage(operationContext, offer); err != nil {
+	op := testPeerOperation(operation)
+	operationKey := op.Ref()
+	if err := handler.HandleMessage(ctx, op, offer); err != nil {
 		cancel()
 		t.Fatal(err)
 	}
@@ -78,7 +79,7 @@ func newSenderCandidateHarness(t *testing.T, maxCandidates int) *senderCandidate
 	})
 	harness := &senderCandidateHarness{
 		handler: handler, peer: peer, session: session,
-		operation: operation, operationContext: operationContext, binding: binding, attempt: attempt,
+		operation: operation, op: op, ctx: ctx, binding: binding, attempt: attempt,
 		cancel: cancel, runDone: runDone,
 	}
 	t.Cleanup(func() { harness.stop(t) })
@@ -88,7 +89,7 @@ func newSenderCandidateHarness(t *testing.T, maxCandidates int) *senderCandidate
 func (harness *senderCandidateHarness) sendCandidate(t *testing.T, body []byte) error {
 	t.Helper()
 	return harness.handler.HandleMessage(
-		harness.operationContext,
+		harness.ctx, harness.op,
 		testMessage(t, protocolsession.MessagePeerCandidate, harness.operation, body),
 	)
 }

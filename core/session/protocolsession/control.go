@@ -4,6 +4,21 @@ import "errors"
 
 var ErrControlSemantic = errors.New("session control semantic body is invalid")
 
+// InboundMessageValidator checks role message schemas after the lane authenticates
+// the envelope. It cannot grant authority to an unopened frame.
+type InboundMessageValidator interface {
+	ValidateInbound(message Message) (InboundValidationResult, error)
+}
+
+type InboundMessageValidatorFunc func(Message) (InboundValidationResult, error)
+
+func (validate InboundMessageValidatorFunc) ValidateInbound(message Message) (InboundValidationResult, error) {
+	if validate == nil {
+		return InboundValidationResult{}, ErrNilRuntimeDependency
+	}
+	return validate(message)
+}
+
 // SenderMessageValidator runs inside the lane pump, after authenticated
 // decryption and before operation admission. A valid envelope can still carry
 // an invalid operation result, which must retire the correct operation.
@@ -30,11 +45,9 @@ func SenderMessageValidator(semantic SenderControlSemanticValidator) InboundMess
 }
 
 func ValidateReceiverMessage(message Message) (InboundValidationResult, error) {
-	if message.kind.isSessionControl() {
+	if message.kind.IsSessionControl() {
 		return InboundValidationResult{}, ValidateSessionControlBody(message.kind, message.body)
 	}
-	// The operation table enforces request direction and the selected request
-	// handler owns decoding the request body.
 	return InboundValidationResult{}, nil
 }
 

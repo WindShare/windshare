@@ -53,11 +53,11 @@ func TestReceiverPeerOperationClosedStateIsInert(t *testing.T) {
 
 func TestReceiverPeerCancelReconcilesTombstonedWireSuppressionLocally(t *testing.T) {
 	fixture := newReceiverPeerTerminalFixture(t, 86)
-	generation, _ := fixture.call.OperationAuthority()
+	op := fixture.call.Operation()
 	cancelPendingCall(t, fixture.operation.rpc, fixture.call)
 	assertReceiverPeerTermination(t, fixture.operation, fixture.operation.Terminate(context.Background()),
 		PeerTerminalAuthorityLocal, PeerProvenanceLocalExplicitStop, PeerTerminalOperationOnly, PeerProvenanceLocalExplicitStop)
-	if generation.IsActive() {
+	if op.IsActive() {
 		t.Fatal("tombstoned peer cancel retained operation authority")
 	}
 	assertRequestsRetired(t, fixture.operation.rpc)
@@ -65,11 +65,11 @@ func TestReceiverPeerCancelReconcilesTombstonedWireSuppressionLocally(t *testing
 
 type inertSenderPeerHandler struct{}
 
-func (inertSenderPeerHandler) HandleMessage(context.Context, protocolsession.Message) error {
+func (inertSenderPeerHandler) HandleMessage(context.Context, protocolsession.Operation, protocolsession.Message) error {
 	return nil
 }
 
-func (inertSenderPeerHandler) Cancel(context.Context, protocolsession.OperationID) error {
+func (inertSenderPeerHandler) Cancel(context.Context, protocolsession.Operation) error {
 	return nil
 }
 

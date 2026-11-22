@@ -13,21 +13,22 @@ func TestRPCLocalCancelAfterSessionTermination(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	admission, err := runtime.router.AdmitOutbound(request, protocolsession.OutboundOperationPermit{})
+	op, _, _, release, err := runtime.operations.AdmitOutboundRequest(request, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := runtime.router.TerminateLocal(); err != nil {
+	release(false)
+	if err := runtime.operations.TerminateLocal(); err != nil {
 		t.Fatal(err)
 	}
-	if err := runtime.reconcileLocalCancel(admission.Generation); err != nil || runtime.Err() != nil {
-		t.Fatalf("retired RPC failed cleanup: error=%v runtime=%v", err, runtime.Err())
+	if transitioned, err := runtime.reconcileLocalCancel(op.Ref()); err != nil || transitioned || runtime.Err() != nil {
+		t.Fatalf("retired RPC failed cleanup: transitioned=%v error=%v runtime=%v", transitioned, err, runtime.Err())
 	}
 	if runtime.ctx.Err() != nil || runtime.operations.ActiveCount() != 0 || runtime.operations.TombstoneCount() != 0 {
 		t.Fatal("late RPC cleanup changed runtime lifecycle or retained authority")
 	}
 	// Session termination must not make a malformed cancellation capability valid.
-	if err := runtime.reconcileLocalCancel(protocolsession.OperationGeneration{}); !errors.Is(err, protocolsession.ErrInvalidOperationID) {
+	if _, err := runtime.reconcileLocalCancel(protocolsession.OperationRef{}); !errors.Is(err, protocolsession.ErrInvalidOperationID) {
 		t.Fatalf("invalid cancellation error=%v", err)
 	}
 	if !errors.Is(runtime.Err(), protocolsession.ErrInvalidOperationID) || runtime.ctx.Err() == nil {
@@ -36,47 +37,40 @@ func TestRPCLocalCancelAfterSessionTermination(t *testing.T) {
 }
 
 func TestRPCFailedBeginCancellationUsesReservedCapacity(t *testing.T) {
-	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
-	operations, err := protocolsession.NewOperationTable(
+	runtime, _ := newUnstartedRuntimeWithPolicy(
+		t, protocolsession.RoleReceiver,
 		protocolsession.OperationLimits{MaxActive: 2, MaxTracked: 2}, nil,
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	router, err := protocolsession.NewRoleRouter(protocolsession.RoleReceiver, operations)
-	if err != nil {
-		t.Fatal(err)
-	}
-	runtime.operations = operations
-	runtime.router = router
 	firstID := id16[protocolsession.OperationID](82)
 	first, _ := protocolsession.NewMessage(
 		protocolsession.MessageListChildren, &firstID, []byte{0xa1, 0x00, 0x01},
 	)
-	firstAdmission, err := router.AdmitOutbound(first, protocolsession.OutboundOperationPermit{})
+	firstOp, _, _, firstRelease, err := runtime.operations.AdmitOutboundRequest(first, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := operations.CancelGeneration(firstAdmission.Generation); err != nil {
-		t.Fatal(err)
+	firstRelease(false)
+	if transitioned, err := runtime.operations.CancelOperation(firstOp.Ref()); err != nil || !transitioned {
+		t.Fatalf("cancel first: transitioned=%v err=%v", transitioned, err)
 	}
 	secondID := id16[protocolsession.OperationID](83)
 	second, _ := protocolsession.NewMessage(
 		protocolsession.MessageListChildren, &secondID, []byte{0xa1, 0x00, 0x02},
 	)
-	secondAdmission, err := router.AdmitOutbound(second, protocolsession.OutboundOperationPermit{})
+	secondOp, _, _, secondRelease, err := runtime.operations.AdmitOutboundRequest(second, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := runtime.reconcileLocalCancel(secondAdmission.Generation); err != nil {
-		t.Fatalf("cleanup error=%v", err)
+	secondRelease(false)
+	if transitioned, err := runtime.reconcileLocalCancel(secondOp.Ref()); err != nil || !transitioned {
+		t.Fatalf("cleanup transitioned=%v error=%v", transitioned, err)
 	}
 	select {
 	case <-runtime.ctx.Done():
 		t.Fatal("reserved cancellation ended the session")
 	default:
 	}
-	if operations.Terminated() || operations.ActiveCount() != 0 || operations.TombstoneCount() != 2 {
-		t.Fatalf("terminal=%v active=%d tombstones=%d", operations.Terminated(), operations.ActiveCount(), operations.TombstoneCount())
+	if runtime.operations.Terminated() || runtime.operations.ActiveCount() != 0 || runtime.operations.TombstoneCount() != 2 {
+		t.Fatalf("terminal=%v active=%d tombstones=%d", runtime.operations.Terminated(), runtime.operations.ActiveCount(), runtime.operations.TombstoneCount())
 	}
 }

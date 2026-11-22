@@ -89,8 +89,7 @@ func TestLostRenewalReauthorizesAtConfirmedExpiryWithoutLosingProgress(t *testin
 				if !errors.Is(state.Err(), content.ErrLeaseExpired) {
 					t.Fatalf("missing renewal did not expire at confirmed lifetime: %v", state.Err())
 				}
-				generation, authority := call.OperationAuthority()
-				if !generation.IsZero() || !authority.IsZero() {
+				if !call.Operation().IsZero() {
 					t.Fatal("expired renewal retained operation authority")
 				}
 				next, err := content.NewRevisionLease(id16[content.LeaseID](10), fixture.contentStore.descriptor,

@@ -87,8 +87,7 @@ func TestControlTransactionsSettleConfirmedFramesLostWithCarrier(t *testing.T) {
 					default:
 						t.Fatal("lost response remained pending despite a surviving lane")
 					}
-					generation, authority := oldCall.OperationAuthority()
-					if !generation.IsZero() || !authority.IsZero() {
+					if !oldCall.Operation().IsZero() {
 						t.Fatal("retry retained the old operation's authority")
 					}
 					if peerReceiver.sends.Load() <= peerSendsBefore || peerSender.sends.Load() <= 1 {

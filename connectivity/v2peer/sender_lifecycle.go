@@ -9,6 +9,7 @@ import (
 	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/socketauthority"
 	"github.com/windshare/windshare/connectivity/v2signal"
+	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
 func (handler *senderHandler) runSessionControls(ctx context.Context) func() {
@@ -29,7 +30,7 @@ func (handler *senderHandler) runSessionControls(ctx context.Context) func() {
 }
 
 func (handler *senderHandler) claimRejectedOffer(
-	operation peerOperation,
+	operation protocolsession.OperationRef,
 	binding v2signal.Binding,
 ) evidenceClaim {
 	if binding.Validate() != nil {
@@ -80,9 +81,10 @@ func (handler *senderHandler) claimRejectedOffer(
 
 func (handler *senderHandler) startAttempt(
 	ctx context.Context,
-	operation peerOperation,
+	op protocolsession.Operation,
 	offer v2signal.Offer,
 ) error {
+	operation := op.Ref()
 	var capacityBoundary *v2signal.Binding
 	handler.mu.Lock()
 	defer func() {
@@ -139,7 +141,7 @@ func (handler *senderHandler) startAttempt(
 	}
 	attempt := newPeerAttempt(peerAttemptConfig{
 		factory: handler.factory, session: handler.session,
-		operation: operation.id, generation: operation.generation, offer: offer,
+		operation: op, offer: offer,
 		onDone: handler.attemptDone,
 	})
 	claim := handler.claimEvidenceLocked(operation, offer.Binding)
@@ -161,7 +163,7 @@ func (handler *senderHandler) startAttempt(
 }
 
 func (handler *senderHandler) acceptCandidate(
-	operation peerOperation,
+	operation protocolsession.OperationRef,
 	candidate v2signal.Candidate,
 ) error {
 	handler.mu.Lock()
@@ -191,7 +193,7 @@ func (handler *senderHandler) acceptCandidate(
 
 func (handler *senderHandler) cancelAttempt(
 	ctx context.Context,
-	operation peerOperation,
+	operation protocolsession.OperationRef,
 ) error {
 	handler.mu.Lock()
 	handler.expireRetiredLocked(handler.factory.now())
@@ -204,7 +206,7 @@ func (handler *senderHandler) cancelAttempt(
 }
 
 func (handler *senderHandler) attemptDone(attempt *peerAttempt, result error) {
-	operation := attempt.operation()
+	operation := attempt.operationRef()
 	binding := attempt.binding()
 	handler.mu.Lock()
 	if handler.attempts[operation] == attempt {
@@ -224,7 +226,7 @@ func (handler *senderHandler) attemptDone(attempt *peerAttempt, result error) {
 }
 
 func (handler *senderHandler) claimEvidenceLocked(
-	operation peerOperation,
+	operation protocolsession.OperationRef,
 	binding v2signal.Binding,
 ) evidenceClaim {
 	return handler.evidenceAuthority.claim(operation, binding)
@@ -283,7 +285,7 @@ func (handler *senderHandler) closeInbox() {
 		select {
 		case event := <-handler.events:
 			if binding := offerBindingForEvent(event); binding != nil {
-				claim := handler.claimRejectedOffer(event.operation, *binding)
+				claim := handler.claimRejectedOffer(event.op.Ref(), *binding)
 				if claim.acquired {
 					failure := senderRuntimeStoppedFailure()
 					if claim.capacity {

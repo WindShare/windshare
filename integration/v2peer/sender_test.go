@@ -312,105 +312,163 @@ func receiveIntegrationFrameChannel(
 	}
 }
 
+type integrationPeerRecord struct {
+	ref         protocolsession.OperationRef
+	active      bool
+	contract    protocolsession.OperationContinuationContract
+	maxCont     int
+	hasMaxCont  bool
+	seen        map[[32]byte]struct{}
+	requestKind protocolsession.MessageKind
+}
+
 type integrationPeerIngress struct {
-	mu          sync.Mutex
-	router      *protocolsession.RoleRouter
-	authorityMu sync.Mutex
-	generations map[protocolsession.OperationID]protocolsession.OperationGeneration
-}
-
-type integrationPeerTrackedHandler struct {
-	ingress *integrationPeerIngress
-	handler sendersession.PeerHandler
-}
-
-func (handler integrationPeerTrackedHandler) HandleMessage(
-	ctx context.Context,
-	message protocolsession.Message,
-) error {
-	operationID, ok := message.OperationID()
-	if !ok {
-		return protocolsession.ErrInvalidOperationID
-	}
-	generation, ok := protocolsession.OperationGenerationFromContext(ctx, operationID)
-	if !ok || generation.IsZero() {
-		return protocolsession.ErrUnknownOperation
-	}
-	handler.ingress.authorityMu.Lock()
-	handler.ingress.generations[operationID] = generation
-	handler.ingress.authorityMu.Unlock()
-	return handler.handler.HandleMessage(ctx, message)
-}
-
-type integrationPeerCancelHandler struct {
-	handler sendersession.PeerHandler
-}
-
-func (handler integrationPeerCancelHandler) HandleMessage(
-	ctx context.Context,
-	message protocolsession.Message,
-) error {
-	operationID, ok := message.OperationID()
-	if !ok {
-		return protocolsession.ErrInvalidOperationID
-	}
-	return handler.handler.Cancel(ctx, operationID)
+	mu         sync.Mutex
+	classifier protocolsession.OperationContinuationClassifier
+	handler    sendersession.PeerHandler
+	nextToken  uint64
+	records    map[protocolsession.OperationID]*integrationPeerRecord
+	closed     bool
 }
 
 func newIntegrationPeerIngress(
 	classifier protocolsession.OperationContinuationClassifier,
 	handler sendersession.PeerHandler,
 ) (*integrationPeerIngress, error) {
-	table, err := protocolsession.NewOperationTableWithContinuations(
-		protocolsession.OperationLimits{MaxActive: 4, MaxTracked: 4},
-		nil,
-		classifier,
-	)
-	if err != nil {
-		return nil, err
+	return &integrationPeerIngress{
+		classifier: classifier,
+		handler:    handler,
+		records:    make(map[protocolsession.OperationID]*integrationPeerRecord),
+	}, nil
+}
+
+func (ingress *integrationPeerIngress) Active(ref protocolsession.OperationRef) bool {
+	ingress.mu.Lock()
+	defer ingress.mu.Unlock()
+	rec := ingress.records[ref.ID]
+	return rec != nil && rec.ref == ref && rec.active
+}
+
+func (ingress *integrationPeerIngress) Current(ref protocolsession.OperationRef) bool {
+	ingress.mu.Lock()
+	defer ingress.mu.Unlock()
+	rec := ingress.records[ref.ID]
+	return rec != nil && rec.ref == ref
+}
+
+func (ingress *integrationPeerIngress) RequestKind(ref protocolsession.OperationRef) (protocolsession.MessageKind, bool) {
+	ingress.mu.Lock()
+	defer ingress.mu.Unlock()
+	rec := ingress.records[ref.ID]
+	if rec == nil || rec.ref != ref {
+		return 0, false
 	}
-	router, err := protocolsession.NewRoleRouter(protocolsession.RoleSender, table)
-	if err != nil {
-		return nil, err
+	return rec.requestKind, true
+}
+
+func (ingress *integrationPeerIngress) PeerAttemptBinding(protocolsession.OperationRef) (protocolsession.PeerAttemptBinding, bool) {
+	return protocolsession.PeerAttemptBinding{}, false
+}
+
+func (ingress *integrationPeerIngress) MaximumContinuations(ref protocolsession.OperationRef) (int, bool) {
+	ingress.mu.Lock()
+	defer ingress.mu.Unlock()
+	rec := ingress.records[ref.ID]
+	if rec == nil || rec.ref != ref || !rec.hasMaxCont {
+		return 0, false
 	}
-	ingress := &integrationPeerIngress{
-		router: router, generations: make(map[protocolsession.OperationID]protocolsession.OperationGeneration),
-	}
-	tracked := integrationPeerTrackedHandler{ingress: ingress, handler: handler}
-	for _, kind := range []protocolsession.MessageKind{
-		protocolsession.MessagePeerOffer,
-		protocolsession.MessagePeerCandidate,
-	} {
-		if err := router.RegisterHandler(kind, tracked); err != nil {
-			router.Close()
-			return nil, err
-		}
-	}
-	if err := router.RegisterHandler(
-		protocolsession.MessageCancel,
-		integrationPeerCancelHandler{handler: handler},
-	); err != nil {
-		router.Close()
-		return nil, err
-	}
-	return ingress, nil
+	return rec.maxCont, true
 }
 
 func (ingress *integrationPeerIngress) Route(
 	ctx context.Context,
 	message protocolsession.Message,
 ) (protocolsession.OperationDisposition, error) {
+	operationID, ok := message.OperationID()
+	if !ok {
+		return protocolsession.OperationDrop, protocolsession.ErrInvalidOperationID
+	}
 	ingress.mu.Lock()
-	defer ingress.mu.Unlock()
-	disposition, err := ingress.router.RouteInbound(ctx, message)
-	if err != nil || disposition != protocolsession.OperationDeliver {
-		return disposition, err
+	if ingress.closed {
+		ingress.mu.Unlock()
+		return protocolsession.OperationDrop, protocolsession.ErrSessionTerminated
 	}
-	event, err := ingress.router.Next(ctx)
-	if err != nil {
-		return protocolsession.OperationDrop, err
+	switch message.Kind() {
+	case protocolsession.MessagePeerOffer:
+		if _, exists := ingress.records[operationID]; exists {
+			ingress.mu.Unlock()
+			return protocolsession.OperationDrop, nil
+		}
+		ingress.nextToken++
+		rec := &integrationPeerRecord{
+			ref:         protocolsession.OperationRef{ID: operationID, Token: ingress.nextToken},
+			active:      true,
+			requestKind: message.Kind(),
+			seen:        make(map[[32]byte]struct{}),
+		}
+		if ingress.classifier != nil {
+			contract, tracked, err := ingress.classifier.BeginOperationContinuation(message.Kind(), message.Body())
+			if err != nil {
+				ingress.mu.Unlock()
+				return protocolsession.OperationDrop, err
+			}
+			if tracked && contract != nil {
+				rec.contract = contract
+				rec.maxCont = contract.MaximumContinuations()
+				rec.hasMaxCont = true
+			}
+		}
+		ingress.records[operationID] = rec
+		op := protocolsession.NewOperation(rec.ref, ingress)
+		ingress.mu.Unlock()
+		return protocolsession.OperationDeliver, ingress.handler.HandleMessage(ctx, op, message)
+	case protocolsession.MessagePeerCandidate:
+		rec := ingress.records[operationID]
+		if rec == nil || !rec.active {
+			ingress.mu.Unlock()
+			return protocolsession.OperationDrop, nil
+		}
+		if rec.contract != nil {
+			key, tracked, err := rec.contract.ClassifyOperationContinuation(
+				message.Kind(), message.Body(),
+			)
+			if err != nil {
+				ingress.mu.Unlock()
+				return protocolsession.OperationDrop, err
+			}
+			if tracked {
+				if _, dup := rec.seen[key]; dup {
+					ingress.mu.Unlock()
+					return protocolsession.OperationDrop, nil
+				}
+				if len(rec.seen) >= rec.maxCont {
+					ingress.mu.Unlock()
+					return protocolsession.OperationDrop, protocolsession.ErrConflictingContinuation
+				}
+				rec.seen[key] = struct{}{}
+			}
+		}
+		op := protocolsession.NewOperation(rec.ref, ingress)
+		ingress.mu.Unlock()
+		return protocolsession.OperationDeliver, ingress.handler.HandleMessage(ctx, op, message)
+	case protocolsession.MessageCancel:
+		rec := ingress.records[operationID]
+		if rec == nil {
+			ingress.nextToken++
+			rec = &integrationPeerRecord{
+				ref: protocolsession.OperationRef{ID: operationID, Token: ingress.nextToken},
+			}
+			ingress.records[operationID] = rec
+		} else {
+			rec.active = false
+		}
+		op := protocolsession.NewOperation(rec.ref, ingress)
+		ingress.mu.Unlock()
+		return protocolsession.OperationDeliver, ingress.handler.Cancel(ctx, op)
+	default:
+		ingress.mu.Unlock()
+		return protocolsession.OperationDrop, protocolsession.ErrUnexpectedOperation
 	}
-	return disposition, ingress.router.Dispatch(ctx, event)
 }
 
 func (ingress *integrationPeerIngress) Deliver(
@@ -442,22 +500,26 @@ func (ingress *integrationPeerIngress) Cancel(
 	return ingress.Deliver(ctx, message)
 }
 
-func (ingress *integrationPeerIngress) MaximumContinuations(
+func (ingress *integrationPeerIngress) MaximumContinuationsForID(
 	operationID protocolsession.OperationID,
 ) (int, bool) {
-	ingress.authorityMu.Lock()
-	generation, ok := ingress.generations[operationID]
-	ingress.authorityMu.Unlock()
-	if !ok {
+	ingress.mu.Lock()
+	defer ingress.mu.Unlock()
+	rec := ingress.records[operationID]
+	if rec == nil || !rec.hasMaxCont {
 		return 0, false
 	}
-	return generation.MaximumContinuations()
+	return rec.maxCont, true
 }
 
 func (ingress *integrationPeerIngress) Close() {
-	if ingress != nil && ingress.router != nil {
-		ingress.router.Close()
+	if ingress == nil {
+		return
 	}
+	ingress.mu.Lock()
+	ingress.closed = true
+	clear(ingress.records)
+	ingress.mu.Unlock()
 }
 
 type integrationPeerSession struct {
@@ -481,11 +543,11 @@ func (peer *integrationPeerSession) ProtocolSessionID() protocolsession.Protocol
 }
 func (peer *integrationPeerSession) SendPeerControl(
 	_ context.Context,
+	op protocolsession.Operation,
 	kind protocolsession.MessageKind,
-	operation protocolsession.OperationID,
 	body []byte,
 ) (protocolsession.OperationDisposition, error) {
-	if operation != peer.operation {
+	if op.ID() != peer.operation {
 		return protocolsession.OperationDrop, errors.New("sender changed the peer operation identity")
 	}
 	switch kind {
@@ -517,7 +579,7 @@ func (peer *integrationPeerSession) SendPeerControl(
 }
 func (peer *integrationPeerSession) FailPeerOperation(
 	_ context.Context,
-	_ protocolsession.OperationID,
+	_ protocolsession.Operation,
 	_ uint16,
 	message string,
 ) error {

@@ -103,8 +103,7 @@ func (pair *auditedVerticalPair) beginReceiverFrameAudit() {
 
 type exactOperationLifecycle struct {
 	call                *sessioncore.Call
-	receiverGeneration  protocolsession.OperationGeneration
-	senderGeneration    protocolsession.OperationGeneration
+	receiverOp          protocolsession.Operation
 	receiverTombstones  int
 	senderTombstones    int
 	expectedRequestKind protocolsession.MessageKind
@@ -113,34 +112,25 @@ type exactOperationLifecycle struct {
 func captureExactOperationLifecycle(
 	t *testing.T,
 	pair *auditedVerticalPair,
-	senderContext context.Context,
+	_ context.Context,
 	receiverTombstones int,
 	senderTombstones int,
 	expectedKind protocolsession.MessageKind,
 ) exactOperationLifecycle {
 	t.Helper()
-	// The sender can enter its handler before the receiver's physical-send
-	// receipt stores outbound authority. Quiescence makes the snapshot describe
-	// the admitted operation instead of that intentionally transient interval.
 	synctest.Wait()
 	call := onlyActiveCall(t, pair.receiver.rpc)
-	receiverGeneration, authority := call.OperationAuthority()
-	senderGeneration, ok := protocolsession.OperationGenerationFromContext(senderContext, call.ID())
-	if receiverGeneration.IsZero() || authority.IsZero() || !ok || senderGeneration.IsZero() {
-		t.Fatal("operation did not retain exact receiver and sender generation authority")
+	receiverOp := call.Operation()
+	if receiverOp.IsZero() {
+		t.Fatal("operation did not retain exact receiver operation authority")
 	}
-	for role, generation := range map[string]protocolsession.OperationGeneration{
-		"receiver": receiverGeneration,
-		"sender":   senderGeneration,
-	} {
-		requestKind, present := generation.RequestKind()
-		if !generation.IsCurrent() || !generation.IsActive() || !present || requestKind != expectedKind {
-			t.Fatalf("%s generation current=%v active=%v kind=%d present=%v", role,
-				generation.IsCurrent(), generation.IsActive(), requestKind, present)
-		}
+	requestKind, present := receiverOp.RequestKind()
+	if !receiverOp.IsCurrent() || !receiverOp.IsActive() || !present || requestKind != expectedKind {
+		t.Fatalf("receiver operation current=%v active=%v kind=%d present=%v",
+			receiverOp.IsCurrent(), receiverOp.IsActive(), requestKind, present)
 	}
 	return exactOperationLifecycle{
-		call: call, receiverGeneration: receiverGeneration, senderGeneration: senderGeneration,
+		call: call, receiverOp: receiverOp,
 		receiverTombstones: receiverTombstones, senderTombstones: senderTombstones,
 		expectedRequestKind: expectedKind,
 	}
@@ -152,25 +142,17 @@ func assertExactOperationDrained(
 	operation exactOperationLifecycle,
 ) {
 	t.Helper()
-	// The remote callback barrier proves cancellation reached the service. Waiting
-	// for quiescence then distinguishes map cleanup from a still-running worker.
 	synctest.Wait()
-	for role, generation := range map[string]protocolsession.OperationGeneration{
-		"receiver": operation.receiverGeneration,
-		"sender":   operation.senderGeneration,
-	} {
-		requestKind, present := generation.RequestKind()
-		if !generation.IsCurrent() || generation.IsActive() || !present || requestKind != operation.expectedRequestKind {
-			t.Fatalf("%s cancelled generation current=%v active=%v kind=%d present=%v", role,
-				generation.IsCurrent(), generation.IsActive(), requestKind, present)
-		}
+	requestKind, present := operation.receiverOp.RequestKind()
+	if !operation.receiverOp.IsCurrent() || operation.receiverOp.IsActive() || !present || requestKind != operation.expectedRequestKind {
+		t.Fatalf("receiver cancelled operation current=%v active=%v kind=%d present=%v",
+			operation.receiverOp.IsCurrent(), operation.receiverOp.IsActive(), requestKind, present)
 	}
 	if pair.receiverFrames.Load() != 1 {
 		t.Fatalf("local failure emitted %d receiver wire frames, want one exact-generation CANCEL",
 			pair.receiverFrames.Load())
 	}
-	clearedGeneration, clearedAuthority := operation.call.OperationAuthority()
-	if !clearedGeneration.IsZero() || !clearedAuthority.IsZero() {
+	if !operation.call.Operation().IsZero() {
 		t.Fatal("retired receiver call retained authority")
 	}
 	assertRequestsRetired(t, pair.receiver.rpc)

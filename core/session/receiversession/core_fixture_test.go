@@ -39,10 +39,6 @@ func startReceiverPeerWriter(t *testing.T, runtime *sessioncore.Runtime) {
 	runtime.Start()
 	t.Cleanup(runtime.Close)
 }
-func receiverRequestContext(call *sessioncore.Call) context.Context {
-	generation, _ := call.OperationAuthority()
-	return protocolsession.WithOperationGeneration(context.Background(), generation)
-}
 
 func runtimeIdentity(runtime interface{ LaneIdentity() (uint32, uint32) }) session.LaneIdentity {
 	id, epoch := runtime.LaneIdentity()

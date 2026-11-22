@@ -25,7 +25,7 @@ func TestRPCPendingControlRecoversBeforeRetiredCarrierDrain(t *testing.T) {
 			t.Fatal(err)
 		}
 		retired := make(chan struct{})
-		runtime.lanes.setDetachHook(func(identity session.LaneIdentity) {
+		runtime.ConfigureLanes(nil, func(identity session.LaneIdentity) {
 			if identity == lane.identity {
 				close(retired)
 			}
@@ -34,15 +34,18 @@ func TestRPCPendingControlRecoversBeforeRetiredCarrierDrain(t *testing.T) {
 		if err := rpc.Register(); err != nil {
 			t.Fatal(err)
 		}
-		runtime.start()
+		runtime.Start()
 		defer func() {
 			unblock()
 			rpc.Close()
-			runtime.close()
+			runtime.Close()
 		}()
 		body, _ := protocolsession.EncodeBody(map[uint64]any{0: uint64(1)})
-		call, err := rpc.beginOn(t.Context(), &lane.identity, protocolsession.MessageListChildren, body)
+		call, message, err := rpc.PrepareCall(t.Context(), protocolsession.MessageListChildren, body)
 		if err != nil {
+			t.Fatal(err)
+		}
+		if err := rpc.BeginCall(t.Context(), &lane.identity, call, message); err != nil {
 			t.Fatal(err)
 		}
 		_ = base.Close()

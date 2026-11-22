@@ -3,10 +3,12 @@ package sessioncore
 import (
 	"context"
 	"errors"
+	"slices"
+
 	"github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/session"
+	sessionobs "github.com/windshare/windshare/core/session/observation"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"slices"
 )
 
 // TerminalSendObservation carries only physical evidence, never operation or
@@ -15,7 +17,7 @@ type TerminalSendObservation struct {
 	ProtocolSessionID    protocolsession.ProtocolSessionID
 	Lane                 session.LaneIdentity
 	Settled              bool
-	Outcome              protocolsession.SendOutcome
+	Outcome              sessionobs.SenderTerminalSendOutcome
 	TransportDisposition framechannel.SendDisposition
 	NaturallyRetired     bool
 }
@@ -47,122 +49,115 @@ func (outbound *Responses) sendTerminalRecipients(
 	lanes []selectedLane,
 ) error {
 	if len(lanes) == 0 {
-		// Last-lane detach removes terminal recipients before it publishes core
-		// cancellation. No writer receipt was admitted in this state, so there is
-		// no terminal delivery lifecycle to fail. Only the caller's cancellation
-		// remains an operation failure; lifecycle cancellation merely reports the
-		// same naturally ended transport that produced the empty snapshot.
 		return callerContext.Err()
 	}
 	message, err := protocolsession.NewMessage(protocolsession.MessageSessionTerminal, nil, body)
 	if err != nil {
 		return err
 	}
-	type terminalReceipt struct {
-		lane    session.LaneIdentity
-		receipt protocolsession.SendReceipt
+	type pendingTerminal struct {
+		lane session.LaneIdentity
+		send *terminalSend
 	}
-	type terminalCompletion struct {
-		lane       session.LaneIdentity
-		completion protocolsession.SendCompletion
+	type settledTerminal struct {
+		lane   session.LaneIdentity
+		result terminalSendResult
 	}
-	receipts := make([]terminalReceipt, 0, len(lanes))
+	pending := make([]pendingTerminal, 0, len(lanes))
 	var combined error
 	var hardAdmissionError error
 	onlyStoppedBeforeAdmission := true
 	for _, lane := range lanes {
-		receipt, err := lane.writer.TryTerminal(message)
-		if err == nil {
-			receipts = append(receipts, terminalReceipt{lane: lane.identity, receipt: receipt})
+		send, enqueueErr := lane.writer.EnqueueTerminal(message, outbound.runtime.lanes.acceptTerminal)
+		if enqueueErr == nil {
+			pending = append(pending, pendingTerminal{lane: lane.identity, send: send})
 		}
-		if err != nil && !errorTreeContainsOnly(err, protocolsession.ErrWriterStopped) {
+		if enqueueErr != nil && !errorTreeContainsOnly(enqueueErr, protocolsession.ErrWriterStopped, protocolsession.ErrNotSent) {
 			onlyStoppedBeforeAdmission = false
-			hardAdmissionError = errors.Join(hardAdmissionError, err)
+			hardAdmissionError = errors.Join(hardAdmissionError, enqueueErr)
 		}
-		combined = errors.Join(combined, err)
+		combined = errors.Join(combined, enqueueErr)
 	}
-	if len(receipts) == 0 {
+	if len(pending) == 0 {
 		if err := callerContext.Err(); err != nil {
 			return errors.Join(combined, err)
 		}
 		if onlyStoppedBeforeAdmission && !outbound.runtime.lanes.hasUsable() {
-			// A snapshot can retain immutable writer references after natural lane
-			// completion. If every writer rejected admission because it had already
-			// stopped and no replacement is usable, no terminal lifecycle was born.
 			return nil
 		}
 		return combined
 	}
-	// Lane shutdown cancels physical writers, but their admitted receipts still
-	// own the final acceptance result. Only the caller may abandon this wait;
-	// observing lifecycle cancellation as a send result loses late success.
-	completions := make([]terminalCompletion, 0, len(receipts))
-	for _, pending := range receipts {
-		completions = append(completions, terminalCompletion{
-			lane:       pending.lane,
-			completion: pending.receipt.Await(callerContext),
+	settled := make([]settledTerminal, 0, len(pending))
+	for _, item := range pending {
+		settled = append(settled, settledTerminal{
+			lane:   item.lane,
+			result: item.send.Await(callerContext),
 		})
 	}
 	delivered := false
 	noUsableReplacement := !outbound.runtime.lanes.hasUsable()
-	for _, settled := range completions {
-		completion := settled.completion
-		naturallyRetired := terminalCompletionNaturallyRetired(completion, noUsableReplacement)
+	for _, item := range settled {
+		result := item.result
+		outcome := terminalOutcome(result)
+		naturallyRetired := terminalResultNaturallyRetired(result, outcome, noUsableReplacement)
 		outbound.observeTerminal(TerminalSendObservation{
-			ProtocolSessionID: outbound.runtime.sessionID,
-			Lane:              settled.lane, Settled: completion.Settled, Outcome: completion.Outcome,
-			TransportDisposition: completion.TransportDisposition, NaturallyRetired: naturallyRetired,
+			ProtocolSessionID:    outbound.runtime.sessionID,
+			Lane:                 item.lane,
+			Settled:              result.settled,
+			Outcome:              outcome,
+			TransportDisposition: result.disposition,
+			NaturallyRetired:     naturallyRetired,
 		})
 		if naturallyRetired {
-			// An admitted receipt can settle after channel retirement or while its
-			// owning writer publishes last-lane completion. Neither path reached the
-			// wire, so an absent replacement makes the lifecycle naturally complete.
 			continue
 		}
-		if completion.Err == nil && completion.Outcome == protocolsession.SendOutcomeTransportConfirmed {
-			// Once any attached lane delivers terminal, the peer's monotonic
-			// session stop may close its siblings before their receipts settle.
-			// Every lane was admitted before waiting, so that close is success,
-			// not evidence that terminal fanout was skipped.
+		if result.err == nil && outcome == sessionobs.SenderTerminalSendOutcomeDelivered {
 			delivered = true
 		}
-		if completion.Err != nil &&
-			(completion.Outcome == protocolsession.SendOutcomeTransportConfirmed ||
-				(completion.Outcome == protocolsession.SendOutcomeDropped &&
-					!isNaturalTerminalDropError(completion.Err))) {
-			hardAdmissionError = errors.Join(hardAdmissionError, completion.Err)
+		if result.err != nil &&
+			(outcome == sessionobs.SenderTerminalSendOutcomeDelivered ||
+				(outcome == sessionobs.SenderTerminalSendOutcomeDropped &&
+					!isNaturalTerminalDropError(result.err))) {
+			hardAdmissionError = errors.Join(hardAdmissionError, result.err)
 		}
-		combined = errors.Join(combined, completion.Err)
+		combined = errors.Join(combined, result.err)
 	}
 	if delivered {
-		// Delivery on one lane makes sibling receipt failures harmless, but it
-		// cannot erase caller cancellation or a local preparation/admission fault.
 		return errors.Join(callerContext.Err(), hardAdmissionError)
 	}
 	return errors.Join(combined, callerContext.Err())
 }
 
-func terminalCompletionNaturallyRetired(
-	completion protocolsession.SendCompletion,
+func terminalOutcome(result terminalSendResult) sessionobs.SenderTerminalSendOutcome {
+	if !result.settled {
+		return sessionobs.SenderTerminalSendOutcomeUnknown
+	}
+	if result.err == nil {
+		return sessionobs.SenderTerminalSendOutcomeDelivered
+	}
+	if protocolsession.IsNotSent(result.err) || result.disposition != framechannel.SendAccepted {
+		return sessionobs.SenderTerminalSendOutcomeDropped
+	}
+	return sessionobs.SenderTerminalSendOutcomeUnknown
+}
+
+func terminalResultNaturallyRetired(
+	result terminalSendResult,
+	outcome sessionobs.SenderTerminalSendOutcome,
 	noUsableReplacement bool,
 ) bool {
-	if completion.TransportDisposition == framechannel.SendRetired {
+	if result.disposition == framechannel.SendRetired {
 		return true
 	}
-	if !noUsableReplacement || !completion.Settled ||
-		completion.Outcome != protocolsession.SendOutcomeDropped || completion.Err == nil {
+	if !noUsableReplacement || !result.settled ||
+		outcome != sessionobs.SenderTerminalSendOutcomeDropped || result.err == nil {
 		return false
 	}
-	switch completion.TransportDisposition {
+	switch result.disposition {
 	case 0:
-		// A queued terminal never reached SendTerminal when the writer stopped
-		// because cancellation or a preceding send's channel retirement won first.
-		return isNaturalTerminalDropError(completion.Err)
+		return isNaturalTerminalDropError(result.err)
 	case framechannel.SendRejected:
-		// SessionWriter sends with its lane lifecycle context. Once the last
-		// writer is unusable, an exact cancellation rejection is the claimed-send
-		// side of lane retirement and still proves that transport acquired nothing.
-		return errorTreeContainsOnly(completion.Err, context.Canceled)
+		return errorTreeContainsOnly(result.err, context.Canceled, protocolsession.ErrNotSent)
 	default:
 		return false
 	}
@@ -172,6 +167,7 @@ func isNaturalTerminalDropError(err error) bool {
 	return errorTreeContainsOnly(
 		err,
 		protocolsession.ErrWriterStopped,
+		protocolsession.ErrNotSent,
 		context.Canceled,
 		context.DeadlineExceeded,
 		framechannel.ErrSendRetired,
@@ -194,9 +190,11 @@ func errorTreeContainsOnly(err error, allowed ...error) bool {
 		}
 		return true
 	}
-	// Match classified wrapper errors (such as framechannel.RetireSend) before
-	// unwrapping to their underlying transport cause.
 	if matcher, ok := err.(interface{ Is(error) bool }); ok && slices.ContainsFunc(allowed, matcher.Is) {
+		// Unwrap through ErrNotSent wrappers so the underlying cause is also checked.
+		if wrapped := errors.Unwrap(err); wrapped != nil && matcher.Is(protocolsession.ErrNotSent) {
+			return errorTreeContainsOnly(wrapped, allowed...)
+		}
 		return true
 	}
 	if wrapped := errors.Unwrap(err); wrapped != nil {

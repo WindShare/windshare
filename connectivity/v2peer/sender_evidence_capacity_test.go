@@ -10,7 +10,7 @@ import (
 
 func TestSenderPathMembershipBoundsNewPathsWithoutPoisoningRecovery(t *testing.T) {
 	authority := newSenderEvidenceAuthority(2)
-	operation := testPeerOperation(testOperationID(1))
+	operation := testPeerOperation(testOperationID(1)).Ref()
 	first, second, overflow := testBinding(2), testBinding(3), testBinding(4)
 	for _, binding := range []v2signal.Binding{first, second} {
 		if claim := authority.claim(operation, binding); !claim.acquired || claim.capacity {
@@ -47,12 +47,12 @@ func TestSenderPathCapacityRejectsOnlyNewPath(t *testing.T) {
 	factory := mustTestFactory(t, Config{MaxPeerPaths: 1, PeerConnections: PeerConnectionFactoryFunc(func(_ pion.Configuration) (PeerConnection, error) { return peer, nil })})
 	session := newTestPeerSession(10)
 	handler, ctx, cancel, done := startSenderTestRuntime(t, factory, session)
-	_, _, _ = sendSenderTestOffer(t, handler, ctx, 11)
+	_, _ = sendSenderTestOffer(t, handler, ctx, 11)
 	receiveTest(t, peer.remote)
 	receiveTest(t, session.controls)
-	operation, _, _ := sendSenderTestOffer(t, handler, ctx, 13)
+	op, _ := sendSenderTestOffer(t, handler, ctx, 13)
 	failure := receiveTest(t, session.failures)
-	if failure.operation != operation || failure.code != protocolsession.PeerOperationCodePolicy {
+	if failure.operation != op.ID() || failure.code != protocolsession.PeerOperationCodePolicy {
 		t.Fatal(failure)
 	}
 	select {
@@ -72,7 +72,7 @@ func TestSenderPathMembershipConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	var authority *senderEvidenceAuthority
-	if authority.claimed(testBinding(1)) || authority.retainedIdentityCount() != 0 || authority.claim(peerOperation{}, testBinding(1)).acquired {
+	if authority.claimed(testBinding(1)) || authority.retainedIdentityCount() != 0 || authority.claim(protocolsession.OperationRef{}, testBinding(1)).acquired {
 		t.Fatal("nil authority")
 	}
 	authority.reset()

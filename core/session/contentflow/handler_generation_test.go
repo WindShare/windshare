@@ -20,23 +20,13 @@ func TestSenderHandlerSuppressesRequestWhoseGenerationWasCanceledBeforePublicati
 	body, _ := EncodeOpenRequest(requestBody)
 	operationID := flowID[protocolsession.OperationID](201)
 	request := operationMessage(t, protocolsession.MessageOpenRevisions, operationID, body)
-	operations, _ := protocolsession.NewOperationTable(
-		protocolsession.OperationLimits{MaxActive: 2, MaxTracked: 2}, nil,
-	)
-	admission, err := operations.ObserveInbound(protocolsession.DirectionReceiverToSender, request)
-	if err != nil {
-		t.Fatal(err)
+	state := newStubOperationState()
+	op := state.admit(operationID, protocolsession.MessageOpenRevisions)
+	state.cancel(op.Ref())
+	if op.IsActive() || !op.IsCurrent() {
+		t.Fatal("canceled operation did not become a current non-executable tombstone")
 	}
-	requestContext := protocolsession.WithOperationGeneration(context.Background(), admission.Generation)
-	cancelBody, _ := EncodeCancelReason(CancelReasonSuperseded)
-	cancel := operationMessage(t, protocolsession.MessageCancel, operationID, cancelBody)
-	if _, err := operations.ObserveInbound(protocolsession.DirectionReceiverToSender, cancel); err != nil {
-		t.Fatal(err)
-	}
-	if admission.Generation.IsActive() || !admission.Generation.IsCurrent() {
-		t.Fatal("canceled generation did not become a current non-executable tombstone")
-	}
-	if err := handler.HandleMessage(requestContext, request); err != nil {
+	if err := handler.HandleMessage(context.Background(), op, request); err != nil {
 		t.Fatalf("stale request suppression: %v", err)
 	}
 	if len(handler.queue) != 0 {
@@ -45,7 +35,7 @@ func TestSenderHandlerSuppressesRequestWhoseGenerationWasCanceledBeforePublicati
 
 	siblingID := flowID[protocolsession.OperationID](202)
 	sibling := operationMessage(t, protocolsession.MessageOpenRevisions, siblingID, body)
-	if err := handler.HandleMessage(senderMessageContext(t, sibling), sibling); err != nil {
+	if err := handler.HandleMessage(context.Background(), state.admit(siblingID, protocolsession.MessageOpenRevisions), sibling); err != nil {
 		t.Fatalf("sibling request: %v", err)
 	}
 	if len(handler.queue) != 1 {

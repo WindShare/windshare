@@ -7,11 +7,11 @@ import (
 
 type inertSenderPeerHandler struct{}
 
-func (inertSenderPeerHandler) HandleMessage(context.Context, protocolsession.Message) error {
+func (inertSenderPeerHandler) HandleMessage(context.Context, protocolsession.Operation, protocolsession.Message) error {
 	return nil
 }
 
-func (inertSenderPeerHandler) Cancel(context.Context, protocolsession.OperationID) error {
+func (inertSenderPeerHandler) Cancel(context.Context, protocolsession.Operation) error {
 	return nil
 }
 

@@ -88,19 +88,15 @@ func TestOperationCallClosedStateRejectsEveryAuthorityMutation(t *testing.T) {
 	if err := call.enqueue(operationResponse{}); err != nil {
 		t.Fatalf("late response to a closed sink error=%v", err)
 	}
-	if call.setAuthority(protocolsession.OperationGeneration{}, protocolsession.OutboundOperationPermit{}) {
+	if call.setAuthority(protocolsession.Operation{}, 0, false) {
 		t.Fatal("closed call accepted generation authority")
 	}
-	if call.setRequestReplay(protocolsession.Message{}, protocolsession.OutboundReplayPermit{}) {
+	call.setRequestReplay(protocolsession.Message{})
+	if call.hasReplay {
 		t.Fatal("closed call accepted replay authority")
 	}
 	if err := call.queueRequestReplay(nil); !errors.Is(err, session.ErrOperationMissing) {
 		t.Fatalf("closed replay queue error=%v", err)
-	}
-
-	open := &Call{}
-	if open.setRequestReplay(protocolsession.Message{}, protocolsession.OutboundReplayPermit{}) {
-		t.Fatal("zero replay capability was accepted")
 	}
 }
 
@@ -114,7 +110,7 @@ func TestOperationRequestReplayRetainsAuthorityWhenReplacementWriterRejects(t *t
 		t.Fatalf("stopped replacement writer error=%v", err)
 	}
 	fixture.call.stateMu.Lock()
-	replayRetained := !fixture.call.replay.IsZero()
+	replayRetained := fixture.call.hasReplay
 	fixture.call.stateMu.Unlock()
 	if !replayRetained {
 		t.Fatal("failed replacement consumed exact request replay authority")
@@ -123,14 +119,7 @@ func TestOperationRequestReplayRetainsAuthorityWhenReplacementWriterRejects(t *t
 
 func TestContinuationAdmissionRetiresOnlyTheStoppedAttemptedLane(t *testing.T) {
 	fixture := newContinuationReplayFixture(t, 139)
-	if !fixture.rpc.retryContinuationAdmission(
-		context.Background(),
-		0,
-		fixture.preferred,
-		protocolsession.ErrWriterStopped,
-	) {
-		t.Fatal("stopped preferred writer was not classified for one replacement retry")
-	}
+	fixture.runtime.lanes.markSelectedClosing(fixture.preferred)
 	fixture.runtime.lanes.mu.Lock()
 	preferredClosing := fixture.runtime.lanes.active[fixture.preferred.identity.ID].closing
 	fixture.runtime.lanes.mu.Unlock()
@@ -140,22 +129,5 @@ func TestContinuationAdmissionRetiresOnlyTheStoppedAttemptedLane(t *testing.T) {
 	selected, err := fixture.rpc.continuationLane(fixture.call)
 	if err != nil || selected.identity != fixture.replacement.identity {
 		t.Fatalf("replacement continuation lane=%+v error=%v", selected.identity, err)
-	}
-
-	canceled, cancel := context.WithCancel(context.Background())
-	cancel()
-	if fixture.rpc.retryContinuationAdmission(
-		canceled,
-		0,
-		selected,
-		protocolsession.ErrWriterStopped,
-	) {
-		t.Fatal("caller cancellation authorized another lane retry")
-	}
-	fixture.runtime.lanes.mu.Lock()
-	replacementClosing := fixture.runtime.lanes.active[selected.identity.ID].closing
-	fixture.runtime.lanes.mu.Unlock()
-	if replacementClosing {
-		t.Fatal("canceled continuation retired an unattempted replacement lane")
 	}
 }

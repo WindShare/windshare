@@ -23,7 +23,7 @@ func TestRPCWaitsForOperationCapacityAndKeepsCancellationLive(t *testing.T) {
 		defer func() { stopWriter(); <-writerDone }()
 		client := NewRequests(runtime, &deterministicReader{next: 70})
 		body := []byte{0xa1, 0x00, 0x01}
-		first, err := client.begin(context.Background(), protocolsession.MessageListChildren, body)
+		first, err := client.Begin(context.Background(), protocolsession.MessageListChildren, body)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -34,7 +34,7 @@ func TestRPCWaitsForOperationCapacityAndKeepsCancellationLive(t *testing.T) {
 		begin := func(ctx context.Context) <-chan begun {
 			done := make(chan begun, 1)
 			go func() {
-				call, err := client.begin(ctx, protocolsession.MessageListChildren, body)
+				call, err := client.Begin(ctx, protocolsession.MessageListChildren, body)
 				done <- begun{call, err}
 			}()
 			return done
@@ -46,7 +46,7 @@ func TestRPCWaitsForOperationCapacityAndKeepsCancellationLive(t *testing.T) {
 			t.Fatalf("active capacity did not wait: %v", result.err)
 		default:
 		}
-		if err := client.cancelAndEnd(first, contentflow.CancelReasonOutputAbort); err != nil {
+		if err := client.CancelAndEnd(first, contentflow.CancelReasonOutputAbort); err != nil {
 			t.Fatal(err)
 		}
 		result := <-second
@@ -56,7 +56,7 @@ func TestRPCWaitsForOperationCapacityAndKeepsCancellationLive(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		third := begin(ctx)
 		synctest.Wait()
-		if err := client.cancelAndEnd(result.call, contentflow.CancelReasonOutputAbort); err != nil {
+		if err := client.CancelAndEnd(result.call, contentflow.CancelReasonOutputAbort); err != nil {
 			t.Fatal(err)
 		}
 		synctest.Wait()
@@ -71,7 +71,7 @@ func TestRPCWaitsForOperationCapacityAndKeepsCancellationLive(t *testing.T) {
 		if result.err != nil {
 			t.Fatal(result.err)
 		}
-		if err := client.cancelAndEnd(result.call, contentflow.CancelReasonOutputAbort); err != nil {
+		if err := client.CancelAndEnd(result.call, contentflow.CancelReasonOutputAbort); err != nil {
 			t.Fatal(err)
 		}
 		synctest.Wait()

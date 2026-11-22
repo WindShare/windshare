@@ -1,13 +1,14 @@
 package sessionobs
 
 import (
+	"strconv"
+	"time"
+
 	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/requestlane"
-	"strconv"
-	"time"
 )
 
 // ProtocolOperationStage identifies the side and terminal observation boundary
@@ -24,6 +25,29 @@ const (
 	ProtocolOperationReceiverAdmissionReady
 )
 
+// SendStatus summarizes the physical transport status of an outbound protocol frame.
+type SendStatus uint8
+
+const (
+	SendStatusConfirmed SendStatus = iota + 1
+	SendStatusNotSent
+	SendStatusUncertain
+)
+
+// DiagnosticName belongs to the source vocabulary; recorders accept new values.
+func (value SendStatus) DiagnosticName() string {
+	switch value {
+	case SendStatusConfirmed:
+		return "confirmed"
+	case SendStatusNotSent:
+		return "not_sent"
+	case SendStatusUncertain:
+		return "uncertain"
+	default:
+		return "unknown_" + strconv.FormatUint(uint64(value), 10)
+	}
+}
+
 // ProtocolOperationObservation summarizes one RPC boundary. Content decisions carry
 // only opaque coordinator/lease join keys; request bodies, file identities,
 // catalog paths, and raw errors remain intentionally absent.
@@ -39,9 +63,7 @@ type ProtocolOperationObservation struct {
 	Lane                    session.LaneIdentity
 	HasLane                 bool
 	HasSend                 bool
-	SendSettled             bool
-	SendAdmitted            bool
-	SendOutcome             protocolsession.SendOutcome
+	SendStatus              SendStatus
 	ResponseCount           uint64
 	DeadlineRemainingMillis uint64
 	HasDeadline             bool
@@ -64,8 +86,7 @@ type ProtocolObservationCorrelation struct {
 	Role              protocolsession.Role
 	ProtocolSessionID protocolsession.ProtocolSessionID
 	OperationID       protocolsession.OperationID
-	// RequestKind may be zero only on ResponseSendNotStarted when setup had no
-	// operation route from which to obtain authenticated request context.
+	// RequestKind may be zero when an outbound error occurs before operation lookup succeeds.
 	RequestKind protocolsession.MessageKind
 }
 
@@ -94,47 +115,42 @@ func (fn ProtocolObservationTraceFunc) TraceProtocolObservation(fact ProtocolObs
 	}
 }
 
-type responseSendObservation struct {
+type ResponseSendObserved struct {
 	ObservationContext
 	sequence uint64
 	kind     protocolsession.MessageKind
+	lane     session.LaneIdentity
+	status   SendStatus
+	attempts uint32
 	content  ProtocolErrorContent
-	result   protocolsession.ResponseSendResult
 }
 
-func (fact responseSendObservation) ResponseSequence() uint64 { return fact.sequence }
-
-func (fact responseSendObservation) ResponseKind() protocolsession.MessageKind { return fact.kind }
-
-func (fact responseSendObservation) Content() ProtocolErrorContent { return fact.content }
-
-func (fact responseSendObservation) Result() protocolsession.ResponseSendResult { return fact.result }
-
-type ResponseSendNotStarted struct{ responseSendObservation }
-
-type ResponseSendReturned struct{ responseSendObservation }
-
-func NewResponseSendNotStarted(ctx ProtocolObservationContext, sequence uint64, kind protocolsession.MessageKind, content ProtocolErrorContent, result protocolsession.ResponseSendResult) ResponseSendNotStarted {
-	return ResponseSendNotStarted{responseSendObservation{ObservationContext{ctx}, sequence, kind, content, result}}
+func NewResponseSendObserved(
+	ctx ProtocolObservationContext,
+	sequence uint64,
+	kind protocolsession.MessageKind,
+	lane session.LaneIdentity,
+	status SendStatus,
+	attempts uint32,
+	content ProtocolErrorContent,
+) ResponseSendObserved {
+	return ResponseSendObserved{
+		ObservationContext: ObservationContext{ctx},
+		sequence:           sequence,
+		kind:               kind,
+		lane:               lane,
+		status:             status,
+		attempts:           attempts,
+		content:            content,
+	}
 }
 
-func NewResponseSendReturned(ctx ProtocolObservationContext, sequence uint64, kind protocolsession.MessageKind, content ProtocolErrorContent, result protocolsession.ResponseSendResult) ResponseSendReturned {
-	return ResponseSendReturned{responseSendObservation{ObservationContext{ctx}, sequence, kind, content, result}}
-}
-
-type SendAttemptSettled struct {
-	ObservationContext
-	kind    protocolsession.MessageKind
-	attempt protocolsession.SendAttemptSnapshot
-}
-
-func NewSendAttemptSettled(ctx ProtocolObservationContext, kind protocolsession.MessageKind, attempt protocolsession.SendAttemptSnapshot) SendAttemptSettled {
-	return SendAttemptSettled{ObservationContext{ctx}, kind, attempt}
-}
-
-func (fact SendAttemptSettled) ResponseKind() protocolsession.MessageKind { return fact.kind }
-
-func (fact SendAttemptSettled) Attempt() protocolsession.SendAttemptSnapshot { return fact.attempt }
+func (fact ResponseSendObserved) ResponseSequence() uint64                  { return fact.sequence }
+func (fact ResponseSendObserved) ResponseKind() protocolsession.MessageKind { return fact.kind }
+func (fact ResponseSendObserved) Lane() session.LaneIdentity                { return fact.lane }
+func (fact ResponseSendObserved) Status() SendStatus                        { return fact.status }
+func (fact ResponseSendObserved) Attempts() uint32                          { return fact.attempts }
+func (fact ResponseSendObserved) Content() ProtocolErrorContent             { return fact.content }
 
 type ReceivedProtocolError struct {
 	ObservationContext
@@ -207,29 +223,33 @@ func (value ProtocolOperationStage) DiagnosticName() string {
 }
 
 const (
-	protocolOperationEventName  = "protocol_operation"
-	contentDecisionEventName    = "sender_content_decision"
-	responseNotStartedEventName = "protocol_response_send_not_started"
-	responseReturnedEventName   = "protocol_response_send_returned"
-	sendAttemptEventName        = "protocol_send_attempt_settled"
-	protocolErrorEventName      = "protocol_error_received"
-	terminalSendEventName       = "sender_terminal_send_observed"
-	sessionTerminatedEventName  = "sender_session_terminated"
+	protocolOperationEventName = "protocol_operation"
+	contentDecisionEventName   = "sender_content_decision"
+	responseReturnedEventName  = "protocol_response_send_returned"
+	protocolErrorEventName     = "protocol_error_received"
+	terminalSendEventName      = "sender_terminal_send_observed"
+	sessionTerminatedEventName = "sender_session_terminated"
 )
 
 func protocolDiagnosticFields(value interface {
 	Correlation() ProtocolObservationCorrelation
 	ObservedAt() time.Time
 }) diagnostics.Fields {
-	return diagnostics.Fields{"observed_at": diagnostics.Text(value.ObservedAt().UTC().Format(time.RFC3339Nano)),
-		"role": diagnostics.Text(value.Correlation().Role.DiagnosticName()), "request_kind": diagnostics.Text(value.Correlation().RequestKind.DiagnosticName())}
+	return diagnostics.Fields{
+		"observed_at":  diagnostics.Text(value.ObservedAt().UTC().Format(time.RFC3339Nano)),
+		"role":         diagnostics.Text(value.Correlation().Role.DiagnosticName()),
+		"request_kind": diagnostics.Text(value.Correlation().RequestKind.DiagnosticName()),
+	}
 }
 
 func protocolDiagnosticCorrelation(value interface {
 	Correlation() ProtocolObservationCorrelation
 }, lane session.LaneIdentity) diagnostics.Fields {
 	c := value.Correlation()
-	fields := diagnostics.Fields{"protocol_session_id": diagnostics.Identity(c.ProtocolSessionID[:]), "protocol_operation_id": diagnostics.Identity(c.OperationID[:])}
+	fields := diagnostics.Fields{
+		"protocol_session_id":   diagnostics.Identity(c.ProtocolSessionID[:]),
+		"protocol_operation_id": diagnostics.Identity(c.OperationID[:]),
+	}
 	if lane.ID != 0 {
 		fields["lane_id"], fields["lane_epoch"] = diagnostics.Number(float64(lane.ID)), diagnostics.Number(float64(lane.Epoch))
 	}
@@ -245,17 +265,27 @@ func (value ProtocolOperationObservation) DiagnosticRecord() diagnostics.Record 
 		fields["response_kind"] = diagnostics.Text(value.ResponseKind.DiagnosticName())
 	}
 	if value.HasSend {
-		fields["send"] = diagnostics.Object(diagnostics.Fields{"settled": diagnostics.Bool(value.SendSettled), "admitted": diagnostics.Bool(value.SendAdmitted), "outcome": diagnostics.Text(value.SendOutcome.DiagnosticName())})
+		fields["send"] = diagnostics.Object(diagnostics.Fields{
+			"status": diagnostics.Text(value.SendStatus.DiagnosticName()),
+		})
 	}
 	if value.HasDeadline {
 		fields["deadline_remaining_ms"] = diagnostics.Uint(value.DeadlineRemainingMillis)
 	}
 	if wait := value.BlockWait; wait.Phase != "" {
-		fields["block_wait"] = diagnostics.Object(diagnostics.Fields{"phase": diagnostics.Text(string(wait.Phase)), "waited_ms": diagnostics.Millis(wait.Waited), "queue_progress": diagnostics.Uint(wait.QueueProgress)})
+		fields["block_wait"] = diagnostics.Object(diagnostics.Fields{
+			"phase":          diagnostics.Text(string(wait.Phase)),
+			"waited_ms":      diagnostics.Millis(wait.Waited),
+			"queue_progress": diagnostics.Uint(wait.QueueProgress),
+		})
 	}
 	if scheduling := value.RequestScheduling; scheduling.Expected != 0 {
-		fields["request_scheduling"] = diagnostics.Object(diagnostics.Fields{"expected_ms": diagnostics.Millis(scheduling.Expected), "response_ms": diagnostics.Millis(scheduling.Response),
-			"queued_content_ms": diagnostics.Millis(scheduling.QueuedContent), "pending_requests": diagnostics.Number(float64(scheduling.Pending))})
+		fields["request_scheduling"] = diagnostics.Object(diagnostics.Fields{
+			"expected_ms":       diagnostics.Millis(scheduling.Expected),
+			"response_ms":       diagnostics.Millis(scheduling.Response),
+			"queued_content_ms": diagnostics.Millis(scheduling.QueuedContent),
+			"pending_requests":  diagnostics.Number(float64(scheduling.Pending)),
+		})
 	}
 	return diagnostics.New(protocolOperationEventName, fields).At(value.ObservedAt()).Correlate(protocolDiagnosticCorrelation(value, value.Lane))
 }
@@ -267,27 +297,14 @@ func (value SenderContentDecision) DiagnosticRecord() diagnostics.Record {
 	return diagnostics.New(contentDecisionEventName, fields).At(value.ObservedAt()).Correlate(protocolDiagnosticCorrelation(value, lane))
 }
 
-func (value responseSendObservation) diagnosticRecord(name string) diagnostics.Record {
+func (value ResponseSendObserved) DiagnosticRecord() diagnostics.Record {
 	fields := protocolDiagnosticFields(value)
-	fields["response_sequence"], fields["response_kind"] = diagnostics.Uint(value.ResponseSequence()), diagnostics.Text(value.ResponseKind().DiagnosticName())
-	fields["protocol_error"], fields["response_result"] = value.Content().DiagnosticValue(), value.Result().DiagnosticValue()
-	return diagnostics.New(name, fields).At(value.ObservedAt()).Correlate(protocolDiagnosticCorrelation(value, session.LaneIdentity{}))
-}
-
-func (value ResponseSendNotStarted) DiagnosticRecord() diagnostics.Record {
-	return value.diagnosticRecord(responseNotStartedEventName)
-}
-
-func (value ResponseSendReturned) DiagnosticRecord() diagnostics.Record {
-	return value.diagnosticRecord(responseReturnedEventName)
-}
-
-func (value SendAttemptSettled) DiagnosticRecord() diagnostics.Record {
-	fields := protocolDiagnosticFields(value)
-	id := value.Attempt().Identity()
-	fields["response_sequence"], fields["response_kind"] = diagnostics.Uint(id.ResponseSequence), diagnostics.Text(value.ResponseKind().DiagnosticName())
-	fields["attempt"] = value.Attempt().DiagnosticValue()
-	return diagnostics.New(sendAttemptEventName, fields).At(value.ObservedAt()).Correlate(protocolDiagnosticCorrelation(value, session.LaneIdentity{ID: id.LaneID, Epoch: id.LaneEpoch}))
+	fields["response_sequence"] = diagnostics.Uint(value.ResponseSequence())
+	fields["response_kind"] = diagnostics.Text(value.ResponseKind().DiagnosticName())
+	fields["protocol_error"] = value.Content().DiagnosticValue()
+	fields["send_status"] = diagnostics.Text(value.Status().DiagnosticName())
+	fields["attempts"] = diagnostics.Number(float64(value.Attempts()))
+	return diagnostics.New(responseReturnedEventName, fields).At(value.ObservedAt()).Correlate(protocolDiagnosticCorrelation(value, value.Lane()))
 }
 
 func (value ReceivedProtocolError) DiagnosticRecord() diagnostics.Record {

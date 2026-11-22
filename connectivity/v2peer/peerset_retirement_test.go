@@ -11,7 +11,7 @@ import (
 func TestSenderRetirementAdvancesWithoutCumulativeIdentityExhaustion(t *testing.T) {
 	authority := newSenderEvidenceAuthority(2)
 	first := testBinding(21)
-	operation := testPeerOperation(testOperationID(22))
+	operation := testPeerOperation(testOperationID(22)).Ref()
 	for sequence := uint64(1); sequence <= 10000; sequence++ {
 		binding := first
 		binding.AttemptSequence = sequence

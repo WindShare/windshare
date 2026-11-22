@@ -22,7 +22,7 @@ type laneGrantHandler struct {
 }
 
 type laneGrantOperation struct {
-	ctx     context.Context
+	op      protocolsession.Operation
 	message protocolsession.Message
 }
 
@@ -37,7 +37,11 @@ func newLaneGrantHandler(
 	}
 }
 
-func (handler *laneGrantHandler) HandleMessage(ctx context.Context, message protocolsession.Message) error {
+func (handler *laneGrantHandler) HandleMessage(
+	ctx context.Context,
+	op protocolsession.Operation,
+	message protocolsession.Message,
+) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -45,14 +49,10 @@ func (handler *laneGrantHandler) HandleMessage(ctx context.Context, message prot
 		return session.ErrRuntimeConfig
 	}
 	operationID, ok := message.OperationID()
-	if !ok {
+	if !ok || op.IsZero() || op.ID() != operationID {
 		return session.ErrOperationMissing
 	}
-	generation, ok := protocolsession.OperationGenerationFromContext(ctx, operationID)
-	if !ok || generation.IsZero() {
-		return session.ErrOperationMissing
-	}
-	if !generation.IsActive() {
+	if !op.IsActive() {
 		return nil
 	}
 	handler.queueMu.Lock()
@@ -64,7 +64,7 @@ func (handler *laneGrantHandler) HandleMessage(ctx context.Context, message prot
 		return session.ErrRuntimeClosed
 	}
 	select {
-	case handler.queue <- laneGrantOperation{ctx: ctx, message: message}:
+	case handler.queue <- laneGrantOperation{op: op, message: message}:
 		return nil
 	default:
 		return session.ErrOperationOverflow
@@ -78,13 +78,10 @@ func (handler *laneGrantHandler) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case queued := <-handler.queue:
-			operationContext := protocolsession.RetainMessageContext(ctx, queued.ctx)
-			operationID, _ := queued.message.OperationID()
-			generation, ok := protocolsession.OperationGenerationFromContext(operationContext, operationID)
-			if !ok || !generation.IsActive() {
+			if !queued.op.IsActive() {
 				continue
 			}
-			if err := handler.process(operationContext, queued.message); err != nil {
+			if err := handler.process(ctx, queued.op, queued.message); err != nil {
 				return fmt.Errorf("issue authenticated lane grant: %w", err)
 			}
 		}
@@ -104,7 +101,11 @@ func (handler *laneGrantHandler) stopAndDrain() {
 	}
 }
 
-func (handler *laneGrantHandler) process(ctx context.Context, message protocolsession.Message) error {
+func (handler *laneGrantHandler) process(
+	ctx context.Context,
+	op protocolsession.Operation,
+	message protocolsession.Message,
+) error {
 	request, err := protocolsession.DecodeLaneAttachRequest(message.Body())
 	if err != nil {
 		return err
@@ -131,10 +132,13 @@ func (handler *laneGrantHandler) process(ctx context.Context, message protocolse
 	if err != nil {
 		return err
 	}
-	outcome, err := handler.outbound.SendControl(ctx, protocolsession.MessageLaneAttach, operationID, body)
-	// Delivered and Unknown both permit peer ownership; only a proven pre-wire
-	// drop leaves the exact grant exclusively owned by this handler.
-	retainGrant = outcome.Evidence() != protocolsession.ResponseSendEvidenceDefinitelyNotSent
+	err = handler.outbound.SendControl(ctx, op, protocolsession.MessageLaneAttach, body)
+	// Delivered and uncertain sends both permit peer ownership; only a proven
+	// pre-wire failure leaves the grant exclusively owned by this handler.
+	retainGrant = err == nil || !protocolsession.IsNotSent(err)
+	if errors.Is(err, protocolsession.ErrOperationSuppressed) {
+		return nil
+	}
 	return err
 }
 

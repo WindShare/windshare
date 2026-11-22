@@ -389,6 +389,7 @@ func peerReplayHandlerFactory(
 
 func (handler *peerReplayHandler) HandleMessage(
 	ctx context.Context,
+	op protocolsession.Operation,
 	message protocolsession.Message,
 ) error {
 	operationID, ok := message.OperationID()
@@ -398,7 +399,7 @@ func (handler *peerReplayHandler) HandleMessage(
 	handler.events <- peerReplayEvent{kind: message.Kind(), operationID: operationID}
 	if message.Kind() == protocolsession.MessagePeerOffer && handler.answer != nil {
 		_, err := handler.session.SendPeerControl(
-			ctx, protocolsession.MessagePeerAnswer, operationID, handler.answer,
+			ctx, op, protocolsession.MessagePeerAnswer, handler.answer,
 		)
 		return err
 	}
@@ -407,9 +408,9 @@ func (handler *peerReplayHandler) HandleMessage(
 
 func (handler *peerReplayHandler) Cancel(
 	_ context.Context,
-	operationID protocolsession.OperationID,
+	op protocolsession.Operation,
 ) error {
-	handler.cancels <- operationID
+	handler.cancels <- op.ID()
 	return nil
 }
 

@@ -3,21 +3,24 @@ package sessioncore
 import (
 	"context"
 	"fmt"
+	"io"
+	"sync"
+	"time"
+
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/core/session"
 	sessionobs "github.com/windshare/windshare/core/session/observation"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/requestlane"
-	"io"
-	"sync"
-	"time"
 )
 
 type LockedReader struct {
 	mu     sync.Mutex
 	reader io.Reader
 }
+
+func NewLockedReader(reader io.Reader) *LockedReader { return &LockedReader{reader: reader} }
 
 func (reader *LockedReader) Read(destination []byte) (int, error) {
 	reader.mu.Lock()
@@ -33,10 +36,9 @@ type Runtime struct {
 	initial              session.LaneIdentity
 	keys                 protocolsession.SessionKeys
 	random               io.Reader
-	operations           *protocolsession.OperationTable
-	router               *protocolsession.RoleRouter
+	operations           *operationTable
+	inbound              *inboundQueue
 	lanes                *runtimeLanes
-	routes               *operationLaneRoutes
 	now                  func() time.Time
 	protocolObservations observationstream.Producer[sessionobs.ProtocolObservation]
 	terminationObserver  TerminationObserver
@@ -93,22 +95,19 @@ func New(config Config) (*Runtime, error) {
 	if config.Now == nil {
 		config.Now = time.Now
 	}
-	operations, err := protocolsession.NewOperationTableWithContinuations(
-		config.OperationLimits, config.Now, config.Continuations,
-	)
-	if err != nil {
-		return nil, err
-	}
-	router, err := protocolsession.NewRoleRouterWithLimits(config.Role, operations, config.RouterLimits)
+	operations, err := newOperationTable(config.OperationLimits, config.Now, config.Continuations)
 	if err != nil {
 		return nil, err
 	}
 	ctx, cancelLifecycle := context.WithCancel(context.Background())
 	runtime := &Runtime{
-		share: config.Share, role: config.Role, sessionID: config.Keys.ProtocolSessionID(),
-		initial: session.LaneIdentity{ID: config.LaneID, Epoch: config.LaneEpoch}, keys: config.Keys,
-		random: config.Random, operations: operations, router: router,
-		routes:               newOperationLaneRoutes(),
+		share:                config.Share,
+		role:                 config.Role,
+		sessionID:            config.Keys.ProtocolSessionID(),
+		initial:              session.LaneIdentity{ID: config.LaneID, Epoch: config.LaneEpoch},
+		keys:                 config.Keys,
+		random:               config.Random,
+		operations:           operations,
 		now:                  config.Now,
 		protocolObservations: config.ProtocolObservations,
 		terminationObserver:  config.TerminationObserver,
@@ -116,7 +115,13 @@ func New(config Config) (*Runtime, error) {
 		cancelLifecycle:      cancelLifecycle,
 		done:                 make(chan struct{}),
 	}
-	if err := router.RegisterHandler(protocolsession.MessagePeerPathControl, &runtime.peerPathControls); err != nil {
+	inbound, err := newInboundQueue(runtime, config.Role, operations, config.RouterLimits)
+	if err != nil {
+		cancelLifecycle()
+		return nil, err
+	}
+	runtime.inbound = inbound
+	if err := inbound.RegisterHandler(protocolsession.MessagePeerPathControl, &runtime.peerPathControls); err != nil {
 		cancelLifecycle()
 		return nil, err
 	}
@@ -156,7 +161,7 @@ type Component struct {
 	Run    func(context.Context) error
 }
 
-func (runtime *Runtime) start(additional ...Component) {
+func (runtime *Runtime) Start(additional ...Component) {
 	components := make([]Component, 0, 1+len(additional))
 	components = append(components, Component{runtimeFailureSourceDispatch, runtime.dispatch})
 	components = append(components, additional...)
@@ -168,8 +173,6 @@ func (runtime *Runtime) start(additional ...Component) {
 			if runtime.ctx.Err() != nil {
 				return
 			}
-			// A component has no independent normal terminal state. Even a cancellation
-			// error is unexpected while the shared context is live and must keep its cause.
 			runtime.terminateWithFailure(TerminationFailed, err, component.Source)
 		}()
 	}
@@ -182,11 +185,9 @@ func (runtime *Runtime) start(additional ...Component) {
 	}()
 }
 
-// abortBeforeStart closes construction-time ownership when composition fails
+// AbortBeforeStart closes construction-time ownership when composition fails
 // after keys and channel state exist but before any runtime goroutine starts.
-// Keeping this path separate prevents error handling from waiting on a done
-// channel that no component could ever close.
-func (runtime *Runtime) abortBeforeStart() {
+func (runtime *Runtime) AbortBeforeStart() {
 	if runtime == nil {
 		return
 	}
@@ -199,8 +200,7 @@ func (runtime *Runtime) abortBeforeStart() {
 func (runtime *Runtime) finish() {
 	runtime.finishOnce.Do(func() {
 		runtime.closeExternalAdmissions()
-		runtime.router.Close()
-		runtime.routes.clear()
+		runtime.inbound.Close()
 		runtime.finalizeMu.Lock()
 		runtime.finalizing = true
 		finalizers := append([]func(){}, runtime.finalizers...)
@@ -214,7 +214,7 @@ func (runtime *Runtime) finish() {
 	})
 }
 
-func (runtime *Runtime) beginExternalAdmission(
+func (runtime *Runtime) BeginExternalAdmission(
 	caller context.Context,
 ) (context.Context, func(), error) {
 	if runtime == nil || caller == nil {
@@ -250,7 +250,7 @@ func (runtime *Runtime) closeExternalAdmissions() {
 	runtime.externalAdmissions.Wait()
 }
 
-func (runtime *Runtime) addFinalizer(finalize func()) error {
+func (runtime *Runtime) AddFinalizer(finalize func()) error {
 	if runtime == nil || finalize == nil {
 		return session.ErrRuntimeConfig
 	}
@@ -263,19 +263,26 @@ func (runtime *Runtime) addFinalizer(finalize func()) error {
 	return nil
 }
 
+func (runtime *Runtime) RegisterHandler(
+	kind protocolsession.MessageKind,
+	handler protocolsession.MessageHandler,
+) error {
+	return runtime.inbound.RegisterHandler(kind, handler)
+}
+
 func (runtime *Runtime) dispatch(ctx context.Context) error {
 	for {
-		event, err := runtime.router.Next(ctx)
+		event, err := runtime.inbound.Next(ctx)
 		if err != nil {
 			return err
 		}
-		if err := runtime.router.Dispatch(ctx, event); err != nil {
+		if err := runtime.inbound.Dispatch(ctx, event); err != nil {
 			return fmt.Errorf("dispatch authenticated session message: %w", err)
 		}
 	}
 }
 
-func (runtime *Runtime) recordError(err error) {
+func (runtime *Runtime) RecordError(err error) {
 	runtime.errMu.Lock()
 	if runtime.err == nil {
 		runtime.err = err
@@ -283,25 +290,50 @@ func (runtime *Runtime) recordError(err error) {
 	runtime.errMu.Unlock()
 }
 
-func (runtime *Runtime) close() {
+func (runtime *Runtime) Fail(err error) {
+	runtime.terminateRuntimeFailed(err)
+}
+
+func (runtime *Runtime) FailProtocol(err error) {
+	_ = runtime.operations.TerminateLocal()
+	runtime.terminateRuntimeFailed(err)
+}
+
+func (runtime *Runtime) FailOperationAuthority() error {
+	return runtime.failRPCOperationAuthority()
+}
+
+func (runtime *Runtime) Close() {
 	if runtime == nil {
 		return
 	}
-	runtime.beginClose()
-	runtime.waitClosed()
+	runtime.BeginClose()
+	runtime.WaitClosed()
 }
 
-func (runtime *Runtime) beginClose() {
+func (runtime *Runtime) BeginClose() {
 	if runtime != nil {
 		runtime.terminate(TerminationForcedClose)
 	}
 }
 
-func (runtime *Runtime) waitClosed() {
+func (runtime *Runtime) WaitClosed() {
 	if runtime == nil {
 		return
 	}
 	<-runtime.done
+}
+
+func (runtime *Runtime) ClaimTermination(cause TerminationCause) TerminationClaim {
+	return runtime.claimTermination(cause)
+}
+
+func (runtime *Runtime) CancelLifetime() { runtime.cancelContext() }
+
+func (runtime *Runtime) PathsExhausted() bool {
+	runtime.termination.mu.Lock()
+	defer runtime.termination.mu.Unlock()
+	return runtime.termination.claimed && runtime.termination.cause == TerminationPathsExhausted
 }
 
 func (runtime *Runtime) Err() error {
@@ -316,16 +348,12 @@ func (runtime *Runtime) Err() error {
 func (runtime *Runtime) Done() <-chan struct{} { return runtime.done }
 
 // Lifetime cancels when session authority ends, before finalizers close Done.
-// Dependent owners borrow it to stop waiting and revoke in-flight work while
-// the runtime is still joining callbacks and physical resources.
 func (runtime *Runtime) Lifetime() context.Context { return runtime.ctx }
 
 func (runtime *Runtime) Stopping() bool {
 	if runtime == nil || runtime.ctx == nil {
 		return true
 	}
-	// Cancellation begins shutdown before finalizers can close Done. Admission
-	// callers need that earlier boundary so the finalizer gap cannot look live.
 	select {
 	case <-runtime.ctx.Done():
 		return true
@@ -334,10 +362,87 @@ func (runtime *Runtime) Stopping() bool {
 	}
 }
 
+func (runtime *Runtime) ShareInstance() catalog.ShareInstance { return runtime.share }
+
+func (runtime *Runtime) Now() time.Time { return runtime.now() }
+
 func (runtime *Runtime) ProtocolSessionID() protocolsession.ProtocolSessionID {
 	return runtime.sessionID
 }
 
 func (runtime *Runtime) LaneIdentity() (uint32, uint32) {
 	return runtime.initial.ID, runtime.initial.Epoch
+}
+
+func (runtime *Runtime) HasUsableLanes() bool { return runtime.lanes.hasUsable() }
+
+func (runtime *Runtime) DetachLane(identity session.LaneIdentity) bool {
+	return runtime.lanes.detach(identity)
+}
+
+func (runtime *Runtime) AttachedLanes() int { return runtime.lanes.len() }
+
+func (runtime *Runtime) LaneDone(identity session.LaneIdentity) (<-chan struct{}, bool) {
+	runtime.lanes.mu.Lock()
+	defer runtime.lanes.mu.Unlock()
+	lane := runtime.lanes.active[identity.ID]
+	if lane == nil || lane.identity != identity {
+		return nil, false
+	}
+	return lane.done, true
+}
+
+// ConfigureLanes binds role dependencies before Start.
+func (runtime *Runtime) ConfigureLanes(
+	queued func(session.LaneIdentity) time.Duration,
+	detached func(session.LaneIdentity),
+) {
+	runtime.lanes.mu.Lock()
+	defer runtime.lanes.mu.Unlock()
+	runtime.lanes.queuedContent = queued
+	runtime.lanes.onDetach = detached
+}
+
+// InstallLane publishes both protocol and role ownership under the same registry lock.
+func (runtime *Runtime) InstallLane(
+	identity session.LaneIdentity,
+	channel protocolsession.FrameChannel,
+	validator protocolsession.InboundMessageValidator,
+	requests *requestlane.Lane,
+	admit func() error,
+) error {
+	_, err := runtime.lanes.addWithAdmission(identity, channel, validator, false, func(lane *RuntimeLane) error {
+		if requests != nil {
+			lane.requests = requests
+		}
+		if admit != nil {
+			return admit()
+		}
+		return nil
+	})
+	return err
+}
+
+func (runtime *Runtime) NewLaneHello(grant protocolsession.LaneGrant) (protocolsession.LaneHello, error) {
+	return protocolsession.NewLaneHello(
+		runtime.share, runtime.sessionID, grant.LaneID, grant.LaneEpoch,
+		grant.OperationID, grant.AttachNonce[:], runtime.keys.ReceiverToSender(),
+	)
+}
+
+func (runtime *Runtime) NewLaneNonce() ([]byte, error) {
+	return ReadNonzeroLaneNonce(runtime.random, protocolsession.LaneSenderNonceBytes)
+}
+
+func (runtime *Runtime) TracingEnabled() bool { return runtime.protocolOperationTracingEnabled() }
+
+func (runtime *Runtime) ObservationContext(
+	id protocolsession.OperationID,
+	kind protocolsession.MessageKind,
+) sessionobs.ProtocolObservationContext {
+	return runtime.observationContext(id, kind)
+}
+
+func (runtime *Runtime) Observe(event sessionobs.ProtocolObservation) {
+	runtime.protocolObservations.TryPublish(event)
 }

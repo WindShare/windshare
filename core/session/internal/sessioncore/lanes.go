@@ -4,12 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/windshare/windshare/core/session"
-	sessionobs "github.com/windshare/windshare/core/session/observation"
-	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/session/requestlane"
 	"sync"
 	"time"
+
+	"github.com/windshare/windshare/core/framechannel"
+	"github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session/protocolsession"
+	"github.com/windshare/windshare/core/session/requestlane"
 )
 
 var (
@@ -18,13 +19,13 @@ var (
 )
 
 type RuntimeLane struct {
-	requests *requestlane.Lane
-	identity session.LaneIdentity
-	channel  protocolsession.FrameChannel
-	writer   *protocolsession.SessionWriter
-	pump     *protocolsession.ProtocolPump
-	sealer   *protocolsession.EnvelopeSealer
-	opener   *protocolsession.EnvelopeOpener
+	requests  *requestlane.Lane
+	identity  session.LaneIdentity
+	channel   protocolsession.FrameChannel
+	writer    *laneWriter
+	validator protocolsession.InboundMessageValidator
+	sealer    *protocolsession.EnvelopeSealer
+	opener    *protocolsession.EnvelopeOpener
 
 	ctx          context.Context
 	cancel       context.CancelFunc
@@ -39,13 +40,13 @@ type RuntimeLane struct {
 }
 
 // selectedLane is an immutable dependency snapshot captured while the lane registry is
-// locked. Natural detach may clear the mutable runtimeLane owner immediately
+// locked. Natural detach may clear the mutable RuntimeLane owner immediately
 // after selection; callers retain these concrete dependencies long enough to
 // observe a stopped writer or closed channel instead of racing a nil reference.
 type selectedLane struct {
 	identity session.LaneIdentity
 	channel  protocolsession.FrameChannel
-	writer   *protocolsession.SessionWriter
+	writer   *laneWriter
 	retired  <-chan struct{}
 	done     <-chan struct{}
 }
@@ -90,90 +91,10 @@ func (lane *RuntimeLane) releaseRuntimeReferences() {
 	}
 	lane.destroyCrypto()
 	lane.writer = nil
-	lane.pump = nil
+	lane.validator = nil
 	lane.channel = nil
 	lane.ctx = nil
 	lane.cancel = nil
-}
-
-type runtimeLanePolicy struct{ runtime *Runtime }
-
-func (policy runtimeLanePolicy) AdmitOutbound(
-	message protocolsession.Message,
-	permit protocolsession.OutboundOperationPermit,
-) (protocolsession.OutboundAdmission, error) {
-	return policy.runtime.router.AdmitOutbound(message, permit)
-}
-
-func (policy runtimeLanePolicy) AcceptOutboundReplay(
-	message protocolsession.Message,
-	permit protocolsession.OutboundReplayPermit,
-) (protocolsession.OutboundAdmission, error) {
-	return policy.runtime.router.AcceptOutboundReplay(message, permit)
-}
-
-func (policy runtimeLanePolicy) AcceptOutboundTerminal() error {
-	return policy.runtime.lanes.acceptTerminal()
-}
-
-func (policy runtimeLanePolicy) OutboundDirection() protocolsession.Direction {
-	return policy.runtime.router.OutboundDirection()
-}
-
-type laneInboundRouter struct {
-	runtime  *Runtime
-	identity session.LaneIdentity
-}
-
-func (router laneInboundRouter) RouteInbound(
-	ctx context.Context,
-	message protocolsession.Message,
-) (protocolsession.OperationDisposition, error) {
-	binding, err := router.prepareInboundRoute(ctx, message)
-	if err != nil {
-		return protocolsession.OperationDrop, err
-	}
-	if binding.replay {
-		// An exact request replay preserves the first physical authority and is
-		// never republished to its handler. A conflicting body was rejected above.
-		return protocolsession.OperationDrop, nil
-	}
-	disposition, err := router.runtime.router.RouteInbound(binding.ctx, message)
-	if binding.reserved != nil && (err != nil || disposition != protocolsession.OperationDeliver) {
-		router.runtime.routes.releaseRoute(binding.operationID, binding.reserved)
-	}
-	if binding.hasOperation && message.Kind() == protocolsession.MessageCancel && err == nil &&
-		disposition == protocolsession.OperationDeliver && binding.bound != nil {
-		router.runtime.routes.releaseRoute(binding.operationID, binding.bound)
-	}
-	if err == nil && disposition == protocolsession.OperationDeliver &&
-		router.runtime.role == protocolsession.RoleSender && receiverRequestKind(message.Kind()) &&
-		router.runtime.protocolOperationTracingEnabled() && message.Kind() != protocolsession.MessageRequestBlocks {
-		router.runtime.traceProtocolOperation(sessionobs.ProtocolOperationObservation{
-			Stage:       sessionobs.ProtocolOperationSenderRequestReceived,
-			OperationID: binding.operationID, RequestKind: message.Kind(),
-			Lane: router.identity, HasLane: true,
-			UsableLanesAtSelection: router.runtime.lanes.usableCount(),
-			Cause:                  sessionobs.ProtocolOperationCauseNone,
-		})
-	}
-	return disposition, err
-}
-
-func (router laneInboundRouter) RouteAuthenticatedOperationViolation(
-	ctx context.Context,
-	message protocolsession.Message,
-	violation protocolsession.AuthenticatedOperationViolation,
-) (bool, error) {
-	return router.runtime.router.RouteAuthenticatedOperationViolation(ctx, message, violation)
-}
-
-func (router laneInboundRouter) TerminateLocal() error {
-	return router.runtime.router.TerminateLocal()
-}
-
-func (router laneInboundRouter) InboundDirection() protocolsession.Direction {
-	return router.runtime.router.InboundDirection()
 }
 
 type runtimeLanes struct {
@@ -245,8 +166,6 @@ func (lanes *runtimeLanes) addWithAdmission(
 	}
 	if rejection != nil {
 		lanes.mu.Unlock()
-		// FrameChannel.Close is application code and may reenter lane inspection.
-		// Releasing the registry lock first keeps rejection callback-safe.
 		lane.closeChannel()
 		lane.releaseRuntimeReferences()
 		return nil, rejection
@@ -278,6 +197,9 @@ func (lanes *runtimeLanes) build(
 	channel protocolsession.FrameChannel,
 	validator protocolsession.InboundMessageValidator,
 ) (*RuntimeLane, error) {
+	if validator == nil {
+		return nil, protocolsession.ErrNilRuntimeDependency
+	}
 	outboundDirection, err := lanes.runtime.role.OutboundDirection()
 	if err != nil {
 		return nil, err
@@ -300,23 +222,14 @@ func (lanes *runtimeLanes) build(
 		sealer.Destroy()
 		return nil, err
 	}
-	writer, err := protocolsession.NewSessionWriter(channel, sealer, runtimeLanePolicy{runtime: lanes.runtime})
-	if err != nil {
-		sealer.Destroy()
-		opener.Destroy()
-		return nil, err
-	}
-	pump, err := protocolsession.NewProtocolPump(
-		channel, opener, validator,
-		laneInboundRouter{runtime: lanes.runtime, identity: identity},
-	)
+	writer, err := newLaneWriter(channel, sealer)
 	if err != nil {
 		sealer.Destroy()
 		opener.Destroy()
 		return nil, err
 	}
 	return &RuntimeLane{
-		identity: identity, channel: channel, writer: writer, pump: pump,
+		identity: identity, channel: channel, writer: writer, validator: validator,
 		sealer: sealer, opener: opener, retired: make(chan struct{}), done: make(chan struct{}),
 	}, nil
 }
@@ -353,12 +266,10 @@ func (lanes *runtimeLanes) run(lane *RuntimeLane) {
 	defer lanes.wait.Done()
 	results := make(chan laneRunResult, 2)
 	go func() { results <- laneRunResult{component: "writer", err: lane.writer.Run(lane.ctx)} }()
-	go func() { results <- laneRunResult{component: "pump", err: lane.pump.Run(lane.ctx)} }()
+	go func() { results <- laneRunResult{component: "pump", err: lanes.runPump(lane.ctx, lane)} }()
 	first := <-results
 	lanes.markClosing(lane)
 	lane.cancel()
-	// Physical shutdown may wait on provider callbacks. It must unblock I/O,
-	// but cannot hold a quiescent epoch's admission slot during that drain.
 	channel := lane.channel
 	drained := make(chan struct{})
 	go func() {
@@ -371,11 +282,75 @@ func (lanes *runtimeLanes) run(lane *RuntimeLane) {
 	lanes.completeLane(lane)
 }
 
+func (lanes *runtimeLanes) runPump(ctx context.Context, lane *RuntimeLane) error {
+	receive := lane.channel.Recv()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case frame, ok := <-receive:
+			if !ok {
+				return nil
+			}
+			if err := lanes.acceptFrame(lane, frame); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+func (lanes *runtimeLanes) acceptFrame(lane *RuntimeLane, frame framechannel.Frame) error {
+	opened, err := lane.opener.Open(frame)
+	if err != nil {
+		return lanes.rejectInboundLocally(fmt.Errorf("%w: %w", protocolsession.ErrEnvelopeRejected, err))
+	}
+	message, err := protocolsession.DecodeMessage(opened.Plaintext)
+	if err != nil {
+		return lanes.rejectInboundLocally(fmt.Errorf("%w: %w", protocolsession.ErrInboundRejected, err))
+	}
+	validation, err := lane.validator.ValidateInbound(message)
+	if err != nil {
+		return lanes.rejectInboundLocally(fmt.Errorf("%w: %w", protocolsession.ErrInboundSemantic, err))
+	}
+	if validation.HasOperationViolation() {
+		violation := validation.OperationViolation()
+		bound, routeErr := lanes.runtime.inbound.RouteAuthenticatedOperationViolation(message, violation)
+		cause := fmt.Errorf(
+			"%w: code=%d bound=%t",
+			protocolsession.ErrAuthenticatedOperationViolation,
+			violation.Code(),
+			bound,
+		)
+		if routeErr != nil {
+			cause = fmt.Errorf("%w: route violation: %w", cause, routeErr)
+		}
+		if violation.Code() == protocolsession.AuthenticatedOperationViolationMalformedPeerControl &&
+			bound && routeErr == nil {
+			return nil
+		}
+		return lanes.rejectInboundLocally(cause)
+	}
+	disposition, err := lanes.runtime.inbound.RouteInbound(lane.identity, message)
+	if err != nil {
+		return lanes.rejectInboundLocally(fmt.Errorf("%w: %w", protocolsession.ErrInboundRejected, err))
+	}
+	if disposition == protocolsession.OperationSessionTerminal {
+		return protocolsession.NewPeerSessionTerminalError(message)
+	}
+	return nil
+}
+
+func (lanes *runtimeLanes) rejectInboundLocally(cause error) error {
+	if err := lanes.runtime.operations.TerminateLocal(); err != nil &&
+		!errors.Is(err, protocolsession.ErrSessionTerminated) {
+		return errors.Join(cause, fmt.Errorf("terminate rejected protocol session: %w", err))
+	}
+	return cause
+}
+
 func (lanes *runtimeLanes) retireRun(lane *RuntimeLane, results ...laneRunResult) {
 	cause := fatalLaneError(results...)
 	if cause != nil && lanes.runtime.ctx.Err() == nil {
-		// The pump owns authenticated peer-terminal and local protocol failures.
-		// Claim that cause before completeLane can publish last-path retirement.
 		trigger := TerminationFailed
 		if errors.Is(cause, protocolsession.ErrPeerSessionTerminal) {
 			trigger = TerminationPeerTerminal
@@ -390,9 +365,6 @@ func fatalLaneError(results ...laneRunResult) error {
 		if result.component != "pump" || result.err == nil || errors.Is(result.err, context.Canceled) {
 			continue
 		}
-		// ProtocolPump returns nil for an ordinary channel close. Every non-nil
-		// result therefore means the shared operation authority can no longer
-		// trust this session, including future error classes added by the pump.
 		return fmt.Errorf("%s failed: %w", result.component, result.err)
 	}
 	return nil
@@ -407,9 +379,6 @@ func (lanes *runtimeLanes) finishLane(lane *RuntimeLane) {
 	lastUsable := !lanes.stopping && !lanes.hasUsableLocked()
 	var claim TerminationClaim
 	if lastUsable {
-		// The registry lock makes the no-path decision atomic with lane removal.
-		// Claiming here prevents a later stop or cleanup consequence from replacing
-		// the actual session root while callbacks publish detach.
 		claim = lanes.runtime.claimTermination(TerminationPathsExhausted)
 	}
 	lanes.mu.Unlock()
@@ -417,9 +386,6 @@ func (lanes *runtimeLanes) finishLane(lane *RuntimeLane) {
 		hook(lane.identity)
 	}
 	if lastUsable {
-		// Losing every physical path ends this cryptographic session. A later
-		// connection must run a fresh transcript and cannot revive old sequence,
-		// operation, grant, or lease authority.
 		lanes.runtime.cancelContext()
 		claim.Publish()
 	}
@@ -427,12 +393,8 @@ func (lanes *runtimeLanes) finishLane(lane *RuntimeLane) {
 
 func (lanes *runtimeLanes) retireLane(lane *RuntimeLane) {
 	lane.retireOnce.Do(func() {
-		// No old-epoch consumer survives retirement. Physical cleanup remains
-		// owned by lane.done and the runtime wait group after membership ends.
 		lane.destroyCrypto()
 		lanes.finishLane(lane)
-		// Recovery needs the completed logical transition, including its terminal
-		// cause, but must not wait for provider callbacks or physical cleanup.
 		close(lane.retired)
 	})
 }
@@ -489,12 +451,6 @@ func (lanes *runtimeLanes) usableCount() uint32 {
 	return count
 }
 
-func (lanes *runtimeLanes) setDetachHook(hook func(session.LaneIdentity)) {
-	lanes.mu.Lock()
-	lanes.onDetach = hook
-	lanes.mu.Unlock()
-}
-
 func (lanes *runtimeLanes) selectLane(preferred *session.LaneIdentity) (selectedLane, error) {
 	if preferred != nil {
 		lanes.mu.Lock()
@@ -542,6 +498,44 @@ func (lanes *runtimeLanes) selectLaneLocked(
 	return selectedLane{}, ErrLaneUnavailable
 }
 
+// selectRequestLane picks the lowest-latency lane for managed receiver requests
+// under the registry lock so concurrent callers observe each other's pending work.
+func (lanes *runtimeLanes) selectRequestLane(
+	preferred *session.LaneIdentity,
+	kind protocolsession.MessageKind,
+) (selectedLane, *requestlane.Reservation, requestlane.Estimate, error) {
+	if preferred != nil || !requestlane.Managed(kind) {
+		selected, err := lanes.selectLane(preferred)
+		return selected, nil, requestlane.Estimate{}, err
+	}
+	lanes.mu.Lock()
+	defer lanes.mu.Unlock()
+	if lanes.stopping || lanes.runtime.ctx.Err() != nil {
+		return selectedLane{}, nil, requestlane.Estimate{}, session.ErrRuntimeClosed
+	}
+	now := lanes.runtime.now()
+	var best *RuntimeLane
+	var estimate requestlane.Estimate
+	for _, id := range lanes.logicalOrder {
+		lane := lanes.active[id]
+		if !lane.usableLocked() {
+			continue
+		}
+		var queued time.Duration
+		if lanes.queuedContent != nil {
+			queued = lanes.queuedContent(lane.identity)
+		}
+		candidate := lane.requests.Estimate(kind, now, queued)
+		if best == nil || candidate.Expected < estimate.Expected {
+			best, estimate = lane, candidate
+		}
+	}
+	if best == nil {
+		return selectedLane{}, nil, requestlane.Estimate{}, ErrLaneUnavailable
+	}
+	return best.selected(), best.requests.Reserve(kind, now), estimate, nil
+}
+
 func (lane *RuntimeLane) selected() selectedLane {
 	return selectedLane{
 		identity: lane.identity,
@@ -579,8 +573,6 @@ func (lanes *runtimeLanes) detach(identity session.LaneIdentity) bool {
 	if lane.started {
 		<-lane.done
 	} else {
-		// No lane runner exists to publish the shared detach transition. Once the
-		// registry removes this owner, detach must synchronously complete it.
 		lanes.completeLane(lane)
 	}
 	return true
@@ -598,7 +590,10 @@ func (lanes *runtimeLanes) acceptTerminal() error {
 	if lanes.terminalAdmitted {
 		return nil
 	}
-	if err := lanes.runtime.router.AcceptOutboundTerminal(); err != nil {
+	if lanes.runtime.role != protocolsession.RoleSender {
+		return protocolsession.ErrInvalidDirection
+	}
+	if err := lanes.runtime.operations.TerminateLocal(); err != nil {
 		return err
 	}
 	lanes.terminalAdmitted = true
@@ -629,8 +624,6 @@ func (lanes *runtimeLanes) shutdown() {
 	active := make([]ownedLane, 0, len(lanes.active))
 	for _, lane := range lanes.active {
 		lane.closing = true
-		// Snapshot references while the registry lock excludes finishLane. Closing
-		// them happens after unlock because FrameChannel.Close may reenter runtime.
 		active = append(active, ownedLane{lane: lane, cancel: lane.cancel, channel: lane.channel})
 	}
 	lanes.active = make(map[uint32]*RuntimeLane)

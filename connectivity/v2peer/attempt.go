@@ -49,12 +49,11 @@ func (rejection *peerOperationRejection) Error() string { return rejection.messa
 func (rejection *peerOperationRejection) Unwrap() error { return rejection.cause }
 
 type peerAttemptConfig struct {
-	factory    *Factory
-	session    sendersession.PeerSession
-	operation  protocolsession.OperationID
-	generation protocolsession.OperationGeneration
-	offer      v2signal.Offer
-	onDone     func(*peerAttempt, error)
+	factory   *Factory
+	session   sendersession.PeerSession
+	operation protocolsession.Operation
+	offer     v2signal.Offer
+	onDone    func(*peerAttempt, error)
 }
 
 type attemptEventKind uint8
@@ -107,7 +106,7 @@ func newPeerAttempt(config peerAttemptConfig) *peerAttempt {
 	return &peerAttempt{
 		config: config,
 		recorder: newSenderAttemptRecorder(
-			config.factory, config.session.ProtocolSessionID(), config.offer.Binding, config.operation,
+			config.factory, config.session.ProtocolSessionID(), config.offer.Binding, config.operation.ID(),
 		),
 		events: make(chan attemptEvent, config.factory.maxCandidates*2+attemptEventReserve),
 		done:   make(chan struct{}), admissionDone: make(chan struct{}),
@@ -121,8 +120,8 @@ func newPeerAttempt(config peerAttemptConfig) *peerAttempt {
 
 func (attempt *peerAttempt) binding() v2signal.Binding { return attempt.config.offer.Binding }
 
-func (attempt *peerAttempt) operation() peerOperation {
-	return peerOperation{id: attempt.config.operation, generation: attempt.config.generation}
+func (attempt *peerAttempt) operationRef() protocolsession.OperationRef {
+	return attempt.config.operation.Ref()
 }
 
 func (attempt *peerAttempt) start(parent context.Context, work *sync.WaitGroup) {
@@ -290,7 +289,7 @@ func newAttemptExecution(
 ) *attemptExecution {
 	execution := &attemptExecution{attempt: attempt, ctx: ctx, peer: peer, signaling: true}
 	execution.candidateWriter = candidatewriter.New(ctx, attempt.config.factory.maxCandidates, func(ctx context.Context, body []byte) (bool, error) {
-		disposition, err := attempt.config.session.SendPeerControl(ctx, protocolsession.MessagePeerCandidate, attempt.config.operation, body)
+		disposition, err := attempt.config.session.SendPeerControl(ctx, attempt.config.operation, protocolsession.MessagePeerCandidate, body)
 		if err == nil && disposition == protocolsession.OperationDrop {
 			err = errCandidateDropped
 		}
@@ -356,8 +355,8 @@ func (execution *attemptExecution) negotiate() error {
 	}
 	disposition, err := execution.attempt.config.session.SendPeerControl(
 		execution.phaseContext,
-		protocolsession.MessagePeerAnswer,
 		execution.attempt.config.operation,
+		protocolsession.MessagePeerAnswer,
 		answerBody,
 	)
 	if err != nil {

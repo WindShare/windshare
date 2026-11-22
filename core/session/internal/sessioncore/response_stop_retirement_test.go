@@ -1,10 +1,9 @@
 package sessioncore
 
 import (
+	"context"
 	"errors"
 	"github.com/windshare/windshare/core/session/contentflow"
-
-	sessionobs "github.com/windshare/windshare/core/session/observation"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"testing"
 	"testing/synctest"
@@ -24,12 +23,12 @@ func TestSenderStopDuringResponseRetirement(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				sender, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
-				sender.start()
-				t.Cleanup(sender.close)
+				sender.Start()
+				t.Cleanup(sender.Close)
 				outbound := NewResponses(sender, ResponseConfig{})
 				// Keep the operation owner alive through stop so finalization cannot
-				// clear its route before the delayed response retires it.
-				_, release, err := sender.beginExternalAdmission(t.Context())
+				// finish before the delayed response settles.
+				_, release, err := sender.BeginExternalAdmission(t.Context())
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -39,9 +38,12 @@ func TestSenderStopDuringResponseRetirement(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				ctx, _ := testOutboundOperationContext(t, sender, sender.initial, request)
+				admission, err := sender.operations.ObserveInbound(protocolsession.DirectionReceiverToSender, sender.initial, request)
+				if err != nil || admission.op.IsZero() {
+					t.Fatalf("admit request: %v", err)
+				}
 				stop := func() {
-					_ = sender.router.TerminateLocal()
+					_ = sender.operations.TerminateLocal()
 					sender.terminate(TerminationGracefulStop)
 					<-sender.Lifetime().Done()
 					if !sender.operations.Terminated() {
@@ -51,39 +53,30 @@ func TestSenderStopDuringResponseRetirement(t *testing.T) {
 						sender.terminateRuntimeFailed(test.failure)
 					}
 				}
-				var result protocolsession.ResponseSendResult
+				stop()
 				if test.lateFinal {
-					stop()
 					body, encodeErr := protocolsession.EncodeOperationFailure(contentflow.OperationFailure{
 						Scope: contentflow.BlockErrorScope, Code: contentflow.BlockCodeTimeout, Message: "Block stopped",
 					})
 					if encodeErr != nil {
 						t.Fatal(encodeErr)
 					}
-					result, err = outbound.SendControl(ctx, protocolsession.MessageOperationError, id, body)
+					err = outbound.SendControl(context.Background(), admission.op, protocolsession.MessageOperationError, body)
 				} else {
 					fragments, fragmentErr := contentflow.FragmentRecord(id, []byte("record"))
 					if fragmentErr != nil {
 						t.Fatal(fragmentErr)
 					}
-					result, err = outbound.executeResponse(ctx, fragments[0].Kind(), id, sessionobs.ProtocolErrorContent{}, func(transaction *outboundTransaction) (outboundLaneAttempt, error) {
-						// Place stop after transaction admission and before its send
-						// returns, without relying on transport timing or a sleep.
-						stop()
-						return func(lane selectedLane, _ protocolsession.OutboundReplayPermit) (protocolsession.SendReceipt, error) {
-							return lane.writer.TryAuthorizedData(fragments[0], transaction.authority)
-						}, nil
-					})
+					err = outbound.SendFragment(context.Background(), admission.op, fragments[0])
 				}
-				if err == nil || result.Evidence() != protocolsession.ResponseSendEvidenceDefinitelyNotSent ||
-					result.Cleanup() != protocolsession.SendCleanupOperationRetired {
-					t.Fatalf("stopped response result=%+v error=%v", result, err)
+				if err == nil || (!protocolsession.IsNotSent(err) && !errors.Is(err, protocolsession.ErrOperationSuppressed)) {
+					t.Fatalf("stopped response error=%v", err)
 				}
-				if sender.routes.len() != 0 || sender.operations.ActiveCount() != 0 || sender.operations.TombstoneCount() != 0 {
+				if sender.operations.ActiveCount() != 0 || sender.operations.TombstoneCount() != 0 {
 					t.Fatal("response cleanup retained operation resources")
 				}
 				release()
-				sender.waitClosed()
+				sender.WaitClosed()
 				if err := sender.Err(); !errors.Is(err, test.failure) {
 					t.Fatalf("stop error=%v, want %v", err, test.failure)
 				}

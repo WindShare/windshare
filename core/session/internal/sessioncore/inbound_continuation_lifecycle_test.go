@@ -20,48 +20,45 @@ func TestInboundRetiredPeerCandidateUsesOperationAuthorityWithoutResponseRoute(t
 			runtime, _ := newUnstartedRuntimeWithContinuations(
 				t, protocolsession.RoleSender, protocolsession.OperationLimits{}, nil, continuationReplayClassifier{},
 			)
-			inbound := laneInboundRouter{runtime: runtime, identity: runtime.initial}
 			id := id16[protocolsession.OperationID](171)
 			request := operationMessageForTest(t, protocolsession.MessagePeerOffer, id, []byte{0xf6})
-			if disposition, err := inbound.RouteInbound(context.Background(), request); err != nil || disposition != protocolsession.OperationDeliver {
+			if disposition, err := runtime.inbound.RouteInbound(runtime.initial, request); err != nil || disposition != protocolsession.OperationDeliver {
 				t.Fatalf("offer admission = %d, %v", disposition, err)
 			}
-			if _, err := runtime.router.Next(context.Background()); err != nil {
+			if _, err := runtime.inbound.Next(context.Background()); err != nil {
 				t.Fatal(err)
 			}
-			route := runtime.routes.current(id)
 			direction := protocolsession.DirectionSenderToReceiver
 			if terminal == protocolsession.MessageCancel {
 				direction = protocolsession.DirectionReceiverToSender
 			}
 			body := []byte{0xf6}
 			final := operationMessageForTest(t, terminal, id, body)
-			if disposition, err := runtime.operations.Observe(direction, final); err != nil || disposition != protocolsession.OperationDeliver {
-				t.Fatalf("operation retirement = %d, %v", disposition, err)
+			if admission, err := runtime.operations.ObserveInbound(direction, runtime.initial, final); err != nil || admission.disposition != protocolsession.OperationDeliver {
+				t.Fatalf("operation retirement = %d, %v", admission.disposition, err)
 			}
-			runtime.routes.releaseRoute(id, route)
 
 			// A candidate admitted by the remote writer before the final can arrive
-			// after the response route is gone, including on another physical lane.
+			// after the operation is retired, including on another physical lane.
 			for _, lane := range []session.LaneIdentity{runtime.initial, {ID: runtime.initial.ID + 1, Epoch: 1}} {
 				candidate := operationMessageForTest(t, protocolsession.MessagePeerCandidate, id, []byte{0xf6})
-				disposition, err := (laneInboundRouter{runtime: runtime, identity: lane}).RouteInbound(context.Background(), candidate)
+				disposition, err := runtime.inbound.RouteInbound(lane, candidate)
 				if err != nil || disposition != protocolsession.OperationDrop {
 					t.Fatalf("late candidate on %v = %d, %v", lane, disposition, err)
 				}
 			}
-			if runtime.routes.len() != 0 || runtime.operations.ActiveCount() != 0 || runtime.operations.TombstoneCount() != 1 {
-				t.Fatal("late traffic revived a response route or operation")
+			if runtime.operations.ActiveCount() != 0 || runtime.operations.TombstoneCount() != 1 {
+				t.Fatal("late traffic revived a retired operation")
 			}
 
 			// Removing a physical-route check must not bypass the retained
 			// continuation contract's semantic validation.
 			malformed := operationMessageForTest(t, protocolsession.MessagePeerCandidate, id, []byte{0xa0})
-			if _, err := inbound.RouteInbound(context.Background(), malformed); !errors.Is(err, protocolsession.ErrInvalidMessage) {
+			if _, err := runtime.inbound.RouteInbound(runtime.initial, malformed); !errors.Is(err, protocolsession.ErrInvalidMessage) {
 				t.Fatalf("invalid late candidate = %v", err)
 			}
 			unknown := operationMessageForTest(t, protocolsession.MessagePeerCandidate, id16[protocolsession.OperationID](172), []byte{0xf6})
-			if _, err := inbound.RouteInbound(context.Background(), unknown); !errors.Is(err, protocolsession.ErrUnknownOperation) {
+			if _, err := runtime.inbound.RouteInbound(runtime.initial, unknown); !errors.Is(err, protocolsession.ErrUnknownOperation) {
 				t.Fatalf("unknown operation candidate = %v", err)
 			}
 		})

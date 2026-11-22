@@ -1,6 +1,9 @@
 package v2peer
 
-import "github.com/windshare/windshare/connectivity/v2signal"
+import (
+	"github.com/windshare/windshare/connectivity/v2signal"
+	"github.com/windshare/windshare/core/session/protocolsession"
+)
 
 type evidenceClaim struct{ acquired, capacity bool }
 
@@ -10,14 +13,18 @@ const minimumPeerPaths = 1
 // exceeds membership cannot poison already admitted paths or the file session.
 type senderEvidenceAuthority struct {
 	maximumPaths int
-	claims       map[v2signal.Binding]peerOperation
+	claims       map[v2signal.Binding]protocolsession.OperationRef
 	latest       map[v2signal.PeerPathID]v2signal.Binding
 }
 
 func newSenderEvidenceAuthority(maximumPaths int) senderEvidenceAuthority {
-	return senderEvidenceAuthority{maximumPaths: maximumPaths, claims: make(map[v2signal.Binding]peerOperation), latest: make(map[v2signal.PeerPathID]v2signal.Binding)}
+	return senderEvidenceAuthority{
+		maximumPaths: maximumPaths,
+		claims:       make(map[v2signal.Binding]protocolsession.OperationRef),
+		latest:       make(map[v2signal.PeerPathID]v2signal.Binding),
+	}
 }
-func (a *senderEvidenceAuthority) claim(operation peerOperation, binding v2signal.Binding) evidenceClaim {
+func (a *senderEvidenceAuthority) claim(operation protocolsession.OperationRef, binding v2signal.Binding) evidenceClaim {
 	if a == nil || binding.Validate() != nil {
 		return evidenceClaim{}
 	}

@@ -99,15 +99,15 @@ func (session *closingAdmissionTestSession) AdmitPeerChannel(
 
 func (session *candidateDropTestSession) SendPeerControl(
 	ctx context.Context,
+	op protocolsession.Operation,
 	kind protocolsession.MessageKind,
-	operation protocolsession.OperationID,
 	body []byte,
 ) (protocolsession.OperationDisposition, error) {
 	if kind == protocolsession.MessagePeerCandidate {
 		session.candidateCalls <- struct{}{}
 		return protocolsession.OperationDrop, nil
 	}
-	return session.testPeerSession.SendPeerControl(ctx, kind, operation, body)
+	return session.testPeerSession.SendPeerControl(ctx, op, kind, body)
 }
 
 func (collector *senderObservationCollector) bind(source <-chan SenderAttemptObservation) {
@@ -176,7 +176,8 @@ func testSenderAttemptObservationEmitsExactSuccessfulLifecycle(t *testing.T) {
 	})
 	session := newTestPeerSession(51)
 	handler, ctx, cancel, runDone := startSenderTestRuntime(t, factory, session)
-	operation, binding, operationContext := sendSenderTestOffer(t, handler, ctx, 52)
+	op, binding := sendSenderTestOffer(t, handler, ctx, 52)
+	operation := op.ID()
 
 	receiveTest(t, peer.remote)
 	receiveTest(t, session.controls)
@@ -186,7 +187,7 @@ func testSenderAttemptObservationEmitsExactSuccessfulLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := handler.HandleMessage(
-		operationContext,
+		ctx, op,
 		testMessage(t, protocolsession.MessagePeerCandidate, operation, remoteBody),
 	); err != nil {
 		t.Fatalf("remote candidate: %v", err)
@@ -285,7 +286,7 @@ func testSenderAttemptObservationEmitsExactSuccessfulLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	receiveTest(t, peer.closed)
-	operationKey := testPeerOperationFromContext(t, operationContext, operation)
+	operationKey := op.Ref()
 	assertPeerState(t, func() bool {
 		handler.mu.Lock()
 		defer handler.mu.Unlock()
@@ -304,7 +305,7 @@ func testSenderAttemptObservationEmitsExactSuccessfulLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	replayMessage := testMessage(t, protocolsession.MessagePeerOffer, replayOperation, replayBody)
-	if err := handler.HandleMessage(testPeerMessageContext(t, ctx, replayMessage), replayMessage); err != nil {
+	if err := handler.HandleMessage(ctx, testPeerOperation(replayOperation), replayMessage); err != nil {
 		t.Fatalf("replay offer: %v", err)
 	}
 	replayFailure := receiveTest(t, session.failures)
@@ -336,7 +337,7 @@ func testSenderAttemptObservationImmediateCloseHasOneSafeTerminal(t *testing.T) 
 	baseSession := newTestPeerSession(66)
 	session := &closingAdmissionTestSession{testPeerSession: baseSession}
 	handler, ctx, cancel, runDone := startSenderTestRuntime(t, factory, session)
-	_, binding, _ := sendSenderTestOffer(t, handler, ctx, 67)
+	_, binding := sendSenderTestOffer(t, handler, ctx, 67)
 	receiveTest(t, peer.remote)
 	receiveTest(t, baseSession.controls)
 	peer.emitDataChannel(&pion.DataChannel{})
@@ -386,7 +387,8 @@ func TestSenderAttemptObservationRedactsNegotiationFailureText(t *testing.T) {
 	observations := factory.SenderAttemptObservations()
 	session := newTestPeerSession(71)
 	handler, ctx, cancel, runDone := startSenderTestRuntime(t, factory, session)
-	operation, binding, _ := sendSenderTestOffer(t, handler, ctx, 72)
+	op, binding := sendSenderTestOffer(t, handler, ctx, 72)
+	operation := op.ID()
 	started := receiveTest(t, observations)
 	deadlineArmed := receiveTest(t, observations)
 	offerReceived := receiveTest(t, observations)
@@ -440,7 +442,8 @@ func testSenderAttemptObservationPreservesTypedAdmissionFailure(t *testing.T) {
 	session := newTestPeerSession(76)
 	session.admitErr = errors.New("synthetic admission failure")
 	handler, ctx, cancel, runDone := startSenderTestRuntime(t, factory, session)
-	operation, binding, _ := sendSenderTestOffer(t, handler, ctx, 77)
+	op, binding := sendSenderTestOffer(t, handler, ctx, 77)
+	operation := op.ID()
 	receiveTest(t, peer.remote)
 	receiveTest(t, session.controls)
 	peer.emitDataChannel(&pion.DataChannel{})
@@ -495,7 +498,7 @@ func TestSenderAttemptObservationClassifiesCancellationAndRuntimeStop(t *testing
 				})
 				session := newTestPeerSession(81)
 				handler, ctx, cancel, runDone := startSenderTestRuntime(t, factory, session)
-				operation, binding, operationContext := sendSenderTestOffer(t, handler, ctx, 82)
+				op, binding := sendSenderTestOffer(t, handler, ctx, 82)
 				receiveTest(t, peer.remote)
 				receiveTest(t, session.controls)
 				if test.cancelRun {
@@ -504,7 +507,7 @@ func TestSenderAttemptObservationClassifiesCancellationAndRuntimeStop(t *testing
 						t.Fatalf("runtime stop = %v", err)
 					}
 				} else {
-					if err := handler.Cancel(operationContext, operation); err != nil {
+					if err := handler.Cancel(ctx, op); err != nil {
 						t.Fatalf("cancel operation: %v", err)
 					}
 					stopSenderTestRuntime(t, cancel, runDone)
@@ -547,10 +550,10 @@ func testSenderAttemptObservationRejectsCapacityWithCompleteAttemptStream(t *tes
 	})
 	session := newTestPeerSession(91)
 	handler, ctx, cancel, runDone := startSenderTestRuntime(t, factory, session)
-	firstOperation, _, firstContext := sendSenderTestOffer(t, handler, ctx, 92)
+	firstOp, _ := sendSenderTestOffer(t, handler, ctx, 92)
 	receiveTest(t, peer.remote)
 	receiveTest(t, session.controls)
-	rejectedOperation, rejectedBinding, rejectedContext := sendSenderTestOffer(t, handler, ctx, 94)
+	rejectedOp, rejectedBinding := sendSenderTestOffer(t, handler, ctx, 94)
 	receiveTest(t, session.failures)
 	assertPeerState(t, func() bool { return len(collector.forAttempt(rejectedBinding.AttemptID)) == 2 })
 	rejected := collector.forAttempt(rejectedBinding.AttemptID)
@@ -569,8 +572,8 @@ func testSenderAttemptObservationRejectsCapacityWithCompleteAttemptStream(t *tes
 	// the rejected identity, and that claim survives the retention window.
 	clock.Advance(2 * time.Minute)
 	if err := handler.HandleMessage(
-		rejectedContext,
-		testMessage(t, protocolsession.MessagePeerOffer, rejectedOperation, repeatedBody),
+		ctx, rejectedOp,
+		testMessage(t, protocolsession.MessagePeerOffer, rejectedOp.ID(), repeatedBody),
 	); err != nil {
 		t.Fatalf("repeat rejected offer: %v", err)
 	}
@@ -578,7 +581,7 @@ func testSenderAttemptObservationRejectsCapacityWithCompleteAttemptStream(t *tes
 	if repeated := collector.forAttempt(rejectedBinding.AttemptID); len(repeated) != 2 {
 		t.Fatalf("repeated rejection restarted evidence stream: %#v", repeated)
 	}
-	if err := handler.Cancel(firstContext, firstOperation); err != nil {
+	if err := handler.Cancel(ctx, firstOp); err != nil {
 		t.Fatalf("cancel first operation: %v", err)
 	}
 	stopSenderTestRuntime(t, cancel, runDone)
@@ -589,7 +592,7 @@ func TestSenderLocalCandidatePruningPreservesAttempt(t *testing.T) {
 	factory := mustTestFactory(t, Config{MaxCandidates: 1, PeerConnections: PeerConnectionFactoryFunc(func(pion.Configuration) (PeerConnection, error) { return peer, nil })})
 	session := newTestPeerSession(101)
 	handler, ctx, cancel, done := startSenderTestRuntime(t, factory, session)
-	_, _, _ = sendSenderTestOffer(t, handler, ctx, 102)
+	_, _ = sendSenderTestOffer(t, handler, ctx, 102)
 	receiveTest(t, peer.remote)
 	receiveTest(t, session.controls)
 	candidate := &pion.ICECandidate{Foundation: "1", Priority: 1, Address: "10.0.0.8", Port: 43000, Protocol: pion.ICEProtocolUDP, Typ: pion.ICECandidateTypeHost, Component: 1}
@@ -629,7 +632,7 @@ func testSenderAttemptObservationTreatsRetiredCandidateAsAttemptCancellation(t *
 		candidateCalls:  make(chan struct{}, 1),
 	}
 	handler, ctx, cancel, runDone := startSenderTestRuntime(t, factory, session)
-	_, binding, _ := sendSenderTestOffer(t, handler, ctx, 112)
+	_, binding := sendSenderTestOffer(t, handler, ctx, 112)
 	receiveTest(t, peer.remote)
 	receiveTest(t, baseSession.controls)
 	peer.emitCandidate(&pion.ICECandidate{
@@ -779,7 +782,7 @@ func sendSenderTestOffer(
 	handler *senderHandler,
 	ctx context.Context,
 	seed byte,
-) (protocolsession.OperationID, v2signal.Binding, context.Context) {
+) (protocolsession.Operation, v2signal.Binding) {
 	t.Helper()
 	operation := testOperationID(seed)
 	binding := testBinding(seed + 1)
@@ -788,11 +791,11 @@ func sendSenderTestOffer(
 		t.Fatal(err)
 	}
 	message := testMessage(t, protocolsession.MessagePeerOffer, operation, body)
-	operationContext := testPeerMessageContext(t, ctx, message)
-	if err := handler.HandleMessage(operationContext, message); err != nil {
+	op := testPeerOperation(operation)
+	if err := handler.HandleMessage(ctx, op, message); err != nil {
 		t.Fatalf("send offer: %v", err)
 	}
-	return operation, binding, operationContext
+	return op, binding
 }
 
 func stopSenderTestRuntime(t *testing.T, cancel context.CancelFunc, runDone <-chan error) {

@@ -150,3 +150,12 @@ func operationFailureRetryValue(failure OperationFailure) any {
 	}
 	return uint64(failure.RetryAfter / time.Millisecond)
 }
+
+func testPeerAttemptBinding() *PeerAttemptBinding {
+	return &PeerAttemptBinding{
+		PeerSlot:        1,
+		PeerPathID:      [16]byte{1, 2, 3, 4},
+		AttemptID:       [16]byte{5, 6, 7, 8},
+		AttemptSequence: 1,
+	}
+}

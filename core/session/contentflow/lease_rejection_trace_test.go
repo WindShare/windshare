@@ -53,7 +53,7 @@ func TestBlockLeaseRejectionKeepsOwnershipDecisionAndWireBehavior(t *testing.T) 
 				t.Fatal(err)
 			}
 			operation := protocolsession.OperationID{81}
-			handler.process(context.Background(), operationMessage(t, protocolsession.MessageRequestBlocks, operation, body))
+			handler.process(context.Background(), testActiveOperation(operation), operationMessage(t, protocolsession.MessageRequestBlocks, operation, body))
 			if len(decisions) != 0 || len(outbound.controls) != 1 {
 				t.Fatal("successful blocks must stay off the rejection trace")
 			}
@@ -63,8 +63,9 @@ func TestBlockLeaseRejectionKeepsOwnershipDecisionAndWireBehavior(t *testing.T) 
 				if encodeErr != nil {
 					t.Fatal(encodeErr)
 				}
-				handler.process(context.Background(), operationMessage(t, protocolsession.MessageReleaseLease,
-					protocolsession.OperationID{82}, releaseBody))
+				id82 := protocolsession.OperationID{82}
+				handler.process(context.Background(), testActiveOperation(id82), operationMessage(t, protocolsession.MessageReleaseLease,
+					id82, releaseBody))
 				if len(decisions) != 1 || decisions[0].Stage != SenderDecisionLeaseRelinquished ||
 					decisions[0].LeaseID != leaseID {
 					t.Fatal("release lost its lease join key")
@@ -85,7 +86,7 @@ func TestBlockLeaseRejectionKeepsOwnershipDecisionAndWireBehavior(t *testing.T) 
 				t.Fatal(err)
 			}
 			operation = protocolsession.OperationID{83}
-			handler.process(context.Background(), operationMessage(t, protocolsession.MessageRequestBlocks, operation, body))
+			handler.process(context.Background(), testActiveOperation(operation), operationMessage(t, protocolsession.MessageRequestBlocks, operation, body))
 			select {
 			case failure := <-outbound.failures:
 				if failure.Code != scenario.code || failure.Scope != RevisionErrorScope {

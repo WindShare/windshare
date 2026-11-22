@@ -69,7 +69,7 @@ func (operation *receiverIntegrationOperation) OperationID() protocolsession.Ope
 }
 
 func (operation *receiverIntegrationOperation) MaximumContinuations() (int, bool) {
-	return operation.ingress.MaximumContinuations(operation.id)
+	return operation.ingress.MaximumContinuationsForID(operation.id)
 }
 
 func (operation *receiverIntegrationOperation) SendCandidate(
@@ -236,11 +236,11 @@ func (peer *receiverIntegrationSenderSession) receiverOperation(
 
 func (peer *receiverIntegrationSenderSession) SendPeerControl(
 	ctx context.Context,
+	op protocolsession.Operation,
 	kind protocolsession.MessageKind,
-	operation protocolsession.OperationID,
 	body []byte,
 ) (protocolsession.OperationDisposition, error) {
-	target := peer.receiverOperation(operation)
+	target := peer.receiverOperation(op.ID())
 	if target == nil {
 		return protocolsession.OperationDrop, errors.New("sender changed the receiver peer operation identity")
 	}
@@ -256,11 +256,11 @@ func (peer *receiverIntegrationSenderSession) SendPeerControl(
 
 func (peer *receiverIntegrationSenderSession) FailPeerOperation(
 	ctx context.Context,
-	operation protocolsession.OperationID,
+	op protocolsession.Operation,
 	_ uint16,
 	message string,
 ) error {
-	target := peer.receiverOperation(operation)
+	target := peer.receiverOperation(op.ID())
 	if target == nil {
 		return errors.New("sender failed a different peer operation")
 	}

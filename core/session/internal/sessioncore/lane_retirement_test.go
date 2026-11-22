@@ -21,26 +21,26 @@ func TestRuntimeCompletionStillJoinsRetiredLaneDrain(t *testing.T) {
 		t.Fatal(err)
 	}
 	retired := make(chan struct{})
-	runtime.lanes.setDetachHook(func(identity session.LaneIdentity) {
+	runtime.ConfigureLanes(nil, func(identity session.LaneIdentity) {
 		if identity == lane.identity {
 			close(retired)
 		}
 	})
-	runtime.start()
+	runtime.Start()
 	_ = base.Close()
 	select {
 	case <-retired:
 	case <-time.After(time.Second):
 		t.Fatal("retired lane remained a member during cleanup")
 	}
-	runtime.beginClose()
+	runtime.BeginClose()
 	select {
 	case <-runtime.Done():
 		t.Fatal("runtime completion lost ownership of its retired transport")
 	default:
 	}
 	unblock()
-	runtime.waitClosed()
+	runtime.WaitClosed()
 	select {
 	case <-lane.done:
 	default:

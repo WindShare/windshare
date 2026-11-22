@@ -22,21 +22,13 @@ func testPeerSlot(t *testing.T) *peerslot.Lease {
 func TestPhysicalPathReplacementPreservesSessionContinuationContract(t *testing.T) {
 	clock := newClock()
 	owner, _ := newTestPeerSet(t, Config{Clock: clock})
-	table, err := protocolsession.NewOperationTableWithContinuations(
-		protocolsession.OperationLimits{MaxActive: 8, MaxTracked: 64}, clock.Now, v2signal.ReceiverControlValidator{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	validator := v2signal.ReceiverControlValidator{}
+	issuedThrough := make(map[uint8]uint64)
 	type admitted struct {
-		binding    v2signal.Binding
-		generation protocolsession.OperationGeneration
-		offer      protocolsession.Message
+		binding v2signal.Binding
 	}
-	var ordinal byte
 	open := func() (*Path, admitted) {
 		t.Helper()
-		ordinal++
-		id := protocolsession.OperationID{ordinal}
 		started := make(chan admitted, 1)
 		path, err := owner.Open(t.Context(), PathConfig{
 			SessionID: protocolsession.ProtocolSessionID{1}, Demand: ContentDemand,
@@ -46,15 +38,23 @@ func TestPhysicalPathReplacementPreservesSessionContinuationContract(t *testing.
 				if err != nil {
 					return nil, err
 				}
-				offer, err := protocolsession.NewMessage(protocolsession.MessagePeerOffer, &id, body)
-				if err != nil {
-					return nil, err
+				contract, tracked, err := validator.BeginOperationContinuation(protocolsession.MessagePeerOffer, body)
+				if err != nil || !tracked {
+					t.Fatalf("peer offer contract tracked=%v err=%v", tracked, err)
 				}
-				admission, err := table.ObserveInbound(protocolsession.DirectionReceiverToSender, offer)
-				if err != nil {
-					return nil, err
+				authority, ok := contract.(protocolsession.PeerAttemptAuthority)
+				if !ok {
+					t.Fatal("peer offer contract missing PeerAttemptAuthority")
 				}
-				started <- admitted{binding, admission.Generation, offer}
+				peerBinding := authority.PeerAttemptBinding()
+				if !peerBinding.Valid() {
+					t.Fatalf("invalid peer attempt binding: %+v", peerBinding)
+				}
+				if peerBinding.AttemptSequence <= issuedThrough[peerBinding.PeerSlot] {
+					t.Fatalf("slot %d sequence %d did not advance past %d", peerBinding.PeerSlot, peerBinding.AttemptSequence, issuedThrough[peerBinding.PeerSlot])
+				}
+				issuedThrough[peerBinding.PeerSlot] = peerBinding.AttemptSequence
+				started <- admitted{binding}
 				attempt := newAttempt()
 				close(attempt.ready)
 				return attempt, nil
@@ -68,26 +68,15 @@ func TestPhysicalPathReplacementPreservesSessionContinuationContract(t *testing.
 	}
 	direct, directAdmission := open()
 	current, currentAdmission := open()
-	first := currentAdmission.offer
 	for range 24 {
 		next, nextAdmission := open()
 		if nextAdmission.binding.PeerSlot == currentAdmission.binding.PeerSlot ||
 			nextAdmission.binding.PeerSlot == directAdmission.binding.PeerSlot {
 			t.Fatal("replacement occupied a live path's slot")
 		}
-		if err := table.CancelGeneration(currentAdmission.generation); err != nil {
-			t.Fatal(err)
-		}
 		_ = current.Close()
 		clock.advance(protocolsession.OperationTombstoneLifetime)
-		if disposition, err := table.Observe(protocolsession.DirectionReceiverToSender, first); err != nil ||
-			disposition != protocolsession.OperationDrop {
-			t.Fatal("retired path resumed after replacement", disposition, err)
-		}
 		current, currentAdmission = next, nextAdmission
-	}
-	if table.ActiveCount() != 2 || table.Terminated() {
-		t.Fatal("replacement disturbed the surviving session")
 	}
 	_ = current.Close()
 	_ = direct.Close()

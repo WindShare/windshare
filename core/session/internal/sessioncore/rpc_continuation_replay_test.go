@@ -5,13 +5,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
-	"github.com/windshare/windshare/core/framechannel"
-	"github.com/windshare/windshare/core/session"
-	"github.com/windshare/windshare/core/session/protocolsession"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/windshare/windshare/core/framechannel"
+	"github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
 const continuationReplayTestTimeout = time.Second
@@ -21,11 +22,11 @@ func TestRPCContinuationRetriesStoppedPreferredWriterAcrossLane(t *testing.T) {
 	stopWriterBeforeAdmission(t, fixture.preferred.writer)
 	startContinuationReplayWriter(t, fixture.replacement.writer)
 
-	outcome, err := fixture.rpc.sendContinuation(
+	disposition, err := fixture.rpc.SendContinuation(
 		context.Background(), fixture.call, protocolsession.MessagePeerCandidate, []byte{0xf6},
 	)
-	if err != nil || outcome != protocolsession.SendOutcomeTransportConfirmed {
-		t.Fatalf("continuation after stopped preferred writer = outcome %d, error %v", outcome, err)
+	if err != nil || disposition != protocolsession.OperationDeliver {
+		t.Fatalf("continuation after stopped preferred writer = disposition %d, error %v", disposition, err)
 	}
 	fixture.assertReplacementOrder()
 }
@@ -36,26 +37,23 @@ func TestRPCContinuationRetriesStaleDrainedPreadmissionDropAcrossLane(t *testing
 	waitContext := newContinuationAwaitBarrier()
 	result := make(chan continuationSendResult, 1)
 	go func() {
-		outcome, err := fixture.rpc.sendContinuation(
+		disposition, err := fixture.rpc.SendContinuation(
 			waitContext, fixture.call, protocolsession.MessagePeerCandidate, []byte{0xf6},
 		)
-		result <- continuationSendResult{outcome: outcome, err: err}
+		result <- continuationSendResult{disposition: disposition, err: err}
 	}()
 
 	select {
 	case <-waitContext.awaited:
 	case <-time.After(continuationReplayTestTimeout):
-		t.Fatal("continuation did not reach receipt settlement")
+		t.Fatal("continuation did not reach writer wait")
 	}
-	// Waiting for Await's Done observation proves the item was published before
-	// stopping the writer, so this exercises stale queue drain rather than the
-	// simpler stopped-writer rejection at TryAuthorizedControl.
 	stopWriterBeforeAdmission(t, fixture.preferred.writer)
 
 	select {
 	case sent := <-result:
-		if sent.err != nil || sent.outcome != protocolsession.SendOutcomeTransportConfirmed {
-			t.Fatalf("continuation after stale queue drain = outcome %d, error %v", sent.outcome, sent.err)
+		if sent.err != nil || sent.disposition != protocolsession.OperationDeliver {
+			t.Fatalf("continuation after stale queue drain = disposition %d, error %v", sent.disposition, sent.err)
 		}
 	case <-time.After(continuationReplayTestTimeout):
 		t.Fatal("continuation did not retry after stale queue drain")
@@ -65,11 +63,10 @@ func TestRPCContinuationRetriesStaleDrainedPreadmissionDropAcrossLane(t *testing
 
 func TestRPCContinuationRetriesClaimedPretransportFailureAcrossLane(t *testing.T) {
 	fixture := newContinuationReplayFixture(t, 104)
-	pretransportErr := errors.New("candidate sequence preflight failed")
-	failingWriter, err := protocolsession.NewSessionWriter(
+	pretransportErr := errors.New("candidate seal failed")
+	failingWriter, err := newLaneWriter(
 		fixture.preferred.channel,
-		continuationPretransportFailingSealer{err: pretransportErr},
-		fixture.runtime.router,
+		continuationFailingSealer{err: pretransportErr},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -82,87 +79,18 @@ func TestRPCContinuationRetriesClaimedPretransportFailureAcrossLane(t *testing.T
 	startContinuationReplayWriter(t, failingWriter)
 	startContinuationReplayWriter(t, fixture.replacement.writer)
 
-	outcome, err := fixture.rpc.sendContinuation(
+	disposition, err := fixture.rpc.SendContinuation(
 		context.Background(), fixture.call, protocolsession.MessagePeerCandidate, []byte{0xf6},
 	)
-	if err != nil || outcome != protocolsession.SendOutcomeTransportConfirmed {
-		t.Fatalf("continuation after pretransport failure = outcome %d, error %v", outcome, err)
+	if err != nil || disposition != protocolsession.OperationDeliver {
+		t.Fatalf("continuation after pretransport failure = disposition %d, error %v", disposition, err)
 	}
 	fixture.assertReplacementOrder()
 }
 
-func TestRPCContinuationGateSerializesRollbackBeforeExactRetry(t *testing.T) {
-	fixture := newTrackedContinuationReplayFixture(t, 105)
-	blocker := &continuationBlockingSealer{
-		base: fixture.preferredRuntimeSealer(), entered: make(chan struct{}), release: make(chan struct{}),
-	}
-	fixture.replacePreferredWriter(t, blocker)
-	startContinuationReplayWriter(t, fixture.preferred.writer)
-	var releaseOnce sync.Once
-	t.Cleanup(func() { releaseOnce.Do(func() { close(blocker.release) }) })
-	var physicalSends atomic.Int32
-	fixture.preferredChannel.onSend = func(framechannel.Frame) { physicalSends.Add(1) }
-
-	firstContext, cancelFirst := context.WithCancel(context.Background())
-	first := make(chan continuationSendResult, 1)
-	go func() {
-		outcome, err := fixture.rpc.sendContinuation(
-			firstContext, fixture.call, protocolsession.MessagePeerCandidate, []byte{0xf6},
-		)
-		first <- continuationSendResult{outcome: outcome, err: err}
-	}()
-	select {
-	case <-blocker.entered:
-	case <-time.After(continuationReplayTestTimeout):
-		t.Fatal("first candidate did not reach claimed sequence preflight")
-	}
-
-	secondContext := newContinuationAwaitBarrier()
-	second := make(chan continuationSendResult, 1)
-	go func() {
-		outcome, err := fixture.rpc.sendContinuation(
-			secondContext, fixture.call, protocolsession.MessagePeerCandidate, []byte{0xf6},
-		)
-		second <- continuationSendResult{outcome: outcome, err: err}
-	}()
-	select {
-	case <-secondContext.awaited:
-	case <-time.After(continuationReplayTestTimeout):
-		t.Fatal("second candidate did not reach the operation gate")
-	}
-	select {
-	case result := <-second:
-		t.Fatalf("second candidate escaped pending owner: outcome %d, error %v", result.outcome, result.err)
-	default:
-	}
-
-	cancelFirst()
-	select {
-	case result := <-first:
-		if result.outcome != protocolsession.SendOutcomeDropped ||
-			!errors.Is(result.err, context.Canceled) || !errors.Is(result.err, errContinuationNotDelivered) {
-			t.Fatalf("canceled owner = outcome %d, error %v", result.outcome, result.err)
-		}
-	case <-time.After(continuationReplayTestTimeout):
-		t.Fatal("canceled candidate owner did not settle")
-	}
-	releaseOnce.Do(func() { close(blocker.release) })
-	select {
-	case result := <-second:
-		if result.outcome != protocolsession.SendOutcomeTransportConfirmed || result.err != nil {
-			t.Fatalf("exact retry after rollback = outcome %d, error %v", result.outcome, result.err)
-		}
-	case <-time.After(continuationReplayTestTimeout):
-		t.Fatal("exact retry did not publish after owner rollback")
-	}
-	if got := physicalSends.Load(); got != 1 {
-		t.Fatalf("preferred lane physically sent %d candidate(s), want one", got)
-	}
-}
-
 func TestRPCContinuationGateCoversAutomaticReplacementRetry(t *testing.T) {
 	fixture := newTrackedContinuationReplayFixture(t, 106)
-	pretransportErr := errors.New("blocked candidate sequence preflight failed")
+	pretransportErr := errors.New("blocked candidate seal failed")
 	blocker := &continuationBlockingFailingSealer{
 		entered: make(chan struct{}), release: make(chan struct{}), err: pretransportErr,
 	}
@@ -174,24 +102,24 @@ func TestRPCContinuationGateCoversAutomaticReplacementRetry(t *testing.T) {
 
 	first := make(chan continuationSendResult, 1)
 	go func() {
-		outcome, err := fixture.rpc.sendContinuation(
+		disposition, err := fixture.rpc.SendContinuation(
 			context.Background(), fixture.call, protocolsession.MessagePeerCandidate, []byte{0xf6},
 		)
-		first <- continuationSendResult{outcome: outcome, err: err}
+		first <- continuationSendResult{disposition: disposition, err: err}
 	}()
 	select {
 	case <-blocker.entered:
 	case <-time.After(continuationReplayTestTimeout):
-		t.Fatal("first candidate did not reach replacement-triggering preflight")
+		t.Fatal("first candidate did not reach replacement-triggering seal")
 	}
 
 	secondContext := newContinuationAwaitBarrier()
 	second := make(chan continuationSendResult, 1)
 	go func() {
-		outcome, err := fixture.rpc.sendContinuation(
+		disposition, err := fixture.rpc.SendContinuation(
 			secondContext, fixture.call, protocolsession.MessagePeerCandidate, []byte{0xf6},
 		)
-		second <- continuationSendResult{outcome: outcome, err: err}
+		second <- continuationSendResult{disposition: disposition, err: err}
 	}()
 	select {
 	case <-secondContext.awaited:
@@ -200,23 +128,23 @@ func TestRPCContinuationGateCoversAutomaticReplacementRetry(t *testing.T) {
 	}
 	select {
 	case result := <-second:
-		t.Fatalf("second candidate escaped replacement retry owner: outcome %d, error %v", result.outcome, result.err)
+		t.Fatalf("second candidate escaped replacement retry owner: disposition %d, error %v", result.disposition, result.err)
 	default:
 	}
 
 	releaseOnce.Do(func() { close(blocker.release) })
 	select {
 	case result := <-first:
-		if result.outcome != protocolsession.SendOutcomeTransportConfirmed || result.err != nil {
-			t.Fatalf("replacement retry owner = outcome %d, error %v", result.outcome, result.err)
+		if result.disposition != protocolsession.OperationDeliver || result.err != nil {
+			t.Fatalf("replacement retry owner = disposition %d, error %v", result.disposition, result.err)
 		}
 	case <-time.After(continuationReplayTestTimeout):
 		t.Fatal("replacement retry owner did not settle")
 	}
 	select {
 	case result := <-second:
-		if result.outcome != protocolsession.SendOutcomeDropped || result.err != nil {
-			t.Fatalf("exact waiter after committed retry = outcome %d, error %v", result.outcome, result.err)
+		if result.disposition != protocolsession.OperationDrop || result.err != nil {
+			t.Fatalf("exact waiter after committed retry = disposition %d, error %v", result.disposition, result.err)
 		}
 	case <-time.After(continuationReplayTestTimeout):
 		t.Fatal("exact waiter did not observe committed replacement retry")
@@ -268,33 +196,10 @@ func TestOperationCandidateGateCancellationDoesNotLeakToken(t *testing.T) {
 	releaseThird()
 }
 
-type continuationPretransportFailingSealer struct{ err error }
+type continuationFailingSealer struct{ err error }
 
-func (sealer continuationPretransportFailingSealer) NextSequence() (uint64, error) {
-	return 0, sealer.err
-}
-
-func (continuationPretransportFailingSealer) Seal([]byte) (protocolsession.SealedEnvelope, error) {
-	panic("Seal must not run after NextSequence failure")
-}
-
-type continuationBlockingSealer struct {
-	base    protocolsession.OutboundEnvelopeSealer
-	entered chan struct{}
-	release chan struct{}
-	once    sync.Once
-}
-
-func (sealer *continuationBlockingSealer) NextSequence() (uint64, error) {
-	sealer.once.Do(func() {
-		close(sealer.entered)
-		<-sealer.release
-	})
-	return sealer.base.NextSequence()
-}
-
-func (sealer *continuationBlockingSealer) Seal(plaintext []byte) (protocolsession.SealedEnvelope, error) {
-	return sealer.base.Seal(plaintext)
+func (sealer continuationFailingSealer) Seal([]byte) (protocolsession.SealedEnvelope, error) {
+	return protocolsession.SealedEnvelope{}, sealer.err
 }
 
 type continuationBlockingFailingSealer struct {
@@ -303,14 +208,10 @@ type continuationBlockingFailingSealer struct {
 	err     error
 }
 
-func (sealer *continuationBlockingFailingSealer) NextSequence() (uint64, error) {
+func (sealer *continuationBlockingFailingSealer) Seal([]byte) (protocolsession.SealedEnvelope, error) {
 	close(sealer.entered)
 	<-sealer.release
-	return 0, sealer.err
-}
-
-func (*continuationBlockingFailingSealer) Seal([]byte) (protocolsession.SealedEnvelope, error) {
-	panic("Seal must not run after NextSequence failure")
+	return protocolsession.SealedEnvelope{}, sealer.err
 }
 
 func TestRPCContinuationDoesNotRetryAdmittedUnknownAcrossLane(t *testing.T) {
@@ -326,17 +227,15 @@ func TestRPCContinuationDoesNotRetryAdmittedUnknownAcrossLane(t *testing.T) {
 		<-releaseSend
 	}
 	startContinuationReplayWriter(t, fixture.preferred.writer)
-	// Release precedes writer cleanup under testing.Cleanup's LIFO order, even if
-	// an assertion aborts while the transport callback owns the send path.
 	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseSend) }) })
 
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan continuationSendResult, 1)
 	go func() {
-		outcome, err := fixture.rpc.sendContinuation(
+		disposition, err := fixture.rpc.SendContinuation(
 			ctx, fixture.call, protocolsession.MessagePeerCandidate, []byte{0xf6},
 		)
-		result <- continuationSendResult{outcome: outcome, err: err}
+		result <- continuationSendResult{disposition: disposition, err: err}
 	}()
 	select {
 	case <-sendStarted:
@@ -347,18 +246,18 @@ func TestRPCContinuationDoesNotRetryAdmittedUnknownAcrossLane(t *testing.T) {
 
 	select {
 	case sent := <-result:
-		if sent.outcome != protocolsession.SendOutcomeUnknown ||
+		if sent.disposition != protocolsession.OperationDeliver ||
 			!errors.Is(sent.err, context.Canceled) || !errors.Is(sent.err, errContinuationNotDelivered) {
-			t.Fatalf("admitted unsettled continuation = outcome %d, error %v", sent.outcome, sent.err)
+			t.Fatalf("admitted unsettled continuation = disposition %d, error %v", sent.disposition, sent.err)
 		}
 	case <-time.After(continuationReplayTestTimeout):
-		t.Fatal("admitted continuation did not return its unsettled snapshot")
+		t.Fatal("admitted continuation did not return its unsettled result")
 	}
 	if got := fixture.replacementChannel.sends.Load(); got != 0 {
 		t.Fatalf("admitted Unknown retried %d replacement-lane frame(s)", got)
 	}
 	fixture.call.stateMu.Lock()
-	replayRetained := !fixture.call.replay.IsZero()
+	replayRetained := fixture.call.hasReplay
 	fixture.call.stateMu.Unlock()
 	if !replayRetained || fixture.call.lane != fixture.runtime.initial {
 		t.Fatalf("admitted Unknown migrated or consumed request replay: retained=%t lane=%+v",
@@ -444,20 +343,21 @@ func newContinuationReplayFixtureWithContinuations(
 	if err != nil {
 		t.Fatal(err)
 	}
-	admission, err := runtime.router.AdmitOutbound(offer, protocolsession.OutboundOperationPermit{})
-	if err != nil || admission.Replay.IsZero() {
-		t.Fatalf("seed ambiguous request replay: admission=%+v, error=%v", admission, err)
+	op, maxCont, hasLimit, release, err := runtime.operations.AdmitOutboundRequest(offer, nil)
+	if err != nil {
+		t.Fatalf("seed ambiguous request replay: error=%v", err)
 	}
+	release(false)
 	call := &Call{
 		id: operationID, messages: make(chan operationResponse, 1), done: make(chan struct{}),
 		lane: runtime.initial,
 	}
-	if !call.setAuthority(admission.Generation, admission.Operation) ||
-		!call.setRequestReplay(offer, admission.Replay) {
+	if !call.setAuthority(op, maxCont, hasLimit) {
 		t.Fatal("seed continuation call authority")
 	}
+	call.setRequestReplay(offer)
 	rpc.calls[operationID] = call
-	t.Cleanup(func() { rpc.end(call) })
+	t.Cleanup(func() { rpc.End(call) })
 	return &continuationReplayFixture{
 		t: t, runtime: runtime, rpc: rpc, call: call,
 		preferred: preferred, preferredChannel: preferredChannel,
@@ -466,25 +366,12 @@ func newContinuationReplayFixtureWithContinuations(
 	}
 }
 
-func (fixture *continuationReplayFixture) preferredRuntimeSealer() protocolsession.OutboundEnvelopeSealer {
-	fixture.t.Helper()
-	fixture.runtime.lanes.mu.Lock()
-	defer fixture.runtime.lanes.mu.Unlock()
-	lane := fixture.runtime.lanes.active[fixture.preferred.identity.ID]
-	if lane == nil || lane.sealer == nil {
-		fixture.t.Fatal("preferred runtime sealer is unavailable")
-	}
-	return lane.sealer
-}
-
 func (fixture *continuationReplayFixture) replacePreferredWriter(
 	t *testing.T,
-	sealer protocolsession.OutboundEnvelopeSealer,
+	sealer envelopeSealer,
 ) {
 	t.Helper()
-	writer, err := protocolsession.NewSessionWriter(
-		fixture.preferred.channel, sealer, runtimeLanePolicy{runtime: fixture.runtime},
-	)
+	writer, err := newLaneWriter(fixture.preferred.channel, sealer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -587,7 +474,7 @@ func (fixture *continuationReplayFixture) assertReplacementOrder() {
 	default:
 	}
 	fixture.call.stateMu.Lock()
-	replayRetained := !fixture.call.replay.IsZero()
+	replayRetained := fixture.call.hasReplay
 	fixture.call.stateMu.Unlock()
 	if !replayRetained || fixture.call.lane != fixture.replacement.identity {
 		fixture.t.Fatalf("replacement commit retained replay=%t lane=%+v, want %+v",
@@ -596,8 +483,8 @@ func (fixture *continuationReplayFixture) assertReplacementOrder() {
 }
 
 type continuationSendResult struct {
-	outcome protocolsession.SendOutcome
-	err     error
+	disposition protocolsession.OperationDisposition
+	err         error
 }
 
 type continuationAwaitBarrier struct {
@@ -615,7 +502,7 @@ func (ctx *continuationAwaitBarrier) Done() <-chan struct{} {
 	return ctx.Context.Done()
 }
 
-func stopWriterBeforeAdmission(t *testing.T, writer *protocolsession.SessionWriter) {
+func stopWriterBeforeAdmission(t *testing.T, writer *laneWriter) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -624,7 +511,7 @@ func stopWriterBeforeAdmission(t *testing.T, writer *protocolsession.SessionWrit
 	}
 }
 
-func startContinuationReplayWriter(t *testing.T, writer *protocolsession.SessionWriter) {
+func startContinuationReplayWriter(t *testing.T, writer *laneWriter) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)

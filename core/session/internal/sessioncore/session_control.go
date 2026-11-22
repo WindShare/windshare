@@ -3,9 +3,10 @@ package sessioncore
 import (
 	"bytes"
 	"context"
+	"sync"
+
 	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"sync"
 )
 
 func (runtime *Runtime) SetPeerPathControlHandler(handler func(context.Context, []byte) error) {
@@ -25,7 +26,11 @@ func (handler *sessionControlHandler) set(callback func(context.Context, []byte)
 	handler.mu.Unlock()
 }
 
-func (handler *sessionControlHandler) HandleMessage(ctx context.Context, message protocolsession.Message) error {
+func (handler *sessionControlHandler) HandleMessage(
+	ctx context.Context,
+	_ protocolsession.Operation,
+	message protocolsession.Message,
+) error {
 	body := message.Body()
 	handler.mu.RLock()
 	callback := handler.callback
@@ -55,10 +60,5 @@ func (runtime *Runtime) SendSessionControl(ctx context.Context, kind protocolses
 	if err != nil {
 		return err
 	}
-	receipt, err := lane.writer.TryControl(message)
-	if err != nil {
-		return err
-	}
-	_, err = receipt.Wait(ctx)
-	return err
+	return lane.writer.SendControl(ctx, message, nil)
 }

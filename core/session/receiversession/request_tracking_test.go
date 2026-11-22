@@ -43,8 +43,7 @@ func TestRequestTrackingReleasesRejectedPreparedCall(t *testing.T) {
 	if _, err := rpc.Requests.AwaitCall(ctx, call, false); !errors.Is(err, session.ErrOperationMissing) {
 		t.Fatalf("rejected call was not closed by the core: %v", err)
 	}
-	generation, authority := call.OperationAuthority()
-	if !generation.IsZero() || !authority.IsZero() {
+	if !call.Operation().IsZero() {
 		t.Fatal("rejected call retained operation authority")
 	}
 	rpc.mu.Lock()

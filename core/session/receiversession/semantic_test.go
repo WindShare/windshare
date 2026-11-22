@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/framechannel"
-
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"testing"
 )
@@ -58,48 +56,34 @@ func TestReceiverSemanticRegistryRejectsEveryAuthenticatedMalformedSenderControl
 }
 
 func TestMalformedAuthenticatedFinalTerminatesBeforeOperationTransition(t *testing.T) {
-	operations, err := protocolsession.NewOperationTable(
-		protocolsession.OperationLimits{MaxActive: 4, MaxTracked: 4}, nil,
-	)
-	if err != nil {
+	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
+	startReceiverPeerWriter(t, runtime)
+	rpc := newTestRequests(runtime, &deterministicReader{next: 71})
+	if err := rpc.Register(); err != nil {
 		t.Fatal(err)
 	}
-	router, err := protocolsession.NewRoleRouter(protocolsession.RoleReceiver, operations)
-	if err != nil {
-		t.Fatal(err)
-	}
-	operationID := id16[protocolsession.OperationID](6)
+	t.Cleanup(rpc.Close)
 	requestBody, _ := protocolsession.EncodeBody([]any{})
-	request, _ := protocolsession.NewMessage(protocolsession.MessageOpenRevisions, &operationID, requestBody)
-	if _, err := router.AdmitOutbound(request, protocolsession.OutboundOperationPermit{}); err != nil || operations.ActiveCount() != 1 {
-		t.Fatalf("begin receiver operation: active=%d err=%v", operations.ActiveCount(), err)
+	call, err := rpc.Begin(context.Background(), protocolsession.MessageOpenRevisions, requestBody)
+	if err != nil {
+		t.Fatal(err)
 	}
-
+	op := call.Operation()
+	if !op.IsActive() {
+		t.Fatal("receiver operation was not active")
+	}
 	validator, _ := newReceiverSenderControlValidator(nil)
 	authenticator := protocolsession.SenderMessageValidator(validator)
+	operationID := call.ID()
 	malformed, _ := protocolsession.NewMessage(protocolsession.MessageOpenResults, &operationID, []byte{0xf6})
-	plaintext, _ := protocolsession.EncodeMessage(malformed)
-
-	receiver, peer := newMemoryChannelPair()
-	pump, err := protocolsession.NewProtocolPump(
-		receiver,
-		semanticTestOpener{opened: protocolsession.OpenedEnvelope{Sequence: 1, Plaintext: plaintext}},
-		authenticator,
-		router,
-	)
-	if err != nil {
-		t.Fatal(err)
+	sendAuthenticatedTestMessage(t, runtime, malformed, authenticator)
+	<-runtime.Done()
+	if !errors.Is(runtime.Err(), protocolsession.ErrInboundSemantic) ||
+		!errors.Is(runtime.Err(), protocolsession.ErrControlSemantic) {
+		t.Fatalf("malformed final rejection = %v", runtime.Err())
 	}
-	if err := peer.Send(context.Background(), framechannel.Frame{1}); err != nil {
-		t.Fatal(err)
-	}
-	err = pump.Run(context.Background())
-	if !errors.Is(err, protocolsession.ErrInboundSemantic) ||
-		!errors.Is(err, protocolsession.ErrControlSemantic) {
-		t.Fatalf("malformed final rejection = %v", err)
-	}
-	if !operations.Terminated() || operations.TombstoneCount() != 0 {
-		t.Fatalf("malformed final changed operation state: terminal=%v tombstones=%d", operations.Terminated(), operations.TombstoneCount())
+	if op.IsCurrent() {
+		t.Fatal("malformed final left operation authority live after session termination")
 	}
 }
 

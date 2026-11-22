@@ -131,20 +131,20 @@ func (session *testPeerSession) ProtocolSessionID() protocolsession.ProtocolSess
 }
 func (session *testPeerSession) SendPeerControl(
 	_ context.Context,
+	op protocolsession.Operation,
 	kind protocolsession.MessageKind,
-	operation protocolsession.OperationID,
 	body []byte,
 ) (protocolsession.OperationDisposition, error) {
-	session.controls <- capturedControl{kind: kind, operation: operation, body: bytes.Clone(body)}
+	session.controls <- capturedControl{kind: kind, operation: op.ID(), body: bytes.Clone(body)}
 	return protocolsession.OperationDeliver, nil
 }
 func (session *testPeerSession) FailPeerOperation(
 	_ context.Context,
-	operation protocolsession.OperationID,
+	op protocolsession.Operation,
 	code uint16,
 	message string,
 ) error {
-	session.failures <- capturedFailure{operation: operation, code: code, message: message}
+	session.failures <- capturedFailure{operation: op.ID(), code: code, message: message}
 	return nil
 }
 func (session *testPeerSession) AdmitPeerChannel(
@@ -349,9 +349,9 @@ func testSenderHandlerAnswersCandidatesAndAdmitsPeerChannel(t *testing.T) {
 	binding := testBinding(40)
 	offerBody, _ := v2signal.EncodeOffer(v2signal.Offer{Binding: binding, SDP: "v=0\r\ns=receiver\r\n"})
 	offerMessage := testMessage(t, protocolsession.MessagePeerOffer, operation, offerBody)
-	operationContext := testPeerMessageContext(t, ctx, offerMessage)
-	operationKey := testPeerOperationFromContext(t, operationContext, operation)
-	if err := handler.HandleMessage(operationContext, offerMessage); err != nil {
+	op := testPeerOperation(operation)
+	operationKey := op.Ref()
+	if err := handler.HandleMessage(ctx, op, offerMessage); err != nil {
 		t.Fatalf("offer: %v", err)
 	}
 	remote := receiveTest(t, peer.remote)
@@ -368,7 +368,7 @@ func testSenderHandlerAnswersCandidatesAndAdmitsPeerChannel(t *testing.T) {
 	remoteCandidate := v2signal.Candidate{Binding: binding, Candidate: "candidate:receiver"}
 	remoteBody, _ := v2signal.EncodeCandidate(remoteCandidate)
 	if err := handler.HandleMessage(
-		operationContext,
+		ctx, op,
 		testMessage(t, protocolsession.MessagePeerCandidate, operation, remoteBody),
 	); err != nil {
 		t.Fatalf("remote candidate: %v", err)
@@ -413,7 +413,7 @@ func testSenderHandlerAnswersCandidatesAndAdmitsPeerChannel(t *testing.T) {
 	replayOperation := testOperationID(21)
 	replayMessage := testMessage(t, protocolsession.MessagePeerOffer, replayOperation, replayBody)
 	if err := handler.HandleMessage(
-		testPeerMessageContext(t, ctx, replayMessage), replayMessage,
+		ctx, testPeerOperation(replayOperation), replayMessage,
 	); err != nil {
 		t.Fatalf("enqueue replay offer: %v", err)
 	}
@@ -439,12 +439,13 @@ func TestSenderHandlerRetainsBindingAcrossCompletionAndCancelUntilExpiry(t *test
 	})
 	handler := newDirectTestHandler(t, factory, newTestPeerSession(3))
 	operation := testOperationID(30)
+	op := testPeerOperation(operation)
 	binding := testBinding(60)
 	attempt := newPeerAttempt(peerAttemptConfig{
-		factory: factory, session: handler.session, operation: operation,
+		factory: factory, session: handler.session, operation: op,
 		offer: v2signal.Offer{Binding: binding, SDP: "v=0\r\n"}, onDone: handler.attemptDone,
 	})
-	operationKey := testPeerOperation(operation)
+	operationKey := op.Ref()
 	handler.mu.Lock()
 	handler.attempts[operationKey] = attempt
 	handler.bindings[binding] = operationKey
@@ -456,31 +457,32 @@ func TestSenderHandlerRetainsBindingAcrossCompletionAndCancelUntilExpiry(t *test
 	handler.attemptDone(attempt, context.Canceled)
 
 	newOperation := testOperationID(31)
+	newOp := testPeerOperation(newOperation)
 	if err := handler.startAttempt(
-		context.Background(), testPeerOperation(newOperation), v2signal.Offer{Binding: binding, SDP: "v=0\r\n"},
+		context.Background(), newOp, v2signal.Offer{Binding: binding, SDP: "v=0\r\n"},
 	); !errors.Is(err, v2signal.ErrSignalBinding) {
 		t.Fatalf("canceled binding replay = %v", err)
 	}
 	blockedBinding := testBinding(61)
 	if err := handler.startAttempt(
-		context.Background(), testPeerOperation(newOperation), v2signal.Offer{Binding: blockedBinding, SDP: "v=0\r\n"},
+		context.Background(), newOp, v2signal.Offer{Binding: blockedBinding, SDP: "v=0\r\n"},
 	); !errors.Is(err, ErrReplayCapacity) {
 		t.Fatalf("reserved replay budget = %v", err)
 	}
 	now = now.Add(30 * time.Second)
-	handler.claimRejectedOffer(testPeerOperation(newOperation), blockedBinding)
+	handler.claimRejectedOffer(newOp.Ref(), blockedBinding)
 
 	// Exhaustion fails closed for a full retention window measured from the
 	// rejected offer, even after the older tombstone itself expires.
 	now = now.Add(30 * time.Second)
 	if err := handler.startAttempt(
-		context.Background(), testPeerOperation(newOperation), v2signal.Offer{Binding: binding, SDP: "v=0\r\n"},
+		context.Background(), newOp, v2signal.Offer{Binding: binding, SDP: "v=0\r\n"},
 	); !errors.Is(err, ErrReplayCapacity) {
 		t.Fatalf("replay exhaustion did not fail closed: %v", err)
 	}
 	now = now.Add(30 * time.Second)
 	if err := handler.startAttempt(
-		context.Background(), testPeerOperation(newOperation), v2signal.Offer{Binding: binding, SDP: "v=0\r\n"},
+		context.Background(), newOp, v2signal.Offer{Binding: binding, SDP: "v=0\r\n"},
 	); !errors.Is(err, v2signal.ErrSignalBinding) {
 		t.Fatalf("session-lifetime evidence binding reuse = %v", err)
 	}
@@ -519,10 +521,10 @@ func testSenderHandlerCapacityFailureEndsOnlyRejectedOperation(t *testing.T) {
 	firstBinding := testBinding(121)
 	firstBody, _ := v2signal.EncodeOffer(v2signal.Offer{Binding: firstBinding, SDP: "v=0\r\n"})
 	firstMessage := testMessage(t, protocolsession.MessagePeerOffer, firstOperation, firstBody)
-	firstContext := testPeerMessageContext(t, ctx, firstMessage)
-	firstKey := testPeerOperationFromContext(t, firstContext, firstOperation)
+	firstOp := testPeerOperation(firstOperation)
+	firstKey := firstOp.Ref()
 	if err := handler.HandleMessage(
-		firstContext, firstMessage,
+		ctx, firstOp, firstMessage,
 	); err != nil {
 		t.Fatalf("first offer: %v", err)
 	}
@@ -540,7 +542,7 @@ func testSenderHandlerCapacityFailureEndsOnlyRejectedOperation(t *testing.T) {
 	})
 	rejectedMessage := testMessage(t, protocolsession.MessagePeerOffer, rejectedOperation, rejectedBody)
 	if err := handler.HandleMessage(
-		testPeerMessageContext(t, ctx, rejectedMessage), rejectedMessage,
+		ctx, testPeerOperation(rejectedOperation), rejectedMessage,
 	); err != nil {
 		t.Fatalf("capacity offer: %v", err)
 	}
@@ -554,7 +556,7 @@ func testSenderHandlerCapacityFailureEndsOnlyRejectedOperation(t *testing.T) {
 	default:
 	}
 
-	if err := handler.Cancel(firstContext, firstOperation); err != nil {
+	if err := handler.Cancel(ctx, firstOp); err != nil {
 		t.Fatalf("cancel first attempt: %v", err)
 	}
 	assertPeerState(t, func() bool {
@@ -566,9 +568,9 @@ func testSenderHandlerCapacityFailureEndsOnlyRejectedOperation(t *testing.T) {
 	freshBinding := testBinding(125)
 	freshBody, _ := v2signal.EncodeOffer(v2signal.Offer{Binding: freshBinding, SDP: "v=0\r\n"})
 	freshMessage := testMessage(t, protocolsession.MessagePeerOffer, freshOperation, freshBody)
-	freshContext := testPeerMessageContext(t, ctx, freshMessage)
+	freshOp := testPeerOperation(freshOperation)
 	if err := handler.HandleMessage(
-		freshContext, freshMessage,
+		ctx, freshOp, freshMessage,
 	); err != nil {
 		t.Fatalf("fresh offer after isolated capacity failure: %v", err)
 	}
@@ -577,7 +579,7 @@ func testSenderHandlerCapacityFailureEndsOnlyRejectedOperation(t *testing.T) {
 	if err != nil || freshAnswerControl.operation != freshOperation || freshAnswer.Binding != freshBinding {
 		t.Fatalf("fresh answer after capacity failure = %#v/%#v, %v", freshAnswerControl, freshAnswer, err)
 	}
-	if err := handler.Cancel(freshContext, freshOperation); err != nil {
+	if err := handler.Cancel(ctx, freshOp); err != nil {
 		t.Fatalf("cancel fresh attempt: %v", err)
 	}
 	cancel()
@@ -600,14 +602,14 @@ func testSenderHandlerQueueOverflowTombstonesRejectedOfferBinding(t *testing.T) 
 	session := newTestPeerSession(19)
 	handler := newDirectTestHandler(t, factory, session)
 	for len(handler.events) < cap(handler.events) {
-		handler.events <- handlerEvent{kind: handlerReject, operation: testPeerOperation(testOperationID(byte(len(handler.events) + 1)))}
+		handler.events <- handlerEvent{kind: handlerReject, op: testPeerOperation(testOperationID(byte(len(handler.events) + 1)))}
 	}
 	operation := testOperationID(130)
 	binding := testBinding(131)
 	body, _ := v2signal.EncodeOffer(v2signal.Offer{Binding: binding, SDP: "v=0\r\n"})
 	overflowMessage := testMessage(t, protocolsession.MessagePeerOffer, operation, body)
 	if err := handler.HandleMessage(
-		testPeerMessageContext(t, context.Background(), overflowMessage), overflowMessage,
+		context.Background(), testPeerOperation(operation), overflowMessage,
 	); err != nil {
 		t.Fatalf("overflowed offer: %v", err)
 	}
@@ -648,19 +650,10 @@ func testSenderHandlerTerminalizesOfferCanceledBeforePublication(t *testing.T) {
 		Binding: binding, SDP: "v=0\r\n",
 	})
 	message := testMessage(t, protocolsession.MessagePeerOffer, operation, body)
-	operations, _ := protocolsession.NewOperationTable(
-		protocolsession.OperationLimits{MaxActive: 2, MaxTracked: 2}, nil,
-	)
-	admission, err := operations.ObserveInbound(protocolsession.DirectionReceiverToSender, message)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cancel, _ := protocolsession.NewMessage(protocolsession.MessageCancel, &operation, []byte{1})
-	if _, err := operations.ObserveInbound(protocolsession.DirectionReceiverToSender, cancel); err != nil {
-		t.Fatal(err)
-	}
-	messageContext := protocolsession.WithOperationGeneration(context.Background(), admission.Generation)
-	if err := handler.HandleMessage(messageContext, message); err != nil {
+	tracker := newTestOperationTracker()
+	op := tracker.admit(operation)
+	tracker.cancel(op)
+	if err := handler.HandleMessage(context.Background(), op, message); err != nil {
 		t.Fatalf("stale offer suppression: %v", err)
 	}
 	if len(handler.events) != 0 {
@@ -675,7 +668,7 @@ func testSenderHandlerTerminalizesOfferCanceledBeforePublication(t *testing.T) {
 		AttemptFailureScopeAttempt,
 		TypedPeerErrorCancelled,
 	)
-	if err := handler.HandleMessage(messageContext, message); err != nil {
+	if err := handler.HandleMessage(context.Background(), op, message); err != nil {
 		t.Fatalf("canceled offer replay: %v", err)
 	}
 	if observations := collector.forAttempt(binding.AttemptID); len(observations) != 2 {
@@ -688,7 +681,7 @@ func testSenderHandlerTerminalizesOfferCanceledBeforePublication(t *testing.T) {
 	})
 	siblingMessage := testMessage(t, protocolsession.MessagePeerOffer, sibling, siblingBody)
 	if err := handler.HandleMessage(
-		testPeerMessageContext(t, context.Background(), siblingMessage), siblingMessage,
+		context.Background(), tracker.admit(sibling), siblingMessage,
 	); err != nil {
 		t.Fatalf("sibling offer: %v", err)
 	}
@@ -718,7 +711,7 @@ func TestSenderHandlerReportsPermanentPeerFailuresAndClosesHostileNilChannel(t *
 	operation := testOperationID(70)
 	body, _ := v2signal.EncodeOffer(v2signal.Offer{Binding: testBinding(80), SDP: "v=0\r\n"})
 	message := testMessage(t, protocolsession.MessagePeerOffer, operation, body)
-	if err := handler.HandleMessage(testPeerMessageContext(t, ctx, message), message); err != nil {
+	if err := handler.HandleMessage(ctx, testPeerOperation(operation), message); err != nil {
 		t.Fatalf("offer: %v", err)
 	}
 	receiveTest(t, session.controls)
@@ -787,7 +780,7 @@ func TestSenderHandlerBoundsTimeoutAndCandidateFlood(t *testing.T) {
 			})
 			message := testMessage(t, protocolsession.MessagePeerOffer, operation, body)
 			if err := handler.HandleMessage(
-				testPeerMessageContext(t, ctx, message), message,
+				ctx, testPeerOperation(operation), message,
 			); err != nil {
 				t.Fatalf("offer: %v", err)
 			}
@@ -840,10 +833,10 @@ func testSenderHandlerCancellationKeepsAnAdmittedLaneUntilPhysicalClose(t *testi
 	operation := testOperationID(100)
 	body, _ := v2signal.EncodeOffer(v2signal.Offer{Binding: testBinding(101), SDP: "v=0\r\n"})
 	message := testMessage(t, protocolsession.MessagePeerOffer, operation, body)
-	operationContext := testPeerMessageContext(t, ctx, message)
-	operationKey := testPeerOperationFromContext(t, operationContext, operation)
+	op := testPeerOperation(operation)
+	operationKey := op.Ref()
 	if err := handler.HandleMessage(
-		operationContext, message,
+		ctx, op, message,
 	); err != nil {
 		t.Fatalf("offer: %v", err)
 	}
@@ -858,7 +851,7 @@ func testSenderHandlerCancellationKeepsAnAdmittedLaneUntilPhysicalClose(t *testi
 		handler.mu.Unlock()
 		return attempt != nil && attempt.attached.Load()
 	})
-	if err := handler.Cancel(operationContext, operation); err != nil {
+	if err := handler.Cancel(ctx, op); err != nil {
 		t.Fatalf("cancel attached operation: %v", err)
 	}
 	select {
@@ -903,7 +896,7 @@ func TestSenderHandlerStopClosesUnattachedPeerWithoutOperationFailure(t *testing
 	operation := testOperationID(110)
 	message := testMessage(t, protocolsession.MessagePeerOffer, operation, body)
 	if err := handler.HandleMessage(
-		testPeerMessageContext(t, ctx, message), message,
+		ctx, testPeerOperation(operation), message,
 	); err != nil {
 		t.Fatalf("offer: %v", err)
 	}
@@ -953,40 +946,67 @@ func testOperationID(seed byte) protocolsession.OperationID {
 	return operation
 }
 
-func testPeerOperation(operation protocolsession.OperationID) peerOperation {
-	return peerOperation{id: operation}
+type testOperationTracker struct {
+	mu        sync.Mutex
+	nextToken uint64
+	active    map[protocolsession.OperationRef]bool
+	current   map[protocolsession.OperationRef]bool
 }
 
-func testPeerMessageContext(
-	t *testing.T,
-	parent context.Context,
-	message protocolsession.Message,
-) context.Context {
-	t.Helper()
-	operations, err := protocolsession.NewOperationTable(
-		protocolsession.OperationLimits{MaxActive: 4, MaxTracked: 4}, nil,
-	)
-	if err != nil {
-		t.Fatal(err)
+func newTestOperationTracker() *testOperationTracker {
+	return &testOperationTracker{
+		active:  make(map[protocolsession.OperationRef]bool),
+		current: make(map[protocolsession.OperationRef]bool),
 	}
-	admission, err := operations.ObserveInbound(protocolsession.DirectionReceiverToSender, message)
-	if err != nil || admission.Disposition != protocolsession.OperationDeliver {
-		t.Fatalf("admit peer message: disposition=%d error=%v", admission.Disposition, err)
-	}
-	return protocolsession.WithOperationGeneration(parent, admission.Generation)
 }
 
-func testPeerOperationFromContext(
-	t *testing.T,
-	ctx context.Context,
-	operation protocolsession.OperationID,
-) peerOperation {
-	t.Helper()
-	generation, ok := protocolsession.OperationGenerationFromContext(ctx, operation)
-	if !ok {
-		t.Fatal("peer test context lost operation generation")
+func (tracker *testOperationTracker) admit(id protocolsession.OperationID) protocolsession.Operation {
+	tracker.mu.Lock()
+	tracker.nextToken++
+	ref := protocolsession.OperationRef{ID: id, Token: tracker.nextToken}
+	tracker.active[ref] = true
+	tracker.current[ref] = true
+	tracker.mu.Unlock()
+	return protocolsession.NewOperation(ref, tracker)
+}
+
+func (tracker *testOperationTracker) cancel(op protocolsession.Operation) {
+	tracker.mu.Lock()
+	delete(tracker.active, op.Ref())
+	tracker.mu.Unlock()
+}
+
+func (tracker *testOperationTracker) Active(ref protocolsession.OperationRef) bool {
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	return tracker.active[ref]
+}
+
+func (tracker *testOperationTracker) Current(ref protocolsession.OperationRef) bool {
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	return tracker.current[ref]
+}
+
+func (tracker *testOperationTracker) RequestKind(ref protocolsession.OperationRef) (protocolsession.MessageKind, bool) {
+	if !tracker.Current(ref) {
+		return 0, false
 	}
-	return peerOperation{id: operation, generation: generation}
+	return protocolsession.MessagePeerOffer, true
+}
+
+func (tracker *testOperationTracker) PeerAttemptBinding(protocolsession.OperationRef) (protocolsession.PeerAttemptBinding, bool) {
+	return protocolsession.PeerAttemptBinding{}, false
+}
+
+func (tracker *testOperationTracker) MaximumContinuations(protocolsession.OperationRef) (int, bool) {
+	return 0, false
+}
+
+var defaultTestOperations = newTestOperationTracker()
+
+func testPeerOperation(operation protocolsession.OperationID) protocolsession.Operation {
+	return defaultTestOperations.admit(operation)
 }
 
 func testMessage(

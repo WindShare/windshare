@@ -26,8 +26,8 @@ func TestProtocolOperationCauseRetainsJoinedFaults(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			call := newOperationCall(id16[protocolsession.OperationID](65), protocolsession.MessageRequestBlocks, time.Now(), 0, false, true)
-			owner := call.claimProtocolTermination()
-			call.recordProtocolTraceFailure(test.err)
+			owner := call.ClaimProtocolTermination()
+			call.RecordTraceFailure(test.err)
 			event, ok := call.protocolOperationTerminationTrace(time.Now(), owner,
 				OperationOutcome{sessionobs.ProtocolOperationReceiverEnded, sessionobs.ProtocolOperationCauseSuperseded})
 			if !ok || event.Stage != sessionobs.ProtocolOperationReceiverFailed || event.Cause != test.want {

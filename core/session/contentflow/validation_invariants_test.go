@@ -8,6 +8,7 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
 func TestResultValidationEntryPointsEnforceCanonicalAuthenticatedBodies(t *testing.T) {
@@ -178,7 +179,7 @@ func TestSenderHandlerLifecycleSnapshotReportsOnlyBoundedOwnership(t *testing.T)
 	handler := &SenderHandler{
 		queue:   make(chan queuedOperation, 2),
 		workers: make(chan struct{}, 2),
-		active: map[handlerOperation]context.CancelFunc{
+		active: map[protocolsession.OperationRef]context.CancelFunc{
 			{}: func() {},
 		},
 	}

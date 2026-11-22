@@ -13,40 +13,40 @@ import (
 
 func TestRPCClientBoundsLifecycleAndCancellation(t *testing.T) {
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
-	runtime.start()
-	defer runtime.close()
+	runtime.Start()
+	defer runtime.Close()
 	receiver := struct {
 		*Runtime
 		rpc *Requests
 	}{runtime, NewRequests(runtime, &deterministicReader{next: 17})}
-	if err := receiver.rpc.register(runtime.router); err != nil {
+	if err := receiver.rpc.Register(); err != nil {
 		t.Fatal(err)
 	}
 	defer receiver.rpc.Close()
 	body, _ := protocolsession.EncodeBody(map[uint64]any{0: uint64(1)})
 	terminal, _ := protocolsession.NewMessage(protocolsession.MessageSessionTerminal, nil, body)
-	if err := receiver.rpc.HandleMessage(context.Background(), terminal); !errors.Is(err, session.ErrOperationMissing) {
+	if err := receiver.rpc.HandleMessage(context.Background(), protocolsession.Operation{}, terminal); !errors.Is(err, session.ErrOperationMissing) {
 		t.Fatalf("message without operation error = %v", err)
 	}
 	missingID := id16[protocolsession.OperationID](71)
 	missing, _ := protocolsession.NewMessage(protocolsession.MessageCatalogResult, &missingID, body)
-	if err := receiver.rpc.HandleMessage(context.Background(), missing); err != nil {
+	if err := receiver.rpc.HandleMessage(context.Background(), protocolsession.Operation{}, missing); err != nil {
 		t.Fatalf("late response error = %v", err)
 	}
 	bounded := &Call{id: missingID, messages: make(chan operationResponse, 1)}
 	seedRequest, _ := protocolsession.NewMessage(protocolsession.MessageListChildren, &missingID, body)
-	requestAdmission, err := receiver.router.AdmitOutbound(seedRequest, protocolsession.OutboundOperationPermit{})
-	if err != nil || !bounded.setAuthority(requestAdmission.Generation, requestAdmission.Operation) {
+	op, maxCont, hasLimit, release, err := receiver.operations.AdmitOutboundRequest(seedRequest, nil)
+	if err != nil || !bounded.setAuthority(op, maxCont, hasLimit) {
 		t.Fatalf("seed bounded call authority: %v", err)
 	}
-	responseContext := protocolsession.WithOperationGeneration(context.Background(), requestAdmission.Generation)
+	release(false)
 	receiver.rpc.mu.Lock()
 	receiver.rpc.calls[missingID] = bounded
 	receiver.rpc.mu.Unlock()
-	if err := receiver.rpc.HandleMessage(responseContext, missing); err != nil {
+	if err := receiver.rpc.HandleMessage(context.Background(), op, missing); err != nil {
 		t.Fatal(err)
 	}
-	if err := receiver.rpc.HandleMessage(responseContext, missing); !errors.Is(err, session.ErrOperationOverflow) {
+	if err := receiver.rpc.HandleMessage(context.Background(), op, missing); !errors.Is(err, session.ErrOperationOverflow) {
 		t.Fatalf("response overflow error = %v", err)
 	}
 	wrong := &Call{id: missingID, messages: make(chan operationResponse, 1)}
@@ -77,7 +77,7 @@ func TestRPCClientBoundsLifecycleAndCancellation(t *testing.T) {
 	if _, err := duplicate.Begin(context.Background(), protocolsession.MessageListChildren, body); !errors.Is(err, session.ErrOperationMissing) {
 		t.Fatalf("duplicate local operation error = %v", err)
 	}
-	if err := receiver.rpc.register(receiver.router); err == nil {
+	if err := receiver.rpc.Register(); err == nil {
 		t.Fatal("duplicate router registration was accepted")
 	}
 	if err := receiver.rpc.admitCancellation(nil, contentflow.CancelReasonUser); !errors.Is(err, session.ErrOperationMissing) {
@@ -103,7 +103,7 @@ func TestRPCClientBoundsLifecycleAndCancellation(t *testing.T) {
 	receiver.rpc.End(call)
 
 	doneCall := &Call{messages: make(chan operationResponse)}
-	runtime.close()
+	runtime.Close()
 	if _, err := receiver.rpc.Await(context.Background(), doneCall); !errors.Is(err, session.ErrRuntimeClosed) {
 		t.Fatalf("await closed runtime = %v", err)
 	}

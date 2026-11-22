@@ -5,20 +5,25 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"github.com/windshare/windshare/core/session"
-	"github.com/windshare/windshare/core/session/contentflow"
-	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/session/requestlane"
 	"io"
 	"sync"
+	"time"
+
+	"github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session/contentflow"
+	sessionobs "github.com/windshare/windshare/core/session/observation"
+	"github.com/windshare/windshare/core/session/protocolsession"
+	"github.com/windshare/windshare/core/session/requestlane"
 )
 
-const operationResponseFrames = 512
-
-const operationIDPrefixAttempts = 4
+const (
+	operationResponseFrames   = 512
+	operationIDPrefixAttempts = 4
+)
 
 var (
 	ErrOperationIDExhausted     = errors.New("session runtime operation identity space is exhausted")
+	ErrRequestCarrierRetired    = fmt.Errorf("%w: request carrier retired before response", ErrLaneUnavailable)
 	errRequestNotDelivered      = errors.New("session runtime request was not delivered")
 	errContinuationNotDelivered = errors.New("session runtime continuation was not delivered")
 	errRPCOperationAuthority    = errors.New("session runtime request admission returned incomplete operation authority")
@@ -75,6 +80,12 @@ func allZero(value []byte) bool {
 	return true
 }
 
+// OperationObserver is the consumer contract for a long-lived request owner.
+type OperationObserver interface {
+	BindTerminalOwner(*TerminalOwner)
+	ObserveAuthenticatedOperationViolation(protocolsession.AuthenticatedOperationViolation)
+}
+
 type Requests struct {
 	runtime *Runtime
 	ids     operationIDSource
@@ -85,19 +96,61 @@ type Requests struct {
 }
 
 type operationResponse struct {
-	message    protocolsession.Message
-	generation protocolsession.OperationGeneration
-	lane       session.LaneIdentity
+	message protocolsession.Message
+	op      protocolsession.Operation
+	lane    session.LaneIdentity
 }
 
 func NewRequests(runtime *Runtime, random io.Reader) *Requests {
 	return &Requests{
-		runtime: runtime, ids: operationIDSource{random: random},
-		calls: make(map[protocolsession.OperationID]*Call),
+		runtime: runtime,
+		ids:     operationIDSource{random: random},
+		calls:   make(map[protocolsession.OperationID]*Call),
 	}
 }
 
-func (client *Requests) HandleMessage(ctx context.Context, message protocolsession.Message) error {
+func (client *Requests) Runtime() *Runtime {
+	if client == nil {
+		return nil
+	}
+	return client.runtime
+}
+
+func (client *Requests) Register() error {
+	for _, kind := range []protocolsession.MessageKind{
+		protocolsession.MessageCatalogResult,
+		protocolsession.MessageOpenResults,
+		protocolsession.MessageLeaseResult,
+		protocolsession.MessageBlockFragment,
+		protocolsession.MessageOperationComplete,
+		protocolsession.MessageOperationError,
+		protocolsession.MessageScanProgress,
+		protocolsession.MessageLaneAttach,
+		protocolsession.MessagePeerAnswer,
+		protocolsession.MessagePeerCandidate,
+	} {
+		if err := client.runtime.inbound.RegisterHandler(kind, client); err != nil {
+			return fmt.Errorf("register receiver response %d: %w", kind, err)
+		}
+	}
+	return nil
+}
+
+func (client *Requests) HandleMessage(
+	ctx context.Context,
+	op protocolsession.Operation,
+	message protocolsession.Message,
+) error {
+	return client.handleInboundMessage(ctx, op, message, session.LaneIdentity{}, time.Time{})
+}
+
+func (client *Requests) handleInboundMessage(
+	_ context.Context,
+	op protocolsession.Operation,
+	message protocolsession.Message,
+	lane session.LaneIdentity,
+	observedAt time.Time,
+) error {
 	id, ok := message.OperationID()
 	if !ok {
 		return session.ErrOperationMissing
@@ -105,73 +158,55 @@ func (client *Requests) HandleMessage(ctx context.Context, message protocolsessi
 	client.mu.Lock()
 	call := client.calls[id]
 	client.mu.Unlock()
-	if call == nil {
-		// OperationTable already classifies authenticated late finals and
-		// fragments; a locally cancelled caller may safely have released its sink.
+	if call == nil || op.IsZero() {
 		return nil
 	}
-	generation, ok := protocolsession.OperationGenerationFromContext(ctx, id)
-	if !ok {
-		return nil
-	}
-	expected, _ := call.operationAuthority()
+	expected := call.Operation()
 	if expected.IsZero() {
-		if !generation.IsCurrent() {
+		if !op.IsCurrent() {
 			return nil
 		}
-	} else if !expected.Same(generation) {
+	} else if !expected.Same(op) {
 		return nil
 	}
 	if requestlane.Managed(call.requestKind) && senderResponseFinal(message.Kind()) {
 		call.requests.Complete(client.runtime.now())
 	}
-	lane, _ := inboundLane(ctx)
-	response := operationResponse{message: message, generation: generation, lane: lane}
+	response := operationResponse{message: message, op: op, lane: lane}
 	var err error
 	if call.traceEnabled && message.Kind() == protocolsession.MessageOperationError {
-		source, hasSource := ctx.Value(inboundLaneContextKey{}).(authenticatedReceiveContext)
-		lane, hasLane := source.lane, hasSource && source.lane.Valid(true)
 		err = call.enqueueAuthenticatedFailure(response, authenticatedFailureSource{
 			protocolSessionID: client.runtime.sessionID,
 			observations:      client.runtime.protocolObservations,
-			observedAt:        source.observedAt,
+			observedAt:        observedAt,
 			lane:              lane,
-			hasLane:           hasLane,
+			hasLane:           lane.Valid(true),
 		})
 	} else {
 		err = call.enqueue(response)
 	}
 	if err != nil {
-		call.recordProtocolTraceFailure(err)
+		call.RecordTraceFailure(err)
 	}
 	return err
 }
 
-func (client *Requests) begin(
+func (client *Requests) Begin(
 	ctx context.Context,
 	kind protocolsession.MessageKind,
 	body []byte,
 ) (*Call, error) {
-	return client.beginOn(ctx, nil, kind, body)
-}
-
-func (client *Requests) beginOn(
-	ctx context.Context,
-	lane *session.LaneIdentity,
-	kind protocolsession.MessageKind,
-	body []byte,
-) (*Call, error) {
-	call, message, err := client.prepareCall(ctx, kind, body)
+	call, message, err := client.PrepareCall(ctx, kind, body)
 	if err != nil {
 		return nil, err
 	}
-	if err := client.beginCall(ctx, lane, call, message); err != nil {
+	if err := client.BeginCall(ctx, nil, call, message); err != nil {
 		return nil, err
 	}
 	return call, nil
 }
 
-func (client *Requests) prepareCall(
+func (client *Requests) PrepareCall(
 	ctx context.Context,
 	kind protocolsession.MessageKind,
 	body []byte,
@@ -190,9 +225,7 @@ func (client *Requests) prepareCall(
 	return client.newCall(ctx, id, kind), message, nil
 }
 
-// Preparing identity separately lets an operation claim terminal observation
-// before admission or sending can race cancellation and runtime shutdown.
-func (client *Requests) beginCall(
+func (client *Requests) BeginCall(
 	ctx context.Context,
 	lane *session.LaneIdentity,
 	call *Call,
@@ -202,83 +235,51 @@ func (client *Requests) beginCall(
 	client.mu.Lock()
 	if client.closed {
 		client.mu.Unlock()
-		call.recordProtocolTraceFailure(session.ErrRuntimeClosed)
-		client.end(call)
-		return session.ErrRuntimeClosed
+		call.RecordTraceFailure(session.ErrRuntimeClosed)
+		client.End(call)
+		return protocolsession.MarkNotSent(session.ErrRuntimeClosed)
 	}
 	if client.calls[id] != nil {
 		client.mu.Unlock()
-		call.recordProtocolTraceFailure(session.ErrOperationMissing)
-		client.end(call)
-		return session.ErrOperationMissing
+		call.RecordTraceFailure(session.ErrOperationMissing)
+		client.End(call)
+		return protocolsession.MarkNotSent(session.ErrOperationMissing)
 	}
 	client.calls[id] = call
 	client.mu.Unlock()
-	completion := client.sendRequest(ctx, lane, call, message)
-	call.recordProtocolTraceSend(completion)
-	outcome, err := completion.Outcome, completion.Err
-	exactAuthority := completion.Admitted && !completion.Generation.IsZero() &&
-		!completion.Operation.IsZero() && completion.Generation.Same(completion.Operation.Generation())
-	safePreadmissionDrop := !completion.Admitted && outcome == protocolsession.SendOutcomeDropped
-	if !exactAuthority && !safePreadmissionDrop {
-		authorityErr := client.runtime.failRPCOperationAuthority()
-		call.recordProtocolTraceFailure(authorityErr)
-		client.end(call)
-		return newRPCRequestSendError(
-			outcome, completion.Admitted,
-			rpcDeliveryError(client.runtime, errRequestNotDelivered, authorityErr),
-		)
-	}
-	if exactAuthority && !call.setAuthority(completion.Generation, completion.Operation) {
-		call.recordProtocolTraceFailure(session.ErrRuntimeClosed)
-		client.end(call)
-		return newRPCRequestSendError(
-			outcome, true,
-			rpcDeliveryError(client.runtime, errRequestNotDelivered, session.ErrRuntimeClosed),
-		)
-	}
-	if err == nil && outcome == protocolsession.SendOutcomeTransportConfirmed {
-		return nil
-	}
-	if outcome == protocolsession.SendOutcomeUnknown && ctx.Err() == nil && client.runtime.ctx.Err() == nil {
-		if !completion.Settled || !call.setRequestReplay(message, completion.Replay) {
-			authorityErr := client.runtime.failRPCOperationAuthority()
-			call.recordProtocolTraceFailure(authorityErr)
-			client.end(call)
-			return newRPCRequestSendError(
-				outcome, completion.Admitted,
-				rpcDeliveryError(client.runtime, errRequestNotDelivered, authorityErr),
-			)
-		}
-		// Transport acceptance is ambiguous: the peer may already own this exact
-		// operation. The exact request replay is retained only to order a later
-		// dependent control on a replacement lane.
-		return nil
-	}
-	var cleanupErr error
-	if completion.Admitted {
-		cleanupErr = client.admitCancellation(call, contentflow.CancelReasonTimeout)
-	}
-	deliveryErr := rpcDeliveryError(
-		client.runtime, errRequestNotDelivered, errors.Join(err, cleanupErr),
-	)
-	// The delivery wrapper describes the unsuccessful request, not an
-	// additional fault. Preserve the send and cleanup evidence separately so
-	// an owner can distinguish a canceled send from failed cancellation.
+
+	err := client.sendRequest(ctx, lane, call, message)
 	if err == nil {
-		call.recordProtocolTraceFailure(errRequestNotDelivered)
-	} else {
-		call.recordProtocolTraceFailure(err)
+		call.recordProtocolTraceSend(sessionobs.SendStatusConfirmed)
+		return nil
 	}
-	call.recordProtocolTraceCleanup(cleanupErr)
+	if protocolsession.IsNotSent(err) {
+		call.recordProtocolTraceSend(sessionobs.SendStatusNotSent)
+		call.RecordTraceFailure(err)
+		if client.runtime.ctx.Err() != nil {
+			call.RecordTraceFailure(session.ErrRuntimeClosed)
+		}
+		client.End(call)
+		return protocolsession.MarkNotSent(rpcDeliveryError(client.runtime, errRequestNotDelivered, err))
+	}
+	// Uncertain physical send: the operation remains admitted in operationTable.
+	call.recordProtocolTraceSend(sessionobs.SendStatusUncertain)
+	if ctx.Err() == nil && client.runtime.ctx.Err() == nil {
+		// Transport acceptance is ambiguous: peer may already own this exact
+		// operation. Retain the request so a migrated continuation can replay it
+		// ahead of dependent control messages on a replacement lane.
+		call.setRequestReplay(message)
+		return nil
+	}
+	cleanupErr := client.admitCancellation(call, contentflow.CancelReasonTimeout)
+	deliveryErr := rpcDeliveryError(client.runtime, errRequestNotDelivered, errors.Join(err, cleanupErr))
+	call.RecordTraceFailure(err)
+	call.RecordTraceCleanup(cleanupErr)
 	if client.runtime.ctx.Err() != nil {
-		call.recordProtocolTraceFailure(session.ErrRuntimeClosed)
+		call.RecordTraceFailure(session.ErrRuntimeClosed)
 	}
-	client.end(call)
-	return newRPCRequestSendError(
-		outcome, completion.Admitted,
-		deliveryErr,
-	)
+	client.End(call)
+	return deliveryErr
 }
 
 func (client *Requests) sendRequest(
@@ -286,17 +287,39 @@ func (client *Requests) sendRequest(
 	lane *session.LaneIdentity,
 	call *Call,
 	message protocolsession.Message,
-) protocolsession.SendCompletion {
+) error {
+	var violationObserver func(protocolsession.AuthenticatedOperationViolation)
+	if message.Kind() == protocolsession.MessagePeerOffer {
+		violationObserver = call.observeAuthenticatedOperationViolation
+	}
 	for {
 		if err := client.waitRequestCapacity(ctx, call); err != nil {
-			return protocolsession.SendCompletion{Settled: true, Outcome: protocolsession.SendOutcomeDropped, Err: err}
+			return protocolsession.MarkNotSent(err)
+		}
+		op, maxContinuations, hasLimit, releaseInFlight, err := client.runtime.operations.AdmitOutboundRequest(
+			message, violationObserver,
+		)
+		if err != nil {
+			if protocolsession.IsOperationCapacityError(err) {
+				continue
+			}
+			return protocolsession.MarkNotSent(err)
+		}
+		if !call.setAuthority(op, maxContinuations, hasLimit) {
+			client.runtime.operations.RollbackUnsentRequest(op.Ref())
+			releaseInFlight(false)
+			return protocolsession.MarkNotSent(session.ErrRuntimeClosed)
 		}
 		selected, reservation, estimate, err := client.runtime.lanes.selectRequestLane(lane, message.Kind())
 		if err != nil {
-			return protocolsession.SendCompletion{Settled: true, Outcome: protocolsession.SendOutcomeDropped, Err: err}
+			client.runtime.operations.RollbackUnsentRequest(op.Ref())
+			releaseInFlight(false)
+			return protocolsession.MarkNotSent(err)
 		}
 		if reservation != nil && !call.requests.Reserve(reservation, estimate) {
-			return protocolsession.SendCompletion{Settled: true, Outcome: protocolsession.SendOutcomeDropped, Err: session.ErrRuntimeClosed}
+			client.runtime.operations.RollbackUnsentRequest(op.Ref())
+			releaseInFlight(false)
+			return protocolsession.MarkNotSent(session.ErrRuntimeClosed)
 		}
 		var usableAtSelection uint32
 		if call.traceEnabled {
@@ -304,39 +327,29 @@ func (client *Requests) sendRequest(
 		}
 		call.setProtocolTraceLane(selected.identity, usableAtSelection)
 		call.bindRequestCarrier(selected.retired)
-		var receipt protocolsession.SendReceipt
-		if message.Kind() == protocolsession.MessagePeerOffer {
-			receipt, err = selected.writer.TryControlObservingAuthenticatedViolations(message, call.observeAuthenticatedOperationViolation)
-		} else {
-			receipt, err = selected.writer.TryControl(message)
+		sendErr := selected.writer.SendControl(ctx, message, releaseInFlight)
+		if sendErr != nil && protocolsession.IsNotSent(sendErr) {
+			client.runtime.operations.RollbackUnsentRequest(op.Ref())
+			call.requests.Reserve(nil, estimate)
+			return sendErr
 		}
-		if err != nil {
-			return protocolsession.SendCompletion{Settled: true, Outcome: protocolsession.SendOutcomeDropped, Err: err}
-		}
-		completion := receipt.Await(ctx)
-		if completion.Admitted || completion.Outcome != protocolsession.SendOutcomeDropped ||
-			!protocolsession.IsOperationCapacityError(completion.Err) {
-			return completion
-		}
-		call.requests.Reserve(nil, estimate)
-		// Another lane can consume the available slot before this writer claims
-		// the request. Only this proven unsent refusal is safe to retry.
+		return sendErr
 	}
 }
 
-func (client *Requests) sendContinuation(
+func (client *Requests) SendContinuation(
 	ctx context.Context,
 	call *Call,
 	kind protocolsession.MessageKind,
 	body []byte,
-) (protocolsession.SendOutcome, error) {
+) (protocolsession.OperationDisposition, error) {
 	if call == nil || call.id.IsZero() {
-		return protocolsession.SendOutcomeDropped, session.ErrOperationMissing
+		return protocolsession.OperationDrop, session.ErrOperationMissing
 	}
 	if kind == protocolsession.MessagePeerCandidate {
 		release, err := call.acquireCandidateSend(ctx, client.runtime.ctx)
 		if err != nil {
-			return protocolsession.SendOutcomeDropped, err
+			return protocolsession.OperationDrop, err
 		}
 		defer release()
 	}
@@ -344,113 +357,102 @@ func (client *Requests) sendContinuation(
 	active := client.calls[call.id] == call
 	client.mu.Unlock()
 	if !active {
-		return protocolsession.SendOutcomeDropped, session.ErrOperationMissing
+		return protocolsession.OperationDrop, session.ErrOperationMissing
+	}
+	op := call.Operation()
+	if op.IsZero() {
+		return protocolsession.OperationDrop, session.ErrOperationMissing
 	}
 	message, err := protocolsession.NewMessage(kind, &call.id, body)
 	if err != nil {
-		return protocolsession.SendOutcomeDropped, err
+		return protocolsession.OperationDrop, err
 	}
-	var retryCause error
-	for attempt := range 2 {
-		result := client.sendContinuationAttempt(ctx, call, message, kind, attempt, retryCause)
-		if result.retry {
-			retryCause = result.retryCause
-			continue
+	if kind == protocolsession.MessageCancel {
+		// Commit the local tombstone synchronously; emit a wire CANCEL only when
+		// this call actually transitions an active operation generation.
+		transitioned, err := client.runtime.reconcileLocalCancel(op.Ref())
+		if err != nil {
+			return protocolsession.OperationDrop, err
 		}
-		return result.outcome, result.err
+		if !transitioned {
+			return protocolsession.OperationDrop, nil
+		}
+		client.enqueueBestEffortCancel(call, message)
+		return protocolsession.OperationDeliver, nil
 	}
-	return protocolsession.SendOutcomeDropped, errors.Join(retryCause, errContinuationNotDelivered)
+	disposition, undo, releaseInFlight, err := client.runtime.operations.AdmitOutboundContinuation(op.Ref(), message)
+	if err != nil {
+		return protocolsession.OperationDrop, err
+	}
+	if disposition == protocolsession.OperationDrop {
+		// Exact continuation replay or already-retired op is an idempotent drop.
+		return protocolsession.OperationDrop, nil
+	}
+	return client.deliverContinuation(ctx, call, message, undo, releaseInFlight)
 }
 
-type continuationAttemptResult struct {
-	outcome    protocolsession.SendOutcome
-	err        error
-	retry      bool
-	retryCause error
-}
-
-func (client *Requests) sendContinuationAttempt(
+func (client *Requests) deliverContinuation(
 	ctx context.Context,
 	call *Call,
 	message protocolsession.Message,
-	kind protocolsession.MessageKind,
-	attempt int,
-	retryCause error,
-) continuationAttemptResult {
-	selected, err := client.continuationLane(call)
-	if err != nil {
-		return continuationAttemptResult{
-			outcome: protocolsession.SendOutcomeDropped, err: errors.Join(retryCause, err),
+	undo func(),
+	releaseInFlight func(bool),
+) (protocolsession.OperationDisposition, error) {
+	var retryCause error
+	for attempt := range 2 {
+		selected, laneErr := client.continuationLane(call)
+		if laneErr != nil {
+			rollbackContinuation(undo, releaseInFlight)
+			return protocolsession.OperationDrop, errors.Join(retryCause, laneErr)
 		}
-	}
-	_, authority := call.operationAuthority()
-	if authority.IsZero() {
-		return continuationAttemptResult{outcome: protocolsession.SendOutcomeDropped, err: session.ErrOperationMissing}
-	}
-	receipt, err := selected.writer.TryAuthorizedControl(message, authority)
-	if err != nil {
-		if client.retryContinuationAdmission(ctx, attempt, selected, err) {
-			return continuationAttemptResult{retry: true, retryCause: err}
+		onDone := continuationDoneHook(attempt, releaseInFlight)
+		sendErr := selected.writer.SendControl(ctx, message, onDone)
+		if sendErr == nil {
+			releaseInFlight(true)
+			return protocolsession.OperationDeliver, nil
 		}
-		return continuationAttemptResult{
-			outcome: protocolsession.SendOutcomeDropped, err: errors.Join(retryCause, err),
+		if !protocolsession.IsNotSent(sendErr) {
+			// Uncertain send: keep continuation recorded and let onDone release pin.
+			return protocolsession.OperationDeliver, rpcDeliveryError(
+				client.runtime, errContinuationNotDelivered, errors.Join(retryCause, sendErr),
+			)
 		}
-	}
-	if kind == protocolsession.MessageCancel && receipt.Admitted() {
-		// CANCEL commits the local tombstone synchronously; physical delivery is
-		// deliberately best effort and must not hold cancellation completion open.
-		return continuationAttemptResult{outcome: protocolsession.SendOutcomeUnknown}
-	}
-	completion := receipt.Await(ctx)
-	if client.retryContinuationCompletion(ctx, attempt, selected, completion) {
-		return continuationAttemptResult{retry: true, retryCause: completion.Err}
-	}
-	if kind == protocolsession.MessageCancel && completion.Outcome == protocolsession.SendOutcomeDropped && completion.Err == nil {
-		return continuationAttemptResult{outcome: completion.Outcome}
-	}
-	if !completion.Admitted && completion.Outcome == protocolsession.SendOutcomeDropped && completion.Err == nil {
-		// Exact continuation replay is a successful idempotent no-op. It must
-		// remain distinguishable from a pre-transport failure with a cause.
-		return continuationAttemptResult{outcome: completion.Outcome}
-	}
-	if completion.Err != nil || completion.Outcome != protocolsession.SendOutcomeTransportConfirmed {
-		return continuationAttemptResult{
-			outcome: completion.Outcome,
-			err: rpcDeliveryError(
-				client.runtime, errContinuationNotDelivered, errors.Join(retryCause, completion.Err),
-			),
+		if client.canRetryContinuation(ctx, attempt, sendErr) {
+			client.runtime.lanes.markSelectedClosing(selected)
+			retryCause = sendErr
+			continue
 		}
+		rollbackContinuation(undo, releaseInFlight)
+		return protocolsession.OperationDrop, rpcDeliveryError(
+			client.runtime, errContinuationNotDelivered, errors.Join(retryCause, sendErr),
+		)
 	}
-	return continuationAttemptResult{outcome: completion.Outcome}
+	rollbackContinuation(undo, releaseInFlight)
+	return protocolsession.OperationDrop, errors.Join(retryCause, errContinuationNotDelivered)
 }
 
-func (client *Requests) retryContinuationAdmission(
-	ctx context.Context,
-	attempt int,
-	selected selectedLane,
-	err error,
-) bool {
-	if attempt != 0 || !errors.Is(err, protocolsession.ErrWriterStopped) ||
-		ctx.Err() != nil || client.runtime.ctx.Err() != nil {
-		return false
-	}
-	client.runtime.lanes.markSelectedClosing(selected)
-	return true
+func (client *Requests) canRetryContinuation(ctx context.Context, attempt int, sendErr error) bool {
+	return attempt == 0 && ctx.Err() == nil && client.runtime.ctx.Err() == nil && retryableLaneFailure(sendErr)
 }
 
-func (client *Requests) retryContinuationCompletion(
-	ctx context.Context,
-	attempt int,
-	selected selectedLane,
-	completion protocolsession.SendCompletion,
-) bool {
-	if attempt != 0 || !completion.Settled || completion.Admitted ||
-		completion.Outcome != protocolsession.SendOutcomeDropped || !completion.RetryableAcrossLane ||
-		ctx.Err() != nil || client.runtime.ctx.Err() != nil {
-		return false
+func continuationDoneHook(attempt int, releaseInFlight func(bool)) func(bool) {
+	if attempt != 0 {
+		return releaseInFlight
 	}
-	client.runtime.lanes.markSelectedClosing(selected)
-	return true
+	// On a retryable pre-send refusal we keep the pin across the retry and
+	// release it only once the final attempt settles.
+	return func(deliveredOrUncertain bool) {
+		if deliveredOrUncertain {
+			releaseInFlight(true)
+		}
+	}
+}
+
+func rollbackContinuation(undo func(), releaseInFlight func(bool)) {
+	if undo != nil {
+		undo()
+	}
+	releaseInFlight(false)
 }
 
 func (client *Requests) continuationLane(call *Call) (selectedLane, error) {
@@ -467,20 +469,79 @@ func (client *Requests) continuationLane(call *Call) (selectedLane, error) {
 	if err := call.queueRequestReplay(selected.writer); err != nil {
 		return selectedLane{}, err
 	}
-	// A continuation migrates only after the authenticated original lane is no
-	// longer usable. An ambiguous initial request is queued first on the same
-	// control FIFO so a candidate cannot overtake its dependency. CANCEL remains
-	// a preemptive race signal and may retire the operation before replay delivery.
 	call.lane = selected.identity
 	return selected, nil
 }
 
-func (client *Requests) end(call *Call) {
+func (client *Requests) Await(ctx context.Context, call *Call) (protocolsession.Message, error) {
+	return client.AwaitCall(ctx, call, true)
+}
+
+func (client *Requests) AwaitPeer(ctx context.Context, call *Call) (protocolsession.Message, error) {
+	return client.AwaitCall(ctx, call, false)
+}
+
+func (client *Requests) AwaitCall(
+	ctx context.Context,
+	call *Call,
+	cancelOnContext bool,
+) (protocolsession.Message, error) {
+	if client == nil || client.runtime == nil {
+		return protocolsession.Message{}, session.ErrRuntimeClosed
+	}
+	if call == nil {
+		return protocolsession.Message{}, session.ErrOperationMissing
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	carrierRetired := call.controlCarrierRetired()
+	for {
+		done := call.doneChannel()
+		select {
+		case <-ctx.Done():
+			call.RecordTraceFailure(ctx.Err())
+			if !cancelOnContext {
+				return protocolsession.Message{}, ctx.Err()
+			}
+			cleanupErr := client.admitCancellation(call, contentflow.CancelReasonTimeout)
+			call.RecordTraceCleanup(cleanupErr)
+			return protocolsession.Message{}, errors.Join(ctx.Err(), cleanupErr)
+		case <-client.runtime.Done():
+			call.RecordTraceFailure(session.ErrRuntimeClosed)
+			return protocolsession.Message{}, errors.Join(session.ErrRuntimeClosed, client.runtime.Err())
+		case <-done:
+			call.RecordTraceFailure(session.ErrOperationMissing)
+			return protocolsession.Message{}, session.ErrOperationMissing
+		case <-carrierRetired:
+			select {
+			case response := <-call.messages:
+				if message, accepted := call.acceptResponse(response); accepted {
+					return message, nil
+				}
+				continue
+			default:
+			}
+			if client.runtime.Lifetime().Err() != nil {
+				call.RecordTraceFailure(session.ErrRuntimeClosed)
+				return protocolsession.Message{}, errors.Join(session.ErrRuntimeClosed, client.runtime.Err())
+			}
+			call.RecordTraceFailure(ErrRequestCarrierRetired)
+			return protocolsession.Message{}, ErrRequestCarrierRetired
+		case response := <-call.messages:
+			if message, accepted := call.acceptResponse(response); accepted {
+				return message, nil
+			}
+		}
+	}
+}
+
+func (client *Requests) End(call *Call) {
 	if call == nil {
 		return
 	}
 	if client == nil {
-		call.close()
+		call.Close()
 		return
 	}
 	client.mu.Lock()
@@ -493,7 +554,7 @@ func (client *Requests) end(call *Call) {
 			client.runtime.traceProtocolOperation(event)
 		}
 	}
-	call.close()
+	call.Close()
 }
 
 func (client *Requests) Close() {
@@ -509,26 +570,23 @@ func (client *Requests) Close() {
 	clear(client.calls)
 	client.mu.Unlock()
 	for _, call := range calls {
-		call.recordProtocolTraceFailure(session.ErrRuntimeClosed)
+		call.RecordTraceFailure(session.ErrRuntimeClosed)
 		if client.runtime != nil && client.runtime.protocolOperationTracingEnabled() {
 			if event, ok := call.protocolOperationTrace(client.runtime.now()); ok {
 				client.runtime.traceProtocolOperation(event)
 			}
 		}
-		call.close()
+		call.Close()
 	}
 }
 
-func (client *Requests) cancelAndEnd(call *Call, reason contentflow.CancelReason) error {
+func (client *Requests) CancelAndEnd(call *Call, reason contentflow.CancelReason) error {
 	if call == nil {
 		return nil
 	}
-	// The exact-generation tombstone must be committed before the response sink
-	// disappears. Otherwise a local decoder/observer failure can leave an active
-	// remote operation with no caller capable of consuming or cancelling it.
 	err := client.admitCancellation(call, reason)
-	call.recordProtocolTraceCleanup(err)
-	client.end(call)
+	call.RecordTraceCleanup(err)
+	client.End(call)
 	return err
 }
 
@@ -542,57 +600,47 @@ func (client *Requests) admitCancellation(
 	if call == nil {
 		return session.ErrOperationMissing
 	}
-	generation, authority := call.operationAuthority()
-	if generation.IsZero() || authority.IsZero() {
+	op := call.Operation()
+	if op.IsZero() {
 		return session.ErrOperationMissing
+	}
+	transitioned, reconcileErr := client.runtime.reconcileLocalCancel(op.Ref())
+	if !transitioned {
+		return reconcileErr
 	}
 	body, err := contentflow.EncodeCancelReason(reason)
 	if err != nil {
-		return errors.Join(err, client.runtime.reconcileLocalCancel(generation))
+		return errors.Join(err, reconcileErr)
 	}
 	message, err := protocolsession.NewMessage(protocolsession.MessageCancel, &call.id, body)
 	if err != nil {
-		return errors.Join(err, client.runtime.reconcileLocalCancel(generation))
+		return errors.Join(err, reconcileErr)
 	}
-	selected, err := client.continuationLane(call)
-	if err == nil {
-		_, err = selected.writer.TryAuthorizedControl(message, authority)
-	}
-	if err == nil {
-		// TryAuthorizedControl admits CANCEL synchronously or proves that the
-		// generation is already retired. Wire delivery remains best effort.
-		return nil
-	}
-	return errors.Join(err, client.runtime.reconcileLocalCancel(generation))
+	client.enqueueBestEffortCancel(call, message)
+	return reconcileErr
 }
 
-func FinalizeLocalCancelIfDropped(
-	runtime *Runtime,
-	generation protocolsession.OperationGeneration,
-	outcome protocolsession.SendOutcome,
-) error {
-	if outcome != protocolsession.SendOutcomeDropped {
-		return nil
-	}
-	return runtime.reconcileLocalCancel(generation)
-}
-
-func (client *Requests) register(router *protocolsession.RoleRouter) error {
-	for _, kind := range []protocolsession.MessageKind{
-		protocolsession.MessageCatalogResult,
-		protocolsession.MessageOpenResults,
-		protocolsession.MessageLeaseResult,
-		protocolsession.MessageBlockFragment,
-		protocolsession.MessageOperationComplete,
-		protocolsession.MessageOperationError,
-		protocolsession.MessageScanProgress,
-		protocolsession.MessageLaneAttach,
-		protocolsession.MessagePeerAnswer,
-		protocolsession.MessagePeerCandidate,
-	} {
-		if err := router.RegisterHandler(kind, client); err != nil {
-			return fmt.Errorf("register receiver response %d: %w", kind, err)
+func (client *Requests) enqueueBestEffortCancel(call *Call, message protocolsession.Message) {
+	for attempt := range 2 {
+		selected, laneErr := client.continuationLane(call)
+		if laneErr != nil {
+			return
 		}
+		err := selected.writer.EnqueueControl(message, nil)
+		if err == nil {
+			return
+		}
+		if attempt == 0 && client.runtime.ctx.Err() == nil && errors.Is(err, protocolsession.ErrWriterStopped) {
+			client.runtime.lanes.markSelectedClosing(selected)
+			continue
+		}
+		return
 	}
-	return nil
+}
+
+func retryableLaneFailure(err error) bool {
+	return errors.Is(err, protocolsession.ErrWriterStopped) ||
+		errors.Is(err, protocolsession.ErrControlQueueFull) ||
+		errors.Is(err, protocolsession.ErrDataQueueFull) ||
+		protocolsession.IsNotSent(err)
 }

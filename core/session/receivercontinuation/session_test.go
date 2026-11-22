@@ -128,9 +128,11 @@ func (terminal) Stop(context.Context) error    { return nil }
 
 type peer struct{}
 
-func (peer) HandleMessage(context.Context, protocolsession.Message) error { return nil }
-func (peer) Cancel(context.Context, protocolsession.OperationID) error    { return nil }
-func (peer) Run(ctx context.Context) error                                { <-ctx.Done(); return ctx.Err() }
+func (peer) HandleMessage(context.Context, protocolsession.Operation, protocolsession.Message) error {
+	return nil
+}
+func (peer) Cancel(context.Context, protocolsession.Operation) error { return nil }
+func (peer) Run(ctx context.Context) error                           { <-ctx.Done(); return ctx.Err() }
 
 type pipe struct {
 	mu     sync.Mutex

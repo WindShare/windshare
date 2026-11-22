@@ -257,10 +257,10 @@ type testTerminalConnectivity struct {
 
 type testSenderPeerHandler struct{}
 
-func (testSenderPeerHandler) HandleMessage(context.Context, protocolsession.Message) error {
+func (testSenderPeerHandler) HandleMessage(context.Context, protocolsession.Operation, protocolsession.Message) error {
 	return nil
 }
-func (testSenderPeerHandler) Cancel(context.Context, protocolsession.OperationID) error { return nil }
+func (testSenderPeerHandler) Cancel(context.Context, protocolsession.Operation) error { return nil }
 func (testSenderPeerHandler) Run(ctx context.Context) error {
 	<-ctx.Done()
 	return ctx.Err()

@@ -139,7 +139,7 @@ func newResourceQueuedHandshake(t *testing.T, sockets *socketauthority.Authority
 		if decodeErr != nil {
 			return nil, decodeErr
 		}
-		h.sender = newPeerAttempt(peerAttemptConfig{factory: senderFactory, session: h.session, operation: h.operation.id, offer: offer, onDone: func(*peerAttempt, error) {}})
+		h.sender = newPeerAttempt(peerAttemptConfig{factory: senderFactory, session: h.session, operation: testPeerOperation(h.operation.id), offer: offer, onDone: func(*peerAttempt, error) {}})
 		h.operation.sender = h.sender
 		h.operation.bindReceiverSignalingOperation(binding)
 		var work sync.WaitGroup

@@ -2,6 +2,8 @@ package sendersession
 
 import (
 	"context"
+	"errors"
+
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/internal/sessioncore"
@@ -82,11 +84,11 @@ type PeerSession interface {
 	ProtocolSessionID() protocolsession.ProtocolSessionID
 	SendPeerControl(
 		context.Context,
+		protocolsession.Operation,
 		protocolsession.MessageKind,
-		protocolsession.OperationID,
 		[]byte,
 	) (protocolsession.OperationDisposition, error)
-	FailPeerOperation(context.Context, protocolsession.OperationID, uint16, string) error
+	FailPeerOperation(context.Context, protocolsession.Operation, uint16, string) error
 	AdmitPeerChannel(
 		context.Context,
 		protocolsession.FrameChannel,
@@ -103,7 +105,7 @@ type PeerSession interface {
 // attempts before returning so ProtocolSession termination cannot leak peers.
 type PeerHandler interface {
 	protocolsession.MessageHandler
-	Cancel(context.Context, protocolsession.OperationID) error
+	Cancel(context.Context, protocolsession.Operation) error
 	Run(context.Context) error
 }
 
@@ -168,16 +170,19 @@ func (peer senderPeerSession) ProtocolSessionID() protocolsession.ProtocolSessio
 
 func (peer senderPeerSession) SendPeerControl(
 	ctx context.Context,
+	op protocolsession.Operation,
 	kind protocolsession.MessageKind,
-	operationID protocolsession.OperationID,
 	body []byte,
 ) (protocolsession.OperationDisposition, error) {
-	if peer.runtime == nil || operationID.IsZero() ||
+	if peer.runtime == nil || op.IsZero() ||
 		(kind != protocolsession.MessagePeerAnswer && kind != protocolsession.MessagePeerCandidate) {
 		return protocolsession.OperationDrop, session.ErrRuntimeConfig
 	}
-	outcome, err := peer.outbound.SendControl(ctx, kind, operationID, body)
-	if outcome.Evidence() == protocolsession.ResponseSendEvidenceDefinitelyNotSent {
+	err := peer.outbound.SendControl(ctx, op, kind, body)
+	if errors.Is(err, protocolsession.ErrOperationSuppressed) {
+		return protocolsession.OperationDrop, nil
+	}
+	if protocolsession.IsNotSent(err) {
 		return protocolsession.OperationDrop, err
 	}
 	return protocolsession.OperationDeliver, err
@@ -199,22 +204,18 @@ func (peer senderPeerSession) AdmitPeerChannel(
 
 func (peer senderPeerSession) FailPeerOperation(
 	ctx context.Context,
-	operationID protocolsession.OperationID,
+	op protocolsession.Operation,
 	code uint16,
 	message string,
 ) error {
-	if peer.runtime == nil || operationID.IsZero() {
+	if peer.runtime == nil || op.IsZero() {
 		return session.ErrRuntimeConfig
 	}
-	generation, ok := protocolsession.OperationGenerationFromContext(ctx, operationID)
+	binding, ok := op.PeerAttemptBinding()
 	if !ok {
 		return session.ErrOperationMissing
 	}
-	binding, ok := generation.PeerAttemptBinding()
-	if !ok {
-		return session.ErrOperationMissing
-	}
-	return peer.outbound.SendOperationError(ctx, operationID, protocolsession.OperationFailure{
+	return peer.outbound.SendOperationError(ctx, op, protocolsession.OperationFailure{
 		Scope: protocolsession.OperationScopePeer, Code: code, Message: message, PeerAttempt: &binding,
 	})
 }

@@ -137,11 +137,15 @@ type delayedPeerRejectionHandler struct {
 	reject <-chan struct{}
 }
 
-func (handler *delayedPeerRejectionHandler) HandleMessage(ctx context.Context, message protocolsession.Message) error {
+func (handler *delayedPeerRejectionHandler) HandleMessage(
+	ctx context.Context,
+	op protocolsession.Operation,
+	message protocolsession.Message,
+) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-handler.reject:
-		return handler.verticalPeerHandler.HandleMessage(ctx, message)
+		return handler.verticalPeerHandler.HandleMessage(ctx, op, message)
 	}
 }

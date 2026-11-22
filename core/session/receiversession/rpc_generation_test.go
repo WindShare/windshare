@@ -3,13 +3,14 @@ package receiversession
 import (
 	"bytes"
 	"context"
-	"github.com/windshare/windshare/core/framechannel"
-	"github.com/windshare/windshare/core/session/internal/sessioncore"
-	"github.com/windshare/windshare/core/session/protocolsession"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
+
+	"github.com/windshare/windshare/core/framechannel"
+	"github.com/windshare/windshare/core/session/internal/sessioncore"
+	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
 func TestReceiverPeerOperationLateTerminateCannotCrossSameIDGeneration(t *testing.T) {
@@ -23,7 +24,7 @@ func testReceiverPeerOperationLateTerminateCannotCrossSameIDGeneration(t *testin
 	var physicalSends atomic.Int32
 	channel.onSend = func(framechannel.Frame) { physicalSends.Add(1) }
 	startReceiverPeerWriter(t, runtime)
-	open := func() (*PeerOperation, *sessioncore.Call, protocolsession.OperationGeneration) {
+	open := func() (*PeerOperation, *sessioncore.Call, protocolsession.Operation) {
 		rpc := newTestRequests(runtime, bytes.NewReader(bytes.Repeat([]byte{0x86}, 8)))
 		t.Cleanup(rpc.Close)
 		receiver := &Runtime{core: runtime, lifecycle: runtime, rpc: rpc}
@@ -31,18 +32,17 @@ func testReceiverPeerOperationLateTerminateCannotCrossSameIDGeneration(t *testin
 		if err != nil {
 			t.Fatal(err)
 		}
-		generation, _ := operation.call.OperationAuthority()
-		return operation, operation.call, generation
+		return operation, operation.call, operation.call.Operation()
 	}
-	operationA, callA, generationA := open()
+	operationA, callA, opA := open()
 	cancelPendingCall(t, operationA.rpc, callA)
-	if generationA.IsActive() {
+	if opA.IsActive() {
 		t.Fatal("generation A retained authority after cancellation")
 	}
 	synctest.Wait()
 	now = now.Add(protocolsession.OperationTombstoneLifetime + time.Nanosecond)
-	operationB, callB, generationB := open()
-	if generationA.Same(generationB) || !generationB.IsActive() || callA.ID() != callB.ID() {
+	operationB, callB, opB := open()
+	if opA.Same(opB) || !opB.IsActive() || callA.ID() != callB.ID() {
 		t.Fatal("fixture did not reuse the exact operation ID in a new generation")
 	}
 	// Route stale cleanup through the current request owner to exercise exact-handle rejection.
@@ -51,7 +51,7 @@ func testReceiverPeerOperationLateTerminateCannotCrossSameIDGeneration(t *testin
 	terminationA := operationA.Terminate(context.Background())
 	assertReceiverPeerTermination(t, operationA, terminationA,
 		PeerTerminalAuthorityLocal, PeerProvenanceLocalExplicitStop, PeerTerminalOperationOnly, PeerProvenanceLocalExplicitStop, PeerDiagnosticCleanupFailed)
-	if !generationB.IsActive() || physicalSends.Load() != sendsBeforeLateCleanup {
+	if !opB.IsActive() || physicalSends.Load() != sendsBeforeLateCleanup {
 		t.Fatal("late generation A cleanup changed B or emitted a stale cancellation")
 	}
 	if _, err := operationB.SendCandidate(context.Background(), []byte{0xf6}); err != nil {
@@ -59,7 +59,7 @@ func testReceiverPeerOperationLateTerminateCannotCrossSameIDGeneration(t *testin
 	}
 	assertReceiverPeerTermination(t, operationB, operationB.Terminate(context.Background()),
 		PeerTerminalAuthorityLocal, PeerProvenanceLocalExplicitStop, PeerTerminalOperationOnly, PeerProvenanceLocalExplicitStop)
-	if generationB.IsActive() {
+	if opB.IsActive() {
 		t.Fatal("generation B retained authority after termination")
 	}
 }

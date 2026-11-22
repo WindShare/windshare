@@ -14,7 +14,7 @@ import (
 
 func TestPeerContinuationMigratesOnlyAfterOriginalLaneLoss(t *testing.T) {
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
-	t.Cleanup(runtime.abortBeforeStart)
+	t.Cleanup(runtime.AbortBeforeStart)
 	rpc := NewRequests(runtime, bytes.NewReader(bytes.Repeat([]byte{3}, protocolsession.IdentityBytes)))
 	call := &Call{
 		id: id16[protocolsession.OperationID](80), messages: make(chan operationResponse, 1),
@@ -37,18 +37,18 @@ func TestPeerContinuationMigratesOnlyAfterOriginalLaneLoss(t *testing.T) {
 		t.Fatalf("migrated continuation lane = %+v, call=%+v, error=%v", selected, call.lane, err)
 	}
 
-	if _, err := rpc.sendContinuation(
+	if _, err := rpc.SendContinuation(
 		context.Background(), nil, protocolsession.MessagePeerCandidate, nil,
 	); !errors.Is(err, session.ErrOperationMissing) {
 		t.Fatalf("nil continuation call error = %v", err)
 	}
 	inactive := &Call{id: id16[protocolsession.OperationID](81)}
-	if _, err := rpc.sendContinuation(
+	if _, err := rpc.SendContinuation(
 		context.Background(), inactive, protocolsession.MessagePeerCandidate, nil,
 	); !errors.Is(err, session.ErrOperationMissing) {
 		t.Fatalf("inactive continuation call error = %v", err)
 	}
-	if _, err := rpc.sendContinuation(
+	if _, err := rpc.SendContinuation(
 		context.Background(), call, protocolsession.MessageKind(0), nil,
 	); err == nil {
 		t.Fatal("continuation accepted an unknown message kind")
@@ -57,12 +57,19 @@ func TestPeerContinuationMigratesOnlyAfterOriginalLaneLoss(t *testing.T) {
 
 func TestPeerContinuationFailsWhenEveryAuthenticatedLaneIsGone(t *testing.T) {
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
-	t.Cleanup(runtime.abortBeforeStart)
+	t.Cleanup(runtime.AbortBeforeStart)
 	rpc := NewRequests(runtime, bytes.NewReader(bytes.Repeat([]byte{4}, protocolsession.IdentityBytes)))
 	call := &Call{
 		id: id16[protocolsession.OperationID](82), messages: make(chan operationResponse, 1),
 		lane: runtime.initial,
 	}
+	offer, _ := protocolsession.NewMessage(protocolsession.MessagePeerOffer, &call.id, []byte{0xf6})
+	op, maxCont, hasLimit, release, err := runtime.operations.AdmitOutboundRequest(offer, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release(false)
+	call.setAuthority(op, maxCont, hasLimit)
 	rpc.calls[call.id] = call
 	runtime.lanes.mu.Lock()
 	runtime.lanes.active[runtime.initial.ID].closing = true
@@ -70,7 +77,7 @@ func TestPeerContinuationFailsWhenEveryAuthenticatedLaneIsGone(t *testing.T) {
 	if _, err := rpc.continuationLane(call); !errors.Is(err, ErrLaneUnavailable) {
 		t.Fatalf("all-lane-loss continuation error = %v", err)
 	}
-	if _, err := rpc.sendContinuation(
+	if _, err := rpc.SendContinuation(
 		context.Background(), call, protocolsession.MessagePeerCandidate, []byte{0xf6},
 	); !errors.Is(err, ErrLaneUnavailable) {
 		t.Fatalf("all-lane-loss send error = %v", err)
@@ -81,28 +88,28 @@ func TestRPCBeginRollsBackEveryPreDeliveryFailure(t *testing.T) {
 	canonicalBody := []byte{0xf6}
 	t.Run("identity source", func(t *testing.T) {
 		runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
-		t.Cleanup(runtime.abortBeforeStart)
+		t.Cleanup(runtime.AbortBeforeStart)
 		rpc := NewRequests(runtime, bytes.NewReader(nil))
-		if _, err := rpc.begin(context.Background(), protocolsession.MessagePeerOffer, canonicalBody); err == nil {
+		if _, err := rpc.Begin(context.Background(), protocolsession.MessagePeerOffer, canonicalBody); err == nil {
 			t.Fatal("peer operation accepted an exhausted identity source")
 		}
 	})
 	t.Run("message schema", func(t *testing.T) {
 		runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
-		t.Cleanup(runtime.abortBeforeStart)
+		t.Cleanup(runtime.AbortBeforeStart)
 		rpc := NewRequests(runtime, bytes.NewReader(bytes.Repeat([]byte{5}, protocolsession.IdentityBytes)))
-		if _, err := rpc.begin(context.Background(), protocolsession.MessageKind(0), canonicalBody); err == nil {
+		if _, err := rpc.Begin(context.Background(), protocolsession.MessageKind(0), canonicalBody); err == nil {
 			t.Fatal("RPC admitted an unknown request kind")
 		}
 	})
 	t.Run("lane selection", func(t *testing.T) {
 		runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
-		t.Cleanup(runtime.abortBeforeStart)
+		t.Cleanup(runtime.AbortBeforeStart)
 		runtime.lanes.mu.Lock()
 		runtime.lanes.active[runtime.initial.ID].closing = true
 		runtime.lanes.mu.Unlock()
 		rpc := NewRequests(runtime, bytes.NewReader(bytes.Repeat([]byte{6}, protocolsession.IdentityBytes)))
-		if _, err := rpc.begin(context.Background(), protocolsession.MessagePeerOffer, canonicalBody); !errors.Is(err, ErrLaneUnavailable) {
+		if _, err := rpc.Begin(context.Background(), protocolsession.MessagePeerOffer, canonicalBody); !errors.Is(err, ErrLaneUnavailable) {
 			t.Fatalf("no-lane RPC error = %v", err)
 		}
 		if len(rpc.calls) != 0 {
@@ -111,7 +118,7 @@ func TestRPCBeginRollsBackEveryPreDeliveryFailure(t *testing.T) {
 	})
 	t.Run("writer shutdown", func(t *testing.T) {
 		runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
-		t.Cleanup(runtime.abortBeforeStart)
+		t.Cleanup(runtime.AbortBeforeStart)
 		lane, err := runtime.lanes.selectLane(&runtime.initial)
 		if err != nil {
 			t.Fatal(err)
@@ -120,7 +127,7 @@ func TestRPCBeginRollsBackEveryPreDeliveryFailure(t *testing.T) {
 		stop()
 		_ = lane.writer.Run(stopped)
 		rpc := NewRequests(runtime, bytes.NewReader(bytes.Repeat([]byte{7}, protocolsession.IdentityBytes)))
-		if _, err := rpc.begin(context.Background(), protocolsession.MessagePeerOffer, canonicalBody); err == nil {
+		if _, err := rpc.Begin(context.Background(), protocolsession.MessagePeerOffer, canonicalBody); err == nil {
 			t.Fatal("RPC admitted work after its physical writer stopped")
 		}
 		if len(rpc.calls) != 0 {
@@ -136,7 +143,7 @@ func TestRPCBeginRollsBackEveryPreDeliveryFailure(t *testing.T) {
 			defer cancel()
 			result := make(chan error, 1)
 			go func() {
-				_, err := rpc.begin(ctx, protocolsession.MessagePeerOffer, canonicalBody)
+				_, err := rpc.Begin(ctx, protocolsession.MessagePeerOffer, canonicalBody)
 				result <- err
 			}()
 			synctest.Wait()
@@ -146,11 +153,11 @@ func TestRPCBeginRollsBackEveryPreDeliveryFailure(t *testing.T) {
 			if pendingCalls != 1 {
 				t.Fatal("RPC did not register its pending response sink")
 			}
-			synctest.Sleep(deadline - time.Nanosecond)
+			time.Sleep(deadline - time.Nanosecond)
 			if len(result) != 0 {
 				t.Fatal("RPC returned before its deadline")
 			}
-			synctest.Sleep(time.Nanosecond)
+			time.Sleep(time.Nanosecond)
 			if err := <-result; !errors.Is(err, context.DeadlineExceeded) {
 				t.Fatalf("pre-transport timeout error = %v", err)
 			}
@@ -164,7 +171,7 @@ func TestRPCBeginRollsBackEveryPreDeliveryFailure(t *testing.T) {
 
 func TestRPCContinuationRejectsStoppedPhysicalWriter(t *testing.T) {
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
-	t.Cleanup(runtime.abortBeforeStart)
+	t.Cleanup(runtime.AbortBeforeStart)
 	lane, err := runtime.lanes.selectLane(&runtime.initial)
 	if err != nil {
 		t.Fatal(err)
@@ -177,8 +184,15 @@ func TestRPCContinuationRejectsStoppedPhysicalWriter(t *testing.T) {
 		id: id16[protocolsession.OperationID](83), messages: make(chan operationResponse, 1),
 		lane: runtime.initial,
 	}
+	offer, _ := protocolsession.NewMessage(protocolsession.MessagePeerOffer, &call.id, []byte{0xf6})
+	op, maxCont, hasLimit, release, err := runtime.operations.AdmitOutboundRequest(offer, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release(false)
+	call.setAuthority(op, maxCont, hasLimit)
 	rpc.calls[call.id] = call
-	if _, err := rpc.sendContinuation(
+	if _, err := rpc.SendContinuation(
 		context.Background(), call, protocolsession.MessagePeerCandidate, []byte{0xf6},
 	); err == nil {
 		t.Fatal("candidate continuation bypassed a stopped physical writer")
@@ -191,43 +205,48 @@ func TestRPCContinuationRetractsPendingPreTransportTimeout(t *testing.T) {
 
 func testRPCContinuationRetractsPendingPreTransportTimeout(t *testing.T) {
 	runtime, channel := newUnstartedRuntime(t, protocolsession.RoleReceiver)
-	t.Cleanup(runtime.abortBeforeStart)
+	t.Cleanup(runtime.AbortBeforeStart)
 	rpc := NewRequests(runtime, bytes.NewReader(bytes.Repeat([]byte{10}, protocolsession.IdentityBytes)))
 	call := &Call{
 		id: id16[protocolsession.OperationID](84), messages: make(chan operationResponse, 1),
 		lane: runtime.initial,
 	}
 	offer, _ := protocolsession.NewMessage(protocolsession.MessagePeerOffer, &call.id, []byte{0xf6})
-	admission, err := runtime.router.AdmitOutbound(offer, protocolsession.OutboundOperationPermit{})
-	if err != nil || !call.setAuthority(admission.Generation, admission.Operation) {
+	op, maxCont, hasLimit, release, err := runtime.operations.AdmitOutboundRequest(offer, nil)
+	if err != nil || !call.setAuthority(op, maxCont, hasLimit) {
 		t.Fatalf("seed continuation contract: %v", err)
 	}
+	release(false)
 	rpc.calls[call.id] = call
 	const deadline = 20 * time.Millisecond
 	ctx, cancel := context.WithTimeout(t.Context(), deadline)
 	defer cancel()
-	result := make(chan continuationAttemptResult, 1)
+	type contResult struct {
+		disposition protocolsession.OperationDisposition
+		err         error
+	}
+	result := make(chan contResult, 1)
 	go func() {
-		outcome, err := rpc.sendContinuation(ctx, call, protocolsession.MessagePeerCandidate, []byte{0xf6})
-		result <- continuationAttemptResult{outcome: outcome, err: err}
+		disposition, err := rpc.SendContinuation(ctx, call, protocolsession.MessagePeerCandidate, []byte{0xf6})
+		result <- contResult{disposition: disposition, err: err}
 	}()
 	synctest.Wait()
-	synctest.Sleep(deadline - time.Nanosecond)
+	time.Sleep(deadline - time.Nanosecond)
 	if len(result) != 0 {
 		t.Fatal("continuation returned before its deadline")
 	}
-	synctest.Sleep(time.Nanosecond)
+	time.Sleep(time.Nanosecond)
 	got := <-result
-	if got.outcome != protocolsession.SendOutcomeDropped || !errors.Is(got.err, context.DeadlineExceeded) ||
+	if got.disposition != protocolsession.OperationDrop || !errors.Is(got.err, context.DeadlineExceeded) ||
 		errors.Is(got.err, session.ErrRuntimeClosed) {
-		t.Fatalf("stalled continuation = outcome %d, error %v", got.outcome, got.err)
+		t.Fatalf("stalled continuation = disposition %d, error %v", got.disposition, got.err)
 	}
 	assertTimedOutRPCNeverReachesTransport(t, runtime, channel)
 }
 
 func TestRPCAdmitCancellationRejectsInvalidAuthority(t *testing.T) {
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
-	t.Cleanup(runtime.abortBeforeStart)
+	t.Cleanup(runtime.AbortBeforeStart)
 	rpc := NewRequests(runtime, bytes.NewReader(bytes.Repeat([]byte{11}, protocolsession.IdentityBytes)))
 	for _, call := range []*Call{nil, {}, {id: id16[protocolsession.OperationID](85)}} {
 		if err := rpc.admitCancellation(call, contentflow.CancelReasonTimeout); !errors.Is(err, session.ErrOperationMissing) {
@@ -237,32 +256,24 @@ func TestRPCAdmitCancellationRejectsInvalidAuthority(t *testing.T) {
 }
 
 func TestDroppedPeerCancelRetiresLocallyActiveOperation(t *testing.T) {
-	operations, err := protocolsession.NewOperationTable(
+	runtime, _ := newUnstartedRuntimeWithPolicy(
+		t, protocolsession.RoleReceiver,
 		protocolsession.OperationLimits{MaxActive: 2, MaxTracked: 2}, nil,
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	router, err := protocolsession.NewRoleRouter(protocolsession.RoleReceiver, operations)
-	if err != nil {
-		t.Fatal(err)
-	}
 	operationID := id16[protocolsession.OperationID](77)
 	body, _ := protocolsession.EncodeBody(map[uint64]any{0: uint64(1)})
 	offer, _ := protocolsession.NewMessage(protocolsession.MessagePeerOffer, &operationID, body)
-	admission, err := router.AdmitOutbound(offer, protocolsession.OutboundOperationPermit{})
-	if err != nil || operations.ActiveCount() != 1 {
-		t.Fatalf("begin peer operation: active=%d, error=%v", operations.ActiveCount(), err)
+	op, _, _, release, err := runtime.operations.AdmitOutboundRequest(offer, nil)
+	if err != nil || runtime.operations.ActiveCount() != 1 {
+		t.Fatalf("begin peer operation: active=%d, error=%v", runtime.operations.ActiveCount(), err)
 	}
-	if err := FinalizeLocalCancelIfDropped(
-		&Runtime{operations: operations, router: router, ctx: context.Background()},
-		admission.Generation, protocolsession.SendOutcomeDropped,
-	); err != nil {
-		t.Fatalf("retire dropped cancel: %v", err)
+	release(false)
+	if transitioned, err := runtime.reconcileLocalCancel(op.Ref()); err != nil || !transitioned {
+		t.Fatalf("retire dropped cancel: transitioned=%v err=%v", transitioned, err)
 	}
-	if operations.ActiveCount() != 0 || operations.TombstoneCount() != 1 {
+	if runtime.operations.ActiveCount() != 0 || runtime.operations.TombstoneCount() != 1 {
 		t.Fatalf("dropped cancel lifecycle = active %d, tombstones %d",
-			operations.ActiveCount(), operations.TombstoneCount())
+			runtime.operations.ActiveCount(), runtime.operations.TombstoneCount())
 	}
 }
 

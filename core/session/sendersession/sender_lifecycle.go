@@ -10,7 +10,7 @@ import (
 )
 
 type operationCancelHandler interface {
-	HandleMessage(context.Context, protocolsession.Message) error
+	HandleMessage(context.Context, protocolsession.Operation, protocolsession.Message) error
 }
 
 type cancelMux struct {
@@ -19,7 +19,11 @@ type cancelMux struct {
 	peer    PeerHandler
 }
 
-func (mux cancelMux) HandleMessage(ctx context.Context, message protocolsession.Message) error {
+func (mux cancelMux) HandleMessage(
+	ctx context.Context,
+	op protocolsession.Operation,
+	message protocolsession.Message,
+) error {
 	operationID, ok := message.OperationID()
 	if !ok {
 		return session.ErrRuntimeConfig
@@ -27,24 +31,23 @@ func (mux cancelMux) HandleMessage(ctx context.Context, message protocolsession.
 	if _, err := contentflow.DecodeCancelReason(message.Body()); err != nil {
 		return err
 	}
-	generation, ok := protocolsession.OperationGenerationFromContext(ctx, operationID)
-	if !ok {
+	if op.IsZero() || op.ID() != operationID {
 		return session.ErrOperationMissing
 	}
-	requestKind, ok := generation.RequestKind()
+	requestKind, ok := op.RequestKind()
 	if !ok {
 		// A preemptive CANCEL has no work owner. Delayed handlers independently
-		// suppress its now-tombstoned generation before starting service work.
+		// suppress its now-tombstoned operation before starting service work.
 		return nil
 	}
 	switch requestKind {
 	case protocolsession.MessageListChildren:
-		return mux.catalog.HandleMessage(ctx, message)
+		return mux.catalog.HandleMessage(ctx, op, message)
 	case protocolsession.MessageOpenRevisions, protocolsession.MessageRenewLease,
 		protocolsession.MessageReleaseLease, protocolsession.MessageRequestBlocks:
-		return mux.content.HandleMessage(ctx, message)
+		return mux.content.HandleMessage(ctx, op, message)
 	case protocolsession.MessagePeerOffer:
-		return mux.peer.Cancel(ctx, operationID)
+		return mux.peer.Cancel(ctx, op)
 	case protocolsession.MessageLaneAttach:
 		return nil
 	default:

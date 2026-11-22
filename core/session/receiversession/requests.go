@@ -15,7 +15,7 @@ type requestClient interface {
 	Runtime() *sessioncore.Runtime
 	Register() error
 	Close()
-	HandleMessage(context.Context, protocolsession.Message) error
+	HandleMessage(context.Context, protocolsession.Operation, protocolsession.Message) error
 	Begin(context.Context, protocolsession.MessageKind, []byte) (*sessioncore.Call, error)
 	PrepareCall(context.Context, protocolsession.MessageKind, []byte) (*sessioncore.Call, protocolsession.Message, error)
 	BeginCall(context.Context, *session.LaneIdentity, *sessioncore.Call, protocolsession.Message) error
@@ -24,5 +24,5 @@ type requestClient interface {
 	AwaitCall(context.Context, *sessioncore.Call, bool) (protocolsession.Message, error)
 	CancelAndEnd(*sessioncore.Call, contentflow.CancelReason) error
 	End(*sessioncore.Call)
-	SendContinuation(context.Context, *sessioncore.Call, protocolsession.MessageKind, []byte) (protocolsession.SendOutcome, error)
+	SendContinuation(context.Context, *sessioncore.Call, protocolsession.MessageKind, []byte) (protocolsession.OperationDisposition, error)
 }

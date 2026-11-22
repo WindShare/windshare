@@ -240,10 +240,10 @@ func (factory *Factory) NewSenderPeerHandler(
 	capacity := SenderMaxActivePeerAttemptsPerSession*(factory.maxCandidates+3) + handlerEventReserve
 	return &senderHandler{
 		factory: factory, session: session, events: make(chan handlerEvent, capacity),
-		attempts:          make(map[peerOperation]*peerAttempt),
-		bindings:          make(map[v2signal.Binding]peerOperation),
+		attempts:          make(map[protocolsession.OperationRef]*peerAttempt),
+		bindings:          make(map[v2signal.Binding]protocolsession.OperationRef),
 		evidenceAuthority: newSenderEvidenceAuthority(factory.maxPeerPaths),
-		retiredOperations: make(map[peerOperation]retiredBinding),
+		retiredOperations: make(map[protocolsession.OperationRef]retiredBinding),
 		retiredBindings:   make(map[v2signal.Binding]retiredBinding),
 	}, nil
 }
@@ -329,18 +329,12 @@ const (
 
 type handlerEvent struct {
 	kind         handlerEventKind
-	ctx          context.Context
-	operation    peerOperation
+	op           protocolsession.Operation
 	offer        v2signal.Offer
 	candidate    v2signal.Candidate
 	offerBinding *v2signal.Binding
 	rejection    *peerOperationRejection
 	completed    chan error
-}
-
-type peerOperation struct {
-	id         protocolsession.OperationID
-	generation protocolsession.OperationGeneration
 }
 
 type senderHandler struct {
@@ -352,13 +346,13 @@ type senderHandler struct {
 	ingress sync.WaitGroup
 
 	mu       sync.Mutex
-	attempts map[peerOperation]*peerAttempt
-	bindings map[v2signal.Binding]peerOperation
+	attempts map[protocolsession.OperationRef]*peerAttempt
+	bindings map[v2signal.Binding]protocolsession.OperationRef
 	// Evidence identity is scoped to the ProtocolSession, while replay
 	// tombstones intentionally expire. Keeping these authorities separate is
 	// what makes one (session,path,attempt,side) stream terminal exactly once.
 	evidenceAuthority  senderEvidenceAuthority
-	retiredOperations  map[peerOperation]retiredBinding
+	retiredOperations  map[protocolsession.OperationRef]retiredBinding
 	retiredBindings    map[v2signal.Binding]retiredBinding
 	replayBlockedUntil time.Time
 	stopping           bool
@@ -367,36 +361,36 @@ type senderHandler struct {
 }
 
 type retiredBinding struct {
-	operation peerOperation
+	operation protocolsession.OperationRef
 	binding   v2signal.Binding
 	expiresAt time.Time
 }
 
 func (handler *senderHandler) HandleMessage(
 	ctx context.Context,
+	op protocolsession.Operation,
 	message protocolsession.Message,
 ) error {
 	if !handler.beginIngress() {
 		return context.Canceled
 	}
 	defer handler.ingress.Done()
-	return handler.handleMessage(ctx, message)
+	return handler.handleMessage(ctx, op, message)
 }
 
 func (handler *senderHandler) handleMessage(
 	ctx context.Context,
+	op protocolsession.Operation,
 	message protocolsession.Message,
 ) error {
-	operation, ok := message.OperationID()
-	if !ok || operation.IsZero() {
+	operationID, ok := message.OperationID()
+	if !ok || operationID.IsZero() {
 		return errors.Join(ErrProtocol, protocolsession.ErrInvalidOperationID)
 	}
-	generation, ok := protocolsession.OperationGenerationFromContext(ctx, operation)
-	if !ok || generation.IsZero() {
+	if op.IsZero() || op.ID() != operationID {
 		return errors.Join(ErrProtocol, protocolsession.ErrUnknownOperation)
 	}
-	operationKey := peerOperation{id: operation, generation: generation}
-	event := handlerEvent{ctx: ctx, operation: operationKey}
+	event := handlerEvent{op: op}
 	var err error
 	switch message.Kind() {
 	case protocolsession.MessagePeerOffer:
@@ -423,13 +417,13 @@ func (handler *senderHandler) handleMessage(
 	default:
 		return errors.Join(ErrProtocol, protocolsession.ErrUnknownMessageKind)
 	}
-	if !generation.IsActive() {
+	if !op.IsActive() {
 		return handler.terminalizeUnstartedOffer(event, handler.unstartedOfferFailure())
 	}
 	if err := handler.enqueue(ctx, event); err != nil {
 		if errors.Is(err, ErrEventCapacity) {
 			return handler.rejectOperation(
-				ctx, operationKey, rejectionForEvent(event, err), offerBindingForEvent(event),
+				ctx, op, rejectionForEvent(event, err), offerBindingForEvent(event),
 			)
 		}
 		return errors.Join(err, handler.terminalizeUnstartedOffer(event, handler.unstartedOfferFailure()))
@@ -443,30 +437,26 @@ func (handler *senderHandler) beginIngress() bool {
 	if handler.closed {
 		return false
 	}
-	// Admission and shutdown share inboxMu so Wait can never race a new Add.
-	// Once admitted, ingress owns its evidence claim until HandleMessage returns.
 	handler.ingress.Add(1)
 	return true
 }
 
 func (handler *senderHandler) Cancel(
 	ctx context.Context,
-	operation protocolsession.OperationID,
+	op protocolsession.Operation,
 ) error {
-	if operation.IsZero() {
+	if op.ID().IsZero() {
 		return errors.Join(ErrProtocol, protocolsession.ErrInvalidOperationID)
 	}
-	generation, ok := protocolsession.OperationGenerationFromContext(ctx, operation)
-	if !ok || generation.IsZero() {
+	if op.IsZero() {
 		return errors.Join(ErrProtocol, protocolsession.ErrUnknownOperation)
 	}
-	if !generation.IsCurrent() {
+	if !op.IsCurrent() {
 		return nil
 	}
 	completed := make(chan error, 1)
 	if err := handler.enqueueCancellation(ctx, handlerEvent{
-		kind: handlerCancel, ctx: ctx,
-		operation: peerOperation{id: operation, generation: generation}, completed: completed,
+		kind: handlerCancel, op: op, completed: completed,
 	}); err != nil {
 		return err
 	}
@@ -539,9 +529,7 @@ func (handler *senderHandler) Run(ctx context.Context) error {
 }
 
 func (handler *senderHandler) handleRunEvent(ctx context.Context, event handlerEvent) error {
-	eventContext := protocolsession.RetainMessageContext(ctx, event.ctx)
-	if event.kind != handlerCancel && !event.operation.generation.IsZero() &&
-		!event.operation.generation.IsActive() {
+	if event.kind != handlerCancel && !event.op.IsZero() && !event.op.IsActive() {
 		terminalErr := handler.terminalizeUnstartedOffer(event, handler.unstartedOfferFailure())
 		if event.completed != nil {
 			event.completed <- nil
@@ -552,12 +540,12 @@ func (handler *senderHandler) handleRunEvent(ctx context.Context, event handlerE
 	var rejected *peerOperationRejection
 	switch event.kind {
 	case handlerOffer:
-		err = handler.startAttempt(eventContext, event.operation, event.offer)
+		err = handler.startAttempt(ctx, event.op, event.offer)
 		if err != nil {
 			rejected = rejectionForEvent(event, err)
 		}
 	case handlerCandidate:
-		err = handler.acceptCandidate(event.operation, event.candidate)
+		err = handler.acceptCandidate(event.op.Ref(), event.candidate)
 		if err != nil {
 			rejected = &peerOperationRejection{
 				code:    protocolsession.PeerOperationCodeCandidates,
@@ -568,7 +556,7 @@ func (handler *senderHandler) handleRunEvent(ctx context.Context, event handlerE
 	case handlerReject:
 		rejected = event.rejection
 	case handlerCancel:
-		err = handler.cancelAttempt(eventContext, event.operation)
+		err = handler.cancelAttempt(ctx, event.op.Ref())
 	default:
 		return ErrProtocol
 	}
@@ -577,7 +565,7 @@ func (handler *senderHandler) handleRunEvent(ctx context.Context, event handlerE
 	}
 	if rejected != nil {
 		return handler.rejectOperation(
-			eventContext, event.operation, rejected, offerBindingForEvent(event),
+			ctx, event.op, rejected, offerBindingForEvent(event),
 		)
 	}
 	if err != nil && ctx.Err() != nil {

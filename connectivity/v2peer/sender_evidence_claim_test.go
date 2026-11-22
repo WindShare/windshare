@@ -30,9 +30,9 @@ func testSenderRecoverableOfferRejectionTerminalizesIdentityOnceForSession(t *te
 	binding := testBinding(123)
 	body := recoverableRejectedOffer(t, binding)
 	message := testMessage(t, protocolsession.MessagePeerOffer, operation, body)
-	messageContext := testPeerMessageContext(t, ctx, message)
+	op := testPeerOperation(operation)
 
-	if err := handler.HandleMessage(messageContext, message); err != nil {
+	if err := handler.HandleMessage(ctx, op, message); err != nil {
 		t.Fatalf("first malformed offer: %v", err)
 	}
 	if failure := receiveTest(t, session.failures); failure.operation != operation {
@@ -51,7 +51,7 @@ func testSenderRecoverableOfferRejectionTerminalizesIdentityOnceForSession(t *te
 	// Replay retention is deliberately finite. Its session claim remains exact
 	// until the separately named evidence budget ends the entire session.
 	clock.Advance(2 * time.Minute)
-	if err := handler.HandleMessage(messageContext, message); err != nil {
+	if err := handler.HandleMessage(ctx, op, message); err != nil {
 		t.Fatalf("replayed malformed offer: %v", err)
 	}
 	receiveTest(t, session.failures)
@@ -122,8 +122,8 @@ func TestSenderEvidenceClaimsReleaseOnlyWithProtocolSession(t *testing.T) {
 	binding := testBinding(126)
 	operation := testPeerOperation(testOperationID(127))
 	handler.mu.Lock()
-	first := handler.claimEvidenceLocked(operation, binding)
-	second := handler.claimEvidenceLocked(operation, binding)
+	first := handler.claimEvidenceLocked(operation.Ref(), binding)
+	second := handler.claimEvidenceLocked(operation.Ref(), binding)
 	if !first.acquired || second.acquired {
 		handler.mu.Unlock()
 		t.Fatal("evidence claim was not unique")
@@ -183,10 +183,10 @@ func TestSenderCanceledBeforeEnqueueStillTerminalizesFirstBinding(t *testing.T) 
 				}
 				message := testMessage(t, protocolsession.MessagePeerOffer, operation, body)
 				callerContext, cancelCaller := context.WithCancel(context.Background())
-				messageContext := testPeerMessageContext(t, callerContext, message)
+				op := testPeerOperation(operation)
 				cancelCaller()
 
-				if err := handler.HandleMessage(messageContext, message); !errors.Is(err, context.Canceled) {
+				if err := handler.HandleMessage(callerContext, op, message); !errors.Is(err, context.Canceled) {
 					t.Fatalf("canceled enqueue error = %v", err)
 				}
 				assertPeerState(t, func() bool {
@@ -198,7 +198,7 @@ func TestSenderCanceledBeforeEnqueueStillTerminalizesFirstBinding(t *testing.T) 
 					test.wantScope,
 					test.wantCode,
 				)
-				if err := handler.HandleMessage(messageContext, message); !errors.Is(err, context.Canceled) {
+				if err := handler.HandleMessage(callerContext, op, message); !errors.Is(err, context.Canceled) {
 					t.Fatalf("canceled replay error = %v", err)
 				}
 				if observations := collector.forAttempt(binding.AttemptID); len(observations) != 2 {
@@ -226,7 +226,7 @@ func testSenderShutdownTerminalizesQueuedOfferBeforeClaimsRelease(t *testing.T) 
 	}
 	message := testMessage(t, protocolsession.MessagePeerOffer, operation, body)
 	if err := handler.HandleMessage(
-		testPeerMessageContext(t, context.Background(), message),
+		context.Background(), testPeerOperation(operation),
 		message,
 	); err != nil {
 		t.Fatalf("queue offer: %v", err)
@@ -262,7 +262,7 @@ func testSenderShutdownWaitsForAdmittedIngressBeforeReleasingClaims(t *testing.T
 		t.Fatal(err)
 	}
 	message := testMessage(t, protocolsession.MessagePeerOffer, operation, body)
-	messageContext := testPeerMessageContext(t, context.Background(), message)
+	op := testPeerOperation(operation)
 	if !handler.beginIngress() {
 		t.Fatal("test ingress was not admitted")
 	}
@@ -283,7 +283,7 @@ func testSenderShutdownWaitsForAdmittedIngressBeforeReleasingClaims(t *testing.T
 	default:
 	}
 
-	if err := handler.handleMessage(messageContext, message); !errors.Is(err, context.Canceled) {
+	if err := handler.handleMessage(context.Background(), op, message); !errors.Is(err, context.Canceled) {
 		t.Fatalf("crossing ingress error = %v", err)
 	}
 	handler.ingress.Done()
@@ -301,7 +301,7 @@ func testSenderShutdownWaitsForAdmittedIngressBeforeReleasingClaims(t *testing.T
 		t.Fatalf("crossing shutdown retained claims: %#v", handler.evidenceAuthority)
 	}
 
-	if err := handler.HandleMessage(messageContext, message); !errors.Is(err, context.Canceled) {
+	if err := handler.HandleMessage(context.Background(), op, message); !errors.Is(err, context.Canceled) {
 		t.Fatalf("post-shutdown ingress error = %v", err)
 	}
 	if observations := collector.forAttempt(binding.AttemptID); len(observations) != 2 {
@@ -322,18 +322,18 @@ func testSenderDistinctBindingRejectionIsNotSuppressedByActiveOperation(t *testi
 	rejectedBinding := testBinding(140)
 
 	handler.mu.Lock()
-	handler.attempts[operation] = &peerAttempt{}
-	handler.bindings[activeBinding] = operation
-	if claim := handler.claimEvidenceLocked(operation, activeBinding); !claim.acquired {
+	handler.attempts[operation.Ref()] = &peerAttempt{}
+	handler.bindings[activeBinding] = operation.Ref()
+	if claim := handler.claimEvidenceLocked(operation.Ref(), activeBinding); !claim.acquired {
 		handler.mu.Unlock()
 		t.Fatalf("active evidence claim = %#v", claim)
 	}
 	handler.mu.Unlock()
 
 	event := handlerEvent{
-		kind:      handlerOffer,
-		operation: operation,
-		offer:     v2signal.Offer{Binding: rejectedBinding, SDP: "v=0\r\n"},
+		kind:  handlerOffer,
+		op:    operation,
+		offer: v2signal.Offer{Binding: rejectedBinding, SDP: "v=0\r\n"},
 	}
 	if err := handler.terminalizeUnstartedOffer(event, senderAttemptCancelledFailure()); err != nil {
 		t.Fatalf("distinct binding rejection: %v", err)

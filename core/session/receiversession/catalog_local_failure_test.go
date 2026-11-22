@@ -189,8 +189,7 @@ func sendInjectedCatalogProgress(
 func deliverInjectedReceiverMessage(t *testing.T, receiver *Runtime, message protocolsession.Message) {
 	t.Helper()
 	call := onlyActiveCall(t, receiver.rpc)
-	ctx := receiverRequestContext(call)
-	if err := receiver.rpc.HandleMessage(ctx, message); err != nil {
+	if err := receiver.rpc.HandleMessage(context.Background(), call.Operation(), message); err != nil {
 		t.Fatalf("enqueue authenticated receiver message: %v", err)
 	}
 }

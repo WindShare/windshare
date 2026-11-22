@@ -573,7 +573,7 @@ func TestHandlerCancellationBookkeepingIsIdempotent(t *testing.T) {
 	defer fixture.close(t)
 	handler, _ := NewSenderHandler(SenderHandlerConfig{Service: fixture.service, Outbound: newRecordingOutbound()})
 	operation := flowID[protocolsession.OperationID](161)
-	owner := handlerOperation{id: operation}
+	owner := protocolsession.OperationRef{ID: operation, Token: 1}
 	ctx, cancel := context.WithCancel(context.Background())
 	if !handler.register(owner, cancel) || handler.register(owner, func() {}) {
 		t.Fatal("operation registration was not unique")
@@ -585,7 +585,7 @@ func TestHandlerCancellationBookkeepingIsIdempotent(t *testing.T) {
 	handler.unregister(owner)
 	handler.cancel(owner)
 	otherContext, otherCancel := context.WithCancel(context.Background())
-	_ = handler.register(handlerOperation{id: flowID[protocolsession.OperationID](162)}, otherCancel)
+	_ = handler.register(protocolsession.OperationRef{ID: flowID[protocolsession.OperationID](162), Token: 2}, otherCancel)
 	handler.cancelAll()
 	if !errors.Is(otherContext.Err(), context.Canceled) {
 		t.Fatal("cancelAll did not stop operation")

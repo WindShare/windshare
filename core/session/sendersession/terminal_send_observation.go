@@ -4,7 +4,6 @@ import (
 	"github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/session/internal/sessioncore"
 	sessionobs "github.com/windshare/windshare/core/session/observation"
-	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
 func observeSenderTerminalSend(
@@ -18,6 +17,7 @@ func observeSenderTerminalSend(
 		ProtocolSessionID: event.ProtocolSessionID,
 		Lane:              event.Lane,
 		Settled:           event.Settled,
+		Outcome:           event.Outcome,
 		Decision:          sessionobs.SenderTerminalSendDecisionFailed,
 	}
 	switch {
@@ -33,20 +33,12 @@ func observeSenderTerminalSend(
 	default:
 		observation.TransportDisposition = sessionobs.SenderTerminalSendTransportNotReached
 	}
-	switch event.Outcome {
-	case protocolsession.SendOutcomeTransportConfirmed:
-		observation.Outcome = sessionobs.SenderTerminalSendOutcomeDelivered
+	if event.Outcome == sessionobs.SenderTerminalSendOutcomeDelivered {
 		observation.Decision = sessionobs.SenderTerminalSendDecisionDelivered
-	case protocolsession.SendOutcomeDropped:
-		observation.Outcome = sessionobs.SenderTerminalSendOutcomeDropped
-	case protocolsession.SendOutcomeUnknown:
-		observation.Outcome = sessionobs.SenderTerminalSendOutcomeUnknown
 	}
 	if event.NaturallyRetired && observation.Decision != sessionobs.SenderTerminalSendDecisionDelivered {
 		observation.Decision = sessionobs.SenderTerminalSendDecisionNaturalRetirement
 	}
-	// Terminal-send evidence is diagnostic consequence data. Observer failures
-	// cannot change the already-owned receipt settlement or stop result.
 	func() {
 		defer func() { _ = recover() }()
 		observer.ObserveSenderTerminalSend(observation)

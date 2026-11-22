@@ -235,8 +235,7 @@ func newBlockedCatalogFetch(t *testing.T, ctx context.Context) *blockedCatalogFe
 		call = active
 	}
 	trackedRequests(receiver.rpc).mu.Unlock()
-	generation, authority := call.OperationAuthority()
-	if generation.IsZero() || authority.IsZero() {
+	if call.Operation().IsZero() {
 		close(fixture.scanGate)
 		receiver.Close()
 		sender.Close()

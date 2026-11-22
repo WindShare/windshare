@@ -177,7 +177,7 @@ func offerBindingForEvent(event handlerEvent) *v2signal.Binding {
 
 func (handler *senderHandler) rejectOperation(
 	ctx context.Context,
-	operation peerOperation,
+	op protocolsession.Operation,
 	rejection *peerOperationRejection,
 	binding *v2signal.Binding,
 ) error {
@@ -189,14 +189,14 @@ func (handler *senderHandler) rejectOperation(
 		}
 	}
 	handler.mu.Lock()
-	attempt := handler.attempts[operation]
+	attempt := handler.attempts[op.Ref()]
 	handler.mu.Unlock()
 	if attempt != nil {
 		attempt.stop(rejection)
 	}
 	claim := evidenceClaim{}
 	if binding != nil {
-		claim = handler.claimRejectedOffer(operation, *binding)
+		claim = handler.claimRejectedOffer(op.Ref(), *binding)
 		if claim.acquired {
 			failure := senderOperationAttemptFailure(rejection.code, rejection.message, rejection)
 			if claim.capacity {
@@ -210,7 +210,7 @@ func (handler *senderHandler) rejectOperation(
 	}
 	failureContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), failureDeliveryTimeout)
 	err := handler.session.FailPeerOperation(
-		failureContext, operation.id, rejection.code, rejection.message,
+		failureContext, op, rejection.code, rejection.message,
 	)
 	cancel()
 	if err != nil {
@@ -232,7 +232,7 @@ func (handler *senderHandler) terminalizeUnstartedOffer(
 	if binding == nil {
 		return nil
 	}
-	claim := handler.claimRejectedOffer(event.operation, *binding)
+	claim := handler.claimRejectedOffer(event.op.Ref(), *binding)
 	if claim.acquired {
 		if claim.capacity {
 			failure = senderPathCapacityFailure()

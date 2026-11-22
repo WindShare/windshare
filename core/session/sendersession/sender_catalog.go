@@ -3,12 +3,13 @@ package sendersession
 import (
 	"context"
 	"errors"
+	"sync"
+
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/session/catalogflow"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/internal/sessioncore"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"sync"
 )
 
 type catalogHandler struct {
@@ -20,37 +21,27 @@ type catalogHandler struct {
 	queueMu  sync.Mutex
 	stopping bool
 	mu       sync.Mutex
-	active   map[catalogOperationKey]context.CancelFunc
+	active   map[protocolsession.OperationRef]context.CancelFunc
 }
 
 type catalogOperation struct {
-	ctx       context.Context
-	message   protocolsession.Message
-	operation catalogOperationKey
-}
-
-type catalogOperationKey struct {
-	id         protocolsession.OperationID
-	generation protocolsession.OperationGeneration
-}
-
-func catalogKey(ctx context.Context, id protocolsession.OperationID) (catalogOperationKey, bool) {
-	generation, ok := protocolsession.OperationGenerationFromContext(ctx, id)
-	if !ok || generation.IsZero() {
-		return catalogOperationKey{}, false
-	}
-	return catalogOperationKey{id: id, generation: generation}, true
+	op      protocolsession.Operation
+	message protocolsession.Message
 }
 
 func newCatalogHandler(service *catalogflow.AddressedSenderService, outbound *sessioncore.Responses) *catalogHandler {
 	return &catalogHandler{
 		service: service, outbound: outbound, queue: make(chan catalogOperation, 256),
 		workers: make(chan struct{}, catalogflow.MaxConcurrentDirectoryLoads),
-		active:  make(map[catalogOperationKey]context.CancelFunc),
+		active:  make(map[protocolsession.OperationRef]context.CancelFunc),
 	}
 }
 
-func (handler *catalogHandler) HandleMessage(ctx context.Context, message protocolsession.Message) error {
+func (handler *catalogHandler) HandleMessage(
+	ctx context.Context,
+	op protocolsession.Operation,
+	message protocolsession.Message,
+) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -58,18 +49,14 @@ func (handler *catalogHandler) HandleMessage(ctx context.Context, message protoc
 		return contentflow.ErrUnexpectedMessage
 	}
 	operationID, ok := message.OperationID()
-	if !ok {
-		return contentflow.ErrOperationIdentity
-	}
-	operation, ok := catalogKey(ctx, operationID)
-	if !ok {
+	if !ok || op.IsZero() || op.ID() != operationID {
 		return contentflow.ErrOperationIdentity
 	}
 	if message.Kind() == protocolsession.MessageCancel {
-		if !operation.generation.IsCurrent() {
+		if !op.IsCurrent() {
 			return nil
 		}
-	} else if !operation.generation.IsActive() {
+	} else if !op.IsActive() {
 		return nil
 	}
 	handler.queueMu.Lock()
@@ -81,7 +68,7 @@ func (handler *catalogHandler) HandleMessage(ctx context.Context, message protoc
 		return contentflow.ErrServiceClosed
 	}
 	select {
-	case handler.queue <- catalogOperation{ctx: ctx, message: message, operation: operation}:
+	case handler.queue <- catalogOperation{op: op, message: message}:
 		return nil
 	default:
 		return contentflow.ErrServiceQueueFull
@@ -102,16 +89,14 @@ func (handler *catalogHandler) Run(ctx context.Context) error {
 			return ctx.Err()
 		case queued := <-handler.queue:
 			if queued.message.Kind() == protocolsession.MessageCancel {
-				handler.cancel(queued.operation)
+				handler.cancel(queued.op.Ref())
 				continue
 			}
-			if !queued.operation.generation.IsActive() {
+			if !queued.op.IsActive() {
 				continue
 			}
-			operationContext, cancel := context.WithCancel(
-				protocolsession.RetainMessageContext(ctx, queued.ctx),
-			)
-			if !handler.add(queued.operation, cancel) {
+			operationContext, cancel := context.WithCancel(ctx)
+			if !handler.add(queued.op.Ref(), cancel) {
 				cancel()
 				continue
 			}
@@ -120,20 +105,20 @@ func (handler *catalogHandler) Run(ctx context.Context) error {
 				case handler.workers <- struct{}{}:
 					defer func() { <-handler.workers }()
 				case <-operationContext.Done():
-					handler.remove(queued.operation)
+					handler.remove(queued.op.Ref())
 					return
 				}
-				handler.process(operationContext, queued.operation.id, queued.message.Body())
-				handler.remove(queued.operation)
+				handler.process(operationContext, queued.op, queued.message.Body())
+				handler.remove(queued.op.Ref())
 			})
 		}
 	}
 }
 
-func (handler *catalogHandler) process(ctx context.Context, operationID protocolsession.OperationID, body []byte) {
-	err := handler.serve(ctx, operationID, body)
+func (handler *catalogHandler) process(ctx context.Context, op protocolsession.Operation, body []byte) {
+	err := handler.serve(ctx, op, body)
 	if err != nil && !errors.Is(err, context.Canceled) {
-		_ = handler.outbound.SendOperationError(ctx, operationID, classifyCatalogOperationFailure(err))
+		_ = handler.outbound.SendOperationError(ctx, op, classifyCatalogOperationFailure(err))
 	}
 }
 
@@ -156,14 +141,14 @@ func classifyCatalogOperationFailure(err error) contentflow.OperationFailure {
 
 func (handler *catalogHandler) serve(
 	ctx context.Context,
-	operationID protocolsession.OperationID,
+	op protocolsession.Operation,
 	body []byte,
 ) error {
 	request, err := catalogflow.DecodeListRequest(body)
 	if err != nil {
 		return err
 	}
-	payload, err := handler.service.Serve(ctx, request, handler.progressObserver(ctx, operationID))
+	payload, err := handler.service.Serve(ctx, request, handler.progressObserver(op))
 	if err != nil {
 		return err
 	}
@@ -171,14 +156,14 @@ func (handler *catalogHandler) serve(
 	if err != nil {
 		return err
 	}
-	_, err = handler.outbound.SendControl(ctx, protocolsession.MessageCatalogResult, operationID, result)
+	err = handler.outbound.SendControl(ctx, op, protocolsession.MessageCatalogResult, result)
+	if errors.Is(err, protocolsession.ErrOperationSuppressed) {
+		return nil
+	}
 	return err
 }
 
-func (handler *catalogHandler) progressObserver(
-	operationContext context.Context,
-	operationID protocolsession.OperationID,
-) catalog.ScanProgressObserver {
+func (handler *catalogHandler) progressObserver(op protocolsession.Operation) catalog.ScanProgressObserver {
 	return catalog.ScanProgressObserverFunc(func(
 		ctx context.Context,
 		update catalog.ScanProgress,
@@ -189,34 +174,36 @@ func (handler *catalogHandler) progressObserver(
 		if err != nil {
 			return err
 		}
-		sendContext := protocolsession.RetainMessageContext(ctx, operationContext)
-		_, err = handler.outbound.SendControl(sendContext, protocolsession.MessageScanProgress, operationID, body)
+		err = handler.outbound.SendControl(ctx, op, protocolsession.MessageScanProgress, body)
+		if errors.Is(err, protocolsession.ErrOperationSuppressed) {
+			return context.Canceled
+		}
 		return err
 	})
 }
 
-func (handler *catalogHandler) cancel(operation catalogOperationKey) {
+func (handler *catalogHandler) cancel(ref protocolsession.OperationRef) {
 	handler.mu.Lock()
-	cancel := handler.active[operation]
+	cancel := handler.active[ref]
 	handler.mu.Unlock()
 	if cancel != nil {
 		cancel()
 	}
 }
 
-func (handler *catalogHandler) add(operation catalogOperationKey, cancel context.CancelFunc) bool {
+func (handler *catalogHandler) add(ref protocolsession.OperationRef, cancel context.CancelFunc) bool {
 	handler.mu.Lock()
 	defer handler.mu.Unlock()
-	if handler.active[operation] != nil {
+	if handler.active[ref] != nil {
 		return false
 	}
-	handler.active[operation] = cancel
+	handler.active[ref] = cancel
 	return true
 }
 
-func (handler *catalogHandler) remove(operation catalogOperationKey) {
+func (handler *catalogHandler) remove(ref protocolsession.OperationRef) {
 	handler.mu.Lock()
-	delete(handler.active, operation)
+	delete(handler.active, ref)
 	handler.mu.Unlock()
 }
 

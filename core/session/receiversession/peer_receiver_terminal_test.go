@@ -253,7 +253,7 @@ func TestReceiverPeerPublishedTerminalOutcomeIsImmutable(t *testing.T) {
 func TestReceiverPeerReceiveRetainsCancellationDiagnostics(t *testing.T) {
 	fixture := newReceiverPeerTerminalFixture(t, 0xb3)
 	operationID := fixture.operation.OperationID()
-	generation, _ := fixture.call.OperationAuthority()
+	op := fixture.call.Operation()
 	trackedRequests(fixture.operation.rpc).cancelErr = sessioncore.ErrLaneUnavailable
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -273,7 +273,7 @@ func TestReceiverPeerReceiveRetainsCancellationDiagnostics(t *testing.T) {
 	if fixture.operation.OperationID() != operationID {
 		t.Fatal("failed local cancellation changed its stable operation identity")
 	}
-	if generation.IsActive() {
+	if op.IsActive() {
 		t.Fatal("local cancellation retained operation authority")
 	}
 	repeated := fixture.operation.Terminate(context.Background())
