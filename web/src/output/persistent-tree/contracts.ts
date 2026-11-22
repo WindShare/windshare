@@ -249,8 +249,6 @@ export interface PersistentMaterializationPort {
   beginFile(request: PersistentFileRequest): Promise<PersistentFileTransactionPort>
   ensureDirectory(path: readonly string[]): Promise<PersistentDirectoryMaterialization>
   closeForTerminalSettlement?(): Promise<void>
-  /** Stop may abandon receiving storage after draining; Pause must preserve its checkpoints. */
-  closeForStopSettlement?(): Promise<void>
   close(): Promise<void>
 }
 

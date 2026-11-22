@@ -1,5 +1,4 @@
 import type { TraceEventObservationV2, TraceEventPayloadByNameV2 } from './model'
-import type { BrowserDeliveryPayloadV1 } from './browser-delivery-payload'
 
 export type TraceRetention = 'recent' | 'milestone' | 'outcome'
 export const MAX_TRACE_PRIORITY_EVENT_COUNT = 256
@@ -57,21 +56,6 @@ export class TraceRetentionWindow<Event> {
       group.events.clear()
       group.bytes = 0
     }
-  }
-}
-
-function browserDeliveryRetention(payload: BrowserDeliveryPayloadV1): TraceRetention {
-  if (payload.failure_name !== undefined || payload.checkpoint_stage === 'failed') return 'outcome'
-  switch (payload.transition) {
-    case 'copy-failed':
-    case 'cleanup-failed':
-    case 'discard-failed':
-      return 'outcome'
-    case 'receiving':
-    case 'checkpoint':
-      return 'recent'
-    default:
-      return 'milestone'
   }
 }
 
@@ -159,8 +143,6 @@ export function traceEventRetention(event: TraceEventObservationV2): TraceRetent
         default:
           return 'milestone'
       }
-    case 'browser_delivery':
-      return browserDeliveryRetention(event.payload)
     default:
       return 'milestone'
   }

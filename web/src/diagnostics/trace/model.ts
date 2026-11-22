@@ -1,7 +1,6 @@
 import type { ContentRetryPayload, ContentSchedulingPayload } from './content-scheduling'
 import type { ConnectionTracePayloads } from './connection-payload'
 import type { ProtocolOperationPayloadV2 } from './protocol-payload'
-import type { BrowserDeliveryPayloadV1 } from './browser-delivery-payload'
 import type { StoragePersistencePayloadV1 } from './storage-persistence-payload'
 import type { LaneTransitionPayloadV1 } from './lane-payload'
 import type { ReceiverExperiencePayloadV1 } from './experience-payload'
@@ -76,7 +75,6 @@ export const TRACE_EVENT_NAMES_V2 = Object.freeze([
   'continuation',
   'reopen',
   'cleanup',
-  'browser_delivery',
   'retained_inventory',
   'retained_action',
   'incident_marker',
@@ -553,9 +551,6 @@ export interface TraceEventPayloadByNameV2 extends ConnectionTracePayloads {
       | 'stop'
       | 'continue'
       | 'save'
-      | 'save_staged_files'
-      | 'cleanup_staging'
-      | 'discard_incomplete_staging'
       | 'redownload'
       | 'change_location'
       | 'discard'
@@ -616,7 +611,6 @@ export interface TraceEventPayloadByNameV2 extends ConnectionTracePayloads {
     lifecycle_generation?: string
     cleanup_kind?: 'published_metadata'
   }>
-  readonly browser_delivery: BrowserDeliveryPayloadV1
   readonly retained_inventory: RetainedInventoryPayloadV1
   readonly retained_action: RetainedActionPayloadV1
   readonly incident_marker: Readonly<{

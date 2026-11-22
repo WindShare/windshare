@@ -82,7 +82,6 @@ export function presentReceiveLifecycle(input: Readonly<{
   interruption?: ReceiveSettlementWait | null
   recoverySummary?: RecoverySummary | null
   writerOpenPause?: PersistentWriterOpenPauseFact | null
-  browserDelivery?: import('../output/model/browser-delivery').BrowserDeliverySummary | null
 }>, language: Language = 'en'): ReceiveLifecyclePresentation {
   const copy = input.interruption === undefined || input.interruption === null
     ? describeLifecycle(
@@ -289,9 +288,6 @@ function presentLifecycleAction(kind: LifecycleUserAction, input: ReceiveActionF
     case 'stop': return action(kind, t.stopAction, true)
     case 'continue': return action(kind, continueActionLabel(state, artifact, plan.kind, language))
     case 'save': return action(kind, t.saveNamed(browserArtifactName(artifact)))
-    case 'save-staged-files': return action(kind, t.saveStaged)
-    case 'cleanup-staging': return action(kind, t.cleanupStaging)
-    case 'discard-incomplete-staging': return action(kind, t.discardStaging, true)
     case 'redownload': return state.kind === 'resumable-receive'
       ? action(kind, t.restartIncomplete, true) : action(kind, t.downloadAgain)
     case 'change-location': return action(kind, t.changeLocation)

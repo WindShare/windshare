@@ -139,7 +139,7 @@ export class RetainedInventoryCoordinator {
       if (this.#options.continuationBlocked()) {
         return Object.freeze({ allowed: false, reason: 'receiverBusy' })
       }
-    } else if ((action === 'continue' || action === 'save-staged-files') &&
+    } else if (action === 'continue' &&
         this.#options.localFinalizationBlocked?.()) {
       return Object.freeze({ allowed: false, reason: 'outputBusy' })
     }

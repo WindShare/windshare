@@ -38,7 +38,6 @@ async function prepareRetainedModules(operation: RetainedReceiveOperation, mutat
   if (operation.actions.some(action => ['continue', 'save', 'redownload', 'save-partial'].includes(action))) {
     work.push(import('./continuation'))
   }
-  if (operation.browserDelivery !== undefined) work.push(import('../fsa/local-delivery'))
   if (operation.lifecycle.kind === 'resumable-receive' && operation.lifecycle.payloadKind === 'workspace-archive') {
     work.push(import('./progressive'))
   }

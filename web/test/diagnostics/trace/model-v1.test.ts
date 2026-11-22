@@ -237,10 +237,6 @@ const PAYLOAD_FOR_EVERY_EVENT = {
   continuation: { backend: 'origin_private', transition: 'paused' },
   reopen: { backend: 'origin_private', transition: 'authorized' },
   cleanup: { backend: 'portable', transition: 'completed' },
-  browser_delivery: {
-    operation_id: 'AQAAAAAAAAAAAAAAAAAAAA', file_id: 'AgAAAAAAAAAAAAAAAAAAAA',
-    transition: 'copy-started', placement: 'staged', recoverable_bytes: '128',
-  },
   retained_inventory: { transition: 'load_completed', operation_count: '0' },
   retained_action: {
     transition: 'started',

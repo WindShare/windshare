@@ -74,7 +74,7 @@ test('incompatible metadata resets without touching files or current records and
 
   expect(result).toEqual({
     oldRowsRemaining: 0,
-    storeCount: 14,
+    storeCount: 12,
     exactIndexesPresent: true,
     publishedSentinelBytes: [91, 92, 93, 94],
     blockedUpgradeRejected: true,

@@ -82,7 +82,7 @@ function retainedBannerFor(task: TaskPresentation): WorkspaceRetainedBanner | nu
       primary !== null &&
       primary.disabledReason === null &&
       primary.target.kind === 'retained' &&
-      (primary.target.action === 'save' || primary.target.action === 'save-staged-files')) {
+      primary.target.action === 'save') {
     return Object.freeze({ kind: 'ready-to-save', task, action: primary })
   }
   const continuation = retainedAction(task, 'continue')

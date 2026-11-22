@@ -8,8 +8,7 @@ import { ReceiverIcon } from '../receiver-presentation/ReceiverIcon'
 
 function isSameChoice(left: SavingChoice | null, right: SavingChoice): boolean {
   return left !== null &&
-    left.offered.choice.choiceId === right.offered.choice.choiceId &&
-    left.recoveryPreference === right.recoveryPreference
+    left.offered.choice.choiceId === right.offered.choice.choiceId
 }
 
 function collectSheetNotes(outcomes: readonly SavingOutcome[]): readonly string[] {
@@ -123,7 +122,7 @@ export function SavingControls({ model, activation, currentTaskContext, actionLa
         {outcome.alternatives.length > 0 && <details className="saving-advanced">
           <summary>{t.moreOptions}</summary>
           {outcome.alternatives.map(choice => <Choice
-            key={`${choice.offered.choice.choiceId}:${choice.recoveryPreference ?? ''}`}
+            key={choice.offered.choice.choiceId}
             choice={choice} recommended={isSameChoice(model.primary, choice)}
             sharedDisabledReason={disabledReason} choose={commit} />)}
         </details>}

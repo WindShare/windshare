@@ -30,7 +30,7 @@ export interface FinalFileCheckpointCommitReceipt {
 
 export type RecoveryMetadataRetirementResult = Readonly<{
   readonly deletedRows: number
-  readonly state: 'more' | 'complete' | 'retained-for-local-delivery'
+  readonly state: 'more' | 'complete'
 }>
 
 export type CheckpointNamespaceBinding = DurableCheckpointNamespaceIdentity

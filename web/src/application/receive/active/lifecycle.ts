@@ -81,7 +81,6 @@ export class ActiveReceiveLifecycle {
     return availableReceiveActions({
       state: facts.lifecycle, plan: facts.plan, activeControls: facts.activeControls,
       interruption: facts.receiveInterruption, recoverySummary: facts.recoverySummary,
-      browserDelivery: facts.browserFolderProgress?.summary ?? null,
     }).includes(action)
   }
 

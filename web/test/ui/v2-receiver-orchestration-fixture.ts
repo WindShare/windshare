@@ -812,10 +812,6 @@ function defaultLifecycleAction(
   lifecycle: ReceiveLifecycleState,
 ): LifecycleMutation {
   switch (action) {
-    case 'save-staged-files':
-    case 'cleanup-staging':
-    case 'discard-incomplete-staging':
-      return { lifecycle }
     case 'continue':
       return {
         lifecycle: next(lifecycle, { kind: 'receiving', activeLeaseId: identityText(60) }),

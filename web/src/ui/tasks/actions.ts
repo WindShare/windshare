@@ -19,9 +19,6 @@ export function activeTaskAction(action: LifecycleActionPresentation, planKind: 
 
 function activeConsequence(action: LifecycleActionPresentation, planKind: string, language: Language): string | null {
   const t = receiverCopy[language].actions
-  if (action.kind === 'save-staged-files') return t.saveStagedHint
-  if (action.kind === 'cleanup-staging') return t.cleanupStagingHint
-  if (action.kind === 'discard-incomplete-staging') return incompleteStagingConsequence(language)
   if (action.kind === 'pause') return t.pauseHint
   if (action.kind === 'stop') return stopConsequence(planKind, language)
   if (action.kind === 'delete' || action.kind === 'discard') {
@@ -45,12 +42,12 @@ export function retainedTaskAction(
     disabledReason = operation.unavailableReason ?? null
   }
   const cleanupOnly = operation.continuation === 'retry-cleanup'
-  const destructive = action === 'discard' || action === 'delete' || action === 'discard-incomplete-staging' ||
+  const destructive = action === 'discard' || action === 'delete' ||
     (action === 'redownload' && operation.recoverySummary !== undefined)
   return Object.freeze({
     id: action,
     label: retainedLabel(operation, action, language),
-    destructive: action === 'discard-incomplete-staging' || (destructive && !cleanupOnly),
+    destructive: destructive && !cleanupOnly,
     disabledReason,
     consequence: retainedConsequence(operation, action, language),
     target: Object.freeze({ kind: 'retained', operation, action }),
@@ -73,9 +70,6 @@ function retainedLabel(
 ): string {
   const t = receiverCopy[language].actions
   switch (action) {
-    case 'save-staged-files': return t.saveStaged
-    case 'cleanup-staging': return t.cleanupStaging
-    case 'discard-incomplete-staging': return t.discardStaging
     case 'save-partial': return t.savePartial
     case 'continue': return continuationLabel(operation, language)
     case 'save': return t.save
@@ -99,9 +93,6 @@ function continuationLabel(operation: RetainedReceiveOperation, language: Langua
 function retainedConsequence(operation: RetainedReceiveOperation, action: RetainedReceiveAction, language: Language): string | null {
   const t = receiverCopy[language].actions
   switch (action) {
-    case 'save-staged-files': return t.saveStagedHint
-    case 'cleanup-staging': return t.cleanupStagingHint
-    case 'discard-incomplete-staging': return incompleteStagingConsequence(language)
     case 'save-partial':
       return t.savePartialHint
     case 'forget': return t.forgetHint
@@ -116,9 +107,4 @@ function retainedConsequence(operation: RetainedReceiveOperation, action: Retain
         : t.restartIncompleteHint
     default: return null
   }
-}
-
-function incompleteStagingConsequence(language: Language): string {
-  const t = receiverCopy[language].actions
-  return t.discardStagingHint
 }

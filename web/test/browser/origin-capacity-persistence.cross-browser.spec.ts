@@ -11,24 +11,24 @@ async function run(page: Page, scenario: 'incompatibleSchema' | 'expiryRollback'
 }
 
 test('rejects incompatible schema without deleting old accounting; an explicit reset creates a clean database', async ({ page }) => {
-  expect(await run(page, 'incompatibleSchema')).toEqual({ failure: 'DataError', version: 3, preserved: 1, fresh: 0 })
+  expect(await run(page, 'incompatibleSchema')).toEqual({ failure: 'DataError', version: 4, preserved: 1, fresh: 0 })
 })
 
 for (const kind of ['legacy', 'nan'] as const) {
-  test(`rejects ${kind} workspace rows in ZIP admission, release, and staged-file admission without changing them`, async ({ page }) => {
+  test(`rejects ${kind} workspace rows in ZIP admission and release without changing them`, async ({ page }) => {
     await page.goto(BROWSER_CONTRACT_HOST_PATH)
     const result = await page.evaluate(async ({ path, kind }) => {
       return (await import(path) as Harness).corruptWorkspace(kind)
     }, { path: HARNESS_PATH, kind })
     expect(result).toEqual({
-      claim: 'DataError', release: 'DataError', stage: 'DataError', entered: false, rows: 1, preserved: true,
+      claim: 'DataError', release: 'DataError', rows: 1, preserved: true,
     })
   })
 }
 
-test('rolls back expired-lease normalization if staged inventory is invalid', async ({ page }) => {
+test('rolls back expired-lease normalization when ownership validation fails later in the transaction', async ({ page }) => {
   expect(await run(page, 'expiryRollback')).toEqual({
-    failure: 'DataError', rows: 1, token: 'old', occupied: '10', outstanding: '20', expires: 1,
+    failure: 'InvalidStateError', rows: 2, token: 'old', occupied: '10', outstanding: '20', expires: 1,
   })
 })
 

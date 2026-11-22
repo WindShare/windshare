@@ -1,12 +1,13 @@
+import { encodeBase64Url } from '../../../src/crypto/bytes'
 import {
   openOriginCapacityDatabase, capacityRequest, capacityTransaction, capacityTransactionCompletion,
-  WORKSPACE_CLAIM_STORE, STAGING_FILE_STORE, WORKSPACE_OBJECT_STORE,
+  WORKSPACE_CLAIM_STORE, WORKSPACE_OBJECT_STORE,
 } from '../../../src/output/origin-private/capacity/database'
 import { IndexedDbOriginPrivateWorkspaceBudgetLeaseAuthority } from '../../../src/output/origin-private/admission-authority'
-import { IndexedDbStagingBudgetStore } from '../../../src/output/staging-budget/indexeddb-store'
 import { openCapacitySession, capacityAction, closeCapacitySessions, deleteCapacityDatabase } from './opfs-capacity-harness'
 
-const OLD_SCHEMA = 3
+const OLD_SCHEMA = 4
+const ACTOR_ZERO_OPERATION_ID = encodeBase64Url(new Uint8Array(16).fill(10))
 const EXPIRED = {
   id: 'expired', operationId: 'expired', token: 'old', budgetDigest: 'digest',
   peakOwnedBytes: 339260n, expiresAtMilliseconds: 1, occupiedBytes: 10n,
@@ -65,13 +66,9 @@ export async function corruptWorkspace(kind: 'legacy' | 'nan') {
     const authority = await IndexedDbOriginPrivateWorkspaceBudgetLeaseAuthority.open(name)
     const release = await failureName(() => authority.release('expired', kind === 'legacy' ? 'old' : ''))
     authority.close()
-    const staging = await IndexedDbStagingBudgetStore.open(name)
-    let entered = false
-    const stage = await failureName(() => staging.transact(() => { entered = true; return { result: null } }))
-    staging.close()
     const rows = await readAll(database, WORKSPACE_CLAIM_STORE)
     const row = rows[0] as Record<string, unknown>
-    return { claim, release, stage, entered, rows: rows.length,
+    return { claim, release, rows: rows.length,
       preserved: kind === 'legacy' ? !('occupiedBytes' in row) : Number.isNaN(row.occupiedBytes) }
   } finally {
     database.close()
@@ -87,11 +84,15 @@ export async function expiryRollback() {
   try {
     await capacityTransaction(database, async tx => {
       tx.objectStore(WORKSPACE_CLAIM_STORE).put(EXPIRED)
-      tx.objectStore(STAGING_FILE_STORE).put({ id: 'broken-staging' })
+      tx.objectStore(WORKSPACE_CLAIM_STORE).put({
+        id: ACTOR_ZERO_OPERATION_ID, operationId: ACTOR_ZERO_OPERATION_ID, token: '',
+        budgetDigest: 'mismatched-budget-digest', peakOwnedBytes: 339260n,
+        expiresAtMilliseconds: 0, occupiedBytes: 0n, outstandingGrowthBytes: 0n, metadataHeadroomBytes: 0n,
+      })
     })
     const failure = await capacityAction({ kind: 'claim', token: 'new', now: 10 })
-    const rows = await readAll(database, WORKSPACE_CLAIM_STORE)
-    const row = rows[0] as typeof EXPIRED
+    const rows = await readAll(database, WORKSPACE_CLAIM_STORE) as Array<typeof EXPIRED>
+    const row = rows.find(candidate => candidate.id === EXPIRED.id)!
     return { failure, rows: rows.length, token: row.token, occupied: String(row.occupiedBytes),
       outstanding: String(row.outstandingGrowthBytes), expires: row.expiresAtMilliseconds }
   } finally {

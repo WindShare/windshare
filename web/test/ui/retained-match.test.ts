@@ -154,55 +154,6 @@ function pausedPartialZipOp(idSeed: number, createdAtMilliseconds = 2_000): Reta
   })
 }
 
-function pausedBrowserFolderOp(
-  idSeed: number,
-  options: Readonly<{
-    createdAtMilliseconds?: number
-    selectionDigest?: string
-    stagedCompleteFiles?: number
-    cleanupPendingFiles?: number
-    actions: RetainedReceiveOperation['actions']
-  }>,
-): RetainedReceiveOperation {
-  const operationId = identityText(idSeed)
-  const receiveIntentDigest = identityText(idSeed + 1, 32)
-  const lifecycle: ReceiveLifecycleState = {
-    operationId,
-    receiveIntentDigest,
-    generation: 2n,
-    kind: 'resumable-receive',
-    payloadKind: 'file-set',
-    checkpointSetDigest: identityText(idSeed + 2, 32),
-    completedFileCount: 1n,
-    completedBytes: 256n,
-    retainedBytes: 512n,
-    selectionFacts: Object.freeze({ discoveredFileCount: 2n, discoveredBytes: 1024n, discovery: 'complete' }),
-  }
-  return retainedOp({
-    operationId,
-    lifecycle,
-    continuation: 'resume-receive',
-    actions: options.actions,
-    selectionDigest: options.selectionDigest ?? SELECTION_A,
-    display: Object.freeze({ objectLabel: '2 files', createdAtMilliseconds: options.createdAtMilliseconds ?? 2_000 }),
-    browserDelivery: Object.freeze({
-      operationId,
-      receiveIntentDigest,
-      receivingFiles: 0,
-      incompleteStagedFiles: 0,
-      stagedCompleteFiles: options.stagedCompleteFiles ?? 0,
-      copyingFiles: 0,
-      cleanupPendingFiles: options.cleanupPendingFiles ?? 0,
-      targetSavedFiles: 0,
-      discardedFiles: 0,
-      recoverableBytes: 256n,
-      stagedBytes: 256n,
-      reservedStagingBytes: 0n,
-      targetSavedBytes: 0n,
-    }),
-  })
-}
-
 async function openTestCoordinator(
   operations: readonly RetainedReceiveOperation[],
   remoteUnavailable?: () => ReceiveBlockReason | null,
@@ -621,7 +572,7 @@ describe('resolveWorkspaceTaskLayout continuation precedence', () => {
         cleanupState: 'clean',
       },
       continuation: 'history-only',
-      actions: ['cleanup-staging'],
+      actions: ['forget'],
       display: Object.freeze({ objectLabel: 'photo.jpg', createdAtMilliseconds: 2_000 }),
     })
     const withOlder = resolveWorkspaceTaskLayout(workspaceSnapshot({
@@ -711,30 +662,6 @@ describe('resolveWorkspaceTaskLayout continuation precedence', () => {
     expect(layoutC.banner?.action.id).toBe('continue')
   })
 
-  it('passes the exact continue action to the banner even when another retained action is primary', () => {
-    const olderCompleteA = completeLocalOp(70, 1_000)
-    const cleanupAndContinueA = pausedBrowserFolderOp(72, {
-      createdAtMilliseconds: 2_000,
-      selectionDigest: SELECTION_A,
-      cleanupPendingFiles: 1,
-      actions: ['cleanup-staging', 'continue', 'discard'],
-    })
-    const newerPausedB = { ...pausedStartOp(76, 3_000), selectionDigest: SELECTION_B }
-
-    const snapshot = workspaceSnapshot({
-      retained: { kind: 'available', pending: null, operations: [olderCompleteA, cleanupAndContinueA, newerPausedB] },
-    })
-    const matchedTask = snapshot.tasks.find(task => task.operationId === cleanupAndContinueA.operationId)
-    expect(matchedTask?.primaryAction?.id).toBe('cleanup-staging')
-
-    const layout = resolveWorkspaceTaskLayout(snapshot)
-    expect(layout.primaryTask).toBeNull()
-    expect(layout.collapseRemoteSaving).toBe(false)
-    expect(layout.banner?.kind).toBe('continue')
-    expect(layout.banner?.task.operationId).toBe(cleanupAndContinueA.operationId)
-    expect(layout.banner?.action.id).toBe('continue')
-  })
-
   it('keeps other selection banners suppressed while continuing the matched selection task', async () => {
     const olderCompleteA = completeLocalOp(78, 1_000)
     const pausedA = pausedStartOp(80, 2_000)
@@ -751,53 +678,5 @@ describe('resolveWorkspaceTaskLayout continuation precedence', () => {
     expect(during.banner).toBeNull()
 
     await cleanup()
-  })
-
-  it('preserves ready-to-save staged folder precedence online and offline per selection', async () => {
-    const olderCompleteA = completeLocalOp(84, 1_000)
-    const stagedA = pausedBrowserFolderOp(86, {
-      createdAtMilliseconds: 2_000,
-      selectionDigest: SELECTION_A,
-      stagedCompleteFiles: 1,
-      actions: ['save-staged-files', 'continue', 'discard'],
-    })
-    const newerStagedB = pausedBrowserFolderOp(90, {
-      createdAtMilliseconds: 3_000,
-      selectionDigest: SELECTION_B,
-      stagedCompleteFiles: 1,
-      actions: ['save-staged-files', 'continue', 'discard'],
-    })
-
-    const online = resolveWorkspaceTaskLayout(workspaceSnapshot({
-      retained: { kind: 'available', pending: null, operations: [olderCompleteA, stagedA, newerStagedB] },
-    }))
-    expect(online.primaryTask).toBeNull()
-    expect(online.banner?.kind).toBe('ready-to-save')
-    expect(online.banner?.task.operationId).toBe(stagedA.operationId)
-    expect(online.banner?.action.id).toBe('save-staged-files')
-
-    const { coordinator, admission, cleanup } = await openTestCoordinator(
-      [newerStagedB, stagedA, olderCompleteA],
-      () => 'reconnectContinue',
-    )
-    const offline = { kind: 'unavailable' as const, reason: 'recovery-exhausted' as const }
-    const offlineWithComplete = resolveWorkspaceTaskLayout(
-      workspaceSnapshot({ connection: offline, retained: coordinator.getSnapshot() }, admission),
-    )
-    expect(offlineWithComplete.primaryTask?.operationId).toBe(olderCompleteA.operationId)
-    expect(offlineWithComplete.collapseRemoteSaving).toBe(true)
-    expect(offlineWithComplete.banner).toBeNull()
-    await cleanup()
-
-    const { coordinator: withoutComplete, admission: withoutCompleteAdmission, cleanup: cleanupWithoutComplete } =
-      await openTestCoordinator([newerStagedB, stagedA], () => 'reconnectContinue')
-    const offlineWithoutComplete = resolveWorkspaceTaskLayout(
-      workspaceSnapshot({ connection: offline, retained: withoutComplete.getSnapshot() }, withoutCompleteAdmission),
-    )
-    expect(offlineWithoutComplete.primaryTask).toBeNull()
-    expect(offlineWithoutComplete.banner?.kind).toBe('ready-to-save')
-    expect(offlineWithoutComplete.banner?.task.operationId).toBe(stagedA.operationId)
-    expect(offlineWithoutComplete.banner?.action.id).toBe('save-staged-files')
-    await cleanupWithoutComplete()
   })
 })

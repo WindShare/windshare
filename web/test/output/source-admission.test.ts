@@ -28,8 +28,6 @@ import {
   snapshotMaterializationRootRelativePath,
   snapshotSourceAuthenticationPath,
 } from '../../src/transfer/job/coordinate/direct-tree'
-import { deliveryEngineFixture } from './browser-delivery-engine-fixture'
-import { deliveryIdentity } from './browser-delivery-fixture'
 import { FILE_ID, materializationFixture, revision } from './persistent-tree-session-fixture'
 import { identity } from './planning/fixture'
 import { identity as bytesIdentity, identityText, receiveIntentFixture } from '../transfer/v2-job-fixture'
@@ -133,7 +131,7 @@ describe('persisted source admission contract', () => {
     })
   })
 
-  it('keeps observed source changes in FaultDomain.Source across PersistentTree, BrowserDelivery, and ProgressiveZip', async () => {
+  it('keeps observed source changes in FaultDomain.Source across PersistentTree and ProgressiveZip', async () => {
     // 1. PersistentTree
     const treeFixture = await materializationFixture()
     const path = ['same.bin'] as const
@@ -154,24 +152,7 @@ describe('persisted source admission contract', () => {
     })
     await treeFixture.session.close()
 
-    // 2. BrowserDelivery
-    const deliveryFixture = await deliveryEngineFixture()
-    const req = deliveryFixture.request(11, 4n)
-    const src = { ...await req.openRevision(), sourceMetadata: deliveryIdentity(81) }
-    const dtx = await deliveryFixture.session.beginFile({ ...req, openRevision: async () => src })
-    await dtx.writeRange(0n, Uint8Array.of(1, 2))
-    await dtx.pause()
-    let deliveryError: unknown
-    try {
-      await deliveryFixture.session.beginFile({
-        ...req,
-        openRevision: async () => ({ ...src, fileRevision: deliveryIdentity(82, 16), sourceMetadata: deliveryIdentity(82) }),
-      })
-    } catch (error) { deliveryError = error }
-    expect(deliveryError).toBeInstanceOf(SourceRevisionChangedError)
-    await deliveryFixture.session.close()
-
-    // 3. ProgressiveZip
+    // 2. ProgressiveZip
     const zip = await openZipFixture()
     const zipSource = { shareInstance: zip.intent.shareInstance, directoryId: 'd', generation: 'g', sourcePath: ['same.bin'] }
     await zip.archive.admitFile({

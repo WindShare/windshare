@@ -47,7 +47,7 @@ test('UI may invoke application commands, but cannot assemble output routes or a
   ]), [])
   for (const target of [
     'application/browser-receive/composition.ts', 'output/workspace/repository.ts',
-    'output/browser-delivery/session.ts', 'output/file-system-access/execution/resource-owner.ts',
+    'output/file-system-access/session.ts', 'output/file-system-access/execution/resource-owner.ts',
   ]) {
     assert.ok(violations([
       ['ui/controller.ts', ['contracts/barrel.ts']],

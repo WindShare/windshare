@@ -54,8 +54,6 @@ export function bindRuntimeOutputFailures(
     get activeControls() {
       return runtime.activeControls
     },
-    ...(runtime.outputProgress === undefined ? {} : { outputProgress: runtime.outputProgress }),
-    ...(runtime.observeCheckpoint === undefined ? {} : { observeCheckpoint: runtime.observeCheckpoint.bind(runtime) }),
     ...(runtime.initialWorkspaceUsage === undefined
       ? {}
       : { initialWorkspaceUsage: runtime.initialWorkspaceUsage }),

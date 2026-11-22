@@ -39,6 +39,8 @@ import { artifactRequestedName } from '../model/artifact-name'
 import { resultRootLayoutFromProof } from './naming'
 import { resolveArtifactChoiceIdentity } from './reconciliation'
 
+export const SMALL_FILE_PORTABLE_MAXIMUM_BYTES = 16n * 1024n * 1024n
+
 type CompleteMaterializationRoute =
   | WorkspaceThenPublishMaterializationRoute
   | PortableHandoffMaterializationRoute
@@ -74,7 +76,7 @@ export async function offerArtifacts(
     return disabledProjectionOffer(projection, 'selection-empty', 'selection-empty')
   }
   const candidates = await Promise.all(
-    (await deriveArtifactCandidates(projection, environment)).map(freezeCandidateIdentity),
+    (await deriveArtifactCandidates(projection, discovery, environment)).map(freezeCandidateIdentity),
   )
   if (candidates.length === 0) return noSafeDestination(projection, environment)
   if (discovery.kind === 'retryable-failure' &&
@@ -86,11 +88,12 @@ export async function offerArtifacts(
 
 async function deriveArtifactCandidates(
   projection: SelectionProjectionV1,
+  discovery: DiscoveryState,
   environment: EnvironmentOffers,
 ): Promise<readonly PlanningArtifactCandidate[]> {
   switch (projection.proof.kind) {
     case 'single-file':
-      return singleFileCandidates(projection, projection.proof, environment)
+      return singleFileCandidates(projection, projection.proof, discovery, environment)
     case 'tree':
       return treeCandidates(projection, projection.proof, environment)
     case 'unknown':
@@ -102,6 +105,7 @@ async function deriveArtifactCandidates(
 async function singleFileCandidates(
   projection: SelectionProjectionV1,
   proof: Extract<SelectionProjectionV1['proof'], { kind: 'single-file' }>,
+  discovery: DiscoveryState,
   environment: EnvironmentOffers,
 ): Promise<readonly PlanningArtifactCandidate[]> {
   const file = proof.file
@@ -115,9 +119,12 @@ async function singleFileCandidates(
     sourcePath: file.sourcePath,
     outputName: file.catalogName,
   })
-  const completeRoute = chooseOriginalFileRoute(environment, projection.metrics.byteCountLowerBound)
   const candidates: PlanningArtifactCandidate[] = []
-  if (completeRoute !== null) {
+  for (const completeRoute of chooseOriginalFileRoutes(
+    environment,
+    projection.metrics.byteCountLowerBound,
+    discovery.kind === 'complete',
+  )) {
     candidates.push(candidateForCompleteArtifact(original, completeRoute))
   }
   const directoryTarget = chooseDirectoryTarget(environment, projection.metrics.byteCountLowerBound)
@@ -164,15 +171,20 @@ async function treeCandidates(
   return Object.freeze(candidates)
 }
 
-function chooseOriginalFileRoute(
+function chooseOriginalFileRoutes(
   environment: EnvironmentOffers,
   byteCountLowerBound: bigint,
-): CompleteMaterializationRoute | null {
+  discoveryComplete: boolean,
+): readonly CompleteMaterializationRoute[] {
   // The priority affects presentation only. Reconciliation selects the already
   // chosen family directly, so a later higher-priority route cannot replace it.
+  // Complete small files prefer direct browser handoff to avoid OPFS setup,
+  // double-write, and retained-storage cleanup overhead while keeping OPFS selectable.
   const workspaceRoute = chooseWorkspaceRoute(environment, byteCountLowerBound)
-  if (workspaceRoute !== null) return workspaceRoute
-  return choosePortableRoute(environment, byteCountLowerBound)
+  const portableRoute = choosePortableRoute(environment, byteCountLowerBound)
+  const preferPortable = discoveryComplete && byteCountLowerBound <= SMALL_FILE_PORTABLE_MAXIMUM_BYTES
+  const ordered = preferPortable ? [portableRoute, workspaceRoute] : [workspaceRoute, portableRoute]
+  return ordered.filter((route): route is CompleteMaterializationRoute => route !== null)
 }
 
 function chooseZipRoute(

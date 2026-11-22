@@ -6,13 +6,10 @@ import type { ReceiverTraceEvent } from '../../src/application/receive/observati
 import { projectReceiverTraceEvent } from '../../src/application/diagnostics/receive-trace'
 import { validateTraceEventPayloadV2 } from '../../src/diagnostics/export/trace-event-payload-v2'
 import { composeTasks } from '../../src/ui/experience/task-composition'
-import { summarizeBrowserDeliveries } from '../../src/output/browser-delivery/retained'
-import { presentTask, retainedTaskFacts } from '../../src/ui/tasks'
 import { EMPTY_OUTPUT_PRESENTATION } from '../../src/ui/output'
 import { EMPTY_PROGRESS } from '../../src/ui/model'
 import { EMPTY_RETAINED_INVENTORY } from '../../src/application/receive/retained/model'
 import type { RetainedReceiveOperation } from '../../src/application/receive/contracts'
-import { deliveryFixture } from '../output/browser-delivery-fixture'
 import { experienceSnapshot } from './receiver-experience-fixture'
 import {
   FakeJoinedShare, FakeReceiveComposition, MANAGED_ENVIRONMENT, WORKSPACE_ENVIRONMENT,
@@ -219,46 +216,5 @@ describe('completed download ownership and presentation', () => {
     expect(controller.getSnapshot().startAdmission.allowed).toBe(false)
     expect(runtime.detachments).toEqual(['detached'])
     await controller.dispose()
-  })
-})
-
-describe('stopped child obligation refresh integration', () => {
-  it.each(['receiving', 'discarding', 'staged-complete'] as const)('refreshes displayed %s child facts when local recovery preserves parent generation', kind => {
-    const f = deliveryFixture()
-    const before = kind === 'staged-complete'
-      ? f.advance(f.initial, { kind, stage: f.stage! })
-      : f.advance(f.initial, { kind, checkpoint: f.checkpoint('staged', 3n) })
-    let after = before
-    if (kind === 'staged-complete') {
-      after = f.advance(after, { kind: 'copying', stage: f.stage!, attempt: { attemptId: 'copy' } })
-      after = f.advance(after, { kind: 'target-saved', target: f.target, stage: f.stage! })
-      after = f.advance(after, { kind: 'cleanup-pending', target: f.target, stage: f.stage! })
-      after = f.advance(after, { kind: 'cleaned', target: f.target })
-    } else {
-      if (kind === 'receiving') after = f.advance(after, { kind: 'discarding', checkpoint: f.checkpoint('staged', 3n) })
-      after = f.advance(after, { kind: 'discarded' })
-    }
-    const lifecycle = { operationId: f.policy.operationId, receiveIntentDigest: f.policy.receiveIntentDigest,
-      generation: 2n, kind: 'partial-directory' as const, reason: 'stopped' as const,
-      successCount: 1n, failureCount: 1n, receiptDigest: f.policy.digest }
-    const operation: RetainedReceiveOperation = { operationId: lifecycle.operationId,
-      receiveIntentDigest: lifecycle.receiveIntentDigest, lifecycleGeneration: lifecycle.generation,
-      lifecycle, continuation: 'history-only', actions: [],
-      browserDelivery: summarizeBrowserDeliveries(f.policy, [after]) }
-    const snapshot = experienceSnapshot({ activeReceiveOperationId: null,
-      output: { ...EMPTY_OUTPUT_PRESENTATION, lifecycle,
-        browserFolderProgress: { kind: 'browser-folder', operationId: lifecycle.operationId,
-          generation: 1n, summary: summarizeBrowserDeliveries(f.policy, [before]) } },
-      progress: { ...EMPTY_PROGRESS, transferJobId: identityText(13), discoveredFiles: 1,
-        discoveredBytes: 8n, completedFiles: 0, completedBytes: 0n, materializedBytes: 3n, writtenBytes: 3n, discovery: 'complete' },
-      retained: { ...EMPTY_RETAINED_INVENTORY, operations: [operation] } })
-    const actual = composeTasks(snapshot).current!
-    const retained = presentTask(retainedTaskFacts(operation))
-    expect(actual.headline).toBe(retained.headline)
-    expect(actual.details).toContain('1 file · 8 B total')
-    expect(actual.details).toContain('0 B retained in browser staging.')
-    expect(actual.details).toContain(kind === 'staged-complete' ? '8 B saved to the chosen folder.' : '0 B saved to the chosen folder.')
-    expect(actual.details.join(' ')).not.toContain('await staging cleanup')
-    expect(actual.details.join(' ')).not.toContain('incomplete staged files cannot continue')
   })
 })

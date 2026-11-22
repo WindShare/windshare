@@ -24,7 +24,6 @@ import { PersistentWriterOpenPauseRequestedError } from '../../output/execution/
 import type { AuthorityActivationSnapshot } from './activation/model'
 import { type ActiveReceiveControl, type ReceiveSettlementWait, type WorkspaceUsage, type PersistentWriterOpenPauseFact } from './actions'
 import type { ProgressChange } from '../../transfer/progress/observation'
-import { folderProgressChange } from './observation/progress-change'
 
 const INACTIVE_ACTIVATION: AuthorityActivationSnapshot = Object.freeze({ kind: 'inactive' })
 
@@ -47,7 +46,6 @@ export interface ReceiveRuntimeSnapshot {
   readonly workspaceUsage: WorkspaceUsage | null
   readonly activeControls: readonly ActiveReceiveControl[]
   readonly receiveInterruption: ReceiveSettlementWait | null
-  readonly browserFolderProgress?: import('./contracts').BrowserFolderProgressSnapshot | null
 }
 
 export const EMPTY_RECEIVE_RUNTIME: ReceiveRuntimeSnapshot = Object.freeze({
@@ -69,7 +67,6 @@ export const EMPTY_RECEIVE_RUNTIME: ReceiveRuntimeSnapshot = Object.freeze({
   workspaceUsage: null,
   activeControls: Object.freeze([]),
   receiveInterruption: null,
-  browserFolderProgress: null,
 })
 
 export type TransferResultProjection = Pick<
@@ -206,7 +203,6 @@ export class ReceiveRuntimeState {
       receiveIntent: intent,
       transferResult: null,
       plan: intent.plan,
-      browserFolderProgress: null,
       safeRenamed: null,
       recoverySummary: null,
       writerOpenPause: null,
@@ -253,7 +249,6 @@ export class ReceiveRuntimeState {
       receiveIntent: intent,
       transferResult: null,
       plan: intent.plan,
-      browserFolderProgress: null,
       safeRenamed: null,
       recoverySummary: null,
       writerOpenPause: null,
@@ -320,20 +315,6 @@ export class ReceiveRuntimeState {
       ...this.#snapshot,
       receiveInterruption: interruption === null ? null : Object.freeze({ ...interruption }),
     }, lifecycle, this.#snapshot.workspaceUsage)
-    return true
-  }
-
-  updateBrowserFolderProgress(progress: import('./contracts').BrowserFolderProgressSnapshot): boolean {
-    const intent = this.#snapshot.receiveIntent
-    if (intent === null || intent.plan.kind !== 'direct-tree' ||
-        progress.operationId !== intent.operationId ||
-        progress.summary.operationId !== intent.operationId ||
-        progress.summary.receiveIntentDigest !== intent.digest) return false
-    const current = this.#snapshot.browserFolderProgress
-    if (current != null && progress.generation <= current.generation) return false
-    this.#publish({
-      ...this.#snapshot, browserFolderProgress: Object.freeze({ ...progress }),
-    }, folderProgressChange(current, progress))
     return true
   }
 

@@ -28,7 +28,7 @@ async function fixture(onTaskCleared: () => void = () => undefined) {
   const offers = app.observations.getSnapshot().offers
   if (offers?.kind !== 'artifact-actions') throw new Error('Test output offer unavailable')
   const choose = () => app.chooseArtifact(offers.primary.choice.choiceId,
-    { objectLabel: 'report.txt', createdAtMilliseconds: 1 }, 'automatic')
+    { objectLabel: 'report.txt', createdAtMilliseconds: 1 })
   return { app, joined, receive, share, errors, choose }
 }
 

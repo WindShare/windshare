@@ -26,28 +26,6 @@ import type {
 } from '../../src/application/receive/contracts'
 
 describe('retained inventory local finalization and identity admission', () => {
-  it.each(['cleanup-staging', 'discard-incomplete-staging'] as const)(
-    'admits %s without a share or access to the busy destination', async action => {
-      const original = operation([action], 'history-only')
-      const started = deferred<void>()
-      const finished = deferred<RetainedReceiveActionResult>()
-      const harness = retainedHarness(() => Promise.resolve(testInventory([original], async (_candidate, dispatched) => {
-        expect(dispatched).toBe(action)
-        started.resolve(undefined)
-        return finished.promise
-      })), undefined, { localFinalizationBlocked: () => true })
-      await harness.coordinator.load()
-      const row = harness.publications.at(-1)!.operations[0]!
-      expect(harness.coordinator.actionAdmission(row, action)).toEqual({ allowed: true, reason: null })
-      harness.coordinator.perform(row, action)
-      await started.promise
-      expect(harness.publications.at(-1)?.pending).toEqual({ operationId: original.operationId, action })
-      finished.resolve({ kind: 'completed' })
-      await harness.coordinator.load()
-      expect(harness.actionErrors).toEqual([])
-    },
-  )
-
   it.each([0n, 1n, 2n, 3n, 4n])(
     'checks workspace continuation generation %s against the observed revision without counting recovery steps',
     async generation => {

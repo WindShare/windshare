@@ -2,7 +2,6 @@ import type { Language } from '../preferences/model'
 import { receiverCopy } from '../locales/receiver'
 import { formatBytes } from '../progress-presentation'
 import type { TaskFacts, TaskProgressPresentation } from './model'
-import { isTerminalLifecycleState } from '../../transfer/lifecycle/state'
 
 const PERCENT_SCALE = 100n
 const UNSETTLED_PERCENT_LIMIT = 99n
@@ -42,19 +41,12 @@ function materializedTaskBytes(facts: TaskFacts): bigint {
 
 function completedFileLabel(facts: TaskFacts, language: Language): string {
   const t = receiverCopy[language].progress
-  if (facts.browserDelivery != null) return ` · ${t.savedFiles(facts.browserDelivery.targetSavedFiles)}`
   return facts.progress === null ? '' : ` · ${t.completedFiles(facts.progress.completedFiles)}`
 }
 
 function retainedProgress(facts: TaskFacts, language: Language): TaskProgressPresentation | null {
   const t = receiverCopy[language].progress
   const state = facts.lifecycle
-  if (facts.browserDelivery != null) return Object.freeze({
-    mode: 'indeterminate', percentage: null,
-    sampleIdentity: '', receivedObjectBytes: 0n, writtenBytes: 0n, remainingBytes: null, status: null,
-    label: t.savedBytes(formatBytes(facts.browserDelivery.targetSavedBytes)),
-    details: Object.freeze(browserDeliveryDetails(facts.browserDelivery, facts.lifecycle, language)),
-  })
   if (state.kind !== 'resumable-receive') return null
   const retained = retainedReceiveBytes(state)
   return Object.freeze({
@@ -91,22 +83,6 @@ function discoveryStatus(facts: TaskFacts, language: Language): string | null {
   return progress?.discovery === 'failed' ? t.countFailed : null
 }
 
-function browserDeliveryDetails(summary: NonNullable<TaskFacts['browserDelivery']>, lifecycle: TaskFacts['lifecycle'], language: Language): string[] {
-  const t = receiverCopy[language].progress
-  const terminal = isTerminalLifecycleState(lifecycle)
-  return [
-    ...(terminal ? [] : [t.verified(formatBytes(summary.recoverableBytes))]),
-    t.savedDestination(formatBytes(summary.targetSavedBytes)),
-    t.staged(formatBytes(summary.stagedBytes)),
-    ...((summary.stagedCompleteFiles + summary.copyingFiles) > 0
-      ? [t.awaitingSave(summary.stagedCompleteFiles + summary.copyingFiles)] : []),
-    ...(summary.cleanupPendingFiles > 0
-      ? [t.awaitingCleanup(summary.cleanupPendingFiles)] : []),
-    ...(terminal && summary.incompleteStagedFiles > 0
-      ? [t.discardable(summary.incompleteStagedFiles)] : []),
-  ]
-}
-
 function maximum(left: bigint, right: bigint): bigint { return left > right ? left : right }
 
 function progressDetails(facts: TaskFacts, language: Language): string[] {
@@ -121,10 +97,6 @@ function progressDetails(facts: TaskFacts, language: Language): string[] {
     details.push(t.newBytes(formatBytes(progress.writtenBytes)))
     if (progress.discovery === 'failed') details.push(t.failedDirectories(progress.failedDirectories))
   }
-  if (facts.browserDelivery != null) {
-    details.push(...browserDeliveryDetails(facts.browserDelivery, facts.lifecycle, language))
-  } else {
-    details.push(t.receivedHint)
-  }
+  details.push(t.receivedHint)
   return details
 }

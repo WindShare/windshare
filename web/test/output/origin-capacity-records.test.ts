@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { workspaceCapacityAccount, workspaceObjectCapacity, stagingFileCapacity } from '../../src/output/origin-private/capacity/records'
+import { workspaceCapacityAccount, workspaceObjectCapacity } from '../../src/output/origin-private/capacity/records'
 import { OriginCapacityDataError } from '../../src/output/origin-private/capacity/errors'
 
 const account = {
@@ -11,16 +11,11 @@ const object = {
   id: 'operation:object', operationId: 'operation', objectId: 'object', token: 'lease',
   occupiedBytes: 12n, reservations: [{ reservationId: 'write', targetLength: 20n, metadataHeadroom: 2n }],
 }
-const staging = {
-  id: 'staged', operationId: 'operation', fileId: 'file', token: 'lease', phase: 'receiving',
-  exactSize: 100n, verifiedStagedBytes: 20n, headroomBytes: 2n,
-}
 
 describe('origin capacity persistence boundary', () => {
-  it('accepts current workspace, object, and staging representations without coercion', () => {
+  it('accepts current workspace and object representations without coercion', () => {
     expect(workspaceCapacityAccount(account)).toBe(account)
     expect(workspaceObjectCapacity(object)).toBe(object)
-    expect(stagingFileCapacity(staging)).toBe(staging)
     expect(workspaceCapacityAccount({ ...account, token: '', expiresAtMilliseconds: 0 })).toBeDefined()
   })
 
@@ -32,7 +27,6 @@ describe('origin capacity persistence boundary', () => {
           .toThrow(`store=workspace-budget-claims id=operation field=${field}`)
       }
       expect(() => workspaceObjectCapacity({ ...object, occupiedBytes: value })).toThrow(OriginCapacityDataError)
-      expect(() => stagingFileCapacity({ ...staging, exactSize: value })).toThrow(OriginCapacityDataError)
     },
   )
 
@@ -47,7 +41,7 @@ describe('origin capacity persistence boundary', () => {
     expect(() => workspaceCapacityAccount(value)).toThrow(OriginCapacityDataError)
   })
 
-  it('rejects broken ownership, expiry, reservation, and staging constraints', () => {
+  it('rejects broken ownership, expiry, and reservation constraints', () => {
     expect(() => workspaceCapacityAccount({ ...account, operationId: 'other' })).toThrow('operationId')
     expect(() => workspaceCapacityAccount({ ...account, expiresAtMilliseconds: NaN })).toThrow('expiresAtMilliseconds')
     expect(() => workspaceObjectCapacity({ ...object, id: 'other' })).toThrow('field=id')
@@ -56,7 +50,5 @@ describe('origin capacity persistence boundary', () => {
       .toThrow('duplicate reservationId')
     expect(() => workspaceObjectCapacity({ ...object, reservations: [{ reservationId: 'write', targetLength: NaN }] }))
       .toThrow('id=operation:object field=targetLength')
-    expect(() => stagingFileCapacity({ ...staging, verifiedStagedBytes: 101n })).toThrow('exceeds exactSize')
-    expect(() => stagingFileCapacity({ ...staging, phase: 'unknown' })).toThrow('field=phase')
   })
 })

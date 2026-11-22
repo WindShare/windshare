@@ -4,7 +4,6 @@ import type { Language } from '../preferences/model'
 import { receiverCopy } from '../locales/receiver'
 import type { ArtifactOffers } from '../../output/model/artifacts/offers'
 import type { OfferedArtifactChoice } from '../../output/model/artifacts/choices'
-import type { BrowserRecoveryPreference } from '../../output/model/browser-delivery'
 import type { SavingActionPresentation, SavingChoice, SavingOutcome, SavingOutcomeKind, SavingPresentationTransition } from './model'
 
 interface SavingRequest {
@@ -62,9 +61,6 @@ function groupOutcomes(
       seen.add(identity)
       return true
     }).map(choice => savingChoice(choice, disabledReason, language))
-    if (primary.route.kind === 'direct-tree' && primary.route.target.kind === 'fsa-parent-directory') {
-      alternatives.unshift(savingChoice(primary, disabledReason, language, undefined, 'direct'))
-    }
     result.push(Object.freeze({
       kind,
       label: outcomeLabel(kind, language),
@@ -80,15 +76,12 @@ function savingChoice(
   disabledReason: string | null,
   language: Language,
   actionLabel?: string,
-  recoveryPreference: BrowserRecoveryPreference = 'automatic',
 ): SavingChoice {
-  const t = receiverCopy[language].saving
   const kind = outcome(offered)
-  const copy = routeCopy(offered, kind, recoveryPreference, language)
+  const copy = routeCopy(offered, kind, language)
   return Object.freeze({
     offered,
-    ...(offered.route.kind === 'direct-tree' ? { recoveryPreference } : {}),
-    label: actionLabel ?? (recoveryPreference === 'direct' ? t.directFolder : choiceLabel(offered, language)),
+    label: actionLabel ?? choiceLabel(offered, language),
     outcome: kind,
     summary: copy.summary,
     badges: Object.freeze(copy.badges),
@@ -112,29 +105,16 @@ function choiceLabel(offered: OfferedArtifactChoice, language: Language): string
 function routeCopy(
   offered: OfferedArtifactChoice,
   kind: SavingOutcomeKind,
-  recoveryPreference: BrowserRecoveryPreference,
   language: Language,
 ): Readonly<{ summary: string; badges: string[]; notes: string[] }> {
   const t = receiverCopy[language].saving
   switch (offered.route.kind) {
     case 'direct-tree':
-      if (recoveryPreference === 'automatic' && offered.route.target.kind === 'fsa-parent-directory') {
-        return {
-          summary: t.automaticFolderSummary,
-          badges: [t.keepsFolders, t.resumable],
-          notes: [
-            t.stagingLarge,
-            t.waitPauseSite,
-          ],
-        }
-      }
       return {
         summary: offered.route.target.kind === 'fsa-parent-directory'
           ? t.directFolderSummary
           : t.folderSummary,
-        badges: offered.route.target.kind === 'fsa-parent-directory'
-          ? [t.keepsFolders, t.lessTemp]
-          : [t.keepsFolders, t.resumable],
+        badges: [t.keepsFolders, t.resumable],
         notes: offered.route.target.kind === 'fsa-parent-directory'
           ? [
               t.directPause,

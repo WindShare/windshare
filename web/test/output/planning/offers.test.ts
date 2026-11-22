@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createSelectionSpec } from '../../../src/transfer/intent'
 import type { ArtifactActionsOffer } from '../../../src/output/model/artifacts/offers'
 import { createEnvironmentOffers } from '../../../src/output/planning/guarantees'
-import { offerArtifacts } from '../../../src/output/planning/offers'
+import { offerArtifacts, SMALL_FILE_PORTABLE_MAXIMUM_BYTES } from '../../../src/output/planning/offers'
 import {
   COMPLETE_DISCOVERY,
   environment,
@@ -154,6 +154,44 @@ describe('artifact offers', () => {
 
     expect(first.choice).toEqual(refreshed.choice)
     expect(first.route).not.toEqual(refreshed.route)
+  })
+
+  it('prefers direct portable handoff for complete small single files while keeping OPFS selectable', async () => {
+    const selection = await selectionSpec()
+    const env = environment({
+      targets: [fsaTarget(), handoffTarget()],
+      workspace: workspaceOffer(),
+      portable: portableOffer(),
+    })
+
+    const smallComplete = requireActions(await offerArtifacts(
+      projection(selection, singleFileProof(), SMALL_FILE_PORTABLE_MAXIMUM_BYTES),
+      COMPLETE_DISCOVERY,
+      env,
+    ))
+    expect(smallComplete.primary.route.kind).toBe('portable-handoff')
+    expect(smallComplete.alternatives.map(candidate => candidate.route.kind)).toEqual([
+      'workspace-then-publish',
+      'direct-tree',
+    ])
+
+    const largeComplete = requireActions(await offerArtifacts(
+      projection(selection, singleFileProof(), SMALL_FILE_PORTABLE_MAXIMUM_BYTES + 1n),
+      COMPLETE_DISCOVERY,
+      env,
+    ))
+    expect(largeComplete.primary.route.kind).toBe('workspace-then-publish')
+    expect(largeComplete.alternatives.map(candidate => candidate.route.kind)).toEqual([
+      'portable-handoff',
+      'direct-tree',
+    ])
+
+    const smallUnsettled = requireActions(await offerArtifacts(
+      projection(selection, singleFileProof(), 1024n),
+      { kind: 'discovering' },
+      env,
+    ))
+    expect(smallUnsettled.primary.route.kind).toBe('workspace-then-publish')
   })
 })
 

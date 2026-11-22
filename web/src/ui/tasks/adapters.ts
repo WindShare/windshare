@@ -45,7 +45,6 @@ export function activeTaskFacts(input: Readonly<{
     completeness: completenessFromFacts(state, progress),
     publication: publicationFromLifecycle(state),
     progress,
-    browserDelivery: output.browserFolderProgress?.summary ?? null,
     safeRenamed: output.safeRenamed,
     details: Object.freeze(details),
     interruption: output.receiveInterruption?.operation ?? null,
@@ -65,10 +64,8 @@ export function retainedTaskFacts(
 ): TaskFacts {
   const details: string[] = []
   const localWork = execution.pending?.operationId === operation.operationId &&
-    (execution.pending.action === 'save-staged-files' || execution.pending.action === 'cleanup-staging' ||
-      execution.pending.action === 'discard-incomplete-staging' ||
-      (execution.pending.action === 'continue' &&
-        (operation.continuation === 'resume-package' || operation.continuation === 'resume-local-finalization')))
+    execution.pending.action === 'continue' &&
+    (operation.continuation === 'resume-package' || operation.continuation === 'resume-local-finalization')
     ? 'finalizing' : 'idle'
   if (operation.recoverySummary !== undefined) details.push(recoverySummaryDescription(operation.recoverySummary, language))
   if (operation.unavailableReason !== undefined) details.push(presentReceiveReason(operation.unavailableReason, language))
@@ -87,7 +84,6 @@ export function retainedTaskFacts(
     completeness: completenessFromFacts(operation.lifecycle, null),
     publication: publicationFromLifecycle(operation.lifecycle),
     progress: null,
-    browserDelivery: operation.browserDelivery ?? null,
     safeRenamed: null,
     details: Object.freeze(details),
     interruption: null,

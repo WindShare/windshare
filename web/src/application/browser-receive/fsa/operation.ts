@@ -52,9 +52,6 @@ import type {
 import { readLifecycle, transitionLifecycle } from '../../../output/workspace/lifecycle/repository'
 import { unavailableRoute } from '../route-contract'
 import { FSAResourceOwner } from '../../../output/file-system-access/execution/resource-owner'
-import { openFolderDeliveryAttempt, type BrowserFolderDeliveryContext } from './folder-delivery'
-import { runActiveBrowserFolderAction } from './active-local-delivery'
-import { observeBrowserFolderCheckpoint } from '../../../output/browser-delivery/trace'
 import {
   createFSAExecutionRecoveryPolicy,
 } from '../../../output/file-system-access/execution/recovery-policy'
@@ -92,17 +89,15 @@ export class FSAReceiveOperation implements BoundReceiveOperation {
   readonly #unsubscribeLifecycle: () => void
   readonly activeControls = receiveInterruptionControls('direct-tree')
   readonly initialWorkspaceUsage = null
-  readonly outputProgress?: BrowserFolderDeliveryContext['progress']
   readonly #repository: ReceiveOperationRepository
   readonly #lease: BrowserReceiveOperationLease
   readonly #resources: FSAResourceOwner
   #diagnostics: OutputDiagnosticsPorts | undefined
   readonly #localOutputFailures: LocalOutputOperationFailureDiagnosticsPort | undefined
   readonly #attemptIdentities: FSAAttemptIdentitySource
-  readonly #folderDelivery: BrowserFolderDeliveryContext | undefined
   #settlement: FileSystemAccessOperationSettlementAuthority
   #plans: PlanExecutionAuthority
-  #closeCheckpointAuthorities: () => void | Promise<void>
+  #closeCheckpointAuthorities: () => void
   #transferJobId: string
   #detached = false
 
@@ -115,12 +110,11 @@ export class FSAReceiveOperation implements BoundReceiveOperation {
     settlement: FileSystemAccessOperationSettlementAuthority
     resources: FSAResourceOwner
     plans: PlanExecutionAuthority
-    closeCheckpointAuthorities: () => void | Promise<void>
+    closeCheckpointAuthorities: () => void
     transferJobId: string
     attemptIdentities: FSAAttemptIdentitySource
     diagnostics?: OutputDiagnosticsPorts
     localOutputFailures?: LocalOutputOperationFailureDiagnosticsPort
-    folderDelivery?: BrowserFolderDeliveryContext
   }) {
     this.intent = input.intent
     this.#lifecycle = new ReceiveLifecycleObservation(input.lifecycle)
@@ -131,8 +125,6 @@ export class FSAReceiveOperation implements BoundReceiveOperation {
     this.#diagnostics = input.diagnostics
     this.#localOutputFailures = input.localOutputFailures
     this.#attemptIdentities = input.attemptIdentities
-    this.#folderDelivery = input.folderDelivery
-    if (input.folderDelivery !== undefined) this.outputProgress = input.folderDelivery.progress
     this.#settlement = input.settlement
     this.#plans = input.plans
     this.#closeCheckpointAuthorities = input.closeCheckpointAuthorities
@@ -152,7 +144,6 @@ export class FSAReceiveOperation implements BoundReceiveOperation {
     resources: FSAResourceOwner
     diagnostics?: OutputDiagnosticsPorts
     localOutputFailures?: LocalOutputOperationFailureDiagnosticsPort
-    folderDelivery?: BrowserFolderDeliveryContext
   }): Promise<FSAReceiveOperation> {
     const checkpointAttempt = await createFSAPlanAuthority(
       input.intent,
@@ -167,7 +158,6 @@ export class FSAReceiveOperation implements BoundReceiveOperation {
       createFSAExecutionRecoveryPolicy({
         pausedFile: 'preserve',
       }),
-      input.folderDelivery,
     )
     return new FSAReceiveOperation({ ...input, ...checkpointAttempt })
   }
@@ -177,7 +167,6 @@ export class FSAReceiveOperation implements BoundReceiveOperation {
     diagnostics?: OutputDiagnosticsPorts,
     localOutputFailures?: LocalOutputOperationFailureDiagnosticsPort,
     attemptIdentities: FSAAttemptIdentitySource = defaultAttemptIdentitySource,
-    folderDelivery?: BrowserFolderDeliveryContext,
   ): Promise<FSAReceiveOperation> {
     if (operation.lifecycle.kind !== 'receiving') {
       throw new TypeError('Direct-tree continuation requires active receive lifecycle state')
@@ -240,7 +229,6 @@ export class FSAReceiveOperation implements BoundReceiveOperation {
         createFSAExecutionRecoveryPolicy({
           pausedFile: retainedFileRecovery,
         }),
-        folderDelivery,
       )
       const resources = new FSAResourceOwner({
         outputSession: session,
@@ -258,7 +246,6 @@ export class FSAReceiveOperation implements BoundReceiveOperation {
         ...checkpointAttempt,
         transferJobId: attemptAuthority.transferJobId,
         attemptIdentities,
-        ...(folderDelivery === undefined ? {} : { folderDelivery }),
         ...(attemptDiagnostics === undefined ? {} : { diagnostics: attemptDiagnostics }),
         ...(localOutputFailures === undefined ? {} : { localOutputFailures }),
       })
@@ -288,25 +275,11 @@ export class FSAReceiveOperation implements BoundReceiveOperation {
     return this.#transferJobId
   }
 
-  observeCheckpoint: NonNullable<import('../../../transfer/job/contract').TransferJobOptions['onCheckpointObservation']> = event => {
-    observeBrowserFolderCheckpoint(this.#diagnostics, event)
-  }
-
   async startLifecycleAction(
     action: Exclude<LifecycleUserAction, ActiveReceiveControl>,
     lifecycle: ReceiveLifecycleState,
   ): Promise<LifecycleMutation> {
     this.#requireAttached()
-    if (action === 'save-staged-files' || action === 'cleanup-staging' || action === 'discard-incomplete-staging') {
-      return runActiveBrowserFolderAction({
-        intent: this.intent, repository: this.#repository, lease: this.#lease,
-        context: this.#folderDelivery, diagnostics: this.#diagnostics, output: this.#resources,
-        checkpointAuthorities: {
-          close: () => this.#closeCheckpointAuthorities(),
-          replace: close => { this.#closeCheckpointAuthorities = close },
-        },
-      }, action, lifecycle)
-    }
     if ((action !== 'continue' && action !== 'redownload') ||
         lifecycle.kind !== 'resumable-receive' ||
         lifecycle.payloadKind !== 'file-set') throw unavailableRoute()
@@ -326,7 +299,7 @@ export class FSAReceiveOperation implements BoundReceiveOperation {
     )
     let session: FileSystemAccessOutputSession | undefined
     try {
-      await this.#closeCheckpointAuthorities()
+      this.#closeCheckpointAuthorities()
       session = await reopenFileSystemAccessOutput({
         intent: this.intent,
         operationRepository: this.#repository,
@@ -355,7 +328,6 @@ export class FSAReceiveOperation implements BoundReceiveOperation {
         transferJobId,
         outputSessionId,
         recovery,
-        this.#folderDelivery,
       )
       const resumed = await transitionLifecycle(
         this.#repository,
@@ -403,7 +375,7 @@ export class FSAReceiveOperation implements BoundReceiveOperation {
     this.#unsubscribeLifecycle()
     this.#lifecycle.close()
     try {
-      await this.#closeCheckpointAuthorities()
+      this.#closeCheckpointAuthorities()
     } finally {
       await this.#resources.close()
     }
@@ -497,11 +469,10 @@ async function createFSAAttempt(
   transferJobId: string,
   outputSessionId: string,
   recovery: ReturnType<typeof createFSAExecutionRecoveryPolicy>,
-  folderDelivery?: BrowserFolderDeliveryContext,
 ): Promise<Readonly<{
   settlement: FileSystemAccessOperationSettlementAuthority
   plans: PlanExecutionAuthority
-  closeCheckpointAuthorities: () => void | Promise<void>
+  closeCheckpointAuthorities: () => void
   transferJobId: string
 }>> {
   const attemptAuthority = await createFSAAttemptSettlement(
@@ -523,7 +494,6 @@ async function createFSAAttempt(
     outputSessionId,
     diagnostics,
     recovery,
-    folderDelivery,
   )
   return Object.freeze({ ...attemptAuthority, ...plans })
 }
@@ -576,10 +546,9 @@ async function createFSAPlanAuthority(
   outputSessionId: string,
   diagnostics: OutputDiagnosticsPorts | undefined,
   recovery: ReturnType<typeof createFSAExecutionRecoveryPolicy>,
-  folderDelivery?: BrowserFolderDeliveryContext,
 ): Promise<Readonly<{
   plans: PlanExecutionAuthority
-  closeCheckpointAuthorities: () => void | Promise<void>
+  closeCheckpointAuthorities: () => void
 }>> {
   const checkpointIdentity = Object.freeze({
     receiveOperationId: intent.operationId,
@@ -595,19 +564,9 @@ async function createFSAPlanAuthority(
     identity: checkpointIdentity,
     ...(observeCheckpointAuthority === undefined ? {} : { observe: observeCheckpointAuthority }),
   })
-  let deliveryAttempt: Awaited<ReturnType<typeof openFolderDeliveryAttempt>> | undefined
-  const closeCheckpointAuthorities = async () => {
+  const closeCheckpointAuthorities = () => {
     automaticCheckpointAdmission.close('terminal-drain')
     preservingWriterCapacity.close('terminal-drain')
-    await deliveryAttempt?.close()
-  }
-  try {
-    deliveryAttempt = folderDelivery === undefined ? undefined : await openFolderDeliveryAttempt(folderDelivery, {
-      target: session, intent, operationLease: lease,
-      ...(diagnostics === undefined ? {} : { diagnostics }),
-    })
-  } catch (error) {
-    return closeFSAContinuationAfterFailure({ close: closeCheckpointAuthorities }, error)
   }
   const plans = await createPlanExecutionAuthority({
     intent,
@@ -630,7 +589,7 @@ async function createFSAPlanAuthority(
           signal.throwIfAborted()
           return createPersistentDirectTreeExecution({
             intent: boundIntent,
-            materialization: deliveryAttempt?.delivery ?? session,
+            materialization: session,
             safeRenamedSummary: () => session.safeRenamedSummary(),
             executionProfile: FSA_DIRECT_TREE_EXECUTION_PROFILE,
             recovery,
@@ -649,7 +608,7 @@ async function createFSAPlanAuthority(
       },
       lifecycle: settlement,
     },
-  }).catch(error => closeFSAContinuationAfterFailure({ close: closeCheckpointAuthorities }, error))
+  }).catch(error => closeFSAContinuationAfterFailure({ close: async () => closeCheckpointAuthorities() }, error))
   return Object.freeze({
     plans,
     closeCheckpointAuthorities,

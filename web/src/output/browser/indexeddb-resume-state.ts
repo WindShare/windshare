@@ -101,12 +101,7 @@ export class IndexedDbReceiveResumeSource implements ReceiveOperationResumeSourc
       throw new DOMException('Receive resume inventory exceeds its bound', 'QuotaExceededError')
     }
 
-    const states = await Promise.all(records.map(async record => {
-      const state = await validateLifecycleRecord(record)
-      if (state.kind !== 'resumable-receive' || state.payloadKind !== 'file-set') return state
-      const { repairBrowserDeliveryInventoryLifecycle } = await import('../browser-delivery/recovery/inventory')
-      return repairBrowserDeliveryInventoryLifecycle(state, this.#databaseName)
-    }))
+    const states = await Promise.all(records.map(validateLifecycleRecord))
     const operations = new Set<string>()
     for (const state of states) {
       if (operations.has(state.operationId)) {
@@ -190,7 +185,7 @@ export class IndexedDbReceiveResumeSource implements ReceiveOperationResumeSourc
     if (operation.receiveIntent.plan.kind !== 'direct-tree') return undefined
     const { requireDirectTreeIntent } = await import('../file-system-access/settlement-proof')
     const { openFSAFileCheckpointRepository } = await import('../file-system-access/checkpoint-repository')
-    const { readBrowserDeliveryRecoverySummary } = await import('../browser-delivery/recovery/inventory')
+    const { readFSARecoverySummary } = await import('../file-system-access/recovery-summary')
     const intent = await requireDirectTreeIntent(operation.receiveIntent)
     const reservation = intent.plan.reservation
     if (reservation.kind !== 'named-container-entry' ||
@@ -205,9 +200,7 @@ export class IndexedDbReceiveResumeSource implements ReceiveOperationResumeSourc
       reservation,
     )
     try {
-      return await readBrowserDeliveryRecoverySummary({
-        intent, lifecycle, checkpoints, databaseName: this.#databaseName,
-      })
+      return await readFSARecoverySummary({ intent, lifecycle, checkpoints })
     } finally {
       checkpoints.close()
     }

@@ -1,6 +1,3 @@
-import { readRetainedBrowserDeliveries, retainedBrowserDeliveryActions, type BrowserDeliveryRepositoryFactory } from '../fsa/retained-delivery'
-import { hasBrowserDeliveryStaging } from '../../../output/model/browser-delivery'
-import type { runRetainedBrowserFolderAction } from '../fsa/local-delivery'
 import { canForgetReceiveOperationHistory } from '../../../output/resume/operation-history'
 import { artifactRequestedName } from '../../../output/model/artifact-name'
 import { preparePartialExport, supportsPartialExport } from '../../../output/capability/partial-export'
@@ -109,8 +106,6 @@ export interface BrowserRetainedContinuationExecutor {
 
 export interface BrowserRetainedCompositionOptions {
   readonly prepareActivation?: (operation: RetainedReceiveOperation, signal: AbortSignal) => Promise<import('./activation').RetainedActivation | undefined>
-  readonly openBrowserDeliveryRepository?: BrowserDeliveryRepositoryFactory
-  readonly runBrowserFolderLocalAction?: typeof runRetainedBrowserFolderAction
   readonly openResumeSource?: () => Promise<ReceiveOperationResumeSource & { close(): void }>
   readonly resumeMutations?:
     ReceiveOperationMutationPort<AuthorityOwnedReceiveOperationMutationResult>
@@ -156,10 +151,6 @@ export async function listBrowserRetainedOperations(
     })
     const inventory = await authority.listResumeState()
     try {
-      const browserDeliveries = options.openResumeSource === undefined || options.openBrowserDeliveryRepository !== undefined
-        ? await readRetainedBrowserDeliveries(inventory.operations.map(reference => reference.descriptor),
-            signal, options.openBrowserDeliveryRepository)
-        : new Map<string, import('../../../output/model/browser-delivery').BrowserDeliverySummary>()
       const locks = readBrowserLocks(windowPort)
       const activities = locks === undefined
         ? inventory.operations.map(() => 'inactive' as const)
@@ -172,16 +163,14 @@ export async function listBrowserRetainedOperations(
       const operations = Object.freeze(inventory.operations.filter((_, index) =>
         activities[index] === 'inactive').map((reference) => {
         const { descriptor } = reference
-        const browserDelivery = browserDeliveries.get(descriptor.operationId) ?? descriptor.browserDelivery
         const presentation = retainedOperationAuthority(
           descriptor.continuation,
           hasMutationAuthority,
           reference.recoverySummary !== undefined,
         )
-        const routeActions = options.resumeMutations?.forget !== undefined &&
+        const availableActions = options.resumeMutations?.forget !== undefined &&
           canForgetReceiveOperationHistory(descriptor.lifecycle)
           ? Object.freeze([...presentation.actions, 'forget' as const]) : presentation.actions
-        const availableActions = retainedBrowserDeliveryActions(descriptor.lifecycle, browserDelivery, routeActions)
         const unavailableReason = descriptor.recoveryUnavailable === 'native-checkpoint-unavailable'
           ? 'zipUnavailable'
           : presentation.unavailableReason
@@ -194,7 +183,6 @@ export async function listBrowserRetainedOperations(
           lifecycleGeneration: descriptor.lifecycleGeneration,
           lifecycle: descriptor.lifecycle,
           continuation: descriptor.continuation,
-          ...(browserDelivery === undefined ? {} : { browserDelivery }),
           actions: hasMutationAuthority && descriptor.recoveryUnavailable === undefined && supportsPartialExport(windowPort) &&
             descriptor.lifecycle.kind === 'resumable-receive' &&
             descriptor.lifecycle.payloadKind === 'workspace-archive' &&
@@ -306,28 +294,6 @@ async function performRetainedAction(
   signal: AbortSignal,
   failures?: OutputFailureSinks,
 ): Promise<RetainedReceiveActionResult> {
-  if (isBrowserFolderStorageAction(operation, action)) {
-    const run = options.runBrowserFolderLocalAction ?? (await import('../fsa/local-delivery')).runRetainedBrowserFolderAction
-    signal.throwIfAborted()
-    await run(
-      windowPort, operation, browserFolderStorageAction(action), signal,
-      diagnosticsFor('file_system_access', options.outputTrace, failures),
-    )
-    if (action !== 'discard' && action !== 'delete') return Object.freeze({ kind: 'completed' })
-  }
-  return performOrdinaryRetainedAction(windowPort, options, authority, reference, operation, action, signal, failures)
-}
-
-async function performOrdinaryRetainedAction(
-  windowPort: BrowserReceiveWindow,
-  options: BrowserRetainedCompositionOptions,
-  authority: ReceiveOperationResumeAuthority<AuthorityOwnedReceiveOperationMutationResult>,
-  reference: ReceiveOperationResumeRef,
-  operation: RetainedReceiveOperation,
-  action: RetainedReceiveAction,
-  signal: AbortSignal,
-  failures?: OutputFailureSinks,
-): Promise<RetainedReceiveActionResult> {
   const partialDestination = action === 'save-partial'
     ? await preparePartialExport(windowPort)
     : undefined
@@ -405,17 +371,6 @@ async function performOrdinaryRetainedAction(
         return Object.freeze({ kind: 'completed' as const })
       })
   }
-}
-
-function isBrowserFolderStorageAction(operation: RetainedReceiveOperation, action: RetainedReceiveAction): boolean {
-  if (action === 'save-staged-files' || action === 'cleanup-staging' || action === 'discard-incomplete-staging') return true
-  return (action === 'discard' || action === 'delete') && operation.browserDelivery !== undefined &&
-    hasBrowserDeliveryStaging(operation.browserDelivery)
-}
-
-function browserFolderStorageAction(action: RetainedReceiveAction) {
-  if (action === 'save-staged-files' || action === 'cleanup-staging' || action === 'discard-incomplete-staging') return action
-  return 'discard-staging' as const
 }
 
 async function continueRetainedReceive(

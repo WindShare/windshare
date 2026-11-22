@@ -87,7 +87,6 @@ describe('trace frozen contract', () => {
       'continuation',
       'reopen',
       'cleanup',
-      'browser_delivery',
       'retained_inventory',
       'retained_action',
       'incident_marker',

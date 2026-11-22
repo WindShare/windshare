@@ -61,8 +61,6 @@ export interface BoundReceiveOperation {
   /** Subscribe before reading lifecycle; notifications never settle the execution lifetime. */
   subscribeLifecycle(listener: (state: ReceiveLifecycleState) => void): () => void
   readonly activeControls: readonly ActiveReceiveControl[]
-  readonly outputProgress?: BrowserFolderProgressSource
-  readonly observeCheckpoint?: NonNullable<import('../../transfer/job/contract').TransferJobOptions['onCheckpointObservation']>
   readonly initialWorkspaceUsage?: WorkspaceUsage | null
 
   /**
@@ -144,9 +142,6 @@ export interface ArtifactPresentationAuthority {
 }
 
 export type RetainedReceiveAction =
-  | 'save-staged-files'
-  | 'cleanup-staging'
-  | 'discard-incomplete-staging'
   | 'save-partial'
   | 'continue'
   | 'save'
@@ -173,7 +168,6 @@ export interface RetainedReceiveOperation {
   readonly continuation: ReceiveOperationContinuation
   readonly actions: readonly RetainedReceiveAction[]
   readonly sourceRevisionFailures?: import('../../transfer/lifecycle/source-revision').SourceRevisionFailures
-  readonly browserDelivery?: import('../../output/model/browser-delivery').BrowserDeliverySummary
   readonly recoverySummary?: RecoverySummary
   readonly unavailableReason?: ReceiveBlockReason
 }
@@ -214,18 +208,5 @@ export interface ReceiveCompositionPort {
     preClickRanking: readonly ArtifactChoiceID[],
     failures?: OutputFailureSinks,
     display?: ReceiveOperationDisplay,
-    recoveryPreference?: import('../../output/model/browser-delivery').BrowserRecoveryPreference,
   ): ArtifactPresentationAuthority
-}
-
-export interface BrowserFolderProgressSnapshot {
-  readonly kind: 'browser-folder'
-  readonly operationId: string
-  readonly generation: bigint
-  readonly summary: import('../../output/model/browser-delivery').BrowserDeliverySummary
-}
-
-export interface BrowserFolderProgressSource {
-  getSnapshot(): BrowserFolderProgressSnapshot
-  subscribe(listener: (snapshot: BrowserFolderProgressSnapshot) => void): () => void
 }

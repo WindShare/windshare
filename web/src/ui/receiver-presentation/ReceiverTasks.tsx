@@ -38,7 +38,7 @@ function renderSavingControls(controller: ReceiverController, snapshot: TaskSnap
     currentTaskContext={current !== null && !draft.empty && !startAdmission.allowed && saving.disabledReason !== null
       ? { operationId: current.operationId, reason: saving.disabledReason } : null}
     actionLabel={actionLabel}
-    choose={choice => controller.chooseArtifact(choice.offered.choice.choiceId, choice.recoveryPreference)}
+    choose={choice => controller.chooseArtifact(choice.offered.choice.choiceId)}
     retry={() => controller.retryOutputConfirmation()} cancel={() => controller.cancelPreparing()}
     onIntent={action => controller.recordExperienceIntent(action)} />
 }

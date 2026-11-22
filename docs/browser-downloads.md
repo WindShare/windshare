@@ -16,11 +16,9 @@ WindShare recommends a save method based on browser capabilities, available stor
 
 | Save Method | Behavior |
 |---|---|
-| **Save to folder** | Preserves the folder hierarchy in a chosen local folder. Small files save directly; larger or slower files may first use browser storage (OPFS), depending on recovery costs and available staging capacity. Each staged file is copied to the folder when complete. |
-| **Browser workspace** | Retains content in OPFS, then starts a browser download when allowed; otherwise choose **Save**. Actions include **Download original** and **Receive ZIP, then save**. The retained result remains available for another export. |
-| **Browser fallback** | A browser download with a size limit may be offered as a fallback. It checks that the complete result fits before receiving. Progress cannot survive a page reload. |
-
-> Under **Other ways to save**, expand **Saving and recovery options**. Choosing **Write directly to folder** bypasses file staging in browser storage. A crash may lose most progress in a large unfinished file; completed files remain saved.
+| **Save to folder** | Writes directly to a chosen local folder, preserving the folder hierarchy and supporting pause and resume. A crash may lose progress on an unfinished large file; completed files remain saved. |
+| **Browser workspace** | Retains content in OPFS, then starts a browser download when allowed; otherwise choose **Save**. Used for large single files and uncompressed ZIPs. The retained result remains available for another export. |
+| **Direct browser download** | Used automatically for small single files (up to 16 MiB) and as a fallback when OPFS is unavailable. Progress cannot survive a page reload. |
 
 Folder downloads preserve accepted names up to 255 UTF-8 bytes. When the browser or filesystem rejects a name (for example, a reserved device name, a browser-restricted extension, or an overlong name), WindShare deterministically saves it with a safe `.windshare-<hash>` suffix and reports the adjusted entries in task details. Download as a ZIP archive to preserve original catalog names, subject to the extractor's filesystem limits.
 
@@ -41,13 +39,12 @@ Keep the original page open during an active download outage. Reconnection conti
 
 - **Available controls**: Folder downloads offer **Pause** and **Stop**. Browser workspace downloads offer **Pause**; the browser fallback offers **Stop** only.
 - **Pause**: Saves progress supported by the chosen method and cancels that download's pending network wait. Reconnection does not resume a paused download; choose **Resume** when ready. Wait for pausing to finish before leaving the page. Remote lease cleanup runs independently after local settlement and shared-read safety; a delayed cleanup reply does not keep the download pausing.
-- **Stop**: Ends receiving and cancels that download's recovery. For folder downloads, incomplete browser staging is removed while saved files remain; complete staged files can still be saved locally. Failed cleanup can be retried.
+- **Stop**: Ends receiving and cancels that download's recovery. For folder downloads, completed files already saved remain in the folder.
 - **Page closure or crash recovery**: Reopen the original link to recover supported downloads from the last verified checkpoint, which may lag behind received bytes. Keep destination files unchanged and site data intact; continuing may require renewed destination permission. The browser fallback must start again after a reload.
 - If a source **reopens with a new revision**, folder and browser workspace downloads can retry the file once when metadata agrees. They reuse saved ranges and fetch the remainder under a fresh lease. Metadata agreement can miss edits that preserve size and modification evidence.
 - **Save partial ZIP**: Available for retained browser-workspace ZIP tasks with completed files when the browser supports a file save picker. Exports complete files as a separate ZIP while keeping the task available for continuation.
 
 ## Storage & Cleanup
 
-- **Staging vs. Destination**: Staging and export can temporarily require both browser storage and a destination copy. Browser storage quotas do not reflect destination disk free space.
-- **Folder staging cleanup**: Each staged file is removed after its destination write is confirmed. Use **Retry staging cleanup** for pending cleanup, or **Discard incomplete browser data** for incomplete staging left by an ended task.
-- **Retained browser results**: A browser download starting does not confirm that it was saved. **Download again** on the result or in Downloads exports the retained copy without the sender. **Download from sender again** starts a separate receive. Use **Delete retained result** when no longer needed.
+- **Browser workspace vs. Destination**: Exporting a browser-workspace file or ZIP temporarily requires both browser storage and destination disk space. Browser storage quotas do not reflect destination disk free space.
+- **Retained browser results**: A browser download starting does not confirm that it was saved. **Save again** on the result or in Downloads exports the retained copy without the sender. **Download from sender again** starts a separate receive. Use **Delete retained result** when no longer needed.

@@ -25,11 +25,8 @@ describe('saving action presenter over eligible offers', () => {
     expect(result.primary?.offered.route.kind).toBe('portable-handoff')
     expect(result.hasAlternatives).toBe(true)
     expect(result.alternatives.map(group => group.kind)).toEqual(['original-file', 'folder'])
-    expect(result.alternatives[1]?.primary.recoveryPreference).toBe('automatic')
     expect(result.alternatives[1]?.primary.badges).toContain('Resumable')
-    const direct = result.alternatives[1]?.alternatives.find(choice => choice.recoveryPreference === 'direct')
-    expect(direct?.recoveryPreference).toBe('direct')
-    expect(direct?.offered.choice.choiceId).toBe(result.alternatives[1]?.primary.offered.choice.choiceId)
+    expect(result.alternatives[1]?.alternatives).toEqual([])
     if (offers.kind === 'artifact-actions') expect(result.primary?.offered).toBe(offers.primary)
   })
 
@@ -52,9 +49,7 @@ describe('saving action presenter over eligible offers', () => {
       environment({ targets: [target()] }),
     )
     const model = presentSavingActions({ offers })
-    const choice = copyLimited
-      ? model.alternatives.find(group => group.kind === 'folder')!.alternatives.find(candidate => candidate.recoveryPreference === 'direct')!
-      : model.primary!
+    const choice = model.primary!
     const notes = choice.notes.join(' ')
     expect(notes).toContain('Pause')
     expect(notes.includes('lose progress')).toBe(copyLimited)

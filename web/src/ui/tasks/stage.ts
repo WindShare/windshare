@@ -1,7 +1,6 @@
 import type { Language } from '../preferences/model'
 import { receiverCopy } from '../locales/receiver'
 import type { TaskBlocking, TaskFacts, TaskStage } from './model'
-import { browserDeliveryLocalActions } from '../../output/model/browser-delivery-actions'
 import { destinationLabel } from './display'
 
 export interface StageCopy {
@@ -16,8 +15,6 @@ export function resolveTaskStage(facts: TaskFacts, language: Language = 'en'): S
   const state = facts.lifecycle
   if (facts.execution.kind === 'local-finalization') return stage('finishing', t.finishingLocally,
     t.finishingLocallyHint, 'local-finalization-active')
-  const folderDelivery = folderDeliveryStage(facts, language)
-  if (folderDelivery !== null) return folderDelivery
   if (state.kind === 'published' || state.kind === 'partial-directory') {
     return savedStage(facts, language)
   }
@@ -38,28 +35,6 @@ export function resolveTaskStage(facts: TaskFacts, language: Language = 'en'): S
     t.settling, facts.interruption)
   if (state.kind === 'receiving') return activeReceivingStage(facts, language)
   return executionStage(facts, language)
-}
-
-function folderDeliveryStage(facts: TaskFacts, language: Language): StageCopy | null {
-  const t = receiverCopy[language].stage
-  const delivery = facts.browserDelivery
-  if (delivery != null && delivery.copyingFiles > 0 && facts.execution.kind === 'active') {
-    return stage('finishing', t.savingToFolder,
-      t.savingToFolderHint,
-      'browser-folder-copying')
-  }
-  const localActions = browserDeliveryLocalActions(facts.lifecycle, delivery)
-  if (localActions.includes('save-staged-files')) {
-    return stage('ready-to-save', t.receivedReady,
-      t.receivedReadyHint,
-      'browser-folder-local-save')
-  }
-  if (localActions.includes('cleanup-staging')) return stage('needs-action', t.cleanupNeeded,
-    t.cleanupNeededHint, 'browser-folder-cleanup')
-  if (localActions.includes('discard-incomplete-staging')) return stage('needs-action', t.incompleteData,
-    t.incompleteDataHint,
-    'browser-folder-incomplete-staging')
-  return null
 }
 
 function savedStage(facts: TaskFacts, language: Language): StageCopy {

@@ -56,9 +56,8 @@ describe('trace evidence under high-volume protocol traffic', () => {
     for (let count = 0; count < 16_420; count++) {
       if (count % 2 === 0) recorder.record({ eventName: 'protocol_operation', correlation,
         payload: { transition: 'send_completed', request_kind: 'open_revisions' } })
-      else recorder.record({ eventName: 'browser_delivery', payload: {
-        operation_id: correlation.protocol_operation_id, file_id: correlation.protocol_session_id,
-        transition: 'checkpoint', checkpoint_stage: 'advanced', received_bytes: String(count),
+      else recorder.record({ eventName: 'output_write', payload: {
+        backend: 'origin_private', transition: 'transaction_committed',
       } })
     }
     const snapshot = recorder.snapshot()

@@ -43,7 +43,6 @@ import {
   validatePerformanceSummary,
 } from './trace-payload-performance'
 import { exactKeys, integerBetween, member, recordValue, type UnknownRecord } from './trace-payload-validation'
-import { validateBrowserDelivery } from './trace-payload-browser-delivery'
 import { validateReceive } from './receive/payload'
 
 export { validateCorrelationV1 } from './trace-payload-validation'
@@ -85,7 +84,6 @@ const EVENT_PAYLOAD_VALIDATORS = Object.freeze({
   continuation: validateContinuation,
   reopen: validateReopen,
   cleanup: validateCleanup,
-  browser_delivery: validateBrowserDelivery,
   retained_inventory: validateRetainedInventory,
   retained_action: validateRetainedAction,
 } satisfies Record<TraceDomainEventNameV2, (payload: UnknownRecord) => void>)

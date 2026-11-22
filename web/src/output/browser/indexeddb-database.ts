@@ -1,4 +1,4 @@
-export const OUTPUT_DATABASE_VERSION = 16
+export const OUTPUT_DATABASE_VERSION = 17
 export const CHECKPOINT_DATABASE_VERSION = OUTPUT_DATABASE_VERSION
 export const DEFAULT_OUTPUT_DATABASE_NAME = 'windshare-output-checkpoints'
 export const DEFAULT_OUTPUT_CHECKPOINT_DATABASE_NAME = DEFAULT_OUTPUT_DATABASE_NAME
@@ -11,8 +11,6 @@ export const INDEXEDDB_RECEIVE_RECORD_STORE = 'receive-operation-v2-records'
 export const INDEXEDDB_RECEIVE_MANIFEST_PAGE_STORE = 'receive-operation-v2-manifest-pages'
 export const INDEXEDDB_RECEIVE_HANDLE_STORE = 'receive-operation-v2-handles'
 export const INDEXEDDB_RECEIVE_LEASE_STORE = 'receive-operation-v2-leases'
-export const INDEXEDDB_BROWSER_SAVE_POLICY_STORE = 'browser-save-policy-v1'
-export const INDEXEDDB_BROWSER_DELIVERY_FILE_STORE = 'browser-file-delivery-v1'
 
 export const INDEXEDDB_BY_OPERATION_INDEX = 'by-operation'
 export const INDEXEDDB_BY_OPERATION_FILE_INDEX = 'by-operation-file'
@@ -92,10 +90,6 @@ export const INDEXEDDB_OUTPUT_STORE_SCHEMAS: readonly IndexedDbStoreSchema[] = O
   ]),
   storeSchema(INDEXEDDB_OPFS_PATH_STORE, 'id', []),
   storeSchema(INDEXEDDB_OPFS_DIRECTORY_STORE, 'id', []),
-  storeSchema(INDEXEDDB_BROWSER_SAVE_POLICY_STORE, 'operationId', []),
-  storeSchema(INDEXEDDB_BROWSER_DELIVERY_FILE_STORE, ['operationId', 'fileId'], [
-    indexSchema(INDEXEDDB_BY_OPERATION_FILE_INDEX, ['operationId', 'fileId'], true),
-  ]),
 ])
 
 export const INDEXEDDB_OPERATION_STORE_SCHEMAS = INDEXEDDB_OUTPUT_STORE_SCHEMAS.filter(

@@ -80,8 +80,8 @@ function taskTone(stage: TaskStage, attention: boolean, facts: TaskFacts): TaskP
 }
 
 function preferredAction(actions: readonly TaskAction[], taskStage: TaskStage): TaskAction | null {
-  let preferred = ['save-staged-files', 'cleanup-staging', 'continue', 'save', 'redownload', 'save-partial']
-  if (taskStage === 'ready-to-save') preferred = ['save-staged-files', 'save', 'save-partial']
+  let preferred = ['continue', 'save', 'redownload', 'save-partial']
+  if (taskStage === 'ready-to-save') preferred = ['save', 'save-partial']
   if (taskStage === 'downloading' || taskStage === 'waiting') preferred = ['pause', 'continue']
   for (const id of preferred) {
     const action = actions.find(candidate => candidate.id === id && candidate.disabledReason === null)

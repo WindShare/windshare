@@ -3,7 +3,7 @@ import { decodeStoredReceiveOperation, operationRecordId, RECEIVE_RECORD_OPERATI
 import type { RetainedReceiveAction, RetainedReceiveOperation } from '../../receive/contracts'
 
 export type RetainedActivation = (action: RetainedReceiveAction) => Promise<void>
-const TARGET_ACTIONS: ReadonlySet<RetainedReceiveAction> = new Set(['continue', 'redownload', 'save-staged-files', 'discard', 'delete'])
+const TARGET_ACTIONS: ReadonlySet<RetainedReceiveAction> = new Set(['continue', 'redownload', 'discard', 'delete'])
 const READ_WRITE = Object.freeze({ mode: 'readwrite' as const })
 type PermissionHandle = FileSystemDirectoryHandle & {
   requestPermission?(options: typeof READ_WRITE): Promise<PermissionState>

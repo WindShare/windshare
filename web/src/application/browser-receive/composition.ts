@@ -87,7 +87,7 @@ export function createBrowserReceiveComposition(
       nativeObjectSupported = await nativeSupportProbe
       const registry = await inspectBrowserRouteRegistry(windowPort, nativeObjectSupported, signal)
       // Preparation is speculative; support facts and acquired authority do not depend on it.
-      if (registry.fsaParent !== null) void import('./fsa/production').catch(() => undefined)
+      if (registry.fsaParent !== null) void import('./fsa/route').catch(() => undefined)
       if (registry.workspaceOffer !== null) void import('./workspace/route').catch(() => undefined)
       if (registry.portableOffer !== null) void import('./portable/route').catch(() => undefined)
       return probeBrowserEnvironment(registry.runtime, {
@@ -95,7 +95,7 @@ export function createBrowserReceiveComposition(
         ...(registry.portableOffer === null ? {} : { portable: registry.portableOffer }),
       }).offers
     },
-    startArtifactAuthority: (action, preClickRanking, failures, display, recoveryPreference) => startProductionAuthority(
+    startArtifactAuthority: (action, preClickRanking, failures, display) => startProductionAuthority(
       windowPort,
       action,
       preClickRanking,
@@ -105,7 +105,6 @@ export function createBrowserReceiveComposition(
       nativeObjectSupported,
       failures,
       display,
-      recoveryPreference,
     ),
   }
   return Object.freeze(composition)
@@ -244,7 +243,6 @@ function startProductionAuthority(
   nativeObjectSupported: boolean,
   failures?: OutputFailureSinks,
   displayInput?: ReceiveOperationDisplay,
-  recoveryPreference: import('../../output/model/browser-delivery').BrowserRecoveryPreference = 'automatic',
 ): ArtifactPresentationAuthority {
   const registry = inspectBrowserRouteRegistrySynchronously(windowPort, nativeObjectSupported)
   const binding = createOutputFailureBinding(failures)
@@ -266,13 +264,13 @@ function startProductionAuthority(
       picked.catch(() => undefined)
       const diagnostics = diagnosticsFor('file_system_access', outputTrace, binding.sinks)
       return bindArtifactAuthorityOutputFailures(
-        deferArtifactAuthority(import('./fsa/production').then(module => module.createFSAArtifactAuthority({
+        deferArtifactAuthority(import('./fsa/route').then(module => new module.FSAArtifactPresentationAuthority({
           offered,
           picked,
           preClickRanking,
           ...(diagnostics === undefined ? {} : { diagnostics }),
           ...localOutputFailuresOption(localOutputFailures),
-        }, windowPort, nativeObjectSupported, recoveryPreference))),
+        }))),
         binding,
         display,
       )

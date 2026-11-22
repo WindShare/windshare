@@ -120,12 +120,11 @@ describe('persistent directory mutation isolation', () => {
 })
 
 describe('persistent production execution bridge', () => {
-  it.each(['pause', 'committed-stop', 'failed-stop'] as const)('chooses storage disposition from %s settlement authority', async outcome => {
+  it.each(['pause', 'committed-stop', 'failed-stop'] as const)('closes terminal materialization for %s settlement authority', async outcome => {
     const intent = asDirectTree(await receiveIntentFixture({
       planKind: 'direct-tree', artifactKind: 'directory-tree', selection: new SelectionPolicy(),
     }))
-    const preservingClose = vi.fn(async () => undefined)
-    const stoppedClose = vi.fn(async () => undefined)
+    const terminalClose = vi.fn(async () => undefined)
     const stopped = lifecycleState(intent, {
       kind: 'partial-directory', reason: 'stopped', receiptDigest: digestIdentity(71), successCount: 1n, failureCount: 0n,
     })
@@ -135,7 +134,7 @@ describe('persistent production execution bridge', () => {
       materialization: {
         beginFile: async () => { throw new Error('no file admission expected') },
         ensureDirectory: async () => { throw new Error('no directory admission expected') },
-        close: preservingClose, closeForTerminalSettlement: preservingClose, closeForStopSettlement: stoppedClose,
+        close: terminalClose, closeForTerminalSettlement: terminalClose,
       },
       settlement: {
         beginTerminal: () => undefined,
@@ -161,8 +160,7 @@ describe('persistent production execution bridge', () => {
       if (outcome === 'failed-stop') await expect(stopping).rejects.toThrow(/lifecycle commit failed/)
       else await expect(stopping).resolves.toBe(stopped)
     }
-    expect(stoppedClose).toHaveBeenCalledTimes(outcome === 'committed-stop' ? 1 : 0)
-    expect(preservingClose).toHaveBeenCalledTimes(outcome === 'committed-stop' ? 0 : 1)
+    expect(terminalClose).toHaveBeenCalledTimes(1)
   })
 
   it('keeps DirectTree revision authority ahead of file creation and settles from proofs', async () => {

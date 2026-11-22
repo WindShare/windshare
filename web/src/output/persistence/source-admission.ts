@@ -65,8 +65,8 @@ export type PersistedSourceAdmissionRejection = Exclude<
 >
 
 /**
- * Applies one canonical precedence order across PersistentTree, BrowserDelivery,
- * and ProgressiveZip: observed source changes win over state blocks, state blocks
+ * Applies one canonical precedence order across PersistentTree and ProgressiveZip:
+ * observed source changes win over state blocks, state blocks
  * win over missing comparison evidence, and same-revision divergence stays invalid.
  */
 export function evaluatePersistedSourceAdmission(

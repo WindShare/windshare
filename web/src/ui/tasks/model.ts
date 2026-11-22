@@ -41,7 +41,6 @@ export interface TaskFacts {
   readonly completeness: TaskCompleteness
   readonly publication: TaskPublication
   readonly progress: ReceiverProgress | null
-  readonly browserDelivery?: import('../../output/model/browser-delivery').BrowserDeliverySummary | null
   readonly safeRenamed: SafeRenamedSummary | null
   readonly details: readonly string[]
   readonly interruption: 'pause' | 'stop' | 'finish' | null

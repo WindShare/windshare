@@ -121,7 +121,6 @@ export async function reopenFileSystemAccessOutput(
       intent,
       reservation: binding.reservation,
       materialization,
-      tree,
       binding,
       operationRepository: options.operationRepository,
       checkpoints,

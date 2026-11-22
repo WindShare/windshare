@@ -19,7 +19,7 @@ export async function retireFSAMaterializationRecoveryMetadata(
     const result = await repository.retireRecoveryMetadataBatch(
       RECOVERY_METADATA_RETIREMENT_BATCH_LIMIT,
     )
-    if (result.state === 'complete' || result.state === 'retained-for-local-delivery') return
+    if (result.state === 'complete') return
     if (result.deletedRows === 0) {
       throw new DOMException('FSA recovery metadata retirement made no progress', 'OperationError')
     }

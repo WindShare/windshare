@@ -1,11 +1,10 @@
 import { OriginCapacityDataError } from './errors'
 
 export const ORIGIN_CAPACITY_DATABASE_NAME = 'windshare-workspace-budget'
-export const ORIGIN_CAPACITY_DATABASE_VERSION = 4
+export const ORIGIN_CAPACITY_DATABASE_VERSION = 5
 export const WORKSPACE_CLAIM_STORE = 'workspace-budget-claims'
 export const WORKSPACE_OBJECT_STORE = 'workspace-object-capacity'
-export const STAGING_FILE_STORE = 'staging-file-capacity'
-export const ORIGIN_CAPACITY_STORES = [WORKSPACE_CLAIM_STORE, WORKSPACE_OBJECT_STORE, STAGING_FILE_STORE]
+export const ORIGIN_CAPACITY_STORES = [WORKSPACE_CLAIM_STORE, WORKSPACE_OBJECT_STORE]
 export const CAPACITY_INVENTORY_BOUND = 1_048_576
 
 export async function openOriginCapacityDatabase(name = ORIGIN_CAPACITY_DATABASE_NAME): Promise<IDBDatabase> {

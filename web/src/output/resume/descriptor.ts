@@ -4,7 +4,6 @@ import type { ReceiveOperationContinuation } from '../model/continuation'
 export const RECEIVE_OPERATION_RESUME_DESCRIPTOR_VERSION = 2 as const
 
 export interface ReceiveOperationResumeDescriptor {
-  readonly browserDelivery?: import('../model/browser-delivery').BrowserDeliverySummary
   readonly display?: import('../model/operation-display').ReceiveOperationDisplay
   readonly shareInstance?: string
   readonly selectionDigest?: string

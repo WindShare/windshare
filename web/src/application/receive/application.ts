@@ -1,5 +1,4 @@
 import type { ReceiveOperationDisplay } from '../../output/model/operation-display'
-import type { BrowserRecoveryPreference } from '../../output/model/browser-delivery'
 import type { ArtifactChoiceID, SelectionSpec } from '../../transfer/intent'
 import type { TransferProgress } from '../../transfer/job'
 import { AuthorityActivationCoordinator } from './activation/coordinator'
@@ -155,11 +154,10 @@ export class BrowserReceiveApplication<Share extends ReceivePlanningShare> {
   chooseArtifact(
     choiceId: ArtifactChoiceID,
     display: ReceiveOperationDisplay,
-    recoveryPreference: BrowserRecoveryPreference,
   ): void {
     if (this.tasks.startBlockedReason() !== null) return
     // A picker must run in this call stack, before any storage or network await.
-    this.#activation.choose(choiceId, display, recoveryPreference)
+    this.#activation.choose(choiceId, display)
   }
 
   retryOutputConfirmation(): void {

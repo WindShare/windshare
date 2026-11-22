@@ -2,17 +2,12 @@ import type { actions as English } from '../en/actions'
 
 export const actions: typeof English = {
   pause: '暂停',
-  saveStagedHint: '将已完整接收的文件复制到所选文件夹，无需重新接收。',
-  cleanupStagingHint: '继续清理已获授权的浏览器暂存数据。已保存到目标位置的文件仍会保留。',
   pauseHint: '暂停前将完成已开始的写入，并保留当前保存方式支持的进度。',
   deleteHint: '删除此任务保留的数据。已通过浏览器导出的文件不受影响。',
   restartHint: '重新下载未完成的文件，原有部分进度将不再使用。',
-  stopFolder: '停止接收并移除未完成的暂存数据。已保存的文件会保留，已完整暂存的文件仍可在本地保存。',
+  stopFolder: '停止接收并结束续传。已保存到文件夹的完整文件会保留。',
   stopWorkspace: '停止接收，完成对浏览器中保留数据的处理后释放任务。',
   stopPortable: '停止接收。此保存方式无法续传中断的任务。',
-  saveStaged: '将已接收的文件保存到文件夹',
-  cleanupStaging: '重试清理暂存数据',
-  discardStaging: '丢弃未完成的暂存数据',
   savePartial: '保存部分 ZIP',
   save: '保存',
   downloadAgain: '重新保存',
@@ -32,5 +27,4 @@ export const actions: typeof English = {
   retryCleanupHint: '移除任务的临时数据，已保存的结果会保留。',
   deleteRetainedHint: '确认数据属于此任务后再删除。已通过浏览器导出的文件不受影响。',
   restartIncompleteHint: '从头下载未完成的文件，将不再使用它们已有的进度。',
-  discardStagingHint: '删除已结束任务中无法续传的暂存数据。已完整暂存的文件仍可导出，已保存的文件不受影响。',
 }

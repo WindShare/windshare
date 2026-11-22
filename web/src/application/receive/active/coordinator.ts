@@ -51,7 +51,6 @@ interface ActiveReceiveOperation extends ActiveReceiveLifecycleOperation {
   receiveOutputLease?: OutputFailureBindingLease
   detachOutputCapability?: LateOutputFailureConsequenceCapability
   detachment?: Promise<void>
-  unsubscribeOutputProgress?: () => void
   unsubscribeLifecycle?: () => void
 }
 
@@ -130,8 +129,7 @@ export class ActiveReceiveCoordinator {
     const output = this.#state.getSnapshot()
     return this.#operation !== undefined && !this.#lifecycle.pending &&
       output.lifecycle?.kind === 'resumable-receive' &&
-      ((output.plan?.kind === 'workspace-then-publish' && output.resolvedArtifact?.kind === 'zip-archive') ||
-        output.browserFolderProgress != null)
+      output.plan?.kind === 'workspace-then-publish' && output.resolvedArtifact?.kind === 'zip-archive'
   }
 
   get canRelease(): boolean {
@@ -182,7 +180,6 @@ export class ActiveReceiveCoordinator {
       },
       start: () => {
         if (!committed) return
-        this.#startOutputProgress(operation)
         this.#startTransfer(operation)
       },
     })
@@ -203,7 +200,6 @@ export class ActiveReceiveCoordinator {
     const active = this.#operation
     this.#operation = undefined
     if (active === undefined) return Promise.resolve()
-    this.#stopOutputProgress(active)
     this.#stopLifecycleObservation(active)
     active.transfer?.abort(reason)
     this.#observability.receiveExclusion(
@@ -251,7 +247,6 @@ export class ActiveReceiveCoordinator {
           ...(this.#traceSource === undefined ? {} : { trace: this.#traceSource }),
           ...(attempt.handle === undefined ? {} : { incidentScope: attempt.handle }),
           outputSettlementDeadline: active.settlementWait,
-          ...(active.runtime.observeCheckpoint === undefined ? {} : { onCheckpointObservation: active.runtime.observeCheckpoint }),
         },
       )
       task = job.run(transfer.signal).then(
@@ -541,30 +536,6 @@ export class ActiveReceiveCoordinator {
       this.#ownsJoinedShare(active.joined)
   }
 
-  #startOutputProgress(active: ActiveReceiveOperation): void {
-    const source = active.runtime.outputProgress
-    if (source === undefined || active.unsubscribeOutputProgress !== undefined) return
-    const publish = (progress: ReturnType<typeof source.getSnapshot>) => {
-      if (!this.#operationIsCurrent(active)) return
-      try {
-        this.#state.updateBrowserFolderProgress(progress)
-      } catch (error) {
-        this.#reportTransferFailure(error)
-      }
-    }
-    try {
-      publish(source.getSnapshot())
-      const unsubscribe = source.subscribe(publish)
-      if (this.#operationIsCurrent(active)) {
-        active.unsubscribeOutputProgress = unsubscribe
-      } else {
-        unsubscribe()
-      }
-    } catch (error) {
-      this.#reportTransferFailure(error)
-    }
-  }
-
   #startLifecycleObservation(active: ActiveReceiveOperation): void {
     let observing = true
     const publish = (state: BoundReceiveOperation['lifecycle']) => {
@@ -587,20 +558,8 @@ export class ActiveReceiveCoordinator {
     }
   }
 
-  #stopOutputProgress(active: ActiveReceiveOperation): void {
-    const unsubscribe = active.unsubscribeOutputProgress
-    if (unsubscribe === undefined) return
-    delete active.unsubscribeOutputProgress
-    try {
-      unsubscribe()
-    } catch {
-      // The operation remains authoritative; a presentation-source cleanup cannot replace it.
-    }
-  }
-
   #detachOperation(active: ActiveReceiveOperation): Promise<void> {
     if (active.detachment !== undefined) return active.detachment
-    this.#stopOutputProgress(active)
     this.#stopLifecycleObservation(active)
     const lateCapability = active.detachOutputCapability
     const outputLease = lateCapability === undefined

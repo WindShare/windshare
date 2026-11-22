@@ -4,7 +4,6 @@ import type { OfferedArtifactChoice } from '../../output/model/artifacts/choices
 export type SavingOutcomeKind = 'original-file' | 'folder' | 'zip'
 
 export interface SavingChoice {
-  readonly recoveryPreference?: import('../../output/model/browser-delivery').BrowserRecoveryPreference
   readonly offered: OfferedArtifactChoice
   readonly label: string
   readonly outcome: SavingOutcomeKind

@@ -4,7 +4,6 @@ import type {
   PerformanceSummaryPayloadV1,
 } from '../../diagnostics/trace/transfer-payload'
 import type { DomainTraceSource } from '../../diagnostics/trace/ports'
-import type { BrowserDeliveryPayloadV1 } from '../../diagnostics/trace/browser-delivery-payload'
 import type { StoragePersistencePayloadV1 } from '../../diagnostics/trace/storage-persistence-payload'
 
 export const OUTPUT_DIAGNOSTIC_BACKENDS = Object.freeze([
@@ -95,7 +94,6 @@ export interface OutputTracePayloadByName {
     lifecycle_generation?: string
     cleanup_kind?: 'published_metadata'
   }>
-  readonly browser_delivery: BrowserDeliveryPayloadV1
 }
 
 export type OutputTraceEventName = keyof OutputTracePayloadByName

@@ -1,6 +1,3 @@
-import { readBrowserDeliveryCheckpoint } from '../browser-delivery/checkpoint-reader'
-import { verifyStagedDeliveryTarget } from '../browser-delivery/target-content'
-import type { BrowserDeliveryRecordV1 } from '../browser-delivery/model'
 import {
   createDestinationReservationID,
   createFSANamedEntryReservation,
@@ -55,8 +52,6 @@ import {
   type FSASemanticOutputRepository,
 } from './checkpoint-repository'
 import type { PersistentDirectTreeMaterializationEvidence } from '../execution/persistent-execution'
-import { openDirectDeliveryFile } from '../browser-delivery/indexeddb/direct-file'
-import type { BrowserDirectFileDelivery } from '../browser-delivery/ports'
 import { SafeNameRegistry, deterministicSafeComponent } from './safe-name'
 import {
   canonicalAuthorityRef,
@@ -156,7 +151,6 @@ export class FileSystemAccessOutputSession implements ActivatablePersistentMater
   readonly intent: ReceiveIntent
   readonly reservation: FSANamedContainerEntryReservation
   readonly #materialization: PersistentTreeOutputSession
-  readonly #tree: BrowserFileSystemTree
   readonly #binding: PersistedFSAOperationBinding
   readonly #operationRepository: FSAOperationBindingRepository
   readonly #checkpoints: FSASemanticOutputRepository
@@ -177,7 +171,6 @@ export class FileSystemAccessOutputSession implements ActivatablePersistentMater
     intent: ReceiveIntent
     reservation: FSANamedContainerEntryReservation
     materialization: PersistentTreeOutputSession
-    tree: BrowserFileSystemTree
     binding: PersistedFSAOperationBinding
     operationRepository: FSAOperationBindingRepository
     checkpoints: FSASemanticOutputRepository
@@ -189,7 +182,6 @@ export class FileSystemAccessOutputSession implements ActivatablePersistentMater
     this.intent = input.intent
     this.reservation = input.reservation
     this.#materialization = input.materialization
-    this.#tree = input.tree
     this.#binding = input.binding
     this.#operationRepository = input.operationRepository
     this.#checkpoints = input.checkpoints
@@ -201,18 +193,6 @@ export class FileSystemAccessOutputSession implements ActivatablePersistentMater
       intent: input.intent,
       checkpoints: input.checkpoints,
     })
-  }
-
-  readCheckpoint(fileId: string) {
-    return readBrowserDeliveryCheckpoint(this.#checkpoints, fileId)
-  }
-
-  beginDirectFile(
-    request: PersistentFileRequest,
-    delivery: BrowserDirectFileDelivery,
-  ): Promise<PersistentFileTransactionPort> {
-    this.#requireMaterializing()
-    return openDirectDeliveryFile(this.#checkpoints, delivery, () => this.beginFile(request))
   }
 
   beginFile(request: PersistentFileRequest): Promise<PersistentFileTransactionPort> {
@@ -317,42 +297,6 @@ export class FileSystemAccessOutputSession implements ActivatablePersistentMater
       ))
     }
     this.#outputClosePromise ??= this.#closeOutputAuthorities()
-    return this.#outputClosePromise
-  }
-
-  async verifyStagedTarget(
-    record: BrowserDeliveryRecordV1,
-    content: Blob,
-  ): Promise<'empty' | 'matching-staged-content'> {
-    this.#requireMaterializing()
-    return verifyStagedDeliveryTarget({
-      record,
-      content,
-      tree: this.#tree,
-      namespace: this.#checkpoints.binding,
-      checkpoint: await this.readCheckpoint(record.fileId),
-    })
-  }
-
-  closeForStopSettlement(): Promise<void> {
-    if (this.#settlementObservationActive || this.#terminalDrain?.kind !== 'stop-operation') {
-      return Promise.reject(new DOMException(
-        'Stopped metadata requires the completed Stop cut',
-        'InvalidStateError',
-      ))
-    }
-    this.#outputClosePromise ??= (async () => {
-      try {
-        // Delivery disposal may have removed the final child obligation after the
-        // parent receipt retired metadata. Release that target authority before closing.
-        this.#requireDrainedScheduler()
-        await this.#settlementLedger.retireRecoveryMetadata()
-      } catch (error) {
-        recordOutputException(this.#diagnostics?.failures?.cleanup, error)
-        outputTrace(this.#diagnostics, { eventName: 'cleanup', transition: 'failed' })
-      }
-      await this.#closeOutputAuthorities()
-    })()
     return this.#outputClosePromise
   }
 
@@ -511,7 +455,6 @@ export async function assembleNewFileSystemAccessOutput(
       intent: binding.intent,
       reservation: binding.reservation,
       materialization,
-      tree,
       binding,
       operationRepository: options.operationRepository,
       checkpoints,

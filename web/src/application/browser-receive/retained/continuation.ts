@@ -1,5 +1,4 @@
 import { FSAReceiveOperation } from '../fsa/operation'
-import { reopenFolderDeliveryContext } from '../fsa/folder-delivery'
 import { WorkspaceReceiveOperation } from '../workspace/operation'
 import { continueRetainedWorkspaceOperation, resumeWorkspaceReceive } from './workspace'
 import { createOutputFailureBinding, recordOutputException, type OutputFailureSinks, type OutputTraceSource, type LocalOutputOperationFailureDiagnosticsPort } from '../../../output/diagnostics'
@@ -36,8 +35,6 @@ export function browserRetainedContinuationExecutor(
               continuation.operation,
               diagnosticsFor('file_system_access', outputTrace, binding.sinks),
               localOutputFailures,
-              undefined,
-              await reopenFolderDeliveryContext(windowPort, continuation.operation.intent.operationId),
             ),
             binding,
           )

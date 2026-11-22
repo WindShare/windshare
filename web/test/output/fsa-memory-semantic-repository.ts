@@ -56,11 +56,6 @@ export function memoryCheckpointFactory(
 }
 
 class MemoryCheckpointRepository implements FSASemanticOutputRepository {
-  enlistFileCommit(): never {
-    // Native transaction participants are exercised with real IndexedDB in browser contracts.
-    throw new TypeError('Use the browser fixture for IndexedDB file commit participants')
-  }
-
   readonly binding: CheckpointNamespaceBinding
   readonly #store: MemoryCheckpointStore
   readonly #onRetire: (() => void) | undefined

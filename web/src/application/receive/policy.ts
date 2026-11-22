@@ -4,8 +4,6 @@ import type { MaterializationPlan } from '../../transfer/intent'
 import type {
   RecoverySummary,
 } from '../../transfer/lifecycle/recovery-summary'
-import type { BrowserDeliverySummary } from '../../output/model/browser-delivery'
-import { browserDeliveryLocalActions } from '../../output/model/browser-delivery-actions'
 import type { LifecycleUserAction, ActiveReceiveControl, ReceiveSettlementWait } from './actions'
 
 export interface ReceiveActionFacts {
@@ -14,7 +12,6 @@ export interface ReceiveActionFacts {
   readonly activeControls?: readonly ActiveReceiveControl[]
   readonly interruption?: ReceiveSettlementWait | null
   readonly recoverySummary?: RecoverySummary | null
-  readonly browserDelivery?: BrowserDeliverySummary | null
 }
 
 export function receiveLifecycleCategory(state: ReceiveLifecycleState): 'active' | 'retained' | 'terminal' {
@@ -36,11 +33,9 @@ export function availableReceiveActions(input: ReceiveActionFacts): readonly Lif
     if (new Set(controls).size !== controls.length) throw new TypeError('active receive controls contain a duplicate action')
     return Object.freeze([...controls])
   }
-  const localActions = input.plan.kind === 'direct-tree'
-    ? browserDeliveryLocalActions(input.state, input.browserDelivery) : []
   if (input.state.kind === 'resumable-receive' && input.state.payloadKind === 'file-set' &&
-      input.plan.kind === 'direct-tree' && input.recoverySummary == null) return Object.freeze([...localActions])
-  return Object.freeze([...localActions, ...stableReceiveActions(input.state, input.plan.kind)])
+      input.plan.kind === 'direct-tree' && input.recoverySummary == null) return Object.freeze([])
+  return Object.freeze(stableReceiveActions(input.state, input.plan.kind))
 }
 
 function stableReceiveActions(

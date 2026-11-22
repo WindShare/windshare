@@ -1,16 +1,11 @@
 export const actions = {
   pause: 'Pause',
-  saveStagedHint: 'Copies complete retained files to the chosen folder without receiving them again.',
-  cleanupStagingHint: 'Finishes previously authorized cleanup of browser staging; saved destination files remain untouched.',
   pauseHint: 'Keeps the progress supported by this saving method; accepted writes finish before pausing.',
   deleteHint: 'Deletes task-owned retained data. Files already exported through browser downloads are unaffected.',
   restartHint: 'Restarts incomplete files; their existing partial progress will not be reused.',
-  stopFolder: 'Ends receiving and removes incomplete browser staging. Saved folder files remain; complete staged files can still be saved locally.',
+  stopFolder: 'Ends receiving and cancels resume metadata. Completed files already saved to the folder remain.',
   stopWorkspace: 'Stops receiving and settles retained browser data before releasing this task.',
   stopPortable: 'Stops receiving. This saving method cannot resume an interrupted transfer.',
-  saveStaged: 'Save received files to folder',
-  cleanupStaging: 'Retry staging cleanup',
-  discardStaging: 'Discard incomplete browser data',
   savePartial: 'Save partial ZIP',
   save: 'Save',
   downloadAgain: 'Save again',
@@ -30,5 +25,4 @@ export const actions = {
   retryCleanupHint: 'Removes owned temporary data; the published result remains saved.',
   deleteRetainedHint: 'Verifies ownership before deleting retained output. Files already exported through browser downloads are unaffected.',
   restartIncompleteHint: 'Restarts incomplete files instead of reusing their retained partial progress.',
-  discardStagingHint: 'Deletes incomplete browser data that this ended task cannot continue. Complete staged files remain saveable; saved folder files stay untouched.',
 }

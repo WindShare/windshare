@@ -1,11 +1,9 @@
 import type { ObjectCapacityRecord } from '../object-capacity'
-import type { StagingBudgetRecord } from '../../staging-budget/contracts'
-import { WORKSPACE_CLAIM_STORE, WORKSPACE_OBJECT_STORE, STAGING_FILE_STORE } from './database'
+import { WORKSPACE_CLAIM_STORE, WORKSPACE_OBJECT_STORE } from './database'
 import { OriginCapacityDataError } from './errors'
 
 const MAX_CAPACITY_BYTES = 0xffff_ffff_ffff_ffffn
 export const OBJECT_RESERVATION_BOUND = 1_024
-const STAGING_PHASES = ['receiving', 'queued', 'exporting', 'export-failed', 'target-saved']
 
 export interface WorkspaceBudgetLeaseRecord {
   readonly id: string
@@ -57,22 +55,6 @@ export function workspaceObjectCapacity(value: unknown): ObjectCapacityRecord {
     identities.add(id)
   }
   return record as unknown as ObjectCapacityRecord
-}
-
-export function stagingFileCapacity(value: unknown): StagingBudgetRecord {
-  const record = capacityRecord(value, STAGING_FILE_STORE)
-  strings(record, STAGING_FILE_STORE, ['operationId', 'fileId', 'token'])
-  for (const field of ['objectId', 'exportOwnerId']) {
-    if (record[field] !== undefined) strings(record, STAGING_FILE_STORE, [field])
-  }
-  bytes(record, STAGING_FILE_STORE, ['exactSize', 'verifiedStagedBytes', 'headroomBytes'])
-  if ((record.verifiedStagedBytes as bigint) > (record.exactSize as bigint)) {
-    invalid(record, STAGING_FILE_STORE, 'verifiedStagedBytes', 'exceeds exactSize')
-  }
-  if (!STAGING_PHASES.some(phase => phase === record.phase)) {
-    invalid(record, STAGING_FILE_STORE, 'phase', 'unknown staging phase')
-  }
-  return record as unknown as StagingBudgetRecord
 }
 
 function capacityRecord(value: unknown, store: string, id?: string, field = 'record'): Record<string, unknown> {

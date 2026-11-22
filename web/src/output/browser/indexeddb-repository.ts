@@ -34,11 +34,8 @@ import {
   type PersistentHandleInventoryRepository,
   type PersistentHandleRepository,
 } from '../persistence/journal'
-import { browserDeliveryRetainsTargetMetadata } from '../browser-delivery/indexeddb/target-retirement'
 import {
   DEFAULT_OUTPUT_CHECKPOINT_DATABASE_NAME,
-  INDEXEDDB_BROWSER_DELIVERY_FILE_STORE,
-  INDEXEDDB_BROWSER_SAVE_POLICY_STORE,
   INDEXEDDB_BY_OPERATION_INDEX,
   INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE,
   INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE,
@@ -69,7 +66,6 @@ import {
   scanStoredCheckpointPage,
   type IndexedDbSemanticTransactionFaults,
 } from './indexeddb/checkpoint-authority-transactions'
-import { IndexedDbFileCommitParticipants, type IndexedDbFileCommitParticipant } from './indexeddb/file-commit-participants'
 
 export { IndexedDbOperationConcurrencyError } from './indexeddb/repository-transactions'
 
@@ -84,8 +80,6 @@ implements SemanticFileCheckpointJournal,
   readonly binding: CheckpointNamespaceBinding
   readonly #database: IDBDatabase
   readonly #faults: IndexedDbSemanticTransactionFaults | undefined
-  readonly #fileCommits = new IndexedDbFileCommitParticipants()
-  #retirementInProgress = false
   #closed = false
 
   private constructor(
@@ -146,35 +140,21 @@ implements SemanticFileCheckpointJournal,
     return (await this.installInitialClaims([candidate]))[0]!
   }
 
-  enlistFileCommit(fileId: string, participant: IndexedDbFileCommitParticipant): () => void {
-    this.#assertOpen()
-    return this.#fileCommits.enlistFileCommit(fileId, participant)
-  }
-
   async installInitialClaims(
     candidates: readonly FileCheckpointV2[],
   ): Promise<readonly InitialCheckpointCASResult[]> {
     this.#assertBatchSize(candidates.length)
     for (const candidate of candidates) this.#assertBinding(candidate)
-    const participation = this.#fileCommits.prepare(candidates)
-    const transaction = this.#database.transaction([...new Set([
+    const transaction = this.#database.transaction([
       INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE,
       INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE,
-      ...participation.stores,
-    ])], 'readwrite')
-    const completion = transactionCompletion(transaction)
-    completion.catch(() => undefined)
+    ], 'readwrite')
     try {
       const results = await installIndexedInitialClaims(transaction, this.binding, candidates)
-      const publish = await participation.apply(transaction, results.flatMap(result =>
-        result.kind === 'installed' || result.kind === 'exact'
-          ? [{ kind: 'initial-claim' as const, checkpoint: result.record }] : []))
-      await completion
-      publish()
+      await transactionCompletion(transaction)
       return results
     } catch (error) {
       abortQuietly(transaction)
-      await completion.catch(() => undefined)
       throw error
     }
   }
@@ -365,27 +345,17 @@ implements SemanticFileCheckpointJournal,
       throw new TypeError('final file commit requires a verified finalized checkpoint transition')
     }
     validateFileCheckpointTransition(input.expectedCommittedCheckpoint, input.finalCheckpoint)
-    const participation = this.#fileCommits.prepare([input.finalCheckpoint])
-    const transaction = this.#database.transaction([...new Set([
+    const transaction = this.#database.transaction([
       INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE,
       INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE,
       INDEXEDDB_FILE_CHECKPOINT_HANDLE_STORE,
-      ...participation.stores,
-    ])], 'readwrite')
-    const completion = transactionCompletion(transaction)
-    completion.catch(() => undefined)
+    ], 'readwrite')
     try {
-      // Both authorities validate their predecessors in this cut; neither needs to reread the other's queued writes.
-      const [receipt, publish] = await Promise.all([
-        commitFinalFileTransaction(transaction, this.binding, input, this.#faults),
-        participation.apply(transaction, [{ kind: 'final-file', checkpoint: input.finalCheckpoint }]),
-      ])
-      await completion
-      publish()
+      const receipt = await commitFinalFileTransaction(transaction, this.binding, input, this.#faults)
+      await transactionCompletion(transaction)
       return receipt
     } catch (error) {
       abortQuietly(transaction)
-      await completion.catch(() => undefined)
       throw error
     }
   }
@@ -413,21 +383,12 @@ implements SemanticFileCheckpointJournal,
       throw new TypeError('recovery metadata retirement batch exceeds its fixed limit')
     }
     const transaction = this.#database.transaction([
-      INDEXEDDB_BROWSER_DELIVERY_FILE_STORE,
-      INDEXEDDB_BROWSER_SAVE_POLICY_STORE,
       INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE,
       INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE,
       INDEXEDDB_FILE_CHECKPOINT_HANDLE_STORE,
     ], 'readwrite')
-    // The caller holds terminal mutation authority for the entire bounded retirement.
-    // Checking local delivery retention once avoids re-scanning delivery rows per batch.
-    if (!this.#retirementInProgress && await browserDeliveryRetainsTargetMetadata(transaction, this.binding)) {
-      await transactionCompletion(transaction)
-      return Object.freeze({ deletedRows: 0, state: 'retained-for-local-delivery' })
-    }
     const result = await retireRecoveryMetadataTransaction(transaction, this.binding, limit)
     await transactionCompletion(transaction)
-    this.#retirementInProgress = result.state === 'more'
     return result
   }
 

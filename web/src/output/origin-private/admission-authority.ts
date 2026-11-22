@@ -12,11 +12,10 @@ import {
 
 import { ORIGIN_CAPACITY_DATABASE_NAME as WORKSPACE_BUDGET_DATABASE_NAME,
   WORKSPACE_CLAIM_STORE as CLAIM_STORE, WORKSPACE_OBJECT_STORE as OBJECT_STORE,
-  STAGING_FILE_STORE, CAPACITY_INVENTORY_BOUND as CLAIM_BOUND, openOriginCapacityDatabase,
+  CAPACITY_INVENTORY_BOUND as CLAIM_BOUND, openOriginCapacityDatabase,
   capacityRequest as requestResult, capacityTransaction } from './capacity/database'
-import { stagingCapacityTotals } from '../staging-budget/admission'
 import {
-  workspaceCapacityAccount, workspaceObjectCapacity, stagingFileCapacity,
+  workspaceCapacityAccount, workspaceObjectCapacity,
   OBJECT_RESERVATION_BOUND as RESERVATION_BOUND,
   type WorkspaceCapacityAccount as Account, type WorkspaceBudgetLeaseRecord,
 } from './capacity/records'
@@ -127,11 +126,10 @@ implements OriginPrivateWorkspaceBudgetLeaseAuthority {
       }] }
       const replacement = updateAccount(account, object, next)
       const inventory = await accounts(transaction, facts.nowMilliseconds)
-      const staging = await stagedCapacity(transaction)
-      const occupied = sum(inventory, (entry) => entry.occupiedBytes) + staging.verifiedStagedBytes
+      const occupied = sum(inventory, (entry) => entry.occupiedBytes)
       const outstanding = sum(inventory, (entry) => entry.id === account.id
         ? replacement.outstandingGrowthBytes + replacement.metadataHeadroomBytes
-        : entry.outstandingGrowthBytes + entry.metadataHeadroomBytes) + staging.outstandingBytes
+        : entry.outstandingGrowthBytes + entry.metadataHeadroomBytes)
       const usage = facts.currentUsageBytes > occupied ? facts.currentUsageBytes : occupied
       const additionalCapacity = replacement.outstandingGrowthBytes + replacement.metadataHeadroomBytes -
         account.outstandingGrowthBytes - account.metadataHeadroomBytes
@@ -238,14 +236,13 @@ implements OriginPrivateWorkspaceBudgetLeaseAuthority {
         metadataHeadroomBytes: budget.durableMetadataBytes,
       }
       const others = inventory.filter((entry) => entry.id !== record.id)
-      const staging = await stagedCapacity(transaction)
       const capacity: WorkspaceCapacitySnapshot = {
         ...(facts.estimatedQuotaBytes === undefined ? {} : { estimatedQuotaBytes: facts.estimatedQuotaBytes }),
         currentUsageBytes: maximum(facts.currentUsageBytes,
-          sum(others, (entry) => entry.occupiedBytes) + current.occupiedBytes + staging.verifiedStagedBytes),
+          sum(others, (entry) => entry.occupiedBytes) + current.occupiedBytes),
         minimumReserveBytes: facts.minimumReserveBytes,
         verifiedAlreadyOwnedBytes: current.occupiedBytes,
-        outstandingGrowthBytes: current.outstandingGrowthBytes + staging.outstandingBytes +
+        outstandingGrowthBytes: current.outstandingGrowthBytes +
           sum(others, (entry) => entry.outstandingGrowthBytes),
         metadataHeadroomBytes: current.metadataHeadroomBytes - budget.durableMetadataBytes +
           sum(others, (entry) => entry.metadataHeadroomBytes),
@@ -326,13 +323,6 @@ function validateLeaseTimes(expires: number, now: number): void {
   if (!Number.isSafeInteger(expires) || !Number.isSafeInteger(now) || now < 0 || expires <= now) {
     throw new TypeError('Workspace budget lease time is invalid')
   }
-}
-
-async function stagedCapacity(transaction: IDBTransaction) {
-  const records = await requestResult<unknown[]>(transaction.objectStore(STAGING_FILE_STORE)
-    .getAll(undefined, CLAIM_BOUND + 1))
-  if (records.length > CLAIM_BOUND) throw new DOMException('Staging inventory exceeds its bound', 'QuotaExceededError')
-  return stagingCapacityTotals(records.map(stagingFileCapacity))
 }
 
 async function readAccount(transaction: IDBTransaction, id: string): Promise<Account | undefined> {

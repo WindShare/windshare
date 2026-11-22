@@ -320,13 +320,13 @@ export class ReceiverController {
     this.#previews.mediaFailed(presentationId)
   }
 
-  chooseArtifact(choiceId: ArtifactChoiceID, recoveryPreference: import('../output/model/browser-delivery').BrowserRecoveryPreference = 'automatic'): void {
+  chooseArtifact(choiceId: ArtifactChoiceID): void {
     this.recordExperienceIntent('choose-saving-outcome')
     if (this.#receive.tasks.startBlockedReason() !== null) return
     this.#previews.yieldToReceiving()
     this.#receive.chooseArtifact(choiceId, Object.freeze({
       objectLabel: this.#snapshot.draft.label, createdAtMilliseconds: Date.now(),
-    }), recoveryPreference)
+    }))
   }
 
   cancelPreparing(): void {
