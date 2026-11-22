@@ -80,39 +80,58 @@ func TestCallerSymlinkedContainerOpensItsTargetWithoutFollowingInnerLinks(t *tes
 	if err := os.Symlink(target, container); err != nil {
 		t.Skipf("directory symlink unavailable: %v", err)
 	}
+	relative := filepath.Join(base, "relative-downloads")
+	if err := os.Symlink("target", relative); err != nil {
+		t.Fatal(err)
+	}
+	chained := filepath.Join(base, "chained-downloads")
+	if err := os.Symlink(relative, chained); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Symlink(filepath.Join(target, "elsewhere"), filepath.Join(target, "inner")); err != nil {
 		t.Fatal(err)
 	}
-	for _, create := range []bool{false, true} {
-		p, err := Open(container, create)
-		if err != nil {
-			t.Fatalf("Open(symlinked container, create=%t) = %v", create, err)
-		}
-		if p.RootOpenDisposition() != outputcap.CallerProvidedContainer {
-			t.Fatalf("existing linked container disposition = %v", p.RootOpenDisposition())
-		}
-		d := p.Root().(*directory)
-		info, err := os.Stat(target)
-		if err != nil || !os.SameFile(d.info, info) {
-			t.Fatalf("root is not pinned to the link target: %v", err)
-		}
-		// Duplicate re-validates the pinned path; a pinned symlink would fail here.
-		duplicate, err := d.Duplicate()
-		if err != nil {
-			t.Fatalf("duplicate pinned root: %v", err)
-		}
-		if err := duplicate.Close(); err != nil {
-			t.Fatal(err)
-		}
-		if inner, err := d.OpenDirectory("inner", false); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
-			if inner != nil {
-				_ = inner.Close()
+	for _, candidate := range []struct {
+		name string
+		path string
+	}{
+		{"absolute", container},
+		{"relative", relative},
+		{"chained", chained},
+	} {
+		t.Run(candidate.name, func(t *testing.T) {
+			for _, create := range []bool{false, true} {
+				p, err := Open(candidate.path, create)
+				if err != nil {
+					t.Fatalf("Open(symlinked container, create=%t) = %v", create, err)
+				}
+				if p.RootOpenDisposition() != outputcap.CallerProvidedContainer {
+					t.Fatalf("existing linked container disposition = %v", p.RootOpenDisposition())
+				}
+				d := p.Root().(*directory)
+				info, err := os.Stat(target)
+				if err != nil || !os.SameFile(d.info, info) {
+					t.Fatalf("root is not pinned to the link target: %v", err)
+				}
+				// Duplicate re-validates the pinned path; a pinned symlink would fail here.
+				duplicate, err := d.Duplicate()
+				if err != nil {
+					t.Fatalf("duplicate pinned root: %v", err)
+				}
+				if err := duplicate.Close(); err != nil {
+					t.Fatal(err)
+				}
+				if inner, err := d.OpenDirectory("inner", false); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
+					if inner != nil {
+						_ = inner.Close()
+					}
+					t.Fatalf("inner symlink followed: %v", err)
+				}
+				if err := p.Close(); err != nil {
+					t.Fatal(err)
+				}
 			}
-			t.Fatalf("inner symlink followed: %v", err)
-		}
-		if err := p.Close(); err != nil {
-			t.Fatal(err)
-		}
+		})
 	}
 }
 
@@ -125,12 +144,20 @@ func TestSymlinkedContainerRequiresAgreeingKernelResolution(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	regularFile := filepath.Join(base, "plain.txt")
+	if err := os.WriteFile(regularFile, []byte("file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	container := filepath.Join(base, "downloads")
 	if err := os.Symlink(target, container); err != nil {
 		t.Skipf("directory symlink unavailable: %v", err)
 	}
 	dangling := filepath.Join(base, "dangling")
 	if err := os.Symlink(filepath.Join(base, "missing"), dangling); err != nil {
+		t.Fatal(err)
+	}
+	fileLink := filepath.Join(base, "file-link")
+	if err := os.Symlink(regularFile, fileLink); err != nil {
 		t.Fatal(err)
 	}
 	refusal := errors.New("kernel refused the link")
@@ -140,27 +167,28 @@ func TestSymlinkedContainerRequiresAgreeingKernelResolution(t *testing.T) {
 		follow func(string) (os.FileInfo, error)
 	}{
 		{"dangling", dangling, os.Stat},
+		{"file target", fileLink, os.Stat},
 		// Linux fs.protected_symlinks refuses the kernel follow (EACCES) while
 		// user-space readlink still resolves the link.
 		{"kernel refusal", container, func(string) (os.FileInfo, error) { return nil, refusal }},
 		{"diverging target", container, func(string) (os.FileInfo, error) { return os.Stat(other) }},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			previous := followContainerLink
-			followContainerLink = tc.follow
-			t.Cleanup(func() { followContainerLink = previous })
-			for _, create := range []bool{false, true} {
-				p, err := Open(tc.path, create)
-				if !errors.Is(err, outputcap.ErrUnsafeNamespace) {
-					if p != nil {
-						_ = p.Close()
+	t.Run("cases", func(t *testing.T) {
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+				for _, create := range []bool{false, true} {
+					p, err := openContainer(tc.path, create, tc.follow)
+					if !errors.Is(err, outputcap.ErrUnsafeNamespace) {
+						if p != nil {
+							_ = p.Close()
+						}
+						t.Fatalf("openContainer(create=%t) = %v, want ErrUnsafeNamespace", create, err)
 					}
-					t.Fatalf("Open(create=%t) = %v, want ErrUnsafeNamespace", create, err)
 				}
-			}
-		})
-	}
+			})
+		}
+	})
 	if entries, err := os.ReadDir(other); err != nil || len(entries) != 0 {
 		t.Fatalf("refused container changed another directory: %v %v", entries, err)
 	}

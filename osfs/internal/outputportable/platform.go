@@ -22,60 +22,42 @@ type Platform struct {
 }
 
 func Open(path string, create bool) (outputcap.Platform, error) {
+	return openContainer(path, create, os.Stat)
+}
+
+func openContainer(
+	path string,
+	create bool,
+	follow func(string) (os.FileInfo, error),
+) (outputcap.Platform, error) {
 	absolute, err := filepath.Abs(path)
 	if err != nil {
 		return nil, err
 	}
-	disposition := outputcap.CallerProvidedContainer
-	if create {
-		if _, err := os.Lstat(absolute); errors.Is(err, fs.ErrNotExist) {
-			if err := os.MkdirAll(absolute, 0o755); err != nil {
-				return nil, err
-			}
-			disposition = outputcap.AuthorityCreatedRoot
+	info, err := os.Lstat(absolute)
+	if create && errors.Is(err, fs.ErrNotExist) {
+		if err := os.MkdirAll(absolute, 0o755); err != nil {
+			return nil, err
 		}
+		// A directory created here must be opened without following links.
+		root, err := openDirectory(absolute)
+		if err != nil {
+			return nil, err
+		}
+		return &Platform{root: root, disposition: outputcap.AuthorityCreatedRoot}, nil
 	}
-	resolved, err := resolveContainerLink(absolute)
 	if err != nil {
 		return nil, err
 	}
-	root, err := openDirectory(resolved)
+	resolved, expected, err := resolveContainerTarget(absolute, info, follow)
 	if err != nil {
 		return nil, err
 	}
-	return &Platform{root: root, disposition: disposition}, nil
-}
-
-// followContainerLink is the kernel-followed lookup of a symlinked container.
-// Tests replace it to simulate a refused or diverging kernel resolution.
-var followContainerLink = os.Stat
-
-// A destination the user names through a final symlink (a linked download
-// folder, or a working directory entered through one) is accepted only when the
-// kernel itself follows that link. filepath.EvalSymlinks resolves in user space
-// and so bypasses kernel link policy such as Linux fs.protected_symlinks, which
-// refuses links planted by another user in sticky world-writable directories.
-// The kernel-followed stat must name the same directory as the resolved path;
-// that directory is then pinned by identity, and every name inside it stays
-// no-follow.
-func resolveContainerLink(path string) (string, error) {
-	info, err := os.Lstat(path)
-	if err != nil || info.Mode()&os.ModeSymlink == 0 {
-		return path, nil
-	}
-	followed, err := followContainerLink(path)
+	root, err := openVerifiedDirectory(resolved, expected)
 	if err != nil {
-		return "", errors.Join(outputcap.ErrUnsafeNamespace, err)
+		return nil, err
 	}
-	resolved, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		return "", errors.Join(outputcap.ErrUnsafeNamespace, err)
-	}
-	target, err := os.Lstat(resolved)
-	if err != nil || !followed.IsDir() || !os.SameFile(followed, target) {
-		return "", errors.Join(outputcap.ErrUnsafeNamespace, err)
-	}
-	return resolved, nil
+	return &Platform{root: root, disposition: outputcap.CallerProvidedContainer}, nil
 }
 
 func (platform *Platform) Root() outputcap.Directory { return platform.root }

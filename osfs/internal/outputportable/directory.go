@@ -28,6 +28,10 @@ func openDirectory(path string) (*directory, error) {
 	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return nil, outputcap.ErrUnsafeNamespace
 	}
+	return openVerifiedDirectory(path, info)
+}
+
+func openVerifiedDirectory(path string, expected os.FileInfo) (*directory, error) {
 	root, err := os.OpenRoot(path)
 	if err != nil {
 		return nil, err
@@ -37,7 +41,7 @@ func openDirectory(path string) (*directory, error) {
 		return nil, errors.Join(err, root.Close())
 	}
 	current, err := handle.Stat()
-	if err != nil || !os.SameFile(info, current) {
+	if err != nil || !current.IsDir() || !os.SameFile(expected, current) {
 		return nil, errors.Join(outputcap.ErrUnsafeNamespace, err, handle.Close(), root.Close())
 	}
 	if err := root.Close(); err != nil {
