@@ -443,10 +443,14 @@ class DonationsAdminApp {
 
   private async handleCreateManualDonation(
     payload: ManualDonationPayload,
+    idempotencyKey: string,
   ): Promise<string | null> {
-    const res = await this.api.createManualDonation(payload)
+    const res = await this.api.createManualDonation(payload, idempotencyKey)
     if (res === null) return null
     if (!res.ok) {
+      if (res.error === 'idempotency_key_conflict') {
+        void this.loadDonations(true)
+      }
       return formatApiError(res, getCopy(this.state.locale))
     }
 
@@ -465,7 +469,7 @@ class DonationsAdminApp {
     this.activeDialog?.remove()
     this.activeDialog = openManualDonationDialog({
       t: getCopy(this.state.locale),
-      onSubmit: payload => this.handleCreateManualDonation(payload),
+      onSubmit: (payload, idempotencyKey) => this.handleCreateManualDonation(payload, idempotencyKey),
       onClose: () => {
         this.activeDialog = null
       },

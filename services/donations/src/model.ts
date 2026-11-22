@@ -12,6 +12,7 @@ export const MAX_MESSAGE_CODEPOINTS = 140
 export const MAX_HIDE_REASON_CODEPOINTS = 140
 export const MAX_ADMIN_SEARCH_CODEPOINTS = 64
 export const MAX_MANUAL_EXTERNAL_ID_CODEPOINTS = 96
+export const MAX_MANUAL_IDEMPOTENCY_KEY_LENGTH = 128
 export const MAX_FUTURE_SKEW_SECONDS = 60
 
 export const DONATION_PROVIDERS = ['afdian', 'kofi', 'nowpayments', 'direct'] as const
@@ -163,6 +164,7 @@ export interface CreateManualDonationInput {
   readonly minorDigits: number
   readonly message: string | null
   readonly donatedAt: number | null
+  readonly idempotencyKey: string | null
 }
 
 export type CreateManualDonationResult =
@@ -170,8 +172,14 @@ export type CreateManualDonationResult =
     readonly ok: true
     readonly record: DonationRecord
     readonly counts: AdminVisibilityCounts
+    readonly replayed: boolean
   }
   | { readonly ok: false; readonly code: 'duplicate_external_id' }
+  | {
+    readonly ok: false
+    readonly code: 'idempotency_key_conflict'
+    readonly existingDonationId: string
+  }
 
 export interface AdminVisibilityCounts {
   readonly total: number

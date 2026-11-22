@@ -87,9 +87,12 @@ export function formatApiError(failure: ApiFailure, t: CopyCatalog): string {
     case 'invalid_amount':
       return t.errors.invalidAmount
     case 'invalid_manual_donation':
+    case 'invalid_idempotency_key':
       return t.errors.invalidManualDonation
     case 'duplicate_external_id':
       return t.errors.duplicateExternalId
+    case 'idempotency_key_conflict':
+      return t.errors.idempotencyKeyConflict
     case 'service_unavailable':
       return t.errors.serviceUnavailable
     default:
@@ -118,12 +121,13 @@ export class AdminApiClient {
     options: {
       readonly method?: 'GET' | 'POST' | 'PATCH'
       readonly body?: unknown
+      readonly headers?: Readonly<Record<string, string>>
       readonly signal?: AbortSignal
       readonly handleUnauthorized?: boolean
     } = {},
   ): Promise<ApiResult<T> | null> {
     const method = options.method ?? 'GET'
-    const headers: Record<string, string> = {}
+    const headers: Record<string, string> = { ...options.headers }
     if (options.body !== undefined) {
       headers['Content-Type'] = 'application/json'
     }
@@ -203,10 +207,14 @@ export class AdminApiClient {
     )
   }
 
-  createManualDonation(payload: ManualDonationPayload): Promise<ApiResult<ModerateResponse> | null> {
+  createManualDonation(
+    payload: ManualDonationPayload,
+    idempotencyKey: string,
+  ): Promise<ApiResult<ModerateResponse> | null> {
     return this.request<ModerateResponse>('/v1/admin/donations', {
       method: 'POST',
       body: payload,
+      headers: { 'Idempotency-Key': idempotencyKey },
       handleUnauthorized: true,
     })
   }

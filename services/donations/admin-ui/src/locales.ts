@@ -105,6 +105,7 @@ export interface CopyCatalog {
     readonly invalidAmount: string
     readonly invalidManualDonation: string
     readonly duplicateExternalId: string
+    readonly idempotencyKeyConflict: string
     readonly invalidCredentials: string
     readonly rateLimited: (seconds: number | null) => string
     readonly adminNotConfigured: string
@@ -252,6 +253,7 @@ const en: CopyCatalog = {
     invalidAmount: 'Enter a positive amount matching this currency precision.',
     invalidManualDonation: 'Check the entered fields and length limits.',
     duplicateExternalId: 'A donation with this reference ID already exists for this channel.',
+    idempotencyKeyConflict: 'This submission was already recorded with earlier details. Close the dialog to view it.',
     invalidCredentials: 'Incorrect password.',
     rateLimited: sec => (sec ? `Too many attempts. Try again in ${sec}s.` : 'Too many attempts. Try again later.'),
     adminNotConfigured: 'Admin password is not configured on this worker.',
@@ -399,6 +401,7 @@ const zhCN: CopyCatalog = {
     invalidAmount: '请输入符合该币种精度的正数金额。',
     invalidManualDonation: '请检查填写内容与长度限制后重试。',
     duplicateExternalId: '该渠道下已存在相同参考号的记录。',
+    idempotencyKeyConflict: '此次提交已按先前内容入库，请关闭弹窗核对。',
     invalidCredentials: '管理密码不正确。',
     rateLimited: sec => (sec ? `尝试过于频繁，请 ${sec} 秒后再试。` : '尝试过于频繁，请稍后再试。'),
     adminNotConfigured: '服务未配置有效的管理密码。',

@@ -117,6 +117,7 @@ describe('WallStore long-term Top 3 persistence and manual donations', () => {
       minorDigits: 2,
       message: 'Direct USDT transfer',
       donatedAt: 1010,
+      idempotencyKey: null,
     }, 1010)
     expect(whale.ok).toBe(true)
     if (!whale.ok) throw new Error('expected manual donation')
@@ -131,6 +132,7 @@ describe('WallStore long-term Top 3 persistence and manual donations', () => {
       minorDigits: 2,
       message: null,
       donatedAt: 1020,
+      idempotencyKey: null,
     }, 1020)
     expect(dup).toEqual({ ok: false, code: 'duplicate_external_id' })
 
@@ -192,6 +194,7 @@ describe('WallStore long-term Top 3 persistence and manual donations', () => {
         minorDigits: 2,
         message: null,
         donatedAt: null,
+        idempotencyKey: null,
       },
     })
 

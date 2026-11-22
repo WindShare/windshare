@@ -165,13 +165,42 @@ export function logAdminManualDonationCreated(fields: {
   readonly externalId: string
   readonly currency: string
   readonly amountMinor: number
+  readonly idempotencyKey?: string | null
 }): void {
-  emit('info', 'donation.admin_manual_created', {
+  const payload: Record<string, unknown> = {
     donation_id: fields.donationId,
     provider: fields.provider,
     external_id: fields.externalId,
     currency: fields.currency,
     amount_minor: fields.amountMinor,
+  }
+  if (fields.idempotencyKey) {
+    payload.idempotency_key = fields.idempotencyKey
+  }
+  emit('info', 'donation.admin_manual_created', payload)
+}
+
+export function logAdminManualDonationReplayed(fields: {
+  readonly donationId: string
+  readonly provider: DonationProvider
+  readonly externalId: string
+  readonly idempotencyKey: string
+}): void {
+  emit('info', 'donation.admin_manual_replayed', {
+    donation_id: fields.donationId,
+    provider: fields.provider,
+    external_id: fields.externalId,
+    idempotency_key: fields.idempotencyKey,
+  })
+}
+
+export function logAdminManualIdempotencyConflict(fields: {
+  readonly idempotencyKey: string
+  readonly existingDonationId: string
+}): void {
+  emit('warn', 'donation.admin_manual_idempotency_conflict', {
+    idempotency_key: fields.idempotencyKey,
+    existing_donation_id: fields.existingDonationId,
   })
 }
 

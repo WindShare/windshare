@@ -33,17 +33,22 @@ import { selectTopSupporters } from './ranking'
 import { determineInitialVisibility } from './sanitize'
 import {
   ADMIN_DONATION_COLUMNS,
+  INSERT_DONATION_SQL,
+  INSERT_MANUAL_IDEMPOTENCY_SQL,
   PUBLIC_WALL_PUBLISHED_SQL,
+  SELECT_MANUAL_IDEMPOTENCY_SQL,
+  WALL_SCHEMA_STATEMENTS,
   buildAdminDonationsQuery,
+  computeManualDonationRequestHash,
+  normalizeAdminPageLimit,
   reduceVisibilityCounts,
+  rowToCryptoIntent,
   rowToDonationRecord,
   rowToPublicWallEntry,
 } from './wall-queries'
 
 const CLEANUP_BATCH_SIZE = 32
 const RATE_LIMIT_STALE_SECONDS = 3600
-const DEFAULT_ADMIN_PAGE_LIMIT = 50
-const MAX_ADMIN_PAGE_LIMIT = 100
 // Keep parameterized IN-clause chunks well under SQLite's 999 bound parameter ceiling.
 const SQL_IN_BATCH_SIZE = 100
 
@@ -103,62 +108,6 @@ export type ModerateVisibilityResult =
   }
   | { readonly ok: false; readonly code: 'not_found' | 'private_donor_immutable' | 'invalid_transition' }
 
-const SCHEMA_STATEMENTS: readonly string[] = [
-  `CREATE TABLE IF NOT EXISTS donations (
-    id TEXT PRIMARY KEY,
-    provider TEXT NOT NULL,
-    external_id TEXT NOT NULL,
-    display_name TEXT,
-    amount_minor INTEGER NOT NULL,
-    currency TEXT NOT NULL,
-    minor_digits INTEGER NOT NULL,
-    message TEXT,
-    visibility_kind TEXT NOT NULL,
-    visibility_json TEXT NOT NULL,
-    donated_at INTEGER NOT NULL,
-    created_at INTEGER NOT NULL,
-    UNIQUE(provider, external_id)
-  )`,
-  `CREATE INDEX IF NOT EXISTS idx_donations_public_wall
-    ON donations (visibility_kind, donated_at DESC, id DESC)`,
-  `CREATE INDEX IF NOT EXISTS idx_donations_admin_cursor
-    ON donations (donated_at DESC, id DESC)`,
-  `CREATE TABLE IF NOT EXISTS crypto_intents (
-    intent_id TEXT PRIMARY KEY,
-    display_name TEXT,
-    message TEXT,
-    requested_usd_minor INTEGER NOT NULL,
-    return_origin TEXT NOT NULL,
-    created_at INTEGER NOT NULL,
-    expires_at INTEGER NOT NULL
-  )`,
-  `CREATE INDEX IF NOT EXISTS idx_crypto_intents_expires_at
-    ON crypto_intents (expires_at)`,
-  `CREATE TABLE IF NOT EXISTS admin_sessions (
-    session_hash TEXT PRIMARY KEY,
-    csrf_token TEXT NOT NULL,
-    created_at INTEGER NOT NULL,
-    expires_at INTEGER NOT NULL
-  )`,
-  `CREATE INDEX IF NOT EXISTS idx_admin_sessions_expires_at
-    ON admin_sessions (expires_at)`,
-  `CREATE TABLE IF NOT EXISTS rate_limits (
-    bucket_key TEXT PRIMARY KEY,
-    tokens REAL NOT NULL,
-    updated_at INTEGER NOT NULL
-  )`,
-  `CREATE INDEX IF NOT EXISTS idx_rate_limits_updated_at
-    ON rate_limits (updated_at)`,
-  `CREATE TABLE IF NOT EXISTS donation_config (
-    singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
-    min_public_cny_minor INTEGER NOT NULL,
-    min_public_usd_minor INTEGER NOT NULL,
-    moderation_enabled INTEGER NOT NULL,
-    crypto_checkout_paused INTEGER NOT NULL,
-    wall_version INTEGER NOT NULL
-  )`,
-]
-
 function generateUrlSafeId(byteLength: number): string {
   return randomBytes(byteLength).toString('base64url')
 }
@@ -168,18 +117,6 @@ function firstRow(cursor: Iterable<Record<string, unknown>>): Record<string, unk
     return row
   }
   return null
-}
-
-function rowToCryptoIntent(row: Record<string, unknown>): CryptoCheckoutIntent {
-  return {
-    intentId: String(row.intent_id),
-    displayName: row.display_name === null ? null : String(row.display_name),
-    message: row.message === null ? null : String(row.message),
-    requestedUsdMinor: Number(row.requested_usd_minor),
-    returnOrigin: String(row.return_origin),
-    createdAt: Number(row.created_at),
-    expiresAt: Number(row.expires_at),
-  }
 }
 
 function normalizeEtag(raw: string): string {
@@ -197,15 +134,6 @@ export function matchesIfNoneMatch(header: string | null, strongEtag: string): b
     }
   }
   return false
-}
-
-function normalizeAdminPageLimit(rawLimit?: number | null): number {
-  // Guard SQLite's integer LIMIT invariant here so fractional, NaN, or unsafe-integer
-  // inputs from any caller cannot trigger SQLITE_MISMATCH.
-  const candidate = rawLimit !== null && rawLimit !== undefined && Number.isSafeInteger(rawLimit)
-    ? rawLimit
-    : DEFAULT_ADMIN_PAGE_LIMIT
-  return Math.min(MAX_ADMIN_PAGE_LIMIT, Math.max(1, candidate))
 }
 
 function evaluateBucket(
@@ -244,7 +172,7 @@ export class WallStore {
 
   private ensureSchema(): void {
     this.runTx(() => {
-      for (const statement of SCHEMA_STATEMENTS) {
+      for (const statement of WALL_SCHEMA_STATEMENTS) {
         this.sql.exec(statement)
       }
       this.sql.exec(
@@ -486,10 +414,7 @@ export class WallStore {
 
   private insertDonationRecord(record: DonationRecord, nowSec: number): void {
     this.sql.exec(
-      `INSERT INTO donations (
-        id, provider, external_id, display_name, amount_minor, currency,
-        minor_digits, message, visibility_kind, visibility_json, donated_at, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      INSERT_DONATION_SQL,
       record.id,
       record.provider,
       record.externalId,
@@ -551,11 +476,45 @@ export class WallStore {
     return { record, deduplicated: false }
   }
 
+  private resolveManualIdempotencyInTx(
+    idempotencyKey: string,
+    requestHash: string,
+  ): CreateManualDonationResult | null {
+    const entry = firstRow(this.sql.exec(SELECT_MANUAL_IDEMPOTENCY_SQL, idempotencyKey))
+    if (entry === null) return null
+
+    const existingDonationId = String(entry.donation_id)
+    if (String(entry.request_hash) !== requestHash) {
+      return { ok: false, code: 'idempotency_key_conflict', existingDonationId }
+    }
+    const existing = firstRow(this.sql.exec(
+      `SELECT ${ADMIN_DONATION_COLUMNS} FROM donations WHERE id = ?`,
+      existingDonationId,
+    ))
+    if (existing === null) {
+      throw new Error(`manual_donation_idempotency references missing donation ${existingDonationId}`)
+    }
+    return {
+      ok: true,
+      record: rowToDonationRecord(existing),
+      counts: this.getVisibilityCounts(),
+      replayed: true,
+    }
+  }
+
   createManualDonation(
     input: CreateManualDonationInput,
     nowSec: number,
   ): CreateManualDonationResult {
     return this.runTx(() => {
+      const requestHash = input.idempotencyKey === null
+        ? null
+        : computeManualDonationRequestHash(input)
+      if (input.idempotencyKey !== null && requestHash !== null) {
+        const replayed = this.resolveManualIdempotencyInTx(input.idempotencyKey, requestHash)
+        if (replayed !== null) return replayed
+      }
+
       const externalId = input.externalId ?? `manual_${generateUrlSafeId(12)}`
       if (this.hasDonation(input.provider, externalId)) {
         return { ok: false, code: 'duplicate_external_id' }
@@ -573,11 +532,15 @@ export class WallStore {
         donatedAt: clampDonatedAt(input.donatedAt, nowSec),
       }
       this.insertDonationRecord(record, nowSec)
+      if (input.idempotencyKey !== null && requestHash !== null) {
+        this.sql.exec(INSERT_MANUAL_IDEMPOTENCY_SQL, input.idempotencyKey, requestHash, record.id, nowSec)
+      }
       this.bumpWallVersion()
       return {
         ok: true,
         record,
         counts: this.getVisibilityCounts(),
+        replayed: false,
       }
     })
   }

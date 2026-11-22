@@ -25,10 +25,21 @@ const MANUAL_CURRENCIES = [
   'CHF',
 ] as const
 
+const FALLBACK_IDEMPOTENCY_KEY_BYTES = 16
+
 export interface ManualDialogOptions {
   readonly t: CopyCatalog
-  readonly onSubmit: (payload: ManualDonationPayload) => Promise<string | null>
+  readonly onSubmit: (payload: ManualDonationPayload, idempotencyKey: string) => Promise<string | null>
   readonly onClose: () => void
+}
+
+function createSubmissionIdempotencyKey(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  const bytes = new Uint8Array(FALLBACK_IDEMPOTENCY_KEY_BYTES)
+  crypto.getRandomValues(bytes)
+  return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')
 }
 
 interface ManualFormControls {
@@ -198,6 +209,9 @@ function buildManualFormControls(t: CopyCatalog): ManualFormControls {
 
 export function openManualDonationDialog(options: ManualDialogOptions): HTMLDialogElement {
   const { t, onSubmit, onClose } = options
+  // Mint one stable key per opened dialog so retrying after a lost response deduplicates
+  // server-side, while reopening the dialog yields a fresh key for distinct donations.
+  const idempotencyKey = createSubmissionIdempotencyKey()
   let submitting = false
 
   const controls = buildManualFormControls(t)
@@ -263,7 +277,7 @@ export function openManualDonationDialog(options: ManualDialogOptions): HTMLDial
             return
           }
           setBusy(true)
-          const errorMessage = await onSubmit(collected.payload)
+          const errorMessage = await onSubmit(collected.payload, idempotencyKey)
           if (errorMessage === null) {
             dialog.close()
             dialog.remove()

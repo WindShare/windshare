@@ -52,7 +52,7 @@ import {
   toAfdianCommitInput,
   type RuntimeDeps,
 } from '../webhooks/handlers'
-import { handleCreateManualDonation } from './manual'
+import { IDEMPOTENCY_KEY_HEADER, handleCreateManualDonation } from './manual'
 
 const VISIBILITY_PATH_PREFIX = '/v1/admin/donations/'
 const VISIBILITY_PATH_SUFFIX = '/visibility'
@@ -555,7 +555,12 @@ async function handleManualDonationPost(
 ): Promise<Response> {
   const parsedBody = await readAdminJsonBody(request)
   if (!parsedBody.ok) return parsedBody.response
-  return handleCreateManualDonation(parsedBody.data, env, deps)
+  return handleCreateManualDonation(
+    parsedBody.data,
+    request.headers.get(IDEMPOTENCY_KEY_HEADER),
+    env,
+    deps,
+  )
 }
 
 async function handleVisibilityPostRoute(

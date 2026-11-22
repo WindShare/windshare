@@ -674,9 +674,18 @@ describe('admin manual donations and all-time Top 3 integration', () => {
     const etagBefore = wallBefore.headers.get('etag')
 
     // Create 4 manual/mixed-currency donations to verify Top 3 selection and ranking order.
-    const createManual = (payload: Record<string, unknown>) => mf.dispatchFetch(
+    const createManual = (
+      payload: Record<string, unknown>,
+      idempotencyKey?: string,
+    ) => mf.dispatchFetch(
       `${DONATE_ORIGIN}/v1/admin/donations`,
-      { method: 'POST', headers: authedHeaders, body: JSON.stringify(payload) },
+      {
+        method: 'POST',
+        headers: idempotencyKey === undefined
+          ? authedHeaders
+          : { ...authedHeaders, 'Idempotency-Key': idempotencyKey },
+        body: JSON.stringify(payload),
+      },
     )
 
     const firstRes = await createManual({
@@ -702,17 +711,32 @@ describe('admin manual donations and all-time Top 3 integration', () => {
     expect(dupRes.status).toBe(409)
     expect(await dupRes.json()).toEqual({ error: 'duplicate_external_id' })
 
-    const secondRes = await createManual({
+    const secondPayload = {
       amount: '200',
       currency: 'USD',
       displayName: 'Direct Patron',
       message: 'USDT direct transfer',
       donatedAt: 1_760_000_200,
-    })
+    }
+    const secondRes = await createManual(secondPayload, 'manual-direct-patron-1')
     expect(secondRes.status).toBe(201)
     const secondCreated = await secondRes.json() as { record: DonationRecord }
     expect(secondCreated.record.provider).toBe('direct')
     expect(secondCreated.record.externalId.startsWith('manual_')).toBe(true)
+
+    // Retrying the same blank-externalId submission with the same Idempotency-Key replays the original record.
+    const secondReplay = await createManual(secondPayload, 'manual-direct-patron-1')
+    expect(secondReplay.status).toBe(200)
+    const replayedData = await secondReplay.json() as { record: DonationRecord }
+    expect(replayedData.record).toEqual(secondCreated.record)
+
+    // Reusing the same Idempotency-Key with edited fields fails explicitly with 409.
+    const secondConflict = await createManual(
+      { ...secondPayload, amount: '250' },
+      'manual-direct-patron-1',
+    )
+    expect(secondConflict.status).toBe(409)
+    expect(await secondConflict.json()).toEqual({ error: 'idempotency_key_conflict' })
 
     expect((await createManual({
       amount: '50',
@@ -763,5 +787,12 @@ describe('admin manual donations and all-time Top 3 integration', () => {
       '林深见鹿',
       'Euro Friend',
     ])
+
+    // Reopening the dialog generates a new Idempotency-Key so identical amount/fields create a distinct donation.
+    const secondDistinctRes = await createManual(secondPayload, 'manual-direct-patron-2')
+    expect(secondDistinctRes.status).toBe(201)
+    const secondDistinct = await secondDistinctRes.json() as { record: DonationRecord }
+    expect(secondDistinct.record.id).not.toBe(secondCreated.record.id)
+    expect(secondDistinct.record.externalId).not.toBe(secondCreated.record.externalId)
   })
 })
