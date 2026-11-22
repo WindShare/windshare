@@ -11,8 +11,6 @@ import (
 	"strconv"
 	"time"
 
-	appobs "github.com/windshare/windshare/engine/observation"
-	"github.com/windshare/windshare/engine/observation/wire"
 	"github.com/windshare/windshare/internal/testrun"
 )
 
@@ -35,10 +33,9 @@ type observationMilestones struct {
 }
 
 type observationRecord struct {
-	SchemaVersion int             `json:"schema_version"`
-	Event         string          `json:"event"`
-	Command       string          `json:"command"`
-	Payload       json.RawMessage `json:"payload"`
+	Event   string          `json:"event"`
+	Command string          `json:"command"`
+	Payload json.RawMessage `json:"payload"`
 }
 
 type observationMilestone struct {
@@ -104,8 +101,8 @@ func (stream *observationMilestones) next(ctx context.Context) (observationMiles
 					return observationMilestone{}, fmt.Errorf("decode observation: %w", err)
 				}
 				stream.pending = stream.pending[:0]
-				if record.SchemaVersion != v5TraceSchemaVersion || record.Command != stream.command {
-					return observationMilestone{}, fmt.Errorf("unexpected observation schema/command: %d/%s", record.SchemaVersion, record.Command)
+				if record.Command != stream.command {
+					return observationMilestone{}, fmt.Errorf("unexpected observation command: %s", record.Command)
 				}
 				if stream.summary {
 					return observationMilestone{}, errors.New("observation follows terminal summary")
@@ -155,7 +152,9 @@ func (stream *observationMilestones) derive(record observationRecord) (observati
 			fact.name = "sender_direct_lane"
 		}
 	case "lane_adopted":
-		var payload wire.LaneAdoptedPayload
+		var payload struct {
+			Transport string `json:"transport"`
+		}
 		if err := decode(&payload); err != nil {
 			return fact, false, err
 		}
@@ -163,11 +162,17 @@ func (stream *observationMilestones) derive(record observationRecord) (observati
 			fact.name = "receiver_direct_lane"
 		}
 	case "engine_task_observed":
-		var payload wire.EngineTaskPayload
+		var payload struct {
+			Stage   string `json:"stage"`
+			Outcome string `json:"outcome"`
+			Failure *struct {
+				Code string `json:"code"`
+			} `json:"failure"`
+		}
 		if err := decode(&payload); err != nil {
 			return fact, false, err
 		}
-		if record.Command == "get" && payload.Stage == "task_settled" && !stream.receiveJoined && payload.Outcome == appobs.EngineOutcomeFailed && payload.Failure != nil && payload.Failure.Code == "share_stopped" {
+		if record.Command == "get" && payload.Stage == "task_settled" && !stream.receiveJoined && payload.Outcome == "failed" && payload.Failure != nil && payload.Failure.Code == "share_stopped" {
 			fact.name, fact.outcome = "receiver_join_stopped", testrun.OutcomeFailed
 		}
 	case "share_workflow":
@@ -194,7 +199,14 @@ func (stream *observationMilestones) derive(record observationRecord) (observati
 	case "receive_relay_content_claimed":
 		fact.name = "receiver_relay_content"
 	case "relay_recovering":
-		var payload wire.RelayRecoveringPayload
+		var payload struct {
+			Attempt uint32 `json:"attempt"`
+			State   string `json:"state"`
+			Details *struct {
+				Generation string `json:"connection_generation"`
+				Terminal   bool   `json:"terminal"`
+			} `json:"details"`
+		}
 		if err := decode(&payload); err != nil {
 			return fact, false, err
 		}
@@ -221,16 +233,14 @@ func (stream *observationMilestones) derive(record observationRecord) (observati
 		}
 	case "trace_summary":
 		var payload struct {
-			ContractRejected string `json:"contract_rejected"`
-			LifecycleDropped string `json:"lifecycle_dropped"`
-			WriterFailed     bool   `json:"writer_failed"`
-			FlushFailed      bool   `json:"flush_failed"`
-			SchemaLimited    bool   `json:"schema_limited"`
+			Incomplete   bool   `json:"incomplete"`
+			Dropped      string `json:"dropped"`
+			WriterFailed bool   `json:"writer_failed"`
 		}
 		if err := decode(&payload); err != nil {
 			return fact, false, err
 		}
-		if payload.ContractRejected != "0" || payload.LifecycleDropped != "0" || payload.WriterFailed || payload.FlushFailed || payload.SchemaLimited {
+		if payload.Incomplete || payload.Dropped != "0" || payload.WriterFailed {
 			return fact, false, fmt.Errorf("observation trace lost lifecycle evidence: %+v", payload)
 		}
 	}

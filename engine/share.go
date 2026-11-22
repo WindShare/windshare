@@ -9,13 +9,11 @@ import (
 	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/liveshare"
-	"github.com/windshare/windshare/engine/internal/eventproject"
 	"github.com/windshare/windshare/engine/internal/nativeconnectivity"
 	"github.com/windshare/windshare/engine/internal/networkruntime"
 	"github.com/windshare/windshare/engine/internal/share"
 	"github.com/windshare/windshare/engine/internal/task"
 	"github.com/windshare/windshare/engine/networkconfig"
-	appobs "github.com/windshare/windshare/engine/observation"
 	"github.com/windshare/windshare/engine/relayprofile"
 )
 
@@ -33,7 +31,7 @@ type ShareResult = share.Result
 type ShareReady struct {
 	Capability          link.Link
 	SelectedRootSummary liveshare.SelectedRootSummary
-	RelayOrigin         appobs.RelayOrigin
+	RelayOrigin         RelayOrigin
 	FrozenCandidates    []networkconfig.Candidate
 	InitialAdmissions   []string
 	Frontend            string
@@ -87,7 +85,7 @@ func (engine *Engine) StartShare(ctx context.Context, request ShareRequest) (*Sh
 	if injected.Peers != nil {
 		dependencies.Peers = func(nativeconnectivity.SenderConfig) (share.Peers, error) { return injected.Peers() }
 	}
-	current, err := startWorkflow(engine, ctx, appobs.WorkflowShare, request.Diagnostics, func(ctx context.Context, control task.Control) task.Completion[share.Result] {
+	current, err := startWorkflow(engine, ctx, "share", request.Diagnostics, func(ctx context.Context, control task.Control) task.Completion[share.Result] {
 		defer selection.ReleaseAuthorization()
 		control.Diagnostics.Record(selection)
 		dependencies.ObserveAttempt = engine.network.Observer(selection, control.Diagnostics)
@@ -118,7 +116,7 @@ func (current *ShareTask) Ready(ctx context.Context) (ShareReady, error) {
 	if err != nil {
 		return ShareReady{}, err
 	}
-	origin, err := eventproject.RelayOrigin(value.RelayEndpoint)
+	origin, err := relayOriginFromEndpoint(value.RelayEndpoint)
 	if err != nil {
 		return ShareReady{}, err
 	}

@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/windshare/windshare/cmd/wind/internal/runtrace"
+	"github.com/windshare/windshare/internal/diaglog"
 )
 
 func TestShareRequestOwnsVerboseAndTraceOptionsAcrossInterleavedArguments(t *testing.T) {
@@ -17,7 +17,7 @@ func TestShareRequestOwnsVerboseAndTraceOptionsAcrossInterleavedArguments(t *tes
 		"--front-url", "https://front.example", "--relay", "https://relay.example",
 	})
 	target, targetErr := request.observation.traceTarget()
-	expected, _ := runtrace.ExactFile(tracePath)
+	expected, _ := diaglog.ExactFile(tracePath)
 	if parse != requestParseReady || !request.observation.verbose || targetErr != nil || target != expected ||
 		len(request.paths) != 2 || request.paths[0] != "selected-one" || request.paths[1] != "selected-two" {
 		t.Fatalf("share request = %#v, parse = %d", request, parse)

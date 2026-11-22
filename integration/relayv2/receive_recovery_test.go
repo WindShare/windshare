@@ -21,7 +21,6 @@ import (
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/engine"
-	appobs "github.com/windshare/windshare/engine/observation"
 	"github.com/windshare/windshare/engine/relayprofile"
 	"github.com/windshare/windshare/internal/testoutputroot"
 	"github.com/windshare/windshare/internal/testrun"
@@ -170,9 +169,9 @@ func TestGetReplacesLostSessionAndKeepsOneJobAndOutputReservation(t *testing.T) 
 	for value := range receiver.Observations() {
 		events = append(events, value.Event)
 		switch event := value.Event.(type) {
-		case appobs.RelayRecovering:
+		case engine.RelayRecovery:
 			trace.RequireRecord(t, "receiver_recovery_observed", testrun.OutcomeSucceeded, event)
-		case appobs.EngineTaskObserved:
+		case engine.TaskLifecycle:
 			trace.RequireRecord(t, "receiver_generation_changed", testrun.OutcomeSucceeded, event)
 		}
 	}
@@ -180,9 +179,8 @@ func TestGetReplacesLostSessionAndKeepsOneJobAndOutputReservation(t *testing.T) 
 	if err != nil || result.Outcome != engine.OutcomeSuccess {
 		for _, event := range events {
 			switch value := event.(type) {
-			case appobs.RelayRecovering, appobs.EngineTaskObserved:
+			case engine.RelayRecovery, engine.TaskLifecycle:
 				t.Logf("%T: %+v", value, value)
-
 			}
 		}
 		t.Fatalf("outcome=%v failure=%v cause=%v test_context=%v progress=%+v wait=%v",
@@ -203,10 +201,9 @@ func TestGetReplacesLostSessionAndKeepsOneJobAndOutputReservation(t *testing.T) 
 	sessions := map[string]bool{}
 	for _, event := range events {
 		switch value := event.(type) {
-		case appobs.RelayRecovering:
-			waited = waited || value.State() == appobs.RelayRecoveryWaiting
-			restored = restored || (value.State() == appobs.RelayRecoverySucceeded && value.Attempt() > 1)
-
+		case engine.RelayRecovery:
+			waited = waited || value.State == engine.RelayRecoveryWaiting
+			restored = restored || (value.State == engine.RelayRecoverySucceeded && value.Attempt > 1)
 		}
 	}
 	diagnosticsStream.Close()

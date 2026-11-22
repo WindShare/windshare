@@ -7,7 +7,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/windshare/windshare/cmd/wind/internal/runtrace"
+	"github.com/windshare/windshare/internal/diaglog"
 )
 
 func testExactTraceOptions(path string) observationOptions {
@@ -38,7 +38,7 @@ func TestObservationOptionsAliasesAndInterleavedFlags(t *testing.T) {
 				t.Fatalf("parse=%d", parse)
 			}
 			target, targetErr := options.traceTarget()
-			expected, _ := runtrace.ExactFile("trace.ndjson")
+			expected, _ := diaglog.ExactFile("trace.ndjson")
 			if !options.verbose || targetErr != nil || target != expected ||
 				!reflect.DeepEqual(positionals, []string{"capability", "selection"}) {
 				t.Fatalf("options=%+v positionals=%q", options, positionals)
@@ -87,7 +87,7 @@ func TestObservationOptionsModelOneMutuallyExclusiveTraceTarget(t *testing.T) {
 	}
 	positionals, parse := parseInterleaved(flags, []string{"source", "--trace-dir", "traces", "second"})
 	target, targetErr := directory.traceTarget()
-	expected, _ := runtrace.RunDirectory("traces")
+	expected, _ := diaglog.RunDirectory("traces")
 	if parse != flagParseReady || targetErr != nil || target != expected ||
 		!reflect.DeepEqual(positionals, []string{"source", "second"}) {
 		t.Fatalf("parse=%d options=%+v positionals=%q", parse, directory, positionals)

@@ -71,8 +71,7 @@ func TestNetworkUnavailableStartupPreservesStatusAndTrace(t *testing.T) {
 				Payload struct {
 					ExitCode int `json:"exit_code"`
 					Failure  struct {
-						Code       string `json:"code"`
-						MessageKey string `json:"message_key"`
+						Code string `json:"code"`
 					} `json:"failure"`
 				} `json:"payload"`
 			}
@@ -87,7 +86,7 @@ func TestNetworkUnavailableStartupPreservesStatusAndTrace(t *testing.T) {
 				}
 			}
 			if len(failed) != 1 || failed[0].Command != test.command || failed[0].Payload.ExitCode != ExitNetwork ||
-				failed[0].Payload.Failure.Code != "network_unavailable" || failed[0].Payload.Failure.MessageKey != "network_unavailable" {
+				failed[0].Payload.Failure.Code != "network_unavailable" {
 				t.Fatalf("trace lost the startup failure: %+v\n%s", failed, raw)
 			}
 		})

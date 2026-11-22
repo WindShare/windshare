@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	appobs "github.com/windshare/windshare/engine/observation"
+	"github.com/windshare/windshare/core/transfer"
 )
 
 func TestRateWindowUsesInjectedMonotonicSamples(t *testing.T) {
@@ -12,10 +12,10 @@ func TestRateWindowUsesInjectedMonotonicSamples(t *testing.T) {
 	base := time.Unix(1_000, 0)
 	window := rateWindow{}
 	observe := func(offset time.Duration, bytes uint64, exact bool) rateEstimate {
-		return window.observe(base.Add(offset), mustSnapshot(t, appobs.ProgressSpec{
+		return window.observe(base.Add(offset), transfer.ReceiveProgressSnapshot{
 			DiscoveredBytes: 20_000_000, VerifiedBytes: bytes, NewlyVerifiedBytes: bytes,
-			Discovery: appobs.DiscoveryOpen, CountersExact: exact,
-		}))
+			Discovery: transfer.DiscoveryOpen, CountersExact: exact,
+		})
 	}
 	if got := observe(0, 0, true); got.valid {
 		t.Fatalf("first sample = %+v", got)
@@ -44,11 +44,11 @@ func TestRateWindowRejectsUnstableAndStalledSamples(t *testing.T) {
 	t.Parallel()
 	base := time.Unix(1_000, 0)
 	window := rateWindow{}
-	snapshot := func(bytes uint64) appobs.ProgressSnapshot {
-		return mustSnapshot(t, appobs.ProgressSpec{
+	snapshot := func(bytes uint64) transfer.ReceiveProgressSnapshot {
+		return transfer.ReceiveProgressSnapshot{
 			DiscoveredBytes: 100_000_000, VerifiedBytes: bytes, NewlyVerifiedBytes: bytes,
-			Discovery: appobs.DiscoveryComplete, CountersExact: true,
-		})
+			Discovery: transfer.DiscoveryComplete, CountersExact: true,
+		}
 	}
 	window.observe(base, snapshot(0))
 	window.observe(base.Add(time.Second), snapshot(1_000_000))

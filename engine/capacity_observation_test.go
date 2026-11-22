@@ -11,7 +11,6 @@ import (
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/liveshare"
-	appobs "github.com/windshare/windshare/engine/observation"
 	"github.com/windshare/windshare/engine/relayprofile"
 )
 
@@ -72,7 +71,7 @@ func TestConcurrentShareCapacityObservationsKeepTheirTaskAndSharedBudget(t *test
 		if err != nil {
 			t.Fatal(err)
 		}
-		raw := make([]byte, appobs.IdentityBytes)
+		raw := make([]byte, diagnostics.IdentityBytes)
 		raw[0] = byte(i + 1)
 		sessions[i], err = stores[i].RegisterSession(content.SessionConfig{
 			SessionID: content.SessionID(base64.RawURLEncoding.EncodeToString(raw)), Limits: limits,
@@ -174,8 +173,8 @@ func TestConcurrentShareCapacityObservationsKeepTheirTaskAndSharedBudget(t *test
 			t.Fatalf("share %d diagnostic count: %v", i, counts)
 		}
 		for observation := range current.Observations() {
-			if _, ok := observation.Event.(appobs.ObserverLossObserved); ok {
-				t.Fatal("source diagnostic entered product projection")
+			if _, ok := observation.Event.(diagnostics.Source); !ok {
+				t.Fatalf("unexpected non-diagnostic event: %T", observation.Event)
 			}
 		}
 	}

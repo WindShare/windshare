@@ -12,26 +12,43 @@ import (
 	"testing"
 	"time"
 
-	"github.com/windshare/windshare/cmd/wind/internal/clievent"
-	"github.com/windshare/windshare/cmd/wind/internal/runtrace"
+	"github.com/windshare/windshare/cmd/wind/internal/humanoutput"
 	"github.com/windshare/windshare/cmd/wind/internal/terminalcanvas"
-	appobs "github.com/windshare/windshare/engine/observation"
+	"github.com/windshare/windshare/core/downloadmetrics"
+	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/engine"
+	"github.com/windshare/windshare/internal/diaglog"
 )
 
 func TestTerminalPresentationIsAlwaysTheSemanticSuffixAfterFinalTraceHealth(t *testing.T) {
 	terminals := []struct {
 		name     string
-		command  clievent.Command
-		event    clievent.TerminalEvent
+		command  string
+		stage    func(*commandRuntime)
 		headline string
 	}{
-		{"get success", clievent.CommandGet, terminalTransfer(t, clievent.ResultSuccess), "Download completed"},
-		{"get partial", clievent.CommandGet, terminalTransfer(t, clievent.ResultPartial), "Download finished partially"},
-		{"get paused", clievent.CommandGet, terminalTransfer(t, clievent.ResultPaused), "Download paused"},
-		{"get failed", clievent.CommandGet, terminalTransfer(t, clievent.ResultFailed), "Download failed"},
-		{"get command failure", clievent.CommandGet, newRuntimeTestCommandFailure(t, clievent.CommandGet, appobs.FailureCanceled), "Error:"},
-		{"share clean stop", clievent.CommandShare, newRuntimeTestSharingStopped(t), "Sharing stopped"},
-		{"share failure", clievent.CommandShare, terminalShareFailure(t), "Sharing failed:"},
+		{"get success", commandGet, func(r *commandRuntime) {
+			r.StageTransferResult(newRuntimeTestProgress(t), ExitOK, terminalTransfer(humanoutput.ResultSuccess), downloadmetrics.Snapshot{})
+		}, "Download completed"},
+		{"get partial", commandGet, func(r *commandRuntime) {
+			r.StageTransferResult(newRuntimeTestProgress(t), ExitFailure, terminalTransfer(humanoutput.ResultPartial), downloadmetrics.Snapshot{})
+		}, "Download finished partially"},
+		{"get paused", commandGet, func(r *commandRuntime) {
+			r.StageTransferResult(newRuntimeTestProgress(t), ExitFailure, terminalTransfer(humanoutput.ResultPaused), downloadmetrics.Snapshot{})
+		}, "Download paused"},
+		{"get failed", commandGet, func(r *commandRuntime) {
+			r.StageTransferResult(newRuntimeTestProgress(t), ExitFailure, terminalTransfer(humanoutput.ResultFailed), downloadmetrics.Snapshot{})
+		}, "Download failed"},
+		{"get command failure", commandGet, func(r *commandRuntime) {
+			r.StageCommandFailure(ExitFailure, engine.Failure{Code: engine.FailureCanceled})
+		}, "Error:"},
+		{"share clean stop", commandShare, func(r *commandRuntime) {
+			r.StageShareResult(ExitOK, humanoutput.ShareResult{Published: true, StoppedCleanly: true, Elapsed: time.Second})
+		}, "Sharing stopped"},
+		{"share failure", commandShare, func(r *commandRuntime) {
+			f := engine.Failure{Code: engine.FailureRelayUnavailable}
+			r.StageShareResult(ExitNetwork, humanoutput.ShareResult{Published: true, Elapsed: time.Second, Failure: &f})
+		}, "Sharing failed:"},
 	}
 	modes := []struct {
 		name    string
@@ -47,11 +64,11 @@ func TestTerminalPresentationIsAlwaysTheSemanticSuffixAfterFinalTraceHealth(t *t
 		for _, mode := range modes {
 			t.Run(terminal.name+"/"+mode.name, func(t *testing.T) {
 				var stderr bytes.Buffer
-				recorder := newFakeUserTrace(runtrace.Status{WriterFailed: true})
+				recorder := newFakeUserTrace(diaglog.RunStatus{WriterFailed: true})
 				app := &App{
 					Stderr:               &stderr,
 					terminalCapabilities: terminalcanvas.CapabilityProviderFunc(func() terminalcanvas.Capabilities { return mode.caps }),
-					openUserTrace: func(runtrace.Target, clievent.Command, runtrace.Config, runtrace.Dependencies) (userTraceRecorder, error) {
+					openUserTrace: func(diaglog.Target, string, diaglog.RunOptions) (runTraceRecorder, error) {
 						return recorder, nil
 					},
 				}
@@ -61,9 +78,7 @@ func TestTerminalPresentationIsAlwaysTheSemanticSuffixAfterFinalTraceHealth(t *t
 				if err != nil {
 					t.Fatal(err)
 				}
-				if !runtime.Finalize(terminal.event) {
-					t.Fatal("terminal event was rejected")
-				}
+				terminal.stage(runtime)
 				runtime.Close()
 				semantic := stripTerminalControl(stderr.String())
 				warning := strings.Index(semantic, "Warning: Trace is incomplete.")
@@ -79,59 +94,6 @@ func TestTerminalPresentationIsAlwaysTheSemanticSuffixAfterFinalTraceHealth(t *t
 	}
 }
 
-func TestFinalTraceHealthScheduleCannotMoveWarningAfterTerminal(t *testing.T) {
-	for _, schedule := range []string{"known before finalization", "racing finalization", "known only at close"} {
-		t.Run(schedule, func(t *testing.T) {
-			var stderr bytes.Buffer
-			status := runtrace.Status{Complete: true}
-			if schedule == "known only at close" {
-				status = runtrace.Status{FlushFailed: true}
-			}
-			recorder := newFakeUserTrace(status)
-			runtime, err := (&App{
-				Stderr: &stderr,
-				openUserTrace: func(runtrace.Target, clievent.Command, runtrace.Config, runtrace.Dependencies) (userTraceRecorder, error) {
-					return recorder, nil
-				},
-			}).newCommandRuntime(clievent.CommandShare, testExactTraceOptions("trace.ndjson"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			health, err := clievent.NewTraceIncomplete(clievent.CommandShare, clievent.TraceIncompleteWriter, clievent.TraceLoss{})
-			if err != nil {
-				t.Fatal(err)
-			}
-			terminal := newRuntimeTestSharingStopped(t)
-			if schedule == "known before finalization" {
-				recorder.health <- health
-			}
-			if schedule == "racing finalization" {
-				start := make(chan struct{})
-				finalized := make(chan bool, 1)
-				go func() {
-					<-start
-					finalized <- runtime.Finalize(terminal)
-				}()
-				close(start)
-				recorder.health <- health
-				if !<-finalized {
-					t.Fatal("terminal event was rejected")
-				}
-			} else if !runtime.Finalize(terminal) {
-				t.Fatal("terminal event was rejected")
-			}
-			runtime.Close()
-
-			semantic := stripTerminalControl(stderr.String())
-			warning := strings.Index(semantic, "Warning: Trace is incomplete.")
-			headline := strings.Index(semantic, "Sharing stopped")
-			if strings.Count(semantic, "Warning: Trace is incomplete.") != 1 || warning < 0 || warning >= headline {
-				t.Fatalf("stderr order = %q", semantic)
-			}
-		})
-	}
-}
-
 func TestTraceCloseCanBlockWhileProgressRemainsVisibleAndTerminalIsOnlyRecorded(t *testing.T) {
 	var stderr bytes.Buffer
 	recorder := newBlockingCloseUserTrace()
@@ -140,19 +102,20 @@ func TestTraceCloseCanBlockWhileProgressRemainsVisibleAndTerminalIsOnlyRecorded(
 		terminalCapabilities: terminalcanvas.CapabilityProviderFunc(func() terminalcanvas.Capabilities {
 			return terminalcanvas.Capabilities{Interactive: true, ANSI: true, Columns: 120}
 		}),
-		openUserTrace: func(runtrace.Target, clievent.Command, runtrace.Config, runtrace.Dependencies) (userTraceRecorder, error) {
+		openUserTrace: func(diaglog.Target, string, diaglog.RunOptions) (runTraceRecorder, error) {
 			return recorder, nil
 		},
 	}
-	runtime, err := app.newCommandRuntime(clievent.CommandGet, testExactTraceOptions("trace.ndjson"))
+	runtime, err := app.newCommandRuntime(commandGet, testExactTraceOptions("trace.ndjson"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	progress := newRuntimeTestProgress(t)
-	settled := newRuntimeTestSettlement(t)
-	if !runtime.PublishTransferFinalization(progress, settled) {
-		t.Fatal("finalization was rejected")
+	result := humanoutput.TransferResult{
+		Status: humanoutput.ResultSuccess, Elapsed: time.Second, Destination: "destination",
+		Files: transfer.FileOutcomeSummary{DownloadedFiles: 1}, PublishedBytes: 10, CountersExact: true,
 	}
+	runtime.StageTransferResult(progress, ExitOK, result, downloadmetrics.Snapshot{})
 	done := make(chan struct{})
 	go func() {
 		runtime.Close()
@@ -163,15 +126,9 @@ func TestTraceCloseCanBlockWhileProgressRemainsVisibleAndTerminalIsOnlyRecorded(
 	if output := stderr.String(); output != progressBytes {
 		t.Fatalf("presentation while trace close blocked = %q", output)
 	}
-	events := recorder.recorded()
-	if len(events) != 2 {
-		t.Fatalf("recorded before close release = %#v", events)
-	}
-	if _, ok := events[0].(appobs.TransferProgress); !ok {
-		t.Fatalf("first trace event = %T", events[0])
-	}
-	if _, ok := events[1].(clievent.TransferSettled); !ok {
-		t.Fatalf("second trace event = %T", events[1])
+	records := recorder.recorded()
+	if len(records) != 2 || records[0].Event != "transfer_progress" || records[1].Event != "transfer_settled" {
+		t.Fatalf("recorded before close release = %#v", records)
 	}
 	close(recorder.releaseClose)
 	<-done
@@ -190,15 +147,17 @@ func TestTraceCloseCanBlockWhileProgressRemainsVisibleAndTerminalIsOnlyRecorded(
 func TestNativeTraceOrdersFinalProgressThenTerminalThenSummary(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "get.ndjson")
 	runtime, err := (&App{Stderr: bytes.NewBuffer(nil)}).newCommandRuntime(
-		clievent.CommandGet,
+		commandGet,
 		testExactTraceOptions(path),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !runtime.PublishTransferFinalization(newRuntimeTestProgress(t), newRuntimeTestSettlement(t)) {
-		t.Fatal("finalization was rejected")
+	result := humanoutput.TransferResult{
+		Status: humanoutput.ResultSuccess, Elapsed: time.Second, Destination: "destination",
+		Files: transfer.FileOutcomeSummary{DownloadedFiles: 1}, PublishedBytes: 10, CountersExact: true,
 	}
+	runtime.StageTransferResult(newRuntimeTestProgress(t), ExitOK, result, downloadmetrics.Snapshot{})
 	runtime.Close()
 	file, err := os.Open(path)
 	if err != nil {
@@ -230,43 +189,15 @@ func TestNativeTraceOrdersFinalProgressThenTerminalThenSummary(t *testing.T) {
 	}
 }
 
-func terminalTransfer(t *testing.T, status clievent.ResultStatus) clievent.TransferSettled {
-	t.Helper()
-	exit := clievent.ExitSuccess
-	failure := appobs.Failure{}
-	if status != clievent.ResultSuccess {
-		exit = clievent.ExitFailure
-		failure, _ = appobs.NewFailure(appobs.FailureRelayTransport)
+func terminalTransfer(status humanoutput.ResultStatus) humanoutput.TransferResult {
+	res := humanoutput.TransferResult{
+		Status: status, Elapsed: time.Second, Destination: "output", CountersExact: true,
 	}
-	result, err := clievent.NewTransferResult(clievent.TransferResultSpec{
-		Status: status, ExitCode: exit, Drift: clievent.DriftNone,
-		Elapsed: time.Second, Destination: appobs.NewDisplayPath("output"),
-		CountersExact: true, Failure: failure,
-	})
-	if err != nil {
-		t.Fatal(err)
+	if status != humanoutput.ResultSuccess {
+		f := engine.Failure{Code: engine.FailureRelayUnavailable}
+		res.Failure = &f
 	}
-	event, err := clievent.NewTransferSettled(result)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return event
-}
-
-func terminalShareFailure(t *testing.T) clievent.SharingStopped {
-	t.Helper()
-	failure, _ := appobs.NewFailure(appobs.FailureRelayTransport)
-	result, err := clievent.NewShareResult(clievent.ShareResultSpec{Publication: clievent.SharePublished,
-		ExitCode: clievent.ExitNetwork, Elapsed: time.Second, Failure: failure,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	event, err := clievent.NewSharingStopped(result)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return event
+	return res
 }
 
 var terminalControlPattern = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
@@ -277,8 +208,7 @@ func stripTerminalControl(value string) string {
 
 type blockingCloseUserTrace struct {
 	mu           sync.Mutex
-	events       []clievent.Event
-	health       chan clievent.TraceIncomplete
+	records      []diaglog.RunRecord
 	closeEntered chan struct{}
 	releaseClose chan struct{}
 	closeOnce    sync.Once
@@ -286,32 +216,28 @@ type blockingCloseUserTrace struct {
 
 func newBlockingCloseUserTrace() *blockingCloseUserTrace {
 	return &blockingCloseUserTrace{
-		health: make(chan clievent.TraceIncomplete), closeEntered: make(chan struct{}), releaseClose: make(chan struct{}),
+		closeEntered: make(chan struct{}), releaseClose: make(chan struct{}),
 	}
 }
 
-func (trace *blockingCloseUserTrace) Record(event clievent.Event) bool {
+func (trace *blockingCloseUserTrace) RecordRun(rec diaglog.RunRecord) bool {
 	trace.mu.Lock()
-	trace.events = append(trace.events, event)
+	trace.records = append(trace.records, rec)
 	trace.mu.Unlock()
 	return true
 }
 
-func (*blockingCloseUserTrace) ReportRejectionEvidenceLoss(uint64) bool { return true }
-
-func (*blockingCloseUserTrace) ReportUpstreamLoss(clievent.TraceLoss) bool    { return true }
-func (trace *blockingCloseUserTrace) Health() <-chan clievent.TraceIncomplete { return trace.health }
-func (*blockingCloseUserTrace) Path() string                                  { return "trace.ndjson" }
-func (trace *blockingCloseUserTrace) Close() runtrace.Status {
+func (*blockingCloseUserTrace) AddDropped(uint64) {}
+func (*blockingCloseUserTrace) Path() string      { return "trace.ndjson" }
+func (trace *blockingCloseUserTrace) CloseRun() diaglog.RunStatus {
 	trace.closeOnce.Do(func() {
 		close(trace.closeEntered)
 		<-trace.releaseClose
-		close(trace.health)
 	})
-	return runtrace.Status{WriterFailed: true}
+	return diaglog.RunStatus{WriterFailed: true}
 }
-func (trace *blockingCloseUserTrace) recorded() []clievent.Event {
+func (trace *blockingCloseUserTrace) recorded() []diaglog.RunRecord {
 	trace.mu.Lock()
 	defer trace.mu.Unlock()
-	return append([]clievent.Event(nil), trace.events...)
+	return append([]diaglog.RunRecord(nil), trace.records...)
 }

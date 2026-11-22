@@ -98,7 +98,6 @@ type App struct {
 	terminalCapabilities terminalCapabilityProvider
 	terminalCellWidth    terminalCellWidthFunc
 	openUserTrace        userTraceOpener
-	commandEventCapacity int
 
 	receiverRecoveryOptions engine.ReceiveRecoverySettings
 	receiverPeerFactory     func() (engine.ReceivePeerStarter, error)

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"flag"
 
-	"github.com/windshare/windshare/cmd/wind/internal/runtrace"
+	"github.com/windshare/windshare/internal/diaglog"
 )
 
 var (
@@ -34,7 +34,7 @@ const (
 // that both mutually exclusive spellings were supplied.
 type observationTraceSelection struct {
 	mode       observationTraceMode
-	target     runtrace.Target
+	target     diaglog.Target
 	targetErr  error
 	conflicted bool
 }
@@ -64,21 +64,21 @@ func (selection *observationTraceSelection) selectTarget(mode observationTraceMo
 	}
 	selection.mode = mode
 	if path == "-" {
-		selection.target = runtrace.Target{}
+		selection.target = diaglog.Target{}
 		selection.targetErr = errTraceStandardOutput
 		return
 	}
 	var (
-		target runtrace.Target
+		target diaglog.Target
 		err    error
 	)
 	switch mode {
 	case observationTraceExact:
-		target, err = runtrace.ExactFile(path)
+		target, err = diaglog.ExactFile(path)
 	case observationTraceDirectory:
-		target, err = runtrace.RunDirectory(path)
+		target, err = diaglog.RunDirectory(path)
 	default:
-		err = runtrace.ErrInvalidTarget
+		err = diaglog.ErrInvalidTarget
 	}
 	selection.target = target
 	selection.targetErr = err
@@ -106,12 +106,12 @@ func (options observationOptions) traceEnabled() bool {
 	return options.trace.mode != observationTraceUnset
 }
 
-func (options observationOptions) traceTarget() (runtrace.Target, error) {
+func (options observationOptions) traceTarget() (diaglog.Target, error) {
 	if err := options.validate(); err != nil {
-		return runtrace.Target{}, err
+		return diaglog.Target{}, err
 	}
 	if !options.traceEnabled() {
-		return runtrace.Target{}, runtrace.ErrInvalidTarget
+		return diaglog.Target{}, diaglog.ErrInvalidTarget
 	}
 	return options.trace.target, nil
 }

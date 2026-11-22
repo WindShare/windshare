@@ -9,7 +9,7 @@ echo "-- update signed network directory vectors"
 UPDATE_NETWORK_VECTORS=1 go test -count=1 ./core/nodedirectory -run 'Test(BrowserDirectory|TextEdge)Vectors'
 
 echo "-- update diagnostic-correlation vectors"
-go test -count=1 ./engine/observation/wire -run 'TestDiagnosticCorrelationVectors' -update
+go test -count=1 ./core/diagnostics -run 'TestDiagnosticCorrelationVectors' -update
 echo "-- update protocol-contract vectors"
 go test -count=1 ./core/internal/protocolcontract -update
 echo "-- update peer-signaling vectors"

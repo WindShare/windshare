@@ -5,45 +5,41 @@ import (
 	"testing"
 	"time"
 
-	"github.com/windshare/windshare/cmd/wind/internal/clievent"
-	appobs "github.com/windshare/windshare/engine/observation"
+	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/engine"
 )
 
 func TestTransferResultVocabularyAndOutcomeAuthority(t *testing.T) {
 	t.Parallel()
-	failure := mustFailure(t, appobs.FailureSourceRevisionChanged)
+	driftFailure := &engine.Failure{Code: engine.FailureSourceChanged}
 	tests := []struct {
 		name      string
-		status    clievent.ResultStatus
-		exit      clievent.ExitCode
-		drift     clievent.DriftReason
-		failure   appobs.Failure
+		status    ResultStatus
+		drift     bool
+		failure   *engine.Failure
 		headline  string
 		completed bool
 	}{
-		{"success", clievent.ResultSuccess, clievent.ExitSuccess, clievent.DriftNone, appobs.Failure{}, "Download completed", true},
-		{"partial", clievent.ResultPartial, clievent.ExitFailure, clievent.DriftNone, mustFailure(t, appobs.FailureOutputStateIO), "finished partially", false},
-		{"paused", clievent.ResultPaused, clievent.ExitFailure, clievent.DriftNone, mustFailure(t, appobs.FailureCheckpointBusy), "Download paused", false},
-		{"failed", clievent.ResultFailed, clievent.ExitNetwork, clievent.DriftNone, mustFailure(t, appobs.FailureRelayTransport), "Download failed", false},
-		{"paused drift", clievent.ResultPaused, clievent.ExitDrift, clievent.DriftSource, failure, "Download paused", false},
-		{"drift", clievent.ResultFailed, clievent.ExitDrift, clievent.DriftSource, failure, "source changed", false},
+		{"success", ResultSuccess, false, nil, "Download completed", true},
+		{"partial", ResultPartial, false, &engine.Failure{Code: engine.FailureOutputFailed}, "finished partially", false},
+		{"paused", ResultPaused, false, &engine.Failure{Code: engine.FailureOutputBusy}, "Download paused", false},
+		{"failed", ResultFailed, false, &engine.Failure{Code: engine.FailureRelayUnavailable}, "Download failed", false},
+		{"paused drift", ResultPaused, true, driftFailure, "Download paused", false},
+		{"drift", ResultFailed, true, driftFailure, "source changed", false},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			result, err := clievent.NewTransferResult(clievent.TransferResultSpec{
-				Status: test.status, ExitCode: test.exit, Drift: test.drift,
+			result := TransferResult{
+				Status: test.status, SourceDrift: test.drift,
 				Elapsed:     9*time.Second + 600*time.Millisecond,
-				Destination: appobs.NewDisplayPath("out\n\x1b[31m"), DestinationAdjusted: true,
-				Files: appobs.FileOutcomes{
+				Destination: "out\n\x1b[31m", DestinationAdjusted: true,
+				Files: transfer.FileOutcomeSummary{
 					DownloadedFiles: 3, ResumedFiles: 2, PausedFiles: 1,
 					CollisionFiles: 1, ItemBlockedFiles: 2, FailedFiles: 1,
 					ModifiedTimeWarnings: 1,
 				},
 				DirectoryFailures: 1, OmittedDiagnostics: 2,
 				PublishedBytes: 5_000_000, CountersExact: false, Failure: test.failure,
-			})
-			if err != nil {
-				t.Fatal(err)
 			}
 			var text strings.Builder
 			for _, line := range formatTransferResult(result, SelectSymbols(false)) {
@@ -60,7 +56,7 @@ func TestTransferResultVocabularyAndOutcomeAuthority(t *testing.T) {
 			if strings.Contains(output, "Download completed") != test.completed {
 				t.Errorf("completed vocabulary mismatch: %q", output)
 			}
-			if test.drift == clievent.DriftSource && !strings.Contains(output, "source changed") {
+			if test.drift && !strings.Contains(output, "source changed") {
 				t.Errorf("drift reason missing from %q", output)
 			}
 			for _, want := range []string{
@@ -78,20 +74,15 @@ func TestTransferResultVocabularyAndOutcomeAuthority(t *testing.T) {
 
 func TestShareResultNeverInfersTrafficTotals(t *testing.T) {
 	t.Parallel()
-	clean, err := clievent.NewShareResult(clievent.ShareResultSpec{Publication: clievent.SharePublished, ExitCode: clievent.ExitSuccess, Elapsed: time.Hour})
-	if err != nil {
-		t.Fatal(err)
-	}
+	clean := ShareResult{Published: true, StoppedCleanly: true, Elapsed: time.Hour}
 	text := lineText(formatShareResult(clean, SelectSymbols(true)))
 	if text != "✔ Sharing stopped" || strings.ContainsAny(text, "0123456789") {
 		t.Fatalf("clean share result = %q", text)
 	}
 
-	failed, err := clievent.NewShareResult(clievent.ShareResultSpec{Publication: clievent.SharePublished,
-		ExitCode: clievent.ExitNetwork, Failure: mustFailure(t, appobs.FailureRelayTransport),
-	})
-	if err != nil {
-		t.Fatal(err)
+	failed := ShareResult{
+		Published: true,
+		Failure:   &engine.Failure{Code: engine.FailureRelayUnavailable},
 	}
 	if text := lineText(formatShareResult(failed, SelectSymbols(false))); !strings.Contains(text, "Sharing failed") {
 		t.Fatalf("failed share result = %q", text)
@@ -101,13 +92,7 @@ func TestShareResultNeverInfersTrafficTotals(t *testing.T) {
 func TestTransferResultPreservesPublishedDestinationKind(t *testing.T) {
 	t.Parallel()
 	for _, destination := range []string{"./archive.zip", "./vacation_photos/"} {
-		result, err := clievent.NewTransferResult(clievent.TransferResultSpec{
-			Status: clievent.ResultSuccess, ExitCode: clievent.ExitSuccess,
-			Destination: appobs.NewDisplayPath(destination), CountersExact: true,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
+		result := TransferResult{Status: ResultSuccess, Destination: destination, CountersExact: true}
 		lines := formatTransferResult(result, SelectSymbols(false))
 		if got := lineText(lines[1]); !strings.Contains(got, destination) {
 			t.Errorf("destination line = %q, want %q", got, destination)
@@ -117,24 +102,20 @@ func TestTransferResultPreservesPublishedDestinationKind(t *testing.T) {
 
 func TestTransferResultExplainsLocalOutcomeWithoutSourceOrUnexpectedWording(t *testing.T) {
 	tests := []struct {
-		code     appobs.FailureCode
-		outcomes appobs.FileOutcomes
+		code     engine.FailureCode
+		outcomes transfer.FileOutcomeSummary
 		want     string
 	}{
-		{appobs.FailureCheckpointRevisionConflict, appobs.FileOutcomes{ItemBlockedFiles: 1, RevisionConflictFiles: 1}, "another source revision"},
-		{appobs.FailureCheckpointInvalid, appobs.FileOutcomes{ItemBlockedFiles: 1, CheckpointInvalidFiles: 1}, "invalid checkpoint binding"},
-		{appobs.FailureOwnedObjectUnknown, appobs.FileOutcomes{ItemBlockedFiles: 1, OwnedObjectUnknownFiles: 1}, "destination object it owns"},
-		{appobs.FailureDestinationCollision, appobs.FileOutcomes{CollisionFiles: 1}, "Existing destinations prevented"},
+		{engine.FailureCheckpointRevisionConflict, transfer.FileOutcomeSummary{ItemBlockedFiles: 1, RevisionConflictFiles: 1}, "another source revision"},
+		{engine.FailureCheckpointInvalid, transfer.FileOutcomeSummary{ItemBlockedFiles: 1, CheckpointInvalidFiles: 1}, "invalid checkpoint binding"},
+		{engine.FailureOwnedObjectUnknown, transfer.FileOutcomeSummary{ItemBlockedFiles: 1, OwnedObjectUnknownFiles: 1}, "destination object it owns"},
+		{engine.FailureDestinationCollision, transfer.FileOutcomeSummary{CollisionFiles: 1}, "Existing destinations prevented"},
 	}
 	for _, test := range tests {
-		failure := mustFailure(t, test.code)
-		result, err := clievent.NewTransferResult(clievent.TransferResultSpec{
-			Status: clievent.ResultPartial, ExitCode: clievent.ExitFailure,
-			Destination: appobs.NewDisplayPath("out"), Files: test.outcomes,
-			CountersExact: true, Failure: failure,
-		})
-		if err != nil {
-			t.Fatal(err)
+		failure := engine.Failure{Code: test.code}
+		result := TransferResult{
+			Status: ResultPartial, Destination: "out", Files: test.outcomes,
+			CountersExact: true, Failure: &failure,
 		}
 		var output strings.Builder
 		for _, line := range formatTransferResult(result, SelectSymbols(false)) {
@@ -150,10 +131,7 @@ func TestTransferResultExplainsLocalOutcomeWithoutSourceOrUnexpectedWording(t *t
 
 func TestDisplayValuesAreEscapedBeforeLayout(t *testing.T) {
 	t.Parallel()
-	subject, err := appobs.NewFileSubject(appobs.NewDisplayName("bad\n\x1b\u202efile"), 1)
-	if err != nil {
-		t.Fatal(err)
-	}
+	subject := SharingSubject{Kind: SharingFile, Name: "bad\n\x1b\u202efile", FileBytes: 1}
 	text := lineText(formatSharingSubject(subject, SelectSymbols(false)))
 	if strings.ContainsAny(text, "\n\r\x1b") || !strings.Contains(text, `bad\n\x1b\u202efile`) {
 		t.Fatalf("escaped subject = %q", text)

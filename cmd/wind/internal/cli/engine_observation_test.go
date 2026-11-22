@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"os"
@@ -9,13 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/windshare/windshare/core/diagnostics"
-
-	"github.com/windshare/windshare/cmd/wind/internal/clievent"
-	"github.com/windshare/windshare/cmd/wind/internal/runtrace"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/engine"
-	appobs "github.com/windshare/windshare/engine/observation"
+	"github.com/windshare/windshare/internal/diaglog"
 )
 
 func TestReceiveParameterFailuresReachGenericTaskTrace(t *testing.T) {
@@ -42,21 +39,19 @@ func TestReceiveParameterFailuresReachGenericTaskTrace(t *testing.T) {
 		}
 		finished := 0
 		for observation := range current.Observations() {
-			lifecycle, ok := observation.Event.(appobs.EngineTaskObserved)
-			if !ok || lifecycle.Facts().Stage != appobs.EngineTaskSettled {
+			lifecycle, ok := observation.Event.(engine.TaskLifecycle)
+			if !ok || lifecycle.Stage != "task_settled" {
 				continue
 			}
 			finished++
-			spec := lifecycle.Facts()
-			relevant, err := true, lifecycle.Validate()
-			if err != nil || !relevant || spec.Outcome != appobs.EngineOutcomeFailed || spec.FailureClass != appobs.EngineFailureUsage || !spec.Failure.Valid() {
-				t.Fatalf("generic trace lost parameter failure: %+v, %v", spec, err)
+			if lifecycle.Outcome != "failed" || lifecycle.FailureClass != "usage" || lifecycle.Failure == nil || !lifecycle.Failure.Valid() {
+				t.Fatalf("generic trace lost parameter failure: %+v", lifecycle)
 			}
-			if request.Capability.Suite == 0 && spec.Failure.Code() != appobs.FailureInvalidInput {
-				t.Fatalf("coded failure was reclassified: %+v", spec)
+			if request.Capability.Suite == 0 && lifecycle.Failure.Code != engine.FailureInvalidInput {
+				t.Fatalf("coded failure was reclassified: %+v", lifecycle)
 			}
-			if _, err := appobs.NewEngineTaskObserved(spec); err != nil {
-				t.Fatal(err)
+			if !lifecycle.DiagnosticRecord().Valid() {
+				t.Fatal("invalid task lifecycle diagnostic record")
 			}
 		}
 		if finished != 1 {
@@ -66,10 +61,11 @@ func TestReceiveParameterFailuresReachGenericTaskTrace(t *testing.T) {
 }
 
 func TestShareAdapterExportsTaskAndSourceAcquisitionFailureMilestones(t *testing.T) {
-	trace := newRecordingUserTrace()
+	trace := newFakeUserTrace(diaglog.RunStatus{})
+	var stderr bytes.Buffer
 	app := &App{
-		Stdout: io.Discard, Stderr: io.Discard,
-		openUserTrace: func(runtrace.Target, clievent.Command, runtrace.Config, runtrace.Dependencies) (userTraceRecorder, error) {
+		Stdout: io.Discard, Stderr: &stderr,
+		openUserTrace: func(diaglog.Target, string, diaglog.RunOptions) (runTraceRecorder, error) {
 			return trace, nil
 		},
 	}
@@ -78,43 +74,63 @@ func TestShareAdapterExportsTaskAndSourceAcquisitionFailureMilestones(t *testing
 	if code != ExitUsage {
 		t.Fatalf("missing source exit = %d", code)
 	}
-	trace.mu.Lock()
-	defer trace.mu.Unlock()
-	stages := make(map[appobs.EngineTaskStage]appobs.EngineTaskSpec)
-	var taskID appobs.EngineTaskID
-	for _, event := range trace.events {
-		if typed, ok := event.(appobs.EngineTaskObserved); ok {
-			facts := typed.Facts()
-			if !taskID.Valid() {
-				taskID = facts.Task
+	if !strings.Contains(stderr.String(), "Path: "+missing) {
+		t.Fatalf("stderr did not report selected source path: %q", stderr.String())
+	}
+	type taskPayload struct {
+		TaskID  string `json:"engine_task_id"`
+		Stage   string `json:"stage"`
+		Failure *struct {
+			Code string `json:"code"`
+		} `json:"failure"`
+	}
+	stages := make(map[string]taskPayload)
+	var taskID string
+	sources := make(map[string]diaglog.RunRecord)
+	for _, rec := range trace.recorded() {
+		switch rec.Event {
+		case "engine_task_observed":
+			var p taskPayload
+			decodeRecordPayload(t, rec.Payload, &p)
+			if taskID == "" {
+				taskID = p.TaskID
 			}
-			if facts.Task != taskID {
+			if p.TaskID != taskID {
 				t.Fatal("adapter changed task identity across milestones")
 			}
-			stages[facts.Stage] = facts
+			stages[p.Stage] = p
+		case "share_workflow":
+			var p struct {
+				Stage string `json:"stage"`
+			}
+			decodeRecordPayload(t, rec.Payload, &p)
+			sources[p.Stage] = rec
 		}
 	}
-	for _, stage := range []appobs.EngineTaskStage{appobs.EngineTaskStarted, appobs.EngineTaskSettled} {
+	for _, stage := range []string{"task_started", "task_settled"} {
 		if _, ok := stages[stage]; !ok {
-			t.Fatalf("missing engine ownership milestone %v", stage)
+			t.Fatalf("missing engine ownership milestone %q", stage)
 		}
 	}
-	for _, stage := range []appobs.EngineTaskStage{appobs.EngineTaskSettled} {
-		failure := stages[stage].Failure
-		path, located := failure.SourcePath()
-		if failure.Code() != appobs.FailureSourceMissing || !located || path.Text() != missing {
-			t.Fatalf("source failure lost its reason or selected path at %v: %+v", stage, failure)
-		}
-	}
-	sources := map[string]diagnostics.Record{}
-	for _, event := range trace.events {
-		if value, ok := event.(clievent.Diagnostic); ok && value.Record.Name() == "share_workflow" {
-			sources[value.Record.Payload().Get("stage").Text()] = value.Record
-		}
+	settled := stages["task_settled"]
+	if settled.Failure == nil || settled.Failure.Code != "source_missing" {
+		t.Fatalf("source failure lost its reason: %+v", settled)
 	}
 	acquiring, failed := sources["source_acquiring"], sources["source_acquisition_failed"]
-	if !acquiring.Valid() || !failed.Valid() || failed.Scope().TaskID != taskID.String() || acquiring.Scope() != failed.Scope() || acquiring.Correlation().Get("share_instance_id").Text() != failed.Correlation().Get("share_instance_id").Text() || !strings.Contains(failed.Payload().Get("failure").Text(), strconv.Quote(missing)) {
-		t.Fatalf("source failure lost scope/details: %v", sources)
+	if acquiring.Scope == nil || failed.Scope == nil || failed.Scope.TaskID != taskID || *acquiring.Scope != *failed.Scope {
+		t.Fatalf("source failure lost scope: %+v / %+v", acquiring, failed)
+	}
+	var acqCorr, failCorr struct {
+		ShareInstanceID string `json:"share_instance_id"`
+	}
+	decodeRecordPayload(t, acquiring.Correlation, &acqCorr)
+	decodeRecordPayload(t, failed.Correlation, &failCorr)
+	var failPayload struct {
+		Failure string `json:"failure"`
+	}
+	decodeRecordPayload(t, failed.Payload, &failPayload)
+	if acqCorr.ShareInstanceID == "" || acqCorr.ShareInstanceID != failCorr.ShareInstanceID || !strings.Contains(failPayload.Failure, strconv.Quote(missing)) {
+		t.Fatalf("source failure lost details: corr=%+v/%+v payload=%+v", acqCorr, failCorr, failPayload)
 	}
 }
 
@@ -122,10 +138,11 @@ func TestShareAdapterExportsTaskAndSourceAcquisitionFailureMilestones(t *testing
 // top-level catalog entries. The share must stop as a usage error that preserves
 // both selections for diagnostics and presentation.
 func TestShareReportsSelectedPathsThatCollideByName(t *testing.T) {
-	trace := newRecordingUserTrace()
+	trace := newFakeUserTrace(diaglog.RunStatus{})
+	var stderr bytes.Buffer
 	app := &App{
-		Stdout: io.Discard, Stderr: io.Discard,
-		openUserTrace: func(runtrace.Target, clievent.Command, runtrace.Config, runtrace.Dependencies) (userTraceRecorder, error) {
+		Stdout: io.Discard, Stderr: &stderr,
+		openUserTrace: func(diaglog.Target, string, diaglog.RunOptions) (runTraceRecorder, error) {
 			return trace, nil
 		},
 	}
@@ -147,18 +164,25 @@ func TestShareReportsSelectedPathsThatCollideByName(t *testing.T) {
 	if code := app.Run(context.Background(), args); code != ExitUsage {
 		t.Fatalf("colliding selection exit = %d", code)
 	}
-	trace.mu.Lock()
-	defer trace.mu.Unlock()
-	for _, event := range trace.events {
-		typed, ok := event.(appobs.EngineTaskObserved)
-		if !ok || typed.Facts().Stage != appobs.EngineTaskSettled {
+	if !strings.Contains(stderr.String(), selected[0]) || !strings.Contains(stderr.String(), selected[1]) {
+		t.Fatalf("stderr did not report both colliding paths: %q", stderr.String())
+	}
+	for _, rec := range trace.recorded() {
+		if rec.Event != "engine_task_observed" {
 			continue
 		}
-		failure := typed.Facts().Failure
-		collision, located := failure.SelectionCollision()
-		if failure.Code() != appobs.FailureSelectionCollision || !located ||
-			collision.FirstPath().Text() != selected[0] || collision.SecondPath().Text() != selected[1] {
-			t.Fatalf("colliding selection lost its reason or paths: %+v", failure)
+		var p struct {
+			Stage   string `json:"stage"`
+			Failure *struct {
+				Code string `json:"code"`
+			} `json:"failure"`
+		}
+		decodeRecordPayload(t, rec.Payload, &p)
+		if p.Stage != "task_settled" {
+			continue
+		}
+		if p.Failure == nil || p.Failure.Code != "selection_collision" {
+			t.Fatalf("colliding selection lost its reason: %+v", p)
 		}
 		return
 	}

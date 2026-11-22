@@ -6,9 +6,8 @@ import (
 )
 
 const (
-	v5TraceSchemaVersion = 5
-	v5IdentityBytes      = 16
-	v5DigestBytes        = sha256.Size
+	v5IdentityBytes = 16
+	v5DigestBytes   = sha256.Size
 )
 
 type v5TraceValueKind uint8
@@ -78,7 +77,7 @@ func v5TraceSchema(groups ...[]v5TraceFieldSchema) *v5TraceObjectSchema {
 	for _, group := range groups {
 		for _, field := range group {
 			if _, duplicate := fields[field.name]; duplicate {
-				panic("duplicate v4 trace schema field: " + field.name)
+				panic("duplicate trace schema field: " + field.name)
 			}
 			fields[field.name] = field
 		}
@@ -113,6 +112,7 @@ func buildV5TracePayloadSchemas() map[string]*v5TraceObjectSchema {
 	)
 	relayRecoveryDetails := v5TraceSchema(
 		v5TraceOptionalFields(v5TraceIdentity, "share_instance"),
+		v5TraceOptionalFields(v5TraceString, "wait_reason", "authorization"),
 		v5TraceFields(v5TraceDecimal, "connection_generation", "next_delay_ms"),
 		v5TraceFields(v5TraceBool, "slow_wait", "resume_registration", "terminal"),
 	)
@@ -121,7 +121,7 @@ func buildV5TracePayloadSchemas() map[string]*v5TraceObjectSchema {
 		v5TraceFields(v5TraceInteger, "code"),
 	)
 	failure := v5TraceSchema(
-		v5TraceFields(v5TraceString, "code", "message_key"),
+		v5TraceFields(v5TraceString, "code"),
 		v5TraceObjectField("fault", fault, true),
 		v5TraceOptionalFields(v5TraceDecimal, "retry_after_ms"),
 	)
@@ -144,8 +144,10 @@ func buildV5TracePayloadSchemas() map[string]*v5TraceObjectSchema {
 		v5TraceObjectField("file_outcomes", fileOutcomes, false),
 		v5TraceObjectField("capacity_wait", capacityWait, false),
 	)
-	rejectionField := v5TraceSchema(v5TraceFields(v5TraceString, "field", "representation"), v5TraceFields(v5TraceRawString, "value"))
-	rejection := v5TraceSchema(v5TraceFields(v5TraceString, "source_event", "source_location", "source_stage", "field", "rule"), v5TraceOptionalFields(v5TraceRawString, "sample_protocol_session_id", "sample_protocol_operation_id", "sample_revision_id", "sample_response_sequence", "sample_attempt_sequence"), v5TraceObjectSliceField("evidence", rejectionField), v5TraceFields(v5TraceBool, "truncated"), v5TraceFields(v5TraceDecimal, "omitted_fields", "omitted_bytes"))
+	omissionSample := v5TraceSchema(
+		v5TraceFields(v5TraceString, "reason"),
+		v5TraceOptionalFields(v5TraceRawString, "detail"),
+	)
 
 	return map[string]*v5TraceObjectSchema{
 		"engine_task_observed": v5TraceSchema(
@@ -165,6 +167,10 @@ func buildV5TracePayloadSchemas() map[string]*v5TraceObjectSchema {
 			v5TraceFields(v5TraceString, "subject_kind"),
 			v5TraceFields(v5TraceDecimal, "selected_items"),
 			v5TraceOptionalFields(v5TraceDecimal, "file_bytes"),
+		),
+		"source_omissions": v5TraceSchema(
+			v5TraceFields(v5TraceDecimal, "count"),
+			v5TraceObjectSliceField("samples", omissionSample),
 		),
 		"relay_connected": v5TraceSchema(v5TraceObjectField("relay_origin", relayOrigin, false)),
 		"relay_availability": v5TraceSchema(
@@ -208,19 +214,10 @@ func buildV5TracePayloadSchemas() map[string]*v5TraceObjectSchema {
 			v5TraceFields(v5TraceBool, "stopped_cleanly"),
 			v5TraceObjectField("failure", failure, true),
 		),
-		"trace_incomplete": v5TraceSchema(
-			v5TraceFields(v5TraceString, "cause"),
-			v5TraceFields(v5TraceDecimal, "contract_rejected", "lifecycle_dropped", "progress_dropped"),
-		),
 		"lane_adopted": v5TraceSchema(v5TraceFields(v5TraceString, "transport")),
-		"observer_loss": v5TraceSchema(
-			v5TraceFields(v5TraceString, "category", "reason"),
-			v5TraceFields(v5TraceDecimal, "count", "omitted_samples"),
-			v5TraceObjectField("rejection", rejection, true),
-		),
 		"trace_summary": v5TraceSchema(
-			v5TraceFields(v5TraceBool, "incomplete", "writer_failed", "flush_failed", "schema_limited"),
-			v5TraceFields(v5TraceDecimal, "contract_rejected", "lifecycle_dropped", "progress_dropped", "events_written", "rejection_evidence_dropped"),
+			v5TraceFields(v5TraceBool, "incomplete", "writer_failed"),
+			v5TraceFields(v5TraceDecimal, "events_written", "dropped"),
 		),
 	}
 }

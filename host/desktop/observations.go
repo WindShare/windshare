@@ -1,9 +1,8 @@
 package desktop
 
 import (
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/engine"
-	appobs "github.com/windshare/windshare/engine/observation"
-	"github.com/windshare/windshare/engine/observation/wire"
 )
 
 type subscription struct {
@@ -12,9 +11,11 @@ type subscription struct {
 }
 
 type observationLog struct {
-	OperationID string       `json:"operation_id"`
-	TaskID      string       `json:"task_id"`
-	Event       wire.Encoded `json:"event"`
+	OperationID string            `json:"operation_id"`
+	TaskID      string            `json:"task_id"`
+	Event       string            `json:"event"`
+	Payload     diagnostics.Value `json:"payload"`
+	Correlation diagnostics.Value `json:"correlation,omitempty"`
 }
 
 func (a *Application) observe(operationID string, task shareTask) {
@@ -46,18 +47,20 @@ func (a *Application) observe(operationID string, task shareTask) {
 // Engine observations stay in local support logs; control sockets only consume
 // authoritative snapshots.
 func (a *Application) logObservation(operationID string, record engine.Observation) {
-	event, ok := record.Event.(appobs.Event)
+	source, ok := record.Event.(diagnostics.Source)
 	if !ok {
 		return
 	}
-	encoded, err := wire.Encode(event)
-	if err != nil {
+	entry := source.DiagnosticRecord()
+	if !entry.Valid() {
 		return
 	}
 	a.deps.log("engine.observation", observationLog{
 		OperationID: operationID,
 		TaskID:      string(record.TaskID),
-		Event:       encoded,
+		Event:       entry.Name(),
+		Payload:     entry.Payload(),
+		Correlation: entry.Correlation(),
 	})
 }
 

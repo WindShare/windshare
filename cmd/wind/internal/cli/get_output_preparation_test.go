@@ -10,11 +10,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/windshare/windshare/cmd/wind/internal/clievent"
-	"github.com/windshare/windshare/cmd/wind/internal/runtrace"
 	"github.com/windshare/windshare/cmd/wind/internal/terminalcanvas"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/engine"
+	"github.com/windshare/windshare/internal/diaglog"
 )
 
 type bindingOnlyGetOutputAuthority struct {
@@ -77,13 +76,8 @@ func TestGetExistingTracePrecedesOutputMutation(t *testing.T) {
 	outputCalls := 0
 	app := &App{
 		Stderr: stderr,
-		openUserTrace: func(
-			runtrace.Target,
-			clievent.Command,
-			runtrace.Config,
-			runtrace.Dependencies,
-		) (userTraceRecorder, error) {
-			return nil, runtrace.ErrTraceExists
+		openUserTrace: func(diaglog.Target, string, diaglog.RunOptions) (runTraceRecorder, error) {
+			return nil, diaglog.ErrTraceExists
 		},
 		getOutputFactory: engine.OutputFactoryFunc(func(engine.OutputConfig) (engine.OutputAuthority, error) {
 			outputCalls++

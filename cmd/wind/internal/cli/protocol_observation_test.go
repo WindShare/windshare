@@ -6,12 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/windshare/windshare/cmd/wind/internal/clievent"
-	"github.com/windshare/windshare/cmd/wind/internal/runtrace"
-	"github.com/windshare/windshare/core/session/protocolsession"
-
 	sessionobs "github.com/windshare/windshare/core/session/observation"
-	appobs "github.com/windshare/windshare/engine/observation"
+	"github.com/windshare/windshare/core/session/protocolsession"
+	"github.com/windshare/windshare/internal/diaglog"
 )
 
 func protocolAssemblyFact(role protocolsession.Role) sessionobs.ProtocolObservation {
@@ -33,16 +30,12 @@ func protocolAssemblyFact(role protocolsession.Role) sessionobs.ProtocolObservat
 }
 
 func TestProtocolCommandAssemblyProjectsSourceFactsAndReportsFinalLossOnce(t *testing.T) {
-	for _, command := range []clievent.Command{clievent.CommandShare, clievent.CommandGet} {
-		name := "share"
-		if command == clievent.CommandGet {
-			name = "get"
-		}
-		t.Run(name, func(t *testing.T) {
-			recorder := newFakeUserTrace(runtrace.Status{Complete: true})
+	for _, command := range []string{commandShare, commandGet} {
+		t.Run(command, func(t *testing.T) {
+			recorder := newFakeUserTrace(diaglog.RunStatus{})
 			app := &App{
 				Stderr: bytes.NewBuffer(nil),
-				openUserTrace: func(runtrace.Target, clievent.Command, runtrace.Config, runtrace.Dependencies) (userTraceRecorder, error) {
+				openUserTrace: func(diaglog.Target, string, diaglog.RunOptions) (runTraceRecorder, error) {
 					return recorder, nil
 				},
 			}
@@ -51,7 +44,7 @@ func TestProtocolCommandAssemblyProjectsSourceFactsAndReportsFinalLossOnce(t *te
 				t.Fatal(err)
 			}
 			role := protocolsession.RoleReceiver
-			if command == clievent.CommandShare {
+			if command == commandShare {
 				role = protocolsession.RoleSender
 			}
 			fact := protocolAssemblyFact(role)
@@ -59,42 +52,34 @@ func TestProtocolCommandAssemblyProjectsSourceFactsAndReportsFinalLossOnce(t *te
 			runtime.diagnosticSink().Lost("protocol", 3)
 			runtime.Close()
 			var projected int
-			var lost uint64
-			for _, event := range recorder.recorded() {
-				switch event := event.(type) {
-				case clievent.Diagnostic:
-					if event.Record.Name() != "protocol_operation" {
-						continue
-					}
-					projected++
-					if clievent.CommandOf(event) != command || !event.Record.ObservedAt().Equal(fact.ObservedAt()) {
-						t.Fatalf("projection changed source context: %+v", event)
-					}
-				case appobs.ObserverLossObserved:
-					if event.Category() == appobs.ObserverLossCommandAdapter && event.Reason() == appobs.ObserverLossStreamCapacity {
-						lost += event.Count()
-					}
+			for _, rec := range recorder.recorded() {
+				if rec.Event != "protocol_operation" {
+					continue
+				}
+				projected++
+				if !rec.SourceTime.Equal(fact.ObservedAt()) {
+					t.Fatalf("projection changed source timestamp: got %v want %v", rec.SourceTime, fact.ObservedAt())
 				}
 			}
-			if projected != 1 || lost != 3 || recorder.lifecycle != 3 {
-				t.Fatalf("projected=%d loss=%d upstream=%d", projected, lost, recorder.lifecycle)
+			if projected != 1 || recorder.droppedCount() != 3 {
+				t.Fatalf("projected=%d dropped=%d", projected, recorder.droppedCount())
 			}
 		})
 	}
 }
 
 func TestSupersededBlockObservationRetainsTraceWithoutVerboseWarning(t *testing.T) {
-	recorder := newFakeUserTrace(runtrace.Status{Complete: true})
+	recorder := newFakeUserTrace(diaglog.RunStatus{})
 	stderr := bytes.NewBuffer(nil)
 	app := &App{
 		Stderr: stderr,
-		openUserTrace: func(runtrace.Target, clievent.Command, runtrace.Config, runtrace.Dependencies) (userTraceRecorder, error) {
+		openUserTrace: func(diaglog.Target, string, diaglog.RunOptions) (runTraceRecorder, error) {
 			return recorder, nil
 		},
 	}
 	options := testExactTraceOptions("trace.ndjson")
 	options.verbose = true
-	runtime, err := app.newCommandRuntime(clievent.CommandGet, options)
+	runtime, err := app.newCommandRuntime(commandGet, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,9 +101,13 @@ func TestSupersededBlockObservationRetainsTraceWithoutVerboseWarning(t *testing.
 	}
 	runtime.Close()
 	var causes []string
-	for _, event := range recorder.recorded() {
-		if event, ok := event.(clievent.Diagnostic); ok && event.Record.Name() == "protocol_operation" {
-			causes = append(causes, event.Record.Payload().Get("cause").Text())
+	for _, rec := range recorder.recorded() {
+		if rec.Event == "protocol_operation" {
+			var p struct {
+				Cause string `json:"cause"`
+			}
+			decodeRecordPayload(t, rec.Payload, &p)
+			causes = append(causes, p.Cause)
 		}
 	}
 	if len(causes) != 2 || causes[0] != "superseded" || causes[1] != "protocol_failure" {
@@ -127,17 +116,5 @@ func TestSupersededBlockObservationRetainsTraceWithoutVerboseWarning(t *testing.
 	if output := stderr.String(); strings.Count(output, "Protocol operation request blocks failed") != 1 ||
 		!strings.Contains(output, "protocol failure") || strings.Contains(output, "superseded") {
 		t.Fatalf("verbose warning classification = %q", output)
-	}
-}
-
-func TestProtocolAssemblyReportsRejectedFacts(t *testing.T) {
-	emitter := &shareRecordingEmitter{detailed: true}
-	loss, err := appobs.NewObserverLossObserved(appobs.ObserverLossSpec{Workflow: appobs.WorkflowShare, Category: appobs.ObserverLossProtocolOperation, Reason: appobs.ObserverLossEventContract, Count: 1})
-	if err != nil {
-		t.Fatal(err)
-	}
-	(&App{}).observeEngineShare(newShareProjection(emitter), loss)
-	if emitter.lifecycleLoss != 1 {
-		t.Fatalf("rejected facts=%d", emitter.lifecycleLoss)
 	}
 }

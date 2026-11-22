@@ -110,6 +110,6 @@ Traces record lifecycle, connectivity, catalog, content, and provider diagnostic
 | Configuration import and storage | [`cmd/wind/internal/configcommand`](../cmd/wind/internal/configcommand/), [`engine/relayconfig`](../engine/relayconfig/) |
 | Relay enrollment | [`engine/relaysetup`](../engine/relaysetup/) |
 | Resume inventory and discard | [`cmd/wind/internal/resumecommand`](../cmd/wind/internal/resumecommand/), [`engine/recovery`](../engine/recovery/), [`adapters/filesystem`](../adapters/filesystem/) |
-| Terminal events and rendering | [`cmd/wind/internal/clievent`](../cmd/wind/internal/clievent/), [`cmd/wind/internal/commandprojection`](../cmd/wind/internal/commandprojection/), [`cmd/wind/internal/humanoutput`](../cmd/wind/internal/humanoutput/), [`cmd/wind/internal/terminalcanvas`](../cmd/wind/internal/terminalcanvas/) |
-| NDJSON run trace | [`cmd/wind/internal/runtrace`](../cmd/wind/internal/runtrace/), [`core/testvectors`](../core/testvectors/) |
+| Terminal events and rendering | [`cmd/wind/internal/humanoutput`](../cmd/wind/internal/humanoutput/), [`cmd/wind/internal/terminalcanvas`](../cmd/wind/internal/terminalcanvas/) |
+| NDJSON run trace | [`internal/diaglog`](../internal/diaglog/), [`core/diagnostics`](../core/diagnostics/), [`core/testvectors`](../core/testvectors/) |
 | Share and receive runtime | [`engine`](../engine/), [`osfs`](../osfs/) |

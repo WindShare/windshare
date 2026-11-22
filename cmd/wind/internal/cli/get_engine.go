@@ -5,16 +5,15 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"strings"
 
 	"golang.org/x/term"
 
-	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/commandinput"
-	"github.com/windshare/windshare/cmd/wind/internal/commandprojection"
+	"github.com/windshare/windshare/cmd/wind/internal/humanoutput"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/engine"
-	appobs "github.com/windshare/windshare/engine/observation"
 	"github.com/windshare/windshare/engine/recovery"
 )
 
@@ -37,70 +36,98 @@ func (a *App) receiveDependencies() engine.ReceiveDependencies {
 	return dependencies
 }
 
-func (a *App) projectReceiveObservation(o getObservation, event engine.Event) {
-	if value, ok := event.(appobs.Event); ok {
-		observeEngineFact(o.runtime, value)
+func (a *App) reportEngineReceive(result engine.TaskCompletion[engine.ReceiveResult], selection receiveSelection, runtime *commandRuntime) int {
+	code := exitCodeForClass(result.FailureClass)
+	cause := result.Err
+	if cause == nil {
+		cause = result.CleanupError
 	}
-}
-func receiveExit(class engine.FailureClass) int {
-	switch class {
-	case engine.FailureNone:
-		return ExitOK
-	case engine.FailureUsage:
-		return ExitUsage
-	case engine.FailureNetwork:
-		return ExitNetwork
-	case engine.FailureSourceDrift:
-		return ExitDrift
-	default:
-		return ExitFailure
-	}
-}
-func (a *App) reportEngineReceive(result engine.TaskCompletion[engine.ReceiveResult], selection receiveSelection, observation getObservation) int {
-	code := receiveExit(result.FailureClass)
+	failure, hasFailure := engine.DescribeFailure(cause)
 	if result.Value.OutputAttention == recovery.AttentionRecoveryUnavailable {
 		a.writeCompleteLine("Existing progress is retained, but restart recovery is unavailable on this destination. Restore its recovery capability before retrying; inspect with wind resume list -o <directory>.")
 	}
 	if result.Outcome != engine.OutcomeSuccess {
 		a.reportBlockedReceiveItems(result.Value.Transfer)
 	}
-	if result.Failure.Code() == appobs.FailureRetainedOutputMissing {
+	if hasFailure && failure.Code == engine.FailureRetainedOutputMissing {
 		a.writeCompleteLine("Searched output directory: %q. Check -o, --only, and --operation, or use wind get to start a download.", result.Value.Destination)
 	}
 	a.reportReceiveRecovery(result.Value, selection)
 	if result.Value.Job.IsZero() {
-		failure := result.Failure
-		exit, _ := getEventExit(code)
-		event, err := clievent.NewCommandFailed(clievent.CommandGet, exit, failure)
-		if err != nil {
-			return observation.commandFailure(ExitFailure, err)
+		if !hasFailure {
+			failure = engine.Failure{Code: engine.FailureUnexpected}
 		}
-		observation.stageTerminal(event)
+		runtime.StageCommandFailure(code, failure)
 		return code
 	}
-	projected, err := commandprojection.ProjectReceiveResult(result)
-	if err != nil {
-		return observation.commandFailure(ExitFailure, err)
+	transferResult := buildTransferResult(result, failure, hasFailure)
+	finalProgress := engine.TransferProgress{
+		Operation:           result.Value.Operation,
+		Job:                 result.Value.Job,
+		Snapshot:            result.Value.Transfer.Progress,
+		CapacityWaitVisible: false,
 	}
-	settled, err := clievent.NewTransferSettled(projected)
-	if err != nil {
-		return observation.commandFailure(ExitFailure, err)
-	}
-	settled, err = settled.WithDownloadConnectivity(result.Value.Connectivity)
-	if err != nil {
-		return observation.commandFailure(ExitFailure, err)
-	}
-	progress, err := commandprojection.ProjectTransferProgress(result.Value.Operation, result.Value.Job, result.Value.Transfer.Progress, false)
-	if err != nil {
-		return observation.commandFailure(ExitFailure, err)
-	}
-	observation.finalize(progress, settled)
+	runtime.StageTransferResult(finalProgress, code, transferResult, result.Value.Connectivity)
 	return code
 }
 
-func (a *App) reportReceiveTask(result engine.TaskResult[engine.ReceiveResult], selection receiveSelection, observation getObservation) int {
-	observation.runtime.ReportObserverLoss(appobs.ObserverLossEngineObservation, appobs.ObserverLossStreamCapacity, result.Observations.CapacityDropped)
-	return a.reportEngineReceive(result.Completion, selection, observation)
+func buildTransferResult(
+	input engine.TaskCompletion[engine.ReceiveResult],
+	failure engine.Failure,
+	hasFailure bool,
+) humanoutput.TransferResult {
+	status := humanoutput.ResultFailed
+	switch input.Outcome {
+	case engine.OutcomeSuccess:
+		status = humanoutput.ResultSuccess
+	case engine.OutcomePartial:
+		status = humanoutput.ResultPartial
+	case engine.OutcomePaused:
+		status = humanoutput.ResultPaused
+	}
+	if input.Outcome != engine.OutcomeSuccess && input.Value.Recovery.ShareStopped() {
+		status = humanoutput.ResultStopped
+	}
+	r := input.Value.Transfer
+	res := humanoutput.TransferResult{
+		Status:               status,
+		SourceDrift:          input.FailureClass == engine.FailureSourceDrift,
+		Elapsed:              input.Value.Elapsed,
+		Destination:          input.Value.Destination,
+		DestinationAdjusted:  input.Value.DestinationAdjusted,
+		Files:                r.Progress.FileOutcomes,
+		SourceOmittedEntries: r.Progress.SourceOmittedEntries,
+		DirectoryFailures:    saturatingCount(len(r.Directories), r.OmittedDirectoryFailures),
+		OmittedDiagnostics:   saturatingAddUint64(r.OmittedDirectoryFailures, r.OmittedFileFailures),
+		PublishedBytes:       r.Progress.PublishedBytes,
+		CountersExact:        r.Progress.CountersExact,
+	}
+	if input.Outcome != engine.OutcomeSuccess {
+		if !hasFailure {
+			failure = engine.Failure{Code: engine.FailureUnexpected}
+		}
+		res.Failure = &failure
+	}
+	return res
+}
+
+func saturatingCount(retained int, omitted uint64) uint64 {
+	if retained < 0 || uint64(retained) > math.MaxUint64-omitted {
+		return math.MaxUint64
+	}
+	return uint64(retained) + omitted
+}
+
+func saturatingAddUint64(left, right uint64) uint64 {
+	if right > math.MaxUint64-left {
+		return math.MaxUint64
+	}
+	return left + right
+}
+
+func (a *App) reportReceiveTask(result engine.TaskResult[engine.ReceiveResult], selection receiveSelection, runtime *commandRuntime) int {
+	runtime.AddDropped(result.Observations.CapacityDropped)
+	return a.reportEngineReceive(result.Completion, selection, runtime)
 }
 
 func (a *App) reportReceiveRecovery(result engine.ReceiveResult, selection receiveSelection) {

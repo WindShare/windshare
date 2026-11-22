@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	appobs "github.com/windshare/windshare/engine/observation"
+	"github.com/windshare/windshare/engine"
 )
 
 func TestFormatBytesUsesDecimalUnitsWithoutFloatLoss(t *testing.T) {
@@ -18,10 +18,8 @@ func TestFormatBytesUsesDecimalUnitsWithoutFloatLoss(t *testing.T) {
 		{0, "0 B"}, {999, "999 B"}, {1_000, "1.0 KB"}, {1_249, "1.2 KB"},
 		{1_250, "1.3 KB"}, {8_200_000, "8.2 MB"}, {142_500_000, "142.5 MB"},
 		{1_999_999_999, "2.0 GB"}, {math.MaxUint64, "18446744073.7 GB"},
-		// Rounding up to 1000.0 must roll into the next unit, not print "1000.0 KB".
 		{999_949, "999.9 KB"}, {999_950, "1.0 MB"}, {999_999, "1.0 MB"},
 		{999_949_999, "999.9 MB"}, {999_950_000, "1.0 GB"}, {999_999_999, "1.0 GB"},
-		// GB is the largest unit, so it must not roll over.
 		{999_999_999_999, "1000.0 GB"},
 	}
 	for _, test := range tests {
@@ -65,26 +63,29 @@ func TestDurationFormattersAreDeterministic(t *testing.T) {
 
 func TestFailureMessagesCoverClosedVocabulary(t *testing.T) {
 	t.Parallel()
-	codes := []appobs.FailureCode{
-		appobs.FailureUnexpected, appobs.FailureCanceled, appobs.FailureDeadline,
-		appobs.FailureInvalidInput, appobs.FailureCapabilityInvalid, appobs.FailureSelectionMissing, appobs.FailureSelectionCollision,
-		appobs.FailurePublication, appobs.FailureTraceWrite, appobs.FailureRelayMalformed,
-		appobs.FailureRelayStarting, appobs.FailureRelayResumeStale, appobs.FailureRelayStopped, appobs.FailureRelayAccessDenied,
-		appobs.FailureRelayAccessUnavailable, appobs.FailureShareStopped, appobs.FailurePeerNegotiation, appobs.FailureSourceUnavailable,
-		appobs.FailurePeerPolicy, appobs.FailurePeerBusy, appobs.FailurePeerAdmission,
-		appobs.FailureSourceRevisionChanged, appobs.FailureCatalogUnavailable,
-		appobs.FailureSessionProtocol, appobs.FailureOutputStateIO, appobs.FailureCheckpointBusy,
+	codes := []engine.FailureCode{
+		engine.FailureUnexpected, engine.FailureCanceled, engine.FailureDeadline,
+		engine.FailureInvalidInput, engine.FailureNetworkUnavailable, engine.FailureCapabilityInvalid,
+		engine.FailureSelectionMissing, engine.FailureSelectionCollision, engine.FailurePublication,
+		engine.FailureAccountStorageError, engine.FailureRelayRejected, engine.FailureRelayUnavailable,
+		engine.FailureRelayNotFound, engine.FailureRelayStopped, engine.FailureRelayAccessDenied,
+		engine.FailureRelayRouteNotFound, engine.FailureShareStopped, engine.FailureDirectUnavailable,
+		engine.FailureDirectPolicy, engine.FailureDirectBusy, engine.FailureDirectAdmission,
+		engine.FailureSourceUnavailable, engine.FailureSourceChanged, engine.FailureSourceMissing,
+		engine.FailureSourceAccessDenied, engine.FailureSourceUnsupported, engine.FailureSourceOmitted,
+		engine.FailureCatalogUnavailable, engine.FailureSessionFailed, engine.FailureOutputFailed,
+		engine.FailureOutputBusy, engine.FailureOutputOperationAlreadyRunning, engine.FailureOutputRecoveryUnavailable,
+		engine.FailureOutputNeedsAttention, engine.FailureRetainedOutputMissing, engine.FailureDestinationCollision,
+		engine.FailureCheckpointFailed, engine.FailureCheckpointRevisionConflict, engine.FailureCheckpointInvalid,
+		engine.FailureOwnedObjectUnknown,
 	}
 	for _, code := range codes {
-		message := failureMessage(mustFailure(t, code))
-		if message == "" || strings.Contains(message, "unexpected") && code != appobs.FailureUnexpected {
+		message := failureMessage(engine.Failure{Code: code})
+		if message == "" || strings.Contains(message, "unexpected") && code != engine.FailureUnexpected {
 			t.Errorf("failureMessage(%v) = %q", code, message)
 		}
 	}
-	retryable, err := appobs.NewRetryableFailure(appobs.FailureRelayStarting, 1_001)
-	if err != nil {
-		t.Fatal(err)
-	}
+	retryable := engine.Failure{Code: engine.FailureRelayUnavailable, RetryAfter: 1001 * time.Millisecond}
 	if got := failureMessage(retryable); !strings.Contains(got, "Retry after 2s") {
 		t.Fatalf("retryable message = %q", got)
 	}

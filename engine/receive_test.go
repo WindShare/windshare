@@ -87,7 +87,8 @@ func TestReceiveRejectsAndClosesInjectedConnectionBeforeChannelUse(t *testing.T)
 		t.Fatal(err)
 	}
 	result, err := current.Wait(t.Context())
-	if err != nil || result.Outcome != OutcomeFailed || !result.Failure.Valid() || !connection.closed.Load() {
+	described, ok := DescribeFailure(result.Err)
+	if err != nil || result.Outcome != OutcomeFailed || !ok || !described.Valid() || !connection.closed.Load() {
 		t.Fatalf("authentication failure=%+v wait=%v closed=%v", result, err, connection.closed.Load())
 	}
 }

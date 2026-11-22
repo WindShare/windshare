@@ -5,25 +5,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/terminalcanvas"
 	"github.com/windshare/windshare/core/diagnostics"
 )
 
-func (visitor eventVisitor) VisitDiagnostic(event clievent.Diagnostic) error {
-	if !visitor.verboseVisible() {
-		return nil
-	}
-	switch event.Record.Name() {
-	case "peer_attempt":
-		visitor.renderer.insert(formatPeerAttempt(event.Record, visitor.symbols()))
-	case "protocol_operation":
-		if event.Record.Payload().Get("stage").Text() == "receiver_failed" {
-			visitor.renderer.insert(formatProtocolOperationFailure(event.Record, visitor.symbols()))
-		}
-	}
-	return nil
-}
 func formatPeerAttempt(record diagnostics.Record, symbols Symbols) terminalcanvas.Line {
 	f := record.Payload()
 	stage := f.Get("stage").Text()
@@ -42,6 +27,7 @@ func formatPeerAttempt(record diagnostics.Record, symbols Symbols) terminalcanva
 	message := name + " [" + record.Correlation().Get("peer_attempt_id").Text() + "]: " + status
 	return statusLine(symbol, escapedDisplay(message), style)
 }
+
 func peerAttemptStatus(f diagnostics.Value) (string, bool) {
 	if failure := f.Get("failure"); failure.Present() {
 		return "failed. " + failure.Get("message").Text(), true
@@ -77,6 +63,7 @@ func peerAttemptStatus(f diagnostics.Value) (string, bool) {
 		return strings.ReplaceAll(stage, "-", " ") + ".", false
 	}
 }
+
 func formatProtocolOperationFailure(record diagnostics.Record, symbols Symbols) terminalcanvas.Line {
 	f := record.Payload()
 	message := "Protocol operation " + strings.ReplaceAll(f.Get("request_kind").Text(), "_", " ") + " failed"

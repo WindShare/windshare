@@ -2,8 +2,6 @@ package task
 
 import (
 	"errors"
-
-	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 var ErrInvalidSettlement = errors.New("task result violates its settlement contract")
@@ -12,10 +10,8 @@ var ErrInvalidSettlement = errors.New("task result violates its settlement contr
 // Both Wait and lifecycle observers receive this same decision; neither infers
 // an outcome from a stop request or the presence of a low-level cause.
 type Settlement struct {
-	Outcome        Outcome
-	FailureClass   FailureClass
-	Failure        appobs.Failure
-	CleanupFailure appobs.Failure
+	Outcome      Outcome
+	FailureClass FailureClass
 	// Cancellation may retain its cause without becoming a business failure.
 	// Outcome, rather than Err alone, distinguishes those terminal states.
 	Err          error

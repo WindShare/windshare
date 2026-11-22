@@ -10,8 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	appobs "github.com/windshare/windshare/engine/observation"
-	"github.com/windshare/windshare/engine/observation/wire"
 	"github.com/windshare/windshare/internal/testrun"
 )
 
@@ -22,7 +20,7 @@ func TestObservationMilestonesRespectAdmissionAndSettlementSemantics(t *testing.
 		milestone            string
 		outcome              testrun.Outcome
 	}{
-		{"share published", "share", "ready", wire.EmptyPayload{}, "sender_ready", testrun.OutcomeSucceeded},
+		{"share published", "share", "ready", map[string]any{}, "sender_ready", testrun.OutcomeSucceeded},
 		{"candidate is not admission", "share", "peer_attempt", diagnosticMilestonePayload{Stage: "datachannel-open"}, "", ""},
 		{"non-direct route is not direct", "share", "peer_attempt", diagnosticMilestonePayload{Stage: "admitted", Route: "relay"}, "", ""},
 		{"direct admission", "share", "peer_attempt", diagnosticMilestonePayload{Stage: "admitted", Route: "direct"}, "sender_direct_lane", testrun.OutcomeSucceeded},
@@ -30,11 +28,11 @@ func TestObservationMilestonesRespectAdmissionAndSettlementSemantics(t *testing.
 		{"decision is not another claim", "get", "receive_admission_decision", diagnosticMilestonePayload{}, "", ""},
 		{"cleanup start", "share", "share_workflow", diagnosticMilestonePayload{Stage: "share_stopping"}, "sender_stop", testrun.OutcomeStarted},
 		{"cleanup failure", "share", "share_workflow", diagnosticMilestonePayload{Stage: "share_stopped", Failure: "unexpected"}, "sender_stop", testrun.OutcomeFailed},
-		{"stopped relay is not terminal until settlement", "get", "warning", wire.WarningPayload{Failure: wire.Failure{Code: "relay_stopped"}}, "", ""},
-		{"single relay stop settlement is not a confirmed share stop", "get", "engine_task_observed", wire.EngineTaskPayload{Stage: "task_settled", Outcome: appobs.EngineOutcomeFailed, Failure: &wire.Failure{Code: "relay_stopped"}}, "", ""},
-		{"exhausted stopped join", "get", "engine_task_observed", wire.EngineTaskPayload{Stage: "task_settled", Outcome: appobs.EngineOutcomeFailed, Failure: &wire.Failure{Code: "share_stopped"}}, "receiver_join_stopped", testrun.OutcomeFailed},
-		{"initial registration is not recovery", "share", "relay_recovering", wire.RelayRecoveringPayload{State: "succeeded", Details: &wire.RelayRecoveryDetails{Generation: "1"}}, "", ""},
-		{"re-registration", "share", "relay_recovering", wire.RelayRecoveringPayload{State: "succeeded", Details: &wire.RelayRecoveryDetails{Generation: "2"}}, "sender_relay_recovery", testrun.OutcomeSucceeded},
+		{"stopped relay is not terminal until settlement", "get", "warning", map[string]any{"failure": map[string]any{"code": "relay_stopped"}}, "", ""},
+		{"single relay stop settlement is not a confirmed share stop", "get", "engine_task_observed", map[string]any{"stage": "task_settled", "outcome": "failed", "failure": map[string]any{"code": "relay_stopped"}}, "", ""},
+		{"exhausted stopped join", "get", "engine_task_observed", map[string]any{"stage": "task_settled", "outcome": "failed", "failure": map[string]any{"code": "share_stopped"}}, "receiver_join_stopped", testrun.OutcomeFailed},
+		{"initial registration is not recovery", "share", "relay_recovering", map[string]any{"state": "succeeded", "details": map[string]any{"connection_generation": "1"}}, "", ""},
+		{"re-registration", "share", "relay_recovering", map[string]any{"state": "succeeded", "details": map[string]any{"connection_generation": "2"}}, "sender_relay_recovery", testrun.OutcomeSucceeded},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			payload, err := json.Marshal(test.payload)
@@ -53,14 +51,14 @@ func TestObservationMilestonesRespectAdmissionAndSettlementSemantics(t *testing.
 }
 
 func TestObservationMilestonesRejectLostOrTruncatedEvidence(t *testing.T) {
-	ready := `{"schema_version":5,"event":"ready","command":"share","payload":{}}`
-	summary := `{"schema_version":5,"event":"trace_summary","command":"share","payload":{"contract_rejected":"0","lifecycle_dropped":"0","writer_failed":false,"flush_failed":false,"schema_limited":false}}`
+	ready := `{"event":"ready","command":"share","payload":{}}`
+	summary := `{"event":"trace_summary","command":"share","payload":{"incomplete":false,"events_written":"1","dropped":"0","writer_failed":false}}`
 	for _, test := range []struct {
 		name, data string
 		complete   bool
 	}{
 		{"complete", ready + "\n" + summary + "\n", true},
-		{"dropped lifecycle", ready + "\n" + strings.Replace(summary, `"lifecycle_dropped":"0"`, `"lifecycle_dropped":"1"`, 1) + "\n", false},
+		{"dropped lifecycle", ready + "\n" + strings.Replace(summary, `"dropped":"0"`, `"dropped":"1"`, 1) + "\n", false},
 		{"truncated summary", ready + "\n" + summary, false},
 		{"missing summary", ready + "\n", false},
 		{"wrong command", strings.Replace(ready, `"share"`, `"get"`, 1) + "\n" + summary + "\n", false},

@@ -2,90 +2,66 @@ package cli
 
 import (
 	"errors"
+	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 
-	"github.com/windshare/windshare/core/diagnostics"
-
-	"github.com/windshare/windshare/cmd/wind/internal/clievent"
-	"github.com/windshare/windshare/cmd/wind/internal/commandprojection"
 	"github.com/windshare/windshare/cmd/wind/internal/humanoutput"
-	"github.com/windshare/windshare/cmd/wind/internal/runtrace"
-	appobs "github.com/windshare/windshare/engine/observation"
+	"github.com/windshare/windshare/core/diagnostics"
+	"github.com/windshare/windshare/core/downloadmetrics"
+	"github.com/windshare/windshare/core/liveshare"
+	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/engine"
+	"github.com/windshare/windshare/internal/diaglog"
+	"github.com/windshare/windshare/internal/platformsetup"
 )
 
-const defaultCommandEventCapacity = 256
+const (
+	commandShare              = "share"
+	commandGet                = "get"
+	defaultDiagnosticCapacity = 256
+)
 
 var (
 	errCommandRuntimeConfig = errors.New("command observation runtime configuration is invalid")
 	errUserTraceOpen        = errors.New("user trace could not be opened")
 )
 
-type userTraceRecorder interface {
-	Record(clievent.Event) bool
-	ReportUpstreamLoss(clievent.TraceLoss) bool
-	ReportRejectionEvidenceLoss(count uint64) bool
-	Health() <-chan clievent.TraceIncomplete
-	Close() runtrace.Status
+type runTraceRecorder interface {
+	RecordRun(diaglog.RunRecord) bool
+	AddDropped(uint64)
+	CloseRun() diaglog.RunStatus
 	Path() string
 }
 
 type userTraceOpener func(
-	target runtrace.Target,
-	command clievent.Command,
-	config runtrace.Config,
-	dependencies runtrace.Dependencies,
-) (userTraceRecorder, error)
+	target diaglog.Target,
+	command string,
+	opts diaglog.RunOptions,
+) (runTraceRecorder, error)
 
-type queuedCommandEvent struct {
-	sequence uint64
-	event    clievent.Event
+type terminalOutcome struct {
+	event       string
+	level       string
+	payload     any
+	renderHuman func(*humanoutput.Renderer)
 }
 
 type commandRuntime struct {
-	diagnosticStream  *diagnostics.Stream
-	diagnosticRecords <-chan diagnostics.Record
-
-	command             clievent.Command
+	command             string
 	clock               commandClock
 	human               *humanoutput.Renderer
-	trace               userTraceRecorder
+	trace               runTraceRecorder
 	canvas              canvasHealth
 	detailedDiagnostics bool
 
-	ready   chan struct{}
-	closing chan struct{}
-	done    chan struct{}
+	diagnosticStream *diagnostics.Stream
+	diagDone         chan struct{}
 
-	entryMu                sync.Mutex
-	closed                 bool
-	observerFinalized      bool
-	entrySequence          uint64
-	observerLifecycle      []queuedCommandEvent
-	observerLifecycleHead  int
-	observerLifecycleCount int
-	observerProgress       queuedCommandEvent
-	hasObserverProgress    bool
-	commandPublications    []queuedCommandEvent
-	commandPublicationHead int
-	stagedFinalProgress    *appobs.TransferProgress
-	stagedTerminal         clievent.TerminalEvent
-	presentationTerminal   clievent.TerminalEvent
-
-	projectionRejections              []pendingProjectionRejection
-	unreportedRejections              uint64
-	rejectionEvidenceDropped          atomic.Uint64
-	pendingRejectionEvidenceLoss      atomic.Uint64
-	rejectionEvidenceLossReportFailed atomic.Bool
-	pendingObserverLoss               [appobs.ObserverLossCategoryLimit][appobs.ObserverLossReasonLimit]atomic.Uint64
-	upstreamCumulative                [appobs.ObserverLossCategoryLimit][appobs.ObserverLossReasonLimit]atomic.Uint64
-	pendingProgressLoss               atomic.Uint64
-	pendingTraceLoss                  atomic.Uint64
-	pendingTraceRejections            atomic.Uint64
-	pendingTraceProgress              atomic.Uint64
-	warningOnce                       sync.Once
-	closeOnce                         sync.Once
+	mu                  sync.Mutex
+	stagedFinalProgress *engine.TransferProgress
+	stagedTerminal      *terminalOutcome
+	closeOnce           sync.Once
 }
 
 // canvasHealth is deliberately narrower than TerminalCanvas. Runtime users can
@@ -96,10 +72,10 @@ type canvasHealth interface {
 }
 
 func (a *App) newCommandRuntime(
-	command clievent.Command,
+	command string,
 	options observationOptions,
 ) (*commandRuntime, error) {
-	if !command.Valid() || a.commandEventCapacity < 0 {
+	if command != commandShare && command != commandGet {
 		return nil, errCommandRuntimeConfig
 	}
 	if err := options.validate(); err != nil {
@@ -122,36 +98,34 @@ func (a *App) newCommandRuntime(
 		return nil, err
 	}
 
-	capacity := a.commandEventCapacity
-	if capacity == 0 {
-		capacity = defaultCommandEventCapacity
-	}
 	runtime := &commandRuntime{
-		command: command, clock: terminal.clock, human: renderer, trace: recorder,
+		command:             command,
+		clock:               terminal.clock,
+		human:               renderer,
+		trace:               recorder,
+		canvas:              terminal.canvas,
 		detailedDiagnostics: options.verbose || options.traceEnabled(),
-		canvas:              terminal.canvas, observerLifecycle: make([]queuedCommandEvent, capacity),
-		ready: make(chan struct{}, 1), closing: make(chan struct{}), done: make(chan struct{}),
 	}
 	if runtime.detailedDiagnostics {
-		runtime.diagnosticStream, err = diagnostics.NewStream(defaultCommandEventCapacity, terminal.clock.Now)
+		runtime.diagnosticStream, err = diagnostics.NewStream(defaultDiagnosticCapacity, terminal.clock.Now)
 		if err != nil {
 			if recorder != nil {
-				recorder.Close()
+				recorder.CloseRun()
 			}
 			return nil, err
 		}
-		runtime.diagnosticRecords = runtime.diagnosticStream.Records()
+		runtime.diagDone = make(chan struct{})
+		go runtime.drainDiagnostics()
 	}
-	go runtime.run()
 	return runtime, nil
 }
 
 func (a *App) openCommandTrace(
-	command clievent.Command,
+	command string,
 	options observationOptions,
 	terminal *terminalOutputState,
 	renderer *humanoutput.Renderer,
-) (userTraceRecorder, error) {
+) (runTraceRecorder, error) {
 	if !options.traceEnabled() {
 		return nil, nil
 	}
@@ -161,291 +135,354 @@ func (a *App) openCommandTrace(
 	}
 	target, targetErr := options.traceTarget()
 	if targetErr != nil {
-		renderTraceOpenFailure(renderer, command, targetErr)
+		renderer.RenderTraceOpenFailure(false)
 		return nil, errUserTraceOpen
 	}
-	recorder, err := opener(target, command, runtrace.Config{}, runtrace.Dependencies{
-		Clock: terminal.clock,
-		NewTicker: func(interval time.Duration) runtrace.Ticker {
-			return terminal.clock.NewTicker(interval)
-		},
-	})
+	recorder, err := opener(target, command, diaglog.RunOptions{Now: terminal.clock.Now})
 	if err == nil && recorder != nil {
 		if options.traceDirectoryMode() {
-			_ = renderer.RenderTracePath(recorder.Path())
+			renderer.RenderTracePath(recorder.Path())
 		}
 		return recorder, nil
 	}
 	if recorder != nil {
-		_ = recorder.Close()
+		recorder.CloseRun()
 	}
-	renderTraceOpenFailure(renderer, command, err)
-	if errors.Is(err, runtrace.ErrTraceExists) {
-		return nil, errors.Join(errUserTraceOpen, runtrace.ErrTraceExists)
+	exists := errors.Is(err, diaglog.ErrTraceExists)
+	renderer.RenderTraceOpenFailure(exists)
+	if exists {
+		return nil, errors.Join(errUserTraceOpen, diaglog.ErrTraceExists)
 	}
 	return nil, errUserTraceOpen
 }
 
 func openNativeUserTrace(
-	target runtrace.Target,
-	command clievent.Command,
-	config runtrace.Config,
-	dependencies runtrace.Dependencies,
-) (userTraceRecorder, error) {
-	recorder, err := runtrace.OpenWithDependencies(target, command, config, dependencies)
+	target diaglog.Target,
+	command string,
+	opts diaglog.RunOptions,
+) (runTraceRecorder, error) {
+	recorder, err := diaglog.OpenRun(target, command, opts)
 	if err != nil {
-		// Converting a nil *Recorder directly to the interface would create a
-		// non-nil typed-nil cleanup target on startup failure.
+		// Returning a typed-nil *diaglog.Recorder would present as non-nil interface.
 		return nil, err
 	}
 	return recorder, nil
 }
 
-func renderTraceOpenFailure(renderer *humanoutput.Renderer, command clievent.Command, openErr error) {
-	code := appobs.FailureTraceOpen
-	if errors.Is(openErr, runtrace.ErrTraceExists) {
-		code = appobs.FailureTraceExists
+func (runtime *commandRuntime) drainDiagnostics() {
+	defer close(runtime.diagDone)
+	for rec := range runtime.diagnosticStream.Records() {
+		runtime.observeDiagnostic(rec)
 	}
-	failure, err := appobs.NewFailure(code)
-	if err != nil {
+}
+
+func (runtime *commandRuntime) observeDiagnostic(rec diagnostics.Record) {
+	runtime.human.RenderDiagnostic(rec)
+	if runtime.trace == nil || !rec.Valid() {
 		return
 	}
-	event, err := clievent.NewCommandFailed(command, clievent.ExitFailure, failure)
-	if err == nil {
-		_ = renderer.RenderTerminal(event)
+	scope := rec.Scope()
+	entry := diaglog.RunRecord{
+		Level:      "debug",
+		Event:      rec.Name(),
+		Scope:      &scope,
+		SourceTime: rec.ObservedAt(),
+		Payload:    rec.Payload(),
+	}
+	if corr := rec.Correlation(); corr.Present() {
+		entry.Correlation = corr
+	}
+	runtime.trace.RecordRun(entry)
+}
+
+func (runtime *commandRuntime) ObserveEngine(obs engine.Observation) {
+	if runtime == nil || obs.Event == nil {
+		return
+	}
+	isShare := runtime.command == commandShare
+	switch value := obs.Event.(type) {
+	case engine.RelayAvailability:
+		runtime.human.RenderRelayAvailability(value)
+	case engine.RelayConnected:
+		runtime.human.RenderRelayConnected(isShare)
+	case engine.RelayRecovery:
+		runtime.human.RenderRelayRecovery(value)
+	case engine.SourceOmissions:
+		runtime.human.RenderSourceOmissions(value.Summary)
+	case engine.ContentPathSelected:
+		runtime.human.RenderContentPath(value.Path)
+	case engine.Fallback:
+		runtime.human.RenderFallback(value)
+	case engine.Warning:
+		runtime.human.RenderWarning(value.Failure)
+	case engine.TransferProgress:
+		runtime.human.RenderProgress(value)
+	case engine.LaneAdopted:
+		runtime.human.RenderLaneAdopted(value)
+	case engine.TaskLifecycle:
+		// Task lifecycle milestones belong to diagnostic traces, not human stderr.
+	}
+	if source, ok := obs.Event.(diagnostics.Source); ok {
+		runtime.recordSource(source)
 	}
 }
 
-// Startup has no settled task result. Derive both process status and the final
-// observation from one projection so share and receive cannot disagree.
+func (runtime *commandRuntime) PublishShareReady(summary liveshare.SelectedRootSummary, origin engine.RelayOrigin) {
+	if runtime == nil {
+		return
+	}
+	subject := humanoutput.SharingSubjectFromSummary(summary)
+	runtime.human.RenderReady()
+	runtime.human.RenderSharingSubject(subject)
+	runtime.human.RenderRelayConnected(true)
+	if runtime.trace == nil {
+		return
+	}
+	runtime.trace.RecordRun(diaglog.RunRecord{Level: "info", Event: "ready"})
+	runtime.trace.RecordRun(diaglog.RunRecord{
+		Level:   "info",
+		Event:   "sharing_subject_selected",
+		Payload: sharingSubjectTracePayload(subject),
+	})
+	runtime.recordSource(engine.RelayConnected{Origin: origin})
+}
+
+func (runtime *commandRuntime) ObserveNetworkSetup(report platformsetup.StartupReport) {
+	if runtime == nil {
+		return
+	}
+	runtime.human.RenderNetworkSetup(report)
+	if runtime.trace == nil {
+		return
+	}
+	level := "debug"
+	if report.Decision.SuggestSetup() {
+		level = "info"
+	}
+	runtime.trace.RecordRun(diaglog.RunRecord{
+		Level: level,
+		Event: "network_setup",
+		Payload: networkSetupTracePayload{
+			Decision:             report.Decision.String(),
+			Executable:           report.Executable,
+			ConfiguredExecutable: report.ConfiguredExecutable,
+			Error:                report.Error,
+			SuggestSetup:         report.Decision.SuggestSetup(),
+		},
+	})
+}
+
+func (runtime *commandRuntime) AddDropped(count uint64) {
+	if runtime == nil || runtime.trace == nil || count == 0 {
+		return
+	}
+	runtime.trace.AddDropped(count)
+}
+
+// failToStart handles failures before a task exists. Derive both exit code and
+// terminal presentation from one classification so share and get stay aligned.
 func (runtime *commandRuntime) failToStart(cause error) int {
-	event, err := commandprojection.ProjectStartFailure(runtime.command, cause)
-	if err != nil {
-		runtime.ReportObservationRejection(appobs.ObserverLossCommandAdapter,
-			commandprojection.ObserverLossReason(err), commandprojection.ProjectionRejection(err))
-		return ExitFailure
+	failure := classifyFailure(cause)
+	exit := ExitFailure
+	switch failure.Code {
+	case engine.FailureNetworkUnavailable:
+		exit = ExitNetwork
+	case engine.FailureInvalidInput, engine.FailureCapabilityInvalid:
+		exit = ExitUsage
 	}
-	runtime.StageFinalization(event)
-	return int(event.ExitCode())
+	runtime.StageCommandFailure(exit, failure)
+	return exit
 }
 
-// Observe is the bounded, nonblocking ingestion path for provider facts.
-// Lifecycle overload is trace-visible loss; progress intentionally coalesces
-// because intermediate presentation samples carry no command authority.
-func (runtime *commandRuntime) Observe(event clievent.Event) bool {
+func (runtime *commandRuntime) StageCommandFailure(exit int, failure engine.Failure) {
 	if runtime == nil {
-		return false
+		return
 	}
-	runtime.entryMu.Lock()
-	defer runtime.entryMu.Unlock()
-	if runtime.closed {
-		return false
+	if !failure.Valid() {
+		failure = engine.Failure{Code: engine.FailureUnexpected}
 	}
-	if runtime.observerFinalized {
-		if _, progress := event.(appobs.TransferProgress); progress {
-			saturatingAtomicAdd(&runtime.pendingProgressLoss, 1)
-		} else {
-			runtime.addObserverLoss(appobs.ObserverLossCommandAdapter, appobs.ObserverLossRecorderClosed, 1)
-		}
-		runtime.signalReadyLocked()
-		return false
-	}
-	if event == nil || clievent.CommandOf(event) != runtime.command {
-		runtime.addObserverLoss(appobs.ObserverLossCommandAdapter, appobs.ObserverLossEventContract, 1)
-		runtime.signalReadyLocked()
-		return false
-	}
-	if _, terminal := event.(clievent.TerminalEvent); terminal {
-		runtime.addObserverLoss(appobs.ObserverLossCommandAdapter, appobs.ObserverLossEventContract, 1)
-		runtime.signalReadyLocked()
-		return false
-	}
-	_, progress := event.(appobs.TransferProgress)
-	if runtime.entrySequence == ^uint64(0) {
-		if progress {
-			saturatingAtomicAdd(&runtime.pendingProgressLoss, 1)
-		} else {
-			runtime.addObserverLoss(appobs.ObserverLossCommandAdapter, appobs.ObserverLossAdapterCapacityTimeout, 1)
-		}
-		runtime.signalReadyLocked()
-		return false
-	}
-	runtime.entrySequence++
-	queued := queuedCommandEvent{sequence: runtime.entrySequence, event: event}
-	if progress {
-		if runtime.hasObserverProgress {
-			saturatingAtomicAdd(&runtime.pendingProgressLoss, 1)
-		}
-		runtime.observerProgress = queued
-		runtime.hasObserverProgress = true
-		runtime.signalReadyLocked()
-		return true
-	}
-	if runtime.observerLifecycleCount == len(runtime.observerLifecycle) {
-		runtime.addObserverLoss(appobs.ObserverLossCommandAdapter, appobs.ObserverLossAdapterCapacityTimeout, 1)
-		runtime.signalReadyLocked()
-		return false
-	}
-	index := (runtime.observerLifecycleHead + runtime.observerLifecycleCount) % len(runtime.observerLifecycle)
-	runtime.observerLifecycle[index] = queued
-	runtime.observerLifecycleCount++
-	runtime.signalReadyLocked()
-	return true
+	isShare := runtime.command == commandShare
+	runtime.stageTerminal(nil, terminalOutcome{
+		event: "command_failed",
+		level: "error",
+		payload: commandFailedTracePayload{
+			ExitCode: exit,
+			Failure:  failure.DiagnosticValue(),
+		},
+		renderHuman: func(h *humanoutput.Renderer) {
+			h.RenderCommandFailed(isShare, failure)
+		},
+	})
 }
 
-// Publish retains command-authoritative milestones independently of observer
-// capacity. Only command supervisors use this path, so retaining this small set
-// in memory cannot put terminal or trace IO onto provider callback goroutines.
-func (runtime *commandRuntime) Publish(events ...clievent.Event) bool {
-	if runtime == nil || len(events) == 0 {
-		return false
-	}
-	for _, event := range events {
-		if _, terminal := event.(clievent.TerminalEvent); terminal {
-			return false
-		}
-	}
-	runtime.entryMu.Lock()
-	defer runtime.entryMu.Unlock()
-	return runtime.publishLocked(events...)
-}
-
-// Finalize closes observer ingestion and assigns exactly one terminal event its
-// causal sequence. Its trace record remains ordered work; only human rendering
-// is staged until trace sealing.
-func (runtime *commandRuntime) Finalize(terminal clievent.TerminalEvent) bool {
-	return runtime.finalize(nil, terminal)
-}
-
-func (runtime *commandRuntime) finalize(
-	progress *appobs.TransferProgress,
-	terminal clievent.TerminalEvent,
-) bool {
-	if runtime == nil || terminal == nil || clievent.CommandOf(terminal) != runtime.command {
-		return false
-	}
-	runtime.entryMu.Lock()
-	defer runtime.entryMu.Unlock()
-	if runtime.closed || runtime.observerFinalized || runtime.stagedTerminal != nil {
-		return false
-	}
-	events := make([]clievent.Event, 0, 2)
-	if progress != nil {
-		if runtime.command != clievent.CommandGet || clievent.CommandOf(progress) != runtime.command {
-			return false
-		}
-		events = append(events, *progress)
-	}
-	events = append(events, terminal)
-	loss := runtime.collectPendingLossLocked(true)
-	if !runtime.publishLocked(events...) {
-		return false
-	}
-	runtime.observerFinalized = true
-	runtime.scheduleUpstreamLossLocked(loss)
-	return true
-}
-
-// StageFinalization retains a decided terminal authority while product owners
-// stop and complete their streams. It accepts no ordinary events by design.
-func (runtime *commandRuntime) StageFinalization(terminal clievent.TerminalEvent) bool {
-	if runtime == nil || terminal == nil || clievent.CommandOf(terminal) != runtime.command {
-		return false
-	}
-	runtime.entryMu.Lock()
-	defer runtime.entryMu.Unlock()
-	if runtime.closed || runtime.observerFinalized || runtime.stagedTerminal != nil {
-		return false
-	}
-	runtime.stagedTerminal = terminal
-	return true
-}
-
-func (runtime *commandRuntime) StageTransferFinalization(
-	progress appobs.TransferProgress,
-	terminal clievent.TransferSettled,
-) bool {
-	if runtime == nil || runtime.command != clievent.CommandGet {
-		return false
-	}
-	runtime.entryMu.Lock()
-	defer runtime.entryMu.Unlock()
-	if runtime.closed || runtime.observerFinalized || runtime.stagedTerminal != nil {
-		return false
-	}
-	runtime.stagedFinalProgress = &progress
-	runtime.stagedTerminal = terminal
-	return true
-}
-
-func (runtime *commandRuntime) FinalizeStaged() bool {
+func (runtime *commandRuntime) StageShareResult(exit int, result humanoutput.ShareResult) {
 	if runtime == nil {
-		return false
+		return
 	}
-	runtime.entryMu.Lock()
-	if runtime.closed || runtime.observerFinalized || runtime.stagedTerminal == nil {
-		runtime.entryMu.Unlock()
-		return false
+	level := "info"
+	if !result.StoppedCleanly {
+		level = "error"
 	}
-	progress := runtime.stagedFinalProgress
-	terminal := runtime.stagedTerminal
-	runtime.stagedFinalProgress = nil
-	runtime.stagedTerminal = nil
-	loss := runtime.collectPendingLossLocked(true)
-	events := make([]clievent.Event, 0, 2)
-	if progress != nil {
-		events = append(events, *progress)
+	publication := "unpublished"
+	if result.Published {
+		publication = "published"
 	}
-	events = append(events, terminal)
-	if !runtime.publishLocked(events...) {
-		runtime.stagedFinalProgress = progress
-		runtime.stagedTerminal = terminal
-		runtime.entryMu.Unlock()
-		return false
+	payload := sharingStoppedTracePayload{
+		Publication:     publication,
+		ExitCode:        exit,
+		ResultElapsedMS: strconv.FormatInt(max(result.Elapsed.Milliseconds(), 0), 10),
+		StoppedCleanly:  result.StoppedCleanly,
 	}
-	runtime.observerFinalized = true
-	runtime.scheduleUpstreamLossLocked(loss)
-	runtime.entryMu.Unlock()
-	return true
+	if result.Failure != nil && result.Failure.Valid() {
+		val := result.Failure.DiagnosticValue()
+		payload.Failure = &val
+	}
+	runtime.stageTerminal(nil, terminalOutcome{
+		event:   "sharing_stopped",
+		level:   level,
+		payload: payload,
+		renderHuman: func(h *humanoutput.Renderer) {
+			h.RenderShareResult(result)
+		},
+	})
 }
 
-func (runtime *commandRuntime) publishLocked(events ...clievent.Event) bool {
-	if runtime.closed || runtime.observerFinalized ||
-		uint64(len(events)) > ^uint64(0)-runtime.entrySequence {
-		return false
+func (runtime *commandRuntime) StageTransferResult(
+	finalProgress engine.TransferProgress,
+	exit int,
+	result humanoutput.TransferResult,
+	connectivity downloadmetrics.Snapshot,
+) {
+	if runtime == nil {
+		return
 	}
-	for _, event := range events {
-		if event == nil || clievent.CommandOf(event) != runtime.command {
-			return false
+	level := "info"
+	switch result.Status {
+	case humanoutput.ResultPartial, humanoutput.ResultPaused, humanoutput.ResultStopped:
+		level = "warn"
+	case humanoutput.ResultFailed:
+		level = "error"
+	}
+	drift := "none"
+	if result.SourceDrift {
+		drift = "source"
+	}
+	payload := transferSettledTracePayload{
+		SourceOmittedEntries: strconv.FormatUint(result.SourceOmittedEntries, 10),
+		ResultStatus:         string(result.Status),
+		ExitCode:             exit,
+		Drift:                drift,
+		ResultElapsedMS:      strconv.FormatInt(max(result.Elapsed.Milliseconds(), 0), 10),
+		DestinationAdjusted:  result.DestinationAdjusted,
+		FileOutcomes:         fileOutcomesTracePayload(result.Files),
+		DirectoryFailures:    strconv.FormatUint(result.DirectoryFailures, 10),
+		OmittedDiagnostics:   strconv.FormatUint(result.OmittedDiagnostics, 10),
+		PublishedBytes:       strconv.FormatUint(result.PublishedBytes, 10),
+		CountersExact:        result.CountersExact,
+	}
+	if connectivity.DownloadID != "" {
+		payload.DownloadConnectivity = buildDownloadConnectivityPayload(connectivity)
+	}
+	if result.Failure != nil && result.Failure.Valid() {
+		val := result.Failure.DiagnosticValue()
+		payload.Failure = &val
+	}
+	progressCopy := finalProgress
+	runtime.stageTerminal(&progressCopy, terminalOutcome{
+		event:   "transfer_settled",
+		level:   level,
+		payload: payload,
+		renderHuman: func(h *humanoutput.Renderer) {
+			h.RenderTransferResult(result)
+		},
+	})
+}
+
+func (runtime *commandRuntime) stageTerminal(finalProgress *engine.TransferProgress, outcome terminalOutcome) {
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	if runtime.stagedTerminal != nil {
+		return
+	}
+	runtime.stagedFinalProgress = finalProgress
+	runtime.stagedTerminal = &outcome
+}
+
+// Close flushes producer diagnostics before recording the staged terminal
+// event, seals the trace, reports incomplete tracing at most once, and renders
+// the terminal human summary last so it is always the semantic suffix.
+func (runtime *commandRuntime) Close() {
+	if runtime == nil {
+		return
+	}
+	runtime.closeOnce.Do(func() {
+		if runtime.diagnosticStream != nil {
+			completion := runtime.diagnosticStream.Close()
+			runtime.AddDropped(completion.CapacityDropped)
+			<-runtime.diagDone
 		}
-	}
-	for _, event := range events {
-		runtime.entrySequence++
-		runtime.commandPublications = append(runtime.commandPublications, queuedCommandEvent{
-			sequence: runtime.entrySequence,
-			event:    event,
-		})
-	}
-	runtime.signalReadyLocked()
-	return true
+		runtime.mu.Lock()
+		finalProgress := runtime.stagedFinalProgress
+		terminal := runtime.stagedTerminal
+		runtime.mu.Unlock()
+
+		if finalProgress != nil {
+			runtime.human.RenderProgress(*finalProgress)
+			runtime.recordSource(*finalProgress)
+		}
+		if terminal != nil && runtime.trace != nil {
+			runtime.trace.RecordRun(diaglog.RunRecord{
+				Level:   terminal.level,
+				Event:   terminal.event,
+				Payload: terminal.payload,
+			})
+		}
+		if runtime.trace != nil {
+			status := runtime.trace.CloseRun()
+			if !status.Complete() {
+				runtime.human.RenderTraceIncomplete(status.WriterFailed)
+			}
+		}
+		if terminal != nil {
+			terminal.renderHuman(runtime.human)
+			return
+		}
+		runtime.human.FinishProgress()
+	})
 }
 
-// PublishTransferFinalization makes the frozen final progress and settlement
-// adjacent command publications after the command has quiesced its producers.
-func (runtime *commandRuntime) PublishTransferFinalization(
-	progress appobs.TransferProgress,
-	settlement clievent.TransferSettled,
-) bool {
-	if runtime == nil || runtime.command != clievent.CommandGet {
-		return false
+func (runtime *commandRuntime) recordSource(source diagnostics.Source) {
+	if runtime == nil || runtime.trace == nil || source == nil {
+		return
 	}
-	return runtime.finalize(&progress, settlement)
+	rec := source.DiagnosticRecord()
+	if !rec.Valid() {
+		return
+	}
+	entry := diaglog.RunRecord{
+		Level:   sourceRecordLevel(rec),
+		Event:   rec.Name(),
+		Payload: rec.Payload(),
+	}
+	if corr := rec.Correlation(); corr.Present() {
+		entry.Correlation = corr
+	}
+	runtime.trace.RecordRun(entry)
 }
 
-func (runtime *commandRuntime) signalReadyLocked() {
-	select {
-	case runtime.ready <- struct{}{}:
+func sourceRecordLevel(rec diagnostics.Record) string {
+	switch rec.Name() {
+	case "warning", "fallback", "source_omissions":
+		return "warn"
+	case "relay_recovering":
+		if rec.Payload().Get("failure").Present() {
+			return "warn"
+		}
+		return "info"
+	case "transfer_progress", "lane_adopted", "engine_task_observed":
+		return "debug"
 	default:
+		return "info"
 	}
 }
 
@@ -456,158 +493,155 @@ func (runtime *commandRuntime) Clock() commandClock {
 	return runtime.clock
 }
 
-func (runtime *commandRuntime) Close() {
-	if runtime == nil {
-		return
-	}
-	runtime.closeOnce.Do(func() {
-		if runtime.diagnosticStream != nil {
-			completion := runtime.diagnosticStream.Close()
-			runtime.ReportObserverLoss(appobs.ObserverLossCommandAdapter, appobs.ObserverLossStreamCapacity, completion.CapacityDropped)
-		}
-		runtime.entryMu.Lock()
-		runtime.closed = true
-		close(runtime.closing)
-		runtime.entryMu.Unlock()
-	})
-	<-runtime.done
-}
-
-func (runtime *commandRuntime) run() {
-	defer close(runtime.done)
-	health := runtime.traceHealth()
-	for {
-		if event := runtime.takeNext(); event != nil {
-			runtime.dispatch(event)
-			runtime.reportPendingLoss()
-			continue
-		}
-		select {
-		case record, open := <-runtime.diagnosticRecords:
-			if !open {
-				runtime.diagnosticRecords = nil
-				continue
-			}
-			runtime.dispatch(clievent.Diagnostic{Owner: runtime.command, Record: record})
-		case <-runtime.ready:
-			runtime.reportPendingLoss()
-		case event, open := <-health:
-			if !open {
-				health = nil
-				continue
-			}
-			runtime.warnTraceIncomplete(event)
-		case <-runtime.closing:
-			runtime.drain()
-			return
-		}
-	}
-}
-
-func (runtime *commandRuntime) dispatch(event clievent.Event) {
-	if terminal, ok := event.(clievent.TerminalEvent); ok {
-		runtime.presentationTerminal = terminal
-		return
-	} else {
-		_ = runtime.human.Render(event)
-	}
-	if runtime.trace != nil {
-		_ = runtime.trace.Record(event)
-	}
-}
-
-func (runtime *commandRuntime) takeNext() clievent.Event {
-	runtime.entryMu.Lock()
-	defer runtime.entryMu.Unlock()
-
-	const (
-		noEntry uint8 = iota
-		observerLifecycleEntry
-		observerProgressEntry
-		commandPublicationEntry
-	)
-	source := noEntry
-	var earliest uint64
-	selectEntry := func(candidate uint8, sequence uint64) {
-		if source == noEntry || sequence < earliest {
-			source = candidate
-			earliest = sequence
-		}
-	}
-	if runtime.observerLifecycleCount != 0 {
-		selectEntry(
-			observerLifecycleEntry,
-			runtime.observerLifecycle[runtime.observerLifecycleHead].sequence,
-		)
-	}
-	if runtime.hasObserverProgress {
-		selectEntry(observerProgressEntry, runtime.observerProgress.sequence)
-	}
-	if runtime.commandPublicationHead < len(runtime.commandPublications) {
-		selectEntry(
-			commandPublicationEntry,
-			runtime.commandPublications[runtime.commandPublicationHead].sequence,
-		)
-	}
-
-	switch source {
-	case observerLifecycleEntry:
-		event := runtime.observerLifecycle[runtime.observerLifecycleHead].event
-		runtime.observerLifecycle[runtime.observerLifecycleHead] = queuedCommandEvent{}
-		runtime.observerLifecycleHead = (runtime.observerLifecycleHead + 1) % len(runtime.observerLifecycle)
-		runtime.observerLifecycleCount--
-		return event
-	case observerProgressEntry:
-		event := runtime.observerProgress.event
-		runtime.observerProgress = queuedCommandEvent{}
-		runtime.hasObserverProgress = false
-		return event
-	case commandPublicationEntry:
-		event := runtime.commandPublications[runtime.commandPublicationHead].event
-		runtime.commandPublications[runtime.commandPublicationHead] = queuedCommandEvent{}
-		runtime.commandPublicationHead++
-		if runtime.commandPublicationHead == len(runtime.commandPublications) {
-			runtime.commandPublications = nil
-			runtime.commandPublicationHead = 0
-		}
-		return event
-	default:
+func (runtime *commandRuntime) HumanOutputError() error {
+	if runtime == nil || runtime.canvas == nil {
 		return nil
 	}
+	return runtime.canvas.Err()
 }
 
-func (runtime *commandRuntime) drain() {
-	// Close freezes the bounded diagnostic stream before drain. Product events
-	// have their own queue; a diagnostic flood cannot displace their state.
-	if runtime.diagnosticStream != nil {
-		for record := range runtime.diagnosticStream.Records() {
-			runtime.dispatch(clievent.Diagnostic{Owner: runtime.command, Record: record})
-		}
-	}
+func (runtime *commandRuntime) detailedDiagnosticsEnabled() bool {
+	return runtime != nil && runtime.detailedDiagnostics
+}
 
-	for {
-		runtime.reportPendingLoss()
-		event := runtime.takeNext()
-		if event == nil {
-			break
-		}
-		runtime.dispatch(event)
+func (runtime *commandRuntime) traceRecordingEnabled() bool {
+	return runtime != nil && runtime.trace != nil
+}
+
+func (runtime *commandRuntime) diagnosticSink() diagnostics.Sink {
+	if runtime == nil || runtime.diagnosticStream == nil {
+		return diagnostics.Sink{}
 	}
-	if runtime.trace != nil {
-		if runtime.presentationTerminal != nil {
-			runtime.trace.Record(runtime.presentationTerminal)
+	return runtime.diagnosticStream.Sink()
+}
+
+func classifyFailure(cause error) engine.Failure {
+	if f, ok := engine.DescribeFailure(cause); ok {
+		return f
+	}
+	return engine.Failure{Code: engine.FailureUnexpected}
+}
+
+func exitCodeForClass(class engine.FailureClass) int {
+	switch class {
+	case engine.FailureNone:
+		return ExitOK
+	case engine.FailureUsage:
+		return ExitUsage
+	case engine.FailureNetwork:
+		return ExitNetwork
+	case engine.FailureSourceDrift:
+		return ExitDrift
+	default:
+		return ExitFailure
+	}
+}
+
+type sharingSubjectPayload struct {
+	SubjectKind   string `json:"subject_kind"`
+	SelectedItems string `json:"selected_items"`
+	FileBytes     string `json:"file_bytes,omitempty"`
+}
+
+func sharingSubjectTracePayload(subject humanoutput.SharingSubject) sharingSubjectPayload {
+	switch subject.Kind {
+	case humanoutput.SharingFile:
+		return sharingSubjectPayload{
+			SubjectKind:   "file",
+			SelectedItems: "1",
+			FileBytes:     strconv.FormatUint(subject.FileBytes, 10),
 		}
-		status := runtime.trace.Close()
-		runtime.drainTraceHealth()
-		if !status.Complete {
-			runtime.warnTraceIncomplete(traceIncompleteFromStatus(runtime.command, status))
+	case humanoutput.SharingDirectory:
+		return sharingSubjectPayload{
+			SubjectKind:   "directory",
+			SelectedItems: "1",
+		}
+	default:
+		return sharingSubjectPayload{
+			SubjectKind:   "multiple",
+			SelectedItems: strconv.FormatUint(subject.SelectedItems, 10),
 		}
 	}
-	if runtime.presentationTerminal != nil {
-		_ = runtime.human.RenderTerminal(runtime.presentationTerminal)
-		return
+}
+
+type networkSetupTracePayload struct {
+	Decision             string `json:"decision"`
+	Executable           string `json:"executable,omitempty"`
+	ConfiguredExecutable string `json:"configured_executable,omitempty"`
+	Error                string `json:"error,omitempty"`
+	SuggestSetup         bool   `json:"suggest_setup"`
+}
+
+type commandFailedTracePayload struct {
+	ExitCode int               `json:"exit_code"`
+	Failure  diagnostics.Value `json:"failure"`
+}
+
+type sharingStoppedTracePayload struct {
+	Publication     string             `json:"publication"`
+	ExitCode        int                `json:"exit_code"`
+	ResultElapsedMS string             `json:"result_elapsed_ms"`
+	StoppedCleanly  bool               `json:"stopped_cleanly"`
+	Failure         *diagnostics.Value `json:"failure,omitempty"`
+}
+
+type downloadConnectivityTracePayload struct {
+	DownloadID            string   `json:"download_id"`
+	FirstDirectElapsedMS  *string  `json:"first_direct_elapsed_ms"`
+	DirectBytes           string   `json:"direct_bytes"`
+	ApplicationRelayBytes string   `json:"application_relay_bytes"`
+	UnknownBytes          string   `json:"unknown_bytes"`
+	DirectFraction        *float64 `json:"direct_fraction"`
+	FallbackStallMS       string   `json:"fallback_stall_ms"`
+	Incomplete            bool     `json:"incomplete"`
+	Final                 bool     `json:"final"`
+}
+
+func buildDownloadConnectivityPayload(m downloadmetrics.Snapshot) *downloadConnectivityTracePayload {
+	summary := &downloadConnectivityTracePayload{
+		DownloadID:            m.DownloadID,
+		DirectBytes:           strconv.FormatUint(m.DirectBytes, 10),
+		ApplicationRelayBytes: strconv.FormatUint(m.ApplicationRelayBytes, 10),
+		UnknownBytes:          strconv.FormatUint(m.UnknownBytes, 10),
+		DirectFraction:        m.DirectFraction,
+		FallbackStallMS:       strconv.FormatInt(max(m.FallbackStall.Milliseconds(), 0), 10),
+		Incomplete:            m.Incomplete,
+		Final:                 m.Final,
 	}
-	runtime.canvas.FinishProgress()
+	if m.FirstDirectElapsed != nil {
+		value := strconv.FormatInt(max(m.FirstDirectElapsed.Milliseconds(), 0), 10)
+		summary.FirstDirectElapsedMS = &value
+	}
+	return summary
+}
+
+type transferSettledTracePayload struct {
+	SourceOmittedEntries string                            `json:"source_omitted_entries"`
+	DownloadConnectivity *downloadConnectivityTracePayload `json:"download_connectivity,omitempty"`
+	ResultStatus         string                            `json:"result_status"`
+	ExitCode             int                               `json:"exit_code"`
+	Drift                string                            `json:"drift"`
+	ResultElapsedMS      string                            `json:"result_elapsed_ms"`
+	DestinationAdjusted  bool                              `json:"destination_adjusted"`
+	FileOutcomes         map[string]string                 `json:"file_outcomes"`
+	DirectoryFailures    string                            `json:"directory_failures"`
+	OmittedDiagnostics   string                            `json:"omitted_diagnostics"`
+	PublishedBytes       string                            `json:"published_bytes"`
+	CountersExact        bool                              `json:"counters_exact"`
+	Failure              *diagnostics.Value                `json:"failure,omitempty"`
+}
+
+func fileOutcomesTracePayload(f transfer.FileOutcomeSummary) map[string]string {
+	return map[string]string{
+		"downloaded_files":           strconv.FormatUint(f.DownloadedFiles, 10),
+		"resumed_files":              strconv.FormatUint(f.ResumedFiles, 10),
+		"previously_published_files": strconv.FormatUint(f.PreviouslyPublishedFiles, 10),
+		"paused_files":               strconv.FormatUint(f.PausedFiles, 10),
+		"collision_files":            strconv.FormatUint(f.CollisionFiles, 10),
+		"item_blocked_files":         strconv.FormatUint(f.ItemBlockedFiles, 10),
+		"failed_files":               strconv.FormatUint(f.FailedFiles, 10),
+		"modified_time_warnings":     strconv.FormatUint(f.ModifiedTimeWarnings, 10),
+	}
 }
 
 // Presentation and engine adapters draw their timers and timestamps from the
@@ -660,10 +694,3 @@ type systemCommandTicker struct{ ticker *time.Ticker }
 
 func (ticker systemCommandTicker) C() <-chan time.Time { return ticker.ticker.C }
 func (ticker systemCommandTicker) Stop()               { ticker.ticker.Stop() }
-
-func (runtime *commandRuntime) diagnosticSink() diagnostics.Sink {
-	if runtime == nil || runtime.diagnosticStream == nil {
-		return diagnostics.Sink{}
-	}
-	return runtime.diagnosticStream.Sink()
-}

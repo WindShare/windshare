@@ -11,11 +11,6 @@ func sourceImportViolation(source, dependency string) string {
 	}
 
 	switch {
-	case strings.HasPrefix(source, "engine/observation/"):
-		// Public facts cannot inherit the engine's permission to assemble networking.
-		if implementationPackage(dependency) {
-			return "observation contracts cannot depend on networking or storage implementations"
-		}
 	case engine:
 		if storageImplementation(dependency) {
 			return "shared engine code must receive filesystem adapters from its host"

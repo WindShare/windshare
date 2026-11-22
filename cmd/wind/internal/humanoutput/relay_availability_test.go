@@ -5,28 +5,26 @@ import (
 	"testing"
 	"time"
 
-	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/terminalcanvas"
-	appobs "github.com/windshare/windshare/engine/observation"
+	"github.com/windshare/windshare/engine"
 )
 
 func TestDefaultRelayOutputDistinguishesJoinAvailabilityAndShowsRecovery(t *testing.T) {
 	harness := newRenderHarness(t, terminalcanvas.Capabilities{}, false)
-	origin, _ := appobs.NewRelayOrigin(appobs.RelayWSS, "relay.example", 443)
-	for _, state := range []struct {
-		available, total, terminal uint32
-		ever                       bool
-	}{{0, 2, 0, false}, {1, 2, 0, true}, {0, 2, 0, true}, {0, 2, 2, true}} {
-		event, _ := appobs.NewRelayAvailability(state.available, state.total, state.terminal, state.ever)
-		if err := harness.renderer.Render(event); err != nil {
-			t.Fatal(err)
-		}
+	origin := engine.RelayOrigin{Scheme: "wss", Host: "relay.example", Port: 443}
+	for _, state := range []engine.RelayAvailability{
+		{Available: 0, Total: 2, Terminal: 0, EverReady: false},
+		{Available: 1, Total: 2, Terminal: 0, EverReady: true},
+		{Available: 0, Total: 2, Terminal: 0, EverReady: true},
+		{Available: 0, Total: 2, Terminal: 2, EverReady: true},
+	} {
+		harness.renderer.RenderRelayAvailability(state)
 	}
-	for _, state := range []appobs.RelayRecoveryState{appobs.RelayRecoveryWaiting, appobs.RelayRecoverySucceeded} {
-		event, _ := clievent.NewRelayRecoveryObservation(clievent.CommandShare, origin, 70, state, appobs.Failure{}, appobs.RelayRecoveryDetails{Generation: 2, Slow: true, Resume: true, NextDelay: time.Second})
-		if err := harness.renderer.Render(event); err != nil {
-			t.Fatal(err)
-		}
+	for _, state := range []engine.RelayRecoveryState{engine.RelayRecoveryWaiting, engine.RelayRecoverySucceeded} {
+		harness.renderer.RenderRelayRecovery(engine.RelayRecovery{
+			Origin: origin, Attempt: 70, State: state,
+			Generation: 2, Slow: true, Resume: true, NextDelay: time.Second,
+		})
 	}
 	output := harness.buffer.String()
 	for _, expected := range []string{"before publishing the link", "1 of 2 relays", "Healthy direct transfers can continue", "all relays need attention", "retrying automatically", "Relay connection restored: relay.example:443"} {

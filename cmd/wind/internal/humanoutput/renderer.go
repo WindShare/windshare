@@ -4,10 +4,13 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/terminalcanvas"
-
-	appobs "github.com/windshare/windshare/engine/observation"
+	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/diagnostics"
+	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
+	"github.com/windshare/windshare/engine"
+	"github.com/windshare/windshare/internal/platformsetup"
 )
 
 var ErrInvalidConfig = errors.New("human output configuration is invalid")
@@ -25,7 +28,7 @@ type Config struct {
 
 // Renderer serializes command events into semantic terminal lines. Writer
 // failures remain observable only through Canvas.Err and never become command
-// failures through Render.
+// failures.
 type Renderer struct {
 	mu           sync.Mutex
 	canvas       *terminalcanvas.Canvas
@@ -35,12 +38,12 @@ type Renderer struct {
 	verbose      bool
 
 	rate                   rateWindow
-	receiveOperation       appobs.ReceiveOperationID
-	transferJob            appobs.TransferJobID
+	receiveOperation       receivecontract.OperationID
+	transferJob            transfer.TransferJobID
 	hasProgressIdentity    bool
-	redirectedDiscovery    appobs.DiscoveryStatus
+	redirectedDiscovery    transfer.DiscoveryStatus
 	hasRedirectedDiscovery bool
-	lastProgress           appobs.ProgressSnapshot
+	lastProgress           transfer.ReceiveProgressSnapshot
 	hasLastProgress        bool
 }
 
@@ -52,51 +55,6 @@ func New(config Config) (*Renderer, error) {
 		canvas: config.Canvas, capabilities: config.Capabilities,
 		clock: config.Clock, cellWidth: config.CellWidth, verbose: config.Verbose,
 	}, nil
-}
-
-// Render consumes immutable application facts and command presentation results.
-// Calls are serialized because rate samples and redirected phase transitions are
-// command-scoped state even when producers happen to be concurrent.
-func (renderer *Renderer) Render(event clievent.Event) error {
-	if renderer == nil || event == nil {
-		return clievent.ErrInvalidEvent
-	}
-	if _, terminal := event.(clievent.TerminalEvent); terminal {
-		return clievent.ErrInvalidEvent
-	}
-	renderer.mu.Lock()
-	defer renderer.mu.Unlock()
-
-	capabilities := renderer.capabilities.Snapshot()
-	return renderEvent(event, eventVisitor{renderer: renderer, capabilities: capabilities})
-}
-
-// RenderTerminal is intentionally separate from Render: a running command can
-// drain ordinary work without accidentally presenting authority before trace
-// sealing has made diagnostic completeness final.
-func (renderer *Renderer) RenderTerminal(event clievent.TerminalEvent) error {
-	if renderer == nil || event == nil {
-		return clievent.ErrInvalidEvent
-	}
-	renderer.mu.Lock()
-	defer renderer.mu.Unlock()
-	return renderEvent(event, eventVisitor{
-		renderer:     renderer,
-		capabilities: renderer.capabilities.Snapshot(),
-	})
-}
-
-// RenderTracePath reports only local human state. The generated path is escaped
-// before layout and is never modeled as a trace event, avoiding self-disclosure
-// in the NDJSON artifact.
-func (renderer *Renderer) RenderTracePath(path string) error {
-	if renderer == nil || path == "" {
-		return clievent.ErrInvalidEvent
-	}
-	renderer.mu.Lock()
-	defer renderer.mu.Unlock()
-	renderer.insert(terminalcanvas.Plain("Trace: " + escapedDisplay(path)))
-	return nil
 }
 
 func (renderer *Renderer) insert(lines ...terminalcanvas.Line) {
@@ -112,244 +70,316 @@ func (renderer *Renderer) finish(lines ...terminalcanvas.Line) {
 	renderer.hasLastProgress = false
 }
 
-type eventVisitor struct {
-	renderer     *Renderer
-	capabilities terminalcanvas.Capabilities
+func (renderer *Renderer) mainVisible(caps terminalcanvas.Capabilities) bool {
+	return caps.Interactive || renderer.verbose
 }
 
-func (visitor eventVisitor) mainVisible() bool {
-	return visitor.capabilities.Interactive || visitor.renderer.verbose
+func (renderer *Renderer) RenderReady() {
+	if renderer == nil {
+		return
+	}
+	renderer.mu.Lock()
+	defer renderer.mu.Unlock()
+	caps := renderer.capabilities.Snapshot()
+	if !renderer.mainVisible(caps) {
+		return
+	}
+	symbols := SelectSymbols(caps.Unicode)
+	renderer.insert(
+		terminalcanvas.Plain(""),
+		statusLine(symbols.Ready, "WindShare is ready", terminalcanvas.StyleSuccess),
+		terminalcanvas.Plain(""),
+	)
 }
 
-func (visitor eventVisitor) verboseVisible() bool {
-	return visitor.renderer.verbose
+func (renderer *Renderer) RenderSharingSubject(subject SharingSubject) {
+	if renderer == nil {
+		return
+	}
+	renderer.mu.Lock()
+	defer renderer.mu.Unlock()
+	caps := renderer.capabilities.Snapshot()
+	if !renderer.mainVisible(caps) {
+		return
+	}
+	renderer.insert(formatSharingSubject(subject, SelectSymbols(caps.Unicode)))
 }
 
-func (visitor eventVisitor) symbols() Symbols {
-	return SelectSymbols(visitor.capabilities.Unicode)
-}
-
-func (visitor eventVisitor) VisitReady(appobs.Ready) error {
-	if visitor.mainVisible() {
-		visitor.renderer.insert(
+func (renderer *Renderer) RenderRelayConnected(isShare bool) {
+	if renderer == nil {
+		return
+	}
+	renderer.mu.Lock()
+	defer renderer.mu.Unlock()
+	caps := renderer.capabilities.Snapshot()
+	symbols := SelectSymbols(caps.Unicode)
+	if isShare && renderer.mainVisible(caps) {
+		renderer.insert(
+			statusLine(symbols.Arrow, "Relay: Connected", terminalcanvas.StyleAccent),
 			terminalcanvas.Plain(""),
-			statusLine(visitor.symbols().Ready, "WindShare is ready", terminalcanvas.StyleSuccess),
-			terminalcanvas.Plain(""),
+			statusLine("", "Waiting for receivers"+symbols.Separator+"Press Ctrl+C to stop", terminalcanvas.StyleMuted),
 		)
+	} else if !isShare && renderer.verbose {
+		renderer.insert(statusLine(symbols.Relay, "Relay connected", terminalcanvas.StyleAccent))
 	}
-	return nil
 }
 
-func (visitor eventVisitor) VisitSharingSubjectSelected(event appobs.SharingSubjectSelected) error {
-	if visitor.mainVisible() {
-		visitor.renderer.insert(formatSharingSubject(event.Subject(), visitor.symbols()))
+func (renderer *Renderer) RenderRelayRecovery(event engine.RelayRecovery) {
+	if renderer == nil {
+		return
 	}
-	return nil
-}
-
-func (visitor eventVisitor) VisitRelayConnected(event appobs.RelayConnected) error {
-	if clievent.CommandOf(event) == clievent.CommandShare && visitor.mainVisible() {
-		visitor.renderer.insert(
-			statusLine(visitor.symbols().Arrow, "Relay: Connected", terminalcanvas.StyleAccent),
-			terminalcanvas.Plain(""),
-			statusLine("", "Waiting for receivers"+visitor.symbols().Separator+"Press Ctrl+C to stop", terminalcanvas.StyleMuted),
-		)
-	} else if clievent.CommandOf(event) == clievent.CommandGet && visitor.verboseVisible() {
-		visitor.renderer.insert(statusLine(visitor.symbols().Relay, "Relay connected", terminalcanvas.StyleAccent))
-	}
-	return nil
-}
-
-func (visitor eventVisitor) VisitRelayRecovering(event appobs.RelayRecovering) error {
-	if !visitor.verboseVisible() {
-		details, detailed := event.Details()
-		if event.State() == appobs.RelayRecoveryStarted || (event.State() == appobs.RelayRecoveryFailed && detailed && !details.Terminal) {
-			return nil
+	renderer.mu.Lock()
+	defer renderer.mu.Unlock()
+	if !renderer.verbose {
+		if event.State == engine.RelayRecoveryStarted {
+			return
+		}
+		hasDetails := event.Generation > 0 || event.Slow || event.Resume || event.NextDelay > 0
+		if event.State == engine.RelayRecoveryFailed && hasDetails && !event.Terminal &&
+			event.WaitReason == engine.RelayWaitConnection && event.Authorization == 0 &&
+			(event.Failure == nil || event.Failure.Code != engine.FailureRelayStopped) {
+			return
 		}
 	}
-	visitor.renderer.insert(formatRelayRecovery(event, visitor.symbols()))
-	return nil
+	caps := renderer.capabilities.Snapshot()
+	renderer.insert(formatRelayRecovery(event, SelectSymbols(caps.Unicode)))
 }
 
-func (visitor eventVisitor) VisitRelayAvailability(event appobs.RelayAvailability) error {
-	visitor.renderer.insert(formatRelayAvailability(event, visitor.symbols()))
-	return nil
-}
-
-func (visitor eventVisitor) VisitContentPathSelected(event appobs.ContentPathSelected) error {
-	if visitor.mainVisible() {
-		visitor.renderer.insert(formatContentPath(event.Path(), visitor.symbols()))
+func (renderer *Renderer) RenderRelayAvailability(event engine.RelayAvailability) {
+	if renderer == nil {
+		return
 	}
-	return nil
+	renderer.mu.Lock()
+	defer renderer.mu.Unlock()
+	caps := renderer.capabilities.Snapshot()
+	renderer.insert(formatRelayAvailability(event, SelectSymbols(caps.Unicode)))
 }
 
-func (visitor eventVisitor) VisitFallback(event appobs.Fallback) error {
-	visitor.renderer.insert(formatFallback(event, visitor.symbols()))
-	return nil
+func (renderer *Renderer) RenderContentPath(path engine.ContentPath) {
+	if renderer == nil {
+		return
+	}
+	renderer.mu.Lock()
+	defer renderer.mu.Unlock()
+	caps := renderer.capabilities.Snapshot()
+	if !renderer.mainVisible(caps) {
+		return
+	}
+	renderer.insert(formatContentPath(path, SelectSymbols(caps.Unicode)))
 }
 
-func (visitor eventVisitor) VisitTransferProgress(event appobs.TransferProgress) error {
-	renderer := visitor.renderer
-	snapshot := event.Snapshot()
+func (renderer *Renderer) RenderFallback(event engine.Fallback) {
+	if renderer == nil {
+		return
+	}
+	renderer.mu.Lock()
+	defer renderer.mu.Unlock()
+	caps := renderer.capabilities.Snapshot()
+	renderer.insert(formatFallback(event, SelectSymbols(caps.Unicode)))
+}
+
+func (renderer *Renderer) RenderProgress(event engine.TransferProgress) {
+	if renderer == nil {
+		return
+	}
+	renderer.mu.Lock()
+	defer renderer.mu.Unlock()
+	caps := renderer.capabilities.Snapshot()
+	snapshot := event.Snapshot
 	renderer.lastProgress = snapshot
 	renderer.hasLastProgress = true
-	if !renderer.hasProgressIdentity || renderer.receiveOperation != event.ReceiveOperationID() ||
-		renderer.transferJob != event.TransferJobID() {
+	if !renderer.hasProgressIdentity || renderer.receiveOperation != event.Operation ||
+		renderer.transferJob != event.Job {
 		renderer.rate.reset()
-		renderer.receiveOperation = event.ReceiveOperationID()
-		renderer.transferJob = event.TransferJobID()
+		renderer.receiveOperation = event.Operation
+		renderer.transferJob = event.Job
 		renderer.hasProgressIdentity = true
 		renderer.hasRedirectedDiscovery = false
 	}
 
-	if !visitor.capabilities.Interactive {
-		if !renderer.verbose || renderer.hasRedirectedDiscovery && renderer.redirectedDiscovery == snapshot.Discovery() {
-			return nil
+	if !caps.Interactive {
+		if !renderer.verbose || renderer.hasRedirectedDiscovery && renderer.redirectedDiscovery == snapshot.Discovery {
+			return
 		}
-		renderer.redirectedDiscovery = snapshot.Discovery()
+		renderer.redirectedDiscovery = snapshot.Discovery
 		renderer.hasRedirectedDiscovery = true
-		renderer.insert(formatDiscoveryMilestone(snapshot, visitor.symbols()))
-		return nil
+		renderer.insert(formatDiscoveryMilestone(snapshot, SelectSymbols(caps.Unicode)))
+		return
 	}
 
 	estimate := renderer.rate.observe(renderer.clock.Now(), snapshot)
-	renderer.canvas.ReplaceProgress(FormatProgress(snapshot, ProgressMetrics{
+	renderer.canvas.ReplaceProgress(FormatProgress(snapshot, event.CapacityWaitVisible, ProgressMetrics{
 		RateBytesPerSecond: estimate.bytesPerSecond,
 		RateValid:          estimate.valid,
 		RateStable:         estimate.stable,
 	}, ProgressLayout{
-		Columns:   visitor.capabilities.Columns,
-		Unicode:   visitor.capabilities.Unicode,
+		Columns:   caps.Columns,
+		Unicode:   caps.Unicode,
 		CellWidth: renderer.cellWidth,
 	}))
-	return nil
 }
 
-func (visitor eventVisitor) VisitWarning(event appobs.Warning) error {
-	visitor.renderer.insert(failureLine("Warning", event.Failure(), visitor.symbols().Warning, terminalcanvas.StyleWarning))
-	return nil
+func (renderer *Renderer) RenderWarning(failure engine.Failure) {
+	if renderer == nil {
+		return
+	}
+	renderer.mu.Lock()
+	defer renderer.mu.Unlock()
+	caps := renderer.capabilities.Snapshot()
+	renderer.insert(failureLine("Warning", failure, SelectSymbols(caps.Unicode).Warning, terminalcanvas.StyleWarning))
 }
 
-func (visitor eventVisitor) VisitCommandFailed(event clievent.CommandFailed) error {
-	message := failureMessage(event.Failure())
-	if clievent.CommandOf(event) == clievent.CommandShare &&
-		(event.Failure().Code() == appobs.FailureNetworkUnavailable ||
-			event.Failure().Code() == appobs.FailureAccountStorageError) {
+func (renderer *Renderer) RenderSourceOmissions(summary catalog.SourceOmissions) {
+	if renderer == nil {
+		return
+	}
+	renderer.mu.Lock()
+	defer renderer.mu.Unlock()
+	caps := renderer.capabilities.Snapshot()
+	renderer.insert(formatSourceOmissions(summary, SelectSymbols(caps.Unicode))...)
+}
+
+func (renderer *Renderer) RenderLaneAdopted(event engine.LaneAdopted) {
+	if renderer == nil {
+		return
+	}
+	renderer.mu.Lock()
+	defer renderer.mu.Unlock()
+	if !renderer.verbose {
+		return
+	}
+	caps := renderer.capabilities.Snapshot()
+	renderer.insert(formatLaneAdopted(event, SelectSymbols(caps.Unicode)))
+}
+
+func (renderer *Renderer) RenderDiagnostic(record diagnostics.Record) {
+	if renderer == nil {
+		return
+	}
+	renderer.mu.Lock()
+	defer renderer.mu.Unlock()
+	if !renderer.verbose {
+		return
+	}
+	symbols := SelectSymbols(renderer.capabilities.Snapshot().Unicode)
+	switch record.Name() {
+	case "peer_attempt":
+		renderer.insert(formatPeerAttempt(record, symbols))
+	case "protocol_operation":
+		if record.Payload().Get("stage").Text() == "receiver_failed" {
+			renderer.insert(formatProtocolOperationFailure(record, symbols))
+		}
+	}
+}
+
+func (renderer *Renderer) RenderNetworkSetup(report platformsetup.StartupReport) {
+	if renderer == nil {
+		return
+	}
+	renderer.mu.Lock()
+	defer renderer.mu.Unlock()
+	if report.Decision.SuggestSetup() {
+		renderer.insert(terminalcanvas.Plain("Network setup: wind setup network; dismiss: wind setup network --skip"))
+	} else if renderer.verbose {
+		renderer.insert(terminalcanvas.Plain("Network setup: " + report.Decision.String()))
+	}
+}
+
+// RenderTracePath reports only local human state. The generated path is escaped
+// before layout and is never modeled as a trace event, avoiding self-disclosure
+// in the NDJSON artifact.
+func (renderer *Renderer) RenderTracePath(path string) {
+	if renderer == nil || path == "" {
+		return
+	}
+	renderer.mu.Lock()
+	defer renderer.mu.Unlock()
+	renderer.insert(terminalcanvas.Plain("Trace: " + escapedDisplay(path)))
+}
+
+func (renderer *Renderer) RenderTraceIncomplete(writerFailed bool) {
+	if renderer == nil {
+		return
+	}
+	renderer.mu.Lock()
+	defer renderer.mu.Unlock()
+	reason := " Diagnostic records were dropped."
+	if writerFailed {
+		reason = " Writing the trace failed."
+	}
+	symbols := SelectSymbols(renderer.capabilities.Snapshot().Unicode)
+	renderer.insert(statusLine(symbols.Warning, "Warning: Trace is incomplete."+reason, terminalcanvas.StyleWarning))
+}
+
+func (renderer *Renderer) RenderTraceOpenFailure(exists bool) {
+	if renderer == nil {
+		return
+	}
+	renderer.mu.Lock()
+	defer renderer.mu.Unlock()
+	message := "The trace is incomplete."
+	if exists {
+		message = "The trace path already exists; prior evidence was preserved and command/output state was untouched. Choose a new --trace path, use --trace-dir, or omit tracing."
+	}
+	symbols := SelectSymbols(renderer.capabilities.Snapshot().Unicode)
+	renderer.finish(statusLine(symbols.Failure, "Error: "+message, terminalcanvas.StyleError))
+}
+
+func (renderer *Renderer) RenderCommandFailed(isShare bool, failure engine.Failure) {
+	if renderer == nil {
+		return
+	}
+	renderer.mu.Lock()
+	defer renderer.mu.Unlock()
+	message := failureMessage(failure)
+	if isShare && (failure.Code == engine.FailureNetworkUnavailable || failure.Code == engine.FailureAccountStorageError) {
 		message += " Alternatively, " + ConfigureRelaysGuidance + "."
 	}
-	visitor.renderer.finish(statusLine(visitor.symbols().Failure, "Error: "+message, terminalcanvas.StyleError))
-	return nil
+	symbols := SelectSymbols(renderer.capabilities.Snapshot().Unicode)
+	renderer.finish(statusLine(symbols.Failure, "Error: "+message, terminalcanvas.StyleError))
 }
 
-func (visitor eventVisitor) VisitTransferSettled(event clievent.TransferSettled) error {
-	last := visitor.renderer.lastProgress
-	if visitor.capabilities.Interactive && event.Result().Status() == clievent.ResultSuccess &&
-		visitor.renderer.hasLastProgress && last.Discovery() == appobs.DiscoveryComplete &&
-		last.CountersExact() && last.DiscoveredBytes() == 0 &&
-		terminalFileOutcomes(last.FileOutcomes()) >= last.DiscoveredFiles() {
-		visitor.renderer.canvas.ReplaceProgress(FormatProgress(
+func (renderer *Renderer) RenderTransferResult(result TransferResult) {
+	if renderer == nil {
+		return
+	}
+	renderer.mu.Lock()
+	defer renderer.mu.Unlock()
+	caps := renderer.capabilities.Snapshot()
+	last := renderer.lastProgress
+	if caps.Interactive && result.Status == ResultSuccess &&
+		renderer.hasLastProgress && last.Discovery == transfer.DiscoveryComplete &&
+		last.CountersExact && last.DiscoveredBytes == 0 &&
+		terminalFileOutcomes(last.FileOutcomes) >= last.DiscoveredFiles {
+		renderer.canvas.ReplaceProgress(FormatProgress(
 			last,
+			false,
 			ProgressMetrics{SuccessfulSettlement: true},
 			ProgressLayout{
-				Columns:   visitor.capabilities.Columns,
-				Unicode:   visitor.capabilities.Unicode,
-				CellWidth: visitor.renderer.cellWidth,
+				Columns:   caps.Columns,
+				Unicode:   caps.Unicode,
+				CellWidth: renderer.cellWidth,
 			},
 		))
 	}
-	visitor.renderer.finish(formatTransferResult(event.Result(), visitor.symbols())...)
-	return nil
+	renderer.finish(formatTransferResult(result, SelectSymbols(caps.Unicode))...)
 }
 
-func (visitor eventVisitor) VisitSharingStopped(event clievent.SharingStopped) error {
-	visitor.renderer.finish(formatShareResult(event.Result(), visitor.symbols()))
-	return nil
+func (renderer *Renderer) RenderShareResult(result ShareResult) {
+	if renderer == nil {
+		return
+	}
+	renderer.mu.Lock()
+	defer renderer.mu.Unlock()
+	caps := renderer.capabilities.Snapshot()
+	renderer.finish(formatShareResult(result, SelectSymbols(caps.Unicode)))
 }
 
-func (visitor eventVisitor) VisitTraceIncomplete(event clievent.TraceIncomplete) error {
-	var reason string
-	switch event.Cause() {
-	case clievent.TraceIncompleteContractRejection:
-		reason = " Diagnostic events were rejected."
-	case clievent.TraceIncompleteLifecycleDrop:
-		reason = " Diagnostic records were dropped."
-	case clievent.TraceIncompleteWriter:
-		reason = " Writing the trace failed."
-	case clievent.TraceIncompleteFlush:
-		reason = " Flushing the trace failed."
-	case clievent.TraceIncompleteSchemaLimit:
-		reason = " Trace recording encountered an internal error."
-	case clievent.TraceIncompleteRejectionEvidence:
-		reason = " Event rejection details were lost."
+func (renderer *Renderer) FinishProgress() {
+	if renderer == nil {
+		return
 	}
-	visitor.renderer.insert(statusLine(visitor.symbols().Warning, "Warning: Trace is incomplete."+reason, terminalcanvas.StyleWarning))
-	return nil
-}
-
-func (visitor eventVisitor) VisitLaneAdopted(event appobs.LaneAdopted) error {
-	if visitor.verboseVisible() {
-		visitor.renderer.insert(formatLaneAdopted(event, visitor.symbols()))
-	}
-	return nil
-}
-
-func (eventVisitor) VisitEngineTaskObserved(appobs.EngineTaskObserved) error { return nil }
-
-func (eventVisitor) VisitObserverLossObserved(appobs.ObserverLossObserved) error { return nil }
-
-func (visitor eventVisitor) VisitNetworkSetupObserved(event clievent.NetworkSetupObserved) error {
-	if event.SuggestSetup() {
-		visitor.renderer.insert(terminalcanvas.Plain("Network setup: wind setup network; dismiss: wind setup network --skip"))
-	} else if visitor.verboseVisible() {
-		visitor.renderer.insert(terminalcanvas.Plain("Network setup: " + event.Decision()))
-	}
-	return nil
-}
-
-func renderEvent(event clievent.Event, visitor eventVisitor) error {
-	if err := event.Validate(); err != nil {
-		return err
-	}
-	switch value := event.(type) {
-	case clievent.Diagnostic:
-		return visitor.VisitDiagnostic(value)
-	case appobs.Ready:
-		return visitor.VisitReady(value)
-	case appobs.SourceOmissionsObserved:
-		return visitor.VisitSourceOmissions(value)
-	case appobs.SharingSubjectSelected:
-		return visitor.VisitSharingSubjectSelected(value)
-	case appobs.RelayConnected:
-		return visitor.VisitRelayConnected(value)
-	case appobs.RelayRecovering:
-		return visitor.VisitRelayRecovering(value)
-	case appobs.RelayAvailability:
-		return visitor.VisitRelayAvailability(value)
-	case appobs.ContentPathSelected:
-		return visitor.VisitContentPathSelected(value)
-	case appobs.Fallback:
-		return visitor.VisitFallback(value)
-	case appobs.TransferProgress:
-		return visitor.VisitTransferProgress(value)
-	case appobs.Warning:
-		return visitor.VisitWarning(value)
-	case clievent.CommandFailed:
-		return visitor.VisitCommandFailed(value)
-	case clievent.TransferSettled:
-		return visitor.VisitTransferSettled(value)
-	case clievent.SharingStopped:
-		return visitor.VisitSharingStopped(value)
-	case clievent.TraceIncomplete:
-		return visitor.VisitTraceIncomplete(value)
-	case appobs.LaneAdopted:
-		return visitor.VisitLaneAdopted(value)
-	case appobs.EngineTaskObserved:
-		return visitor.VisitEngineTaskObserved(value)
-	case appobs.ObserverLossObserved:
-		return visitor.VisitObserverLossObserved(value)
-	case clievent.NetworkSetupObserved:
-		return visitor.VisitNetworkSetupObserved(value)
-	default:
-		return nil
-	}
+	renderer.mu.Lock()
+	defer renderer.mu.Unlock()
+	renderer.finish()
 }

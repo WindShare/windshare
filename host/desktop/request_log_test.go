@@ -10,7 +10,7 @@ import (
 
 	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/relaysetup"
-	"github.com/windshare/windshare/host/desktop/logstore"
+	"github.com/windshare/windshare/internal/diaglog"
 )
 
 func TestPreferenceRequestLogsUseOnlyDiagnosticFields(t *testing.T) {
@@ -57,7 +57,7 @@ func TestControlLogsExcludeCredentialsFromAcceptedAndRejectedRequests(t *testing
 	const key = "relay-key-fixture"
 	const relay = "https://user:password-fixture@relay.example:8443/private-path?token=query-fixture#fragment-fixture"
 	directory := t.TempDir()
-	log, err := logstore.Open(directory, "session")
+	log, err := diaglog.OpenRotating(directory, "session")
 	if err != nil {
 		t.Fatal(err)
 	}

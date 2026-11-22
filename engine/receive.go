@@ -5,7 +5,6 @@ import (
 
 	"github.com/windshare/windshare/engine/internal/receive"
 	"github.com/windshare/windshare/engine/internal/task"
-	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 type ReceivePause = receive.Pause
@@ -120,7 +119,7 @@ func (engine *Engine) StartReceive(ctx context.Context, request ReceiveRequest) 
 		ResolveEndpoints: expand,
 		ICEPool:          engine.network.ICEPool,
 	}
-	current, err := startWorkflow(engine, ctx, appobs.WorkflowReceive, request.Diagnostics, func(ctx context.Context, control task.Control) task.Completion[receive.Result] {
+	current, err := startWorkflow(engine, ctx, "receive", request.Diagnostics, func(ctx context.Context, control task.Control) task.Completion[receive.Result] {
 		dependencies.Control = control
 		request.Diagnostics = control.Diagnostics
 		return receive.Run(ctx, request, dependencies)
@@ -141,6 +140,6 @@ func NewReceivePeerOutcome(disposition ReceivePeerDisposition, cause error) Rece
 
 func SettleReceive(input ReceiveSettlementInput) (TaskCompletion[ReceiveResult], error) {
 	result, err := receive.Settle(input)
-	result.Settlement = describeSettlement(result.Settlement)
+	result.Settlement = result.Checked()
 	return result, err
 }

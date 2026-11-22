@@ -9,13 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/windshare/windshare/cmd/wind/internal/clievent"
-	"github.com/windshare/windshare/cmd/wind/internal/runtrace"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/engine"
-	appobs "github.com/windshare/windshare/engine/observation"
 	"github.com/windshare/windshare/engine/relayprofile"
+	"github.com/windshare/windshare/internal/diaglog"
 )
 
 func TestSharePublicationFailureStopsAndJoinsService(t *testing.T) {
@@ -25,12 +23,12 @@ func TestSharePublicationFailureStopsAndJoinsService(t *testing.T) {
 		shortWrite        bool
 		cleanupError      error
 		exitCode          int
-		failure           appobs.FailureCode
+		failure           engine.FailureCode
 	}{
-		{name: "encoding", invalidCapability: true, exitCode: ExitUsage, failure: appobs.FailureCapabilityInvalid},
-		{name: "output", exitCode: ExitFailure, failure: appobs.FailurePublication},
-		{name: "partial output", shortWrite: true, exitCode: ExitFailure, failure: appobs.FailurePublication},
-		{name: "output and cleanup", cleanupError: errors.New("relay cleanup failed"), exitCode: ExitFailure, failure: appobs.FailurePublication},
+		{name: "encoding", invalidCapability: true, exitCode: ExitUsage, failure: engine.FailureCapabilityInvalid},
+		{name: "output", exitCode: ExitFailure, failure: engine.FailurePublication},
+		{name: "partial output", shortWrite: true, exitCode: ExitFailure, failure: engine.FailurePublication},
+		{name: "output and cleanup", cleanupError: errors.New("relay cleanup failed"), exitCode: ExitFailure, failure: engine.FailurePublication},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			relays := &cliShareRelays{
@@ -39,7 +37,7 @@ func TestSharePublicationFailureStopsAndJoinsService(t *testing.T) {
 			}
 			prefetchStarted, sourceClosed := make(chan struct{}), make(chan struct{})
 			ctx, cancel := context.WithCancel(context.Background())
-			trace := newRecordingUserTrace()
+			trace := newFakeUserTrace(diaglog.RunStatus{})
 			app := &App{
 				Stdout: &startedShareFailureWriter{ctx: ctx, accepting: relays.accepting, prefetched: prefetchStarted, short: test.shortWrite},
 				Stderr: io.Discard,
@@ -55,7 +53,7 @@ func TestSharePublicationFailureStopsAndJoinsService(t *testing.T) {
 					Relays:      func(context.Context, []relayprofile.Registration) (engine.ShareRelays, error) { return relays, nil },
 					PollNetwork: func(ctx context.Context, _ func()) { <-ctx.Done() },
 				}},
-				openUserTrace: func(runtrace.Target, clievent.Command, runtrace.Config, runtrace.Dependencies) (userTraceRecorder, error) {
+				openUserTrace: func(diaglog.Target, string, diaglog.RunOptions) (runTraceRecorder, error) {
 					return trace, nil
 				},
 			}
@@ -106,28 +104,39 @@ func TestSharePublicationFailureStopsAndJoinsService(t *testing.T) {
 			default:
 				t.Fatal("command returned with source ownership still live")
 			}
-			trace.mu.Lock()
-			defer trace.mu.Unlock()
 			var commandFailures, settlements int
-			for _, event := range trace.events {
-				switch value := event.(type) {
-				case clievent.CommandFailed:
+			for _, rec := range trace.recorded() {
+				switch rec.Event {
+				case "command_failed":
 					commandFailures++
-					if value.Failure().Code() != test.failure {
-						t.Fatalf("publication failure lost: %+v", value.Failure())
+					var p struct {
+						Failure struct {
+							Code string `json:"code"`
+						} `json:"failure"`
 					}
-				case appobs.EngineTaskObserved:
-					facts := value.Facts()
-					if facts.Stage != appobs.EngineTaskSettled {
+					decodeRecordPayload(t, rec.Payload, &p)
+					if p.Failure.Code != string(test.failure) {
+						t.Fatalf("publication failure lost: %+v", p)
+					}
+				case "engine_task_observed":
+					var p struct {
+						Stage          string `json:"stage"`
+						Outcome        string `json:"outcome"`
+						CleanupFailure *struct {
+							Code string `json:"code"`
+						} `json:"cleanup_failure"`
+					}
+					decodeRecordPayload(t, rec.Payload, &p)
+					if p.Stage != "task_settled" {
 						continue
 					}
 					settlements++
-					wantOutcome := appobs.EngineOutcomeStopped
+					wantOutcome := "stopped"
 					if test.cleanupError != nil {
-						wantOutcome = appobs.EngineOutcomeFailed
+						wantOutcome = "failed"
 					}
-					if facts.Outcome != wantOutcome || facts.CleanupFailure.Valid() != (test.cleanupError != nil) {
-						t.Fatalf("service settlement was replaced by presentation failure: %+v", facts)
+					if p.Outcome != wantOutcome || (p.CleanupFailure != nil) != (test.cleanupError != nil) {
+						t.Fatalf("service settlement was replaced by presentation failure: %+v", p)
 					}
 				}
 			}

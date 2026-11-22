@@ -10,16 +10,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/windshare/windshare/cmd/wind/internal/clievent"
-	"github.com/windshare/windshare/cmd/wind/internal/commandprojection"
-	"github.com/windshare/windshare/cmd/wind/internal/runtrace"
 	"github.com/windshare/windshare/cmd/wind/internal/terminalcanvas"
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/core/transfer/revisionwait"
 	"github.com/windshare/windshare/engine"
-	appobs "github.com/windshare/windshare/engine/observation"
+	"github.com/windshare/windshare/internal/diaglog"
 )
 
 func newGetReportingRuntime(t *testing.T, interactive, verbose bool) (*commandRuntime, *bytes.Buffer) {
@@ -32,7 +29,7 @@ func newGetReportingRuntime(t *testing.T, interactive, verbose bool) (*commandRu
 		}),
 	}
 	runtime, err := app.newCommandRuntime(
-		clievent.CommandGet,
+		commandGet,
 		observationOptions{verbose: verbose},
 	)
 	if err != nil {
@@ -41,7 +38,7 @@ func newGetReportingRuntime(t *testing.T, interactive, verbose bool) (*commandRu
 	return runtime, stderr
 }
 
-func newGetReportingCompletion(t *testing.T, result transfer.JobResult) getTransferCompletion {
+func newGetReportingIDs(t *testing.T) (receivecontract.OperationID, transfer.TransferJobID) {
 	t.Helper()
 	receiveID, err := receivecontract.OperationIDFromBytes(bytes.Repeat([]byte{1}, 16))
 	if err != nil {
@@ -51,27 +48,11 @@ func newGetReportingCompletion(t *testing.T, result transfer.JobResult) getTrans
 	if err != nil {
 		t.Fatal(err)
 	}
-	progress, err := commandprojection.ProjectTransferProgress(receiveID, jobID, result.Progress, false)
-	if err != nil {
-		progress, err = commandprojection.ProjectTransferProgress(
-			receiveID,
-			jobID,
-			transfer.ReceiveProgressSnapshot{
-				Discovery:     transfer.DiscoveryComplete,
-				CountersExact: true,
-			},
-			false,
-		)
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
-	return getTransferCompletion{result: result, finalProgress: progress}
+	return receiveID, jobID
 }
 
 func TestGetResultUsesAuthorityDestinationAndHumanOutcomeVocabulary(t *testing.T) {
 	runtime, stderr := newGetReportingRuntime(t, false, false)
-	observation := getObservation{runtime: runtime}
 	published, err := transfer.NewDirectTreeSettlement(transfer.DirectTreeSettlementSuccess)
 	if err != nil {
 		t.Fatal(err)
@@ -88,8 +69,8 @@ func TestGetResultUsesAuthorityDestinationAndHumanOutcomeVocabulary(t *testing.T
 	}
 	startedAt := runtime.Clock().Now().Add(-2 * time.Second)
 	if code := (&App{}).reportTransferResultWithAdmission(
-		t.Context(), newGetReportingCompletion(t, result), nil, nil, nil,
-		destination, true, startedAt, observation,
+		t, t.Context(), result, nil, nil, nil,
+		destination, true, startedAt, runtime,
 	); code != ExitOK {
 		t.Fatalf("exit=%d", code)
 	}
@@ -105,55 +86,8 @@ func TestGetResultUsesAuthorityDestinationAndHumanOutcomeVocabulary(t *testing.T
 	}
 }
 
-func TestGetFinalProgressAndSettlementUseOrderedFinalization(t *testing.T) {
-	runtime, writer, recorder := newSaturatedCommandRuntime(t, clievent.CommandGet, false)
-	settlement, err := transfer.NewDirectTreeSettlement(transfer.DirectTreeSettlementSuccess)
-	if err != nil {
-		t.Fatal(err)
-	}
-	result := transfer.JobResult{
-		Outcome:        transfer.DirectTreeOutcomeSuccess,
-		Settlement:     settlement,
-		SucceededFiles: 1,
-		Progress: transfer.ReceiveProgressSnapshot{
-			Discovery:          transfer.DiscoveryComplete,
-			CountersExact:      true,
-			DiscoveredFiles:    1,
-			DiscoveredBytes:    7,
-			VerifiedBytes:      7,
-			PublishedFiles:     1,
-			PublishedBytes:     7,
-			NewlyVerifiedBytes: 7,
-			FileOutcomes:       transfer.FileOutcomeSummary{DownloadedFiles: 1},
-		},
-	}
-	if code := (&App{}).reportTransferResultWithAdmission(
-		t.Context(),
-		newGetReportingCompletion(t, result),
-		nil,
-		nil,
-		nil,
-		t.TempDir(),
-		false,
-		runtime.Clock().Now(),
-		getObservation{runtime: runtime},
-	); code != ExitOK {
-		t.Fatalf("exit=%d", code)
-	}
-	closeBlockedRuntime(t, runtime, writer)
-
-	assertRuntimeEventTypes(t, recorder.recorded(),
-		appobs.Warning{},
-		appobs.Warning{},
-		appobs.ObserverLossObserved{},
-		appobs.TransferProgress{},
-		clievent.TransferSettled{},
-	)
-}
-
 func TestGetNonSuccessNeverUsesCompletedWordingAndKeepsOutcomeCounts(t *testing.T) {
 	runtime, stderr := newGetReportingRuntime(t, false, false)
-	observation := getObservation{runtime: runtime}
 	settlement, err := transfer.NewDirectTreeSettlement(transfer.DirectTreeSettlementPartial)
 	if err != nil {
 		t.Fatal(err)
@@ -170,8 +104,8 @@ func TestGetNonSuccessNeverUsesCompletedWordingAndKeepsOutcomeCounts(t *testing.
 		},
 	}
 	if code := (&App{}).reportTransferResultWithAdmission(
-		t.Context(), newGetReportingCompletion(t, result), nil, nil, nil,
-		t.TempDir(), false, runtime.Clock().Now(), observation,
+		t, t.Context(), result, nil, nil, nil,
+		t.TempDir(), false, runtime.Clock().Now(), runtime,
 	); code != ExitFailure {
 		t.Fatalf("exit=%d", code)
 	}
@@ -211,8 +145,8 @@ func TestGetCapacityBudgetPauseReportsResumableJobWithoutFileFailure(t *testing.
 		},
 	}
 	code := (&App{}).reportTransferResultWithAdmission(
-		t.Context(), newGetReportingCompletion(t, result), nil, nil, nil,
-		t.TempDir(), false, runtime.Clock().Now(), getObservation{runtime: runtime},
+		t, t.Context(), result, nil, nil, nil,
+		t.TempDir(), false, runtime.Clock().Now(), runtime,
 	)
 	runtime.Close()
 	output := stderr.String()
@@ -275,8 +209,8 @@ func TestGetResultIntegrationPreservesEveryNonSuccessExitClass(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			runtime, stderr := newGetReportingRuntime(t, false, false)
 			code := (&App{}).reportTransferResultWithAdmission(
-				t.Context(), newGetReportingCompletion(t, test.result), test.admissionErr, nil, nil,
-				t.TempDir(), false, runtime.Clock().Now(), getObservation{runtime: runtime},
+				t, t.Context(), test.result, test.admissionErr, nil, nil,
+				t.TempDir(), false, runtime.Clock().Now(), runtime,
 			)
 			runtime.Close()
 			if code != test.wantExit {
@@ -293,63 +227,19 @@ func TestGetResultIntegrationPreservesEveryNonSuccessExitClass(t *testing.T) {
 
 func TestGetProgressProjectsVerifiedAndNewBytesWithoutLegacyMeasure(t *testing.T) {
 	runtime, stderr := newGetReportingRuntime(t, true, false)
-	observation := getObservation{runtime: runtime}
-	receiveID, err := receivecontract.OperationIDFromBytes(bytes.Repeat([]byte{1}, 16))
-	if err != nil {
-		t.Fatal(err)
-	}
-	jobID, err := transfer.TransferJobIDFromBytes(bytes.Repeat([]byte{2}, 16))
-	if err != nil {
-		t.Fatal(err)
-	}
-	observation.progress(receiveID, jobID, transfer.ReceiveProgressSnapshot{
-		Discovery: transfer.DiscoveryOpen, CountersExact: true,
-		DiscoveredFiles: 2, DiscoveredBytes: 10, VerifiedBytes: 4, NewlyVerifiedBytes: 1,
-	})
+	receiveID, jobID := newGetReportingIDs(t)
+	runtime.ObserveEngine(engine.Observation{Event: engine.TransferProgress{
+		Operation: receiveID,
+		Job:       jobID,
+		Snapshot: transfer.ReceiveProgressSnapshot{
+			Discovery: transfer.DiscoveryOpen, CountersExact: true,
+			DiscoveredFiles: 2, DiscoveredBytes: 10, VerifiedBytes: 4, NewlyVerifiedBytes: 1,
+		},
+	}})
 	runtime.Close()
 	output := stderr.String()
 	if strings.Contains(output, "%") || !strings.Contains(output, "Discovering") || !strings.Contains(output, "10 B ready") {
 		t.Fatalf("open discovery progress=%q", output)
-	}
-}
-
-func TestGetCapacityWaitVisibilityUsesInjectedCommandClockAndClears(t *testing.T) {
-	startedAt := time.Date(2026, 8, 23, 1, 2, 3, 0, time.UTC)
-	visibleAfter := startedAt.Add(revisionwait.DefaultVisibilityThreshold)
-	waiting := revisionwait.Snapshot{
-		ActiveWaiters: 1, ActiveSince: startedAt, VisibleAfter: visibleAfter,
-		AccumulatedWait: revisionwait.DefaultVisibilityThreshold, Attempts: 1,
-	}
-
-	hidden := getObservation{runtime: &commandRuntime{clock: &fakeCommandClock{
-		now: visibleAfter.Add(-time.Nanosecond),
-	}}}
-	if hidden.capacityWaitVisible(waiting) {
-		t.Fatal("capacity wait became visible before the anti-flicker threshold")
-	}
-
-	visible := getObservation{runtime: &commandRuntime{clock: &fakeCommandClock{now: visibleAfter}}}
-	if !visible.capacityWaitVisible(waiting) {
-		t.Fatal("capacity wait remained hidden at the anti-flicker threshold")
-	}
-
-	cleared := waiting
-	cleared.ActiveWaiters = 0
-	cleared.ActiveSince = time.Time{}
-	cleared.VisibleAfter = time.Time{}
-	for _, transition := range []string{
-		"retry success", "cancellation", "capacity-budget pause", "runtime end",
-	} {
-		t.Run(transition, func(t *testing.T) {
-			if visible.capacityWaitVisible(cleared) {
-				t.Fatalf("capacity wait remained visible after %s", transition)
-			}
-		})
-	}
-	if (getObservation{}).capacityWaitVisible(revisionwait.Snapshot{
-		ActiveWaiters: 1, VisibleAfter: startedAt,
-	}) {
-		t.Fatal("observation without a runtime clock projected stale waiting state")
 	}
 }
 
@@ -360,10 +250,7 @@ func (getHostileError) Error() string { panic("provider Error must not be render
 func TestGetFailureProjectionDoesNotRenderProviderText(t *testing.T) {
 	runtime, stderr := newGetReportingRuntime(t, false, false)
 	secret := "provider-secret-and-local-path"
-	code := (getObservation{runtime: runtime}).commandFailure(ExitFailure, getHostileError{secret: secret})
-	if code != ExitFailure {
-		t.Fatalf("exit=%d", code)
-	}
+	runtime.StageCommandFailure(ExitFailure, classifyFailure(getHostileError{secret: secret}))
 	runtime.Close()
 	if strings.Contains(stderr.String(), secret) || !strings.Contains(stderr.String(), "unexpected") {
 		t.Fatalf("unsafe failure output=%q", stderr.String())
@@ -372,7 +259,7 @@ func TestGetFailureProjectionDoesNotRenderProviderText(t *testing.T) {
 
 func TestGetLiveOnlyWarningExplainsRecoveryWithoutReportingUnsafeOutput(t *testing.T) {
 	runtime, stderr := newGetReportingRuntime(t, false, false)
-	(getObservation{runtime: runtime}).warningCode(appobs.FailureOutputRecoveryUnavailable)
+	runtime.ObserveEngine(engine.Observation{Event: engine.Warning{Failure: engine.Failure{Code: engine.FailureOutputRecoveryUnavailable}}})
 	runtime.Close()
 	output := stderr.String()
 	if !strings.Contains(output, "retry only while") || !strings.Contains(output, "unfinished progress") ||
@@ -383,50 +270,27 @@ func TestGetLiveOnlyWarningExplainsRecoveryWithoutReportingUnsafeOutput(t *testi
 
 func TestGetWarningUsesClosedFailureVocabulary(t *testing.T) {
 	runtime, stderr := newGetReportingRuntime(t, false, false)
-	(getObservation{runtime: runtime}).warningCode(appobs.FailureOutputUnsupportedFilesystem)
+	runtime.ObserveEngine(engine.Observation{Event: engine.Warning{Failure: engine.Failure{Code: engine.FailureOutputFailed}}})
 	runtime.Close()
 	if output := stderr.String(); !strings.Contains(output, "Warning") || !strings.Contains(output, "destination") {
 		t.Fatalf("warning=%q", output)
 	}
 }
 
-type getIncompleteTraceRecorder struct {
-	health chan clievent.TraceIncomplete
-}
-
-func (*getIncompleteTraceRecorder) Record(clievent.Event) bool              { return true }
-func (*getIncompleteTraceRecorder) ReportRejectionEvidenceLoss(uint64) bool { return true }
-
-func (*getIncompleteTraceRecorder) ReportUpstreamLoss(clievent.TraceLoss) bool {
-	return true
-}
-func (recorder *getIncompleteTraceRecorder) Health() <-chan clievent.TraceIncomplete {
-	return recorder.health
-}
-func (*getIncompleteTraceRecorder) Path() string { return "get.ndjson" }
-func (*getIncompleteTraceRecorder) Close() runtrace.Status {
-	return runtrace.Status{WriterFailed: true}
-}
-
 func TestGetTraceRuntimeFailureCannotReclassifySuccess(t *testing.T) {
 	stderr := &bytes.Buffer{}
-	recorder := &getIncompleteTraceRecorder{health: make(chan clievent.TraceIncomplete)}
+	recorder := newFakeUserTrace(diaglog.RunStatus{WriterFailed: true})
 	app := &App{
 		Stderr: stderr,
 		terminalCapabilities: terminalcanvas.CapabilityProviderFunc(func() terminalcanvas.Capabilities {
 			return terminalcanvas.Capabilities{Columns: 500}
 		}),
-		openUserTrace: func(
-			runtrace.Target,
-			clievent.Command,
-			runtrace.Config,
-			runtrace.Dependencies,
-		) (userTraceRecorder, error) {
+		openUserTrace: func(diaglog.Target, string, diaglog.RunOptions) (runTraceRecorder, error) {
 			return recorder, nil
 		},
 	}
 	runtime, err := app.newCommandRuntime(
-		clievent.CommandGet,
+		commandGet,
 		testExactTraceOptions(filepath.Join(t.TempDir(), "get.ndjson")),
 	)
 	if err != nil {
@@ -443,8 +307,8 @@ func TestGetTraceRuntimeFailureCannotReclassifySuccess(t *testing.T) {
 		},
 	}
 	code := app.reportTransferResultWithAdmission(
-		t.Context(), newGetReportingCompletion(t, result), nil, nil, nil,
-		t.TempDir(), false, runtime.Clock().Now(), getObservation{runtime: runtime},
+		t, t.Context(), result, nil, nil, nil,
+		t.TempDir(), false, runtime.Clock().Now(), runtime,
 	)
 	runtime.Close()
 	if code != ExitOK {
@@ -456,51 +320,34 @@ func TestGetTraceRuntimeFailureCannotReclassifySuccess(t *testing.T) {
 	}
 }
 
-type getTransferCompletion struct {
-	result                  transfer.JobResult
-	finalProgress           appobs.TransferProgress
-	finalProgressProjection error
-}
-
 func (a *App) reportTransferResultWithAdmission(
+	t *testing.T,
 	ctx context.Context,
-	completion getTransferCompletion,
+	result transfer.JobResult,
 	admissionErr error,
 	runtimeErr error,
 	connectionErr error,
 	destination string,
 	destinationAdjusted bool,
 	startedAt time.Time,
-	observation getObservation,
+	runtime *commandRuntime,
 ) int {
-	if completion.finalProgressProjection != nil {
-		return observation.commandFailure(ExitFailure, commandprojection.ErrInvalidProjection)
-	}
-	now := observation.runtime.Clock().Now()
+	t.Helper()
+	receiveID, jobID := newGetReportingIDs(t)
+	now := runtime.Clock().Now()
 	elapsed := max(now.Sub(startedAt), 0)
 	settled, err := engine.SettleReceive(engine.ReceiveSettlementInput{
-		Result: completion.result, AdmissionError: admissionErr,
+		Result: result, AdmissionError: admissionErr,
 		RuntimeError: runtimeErr, ConnectionError: connectionErr, ContextError: ctx.Err(),
 		Elapsed: elapsed, Destination: destination,
 		DestinationAdjusted: destinationAdjusted,
+		Operation:           receiveID,
+		Job:                 jobID,
 	})
 	if err != nil {
-		return observation.commandFailure(ExitFailure, commandprojection.ErrInvalidProjection)
+		t.Fatal(err)
 	}
-	projected, err := commandprojection.ProjectReceiveResult(settled)
-	if err != nil {
-		return observation.commandFailure(ExitFailure, err)
-	}
-	event, err := clievent.NewTransferSettled(projected)
-	if err != nil {
-		return observation.commandFailure(ExitFailure, commandprojection.ErrInvalidProjection)
-	}
-	observation.finalize(completion.finalProgress, event)
-	code, ok := projected.ExitCode().ProcessCode()
-	if !ok {
-		return ExitFailure
-	}
-	return code
+	return a.reportEngineReceive(settled, receiveSelection{}, runtime)
 }
 
 func TestMissingSelectionEchoesTypedOnlyValuesInCommandLineOrder(t *testing.T) {
@@ -529,7 +376,6 @@ func TestMissingSelectionEchoesTypedOnlyValuesInCommandLineOrder(t *testing.T) {
 				paths: []string{"d/nope", "d/a b.txt", "a b.txt"},
 				typed: []string{"d/nope", "d/a b.txt", "a b.txt/"},
 			},
-			// The engine reports canonical targets sorted; output follows the command line.
 			missing:   []string{"a b.txt", "d/nope"},
 			wantLines: []string{"Not found in this share:", `  --only "d/nope"`, `  --only "a b.txt/"`, hint},
 			absent:    []string{`"d/a b.txt"`, `--only "a b.txt"` + "\n", "omitted"},
@@ -551,7 +397,7 @@ func TestMissingSelectionEchoesTypedOnlyValuesInCommandLineOrder(t *testing.T) {
 			app := &App{Stderr: stderr, terminalCapabilities: terminalcanvas.CapabilityProviderFunc(func() terminalcanvas.Capabilities {
 				return terminalcanvas.Capabilities{Columns: 500}
 			})}
-			runtime, err := app.newCommandRuntime(clievent.CommandGet, observationOptions{})
+			runtime, err := app.newCommandRuntime(commandGet, observationOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -567,7 +413,7 @@ func TestMissingSelectionEchoesTypedOnlyValuesInCommandLineOrder(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			code := app.reportEngineReceive(settled, test.selection, getObservation{runtime: runtime})
+			code := app.reportEngineReceive(settled, test.selection, runtime)
 			runtime.Close()
 			output := stderr.String()
 			want := strings.Join(append(test.wantLines, "Correct --only and run wind get with the intended selection."), "\n") + "\n"

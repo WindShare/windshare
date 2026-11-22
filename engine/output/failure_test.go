@@ -5,21 +5,21 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/windshare/windshare/engine/observation"
+	transferfault "github.com/windshare/windshare/core/transfer/fault"
 )
 
 func TestFailureAnnotationsKeepPrimaryAndCleanupIndependent(t *testing.T) {
 	primaryCause := errors.New("document provider rejected checkpoint")
 	closeCause := errors.New("document grant release failed")
-	fact, _ := observation.NewFailure(observation.FailureCheckpointStateIO)
-	primary, ok := SealFailure(primaryCause, FailureDiagnostic{Stage: FailureCheckpoint, Failure: fact})
+	fact, _ := transferfault.NewCheckpoint(transferfault.ScopeOutputPause, transferfault.CheckpointStateIO)
+	primary, ok := SealFailure(primaryCause, FailureDiagnostic{Stage: FailureCheckpoint, Fault: fact})
 	if !ok {
 		t.Fatal("valid provider failure rejected")
 	}
 	cleanup, _ := SealFailure(closeCause, FailureDiagnostic{Stage: FailureClose})
 	joined := fmt.Errorf("provider operation: %w", errors.Join(primary, cleanup))
 	diagnostic, ok := FindDiagnostic(joined)
-	if !ok || diagnostic.Stage != FailureCheckpoint || diagnostic.Failure != fact {
+	if !ok || diagnostic.Stage != FailureCheckpoint || diagnostic.Fault != fact {
 		t.Fatalf("primary diagnostic lost: %+v", diagnostic)
 	}
 	selected := FailureForStage(joined, FailureClose)

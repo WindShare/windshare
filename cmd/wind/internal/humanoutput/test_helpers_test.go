@@ -6,7 +6,8 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/cmd/wind/internal/terminalcanvas"
-	appobs "github.com/windshare/windshare/engine/observation"
+	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 type fakeClock struct{ now time.Time }
@@ -35,46 +36,21 @@ func newRenderHarness(t *testing.T, capabilities terminalcanvas.Capabilities, ve
 	return harness
 }
 
-func mustFailure(t *testing.T, code appobs.FailureCode) appobs.Failure {
+func mustReceiveID(t *testing.T, discriminator byte) receivecontract.OperationID {
 	t.Helper()
-	failure, err := appobs.NewFailure(code)
-	if err != nil {
-		t.Fatalf("NewFailure() error = %v", err)
-	}
-	return failure
-}
-
-func mustSnapshot(t *testing.T, spec appobs.ProgressSpec) appobs.ProgressSnapshot {
-	t.Helper()
-	snapshot, err := appobs.NewProgressSnapshot(spec)
-	if err != nil {
-		t.Fatalf("NewProgressSnapshot() error = %v", err)
-	}
-	return snapshot
-}
-
-func mustID(t *testing.T, discriminator byte) []byte {
-	t.Helper()
-	raw := make([]byte, appobs.IdentityBytes)
+	raw := make([]byte, 16)
 	raw[0] = discriminator
-	return raw
-}
-
-func mustReceiveID(t *testing.T) appobs.ReceiveOperationID {
-	t.Helper()
-	id, err := appobs.NewReceiveOperationID(mustID(t, 1))
+	id, err := receivecontract.OperationIDFromBytes(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return id
 }
 
-func mustJobID(t *testing.T) appobs.TransferJobID {
+func mustJobID(t *testing.T, discriminator byte) transfer.TransferJobID {
 	t.Helper()
-	id, err := appobs.NewTransferJobID(mustID(t, 2))
-	if err != nil {
-		t.Fatal(err)
-	}
+	var id transfer.TransferJobID
+	id[0] = discriminator
 	return id
 }
 

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"slices"
 
-	"github.com/windshare/windshare/engine/observation"
+	transferfault "github.com/windshare/windshare/core/transfer/fault"
 )
 
 var ErrBusy = errors.New("output destination or operation is already in use")
@@ -52,13 +52,13 @@ func (stage FailureStage) String() string {
 }
 
 type FailureDiagnostic struct {
-	Stage   FailureStage
-	Failure observation.Failure
+	Stage FailureStage
+	Fault transferfault.Fault
 }
 
 func (diagnostic FailureDiagnostic) Valid() bool {
 	return diagnostic.Stage.Valid() &&
-		(diagnostic.Failure == (observation.Failure{}) || diagnostic.Failure.Valid())
+		(diagnostic.Fault.IsZero() || diagnostic.Fault.Valid())
 }
 
 // FailureEvidence binds one stage to its exact causes, so cleanup failures can

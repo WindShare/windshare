@@ -2,8 +2,6 @@ package engine
 
 import (
 	"context"
-
-	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 type ShareStartupState uint8
@@ -23,7 +21,7 @@ type ShareSnapshot struct {
 	Ready             ShareReady
 	StartupError      error
 	Authorization     *ShareAuthorization
-	RelayAvailability *appobs.RelayAvailability
+	RelayAvailability *RelayAvailability
 	// Result is present only after Done closes: all task work has joined.
 	Result *TaskResult[ShareResult]
 }
@@ -47,11 +45,13 @@ func (current *ShareTask) Snapshot() ShareSnapshot {
 		snapshot.Startup = ShareAwaitingAuthorization
 		snapshot.Authorization = &ShareAuthorization{Kind: ShareOfficialAuthorization}
 	}
-	if hasStatus {
+	if hasStatus && status.Availability.Total > 0 {
 		value := status.Availability
-		available, err := appobs.NewRelayAvailability(value.Available, value.Total, value.Terminal, value.EverReady)
-		if err == nil {
-			snapshot.RelayAvailability = &available
+		snapshot.RelayAvailability = &RelayAvailability{
+			Available: value.Available,
+			Total:     value.Total,
+			EverReady: value.EverReady,
+			Terminal:  value.Terminal,
 		}
 	}
 	// Read lifecycle after startup and availability so cancellation cannot pair

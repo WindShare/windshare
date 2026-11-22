@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/adapters/filesystem"
-	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/commandinput"
 	"github.com/windshare/windshare/cmd/wind/internal/networkcommand"
 	"github.com/windshare/windshare/core/catalog"
@@ -49,12 +48,11 @@ func (a *App) runReceive(ctx context.Context, command receiveCommand, args []str
 	if parsed != requestParseReady {
 		return parsed.exitCode()
 	}
-	runtime, err := a.newCommandRuntime(clievent.CommandGet, request.observation)
+	runtime, err := a.newCommandRuntime(commandGet, request.observation)
 	if err != nil {
 		return ExitFailure
 	}
-	observation := newGetObservation(runtime)
-	defer func() { observation.completeAndFinalize(); runtime.Close() }()
+	defer runtime.Close()
 	closeApp, err := a.ensureApplication(runtime.diagnosticSink())
 	if err != nil {
 		return ExitFailure
@@ -62,28 +60,40 @@ func (a *App) runReceive(ctx context.Context, command receiveCommand, args []str
 	defer closeApp(&code)
 	destination, err := filepath.Abs(request.outDir)
 	if err != nil {
-		return observation.commandFailure(ExitFailure, err)
+		runtime.StageCommandFailure(ExitFailure, classifyFailure(err))
+		return ExitFailure
 	}
 	factory := a.getOutputFactory
 	if factory == nil {
 		factory = filesystem.FilesystemOutput{RootPath: destination, CreateRoot: true}
 	}
-	task, err := a.application.StartReceive(ctx, engine.ReceiveRequest{Admission: request.admission, OperationID: request.operationID, Capability: request.link, Only: request.selection.paths, Connectivity: request.connectivity, WaitTimeout: request.waitTimeout, Output: factory, Destination: destination, Diagnostics: runtime.diagnosticSink(), OnPause: a.receivePauseHandler()})
+	task, err := a.application.StartReceive(ctx, engine.ReceiveRequest{
+		Admission:    request.admission,
+		OperationID:  request.operationID,
+		Capability:   request.link,
+		Only:         request.selection.paths,
+		Connectivity: request.connectivity,
+		WaitTimeout:  request.waitTimeout,
+		Output:       factory,
+		Destination:  destination,
+		Diagnostics:  runtime.diagnosticSink(),
+		OnPause:      a.receivePauseHandler(),
+	})
 	if err != nil {
 		return runtime.failToStart(err)
 	}
 	if a.networkSetup != nil && request.connectivity != engine.ConnectivityRelayOnly {
-		networkcommand.ObserveStartup(a.networkSetup, runtime, clievent.CommandGet)
+		networkcommand.ObserveStartup(a.networkSetup, runtime.ObserveNetworkSetup)
 	}
 	for value := range task.Observations() {
-		observeEngineTask(runtime, value)
-		a.projectReceiveObservation(observation, value.Event)
+		runtime.ObserveEngine(value)
 	}
 	result, err := task.Wait(context.Background())
 	if err != nil {
-		return observation.commandFailure(ExitFailure, err)
+		runtime.StageCommandFailure(ExitFailure, classifyFailure(err))
+		return ExitFailure
 	}
-	return a.reportReceiveTask(result, request.selection, observation)
+	return a.reportReceiveTask(result, request.selection, runtime)
 }
 
 const (

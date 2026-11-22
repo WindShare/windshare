@@ -469,11 +469,10 @@ func TestTransferResultEventsPreserveExitCodePrecedence(t *testing.T) {
 				cancel()
 			}
 			runtime, stderr := newGetReportingRuntime(t, false, false)
-			observation := getObservation{runtime: runtime}
 			app := &App{}
 			if code := app.reportTransferResultWithAdmission(
-				ctx, newGetReportingCompletion(t, test.result), test.admissionErr, nil, nil,
-				t.TempDir(), false, runtime.Clock().Now(), observation,
+				t, ctx, test.result, test.admissionErr, nil, nil,
+				t.TempDir(), false, runtime.Clock().Now(), runtime,
 			); code != test.wantCode {
 				t.Fatalf("exit=%d want=%d stderr=%q", code, test.wantCode, stderr.String())
 			}

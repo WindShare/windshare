@@ -10,7 +10,6 @@ import (
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
 	"github.com/windshare/windshare/engine"
-	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 func TestControlAuthenticatesAndRecoversAfterLostCreateReply(t *testing.T) {
@@ -88,10 +87,7 @@ func TestObservationsStayOutOfControlQueueAndSnapshotsCarryRelayAvailability(t *
 	a, task, _ := fixture(t)
 	a.execute(createRequest())
 	admitted(t, a)
-	event, err := appobs.NewRelayAvailability(1, 1, 0, true)
-	if err != nil {
-		t.Fatal(err)
-	}
+	event := engine.RelayAvailability{Available: 1, Total: 1, EverReady: true}
 	a.logObservation("operation", engine.Observation{TaskID: "engine:1", Event: event})
 	task.mu.Lock()
 	task.state.RelayAvailability = &event

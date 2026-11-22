@@ -8,15 +8,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/terminalcanvas"
 	"github.com/windshare/windshare/core/diagnostics"
-	appobs "github.com/windshare/windshare/engine/observation"
+	"github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session/protocolsession"
+	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/engine"
 )
 
 type visibilityExpectation struct {
 	name        string
-	event       clievent.Event
+	render      func(*Renderer)
 	main        bool
 	verboseOnly bool
 	always      bool
@@ -39,9 +41,7 @@ func TestRendererVisibilityForEveryEvent(t *testing.T) {
 		for _, mode := range modes {
 			t.Run(eventCase.name+"/"+mode.name, func(t *testing.T) {
 				harness := newRenderHarness(t, terminalcanvas.Capabilities{Interactive: mode.interactive}, mode.verbose)
-				if err := renderTestEvent(harness.renderer, eventCase.event); err != nil {
-					t.Fatalf("Render() error = %v", err)
-				}
+				eventCase.render(harness.renderer)
 				want := eventCase.always || eventCase.main && (mode.interactive || mode.verbose) ||
 					eventCase.verboseOnly && mode.verbose || eventCase.progress && (mode.interactive || mode.verbose)
 				if got := harness.buffer.Len() != 0; got != want {
@@ -53,20 +53,15 @@ func TestRendererVisibilityForEveryEvent(t *testing.T) {
 }
 
 func TestVerboseProtocolFailureNamesWaitLaneAndCause(t *testing.T) {
-	var event clievent.Event
-	for _, candidate := range rendererEvents(t) {
-		if candidate.name == "protocol operation failure" {
-			event = candidate.event
-			break
-		}
-	}
-	if event == nil {
-		t.Fatal("protocol operation fixture is missing")
-	}
+	record := diagnostics.New("protocol_operation", diagnostics.Fields{
+		"stage":                diagnostics.Text("receiver_failed"),
+		"cause":                diagnostics.Text("deadline"),
+		"request_kind":         diagnostics.Text("release_lease"),
+		"operation_elapsed_ms": diagnostics.Uint(30_000),
+	}).Correlate(diagnostics.Fields{"lane_id": diagnostics.Number(2), "lane_epoch": diagnostics.Number(1)})
+
 	harness := newRenderHarness(t, terminalcanvas.Capabilities{}, true)
-	if err := harness.renderer.Render(event); err != nil {
-		t.Fatal(err)
-	}
+	harness.renderer.RenderDiagnostic(record)
 	const want = "Protocol operation release lease failed after 30.0s on lane 2 epoch 1 (deadline)."
 	if got := harness.buffer.String(); !strings.Contains(got, want) {
 		t.Fatalf("protocol failure output = %q, want substring %q", got, want)
@@ -87,11 +82,13 @@ func TestVerboseProtocolWarningUsesOutcomeInsteadOfCancellationCause(t *testing.
 		{"protocol failure", "receiver_failed", "protocol_failure", true},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			event := diagnosticEvent("protocol_operation", diagnostics.Fields{"stage": diagnostics.Text(testCase.stage), "cause": diagnostics.Text(testCase.cause), "request_kind": diagnostics.Text("peer_offer")})
+			record := diagnostics.New("protocol_operation", diagnostics.Fields{
+				"stage":        diagnostics.Text(testCase.stage),
+				"cause":        diagnostics.Text(testCase.cause),
+				"request_kind": diagnostics.Text("peer_offer"),
+			})
 			harness := newRenderHarness(t, terminalcanvas.Capabilities{}, true)
-			if err := harness.renderer.Render(event); err != nil {
-				t.Fatal(err)
-			}
+			harness.renderer.RenderDiagnostic(record)
 			if got := harness.buffer.String(); (got != "") != testCase.warn ||
 				(testCase.warn && !strings.Contains(got, "Protocol operation peer offer failed")) {
 				t.Fatalf("warning = %q, want warning %v", got, testCase.warn)
@@ -102,147 +99,71 @@ func TestVerboseProtocolWarningUsesOutcomeInsteadOfCancellationCause(t *testing.
 
 func rendererEvents(t *testing.T) []visibilityExpectation {
 	t.Helper()
-	origin, err := appobs.NewRelayOrigin(appobs.RelayWSS, "relay.example", 443)
-	if err != nil {
-		t.Fatal(err)
-	}
-	subject, err := appobs.NewDirectorySubject(appobs.NewDisplayName("photos"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	subjectEvent, err := appobs.NewSharingSubjectSelected(subject)
-	if err != nil {
-		t.Fatal(err)
-	}
-	relayConnected, err := clievent.NewRelayConnected(clievent.CommandShare, origin)
-	if err != nil {
-		t.Fatal(err)
-	}
-	relayRecovering, err := clievent.NewRelayRecovering(
-		clievent.CommandGet, origin, 1, appobs.RelayRecoveryStarted, appobs.Failure{},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	contentPath, err := appobs.NewContentPathSelected(appobs.ContentPathDirect)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fallback, err := clievent.NewFallback(
-		clievent.CommandGet, appobs.TransportWebRTC, appobs.TransportRelay,
-		mustFailure(t, appobs.FailurePeerNegotiation),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	progressSnapshot := mustSnapshot(t, appobs.ProgressSpec{
-		Discovery: appobs.DiscoveryOpen, CountersExact: true,
-	})
-	progress, err := appobs.NewTransferProgress(mustReceiveID(t), mustJobID(t), progressSnapshot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	warning, err := clievent.NewWarning(clievent.CommandGet, mustFailure(t, appobs.FailureTraceWrite))
-	if err != nil {
-		t.Fatal(err)
-	}
-	commandFailed, err := clievent.NewCommandFailed(
-		clievent.CommandGet, clievent.ExitNetwork, mustFailure(t, appobs.FailureRelayTransport),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	transferResult, err := clievent.NewTransferResult(clievent.TransferResultSpec{
-		Status: clievent.ResultSuccess, ExitCode: clievent.ExitSuccess,
-		Destination: appobs.NewDisplayPath("output"), CountersExact: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	transferSettled, err := clievent.NewTransferSettled(transferResult)
-	if err != nil {
-		t.Fatal(err)
-	}
-	shareResult, err := clievent.NewShareResult(clievent.ShareResultSpec{Publication: clievent.SharePublished, ExitCode: clievent.ExitSuccess})
-	if err != nil {
-		t.Fatal(err)
-	}
-	sharingStopped, err := clievent.NewSharingStopped(shareResult)
-	if err != nil {
-		t.Fatal(err)
-	}
-	traceIncomplete, err := clievent.NewTraceIncomplete(
-		clievent.CommandGet, clievent.TraceIncompleteWriter, clievent.TraceLoss{},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sessionID, err := appobs.NewProtocolSessionID(mustID(t, 3))
-	if err != nil {
-		t.Fatal(err)
-	}
-	lane, err := appobs.NewLaneIdentity(2, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	laneAdopted, err := clievent.NewLaneAdopted(clievent.CommandGet, sessionID, lane, appobs.TransportWebRTC)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	relayLifecycle := diagnosticEvent("relay_lifecycle", nil)
-	webRTC := diagnosticEvent("webrtc_lifecycle", nil)
-	peerAttempt := diagnosticEvent("peer_attempt", diagnostics.Fields{"stage": diagnostics.Text("started")})
-	transferLifecycle := diagnosticEvent("transfer_lifecycle", nil)
-	filesystem := diagnosticEvent("filesystem_output", nil)
-	senderTerminalSend := diagnosticEvent("sender_terminal_send_observed", nil)
-	senderSessionTerminated := diagnosticEvent("sender_session_terminated", nil)
-	rootPrefetch := diagnosticEvent("root_prefetch", nil)
-	protocolOperation := diagnosticEvent("protocol_operation", diagnostics.Fields{
-		"stage": diagnostics.Text("receiver_failed"), "cause": diagnostics.Text("deadline"), "request_kind": diagnostics.Text("release_lease"), "operation_elapsed_ms": diagnostics.Uint(30_000)})
-	protocolOperation.Record = protocolOperation.Record.Correlate(diagnostics.Fields{"lane_id": diagnostics.Number(2), "lane_epoch": diagnostics.Number(1)})
+	origin := engine.RelayOrigin{Scheme: "wss", Host: "relay.example", Port: 443}
+	var sessionID protocolsession.ProtocolSessionID
+	sessionID[0] = 3
+	lane := session.LaneIdentity{ID: 2, Epoch: 1}
+	protocolOp := diagnostics.New("protocol_operation", diagnostics.Fields{
+		"stage":                diagnostics.Text("receiver_failed"),
+		"cause":                diagnostics.Text("deadline"),
+		"request_kind":         diagnostics.Text("release_lease"),
+		"operation_elapsed_ms": diagnostics.Uint(30_000),
+	}).Correlate(diagnostics.Fields{"lane_id": diagnostics.Number(2), "lane_epoch": diagnostics.Number(1)})
 
 	return []visibilityExpectation{
-		{"ready", appobs.NewReady(), true, false, false, false},
-		{"sharing subject", subjectEvent, true, false, false, false},
-		{"relay connected", relayConnected, true, false, false, false},
-		{"relay recovering", relayRecovering, false, true, false, false},
-		{"content path", contentPath, true, false, false, false},
-		{"fallback", fallback, false, false, true, false},
-		{"transfer progress", progress, false, false, false, true},
-		{"warning", warning, false, false, true, false},
-		{"command failed", commandFailed, false, false, true, false},
-		{"transfer settled", transferSettled, false, false, true, false},
-		{"sharing stopped", sharingStopped, false, false, true, false},
-		{"trace incomplete", traceIncomplete, false, false, true, false},
-		{"lane adopted", laneAdopted, false, true, false, false},
-		{"relay lifecycle", relayLifecycle, false, false, false, false},
-		{"webrtc lifecycle", webRTC, false, false, false, false},
-		{"peer attempt", peerAttempt, false, true, false, false},
-		{"transfer lifecycle", transferLifecycle, false, false, false, false},
-		{"filesystem output", filesystem, false, false, false, false},
-		{"sender terminal send", senderTerminalSend, false, false, false, false},
-		{"sender session terminated", senderSessionTerminated, false, false, false, false},
-		{"root prefetch", rootPrefetch, false, false, false, false},
-		{"protocol operation failure", protocolOperation, false, true, false, false},
+		{"ready", func(r *Renderer) { r.RenderReady() }, true, false, false, false},
+		{"sharing subject", func(r *Renderer) {
+			r.RenderSharingSubject(SharingSubject{Kind: SharingDirectory, Name: "photos"})
+		}, true, false, false, false},
+		{"relay connected", func(r *Renderer) { r.RenderRelayConnected(true) }, true, false, false, false},
+		{"relay recovering", func(r *Renderer) {
+			r.RenderRelayRecovery(engine.RelayRecovery{Origin: origin, Attempt: 1, State: engine.RelayRecoveryStarted})
+		}, false, true, false, false},
+		{"content path", func(r *Renderer) { r.RenderContentPath(engine.ContentPathDirect) }, true, false, false, false},
+		{"fallback", func(r *Renderer) {
+			r.RenderFallback(engine.Fallback{From: engine.TransportWebRTC, To: engine.TransportRelay, Failure: engine.Failure{Code: engine.FailureDirectUnavailable}})
+		}, false, false, true, false},
+		{"transfer progress", func(r *Renderer) {
+			r.RenderProgress(engine.TransferProgress{
+				Operation: mustReceiveID(t, 1), Job: mustJobID(t, 2),
+				Snapshot: transfer.ReceiveProgressSnapshot{Discovery: transfer.DiscoveryOpen, CountersExact: true},
+			})
+		}, false, false, false, true},
+		{"warning", func(r *Renderer) { r.RenderWarning(engine.Failure{Code: engine.FailureRelayUnavailable}) }, false, false, true, false},
+		{"command failed", func(r *Renderer) { r.RenderCommandFailed(false, engine.Failure{Code: engine.FailureRelayUnavailable}) }, false, false, true, false},
+		{"transfer settled", func(r *Renderer) {
+			r.RenderTransferResult(TransferResult{Status: ResultSuccess, Destination: "output", CountersExact: true})
+		}, false, false, true, false},
+		{"sharing stopped", func(r *Renderer) {
+			r.RenderShareResult(ShareResult{Published: true, StoppedCleanly: true})
+		}, false, false, true, false},
+		{"trace incomplete", func(r *Renderer) { r.RenderTraceIncomplete(true) }, false, false, true, false},
+		{"lane adopted", func(r *Renderer) {
+			r.RenderLaneAdopted(engine.LaneAdopted{Session: sessionID, Lane: lane, Transport: engine.TransportWebRTC})
+		}, false, true, false, false},
+		{"relay lifecycle", func(r *Renderer) { r.RenderDiagnostic(diagnostics.New("relay_lifecycle", nil)) }, false, false, false, false},
+		{"webrtc lifecycle", func(r *Renderer) { r.RenderDiagnostic(diagnostics.New("webrtc_lifecycle", nil)) }, false, false, false, false},
+		{"peer attempt", func(r *Renderer) {
+			r.RenderDiagnostic(diagnostics.New("peer_attempt", diagnostics.Fields{"stage": diagnostics.Text("started")}))
+		}, false, true, false, false},
+		{"transfer lifecycle", func(r *Renderer) { r.RenderDiagnostic(diagnostics.New("transfer_lifecycle", nil)) }, false, false, false, false},
+		{"filesystem output", func(r *Renderer) { r.RenderDiagnostic(diagnostics.New("filesystem_output", nil)) }, false, false, false, false},
+		{"sender terminal send", func(r *Renderer) { r.RenderDiagnostic(diagnostics.New("sender_terminal_send_observed", nil)) }, false, false, false, false},
+		{"sender session terminated", func(r *Renderer) { r.RenderDiagnostic(diagnostics.New("sender_session_terminated", nil)) }, false, false, false, false},
+		{"root prefetch", func(r *Renderer) { r.RenderDiagnostic(diagnostics.New("root_prefetch", nil)) }, false, false, false, false},
+		{"protocol operation failure", func(r *Renderer) { r.RenderDiagnostic(protocolOp) }, false, true, false, false},
 	}
 }
 
 func TestRedirectedVerboseProgressEmitsOnlyPhaseMilestones(t *testing.T) {
 	harness := newRenderHarness(t, terminalcanvas.Capabilities{}, true)
-	receive, job := mustReceiveID(t), mustJobID(t)
-	for _, snapshot := range []appobs.ProgressSnapshot{
-		mustSnapshot(t, appobs.ProgressSpec{DiscoveredFiles: 1, Discovery: appobs.DiscoveryOpen, CountersExact: true}),
-		mustSnapshot(t, appobs.ProgressSpec{DiscoveredFiles: 2, Discovery: appobs.DiscoveryOpen, CountersExact: true}),
-		mustSnapshot(t, appobs.ProgressSpec{DiscoveredFiles: 2, Discovery: appobs.DiscoveryComplete, CountersExact: true}),
+	receive, job := mustReceiveID(t, 1), mustJobID(t, 2)
+	for _, snapshot := range []transfer.ReceiveProgressSnapshot{
+		{DiscoveredFiles: 1, Discovery: transfer.DiscoveryOpen, CountersExact: true},
+		{DiscoveredFiles: 2, Discovery: transfer.DiscoveryOpen, CountersExact: true},
+		{DiscoveredFiles: 2, Discovery: transfer.DiscoveryComplete, CountersExact: true},
 	} {
-		event, err := appobs.NewTransferProgress(receive, job, snapshot)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := harness.renderer.Render(event); err != nil {
-			t.Fatal(err)
-		}
+		harness.renderer.RenderProgress(engine.TransferProgress{Operation: receive, Job: job, Snapshot: snapshot})
 	}
 	if got := strings.Count(harness.buffer.String(), "\n"); got != 2 {
 		t.Fatalf("redirected verbose milestones = %d lines, output %q", got, harness.buffer.String())
@@ -251,21 +172,13 @@ func TestRedirectedVerboseProgressEmitsOnlyPhaseMilestones(t *testing.T) {
 
 func TestRedirectedMilestonesResetForANewOperation(t *testing.T) {
 	harness := newRenderHarness(t, terminalcanvas.Capabilities{}, true)
-	job := mustJobID(t)
+	job := mustJobID(t, 2)
 	for discriminator := byte(1); discriminator <= 2; discriminator++ {
-		receive, err := appobs.NewReceiveOperationID(mustID(t, discriminator))
-		if err != nil {
-			t.Fatal(err)
-		}
-		event, err := appobs.NewTransferProgress(receive, job, mustSnapshot(t, appobs.ProgressSpec{
-			Discovery: appobs.DiscoveryOpen, CountersExact: true,
-		}))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := harness.renderer.Render(event); err != nil {
-			t.Fatal(err)
-		}
+		harness.renderer.RenderProgress(engine.TransferProgress{
+			Operation: mustReceiveID(t, discriminator),
+			Job:       job,
+			Snapshot:  transfer.ReceiveProgressSnapshot{Discovery: transfer.DiscoveryOpen, CountersExact: true},
+		})
 	}
 	if got := strings.Count(harness.buffer.String(), "\n"); got != 2 {
 		t.Fatalf("new-operation milestones = %d lines, output %q", got, harness.buffer.String())
@@ -274,20 +187,17 @@ func TestRedirectedMilestonesResetForANewOperation(t *testing.T) {
 
 func TestRendererRateUsesInjectedClockWithoutWaiting(t *testing.T) {
 	harness := newRenderHarness(t, terminalcanvas.Capabilities{Interactive: true}, false)
-	receive, job := mustReceiveID(t), mustJobID(t)
+	receive, job := mustReceiveID(t, 1), mustJobID(t, 2)
 	for index := range uint64(3) {
-		snapshot := mustSnapshot(t, appobs.ProgressSpec{
-			DiscoveredFiles: 1, DiscoveredBytes: 10_000_000,
-			VerifiedBytes: index * 1_000_000, NewlyVerifiedBytes: index * 1_000_000,
-			Discovery: appobs.DiscoveryComplete, CountersExact: true,
+		harness.renderer.RenderProgress(engine.TransferProgress{
+			Operation: receive,
+			Job:       job,
+			Snapshot: transfer.ReceiveProgressSnapshot{
+				DiscoveredFiles: 1, DiscoveredBytes: 10_000_000,
+				VerifiedBytes: index * 1_000_000, NewlyVerifiedBytes: index * 1_000_000,
+				Discovery: transfer.DiscoveryComplete, CountersExact: true,
+			},
 		})
-		event, err := appobs.NewTransferProgress(receive, job, snapshot)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := harness.renderer.Render(event); err != nil {
-			t.Fatal(err)
-		}
 		harness.clock.now = harness.clock.now.Add(time.Second)
 	}
 	output := harness.buffer.String()
@@ -299,53 +209,31 @@ func TestRendererRateUsesInjectedClockWithoutWaiting(t *testing.T) {
 func TestRendererEmptySelectionReachesHundredPercentOnlyForSuccess(t *testing.T) {
 	tests := []struct {
 		name        string
-		status      clievent.ResultStatus
-		exitCode    clievent.ExitCode
-		failure     appobs.Failure
+		status      ResultStatus
+		failure     *engine.Failure
 		wantHundred bool
 		wantResult  string
 	}{
-		{"success", clievent.ResultSuccess, clievent.ExitSuccess, appobs.Failure{}, true, "Download completed"},
-		{"partial", clievent.ResultPartial, clievent.ExitFailure, mustFailure(t, appobs.FailureUnexpected), false, "Download finished partially"},
-		{"paused", clievent.ResultPaused, clievent.ExitFailure, mustFailure(t, appobs.FailureCanceled), false, "Download paused"},
-		{"failed", clievent.ResultFailed, clievent.ExitFailure, mustFailure(t, appobs.FailureUnexpected), false, "Download failed"},
+		{"success", ResultSuccess, nil, true, "Download completed"},
+		{"partial", ResultPartial, &engine.Failure{Code: engine.FailureUnexpected}, false, "Download finished partially"},
+		{"paused", ResultPaused, &engine.Failure{Code: engine.FailureCanceled}, false, "Download paused"},
+		{"failed", ResultFailed, &engine.Failure{Code: engine.FailureUnexpected}, false, "Download failed"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			harness := newRenderHarness(t, terminalcanvas.Capabilities{Interactive: true}, false)
-			snapshot := mustSnapshot(t, appobs.ProgressSpec{
-				Discovery: appobs.DiscoveryComplete, CountersExact: true,
+			harness.renderer.RenderProgress(engine.TransferProgress{
+				Operation: mustReceiveID(t, 1),
+				Job:       mustJobID(t, 2),
+				Snapshot:  transfer.ReceiveProgressSnapshot{Discovery: transfer.DiscoveryComplete, CountersExact: true},
 			})
-			progress, err := appobs.NewTransferProgress(mustReceiveID(t), mustJobID(t), snapshot)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := harness.renderer.Render(progress); err != nil {
-				t.Fatal(err)
-			}
 			beforeSettlement := harness.buffer.String()
 			if !strings.Contains(beforeSettlement, "0%") || strings.Contains(beforeSettlement, "100%") {
 				t.Fatalf("pre-settlement progress = %q", beforeSettlement)
 			}
-
-			resultSpec := clievent.TransferResultSpec{
-				Status: test.status, ExitCode: test.exitCode,
-				Destination: appobs.NewDisplayPath("output"), CountersExact: true,
-			}
-			if test.failure.Valid() {
-				resultSpec.Failure = test.failure
-			}
-			result, err := clievent.NewTransferResult(resultSpec)
-			if err != nil {
-				t.Fatal(err)
-			}
-			settled, err := clievent.NewTransferSettled(result)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := harness.renderer.RenderTerminal(settled); err != nil {
-				t.Fatal(err)
-			}
+			harness.renderer.RenderTransferResult(TransferResult{
+				Status: test.status, Destination: "output", CountersExact: true, Failure: test.failure,
+			})
 			output := harness.buffer.String()
 			if got := strings.Contains(output, "100%"); got != test.wantHundred {
 				t.Fatalf("hundred-percent progress = %v, want %v; output %q", got, test.wantHundred, output)
@@ -354,33 +242,6 @@ func TestRendererEmptySelectionReachesHundredPercentOnlyForSuccess(t *testing.T)
 				t.Fatalf("settlement output %q missing %q", output, test.wantResult)
 			}
 		})
-	}
-}
-
-func renderTestEvent(renderer *Renderer, event clievent.Event) error {
-	if terminal, ok := event.(clievent.TerminalEvent); ok {
-		return renderer.RenderTerminal(terminal)
-	}
-	return renderer.Render(event)
-}
-
-func TestRendererRequiresTerminalEventsThroughNarrowTerminalBoundary(t *testing.T) {
-	harness := newRenderHarness(t, terminalcanvas.Capabilities{}, false)
-	var terminal clievent.TerminalEvent
-	for _, candidate := range rendererEvents(t) {
-		if value, ok := candidate.event.(clievent.TerminalEvent); ok {
-			terminal = value
-			break
-		}
-	}
-	if terminal == nil {
-		t.Fatal("renderer fixtures contain no terminal event")
-	}
-	if err := harness.renderer.Render(terminal); !errors.Is(err, clievent.ErrInvalidEvent) {
-		t.Fatalf("ordinary terminal render error = %v", err)
-	}
-	if err := harness.renderer.RenderTerminal(terminal); err != nil {
-		t.Fatalf("terminal render error = %v", err)
 	}
 }
 
@@ -397,18 +258,14 @@ func TestRendererConfigurationValidationAndWriteFailureIsolation(t *testing.T) {
 			t.Fatalf("New(%+v) error = %v", config, err)
 		}
 	}
-	if err := (*Renderer)(nil).Render(appobs.NewReady()); !errors.Is(err, clievent.ErrInvalidEvent) {
-		t.Fatalf("nil renderer error = %v", err)
-	}
+	(*Renderer)(nil).RenderReady()
 
 	failingCanvas := terminalcanvas.New(terminalcanvas.Config{Writer: failingWriter{}, Capabilities: provider})
 	renderer, err := New(Config{Canvas: failingCanvas, Capabilities: provider, Clock: clock})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := renderer.Render(appobs.NewReady()); err != nil {
-		t.Fatalf("human write changed render authority: %v", err)
-	}
+	renderer.RenderReady()
 	if failingCanvas.Err() == nil {
 		t.Fatal("Canvas did not retain writer failure")
 	}
@@ -420,25 +277,15 @@ func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("write fa
 
 func TestRendererSerializesConcurrentEvents(t *testing.T) {
 	harness := newRenderHarness(t, terminalcanvas.Capabilities{}, false)
-	warning, err := clievent.NewWarning(clievent.CommandGet, mustFailure(t, appobs.FailureTraceWrite))
-	if err != nil {
-		t.Fatal(err)
-	}
 	const producers = 20
 	var group sync.WaitGroup
 	for range producers {
 		group.Go(func() {
-			if err := harness.renderer.Render(warning); err != nil {
-				t.Errorf("Render() error = %v", err)
-			}
+			harness.renderer.RenderWarning(engine.Failure{Code: engine.FailureRelayUnavailable})
 		})
 	}
 	group.Wait()
 	if got := strings.Count(harness.buffer.String(), "\n"); got != producers {
 		t.Fatalf("rendered %d lines, want %d", got, producers)
 	}
-}
-
-func diagnosticEvent(name string, fields diagnostics.Fields) clievent.Diagnostic {
-	return clievent.Diagnostic{Owner: clievent.CommandGet, Record: diagnostics.New(name, fields)}
 }

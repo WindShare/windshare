@@ -6,13 +6,10 @@ import (
 
 	"github.com/windshare/windshare/adapters/filesystem"
 	"github.com/windshare/windshare/cmd/wind/internal/accountcommand"
-	"github.com/windshare/windshare/cmd/wind/internal/clievent"
-	"github.com/windshare/windshare/cmd/wind/internal/commandprojection"
+	"github.com/windshare/windshare/cmd/wind/internal/humanoutput"
 	"github.com/windshare/windshare/cmd/wind/internal/networkcommand"
-	"github.com/windshare/windshare/cmd/wind/internal/observationbridge"
 	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/engine/account"
-	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 func (a *App) runShare(ctx context.Context, args []string) (code int) {
@@ -20,18 +17,14 @@ func (a *App) runShare(ctx context.Context, args []string) (code int) {
 	if parse != requestParseReady {
 		return parse.exitCode()
 	}
-	runtime, err := a.newCommandRuntime(clievent.CommandShare, request.observation)
+	runtime, err := a.newCommandRuntime(commandShare, request.observation)
 	if err != nil {
 		if !errors.Is(err, errUserTraceOpen) {
 			a.writeCompleteLine("share: command observation could not start")
 		}
 		return ExitFailure
 	}
-	observations := newShareProjection(runtime)
-	defer func() {
-		runtime.FinalizeStaged()
-		runtime.Close()
-	}()
+	defer runtime.Close()
 	closeApp, err := a.ensureApplication(runtime.diagnosticSink())
 	if err != nil {
 		return ExitFailure
@@ -45,7 +38,7 @@ func (a *App) runShare(ctx context.Context, args []string) (code int) {
 		return runtime.failToStart(err)
 	}
 	if a.networkSetup != nil {
-		networkcommand.ObserveStartup(a.networkSetup, runtime, clievent.CommandShare)
+		networkcommand.ObserveStartup(a.networkSetup, runtime.ObserveNetworkSetup)
 	}
 	go func() {
 		select {
@@ -54,14 +47,13 @@ func (a *App) runShare(ctx context.Context, args []string) (code int) {
 		case <-current.Done():
 		}
 	}()
-	gate := &observationbridge.PublicationGate{}
-	reader := observationbridge.Start(current.Observations(), gate, func(readContext context.Context, value engine.Observation) {
-		gate.Commit(readContext, func() bool {
-			observeEngineTask(runtime, value)
-			a.observeEngineShare(observations, value.Event)
-			return true
-		})
-	})
+	observationsDone := make(chan struct{})
+	go func() {
+		defer close(observationsDone)
+		for value := range current.Observations() {
+			runtime.ObserveEngine(value)
+		}
+	}()
 
 	finishAccountProgress := accountcommand.Watch(ctx, a.application.Accounts(), a.terminalOutput().canvas)
 	defer finishAccountProgress()
@@ -69,7 +61,7 @@ func (a *App) runShare(ctx context.Context, args []string) (code int) {
 	finishAccountProgress()
 	var publicationErr error
 	if !authRequired && readyErr == nil {
-		publicationErr = a.publishEngineShare(ready, request.link, runtime, observations)
+		publicationErr = a.publishEngineShare(ready, request.link, runtime)
 		if publicationErr != nil {
 			// Service readiness precedes presentation. Even a partial output failure
 			// must stop the share and join its work before this command returns.
@@ -77,14 +69,11 @@ func (a *App) runShare(ctx context.Context, args []string) (code int) {
 		}
 	}
 	result, waitErr := current.Wait(context.Background())
-	completionContext, cancel := context.WithTimeout(context.Background(), observationCompletionTimeout)
-	observations.reportReaderStatus(appobs.ObserverLossCommandAdapter, reader.Join(completionContext))
-	cancel()
-	if result.Observations.CapacityDropped > 0 {
-		runtime.ReportObserverLoss(appobs.ObserverLossEngineObservation, appobs.ObserverLossStreamCapacity, result.Observations.CapacityDropped)
-	}
+	// Engine closes Observations() before resolving Done/Wait, so draining finishes promptly.
+	<-observationsDone
+	runtime.AddDropped(result.Observations.CapacityDropped)
 	if waitErr != nil {
-		emitShareCommandFailure(runtime, ExitFailure, waitErr)
+		runtime.StageCommandFailure(ExitFailure, classifyFailure(waitErr))
 		return ExitFailure
 	}
 	if authRequired {
@@ -97,11 +86,11 @@ func (a *App) runShare(ctx context.Context, args []string) (code int) {
 				if snapshot.Reason != "" {
 					a.writeCompleteLine("Account: %s", snapshot.Reason)
 				}
-				emitShareKnownFailure(runtime, ExitFailure, appobs.FailureAccountStorageError)
+				runtime.StageCommandFailure(ExitFailure, engine.Failure{Code: engine.FailureAccountStorageError})
 				return ExitFailure
 			}
 		}
-		emitShareKnownFailure(runtime, ExitNetwork, appobs.FailureRelayAccessDenied)
+		runtime.StageCommandFailure(ExitNetwork, engine.Failure{Code: engine.FailureRelayAccessDenied})
 		return ExitNetwork
 	}
 	return reportShareResult(runtime, result, publicationErr)
@@ -137,12 +126,15 @@ func awaitShareStartup(current *engine.ShareTask) (engine.ShareReady, error, boo
 
 func (a *App) engineShareRequest(request shareRequest, runtime *commandRuntime) engine.ShareRequest {
 	return engine.ShareRequest{
-		Source: filesystem.ShareSource(request.paths), RelayIntent: request.relayIntent, Frontend: request.link.frontURL, ChunkSize: request.chunkSize,
+		Source:      filesystem.ShareSource(request.paths),
+		RelayIntent: request.relayIntent,
+		Frontend:    request.link.frontURL,
+		ChunkSize:   request.chunkSize,
 		Diagnostics: runtime.diagnosticSink(),
 	}
 }
 
-func (a *App) publishEngineShare(ready engine.ShareReady, presentation shareLinkPresentation, runtime *commandRuntime, observations *shareObservations) error {
+func (a *App) publishEngineShare(ready engine.ShareReady, presentation shareLinkPresentation, runtime *commandRuntime) error {
 	if ready.Frontend != "" {
 		presentation.frontURL = ready.Frontend
 	}
@@ -154,31 +146,51 @@ func (a *App) publishEngineShare(ready engine.ShareReady, presentation shareLink
 	if err := publishShareCapability(a.Stdout, payload); err != nil {
 		return errors.Join(errShareCapabilityOutput, err)
 	}
-	origin := ready.RelayOrigin
-	observations.SetRelayOrigin(origin)
-	subject, err := commandprojection.ProjectSharingSubject(ready.SelectedRootSummary)
-	if err != nil {
-		return err
-	}
-	connected, err := clievent.NewRelayConnected(clievent.CommandShare, origin)
-	if err != nil {
-		return err
-	}
-	emitShareReady(runtime, subject, connected)
+	runtime.PublishShareReady(ready.SelectedRootSummary, ready.RelayOrigin)
 	return nil
 }
 
-func shareExitCode(class engine.FailureClass) int {
-	switch class {
-	case engine.FailureNone:
-		return ExitOK
-	case engine.FailureUsage:
-		return ExitUsage
-	case engine.FailureNetwork:
-		return ExitNetwork
-	case engine.FailureSourceDrift:
-		return ExitDrift
-	default:
+func reportShareResult(runtime *commandRuntime, result engine.TaskResult[engine.ShareResult], publicationErr error) int {
+	if publicationErr != nil {
+		// The engine settles service shutdown separately. Its stop outcome and
+		// cleanup failures cannot turn an output error into success or usage error.
+		switch {
+		case errors.Is(publicationErr, errShareCapabilityEncoding):
+			runtime.StageCommandFailure(ExitUsage, engine.Failure{Code: engine.FailureCapabilityInvalid})
+			return ExitUsage
+		case errors.Is(publicationErr, errShareCapabilityOutput):
+			runtime.StageCommandFailure(ExitFailure, engine.Failure{Code: engine.FailurePublication})
+			return ExitFailure
+		}
+		runtime.StageCommandFailure(ExitFailure, classifyFailure(publicationErr))
 		return ExitFailure
 	}
+	code := exitCodeForClass(result.FailureClass)
+	if !result.Value.Ready && (result.Err != nil || result.CleanupError != nil) {
+		if code != ExitOK {
+			cause := result.Err
+			if cause == nil {
+				cause = result.CleanupError
+			}
+			runtime.StageCommandFailure(code, classifyFailure(cause))
+		}
+		return code
+	}
+	stoppedCleanly := code == ExitOK
+	var failure *engine.Failure
+	if !stoppedCleanly {
+		cause := result.Err
+		if cause == nil {
+			cause = result.CleanupError
+		}
+		f := classifyFailure(cause)
+		failure = &f
+	}
+	runtime.StageShareResult(code, humanoutput.ShareResult{
+		Published:      result.Value.Ready,
+		StoppedCleanly: stoppedCleanly,
+		Elapsed:        result.Value.Elapsed,
+		Failure:        failure,
+	})
+	return code
 }

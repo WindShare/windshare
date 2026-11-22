@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"github.com/windshare/windshare/cmd/wind/internal/terminalcanvas"
-	appobs "github.com/windshare/windshare/engine/observation"
+	"github.com/windshare/windshare/core/transfer"
 )
 
 const (
@@ -34,11 +34,12 @@ type progressComponents struct {
 // FormatProgress is pure: rate eligibility is supplied as a fact, while this
 // function owns only progress truth rules and width degradation.
 func FormatProgress(
-	snapshot appobs.ProgressSnapshot,
+	snapshot transfer.ReceiveProgressSnapshot,
+	capacityWaitVisible bool,
 	metrics ProgressMetrics,
 	layout ProgressLayout,
 ) terminalcanvas.Line {
-	components := progressView(snapshot, metrics, layout.Unicode)
+	components := progressView(snapshot, capacityWaitVisible, metrics, layout.Unicode)
 	line := composeProgressLine(components)
 	if layout.Columns <= 0 {
 		return line
@@ -61,10 +62,15 @@ func FormatProgress(
 	return line
 }
 
-func progressView(snapshot appobs.ProgressSnapshot, metrics ProgressMetrics, unicode bool) progressComponents {
+func progressView(
+	snapshot transfer.ReceiveProgressSnapshot,
+	capacityWaitVisible bool,
+	metrics ProgressMetrics,
+	unicode bool,
+) progressComponents {
 	symbols := SelectSymbols(unicode)
 	exactPrefix := ""
-	if !snapshot.CountersExact() {
+	if !snapshot.CountersExact {
 		if unicode {
 			exactPrefix = "≥"
 		} else {
@@ -72,74 +78,78 @@ func progressView(snapshot appobs.ProgressSnapshot, metrics ProgressMetrics, uni
 		}
 	}
 	rate := ""
-	if metrics.RateValid && metrics.RateBytesPerSecond != 0 && snapshot.CountersExact() &&
-		snapshot.Discovery() != appobs.DiscoveryFailed {
+	if metrics.RateValid && metrics.RateBytesPerSecond != 0 && snapshot.CountersExact &&
+		snapshot.Discovery != transfer.DiscoveryFailed {
 		rate = FormatRate(metrics.RateBytesPerSecond)
 	}
-	if snapshot.CapacityWaitVisible() {
+	if capacityWaitVisible {
 		return progressComponents{phase: capacityWaitPhase}
 	}
 
-	switch snapshot.Discovery() {
-	case appobs.DiscoveryOpen:
+	completed := snapshot.CompletedBytes()
+	switch snapshot.Discovery {
+	case transfer.DiscoveryOpen:
 		return progressComponents{
 			phase:     symbols.Discovery + " Discovering" + symbols.Ellipsis,
-			primary:   exactPrefix + FormatBytes(snapshot.DiscoveredBytes()) + " ready",
-			secondary: exactPrefix + formatFiles(snapshot.DiscoveredFiles()),
+			primary:   exactPrefix + FormatBytes(snapshot.DiscoveredBytes) + " ready",
+			secondary: exactPrefix + formatFiles(snapshot.DiscoveredFiles),
 			rate:      rate,
 		}
-	case appobs.DiscoveryFailed:
+	case transfer.DiscoveryFailed:
 		return progressComponents{
 			phase:     symbols.Failure + " Discovery failed",
-			primary:   exactPrefix + FormatBytes(snapshot.CompletedBytes()) + " completed",
-			secondary: exactPrefix + formatFiles(snapshot.PublishedFiles()) + " published",
+			primary:   exactPrefix + FormatBytes(completed) + " completed",
+			secondary: exactPrefix + formatFiles(snapshot.PublishedFiles) + " published",
 		}
 	}
 
-	if !snapshot.CountersExact() {
+	if !snapshot.CountersExact {
 		return progressComponents{
 			phase:     "Transferring" + symbols.Ellipsis,
-			primary:   exactPrefix + FormatBytes(snapshot.CompletedBytes()) + " completed",
-			secondary: exactPrefix + formatFiles(snapshot.PublishedFiles()) + " published",
+			primary:   exactPrefix + FormatBytes(completed) + " completed",
+			secondary: exactPrefix + formatFiles(snapshot.PublishedFiles) + " published",
 			rate:      rate,
 		}
 	}
 
-	if snapshot.DiscoveredBytes() == 0 {
-		settledFiles := terminalFileOutcomes(snapshot.FileOutcomes())
+	if snapshot.DiscoveredBytes == 0 {
+		settledFiles := terminalFileOutcomes(snapshot.FileOutcomes)
 		percent := zeroBytePercentage(
 			settledFiles,
-			snapshot.DiscoveredFiles(),
-			snapshot.FileOutcomes(),
+			snapshot.DiscoveredFiles,
+			snapshot.FileOutcomes,
 			metrics.SuccessfulSettlement,
 		)
 		return progressComponents{
 			phase:   formatCount(percent) + "%",
-			primary: formatCount(settledFiles) + "/" + formatFiles(snapshot.DiscoveredFiles()) + " settled",
+			primary: formatCount(settledFiles) + "/" + formatFiles(snapshot.DiscoveredFiles) + " settled",
 			bar:     formatProgressBar(percent, unicode),
 		}
 	}
 
-	if snapshot.CompletedBytes() == snapshot.DiscoveredBytes() &&
-		(snapshot.PublishedBytes() < snapshot.DiscoveredBytes() || snapshot.PublishedFiles() < snapshot.DiscoveredFiles()) {
+	if completed == snapshot.DiscoveredBytes &&
+		(snapshot.PublishedBytes < snapshot.DiscoveredBytes || snapshot.PublishedFiles < snapshot.DiscoveredFiles) {
 		return progressComponents{
 			phase:     "Finalizing" + symbols.Ellipsis,
-			primary:   FormatBytes(snapshot.PublishedBytes()) + "/" + FormatBytes(snapshot.DiscoveredBytes()) + " published",
-			secondary: formatCount(snapshot.PublishedFiles()) + "/" + formatFiles(snapshot.DiscoveredFiles()),
+			primary:   FormatBytes(snapshot.PublishedBytes) + "/" + FormatBytes(snapshot.DiscoveredBytes) + " published",
+			secondary: formatCount(snapshot.PublishedFiles) + "/" + formatFiles(snapshot.DiscoveredFiles),
 		}
 	}
 
-	percent := percentage(snapshot.CompletedBytes(), snapshot.DiscoveredBytes())
+	percent := percentage(completed, snapshot.DiscoveredBytes)
 	components := progressComponents{
 		phase:     formatCount(percent) + "%",
-		primary:   FormatBytes(snapshot.CompletedBytes()) + "/" + FormatBytes(snapshot.DiscoveredBytes()),
-		secondary: formatCount(snapshot.PublishedFiles()) + "/" + formatFiles(snapshot.DiscoveredFiles()),
+		primary:   FormatBytes(completed) + "/" + FormatBytes(snapshot.DiscoveredBytes),
+		secondary: formatCount(snapshot.PublishedFiles) + "/" + formatFiles(snapshot.DiscoveredFiles),
 		bar:       formatProgressBar(percent, unicode),
 		rate:      rate,
 	}
-	remaining := snapshot.DiscoveredBytes() - snapshot.CompletedBytes()
+	var remaining uint64
+	if snapshot.DiscoveredBytes > completed {
+		remaining = snapshot.DiscoveredBytes - completed
+	}
 	if remaining != 0 && metrics.RateValid && metrics.RateStable &&
-		metrics.RateBytesPerSecond != 0 && !snapshot.FileOutcomes().HasNonSuccess() {
+		metrics.RateBytesPerSecond != 0 && !hasNonSuccessOutcome(snapshot.FileOutcomes) {
 		seconds := remaining / metrics.RateBytesPerSecond
 		if remaining%metrics.RateBytesPerSecond != 0 {
 			seconds++
@@ -187,20 +197,20 @@ func percentage(completed, total uint64) uint64 {
 
 func zeroBytePercentage(
 	settledFiles, discoveredFiles uint64,
-	outcomes appobs.FileOutcomes,
+	outcomes transfer.FileOutcomeSummary,
 	successfulSettlement bool,
 ) uint64 {
 	if discoveredFiles == 0 {
 		// No file outcome can prove completion for an empty set, so only the
 		// authoritative transfer settlement may close its progress.
-		if successfulSettlement && !outcomes.HasNonSuccess() {
+		if successfulSettlement && !hasNonSuccessOutcome(outcomes) {
 			return 100
 		}
 		return 0
 	}
 
 	percent := percentage(settledFiles, discoveredFiles)
-	if percent == 100 && (!successfulSettlement || outcomes.HasNonSuccess()) {
+	if percent == 100 && (!successfulSettlement || hasNonSuccessOutcome(outcomes)) {
 		return 99
 	}
 	return percent
@@ -216,7 +226,12 @@ func formatProgressBar(percent uint64, unicode bool) string {
 	return "[" + strings.Repeat(fill, filled) + strings.Repeat(empty, progressBarSegments-filled) + "]"
 }
 
-func terminalFileOutcomes(outcomes appobs.FileOutcomes) uint64 {
+func hasNonSuccessOutcome(outcomes transfer.FileOutcomeSummary) bool {
+	return outcomes.PausedFiles != 0 || outcomes.CollisionFiles != 0 ||
+		outcomes.ItemBlockedFiles != 0 || outcomes.FailedFiles != 0
+}
+
+func terminalFileOutcomes(outcomes transfer.FileOutcomeSummary) uint64 {
 	total := outcomes.DownloadedFiles
 	for _, value := range []uint64{
 		outcomes.ResumedFiles, outcomes.PreviouslyPublishedFiles, outcomes.PausedFiles, outcomes.CollisionFiles,

@@ -5,53 +5,51 @@ import (
 	"testing"
 	"time"
 
-	appobs "github.com/windshare/windshare/engine/observation"
+	"github.com/windshare/windshare/core/transfer"
+	"github.com/windshare/windshare/core/transfer/revisionwait"
 )
 
 func TestCapacityWaitOverridesOrdinaryProgressOnlyWhileVisible(t *testing.T) {
-	spec := appobs.ProgressSpec{
+	snapshot := transfer.ReceiveProgressSnapshot{
 		DiscoveredFiles: 2, DiscoveredBytes: 100,
 		PublishedFiles: 1, PublishedBytes: 20,
 		VerifiedBytes: 40, NewlyVerifiedBytes: 40,
-		FileOutcomes:          appobs.FileOutcomes{DownloadedFiles: 1},
-		CapacityActiveWaiters: 1, CapacityAccumulatedWait: time.Second, CapacityWaitAttempts: 2,
-		Discovery: appobs.DiscoveryComplete, CountersExact: true,
+		FileOutcomes:  transfer.FileOutcomeSummary{DownloadedFiles: 1},
+		CapacityWait:  revisionwait.Snapshot{ActiveWaiters: 1, AccumulatedWait: time.Second, Attempts: 2},
+		Discovery:     transfer.DiscoveryComplete,
+		CountersExact: true,
 	}
 	metrics := ProgressMetrics{RateBytesPerSecond: 10, RateValid: true, RateStable: true}
 
-	hidden := mustSnapshot(t, spec)
-	hiddenText := lineText(FormatProgress(hidden, metrics, ProgressLayout{}))
+	hiddenText := lineText(FormatProgress(snapshot, false, metrics, ProgressLayout{}))
 	if !strings.Contains(hiddenText, "40%") || strings.Contains(hiddenText, "Waiting for sender capacity") {
 		t.Fatalf("hidden capacity wait changed ordinary progress: %q", hiddenText)
 	}
 
-	spec.CapacityWaitVisible = true
-	visible := mustSnapshot(t, spec)
-	visibleText := lineText(FormatProgress(visible, metrics, ProgressLayout{}))
+	visibleText := lineText(FormatProgress(snapshot, true, metrics, ProgressLayout{}))
 	if visibleText != "Waiting for sender capacity" || strings.Contains(visibleText, "%") ||
 		strings.Contains(visibleText, "/s") || strings.Contains(visibleText, "left") {
 		t.Fatalf("visible capacity wait was not concise: %q", visibleText)
 	}
 
-	spec.CapacityActiveWaiters = 0
-	spec.CapacityWaitVisible = false
-	spec.VerifiedBytes = 50
-	cleared := mustSnapshot(t, spec)
-	clearedText := lineText(FormatProgress(cleared, metrics, ProgressLayout{}))
+	snapshot.CapacityWait.ActiveWaiters = 0
+	snapshot.VerifiedBytes = 50
+	clearedText := lineText(FormatProgress(snapshot, false, metrics, ProgressLayout{}))
 	if !strings.Contains(clearedText, "50%") || strings.Contains(clearedText, "Waiting for sender capacity") {
 		t.Fatalf("cleared capacity wait did not restore ordinary progress: %q", clearedText)
 	}
 }
 
 func TestHistoricalDeliveryContributesToProgressWithoutChangingTransferRate(t *testing.T) {
-	spec := appobs.ProgressSpec{
+	snapshot := transfer.ReceiveProgressSnapshot{
 		DiscoveredFiles: 2, DiscoveredBytes: 100,
 		PublishedFiles: 1, PublishedBytes: 60, PreviouslyPublishedBytes: 60,
 		VerifiedBytes: 20, NewlyVerifiedBytes: 20,
-		FileOutcomes: appobs.FileOutcomes{PreviouslyPublishedFiles: 1},
-		Discovery:    appobs.DiscoveryComplete, CountersExact: true,
+		FileOutcomes:  transfer.FileOutcomeSummary{PreviouslyPublishedFiles: 1},
+		Discovery:     transfer.DiscoveryComplete,
+		CountersExact: true,
 	}
-	text := lineText(FormatProgress(mustSnapshot(t, spec), ProgressMetrics{
+	text := lineText(FormatProgress(snapshot, false, ProgressMetrics{
 		RateBytesPerSecond: 10, RateValid: true, RateStable: true,
 	}, ProgressLayout{}))
 	for _, want := range []string{"80%", "80 B/100 B", "10 B/s", "2s left"} {
@@ -59,10 +57,10 @@ func TestHistoricalDeliveryContributesToProgressWithoutChangingTransferRate(t *t
 			t.Errorf("mixed progress %q missing %q", text, want)
 		}
 	}
-	spec.VerifiedBytes, spec.NewlyVerifiedBytes = 0, 0
-	spec.PublishedFiles, spec.FileOutcomes.PreviouslyPublishedFiles = 2, 2
-	spec.PublishedBytes, spec.PreviouslyPublishedBytes = 100, 100
-	text = lineText(FormatProgress(mustSnapshot(t, spec), ProgressMetrics{SuccessfulSettlement: true}, ProgressLayout{}))
+	snapshot.VerifiedBytes, snapshot.NewlyVerifiedBytes = 0, 0
+	snapshot.PublishedFiles, snapshot.FileOutcomes.PreviouslyPublishedFiles = 2, 2
+	snapshot.PublishedBytes, snapshot.PreviouslyPublishedBytes = 100, 100
+	text = lineText(FormatProgress(snapshot, false, ProgressMetrics{SuccessfulSettlement: true}, ProgressLayout{}))
 	if !strings.Contains(text, "100%") || strings.Contains(text, "verified") || strings.Contains(text, "left") {
 		t.Fatalf("historical completion = %q", text)
 	}
@@ -70,12 +68,12 @@ func TestHistoricalDeliveryContributesToProgressWithoutChangingTransferRate(t *t
 
 func TestProgressTruthEligibility(t *testing.T) {
 	t.Parallel()
-	open := mustSnapshot(t, appobs.ProgressSpec{
+	open := transfer.ReceiveProgressSnapshot{
 		DiscoveredFiles: 14, DiscoveredBytes: 8_200_000,
 		VerifiedBytes: 2_000_000, NewlyVerifiedBytes: 2_000_000,
-		Discovery: appobs.DiscoveryOpen, CountersExact: true,
-	})
-	text := lineText(FormatProgress(open, ProgressMetrics{
+		Discovery: transfer.DiscoveryOpen, CountersExact: true,
+	}
+	text := lineText(FormatProgress(open, false, ProgressMetrics{
 		RateBytesPerSecond: 2_400_000, RateValid: true, RateStable: true,
 	}, ProgressLayout{Unicode: true}))
 	for _, want := range []string{"Discovering", "14 files", "8.2 MB ready", "2.4 MB/s"} {
@@ -87,14 +85,14 @@ func TestProgressTruthEligibility(t *testing.T) {
 		t.Errorf("open discovery exposed deterministic progress: %q", text)
 	}
 
-	complete := mustSnapshot(t, appobs.ProgressSpec{
+	complete := transfer.ReceiveProgressSnapshot{
 		DiscoveredFiles: 34, DiscoveredBytes: 142_500_000,
 		PublishedFiles: 27, PublishedBytes: 111_200_000,
 		VerifiedBytes: 111_200_000, NewlyVerifiedBytes: 30_000_000,
-		FileOutcomes: appobs.FileOutcomes{DownloadedFiles: 27},
-		Discovery:    appobs.DiscoveryComplete, CountersExact: true,
-	})
-	text = lineText(FormatProgress(complete, ProgressMetrics{
+		FileOutcomes: transfer.FileOutcomeSummary{DownloadedFiles: 27},
+		Discovery:    transfer.DiscoveryComplete, CountersExact: true,
+	}
+	text = lineText(FormatProgress(complete, false, ProgressMetrics{
 		RateBytesPerSecond: 14_800_000, RateValid: true, RateStable: true,
 	}, ProgressLayout{}))
 	for _, want := range []string{"78%", "27/34 files", "111.2 MB/142.5 MB", "14.8 MB/s", "3s left"} {
@@ -103,14 +101,14 @@ func TestProgressTruthEligibility(t *testing.T) {
 		}
 	}
 
-	blocked := mustSnapshot(t, appobs.ProgressSpec{
+	blocked := transfer.ReceiveProgressSnapshot{
 		DiscoveredFiles: 34, DiscoveredBytes: 142_500_000,
 		PublishedFiles: 27, PublishedBytes: 111_200_000,
 		VerifiedBytes: 111_200_000, NewlyVerifiedBytes: 30_000_000,
-		FileOutcomes: appobs.FileOutcomes{DownloadedFiles: 27, ItemBlockedFiles: 1},
-		Discovery:    appobs.DiscoveryComplete, CountersExact: true,
-	})
-	text = lineText(FormatProgress(blocked, ProgressMetrics{
+		FileOutcomes: transfer.FileOutcomeSummary{DownloadedFiles: 27, ItemBlockedFiles: 1},
+		Discovery:    transfer.DiscoveryComplete, CountersExact: true,
+	}
+	text = lineText(FormatProgress(blocked, false, ProgressMetrics{
 		RateBytesPerSecond: 14_800_000, RateValid: true, RateStable: true,
 	}, ProgressLayout{}))
 	if !strings.Contains(text, "14.8 MB/s") || strings.Contains(text, "left") {
@@ -120,26 +118,26 @@ func TestProgressTruthEligibility(t *testing.T) {
 
 func TestProgressFinalizingAndInexactSemantics(t *testing.T) {
 	t.Parallel()
-	finalizing := mustSnapshot(t, appobs.ProgressSpec{
+	finalizing := transfer.ReceiveProgressSnapshot{
 		DiscoveredFiles: 2, DiscoveredBytes: 10_000,
 		PublishedFiles: 1, PublishedBytes: 6_000,
 		VerifiedBytes: 10_000, NewlyVerifiedBytes: 10_000,
-		FileOutcomes: appobs.FileOutcomes{DownloadedFiles: 1},
-		Discovery:    appobs.DiscoveryComplete, CountersExact: true,
-	})
-	text := lineText(FormatProgress(finalizing, ProgressMetrics{
+		FileOutcomes: transfer.FileOutcomeSummary{DownloadedFiles: 1},
+		Discovery:    transfer.DiscoveryComplete, CountersExact: true,
+	}
+	text := lineText(FormatProgress(finalizing, false, ProgressMetrics{
 		RateBytesPerSecond: 1_000, RateValid: true, RateStable: true,
 	}, ProgressLayout{}))
 	if !strings.Contains(text, "Finalizing") || strings.Contains(text, "/s") || strings.Contains(text, "left") {
 		t.Fatalf("finalizing progress = %q", text)
 	}
 
-	inexact := mustSnapshot(t, appobs.ProgressSpec{
+	inexact := transfer.ReceiveProgressSnapshot{
 		DiscoveredFiles: 5, DiscoveredBytes: 10_000, PublishedFiles: 2,
 		PublishedBytes: 4_000, VerifiedBytes: 4_000, NewlyVerifiedBytes: 4_000,
-		Discovery: appobs.DiscoveryComplete, CountersExact: false,
-	})
-	text = lineText(FormatProgress(inexact, ProgressMetrics{
+		Discovery: transfer.DiscoveryComplete, CountersExact: false,
+	}
+	text = lineText(FormatProgress(inexact, false, ProgressMetrics{
 		RateBytesPerSecond: 1_000, RateValid: true, RateStable: true,
 	}, ProgressLayout{Unicode: false}))
 	if strings.Contains(text, "%") || strings.Contains(text, "left") || !strings.Contains(text, ">=") {
@@ -159,7 +157,7 @@ func TestExactCompleteZeroByteProgressUsesFileOutcomes(t *testing.T) {
 		name                 string
 		files                uint64
 		published            uint64
-		outcomes             appobs.FileOutcomes
+		outcomes             transfer.FileOutcomeSummary
 		successfulSettlement bool
 		wantPhase            string
 		wantPrimary          string
@@ -167,25 +165,25 @@ func TestExactCompleteZeroByteProgressUsesFileOutcomes(t *testing.T) {
 		{
 			name:  "one of two terminal outcomes",
 			files: 2, published: 1,
-			outcomes:  appobs.FileOutcomes{DownloadedFiles: 1},
+			outcomes:  transfer.FileOutcomeSummary{DownloadedFiles: 1},
 			wantPhase: "50%", wantPrimary: "1/2 files settled",
 		},
 		{
 			name:  "all outcomes before settlement",
 			files: 2, published: 2,
-			outcomes:  appobs.FileOutcomes{DownloadedFiles: 2},
+			outcomes:  transfer.FileOutcomeSummary{DownloadedFiles: 2},
 			wantPhase: "99%", wantPrimary: "2/2 files settled",
 		},
 		{
 			name:  "all outcomes after successful settlement",
 			files: 2, published: 2,
-			outcomes: appobs.FileOutcomes{DownloadedFiles: 2}, successfulSettlement: true,
+			outcomes: transfer.FileOutcomeSummary{DownloadedFiles: 2}, successfulSettlement: true,
 			wantPhase: "100%", wantPrimary: "2/2 files settled",
 		},
 		{
 			name:  "non-success outcome cannot close progress",
 			files: 2, published: 1,
-			outcomes: appobs.FileOutcomes{DownloadedFiles: 1, FailedFiles: 1}, successfulSettlement: true,
+			outcomes: transfer.FileOutcomeSummary{DownloadedFiles: 1, FailedFiles: 1}, successfulSettlement: true,
 			wantPhase: "99%", wantPrimary: "2/2 files settled",
 		},
 		{
@@ -199,14 +197,14 @@ func TestExactCompleteZeroByteProgressUsesFileOutcomes(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			snapshot := mustSnapshot(t, appobs.ProgressSpec{
+			snapshot := transfer.ReceiveProgressSnapshot{
 				DiscoveredFiles: test.files,
 				PublishedFiles:  test.published,
 				FileOutcomes:    test.outcomes,
-				Discovery:       appobs.DiscoveryComplete,
+				Discovery:       transfer.DiscoveryComplete,
 				CountersExact:   true,
-			})
-			components := progressView(snapshot, ProgressMetrics{SuccessfulSettlement: test.successfulSettlement}, false)
+			}
+			components := progressView(snapshot, false, ProgressMetrics{SuccessfulSettlement: test.successfulSettlement}, false)
 			if components.phase != test.wantPhase || components.primary != test.wantPrimary {
 				t.Fatalf("progress = %q | %q, want %q | %q", components.phase, components.primary, test.wantPhase, test.wantPrimary)
 			}
@@ -219,19 +217,19 @@ func TestExactCompleteZeroByteProgressUsesFileOutcomes(t *testing.T) {
 
 func TestProgressWidthDegradesInSemanticOrder(t *testing.T) {
 	t.Parallel()
-	snapshot := mustSnapshot(t, appobs.ProgressSpec{
+	snapshot := transfer.ReceiveProgressSnapshot{
 		DiscoveredFiles: 100, DiscoveredBytes: 100_000_000,
 		PublishedFiles: 50, PublishedBytes: 50_000_000,
 		VerifiedBytes: 50_000_000, NewlyVerifiedBytes: 50_000_000,
-		FileOutcomes: appobs.FileOutcomes{DownloadedFiles: 50},
-		Discovery:    appobs.DiscoveryComplete, CountersExact: true,
-	})
+		FileOutcomes: transfer.FileOutcomeSummary{DownloadedFiles: 50},
+		Discovery:    transfer.DiscoveryComplete, CountersExact: true,
+	}
 	metrics := ProgressMetrics{RateBytesPerSecond: 10_000_000, RateValid: true, RateStable: true}
-	components := progressView(snapshot, metrics, false)
+	components := progressView(snapshot, false, metrics, false)
 
 	withoutETA := components
 	withoutETA.eta = ""
-	line := FormatProgress(snapshot, metrics, ProgressLayout{Columns: composeProgressLine(withoutETA).DisplayCells(nil)})
+	line := FormatProgress(snapshot, false, metrics, ProgressLayout{Columns: composeProgressLine(withoutETA).DisplayCells(nil)})
 	text := lineText(line)
 	if strings.Contains(text, "left") || !strings.Contains(text, "/s") || !strings.Contains(text, "[") {
 		t.Fatalf("ETA degradation = %q", text)
@@ -239,7 +237,7 @@ func TestProgressWidthDegradesInSemanticOrder(t *testing.T) {
 
 	withoutRate := withoutETA
 	withoutRate.rate = ""
-	line = FormatProgress(snapshot, metrics, ProgressLayout{Columns: composeProgressLine(withoutRate).DisplayCells(nil)})
+	line = FormatProgress(snapshot, false, metrics, ProgressLayout{Columns: composeProgressLine(withoutRate).DisplayCells(nil)})
 	text = lineText(line)
 	if strings.Contains(text, "/s") || !strings.Contains(text, "[") || !strings.Contains(text, "50/100 files") {
 		t.Fatalf("rate degradation = %q", text)
@@ -247,7 +245,7 @@ func TestProgressWidthDegradesInSemanticOrder(t *testing.T) {
 
 	withoutBar := withoutRate
 	withoutBar.bar = ""
-	line = FormatProgress(snapshot, metrics, ProgressLayout{Columns: composeProgressLine(withoutBar).DisplayCells(nil)})
+	line = FormatProgress(snapshot, false, metrics, ProgressLayout{Columns: composeProgressLine(withoutBar).DisplayCells(nil)})
 	text = lineText(line)
 	if strings.Contains(text, "[") || !strings.Contains(text, "50/100 files") {
 		t.Fatalf("bar degradation = %q", text)
@@ -255,7 +253,7 @@ func TestProgressWidthDegradesInSemanticOrder(t *testing.T) {
 
 	minimum := withoutBar
 	minimum.secondary = ""
-	line = FormatProgress(snapshot, metrics, ProgressLayout{Columns: composeProgressLine(minimum).DisplayCells(nil)})
+	line = FormatProgress(snapshot, false, metrics, ProgressLayout{Columns: composeProgressLine(minimum).DisplayCells(nil)})
 	text = lineText(line)
 	if strings.Contains(text, "files") || !strings.Contains(text, "50%") || !strings.Contains(text, "50.0 MB/100.0 MB") {
 		t.Fatalf("secondary degradation = %q", text)
@@ -264,9 +262,9 @@ func TestProgressWidthDegradesInSemanticOrder(t *testing.T) {
 
 func TestProgressSymbolsFallbackToASCII(t *testing.T) {
 	t.Parallel()
-	snapshot := mustSnapshot(t, appobs.ProgressSpec{Discovery: appobs.DiscoveryOpen, CountersExact: true})
-	ascii := lineText(FormatProgress(snapshot, ProgressMetrics{}, ProgressLayout{Unicode: false}))
-	unicode := lineText(FormatProgress(snapshot, ProgressMetrics{}, ProgressLayout{Unicode: true}))
+	snapshot := transfer.ReceiveProgressSnapshot{Discovery: transfer.DiscoveryOpen, CountersExact: true}
+	ascii := lineText(FormatProgress(snapshot, false, ProgressMetrics{}, ProgressLayout{Unicode: false}))
+	unicode := lineText(FormatProgress(snapshot, false, ProgressMetrics{}, ProgressLayout{Unicode: true}))
 	if !strings.HasPrefix(ascii, "? ") || !strings.HasPrefix(unicode, "🔍 ") {
 		t.Fatalf("symbol fallback: ASCII %q, Unicode %q", ascii, unicode)
 	}
@@ -277,15 +275,15 @@ func TestProgressSymbolsFallbackToASCII(t *testing.T) {
 
 func TestProgressWidthUsesInjectedDisplayCells(t *testing.T) {
 	t.Parallel()
-	snapshot := mustSnapshot(t, appobs.ProgressSpec{
+	snapshot := transfer.ReceiveProgressSnapshot{
 		DiscoveredFiles: 2, DiscoveredBytes: 10_000,
 		PublishedFiles: 1, PublishedBytes: 5_000,
 		VerifiedBytes: 5_000, NewlyVerifiedBytes: 5_000,
-		FileOutcomes: appobs.FileOutcomes{DownloadedFiles: 1},
-		Discovery:    appobs.DiscoveryComplete, CountersExact: true,
-	})
+		FileOutcomes: transfer.FileOutcomeSummary{DownloadedFiles: 1},
+		Discovery:    transfer.DiscoveryComplete, CountersExact: true,
+	}
 	metrics := ProgressMetrics{RateBytesPerSecond: 1_000, RateValid: true, RateStable: true}
-	line := FormatProgress(snapshot, metrics, ProgressLayout{
+	line := FormatProgress(snapshot, false, metrics, ProgressLayout{
 		Columns:   70,
 		CellWidth: func(text string) int { return len(text) * 2 },
 	})

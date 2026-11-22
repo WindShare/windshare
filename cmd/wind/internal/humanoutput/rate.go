@@ -5,7 +5,7 @@ import (
 	"math/bits"
 	"time"
 
-	appobs "github.com/windshare/windshare/engine/observation"
+	"github.com/windshare/windshare/core/transfer"
 )
 
 const (
@@ -34,9 +34,9 @@ func (window *rateWindow) reset() {
 	window.samples = nil
 }
 
-func (window *rateWindow) observe(now time.Time, snapshot appobs.ProgressSnapshot) rateEstimate {
-	current := timedCounter{at: now, bytes: snapshot.NewlyVerifiedBytes()}
-	if !snapshot.CountersExact() || snapshot.Discovery() == appobs.DiscoveryFailed {
+func (window *rateWindow) observe(now time.Time, snapshot transfer.ReceiveProgressSnapshot) rateEstimate {
+	current := timedCounter{at: now, bytes: snapshot.NewlyVerifiedBytes}
+	if !snapshot.CountersExact || snapshot.Discovery == transfer.DiscoveryFailed {
 		window.samples = []timedCounter{current}
 		return rateEstimate{}
 	}

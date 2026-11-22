@@ -42,15 +42,15 @@ func TestPublicAliasesFactoriesAndNestedMethodsCannotHideNativeTypes(t *testing.
 }
 func TestSourceGateChecksInactivePlatformsAndLeavesTestsAtTheirOwnedBoundary(t *testing.T) {
 	root := t.TempDir()
-	for _, dir := range []string{"cmd/tool", "engine/observation"} {
+	for _, dir := range []string{"cmd/tool", "engine/sub"} {
 		if err := os.MkdirAll(filepath.Join(root, dir), 0700); err != nil {
 			t.Fatal(err)
 		}
 	}
 	files := map[string]string{
-		"cmd/tool/bad_plan9.go":       "//go:build plan9\n\npackage main\nimport _ \"" + module + "/transport/relayv2\"\n",
-		"cmd/tool/fixture_test.go":    "package main\nimport _ \"" + module + "/connectivity/example\"\n",
-		"engine/observation/event.go": "package observation\nimport _ \"" + module + "/relay/protocol/v2\"\n",
+		"cmd/tool/bad_plan9.go":    "//go:build plan9\n\npackage main\nimport _ \"" + module + "/transport/relayv2\"\n",
+		"cmd/tool/fixture_test.go": "package main\nimport _ \"" + module + "/connectivity/example\"\n",
+		"engine/sub/storage.go":    "package sub\nimport _ \"" + module + "/osfs\"\n",
 	}
 	for name, body := range files {
 		if err := os.WriteFile(filepath.Join(root, name), []byte(body), 0600); err != nil {

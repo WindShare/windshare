@@ -19,7 +19,6 @@ func TestUserTraceCapacityWaitRemainsProductState(t *testing.T) {
 
 func v5CapacityTraceRecord(sequence int, command, event, runtimeRunID string, payload map[string]any) map[string]any {
 	return map[string]any{
-		"schema_version": v5TraceSchemaVersion,
 		"sequence":       strconv.Itoa(sequence),
 		"time":           "2026-08-23T00:00:00Z",
 		"elapsed_ms":     strconv.Itoa(sequence),

@@ -7,37 +7,39 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/pionpeer"
-
-	"github.com/windshare/windshare/cmd/wind/internal/clievent"
-	"github.com/windshare/windshare/cmd/wind/internal/runtrace"
-	appobs "github.com/windshare/windshare/engine/observation"
+	"github.com/windshare/windshare/internal/diaglog"
 )
 
 func TestNativeProviderDiagnosticsReachTrace(t *testing.T) {
-	target, err := runtrace.ExactFile(filepath.Join(t.TempDir(), "provider.ndjson"))
+	target, err := diaglog.ExactFile(filepath.Join(t.TempDir(), "provider.ndjson"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	recorder, err := runtrace.Open(target, clievent.CommandGet, runtrace.Config{})
+	recorder, err := diaglog.OpenRun(target, commandGet, diaglog.RunOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { recorder.Close() })
+	t.Cleanup(func() { recorder.CloseRun() })
 	for _, scope := range []string{"ice", "turnc"} {
 		for _, severity := range []string{"warning", "error"} {
 			diagnostic := &pionpeer.Diagnostic{Scope: scope, Severity: severity, Message: "provider diagnostic detail"}
-			source := nativeFactSpec(appobs.WorkflowReceive, "provider_diagnostic")
+			source := nativeFactSpec(nativepeer.SideReceiver, "provider_diagnostic")
 			source.Subject.AttemptID, source.Subject.AttemptSequence, source.Subject.NetworkGenerationID, source.Subject.ICEProfileID = [16]byte{3}, 4, 5, "ice-0123abcd"
 			source.Provider.Diagnostic = diagnostic
-			event := clievent.Diagnostic{Owner: clievent.CommandGet, Record: source.DiagnosticRecord()}
+			rec := source.DiagnosticRecord()
 			diagnostic.Message = "changed producer storage"
-			if !recorder.Record(event) {
+			entry := diaglog.RunRecord{Level: "debug", Event: rec.Name(), Payload: rec.Payload()}
+			if corr := rec.Correlation(); corr.Present() {
+				entry.Correlation = corr
+			}
+			if !recorder.RecordRun(entry) {
 				t.Fatal("provider diagnostic rejected by recorder")
 			}
 		}
 	}
-	if status := recorder.Close(); !status.Complete || status.LifecycleDropped != 0 {
+	if status := recorder.CloseRun(); !status.Complete() || status.Dropped != 0 {
 		t.Fatalf("provider diagnostics lost: %+v", status)
 	}
 	body, err := os.ReadFile(recorder.Path())

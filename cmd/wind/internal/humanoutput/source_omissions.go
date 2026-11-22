@@ -3,13 +3,11 @@ package humanoutput
 import (
 	"github.com/windshare/windshare/cmd/wind/internal/terminalcanvas"
 	"github.com/windshare/windshare/core/catalog"
-	appobs "github.com/windshare/windshare/engine/observation"
 )
 
-func (visitor eventVisitor) VisitSourceOmissions(event appobs.SourceOmissionsObserved) error {
-	summary := event.Summary()
+func formatSourceOmissions(summary catalog.SourceOmissions, symbols Symbols) []terminalcanvas.Line {
 	lines := []terminalcanvas.Line{
-		statusLine(visitor.symbols().Warning, "Sharing skipped "+formatCount(summary.Count)+" source items in "+escapedDisplay(summary.DirectoryPath), terminalcanvas.StyleWarning),
+		statusLine(symbols.Warning, "Sharing skipped "+formatCount(summary.Count)+" source items in "+escapedDisplay(summary.DirectoryPath), terminalcanvas.StyleWarning),
 	}
 	for _, sample := range summary.Samples {
 		lines = append(lines, terminalcanvas.Plain("  "+escapedDisplay(sample.Name)+": "+sourceOmissionReason(sample)))
@@ -18,8 +16,7 @@ func (visitor eventVisitor) VisitSourceOmissions(event appobs.SourceOmissionsObs
 		lines = append(lines, terminalcanvas.Plain("  "+formatCount(unsampled)+" more skipped items; examples above are limited."))
 	}
 	lines = append(lines, terminalcanvas.Plain("  A skipped directory counts as one item; none of its contents are shared. Fix the source and share again to include it."))
-	visitor.renderer.insert(lines...)
-	return nil
+	return lines
 }
 
 func sourceOmissionReason(sample catalog.SourceOmission) string {

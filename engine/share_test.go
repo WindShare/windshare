@@ -13,7 +13,6 @@ import (
 	"github.com/windshare/windshare/core/session/protocolsession"
 
 	sendersession "github.com/windshare/windshare/core/session/sendersession"
-	appobs "github.com/windshare/windshare/engine/observation"
 	"github.com/windshare/windshare/engine/relayprofile"
 )
 
@@ -64,21 +63,22 @@ func TestShareChunkSizeValidationPrecedesSenderPreparation(t *testing.T) {
 				}
 				return
 			}
-			if prepared || !errors.Is(result.Err, ErrInvalidShareChunkSize) || result.Failure.Code() != appobs.FailureInvalidInput {
-				t.Fatalf("invalid chunk size lost its input failure: prepared=%v result=%+v", prepared, result)
+			described, _ := DescribeFailure(result.Err)
+			if prepared || !errors.Is(result.Err, ErrInvalidShareChunkSize) || described.Code != FailureInvalidInput {
+				t.Fatalf("invalid chunk size lost its input failure: prepared=%v result=%+v described=%+v", prepared, result, described)
 			}
 			if _, err := current.Ready(ctx); !errors.Is(err, ErrInvalidShareChunkSize) {
 				t.Fatalf("readiness lost the input error: %v", err)
 			}
 			settled := 0
 			for observation := range current.Observations() {
-				event, ok := observation.Event.(appobs.EngineTaskObserved)
-				if !ok || event.Facts().Stage != appobs.EngineTaskSettled {
+				event, ok := observation.Event.(TaskLifecycle)
+				if !ok || event.Stage != "task_settled" {
 					continue
 				}
 				settled++
-				if event.Facts().Failure.Code() != appobs.FailureInvalidInput || event.Facts().FailureClass != appobs.EngineFailureUsage {
-					t.Fatalf("task observation lost the input failure: %+v", event.Facts())
+				if event.Failure == nil || event.Failure.Code != FailureInvalidInput || event.FailureClass != "usage" {
+					t.Fatalf("task observation lost the input failure: %+v", event)
 				}
 			}
 			if settled != 1 {
@@ -244,7 +244,8 @@ func TestShareReleasesInjectedPeerAuthorityAfterPartialConstruction(t *testing.T
 		t.Fatal(err)
 	}
 	result, err := current.Wait(t.Context())
-	if err != nil || !errors.Is(result.Err, failure) || !result.Failure.Valid() || !peers.closed.Load() {
+	described, ok := DescribeFailure(result.Err)
+	if err != nil || !errors.Is(result.Err, failure) || !ok || !described.Valid() || !peers.closed.Load() {
 		t.Fatalf("partial construction retained authority: %+v %v closed=%v", result, err, peers.closed.Load())
 	}
 }

@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/cmd/wind/internal/terminalcanvas"
-	appobs "github.com/windshare/windshare/engine/observation"
+	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/engine/relayconfig"
 )
 
@@ -116,19 +116,6 @@ func escapedDisplay(text string) string {
 	return terminalcanvas.EscapeText(text)
 }
 
-func eventName(value interface{ Name() (string, bool) }) string {
-	name, _ := value.Name()
-	return strings.ReplaceAll(name, "_", " ")
-}
-
-func titleName(value interface{ Name() (string, bool) }) string {
-	name := eventName(value)
-	if name == "" {
-		return "Unknown"
-	}
-	return strings.ToUpper(name[:1]) + name[1:]
-}
-
 func statusLine(symbol, text string, style terminalcanvas.Style) terminalcanvas.Line {
 	if symbol == "" {
 		return terminalcanvas.NewLine(
@@ -143,123 +130,118 @@ func statusLine(symbol, text string, style terminalcanvas.Style) terminalcanvas.
 
 const ConfigureRelaysGuidance = "configure relay candidates with wind config import <file|->, or pass --relay for this share"
 
-func failureMessage(failure appobs.Failure) string {
-	key, _ := failure.MessageKey()
+func failureMessage(failure engine.Failure) string {
 	var message string
-	switch key {
-	case appobs.MessageInterrupted:
+	switch failure.Code {
+	case engine.FailureCanceled:
 		message = "The operation was interrupted."
-	case appobs.MessageTimedOut:
+	case engine.FailureDeadline:
 		message = "The operation timed out."
-	case appobs.MessageInvalidRequest:
+	case engine.FailureInvalidInput:
 		message = "The request is invalid."
-	case appobs.MessageNetworkUnavailable:
+	case engine.FailureNetworkUnavailable:
 		message = "The WindShare network is unavailable. Check your connection and retry."
-	case appobs.MessageCapabilityInvalid:
+	case engine.FailureCapabilityInvalid:
 		message = "The share link or key is invalid."
-	case appobs.MessageSelectionMissing:
+	case engine.FailureSelectionMissing:
 		message = "The selected content was not found."
-	case appobs.MessageRetainedOutputMissing:
+	case engine.FailureRetainedOutputMissing:
 		message = "No saved download matches this resume request."
-	case appobs.MessageSelectionCollision:
+	case engine.FailureSelectionCollision:
 		message = "Selected names must differ even ignoring case. Rename one item or remove a duplicate selection."
-		if collision, ok := failure.SelectionCollision(); ok {
-			message = "Selected names collide: " + escapedDisplay(collision.FirstPath().Text()) + " and " +
-				escapedDisplay(collision.SecondPath().Text()) + ". " + message
+		if failure.SelectionCollision != nil {
+			message = "Selected names collide: " + escapedDisplay(failure.SelectionCollision.FirstPath) + " and " +
+				escapedDisplay(failure.SelectionCollision.SecondPath) + ". " + message
 		}
-	case appobs.MessageRelayRouteNotFound:
-		message = relayconfig.RelayRouteGuidance(failure.RelayBaseHint())
-	case appobs.MessageRelayAccessDenied:
+	case engine.FailureRelayRouteNotFound:
+		message = relayconfig.RelayRouteGuidance(failure.RelayBaseHint)
+	case engine.FailureRelayAccessDenied:
 		message = "Relay access was denied. Check your account or relay authorization."
-	case appobs.MessageAccountStorageError:
+	case engine.FailureAccountStorageError:
 		message = "The local account file cannot be read or is invalid. Repair or remove it, then retry."
-	case appobs.MessageRelayRejected:
+	case engine.FailureRelayRejected:
 		message = "The relay rejected the request."
-	case appobs.MessageRelayUnavailable:
+	case engine.FailureRelayUnavailable:
 		message = "The relay is unavailable."
-	case appobs.MessageShareUnavailable:
+	case engine.FailureRelayNotFound:
 		message = "The share is not currently available. Retry the original link."
-	case appobs.MessageRelayStopped:
+	case engine.FailureRelayStopped:
 		message = "A relay reported that its route for this share was stopped."
-	case appobs.MessageShareStopped:
+	case engine.FailureShareStopped:
 		message = "This share has stopped. Ask the sender for a new link."
-	case appobs.MessageDirectUnavailable:
+	case engine.FailureDirectUnavailable:
 		message = "The direct connection is unavailable."
-	case appobs.MessageDirectPolicy:
+	case engine.FailureDirectPolicy:
 		message = "The direct path was rejected by connection policy."
-	case appobs.MessageDirectBusy:
+	case engine.FailureDirectBusy:
 		message = "A previous direct connection attempt is still finishing."
-	case appobs.MessageDirectAdmission:
+	case engine.FailureDirectAdmission:
 		message = "The direct channel could not be admitted."
-	case appobs.MessageSourceUnavailable, appobs.MessageSourceMissing, appobs.MessageSourceAccessDenied,
-		appobs.MessageSourceUnsupported, appobs.MessageSourceOmitted, appobs.MessageSourceChanged:
+	case engine.FailureSourceUnavailable, engine.FailureSourceMissing, engine.FailureSourceAccessDenied,
+		engine.FailureSourceUnsupported, engine.FailureSourceOmitted, engine.FailureSourceChanged:
 		message = sourceFailureMessage(failure)
-	case appobs.MessageCatalogUnavailable:
+	case engine.FailureCatalogUnavailable:
 		message = "The content catalog is unavailable."
-	case appobs.MessageSessionFailed:
+	case engine.FailureSessionFailed:
 		message = "The transfer session failed."
-	case appobs.MessageOutputFailed, appobs.MessageOutputBusy, appobs.MessageOutputOperationAlreadyRunning,
-		appobs.MessageOutputRecoveryUnavailable, appobs.MessageCheckpointFailed,
-		appobs.MessageOutputNeedsAttention, appobs.MessageDestinationCollision,
-		appobs.MessageCheckpointRevisionConflict, appobs.MessageCheckpointInvalid, appobs.MessageOwnedObjectUnknown:
-		message = outputFailureMessage(key)
-	case appobs.MessagePublicationFailed:
+	case engine.FailureOutputFailed, engine.FailureOutputBusy, engine.FailureOutputOperationAlreadyRunning,
+		engine.FailureOutputRecoveryUnavailable, engine.FailureCheckpointFailed,
+		engine.FailureOutputNeedsAttention, engine.FailureDestinationCollision,
+		engine.FailureCheckpointRevisionConflict, engine.FailureCheckpointInvalid, engine.FailureOwnedObjectUnknown:
+		message = outputFailureMessage(failure.Code)
+	case engine.FailurePublication:
 		message = "The share link could not be published."
-	case appobs.MessageTraceIncomplete:
-		message = "The trace is incomplete."
-	case appobs.MessageTraceExists:
-		message = "The trace path already exists; prior evidence was preserved and command/output state was untouched. Choose a new --trace path, use --trace-dir, or omit tracing."
 	default:
 		message = "An unexpected error occurred."
 	}
-	if retryMillis, ok := failure.RetryAfterMillis(); ok {
+	if failure.RetryAfter > 0 {
+		retryMillis := uint64((failure.RetryAfter + time.Millisecond - 1) / time.Millisecond)
 		seconds := (retryMillis + 999) / 1000
 		message += " Retry after " + formatClockDuration(seconds) + "."
 	}
-	if path, ok := failure.SourcePath(); ok {
-		message += " Path: " + escapedDisplay(path.Text())
+	if failure.SourcePath != "" {
+		message += " Path: " + escapedDisplay(failure.SourcePath)
 	}
 	return message
 }
 
-func outputFailureMessage(key appobs.SafeMessageKey) string {
-	switch key {
-	case appobs.MessageOutputBusy:
+func outputFailureMessage(code engine.FailureCode) string {
+	switch code {
+	case engine.FailureOutputBusy:
 		return "The destination is busy. Check for another WindShare command or a program holding its files open before retrying."
-	case appobs.MessageOutputOperationAlreadyRunning:
+	case engine.FailureOutputOperationAlreadyRunning:
 		return "This download is already running at this destination. Check the running command; if the download stops before completing, rerun this command to resume."
-	case appobs.MessageOutputRecoveryUnavailable:
+	case engine.FailureOutputRecoveryUnavailable:
 		return "This destination supports retry only while WindShare stays open. Exiting discards unfinished progress; completed files stay."
-	case appobs.MessageCheckpointFailed:
+	case engine.FailureCheckpointFailed:
 		return "The recovery checkpoint could not be updated safely."
-	case appobs.MessageOutputNeedsAttention:
+	case engine.FailureOutputNeedsAttention:
 		return "The destination needs attention before the transfer can continue."
-	case appobs.MessageDestinationCollision:
+	case engine.FailureDestinationCollision:
 		return "Existing destinations prevented one or more files from completing."
-	case appobs.MessageCheckpointRevisionConflict:
+	case engine.FailureCheckpointRevisionConflict:
 		return "Local resume data belongs to another source revision; no destination was replaced."
-	case appobs.MessageCheckpointInvalid:
+	case engine.FailureCheckpointInvalid:
 		return "Local resume data has an invalid checkpoint binding; existing evidence was preserved."
-	case appobs.MessageOwnedObjectUnknown:
+	case engine.FailureOwnedObjectUnknown:
 		return "Local resume data disagrees about which destination object it owns; no automatic change was made."
 	default:
 		return "The destination could not be updated safely."
 	}
 }
 
-func sourceFailureMessage(failure appobs.Failure) string {
-	key, _ := failure.MessageKey()
-	switch key {
-	case appobs.MessageSourceMissing:
+func sourceFailureMessage(failure engine.Failure) string {
+	switch failure.Code {
+	case engine.FailureSourceMissing:
 		return "Source path not found. Check the path and try again."
-	case appobs.MessageSourceAccessDenied:
+	case engine.FailureSourceAccessDenied:
 		return "Permission denied while opening the source. Check read access to the source and its parent directory."
-	case appobs.MessageSourceUnsupported:
+	case engine.FailureSourceUnsupported:
 		return "This source cannot be shared safely. Select a regular file or directory on a supported filesystem; symbolic links are not supported."
-	case appobs.MessageSourceOmitted:
+	case engine.FailureSourceOmitted:
 		return "The sender could not include some source items. Ask the sender to check the skipped names and reasons, fix the source, and share it again."
-	case appobs.MessageSourceChanged:
-		if _, selected := failure.SourcePath(); selected {
+	case engine.FailureSourceChanged:
+		if failure.SourcePath != "" {
 			return "The source changed while it was being opened. Retry the share."
 		}
 		return "The source content changed during transfer."
@@ -268,6 +250,6 @@ func sourceFailureMessage(failure appobs.Failure) string {
 	}
 }
 
-func failureLine(label string, failure appobs.Failure, symbol string, style terminalcanvas.Style) terminalcanvas.Line {
+func failureLine(label string, failure engine.Failure, symbol string, style terminalcanvas.Style) terminalcanvas.Line {
 	return statusLine(symbol, label+": "+failureMessage(failure), style)
 }

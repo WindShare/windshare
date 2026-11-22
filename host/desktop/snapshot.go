@@ -122,10 +122,10 @@ func projectTask(view *Share, current running) {
 	}
 	if view.State == Sharing && state.RelayAvailability != nil {
 		view.Relay = &RelayAvailability{
-			Available: state.RelayAvailability.Available(),
-			Total:     state.RelayAvailability.Total(),
-			EverReady: state.RelayAvailability.EverReady(),
-			Terminal:  state.RelayAvailability.Terminal(),
+			Available: state.RelayAvailability.Available,
+			Total:     state.RelayAvailability.Total,
+			EverReady: state.RelayAvailability.EverReady,
+			Terminal:  state.RelayAvailability.Terminal,
 		}
 	}
 	if result := state.Result; result != nil {
@@ -142,8 +142,8 @@ func errorText(err error) string {
 	if err == nil {
 		return ""
 	}
-	if reason, ok := engine.DescribeFailure(err); ok && reason.RelayBaseHint().URL() != "" {
-		return relayconfig.RelayRouteGuidance(reason.RelayBaseHint())
+	if reason, ok := engine.DescribeFailure(err); ok && reason.RelayBaseHint.URL() != "" {
+		return relayconfig.RelayRouteGuidance(reason.RelayBaseHint)
 	}
 	return err.Error()
 }

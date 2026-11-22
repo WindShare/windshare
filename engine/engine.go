@@ -20,11 +20,9 @@ import (
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/core/session/contentflow"
-	"github.com/windshare/windshare/engine/internal/eventproject"
 	"github.com/windshare/windshare/engine/internal/nativeconnectivity"
 	"github.com/windshare/windshare/engine/internal/networkruntime"
 	"github.com/windshare/windshare/engine/internal/task"
-	appobs "github.com/windshare/windshare/engine/observation"
 	"github.com/windshare/windshare/engine/relaysetup"
 )
 
@@ -158,9 +156,9 @@ func New(config Config) (*Engine, error) {
 }
 
 func start[T any](engine *Engine, ctx context.Context, run func(context.Context, task.Control) task.Completion[T]) (*Task[T], error) {
-	return startWorkflow(engine, ctx, 0, diagnostics.Sink{}, run)
+	return startWorkflow(engine, ctx, "", diagnostics.Sink{}, run)
 }
-func startWorkflow[T any](engine *Engine, ctx context.Context, workflow appobs.Workflow, diagnosticSink diagnostics.Sink, run func(context.Context, task.Control) task.Completion[T]) (*Task[T], error) {
+func startWorkflow[T any](engine *Engine, ctx context.Context, workflow string, diagnosticSink diagnostics.Sink, run func(context.Context, task.Control) task.Completion[T]) (*Task[T], error) {
 	if ctx == nil {
 		return nil, errors.New("task context is nil")
 	}
@@ -175,21 +173,20 @@ func startWorkflow[T any](engine *Engine, ctx context.Context, workflow appobs.W
 	engine.sequence++
 	id := task.ID(fmt.Sprintf("%s:%d", engine.identity, engine.sequence))
 	var project func(task.Observation, func(task.Observation) bool) bool
-	if workflow.Valid() {
+	if workflow != "" {
 		project = func(value task.Observation, emit func(task.Observation) bool) bool {
-			return eventproject.Workflow(workflow, value, emit)
+			return translateWorkflowEvent(workflow, value, emit)
 		}
 	}
-	workflowName, _ := workflow.Name()
 	current, err := task.Start(ctx, task.Config[T]{
 		ID: id, Now: engine.config.Clock.Now, Random: engine.random,
-		Diagnostics:         diagnosticSink.Bind(diagnostics.Scope{EngineID: engine.identity, TaskID: string(id), Workflow: workflowName}),
+		Diagnostics:         diagnosticSink.Bind(diagnostics.Scope{EngineID: engine.identity, TaskID: string(id), Workflow: workflow}),
 		CleanupTimeout:      engine.config.CleanupTimeout,
 		ObservationCapacity: engine.config.ObservationCapacity,
 		Project:             project,
 		Run: func(ctx context.Context, control task.Control) task.Completion[T] {
 			result := run(ctx, control)
-			result.Settlement = describeSettlement(result.Settlement)
+			result.Settlement = result.Checked()
 			return result
 		},
 		Completed: func(localCleanupErr error) {

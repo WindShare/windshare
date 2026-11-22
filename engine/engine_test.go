@@ -11,8 +11,6 @@ import (
 	"testing"
 	"time"
 
-	appobs "github.com/windshare/windshare/engine/observation"
-
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/engine/internal/task"
@@ -236,13 +234,13 @@ func TestReceiveFacadeSettlesInvalidRequestAndClosesAdmission(t *testing.T) {
 	if err != nil || result.Outcome != OutcomeFailed || result.FailureClass != FailureUsage || !classified || failure.Code != ReceiveFailureInvalidInput || !result.Settlement.Valid() {
 		t.Fatalf("result = %+v, %v", result, err)
 	}
+	expectedFailure, _ := DescribeFailure(result.Err)
 	finished := 0
 	for observation := range current.Observations() {
-		if lifecycle, ok := observation.Event.(appobs.EngineTaskObserved); ok && lifecycle.Facts().Stage == appobs.EngineTaskSettled {
+		if lifecycle, ok := observation.Event.(TaskLifecycle); ok && lifecycle.Stage == "task_settled" {
 			finished++
-			facts := lifecycle.Facts()
-			if facts.Outcome != appobs.EngineOutcomeFailed || facts.FailureClass != appobs.EngineFailureUsage || facts.Failure != result.Failure || !facts.Failure.Valid() {
-				t.Fatalf("failed receive lost its terminal reason: %+v", facts)
+			if lifecycle.Outcome != "failed" || lifecycle.FailureClass != "usage" || lifecycle.Failure == nil || lifecycle.Failure.Code != expectedFailure.Code {
+				t.Fatalf("failed receive lost its terminal reason: %+v", lifecycle)
 			}
 		}
 	}

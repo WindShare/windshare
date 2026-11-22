@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/windshare/windshare/engine/observation"
+	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/engine/output"
 	"github.com/windshare/windshare/osfs"
 )
@@ -65,12 +65,38 @@ func SealOutputFailure(diagnostic OutputFailureDiagnostic) (error, bool) {
 		Stage:            diagnostic.Stage,
 		NativeErrorClass: diagnostic.NativeErrorClass,
 	}}
-	failure, _ := observation.ProjectNormalizedFault(
+	fault := projectNormalizedFault(
 		diagnostic.FaultDomain, diagnostic.NormalizedScope, diagnostic.NormalizedCode,
 	)
 	return output.SealFailure(cause, output.FailureDiagnostic{
-		Stage: diagnostic.Stage, Failure: failure,
+		Stage: diagnostic.Stage, Fault: fault,
 	})
+}
+
+func projectNormalizedFault(domain, scope uint8, code uint16) transferfault.Fault {
+	s := transferfault.Scope(scope)
+	var (
+		fault transferfault.Fault
+		err   error
+	)
+	switch transferfault.Domain(domain) {
+	case transferfault.DomainSource:
+		fault, err = transferfault.NewSource(s, transferfault.SourceCode(code))
+	case transferfault.DomainCatalog:
+		fault, err = transferfault.NewCatalog(s, transferfault.CatalogCode(code))
+	case transferfault.DomainSession:
+		fault, err = transferfault.NewSession(s, transferfault.SessionCode(code))
+	case transferfault.DomainOutput:
+		fault, err = transferfault.NewOutput(s, transferfault.OutputCode(code))
+	case transferfault.DomainCheckpoint:
+		fault, err = transferfault.NewCheckpoint(s, transferfault.CheckpointCode(code))
+	default:
+		return transferfault.Fault{}
+	}
+	if err != nil {
+		return transferfault.Fault{}
+	}
+	return fault
 }
 
 // FailureDetail retains provider OS error classes for host CLI rendering
@@ -166,13 +192,13 @@ func sealOutputError(cause error) error {
 		if !found {
 			continue
 		}
-		failure, _ := observation.ProjectNormalizedFault(
+		fault := projectNormalizedFault(
 			detail.FaultDomain, detail.NormalizedScope, detail.NormalizedCode,
 		)
 		evidence = append(evidence, output.FailureEvidence{
 			Cause: matching,
 			Diagnostic: output.FailureDiagnostic{
-				Stage: projectFailureStage(stage), Failure: failure,
+				Stage: projectFailureStage(stage), Fault: fault,
 			},
 		})
 	}

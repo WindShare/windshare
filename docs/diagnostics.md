@@ -14,7 +14,7 @@ wind share <path> --verbose --trace trace.ndjson
 wind share <path> --verbose --trace-dir ./traces
 ```
 
-Native traces use NDJSON schema 5. Typed product events in `engine/observation` describe readiness, progress, connectivity summaries and task settlement. Detailed diagnostics travel through an injected `core/diagnostics.Sink`, independently of product events; their source owns the event name and attributes. New diagnostic stages need no engine, wire or CLI registration.
+Native traces write NDJSON records via `internal/diaglog`. Typed domain events in `engine` describe readiness, progress, connectivity summaries and task settlement. Detailed diagnostics travel through an injected `core/diagnostics.Sink`, independently of product events; their source owns the event name and attributes. New diagnostic stages need no engine or CLI registration.
 
 The sink is disabled by default and enabled by `--verbose` or trace capture. Its bounded queue never waits for presentation or disk writes. Hosts close the diagnostic stream after tasks stop; task results remain available through `Wait`, even if diagnostics are dropped or the sink closes.
 
@@ -44,9 +44,8 @@ Correlate events across the session using:
 - `receive.output_recovery_decision`: Operation identity, retry/discard/exit choice, recovery reason, output mode, and verified bytes across attempts.
 
 `Trace is incomplete` reports diagnostic loss, independently of transfer results.
-`trace_summary` separates `contract_rejected` from `lifecycle_dropped`, write/flush failures,
-and lost rejection evidence. Normal progress sampling does not make a trace incomplete.
-`diagnostic_loss` identifies source loss; final loss totals also survive a full diagnostic queue. `observer_loss.rejection` describes product-event contract errors. Unknown diagnostic names or attributes are preserved, never treated as contract errors. Diagnostic export is an evolving debugging format, separate from the product/RPC contract.
+`trace_summary` records `events_written`, total `dropped` records, and `writer_failed`.
+Unknown diagnostic names or attributes are preserved, never treated as contract errors. Diagnostic export is an evolving debugging format, separate from the product/RPC contract.
 
 Receiver peer and block operations publish their terminal `protocol_operation` after receive and cleanup join.
 Content race losers report `receiver_ended / superseded`; peer stops may retain `canceled` or `operation_closed`.

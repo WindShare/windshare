@@ -11,7 +11,6 @@ import (
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/engine/internal/receive"
 	"github.com/windshare/windshare/engine/internal/task"
-	appobs "github.com/windshare/windshare/engine/observation"
 )
 
 const pressureObservations = 4096
@@ -28,7 +27,7 @@ func TestDiagnosticPressurePreservesProductProgressCancellationAndSettlement(t *
 	application := newTestEngine(t, Config{ObservationCapacity: 8})
 	stream, _ := diagnostics.NewStream(1, nil)
 	produced := make(chan struct{})
-	current, err := startWorkflow(application, t.Context(), appobs.WorkflowReceive, stream.Sink(),
+	current, err := startWorkflow(application, t.Context(), "receive", stream.Sink(),
 		func(ctx context.Context, control task.Control) task.Completion[int] {
 			record := diagnostics.New("future.diagnostic.stage", diagnostics.Fields{"round": diagnostics.Uint(1)})
 			for range pressureObservations {
@@ -56,10 +55,10 @@ func TestDiagnosticPressurePreservesProductProgressCancellationAndSettlement(t *
 	progress, settled := false, false
 	for envelope := range current.Observations() {
 		switch event := envelope.Event.(type) {
-		case appobs.TransferProgress:
+		case TransferProgress:
 			progress = true
-		case appobs.EngineTaskObserved:
-			settled = settled || event.Facts().Stage == appobs.EngineTaskSettled
+		case TaskLifecycle:
+			settled = settled || event.Stage == "task_settled"
 		default:
 			t.Fatalf("unexpected product event: %T", event)
 		}
@@ -82,7 +81,7 @@ func TestClosedDiagnosticStreamDoesNotAffectTasksAndScopesRemainDistinct(t *test
 	stream, _ := diagnostics.NewStream(4, nil)
 	var tasks []*Task[int]
 	for range 2 {
-		current, err := startWorkflow(application, t.Context(), appobs.WorkflowShare, stream.Sink(), func(_ context.Context, c task.Control) task.Completion[int] {
+		current, err := startWorkflow(application, t.Context(), "share", stream.Sink(), func(_ context.Context, c task.Control) task.Completion[int] {
 			c.Diagnostics.Emit(diagnostics.New("source.started", nil))
 			return task.Completion[int]{Value: 1, Outcome: task.OutcomeSuccess}
 		})
@@ -109,7 +108,7 @@ func TestClosedDiagnosticStreamDoesNotAffectTasksAndScopesRemainDistinct(t *test
 	if len(seen) != 2 {
 		t.Fatalf("task scopes merged: %v", seen)
 	}
-	current, err := startWorkflow(application, t.Context(), appobs.WorkflowShare, stream.Sink(), func(_ context.Context, c task.Control) task.Completion[int] {
+	current, err := startWorkflow(application, t.Context(), "share", stream.Sink(), func(_ context.Context, c task.Control) task.Completion[int] {
 		if c.Diagnostics.Emit(diagnostics.New("after.close", nil)) {
 			t.Error("closed sink accepted event")
 		}
@@ -138,7 +137,7 @@ func BenchmarkEngineObservationPressure(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for range b.N {
-				current, err := startWorkflow(application, context.Background(), appobs.WorkflowReceive, stream.Sink(), func(_ context.Context, c task.Control) task.Completion[int] {
+				current, err := startWorkflow(application, context.Background(), "receive", stream.Sink(), func(_ context.Context, c task.Control) task.Completion[int] {
 					for range pressureObservations {
 						if kind == "diagnostic" {
 							c.Diagnostics.Emit(record)

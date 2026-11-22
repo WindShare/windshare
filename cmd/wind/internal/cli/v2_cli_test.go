@@ -12,17 +12,14 @@ import (
 	"testing"
 	"time"
 
-	appobs "github.com/windshare/windshare/engine/observation"
-
-	"github.com/windshare/windshare/cmd/wind/internal/clievent"
-	"github.com/windshare/windshare/cmd/wind/internal/commandprojection"
-	"github.com/windshare/windshare/cmd/wind/internal/runtrace"
+	"github.com/windshare/windshare/cmd/wind/internal/humanoutput"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/engine/relayprofile"
+	"github.com/windshare/windshare/internal/diaglog"
 )
 
 func TestParseInterleavedV2Flags(t *testing.T) {
@@ -55,7 +52,7 @@ func TestTransferResultDriftClassification(t *testing.T) {
 		mustCLIFault(transferfault.NewSource(transferfault.ScopeFileLocal, transferfault.SourceRevisionInvalidated)),
 		mustCLIFault(transferfault.NewCatalog(transferfault.ScopeDirectoryLocal, transferfault.CatalogDirectoryStale)),
 	} {
-		result, err := projectTestGetResult(engine.ReceiveSettlementInput{
+		result, exit, err := projectTestGetResult(engine.ReceiveSettlementInput{
 			Result: transfer.JobResult{
 				Outcome:          transfer.DirectTreeOutcomePartial,
 				SourceDriftFault: value,
@@ -65,11 +62,11 @@ func TestTransferResultDriftClassification(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if result.Drift() != clievent.DriftSource || result.ExitCode() != clievent.ExitDrift {
-			t.Fatalf("drift projection = %v/%v", result.Drift(), result.ExitCode())
+		if !result.SourceDrift || exit != ExitDrift {
+			t.Fatalf("drift projection = %v/%d", result.SourceDrift, exit)
 		}
 	}
-	network, err := projectTestGetResult(engine.ReceiveSettlementInput{
+	network, exit, err := projectTestGetResult(engine.ReceiveSettlementInput{
 		Result:       transfer.JobResult{Outcome: transfer.DirectTreeOutcomePaused},
 		RuntimeError: errors.New("network"),
 		Destination:  t.TempDir(),
@@ -77,8 +74,8 @@ func TestTransferResultDriftClassification(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if network.Drift() != clievent.DriftNone || network.ExitCode() != clievent.ExitNetwork {
-		t.Fatalf("network projection = %v/%v", network.Drift(), network.ExitCode())
+	if network.SourceDrift || exit != ExitNetwork {
+		t.Fatalf("network projection = %v/%d", network.SourceDrift, exit)
 	}
 }
 
@@ -119,7 +116,7 @@ func testShareCancellation(t *testing.T, cleanupError error, exitCode int) {
 	}
 	stdout := &lockedTestBuffer{}
 	stderr := &lockedTestBuffer{}
-	userTrace := newRecordingUserTrace()
+	userTrace := newFakeUserTrace(diaglog.RunStatus{})
 	userTracePath := filepath.Join(t.TempDir(), "share.ndjson")
 	app := &App{
 		Stdout: stdout, Stderr: stderr, Stdin: strings.NewReader(""),
@@ -129,14 +126,9 @@ func testShareCancellation(t *testing.T, cleanupError error, exitCode int) {
 			},
 			PollNetwork: func(ctx context.Context, _ func()) { <-ctx.Done() },
 		}},
-		openUserTrace: func(
-			target runtrace.Target,
-			command clievent.Command,
-			_ runtrace.Config,
-			_ runtrace.Dependencies,
-		) (userTraceRecorder, error) {
-			expected, _ := runtrace.ExactFile(userTracePath)
-			if target != expected || !filepath.IsAbs(userTracePath) || command != clievent.CommandShare {
+		openUserTrace: func(target diaglog.Target, command string, _ diaglog.RunOptions) (runTraceRecorder, error) {
+			expected, _ := diaglog.ExactFile(userTracePath)
+			if target != expected || !filepath.IsAbs(userTracePath) || command != commandShare {
 				return nil, errors.New("unexpected user trace request")
 			}
 			return userTrace, nil
@@ -186,26 +178,34 @@ func testShareCancellation(t *testing.T, cleanupError error, exitCode int) {
 	case <-time.After(cliShareCancellationTimeout):
 		t.Fatal("share did not complete explicit stop")
 	}
-	userTrace.mu.Lock()
-	defer userTrace.mu.Unlock()
 	stoppedEvents := 0
-	stages := make(map[appobs.EngineTaskStage]int)
-	for _, event := range userTrace.events {
-		if lifecycle, ok := event.(appobs.EngineTaskObserved); ok {
-			facts := lifecycle.Facts()
-			stages[facts.Stage]++
-			if facts.Stage == appobs.EngineTaskSettled && facts.CleanupFailure.Valid() != (cleanupError != nil) {
-				t.Fatalf("cleanup failure lost from observation: %+v", facts)
+	stages := make(map[string]int)
+	for _, rec := range userTrace.recorded() {
+		switch rec.Event {
+		case "engine_task_observed":
+			var p struct {
+				Stage          string `json:"stage"`
+				CleanupFailure *struct {
+					Code string `json:"code"`
+				} `json:"cleanup_failure"`
 			}
-		}
-		if stopped, ok := event.(clievent.SharingStopped); ok {
+			decodeRecordPayload(t, rec.Payload, &p)
+			stages[p.Stage]++
+			if p.Stage == "task_settled" && (p.CleanupFailure != nil) != (cleanupError != nil) {
+				t.Fatalf("cleanup failure lost from observation: %+v", p)
+			}
+		case "sharing_stopped":
 			stoppedEvents++
-			if code, valid := stopped.Result().ExitCode().ProcessCode(); !valid || code != exitCode {
-				t.Fatalf("user trace stop exit=%d valid=%v want=%d", code, valid, exitCode)
+			var p struct {
+				ExitCode int `json:"exit_code"`
+			}
+			decodeRecordPayload(t, rec.Payload, &p)
+			if p.ExitCode != exitCode {
+				t.Fatalf("user trace stop exit=%d want=%d", p.ExitCode, exitCode)
 			}
 		}
 	}
-	if stages[appobs.EngineTaskStopping] != 1 || stages[appobs.EngineTaskSettled] != 1 {
+	if stages["task_stopping"] != 1 || stages["task_settled"] != 1 {
 		t.Fatalf("share cleanup stages=%v", stages)
 	}
 	if stoppedEvents != 1 {
@@ -270,47 +270,15 @@ func (buffer *lockedTestBuffer) String() string {
 	return buffer.buffer.String()
 }
 
-type recordingUserTrace struct {
-	mu      sync.Mutex
-	events  []clievent.Event
-	health  chan clievent.TraceIncomplete
-	changed chan struct{}
-}
-
-func newRecordingUserTrace() *recordingUserTrace {
-	return &recordingUserTrace{
-		health:  make(chan clievent.TraceIncomplete),
-		changed: make(chan struct{}),
-	}
-}
-
-func (trace *recordingUserTrace) Record(event clievent.Event) bool {
-	trace.mu.Lock()
-	trace.events = append(trace.events, event)
-	close(trace.changed)
-	trace.changed = make(chan struct{})
-	trace.mu.Unlock()
-	return true
-}
-
-func (*recordingUserTrace) ReportRejectionEvidenceLoss(uint64) bool { return true }
-
-func (*recordingUserTrace) ReportUpstreamLoss(clievent.TraceLoss) bool { return true }
-
-func (trace *recordingUserTrace) Health() <-chan clievent.TraceIncomplete { return trace.health }
-func (*recordingUserTrace) Path() string                                  { return "trace.ndjson" }
-
-func (*recordingUserTrace) Close() runtrace.Status { return runtrace.Status{Complete: true} }
-
-func waitRecordedReady(t *testing.T, trace *recordingUserTrace) {
+func waitRecordedReady(t *testing.T, trace *fakeUserTrace) {
 	t.Helper()
 	timer := time.NewTimer(cliShareCancellationTimeout)
 	defer timer.Stop()
 	for {
 		trace.mu.Lock()
 		ready := false
-		for _, event := range trace.events {
-			if _, ok := event.(appobs.Ready); ok {
+		for _, rec := range trace.records {
+			if rec.Event == "ready" {
 				ready = true
 			}
 		}
@@ -331,10 +299,11 @@ func testApp(stdin string) *App {
 	return &App{Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}, Stdin: strings.NewReader(stdin)}
 }
 
-func projectTestGetResult(input engine.ReceiveSettlementInput) (clievent.TransferResult, error) {
+func projectTestGetResult(input engine.ReceiveSettlementInput) (humanoutput.TransferResult, int, error) {
 	result, err := engine.SettleReceive(input)
 	if err != nil {
-		return clievent.TransferResult{}, err
+		return humanoutput.TransferResult{}, 0, err
 	}
-	return commandprojection.ProjectReceiveResult(result)
+	f, ok := engine.DescribeFailure(result.Err)
+	return buildTransferResult(result, f, ok), exitCodeForClass(result.FailureClass), nil
 }

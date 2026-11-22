@@ -106,7 +106,7 @@ func assertV5ProducerFactsPrecedeCommandResult(t *testing.T, component string, r
 	}
 	for index := terminal + 1; index < len(records); index++ {
 		switch event := records[index].Event; event {
-		case "engine_task_observed", "relay_lifecycle", "webrtc_lifecycle", "peer_attempt", "receiver_termination", "lane_settlement", "observer_loss":
+		case "engine_task_observed", "relay_lifecycle", "webrtc_lifecycle", "peer_attempt", "receiver_termination", "lane_settlement":
 			t.Fatalf("%s user trace emitted %s after its command result", component, event)
 		}
 	}
@@ -154,7 +154,7 @@ func validateV5TraceRecord(
 		t.Fatalf("decode user trace record: %v", err)
 	}
 	allowedEnvelope := map[string]struct{}{
-		"schema_version": {}, "sequence": {}, "time": {}, "elapsed_ms": {}, "level": {},
+		"sequence": {}, "time": {}, "elapsed_ms": {}, "level": {},
 		"event": {}, "command": {}, "runtime_run_id": {}, "correlation": {}, "payload": {}, "scope": {}, "source_time": {},
 	}
 	for field, raw := range envelope {
@@ -166,14 +166,11 @@ func validateV5TraceRecord(
 		}
 	}
 	for _, field := range []string{
-		"schema_version", "sequence", "time", "elapsed_ms", "level", "event", "command", "runtime_run_id", "payload",
+		"sequence", "time", "elapsed_ms", "level", "event", "command", "runtime_run_id", "payload",
 	} {
 		if _, present := envelope[field]; !present {
 			t.Fatalf("user trace is missing envelope field %q", field)
 		}
-	}
-	if version := v5TraceIntegerField(t, envelope, "schema_version"); version != v5TraceSchemaVersion {
-		t.Fatalf("user trace schema_version=%d want=%d", version, v5TraceSchemaVersion)
 	}
 	sequence := v5TraceDecimalField(t, envelope, "sequence")
 	if sequence == 0 {
@@ -438,16 +435,6 @@ func validateV5DiagnosticRecord(t *testing.T, record v5TraceRecord) {
 				)
 			}
 		}
-	case "observer_loss":
-		if !v5KnownObserverLossCategory(v5TraceStringField(t, record.Payload, "category")) {
-			t.Fatal("observer loss category is outside the closed vocabulary")
-		}
-		if !v5KnownObserverLossReason(v5TraceStringField(t, record.Payload, "reason")) {
-			t.Fatal("observer loss reason is outside the closed vocabulary")
-		}
-		if v5TraceDecimalField(t, record.Payload, "count") == 0 {
-			t.Fatal("observer loss count is zero")
-		}
 	case "receiver_termination":
 		switch reason := v5TraceStringField(t, record.Payload, "local_stop_reason"); reason {
 		case "none", "caller", "output_admission", "runtime_session_failure", "normal_completion":
@@ -471,27 +458,6 @@ func v5ValidFilesystemCheckpointDecision(event, decision string) bool {
 	}
 	switch decision {
 	case "absent", "exact", "revision_conflict", "ownership_conflict", "invalid":
-		return true
-	default:
-		return false
-	}
-}
-
-func v5KnownObserverLossCategory(value string) bool {
-	switch value {
-	case "relay_lifecycle", "webrtc_lifecycle", "sender_attempt", "receiver_termination", "lane_settlement",
-		"protocol_operation", "transfer_lifecycle", "filesystem_output", "root_prefetch",
-		"sender_capacity", "sender_revision", "native_connectivity", "command_adapter", "engine_observation":
-		return true
-	default:
-		return false
-	}
-}
-
-func v5KnownObserverLossReason(value string) bool {
-	switch value {
-	case "unknown_enum", "invalid_identity", "invalid_stage_field_combination", "event_contract_rejection",
-		"adapter_capacity_timeout", "trace_queue", "recorder_closed", "observation_capacity", "consumer_undrained", "signature_capacity", "observer_panic":
 		return true
 	default:
 		return false
@@ -693,8 +659,6 @@ func assertV2UserTraceProductDiagnostics(t *testing.T, process *v2Process, recei
 			}
 		case "fallback":
 			t.Fatal("successful retained-operation recovery emitted a fallback record")
-		case "observer_loss":
-			t.Fatal("successful retained-operation recovery lost diagnostic observations")
 		}
 	}
 	if !fileRecovered {
@@ -734,10 +698,6 @@ func assertV2UserTraceTransportDiagnostics(
 			}
 		case "fallback":
 			t.Fatalf("transfer using %s emitted an unexpected fallback record", wantRoute)
-		case "observer_loss":
-			t.Fatalf("transfer using %s lost diagnostic observations: category=%s reason=%s count=%d",
-				wantRoute, v5TraceStringField(t, record.Payload, "category"),
-				v5TraceStringField(t, record.Payload, "reason"), v5TraceDecimalField(t, record.Payload, "count"))
 		}
 	}
 	if !delivered {

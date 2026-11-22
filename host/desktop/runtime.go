@@ -14,7 +14,7 @@ import (
 	"github.com/windshare/windshare/engine/builtinnetwork"
 	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/relaysetup"
-	"github.com/windshare/windshare/host/desktop/logstore"
+	"github.com/windshare/windshare/internal/diaglog"
 )
 
 const (
@@ -36,7 +36,7 @@ type Host struct {
 	Endpoint       Endpoint
 	app            *Application
 	server         *server
-	log            *logstore.Recorder
+	log            *diaglog.Recorder
 	diagnostics    *diagnostics.Stream
 	diagnosticDone chan struct{}
 	closeOnce      sync.Once
@@ -52,14 +52,14 @@ func Start() (*Host, error) {
 	sessionID := token[:sessionIdentityCharacters]
 	cache, err := os.UserCacheDir()
 	directory := filepath.Join(cache, "WindShare", "logs")
-	var log *logstore.Recorder
+	var log *diaglog.Recorder
 	if err == nil {
-		log, err = logstore.Open(directory, sessionID)
+		log, err = diaglog.OpenRotating(directory, sessionID)
 	}
 	logAvailable := err == nil
 	if !logAvailable {
 		_, _ = fmt.Fprintf(os.Stderr, "host.log_unavailable session_id=%s error=%v\n", sessionID, err)
-		log = logstore.Disabled(sessionID, err)
+		log = diaglog.Disabled(sessionID, err)
 	}
 	configPath, err := relayconfig.Path()
 	if err != nil {

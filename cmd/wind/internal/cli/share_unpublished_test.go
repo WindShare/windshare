@@ -15,16 +15,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/windshare/windshare/cmd/wind/internal/clievent"
-	"github.com/windshare/windshare/cmd/wind/internal/runtrace"
 	"github.com/windshare/windshare/core/nodedirectory"
 	"github.com/windshare/windshare/core/serviceauthority"
 	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/engine/account"
 	"github.com/windshare/windshare/engine/networkconfig"
 	"github.com/windshare/windshare/engine/networkdirectory"
-	appobs "github.com/windshare/windshare/engine/observation"
 	"github.com/windshare/windshare/engine/relayconfig"
+	"github.com/windshare/windshare/internal/diaglog"
 )
 
 func TestShareCancellationBeforePublicationSettlesWithoutRedialing(t *testing.T) {
@@ -54,13 +52,13 @@ func TestShareCancellationBeforePublicationSettlesWithoutRedialing(t *testing.T)
 				t.Fatal(err)
 			}
 			var stdout, stderr bytes.Buffer
-			trace := newRecordingUserTrace()
+			trace := newFakeUserTrace(diaglog.RunStatus{})
 			app := &App{
 				Stdout: &stdout, Stderr: &stderr, Stdin: strings.NewReader(""),
 				engineConfig: engine.Config{Share: engine.ShareDependencies{
 					PollNetwork: func(ctx context.Context, _ func()) { <-ctx.Done() },
 				}},
-				openUserTrace: func(runtrace.Target, clievent.Command, runtrace.Config, runtrace.Dependencies) (userTraceRecorder, error) {
+				openUserTrace: func(diaglog.Target, string, diaglog.RunOptions) (runTraceRecorder, error) {
 					return trace, nil
 				},
 			}
@@ -68,18 +66,21 @@ func TestShareCancellationBeforePublicationSettlesWithoutRedialing(t *testing.T)
 			if code != ExitOK || stdout.Len() != 0 || requests.Load() != 1 {
 				t.Fatalf("exit=%d stdout=%q requests=%d stderr=%q", code, stdout.String(), requests.Load(), stderr.String())
 			}
-			trace.mu.Lock()
-			defer trace.mu.Unlock()
 			terminal := 0
-			for _, event := range trace.events {
-				switch event := event.(type) {
-				case clievent.SharingStopped:
+			for _, rec := range trace.recorded() {
+				switch rec.Event {
+				case "sharing_stopped":
 					terminal++
-					if event.Result().Publication() != clievent.ShareUnpublished || !event.Result().StoppedCleanly() {
-						t.Fatalf("unpublished stop result = %+v", event.Result())
+					var p struct {
+						Publication    string `json:"publication"`
+						StoppedCleanly bool   `json:"stopped_cleanly"`
 					}
-				case appobs.Ready, clievent.CommandFailed:
-					t.Fatalf("unpublished cancellation emitted %T", event)
+					decodeRecordPayload(t, rec.Payload, &p)
+					if p.Publication != "unpublished" || !p.StoppedCleanly {
+						t.Fatalf("unpublished stop result = %+v", p)
+					}
+				case "ready", "command_failed":
+					t.Fatalf("unpublished cancellation emitted %q", rec.Event)
 				}
 			}
 			if terminal != 1 {
@@ -158,7 +159,7 @@ func TestShareFailsFastWhenOfficialAccountActionIsRequired(t *testing.T) {
 				t.Fatal(err)
 			}
 			var stdout, stderr bytes.Buffer
-			trace := newRecordingUserTrace()
+			trace := newFakeUserTrace(diaglog.RunStatus{})
 			app := &App{
 				Stdout: &stdout, Stderr: &stderr, Stdin: strings.NewReader(""),
 				clock:           newSystemCommandClock(func() time.Time { return directoryFixture.Now }),
@@ -197,7 +198,7 @@ func TestShareFailsFastWhenOfficialAccountActionIsRequired(t *testing.T) {
 						PollNetwork: func(ctx context.Context, _ func()) { <-ctx.Done() },
 					},
 				},
-				openUserTrace: func(runtrace.Target, clievent.Command, runtrace.Config, runtrace.Dependencies) (userTraceRecorder, error) {
+				openUserTrace: func(diaglog.Target, string, diaglog.RunOptions) (runTraceRecorder, error) {
 					return trace, nil
 				},
 			}
@@ -208,14 +209,18 @@ func TestShareFailsFastWhenOfficialAccountActionIsRequired(t *testing.T) {
 			if !strings.Contains(stderr.String(), scenario.wantHint) {
 				t.Fatalf("stderr=%q missing actionable hint %q", stderr.String(), scenario.wantHint)
 			}
-			trace.mu.Lock()
-			defer trace.mu.Unlock()
 			var failures int
-			for _, event := range trace.events {
-				if failed, ok := event.(clievent.CommandFailed); ok {
+			for _, rec := range trace.recorded() {
+				if rec.Event == "command_failed" {
 					failures++
-					if failed.Failure().Code() != appobs.FailureRelayAccessDenied {
-						t.Fatalf("failure code = %v, want relay access denied", failed.Failure().Code())
+					var p struct {
+						Failure struct {
+							Code string `json:"code"`
+						} `json:"failure"`
+					}
+					decodeRecordPayload(t, rec.Payload, &p)
+					if p.Failure.Code != string(engine.FailureRelayAccessDenied) {
+						t.Fatalf("failure code = %q, want relay access denied", p.Failure.Code)
 					}
 				}
 			}
@@ -292,7 +297,7 @@ func TestShareFailsFastWhenLocalAccountStoreIsInvalid(t *testing.T) {
 			scenario.setup(t, accountPath)
 
 			var stdout, stderr bytes.Buffer
-			trace := newRecordingUserTrace()
+			trace := newFakeUserTrace(diaglog.RunStatus{})
 			app := &App{
 				Stdout: &stdout, Stderr: &stderr, Stdin: strings.NewReader(""),
 				clock:           newSystemCommandClock(func() time.Time { return directoryFixture.Now }),
@@ -323,7 +328,7 @@ func TestShareFailsFastWhenLocalAccountStoreIsInvalid(t *testing.T) {
 						PollNetwork: func(ctx context.Context, _ func()) { <-ctx.Done() },
 					},
 				},
-				openUserTrace: func(runtrace.Target, clievent.Command, runtrace.Config, runtrace.Dependencies) (userTraceRecorder, error) {
+				openUserTrace: func(diaglog.Target, string, diaglog.RunOptions) (runTraceRecorder, error) {
 					return trace, nil
 				},
 			}
@@ -336,14 +341,18 @@ func TestShareFailsFastWhenLocalAccountStoreIsInvalid(t *testing.T) {
 					t.Fatalf("stderr=%q missing %q", stderr.String(), want)
 				}
 			}
-			trace.mu.Lock()
-			defer trace.mu.Unlock()
 			var failures int
-			for _, event := range trace.events {
-				if failed, ok := event.(clievent.CommandFailed); ok {
+			for _, rec := range trace.recorded() {
+				if rec.Event == "command_failed" {
 					failures++
-					if failed.Failure().Code() != appobs.FailureAccountStorageError {
-						t.Fatalf("failure code = %v, want account storage error", failed.Failure().Code())
+					var p struct {
+						Failure struct {
+							Code string `json:"code"`
+						} `json:"failure"`
+					}
+					decodeRecordPayload(t, rec.Payload, &p)
+					if p.Failure.Code != string(engine.FailureAccountStorageError) {
+						t.Fatalf("failure code = %q, want account storage error", p.Failure.Code)
 					}
 				}
 			}
