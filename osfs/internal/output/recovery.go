@@ -291,43 +291,40 @@ func DiscardOperation(
 	if err != nil {
 		return RecoverySummary{}, DiagnoseFailure(FailureLookup, err)
 	}
+	// Hold the directory lock across task-lock verification, handle release, and
+	// directory removal so no concurrent get or resume retry can reopen opID
+	// after task.lock closes (required before deletion on Windows).
+	dirLock, _, lockErr := acquireLockFile(ctrlDir, dirLockFileName, false, true)
+	if lockErr != nil {
+		_ = ctrlDir.Close()
+		return RecoverySummary{}, DiagnoseFailure(FailureOpen, lockErr)
+	}
+
 	opDirName := hex.EncodeToString(opID.Bytes())
 	opDir, err := openChildDir(ctrlDir, opDirName)
-	_ = ctrlDir.Close()
 	if err != nil {
+		_ = errors.Join(dirLock.Close(), ctrlDir.Close())
 		return RecoverySummary{}, DiagnoseFailure(FailureLookup, err)
 	}
 
 	taskLock, _, lockErr := acquireLockFile(opDir, taskLockFileName, false, false)
 	if errors.Is(lockErr, ErrNamespaceLockBusy) {
-		_ = opDir.Close()
+		_ = errors.Join(opDir.Close(), dirLock.Close(), ctrlDir.Close())
 		return RecoverySummary{}, DiagnoseFailure(FailureOpen, ErrBusy)
 	}
 	if lockErr != nil {
-		_ = opDir.Close()
+		_ = errors.Join(opDir.Close(), dirLock.Close(), ctrlDir.Close())
 		return RecoverySummary{}, DiagnoseFailure(FailureOpen, lockErr)
 	}
 
 	state, _, readErr := readJournalState(opDir)
 	releaseErr := errors.Join(taskLock.Close(), opDir.Close())
 	if releaseErr != nil {
+		releaseErr = errors.Join(releaseErr, dirLock.Close(), ctrlDir.Close())
 		return RecoverySummary{}, DiagnoseFailure(FailureClose, releaseErr)
 	}
 
-	if err := retireControlDir(root, opDirName); err != nil {
-		summary := RecoverySummary{
-			valid:           true,
-			operationID:     opID,
-			stateGeneration: max(state.meta.StateGen, 1),
-			state:           RecoveryOperationCleanupPending,
-			attention:       AttentionCleanup,
-		}
-		if readErr == nil && state.hasMeta {
-			summary.intentDigest = state.meta.Intent.Digest()
-		}
-		return summary, DiagnoseFailure(FailureClose, err)
-	}
-
+	removeErr, closeErr := removeOperationLocked(root, ctrlDir, dirLock, opDirName)
 	summary := RecoverySummary{
 		valid:           true,
 		operationID:     opID,
@@ -337,6 +334,14 @@ func DiscardOperation(
 	}
 	if readErr == nil && state.hasMeta {
 		summary.intentDigest = state.meta.Intent.Digest()
+	}
+	if removeErr != nil {
+		summary.state = RecoveryOperationCleanupPending
+		summary.attention = AttentionCleanup
+		return summary, DiagnoseFailure(FailureClose, errors.Join(removeErr, closeErr))
+	}
+	if closeErr != nil {
+		return summary, DiagnoseFailure(FailureClose, closeErr)
 	}
 	return summary, nil
 }

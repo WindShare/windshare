@@ -460,22 +460,28 @@ func (s *Session) FinalizeTree(
 	s.mu.Unlock()
 
 	if outcome == transfer.DirectTreeOutcomeSuccess {
-		// Completed transfer: release journal & task lock, then delete .windshare-tmp/<opID>
-		// (and remove .windshare-tmp if empty).
+		// Completed transfer: acquire the directory lock before releasing
+		// journal/task.lock and deleting .windshare-tmp/<opID> so no concurrent
+		// receiver can reopen the completed operation before removal.
 		s.authority.mu.Lock()
 		s.op.opened = false
 		s.op.completed = true
 		root := s.authority.root
-		opDirName := s.op.opDirName
-		closeErr := s.op.closeResources()
+		op := s.op
+		opDirName := op.opDirName
+		if s.authority.operation == op {
+			s.authority.operation = nil
+		}
 		s.authority.mu.Unlock()
 
 		var cleanupErr error
 		if root != nil {
-			cleanupErr = retireControlDir(root, opDirName)
+			cleanupErr = retireControlDir(root, opDirName, op.closeResources)
+		} else {
+			cleanupErr = op.closeResources()
 		}
-		if err := errors.Join(closeErr, cleanupErr); err != nil {
-			return transfer.DirectTreeSettlement{}, DiagnoseFailure(FailureClose, err)
+		if cleanupErr != nil {
+			return transfer.DirectTreeSettlement{}, DiagnoseFailure(FailureClose, cleanupErr)
 		}
 		return settlement, nil
 	}
