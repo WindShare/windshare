@@ -6,6 +6,13 @@ import (
 	"time"
 )
 
+const (
+	// Active loops allow one extra interval for ticker jitter and absorb a
+	// single transient OS sampling glitch before failing pull callers.
+	activeFreshnessMultiplier = 2
+	activeFailureThreshold    = 2
+)
+
 type WatcherConfig struct {
 	Source   Source
 	Debounce time.Duration
@@ -15,8 +22,9 @@ type WatcherConfig struct {
 
 // Watcher owns one host-wide polling cadence and fans out immutable generation
 // transitions to all subscribers. Polling runs only while at least one
-// subscriber is active; Snapshot and Poll reuse the latest observation while
-// active or within Interval so concurrent callers never multiply OS queries.
+// subscriber is active; Snapshot and Poll reuse recent observations so
+// concurrent callers never multiply OS queries, while still surfacing expired
+// snapshots and persistent background sampling failures.
 type Watcher struct {
 	mu          sync.Mutex
 	pollMu      sync.Mutex
@@ -24,6 +32,9 @@ type Watcher struct {
 	interval    time.Duration
 	now         func() time.Time
 	polledAt    time.Time
+	attemptedAt time.Time
+	lastErr     error
+	failedPolls int
 	current     Snapshot
 	subscribers map[uint64]chan Snapshot
 	nextID      uint64
@@ -64,12 +75,14 @@ func (w *Watcher) Snapshot(ctx context.Context) (Snapshot, error) {
 }
 
 // Poll satisfies pull-based consumers without triggering redundant OS queries
-// while a shared watcher loop is active or its last sample is still fresh.
+// while the cached snapshot is fresh. When sampling is failing or the last
+// successful snapshot has expired, Poll preserves the last snapshot and
+// surfaces the sampling error instead of silently returning stale state.
 func (w *Watcher) Poll(ctx context.Context, now time.Time) (Snapshot, bool, error) {
 	w.mu.Lock()
-	if snapshot, ok := w.freshLocked(now); ok {
+	if snapshot, err, ok := w.cachedLocked(now); ok {
 		w.mu.Unlock()
-		return snapshot, false, nil
+		return snapshot, false, err
 	}
 	w.mu.Unlock()
 
@@ -77,9 +90,9 @@ func (w *Watcher) Poll(ctx context.Context, now time.Time) (Snapshot, bool, erro
 	defer w.pollMu.Unlock()
 
 	w.mu.Lock()
-	if snapshot, ok := w.freshLocked(now); ok {
+	if snapshot, err, ok := w.cachedLocked(now); ok {
 		w.mu.Unlock()
-		return snapshot, false, nil
+		return snapshot, false, err
 	}
 	w.mu.Unlock()
 	return w.pollLocked(ctx, now)
@@ -112,11 +125,12 @@ func (w *Watcher) Subscribe() (<-chan Snapshot, func()) {
 		loopCtx, cancel := context.WithCancel(context.Background())
 		done := make(chan struct{})
 		prev := w.draining
+		initialPoll := w.needsInitialPollLocked()
 		w.loopActive = true
 		w.loopCancel = cancel
 		w.loopDone = done
 		w.draining = nil
-		w.wg.Go(func() { w.run(loopCtx, prev, done) })
+		w.wg.Go(func() { w.run(loopCtx, prev, done, initialPoll) })
 	}
 	w.mu.Unlock()
 	return ch, sync.OnceFunc(func() { w.unsubscribe(id) })
@@ -185,31 +199,54 @@ func (w *Watcher) unsubscribe(id uint64) {
 	}
 }
 
-func (w *Watcher) freshLocked(now time.Time) (Snapshot, bool) {
+func (w *Watcher) cachedLocked(now time.Time) (Snapshot, error, bool) {
 	if w.current.GenerationID() == 0 {
-		return Snapshot{}, false
+		return Snapshot{}, nil, false
 	}
 	if w.loopActive {
-		return w.current, true
-	}
-	if !w.polledAt.IsZero() {
-		elapsed := now.Sub(w.polledAt)
-		if elapsed >= 0 && elapsed < w.interval {
-			return w.current, true
+		if w.failedPolls < activeFailureThreshold && withinWindow(now, w.polledAt, activeFreshnessMultiplier*w.interval) {
+			return w.current, nil, true
 		}
+		if w.lastErr != nil && withinWindow(now, w.attemptedAt, w.interval) {
+			return w.current, w.lastErr, true
+		}
+		return Snapshot{}, nil, false
 	}
-	return Snapshot{}, false
+	if w.lastErr == nil && withinWindow(now, w.polledAt, w.interval) {
+		return w.current, nil, true
+	}
+	return Snapshot{}, nil, false
+}
+
+func withinWindow(now, since time.Time, window time.Duration) bool {
+	if since.IsZero() {
+		return false
+	}
+	elapsed := now.Sub(since)
+	return elapsed >= 0 && elapsed < window
 }
 
 func (w *Watcher) pollLocked(ctx context.Context, now time.Time) (Snapshot, bool, error) {
 	snapshot, changed, err := w.monitor.Poll(ctx, now)
 	if err != nil {
-		return w.Current(), false, err
+		w.mu.Lock()
+		current := w.current
+		// Caller or loop-shutdown cancellation must not poison shared health.
+		if ctx.Err() == nil {
+			w.attemptedAt = now
+			w.lastErr = err
+			w.failedPolls++
+		}
+		w.mu.Unlock()
+		return current, false, err
 	}
 	w.mu.Lock()
 	previous := w.current.GenerationID()
 	w.current = snapshot
 	w.polledAt = now
+	w.attemptedAt = now
+	w.lastErr = nil
+	w.failedPolls = 0
 	if changed && previous != 0 && snapshot.GenerationID() != previous {
 		for _, ch := range w.subscribers {
 			deliverSnapshot(ch, snapshot)
@@ -219,7 +256,7 @@ func (w *Watcher) pollLocked(ctx context.Context, now time.Time) (Snapshot, bool
 	return snapshot, changed, nil
 }
 
-func (w *Watcher) run(ctx context.Context, prev <-chan struct{}, done chan struct{}) {
+func (w *Watcher) run(ctx context.Context, prev <-chan struct{}, done chan struct{}, initialPoll bool) {
 	defer close(done)
 	if prev != nil {
 		select {
@@ -234,7 +271,9 @@ func (w *Watcher) run(ctx context.Context, prev <-chan struct{}, done chan struc
 		w.pollMu.Unlock()
 	}()
 
-	w.initialPoll(ctx)
+	if initialPoll || prev != nil {
+		w.initialPoll(ctx)
+	}
 	ticker := time.NewTicker(w.interval)
 	defer ticker.Stop()
 	for {
@@ -261,7 +300,11 @@ func (w *Watcher) initialPoll(ctx context.Context) {
 func (w *Watcher) needsInitialPoll() bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.current.GenerationID() == 0 || w.polledAt.IsZero() {
+	return w.needsInitialPollLocked()
+}
+
+func (w *Watcher) needsInitialPollLocked() bool {
+	if w.current.GenerationID() == 0 || w.polledAt.IsZero() || w.lastErr != nil {
 		return true
 	}
 	elapsed := w.now().Sub(w.polledAt)

@@ -2,6 +2,7 @@ package networkstate
 
 import (
 	"context"
+	"errors"
 	"net/netip"
 	"sync"
 	"sync/atomic"
@@ -19,6 +20,9 @@ type countingSource struct {
 
 func (s *countingSource) Snapshot(ctx context.Context) (State, error) {
 	s.calls.Add(1)
+	if err := ctx.Err(); err != nil {
+		return State{}, err
+	}
 	if s.block != nil {
 		select {
 		case <-s.block:
@@ -35,6 +39,12 @@ func (s *countingSource) setIP(ip string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.state = State{Addresses: []Address{{IP: netip.MustParseAddr(ip), InterfaceIndex: 1}}}
+}
+
+func (s *countingSource) setErr(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.err = err
 }
 
 func TestWatcherReusesFreshSnapshotAndFansOutTrueGenerationChanges(t *testing.T) {
@@ -220,5 +230,132 @@ func TestWatcherInitialPollSharesConcurrentColdStartSnapshot(t *testing.T) {
 		if calls := source.calls.Load(); calls != 1 {
 			t.Fatalf("concurrent cold-start Snapshot + Subscribe calls = %d, want 1", calls)
 		}
+	}
+}
+
+func TestWatcherSurfacesExpiredSnapshotAndPersistentSamplingErrors(t *testing.T) {
+	now := time.Unix(3000, 0)
+	var clockMu sync.Mutex
+	clock := func() time.Time { clockMu.Lock(); defer clockMu.Unlock(); return now }
+	advance := func(d time.Duration) { clockMu.Lock(); now = now.Add(d); clockMu.Unlock() }
+
+	source := &countingSource{}
+	source.setIP("10.0.0.2")
+	watcher := NewWatcher(WatcherConfig{
+		Source:   source,
+		Debounce: time.Nanosecond,
+		Interval: time.Hour,
+		Now:      clock,
+	})
+	defer watcher.Close()
+
+	// Establish baseline before subscribing so run()'s initial check deterministically reuses it.
+	if snap, err := watcher.Snapshot(context.Background()); err != nil || snap.GenerationID() != 1 {
+		t.Fatalf("baseline snapshot = (%d, %v)", snap.GenerationID(), err)
+	}
+	_, unsub := watcher.Subscribe()
+	defer unsub()
+	baselineCalls := source.calls.Load()
+
+	// Normal ticker jitter (within 2*Interval) still reuses the cached snapshot.
+	advance(time.Hour + 10*time.Minute)
+	if snap, changed, err := watcher.Poll(context.Background(), clock()); err != nil || changed || snap.GenerationID() != 1 {
+		t.Fatalf("jitter-window Poll = (%d, %t, %v)", snap.GenerationID(), changed, err)
+	}
+	if source.calls.Load() != baselineCalls {
+		t.Fatalf("jitter-window Poll queried OS: calls=%d want=%d", source.calls.Load(), baselineCalls)
+	}
+
+	// A single transient sampling error while the snapshot is still fresh is absorbed.
+	sampleErr := errors.New("snapshot unavailable")
+	source.setErr(sampleErr)
+	if snap, changed, err := watcher.Step(context.Background()); !errors.Is(err, sampleErr) || changed || snap.GenerationID() != 1 {
+		t.Fatalf("first failed Step = (%d, %t, %v)", snap.GenerationID(), changed, err)
+	}
+	if snap, changed, err := watcher.Poll(context.Background(), clock()); err != nil || changed || snap.GenerationID() != 1 {
+		t.Fatalf("single transient failure Poll = (%d, %t, %v)", snap.GenerationID(), changed, err)
+	}
+
+	// Consecutive failures surface the error while preserving the last snapshot and throttling OS retries.
+	if snap, changed, err := watcher.Step(context.Background()); !errors.Is(err, sampleErr) || changed || snap.GenerationID() != 1 {
+		t.Fatalf("second failed Step = (%d, %t, %v)", snap.GenerationID(), changed, err)
+	}
+	callsAfterSecondFailure := source.calls.Load()
+	for range 5 {
+		snap, changed, err := watcher.Poll(context.Background(), clock())
+		if !errors.Is(err, sampleErr) || changed || snap.GenerationID() != 1 {
+			t.Fatalf("persistent failure Poll = (%d, %t, %v)", snap.GenerationID(), changed, err)
+		}
+	}
+	if source.calls.Load() != callsAfterSecondFailure {
+		t.Fatalf("throttled error Poll hammered OS: calls=%d want=%d", source.calls.Load(), callsAfterSecondFailure)
+	}
+	if watcher.Current().GenerationID() != 1 {
+		t.Fatalf("Current lost last successful snapshot: gen=%d", watcher.Current().GenerationID())
+	}
+
+	// Advancing far past freshness (e.g. 24h) re-polls and surfaces the failure once per interval.
+	advance(24 * time.Hour)
+	snap, changed, err := watcher.Poll(context.Background(), clock())
+	if !errors.Is(err, sampleErr) || changed || snap.GenerationID() != 1 {
+		t.Fatalf("24h stale Poll = (%d, %t, %v)", snap.GenerationID(), changed, err)
+	}
+	if source.calls.Load() != callsAfterSecondFailure+1 {
+		t.Fatalf("24h stale Poll calls = %d, want %d", source.calls.Load(), callsAfterSecondFailure+1)
+	}
+
+	// Recovery clears the cached error and advances the generation after debounce.
+	source.setErr(nil)
+	source.setIP("10.0.0.9")
+	advance(time.Hour)
+	if snap, _, err := watcher.Poll(context.Background(), clock()); err != nil || snap.GenerationID() != 1 {
+		t.Fatalf("recovery debounce Poll = (%d, %v)", snap.GenerationID(), err)
+	}
+	advance(time.Millisecond)
+	if snap, changed, err := watcher.Step(context.Background()); err != nil || !changed || snap.GenerationID() != 2 {
+		t.Fatalf("post-recovery Step = (%d, %t, %v)", snap.GenerationID(), changed, err)
+	}
+
+	// Even without prior failed Steps, a 24h freshness expiry under an active loop surfaces injected errors.
+	source.setErr(sampleErr)
+	advance(24 * time.Hour)
+	if snap, changed, err := watcher.Poll(context.Background(), clock()); !errors.Is(err, sampleErr) || changed || snap.GenerationID() != 2 {
+		t.Fatalf("direct 24h expiry Poll = (%d, %t, %v)", snap.GenerationID(), changed, err)
+	}
+}
+
+func TestWatcherCallerCancellationDoesNotPoisonSharedHealth(t *testing.T) {
+	now := time.Unix(4000, 0)
+	var clockMu sync.Mutex
+	clock := func() time.Time { clockMu.Lock(); defer clockMu.Unlock(); return now }
+	advance := func(d time.Duration) { clockMu.Lock(); now = now.Add(d); clockMu.Unlock() }
+
+	source := &countingSource{}
+	source.setIP("10.0.0.2")
+	watcher := NewWatcher(WatcherConfig{
+		Source:   source,
+		Debounce: time.Nanosecond,
+		Interval: time.Hour,
+		Now:      clock,
+	})
+	defer watcher.Close()
+
+	if snap, err := watcher.Snapshot(context.Background()); err != nil || snap.GenerationID() != 1 {
+		t.Fatalf("baseline snapshot = (%d, %v)", snap.GenerationID(), err)
+	}
+	_, unsub := watcher.Subscribe()
+	defer unsub()
+
+	// Force a cache miss via a 24h jump and fail with a caller-canceled context.
+	advance(24 * time.Hour)
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if snap, changed, err := watcher.Poll(canceledCtx, clock()); !errors.Is(err, context.Canceled) || changed || snap.GenerationID() != 1 {
+		t.Fatalf("canceled Poll = (%d, %t, %v)", snap.GenerationID(), changed, err)
+	}
+
+	// A subsequent healthy caller at the same timestamp must not inherit context.Canceled.
+	if snap, changed, err := watcher.Poll(context.Background(), clock()); err != nil || changed || snap.GenerationID() != 1 {
+		t.Fatalf("healthy Poll after canceled caller = (%d, %t, %v)", snap.GenerationID(), changed, err)
 	}
 }
