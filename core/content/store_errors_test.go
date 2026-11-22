@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/content/revisioncapacity"
 )
 
 type catalogNodeFunc func(context.Context, catalog.NodeID) (catalog.NodeRecord, bool, error)
@@ -31,9 +30,9 @@ func (g fixedIDs) NewLeaseID() (LeaseID, error) { return g.lease, nil }
 
 func customRevisionStore(t *testing.T, nodeSource CatalogNodeSource, source RevisionSource, clock Clock, ids LeaseIDGenerator) *RevisionStore {
 	t.Helper()
-	owner, err := revisioncapacity.NewProcessOwner(revisioncapacity.ProcessConfig{
-		Limits:     revisioncapacity.CapacityLimits{StableHandles: 100, ActiveLeases: 100},
-		RetryAfter: revisioncapacity.DefaultCapacityRetryAfter,
+	pool, err := NewHandlePool(HandlePoolConfig{
+		Limits:     CapacityLimits{StableHandles: 100, ActiveLeases: 100},
+		RetryAfter: DefaultCapacityRetryAfter,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -41,18 +40,15 @@ func customRevisionStore(t *testing.T, nodeSource CatalogNodeSource, source Revi
 	store, err := NewRevisionStore(RevisionStoreConfig{
 		ShareInstance: catalogID[catalog.ShareInstance](1), ChunkSize: catalog.MinChunkSize,
 		Catalog: nodeSource, Source: source, Clock: clock, LeaseIDs: ids,
-		CapacityCoordinator: owner.Coordinator(),
-		CapacityStore: revisioncapacity.StoreConfig{
-			StoreID: "custom-test-store", ShareID: "custom-test-share",
-			Limits: revisioncapacity.CapacityLimits{StableHandles: 100, ActiveLeases: 100},
-		},
+		HandlePool:  pool,
+		ShareLimits: CapacityLimits{StableHandles: 100, ActiveLeases: 100},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
 		_ = store.Close()
-		_ = owner.Close()
+		_ = pool.Close()
 	})
 	return store
 }
@@ -100,11 +96,11 @@ func TestNewRevisionRequiresSessionAdmissionBeforeOpeningSource(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		limits   revisioncapacity.CapacityLimits
-		resource revisioncapacity.CapacityResource
+		limits   CapacityLimits
+		resource CapacityResource
 	}{
-		{name: "stable handle", limits: revisioncapacity.CapacityLimits{StableHandles: 1, ActiveLeases: 2}, resource: revisioncapacity.CapacityResourceStableHandle},
-		{name: "active lease", limits: revisioncapacity.CapacityLimits{StableHandles: 2, ActiveLeases: 1}, resource: revisioncapacity.CapacityResourceActiveLease},
+		{name: "stable handle", limits: CapacityLimits{StableHandles: 1, ActiveLeases: 2}, resource: CapacityResourceStableHandle},
+		{name: "active lease", limits: CapacityLimits{StableHandles: 2, ActiveLeases: 1}, resource: CapacityResourceActiveLease},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -117,18 +113,18 @@ func TestNewRevisionRequiresSessionAdmissionBeforeOpeningSource(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var busy *revisioncapacity.CapacityBusyError
+			var busy *CapacityBusyError
 			if _, err := store.OpenRevision(context.Background(), secondFile, session); !errors.As(err, &busy) {
 				t.Fatalf("second open admission = %v", err)
 			}
-			if busy.Resource() != test.resource || busy.Scope() != revisioncapacity.CapacityScopeSession ||
+			if busy.Resource() != test.resource || busy.Scope() != CapacityScopeSession ||
 				busy.DecisionID() == "" || busy.Snapshot().Process().Used().ActiveLeases != 1 {
 				t.Fatalf("imprecise capacity busy outcome=%+v", busy)
 			}
 			if source.Calls() != 1 {
 				t.Fatalf("rejected session admission opened %d stable sources", source.Calls())
 			}
-			if got := session.Snapshot().Used(); got != (revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 1}) {
+			if got := session.Snapshot().Used(); got != (CapacityUsage{StableHandles: 1, ActiveLeases: 1}) {
 				t.Fatalf("failed pre-admission changed session usage: %+v", got)
 			}
 			if err := store.EndLease(first.ID(), LeaseRelinquished); err != nil {
@@ -140,9 +136,9 @@ func TestNewRevisionRequiresSessionAdmissionBeforeOpeningSource(t *testing.T) {
 			if err := store.Close(); err != nil {
 				t.Fatal(err)
 			}
-			if store.CapacitySnapshot().Process().Used() != (revisioncapacity.CapacityUsage{}) ||
-				store.CapacitySnapshot().Share().Used() != (revisioncapacity.CapacityUsage{}) ||
-				session.Snapshot().Used() != (revisioncapacity.CapacityUsage{}) {
+			if store.CapacitySnapshot().Process().Used() != (CapacityUsage{}) ||
+				store.CapacitySnapshot().Share().Used() != (CapacityUsage{}) ||
+				session.Snapshot().Used() != (CapacityUsage{}) {
 				t.Fatal("pre-admission test leaked capacity")
 			}
 		})
@@ -204,9 +200,9 @@ func TestOpenRevisionRollsBackEveryPrepublicationFailure(t *testing.T) {
 			if err := store.Close(); err != nil {
 				t.Fatal(err)
 			}
-			if store.CapacitySnapshot().Process().Used() != (revisioncapacity.CapacityUsage{}) ||
-				store.CapacitySnapshot().Share().Used() != (revisioncapacity.CapacityUsage{}) ||
-				session.Snapshot().Used() != (revisioncapacity.CapacityUsage{}) {
+			if store.CapacitySnapshot().Process().Used() != (CapacityUsage{}) ||
+				store.CapacitySnapshot().Share().Used() != (CapacityUsage{}) ||
+				session.Snapshot().Used() != (CapacityUsage{}) {
 				t.Fatalf("prepublication failure leaked capacity: process=%+v share=%+v session=%+v",
 					store.CapacitySnapshot().Process().Used(), store.CapacitySnapshot().Share().Used(), session.Snapshot().Used())
 			}
@@ -233,9 +229,9 @@ func TestOpenRevisionCancellationCancelsUnpublishedStableOpen(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if store.CapacitySnapshot().Process().Used() != (revisioncapacity.CapacityUsage{}) ||
-		store.CapacitySnapshot().Share().Used() != (revisioncapacity.CapacityUsage{}) ||
-		session.Snapshot().Used() != (revisioncapacity.CapacityUsage{}) {
+	if store.CapacitySnapshot().Process().Used() != (CapacityUsage{}) ||
+		store.CapacitySnapshot().Share().Used() != (CapacityUsage{}) ||
+		session.Snapshot().Used() != (CapacityUsage{}) {
 		t.Fatal("cancelled open leaked capacity")
 	}
 }
@@ -254,9 +250,9 @@ func TestStoreCloseReleasesPendingOpenAdmissionBeforeWaiterReturns(t *testing.T)
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if store.CapacitySnapshot().Process().Used() != (revisioncapacity.CapacityUsage{}) ||
-		store.CapacitySnapshot().Share().Used() != (revisioncapacity.CapacityUsage{}) ||
-		session.Snapshot().Used() != (revisioncapacity.CapacityUsage{}) {
+	if store.CapacitySnapshot().Process().Used() != (CapacityUsage{}) ||
+		store.CapacitySnapshot().Share().Used() != (CapacityUsage{}) ||
+		session.Snapshot().Used() != (CapacityUsage{}) {
 		t.Fatal("store close returned while pending open admission remained charged")
 	}
 	if err := <-result; err == nil {
@@ -277,18 +273,18 @@ func TestLeaseErrorsDoNotEvictAnAdmittedRevision(t *testing.T) {
 	if _, err := store.RenewLease(contentID[LeaseID](99)); !errors.Is(err, ErrInvalidLease) {
 		t.Fatalf("unknown renew = %v", err)
 	}
-	store.mu.Lock()
+	store.pool.mu.Lock()
 	state := store.leases[lease.ID()]
 	state.createdAt = clock.Now().Add(-MaxLeaseLifetime)
 	state.expiresAt = clock.Now().Add(time.Second)
-	store.mu.Unlock()
+	store.pool.mu.Unlock()
 	if _, err := store.RenewLease(lease.ID()); !errors.Is(err, ErrLeaseLifetime) {
 		t.Fatalf("maximum lifetime renew = %v", err)
 	}
-	store.mu.Lock()
+	store.pool.mu.Lock()
 	state.createdAt = clock.Now().Add(-MaxLeaseLifetime + LeaseTTL - time.Millisecond)
 	state.expiresAt = clock.Now().Add(LeaseRenewWindow)
-	store.mu.Unlock()
+	store.pool.mu.Unlock()
 	if _, err := store.RenewLease(lease.ID()); !errors.Is(err, ErrLeaseLifetime) {
 		t.Fatalf("truncated final renew = %v", err)
 	}
@@ -307,7 +303,7 @@ func TestLeaseErrorsDoNotEvictAnAdmittedRevision(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if stable.closed.Load() != 1 || session.Snapshot().Used() != (revisioncapacity.CapacityUsage{}) {
+	if stable.closed.Load() != 1 || session.Snapshot().Used() != (CapacityUsage{}) {
 		t.Fatalf("close cleanup: source=%d quota=%+v", stable.closed.Load(), session.Snapshot().Used())
 	}
 	if _, err := store.RenewLease(lease.ID()); !errors.Is(err, ErrRevisionStoreClosed) {
@@ -394,9 +390,9 @@ func TestLateRelinquishmentCannotRestartDetachedRecoveryAfterExpiry(t *testing.T
 	if stable.closed.Load() != 1 {
 		t.Fatal("late relinquishment retained the source for a new recovery interval")
 	}
-	if store.CapacitySnapshot().Process().Used() != (revisioncapacity.CapacityUsage{}) ||
-		store.CapacitySnapshot().Share().Used() != (revisioncapacity.CapacityUsage{}) ||
-		session.Snapshot().Used() != (revisioncapacity.CapacityUsage{}) {
+	if store.CapacitySnapshot().Process().Used() != (CapacityUsage{}) ||
+		store.CapacitySnapshot().Share().Used() != (CapacityUsage{}) ||
+		session.Snapshot().Used() != (CapacityUsage{}) {
 		t.Fatal("late relinquishment retained expired revision capacity")
 	}
 }
@@ -457,7 +453,7 @@ func (f *panicCloseFile) Close() error {
 	panic("close panic")
 }
 
-func TestFailedOpenQuarantinesCapacityWhenStableClosePanics(t *testing.T) {
+func TestFailedOpenReleasesCapacityWhenStableClosePanics(t *testing.T) {
 	file, record := fileRecord(t, 1)
 	stable := &panicCloseFile{}
 	store := customRevisionStore(t,
@@ -469,11 +465,10 @@ func TestFailedOpenQuarantinesCapacityWhenStableClosePanics(t *testing.T) {
 		t.Fatalf("size-mismatched stable source = %v", err)
 	}
 	if stable.closed.Load() != 1 ||
-		store.CapacitySnapshot().Process().Used() != (revisioncapacity.CapacityUsage{StableHandles: 1}) ||
-		store.CapacitySnapshot().Share().Used() != (revisioncapacity.CapacityUsage{StableHandles: 1}) ||
-		session.Snapshot().Used() != (revisioncapacity.CapacityUsage{}) ||
-		store.CapacitySnapshot().Process().QuarantinedStableHandles() != 1 {
-		t.Fatal("panicking cleanup did not quarantine uncertain stable ownership")
+		store.CapacitySnapshot().Process().Used() != (CapacityUsage{}) ||
+		store.CapacitySnapshot().Share().Used() != (CapacityUsage{}) ||
+		session.Snapshot().Used() != (CapacityUsage{}) {
+		t.Fatal("panicking cleanup leaked capacity instead of releasing cleanly")
 	}
 	_ = store.Close()
 }
@@ -515,18 +510,18 @@ func TestStableReadPanicIsUnavailableAndDoesNotInvalidateRevision(t *testing.T) 
 		t.Fatalf("panicking stable read = %v", err)
 	}
 	if stable.closed.Load() != 0 ||
-		store.CapacitySnapshot().Process().Used() == (revisioncapacity.CapacityUsage{}) ||
-		store.CapacitySnapshot().Share().Used() == (revisioncapacity.CapacityUsage{}) ||
-		session.Snapshot().Used() == (revisioncapacity.CapacityUsage{}) {
+		store.CapacitySnapshot().Process().Used() == (CapacityUsage{}) ||
+		store.CapacitySnapshot().Share().Used() == (CapacityUsage{}) ||
+		session.Snapshot().Used() == (CapacityUsage{}) {
 		t.Fatal("uncertain read invalidated an otherwise active revision")
 	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if stable.closed.Load() != 1 ||
-		store.CapacitySnapshot().Process().Used() != (revisioncapacity.CapacityUsage{}) ||
-		store.CapacitySnapshot().Share().Used() != (revisioncapacity.CapacityUsage{}) ||
-		session.Snapshot().Used() != (revisioncapacity.CapacityUsage{}) {
+		store.CapacitySnapshot().Process().Used() != (CapacityUsage{}) ||
+		store.CapacitySnapshot().Share().Used() != (CapacityUsage{}) ||
+		session.Snapshot().Used() != (CapacityUsage{}) {
 		t.Fatal("store close leaked source or capacity after uncertain read")
 	}
 }

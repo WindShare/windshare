@@ -8,7 +8,6 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
-	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
@@ -137,7 +136,7 @@ type RevisionFailure struct {
 	Retryable  bool
 	RetryAfter time.Duration
 
-	capacityDecision revisioncapacity.CapacityDecisionID
+	capacityDecision content.CapacityDecisionID
 }
 
 func NewRevisionFailure(code uint16, retryable bool, retryAfter time.Duration) (RevisionFailure, error) {
@@ -155,12 +154,12 @@ func NewRevisionFailure(code uint16, retryable bool, retryAfter time.Duration) (
 	return RevisionFailure{Code: code, Retryable: retryable, RetryAfter: retryAfter}, nil
 }
 
-func (failure RevisionFailure) CapacityDecisionID() revisioncapacity.CapacityDecisionID {
+func (failure RevisionFailure) CapacityDecisionID() content.CapacityDecisionID {
 	return failure.capacityDecision
 }
 
 func (failure RevisionFailure) withCapacityDecision(
-	decision revisioncapacity.CapacityDecisionID,
+	decision content.CapacityDecisionID,
 ) RevisionFailure {
 	if failure.Code == RevisionCodeQuota && failure.Retryable && decision != "" {
 		failure.capacityDecision = decision

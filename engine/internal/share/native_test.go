@@ -17,7 +17,7 @@ import (
 	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/content/revisioncapacity"
+	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/session/contentflow"
@@ -44,12 +44,12 @@ func (e *readyEndpoint) CompleteObservations() relayv2.LifecycleObservationCompl
 
 func nativeDependencies(t *testing.T) Dependencies {
 	t.Helper()
-	owner, err := revisioncapacity.NewProcessOwner(revisioncapacity.ProcessConfig{Limits: revisioncapacity.DefaultProcessLimits(), RetryAfter: revisioncapacity.DefaultCapacityRetryAfter})
+	pool, err := content.NewHandlePool(content.DefaultHandlePoolConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if err := owner.Close(); err != nil {
+		if err := pool.Close(); err != nil {
 			t.Error(err)
 		}
 	})
@@ -70,7 +70,7 @@ func nativeDependencies(t *testing.T) Dependencies {
 		Control: task.Control{ID: "native-share", Now: time.Now, Random: rand.Reader, CleanupContext: func() (context.Context, context.CancelFunc) {
 			return context.WithTimeout(context.Background(), testWaitTimeout)
 		}},
-		Controller: NewController(), RevisionCapacity: owner.Coordinator(), CatalogBudget: budget, CacheBudget: cache,
+		Controller: NewController(), RevisionCapacity: pool, CatalogBudget: budget, CacheBudget: cache,
 	}
 }
 

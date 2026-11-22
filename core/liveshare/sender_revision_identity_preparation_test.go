@@ -10,7 +10,6 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
-	"github.com/windshare/windshare/core/content/revisioncapacity"
 )
 
 type preparationRevisionTracer struct{}
@@ -104,9 +103,9 @@ func TestPrepareSenderRollbackClosesRevisionStoreAndCache(t *testing.T) {
 	if capturedStore == nil {
 		t.Fatal("late failure occurred before revision store ownership transferred")
 	}
-	if _, err := capturedStore.RegisterSession(revisioncapacity.SessionConfig{
+	if _, err := capturedStore.RegisterSession(content.SessionConfig{
 		SessionID: "rollback-check",
-		Limits:    revisioncapacity.DefaultSessionLimits(),
+		Limits:    content.DefaultSessionCapacityLimits(),
 	}); !errors.Is(err, content.ErrRevisionStoreClosed) {
 		t.Fatalf("rolled-back revision store accepted session registration: %v", err)
 	}

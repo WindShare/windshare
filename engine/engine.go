@@ -16,7 +16,7 @@ import (
 	"github.com/windshare/windshare/connectivity/networkstate"
 	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/content/revisioncapacity"
+	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/core/session/contentflow"
@@ -69,7 +69,7 @@ type Engine struct {
 	random          *lockedReader
 	identity        string
 	sequence        uint64
-	revisions       *revisioncapacity.ProcessOwner
+	revisions       *content.HandlePool
 	catalog         *catalog.BudgetAccount
 	cache           *contentflow.ProcessCacheBudget
 	receiveCapacity *liveshare.ReceiveCapacity
@@ -98,11 +98,11 @@ func New(config Config) (*Engine, error) {
 	if config.CleanupTimeout < 0 || config.ObservationCapacity < 0 {
 		return nil, errors.New("engine cleanup timeout and observation capacity must be positive")
 	}
-	if config.RevisionCapacity.Limits == (revisioncapacity.CapacityLimits{}) {
-		config.RevisionCapacity.Limits = revisioncapacity.DefaultProcessLimits()
+	if config.RevisionCapacity.Limits == (content.CapacityLimits{}) {
+		config.RevisionCapacity.Limits = content.DefaultProcessCapacityLimits()
 	}
 	if config.RevisionCapacity.RetryAfter == 0 {
-		config.RevisionCapacity.RetryAfter = revisioncapacity.DefaultCapacityRetryAfter
+		config.RevisionCapacity.RetryAfter = content.DefaultCapacityRetryAfter
 	}
 	if config.CatalogLimits == (catalog.BudgetLimits{}) {
 		config.CatalogLimits = catalog.DefaultProcessBudgetLimits()
@@ -124,7 +124,7 @@ func New(config Config) (*Engine, error) {
 	if err != nil {
 		return nil, err
 	}
-	revisions, err := revisioncapacity.NewProcessOwner(config.RevisionCapacity)
+	revisions, err := content.NewHandlePool(config.RevisionCapacity)
 	if err != nil {
 		return nil, err
 	}

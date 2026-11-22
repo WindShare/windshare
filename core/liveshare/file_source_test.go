@@ -13,7 +13,6 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
-	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/core/session/contentflow"
 )
 
@@ -305,21 +304,21 @@ func lifecycleSessionCapacity(
 	t *testing.T,
 	store *content.RevisionStore,
 	name string,
-) *revisioncapacity.SessionRegistration {
+) *content.RevisionSession {
 	t.Helper()
-	registration, err := store.RegisterSession(revisioncapacity.SessionConfig{
-		SessionID: revisioncapacity.SessionID(name),
-		Limits:    revisioncapacity.DefaultSessionLimits(),
+	session, err := store.RegisterSession(content.SessionConfig{
+		SessionID: content.SessionID(name),
+		Limits:    content.DefaultSessionCapacityLimits(),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if err := registration.Close(); err != nil {
-			t.Errorf("close lifecycle session capacity: %v", err)
+		if err := session.Close(); err != nil {
+			t.Errorf("close lifecycle revision session: %v", err)
 		}
 	})
-	return registration
+	return session
 }
 
 func TestFileSourceReopenAssignsFreshRevisionWithMatchingSourceMetadata(t *testing.T) {

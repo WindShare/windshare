@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/content/revisioncapacity"
 )
 
 func fileRecordWithModifiedTime(t *testing.T, fileByte byte, size uint64, modified catalog.ModifiedTime) (catalog.FileID, catalog.NodeRecord) {
@@ -260,8 +259,8 @@ func TestRevisionTracerPanicCannotAffectStoreAuthority(t *testing.T) {
 		}),
 	}
 	attachTestCapacity(t, &config,
-		revisioncapacity.CapacityLimits{StableHandles: 100, ActiveLeases: 100},
-		revisioncapacity.CapacityLimits{StableHandles: 100, ActiveLeases: 100},
+		CapacityLimits{StableHandles: 100, ActiveLeases: 100},
+		CapacityLimits{StableHandles: 100, ActiveLeases: 100},
 	)
 	store, err := NewRevisionStore(config)
 	if err != nil {
@@ -381,8 +380,8 @@ func TestRevisionStoreRetiresCacheOnReleaseGraceExpiryReclaimAndClose(t *testing
 
 func TestRevisionStoreRetiresCacheOnCapacityReclaimAndGuardsCallbackPanic(t *testing.T) {
 	clock := &testClock{now: time.Unix(100, 0)}
-	owner := newCapacityTestOwner(t, revisioncapacity.CapacityLimits{StableHandles: 1, ActiveLeases: 4}, nil)
-	limits := revisioncapacity.CapacityLimits{StableHandles: 1, ActiveLeases: 4}
+	pool := newCapacityTestPool(t, CapacityLimits{StableHandles: 1, ActiveLeases: 4}, nil)
+	limits := CapacityLimits{StableHandles: 1, ActiveLeases: 4}
 	firstID, firstRecord := capacityRecord(t, 61)
 	secondID, secondRecord := capacityRecord(t, 62)
 	panicCache := &panickingRetireCache{}
@@ -394,15 +393,15 @@ func TestRevisionStoreRetiresCacheOnCapacityReclaimAndGuardsCallbackPanic(t *tes
 		calls: make(map[catalog.FileID]int),
 	}
 	store, err := NewRevisionStore(RevisionStoreConfig{
-		ShareInstance:       catalogID[catalog.ShareInstance](1),
-		ChunkSize:           catalog.MinChunkSize,
-		Catalog:             testCatalog{records: map[catalog.NodeID]catalog.NodeRecord{firstID.NodeID(): firstRecord, secondID.NodeID(): secondRecord}},
-		Source:              source,
-		Clock:               clock,
-		LeaseIDs:            &sequenceIDs{},
-		Cache:               panicCache,
-		CapacityCoordinator: owner.Coordinator(),
-		CapacityStore:       revisioncapacity.StoreConfig{StoreID: "reclaim-panic-store", ShareID: "reclaim-panic-share", Limits: limits},
+		ShareInstance: catalogID[catalog.ShareInstance](1),
+		ChunkSize:     catalog.MinChunkSize,
+		Catalog:       testCatalog{records: map[catalog.NodeID]catalog.NodeRecord{firstID.NodeID(): firstRecord, secondID.NodeID(): secondRecord}},
+		Source:        source,
+		Clock:         clock,
+		LeaseIDs:      &sequenceIDs{},
+		Cache:         panicCache,
+		HandlePool:    pool,
+		ShareLimits:   limits,
 	})
 	if err != nil {
 		t.Fatal(err)

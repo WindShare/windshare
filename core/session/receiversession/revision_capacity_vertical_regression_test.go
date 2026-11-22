@@ -12,7 +12,6 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
-	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/core/internal/keyderiv"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/session/catalogflow"
@@ -29,7 +28,7 @@ import (
 	"time"
 )
 
-const syntheticCapacityFileCount = revisioncapacity.DefaultShareStableHandles + 1
+const syntheticCapacityFileCount = content.DefaultShareStableHandles + 1
 
 func TestTransferJobExplicitlySettlesMoreThanShareStableHandleLimit(t *testing.T) {
 	fixture := newSyntheticCapacityFixture(t, syntheticCapacityFileCount)
@@ -99,10 +98,10 @@ func TestTransferJobExplicitlySettlesMoreThanShareStableHandleLimit(t *testing.T
 		t.Fatalf("lease settlements: relinquished=%d other=%d", relinquished, other)
 	}
 	snapshot := fixture.revisionStore.CapacitySnapshot()
-	if used := snapshot.Process().Used(); used != (revisioncapacity.CapacityUsage{}) {
+	if used := snapshot.Process().Used(); used != (content.CapacityUsage{}) {
 		t.Fatalf("process capacity after settlement = %+v", used)
 	}
-	if used := snapshot.Share().Used(); used != (revisioncapacity.CapacityUsage{}) {
+	if used := snapshot.Share().Used(); used != (content.CapacityUsage{}) {
 		t.Fatalf("share capacity after settlement = %+v", used)
 	}
 	sessions := snapshot.Sessions()
@@ -110,7 +109,7 @@ func TestTransferJobExplicitlySettlesMoreThanShareStableHandleLimit(t *testing.T
 		t.Fatalf("capacity sessions after settlement = %d, want 1", len(sessions))
 	}
 	for _, session := range sessions {
-		if used := session.Used(); used != (revisioncapacity.CapacityUsage{}) {
+		if used := session.Used(); used != (content.CapacityUsage{}) {
 			t.Fatalf("session capacity after settlement = %+v", used)
 		}
 	}
@@ -246,7 +245,7 @@ func newSyntheticCapacityFixture(t *testing.T, fileCount uint64) *syntheticCapac
 		t.Fatal(err)
 	}
 
-	owner, err := revisioncapacity.NewProcessOwner(revisioncapacity.DefaultProcessConfig())
+	pool, err := content.NewHandlePool(content.DefaultHandlePoolConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,10 +253,7 @@ func newSyntheticCapacityFixture(t *testing.T, fileCount uint64) *syntheticCapac
 	settlements := &syntheticCapacitySettlements{}
 	revisionStore, err := content.NewRevisionStore(content.RevisionStoreConfig{
 		ShareInstance: share, ChunkSize: catalog.MinChunkSize, Catalog: catalogStore, Source: revisionSource,
-		CapacityCoordinator: owner.Coordinator(), CapacityStore: revisioncapacity.StoreConfig{
-			StoreID: "synthetic-capacity-store", ShareID: "synthetic-capacity-share",
-			Limits: revisioncapacity.DefaultShareLimits(),
-		},
+		HandlePool: pool, ShareLimits: content.DefaultShareCapacityLimits(),
 		LeaseIDs: &syntheticCapacityLeaseIDs{},
 		Tracer: content.RevisionTracerFunc(func(event content.RevisionTrace) {
 			if event.Stage() != content.RevisionTraceStageLeaseSettlement {
@@ -288,18 +284,18 @@ func newSyntheticCapacityFixture(t *testing.T, fileCount uint64) *syntheticCapac
 		t.Fatal(err)
 	}
 	contentFactory := sendersession.ContentFactoryFunc(func(sessionID protocolsession.ProtocolSessionID) (*contentflow.SenderService, error) {
-		sessionCapacity, registerErr := revisionStore.RegisterSession(revisioncapacity.SessionConfig{
-			SessionID: revisioncapacity.SessionID(base64.RawURLEncoding.EncodeToString(sessionID.Bytes())),
-			Limits:    revisioncapacity.DefaultSessionLimits(),
+		session, registerErr := revisionStore.RegisterSession(content.SessionConfig{
+			SessionID: content.SessionID(base64.RawURLEncoding.EncodeToString(sessionID.Bytes())),
+			Limits:    content.DefaultSessionCapacityLimits(),
 		})
 		if registerErr != nil {
 			return nil, registerErr
 		}
 		service, serviceErr := contentflow.NewSenderService(contentflow.SenderServiceConfig{
-			Store: revisionStore, SessionCapacity: sessionCapacity, Encoder: recordEncoder, Cache: cache,
+			Store: session, Encoder: recordEncoder, Cache: cache,
 		})
 		if serviceErr != nil {
-			return nil, errors.Join(serviceErr, sessionCapacity.Close())
+			return nil, errors.Join(serviceErr, session.Close())
 		}
 		return service, nil
 	})
@@ -346,7 +342,7 @@ func newSyntheticCapacityFixture(t *testing.T, fileCount uint64) *syntheticCapac
 		if err := catalogStore.Close(); err != nil {
 			t.Error(err)
 		}
-		if err := owner.Close(); err != nil {
+		if err := pool.Close(); err != nil {
 			t.Error(err)
 		}
 		keyTree.Destroy()

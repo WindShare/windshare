@@ -4,7 +4,6 @@ import (
 	"errors"
 
 	"github.com/windshare/windshare/core/content"
-	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
@@ -25,7 +24,7 @@ type SenderDecisionTrace struct {
 	Stage              SenderDecisionStage
 	OperationID        protocolsession.OperationID
 	RequestKind        protocolsession.MessageKind
-	CapacityDecisionID revisioncapacity.CapacityDecisionID
+	CapacityDecisionID content.CapacityDecisionID
 	LeaseID            content.LeaseID
 }
 

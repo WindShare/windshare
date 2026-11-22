@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/content/revisioncapacity"
 )
 
 func TestRevisionEvidenceRejectsIdentityAndGeometryBoundaries(t *testing.T) {
@@ -162,7 +161,7 @@ func TestRevisionTraceImmutableProjections(t *testing.T) {
 		fileID:        catalogID[catalog.FileID](2),
 		fileRevision:  contentID[FileRevision](3),
 		leaseID:       contentID[LeaseID](4),
-		sessionID:     revisioncapacity.SessionID("session-5"),
+		sessionID:     SessionID("session-5"),
 	}
 	projections := []struct {
 		name string
@@ -228,8 +227,8 @@ func TestRevisionStoreRevisionIDFailureRollsBackAdmissionAndRemainsRetryable(t *
 		LeaseIDs:      &sequenceIDs{},
 	}
 	attachTestCapacity(t, &config,
-		revisioncapacity.CapacityLimits{StableHandles: 100, ActiveLeases: 100},
-		revisioncapacity.CapacityLimits{StableHandles: 100, ActiveLeases: 100},
+		CapacityLimits{StableHandles: 100, ActiveLeases: 100},
+		CapacityLimits{StableHandles: 100, ActiveLeases: 100},
 	)
 	store, err := NewRevisionStore(config)
 	if err != nil {
@@ -246,8 +245,8 @@ func TestRevisionStoreRevisionIDFailureRollsBackAdmissionAndRemainsRetryable(t *
 	if _, openErr := store.OpenRevision(context.Background(), file, session); !errors.Is(openErr, sentinel) {
 		t.Fatalf("first open error = %v", openErr)
 	}
-	if snapshot := store.CapacitySnapshot(); snapshot.Process().Used() != (revisioncapacity.CapacityUsage{}) ||
-		snapshot.Share().Used() != (revisioncapacity.CapacityUsage{}) || session.Snapshot().Used() != (revisioncapacity.CapacityUsage{}) {
+	if snapshot := store.CapacitySnapshot(); snapshot.Process().Used() != (CapacityUsage{}) ||
+		snapshot.Share().Used() != (CapacityUsage{}) || session.Snapshot().Used() != (CapacityUsage{}) {
 		t.Fatalf("failed revision generation leaked capacity: %+v", snapshot)
 	}
 	if source.Calls() != 0 {
@@ -261,7 +260,7 @@ func TestRevisionStoreRevisionIDFailureRollsBackAdmissionAndRemainsRetryable(t *
 	if lease.ID().IsZero() || lease.Descriptor().FileRevision().IsZero() || source.Calls() != 1 {
 		t.Fatalf("retry did not publish exactly one source-backed lease: lease=%x calls=%d", lease.ID(), source.Calls())
 	}
-	want := revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 1}
+	want := CapacityUsage{StableHandles: 1, ActiveLeases: 1}
 	if snapshot := store.CapacitySnapshot(); snapshot.Process().Used() != want || snapshot.Share().Used() != want || session.Snapshot().Used() != want {
 		t.Fatalf("successful retry capacity = %+v", snapshot)
 	}
@@ -276,8 +275,8 @@ func TestRevisionStoreRevisionIDFailureRollsBackAdmissionAndRemainsRetryable(t *
 		t.Fatal(err)
 	}
 	closed = true
-	if snapshot := store.CapacitySnapshot(); snapshot.Process().Used() != (revisioncapacity.CapacityUsage{}) ||
-		session.Snapshot().Used() != (revisioncapacity.CapacityUsage{}) {
+	if snapshot := store.CapacitySnapshot(); snapshot.Process().Used() != (CapacityUsage{}) ||
+		session.Snapshot().Used() != (CapacityUsage{}) {
 		t.Fatalf("store close leaked capacity: %+v", snapshot)
 	}
 }

@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/content/revisioncapacity"
+	"github.com/windshare/windshare/core/content"
 	framechannel "github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/internal/testoutputroot"
 	"github.com/windshare/windshare/core/link"
@@ -165,7 +165,7 @@ func TestLiveShareFacadeTransfersProgressiveDirectoryToDurableOutput(t *testing.
 	}
 	defer acceptedResult.runtime.Close()
 	capacitySessions := sender.revisionStore.CapacitySnapshot().Sessions()
-	if len(capacitySessions) != 1 || capacitySessions[0].Limits() != revisioncapacity.DefaultSessionLimits() {
+	if len(capacitySessions) != 1 || capacitySessions[0].Limits() != content.DefaultSessionCapacityLimits() {
 		t.Fatalf("authenticated sender session capacity = %+v", capacitySessions)
 	}
 	outputFixture := testoutputroot.New(t)

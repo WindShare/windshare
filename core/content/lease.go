@@ -8,8 +8,8 @@ import (
 	"runtime/debug"
 	"time"
 
+	"github.com/windshare/windshare/core/capacityledger"
 	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/content/revisioncapacity"
 )
 
 type OpenRevisionRequest struct {
@@ -38,7 +38,49 @@ func (kind LeaseEndKind) valid() bool {
 	return kind >= LeaseRelinquished && kind <= LeaseDetached
 }
 
-func (s *RevisionStore) OpenRevisions(ctx context.Context, requests []OpenRevisionRequest, session *revisioncapacity.SessionRegistration) ([]OpenRevisionResult, error) {
+func (s *RevisionSession) OpenRevision(ctx context.Context, file catalog.FileID) (RevisionLease, error) {
+	if s == nil || s.store == nil {
+		return RevisionLease{}, errors.New("revision session is unavailable")
+	}
+	return s.store.OpenRevision(ctx, file, s)
+}
+
+func (s *RevisionSession) OpenRevisions(ctx context.Context, requests []OpenRevisionRequest) ([]OpenRevisionResult, error) {
+	if s == nil || s.store == nil {
+		return nil, errors.New("revision session is unavailable")
+	}
+	return s.store.OpenRevisions(ctx, requests, s)
+}
+
+func (s *RevisionSession) RenewLease(id LeaseID) (RevisionLease, error) {
+	if s == nil || s.store == nil {
+		return RevisionLease{}, errors.New("revision session is unavailable")
+	}
+	return s.store.RenewLease(id)
+}
+
+func (s *RevisionSession) EndLease(id LeaseID, kind LeaseEndKind) error {
+	if s == nil || s.store == nil {
+		return errors.New("revision session is unavailable")
+	}
+	return s.store.EndLease(id, kind)
+}
+
+func (s *RevisionSession) ValidateLease(id LeaseID, descriptor FileRevisionDescriptor) error {
+	if s == nil || s.store == nil {
+		return errors.New("revision session is unavailable")
+	}
+	return s.store.ValidateLease(id, descriptor)
+}
+
+func (s *RevisionSession) ReadBlock(ctx context.Context, leaseID LeaseID, ref BlockRef) ([]byte, error) {
+	if s == nil || s.store == nil {
+		return nil, errors.New("revision session is unavailable")
+	}
+	return s.store.ReadBlock(ctx, leaseID, ref)
+}
+
+func (s *RevisionStore) OpenRevisions(ctx context.Context, requests []OpenRevisionRequest, session *RevisionSession) ([]OpenRevisionResult, error) {
 	if len(requests) > MaxOpenRevisionBatch {
 		return nil, ErrOpenBatchLimit
 	}
@@ -68,8 +110,8 @@ func (s *RevisionStore) OpenRevisions(ctx context.Context, requests []OpenRevisi
 func (s *RevisionStore) RenewLease(id LeaseID) (RevisionLease, error) {
 	now := s.clock.Now()
 	s.reap(now)
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.pool.mu.Lock()
+	defer s.pool.mu.Unlock()
 	if s.closed {
 		return RevisionLease{}, ErrRevisionStoreClosed
 	}
@@ -111,24 +153,27 @@ func (s *RevisionStore) EndLease(id LeaseID, kind LeaseEndKind) error {
 	// Expiry is authoritative detachment. Reaping first prevents a later caller
 	// from replacing that evidence or extending its recovery deadline.
 	s.reap(now)
-	s.mu.Lock()
+	s.pool.mu.Lock()
 	state := s.leases[id]
 	if state == nil {
-		s.mu.Unlock()
+		s.pool.mu.Unlock()
 		return nil
 	}
-	releases := capacityChargeRelease{}
 	sessionID := state.session.SessionID()
 	if state.status == leaseActive {
-		releases = s.endLeaseLocked(state, kind, now)
+		s.endLeaseLocked(state, kind, now)
 	}
 	delete(s.leases, id)
 	delete(state.revision.leases, id)
 	s.rememberLeaseTombstoneLocked(id, leaseEnded)
-	transition, retired := s.retireRevisionIfIdleLocked(state.revision, now)
+	cleanup, retire, retired := s.retireRevisionIfIdleLocked(state.revision, now)
 	identity := state.revision.identity()
-	s.mu.Unlock()
-	err := errors.Join(releases.run(), s.runRevisionTransition(transition))
+	s.pool.mu.Unlock()
+
+	err := cleanup.run()
+	if !retire.file.IsZero() {
+		s.retireRevisionCache(retire)
+	}
 	s.traceLeaseRevision(RevisionTraceStageLeaseSettlement, leaseEndTraceCause(kind), identity.file, identity.revision, id, sessionID)
 	if retired {
 		s.traceLeaseRevision(RevisionTraceStageCleanRelease, leaseEndTraceCause(kind), identity.file, identity.revision, id, sessionID)
@@ -145,8 +190,8 @@ func (s *RevisionStore) ValidateLease(id LeaseID, descriptor FileRevisionDescrip
 	}
 	now := s.clock.Now()
 	s.reap(now)
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.pool.mu.Lock()
+	defer s.pool.mu.Unlock()
 	if s.closed {
 		return ErrRevisionStoreClosed
 	}
@@ -177,9 +222,9 @@ func (s *RevisionStore) leaseTombstoneErrorLocked(id LeaseID) error {
 	}
 }
 
-func (s *RevisionStore) endLeaseLocked(state *leaseState, kind LeaseEndKind, endedAt time.Time) capacityChargeRelease {
+func (s *RevisionStore) endLeaseLocked(state *leaseState, kind LeaseEndKind, endedAt time.Time) {
 	if state.status != leaseActive {
-		return capacityChargeRelease{}
+		return
 	}
 	state.status = leaseEnded
 	state.revision.activeLeases--
@@ -190,135 +235,44 @@ func (s *RevisionStore) endLeaseLocked(state *leaseState, kind LeaseEndKind, end
 			state.revision.recoveryUntil = recoveryUntil
 		}
 	}
-	release := capacityChargeRelease{active: state.activeCharge}
-	state.activeCharge = revisioncapacity.ActiveLeaseCharge{}
-	release.sessionHandle = s.releaseSessionHandleLocked(state)
-	return release
+	state.leaseHold.Release()
+	state.leaseHold = capacityledger.Hold{}
+	s.releaseSessionHandleLocked(state)
 }
 
-type revisionTransitionKind uint8
-
-const (
-	revisionTransitionNone revisionTransitionKind = iota
-	revisionTransitionPublishIdle
-	revisionTransitionClose
-	revisionTransitionRetireCache
-)
-
-type revisionTransition struct {
-	kind      revisionTransitionKind
-	revision  *revisionState
-	token     revisioncapacity.CandidateToken
-	candidate revisioncapacity.IdleCandidate
-	cleanup   revisionCleanup
-	retire    revisionIdentity
-}
-
-func (s *RevisionStore) retireRevisionIfIdleLocked(revision *revisionState, now time.Time) (revisionTransition, bool) {
-	if revision == nil || revision.lifecycle != revisionLifecycleActive || s.hasActiveLeaseLocked(revision) || revision.admissionDone != nil {
-		return revisionTransition{}, false
+func (s *RevisionStore) retireRevisionIfIdleLocked(revision *revisionState, now time.Time) (revisionCleanup, revisionIdentity, bool) {
+	if revision == nil || revision.lifecycle != revisionLifecycleActive || revision.activeLeases != 0 {
+		return revisionCleanup{}, revisionIdentity{}, false
 	}
 	if attempt := s.opening[revision.descriptor.FileID()]; attempt != nil && attempt.revision == revision {
-		return revisionTransition{}, false
+		return revisionCleanup{}, revisionIdentity{}, false
 	}
 	if !s.closed && !revision.recoveryUntil.IsZero() && now.Before(revision.recoveryUntil) {
-		if revision.readers != 0 {
-			return revisionTransition{}, false
+		if revision.readers == 0 {
+			s.pool.markIdleLocked(revision)
 		}
-		if revision.idleToken != "" {
-			return revisionTransition{}, false
-		}
-		revision.lifecycleGeneration++
-		token := revisioncapacity.CandidateToken(fmt.Sprintf(
-			"%x:%x:%d", revision.descriptor.FileID().Bytes(), revision.descriptor.FileRevision().Bytes(), revision.lifecycleGeneration,
-		))
-		revision.idleToken = token
-		s.idleRevisions[token] = revision
-		s.capacityWG.Add(1)
-		return revisionTransition{
-			kind: revisionTransitionPublishIdle, revision: revision, token: token,
-			candidate: revisioncapacity.IdleCandidate{
-				Token: token, RevisionID: capacityRevisionID(revision.identity()),
-				RecoveryUntil: revision.recoveryUntil, LifecycleGeneration: revision.lifecycleGeneration,
-				StableHandle: revision.handleCharge,
-			},
-		}, false
+		return revisionCleanup{}, revisionIdentity{}, false
 	}
 	identity := revision.identity()
+	s.pool.unlinkIdleLocked(revision)
 	if s.revisions[revision.descriptor.FileID()] == revision {
 		delete(s.revisions, revision.descriptor.FileID())
 	}
-	revision.lifecycleGeneration++
 	revision.lifecycle = revisionLifecycleReleased
 	revision.closePending = true
-	transition := revisionTransition{kind: revisionTransitionClose, revision: revision, token: revision.idleToken, retire: identity}
-	if transition.token != "" {
-		delete(s.idleRevisions, transition.token)
-	}
-	revision.idleToken = ""
 	if revision.readers != 0 {
 		// Handle close waits for active readers in finishRead, but the revision
-		// is permanently retired now so cached entries and in-flight caching stop immediately.
-		return revisionTransition{kind: revisionTransitionRetireCache, retire: identity}, true
+		// is permanently retired now so cached entries stop immediately.
+		return revisionCleanup{}, identity, true
 	}
-	if transition.token == "" && revision.source != nil && !revision.closing && !revision.closed {
+	var cleanup revisionCleanup
+	if revision.source != nil && !revision.closing && !revision.closed {
 		revision.closing = true
-		transition.cleanup = revisionCleanup{store: s, revision: revision, source: revision.source, stableCharge: revision.handleCharge}
+		cleanup = revisionCleanup{store: s, revision: revision, source: revision.source, handleHold: revision.handleHold}
 		revision.source = nil
-		revision.handleCharge = revisioncapacity.StableHandleCharge{}
+		revision.handleHold = capacityledger.Hold{}
 	}
-	return transition, true
-}
-
-func (s *RevisionStore) runRevisionTransition(transition revisionTransition) error {
-	switch transition.kind {
-	case revisionTransitionNone:
-		return nil
-	case revisionTransitionPublishIdle:
-		defer s.capacityWG.Done()
-		publishErr := s.capacity.PublishIdle(transition.candidate)
-		withdraw := false
-		var fallback revisionTransition
-		s.mu.Lock()
-		valid := !s.closed && transition.revision.lifecycle == revisionLifecycleActive &&
-			transition.revision.idleToken == transition.token &&
-			transition.revision.lifecycleGeneration == transition.candidate.LifecycleGeneration &&
-			transition.revision.readers == 0 && !s.hasActiveLeaseLocked(transition.revision) &&
-			transition.revision.admissionDone == nil && s.clock.Now().Before(transition.revision.recoveryUntil)
-		if publishErr != nil && valid {
-			delete(s.idleRevisions, transition.token)
-			transition.revision.idleToken = ""
-			transition.revision.recoveryUntil = time.Time{}
-			fallback, _ = s.retireRevisionIfIdleLocked(transition.revision, s.clock.Now())
-		} else if publishErr == nil && !valid {
-			withdraw = true
-			if transition.revision.idleToken == transition.token &&
-				transition.revision.lifecycleGeneration == transition.candidate.LifecycleGeneration &&
-				!s.clock.Now().Before(transition.revision.recoveryUntil) {
-				delete(s.idleRevisions, transition.token)
-				transition.revision.idleToken = ""
-				transition.revision.recoveryUntil = time.Time{}
-				fallback, _ = s.retireRevisionIfIdleLocked(transition.revision, s.clock.Now())
-			}
-		}
-		s.mu.Unlock()
-		if withdraw {
-			s.capacity.WithdrawIdle(transition.token)
-		}
-		return errors.Join(publishErr, s.runRevisionTransition(fallback))
-	case revisionTransitionClose:
-		if transition.token != "" {
-			transition.cleanup = revisionCleanup{store: s, revision: transition.revision, idleToken: transition.token}
-		}
-		err := transition.cleanup.run()
-		s.retireRevisionCache(transition.retire)
-		return err
-	case revisionTransitionRetireCache:
-		s.retireRevisionCache(transition.retire)
-		return nil
-	default:
-		return errors.New("revision transition kind is invalid")
-	}
+	return cleanup, identity, true
 }
 
 func leaseEndTraceCause(kind LeaseEndKind) RevisionTraceCause {
@@ -334,36 +288,28 @@ func leaseEndTraceCause(kind LeaseEndKind) RevisionTraceCause {
 	}
 }
 
-func (s *RevisionStore) releaseSessionHandleLocked(state *leaseState) revisioncapacity.SessionHandleCharge {
+func (s *RevisionStore) releaseSessionHandleLocked(state *leaseState) {
 	if state.session == nil {
-		return revisioncapacity.SessionHandleCharge{}
+		return
 	}
 	handle := state.revision.sessionHandles[state.session]
 	if handle == nil || handle.leases == 0 {
 		state.session = nil
-		return revisioncapacity.SessionHandleCharge{}
+		return
 	}
 	handle.leases--
-	var charge revisioncapacity.SessionHandleCharge
 	if handle.leases == 0 {
-		charge = handle.charge
+		handle.hold.Release()
 		delete(state.revision.sessionHandles, state.session)
 	}
 	state.session = nil
-	return charge
 }
 
-func releaseAllSessionHandlesLocked(revision *revisionState) []capacityChargeRelease {
-	releases := make([]capacityChargeRelease, 0, len(revision.sessionHandles))
+func releaseAllSessionHandlesLocked(revision *revisionState) {
 	for session, handle := range revision.sessionHandles {
-		releases = append(releases, capacityChargeRelease{sessionHandle: handle.charge})
+		handle.hold.Release()
 		delete(revision.sessionHandles, session)
 	}
-	return releases
-}
-
-func (s *RevisionStore) hasActiveLeaseLocked(revision *revisionState) bool {
-	return revision != nil && revision.activeLeases != 0
 }
 
 func (s *RevisionStore) ReadBlock(ctx context.Context, leaseID LeaseID, ref BlockRef) ([]byte, error) {
@@ -372,28 +318,28 @@ func (s *RevisionStore) ReadBlock(ctx context.Context, leaseID LeaseID, ref Bloc
 	}
 	now := s.clock.Now()
 	s.reap(now)
-	s.mu.Lock()
+	s.pool.mu.Lock()
 	if s.closed {
-		s.mu.Unlock()
+		s.pool.mu.Unlock()
 		return nil, ErrRevisionStoreClosed
 	}
 	lease := s.leases[leaseID]
 	if lease == nil {
 		err := s.leaseTombstoneErrorLocked(leaseID)
-		s.mu.Unlock()
+		s.pool.mu.Unlock()
 		return nil, err
 	}
 	if lease.status == leaseDrifted || lease.revision.lifecycle == revisionLifecycleInvalidated {
-		s.mu.Unlock()
+		s.pool.mu.Unlock()
 		return nil, ErrRevisionDrift
 	}
 	if lease.status != leaseActive || !now.Before(lease.expiresAt) {
-		s.mu.Unlock()
+		s.pool.mu.Unlock()
 		return nil, ErrLeaseExpired
 	}
 	descriptor := lease.revision.descriptor
 	if ref.FileID() != descriptor.FileID() || ref.FileRevision() != descriptor.FileRevision() || ref.LocalBlockIndex() >= descriptor.Geometry().BlockCount() {
-		s.mu.Unlock()
+		s.pool.mu.Unlock()
 		return nil, ErrInvalidBlockRef
 	}
 	offset, _ := descriptor.Geometry().BlockOffset(ref.LocalBlockIndex())
@@ -402,20 +348,17 @@ func (s *RevisionStore) ReadBlock(ctx context.Context, leaseID LeaseID, ref Bloc
 	revision.readers++
 	s.readingRevisions[revision] = struct{}{}
 	s.readWG.Add(1)
-	s.mu.Unlock()
+	s.pool.mu.Unlock()
 	defer s.readWG.Done()
 
 	destination := make([]byte, plainLength)
 	comparison, readErr := readStableBlock(ctx, revision.source, destination, offset)
-	drifted, cleanups, transitions, releases, invalidate := s.finishRead(revision, comparison)
-	for _, release := range releases {
-		_ = release.run()
-	}
+	drifted, cleanups, retire, invalidate := s.finishRead(revision, comparison)
 	for _, cleanup := range cleanups {
 		_ = cleanup.run()
 	}
-	for _, transition := range transitions {
-		_ = s.runRevisionTransition(transition)
+	if !retire.file.IsZero() {
+		s.retireRevisionCache(retire)
 	}
 	if invalidate {
 		s.invalidateRevisionCache(revisionIdentity{file: descriptor.FileID(), revision: descriptor.FileRevision()})
@@ -472,57 +415,54 @@ func readStableBlock(ctx context.Context, source StableFile, destination []byte,
 func (s *RevisionStore) finishRead(revision *revisionState, comparison RevisionComparison) (
 	bool,
 	[]revisionCleanup,
-	[]revisionTransition,
-	[]capacityChargeRelease,
+	revisionIdentity,
 	bool,
 ) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.pool.mu.Lock()
+	defer s.pool.mu.Unlock()
 	revision.readers--
 	if revision.readers == 0 {
 		delete(s.readingRevisions, revision)
 	}
 	var cleanups []revisionCleanup
-	var transitions []revisionTransition
-	var releases []capacityChargeRelease
+	var retire revisionIdentity
 	invalidate := comparison == RevisionComparisonMismatch
 	if invalidate {
-		cleanups, releases = s.invalidateIdentityLocked(revision.identity(), revision)
-	}
-	if !invalidate {
-		if transition, _ := s.retireRevisionIfIdleLocked(revision, s.clock.Now()); transition.kind != revisionTransitionNone {
-			transitions = append(transitions, transition)
+		cleanups = s.invalidateIdentityLocked(revision.identity(), revision)
+	} else {
+		cleanup, retiredID, _ := s.retireRevisionIfIdleLocked(revision, s.clock.Now())
+		if cleanup.source != nil || cleanup.handleHold.Units() != 0 {
+			cleanups = append(cleanups, cleanup)
 		}
+		retire = retiredID
 	}
 	drifted := revision.lifecycle == revisionLifecycleInvalidated
 	if revision.closePending && revision.readers == 0 && !revision.closed {
 		if revision.source != nil && !revision.closing {
 			revision.closing = true
-			cleanups = append(cleanups, revisionCleanup{store: s, revision: revision, source: revision.source, stableCharge: revision.handleCharge})
+			cleanups = append(cleanups, revisionCleanup{store: s, revision: revision, source: revision.source, handleHold: revision.handleHold})
 			revision.source = nil
-			revision.handleCharge = revisioncapacity.StableHandleCharge{}
+			revision.handleHold = capacityledger.Hold{}
 		}
 	}
-	return drifted, cleanups, transitions, releases, invalidate
+	return drifted, cleanups, retire, invalidate
 }
 
 func (s *RevisionStore) reap(now time.Time) {
 	cleanups := make([]revisionCleanup, 0)
-	transitions := make([]revisionTransition, 0)
-	releases := make([]capacityChargeRelease, 0)
-	released := make([]revisionIdentity, 0)
+	retired := make([]revisionIdentity, 0)
 	type detachedLeaseTrace struct {
 		identity revisionIdentity
 		leaseID  LeaseID
-		session  revisioncapacity.SessionID
+		session  SessionID
 	}
 	detached := make([]detachedLeaseTrace, 0)
-	s.mu.Lock()
+	s.pool.mu.Lock()
 	expired := make([]LeaseID, 0)
 	for id, lease := range s.leases {
 		if lease.status == leaseActive && !now.Before(lease.expiresAt) {
 			sessionID := lease.session.SessionID()
-			releases = append(releases, s.endLeaseLocked(lease, LeaseDetached, lease.expiresAt))
+			s.endLeaseLocked(lease, LeaseDetached, lease.expiresAt)
 			expired = append(expired, id)
 			detached = append(detached, detachedLeaseTrace{
 				identity: lease.revision.identity(), leaseID: id, session: sessionID,
@@ -536,26 +476,21 @@ func (s *RevisionStore) reap(now time.Time) {
 		s.rememberLeaseTombstoneLocked(id, leaseEnded)
 	}
 	for file, revision := range s.revisions {
-		transition, retired := s.retireRevisionIfIdleLocked(revision, now)
-		if retired {
+		cleanup, retireID, wasRetired := s.retireRevisionIfIdleLocked(revision, now)
+		if wasRetired {
 			delete(s.revisions, file)
-			released = append(released, revision.identity())
-			if transition.kind != revisionTransitionNone {
-				transitions = append(transitions, transition)
+			retired = append(retired, retireID)
+			if cleanup.source != nil || cleanup.handleHold.Units() != 0 {
+				cleanups = append(cleanups, cleanup)
 			}
-		} else if transition.kind != revisionTransitionNone {
-			transitions = append(transitions, transition)
 		}
 	}
-	s.mu.Unlock()
-	for _, release := range releases {
-		_ = release.run()
-	}
+	s.pool.mu.Unlock()
 	for _, cleanup := range cleanups {
 		_ = cleanup.run()
 	}
-	for _, transition := range transitions {
-		_ = s.runRevisionTransition(transition)
+	for _, identity := range retired {
+		s.retireRevisionCache(identity)
 	}
 	for _, trace := range detached {
 		s.traceLeaseRevision(
@@ -563,7 +498,7 @@ func (s *RevisionStore) reap(now time.Time) {
 			trace.identity.file, trace.identity.revision, trace.leaseID, trace.session,
 		)
 	}
-	for _, identity := range released {
+	for _, identity := range retired {
 		s.traceRevision(RevisionTraceStageCleanRelease, RevisionTraceCauseDetached, identity.file, identity.revision)
 	}
 }

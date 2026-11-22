@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/content/revisioncapacity"
+	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/observationstream"
@@ -58,7 +58,7 @@ type Config struct {
 	Random              io.Reader
 	CleanupTimeout      time.Duration
 	ObservationCapacity observationstream.Capacity
-	RevisionCapacity    revisioncapacity.ProcessConfig
+	RevisionCapacity    content.HandlePoolConfig
 	CatalogLimits       catalog.BudgetLimits
 	CacheBytes          uint64
 	ReceiveCapacity     liveshare.ReceiveCapacityLimits

@@ -4,7 +4,6 @@ import (
 	"strconv"
 
 	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/content/revisioncapacity"
 )
 
 type RevisionTraceStage uint8
@@ -44,16 +43,16 @@ type RevisionTrace struct {
 	fileID        catalog.FileID
 	fileRevision  FileRevision
 	leaseID       LeaseID
-	sessionID     revisioncapacity.SessionID
+	sessionID     SessionID
 }
 
-func (t RevisionTrace) Stage() RevisionTraceStage             { return t.stage }
-func (t RevisionTrace) Cause() RevisionTraceCause             { return t.cause }
-func (t RevisionTrace) ShareInstance() catalog.ShareInstance  { return t.shareInstance }
-func (t RevisionTrace) FileID() catalog.FileID                { return t.fileID }
-func (t RevisionTrace) FileRevision() FileRevision            { return t.fileRevision }
-func (t RevisionTrace) LeaseID() LeaseID                      { return t.leaseID }
-func (t RevisionTrace) SessionID() revisioncapacity.SessionID { return t.sessionID }
+func (t RevisionTrace) Stage() RevisionTraceStage            { return t.stage }
+func (t RevisionTrace) Cause() RevisionTraceCause            { return t.cause }
+func (t RevisionTrace) ShareInstance() catalog.ShareInstance { return t.shareInstance }
+func (t RevisionTrace) FileID() catalog.FileID               { return t.fileID }
+func (t RevisionTrace) FileRevision() FileRevision           { return t.fileRevision }
+func (t RevisionTrace) LeaseID() LeaseID                     { return t.leaseID }
+func (t RevisionTrace) SessionID() SessionID                 { return t.sessionID }
 
 type RevisionTracer interface {
 	TraceRevision(RevisionTrace)
@@ -78,7 +77,7 @@ func (s *RevisionStore) traceLeaseRevision(
 	file catalog.FileID,
 	revision FileRevision,
 	lease LeaseID,
-	session revisioncapacity.SessionID,
+	session SessionID,
 ) {
 	if s == nil {
 		return

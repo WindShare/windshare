@@ -5,8 +5,6 @@ import (
 	"errors"
 	"testing"
 	"time"
-
-	"github.com/windshare/windshare/core/content/revisioncapacity"
 )
 
 type failingLeaseIDs struct {
@@ -36,10 +34,10 @@ func TestResidentAdmissionFailurePreservesPublishedAuthorityAndAccounting(t *tes
 	if _, err := store.OpenRevision(context.Background(), file, failedSession); !errors.Is(err, sentinel) {
 		t.Fatalf("resident generator failure=%v", err)
 	}
-	if store.CapacitySnapshot().Process().Used() != (revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 1}) ||
-		store.CapacitySnapshot().Share().Used() != (revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 1}) ||
-		originalSession.Snapshot().Used() != (revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 1}) ||
-		failedSession.Snapshot().Used() != (revisioncapacity.CapacityUsage{}) {
+	if store.CapacitySnapshot().Process().Used() != (CapacityUsage{StableHandles: 1, ActiveLeases: 1}) ||
+		store.CapacitySnapshot().Share().Used() != (CapacityUsage{StableHandles: 1, ActiveLeases: 1}) ||
+		originalSession.Snapshot().Used() != (CapacityUsage{StableHandles: 1, ActiveLeases: 1}) ||
+		failedSession.Snapshot().Used() != (CapacityUsage{}) {
 		t.Fatalf("failed resident admission changed capacity: %+v", store.CapacitySnapshot())
 	}
 	if err := store.ValidateLease(original.ID(), original.Descriptor()); err != nil || stable.closed.Load() != 0 {
@@ -59,37 +57,32 @@ func TestRevisionInvalidationRemainsIdempotentAcrossActiveReaders(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	store.mu.Lock()
+	store.pool.mu.Lock()
 	revision := store.revisions[file]
 	revision.readers = 1
 	store.readingRevisions[revision] = struct{}{}
 	identity := revision.identity()
-	cleanups, releases := store.invalidateIdentityLocked(identity, revision)
+	cleanups := store.invalidateIdentityLocked(identity, revision)
 	if len(cleanups) != 0 {
-		store.mu.Unlock()
+		store.pool.mu.Unlock()
 		t.Fatalf("reader invalidation closed active handle prematurely: cleanups=%d", len(cleanups))
 	}
-	extraCleanups, extraReleases := store.invalidateIdentityLocked(identity, revision)
-	if len(extraCleanups) != 0 || len(extraReleases) != 0 {
-		store.mu.Unlock()
-		t.Fatalf("repeated invalidation was not idempotent: cleanups=%d releases=%d", len(extraCleanups), len(extraReleases))
+	extraCleanups := store.invalidateIdentityLocked(identity, revision)
+	if len(extraCleanups) != 0 {
+		store.pool.mu.Unlock()
+		t.Fatalf("repeated invalidation was not idempotent: cleanups=%d", len(extraCleanups))
 	}
 	delete(store.readingRevisions, revision)
 	revision.readers = 0
-	cleanup, finalReleases, ready := store.invalidateStateLocked(revision, store.clock.Now())
-	store.mu.Unlock()
-	for _, release := range append(releases, finalReleases...) {
-		if err := release.run(); err != nil {
-			t.Fatal(err)
-		}
-	}
+	cleanup, ready := store.invalidateStateLocked(revision, store.clock.Now())
+	store.pool.mu.Unlock()
 	if !ready {
 		t.Fatal("last reader did not release invalidated physical state")
 	}
 	if err := cleanup.run(); err != nil {
 		t.Fatal(err)
 	}
-	if stable.closed.Load() != 1 || session.Snapshot().Used() != (revisioncapacity.CapacityUsage{}) {
+	if stable.closed.Load() != 1 || session.Snapshot().Used() != (CapacityUsage{}) {
 		t.Fatalf("invalidation cleanup closes=%d capacity=%+v", stable.closed.Load(), session.Snapshot())
 	}
 }

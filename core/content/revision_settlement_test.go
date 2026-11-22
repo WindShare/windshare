@@ -5,8 +5,6 @@ import (
 	"errors"
 	"testing"
 	"time"
-
-	"github.com/windshare/windshare/core/content/revisioncapacity"
 )
 
 func TestExplicitLeaseEndingsRetireIdleRevisionImmediately(t *testing.T) {
@@ -30,9 +28,9 @@ func TestExplicitLeaseEndingsRetireIdleRevisionImmediately(t *testing.T) {
 			if stable.closed.Load() != 1 {
 				t.Fatalf("stable source closes=%d", stable.closed.Load())
 			}
-			if store.CapacitySnapshot().Process().Used() != (revisioncapacity.CapacityUsage{}) ||
-				store.CapacitySnapshot().Share().Used() != (revisioncapacity.CapacityUsage{}) ||
-				session.Snapshot().Used() != (revisioncapacity.CapacityUsage{}) {
+			if store.CapacitySnapshot().Process().Used() != (CapacityUsage{}) ||
+				store.CapacitySnapshot().Share().Used() != (CapacityUsage{}) ||
+				session.Snapshot().Used() != (CapacityUsage{}) {
 				t.Fatalf("capacity retained after ending %v", kind)
 			}
 			var settlement RevisionTrace
@@ -70,9 +68,9 @@ func TestInitialRangeFailureRollsBackUndeliveredLeaseImmediately(t *testing.T) {
 	if stable.closed.Load() != 1 {
 		t.Fatalf("undelivered initial-range source closes=%d", stable.closed.Load())
 	}
-	if store.CapacitySnapshot().Process().Used() != (revisioncapacity.CapacityUsage{}) ||
-		store.CapacitySnapshot().Share().Used() != (revisioncapacity.CapacityUsage{}) ||
-		session.Snapshot().Used() != (revisioncapacity.CapacityUsage{}) {
+	if store.CapacitySnapshot().Process().Used() != (CapacityUsage{}) ||
+		store.CapacitySnapshot().Share().Used() != (CapacityUsage{}) ||
+		session.Snapshot().Used() != (CapacityUsage{}) {
 		t.Fatal("capacity retained after initial-range rollback")
 	}
 }
@@ -99,9 +97,9 @@ func TestDetachedDeadlineSurvivesActiveAndLaterRelinquishedLeases(t *testing.T) 
 		t.Fatal(err)
 	}
 	expectedDeadline := startedAt.Add(RevisionResumeGrace)
-	store.mu.Lock()
+	store.pool.mu.Lock()
 	deadline := store.revisions[file].recoveryUntil
-	store.mu.Unlock()
+	store.pool.mu.Unlock()
 	if deadline != expectedDeadline {
 		t.Fatalf("detached recovery deadline=%v want=%v", deadline, expectedDeadline)
 	}
@@ -110,7 +108,7 @@ func TestDetachedDeadlineSurvivesActiveAndLaterRelinquishedLeases(t *testing.T) 
 	if err := store.EndLease(active.ID(), LeaseRelinquished); err != nil {
 		t.Fatal(err)
 	}
-	if stable.closed.Load() != 0 || store.CapacitySnapshot().Process().Used() != (revisioncapacity.CapacityUsage{StableHandles: 1}) {
+	if stable.closed.Load() != 0 || store.CapacitySnapshot().Process().Used() != (CapacityUsage{StableHandles: 1}) {
 		t.Fatalf("earlier detachment was erased: closes=%d capacity=%+v", stable.closed.Load(), store.CapacitySnapshot().Process().Used())
 	}
 
@@ -124,9 +122,9 @@ func TestDetachedDeadlineSurvivesActiveAndLaterRelinquishedLeases(t *testing.T) 
 	if err := store.EndLease(reopened.ID(), LeaseRelinquished); err != nil {
 		t.Fatal(err)
 	}
-	store.mu.Lock()
+	store.pool.mu.Lock()
 	deadline = store.revisions[file].recoveryUntil
-	store.mu.Unlock()
+	store.pool.mu.Unlock()
 	if deadline != expectedDeadline {
 		t.Fatalf("lease acquisition changed detached deadline=%v want=%v", deadline, expectedDeadline)
 	}
@@ -135,7 +133,7 @@ func TestDetachedDeadlineSurvivesActiveAndLaterRelinquishedLeases(t *testing.T) 
 	if err := store.ValidateLease(reopened.ID(), reopened.Descriptor()); !errors.Is(err, ErrLeaseExpired) {
 		t.Fatalf("ended lease validation=%v", err)
 	}
-	if stable.closed.Load() != 1 || store.CapacitySnapshot().Process().Used() != (revisioncapacity.CapacityUsage{}) {
+	if stable.closed.Load() != 1 || store.CapacitySnapshot().Process().Used() != (CapacityUsage{}) {
 		t.Fatalf("expired detached recovery closes=%d capacity=%+v", stable.closed.Load(), store.CapacitySnapshot().Process().Used())
 	}
 }

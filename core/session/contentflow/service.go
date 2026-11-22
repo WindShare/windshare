@@ -11,7 +11,6 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
-	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
@@ -20,11 +19,12 @@ const ReleasedLeaseTombstoneLimit = 4_096
 var errRevisionOperationScope = errors.New("content failure belongs to the file revision")
 
 type RevisionStore interface {
-	OpenRevisions(context.Context, []content.OpenRevisionRequest, *revisioncapacity.SessionRegistration) ([]content.OpenRevisionResult, error)
+	OpenRevisions(context.Context, []content.OpenRevisionRequest) ([]content.OpenRevisionResult, error)
 	RenewLease(content.LeaseID) (content.RevisionLease, error)
 	EndLease(content.LeaseID, content.LeaseEndKind) error
 	ValidateLease(content.LeaseID, content.FileRevisionDescriptor) error
 	ReadBlock(context.Context, content.LeaseID, content.BlockRef) ([]byte, error)
+	Close() error
 }
 
 type RecordEncoder interface {
@@ -33,17 +33,15 @@ type RecordEncoder interface {
 }
 
 type SenderServiceConfig struct {
-	Store           RevisionStore
-	SessionCapacity *revisioncapacity.SessionRegistration
-	Encoder         RecordEncoder
-	Cache           *SharedBlockCache
+	Store   RevisionStore
+	Encoder RecordEncoder
+	Cache   *SharedBlockCache
 }
 
 type SenderService struct {
-	store           RevisionStore
-	sessionCapacity *revisioncapacity.SessionRegistration
-	encoder         RecordEncoder
-	cache           *SharedBlockCache
+	store   RevisionStore
+	encoder RecordEncoder
+	cache   *SharedBlockCache
 
 	mu             sync.Mutex
 	closed         bool
@@ -56,12 +54,11 @@ type SenderService struct {
 }
 
 func NewSenderService(config SenderServiceConfig) (*SenderService, error) {
-	if config.Store == nil || config.SessionCapacity == nil || config.SessionCapacity.SessionID() == "" ||
-		config.Encoder == nil || config.Cache == nil {
-		return nil, errors.New("content sender service requires store, revision-capacity session, encoder, and share cache")
+	if config.Store == nil || config.Encoder == nil || config.Cache == nil {
+		return nil, errors.New("content sender service requires store, encoder, and share cache")
 	}
 	return &SenderService{
-		store: config.Store, sessionCapacity: config.SessionCapacity, encoder: config.Encoder, cache: config.Cache,
+		store: config.Store, encoder: config.Encoder, cache: config.Cache,
 		leases: make(map[content.LeaseID]content.FileRevisionDescriptor), released: make(map[content.LeaseID]struct{}),
 	}, nil
 }
@@ -78,7 +75,7 @@ func (s *SenderService) Open(ctx context.Context, request OpenRequest) (OpenResu
 	for index, item := range validated.items {
 		storeRequests[index] = content.OpenRevisionRequest{FileID: item.FileID, InitialRanges: item.InitialRanges}
 	}
-	storeResults, err := s.store.OpenRevisions(ctx, storeRequests, s.sessionCapacity)
+	storeResults, err := s.store.OpenRevisions(ctx, storeRequests)
 	if err != nil {
 		s.rollbackUndeliveredStoreResults(storeResults)
 		return OpenResults{}, err
@@ -493,13 +490,13 @@ func (s *SenderService) Close() error {
 		for _, leaseID := range leases {
 			result = errors.Join(result, s.store.EndLease(leaseID, content.LeaseDetached))
 		}
-		s.closeErr = errors.Join(result, s.sessionCapacity.Close())
+		s.closeErr = errors.Join(result, s.store.Close())
 	})
 	return s.closeErr
 }
 
 func classifyRevisionError(err error) RevisionFailure {
-	var capacityBusy *revisioncapacity.CapacityBusyError
+	var capacityBusy *content.CapacityBusyError
 	if errors.As(err, &capacityBusy) && capacityBusy != nil {
 		retryAfter := min(
 			max(capacityBusy.RetryAfter(), MinRevisionFailureRetryAfter),

@@ -3,7 +3,7 @@ package content
 import (
 	"time"
 
-	"github.com/windshare/windshare/core/content/revisioncapacity"
+	"github.com/windshare/windshare/core/capacityledger"
 )
 
 func (s *RevisionStore) invalidateRevisionCache(identity revisionIdentity) {
@@ -32,7 +32,7 @@ func (s *RevisionStore) retireRevisionCache(identity revisionIdentity) {
 // of a tuple under one lock, so no reader or lease can escape tuple-global loss.
 // Because every fresh open assigns a distinct random FileRevision, revocation
 // requires no share-lifetime tombstone table.
-func (s *RevisionStore) invalidateIdentityLocked(identity revisionIdentity, origin *revisionState) ([]revisionCleanup, []capacityChargeRelease) {
+func (s *RevisionStore) invalidateIdentityLocked(identity revisionIdentity, origin *revisionState) []revisionCleanup {
 	states := make(map[*revisionState]struct{})
 	if current := s.revisions[identity.file]; current != nil && current.identity() == identity {
 		states[current] = struct{}{}
@@ -47,31 +47,27 @@ func (s *RevisionStore) invalidateIdentityLocked(identity revisionIdentity, orig
 	}
 	now := s.clock.Now()
 	cleanups := make([]revisionCleanup, 0, len(states))
-	releases := make([]capacityChargeRelease, 0)
 	for revision := range states {
-		cleanup, stateReleases, ok := s.invalidateStateLocked(revision, now)
-		releases = append(releases, stateReleases...)
-		if ok {
+		if cleanup, ok := s.invalidateStateLocked(revision, now); ok {
 			cleanups = append(cleanups, cleanup)
 		}
 	}
-	return cleanups, releases
+	return cleanups
 }
 
 // invalidateStateLocked makes lifecycle loss and all lease revocations visible
 // before returning deferred physical cleanup to the caller.
-func (s *RevisionStore) invalidateStateLocked(revision *revisionState, now time.Time) (revisionCleanup, []capacityChargeRelease, bool) {
-	releases := make([]capacityChargeRelease, 0)
+func (s *RevisionStore) invalidateStateLocked(revision *revisionState, now time.Time) (revisionCleanup, bool) {
 	if revision.lifecycle != revisionLifecycleInvalidated {
-		revision.lifecycleGeneration++
+		s.pool.unlinkIdleLocked(revision)
 		revision.lifecycle = revisionLifecycleInvalidated
 		if s.revisions[revision.descriptor.FileID()] == revision {
 			delete(s.revisions, revision.descriptor.FileID())
 		}
 		for leaseID, lease := range revision.leases {
 			if lease.status == leaseActive {
-				releases = append(releases, capacityChargeRelease{active: lease.activeCharge})
-				lease.activeCharge = revisioncapacity.ActiveLeaseCharge{}
+				lease.leaseHold.Release()
+				lease.leaseHold = capacityledger.Hold{}
 			}
 			lease.session = nil
 			lease.status = leaseDrifted
@@ -80,22 +76,16 @@ func (s *RevisionStore) invalidateStateLocked(revision *revisionState, now time.
 			delete(s.leases, leaseID)
 		}
 		revision.activeLeases = 0
-		releases = append(releases, releaseAllSessionHandlesLocked(revision)...)
+		releaseAllSessionHandlesLocked(revision)
 		revision.leases = nil
 		revision.closePending = true
 	}
-	if revision.closePending && revision.readers == 0 && !revision.closed && !revision.closing {
-		token := revision.idleToken
-		revision.idleToken = ""
-		if token != "" {
-			delete(s.idleRevisions, token)
-			return revisionCleanup{store: s, revision: revision, idleToken: token}, releases, true
-		}
+	if revision.closePending && revision.readers == 0 && !revision.closed && !revision.closing && revision.source != nil {
 		revision.closing = true
-		cleanup := revisionCleanup{store: s, revision: revision, source: revision.source, stableCharge: revision.handleCharge}
+		cleanup := revisionCleanup{store: s, revision: revision, source: revision.source, handleHold: revision.handleHold}
 		revision.source = nil
-		revision.handleCharge = revisioncapacity.StableHandleCharge{}
-		return cleanup, releases, true
+		revision.handleHold = capacityledger.Hold{}
+		return cleanup, true
 	}
-	return revisionCleanup{}, releases, false
+	return revisionCleanup{}, false
 }

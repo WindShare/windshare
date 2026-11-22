@@ -14,7 +14,6 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
-	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/core/senderobject"
@@ -27,9 +26,7 @@ import (
 )
 
 const (
-	defaultSharedBlockCacheBytes  = uint64(64) << 20
-	revisionCapacityStoreIDPrefix = "liveshare-store:"
-	revisionCapacityShareIDPrefix = "liveshare-share:"
+	defaultSharedBlockCacheBytes = uint64(64) << 20
 )
 
 type SenderConfig struct {
@@ -41,8 +38,8 @@ type SenderConfig struct {
 	ScanAdmission      DirectoryScanAdmission
 	RootPrefetchTracer RootPrefetchTracer
 	RevisionTracer     content.RevisionTracer
-	CapacityTracer     revisioncapacity.Tracer
-	RevisionCapacity   *revisioncapacity.Coordinator
+	CapacityTracer     content.CapacityTracer
+	RevisionCapacity   *content.HandlePool
 	CatalogBudget      *catalog.BudgetAccount
 	CacheBudget        *contentflow.ProcessCacheBudget
 
@@ -352,10 +349,11 @@ func prepareSenderContent(
 	}
 	sender.revisionStore, err = dependencies.newRevisionStore(content.RevisionStoreConfig{
 		ShareInstance: authority.shareInstance, ChunkSize: config.ChunkSize, Catalog: sender.catalogStore,
-		Source: sender.source, CapacityCoordinator: config.RevisionCapacity,
-		CapacityStore: senderRevisionCapacityStoreConfig(authority.shareInstance, config.CapacityTracer),
-		RevisionIDs:   randomRevisionIDs{random: random},
-		Cache:         sender.cache, Tracer: config.RevisionTracer,
+		Source: sender.source, HandlePool: config.RevisionCapacity,
+		ShareLimits:    content.DefaultShareCapacityLimits(),
+		CapacityTracer: config.CapacityTracer,
+		RevisionIDs:    randomRevisionIDs{random: random},
+		Cache:          sender.cache, Tracer: config.RevisionTracer,
 	})
 	if err != nil {
 		return err
@@ -377,16 +375,6 @@ func (g randomRevisionIDs) NewFileRevision() (content.FileRevision, error) {
 		return content.FileRevision{}, err
 	}
 	return content.FileRevisionFromBytes(identity[:])
-}
-
-func senderRevisionCapacityStoreConfig(share catalog.ShareInstance, tracer revisioncapacity.Tracer) revisioncapacity.StoreConfig {
-	identity := base64.RawURLEncoding.EncodeToString(share.Bytes())
-	return revisioncapacity.StoreConfig{
-		StoreID: revisioncapacity.StoreID(revisionCapacityStoreIDPrefix + identity),
-		Tracer:  tracer,
-		ShareID: revisioncapacity.ShareID(revisionCapacityShareIDPrefix + identity),
-		Limits:  revisioncapacity.DefaultShareLimits(),
-	}
 }
 
 func commitSenderPreparation(sender *PreparedSender, authority senderAuthority, catalogState senderCatalog) {
@@ -472,18 +460,18 @@ func (sender *PreparedSender) NewRuntimeFactory(config RuntimeFactoryConfig) (*s
 		return nil, errors.New("live share sender runtime factory is unavailable")
 	}
 	contentFactory := sendersession.ContentFactoryFunc(func(sessionID protocolsession.ProtocolSessionID) (*contentflow.SenderService, error) {
-		sessionCapacity, err := sender.revisionStore.RegisterSession(revisioncapacity.SessionConfig{
-			SessionID: revisioncapacity.SessionID(base64.RawURLEncoding.EncodeToString(sessionID.Bytes())),
-			Limits:    revisioncapacity.DefaultSessionLimits(),
+		session, err := sender.revisionStore.RegisterSession(content.SessionConfig{
+			SessionID: content.SessionID(base64.RawURLEncoding.EncodeToString(sessionID.Bytes())),
+			Limits:    content.DefaultSessionCapacityLimits(),
 		})
 		if err != nil {
 			return nil, err
 		}
 		service, err := contentflow.NewSenderService(contentflow.SenderServiceConfig{
-			Store: sender.revisionStore, SessionCapacity: sessionCapacity, Encoder: records.Encoder{}, Cache: sender.cache,
+			Store: session, Encoder: records.Encoder{}, Cache: sender.cache,
 		})
 		if err != nil {
-			return nil, errors.Join(err, sessionCapacity.Close())
+			return nil, errors.Join(err, session.Close())
 		}
 		return service, nil
 	})

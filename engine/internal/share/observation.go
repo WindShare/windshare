@@ -10,7 +10,6 @@ import (
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
-	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -260,6 +259,6 @@ func readObservations[T any](o *observations, stream <-chan T, emit func(T)) fun
 	return func() { <-done }
 }
 
-func (o *observations) TraceCapacity(value revisioncapacity.TraceEvent) {
+func (o *observations) TraceCapacity(value content.CapacityTraceEvent) {
 	o.control.Diagnostics.Record(value)
 }

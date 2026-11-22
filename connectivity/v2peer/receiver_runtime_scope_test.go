@@ -16,7 +16,6 @@ import (
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
-	"github.com/windshare/windshare/core/content/revisioncapacity"
 	framechannel "github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/session/contentflow"
@@ -50,18 +49,18 @@ func TestReceiverRuntimeCrossScopeOperationErrorIsRemoteSessionUnsafe(t *testing
 	if err := os.WriteFile(selected, []byte("receiver runtime scope"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	capacityOwner, err := revisioncapacity.NewProcessOwner(revisioncapacity.DefaultProcessConfig())
+	pool, err := content.NewHandlePool(content.DefaultHandlePoolConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if err := capacityOwner.Close(); err != nil {
-			t.Errorf("close revision capacity owner: %v", err)
+		if err := pool.Close(); err != nil {
+			t.Errorf("close revision handle pool: %v", err)
 		}
 	})
 	preparedSender, err := liveshare.PrepareSender(ctx, sourceBoundarySenderConfig([]string{selected}, liveshare.SenderConfig{
 		Relays: []string{receiverRuntimeScopeRelay}, ChunkSize: catalog.MinChunkSize,
-		RevisionCapacity: capacityOwner.Coordinator(),
+		RevisionCapacity: pool,
 	}))
 	if err != nil {
 		t.Fatal(err)

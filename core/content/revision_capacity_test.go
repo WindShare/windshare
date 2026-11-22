@@ -8,52 +8,26 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"testing/synctest"
 	"time"
 
 	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/content/revisioncapacity"
 )
 
 type capacityTraceRecorder struct {
 	mu     sync.Mutex
-	events []revisioncapacity.TraceEvent
+	events []CapacityTraceEvent
 }
 
-type claimReactivationTrace struct {
-	claimed      chan struct{}
-	allowClaim   chan struct{}
-	declined     chan struct{}
-	allowDecline chan struct{}
-	claimedOnce  sync.Once
-	declinedOnce sync.Once
-}
-
-func (r *claimReactivationTrace) TraceCapacity(event revisioncapacity.TraceEvent) {
-	switch event.Stage() {
-	case revisioncapacity.TraceReclaimClaimed:
-		r.claimedOnce.Do(func() {
-			close(r.claimed)
-			<-r.allowClaim
-		})
-	case revisioncapacity.TraceReclaimDeclined:
-		r.declinedOnce.Do(func() {
-			close(r.declined)
-			<-r.allowDecline
-		})
-	}
-}
-
-func (r *capacityTraceRecorder) TraceCapacity(event revisioncapacity.TraceEvent) {
+func (r *capacityTraceRecorder) TraceCapacity(event CapacityTraceEvent) {
 	r.mu.Lock()
 	r.events = append(r.events, event)
 	r.mu.Unlock()
 }
 
-func (r *capacityTraceRecorder) snapshot() []revisioncapacity.TraceEvent {
+func (r *capacityTraceRecorder) snapshot() []CapacityTraceEvent {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return append([]revisioncapacity.TraceEvent(nil), r.events...)
+	return append([]CapacityTraceEvent(nil), r.events...)
 }
 
 type mappedRevisionSource struct {
@@ -163,33 +137,27 @@ func (f *capacityStableFile) Close() error {
 	return f.closeErr
 }
 
-func newCapacityTestOwner(
-	t *testing.T,
-	limits revisioncapacity.CapacityLimits,
-	tracer revisioncapacity.Tracer,
-) *revisioncapacity.ProcessOwner {
+func newCapacityTestPool(t *testing.T, limits CapacityLimits, tracer CapacityTracer) *HandlePool {
 	t.Helper()
-	owner, err := revisioncapacity.NewProcessOwner(revisioncapacity.ProcessConfig{
-		Limits: limits, RetryAfter: revisioncapacity.DefaultCapacityRetryAfter, Tracer: tracer,
+	pool, err := NewHandlePool(HandlePoolConfig{
+		Limits: limits, RetryAfter: DefaultCapacityRetryAfter, Tracer: tracer,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if err := owner.Close(); err != nil {
-			t.Errorf("close capacity owner: %v", err)
+		if err := pool.Close(); err != nil {
+			t.Errorf("close handle pool: %v", err)
 		}
 	})
-	return owner
+	return pool
 }
 
 func newCapacityTestStore(
 	t *testing.T,
-	owner *revisioncapacity.ProcessOwner,
-	storeID revisioncapacity.StoreID,
-	shareID revisioncapacity.ShareID,
+	pool *HandlePool,
 	shareByte byte,
-	limits revisioncapacity.CapacityLimits,
+	limits CapacityLimits,
 	clock Clock,
 	records map[catalog.NodeID]catalog.NodeRecord,
 	source RevisionSource,
@@ -198,16 +166,14 @@ func newCapacityTestStore(
 	store, err := NewRevisionStore(RevisionStoreConfig{
 		ShareInstance: catalogID[catalog.ShareInstance](shareByte), ChunkSize: catalog.MinChunkSize,
 		Catalog: testCatalog{records: records}, Source: source, Clock: clock,
-		LeaseIDs:            &sequenceIDs{},
-		CapacityCoordinator: owner.Coordinator(),
-		CapacityStore:       revisioncapacity.StoreConfig{StoreID: storeID, ShareID: shareID, Limits: limits},
+		LeaseIDs: &sequenceIDs{}, HandlePool: pool, ShareLimits: limits,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
 		if err := store.Close(); err != nil {
-			t.Errorf("close capacity store %s: %v", storeID, err)
+			t.Errorf("close capacity store %d: %v", shareByte, err)
 		}
 	})
 	return store
@@ -218,27 +184,65 @@ func capacityRecord(t *testing.T, fileByte byte) (catalog.FileID, catalog.NodeRe
 	return fileRecordWithModifiedTime(t, fileByte, 1, catalog.ModifiedTime{})
 }
 
-func capacitySession(
-	t *testing.T,
-	store *RevisionStore,
-	id string,
-	limits revisioncapacity.CapacityLimits,
-) *revisioncapacity.SessionRegistration {
+func capacitySession(t *testing.T, store *RevisionStore, id string, limits CapacityLimits) *RevisionSession {
 	t.Helper()
-	session, err := store.RegisterSession(revisioncapacity.SessionConfig{
-		SessionID: revisioncapacity.SessionID(id), Limits: limits,
-	})
+	session, err := store.RegisterSession(SessionConfig{SessionID: SessionID(id), Limits: limits})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return session
 }
 
+func TestHandlePoolValidationAndCloseContracts(t *testing.T) {
+	if _, err := NewHandlePool(HandlePoolConfig{RetryAfter: DefaultCapacityRetryAfter}); err == nil {
+		t.Fatal("zero limits accepted")
+	}
+	if _, err := NewHandlePool(HandlePoolConfig{Limits: DefaultProcessCapacityLimits(), RetryAfter: 0}); err == nil {
+		t.Fatal("zero retry delay accepted")
+	}
+	if _, err := NewHandlePool(HandlePoolConfig{Limits: DefaultProcessCapacityLimits(), RetryAfter: 500 * time.Microsecond}); err == nil {
+		t.Fatal("sub-millisecond retry delay accepted")
+	}
+	pool, err := NewHandlePool(DefaultHandlePoolConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, record := capacityRecord(t, 1)
+	store, err := NewRevisionStore(RevisionStoreConfig{
+		ShareInstance: catalogID[catalog.ShareInstance](1), ChunkSize: catalog.MinChunkSize,
+		Catalog:    testCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}},
+		Source:     &mappedRevisionSource{files: map[catalog.FileID]StableFile{}, calls: make(map[catalog.FileID]int)},
+		HandlePool: pool,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var live *LiveStoresError
+	if err := pool.Close(); !errors.As(err, &live) || live.Count() != 1 {
+		t.Fatalf("close with live store = %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.Close(); err != nil {
+		t.Fatalf("idempotent pool close = %v", err)
+	}
+	if _, err := NewRevisionStore(RevisionStoreConfig{
+		ShareInstance: catalogID[catalog.ShareInstance](2), ChunkSize: catalog.MinChunkSize,
+		Catalog: testCatalog{}, Source: &mappedRevisionSource{}, HandlePool: pool,
+	}); !errors.Is(err, ErrHandlePoolClosed) {
+		t.Fatalf("register on closed pool = %v", err)
+	}
+}
+
 func TestRevisionStoreReclaimsOldestIdleAboveShareLimit(t *testing.T) {
 	clock := &testClock{now: time.Unix(100, 0)}
 	traces := &capacityTraceRecorder{}
-	owner := newCapacityTestOwner(t, revisioncapacity.CapacityLimits{StableHandles: 3, ActiveLeases: 10}, traces)
-	limits := revisioncapacity.CapacityLimits{StableHandles: 2, ActiveLeases: 10}
+	pool := newCapacityTestPool(t, CapacityLimits{StableHandles: 3, ActiveLeases: 10}, traces)
+	limits := CapacityLimits{StableHandles: 2, ActiveLeases: 10}
 	firstID, firstRecord := capacityRecord(t, 11)
 	secondID, secondRecord := capacityRecord(t, 12)
 	thirdID, thirdRecord := capacityRecord(t, 13)
@@ -248,10 +252,10 @@ func TestRevisionStoreReclaimsOldestIdleAboveShareLimit(t *testing.T) {
 	source := &mappedRevisionSource{files: map[catalog.FileID]StableFile{
 		firstID: first, secondID: second, thirdID: third,
 	}, calls: make(map[catalog.FileID]int)}
-	store := newCapacityTestStore(t, owner, "store", "share", 1, limits, clock, map[catalog.NodeID]catalog.NodeRecord{
+	store := newCapacityTestStore(t, pool, 1, limits, clock, map[catalog.NodeID]catalog.NodeRecord{
 		firstID.NodeID(): firstRecord, secondID.NodeID(): secondRecord, thirdID.NodeID(): thirdRecord,
 	}, source)
-	session := capacitySession(t, store, "session", revisioncapacity.CapacityLimits{StableHandles: 3, ActiveLeases: 10})
+	session := capacitySession(t, store, "session", CapacityLimits{StableHandles: 3, ActiveLeases: 10})
 
 	firstLease, err := store.OpenRevision(context.Background(), firstID, session)
 	if err != nil {
@@ -276,21 +280,23 @@ func TestRevisionStoreReclaimsOldestIdleAboveShareLimit(t *testing.T) {
 		t.Fatalf("deterministic oldest reclaim closes=(%d,%d,%d)", first.closed.Load(), second.closed.Load(), third.closed.Load())
 	}
 	snapshot := store.CapacitySnapshot()
-	want := revisioncapacity.CapacityUsage{StableHandles: 2, ActiveLeases: 1}
+	want := CapacityUsage{StableHandles: 2, ActiveLeases: 1}
 	if snapshot.Process().Used() != want || snapshot.Share().Used() != want ||
-		snapshot.Process().ReclaimableStableHandles() != 1 || snapshot.Share().ReclaimableStableHandles() != 1 ||
-		snapshot.Process().PendingAdmissions() != 0 || snapshot.Process().ActiveReclaims() != 0 {
+		snapshot.Process().ReclaimableStableHandles() != 1 || snapshot.Share().ReclaimableStableHandles() != 1 {
 		t.Fatalf("post-handoff snapshot=%+v", snapshot)
 	}
-	stages := make(map[revisioncapacity.TraceStage]int)
+	stages := make(map[CapacityTraceStage]int)
 	for _, event := range traces.snapshot() {
 		stages[event.Stage()]++
 		if event.Snapshot().Process().Used().StableHandles > 3 || event.Snapshot().Share().Used().StableHandles > 2 {
 			t.Fatalf("trace observed overbooking: %+v", event.Snapshot())
 		}
+		record := event.DiagnosticRecord()
+		if record.Name() != capacityEventName || record.Payload().Get("stage").Text() != event.Stage().DiagnosticName() {
+			t.Fatalf("unexpected diagnostic record: %+v", record)
+		}
 	}
-	if stages[revisioncapacity.TraceIdlePublished] < 2 || stages[revisioncapacity.TraceReclaimClaimed] != 1 ||
-		stages[revisioncapacity.TraceReclaimCompleted] != 1 || stages[revisioncapacity.TraceAdmissionGranted] < 3 {
+	if stages[CapacityTraceEvicted] != 1 || stages[CapacityTraceAdmitted] < 3 {
 		t.Fatalf("capacity trace stages=%v", stages)
 	}
 	if err := store.EndLease(thirdLease.ID(), LeaseRelinquished); err != nil {
@@ -300,8 +306,8 @@ func TestRevisionStoreReclaimsOldestIdleAboveShareLimit(t *testing.T) {
 
 func TestRevisionStoreCrossShareHandoffWaitsForTerminalClose(t *testing.T) {
 	clock := &testClock{now: time.Unix(100, 0)}
-	owner := newCapacityTestOwner(t, revisioncapacity.CapacityLimits{StableHandles: 1, ActiveLeases: 10}, nil)
-	limits := revisioncapacity.CapacityLimits{StableHandles: 2, ActiveLeases: 10}
+	pool := newCapacityTestPool(t, CapacityLimits{StableHandles: 1, ActiveLeases: 10}, nil)
+	limits := CapacityLimits{StableHandles: 2, ActiveLeases: 10}
 	victimID, victimRecord := capacityRecord(t, 21)
 	requestID, requestRecord := capacityRecord(t, 22)
 	victim := &capacityStableFile{
@@ -310,9 +316,9 @@ func TestRevisionStoreCrossShareHandoffWaitsForTerminalClose(t *testing.T) {
 	requesterFile := &capacityStableFile{data: []byte{2}}
 	victimSource := &mappedRevisionSource{files: map[catalog.FileID]StableFile{victimID: victim}, calls: make(map[catalog.FileID]int)}
 	requestSource := &mappedRevisionSource{files: map[catalog.FileID]StableFile{requestID: requesterFile}, calls: make(map[catalog.FileID]int)}
-	victimStore := newCapacityTestStore(t, owner, "victim", "share-a", 1, limits, clock,
+	victimStore := newCapacityTestStore(t, pool, 1, limits, clock,
 		map[catalog.NodeID]catalog.NodeRecord{victimID.NodeID(): victimRecord}, victimSource)
-	requestStore := newCapacityTestStore(t, owner, "requester", "share-b", 2, limits, clock,
+	requestStore := newCapacityTestStore(t, pool, 2, limits, clock,
 		map[catalog.NodeID]catalog.NodeRecord{requestID.NodeID(): requestRecord}, requestSource)
 	victimSession := capacitySession(t, victimStore, "victim-session", limits)
 	requestSession := capacitySession(t, requestStore, "request-session", limits)
@@ -350,24 +356,24 @@ func TestRevisionStoreCrossShareHandoffWaitsForTerminalClose(t *testing.T) {
 		t.Fatalf("cross-share handoff=(%x,%v) requester opens=%d", opened.lease.ID(), opened.err, requestSource.callCount(requestID))
 	}
 	snapshot := requestStore.CapacitySnapshot()
-	if snapshot.Process().Used() != (revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 1}) ||
-		snapshot.Share().Used() != (revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 1}) {
+	if snapshot.Process().Used() != (CapacityUsage{StableHandles: 1, ActiveLeases: 1}) ||
+		snapshot.Share().Used() != (CapacityUsage{StableHandles: 1, ActiveLeases: 1}) {
 		t.Fatalf("cross-share accounting=%+v", snapshot)
 	}
 }
 
 func TestRevisionStoreCrossShareReclaimsExpiredIdleWithoutVictimActivity(t *testing.T) {
 	clock := &testClock{now: time.Unix(100, 0)}
-	owner := newCapacityTestOwner(t, revisioncapacity.CapacityLimits{StableHandles: 1, ActiveLeases: 4}, nil)
-	limits := revisioncapacity.CapacityLimits{StableHandles: 2, ActiveLeases: 4}
+	pool := newCapacityTestPool(t, CapacityLimits{StableHandles: 1, ActiveLeases: 4}, nil)
+	limits := CapacityLimits{StableHandles: 2, ActiveLeases: 4}
 	victimID, victimRecord := capacityRecord(t, 28)
 	requestID, requestRecord := capacityRecord(t, 29)
 	victim := &capacityStableFile{data: []byte{1}}
 	requester := &capacityStableFile{data: []byte{2}}
-	victimStore := newCapacityTestStore(t, owner, "expired-victim", "expired-share-a", 1, limits, clock,
+	victimStore := newCapacityTestStore(t, pool, 1, limits, clock,
 		map[catalog.NodeID]catalog.NodeRecord{victimID.NodeID(): victimRecord},
 		&mappedRevisionSource{files: map[catalog.FileID]StableFile{victimID: victim}, calls: make(map[catalog.FileID]int)})
-	requestStore := newCapacityTestStore(t, owner, "expired-requester", "expired-share-b", 2, limits, clock,
+	requestStore := newCapacityTestStore(t, pool, 2, limits, clock,
 		map[catalog.NodeID]catalog.NodeRecord{requestID.NodeID(): requestRecord},
 		&mappedRevisionSource{files: map[catalog.FileID]StableFile{requestID: requester}, calls: make(map[catalog.FileID]int)})
 	victimSession := capacitySession(t, victimStore, "expired-victim-session", limits)
@@ -389,8 +395,8 @@ func TestRevisionStoreCrossShareReclaimsExpiredIdleWithoutVictimActivity(t *test
 		t.Fatalf("expired idle victim closes=%d, want 1", victim.closed.Load())
 	}
 	snapshot := requestStore.CapacitySnapshot()
-	if snapshot.Process().Used() != (revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 1}) ||
-		snapshot.Process().ReclaimableStableHandles() != 0 || snapshot.Process().ActiveReclaims() != 0 {
+	if snapshot.Process().Used() != (CapacityUsage{StableHandles: 1, ActiveLeases: 1}) ||
+		snapshot.Process().ReclaimableStableHandles() != 0 {
 		t.Fatalf("expired cross-share handoff accounting=%+v", snapshot)
 	}
 	if err := requestStore.EndLease(opened.ID(), LeaseRelinquished); err != nil {
@@ -398,138 +404,14 @@ func TestRevisionStoreCrossShareReclaimsExpiredIdleWithoutVictimActivity(t *test
 	}
 }
 
-func TestRevisionStoreClaimedReactivationFailureRepublishesOwnedHandle(t *testing.T) {
-	synctest.Test(t, testRevisionStoreClaimedReactivationFailureRepublishesOwnedHandle)
-}
-
-func testRevisionStoreClaimedReactivationFailureRepublishesOwnedHandle(t *testing.T) {
-	clock := &testClock{now: time.Unix(100, 0)}
-	tracer := &claimReactivationTrace{
-		claimed: make(chan struct{}), allowClaim: make(chan struct{}),
-		declined: make(chan struct{}), allowDecline: make(chan struct{}),
-	}
-	defer func() {
-		select {
-		case <-tracer.allowClaim:
-		default:
-			close(tracer.allowClaim)
-		}
-		select {
-		case <-tracer.allowDecline:
-		default:
-			close(tracer.allowDecline)
-		}
-	}()
-	owner := newCapacityTestOwner(t, revisioncapacity.CapacityLimits{StableHandles: 1, ActiveLeases: 1}, tracer)
-	limits := revisioncapacity.CapacityLimits{StableHandles: 2, ActiveLeases: 2}
-	victimID, victimRecord := capacityRecord(t, 33)
-	requestID, requestRecord := capacityRecord(t, 34)
-	victim := &capacityStableFile{data: []byte{1}}
-	requester := &capacityStableFile{data: []byte{2}}
-	victimStore := newCapacityTestStore(t, owner, "reactivation-victim", "reactivation-share-a", 1, limits, clock,
-		map[catalog.NodeID]catalog.NodeRecord{victimID.NodeID(): victimRecord},
-		&mappedRevisionSource{files: map[catalog.FileID]StableFile{victimID: victim}, calls: make(map[catalog.FileID]int)})
-	requestStore := newCapacityTestStore(t, owner, "reactivation-requester", "reactivation-share-b", 2, limits, clock,
-		map[catalog.NodeID]catalog.NodeRecord{requestID.NodeID(): requestRecord},
-		&mappedRevisionSource{files: map[catalog.FileID]StableFile{requestID: requester}, calls: make(map[catalog.FileID]int)})
-	victimSession := capacitySession(t, victimStore, "reactivation-victim-session", limits)
-	requestSession := capacitySession(t, requestStore, "reactivation-request-session", limits)
-	lease, err := victimStore.OpenRevision(context.Background(), victimID, victimSession)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := victimStore.EndLease(lease.ID(), LeaseDetached); err != nil {
-		t.Fatal(err)
-	}
-
-	type openResult struct {
-		lease RevisionLease
-		err   error
-	}
-	requestResult := make(chan openResult, 1)
-	go func() {
-		opened, openErr := requestStore.OpenRevision(context.Background(), requestID, requestSession)
-		requestResult <- openResult{lease: opened, err: openErr}
-	}()
-	select {
-	case <-tracer.claimed:
-	case <-time.After(2 * time.Second):
-		t.Fatal("requester did not claim the idle victim")
-	}
-	victimResult := make(chan error, 1)
-	go func() {
-		_, openErr := victimStore.OpenRevision(context.Background(), victimID, victimSession)
-		victimResult <- openErr
-	}()
-	synctest.Wait()
-	victimStore.mu.Lock()
-	revision := victimStore.revisions[victimID]
-	waitingForClaim := revision != nil && revision.admissionDone != nil && revision.idleToken == ""
-	victimStore.mu.Unlock()
-	if !waitingForClaim {
-		t.Fatal("victim reactivation did not withdraw the claimed generation")
-	}
-	close(tracer.allowClaim)
-	select {
-	case <-tracer.declined:
-	case <-time.After(2 * time.Second):
-		t.Fatal("reactivated victim did not decline its stale claim")
-	}
-	select {
-	case reactivateErr := <-victimResult:
-		var busy *revisioncapacity.CapacityBusyError
-		if !errors.As(reactivateErr, &busy) || busy.Resource() != revisioncapacity.CapacityResourceActiveLease {
-			t.Fatalf("reactivation under reserved active capacity=%v", reactivateErr)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("reactivation did not finish after stale claim resolution")
-	}
-	close(tracer.allowDecline)
-	var opened openResult
-	select {
-	case opened = <-requestResult:
-	case <-time.After(2 * time.Second):
-		t.Fatal("requester did not retry the republished victim")
-	}
-	if opened.err != nil || opened.lease.ID().IsZero() {
-		t.Fatalf("requester after victim republication=(%x,%v)", opened.lease.ID(), opened.err)
-	}
-	if victim.closed.Load() != 1 {
-		t.Fatalf("victim terminal closes=%d, want exactly 1", victim.closed.Load())
-	}
-	snapshot := requestStore.CapacitySnapshot()
-	if snapshot.Process().Used() != (revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 1}) ||
-		snapshot.Process().ReclaimableStableHandles() != 0 || snapshot.Process().ActiveReclaims() != 0 ||
-		snapshot.Process().PendingAdmissions() != 0 {
-		t.Fatalf("post-reactivation ownership accounting=%+v", snapshot)
-	}
-	if err := requestStore.EndLease(opened.lease.ID(), LeaseRelinquished); err != nil {
-		t.Fatal(err)
-	}
-	if snapshot := requestStore.CapacitySnapshot(); snapshot.Process().Used() != (revisioncapacity.CapacityUsage{}) ||
-		snapshot.Process().ReclaimableStableHandles() != 0 || snapshot.Process().ActiveReclaims() != 0 ||
-		snapshot.Process().PendingAdmissions() != 0 {
-		t.Fatalf("terminal ownership accounting=%+v", snapshot)
-	}
-	if err := victimStore.Close(); err != nil {
-		t.Fatalf("close victim store: %v", err)
-	}
-	if err := requestStore.Close(); err != nil {
-		t.Fatalf("close requester store: %v", err)
-	}
-	if err := owner.Close(); err != nil {
-		t.Fatalf("close process owner: %v", err)
-	}
-}
-
 func TestRevisionStoreCoalescedWaiterRetriesAfterOwnerSessionCloses(t *testing.T) {
 	clock := &testClock{now: time.Unix(100, 0)}
-	owner := newCapacityTestOwner(t, revisioncapacity.CapacityLimits{StableHandles: 2, ActiveLeases: 2}, nil)
-	limits := revisioncapacity.CapacityLimits{StableHandles: 2, ActiveLeases: 2}
+	pool := newCapacityTestPool(t, CapacityLimits{StableHandles: 2, ActiveLeases: 2}, nil)
+	limits := CapacityLimits{StableHandles: 2, ActiveLeases: 2}
 	fileID, record := capacityRecord(t, 35)
 	stable := &capacityStableFile{data: []byte{1}}
 	source := &mappedRevisionSource{files: map[catalog.FileID]StableFile{fileID: stable}, calls: make(map[catalog.FileID]int)}
-	store := newCapacityTestStore(t, owner, "coalesced-store", "coalesced-share", 1, limits, clock,
+	store := newCapacityTestStore(t, pool, 1, limits, clock,
 		map[catalog.NodeID]catalog.NodeRecord{fileID.NodeID(): record}, source)
 	blockedCatalog := &firstNodeBlockingCatalog{
 		records: map[catalog.NodeID]catalog.NodeRecord{fileID.NodeID(): record},
@@ -565,12 +447,11 @@ func TestRevisionStoreCoalescedWaiterRetriesAfterOwnerSessionCloses(t *testing.T
 		waiterResult <- openResult{lease: lease, err: openErr}
 	}()
 	deadline := time.After(2 * time.Second)
-	joined := false
-	for !joined {
-		store.mu.Lock()
+	for {
+		store.pool.mu.Lock()
 		attempt := store.opening[fileID]
-		joined = attempt != nil && attempt.waiters == 2
-		store.mu.Unlock()
+		joined := attempt != nil && attempt.waiters == 2
+		store.pool.mu.Unlock()
 		if joined {
 			break
 		}
@@ -586,7 +467,7 @@ func TestRevisionStoreCoalescedWaiterRetriesAfterOwnerSessionCloses(t *testing.T
 	}
 	close(blockedCatalog.release)
 	ownerOpen := <-ownerResult
-	if !errors.Is(ownerOpen.err, revisioncapacity.ErrRegistrationClosing) {
+	if !errors.Is(ownerOpen.err, ErrSessionClosed) {
 		t.Fatalf("initiating closed session result=%v", ownerOpen.err)
 	}
 	waiterOpen := <-waiterResult
@@ -596,8 +477,8 @@ func TestRevisionStoreCoalescedWaiterRetriesAfterOwnerSessionCloses(t *testing.T
 	if blockedCatalog.calls.Load() != 2 || source.callCount(fileID) != 1 {
 		t.Fatalf("coalesced retry catalog calls=%d source opens=%d", blockedCatalog.calls.Load(), source.callCount(fileID))
 	}
-	want := revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 1}
-	if sessionA.Snapshot().Used() != (revisioncapacity.CapacityUsage{}) || sessionB.Snapshot().Used() != want ||
+	want := CapacityUsage{StableHandles: 1, ActiveLeases: 1}
+	if sessionA.Snapshot().Used() != (CapacityUsage{}) || sessionB.Snapshot().Used() != want ||
 		store.CapacitySnapshot().Process().Used() != want {
 		t.Fatalf("coalesced retry charges owner=%+v waiter=%+v process=%+v",
 			sessionA.Snapshot(), sessionB.Snapshot(), store.CapacitySnapshot().Process())
@@ -609,21 +490,22 @@ func TestRevisionStoreCoalescedWaiterRetriesAfterOwnerSessionCloses(t *testing.T
 
 func TestRevisionStoreCrossShareReclaimSelectionIsDeterministic(t *testing.T) {
 	clock := &testClock{now: time.Unix(100, 0)}
-	owner := newCapacityTestOwner(t, revisioncapacity.CapacityLimits{StableHandles: 2, ActiveLeases: 10}, nil)
-	limits := revisioncapacity.CapacityLimits{StableHandles: 2, ActiveLeases: 10}
+	pool := newCapacityTestPool(t, CapacityLimits{StableHandles: 2, ActiveLeases: 10}, nil)
+	limits := CapacityLimits{StableHandles: 2, ActiveLeases: 10}
 	bID, bRecord := capacityRecord(t, 23)
 	aID, aRecord := capacityRecord(t, 24)
 	requestID, requestRecord := capacityRecord(t, 25)
 	bFile := &capacityStableFile{data: []byte{1}}
 	aFile := &capacityStableFile{data: []byte{2}}
 	requestFile := &capacityStableFile{data: []byte{3}}
-	storeB := newCapacityTestStore(t, owner, "victim-b", "share-b", 1, limits, clock,
+	// Share byte 2 encodes lexicographically after share byte 1; register 2 first.
+	storeB := newCapacityTestStore(t, pool, 2, limits, clock,
 		map[catalog.NodeID]catalog.NodeRecord{bID.NodeID(): bRecord},
 		&mappedRevisionSource{files: map[catalog.FileID]StableFile{bID: bFile}, calls: make(map[catalog.FileID]int)})
-	storeA := newCapacityTestStore(t, owner, "victim-a", "share-a", 2, limits, clock,
+	storeA := newCapacityTestStore(t, pool, 1, limits, clock,
 		map[catalog.NodeID]catalog.NodeRecord{aID.NodeID(): aRecord},
 		&mappedRevisionSource{files: map[catalog.FileID]StableFile{aID: aFile}, calls: make(map[catalog.FileID]int)})
-	requestStore := newCapacityTestStore(t, owner, "requester", "share-request", 3, limits, clock,
+	requestStore := newCapacityTestStore(t, pool, 3, limits, clock,
 		map[catalog.NodeID]catalog.NodeRecord{requestID.NodeID(): requestRecord},
 		&mappedRevisionSource{files: map[catalog.FileID]StableFile{requestID: requestFile}, calls: make(map[catalog.FileID]int)})
 	sessionB := capacitySession(t, storeB, "session-b", limits)
@@ -651,17 +533,17 @@ func TestRevisionStoreCrossShareReclaimSelectionIsDeterministic(t *testing.T) {
 	}
 }
 
-func TestRevisionStoreCloseJoinsInFlightReclaimCallback(t *testing.T) {
+func TestRevisionStoreCloseJoinsInFlightEvictionClose(t *testing.T) {
 	clock := &testClock{now: time.Unix(100, 0)}
-	owner := newCapacityTestOwner(t, revisioncapacity.CapacityLimits{StableHandles: 1, ActiveLeases: 4}, nil)
-	limits := revisioncapacity.CapacityLimits{StableHandles: 2, ActiveLeases: 4}
+	pool := newCapacityTestPool(t, CapacityLimits{StableHandles: 1, ActiveLeases: 4}, nil)
+	limits := CapacityLimits{StableHandles: 2, ActiveLeases: 4}
 	victimID, victimRecord := capacityRecord(t, 26)
 	requestID, requestRecord := capacityRecord(t, 27)
 	victim := &capacityStableFile{data: []byte{1}, closeStarted: make(chan struct{}), closeRelease: make(chan struct{})}
-	victimStore := newCapacityTestStore(t, owner, "closing-victim", "closing-a", 1, limits, clock,
+	victimStore := newCapacityTestStore(t, pool, 1, limits, clock,
 		map[catalog.NodeID]catalog.NodeRecord{victimID.NodeID(): victimRecord},
 		&mappedRevisionSource{files: map[catalog.FileID]StableFile{victimID: victim}, calls: make(map[catalog.FileID]int)})
-	requestStore := newCapacityTestStore(t, owner, "closing-request", "closing-b", 2, limits, clock,
+	requestStore := newCapacityTestStore(t, pool, 2, limits, clock,
 		map[catalog.NodeID]catalog.NodeRecord{requestID.NodeID(): requestRecord},
 		&mappedRevisionSource{files: map[catalog.FileID]StableFile{requestID: &capacityStableFile{data: []byte{2}}}, calls: make(map[catalog.FileID]int)})
 	victimSession := capacitySession(t, victimStore, "closing-victim-session", limits)
@@ -683,7 +565,7 @@ func TestRevisionStoreCloseJoinsInFlightReclaimCallback(t *testing.T) {
 	go func() { closeResult <- victimStore.Close() }()
 	select {
 	case err := <-closeResult:
-		t.Fatalf("store close escaped its reclaim callback: %v", err)
+		t.Fatalf("store close escaped its eviction close: %v", err)
 	default:
 	}
 	close(victim.closeRelease)
@@ -693,16 +575,15 @@ func TestRevisionStoreCloseJoinsInFlightReclaimCallback(t *testing.T) {
 	if err := <-closeResult; err != nil {
 		t.Fatalf("victim store close race: %v", err)
 	}
-	if snapshot := requestStore.CapacitySnapshot(); snapshot.Process().Used() != (revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 1}) ||
-		snapshot.Process().ActiveReclaims() != 0 || snapshot.Process().PendingAdmissions() != 0 {
-		t.Fatalf("close/reclaim race accounting=%+v", snapshot)
+	if snapshot := requestStore.CapacitySnapshot(); snapshot.Process().Used() != (CapacityUsage{StableHandles: 1, ActiveLeases: 1}) {
+		t.Fatalf("close/eviction race accounting=%+v", snapshot)
 	}
 }
 
 func TestRevisionStoreNeverReclaimsActiveReader(t *testing.T) {
 	clock := &testClock{now: time.Unix(100, 0)}
-	owner := newCapacityTestOwner(t, revisioncapacity.CapacityLimits{StableHandles: 1, ActiveLeases: 10}, nil)
-	limits := revisioncapacity.CapacityLimits{StableHandles: 1, ActiveLeases: 10}
+	pool := newCapacityTestPool(t, CapacityLimits{StableHandles: 1, ActiveLeases: 10}, nil)
+	limits := CapacityLimits{StableHandles: 1, ActiveLeases: 10}
 	readID, readRecord := capacityRecord(t, 31)
 	requestID, requestRecord := capacityRecord(t, 32)
 	reading := &capacityStableFile{
@@ -710,7 +591,7 @@ func TestRevisionStoreNeverReclaimsActiveReader(t *testing.T) {
 	}
 	requester := &capacityStableFile{data: []byte{2}}
 	source := &mappedRevisionSource{files: map[catalog.FileID]StableFile{readID: reading, requestID: requester}, calls: make(map[catalog.FileID]int)}
-	store := newCapacityTestStore(t, owner, "reader-store", "reader-share", 1, limits, clock,
+	store := newCapacityTestStore(t, pool, 1, limits, clock,
 		map[catalog.NodeID]catalog.NodeRecord{readID.NodeID(): readRecord, requestID.NodeID(): requestRecord}, source)
 	session := capacitySession(t, store, "reader-session", limits)
 	lease, err := store.OpenRevision(context.Background(), readID, session)
@@ -730,8 +611,8 @@ func TestRevisionStoreNeverReclaimsActiveReader(t *testing.T) {
 	if store.CapacitySnapshot().Share().ReclaimableStableHandles() != 0 {
 		t.Fatal("active reader was published as reclaimable")
 	}
-	var busy *revisioncapacity.CapacityBusyError
-	if _, err := store.OpenRevision(context.Background(), requestID, session); !errors.As(err, &busy) || busy.Resource() != revisioncapacity.CapacityResourceStableHandle {
+	var busy *CapacityBusyError
+	if _, err := store.OpenRevision(context.Background(), requestID, session); !errors.As(err, &busy) || busy.Resource() != CapacityResourceStableHandle {
 		t.Fatalf("reader pressure error=%v", err)
 	}
 	if reading.closed.Load() != 0 || reading.closeDuringRead.Load() {
@@ -752,14 +633,14 @@ func TestRevisionStoreNeverReclaimsActiveReader(t *testing.T) {
 
 func TestRevisionStoreMixedLeasesPublishOnlyAfterLastActiveLease(t *testing.T) {
 	clock := &testClock{now: time.Unix(100, 0)}
-	owner := newCapacityTestOwner(t, revisioncapacity.CapacityLimits{StableHandles: 1, ActiveLeases: 4}, nil)
-	limits := revisioncapacity.CapacityLimits{StableHandles: 1, ActiveLeases: 4}
+	pool := newCapacityTestPool(t, CapacityLimits{StableHandles: 1, ActiveLeases: 4}, nil)
+	limits := CapacityLimits{StableHandles: 1, ActiveLeases: 4}
 	firstID, firstRecord := capacityRecord(t, 41)
 	secondID, secondRecord := capacityRecord(t, 42)
 	first := &capacityStableFile{data: []byte{1}}
 	second := &capacityStableFile{data: []byte{2}}
 	source := &mappedRevisionSource{files: map[catalog.FileID]StableFile{firstID: first, secondID: second}, calls: make(map[catalog.FileID]int)}
-	store := newCapacityTestStore(t, owner, "mixed-store", "mixed-share", 1, limits, clock,
+	store := newCapacityTestStore(t, pool, 1, limits, clock,
 		map[catalog.NodeID]catalog.NodeRecord{firstID.NodeID(): firstRecord, secondID.NodeID(): secondRecord}, source)
 	sessionA := capacitySession(t, store, "mixed-a", limits)
 	sessionB := capacitySession(t, store, "mixed-b", limits)
@@ -775,9 +656,9 @@ func TestRevisionStoreMixedLeasesPublishOnlyAfterLastActiveLease(t *testing.T) {
 		t.Fatal(err)
 	}
 	if snapshot := store.CapacitySnapshot(); snapshot.Share().ReclaimableStableHandles() != 0 ||
-		snapshot.Share().Used() != (revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 1}) ||
-		sessionA.Snapshot().Used() != (revisioncapacity.CapacityUsage{}) ||
-		sessionB.Snapshot().Used() != (revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 1}) {
+		snapshot.Share().Used() != (CapacityUsage{StableHandles: 1, ActiveLeases: 1}) ||
+		sessionA.Snapshot().Used() != (CapacityUsage{}) ||
+		sessionB.Snapshot().Used() != (CapacityUsage{StableHandles: 1, ActiveLeases: 1}) {
 		t.Fatalf("mixed active/detached accounting=%+v", snapshot)
 	}
 	if err := store.EndLease(leaseB.ID(), LeaseRelinquished); err != nil {
@@ -796,17 +677,17 @@ func TestRevisionStoreMixedLeasesPublishOnlyAfterLastActiveLease(t *testing.T) {
 
 func TestRevisionStoreCancellationDuringCloseReleasesVictimWithoutGrant(t *testing.T) {
 	clock := &testClock{now: time.Unix(100, 0)}
-	owner := newCapacityTestOwner(t, revisioncapacity.CapacityLimits{StableHandles: 1, ActiveLeases: 4}, nil)
-	limits := revisioncapacity.CapacityLimits{StableHandles: 2, ActiveLeases: 4}
+	pool := newCapacityTestPool(t, CapacityLimits{StableHandles: 1, ActiveLeases: 4}, nil)
+	limits := CapacityLimits{StableHandles: 2, ActiveLeases: 4}
 	victimID, victimRecord := capacityRecord(t, 51)
 	requestID, requestRecord := capacityRecord(t, 52)
 	victim := &capacityStableFile{data: []byte{1}, closeStarted: make(chan struct{}), closeRelease: make(chan struct{})}
 	requester := &capacityStableFile{data: []byte{2}}
 	victimSource := &mappedRevisionSource{files: map[catalog.FileID]StableFile{victimID: victim}, calls: make(map[catalog.FileID]int)}
 	requestSource := &mappedRevisionSource{files: map[catalog.FileID]StableFile{requestID: requester}, calls: make(map[catalog.FileID]int)}
-	victimStore := newCapacityTestStore(t, owner, "cancel-victim", "cancel-a", 1, limits, clock,
+	victimStore := newCapacityTestStore(t, pool, 1, limits, clock,
 		map[catalog.NodeID]catalog.NodeRecord{victimID.NodeID(): victimRecord}, victimSource)
-	requestStore := newCapacityTestStore(t, owner, "cancel-requester", "cancel-b", 2, limits, clock,
+	requestStore := newCapacityTestStore(t, pool, 2, limits, clock,
 		map[catalog.NodeID]catalog.NodeRecord{requestID.NodeID(): requestRecord}, requestSource)
 	victimSession := capacitySession(t, victimStore, "cancel-victim-session", limits)
 	requestSession := capacitySession(t, requestStore, "cancel-request-session", limits)
@@ -834,21 +715,21 @@ func TestRevisionStoreCancellationDuringCloseReleasesVictimWithoutGrant(t *testi
 	close(victim.closeRelease)
 	requestStore.openWG.Wait()
 	if requestSource.callCount(requestID) != 0 || victim.closed.Load() != 1 ||
-		requestStore.CapacitySnapshot().Process().Used() != (revisioncapacity.CapacityUsage{}) {
+		requestStore.CapacitySnapshot().Process().Used() != (CapacityUsage{}) {
 		t.Fatalf("cancelled handoff requester opens=%d closes=%d snapshot=%+v",
 			requestSource.callCount(requestID), victim.closed.Load(), requestStore.CapacitySnapshot())
 	}
 }
 
-func TestRevisionStoreCloseFailureOwnershipOutcomes(t *testing.T) {
-	t.Run("ordinary diagnostic error releases after return", func(t *testing.T) {
+func TestRevisionStoreCloseFailureReleasesCapacityCleanly(t *testing.T) {
+	t.Run("ordinary diagnostic error releases", func(t *testing.T) {
 		clock := &testClock{now: time.Unix(100, 0)}
 		sentinel := errors.New("ordinary diagnostic close failure")
-		owner := newCapacityTestOwner(t, revisioncapacity.CapacityLimits{StableHandles: 1, ActiveLeases: 2}, nil)
-		limits := revisioncapacity.CapacityLimits{StableHandles: 1, ActiveLeases: 2}
+		pool := newCapacityTestPool(t, CapacityLimits{StableHandles: 1, ActiveLeases: 2}, nil)
+		limits := CapacityLimits{StableHandles: 1, ActiveLeases: 2}
 		fileID, record := capacityRecord(t, 60)
 		stable := &capacityStableFile{data: []byte{1}, closeErr: sentinel}
-		store := newCapacityTestStore(t, owner, "ordinary-error", "ordinary-error-share", 1, limits, clock,
+		store := newCapacityTestStore(t, pool, 1, limits, clock,
 			map[catalog.NodeID]catalog.NodeRecord{fileID.NodeID(): record},
 			&mappedRevisionSource{files: map[catalog.FileID]StableFile{fileID: stable}, calls: make(map[catalog.FileID]int)})
 		session := capacitySession(t, store, "ordinary-error-session", limits)
@@ -859,19 +740,18 @@ func TestRevisionStoreCloseFailureOwnershipOutcomes(t *testing.T) {
 		if err := store.EndLease(lease.ID(), LeaseRelinquished); !errors.Is(err, sentinel) {
 			t.Fatalf("ordinary close diagnostic=%v", err)
 		}
-		if stable.closed.Load() != 1 || store.CapacitySnapshot().Process().Used() != (revisioncapacity.CapacityUsage{}) ||
-			store.CapacitySnapshot().Process().QuarantinedStableHandles() != 0 {
+		if stable.closed.Load() != 1 || store.CapacitySnapshot().Process().Used() != (CapacityUsage{}) {
 			t.Fatalf("ordinary terminal close accounting=%+v closes=%d", store.CapacitySnapshot(), stable.closed.Load())
 		}
 	})
 
-	t.Run("ordinary panic quarantines uncertain ownership", func(t *testing.T) {
+	t.Run("ordinary close panic reports error and releases", func(t *testing.T) {
 		clock := &testClock{now: time.Unix(100, 0)}
-		owner := newCapacityTestOwner(t, revisioncapacity.CapacityLimits{StableHandles: 1, ActiveLeases: 2}, nil)
-		limits := revisioncapacity.CapacityLimits{StableHandles: 1, ActiveLeases: 2}
+		pool := newCapacityTestPool(t, CapacityLimits{StableHandles: 1, ActiveLeases: 2}, nil)
+		limits := CapacityLimits{StableHandles: 1, ActiveLeases: 2}
 		fileID, record := capacityRecord(t, 59)
 		stable := &capacityStableFile{data: []byte{1}, closePanic: true}
-		store := newCapacityTestStore(t, owner, "ordinary-panic", "ordinary-panic-share", 1, limits, clock,
+		store := newCapacityTestStore(t, pool, 1, limits, clock,
 			map[catalog.NodeID]catalog.NodeRecord{fileID.NodeID(): record},
 			&mappedRevisionSource{files: map[catalog.FileID]StableFile{fileID: stable}, calls: make(map[catalog.FileID]int)})
 		session := capacitySession(t, store, "ordinary-panic-session", limits)
@@ -882,28 +762,27 @@ func TestRevisionStoreCloseFailureOwnershipOutcomes(t *testing.T) {
 		if err := store.EndLease(lease.ID(), LeaseRelinquished); err == nil {
 			t.Fatal("ordinary close panic was not reported")
 		}
-		snapshot := store.CapacitySnapshot()
-		if stable.closed.Load() != 1 || snapshot.Process().Used() != (revisioncapacity.CapacityUsage{StableHandles: 1}) ||
-			snapshot.Process().QuarantinedStableHandles() != 1 || snapshot.Share().QuarantinedStableHandles() != 1 ||
-			session.Snapshot().Used() != (revisioncapacity.CapacityUsage{}) {
-			t.Fatalf("ordinary panic ownership snapshot=%+v closes=%d session=%+v", snapshot, stable.closed.Load(), session.Snapshot())
+		if stable.closed.Load() != 1 || store.CapacitySnapshot().Process().Used() != (CapacityUsage{}) ||
+			session.Snapshot().Used() != (CapacityUsage{}) {
+			t.Fatalf("ordinary panic ownership snapshot=%+v closes=%d session=%+v",
+				store.CapacitySnapshot(), stable.closed.Load(), session.Snapshot())
 		}
 	})
 
-	t.Run("diagnostic error is terminal", func(t *testing.T) {
+	t.Run("eviction close diagnostic error still completes handoff", func(t *testing.T) {
 		clock := &testClock{now: time.Unix(100, 0)}
 		sentinel := errors.New("diagnostic close failure")
 		traces := &capacityTraceRecorder{}
-		owner := newCapacityTestOwner(t, revisioncapacity.CapacityLimits{StableHandles: 1, ActiveLeases: 4}, traces)
-		limits := revisioncapacity.CapacityLimits{StableHandles: 2, ActiveLeases: 4}
+		pool := newCapacityTestPool(t, CapacityLimits{StableHandles: 1, ActiveLeases: 4}, traces)
+		limits := CapacityLimits{StableHandles: 2, ActiveLeases: 4}
 		victimID, victimRecord := capacityRecord(t, 61)
 		requestID, requestRecord := capacityRecord(t, 62)
 		victim := &capacityStableFile{data: []byte{1}, closeErr: sentinel}
 		requester := &capacityStableFile{data: []byte{2}}
-		victimStore := newCapacityTestStore(t, owner, "error-victim", "error-a", 1, limits, clock,
+		victimStore := newCapacityTestStore(t, pool, 1, limits, clock,
 			map[catalog.NodeID]catalog.NodeRecord{victimID.NodeID(): victimRecord},
 			&mappedRevisionSource{files: map[catalog.FileID]StableFile{victimID: victim}, calls: make(map[catalog.FileID]int)})
-		requestStore := newCapacityTestStore(t, owner, "error-request", "error-b", 2, limits, clock,
+		requestStore := newCapacityTestStore(t, pool, 2, limits, clock,
 			map[catalog.NodeID]catalog.NodeRecord{requestID.NodeID(): requestRecord},
 			&mappedRevisionSource{files: map[catalog.FileID]StableFile{requestID: requester}, calls: make(map[catalog.FileID]int)})
 		victimSession := capacitySession(t, victimStore, "error-victim-session", limits)
@@ -920,65 +799,19 @@ func TestRevisionStoreCloseFailureOwnershipOutcomes(t *testing.T) {
 		}
 		foundDiagnostic := false
 		for _, event := range traces.snapshot() {
-			if event.Stage() == revisioncapacity.TraceReclaimCompleted && errors.Is(event.Diagnostic(), sentinel) {
+			if event.Stage() == CapacityTraceEvicted && errors.Is(event.Diagnostic(), sentinel) {
 				foundDiagnostic = true
 			}
 		}
-		if !foundDiagnostic || requestStore.CapacitySnapshot().Process().QuarantinedStableHandles() != 0 {
-			t.Fatalf("diagnostic completion trace=%v snapshot=%+v", foundDiagnostic, requestStore.CapacitySnapshot())
-		}
-	})
-
-	t.Run("panic quarantines and denies", func(t *testing.T) {
-		clock := &testClock{now: time.Unix(100, 0)}
-		traces := &capacityTraceRecorder{}
-		owner := newCapacityTestOwner(t, revisioncapacity.CapacityLimits{StableHandles: 1, ActiveLeases: 4}, traces)
-		limits := revisioncapacity.CapacityLimits{StableHandles: 2, ActiveLeases: 4}
-		victimID, victimRecord := capacityRecord(t, 71)
-		requestID, requestRecord := capacityRecord(t, 72)
-		victim := &capacityStableFile{data: []byte{1}, closePanic: true}
-		requestSource := &mappedRevisionSource{
-			files: map[catalog.FileID]StableFile{requestID: &capacityStableFile{data: []byte{2}}}, calls: make(map[catalog.FileID]int),
-		}
-		victimStore := newCapacityTestStore(t, owner, "panic-victim", "panic-a", 1, limits, clock,
-			map[catalog.NodeID]catalog.NodeRecord{victimID.NodeID(): victimRecord},
-			&mappedRevisionSource{files: map[catalog.FileID]StableFile{victimID: victim}, calls: make(map[catalog.FileID]int)})
-		requestStore := newCapacityTestStore(t, owner, "panic-request", "panic-b", 2, limits, clock,
-			map[catalog.NodeID]catalog.NodeRecord{requestID.NodeID(): requestRecord}, requestSource)
-		victimSession := capacitySession(t, victimStore, "panic-victim-session", limits)
-		requestSession := capacitySession(t, requestStore, "panic-request-session", limits)
-		lease, err := victimStore.OpenRevision(context.Background(), victimID, victimSession)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := victimStore.EndLease(lease.ID(), LeaseDetached); err != nil {
-			t.Fatal(err)
-		}
-		var ownership *revisioncapacity.ReclaimOwnershipError
-		if _, err := requestStore.OpenRevision(context.Background(), requestID, requestSession); !errors.As(err, &ownership) {
-			t.Fatalf("panic reclaim error=%v", err)
-		}
-		snapshot := requestStore.CapacitySnapshot()
-		if snapshot.Process().Used() != (revisioncapacity.CapacityUsage{StableHandles: 1}) ||
-			snapshot.Process().QuarantinedStableHandles() != 1 || requestSource.callCount(requestID) != 0 {
-			t.Fatalf("panic quarantine snapshot=%+v requester opens=%d", snapshot, requestSource.callCount(requestID))
-		}
-		found := false
-		for _, event := range traces.snapshot() {
-			if event.Stage() == revisioncapacity.TraceReclaimQuarantined && event.DecisionID() != "" && event.ClaimID() != "" {
-				found = true
-			}
-		}
-		if !found {
-			t.Fatal("panic quarantine lacked structured decision/claim trace")
+		if !foundDiagnostic {
+			t.Fatalf("eviction diagnostic trace missing: %+v", traces.snapshot())
 		}
 	})
 }
 
 func TestRevisionStoreRegistrationAndCloseRace(t *testing.T) {
-	owner := newCapacityTestOwner(t, revisioncapacity.CapacityLimits{StableHandles: 100, ActiveLeases: 100}, nil)
-	store := newCapacityTestStore(t, owner, "race-store", "race-share", 1,
-		revisioncapacity.CapacityLimits{StableHandles: 100, ActiveLeases: 100}, nil,
+	pool := newCapacityTestPool(t, CapacityLimits{StableHandles: 100, ActiveLeases: 100}, nil)
+	store := newCapacityTestStore(t, pool, 1, CapacityLimits{StableHandles: 100, ActiveLeases: 100}, nil,
 		map[catalog.NodeID]catalog.NodeRecord{}, &mappedRevisionSource{files: map[catalog.FileID]StableFile{}, calls: make(map[catalog.FileID]int)})
 	start := make(chan struct{})
 	var wait sync.WaitGroup
@@ -988,12 +821,11 @@ func TestRevisionStoreRegistrationAndCloseRace(t *testing.T) {
 		go func(index int) {
 			defer wait.Done()
 			<-start
-			_, err := store.RegisterSession(revisioncapacity.SessionConfig{
-				SessionID: revisioncapacity.SessionID(fmt.Sprintf("race-%d", index)),
-				Limits:    revisioncapacity.CapacityLimits{StableHandles: 1, ActiveLeases: 1},
+			_, err := store.RegisterSession(SessionConfig{
+				SessionID: SessionID(fmt.Sprintf("race-%d", index)),
+				Limits:    CapacityLimits{StableHandles: 1, ActiveLeases: 1},
 			})
-			if err != nil && !errors.Is(err, ErrRevisionStoreClosed) &&
-				!errors.Is(err, revisioncapacity.ErrRegistrationClosing) {
+			if err != nil && !errors.Is(err, ErrRevisionStoreClosed) {
 				unexpected.Store(err)
 			}
 		}(index)
@@ -1006,7 +838,7 @@ func TestRevisionStoreRegistrationAndCloseRace(t *testing.T) {
 	if value := unexpected.Load(); value != nil {
 		t.Fatalf("registration/close race=%v", value)
 	}
-	if err := owner.Close(); err != nil {
-		t.Fatalf("owner retained raced registration: %v", err)
+	if err := pool.Close(); err != nil {
+		t.Fatalf("pool retained raced registration: %v", err)
 	}
 }

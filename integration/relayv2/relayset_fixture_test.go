@@ -12,7 +12,7 @@ import (
 
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/content/revisioncapacity"
+	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -106,12 +106,12 @@ type relaysetShare struct {
 
 func prepareRelaysetShare(t *testing.T, ctx context.Context, trace *testscenario.Trace, urls []string) relaysetShare {
 	t.Helper()
-	capacity, err := revisioncapacity.NewProcessOwner(revisioncapacity.DefaultProcessConfig())
+	pool, err := content.NewHandlePool(content.DefaultHandlePoolConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if err := capacity.Close(); err != nil {
+		if err := pool.Close(); err != nil {
 			t.Error(err)
 		}
 	})
@@ -119,7 +119,7 @@ func prepareRelaysetShare(t *testing.T, ctx context.Context, trace *testscenario
 	if err := os.WriteFile(file, []byte(relaysetFileContent), 0600); err != nil {
 		t.Fatal(err)
 	}
-	config := liveshare.SenderConfig{Relays: urls, RevisionCapacity: capacity.Coordinator()}
+	config := liveshare.SenderConfig{Relays: urls, RevisionCapacity: pool}
 	config.Source = liveshare.FileSourceFactoryFunc(func(ctx context.Context, source liveshare.FileSourceContext) (liveshare.FileSource, error) {
 		return osfs.NewSelectedFileSource(ctx, osfs.SelectedCatalogSourceConfig{
 			Paths: []string{file}, SyntheticRoot: source.SyntheticRoot, Identities: osfs.CatalogIdentitySourceFunc(source.NewIdentity),

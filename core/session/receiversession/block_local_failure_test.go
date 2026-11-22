@@ -248,13 +248,9 @@ func newContextCapturingContentFactory(
 		cache.Close()
 	})
 	store := &contextCapturingContentStore{verticalContentStore: fixture.contentStore, started: started}
-	return sendersession.ContentFactoryFunc(func(sessionID protocolsession.ProtocolSessionID) (*contentflow.SenderService, error) {
-		sessionCapacity, err := fixture.registerCapacitySession(sessionID)
-		if err != nil {
-			return nil, err
-		}
+	return sendersession.ContentFactoryFunc(func(protocolsession.ProtocolSessionID) (*contentflow.SenderService, error) {
 		return contentflow.NewSenderService(contentflow.SenderServiceConfig{
-			Store: store, SessionCapacity: sessionCapacity, Encoder: sealer, Cache: cache,
+			Store: store, Encoder: sealer, Cache: cache,
 		})
 	})
 }

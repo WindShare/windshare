@@ -15,7 +15,6 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
-	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/internal/testoutputroot"
 	"github.com/windshare/windshare/core/liveshare"
@@ -45,12 +44,12 @@ func newFixture(t *testing.T, directory ...bool) *fixture {
 
 func newFixtureWithSource(t *testing.T, directory bool, wrap func(liveshare.FileSource) liveshare.FileSource) *fixture {
 	t.Helper()
-	owner, err := revisioncapacity.NewProcessOwner(revisioncapacity.DefaultProcessConfig())
+	pool, err := content.NewHandlePool(content.DefaultHandlePoolConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if err := owner.Close(); err != nil {
+		if err := pool.Close(); err != nil {
 			t.Error(err)
 		}
 	})
@@ -64,7 +63,7 @@ func newFixtureWithSource(t *testing.T, directory bool, wrap func(liveshare.File
 		source = filepath.Dir(filename)
 	}
 	config := sourceBoundarySenderConfig([]string{source}, liveshare.SenderConfig{
-		Relays: []string{"ws://local.invalid"}, ChunkSize: catalog.MinChunkSize, RevisionCapacity: owner.Coordinator(),
+		Relays: []string{"ws://local.invalid"}, ChunkSize: catalog.MinChunkSize, RevisionCapacity: pool,
 	})
 	if wrap != nil {
 		factory := config.Source

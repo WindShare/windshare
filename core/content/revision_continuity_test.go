@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/content/revisioncapacity"
 )
 
 func TestOpenHandleRevisionRetainsResidentIdentityAndReopensWithFreshID(t *testing.T) {
@@ -63,7 +62,7 @@ func TestOpenHandleRevisionRetainsResidentIdentityAndReopensWithFreshID(t *testi
 	if err := store.EndLease(reopened.ID(), LeaseRelinquished); err != nil {
 		t.Fatal(err)
 	}
-	if got := store.CapacitySnapshot().Process().Used(); got != (revisioncapacity.CapacityUsage{}) {
+	if got := store.CapacitySnapshot().Process().Used(); got != (CapacityUsage{}) {
 		t.Fatalf("reopening leaked capacity: %+v", got)
 	}
 }
@@ -128,22 +127,19 @@ func TestRepeatedInvalidationsAndStaleOpensNeverStopFreshAdmission(t *testing.T)
 		// Succeeds on open, then drifts during ReadBlock.
 		return &testStableFile{data: []byte{1}}, nil
 	})
-	owner, err := revisioncapacity.NewProcessOwner(revisioncapacity.ProcessConfig{
-		Limits:     revisioncapacity.CapacityLimits{StableHandles: 100, ActiveLeases: 100},
-		RetryAfter: revisioncapacity.DefaultCapacityRetryAfter,
+	pool, err := NewHandlePool(HandlePoolConfig{
+		Limits:     CapacityLimits{StableHandles: 100, ActiveLeases: 100},
+		RetryAfter: DefaultCapacityRetryAfter,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer owner.Close()
+	defer pool.Close()
 	store, err := NewRevisionStore(RevisionStoreConfig{
 		ShareInstance: catalogID[catalog.ShareInstance](1), ChunkSize: catalog.MinChunkSize,
 		Catalog: testCatalog{records: records}, Source: source, Clock: &testClock{now: time.Unix(100, 0)},
-		CapacityCoordinator: owner.Coordinator(),
-		CapacityStore: revisioncapacity.StoreConfig{
-			StoreID: "churn-store", ShareID: "churn-share",
-			Limits: revisioncapacity.CapacityLimits{StableHandles: 100, ActiveLeases: 100},
-		},
+		HandlePool:  pool,
+		ShareLimits: CapacityLimits{StableHandles: 100, ActiveLeases: 100},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -162,9 +158,9 @@ func TestRepeatedInvalidationsAndStaleOpensNeverStopFreshAdmission(t *testing.T)
 		if err != nil {
 			t.Fatalf("open before drift %d = %v", index, err)
 		}
-		store.mu.Lock()
+		store.pool.mu.Lock()
 		stable := store.revisions[file].source.(*testStableFile)
-		store.mu.Unlock()
+		store.pool.mu.Unlock()
 		stable.drifted.Store(true)
 		ref, _ := NewBlockRef(file, lease.Descriptor().FileRevision(), 0, lease.Descriptor().Geometry())
 		if _, err := store.ReadBlock(context.Background(), lease.ID(), ref); !errors.Is(err, ErrRevisionDrift) {
@@ -184,7 +180,7 @@ func TestRepeatedInvalidationsAndStaleOpensNeverStopFreshAdmission(t *testing.T)
 	if err := store.EndLease(healthyLease.ID(), LeaseRelinquished); err != nil {
 		t.Fatal(err)
 	}
-	if got := store.CapacitySnapshot().Process().Used(); got != (revisioncapacity.CapacityUsage{}) {
+	if got := store.CapacitySnapshot().Process().Used(); got != (CapacityUsage{}) {
 		t.Fatalf("churn leaked capacity: %+v", got)
 	}
 }

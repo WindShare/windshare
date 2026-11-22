@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"sync/atomic"
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
-	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/engine/relayprofile"
@@ -23,8 +23,8 @@ func TestConcurrentSharesEnforceAggregateCapacityAndReleaseIndependently(t *test
 			config := Config{}
 			config.CatalogLimits = catalog.DefaultProcessBudgetLimits()
 			config.CatalogLimits.MemoryBytes = 10
-			config.RevisionCapacity = revisioncapacity.DefaultProcessConfig()
-			config.RevisionCapacity.Limits = revisioncapacity.CapacityLimits{StableHandles: 1, ActiveLeases: 1}
+			config.RevisionCapacity = content.DefaultHandlePoolConfig()
+			config.RevisionCapacity.Limits = content.CapacityLimits{StableHandles: 1, ActiveLeases: 1}
 			config.CacheBytes = 10
 			type acquired struct {
 				config liveshare.SenderConfig
@@ -138,40 +138,82 @@ func reserveTaskResource(resource string, config liveshare.SenderConfig, identit
 		}
 		return cache.Close, nil
 	case "revision":
-		store, err := config.RevisionCapacity.RegisterStore(revisioncapacity.StoreConfig{
-			StoreID: revisioncapacity.StoreID(fmt.Sprintf("store-%d", identity)),
-			ShareID: revisioncapacity.ShareID(fmt.Sprintf("share-%d", identity)),
-			Limits:  revisioncapacity.DefaultShareLimits(),
-		}, noReclaim{})
+		store, fileID, err := newEngineTestRevisionStore(config.RevisionCapacity, identity, content.DefaultShareCapacityLimits(), nil)
 		if err != nil {
 			return nil, err
 		}
-		session, err := store.RegisterSession(revisioncapacity.SessionConfig{SessionID: "session", Limits: revisioncapacity.DefaultSessionLimits()})
+		session, err := store.RegisterSession(content.SessionConfig{SessionID: "session", Limits: content.DefaultSessionCapacityLimits()})
 		if err != nil {
 			_ = store.Close()
 			return nil, err
 		}
-		grant, err := store.Admit(context.Background(), revisioncapacity.AdmissionRequest{Kind: revisioncapacity.AdmissionNewRevision, RevisionID: "revision", Session: session})
+		lease, err := session.OpenRevision(context.Background(), fileID)
 		if err != nil {
 			_ = session.Close()
 			_ = store.Close()
 			return nil, err
 		}
-		charges, err := grant.Commit()
-		if err != nil {
-			_ = grant.Abort()
+		return func() {
+			_ = session.EndLease(lease.ID(), content.LeaseRelinquished)
 			_ = session.Close()
 			_ = store.Close()
-			return nil, err
-		}
-		return func() { _ = charges.Release(); _ = session.Close(); _ = store.Close() }, nil
+		}, nil
 	default:
 		return nil, errors.New("unknown resource")
 	}
 }
 
-type noReclaim struct{}
+type engineTestCatalog map[catalog.NodeID]catalog.NodeRecord
 
-func (noReclaim) ReclaimIdle(_ context.Context, claim revisioncapacity.ReclaimClaim) revisioncapacity.ReclaimResult {
-	return revisioncapacity.ReclaimDeclined(claim)
+func (c engineTestCatalog) Node(_ context.Context, id catalog.NodeID) (catalog.NodeRecord, bool, error) {
+	record, ok := c[id]
+	return record, ok, nil
+}
+
+type engineTestSource struct{}
+
+func (engineTestSource) OpenStable(context.Context, catalog.NodeRecord) (content.StableFile, error) {
+	return engineTestStableFile{}, nil
+}
+
+type engineTestStableFile struct{}
+
+func (engineTestStableFile) ExactSize() uint64                                   { return 1 }
+func (engineTestStableFile) ModifiedTime() catalog.ModifiedTime                  { return catalog.ModifiedTime{} }
+func (engineTestStableFile) Verify(context.Context) error                        { return nil }
+func (engineTestStableFile) ReadAt(context.Context, []byte, uint64) (int, error) { return 0, io.EOF }
+func (engineTestStableFile) Close() error                                        { return nil }
+
+func newEngineTestRevisionStore(
+	pool *content.HandlePool,
+	identity byte,
+	limits content.CapacityLimits,
+	tracer content.CapacityTracer,
+) (*content.RevisionStore, catalog.FileID, error) {
+	share := catalog.ShareInstance{identity}
+	parent := catalog.DirectoryID{identity, 1}
+	fileID := catalog.FileID{identity, 2}
+	ref, err := catalog.NewSourceReference([]byte(fmt.Sprintf("object:file-%d", identity)))
+	if err != nil {
+		return nil, catalog.FileID{}, err
+	}
+	srcID, err := catalog.NewSourceIdentity([]byte(fmt.Sprintf("src-%d", identity)))
+	if err != nil {
+		return nil, catalog.FileID{}, err
+	}
+	ver, err := catalog.NewVersionCandidate([]byte(fmt.Sprintf("ver-%d", identity)))
+	if err != nil {
+		return nil, catalog.FileID{}, err
+	}
+	record, err := catalog.NewFileNodeRecord(fileID, parent, "file.bin", ref, srcID, ver, 1, catalog.ModifiedTime{})
+	if err != nil {
+		return nil, catalog.FileID{}, err
+	}
+	store, err := content.NewRevisionStore(content.RevisionStoreConfig{
+		ShareInstance: share, ChunkSize: catalog.MinChunkSize,
+		Catalog:    engineTestCatalog{fileID.NodeID(): record},
+		Source:     engineTestSource{},
+		HandlePool: pool, ShareLimits: limits, CapacityTracer: tracer,
+	})
+	return store, fileID, err
 }

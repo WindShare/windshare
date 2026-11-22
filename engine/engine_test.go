@@ -14,7 +14,7 @@ import (
 	appobs "github.com/windshare/windshare/engine/observation"
 
 	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/content/revisioncapacity"
+	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/engine/internal/task"
 	"github.com/windshare/windshare/engine/relayprofile"
 )
@@ -160,7 +160,7 @@ func TestNewValidatesDependenciesAndDoesNotShareOwners(t *testing.T) {
 		{CleanupTimeout: -time.Second},
 		{ObservationCapacity: -1},
 		{CatalogLimits: catalog.BudgetLimits{MemoryBytes: 1}},
-		{RevisionCapacity: revisioncapacity.ProcessConfig{Limits: revisioncapacity.CapacityLimits{StableHandles: 1}}},
+		{RevisionCapacity: content.HandlePoolConfig{Limits: content.CapacityLimits{StableHandles: 1}}},
 		{Random: bytes.NewReader(nil)},
 	} {
 		if application, err := New(config); err == nil {
@@ -170,7 +170,7 @@ func TestNewValidatesDependenciesAndDoesNotShareOwners(t *testing.T) {
 	}
 	first := newTestEngine(t, Config{})
 	second := newTestEngine(t, Config{})
-	if first.revisions.Coordinator() == second.revisions.Coordinator() || first.catalog == second.catalog || first.cache == second.cache {
+	if first.revisions == second.revisions || first.catalog == second.catalog || first.cache == second.cache {
 		t.Fatal("independent applications share an aggregate owner")
 	}
 	ctx, cancel := context.WithCancel(context.Background())

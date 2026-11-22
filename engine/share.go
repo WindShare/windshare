@@ -73,7 +73,7 @@ func (engine *Engine) StartShare(ctx context.Context, request ShareRequest) (*Sh
 		}
 	}
 	dependencies := share.Dependencies{
-		Controller: controller, RevisionCapacity: engine.revisions.Coordinator(),
+		Controller: controller, RevisionCapacity: engine.revisions,
 		CatalogBudget: engine.catalog, CacheBudget: engine.cache, Connectivity: engine.connectivity,
 		Prepare: injected.Prepare, PollNetwork: pollNetwork,
 		Attempts: admissions.Control, Clock: engine.config.Clock,

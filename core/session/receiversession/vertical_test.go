@@ -9,7 +9,6 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
-	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/internal/keyderiv"
 	"github.com/windshare/windshare/core/link"
@@ -554,22 +553,11 @@ type verticalFixture struct {
 	receiverFactory  *Factory
 	receiverConfig   FactoryConfig
 	contentStore     *verticalContentStore
-	capacityOwner    *revisioncapacity.ProcessOwner
-	capacityStore    *revisioncapacity.StoreRegistration
 	terminal         *verticalTerminalConnectivity
 	scanCalls        atomic.Int32
 	scanStarted      chan struct{}
 	scanGate         chan struct{}
 	scanStopped      chan struct{}
-}
-
-func (fixture *verticalFixture) registerCapacitySession(
-	sessionID protocolsession.ProtocolSessionID,
-) (*revisioncapacity.SessionRegistration, error) {
-	return fixture.capacityStore.RegisterSession(revisioncapacity.SessionConfig{
-		SessionID: revisioncapacity.SessionID(base64.RawURLEncoding.EncodeToString(sessionID.Bytes())),
-		Limits:    revisioncapacity.DefaultSessionLimits(),
-	})
 }
 
 func newVerticalFixture(t *testing.T) *verticalFixture {
@@ -700,31 +688,12 @@ func newVerticalFixtureWithContent(t *testing.T, data []byte, chunkSize uint32) 
 		contentflow.RevisionLeaseTTL, contentflow.RevisionLeaseRenewAfter,
 	)
 	fixture.contentStore = &verticalContentStore{descriptor: revisionDescriptor, lease: lease, data: fixture.fileData}
-	fixture.capacityOwner, err = revisioncapacity.NewProcessOwner(revisioncapacity.DefaultProcessConfig())
-	if err != nil {
-		t.Fatal(err)
-	}
-	fixture.capacityStore, err = fixture.capacityOwner.Coordinator().RegisterStore(revisioncapacity.StoreConfig{
-		StoreID: "sessionruntime-vertical-store", ShareID: "sessionruntime-vertical-share",
-		Limits: revisioncapacity.DefaultShareLimits(),
-	}, verticalCapacityTarget{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_ = fixture.capacityStore.Close()
-		_ = fixture.capacityOwner.Close()
-	})
 	cacheBudget, _ := contentflow.NewProcessCacheBudget(64 << 20)
 	cache, _ := contentflow.NewSharedBlockCache(fixture.share, 16<<20, cacheBudget)
 	t.Cleanup(cache.Close)
-	contentFactory := sendersession.ContentFactoryFunc(func(sessionID protocolsession.ProtocolSessionID) (*contentflow.SenderService, error) {
-		sessionCapacity, err := fixture.registerCapacitySession(sessionID)
-		if err != nil {
-			return nil, err
-		}
+	contentFactory := sendersession.ContentFactoryFunc(func(protocolsession.ProtocolSessionID) (*contentflow.SenderService, error) {
 		return contentflow.NewSenderService(contentflow.SenderServiceConfig{
-			Store: fixture.contentStore, SessionCapacity: sessionCapacity, Encoder: recordEncoder, Cache: cache,
+			Store: fixture.contentStore, Encoder: recordEncoder, Cache: cache,
 		})
 	})
 	fixture.senderConfig = sendersession.FactoryConfig{
@@ -852,7 +821,6 @@ func (*verticalPeerHandler) Run(ctx context.Context) error {
 func (store *verticalContentStore) OpenRevisions(
 	_ context.Context,
 	requests []content.OpenRevisionRequest,
-	_ *revisioncapacity.SessionRegistration,
 ) ([]content.OpenRevisionResult, error) {
 	results := make([]content.OpenRevisionResult, len(requests))
 	for index, request := range requests {
@@ -868,14 +836,7 @@ func (store *verticalContentStore) OpenRevisions(
 	return results, nil
 }
 
-type verticalCapacityTarget struct{}
-
-func (verticalCapacityTarget) ReclaimIdle(
-	_ context.Context,
-	claim revisioncapacity.ReclaimClaim,
-) revisioncapacity.ReclaimResult {
-	return revisioncapacity.ReclaimDeclined(claim)
-}
+func (*verticalContentStore) Close() error { return nil }
 
 func (store *verticalContentStore) RenewLease(id content.LeaseID) (content.RevisionLease, error) {
 	if id != store.lease.ID() {

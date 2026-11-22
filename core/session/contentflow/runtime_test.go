@@ -14,7 +14,6 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
-	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
@@ -128,15 +127,15 @@ func (ids *runtimeIDs) NewLeaseID() (content.LeaseID, error) {
 }
 
 type runtimeFixture struct {
-	share         catalog.ShareInstance
-	file          catalog.FileID
-	stable        *runtimeStableFile
-	clock         *runtimeClock
-	store         *content.RevisionStore
-	cache         *SharedBlockCache
-	service       *SenderService
-	opener        *records.Decoder
-	capacityOwner *revisioncapacity.ProcessOwner
+	share      catalog.ShareInstance
+	file       catalog.FileID
+	stable     *runtimeStableFile
+	clock      *runtimeClock
+	store      *content.RevisionStore
+	cache      *SharedBlockCache
+	service    *SenderService
+	opener     *records.Decoder
+	handlePool *content.HandlePool
 }
 
 func newRuntimeFixture(t *testing.T, blocks int) runtimeFixture {
@@ -160,43 +159,40 @@ func newRuntimeFixture(t *testing.T, blocks int) runtimeFixture {
 	cache, _ := NewSharedBlockCache(share, uint64(catalog.MinChunkSize)*4, processCache)
 	clock := &runtimeClock{now: time.Unix(1_000, 0)}
 	stable := &runtimeStableFile{data: data}
-	capacityOwner, err := revisioncapacity.NewProcessOwner(revisioncapacity.DefaultProcessConfig())
+	handlePool, err := content.NewHandlePool(content.DefaultHandlePoolConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
 	store, err := content.NewRevisionStore(content.RevisionStoreConfig{
 		ShareInstance: share, ChunkSize: catalog.MinChunkSize,
 		Catalog: runtimeCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}},
-		Source:  runtimeSource{file: stable}, CapacityCoordinator: capacityOwner.Coordinator(),
-		CapacityStore: revisioncapacity.StoreConfig{
-			StoreID: "contentflow-runtime-store", ShareID: "contentflow-runtime-share",
-			Limits: revisioncapacity.DefaultShareLimits(),
-		},
-		Clock: clock, LeaseIDs: &runtimeIDs{}, Cache: cache,
+		Source:  runtimeSource{file: stable}, HandlePool: handlePool,
+		ShareLimits: content.DefaultShareCapacityLimits(),
+		Clock:       clock, LeaseIDs: &runtimeIDs{}, Cache: cache,
 	})
 	if err != nil {
-		_ = capacityOwner.Close()
+		_ = handlePool.Close()
 		t.Fatal(err)
 	}
-	sessionCapacity, err := store.RegisterSession(revisioncapacity.SessionConfig{
-		SessionID: "contentflow-runtime-session", Limits: revisioncapacity.DefaultSessionLimits(),
+	session, err := store.RegisterSession(content.SessionConfig{
+		SessionID: "contentflow-runtime-session", Limits: content.DefaultSessionCapacityLimits(),
 	})
 	if err != nil {
 		_ = store.Close()
-		_ = capacityOwner.Close()
+		_ = handlePool.Close()
 		t.Fatal(err)
 	}
 	sealer := records.Encoder{}
 	opener := &records.Decoder{ShareInstance: share}
 	service, err := NewSenderService(SenderServiceConfig{
-		Store: store, SessionCapacity: sessionCapacity, Encoder: sealer, Cache: cache,
+		Store: session, Encoder: sealer, Cache: cache,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return runtimeFixture{
 		share: share, file: file, stable: stable, clock: clock, store: store,
-		cache: cache, service: service, opener: opener, capacityOwner: capacityOwner,
+		cache: cache, service: service, opener: opener, handlePool: handlePool,
 	}
 }
 
@@ -209,7 +205,7 @@ func (fixture runtimeFixture) close(t *testing.T) {
 	if err := fixture.store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := fixture.capacityOwner.Close(); err != nil {
+	if err := fixture.handlePool.Close(); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -768,43 +764,55 @@ func TestErrorClassificationPreservesOperationScope(t *testing.T) {
 }
 
 func TestRevisionErrorClassificationGrantsRetryAuthorityOnlyToTypedCapacity(t *testing.T) {
-	owner, err := revisioncapacity.NewProcessOwner(revisioncapacity.ProcessConfig{
-		Limits:     revisioncapacity.CapacityLimits{StableHandles: 1, ActiveLeases: 8},
+	pool, err := content.NewHandlePool(content.HandlePoolConfig{
+		Limits:     content.CapacityLimits{StableHandles: 1, ActiveLeases: 8},
 		RetryAfter: MaxRevisionFailureRetryAfter,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := owner.Coordinator().RegisterStore(revisioncapacity.StoreConfig{
-		StoreID: "contentflow-classification-store", ShareID: "contentflow-classification-share",
-		Limits: revisioncapacity.CapacityLimits{StableHandles: 8, ActiveLeases: 8},
-	}, contentflowReclaimTargetFunc(func(_ context.Context, claim revisioncapacity.ReclaimClaim) revisioncapacity.ReclaimResult {
-		return revisioncapacity.ReclaimDeclined(claim)
-	}))
+	share := flowID[catalog.ShareInstance](191)
+	parent := flowID[catalog.DirectoryID](192)
+	fileA := flowID[catalog.FileID](193)
+	fileB := flowID[catalog.FileID](194)
+	data := make([]byte, catalog.MinChunkSize)
+	makeNode := func(id catalog.FileID, name string) catalog.NodeRecord {
+		locator, _ := catalog.NewSourceReference([]byte("object:" + name))
+		sourceID, _ := catalog.NewSourceIdentity([]byte("src:" + name))
+		candidate, _ := catalog.NewVersionCandidate([]byte("ver:" + name))
+		rec, recErr := catalog.NewFileNodeRecord(id, parent, name, locator, sourceID, candidate, uint64(len(data)), catalog.ModifiedTime{})
+		if recErr != nil {
+			t.Fatal(recErr)
+		}
+		return rec
+	}
+	store, err := content.NewRevisionStore(content.RevisionStoreConfig{
+		ShareInstance: share, ChunkSize: catalog.MinChunkSize,
+		Catalog: runtimeCatalog{records: map[catalog.NodeID]catalog.NodeRecord{
+			fileA.NodeID(): makeNode(fileA, "a.bin"),
+			fileB.NodeID(): makeNode(fileB, "b.bin"),
+		}},
+		Source:      runtimeSource{file: &runtimeStableFile{data: data}},
+		HandlePool:  pool,
+		ShareLimits: content.CapacityLimits{StableHandles: 8, ActiveLeases: 8},
+		LeaseIDs:    &runtimeIDs{},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	session, err := store.RegisterSession(revisioncapacity.SessionConfig{
+	session, err := store.RegisterSession(content.SessionConfig{
 		SessionID: "contentflow-classification-session",
-		Limits:    revisioncapacity.CapacityLimits{StableHandles: 8, ActiveLeases: 8},
+		Limits:    content.CapacityLimits{StableHandles: 8, ActiveLeases: 8},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	grant, err := store.Admit(context.Background(), revisioncapacity.AdmissionRequest{
-		Kind: revisioncapacity.AdmissionNewRevision, RevisionID: "resident", Session: session,
-	})
+	lease, err := session.OpenRevision(context.Background(), fileA)
 	if err != nil {
 		t.Fatal(err)
 	}
-	charges, err := grant.Commit()
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, busyErr := store.Admit(context.Background(), revisioncapacity.AdmissionRequest{
-		Kind: revisioncapacity.AdmissionNewRevision, RevisionID: "blocked", Session: session,
-	})
-	if _, ok := errors.AsType[*revisioncapacity.CapacityBusyError](busyErr); !ok {
+	_, busyErr := session.OpenRevision(context.Background(), fileB)
+	if _, ok := errors.AsType[*content.CapacityBusyError](busyErr); !ok {
 		t.Fatalf("stable saturation error=%T %v", busyErr, busyErr)
 	}
 	failure := classifyRevisionError(fmt.Errorf("store open: %w", busyErr))
@@ -843,7 +851,7 @@ func TestRevisionErrorClassificationGrantsRetryAuthorityOnlyToTypedCapacity(t *t
 			t.Errorf("%s acquired capacity retry authority: %+v", name, classified)
 		}
 	}
-	if err := charges.Release(); err != nil {
+	if err := session.EndLease(lease.ID(), content.LeaseRelinquished); err != nil {
 		t.Fatal(err)
 	}
 	if err := session.Close(); err != nil {
@@ -852,7 +860,7 @@ func TestRevisionErrorClassificationGrantsRetryAuthorityOnlyToTypedCapacity(t *t
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := owner.Close(); err != nil {
+	if err := pool.Close(); err != nil {
 		t.Fatal(err)
 	}
 }

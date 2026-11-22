@@ -68,7 +68,7 @@ func assertSafePayloadType(t *testing.T, value reflect.Type, seen map[reflect.Ty
 					value == reflect.TypeFor[appobs.RejectionField]()
 				// RelayBaseHint can hold only a validated address without a routing query.
 				relayHint := value == reflect.TypeFor[networkendpoint.RelayBaseHint]()
-				if !diagnostic && !relayHint && owner != "DisplayName" && owner != "DisplayPath" && owner != "RelayOrigin" && owner != "CapacityStoreID" && owner != "CapacityShareID" {
+				if !diagnostic && !relayHint && owner != "DisplayName" && owner != "DisplayPath" && owner != "RelayOrigin" {
 					t.Fatalf("unreviewed string field %s.%s", owner, field.Name)
 				}
 			}

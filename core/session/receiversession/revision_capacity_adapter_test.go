@@ -3,7 +3,7 @@ package receiversession
 import (
 	"context"
 	"errors"
-	"github.com/windshare/windshare/core/content/revisioncapacity"
+	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/internal/sessioncore"
@@ -154,57 +154,12 @@ func TestReceiverRevisionWaitFenceEndsWithFixedRuntime(t *testing.T) {
 	}
 }
 
-func capacityBusyForAdapterTest(t *testing.T, retryAfter time.Duration) *revisioncapacity.CapacityBusyError {
+func capacityBusyForAdapterTest(t *testing.T, retryAfter time.Duration) *content.CapacityBusyError {
 	t.Helper()
-	owner, err := revisioncapacity.NewProcessOwner(revisioncapacity.ProcessConfig{
-		Limits:     revisioncapacity.CapacityLimits{StableHandles: 1, ActiveLeases: 8},
-		RetryAfter: retryAfter,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	store, err := owner.Coordinator().RegisterStore(revisioncapacity.StoreConfig{
-		StoreID: "sessionruntime-adapter-store", ShareID: "sessionruntime-adapter-share",
-		Limits: revisioncapacity.CapacityLimits{StableHandles: 8, ActiveLeases: 8},
-	}, verticalCapacityTarget{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	session, err := store.RegisterSession(revisioncapacity.SessionConfig{
-		SessionID: "sessionruntime-adapter-session",
-		Limits:    revisioncapacity.CapacityLimits{StableHandles: 8, ActiveLeases: 8},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	grant, err := store.Admit(context.Background(), revisioncapacity.AdmissionRequest{
-		Kind: revisioncapacity.AdmissionNewRevision, RevisionID: "resident", Session: session,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	charges, err := grant.Commit()
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, busyErr := store.Admit(context.Background(), revisioncapacity.AdmissionRequest{
-		Kind: revisioncapacity.AdmissionNewRevision, RevisionID: "blocked", Session: session,
-	})
-	var busy *revisioncapacity.CapacityBusyError
-	if !errors.As(busyErr, &busy) {
-		t.Fatalf("capacity admission error=%T %v", busyErr, busyErr)
-	}
-	if err := charges.Release(); err != nil {
-		t.Fatal(err)
-	}
-	if err := session.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := owner.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return busy
+	return content.NewCapacityBusyError(
+		"capacity-adapter-1",
+		content.CapacityResourceStableHandle,
+		content.CapacityScopeProcess,
+		retryAfter,
+	)
 }

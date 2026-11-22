@@ -9,34 +9,32 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
-	"github.com/windshare/windshare/core/content/revisioncapacity"
 )
 
-func newTestRevisionCapacity(t testing.TB) *revisioncapacity.Coordinator {
+func newTestRevisionCapacity(t testing.TB) *content.HandlePool {
 	t.Helper()
-	owner, err := revisioncapacity.NewProcessOwner(revisioncapacity.DefaultProcessConfig())
+	pool, err := content.NewHandlePool(content.DefaultHandlePoolConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if err := owner.Close(); err != nil {
-			t.Errorf("close test revision capacity owner: %v", err)
+		if err := pool.Close(); err != nil {
+			t.Errorf("close test revision handle pool: %v", err)
 		}
 	})
-	return owner.Coordinator()
+	return pool
 }
 
 func TestPreparedSendersShareApplicationRevisionCapacityUntilEveryStoreCloses(t *testing.T) {
-	owner, err := revisioncapacity.NewProcessOwner(revisioncapacity.DefaultProcessConfig())
+	pool, err := content.NewHandlePool(content.DefaultHandlePoolConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if err := owner.Close(); err != nil {
-			t.Errorf("close application revision capacity owner: %v", err)
+		if err := pool.Close(); err != nil {
+			t.Errorf("close application revision handle pool: %v", err)
 		}
 	})
-	coordinator := owner.Coordinator()
 	prepare := func(name string) *PreparedSender {
 		t.Helper()
 		path := filepath.Join(t.TempDir(), name)
@@ -45,7 +43,7 @@ func TestPreparedSendersShareApplicationRevisionCapacityUntilEveryStoreCloses(t 
 		}
 		sender, err := PrepareSender(context.Background(), SenderConfig{CatalogBudget: testCatalogBudget(), CacheBudget: testCacheBudget(),
 			Source: testFileSource([]string{path}), Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.MinChunkSize,
-			RevisionCapacity: coordinator,
+			RevisionCapacity: pool,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -63,20 +61,20 @@ func TestPreparedSendersShareApplicationRevisionCapacityUntilEveryStoreCloses(t 
 	firstCapacity := first.revisionStore.CapacitySnapshot()
 	secondCapacity := second.revisionStore.CapacitySnapshot()
 	if firstCapacity.Process().Identity() != secondCapacity.Process().Identity() ||
-		firstCapacity.Process().Limits() != revisioncapacity.DefaultProcessLimits() ||
-		secondCapacity.Process().Limits() != revisioncapacity.DefaultProcessLimits() {
+		firstCapacity.Process().Limits() != content.DefaultProcessCapacityLimits() ||
+		secondCapacity.Process().Limits() != content.DefaultProcessCapacityLimits() {
 		t.Fatalf("prepared senders did not retain one process capacity authority: first=%+v second=%+v", firstCapacity.Process(), secondCapacity.Process())
 	}
 	if firstCapacity.Share().Identity() == secondCapacity.Share().Identity() ||
-		firstCapacity.Share().Limits() != revisioncapacity.DefaultShareLimits() ||
-		secondCapacity.Share().Limits() != revisioncapacity.DefaultShareLimits() {
+		firstCapacity.Share().Limits() != content.DefaultShareCapacityLimits() ||
+		secondCapacity.Share().Limits() != content.DefaultShareCapacityLimits() {
 		t.Fatalf("prepared senders did not retain distinct default-limited share registrations: first=%+v second=%+v", firstCapacity.Share(), secondCapacity.Share())
 	}
 	assertLiveStores := func(want int) {
 		t.Helper()
-		var live *revisioncapacity.LiveStoreRegistrationsError
-		if err := owner.Close(); !errors.As(err, &live) || live.Count() != want {
-			t.Fatalf("owner close with live stores = %v, want %d registrations", err, want)
+		var live *content.LiveStoresError
+		if err := pool.Close(); !errors.As(err, &live) || live.Count() != want {
+			t.Fatalf("pool close with live stores = %v, want %d stores", err, want)
 		}
 	}
 	assertLiveStores(2)
@@ -87,19 +85,19 @@ func TestPreparedSendersShareApplicationRevisionCapacityUntilEveryStoreCloses(t 
 	if err := second.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := owner.Close(); err != nil {
-		t.Fatalf("owner did not close after both prepared senders: %v", err)
+	if err := pool.Close(); err != nil {
+		t.Fatalf("pool did not close after both prepared senders: %v", err)
 	}
 }
 
 func TestPrepareSenderFailureUnregistersStoreBeforeReturning(t *testing.T) {
-	owner, err := revisioncapacity.NewProcessOwner(revisioncapacity.DefaultProcessConfig())
+	pool, err := content.NewHandlePool(content.DefaultHandlePoolConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if err := owner.Close(); err != nil {
-			t.Errorf("close application revision capacity owner: %v", err)
+		if err := pool.Close(); err != nil {
+			t.Errorf("close application revision handle pool: %v", err)
 		}
 	})
 	path := filepath.Join(t.TempDir(), "selected.bin")
@@ -114,12 +112,12 @@ func TestPrepareSenderFailureUnregistersStoreBeforeReturning(t *testing.T) {
 
 	sender, err := PrepareSender(context.Background(), SenderConfig{CatalogBudget: testCatalogBudget(), CacheBudget: testCacheBudget(),
 		Source: testFileSource([]string{path}), Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.MinChunkSize,
-		RevisionCapacity: owner.Coordinator(), preparation: dependencies,
+		RevisionCapacity: pool, preparation: dependencies,
 	})
 	if sender != nil || !errors.Is(err, injected) {
 		t.Fatalf("partial preparation result = %v, %v", sender, err)
 	}
-	if err := owner.Close(); err != nil {
+	if err := pool.Close(); err != nil {
 		t.Fatalf("partial preparation returned before unregistering its store: %v", err)
 	}
 }

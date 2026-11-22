@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/content/revisioncapacity"
+	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/session/contentflow"
 	appobs "github.com/windshare/windshare/engine/observation"
@@ -20,19 +20,19 @@ func TestSharingSubjectProjectionUsesFrozenHumanDisplayFact(t *testing.T) {
 	if err := os.WriteFile(path, []byte("selected-content"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	capacityOwner, err := revisioncapacity.NewProcessOwner(revisioncapacity.DefaultProcessConfig())
+	pool, err := content.NewHandlePool(content.DefaultHandlePoolConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if err := capacityOwner.Close(); err != nil {
-			t.Errorf("close revision capacity owner: %v", err)
+		if err := pool.Close(); err != nil {
+			t.Errorf("close revision handle pool: %v", err)
 		}
 	})
 	sender, err := liveshare.PrepareSender(context.Background(), sourceBoundarySenderConfig([]string{path}, liveshare.SenderConfig{
 		Relays:           []string{"ws://127.0.0.1:8484"},
 		ChunkSize:        catalog.MinChunkSize,
-		RevisionCapacity: capacityOwner.Coordinator(),
+		RevisionCapacity: pool,
 	}))
 	if err != nil {
 		t.Fatal(err)

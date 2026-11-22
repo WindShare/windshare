@@ -19,7 +19,7 @@ import (
 	pion "github.com/pion/webrtc/v4"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/content/revisioncapacity"
+	"github.com/windshare/windshare/core/content"
 	framechannel "github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -144,18 +144,18 @@ func newCandidateRuntimeHarness(t *testing.T, maxCandidates int) *candidateRunti
 	if err := os.WriteFile(selected, []byte("candidate transaction"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	capacityOwner, err := revisioncapacity.NewProcessOwner(revisioncapacity.DefaultProcessConfig())
+	pool, err := content.NewHandlePool(content.DefaultHandlePoolConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if err := capacityOwner.Close(); err != nil {
-			t.Errorf("close revision capacity owner: %v", err)
+		if err := pool.Close(); err != nil {
+			t.Errorf("close revision handle pool: %v", err)
 		}
 	})
 	preparedSender, err := liveshare.PrepareSender(ctx, sourceBoundarySenderConfig([]string{selected}, liveshare.SenderConfig{
 		Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.MinChunkSize,
-		RevisionCapacity: capacityOwner.Coordinator(),
+		RevisionCapacity: pool,
 	}))
 	if err != nil {
 		t.Fatal(err)

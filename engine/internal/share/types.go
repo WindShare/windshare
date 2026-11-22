@@ -16,7 +16,7 @@ import (
 	"github.com/windshare/windshare/connectivity/turnpath"
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/content/revisioncapacity"
+	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/session/contentflow"
@@ -97,7 +97,7 @@ type Dependencies struct {
 	TURN             turnpath.Accounts
 	Control          task.Control
 	Controller       *Controller
-	RevisionCapacity *revisioncapacity.Coordinator
+	RevisionCapacity *content.HandlePool
 	CatalogBudget    *catalog.BudgetAccount
 	CacheBudget      *contentflow.ProcessCacheBudget
 	Connectivity     *nativeconnectivity.Capacity

@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/content/revisioncapacity"
 )
 
 type testClock struct {
@@ -146,20 +145,20 @@ func (i *recordingInvalidator) snapshot() (invalidated, retired []FileRevision) 
 	return append([]FileRevision(nil), i.revisions...), append([]FileRevision(nil), i.retired...)
 }
 
-func generousSession(t *testing.T, store *RevisionStore, name string) *revisioncapacity.SessionRegistration {
+func generousSession(t *testing.T, store *RevisionStore, name string) *RevisionSession {
 	t.Helper()
-	return limitedSession(t, store, name, revisioncapacity.CapacityLimits{StableHandles: 100, ActiveLeases: 100})
+	return limitedSession(t, store, name, CapacityLimits{StableHandles: 100, ActiveLeases: 100})
 }
 
 func limitedSession(
 	t *testing.T,
 	store *RevisionStore,
 	name string,
-	limits revisioncapacity.CapacityLimits,
-) *revisioncapacity.SessionRegistration {
+	limits CapacityLimits,
+) *RevisionSession {
 	t.Helper()
-	session, err := store.RegisterSession(revisioncapacity.SessionConfig{
-		SessionID: revisioncapacity.SessionID(name), Limits: limits,
+	session, err := store.RegisterSession(SessionConfig{
+		SessionID: SessionID(name), Limits: limits,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -171,22 +170,20 @@ func limitedSession(
 func attachTestCapacity(
 	t *testing.T,
 	config *RevisionStoreConfig,
-	processLimits revisioncapacity.CapacityLimits,
-	shareLimits revisioncapacity.CapacityLimits,
-) *revisioncapacity.ProcessOwner {
+	processLimits CapacityLimits,
+	shareLimits CapacityLimits,
+) *HandlePool {
 	t.Helper()
-	owner, err := revisioncapacity.NewProcessOwner(revisioncapacity.ProcessConfig{
-		Limits: processLimits, RetryAfter: revisioncapacity.DefaultCapacityRetryAfter,
+	pool, err := NewHandlePool(HandlePoolConfig{
+		Limits: processLimits, RetryAfter: DefaultCapacityRetryAfter,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	config.CapacityCoordinator = owner.Coordinator()
-	config.CapacityStore = revisioncapacity.StoreConfig{
-		StoreID: "attached-test-store", ShareID: "attached-test-share", Limits: shareLimits,
-	}
-	t.Cleanup(func() { _ = owner.Close() })
-	return owner
+	config.HandlePool = pool
+	config.ShareLimits = shareLimits
+	t.Cleanup(func() { _ = pool.Close() })
+	return pool
 }
 
 func fileRecord(t *testing.T, size uint64) (catalog.FileID, catalog.NodeRecord) {
@@ -205,9 +202,9 @@ func fileRecord(t *testing.T, size uint64) (catalog.FileID, catalog.NodeRecord) 
 
 func newRevisionStore(t *testing.T, source RevisionSource, clock Clock, cache RevisionCache, file catalog.FileID, record catalog.NodeRecord) *RevisionStore {
 	t.Helper()
-	owner, err := revisioncapacity.NewProcessOwner(revisioncapacity.ProcessConfig{
-		Limits:     revisioncapacity.CapacityLimits{StableHandles: 100, ActiveLeases: 100},
-		RetryAfter: revisioncapacity.DefaultCapacityRetryAfter,
+	pool, err := NewHandlePool(HandlePoolConfig{
+		Limits:     CapacityLimits{StableHandles: 100, ActiveLeases: 100},
+		RetryAfter: DefaultCapacityRetryAfter,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -216,19 +213,16 @@ func newRevisionStore(t *testing.T, source RevisionSource, clock Clock, cache Re
 		ShareInstance: catalogID[catalog.ShareInstance](1), ChunkSize: catalog.MinChunkSize,
 		Catalog: testCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}},
 		Source:  source, Clock: clock,
-		CapacityCoordinator: owner.Coordinator(),
-		CapacityStore: revisioncapacity.StoreConfig{
-			StoreID: "test-store", ShareID: "test-share",
-			Limits: revisioncapacity.CapacityLimits{StableHandles: 100, ActiveLeases: 100},
-		},
-		LeaseIDs: &sequenceIDs{}, Cache: cache,
+		HandlePool:  pool,
+		ShareLimits: CapacityLimits{StableHandles: 100, ActiveLeases: 100},
+		LeaseIDs:    &sequenceIDs{}, Cache: cache,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
 		_ = store.Close()
-		_ = owner.Close()
+		_ = pool.Close()
 	})
 	return store
 }
@@ -310,9 +304,9 @@ func TestRevisionStoreSingleflightsOpenAndCreatesIndependentLeases(t *testing.T)
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if store.CapacitySnapshot().Process().Used() != (revisioncapacity.CapacityUsage{}) ||
-		store.CapacitySnapshot().Share().Used() != (revisioncapacity.CapacityUsage{}) ||
-		session.Snapshot().Used() != (revisioncapacity.CapacityUsage{}) {
+	if store.CapacitySnapshot().Process().Used() != (CapacityUsage{}) ||
+		store.CapacitySnapshot().Share().Used() != (CapacityUsage{}) ||
+		session.Snapshot().Used() != (CapacityUsage{}) {
 		t.Fatal("capacity leaked after store close")
 	}
 }
@@ -337,35 +331,35 @@ func TestSharedRevisionChargesStableHandleToCurrentLeaseSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := store.CapacitySnapshot().Process().Used(); got != (revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 3}) {
+	if got := store.CapacitySnapshot().Process().Used(); got != (CapacityUsage{StableHandles: 1, ActiveLeases: 3}) {
 		t.Fatalf("process capacity counted a shared handle per session: %+v", got)
 	}
-	if got := store.CapacitySnapshot().Share().Used(); got != (revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 3}) {
+	if got := store.CapacitySnapshot().Share().Used(); got != (CapacityUsage{StableHandles: 1, ActiveLeases: 3}) {
 		t.Fatalf("share capacity counted a shared handle per session: %+v", got)
 	}
-	if got := sessionA.Snapshot().Used(); got != (revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 2}) {
+	if got := sessionA.Snapshot().Used(); got != (CapacityUsage{StableHandles: 1, ActiveLeases: 2}) {
 		t.Fatalf("session A capacity = %+v", got)
 	}
-	if got := sessionB.Snapshot().Used(); got != (revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 1}) {
+	if got := sessionB.Snapshot().Used(); got != (CapacityUsage{StableHandles: 1, ActiveLeases: 1}) {
 		t.Fatalf("session B capacity = %+v", got)
 	}
 
 	_ = store.EndLease(first.ID(), LeaseRelinquished)
-	if got := sessionA.Snapshot().Used(); got != (revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 1}) {
+	if got := sessionA.Snapshot().Used(); got != (CapacityUsage{StableHandles: 1, ActiveLeases: 1}) {
 		t.Fatalf("session A released its handle before its last lease: %+v", got)
 	}
 	_ = store.EndLease(second.ID(), LeaseRelinquished)
-	if got := sessionA.Snapshot().Used(); got != (revisioncapacity.CapacityUsage{}) {
+	if got := sessionA.Snapshot().Used(); got != (CapacityUsage{}) {
 		t.Fatalf("session A retained a shared handle after its last lease: %+v", got)
 	}
-	if got := sessionB.Snapshot().Used(); got != (revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 1}) {
+	if got := sessionB.Snapshot().Used(); got != (CapacityUsage{StableHandles: 1, ActiveLeases: 1}) {
 		t.Fatalf("session A release changed session B accounting: %+v", got)
 	}
 	_ = store.EndLease(third.ID(), LeaseRelinquished)
-	if got := sessionB.Snapshot().Used(); got != (revisioncapacity.CapacityUsage{}) {
+	if got := sessionB.Snapshot().Used(); got != (CapacityUsage{}) {
 		t.Fatalf("session B retained a handle after its last lease: %+v", got)
 	}
-	if got := store.CapacitySnapshot().Process().Used(); got != (revisioncapacity.CapacityUsage{}) {
+	if got := store.CapacitySnapshot().Process().Used(); got != (CapacityUsage{}) {
 		t.Fatalf("final relinquishment retained physical capacity: %+v", got)
 	}
 	if err := store.Close(); err != nil {
@@ -439,9 +433,9 @@ func TestRevisionDriftInvalidatesEveryLeaseAndCache(t *testing.T) {
 	if stable.closed.Load() != 1 || len(invalidator.revisions) != 1 {
 		t.Fatalf("drift cleanup: closes=%d invalidations=%d", stable.closed.Load(), len(invalidator.revisions))
 	}
-	if store.CapacitySnapshot().Process().Used() != (revisioncapacity.CapacityUsage{}) ||
-		store.CapacitySnapshot().Share().Used() != (revisioncapacity.CapacityUsage{}) ||
-		session.Snapshot().Used() != (revisioncapacity.CapacityUsage{}) {
+	if store.CapacitySnapshot().Process().Used() != (CapacityUsage{}) ||
+		store.CapacitySnapshot().Share().Used() != (CapacityUsage{}) ||
+		session.Snapshot().Used() != (CapacityUsage{}) {
 		t.Fatal("drift leaked capacity")
 	}
 }

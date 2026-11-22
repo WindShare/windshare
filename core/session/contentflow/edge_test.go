@@ -7,14 +7,12 @@ import (
 	"fmt"
 	"slices"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
-	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
@@ -307,7 +305,7 @@ type recordedLeaseEnd struct {
 	kind content.LeaseEndKind
 }
 
-func (store *stubRevisionStore) OpenRevisions(context.Context, []content.OpenRevisionRequest, *revisioncapacity.SessionRegistration) ([]content.OpenRevisionResult, error) {
+func (store *stubRevisionStore) OpenRevisions(context.Context, []content.OpenRevisionRequest) ([]content.OpenRevisionResult, error) {
 	return slices.Clone(store.results), store.openErr
 }
 func (store *stubRevisionStore) RenewLease(content.LeaseID) (content.RevisionLease, error) {
@@ -325,6 +323,7 @@ func (store *stubRevisionStore) ValidateLease(content.LeaseID, content.FileRevis
 func (store *stubRevisionStore) ReadBlock(context.Context, content.LeaseID, content.BlockRef) ([]byte, error) {
 	return slices.Clone(store.read), store.readErr
 }
+func (store *stubRevisionStore) Close() error { return nil }
 
 type stubRecordEncoder struct {
 	revision    []byte
@@ -345,58 +344,12 @@ func stubService(t *testing.T, descriptor content.FileRevisionDescriptor, store 
 	process, _ := NewProcessCacheBudget(1 << 20)
 	cache, _ := NewSharedBlockCache(descriptor.ShareInstance(), 1<<20, process)
 	service, err := NewSenderService(SenderServiceConfig{
-		Store: store, SessionCapacity: testSessionCapacity(t), Encoder: sealer, Cache: cache,
+		Store: store, Encoder: sealer, Cache: cache,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return service, cache
-}
-
-var contentflowCapacityTestSequence atomic.Uint64
-
-type contentflowReclaimTargetFunc func(context.Context, revisioncapacity.ReclaimClaim) revisioncapacity.ReclaimResult
-
-func (function contentflowReclaimTargetFunc) ReclaimIdle(
-	ctx context.Context,
-	claim revisioncapacity.ReclaimClaim,
-) revisioncapacity.ReclaimResult {
-	return function(ctx, claim)
-}
-
-func testSessionCapacity(t *testing.T) *revisioncapacity.SessionRegistration {
-	t.Helper()
-	sequence := contentflowCapacityTestSequence.Add(1)
-	owner, err := revisioncapacity.NewProcessOwner(revisioncapacity.DefaultProcessConfig())
-	if err != nil {
-		t.Fatal(err)
-	}
-	store, err := owner.Coordinator().RegisterStore(revisioncapacity.StoreConfig{
-		StoreID: revisioncapacity.StoreID(fmt.Sprintf("contentflow-test-store-%d", sequence)),
-		ShareID: revisioncapacity.ShareID(fmt.Sprintf("contentflow-test-share-%d", sequence)),
-		Limits:  revisioncapacity.DefaultShareLimits(),
-	}, contentflowReclaimTargetFunc(func(_ context.Context, claim revisioncapacity.ReclaimClaim) revisioncapacity.ReclaimResult {
-		return revisioncapacity.ReclaimDeclined(claim)
-	}))
-	if err != nil {
-		_ = owner.Close()
-		t.Fatal(err)
-	}
-	session, err := store.RegisterSession(revisioncapacity.SessionConfig{
-		SessionID: revisioncapacity.SessionID(fmt.Sprintf("contentflow-test-session-%d", sequence)),
-		Limits:    revisioncapacity.DefaultSessionLimits(),
-	})
-	if err != nil {
-		_ = store.Close()
-		_ = owner.Close()
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_ = session.Close()
-		_ = store.Close()
-		_ = owner.Close()
-	})
-	return session
 }
 
 func TestSenderServiceRollsBackMalformedStoreAndSealOutcomes(t *testing.T) {

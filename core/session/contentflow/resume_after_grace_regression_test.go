@@ -13,7 +13,6 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
-	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
@@ -133,7 +132,7 @@ func TestResumeWithinGraceReusesResidentCacheAndReopenMatchesMetadata(t *testing
 		t.Fatal(err)
 	}
 
-	capacityOwner, err := revisioncapacity.NewProcessOwner(revisioncapacity.DefaultProcessConfig())
+	pool, err := content.NewHandlePool(content.DefaultHandlePoolConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,38 +147,35 @@ func TestResumeWithinGraceReusesResidentCacheAndReopenMatchesMetadata(t *testing
 	clock := &runtimeClock{now: time.Unix(10_000, 0)}
 	source := &resumeAfterGraceSource{data: data, modified: modified}
 	store, err := content.NewRevisionStore(content.RevisionStoreConfig{
-		ShareInstance:       share,
-		ChunkSize:           chunkSize,
-		Catalog:             runtimeCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}},
-		Source:              source,
-		CapacityCoordinator: capacityOwner.Coordinator(),
-		CapacityStore: revisioncapacity.StoreConfig{
-			StoreID: "resume-after-grace-store", ShareID: "resume-after-grace-share",
-			Limits: revisioncapacity.DefaultShareLimits(),
-		},
-		Clock:    clock,
-		LeaseIDs: &runtimeIDs{},
-		Cache:    cache,
+		ShareInstance: share,
+		ChunkSize:     chunkSize,
+		Catalog:       runtimeCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}},
+		Source:        source,
+		HandlePool:    pool,
+		ShareLimits:   content.DefaultShareCapacityLimits(),
+		Clock:         clock,
+		LeaseIDs:      &runtimeIDs{},
+		Cache:         cache,
 	})
 	if err != nil {
-		_ = capacityOwner.Close()
+		_ = pool.Close()
 		t.Fatal(err)
 	}
-	firstSessionCapacity, err := store.RegisterSession(revisioncapacity.SessionConfig{
-		SessionID: "resume-after-grace-session-1", Limits: revisioncapacity.DefaultSessionLimits(),
+	firstSession, err := store.RegisterSession(content.SessionConfig{
+		SessionID: "resume-after-grace-session-1", Limits: content.DefaultSessionCapacityLimits(),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondSessionCapacity, err := store.RegisterSession(revisioncapacity.SessionConfig{
-		SessionID: "resume-after-grace-session-2", Limits: revisioncapacity.DefaultSessionLimits(),
+	secondSession, err := store.RegisterSession(content.SessionConfig{
+		SessionID: "resume-after-grace-session-2", Limits: content.DefaultSessionCapacityLimits(),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	sealer := records.Encoder{}
 	firstService, err := NewSenderService(SenderServiceConfig{
-		Store: store, SessionCapacity: firstSessionCapacity, Encoder: sealer, Cache: cache,
+		Store: firstSession, Encoder: sealer, Cache: cache,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -192,7 +188,7 @@ func TestResumeWithinGraceReusesResidentCacheAndReopenMatchesMetadata(t *testing
 		_ = firstService.Close()
 		cache.Close()
 		_ = store.Close()
-		_ = capacityOwner.Close()
+		_ = pool.Close()
 	})
 
 	opened, err := firstService.Open(context.Background(), mustOpenRequest(t, file))
@@ -222,9 +218,9 @@ func TestResumeWithinGraceReusesResidentCacheAndReopenMatchesMetadata(t *testing
 	if cache.UsedBytes() == 0 {
 		t.Fatal("partial transfer did not populate the shared block cache")
 	}
-	requireResumeCapacityUsage(t, store.CapacitySnapshot().Process(), revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 1})
-	requireResumeCapacityUsage(t, store.CapacitySnapshot().Share(), revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 1})
-	requireResumeCapacityUsage(t, firstSessionCapacity.Snapshot(), revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 1})
+	requireResumeCapacityUsage(t, store.CapacitySnapshot().Process(), content.CapacityUsage{StableHandles: 1, ActiveLeases: 1})
+	requireResumeCapacityUsage(t, store.CapacitySnapshot().Share(), content.CapacityUsage{StableHandles: 1, ActiveLeases: 1})
+	requireResumeCapacityUsage(t, firstSession.Snapshot(), content.CapacityUsage{StableHandles: 1, ActiveLeases: 1})
 
 	// Closing the session detaches its lease so the open handle stays resident
 	// for RevisionResumeGrace and preserves both FileRevision and cache hits.
@@ -237,12 +233,12 @@ func TestResumeWithinGraceReusesResidentCacheAndReopenMatchesMetadata(t *testing
 	if opens, closes, reads := source.snapshot(); opens != 1 || closes != 0 || !slices.Equal(reads, []uint64{0}) {
 		t.Fatalf("detached grace lifecycle opens=%d closes=%d reads=%v", opens, closes, reads)
 	}
-	requireResumeCapacityUsage(t, store.CapacitySnapshot().Process(), revisioncapacity.CapacityUsage{StableHandles: 1})
-	requireResumeCapacityUsage(t, store.CapacitySnapshot().Share(), revisioncapacity.CapacityUsage{StableHandles: 1})
-	requireResumeCapacityUsage(t, firstSessionCapacity.Snapshot(), revisioncapacity.CapacityUsage{})
+	requireResumeCapacityUsage(t, store.CapacitySnapshot().Process(), content.CapacityUsage{StableHandles: 1})
+	requireResumeCapacityUsage(t, store.CapacitySnapshot().Share(), content.CapacityUsage{StableHandles: 1})
+	requireResumeCapacityUsage(t, firstSession.Snapshot(), content.CapacityUsage{})
 
 	secondService, err = NewSenderService(SenderServiceConfig{
-		Store: store, SessionCapacity: secondSessionCapacity, Encoder: sealer, Cache: cache,
+		Store: secondSession, Encoder: sealer, Cache: cache,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -310,7 +306,7 @@ func TestResumeWithinGraceReusesResidentCacheAndReopenMatchesMetadata(t *testing
 	if cache.UsedBytes() != cachedBytes || processCache.Used() != cachedBytes {
 		t.Fatalf("grace-period cache was prematurely evicted: cache=%d process=%d want=%d", cache.UsedBytes(), processCache.Used(), cachedBytes)
 	}
-	requireResumeCapacityUsage(t, secondSessionCapacity.Snapshot(), revisioncapacity.CapacityUsage{})
+	requireResumeCapacityUsage(t, secondSession.Snapshot(), content.CapacityUsage{})
 	clock.Advance(content.RevisionResumeGrace)
 
 	reopened, err := secondService.Open(context.Background(), resumeRequest)
@@ -338,9 +334,9 @@ func TestResumeWithinGraceReusesResidentCacheAndReopenMatchesMetadata(t *testing
 	if opens, closes, reads := source.snapshot(); opens != 2 || closes != 1 || !slices.Equal(reads, []uint64{0}) {
 		t.Errorf("reopen source lifecycle opens=%d closes=%d reads=%v", opens, closes, reads)
 	}
-	requireResumeCapacityUsage(t, store.CapacitySnapshot().Process(), revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 1})
-	requireResumeCapacityUsage(t, store.CapacitySnapshot().Share(), revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 1})
-	requireResumeCapacityUsage(t, secondSessionCapacity.Snapshot(), revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 1})
+	requireResumeCapacityUsage(t, store.CapacitySnapshot().Process(), content.CapacityUsage{StableHandles: 1, ActiveLeases: 1})
+	requireResumeCapacityUsage(t, store.CapacitySnapshot().Share(), content.CapacityUsage{StableHandles: 1, ActiveLeases: 1})
+	requireResumeCapacityUsage(t, secondSession.Snapshot(), content.CapacityUsage{StableHandles: 1, ActiveLeases: 1})
 
 	continuation, err := NewBlockRequest(reopenedLease.ID(), []uint64{1})
 	if err != nil {
@@ -369,9 +365,9 @@ func TestResumeWithinGraceReusesResidentCacheAndReopenMatchesMetadata(t *testing
 	if cache.UsedBytes() != 0 || processCache.Used() != 0 {
 		t.Fatalf("cleanly retired revision retained cache budget: cache=%d process=%d", cache.UsedBytes(), processCache.Used())
 	}
-	requireResumeCapacityUsage(t, store.CapacitySnapshot().Process(), revisioncapacity.CapacityUsage{})
-	requireResumeCapacityUsage(t, store.CapacitySnapshot().Share(), revisioncapacity.CapacityUsage{})
-	requireResumeCapacityUsage(t, secondSessionCapacity.Snapshot(), revisioncapacity.CapacityUsage{})
+	requireResumeCapacityUsage(t, store.CapacitySnapshot().Process(), content.CapacityUsage{})
+	requireResumeCapacityUsage(t, store.CapacitySnapshot().Share(), content.CapacityUsage{})
+	requireResumeCapacityUsage(t, secondSession.Snapshot(), content.CapacityUsage{})
 }
 
 func TestCrossShareReclaimFreesRetiredCacheForPeerShareBudget(t *testing.T) {
@@ -404,9 +400,9 @@ func TestCrossShareReclaimFreesRetiredCacheForPeerShareBudget(t *testing.T) {
 		return record
 	}
 
-	capacityOwner, err := revisioncapacity.NewProcessOwner(revisioncapacity.ProcessConfig{
-		Limits:     revisioncapacity.CapacityLimits{StableHandles: 1, ActiveLeases: 4},
-		RetryAfter: revisioncapacity.DefaultCapacityRetryAfter,
+	pool, err := content.NewHandlePool(content.HandlePoolConfig{
+		Limits:     content.CapacityLimits{StableHandles: 1, ActiveLeases: 4},
+		RetryAfter: content.DefaultCapacityRetryAfter,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -427,30 +423,27 @@ func TestCrossShareReclaimFreesRetiredCacheForPeerShareBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 	storeA, err := content.NewRevisionStore(content.RevisionStoreConfig{
-		ShareInstance:       shareA,
-		ChunkSize:           chunkSize,
-		Catalog:             runtimeCatalog{records: map[catalog.NodeID]catalog.NodeRecord{fileA.NodeID(): recordA}},
-		Source:              &resumeAfterGraceSource{data: data, modified: modified},
-		CapacityCoordinator: capacityOwner.Coordinator(),
-		CapacityStore: revisioncapacity.StoreConfig{
-			StoreID: "reclaim-cache-store-a", ShareID: "reclaim-cache-share-a",
-			Limits: revisioncapacity.CapacityLimits{StableHandles: 1, ActiveLeases: 4},
-		},
-		Clock:    clock,
-		LeaseIDs: &runtimeIDs{},
-		Cache:    cacheA,
+		ShareInstance: shareA,
+		ChunkSize:     chunkSize,
+		Catalog:       runtimeCatalog{records: map[catalog.NodeID]catalog.NodeRecord{fileA.NodeID(): recordA}},
+		Source:        &resumeAfterGraceSource{data: data, modified: modified},
+		HandlePool:    pool,
+		ShareLimits:   content.CapacityLimits{StableHandles: 1, ActiveLeases: 4},
+		Clock:         clock,
+		LeaseIDs:      &runtimeIDs{},
+		Cache:         cacheA,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	sessionCapA, err := storeA.RegisterSession(revisioncapacity.SessionConfig{
-		SessionID: "reclaim-cache-session-a", Limits: revisioncapacity.CapacityLimits{StableHandles: 1, ActiveLeases: 4},
+	sessionA, err := storeA.RegisterSession(content.SessionConfig{
+		SessionID: "reclaim-cache-session-a", Limits: content.CapacityLimits{StableHandles: 1, ActiveLeases: 4},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	serviceA, err := NewSenderService(SenderServiceConfig{
-		Store: storeA, SessionCapacity: sessionCapA, Encoder: records.Encoder{}, Cache: cacheA,
+		Store: sessionA, Encoder: records.Encoder{}, Cache: cacheA,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -464,30 +457,27 @@ func TestCrossShareReclaimFreesRetiredCacheForPeerShareBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 	storeB, err := content.NewRevisionStore(content.RevisionStoreConfig{
-		ShareInstance:       shareB,
-		ChunkSize:           chunkSize,
-		Catalog:             runtimeCatalog{records: map[catalog.NodeID]catalog.NodeRecord{fileB.NodeID(): recordB}},
-		Source:              &resumeAfterGraceSource{data: data, modified: modified},
-		CapacityCoordinator: capacityOwner.Coordinator(),
-		CapacityStore: revisioncapacity.StoreConfig{
-			StoreID: "reclaim-cache-store-b", ShareID: "reclaim-cache-share-b",
-			Limits: revisioncapacity.CapacityLimits{StableHandles: 1, ActiveLeases: 4},
-		},
-		Clock:    clock,
-		LeaseIDs: &runtimeIDs{},
-		Cache:    cacheB,
+		ShareInstance: shareB,
+		ChunkSize:     chunkSize,
+		Catalog:       runtimeCatalog{records: map[catalog.NodeID]catalog.NodeRecord{fileB.NodeID(): recordB}},
+		Source:        &resumeAfterGraceSource{data: data, modified: modified},
+		HandlePool:    pool,
+		ShareLimits:   content.CapacityLimits{StableHandles: 1, ActiveLeases: 4},
+		Clock:         clock,
+		LeaseIDs:      &runtimeIDs{},
+		Cache:         cacheB,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	sessionCapB, err := storeB.RegisterSession(revisioncapacity.SessionConfig{
-		SessionID: "reclaim-cache-session-b", Limits: revisioncapacity.CapacityLimits{StableHandles: 1, ActiveLeases: 4},
+	sessionB, err := storeB.RegisterSession(content.SessionConfig{
+		SessionID: "reclaim-cache-session-b", Limits: content.CapacityLimits{StableHandles: 1, ActiveLeases: 4},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	serviceB, err := NewSenderService(SenderServiceConfig{
-		Store: storeB, SessionCapacity: sessionCapB, Encoder: records.Encoder{}, Cache: cacheB,
+		Store: sessionB, Encoder: records.Encoder{}, Cache: cacheB,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -499,7 +489,7 @@ func TestCrossShareReclaimFreesRetiredCacheForPeerShareBudget(t *testing.T) {
 		cacheA.Close()
 		_ = storeB.Close()
 		_ = storeA.Close()
-		_ = capacityOwner.Close()
+		_ = pool.Close()
 	})
 
 	openedA, err := serviceA.Open(context.Background(), mustOpenRequest(t, fileA))
@@ -552,7 +542,7 @@ func TestCrossShareReclaimFreesRetiredCacheForPeerShareBudget(t *testing.T) {
 	}
 }
 
-func requireResumeCapacityUsage(t *testing.T, snapshot revisioncapacity.ScopeSnapshot, expected revisioncapacity.CapacityUsage) {
+func requireResumeCapacityUsage(t *testing.T, snapshot content.ScopeSnapshot, expected content.CapacityUsage) {
 	t.Helper()
 	if actual := snapshot.Used(); actual != expected {
 		t.Fatalf("capacity %q usage=%+v, want %+v", snapshot.Identity(), actual, expected)
