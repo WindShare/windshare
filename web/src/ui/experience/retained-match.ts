@@ -1,7 +1,7 @@
-import type { RetainedReceiveOperation } from '../../application/receive/contracts'
+import type { RetainedReceiveAction, RetainedReceiveOperation } from '../../application/receive/contracts'
 import { retainedContinuationReadiness } from '../../application/receive/retained/readiness'
 import type { TaskSnapshot } from '../controller/projections'
-import type { TaskPresentation } from '../tasks'
+import type { TaskAction, TaskPresentation } from '../tasks'
 import type { TaskComposition } from './task-composition'
 
 export type WorkspaceTaskSnapshot = TaskSnapshot & TaskComposition
@@ -29,18 +29,28 @@ function isCompleteLocalRetained(
     task.primaryAction.target.kind === 'retained'
 }
 
+function retainedAction(
+  task: TaskPresentation,
+  action: RetainedReceiveAction,
+): TaskAction | null {
+  if (task.primaryAction?.target.kind === 'retained' && task.primaryAction.target.action === action) {
+    return task.primaryAction
+  }
+  return task.secondaryActions.find(
+    candidate => candidate.target.kind === 'retained' && candidate.target.action === action,
+  ) ?? null
+}
+
 function isTransientlyBusyContinuation(
   operation: RetainedReceiveOperation,
   task: TaskPresentation,
   snapshot: WorkspaceTaskSnapshot,
 ): boolean {
   const { pending } = snapshot.retained
-  const action = task.primaryAction?.target.kind === 'retained' ? task.primaryAction.target.action : null
-  if (pending === null || action === null) return false
-  if (pending.operationId === task.operationId && pending.action === action) return true
+  if (pending === null) return false
+  if (pending.operationId === task.operationId && pending.action === 'continue') return true
   if (operation.unavailableReason !== undefined) return false
-  const needsRemote = action === 'continue' &&
-    retainedContinuationReadiness(operation, snapshot.share?.shareInstance ?? null) !== 'local'
+  const needsRemote = retainedContinuationReadiness(operation, snapshot.share?.shareInstance ?? null) !== 'local'
   return !needsRemote || (snapshot.connection.kind !== 'ended' && snapshot.connection.kind !== 'unavailable')
 }
 
@@ -49,10 +59,13 @@ function isContinuableRetained(
   task: TaskPresentation,
   snapshot: WorkspaceTaskSnapshot,
 ): boolean {
-  if (task.stage === 'handed-to-browser' || task.primaryAction === null || task.primaryAction.target.kind !== 'retained') {
-    return false
-  }
-  return task.primaryAction.disabledReason === null || isTransientlyBusyContinuation(operation, task, snapshot)
+  if (task.stage === 'handed-to-browser') return false
+  // Check the explicit continue action rather than any enabled primaryAction; when
+  // remote continuation is disabled, presentation promotes local fallbacks like
+  // save-partial that must not displace a complete local copy.
+  const continuation = retainedAction(task, 'continue')
+  if (continuation === null) return false
+  return continuation.disabledReason === null || isTransientlyBusyContinuation(operation, task, snapshot)
 }
 
 function findCompleteLocalMatch(snapshot: WorkspaceTaskSnapshot): TaskPresentation | null {
@@ -95,20 +108,30 @@ function isSettlingWorkspaceHandoff(snapshot: WorkspaceTaskSnapshot): boolean {
     (activeReceiveOperationId === current.operationId || retained.kind === 'loading' || retained.kind === 'unloaded')
 }
 
+function retainedBannerKind(task: TaskPresentation): WorkspaceRetainedBanner['kind'] | null {
+  if (task.stage === 'handed-to-browser' ||
+      task.primaryAction === null ||
+      task.primaryAction.disabledReason !== null ||
+      task.primaryAction.target.kind !== 'retained') {
+    return null
+  }
+  const { action } = task.primaryAction.target
+  if (task.stage === 'ready-to-save') {
+    return action === 'save' || action === 'save-staged-files' ? 'ready-to-save' : null
+  }
+  return action === 'continue' ? 'continue' : null
+}
+
 function findRetainedBanner(snapshot: WorkspaceTaskSnapshot): WorkspaceRetainedBanner | null {
   const { share, tasks, retained } = snapshot
   if (share === null) return null
   for (const task of tasks) {
-    if (task.stage === 'handed-to-browser' || task.primaryAction === null || task.primaryAction.disabledReason !== null) {
-      continue
-    }
+    const kind = retainedBannerKind(task)
+    if (kind === null) continue
     const matchesShare = retained.operations.some(operation =>
       operation.operationId === task.operationId && operation.shareInstance === share.shareInstance)
     if (!matchesShare) continue
-    return Object.freeze({
-      kind: task.stage === 'ready-to-save' ? 'ready-to-save' : 'continue',
-      task,
-    })
+    return Object.freeze({ kind, task })
   }
   return null
 }

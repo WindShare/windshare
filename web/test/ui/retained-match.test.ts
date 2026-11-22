@@ -130,6 +130,29 @@ function pausedStartOp(idSeed: number, createdAtMilliseconds = 2_000): RetainedR
   })
 }
 
+function pausedPartialZipOp(idSeed: number, createdAtMilliseconds = 2_000): RetainedReceiveOperation {
+  const lifecycle: ReceiveLifecycleState = {
+    operationId: identityText(idSeed),
+    receiveIntentDigest: identityText(idSeed + 1, 32),
+    generation: 2n,
+    kind: 'resumable-receive',
+    payloadKind: 'workspace-archive',
+    objectId: identityText(idSeed + 2),
+    checkpointGeneration: 1n,
+    occupiedBytes: 512n,
+    completedFileCount: 1n,
+    completedBytes: 256n,
+    discoveryComplete: true,
+  }
+  return retainedOp({
+    operationId: lifecycle.operationId,
+    lifecycle,
+    continuation: 'resume-receive',
+    actions: ['continue', 'discard', 'save-partial'],
+    display: Object.freeze({ objectLabel: 'photo.jpg', createdAtMilliseconds }),
+  })
+}
+
 async function openTestCoordinator(
   operations: readonly RetainedReceiveOperation[],
   remoteUnavailable?: () => ReceiveBlockReason | null,
@@ -485,6 +508,111 @@ describe('resolveWorkspaceTaskLayout continuation precedence', () => {
     )
     expect(during.primaryTask).toBeNull()
     expect(during.collapseRemoteSaving).toBe(false)
+
+    await cleanup()
+  })
+
+  it('keeps an older complete local copy promoted offline even when a newer paused task offers save-partial', async () => {
+    const olderComplete = completeLocalOp(46, 1_000)
+    const newerPaused = pausedPartialZipOp(47, 2_000)
+    const online = resolveWorkspaceTaskLayout(workspaceSnapshot({
+      retained: { kind: 'available', pending: null, operations: [newerPaused, olderComplete] },
+    }))
+    expect(online.primaryTask).toBeNull()
+    expect(online.banner?.kind).toBe('continue')
+    expect(online.banner?.task.operationId).toBe(newerPaused.operationId)
+    expect(online.banner?.task.primaryAction?.id).toBe('continue')
+
+    const { coordinator, admission, cleanup } = await openTestCoordinator([newerPaused, olderComplete], () => 'reconnectContinue')
+    const offline = { kind: 'unavailable' as const, reason: 'recovery-exhausted' as const }
+
+    const before = resolveWorkspaceTaskLayout(
+      workspaceSnapshot({ connection: offline, retained: coordinator.getSnapshot() }, admission),
+    )
+    expect(before.primaryTask?.operationId).toBe(olderComplete.operationId)
+    expect(before.primaryTask?.primaryAction?.id).toBe('redownload')
+    expect(before.collapseRemoteSaving).toBe(true)
+    expect(before.banner).toBeNull()
+
+    const pausedTarget = coordinator.getSnapshot().operations.find(op => op.operationId === newerPaused.operationId)!
+    coordinator.perform(pausedTarget, 'save-partial')
+    const duringPartial = resolveWorkspaceTaskLayout(
+      workspaceSnapshot({ connection: offline, retained: coordinator.getSnapshot() }, admission),
+    )
+    expect(duringPartial.primaryTask?.operationId).toBe(olderComplete.operationId)
+    expect(duringPartial.collapseRemoteSaving).toBe(true)
+    expect(duringPartial.banner).toBeNull()
+
+    await cleanup()
+  })
+
+  it('does not surface a continue banner when only save-partial or maintenance actions are enabled', async () => {
+    const paused = pausedPartialZipOp(50, 2_000)
+    const { coordinator, admission, cleanup } = await openTestCoordinator([paused], () => 'reconnectContinue')
+    const offline = { kind: 'unavailable' as const, reason: 'recovery-exhausted' as const }
+
+    const snapshot = workspaceSnapshot({ connection: offline, retained: coordinator.getSnapshot() }, admission)
+    expect(snapshot.tasks[0]?.primaryAction?.id).toBe('save-partial')
+    const layout = resolveWorkspaceTaskLayout(snapshot)
+    expect(layout.primaryTask).toBeNull()
+    expect(layout.banner).toBeNull()
+
+    await cleanup()
+
+    const olderComplete = completeLocalOp(53, 1_000)
+    const maintenanceOnly = retainedOp({
+      operationId: identityText(54),
+      lifecycle: {
+        operationId: identityText(54),
+        receiveIntentDigest: identityText(55, 32),
+        generation: 4n,
+        kind: 'published',
+        receiptDigest: identityText(56, 32),
+        cleanupState: 'clean',
+      },
+      continuation: 'restoration-available',
+      actions: ['catch-up'],
+      display: Object.freeze({ objectLabel: 'photo.jpg', createdAtMilliseconds: 2_000 }),
+    })
+    const withOlder = resolveWorkspaceTaskLayout(workspaceSnapshot({
+      retained: { kind: 'available', pending: null, operations: [maintenanceOnly, olderComplete] },
+    }))
+    expect(withOlder.primaryTask?.operationId).toBe(olderComplete.operationId)
+    expect(withOlder.banner).toBeNull()
+
+    const alone = resolveWorkspaceTaskLayout(workspaceSnapshot({
+      retained: { kind: 'available', pending: null, operations: [maintenanceOnly] },
+    }))
+    expect(alone.primaryTask).toBeNull()
+    expect(alone.banner).toBeNull()
+  })
+
+  it('still lets a newer locally-continuable task supersede an older complete local copy offline', async () => {
+    const olderComplete = completeLocalOp(57, 1_000)
+    const newerLocalFinish = retainedOp({
+      operationId: identityText(58),
+      lifecycle: {
+        operationId: identityText(58),
+        receiveIntentDigest: identityText(59, 32),
+        generation: 3n,
+        kind: 'resumable-package',
+        sealedMaterializationDigest: identityText(60, 32),
+        tempCleanupProofDigest: identityText(61, 32),
+      },
+      continuation: 'resume-package',
+      actions: ['continue', 'discard'],
+      display: Object.freeze({ objectLabel: 'photo.jpg', createdAtMilliseconds: 2_000 }),
+    })
+    const { coordinator, admission, cleanup } = await openTestCoordinator([newerLocalFinish, olderComplete], () => 'endedContinue')
+
+    const layout = resolveWorkspaceTaskLayout(
+      workspaceSnapshot({ connection: { kind: 'ended', reason: 'share-stopped' }, retained: coordinator.getSnapshot() }, admission),
+    )
+    expect(layout.primaryTask).toBeNull()
+    expect(layout.collapseRemoteSaving).toBe(false)
+    expect(layout.banner?.kind).toBe('continue')
+    expect(layout.banner?.task.operationId).toBe(newerLocalFinish.operationId)
+    expect(layout.banner?.task.primaryAction?.id).toBe('continue')
 
     await cleanup()
   })
