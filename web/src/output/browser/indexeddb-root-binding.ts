@@ -7,11 +7,6 @@ import {
   type ReceiveIntent,
 } from '../../transfer/intent'
 import { sameGuaranteeFacts } from '../planning/guarantees'
-import type {
-  CompatibleNameOperationBootstrapV1,
-  CompatibleNameOperationHeaderV1,
-  CompatibleNamePairKind,
-} from '../file-system-access/compatible-name/model'
 import { TargetOwnershipUnknownError } from '../persistent-tree/errors'
 import {
   runPersistentOutputStage,
@@ -39,8 +34,6 @@ import { equalCanonicalBytes } from '../../transfer/encoding/canonical'
 
 export const FSA_OPERATION_HANDLE_PARENT = 1 as const
 export const FSA_OPERATION_HANDLE_DIRECTORY = 2 as const
-export const FSA_OPERATION_HANDLE_COMPATIBLE_NAME_SCRIPT = 3 as const
-export const FSA_OPERATION_HANDLE_COMPATIBLE_NAME_SIDECAR = 4 as const
 
 const FSA_PARENT_HANDLE_DOMAIN = 'windshare/fsa-parent-handle/v1'
 const FSA_DIRECTORY_HANDLE_DOMAIN = 'windshare/fsa-directory-handle/v1'
@@ -71,26 +64,10 @@ export type FSAOperationBindingRepository = Pick<
   'commitTransition' | 'readRecord' | 'readHandle'
 >
 
-export type FSACompatibleNamePairHandleRepository = Pick<
-  ReceiveOperationRepository,
-  'readHandle'
->
-
 export type FSAOwnedDirectoryBindingRepository = Pick<
   ReceiveOperationRepository,
   'readHandle'
 >
-
-/**
- * Rejected-root activation uses this separate port so the generic receive transition
- * never learns an FSA-only repair flag or permits the repair header to commit later.
- */
-export interface FSACompatibleNameBootstrapRepository {
-  commitFSACompatibleNameBootstrap(input: Readonly<{
-    transition: ReceiveOperationTransition
-    bootstrap: CompatibleNameOperationBootstrapV1
-  }>): Promise<void>
-}
 
 /**
  * Preparation is deliberately read-only so lifecycle and lease ownership can join
@@ -373,31 +350,6 @@ export async function readFSAOwnedDirectoryBinding(input: Readonly<{
   })
 }
 
-/** Reopen verifies the exact persisted pair handle instead of trusting its claimed physical name. */
-export async function readFSACompatibleNamePairHandle(input: Readonly<{
-  repository: FSACompatibleNamePairHandleRepository
-  header: CompatibleNameOperationHeaderV1
-  pairKind: CompatibleNamePairKind
-}>): Promise<FileSystemFileHandle> {
-  const identity = input.header.pair[input.pairKind]
-  let record: ReceiveOperationHandleRecord<FileSystemFileHandle> | undefined
-  try {
-    record = await input.repository.readHandle<FileSystemFileHandle>(identity.handleId)
-  } catch (cause) {
-    throw new TargetOwnershipUnknownError('parent-authority', input.header.operationId, { cause })
-  }
-  const expectedKind = input.pairKind === 'script'
-    ? FSA_OPERATION_HANDLE_COMPATIBLE_NAME_SCRIPT
-    : FSA_OPERATION_HANDLE_COMPATIBLE_NAME_SIDECAR
-  if (record === undefined || record.kind !== expectedKind ||
-      record.operationId !== input.header.operationId ||
-      record.authorityRef !== input.header.authorityRef ||
-      record.ownedObjectId !== identity.ownedObjectId || !isFileHandle(record.handle)) {
-    throw new TargetOwnershipUnknownError('parent-authority', input.header.operationId)
-  }
-  return record.handle
-}
-
 export function fsaParentHandleId(operationId: string, authorityRef: string): string {
   return `${FSA_PARENT_HANDLE_DOMAIN}/${operationId}/${authorityRef}`
 }
@@ -514,12 +466,6 @@ function requireDirectoryHandle(
     throw new TargetOwnershipUnknownError(stage, operationId)
   }
   return value as FileSystemDirectoryHandle
-}
-
-function isFileHandle(value: unknown): value is FileSystemFileHandle {
-  return typeof value === 'object' && value !== null && 'kind' in value &&
-    (value as { readonly kind?: unknown }).kind === 'file' && 'isSameEntry' in value &&
-    typeof (value as { readonly isSameEntry?: unknown }).isSameEntry === 'function'
 }
 
 async function sameEntry(

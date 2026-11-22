@@ -243,7 +243,7 @@ describe('stopped child obligation refresh integration', () => {
       successCount: 1n, failureCount: 1n, receiptDigest: f.policy.digest }
     const operation: RetainedReceiveOperation = { operationId: lifecycle.operationId,
       receiveIntentDigest: lifecycle.receiveIntentDigest, lifecycleGeneration: lifecycle.generation,
-      lifecycle, continuation: 'restoration-available', actions: [],
+      lifecycle, continuation: 'history-only', actions: [],
       browserDelivery: summarizeBrowserDeliveries(f.policy, [after]) }
     const snapshot = experienceSnapshot({ activeReceiveOperationId: null,
       output: { ...EMPTY_OUTPUT_PRESENTATION, lifecycle,

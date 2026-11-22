@@ -14,12 +14,11 @@ const FALLBACK_OPERATION_LABEL_LENGTH = 8
 export function presentTask(facts: TaskFacts, language: Language = 'en'): TaskPresentation {
   const t = receiverCopy[language].progress
   const copy = resolveTaskStage(facts, language)
-  const fidelityPending = facts.fidelity?.actionMode === 'catch-up-required'
   const actions: readonly TaskAction[] = facts.actions.map(action => action.disabledReason === null ? action :
     Object.freeze({ ...action, disabledReason: receiverCopy[language].admission[action.disabledReason] }))
   const usableActions = actions.filter(action => !action.destructive)
   const primaryAction = facts.execution.kind === 'local-finalization' ? null : preferredAction(usableActions, copy.stage)
-  const attention = copy.stage === 'needs-action' || copy.stage === 'ready-to-save' || fidelityPending ||
+  const attention = copy.stage === 'needs-action' || copy.stage === 'ready-to-save' ||
     facts.completeness === 'partial'
   const details = [...facts.details]
   const progress = presentTaskProgress(facts, language)
@@ -28,11 +27,9 @@ export function presentTask(facts: TaskFacts, language: Language = 'en'): TaskPr
   if (facts.lifecycle.contentWarning !== undefined) {
     details.unshift(...contentWarningDetails(facts.lifecycle.contentWarning, facts.lifecycle.kind === 'resumable-receive', language))
   } else if (facts.completeness === 'partial') details.unshift(t.partial)
-  if (facts.fidelity !== null) {
-    const count = facts.fidelity.replacementCount
-    details.push(receiverCopy[language].downloads.adjustedCount(count))
+  if (facts.safeRenamed !== null && facts.safeRenamed.count > 0) {
+    details.push(receiverCopy[language].downloads.adjustedCount(facts.safeRenamed.count))
     details.push(t.adjustedHint)
-    if (fidelityPending) details.push(t.setupBeforeRestore)
   }
   if (facts.lifecycle.kind === 'published' && facts.lifecycle.cleanupState === 'cleanup-pending') {
     details.push(t.pendingCleanup)
@@ -56,7 +53,7 @@ export function presentTask(facts: TaskFacts, language: Language = 'en'): TaskPr
     secondaryActions: Object.freeze(usableActions.filter(action => action !== primaryAction)),
     destructiveActions: Object.freeze(actions.filter(action => action.destructive)),
     details: Object.freeze(details),
-    fidelity: facts.fidelity,
+    safeRenamed: facts.safeRenamed,
     completeness: facts.completeness,
     publication: facts.publication,
     transition,
@@ -83,7 +80,7 @@ function taskTone(stage: TaskStage, attention: boolean, facts: TaskFacts): TaskP
 }
 
 function preferredAction(actions: readonly TaskAction[], taskStage: TaskStage): TaskAction | null {
-  let preferred = ['save-staged-files', 'cleanup-staging', 'continue', 'save', 'catch-up', 'redownload', 'save-partial']
+  let preferred = ['save-staged-files', 'cleanup-staging', 'continue', 'save', 'redownload', 'save-partial']
   if (taskStage === 'ready-to-save') preferred = ['save-staged-files', 'save', 'save-partial']
   if (taskStage === 'downloading' || taskStage === 'waiting') preferred = ['pause', 'continue']
   for (const id of preferred) {
@@ -103,8 +100,7 @@ function transitionFor(facts: TaskFacts, copy: StageCopy, attention: boolean): T
     stage: copy.stage, reason: copy.reason,
     completeness: facts.completeness, publication: facts.publication, attention,
     fingerprint: [facts.lifecycle.operationId, copy.stage, copy.reason, facts.completeness,
-      facts.publication, attention, facts.fidelity?.actionMode,
-      (facts.fidelity?.replacementCount ?? 0) > 0, actionFacts,
+      facts.publication, attention, (facts.safeRenamed?.count ?? 0) > 0, actionFacts,
       receiveElapsedMilliseconds(facts.lifecycle.timing)].join(':'),
   })
 }

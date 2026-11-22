@@ -315,8 +315,8 @@ export class TransferJobSettlement {
   ): TransferJobResult {
     const execution = this.#context.execution()
     const preparation = this.#context.preparation()
-    const repairSummary = execution?.planKind === 'direct-tree'
-      ? execution.repairSummary?.()
+    const safeRenamed = execution?.planKind === 'direct-tree'
+      ? execution.safeRenamedSummary?.()
       : undefined
     const recoverySummary = execution?.planKind === 'direct-tree'
       ? execution.recoverySummary?.()
@@ -331,7 +331,7 @@ export class TransferJobSettlement {
       ...(failureTrigger === undefined ? {} : { failureTrigger }),
       ...(execution === undefined ? {} : { outputDurability: execution.output.capabilities.durability }),
       ...(preparation === undefined ? {} : { preparation }),
-      ...(repairSummary === undefined ? {} : { repairSummary }),
+      ...(safeRenamed === undefined ? {} : { safeRenamed }),
       ...(recoverySummary === undefined ? {} : { recoverySummary }),
     })
   }

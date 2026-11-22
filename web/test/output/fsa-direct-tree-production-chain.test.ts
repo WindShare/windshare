@@ -72,7 +72,7 @@ const PERSISTENCE_EXPECTATIONS: readonly PersistenceExpectation[] = Object.freez
   }),
   Object.freeze({
     scenario: 'synthetic-root',
-    variant: 'compatible-name-restoration',
+    variant: 'safe-renamed-file',
     rootDirectoryId: identityText(2),
     filePath: Object.freeze(['blocked.txt']),
   }),
@@ -141,17 +141,14 @@ describe('FSA DirectTree production coordinate chain', () => {
       const reopenedFileLookups = observed.physicalLookups
         .filter(value => value.phase === 'reopened' && value.kind === 'file')
         .map(value => value.name)
-      if (variant === 'compatible-name-restoration') {
-        expect.soft(observed.compatibleNameMapping).toMatchObject({
-          logicalPath: filePath,
-          commitState: 'committed',
-        })
-        expect.soft(observed.compatibleNameMapping?.physicalComponent).not.toBe(filePath[0])
-        expect.soft(observed.taskRootPhysicalEntries).toContain(
-          observed.compatibleNameMapping!.physicalComponent,
-        )
+      if (variant === 'safe-renamed-file') {
+        expect.soft(observed.safeRenamedSummary?.count).toBe(1)
+        const renamed = observed.safeRenamedSummary?.sample[0]
+        expect.soft(renamed?.logicalPath).toEqual(filePath)
+        expect.soft(renamed?.physicalName).not.toBe(filePath[0])
+        expect.soft(observed.taskRootPhysicalEntries).toContain(renamed!.physicalName)
         expect.soft(observed.taskRootPhysicalEntries).not.toContain(filePath[0])
-        expect.soft(reopenedFileLookups).toContain(observed.compatibleNameMapping!.physicalComponent)
+        expect.soft(reopenedFileLookups).toContain(renamed!.physicalName)
       } else {
         expect.soft(observed.taskRootPhysicalEntries).toEqual(filePath)
         expect.soft(reopenedFileLookups).toContain(filePath[0])

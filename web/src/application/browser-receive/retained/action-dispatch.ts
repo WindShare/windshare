@@ -8,7 +8,7 @@ import type { RetainedReceiveAction, RetainedReceiveOperation } from '../../rece
 
 type RetainedActionAuthority = Pick<
   ReceiveOperationResumeAuthority<AuthorityOwnedReceiveOperationMutationResult>,
-  'forget' | 'discard' | 'cleanup' | 'catchUp' | 'resume'
+  'forget' | 'discard' | 'cleanup' | 'resume'
 >
 
 type RetainedAuthorityDispatch =
@@ -42,8 +42,6 @@ export async function dispatchRetainedAuthorityAction(
   if (action === 'delete' &&
       operation.continuation === 'retry-cleanup') {
     result = await authority.cleanup(reference, failures)
-  } else if (action === 'catch-up') {
-    result = await authority.catchUp(reference, failures)
   } else {
     const retainedFileRecovery = retainedFileRecoveryFor(operation, action)
     result = await authority.resume(reference, {

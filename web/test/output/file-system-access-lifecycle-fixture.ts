@@ -23,8 +23,6 @@ import {
 import {
   prepareFSAOperationBindingTransition,
   verifyFSAOperationBinding,
-  FSA_OPERATION_HANDLE_COMPATIBLE_NAME_SCRIPT,
-  FSA_OPERATION_HANDLE_COMPATIBLE_NAME_SIDECAR,
 } from '../../src/output/browser/indexeddb-root-binding'
 import {
   assembleNewFileSystemAccessOutput,
@@ -37,23 +35,6 @@ import { createFileSystemAccessSettlementAuthority } from '../../src/output/file
 import { createAutomaticCheckpointAdmissionAuthority } from '../../src/output/persistent-tree/automatic-checkpoint-admission'
 import { createPreservingWriterCapacityAuthority } from '../../src/output/persistent-tree/preserving-writer-capacity'
 import { memoryCheckpointFactory } from './fsa-memory-semantic-repository'
-import type {
-  CompatibleNameActivationLedger,
-  CompatibleNameRootRepairFactory,
-  CompatibleNameRootRepairPreparationOptions,
-} from '../../src/output/file-system-access/compatible-name/coordinator'
-import {
-  compatibleNameMappingV1,
-  compatibleNameOperationBootstrapV1,
-  compatibleNameOperationHeaderV1,
-  type CompatibleNameMappingV1,
-  type CompatibleNameOperationHeaderV1,
-  type CompatibleNamePendingTerminalOutcomeV1,
-} from '../../src/output/file-system-access/compatible-name/model'
-import { compatibleNameRepairSummary } from '../../src/transfer/lifecycle/name-repair'
-import {
-  type CompatibleNameRepairSummary,
-} from '../../src/transfer/lifecycle/name-repair'
 import {
   discardReopenedFileSystemAccessOutput,
   type ReopenedFileSystemAccessDiscardOperation,
@@ -64,7 +45,6 @@ import type {
 import type { OutputDiagnosticsPorts } from '../../src/output/diagnostics'
 import {
   RECEIVE_RECORD_LIFECYCLE_STATE,
-  receiveOperationHandleRecord,
   receiveOperationLeaseRecord,
   type PersistedReceiveRecord,
   type ReceiveOperationHandleRecord,
@@ -260,249 +240,7 @@ export function discardFreshFixture(
     operation,
     lockManager: fixture.locks, mutationIdentities: memoryFSAIdentities(fixture.locks),
     checkpointRepositoryFactory: fixture.checkpointFactory,
-    openCompatibleNameLedger: async () => new AbsentCompatibleNameLedger(),
   })
-}
-
-export function absentCompatibleNameLedgerFactory(): Promise<CompatibleNameActivationLedger> {
-  return Promise.resolve(new AbsentCompatibleNameLedger())
-}
-
-class AbsentCompatibleNameLedger implements CompatibleNameActivationLedger {
-  async readHeader(): Promise<undefined> { return undefined }
-  async loadOperation(): Promise<undefined> { return undefined }
-  async bootstrapOperation(): Promise<never> { throw new Error('unexpected compatible bootstrap') }
-  async claimMapping(): Promise<never> { throw new Error('unexpected compatible mapping') }
-  async recordPairOwnership(): Promise<never> { throw new Error('unexpected pair ownership') }
-  async recordCompatibleTargetCreated(): Promise<never> { throw new Error('unexpected target activation') }
-  async recordVerifiedDirectoryOwnership(): Promise<never> {
-    throw new Error('unexpected directory ownership')
-  }
-  async commitMapping(): Promise<never> { throw new Error('unexpected compatible commit') }
-  async scanCommittedMappings(): Promise<readonly never[]> { return Object.freeze([]) }
-  async persistRepairSummary(): Promise<never> { throw new Error('unexpected compatible summary') }
-  async persistPendingTerminalOutcome(): Promise<never> { throw new Error('unexpected terminal outcome') }
-  async readPendingTerminalOutcome(): Promise<undefined> { return undefined }
-  async clearPendingTerminalOutcome(): Promise<never> { throw new Error('unexpected terminal clear') }
-  async readRepairSummary(): Promise<undefined> { return undefined }
-  async removeVerifiedEmptyOperation(): Promise<never> { throw new Error('unexpected repair cleanup') }
-  close(): void {}
-}
-
-export class MemoryCompatibleNameLedger implements CompatibleNameActivationLedger {
-  header: CompatibleNameOperationHeaderV1 | undefined
-  readonly mappings = new Map<string, CompatibleNameMappingV1>()
-  closeCount = 0
-  #nextOrdinal = 1
-  readonly #repository: MemoryOperationRepository
-
-  constructor(repository: MemoryOperationRepository) {
-    this.#repository = repository
-  }
-
-  async readHeader(operationId: string): Promise<CompatibleNameOperationHeaderV1 | undefined> {
-    return this.header?.operationId === operationId ? this.header : undefined
-  }
-
-  async loadOperation(operationId: string) {
-    if (this.header?.operationId !== operationId) return undefined
-    return Object.freeze({
-      header: this.header,
-      mappings: Object.freeze([...this.mappings.values()]),
-    })
-  }
-
-  async bootstrapOperation(input: Parameters<
-    CompatibleNameActivationLedger['bootstrapOperation']
-  >[0]) {
-    const bootstrap = compatibleNameOperationBootstrapV1(input)
-    if (this.header !== undefined) throw new Error('memory compatible operation already exists')
-    this.header = bootstrap.header
-    this.mappings.set(bootstrap.initialMapping.id, bootstrap.initialMapping)
-    return (await this.loadOperation(bootstrap.header.operationId))!
-  }
-
-  async claimMapping(input: Parameters<CompatibleNameActivationLedger['claimMapping']>[0]) {
-    const mapping = compatibleNameMappingV1(input)
-    const existing = this.mappings.get(mapping.id)
-    if (existing !== undefined) return existing
-    this.mappings.set(mapping.id, mapping)
-    return mapping
-  }
-
-  async recordPairOwnership(input: Parameters<
-    CompatibleNameActivationLedger['recordPairOwnership']
-  >[0]) {
-    const header = this.#requireHeader(input.operationId)
-    const identity = header.pair[input.pairKind]
-    const kind = input.pairKind === 'script'
-      ? FSA_OPERATION_HANDLE_COMPATIBLE_NAME_SCRIPT
-      : FSA_OPERATION_HANDLE_COMPATIBLE_NAME_SIDECAR
-    await this.#repository.commitTransition({
-      operationId: input.operationId,
-      handles: [receiveOperationHandleRecord({
-        id: identity.handleId,
-        operationId: input.operationId,
-        kind,
-        authorityRef: header.authorityRef,
-        ownedObjectId: identity.ownedObjectId,
-        handle: input.handle,
-      })],
-    })
-    const pair = Object.freeze({
-      ...header.pair,
-      [input.pairKind]: Object.freeze({ ...identity, ownershipState: 'owned' as const }),
-    })
-    let activationState: CompatibleNameOperationHeaderV1['activationState'] = 'prepared'
-    if (pair.sidecar.ownershipState === 'owned') {
-      activationState = header.activationState === 'active' ? 'active' : 'report-ready'
-    }
-    this.header = compatibleNameOperationHeaderV1({ ...header, pair, activationState })
-    return this.header
-  }
-
-  async recordCompatibleTargetCreated(input: Parameters<
-    CompatibleNameActivationLedger['recordCompatibleTargetCreated']
-  >[0]) {
-    const header = this.#requireHeader(input.operationId)
-    this.#mapping(input.operationId, input.logicalPath, input.entryKind)
-    if (header.activationState === 'active') return header
-    this.header = compatibleNameOperationHeaderV1({
-      ...header,
-      activationState: 'active',
-      repairSummary: input.repairSummary,
-    })
-    return this.header
-  }
-
-  async recordVerifiedDirectoryOwnership(input: Parameters<
-    CompatibleNameActivationLedger['recordVerifiedDirectoryOwnership']
-  >[0]) {
-    const mapping = this.#mapping(input.operationId, input.logicalPath, input.entryKind)
-    const owned = compatibleNameMappingV1({
-      ...mapping,
-      ownershipState: 'owned',
-      ownedObjectId: input.ownedObjectId,
-    })
-    this.mappings.set(owned.id, owned)
-    return owned
-  }
-
-  async commitMapping(input: Parameters<CompatibleNameActivationLedger['commitMapping']>[0]) {
-    const mapping = this.#mapping(input.operationId, input.logicalPath, input.entryKind)
-    if (mapping.commitState === 'committed') return mapping
-    const committed = compatibleNameMappingV1({
-      ...mapping,
-      ownershipState: 'owned',
-      ownedObjectId: input.ownedObjectId,
-      commitState: 'committed',
-      commitOrdinal: this.#nextOrdinal++,
-    })
-    this.mappings.set(committed.id, committed)
-    this.header = compatibleNameOperationHeaderV1({
-      ...this.#requireHeader(input.operationId),
-      ...(this.header?.repairSummary === undefined
-        ? {}
-        : {
-            repairSummary: compatibleNameRepairSummary({
-              ...this.header.repairSummary,
-              committedCount: committed.commitOrdinal!,
-              logicalPathSample: this.header.repairSummary.logicalPathSample.length === 0
-                ? [committed.logicalPath]
-                : this.header.repairSummary.logicalPathSample,
-              sidecarSync: 'pending',
-            }),
-          }),
-    })
-    return committed
-  }
-
-  async scanCommittedMappings(operationId: string, afterOrdinal = 0) {
-    this.#requireHeader(operationId)
-    return Object.freeze([...this.mappings.values()]
-      .filter(mapping => (mapping.commitOrdinal ?? 0) > afterOrdinal)
-      .sort((left, right) => left.commitOrdinal! - right.commitOrdinal!))
-  }
-
-  async persistRepairSummary(
-    operationId: string,
-    summary: CompatibleNameRepairSummary,
-  ): Promise<CompatibleNameOperationHeaderV1> {
-    this.header = compatibleNameOperationHeaderV1({
-      ...this.#requireHeader(operationId),
-      repairSummary: summary,
-    })
-    return this.header
-  }
-
-  async persistPendingTerminalOutcome(input: {
-    operationId: string
-    outcome: CompatibleNamePendingTerminalOutcomeV1
-    repairSummary: CompatibleNameRepairSummary
-  }): Promise<CompatibleNameOperationHeaderV1> {
-    this.header = compatibleNameOperationHeaderV1({
-      ...this.#requireHeader(input.operationId),
-      pendingTerminalOutcome: input.outcome,
-      repairSummary: input.repairSummary,
-    })
-    return this.header
-  }
-
-  async readPendingTerminalOutcome(
-    operationId: string,
-  ): Promise<CompatibleNamePendingTerminalOutcomeV1 | undefined> {
-    return this.#requireHeader(operationId).pendingTerminalOutcome
-  }
-
-  async clearPendingTerminalOutcome(input: {
-    operationId: string
-    repairSummary: CompatibleNameRepairSummary
-  }): Promise<CompatibleNameOperationHeaderV1> {
-    const header = { ...this.#requireHeader(input.operationId), repairSummary: input.repairSummary }
-    delete header.pendingTerminalOutcome
-    this.header = compatibleNameOperationHeaderV1(header)
-    return this.header
-  }
-
-  async readRepairSummary(operationId: string): Promise<CompatibleNameRepairSummary | undefined> {
-    return this.#requireHeader(operationId).repairSummary
-  }
-
-  async removeVerifiedEmptyOperation(
-    expectedHeader: CompatibleNameOperationHeaderV1,
-  ): Promise<void> {
-    if (this.header === undefined) return
-    const committed = [...this.mappings.values()].filter(mapping => mapping.commitState === 'committed')
-    if (this.header.operationId !== expectedHeader.operationId || committed.length !== 0) {
-      throw new Error('memory compatible repair is not empty')
-    }
-    await this.#repository.commitTransition({
-      operationId: expectedHeader.operationId,
-      deleteHandleIds: [expectedHeader.pair.script.handleId, expectedHeader.pair.sidecar.handleId],
-    })
-    this.mappings.clear()
-    this.header = undefined
-  }
-
-  close(): void { this.closeCount += 1 }
-
-  #requireHeader(operationId: string): CompatibleNameOperationHeaderV1 {
-    if (this.header?.operationId !== operationId) throw new Error('memory compatible header is missing')
-    return this.header
-  }
-
-  #mapping(
-    operationId: string,
-    logicalPath: readonly string[],
-    entryKind: 'file' | 'directory',
-  ): CompatibleNameMappingV1 {
-    const mapping = [...this.mappings.values()].find(value =>
-      value.operationId === operationId && value.entryKind === entryKind &&
-      value.logicalPath.length === logicalPath.length &&
-      value.logicalPath.every((component, index) => component === logicalPath[index]))
-    if (mapping === undefined) throw new Error('memory compatible mapping is missing')
-    return mapping
-  }
 }
 
 export async function bindTask(input: Readonly<{
@@ -514,9 +252,6 @@ export async function bindTask(input: Readonly<{
   operationSeed: number
   selection?: SelectionSpec
   activate?: boolean
-  prepareCompatibleNameRootRepair?: CompatibleNameRootRepairFactory
-  compatibleNamePreparation?: CompatibleNameRootRepairPreparationOptions
-  openCompatibleNameLedger?: () => Promise<CompatibleNameActivationLedger>
   stageDiagnostics?: PersistentOutputStageDiagnostics
   diagnostics?: OutputDiagnosticsPorts
   maximumActiveWriters?: number
@@ -537,9 +272,6 @@ export async function bindTask(input: Readonly<{
     operationId: identity(input.operationSeed),
     reservationId: identity(input.operationSeed + 1),
     authorityRef: identity(input.operationSeed + 2, 32),
-    ...(input.prepareCompatibleNameRootRepair === undefined
-      ? {}
-      : { prepareCompatibleNameRootRepair: input.prepareCompatibleNameRootRepair }),
     ...(input.trace === undefined ? {} : { trace: input.trace }),
     ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
   })
@@ -565,27 +297,9 @@ export async function bindTask(input: Readonly<{
     operationRepository: input.repository,
     rootLease,
     checkpointRepositoryFactory: input.checkpointFactory,
-    ...(input.openCompatibleNameLedger === undefined
-      ? {}
-      : { openCompatibleNameLedger: input.openCompatibleNameLedger }),
-    ...(input.openCompatibleNameLedger === undefined
-      ? {}
-      : {
-          compatibleNamePreparation: input.compatibleNamePreparation ?? {
-            platform: 'windows',
-            templateProvider: {
-              select: () => Object.freeze({
-                id: 'windows-powershell-v1',
-                scriptFileExtension: '.ps1',
-                source: '# test restoration script\n',
-              }),
-            },
-            randomBits: () => 0,
-          },
-        }),
     ...(input.stageDiagnostics === undefined
       ? {}
-       : { stageDiagnostics: input.stageDiagnostics }),
+      : { stageDiagnostics: input.stageDiagnostics }),
     ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
     ...(input.trace === undefined ? {} : { trace: input.trace }),
   })

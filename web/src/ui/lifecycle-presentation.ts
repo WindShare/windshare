@@ -4,9 +4,6 @@ import { availableReceiveActions, receiveLifecycleCategory, newReceiveOperationK
 import type { LifecycleUserAction, PersistentWriterOpenPauseFact, ActiveReceiveControl, ReceiveSettlementWait, WorkspaceUsage } from '../application/receive/actions'
 import { artifactRequestedName } from '../output/model/artifact-name'
 import type {
-  CompatibleNameRepairSummary,
-} from '../transfer/lifecycle/name-repair'
-import type {
   RecoverySummary,
 } from '../transfer/lifecycle/recovery-summary'
 import {
@@ -17,10 +14,6 @@ import type {
   MaterializationPlan,
 } from '../transfer/intent'
 import { resumableFileSetDescription } from './resumable-file-set-presentation'
-import {
-  presentCompatibleNameRepair,
-  type CompatibleNameRepairPresentation,
-} from './compatible-name-repair-presentation'
 import { formatBytes } from './progress-presentation'
 
 export interface WorkspaceUsagePresentation {
@@ -63,11 +56,6 @@ export function presentNewReceiveOperation(input: Readonly<{
   return null
 }
 
-export { presentCompatibleNameRepair } from './compatible-name-repair-presentation'
-export { hasValidatedTerminalCompatibleNameRepair } from '../application/receive/repair'
-export type { CompatibleNameRepairPresentation, CompatibleNameRepairPresentationContext } from './compatible-name-repair-presentation'
-export type { CompatibleNameRepairActionMode } from '../application/receive/repair'
-
 export interface ReceiveLifecyclePresentation {
   readonly stateKind: ReceiveLifecycleState['kind']
   readonly category: 'active' | 'retained' | 'terminal'
@@ -76,7 +64,6 @@ export interface ReceiveLifecyclePresentation {
   readonly tone: 'neutral' | 'positive' | 'warning' | 'critical'
   readonly usage: WorkspaceUsagePresentation | null
   readonly actions: readonly LifecycleActionPresentation[]
-  readonly compatibleNameRepair: CompatibleNameRepairPresentation | null
   readonly writerOpenPause: PersistentWriterOpenPausePresentation | null
 }
 
@@ -93,20 +80,15 @@ export function presentReceiveLifecycle(input: Readonly<{
   workspaceUsage?: WorkspaceUsage | null
   activeControls?: readonly ActiveReceiveControl[]
   interruption?: ReceiveSettlementWait | null
-  repairSummary?: CompatibleNameRepairSummary | null
   recoverySummary?: RecoverySummary | null
   writerOpenPause?: PersistentWriterOpenPauseFact | null
   browserDelivery?: import('../output/model/browser-delivery').BrowserDeliverySummary | null
 }>, language: Language = 'en'): ReceiveLifecyclePresentation {
-  const compatibleNameRepair = input.repairSummary === undefined || input.repairSummary === null
-    ? null
-    : presentCompatibleNameRepair({ state: input.state, summary: input.repairSummary }, language)
   const copy = input.interruption === undefined || input.interruption === null
     ? describeLifecycle(
         input.state,
         input.artifact,
         input.plan,
-        compatibleNameRepair,
         input.recoverySummary ?? null, language,
       )
     : interruptionCopy(input.interruption, language)
@@ -120,7 +102,6 @@ export function presentReceiveLifecycle(input: Readonly<{
     tone: copy.tone,
     usage: workspaceUsagePresentation(input, language),
     actions,
-    compatibleNameRepair,
     writerOpenPause,
   })
 }
@@ -192,7 +173,6 @@ function describeLifecycle(
   state: ReceiveLifecycleState,
   artifact: ArtifactSpec,
   plan: MaterializationPlan,
-  compatibleNameRepair: CompatibleNameRepairPresentation | null,
   recoverySummary: RecoverySummary | null,
   language: Language,
 ): Readonly<{
@@ -201,8 +181,6 @@ function describeLifecycle(
   tone: ReceiveLifecyclePresentation['tone']
 }> {
   const t = receiverCopy[language].lifecycle
-  const override = compatibleNameLifecycleCopy(state, compatibleNameRepair, language)
-  if (override !== null) return override
   const name = browserArtifactName(artifact)
   switch (state.kind) {
     case 'intent-frozen':
@@ -278,40 +256,6 @@ function describeLifecycle(
     case 'needs-attention':
       return copy(t.needsAttention, needsAttentionDescription(state.reason, language), 'critical')
   }
-}
-
-function compatibleNameLifecycleCopy(
-  state: ReceiveLifecycleState,
-  repair: CompatibleNameRepairPresentation | null,
-  language: Language,
-): Readonly<{
-  title: string
-  description: string
-  tone: ReceiveLifecyclePresentation['tone']
-}> | null {
-  const t = receiverCopy[language].lifecycle
-  if (repair === null || (state.kind !== 'published' && state.kind !== 'partial-directory')) {
-    return null
-  }
-  if (repair.actionMode !== 'routine-restoration') {
-    return copy(
-      t.repairNeeded,
-      t.repairNeededHint,
-      'warning',
-    )
-  }
-  if (state.kind === 'published') {
-    return copy(
-      t.compatibleComplete,
-      t.compatibleCompleteHint,
-      'positive',
-    )
-  }
-  return copy(
-    t.compatiblePartial,
-    t.partialCompatible(partialDirectoryDescription(state, language)),
-    'warning',
-  )
 }
 
 function resumableReceiveCopy(

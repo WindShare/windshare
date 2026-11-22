@@ -51,13 +51,12 @@ import type { FSASemanticOutputRepository } from '../../src/output/file-system-a
 import { createFileSystemAccessSettlementAuthority } from '../../src/output/file-system-access/settlement'
 import { RECEIVE_RECORD_RECEIPT } from '../../src/output/workspace/records'
 import type { ReceiveLifecycleState } from '../../src/transfer/lifecycle/state'
+import type { SafeRenamedSummary } from '../../src/transfer/lifecycle/safe-names'
 import {
   MemoryDirectory,
   MemoryFile,
-  MemoryCompatibleNameLedger,
   MemoryLockManager,
   MemoryOperationRepository,
-  absentCompatibleNameLedgerFactory,
   bindTask,
   memoryCheckpointFactory,
   resumeReceiving,
@@ -81,7 +80,7 @@ export type FSAProductionChainScenarioKind =
 export type FSAProductionPersistenceVariant =
   | 'pause-resume'
   | 'collision-reserved-root'
-  | 'compatible-name-restoration'
+  | 'safe-renamed-file'
 
 type ProductionPhase = 'initial' | 'reopened'
 
@@ -151,11 +150,7 @@ export interface FSAProductionPersistenceObservation {
   readonly physicalLookups: readonly ObservedPhysicalLookup[]
   readonly parentPhysicalEntries: readonly string[]
   readonly taskRootPhysicalEntries: readonly string[]
-  readonly compatibleNameMapping?: Readonly<{
-    readonly logicalPath: readonly string[]
-    readonly physicalComponent: string
-    readonly commitState: string
-  }>
+  readonly safeRenamedSummary?: SafeRenamedSummary
 }
 
 interface ProductionScenario {
@@ -213,9 +208,9 @@ const TEST_OUTPUT_WRITE_BUDGET_BYTES = 1_024n
 const TEST_CHECKPOINT_TRIGGER_BYTES = 1_024n
 const PERSISTENCE_PAUSE_RESUME_ORDINAL = 10
 const PERSISTENCE_COLLISION_ORDINAL = 20
-const PERSISTENCE_COMPATIBLE_NAME_ORDINAL = 30
+const PERSISTENCE_SAFE_RENAME_ORDINAL = 30
 export const FSA_PRODUCTION_PARTIAL_FILE_BYTES = 2n
-const COMPATIBLE_NAME_LOGICAL_FILE = 'blocked.txt'
+const SAFE_RENAME_LOGICAL_FILE = 'blocked.txt'
 
 export async function runFSAProductionChain(
   scenarioKind: FSAProductionChainScenarioKind,
@@ -241,7 +236,6 @@ export async function runFSAProductionChain(
       syntheticRoot: identityText(DESCRIPTOR_SYNTHETIC_ROOT_SEED),
       rules: { mode: 'node-id', defaultSelected: true, rules: [] },
     }),
-    openCompatibleNameLedger: absentCompatibleNameLedgerFactory,
     ...(options.diagnostics === undefined ? {} : { diagnostics: options.diagnostics }),
     ...(options.maximumActiveNativeWriters === undefined
       ? {}
@@ -320,7 +314,7 @@ export async function runFSAProductionPersistenceChain(
 ): Promise<FSAProductionPersistenceObservation> {
   const scenario = await productionScenario(
     scenarioKind,
-    variant === 'compatible-name-restoration' ? COMPATIBLE_NAME_LOGICAL_FILE : undefined,
+    variant === 'safe-renamed-file' ? SAFE_RENAME_LOGICAL_FILE : undefined,
   )
   const parent = new MemoryDirectory(`downloads-${scenarioKind}-${variant}`)
   if (variant === 'collision-reserved-root') {
@@ -338,12 +332,6 @@ export async function runFSAProductionPersistenceChain(
     memoryCheckpointFactory(),
     checkpointRecorder,
   )
-  const compatibleNames = variant === 'compatible-name-restoration'
-    ? new MemoryCompatibleNameLedger(repository)
-    : undefined
-  const openCompatibleNameLedger = compatibleNames === undefined
-    ? absentCompatibleNameLedgerFactory
-    : async () => compatibleNames
   const ordinal = scenarioOrdinal(scenarioKind) + persistenceVariantOrdinal(variant)
   const session = await bindTask({
     parent,
@@ -357,7 +345,6 @@ export async function runFSAProductionPersistenceChain(
       syntheticRoot: identityText(DESCRIPTOR_SYNTHETIC_ROOT_SEED),
       rules: { mode: 'node-id', defaultSelected: true, rules: [] },
     }),
-    openCompatibleNameLedger,
   })
   const root = await parent.getDirectoryHandle(
     session.reservation.physicalName,
@@ -366,9 +353,9 @@ export async function runFSAProductionPersistenceChain(
   const physicalLookups: ObservedPhysicalLookup[] = []
   root.onEntryLookup = lookup => {
     physicalLookups.push(Object.freeze({ phase: physicalLookupPhase, ...lookup }))
-    if (variant === 'compatible-name-restoration' && lookup.kind === 'file' &&
-        lookup.name === COMPATIBLE_NAME_LOGICAL_FILE && !lookup.create) {
-      throw new TypeError('simulated native compatible-name refusal')
+    if (variant === 'safe-renamed-file' && lookup.kind === 'file' &&
+        lookup.name === SAFE_RENAME_LOGICAL_FILE && !lookup.create) {
+      throw new TypeError('simulated native path-component refusal')
     }
   }
 
@@ -430,10 +417,6 @@ export async function runFSAProductionPersistenceChain(
     operationRepository: repository,
     lockManager: locks, mutationIdentities: memoryFSAIdentities(locks),
     checkpointRepositoryFactory: checkpointFactory,
-    openCompatibleNameLedger,
-    ...(compatibleNames === undefined ? {} : {
-      compatibleNamePreparation: compatibleNamePreparation(),
-    }),
   })
   const reopenedAdmissionRecorder: AdmissionRecorder = { attempts: 0, admitted: [] }
   const reopenedFileRecorder: FileCoordinateRecorder = {
@@ -488,9 +471,7 @@ export async function runFSAProductionPersistenceChain(
     repository,
     lifecycle: reopenedResult.lifecycle,
   })
-  const compatibleNameMapping = compatibleNames === undefined
-    ? undefined
-    : [...compatibleNames.mappings.values()].find(mapping => mapping.entryKind === 'file')
+  const safeRenamedSummary = reopened.safeRenamedSummary()
 
   return Object.freeze({
     scenario: scenarioKind,
@@ -523,13 +504,7 @@ export async function runFSAProductionPersistenceChain(
     physicalLookups: Object.freeze([...physicalLookups]),
     parentPhysicalEntries: Object.freeze(await physicalEntries(parent)),
     taskRootPhysicalEntries: Object.freeze(await physicalEntries(root)),
-    ...(compatibleNameMapping === undefined ? {} : {
-      compatibleNameMapping: Object.freeze({
-        logicalPath: Object.freeze([...compatibleNameMapping.logicalPath]),
-        physicalComponent: compatibleNameMapping.physicalComponent,
-        commitState: compatibleNameMapping.commitState,
-      }),
-    }),
+    ...(safeRenamedSummary === undefined ? {} : { safeRenamedSummary }),
   })
 }
 
@@ -581,8 +556,7 @@ async function productionPlanAuthority(input: Readonly<{
               createAutomaticCheckpointAdmissionAuthority({ identity: checkpointIdentity }),
             preservingWriterCapacity:
               createPreservingWriterCapacityAuthority({ identity: checkpointIdentity }),
-            namespaceClaims: input.session,
-            repairSummary: () => input.session.repairSummary(),
+            safeRenamedSummary: () => input.session.safeRenamedSummary(),
             outputIdentity: outputSessionIdentity({
               backend: 'fsa-production-chain-test',
               outputSessionId: input.outputSessionId,
@@ -1026,20 +1000,6 @@ function resultRootName(artifact: DirectoryTreeArtifact): string {
   }
 }
 
-function compatibleNamePreparation() {
-  return Object.freeze({
-    platform: 'windows' as const,
-    templateProvider: Object.freeze({
-      select: () => Object.freeze({
-        id: 'windows-powershell-v1',
-        scriptFileExtension: '.ps1',
-        source: '# test restoration script\n',
-      }),
-    }),
-    randomBits: () => 0,
-  })
-}
-
 function catalogWithSiblingAuthority(
   directories: readonly CatalogDirectoryFixture[],
 ): CatalogClient {
@@ -1147,7 +1107,7 @@ function persistenceVariantOrdinal(variant: FSAProductionPersistenceVariant): nu
   switch (variant) {
     case 'pause-resume': return PERSISTENCE_PAUSE_RESUME_ORDINAL
     case 'collision-reserved-root': return PERSISTENCE_COLLISION_ORDINAL
-    case 'compatible-name-restoration': return PERSISTENCE_COMPATIBLE_NAME_ORDINAL
+    case 'safe-renamed-file': return PERSISTENCE_SAFE_RENAME_ORDINAL
   }
 }
 

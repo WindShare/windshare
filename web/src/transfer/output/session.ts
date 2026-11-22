@@ -5,9 +5,7 @@ import type {
 } from '../preparation/generation'
 import type { PreparationFileEntry, PreparationManifestEntry } from '../preparation'
 import type { ReceiveLifecycleState, RecoverySelectionFacts } from '../lifecycle/state'
-import type {
-  CompatibleNameRepairSummary,
-} from '../lifecycle/name-repair'
+import type { SafeRenamedSummary } from '../lifecycle/safe-names'
 import type {
   RecoverySummary,
 } from '../lifecycle/recovery-summary'
@@ -39,7 +37,6 @@ import type {
   SuccessfulTransferWorkerSettlement,
   TransferWorkerSettlement,
 } from '../outcome'
-import type { AuthenticatedLogicalSiblingMembership } from '../job/contract'
 import {
   snapshotLogicalArtifactPath,
   snapshotSourceAuthenticationPath,
@@ -60,8 +57,6 @@ export interface DirectoryMaterializationRequest {
   readonly directory: MaterializationDirectory
   readonly sourceAuthenticationPath: SourceAuthenticationPath
   readonly logicalArtifactPath: LogicalArtifactPath
-  /** Lazy authority; carrying it must not itself query catalog page storage. */
-  readonly logicalSiblingMembership?: AuthenticatedLogicalSiblingMembership
 }
 
 /** Incremental directory authority is exclusive to native/tree materialization. */
@@ -116,7 +111,7 @@ export interface DirectTreeExecution extends PlanExecutionBase<DirectTreePlan> {
   readonly planKind: 'direct-tree'
   readonly directories: IncrementalDirectoryOutput
   readonly performance?: PerformanceSummaryObservations
-  readonly repairSummary?: () => CompatibleNameRepairSummary | undefined
+  readonly safeRenamedSummary?: () => SafeRenamedSummary | undefined
   readonly recoverySummary?: () => RecoverySummary | undefined
   readonly terminalSettlementInitiated?: () => boolean
   beginTerminal(kind: 'pause' | 'stop' | 'settle'): void
@@ -274,33 +269,10 @@ export function snapshotDirectoryMaterializationRequest(
   request: DirectoryMaterializationRequest,
 ): DirectoryMaterializationRequest {
   const directory = snapshotMaterializationDirectory(request.directory)
-  const logicalSiblingMembership = request.logicalSiblingMembership === undefined
-    ? undefined
-    : snapshotLogicalSiblingMembership(request.logicalSiblingMembership, directory)
   return Object.freeze({
     directory,
     sourceAuthenticationPath: snapshotSourceAuthenticationPath(request.sourceAuthenticationPath),
     logicalArtifactPath: snapshotLogicalArtifactPath(request.logicalArtifactPath),
-    ...(logicalSiblingMembership === undefined ? {} : { logicalSiblingMembership }),
-  })
-}
-
-function snapshotLogicalSiblingMembership(
-  membership: AuthenticatedLogicalSiblingMembership,
-  source: MaterializationDirectory,
-): AuthenticatedLogicalSiblingMembership {
-  if (membership.directoryId !== source.directoryId || membership.generation !== source.generation) {
-    throw new OutputSessionBindingError(
-      'logical-sibling membership does not match the admitted directory generation',
-    )
-  }
-  if (typeof membership.hasCommittedName !== 'function') {
-    throw new OutputSessionBindingError('logical-sibling membership has no committed-name authority')
-  }
-  return Object.freeze({
-    directoryId: source.directoryId,
-    generation: source.generation,
-    hasCommittedName: (candidate: string) => membership.hasCommittedName(candidate),
   })
 }
 

@@ -5,17 +5,14 @@ import { type ArtifactChoice, type OfferedArtifactChoice } from '../../output/mo
 import { type ArtifactSizeProjection } from '../../output/model/artifacts/projections'
 import { type ArtifactOffers } from '../../output/model/artifacts/offers'
 import { type ResolvedArtifactAction } from '../../output/planning/contracts'
-import { compatibleNameRepairSummary } from '../../transfer/lifecycle/name-repair'
 import {
-  type CompatibleNameRepairSummary,
-} from '../../transfer/lifecycle/name-repair'
+  safeRenamedSummary,
+  type SafeRenamedSummary,
+} from '../../transfer/lifecycle/safe-names'
 import type {
   RecoverySummary,
 } from '../../transfer/lifecycle/recovery-summary'
-import {
-  isTerminalLifecycleState,
-  type ReceiveLifecycleState,
-} from '../../output/workspace'
+import type { ReceiveLifecycleState } from '../../output/workspace'
 import type {
   ArtifactSpec,
   MaterializationPlan,
@@ -44,7 +41,7 @@ export interface ReceiveRuntimeSnapshot {
   readonly receiveIntent: ReceiveIntent | null
   readonly plan: MaterializationPlan | null
   readonly lifecycle: ReceiveLifecycleState | null
-  readonly repairSummary: CompatibleNameRepairSummary | null
+  readonly safeRenamed: SafeRenamedSummary | null
   readonly recoverySummary: RecoverySummary | null
   readonly writerOpenPause: PersistentWriterOpenPauseFact | null
   readonly workspaceUsage: WorkspaceUsage | null
@@ -66,7 +63,7 @@ export const EMPTY_RECEIVE_RUNTIME: ReceiveRuntimeSnapshot = Object.freeze({
   receiveIntent: null,
   plan: null,
   lifecycle: null,
-  repairSummary: null,
+  safeRenamed: null,
   recoverySummary: null,
   writerOpenPause: null,
   workspaceUsage: null,
@@ -77,7 +74,7 @@ export const EMPTY_RECEIVE_RUNTIME: ReceiveRuntimeSnapshot = Object.freeze({
 
 export type TransferResultProjection = Pick<
   TransferJobResult,
-  'worker' | 'intent' | 'transferJobId' | 'lifecycle' | 'repairSummary' | 'recoverySummary' |
+  'worker' | 'intent' | 'transferJobId' | 'lifecycle' | 'safeRenamed' | 'recoverySummary' |
     'abortReason' | 'measure'
 >
 
@@ -174,7 +171,6 @@ export class ReceiveRuntimeState {
     lifecycle?: ReceiveLifecycleState,
     workspaceUsage?: WorkspaceUsage | null,
     activeControls: readonly ActiveReceiveControl[] = Object.freeze([]),
-    repairSummary?: CompatibleNameRepairSummary,
   ): boolean {
     return this.adoptReceiveIntentAtomically(
       choice,
@@ -183,7 +179,6 @@ export class ReceiveRuntimeState {
       lifecycle,
       workspaceUsage,
       activeControls,
-      repairSummary,
     )
   }
 
@@ -194,7 +189,6 @@ export class ReceiveRuntimeState {
     lifecycle?: ReceiveLifecycleState,
     workspaceUsage?: WorkspaceUsage | null,
     activeControls: readonly ActiveReceiveControl[] = Object.freeze([]),
-    repairSummary?: CompatibleNameRepairSummary,
   ): boolean {
     const activation = this.#snapshot.activation
     if (activation.kind === 'inactive' ||
@@ -213,7 +207,7 @@ export class ReceiveRuntimeState {
       transferResult: null,
       plan: intent.plan,
       browserFolderProgress: null,
-      repairSummary: snapshotCompatibleNameRepair(repairSummary),
+      safeRenamed: null,
       recoverySummary: null,
       writerOpenPause: null,
       activeControls: Object.freeze([...activeControls]),
@@ -228,7 +222,6 @@ export class ReceiveRuntimeState {
     lifecycle: ReceiveLifecycleState,
     workspaceUsage?: WorkspaceUsage | null,
     activeControls: readonly ActiveReceiveControl[] = Object.freeze([]),
-    repairSummary?: CompatibleNameRepairSummary,
   ): void {
     this.adoptRetainedReceiveIntentAtomically(
       intent,
@@ -236,7 +229,6 @@ export class ReceiveRuntimeState {
       () => undefined,
       workspaceUsage,
       activeControls,
-      repairSummary,
     )
   }
 
@@ -246,7 +238,6 @@ export class ReceiveRuntimeState {
     commitOwnership: () => void,
     workspaceUsage?: WorkspaceUsage | null,
     activeControls: readonly ActiveReceiveControl[] = Object.freeze([]),
-    repairSummary?: CompatibleNameRepairSummary,
   ): void {
     if (lifecycle.operationId !== intent.operationId ||
         lifecycle.receiveIntentDigest !== intent.digest) {
@@ -263,7 +254,7 @@ export class ReceiveRuntimeState {
       transferResult: null,
       plan: intent.plan,
       browserFolderProgress: null,
-      repairSummary: snapshotCompatibleNameRepair(repairSummary),
+      safeRenamed: null,
       recoverySummary: null,
       writerOpenPause: null,
       activeControls: Object.freeze([...activeControls]),
@@ -290,7 +281,7 @@ export class ReceiveRuntimeState {
     state: ReceiveLifecycleState,
     workspaceUsage?: WorkspaceUsage | null,
     activeControls: readonly ActiveReceiveControl[] = Object.freeze([]),
-    repairSummary?: CompatibleNameRepairSummary | null,
+    safeRenamed?: SafeRenamedSummary | null,
     recoverySummary?: RecoverySummary | null,
   ): boolean {
     const intent = this.#snapshot.receiveIntent
@@ -301,10 +292,7 @@ export class ReceiveRuntimeState {
         (state.generation === current.generation && !sameReceiveLifecycleState(state, current)))) return false
     this.#publishLifecycleSnapshot({
       ...this.#snapshot,
-      repairSummary: nextCompatibleNameRepair(
-        this.#snapshot.repairSummary,
-        repairSummary,
-      ),
+      safeRenamed: nextSafeRenamed(this.#snapshot.safeRenamed, safeRenamed),
       // Recovery costs authenticate one exact stable generation and cannot flow
       // through a later lifecycle observation without a new checkpoint snapshot.
       recoverySummary: recoverySummary ?? null,
@@ -349,19 +337,6 @@ export class ReceiveRuntimeState {
     return true
   }
 
-  updateRepairSummary(
-    operationId: string,
-    summary: CompatibleNameRepairSummary,
-  ): boolean {
-    const intent = this.#snapshot.receiveIntent
-    if (intent === null || intent.operationId !== operationId) return false
-    this.#publishLifecycleSnapshot({
-      ...this.#snapshot,
-      repairSummary: nextCompatibleNameRepair(this.#snapshot.repairSummary, summary),
-    }, this.#snapshot.lifecycle, this.#snapshot.workspaceUsage)
-    return true
-  }
-
   adoptTransferResult(result: TransferResultProjection): boolean {
     const intent = this.#snapshot.receiveIntent
     if (intent === null || result.intent.operationId !== intent.operationId ||
@@ -372,20 +347,14 @@ export class ReceiveRuntimeState {
     if (currentLifecycle !== null && result.lifecycle.generation < currentLifecycle.generation) {
       return false
     }
-    // An absent terminal summary is authoritative only after the output layer has
-    // verified and removed an empty repair pair. Carrying the earlier live notice
-    // would falsely qualify an ordinary terminal result.
-    const terminalRepairSummary = result.repairSummary ??
-      (isTerminalLifecycleState(result.lifecycle) ? null : undefined)
-    const repairSummary = nextCompatibleNameRepair(
-      this.#snapshot.repairSummary,
-      terminalRepairSummary,
-    )
+    const safeRenamed = result.safeRenamed === undefined
+      ? null
+      : safeRenamedSummary(result.safeRenamed)
     const recoverySummary = result.recoverySummary ?? null
     const writerOpenPause = persistentWriterOpenPauseFact(result.abortReason)
     const snapshot = this.#buildLifecycleSnapshot({
       ...this.#snapshot,
-      repairSummary,
+      safeRenamed,
       recoverySummary,
       writerOpenPause,
       receiveInterruption: null,
@@ -540,63 +509,12 @@ function findOfferedChoice(
     sameArtifactChoiceSemantics(candidate.choice, choice)) ?? null
 }
 
-function snapshotCompatibleNameRepair(
-  summary: CompatibleNameRepairSummary | undefined,
-): CompatibleNameRepairSummary | null {
-  return summary === undefined ? null : compatibleNameRepairSummary(summary)
-}
-
-function nextCompatibleNameRepair(
-  current: CompatibleNameRepairSummary | null,
-  next: CompatibleNameRepairSummary | null | undefined,
-): CompatibleNameRepairSummary | null {
+function nextSafeRenamed(
+  current: SafeRenamedSummary | null,
+  next: SafeRenamedSummary | null | undefined,
+): SafeRenamedSummary | null {
   if (next === undefined) return current
-  if (next === null) return null
-  const snapshot = compatibleNameRepairSummary(next)
-  if (current !== null) assertCompatibleNameRepairProgression(current, snapshot)
-  return snapshot
-}
-
-function assertCompatibleNameRepairProgression(
-  current: CompatibleNameRepairSummary,
-  next: CompatibleNameRepairSummary,
-): void {
-  if (next.committedCount < current.committedCount) {
-    throw new TypeError('compatible-name repair count cannot move backward')
-  }
-  if (next.placement !== current.placement ||
-      next.pairDisplayNames.sidecar !== current.pairDisplayNames.sidecar) {
-    throw new TypeError('compatible-name restoration identity cannot change')
-  }
-  for (let index = 0; index < current.logicalPathSample.length; index += 1) {
-    if (!sameLogicalPath(current.logicalPathSample[index], next.logicalPathSample[index])) {
-      throw new TypeError('compatible-name logical path sample cannot be rewritten')
-    }
-  }
-  const currentFooter = current.latestObservedFooter
-  const nextFooter = next.latestObservedFooter
-  if (currentFooter === undefined) return
-  if (nextFooter === undefined || nextFooter.committedCount < currentFooter.committedCount) {
-    throw new TypeError('compatible-name sidecar checkpoint cannot move backward')
-  }
-  if (currentFooter.state !== 'active' &&
-      (nextFooter.state !== currentFooter.state ||
-       nextFooter.committedCount !== currentFooter.committedCount ||
-       next.committedCount !== current.committedCount ||
-       next.logicalPathSample.length !== current.logicalPathSample.length)) {
-    throw new TypeError('compatible-name terminal sidecar checkpoint is immutable')
-  }
-  if (current.terminalSettlement === 'complete' && next.terminalSettlement !== 'complete') {
-    throw new TypeError('completed compatible-name catch-up cannot become pending')
-  }
-}
-
-function sameLogicalPath(
-  first: readonly string[] | undefined,
-  second: readonly string[] | undefined,
-): boolean {
-  return first !== undefined && second !== undefined && first.length === second.length &&
-    first.every((component, index) => component === second[index])
+  return next === null ? null : safeRenamedSummary(next)
 }
 
 function resolvedActionFromActivation(

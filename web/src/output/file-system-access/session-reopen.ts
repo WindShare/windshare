@@ -1,7 +1,6 @@
 import { validateReceiveIntent, type ReceiveIntent } from '../../transfer/intent'
 import { recordOutputException, type OutputDiagnosticsPorts } from '../diagnostics'
 import { BrowserFileSystemTree } from '../browser/filesystem-tree'
-import { IndexedDbCompatibleNameLedger } from '../browser/indexeddb-compatible-name-ledger'
 import {
   verifyFSAOperationBinding,
   type FSAOperationBindingRepository,
@@ -21,26 +20,12 @@ import {
 } from '../persistent-tree/stage-diagnostics'
 import {
   openFSAFileCheckpointRepository,
-  scanAllFSAFileCheckpoints,
   type FSAFileCheckpointRepository,
   type FSAFileCheckpointRepositoryFactory,
   type FSASemanticOutputRepository,
 } from './checkpoint-repository'
-import { fileCheckpointIsFinalized } from '../persistence/checkpoint'
-import { retireFSAMaterializationRecoveryMetadata } from './recovery-metadata-retirement'
+import { SafeNameRegistry } from './safe-name'
 import {
-  CompatibleNamePathAuthority,
-  type CompatibleNameActivationLedger,
-  type CompatibleNameRootRepairPreparationOptions,
-} from './compatible-name/coordinator'
-import type {
-  CompatibleNamePendingTerminalOutcomeV1,
-} from './compatible-name/model'
-import type {
-  CompatibleNameRepairSummary,
-} from '../../transfer/lifecycle/name-repair'
-import {
-  defaultCompatibleNamePreparation,
   emitFSAOutputTrace,
   needsAttention,
   outputTrace,
@@ -58,33 +43,9 @@ export interface ReopenFileSystemAccessOutputOptions {
   readonly mutationIdentities?: FSAHandleIdentityResolver
   readonly checkpointRepositoryFactory?: FSAFileCheckpointRepositoryFactory
   readonly databaseName?: string
-  readonly openCompatibleNameLedger?: () => Promise<CompatibleNameActivationLedger>
-  readonly compatibleNamePreparation?: CompatibleNameRootRepairPreparationOptions
   readonly diagnostics?: OutputDiagnosticsPorts
   readonly stageDiagnostics?: PersistentOutputStageDiagnostics
   readonly trace?: FSAOutputTrace
-}
-
-export interface OpenFileSystemAccessCompatibleNameCatchUpOptions {
-  readonly intent: ReceiveIntent
-  readonly operationRepository: FSAOperationBindingRepository
-  readonly lockManager?: BrowserLockManagerRuntime
-  readonly mutationIdentities?: FSAHandleIdentityResolver
-  readonly checkpointRepositoryFactory?: FSAFileCheckpointRepositoryFactory
-  readonly databaseName?: string
-  readonly openCompatibleNameLedger?: () => Promise<CompatibleNameActivationLedger>
-  readonly compatibleNamePreparation?: CompatibleNameRootRepairPreparationOptions
-}
-
-/** Local-only authority: no catalog, revision, content, block, or sender capability is accepted. */
-export interface FileSystemAccessCompatibleNameCatchUpSession {
-  readonly pendingOutcome: CompatibleNamePendingTerminalOutcomeV1 | undefined
-  synchronizeActiveProjector(): Promise<CompatibleNameRepairSummary>
-  drainTerminalProjector(): Promise<CompatibleNameRepairSummary>
-  clearPendingOutcome(): Promise<void>
-  retireRecoveryMetadata(): Promise<void>
-  runExclusive<T>(operation: () => Promise<T>): Promise<T>
-  close(): Promise<void>
 }
 
 export async function reopenFileSystemAccessOutput(
@@ -117,7 +78,6 @@ export async function reopenFileSystemAccessOutput(
   }
   const rootLease = await acquireReopenRootLease(firstBinding.parent, options)
   let checkpoints: FSASemanticOutputRepository | undefined
-  let compatibleNames: CompatibleNamePathAuthority | undefined
   let materializationOpening = false
   try {
     const binding = await verifyFSAOperationBinding({
@@ -128,21 +88,14 @@ export async function reopenFileSystemAccessOutput(
         ? {}
         : { stageScope: stageAuthority.bindingScope() }),
     })
-    compatibleNames = await CompatibleNamePathAuthority.openForReopen({
-      binding,
-      mutations: rootLease.authority,
-      pairHandles: options.operationRepository,
-      openLedger: options.openCompatibleNameLedger ??
-        (() => IndexedDbCompatibleNameLedger.open(options.databaseName)),
-      preparation: options.compatibleNamePreparation ?? defaultCompatibleNamePreparation(),
-    })
+    const safeNames = new SafeNameRegistry(binding.reservation)
     checkpoints = await openFSAFileCheckpointRepository(options, intent, binding.reservation)
     const tree = new BrowserFileSystemTree({
       binding,
       operationRepository: options.operationRepository,
       fileHandles: checkpoints,
       mutations: rootLease.authority,
-      compatibleNames,
+      safeNames,
       ...(stageAuthority === undefined ? {} : { stageAuthority }),
     })
     materializationOpening = true
@@ -157,7 +110,6 @@ export async function reopenFileSystemAccessOutput(
       ...(stageAuthority === undefined ? {} : { stageAuthority }),
       ...(options.trace === undefined ? {} : { trace: options.trace }),
     })
-    await reconcileCommittedFileMappings(checkpoints, compatibleNames)
     emitFSAOutputTrace(options.trace, Object.freeze({
       name: 'receive.reservation.reopened',
       operation_id: intent.operationId,
@@ -174,7 +126,7 @@ export async function reopenFileSystemAccessOutput(
       operationRepository: options.operationRepository,
       checkpoints,
       rootLease,
-      compatibleNames,
+      safeNames,
       ...(stageAuthority === undefined ? {} : { stageAuthority }),
       ...(options.diagnostics === undefined
         ? {}
@@ -184,7 +136,6 @@ export async function reopenFileSystemAccessOutput(
     reportFSAReopenFailure(options, intent.operationId, error, materializationOpening)
     const cleanupFailures = await releaseFailedFSAOpen(
       checkpoints,
-      compatibleNames,
       rootLease,
       options.diagnostics,
     )
@@ -205,116 +156,6 @@ function initialClaimInspectionSessionOption(
   return maximumConcurrentInitialClaimInspections === undefined
     ? {}
     : { maximumConcurrentInitialClaimInspections }
-}
-
-export async function openFileSystemAccessCompatibleNameCatchUp(
-  options: OpenFileSystemAccessCompatibleNameCatchUpOptions,
-): Promise<FileSystemAccessCompatibleNameCatchUpSession> {
-  const intent = await validateReceiveIntent(options.intent)
-  const firstBinding = await verifyFSAOperationBinding({
-    repository: options.operationRepository,
-    intent,
-  })
-  const rootLease = await acquireReopenRootLease(firstBinding.parent, options)
-  let compatibleNames: CompatibleNamePathAuthority | undefined
-  let checkpoints: FSAFileCheckpointRepository | undefined
-  try {
-    const binding = await verifyFSAOperationBinding({
-      repository: options.operationRepository,
-      intent,
-      expectedParent: firstBinding.parent,
-    })
-    compatibleNames = await CompatibleNamePathAuthority.openForReopen({
-      binding,
-      mutations: rootLease.authority,
-      pairHandles: options.operationRepository,
-      openLedger: options.openCompatibleNameLedger ??
-        (() => IndexedDbCompatibleNameLedger.open(options.databaseName)),
-      preparation: options.compatibleNamePreparation ?? defaultCompatibleNamePreparation(),
-    })
-    const pendingOutcome = compatibleNames.pendingTerminalOutcome()
-    if (!compatibleNames.active) {
-      throw new DOMException('Compatible-name local catch-up is unavailable', 'InvalidStateError')
-    }
-    const pairRoot = compatibleNames.pairPlacement === 'inside-logical-root'
-      ? await binding.parent.getDirectoryHandle(binding.reservation.physicalName)
-      : undefined
-    await compatibleNames.ensureRecoveryReport(pairRoot)
-    checkpoints = await openFSAFileCheckpointRepository(options, intent, binding.reservation)
-    const semantic = semanticRepository(checkpoints)
-    const terminalDrain = rootLease.scheduler.beginTerminal('repair-operation')
-    const runExclusive = async <T>(operation: () => Promise<T>): Promise<T> => {
-      await terminalDrain.drained
-      return terminalDrain.runExclusive(() => operation())
-    }
-    let closed = false
-    const close = async () => {
-      if (closed) return
-      closed = true
-      const failures: unknown[] = []
-      try { checkpoints?.close() } catch (error) { failures.push(error) }
-      try { compatibleNames?.close() } catch (error) { failures.push(error) }
-      try { await rootLease.release() } catch (error) { failures.push(error) }
-      if (failures.length === 1) throw failures[0]
-      if (failures.length > 1) {
-        throw new AggregateError(failures, 'FSA terminal catch-up authorities did not close cleanly')
-      }
-    }
-    return Object.freeze({
-      pendingOutcome,
-      synchronizeActiveProjector: async () => {
-        if (pendingOutcome !== undefined) {
-          throw new DOMException('Active catch-up cannot cross a terminal outcome', 'InvalidStateError')
-        }
-        const summary = await compatibleNames!.synchronizeActiveProjector(
-          () => reconcileCommittedFileMappings(semantic, compatibleNames!),
-        )
-        if (summary === undefined) {
-          throw new DOMException('Compatible-name active projector is unavailable', 'InvalidStateError')
-        }
-        return summary
-      },
-      drainTerminalProjector: async () => {
-        if (pendingOutcome === undefined) {
-          throw new DOMException('Compatible-name terminal outcome is unavailable', 'InvalidStateError')
-        }
-        const summary = await compatibleNames!.drainTerminalProjector(pendingOutcome.footerState)
-        if (summary === undefined) {
-          throw new DOMException('Compatible-name terminal projector is unavailable', 'InvalidStateError')
-        }
-        return summary
-      },
-      clearPendingOutcome: async () => {
-        if (pendingOutcome === undefined) {
-          throw new DOMException('Active catch-up has no terminal outcome to clear', 'InvalidStateError')
-        }
-        await compatibleNames!.clearPendingTerminalOutcome()
-      },
-      retireRecoveryMetadata: async () => {
-        if (pendingOutcome === undefined) {
-          throw new DOMException('Active catch-up must preserve receive metadata', 'InvalidStateError')
-        }
-        await retireFSAMaterializationRecoveryMetadata(semantic)
-      },
-      runExclusive,
-      close,
-    })
-  } catch (error) {
-    const failures = await releaseFailedFSAOpen(
-      checkpoints,
-      compatibleNames,
-      rootLease,
-      undefined,
-    )
-    if (failures.length !== 0) {
-      throw new AggregateError(
-        [error, ...failures],
-        'FSA terminal catch-up failed to acquire local authority cleanly',
-        { cause: error },
-      )
-    }
-    throw error
-  }
 }
 
 async function acquireReopenRootLease(
@@ -353,19 +194,12 @@ function reportFSAReopenFailure(
 
 async function releaseFailedFSAOpen(
   checkpoints: FSAFileCheckpointRepository | undefined,
-  compatibleNames: CompatibleNamePathAuthority | undefined,
   rootLease: FSARootMutationLease,
   diagnostics: OutputDiagnosticsPorts | undefined,
 ): Promise<readonly unknown[]> {
   const failures: unknown[] = []
   try {
     checkpoints?.close()
-  } catch (error) {
-    failures.push(error)
-    recordOutputException(diagnostics?.failures?.cleanup, error)
-  }
-  try {
-    compatibleNames?.close()
   } catch (error) {
     failures.push(error)
     recordOutputException(diagnostics?.failures?.cleanup, error)
@@ -380,29 +214,4 @@ async function releaseFailedFSAOpen(
     outputTrace(diagnostics, { eventName: 'cleanup', transition: 'failed' })
   }
   return Object.freeze(failures)
-}
-
-async function reconcileCommittedFileMappings(
-  checkpoints: FSAFileCheckpointRepository,
-  compatibleNames: CompatibleNamePathAuthority,
-): Promise<void> {
-  if (!compatibleNames.active) return
-  const committed = await scanAllFSAFileCheckpoints(checkpoints, 'committed')
-  for (const checkpoint of committed) {
-    if (!fileCheckpointIsFinalized(checkpoint)) continue
-    await compatibleNames.commitFinalFile(checkpoint.canonicalPath, checkpoint.ownedObjectId)
-  }
-}
-
-function semanticRepository(
-  repository: FSAFileCheckpointRepository,
-): FSASemanticOutputRepository {
-  const candidate = repository as Partial<FSASemanticOutputRepository>
-  if (typeof candidate.retireRecoveryMetadataBatch !== 'function') {
-    throw new DOMException(
-      'DirectTree recovery requires semantic checkpoint repository authority',
-      'InvalidStateError',
-    )
-  }
-  return candidate as FSASemanticOutputRepository
 }

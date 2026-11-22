@@ -5,7 +5,7 @@ import { EMPTY_OUTPUT_PRESENTATION } from '../../src/ui/output'
 import { EMPTY_PROGRESS } from '../../src/ui/model'
 import type { RetainedReceiveOperation } from '../../src/application/receive/contracts'
 import type { ReceiveLifecycleState } from '../../src/output/workspace'
-import type { TaskAction } from '../../src/ui/tasks'
+import { safeRenamedSummary } from '../../src/transfer/lifecycle/safe-names'
 
 function retained(actions: RetainedReceiveOperation['actions'] = ['continue', 'save-partial', 'discard']): RetainedReceiveOperation {
   const state: ReceiveLifecycleState = {
@@ -236,24 +236,25 @@ describe('shared task presenter', () => {
     expect(compareTaskTransition(initial, presentTask(TASK_FIXTURES['browser-handoff']!).transition)).not.toBeNull()
   })
 
-  it('keeps filename restoration pending prominent without losing a saved headline', () => {
-    const action = {
-      id: 'catch-up', label: 'Finish setup', destructive: false, disabledReason: null, consequence: null,
-      target: { kind: 'retained', operation: retained(), action: 'catch-up' },
-    } satisfies TaskAction
+  it('shows safe-renamed filenames calmly without setting attention or overriding Saved', () => {
     const result = presentTask(taskFixture({
-      ...TASK_FIXTURES['saved-cleanup']!,
-      actions: [action],
-      fidelity: {
-        noticeTitle: '', noticeDescription: '', replacementCount: 1, replacementCountLabel: '',
-        logicalPathSample: [], omittedLogicalPathCount: 0, scriptName: 'restore.ps1', sidecarName: 'names.json',
-        placementLabel: '', runCommand: null, shortCommand: null, visibility: 'primary',
-        actionMode: 'catch-up-required', actionTitle: '', actionDescription: '',
+      lifecycle: {
+        operationId: '1'.repeat(32), receiveIntentDigest: '2'.repeat(64), generation: 2n,
+        kind: 'published', receiptDigest: '6'.repeat(64), cleanupState: 'clean',
       },
+      completeness: 'complete',
+      publication: 'saved',
+      safeRenamed: safeRenamedSummary({
+        count: 1,
+        sample: [
+          { logicalPath: ['pyvenv.cfg'], physicalName: 'pyvenv-cfg.windshare-a1b2c3d4' },
+        ],
+      }),
     }))
     expect(result.headline).toBe('Saved')
-    expect(result.attention).toBe(true)
-    expect(result.primaryAction?.id).toBe('catch-up')
+    expect(result.tone).toBe('positive')
+    expect(result.attention).toBe(false)
     expect(result.details.join(' ')).toContain('1 filename was adjusted')
+    expect(result.details.join(' ')).toContain('ZIP')
   })
 })

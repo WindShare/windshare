@@ -8,11 +8,6 @@ import { dispatchRetainedAuthorityAction } from './action-dispatch'
 import { lifecycleFailureFact, type FailureFact } from '../../../diagnostics/incident'
 import { IndexedDbReceiveResumeSource } from '../../../output/browser/indexeddb-resume-state'
 import { IndexedDbReceiveOperationRepository } from '../../../output/browser/indexeddb-repository'
-import { IndexedDbCompatibleNameLedger } from '../../../output/browser/indexeddb-compatible-name-ledger'
-import type { CompatibleNameLedger } from '../../../output/file-system-access/compatible-name/ledger'
-import type {
-  CompatibleNameRepairSummary,
-} from '../../../transfer/lifecycle/name-repair'
 import {
   createOutputFailureBinding,
   type LocalOutputOperationFailureDiagnosticsPort,
@@ -45,7 +40,6 @@ import {
   readBrowserLocks,
   type BrowserReceiveWindow,
 } from '../../../output/browser/environment'
-import { unavailableRoute } from '../route-contract'
 import { bindRuntimeOutputFailures, diagnosticsFor } from './diagnostics'
 import {
   detachRuntimeAfterFailure,
@@ -72,17 +66,9 @@ const READ_ONLY_RESUME_MUTATIONS:
       'Persisted receive cleanup authority is not installed',
       'NotSupportedError',
     )),
-    catchUp: () => Promise.reject(new DOMException(
-      'Persisted terminal catch-up authority is not installed',
-      'NotSupportedError',
-    )),
   })
 
 type RetainedContinuationAction = Extract<RetainedReceiveAction, 'save' | 'redownload'>
-type DirectTreeCatchUpContinuation = Extract<
-  AuthorityOwnedReceiveOperationContinuation,
-  { readonly kind: 'direct-tree-catch-up' }
->
 type DirectTreeReceiveContinuation = Extract<
   AuthorityOwnedReceiveOperationContinuation,
   { readonly kind: 'direct-tree-receive' }
@@ -103,11 +89,6 @@ type WorkspaceRetainedContinuation = Extract<
   { readonly kind: 'workspace-retained' }
 >
 export interface BrowserRetainedContinuationExecutor {
-  catchUpCompatibleNames?(
-    continuation: DirectTreeCatchUpContinuation,
-    signal: AbortSignal,
-    failures?: OutputFailureSinks,
-  ): Promise<void>
   resumeReceive(
     continuation: ReceiveContinuation,
     signal: AbortSignal,
@@ -140,27 +121,6 @@ export interface BrowserRetainedCompositionOptions {
   readonly onTrace?: WorkspaceStageTraceListener
   readonly openActivationRepository?: () => Promise<WorkspaceActivationJournalRepository>
   readonly recoverWorkspaceActivations?: typeof recoverWorkspaceActivationCandidates
-  readonly openCompatibleNameLedger?: () => Promise<Pick<
-    CompatibleNameLedger,
-    'readRepairSummary' | 'close'
-  >>
-}
-
-export async function readBrowserCompatibleNameRepairSummary(
-  options: BrowserRetainedCompositionOptions,
-  operationId: string,
-  signal: AbortSignal,
-): Promise<CompatibleNameRepairSummary | undefined> {
-  signal.throwIfAborted()
-  const ledger = await (options.openCompatibleNameLedger ??
-    (() => IndexedDbCompatibleNameLedger.open()))()
-  try {
-    const summary = await ledger.readRepairSummary(operationId)
-    signal.throwIfAborted()
-    return summary
-  } finally {
-    ledger.close()
-  }
 }
 
 export async function listBrowserRetainedOperations(
@@ -221,10 +181,7 @@ export async function listBrowserRetainedOperations(
         const routeActions = options.resumeMutations?.forget !== undefined &&
           canForgetReceiveOperationHistory(descriptor.lifecycle)
           ? Object.freeze([...presentation.actions, 'forget' as const]) : presentation.actions
-        const ordinaryActions = descriptor.lifecycle.kind === 'resumable-receive' &&
-          descriptor.lifecycle.payloadKind === 'workspace-archive'
-          ? routeActions.filter(action => action !== 'catch-up') : routeActions
-        const availableActions = retainedBrowserDeliveryActions(descriptor.lifecycle, browserDelivery, ordinaryActions)
+        const availableActions = retainedBrowserDeliveryActions(descriptor.lifecycle, browserDelivery, routeActions)
         const unavailableReason = descriptor.recoveryUnavailable === 'native-checkpoint-unavailable'
           ? 'zipUnavailable'
           : presentation.unavailableReason
@@ -423,17 +380,6 @@ async function performOrdinaryRetainedAction(
       return result.kind === 'receive-continuation'
         ? Object.freeze({ ...result, runtime: bindRuntimeOutputFailures(result.runtime, binding, operation.display) }) : result
     }
-    case 'direct-tree-catch-up':
-      return withRetainedOperationClose(continuation.operation, async () => {
-        if (action !== 'catch-up') throw continuationMismatch()
-        const catchUp = executor.catchUpCompatibleNames
-        if (catchUp === undefined) throw unavailableRoute()
-        signal.throwIfAborted()
-        await (failures === undefined
-          ? catchUp(continuation, signal)
-          : catchUp(continuation, signal, failures))
-        return Object.freeze({ kind: 'completed' as const })
-      })
     case 'direct-tree-receive':
     case 'workspace-start':
     case 'workspace-receive':

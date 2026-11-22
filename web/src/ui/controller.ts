@@ -363,8 +363,6 @@ export class ReceiverController {
     this.#operationTransitions.prepareReplacementDownload(operation, failure)
   }
 
-  catchUpStoppedCompatibleNames(): void { this.#receive.tasks.catchUpStoppedCompatibleNames() }
-
   startNewReceiveOperation(): void { this.#operationTransitions.startNewReceiveOperation() }
 
   async dispose(): Promise<void> {

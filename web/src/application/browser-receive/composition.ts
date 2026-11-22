@@ -80,11 +80,6 @@ export function createBrowserReceiveComposition(
         signal.throwIfAborted()
         return retained.listRetainedOperations(windowPort, options, signal)
       },
-      readRepairSummary: async (operationId: string, signal: AbortSignal) => {
-        const retained = await import('./retained/inventory')
-        signal.throwIfAborted()
-        return retained.readBrowserCompatibleNameRepairSummary(options, operationId, signal)
-      },
     }),
     environment: async (signal) => {
       signal.throwIfAborted()

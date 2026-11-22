@@ -23,7 +23,6 @@ import {
   type ReceiveLifecycleState,
 } from '../../transfer/lifecycle/state'
 import { decodeStoredReceiveLifecycleState } from '../workspace/state-codec'
-import { readIncompatibleNameStatus } from './indexeddb/incompatible-name-records'
 import type { ReceiveOperationResumeSource } from '../resume/authority'
 import type {
   RecoverySummary,
@@ -166,11 +165,6 @@ export class IndexedDbReceiveResumeSource implements ReceiveOperationResumeSourc
     const operation = await decodeStoredReceiveOperation(stored as PersistedReceiveRecord)
     if (operation.receiveIntent.digest !== lifecycle.receiveIntentDigest) throw new TypeError('Recovery intent mismatch')
     return (await import('../resume/source-revision-failures')).readSourceRevisionFailures(operation.receiveIntent, lifecycle, this.#databaseName)
-  }
-
-  async isCleanupOnly(operationId: string): Promise<boolean> {
-    this.#assertOpen()
-    return readIncompatibleNameStatus(this.#database, operationId)
   }
 
   async readRecoverySummary(

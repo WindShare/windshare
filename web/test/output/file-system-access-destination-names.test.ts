@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { memoryFSAIdentities } from './fsa-mutation-lock-fixture'
 import { reopenFileSystemAccessOutput } from '../../src/output/file-system-access/session'
-import { decodeCompatibleNameSidecar } from '../../src/output/file-system-access/compatible-name/sidecar-codec'
+import { isSafeComponentName } from '../../src/output/file-system-access/safe-name'
 import { identity } from './planning/fixture'
 import {
-  MemoryDirectory, MemoryFile, MemoryCompatibleNameLedger, MemoryLockManager,
+  MemoryDirectory, MemoryFile, MemoryLockManager,
   MemoryOperationRepository, bindTask, memoryCheckpointFactory, resultRootArtifact,
 } from './file-system-access-lifecycle-fixture'
 
@@ -14,17 +14,14 @@ describe('destination-specific source names', () => {
       .map(name => ({ name, path: [name] })),
     { name: 'folder?', path: ['folder?', 'nested.txt'] },
   ])(
-    'saves all content and retains the mapping for $path across reopen', async ({ name, path }) => {
+    'saves all content under a deterministic safe name and reopens $path', async ({ name, path }) => {
       const parent = new MemoryDirectory('downloads')
       const repository = new MemoryOperationRepository()
       const checkpointFactory = memoryCheckpointFactory()
       const locks = new MemoryLockManager()
-      const ledger = new MemoryCompatibleNameLedger(repository)
-      const compatibleNamePreparation = { platform: 'linux', randomBits: () => 0 }
       const session = await bindTask({
         parent, repository, checkpointFactory, locks,
         artifact: await resultRootArtifact(), operationSeed: 70,
-        openCompatibleNameLedger: async () => ledger, compatibleNamePreparation,
       })
       const root = await parent.getDirectoryHandle(session.reservation.physicalName) as unknown as MemoryDirectory
       root.onEntryLookup = lookup => {
@@ -44,14 +41,12 @@ describe('destination-specific source names', () => {
       })
       await ordinary.writeRange(0n, Uint8Array.of(7))
       await ordinary.commit()
-      await reportCaughtUp(session)
-      expect(ledger.header?.repairSummary?.committedCount).toBe(1)
-      const sidecarName = ledger.header!.pair.sidecar.physicalName
-      const sidecar = await root.getFileHandle(sidecarName) as unknown as MemoryFile
-      const report = decodeCompatibleNameSidecar(await sidecar.bytes())
-      expect(report.mappings).toHaveLength(1)
-      expect(report.mappings[0]?.logicalPath.at(-1)).toBe(name)
-      const physicalName = report.mappings[0]!.physicalComponent
+
+      const summary = session.safeRenamedSummary()
+      expect(summary?.count).toBe(1)
+      expect(summary?.sample[0]?.logicalPath.at(-1)).toBe(name)
+      const physicalName = summary!.sample[0]!.physicalName
+      expect(isSafeComponentName(physicalName)).toBe(true)
       const savedParent = path.length === 1
         ? root
         : await root.getDirectoryHandle(physicalName) as unknown as MemoryDirectory
@@ -60,10 +55,10 @@ describe('destination-specific source names', () => {
       expect(await (await root.getFileHandle('ordinary.txt') as unknown as MemoryFile).bytes()).toEqual(Uint8Array.of(7))
       const intent = session.intent
       await session.close()
+
       const reopened = await reopenFileSystemAccessOutput({
         intent, operationRepository: repository, lockManager: locks,
         mutationIdentities: memoryFSAIdentities(locks), checkpointRepositoryFactory: checkpointFactory,
-        openCompatibleNameLedger: async () => ledger, compatibleNamePreparation,
       })
       const retained = await reopened.beginFile(request)
       expect(retained.ownedObjectId).toBe(file.ownedObjectId)
@@ -72,19 +67,3 @@ describe('destination-specific source names', () => {
     },
   )
 })
-
-async function reportCaughtUp(session: Awaited<ReturnType<typeof bindTask>>): Promise<void> {
-  const source = session.repairProjection
-  if (source === undefined) throw new Error('Missing durable name-repair projection')
-  let unsubscribe = () => {}
-  try {
-    await new Promise<void>(resolve => {
-      unsubscribe = source.subscribe(summary => {
-        if (summary.sidecarSync === 'current' &&
-            summary.latestObservedFooter?.committedCount === summary.committedCount) resolve()
-      })
-    })
-  } finally {
-    unsubscribe()
-  }
-}

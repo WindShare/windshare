@@ -1,9 +1,7 @@
 import { ReceiveRuntimeState } from '../../src/application/receive/state'
 import { describe, expect, it, vi } from 'vitest'
 
-import type {
-  CompatibleNameRepairSummary,
-} from '../../src/transfer/lifecycle/name-repair'
+import { safeRenamedSummary } from '../../src/transfer/lifecycle/safe-names'
 import type {
   RecoverySummary,
 } from '../../src/transfer/lifecycle/recovery-summary'
@@ -569,7 +567,7 @@ describe('derived output lifecycle and recovery presentation', () => {
     })
   })
 
-  it('keeps compatible-name repair separate, persistent, monotonic, and terminally qualified', async () => {
+  it('records safe-renamed filenames on settled output without overriding Saved or Transfer completed', async () => {
     const observation = await singleFileObservation(7n)
     const receiveState = new ReceiveRuntimeState()
     const outputs = new OutputPresentationController(receiveState)
@@ -590,109 +588,35 @@ describe('derived output lifecycle and recovery presentation', () => {
       receiving,
     )).toBe(true)
 
-    const firstReplacement = repairSummary(0, [], 'active')
-    expect(receiveState.updateRepairSummary('another-operation', firstReplacement)).toBe(false)
-    expect(receiveState.updateRepairSummary(intent.operationId, firstReplacement)).toBe(true)
-    expect(outputs.getSnapshot().lifecyclePresentation?.compatibleNameRepair).toMatchObject({
-      replacementCount: 0,
-      actionMode: 'receiving-notice',
-    })
-
-    const committed = repairSummary(2, [
-      ['folder', 'pyvenv.cfg'],
-      ['folder', 'nested'],
-    ], 'active')
-    const receivingUpdate = lifecycle(intent, 2n, {
-      kind: 'receiving',
-      activeLeaseId: 'lease',
-    })
-    expect(receiveState.settleLifecycle(receivingUpdate, null, [], committed)).toBe(true)
-    expect(outputs.getSnapshot().repairSummary?.committedCount).toBe(2)
-    expect(outputs.getSnapshot().lifecyclePresentation?.compatibleNameRepair)
-      .toMatchObject({ replacementCount: 2 })
-    expect(() => receiveState.updateRepairSummary(intent.operationId, firstReplacement))
-      .toThrow(/count cannot move backward/u)
-
-    const terminalRepair = repairSummary(2, committed.logicalPathSample, 'completed')
-    const published = lifecycle(intent, 3n, {
+    const published = lifecycle(intent, 2n, {
       kind: 'published',
       receiptDigest: identity(92, 32),
       cleanupState: 'clean',
     })
-    expect(receiveState.settleLifecycle(published, null, [], terminalRepair)).toBe(true)
+    const safeRenamed = safeRenamedSummary({
+      count: 2,
+      sample: [
+        { logicalPath: ['folder', 'pyvenv.cfg'], physicalName: 'pyvenv-cfg.windshare-a1b2c3d4' },
+        { logicalPath: ['folder', 'CON'], physicalName: 'entry-con.windshare-deadbeef' },
+      ],
+    })
+    expect(receiveState.adoptTransferResult({
+      measure: { discovery: 'complete', discoveredFiles: 0, discoveredBytes: 0n, sizeClass: 'small', sourceOmittedEntries: 0n },
+      worker: successfulWorker(),
+      lifecycle: published,
+      intent,
+      transferJobId: 'transfer-job',
+      safeRenamed,
+    })).toBe(true)
     expect(outputs.getSnapshot()).toMatchObject({
       lifecycle: { kind: 'published' },
-      lifecyclePresentation: {
-        title: 'Completed with compatible names',
-        compatibleNameRepair: { actionMode: 'routine-restoration' },
-      },
+      safeRenamed,
+      lifecyclePresentation: { title: 'Saved', tone: 'positive' },
+      transferResultPresentation: { title: 'Transfer completed', tone: 'success' },
     })
-    expect(receiveState.adoptTransferResult({
-      measure: { discovery: 'complete', discoveredFiles: 0, discoveredBytes: 0n, sizeClass: 'small', sourceOmittedEntries: 0n },
-      worker: successfulWorker(),
-      lifecycle: published,
-      intent,
-      transferJobId: 'transfer-job',
-      repairSummary: terminalRepair,
-    })).toBe(true)
-    expect(outputs.getSnapshot().transferResultPresentation?.title)
-      .toBe('Completed with compatible names')
 
     receiveState.reset()
-    expect(outputs.getSnapshot().repairSummary).toBeNull()
-  })
-
-  it('treats an absent terminal repair summary as verified empty-cleanup authority', async () => {
-    const observation = await singleFileObservation(8n)
-    const receiveState = new ReceiveRuntimeState()
-    const outputs = new OutputPresentationController(receiveState)
-    receiveState.updateProjection(1, observation.state, observation.offers)
-    receiveState.updateActivation(waitingResolution(
-      observation.offered,
-      observation.state.projection,
-      1,
-    ))
-    const intent = receiveIntent(observation.action)
-    const receiving = lifecycle(intent, 1n, {
-      kind: 'receiving',
-      activeLeaseId: 'lease',
-    })
-    expect(receiveState.adoptReceiveIntent(
-      observation.offered.choice,
-      intent,
-      receiving,
-    )).toBe(true)
-    expect(receiveState.updateRepairSummary(
-      intent.operationId,
-      repairSummary(0, [], 'active'),
-    )).toBe(true)
-    expect(outputs.getSnapshot().lifecyclePresentation?.compatibleNameRepair)
-      .toMatchObject({ replacementCount: 0 })
-
-    const published = lifecycle(intent, 2n, {
-      kind: 'published',
-      receiptDigest: identity(93, 32),
-      cleanupState: 'clean',
-    })
-    expect(receiveState.settleLifecycle(published, null, [], null)).toBe(true)
-    expect(outputs.getSnapshot()).toMatchObject({
-      repairSummary: null,
-      lifecyclePresentation: {
-        title: 'Saved',
-        compatibleNameRepair: null,
-      },
-    })
-    expect(receiveState.adoptTransferResult({
-      measure: { discovery: 'complete', discoveredFiles: 0, discoveredBytes: 0n, sizeClass: 'small', sourceOmittedEntries: 0n },
-      worker: successfulWorker(),
-      lifecycle: published,
-      intent,
-      transferJobId: 'transfer-job',
-    })).toBe(true)
-    expect(outputs.getSnapshot()).toMatchObject({
-      repairSummary: null,
-      transferResultPresentation: { title: 'Transfer completed' },
-    })
+    expect(outputs.getSnapshot().safeRenamed).toBeNull()
   })
 
   it('publishes a receive intent only after its prepared owner is installed', async () => {
@@ -866,27 +790,6 @@ function lifecycle(
     receiveIntentDigest: intent.digest,
     generation,
   }) as ReceiveLifecycleState
-}
-
-function repairSummary(
-  committedCount: number,
-  logicalPathSample: readonly (readonly string[])[],
-  footerState: NonNullable<CompatibleNameRepairSummary['latestObservedFooter']>['state'],
-  sidecarPending = false,
-): CompatibleNameRepairSummary {
-  const terminalSettlement = sidecarPending ? 'pending' : 'complete'
-  return Object.freeze({
-    committedCount,
-    logicalPathSample: Object.freeze(logicalPathSample.map(path => Object.freeze([...path]))),
-    pairDisplayNames: Object.freeze({
-      script: 'restore.windshare-abc234.ps1',
-      sidecar: 'restore.windshare-abc234.data',
-    }),
-    placement: 'inside-logical-root',
-    latestObservedFooter: Object.freeze({ committedCount, state: footerState }),
-    sidecarSync: sidecarPending ? 'pending' : 'current',
-    terminalSettlement: footerState === 'active' ? 'none' : terminalSettlement,
-  })
 }
 
 function successfulWorker(): TransferWorkerSettlement {

@@ -13,7 +13,7 @@ import type { ReceiveOperationTransition } from '../../src/output/workspace/repo
 import type { ReceiveLifecycleState } from '../../src/transfer/lifecycle/state'
 import type { OutputTraceEvent } from '../../src/output/diagnostics'
 import {
-  absentCompatibleNameLedgerFactory, bindTask, fsaExecution, MemoryDirectory,
+  bindTask, fsaExecution, MemoryDirectory,
   MemoryLockManager, MemoryOperationRepository, memoryCheckpointFactory, type MemoryFile,
   outputFileRequest, SIGNAL, singleFileArtifact, startReceiving, SUCCESS,
 } from './file-system-access-lifecycle-fixture'
@@ -73,7 +73,6 @@ async function publishedFile(retirementFailures = 1) {
     outputTrace,
     cleanupPublishedDirectTree: input => cleanupReopenedPublishedFileSystemAccessOutput({
       ...input, checkpointRepositoryFactory: checkpointFactory,
-      openCompatibleNameLedger: absentCompatibleNameLedgerFactory,
     }),
   })
   const authority = new ReceiveOperationResumeAuthority({
@@ -101,7 +100,6 @@ async function cleanupInput(fixture: Awaited<ReturnType<typeof publishedFile>>) 
     intent: fixture.intent, lifecycle: await fixture.current(),
     repository: fixture.repository, leaseId: fixture.leaseId,
     checkpointRepositoryFactory: fixture.checkpointFactory,
-    openCompatibleNameLedger: absentCompatibleNameLedgerFactory,
   }
 }
 

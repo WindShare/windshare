@@ -2,7 +2,6 @@ import { receiverCopy } from '../locales/receiver'
 import { useCopy, usePreferences } from '../preferences/use-preferences'
 import { useRef, useState, type ReactNode, type Ref } from 'react'
 import type { TaskAction, TaskPresentation } from './index'
-import { CompatibleNameRepairPanel } from '../compatible-name/CompatibleNameRepairPanel'
 import { DetailSheet } from '../controls/DetailSheet'
 import { ReceiverIcon, type ReceiverIconName } from '../receiver-presentation/ReceiverIcon'
 import { useReceiveRate } from './use-receive-rate'
@@ -21,7 +20,6 @@ const DETAILS_ONLY_CONSEQUENCE_ACTIONS = new Set(['redownload'])
 
 export interface TaskViewActions {
   readonly perform: (action: TaskAction) => void
-  readonly catchUp: (operationId: string) => void
 }
 
 export function TaskActionButton({ action, perform, primary = false, busy = false, detailed = false }: {
@@ -102,9 +100,8 @@ export function TaskCard({ task, actions, onDetails, detailsRef, busy = false, s
       </div>
     </div>}
     {task.completeness === 'partial' && <p className="task-notice">{t.partial}</p>}
-    {task.fidelity?.actionMode === 'catch-up-required' && <p className="task-notice">{t.restoreNeeded}</p>}
-    {task.fidelity !== null && task.fidelity.replacementCount > 0 &&
-      <p className="task-notice">{t.adjustedCount(task.fidelity.replacementCount)}</p>}
+    {task.safeRenamed !== null && task.safeRenamed.count > 0 &&
+      <p className="task-notice">{t.adjustedCount(task.safeRenamed.count)}</p>}
   </section>
 }
 
@@ -159,6 +156,8 @@ export function TaskDetails({ task, actions, busy = false, children }: {
   const t = useCopy(receiverCopy).downloads
   const hasActions = task.primaryAction !== null || task.secondaryActions.length > 0
   const technicalLines = task.progress?.details ?? []
+  const safeRenamed = task.safeRenamed !== null && task.safeRenamed.sample.length > 0 ? task.safeRenamed : null
+  const remainingAdjusted = safeRenamed === null ? 0 : Math.max(0, safeRenamed.count - safeRenamed.sample.length)
   return <div className={`task-details task-tone-${task.tone}`} data-task-stage={task.stage}>
     <TaskDetailHero task={task} rate={rate} />
     {hasActions && <div className="task-actions task-detail-actions">
@@ -169,12 +168,20 @@ export function TaskDetails({ task, actions, busy = false, children }: {
     {task.details.length > 0 && <ul className="task-detail-notices">
       {task.details.map((line, index) => <li key={`${index}-${line}`}>{line}</li>)}
     </ul>}
-    <CompatibleNameRepairPanel repair={task.fidelity} busy={busy} catchUp={() => actions.catchUp(task.operationId)} />
     {children}
-    {(task.stage === 'handed-to-browser' || technicalLines.length > 0 || task.destructiveActions.length > 0) && <div className="detail-disclosures">
+    {(task.stage === 'handed-to-browser' || safeRenamed !== null || technicalLines.length > 0 || task.destructiveActions.length > 0) && <div className="detail-disclosures">
       {task.stage === 'handed-to-browser' && <details className="detail-disclosure task-handoff-help">
         <summary>{t.handoffHelp}</summary>
         <p>{t.handoffHelpHint}</p>
+      </details>}
+      {safeRenamed !== null && <details className="detail-disclosure">
+        <summary>{t.adjustedNames}</summary>
+        <ul className="task-detail-list">
+          {safeRenamed.sample.map((entry, index) => <li key={`${index}-${entry.physicalName}`}>
+            {entry.logicalPath.join('/')} → {entry.physicalName}
+          </li>)}
+          {remainingAdjusted > 0 && <li>{t.moreAdjusted(remainingAdjusted)}</li>}
+        </ul>
       </details>}
       {technicalLines.length > 0 && <details className="detail-disclosure">
         <summary>{t.transferDetails}</summary>

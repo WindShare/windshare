@@ -15,9 +15,7 @@ import type { BlockRangeReader, ContentLaneStatus } from '../../content/broker'
 import type { RevisionReader } from '../../content/session-services'
 import type { IncidentScopeHandle } from '../../diagnostics/incident'
 import type { DomainTraceSource } from '../../diagnostics/trace/ports'
-import type {
-  CompatibleNameRepairSummary,
-} from '../lifecycle/name-repair'
+import type { SafeRenamedSummary } from '../lifecycle/safe-names'
 import type {
   RecoverySummary,
 } from '../lifecycle/recovery-summary'
@@ -315,16 +313,6 @@ export type AuthenticatedDirectory =
       admission: DirectoryAdmission
     }>)
 
-/**
- * Exact committed-generation authority for the logical children of one directory.
- * Output backends may consult it only while evaluating an activated compatible-name candidate.
- */
-export interface AuthenticatedLogicalSiblingMembership {
-  readonly directoryId: string
-  readonly generation: string
-  hasCommittedName(candidate: string): Promise<boolean>
-}
-
 export interface DirectoryWork {
   readonly cursor: DirectoryCursor
   /** Lazily records or materializes the parent chain only when selected output requires it. */
@@ -345,8 +333,7 @@ export interface PendingFile {
 export interface TransferJobResult {
   readonly worker: TransferWorkerSettlement
   readonly lifecycle: ReceiveLifecycleState
-  /** Repair qualifies output independently, so ordinary lifecycle kinds remain canonical. */
-  readonly repairSummary?: CompatibleNameRepairSummary
+  readonly safeRenamed?: SafeRenamedSummary
   /** Choice costs are exposed only after the resumable lifecycle authenticates its checkpoint set. */
   readonly recoverySummary?: RecoverySummary
   readonly measure: SelectionMeasure

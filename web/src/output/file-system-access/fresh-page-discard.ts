@@ -50,10 +50,6 @@ import {
   type FSAFreshPageDiscardCut,
   type FreshPageFileSystemAccessDiscardSession,
 } from './session'
-import type {
-  CompatibleNameActivationLedger,
-  CompatibleNameRootRepairPreparationOptions,
-} from './compatible-name/coordinator'
 import { fsaCheckpointSetDigest } from './settlement'
 
 const FSA_FRESH_PAGE_CLEANUP_RECEIPT = 14
@@ -109,8 +105,6 @@ export interface DiscardReopenedFileSystemAccessOutputOptions {
   readonly mutationIdentities?: FSAHandleIdentityResolver
   readonly checkpointRepositoryFactory?: FSAFileCheckpointRepositoryFactory
   readonly databaseName?: string
-  readonly openCompatibleNameLedger?: () => Promise<CompatibleNameActivationLedger>
-  readonly compatibleNamePreparation?: CompatibleNameRootRepairPreparationOptions
   readonly trace?: (event: FSAFreshPageDiscardTraceEvent) => void
 }
 
@@ -179,12 +173,6 @@ class FreshPageDiscardExecution {
       ...(this.#options.databaseName === undefined
         ? {}
         : { databaseName: this.#options.databaseName }),
-      ...(this.#options.openCompatibleNameLedger === undefined
-        ? {}
-        : { openCompatibleNameLedger: this.#options.openCompatibleNameLedger }),
-      ...(this.#options.compatibleNamePreparation === undefined
-        ? {}
-        : { compatibleNamePreparation: this.#options.compatibleNamePreparation }),
     })
     if (!this.#session.usesOperationRepository(this.#options.operation.repository)) {
       throw new TypeError('Fresh-page FSA discard split its repository authority')

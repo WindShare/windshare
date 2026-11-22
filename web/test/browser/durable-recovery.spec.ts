@@ -3,8 +3,8 @@ import { BROWSER_CONTRACT_HOST_PATH } from './contract-host'
 
 import { requireOriginPrivateStorage } from './browser-storage-support'
 import type {
-  CompatibleNameRecoveryCut,
-  CompatibleNameRecoveryProof,
+  SafeNameRecoveryCut,
+  SafeNameRecoveryProof,
   DurablePackageFixture,
   DurableReceiveFixture,
   FreshPageWorkspaceResumeCut,
@@ -54,22 +54,20 @@ test('retains invalidated original-file bytes across reload with cleanup but no 
   expect(proof.retainedPayloads).not.toContainEqual([1, 2, 3])
 })
 
-test('reopens compatible-name translation without changing materialization-relative checkpoint lineage', async ({
+test('reopens safe-renamed file via persisted handle without changing materialization-relative checkpoint lineage', async ({
   page,
 }) => {
-  const key = `compatible-${crypto.randomUUID()}`
+  const key = `safe-name-${crypto.randomUUID()}`
   const cut = await page.evaluate(async ({ path, fixtureKey }) => {
     const harness = await import(path) as typeof import('./durable-recovery-harness')
-    return harness.createCompatibleNameRecoveryCut(fixtureKey)
-  }, { path: RECOVERY_HARNESS_PATH, fixtureKey: key }) as CompatibleNameRecoveryCut
+    return harness.createSafeNameRecoveryCut(fixtureKey)
+  }, { path: RECOVERY_HARNESS_PATH, fixtureKey: key }) as SafeNameRecoveryCut
   expect(cut).toMatchObject({
     materializationRelativeCheckpointPath: ['logical-checkpoint.bin'],
-    physicalComponent: 'logical-checkpoint-bin.windshare-aaaaaa',
+    safeComponentName: true,
     rejectedEntriesBefore: [],
     logicalEntryAbsent: true,
-    sidecarCommittedCountBeforeCommit: 0,
-    durableActivationState: 'active',
-    durableRepairSummaryCount: 0,
+    safeRenamedCount: 1,
     checkpointRanges: ['0:2'],
     physicalPrefixBytes: [1, 2],
   })
@@ -77,92 +75,16 @@ test('reopens compatible-name translation without changing materialization-relat
   await page.reload()
   const proof = await page.evaluate(async ({ path, fixture }) => {
     const harness = await import(path) as typeof import('./durable-recovery-harness')
-    return harness.reopenCompatibleNameRecovery(fixture)
-  }, { path: RECOVERY_HARNESS_PATH, fixture: cut.fixture }) as CompatibleNameRecoveryProof
+    return harness.reopenSafeNameRecovery(fixture)
+  }, { path: RECOVERY_HARNESS_PATH, fixture: cut.fixture }) as SafeNameRecoveryProof
   expect(proof).toEqual({
-    headerPointRead: true,
     materializationRelativeCheckpointPath: ['logical-checkpoint.bin'],
-    physicalComponent: 'logical-checkpoint-bin.windshare-aaaaaa',
-    committedOrdinal: 1,
+    physicalComponent: cut.physicalComponent,
     resumedRanges: ['0:2'],
     physicalBytes: [1, 2, 3, 4],
-    sidecarCommittedCount: 1,
-    reopenedRepairSummaryCount: 0,
-    incompleteTailTruncated: true,
+    reopenedSafeRenamedCount: 1,
     logicalEntryAbsent: true,
   })
-})
-
-test('catches up committed names locally after reload and preserves real receive continuation', async ({ page, context }) => {
-  const harnessPath = '/test/browser/compatible-name-catch-up-harness.ts'
-  const cut = await page.evaluate(async ({ path, key }) => {
-    const harness = await import(path) as typeof import('./compatible-name-catch-up-harness')
-    return harness.createActiveCompatibleNameCatchUpCut(key)
-  }, { path: harnessPath, key: crypto.randomUUID() })
-  expect(cut).toMatchObject({
-    committedCount: 1,
-    observedCount: 0,
-    restoreCommandAvailable: false,
-    footer: 'active',
-    sidecarSync: 'pending',
-    terminalSettlement: 'none',
-    pendingOutcomePresent: false,
-    lifecycle: 'receiving',
-    durableReceiveLeasePresent: true,
-    continuation: 'resume-receive',
-  })
-  expect(cut.injectedWriteFailures).toBeGreaterThan(0)
-  const otherPage = await context.newPage()
-  try {
-    await otherPage.goto(BROWSER_CONTRACT_HOST_PATH)
-    const liveOperationExposed = await otherPage.evaluate(async ({ path, fixture }) => {
-      const harness = await import(path) as typeof import('./compatible-name-catch-up-harness')
-      return harness.retainedOperationPresent(fixture)
-    }, { path: harnessPath, fixture: cut.fixture })
-    expect(liveOperationExposed).toBe(false)
-  } finally {
-    await otherPage.close()
-  }
-  await page.reload()
-  // Load the local harness before disabling networking; no sender or transport can help recovery.
-  await page.evaluate(async path => { await import(path) }, harnessPath)
-  await context.setOffline(true)
-  const proof = await page.evaluate(async ({ path, fixture }) => {
-    const harness = await import(path) as typeof import('./compatible-name-catch-up-harness')
-    return harness.catchUpActiveCompatibleNamesAfterReload(fixture)
-  }, { path: harnessPath, fixture: cut.fixture })
-  expect(proof).toMatchObject({
-    lifecycle: 'receiving',
-    lifecycleUnchanged: true,
-    restoreCommandAvailable: true,
-    continuationBefore: 'resume-receive',
-    continuationAfter: 'resume-receive',
-    footer: 'active',
-    committedCount: 1,
-    sidecarSync: 'current',
-    terminalSettlement: 'none',
-    pendingOutcomePresent: false,
-  })
-  expect(proof.actionsBefore).toContain('continue')
-  expect(proof.actionsBefore).toContain('catch-up')
-  expect(proof.actionsAfter).toContain('continue')
-  expect(proof.actionsAfter).not.toContain('catch-up')
-  expect(proof.sidecarName).toBe(proof.scriptName.replace(/\.ps1$/u, '.data'))
-  const resumed = await page.evaluate(async ({ path, fixture }) => {
-    const harness = await import(path) as typeof import('./compatible-name-catch-up-harness')
-    return harness.resumeAfterActiveCompatibleNameCatchUp(fixture)
-  }, { path: harnessPath, fixture: cut.fixture })
-  expect(resumed).toMatchObject({
-    lifecycle: 'receiving',
-    retainedFileRecovery: 'preserve',
-    resumedRanges: ['0:2'],
-    physicalBytes: [1, 2, 3, 4],
-    committedOrdinal: 2,
-    sidecarCommittedCount: 2,
-    reopenedRepairSummaryCount: 1,
-    incompleteTailTruncated: true,
-  })
-  await context.setOffline(false)
 })
 
 test('promotes an exactly marked workspace activation candidate after reload', async ({ page }) => {

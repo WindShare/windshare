@@ -50,7 +50,7 @@ test('native FSA saves expanded Unicode files and generated overlong directory r
     expect(results).toHaveLength(2)
     for (const result of results) {
       expect(result.evidenceKind).toBe('component-byte-budget')
-      expect(result.mappingName).toBe(result.logicalName)
+      expect(result.safeComponent).toBe(true)
       expect(result.physicalName).not.toBe(result.logicalName)
       const outputPath = result.kind === 'file'
         ? join(destination, result.physicalName)

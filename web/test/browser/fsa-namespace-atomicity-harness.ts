@@ -22,9 +22,6 @@ import {
   IndexedDbReceiveOperationRepository,
 } from '../../src/output/browser/indexeddb-repository'
 import {
-  IndexedDbCompatibleNameLedger,
-} from '../../src/output/browser/indexeddb-compatible-name-ledger'
-import {
   FSARootMutationBusyError,
   acquireFSARootMutationLease,
   type FSARootMutationLease,
@@ -47,14 +44,7 @@ import {
   reserveNewFileSystemAccessOutput,
   type FileSystemAccessOutputSession,
 } from '../../src/output/file-system-access/session'
-import {
-  CompatibleNameCoordinator,
-  prepareCompatibleNameRootRepair,
-  type CompatibleNameActivationLedger,
-  type CompatibleNameRootRepairFactory,
-} from '../../src/output/file-system-access/compatible-name/coordinator'
-import { compatibleNameRestorationPairCandidate } from '../../src/output/file-system-access/compatible-name/naming'
-import { decodeCompatibleNameSidecar } from '../../src/output/file-system-access/compatible-name/sidecar-codec'
+import { isSafeComponentName } from '../../src/output/file-system-access/safe-name'
 
 export interface FsaNamespaceFixture {
   readonly databaseName: string
@@ -232,40 +222,34 @@ export async function cleanupHeldNativeRootDrain(fixture: FsaNamespaceFixture): 
   await resetFixture(fixture)
 }
 
-export interface CompatibleNameRefusalProof {
+export interface SafeNameRefusalProof {
   readonly scope: 'file' | 'directory' | 'result-root'
   readonly expectedKind: 'file' | 'directory'
   readonly rejectionCallCount: number
   readonly rejectedEntriesBefore: readonly string[]
   readonly contentBlockRequestCountAtRefusal: number
   readonly logicalEntryAbsent: boolean
-  readonly repairActive: boolean
-  readonly pairReadyBeforeTarget: boolean
-  readonly sidecarCommittedCountBeforeTarget: number
-  readonly sidecarCommittedCountAfterCommit: number
-  readonly committedMappingKinds: readonly ('file' | 'directory')[]
-  readonly rootCausePreserved: boolean | null
+  readonly safeComponentName: boolean
+  readonly summaryCount: number
+  readonly extraEntriesCount: number
 }
 
-export interface OrdinaryCompatibleNameDormancyProof {
-  readonly repairFactoryCalls: number
-  readonly ledgerOpens: number
-  readonly repairProjectionPresent: boolean
-  readonly projectionActivationCount: number
+export interface OrdinarySafeNameDormancyProof {
+  readonly summaryPresent: boolean
   readonly unexpectedLookupCount: number
   readonly outputNames: readonly string[]
   readonly bothRevisionsAdmittedBeforeRelease: boolean
 }
 
-export interface CompatibleNameScenarioClosureProof {
-  readonly refusals: readonly CompatibleNameRefusalProof[]
-  readonly ordinary: OrdinaryCompatibleNameDormancyProof
+export interface SafeNameScenarioClosureProof {
+  readonly refusals: readonly SafeNameRefusalProof[]
+  readonly ordinary: OrdinarySafeNameDormancyProof
 }
 
-export async function exerciseCompatibleNameScenarioClosure(
+export async function exerciseSafeNameScenarioClosure(
   fixture: FsaNamespaceFixture,
-): Promise<CompatibleNameScenarioClosureProof> {
-  const refusals: CompatibleNameRefusalProof[] = []
+): Promise<SafeNameScenarioClosureProof> {
+  const refusals: SafeNameRefusalProof[] = []
   refusals.push(await exerciseDescendantRefusal(
     scopedFixture(fixture, 'file'),
     'file',
@@ -279,58 +263,8 @@ export async function exerciseCompatibleNameScenarioClosure(
     81,
   ))
   refusals.push(await exerciseResultRootRefusal(scopedFixture(fixture, 'root'), 91))
-  const ordinary = await exerciseOrdinaryCompatibleNameDormancy(scopedFixture(fixture, 'ordinary'))
+  const ordinary = await exerciseOrdinarySafeNameDormancy(scopedFixture(fixture, 'ordinary'))
   return Object.freeze({ refusals: Object.freeze(refusals), ordinary })
-}
-
-export async function exerciseRestorationPairCollisions(fixture: FsaNamespaceFixture) {
-  const results = []
-  for (const occupiedKind of ['script', 'sidecar'] as const) {
-    const scoped = scopedFixture(fixture, occupiedKind)
-    await resetFixture(scoped)
-    const parent = await parentDirectory(scoped, true)
-    const repository = await IndexedDbReceiveOperationRepository.open(scoped.databaseName)
-    const session = await bindTask(scoped, parent, repository, await resultRootArtifact(), 111)
-    const root = await parent.getDirectoryHandle(session.reservation.physicalName)
-    const first = await compatibleNameRestorationPairCandidate({
-      operationId: session.intent.operationId, primaryToken: 'aaaaaa', attempt: 0,
-    })
-    const second = await compatibleNameRestorationPairCandidate({
-      operationId: session.intent.operationId, primaryToken: 'aaaaaa', attempt: 1,
-    })
-    const occupied = await root.getFileHandle(first[occupiedKind], { create: true })
-    const writer = await occupied.createWritable()
-    await writer.write('unrelated existing file')
-    await writer.close()
-    const interceptor = installNativeLookupInterceptor({
-      parent: root,
-      rejection: { kind: 'directory', cause: new TypeError('injected exact native refusal') },
-      contentBlockRequestCount: () => 0,
-    })
-    try {
-      await session.ensureDirectory(['mapped-directory'])
-      await waitForCompatibleProjection(session, 1)
-      const operation = await readCompatibleOperation(scoped, session.intent.operationId)
-      const names = await entryNames(root)
-      results.push(Object.freeze({
-        occupiedKind,
-        pairRetriedTogether: operation.header.pair.token === second.token &&
-          operation.header.pair.script.physicalName === second.script &&
-          operation.header.pair.sidecar.physicalName === second.sidecar,
-        unoccupiedFirstPartnerAbsent: !names.includes(first[occupiedKind === 'script' ? 'sidecar' : 'script']),
-        occupiedFilePreserved: await (await occupied.getFile()).text() === 'unrelated existing file',
-        contentTokenUnchanged: operation.mappings[0]?.token === 'aaaaaa',
-        pairOwned: operation.header.pair.script.ownershipState === 'owned' &&
-          operation.header.pair.sidecar.ownershipState === 'owned',
-      }))
-    } finally {
-      interceptor.restore()
-      await session.close()
-      repository.close()
-      await resetFixture(scoped)
-    }
-  }
-  return Object.freeze(results)
 }
 
 async function exerciseDescendantRefusal(
@@ -338,7 +272,7 @@ async function exerciseDescendantRefusal(
   expectedKind: 'file' | 'directory',
   logicalComponent: string,
   seed: number,
-): Promise<CompatibleNameRefusalProof> {
+): Promise<SafeNameRefusalProof> {
   await resetFixture(fixture)
   const parent = await parentDirectory(fixture, true)
   const repository = await IndexedDbReceiveOperationRepository.open(fixture.databaseName)
@@ -354,9 +288,6 @@ async function exerciseDescendantRefusal(
       await resultRootArtifact(),
       seed,
       true,
-      {
-        openCompatibleNameLedger: () => IndexedDbCompatibleNameLedger.open(fixture.databaseName),
-      },
     )
     const root = await parent.getDirectoryHandle(session.reservation.physicalName)
     interceptor = installNativeLookupInterceptor({
@@ -374,11 +305,6 @@ async function exerciseDescendantRefusal(
           exactSize: 2n,
         }),
       })
-      const beforeCommit = await readCompatibleOperation(fixture, session.intent.operationId)
-      const beforeSidecar = await readCompatibleSidecar(root, beforeCommit.header.pair.sidecar.physicalName)
-      if (beforeSidecar.footer.committedCount !== 0) {
-        throw new TypeError('uncommitted compatible file was published to the sidecar')
-      }
       contentBlockRequestCount += 1
       await transaction.writeRange(0n, Uint8Array.of(4, 2))
       await transaction.commit()
@@ -386,33 +312,25 @@ async function exerciseDescendantRefusal(
       await session.ensureDirectory([logicalComponent])
     }
 
-    await waitForCompatibleProjection(session, 1)
-    const operation = await readCompatibleOperation(fixture, session.intent.operationId)
-    const sidecar = await readCompatibleSidecar(root, operation.header.pair.sidecar.physicalName)
-    const mapping = operation.mappings.find(value => value.logicalPath.length === 1 &&
-      value.logicalPath[0] === logicalComponent && value.entryKind === expectedKind)
-    if (mapping === undefined) throw new TypeError('compatible mapping was not persisted')
+    const summary = session.safeRenamedSummary()
+    const renamed = summary?.sample.find(entry => entry.logicalPath.length === 1 &&
+      entry.logicalPath[0] === logicalComponent)
+    if (renamed === undefined) throw new TypeError('safe-renamed entry was not recorded')
     const rejection = interceptor.calls.filter(call => call.rejected)
     if (rejection.length !== 1 || rejection[0]?.name !== logicalComponent) {
       throw new TypeError('fault injection missed the awaited logical-component lookup')
     }
-    const targetCreate = interceptor.calls.find(call => call.create && call.kind === expectedKind &&
-      call.name === mapping.physicalComponent)
+    const names = await entryNames(root)
     return Object.freeze({
       scope: expectedKind,
       expectedKind,
       rejectionCallCount: rejection.length,
       rejectedEntriesBefore: rejection[0]?.entriesBefore ?? Object.freeze([]),
       contentBlockRequestCountAtRefusal: rejection[0]?.contentBlockRequestCount ?? -1,
-      logicalEntryAbsent: !(await entryNames(root)).includes(logicalComponent),
-      repairActive: session.compatibleNameRepairActive,
-      pairReadyBeforeTarget: targetCreate?.activeZeroSidecarsBefore === 1,
-      sidecarCommittedCountBeforeTarget: targetCreate?.activeZeroSidecarsBefore === 1 ? 0 : -1,
-      sidecarCommittedCountAfterCommit: sidecar.footer.committedCount,
-      committedMappingKinds: Object.freeze(operation.mappings
-        .filter(value => value.commitState === 'committed')
-        .map(value => value.entryKind)),
-      rootCausePreserved: null,
+      logicalEntryAbsent: !names.includes(logicalComponent),
+      safeComponentName: isSafeComponentName(renamed.physicalName),
+      summaryCount: summary?.count ?? 0,
+      extraEntriesCount: names.filter(name => name !== renamed.physicalName).length,
     })
   } finally {
     interceptor?.restore()
@@ -425,24 +343,18 @@ async function exerciseDescendantRefusal(
 async function exerciseResultRootRefusal(
   fixture: FsaNamespaceFixture,
   seed: number,
-): Promise<CompatibleNameRefusalProof> {
+): Promise<SafeNameRefusalProof> {
   await resetFixture(fixture)
   const parent = await parentDirectory(fixture, true)
   const repository = await IndexedDbReceiveOperationRepository.open(fixture.databaseName)
   const logicalComponent = 'photos'
   const cause = new TypeError('injected exact native refusal')
-  let rootCausePreserved = false
   let session: FileSystemAccessOutputSession | undefined
   const interceptor = installNativeLookupInterceptor({
     parent,
     rejection: { kind: 'directory', cause },
     contentBlockRequestCount: () => 0,
   })
-  const prepareRootRepair: CompatibleNameRootRepairFactory = async input => {
-    const prepared = await prepareCompatibleNameRootRepair(input, compatibleNamePreparation())
-    rootCausePreserved = prepared.rejection.cause === cause
-    return prepared
-  }
   try {
     session = await bindTask(
       fixture,
@@ -451,41 +363,24 @@ async function exerciseResultRootRefusal(
       await resultRootArtifact(),
       seed,
       true,
-      {
-        prepareCompatibleNameRootRepair: prepareRootRepair,
-        openCompatibleNameLedger: () => IndexedDbCompatibleNameLedger.open(fixture.databaseName),
-      },
     )
-    await waitForCompatibleProjection(session, 1)
-    const operation = await readCompatibleOperation(fixture, session.intent.operationId)
-    const sidecar = await readCompatibleSidecar(
-      parent,
-      operation.header.pair.sidecar.physicalName,
-    )
-    const mapping = operation.mappings.find(value => value.logicalPath.length === 1 &&
-      value.logicalPath[0] === logicalComponent && value.entryKind === 'directory')
-    if (mapping === undefined) throw new TypeError('compatible result-root mapping was not persisted')
+    const summary = session.safeRenamedSummary()
+    const physicalName = session.reservation.physicalName
     const rejection = interceptor.calls.filter(call => call.rejected)
     if (rejection.length !== 1 || rejection[0]?.name !== logicalComponent) {
       throw new TypeError('fault injection missed the awaited result-root lookup')
     }
-    const targetCreate = interceptor.calls.find(call => call.create && call.kind === 'directory' &&
-      call.name === mapping.physicalComponent)
+    const names = await entryNames(parent)
     return Object.freeze({
       scope: 'result-root',
       expectedKind: 'directory',
       rejectionCallCount: rejection.length,
       rejectedEntriesBefore: rejection[0]?.entriesBefore ?? Object.freeze([]),
       contentBlockRequestCountAtRefusal: rejection[0]?.contentBlockRequestCount ?? -1,
-      logicalEntryAbsent: !(await entryNames(parent)).includes(logicalComponent),
-      repairActive: session.compatibleNameRepairActive,
-      pairReadyBeforeTarget: targetCreate?.activeZeroSidecarsBefore === 1,
-      sidecarCommittedCountBeforeTarget: targetCreate?.activeZeroSidecarsBefore === 1 ? 0 : -1,
-      sidecarCommittedCountAfterCommit: sidecar.footer.committedCount,
-      committedMappingKinds: Object.freeze(operation.mappings
-        .filter(value => value.commitState === 'committed')
-        .map(value => value.entryKind)),
-      rootCausePreserved,
+      logicalEntryAbsent: !names.includes(logicalComponent),
+      safeComponentName: isSafeComponentName(physicalName),
+      summaryCount: summary?.count ?? 0,
+      extraEntriesCount: names.filter(name => name !== physicalName).length,
     })
   } finally {
     interceptor.restore()
@@ -495,15 +390,12 @@ async function exerciseResultRootRefusal(
   }
 }
 
-async function exerciseOrdinaryCompatibleNameDormancy(
+async function exerciseOrdinarySafeNameDormancy(
   fixture: FsaNamespaceFixture,
-): Promise<OrdinaryCompatibleNameDormancyProof> {
+): Promise<OrdinarySafeNameDormancyProof> {
   await resetFixture(fixture)
   const parent = await parentDirectory(fixture, true)
   const repository = await IndexedDbReceiveOperationRepository.open(fixture.databaseName)
-  let repairFactoryCalls = 0
-  let ledgerOpens = 0
-  let projectionActivationCount = 0
   let session: FileSystemAccessOutputSession | undefined
   let interceptor: NativeLookupInterceptor | undefined
   try {
@@ -514,22 +406,9 @@ async function exerciseOrdinaryCompatibleNameDormancy(
       await resultRootArtifact(),
       101,
       true,
-      {
-        prepareCompatibleNameRootRepair: async input => {
-          repairFactoryCalls += 1
-          return prepareCompatibleNameRootRepair(input, compatibleNamePreparation())
-        },
-        openCompatibleNameLedger: async () => {
-          ledgerOpens += 1
-          return IndexedDbCompatibleNameLedger.open(fixture.databaseName)
-        },
-      },
     )
     const root = await parent.getDirectoryHandle(session.reservation.physicalName)
     interceptor = installNativeLookupInterceptor({ parent: root, contentBlockRequestCount: () => 0 })
-    const unsubscribe = session.subscribeRepairProjectionActivation(() => {
-      projectionActivationCount += 1
-    })
     const admitted = deferred<void>()
     const release = deferred<void>()
     let revisionAdmissions = 0
@@ -556,9 +435,8 @@ async function exerciseOrdinaryCompatibleNameDormancy(
       first.writeRange(0n, Uint8Array.of(1)).then(() => first.commit()),
       second.writeRange(0n, Uint8Array.of(2)).then(() => second.commit()),
     ])
-    unsubscribe()
     const allowedNames = new Set(['ordinary-a.bin', 'ordinary-b.bin'])
-    const repairProjectionPresent = session.repairProjection !== undefined
+    const summaryPresent = session.safeRenamedSummary() !== undefined
     const unexpectedLookupCount = interceptor.calls.filter(call => !allowedNames.has(call.name)).length
     const outputNames = Object.freeze(await entryNames(root))
     interceptor.restore()
@@ -566,10 +444,7 @@ async function exerciseOrdinaryCompatibleNameDormancy(
     await session.close()
     session = undefined
     return Object.freeze({
-      repairFactoryCalls,
-      ledgerOpens,
-      repairProjectionPresent,
-      projectionActivationCount,
+      summaryPresent,
       unexpectedLookupCount,
       outputNames,
       bothRevisionsAdmittedBeforeRelease,
@@ -763,11 +638,6 @@ export async function exerciseFailedPreExecutionActivation(
   return Object.freeze({ rootAbsentBeforeExecution, rootAbsentAfterDetach })
 }
 
-export interface BindTaskOptions {
-  readonly prepareCompatibleNameRootRepair?: CompatibleNameRootRepairFactory
-  readonly openCompatibleNameLedger?: () => Promise<CompatibleNameActivationLedger>
-}
-
 export async function bindTask(
   fixture: FsaNamespaceFixture,
   parent: FileSystemDirectoryHandle,
@@ -775,7 +645,6 @@ export async function bindTask(
   artifact: DirectoryTreeArtifact,
   seed: number,
   activate = true,
-  options: BindTaskOptions = {},
 ): Promise<FileSystemAccessOutputSession> {
   const selection = await createSelectionSpec({
     shareInstance: identity(1),
@@ -791,9 +660,6 @@ export async function bindTask(
     operationId: identity(seed),
     reservationId: identity(seed + 1),
     authorityRef: identity(seed + 2, 32),
-    ...(options.prepareCompatibleNameRootRepair === undefined
-      ? {}
-      : { prepareCompatibleNameRootRepair: options.prepareCompatibleNameRootRepair }),
   })
   const intent = await createReceiveIntent({
     selection,
@@ -806,25 +672,8 @@ export async function bindTask(
     parent,
     preClickRanking: [(await deriveArtifactChoiceIdentity(intent.artifact, intent.plan)).id],
   })
-  if (reserved.compatibleNameRepair === undefined) {
-    await repository.commitTransition({ operationId: intent.operationId, ...prepared.transition })
-  } else {
-    await repository.commitFSACompatibleNameBootstrap({
-      transition: { operationId: intent.operationId, ...prepared.transition },
-      bootstrap: reserved.compatibleNameRepair.bootstrap,
-    })
-  }
+  await repository.commitTransition({ operationId: intent.operationId, ...prepared.transition })
   const binding = await verifyFSAOperationBinding({ repository, intent, expectedParent: parent })
-  const openCompatibleNameLedger = options.openCompatibleNameLedger ??
-    (() => IndexedDbCompatibleNameLedger.open(fixture.databaseName))
-  const compatibleNameCoordinator = reserved.compatibleNameRepair === undefined
-    ? undefined
-    : await CompatibleNameCoordinator.activate({
-        prepared: reserved.compatibleNameRepair,
-        mutations: rootLease.authority,
-        pairHandles: repository,
-        openLedger: openCompatibleNameLedger,
-      })
   const session = await assembleNewFileSystemAccessOutput({
     binding,
     operationRepository: repository,
@@ -832,9 +681,6 @@ export async function bindTask(
     databaseName: fixture.databaseName,
     checkpointRepositoryFactory: binding =>
       IndexedDbFileCheckpointRepository.open(binding, fixture.databaseName),
-    openCompatibleNameLedger,
-    compatibleNamePreparation: compatibleNamePreparation(),
-    ...(compatibleNameCoordinator === undefined ? {} : { compatibleNameCoordinator }),
   })
   if (activate) await session.activate()
   return session
@@ -899,7 +745,6 @@ export interface NativeLookupCall {
   readonly create: boolean
   readonly rejected: boolean
   readonly entriesBefore: readonly string[]
-  readonly activeZeroSidecarsBefore: number
   readonly contentBlockRequestCount: number
 }
 
@@ -936,7 +781,6 @@ export function installNativeLookupInterceptor(input: Readonly<{
   ): Promise<T> => {
     if (!await receiver.isSameEntry(input.parent)) return nativeLookup(name, options)
     const entriesBefore = await entryNames(receiver)
-    const activeZeroSidecarsBefore = await countActiveZeroSidecars(receiver)
     const rejected = !rejectionConsumed && options?.create !== true &&
       input.rejection?.kind === kind
     if (rejected) rejectionConsumed = true
@@ -946,7 +790,6 @@ export function installNativeLookupInterceptor(input: Readonly<{
       create: options?.create === true,
       rejected,
       entriesBefore,
-      activeZeroSidecarsBefore,
       contentBlockRequestCount: input.contentBlockRequestCount(),
     }))
     if (rejected) throw input.rejection!.cause
@@ -1003,67 +846,6 @@ export function installNativeLookupInterceptor(input: Readonly<{
       Object.defineProperty(prototype, 'getFileHandle', fileDescriptor)
       Object.defineProperty(prototype, 'getDirectoryHandle', directoryDescriptor)
     },
-  })
-}
-
-async function countActiveZeroSidecars(parent: FileSystemDirectoryHandle): Promise<number> {
-  let count = 0
-  for await (const handle of parent.values()) {
-    if (handle.kind !== 'file') continue
-    try {
-      const checkpoint = decodeCompatibleNameSidecar(new Uint8Array(
-        await (await (handle as FileSystemFileHandle).getFile()).arrayBuffer(),
-      ))
-      if (checkpoint.footer.state === 'active' && checkpoint.footer.committedCount === 0 &&
-          checkpoint.trailingByteLength === 0) count += 1
-    } catch {
-      // The immutable script and ordinary files are intentionally not sidecar candidates.
-    }
-  }
-  return count
-}
-
-async function readCompatibleOperation(fixture: FsaNamespaceFixture, operationId: string) {
-  const ledger = await IndexedDbCompatibleNameLedger.open(fixture.databaseName)
-  try {
-    const snapshot = await ledger.loadOperation(operationId)
-    if (snapshot === undefined) throw new TypeError('compatible-name operation is unavailable')
-    return snapshot
-  } finally {
-    ledger.close()
-  }
-}
-
-async function readCompatibleSidecar(parent: FileSystemDirectoryHandle, name: string) {
-  const handle = await parent.getFileHandle(name)
-  return decodeCompatibleNameSidecar(new Uint8Array(await (await handle.getFile()).arrayBuffer()))
-}
-
-async function waitForCompatibleProjection(
-  session: FileSystemAccessOutputSession,
-  committedCount: number,
-): Promise<void> {
-  const source = session.repairProjection
-  if (source === undefined) throw new TypeError('compatible-name repair projection is unavailable')
-  let unsubscribe: (() => void) | undefined
-  const reached = new Promise<void>(resolve => {
-    unsubscribe = source.subscribe(summary => {
-      if (summary.committedCount === committedCount && summary.sidecarSync === 'current' &&
-          summary.latestObservedFooter?.state === 'active' &&
-          summary.latestObservedFooter.committedCount === committedCount) resolve()
-    })
-  })
-  try {
-    await reached
-  } finally {
-    unsubscribe?.()
-  }
-}
-
-function compatibleNamePreparation() {
-  return Object.freeze({
-    platform: 'windows',
-    randomBits: () => 0,
   })
 }
 

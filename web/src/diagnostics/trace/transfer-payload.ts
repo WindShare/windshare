@@ -96,7 +96,6 @@ export const PERFORMANCE_NAMESPACE_KINDS_V1 = Object.freeze([
   'settle_operation',
   'remove_entry',
   'rename_entry',
-  'repair_compatible_name',
 ] as const)
 
 export const PERFORMANCE_FILE_PIPELINE_STAGES_V1 = Object.freeze([

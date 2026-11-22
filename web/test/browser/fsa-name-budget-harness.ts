@@ -1,7 +1,6 @@
 import { inspectFileSystemComponent, PathComponentRejectedError } from '../../src/output/browser/filesystem-component-inspection'
-import { prepareCompatibleNameRootRepair } from '../../src/output/file-system-access/compatible-name/coordinator'
+import { deterministicSafeComponent, isSafeComponentName } from '../../src/output/file-system-access/safe-name'
 import { appendProtectedSuffix } from '../../src/transfer/intent/selection'
-import { encodeBase64Url } from '../../src/crypto/bytes'
 
 export async function exerciseNativeNameBudget(parent: FileSystemDirectoryHandle, rawName: string) {
   const samples = [
@@ -20,16 +19,11 @@ export async function exerciseNativeNameBudget(parent: FileSystemDirectoryHandle
       if (!(error instanceof PathComponentRejectedError)) throw error
       refusal = error
     }
-    if (refusal === undefined) throw new Error('Overlong root was admitted without repair')
-    const prepared = await prepareCompatibleNameRootRepair({
-      rejection: refusal, parent, entryKind: sample.kind, logicalReservedName: sample.name,
-      operationId: encodeBase64Url(new Uint8Array(16).fill(1)),
-      authorityRef: encodeBase64Url(new Uint8Array(32).fill(2)),
-    }, {
-      platform: 'linux', templateProvider: { select: () => { throw new Error('No script template') } },
-      randomBits: () => 0,
+    if (refusal === undefined) throw new Error('Overlong root was admitted without safe-renaming')
+    const physicalName = await deterministicSafeComponent({
+      logicalPath: [sample.name],
+      entryKind: sample.kind,
     })
-    const physicalName = prepared.bootstrap.initialMapping.physicalComponent
     if (sample.kind === 'directory') {
       const directory = await parent.getDirectoryHandle(physicalName, { create: true })
       const child = await directory.getFileHandle('received.txt', { create: true })
@@ -44,7 +38,7 @@ export async function exerciseNativeNameBudget(parent: FileSystemDirectoryHandle
     }
     results.push({
       kind: sample.kind, logicalName: sample.name, physicalName,
-      evidenceKind: refusal.evidenceKind, mappingName: prepared.bootstrap.initialMapping.logicalPath[0],
+      evidenceKind: refusal.evidenceKind, safeComponent: isSafeComponentName(physicalName),
     })
   }
   return results

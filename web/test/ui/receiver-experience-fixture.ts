@@ -36,7 +36,7 @@ export function experienceController(snapshot: ReceiverSnapshot): ReceiverContro
     chooseArtifact: vi.fn(), retryOutputConfirmation: vi.fn(), performLifecycleAction: vi.fn(),
     performRetainedAction: vi.fn(), enterSelectionMode: vi.fn(), exitSelectionMode: vi.fn(),
     selectPage: vi.fn(), clearSelection: vi.fn(), cancelPreparing: vi.fn(),
-    startNewReceiveOperation: vi.fn(), catchUpStoppedCompatibleNames: vi.fn(),
+    startNewReceiveOperation: vi.fn(),
     prepareReplacementDownload: vi.fn(), recordExperienceIntent: vi.fn(),
     retainedActionAdmission: vi.fn(() => ({ allowed: true, reason: null })),
     activeLifecycleActionAdmission: vi.fn(() => ({ allowed: true, reason: null })),

@@ -1,6 +1,5 @@
 import { receiveOperationDisplayFields } from '../../../output/model/operation-display'
 import { IndexedDbReceiveOperationRepository } from '../../../output/browser/indexeddb-repository'
-import { IndexedDbCompatibleNameLedger } from '../../../output/browser/indexeddb-compatible-name-ledger'
 import {
   acquireFSARootMutationLease,
   type FSARootMutationLease,
@@ -8,7 +7,6 @@ import {
 import {
   prepareFSAOperationBindingTransition,
   verifyFSAOperationBinding,
-  type FSACompatibleNameBootstrapRepository,
 } from '../../../output/browser/indexeddb-root-binding'
 import {
   acquireBrowserReceiveOperationLease,
@@ -33,14 +31,6 @@ import {
   reserveNewFileSystemAccessOutput,
   type FSAFileCheckpointRepositoryFactory,
 } from '../../../output/file-system-access/session'
-import {
-  CompatibleNameCoordinator,
-  prepareCompatibleNameRootRepair,
-  type CompatibleNameActivationLedger,
-  type PreparedCompatibleNameRootRepair,
-  type CompatibleNameRootRepairRequest,
-  type CompatibleNameRootRepairFactory,
-} from '../../../output/file-system-access/compatible-name/coordinator'
 import {
   activatePreparedFileSystemAccessSettlement,
   prepareFileSystemAccessSettlement,
@@ -84,7 +74,6 @@ import { FSAResourceOwner } from '../../../output/file-system-access/execution/r
 import type { BrowserFolderDeliveryContext } from './folder-delivery'
 import { snapshotPreClickRanking } from '../route-contract'
 
-type FSARouteRepository = ReceiveOperationRepository & Partial<FSACompatibleNameBootstrapRepository>
 type OfferedFSAChoice = Omit<OfferedArtifactChoice, 'route'> & Readonly<{
   route: Omit<DirectTreeMaterializationRoute, 'target'> & Readonly<{
     target: FSADirectoryContainerOffer
@@ -92,7 +81,7 @@ type OfferedFSAChoice = Omit<OfferedArtifactChoice, 'route'> & Readonly<{
 }>
 
 export interface FSARouteDependencies {
-  readonly openRepository: () => Promise<FSARouteRepository>
+  readonly openRepository: () => Promise<ReceiveOperationRepository>
   readonly authorizeParent: typeof authorizeFSAParent
   readonly acquireRootLease: (
     parent: FileSystemDirectoryHandle,
@@ -104,8 +93,6 @@ export interface FSARouteDependencies {
     operationId: string,
     options: BrowserReceiveOperationLeaseOptions,
   ) => Promise<BrowserReceiveOperationLease>
-  readonly prepareCompatibleNameRootRepair: CompatibleNameRootRepairFactory
-  readonly openCompatibleNameLedger: () => Promise<CompatibleNameActivationLedger>
   readonly createOperationId: () => string
   readonly createReservationId: () => string
   readonly createAuthorityRef: () => string
@@ -166,7 +153,7 @@ export class FSAArtifactPresentationAuthority implements ArtifactPresentationAut
 
   async commit(input: RouteCommitInput): Promise<RouteCommitResult> {
     this.#claimCommit()
-    let repository: FSARouteRepository | undefined
+    let repository: ReceiveOperationRepository | undefined
     let rootLease: FSARootMutationLease | undefined
     let receiverOperationId: string | undefined
     let attemptDiagnostics: OutputDiagnosticsPorts | undefined
@@ -207,7 +194,6 @@ export class FSAArtifactPresentationAuthority implements ArtifactPresentationAut
         operationId: attemptOperationId,
         reservationId: this.#dependencies.createReservationId(),
         authorityRef: this.#dependencies.createAuthorityRef(),
-        prepareCompatibleNameRootRepair: this.#dependencies.prepareCompatibleNameRootRepair,
         ...(attemptDiagnostics === undefined ? {} : { diagnostics: attemptDiagnostics }),
       })
       const bound = await input.freezeAtFence(Object.freeze({
@@ -240,14 +226,6 @@ export class FSAArtifactPresentationAuthority implements ArtifactPresentationAut
             ...preparedBinding.transition,
             lifecycle,
           },
-          ...(reserved.compatibleNameRepair === undefined
-            ? {}
-            : {
-                acquisitionTransitionCommitter: compatibleNameBootstrapCommitter(
-                  repository,
-                  reserved.compatibleNameRepair.bootstrap,
-                ),
-              }),
         },
       )
 
@@ -282,9 +260,6 @@ export class FSAArtifactPresentationAuthority implements ArtifactPresentationAut
           rootLease,
           resources,
           owned,
-          ...(reserved.compatibleNameRepair === undefined
-            ? {}
-            : { compatibleNameRepair: reserved.compatibleNameRepair }),
           transferJobId,
           outputSessionId,
           ...(attemptDiagnostics === undefined ? {} : { diagnostics: attemptDiagnostics }),
@@ -323,89 +298,65 @@ export class FSAArtifactPresentationAuthority implements ArtifactPresentationAut
   async #completeDurableActivation(input: Readonly<{
     bound: BoundReceiveIntent
     lifecycle: ReceiveLifecycleState
-    repository: FSARouteRepository
+    repository: ReceiveOperationRepository
     parent: FileSystemDirectoryHandle
     lease: BrowserReceiveOperationLease
     rootLease: FSARootMutationLease
     resources: FSAResourceOwner
     owned: FSAOwnedActivationAuthority
-    compatibleNameRepair?: PreparedCompatibleNameRootRepair
     transferJobId: string
     outputSessionId: string
     diagnostics?: OutputDiagnosticsPorts
     signal: AbortSignal
   }>) {
-    let unadoptedCompatibleNameCoordinator: CompatibleNameCoordinator | undefined
-    try {
-      const settlement = input.owned.settlementAuthority()
-      const binding = await verifyCommittedFSAOwnerCut(
-        input.repository,
-        input.bound.intent,
-        input.parent,
-        input.lease,
-        input.lifecycle,
-      )
-      this.#requireCommitting(input.signal)
-      unadoptedCompatibleNameCoordinator = input.compatibleNameRepair === undefined
-        ? undefined
-        : await CompatibleNameCoordinator.activate({
-             prepared: input.compatibleNameRepair,
-             mutations: input.rootLease.authority,
-             pairHandles: input.repository,
-             openLedger: this.#dependencies.openCompatibleNameLedger,
-          })
-      this.#requireCommitting(input.signal)
-      const session = await assembleNewFileSystemAccessOutput({
-        binding,
-        operationRepository: input.repository,
-        rootLease: input.rootLease,
-        maximumConcurrentInitialClaimInspections:
-          WINDOWS_CHROMIUM_FSA_MAXIMUM_CONCURRENT_INITIAL_CLAIM_INSPECTIONS,
-        openCompatibleNameLedger: this.#dependencies.openCompatibleNameLedger,
-        compatibleNamePreparation: { platform: browserRestorationPlatform() },
-        ...(unadoptedCompatibleNameCoordinator === undefined
-          ? {}
-          : { compatibleNameCoordinator: unadoptedCompatibleNameCoordinator }),
-        ...(this.#dependencies.checkpointRepositoryFactory === undefined
-          ? {}
-          : { checkpointRepositoryFactory: this.#dependencies.checkpointRepositoryFactory }),
-        ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
-        ...stageDiagnosticsOption(
-          this.#localOutputFailures,
-          input.diagnostics?.failures?.attempt,
-          input.transferJobId,
-          input.outputSessionId,
-        ),
-      })
-      input.resources.adoptOutputSession(session)
-      unadoptedCompatibleNameCoordinator = undefined
-      const operation = await FSAReceiveOperation.createCommitted({
-        ...(this.#folderDelivery === undefined ? {} : { folderDelivery: this.#folderDelivery }),
-        intent: input.bound.intent,
-        lifecycle: input.lifecycle,
-        repository: input.repository,
-        lease: input.lease,
-        session,
-        settlement,
-        transferJobId: input.transferJobId,
-        outputSessionId: input.outputSessionId,
-        attemptIdentities: Object.freeze({
-          createOutputSessionId: this.#dependencies.createOutputSessionId,
-          createTransferJobId: this.#dependencies.createTransferJobId,
-          clock: { nowMilliseconds: this.#dependencies.clock },
-        }),
-        resources: input.resources,
-        ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
-        ...localOutputFailuresOption(this.#localOutputFailures),
-      })
-      this.#requireCommitting(input.signal)
-      return operation
-    } catch (error) {
-      // A coordinator not yet transferred into the output session owns only its ledger handle;
-      // the durable bootstrap and any verified partial pair remain recoverable operation state.
-      unadoptedCompatibleNameCoordinator?.close()
-      throw error
-    }
+    const settlement = input.owned.settlementAuthority()
+    const binding = await verifyCommittedFSAOwnerCut(
+      input.repository,
+      input.bound.intent,
+      input.parent,
+      input.lease,
+      input.lifecycle,
+    )
+    this.#requireCommitting(input.signal)
+    const session = await assembleNewFileSystemAccessOutput({
+      binding,
+      operationRepository: input.repository,
+      rootLease: input.rootLease,
+      maximumConcurrentInitialClaimInspections:
+        WINDOWS_CHROMIUM_FSA_MAXIMUM_CONCURRENT_INITIAL_CLAIM_INSPECTIONS,
+      ...(this.#dependencies.checkpointRepositoryFactory === undefined
+        ? {}
+        : { checkpointRepositoryFactory: this.#dependencies.checkpointRepositoryFactory }),
+      ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
+      ...stageDiagnosticsOption(
+        this.#localOutputFailures,
+        input.diagnostics?.failures?.attempt,
+        input.transferJobId,
+        input.outputSessionId,
+      ),
+    })
+    input.resources.adoptOutputSession(session)
+    const operation = await FSAReceiveOperation.createCommitted({
+      ...(this.#folderDelivery === undefined ? {} : { folderDelivery: this.#folderDelivery }),
+      intent: input.bound.intent,
+      lifecycle: input.lifecycle,
+      repository: input.repository,
+      lease: input.lease,
+      session,
+      settlement,
+      transferJobId: input.transferJobId,
+      outputSessionId: input.outputSessionId,
+      attemptIdentities: Object.freeze({
+        createOutputSessionId: this.#dependencies.createOutputSessionId,
+        createTransferJobId: this.#dependencies.createTransferJobId,
+        clock: { nowMilliseconds: this.#dependencies.clock },
+      }),
+      resources: input.resources,
+      ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
+      ...localOutputFailuresOption(this.#localOutputFailures),
+    })
+    this.#requireCommitting(input.signal)
+    return operation
   }
 
   release(reason: unknown): void {
@@ -547,7 +498,7 @@ async function verifyInitialLifecycle(
 }
 
 async function verifyCommittedFSAOwnerCut(
-  repository: FSARouteRepository,
+  repository: ReceiveOperationRepository,
   intent: BoundReceiveIntent['intent'],
   parent: FileSystemDirectoryHandle,
   lease: BrowserReceiveOperationLease,
@@ -568,7 +519,7 @@ async function verifyCommittedFSAOwnerCut(
 
 async function releasePreCutResources(
   rootLease: FSARootMutationLease | undefined,
-  repository: FSARouteRepository | undefined,
+  repository: ReceiveOperationRepository | undefined,
   diagnostics: OutputDiagnosticsPorts | undefined,
 ): Promise<readonly unknown[]> {
   const failures: unknown[] = []
@@ -645,11 +596,6 @@ function routeDependencies(
       performance?: NonNullable<OutputDiagnosticsPorts['performance']>,
     ) => acquireFSARootMutationLease(parent, undefined, maximumActiveWriters, performance),
     acquireOperationLease: acquireBrowserReceiveOperationLease,
-    prepareCompatibleNameRootRepair: (input: CompatibleNameRootRepairRequest) =>
-      prepareCompatibleNameRootRepair(input, {
-        platform: browserRestorationPlatform(),
-      }),
-    openCompatibleNameLedger: () => IndexedDbCompatibleNameLedger.open(),
     createOperationId: createOperationID,
     createReservationId: createDestinationReservationID,
     createAuthorityRef: createFSAAuthorityReference,
@@ -658,28 +604,4 @@ function routeDependencies(
     clock: Date.now,
     ...overrides,
   })
-}
-
-function compatibleNameBootstrapCommitter(
-  repository: FSARouteRepository,
-  bootstrap: NonNullable<Awaited<ReturnType<CompatibleNameRootRepairFactory>>>['bootstrap'],
-) {
-  if (repository.commitFSACompatibleNameBootstrap === undefined) {
-    throw new DOMException(
-      'The FSA repository cannot atomically commit a compatible-name bootstrap',
-      'NotSupportedError',
-    )
-  }
-  return Object.freeze({
-    commitAcquisitionTransition: (transition: Parameters<
-      FSACompatibleNameBootstrapRepository['commitFSACompatibleNameBootstrap']
-    >[0]['transition']) => repository.commitFSACompatibleNameBootstrap!({ transition, bootstrap }),
-  })
-}
-
-function browserRestorationPlatform(): string {
-  const platform = globalThis.navigator?.platform
-  return typeof platform === 'string' && platform.toLowerCase().startsWith('win')
-    ? 'windows'
-    : 'unsupported'
 }

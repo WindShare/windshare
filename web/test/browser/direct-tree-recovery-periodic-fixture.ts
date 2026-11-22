@@ -3,7 +3,6 @@ import {
   IndexedDbFileCheckpointRepository,
   IndexedDbReceiveOperationRepository,
 } from '../../src/output/browser/indexeddb-repository'
-import { IndexedDbCompatibleNameLedger } from '../../src/output/browser/indexeddb-compatible-name-ledger'
 import {
   prepareFSAOperationBindingTransition,
   verifyFSAOperationBinding,
@@ -325,8 +324,7 @@ export async function recoverDirectTreeAfterProcessTermination(
         createAutomaticCheckpointAdmissionAuthority({ identity: checkpointIdentity }),
       preservingWriterCapacity:
         createPreservingWriterCapacityAuthority({ identity: checkpointIdentity }),
-      namespaceClaims: reopenedSession,
-      repairSummary: () => reopenedSession.repairSummary(),
+      safeRenamedSummary: () => reopenedSession.safeRenamedSummary(),
       outputIdentity: OUTPUT_IDENTITY,
       settlement: settlement.bindMaterialization(reopenedSession),
     })
@@ -438,8 +436,8 @@ async function bindTask(
     reservationId: identityText(seed + 1),
     authorityRef: digestIdentity(seed + 2),
   })
-  if (reserved.compatibleNameRepair !== undefined) {
-    throw new TypeError('OPFS DirectTree recovery unexpectedly required compatible-name repair')
+  if (reserved.reservation.physicalName !== reserved.reservation.logicalReservedName) {
+    throw new TypeError('OPFS DirectTree recovery unexpectedly required safe renaming')
   }
   const intent = await createReceiveIntent({
     selection,
@@ -468,8 +466,6 @@ async function bindTask(
     databaseName: fixture.databaseName,
     checkpointRepositoryFactory: checkpointBinding =>
       IndexedDbFileCheckpointRepository.open(checkpointBinding, fixture.databaseName),
-    openCompatibleNameLedger: () => IndexedDbCompatibleNameLedger.open(fixture.databaseName),
-    compatibleNamePreparation: { platform: 'windows', randomBits: () => 0 },
   })
   await session.activate()
   return session
@@ -533,12 +529,6 @@ async function admitRecoveryRoot(
       directory,
       sourceAuthenticationPath: projection.sourceAuthenticationPath,
       logicalArtifactPath: projection.logicalArtifactPath,
-      logicalSiblingMembership: {
-        directoryId: coordinates.intent.syntheticRoot,
-        generation,
-        hasCommittedName: async candidate =>
-          FILES.some(file => file.name === candidate),
-      },
     }),
     ACTIVE_SIGNAL,
   )

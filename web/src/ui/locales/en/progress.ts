@@ -1,8 +1,7 @@
 import { plural } from './plural'
 
 export const progress = {
-  adjustedHint: 'Adjusted paths may affect projects or scripts that expect the original names.',
-  setupBeforeRestore: 'Finish local filename restoration setup before running the restoration tool.',
+  adjustedHint: 'Download as a ZIP archive to preserve the original filenames.',
   partial: 'Partial result: some selected items are missing or unfinished.',
   pendingCleanup: 'The result is saved. Cleanup of owned temporary data is still pending.',
   sourceChanged: 'The source file changed or was deleted.',

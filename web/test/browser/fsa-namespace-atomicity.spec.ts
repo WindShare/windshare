@@ -7,12 +7,7 @@ import type { FsaNamespaceFixture } from './fsa-namespace-atomicity-harness'
 
 const HARNESS_PATH = '/test/browser/fsa-namespace-atomicity-harness.ts'
 const INDEXEDDB_DATABASE_PATH = '/src/output/browser/indexeddb-database.ts'
-const INDEXEDDB_LEDGER_PATH = '/src/output/browser/indexeddb-compatible-name-ledger.ts'
 const INDEXEDDB_REPOSITORY_PATH = '/src/output/browser/indexeddb-repository.ts'
-const NAME_REPAIR_MODEL_PATH = '/src/transfer/lifecycle/name-repair.ts'
-const COMPATIBLE_NAME_MODEL_PATH = '/src/output/file-system-access/compatible-name/model.ts'
-const COMPATIBLE_NAME_RESOLVER_PATH = '/src/output/file-system-access/compatible-name/resolver.ts'
-const WORKSPACE_RECORDS_PATH = '/src/output/workspace/records.ts'
 
 interface NamespaceHarness {
   exerciseNativeMutationScheduling(fixture: FsaNamespaceFixture): Promise<{
@@ -71,7 +66,7 @@ interface NamespaceHarness {
     rootAbsentBeforeExecution: boolean
     rootAbsentAfterDetach: boolean
   }>
-  exerciseCompatibleNameScenarioClosure(fixture: FsaNamespaceFixture): Promise<{
+  exerciseSafeNameScenarioClosure(fixture: FsaNamespaceFixture): Promise<{
     refusals: readonly {
       scope: 'file' | 'directory' | 'result-root'
       expectedKind: 'file' | 'directory'
@@ -79,18 +74,12 @@ interface NamespaceHarness {
       rejectedEntriesBefore: readonly string[]
       contentBlockRequestCountAtRefusal: number
       logicalEntryAbsent: boolean
-      repairActive: boolean
-      pairReadyBeforeTarget: boolean
-      sidecarCommittedCountBeforeTarget: number
-      sidecarCommittedCountAfterCommit: number
-      committedMappingKinds: readonly ('file' | 'directory')[]
-      rootCausePreserved: boolean | null
+      safeComponentName: boolean
+      summaryCount: number
+      extraEntriesCount: number
     }[]
     ordinary: {
-      repairFactoryCalls: number
-      ledgerOpens: number
-      repairProjectionPresent: boolean
-      projectionActivationCount: number
+      summaryPresent: boolean
       unexpectedLookupCount: number
       outputNames: readonly string[]
       bothRevisionsAdmittedBeforeRelease: boolean
@@ -243,15 +232,15 @@ test('failed activation before DirectTree execution leaves no visible task root'
   )).toEqual({ rootAbsentBeforeExecution: true, rootAbsentAfterDetach: true })
 })
 
-test('compatible-name repair is exact-call-locus, pair-first, and dormant for ordinary output', async ({
+test('safe-name fallback is exact-call-locus, writes no extra files, and stays dormant for ordinary output', async ({
   browserName,
   page,
 }) => {
   await page.goto(BROWSER_CONTRACT_HOST_PATH)
   await requireOriginPrivateStorage(page, browserName)
   const proof = await callHarness<Awaited<ReturnType<
-    NamespaceHarness['exerciseCompatibleNameScenarioClosure']
-  >>>(page, 'exerciseCompatibleNameScenarioClosure', testFixture('compatible-scenarios'))
+    NamespaceHarness['exerciseSafeNameScenarioClosure']
+  >>>(page, 'exerciseSafeNameScenarioClosure', testFixture('safe-name-scenarios'))
   expect(proof).toEqual({
     refusals: [
       {
@@ -261,12 +250,9 @@ test('compatible-name repair is exact-call-locus, pair-first, and dormant for or
         rejectedEntriesBefore: [],
         contentBlockRequestCountAtRefusal: 0,
         logicalEntryAbsent: true,
-        repairActive: true,
-        pairReadyBeforeTarget: true,
-        sidecarCommittedCountBeforeTarget: 0,
-        sidecarCommittedCountAfterCommit: 1,
-        committedMappingKinds: ['file'],
-        rootCausePreserved: null,
+        safeComponentName: true,
+        summaryCount: 1,
+        extraEntriesCount: 0,
       },
       {
         scope: 'directory',
@@ -275,12 +261,9 @@ test('compatible-name repair is exact-call-locus, pair-first, and dormant for or
         rejectedEntriesBefore: [],
         contentBlockRequestCountAtRefusal: 0,
         logicalEntryAbsent: true,
-        repairActive: true,
-        pairReadyBeforeTarget: true,
-        sidecarCommittedCountBeforeTarget: 0,
-        sidecarCommittedCountAfterCommit: 1,
-        committedMappingKinds: ['directory'],
-        rootCausePreserved: null,
+        safeComponentName: true,
+        summaryCount: 1,
+        extraEntriesCount: 0,
       },
       {
         scope: 'result-root',
@@ -289,499 +272,16 @@ test('compatible-name repair is exact-call-locus, pair-first, and dormant for or
         rejectedEntriesBefore: [],
         contentBlockRequestCountAtRefusal: 0,
         logicalEntryAbsent: true,
-        repairActive: true,
-        pairReadyBeforeTarget: true,
-        sidecarCommittedCountBeforeTarget: 0,
-        sidecarCommittedCountAfterCommit: 1,
-        committedMappingKinds: ['directory'],
-        rootCausePreserved: true,
+        safeComponentName: true,
+        summaryCount: 1,
+        extraEntriesCount: 0,
       },
     ],
     ordinary: {
-      repairFactoryCalls: 0,
-      ledgerOpens: 0,
-      repairProjectionPresent: false,
-      projectionActivationCount: 0,
+      summaryPresent: false,
       unexpectedLookupCount: 0,
       outputNames: ['ordinary-a.bin', 'ordinary-b.bin'],
       bothRevisionsAdmittedBeforeRelease: true,
-    },
-  })
-})
-
-test('retries the whole restoration pair when either exact native sibling is occupied', async ({ page, browserName }) => {
-  await page.goto(BROWSER_CONTRACT_HOST_PATH)
-  await requireOriginPrivateStorage(page, browserName)
-  const proof = await page.evaluate(async ({ path, fixture }) => {
-    const harness = await import(path) as typeof import('./fsa-namespace-atomicity-harness')
-    return harness.exerciseRestorationPairCollisions(fixture)
-  }, { path: HARNESS_PATH, fixture: testFixture('pair-collisions') })
-  expect(proof).toEqual(['script', 'sidecar'].map(occupiedKind => ({
-    occupiedKind,
-    pairRetriedTogether: true,
-    unoccupiedFirstPartnerAbsent: true,
-    occupiedFilePreserved: true,
-    contentTokenUnchanged: true,
-    pairOwned: true,
-  })))
-})
-
-test('compatible-name ledger keeps pair ownership and contiguous commits across reopen', async ({
-  browserName,
-  page,
-}) => {
-  await page.goto(BROWSER_CONTRACT_HOST_PATH)
-  await requireOriginPrivateStorage(page, browserName)
-  const operationId = identity(16, 31)
-  const atomicOperationId = identity(16, 41)
-  const databaseName = `fsa-compatible-ledger-${crypto.randomUUID()}`
-  const result = await page.evaluate(async ({
-    databaseName: name,
-    operationId: operation,
-    atomicOperationId: atomicOperation,
-    authorityRef,
-    pairScriptObjectId,
-    pairSidecarObjectId,
-    directoryObjectId,
-    fileObjectId,
-    leaseId,
-    replacementLeaseId,
-    receiveIntentDigest,
-    receiptDigest,
-    modulePaths,
-  }) => {
-    const { IndexedDbCompatibleNameLedger } = await import(modulePaths.ledger) as
-      typeof import('../../src/output/browser/indexeddb-compatible-name-ledger')
-    const { IndexedDbReceiveOperationRepository } = await import(modulePaths.repository) as
-      typeof import('../../src/output/browser/indexeddb-repository')
-    const model = await import(modulePaths.model) as
-      typeof import('../../src/output/file-system-access/compatible-name/model')
-    const { compatibleNameRepairSummary } = await import(modulePaths.nameRepair) as
-      typeof import('../../src/transfer/lifecycle/name-repair')
-    const records = await import(modulePaths.records) as
-      typeof import('../../src/output/workspace/records')
-    const { PhysicalPathResolver } = await import(modulePaths.resolver) as
-      typeof import('../../src/output/file-system-access/compatible-name/resolver')
-    const root = await navigator.storage.getDirectory()
-    const pairDirectoryName = `pair-${operation}`
-    const pairDirectory = await root.getDirectoryHandle(pairDirectoryName, { create: true })
-    const scriptHandle = await pairDirectory.getFileHandle('restore.windshare-aaaaaa.ps1', {
-      create: true,
-    })
-    const sidecarHandle = await pairDirectory.getFileHandle('restore.windshare-aaaaaa.data', {
-      create: true,
-    })
-    const headerInput = (targetOperation: string) => ({
-      operationId: targetOperation,
-      primaryToken: 'aaaaaa',
-      authorityRef,
-      root: { logicalName: 'root', physicalName: 'root' },
-      pairPlacement: 'inside-logical-root' as const,
-      pair: {
-        token: 'aaaaaa',
-        script: {
-          physicalName: 'restore.windshare-aaaaaa.ps1',
-          handleId: `script-${targetOperation}`,
-          ownedObjectId: pairScriptObjectId,
-          ownershipState: 'claimed' as const,
-        },
-        sidecar: {
-          physicalName: 'restore.windshare-aaaaaa.data',
-          handleId: `sidecar-${targetOperation}`,
-          ownedObjectId: pairSidecarObjectId,
-          ownershipState: 'claimed' as const,
-        },
-      },
-      activationState: 'prepared' as const,
-    })
-    const bootstrapFor = (targetOperation: string) => model.compatibleNameOperationBootstrapV1({
-      header: model.compatibleNameOperationHeaderV1(headerInput(targetOperation)),
-      initialMapping: model.compatibleNameMappingV1({
-        operationId: targetOperation,
-        logicalPath: ['root', 'rejected-directory'],
-        entryKind: 'directory',
-        physicalComponent: 'rejected-directory.windshare-aaaaaa',
-        attempt: 0,
-        token: 'aaaaaa',
-        ownershipState: 'selected',
-        commitState: 'uncommitted',
-      }),
-    })
-
-    const ledger = await IndexedDbCompatibleNameLedger.open(name)
-    await ledger.bootstrapOperation(bootstrapFor(operation))
-    await ledger.recordPairOwnership({ operationId: operation, pairKind: 'script', handle: scriptHandle })
-    await ledger.recordPairOwnership({
-      operationId: operation,
-      pairKind: 'sidecar',
-      handle: sidecarHandle,
-    })
-    await ledger.recordCompatibleTargetCreated({
-      operationId: operation,
-      logicalPath: ['root', 'rejected-directory'],
-      entryKind: 'directory',
-      repairSummary: compatibleNameRepairSummary({
-        committedCount: 0,
-        logicalPathSample: [],
-        pairDisplayNames: {
-          script: 'restore.windshare-aaaaaa.ps1',
-          sidecar: 'restore.windshare-aaaaaa.data',
-        },
-        placement: 'inside-logical-root',
-        sidecarSync: 'pending',
-        terminalSettlement: 'none',
-      }),
-    })
-    await ledger.recordVerifiedDirectoryOwnership({
-      operationId: operation,
-      logicalPath: ['root', 'rejected-directory'],
-      entryKind: 'directory',
-      ownedObjectId: directoryObjectId,
-    })
-    const directory = await ledger.commitMapping({
-      operationId: operation,
-      logicalPath: ['root', 'rejected-directory'],
-      entryKind: 'directory',
-      ownedObjectId: directoryObjectId,
-    })
-    await ledger.claimMapping({
-      operationId: operation,
-      logicalPath: ['root', 'rejected-file.cfg'],
-      entryKind: 'file',
-      physicalComponent: 'rejected-file.windshare-aaaaaa',
-      attempt: 0,
-      token: 'aaaaaa',
-      ownershipState: 'selected',
-      commitState: 'uncommitted',
-    })
-    const file = await ledger.commitMapping({
-      operationId: operation,
-      logicalPath: ['root', 'rejected-file.cfg'],
-      entryKind: 'file',
-      ownedObjectId: fileObjectId,
-    })
-    const committed = await ledger.scanCommittedMappings(operation)
-    const summaryInput = (state: 'active' | 'completed', terminalPending: boolean) => ({
-      committedCount: 2,
-      logicalPathSample: [
-        ['root', 'rejected-directory'],
-        ['root', 'rejected-file.cfg'],
-      ],
-      pairDisplayNames: {
-        script: 'restore.windshare-aaaaaa.ps1',
-        sidecar: 'restore.windshare-aaaaaa.data',
-      },
-      placement: 'inside-logical-root' as const,
-      latestObservedFooter: { committedCount: 2, state },
-      sidecarSync: 'current' as const,
-      terminalSettlement: terminalPending ? 'pending' as const : 'complete' as const,
-    })
-    await ledger.persistRepairSummary(
-      operation,
-      compatibleNameRepairSummary(summaryInput('active', true)),
-    )
-    await ledger.persistPendingTerminalOutcome({
-      operationId: operation,
-      outcome: model.compatibleNamePendingTerminalOutcomeV1({
-        formatVersion: model.COMPATIBLE_NAME_PENDING_OUTCOME_FORMAT_VERSION,
-        footerState: 'completed',
-        ordinaryLifecycle: {
-          kind: 'partial-directory',
-          operationId: operation,
-          receiveIntentDigest,
-          generation: 1n,
-          reason: 'failures',
-          successCount: 2n,
-          failureCount: 1n,
-          receiptDigest,
-        },
-        terminalReceipt: {
-          id: records.operationRecordId(operation, records.RECEIVE_RECORD_RECEIPT, receiptDigest),
-          schemaVersion: records.RECEIVE_OPERATION_SCHEMA_VERSION,
-          operationId: operation,
-          kind: records.RECEIVE_RECORD_RECEIPT,
-          canonicalBytes: Uint8Array.of(1),
-          digest: receiptDigest,
-        },
-      }),
-      repairSummary: compatibleNameRepairSummary(summaryInput('active', true)),
-    })
-    const pendingWasReadable = await ledger.readPendingTerminalOutcome(operation) !== undefined
-    const pendingSummary = await ledger.readRepairSummary(operation)
-    const currentSidecarIndependentOfPendingOutcome = pendingSummary?.sidecarSync === 'current' &&
-      pendingSummary.terminalSettlement === 'pending'
-    await ledger.clearPendingTerminalOutcome({
-      operationId: operation,
-      repairSummary: compatibleNameRepairSummary(summaryInput('completed', false)),
-    })
-    const pendingWasCleared = await ledger.readPendingTerminalOutcome(operation) === undefined
-    const reportOnlySummary = compatibleNameRepairSummary({
-      ...summaryInput('completed', false), pairDisplayNames: { sidecar: 'restore.windshare-aaaaaa.data' },
-    })
-    await ledger.persistRepairSummary(operation, reportOnlySummary)
-    let terminalSummaryImmutable = false
-    try {
-      await ledger.persistRepairSummary(
-        operation,
-        compatibleNameRepairSummary(summaryInput('active', true)),
-      )
-    } catch {
-      terminalSummaryImmutable = true
-    }
-    ledger.close()
-
-    const reopened = await IndexedDbCompatibleNameLedger.open(name)
-    const snapshot = await reopened.loadOperation(operation)
-    const resolver = snapshot === undefined ? undefined : new PhysicalPathResolver(snapshot)
-    reopened.close()
-
-    const repository = await IndexedDbReceiveOperationRepository.open(name)
-    const firstLease = records.receiveOperationLeaseRecord({
-      operationId: atomicOperation,
-      leaseId,
-      acquiredAt: 1,
-    })
-    await repository.commitFSACompatibleNameBootstrap({
-      transition: {
-        operationId: atomicOperation,
-        lease: { kind: 'put', record: firstLease },
-      },
-      bootstrap: bootstrapFor(atomicOperation),
-    })
-    let conflictRejected = false
-    try {
-      const replacement = records.receiveOperationLeaseRecord({
-        operationId: atomicOperation,
-        leaseId: replacementLeaseId,
-        acquiredAt: 2,
-      })
-      await repository.commitFSACompatibleNameBootstrap({
-        transition: {
-          operationId: atomicOperation,
-          expectedLeaseId: leaseId,
-          lease: { kind: 'put', record: replacement },
-        },
-        bootstrap: model.compatibleNameOperationBootstrapV1({
-          ...bootstrapFor(atomicOperation),
-          header: model.compatibleNameOperationHeaderV1({
-            ...headerInput(atomicOperation),
-            authorityRef: pairScriptObjectId,
-          }),
-        }),
-      })
-    } catch {
-      conflictRejected = true
-    }
-    const leaseAfterConflict = await repository.readLease(atomicOperation)
-    repository.close()
-
-    const atomicLedger = await IndexedDbCompatibleNameLedger.open(name)
-    const atomicHeader = await atomicLedger.readHeader(atomicOperation)
-    atomicLedger.close()
-    await deleteDatabase(name)
-    await root.removeEntry(pairDirectoryName, { recursive: true })
-    return {
-      directoryOrdinal: directory.commitOrdinal,
-      fileOrdinal: file.commitOrdinal,
-      scanOrdinals: committed.map(mapping => mapping.commitOrdinal),
-      reopenedCount: snapshot?.mappings.length,
-      reopenedPairReady: snapshot?.header.pair.script.ownershipState === 'owned' &&
-        snapshot.header.pair.sidecar.ownershipState === 'owned',
-      reopenedPhysicalFile: resolver?.physicalComponent(['root', 'rejected-file.cfg'], 'file'),
-      logicalPathPreserved: resolver?.mapping(['root', 'rejected-file.cfg'], 'file')
-        ?.logicalPath.join('/'),
-      atomicHeaderPersisted: atomicHeader !== undefined,
-      conflictRejected,
-      leaseRolledBack: leaseAfterConflict?.leaseId === leaseId,
-      pendingWasReadable,
-      currentSidecarIndependentOfPendingOutcome,
-      pendingWasCleared,
-      terminalSummaryCount: snapshot?.header.repairSummary?.committedCount,
-      terminalSummaryImmutable,
-      reportOnlyAfterReopen: snapshot?.header.repairSummary?.pairDisplayNames.script === undefined,
-    }
-
-    function deleteDatabase(targetName: string): Promise<void> {
-      return new Promise((resolve, reject) => {
-        const request = indexedDB.deleteDatabase(targetName)
-        request.addEventListener('success', () => resolve(), { once: true })
-        request.addEventListener('error', () => reject(request.error), { once: true })
-        request.addEventListener('blocked', () => reject(
-          new DOMException('test database deletion was blocked', 'InvalidStateError'),
-        ), { once: true })
-      })
-    }
-  }, {
-    databaseName,
-    operationId,
-    atomicOperationId,
-    authorityRef: identity(32, 32),
-    pairScriptObjectId: identity(32, 33),
-    pairSidecarObjectId: identity(32, 34),
-    directoryObjectId: identity(32, 35),
-    fileObjectId: identity(32, 36),
-    leaseId: identity(16, 42),
-    replacementLeaseId: identity(16, 43),
-    receiveIntentDigest: identity(32, 44),
-    receiptDigest: identity(32, 45),
-    modulePaths: {
-      ledger: INDEXEDDB_LEDGER_PATH,
-      repository: INDEXEDDB_REPOSITORY_PATH,
-      model: COMPATIBLE_NAME_MODEL_PATH,
-      nameRepair: NAME_REPAIR_MODEL_PATH,
-      resolver: COMPATIBLE_NAME_RESOLVER_PATH,
-      records: WORKSPACE_RECORDS_PATH,
-    },
-  })
-
-  expect(result).toEqual({
-    directoryOrdinal: 1,
-    fileOrdinal: 2,
-    scanOrdinals: [1, 2],
-    reopenedCount: 2,
-    reopenedPairReady: true,
-    reopenedPhysicalFile: 'rejected-file.windshare-aaaaaa',
-    logicalPathPreserved: 'root/rejected-file.cfg',
-    atomicHeaderPersisted: true,
-    conflictRejected: true,
-    leaseRolledBack: true,
-    pendingWasReadable: true,
-    currentSidecarIndependentOfPendingOutcome: true,
-    pendingWasCleared: true,
-    terminalSummaryCount: 2,
-    terminalSummaryImmutable: true,
-    reportOnlyAfterReopen: true,
-  })
-})
-
-test('compatible-name ledger scopes mapping and pair claims to physical siblings', async ({
-  browserName,
-  page,
-}) => {
-  await page.goto(BROWSER_CONTRACT_HOST_PATH)
-  await requireOriginPrivateStorage(page, browserName)
-  const databaseName = `fsa-compatible-claims-${crypto.randomUUID()}`
-  const operationId = identity(16, 46)
-  const result = await page.evaluate(async ({
-    databaseName: name,
-    operationId: operation,
-    authorityRef,
-    pairScriptObjectId,
-    pairSidecarObjectId,
-    modulePaths,
-  }) => {
-    const { IndexedDbCompatibleNameLedger } = await import(modulePaths.ledger) as
-      typeof import('../../src/output/browser/indexeddb-compatible-name-ledger')
-    const model = await import(modulePaths.model) as
-      typeof import('../../src/output/file-system-access/compatible-name/model')
-    const { PhysicalPathResolver } = await import(modulePaths.resolver) as
-      typeof import('../../src/output/file-system-access/compatible-name/resolver')
-    const ledger = await IndexedDbCompatibleNameLedger.open(name)
-    await ledger.bootstrapOperation(model.compatibleNameOperationBootstrapV1({
-      header: model.compatibleNameOperationHeaderV1({
-        operationId: operation,
-        primaryToken: 'aaaaaa',
-        authorityRef,
-        root: { logicalName: 'root', physicalName: 'root' },
-        pairPlacement: 'inside-logical-root',
-        pair: {
-          token: 'aaaaaa',
-          script: {
-            physicalName: 'restore.windshare-aaaaaa.ps1',
-            handleId: `script-${operation}`,
-            ownedObjectId: pairScriptObjectId,
-            ownershipState: 'claimed',
-          },
-          sidecar: {
-            physicalName: 'restore.windshare-aaaaaa.data',
-            handleId: `sidecar-${operation}`,
-            ownedObjectId: pairSidecarObjectId,
-            ownershipState: 'claimed',
-          },
-        },
-        activationState: 'prepared',
-      }),
-      initialMapping: model.compatibleNameMappingV1({
-        operationId: operation,
-        logicalPath: ['parent-a', 'mapped'],
-        entryKind: 'file',
-        physicalComponent: 'shared.windshare-aaaaaa',
-        attempt: 0,
-        token: 'aaaaaa',
-        ownershipState: 'selected',
-        commitState: 'uncommitted',
-      }),
-    }))
-    const claim = (logicalPath: readonly string[], physicalComponent: string) => ledger.claimMapping({
-      operationId: operation,
-      logicalPath,
-      entryKind: 'file',
-      physicalComponent,
-      attempt: 0,
-      token: 'aaaaaa',
-      ownershipState: 'selected',
-      commitState: 'uncommitted',
-    })
-    const crossParent = await claim(['parent-b', 'mapped'], 'shared.windshare-aaaaaa')
-    let sameSiblingRejected = false
-    try {
-      await claim(['parent-a', 'conflict'], 'shared.windshare-aaaaaa')
-    } catch {
-      sameSiblingRejected = true
-    }
-    let pairSiblingRejected = false
-    try {
-      await claim(['pair-conflict'], 'restore.windshare-aaaaaa.ps1')
-    } catch {
-      pairSiblingRejected = true
-    }
-    const nestedPairTwin = await claim(
-      ['nested', 'ordinary-pair-twin'],
-      'restore.windshare-aaaaaa.ps1',
-    )
-    const snapshot = await ledger.loadOperation(operation)
-    const resolver = snapshot === undefined ? undefined : new PhysicalPathResolver(snapshot)
-    ledger.close()
-    await new Promise<void>((resolve, reject) => {
-      const request = indexedDB.deleteDatabase(name)
-      request.addEventListener('success', () => resolve(), { once: true })
-      request.addEventListener('error', () => reject(request.error), { once: true })
-    })
-    return {
-      crossParentAttempt: crossParent.attempt,
-      sameSiblingRejected,
-      pairSiblingRejected,
-      nestedPairTwinAttempt: nestedPairTwin.attempt,
-      reopenedCount: snapshot?.mappings.length,
-      unrelatedReverseChild: resolver?.physicalChild(
-        ['unrelated'],
-        'shared.windshare-aaaaaa',
-        'file',
-      ),
-    }
-  }, {
-    databaseName,
-    operationId,
-    authorityRef: identity(32, 47),
-    pairScriptObjectId: identity(32, 48),
-    pairSidecarObjectId: identity(32, 49),
-    modulePaths: {
-      ledger: INDEXEDDB_LEDGER_PATH,
-      model: COMPATIBLE_NAME_MODEL_PATH,
-      nameRepair: NAME_REPAIR_MODEL_PATH,
-      resolver: COMPATIBLE_NAME_RESOLVER_PATH,
-    },
-  })
-
-  expect(result).toEqual({
-    crossParentAttempt: 0,
-    sameSiblingRejected: true,
-    pairSiblingRejected: true,
-    nestedPairTwinAttempt: 0,
-    reopenedCount: 3,
-    unrelatedReverseChild: {
-      kind: 'logical',
-      logicalComponent: 'shared.windshare-aaaaaa',
     },
   })
 })
@@ -795,8 +295,8 @@ test('IndexedDB closes on versionchange and rejects blocked upgrades without lea
   const result = await page.evaluate(async ({ upgradeName, blockedName, operationId, modulePaths }) => {
     const databaseModule = await import(modulePaths.database) as
       typeof import('../../src/output/browser/indexeddb-database')
-    const ledgerModule = await import(modulePaths.ledger) as
-      typeof import('../../src/output/browser/indexeddb-compatible-name-ledger')
+    const repositoryModule = await import(modulePaths.repository) as
+      typeof import('../../src/output/browser/indexeddb-repository')
     const legacyReceiveLeaseStore = 'receive-operation-v1-leases'
     const v8 = await openRaw(upgradeName, databaseModule.OUTPUT_DATABASE_VERSION - 1, database => {
       database.createObjectStore(legacyReceiveLeaseStore, { keyPath: 'id' })
@@ -809,9 +309,9 @@ test('IndexedDB closes on versionchange and rejects blocked upgrades without lea
     await transactionDone(write)
     v8.close()
 
-    const upgraded = await ledgerModule.IndexedDbCompatibleNameLedger.open(upgradeName)
+    const upgraded = await repositoryModule.IndexedDbReceiveOperationRepository.open(upgradeName)
     upgraded.close()
-    const reopened = await ledgerModule.IndexedDbCompatibleNameLedger.open(upgradeName)
+    const reopened = await repositoryModule.IndexedDbReceiveOperationRepository.open(upgradeName)
     const rawV9 = await openRaw(upgradeName, databaseModule.CHECKPOINT_DATABASE_VERSION)
     const legacyLeaseStorePresent = rawV9.objectStoreNames.contains(legacyReceiveLeaseStore)
     const countTransaction = rawV9.transaction(
@@ -829,7 +329,7 @@ test('IndexedDB closes on versionchange and rejects blocked upgrades without lea
     )
     let closedAfterVersionchange = false
     try {
-      await reopened.readHeader(operationId)
+      await reopened.readLifecycle(operationId)
     } catch (error) {
       closedAfterVersionchange = error instanceof DOMException && error.name === 'InvalidStateError'
     }
@@ -840,7 +340,7 @@ test('IndexedDB closes on versionchange and rejects blocked upgrades without lea
       database.createObjectStore('incompatible-format', { keyPath: 'id' })
     })
     let blockedRejected = false
-    await ledgerModule.IndexedDbCompatibleNameLedger.open(blockedName).catch((error: unknown) => {
+    await repositoryModule.IndexedDbReceiveOperationRepository.open(blockedName).catch((error: unknown) => {
       blockedRejected = error instanceof DOMException && error.name === 'InvalidStateError'
     })
     blocker.close()
@@ -906,7 +406,7 @@ test('IndexedDB closes on versionchange and rejects blocked upgrades without lea
     operationId: identity(16, 51),
     modulePaths: {
       database: INDEXEDDB_DATABASE_PATH,
-      ledger: INDEXEDDB_LEDGER_PATH,
+      repository: INDEXEDDB_REPOSITORY_PATH,
     },
   })
 

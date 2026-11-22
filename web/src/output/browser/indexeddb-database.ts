@@ -1,4 +1,4 @@
-export const OUTPUT_DATABASE_VERSION = 15
+export const OUTPUT_DATABASE_VERSION = 16
 export const CHECKPOINT_DATABASE_VERSION = OUTPUT_DATABASE_VERSION
 export const DEFAULT_OUTPUT_DATABASE_NAME = 'windshare-output-checkpoints'
 export const DEFAULT_OUTPUT_CHECKPOINT_DATABASE_NAME = DEFAULT_OUTPUT_DATABASE_NAME
@@ -11,8 +11,6 @@ export const INDEXEDDB_RECEIVE_RECORD_STORE = 'receive-operation-v2-records'
 export const INDEXEDDB_RECEIVE_MANIFEST_PAGE_STORE = 'receive-operation-v2-manifest-pages'
 export const INDEXEDDB_RECEIVE_HANDLE_STORE = 'receive-operation-v2-handles'
 export const INDEXEDDB_RECEIVE_LEASE_STORE = 'receive-operation-v2-leases'
-export const INDEXEDDB_COMPATIBLE_NAME_OPERATION_STORE = 'compatible-name-v1-operations'
-export const INDEXEDDB_COMPATIBLE_NAME_MAPPING_STORE = 'compatible-name-v1-mappings'
 export const INDEXEDDB_BROWSER_SAVE_POLICY_STORE = 'browser-save-policy-v1'
 export const INDEXEDDB_BROWSER_DELIVERY_FILE_STORE = 'browser-file-delivery-v1'
 
@@ -22,7 +20,6 @@ export const INDEXEDDB_BY_OPERATION_KIND_INDEX = 'by-operation-kind'
 export const INDEXEDDB_BY_KIND_INDEX = 'by-kind'
 export const INDEXEDDB_BY_REOPEN_KEY_INDEX = 'by-reopen-key'
 export const INDEXEDDB_BY_STATE_INDEX = 'by-state'
-export const INDEXEDDB_BY_OPERATION_COMMIT_ORDINAL_INDEX = 'by-operation-commit-ordinal'
 export const INDEXEDDB_BY_OPERATION_LINEAGE_INDEX = 'by-operation-lineage'
 export const INDEXEDDB_BY_OPERATION_OWNED_OBJECT_INDEX = 'by-operation-owned-object'
 export const INDEXEDDB_BY_OPERATION_RECORD_INDEX = 'by-operation-record'
@@ -70,11 +67,6 @@ export const INDEXEDDB_OUTPUT_STORE_SCHEMAS: readonly IndexedDbStoreSchema[] = O
   storeSchema(INDEXEDDB_FILE_CHECKPOINT_CONTROL_STORE, 'id', [
     indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),
     indexSchema(INDEXEDDB_BY_OPERATION_KIND_INDEX, ['operationId', 'kind']),
-  ]),
-  storeSchema(INDEXEDDB_COMPATIBLE_NAME_OPERATION_STORE, 'operationId', []),
-  storeSchema(INDEXEDDB_COMPATIBLE_NAME_MAPPING_STORE, 'id', [
-    indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),
-    indexSchema(INDEXEDDB_BY_OPERATION_COMMIT_ORDINAL_INDEX, ['operationId', 'commitOrdinal']),
   ]),
   storeSchema(INDEXEDDB_RECEIVE_RECORD_STORE, 'id', [
     indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),

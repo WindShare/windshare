@@ -1,8 +1,5 @@
 import { describe, expect, it } from 'vitest'
 
-import type {
-  CompatibleNameRepairSummary,
-} from '../../src/transfer/lifecycle/name-repair'
 import type { TransferWorkerSettlement } from '../../src/transfer/outcome'
 import { presentTransferResult } from '../../src/ui/transfer-result'
 
@@ -36,50 +33,6 @@ describe('transfer result presentation', () => {
     expect(text).toMatch(copy)
     expect(text).not.toMatch(/source content changed|needs attention/iu)
   })
-
-  it('qualifies completed and partial terminal results without hiding ordinary failure evidence', () => {
-    const completed = presentTransferResult(successfulWorker(), repairSummary('completed'))
-    const partial = presentTransferResult(
-      worker({ collisionFiles: 1 }),
-      repairSummary('failed'),
-    )
-
-    expect(completed).toMatchObject({
-      title: 'Completed with compatible names',
-      tone: 'success',
-    })
-    expect(partial).toMatchObject({
-      title: 'Partial with compatible names',
-      tone: 'warning',
-    })
-    expect(partial.lines.join(' ')).toMatch(/existing destination prevented/u)
-    expect(partial.lines.join(' ')).toContain('restore.windshare-abc234.ps1')
-    expect(partial.lines.join(' ')).toContain('remain compatible')
-  })
-
-  it('does not publish terminal completion before sidecar catch-up validates', () => {
-    const presentation = presentTransferResult(
-      successfulWorker(),
-      repairSummary('completed', true),
-    )
-
-    expect(presentation.title).toBe('Compatible-name restoration catch-up required')
-    expect(presentation.tone).toBe('warning')
-  })
-
-  it('does not qualify a terminal summary with no committed replacement', () => {
-    const empty = Object.freeze({
-      ...repairSummary('completed'),
-      committedCount: 0,
-      logicalPathSample: Object.freeze([]),
-      latestObservedFooter: Object.freeze({ committedCount: 0, state: 'completed' as const }),
-    })
-
-    expect(presentTransferResult(successfulWorker(), empty)).toMatchObject({
-      title: 'Compatible-name restoration catch-up required',
-      tone: 'warning',
-    })
-  })
 })
 
 function worker(
@@ -102,42 +55,5 @@ function worker(
     fileFailureCount,
     omittedFailureCount: fileFailureCount,
     fileOutcomes: Object.freeze(fileOutcomes),
-  })
-}
-
-function successfulWorker(): TransferWorkerSettlement {
-  return Object.freeze({
-    status: 'Succeeded',
-    failures: Object.freeze([]),
-    failureCount: 0,
-    fileFailureCount: 0,
-    omittedFailureCount: 0,
-    fileOutcomes: Object.freeze({
-      sourceDriftFiles: 0,
-      revisionConflictFiles: 0,
-      checkpointInvalidFiles: 0,
-      ownedObjectUnknownFiles: 0,
-      collisionFiles: 0,
-      failedFiles: 0,
-    }),
-  })
-}
-
-function repairSummary(
-  state: NonNullable<CompatibleNameRepairSummary['latestObservedFooter']>['state'],
-  sidecarPending = false,
-): CompatibleNameRepairSummary {
-  const terminalSettlement = sidecarPending ? 'pending' : 'complete'
-  return Object.freeze({
-    committedCount: 1,
-    logicalPathSample: Object.freeze([Object.freeze(['pyvenv.cfg'])]),
-    pairDisplayNames: Object.freeze({
-      script: 'restore.windshare-abc234.ps1',
-      sidecar: 'restore.windshare-abc234.data',
-    }),
-    placement: 'inside-logical-root',
-    latestObservedFooter: Object.freeze({ committedCount: 1, state }),
-    sidecarSync: sidecarPending ? 'pending' : 'current',
-    terminalSettlement: state === 'active' ? 'none' : terminalSettlement,
   })
 }

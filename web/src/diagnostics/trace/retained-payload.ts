@@ -7,7 +7,6 @@ export const RETAINED_ACTION_TRANSITIONS = Object.freeze([
 
 export const RETAINED_ACTIONS = Object.freeze([
   'continue',
-  'catch-up',
   'save',
   'redownload',
   'discard',
@@ -22,14 +21,11 @@ export const RETAINED_ACTIONS = Object.freeze([
 export const RETAINED_CONTINUATIONS = Object.freeze([
   'resume_start',
   'resume_receive',
-  'pending_catch_up',
-  'restoration_available',
   'history_only',
   'resume_package',
   'resume_local_finalization',
   'save_artifact',
   'retry_download',
-  'cleanup_incompatible',
   'cleanup_only',
   'retry_cleanup',
   'needs_attention',

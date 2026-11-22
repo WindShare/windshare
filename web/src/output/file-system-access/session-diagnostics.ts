@@ -15,7 +15,6 @@ import type {
   CheckpointAuthorityObserver,
   PersistentTreeTraceEvent,
 } from '../persistent-tree/contracts'
-import type { CompatibleNameRootRepairPreparationOptions } from './compatible-name/coordinator'
 import type {
   FSAOutputTrace,
   FSAOutputTraceEvent,
@@ -146,15 +145,6 @@ export function emitFSAOutputTrace(
 
 export function canonicalAuthorityRef(value: string): string {
   return encodeBase64Url(identityBytes(value, FILE_CHECKPOINT_ID_BYTES, 'authority reference'))
-}
-
-export function defaultCompatibleNamePreparation(): CompatibleNameRootRepairPreparationOptions {
-  const platform = globalThis.navigator?.platform
-  return Object.freeze({
-    platform: typeof platform === 'string' && platform.toLowerCase().startsWith('win')
-      ? 'windows'
-      : 'unsupported',
-  })
 }
 
 export function createFSAAuthorityReference(): string {

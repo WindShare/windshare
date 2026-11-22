@@ -93,7 +93,7 @@ Coverage is gated on the core and non-core totals and on each package, with no p
 | Go E2E | The critical sender/relay/receiver process test. |
 | Chromium relay smoke | Relay smoke, sustained native-size block bursts, and session isolation. |
 | Chromium browser contracts | Short component contracts, independently of native toolchains and smoke tests. |
-| Windows | Native build, vet, short tests, and compatible-name restoration checks. |
+| Windows | Native build, vet, and short tests. |
 | FAT/exFAT (Linux) | Disposable image remounts verify partial reuse, publication, and owned cleanup after native IDs change. |
 | macOS (arm64 and amd64) | Each runner builds its native CLI and relay, runs the output/recovery suites, and captures APFS evidence for CLI file/folder downloads and SIGKILL recovery. |
 

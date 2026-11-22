@@ -289,7 +289,7 @@ describe('browser production receive composition', () => {
     expect(continuations).toEqual({
       'download-started': 'retry-download',
       'needs-attention': 'needs-attention',
-      published: 'restoration-available',
+      published: 'history-only',
       'resumable-package': 'resume-package',
       'resumable-receive': 'resume-receive',
       'waiting-to-save': 'save-artifact',
@@ -364,7 +364,7 @@ describe('browser production receive composition', () => {
     const operation = inventory.operations[0]
     if (operation === undefined) throw new Error('retained operation was not projected')
 
-    expect(operation.actions).toEqual(['continue', 'discard', 'catch-up'])
+    expect(operation.actions).toEqual(['continue', 'discard'])
     await expect(inventory.act(
       Object.freeze({ ...operation }),
       'discard',
@@ -413,7 +413,7 @@ describe('browser production receive composition', () => {
     const operation = inventory.operations[0]
     if (operation === undefined) throw new Error('resumable operation was not projected')
 
-    expect(operation.actions).toEqual(['continue', 'discard', 'catch-up'])
+    expect(operation.actions).toEqual(['continue', 'discard'])
     expect(operation.unavailableReason).toBeUndefined()
     await inventory.act(operation, 'discard', new AbortController().signal)
 

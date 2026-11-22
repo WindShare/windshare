@@ -1,13 +1,10 @@
 export type ReceiveOperationContinuation =
   | 'resume-start'
   | 'resume-receive'
-  | 'pending-catch-up'
-  | 'restoration-available'
   | 'resume-package'
   | 'resume-local-finalization'
   | 'save-artifact'
   | 'retry-download'
-  | 'cleanup-incompatible'
   | 'cleanup-only'
   | 'retry-cleanup'
   | 'needs-attention'

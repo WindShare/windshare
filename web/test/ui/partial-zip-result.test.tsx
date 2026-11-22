@@ -13,7 +13,7 @@ const warning: ReceiveContentWarning = {
   kind: 'partial-zip', selectedFileCount: 3n, completedFileCount: 2n,
   missingFiles: [{ path: ['folder', 'b.txt'], reason: 'source-changed' }],
 }
-const actions = { perform: () => undefined, catchUp: () => undefined }
+const actions = { perform: () => undefined }
 
 function ready(contentWarning?: ReceiveContentWarning) {
   return nextReceiveLifecycleState(initialReceiveLifecycleState({

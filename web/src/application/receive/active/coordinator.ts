@@ -4,7 +4,6 @@ import type {
   LateOutputFailureConsequenceCapability,
   OutputFailureBindingLease,
 } from '../../../output/diagnostics'
-import { isTerminalLifecycleState } from '../../../output/workspace'
 import { TransferPauseRequestedError } from '../../../transfer/output/session'
 import { TransferFailureSettlementError } from '../../../transfer/settlement/output'
 import {
@@ -24,7 +23,7 @@ import type { ActiveReceiveJoinedShare } from '../joined-share'
 import type { ReceiveRuntimeState } from '../state'
 import type { BoundReceiveOperation } from '../contracts'
 import type { ReceiveObservationOptions } from '../observation/contracts'
-import { StaleReceiveBoundaryError, type ActiveCompatibleNameRepairProjection } from '../observation/contracts'
+import { StaleReceiveBoundaryError } from '../observation/contracts'
 import {
   ActiveReceiveObservability,
   type ReceiveFailureTrigger,
@@ -44,7 +43,6 @@ interface ActiveReceiveOperation extends ActiveReceiveLifecycleOperation {
   readonly joined: ActiveReceiveJoinedShare
   readonly selection: FrozenSelectionPolicy
   readonly runtime: BoundReceiveOperation
-  repairProjection?: ActiveCompatibleNameRepairProjection
   transfer?: AbortController
   connectivity?: ConnectivityActivation
   running?: Promise<void>
@@ -53,8 +51,6 @@ interface ActiveReceiveOperation extends ActiveReceiveLifecycleOperation {
   receiveOutputLease?: OutputFailureBindingLease
   detachOutputCapability?: LateOutputFailureConsequenceCapability
   detachment?: Promise<void>
-  unsubscribeRepairProjection?: () => void
-  unsubscribeRepairProjectionActivation?: () => void
   unsubscribeOutputProgress?: () => void
   unsubscribeLifecycle?: () => void
 }
@@ -75,7 +71,6 @@ export interface ActiveReceiveAdoption {
   readonly joined: ActiveReceiveJoinedShare
   readonly selection: FrozenSelectionPolicy
   readonly runtime: BoundReceiveOperation
-  readonly repairProjection?: ActiveCompatibleNameRepairProjection
 }
 
 export interface PreparedActiveReceiveAdoption {
@@ -208,7 +203,6 @@ export class ActiveReceiveCoordinator {
     const active = this.#operation
     this.#operation = undefined
     if (active === undefined) return Promise.resolve()
-    this.#stopRepairProjection(active)
     this.#stopOutputProgress(active)
     this.#stopLifecycleObservation(active)
     active.transfer?.abort(reason)
@@ -239,8 +233,6 @@ export class ActiveReceiveCoordinator {
     let transfer: AbortController | undefined
     let task: Promise<void>
     try {
-      this.#startRepairProjectionActivation(active)
-      this.#startRepairProjection(active)
       connectivity = active.joined.beginDownloadConnectivity()
       transfer = new AbortController()
       active.connectivity = connectivity
@@ -317,7 +309,6 @@ export class ActiveReceiveCoordinator {
         active.detachment !== undefined || !isReceiveOutputDelivered(state) || state === null) return
     // Keep ownership until detach resolves, while leaving the delivered result on screen.
     // A lifecycle observation or 100% progress alone does not settle the writer lifetime.
-    this.#stopRepairProjection(active)
     this.#observability.emitOwnershipTrace('releasing', state)
     this.#detachOperation(active).then(() => {
       this.#observability.emitOwnershipTrace('released', state)
@@ -364,7 +355,7 @@ export class ActiveReceiveCoordinator {
         result.lifecycle,
         usage,
         Object.freeze([]),
-        repairSummaryAtResultBoundary(result),
+        result.safeRenamed ?? null,
         result.recoverySummary ?? null,
       )) {
         throw new TypeError('transfer lifecycle did not advance the active receive operation')
@@ -550,57 +541,6 @@ export class ActiveReceiveCoordinator {
       this.#ownsJoinedShare(active.joined)
   }
 
-  #startRepairProjection(active: ActiveReceiveOperation): void {
-    const projection = active.repairProjection
-    if (projection === undefined || active.unsubscribeRepairProjection !== undefined) return
-    const unsubscribe = projection.subscribe(summary => {
-      if (!this.#operationIsCurrent(active)) return
-      this.#state.updateRepairSummary(active.runtime.intent.operationId, summary)
-    })
-    if (this.#operationIsCurrent(active)) {
-      active.unsubscribeRepairProjection = unsubscribe
-      return
-    }
-    unsubscribe()
-  }
-
-  #startRepairProjectionActivation(active: ActiveReceiveOperation): void {
-    if (active.repairProjection !== undefined ||
-        active.unsubscribeRepairProjectionActivation !== undefined) return
-    const subscribe = active.runtime.subscribeRepairProjectionActivation
-    if (subscribe === undefined) return
-    const unsubscribe = subscribe.call(active.runtime, projection => {
-      if (!this.#operationIsCurrent(active) || active.repairProjection !== undefined) return
-      active.repairProjection = projection
-      this.#startRepairProjection(active)
-    })
-    if (this.#operationIsCurrent(active)) {
-      active.unsubscribeRepairProjectionActivation = unsubscribe
-      return
-    }
-    unsubscribe()
-  }
-
-  #stopRepairProjection(active: ActiveReceiveOperation): void {
-    const unsubscribeActivation = active.unsubscribeRepairProjectionActivation
-    if (unsubscribeActivation !== undefined) {
-      delete active.unsubscribeRepairProjectionActivation
-      try {
-        unsubscribeActivation()
-      } catch {
-        // Activation-source cleanup cannot replace receive ownership settlement.
-      }
-    }
-    const unsubscribe = active.unsubscribeRepairProjection
-    if (unsubscribe === undefined) return
-    delete active.unsubscribeRepairProjection
-    try {
-      unsubscribe()
-    } catch {
-      // Presentation-source cleanup cannot replace receive ownership settlement.
-    }
-  }
-
   #startOutputProgress(active: ActiveReceiveOperation): void {
     const source = active.runtime.outputProgress
     if (source === undefined || active.unsubscribeOutputProgress !== undefined) return
@@ -701,11 +641,4 @@ export class ActiveReceiveCoordinator {
   #closeAttempt(attempt: PresentationAttempt | undefined): void {
     attempt?.close()
   }
-}
-
-function repairSummaryAtResultBoundary(
-  result: TransferJobResult,
-): TransferJobResult['repairSummary'] | null {
-  if (result.repairSummary !== undefined) return result.repairSummary
-  return isTerminalLifecycleState(result.lifecycle) ? null : undefined
 }

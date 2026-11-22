@@ -3,9 +3,8 @@ import {
   IndexedDbFileCheckpointRepository,
   IndexedDbReceiveOperationRepository,
 } from '../../src/output/browser/indexeddb-repository'
-import { IndexedDbCompatibleNameLedger } from '../../src/output/browser/indexeddb-compatible-name-ledger'
+import { isSafeComponentName } from '../../src/output/file-system-access/safe-name'
 import { reopenFileSystemAccessOutput } from '../../src/output/file-system-access/session'
-import { decodeCompatibleNameSidecar } from '../../src/output/file-system-access/compatible-name/sidecar-codec'
 import { FILE_CHECKPOINT_MATERIALIZER_FSA_TREE } from '../../src/output/persistence/checkpoint'
 import { durableCheckpointNamespaceIdentity } from '../../src/output/persistence/namespace'
 import {
@@ -106,7 +105,7 @@ export interface WorkspaceActivationReloadProof {
   readonly retainedContinuation: string | null
 }
 
-export interface CompatibleNameRecoveryFixture {
+export interface SafeNameRecoveryFixture {
   readonly key: string
   readonly databaseName: string
   readonly parentName: string
@@ -118,29 +117,24 @@ export interface CompatibleNameRecoveryFixture {
   readonly fileRevision: string
 }
 
-export interface CompatibleNameRecoveryCut {
-  readonly fixture: CompatibleNameRecoveryFixture
+export interface SafeNameRecoveryCut {
+  readonly fixture: SafeNameRecoveryFixture
   readonly materializationRelativeCheckpointPath: readonly string[]
   readonly physicalComponent: string
+  readonly safeComponentName: boolean
   readonly rejectedEntriesBefore: readonly string[]
   readonly logicalEntryAbsent: boolean
-  readonly sidecarCommittedCountBeforeCommit: number
-  readonly durableActivationState: string
-  readonly durableRepairSummaryCount: number
+  readonly safeRenamedCount: number
   readonly checkpointRanges: readonly string[]
   readonly physicalPrefixBytes: readonly number[]
 }
 
-export interface CompatibleNameRecoveryProof {
-  readonly headerPointRead: boolean
+export interface SafeNameRecoveryProof {
   readonly materializationRelativeCheckpointPath: readonly string[]
   readonly physicalComponent: string
-  readonly committedOrdinal: number
   readonly resumedRanges: readonly string[]
   readonly physicalBytes: readonly number[]
-  readonly sidecarCommittedCount: number
-  readonly reopenedRepairSummaryCount: number
-  readonly incompleteTailTruncated: boolean
+  readonly reopenedSafeRenamedCount: number
   readonly logicalEntryAbsent: boolean
 }
 
@@ -174,12 +168,12 @@ export interface PublicationRetryResult {
   readonly cleanup: string
 }
 
-export async function createCompatibleNameRecoveryCut(
+export async function createSafeNameRecoveryCut(
   key: string,
-): Promise<CompatibleNameRecoveryCut> {
+): Promise<SafeNameRecoveryCut> {
   const ids = await durableIdentities(key)
-  const databaseName = `windshare-compatible-recovery-${key}`
-  const parentName = `compatible-${key}`
+  const databaseName = `windshare-safe-name-recovery-${key}`
+  const parentName = `safe-name-${key}`
   const namespaceFixture: FsaNamespaceFixture = Object.freeze({ databaseName, parentName })
   const logicalComponent = 'logical-checkpoint.bin'
   const parentRoot = await originPrivateRoot()
@@ -198,7 +192,6 @@ export async function createCompatibleNameRecoveryCut(
       await fsaResultRootArtifact(),
       121,
       true,
-      { openCompatibleNameLedger: () => IndexedDbCompatibleNameLedger.open(databaseName) },
     )
     const resultRoot = await parent.getDirectoryHandle(session.reservation.physicalName)
     interceptor = installNativeLookupInterceptor({
@@ -217,18 +210,15 @@ export async function createCompatibleNameRecoveryCut(
         exactSize: 4n,
       }),
     })
-    const snapshot = await readCompatibleSnapshot(databaseName, session.intent.operationId)
-    const mapping = snapshot.mappings.find(value => value.logicalPath[0] === logicalComponent &&
-      value.entryKind === 'file')
-    if (mapping === undefined) throw new TypeError('compatible recovery cut omitted its file mapping')
-    const sidecar = await resultRoot.getFileHandle(snapshot.header.pair.sidecar.physicalName)
-    const beforeCommit = await decodeSidecarFile(sidecar)
+    const summary = session.safeRenamedSummary()
+    const renamed = summary?.sample.find(entry => entry.logicalPath[0] === logicalComponent)
+    if (renamed === undefined) throw new TypeError('safe-name recovery cut omitted its file rename')
     contentBlockRequestCount += 1
     await transaction.writeRange(0n, Uint8Array.of(1, 2))
     const checkpointRanges = await transaction.checkpoint()
     const materializationRelativeCheckpointPath = await readFsaMaterializationRelativeCheckpointPath(session.intent, databaseName)
     const physicalPrefixBytes = await readFileBytes(
-      await resultRoot.getFileHandle(mapping.physicalComponent),
+      await resultRoot.getFileHandle(renamed.physicalName),
     )
     const rejection = interceptor.calls.find(call => call.rejected)
     if (rejection?.name !== logicalComponent) {
@@ -242,26 +232,24 @@ export async function createCompatibleNameRecoveryCut(
     await session.close()
     session = undefined
     repository.close()
-    await appendIncompleteSidecarTail(sidecar)
     return Object.freeze({
       fixture: Object.freeze({
         key,
         databaseName,
         parentName,
-        operationId: snapshot.header.operationId,
+        operationId: intent.operationId,
         intent,
         logicalComponent,
-        physicalComponent: mapping.physicalComponent,
+        physicalComponent: renamed.physicalName,
         fileId: ids.fileId,
         fileRevision: ids.fileRevision,
       }),
       materializationRelativeCheckpointPath,
-      physicalComponent: mapping.physicalComponent,
+      physicalComponent: renamed.physicalName,
+      safeComponentName: isSafeComponentName(renamed.physicalName),
       rejectedEntriesBefore: rejection?.entriesBefore ?? Object.freeze([]),
       logicalEntryAbsent,
-      sidecarCommittedCountBeforeCommit: beforeCommit.footer.committedCount,
-      durableActivationState: snapshot.header.activationState,
-      durableRepairSummaryCount: snapshot.header.repairSummary?.committedCount ?? -1,
+      safeRenamedCount: summary?.count ?? 0,
       checkpointRanges: Object.freeze(checkpointRanges.map(rangeText)),
       physicalPrefixBytes: Object.freeze([...physicalPrefixBytes]),
     })
@@ -272,10 +260,9 @@ export async function createCompatibleNameRecoveryCut(
   }
 }
 
-export async function reopenCompatibleNameRecovery(
-  fixture: CompatibleNameRecoveryFixture,
-  committedMappingsBeforeResume = 0,
-): Promise<CompatibleNameRecoveryProof> {
+export async function reopenSafeNameRecovery(
+  fixture: SafeNameRecoveryFixture,
+): Promise<SafeNameRecoveryProof> {
   const repository = await IndexedDbReceiveOperationRepository.open(fixture.databaseName)
   let session: Awaited<ReturnType<typeof reopenFileSystemAccessOutput>> | undefined
   try {
@@ -283,10 +270,7 @@ export async function reopenCompatibleNameRecovery(
       intent: fixture.intent,
       operationRepository: repository,
       databaseName: fixture.databaseName,
-      openCompatibleNameLedger: () => IndexedDbCompatibleNameLedger.open(fixture.databaseName),
-      compatibleNamePreparation: { platform: 'windows', randomBits: () => 0 },
     })
-    const reopenedRepairSummaryCount = session.repairSummary()?.committedCount ?? -1
     const resumed = await session.beginFile({
       materializationRelativePath: [fixture.logicalComponent],
       recovery: preservingBrowserRecoveryPolicy(),
@@ -299,34 +283,19 @@ export async function reopenCompatibleNameRecovery(
     const resumedRanges = Object.freeze(resumed.verifiedRanges.map(rangeText))
     await resumed.writeRange(2n, Uint8Array.of(3, 4))
     await resumed.commit()
-    await waitForCompatibleSidecar(session, committedMappingsBeforeResume + 1)
 
-    const snapshot = await readCompatibleSnapshot(fixture.databaseName, fixture.operationId)
-    const mapping = snapshot.mappings.find(value => value.logicalPath[0] === fixture.logicalComponent &&
-      value.entryKind === 'file')
-    if (mapping?.commitOrdinal === undefined) {
-      throw new TypeError('compatible-name recovery lost its committed mapping lineage')
-    }
     const parent = await (await originPrivateRoot()).getDirectoryHandle(fixture.parentName)
     const resultRoot = await parent.getDirectoryHandle(session.reservation.physicalName)
-    const sidecar = await decodeSidecarFile(
-      await resultRoot.getFileHandle(snapshot.header.pair.sidecar.physicalName),
-    )
     const materializationRelativeCheckpointPath = await readFsaMaterializationRelativeCheckpointPath(fixture.intent, fixture.databaseName)
     const physicalBytes = await readFileBytes(
-      await resultRoot.getFileHandle(mapping.physicalComponent),
+      await resultRoot.getFileHandle(fixture.physicalComponent),
     )
-    const headerPointRead = await readCompatibleHeader(fixture.databaseName, fixture.operationId)
     return Object.freeze({
-      headerPointRead,
       materializationRelativeCheckpointPath,
-      physicalComponent: mapping.physicalComponent,
-      committedOrdinal: mapping.commitOrdinal,
+      physicalComponent: fixture.physicalComponent,
       resumedRanges,
       physicalBytes: Object.freeze([...physicalBytes]),
-      sidecarCommittedCount: sidecar.footer.committedCount,
-      reopenedRepairSummaryCount,
-      incompleteTailTruncated: sidecar.trailingByteLength === 0,
+      reopenedSafeRenamedCount: session.safeRenamedSummary()?.count ?? 0,
       logicalEntryAbsent: !(await directoryEntryNames(resultRoot)).includes(fixture.logicalComponent),
     })
   } finally {
@@ -825,43 +794,8 @@ function rangeText(range: { readonly start: bigint; readonly end: bigint }): str
   return `${range.start}:${range.end}`
 }
 
-async function readCompatibleSnapshot(databaseName: string, operationId: string) {
-  const ledger = await IndexedDbCompatibleNameLedger.open(databaseName)
-  try {
-    const snapshot = await ledger.loadOperation(operationId)
-    if (snapshot === undefined) throw new TypeError('compatible-name recovery snapshot is unavailable')
-    return snapshot
-  } finally {
-    ledger.close()
-  }
-}
-
-async function readCompatibleHeader(databaseName: string, operationId: string): Promise<boolean> {
-  const ledger = await IndexedDbCompatibleNameLedger.open(databaseName)
-  try {
-    return await ledger.readHeader(operationId) !== undefined
-  } finally {
-    ledger.close()
-  }
-}
-
-async function decodeSidecarFile(handle: FileSystemFileHandle) {
-  return decodeCompatibleNameSidecar(await readFileBytes(handle))
-}
-
 async function readFileBytes(handle: FileSystemFileHandle): Promise<Uint8Array> {
   return new Uint8Array(await (await handle.getFile()).arrayBuffer())
-}
-
-async function appendIncompleteSidecarTail(handle: FileSystemFileHandle): Promise<void> {
-  const size = (await handle.getFile()).size
-  const writable = await handle.createWritable({ keepExistingData: true })
-  try {
-    await writable.seek(size)
-    await writable.write(new TextEncoder().encode('M\\t2\\tfile\\t'))
-  } finally {
-    await writable.close()
-  }
 }
 
 async function readFsaMaterializationRelativeCheckpointPath(
@@ -883,32 +817,11 @@ async function readFsaMaterializationRelativeCheckpointPath(
     const page = await checkpoints.scanCommitted({ direction: 'ascending' })
     const record = page.records[0]
     if (record === undefined || page.records.length !== 1) {
-      throw new TypeError('compatible-name recovery lacks its unique materialization-relative checkpoint')
+      throw new TypeError('safe-name recovery lacks its unique materialization-relative checkpoint')
     }
     return record.canonicalPath
   } finally {
     checkpoints.close()
-  }
-}
-
-async function waitForCompatibleSidecar(
-  session: Awaited<ReturnType<typeof reopenFileSystemAccessOutput>>,
-  committedCount: number,
-): Promise<void> {
-  const source = session.repairProjection
-  if (source === undefined) throw new TypeError('compatible-name recovery projection is unavailable')
-  let unsubscribe: (() => void) | undefined
-  const reached = new Promise<void>(resolve => {
-    unsubscribe = source.subscribe(summary => {
-      if (summary.committedCount === committedCount && summary.sidecarSync === 'current' &&
-          summary.latestObservedFooter?.state === 'active' &&
-          summary.latestObservedFooter.committedCount === committedCount) resolve()
-    })
-  })
-  try {
-    await reached
-  } finally {
-    unsubscribe?.()
   }
 }
 

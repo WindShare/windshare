@@ -555,7 +555,6 @@ function performanceNamespaceKind(
     case 'create-directory': return 'create_directory'
     case 'create-file': return 'create_file'
     case 'remove-file': return 'remove_entry'
-    case 'repair-compatible-name': return 'repair_compatible_name'
   }
 }
 
@@ -590,7 +589,6 @@ function requireNamespaceMutationKind(kind: FSANamespaceMutationKind): void {
     case 'reserve-name':
     case 'create-directory':
     case 'create-file':
-    case 'repair-compatible-name':
       return
   }
   throw new TypeError('FSA namespace mutation kind is invalid')
@@ -602,7 +600,6 @@ function requireTerminalMutationKind(kind: FSATerminalMutationKind): void {
     case 'pause-operation':
     case 'stop-operation':
     case 'discard-operation':
-    case 'repair-operation':
       return
   }
   throw new TypeError('FSA terminal mutation kind is invalid')

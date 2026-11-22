@@ -40,7 +40,7 @@ export function receiveOperationResumeDescriptor(
 export function assertReceiveOperationCanContinue(
   descriptor: ReceiveOperationResumeDescriptor,
 ): void {
-  if (descriptor.continuation === 'history-only' || descriptor.continuation === 'cleanup-incompatible' ||
+  if (descriptor.continuation === 'history-only' ||
       descriptor.continuation === 'cleanup-only' ||
       descriptor.continuation === 'needs-attention' ||
       descriptor.continuation === 'retry-cleanup') {
@@ -68,8 +68,8 @@ function continuationFor(
     case 'published':
       return lifecycle.cleanupState === 'cleanup-pending'
         ? 'retry-cleanup'
-        : 'restoration-available'
-    case 'partial-directory': return 'restoration-available'
+        : 'history-only'
+    case 'partial-directory': return 'history-only'
     case 'needs-attention': return 'needs-attention'
     default: return undefined
   }

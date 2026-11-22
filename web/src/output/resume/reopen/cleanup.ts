@@ -1,6 +1,5 @@
 import { forgetReceiveOperationHistory } from '../operation-history'
 import type { ReceiveOperationHandleInventoryRepository } from '../../workspace/repository'
-import { forgetIncompatibleNameRecord } from '../../browser/indexeddb/incompatible-name-records'
 import { IndexedDbReceiveOperationRepository } from '../../browser/indexeddb-repository'
 import {
   recordOutputException,
@@ -163,7 +162,6 @@ export type AuthorityOwnedReceiveOperationContinuation =
       }
     }>
   | Readonly<{ kind: 'direct-tree-receive'; operation: ReopenedDirectTreeOperation }>
-  | Readonly<{ kind: 'direct-tree-catch-up'; operation: ReopenedDirectTreeOperation }>
   | Readonly<{
       kind: 'workspace-receive'
       operation: ReopenedWorkspaceOperation & {
@@ -204,17 +202,14 @@ implements ReceiveOperationMutationPort<AuthorityOwnedReceiveOperationMutationRe
   readonly #reopen: PersistedReceiveOperationReopenPort
   readonly #cleanup: ReceiveOperationOwnedCleanupExecutor
   readonly #forgetHistory: ((descriptor: ReceiveOperationResumeDescriptor) => Promise<void>) | undefined
-  readonly #forgetIncompatible: ((descriptor: ReceiveOperationResumeDescriptor) => Promise<ReceiveOperationDiscardResult>) | undefined
 
   constructor(input: {
     readonly reopen: PersistedReceiveOperationReopenPort
     readonly cleanup: ReceiveOperationOwnedCleanupExecutor
     readonly forgetHistory?: (descriptor: ReceiveOperationResumeDescriptor) => Promise<void>
-    readonly forgetIncompatible?: (descriptor: ReceiveOperationResumeDescriptor) => Promise<ReceiveOperationDiscardResult>
   }) {
     this.#reopen = input.reopen
     this.#cleanup = input.cleanup
-    this.#forgetIncompatible = input.forgetIncompatible
     this.#forgetHistory = input.forgetHistory
   }
 
@@ -222,7 +217,6 @@ implements ReceiveOperationMutationPort<AuthorityOwnedReceiveOperationMutationRe
     descriptor: ReceiveOperationResumeDescriptor,
     request?: ReceiveOperationResumeRequest,
   ): Promise<AuthorityOwnedReceiveOperationMutationResult> {
-    assertPhysicalOutputAuthority(descriptor)
     const operation = await this.#reopen.reopen(
       descriptor,
       request?.purpose ?? 'continue',
@@ -239,7 +233,6 @@ implements ReceiveOperationMutationPort<AuthorityOwnedReceiveOperationMutationRe
     descriptor: ReceiveOperationResumeDescriptor,
     failures?: OutputFailureSinks,
   ): Promise<AuthorityOwnedReceiveOperationMutationResult> {
-    assertPhysicalOutputAuthority(descriptor)
     const operation = await this.#reopen.reopen(descriptor, 'cleanup', failures)
     try {
       return Object.freeze({
@@ -260,52 +253,12 @@ implements ReceiveOperationMutationPort<AuthorityOwnedReceiveOperationMutationRe
     descriptor: ReceiveOperationResumeDescriptor,
     failures?: OutputFailureSinks,
   ): Promise<ReceiveOperationDiscardResult> {
-    if (descriptor.continuation === 'cleanup-incompatible') {
-      if (this.#forgetIncompatible === undefined) {
-        throw new DOMException('Saved-record cleanup is unavailable', 'NotSupportedError')
-      }
-      return this.#forgetIncompatible(descriptor)
-    }
     const operation = await this.#reopen.reopen(descriptor, 'cleanup', failures)
     try {
       return await this.#cleanup.cleanup(operation, failures)
     } finally {
       await operation.close()
     }
-  }
-
-  async catchUp(
-    descriptor: ReceiveOperationResumeDescriptor,
-    failures?: OutputFailureSinks,
-  ): Promise<AuthorityOwnedReceiveOperationMutationResult> {
-    assertPhysicalOutputAuthority(descriptor)
-    const operation = await this.#reopen.reopen(descriptor, 'cleanup', failures)
-    if (operation.kind !== 'direct-tree') {
-      return withClosedOperation(operation, async () => {
-        throw new TypeError('terminal catch-up is exclusive to DirectTree operations')
-      })
-    }
-    return Object.freeze({
-      kind: 'continuation',
-      continuation: Object.freeze({ kind: 'direct-tree-catch-up', operation }),
-    })
-  }
-}
-
-function assertPhysicalOutputAuthority(descriptor: ReceiveOperationResumeDescriptor): void {
-  if (descriptor.continuation === 'cleanup-incompatible') {
-    throw new DOMException('Incompatible saved records have no physical output authority', 'InvalidStateError')
-  }
-}
-
-async function withClosedOperation<Result>(
-  operation: ReopenedReceiveOperation,
-  action: () => Promise<Result>,
-): Promise<Result> {
-  try {
-    return await action()
-  } finally {
-    await operation.close()
   }
 }
 
@@ -328,9 +281,6 @@ export function createPersistedReceiveOperationMutationPort(
         repository.close()
       }
     },
-    forgetIncompatible: descriptor => forgetIncompatibleNameRecord(descriptor, {
-      ...(options.checkpointDatabaseName === undefined ? {} : { databaseName: options.checkpointDatabaseName }),
-    }),
   })
 }
 

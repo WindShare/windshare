@@ -14,7 +14,6 @@ import type { RetainedReceiveAction, RetainedReceiveOperation } from './contract
 import type { ReceiveJoinedShare } from './joined-share'
 import { isReceiveOutputDelivered } from './completion'
 import { newReceiveOperationKind } from './policy'
-import { canCatchUpReceiveRepair } from './repair'
 
 interface ReceiveRuntimeOptions<Share extends ReceiveJoinedShare> {
   readonly state: ReceiveRuntimeState
@@ -109,7 +108,6 @@ export class BrowserReceiveRuntime<Share extends ReceiveJoinedShare> {
     this.#options.activation.invalidate(new StaleReceiveBoundaryError(), 'caller-cancelled')
     const prepared = this.#options.active.prepareAdoption({
       joined, selection, runtime,
-      ...(runtime.repairProjection === undefined ? {} : { repairProjection: runtime.repairProjection }),
     })
     this.#options.state.adoptRetainedReceiveIntentAtomically(
       intent, runtime.lifecycle,
@@ -117,7 +115,7 @@ export class BrowserReceiveRuntime<Share extends ReceiveJoinedShare> {
         prepared.commit()
         this.#notify(() => this.#options.onTaskAdopted(runtime.display ?? input.retained.display))
       },
-      runtime.initialWorkspaceUsage, runtime.activeControls, input.retained.repairSummary,
+      runtime.initialWorkspaceUsage, runtime.activeControls,
     )
     prepared.start()
   }
@@ -151,21 +149,6 @@ export class BrowserReceiveRuntime<Share extends ReceiveJoinedShare> {
     if (this.#options.disposed() || this.#pending || !this.#options.active.active) return
     this.#releaseToBrowsing(new DOMException('Retained file failures require a recovery choice', 'AbortError'))
       .catch(() => undefined)
-  }
-
-  catchUpStoppedCompatibleNames(): void {
-    const facts = this.#options.state.getSnapshot()
-    if (this.#options.disposed() || this.#pending || this.#options.retained.pending ||
-        facts.lifecycle === null || !this.#options.active.active ||
-        !canCatchUpReceiveRepair(facts.lifecycle, facts.repairSummary)) return
-    const operationId = facts.lifecycle.operationId
-    this.#releaseToBrowsing(new DOMException(
-      'Stopped receive is handing output authority to local restoration catch-up', 'AbortError',
-    )).then(released => {
-      if (!released) return
-      const operation = this.#options.retained.getSnapshot().operations.find(candidate => candidate.operationId === operationId)
-      if (operation?.actions.includes('catch-up')) this.#options.retained.perform(operation, 'catch-up')
-    }).catch(error => this.#options.onActionError(error))
   }
 
   startNewReceiveOperation(): void {

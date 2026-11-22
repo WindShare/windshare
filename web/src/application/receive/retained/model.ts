@@ -1,11 +1,6 @@
-import type {
-  CompatibleNameRepairSummary,
-} from '../../../transfer/lifecycle/name-repair'
 import type { RetainedReceiveAction, RetainedReceiveOperation } from '../contracts'
 
-export type RetainedReceiveOperationSnapshot = Readonly<
-  RetainedReceiveOperation & { readonly repairSummary?: CompatibleNameRepairSummary }
->
+export type RetainedReceiveOperationSnapshot = Readonly<RetainedReceiveOperation>
 
 export interface PendingRetainedReceiveActionSnapshot {
   readonly operationId: string

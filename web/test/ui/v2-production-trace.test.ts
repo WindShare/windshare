@@ -520,9 +520,9 @@ describe('peer recovery terminal trace', () => {
 describe('retained receive trace projection', () => {
   it.each([
     'resume-receive',
-    'pending-catch-up', 'restoration-available', 'history-only', 'resume-package',
+    'history-only', 'resume-package',
     'resume-local-finalization', 'save-artifact', 'retry-download',
-    'cleanup-incompatible', 'retry-cleanup', 'needs-attention',
+    'retry-cleanup', 'needs-attention',
   ] as const)('exports retained continuation %s through every action milestone', (continuation) => {
     for (const name of [
       'receive.inventory.action.started',

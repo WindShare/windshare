@@ -1,5 +1,4 @@
 import { commitOutputTransaction } from '../../persistence/transaction'
-import type { CompatibleNameOperationBootstrapV1 } from '../../file-system-access/compatible-name/model'
 import {
   prepareReceiveOperationTransition,
   type ReceiveOperationHandleInventoryRepository,
@@ -27,20 +26,12 @@ import { snapshotIdentity } from '../../../transfer/encoding/canonical'
 import { RECEIVE_STATE_INTENT_FROZEN } from '../../../transfer/lifecycle/state'
 import { decodeStoredReceiveLifecycleState } from '../../workspace/state-codec'
 import { ReceiveLifecycleNotifications, type ReceiveLifecycleListener } from '../../workspace/lifecycle/observation'
-import type { FSACompatibleNameBootstrapRepository } from '../indexeddb-root-binding'
-import {
-  applyCompatibleNameBootstrapTransaction,
-  assertCompatibleNameBootstrapTransaction,
-  assertCompatibleNameBootstrapTransition,
-} from '../indexeddb-compatible-name-ledger'
 import {
   DEFAULT_OUTPUT_DATABASE_NAME,
   INDEXEDDB_BY_KIND_INDEX,
   INDEXEDDB_BY_OPERATION_INDEX,
   INDEXEDDB_BY_OPERATION_KIND_INDEX,
   INDEXEDDB_BY_STATE_INDEX,
-  INDEXEDDB_COMPATIBLE_NAME_MAPPING_STORE,
-  INDEXEDDB_COMPATIBLE_NAME_OPERATION_STORE,
   INDEXEDDB_RECEIVE_HANDLE_STORE,
   INDEXEDDB_RECEIVE_LEASE_STORE,
   INDEXEDDB_RECEIVE_MANIFEST_PAGE_STORE,
@@ -67,8 +58,7 @@ const WORKSPACE_ACTIVATION_CANDIDATE_BOUND = 4_096
 export class IndexedDbReceiveOperationRepository
 implements ReceiveOperationRepository,
   ReceiveOperationHandleInventoryRepository,
-  WorkspaceActivationJournalRepository,
-  FSACompatibleNameBootstrapRepository {
+  WorkspaceActivationJournalRepository {
   readonly #database: IDBDatabase
   readonly #lifecycleNotifications = new ReceiveLifecycleNotifications()
   #closed = false
@@ -111,38 +101,6 @@ implements ReceiveOperationRepository,
   #publishCommittedLifecycle(records: readonly PersistedReceiveRecord[]): void {
     const record = records.find(candidate => candidate.kind === RECEIVE_RECORD_LIFECYCLE_STATE)
     if (record !== undefined) this.#lifecycleNotifications.publish(decodeStoredReceiveLifecycleState(record))
-  }
-
-  async commitFSACompatibleNameBootstrap(input: Readonly<{
-    transition: ReceiveOperationTransition
-    bootstrap: CompatibleNameOperationBootstrapV1
-  }>): Promise<void> {
-    this.#assertOpen()
-    const prepared = await prepareReceiveOperationTransition(input.transition)
-    const bootstrap = assertCompatibleNameBootstrapTransition(prepared, input.bootstrap)
-    const transaction = this.#database.transaction([
-      INDEXEDDB_RECEIVE_RECORD_STORE,
-      INDEXEDDB_RECEIVE_MANIFEST_PAGE_STORE,
-      INDEXEDDB_RECEIVE_HANDLE_STORE,
-      INDEXEDDB_RECEIVE_LEASE_STORE,
-      INDEXEDDB_COMPATIBLE_NAME_OPERATION_STORE,
-      INDEXEDDB_COMPATIBLE_NAME_MAPPING_STORE,
-    ], 'readwrite')
-    try {
-      await assertOperationConcurrency(transaction, prepared)
-      await assertOperationMutationOwnership(transaction, prepared)
-      const insertBootstrap = await assertCompatibleNameBootstrapTransaction(
-        transaction,
-        bootstrap,
-      )
-      applyOperationTransition(transaction, prepared)
-      if (insertBootstrap) applyCompatibleNameBootstrapTransaction(transaction, bootstrap)
-      await transactionCompletion(transaction)
-    } catch (error) {
-      abortQuietly(transaction)
-      throw error
-    }
-    this.#publishCommittedLifecycle(prepared.records)
   }
 
   async readRecord(id: string): Promise<PersistedReceiveRecord | undefined> {
@@ -305,13 +263,5 @@ implements ReceiveOperationRepository,
     if (this.#closed) {
       throw new DOMException('Receive operation repository is closed', 'InvalidStateError')
     }
-  }
-}
-
-function abortQuietly(transaction: IDBTransaction): void {
-  try {
-    transaction.abort()
-  } catch {
-    // A terminal transaction already owns its result.
   }
 }

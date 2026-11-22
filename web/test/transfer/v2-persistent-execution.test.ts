@@ -7,14 +7,12 @@ import type {
   PersistentFileRequest,
   PersistentFileTransactionPort,
   PersistentMaterializationPort,
-  PersistentOutputNamespaceClaimPort,
 } from '../../src/output/persistent-tree/contracts'
 import type { ReceiveLifecycleState } from '../../src/transfer/lifecycle/state'
 import { SelectionPolicy } from '../../src/catalog/selection'
 import type { ReceiveIntent } from '../../src/transfer/intent'
 import {
   OutputPausedError,
-  type AuthenticatedLogicalSiblingMembership,
 } from '../../src/transfer/job/contract'
 import {
   snapshotLogicalArtifactPath,
@@ -27,7 +25,6 @@ import {
   VerifiedFinalOutputFile,
   disabledOutputExecutionProfile,
   outputSessionIdentity,
-  snapshotDirectoryMaterializationRequest,
   type DirectoryMaterializationRequest,
   type OutputFileRequest,
 } from '../../src/transfer/output/session'
@@ -59,78 +56,8 @@ const SIGNAL = new AbortController().signal
 const SUCCESS = transferWorkerSettlement('Succeeded', EMPTY_TRANSFER_FAILURE_SUMMARY)
 const PAUSED = transferWorkerSettlement('Paused', EMPTY_TRANSFER_FAILURE_SUMMARY)
 
-describe('persistent namespace claim bridge', () => {
-  it('rejects membership authority from another committed generation', () => {
-    expect(() => snapshotDirectoryMaterializationRequest(rootDirectoryRequest(
-      identityText(2),
-      identityText(90),
-      {
-        directoryId: identityText(2),
-        generation: identityText(91),
-        hasCommittedName: async () => false,
-      },
-    ))).toThrow('does not match the admitted directory generation')
-  })
-
-  it('binds lazy authenticated membership without querying it on an ordinary directory admission', async () => {
-    const intent = asDirectTree(await receiveIntentFixture({
-      planKind: 'direct-tree',
-      artifactKind: 'directory-tree',
-      selection: new SelectionPolicy(),
-    }))
-    const materialization = new PersistentMaterializationFixture(intent)
-    const hasCommittedName = vi.fn(async (candidate: string) => candidate === 'occupied')
-    const membership: AuthenticatedLogicalSiblingMembership = Object.freeze({
-      directoryId: intent.syntheticRoot,
-      generation: identityText(90),
-      hasCommittedName,
-    })
-    let bound: Parameters<PersistentOutputNamespaceClaimPort['bindDirectoryNamespace']>[0] | undefined
-    const namespaceClaims: PersistentOutputNamespaceClaimPort = {
-      bindDirectoryNamespace: (claim) => {
-        materialization.events.push('namespace-bound')
-        bound = claim
-      },
-    }
-    const execution = await createPersistentDirectTreeExecution({
-      ...createTestCheckpointAuthorities(),
-      executionProfile: disabledOutputExecutionProfile(1),
-      intent,
-      materialization,
-      namespaceClaims,
-      outputIdentity: outputSessionIdentity({
-        backend: 'persistent-test',
-        outputSessionId: 'namespace-claim-session',
-      }),
-      settlement: {
-        beginTerminal: () => undefined,
-        pause: async (_request, cut) => {
-          await cut.closeMaterialization()
-          return partialDirectoryState(intent)
-        },
-        settle: async (_request, cut) => {
-          await cut.closeMaterialization()
-          return publishedState(intent)
-        },
-      },
-    })
-
-    await execution.directories.admitDirectory(
-      rootDirectoryRequest(intent.syntheticRoot, identityText(90), membership),
-      SIGNAL,
-    )
-
-    expect(materialization.events.slice(0, 2)).toEqual([
-      'namespace-bound',
-      'ensure-directory:',
-    ])
-    expect(hasCommittedName).not.toHaveBeenCalled()
-    if (bound === undefined) throw new Error('namespace claim was not bound')
-    await expect(bound.logicalSiblingMembership.hasCommittedName('occupied')).resolves.toBe(true)
-    expect(hasCommittedName).toHaveBeenCalledOnce()
-  })
-
-  it('isolates a later logical directory collision without retrying its namespace mutation', async () => {
+describe('persistent directory mutation isolation', () => {
+  it('isolates a logical directory collision without retrying its namespace mutation', async () => {
     const intent = asDirectTree(await receiveIntentFixture({
       planKind: 'direct-tree',
       artifactKind: 'directory-tree',
@@ -897,7 +824,6 @@ class PersistentMaterializationFixture implements PersistentMaterializationPort 
 function rootDirectoryRequest(
   directoryId: string,
   generation: string,
-  logicalSiblingMembership?: AuthenticatedLogicalSiblingMembership,
 ): DirectoryMaterializationRequest {
   return Object.freeze({
     directory: Object.freeze({
@@ -907,7 +833,6 @@ function rootDirectoryRequest(
     }),
     sourceAuthenticationPath: snapshotSourceAuthenticationPath([]),
     logicalArtifactPath: snapshotLogicalArtifactPath(['windshare']),
-    ...(logicalSiblingMembership === undefined ? {} : { logicalSiblingMembership }),
   })
 }
 

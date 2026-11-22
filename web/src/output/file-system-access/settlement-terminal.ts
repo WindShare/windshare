@@ -9,15 +9,11 @@ export async function cleanupTerminalFSAMetadata(
   input: Pick<CreateFileSystemAccessSettlementAuthorityOptions,
     'intent' | 'repository' | 'lifecycleLeaseId' | 'diagnostics'> & {
     readonly lifecycle: ReceiveLifecycleState
-    readonly observation: Pick<FSAFinalSettlementObservation,
-      'retireRecoveryMetadata' | 'clearCompatibleNamePendingOutcome'>
+    readonly observation: Pick<FSAFinalSettlementObservation, 'retireRecoveryMetadata'>
   },
 ): Promise<ReceiveLifecycleState> {
   const { lifecycle, observation, diagnostics } = input
-  const cleanup = async () => {
-    await observation.retireRecoveryMetadata()
-    await observation.clearCompatibleNamePendingOutcome()
-  }
+  const cleanup = () => observation.retireRecoveryMetadata()
   try {
     if (lifecycle.kind === 'published') {
       return (await completeFileSystemAccessPublishedCleanup({

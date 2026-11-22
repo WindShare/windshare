@@ -1,6 +1,5 @@
 import { encodeBase64Url } from '../../crypto/bytes'
 import type { FSANamedContainerEntryReservation } from '../../transfer/intent'
-import { OutputDirectoryMutationError } from '../../transfer/output/session'
 import {
   snapshotMaterializationRootRelativePath,
   type MaterializationRootRelativePath,
@@ -11,8 +10,8 @@ import {
   type PersistentOutputStage,
   type PersistentOutputStageScope,
 } from '../persistent-tree/stage-diagnostics'
-import { fsaOwnedDirectoryHandleId } from './indexeddb-root-binding'
 import {
+  fsaOwnedDirectoryHandleId,
   persistFSAOwnedDirectory,
   readFSAOwnedDirectoryBinding,
   type FSAOperationBindingRepository,
@@ -100,14 +99,9 @@ export type FSADirectoryAdmissionOutcome =
   | Readonly<{
       kind: 'materialized'
       value: Readonly<{ ownedObjectId: string; created: boolean }>
+      physicalName: string
     }>
   | Readonly<{ kind: 'rejected'; rejection: PathComponentRejectedError }>
-
-interface CompatibleDirectoryAdmission {
-  hasLateLogicalCollision(path: readonly string[], entryKind: 'directory'): boolean
-  hasMapping(path: readonly string[], entryKind: 'directory'): boolean
-  commitVerifiedDirectory(path: readonly string[], ownedObjectId: string): Promise<void>
-}
 
 /** The cache install follows the existing durable record and exact native identity validation. */
 export async function admitFSAOwnedDirectory(input: Readonly<{
@@ -119,10 +113,9 @@ export async function admitFSAOwnedDirectory(input: Readonly<{
   canonicalPath: readonly string[]
   parent: FSAVerifiedDirectoryAuthority
   name: string
+  isSafeName?: boolean
   handleId: string
   stageScope?: PersistentOutputStageScope
-  compatibleNames?: CompatibleDirectoryAdmission
-  recordCompatibleTargetCreated: () => Promise<void>
   randomOwnedObjectId: () => string
 }>): Promise<FSADirectoryAdmissionOutcome> {
   return input.scheduler.runNamespace(
@@ -137,9 +130,12 @@ export async function admitFSAOwnedDirectory(input: Readonly<{
         ...(input.stageScope === undefined ? {} : { stageScope: input.stageScope }),
       })
       if (persisted !== undefined) {
+        // Reopen uses the persisted handle's exact on-disk name so safe-renamed directories
+        // verify without a separate mapping ledger.
+        const physicalName = persisted.handle.name
         const current = await openDirectoryEntry(
           input.parent.handle,
-          input.name,
+          physicalName,
           input.operationId,
           input.stageScope,
           'fsa.directory.entry.open',
@@ -156,23 +152,14 @@ export async function admitFSAOwnedDirectory(input: Readonly<{
         input.authorities.installDirectory({
           ...persisted,
           canonicalPath: input.canonicalPath,
-          physicalName: input.name,
+          physicalName,
           handle: current,
         })
-        await input.compatibleNames?.commitVerifiedDirectory(
-          input.canonicalPath,
-          persisted.ownedObjectId,
-        )
         return Object.freeze({
           kind: 'materialized',
           value: Object.freeze({ ownedObjectId: persisted.ownedObjectId, created: false }),
+          physicalName,
         })
-      }
-      if (input.compatibleNames?.hasLateLogicalCollision(input.canonicalPath, 'directory')) {
-        throw new OutputDirectoryMutationError(
-          'A logical directory collides with an operation-owned compatible name',
-          false,
-        )
       }
       let inspection: 'absent' | 'occupied'
       try {
@@ -184,9 +171,7 @@ export async function admitFSAOwnedDirectory(input: Readonly<{
             component: input.name,
             expectedKind: 'directory',
             stage: 'fsa.directory.entry.inspect',
-            mode: input.compatibleNames?.hasMapping(input.canonicalPath, 'directory') === true
-              ? 'diagnostic'
-              : 'classify-rejection',
+            mode: input.isSafeName === true ? 'diagnostic' : 'classify-rejection',
           }),
         )
       } catch (error) {
@@ -204,11 +189,11 @@ export async function admitFSAOwnedDirectory(input: Readonly<{
           () => input.parent.handle.getDirectoryHandle(input.name, { create: true }),
         )
       } catch (error) {
+        if (input.isSafeName === true) throw error
         const rejection = classifyDirectoryCreationRefusal(error, input.name)
         if (rejection === undefined) throw error
         return Object.freeze({ kind: 'rejected', rejection })
       }
-      await input.recordCompatibleTargetCreated()
       const ownedObjectId = requireOwnedObjectId(input.randomOwnedObjectId())
       const ownedScope = input.stageScope?.withCorrelation({ ownedObjectId })
       const committedBinding = await persistFSAOwnedDirectory({
@@ -242,10 +227,10 @@ export async function admitFSAOwnedDirectory(input: Readonly<{
         physicalName: input.name,
         handle: current,
       })
-      await input.compatibleNames?.commitVerifiedDirectory(input.canonicalPath, ownedObjectId)
       return Object.freeze({
         kind: 'materialized',
         value: Object.freeze({ ownedObjectId, created: true }),
+        physicalName: input.name,
       })
     },
   )

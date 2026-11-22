@@ -1,6 +1,7 @@
 import { offerArtifacts } from '../../../src/output/planning/offers'
 import { createSelectionSpec, createZipArchiveArtifact, createCompleteDirectoryResultRoot, createWorkspaceBinding, createWorkspaceThenPublishPlan } from '../../../src/transfer/intent'
 import { EMPTY_RECEIVE_RUNTIME, type ReceiveRuntimeSnapshot } from '../../../src/application/receive/state'
+import { safeRenamedSummary } from '../../../src/transfer/lifecycle/safe-names'
 import { EMPTY_PREVIEW, EMPTY_PROGRESS, type BrowseRow, type PreviewSnapshot, type ReceiverSnapshot } from '../../../src/ui/model'
 import { TASK_FIXTURES } from '../../../src/ui/tasks/fixtures'
 import { COMPLETE_DISCOVERY, environment, fsaTarget, handoffTarget, identity, portableOffer, projection, singleFileProof, treeProof, workspaceOffer } from '../../output/planning/fixture'
@@ -76,12 +77,12 @@ async function galleryTaskOutput(
   return {
     ...EMPTY_RECEIVE_RUNTIME, offers, lifecycle: facts.lifecycle,
     plan, resolvedArtifact: artifact, activeControls: facts.lifecycle.kind === 'receiving' ? ['pause', 'stop'] : [],
-    repairSummary: scenario === 'saved-cleanup' ? {
-      committedCount: 1, logicalPathSample: [['project', 'settings.cfg']],
-      pairDisplayNames: { script: 'restore.windshare-abc234.ps1', sidecar: 'restore.windshare-abc234.data' },
-      placement: 'inside-logical-root', sidecarSync: 'current', terminalSettlement: 'complete',
-      latestObservedFooter: { committedCount: 1, state: 'completed' },
-    } : null,
+    safeRenamed: scenario === 'saved-cleanup' ? safeRenamedSummary({
+      count: 1,
+      sample: [
+        { logicalPath: ['project', 'settings.cfg'], physicalName: 'settings-cfg.windshare-a1b2c3d4' },
+      ],
+    }) : null,
   }
 }
 

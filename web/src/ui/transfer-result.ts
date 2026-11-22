@@ -1,12 +1,7 @@
 import type { Language } from './preferences/model'
 import { receiverCopy } from './locales/receiver'
-import { compatibleNameRepairSummary } from '../transfer/lifecycle/name-repair'
-import {
-  type CompatibleNameRepairSummary,
-} from '../transfer/lifecycle/name-repair'
 import type { TransferWorkerSettlement } from '../transfer/outcome'
 import type { ReceiveLifecycleState } from '../transfer/lifecycle/state'
-import { hasValidatedTerminalCompatibleNameRepair } from './lifecycle-presentation'
 
 export type TransferResultTone = 'success' | 'warning'
 
@@ -17,39 +12,6 @@ export interface TransferResultPresentation {
 }
 
 export function presentTransferResult(
-  worker: TransferWorkerSettlement,
-  repairSummary?: CompatibleNameRepairSummary | null,
-  lifecycle?: ReceiveLifecycleState,
-  language: Language = 'en',
-): TransferResultPresentation {
-  const t = receiverCopy[language].result
-  const ordinary = presentOrdinaryTransferResult(worker, lifecycle, language)
-  if (repairSummary === undefined || repairSummary === null) return ordinary
-
-  const repair = compatibleNameRepairSummary(repairSummary)
-  const lines = [...ordinary.lines]
-  if (worker.status === 'CompletedWithErrors') {
-    lines.unshift(`${ordinary.title}.`)
-  }
-  lines.push(
-    repair.pairDisplayNames.script === undefined
-      ? t.nameReport(repair.pairDisplayNames.sidecar)
-      : t.nameScript(repair.pairDisplayNames.script),
-  )
-
-  if (worker.status === 'Paused' &&
-      !(lifecycle?.kind === 'partial-directory' && lifecycle.reason === 'stopped')) {
-    return result(t.pausedCompatible, 'warning', lines)
-  }
-  if (!hasValidatedTerminalCompatibleNameRepair(repair)) {
-    return result(t.setupNeeded, 'warning', lines)
-  }
-  return worker.status === 'Succeeded'
-    ? result(t.compatible, 'success', lines)
-    : result(t.partialCompatible, 'warning', lines)
-}
-
-function presentOrdinaryTransferResult(
   worker: TransferWorkerSettlement,
   lifecycle?: ReceiveLifecycleState,
   language: Language = 'en',

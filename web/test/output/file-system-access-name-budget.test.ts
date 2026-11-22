@@ -5,7 +5,7 @@ import {
   type FileSystemComponentKind,
 } from '../../src/output/browser/filesystem-component-inspection'
 import { fitsPortableOutputNameBudget } from '../../src/output/names/policy'
-import { prepareCompatibleNameRootRepair } from '../../src/output/file-system-access/compatible-name/coordinator'
+import { isSafeComponentName } from '../../src/output/file-system-access/safe-name'
 import { reserveNewFileSystemAccessOutput, reopenFileSystemAccessOutput } from '../../src/output/file-system-access/session'
 import { fsaParentOffer } from '../../src/output/capability/acquisition'
 import { acquireFSARootMutationLease, memoryFSAIdentities } from './fsa-mutation-lock-fixture'
@@ -16,7 +16,7 @@ import {
 import { appendProtectedSuffix } from '../../src/transfer/intent/selection'
 import { identity } from './planning/fixture'
 import {
-  MemoryDirectory, MemoryCompatibleNameLedger, MemoryLockManager, MemoryOperationRepository,
+  MemoryDirectory, MemoryLockManager, MemoryOperationRepository,
   bindTask, memoryCheckpointFactory, resultRootArtifact, singleFileArtifact,
 } from './file-system-access-lifecycle-fixture'
 
@@ -70,7 +70,7 @@ describe('FSA physical component byte admission', () => {
     },
   )
 
-  it.each(['file', 'directory', 'collision'] as const)('freezes a compatible %s root before namespace mutation', async scenario => {
+  it.each(['file', 'directory', 'collision'] as const)('freezes a safe %s root before namespace mutation', async scenario => {
     const kind = scenario === 'directory' ? 'directory' : 'file'
     const parent = new MemoryDirectory('downloads')
     const locks = new MemoryLockManager()
@@ -90,35 +90,25 @@ describe('FSA physical component byte admission', () => {
           parent: parent as unknown as FileSystemDirectoryHandle,
         },
         artifact, rootLease, operationId: identity(40), reservationId: identity(41), authorityRef: identity(42, 32),
-        prepareCompatibleNameRootRepair: input => prepareCompatibleNameRootRepair(input, {
-          platform: 'linux', templateProvider: { select: () => { throw new Error('No script template') } },
-          randomBits: () => 0,
-        }),
       })
       expect(reserved.reservation.requestedName).toBe(name)
       expect(reserved.reservation.collisionIndex).toBe(scenario === 'collision' ? 1 : 0)
       expect(fitsPortableOutputNameBudget(reserved.reservation.logicalReservedName)).toBe(false)
       expect(fitsPortableOutputNameBudget(reserved.reservation.physicalName)).toBe(true)
-      expect(reserved.compatibleNameRepair?.bootstrap.initialMapping).toMatchObject({
-        logicalPath: [reserved.reservation.logicalReservedName],
-        physicalComponent: reserved.reservation.physicalName, entryKind: kind,
-        ownershipState: 'selected', commitState: 'uncommitted',
-      })
+      expect(isSafeComponentName(reserved.reservation.physicalName)).toBe(true)
       expect(parent.entryNames()).toEqual(scenario === 'collision' ? [name] : [])
     } finally {
       await rootLease.release()
     }
   })
 
-  it('saves long descendants and reopens their existing mappings and file identity', async () => {
+  it('saves long descendants under safe names and reopens their persisted handles', async () => {
     const parent = new MemoryDirectory('downloads')
     const repository = new MemoryOperationRepository()
     const checkpointFactory = memoryCheckpointFactory()
     const locks = new MemoryLockManager()
-    const ledger = new MemoryCompatibleNameLedger(repository)
     const session = await bindTask({
       parent, repository, checkpointFactory, locks, artifact: await resultRootArtifact(), operationSeed: 50,
-      openCompatibleNameLedger: async () => ledger,
     })
     const root = await parent.getDirectoryHandle(session.reservation.physicalName) as unknown as MemoryDirectory
     root.onEntryLookup = entry => {
@@ -135,23 +125,22 @@ describe('FSA physical component byte admission', () => {
     const file = await session.beginFile(request)
     await file.writeRange(0n, Uint8Array.of(4, 2))
     await file.commit()
-    const mappings = [...ledger.mappings.values()]
-    expect(mappings).toHaveLength(2)
-    expect(mappings.every(mapping => mapping.commitState === 'committed' &&
-      fitsPortableOutputNameBudget(mapping.physicalComponent))).toBe(true)
-    const mappedDirectory = mappings.find(mapping => mapping.entryKind === 'directory')!
-    const mappedFile = mappings.find(mapping => mapping.entryKind === 'file')!
-    const savedParent = await root.getDirectoryHandle(mappedDirectory.physicalComponent) as unknown as MemoryDirectory
-    expect(await savedParent.fileBytes(mappedFile.physicalComponent)).toEqual(Uint8Array.of(4, 2))
+    const summary = session.safeRenamedSummary()
+    expect(summary?.count).toBe(2)
+    expect(summary?.sample.every(entry => fitsPortableOutputNameBudget(entry.physicalName) &&
+      isSafeComponentName(entry.physicalName))).toBe(true)
+    const dirEntry = summary!.sample.find(entry => entry.logicalPath.length === 1)!
+    const fileEntry = summary!.sample.find(entry => entry.logicalPath.length === 2)!
+    const savedParent = await root.getDirectoryHandle(dirEntry.physicalName) as unknown as MemoryDirectory
+    expect(await savedParent.fileBytes(fileEntry.physicalName)).toEqual(Uint8Array.of(4, 2))
     await session.close()
     const reopened = await reopenFileSystemAccessOutput({
       intent: session.intent, operationRepository: repository, checkpointRepositoryFactory: checkpointFactory,
-      lockManager: locks, mutationIdentities: memoryFSAIdentities(locks), openCompatibleNameLedger: async () => ledger,
+      lockManager: locks, mutationIdentities: memoryFSAIdentities(locks),
     })
     expect((await reopened.ensureDirectory([EXPANDED_NAME])).ownedObjectId).toBe(directory.ownedObjectId)
     const reopenedFile = await reopened.beginFile(request)
     expect(reopenedFile.ownedObjectId).toBe(file.ownedObjectId)
-    expect([...ledger.mappings.values()]).toEqual(mappings)
     await reopenedFile.close()
     await reopened.close()
   })

@@ -16,7 +16,7 @@ import type {
   RetainedReceiveInventory,
   RetainedReceiveOperation,
 } from '../contracts'
-import { StaleReceiveBoundaryError, type ReceiverIncidentPort, type RetainedCompatibleNameRepairSource, type RetainedInventoryTraceEvent } from '../observation/contracts'
+import { StaleReceiveBoundaryError, type ReceiverIncidentPort, type RetainedInventoryTraceEvent } from '../observation/contracts'
 import { PresentationAttempt } from '../observation/attempt'
 import {
   resolveRetainedInventory,
@@ -68,7 +68,6 @@ export interface RetainedInventoryCoordinatorOptions {
   readonly adoptContinuation: (input: RetainedContinuationAdoption) => Promise<void>
   readonly ownsRuntime: (runtime: BoundReceiveOperation) => boolean
   readonly publish: (retained: RetainedReceiveInventorySnapshot) => void
-  readonly repairSource?: RetainedCompatibleNameRepairSource
   readonly trace?: DomainTraceSource<RetainedInventoryTraceEvent>
   readonly onActionError: (error: unknown) => void
   readonly onActionCompleted?: (operationId: string, action: RetainedReceiveAction) => void
@@ -263,7 +262,7 @@ export class RetainedInventoryCoordinator {
         attempt.outputFailures,
       )
       pending.controller.signal.throwIfAborted()
-      const presented = await resolveRetainedInventory(loaded, pending.controller.signal, this.#options.repairSource)
+      const presented = resolveRetainedInventory(loaded)
       pending.controller.signal.throwIfAborted()
       if (!this.#isCurrentLoad(pending)) {
         this.#closeLoadedInventory(loaded, attempt)

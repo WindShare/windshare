@@ -1,4 +1,3 @@
-import { catchUpFileSystemAccessCompatibleNames } from '../../../output/file-system-access/settlement'
 import { FSAReceiveOperation } from '../fsa/operation'
 import { reopenFolderDeliveryContext } from '../fsa/folder-delivery'
 import { WorkspaceReceiveOperation } from '../workspace/operation'
@@ -10,8 +9,8 @@ import type { WorkspaceStageTraceListener } from '../../../output/workspace/stag
 import type { BoundReceiveOperation, RetainedReceiveAction } from '../../receive/contracts'
 import type { AuthorityOwnedReceiveOperationContinuation } from '../../../output/resume/reopen-authority'
 import type { BrowserRetainedContinuationExecutor } from './inventory'
+
 type RetainedContinuationAction = Extract<RetainedReceiveAction, 'save' | 'redownload'>
-type DirectTreeCatchUpContinuation = Extract<AuthorityOwnedReceiveOperationContinuation, { kind: 'direct-tree-catch-up' }>
 type ReceiveContinuation = Extract<AuthorityOwnedReceiveOperationContinuation, { kind: 'direct-tree-receive' | 'workspace-receive' | 'workspace-start' }>
 type WorkspacePackageContinuation = Extract<AuthorityOwnedReceiveOperationContinuation, { kind: 'workspace-package' }>
 type WorkspaceRetainedContinuation = Extract<AuthorityOwnedReceiveOperationContinuation, { kind: 'workspace-retained' }>
@@ -23,21 +22,6 @@ export function browserRetainedContinuationExecutor(
   localOutputFailures: LocalOutputOperationFailureDiagnosticsPort | undefined,
 ): BrowserRetainedContinuationExecutor {
   return Object.freeze({
-    catchUpCompatibleNames: async (
-      continuation: DirectTreeCatchUpContinuation,
-      signal: AbortSignal,
-      failures?: OutputFailureSinks,
-    ) => {
-      try {
-        await catchUpFileSystemAccessCompatibleNames({
-          operation: continuation.operation,
-          signal,
-        })
-      } catch (error) {
-        if (!signal.aborted) recordOutputException(failures?.settlement, error)
-        throw error
-      }
-    },
     resumeReceive: async (
       continuation: ReceiveContinuation,
       signal: AbortSignal,

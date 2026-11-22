@@ -25,6 +25,5 @@ export const admission: typeof English = {
   outputBusy: '另一个下载正在写入。请先暂停或完成它，再继续此任务。',
   noSavedAuthority: '此浏览器未保留操作授权，无法操作已保存的任务。',
   ownershipUnknown: '需要先确认文件归属，暂时无法自动处理。',
-  abnormalReceive: '上次接收意外中断。请先确认任务不会继续，再使用文件名还原命令。',
   zipUnavailable: '无法恢复已保留的 ZIP。请重新下载，原有数据仍会保留。',
 }

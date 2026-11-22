@@ -102,7 +102,6 @@ export class BrowserReceiveApplication<Share extends ReceivePlanningShare> {
       onFailure: options.onActionError,
       ...(options.trace === undefined ? {} : { trace: options.trace }),
     })
-    const readRepairSummary = options.receive.retained.readRepairSummary
     this.#retained = new RetainedInventoryCoordinator({
       receive: options.receive,
       isDisposed: disposed,
@@ -114,10 +113,6 @@ export class BrowserReceiveApplication<Share extends ReceivePlanningShare> {
       ownsRuntime: operation => this.#active.ownsRuntime(operation),
       publish: options.onRetainedChanged,
       onActionCompleted: (operationId, action) => this.tasks.retainedActionCompleted(operationId, action),
-      ...(readRepairSummary === undefined ? {} : {
-        repairSource: { readRepairSummary: (operationId: string, signal: AbortSignal) =>
-          readRepairSummary.call(options.receive.retained, operationId, signal) },
-      }),
       ...(options.trace === undefined ? {} : { trace: options.trace }),
       onActionError: options.onActionError,
       ...(options.incidents === undefined ? {} : { incidents: options.incidents }),

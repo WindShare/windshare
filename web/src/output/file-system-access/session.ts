@@ -10,9 +10,7 @@ import {
   type FSANamedContainerEntryReservation,
   type ReceiveIntent,
 } from '../../transfer/intent'
-import {
-  snapshotMaterializationRootRelativePath,
-} from '../../transfer/job/coordinate/direct-tree'
+import type { SafeRenamedSummary } from '../../transfer/lifecycle/safe-names'
 import {
   observePerformance,
   recordOutputException,
@@ -24,7 +22,6 @@ import {
   inspectFileSystemComponent,
 } from '../browser/filesystem-component-inspection'
 import { BrowserFileSystemTree } from '../browser/filesystem-tree'
-import { IndexedDbCompatibleNameLedger } from '../browser/indexeddb-compatible-name-ledger'
 import {
   verifyFSAOperationBinding,
   type FSAOperationBindingRepository,
@@ -44,8 +41,6 @@ import type {
   PersistentFileRequest,
   PersistentFileTransactionPort,
   ActivatablePersistentMaterializationPort,
-  PersistentDirectoryNamespaceClaim,
-  PersistentOutputNamespaceClaimPort,
   PersistentTreeTraceEvent,
 } from '../persistent-tree/contracts'
 import { PersistentTreeOutputSession } from '../persistent-tree/session'
@@ -60,30 +55,12 @@ import {
   type FSASemanticOutputRepository,
 } from './checkpoint-repository'
 import type { PersistentDirectTreeMaterializationEvidence } from '../execution/persistent-execution'
-import type {
-  CompatibleNameActivationLedger,
-  CompatibleNameCoordinator,
-  CompatibleNameEmptyRepairRemoval,
-  CompatibleNameRootRepairPreparationOptions,
-  CompatibleNameRootRepairFactory,
-  PreparedCompatibleNameRootRepair,
-  CompatibleNameRepairProjectionSource,
-} from './compatible-name/coordinator'
-import { CompatibleNamePathAuthority } from './compatible-name/coordinator'
-import { beginCompatibleNameFile } from './compatible-name/file-transaction'
 import { openDirectDeliveryFile } from '../browser-delivery/indexeddb/direct-file'
 import type { BrowserDirectFileDelivery } from '../browser-delivery/ports'
-import type {
-  CompatibleNamePendingTerminalOutcomeV1,
-  CompatibleNameTerminalFooterState,
-} from './compatible-name/model'
-import type {
-  CompatibleNameRepairSummary,
-} from '../../transfer/lifecycle/name-repair'
+import { SafeNameRegistry, deterministicSafeComponent } from './safe-name'
 import {
   canonicalAuthorityRef,
   createFSAAuthorityReference,
-  defaultCompatibleNamePreparation,
   emitFSAOutputTrace,
   outputTrace,
   reservationCreated,
@@ -95,7 +72,6 @@ import {
 } from './settlement-ledger'
 import { closeFailedFSAAssembly, closeFSAOutputAuthorities } from './assembly-cleanup'
 
-
 export type {
   FSAFileCheckpointRepository,
   FSAFileCheckpointRepositoryFactory,
@@ -106,6 +82,9 @@ export {
   type FSAFreshPageDiscardCut,
   type OpenFreshPageFileSystemAccessDiscardOptions,
 } from './fresh-page-discard-session'
+export { reopenFileSystemAccessOutput } from './session-reopen'
+export type { ReopenFileSystemAccessOutputOptions } from './session-reopen'
+export { createFSAAuthorityReference } from './session-diagnostics'
 
 const MAX_COLLISION_INDEX = 0xffff_ffff
 
@@ -132,12 +111,6 @@ export type FSAOutputTraceEvent = FSAReservationTraceEvent | PersistentTreeTrace
 export type FSAOutputTrace = (event: FSAOutputTraceEvent) => void
 
 export interface FSAFinalSettlementObservation {
-  persistCompatibleNamePendingOutcome(outcome: CompatibleNamePendingTerminalOutcomeV1): Promise<void>
-  drainCompatibleNameProjector(
-    state: CompatibleNameTerminalFooterState,
-  ): Promise<CompatibleNameRepairSummary | undefined>
-  clearCompatibleNamePendingOutcome(): Promise<void>
-  removeVerifiedEmptyCompatibleNameRepair(): Promise<CompatibleNameEmptyRepairRemoval>
   verifyOperationBinding(): Promise<void>
   checkpointSettlementSnapshot(
     evidence: PersistentDirectTreeMaterializationEvidence,
@@ -155,7 +128,6 @@ export interface ReserveNewFileSystemAccessOutputOptions {
   readonly operationId?: string
   readonly reservationId?: string
   readonly authorityRef?: string
-  readonly prepareCompatibleNameRootRepair?: CompatibleNameRootRepairFactory
   readonly diagnostics?: OutputDiagnosticsPorts
   readonly trace?: FSAOutputTrace
 }
@@ -166,7 +138,6 @@ export interface ReservedFileSystemAccessOutput {
   readonly operationId: string
   readonly reservation: FSANamedContainerEntryReservation
   readonly rootLease: FSARootMutationLease
-  readonly compatibleNameRepair?: PreparedCompatibleNameRootRepair
 }
 
 export interface AssembleNewFileSystemAccessOutputOptions {
@@ -174,9 +145,6 @@ export interface AssembleNewFileSystemAccessOutputOptions {
   readonly operationRepository: FSAOperationBindingRepository
   readonly rootLease: FSARootMutationLease
   readonly maximumConcurrentInitialClaimInspections?: number
-  readonly compatibleNameCoordinator?: CompatibleNameCoordinator
-  readonly openCompatibleNameLedger?: () => Promise<CompatibleNameActivationLedger>
-  readonly compatibleNamePreparation?: CompatibleNameRootRepairPreparationOptions
   readonly checkpointRepositoryFactory?: FSAFileCheckpointRepositoryFactory
   readonly databaseName?: string
   readonly diagnostics?: OutputDiagnosticsPorts
@@ -184,20 +152,7 @@ export interface AssembleNewFileSystemAccessOutputOptions {
   readonly trace?: FSAOutputTrace
 }
 
-
-export {
-  openFileSystemAccessCompatibleNameCatchUp,
-  reopenFileSystemAccessOutput,
-} from './session-reopen'
-export type {
-  FileSystemAccessCompatibleNameCatchUpSession,
-  OpenFileSystemAccessCompatibleNameCatchUpOptions,
-  ReopenFileSystemAccessOutputOptions,
-} from './session-reopen'
-export { createFSAAuthorityReference } from './session-diagnostics'
-
-export class FileSystemAccessOutputSession implements
-  ActivatablePersistentMaterializationPort, PersistentOutputNamespaceClaimPort {
+export class FileSystemAccessOutputSession implements ActivatablePersistentMaterializationPort {
   readonly intent: ReceiveIntent
   readonly reservation: FSANamedContainerEntryReservation
   readonly #materialization: PersistentTreeOutputSession
@@ -206,7 +161,7 @@ export class FileSystemAccessOutputSession implements
   readonly #operationRepository: FSAOperationBindingRepository
   readonly #checkpoints: FSASemanticOutputRepository
   readonly #rootLease: FSARootMutationLease
-  readonly #compatibleNames: CompatibleNamePathAuthority
+  readonly #safeNames: SafeNameRegistry
   readonly #stageAuthority: PersistentOutputStageAuthority | undefined
   readonly #diagnostics: OutputDiagnosticsPorts | undefined
   readonly #settlementLedger: FSASettlementLedgerAuthority
@@ -227,7 +182,7 @@ export class FileSystemAccessOutputSession implements
     operationRepository: FSAOperationBindingRepository
     checkpoints: FSASemanticOutputRepository
     rootLease: FSARootMutationLease
-    compatibleNames: CompatibleNamePathAuthority
+    safeNames: SafeNameRegistry
     stageAuthority?: PersistentOutputStageAuthority
     diagnostics?: OutputDiagnosticsPorts
   }>) {
@@ -239,7 +194,7 @@ export class FileSystemAccessOutputSession implements
     this.#operationRepository = input.operationRepository
     this.#checkpoints = input.checkpoints
     this.#rootLease = input.rootLease
-    this.#compatibleNames = input.compatibleNames
+    this.#safeNames = input.safeNames
     this.#stageAuthority = input.stageAuthority
     this.#diagnostics = input.diagnostics
     this.#settlementLedger = new FSASettlementLedgerAuthority({
@@ -252,14 +207,17 @@ export class FileSystemAccessOutputSession implements
     return readBrowserDeliveryCheckpoint(this.#checkpoints, fileId)
   }
 
-  beginDirectFile(request: PersistentFileRequest, delivery: BrowserDirectFileDelivery): Promise<PersistentFileTransactionPort> {
+  beginDirectFile(
+    request: PersistentFileRequest,
+    delivery: BrowserDirectFileDelivery,
+  ): Promise<PersistentFileTransactionPort> {
     this.#requireMaterializing()
     return openDirectDeliveryFile(this.#checkpoints, delivery, () => this.beginFile(request))
   }
 
-  async beginFile(request: PersistentFileRequest): Promise<PersistentFileTransactionPort> {
+  beginFile(request: PersistentFileRequest): Promise<PersistentFileTransactionPort> {
     this.#requireMaterializing()
-    return beginCompatibleNameFile(request, this.#materialization, this.#compatibleNames)
+    return this.#materialization.beginFile(request)
   }
 
   ensureDirectory(
@@ -269,46 +227,18 @@ export class FileSystemAccessOutputSession implements
     return this.#materialization.ensureDirectory(path)
   }
 
-  bindDirectoryNamespace(claim: PersistentDirectoryNamespaceClaim): void {
-    this.#requireMaterializing()
-    this.#compatibleNames.bindDirectoryNamespace(claim)
-  }
-
   activate(): Promise<void> {
     this.#requireMaterializing()
-    this.#activationPromise ??= this.#activate()
+    this.#activationPromise ??= this.#materialization.activate()
     return this.#activationPromise
-  }
-
-  async #activate(): Promise<void> {
-    await this.#materialization.activate()
-    if (this.#compatibleNames.rootEntryKind !== 'directory') return
-    const root = await this.#materialization.ensureDirectory(
-      snapshotMaterializationRootRelativePath([]),
-    )
-    await this.#compatibleNames.commitVerifiedRootDirectory(root.ownedObjectId)
   }
 
   usesOperationRepository(repository: FSAOperationBindingRepository): boolean {
     return repository === this.#operationRepository
   }
 
-  get repairProjection(): CompatibleNameRepairProjectionSource | undefined {
-    return this.#compatibleNames.repairProjection
-  }
-
-  repairSummary(): CompatibleNameRepairSummary | undefined {
-    return this.#compatibleNames.repairSummary()
-  }
-
-  subscribeRepairProjectionActivation(
-    listener: (source: CompatibleNameRepairProjectionSource) => void,
-  ): () => void {
-    return this.#compatibleNames.subscribeRepairProjectionActivation(listener)
-  }
-
-  get compatibleNameRepairActive(): boolean {
-    return this.#compatibleNames.active
+  safeRenamedSummary(): SafeRenamedSummary | undefined {
+    return this.#safeNames.summary()
   }
 
   beginTerminal(kind: FSATerminalMutationKind): void {
@@ -390,15 +320,26 @@ export class FileSystemAccessOutputSession implements
     return this.#outputClosePromise
   }
 
-  async verifyStagedTarget(record: BrowserDeliveryRecordV1, content: Blob): Promise<'empty' | 'matching-staged-content'> {
+  async verifyStagedTarget(
+    record: BrowserDeliveryRecordV1,
+    content: Blob,
+  ): Promise<'empty' | 'matching-staged-content'> {
     this.#requireMaterializing()
-    return verifyStagedDeliveryTarget({ record, content, tree: this.#tree, namespace: this.#checkpoints.binding,
-      checkpoint: await this.readCheckpoint(record.fileId) })
+    return verifyStagedDeliveryTarget({
+      record,
+      content,
+      tree: this.#tree,
+      namespace: this.#checkpoints.binding,
+      checkpoint: await this.readCheckpoint(record.fileId),
+    })
   }
 
   closeForStopSettlement(): Promise<void> {
     if (this.#settlementObservationActive || this.#terminalDrain?.kind !== 'stop-operation') {
-      return Promise.reject(new DOMException('Stopped metadata requires the completed Stop cut', 'InvalidStateError'))
+      return Promise.reject(new DOMException(
+        'Stopped metadata requires the completed Stop cut',
+        'InvalidStateError',
+      ))
     }
     this.#outputClosePromise ??= (async () => {
       try {
@@ -440,8 +381,11 @@ export class FileSystemAccessOutputSession implements
   }
 
   #closeOutputAuthorities(): Promise<void> {
-    return closeFSAOutputAuthorities({ materialization: this.#materialization, checkpoints: this.#checkpoints,
-      compatibleNames: this.#compatibleNames, diagnostics: this.#diagnostics })
+    return closeFSAOutputAuthorities({
+      materialization: this.#materialization,
+      checkpoints: this.#checkpoints,
+      diagnostics: this.#diagnostics,
+    })
   }
 
   #observation(authority: FSATerminalExclusiveAuthority): FSAFinalSettlementObservation {
@@ -449,14 +393,6 @@ export class FileSystemAccessOutputSession implements
       throw new DOMException('FSA terminal exclusive authority is foreign', 'InvalidStateError')
     }
     return Object.freeze({
-      persistCompatibleNamePendingOutcome: (outcome: CompatibleNamePendingTerminalOutcomeV1) =>
-        this.#compatibleNames.persistPendingTerminalOutcome(outcome),
-      drainCompatibleNameProjector: (state: CompatibleNameTerminalFooterState) =>
-        this.#compatibleNames.drainTerminalProjector(state),
-      clearCompatibleNamePendingOutcome: () =>
-        this.#compatibleNames.clearPendingTerminalOutcome(),
-      removeVerifiedEmptyCompatibleNameRepair: () =>
-        this.#compatibleNames.removeVerifiedEmptyRepairWithinMutation(this.#tree.ownedRoot()),
       verifyOperationBinding: async () => {
         await verifyFSAOperationBinding({
           repository: this.#operationRepository,
@@ -498,15 +434,9 @@ export async function reserveNewFileSystemAccessOutput(
   const operationId = options.operationId ?? createOperationID()
   const reservationId = options.reservationId ?? createDestinationReservationID()
   const authorityRef = canonicalAuthorityRef(options.authorityRef ?? createFSAAuthorityReference())
-  const selected = await options.rootLease.authority.run('reserve-name', async () => {
-    const decision = await firstAvailableName(
-      options.authority.parent,
-      operationId,
-      artifact,
-      authorityRef,
-      options.prepareCompatibleNameRootRepair,
-    )
-    const reservation = await createFSANamedEntryReservation({
+  const reservation = await options.rootLease.authority.run('reserve-name', async () => {
+    const decision = await firstAvailableName(options.authority.parent, operationId, artifact)
+    return createFSANamedEntryReservation({
       operationId,
       reservationId,
       artifact,
@@ -515,17 +445,13 @@ export async function reserveNewFileSystemAccessOutput(
       physicalName: decision.physicalName,
       collisionIndex: decision.collisionIndex,
     })
-    return Object.freeze({ reservation, compatibleNameRepair: decision.compatibleNameRepair })
   })
   return Object.freeze({
     authority: options.authority,
     artifact,
     operationId,
-    reservation: selected.reservation,
+    reservation,
     rootLease: options.rootLease,
-    ...(selected.compatibleNameRepair === undefined
-      ? {}
-      : { compatibleNameRepair: selected.compatibleNameRepair }),
   })
 }
 
@@ -547,17 +473,7 @@ export async function assembleNewFileSystemAccessOutput(
       ? {}
       : { stageScope: stageAuthority.bindingScope() }),
   })
-  const compatibleNames = CompatibleNamePathAuthority.create({
-    binding,
-    mutations: options.rootLease.authority,
-    pairHandles: options.operationRepository,
-    openLedger: options.openCompatibleNameLedger ??
-      (() => IndexedDbCompatibleNameLedger.open(options.databaseName)),
-    preparation: options.compatibleNamePreparation ?? defaultCompatibleNamePreparation(),
-    ...(options.compatibleNameCoordinator === undefined
-      ? {}
-      : { coordinator: options.compatibleNameCoordinator }),
-  })
+  const safeNames = new SafeNameRegistry(binding.reservation)
   let checkpoints: FSASemanticOutputRepository | undefined
   try {
     checkpoints = await openFSAFileCheckpointRepository(
@@ -572,7 +488,7 @@ export async function assembleNewFileSystemAccessOutput(
       operationRepository: options.operationRepository,
       fileHandles: checkpoints,
       mutations: options.rootLease.authority,
-      compatibleNames,
+      safeNames,
       ...(stageAuthority === undefined ? {} : { stageAuthority }),
     })
     const materialization = await PersistentTreeOutputSession.createNew({
@@ -600,7 +516,7 @@ export async function assembleNewFileSystemAccessOutput(
       operationRepository: options.operationRepository,
       checkpoints,
       rootLease: options.rootLease,
-      compatibleNames,
+      safeNames,
       ...(stageAuthority === undefined ? {} : { stageAuthority }),
       ...(options.diagnostics === undefined
         ? {}
@@ -609,11 +525,7 @@ export async function assembleNewFileSystemAccessOutput(
   } catch (error) {
     recordOutputException(options.diagnostics?.failures?.outputReservation, error)
     outputTrace(options.diagnostics, { eventName: 'output_reservation', transition: 'failed' })
-    const cleanupFailure = closeFailedFSAAssembly(
-      checkpoints,
-      compatibleNames,
-      options.diagnostics,
-    )
+    const cleanupFailure = closeFailedFSAAssembly(checkpoints, options.diagnostics)
     if (cleanupFailure !== undefined) {
       throw new AggregateError(
         [error, cleanupFailure],
@@ -639,14 +551,11 @@ async function firstAvailableName(
   parent: FileSystemDirectoryHandle,
   operationId: string,
   artifact: DirectoryTreeArtifact,
-  authorityRef: string,
-  prepareCompatibleNameRootRepair: CompatibleNameRootRepairFactory | undefined,
 ): Promise<{
   readonly requestedName: string
   readonly reservedName: string
   readonly physicalName: string
   readonly collisionIndex: number
-  readonly compatibleNameRepair?: PreparedCompatibleNameRootRepair
 }> {
   for (let collisionIndex = 0; collisionIndex <= MAX_COLLISION_INDEX; collisionIndex += 1) {
     const decision = await decideCollisionName(operationId, artifact, collisionIndex)
@@ -665,24 +574,24 @@ async function firstAvailableName(
         collisionIndex: decision.collisionIndex,
       })
     } catch (error) {
-      if (!(error instanceof PathComponentRejectedError) ||
-          prepareCompatibleNameRootRepair === undefined) {
-        throw error
-      }
-      const compatibleNameRepair = await prepareCompatibleNameRootRepair({
-        rejection: error,
-        parent,
-        operationId,
-        authorityRef,
-        logicalReservedName: decision.reservedName,
+      if (!(error instanceof PathComponentRejectedError)) throw error
+      const safeName = await deterministicSafeComponent({
+        logicalPath: [decision.reservedName],
         entryKind: decision.entryKind,
+        collisionIndex: decision.collisionIndex,
       })
+      if (await inspectFileSystemComponent({
+        verifiedParent: parent,
+        component: safeName,
+        expectedKind: decision.entryKind,
+        stage: 'fsa.root.entry.inspect',
+        mode: 'diagnostic',
+      }) === 'occupied') continue
       return Object.freeze({
         requestedName: decision.requestedName,
         reservedName: decision.reservedName,
-        physicalName: compatibleNameRepair.bootstrap.initialMapping.physicalComponent,
+        physicalName: safeName,
         collisionIndex: decision.collisionIndex,
-        compatibleNameRepair,
       })
     }
   }

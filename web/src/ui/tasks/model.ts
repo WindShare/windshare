@@ -1,7 +1,7 @@
 import type { ReceiveBlockReason } from '../../application/receive/admission'
 import type { ReceiveLifecycleState } from '../../transfer/lifecycle/state'
 import type { ReceiveOperationDisplay } from '../../output/model/operation-display'
-import type { CompatibleNameRepairPresentation } from '../compatible-name-repair-presentation'
+import type { SafeRenamedSummary } from '../../transfer/lifecycle/safe-names'
 import type { LifecycleUserAction } from '../../application/receive/actions'
 import type { ReceiverProgress } from '../model'
 import type { RetainedReceiveAction, RetainedReceiveOperation } from '../../application/receive/contracts'
@@ -42,7 +42,7 @@ export interface TaskFacts {
   readonly publication: TaskPublication
   readonly progress: ReceiverProgress | null
   readonly browserDelivery?: import('../../output/model/browser-delivery').BrowserDeliverySummary | null
-  readonly fidelity: CompatibleNameRepairPresentation | null
+  readonly safeRenamed: SafeRenamedSummary | null
   readonly details: readonly string[]
   readonly interruption: 'pause' | 'stop' | 'finish' | null
   readonly execution: Readonly<{ kind: 'active' }> |
@@ -91,7 +91,7 @@ export interface TaskPresentation {
   readonly secondaryActions: readonly TaskAction[]
   readonly destructiveActions: readonly TaskAction[]
   readonly details: readonly string[]
-  readonly fidelity: CompatibleNameRepairPresentation | null
+  readonly safeRenamed: SafeRenamedSummary | null
   readonly completeness: TaskCompleteness
   readonly publication: TaskPublication
   readonly transition: TaskPresentationTransition

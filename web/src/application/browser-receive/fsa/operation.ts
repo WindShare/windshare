@@ -22,7 +22,6 @@ import type {
 } from '../../../diagnostics/trace/ports'
 import { SYSTEM_TRACE_CLOCK } from '../../../diagnostics/trace/ports'
 import type { ReopenedDirectTreeOperation } from '../../../output/resume/reopen-authority'
-import type { CompatibleNameRepairProjectionSource } from '../../../output/file-system-access/compatible-name/coordinator'
 import { createAutomaticCheckpointAdmissionAuthority } from '../../../output/persistent-tree/automatic-checkpoint-admission'
 import { createPreservingWriterCapacityAuthority } from '../../../output/persistent-tree/preserving-writer-capacity'
 import { checkpointAuthorityObserver } from '../../../output/file-system-access/session-diagnostics'
@@ -93,7 +92,6 @@ export class FSAReceiveOperation implements BoundReceiveOperation {
   readonly #unsubscribeLifecycle: () => void
   readonly activeControls = receiveInterruptionControls('direct-tree')
   readonly initialWorkspaceUsage = null
-  readonly repairProjection?: CompatibleNameRepairProjectionSource
   readonly outputProgress?: BrowserFolderDeliveryContext['progress']
   readonly #repository: ReceiveOperationRepository
   readonly #lease: BrowserReceiveOperationLease
@@ -130,8 +128,6 @@ export class FSAReceiveOperation implements BoundReceiveOperation {
     this.#repository = input.repository
     this.#lease = input.lease
     this.#resources = input.resources
-    const repairProjection = input.session.repairProjection
-    if (repairProjection !== undefined) this.repairProjection = repairProjection
     this.#diagnostics = input.diagnostics
     this.#localOutputFailures = input.localOutputFailures
     this.#attemptIdentities = input.attemptIdentities
@@ -294,13 +290,6 @@ export class FSAReceiveOperation implements BoundReceiveOperation {
 
   observeCheckpoint: NonNullable<import('../../../transfer/job/contract').TransferJobOptions['onCheckpointObservation']> = event => {
     observeBrowserFolderCheckpoint(this.#diagnostics, event)
-  }
-
-
-  subscribeRepairProjectionActivation(
-    listener: (source: CompatibleNameRepairProjectionSource) => void,
-  ): () => void {
-    return this.#resources.subscribeRepairProjectionActivation(listener)
   }
 
   async startLifecycleAction(
@@ -642,8 +631,7 @@ async function createFSAPlanAuthority(
           return createPersistentDirectTreeExecution({
             intent: boundIntent,
             materialization: deliveryAttempt?.delivery ?? session,
-            namespaceClaims: session,
-            repairSummary: () => session.repairSummary(),
+            safeRenamedSummary: () => session.safeRenamedSummary(),
             executionProfile: FSA_DIRECT_TREE_EXECUTION_PROFILE,
             recovery,
             automaticCheckpointAdmission,

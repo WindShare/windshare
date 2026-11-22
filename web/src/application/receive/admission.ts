@@ -23,7 +23,6 @@ export type ReceiveBlockReason =
   | 'outputBusy'
   | 'noSavedAuthority'
   | 'ownershipUnknown'
-  | 'abnormalReceive'
   | 'zipUnavailable'
 
 export type ReceiveAdmission = Readonly<{ allowed: boolean; reason: ReceiveBlockReason | null }>

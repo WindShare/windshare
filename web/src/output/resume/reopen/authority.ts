@@ -1,4 +1,3 @@
-import { IndexedDbCompatibleNameLedger } from '../../browser/indexeddb-compatible-name-ledger'
 import {
   verifyFSAOperationBinding,
 } from '../../browser/indexeddb-root-binding'
@@ -63,7 +62,6 @@ import { WorkspaceContinuationAuthority } from './workspace-continuation-authori
  * never supplies an intent, binding, handle, repository row, or lifecycle state.
  */
 export class PersistedReceiveOperationReopenAuthority {
-  readonly #readCompatibleNameHeader: NonNullable<PersistedReceiveOperationReopenAuthorityOptions['readCompatibleNameHeader']>
   readonly #repositoryFactory: () => Promise<ReceiveOperationRepository>
   readonly #clock: { now(): number }
   readonly #leaseOptions: LeaseOptions
@@ -76,10 +74,6 @@ export class PersistedReceiveOperationReopenAuthority {
   readonly #trace: PersistedReceiveOperationReopenTrace | undefined
 
   constructor(options: PersistedReceiveOperationReopenAuthorityOptions) {
-    this.#readCompatibleNameHeader = options.readCompatibleNameHeader ?? (async operationId => {
-      const ledger = await IndexedDbCompatibleNameLedger.open(options.checkpointDatabaseName)
-      try { return await ledger.readHeader(operationId) } finally { ledger.close() }
-    })
     this.#repositoryFactory = options.repositoryFactory
     this.#clock = options.clock ?? SYSTEM_CLOCK
     this.#leaseOptions = options.leaseOptions ?? {}
@@ -323,11 +317,6 @@ export class PersistedReceiveOperationReopenAuthority {
       return this.#workspaceContinuation.resumeReceive({ ...input, target: input.target })
     }
     if (input.snapshot.lifecycle.kind === 'receiving' && input.target.kind === 'direct-tree') {
-      const header = await this.#readCompatibleNameHeader(input.snapshot.operation.operationId)
-      if (header?.pendingTerminalOutcome !== undefined ||
-          header?.repairSummary?.terminalSettlement === 'complete') {
-        throw new DOMException('Terminal compatible-name output requires local settlement', 'InvalidStateError')
-      }
       return Object.freeze({
         lifecycle: await persistReceiveResume(
           input.repository, input.snapshot, input.lease,

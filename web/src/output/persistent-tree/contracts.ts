@@ -10,7 +10,6 @@ import type {
   SemanticFileCheckpointJournal,
 } from '../persistence/journal'
 import type { FileCheckpointRecoveryRepository } from './recovery'
-import type { AuthenticatedLogicalSiblingMembership } from '../../transfer/job/contract'
 import type {
   AutomaticCheckpointTrigger,
   OutputSessionIdentity,
@@ -253,19 +252,6 @@ export interface PersistentMaterializationPort {
   /** Stop may abandon receiving storage after draining; Pause must preserve its checkpoints. */
   closeForStopSettlement?(): Promise<void>
   close(): Promise<void>
-}
-
-export interface PersistentDirectoryNamespaceClaim {
-  readonly materializationRelativePath: readonly string[]
-  readonly logicalSiblingMembership: AuthenticatedLogicalSiblingMembership
-}
-
-/**
- * Optional DirectTree join for a backend that can activate compatible physical names.
- * Binding is synchronous and must not inspect membership; candidate allocation owns that lazy query.
- */
-export interface PersistentOutputNamespaceClaimPort {
-  bindDirectoryNamespace(claim: PersistentDirectoryNamespaceClaim): void
 }
 
 /** Root publication is an explicit post-binding step for PrefixVisible destinations. */

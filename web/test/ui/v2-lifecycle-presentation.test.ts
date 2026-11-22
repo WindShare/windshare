@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
 import type {
-  CompatibleNameRepairSummary,
-} from '../../src/transfer/lifecycle/name-repair'
-import type {
   RecoverySummary,
 } from '../../src/transfer/lifecycle/recovery-summary'
 import type {
@@ -130,7 +127,6 @@ describe('direct tree recovery presentation', () => {
       TREE,
       'direct-tree',
       undefined,
-      undefined,
       recoverySummary({ discovery: 'complete' }),
     )
 
@@ -148,7 +144,6 @@ describe('direct tree recovery presentation', () => {
       state,
       TREE,
       'direct-tree',
-      undefined,
       undefined,
       recoverySummary({ discovery: 'known-so-far' }),
     )
@@ -168,109 +163,6 @@ describe('direct tree recovery presentation', () => {
 
     expect(resumable.description).toContain('Recovery costs are being validated')
     expect(resumable.actions).toEqual([])
-  })
-})
-
-describe('compatible-name repair presentation', () => {
-  it('keeps receiving notice-only and blocks paused restoration while the sidecar is behind', () => {
-    const summary = repairSummary('active', true, 3)
-    const active = present(
-      lifecycle({ kind: 'receiving', activeLeaseId: 'lease' }),
-      TREE,
-      'direct-tree',
-      undefined,
-      summary,
-    )
-    const paused = present(lifecycle({
-      kind: 'resumable-receive',
-      payloadKind: 'file-set',
-      checkpointSetDigest: 'checkpoints',
-      completedFileCount: 1n,
-      retainedBytes: 128n,
-      completedBytes: 128n,
-    }), TREE, 'direct-tree', undefined, summary)
-
-    expect(active.compatibleNameRepair).toMatchObject({
-      noticeTitle: 'Compatible names are in use',
-      replacementCount: 3,
-      replacementCountLabel: '3 verified/committed name replacements',
-      logicalPathSample: ['folder/pyvenv.cfg', 'folder/nested'],
-      omittedLogicalPathCount: 1,
-      scriptName: 'restore.windshare-abc234.ps1',
-      sidecarName: 'restore.windshare-abc234.data',
-      runCommand: null,
-      actionMode: 'receiving-notice',
-    })
-    expect(paused.compatibleNameRepair?.actionMode).toBe('catch-up-required')
-    expect(paused.compatibleNameRepair?.runCommand).toBeNull()
-    expect(active.compatibleNameRepair?.visibility).toBe('notice')
-
-    const createdTarget = present(
-      lifecycle({ kind: 'receiving', activeLeaseId: 'lease' }),
-      TREE,
-      'direct-tree',
-      undefined,
-      repairSummary('active', false, 0),
-    )
-    expect(createdTarget.compatibleNameRepair).toMatchObject({
-      replacementCount: 0,
-      replacementCountLabel: '0 verified/committed name replacements',
-      logicalPathSample: [],
-      actionMode: 'receiving-notice',
-    })
-  })
-
-  it.each([
-    ['published', lifecycle({ kind: 'published', receiptDigest: 'receipt', cleanupState: 'clean' }),
-      'completed', 'Completed with compatible names'],
-    ['partial-directory', lifecycle({
-      kind: 'partial-directory',
-      reason: 'stopped',
-      successCount: 2n,
-      failureCount: 1n,
-      receiptDigest: 'receipt',
-    }), 'stopped', 'Partial with compatible names'],
-  ] as const)('qualifies a terminal %s only after its complete terminal footer', (
-    _kind,
-    state,
-    footerState,
-    title,
-  ) => {
-    const presentation = present(
-      state,
-      TREE,
-      'direct-tree',
-      undefined,
-      repairSummary(footerState, false, 2),
-    )
-
-    expect(presentation).toMatchObject({
-      stateKind: state.kind,
-      category: 'terminal',
-      title,
-      compatibleNameRepair: {
-        actionMode: 'routine-restoration',
-        actionTitle: 'Restore the original names',
-      },
-    })
-    expect(presentation.description).toContain('compatible names')
-    expect(presentation.description).not.toMatch(/names (?:are|were) restored/iu)
-  })
-
-  it('withholds qualified terminal success while sidecar catch-up is pending', () => {
-    const presentation = present(
-      lifecycle({ kind: 'published', receiptDigest: 'receipt', cleanupState: 'clean' }),
-      TREE,
-      'direct-tree',
-      undefined,
-      repairSummary('completed', true, 2),
-    )
-
-    expect(presentation.title).toBe('Restoration tool catch-up required')
-    expect(presentation.tone).toBe('warning')
-    expect(presentation.compatibleNameRepair?.actionMode).toBe('catch-up-required')
-    expect(presentation.compatibleNameRepair?.runCommand).toBeNull()
-    expect(presentation.description).not.toMatch(/complete result was saved/iu)
   })
 })
 
@@ -332,7 +224,6 @@ function present(
   artifact: ArtifactSpec,
   planKind: MaterializationPlan['kind'] = 'workspace-then-publish',
   workspaceUsage?: { readonly ownedBytes: bigint; readonly maximumBytes?: bigint },
-  repairSummary?: CompatibleNameRepairSummary,
   recoverySummaryInput?: RecoverySummary,
 ) {
   return presentReceiveLifecycle({
@@ -340,7 +231,6 @@ function present(
     artifact,
     plan: planForTest(planKind),
     ...(workspaceUsage === undefined ? {} : { workspaceUsage }),
-    ...(repairSummary === undefined ? {} : { repairSummary }),
     ...(recoverySummaryInput === undefined ? {} : { recoverySummary: recoverySummaryInput }),
   })
 }
@@ -366,29 +256,6 @@ function lifecycle(
     receiveIntentDigest: 'intent',
     generation: 1n,
   }) as ReceiveLifecycleState
-}
-
-function repairSummary(
-  footerState: NonNullable<CompatibleNameRepairSummary['latestObservedFooter']>['state'],
-  sidecarPending: boolean,
-  committedCount: number,
-): CompatibleNameRepairSummary {
-  const terminalSettlement = sidecarPending ? 'pending' : 'complete'
-  return Object.freeze({
-    committedCount,
-    logicalPathSample: Object.freeze([
-      Object.freeze(['folder', 'pyvenv.cfg']),
-      Object.freeze(['folder', 'nested']),
-    ].slice(0, committedCount)),
-    pairDisplayNames: Object.freeze({
-      script: 'restore.windshare-abc234.ps1',
-      sidecar: 'restore.windshare-abc234.data',
-    }),
-    placement: 'inside-logical-root',
-    latestObservedFooter: Object.freeze({ committedCount, state: footerState }),
-    sidecarSync: sidecarPending ? 'pending' : 'current',
-    terminalSettlement: footerState === 'active' ? 'none' : terminalSettlement,
-  })
 }
 
 function recoverySummary(

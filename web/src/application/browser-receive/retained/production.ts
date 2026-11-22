@@ -15,7 +15,6 @@ export function listRetainedOperations(windowPort: BrowserReceiveWindow, options
     resume: (...args) => mutations().then(port => port.resume(...args)),
     cleanup: (...args) => mutations().then(port => port.cleanup(...args)),
     discard: (...args) => mutations().then(port => port.discard(...args)),
-    catchUp: (...args) => mutations().then(port => port.catchUp(...args)),
     forget: (...args) => mutations().then(port => port.forget(...args)),
   }
   return listBrowserRetainedOperations(windowPort, {
@@ -36,7 +35,7 @@ export function listRetainedOperations(windowPort: BrowserReceiveWindow, options
 async function prepareRetainedModules(operation: RetainedReceiveOperation, mutations: () => Promise<unknown>): Promise<void> {
   if (operation.actions.length === 0) return
   const work: Promise<unknown>[] = [mutations()]
-  if (operation.actions.some(action => ['continue', 'save', 'redownload', 'catch-up', 'save-partial'].includes(action))) {
+  if (operation.actions.some(action => ['continue', 'save', 'redownload', 'save-partial'].includes(action))) {
     work.push(import('./continuation'))
   }
   if (operation.browserDelivery !== undefined) work.push(import('../fsa/local-delivery'))

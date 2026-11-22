@@ -14,9 +14,6 @@ import {
   type PresentationDecision,
 } from '../../src/diagnostics/incident'
 import { recordOutputException, type OutputFailureSinks } from '../../src/output/diagnostics'
-import type {
-  CompatibleNameRepairSummary,
-} from '../../src/transfer/lifecycle/name-repair'
 import type { CandidateMaterializationBinding } from '../../src/output/planning/binding'
 import type { EnvironmentOffers, ResolvedArtifactAction } from '../../src/output/planning/contracts'
 import type { OfferedArtifactChoice } from '../../src/output/model/artifacts/choices'
@@ -118,15 +115,10 @@ export class FakeReceiveComposition implements ReceiveCompositionPort {
     signal: AbortSignal
   }>> = []
   readonly retainedInventories: RetainedReceiveInventory[] = []
-  readonly repairSummaries = new Map<string, CompatibleNameRepairSummary>()
   retainedOperations: readonly RetainedReceiveOperation[] = Object.freeze([])
   retainedGate: PromiseLike<RetainedReceiveInventory> | undefined
   retainedActionGate: PromiseLike<RetainedReceiveActionResult> | undefined
   readonly retained = Object.freeze({
-    readRepairSummary: (operationId: string, signal: AbortSignal) => {
-      signal.throwIfAborted()
-      return Promise.resolve(this.repairSummaries.get(operationId))
-    },
     list: (signal: AbortSignal): PromiseLike<RetainedReceiveInventory> => {
       this.retainedSignals.push(signal)
       if (this.retainedGate !== undefined) return this.retainedGate

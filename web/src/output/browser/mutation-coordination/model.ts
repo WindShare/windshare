@@ -20,16 +20,15 @@ export interface FSAVerifiedFileMutationTarget {
 }
 
 /**
- * These operations inspect names, create absent entries, or maintain separately
- * reserved repair metadata. They cannot replace content entries or mutate their
- * bytes, so an existing file writer need not reserve its entire parent directory.
+ * These operations inspect names or create absent entries. They cannot replace
+ * content entries or mutate their bytes, so an existing file writer need not
+ * reserve its entire parent directory.
  */
 export type FSANamespaceMutationKind =
   | 'inspect-entry'
   | 'reserve-name'
   | 'create-directory'
   | 'create-file'
-  | 'repair-compatible-name'
 
 export type FSAFileMutationKind = 'remove-file'
 
@@ -38,7 +37,6 @@ export type FSATerminalMutationKind =
   | 'pause-operation'
   | 'stop-operation'
   | 'discard-operation'
-  | 'repair-operation'
 
 export type FSAMutationSchedulerState = 'accepting' | 'draining' | 'closed'
 

@@ -40,7 +40,6 @@ import {
   PAUSED,
   SIGNAL,
   SUCCESS,
-  absentCompatibleNameLedgerFactory,
   bindTask,
   discardFreshFixture,
   freshDiscardFixture,
@@ -268,13 +267,12 @@ describe('File System Access DirectTree lifecycle', () => {
   it.each([
     { label: 'single-file', artifact: singleFileArtifact, expected: ['file:report.bin', 'directory:report.bin'] },
     { label: 'result-root', artifact: resultRootArtifact, expected: ['directory:photos', 'file:photos'] },
-  ])('reserves an ordinary $label root by expected kind without activating repair', async ({
+  ])('reserves an ordinary $label root by expected kind without safe-renaming', async ({
     artifact,
     expected,
   }) => {
     const parent = new MemoryDirectory('downloads')
     const lookups: string[] = []
-    let repairFactoryCalls = 0
     parent.onEntryLookup = (lookup) => {
       if (!lookup.create) lookups.push(`${lookup.kind}:${lookup.name}`)
     }
@@ -286,14 +284,10 @@ describe('File System Access DirectTree lifecycle', () => {
       artifact: await artifact(),
       operationSeed: 9,
       activate: false,
-      prepareCompatibleNameRootRepair: async () => {
-        repairFactoryCalls += 1
-        throw new Error('ordinary reservation must not activate repair')
-      },
     })
 
     expect(lookups).toEqual(expected)
-    expect(repairFactoryCalls).toBe(0)
+    expect(session.safeRenamedSummary()).toBeUndefined()
     expect(session.reservation.logicalReservedName).toBe(session.reservation.physicalName)
     expect(parent.entryNames()).toEqual([])
     await session.close()
@@ -342,7 +336,6 @@ describe('File System Access DirectTree lifecycle', () => {
       operationRepository: repository,
       lockManager: locks, mutationIdentities: memoryFSAIdentities(locks),
       checkpointRepositoryFactory: checkpointFactory,
-      openCompatibleNameLedger: absentCompatibleNameLedgerFactory,
     })
     expect(reopened.reservation.logicalReservedName).toBe(first.reservation.logicalReservedName)
     expect(await parent.getDirectoryHandle(reopened.reservation.physicalName)).toBe(taskRoot)
@@ -419,7 +412,6 @@ describe('File System Access DirectTree lifecycle', () => {
       operationRepository: repository,
       lockManager: locks, mutationIdentities: memoryFSAIdentities(locks),
       checkpointRepositoryFactory: checkpointFactory,
-      openCompatibleNameLedger: absentCompatibleNameLedgerFactory,
     })
     const resumed = await reopened.beginFile({
       materializationRelativePath: [],
@@ -483,7 +475,6 @@ describe('File System Access DirectTree lifecycle', () => {
       operationRepository: repository,
       lockManager: locks, mutationIdentities: memoryFSAIdentities(locks),
       checkpointRepositoryFactory: checkpointFactory,
-      openCompatibleNameLedger: absentCompatibleNameLedgerFactory,
     })
     expect(reopened.reservation).toEqual(session.reservation)
     await reopened.close()
@@ -788,7 +779,6 @@ describe('File System Access settlement authority', () => {
       operationRepository: repository,
       lockManager: locks, mutationIdentities: memoryFSAIdentities(locks),
       checkpointRepositoryFactory: checkpointFactory,
-      openCompatibleNameLedger: absentCompatibleNameLedgerFactory,
     })
     const reopenedExecution = await fsaExecution(
       reopened,

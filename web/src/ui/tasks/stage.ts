@@ -81,12 +81,6 @@ function retainedStage(facts: TaskFacts, continuation: import('../../output/mode
     case 'save-artifact':
     case 'retry-download': return stage('ready-to-save', t.readyToSave,
       t.retainedReadyHint, continuation)
-    case 'pending-catch-up': return stage('needs-action', t.setupNames,
-      t.setupNamesHint, continuation)
-    case 'restoration-available': return stage('needs-action', t.reviewOutput,
-      t.reviewOutputHint, continuation)
-    case 'cleanup-incompatible': return stage('needs-action', t.removeRecord,
-      t.removeRecordHint, continuation)
     case 'retry-cleanup': return stage('needs-action', t.cleanup,
       t.cleanupHint, continuation)
     case 'needs-attention': return stage('needs-action', t.needsAction,

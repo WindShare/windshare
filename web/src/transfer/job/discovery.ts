@@ -1,4 +1,3 @@
-import type { CatalogClient } from '../../catalog/client'
 import type { CommittedDirectory } from '../../catalog/page-store'
 import type { CatalogEntry } from '../../catalog/records'
 import type { FrozenSelectionPolicy } from '../../catalog/selection'
@@ -6,7 +5,6 @@ import { discoverDirectoryGeneration, replayDirectoryEntries } from '../discover
 import { generationReplayMetadataBytes, type DirectoryReplay } from '../discovery/directory-replay'
 import type {
   AuthenticatedDirectory,
-  AuthenticatedLogicalSiblingMembership,
   DirectoryCursor,
   DirectoryWork,
   PendingFile,
@@ -17,19 +15,6 @@ import type { ExactPreparationCollector } from './preparation'
 import { AsyncBoundedQueue } from './scheduler'
 import type { ExplicitSelectionTargetLedger } from './selection'
 import type { CatalogTraversalGuard } from './traversal'
-
-/** Retains the raw committed handle so membership cannot be reconstructed from text projections. */
-export function createAuthenticatedLogicalSiblingMembership(
-  catalog: Pick<CatalogClient, 'hasCommittedName'>,
-  committed: CommittedDirectory,
-  signal: AbortSignal,
-): AuthenticatedLogicalSiblingMembership {
-  return Object.freeze({
-    directoryId: committed.directoryIdText,
-    generation: committed.generationText,
-    hasCommittedName: (candidate: string) => catalog.hasCommittedName(committed, candidate, signal),
-  })
-}
 
 export class JobDiscovery {
   readonly #catalog: TransferJobOptions['catalog']

@@ -620,8 +620,8 @@ describe('resolveWorkspaceTaskLayout continuation precedence', () => {
         receiptDigest: identityText(56, 32),
         cleanupState: 'clean',
       },
-      continuation: 'restoration-available',
-      actions: ['catch-up'],
+      continuation: 'history-only',
+      actions: ['cleanup-staging'],
       display: Object.freeze({ objectLabel: 'photo.jpg', createdAtMilliseconds: 2_000 }),
     })
     const withOlder = resolveWorkspaceTaskLayout(workspaceSnapshot({

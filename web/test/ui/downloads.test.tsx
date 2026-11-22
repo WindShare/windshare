@@ -7,7 +7,7 @@ import { TASK_FIXTURES } from '../../src/ui/tasks/fixtures'
 describe('Downloads inventory presentation', () => {
   function render(inventory: 'empty' | 'loading' | 'failed', populated = false) {
     return renderToString(<Downloads tasks={populated ? [presentTask(TASK_FIXTURES['saved-cleanup']!)] : []}
-      actions={{ perform: vi.fn(), catchUp: vi.fn() }} inventory={inventory}
+      actions={{ perform: vi.fn() }} inventory={inventory}
       busy={false} open onOpenChange={vi.fn()} onIntent={vi.fn()} />)
   }
 

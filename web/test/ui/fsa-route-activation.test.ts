@@ -12,13 +12,7 @@ import {
   type LocalOutputOperationFailureDiagnosticsPort,
 } from '../../src/output/diagnostics'
 import type { FSAFileCheckpointRepositoryFactory } from '../../src/output/file-system-access/session'
-import {
-  prepareCompatibleNameRootRepair,
-} from '../../src/output/file-system-access/compatible-name/coordinator'
-import {
-  type CompatibleNameRepairSummary,
-} from '../../src/transfer/lifecycle/name-repair'
-import { decodeCompatibleNameSidecar } from '../../src/output/file-system-access/compatible-name/sidecar-codec'
+import { isSafeComponentName } from '../../src/output/file-system-access/safe-name'
 import type { ReopenedDirectTreeOperation } from '../../src/output/resume/reopen-authority'
 import {
   MAXIMUM_AUTOMATIC_PREFIX_COPY_BYTES,
@@ -48,10 +42,8 @@ import {
   identity,
 } from '../output/planning/fixture'
 import {
-  MemoryCompatibleNameActivationLedger,
   TestRepository,
   acquiredParent,
-  classifiedRootRejection,
   commitInput,
   commitInputForAction,
   deferred,
@@ -206,13 +198,11 @@ describe('FSA presentation route activation', () => {
     await result.operation.detach()
   })
 
-  it('keeps the ordinary root on the zero-repair path with expected-kind-first inspection', async () => {
+  it('keeps the ordinary root on the zero-rename path with expected-kind-first inspection', async () => {
     const planning = await planningFixture()
     const parent = new MemoryDirectory('downloads')
     const repository = new TestRepository()
     const lookups: string[] = []
-    let repairFactoryCalls = 0
-    let ledgerFactoryCalls = 0
     parent.onEntryLookup = (lookup) => {
       if (!lookup.create) lookups.push(`${lookup.kind}:${lookup.name}`)
     }
@@ -221,16 +211,6 @@ describe('FSA presentation route activation', () => {
       Promise.resolve(acquiredParent(parent, planning.offered)),
       parent,
       repository,
-      {
-        prepareCompatibleNameRootRepair: async () => {
-          repairFactoryCalls += 1
-          throw new Error('ordinary reservation must not activate repair')
-        },
-        openCompatibleNameLedger: async () => {
-          ledgerFactoryCalls += 1
-          throw new Error('ordinary reservation must not open the repair ledger')
-        },
-      },
     )
 
     const result = await route.commit(commitInput(planning))
@@ -239,25 +219,19 @@ describe('FSA presentation route activation', () => {
     if (reservation.kind !== 'named-container-entry') throw new Error('expected named reservation')
     expect(reservation.logicalReservedName).toBe(reservation.physicalName)
     expect(lookups).toEqual(['directory:photos', 'file:photos'])
-    expect(repairFactoryCalls).toBe(0)
-    expect(ledgerFactoryCalls).toBe(0)
-    expect(repository.compatibleBootstrapCommits).toBe(0)
-    expect(result.operation.repairProjection).toBeUndefined()
     expect(parent.entryNames()).toEqual([])
     await result.operation.detach()
   })
 
 })
 
-describe('FSA compatible-name route activation', () => {
-  it('commits rejected-root repair atomically and verifies the owned pair before root creation', async () => {
+describe('FSA safe-name route activation', () => {
+  it('assigns a deterministic safe root without writing extra files when the parent refuses the logical root', async () => {
     const planning = await planningFixture()
     const parent = new MemoryDirectory('downloads')
     const repository = new TestRepository()
-    const ledger = new MemoryCompatibleNameActivationLedger(repository)
     const mutationOrder: string[] = []
     let refused = false
-    let ledgerFactoryCalls = 0
     parent.onEntryLookup = (lookup) => {
       if (!refused && !lookup.create && lookup.kind === 'directory' && lookup.name === 'photos') {
         refused = true
@@ -270,26 +244,11 @@ describe('FSA compatible-name route activation', () => {
       Promise.resolve(acquiredParent(parent, planning.offered)),
       parent,
       repository,
-      {
-        prepareCompatibleNameRootRepair: input => prepareCompatibleNameRootRepair(input, {
-          platform: 'windows',
-          randomBits: () => 0,
-          randomOwnedObjectId: (() => {
-            const ids = [identity(52, 32), identity(53, 32)]
-            return () => ids.shift()!
-          })(),
-        }),
-        openCompatibleNameLedger: async () => {
-          ledgerFactoryCalls += 1
-          return ledger
-        },
-      },
     )
     const baseInput = commitInput(planning)
     const result = await route.commit({
       ...baseInput,
       freezeAtFence: async (candidate) => {
-        expect(repository.compatibleBootstrap).toBeUndefined()
         expect(parent.entryNames()).toEqual([])
         return baseInput.freezeAtFence(candidate)
       },
@@ -300,162 +259,17 @@ describe('FSA compatible-name route activation', () => {
 
     const reservation = requireDirectTreeIntent(result.operation.intent).plan.reservation
     if (reservation.kind !== 'named-container-entry') throw new Error('expected named reservation')
-    expect(reservation).toMatchObject({
-      logicalReservedName: 'photos',
-      physicalName: 'photos.windshare-aaaaaa',
-    })
-    expect(repository.compatibleBootstrapCommits).toBe(1)
-    expect(repository.compatibleBootstrap?.initialMapping.physicalComponent)
-      .toBe(reservation.physicalName)
-    expect(ledgerFactoryCalls).toBe(1)
-    expect(ledger.header?.activationState).toBe('report-ready')
-    expect(ledger.header?.pair.script.ownershipState).toBe('owned')
-    expect(ledger.header?.pair.sidecar.ownershipState).toBe('owned')
-    expect(parent.entryNames()).toEqual([
-      'restore.windshare-idbee5.data',
-      'restore.windshare-idbee5.ps1',
-    ])
-    const checkpoint = decodeCompatibleNameSidecar(
-      await parent.fileBytes('restore.windshare-idbee5.data'),
-    )
-    expect(checkpoint).toMatchObject({
-      header: { operationId: result.operation.intent.operationId, placement: 'beside' },
-      footer: { committedCount: 0, state: 'active' },
-      mappings: [],
-      trailingByteLength: 0,
-    })
-    expect(mutationOrder).toEqual([
-      'file:restore.windshare-idbee5.data',
-      'file:restore.windshare-idbee5.ps1',
-    ])
-    const repairSummaries: CompatibleNameRepairSummary[] = []
-    const repairProjection = result.operation.repairProjection
-    if (repairProjection === undefined) throw new Error('repaired runtime omitted its projection')
-    const unsubscribeRepair = repairProjection.subscribe(summary => repairSummaries.push(summary))
-    expect(repairSummaries).toEqual([])
+    expect(reservation.logicalReservedName).toBe('photos')
+    expect(isSafeComponentName(reservation.physicalName)).toBe(true)
+    expect(parent.entryNames()).toEqual([])
 
     await result.operation.plans.openDirectTree(
       requireDirectTreeIntent(result.operation.intent),
       new AbortController().signal,
     )
-    expect(mutationOrder).toEqual([
-      'file:restore.windshare-idbee5.data',
-      'file:restore.windshare-idbee5.ps1',
-      'directory:photos.windshare-aaaaaa',
-    ])
-    expect(ledger.mapping?.commitState).toBe('committed')
-    expect(ledger.mapping?.ownedObjectId).toBeDefined()
-    expect(repairSummaries[0]).toMatchObject({ committedCount: 0, sidecarSync: 'current' })
-    expect(repairSummaries).toContainEqual(expect.objectContaining({
-      committedCount: 1,
-      sidecarSync: 'pending',
-    }))
-    unsubscribeRepair()
+    expect(mutationOrder).toEqual([`directory:${reservation.physicalName}`])
+    expect(parent.entryNames()).toEqual([reservation.physicalName])
     await result.operation.detach()
-    expect(ledger.closeCount).toBe(1)
-  })
-
-  it('advances root and pair allocation only for candidates proven occupied', async () => {
-    const parent = new MemoryDirectory('downloads')
-    await parent.getDirectoryHandle('photos.windshare-aaaaaa', { create: true })
-    await parent.getFileHandle('restore.windshare-idbee5.ps1', { create: true })
-    const prepared = await prepareCompatibleNameRootRepair({
-      rejection: classifiedRootRejection('photos', 'directory'),
-      parent: parent as unknown as FileSystemDirectoryHandle,
-      operationId: identity(40),
-      authorityRef: identity(42, 32),
-      logicalReservedName: 'photos',
-      entryKind: 'directory',
-    }, {
-      platform: 'windows',
-      randomBits: () => 0,
-      randomOwnedObjectId: (() => {
-        const ids = [identity(52, 32), identity(53, 32)]
-        return () => ids.shift()!
-      })(),
-    })
-
-    expect(prepared.bootstrap.initialMapping).toMatchObject({ attempt: 1 })
-    expect(prepared.bootstrap.initialMapping.physicalComponent)
-      .not.toBe('photos.windshare-aaaaaa')
-    expect(prepared.bootstrap.header.pair.script.physicalName)
-      .not.toBe('restore.windshare-idbee5.ps1')
-    expect(prepared.bootstrap.header.pair.sidecar.physicalName)
-      .not.toBe('restore.windshare-idbee5.data')
-    expect(parent.entryNames()).toEqual([
-      'photos.windshare-aaaaaa',
-      'restore.windshare-idbee5.ps1',
-    ])
-  })
-
-  it('does not reinterpret a compatible-candidate TypeError as occupancy', async () => {
-    const parent = new MemoryDirectory('downloads')
-    const cause = new TypeError('derived candidate rejected')
-    const inspected: string[] = []
-    parent.onEntryLookup = (lookup) => {
-      inspected.push(`${lookup.kind}:${lookup.name}`)
-      if (lookup.kind === 'directory' && lookup.name === 'photos.windshare-aaaaaa') throw cause
-    }
-
-    await expect(prepareCompatibleNameRootRepair({
-      rejection: classifiedRootRejection('photos', 'directory'),
-      parent: parent as unknown as FileSystemDirectoryHandle,
-      operationId: identity(40),
-      authorityRef: identity(42, 32),
-      logicalReservedName: 'photos',
-      entryKind: 'directory',
-    }, {
-      platform: 'windows',
-      randomBits: () => 0,
-    })).rejects.toBe(cause)
-    expect(inspected).toEqual(['directory:photos.windshare-aaaaaa'])
-    expect(parent.entryNames()).toEqual([])
-  })
-
-  it('keeps the compatible target absent when restoration-pair creation fails', async () => {
-    const planning = await planningFixture()
-    const parent = new MemoryDirectory('downloads')
-    const repository = new TestRepository()
-    const ledger = new MemoryCompatibleNameActivationLedger(repository)
-    const pairFailure = new DOMException('sidecar creation refused', 'NotAllowedError')
-    let refused = false
-    parent.onEntryLookup = (lookup) => {
-      if (!refused && !lookup.create && lookup.kind === 'directory' && lookup.name === 'photos') {
-        refused = true
-        throw new TypeError('injected native root refusal')
-      }
-      if (lookup.create && lookup.name === 'restore.windshare-idbee5.data') throw pairFailure
-    }
-    const route = routeFixture(
-      planning.offered,
-      Promise.resolve(acquiredParent(parent, planning.offered)),
-      parent,
-      repository,
-      {
-        prepareCompatibleNameRootRepair: input => prepareCompatibleNameRootRepair(input, {
-          platform: 'windows',
-          randomBits: () => 0,
-          randomOwnedObjectId: (() => {
-            const ids = [identity(52, 32), identity(53, 32)]
-            return () => ids.shift()!
-          })(),
-        }),
-        openCompatibleNameLedger: async () => ledger,
-      },
-    )
-
-    const result = await route.commit(commitInput(planning))
-    expect(result.kind).toBe('owned-effects')
-    if (result.kind !== 'owned-effects') throw new Error('expected owned repair effects')
-    expect(result.cause).toBe(pairFailure)
-    expect(repository.compatibleBootstrapCommits).toBe(1)
-    expect(parent.entryNames()).toEqual([])
-    expect(parent.directoryNames()).not.toContain('photos.windshare-aaaaaa')
-    expect(ledger.header?.pair.script.ownershipState).toBe('claimed')
-    expect(ledger.header?.pair.sidecar.ownershipState).toBe('claimed')
-    expect(ledger.closeCount).toBe(1)
-    await result.authority.settleActivationFailure(result.cause)
-    await result.authority.detach()
   })
 
   it('uses one output-session identity for local stage diagnostics and DirectTree execution', async () => {

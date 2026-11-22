@@ -30,7 +30,7 @@ export function TaskDownloads({ tasks, snapshot, controller, entryLabel, entryDe
   return <Downloads open={open ?? localOpen} onOpenChange={next => {
     (onOpenChange ?? setLocalOpen)(next)
     if (next) void controller.ensureDownloads()
-  }} tasks={tasks} actions={taskActions(controller, snapshot)}
+  }} tasks={tasks} actions={taskActions(controller)}
     inventory={snapshot.retained.kind}
     onRetry={() => { void controller.ensureDownloads() }}
     busy={snapshot.retained.pending !== null} {...(entryLabel === undefined ? {} : { entryLabel })} {...(entryDescription === undefined ? {} : { entryDescription })} onIntent={action => controller.recordExperienceIntent(action)}

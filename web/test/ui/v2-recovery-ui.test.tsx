@@ -28,7 +28,7 @@ describe('DirectTree recovery UI', () => {
     })
 
     const html = renderToString(
-      <TaskDetails task={presentTask(retainedTaskFacts(retained.operations[0]!, 'matching-share'))} actions={{ perform: vi.fn(), catchUp: vi.fn() }} />,
+      <TaskDetails task={presentTask(retainedTaskFacts(retained.operations[0]!, 'matching-share'))} actions={{ perform: vi.fn() }} />,
     )
 
     expect(html).toContain('Known so far (discovery incomplete)')

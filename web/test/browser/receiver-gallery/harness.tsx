@@ -151,7 +151,6 @@ class GalleryController {
   performRetainedAction = (operation: RetainedReceiveOperation, action: RetainedReceiveAction) => {
     this.intents.push(`retained:${operation.operationId}:${action}`)
   }
-  catchUpStoppedCompatibleNames = () => undefined
   completeDownload = (kind: CompletedDownloadScenario) => {
     const facts = TASK_FIXTURES[kind === 'published' ? 'saved-cleanup' : 'browser-handoff']!
     const source = facts.lifecycle
@@ -159,7 +158,6 @@ class GalleryController {
     let continuation: RetainedReceiveOperation['continuation'] = 'history-only'
     if (source.kind === 'published') {
       lifecycle = { ...source, cleanupState: 'clean' }
-      continuation = 'restoration-available'
     } else if (kind === 'workspace' && source.kind === 'download-started') {
       lifecycle = { ...source, attemptKind: 'workspace', packageDigest: 'fixture-package' }
       continuation = 'retry-download'

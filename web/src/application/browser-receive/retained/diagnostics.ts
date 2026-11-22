@@ -56,18 +56,6 @@ export function bindRuntimeOutputFailures(
     },
     ...(runtime.outputProgress === undefined ? {} : { outputProgress: runtime.outputProgress }),
     ...(runtime.observeCheckpoint === undefined ? {} : { observeCheckpoint: runtime.observeCheckpoint.bind(runtime) }),
-    ...(runtime.repairProjection === undefined
-      ? {}
-      : { repairProjection: runtime.repairProjection }),
-    ...(runtime.subscribeRepairProjectionActivation === undefined
-      ? {}
-      : {
-          subscribeRepairProjectionActivation: (
-            listener: Parameters<NonNullable<
-              BoundReceiveOperation['subscribeRepairProjectionActivation']
-            >>[0],
-          ) => runtime.subscribeRepairProjectionActivation!(listener),
-        }),
     ...(runtime.initialWorkspaceUsage === undefined
       ? {}
       : { initialWorkspaceUsage: runtime.initialWorkspaceUsage }),

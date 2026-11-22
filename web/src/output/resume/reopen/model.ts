@@ -156,8 +156,6 @@ export type PersistedWorkspaceBudgetReclaim = (
 
 export interface PersistedReceiveOperationReopenAuthorityOptions {
   readonly repositoryFactory: () => Promise<ReceiveOperationRepository>
-  readonly readCompatibleNameHeader?: (operationId: string) =>
-    Promise<import('../../file-system-access/compatible-name/model').CompatibleNameOperationHeaderV1 | undefined>
   readonly clock?: { now(): number }
   readonly leaseOptions?: LeaseOptions
   readonly acquireLease?: typeof acquireBrowserReceiveOperationLease

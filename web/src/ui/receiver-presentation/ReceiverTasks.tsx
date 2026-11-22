@@ -80,7 +80,7 @@ export function ReceiverActivity({ controller, openDownloads }: {
   const { primaryTask, collapseRemoteSaving, repeatRemoteLabel, banner } = resolveWorkspaceTaskLayout(snapshot)
   const details = primaryTask !== null && detailsOperationId === primaryTask.operationId
   const handoffHelpOpen = primaryTask !== null && handoffHelpOpenId === primaryTask.operationId
-  const baseActions = taskActions(controller, snapshot)
+  const baseActions = taskActions(controller)
   const actions: TaskViewActions = {
     ...baseActions,
     perform: action => {

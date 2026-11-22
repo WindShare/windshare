@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { BrowserFileLineageAuthority } from '../../src/output/browser/filesystem-file-lineage'
 import { fileHandleId } from '../../src/output/browser/filesystem-file-record'
+import { SafeNameRegistry } from '../../src/output/file-system-access/safe-name'
 import {
   FSAAuthorityCache,
   type FSAVerifiedDirectoryAuthority,
@@ -67,7 +68,7 @@ describe('browser filesystem authority cache', () => {
     expect(fixture.cache.diagnostics().invalidations).toBe(1)
   })
 
-  it('rejects an in-flight result invalidated by a compatible-name remap', async () => {
+  it('rejects an in-flight result invalidated by a subtree invalidation', async () => {
     const fixture = cacheFixture()
     const validation = deferred<void>()
     const pending = fixture.cache.resolveDirectory(['mapped'], 1, async () => {
@@ -171,6 +172,7 @@ describe('browser filesystem authority cache', () => {
       fileHandles: repository,
       mutations,
       authorities: fixture.cache,
+      safeNames: new SafeNameRegistry(),
       prepareRoot: async () => undefined,
       resolveParent: async () => ({ authority: parent, name: 'payload.bin' }),
     })
@@ -195,6 +197,7 @@ describe('browser filesystem authority cache', () => {
       fileHandles: repository,
       mutations,
       authorities: fixture.cache,
+      safeNames: new SafeNameRegistry(),
       prepareRoot: async () => undefined,
       resolveParent: async () => ({ authority: parent, name: 'payload.bin' }),
     })
@@ -237,6 +240,7 @@ describe('browser filesystem authority cache', () => {
       fileHandles: repository,
       mutations,
       authorities: fixture.cache,
+      safeNames: new SafeNameRegistry(),
       prepareRoot: async () => undefined,
       resolveParent: async () => ({ authority: parent, name: 'payload.bin' }),
     })

@@ -77,12 +77,11 @@ function retainedLabel(
     case 'cleanup-staging': return t.cleanupStaging
     case 'discard-incomplete-staging': return t.discardStaging
     case 'save-partial': return t.savePartial
-    case 'catch-up': return t.finishRestoration
     case 'continue': return continuationLabel(operation, language)
     case 'save': return t.save
     case 'redownload': return operation.recoverySummary === undefined ? t.downloadAgain : t.restartIncomplete
     case 'forget': return t.forget
-    case 'discard': return operation.continuation === 'cleanup-incompatible' ? t.deleteHistory : t.discardOutput
+    case 'discard': return t.discardOutput
     case 'delete':
       if (operation.continuation === 'retry-cleanup') return t.retryCleanup
       return t.deleteRetained
@@ -107,9 +106,7 @@ function retainedConsequence(operation: RetainedReceiveOperation, action: Retain
       return t.savePartialHint
     case 'forget': return t.forgetHint
     case 'discard':
-      return operation.continuation === 'cleanup-incompatible'
-        ? t.deleteHistoryHint
-        : t.discardOutputHint
+      return t.discardOutputHint
     case 'delete':
       return operation.continuation === 'retry-cleanup'
         ? t.retryCleanupHint

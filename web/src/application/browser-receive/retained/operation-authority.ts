@@ -32,16 +32,12 @@ export function retainedOperationAuthority(
       return Object.freeze({ actions: retainedActions('continue', 'discard') })
     case 'history-only':
       return Object.freeze({ actions: retainedActions() })
-    case 'cleanup-incompatible':
     case 'cleanup-only':
       return Object.freeze({ actions: retainedActions('discard') })
-    case 'pending-catch-up':
-    case 'restoration-available':
-      return Object.freeze({ actions: retainedActions('catch-up') })
     case 'resume-receive':
       return hasDirectTreeRecoverySummary
-        ? Object.freeze({ actions: retainedActions('continue', 'redownload', 'catch-up') })
-        : Object.freeze({ actions: retainedActions('continue', 'discard', 'catch-up') })
+        ? Object.freeze({ actions: retainedActions('continue', 'redownload') })
+        : Object.freeze({ actions: retainedActions('continue', 'discard') })
     case 'resume-package':
     case 'resume-local-finalization':
       return Object.freeze({ actions: retainedActions('continue', 'discard') })
@@ -50,7 +46,7 @@ export function retainedOperationAuthority(
     case 'retry-download':
       return Object.freeze({ actions: retainedActions('redownload', 'delete') })
     case 'retry-cleanup':
-      return Object.freeze({ actions: retainedActions('catch-up', 'delete') })
+      return Object.freeze({ actions: retainedActions('delete') })
     case 'needs-attention':
       return Object.freeze({
         actions: retainedActions(),

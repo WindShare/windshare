@@ -1,16 +1,7 @@
-import {
-  validateReceiveIntent,
-  type ReceiveIntent,
-} from '../../transfer/intent'
-import {
-  BrowserFileSystemTree,
-  FSA_FILE_HANDLE_KIND,
-  fsaDirectoryHandleId,
-} from '../browser/filesystem-tree'
+import { validateReceiveIntent, type ReceiveIntent } from '../../transfer/intent'
+import { BrowserFileSystemTree, FSA_FILE_HANDLE_KIND, fsaDirectoryHandleId } from '../browser/filesystem-tree'
 import {
   FSA_OPERATION_HANDLE_DIRECTORY,
-  FSA_OPERATION_HANDLE_COMPATIBLE_NAME_SCRIPT,
-  FSA_OPERATION_HANDLE_COMPATIBLE_NAME_SIDECAR,
   FSA_OPERATION_HANDLE_PARENT,
   verifyFSAOperationBinding,
   type PersistedFSAOperationBinding,
@@ -22,17 +13,11 @@ import {
   type FSARootMutationLease,
 } from '../browser/namespace-mutation'
 import type { FSATerminalExclusiveAuthority } from '../browser/mutation-coordination/model'
-import {
-  fileCheckpointIsComplete,
-  type FileCheckpointV2,
-} from '../persistence/checkpoint'
+import { fileCheckpointIsComplete, type FileCheckpointV2 } from '../persistence/checkpoint'
 import type { PersistentHandleRecord } from '../persistence/journal'
 import { TargetOwnershipUnknownError } from '../persistent-tree/errors'
 import type { ReceiveOperationHandleRecord } from '../workspace/records'
-import type {
-  ReceiveOperationHandleInventoryRepository,
-  ReceiveOperationRepository,
-} from '../workspace/repository'
+import type { ReceiveOperationHandleInventoryRepository, ReceiveOperationRepository } from '../workspace/repository'
 import {
   openFSAFileCheckpointRepository,
   scanAllFSAFileCheckpoints,
@@ -40,12 +25,7 @@ import {
   type FSAFileCheckpointRepositoryFactory,
 } from './checkpoint-repository'
 import { retireFSAMaterializationRecoveryMetadata } from './recovery-metadata-retirement'
-import { IndexedDbCompatibleNameLedger } from '../browser/indexeddb-compatible-name-ledger'
-import {
-  CompatibleNamePathAuthority,
-  type CompatibleNameActivationLedger,
-  type CompatibleNameRootRepairPreparationOptions,
-} from './compatible-name/coordinator'
+import { isSafeComponentName } from './safe-name'
 
 export interface OpenFreshPageFileSystemAccessDiscardOptions {
   readonly intent: ReceiveIntent
@@ -55,8 +35,6 @@ export interface OpenFreshPageFileSystemAccessDiscardOptions {
   readonly mutationIdentities?: FSAHandleIdentityResolver
   readonly checkpointRepositoryFactory?: FSAFileCheckpointRepositoryFactory
   readonly databaseName?: string
-  readonly openCompatibleNameLedger?: () => Promise<CompatibleNameActivationLedger>
-  readonly compatibleNamePreparation?: CompatibleNameRootRepairPreparationOptions
 }
 
 export interface FSAFreshPageDiscardCut {
@@ -79,10 +57,13 @@ interface OwnedCheckpointObject extends CheckpointObject {
   readonly persistedHandle: FileSystemFileHandle
 }
 
-interface OwnedDirectoryObservation {
-  readonly path: readonly string[]
+interface RemovableDirectoryObservation {
+  readonly parentHandle: FileSystemDirectoryHandle
+  readonly physicalName: string
   readonly ownedObjectId: string
   readonly handleId: string
+  readonly persistedHandle: FileSystemDirectoryHandle
+  readonly isRoot: boolean
 }
 
 interface CheckpointObjectGroup {
@@ -103,7 +84,6 @@ export class FreshPageFileSystemAccessDiscardSession {
   readonly #tree: BrowserFileSystemTree
   readonly #checkpoints: FSAFileCheckpointRepository
   readonly #rootLease: FSARootMutationLease
-  readonly #compatibleNames: CompatibleNamePathAuthority
   #discardStarted = false
   #closePromise: Promise<void> | undefined
 
@@ -114,7 +94,6 @@ export class FreshPageFileSystemAccessDiscardSession {
     tree: BrowserFileSystemTree
     checkpoints: FSAFileCheckpointRepository
     rootLease: FSARootMutationLease
-    compatibleNames: CompatibleNamePathAuthority
   }>) {
     this.intent = input.intent
     this.#binding = input.binding
@@ -122,7 +101,6 @@ export class FreshPageFileSystemAccessDiscardSession {
     this.#tree = input.tree
     this.#checkpoints = input.checkpoints
     this.#rootLease = input.rootLease
-    this.#compatibleNames = input.compatibleNames
   }
 
   usesOperationRepository(repository: ReceiveOperationRepository): boolean {
@@ -150,14 +128,14 @@ export class FreshPageFileSystemAccessDiscardSession {
       checkpointObjects(this.intent, committed, candidates),
       checkpointHandles,
     )
-    const directories = await this.#verifyNamespaceInventory(objects, operationHandles)
+    const removableDirectories = await this.#verifyNamespaceInventory(objects, operationHandles)
 
     return terminal.runExclusive(authority => this.#discardVerifiedObjects({
       authority,
       committed,
       candidates,
       objects,
-      directories,
+      removableDirectories,
     }))
   }
 
@@ -166,7 +144,7 @@ export class FreshPageFileSystemAccessDiscardSession {
     committed: readonly FileCheckpointV2[]
     candidates: readonly FileCheckpointV2[]
     objects: readonly OwnedCheckpointObject[]
-    directories: readonly OwnedDirectoryObservation[]
+    removableDirectories: readonly RemovableDirectoryObservation[]
   }>): Promise<FSAFreshPageDiscardCut> {
     const removedObjectIds: string[] = []
     for (const object of input.objects) {
@@ -180,28 +158,17 @@ export class FreshPageFileSystemAccessDiscardSession {
     const successful = input.objects.flatMap(object =>
       object.successful === undefined ? [] : [object.successful])
     const removedHandleIds: string[] = []
-    const removableDirectories = input.directories
-      .filter(directory => !successful.some(checkpoint =>
-        pathStartsWith(checkpoint.canonicalPath, directory.path)))
-      .sort((left, right) => right.path.length - left.path.length ||
-        comparePaths(right.path, left.path))
-    for (const directory of removableDirectories) {
+    for (const directory of input.removableDirectories) {
       await cleanupMutation(this.intent.operationId, async () => {
-        await this.#tree.removeDirectoryWithinTerminal(
-          input.authority,
-          directory.path,
-          directory.ownedObjectId,
-        )
+        if (directory.isRoot) await this.#verifyBinding()
+        const current = await directory.parentHandle.getDirectoryHandle(directory.physicalName)
+        if (!await sameEntryForCleanup(current, directory.persistedHandle, this.intent.operationId)) {
+          throw new TargetOwnershipUnknownError('cleanup', this.intent.operationId)
+        }
+        await directory.parentHandle.removeEntry(directory.physicalName, { recursive: true })
       })
       removedObjectIds.push(directory.ownedObjectId)
       removedHandleIds.push(directory.handleId)
-    }
-    const removedRepair = await this.#compatibleNames.removeVerifiedEmptyRepairWithinMutation(
-      this.#tree.ownedRoot(),
-    )
-    if (removedRepair.kind === 'removed') {
-      removedObjectIds.push(...removedRepair.removedObjectIds)
-      removedHandleIds.push(...removedRepair.removedHandleIds)
     }
 
     return Object.freeze({
@@ -210,7 +177,7 @@ export class FreshPageFileSystemAccessDiscardSession {
       successfulCheckpoints: Object.freeze(successful),
       removedObjectIds: Object.freeze(removedObjectIds.sort()),
       removedHandleIds: Object.freeze(removedHandleIds.sort()),
-      retireRecoveryMetadata: () => this.#retireRecoveryMetadata(),
+      retireRecoveryMetadata: () => retireFSAMaterializationRecoveryMetadata(this.#checkpoints),
     })
   }
 
@@ -220,19 +187,7 @@ export class FreshPageFileSystemAccessDiscardSession {
   }
 
   async #verifyBinding(): Promise<void> {
-    const verified = await verifyFSAOperationBinding({
-      repository: this.#operationRepository,
-      intent: this.intent,
-      expectedParent: this.#binding.parent,
-    })
-    if (verified.parentHandleId !== this.#binding.parentHandleId ||
-        verified.reservation.digest !== this.#binding.reservation.digest) {
-      throw new TargetOwnershipUnknownError('reservation', this.intent.operationId)
-    }
-  }
-
-  async #retireRecoveryMetadata(): Promise<void> {
-    await retireFSAMaterializationRecoveryMetadata(this.#checkpoints)
+    await verifyExpectedBinding(this.#operationRepository, this.intent, this.#binding)
   }
 
   async #verifyCheckpointObjects(
@@ -278,13 +233,9 @@ export class FreshPageFileSystemAccessDiscardSession {
   async #verifyNamespaceInventory(
     objects: readonly OwnedCheckpointObject[],
     handles: readonly ReceiveOperationHandleRecord[],
-  ): Promise<readonly OwnedDirectoryObservation[]> {
+  ): Promise<readonly RemovableDirectoryObservation[]> {
     await verifyPersistedParentAuthority(this.#binding, handles)
-    const directoryById = ownedDirectoryHandleInventory(
-      this.#binding,
-      handles,
-      this.#compatibleNames.pairHandleIds(),
-    )
+    const directoryById = ownedDirectoryHandleInventory(this.#binding, handles)
 
     if (this.#binding.reservation.entryKind === 'single-file') {
       // The reserved file is the FSA materialization root; accepting its logical name here
@@ -298,32 +249,63 @@ export class FreshPageFileSystemAccessDiscardSession {
     }
 
     const root = await requireResultRoot(this.#binding)
-    const fileByPath = new Map(objects.map(object => [pathKey(object.path), object]))
-    const seenFiles = new Set<string>()
-    const seenDirectories = new Set<string>()
-    const directories: OwnedDirectoryObservation[] = []
-    await walkOwnedDirectory({
-      tree: this.#tree,
-      binding: this.#binding,
-      directory: root,
-      path: Object.freeze([]),
-      directoryById,
-      fileByPath,
-      seenDirectories,
-      seenFiles,
-      directories,
-    })
-    if (seenDirectories.size !== directoryById.size || seenFiles.size !== fileByPath.size) {
+    const rootHandleId = await fsaDirectoryHandleId(this.#binding.reservation, [])
+    const rootRecord = directoryById.get(rootHandleId)
+    if (rootRecord?.ownedObjectId === undefined ||
+        !await this.#tree.validateDirectory([], rootRecord.ownedObjectId)) {
       throw new TargetOwnershipUnknownError('cleanup', this.intent.operationId)
     }
-    return Object.freeze(directories)
+    const walkContext: OwnedDirectoryWalkContext = {
+      tree: this.#tree,
+      binding: this.#binding,
+      directoryById,
+      directoriesByPhysicalName: groupByPhysicalName(
+        [...directoryById.values()],
+        record => (record.handle as FileSystemDirectoryHandle).name,
+      ),
+      fileByPath: new Map(objects.map(object => [pathKey(object.path), object])),
+      filesByPhysicalName: groupByPhysicalName(objects, object => object.persistedHandle.name),
+      seenDirectories: new Set<string>(),
+      seenFiles: new Set<string>(),
+      removableDirectories: [],
+    }
+    await walkOwnedDirectory(walkContext, {
+      parentHandle: this.#binding.parent,
+      physicalName: this.#binding.reservation.physicalName,
+      directory: root,
+      record: rootRecord,
+      path: Object.freeze([]),
+      isRoot: true,
+    })
+    if (walkContext.seenDirectories.size !== directoryById.size ||
+        walkContext.seenFiles.size !== objects.length) {
+      throw new TargetOwnershipUnknownError('cleanup', this.intent.operationId)
+    }
+    return Object.freeze(walkContext.removableDirectories)
   }
 
   async #close(): Promise<void> {
     this.#checkpoints.close()
-    this.#compatibleNames.close()
     await this.#rootLease.release()
   }
+}
+
+async function verifyExpectedBinding(
+  repository: ReceiveOperationRepository,
+  intent: ReceiveIntent,
+  expected: PersistedFSAOperationBinding,
+  parentOverride?: FileSystemDirectoryHandle,
+): Promise<PersistedFSAOperationBinding> {
+  const verified = await verifyFSAOperationBinding({
+    repository,
+    intent,
+    expectedParent: parentOverride ?? expected.parent,
+  })
+  if (verified.parentHandleId !== expected.parentHandleId ||
+      verified.reservation.digest !== expected.reservation.digest) {
+    throw new TargetOwnershipUnknownError('reservation', intent.operationId)
+  }
+  return verified
 }
 
 export async function openFreshPageFileSystemAccessDiscard(
@@ -352,32 +334,19 @@ export async function openFreshPageFileSystemAccessDiscard(
     options.mutationIdentities,
   )
   let checkpoints: FSAFileCheckpointRepository | undefined
-  let compatibleNames: CompatibleNamePathAuthority | undefined
   try {
-    const binding = await verifyFSAOperationBinding({
-      repository: options.operationRepository,
+    const binding = await verifyExpectedBinding(
+      options.operationRepository,
       intent,
-      expectedParent: firstBinding.parent,
-    })
-    if (binding.parentHandleId !== options.binding.parentHandleId ||
-        binding.reservation.digest !== options.binding.reservation.digest) {
-      throw new TargetOwnershipUnknownError('reservation', intent.operationId)
-    }
-    compatibleNames = await CompatibleNamePathAuthority.openForReopen({
-      binding,
-      mutations: rootLease.authority,
-      pairHandles: options.operationRepository,
-      openLedger: options.openCompatibleNameLedger ??
-        (() => IndexedDbCompatibleNameLedger.open(options.databaseName)),
-      preparation: options.compatibleNamePreparation ?? defaultCompatibleNamePreparation(),
-    })
+      options.binding,
+      firstBinding.parent,
+    )
     checkpoints = await openFSAFileCheckpointRepository(options, intent, binding.reservation)
     const tree = new BrowserFileSystemTree({
       binding,
       operationRepository: options.operationRepository,
       fileHandles: checkpoints,
       mutations: rootLease.authority,
-      compatibleNames,
     })
     return new FreshPageFileSystemAccessDiscardSession({
       intent,
@@ -386,11 +355,9 @@ export async function openFreshPageFileSystemAccessDiscard(
       tree,
       checkpoints,
       rootLease,
-      compatibleNames,
     })
   } catch (error) {
     checkpoints?.close()
-    compatibleNames?.close()
     await rootLease.release().catch(() => undefined)
     throw error
   }
@@ -401,7 +368,9 @@ function checkpointObjects(
   committed: readonly FileCheckpointV2[],
   candidates: readonly FileCheckpointV2[],
 ): readonly CheckpointObject[] {
-  const groups = checkpointObjectGroups(intent, committed, candidates)
+  const groups = new Map<string, CheckpointObjectGroup>()
+  appendCheckpointGroups(intent, groups, 'committed', committed)
+  appendCheckpointGroups(intent, groups, 'candidates', candidates)
   const paths = new Set<string>()
   const objects: CheckpointObject[] = []
   for (const [ownedObjectId, group] of groups) {
@@ -412,17 +381,6 @@ function checkpointObjects(
     objects.push(object)
   }
   return Object.freeze(objects.sort((left, right) => comparePaths(left.path, right.path)))
-}
-
-function checkpointObjectGroups(
-  intent: ReceiveIntent,
-  committed: readonly FileCheckpointV2[],
-  candidates: readonly FileCheckpointV2[],
-): ReadonlyMap<string, CheckpointObjectGroup> {
-  const groups = new Map<string, CheckpointObjectGroup>()
-  appendCheckpointGroups(intent, groups, 'committed', committed)
-  appendCheckpointGroups(intent, groups, 'candidates', candidates)
-  return groups
 }
 
 function appendCheckpointGroups(
@@ -544,20 +502,11 @@ async function verifyPersistedParentAuthority(
 function ownedDirectoryHandleInventory(
   binding: PersistedFSAOperationBinding,
   handles: readonly ReceiveOperationHandleRecord[],
-  pairHandleIds: readonly string[],
 ): ReadonlyMap<string, ReceiveOperationHandleRecord> {
   const directoryById = new Map<string, ReceiveOperationHandleRecord>()
   const directoryObjectIds = new Set<string>()
-  const expectedPairHandleIds = new Set(pairHandleIds)
   for (const handle of handles) {
     if (handle.id === binding.parentHandleId) continue
-    if (handle.kind === FSA_OPERATION_HANDLE_COMPATIBLE_NAME_SCRIPT ||
-        handle.kind === FSA_OPERATION_HANDLE_COMPATIBLE_NAME_SIDECAR) {
-      if (!expectedPairHandleIds.delete(handle.id)) {
-        throw new TargetOwnershipUnknownError('cleanup', binding.intent.operationId)
-      }
-      continue
-    }
     if (handle.operationId !== binding.intent.operationId ||
         handle.kind !== FSA_OPERATION_HANDLE_DIRECTORY ||
         handle.authorityRef !== binding.reservation.authorityRef ||
@@ -568,91 +517,172 @@ function ownedDirectoryHandleInventory(
     directoryById.set(handle.id, handle)
     directoryObjectIds.add(handle.ownedObjectId)
   }
-  if (expectedPairHandleIds.size !== 0) {
-    throw new TargetOwnershipUnknownError('cleanup', binding.intent.operationId)
-  }
   return directoryById
 }
 
-interface OwnedDirectoryWalkInput {
-  tree: BrowserFileSystemTree
-  binding: PersistedFSAOperationBinding
-  directory: FileSystemDirectoryHandle
-  path: readonly string[]
-  directoryById: ReadonlyMap<string, ReceiveOperationHandleRecord>
-  fileByPath: ReadonlyMap<string, OwnedCheckpointObject>
-  seenDirectories: Set<string>
-  seenFiles: Set<string>
-  directories: OwnedDirectoryObservation[]
+interface OwnedDirectoryWalkContext {
+  readonly tree: BrowserFileSystemTree
+  readonly binding: PersistedFSAOperationBinding
+  readonly directoryById: ReadonlyMap<string, ReceiveOperationHandleRecord>
+  readonly directoriesByPhysicalName: ReadonlyMap<string, readonly ReceiveOperationHandleRecord[]>
+  readonly fileByPath: ReadonlyMap<string, OwnedCheckpointObject>
+  readonly filesByPhysicalName: ReadonlyMap<string, readonly OwnedCheckpointObject[]>
+  readonly seenDirectories: Set<string>
+  readonly seenFiles: Set<string>
+  readonly removableDirectories: RemovableDirectoryObservation[]
 }
 
-async function walkOwnedDirectory(input: Readonly<OwnedDirectoryWalkInput>): Promise<void> {
-  const operationId = input.binding.intent.operationId
-  let handleId: string
-  try {
-    handleId = await fsaDirectoryHandleId(input.binding.reservation, input.path)
-  } catch (cause) {
-    throw new TargetOwnershipUnknownError('cleanup', operationId, { cause })
-  }
-  const record = input.directoryById.get(handleId)
-  if (record?.ownedObjectId === undefined || input.seenDirectories.has(handleId) ||
-      !await input.tree.validateDirectory(input.path, record.ownedObjectId)) {
+interface OwnedDirectoryNode {
+  readonly parentHandle: FileSystemDirectoryHandle
+  readonly physicalName: string
+  readonly directory: FileSystemDirectoryHandle
+  readonly record: ReceiveOperationHandleRecord
+  readonly path: readonly string[] | undefined
+  readonly isRoot: boolean
+}
+
+async function walkOwnedDirectory(
+  context: OwnedDirectoryWalkContext,
+  node: OwnedDirectoryNode,
+): Promise<boolean> {
+  const operationId = context.binding.intent.operationId
+  const { record } = node
+  if (record.ownedObjectId === undefined || context.seenDirectories.has(record.id)) {
     throw new TargetOwnershipUnknownError('cleanup', operationId)
   }
-  input.seenDirectories.add(handleId)
-  input.directories.push(Object.freeze({
-    path: input.path,
-    ownedObjectId: record.ownedObjectId,
-    handleId,
-  }))
+  context.seenDirectories.add(record.id)
 
-  const enumerable = input.directory as FileSystemDirectoryHandle & {
+  const enumerable = node.directory as FileSystemDirectoryHandle & {
     entries?: () => AsyncIterableIterator<[string, FileSystemHandle]>
   }
   if (typeof enumerable.entries !== 'function') {
     throw new TargetOwnershipUnknownError('cleanup', operationId)
   }
+  let hasKeptDescendant = false
   try {
     for await (const [name, handle] of enumerable.entries()) {
-      await walkOwnedDirectoryEntry(input, name, handle, operationId)
+      if (await walkOwnedEntry(context, node, name, handle, operationId)) {
+        hasKeptDescendant = true
+      }
     }
   } catch (cause) {
     if (cause instanceof TargetOwnershipUnknownError) throw cause
     throw new TargetOwnershipUnknownError('cleanup', operationId, { cause })
   }
+  if (!hasKeptDescendant) {
+    context.removableDirectories.push(Object.freeze({
+      parentHandle: node.parentHandle,
+      physicalName: node.physicalName,
+      ownedObjectId: record.ownedObjectId,
+      handleId: record.id,
+      persistedHandle: record.handle as FileSystemDirectoryHandle,
+      isRoot: node.isRoot,
+    }))
+  }
+  return hasKeptDescendant
 }
 
-async function walkOwnedDirectoryEntry(
-  input: Readonly<OwnedDirectoryWalkInput>,
-  physicalName: string,
+async function walkOwnedEntry(
+  context: OwnedDirectoryWalkContext,
+  parent: OwnedDirectoryNode,
+  name: string,
   handle: FileSystemHandle,
   operationId: string,
-): Promise<void> {
-  if (handle.kind !== 'directory' && handle.kind !== 'file') {
-    throw new TargetOwnershipUnknownError('cleanup', operationId)
-  }
-  const translated = input.tree.physicalChild(input.path, physicalName, handle.kind)
-  if (translated.kind === 'restoration-pair') return
-  if (translated.kind !== 'logical') {
-    throw new TargetOwnershipUnknownError('cleanup', operationId)
-  }
-  const path = Object.freeze([...input.path, translated.logicalComponent])
+): Promise<boolean> {
   if (handle.kind === 'directory') {
-    await walkOwnedDirectory({ ...input, directory: handle as FileSystemDirectoryHandle, path })
-    return
+    const matched = await matchOwnedDirectory(context, parent.path, name, handle as FileSystemDirectoryHandle, operationId)
+    return walkOwnedDirectory(context, {
+      parentHandle: parent.directory,
+      physicalName: name,
+      directory: handle as FileSystemDirectoryHandle,
+      record: matched.record,
+      path: matched.path,
+      isRoot: false,
+    })
   }
-  const key = pathKey(path)
-  const object = input.fileByPath.get(key)
-  if (object === undefined || input.seenFiles.has(key) ||
-      !await sameEntryForCleanup(handle, object.persistedHandle, operationId)) {
-    throw new TargetOwnershipUnknownError('cleanup', operationId)
+  if (handle.kind === 'file') {
+    const matched = await matchOwnedFile(context, parent.path, name, handle as FileSystemFileHandle, operationId)
+    context.seenFiles.add(matched.ownedObjectId)
+    return matched.successful !== undefined
   }
-  input.seenFiles.add(key)
+  throw new TargetOwnershipUnknownError('cleanup', operationId)
 }
 
-async function requireResultRoot(
-  binding: PersistedFSAOperationBinding,
-): Promise<FileSystemDirectoryHandle> {
+async function matchOwnedDirectory(
+  context: OwnedDirectoryWalkContext,
+  parentPath: readonly string[] | undefined,
+  physicalName: string,
+  handle: FileSystemDirectoryHandle,
+  operationId: string,
+): Promise<Readonly<{ record: ReceiveOperationHandleRecord; path: readonly string[] | undefined }>> {
+  if (parentPath !== undefined) {
+    const logicalPath = Object.freeze([...parentPath, physicalName])
+    let handleId: string | undefined
+    try {
+      handleId = await fsaDirectoryHandleId(context.binding.reservation, logicalPath)
+    } catch {
+      handleId = undefined
+    }
+    const direct = handleId === undefined ? undefined : context.directoryById.get(handleId)
+    if (direct?.ownedObjectId !== undefined && !context.seenDirectories.has(direct.id) &&
+        await context.tree.validateDirectory(logicalPath, direct.ownedObjectId) &&
+        await sameEntryForCleanup(handle, direct.handle as FileSystemDirectoryHandle, operationId)) {
+      return Object.freeze({ record: direct, path: logicalPath })
+    }
+    if (!isSafeComponentName(physicalName)) {
+      throw new TargetOwnershipUnknownError('cleanup', operationId)
+    }
+  }
+  // Safe-renamed directories (and their descendants) verify exact handle identity against
+  // the persisted operation inventory rather than relying on a separate mapping ledger.
+  for (const candidate of context.directoriesByPhysicalName.get(physicalName) ?? []) {
+    if (context.seenDirectories.has(candidate.id)) continue
+    if (await sameEntryForCleanup(handle, candidate.handle as FileSystemDirectoryHandle, operationId)) {
+      return Object.freeze({ record: candidate, path: undefined })
+    }
+  }
+  throw new TargetOwnershipUnknownError('cleanup', operationId)
+}
+
+async function matchOwnedFile(
+  context: OwnedDirectoryWalkContext,
+  parentPath: readonly string[] | undefined,
+  physicalName: string,
+  handle: FileSystemFileHandle,
+  operationId: string,
+): Promise<OwnedCheckpointObject> {
+  if (parentPath !== undefined) {
+    const direct = context.fileByPath.get(pathKey([...parentPath, physicalName]))
+    if (direct !== undefined && !context.seenFiles.has(direct.ownedObjectId) &&
+        await sameEntryForCleanup(handle, direct.persistedHandle, operationId)) {
+      return direct
+    }
+  }
+  for (const candidate of context.filesByPhysicalName.get(physicalName) ?? []) {
+    if (context.seenFiles.has(candidate.ownedObjectId)) continue
+    if (parentPath !== undefined && !samePath(candidate.path.slice(0, -1), parentPath)) continue
+    if (await sameEntryForCleanup(handle, candidate.persistedHandle, operationId)) {
+      return candidate
+    }
+  }
+  throw new TargetOwnershipUnknownError('cleanup', operationId)
+}
+
+function groupByPhysicalName<T>(
+  items: readonly T[],
+  nameOf: (item: T) => string,
+): ReadonlyMap<string, readonly T[]> {
+  const groups = new Map<string, T[]>()
+  for (const item of items) {
+    const name = nameOf(item)
+    const bucket = groups.get(name) ?? []
+    bucket.push(item)
+    groups.set(name, bucket)
+  }
+  return groups
+}
+
+async function requireResultRoot(binding: PersistedFSAOperationBinding): Promise<FileSystemDirectoryHandle> {
   try {
     return await binding.parent.getDirectoryHandle(binding.reservation.physicalName)
   } catch (cause) {
@@ -696,29 +726,17 @@ async function cleanupMutation(operationId: string, mutation: () => Promise<void
   }
 }
 
-function isDirectoryHandle(value: unknown): value is FileSystemDirectoryHandle {
-  return typeof value === 'object' && value !== null && 'kind' in value &&
-    (value as { readonly kind?: unknown }).kind === 'directory' && 'isSameEntry' in value &&
+function isHandleKind<T extends FileSystemHandle>(value: unknown, kind: T['kind']): value is T {
+  return typeof value === 'object' && value !== null &&
+    (value as { readonly kind?: unknown }).kind === kind &&
     typeof (value as { readonly isSameEntry?: unknown }).isSameEntry === 'function'
 }
 
-function isFileHandle(value: unknown): value is FileSystemFileHandle {
-  return typeof value === 'object' && value !== null && 'kind' in value &&
-    (value as { readonly kind?: unknown }).kind === 'file' && 'isSameEntry' in value &&
-    typeof (value as { readonly isSameEntry?: unknown }).isSameEntry === 'function'
-}
-
-function pathStartsWith(path: readonly string[], prefix: readonly string[]): boolean {
-  return prefix.length < path.length && prefix.every((segment, index) => path[index] === segment)
-}
-
-function pathKey(path: readonly string[]): string {
-  return JSON.stringify(path)
-}
-
-function samePath(left: readonly string[], right: readonly string[]): boolean {
-  return left.length === right.length && left.every((segment, index) => segment === right[index])
-}
+const isDirectoryHandle = (value: unknown): value is FileSystemDirectoryHandle => isHandleKind(value, 'directory')
+const isFileHandle = (value: unknown): value is FileSystemFileHandle => isHandleKind(value, 'file')
+const pathKey = (path: readonly string[]): string => JSON.stringify(path)
+const samePath = (left: readonly string[], right: readonly string[]): boolean =>
+  left.length === right.length && left.every((segment, index) => segment === right[index])
 
 function comparePaths(left: readonly string[], right: readonly string[]): number {
   const length = Math.min(left.length, right.length)
@@ -729,16 +747,5 @@ function comparePaths(left: readonly string[], right: readonly string[]): number
   return left.length - right.length
 }
 
-function errorNamed(error: unknown, name: string): boolean {
-  return typeof error === 'object' && error !== null &&
-    'name' in error && (error as { readonly name?: unknown }).name === name
-}
-
-function defaultCompatibleNamePreparation(): CompatibleNameRootRepairPreparationOptions {
-  const platform = globalThis.navigator?.platform
-  return Object.freeze({
-    platform: typeof platform === 'string' && platform.toLowerCase().startsWith('win')
-      ? 'windows'
-      : 'unsupported',
-  })
-}
+const errorNamed = (error: unknown, name: string): boolean =>
+  typeof error === 'object' && error !== null && (error as { readonly name?: unknown }).name === name

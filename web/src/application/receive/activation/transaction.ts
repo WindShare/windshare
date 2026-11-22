@@ -161,9 +161,6 @@ export function frozenBoundOperation(
       joined: record.joined,
       selection: active.frozenSelection,
       runtime,
-      ...(runtime.repairProjection === undefined
-        ? {}
-        : { repairProjection: runtime.repairProjection }),
     },
   })
 }

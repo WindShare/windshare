@@ -3,13 +3,10 @@ import type { FinalFileCheckpointProof } from '../persistence/journal'
 import type {
   AutomaticCheckpointAdmissionAuthority,
   PersistentMaterializationPort,
-  PersistentOutputNamespaceClaimPort,
   PreservingWriterCapacityAuthority,
 } from '../persistent-tree/contracts'
 import type { MaterializedManifestEntry } from '../workspace/manifest'
-import type {
-  CompatibleNameRepairSummary,
-} from '../../transfer/lifecycle/name-repair'
+import type { SafeRenamedSummary } from '../../transfer/lifecycle/safe-names'
 import {
   createDirectoryAdmissionScope,
   validateDirectorySettlement,
@@ -103,9 +100,8 @@ export async function createPersistentDirectTreeExecution(input: {
   readonly settlement: PersistentDirectTreeSettlementAuthority
   readonly automaticCheckpointAdmission: AutomaticCheckpointAdmissionAuthority
   readonly preservingWriterCapacity: PreservingWriterCapacityAuthority
-  readonly namespaceClaims?: PersistentOutputNamespaceClaimPort
   readonly capabilities?: Partial<OutputCapabilities>
-  readonly repairSummary?: () => CompatibleNameRepairSummary | undefined
+  readonly safeRenamedSummary?: () => SafeRenamedSummary | undefined
   readonly recovery?: PersistentExecutionRecoveryPolicy
   readonly performance?: PerformanceSummaryObservations
 }): Promise<DirectTreeExecution> {
@@ -125,7 +121,6 @@ export async function createPersistentDirectTreeExecution(input: {
     automaticCheckpointAdmission: input.automaticCheckpointAdmission,
     preservingWriterCapacity: input.preservingWriterCapacity,
     ...(input.recovery === undefined ? {} : { recovery: input.recovery }),
-    ...(input.namespaceClaims === undefined ? {} : { namespaceClaims: input.namespaceClaims }),
     ...(input.performance === undefined ? {} : { performance: input.performance }),
   })
   let terminalSettlementInitiated = false
@@ -141,7 +136,7 @@ export async function createPersistentDirectTreeExecution(input: {
       adapter.closeCheckpointAuthorities()
       input.settlement.beginTerminal(kind)
     },
-    ...(input.repairSummary === undefined ? {} : { repairSummary: input.repairSummary }),
+    ...(input.safeRenamedSummary === undefined ? {} : { safeRenamedSummary: input.safeRenamedSummary }),
     ...(recoverySummary === undefined
       ? {}
       : { recoverySummary }),
@@ -261,7 +256,6 @@ class PersistentMaterializationOutput implements OutputSession {
   readonly #materialization: PersistentMaterializationPort
   readonly #checkpointNamespace: PersistentCheckpointNamespaceEvidence
   readonly #directoryLedger: DirectoryAdmissionLedger | undefined
-  readonly #namespaceClaims: PersistentOutputNamespaceClaimPort | undefined
   readonly #directTreeCoordinates: DirectTreeCoordinateContract | undefined
   readonly #recovery: PersistentExecutionRecoveryPolicy
   readonly #automaticCheckpointAdmission: AutomaticCheckpointAdmissionAuthority | undefined
@@ -284,7 +278,6 @@ class PersistentMaterializationOutput implements OutputSession {
     readonly executionProfile: OutputExecutionProfile
     readonly capabilities: OutputCapabilities
     readonly directoryLedger?: DirectoryAdmissionLedger
-    readonly namespaceClaims?: PersistentOutputNamespaceClaimPort
     readonly directTreeCoordinates?: DirectTreeCoordinateContract
     readonly recovery?: PersistentExecutionRecoveryPolicy
     readonly automaticCheckpointAdmission?: AutomaticCheckpointAdmissionAuthority
@@ -297,7 +290,6 @@ class PersistentMaterializationOutput implements OutputSession {
     this.capabilities = outputCapabilities(input.capabilities)
     this.executionProfile = outputExecutionProfile(input.executionProfile)
     this.#directoryLedger = input.directoryLedger
-    this.#namespaceClaims = input.namespaceClaims
     this.#directTreeCoordinates = input.directTreeCoordinates
     this.#recovery = input.recovery ?? Object.freeze({ pausedFile: 'preserve' as const })
     this.#automaticCheckpointAdmission = input.automaticCheckpointAdmission
@@ -320,17 +312,6 @@ class PersistentMaterializationOutput implements OutputSession {
           snapshot.directory,
           signal,
           async () => {
-            if (this.#namespaceClaims !== undefined) {
-              if (snapshot.logicalSiblingMembership === undefined) {
-                throw new TypeError(
-                  'persistent namespace claims require authenticated logical-sibling membership',
-                )
-              }
-              this.#namespaceClaims.bindDirectoryNamespace(Object.freeze({
-                materializationRelativePath,
-                logicalSiblingMembership: snapshot.logicalSiblingMembership,
-              }))
-            }
             await this.#materialization.ensureDirectory(materializationRelativePath)
               .catch((cause: unknown) => {
                 // Directory writes need the same output-wide state-I/O boundary as file writes;

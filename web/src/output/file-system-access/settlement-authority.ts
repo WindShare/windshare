@@ -53,7 +53,6 @@ import type {
   RecoverySummary,
 } from '../../transfer/lifecycle/recovery-summary'
 import { deriveSettledFSARecoverySummary } from './recovery-settlement'
-import { COMPATIBLE_NAME_PENDING_OUTCOME_FORMAT_VERSION } from './compatible-name/model'
 import type {
   CreateFileSystemAccessSettlementAuthorityOptions,
   FileSystemAccessOperationSettlementAuthority,
@@ -306,10 +305,6 @@ export class FSAOperationSettlementAuthority implements FileSystemAccessOperatio
       }
       const published = footerState === 'completed' && request.worker.status === 'Succeeded'
       const outcome = published ? 'published' as const : 'partial-directory' as const
-      // A zero-prefix repair has no restorable user namespace. Removing only its
-      // verified owned pair here prevents a false repaired result while keeping
-      // every ordinary output entry outside this narrowly proven cleanup.
-      await observation.removeVerifiedEmptyCompatibleNameRepair()
       const current = await this.#lifecycle()
       if (current.state.kind !== 'receiving') {
         throw new TypeError('FSA completion requires Receiving lifecycle state')
@@ -338,13 +333,6 @@ export class FSAOperationSettlementAuthority implements FileSystemAccessOperatio
             evidence,
           )
       const next = transition.terminal
-      await observation.persistCompatibleNamePendingOutcome(Object.freeze({
-        formatVersion: COMPATIBLE_NAME_PENDING_OUTCOME_FORMAT_VERSION,
-        footerState,
-        ordinaryLifecycle: next,
-        terminalReceipt: receipt,
-      }))
-      await observation.drainCompatibleNameProjector(footerState)
       const terminalBase = transition.intermediate === undefined
         ? current
         : await this.#commitLifecycle(current, transition.intermediate)
@@ -442,7 +430,7 @@ export class FSAOperationSettlementAuthority implements FileSystemAccessOperatio
         try {
           return await operation(observation)
         } catch (cause) {
-          if (!(cause instanceof TargetOwnershipUnknownError) || session.compatibleNameRepairActive) {
+          if (!(cause instanceof TargetOwnershipUnknownError)) {
             throw cause
           }
           return (await this.#recordNeedsAttention(cause)).state
@@ -450,7 +438,7 @@ export class FSAOperationSettlementAuthority implements FileSystemAccessOperatio
       })
     } catch (cause) {
       failure = cause
-      if (cause instanceof TargetOwnershipUnknownError && !session.compatibleNameRepairActive) {
+      if (cause instanceof TargetOwnershipUnknownError) {
         try {
           result = (await this.#recordNeedsAttention(cause, false)).state
           failure = undefined

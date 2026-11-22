@@ -25,8 +25,6 @@ describe('FSA background resource ownership', () => {
     const releaseOperation = deferred<void>()
     const order: string[] = []
     const outputSession: FSAOwnedOutputSession = {
-      repairProjection: undefined,
-      subscribeRepairProjectionActivation: () => () => undefined,
       closeForTerminalSettlement: async () => {
         order.push('output-close-started')
         await closeGate.promise
@@ -114,8 +112,6 @@ function operationLeaseFixture(release: () => void | Promise<void>): BrowserRece
 
 function outputSessionFixture(order: string[]): FSAOwnedOutputSession {
   return Object.freeze({
-    repairProjection: undefined,
-    subscribeRepairProjectionActivation: () => () => undefined,
     closeForTerminalSettlement: async () => { order.push('output-close') },
     releaseRootLease: async () => { order.push('root-release') },
   })

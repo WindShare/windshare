@@ -20,7 +20,6 @@ export interface ReceiveOperationResumeSource {
   }> | undefined>
   readProgressiveRequirement?(lifecycle: ReceiveLifecycleState): Promise<import('./progressive-checkpoint').ProgressiveZipRecoveryRequirement | undefined>
   readSourceRevisionFailures?(lifecycle: ReceiveLifecycleState): Promise<import('../../transfer/lifecycle/source-revision').SourceRevisionFailures | undefined>
-  isCleanupOnly?(operationId: string): Promise<boolean>
   readRecoverySummary?(
     lifecycle: Extract<ReceiveLifecycleState, {
       kind: 'resumable-receive'
@@ -63,10 +62,6 @@ export interface ReceiveOperationMutationPort<TResult = unknown> {
     descriptor: ReceiveOperationResumeDescriptor,
     failures?: OutputFailureSinks,
   ): Promise<ReceiveOperationDiscardResult>
-  catchUp?(
-    descriptor: ReceiveOperationResumeDescriptor,
-    failures?: OutputFailureSinks,
-  ): Promise<TResult>
 }
 
 interface ResumeReferenceOwner {
@@ -138,10 +133,9 @@ export class ReceiveOperationResumeAuthority<TResult = unknown> {
     for (const lifecycle of lifecycles) {
       const projected = receiveOperationResumeDescriptor(lifecycle)
       if (projected === undefined) continue
-      const cleanupOnly = await this.#source.isCleanupOnly?.(lifecycle.operationId) ?? false
-      const identity = cleanupOnly ? undefined : await this.#source.readOperationIdentity?.(lifecycle)
-      const descriptor = await this.#projectDescriptor(Object.freeze({ ...projected, ...identity }), lifecycle, cleanupOnly)
-      const recoverySummary = !cleanupOnly && lifecycle.kind === 'resumable-receive' &&
+      const identity = await this.#source.readOperationIdentity?.(lifecycle)
+      const descriptor = await this.#projectDescriptor(Object.freeze({ ...projected, ...identity }), lifecycle)
+      const recoverySummary = lifecycle.kind === 'resumable-receive' &&
           lifecycle.payloadKind === 'file-set' &&
           this.#source.readRecoverySummary !== undefined
         ? await this.#source.readRecoverySummary(lifecycle)
@@ -159,22 +153,21 @@ export class ReceiveOperationResumeAuthority<TResult = unknown> {
   }
 
   async #projectDescriptor(
-    projected: ReceiveOperationResumeDescriptor, lifecycle: ReceiveLifecycleState, cleanupOnly: boolean,
+    projected: ReceiveOperationResumeDescriptor, lifecycle: ReceiveLifecycleState,
   ): Promise<ReceiveOperationResumeDescriptor> {
     let descriptor = projected
     let nativeRequirement: import('./progressive-checkpoint').ProgressiveZipRecoveryRequirement | undefined
     try {
-      nativeRequirement = cleanupOnly ? undefined : await this.#source.readProgressiveRequirement?.(lifecycle)
+      nativeRequirement = await this.#source.readProgressiveRequirement?.(lifecycle)
     } catch (error) {
       if (!(error instanceof NativeZipRecoveryUnavailableError)) throw error
       descriptor = Object.freeze({ ...projected, continuation: 'needs-attention',
         recoveryUnavailable: 'native-checkpoint-unavailable' })
     }
-    if (cleanupOnly) descriptor = Object.freeze({ ...projected, continuation: 'cleanup-incompatible' as const })
-    else if (nativeRequirement === 'local-finalization') {
+    if (nativeRequirement === 'local-finalization') {
       descriptor = Object.freeze({ ...projected, continuation: 'resume-local-finalization' as const })
     }
-    if (!cleanupOnly && descriptor.recoveryUnavailable === undefined) {
+    if (descriptor.recoveryUnavailable === undefined) {
       const sourceRevisionFailures = await this.#source.readSourceRevisionFailures?.(lifecycle)
       if (sourceRevisionFailures !== undefined) descriptor = Object.freeze({ ...descriptor, sourceRevisionFailures })
     }
@@ -187,9 +180,6 @@ export class ReceiveOperationResumeAuthority<TResult = unknown> {
   ): Promise<TResult> {
     requireMatchingRetainedFileRecovery(reference, request?.retainedFileRecovery)
     const descriptor = this.#consume(reference)
-    if (descriptor.continuation === 'cleanup-incompatible') {
-      throw new DOMException('Incompatible saved records can only be forgotten', 'InvalidStateError')
-    }
     assertReceiveOperationCanContinue(descriptor)
     return this.#mutations.resume(descriptor, request)
   }
@@ -218,24 +208,6 @@ export class ReceiveOperationResumeAuthority<TResult = unknown> {
     }
     // The single-use reference prevents presentation from replaying cleanup authority.
     return this.#mutations.cleanup(descriptor, failures)
-  }
-
-  async catchUp(
-    reference: ReceiveOperationResumeRef,
-    failures?: OutputFailureSinks,
-  ): Promise<TResult> {
-    const descriptor = this.#consume(reference)
-    if (descriptor.continuation !== 'pending-catch-up' &&
-        descriptor.continuation !== 'restoration-available' &&
-        descriptor.continuation !== 'resume-receive' &&
-        descriptor.continuation !== 'retry-cleanup') {
-      throw new DOMException('Receive operation has no terminal catch-up authority', 'InvalidStateError')
-    }
-    const catchUp = this.#mutations.catchUp
-    if (catchUp === undefined) {
-      throw new DOMException('Terminal catch-up authority is unavailable', 'NotSupportedError')
-    }
-    return catchUp.call(this.#mutations, descriptor, failures)
   }
 
   #consume(reference: ReceiveOperationResumeRef): ReceiveOperationResumeDescriptor {

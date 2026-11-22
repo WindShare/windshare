@@ -1,8 +1,7 @@
 import type { progress as English } from '../en/progress'
 
 export const progress: typeof English = {
-  adjustedHint: '依赖原文件名的项目或脚本可能会受到路径变化的影响。',
-  setupBeforeRestore: '请先完成本地文件名还原设置，再运行还原工具。',
+  adjustedHint: '如需保留原文件名，请改用 ZIP 方式下载。',
   partial: '仅部分完成：部分所选项目缺失或尚未完成。',
   pendingCleanup: '结果已保存，仍需清理任务的临时数据。',
   sourceChanged: '源文件已更改或已删除。',

@@ -1,4 +1,3 @@
-import type { CompatibleNamePathAuthority } from '../file-system-access/compatible-name/coordinator'
 import type {
   PersistentHandleRecord,
   PersistentHandleRepository,
@@ -15,6 +14,10 @@ import {
   type PersistentOutputStageAuthority,
   type PersistentOutputStageScope,
 } from '../persistent-tree/stage-diagnostics'
+import {
+  SafeNameRegistry,
+  deterministicSafeComponent,
+} from '../file-system-access/safe-name'
 import {
   BrowserFileLineageAuthority,
   createOwnedObjectId,
@@ -63,7 +66,7 @@ export interface BrowserFileSystemTreeOptions {
   readonly operationRepository: FSAOperationBindingRepository
   readonly fileHandles: PersistentHandleRepository
   readonly mutations: FSARootMutationAuthority
-  readonly compatibleNames?: CompatibleNamePathAuthority
+  readonly safeNames?: SafeNameRegistry
   readonly stageAuthority?: PersistentOutputStageAuthority
   readonly randomOwnedObjectId?: () => string
 }
@@ -74,7 +77,7 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
   readonly #mutations: FSARootMutationAuthority
   readonly #authorities: FSAAuthorityCache
   readonly #stageAuthority: PersistentOutputStageAuthority | undefined
-  readonly #compatibleNames: CompatibleNamePathAuthority | undefined
+  readonly #safeNames: SafeNameRegistry
   readonly #randomOwnedObjectId: () => string
   readonly #files: BrowserFileLineageAuthority
   #root: FileSystemDirectoryHandle | undefined
@@ -90,17 +93,16 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
       rootParentIdentity: options.mutations.rootParentIdentity,
     })
     this.#stageAuthority = options.stageAuthority
-    this.#compatibleNames = options.compatibleNames
+    this.#safeNames = options.safeNames ?? new SafeNameRegistry(options.binding.reservation)
     this.#randomOwnedObjectId = options.randomOwnedObjectId ?? createOwnedObjectId
     this.#files = new BrowserFileLineageAuthority({
       binding: options.binding,
       fileHandles: options.fileHandles,
       mutations: options.mutations,
       authorities: this.#authorities,
+      safeNames: this.#safeNames,
       prepareRoot: () => this.#requirePreparedRoot(),
       resolveParent: (path, scope) => this.#parent(path, scope),
-      pairParent: () => this.#authorities.directory([]),
-      ...(this.#compatibleNames === undefined ? {} : { compatibleNames: this.#compatibleNames }),
       randomOwnedObjectId: this.#randomOwnedObjectId,
     })
   }
@@ -133,13 +135,7 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
   async prepareRoot(): Promise<void> {
     const scope = this.#rootScope()
     await this.authorize()
-    if (this.#binding.reservation.entryKind === 'single-file') {
-      await this.#compatibleNames?.ensureRecoveryReport(undefined)
-      return
-    }
-    if (this.#compatibleNames?.pairPlacement === 'beside-mapped-root') {
-      await this.#compatibleNames.ensureRecoveryReport(undefined)
-    }
+    if (this.#binding.reservation.entryKind === 'single-file') return
     const pickedParent = this.#authorities.pickedParent()
     await this.#mutations.scheduler.runNamespace([pickedParent.schedulerIdentity], 'create-directory', async () => {
       const parent = pickedParent.handle
@@ -200,11 +196,6 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
           { create: true },
         ),
       )
-      await this.#compatibleNames?.recordCompatibleTargetCreated(
-        Object.freeze([]),
-        'directory',
-        created,
-      )
       const ownedObjectId = requireOwnedObjectId(this.#randomOwnedObjectId())
       const ownedScope = scope?.withCorrelation({ ownedObjectId })
       const committedBinding = await persistFSAOwnedDirectory({
@@ -244,16 +235,12 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
         handle: current,
       })
     })
-    await this.#compatibleNames?.ensureRecoveryReport(this.#root)
   }
 
   async reopenOwnedRootForCleanup(): Promise<void> {
     const scope = this.#rootScope()
     await this.authorize()
-    if (this.#binding.reservation.entryKind === 'single-file') {
-      await this.#compatibleNames?.ensureRecoveryReport(undefined)
-      return
-    }
+    if (this.#binding.reservation.entryKind === 'single-file') return
     await this.#mutate('settle-operation', async () => {
       const parent = await this.#verifyParent(scope)
       const handleId = await fsaDirectoryHandleId(this.#binding.reservation, [])
@@ -295,7 +282,6 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
         handle: current,
       })
     })
-    await this.#compatibleNames?.ensureRecoveryReport(this.#root)
   }
 
   async ensureDirectory(path: readonly string[]): Promise<PersistentDirectoryMaterialization> {
@@ -307,10 +293,11 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
     const retained = this.#retainedDirectoryMaterialization(canonicalPath)
     if (retained !== undefined) return retained
     const scope = this.#directoryScope(canonicalPath)
+    const leaf = canonicalPath.at(-1)!
     while (true) {
       const parent = await this.#directoryAuthority(canonicalPath.slice(0, -1), undefined, true)
-      const name = this.#compatibleNames?.physicalComponent(canonicalPath, 'directory') ??
-        canonicalPath.at(-1)!
+      const assigned = this.#safeNames.physicalComponent(canonicalPath, 'directory')
+      const name = assigned ?? leaf
       const handleId = await fsaDirectoryHandleId(
         this.#binding.reservation,
         canonicalPath,
@@ -325,29 +312,22 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
           canonicalPath,
           parent,
           name,
+          isSafeName: assigned !== undefined,
           handleId,
           ...(scope === undefined ? {} : { stageScope: scope }),
-          ...(this.#compatibleNames === undefined
-            ? {}
-            : { compatibleNames: this.#compatibleNames }),
-          recordCompatibleTargetCreated: () =>
-            this.#recordCompatibleDirectoryTargetCreated(canonicalPath),
           randomOwnedObjectId: this.#randomOwnedObjectId,
         })
-        if (outcome.kind === 'materialized') return outcome.value
-        const pairParent = this.#authorities.directory([])
-        if (this.#compatibleNames === undefined || pairParent === undefined) {
-          throw outcome.rejection
+        if (outcome.kind === 'materialized') {
+          if (outcome.physicalName !== leaf) {
+            this.#safeNames.record(canonicalPath, 'directory', outcome.physicalName)
+          }
+          return outcome.value
         }
-        await this.#compatibleNames.resolveRejectedComponent({
-          rejection: outcome.rejection,
-          artifactPath: canonicalPath,
+        const safeName = await deterministicSafeComponent({
+          logicalPath: canonicalPath,
           entryKind: 'directory',
-          parent: parent.handle,
-          parentAuthority: parent,
-          pairParent: pairParent.handle,
-          pairParentAuthority: pairParent,
         })
+        this.#safeNames.assign(canonicalPath, 'directory', safeName)
       } catch (error) {
         this.#authorities.invalidateSubtree(canonicalPath)
         throw error
@@ -370,15 +350,6 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
     return authority?.ownedObjectId === undefined
       ? undefined
       : Object.freeze({ ownedObjectId: authority.ownedObjectId, created: false })
-  }
-
-  async #recordCompatibleDirectoryTargetCreated(canonicalPath: readonly string[]): Promise<void> {
-    if (this.#compatibleNames === undefined || this.#root === undefined) return
-    await this.#compatibleNames.recordCompatibleTargetCreated(
-      canonicalPath,
-      'directory',
-      this.#root,
-    )
   }
 
   async validateDirectory(path: readonly string[], ownedObjectId: string): Promise<boolean> {
@@ -490,19 +461,6 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
     await this.#removeDirectoryAuthority(canonicalPath)
   }
 
-  physicalChild(
-    parentPath: readonly string[],
-    physicalComponent: string,
-    entryKind: 'file' | 'directory',
-  ) {
-    return this.#compatibleNames?.physicalChild(parentPath, physicalComponent, entryKind) ??
-      Object.freeze({ kind: 'logical' as const, logicalComponent: physicalComponent })
-  }
-
-  ownedRoot(): FileSystemDirectoryHandle | undefined {
-    return this.#root
-  }
-
   async #removeDirectoryAuthority(canonicalPath: readonly string[]): Promise<void> {
     if (canonicalPath.length === 0) {
       const parent = await this.#verifyParent()
@@ -510,8 +468,9 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
       this.#authorities.invalidateSubtree([])
       return
     }
-    const { authority: parent, name } = await this.#parent(canonicalPath, undefined, 'directory')
-    await parent.handle.removeEntry(name, { recursive: true })
+    const target = await this.#directoryAuthority(canonicalPath)
+    const parent = await this.#directoryAuthority(canonicalPath.slice(0, -1))
+    await parent.handle.removeEntry(target.physicalName, { recursive: true })
     this.#authorities.invalidateSubtree(canonicalPath)
   }
 
@@ -553,7 +512,7 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
     if (name === undefined) throw new TypeError('Output file path has no leaf')
     return {
       authority: await this.#directoryAuthority(path.slice(0, -1), stageScope),
-      name: this.#compatibleNames?.physicalComponent(path, entryKind) ?? name,
+      name: this.#safeNames.physicalComponent(path, entryKind) ?? name,
     }
   }
 
@@ -596,8 +555,7 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
               this.#binding.intent.operationId,
             )
           }
-          const physicalName = this.#compatibleNames
-            ?.physicalComponent(canonicalWalked, 'directory') ?? segment
+          const physicalName = persisted.handle.name
           const next = await openDirectoryEntry(
             parent.handle,
             physicalName,
@@ -616,6 +574,9 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
               'parent-authority',
               this.#binding.intent.operationId,
             )
+          }
+          if (physicalName !== segment) {
+            this.#safeNames.record(canonicalWalked, 'directory', physicalName)
           }
           return {
             ...persisted,

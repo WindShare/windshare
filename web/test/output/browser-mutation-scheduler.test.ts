@@ -156,12 +156,12 @@ describe('FSA operation mutation scheduler', () => {
     const firstGate = deferred()
     const firstStarted = deferred()
     const order: string[] = []
-    const first = scheduler.runNamespace([right, left], 'repair-compatible-name', async () => {
+    const first = scheduler.runNamespace([right, left], 'create-directory', async () => {
       order.push('first')
       firstStarted.resolve()
       await firstGate.promise
     })
-    const second = scheduler.runNamespace([left, right], 'repair-compatible-name', async () => {
+    const second = scheduler.runNamespace([left, right], 'create-directory', async () => {
       order.push('second')
     })
     await firstStarted.promise

@@ -27,10 +27,7 @@ import {
   normalizeFileTransferFailure,
 } from './job/failures'
 import { TransferAdmissionFailureError } from './job/admission-error'
-import {
-  createAuthenticatedLogicalSiblingMembership,
-  JobDiscovery,
-} from './job/discovery'
+import { JobDiscovery } from './job/discovery'
 import { transferFile } from './job/file-transfer'
 import {
   createDirectTreeCoordinateContract,
@@ -448,11 +445,6 @@ export class TransferJob {
       directory,
       sourceAuthenticationPath: projection.sourceAuthenticationPath,
       logicalArtifactPath: projection.logicalArtifactPath,
-      logicalSiblingMembership: createAuthenticatedLogicalSiblingMembership(
-        this.#options.catalog,
-        committed,
-        this.#lifetime.signal,
-      ),
     })
     let returned: DirectoryAdmission
     try {

@@ -3,7 +3,6 @@ import type { ReceiveAdmission } from '../../application/receive/admission'
 import { presentReceiveReason } from '../experience/receive-reason'
 import type { ReceiveLifecycleState } from '../../transfer/lifecycle/state'
 import type { ReceiveOperationDisplay } from '../../output/model/operation-display'
-import { presentCompatibleNameRepair } from '../compatible-name-repair-presentation'
 import type { ReceiverProgress } from '../model'
 import type { RetainedReceiveOperationSnapshot, PendingRetainedReceiveActionSnapshot } from '../../application/receive/retained/model'
 import type { RetainedReceiveAction } from '../../application/receive/contracts'
@@ -47,7 +46,7 @@ export function activeTaskFacts(input: Readonly<{
     publication: publicationFromLifecycle(state),
     progress,
     browserDelivery: output.browserFolderProgress?.summary ?? null,
-    fidelity: lifecycle?.compatibleNameRepair ?? null,
+    safeRenamed: output.safeRenamed,
     details: Object.freeze(details),
     interruption: output.receiveInterruption?.operation ?? null,
     execution: Object.freeze({ kind: 'active' }),
@@ -89,9 +88,7 @@ export function retainedTaskFacts(
     publication: publicationFromLifecycle(operation.lifecycle),
     progress: null,
     browserDelivery: operation.browserDelivery ?? null,
-    fidelity: operation.repairSummary === undefined ? null : presentCompatibleNameRepair({
-      state: operation.lifecycle, summary: operation.repairSummary, context: 'retained-operation',
-    }, language),
+    safeRenamed: null,
     details: Object.freeze(details),
     interruption: null,
     execution: localWork === 'finalizing'

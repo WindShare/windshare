@@ -8,7 +8,7 @@ test('recovery details and nested removal confirmation preserve modal backdrop a
     await showScenario(page, 'saved-cleanup')
     await page.locator(CURRENT_TASK).getByRole('button', { name: 'Details', exact: true }).click()
     let dialog = page.getByRole('dialog')
-    await expect(dialog.locator('.compatible-name-repair')).toBeVisible()
+    await expect(dialog.getByText('Adjusted filenames', { exact: true })).toBeVisible()
     const backdrop = await dialog.evaluate(element => getComputedStyle(element, '::backdrop').backgroundColor)
     expect(backdrop).not.toBe('rgba(0, 0, 0, 0)')
     await capture(page, 'recovery-details-' + colorScheme)

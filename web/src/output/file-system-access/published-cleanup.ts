@@ -1,5 +1,4 @@
 import type { ReceiveIntent } from '../../transfer/intent'
-import { IndexedDbCompatibleNameLedger } from '../browser/indexeddb-compatible-name-ledger'
 import { emitOutputTrace, outputTraceEvent, type OutputTraceSource } from '../diagnostics'
 import { TargetOwnershipUnknownError } from '../persistent-tree/errors'
 import {
@@ -15,8 +14,6 @@ import type { ReceiveLifecycleState } from '../../transfer/lifecycle/state'
 import {
   openFSAFileCheckpointRepository, type FSAFileCheckpointRepositoryOptions,
 } from './checkpoint-repository'
-import type { CompatibleNameLedger } from './compatible-name/ledger'
-import type { CompatibleNameOperationHeaderV1 } from './compatible-name/model'
 import { retireFSAMaterializationRecoveryMetadata } from './recovery-metadata-retirement'
 import { requireDirectTreeIntent, type DirectTreeIntent } from './settlement-proof'
 import type { FSASettlementRepository } from './settlement'
@@ -24,8 +21,6 @@ import type { FSASettlementRepository } from './settlement'
 const FSA_PUBLISHED_METADATA_CLEANUP_RECEIPT_V1 = 17
 
 type PublishedLifecycle = Extract<ReceiveLifecycleState, { kind: 'published' }>
-type PublicationCleanupLedger = Pick<CompatibleNameLedger,
-  'readHeader' | 'clearPendingTerminalOutcome' | 'close'>
 
 export interface FSAPublishedCleanupAuthority {
   readonly intent: ReceiveIntent
@@ -63,9 +58,7 @@ export async function completeFileSystemAccessPublishedCleanup(
 }
 
 export async function cleanupReopenedPublishedFileSystemAccessOutput(
-  input: FSAPublishedCleanupAuthority & FSAFileCheckpointRepositoryOptions & {
-    readonly openCompatibleNameLedger?: () => Promise<PublicationCleanupLedger>
-  },
+  input: FSAPublishedCleanupAuthority & FSAFileCheckpointRepositoryOptions,
 ): Promise<FSAPublishedCleanupResult> {
   const intent = await requireDirectTreeIntent(input.intent)
   const reservation = intent.plan.reservation
@@ -75,28 +68,11 @@ export async function cleanupReopenedPublishedFileSystemAccessOutput(
   return completeFileSystemAccessPublishedCleanup({
     ...input,
     cleanup: async () => {
-      const ledger = await (input.openCompatibleNameLedger ??
-        (() => IndexedDbCompatibleNameLedger.open(input.databaseName)))()
+      const checkpoints = await openFSAFileCheckpointRepository(input, intent, reservation)
       try {
-        const header = await ledger.readHeader(intent.operationId)
-        verifyPublishedRepair(header, intent, input.lifecycle)
-        const checkpoints = await openFSAFileCheckpointRepository(input, intent, reservation)
-        try {
-          await retireFSAMaterializationRecoveryMetadata(checkpoints)
-        } finally {
-          checkpoints.close()
-        }
-        if (header?.pendingTerminalOutcome !== undefined && header.repairSummary !== undefined) {
-          await ledger.clearPendingTerminalOutcome({
-            operationId: intent.operationId,
-            repairSummary: { ...header.repairSummary, terminalSettlement: 'complete' },
-          })
-          if ((await ledger.readHeader(intent.operationId))?.pendingTerminalOutcome !== undefined) {
-            throw new DOMException('Published FSA repair metadata was not retired', 'OperationError')
-          }
-        }
+        await retireFSAMaterializationRecoveryMetadata(checkpoints)
       } finally {
-        ledger.close()
+        checkpoints.close()
       }
     },
   })
@@ -127,31 +103,6 @@ async function verifyPublishedAuthority(
     throw new TargetOwnershipUnknownError('settlement', intent.operationId)
   }
   await validatePersistedReceiveRecord(receipt)
-}
-
-function verifyPublishedRepair(
-  header: CompatibleNameOperationHeaderV1 | undefined,
-  intent: DirectTreeIntent,
-  lifecycle: PublishedLifecycle,
-): void {
-  if (header === undefined) return
-  // Published was committed after the terminal footer was observed. Reopening user
-  // files here would make metadata retirement depend on later edits or moves.
-  const pending = header.pendingTerminalOutcome
-  const summary = header.repairSummary
-  const footer = summary?.latestObservedFooter
-  if (header.operationId !== intent.operationId || header.authorityRef !== intent.plan.reservation.authorityRef ||
-      summary?.sidecarSync !== 'current' ||
-      (pending === undefined && summary.terminalSettlement !== 'complete') ||
-      footer?.state !== 'completed' || footer.committedCount !== summary.committedCount ||
-      (pending !== undefined && (
-        pending.ordinaryLifecycle.kind !== 'published' ||
-        pending.ordinaryLifecycle.receiveIntentDigest !== intent.digest ||
-        pending.ordinaryLifecycle.receiptDigest !== lifecycle.receiptDigest ||
-        pending.footerState !== 'completed'
-      ))) {
-    throw new DOMException('Published FSA cleanup requires settled restoration metadata', 'InvalidStateError')
-  }
 }
 
 async function commitPublishedCleanup(

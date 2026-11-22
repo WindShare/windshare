@@ -30,7 +30,7 @@ export function taskFixture(overrides: Partial<TaskFacts> = {}): TaskFacts {
       ...EMPTY_PROGRESS, discoveredFiles: 12, discoveredBytes: 6_710_886n,
       writtenBytes: 2_000_000n, materializedBytes: 2_000_000n, completedFiles: 3, completedBytes: 1_500_000n,
     }),
-    fidelity: null,
+    safeRenamed: null,
     details: Object.freeze([]),
     interruption: null,
     execution: Object.freeze({ kind: 'active' }),

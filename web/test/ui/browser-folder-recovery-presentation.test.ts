@@ -6,10 +6,6 @@ import { deliveryFixture } from '../output/browser-delivery-fixture'
 import { presentReceiveLifecycle } from '../../src/ui/lifecycle-presentation'
 import { planningFixture } from './fsa-route-activation-fixture'
 import type { RetainedReceiveOperation } from '../../src/application/receive/contracts'
-import { retainedReceiveActions } from '../../src/application/receive/retained/inventory'
-import type {
-  CompatibleNameRepairSummary,
-} from '../../src/transfer/lifecycle/name-repair'
 import { retainedBrowserDeliveryActions } from '../../src/application/browser-receive/fsa/retained-delivery'
 
 describe('folder receiving and local saving presentation', () => {
@@ -33,7 +29,7 @@ describe('folder receiving and local saving presentation', () => {
       expect(active.actions).toEqual([{ kind: expectedAction, destructive: kind === 'receiving', label: expect.any(String) }])
       const operation: RetainedReceiveOperation = {
         operationId: lifecycle.operationId, receiveIntentDigest: lifecycle.receiveIntentDigest,
-        lifecycleGeneration: lifecycle.generation, lifecycle, continuation: 'restoration-available',
+        lifecycleGeneration: lifecycle.generation, lifecycle, continuation: 'history-only',
         browserDelivery: summary, actions: retainedBrowserDeliveryActions(lifecycle, summary, []),
       }
       const task = presentTask(retainedTaskFacts(operation))
@@ -46,17 +42,6 @@ describe('folder receiving and local saving presentation', () => {
       expect(operation.actions).not.toContain('continue')
     },
   )
-
-  it('keeps cleanup and explicit abandonment reachable while filename restoration is pending', () => {
-    const fixture = deliveryFixture()
-    const lifecycle = { operationId: fixture.policy.operationId, receiveIntentDigest: fixture.policy.receiveIntentDigest, generation: 2n,
-      kind: 'partial-directory' as const, reason: 'stopped' as const, successCount: 1n, failureCount: 1n, receiptDigest: fixture.policy.digest }
-    const operation: RetainedReceiveOperation = { operationId: lifecycle.operationId, receiveIntentDigest: lifecycle.receiveIntentDigest,
-      lifecycleGeneration: lifecycle.generation, lifecycle, continuation: 'restoration-available',
-      actions: ['save-staged-files', 'cleanup-staging', 'discard-incomplete-staging', 'catch-up'] }
-    const summary = { terminalSettlement: 'pending' } as CompatibleNameRepairSummary
-    expect(retainedReceiveActions(operation, summary)).toEqual(['cleanup-staging', 'discard-incomplete-staging', 'catch-up'])
-  })
 
   it('offers save and cleanup independently and never removes a history record with child obligations', () => {
     const fixture = deliveryFixture()

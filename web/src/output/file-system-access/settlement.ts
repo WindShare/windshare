@@ -81,14 +81,6 @@ export interface PreparedFileSystemAccessSettlement {
   readonly directoryScope: DirectoryAdmissionScope
 }
 
-
-export {
-  catchUpFileSystemAccessCompatibleNames,
-} from './settlement-catch-up'
-export type {
-  FileSystemAccessCompatibleNameCatchUpResult,
-} from './settlement-catch-up'
-
 export async function prepareFileSystemAccessSettlement(
   intentInput: ReceiveIntent,
   admissionFallbackInput?: ReceiveAdmissionFallback,

@@ -23,7 +23,7 @@ export function presentReceiveOutput(facts: ReceiveRuntimeSnapshot, language: La
     : presentReceiveLifecycle({
         state: facts.lifecycle, artifact: facts.resolvedArtifact, plan: facts.plan,
         workspaceUsage: facts.workspaceUsage, activeControls: facts.activeControls,
-        interruption: facts.receiveInterruption, repairSummary: facts.repairSummary,
+        interruption: facts.receiveInterruption,
         recoverySummary: facts.recoverySummary, writerOpenPause: facts.writerOpenPause,
         browserDelivery: facts.browserFolderProgress?.summary ?? null,
       }, language)
@@ -38,7 +38,7 @@ export function presentReceiveOutput(facts: ReceiveRuntimeSnapshot, language: La
     lifecyclePresentation,
     transferResultPresentation: transferResult === null ? null :
       presentSourceCoverage(transferResult,
-        presentTransferResult(transferResult.worker, facts.repairSummary, transferResult.lifecycle, language), language),
+        presentTransferResult(transferResult.worker, transferResult.lifecycle, language), language),
   })
 }
 

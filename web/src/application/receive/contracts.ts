@@ -10,7 +10,6 @@ import type { EnvironmentOffers, ResolvedArtifactAction } from '../../output/pla
 import type { OfferedArtifactChoice } from '../../output/model/artifacts/choices'
 import type { ReceiveOperationContinuation } from '../../output/model/continuation'
 import type { ReceiveLifecycleState } from '../../output/workspace'
-import type { CompatibleNameRepairProjectionSource } from '../../output/file-system-access/compatible-name/coordinator'
 import type {
   RecoverySummary,
 } from '../../transfer/lifecycle/recovery-summary'
@@ -65,10 +64,6 @@ export interface BoundReceiveOperation {
   readonly outputProgress?: BrowserFolderProgressSource
   readonly observeCheckpoint?: NonNullable<import('../../transfer/job/contract').TransferJobOptions['onCheckpointObservation']>
   readonly initialWorkspaceUsage?: WorkspaceUsage | null
-  readonly repairProjection?: CompatibleNameRepairProjectionSource
-  subscribeRepairProjectionActivation?(
-    listener: (source: CompatibleNameRepairProjectionSource) => void,
-  ): () => void
 
   /**
    * The runtime-local binding prevents output sessions that span retries from
@@ -154,7 +149,6 @@ export type RetainedReceiveAction =
   | 'discard-incomplete-staging'
   | 'save-partial'
   | 'continue'
-  | 'catch-up'
   | 'save'
   | 'redownload'
   | 'discard'
@@ -207,10 +201,6 @@ export interface RetainedReceiveInventoryPort {
     signal: AbortSignal,
     failures?: OutputFailureSinks,
   ): PromiseLike<RetainedReceiveInventory>
-  readRepairSummary?(
-    operationId: string,
-    signal: AbortSignal,
-  ): PromiseLike<import('../../transfer/lifecycle/name-repair').CompatibleNameRepairSummary | undefined>
 }
 
 export interface ReceiveCompositionPort {

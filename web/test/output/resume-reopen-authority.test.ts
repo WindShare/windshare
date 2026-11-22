@@ -32,7 +32,6 @@ import {
 } from '../../src/output/workspace/records'
 import { WORKSPACE_HANDLE_PACKAGE_OBJECT } from '../../src/output/workspace/stages'
 import { identity } from './planning/fixture'
-import type { CompatibleNameOperationHeaderV1 } from '../../src/output/file-system-access/compatible-name/model'
 import {
   MemoryDirectoryHandle,
   MemoryLockManager,
@@ -122,7 +121,7 @@ describe('persisted receive operation reopen authority', () => {
     expect(state.lease).toBeUndefined()
   })
 
-  it.each([false, true])('reacquires an interrupted receive only without a pending terminal outcome (%s)', async terminalPending => {
+  it('reacquires an interrupted receive under a fresh lease', async () => {
     const state = new MemoryRepositoryState()
     const intent = await directTreeIntent()
     const parent = new MemoryDirectoryHandle('downloads')
@@ -136,19 +135,10 @@ describe('persisted receive operation reopen authority', () => {
       repositoryFactory: async () => new MemoryOperationRepository(state),
       clock: { now: () => ENTERED_AT + 1 },
       leaseOptions: { manager: new MemoryLockManager(), randomBytes: bytesFilled(81) },
-      readCompatibleNameHeader: async () => terminalPending
-        ? { pendingTerminalOutcome: {} } as unknown as CompatibleNameOperationHeaderV1
-        : undefined,
     })
     const descriptor = requiredDescriptor(lifecycle)
     expect(descriptor.continuation).toBe('resume-receive')
-    const attempt = authority.reopen(descriptor, 'continue')
-    if (terminalPending) {
-      await expect(attempt).rejects.toThrow('requires local settlement')
-      expect(state.lease).toBeUndefined()
-      return
-    }
-    const reopened = await attempt
+    const reopened = await authority.reopen(descriptor, 'continue')
     expect(reopened.lifecycle).toMatchObject({
       kind: 'receiving', generation: 5n, activeLeaseId: reopened.lease.leaseId,
     })
