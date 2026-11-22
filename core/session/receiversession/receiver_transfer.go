@@ -89,7 +89,7 @@ func (runtime *Runtime) ResolveOrdinaryOutputShape(
 	defer endAdmission()
 	return ordinaryoutput.ResolveShape(
 		operationContext,
-		receiverTransferDependencies{runtime: runtime},
+		prefetchRecordingCatalog{dependencies: receiverTransferDependencies{runtime: runtime}},
 		input,
 		budget,
 	)
@@ -152,6 +152,27 @@ type receiverTransferDependencies struct {
 }
 
 func (dependencies receiverTransferDependencies) OpenDirectoryPages(
+	ctx context.Context,
+	directory catalog.DirectoryID,
+) (catalog.DirectoryPageCursor, error) {
+	if ctx != nil && ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if dependencies.runtime != nil && dependencies.runtime.core != nil &&
+		dependencies.runtime.Lifetime().Err() == nil {
+		if pages, ok := dependencies.runtime.takePrefetchedDirectory(directory); ok {
+			return &prefetchedDirectoryPageCursor{
+				pages:        pages,
+				dependencies: dependencies,
+			}, nil
+		}
+	}
+	return dependencies.OpenDirectoryPagesLive(ctx, directory)
+}
+
+// OpenDirectoryPagesLive bypasses any shape-resolution prefetch cache and opens
+// a fresh forward-only cursor directly on the live catalog client.
+func (dependencies receiverTransferDependencies) OpenDirectoryPagesLive(
 	ctx context.Context,
 	directory catalog.DirectoryID,
 ) (catalog.DirectoryPageCursor, error) {

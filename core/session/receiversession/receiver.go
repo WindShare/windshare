@@ -371,23 +371,27 @@ func (factory *Factory) acquireRuntimeResources() (RuntimeResourceLease, error) 
 }
 
 type Runtime struct {
-	lifecycle     lifecycle
-	core          *sessioncore.Runtime
-	descriptor    catalog.ShareDescriptor
-	sender        *senderauth.Verifier
-	decoder       RecordDecoder
-	rpc           requestClient
-	catalog       *catalogflow.Client
-	revisions     *receiverRevisionClient
-	access        *revisionaccess.Reader
-	assembler     *contentflow.Assembler
-	laneSet       *transferlanes.Set
-	broker        *transfer.BlockBroker
-	semantic      protocolsession.SenderControlSemanticValidator
-	resourceLease RuntimeResourceLease
-	cleanupOnce   sync.Once
-	cleanupMu     sync.Mutex
-	cleanupErr    error
+	lifecycle       lifecycle
+	core            *sessioncore.Runtime
+	descriptor      catalog.ShareDescriptor
+	sender          *senderauth.Verifier
+	decoder         RecordDecoder
+	rpc             requestClient
+	catalog         *catalogflow.Client
+	revisions       *receiverRevisionClient
+	access          *revisionaccess.Reader
+	assembler       *contentflow.Assembler
+	laneSet         *transferlanes.Set
+	broker          *transfer.BlockBroker
+	semantic        protocolsession.SenderControlSemanticValidator
+	resourceLease   RuntimeResourceLease
+	prefetchMu      sync.Mutex
+	prefetchClosed  bool
+	prefetchedDirs  map[catalog.DirectoryID][]catalog.CatalogPage
+	prefetchedBytes uint64
+	cleanupOnce     sync.Once
+	cleanupMu       sync.Mutex
+	cleanupErr      error
 }
 
 func (runtime *Runtime) startReceiver() {
@@ -454,6 +458,7 @@ func (runtime *Runtime) BeginClose() {
 		// Receiver callbacks may request shutdown themselves. Component Stop methods
 		// freeze/cancel without joining; the runtime owner performs ordered joins in
 		// finalization so cached plaintext and new lane attempts disappear immediately.
+		runtime.clearPrefetchedDirectories()
 		if runtime.access != nil {
 			runtime.access.Stop()
 		}
@@ -473,6 +478,7 @@ func (runtime *Runtime) WaitClosed() {
 
 func (runtime *Runtime) releaseOwnedResources() {
 	runtime.cleanupOnce.Do(func() {
+		runtime.clearPrefetchedDirectories()
 		// Catalog loads can be inside user progress or verifier callbacks after the
 		// RPC sink closes. Join them before releasing the verifier/key-tree lease.
 		if runtime.access != nil {

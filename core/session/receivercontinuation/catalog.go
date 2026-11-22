@@ -10,7 +10,24 @@ import (
 )
 
 func (s *Session) OpenDirectoryPages(ctx context.Context, id catalog.DirectoryID) (catalog.DirectoryPageCursor, error) {
-	cursor := &directoryCursor{owner: s, directory: id}
+	return s.openDirectoryPages(ctx, id, false)
+}
+
+type continuationShapeCatalog struct {
+	session *Session
+}
+
+func (c continuationShapeCatalog) OpenDirectoryPages(ctx context.Context, id catalog.DirectoryID) (catalog.DirectoryPageCursor, error) {
+	return c.session.openDirectoryPages(ctx, id, true)
+}
+
+func (s *Session) openDirectoryPages(ctx context.Context, id catalog.DirectoryID, recordPrefetch bool) (catalog.DirectoryPageCursor, error) {
+	cursor := &directoryCursor{
+		owner:          s,
+		directory:      id,
+		live:           recordPrefetch,
+		recordPrefetch: recordPrefetch,
+	}
 	if err := cursor.open(ctx); err != nil {
 		return nil, err
 	}
@@ -18,13 +35,18 @@ func (s *Session) OpenDirectoryPages(ctx context.Context, id catalog.DirectoryID
 }
 
 type directoryCursor struct {
-	owner      *Session
-	directory  catalog.DirectoryID
-	runtime    *receiversession.Runtime
-	cursor     catalog.DirectoryPageCursor
-	count      uint32
-	commitment catalog.PageCommitment
-	closed     bool
+	owner           *Session
+	directory       catalog.DirectoryID
+	runtime         *receiversession.Runtime
+	cursor          catalog.DirectoryPageCursor
+	count           uint32
+	commitment      catalog.PageCommitment
+	closed          bool
+	live            bool
+	recordPrefetch  bool
+	prefetchAborted bool
+	prefetchPages   []catalog.CatalogPage
+	prefetchBytes   uint64
 }
 
 func (c *directoryCursor) open(ctx context.Context) error {
@@ -34,7 +56,11 @@ func (c *directoryCursor) open(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		c.cursor, err = dependencies.OpenDirectoryPages(ctx, c.directory)
+		if c.live {
+			c.cursor, err = dependencies.OpenDirectoryPagesLive(ctx, c.directory)
+		} else {
+			c.cursor, err = dependencies.OpenDirectoryPages(ctx, c.directory)
+		}
 		if err == nil {
 			return nil
 		}
@@ -56,12 +82,32 @@ func (c *directoryCursor) Next(ctx context.Context) (catalog.CatalogPage, bool, 
 			if ok {
 				c.count++
 				c.commitment = page.Commitment()
+				if c.recordPrefetch && !c.prefetchAborted {
+					pageBytes := page.EstimatedMemoryBytes()
+					if pageBytes == 0 || pageBytes > receiversession.MaxPrefetchedDirectoryBytes-c.prefetchBytes {
+						c.prefetchAborted = true
+						c.prefetchPages = nil
+					} else {
+						c.prefetchPages = append(c.prefetchPages, page)
+						c.prefetchBytes += pageBytes
+					}
+				}
+			} else if c.recordPrefetch && !c.prefetchAborted {
+				if len(c.prefetchPages) > 0 && c.prefetchPages[len(c.prefetchPages)-1].Terminal() {
+					c.runtime.RecordPrefetchedDirectory(c.directory, c.prefetchPages)
+				}
+				c.prefetchAborted = true
+				c.prefetchPages = nil
 			}
 			return page, ok, nil
 		}
 		if !c.runtime.AwaitPathRetirement(ctx) {
+			c.prefetchAborted = true
+			c.prefetchPages = nil
 			return page, ok, err
 		}
+		c.prefetchAborted = true
+		c.prefetchPages = nil
 		_ = c.cursor.Close()
 		if err = c.owner.recover(ctx, c.runtime); err != nil {
 			return catalog.CatalogPage{}, false, err
@@ -107,6 +153,8 @@ func (c *directoryCursor) Close() error {
 		return nil
 	}
 	c.closed = true
+	c.prefetchAborted = true
+	c.prefetchPages = nil
 	err := c.cursor.Close()
 	if c.runtime.PathsExhausted() {
 		return nil

@@ -37,6 +37,8 @@ type incrementalDirectoryDiscovery struct {
 	generation                 catalog.DirectoryGeneration
 	omittedCount               uint64
 	commitments                []catalog.PageCommitment
+	singlePage                 catalog.CatalogPage
+	hasSinglePage              bool
 	selection                  discoveredSelection
 	descendantAdmission        bool
 	descendantDiscoveryPending bool
@@ -250,6 +252,7 @@ func (discovery *incrementalDirectoryDiscovery) readTerminalGeneration(
 			ctx, discovery.checkpoint, discovery.request.directory, discovery.request.path, failure,
 		)
 	}
+	discovery.singlePage, discovery.hasSinglePage = result.SinglePage()
 	discovery.beginGeneration(discovery.generation)
 	return true, nil
 }

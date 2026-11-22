@@ -77,16 +77,49 @@ func TestTransferJobPreservesWorkerStopDuringCatalogReplay(t *testing.T) {
 	for _, boundary := range []string{"open", "next"} {
 		t.Run(boundary, func(t *testing.T) {
 			share := transferID[catalog.ShareInstance](0x91)
+			root := transferID[catalog.DirectoryID](0x92)
+			file := transferID[catalog.FileID](0x93)
+			other := transferID[catalog.FileID](0x94)
+			descriptor := jobDescriptor(t, share, file, 1, 1)
+			opened, err := NewOpenedRevision(transferID[RevisionHandle](0x95), descriptor)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rules, err := NewPathSelectionRules([]string{"file.bin"})
+			if err != nil {
+				t.Fatal(err)
+			}
 			output := newJobOutput(share)
 			output.transactionScript.commitErr = outputFailure(
 				fault.ScopeFileLocal, fault.OutputStateIO, errors.New("publication authority was lost"),
 			)
 			ready := make(chan struct{})
-			job, _ := branchJob(t, output, &jobRevisionClient{}, replayGatedRangeReader{
-				RangeReader: scriptedRangeReader{}, ready: ready,
+			// Multi-page root exercises streaming cursor replay on open #3.
+			baseCatalog := failingCatalog{
+				snapshots: map[catalog.DirectoryID]catalog.DirectorySnapshot{
+					root: multiPageJobSnapshot(
+						t, share, root, 1,
+						jobEntry(t, file, "file.bin", 1),
+						jobEntry(t, other, "other.bin", 1),
+					),
+				},
+				failures: make(map[catalog.DirectoryID]error),
+			}
+			job, err := newTestTransferJob(t, testTransferJobConfig{
+				ShareInstance: share, SyntheticRoot: root, Rules: rules,
+				Catalog: &interruptedReplayCatalog{
+					CatalogReader: baseCatalog, ready: ready, interruptOpen: boundary == "open",
+				},
+				Revisions: &jobRevisionClient{
+					opened: map[catalog.FileID]OpenedRevision{file: opened}, failures: make(map[catalog.FileID]error),
+				},
+				Blocks: replayGatedRangeReader{
+					RangeReader: scriptedRangeReader{}, ready: ready,
+				},
+				Materializer: output,
 			})
-			job.catalog = &interruptedReplayCatalog{
-				CatalogReader: job.catalog, ready: ready, interruptOpen: boundary == "open",
+			if err != nil {
+				t.Fatal(err)
 			}
 			stream := newTestDiagnosticsStream(t)
 			job.diagnostics = stream.Sink()

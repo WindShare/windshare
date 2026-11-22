@@ -8,9 +8,10 @@ import (
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 )
 
-// replayGeneration turns terminal catalog evidence into bounded work. The
-// first pass keeps only page commitments; matching each replay page before its
-// entries are used prevents a second cursor from changing an admitted generation.
+// replayGeneration turns terminal catalog evidence into bounded work. Single-page
+// generations replay directly from the already-authenticated page without extra
+// network round-trips; multi-page generations reopen a streaming cursor and verify
+// each page commitment so large directories remain O(1) pages in memory.
 func (discovery *incrementalDirectoryDiscovery) replayGeneration(
 	ctx context.Context,
 	admission DirectoryAdmission,
@@ -72,6 +73,12 @@ func (discovery *incrementalDirectoryDiscovery) replayGenerationPhase(
 	materialization MaterializedDirectoryClaim,
 	phase generationReplayPhase,
 ) (selected bool, resultErr error) {
+	if discovery.hasSinglePage {
+		if err := context.Cause(ctx); err != nil {
+			return false, fault.FromCancellation(ctx, err)
+		}
+		return discovery.replayPage(ctx, discovery.singlePage, admission, materialization, phase)
+	}
 	cursor, rawOpenErr := discovery.run.job.catalog.OpenDirectoryPages(ctx, discovery.request.directory)
 	err := normalizeCatalogBoundary(ctx, rawOpenErr)
 	if err != nil {

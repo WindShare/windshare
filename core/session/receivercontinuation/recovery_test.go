@@ -384,6 +384,17 @@ func TestCatalogReplayPreservesCommitmentAndGenerationFence(t *testing.T) {
 	if _, err = s.ResolveOrdinaryOutputShape(context.Background(), selection, ordinaryoutput.DefaultShapeProbeBudgetV1); err != nil {
 		t.Fatal(err)
 	}
+	// First OpenDirectoryPages after ResolveOrdinaryOutputShape consumes the prefetched root page.
+	prefetched, err := s.OpenDirectoryPages(context.Background(), runtime.Descriptor().SyntheticRoot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page, exists, err := prefetched.Next(context.Background()); err != nil || !exists || page.Commitment() != first.Commitment() {
+		t.Fatalf("prefetched root = (%v, %v, %v)", page.Commitment(), exists, err)
+	}
+	if err := prefetched.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if _, err = s.ResolveOrdinaryOutputShape(context.Background(), transfer.SelectionSpec{}, ordinaryoutput.DefaultShapeProbeBudgetV1); err == nil {
 		t.Fatal("invalid selection accepted")
 	}

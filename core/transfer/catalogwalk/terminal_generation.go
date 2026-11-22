@@ -106,6 +106,7 @@ func (meter *Meter) consume(page catalog.CatalogPage) BudgetLimit {
 type TerminalGeneration struct {
 	Directory   catalog.CommittedDirectory
 	commitments *terminalGenerationCommitments
+	singlePage  *catalog.CatalogPage
 	Validated   bool
 	Exhausted   BudgetLimit
 }
@@ -121,6 +122,16 @@ func (generation TerminalGeneration) PageCommitments() []catalog.PageCommitment 
 		return nil
 	}
 	return append([]catalog.PageCommitment(nil), generation.commitments.values...)
+}
+
+// SinglePage returns the already-authenticated page when the terminal
+// generation consists of a single page, allowing callers to replay entries in
+// memory without reopening a network cursor.
+func (generation TerminalGeneration) SinglePage() (catalog.CatalogPage, bool) {
+	if !generation.Validated || generation.singlePage == nil {
+		return catalog.CatalogPage{}, false
+	}
+	return *generation.singlePage, true
 }
 
 // ReadTerminalGeneration validates one forward-only generation against its
@@ -145,6 +156,8 @@ func ReadTerminalGeneration(
 
 	var validator catalog.DirectoryGenerationValidator
 	commitments := make([]catalog.PageCommitment, 0, 1)
+	var firstPage catalog.CatalogPage
+	hasFirstPage := false
 	for {
 		page, ok, err := cursor.Next(ctx)
 		if err != nil {
@@ -152,7 +165,7 @@ func ReadTerminalGeneration(
 		}
 		if !ok {
 			return finishTerminalGeneration(
-				&validator, expectedShare, expectedDirectory, commitments,
+				&validator, expectedShare, expectedDirectory, commitments, firstPage, hasFirstPage,
 			)
 		}
 		if err := acceptTerminalPage(&validator, page, expectedShare, expectedDirectory); err != nil {
@@ -160,6 +173,15 @@ func ReadTerminalGeneration(
 		}
 		if limit := meter.consume(page); limit != BudgetWithinLimits {
 			return TerminalGeneration{Exhausted: limit}, nil
+		}
+		if len(commitments) == 0 {
+			firstPage = page
+			hasFirstPage = true
+		} else if hasFirstPage {
+			// Release page 0 immediately on multi-page directories so streaming
+			// walks stay O(1) pages in memory.
+			firstPage = catalog.CatalogPage{}
+			hasFirstPage = false
 		}
 		commitments = append(commitments, page.Commitment())
 		if err := visitTerminalPageEntries(ctx, page, visit); err != nil {
@@ -183,6 +205,8 @@ func finishTerminalGeneration(
 	expectedShare catalog.ShareInstance,
 	expectedDirectory catalog.DirectoryID,
 	commitments []catalog.PageCommitment,
+	firstPage catalog.CatalogPage,
+	hasFirstPage bool,
 ) (TerminalGeneration, error) {
 	committed, err := validator.Finish()
 	if err != nil {
@@ -191,12 +215,18 @@ func finishTerminalGeneration(
 	if committed.ShareInstance() != expectedShare || committed.DirectoryID() != expectedDirectory {
 		return TerminalGeneration{}, ErrTerminalGenerationIntegrity
 	}
+	var singlePage *catalog.CatalogPage
+	if hasFirstPage && len(commitments) == 1 {
+		pageCopy := firstPage
+		singlePage = &pageCopy
+	}
 	return TerminalGeneration{
 		Directory: committed,
 		commitments: &terminalGenerationCommitments{
 			values: append([]catalog.PageCommitment(nil), commitments...),
 		},
-		Validated: true,
+		singlePage: singlePage,
+		Validated:  true,
 	}, nil
 }
 

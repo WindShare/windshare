@@ -39,6 +39,12 @@ func TestReadTerminalGenerationValidatesScopeCompletenessAndUsage(t *testing.T) 
 	if result.PageCommitments()[0].IsZero() || (TerminalGeneration{}).PageCommitments() != nil {
 		t.Fatal("terminal generation exposed mutable commitment state")
 	}
+	if single, ok := result.SinglePage(); !ok || single.Commitment() != page.Commitment() {
+		t.Fatalf("SinglePage() = (%+v, %v), want cached single page", single, ok)
+	}
+	if _, ok := (TerminalGeneration{}).SinglePage(); ok {
+		t.Fatal("zero TerminalGeneration exposed SinglePage")
+	}
 	if !cursor.closed {
 		t.Fatal("terminal generation cursor was not closed")
 	}
@@ -183,6 +189,27 @@ func TestReadTerminalGenerationPageBudgetFallsBackForAValidContinuation(t *testi
 	if err != nil || result.Exhausted != BudgetAuthenticatedPages ||
 		visited != 1 || !cursor.closed {
 		t.Fatalf("result=%+v visited=%d closed=%v err=%v", result, visited, cursor.closed, err)
+	}
+
+	fullMeter, _ := NewMeter(mustWalkLimits(
+		t,
+		2,
+		2,
+		firstPage.EstimatedMemoryBytes()+secondPage.EstimatedMemoryBytes(),
+	))
+	fullResult, err := ReadTerminalGeneration(
+		context.Background(),
+		&walkCursor{pages: []catalog.CatalogPage{firstPage, secondPage}},
+		share,
+		directory,
+		fullMeter,
+		func(catalog.Entry) error { return nil },
+	)
+	if err != nil || !fullResult.Validated || len(fullResult.PageCommitments()) != 2 {
+		t.Fatalf("multi-page result=%+v err=%v", fullResult, err)
+	}
+	if _, ok := fullResult.SinglePage(); ok {
+		t.Fatal("multi-page terminal generation retained a single page")
 	}
 }
 

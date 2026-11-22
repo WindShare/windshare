@@ -96,10 +96,7 @@ func runSparseFileLocalResume(t *testing.T, inProcess bool) {
 	wire.mu.Lock()
 	loads := slices.Clone(wire.loads)
 	wire.mu.Unlock()
-	wantLoads := []catalog.DirectoryID{
-		root, root, root, directory, directory, directory,
-		emptyDirectory, emptyDirectory, emptyDirectory,
-	}
+	wantLoads := []catalog.DirectoryID{root, directory, emptyDirectory}
 	if !slices.Equal(loads, wantLoads) {
 		t.Fatalf("catalog loads=%v", loads)
 	}
@@ -438,7 +435,7 @@ func TestTransferJobResolvesPathSelectionInsideBoundedJobTraversal(t *testing.T)
 		result.MissingSelectionPaths != nil {
 		t.Fatalf("result=%+v", result)
 	}
-	if source.loadCount(root) != 3 || source.loadCount(folder) != 3 || source.loadCount(unrelated) != 0 {
+	if source.loadCount(root) != 1 || source.loadCount(folder) != 1 || source.loadCount(unrelated) != 0 {
 		t.Fatalf("catalog loads root=%d folder=%d unrelated=%d", source.loadCount(root), source.loadCount(folder), source.loadCount(unrelated))
 	}
 }

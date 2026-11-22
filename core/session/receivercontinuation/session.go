@@ -190,7 +190,7 @@ func (s *Session) ResolveOrdinaryOutputShape(ctx context.Context, selection tran
 	if err != nil {
 		return ordinaryoutput.ShapeDecision{}, err
 	}
-	return ordinaryoutput.ResolveShape(ctx, s, input, budget)
+	return ordinaryoutput.ResolveShape(ctx, continuationShapeCatalog{session: s}, input, budget)
 }
 
 func (s *Session) AcquireDirectory(ctx context.Context, id catalog.DirectoryID) (catalog.DirectorySnapshot, func(), error) {
