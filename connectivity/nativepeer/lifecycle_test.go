@@ -383,3 +383,220 @@ func TestPrepareAttemptCancelsWhileSharedWatcherSampleBlocks(t *testing.T) {
 		t.Fatalf("source calls = %d, want 1", calls)
 	}
 }
+
+type blockingGateway struct {
+	entered  chan struct{}
+	canceled chan error
+	release  chan struct{}
+	enter    sync.Once
+	unblock  sync.Once
+}
+
+func newBlockingGateway() *blockingGateway {
+	return &blockingGateway{
+		entered:  make(chan struct{}),
+		canceled: make(chan error, 1),
+		release:  make(chan struct{}),
+	}
+}
+
+func (g *blockingGateway) unblockAll() { g.unblock.Do(func() { close(g.release) }) }
+
+func (g *blockingGateway) Create(ctx context.Context, _ reachability.Request) (reachability.Lease, error) {
+	g.enter.Do(func() { close(g.entered) })
+	<-ctx.Done()
+	select {
+	case g.canceled <- ctx.Err():
+	default:
+	}
+	<-g.release
+	return reachability.Lease{}, ctx.Err()
+}
+
+func (g *blockingGateway) Renew(ctx context.Context, request reachability.Request, _ reachability.Lease) (reachability.Lease, error) {
+	return g.Create(ctx, request)
+}
+
+func (g *blockingGateway) Delete(context.Context, reachability.Request, reachability.Lease) error {
+	return nil
+}
+
+func TestNetworkChangeCancelsInFlightAttemptWhileGatewayReconcileBlocks(t *testing.T) {
+	now := time.Unix(700, 0)
+	var clockMu sync.Mutex
+	clock := func() time.Time { clockMu.Lock(); defer clockMu.Unlock(); return now }
+	advance := func(d time.Duration) { clockMu.Lock(); now = now.Add(d); clockMu.Unlock() }
+
+	source := &countingNetworkSource{state: networkstate.State{
+		Addresses: []networkstate.Address{{IP: netip.MustParseAddr("192.0.2.1"), InterfaceIndex: 1}},
+	}}
+	watcher := networkstate.NewWatcher(networkstate.WatcherConfig{
+		Source: source, Debounce: time.Nanosecond, Interval: time.Hour, Now: clock,
+	})
+	defer watcher.Close()
+	if snap, err := watcher.Snapshot(context.Background()); err != nil || snap.GenerationID() != 1 {
+		t.Fatalf("baseline snapshot = (%d, %v)", snap.GenerationID(), err)
+	}
+
+	gw := newBlockingGateway()
+	defer gw.unblockAll()
+	authority := reachability.New(reachability.Config{
+		Now:              clock,
+		OperationTimeout: reachability.DefaultOperationTimeout,
+		Gateways:         []reachability.Gateway{gw},
+	})
+	sockets := testSocketAuthority(t, 0)
+	defer func() { _ = sockets.Close() }()
+	native := newTestConnectivity(t, Config{
+		Monitor:      watcher,
+		Sockets:      sockets,
+		Now:          clock,
+		Reachability: authority,
+		Connect: func(pion.Configuration, pionpeer.AttemptConfig) (*pionpeer.Connection, error) {
+			return nil, errors.New("capture")
+		},
+	})
+	defer func() {
+		gw.unblockAll()
+		_ = native.Close(context.Background())
+	}()
+
+	req1 := request(1)
+	if _, err := native.SetDemand(req1.ProtocolSessionID, req1.Binding.PeerPathID, true, false); err != nil {
+		t.Fatal(err)
+	}
+	// Install the generation-1 socket lease on the path, then seed reachability
+	// head-start and keep a generation-1 attempt active for cancellation checks.
+	_, _ = native.NewPeerConnection(context.Background(), req1)
+	native.Maintain(context.Background())
+	advance(reachability.DefaultHeadStart + time.Millisecond)
+
+	attempt, err := native.PrepareAttempt(context.Background(), request(2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer attempt.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	sent := make(chan protocolsession.PeerPathControl, 4)
+	var sessionWG sync.WaitGroup
+	sessionWG.Go(func() {
+		native.RunSession(ctx, req1.ProtocolSessionID, func(_ context.Context, body []byte) error {
+			control, decodeErr := protocolsession.DecodePeerPathControl(body)
+			if decodeErr == nil {
+				sent <- control
+			}
+			return decodeErr
+		})
+	})
+	defer func() {
+		cancel()
+		gw.unblockAll()
+		sessionWG.Wait()
+	}()
+
+	// Trigger gateway reconciliation immediately without waiting for the 1s tick.
+	native.mu.Lock()
+	native.wakeMaintenanceLocked()
+	native.mu.Unlock()
+
+	select {
+	case <-gw.entered:
+	case <-time.After(time.Second):
+		t.Fatal("gateway reconcile did not enter blocking Create")
+	}
+
+	// Publish generation 2 while gateway.Create is still held open before release.
+	source.mu.Lock()
+	source.state.ResumeSequence++
+	source.mu.Unlock()
+	if _, _, err := watcher.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	advance(time.Millisecond)
+	if snap, changed, err := watcher.Step(context.Background()); err != nil || !changed || snap.GenerationID() != 2 {
+		t.Fatalf("network change step = (%d, %t, %v)", snap.GenerationID(), changed, err)
+	}
+
+	// All assertions below must complete while gateway.Create is still blocked on
+	// gw.release, proving maintenance does not wait for the 2s OperationTimeout.
+	select {
+	case <-attempt.ctx.Done():
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("old ICE attempt was delayed behind blocked gateway reconcile")
+	}
+	select {
+	case err := <-gw.canceled:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("gateway cancel err = %v, want context.Canceled", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("blocked gateway operation was not canceled immediately by authority retirement")
+	}
+	select {
+	case control := <-sent:
+		if control.Kind != protocolsession.PeerPathNetworkChanged {
+			t.Fatalf("emitted control = %+v, want PeerPathNetworkChanged", control)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("session control notice was delayed behind blocked gateway reconcile")
+	}
+
+	gw.unblockAll()
+}
+
+func TestRetainMaintenanceReconcilesMappingAsynchronously(t *testing.T) {
+	now := time.Unix(800, 0)
+	var clockMu sync.Mutex
+	clock := func() time.Time { clockMu.Lock(); defer clockMu.Unlock(); return now }
+	advance := func(d time.Duration) { clockMu.Lock(); now = now.Add(d); clockMu.Unlock() }
+
+	source := &countingNetworkSource{state: networkstate.State{
+		Addresses: []networkstate.Address{{IP: netip.MustParseAddr("192.0.2.1"), InterfaceIndex: 1}},
+	}}
+	watcher := networkstate.NewWatcher(networkstate.WatcherConfig{
+		Source: source, Debounce: time.Nanosecond, Interval: time.Hour, Now: clock,
+	})
+	defer watcher.Close()
+	if _, err := watcher.Snapshot(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	gw := &mappedGateway{}
+	sockets := testSocketAuthority(t, 0)
+	defer func() { _ = sockets.Close() }()
+	native := newTestConnectivity(t, Config{
+		Monitor:      watcher,
+		Sockets:      sockets,
+		Now:          clock,
+		Reachability: reachability.New(reachability.Config{Now: clock, Gateways: []reachability.Gateway{gw}}),
+		Connect: func(pion.Configuration, pionpeer.AttemptConfig) (*pionpeer.Connection, error) {
+			return nil, errors.New("capture")
+		},
+	})
+	defer func() { _ = native.Close(context.Background()) }()
+
+	req := request(1)
+	changes, err := native.SetDemand(req.ProtocolSessionID, req.Binding.PeerPathID, true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = native.NewPeerConnection(context.Background(), req)
+	native.Maintain(context.Background())
+	advance(reachability.DefaultHeadStart + time.Millisecond)
+
+	release := native.RetainMaintenance()
+	defer release()
+	native.mu.Lock()
+	native.wakeMaintenanceLocked()
+	native.mu.Unlock()
+
+	select {
+	case change := <-changes:
+		if !change.MappingReady || change.NetworkGenerationID != 1 {
+			t.Fatalf("mapping change = %+v, want MappingReady on generation 1", change)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("async reconciler did not publish MappingReady")
+	}
+}

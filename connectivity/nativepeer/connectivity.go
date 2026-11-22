@@ -289,15 +289,7 @@ func (n *NativePeerConnectivity) applySnapshot(snapshot networkstate.Snapshot) b
 // renews the application's demand lifetime.
 func (n *NativePeerConnectivity) Maintain(ctx context.Context) {
 	_, _ = n.snapshot(ctx)
-	n.mu.Lock()
-	for key, path := range n.paths {
-		if path.content && path.remoteDemand && (!n.config.Now().Before(path.remoteExpires) || !n.config.Now().Before(path.holdUntil)) {
-			path.content = false
-			n.observeLifecycleLocked(key, path, DemandChanged, 0)
-		}
-		n.refreshDemandLocked(key, path)
-	}
-	n.mu.Unlock()
+	n.refreshDemands()
 	n.mu.Lock()
 	authority := n.config.Reachability
 	n.mu.Unlock()
@@ -307,10 +299,51 @@ func (n *NativePeerConnectivity) Maintain(ctx context.Context) {
 			authority.RefreshUnavailable()
 		default:
 		}
+	}
+	n.reconcileReachability(ctx)
+}
+
+// refreshDemands expires stale remote demand windows and synchronizes active
+// path demand into the current reachability authority without blocking on I/O.
+func (n *NativePeerConnectivity) refreshDemands() bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	now := n.config.Now()
+	active := false
+	for key, path := range n.paths {
+		if path.content && path.remoteDemand && (!now.Before(path.remoteExpires) || !now.Before(path.holdUntil)) {
+			path.content = false
+			n.observeLifecycleLocked(key, path, DemandChanged, 0)
+		}
+		n.refreshDemandLocked(key, path)
+		if path.lease != nil || path.content {
+			active = true
+		}
+	}
+	return active
+}
+
+func (n *NativePeerConnectivity) refreshUnavailable() {
+	n.mu.Lock()
+	authority := n.config.Reachability
+	n.mu.Unlock()
+	if authority != nil {
+		authority.RefreshUnavailable()
+	}
+}
+
+func (n *NativePeerConnectivity) reconcileReachability(ctx context.Context) {
+	n.mu.Lock()
+	authority := n.config.Reachability
+	n.mu.Unlock()
+	if authority != nil {
 		authority.Reconcile(ctx)
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	if n.closed {
+		return
+	}
 	for key, path := range n.paths {
 		mapped := n.hasMappingLocked(path)
 		if mapped && !path.mapped {

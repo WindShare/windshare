@@ -153,16 +153,47 @@ func (n *NativePeerConnectivity) runMaintenance(ctx context.Context, prev <-chan
 		case <-prev:
 		}
 	}
+	// Gateway reconciliation performs bounded router I/O (up to OperationTimeout).
+	// Isolate it on a single coalescing worker so network transitions, attempt
+	// cancellations, and authority retirements are never delayed behind slow gateways.
+	reconcileWake := make(chan struct{}, 1)
+	wakeReconcile := func() {
+		select {
+		case reconcileWake <- struct{}{}:
+		default:
+		}
+	}
+	var workers sync.WaitGroup
+	workers.Go(func() {
+		n.runReachabilityReconciler(ctx, reconcileWake)
+	})
+	defer workers.Wait()
+
+	var subscriber networkSubscriber
 	var networkChanges <-chan networkstate.Snapshot
-	if subscriber, ok := n.config.Monitor.(networkSubscriber); ok {
+	if sub, ok := n.config.Monitor.(networkSubscriber); ok {
+		subscriber = sub
 		var unsubscribe func()
 		networkChanges, unsubscribe = subscriber.Subscribe()
 		defer unsubscribe()
 		// Sync the current generation only after subscribing so transitions before
 		// or during subscription cannot be missed; applySnapshot deduplicates
 		// monotonically if the same generation also arrives on networkChanges.
-		if n.applySnapshot(subscriber.Current()) && n.hasActiveMaintenance() {
-			n.Maintain(ctx)
+		if n.applySnapshot(subscriber.Current()) && n.refreshDemands() {
+			wakeReconcile()
+		}
+	}
+	syncAndSchedule := func() {
+		if !n.hasActiveMaintenance() {
+			return
+		}
+		if subscriber != nil {
+			n.applySnapshot(subscriber.Current())
+		} else {
+			_, _ = n.snapshot(ctx)
+		}
+		if n.refreshDemands() {
+			wakeReconcile()
 		}
 	}
 	ticker := time.NewTicker(MaintenanceInterval)
@@ -177,27 +208,30 @@ func (n *NativePeerConnectivity) runMaintenance(ctx context.Context, prev <-chan
 				networkChanges = nil
 				continue
 			}
-			if n.applySnapshot(snapshot) && n.hasActiveMaintenance() {
-				n.Maintain(ctx)
+			if n.applySnapshot(snapshot) && n.refreshDemands() {
+				wakeReconcile()
 			}
 		case <-discoveryChanges:
-			n.mu.Lock()
-			authority := n.config.Reachability
-			n.mu.Unlock()
-			if authority != nil {
-				authority.RefreshUnavailable()
-			}
-			if n.hasActiveMaintenance() {
-				n.Maintain(ctx)
-			}
+			n.refreshUnavailable()
+			syncAndSchedule()
 		case <-n.maintWake:
-			if n.hasActiveMaintenance() {
-				n.Maintain(ctx)
-			}
+			syncAndSchedule()
 		case <-ticker.C:
-			if n.hasActiveMaintenance() {
-				n.Maintain(ctx)
+			syncAndSchedule()
+		}
+	}
+}
+
+func (n *NativePeerConnectivity) runReachabilityReconciler(ctx context.Context, wake <-chan struct{}) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-wake:
+			if ctx.Err() != nil {
+				return
 			}
+			n.reconcileReachability(ctx)
 		}
 	}
 }
