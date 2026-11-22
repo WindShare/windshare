@@ -20,7 +20,7 @@ import (
 const getProgressInterval = 500 * time.Millisecond
 
 func runAttempt(ctx context.Context, input preparedRequest, deps Dependencies, retained *getOutputPreparation) (completed task.Completion[Result]) {
-	a := &runner{receiverRecoveryOptions: deps.Recovery, receiverPeerFactory: deps.PeerFactory, receiverDial: deps.ReceiverDial, getOutputFactory: input.output, control: deps.Control, clock: deps.Clock}
+	a := &runner{receiverRecoveryOptions: deps.Recovery, receiverPeerFactory: deps.PeerFactory, receiverDial: deps.ReceiverDial, getOutputFactory: input.output, control: deps.Control, clock: deps.Clock, caller: ctx}
 	a.receiveCapacity = deps.Capacity
 	a.connectivityCapacity = deps.Connectivity
 	a.resolveEndpoints = deps.ResolveEndpoints

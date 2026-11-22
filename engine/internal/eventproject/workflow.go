@@ -1,6 +1,7 @@
 package eventproject
 
 import (
+	v2peer "github.com/windshare/windshare/connectivity/v2peer"
 	receive "github.com/windshare/windshare/engine/internal/receive"
 	share "github.com/windshare/windshare/engine/internal/share"
 	task "github.com/windshare/windshare/engine/internal/task"
@@ -111,22 +112,39 @@ func receiveWarning(code receive.FailureCode, cause error) appobs.Failure {
 }
 
 func (p workflowProjection) receiverTermination(value receive.PeerTerminated) bool {
-	// A caller stop tears down the runtime, lanes and peer together; whatever the
-	// peer retains from that teardown is a consequence of the stop, not a failure
-	// to warn about. The trace record keeps the retained classes.
-	if value.LocalStop == receive.ReceiverLocalStopCaller {
+	trace := value.Value
+	failure, ok := receiverTerminationWarning(value.LocalStop, trace.RetainedCauseClasses(),
+		trace.PeerShutdownFailed(), trace.ChannelDrainFailed())
+	if !ok {
 		return true
 	}
-	for _, cause := range value.Value.RetainedCauseClasses() {
+	return p.emit(appobs.NewWarning(p.workflow, failure))
+}
+
+// receiverTerminationWarning selects the warning a peer termination projects.
+// A caller stop tears down the runtime, lanes and peer together, so the opaque
+// and runtime-closed residue it leaves is a consequence of the stop, not a
+// failure to warn about; the trace record keeps it. Other retained classes and
+// failed peer shutdown or channel drain still warn.
+func receiverTerminationWarning(
+	stop receive.ReceiverLocalStopReason,
+	retained []v2peer.ReceiverCauseClass,
+	shutdownFailed, drainFailed bool,
+) (appobs.Failure, bool) {
+	for _, cause := range retained {
+		if stop == receive.ReceiverLocalStopCaller &&
+			(cause == v2peer.ReceiverCauseUnknown || cause == v2peer.ReceiverCauseRuntimeClosed) {
+			continue
+		}
 		if failure, ok := ProjectReceiverCauseClass(cause); ok {
-			return p.emit(appobs.NewWarning(p.workflow, failure))
+			return failure, true
 		}
 	}
-	if value.Value.PeerShutdownFailed() {
-		return p.emit(appobs.NewWarning(p.workflow, mustFailure(appobs.FailurePeerShutdown)))
+	if shutdownFailed {
+		return mustFailure(appobs.FailurePeerShutdown), true
 	}
-	if value.Value.ChannelDrainFailed() {
-		return p.emit(appobs.NewWarning(p.workflow, mustFailure(appobs.FailurePeerChannelDrain)))
+	if drainFailed {
+		return mustFailure(appobs.FailurePeerChannelDrain), true
 	}
-	return true
+	return appobs.Failure{}, false
 }

@@ -146,6 +146,9 @@ type runner struct {
 	getOutputFactory        getOutputAuthorityFactory
 	control                 task.Control
 	clock                   Clock
+	// caller is the receive task's own context. It ends only when the task is
+	// stopped, unlike the per-session contexts later generations run under.
+	caller context.Context
 }
 
 type stepOutcome uint8

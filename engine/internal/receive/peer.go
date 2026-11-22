@@ -325,9 +325,11 @@ type receiverLocalStop struct {
 	caller context.Context
 }
 
-// bindCaller attributes stops to the caller once ctx ends. Peers observe that
-// cancellation directly, usually before settlement records it, and teardown it
-// starts (such as runtime replacement) is a consequence of the caller stop.
+// bindCaller attributes stops to the caller once the task context ends. Peers
+// observe that cancellation directly, usually before settlement records it, and
+// teardown it starts (such as runtime replacement) is a consequence of the stop.
+// Only the task context is bound: a replaced generation's session context also
+// ends on normal completion, which must keep its own reason.
 func (stop *receiverLocalStop) bindCaller(ctx context.Context) {
 	if stop == nil {
 		return
@@ -420,7 +422,7 @@ func (a *runner) startReceiverPeer(
 	requirement receiverPeerRequirement,
 	options ...receiverPeerOptions,
 ) *activeReceiverPeer {
-	localStop.bindCaller(ctx)
+	localStop.bindCaller(a.caller)
 	starter, err := a.newReceiverPeerStarter(observation, localStop, requirement == receiverPeerRequired, options...)
 	if adapter, ok := starter.(receiverPeerFactoryAdapter); ok && len(options) > 0 {
 		adapter.options = options[0]
