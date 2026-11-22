@@ -6,6 +6,7 @@ import (
 	"testing"
 	"testing/synctest"
 
+	"github.com/windshare/windshare/cmd/wind/internal/command"
 	"github.com/windshare/windshare/engine/relayconfig"
 )
 
@@ -24,11 +25,11 @@ func TestImportCancellationDoesNotWaitForOrSaveLateInput(t *testing.T) {
 		}
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
-		done := make(chan Result, 1)
+		done := make(chan command.ExitCode, 1)
 		go func() { done <- runner.Run(ctx, []string{"import", "-"}) }()
 		synctest.Wait()
 		cancel()
-		if result := <-done; result != ResultFailure {
+		if result := <-done; result != command.ExitFailure {
 			t.Fatalf("cancelled import result=%v", result)
 		}
 		if _, err := io.WriteString(writer, importedConfiguration); err != nil {

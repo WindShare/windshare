@@ -2,11 +2,10 @@ package cli
 
 import (
 	"errors"
-	"flag"
-	"io"
 	"reflect"
 	"testing"
 
+	"github.com/windshare/windshare/cmd/wind/internal/command"
 	"github.com/windshare/windshare/internal/diaglog"
 )
 
@@ -25,16 +24,15 @@ func testDirectoryTraceOptions(path string) observationOptions {
 func TestObservationOptionsAliasesAndInterleavedFlags(t *testing.T) {
 	for _, alias := range []string{"-v", "--verbose"} {
 		t.Run(alias, func(t *testing.T) {
-			flags := flag.NewFlagSet("get", flag.ContinueOnError)
-			flags.SetOutput(io.Discard)
+			flags := command.NewFlagSet("get")
 			var options observationOptions
 			if err := bindObservationOptions(flags, &options); err != nil {
 				t.Fatal(err)
 			}
-			positionals, parse := parseInterleaved(flags, []string{
+			positionals, parse := command.ParseInterleaved(flags, []string{
 				"capability", alias, "--trace", "trace.ndjson", "selection",
 			})
-			if parse != flagParseReady {
+			if parse != command.ParseReady {
 				t.Fatalf("parse=%d", parse)
 			}
 			target, targetErr := options.traceTarget()
@@ -79,16 +77,15 @@ func TestObservationOptionsModelOneMutuallyExclusiveTraceTarget(t *testing.T) {
 		t.Fatal("conflicting explicit targets were not recognized before validation")
 	}
 
-	flags := flag.NewFlagSet("share", flag.ContinueOnError)
-	flags.SetOutput(io.Discard)
+	flags := command.NewFlagSet("share")
 	var directory observationOptions
 	if err := bindObservationOptions(flags, &directory); err != nil {
 		t.Fatal(err)
 	}
-	positionals, parse := parseInterleaved(flags, []string{"source", "--trace-dir", "traces", "second"})
+	positionals, parse := command.ParseInterleaved(flags, []string{"source", "--trace-dir", "traces", "second"})
 	target, targetErr := directory.traceTarget()
 	expected, _ := diaglog.RunDirectory("traces")
-	if parse != flagParseReady || targetErr != nil || target != expected ||
+	if parse != command.ParseReady || targetErr != nil || target != expected ||
 		!reflect.DeepEqual(positionals, []string{"source", "second"}) {
 		t.Fatalf("parse=%d options=%+v positionals=%q", parse, directory, positionals)
 	}

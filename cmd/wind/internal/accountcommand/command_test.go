@@ -10,6 +10,7 @@ import (
 	"testing"
 	"testing/synctest"
 
+	"github.com/windshare/windshare/cmd/wind/internal/command"
 	"github.com/windshare/windshare/engine/account"
 )
 
@@ -74,7 +75,9 @@ func TestAccountCommandsDispatchSecretsWithoutEcho(t *testing.T) {
 	}{
 		{[]string{"register"}, "register", "", ""},
 		{[]string{"login", "alice", "--password-stdin"}, "login", "alice", "a local password"},
+		{[]string{"login", "--password-stdin", "alice"}, "login", "alice", "a local password"},
 		{[]string{"password", "alice", "--password-stdin"}, "password", "alice", "a local password"},
+		{[]string{"password", "--password-stdin", "alice"}, "password", "alice", "a local password"},
 		{[]string{"email", "alice@example.test"}, "email", "alice@example.test", ""},
 		{[]string{"verify", "local-verification-code"}, "verify", "", "local-verification-code"},
 		{[]string{"revoke", base64.RawURLEncoding.EncodeToString(id[:])}, "revoke", "", ""},
@@ -83,7 +86,7 @@ func TestAccountCommandsDispatchSecretsWithoutEcho(t *testing.T) {
 			service := &commandService{value: account.Snapshot{State: account.Ready, Account: activeAccount}}
 			output := &lines{}
 			runner := Runner{Service: service, Input: strings.NewReader("a local password\r\n"), Output: output}
-			if code := runner.Run(context.Background(), scenario.args); code != ResultOK {
+			if code := runner.Run(context.Background(), scenario.args); code != command.ExitOK {
 				t.Fatalf("command failed: %d %s", code, output.String())
 			}
 			if service.action != scenario.action || service.username != scenario.username || service.secret != scenario.secret {
@@ -110,24 +113,26 @@ func TestAccountCommandsRejectInvalidInputBeforeMutation(t *testing.T) {
 		service := &commandService{}
 		output := &lines{}
 		runner := Runner{Service: service, Input: strings.NewReader("secret"), Output: output}
-		if code := runner.Run(context.Background(), args); code != ResultUsage || service.action != "" {
+		if code := runner.Run(context.Background(), args); code != command.ExitUsage || service.action != "" {
 			t.Fatalf("invalid command returned %d or mutated account: %v %s", code, args, service.action)
 		}
 	}
 	service := &commandService{value: account.Snapshot{State: account.Pending}}
 	output := &lines{}
 	id := [16]byte{19}
-	if code := (Runner{Service: service, Output: output}).Run(context.Background(), []string{"revoke", base64.RawURLEncoding.EncodeToString(id[:])}); code != ResultFailure || service.action != "" || !strings.Contains(output.String(), "account setup is still pending") {
+	if code := (Runner{Service: service, Output: output}).Run(context.Background(), []string{"revoke", base64.RawURLEncoding.EncodeToString(id[:])}); code != command.ExitFailure || service.action != "" || !strings.Contains(output.String(), "account setup is still pending") {
 		t.Fatalf("pending revoke returned %d action=%q output=%q", code, service.action, output.String())
 	}
 }
 
 func TestAccountHelpSucceedsWithoutConfiguredService(t *testing.T) {
 	for _, args := range [][]string{
-		{"help"}, {"-h"}, {"-help"}, {"--help"}, {"status", "--help"}, {"refresh", "-h"}, {"login", "--help"},
+		{"help"}, {"-h"}, {"-help"}, {"--help"},
+		{"status", "--help"}, {"refresh", "-h"}, {"login", "--help"},
+		{"login", "alice", "--help"}, {"password", "alice", "-h"}, {"email", "alice@example.test", "--help"},
 	} {
 		output := &lines{}
-		if code := (Runner{Output: output}).Run(context.Background(), args); code != ResultOK || !strings.Contains(output.String(), "wind account status") {
+		if code := (Runner{Output: output}).Run(context.Background(), args); code != command.ExitOK || !strings.Contains(output.String(), "wind account status") {
 			t.Fatalf("help %v returned %d output=%q", args, code, output.String())
 		}
 	}
@@ -139,14 +144,14 @@ func TestAccountRefreshUsesAttemptResult(t *testing.T) {
 		name    string
 		outcome account.RefreshOutcome
 		err     error
-		code    int
+		code    command.ExitCode
 		hint    string
 	}{
-		{name: "refreshed", outcome: account.RefreshSucceeded, code: ResultOK},
-		{name: "denied", err: denied, code: ResultFailure, hint: denied.Error()},
-		{name: "timed out", err: context.DeadlineExceeded, code: ResultFailure},
-		{name: "register", outcome: account.RefreshNeedsRegistration, code: ResultFailure, hint: "wind account register"},
-		{name: "verify email", outcome: account.RefreshNeedsEmail, code: ResultFailure, hint: "wind account verify"},
+		{name: "refreshed", outcome: account.RefreshSucceeded, code: command.ExitOK},
+		{name: "denied", err: denied, code: command.ExitFailure, hint: denied.Error()},
+		{name: "timed out", err: context.DeadlineExceeded, code: command.ExitFailure},
+		{name: "register", outcome: account.RefreshNeedsRegistration, code: command.ExitFailure, hint: "wind account register"},
+		{name: "verify email", outcome: account.RefreshNeedsEmail, code: command.ExitFailure, hint: "wind account verify"},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			service := &commandService{
@@ -180,7 +185,7 @@ func TestAccountRefreshWaitsForAttemptDespiteCachedReadiness(t *testing.T) {
 				return "", ctx.Err()
 			},
 		}
-		done := make(chan int, 1)
+		done := make(chan command.ExitCode, 1)
 		go func() {
 			done <- (Runner{Service: service, Output: &lines{}}).Run(ctx, []string{"refresh"})
 		}()
@@ -196,7 +201,7 @@ func TestAccountRefreshWaitsForAttemptDespiteCachedReadiness(t *testing.T) {
 		default:
 		}
 		cancel()
-		if code := <-done; code != ResultFailure {
+		if code := <-done; code != command.ExitFailure {
 			t.Fatalf("canceled refresh returned %d", code)
 		}
 	})
@@ -204,7 +209,7 @@ func TestAccountRefreshWaitsForAttemptDespiteCachedReadiness(t *testing.T) {
 
 func TestAccountStatusAndErrors(t *testing.T) {
 	output := &lines{}
-	if code := (Runner{Output: output}).Run(context.Background(), nil); code != ResultFailure {
+	if code := (Runner{Output: output}).Run(context.Background(), nil); code != command.ExitFailure {
 		t.Fatal("unconfigured service accepted")
 	}
 	service := &commandService{value: account.Snapshot{
@@ -217,7 +222,7 @@ func TestAccountStatusAndErrors(t *testing.T) {
 	}}
 	var encoded bytes.Buffer
 	runner := Runner{Service: service, Output: output, JSONOutput: &encoded}
-	if code := runner.Run(context.Background(), []string{"status", "--json"}); code != ResultOK {
+	if code := runner.Run(context.Background(), []string{"status", "--json"}); code != command.ExitOK {
 		t.Fatal(code)
 	}
 	var snapshot account.Snapshot
@@ -225,7 +230,7 @@ func TestAccountStatusAndErrors(t *testing.T) {
 		t.Fatalf("invalid account status: %v", err)
 	}
 	output.Reset()
-	if code := runner.Run(context.Background(), nil); code != ResultOK || service.action != "" {
+	if code := runner.Run(context.Background(), nil); code != command.ExitOK || service.action != "" {
 		t.Fatal("reading status performed an account operation")
 	}
 	for _, want := range []string{
@@ -242,7 +247,7 @@ func TestAccountStatusAndErrors(t *testing.T) {
 		}
 	}
 	service.failure = errors.New("request unavailable")
-	if code := runner.Run(context.Background(), []string{"email", "alice@example.test"}); code != ResultFailure {
+	if code := runner.Run(context.Background(), []string{"email", "alice@example.test"}); code != command.ExitFailure {
 		t.Fatal("authority failure lost")
 	}
 	output.Reset()
@@ -251,11 +256,11 @@ func TestAccountStatusAndErrors(t *testing.T) {
 		failure: account.ErrInvalidState,
 	}
 	storageRunner := Runner{Service: storageService, Output: output}
-	if code := storageRunner.Run(context.Background(), []string{"status"}); code != ResultOK || !strings.Contains(output.String(), "Local account file needs repair") {
+	if code := storageRunner.Run(context.Background(), []string{"status"}); code != command.ExitOK || !strings.Contains(output.String(), "Local account file needs repair") {
 		t.Fatalf("storage status returned %d output=%q", code, output.String())
 	}
 	output.Reset()
-	if code := storageRunner.Run(context.Background(), []string{"register"}); code != ResultFailure || !strings.Contains(output.String(), "local account file is unreadable or invalid") {
+	if code := storageRunner.Run(context.Background(), []string{"register"}); code != command.ExitFailure || !strings.Contains(output.String(), "local account file is unreadable or invalid") {
 		t.Fatalf("storage register returned %d output=%q", code, output.String())
 	}
 }

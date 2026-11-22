@@ -11,45 +11,20 @@ import (
 	"os"
 	"strings"
 
+	"github.com/windshare/windshare/cmd/wind/internal/command"
 	"github.com/windshare/windshare/cmd/wind/internal/commandinput"
-	"github.com/windshare/windshare/cmd/wind/internal/commandmeta"
 	"github.com/windshare/windshare/engine/account"
 	"golang.org/x/term"
 )
 
-const (
-	ResultOK      = 0
-	ResultFailure = 1
-	ResultUsage   = 2
-)
-
 const Usage = "Usage:\n" +
-	"  " + commandmeta.Name + " account status [--json] | register | refresh\n" +
-	"  " + commandmeta.Name + " account login <username> | password <username> [--password-stdin]\n" +
-	"  " + commandmeta.Name + " account email <address> | verify <code> | revoke <credential>"
+	"  " + command.Name + " account status [--json] | register | refresh\n" +
+	"  " + command.Name + " account login <username> | password <username> [--password-stdin]\n" +
+	"  " + command.Name + " account email <address> | verify <code> | revoke <credential>"
 
 type usageError struct{ message string }
 
 func (err usageError) Error() string { return err.message }
-
-func IsHelp(args []string) bool {
-	if len(args) == 1 {
-		return args[0] == "help" || isHelpFlag(args[0])
-	}
-	if len(args) == 2 && isHelpFlag(args[1]) {
-		switch args[0] {
-		case "status", "register", "refresh", "login", "password", "email", "verify", "revoke":
-			return true
-		}
-	}
-	return false
-}
-
-func isHelpFlag(arg string) bool {
-	return arg == "-h" || arg == "-help" || arg == "--help"
-}
-
-type LineOutput interface{ WriteLines(...string) }
 
 type Service interface {
 	Snapshot() (account.Snapshot, <-chan struct{})
@@ -65,11 +40,12 @@ type Service interface {
 type Runner struct {
 	Service    Service
 	Input      io.Reader
-	Output     LineOutput
+	Output     command.LineOutput
 	JSONOutput io.Writer
 }
 
-type parsedCommand struct {
+// Request is a validated account subcommand ready to execute against a Service.
+type Request struct {
 	action        string
 	jsonOutput    bool
 	value         string
@@ -77,84 +53,128 @@ type parsedCommand struct {
 	credential    [16]byte
 }
 
-func parseCommand(args []string) (parsedCommand, error) {
+// Parse validates account subcommand arguments without requiring an initialized
+// engine or account service. When ready is false, code is the terminal exit status.
+func Parse(args []string, output command.LineOutput) (Request, command.ExitCode, bool) {
 	if len(args) == 0 {
-		return parsedCommand{action: "status"}, nil
+		return Request{action: "status"}, command.ExitOK, true
 	}
-	switch args[0] {
+	if command.IsHelpToken(args[0]) {
+		command.WriteLines(output, Usage)
+		return Request{}, command.ExitOK, false
+	}
+	action := args[0]
+	rest := args[1:]
+	switch action {
 	case "status":
-		if len(args) == 1 {
-			return parsedCommand{action: "status"}, nil
+		var req Request
+		req.action = action
+		flags := command.NewFlagSet("account status")
+		flags.BoolVar(&req.jsonOutput, "json", false, "write account status as JSON")
+		if code, ok := projectAccountFlagParse(output, "account status", command.ParseNoPositionals(flags, rest)); !ok {
+			return Request{}, code, false
 		}
-		if len(args) == 2 && args[1] == "--json" {
-			return parsedCommand{action: "status", jsonOutput: true}, nil
-		}
+		return req, command.ExitOK, true
 	case "register", "refresh":
-		if len(args) == 1 {
-			return parsedCommand{action: args[0]}, nil
+		flags := command.NewFlagSet("account " + action)
+		if code, ok := projectAccountFlagParse(output, "account "+action, command.ParseNoPositionals(flags, rest)); !ok {
+			return Request{}, code, false
 		}
+		return Request{action: action}, command.ExitOK, true
 	case "login", "password":
-		if len(args) == 2 || (len(args) == 3 && args[2] == "--password-stdin") {
-			return parsedCommand{action: args[0], value: args[1], passwordStdin: len(args) == 3}, nil
+		var req Request
+		req.action = action
+		flags := command.NewFlagSet("account " + action)
+		flags.BoolVar(&req.passwordStdin, "password-stdin", false, "read password from standard input")
+		positionals, outcome := command.ParseInterleaved(flags, rest)
+		if code, ok := projectAccountFlagParse(output, "account "+action, outcome); !ok {
+			return Request{}, code, false
 		}
-	case "email", "verify":
-		if len(args) == 2 {
-			return parsedCommand{action: args[0], value: args[1]}, nil
+		if len(positionals) != 1 || positionals[0] == "" {
+			command.WriteLines(output, Usage)
+			return Request{}, command.ExitUsage, false
 		}
-	case "revoke":
-		if len(args) == 2 {
-			raw, err := base64.RawURLEncoding.Strict().DecodeString(args[1])
+		req.value = positionals[0]
+		return req, command.ExitOK, true
+	case "email", "verify", "revoke":
+		flags := command.NewFlagSet("account " + action)
+		positionals, outcome := command.ParseInterleaved(flags, rest)
+		if code, ok := projectAccountFlagParse(output, "account "+action, outcome); !ok {
+			return Request{}, code, false
+		}
+		if len(positionals) != 1 || positionals[0] == "" {
+			command.WriteLines(output, Usage)
+			return Request{}, command.ExitUsage, false
+		}
+		if action == "revoke" {
+			raw, err := base64.RawURLEncoding.Strict().DecodeString(positionals[0])
 			if err != nil || len(raw) != 16 {
-				return parsedCommand{}, usageError{message: "Account: invalid credential ID"}
+				command.WriteLines(output, "Account: invalid credential ID")
+				return Request{}, command.ExitUsage, false
 			}
-			return parsedCommand{action: "revoke", credential: [16]byte(raw)}, nil
+			return Request{action: action, credential: [16]byte(raw)}, command.ExitOK, true
 		}
+		return Request{action: action, value: positionals[0]}, command.ExitOK, true
+	default:
+		command.WriteLines(output, Usage)
+		return Request{}, command.ExitUsage, false
 	}
-	return parsedCommand{}, usageError{message: Usage}
 }
 
-func (runner Runner) Run(ctx context.Context, args []string) int {
-	if IsHelp(args) {
-		runner.Output.WriteLines(Usage)
-		return ResultOK
+func projectAccountFlagParse(output command.LineOutput, label string, outcome command.ParseOutcome) (command.ExitCode, bool) {
+	switch outcome {
+	case command.ParseReady:
+		return command.ExitOK, true
+	case command.ParseHelp:
+		command.WriteLines(output, Usage)
+		return command.ExitOK, false
+	default:
+		command.WriteLinef(output, "%s: %s", label, outcome.Diagnostic())
+		return outcome.ExitCode(), false
 	}
-	command, err := parseCommand(args)
-	if err != nil {
-		runner.Output.WriteLines(err.Error())
-		return ResultUsage
+}
+
+func (runner Runner) Run(ctx context.Context, args []string) command.ExitCode {
+	request, code, ready := Parse(args, runner.Output)
+	if !ready {
+		return code
 	}
+	return runner.Execute(ctx, request)
+}
+
+func (runner Runner) Execute(ctx context.Context, request Request) command.ExitCode {
 	if runner.Service == nil {
-		runner.Output.WriteLines(account.ErrNotConfigured.Error())
-		return ResultFailure
+		command.WriteLines(runner.Output, account.ErrNotConfigured.Error())
+		return command.ExitFailure
 	}
-	if command.action == "status" && command.jsonOutput {
+	if request.action == "status" && request.jsonOutput {
 		snapshot, _ := runner.Service.Snapshot()
 		if err := json.NewEncoder(runner.JSONOutput).Encode(snapshot); err != nil {
-			return ResultFailure
+			return command.ExitFailure
 		}
-		return ResultOK
+		return command.ExitOK
 	}
-	if err := runner.execute(ctx, command); err != nil {
+	if err := runner.execute(ctx, request); err != nil {
 		if usage, ok := errors.AsType[usageError](err); ok {
-			runner.Output.WriteLines(usage.message)
-			return ResultUsage
+			command.WriteLines(runner.Output, usage.message)
+			return command.ExitUsage
 		}
-		runner.Output.WriteLines("Account: " + err.Error())
-		return ResultFailure
+		command.WriteLines(runner.Output, "Account: "+err.Error())
+		return command.ExitFailure
 	}
 	snapshot, _ := runner.Service.Snapshot()
-	if command.action == "verify" {
-		runner.Output.WriteLines("Account setup complete.")
+	if request.action == "verify" {
+		command.WriteLines(runner.Output, "Account setup complete.")
 	} else {
-		runner.Output.WriteLines(Describe(snapshot))
+		command.WriteLines(runner.Output, Describe(snapshot))
 	}
 	if identity := IdentityLines(snapshot); len(identity) > 0 {
-		runner.Output.WriteLines(identity...)
+		command.WriteLines(runner.Output, identity...)
 	}
-	return ResultOK
+	return command.ExitOK
 }
-func (runner Runner) execute(ctx context.Context, command parsedCommand) error {
-	switch command.action {
+func (runner Runner) execute(ctx context.Context, request Request) error {
+	switch request.action {
 	case "register":
 		return runner.register(ctx)
 	case "status":
@@ -162,19 +182,19 @@ func (runner Runner) execute(ctx context.Context, command parsedCommand) error {
 	case "refresh":
 		return runner.refresh(ctx)
 	case "login":
-		password, err := runner.password(ctx, command.passwordStdin)
+		password, err := runner.password(ctx, request.passwordStdin)
 		if err != nil {
 			return err
 		}
-		return runner.Service.Login(ctx, command.value, password)
+		return runner.Service.Login(ctx, request.value, password)
 	case "password":
-		return runner.setPassword(ctx, command.value, command.passwordStdin)
+		return runner.setPassword(ctx, request.value, request.passwordStdin)
 	case "email":
-		return runner.Service.RequestEmail(ctx, command.value)
+		return runner.Service.RequestEmail(ctx, request.value)
 	case "verify":
-		return runner.Service.VerifyEmail(ctx, command.value)
+		return runner.Service.VerifyEmail(ctx, request.value)
 	case "revoke":
-		return runner.revoke(ctx, command.credential)
+		return runner.revoke(ctx, request.credential)
 	default:
 		return usageError{message: Usage}
 	}

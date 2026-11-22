@@ -2,14 +2,14 @@ package resumecommand
 
 import (
 	"errors"
-	"flag"
-	"io"
 	"path/filepath"
 	"strconv"
+
+	"github.com/windshare/windshare/cmd/wind/internal/command"
 )
 
-// List and discard accept no positional arguments. The standard parser must
-// retain ownership of "--" so later tokens cannot be reinterpreted as help.
+// List and discard accept no positional arguments. ParseNoPositionals stops at
+// the first positional or "--" so later tokens cannot be reinterpreted as help.
 type flagRequestParser struct {
 	logger resumeLogger
 }
@@ -17,75 +17,56 @@ type flagRequestParser struct {
 func (parser flagRequestParser) ParseRoot(
 	action string,
 	args []string,
-) (resumeRootRequest, resumeRequestParse) {
-	flags := parser.newFlagSet(action)
+) (resumeRootRequest, command.ParseOutcome) {
+	flags := command.NewFlagSet(action)
 	var rootPath resumeRootPathFlag
 	flags.Var(&rootPath, "o", "output directory (required)")
-	err := flags.Parse(args)
-	if errors.Is(err, flag.ErrHelp) {
-		return resumeRootRequest{}, resumeRequestHelp
-	}
-	if err != nil {
-		parser.logger.Logf("%s: arguments are invalid", action)
-		return resumeRootRequest{}, resumeRequestInvalid
-	}
-	if flags.NArg() != 0 {
-		parser.logger.Logf("%s: positional arguments are not accepted", action)
-		return resumeRootRequest{}, resumeRequestInvalid
+	outcome := command.ParseNoPositionals(flags, args)
+	if outcome != command.ParseReady {
+		if outcome != command.ParseHelp {
+			parser.logger.Logf("%s: %s", action, outcome.Diagnostic())
+		}
+		return resumeRootRequest{}, outcome
 	}
 	if !rootPath.set {
 		parser.logger.Logf("%s: -o is required", action)
-		return resumeRootRequest{}, resumeRequestInvalid
+		return resumeRootRequest{}, command.ParseMissingOptionValue
 	}
 	absolute, err := absoluteResumeRoot(rootPath.value)
 	if err != nil {
 		parser.logger.Logf("%s: output directory is invalid", action)
-		return resumeRootRequest{}, resumeRequestInvalid
+		return resumeRootRequest{}, command.ParseInvalidOptionValue
 	}
-	return resumeRootRequest{rootPath: absolute}, resumeRequestReady
+	return resumeRootRequest{rootPath: absolute}, command.ParseReady
 }
 
-func (parser flagRequestParser) ParseDiscard(args []string) (resumeDiscardRequest, resumeRequestParse) {
-	flags := parser.newFlagSet("resume discard")
+func (parser flagRequestParser) ParseDiscard(args []string) (resumeDiscardRequest, command.ParseOutcome) {
+	flags := command.NewFlagSet("resume discard")
 	var rootPath resumeRootPathFlag
 	flags.Var(&rootPath, "o", "output directory (required)")
 	var item resumeItemNumberFlag
 	flags.Var(&item, "item", "one current inventory item number (required)")
-	err := flags.Parse(args)
-	if errors.Is(err, flag.ErrHelp) {
-		return resumeDiscardRequest{}, resumeRequestHelp
-	}
-	if err != nil {
-		parser.logger.Logf("resume discard: arguments are invalid")
-		return resumeDiscardRequest{}, resumeRequestInvalid
-	}
-	if flags.NArg() != 0 {
-		parser.logger.Logf("resume discard: positional arguments are not accepted")
-		return resumeDiscardRequest{}, resumeRequestInvalid
+	outcome := command.ParseNoPositionals(flags, args)
+	if outcome != command.ParseReady {
+		if outcome != command.ParseHelp {
+			parser.logger.Logf("resume discard: %s", outcome.Diagnostic())
+		}
+		return resumeDiscardRequest{}, outcome
 	}
 	if !rootPath.set {
 		parser.logger.Logf("resume discard: -o is required")
-		return resumeDiscardRequest{}, resumeRequestInvalid
+		return resumeDiscardRequest{}, command.ParseMissingOptionValue
 	}
 	if !item.set {
 		parser.logger.Logf("resume discard: --item is required")
-		return resumeDiscardRequest{}, resumeRequestInvalid
+		return resumeDiscardRequest{}, command.ParseMissingOptionValue
 	}
 	absolute, err := absoluteResumeRoot(rootPath.value)
 	if err != nil {
 		parser.logger.Logf("resume discard: output directory is invalid")
-		return resumeDiscardRequest{}, resumeRequestInvalid
+		return resumeDiscardRequest{}, command.ParseInvalidOptionValue
 	}
-	return resumeDiscardRequest{rootPath: absolute, itemNumber: item.value}, resumeRequestReady
-}
-
-func (parser flagRequestParser) newFlagSet(name string) *flag.FlagSet {
-	flags := flag.NewFlagSet(name, flag.ContinueOnError)
-	// The standard flag package includes rejected values in diagnostics. Resume
-	// accepts no secrets, but suppressing reflection still protects a capability
-	// accidentally pasted into --item or another unsupported position.
-	flags.SetOutput(io.Discard)
-	return flags
+	return resumeDiscardRequest{rootPath: absolute, itemNumber: item.value}, command.ParseReady
 }
 
 type resumeRootPathFlag struct {

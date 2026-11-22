@@ -4,6 +4,8 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+
+	"github.com/windshare/windshare/cmd/wind/internal/command"
 )
 
 func TestResumePositionalsCannotBecomeHelpRequests(t *testing.T) {
@@ -25,7 +27,7 @@ func TestResumePositionalsCannotBecomeHelpRequests(t *testing.T) {
 				app.resumeInventories = opener
 				args := append([]string{"resume", action}, options...)
 				args = append(args, suffix...)
-				if result := app.Run(context.Background(), args); result != ResultUsage {
+				if result := app.Run(context.Background(), args); result != command.ExitUsage {
 					t.Fatalf("result=%d stderr=%q", result, stderr.String())
 				}
 				if opener.calls != 0 {
@@ -45,11 +47,11 @@ func TestResumeParsersPreserveOptionValuesBeforeTerminator(t *testing.T) {
 			}
 			app, _, _ := newResumeTestApp()
 			request, parse := app.parser().ParseRoot("resume list", []string{"-o", value, "--"})
-			if parse != resumeRequestReady || request.rootPath != root {
+			if parse != command.ParseReady || request.rootPath != root {
 				t.Fatalf("list request=%+v parse=%d", request, parse)
 			}
 			discard, parse := app.parser().ParseDiscard([]string{"--item", "1", "-o", value, "--"})
-			if parse != resumeRequestReady || discard.rootPath != root || discard.itemNumber != 1 {
+			if parse != command.ParseReady || discard.rootPath != root || discard.itemNumber != 1 {
 				t.Fatalf("discard request=%+v parse=%d", discard, parse)
 			}
 		})

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/windshare/windshare/adapters/filesystem"
+	"github.com/windshare/windshare/cmd/wind/internal/command"
 	"github.com/windshare/windshare/engine/output"
 )
 
@@ -19,7 +20,7 @@ func TestRunnerFailsClosedAtInjectedPresentationBoundaries(t *testing.T) {
 		app.resumeInventories = &fakeResumeStateInventoryOpener{}
 		if result := app.Run(context.Background(), []string{
 			"resume", "list", "-o", t.TempDir(),
-		}); result != ResultFailure || !strings.Contains(stdout.String(), resumeDestinationUnknownReason) {
+		}); result != command.ExitFailure || !strings.Contains(stdout.String(), resumeDestinationUnknownReason) {
 			t.Fatalf("result=%d stdout=%q", result, stdout.String())
 		}
 	})
@@ -30,7 +31,7 @@ func TestRunnerFailsClosedAtInjectedPresentationBoundaries(t *testing.T) {
 		}}
 		if result := app.Run(context.Background(), []string{
 			"resume", "list", "-o", t.TempDir(),
-		}); result != ResultFailure || strings.Contains(stdout.String(), "private") {
+		}); result != command.ExitFailure || strings.Contains(stdout.String(), "private") {
 			t.Fatalf("result=%d stdout=%q", result, stdout.String())
 		}
 	})
@@ -43,7 +44,7 @@ func TestRunnerFailsClosedAtInjectedPresentationBoundaries(t *testing.T) {
 		}
 		if result := app.Run(context.Background(), []string{
 			"resume", "discard", "-o", t.TempDir(), "--item", "1",
-		}); result != ResultFailure || inventory.discardCalls != 0 ||
+		}); result != command.ExitFailure || inventory.discardCalls != 0 ||
 			!strings.Contains(stderr.String(), "could not be read") {
 			t.Fatalf("result=%d inventory=%+v stderr=%q", result, inventory, stderr.String())
 		}
@@ -56,7 +57,7 @@ func TestRunnerFailsClosedAtInjectedPresentationBoundaries(t *testing.T) {
 		}
 		if result := app.Run(context.Background(), []string{
 			"resume", "list", "-o", t.TempDir(),
-		}); result != ResultFailure {
+		}); result != command.ExitFailure {
 			t.Fatalf("result=%d", result)
 		}
 	})
@@ -135,7 +136,7 @@ func TestResumeListFailureStageMatrixIsClosedAndPathFree(t *testing.T) {
 				"resume", "list", "-o", t.TempDir(),
 			})
 			rendered := stdout.String()
-			if result != ResultFailure ||
+			if result != command.ExitFailure ||
 				!strings.Contains(rendered, `reason="`+test.reason+`"`) ||
 				!strings.Contains(rendered, `stage="`+test.stage.String()+`"`) {
 				t.Fatalf("result=%d output=%q", result, rendered)

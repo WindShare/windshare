@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/adapters/filesystem"
+	"github.com/windshare/windshare/cmd/wind/internal/command"
 	"github.com/windshare/windshare/cmd/wind/internal/commandinput"
 	"github.com/windshare/windshare/cmd/wind/internal/networkcommand"
 	"github.com/windshare/windshare/core/catalog"
@@ -101,15 +102,15 @@ const (
 	missingCapabilityKeyDiagnostic = "key string is required"
 )
 
-func (a *App) parseReceiveRequest(ctx context.Context, command receiveCommand, args []string) (receiveRequest, requestParseOutcome) {
-	name := string(command)
-	flags := a.newFlagSet(name)
+func (a *App) parseReceiveRequest(ctx context.Context, cmd receiveCommand, args []string) (receiveRequest, requestParseOutcome) {
+	name := string(cmd)
+	flags := command.NewFlagSet(name)
 	admission := engine.ReceiveCreateOrResume
 	var redownload bool
 	var operation string
 	// The commands share transfer options, but expose only the operation choices
 	// their contracts allow. Retry can never silently become a new download.
-	switch command {
+	switch cmd {
 	case receiveGet:
 		flags.BoolVar(&redownload, "redownload", false, "start a separate download in a new reserved destination; retain the original task")
 	case receiveResumeRetry:
@@ -124,7 +125,7 @@ func (a *App) parseReceiveRequest(ctx context.Context, command receiveCommand, a
 		return receiveRequest{}, requestParseInternalFailure
 	}
 	outputHelp := "output directory"
-	if command == receiveResumeRetry {
+	if cmd == receiveResumeRetry {
 		outputHelp = "directory to search for saved downloads"
 	}
 	outDir := flags.String("o", defaultReceiveOutputDirectory, outputHelp)
@@ -135,9 +136,9 @@ func (a *App) parseReceiveRequest(ctx context.Context, command receiveCommand, a
 		engine.ConnectivityAuto.String(),
 		"content connectivity policy: auto, relay-only, or p2p-only",
 	)
-	var only repeatedFlag
+	var only command.RepeatedFlag
 	flags.Var(&only, "only", "download only this catalog path; repeatable, directories include descendants")
-	positional, flagParse := parseInterleaved(flags, args)
+	positional, flagParse := command.ParseInterleaved(flags, args)
 	if parse := a.projectFlagParse(name, flags, name+" [options] <link>", flagParse); parse != requestParseReady {
 		return receiveRequest{}, parse
 	}

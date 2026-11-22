@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/windshare/windshare/cmd/wind/internal/command"
 	"github.com/windshare/windshare/internal/platformsetup"
 )
 
@@ -18,7 +19,7 @@ func TestHumanFindingsOmitEmptyInterfacePrefix(t *testing.T) {
 		},
 	}}
 	runner := Runner{Service: service, Output: &human}
-	if code := runner.Run(t.Context(), "doctor", []string{"network"}); code != ResultFailure {
+	if code := runner.Run(t.Context(), "doctor", []string{"network"}); code != command.ExitFailure {
 		t.Fatalf("code=%d human=%q", code, human)
 	}
 	joined := strings.Join(human, "\n")
@@ -47,7 +48,7 @@ func TestHumanFindingsKeepInterfaceAndProfileWhenPresent(t *testing.T) {
 		Protocol: platformsetup.UDP, Status: platformsetup.RuleMissing, Reason: platformsetup.NoMatchingRule,
 	}}}}
 	runner := Runner{Service: service, Output: &human}
-	if code := runner.Run(t.Context(), "doctor", []string{"network"}); code != ResultOK {
+	if code := runner.Run(t.Context(), "doctor", []string{"network"}); code != command.ExitOK {
 		t.Fatalf("code=%d", code)
 	}
 	joined := strings.Join(human, "\n")
@@ -72,7 +73,7 @@ func TestSetupOmitsWindowsPreambleWhenUnsupported(t *testing.T) {
 		supportsSetup: false,
 	}
 	runner := Runner{Service: service, Output: &human, Interactive: func() bool { return true }}
-	if code := runner.Run(t.Context(), "setup", []string{"network"}); code != ResultFailure {
+	if code := runner.Run(t.Context(), "setup", []string{"network"}); code != command.ExitFailure {
 		t.Fatalf("code=%d human=%q", code, human)
 	}
 	joined := strings.Join(human, "\n")
@@ -94,7 +95,7 @@ func TestSetupStillPrintsPreambleWhenSupported(t *testing.T) {
 		supportsSetup: true,
 	}
 	runner := Runner{Service: service, Output: &human, Interactive: func() bool { return true }}
-	if code := runner.Run(t.Context(), "setup", []string{"network"}); code != ResultOK {
+	if code := runner.Run(t.Context(), "setup", []string{"network"}); code != command.ExitOK {
 		t.Fatalf("code=%d", code)
 	}
 	joined := strings.Join(human, "\n")
@@ -111,7 +112,7 @@ func TestSetupJSONNeverPrintsPreamble(t *testing.T) {
 		supportsSetup: true,
 	}
 	runner := Runner{Service: service, Output: &human, JSONOutput: &machine, Interactive: func() bool { return true }}
-	if code := runner.Run(t.Context(), "setup", []string{"network", "--json"}); code != ResultOK {
+	if code := runner.Run(t.Context(), "setup", []string{"network", "--json"}); code != command.ExitOK {
 		t.Fatalf("code=%d", code)
 	}
 	if len(human) != 0 {

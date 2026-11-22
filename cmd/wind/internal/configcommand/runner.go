@@ -6,47 +6,36 @@ import (
 	"crypto/rand"
 	"errors"
 	"flag"
-	"fmt"
 	"io"
 	"log/slog"
 	"os"
-	"strings"
 
+	"github.com/windshare/windshare/cmd/wind/internal/command"
 	"github.com/windshare/windshare/cmd/wind/internal/commandinput"
-	"github.com/windshare/windshare/cmd/wind/internal/commandmeta"
 	"github.com/windshare/windshare/engine/relayconfig"
 )
 
-type Result uint8
-
-const (
-	ResultOK Result = iota
-	ResultFailure
-	ResultUsage
-)
-
-const Usage = "Usage: " + commandmeta.Name + " config import <file|-> [--front-url <url>] [-v|--verbose]\n" +
+const Usage = "Usage: " + command.Name + " config import <file|-> [--front-url <url>] [-v|--verbose]\n" +
 	"  Replace sharing defaults; --front-url saves the website address; '-' reads JSON from stdin.\n"
-
-// LineOutput commits complete diagnostic records immediately; it is not a byte stream.
-type LineOutput interface {
-	WriteLines(...string)
-}
 
 // Runner keeps the destination authority injected so embedded callers cannot
 // accidentally modify the developer's personal configuration.
 type Runner struct {
 	Input        io.Reader
-	Output       LineOutput
+	Output       command.LineOutput
 	TraceHandler slog.Handler
 	Save         func(relayconfig.Config) error
 }
 
-func (runner Runner) Run(ctx context.Context, args []string) Result {
-	request, err := parse(args)
-	if errors.Is(err, flag.ErrHelp) {
+func (runner Runner) Run(ctx context.Context, args []string) command.ExitCode {
+	request, outcome, err := parse(args)
+	if outcome == command.ParseHelp {
 		runner.writeLine("%s", Usage)
-		return ResultOK
+		return command.ExitOK
+	}
+	if outcome != command.ParseReady {
+		runner.writeLine("config import: %s", outcome.Diagnostic())
+		return outcome.ExitCode()
 	}
 	if err != nil {
 		if errors.Is(err, relayconfig.ErrFrontURL) {
@@ -54,7 +43,7 @@ func (runner Runner) Run(ctx context.Context, args []string) Result {
 		} else {
 			runner.writeLine("%s", Usage)
 		}
-		return ResultUsage
+		return command.ExitUsage
 	}
 	traceHandler := slog.DiscardHandler
 	if request.verbose && runner.TraceHandler != nil {
@@ -70,7 +59,7 @@ func (runner Runner) Run(ctx context.Context, args []string) Result {
 	if err := ctx.Err(); err != nil {
 		log.Info("failed", "stage", "read", "reason", "cancelled")
 		runner.writeLine("config import: cancelled; saved configuration was not changed")
-		return ResultFailure
+		return command.ExitFailure
 	}
 	config, err := commandinput.Read(ctx, func() (relayconfig.Config, error) {
 		return runner.read(request.source)
@@ -78,33 +67,33 @@ func (runner Runner) Run(ctx context.Context, args []string) Result {
 	if ctx.Err() != nil {
 		log.Info("failed", "stage", "read", "reason", "cancelled")
 		runner.writeLine("config import: cancelled; saved configuration was not changed")
-		return ResultFailure
+		return command.ExitFailure
 	}
 	if err != nil {
 		if errors.Is(err, relayconfig.ErrFrontURL) {
 			log.Info("failed", "stage", "validate", "reason", "invalid_frontend", "error", err)
 			runner.writeLine("config import: %s", err)
-			return ResultUsage
+			return command.ExitUsage
 		}
 		// Name the member: common JSON checkers accept repetitions silently.
 		if errors.Is(err, relayconfig.ErrRepeatedMember) {
 			log.Info("failed", "stage", "validate", "reason", "repeated_member", "error", err)
 			runner.writeLine("config import: %s", err)
-			return ResultUsage
+			return command.ExitUsage
 		}
 		if errors.Is(err, relayconfig.ErrRelayURL) {
 			log.Info("failed", "stage", "validate", "reason", "invalid_relay", "error", err)
 			runner.writeLine("config import: %s", err)
-			return ResultUsage
+			return command.ExitUsage
 		}
 		if errors.Is(err, relayconfig.ErrConfig) {
 			log.Info("failed", "stage", "validate", "reason", "invalid_configuration")
 			runner.writeLine("config import: invalid sharing configuration; expected at most %d profiles, active_relays selected from those profiles, and an optional HTTP(S) front_url", relayconfig.MaximumProfiles)
-			return ResultUsage
+			return command.ExitUsage
 		}
 		log.Info("failed", "stage", "read", "reason", "source_unreadable")
 		runner.writeLine("config import: cannot read the input file or stdin; saved configuration was not changed")
-		return ResultFailure
+		return command.ExitFailure
 	}
 	if request.frontURL != "" {
 		config.FrontURL = request.frontURL
@@ -113,17 +102,17 @@ func (runner Runner) Run(ctx context.Context, args []string) Result {
 	if ctx.Err() != nil {
 		log.Info("failed", "stage", "save", "reason", "cancelled")
 		runner.writeLine("config import: cancelled; saved configuration was not changed")
-		return ResultFailure
+		return command.ExitFailure
 	}
 	if runner.Save == nil {
 		log.Info("failed", "stage", "save", "reason", "destination_unavailable")
 		runner.writeLine("config import: configuration storage is unavailable")
-		return ResultFailure
+		return command.ExitFailure
 	}
 	if err := runner.Save(config); err != nil {
 		log.Info("failed", "stage", "save", "reason", "write_failed")
 		runner.writeLine("config import: cannot save configuration; check the user config directory or WINDSHARE_CONFIG")
-		return ResultFailure
+		return command.ExitFailure
 	}
 	log.Info("committed", "candidate_count", len(config.Profiles), "frontend_configured", config.FrontURL != "")
 	runner.writeLine("Saved sharing configuration with %d relay candidate(s).", len(config.Profiles))
@@ -132,13 +121,11 @@ func (runner Runner) Run(ctx context.Context, args []string) Result {
 	} else {
 		runner.writeLine("Frontend: %s. Future shares use these defaults.", config.FrontURL)
 	}
-	return ResultOK
+	return command.ExitOK
 }
 
 func (runner Runner) writeLine(format string, args ...any) {
-	if runner.Output != nil {
-		runner.Output.WriteLines(fmt.Sprintf(format, args...))
-	}
+	command.WriteLinef(runner.Output, format, args...)
 }
 
 func (runner Runner) read(source string) (relayconfig.Config, error) {
@@ -164,43 +151,24 @@ type importRequest struct {
 	frontURL string
 }
 
-func parse(args []string) (importRequest, error) {
-	if len(args) == 1 && (args[0] == "help" || args[0] == "-h" || args[0] == "--help") {
-		return importRequest{}, flag.ErrHelp
+func parse(args []string) (importRequest, command.ParseOutcome, error) {
+	if len(args) > 0 && command.IsHelpToken(args[0]) {
+		return importRequest{}, command.ParseHelp, nil
 	}
 	if len(args) == 0 || args[0] != "import" {
-		return importRequest{}, errors.New("expected import")
+		return importRequest{}, command.ParseReady, errors.New("expected import")
 	}
 	var request importRequest
-	flags := flag.NewFlagSet("config import", flag.ContinueOnError)
-	flags.SetOutput(io.Discard)
+	flags := command.NewFlagSet("config import")
 	flags.BoolVar(&request.verbose, "v", false, "emit structured import diagnostics")
 	flags.BoolVar(&request.verbose, "verbose", false, "emit structured import diagnostics")
 	flags.StringVar(&request.frontURL, "front-url", "", "save this frontend base URL for future shares")
-	args = args[1:]
-	var paths []string
-	for len(args) > 0 {
-		// "--" ends options only where an option could start, matching share and
-		// get; as the value of --front-url it stays a value for validation below.
-		if args[0] == "--" {
-			paths = append(paths, args[1:]...)
-			break
-		}
-		if len(args[0]) < 2 || args[0][0] != '-' {
-			paths = append(paths, args[0])
-			args = args[1:]
-			continue
-		}
-		// Parse one option occurrence at a time so the flag package never sees,
-		// and silently consumes, a terminator that belongs to this loop.
-		width := importOptionWidth(flags, args)
-		if err := flags.Parse(args[:width]); err != nil {
-			return importRequest{}, err
-		}
-		args = args[width:]
+	paths, outcome := command.ParseInterleaved(flags, args[1:])
+	if outcome != command.ParseReady {
+		return importRequest{}, outcome, nil
 	}
 	if len(paths) != 1 || paths[0] == "" {
-		return importRequest{}, errors.New("expected one input file or stdin")
+		return importRequest{}, command.ParseReady, errors.New("expected one input file or stdin")
 	}
 	// Validate after flag parsing so flag.Func cannot flatten the error category
 	// into a message that also echoes the rejected value. Omission stays valid.
@@ -211,26 +179,8 @@ func parse(args []string) (importRequest, error) {
 		}
 	})
 	if frontErr != nil {
-		return importRequest{}, frontErr
+		return importRequest{}, command.ParseReady, frontErr
 	}
 	request.source = paths[0]
-	return request, nil
-}
-
-// importOptionWidth reports how many arguments the option at args[0] occupies:
-// two for a registered value option written without "=", otherwise one, so the
-// flag package reports unknown, malformed, and missing-value options itself.
-func importOptionWidth(flags *flag.FlagSet, args []string) int {
-	name := strings.TrimPrefix(strings.TrimPrefix(args[0], "-"), "-")
-	if strings.Contains(name, "=") || len(args) == 1 {
-		return 1
-	}
-	registered := flags.Lookup(name)
-	if registered == nil {
-		return 1
-	}
-	if value, ok := registered.Value.(interface{ IsBoolFlag() bool }); ok && value.IsBoolFlag() {
-		return 1
-	}
-	return 2
+	return request, command.ParseReady, nil
 }

@@ -6,8 +6,6 @@ package networkcommand
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -15,13 +13,8 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/windshare/windshare/cmd/wind/internal/command"
 	"github.com/windshare/windshare/internal/platformsetup"
-)
-
-const (
-	ResultOK      = 0
-	ResultFailure = 1
-	ResultUsage   = 2
 )
 
 type Service interface {
@@ -33,57 +26,52 @@ type Service interface {
 	SupportsSetup() bool
 }
 
-// LineOutput commits complete diagnostic records immediately. Embedded line
-// breaks belong to the record; a trailing newline is not required.
-type LineOutput interface {
-	WriteLines(...string)
-}
-
 type Runner struct {
 	Service     Service
-	Output      LineOutput
+	Output      command.LineOutput
 	JSONOutput  io.Writer
 	Interactive func() bool
 }
 
-func (runner Runner) Run(ctx context.Context, command string, args []string) int {
+func networkUsage(cmd string) string {
+	usage := "Usage: " + command.Name + " " + cmd + " network [--json]"
+	if cmd == "setup" {
+		usage += " [--skip|--remove] [--non-interactive]"
+	}
+	return usage
+}
+
+func (runner Runner) Run(ctx context.Context, cmd string, args []string) command.ExitCode {
 	if runner.JSONOutput == nil {
 		runner.JSONOutput = io.Discard
 	}
-	options, err := parseNetworkArgs(command, args)
-	if err != nil {
-		usage := "Usage: wind " + command + " network [--json]"
-		if command == "setup" {
-			usage += " [--skip|--remove] [--non-interactive]"
-		}
-		runner.writeLine("%s", usage)
-		if errors.Is(err, flag.ErrHelp) {
-			return ResultOK
-		}
-		return ResultUsage
+	options, outcome := parseNetworkArgs(cmd, args)
+	if outcome != command.ParseReady {
+		runner.writeLine("%s", networkUsage(cmd))
+		return outcome.ExitCode()
 	}
 	if runner.Service == nil {
 		runner.Service = platformsetup.New()
 	}
-	if command == "doctor" {
+	if cmd == "doctor" {
 		report := runner.Service.Check(ctx)
 		runner.report(report, nil, options.jsonOutput)
 		if report.InspectionError != "" || report.PreferenceError != "" {
-			return ResultFailure
+			return command.ExitFailure
 		}
-		return ResultOK
+		return command.ExitOK
 	}
 	if options.skip {
 		if err := runner.Service.Skip(); err != nil {
 			runner.writeLine("Network preference: %v", err)
-			return ResultFailure
+			return command.ExitFailure
 		}
 		if options.jsonOutput {
 			fmt.Fprintln(runner.JSONOutput, `{"choice":"skip"}`)
 		} else {
 			runner.writeLine("Network setup reminders disabled.")
 		}
-		return ResultOK
+		return command.ExitOK
 	}
 	action := platformsetup.EnsureRules
 	if options.remove {
@@ -105,34 +93,42 @@ func (runner Runner) Run(ctx context.Context, command string, args []string) int
 	operation, report := runner.Service.Setup(ctx, action, allowElevation)
 	runner.report(report, &operation, options.jsonOutput)
 	if !operation.Succeeded() || report.PreferenceError != "" {
-		return ResultFailure
+		return command.ExitFailure
 	}
-	return ResultOK
+	return command.ExitOK
 }
 
 type networkOptions struct{ skip, remove, noninteractive, jsonOutput bool }
 
-func parseNetworkArgs(command string, args []string) (networkOptions, error) {
+func parseNetworkArgs(cmd string, args []string) (networkOptions, command.ParseOutcome) {
 	var options networkOptions
-	if len(args) == 0 || args[0] != "network" || (command != "doctor" && command != "setup") {
-		return options, errors.New("invalid network command")
+	if cmd != "doctor" && cmd != "setup" {
+		return options, command.ParseInvalidOptionSyntax
 	}
-	flags := flag.NewFlagSet(command+" network", flag.ContinueOnError)
-	flags.SetOutput(io.Discard)
-	flags.Usage = func() {}
+	if len(args) == 0 {
+		return options, command.ParseInvalidOptionSyntax
+	}
+	if command.IsHelpToken(args[0]) {
+		return options, command.ParseHelp
+	}
+	if args[0] != "network" {
+		return options, command.ParseInvalidOptionSyntax
+	}
+	flags := command.NewFlagSet(cmd + " network")
 	flags.BoolVar(&options.jsonOutput, "json", false, "write the executable rule inspection as JSON")
-	if command == "setup" {
+	if cmd == "setup" {
 		flags.BoolVar(&options.skip, "skip", false, "save the preference to stop reminders")
 		flags.BoolVar(&options.remove, "remove", false, "remove only this executable's WindShare rules")
 		flags.BoolVar(&options.noninteractive, "non-interactive", false, "never request elevation")
 	}
-	if err := flags.Parse(args[1:]); err != nil {
-		return options, err
+	outcome := command.ParseNoPositionals(flags, args[1:])
+	if outcome != command.ParseReady {
+		return options, outcome
 	}
-	if flags.NArg() != 0 || options.skip && options.remove {
-		return options, errors.New("invalid network options")
+	if options.skip && options.remove {
+		return options, command.ParseInvalidOptionValue
 	}
-	return options, nil
+	return options, command.ParseReady
 }
 
 func IsInteractive(input io.Reader, output io.Writer) bool {
@@ -166,14 +162,12 @@ func (runner Runner) report(report platformsetup.Report, operation *platformsetu
 		}
 	}
 	if report.SuggestSetup() {
-		runner.writeLine("Configure: wind setup network")
+		runner.writeLine("Configure: %s setup network", command.Name)
 	}
 }
 
 func (runner Runner) writeLine(format string, args ...any) {
-	if runner.Output != nil {
-		runner.Output.WriteLines(fmt.Sprintf(format, args...))
-	}
+	command.WriteLinef(runner.Output, format, args...)
 }
 
 func parenthesized(detail string) string {

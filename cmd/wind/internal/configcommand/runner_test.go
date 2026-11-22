@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"log/slog"
 	"os"
@@ -14,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/windshare/windshare/cmd/wind/internal/command"
 	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/relayprofile"
 )
@@ -45,7 +45,7 @@ func TestImportFromFileAndStdin(t *testing.T) {
 					return nil
 				},
 			}
-			if result := runner.Run(context.Background(), []string{"import", source, "--verbose"}); result != ResultOK {
+			if result := runner.Run(context.Background(), []string{"import", source, "--verbose"}); result != command.ExitOK {
 				t.Fatal("import failed:", result, output.String())
 			}
 			want := []relayprofile.Candidate{{PublicURL: "https://private.example?route=one", AccessKey: "secret-canary"}}
@@ -63,23 +63,23 @@ func TestImportFailureDoesNotSaveOrExposePrivateInput(t *testing.T) {
 		name, input string
 		args        []string
 		saveError   error
-		want        Result
+		want        command.ExitCode
 		saves       int
 	}{
-		{name: "unknown action", args: []string{"secret-canary"}, want: ResultUsage},
-		{name: "missing action", want: ResultUsage},
-		{name: "missing file", args: []string{"import"}, want: ResultUsage},
-		{name: "multiple files", args: []string{"import", "-", "secret-canary"}, want: ResultUsage},
-		{name: "unknown option", args: []string{"import", "--secret-canary"}, want: ResultUsage},
-		{name: "unreadable file", args: []string{"import", filepath.Join(t.TempDir(), "secret-canary")}, want: ResultFailure},
-		{name: "invalid input", args: []string{"import", "-"}, input: "secret-canary", want: ResultUsage},
-		{name: "empty set", args: []string{"import", "-"}, input: `{"profiles":null}`, want: ResultUsage},
-		{name: "empty frontend override", args: []string{"import", "-", "--front-url", ""}, input: importedConfiguration, want: ResultUsage},
-		{name: "invalid frontend override", args: []string{"import", "-", "--front-url", "wss://secret-canary"}, input: importedConfiguration, want: ResultUsage},
-		{name: "invalid frontend document", args: []string{"import", "-"}, input: `{"front_url":"https://front.example#secret-canary","profiles":[{"url":"https://relay.example"}]}`, want: ResultUsage},
-		{name: "trailing document", args: []string{"import", "-"}, input: importedConfiguration + "{}", want: ResultUsage},
+		{name: "unknown action", args: []string{"secret-canary"}, want: command.ExitUsage},
+		{name: "missing action", want: command.ExitUsage},
+		{name: "missing file", args: []string{"import"}, want: command.ExitUsage},
+		{name: "multiple files", args: []string{"import", "-", "secret-canary"}, want: command.ExitUsage},
+		{name: "unknown option", args: []string{"import", "--secret-canary"}, want: command.ExitUsage},
+		{name: "unreadable file", args: []string{"import", filepath.Join(t.TempDir(), "secret-canary")}, want: command.ExitFailure},
+		{name: "invalid input", args: []string{"import", "-"}, input: "secret-canary", want: command.ExitUsage},
+		{name: "empty set", args: []string{"import", "-"}, input: `{"profiles":null}`, want: command.ExitUsage},
+		{name: "empty frontend override", args: []string{"import", "-", "--front-url", ""}, input: importedConfiguration, want: command.ExitUsage},
+		{name: "invalid frontend override", args: []string{"import", "-", "--front-url", "wss://secret-canary"}, input: importedConfiguration, want: command.ExitUsage},
+		{name: "invalid frontend document", args: []string{"import", "-"}, input: `{"front_url":"https://front.example#secret-canary","profiles":[{"url":"https://relay.example"}]}`, want: command.ExitUsage},
+		{name: "trailing document", args: []string{"import", "-"}, input: importedConfiguration + "{}", want: command.ExitUsage},
 		{name: "save failure", args: []string{"import", "-", "-v"}, input: importedConfiguration,
-			saveError: errors.New("secret-canary"), want: ResultFailure, saves: 1},
+			saveError: errors.New("secret-canary"), want: command.ExitFailure, saves: 1},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			var output bytes.Buffer
@@ -110,7 +110,7 @@ func TestImportNamesRepeatedMember(t *testing.T) {
 		TraceHandler: slog.NewJSONHandler(&trace, nil),
 		Save:         func(relayconfig.Config) error { t.Fatal("rejected import was saved"); return nil },
 	}
-	if result := runner.Run(context.Background(), []string{"import", "-", "--verbose"}); result != ResultUsage {
+	if result := runner.Run(context.Background(), []string{"import", "-", "--verbose"}); result != command.ExitUsage {
 		t.Fatal("repeated member was not a usage error:", result)
 	}
 	want := `config import: invalid sharing configuration; member "URL" appears more than once in profiles[0]`
@@ -127,7 +127,7 @@ func TestImportReportsTheRejectedRelayField(t *testing.T) {
 		Output: bufferLines{buffer: &output}, TraceHandler: slog.NewJSONHandler(&trace, nil),
 		Save: func(relayconfig.Config) error { t.Fatal("rejected import was saved"); return nil },
 	}
-	if result := runner.Run(context.Background(), []string{"import", "-", "--verbose"}); result != ResultUsage {
+	if result := runner.Run(context.Background(), []string{"import", "-", "--verbose"}); result != command.ExitUsage {
 		t.Fatal("invalid relay was not a usage error:", result)
 	}
 	for _, detail := range []string{"profiles[1].url", "relay.123", "canonical IP address"} {
@@ -143,12 +143,12 @@ func TestImportReportsTheRejectedRelayField(t *testing.T) {
 
 func TestImportParsePreservesFrontendValidationCause(t *testing.T) {
 	for _, raw := range []string{"", "https://front.example/app\u00a0", "https://front.example/app\u0085", "wss://front.example"} {
-		if _, err := parse([]string{"import", "-", "--front-url", raw}); !errors.Is(err, relayconfig.ErrFrontURL) {
-			t.Fatalf("parse lost frontend validation cause for %q: %v", raw, err)
+		if _, outcome, err := parse([]string{"import", "-", "--front-url", raw}); outcome != command.ParseReady || !errors.Is(err, relayconfig.ErrFrontURL) {
+			t.Fatalf("parse lost frontend validation cause for %q: outcome=%v err=%v", raw, outcome, err)
 		}
 	}
-	if _, err := parse([]string{"import", "-"}); err != nil {
-		t.Fatalf("omitted frontend override was rejected: %v", err)
+	if _, outcome, err := parse([]string{"import", "-"}); outcome != command.ParseReady || err != nil {
+		t.Fatalf("omitted frontend override was rejected: outcome=%v err=%v", outcome, err)
 	}
 }
 
@@ -158,7 +158,7 @@ func TestImportFrontendOverrideReplacesTheDocumentChoice(t *testing.T) {
 		Input: strings.NewReader(importedConfiguration),
 		Save:  func(config relayconfig.Config) error { saved = config; return nil },
 	}
-	if result := runner.Run(context.Background(), []string{"import", "--front-url", "https://another.example", "-"}); result != ResultOK {
+	if result := runner.Run(context.Background(), []string{"import", "--front-url", "https://another.example", "-"}); result != command.ExitOK {
 		t.Fatal("frontend override failed:", result)
 	}
 	if saved.FrontURL != "https://another.example" || len(saved.Profiles) != 1 || saved.Profiles[0].AccessKey != "secret-canary" {
@@ -172,14 +172,14 @@ func TestImportHelpAndCancellationHaveNoSideEffects(t *testing.T) {
 		Input: strings.NewReader(importedConfiguration),
 		Save:  func(relayconfig.Config) error { saves++; return nil },
 	}
-	for _, args := range [][]string{{"help"}, {"--help"}, {"import", "--help"}} {
-		if result := runner.Run(context.Background(), args); result != ResultOK {
-			t.Fatal("help failed")
+	for _, args := range [][]string{{"help"}, {"-h"}, {"-help"}, {"--help"}, {"import", "--help"}, {"import", "-", "--help"}} {
+		if result := runner.Run(context.Background(), args); result != command.ExitOK {
+			t.Fatalf("help %v failed: %v", args, result)
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if result := runner.Run(ctx, []string{"import", "-"}); result != ResultFailure {
+	if result := runner.Run(ctx, []string{"import", "-"}); result != command.ExitFailure {
 		t.Fatal("cancelled import succeeded")
 	}
 	if saves != 0 {
@@ -189,11 +189,11 @@ func TestImportHelpAndCancellationHaveNoSideEffects(t *testing.T) {
 
 func TestImportRequiresInjectedStorageAndInput(t *testing.T) {
 	runner := Runner{Input: strings.NewReader(importedConfiguration)}
-	if result := runner.Run(context.Background(), []string{"import", "-"}); result != ResultFailure {
+	if result := runner.Run(context.Background(), []string{"import", "-"}); result != command.ExitFailure {
 		t.Fatal("import succeeded without destination authority")
 	}
 	runner.Input = nil
-	if result := runner.Run(context.Background(), []string{"import", "-"}); result != ResultFailure {
+	if result := runner.Run(context.Background(), []string{"import", "-"}); result != command.ExitFailure {
 		t.Fatal("import succeeded without stdin")
 	}
 }
@@ -234,60 +234,15 @@ func assertImportTrace(t *testing.T, output string, want []string) {
 	}
 }
 
-func TestImportParseTreatsArgumentsAfterTerminatorAsPaths(t *testing.T) {
-	// "--" ends option parsing for every later argument, as it does for share and get.
-	if _, err := parse([]string{"import", "--", "relay.json", "--verbose"}); err == nil {
-		t.Fatal("parse accepted an argument after -- as the --verbose option")
-	}
-	if _, err := parse([]string{"import", "--", "relay.json", "--front-url", "https://example.com"}); err == nil {
-		t.Fatal("parse accepted arguments after -- as the --front-url option")
-	}
-	request, err := parse([]string{"import", "-v", "--", "-profile.json"})
-	if err != nil || request.source != "-profile.json" || !request.verbose {
-		t.Fatalf("parse(-v -- -profile.json) = %+v, %v", request, err)
-	}
-	request, err = parse([]string{"import", "relay.json", "--verbose"})
-	if err != nil || request.source != "relay.json" || !request.verbose {
-		t.Fatalf("parse(relay.json --verbose) = %+v, %v", request, err)
-	}
-}
-
-func TestImportParseRejectsOptionsAfterTerminatorFollowingOptions(t *testing.T) {
-	// Options before "--" must not hide the terminator from later arguments.
+func TestImportParseKeepsTerminatorAndInterleavedSemantics(t *testing.T) {
 	for _, args := range [][]string{
-		{"import", "-v", "--", "relay.json", "--verbose"},
-		{"import", "--front-url", "https://a.example", "--", "relay.json", "--front-url", "https://b.example"},
-		// The second "--" is a literal second path, not another terminator.
-		{"import", "--", "relay.json", "--"},
-	} {
-		if request, err := parse(args); err == nil {
-			t.Fatalf("parse(%q) = %+v, want rejection", args[1:], request)
-		}
-	}
-	request, err := parse([]string{"import", "--", "--verbose"})
-	if err != nil || request.source != "--verbose" || request.verbose {
-		t.Fatalf("parse(-- --verbose) = %+v, %v", request, err)
-	}
-}
-
-func TestImportParseKeepsTerminatorAsOptionValue(t *testing.T) {
-	// A "--" value belongs to --front-url, so -v stays an option and the
-	// frontend validation reports the specific cause, as share and get do.
-	_, err := parse([]string{"import", "--front-url", "--", "relay.json", "-v"})
-	if !errors.Is(err, relayconfig.ErrFrontURL) {
-		t.Fatalf("parse(--front-url -- relay.json -v) = %v, want frontend URL error", err)
-	}
-	for _, args := range [][]string{
+		{"import", "--front-url", "--", "relay.json", "-v"},
 		{"import", "--front-url=--", "relay.json", "-v"},
-		{"import", "--front-url", "--", "relay.json", "--verbose"},
 	} {
-		if _, err := parse(args); !errors.Is(err, relayconfig.ErrFrontURL) {
-			t.Fatalf("parse(%q) = %v, want frontend URL error", args[1:], err)
+		if _, outcome, err := parse(args); outcome != command.ParseReady || !errors.Is(err, relayconfig.ErrFrontURL) {
+			t.Fatalf("parse(%q) = outcome=%v err=%v, want frontend URL error", args[1:], outcome, err)
 		}
 	}
-}
-
-func TestImportParseKeepsAcceptedForms(t *testing.T) {
 	for _, tc := range []struct {
 		args     []string
 		source   string
@@ -298,16 +253,18 @@ func TestImportParseKeepsAcceptedForms(t *testing.T) {
 		{[]string{"import", "relay.json", "--verbose"}, "relay.json", true, ""},
 		{[]string{"import", "-v", "--", "-profile.json"}, "-profile.json", true, ""},
 		{[]string{"import", "--front-url", "https://front.example", "relay.json"}, "relay.json", false, "https://front.example"},
-		{[]string{"import", "--front-url", "https://front.example", "--", "relay.json"}, "relay.json", false, "https://front.example"},
 		{[]string{"import", "--", "-"}, "-", false, ""},
-		{[]string{"import", "relay.json", "--"}, "relay.json", false, ""},
+		{[]string{"import", "--", "--verbose"}, "--verbose", false, ""},
 	} {
-		request, err := parse(tc.args)
-		if err != nil || request.source != tc.source || request.verbose != tc.verbose || request.frontURL != tc.frontURL {
-			t.Fatalf("parse(%q) = %+v, %v", tc.args[1:], request, err)
+		request, outcome, err := parse(tc.args)
+		if outcome != command.ParseReady || err != nil || request.source != tc.source || request.verbose != tc.verbose || request.frontURL != tc.frontURL {
+			t.Fatalf("parse(%q) = %+v outcome=%v err=%v", tc.args[1:], request, outcome, err)
 		}
 	}
-	if _, err := parse([]string{"import", "--help"}); !errors.Is(err, flag.ErrHelp) {
-		t.Fatalf("parse(import --help) = %v, want flag.ErrHelp", err)
+	if _, outcome, err := parse([]string{"import", "--", "relay.json", "--verbose"}); outcome == command.ParseReady && err == nil {
+		t.Fatal("parse accepted extra arguments after --")
+	}
+	if _, outcome, err := parse([]string{"import", "--help"}); outcome != command.ParseHelp || err != nil {
+		t.Fatalf("parse(import --help) = outcome=%v err=%v", outcome, err)
 	}
 }

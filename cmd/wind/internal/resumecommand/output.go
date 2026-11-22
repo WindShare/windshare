@@ -3,11 +3,13 @@ package resumecommand
 import (
 	"errors"
 	"io"
+
+	"github.com/windshare/windshare/cmd/wind/internal/command"
 )
 
 type streamResumeOutput struct {
 	result io.Writer
-	usage  LineOutput
+	usage  command.LineOutput
 }
 
 func (output streamResumeOutput) WriteResult(value string) error {

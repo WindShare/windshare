@@ -11,6 +11,10 @@ func (a *App) runResume(ctx context.Context, args []string) (code int) {
 	if len(args) > 0 && args[0] == "retry" {
 		return a.runReceive(ctx, receiveResumeRetry, args[1:])
 	}
+	request, exit, ready := resumecommand.Parse(args, a.stderrLines())
+	if !ready {
+		return exit.Int()
+	}
 	closeApp, err := a.ensureApplication(diagnostics.Sink{})
 	if err != nil {
 		return ExitFailure
@@ -26,15 +30,5 @@ func (a *App) runResume(ctx context.Context, args []string) (code int) {
 		DiagnosticOutput:  a.stderrLines(),
 		Logf:              a.writeCompleteLine,
 	})
-	switch runner.Run(ctx, args) {
-	case resumecommand.ResultOK:
-		return ExitOK
-	case resumecommand.ResultUsage:
-		return ExitUsage
-	case resumecommand.ResultFailure:
-		return ExitFailure
-	default:
-		a.writeCompleteLine("resume: command returned an invalid result")
-		return ExitFailure
-	}
+	return runner.Execute(ctx, request).Int()
 }

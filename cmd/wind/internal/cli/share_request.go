@@ -7,6 +7,7 @@ import (
 	"math"
 	"slices"
 
+	"github.com/windshare/windshare/cmd/wind/internal/command"
 	"github.com/windshare/windshare/cmd/wind/internal/humanoutput"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/engine/relayconfig"
@@ -22,7 +23,7 @@ type shareRequest struct {
 }
 
 func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcome) {
-	flags := a.newFlagSet("share")
+	flags := command.NewFlagSet("share")
 	var relayURLs []string
 	flags.Func("relay", "override saved relay selection; repeat to use multiple relays", func(value string) error {
 		if value == "" {
@@ -48,7 +49,7 @@ func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcom
 		a.writeCompleteLine("share: observation options are unavailable")
 		return shareRequest{}, requestParseInternalFailure
 	}
-	paths, flagParse := parseInterleaved(flags, args)
+	paths, flagParse := command.ParseInterleaved(flags, args)
 	if parse := a.projectFlagParse("share", flags, "share <path...> [options]", flagParse); parse != requestParseReady {
 		return shareRequest{}, parse
 	}

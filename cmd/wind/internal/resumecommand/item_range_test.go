@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/windshare/windshare/cmd/wind/internal/command"
 )
 
 // Item ordinals beyond the platform int range must be rejected while parsing.
@@ -15,7 +17,7 @@ func TestResumeDiscardRejectsItemsBeyondIntRange(t *testing.T) {
 	maxInt := strconv.FormatUint(uint64(^uint(0)>>1), 10)
 	app, _, _ := newResumeTestApp()
 	request, parse := app.parser().ParseDiscard([]string{"-o", root, "--item", maxInt})
-	if parse != resumeRequestReady || strconv.Itoa(request.itemNumber) != maxInt {
+	if parse != command.ParseReady || strconv.Itoa(request.itemNumber) != maxInt {
 		t.Fatalf("largest int item request=%+v parse=%d", request, parse)
 	}
 
@@ -25,7 +27,7 @@ func TestResumeDiscardRejectsItemsBeyondIntRange(t *testing.T) {
 	} {
 		t.Run(item, func(t *testing.T) {
 			request, parse := app.parser().ParseDiscard([]string{"-o", root, "--item", item})
-			if parse != resumeRequestInvalid {
+			if parse.ExitCode() != command.ExitUsage {
 				t.Fatalf("out-of-range item was accepted as %d (parse=%d)", request.itemNumber, parse)
 			}
 
@@ -39,7 +41,7 @@ func TestResumeDiscardRejectsItemsBeyondIntRange(t *testing.T) {
 			runApp, stdout, stderr := newResumeTestApp()
 			runApp.resumeInventories = opener
 			result := runApp.Run(context.Background(), []string{"resume", "discard", "-o", root, "--item", item})
-			if result != ResultUsage || opener.calls != 0 || stdout.Len() != 0 {
+			if result != command.ExitUsage || opener.calls != 0 || stdout.Len() != 0 {
 				t.Fatalf("result=%d calls=%d stdout=%q stderr=%q", result, opener.calls, stdout.String(), stderr.String())
 			}
 			if strings.Contains(stderr.String(), "--item -") {

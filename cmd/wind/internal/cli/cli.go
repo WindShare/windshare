@@ -5,17 +5,15 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"os/signal"
-	"strings"
 	"time"
 
 	"github.com/windshare/windshare/cmd/wind/internal/accountcommand"
-	"github.com/windshare/windshare/cmd/wind/internal/commandmeta"
+	"github.com/windshare/windshare/cmd/wind/internal/command"
 	"github.com/windshare/windshare/cmd/wind/internal/configcommand"
 	"github.com/windshare/windshare/cmd/wind/internal/networkcommand"
 	"github.com/windshare/windshare/core/diagnostics"
@@ -27,17 +25,17 @@ import (
 )
 
 // 退出码语义(§6.9 工程要求):脚本据此区分"该重试"(网络)与"该改命令"
-// (用户错误)与"该重新分享"(漂移)。
+// (用户错误)与"该重新分享"(漂移)。唯一定义在 internal/command。
 const (
-	ExitOK      = 0
-	ExitFailure = 1 // 运行期失败:传输中断、本地 IO、内部错误
-	ExitUsage   = 2 // 用户错误:参数、链接/密钥、路径选择、清单超限
-	ExitNetwork = 3 // 网络/中转不可达或被中转拒绝
-	ExitDrift   = 4 // 快照漂移中止:分享期间文件被修改(§6.3)
+	ExitOK      = int(command.ExitOK)
+	ExitFailure = int(command.ExitFailure)
+	ExitUsage   = int(command.ExitUsage)
+	ExitNetwork = int(command.ExitNetwork)
+	ExitDrift   = int(command.ExitDrift)
 )
 
 const usageText = `Usage:
-  ` + commandmeta.Name + ` share <path...> [--relay <url>] [--block-size <bytes>] [--split-key] [--front-url <url>] [--browser-trace] [-v|--verbose] [--trace <file>|--trace-dir <directory>]
+  ` + command.Name + ` share <path...> [--relay <url>] [--block-size <bytes>] [--split-key] [--front-url <url>] [--browser-trace] [-v|--verbose] [--trace <file>|--trace-dir <directory>]
       Commit selected roots, wait for relay registration, print a suite-02 link, and scan descendants on demand.
       --split-key prints a bare link and key string for delivery over separate channels.
       Sharing defaults load from the user config directory's windshare/config.json (or WINDSHARE_CONFIG).
@@ -45,8 +43,8 @@ const usageText = `Usage:
       --configured-relays-only disables built-in candidates for this share.
       --relay overrides the saved candidate set, retaining credentials for matching addresses.
 
-  ` + commandmeta.Name + ` get <link> [--only <path>]... [--key <key-string>] [--connectivity auto|relay-only|p2p-only] [-v|--verbose] [--trace <file>|--trace-dir <directory>]
-  ` + commandmeta.Name + ` get -o <directory> <link> [--only <path>]... [--key <key-string>] [--connectivity auto|relay-only|p2p-only] [-v|--verbose] [--trace <file>|--trace-dir <directory>]
+  ` + command.Name + ` get <link> [--only <path>]... [--key <key-string>] [--connectivity auto|relay-only|p2p-only] [-v|--verbose] [--trace <file>|--trace-dir <directory>]
+  ` + command.Name + ` get -o <directory> <link> [--only <path>]... [--key <key-string>] [--connectivity auto|relay-only|p2p-only] [-v|--verbose] [--trace <file>|--trace-dir <directory>]
       Save one ordinary named result inside the output container; -o defaults to the current directory.
       Compatible active downloads reuse their frozen result name and verified progress.
       Temporary outages reconnect automatically; --wait-timeout <duration> limits initial or each later connection wait.
@@ -57,32 +55,32 @@ const usageText = `Usage:
       -v and --verbose show static diagnostic milestones; --trace creates one exact file and --trace-dir generates one run-specific file.
       Trace targets are mutually exclusive; '-' is unsupported because trace data never shares a human or capability stream.
 
-  ` + commandmeta.Name + ` relay add <url> [--access-key <key>] [--name <device>] [--no-browser]
-  ` + commandmeta.Name + ` relay onboard <url> [--name <device>] [--no-browser]
+  ` + command.Name + ` relay add <url> [--access-key <key>] [--name <device>] [--no-browser]
+  ` + command.Name + ` relay onboard <url> [--name <device>] [--no-browser]
       Pair this device in the browser. New relays are enabled when a slot is available.
-  ` + commandmeta.Name + ` relay list | mode <automatic|selected> | enable|disable <url> | frontend <url|default>
-  ` + commandmeta.Name + ` relay cancel <url>
+  ` + command.Name + ` relay list | mode <automatic|selected> | enable|disable <url> | frontend <url|default>
+  ` + command.Name + ` relay cancel <url>
       Cancel a pending enrollment.
 
-  ` + commandmeta.Name + ` account status [--json] | register | refresh
-  ` + commandmeta.Name + ` account login <username> | password <username> [--password-stdin]
-  ` + commandmeta.Name + ` account email <address> | verify <code> | revoke <credential>
+  ` + command.Name + ` account status [--json] | register | refresh
+  ` + command.Name + ` account login <username> | password <username> [--password-stdin]
+  ` + command.Name + ` account email <address> | verify <code> | revoke <credential>
       Manage the account shared with the desktop app. Login applies to new shares.
 
-  ` + commandmeta.Name + ` config import <file|-> [--front-url <url>] [-v|--verbose]
+  ` + command.Name + ` config import <file|-> [--front-url <url>] [-v|--verbose]
       Validate and replace sharing defaults. --front-url saves the website address; '-' reads JSON from stdin.
 
-  ` + commandmeta.Name + ` doctor network [--json]
-  ` + commandmeta.Name + ` setup network [--skip|--remove] [--non-interactive] [--json]
+  ` + command.Name + ` doctor network [--json]
+  ` + command.Name + ` setup network [--skip|--remove] [--non-interactive] [--json]
 
-  ` + commandmeta.Name + ` resume retry [-o <directory>] [--only <path>] <link>
+  ` + command.Name + ` resume retry [-o <directory>] [--only <path>] <link>
       Continue an existing download with its original link and selection.
 
-  ` + commandmeta.Name + ` resume list -o <directory>
+  ` + command.Name + ` resume list -o <directory>
       List destination-owned incomplete, resumable, cleanup-pending, and attention state.
       Locally ambiguous children are reported as item-blocked.
 
-  ` + commandmeta.Name + ` resume discard -o <directory> --item <N>
+  ` + command.Name + ` resume discard -o <directory> --item <N>
       Re-list and exactly confirm one operation on a terminal before discarding identity-matched unfinished state.
       Published files and unknown objects are always preserved.
 `
@@ -144,63 +142,73 @@ func Main() int {
 	return code
 }
 
-// Run 分派子命令。stdlib flag 不认子命令,这里手工分派(§6.9 工程要求:
-// 不引 CLI 框架)。
-func (a *App) Run(ctx context.Context, args []string) (code int) {
-	// Local configuration does not need a transfer engine or network resources.
-	if len(args) != 0 && (args[0] == "doctor" || args[0] == "setup") {
-		service := a.networkSetup
-		if service == nil {
-			service = platformsetup.New()
-		}
-		runner := networkcommand.Runner{Service: service, Output: a.stderrLines(), JSONOutput: a.Stdout,
-			Interactive: func() bool { return networkcommand.IsInteractive(a.Stdin, a.Stderr) }}
-		return runner.Run(ctx, args[0], args[1:])
-	}
-	if len(args) != 0 && args[0] == "config" {
-		output := a.stderrLines()
-		runner := configcommand.Runner{Input: a.Stdin, Output: output, TraceHandler: output.jsonHandler(), Save: a.saveShareConfig}
-		switch runner.Run(ctx, args[1:]) {
-		case configcommand.ResultOK:
-			return ExitOK
-		case configcommand.ResultUsage:
-			return ExitUsage
-		default:
-			return ExitFailure
-		}
-	}
-	if len(args) != 0 && args[0] == "account" && accountcommand.IsHelp(args[1:]) {
-		a.stderrLines().WriteLines(accountcommand.Usage)
-		return ExitOK
-	}
+// Run dispatches top-level commands. Every command parses arguments and answers
+// help requests before acquiring transfer-engine or OS authority.
+func (a *App) Run(ctx context.Context, args []string) int {
 	if len(args) == 0 {
 		a.usage()
 		return ExitUsage
 	}
+	if command.IsHelpToken(args[0]) {
+		a.usage()
+		return ExitOK
+	}
 	switch args[0] {
-	case "account":
-		return a.runAccount(ctx, args[1:])
-	case "relay":
-		return a.runRelay(ctx, args[1:])
 	case "share":
 		return a.runShare(ctx, args[1:])
 	case "get":
 		return a.runGet(ctx, args[1:])
+	case "relay":
+		return a.runRelay(ctx, args[1:])
+	case "account":
+		return a.runAccount(ctx, args[1:])
+	case "config":
+		return a.runConfig(ctx, args[1:])
+	case "doctor", "setup":
+		return a.runNetwork(ctx, args[0], args[1:])
 	case "resume":
 		return a.runResume(ctx, args[1:])
-	case "help", "-h", "--help":
-		a.usage()
-		return ExitOK
 	default:
 		// A command token is untrusted input and can itself be a capability or
 		// private credential accidentally pasted in the wrong position.
-		a.writeCompleteLine("%s: unknown command", commandmeta.Name)
+		a.writeCompleteLine("%s: unknown command", command.Name)
 		a.usage()
 		return ExitUsage
 	}
 }
 
+func (a *App) runNetwork(ctx context.Context, cmd string, args []string) int {
+	service := a.networkSetup
+	if service == nil {
+		service = platformsetup.New()
+	}
+	runner := networkcommand.Runner{
+		Service:    service,
+		Output:     a.stderrLines(),
+		JSONOutput: a.Stdout,
+		Interactive: func() bool {
+			return networkcommand.IsInteractive(a.Stdin, a.Stderr)
+		},
+	}
+	return runner.Run(ctx, cmd, args).Int()
+}
+
+func (a *App) runConfig(ctx context.Context, args []string) int {
+	output := a.stderrLines()
+	runner := configcommand.Runner{
+		Input:        a.Stdin,
+		Output:       output,
+		TraceHandler: output.jsonHandler(),
+		Save:         a.saveShareConfig,
+	}
+	return runner.Run(ctx, args).Int()
+}
+
 func (a *App) runAccount(ctx context.Context, args []string) (code int) {
+	request, exit, ready := accountcommand.Parse(args, a.stderrLines())
+	if !ready {
+		return exit.Int()
+	}
 	closeApp, err := a.ensureApplication(diagnostics.Sink{})
 	if err != nil {
 		return ExitFailure
@@ -210,14 +218,7 @@ func (a *App) runAccount(ctx context.Context, args []string) (code int) {
 	if service := a.application.Accounts(); service != nil {
 		runner.Service = service
 	}
-	switch runner.Run(ctx, args) {
-	case accountcommand.ResultOK:
-		return ExitOK
-	case accountcommand.ResultUsage:
-		return ExitUsage
-	default:
-		return ExitFailure
-	}
+	return runner.Execute(ctx, request).Int()
 }
 
 // ensureApplication constructs a command-scoped engine after flags and trace
@@ -230,13 +231,13 @@ func (a *App) ensureApplication(diagnosticSink diagnostics.Sink) (func(*int), er
 	}
 	application, err := a.newApplication(diagnosticSink)
 	if err != nil {
-		a.writeCompleteLine("%s: initialize application: %v", commandmeta.Name, err)
+		a.writeCompleteLine("%s: initialize application: %v", command.Name, err)
 		return nil, err
 	}
 	a.application = application
 	return func(code *int) {
 		if err := application.Close(context.Background()); err != nil {
-			a.writeCompleteLine("%s: close application: %v", commandmeta.Name, err)
+			a.writeCompleteLine("%s: close application: %v", command.Name, err)
 			if code != nil && *code == ExitOK {
 				*code = ExitFailure
 			}
@@ -314,191 +315,23 @@ func (outcome requestParseOutcome) exitCode() int {
 	}
 }
 
-type flagParseOutcome uint8
-
-const (
-	flagParseReady flagParseOutcome = iota
-	flagParseHelp
-	flagParseUnknownOption
-	flagParseMissingOptionValue
-	flagParseInvalidOptionValue
-	flagParseInvalidOptionSyntax
-	flagParseInternalFailure
-)
-
-func flagParseDiagnostic(outcome flagParseOutcome) string {
-	switch outcome {
-	case flagParseUnknownOption:
-		return "unknown option"
-	case flagParseMissingOptionValue:
-		return "option value is required"
-	case flagParseInvalidOptionValue:
-		return "option value is invalid"
-	case flagParseInvalidOptionSyntax:
-		return "option syntax is invalid"
-	default:
-		return "command arguments could not be parsed"
-	}
-}
-
-// newFlagSet gives the standard parser a discard-only sink because its errors
-// quote rejected values. Human output is produced later from the closed
-// flagParseOutcome classification, never from error text.
-func (a *App) newFlagSet(name string) *flag.FlagSet {
-	fs := flag.NewFlagSet(name, flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	fs.Usage = func() {}
-	return fs
-}
-
-// writeFlagHelp renders only registration-time metadata. PrintDefaults uses
-// DefValue rather than the parsed Value, so help after a positional capability
-// cannot reflect that capability back to the terminal.
-func (a *App) writeFlagHelp(fs *flag.FlagSet, synopsis string) {
-	var help strings.Builder
-	fmt.Fprintf(&help, "Usage: %s %s\n", commandmeta.Name, synopsis)
-	if defaults := flagDefaults(fs); defaults != "" {
-		help.WriteString("\nOptions:\n")
-		help.WriteString(defaults)
-	}
-	a.stderrLines().WriteLines(help.String())
-}
-
-// flagDefaults renders PrintDefaults for TerminalCanvas. The flag package
-// aligns usage text with tabs, which the canvas would show as literal `\t`
-// escapes, so layout tabs become the spaces a terminal would have displayed.
-func flagDefaults(fs *flag.FlagSet) string {
-	output := fs.Output()
-	var defaults strings.Builder
-	fs.SetOutput(&defaults)
-	fs.PrintDefaults()
-	fs.SetOutput(output)
-	return expandTabStops(defaults.String())
-}
-
-func expandTabStops(text string) string {
-	const tabWidth = 8
-	var expanded strings.Builder
-	expanded.Grow(len(text))
-	column := 0
-	for _, character := range text {
-		switch character {
-		case '\t':
-			padding := tabWidth - column%tabWidth
-			expanded.WriteString(strings.Repeat(" ", padding))
-			column += padding
-		case '\n':
-			expanded.WriteRune(character)
-			column = 0
-		default:
-			expanded.WriteRune(character)
-			column++
-		}
-	}
-	return expanded.String()
-}
-
 func (a *App) projectFlagParse(
-	command string,
+	name string,
 	fs *flag.FlagSet,
 	synopsis string,
-	outcome flagParseOutcome,
+	outcome command.ParseOutcome,
 ) requestParseOutcome {
 	switch outcome {
-	case flagParseReady:
+	case command.ParseReady:
 		return requestParseReady
-	case flagParseHelp:
-		a.writeFlagHelp(fs, synopsis)
+	case command.ParseHelp:
+		command.WriteFlagHelp(a.stderrLines(), fs, synopsis)
 		return requestParseHelp
-	case flagParseInternalFailure:
-		a.writeCompleteLine("%s: command arguments could not be parsed", command)
+	case command.ParseInternalFailure:
+		a.writeCompleteLine("%s: command arguments could not be parsed", name)
 		return requestParseInternalFailure
 	default:
-		a.writeCompleteLine("%s: %s", command, flagParseDiagnostic(outcome))
+		a.writeCompleteLine("%s: %s", name, outcome.Diagnostic())
 		return requestParseUsageFailure
 	}
-}
-
-// parseInterleaved preserves the flag package's individual flag semantics
-// while treating positionals as collectable between options. Parsing one
-// occurrence at a time lets the boundary classify a failure from option
-// structure without examining the standard library's value-bearing error.
-func parseInterleaved(fs *flag.FlagSet, args []string) ([]string, flagParseOutcome) {
-	if fs == nil {
-		return nil, flagParseInternalFailure
-	}
-	positionals := make([]string, 0, len(args))
-	for len(args) > 0 {
-		if args[0] == "--" {
-			return append(positionals, args[1:]...), flagParseReady
-		}
-		occurrence := inspectFlagOccurrence(fs, args)
-		if occurrence.positional {
-			positionals = append(positionals, args[0])
-			args = args[1:]
-			continue
-		}
-		err := fs.Parse(args[:occurrence.width])
-		if errors.Is(err, flag.ErrHelp) {
-			return nil, flagParseHelp
-		}
-		if err != nil {
-			return nil, occurrence.failure
-		}
-		args = args[occurrence.width:]
-	}
-	return positionals, flagParseReady
-}
-
-type flagOccurrence struct {
-	width      int
-	failure    flagParseOutcome
-	positional bool
-}
-
-type boolFlag interface {
-	IsBoolFlag() bool
-}
-
-func inspectFlagOccurrence(fs *flag.FlagSet, args []string) flagOccurrence {
-	argument := args[0]
-	if len(argument) < 2 || argument[0] != '-' || argument == "-" {
-		return flagOccurrence{width: 1, positional: true}
-	}
-	numMinuses := 1
-	if argument[1] == '-' {
-		numMinuses++
-		if len(argument) == numMinuses {
-			return flagOccurrence{width: 1, positional: true}
-		}
-	}
-	nameAndValue := argument[numMinuses:]
-	if nameAndValue == "" || nameAndValue[0] == '-' || nameAndValue[0] == '=' {
-		return flagOccurrence{width: 1, failure: flagParseInvalidOptionSyntax}
-	}
-	name, _, hasValue := strings.Cut(nameAndValue, "=")
-	registered := fs.Lookup(name)
-	if registered == nil {
-		return flagOccurrence{width: 1, failure: flagParseUnknownOption}
-	}
-	if candidate, ok := registered.Value.(boolFlag); ok && candidate.IsBoolFlag() {
-		return flagOccurrence{width: 1, failure: flagParseInvalidOptionValue}
-	}
-	if hasValue {
-		return flagOccurrence{width: 1, failure: flagParseInvalidOptionValue}
-	}
-	if len(args) == 1 {
-		return flagOccurrence{width: 1, failure: flagParseMissingOptionValue}
-	}
-	return flagOccurrence{width: 2, failure: flagParseInvalidOptionValue}
-}
-
-// repeatedFlag 收集可重复 flag(--only a --only b)。
-type repeatedFlag []string
-
-func (f *repeatedFlag) String() string { return strings.Join(*f, ",") }
-
-func (f *repeatedFlag) Set(v string) error {
-	*f = append(*f, v)
-	return nil
 }

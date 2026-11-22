@@ -5,16 +5,12 @@ import (
 	"io"
 
 	"github.com/windshare/windshare/adapters/filesystem"
+	"github.com/windshare/windshare/cmd/wind/internal/command"
 	"github.com/windshare/windshare/engine"
 )
 
 type recoveryInspector interface {
 	InspectRecovery(context.Context, engine.RecoveryAuthority) (*engine.RecoveryInventory, error)
-}
-
-// LineOutput commits complete diagnostic records before returning, including prompts.
-type LineOutput interface {
-	WriteLines(...string)
 }
 
 // FilesystemConfig keeps raw terminal detection separate from diagnostic records;
@@ -24,7 +20,7 @@ type FilesystemConfig struct {
 	Input             io.Reader
 	Output            io.Writer
 	RawTerminalOutput io.Writer
-	DiagnosticOutput  LineOutput
+	DiagnosticOutput  command.LineOutput
 	Logf              func(string, ...any)
 }
 

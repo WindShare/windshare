@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/windshare/windshare/cmd/wind/internal/command"
 	"github.com/windshare/windshare/cmd/wind/internal/humanoutput"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -23,11 +24,10 @@ import (
 )
 
 func TestParseInterleavedV2Flags(t *testing.T) {
-	app := testApp("")
-	flags := app.newFlagSet("share")
+	flags := command.NewFlagSet("share")
 	relay := flags.String("relay", "", "")
-	positionals, outcome := parseInterleaved(flags, []string{"first", "--relay", "ws://relay.example", "second"})
-	if outcome != flagParseReady || *relay != "ws://relay.example" || strings.Join(positionals, ",") != "first,second" {
+	positionals, outcome := command.ParseInterleaved(flags, []string{"first", "--relay", "ws://relay.example", "second"})
+	if outcome != command.ParseReady || *relay != "ws://relay.example" || strings.Join(positionals, ",") != "first,second" {
 		t.Fatalf("parse result = %v %q %v", positionals, *relay, outcome)
 	}
 }

@@ -9,24 +9,31 @@ import (
 	"os/exec"
 	"runtime"
 
-	"github.com/windshare/windshare/cmd/wind/internal/commandmeta"
+	"github.com/windshare/windshare/cmd/wind/internal/command"
 	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/relaysetup"
 )
 
-const relayUsage = "Usage: wind relay add <url> [--access-key <key>] [--name <device>] [--no-browser] | wind relay onboard <url> [--name <device>] [--no-browser] | wind relay cancel <url> | wind relay list | wind relay mode <automatic|selected> | wind relay enable|disable|remove <url> | wind relay frontend <url|default>"
+const relayUsage = "Usage: " + command.Name + " relay add <url> [--access-key <key>] [--name <device>] [--no-browser] | " +
+	command.Name + " relay onboard <url> [--name <device>] [--no-browser] | " +
+	command.Name + " relay cancel <url> | " +
+	command.Name + " relay list | " +
+	command.Name + " relay mode <automatic|selected> | " +
+	command.Name + " relay enable|disable|remove <url> | " +
+	command.Name + " relay frontend <url|default>"
 
 func (app *App) runRelay(ctx context.Context, args []string) (code int) {
 	if len(args) == 0 {
 		app.writeCompleteLine("%s", relayUsage)
 		return ExitUsage
 	}
-	switch args[0] {
-	case "help", "-h", "--help":
+	if command.IsHelpToken(args[0]) {
 		app.writeCompleteLine("%s", relayUsage)
 		return ExitOK
+	}
+	switch args[0] {
 	case "add", "onboard":
 		request, outcome := app.parseRelaySetupRequest(args[0], args[1:])
 		if outcome != requestParseReady {
@@ -36,7 +43,7 @@ func (app *App) runRelay(ctx context.Context, args []string) (code int) {
 	case "list", "mode", "enable", "disable", "remove", "frontend":
 		return app.relayPreferences(ctx, args)
 	case "cancel":
-		flags := app.newFlagSet("relay cancel")
+		flags := command.NewFlagSet("relay cancel")
 		address, outcome := app.parseRelayURL(flags, "relay cancel <url>", args[1:])
 		if outcome != requestParseReady {
 			return outcome.exitCode()
@@ -64,31 +71,31 @@ type relaySetupCommand struct {
 }
 
 func (app *App) parseRelaySetupRequest(operation string, args []string) (relaySetupCommand, requestParseOutcome) {
-	command := relaySetupCommand{request: engine.RelaySetupRequest{Operation: relaysetup.AddProfile}}
+	cmd := relaySetupCommand{request: engine.RelaySetupRequest{Operation: relaysetup.AddProfile}}
 	if operation == "onboard" {
-		command.request.Operation = relaysetup.AuthorizeDevice
+		cmd.request.Operation = relaysetup.AuthorizeDevice
 	}
-	flags := app.newFlagSet("relay " + operation)
+	flags := command.NewFlagSet("relay " + operation)
 	if operation == "add" {
-		flags.StringVar(&command.request.AccessKey, "access-key", "", "merge this service key into the saved relay")
+		flags.StringVar(&cmd.request.AccessKey, "access-key", "", "merge this service key into the saved relay")
 	}
 	hostname, _ := os.Hostname()
-	flags.BoolVar(&command.noBrowser, "no-browser", false, "display the approval URL without opening a browser")
-	flags.StringVar(&command.request.DeviceName, "name", relaysetup.DefaultDeviceName(hostname), "device name displayed for browser approval")
+	flags.BoolVar(&cmd.noBrowser, "no-browser", false, "display the approval URL without opening a browser")
+	flags.StringVar(&cmd.request.DeviceName, "name", relaysetup.DefaultDeviceName(hostname), "device name displayed for browser approval")
 	address, outcome := app.parseRelayURL(flags, flags.Name()+" <url> [options]", args)
 	if outcome != requestParseReady {
 		return relaySetupCommand{}, outcome
 	}
-	if err := relaysetup.ValidateDeviceName(command.request.DeviceName); err != nil {
+	if err := relaysetup.ValidateDeviceName(cmd.request.DeviceName); err != nil {
 		app.writeRelaySetupFailure(err)
 		return relaySetupCommand{}, requestParseUsageFailure
 	}
-	command.request.URL = address
-	return command, requestParseReady
+	cmd.request.URL = address
+	return cmd, requestParseReady
 }
 
 func (app *App) parseRelayURL(flags *flag.FlagSet, synopsis string, args []string) (string, requestParseOutcome) {
-	positionals, flagParse := parseInterleaved(flags, args)
+	positionals, flagParse := command.ParseInterleaved(flags, args)
 	if outcome := app.projectFlagParse(flags.Name(), flags, synopsis, flagParse); outcome != requestParseReady {
 		return "", outcome
 	}
@@ -192,13 +199,13 @@ func (app *App) writeInterruptedRelaySetupHint(err error) {
 	case relaysetup.RecoveryRestart:
 		app.writeCompleteLine("No pending setup was recorded; run the same command to start again.")
 	case relaysetup.RecoveryContinue:
-		app.writeCompleteLine("Setup was saved. Run the same command to continue, or %s relay cancel %s.", commandmeta.Name, recovery.RelayURL)
+		app.writeCompleteLine("Setup was saved. Run the same command to continue, or %s relay cancel %s.", command.Name, recovery.RelayURL)
 	case relaysetup.RecoveryCancel:
-		app.writeCompleteLine("Cancel the saved setup with %s relay cancel %s, then run the same command again.", commandmeta.Name, recovery.RelayURL)
+		app.writeCompleteLine("Cancel the saved setup with %s relay cancel %s, then run the same command again.", command.Name, recovery.RelayURL)
 	case relaysetup.RecoveryRetryCancel:
-		app.writeCompleteLine("Cancellation is unfinished; run %s relay cancel %s to finish it.", commandmeta.Name, recovery.RelayURL)
+		app.writeCompleteLine("Cancellation is unfinished; run %s relay cancel %s to finish it.", command.Name, recovery.RelayURL)
 	case relaysetup.RecoveryBlocked:
-		app.writeCompleteLine("Finish the pending setup for %s, or run %s relay cancel %s.", recovery.RelayURL, commandmeta.Name, recovery.RelayURL)
+		app.writeCompleteLine("Finish the pending setup for %s, or run %s relay cancel %s.", recovery.RelayURL, command.Name, recovery.RelayURL)
 	default:
 		app.writeCompleteLine("Setup state could not be confirmed.")
 	}

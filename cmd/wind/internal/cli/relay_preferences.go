@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 
+	"github.com/windshare/windshare/cmd/wind/internal/command"
 	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/relaysetup"
 )
@@ -21,25 +22,56 @@ func relayEnabledLabel(enabled bool) string {
 	return "disabled"
 }
 
+func (app *App) parseRelayPreferenceArgs(args []string) (string, string, int, bool) {
+	action := args[0]
+	flags := command.NewFlagSet("relay " + action)
+	if action == "list" {
+		outcome := command.ParseNoPositionals(flags, args[1:])
+		if outcome == command.ParseHelp {
+			app.writeCompleteLine("%s", relayUsage)
+			return "", "", ExitOK, false
+		}
+		if outcome != command.ParseReady {
+			app.writeCompleteLine("relay list: %s", outcome.Diagnostic())
+			return "", "", outcome.ExitCode().Int(), false
+		}
+		return action, "", ExitOK, true
+	}
+	positionals, outcome := command.ParseInterleaved(flags, args[1:])
+	if outcome == command.ParseHelp {
+		app.writeCompleteLine("%s", relayUsage)
+		return "", "", ExitOK, false
+	}
+	if outcome != command.ParseReady {
+		app.writeCompleteLine("relay %s: %s", action, outcome.Diagnostic())
+		return "", "", outcome.ExitCode().Int(), false
+	}
+	if len(positionals) != 1 || positionals[0] == "" {
+		app.writeCompleteLine("%s", relayUsage)
+		return "", "", ExitUsage, false
+	}
+	return action, positionals[0], ExitOK, true
+}
+
 func (app *App) relayPreferences(ctx context.Context, args []string) int {
+	action, value, code, ready := app.parseRelayPreferenceArgs(args)
+	if !ready {
+		return code
+	}
 	store := app.engineConfig.RelaySetup.Store
 	if store == nil {
 		return app.writeRelaySetupFailure(relayconfig.ErrConfig)
 	}
 	var saved relaysetup.Snapshot
 	var err error
-	switch {
-	case args[0] == "list" && len(args) == 1:
+	if action == "list" {
 		saved, err = store.Load()
-	case args[0] != "list" && len(args) == 2:
-		change := relayconfig.PreferenceEdit{Action: args[0], Value: args[1]}
+	} else {
+		change := relayconfig.PreferenceEdit{Action: action, Value: value}
 		if change.Action == "frontend" && change.Value == "default" {
 			change.Value = ""
 		}
 		saved, err = store.Update(ctx, func(snapshot *relaysetup.Snapshot) error { return change.Apply(&snapshot.Config) })
-	default:
-		app.writeCompleteLine("%s", relayUsage)
-		return ExitUsage
 	}
 	if err != nil {
 		return app.writeRelaySetupFailure(err)

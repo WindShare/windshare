@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/windshare/windshare/adapters/filesystem"
+	"github.com/windshare/windshare/cmd/wind/internal/command"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/engine/output"
@@ -52,15 +53,12 @@ var (
 	newResumeInventorySnapshot = engine.NewRecoverySnapshot
 )
 
-// Result is deliberately smaller than the process exit-code space: resume does
-// not own network or snapshot-drift outcomes.
-type Result uint8
-
-const (
-	ResultOK Result = iota + 1
-	ResultFailure
-	ResultUsage
-)
+// Request is a validated resume list or discard invocation ready to execute.
+type Request struct {
+	action     string
+	rootPath   string
+	itemNumber int
+}
 
 type resumeRootRequest struct {
 	rootPath string
@@ -119,19 +117,9 @@ type resumeConfirmationTerminal interface {
 	ReadLine(context.Context, string) (string, error)
 }
 
-// resumeRequestParse separates an explicit help request from rejected
-// arguments, so action-level -h/--help succeeds like every other wind command.
-type resumeRequestParse int
-
-const (
-	resumeRequestInvalid resumeRequestParse = iota
-	resumeRequestReady
-	resumeRequestHelp
-)
-
 type resumeRequestParser interface {
-	ParseRoot(string, []string) (resumeRootRequest, resumeRequestParse)
-	ParseDiscard([]string) (resumeDiscardRequest, resumeRequestParse)
+	ParseRoot(string, []string) (resumeRootRequest, command.ParseOutcome)
+	ParseDiscard([]string) (resumeDiscardRequest, command.ParseOutcome)
 }
 
 type resumeRenderer interface {

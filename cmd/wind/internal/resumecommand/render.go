@@ -5,18 +5,18 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/windshare/windshare/cmd/wind/internal/commandmeta"
+	"github.com/windshare/windshare/cmd/wind/internal/command"
 )
 
 type textRenderer struct{}
 
 func (textRenderer) Usage() string {
 	return "Usage:\n" +
-		"  " + commandmeta.Name + " resume retry [-o <directory>] [--operation <id>] [--only <path>] <link>\n" +
+		"  " + command.Name + " resume retry [-o <directory>] [--operation <id>] [--only <path>] <link>\n" +
 		"      Continue the matching retained download; never create a new one.\n\n" +
-		"  " + commandmeta.Name + " resume list -o <directory>\n" +
+		"  " + command.Name + " resume list -o <directory>\n" +
 		"      List unfinished operations owned by that output directory.\n\n" +
-		"  " + commandmeta.Name + " resume discard -o <directory> --item <N>\n" +
+		"  " + command.Name + " resume discard -o <directory> --item <N>\n" +
 		"      Re-list one operation and require the exact confirmation \"discard N\".\n" +
 		"      Only identity-matched unfinished state is removed; final and foreign objects stay.\n\n" +
 		"States:\n" +

@@ -3,7 +3,6 @@ package cli
 import (
 	"bytes"
 	"context"
-	"flag"
 	"strings"
 	"testing"
 )
@@ -50,6 +49,46 @@ func TestArgumentParsingNeverProjectsRejectedSecretValues(t *testing.T) {
 			},
 			wantCode:   ExitUsage,
 			wantStderr: "get: connectivity must be auto, relay-only, or p2p-only\n",
+		},
+		{
+			name: "account unknown option",
+			args: func(canary string) []string {
+				return []string{"account", "login", "--password-stdin=" + canary, "alice"}
+			},
+			wantCode:   ExitUsage,
+			wantStderr: "account login: option value is invalid\n",
+		},
+		{
+			name: "config invalid boolean",
+			args: func(canary string) []string {
+				return []string{"config", "import", "--verbose=" + canary, "-"}
+			},
+			wantCode:   ExitUsage,
+			wantStderr: "config import: option value is invalid\n",
+		},
+		{
+			name: "relay invalid boolean",
+			args: func(canary string) []string {
+				return []string{"relay", "add", "--no-browser=" + canary, "https://relay.example"}
+			},
+			wantCode:   ExitUsage,
+			wantStderr: "relay add: option value is invalid\n",
+		},
+		{
+			name: "resume discard invalid item",
+			args: func(canary string) []string {
+				return []string{"resume", "discard", "-o", ".", "--item", canary}
+			},
+			wantCode:   ExitUsage,
+			wantStderr: "resume discard: option value is invalid\n",
+		},
+		{
+			name: "doctor network invalid boolean",
+			args: func(canary string) []string {
+				return []string{"doctor", "network", "--json=" + canary}
+			},
+			wantCode:   ExitUsage,
+			wantStderr: "Usage: wind doctor network [--json]\n",
 		},
 	}
 
@@ -166,50 +205,43 @@ func assertArgumentCanariesAbsent(t *testing.T, stdout, stderr string, canaries 
 	}
 }
 
-func TestFlagDefaultsPreserveRegisteredValuesAndOutput(t *testing.T) {
-	const registeredValue = "registered-default"
-	const parsedValue = "parsed-value-CANARY"
-	var output bytes.Buffer
-	flags := flag.NewFlagSet("example", flag.ContinueOnError)
-	flags.SetOutput(&output)
-	flags.String("name", registeredValue, "label")
-	flags.Bool("v", false, "switch")
-	if err := flags.Set("name", parsedValue); err != nil {
-		t.Fatal(err)
-	}
-
-	defaults := flagDefaults(flags)
-	if flags.Output() != &output || output.Len() != 0 {
-		t.Fatal("rendering defaults changed the parser's output authority")
-	}
-	if strings.ContainsAny(defaults, "\t") || strings.Contains(defaults, `\t`) {
-		t.Fatalf("unexpanded layout tabs: %q", defaults)
-	}
-	if !strings.Contains(defaults, registeredValue) || strings.Contains(defaults, parsedValue) {
-		t.Fatalf("defaults reflected parsed values instead of registration metadata: %q", defaults)
-	}
-}
-
-func TestExpandTabStopsUsesEightColumnStops(t *testing.T) {
+func TestAllCommandsHandleHelpAndUsageWithoutStartingEngine(t *testing.T) {
 	tests := []struct {
-		name string
-		text string
-		want string
+		name     string
+		args     []string
+		wantCode int
 	}{
-		{name: "short boolean", text: "  -v\tshow diagnostic milestones\n", want: "  -v    show diagnostic milestones\n"},
-		{name: "usage line", text: "    \tretained operation ID\n", want: "        retained operation ID\n"},
-		{
-			name: "multi-line usage",
-			text: "  -o string\n    \tfirst line\n    \tsecond line\n",
-			want: "  -o string\n        first line\n        second line\n",
-		},
-		{name: "tab inside description", text: "    \ta\tb\n", want: "        a       b\n"},
-		{name: "no tabs", text: "  -name string\n", want: "  -name string\n"},
+		{"top-level -help", []string{"-help"}, ExitOK},
+		{"doctor --help", []string{"doctor", "--help"}, ExitOK},
+		{"doctor help", []string{"doctor", "help"}, ExitOK},
+		{"setup --help", []string{"setup", "--help"}, ExitOK},
+		{"setup help", []string{"setup", "help"}, ExitOK},
+		{"relay list --help", []string{"relay", "list", "--help"}, ExitOK},
+		{"relay mode --help", []string{"relay", "mode", "--help"}, ExitOK},
+		{"relay frontend -h", []string{"relay", "frontend", "-h"}, ExitOK},
+		{"relay remove positional --help", []string{"relay", "remove", "https://relay.example", "--help"}, ExitOK},
+		{"account login positional --help", []string{"account", "login", "alice", "--help"}, ExitOK},
+		{"account unknown", []string{"account", "unknown"}, ExitUsage},
+		{"resume --help", []string{"resume", "--help"}, ExitOK},
+		{"resume help", []string{"resume", "help"}, ExitOK},
+		{"resume list --help", []string{"resume", "list", "--help"}, ExitOK},
+		{"resume discard --help", []string{"resume", "discard", "--help"}, ExitOK},
+		{"resume missing action", []string{"resume"}, ExitUsage},
+		{"resume unknown action", []string{"resume", "unknown"}, ExitUsage},
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if got := expandTabStops(test.text); got != test.want {
-				t.Fatalf("expandTabStops(%q) = %q, want %q", test.text, got, test.want)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			app := &App{Stdout: &stdout, Stderr: &stderr, Stdin: strings.NewReader("")}
+			// Inject invalid engine config so any premature engine startup fails visibly.
+			app.engineConfig.CleanupTimeout = -1
+			code := app.Run(context.Background(), tc.args)
+			app.closeTerminalOutput()
+			if code != tc.wantCode || stdout.Len() != 0 || stderr.Len() == 0 {
+				t.Fatalf("args=%v exit=%d want=%d stdout=%q stderr=%q", tc.args, code, tc.wantCode, stdout.String(), stderr.String())
+			}
+			if app.application != nil {
+				t.Fatalf("args=%v unexpectedly initialized application engine", tc.args)
 			}
 		})
 	}

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/windshare/windshare/cmd/wind/internal/command"
 	"github.com/windshare/windshare/internal/platformsetup"
 )
 
@@ -45,21 +46,25 @@ func TestCommandsKeepReadingPreferenceAndMutationIndependent(t *testing.T) {
 		checks, setups, skips int
 		elevation             bool
 		action                platformsetup.RuleAction
-		code                  int
+		code                  command.ExitCode
 	}{
-		{"doctor", []string{"network"}, 1, 0, 0, false, 0, ResultOK},
-		{"doctor", []string{"network", "--json"}, 1, 0, 0, false, 0, ResultOK},
-		{"setup", []string{"network"}, 0, 1, 0, true, platformsetup.EnsureRules, ResultOK},
-		{"setup", []string{"network", "--non-interactive"}, 0, 1, 0, false, platformsetup.EnsureRules, ResultOK},
-		{"setup", []string{"network", "--json"}, 0, 1, 0, false, platformsetup.EnsureRules, ResultOK},
-		{"setup", []string{"network", "--remove"}, 0, 1, 0, true, platformsetup.RemoveRules, ResultOK},
-		{"setup", []string{"network", "--skip"}, 0, 0, 1, false, 0, ResultOK},
-		{"setup", []string{"network", "--skip", "--json"}, 0, 0, 1, false, 0, ResultOK},
-		{"setup", []string{"network", "--skip", "--remove"}, 0, 0, 0, false, 0, ResultUsage},
-		{"doctor", []string{"network", "--skip"}, 0, 0, 0, false, 0, ResultUsage},
-		{"doctor", []string{"network", "extra"}, 0, 0, 0, false, 0, ResultUsage},
-		{"setup", []string{"network", "--help"}, 0, 0, 0, false, 0, ResultOK},
-		{"setup", nil, 0, 0, 0, false, 0, ResultUsage},
+		{"doctor", []string{"network"}, 1, 0, 0, false, 0, command.ExitOK},
+		{"doctor", []string{"network", "--json"}, 1, 0, 0, false, 0, command.ExitOK},
+		{"setup", []string{"network"}, 0, 1, 0, true, platformsetup.EnsureRules, command.ExitOK},
+		{"setup", []string{"network", "--non-interactive"}, 0, 1, 0, false, platformsetup.EnsureRules, command.ExitOK},
+		{"setup", []string{"network", "--json"}, 0, 1, 0, false, platformsetup.EnsureRules, command.ExitOK},
+		{"setup", []string{"network", "--remove"}, 0, 1, 0, true, platformsetup.RemoveRules, command.ExitOK},
+		{"setup", []string{"network", "--skip"}, 0, 0, 1, false, 0, command.ExitOK},
+		{"setup", []string{"network", "--skip", "--json"}, 0, 0, 1, false, 0, command.ExitOK},
+		{"setup", []string{"network", "--skip", "--remove"}, 0, 0, 0, false, 0, command.ExitUsage},
+		{"doctor", []string{"network", "--skip"}, 0, 0, 0, false, 0, command.ExitUsage},
+		{"doctor", []string{"network", "extra"}, 0, 0, 0, false, 0, command.ExitUsage},
+		{"doctor", []string{"--help"}, 0, 0, 0, false, 0, command.ExitOK},
+		{"doctor", []string{"help"}, 0, 0, 0, false, 0, command.ExitOK},
+		{"setup", []string{"--help"}, 0, 0, 0, false, 0, command.ExitOK},
+		{"setup", []string{"help"}, 0, 0, 0, false, 0, command.ExitOK},
+		{"setup", []string{"network", "--help"}, 0, 0, 0, false, 0, command.ExitOK},
+		{"setup", nil, 0, 0, 0, false, 0, command.ExitUsage},
 	} {
 		service := &fakeService{supportsSetup: true, operation: platformsetup.Operation{State: platformsetup.RulesApplied}}
 		runner := Runner{Service: service, Output: &recordedLines{}, Interactive: func() bool { return true }}
@@ -74,18 +79,18 @@ func TestCommandFailuresRemainSeparateFromPolicyVerdicts(t *testing.T) {
 	for _, state := range []platformsetup.OperationState{platformsetup.AuthorizationDeclined, platformsetup.PermissionRequired, platformsetup.OperationFailed, platformsetup.OperationUnsupported} {
 		service := &fakeService{supportsSetup: state != platformsetup.OperationUnsupported, operation: platformsetup.Operation{State: state, Detail: "failure"}}
 		runner := Runner{Service: service, Output: &recordedLines{}}
-		if code := runner.Run(t.Context(), "setup", []string{"network"}); code != ResultFailure || service.elevation {
+		if code := runner.Run(t.Context(), "setup", []string{"network"}); code != command.ExitFailure || service.elevation {
 			t.Fatal(state, code)
 		}
 	}
 	for _, report := range []platformsetup.Report{{InspectionError: "read failed"}, {PreferenceError: "unreadable"}} {
 		runner := Runner{Service: &fakeService{report: report}, Output: &recordedLines{}}
-		if code := runner.Run(t.Context(), "doctor", []string{"network"}); code != ResultFailure {
+		if code := runner.Run(t.Context(), "doctor", []string{"network"}); code != command.ExitFailure {
 			t.Fatal(code)
 		}
 	}
 	runner := Runner{Service: &fakeService{skipErr: errors.New("disk full")}, Output: &recordedLines{}}
-	if code := runner.Run(t.Context(), "setup", []string{"network", "--skip"}); code != ResultFailure {
+	if code := runner.Run(t.Context(), "setup", []string{"network", "--skip"}); code != command.ExitFailure {
 		t.Fatal(code)
 	}
 }
@@ -99,7 +104,7 @@ func TestJSONReportPreservesEvidenceOnItsOwnStream(t *testing.T) {
 		Rules: []platformsetup.Rule{{Name: "company policy", Action: platformsetup.Block}},
 	}}}}
 	runner := Runner{Service: service, Output: &human, JSONOutput: &machine}
-	if code := runner.Run(t.Context(), "doctor", []string{"network", "--json"}); code != ResultOK {
+	if code := runner.Run(t.Context(), "doctor", []string{"network", "--json"}); code != command.ExitOK {
 		t.Fatal(code)
 	}
 	var report jsonReport

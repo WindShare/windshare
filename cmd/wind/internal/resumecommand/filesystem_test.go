@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/windshare/windshare/cmd/wind/internal/command"
 	"github.com/windshare/windshare/engine"
 )
 
@@ -20,7 +21,7 @@ func TestFilesystemRunnerHelpUsesOnlyRootOwnedOperationInventory(t *testing.T) {
 		Input: strings.NewReader(""), Output: stdout,
 		RawTerminalOutput: stderr, DiagnosticOutput: testDiagnosticOutput{writer: stderr},
 	})
-	if result := runner.Run(context.Background(), []string{"help"}); result != ResultOK {
+	if result := runner.Run(context.Background(), []string{"help"}); result != command.ExitOK {
 		t.Fatalf("result=%d", result)
 	}
 	if stdout.Len() != 0 || !strings.Contains(stderr.String(), "resume list -o") ||
@@ -46,7 +47,7 @@ func TestFilesystemRunnerUsesEngineRecoveryWithoutCreatingMissingRoot(t *testing
 		RawTerminalOutput: stderr, DiagnosticOutput: testDiagnosticOutput{writer: stderr},
 		Logf: func(format string, args ...any) { _, _ = fmt.Fprintf(stderr, format, args...) },
 	})
-	if result := runner.Run(context.Background(), []string{"list", "-o", missing}); result != ResultFailure {
+	if result := runner.Run(context.Background(), []string{"list", "-o", missing}); result != command.ExitFailure {
 		t.Fatalf("missing destination result=%d", result)
 	}
 	if _, err := os.Stat(missing); !errors.Is(err, os.ErrNotExist) {
@@ -76,7 +77,7 @@ func TestResumeDiscardProjectsEngineRefusalAfterConfirmation(t *testing.T) {
 			app.resumeInventories = &fakeResumeStateInventoryOpener{inventory: inventory}
 			app.resumeConfirmation = terminal
 			result := app.Run(context.Background(), []string{"resume", "discard", "-o", t.TempDir(), "--item", "1"})
-			if result != ResultFailure || terminal.calls != 1 || inventory.discardCalls != 1 ||
+			if result != command.ExitFailure || terminal.calls != 1 || inventory.discardCalls != 1 ||
 				inventory.discardID != snapshot.Operations[0].ID {
 				t.Fatalf("identity-bound interaction result=%d inventory=%+v terminal=%+v", result, inventory, terminal)
 			}

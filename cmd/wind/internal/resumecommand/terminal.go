@@ -7,20 +7,21 @@ import (
 	"io"
 	"strings"
 
+	"github.com/windshare/windshare/cmd/wind/internal/command"
 	"github.com/windshare/windshare/cmd/wind/internal/commandinput"
 	"golang.org/x/term"
 )
 
 type stdioResumeConfirmationTerminal struct {
 	input       io.Reader
-	output      LineOutput
+	output      command.LineOutput
 	interactive bool
 }
 
 func newStdioResumeConfirmationTerminal(
 	input io.Reader,
 	rawOutput io.Writer,
-	diagnosticOutput LineOutput,
+	diagnosticOutput command.LineOutput,
 ) stdioResumeConfirmationTerminal {
 	inputFD, inputIsFile := input.(interface{ Fd() uintptr })
 	outputFD, outputIsFile := rawOutput.(interface{ Fd() uintptr })

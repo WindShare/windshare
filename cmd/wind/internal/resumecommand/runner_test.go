@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/windshare/windshare/cmd/wind/internal/command"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 	"github.com/windshare/windshare/engine"
 )
@@ -20,11 +21,11 @@ func TestResumeParsersRequireOneExplicitOutputRootAndOrdinal(t *testing.T) {
 	app, _, _ := newResumeTestApp()
 
 	request, parse := app.parser().ParseRoot("resume list", []string{"-o", root})
-	if parse != resumeRequestReady || request.rootPath != root {
+	if parse != command.ParseReady || request.rootPath != root {
 		t.Fatalf("list request=%+v parse=%d", request, parse)
 	}
 	discard, parse := app.parser().ParseDiscard([]string{"--item", "2", "-o", root})
-	if parse != resumeRequestReady || discard.rootPath != root || discard.itemNumber != 2 {
+	if parse != command.ParseReady || discard.rootPath != root || discard.itemNumber != 2 {
 		t.Fatalf("discard request=%+v parse=%d", discard, parse)
 	}
 
@@ -40,8 +41,8 @@ func TestResumeParsersRequireOneExplicitOutputRootAndOrdinal(t *testing.T) {
 		"positional path":    {"-o", root, "--item", "1", "records/one"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, parse := app.parser().ParseDiscard(args); parse != resumeRequestInvalid {
-				t.Fatal("invalid discard request was accepted")
+			if _, parse := app.parser().ParseDiscard(args); parse.ExitCode() != command.ExitUsage {
+				t.Fatalf("invalid discard request was accepted: parse=%v", parse)
 			}
 		})
 	}
@@ -52,8 +53,8 @@ func TestResumeParsersRequireOneExplicitOutputRootAndOrdinal(t *testing.T) {
 		"positional":    {"-o", root, "records/one"},
 	} {
 		t.Run("list "+name, func(t *testing.T) {
-			if _, parse := app.parser().ParseRoot("resume list", args); parse != resumeRequestInvalid {
-				t.Fatal("invalid list request was accepted")
+			if _, parse := app.parser().ParseRoot("resume list", args); parse.ExitCode() != command.ExitUsage {
+				t.Fatalf("invalid list request was accepted: parse=%v", parse)
 			}
 		})
 	}
@@ -71,14 +72,14 @@ func TestResumeActionHelpSucceedsWithoutOpeningDestinationState(t *testing.T) {
 			opener := &fakeResumeStateInventoryOpener{err: errors.New("help opened destination state")}
 			app, stdout, stderr := newResumeTestApp()
 			app.resumeInventories = opener
-			if result := app.Run(context.Background(), append([]string{"resume"}, args...)); result != ResultOK {
+			if result := app.Run(context.Background(), append([]string{"resume"}, args...)); result != command.ExitOK {
 				t.Fatalf("result=%d stderr=%q", result, stderr.String())
 			}
 			if opener.calls != 0 || stdout.Len() != 0 {
 				t.Fatalf("help reached destination state: calls=%d stdout=%q", opener.calls, stdout.String())
 			}
 			if !strings.Contains(stderr.String(), "wind resume list") ||
-				strings.Contains(stderr.String(), "arguments are invalid") {
+				strings.Contains(stderr.String(), "option") {
 				t.Fatalf("stderr=%q", stderr.String())
 			}
 		})
@@ -88,7 +89,7 @@ func TestResumeActionHelpSucceedsWithoutOpeningDestinationState(t *testing.T) {
 	opener := &fakeResumeStateInventoryOpener{err: errors.New("destination unavailable")}
 	app, _, _ := newResumeTestApp()
 	app.resumeInventories = opener
-	if result := app.Run(context.Background(), []string{"resume", "list", "-o", "--help"}); result == ResultOK || opener.calls != 1 {
+	if result := app.Run(context.Background(), []string{"resume", "list", "-o", "--help"}); result == command.ExitOK || opener.calls != 1 {
 		t.Fatalf("result=%d calls=%d", result, opener.calls)
 	}
 }
@@ -98,16 +99,16 @@ func TestResumeArgumentFailuresNeverReflectRejectedValues(t *testing.T) {
 	app, _, stderr := newResumeTestApp()
 	if result := app.Run(context.Background(), []string{
 		"resume", "discard", "-o", t.TempDir(), "--item", accidentalCapability,
-	}); result != ResultUsage {
+	}); result != command.ExitUsage {
 		t.Fatalf("result=%d", result)
 	}
 	if strings.Contains(stderr.String(), accidentalCapability) ||
-		!strings.Contains(stderr.String(), "arguments are invalid") {
+		!strings.Contains(stderr.String(), "option value is invalid") {
 		t.Fatalf("stderr=%q", stderr.String())
 	}
 
 	app, _, stderr = newResumeTestApp()
-	if result := app.Run(context.Background(), []string{"resume", accidentalCapability}); result != ResultUsage {
+	if result := app.Run(context.Background(), []string{"resume", accidentalCapability}); result != command.ExitUsage {
 		t.Fatalf("result=%d", result)
 	}
 	if strings.Contains(stderr.String(), accidentalCapability) ||
@@ -143,7 +144,7 @@ func TestResumeListGroupsOperationsAndOnlyShowsBlockedChildren(t *testing.T) {
 	app, stdout, stderr := newResumeTestApp()
 	app.resumeInventories = opener
 
-	if result := app.Run(context.Background(), []string{"resume", "list", "-o", root}); result != ResultFailure {
+	if result := app.Run(context.Background(), []string{"resume", "list", "-o", root}); result != command.ExitFailure {
 		t.Fatalf("result=%d", result)
 	}
 	if opener.calls != 1 || opener.rootPath != root {
@@ -186,7 +187,7 @@ func TestResumeListKeepsBusyAsAvailabilityNotLifecycle(t *testing.T) {
 
 	if result := app.Run(context.Background(), []string{
 		"resume", "list", "-o", t.TempDir(),
-	}); result != ResultOK {
+	}); result != command.ExitOK {
 		t.Fatalf("result=%d", result)
 	}
 	if !strings.Contains(stdout.String(), `state="incomplete"`) ||
@@ -206,7 +207,7 @@ func TestResumeListSurfacesUnknownRegistryPagesWithoutDiscardAuthority(t *testin
 	}
 	if result := app.Run(context.Background(), []string{
 		"resume", "list", "-o", t.TempDir(),
-	}); result != ResultFailure {
+	}); result != command.ExitFailure {
 		t.Fatalf("result=%d", result)
 	}
 	if !strings.Contains(stdout.String(), `resume_list_status="needs-attention"`) ||
@@ -245,7 +246,7 @@ func TestResumeListSurfacesUnknownOrBusyRootWithoutNativeDetails(t *testing.T) {
 			app.resumeInventories = &fakeResumeStateInventoryOpener{err: test.err}
 			if result := app.Run(context.Background(), []string{
 				"resume", "list", "-o", t.TempDir(),
-			}); result != ResultFailure {
+			}); result != command.ExitFailure {
 				t.Fatalf("result=%d", result)
 			}
 			if !strings.Contains(stdout.String(), fmt.Sprintf(`resume_list_status=%q`, test.wantStatus)) ||
@@ -277,7 +278,7 @@ func TestResumeDiscardRequiresFreshOrdinalAndExactTerminalIntent(t *testing.T) {
 
 	if result := app.Run(context.Background(), []string{
 		"resume", "discard", "-o", t.TempDir(), "--item", "1",
-	}); result != ResultOK {
+	}); result != command.ExitOK {
 		t.Fatalf("result=%d stderr=%q", result, stderr.String())
 	}
 	if inventory.discardCalls != 1 || inventory.discardID != snapshot.Operations[0].ID || terminal.calls != 1 {
@@ -354,7 +355,7 @@ func TestResumeDiscardRejectsRedirectedInexactUnknownAndRunningSelections(t *tes
 			app.resumeConfirmation = test.terminal
 			if result := app.Run(context.Background(), []string{
 				"resume", "discard", "-o", t.TempDir(), "--item", "1",
-			}); result != ResultFailure {
+			}); result != command.ExitFailure {
 				t.Fatalf("result=%d", result)
 			}
 			if inventory.discardCalls != 0 ||
@@ -386,7 +387,7 @@ func TestResumeDiscardReportsCleanupDebtEvenWhenCleanupReturnsAnError(t *testing
 
 	if result := app.Run(context.Background(), []string{
 		"resume", "discard", "-o", t.TempDir(), "--item", "1",
-	}); result != ResultFailure {
+	}); result != command.ExitFailure {
 		t.Fatalf("result=%d", result)
 	}
 	if !strings.Contains(stdout.String(), `resume_discard_status="cleanup-pending"`) ||
@@ -413,7 +414,7 @@ func TestResumeDiscardKeepsACompletedOutcomeWhenAuthorityCloseFails(t *testing.T
 	app.resumeConfirmation = &fakeResumeConfirmationTerminal{interactive: true, line: "discard 1"}
 	if result := app.Run(context.Background(), []string{
 		"resume", "discard", "-o", t.TempDir(), "--item", "1",
-	}); result != ResultFailure {
+	}); result != command.ExitFailure {
 		t.Fatalf("result=%d", result)
 	}
 	if !strings.Contains(stdout.String(), `resume_discard_status="discarded"`) ||
@@ -426,7 +427,7 @@ func TestResumeDiscardKeepsACompletedOutcomeWhenAuthorityCloseFails(t *testing.T
 func TestResumeSurfaceHasNoLegacyGlobalOrTerminalHistoryCommands(t *testing.T) {
 	for _, action := range []string{"cleanup", "status", "delete", "purge", "cancel", "pause", "complete"} {
 		app, _, stderr := newResumeTestApp()
-		if result := app.Run(context.Background(), []string{"resume", action}); result != ResultUsage {
+		if result := app.Run(context.Background(), []string{"resume", action}); result != command.ExitUsage {
 			t.Fatalf("action=%q result=%d", action, result)
 		}
 		if !strings.Contains(stderr.String(), "unknown action") {
@@ -434,7 +435,7 @@ func TestResumeSurfaceHasNoLegacyGlobalOrTerminalHistoryCommands(t *testing.T) {
 		}
 	}
 	app, _, stderr := newResumeTestApp()
-	if result := app.Run(context.Background(), []string{"resume", "help"}); result != ResultOK {
+	if result := app.Run(context.Background(), []string{"resume", "help"}); result != command.ExitOK {
 		t.Fatalf("result=%d", result)
 	}
 	help := stderr.String()
@@ -512,9 +513,9 @@ func newResumeTestApp() (*resumeTestApp, *bytes.Buffer, *bytes.Buffer) {
 	}, stdout, stderr
 }
 
-func (app *resumeTestApp) Run(ctx context.Context, args []string) Result {
+func (app *resumeTestApp) Run(ctx context.Context, args []string) command.ExitCode {
 	if len(args) == 0 || args[0] != "resume" {
-		return ResultUsage
+		return command.ExitUsage
 	}
 	return app.runner().Run(ctx, args[1:])
 }
