@@ -1,4 +1,7 @@
-use super::{AccountDialog, AccountDialogEvent, AccountOrigin, AccountPage, PreviewAccountEdit};
+use super::{
+    AccountDialog, AccountDialogEvent, AccountFormError, AccountOrigin, AccountPage, AccountSource,
+    PreviewAccountEdit, can_register_account,
+};
 use crate::{
     desktop::Desktop,
     flow_state::{CopyFeedback, CopyTarget},
@@ -7,21 +10,38 @@ use crate::{
     model::{Overlay, Page, SettingsSection},
 };
 use gpui::{App, ClipboardItem, Context, Window, prelude::*};
-use windshare_host::{AccountCommand, AccountView, Failure};
+use windshare_host::{AccountCommand, AccountView};
 
 impl Desktop {
-    pub(crate) fn account_view(&self) -> Option<&AccountView> {
+    pub(crate) fn account_view<'a>(&'a self, cx: &'a App) -> Option<&'a AccountView> {
         match &self.runtime {
-            Runtime::Native(session) => session.model.account.as_ref(),
+            Runtime::Native(session) => session.model(cx).account.as_ref(),
             Runtime::Preview(preview) => Some(&preview.account),
         }
     }
 
+    pub(super) fn account_busy(&self, cx: &App) -> bool {
+        match &self.runtime {
+            Runtime::Native(session) => session.model(cx).account_busy(),
+            Runtime::Preview(preview) => preview.account.busy(),
+        }
+    }
+
+    pub(super) fn account_inline_feedback(
+        &self,
+        cx: &App,
+    ) -> Option<Result<Text, AccountFormError>> {
+        let Runtime::Native(session) = &self.runtime else {
+            return None;
+        };
+        self.account_ui.inline_feedback(session.model(cx))
+    }
+
     pub fn open_account(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Runtime::Native(session) = &self.runtime {
-            session.controller.reload_account_selection();
+            session.controller(cx).reload_account_selection();
         }
-        let Some(page) = self.account_view().map(|view| AccountPage::entry(view).0) else {
+        let Some(page) = self.account_view(cx).map(|view| AccountPage::entry(view).0) else {
             return;
         };
         if page == AccountPage::Overview {
@@ -37,32 +57,26 @@ impl Desktop {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(view) = self.account_view().cloned() else {
-            return;
+        let source = match &self.runtime {
+            Runtime::Native(session) => {
+                if session.model(cx).account.is_none() {
+                    return;
+                }
+                session.controller(cx).reload_account_selection();
+                AccountSource::Native(session.host.clone())
+            }
+            Runtime::Preview(preview) => AccountSource::Preview(Box::new(preview.account.clone())),
         };
-        if let Runtime::Native(session) = &self.runtime {
-            session.controller.reload_account_selection();
-        }
+        self.account_ui.clear();
         let origin =
             if self.page == Page::Settings && self.settings_section == SettingsSection::Account {
                 AccountOrigin::Settings
             } else {
                 AccountOrigin::Standalone
             };
-        let is_preview = self.runtime.is_preview();
         let scope = cx.focus_handle();
-        let dialog = cx.new(|cx| {
-            AccountDialog::new(
-                page,
-                view,
-                origin,
-                is_preview,
-                scope.clone(),
-                &self.account,
-                window,
-                cx,
-            )
-        });
+        let dialog =
+            cx.new(|cx| AccountDialog::new(page, source, origin, scope.clone(), window, cx));
         let initial_focus = dialog.read(cx).focus_target(cx);
         let subscription = cx.subscribe_in(&dialog, window, |this, _, event, window, cx| {
             this.handle_account_dialog_event(event, window, cx);
@@ -84,13 +98,15 @@ impl Desktop {
         cx: &mut Context<Self>,
     ) {
         match event {
-            AccountDialogEvent::Submit(submission) => {
-                self.send_account_command(submission.to_command(), cx);
+            AccountDialogEvent::Completed(toast) => {
+                self.close_overlay(window, cx);
+                if let Some(message) = toast {
+                    self.notify(*message, cx);
+                }
             }
             AccountDialogEvent::PreviewEdit(edit) => {
                 self.apply_preview_account_edit(edit.clone(), window, cx);
             }
-            AccountDialogEvent::CopyUid => self.copy_account_uid(cx),
             AccountDialogEvent::Close => self.close_overlay(window, cx),
             AccountDialogEvent::PageChanged => {}
         }
@@ -98,46 +114,34 @@ impl Desktop {
     }
 
     pub(crate) fn register_account(&mut self, cx: &mut Context<Self>) {
-        if let Some(view) = self.account_view()
-            && self.account.can_register(view)
+        if let Some(view) = self.account_view(cx)
+            && can_register_account(view, self.account_busy(cx))
+            && let Runtime::Native(session) = &self.runtime
         {
-            self.send_account_command(AccountCommand::Register, cx);
+            let host = session.host.clone();
+            self.account_ui.inline_request_id = host.update(cx, |host, cx| {
+                host.submit_account(AccountCommand::Register, cx)
+            });
             cx.notify();
         }
     }
 
-    pub(crate) fn reload_account_selection(&self) {
+    pub(crate) fn reload_account_selection(&self, cx: &App) {
         if let Runtime::Native(session) = &self.runtime {
-            session.controller.reload_account_selection();
+            session.controller(cx).reload_account_selection();
         }
     }
 
     pub(crate) fn refresh_account(&mut self, cx: &mut Context<Self>) {
-        if let Some(view) = self.account_view()
-            && !self.account.busy(view)
+        if self.account_view(cx).is_some()
+            && !self.account_busy(cx)
+            && let Runtime::Native(session) = &self.runtime
         {
-            self.send_account_command(AccountCommand::Refresh, cx);
+            let host = session.host.clone();
+            self.account_ui.inline_request_id = host.update(cx, |host, cx| {
+                host.submit_account(AccountCommand::Refresh, cx)
+            });
             cx.notify();
-        }
-    }
-
-    fn send_account_command(&mut self, command: AccountCommand, cx: &mut Context<Self>) {
-        let Runtime::Native(session) = &self.runtime else {
-            return;
-        };
-        self.account.pending = session.controller.account(command);
-        self.account.feedback = if self.account.pending.is_some() {
-            None
-        } else {
-            session
-                .controller
-                .model()
-                .command_error
-                .clone()
-                .map(|error| Err(Failure::from(error).into()))
-        };
-        if let Some(Overlay::Account(dialog)) = self.overlays.last().map(|frame| &frame.content) {
-            dialog.update(cx, |dialog, cx| dialog.sync_tracker(&self.account, cx));
         }
     }
 
@@ -175,9 +179,9 @@ impl Desktop {
         self.notify(toast, cx);
     }
 
-    pub(crate) fn copy_account_uid(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn copy_account_uid(&mut self, cx: &Context<Self>) {
         let Some(uid) = self
-            .account_view()
+            .account_view(cx)
             .map(|view| view.status.account.clone())
             .filter(|uid| !uid.is_empty())
         else {
@@ -189,19 +193,12 @@ impl Desktop {
             target: CopyTarget::AccountUid,
             revision,
         };
-        self.sync_account_dialog_uid_copied(true, cx);
         tracing::info!(
             event = "account.uid_copied",
             session = std::process::id(),
             operation = revision,
         );
         Self::schedule_copy_feedback_reset(revision, cx);
-    }
-
-    pub(crate) fn sync_account_dialog_uid_copied(&self, copied: bool, cx: &mut Context<Self>) {
-        if let Some(Overlay::Account(dialog)) = self.overlays.last().map(|frame| &frame.content) {
-            dialog.update(cx, |dialog, cx| dialog.set_uid_copied(copied, cx));
-        }
     }
 
     pub(crate) fn sync_account_view_visibility(&self, window: &Window, cx: &App) {
@@ -215,11 +212,11 @@ impl Desktop {
                     Overlay::Account(dialog) if dialog.read(cx).page() == AccountPage::Overview
                 )
             });
-            session.controller.set_account_view_visible(
+            session.controller(cx).set_account_view_visible(
                 window.is_visible()
                     && (viewing_page || viewing_overlay)
                     && self
-                        .account_view()
+                        .account_view(cx)
                         .is_some_and(|view| !view.status.account.is_empty()),
             );
         }

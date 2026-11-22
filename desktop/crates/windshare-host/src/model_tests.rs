@@ -265,3 +265,31 @@ fn waits_for_official_authorization_covers_live_and_repeated_waits() {
     assert!(!model.waits_for_official_authorization("self-hosted"));
     assert!(!model.waits_for_official_authorization("finished"));
 }
+
+#[test]
+fn setup_cancel_request_settles_if_setup_finishes_first() {
+    let mut model = Model {
+        setup_request: crate::SetupRequest::Pending {
+            id: "setup:1".into(),
+            kind: crate::SetupRequestKind::Cancel {
+                acknowledged: false,
+            },
+        },
+        ..Model::default()
+    };
+    let finished_setup: Setup = serde_json::from_value(serde_json::json!({
+        "state": "finished",
+        "id": "setup:1",
+        "relay_saved": true
+    }))
+    .unwrap();
+    let mut next = snapshot(1, vec![]);
+    next.setup = finished_setup;
+    model.reconcile(next);
+    assert_eq!(
+        model.setup_request,
+        crate::SetupRequest::Finished {
+            id: "setup:1".into()
+        }
+    );
+}

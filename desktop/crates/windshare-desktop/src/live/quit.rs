@@ -8,13 +8,16 @@ use gpui::{Context, PromptButton, PromptLevel, Window};
 const CONFIRM_QUIT: usize = 1;
 
 impl Desktop {
-    fn quit(&mut self, generation: u64, window: &mut Window) {
+    fn quit(&mut self, generation: u64, window: &mut Window, cx: &mut Context<Self>) {
         if let Runtime::Native(session) = &mut self.runtime {
             if !session.application.commit_shutdown(generation) {
                 session.quit_state = QuitState::Running;
                 return;
             }
             session.quit_state = QuitState::Exiting;
+            session
+                .host
+                .update(cx, |host, cx| host.set_exiting(true, cx));
             // Seal command admission before the platform processes the quit request.
         }
         tracing::info!(
@@ -28,7 +31,7 @@ impl Desktop {
 
     pub fn request_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Runtime::Native(session) = &mut self.runtime else {
-            self.quit(0, window);
+            self.quit(0, window, cx);
             return;
         };
         if session.quit_state != QuitState::Running {
@@ -37,8 +40,8 @@ impl Desktop {
         let generation = session.application.generation();
         // Read application ownership, including queued selections and setup,
         // rather than the currently visible page or a possibly stale projection.
-        if !session.controller.model().has_unfinished_work() {
-            self.quit(generation, window);
+        if !session.controller(cx).model().has_unfinished_work() {
+            self.quit(generation, window, cx);
             return;
         }
         session.quit_state = QuitState::Confirming;
@@ -70,7 +73,7 @@ impl Desktop {
                     confirmed
                 );
                 if confirmed {
-                    this.quit(generation, window);
+                    this.quit(generation, window, cx);
                 } else if let Runtime::Native(session) = &mut this.runtime {
                     session.quit_state = QuitState::Running;
                     cx.notify();

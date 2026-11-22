@@ -59,7 +59,7 @@ impl Desktop {
         }
         let locale = language(cx);
         let official = matches!(authorization, windshare_host::ShareAuthorization::Official);
-        let account = self.account_view().filter(|_| official);
+        let account = self.account_view(cx).filter(|_| official);
         if let Some(view) = account.filter(|view| view.status.state == AccountState::StorageError) {
             return Self::account_storage_error_share(theme, share, &view.status.reason, cx);
         }
@@ -197,7 +197,7 @@ impl Desktop {
         let continuation = match blocking.recovery {
             RecoveryAction::Retry => Some((Text::RetryConnection, Action::ResumeShare(share.id))),
             RecoveryAction::RepairSettings => {
-                Some((Text::UseSavedSettings, Action::UseSavedSettings(share.id)))
+                Some((Text::RetryConnection, Action::UseSavedSettings(share.id)))
             }
             _ => None,
         };
@@ -230,7 +230,7 @@ impl Desktop {
                     action,
                     cx,
                 )
-                .disabled(cooling_down || self.runtime.selection_disabled()),
+                .disabled(cooling_down || self.runtime.selection_disabled(cx)),
             );
         }
         card = card.child(

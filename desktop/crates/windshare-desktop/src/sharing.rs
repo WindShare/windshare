@@ -117,7 +117,7 @@ impl Desktop {
             let label = locale.text(text);
             let button = if live {
                 Self::button(id, label, symbol, style, action, cx)
-                    .disabled(self.runtime.selection_disabled())
+                    .disabled(self.runtime.selection_disabled(cx))
             } else {
                 Button::new(id, label).icon(symbol).style(style)
             };

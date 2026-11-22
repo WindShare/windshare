@@ -83,6 +83,9 @@ impl Render for AccountDialog {
 
 impl AccountDialog {
     fn registration_body(&self, theme: Theme, cx: &Context<Self>) -> Div {
+        let Some(view) = self.view(cx) else {
+            return column();
+        };
         let locale = language(cx);
         let create = Button::new(
             "create-account",
@@ -94,7 +97,7 @@ impl AccountDialog {
         )
         .icon(Icon::Arrow)
         .style(ButtonStyle::Primary)
-        .disabled(!self.can_register())
+        .disabled(!self.can_register(cx))
         .on_press(cx.listener(|this, (), window, cx| this.register(window, cx)));
         let login = Button::new("registration-login", locale.text(Text::LoginExisting))
             .icon(Icon::Lock)
@@ -102,20 +105,23 @@ impl AccountDialog {
             .on_press(
                 cx.listener(|this, (), window, cx| this.open_page(AccountPage::Login, window, cx)),
             );
-        registration_panel_view(theme, &self.view, self.busy(), true, create, login, cx)
+        registration_panel_view(theme, view, self.busy(cx), true, create, login, cx)
     }
 
     fn overview_body(&self, theme: Theme, cx: &Context<Self>) -> Div {
+        let Some(view) = self.view(cx) else {
+            return column();
+        };
         let locale = language(cx);
-        let locked = self.view.nickname_locked_until().is_some();
+        let locked = view.nickname_locked_until().is_some();
         let nickname = Button::new(
             "account-nickname",
-            locale.text(AccountPage::Nickname(()).title(&self.view)),
+            locale.text(AccountPage::Nickname(()).title(view)),
         )
         .icon(Icon::Pencil)
         .style(ButtonStyle::Secondary)
         .compact()
-        .disabled(self.busy() || locked)
+        .disabled(self.busy(cx) || locked)
         .on_press(cx.listener(|this, (), window, cx| {
             this.open_page(AccountPage::Nickname(()), window, cx);
         }));
@@ -138,11 +144,14 @@ impl AccountDialog {
             ButtonStyle::Secondary
         })
         .compact()
-        .on_press(cx.listener(|_, (), _, cx| cx.emit(AccountDialogEvent::CopyUid)));
-        account_identity_view(theme, &self.view, nickname, copy, cx)
+        .on_press(cx.listener(|this, (), _, cx| this.copy_uid(cx)));
+        account_identity_view(theme, view, nickname, copy, cx)
     }
 
     fn editor_body(&self, theme: Theme, cx: &Context<Self>) -> Div {
+        let Some(view) = self.view(cx) else {
+            return column();
+        };
         let locale = language(cx);
         let field = |input: &Entity<Input>, label| {
             column()
@@ -190,7 +199,7 @@ impl AccountDialog {
             }
             AccountPage::Email(purpose, EmailStep::Code) => {
                 let prompt = if purpose == EmailPurpose::Profile(())
-                    && let Some(pending) = &self.view.status.pending_email
+                    && let Some(pending) = &view.status.pending_email
                 {
                     locale.code_sent_to(&pending.address)
                 } else {
@@ -221,15 +230,12 @@ impl AccountDialog {
             Text::SaveSettings | Text::AccountVerify => Icon::Check,
             _ => Icon::Arrow,
         };
+        let busy = self.busy(cx);
         let can_submit = self.can_submit(cx);
         let mut actions = row().gap(px(8.)).flex_wrap().child(
             Button::new(
                 "account-submit",
-                locale.text(if self.busy() {
-                    Text::AccountWorking
-                } else {
-                    submit
-                }),
+                locale.text(if busy { Text::AccountWorking } else { submit }),
             )
             .icon(submit_icon)
             .style(ButtonStyle::Primary)
@@ -241,7 +247,7 @@ impl AccountDialog {
                 Button::new("new-email-code", locale.text(Text::AccountRequestAnother))
                     .icon(Icon::Refresh)
                     .style(ButtonStyle::Quiet)
-                    .disabled(self.busy())
+                    .disabled(busy)
                     .on_press(cx.listener(move |this, (), window, cx| {
                         this.open_page(AccountPage::Email(purpose, EmailStep::Address), window, cx);
                     })),
@@ -255,7 +261,7 @@ impl AccountDialog {
             Close,
             Open(AccountPage),
         }
-        let view = &self.view;
+        let view = self.view(cx)?;
         let (label, target, icon) = match self.page() {
             AccountPage::Email(purpose, EmailStep::Address) if purpose.has_code(view) => (
                 Text::EnterExistingCode,
@@ -297,7 +303,7 @@ impl AccountDialog {
         let button = Button::new("account-alternative", language(cx).text(label))
             .icon(icon)
             .style(ButtonStyle::Quiet)
-            .disabled(self.busy());
+            .disabled(self.busy(cx));
         Some(match target {
             Alternative::Close => {
                 button.on_press(cx.listener(|_, (), _, cx| cx.emit(AccountDialogEvent::Close)))

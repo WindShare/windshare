@@ -37,35 +37,38 @@ pub fn setting_row(theme: Theme, title: &str, detail: String, action: Button) ->
 }
 
 impl Desktop {
-    pub(crate) fn relay_preferences_view(&self) -> &RelayPreferences {
+    pub(crate) fn relay_preferences_view<'a>(&'a self, cx: &'a gpui::App) -> &'a RelayPreferences {
         match &self.runtime {
-            Runtime::Native(session) => &session.model.preferences,
+            Runtime::Native(session) => &session.model(cx).preferences,
             Runtime::Preview(preview) => &preview.preferences,
         }
     }
 
-    pub(crate) fn network_attention_tone(&self) -> Option<Tone> {
+    pub(crate) fn network_attention_tone(&self, cx: &gpui::App) -> Option<Tone> {
         if let Runtime::Native(session) = &self.runtime
-            && session.model.setup.unfinished()
+            && session.model(cx).setup.unfinished()
         {
             return Some(Tone::Peach);
         }
-        let prefs = self.relay_preferences_view();
+        let prefs = self.relay_preferences_view(cx);
         let enabled = prefs.relays.iter().any(|relay| relay.enabled);
         (prefs.mode == RelayMode::Selected && !enabled).then_some(Tone::Peach)
     }
 
-    pub(super) fn network_settings_busy(&self) -> bool {
-        let setup_unfinished = match &self.runtime {
-            Runtime::Native(session) => session.model.setup.unfinished(),
-            Runtime::Preview(_) => false,
+    pub(super) fn network_settings_busy(&self, cx: &gpui::App) -> bool {
+        let (pending, setup_unfinished) = match &self.runtime {
+            Runtime::Native(session) => {
+                let model = session.model(cx);
+                (model.setup_pending(), model.setup.unfinished())
+            }
+            Runtime::Preview(_) => (false, false),
         };
-        self.setup.pending.is_some() || setup_unfinished || self.runtime.selection_disabled()
+        pending || setup_unfinished || self.runtime.selection_disabled(cx)
     }
 
     pub fn network_settings_page(&self, theme: Theme, compact: bool, cx: &Context<Self>) -> Div {
-        let prefs = self.relay_preferences_view();
-        let busy = self.network_settings_busy();
+        let prefs = self.relay_preferences_view(cx);
+        let busy = self.network_settings_busy(cx);
         column()
             .gap(px(SECTION_GAP))
             .child(Self::relay_mode_card(theme, prefs, compact, busy, cx))
@@ -83,8 +86,8 @@ impl Desktop {
         Button::new(id, label)
             .icon(symbol)
             .compact()
-            .on_press(cx.listener(move |this, (), window, cx| {
-                this.apply_preference(edit.clone(), window, cx);
+            .on_press(cx.listener(move |this, (), _, cx| {
+                this.apply_preference(edit.clone(), cx);
             }))
     }
 
@@ -245,7 +248,7 @@ impl Desktop {
         let Runtime::Native(session) = &self.runtime else {
             return None;
         };
-        let setup = &session.model.setup;
+        let setup = &session.model(cx).setup;
         let setup_modal_open = self
             .overlays
             .last()
@@ -277,11 +280,14 @@ impl Desktop {
         if setup_modal_open {
             return None;
         }
+        let Runtime::Native(session) = &self.runtime else {
+            return None;
+        };
         let locale = language(cx);
-        let feedback = self.setup.feedback.as_ref()?;
+        let feedback = self.network_ui.inline_feedback(session.model(cx))?;
         let (message, tone) = match feedback {
-            Ok(label) => (locale.text(*label).to_owned(), Tone::Mint),
-            Err(error) => (error.clone(), Tone::Rose),
+            Ok(label) => (locale.text(label).to_owned(), Tone::Mint),
+            Err(error) => (error, Tone::Rose),
         };
         Some(theme.caption(message).text_color(tone.text(theme)))
     }
@@ -298,7 +304,7 @@ impl Desktop {
         cx: &Context<Self>,
     ) -> Div {
         let can_toggle = !busy && (relay.enabled || !at_capacity);
-        let expanded = self.setup.expanded_relay.as_deref() == Some(relay.url.as_str());
+        let expanded = self.network_ui.expanded_relay.as_deref() == Some(relay.url.as_str());
         let toggle_edit = if relay.enabled {
             PreferenceEdit::Disable(relay.url.clone())
         } else {
@@ -308,9 +314,9 @@ impl Desktop {
             .toggle(("relay-switch", index), relay.enabled, can_toggle)
             .aria_label(relay.url.clone())
             .when(can_toggle, |control| {
-                control.on_click(cx.listener(move |this, _, window, cx| {
+                control.on_click(cx.listener(move |this, _, _, cx| {
                     cx.stop_propagation();
-                    this.apply_preference(toggle_edit.clone(), window, cx);
+                    this.apply_preference(toggle_edit.clone(), cx);
                 }))
             });
         let toggle_url = relay.url.clone();
@@ -321,8 +327,8 @@ impl Desktop {
                 expanded,
                 busy,
                 move |this: &mut Self, cx| {
-                    this.setup.expanded_relay =
-                        if this.setup.expanded_relay.as_deref() == Some(toggle_url.as_str()) {
+                    this.network_ui.expanded_relay =
+                        if this.network_ui.expanded_relay.as_deref() == Some(toggle_url.as_str()) {
                             None
                         } else {
                             Some(toggle_url.clone())

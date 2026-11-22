@@ -13,6 +13,49 @@ use windshare_ui::{Button, ButtonStyle, Icon, Theme, Tone, column, icon, row};
 
 const CONFIRM_RELAY_ACTION: usize = 1;
 
+pub(super) fn prompt_reauthorize_relay(
+    relay_url: &str,
+    window: &mut Window,
+    cx: &mut gpui::App,
+) -> impl std::future::Future<Output = bool> + 'static {
+    let locale = language(cx);
+    let detail = format!(
+        "{relay_url}\n\n{}",
+        locale.text(Text::ReauthorizeDeviceDetail)
+    );
+    let answer = window.prompt(
+        PromptLevel::Info,
+        locale.text(Text::ReauthorizeDeviceTitle),
+        Some(&detail),
+        &[
+            PromptButton::Cancel(locale.text(Text::Cancel).into()),
+            PromptButton::Other(locale.text(Text::ReauthorizeDevice).into()),
+        ],
+        cx,
+    );
+    async move { answer.await == Ok(CONFIRM_RELAY_ACTION) }
+}
+
+pub(super) fn prompt_remove_relay(
+    relay_url: &str,
+    window: &mut Window,
+    cx: &mut gpui::App,
+) -> impl std::future::Future<Output = bool> + 'static {
+    let locale = language(cx);
+    let detail = format!("{relay_url}\n\n{}", locale.text(Text::RemoveRelayDetail));
+    let answer = window.prompt(
+        PromptLevel::Warning,
+        locale.text(Text::RemoveRelayTitle),
+        Some(&detail),
+        &[
+            PromptButton::Cancel(locale.text(Text::Cancel).into()),
+            PromptButton::Other(locale.text(Text::Remove).into()),
+        ],
+        cx,
+    );
+    async move { answer.await == Ok(CONFIRM_RELAY_ACTION) }
+}
+
 pub(super) fn relay_actions_toggle<V: 'static>(
     index: usize,
     expanded: bool,
@@ -188,66 +231,42 @@ impl Desktop {
             cx.notify();
             return;
         }
+        if self.network_settings_busy(cx) {
+            return;
+        }
         let Runtime::Native(session) = &self.runtime else {
             return;
         };
-        if self.setup.pending.is_some()
-            || session.model.setup.unfinished()
-            || self.runtime.selection_disabled()
-        {
-            return;
-        }
-        self.setup.pending = session
-            .controller
-            .edit_preference("", PreferenceEdit::Mode(mode));
-        self.setup.pending_toast = None;
-        self.setup.feedback = None;
+        let host = session.host.clone();
+        self.network_ui.inline_request_id = host.update(cx, |host, cx| {
+            host.submit_preference("", PreferenceEdit::Mode(mode), cx)
+        });
+        self.network_ui.remove_toast_id = None;
         cx.notify();
     }
 
-    pub(super) fn apply_preference(
-        &mut self,
-        edit: PreferenceEdit,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(super) fn apply_preference(&mut self, edit: PreferenceEdit, cx: &mut Context<Self>) {
         if matches!(self.runtime, Runtime::Preview(_)) {
-            self.apply_preview_preference(edit, window, cx);
+            self.apply_preview_preference(edit, cx);
+            return;
+        }
+        if self.network_settings_busy(cx) {
             return;
         }
         let Runtime::Native(session) = &self.runtime else {
             return;
         };
-        if self.setup.pending.is_some()
-            || session.model.setup.unfinished()
-            || self.runtime.selection_disabled()
-        {
-            return;
-        }
-        let operation = match self.overlays.last().map(|frame| &frame.content) {
-            Some(Overlay::SharingSetup(target, _)) => match target.share_id() {
-                Some(id) => {
-                    let Some(op) = self.native_operation(id) else {
-                        return;
-                    };
-                    op
-                }
-                None => "",
-            },
-            _ => "",
-        };
-        let pending_toast = matches!(edit, PreferenceEdit::Remove(_)).then_some(Text::RelayRemoved);
-        self.setup.pending = session.controller.edit_preference(operation, edit);
-        self.setup.pending_toast = self.setup.pending.as_ref().and(pending_toast);
-        self.setup.feedback = None;
-        self.sync_open_setup_dialog(window, cx);
+        let is_remove = matches!(edit, PreferenceEdit::Remove(_));
+        let host = session.host.clone();
+        let id = host.update(cx, |host, cx| host.submit_preference("", edit, cx));
+        self.network_ui.remove_toast_id = is_remove.then(|| id.clone()).flatten();
+        self.network_ui.inline_request_id = id;
         cx.notify();
     }
 
-    fn apply_preview_preference(
+    pub(super) fn apply_preview_preference(
         &mut self,
         edit: PreferenceEdit,
-        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Runtime::Preview(preview) = &mut self.runtime else {
@@ -271,8 +290,8 @@ impl Desktop {
             }
             PreferenceEdit::Remove(url) => {
                 prefs.relays.retain(|relay| relay.url != url);
-                if self.setup.expanded_relay.as_deref() == Some(url.as_str()) {
-                    self.setup.expanded_relay = None;
+                if self.network_ui.expanded_relay.as_deref() == Some(url.as_str()) {
+                    self.network_ui.expanded_relay = None;
                 }
                 toast = Some(Text::RelayRemoved);
             }
@@ -289,26 +308,17 @@ impl Desktop {
         }
         prefs.at_capacity =
             prefs.relays.iter().filter(|relay| relay.enabled).count() >= MAX_ACTIVE_RELAYS;
-        self.sync_open_setup_dialog(window, cx);
+        let updated_prefs = prefs.clone();
+        if let Some(Overlay::SharingSetup(_, dialog)) =
+            self.overlays.last().map(|frame| &frame.content)
+        {
+            dialog.update(cx, |dialog, cx| {
+                dialog.set_preview_preferences(updated_prefs, cx);
+            });
+        }
         if let Some(message) = toast {
             self.notify(message, cx);
         }
-        cx.notify();
-    }
-
-    pub(super) fn toggle_relay_actions(
-        &mut self,
-        relay_url: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.setup.expanded_relay =
-            if self.setup.expanded_relay.as_deref() == Some(relay_url.as_str()) {
-                None
-            } else {
-                Some(relay_url)
-            };
-        self.sync_open_setup_dialog(window, cx);
         cx.notify();
     }
 
@@ -318,41 +328,27 @@ impl Desktop {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.network_settings_busy() || self.runtime.is_preview() {
+        if self.network_settings_busy(cx) || self.runtime.is_preview() {
             return;
         }
         let epoch = self.interaction_epoch();
-        let locale = language(cx);
-        let detail = format!(
-            "{relay_url}\n\n{}",
-            locale.text(Text::ReauthorizeDeviceDetail)
-        );
-        let answer = window.prompt(
-            PromptLevel::Info,
-            locale.text(Text::ReauthorizeDeviceTitle),
-            Some(&detail),
-            &[
-                PromptButton::Cancel(locale.text(Text::Cancel).into()),
-                PromptButton::Other(locale.text(Text::ReauthorizeDevice).into()),
-            ],
-            cx,
-        );
+        let confirmed = prompt_reauthorize_relay(&relay_url, window, cx);
         cx.spawn_in(window, async move |view, cx| {
-            if answer.await != Ok(CONFIRM_RELAY_ACTION) {
+            if !confirmed.await {
                 return;
             }
             let _ = view.update_in(cx, |this, window, cx| {
                 if this.interaction_epoch() != epoch
-                    || this.network_settings_busy()
+                    || this.network_settings_busy(cx)
                     || !this
-                        .relay_preferences_view()
+                        .relay_preferences_view(cx)
                         .relays
                         .iter()
                         .any(|relay| relay.url == relay_url)
                 {
                     return;
                 }
-                this.setup.expanded_relay = None;
+                this.network_ui.expanded_relay = None;
                 tracing::info!(
                     event = "desktop.relay_reauthorize_confirmed",
                     session = std::process::id()
@@ -369,43 +365,32 @@ impl Desktop {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.network_settings_busy() {
+        if self.network_settings_busy(cx) {
             return;
         }
         let epoch = self.interaction_epoch();
-        let locale = language(cx);
-        let detail = format!("{relay_url}\n\n{}", locale.text(Text::RemoveRelayDetail));
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            locale.text(Text::RemoveRelayTitle),
-            Some(&detail),
-            &[
-                PromptButton::Cancel(locale.text(Text::Cancel).into()),
-                PromptButton::Other(locale.text(Text::Remove).into()),
-            ],
-            cx,
-        );
+        let confirmed = prompt_remove_relay(&relay_url, window, cx);
         cx.spawn_in(window, async move |view, cx| {
-            if answer.await != Ok(CONFIRM_RELAY_ACTION) {
+            if !confirmed.await {
                 return;
             }
-            let _ = view.update_in(cx, |this, window, cx| {
+            let _ = view.update_in(cx, |this, _, cx| {
                 if this.interaction_epoch() != epoch
-                    || this.network_settings_busy()
+                    || this.network_settings_busy(cx)
                     || !this
-                        .relay_preferences_view()
+                        .relay_preferences_view(cx)
                         .relays
                         .iter()
                         .any(|relay| relay.url == relay_url)
                 {
                     return;
                 }
-                this.setup.expanded_relay = None;
+                this.network_ui.expanded_relay = None;
                 tracing::info!(
                     event = "desktop.relay_remove_confirmed",
                     session = std::process::id()
                 );
-                this.apply_preference(PreferenceEdit::Remove(relay_url), window, cx);
+                this.apply_preference(PreferenceEdit::Remove(relay_url), cx);
             });
         })
         .detach();

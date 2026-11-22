@@ -118,7 +118,7 @@ impl Desktop {
     }
 
     pub fn account_notice(&self, theme: Theme, cx: &Context<Self>) -> Option<Div> {
-        let view = self.account_view()?;
+        let view = self.account_view(cx)?;
         if !should_show_account_notice(
             &view.status,
             self.account_notice_surface(),

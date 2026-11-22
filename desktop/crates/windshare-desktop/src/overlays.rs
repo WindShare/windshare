@@ -77,7 +77,7 @@ impl Desktop {
                 dialog.clone().into_any_element(),
             ),
             Overlay::Account(dialog) => (
-                locale.text(dialog.read(cx).title()),
+                locale.text(dialog.read(cx).title(cx)),
                 DEFAULT_OVERLAY_WIDTH,
                 dialog.clone().into_any_element(),
             ),

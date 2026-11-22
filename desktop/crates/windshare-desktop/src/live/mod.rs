@@ -1,11 +1,13 @@
 mod application;
 mod blocking;
+mod host_store;
 mod presentation;
 mod projection;
 mod quit;
 mod selection;
 mod session;
 
+pub use host_store::{HostStore, host_share_running, host_share_state};
 pub use projection::byte_size;
 pub use session::{PREVIEW_DEFAULT_FRONTEND, Runtime};
 
@@ -76,11 +78,9 @@ pub fn run(activation: Activation, compact: bool) -> Result<(), String> {
             };
             cx.open_window(options, |window, cx| {
                 cx.new(|cx| {
-                    let mut desktop = Desktop::new(
-                        window,
-                        Runtime::native(application_controller, event_application),
-                        cx,
-                    );
+                    let runtime =
+                        Runtime::native(application_controller, event_application, window, cx);
+                    let mut desktop = Desktop::new(window, runtime, cx);
                     desktop.consume_activations(window, cx);
                     desktop
                 })

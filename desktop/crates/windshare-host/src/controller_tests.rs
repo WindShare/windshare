@@ -199,3 +199,45 @@ fn submission_publishes_a_distinct_snapshot_when_previous_is_retained() {
     assert_eq!(before.operations.len(), 0);
     assert_eq!(after.operations.len(), 1);
 }
+
+#[test]
+fn account_and_setup_submissions_record_pending_and_local_failure_atomically() {
+    let (controller, _receiver) = controller();
+    let account_id = controller.account(AccountCommand::Refresh).unwrap();
+    assert_eq!(
+        controller.model().account_request,
+        AccountRequest::Pending { id: account_id }
+    );
+    assert!(controller.model().account_busy());
+    assert!(controller.model().has_unfinished_work());
+
+    let setup_id = controller
+        .edit_preference("", PreferenceEdit::Mode(RelayMode::Selected))
+        .unwrap();
+    assert_eq!(
+        controller.model().setup_request,
+        SetupRequest::Pending {
+            id: setup_id,
+            kind: SetupRequestKind::Configure,
+        }
+    );
+    assert!(controller.model().setup_pending());
+
+    controller.begin_shutdown();
+    assert!(controller.account(AccountCommand::Refresh).is_none());
+    assert!(matches!(
+        controller.model().account_request,
+        AccountRequest::Failed { .. }
+    ));
+    assert!(controller.model().command_error.is_none());
+    assert!(
+        controller
+            .edit_preference("", PreferenceEdit::Mode(RelayMode::Automatic))
+            .is_none()
+    );
+    assert!(matches!(
+        controller.model().setup_request,
+        SetupRequest::Failed { .. }
+    ));
+    assert!(controller.model().command_error.is_none());
+}

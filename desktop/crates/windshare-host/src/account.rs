@@ -141,7 +141,36 @@ pub enum Allowance {
     Stale,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum AccountRequest {
+    #[default]
+    Idle,
+    Pending {
+        id: String,
+    },
+    Succeeded {
+        id: String,
+    },
+    Failed {
+        id: String,
+        error: Failure,
+    },
+}
+
+impl AccountRequest {
+    pub fn id(&self) -> Option<&str> {
+        match self {
+            Self::Idle => None,
+            Self::Pending { id } | Self::Succeeded { id } | Self::Failed { id, .. } => Some(id),
+        }
+    }
+
+    pub const fn is_pending(&self) -> bool {
+        matches!(self, Self::Pending { .. })
+    }
+}
+
+#[derive(Clone, Serialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum AccountCommand {
     Register,

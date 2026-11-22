@@ -11,10 +11,10 @@ use windshare_host::{Connection, Model, SenderTrace, SenderTraceChange};
 use windshare_ui::{ButtonStyle, Icon, Theme, Tone, column, row};
 
 impl Desktop {
-    pub(crate) fn diagnostics_attention_tone(&self) -> Option<Tone> {
+    pub(crate) fn diagnostics_attention_tone(&self, cx: &gpui::App) -> Option<Tone> {
         let sender_on = matches!(
             &self.runtime,
-            Runtime::Native(session) if session.model.sender_trace == SenderTrace::On
+            Runtime::Native(session) if session.model(cx).sender_trace == SenderTrace::On
         );
         (self.browser_trace || sender_on).then_some(Tone::Lavender)
     }
@@ -35,9 +35,9 @@ impl Desktop {
         let Runtime::Native(session) = &self.runtime else {
             return card;
         };
-        let logs_available = self.log_directory().is_some();
+        let logs_available = self.log_directory(cx).is_some();
         card.child(theme.separator())
-            .child(Self::sender_trace_setting(theme, &session.model, cx))
+            .child(Self::sender_trace_setting(theme, session.model(cx), cx))
             .child(theme.separator())
             .child(Self::local_logs_row(theme, logs_available, cx))
     }
@@ -156,23 +156,23 @@ impl Desktop {
         );
     }
 
-    pub(crate) fn set_sender_trace(&self, enabled: bool) {
+    pub(crate) fn set_sender_trace(&self, enabled: bool, cx: &gpui::App) {
         if let Runtime::Native(session) = &self.runtime {
-            session.controller.set_sender_trace(enabled);
+            session.controller(cx).set_sender_trace(enabled);
         }
     }
 
-    fn log_directory(&self) -> Option<&Path> {
+    fn log_directory(&self, cx: &gpui::App) -> Option<std::path::PathBuf> {
         if let Runtime::Native(session) = &self.runtime
-            && let Some(directory) = session.model.log_directory.as_deref()
+            && let Some(directory) = session.model(cx).log_directory.as_deref()
         {
-            return Some(directory);
+            return Some(directory.to_path_buf());
         }
-        crate::logging::directory()
+        crate::logging::directory().map(Path::to_path_buf)
     }
 
     pub(crate) fn open_logs(&mut self, cx: &mut Context<Self>) {
-        let Some(path) = self.log_directory().filter(|path| path.is_dir()) else {
+        let Some(path) = self.log_directory(cx).filter(|path| path.is_dir()) else {
             tracing::warn!(
                 event = "desktop.log_folder_unavailable",
                 session = std::process::id()
@@ -184,6 +184,6 @@ impl Desktop {
             event = "desktop.log_folder_opened",
             session = std::process::id()
         );
-        cx.open_with_system(path);
+        cx.open_with_system(&path);
     }
 }

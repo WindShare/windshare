@@ -11,8 +11,8 @@ use windshare_ui::{Button, ButtonStyle, Icon, Theme, Tone, column, icon, row};
 const TAB_TRANSITION_MS: u64 = 180;
 
 impl Desktop {
-    pub fn active_settings_section(&self) -> SettingsSection {
-        if self.settings_section_available(self.settings_section) {
+    pub fn active_settings_section(&self, cx: &gpui::App) -> SettingsSection {
+        if self.settings_section_available(self.settings_section, cx) {
             self.settings_section
         } else {
             SettingsSection::General
@@ -62,7 +62,7 @@ impl Desktop {
                 .children(
                     sections
                         .into_iter()
-                        .filter(|section| self.settings_section_available(*section))
+                        .filter(|section| self.settings_section_available(*section, cx))
                         .map(|section| {
                             self.settings_tab(theme, section, active == section, locale, cx)
                         }),
@@ -79,9 +79,9 @@ impl Desktop {
         cx: &Context<Self>,
     ) -> Button {
         let attention = match section {
-            SettingsSection::Network => self.network_attention_tone(),
-            SettingsSection::Account => self.account_attention_tone(),
-            SettingsSection::Diagnostics => self.diagnostics_attention_tone(),
+            SettingsSection::Network => self.network_attention_tone(cx),
+            SettingsSection::Account => self.account_attention_tone(cx),
+            SettingsSection::Diagnostics => self.diagnostics_attention_tone(cx),
             SettingsSection::General => None,
         };
         let icon_color = if selected {

@@ -232,7 +232,7 @@ impl Desktop {
             }))
             .child(
                 theme
-                    .label(locale.text(self.runtime.status()), 12.)
+                    .label(locale.text(self.runtime.status(cx)), 12.)
                     .text_color(theme.muted_text()),
             )
     }

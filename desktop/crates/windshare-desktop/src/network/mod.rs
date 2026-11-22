@@ -1,18 +1,16 @@
 mod dialog;
+mod dialog_host;
 mod dialog_view;
 mod relay_preferences;
 mod settings;
 mod setup;
 mod setup_feedback;
 
-pub use dialog::{
-    OtherRunningSetup, SetupDialog, SetupDialogEvent, SetupDialogSnapshot, SetupRuntimeMode,
-    SetupShareSummary,
-};
+pub use dialog::{SetupDialog, SetupDialogEvent, SetupSource};
 pub use settings::setting_row;
 
 use crate::localization::Text;
-use windshare_host::{Model, RelayOperation, Setup};
+use windshare_host::{Model, RelayOperation, RelayPreferences, Setup, SetupRequest};
 
 const MAX_ACTIVE_RELAYS: usize = 8;
 
@@ -34,93 +32,79 @@ impl SetupPage {
     }
 }
 
-#[derive(Default)]
-pub struct SetupReconcile {
-    pub toast: Option<Text>,
-    pub had_pending: bool,
-    pub finished: bool,
-    pub clear_access_key: bool,
+fn setup_finished_feedback(model: &Model) -> Option<Text> {
+    let Setup::Finished { context } = &model.setup else {
+        return None;
+    };
+    if context.frontend_saved {
+        Some(Text::FrontendSaved)
+    } else if context.relay_saved {
+        let enabled = model
+            .preferences
+            .relays
+            .iter()
+            .any(|relay| relay.url == context.relay_url && relay.enabled);
+        Some(
+            if model.waits_for_official_authorization(&context.operation_id) {
+                Text::RelaySaved
+            } else if enabled {
+                Text::RelayConnected
+            } else {
+                Text::RelaySavedInactive
+            },
+        )
+    } else {
+        None
+    }
 }
 
 #[derive(Default)]
-pub struct SetupTracker {
-    pub pending: Option<String>,
-    pub pending_toast: Option<Text>,
-    pub feedback: Option<Result<Text, String>>,
+pub struct NetworkSettingsState {
     pub expanded_relay: Option<String>,
+    pub inline_request_id: Option<String>,
+    pub remove_toast_id: Option<String>,
 }
 
-impl SetupTracker {
-    pub fn reconcile(&mut self, model: &Model) -> SetupReconcile {
+impl NetworkSettingsState {
+    pub fn clear_transient(&mut self) {
+        self.expanded_relay = None;
+        self.inline_request_id = None;
+    }
+
+    pub fn prune_expanded(&mut self, prefs: &RelayPreferences) {
         if let Some(url) = &self.expanded_relay
-            && !model
-                .preferences
-                .relays
-                .iter()
-                .any(|relay| &relay.url == url)
+            && !prefs.relays.iter().any(|relay| &relay.url == url)
         {
             self.expanded_relay = None;
         }
-        let Some(id) = self.pending.as_ref() else {
-            return SetupReconcile::default();
-        };
-        let mut update = SetupReconcile {
-            had_pending: true,
-            ..SetupReconcile::default()
-        };
-        if let Some(error) = model.settings_rejection(id) {
-            self.feedback = Some(Err(error.message.clone()));
-            self.pending_toast = None;
-        } else if model
-            .setup
-            .context()
-            .is_some_and(|context| &context.id == id)
-        {
-            self.feedback = match &model.setup {
-                Setup::Finished { context } => {
-                    update.finished = true;
-                    update.clear_access_key = true;
-                    update.toast = self.pending_toast.take();
-                    if context.frontend_saved {
-                        Some(Ok(Text::FrontendSaved))
-                    } else if context.relay_saved {
-                        let enabled = model
-                            .preferences
-                            .relays
-                            .iter()
-                            .any(|relay| relay.url == context.relay_url && relay.enabled);
-                        Some(Ok(
-                            if model.waits_for_official_authorization(&context.operation_id) {
-                                Text::RelaySaved
-                            } else if enabled {
-                                Text::RelayConnected
-                            } else {
-                                Text::RelaySavedInactive
-                            },
-                        ))
-                    } else {
-                        None
-                    }
-                }
-                Setup::Cancelled { .. } => {
-                    self.pending_toast = None;
-                    update.clear_access_key = true;
-                    Some(Ok(Text::SetupCancelled))
-                }
-                Setup::Failed { error, .. } if !model.setup.unfinished() => {
-                    self.pending_toast = None;
-                    Some(Err(error.message.clone()))
-                }
-                Setup::Failed { .. } | Setup::CancelFailed { .. } => {
-                    self.pending_toast = None;
-                    None
-                }
-                _ => return SetupReconcile::default(),
-            };
-        } else {
-            return SetupReconcile::default();
+    }
+
+    pub fn take_remove_toast(&mut self, model: &Model) -> Option<Text> {
+        let tracked = self.remove_toast_id.as_deref()?;
+        match &model.setup_request {
+            SetupRequest::Finished { id } if id == tracked => {
+                self.remove_toast_id = None;
+                Some(Text::RelayRemoved)
+            }
+            SetupRequest::Cancelled { id } | SetupRequest::Failed { id, .. } if id == tracked => {
+                self.remove_toast_id = None;
+                None
+            }
+            _ => None,
         }
-        self.pending = None;
-        update
+    }
+
+    pub fn inline_feedback(&self, model: &Model) -> Option<Result<Text, String>> {
+        let tracked = self.inline_request_id.as_deref()?;
+        match &model.setup_request {
+            SetupRequest::Finished { id } if id == tracked => {
+                setup_finished_feedback(model).map(Ok)
+            }
+            SetupRequest::Cancelled { id } if id == tracked => Some(Ok(Text::SetupCancelled)),
+            SetupRequest::Failed { id, error } if id == tracked && !model.setup.unfinished() => {
+                Some(Err(error.message.clone()))
+            }
+            _ => None,
+        }
     }
 }

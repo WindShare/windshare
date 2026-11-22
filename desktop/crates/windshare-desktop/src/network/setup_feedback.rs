@@ -124,7 +124,7 @@ impl Desktop {
                 .icon(Icon::Refresh)
                 .style(ButtonStyle::Secondary)
                 .on_press(cx.listener(|this, (), _, cx| {
-                    this.cancel_sharing_setup();
+                    this.cancel_sharing_setup(cx);
                     cx.notify();
                 })),
             )
@@ -139,7 +139,7 @@ impl Desktop {
         let Runtime::Native(session) = &self.runtime else {
             return None;
         };
-        let setup = &session.model.setup;
+        let setup = &session.model(cx).setup;
         let context = setup.context()?;
         if !setup.unfinished() || operation.is_empty() || context.operation_id == operation {
             return None;
@@ -188,7 +188,7 @@ impl Desktop {
                     .style(ButtonStyle::Secondary)
                     .disabled(disabled)
                     .on_press(cx.listener(|this, (), _, cx| {
-                        this.cancel_sharing_setup();
+                        this.cancel_sharing_setup(cx);
                         cx.notify();
                     }))
             },

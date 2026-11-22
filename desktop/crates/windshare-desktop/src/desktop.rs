@@ -34,8 +34,8 @@ pub struct Desktop {
     pub link_input: Entity<Input>,
     pub share_flow: ShareFlow,
     pub runtime: Runtime,
-    pub setup: crate::network::SetupTracker,
-    pub account: crate::account::AccountTracker,
+    pub network_ui: crate::network::NetworkSettingsState,
+    pub account_ui: crate::account::AccountSettingsState,
     pub share_reveal_wakeup: Option<gpui::Task<()>>,
     pub intro_anchors: IntroAnchors,
     pub receive_flow: ReceiveFlow,
@@ -108,7 +108,7 @@ impl Desktop {
         let primary_focus = cx.focus_handle();
         window.focus(&primary_focus, cx);
         if let Runtime::Native(session) = &runtime {
-            Self::observe_runtime(session.controller.clone(), window, cx);
+            subscriptions.push(Self::observe_runtime(&session.host, window, cx));
             Self::observe_activations(session.application.clone(), window, cx);
             let view = cx.entity().downgrade();
             // Visibility can change while the window is no longer drawing frames.
@@ -132,8 +132,8 @@ impl Desktop {
             link_input,
             share_flow: ShareFlow::Choose,
             runtime,
-            setup: crate::network::SetupTracker::default(),
-            account: crate::account::AccountTracker::default(),
+            network_ui: crate::network::NetworkSettingsState::default(),
+            account_ui: crate::account::AccountSettingsState::default(),
             share_reveal_wakeup: None,
             intro_anchors: IntroAnchors::default(),
             receive_flow: ReceiveFlow::default(),
@@ -250,9 +250,6 @@ impl Desktop {
         let Some(frame) = self.overlays.pop() else {
             return;
         };
-        if matches!(frame.content, Overlay::SharingSetup(..)) {
-            self.setup.expanded_relay = None;
-        }
         let fallback = self
             .overlays
             .last()
@@ -278,24 +275,25 @@ impl Desktop {
                 .update(cx, crate::supershare::SuperShare::leave);
         }
         if page == Page::Settings {
-            if !self.settings_section_available(self.settings_section) {
+            if !self.settings_section_available(self.settings_section, cx) {
                 self.settings_section = SettingsSection::General;
             }
-            self.refresh_settings_section();
+            self.refresh_settings_section(cx);
         }
         self.page = page;
         self.overlays.clear();
-        self.setup.expanded_relay = None;
+        self.network_ui.clear_transient();
+        self.account_ui.clear();
         self.link_disclosure = LinkDisclosure::Summary;
         self.focus_task(window, cx);
     }
 
-    pub fn settings_section_available(&self, section: SettingsSection) -> bool {
+    pub fn settings_section_available(&self, section: SettingsSection, cx: &App) -> bool {
         match section {
             SettingsSection::General | SettingsSection::Network | SettingsSection::Diagnostics => {
                 true
             }
-            SettingsSection::Account => self.account_view().is_some(),
+            SettingsSection::Account => self.account_view(cx).is_some(),
         }
     }
 
@@ -305,7 +303,7 @@ impl Desktop {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let next = if self.settings_section_available(section) {
+        let next = if self.settings_section_available(section, cx) {
             section
         } else {
             SettingsSection::General
@@ -317,22 +315,23 @@ impl Desktop {
             to = ?next,
         );
         self.settings_section = next;
-        self.setup.expanded_relay = None;
+        self.network_ui.clear_transient();
+        self.account_ui.clear();
         if self.page == Page::Settings {
             self.overlays.clear();
-            self.refresh_settings_section();
+            self.refresh_settings_section(cx);
         } else {
             self.navigate(Page::Settings, window, cx);
         }
     }
 
-    fn refresh_settings_section(&self) {
+    fn refresh_settings_section(&self, cx: &App) {
         let Runtime::Native(session) = &self.runtime else {
             return;
         };
-        session.controller.refresh_preferences();
+        session.controller(cx).refresh_preferences();
         if self.settings_section == SettingsSection::Account {
-            session.controller.reload_account_selection();
+            session.controller(cx).reload_account_selection();
         }
     }
     pub fn focus_task(&self, window: &mut Window, cx: &mut App) {
@@ -402,7 +401,7 @@ impl Desktop {
         let theme = Theme::current(window, cx);
         let compact = window.viewport_size().width < px(COMPACT_WIDTH);
         let gutter = px(page_gutter(compact));
-        let active = self.active_settings_section();
+        let active = self.active_settings_section(cx);
         column()
             .flex_1()
             .min_h_0()
@@ -445,13 +444,13 @@ impl Desktop {
                             .max_w(px(MAX_PAGE_WIDTH))
                             .flex_shrink_0()
                             .gap(px(16.))
-                            .when_some(self.runtime.setup_cancellation_error(), |el, error| {
+                            .when_some(self.runtime.setup_cancellation_error(cx), |el, error| {
                                 el.child(Self::setup_cancellation_notice(theme, error, cx))
                             })
                             .when_some(self.account_notice(theme, cx), |el, notice| {
                                 el.child(notice)
                             })
-                            .when_some(self.runtime.notice(), |el, error| {
+                            .when_some(self.runtime.notice(cx), |el, error| {
                                 el.child(theme.card().p(px(18.)).child(
                                     theme.label(error, 15.).text_color(Tone::Rose.text(theme)),
                                 ))
@@ -506,13 +505,13 @@ impl Desktop {
                         .when(self.page != Page::Share, |el| {
                             el.child(self.page_heading(theme, compact, cx))
                         })
-                        .when_some(self.runtime.setup_cancellation_error(), |el, error| {
+                        .when_some(self.runtime.setup_cancellation_error(cx), |el, error| {
                             el.child(Self::setup_cancellation_notice(theme, error, cx))
                         })
                         .when_some(self.account_notice(theme, cx), |el, notice| {
                             el.child(notice)
                         })
-                        .when_some(self.runtime.notice(), |el, error| {
+                        .when_some(self.runtime.notice(cx), |el, error| {
                             el.child(
                                 theme.card().p(px(18.)).child(
                                     theme.label(error, 15.).text_color(Tone::Rose.text(theme)),

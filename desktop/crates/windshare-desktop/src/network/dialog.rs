@@ -1,116 +1,56 @@
-use super::{SetupPage, SetupReconcile};
+use super::{
+    SetupPage,
+    dialog_host::{
+        OtherRunningSetup, ShareDisplay, operation_display, other_running_for_model,
+        setup_shows_progress,
+    },
+};
 use crate::{
+    live::HostStore,
     localization::{LanguageSettings, Text, language},
     model::SharingSetupTarget,
 };
 use gpui::{
-    AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, Subscription, Window,
+    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, Subscription, Window,
 };
 use windshare_host::{PreferenceEdit, RelayOperation, RelayPreferences, Setup};
-use windshare_ui::{Icon, Input, InputEvent};
+use windshare_ui::{Input, InputEvent};
 
-#[derive(Clone)]
-pub struct SetupShareSummary {
-    pub id: usize,
-    pub name: String,
-    pub symbol: Icon,
-    pub finished: bool,
-    pub live: bool,
-    pub operation_id: String,
-}
+const IDLE_SETUP: Setup = Setup::Idle;
 
-#[derive(Clone)]
-pub struct OtherRunningSetup {
-    pub share_name: Option<String>,
-}
-
-#[derive(Clone, Copy)]
-pub enum SetupRuntimeMode {
-    Preview,
+pub enum SetupSource {
     Native {
-        waits_official: bool,
-        selection_disabled: bool,
-        pending: bool,
+        host: Entity<HostStore>,
+        operation_id: String,
     },
-}
-
-impl SetupRuntimeMode {
-    pub const fn is_preview(self) -> bool {
-        matches!(self, Self::Preview)
-    }
-
-    pub const fn pending(self) -> bool {
-        matches!(self, Self::Native { pending: true, .. })
-    }
-
-    pub const fn selection_disabled(self) -> bool {
-        matches!(
-            self,
-            Self::Native {
-                selection_disabled: true,
-                ..
-            }
-        )
-    }
-
-    pub const fn waits_official(self) -> bool {
-        matches!(
-            self,
-            Self::Native {
-                waits_official: true,
-                ..
-            }
-        )
-    }
-}
-
-#[derive(Clone)]
-pub struct SetupDialogSnapshot {
-    pub target: SharingSetupTarget,
-    pub prefs: RelayPreferences,
-    pub setup: Setup,
-    pub command_error: Option<String>,
-    pub mode: SetupRuntimeMode,
-    pub share: Option<SetupShareSummary>,
-    pub other_running: Option<OtherRunningSetup>,
-    pub feedback: Option<Result<Text, String>>,
-    pub expanded_relay: Option<String>,
+    Preview {
+        prefs: RelayPreferences,
+    },
 }
 
 #[derive(Clone)]
 pub enum SetupDialogEvent {
     PageChanged,
-    SubmitRelay {
-        share_id: Option<usize>,
-        relay_operation: RelayOperation,
-        relay_url: String,
-        access_key: String,
-    },
-    SubmitFrontend {
-        share_id: Option<usize>,
-        url: String,
-    },
-    EditPreference(PreferenceEdit),
-    ToggleRelayActions(String),
-    SwitchShareRelay {
-        share_id: usize,
-        relay_url: String,
-    },
-    UseSavedSettings(usize),
     ReturnToRunningSetup,
-    CancelSetup,
-    ApproveRelay,
-    ConfirmReauthorizeRelay(String),
-    ConfirmRemoveRelay(String),
+    Toast(Text),
+    Completed(Option<Text>),
     Close,
+    PreviewRelay(String),
+    PreviewFrontend(String),
+    PreviewPreference(PreferenceEdit),
 }
 
 pub struct SetupDialog {
+    pub(super) target: SharingSetupTarget,
+    pub(super) source: SetupSource,
     pub(super) page: SetupPage,
     pub(super) relay: Entity<Input>,
     pub(super) access_key: Entity<Input>,
     pub(super) frontend: Entity<Input>,
-    pub(super) snapshot: SetupDialogSnapshot,
+    pub(super) expanded_relay: Option<String>,
+    pub(super) feedback: Option<Result<Text, String>>,
+    pub(super) in_flight_id: Option<String>,
+    pub(super) remove_toast_id: Option<String>,
     overlay_scope: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -119,11 +59,12 @@ impl EventEmitter<SetupDialogEvent> for SetupDialog {}
 
 impl SetupDialog {
     pub fn new(
-        snapshot: SetupDialogSnapshot,
+        target: SharingSetupTarget,
+        source: SetupSource,
         initial_page: SetupPage,
         initial_relay_url: Option<String>,
         overlay_scope: FocusHandle,
-        window: &Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let locale = language(cx);
@@ -151,12 +92,33 @@ impl SetupDialog {
                 },
             ));
         }
+        let in_flight_id = match &source {
+            SetupSource::Native { host, .. } => {
+                subscriptions.push(cx.observe_in(host, window, |this, host, window, cx| {
+                    this.on_host_updated(&host, window, cx);
+                }));
+                let model = host.read(cx).model();
+                if model.setup_pending() {
+                    model.setup_request.id().map(str::to_owned)
+                } else if model.setup.busy() {
+                    model.setup.context().map(|ctx| ctx.id.clone())
+                } else {
+                    None
+                }
+            }
+            SetupSource::Preview { .. } => None,
+        };
         let mut dialog = Self {
+            target,
+            source,
             page: SetupPage::Selection,
             relay,
             access_key,
             frontend,
-            snapshot,
+            expanded_relay: None,
+            feedback: None,
+            in_flight_id,
+            remove_toast_id: None,
             overlay_scope,
             _subscriptions: subscriptions,
         };
@@ -187,11 +149,87 @@ impl SetupDialog {
         self.page.title()
     }
 
-    pub(super) fn operation_id(&self) -> &str {
-        self.snapshot
-            .share
-            .as_ref()
-            .map_or("", |share| share.operation_id.as_str())
+    pub(super) const fn is_preview(&self) -> bool {
+        matches!(self.source, SetupSource::Preview { .. })
+    }
+
+    pub(super) const fn operation_id(&self) -> &str {
+        match &self.source {
+            SetupSource::Native { operation_id, .. } => operation_id.as_str(),
+            SetupSource::Preview { .. } => "",
+        }
+    }
+
+    pub(super) fn prefs<'a>(&'a self, cx: &'a App) -> &'a RelayPreferences {
+        match &self.source {
+            SetupSource::Native { host, .. } => &host.read(cx).model().preferences,
+            SetupSource::Preview { prefs } => prefs,
+        }
+    }
+
+    pub(super) fn setup<'a>(&'a self, cx: &'a App) -> &'a Setup {
+        match &self.source {
+            SetupSource::Native { host, .. } => &host.read(cx).model().setup,
+            SetupSource::Preview { .. } => &IDLE_SETUP,
+        }
+    }
+
+    pub(super) fn command_error<'a>(&'a self, cx: &'a App) -> Option<&'a str> {
+        match &self.source {
+            SetupSource::Native { host, .. } => host.read(cx).model().command_error.as_deref(),
+            SetupSource::Preview { .. } => None,
+        }
+    }
+
+    pub(super) fn pending(&self, cx: &App) -> bool {
+        match &self.source {
+            SetupSource::Native { host, .. } => host.read(cx).model().setup_pending(),
+            SetupSource::Preview { .. } => false,
+        }
+    }
+
+    pub(super) fn selection_disabled(&self, cx: &App) -> bool {
+        match &self.source {
+            SetupSource::Native { host, .. } => host.read(cx).selection_disabled(),
+            SetupSource::Preview { .. } => false,
+        }
+    }
+
+    pub(super) fn busy(&self, cx: &App) -> bool {
+        self.pending(cx) || self.selection_disabled(cx) || self.setup(cx).unfinished()
+    }
+
+    pub(super) fn waits_official(&self, cx: &App) -> bool {
+        match &self.source {
+            SetupSource::Native { host, operation_id } => host
+                .read(cx)
+                .model()
+                .waits_for_official_authorization(operation_id),
+            SetupSource::Preview { .. } => false,
+        }
+    }
+
+    pub(super) fn share_summary(&self, cx: &App) -> Option<ShareDisplay> {
+        let SetupSource::Native { host, operation_id } = &self.source else {
+            return None;
+        };
+        if operation_id.is_empty() {
+            return None;
+        }
+        let op = host
+            .read(cx)
+            .model()
+            .operations
+            .iter()
+            .find(|op| &op.id == operation_id)?;
+        Some(operation_display(op))
+    }
+
+    pub(super) fn other_running_setup(&self, cx: &App) -> Option<OtherRunningSetup> {
+        let SetupSource::Native { host, operation_id } = &self.source else {
+            return None;
+        };
+        other_running_for_model(host.read(cx).model(), operation_id)
     }
 
     pub(super) fn input_submittable(&self, cx: &Context<Self>) -> bool {
@@ -200,26 +238,21 @@ impl SetupDialog {
             SetupPage::Relay(_) => !self.relay.read(cx).value().trim().is_empty(),
             SetupPage::ReceiverSite => {
                 let url = self.frontend.read(cx).value().trim();
-                !url.is_empty() && url != self.snapshot.prefs.frontend
+                !url.is_empty() && url != self.prefs(cx).frontend
             }
         }
     }
 
-    pub(super) fn shows_setup_progress(&self) -> bool {
-        let connecting = self
-            .snapshot
-            .setup
-            .context()
-            .is_some_and(|ctx| !ctx.relay_url.is_empty());
-        self.snapshot.setup.busy() && connecting || self.snapshot.setup.requires_cancellation()
+    pub(super) fn shows_setup_progress(&self, cx: &App) -> bool {
+        setup_shows_progress(self.setup(cx))
     }
 
-    fn form_visible(&self) -> bool {
-        self.snapshot.other_running.is_none() && !self.shows_setup_progress()
+    fn form_visible(&self, cx: &App) -> bool {
+        self.other_running_setup(cx).is_none() && !self.shows_setup_progress(cx)
     }
 
-    pub fn focus_target(&self, cx: &gpui::App) -> FocusHandle {
-        if !self.form_visible() {
+    pub fn focus_target(&self, cx: &App) -> FocusHandle {
+        if !self.form_visible(cx) {
             return self.overlay_scope.clone();
         }
         match self.page {
@@ -235,7 +268,7 @@ impl SetupDialog {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.snapshot.mode.pending() || self.snapshot.setup.unfinished() {
+        if self.pending(cx) || self.setup(cx).unfinished() {
             return;
         }
         self.switch_page(page, None, window, cx);
@@ -247,7 +280,7 @@ impl SetupDialog {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.snapshot.mode.pending() || self.snapshot.setup.unfinished() {
+        if self.pending(cx) || self.setup(cx).unfinished() {
             return;
         }
         self.switch_page(
@@ -280,7 +313,7 @@ impl SetupDialog {
         cx: &mut Context<Self>,
     ) {
         self.page = page;
-        self.snapshot.feedback = None;
+        self.feedback = None;
         self.access_key
             .update(cx, |input, cx| input.set_value("", cx));
         match page {
@@ -291,72 +324,35 @@ impl SetupDialog {
                     .update(cx, |input, cx| input.set_value(relay_value, cx));
             }
             SetupPage::ReceiverSite => {
-                let frontend = self.snapshot.prefs.frontend.clone();
+                let frontend = self.prefs(cx).frontend.clone();
                 self.frontend
                     .update(cx, |input, cx| input.set_value(frontend, cx));
             }
         }
     }
 
-    pub(super) fn submit(&self, cx: &mut Context<Self>) {
-        let operation = self.operation_id();
-        if !self.snapshot.mode.is_preview()
-            && (self.snapshot.mode.selection_disabled()
-                || self.snapshot.mode.pending()
-                || !self.snapshot.setup.can_configure(operation))
-        {
-            return;
-        }
-        let share_id = self.snapshot.target.share_id();
-        match self.page {
-            SetupPage::Selection => {}
-            SetupPage::Relay(relay_operation) => {
-                let relay_url = self.relay.read(cx).value().trim().to_owned();
-                if relay_url.is_empty() {
-                    return;
-                }
-                let access_key = self.access_key.read(cx).value().trim().to_owned();
-                cx.emit(SetupDialogEvent::SubmitRelay {
-                    share_id,
-                    relay_operation,
-                    relay_url,
-                    access_key,
-                });
-            }
-            SetupPage::ReceiverSite => {
-                let url = self.frontend.read(cx).value().trim().to_owned();
-                if url.is_empty() || url == self.snapshot.prefs.frontend {
-                    return;
-                }
-                cx.emit(SetupDialogEvent::SubmitFrontend { share_id, url });
-            }
-        }
+    pub(super) fn toggle_relay_actions(&mut self, relay_url: String, cx: &mut Context<Self>) {
+        self.expanded_relay = if self.expanded_relay.as_deref() == Some(relay_url.as_str()) {
+            None
+        } else {
+            Some(relay_url)
+        };
+        cx.notify();
     }
 
-    pub fn sync_snapshot(
-        &mut self,
-        snapshot: SetupDialogSnapshot,
-        update: Option<&SetupReconcile>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let previous_page = self.page;
-        let previous_form_visible = self.form_visible();
-        if let Some(update) = update {
-            if update.clear_access_key {
-                self.access_key
-                    .update(cx, |input, cx| input.set_value("", cx));
+    pub fn set_preview_preferences(&mut self, prefs: RelayPreferences, cx: &mut Context<Self>) {
+        if let SetupSource::Preview {
+            prefs: current_prefs,
+        } = &mut self.source
+        {
+            if let Some(url) = &self.expanded_relay
+                && !prefs.relays.iter().any(|relay| &relay.url == url)
+            {
+                self.expanded_relay = None;
             }
-            if update.finished {
-                self.page = SetupPage::Selection;
-            }
+            *current_prefs = prefs;
+            cx.notify();
         }
-        self.snapshot = snapshot;
-        if self.page != previous_page || self.form_visible() != previous_form_visible {
-            let focus = self.focus_target(cx);
-            window.focus(&focus, cx);
-        }
-        cx.notify();
     }
 
     pub fn clear_access_key(&self, cx: &mut Context<Self>) {

@@ -68,18 +68,18 @@ impl Desktop {
             Action::CopyLink(id, kind) => self.copy_link(id, kind, cx),
             Action::ToggleLink(id) => self.toggle_link(id),
             Action::SetBrowserTrace(enabled) => self.set_browser_trace(enabled),
-            Action::SetSenderTrace(enabled) => self.set_sender_trace(enabled),
+            Action::SetSenderTrace(enabled) => self.set_sender_trace(enabled, cx),
             Action::OpenLogs => self.open_logs(cx),
             Action::EnlargeQr(id) => self.enlarge_qr(id, window, cx),
-            Action::StopShare(id) => self.stop_share(id),
+            Action::StopShare(id) => self.stop_share(id, cx),
             Action::ShareAgain(id) => self.share_again(id, window, cx),
             Action::ConfigureShare(id) => self.configure_share(id, window, cx),
             Action::OpenAccount => self.open_account(window, cx),
-            Action::ReloadAccountSelection => self.reload_account_selection(),
+            Action::ReloadAccountSelection => self.reload_account_selection(cx),
             Action::ChooseShareRelays(id) => self.open_sharing_setup(Some(id), window, cx),
             Action::SettingsSection(section) => self.select_settings_section(section, window, cx),
-            Action::ResumeShare(id) => self.resume_native_share(id),
-            Action::UseSavedSettings(id) => self.use_saved_settings(id),
+            Action::ResumeShare(id) => self.resume_native_share(id, cx),
+            Action::UseSavedSettings(id) => self.use_saved_settings(id, cx),
             Action::ToggleTransfer(index) => self.toggle_preview_transfer(index),
             Action::SetNotifications(choice) => {
                 crate::preferences::select_notifications(choice, cx);
@@ -109,7 +109,7 @@ impl Desktop {
         }
     }
 
-    fn stop_share(&mut self, id: usize) {
+    fn stop_share(&mut self, id: usize, cx: &gpui::App) {
         if self.runtime.is_preview() {
             if let Some(share) = self.shares.iter_mut().find(|share| share.id == id) {
                 share.state = match share.state {
@@ -119,7 +119,7 @@ impl Desktop {
                 };
             }
         } else {
-            self.stop_native_share(id);
+            self.stop_native_share(id, cx);
         }
     }
 
@@ -150,7 +150,7 @@ impl Desktop {
                     )
             })
         {
-            self.stop_share(run.share_id);
+            self.stop_share(run.share_id, cx);
         }
         self.share_flow = ShareFlow::Choose;
         self.focus_task(window, cx);
@@ -223,7 +223,6 @@ impl Desktop {
             let _ = view.update(cx, |this, cx| {
                 if matches!(this.copy_feedback, CopyFeedback::Copied { revision: current, .. } if current == revision) {
                     this.copy_feedback = CopyFeedback::Idle;
-                    this.sync_account_dialog_uid_copied(false, cx);
                     cx.notify();
                 }
             });

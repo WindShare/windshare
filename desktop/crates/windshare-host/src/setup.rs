@@ -130,6 +130,48 @@ impl Setup {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SetupRequestKind {
+    Configure,
+    Cancel { acknowledged: bool },
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum SetupRequest {
+    #[default]
+    Idle,
+    Pending {
+        id: String,
+        kind: SetupRequestKind,
+    },
+    Finished {
+        id: String,
+    },
+    Cancelled {
+        id: String,
+    },
+    Failed {
+        id: String,
+        error: crate::Failure,
+    },
+}
+
+impl SetupRequest {
+    pub fn id(&self) -> Option<&str> {
+        match self {
+            Self::Idle => None,
+            Self::Pending { id, .. }
+            | Self::Finished { id }
+            | Self::Cancelled { id }
+            | Self::Failed { id, .. } => Some(id),
+        }
+    }
+
+    pub const fn is_pending(&self) -> bool {
+        matches!(self, Self::Pending { .. })
+    }
+}
+
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
 pub struct RelayPreferences {
     pub mode: RelayMode,

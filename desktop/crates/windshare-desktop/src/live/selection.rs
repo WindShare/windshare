@@ -11,7 +11,7 @@ use windshare_activation::{Activation, EntrySource, ShareIntent};
 
 impl Desktop {
     pub fn choose_native(&mut self, folders: bool, window: &Window, cx: &Context<Self>) {
-        if self.runtime.selection_disabled() {
+        if self.runtime.selection_disabled(cx) {
             return;
         }
         let Runtime::Native(session) = &mut self.runtime else {
@@ -134,7 +134,7 @@ impl Desktop {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<usize> {
-        if self.runtime.selection_disabled() {
+        if self.runtime.selection_disabled(cx) {
             return None;
         }
         let Runtime::Native(session) = &mut self.runtime else {
@@ -144,10 +144,12 @@ impl Desktop {
         let crate::model::ShareSource::Native { operation_id } = &share.source else {
             return None;
         };
-        match session.controller.repeat(operation_id) {
+        match session.controller(cx).repeat(operation_id) {
             Ok(operation_id) => self.present_native_operation(&operation_id, window, cx),
             Err(error) => {
-                session.error = Some(error);
+                if let Runtime::Native(session) = &mut self.runtime {
+                    session.error = Some(error);
+                }
                 cx.notify();
                 None
             }

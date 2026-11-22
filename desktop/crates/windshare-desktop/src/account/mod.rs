@@ -5,11 +5,13 @@ mod notice;
 mod registration;
 mod settings;
 
-pub use dialog::{AccountDialog, AccountDialogEvent, AccountOrigin, PreviewAccountEdit};
+pub use dialog::{
+    AccountDialog, AccountDialogEvent, AccountOrigin, AccountSource, PreviewAccountEdit,
+};
 pub use notice::account_status_summary;
 
 use crate::localization::Text;
-use windshare_host::{AccountOutcome, AccountState, AccountView, Failure, Model};
+use windshare_host::{AccountRequest, AccountState, AccountView, Failure, Model};
 
 // Navigation selects a page. An open editor also owns the account it was opened for.
 pub type AccountPage = AccountScreen<()>;
@@ -142,60 +144,32 @@ impl From<Failure> for AccountFormError {
     }
 }
 
-#[derive(Clone, Debug)]
-pub enum AccountReconcile {
-    Idle,
-    Succeeded,
-    Failed(AccountFormError),
+pub const fn can_register_account(view: &AccountView, busy: bool) -> bool {
+    !busy
+        && view.status.account.is_empty()
+        && !matches!(
+            view.status.state,
+            AccountState::Registering { .. } | AccountState::Denied | AccountState::StorageError
+        )
 }
 
 #[derive(Default)]
-pub struct AccountTracker {
-    pub pending: Option<String>,
-    pub feedback: Option<Result<Text, AccountFormError>>,
+pub struct AccountSettingsState {
+    pub inline_request_id: Option<String>,
 }
 
-impl AccountTracker {
-    pub const fn busy(&self, view: &AccountView) -> bool {
-        self.pending.is_some() || view.busy()
+impl AccountSettingsState {
+    pub fn clear(&mut self) {
+        self.inline_request_id = None;
     }
 
-    pub const fn can_register(&self, view: &AccountView) -> bool {
-        !self.busy(view)
-            && view.status.account.is_empty()
-            && !matches!(
-                view.status.state,
-                AccountState::Registering { .. }
-                    | AccountState::Denied
-                    | AccountState::StorageError
-            )
-    }
-
-    pub fn reconcile(&mut self, model: &Model) -> AccountReconcile {
-        let Some(view) = &model.account else {
-            return AccountReconcile::Idle;
-        };
-        let Some(id) = &self.pending else {
-            return AccountReconcile::Idle;
-        };
-        let outcome = if let Some(op) = view.operation.as_ref().filter(|op| &op.id == id) {
-            match &op.outcome {
-                AccountOutcome::Running => return AccountReconcile::Idle,
-                AccountOutcome::Failed { error } => {
-                    let error = AccountFormError::from(error.clone());
-                    self.feedback = Some(Err(error.clone()));
-                    AccountReconcile::Failed(error)
-                }
-                AccountOutcome::Succeeded => AccountReconcile::Succeeded,
+    pub fn inline_feedback(&self, model: &Model) -> Option<Result<Text, AccountFormError>> {
+        let tracked = self.inline_request_id.as_deref()?;
+        match &model.account_request {
+            AccountRequest::Failed { id, error } if id == tracked => {
+                Some(Err(AccountFormError::from(error.clone())))
             }
-        } else if let Some(error) = model.settings_rejection(id) {
-            let error = AccountFormError::from(error.clone());
-            self.feedback = Some(Err(error.clone()));
-            AccountReconcile::Failed(error)
-        } else {
-            return AccountReconcile::Idle;
-        };
-        self.pending = None;
-        outcome
+            _ => None,
+        }
     }
 }

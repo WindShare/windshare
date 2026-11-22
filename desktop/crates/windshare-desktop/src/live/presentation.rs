@@ -59,7 +59,7 @@ impl Desktop {
         let Runtime::Native(session) = &mut self.runtime else {
             return None;
         };
-        let model = session.controller.model();
+        let model = session.controller(cx).model();
         let operation = model.operations.iter().find(|op| op.id == operation_id)?;
         session.interaction_epoch += 1;
         session.picking = false;

@@ -1,8 +1,8 @@
 mod abi;
 mod account;
 pub use account::{
-    AccountCommand, AccountOutcome, AccountProfile, AccountState, AccountStatus, AccountView,
-    Allowance, Nickname,
+    AccountCommand, AccountOutcome, AccountProfile, AccountRequest, AccountState, AccountStatus,
+    AccountView, Allowance, Nickname,
 };
 mod admission;
 mod connection;
@@ -12,7 +12,7 @@ mod setup;
 pub use model::ShareAuthorization;
 pub use setup::{
     PreferenceEdit, RelayMode, RelayOperation, RelayPreferences, SavedRelay, Setup, SetupContext,
-    SetupRecovery,
+    SetupRecovery, SetupRequest, SetupRequestKind,
 };
 
 #[cfg(test)]
@@ -205,11 +205,27 @@ impl Controller {
 
     pub fn account(&self, account: AccountCommand) -> Option<String> {
         let id = self.operation_id("account");
-        self.command(Command::Account {
-            operation_id: id.clone(),
-            account,
-        })
-        .then_some(id)
+        let mut queued = false;
+        self.shared.update(|draft| {
+            // Keep the model lock while recording the pending request so a fast
+            // host reply cannot arrive before the UI observes the in-flight state.
+            let next = match self.enqueue(Command::Account {
+                operation_id: id.clone(),
+                account,
+            }) {
+                Ok(()) => {
+                    queued = true;
+                    AccountRequest::Pending { id: id.clone() }
+                }
+                Err(message) => AccountRequest::Failed {
+                    id: id.clone(),
+                    error: Failure::from(message),
+                },
+            };
+            draft.write().account_request = next;
+        });
+        let _ = self.shared.wake.notify();
+        queued.then_some(id)
     }
 
     pub fn cancel(&self, operation_id: &str) {
@@ -287,20 +303,53 @@ impl Controller {
 
     fn submit_setup(&self, operation_id: &str, input: request::SetupInput) -> Option<String> {
         let id = self.operation_id("setup");
-        self.command(Command::Configure {
-            operation_id: operation_id.into(),
-            setup: request::SetupInput {
-                id: id.clone(),
-                ..input
-            },
-        })
-        .then_some(id)
+        let mut queued = false;
+        self.shared.update(|draft| {
+            let next = match self.enqueue(Command::Configure {
+                operation_id: operation_id.into(),
+                setup: request::SetupInput {
+                    id: id.clone(),
+                    ..input
+                },
+            }) {
+                Ok(()) => {
+                    queued = true;
+                    SetupRequest::Pending {
+                        id: id.clone(),
+                        kind: SetupRequestKind::Configure,
+                    }
+                }
+                Err(message) => SetupRequest::Failed {
+                    id: id.clone(),
+                    error: Failure::from(message),
+                },
+            };
+            draft.write().setup_request = next;
+        });
+        let _ = self.shared.wake.notify();
+        queued.then_some(id)
     }
 
     pub fn cancel_setup(&self, setup_id: &str) {
-        self.command(Command::CancelSetup {
-            setup_id: setup_id.into(),
+        let id = setup_id.to_owned();
+        self.shared.update(|draft| {
+            let next = match self.enqueue(Command::CancelSetup {
+                setup_id: id.clone(),
+            }) {
+                Ok(()) => SetupRequest::Pending {
+                    id,
+                    kind: SetupRequestKind::Cancel {
+                        acknowledged: false,
+                    },
+                },
+                Err(message) => SetupRequest::Failed {
+                    id,
+                    error: Failure::from(message),
+                },
+            };
+            draft.write().setup_request = next;
         });
+        let _ = self.shared.wake.notify();
     }
 
     pub fn resume(&self, operation_id: &str) {

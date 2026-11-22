@@ -16,11 +16,10 @@ impl Render for SetupDialog {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::current(window, cx);
         let locale = language(cx);
-        let snapshot = &self.snapshot;
-        if let Some(other) = &snapshot.other_running {
+        if let Some(other) = self.other_running_setup(cx) {
             return setup_return_panel(
                 theme,
-                &snapshot.setup,
+                self.setup(cx),
                 other.share_name.as_deref(),
                 Button::new("return-to-running-setup", locale.text(Text::ReturnToSetup))
                     .icon(Icon::Settings)
@@ -31,15 +30,16 @@ impl Render for SetupDialog {
                 cx,
             );
         }
-        let locked = snapshot.mode.pending() || snapshot.mode.selection_disabled();
-        let busy = locked || snapshot.setup.unfinished();
-        let switch_share = match snapshot.target {
+        let locked = self.pending(cx) || self.selection_disabled(cx);
+        let busy = self.busy(cx);
+        let switch_share = match self.target {
             SharingSetupTarget::SwitchRelay(id) => Some(id),
             _ => None,
         };
+        let share = self.share_summary(cx);
         let mut panel = column()
             .gap(px(18.))
-            .when_some(snapshot.share.as_ref(), |panel, share| {
+            .when_some(share.as_ref(), |panel, share| {
                 panel.child(
                     row()
                         .gap(px(10.))
@@ -53,15 +53,17 @@ impl Render for SetupDialog {
                         ),
                 )
             });
-        if self.shows_setup_progress() {
+        if self.shows_setup_progress(cx) {
             return panel.child(self.progress_view(theme, cx));
         }
-        let close_on_back = matches!(snapshot.target, SharingSetupTarget::Defaults);
+        let close_on_back = matches!(self.target, SharingSetupTarget::Defaults);
         panel = match self.page {
-            SetupPage::Selection => self.selection_body(panel, theme, switch_share, busy, cx),
+            SetupPage::Selection => {
+                self.selection_body(panel, theme, share.as_ref(), switch_share, busy, cx)
+            }
             SetupPage::Relay(_) => panel.child(self.connect_relay_fields(
                 theme,
-                locked || !snapshot.setup.can_configure(self.operation_id()),
+                locked || !self.setup(cx).can_configure(self.operation_id()),
                 busy,
                 close_on_back,
                 cx,
@@ -81,25 +83,25 @@ impl SetupDialog {
     fn progress_view(&self, theme: Theme, cx: &Context<Self>) -> Div {
         setup_progress_panel(
             theme,
-            &self.snapshot.setup,
+            self.setup(cx),
             |cx| {
                 Button::new("approve-owner", language(cx).text(Text::ApproveAsOwner))
                     .icon(Icon::Shield)
                     .style(ButtonStyle::Quiet)
-                    .on_press(cx.listener(|_, (), _, cx| cx.emit(SetupDialogEvent::ApproveRelay)))
+                    .on_press(cx.listener(|this, (), _, cx| this.approve_relay(cx)))
             },
             |cx| {
                 Button::new("approve-device", language(cx).text(Text::ApproveDevice))
                     .icon(Icon::External)
                     .style(ButtonStyle::Primary)
-                    .on_press(cx.listener(|_, (), _, cx| cx.emit(SetupDialogEvent::ApproveRelay)))
+                    .on_press(cx.listener(|this, (), _, cx| this.approve_relay(cx)))
             },
             |label, disabled, cx| {
                 Button::new("cancel-sharing-setup", language(cx).text(label))
                     .icon(Icon::Close)
                     .style(ButtonStyle::Secondary)
                     .disabled(disabled)
-                    .on_press(cx.listener(|_, (), _, cx| cx.emit(SetupDialogEvent::CancelSetup)))
+                    .on_press(cx.listener(|this, (), _, cx| this.cancel_setup(cx)))
             },
             cx,
         )
@@ -109,21 +111,18 @@ impl SetupDialog {
         &self,
         panel: Div,
         theme: Theme,
+        share: Option<&super::dialog_host::ShareDisplay>,
         switch_share: Option<usize>,
         busy: bool,
         cx: &Context<Self>,
     ) -> Div {
         let locale = language(cx);
-        let prefs_busy = busy || switch_share.is_some() && !self.snapshot.mode.waits_official();
+        let prefs_busy = busy || switch_share.is_some() && !self.waits_official(cx);
         panel
             .child(self.relay_preferences_panel(theme, switch_share, prefs_busy, cx))
-            .when_some(
-                self.snapshot
-                    .share
-                    .as_ref()
-                    .filter(|share| switch_share.is_none() && !share.finished && !share.live),
-                |panel, share| {
-                    let id = share.id;
+            .when(
+                share.is_some_and(|share| switch_share.is_none() && !share.finished && !share.live),
+                |panel| {
                     panel.child(
                         Button::new(
                             "use-saved-sharing-settings",
@@ -132,9 +131,7 @@ impl SetupDialog {
                         .icon(Icon::Refresh)
                         .style(ButtonStyle::Secondary)
                         .disabled(busy)
-                        .on_press(cx.listener(move |_, (), _, cx| {
-                            cx.emit(SetupDialogEvent::UseSavedSettings(id));
-                        })),
+                        .on_press(cx.listener(|this, (), _, cx| this.use_saved_settings(cx))),
                     )
                 },
             )
@@ -148,7 +145,7 @@ impl SetupDialog {
         cx: &Context<Self>,
     ) -> Div {
         let locale = language(cx);
-        let prefs = &self.snapshot.prefs;
+        let prefs = self.prefs(cx);
         let enabled = prefs.relays.iter().any(|relay| relay.enabled);
         let mut list = column().gap(px(12.)).child(
             row()
@@ -200,10 +197,8 @@ impl SetupDialog {
                         RelayMode::Automatic,
                         busy,
                         false,
-                        |_, cx| {
-                            cx.emit(SetupDialogEvent::EditPreference(PreferenceEdit::Mode(
-                                RelayMode::Automatic,
-                            )));
+                        |this, cx| {
+                            this.apply_preference(PreferenceEdit::Mode(RelayMode::Automatic), cx);
                         },
                         cx,
                     ))
@@ -213,10 +208,8 @@ impl SetupDialog {
                         RelayMode::Selected,
                         busy,
                         false,
-                        |_, cx| {
-                            cx.emit(SetupDialogEvent::EditPreference(PreferenceEdit::Mode(
-                                RelayMode::Selected,
-                            )));
+                        |this, cx| {
+                            this.apply_preference(PreferenceEdit::Mode(RelayMode::Selected), cx);
                         },
                         cx,
                     )),
@@ -257,7 +250,7 @@ impl SetupDialog {
         cx: &Context<Self>,
     ) -> Button {
         let locale = language(cx);
-        let at_capacity = self.snapshot.prefs.at_capacity;
+        let at_capacity = self.prefs(cx).at_capacity;
         switch_share.map_or_else(
             || {
                 let (label, symbol, edit) = if relay.enabled {
@@ -282,18 +275,15 @@ impl SetupDialog {
                 )
                 .disabled(busy || !relay.enabled && at_capacity)
             },
-            |share_id| {
+            |_| {
                 let relay_url = relay.url.clone();
                 Button::new(("use-relay", index), locale.text(Text::UseRelayForShare))
                     .icon(Icon::Arrow)
                     .compact()
                     .style(ButtonStyle::Secondary)
                     .disabled(busy)
-                    .on_press(cx.listener(move |_, (), _, cx| {
-                        cx.emit(SetupDialogEvent::SwitchShareRelay {
-                            share_id,
-                            relay_url: relay_url.clone(),
-                        });
+                    .on_press(cx.listener(move |this, (), _, cx| {
+                        this.switch_share_relay(&relay_url, cx);
                     }))
             },
         )
@@ -308,8 +298,8 @@ impl SetupDialog {
         busy: bool,
         cx: &Context<Self>,
     ) -> Div {
-        let expanded = switch_share.is_none()
-            && self.snapshot.expanded_relay.as_deref() == Some(relay.url.as_str());
+        let expanded =
+            switch_share.is_none() && self.expanded_relay.as_deref() == Some(relay.url.as_str());
         let choice = self.saved_relay_choice(relay, index, switch_share, busy, cx);
         let toggle_url = relay.url.clone();
         let actions = row()
@@ -321,9 +311,7 @@ impl SetupDialog {
                     index,
                     expanded,
                     busy,
-                    move |_, cx| {
-                        cx.emit(SetupDialogEvent::ToggleRelayActions(toggle_url.clone()));
-                    },
+                    move |this, cx| this.toggle_relay_actions(toggle_url.clone(), cx),
                     cx,
                 ))
             })
@@ -360,14 +348,12 @@ impl SetupDialog {
                     relay,
                     index,
                     busy,
-                    self.snapshot.mode.is_preview(),
-                    move |_, _, cx| {
-                        cx.emit(SetupDialogEvent::ConfirmReauthorizeRelay(
-                            reauth_url.clone(),
-                        ));
+                    self.is_preview(),
+                    move |this, window, cx| {
+                        this.confirm_reauthorize_relay(reauth_url.clone(), window, cx);
                     },
-                    move |_, _, cx| {
-                        cx.emit(SetupDialogEvent::ConfirmRemoveRelay(remove_url.clone()));
+                    move |this, window, cx| {
+                        this.confirm_remove_relay(remove_url.clone(), window, cx);
                     },
                     cx,
                 ))
@@ -384,26 +370,26 @@ impl SetupDialog {
         Button::new(id, label)
             .icon(symbol)
             .compact()
-            .on_press(cx.listener(move |_, (), _, cx| {
-                cx.emit(SetupDialogEvent::EditPreference(edit.clone()));
+            .on_press(cx.listener(move |this, (), _, cx| {
+                this.apply_preference(edit.clone(), cx);
             }))
     }
 
     fn feedback_view(&self, theme: Theme, cx: &Context<Self>) -> Option<Div> {
         let locale = language(cx);
-        let setup = &self.snapshot.setup;
+        let setup = self.setup(cx);
         if setup.unfinished() && !setup.busy() {
             Some(self.progress_view(theme, cx))
-        } else if let Some(feedback) = &self.snapshot.feedback {
+        } else if let Some(feedback) = &self.feedback {
             let (message, tone) = match feedback {
                 Ok(label) => (locale.text(*label).to_owned(), Tone::Mint),
                 Err(error) => (error.clone(), Tone::Rose),
             };
             Some(theme.caption(message).text_color(tone.text(theme)))
         } else {
-            self.snapshot.command_error.as_ref().map(|error| {
+            self.command_error(cx).map(|error| {
                 theme
-                    .caption(error.clone())
+                    .caption(error.to_owned())
                     .text_color(Tone::Rose.text(theme))
             })
         }
@@ -456,7 +442,7 @@ impl SetupDialog {
         cx: &Context<Self>,
     ) -> Div {
         let locale = language(cx);
-        let prefs = &self.snapshot.prefs;
+        let prefs = self.prefs(cx);
         let input_ready = self.input_submittable(cx);
         let mut panel = column()
             .gap(px(16.))

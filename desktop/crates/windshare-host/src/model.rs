@@ -282,8 +282,8 @@ pub struct Model {
     pub revision: u64,
     pub operations: Vec<Operation>,
     pub command_error: Option<String>,
-    pub(crate) rejected_setup: Option<(String, Failure)>,
-    pub(crate) rejected_account: Option<(String, Failure)>,
+    pub account_request: crate::AccountRequest,
+    pub setup_request: crate::SetupRequest,
     pub sender_trace: SenderTrace,
     pub sender_trace_change: SenderTraceChange,
     pub setup: Setup,
@@ -300,8 +300,8 @@ impl Default for Model {
             revision: 0,
             operations: Vec::new(),
             command_error: None,
-            rejected_setup: None,
-            rejected_account: None,
+            account_request: crate::AccountRequest::Idle,
+            setup_request: crate::SetupRequest::Idle,
             sender_trace: SenderTrace::Unavailable,
             sender_trace_change: SenderTraceChange::Idle,
             setup: Setup::Idle,
@@ -312,14 +312,13 @@ impl Default for Model {
 }
 
 impl Model {
-    // A preference refresh can fail while another form is submitting. Only the
-    // matching request may release that form, even when snapshots coalesce.
-    pub fn settings_rejection(&self, id: &str) -> Option<&Failure> {
-        self.rejected_setup
-            .iter()
-            .chain(&self.rejected_account)
-            .find(|(rejected, _)| rejected == id)
-            .map(|(_, error)| error)
+    pub fn account_busy(&self) -> bool {
+        self.account_request.is_pending()
+            || self.account.as_ref().is_some_and(crate::AccountView::busy)
+    }
+
+    pub const fn setup_pending(&self) -> bool {
+        self.setup_request.is_pending()
     }
 
     pub fn waits_for_official_authorization(&self, operation_id: &str) -> bool {
@@ -338,7 +337,8 @@ impl Model {
     }
 
     pub fn has_unfinished_work(&self) -> bool {
-        self.account.as_ref().is_some_and(crate::AccountView::busy)
+        self.account_busy()
+            || self.setup_pending()
             || self.setup.unfinished()
             || self
                 .operations
@@ -376,6 +376,8 @@ impl Model {
         self.preferences = snapshot.preferences;
         self.account = snapshot.account;
         self.sender_trace = snapshot.sender_trace;
+        self.reconcile_account_request();
+        self.reconcile_setup_request();
         // A full snapshot replaces accepted state, but cannot erase unsent local
         // intents whose commands have not yet reached the host.
         let present: HashSet<&str> = snapshot
@@ -423,6 +425,66 @@ impl Model {
     pub fn reject(&mut self, operation_id: &str, error: Failure) {
         if let Some(operation) = self.operations.iter_mut().find(|op| op.id == operation_id) {
             operation.state = OperationState::Rejected(error);
+        }
+    }
+
+    fn reconcile_account_request(&mut self) {
+        let crate::AccountRequest::Pending { id } = &self.account_request else {
+            return;
+        };
+        let Some(operation) = self
+            .account
+            .as_ref()
+            .and_then(|view| view.operation.as_ref())
+            .filter(|op| &op.id == id)
+        else {
+            return;
+        };
+        match &operation.outcome {
+            crate::AccountOutcome::Running => {}
+            crate::AccountOutcome::Succeeded => {
+                self.account_request = crate::AccountRequest::Succeeded { id: id.clone() };
+            }
+            crate::AccountOutcome::Failed { error } => {
+                self.account_request = crate::AccountRequest::Failed {
+                    id: id.clone(),
+                    error: error.clone(),
+                };
+            }
+        }
+    }
+
+    fn reconcile_setup_request(&mut self) {
+        let crate::SetupRequest::Pending { id, kind } = &mut self.setup_request else {
+            return;
+        };
+        if self.setup.context().is_none_or(|ctx| &ctx.id != id) {
+            return;
+        }
+        let settled = match (&self.setup, *kind) {
+            (Setup::Finished { .. }, _) => Some(crate::SetupRequest::Finished { id: id.clone() }),
+            (Setup::Cancelled { .. }, _) => Some(crate::SetupRequest::Cancelled { id: id.clone() }),
+            (Setup::Cancelling { .. }, crate::SetupRequestKind::Cancel { acknowledged }) => {
+                if !acknowledged {
+                    *kind = crate::SetupRequestKind::Cancel { acknowledged: true };
+                }
+                None
+            }
+            (
+                Setup::Failed { error, .. } | Setup::CancelFailed { error, .. },
+                crate::SetupRequestKind::Configure,
+            )
+            | (
+                Setup::CancelFailed { error, .. },
+                crate::SetupRequestKind::Cancel { acknowledged: true },
+            ) => Some(crate::SetupRequest::Failed {
+                id: id.clone(),
+                error: error.clone(),
+            }),
+            _ => None,
+        };
+        if let Some(next) = settled {
+            self.setup_request = next;
         }
     }
 }

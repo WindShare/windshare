@@ -246,6 +246,21 @@ fn apply_reply(draft: &mut crate::ModelDraft<'_>, command: Option<Command>, mess
         }
     } else if let Some(error) = message.error {
         apply_command_error(draft, command, error);
+    } else if let Some(Command::CancelSetup { setup_id }) = &command
+        && matches!(
+            &draft.read().setup_request,
+            crate::SetupRequest::Pending {
+                id,
+                kind: crate::SetupRequestKind::Cancel {
+                    acknowledged: false,
+                },
+            } if id == setup_id
+        )
+    {
+        draft.write().setup_request = crate::SetupRequest::Pending {
+            id: setup_id.clone(),
+            kind: crate::SetupRequestKind::Cancel { acknowledged: true },
+        };
     }
     if let Some(snapshot) = message.snapshot
         && draft.read().accepts_snapshot(&snapshot)
@@ -259,6 +274,8 @@ fn apply_command_error(
     command: Option<Command>,
     error: crate::Failure,
 ) {
+    // Only the matching pending request may release its form, even when
+    // unrelated refreshes fail or snapshots coalesce.
     match command {
         Some(Command::Create { operation_id, .. } | Command::Repeat { operation_id, .. }) => {
             if draft.read().can_reject(&operation_id, &error) {
@@ -266,15 +283,36 @@ fn apply_command_error(
             }
         }
         Some(Command::Account { operation_id, .. }) => {
-            let entry = Some((operation_id, error));
-            if draft.read().rejected_account != entry {
-                draft.write().rejected_account = entry;
+            if matches!(
+                &draft.read().account_request,
+                crate::AccountRequest::Pending { id } if id == &operation_id
+            ) {
+                draft.write().account_request = crate::AccountRequest::Failed {
+                    id: operation_id,
+                    error,
+                };
             }
         }
         Some(Command::Configure { setup, .. }) => {
-            let entry = Some((setup.id, error));
-            if draft.read().rejected_setup != entry {
-                draft.write().rejected_setup = entry;
+            if matches!(
+                &draft.read().setup_request,
+                crate::SetupRequest::Pending { id, .. } if id == &setup.id
+            ) {
+                draft.write().setup_request = crate::SetupRequest::Failed {
+                    id: setup.id,
+                    error,
+                };
+            }
+        }
+        Some(Command::CancelSetup { setup_id }) => {
+            if matches!(
+                &draft.read().setup_request,
+                crate::SetupRequest::Pending { id, .. } if id == &setup_id
+            ) {
+                draft.write().setup_request = crate::SetupRequest::Failed {
+                    id: setup_id,
+                    error,
+                };
             }
         }
         _ => draft.set_command_error(Some(error.message)),

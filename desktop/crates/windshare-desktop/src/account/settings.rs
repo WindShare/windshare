@@ -1,6 +1,6 @@
 use super::{
-    AccountPage, EmailPurpose, account_status_summary, dialog_view::account_feedback_banner,
-    registration::registration_panel_view,
+    AccountPage, EmailPurpose, account_status_summary, can_register_account,
+    dialog_view::account_feedback_banner, registration::registration_panel_view,
 };
 use crate::{
     desktop::Desktop,
@@ -157,8 +157,8 @@ fn account_uid_strip(theme: Theme, account_id: &str, copy_button: Button, cx: &A
 }
 
 impl Desktop {
-    pub(crate) fn account_attention_tone(&self) -> Option<Tone> {
-        let view = self.account_view()?;
+    pub(crate) fn account_attention_tone(&self, cx: &gpui::App) -> Option<Tone> {
+        let view = self.account_view(cx)?;
         match view.status.state {
             AccountState::Ready if view.status.allowance == Allowance::Available => None,
             AccountState::Ready if view.status.allowance == Allowance::Spent => Some(Tone::Peach),
@@ -172,7 +172,7 @@ impl Desktop {
     }
 
     pub fn account_settings_page(&self, theme: Theme, cx: &Context<Self>) -> Div {
-        let Some(view) = self.account_view() else {
+        let Some(view) = self.account_view(cx) else {
             return column();
         };
         if view.status.state == AccountState::StorageError {
@@ -181,18 +181,14 @@ impl Desktop {
         if view.status.account.is_empty() {
             return self.account_onboarding_page(theme, view, cx);
         }
+        let feedback = self.account_inline_feedback(cx);
         column()
             .gap(px(SECTION_GAP))
             .child(self.account_identity_card(theme, view, cx))
             .child(self.account_allowance_card(theme, view, cx))
             .child(self.account_security_card(theme, view, cx))
             .when_some(
-                account_feedback_banner(
-                    self.account.feedback.as_ref(),
-                    AccountPage::Overview,
-                    theme,
-                    cx,
-                ),
+                account_feedback_banner(feedback.as_ref(), AccountPage::Overview, theme, cx),
                 gpui::ParentElement::child,
             )
     }
@@ -262,7 +258,8 @@ impl Desktop {
 
     fn account_onboarding_page(&self, theme: Theme, view: &AccountView, cx: &Context<Self>) -> Div {
         let locale = language(cx);
-        let busy = self.account.busy(view);
+        let busy = self.account_busy(cx);
+        let feedback = self.account_inline_feedback(cx);
         let body = if view.status.state == AccountState::EmailRequired {
             let email_page = EmailPurpose::Registration.entry(view);
             column()
@@ -313,7 +310,7 @@ impl Desktop {
                 && self.overlays.is_empty();
             let create = Button::new(
                 "create-account",
-                locale.text(if matches!(self.account.feedback, Some(Err(_))) {
+                locale.text(if matches!(feedback, Some(Err(_))) {
                     Text::RetryConnection
                 } else {
                     Text::CreateAccount
@@ -321,7 +318,7 @@ impl Desktop {
             )
             .icon(Icon::Arrow)
             .style(ButtonStyle::Primary)
-            .disabled(!self.account.can_register(view))
+            .disabled(!can_register_account(view, busy))
             .on_press(cx.listener(|this, (), _, cx| this.register_account(cx)));
             let login = Self::account_modal_button(
                 "registration-login",
@@ -342,7 +339,7 @@ impl Desktop {
                 .child(body)
                 .when_some(
                     account_feedback_banner(
-                        self.account.feedback.as_ref(),
+                        feedback.as_ref(),
                         AccountPage::Registration,
                         theme,
                         cx,
@@ -354,7 +351,7 @@ impl Desktop {
 
     fn account_identity_card(&self, theme: Theme, view: &AccountView, cx: &Context<Self>) -> Div {
         let locale = language(cx);
-        let busy = self.account.busy(view);
+        let busy = self.account_busy(cx);
         let locked = view.nickname_locked_until().is_some();
         let nickname = Self::account_modal_button(
             "account-nickname",
@@ -432,7 +429,7 @@ impl Desktop {
 
     fn account_allowance_body(&self, theme: Theme, view: &AccountView, cx: &Context<Self>) -> Div {
         let locale = language(cx);
-        let busy = self.account.busy(view);
+        let busy = self.account_busy(cx);
         match view.status.state {
             AccountState::Ready if view.status.allowance == Allowance::Available => row()
                 .flex_wrap()
@@ -509,7 +506,7 @@ impl Desktop {
 
     fn account_security_card(&self, theme: Theme, view: &AccountView, cx: &Context<Self>) -> Div {
         let locale = language(cx);
-        let busy = self.account.busy(view);
+        let busy = self.account_busy(cx);
         let credentials_detail = if view.status.username.is_empty() {
             locale.text(Text::AccountPasswordDetail).to_owned()
         } else {

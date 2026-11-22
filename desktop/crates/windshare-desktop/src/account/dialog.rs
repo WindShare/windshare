@@ -1,12 +1,17 @@
 use super::{
-    AccountFormError, AccountPage, AccountReconcile, AccountScreen, AccountTracker, EmailPurpose,
-    EmailStep,
+    AccountFormError, AccountPage, AccountScreen, EmailPurpose, EmailStep, can_register_account,
 };
-use crate::localization::{LanguageSettings, Text, language};
+use crate::{
+    flow_state::COPY_FEEDBACK_MS,
+    live::HostStore,
+    localization::{LanguageSettings, Text, language},
+};
 use gpui::{
-    AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, Subscription, Window,
+    App, AppContext, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    Subscription, Window,
 };
-use windshare_host::{AccountCommand, AccountState, AccountView};
+use std::{sync::Arc, time::Duration};
+use windshare_host::{AccountCommand, AccountRequest, AccountState, AccountView};
 use windshare_ui::{Input, InputEvent};
 
 #[derive(Clone)]
@@ -17,89 +22,9 @@ pub enum PreviewAccountEdit {
     ProfileEmail(String),
 }
 
-pub enum AccountSubmission {
-    Register,
-    Login {
-        username: String,
-        password: String,
-    },
-    Password {
-        account_id: String,
-        username: String,
-        password: String,
-    },
-    Nickname {
-        account_id: String,
-        nickname: String,
-    },
-    Email {
-        email: String,
-    },
-    Verify {
-        code: String,
-    },
-    RequestProfileEmail {
-        account_id: String,
-        email: String,
-    },
-    ConfirmProfileEmail {
-        account_id: String,
-        challenge: String,
-        code: String,
-    },
-}
-
-impl AccountSubmission {
-    pub fn to_command(&self) -> AccountCommand {
-        match self {
-            Self::Register => AccountCommand::Register,
-            Self::Login { username, password } => AccountCommand::Login {
-                username: username.clone(),
-                password: password.clone(),
-            },
-            Self::Password {
-                account_id,
-                username,
-                password,
-            } => AccountCommand::Password {
-                account_id: account_id.clone(),
-                username: username.clone(),
-                password: password.clone(),
-            },
-            Self::Nickname {
-                account_id,
-                nickname,
-            } => AccountCommand::Nickname {
-                account_id: account_id.clone(),
-                nickname: nickname.clone(),
-            },
-            Self::Email { email } => AccountCommand::Email {
-                email: email.clone(),
-            },
-            Self::Verify { code } => AccountCommand::Verify { code: code.clone() },
-            Self::RequestProfileEmail { account_id, email } => {
-                AccountCommand::RequestProfileEmail {
-                    account_id: account_id.clone(),
-                    email: email.clone(),
-                }
-            }
-            Self::ConfirmProfileEmail {
-                account_id,
-                challenge,
-                code,
-            } => AccountCommand::ConfirmProfileEmail {
-                account_id: account_id.clone(),
-                challenge: challenge.clone(),
-                code: code.clone(),
-            },
-        }
-    }
-}
-
 pub enum AccountDialogEvent {
-    Submit(AccountSubmission),
+    Completed(Option<Text>),
     PreviewEdit(PreviewAccountEdit),
-    CopyUid,
     Close,
     PageChanged,
 }
@@ -110,10 +35,9 @@ pub enum AccountOrigin {
     Standalone,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum DialogRuntime {
-    Native,
-    Preview,
+pub enum AccountSource {
+    Native(Entity<HostStore>),
+    Preview(Box<AccountView>),
 }
 
 pub struct AccountDialog {
@@ -123,12 +47,12 @@ pub struct AccountDialog {
     pub(super) email: Entity<Input>,
     pub(super) code: Entity<Input>,
     pub(super) page: AccountScreen<String>,
-    pub(super) view: AccountView,
     pub(super) origin: AccountOrigin,
-    runtime: DialogRuntime,
-    pub(super) pending: bool,
+    source: AccountSource,
+    in_flight_id: Option<String>,
     pub(super) feedback: Option<Result<Text, AccountFormError>>,
     pub(super) uid_copied: bool,
+    copy_sequence: usize,
     overlay_scope: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -136,15 +60,12 @@ pub struct AccountDialog {
 impl EventEmitter<AccountDialogEvent> for AccountDialog {}
 
 impl AccountDialog {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         initial_page: AccountPage,
-        view: AccountView,
+        source: AccountSource,
         origin: AccountOrigin,
-        is_preview: bool,
         overlay_scope: FocusHandle,
-        tracker: &AccountTracker,
-        window: &Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let locale = language(cx);
@@ -169,6 +90,19 @@ impl AccountDialog {
                 }),
             );
         }
+        let in_flight_id = match &source {
+            AccountSource::Native(host) => {
+                subscriptions.push(cx.observe_in(host, window, |this, host, window, cx| {
+                    this.on_host_updated(&host, window, cx);
+                }));
+                let request = &host.read(cx).model().account_request;
+                request
+                    .is_pending()
+                    .then(|| request.id().map(str::to_owned))
+                    .flatten()
+            }
+            AccountSource::Preview(_) => None,
+        };
         let mut dialog = Self {
             nickname,
             username,
@@ -176,16 +110,12 @@ impl AccountDialog {
             email,
             code,
             page: AccountScreen::Overview,
-            view,
             origin,
-            runtime: if is_preview {
-                DialogRuntime::Preview
-            } else {
-                DialogRuntime::Native
-            },
-            pending: tracker.pending.is_some(),
-            feedback: tracker.feedback.clone(),
+            source,
+            in_flight_id,
+            feedback: None,
             uid_copied: false,
+            copy_sequence: 0,
             overlay_scope,
             _subscriptions: subscriptions,
         };
@@ -208,27 +138,43 @@ impl AccountDialog {
         }
     }
 
+    pub(super) fn view<'a>(&'a self, cx: &'a App) -> Option<&'a AccountView> {
+        match &self.source {
+            AccountSource::Native(host) => host.read(cx).model().account.as_ref(),
+            AccountSource::Preview(view) => Some(view),
+        }
+    }
+
     pub fn page(&self) -> AccountPage {
         self.page.map_target(|_| ())
     }
 
-    pub fn title(&self) -> Text {
-        self.page().title(&self.view)
+    pub fn title(&self, cx: &App) -> Text {
+        self.view(cx)
+            .map_or(Text::Account, |view| self.page().title(view))
     }
 
-    pub const fn busy(&self) -> bool {
-        self.pending || self.view.busy()
+    pub const fn has_error_feedback(&self) -> bool {
+        matches!(self.feedback, Some(Err(_)))
     }
 
-    pub const fn can_register(&self) -> bool {
-        !self.busy()
-            && self.view.status.account.is_empty()
-            && !matches!(
-                self.view.status.state,
-                AccountState::Registering { .. }
-                    | AccountState::Denied
-                    | AccountState::StorageError
-            )
+    pub fn will_complete_on(&self, model: &windshare_host::Model) -> bool {
+        self.page() != AccountPage::Overview
+            && self.in_flight_id.as_deref().is_some_and(|tracked| {
+                matches!(&model.account_request, AccountRequest::Succeeded { id } if id == tracked)
+            })
+    }
+
+    pub fn busy(&self, cx: &App) -> bool {
+        match &self.source {
+            AccountSource::Native(host) => host.read(cx).model().account_busy(),
+            AccountSource::Preview(view) => view.busy(),
+        }
+    }
+
+    pub fn can_register(&self, cx: &App) -> bool {
+        self.view(cx)
+            .is_some_and(|view| can_register_account(view, self.busy(cx)))
     }
 
     fn target_changed(&self, view: &AccountView) -> bool {
@@ -237,7 +183,7 @@ impl AccountDialog {
             .is_some_and(|target| target != &view.status.account)
     }
 
-    pub fn field_focus(&self, cx: &gpui::App) -> Option<FocusHandle> {
+    pub fn field_focus(&self, cx: &App) -> Option<FocusHandle> {
         let input = match self.page {
             AccountScreen::Login | AccountScreen::Credentials(_) => &self.username,
             AccountScreen::Nickname(_) => &self.nickname,
@@ -248,19 +194,21 @@ impl AccountDialog {
         Some(input.read(cx).focus_handle(cx))
     }
 
-    pub fn focus_target(&self, cx: &gpui::App) -> FocusHandle {
+    pub fn focus_target(&self, cx: &App) -> FocusHandle {
         self.field_focus(cx)
             .unwrap_or_else(|| self.overlay_scope.clone())
     }
 
     pub(super) fn can_submit(&self, cx: &Context<Self>) -> bool {
-        let view = &self.view;
-        if self.busy() || self.target_changed(view) {
+        let Some(view) = self.view(cx) else {
+            return false;
+        };
+        if self.busy(cx) || self.target_changed(view) {
             return false;
         }
         match self.page() {
             AccountPage::Overview => false,
-            AccountPage::Registration => self.can_register(),
+            AccountPage::Registration => self.can_register(cx),
             AccountPage::Login | AccountPage::Credentials(()) => {
                 !self.username.read(cx).value().trim().is_empty()
                     && !self.password.read(cx).value().is_empty()
@@ -277,12 +225,17 @@ impl AccountDialog {
                         .as_ref()
                         .is_none_or(|current| current.value != value)
             }
-            AccountPage::Email(purpose, step) => self.can_submit_email(purpose, step, cx),
+            AccountPage::Email(purpose, step) => self.can_submit_email(view, purpose, step, cx),
         }
     }
 
-    fn can_submit_email(&self, purpose: EmailPurpose, step: EmailStep, cx: &Context<Self>) -> bool {
-        let view = &self.view;
+    fn can_submit_email(
+        &self,
+        view: &AccountView,
+        purpose: EmailPurpose,
+        step: EmailStep,
+        cx: &Context<Self>,
+    ) -> bool {
         let available = match purpose {
             EmailPurpose::Registration => view.status.state == AccountState::EmailRequired,
             EmailPurpose::Profile(()) => view.can_edit_profile(),
@@ -309,7 +262,7 @@ impl AccountDialog {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.busy() || !self.apply_page(page, cx) {
+        if self.busy(cx) || !self.apply_page(page, cx) {
             return;
         }
         let focus = self.focus_target(cx);
@@ -319,18 +272,19 @@ impl AccountDialog {
     }
 
     fn apply_page(&mut self, page: AccountPage, cx: &mut Context<Self>) -> bool {
-        if page.target().is_some()
-            && (self.view.status.account.is_empty() || self.target_changed(&self.view))
+        let Some(view) = self.view(cx).cloned() else {
+            return false;
+        };
+        if page.target().is_some() && (view.status.account.is_empty() || self.target_changed(&view))
         {
             return false;
         }
         let username = if page == AccountPage::Credentials(()) {
-            self.view.status.username.clone()
+            view.status.username.clone()
         } else {
             String::new()
         };
-        let nickname = self
-            .view
+        let nickname = view
             .status
             .profile
             .nickname
@@ -338,11 +292,10 @@ impl AccountDialog {
             .map_or_default(|nickname| nickname.value.clone());
         let email = match page {
             AccountPage::Email(EmailPurpose::Profile(()), EmailStep::Address) => Some(
-                self.view
-                    .status
+                view.status
                     .pending_email
                     .as_ref()
-                    .map_or(&self.view.status.profile.email, |pending| &pending.address)
+                    .map_or(&view.status.profile.email, |pending| &pending.address)
                     .clone(),
             ),
             AccountPage::Email(EmailPurpose::Registration, EmailStep::Address)
@@ -355,7 +308,7 @@ impl AccountDialog {
             }
             _ => None,
         };
-        self.page = page.map_target(|()| self.view.status.account.clone());
+        self.page = page.map_target(|()| view.status.account.clone());
         if page == AccountPage::Nickname(()) {
             self.nickname
                 .update(cx, |input, cx| input.set_value(nickname, cx));
@@ -372,12 +325,12 @@ impl AccountDialog {
     }
 
     pub(super) fn register(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.can_register() {
+        if !self.can_register(cx) {
             return;
         }
         self.page = AccountScreen::Registration;
         self.feedback = None;
-        cx.emit(AccountDialogEvent::Submit(AccountSubmission::Register));
+        self.dispatch_command(AccountCommand::Register, cx);
         window.focus(&self.overlay_scope, cx);
         cx.notify();
     }
@@ -386,16 +339,16 @@ impl AccountDialog {
         if !self.can_submit(cx) {
             return;
         }
-        if self.runtime == DialogRuntime::Preview {
+        if matches!(self.source, AccountSource::Preview(_)) {
             self.submit_preview(cx);
             return;
         }
-        let Some(submission) = self.build_submission(cx) else {
+        let Some(command) = self.build_command(cx) else {
             return;
         };
         let registering = self.page() == AccountPage::Registration;
         self.feedback = None;
-        cx.emit(AccountDialogEvent::Submit(submission));
+        self.dispatch_command(command, cx);
         // The primary button leaves the tree while the account is being created.
         if registering {
             window.focus(&self.overlay_scope, cx);
@@ -403,46 +356,54 @@ impl AccountDialog {
         cx.notify();
     }
 
-    fn build_submission(&self, cx: &Context<Self>) -> Option<AccountSubmission> {
+    fn dispatch_command(&mut self, command: AccountCommand, cx: &mut Context<Self>) {
+        let AccountSource::Native(host) = &self.source else {
+            return;
+        };
+        let host = host.clone();
+        self.in_flight_id = host.update(cx, |host, cx| host.submit_account(command, cx));
+    }
+
+    fn build_command(&self, cx: &Context<Self>) -> Option<AccountCommand> {
         match &self.page {
             AccountScreen::Overview => None,
-            AccountScreen::Registration => Some(AccountSubmission::Register),
+            AccountScreen::Registration => Some(AccountCommand::Register),
             AccountScreen::Login | AccountScreen::Credentials(_) => {
                 let username = self.username.read(cx).value().trim().to_owned();
                 let password = self.password.read(cx).value().to_owned();
                 Some(if let AccountScreen::Credentials(account_id) = &self.page {
-                    AccountSubmission::Password {
+                    AccountCommand::Password {
                         account_id: account_id.clone(),
                         username,
                         password,
                     }
                 } else {
-                    AccountSubmission::Login { username, password }
+                    AccountCommand::Login { username, password }
                 })
             }
-            AccountScreen::Nickname(account_id) => Some(AccountSubmission::Nickname {
+            AccountScreen::Nickname(account_id) => Some(AccountCommand::Nickname {
                 account_id: account_id.clone(),
                 nickname: self.nickname.read(cx).value().trim().into(),
             }),
             AccountScreen::Email(EmailPurpose::Registration, EmailStep::Code) => {
-                Some(AccountSubmission::Verify {
+                Some(AccountCommand::Verify {
                     code: self.code.read(cx).value().trim().into(),
                 })
             }
             AccountScreen::Email(EmailPurpose::Registration, EmailStep::Address) => {
-                Some(AccountSubmission::Email {
+                Some(AccountCommand::Email {
                     email: self.email.read(cx).value().trim().into(),
                 })
             }
             AccountScreen::Email(EmailPurpose::Profile(account_id), EmailStep::Address) => {
-                Some(AccountSubmission::RequestProfileEmail {
+                Some(AccountCommand::RequestProfileEmail {
                     account_id: account_id.clone(),
                     email: self.email.read(cx).value().trim().into(),
                 })
             }
             AccountScreen::Email(EmailPurpose::Profile(account_id), EmailStep::Code) => {
-                let pending = self.view.status.pending_email.as_ref()?;
-                Some(AccountSubmission::ConfirmProfileEmail {
+                let pending = self.view(cx)?.status.pending_email.as_ref()?;
+                Some(AccountCommand::ConfirmProfileEmail {
                     account_id: account_id.clone(),
                     challenge: pending.challenge.id.clone(),
                     code: self.code.read(cx).value().trim().into(),
@@ -472,69 +433,112 @@ impl AccountDialog {
         cx.emit(AccountDialogEvent::PreviewEdit(edit));
     }
 
-    pub fn sync_tracker(&mut self, tracker: &AccountTracker, cx: &mut Context<Self>) {
-        self.pending = tracker.pending.is_some();
-        self.feedback.clone_from(&tracker.feedback);
+    pub(super) fn copy_uid(&mut self, cx: &mut Context<Self>) {
+        let Some(uid) = self
+            .view(cx)
+            .map(|view| view.status.account.clone())
+            .filter(|uid| !uid.is_empty())
+        else {
+            return;
+        };
+        cx.write_to_clipboard(ClipboardItem::new_string(uid));
+        self.copy_sequence += 1;
+        let sequence = self.copy_sequence;
+        self.uid_copied = true;
+        tracing::info!(
+            event = "account.uid_copied",
+            session = std::process::id(),
+            operation = sequence,
+        );
+        cx.spawn(async move |view, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(COPY_FEEDBACK_MS))
+                .await;
+            let _ = view.update(cx, |this, cx| {
+                if this.copy_sequence == sequence {
+                    this.uid_copied = false;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
         cx.notify();
     }
 
-    pub fn set_uid_copied(&mut self, copied: bool, cx: &mut Context<Self>) {
-        if self.uid_copied != copied {
-            self.uid_copied = copied;
-            cx.notify();
-        }
-    }
-
-    pub fn sync_model(
+    fn on_host_updated(
         &mut self,
-        view: &AccountView,
-        tracker: &mut AccountTracker,
-        outcome: &AccountReconcile,
+        host: &Entity<HostStore>,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> AccountPage {
+    ) {
+        let (previous_model, model) = {
+            let store = host.read(cx);
+            (
+                Arc::clone(store.previous_model()),
+                Arc::clone(store.model()),
+            )
+        };
+        let Some(view) = model.account.as_ref() else {
+            return;
+        };
         let previous_page = self.page();
         let previous_field = self.field_focus(cx);
-        self.view = view.clone();
+        let mut completed_toast = None;
         if self.target_changed(view) {
-            self.close_stale_edit(tracker, cx);
+            self.close_stale_edit(cx);
         } else {
-            match outcome {
-                AccountReconcile::Failed(AccountFormError::AccountChanged)
-                    if self.page.target().is_some() =>
-                {
-                    self.close_stale_edit(tracker, cx);
+            if let Some(tracked) = self.in_flight_id.as_deref() {
+                match &model.account_request {
+                    AccountRequest::Succeeded { id } if id == tracked => {
+                        self.in_flight_id = None;
+                        completed_toast = self.completed(view, cx);
+                    }
+                    AccountRequest::Failed { id, error } if id == tracked => {
+                        self.in_flight_id = None;
+                        let form_error = AccountFormError::from(error.clone());
+                        if matches!(form_error, AccountFormError::AccountChanged)
+                            && self.page.target().is_some()
+                        {
+                            self.close_stale_edit(cx);
+                        } else {
+                            self.feedback = Some(Err(form_error));
+                        }
+                    }
+                    _ => {}
                 }
-                AccountReconcile::Succeeded => self.completed(view, tracker, cx),
-                AccountReconcile::Failed(_) | AccountReconcile::Idle => {}
             }
             if !self.target_changed(view) {
-                self.reconcile_page(view, tracker, cx);
+                self.reconcile_page(view, cx);
             }
         }
-        self.pending = tracker.pending.is_some();
-        self.feedback.clone_from(&tracker.feedback);
         let next_field = self.field_focus(cx);
         if previous_field != next_field {
             let focus = self.focus_target(cx);
             window.focus(&focus, cx);
         }
+        if previous_page != AccountPage::Overview && self.page() == AccountPage::Overview {
+            if let Some(message) = completed_toast {
+                cx.emit(AccountDialogEvent::Completed(Some(message)));
+            } else {
+                let had_no_account = previous_model
+                    .account
+                    .as_ref()
+                    .is_some_and(|prev| prev.status.account.is_empty());
+                if self.feedback.is_none() && had_no_account && !view.status.account.is_empty() {
+                    cx.emit(AccountDialogEvent::Completed(None));
+                }
+            }
+        }
         cx.notify();
-        previous_page
     }
 
-    fn reconcile_page(
-        &mut self,
-        view: &AccountView,
-        tracker: &mut AccountTracker,
-        cx: &mut Context<Self>,
-    ) {
+    fn reconcile_page(&mut self, view: &AccountView, cx: &mut Context<Self>) {
         match &mut self.page {
             AccountScreen::Registration | AccountScreen::Email(EmailPurpose::Registration, _)
                 if !view.status.account.is_empty() =>
             {
                 self.page = AccountScreen::Overview;
-                tracker.feedback = None;
+                self.feedback = None;
                 self.clear_secrets(cx);
             }
             AccountScreen::Registration if view.status.state == AccountState::EmailRequired => {
@@ -560,10 +564,10 @@ impl AccountDialog {
         }
     }
 
-    fn close_stale_edit(&mut self, tracker: &mut AccountTracker, cx: &mut Context<Self>) {
+    fn close_stale_edit(&mut self, cx: &mut Context<Self>) {
         self.page = AccountScreen::Overview;
-        tracker.pending = None;
-        tracker.feedback = Some(Err(AccountFormError::AccountChanged));
+        self.in_flight_id = None;
+        self.feedback = Some(Err(AccountFormError::AccountChanged));
         self.clear_secrets(cx);
     }
 
@@ -573,16 +577,11 @@ impl AccountDialog {
         self.code.update(cx, |input, cx| input.set_value("", cx));
     }
 
-    fn completed(
-        &mut self,
-        view: &AccountView,
-        tracker: &mut AccountTracker,
-        cx: &mut Context<Self>,
-    ) {
+    fn completed(&mut self, view: &AccountView, cx: &mut Context<Self>) -> Option<Text> {
         let message = match &mut self.page {
             AccountScreen::Registration if view.status.state == AccountState::EmailRequired => {
                 self.page = EmailPurpose::Registration.entry(view);
-                return;
+                return None;
             }
             AccountScreen::Registration => Text::AccountCreated,
             AccountScreen::Login => Text::AccountSignedIn,
@@ -591,7 +590,7 @@ impl AccountDialog {
             AccountScreen::Email(purpose, step @ EmailStep::Address) => {
                 *step = purpose.step(view);
                 self.code.update(cx, |input, cx| input.set_value("", cx));
-                return;
+                return None;
             }
             AccountScreen::Email(EmailPurpose::Registration, EmailStep::Code) => {
                 Text::AccountVerified
@@ -599,10 +598,11 @@ impl AccountDialog {
             AccountScreen::Email(EmailPurpose::Profile(_), EmailStep::Code) => {
                 Text::ProfileEmailSaved
             }
-            AccountScreen::Overview => return,
+            AccountScreen::Overview => return None,
         };
         self.clear_secrets(cx);
         self.page = AccountScreen::Overview;
-        tracker.feedback = Some(Ok(message));
+        self.feedback = None;
+        Some(message)
     }
 }
