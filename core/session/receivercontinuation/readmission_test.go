@@ -161,7 +161,7 @@ func testTransferReadmission(t *testing.T, changeStage func(string) error) {
 	}
 	job, err := transfer.NewTransferJob(transfer.TransferJobConfig{
 		ReceiveIntent: intent, JobID: id, Session: continuation, Catalog: continuation, Revisions: continuation,
-		Blocks: reader, Materializer: operation, Tracer: tracer, RevisionWait: &revisionwait.Config{GenerationFence: continuation},
+		Blocks: reader, Materializer: operation, Tracer: tracer, RevisionWait: &revisionwait.Config{WatchSession: continuation.WaitSessionChange},
 	})
 	if err != nil {
 		t.Fatal(err)

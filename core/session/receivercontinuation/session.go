@@ -154,37 +154,32 @@ func (s *Session) NewTransferJob(intent transfer.ReceiveIntent, id transfer.Tran
 	return transfer.NewTransferJob(transfer.TransferJobConfig{
 		ReceiveIntent: intent, JobID: id, Session: s, Tracer: tracer,
 		Catalog: s, Revisions: s, Blocks: s, Materializer: materializer,
-		RevisionWait: &revisionwait.Config{GenerationFence: s},
+		RevisionWait: &revisionwait.Config{WatchSession: s.WaitSessionChange},
 	})
 }
 
-func (s *Session) Current() revisionwait.GenerationToken {
-	if s.ctx.Err() != nil {
-		return revisionwait.GenerationToken{}
-	}
-	token, _ := revisionwait.GenerationTokenFromBytes(s.Runtime().ProtocolSessionID().Bytes())
-	return token
-}
-
-func (s *Session) WaitForChange(ctx context.Context, expected revisionwait.GenerationToken) (revisionwait.GenerationChange, error) {
+func (s *Session) WaitSessionChange(
+	ctx context.Context,
+	expected protocolsession.ProtocolSessionID,
+) (protocolsession.ProtocolSessionID, error) {
 	for {
-		runtime := s.Runtime()
-		current := s.Current()
-		if current.IsZero() {
-			return revisionwait.NewGenerationEnd(expected, s.ctx.Err())
+		if err := s.ctx.Err(); err != nil {
+			return protocolsession.ProtocolSessionID{}, err
 		}
+		runtime := s.Runtime()
+		current := runtime.ProtocolSessionID()
 		if current != expected {
-			return revisionwait.NewGenerationReplacement(expected, current, nil)
+			return current, nil
 		}
 		select {
 		case <-ctx.Done():
-			return revisionwait.GenerationChange{}, ctx.Err()
+			return protocolsession.ProtocolSessionID{}, ctx.Err()
 		case <-s.ctx.Done():
-			return revisionwait.NewGenerationEnd(expected, s.ctx.Err())
+			return protocolsession.ProtocolSessionID{}, s.ctx.Err()
 		case <-runtime.Done():
 		}
 		if err := s.recover(ctx, runtime); err != nil {
-			return revisionwait.NewGenerationEnd(expected, err)
+			return protocolsession.ProtocolSessionID{}, err
 		}
 	}
 }

@@ -262,7 +262,7 @@ type TransferJob struct {
 	projector          ordinaryoutput.ArtifactPathProjector
 	coordinates        directTreeCoordinateProjector
 	tracer             TransferLifecycleTracer
-	revisionWait       *revisionwait.Coordinator
+	revisionWait       *revisionwait.Waiter
 	progress           receiveProgressTracker
 
 	mu      sync.Mutex
@@ -312,9 +312,9 @@ func NewTransferJob(config TransferJobConfig) (*TransferJob, error) {
 	if !ok {
 		return nil, ErrInvalidTransferJob
 	}
-	var revisionWait *revisionwait.Coordinator
+	var revisionWait *revisionwait.Waiter
 	if config.RevisionWait != nil {
-		revisionWait, err = revisionwait.NewCoordinator(*config.RevisionWait)
+		revisionWait, err = revisionwait.NewWaiter(*config.RevisionWait)
 		if err != nil {
 			return nil, errors.Join(ErrInvalidTransferJob, err)
 		}

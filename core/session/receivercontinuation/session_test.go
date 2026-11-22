@@ -243,7 +243,7 @@ func TestTransferKeepsOutputAndConfirmedProgressAcrossFreshSession(t *testing.T)
 		return err
 	}}
 	liveOutput := &singleOpenMaterializer{materializer: operation}
-	job, err := transfer.NewTransferJob(transfer.TransferJobConfig{ReceiveIntent: intent, JobID: id, Session: continuation, Catalog: continuation, Revisions: continuation, Blocks: reader, Materializer: liveOutput, RevisionWait: &revisionwait.Config{GenerationFence: continuation}})
+	job, err := transfer.NewTransferJob(transfer.TransferJobConfig{ReceiveIntent: intent, JobID: id, Session: continuation, Catalog: continuation, Revisions: continuation, Blocks: reader, Materializer: liveOutput, RevisionWait: &revisionwait.Config{WatchSession: continuation.WaitSessionChange}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -380,14 +380,11 @@ func TestContinuationRequiresWinningNetworkRetirementAndFreshIdentity(t *testing
 	if _, err = New(t.Context(), runtime, nil); !errors.Is(err, ErrReplacement) {
 		t.Fatal("missing replacement accepted", err)
 	}
-	token := s.Current()
+	sessionID := s.ProtocolSessionID()
 	s.Close()
-	if !s.Current().IsZero() {
-		t.Fatal("closed receive intent retained generation authority")
-	}
-	change, err := s.WaitForChange(context.Background(), token)
-	if err != nil || change.Kind() != revisionwait.GenerationLifetimeEnded {
-		t.Fatalf("change=%v err=%v", change, err)
+	next, err := s.WaitSessionChange(context.Background(), sessionID)
+	if err == nil || !next.IsZero() {
+		t.Fatalf("closed continuation returned next=%x err=%v", next, err)
 	}
 }
 

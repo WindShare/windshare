@@ -19,7 +19,6 @@ import (
 	receiversession "github.com/windshare/windshare/core/session/receiversession"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
-	"github.com/windshare/windshare/core/transfer/revisionwait"
 )
 
 func TestInterruptedRangeRetainsOnlyAuthenticatedDeliveredIntervals(t *testing.T) {
@@ -349,7 +348,7 @@ func TestCatalogReplayPreservesCommitmentAndGenerationFence(t *testing.T) {
 	if err != nil || !exists {
 		t.Fatal(err)
 	}
-	original := s.Current()
+	original := s.ProtocolSessionID()
 	c := cursor.(*directoryCursor)
 	_ = c.cursor.Close()
 	c.cursor = failedCursor{}
@@ -370,13 +369,13 @@ func TestCatalogReplayPreservesCommitmentAndGenerationFence(t *testing.T) {
 	if _, _, err = cursor.Next(context.Background()); !errors.Is(err, session.ErrRuntimeClosed) {
 		t.Fatal(err)
 	}
-	change, err := s.WaitForChange(context.Background(), original)
-	if err != nil || change.Kind() != revisionwait.GenerationReplaced {
-		t.Fatalf("change=%v err=%v", change, err)
+	next, err := s.WaitSessionChange(context.Background(), original)
+	if err != nil || next.IsZero() || next == original {
+		t.Fatalf("next=%x err=%v", next, err)
 	}
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err = s.WaitForChange(canceled, s.Current()); !errors.Is(err, context.Canceled) {
+	if _, err = s.WaitSessionChange(canceled, s.ProtocolSessionID()); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
 	rules, _ := transfer.NewSelectionRules(true, nil)
@@ -420,17 +419,17 @@ func TestFenceRecoveryCancellationJoinsReplacementOwner(t *testing.T) {
 		<-ctx.Done()
 		return nil, ctx.Err()
 	})
-	expected := s.Current()
+	expected := s.ProtocolSessionID()
 	_ = wire.Close()
 	<-runtime.Done()
 	result := make(chan error, 1)
-	go func() { _, err := s.WaitForChange(context.Background(), expected); result <- err }()
+	go func() { _, err := s.WaitSessionChange(context.Background(), expected); result <- err }()
 	<-entered
 	s.Close()
 	select {
 	case err := <-result:
-		if err != nil {
-			t.Fatal(err)
+		if err == nil {
+			t.Fatal("closed continuation did not terminate wait")
 		}
 	case <-time.After(time.Second):
 		t.Fatal("replacement did not join")

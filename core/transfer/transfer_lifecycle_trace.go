@@ -37,7 +37,7 @@ const (
 	TransferCapacityRetrySucceeded
 	TransferCapacityBudgetPaused
 	TransferCapacityWaitCanceled
-	TransferCapacityGenerationEnded
+	TransferCapacitySessionEnded
 	TransferJobSettled
 	TransferDeliverySkipped
 	TransferFileRevisionReadmission
@@ -72,8 +72,6 @@ type TransferLifecycleTrace struct {
 	ItemBlockReason       ItemBlockReason
 	DirectTreeSettlement  DirectTreeSettlementKind
 	Progress              ReceiveProgressSnapshot
-	CapacityWaitID        revisionwait.WaitID
-	CapacityGeneration    revisionwait.GenerationToken
 	CapacityOperationID   protocolsession.OperationID
 	CapacityAttempt       uint64
 	CapacityHint          time.Duration
@@ -180,19 +178,20 @@ func (r *jobRun) traceRevisionWait(plan plannedFile, event revisionwait.Trace) {
 		stage = TransferCapacityBudgetPaused
 	case revisionwait.TraceWaitCanceled:
 		stage = TransferCapacityWaitCanceled
-	case revisionwait.TraceGenerationEnded:
-		stage = TransferCapacityGenerationEnded
+	case revisionwait.TraceSessionEnded:
+		stage = TransferCapacitySessionEnded
 	}
 	trace := TransferLifecycleTrace{
 		Stage: stage, ProtocolSessionID: event.ProtocolSession, FileSelection: plan.selectionDecision,
-		CapacityWaitID: event.WaitID, CapacityGeneration: event.Generation,
-		CapacityOperationID: event.ProtocolOperation,
-		CapacityAttempt:     event.Attempt, CapacityHint: event.Hint,
-		CapacityJitter: event.Jitter, CapacityDelay: event.Delay,
+		CapacityOperationID:   event.ProtocolOperation,
+		CapacityAttempt:       event.Attempt,
+		CapacityHint:          event.Hint,
+		CapacityJitter:        event.Jitter,
+		CapacityDelay:         event.Delay,
 		CapacityAccumulated:   event.AccumulatedWait,
 		CapacityActiveWaiters: event.ActiveWaiters,
 		Failed: event.Stage == revisionwait.TraceBudgetPaused ||
-			event.Stage == revisionwait.TraceWaitCanceled || event.Stage == revisionwait.TraceGenerationEnded,
+			event.Stage == revisionwait.TraceWaitCanceled || event.Stage == revisionwait.TraceSessionEnded,
 	}
 	if event.Stage == revisionwait.TraceWaitCanceled {
 		switch {
@@ -205,7 +204,7 @@ func (r *jobRun) traceRevisionWait(plan plannedFile, event revisionwait.Trace) {
 	switch event.Stage {
 	case revisionwait.TraceBudgetPaused:
 		trace.Fault = mustSessionFault(fault.ScopeOutputPause, fault.SessionResourceBudget)
-	case revisionwait.TraceGenerationEnded:
+	case revisionwait.TraceSessionEnded:
 		trace.Fault = mustSessionFault(fault.ScopeSessionTerminal, fault.SessionTransport)
 	}
 	r.job.trace(trace)
@@ -254,8 +253,8 @@ func (value TransferLifecycleStage) DiagnosticName() string {
 		return "capacity_budget_paused"
 	case TransferCapacityWaitCanceled:
 		return "capacity_wait_canceled"
-	case TransferCapacityGenerationEnded:
-		return "capacity_generation_ended"
+	case TransferCapacitySessionEnded:
+		return "capacity_session_ended"
 	case TransferJobSettled:
 		return "job_settled"
 	default:
@@ -304,8 +303,8 @@ func (v TransferLifecycleTrace) DiagnosticRecord() diag.Record {
 	f["plan_kind"] = diag.Number(float64(v.PlanKind))
 	f["discovery"] = diag.Text(v.Discovery.DiagnosticName())
 	f["connection_size_class"] = diag.Number(float64(v.ConnectionSizeClass))
-	if !v.CapacityWaitID.IsZero() {
-		f["capacity"] = diag.Object(diag.Fields{"wait_id": diag.Identity(v.CapacityWaitID.Bytes()), "generation_id": diag.Identity(v.CapacityGeneration.Bytes()),
+	if v.Stage >= TransferCapacityRetryScheduled && v.Stage <= TransferCapacitySessionEnded {
+		f["capacity"] = diag.Object(diag.Fields{
 			"protocol_operation_id": diag.Identity(v.CapacityOperationID[:]), "attempt": diag.Uint(v.CapacityAttempt),
 			"hint_ms": diag.Millis(v.CapacityHint), "jitter_ms": diag.Millis(v.CapacityJitter), "delay_ms": diag.Millis(v.CapacityDelay),
 			"accumulated_wait_ms": diag.Millis(v.CapacityAccumulated), "active_waiters": diag.Number(float64(v.CapacityActiveWaiters))})

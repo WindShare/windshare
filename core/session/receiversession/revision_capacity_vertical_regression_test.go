@@ -125,7 +125,7 @@ func TestTransferJobExplicitlySettlesMoreThanShareStableHandleLimit(t *testing.T
 			transfer.TransferCapacityRetrySucceeded,
 			transfer.TransferCapacityBudgetPaused,
 			transfer.TransferCapacityWaitCanceled,
-			transfer.TransferCapacityGenerationEnded:
+			transfer.TransferCapacitySessionEnded:
 			t.Fatalf("ordinary explicit releases reached capacity backpressure: %+v", event)
 		}
 	}

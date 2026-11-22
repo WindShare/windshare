@@ -2,7 +2,6 @@ package transfer
 
 import (
 	"context"
-	"errors"
 
 	"github.com/windshare/windshare/core/transfer/internal/failurestate"
 	"github.com/windshare/windshare/core/transfer/revisionwait"
@@ -26,9 +25,15 @@ func (r *jobRun) openSelectedRevision(ctx context.Context, plan plannedFile) (Op
 }
 
 type revisionOpenAttempt struct {
-	run  *jobRun
-	plan plannedFile
-	wait *revisionwait.Operation
+	run    *jobRun
+	plan   plannedFile
+	waited bool
+}
+
+func (attempt *revisionOpenAttempt) traceFunc() func(revisionwait.Trace) {
+	return func(event revisionwait.Trace) {
+		attempt.run.traceRevisionWait(attempt.plan, event)
+	}
 }
 
 func (attempt *revisionOpenAttempt) waitForCapacity(
@@ -40,10 +45,10 @@ func (attempt *revisionOpenAttempt) waitForCapacity(
 		attempt.stopWait()
 		return false, err
 	}
-	if err := attempt.ensureWait(); err != nil {
-		return false, failurestate.DependencyContract(err)
-	}
-	outcome, err := attempt.wait.Wait(ctx, signal)
+	attempt.waited = true
+	outcome, err := attempt.run.job.revisionWait.Wait(
+		ctx, signal, attempt.run.job.progress.setRevisionWait, attempt.traceFunc(),
+	)
 	return attempt.classifyWaitOutcome(ctx, outcome, err)
 }
 
@@ -69,22 +74,6 @@ func (attempt *revisionOpenAttempt) capacityContractError(
 	return nil
 }
 
-func (attempt *revisionOpenAttempt) ensureWait() error {
-	if attempt.wait != nil {
-		return nil
-	}
-	wait, err := attempt.run.job.revisionWait.NewOperation(
-		revisionwait.ObserverFunc(attempt.run.job.progress.setRevisionWait),
-		revisionwait.TraceFunc(func(event revisionwait.Trace) {
-			attempt.run.traceRevisionWait(attempt.plan, event)
-		}),
-	)
-	if err == nil {
-		attempt.wait = wait
-	}
-	return err
-}
-
 func (attempt *revisionOpenAttempt) classifyWaitOutcome(
 	ctx context.Context,
 	outcome revisionwait.WaitOutcome,
@@ -94,15 +83,15 @@ func (attempt *revisionOpenAttempt) classifyWaitOutcome(
 	case revisionwait.WaitRetry:
 		return true, nil
 	case revisionwait.WaitBudgetPaused:
+		attempt.waited = false
 		return false, resourceBudgetFailure(err)
 	case revisionwait.WaitCanceled:
+		attempt.waited = false
 		return false, failurestate.FromCancellation(ctx, err)
-	case revisionwait.WaitGenerationEnded:
+	case revisionwait.WaitSessionEnded:
+		attempt.waited = false
 		if failurestate.IsCancellation(ctx, err) {
 			return false, failurestate.FromCancellation(ctx, err)
-		}
-		if errors.Is(err, revisionwait.ErrGenerationContract) {
-			return false, failurestate.DependencyContract(err)
 		}
 		return false, sessionTransportFailure(err)
 	default:
@@ -112,26 +101,30 @@ func (attempt *revisionOpenAttempt) classifyWaitOutcome(
 }
 
 func (attempt *revisionOpenAttempt) finishWait(ctx context.Context, openErr error) {
-	if attempt.wait == nil {
+	if !attempt.waited {
 		return
 	}
+	attempt.waited = false
+	observe := attempt.run.job.progress.setRevisionWait
 	if openErr == nil {
-		attempt.wait.Succeed()
+		attempt.run.job.revisionWait.Succeed(observe, attempt.traceFunc())
 		return
 	}
 	if cause := context.Cause(ctx); cause != nil {
 		// The retry RPC observed cancellation, so it is neither a successful
 		// admission nor a scheduler stop even though progress must be cleared.
-		attempt.wait.Cancel(cause)
+		attempt.run.job.revisionWait.Cancel(cause, observe, attempt.traceFunc())
 		return
 	}
-	attempt.stopWait()
+	attempt.run.job.revisionWait.Stop(observe)
 }
 
 func (attempt *revisionOpenAttempt) stopWait() {
-	if attempt.wait != nil {
-		attempt.wait.Stop()
+	if !attempt.waited {
+		return
 	}
+	attempt.waited = false
+	attempt.run.job.revisionWait.Stop(attempt.run.job.progress.setRevisionWait)
 }
 
 func (r *jobRun) admitOpenedRevision(

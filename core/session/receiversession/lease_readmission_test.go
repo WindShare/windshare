@@ -97,7 +97,7 @@ func TestLeaseReplacementIsolatesCleanupFromDirectoryTransfer(t *testing.T) {
 				return content.BindRevisionMetadata(d, content.SourceMetadata{metadata})
 			}
 			source := &expiringFileSource{
-				Source: receiverLeaseDependencies{deps}, before: descriptor(1, 1),
+				Source: receiverLeaseDependencies{receiverTransferDependencies: deps, emitCapacitySignal: true}, before: descriptor(1, 1),
 				after: descriptor(tc.revision, tc.metadata), timeout: tc.timeout,
 			}
 			receiver.access.Stop()

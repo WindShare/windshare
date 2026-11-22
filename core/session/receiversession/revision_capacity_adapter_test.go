@@ -16,13 +16,8 @@ import (
 func TestAuthenticatedCapacitySignalPreservesExactHintAndCorrelation(t *testing.T) {
 	sessionID := id16[protocolsession.ProtocolSessionID](181)
 	operationID := id16[protocolsession.OperationID](182)
-	generation, err := revisionwait.GenerationTokenFromBytes(sessionID.Bytes())
-	if err != nil {
-		t.Fatal(err)
-	}
 	dependencies := receiverTransferDependencies{
-		runtime:    &Runtime{core: &sessioncore.Runtime{}, lifecycle: testLifecycle{sessionID: sessionID}},
-		generation: generation,
+		runtime: &Runtime{core: &sessioncore.Runtime{}, lifecycle: testLifecycle{sessionID: sessionID}},
 	}
 	remote := &RemoteRevisionError{
 		failure: contentflow.RevisionFailure{
@@ -36,8 +31,7 @@ func TestAuthenticatedCapacitySignalPreservesExactHintAndCorrelation(t *testing.
 	}
 	signal, ok := revisionwait.MatchCapacitySignal(capacity)
 	if !ok || signal.RetryAfter() != remote.Failure().RetryAfter ||
-		!signal.ProtocolSession().Equal(sessionID) || signal.ProtocolOperation() != operationID ||
-		signal.Generation() != generation {
+		!signal.ProtocolSession().Equal(sessionID) || signal.ProtocolOperation() != operationID {
 		t.Fatalf("capacity signal=%+v matched=%v", signal, ok)
 	}
 	if remote.ProtocolSessionID() != sessionID || remote.OperationID() != operationID {
@@ -63,13 +57,7 @@ func TestAuthenticatedOpenCapacityResponsePreservesWireCorrelation(t *testing.T)
 		t.Fatalf("authenticated capacity diagnostic failure=%+v session=%x operation=%x",
 			remote.Failure(), remote.ProtocolSessionID(), remote.OperationID())
 	}
-	generation, err := revisionwait.GenerationTokenFromBytes(receiver.ProtocolSessionID().Bytes())
-	if err != nil {
-		t.Fatal(err)
-	}
-	capacity, recognized := (receiverTransferDependencies{
-		runtime: receiver, generation: generation,
-	}).authenticatedCapacitySignal(remote)
+	capacity, recognized := (receiverTransferDependencies{runtime: receiver}).authenticatedCapacitySignal(remote)
 	signal, matched := revisionwait.MatchCapacitySignal(capacity)
 	if !recognized || !matched || signal.RetryAfter() != 125*time.Millisecond ||
 		signal.ProtocolOperation() != remote.OperationID() {
@@ -80,10 +68,8 @@ func TestAuthenticatedOpenCapacityResponsePreservesWireCorrelation(t *testing.T)
 func TestAuthenticatedCapacitySignalRejectsAdjacentFailureShapes(t *testing.T) {
 	sessionID := id16[protocolsession.ProtocolSessionID](183)
 	operationID := id16[protocolsession.OperationID](184)
-	generation, _ := revisionwait.GenerationTokenFromBytes(sessionID.Bytes())
 	dependencies := receiverTransferDependencies{
-		runtime:    &Runtime{core: &sessioncore.Runtime{}, lifecycle: testLifecycle{sessionID: sessionID}},
-		generation: generation,
+		runtime: &Runtime{core: &sessioncore.Runtime{}, lifecycle: testLifecycle{sessionID: sessionID}},
 	}
 	for name, failure := range map[string]contentflow.RevisionFailure{
 		"permanent quota": {
@@ -123,33 +109,32 @@ func TestReceiverRevisionWaitFenceEndsWithFixedRuntime(t *testing.T) {
 	sessionID := id16[protocolsession.ProtocolSessionID](186)
 	lifecycle, endRuntime := context.WithCancel(context.Background())
 	runtime := &Runtime{core: &sessioncore.Runtime{}, lifecycle: testLifecycle{sessionID: sessionID, ctx: lifecycle}}
-	generation, config, err := newReceiverRevisionWait(runtime)
+	config, err := newReceiverRevisionWait(runtime)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config == nil || config.GenerationFence == nil || config.GenerationFence.Current() != generation {
-		t.Fatalf("revision wait config=%+v generation=%x", config, generation)
+	if config == nil || config.WatchSession == nil {
+		t.Fatalf("revision wait config=%+v", config)
 	}
-	type fenceResult struct {
-		change revisionwait.GenerationChange
-		err    error
+	type watchResult struct {
+		next protocolsession.ProtocolSessionID
+		err  error
 	}
-	result := make(chan fenceResult, 1)
+	result := make(chan watchResult, 1)
 	go func() {
-		change, waitErr := config.GenerationFence.WaitForChange(context.Background(), generation)
-		result <- fenceResult{change: change, err: waitErr}
+		next, waitErr := config.WatchSession(context.Background(), sessionID)
+		result <- watchResult{next: next, err: waitErr}
 	}()
 	endRuntime()
 	select {
 	case ended := <-result:
-		if ended.err != nil || ended.change.Kind() != revisionwait.GenerationLifetimeEnded ||
-			ended.change.Previous() != generation || !ended.change.Current().IsZero() || ended.change.Cause() == nil {
-			t.Fatalf("runtime fence result=%+v err=%v", ended.change, ended.err)
+		if !ended.next.IsZero() || ended.err == nil {
+			t.Fatalf("runtime watch result=%+v", ended)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("fixed runtime end did not wake capacity wait fence")
+		t.Fatal("fixed runtime end did not wake capacity wait watcher")
 	}
-	if _, _, err := newReceiverRevisionWait(nil); !errors.Is(err, session.ErrRuntimeClosed) {
+	if _, err := newReceiverRevisionWait(nil); !errors.Is(err, session.ErrRuntimeClosed) {
 		t.Fatalf("nil runtime wait config error=%v", err)
 	}
 }

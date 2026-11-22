@@ -24,7 +24,7 @@ func (f capacityRangeFunc) ReadRange(ctx context.Context, l RevisionHandle, d co
 
 func TestReplacementLeaseCapacityUsesExistingJobBudgetAndRebuildsOnlyUncommittedRange(t *testing.T) {
 	file := transferID[catalog.FileID](84)
-	wait, token, timers := capacityJobWaitConfig(t, 10*time.Second)
+	wait, timers := capacityJobWaitConfig(t, 10*time.Second)
 	job, _ := newCapacityTransferJob(t, []catalog.FileID{file}, &capacityRevisionScript{}, wait, nil)
 	session := &changingJobSession{id: transferID[protocolsession.ProtocolSessionID](89)}
 	job.session = session
@@ -37,7 +37,7 @@ func TestReplacementLeaseCapacityUsesExistingJobBudgetAndRebuildsOnlyUncommitted
 			if err := sink.WriteRange(ctx, 0, []byte("abc")); err != nil {
 				t.Fatal(err)
 			}
-			return capacityJobSignal(t, token, 2*time.Second)
+			return capacityJobSignal(t, 2*time.Second)
 		}
 		return sink.WriteRange(ctx, 0, []byte("abcdef"))
 	})

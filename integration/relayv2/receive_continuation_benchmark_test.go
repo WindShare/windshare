@@ -192,7 +192,7 @@ func runReceiveEvidenceSample(
 	config := transfer.TransferJobConfig{
 		ReceiveIntent: intent, JobID: id, Session: continuation, Catalog: continuation,
 		Revisions: continuation, Blocks: continuation, Materializer: operation.Materializer,
-		RevisionWait: &revisionwait.Config{GenerationFence: continuation},
+		RevisionWait: &revisionwait.Config{WatchSession: continuation.WaitSessionChange},
 	}
 	var recovery receiveRecoveryEvidence
 	if scenario == evidenceReopened {

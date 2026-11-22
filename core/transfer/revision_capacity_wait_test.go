@@ -15,55 +15,27 @@ import (
 	"github.com/windshare/windshare/core/transfer/revisionwait"
 )
 
-type capacityJobClock struct {
-	mu  sync.Mutex
-	now time.Time
-}
-
-func (clock *capacityJobClock) Now() time.Time {
-	clock.mu.Lock()
-	defer clock.mu.Unlock()
-	return clock.now
-}
-
-func (clock *capacityJobClock) advance(elapsed time.Duration) {
-	clock.mu.Lock()
-	clock.now = clock.now.Add(elapsed)
-	clock.mu.Unlock()
-}
-
 type capacityJobTimers struct {
-	clock *capacityJobClock
 	mu    sync.Mutex
+	now   time.Time
 	waits []time.Duration
 }
 
-func (timers *capacityJobTimers) NewTimer(delay time.Duration) revisionwait.Timer {
+func (timers *capacityJobTimers) Now() time.Time {
 	timers.mu.Lock()
-	timers.waits = append(timers.waits, delay)
-	timers.mu.Unlock()
-	timers.clock.advance(delay)
-	done := make(chan time.Time, 1)
-	done <- timers.clock.Now()
-	return capacityJobTimer{done: done}
+	defer timers.mu.Unlock()
+	return timers.now
 }
 
-type capacityJobTimer struct{ done <-chan time.Time }
-
-func (timer capacityJobTimer) Done() <-chan time.Time { return timer.done }
-func (capacityJobTimer) Stop() bool                   { return true }
-
-type zeroCapacityJitter struct{}
-
-func (zeroCapacityJitter) AdditiveJitter(time.Duration) (time.Duration, error) { return 0, nil }
-
-type capacityWaitIDs struct{ next byte }
-
-func (ids *capacityWaitIDs) NewWaitID() (revisionwait.WaitID, error) {
-	ids.next++
-	var id revisionwait.WaitID
-	id[0] = ids.next
-	return id, nil
+func (timers *capacityJobTimers) After(delay time.Duration) (<-chan time.Time, func() bool) {
+	timers.mu.Lock()
+	timers.waits = append(timers.waits, delay)
+	timers.now = timers.now.Add(delay)
+	now := timers.now
+	timers.mu.Unlock()
+	done := make(chan time.Time, 1)
+	done <- now
+	return done, func() bool { return true }
 }
 
 type capacityCatalog struct{ snapshot catalog.DirectorySnapshot }
@@ -120,37 +92,29 @@ func (script *capacityRevisionScript) ReleaseRevision(_ context.Context, lease R
 func capacityJobWaitConfig(
 	t *testing.T,
 	budget time.Duration,
-) (*revisionwait.Config, revisionwait.GenerationToken, *capacityJobTimers) {
+) (*revisionwait.Config, *capacityJobTimers) {
 	t.Helper()
-	var tokenBytes [revisionwait.GenerationBytes]byte
-	tokenBytes[0] = 90
-	token, err := revisionwait.GenerationTokenFromBytes(tokenBytes[:])
-	if err != nil {
-		t.Fatal(err)
-	}
-	fence, err := revisionwait.NewLifetimeFence(token, context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	clock := &capacityJobClock{now: time.Unix(1_700_000_000, 0)}
-	timers := &capacityJobTimers{clock: clock}
+	sessionID := transferID[protocolsession.ProtocolSessionID](91)
+	timers := &capacityJobTimers{now: time.Unix(1_700_000_000, 0)}
 	return &revisionwait.Config{
 		WaitBudget: budget, AdditiveJitterLimit: time.Millisecond,
-		VisibilityThreshold: time.Millisecond, Clock: clock, Timers: timers,
-		Jitter: zeroCapacityJitter{}, WaitIDs: &capacityWaitIDs{}, GenerationFence: fence,
-	}, token, timers
+		VisibilityThreshold: time.Millisecond,
+		WatchSession:        revisionwait.WatchLifetime(sessionID, context.Background()),
+		Now:                 timers.Now, After: timers.After,
+		Jitter: func(time.Duration) (time.Duration, error) { return 0, nil },
+	}, timers
 }
 
 func capacityJobSignal(
 	t *testing.T,
-	token revisionwait.GenerationToken,
 	hint time.Duration,
 ) *revisionwait.CapacitySignal {
 	t.Helper()
-	signal, err := revisionwait.NewCapacitySignal(revisionwait.CapacitySignalSpec{
-		RetryAfter: hint, ProtocolSession: transferID[protocolsession.ProtocolSessionID](91),
-		ProtocolOperation: transferID[protocolsession.OperationID](92), Generation: token,
-	})
+	signal, err := revisionwait.NewCapacitySignal(
+		hint,
+		transferID[protocolsession.ProtocolSessionID](91),
+		transferID[protocolsession.OperationID](92),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,12 +154,12 @@ func newCapacityTransferJob(
 func TestTransferJobRetriesCapacityInsideCurrentWorkerSlotAndSucceeds(t *testing.T) {
 	fileA := transferID[catalog.FileID](84)
 	fileB := transferID[catalog.FileID](85)
-	wait, token, timers := capacityJobWaitConfig(t, 10*time.Second)
+	wait, timers := capacityJobWaitConfig(t, 10*time.Second)
 	share := transferID[catalog.ShareInstance](80)
 	script := &capacityRevisionScript{
 		busy: map[catalog.FileID]int{fileA: 1},
 		signals: map[catalog.FileID]*revisionwait.CapacitySignal{
-			fileA: capacityJobSignal(t, token, 2*time.Second),
+			fileA: capacityJobSignal(t, 2*time.Second),
 		},
 		opened: map[catalog.FileID]OpenedRevision{},
 	}
@@ -232,17 +196,11 @@ func TestTransferJobRetriesCapacityInsideCurrentWorkerSlotAndSucceeds(t *testing
 	traceMu.Lock()
 	defer traceMu.Unlock()
 	var capacityStages []TransferLifecycleStage
-	var waitID revisionwait.WaitID
 	for _, event := range traces {
-		if event.Stage < TransferCapacityRetryScheduled || event.Stage > TransferCapacityGenerationEnded {
+		if event.Stage < TransferCapacityRetryScheduled || event.Stage > TransferCapacitySessionEnded {
 			continue
 		}
 		capacityStages = append(capacityStages, event.Stage)
-		if waitID.IsZero() {
-			waitID = event.CapacityWaitID
-		} else if event.CapacityWaitID != waitID {
-			t.Fatalf("capacity trace changed wait id: %+v", event)
-		}
 	}
 	wantStages := []TransferLifecycleStage{
 		TransferCapacityRetryScheduled, TransferCapacityRetryReady, TransferCapacityRetrySucceeded,
@@ -254,11 +212,11 @@ func TestTransferJobRetriesCapacityInsideCurrentWorkerSlotAndSucceeds(t *testing
 
 func TestTransferJobCapacityBudgetPausesTreeWithoutFileErrors(t *testing.T) {
 	file := transferID[catalog.FileID](94)
-	wait, token, timers := capacityJobWaitConfig(t, time.Second)
+	wait, timers := capacityJobWaitConfig(t, time.Second)
 	script := &capacityRevisionScript{
 		busy: map[catalog.FileID]int{file: 1},
 		signals: map[catalog.FileID]*revisionwait.CapacitySignal{
-			file: capacityJobSignal(t, token, 2*time.Second),
+			file: capacityJobSignal(t, 2*time.Second),
 		},
 		opened: make(map[catalog.FileID]OpenedRevision),
 	}

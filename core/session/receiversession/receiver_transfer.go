@@ -18,7 +18,6 @@ import (
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 	"github.com/windshare/windshare/core/transfer/revisionwait"
-	"reflect"
 )
 
 // NewTransferJob binds one confirmed receive intent to a single transfer run.
@@ -38,11 +37,11 @@ func (runtime *Runtime) NewTransferJob(
 		intent.SyntheticRoot() != descriptor.SyntheticRoot() {
 		return nil, transfer.ErrInvalidTransferJob
 	}
-	generation, revisionWait, err := newReceiverRevisionWait(runtime)
+	revisionWait, err := newReceiverRevisionWait(runtime)
 	if err != nil {
 		return nil, errors.Join(transfer.ErrInvalidTransferJob, err)
 	}
-	dependencies := receiverTransferDependencies{runtime: runtime, generation: generation}
+	dependencies := receiverTransferDependencies{runtime: runtime}
 	return transfer.NewTransferJob(transfer.TransferJobConfig{
 		ReceiveIntent: intent, JobID: jobID,
 		Session: runtime, Tracer: tracer,
@@ -51,21 +50,17 @@ func (runtime *Runtime) NewTransferJob(
 	})
 }
 
-func newReceiverRevisionWait(
-	runtime *Runtime,
-) (revisionwait.GenerationToken, *revisionwait.Config, error) {
+func newReceiverRevisionWait(runtime *Runtime) (*revisionwait.Config, error) {
 	if runtime == nil || runtime.core == nil || runtime.Lifetime() == nil {
-		return revisionwait.GenerationToken{}, nil, session.ErrRuntimeClosed
+		return nil, session.ErrRuntimeClosed
 	}
-	generation, err := revisionwait.GenerationTokenFromBytes(runtime.ProtocolSessionID().Bytes())
-	if err != nil {
-		return revisionwait.GenerationToken{}, nil, err
+	sessionID := runtime.ProtocolSessionID()
+	if sessionID.IsZero() {
+		return nil, revisionwait.ErrInvalidConfig
 	}
-	fence, err := revisionwait.NewLifetimeFence(generation, runtime.Lifetime())
-	if err != nil {
-		return revisionwait.GenerationToken{}, nil, err
-	}
-	return generation, &revisionwait.Config{GenerationFence: fence}, nil
+	return &revisionwait.Config{
+		WatchSession: revisionwait.WatchLifetime(sessionID, runtime.Lifetime()),
+	}, nil
 }
 
 // ResolveOrdinaryOutputShape consumes only authenticated catalog metadata from
@@ -104,8 +99,8 @@ func (runtime *Runtime) ResolveOrdinaryOutputShape(
 // TransferDependencies exposes protocol operations without giving a transfer owner
 // access to the runtime's crypto, grants, or lease registry.
 func (runtime *Runtime) TransferDependencies() (TransferDependencies, error) {
-	generation, _, err := newReceiverRevisionWait(runtime)
-	return receiverTransferDependencies{runtime: runtime, generation: generation}, err
+	_, err := newReceiverRevisionWait(runtime)
+	return receiverTransferDependencies{runtime: runtime}, err
 }
 
 type TransferDependencies = receiverTransferDependencies
@@ -154,8 +149,7 @@ func (runtime *Runtime) AwaitPathRetirement(ctx context.Context) bool {
 // owner is live, but once the runtime closes they all describe the same terminal
 // fact: retrying another file cannot succeed on this authenticated session.
 type receiverTransferDependencies struct {
-	runtime    *Runtime
-	generation revisionwait.GenerationToken
+	runtime *Runtime
 }
 
 func (dependencies receiverTransferDependencies) OpenDirectoryPages(
@@ -201,11 +195,10 @@ func (dependencies receiverLeaseDependencies) OpenLease(
 	file catalog.FileID,
 ) (revisionaccess.Lease, error) {
 	opened, err := dependencies.runtime.revisions.OpenRevision(ctx, file)
-	var remote *RemoteRevisionError
-	// Only the authenticated client may return this authority directly. Runtime
-	// type equality rejects diagnostic wrappers before errors.As extracts it.
-	if reflect.TypeOf(err) == reflect.TypeOf(remote) && errors.As(err, &remote) && remote != nil {
-		if !dependencies.generation.IsZero() {
+	// Direct type assertion rejects diagnostic wrappers so only an authenticated
+	// remote response can produce capacity retry authority.
+	if remote, ok := err.(*RemoteRevisionError); ok && remote != nil {
+		if dependencies.emitCapacitySignal {
 			if capacity, recognized := dependencies.authenticatedCapacitySignal(remote); recognized {
 				return opened, capacity
 			}
@@ -226,15 +219,13 @@ func (dependencies receiverTransferDependencies) authenticatedCapacitySignal(
 		return nil, false
 	}
 	runtime := dependencies.runtime
-	if runtime == nil || dependencies.generation.IsZero() ||
-		remote.ProtocolSessionID().IsZero() || remote.OperationID().IsZero() ||
+	if runtime == nil || remote.ProtocolSessionID().IsZero() || remote.OperationID().IsZero() ||
 		!remote.ProtocolSessionID().Equal(runtime.ProtocolSessionID()) {
 		return dependencyBoundaryError(errors.Join(transfer.ErrInvalidTransferJob, remote)), true
 	}
-	signal, err := revisionwait.NewCapacitySignal(revisionwait.CapacitySignalSpec{
-		RetryAfter: failure.RetryAfter, ProtocolSession: remote.ProtocolSessionID(),
-		ProtocolOperation: remote.OperationID(), Generation: dependencies.generation,
-	})
+	signal, err := revisionwait.NewCapacitySignal(
+		failure.RetryAfter, remote.ProtocolSessionID(), remote.OperationID(),
+	)
 	if err != nil {
 		return sessionProtocolBoundaryError(errors.Join(protocolsession.ErrInvalidOperationFailure, remote, err)), true
 	}
@@ -453,18 +444,23 @@ func (state *catalogProgressState) observe(progress protocolsession.ScanProgress
 }
 
 func (runtime *Runtime) bindRevisionAccess() error {
-	generation, _, err := newReceiverRevisionWait(runtime)
-	if err != nil {
+	if _, err := newReceiverRevisionWait(runtime); err != nil {
 		return err
 	}
-	source := receiverLeaseDependencies{receiverTransferDependencies{runtime: runtime, generation: generation}}
+	source := receiverLeaseDependencies{
+		receiverTransferDependencies: receiverTransferDependencies{runtime: runtime},
+		emitCapacitySignal:           true,
+	}
 	runtime.access = revisionaccess.New(runtime.Lifetime(), source)
 	return runtime.core.AddFinalizer(runtime.releaseOwnedResources)
 }
 
 // The local handle owns one file's wire lease across output attempts. Each
 // range request must still match the descriptor admitted by its own writer.
-type receiverLeaseDependencies struct{ receiverTransferDependencies }
+type receiverLeaseDependencies struct {
+	receiverTransferDependencies
+	emitCapacitySignal bool
+}
 
 func (dependencies receiverTransferDependencies) OpenRevision(ctx context.Context, file catalog.FileID) (transfer.OpenedRevision, error) {
 	opened, err := dependencies.runtime.access.OpenRevision(ctx, file)
