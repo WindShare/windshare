@@ -264,7 +264,7 @@ func (dependencies receiverTransferDependencies) classifyCatalog(ctx context.Con
 				transferfault.ScopeDirectoryLocal, transferfault.CatalogDirectoryStale,
 			)
 			return transferfault.Wrap(value, cause)
-		case receiverSessionTerminal(cause):
+		case transferfault.IsSessionTerminal(cause):
 			return sessionTransportBoundaryError(cause)
 		default:
 			return dependencyBoundaryError(cause)
@@ -274,35 +274,22 @@ func (dependencies receiverTransferDependencies) classifyCatalog(ctx context.Con
 
 func (dependencies receiverTransferDependencies) classifySource(ctx context.Context, err error) error {
 	return dependencies.classifyBoundary(ctx, err, func(cause error) error {
-		switch {
-		case errors.Is(cause, content.ErrRevisionDrift), errors.Is(cause, transfer.ErrBlockInvalidated):
+		if errors.Is(cause, transfer.ErrBlockInvalidated) {
 			return sourceBoundaryError(transferfault.SourceRevisionInvalidated, cause)
-		case errors.Is(cause, content.ErrRevisionStale), errors.Is(cause, content.ErrSourceDrift):
-			return sourceBoundaryError(transferfault.SourceRevisionChanged, cause)
-		case errors.Is(cause, content.ErrRevisionNotFound), errors.Is(cause, content.ErrRevisionUnreadable),
-			errors.Is(cause, content.ErrUnsupportedStability):
-			return sourceBoundaryError(transferfault.SourcePermanent, cause)
-		case errors.Is(cause, content.ErrRevisionReopened), errors.Is(cause, content.ErrQuotaExceeded),
-			errors.Is(cause, content.ErrLeaseExpired),
-			errors.Is(cause, content.ErrInvalidLease):
-			return sourceBoundaryError(transferfault.SourceUnavailable, cause)
+		}
+		if value, known := transferfault.ClassifyContent(cause); known {
+			return transferfault.Wrap(value, cause)
+		}
+		switch {
 		case errors.Is(cause, transfer.ErrBlockIdentity):
 			return sessionProtocolBoundaryError(cause)
-		case errors.Is(cause, transfer.ErrBrokerClosed), errors.Is(cause, transferlanes.ErrClosed):
-			return sessionTransportBoundaryError(cause)
-		case receiverSessionTerminal(cause):
+		case errors.Is(cause, transfer.ErrBrokerClosed), errors.Is(cause, transferlanes.ErrClosed),
+			transferfault.IsSessionTerminal(cause):
 			return sessionTransportBoundaryError(cause)
 		default:
 			return dependencyBoundaryError(cause)
 		}
 	})
-}
-
-func receiverSessionTerminal(err error) bool {
-	return errors.Is(err, protocolsession.ErrSessionTerminated) ||
-		errors.Is(err, protocolsession.ErrPeerSessionTerminal) ||
-		errors.Is(err, protocolsession.ErrWriterTerminal) ||
-		errors.Is(err, protocolsession.ErrWriterStopped)
 }
 
 func (dependencies receiverTransferDependencies) classifyBoundary(

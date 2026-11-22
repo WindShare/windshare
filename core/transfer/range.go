@@ -11,7 +11,7 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/downloadmetrics"
-	"github.com/windshare/windshare/core/transfer/internal/failurestate"
+	"github.com/windshare/windshare/core/transfer/fault"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	"github.com/windshare/windshare/core/transfer/revisionwait"
 )
@@ -179,7 +179,7 @@ func (sink *atomicRequestedRangeSink) failContractLocked(cause error) error {
 }
 
 func rangeReaderContractError(cause error) error {
-	return failurestate.DependencyContract(errors.Join(errRangeReaderContract, cause))
+	return fault.DependencyContract(errors.Join(errRangeReaderContract, cause))
 }
 
 func (b *BlockBroker) beginDownloadWait() func() {
@@ -375,7 +375,7 @@ func (r *jobRun) transferMissingRanges(
 			if cause := context.Cause(ctx); cause != nil {
 				return false, r.settleFailedFile(
 					ctx, plan, opened, transaction, FailureBlockTransfer,
-					failurestate.FromCancellation(ctx, cause), 0, progress,
+					fault.FromCancellation(ctx, cause), 0, progress,
 				)
 			}
 			// RangeReader owns the bounded block pipeline. Passing one chunk at a

@@ -9,7 +9,6 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/transfer/fault"
-	"github.com/windshare/windshare/core/transfer/internal/failurestate"
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 )
 
@@ -227,9 +226,9 @@ type jobRun struct {
 	failurePathBytes               uint64
 	omittedDirectories             uint64
 	omittedFiles                   uint64
-	sourceDriftFailure             *failurestate.Failure
-	terminationCause               *failurestate.Failure
-	settlementFailure              *failurestate.Failure
+	sourceDriftFailure             *fault.BoundaryError
+	terminationCause               *fault.BoundaryError
+	settlementFailure              *fault.BoundaryError
 	settlement                     DirectTreeSettlement
 	admitted                       bool
 	needsAttention                 bool
@@ -314,7 +313,7 @@ func (r *jobRun) retainOpaqueSelectionEvidence(
 ) error {
 	if directory.IsZero() || evidence.generation.IsZero() || evidence.terminal.IsZero() ||
 		r.opaqueSelectionEvidence == nil {
-		return failurestate.DependencyContract(ErrNodeLedgerState)
+		return fault.DependencyContract(ErrNodeLedgerState)
 	}
 	if retained, exists := r.opaqueSelectionEvidence[directory]; exists {
 		if retained != evidence {
@@ -394,8 +393,8 @@ func (r *jobRun) isolateIncrementalFailure(
 	path string,
 	err error,
 ) error {
-	propagated, _ := failurestate.Admit(err)
-	if cause := failurestate.ContextCause(ctx); cause != nil && cause == propagated {
+	propagated, _ := fault.Admit(err)
+	if cause := fault.ContextCause(ctx); cause != nil && cause == propagated {
 		// A worker can stop the whole job with a file-local settlement fault.
 		// Propagating that stop cannot invalidate authenticated catalog authority.
 		return cause
@@ -411,12 +410,12 @@ func (r *jobRun) isolateIncrementalFailure(
 		// authenticated terminal generation, no durable namespace may settle.
 		r.rootGeneration = catalog.DirectoryGeneration{}
 		if rollbackErr := r.rollbackClaims(checkpoint); rollbackErr != nil {
-			return failurestate.DependencyContract(rollbackErr)
+			return fault.DependencyContract(rollbackErr)
 		}
 		return catalogIntegrityFailure(err)
 	}
 	if rollbackErr := r.rollbackClaims(checkpoint); rollbackErr != nil {
-		return failurestate.DependencyContract(rollbackErr)
+		return fault.DependencyContract(rollbackErr)
 	}
 	return nil
 }
@@ -439,14 +438,14 @@ func isDirectoryDiscoveryFailure(err error) bool {
 
 func (r *jobRun) recordDirectoryFailure(failure DirectoryJobFailure) {
 	if !failure.Fault.Valid() {
-		failure.Fault = failurestate.FaultOf(failure.Cause)
+		failure.Fault = fault.FaultOf(failure.Cause)
 	}
 	r.failureMu.Lock()
 	r.retainSourceDriftFailure(failure.Cause)
 	if failure.Stage == FailureDirectoryDiscovery {
 		r.discoveryFault = fault.Join(r.discoveryFault, failure.Fault)
 	}
-	failure.Cause = failurestate.Diagnostic(failure.Cause)
+	failure.Cause = fault.CauseOf(failure.Cause)
 	if r.reserveFailurePath(failure.Path) {
 		r.directories = append(r.directories, failure)
 	} else if r.omittedDirectories != ^uint64(0) {
@@ -463,15 +462,15 @@ func (r *jobRun) discoveryFaultSnapshot() fault.Fault {
 
 func (r *jobRun) recordFileFailure(failure FileJobFailure) {
 	if !failure.Fault.Valid() {
-		failure.Fault = failurestate.FaultOf(failure.Cause)
+		failure.Fault = fault.FaultOf(failure.Cause)
 	}
 	if !failure.SettlementFault.Valid() {
-		failure.SettlementFault = failurestate.FaultOf(failure.SettlementFailure)
+		failure.SettlementFault = fault.FaultOf(failure.SettlementFailure)
 	}
 	r.failureMu.Lock()
 	r.retainSourceDriftFailure(failure.Cause)
-	failure.Cause = failurestate.Diagnostic(failure.Cause)
-	failure.SettlementFailure = failurestate.Diagnostic(failure.SettlementFailure)
+	failure.Cause = fault.CauseOf(failure.Cause)
+	failure.SettlementFailure = fault.CauseOf(failure.SettlementFailure)
 	if r.reserveFailurePath(failure.Path) {
 		r.files = append(r.files, failure)
 	} else if r.omittedFiles != ^uint64(0) {
@@ -493,7 +492,7 @@ func (r *jobRun) reserveFailurePath(path string) bool {
 }
 
 func (r *jobRun) retainSourceDriftFailure(cause error) {
-	failure, ok := failurestate.Admit(cause)
+	failure, ok := fault.Admit(cause)
 	if r.sourceDriftFailure == nil && ok && lifecyclePolicyFor(failure).sourceDrift() {
 		r.sourceDriftFailure = failure
 	}
@@ -504,7 +503,7 @@ func (r *jobRun) failureSnapshot() (
 	files []FileJobFailure,
 	omittedDirectories uint64,
 	omittedFiles uint64,
-	sourceDriftFailure *failurestate.Failure) {
+	sourceDriftFailure *fault.BoundaryError) {
 	r.failureMu.Lock()
 	defer r.failureMu.Unlock()
 	return slices.Clone(r.directories), slices.Clone(r.files), r.omittedDirectories, r.omittedFiles,

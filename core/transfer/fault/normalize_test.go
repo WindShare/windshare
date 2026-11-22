@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
+	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/transfer/fault"
 )
 
@@ -128,5 +131,93 @@ func TestRetirementRequiresExplicitFileLocalSourceCode(t *testing.T) {
 		if reason, ok := fault.RetirementFor(candidate); ok || reason != 0 {
 			t.Fatalf("fault %v authorized retirement (%v, %v)", candidate, reason, ok)
 		}
+	}
+}
+
+func TestNormalizeAndReducePreserveOwnerCauseAndCancellation(t *testing.T) {
+	t.Parallel()
+
+	sourceVal := mustSource(t, fault.ScopeFileLocal, fault.SourceRevisionChanged)
+	sessionVal, _ := fault.NewSession(fault.ScopeSessionTerminal, fault.SessionProtocol)
+	diag := errors.New("revision changed")
+	owned := fault.New(sourceVal, diag)
+
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cancel(owned)
+	if got := fault.Normalize(ctx, context.Canceled, nil); got != owned || got.Canceled() || got.Fault() != sourceVal {
+		t.Fatalf("owner cause lost provenance: %+v", got)
+	}
+	if fault.CauseOf(owned) != diag || owned.Cause() != diag {
+		t.Fatal("diagnostic cause was discarded")
+	}
+	if _, ok := fault.Admit(fmt.Errorf("wrapped: %w", owned)); ok {
+		t.Fatal("wrapped error acquired direct policy admission")
+	}
+	if fault.Require(errors.New("raw")).Fault() != fault.DependencyContractFault() {
+		t.Fatal("raw error did not default to dependency contract")
+	}
+	if fault.Require(nil) != nil || (*fault.BoundaryError)(nil).Err() != nil || fault.ContextCause(context.Background()) != nil {
+		t.Fatal("nil produced non-nil failure")
+	}
+
+	sessionErr := fault.New(sessionVal, errors.New("session"))
+	canceled := fault.FromCancellation(context.Background(), context.Canceled)
+	deadline := fault.FromCancellation(context.Background(), context.DeadlineExceeded)
+	for _, order := range [][]error{
+		{owned, sessionErr, canceled, deadline},
+		{deadline, canceled, sessionErr, owned},
+	} {
+		reduced := fault.Reduce(order...)
+		if reduced.Fault() != sessionVal || reduced.Cancellation() != context.DeadlineExceeded ||
+			!errors.Is(reduced, context.DeadlineExceeded) || errors.Is(reduced, context.Canceled) {
+			t.Fatalf("reduction depended on order: %v", reduced)
+		}
+		if reduced.Project(reduced.Cause()) != context.DeadlineExceeded {
+			t.Fatal("projected canceled failure lost deadline sentinel")
+		}
+	}
+	if fault.Reduce(nil, owned) != owned || fault.Merge(nil, owned) != owned || fault.Merge(owned, nil) != owned {
+		t.Fatal("singleton reduction replaced owned cause")
+	}
+	if fault.JoinErrors(nil) != nil {
+		t.Fatal("empty join produced non-nil error")
+	}
+	wrappedCancel := fmt.Errorf("diagnostic: %w", context.Canceled)
+	if got := fault.Reduce(wrappedCancel); got.Canceled() || got.Fault() != fault.DependencyContractFault() {
+		t.Fatalf("wrapped cancellation acquired reduce authority: %v", got)
+	}
+	if got := fault.Normalize(context.Background(), wrappedCancel, nil); !got.Canceled() {
+		t.Fatal("boundary rejected collaborator cancellation")
+	}
+	dlCtx, dlCancel := context.WithDeadline(context.Background(), time.Time{})
+	defer dlCancel()
+	if got := fault.Normalize(dlCtx, fault.Wrap(sessionVal, context.Canceled), nil); !got.Canceled() || got.Cancellation() != context.DeadlineExceeded {
+		t.Fatalf("caller deadline lost to classified boundary: %v", got)
+	}
+}
+
+func TestClassifyContentAndSessionTerminal(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		cause error
+		code  fault.SourceCode
+	}{
+		{content.ErrRevisionDrift, fault.SourceRevisionInvalidated},
+		{content.ErrRevisionStale, fault.SourceRevisionChanged},
+		{content.ErrSourceDrift, fault.SourceRevisionChanged},
+		{content.ErrRevisionNotFound, fault.SourcePermanent},
+		{content.ErrLeaseExpired, fault.SourceUnavailable},
+	}
+	for _, tc := range cases {
+		got := fault.Normalize(context.Background(), fmt.Errorf("source: %w", tc.cause), fault.ClassifyContent)
+		want := mustSource(t, fault.ScopeFileLocal, tc.code)
+		if got.Fault() != want || got.Canceled() {
+			t.Fatalf("ClassifyContent(%v) = %v, want %v", tc.cause, got, want)
+		}
+	}
+	if _, ok := fault.ClassifyContent(protocolsession.ErrSessionTerminated); ok ||
+		!fault.IsSessionTerminal(protocolsession.ErrWriterStopped) {
+		t.Fatal("content and session terminal classification overlapped")
 	}
 }

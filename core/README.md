@@ -26,7 +26,7 @@ The pre-v1 package API makes no compatibility promise; a separate module would o
 - **Dependency gates**: CI (`_coreboundary`) blocks non-core WindShare imports in production (allowing `osfs` only in test-graph deltas) and concrete networking or transport capabilities, and enforces isolation across `session/` role packages (`sendersession`, `receiversession`, `sessioncore`, `observation`).
 - **File sources**: `liveshare.PrepareSender` consumes an injected `FileSourceFactory` (natively `osfs.SelectedFileSource` via `adapters/filesystem`). Acquisition reads selected-root metadata on demand without traversing descendants; `catalog.SourceReference` stays private to the adapter, and `content.StableFile` owns handle lifetimes.
 - **Budgets**: The application supplies process-wide sender budgets (`content.HandlePool`, `catalog.BudgetAccount`, `contentflow.ProcessCacheBudget`) and receiver capacity (`liveshare.ReceiveCapacity`); shares and receivers retain and release their own reservations.
-- **Transfer**: `transfer` owns receive jobs, `BlockBroker`, and output settlement contracts; `transfer/lanes` owns lane admission, block attempts, cancellation, and lane settlement. Brokers consume `BlockFetcher`, `receiversession` binds `downloadmetrics.Metrics` to both producers, and both layers normalize closed failures in `transfer/internal/failurestate`.
+- **Transfer**: `transfer` owns receive jobs, `BlockBroker`, and output settlement contracts; `transfer/lanes` owns lane admission, block attempts, cancellation, and lane settlement. Brokers consume `BlockFetcher`, `receiversession` binds `downloadmetrics.Metrics` to both producers, and both layers normalize failures through `transfer/fault`.
 
 ## Validate
 

@@ -9,7 +9,6 @@ import (
 
 	"github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/transfer/fault"
-	"github.com/windshare/windshare/core/transfer/internal/failurestate"
 )
 
 // demandNotAdmittedError is an opaque concrete capability proving that a lane
@@ -61,7 +60,7 @@ func isDemandReassignableAfterRetirement(err error) bool {
 }
 
 type laneFailureSet struct {
-	failure    *failurestate.Failure
+	failure    *fault.BoundaryError
 	diagnostic error
 }
 
@@ -97,31 +96,31 @@ func reduceLaneFailures(current laneFailureSet, results []laneResult) (laneFailu
 		if result.notAdmitted {
 			failure = sourceUnavailableFailure(diagnostic)
 		}
-		current.failure = failurestate.JoinClosed(current.failure, failure)
+		current.failure = fault.Merge(current.failure, failure.Err())
 		current.diagnostic = errors.Join(current.diagnostic, diagnostic)
 		reassignable = reassignable && result.reassignable
 	}
 	return current, reassignable
 }
 func normalizeSourceBoundary(ctx context.Context, err error) error {
-	return failurestate.Err(failurestate.Normalize(ctx, err, func(cause error) (fault.Fault, bool) {
-		if value, known := failurestate.ContentFault(cause); known {
+	return fault.Normalize(ctx, err, func(cause error) (fault.Fault, bool) {
+		if value, known := fault.ClassifyContent(cause); known {
 			return value, true
 		}
-		if errors.Is(cause, ErrClosed) || failurestate.SessionTerminal(cause) {
+		if errors.Is(cause, ErrClosed) || fault.IsSessionTerminal(cause) {
 			value, _ := fault.NewSession(fault.ScopeSessionTerminal, fault.SessionTransport)
 			return value, true
 		}
 		return fault.Fault{}, false
-	}))
+	}).Err()
 }
 
-func sourceUnavailableFailure(cause error) *failurestate.Failure {
+func sourceUnavailableFailure(cause error) *fault.BoundaryError {
 	value, _ := fault.NewSource(fault.ScopeFileLocal, fault.SourceUnavailable)
-	return failurestate.New(value, cause)
+	return fault.New(value, cause)
 }
 
 func exhaustedRouteFailure() laneFailureSet {
 	value, _ := fault.NewSession(fault.ScopeOutputPause, fault.SessionTransport)
-	return laneFailureSet{failurestate.New(value, ErrNoContentRoute), ErrNoContentRoute}
+	return laneFailureSet{fault.New(value, ErrNoContentRoute), ErrNoContentRoute}
 }

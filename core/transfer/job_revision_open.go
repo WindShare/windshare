@@ -3,7 +3,7 @@ package transfer
 import (
 	"context"
 
-	"github.com/windshare/windshare/core/transfer/internal/failurestate"
+	"github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/core/transfer/revisionwait"
 )
 
@@ -60,16 +60,16 @@ func (attempt *revisionOpenAttempt) capacityContractError(
 	run := attempt.run
 	sessionID := run.job.protocolSessionID()
 	if !sessionID.IsZero() && signal.ProtocolSession() != sessionID {
-		return failurestate.DependencyContract(ErrRevisionIdentity)
+		return fault.DependencyContract(ErrRevisionIdentity)
 	}
 	if !opened.Handle.IsZero() {
 		// A capacity denial cannot grant a capability. Retiring it first keeps a
 		// broken adapter from leaking sender capacity while the job fails closed.
 		run.releaseRevision(ctx, attempt.plan, opened.Handle)
-		return failurestate.DependencyContract(ErrRevisionIdentity)
+		return fault.DependencyContract(ErrRevisionIdentity)
 	}
 	if run.job.revisionWait == nil {
-		return failurestate.DependencyContract(ErrRevisionWaitUnavailable)
+		return fault.DependencyContract(ErrRevisionWaitUnavailable)
 	}
 	return nil
 }
@@ -87,16 +87,16 @@ func (attempt *revisionOpenAttempt) classifyWaitOutcome(
 		return false, resourceBudgetFailure(err)
 	case revisionwait.WaitCanceled:
 		attempt.waited = false
-		return false, failurestate.FromCancellation(ctx, err)
+		return false, fault.FromCancellation(ctx, err)
 	case revisionwait.WaitSessionEnded:
 		attempt.waited = false
-		if failurestate.IsCancellation(ctx, err) {
-			return false, failurestate.FromCancellation(ctx, err)
+		if fault.IsCancellation(ctx, err) {
+			return false, fault.FromCancellation(ctx, err)
 		}
 		return false, sessionTransportFailure(err)
 	default:
 		attempt.stopWait()
-		return false, failurestate.DependencyContract(err)
+		return false, fault.DependencyContract(err)
 	}
 }
 

@@ -14,7 +14,6 @@ import (
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/transfer/catalogwalk"
 	"github.com/windshare/windshare/core/transfer/fault"
-	"github.com/windshare/windshare/core/transfer/internal/failurestate"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
@@ -347,7 +346,7 @@ func (j *TransferJob) Run(ctx context.Context) JobResult {
 	j.mu.Lock()
 	if j.started {
 		j.mu.Unlock()
-		failure := failurestate.DependencyContract(ErrTransferJobRun)
+		failure := fault.DependencyContract(ErrTransferJobRun)
 		return JobResult{Outcome: DirectTreeOutcomePaused, TransferJobID: j.jobID,
 			ReceiveIntentDigest: j.intent.Digest(), ReceiveIntent: j.intent,
 			Progress: j.Progress(), TerminationCause: failure,
@@ -372,7 +371,7 @@ func (j *TransferJob) Run(ctx context.Context) JobResult {
 	defer cancel(nil)
 	state, err := newJobRun(j)
 	if err != nil {
-		failure := failurestate.DependencyContract(err)
+		failure := fault.DependencyContract(err)
 		j.failUnstartedDiscovery()
 		return JobResult{
 			Outcome: DirectTreeOutcomePaused, TransferJobID: j.jobID,
@@ -382,7 +381,7 @@ func (j *TransferJob) Run(ctx context.Context) JobResult {
 		}
 	}
 	if cause := context.Cause(runContext); cause != nil {
-		state.terminationCause = failurestate.FromCancellation(runContext, cause)
+		state.terminationCause = fault.FromCancellation(runContext, cause)
 		j.failUnstartedDiscovery()
 		return state.finish(ctx)
 	}
@@ -393,25 +392,25 @@ func (j *TransferJob) Run(ctx context.Context) JobResult {
 	}
 
 	fileQueue := make(chan transferQueueItem, j.queueCapacity)
-	workerErr := make(chan *failurestate.Failure, 1)
+	workerErr := make(chan *fault.BoundaryError, 1)
 	workerDone := make(chan struct{})
 	go state.transferQueueWorker(runContext, fileQueue, cancel, workerErr, workerDone)
 	j.trace(TransferLifecycleTrace{
 		Stage: TransferDiscoveryStarted, TransferJobID: j.jobID, ReceiveIntentDigest: j.intent.Digest(),
 		Discovery: DiscoveryOpen,
 	})
-	discoveryFailure := failurestate.Require(state.discoverIncremental(runContext, fileQueue))
+	discoveryFailure := fault.Require(state.discoverIncremental(runContext, fileQueue))
 	return state.completeDiscovery(ctx, runContext, cancel, fileQueue, workerErr, workerDone, discoveryFailure)
 }
 
-func (j *TransferJob) admitRunOutput(ctx context.Context, state *jobRun) *failurestate.Failure {
+func (j *TransferJob) admitRunOutput(ctx context.Context, state *jobRun) *fault.BoundaryError {
 	j.trace(TransferLifecycleTrace{
 		Stage: TransferAdmissionStarted, TransferJobID: j.jobID, ReceiveIntentDigest: j.intent.Digest(),
 	})
 	output, rawOutputErr := j.outputAuthority.OpenDirectTree(ctx, j.intent)
-	failure := failurestate.Require(normalizeOutputBoundary(ctx, rawOutputErr))
+	failure := fault.Require(normalizeOutputBoundary(ctx, rawOutputErr))
 	if output != nil {
-		bindingFailure := failurestate.Require(validateDirectTreeSession(j.intent, output))
+		bindingFailure := fault.Require(validateDirectTreeSession(j.intent, output))
 		if bindingFailure != nil {
 			// A foreign session is not authority to mutate, even for cleanup or pause.
 			// Prefer the binding failure over a simultaneous adapter error because the
@@ -425,14 +424,14 @@ func (j *TransferJob) admitRunOutput(ctx context.Context, state *jobRun) *failur
 			state.admitted = true
 		}
 	} else if failure == nil {
-		failure = failurestate.Require(validateDirectTreeSession(j.intent, nil))
+		failure = fault.Require(validateDirectTreeSession(j.intent, nil))
 	}
 	if failure == nil {
 		admissionScope := j.coordinates.scope
 		if !admissionScope.valid() {
 			// Intent validation precedes OpenDirectTree, so failure to project its receipt
 			// scope is an internal boundary violation rather than backend authority.
-			failure = failurestate.DependencyContract(ErrInvalidDirectoryAdmission)
+			failure = fault.DependencyContract(ErrInvalidDirectoryAdmission)
 		} else {
 			state.directoryAdmissionScope = admissionScope
 		}
@@ -464,9 +463,9 @@ func (r *jobRun) completeDiscovery(
 	runContext context.Context,
 	cancel context.CancelCauseFunc,
 	fileQueue chan transferQueueItem,
-	workerErr <-chan *failurestate.Failure, workerDone <-chan struct{},
-	discoveryFailure *failurestate.Failure) JobResult {
-	workerCause := failurestate.ContextCause(runContext)
+	workerErr <-chan *fault.BoundaryError, workerDone <-chan struct{},
+	discoveryFailure *fault.BoundaryError) JobResult {
+	workerCause := fault.ContextCause(runContext)
 	workerInterruptedDiscovery := (workerCause != nil && (workerCause == discoveryFailure || (discoveryFailure != nil && discoveryFailure.Canceled()))) ||
 		(discoveryFailure != nil && discoveryFailure.Canceled())
 	discoveryIncomplete := discoveryFailure != nil &&
@@ -512,7 +511,7 @@ func (r *jobRun) completeDiscovery(
 			r.terminationCause = workerFailure
 			cancel(workerFailure)
 		} else {
-			r.terminationCause = failurestate.Merge(r.terminationCause, workerFailure)
+			r.terminationCause = fault.Merge(r.terminationCause, workerFailure)
 		}
 	default:
 	}
@@ -521,7 +520,7 @@ func (r *jobRun) completeDiscovery(
 }
 
 func discoveryCompletionFault(
-	failure *failurestate.Failure, incomplete bool,
+	failure *fault.BoundaryError, incomplete bool,
 ) fault.Fault {
 	if !incomplete {
 		return fault.Fault{}

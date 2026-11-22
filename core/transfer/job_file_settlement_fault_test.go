@@ -580,7 +580,7 @@ func TestTransferJobCancellationDuringDiscoveryIsAborted(t *testing.T) {
 	}
 }
 
-func TestClosedFaultScopeDrivesOutputPolicyWithoutExposingDiagnostics(t *testing.T) {
+func TestClosedFaultScopeDrivesOutputPolicy(t *testing.T) {
 	diagnostic := errors.New("journal")
 	fatal := outputFailure(fault.ScopeOutputPause, fault.OutputStateIO, diagnostic)
 	nonfatal := outputFailure(fault.ScopeFileLocal, fault.OutputStateIO, errors.New("file"))
@@ -589,8 +589,8 @@ func TestClosedFaultScopeDrivesOutputPolicyWithoutExposingDiagnostics(t *testing
 		lifecyclePolicyFor(nonfatal).outputRequiresJobPause(capabilities) {
 		t.Fatal("output error scope classification failed")
 	}
-	if errors.Is(fatal, diagnostic) || normalizedFault(fatal).Scope() != fault.ScopeOutputPause {
-		t.Fatal("normalized lifecycle fault exposed diagnostic authority")
+	if !errors.Is(fatal, diagnostic) || normalizedFault(fatal).Scope() != fault.ScopeOutputPause {
+		t.Fatal("normalized lifecycle fault lost scope or diagnostic cause")
 	}
 }
 

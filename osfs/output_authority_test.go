@@ -87,13 +87,6 @@ func TestOutputDiagnosticForAdmitsOnlyCompleteBoundedEvidence(t *testing.T) {
 		t.Fatal("zero diagnostic was accepted")
 	}
 	if (OutputDiagnostic{
-		Stage:           OutputFailureDurability,
-		FaultDomain:     1,
-		NormalizedScope: 2,
-	}).Valid() {
-		t.Fatal("incomplete normalized fault was accepted")
-	}
-	if (OutputDiagnostic{
 		Stage:            OutputFailureDurability,
 		NativeErrorClass: 255,
 	}).Valid() {

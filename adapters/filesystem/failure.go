@@ -26,9 +26,7 @@ const (
 type OutputFailureDiagnostic struct {
 	Stage            output.FailureStage
 	NativeErrorClass NativeErrorClass
-	FaultDomain      uint8
-	NormalizedScope  uint8
-	NormalizedCode   uint16
+	Fault            transferfault.Fault
 }
 
 func (diagnostic OutputFailureDiagnostic) Valid() bool {
@@ -38,13 +36,7 @@ func (diagnostic OutputFailureDiagnostic) Valid() bool {
 	if diagnostic.NativeErrorClass != 0 && !diagnostic.NativeErrorClass.Valid() {
 		return false
 	}
-	faultZero := diagnostic.FaultDomain == 0 &&
-		diagnostic.NormalizedScope == 0 &&
-		diagnostic.NormalizedCode == 0
-	faultComplete := diagnostic.FaultDomain != 0 &&
-		diagnostic.NormalizedScope != 0 &&
-		diagnostic.NormalizedCode != 0
-	return faultZero || faultComplete
+	return diagnostic.Fault.IsZero() || diagnostic.Fault.Valid()
 }
 
 type sealedNativeDetail struct {
@@ -65,38 +57,9 @@ func SealOutputFailure(diagnostic OutputFailureDiagnostic) (error, bool) {
 		Stage:            diagnostic.Stage,
 		NativeErrorClass: diagnostic.NativeErrorClass,
 	}}
-	fault := projectNormalizedFault(
-		diagnostic.FaultDomain, diagnostic.NormalizedScope, diagnostic.NormalizedCode,
-	)
 	return output.SealFailure(cause, output.FailureDiagnostic{
-		Stage: diagnostic.Stage, Fault: fault,
+		Stage: diagnostic.Stage, Fault: diagnostic.Fault,
 	})
-}
-
-func projectNormalizedFault(domain, scope uint8, code uint16) transferfault.Fault {
-	s := transferfault.Scope(scope)
-	var (
-		fault transferfault.Fault
-		err   error
-	)
-	switch transferfault.Domain(domain) {
-	case transferfault.DomainSource:
-		fault, err = transferfault.NewSource(s, transferfault.SourceCode(code))
-	case transferfault.DomainCatalog:
-		fault, err = transferfault.NewCatalog(s, transferfault.CatalogCode(code))
-	case transferfault.DomainSession:
-		fault, err = transferfault.NewSession(s, transferfault.SessionCode(code))
-	case transferfault.DomainOutput:
-		fault, err = transferfault.NewOutput(s, transferfault.OutputCode(code))
-	case transferfault.DomainCheckpoint:
-		fault, err = transferfault.NewCheckpoint(s, transferfault.CheckpointCode(code))
-	default:
-		return transferfault.Fault{}
-	}
-	if err != nil {
-		return transferfault.Fault{}
-	}
-	return fault
 }
 
 // FailureDetail retains provider OS error classes for host CLI rendering
@@ -192,13 +155,10 @@ func sealOutputError(cause error) error {
 		if !found {
 			continue
 		}
-		fault := projectNormalizedFault(
-			detail.FaultDomain, detail.NormalizedScope, detail.NormalizedCode,
-		)
 		evidence = append(evidence, output.FailureEvidence{
 			Cause: matching,
 			Diagnostic: output.FailureDiagnostic{
-				Stage: projectFailureStage(stage), Fault: fault,
+				Stage: projectFailureStage(stage), Fault: detail.Fault,
 			},
 		})
 	}

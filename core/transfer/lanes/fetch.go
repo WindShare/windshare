@@ -9,7 +9,7 @@ import (
 	"github.com/windshare/windshare/core/framechannel"
 
 	"github.com/windshare/windshare/core/content/records"
-	"github.com/windshare/windshare/core/transfer/internal/failurestate"
+	"github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/core/transfer/lanescheduling"
 )
 
@@ -24,7 +24,7 @@ type laneResult struct {
 	state        *laneState
 	record       records.BlockRecord
 	err          error
-	normalized   *failurestate.Failure
+	normalized   *fault.BoundaryError
 	notAdmitted  bool
 	reassignable bool
 }
@@ -60,8 +60,7 @@ func (s *Set) Fetch(
 		return Block{}, err
 	}
 	if validate == nil {
-		failure := failurestate.DependencyContract(ErrInvalidRequest)
-		return Block{}, failurestate.BoundaryError(failure, ErrInvalidRequest)
+		return Block{}, fault.DependencyContract(ErrInvalidRequest).Project(ErrInvalidRequest)
 	}
 	if !s.beginFetch() {
 		return Block{}, ErrClosed
@@ -77,14 +76,14 @@ func (s *Set) Fetch(
 	for len(attempted) < MaxDemandAttempts {
 		candidates, exhausted, err := s.candidates(ctx, attempted, request)
 		if err != nil {
-			normalized := failurestate.Require(normalizeSourceBoundary(ctx, err))
-			return Block{}, failurestate.BoundaryError(normalized, err)
+			normalized := fault.Require(normalizeSourceBoundary(ctx, err))
+			return Block{}, normalized.Project(err)
 		}
 		if exhausted {
 			if failures.failure == nil {
 				failures = exhaustedRouteFailure()
 			}
-			return Block{}, failurestate.BoundaryError(failures.failure, failures.diagnostic)
+			return Block{}, failures.failure.Project(failures.diagnostic)
 		}
 		// Reassignment is an admitted action, not an inference from a retryable
 		// error. Candidate selection has already reserved the subsequent round.
@@ -103,7 +102,7 @@ func (s *Set) Fetch(
 			var reassignable bool
 			failures, reassignable = reduceLaneFailures(failures, round.failures)
 			if !reassignable {
-				return Block{}, failurestate.BoundaryError(failures.failure, failures.diagnostic)
+				return Block{}, failures.failure.Project(failures.diagnostic)
 			}
 			// A completed cancellation boundary permits retrying this same live
 			// lane after its cooldown. Congestion consumes no failure budget.
@@ -115,7 +114,7 @@ func (s *Set) Fetch(
 			pendingReassignments = round.failures
 		}
 	}
-	return Block{}, failurestate.BoundaryError(failures.failure, failures.diagnostic)
+	return Block{}, failures.failure.Project(failures.diagnostic)
 }
 
 func (s *Set) beginFetch() bool {
@@ -279,7 +278,7 @@ func (s *Set) fetchLane(
 		fetchErr = validate(record)
 	}
 	notAdmitted := isDemandNotAdmitted(fetchErr)
-	normalized := failurestate.Require(normalizeSourceBoundary(ctx, fetchErr))
+	normalized := fault.Require(normalizeSourceBoundary(ctx, fetchErr))
 	canceled := normalized != nil && normalized.Canceled()
 	reassignable := !canceled && (notAdmitted || isDemandReassignableAfterRetirement(fetchErr))
 	elapsed := s.now().Sub(started)

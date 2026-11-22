@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/windshare/windshare/core/transfer/fault"
-	"github.com/windshare/windshare/core/transfer/internal/failurestate"
 )
 
 func TestCollaboratorBoundaryNormalizationIsClosed(t *testing.T) {
@@ -46,15 +45,15 @@ func TestLifecycleFailureJoinUsesOnlyNormalizedSeverity(t *testing.T) {
 	pause := outputFailure(fault.ScopeOutputPause, fault.OutputStateIO, errors.New("output state failure"))
 	terminal := sessionProtocolFailure(errors.New("authenticated protocol failure"))
 
-	joined := failurestate.Join(file, pause, terminal)
+	joined := fault.JoinErrors(file, pause, terminal)
 	if got := normalizedFault(joined); got != normalizedFault(terminal) {
 		t.Fatalf("joined fault = %v, want %v", got, normalizedFault(terminal))
 	}
-	if got := normalizedFault(failurestate.Join(terminal, file, pause)); got != normalizedFault(terminal) {
+	if got := normalizedFault(fault.JoinErrors(terminal, file, pause)); got != normalizedFault(terminal) {
 		t.Fatalf("permuted joined fault = %v, want %v", got, normalizedFault(terminal))
 	}
 
-	withCancellation := failurestate.Join(failurestate.FromCancellation(canceledContext(), context.Canceled), pause)
+	withCancellation := fault.JoinErrors(fault.FromCancellation(canceledContext(), context.Canceled), pause)
 	policy := lifecyclePolicyFor(withCancellation)
 	if !policy.canceled || policy.value != normalizedFault(pause) {
 		t.Fatalf("joined cancellation policy = %+v", policy)
@@ -68,7 +67,7 @@ func TestRetirementAndIsolationRequireExplicitClosedFaults(t *testing.T) {
 	if got := fileRetireReason(permanent); got != FileRetireIsolatedPermanentSourceFailure {
 		t.Fatalf("permanent retire reason = %v", got)
 	}
-	if got := fileRetireReason(failurestate.DependencyContract(errors.New("unknown"))); got != 0 {
+	if got := fileRetireReason(fault.DependencyContract(errors.New("unknown"))); got != 0 {
 		t.Fatalf("dependency-contract fault authorized retirement: %v", got)
 	}
 
@@ -77,7 +76,7 @@ func TestRetirementAndIsolationRequireExplicitClosedFaults(t *testing.T) {
 	if !lifecyclePolicyFor(fileOutput).outputCanContinueAfterFileSettlement(isolating) {
 		t.Fatal("explicit file-local output fault was not isolated")
 	}
-	if lifecyclePolicyFor(failurestate.DependencyContract(errors.New("unknown"))).outputCanContinueAfterFileSettlement(isolating) {
+	if lifecyclePolicyFor(fault.DependencyContract(errors.New("unknown"))).outputCanContinueAfterFileSettlement(isolating) {
 		t.Fatal("unknown fault acquired file-isolation authority")
 	}
 }
@@ -95,13 +94,14 @@ func TestLifecycleAuthorityRejectsWrappedInternalCarriers(t *testing.T) {
 	}
 
 	wrappedCancellation := fmt.Errorf("untrusted wrapper: %w", context.Canceled)
-	joined := failurestate.Join(wrappedCancellation)
+	joined := fault.JoinErrors(wrappedCancellation)
 	policy := lifecyclePolicyFor(joined)
-	if policy.canceled || policy.value != fault.DependencyContractFault() || errors.Is(joined, context.Canceled) {
+	if policy.canceled || policy.value != fault.DependencyContractFault() ||
+		fault.IsCancellation(context.Background(), joined) {
 		t.Fatalf("wrapped cancellation acquired authority: policy=%+v err=%v", policy, joined)
 	}
 
-	directCancellation := failurestate.Join(context.Canceled)
+	directCancellation := fault.JoinErrors(context.Canceled)
 	if policy := lifecyclePolicyFor(directCancellation); !policy.canceled || policy.value.Valid() ||
 		!errors.Is(directCancellation, context.Canceled) {
 		t.Fatalf("direct cancellation was not preserved: policy=%+v err=%v", policy, directCancellation)

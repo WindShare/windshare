@@ -7,7 +7,6 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/transfer/catalogwalk"
 	"github.com/windshare/windshare/core/transfer/fault"
-	"github.com/windshare/windshare/core/transfer/internal/failurestate"
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 )
 
@@ -72,7 +71,7 @@ func (r *jobRun) discoverOpaqueSelectionBranch(
 	}
 	evidence, retained := r.opaqueEvidence(request.directory)
 	if !retained {
-		return false, failurestate.DependencyContract(ErrNodeLedgerState)
+		return false, fault.DependencyContract(ErrNodeLedgerState)
 	}
 	request.mode = incrementalDiscoveryOpaqueMaterialization
 	request.expectedEvidence = evidence
@@ -84,12 +83,12 @@ func (r *jobRun) transferQueueWorker(
 	ctx context.Context,
 	queue <-chan transferQueueItem,
 	cancel context.CancelCauseFunc,
-	workerErr chan<- *failurestate.Failure, done chan<- struct{},
+	workerErr chan<- *fault.BoundaryError, done chan<- struct{},
 ) {
 	defer close(done)
 	for item := range queue {
 		if err := context.Cause(ctx); err != nil {
-			reportTransferWorkerFailure(workerErr, cancel, failurestate.FromCancellation(ctx, err))
+			reportTransferWorkerFailure(workerErr, cancel, fault.FromCancellation(ctx, err))
 			return
 		}
 		var err error
@@ -98,7 +97,7 @@ func (r *jobRun) transferQueueWorker(
 			select {
 			case <-item.enqueued:
 			case <-ctx.Done():
-				reportTransferWorkerFailure(workerErr, cancel, failurestate.FromCancellation(ctx, context.Cause(ctx)))
+				reportTransferWorkerFailure(workerErr, cancel, fault.FromCancellation(ctx, context.Cause(ctx)))
 				return
 			}
 			r.traceFileLifecycle(TransferFileStarted, item.file, nil)
@@ -106,7 +105,7 @@ func (r *jobRun) transferQueueWorker(
 		case transferQueueDirectoryFinalization:
 			err = r.finalizeIncrementalDirectory(ctx, item.admission)
 		default:
-			err = failurestate.DependencyContract(ErrOutputContract)
+			err = fault.DependencyContract(ErrOutputContract)
 		}
 		if err != nil {
 			reportTransferWorkerFailure(workerErr, cancel, err)
@@ -116,10 +115,10 @@ func (r *jobRun) transferQueueWorker(
 }
 
 func reportTransferWorkerFailure(
-	workerErr chan<- *failurestate.Failure, cancel context.CancelCauseFunc,
+	workerErr chan<- *fault.BoundaryError, cancel context.CancelCauseFunc,
 	err error,
 ) {
-	failure := failurestate.Require(err)
+	failure := fault.Require(err)
 	if failure == nil {
 		return
 	}
@@ -136,7 +135,7 @@ func (r *jobRun) discoverIncrementalDirectory(
 	request incrementalDirectoryRequest,
 ) (selected bool, resultErr error) {
 	if err := context.Cause(ctx); err != nil {
-		return false, failurestate.FromCancellation(ctx, err)
+		return false, fault.FromCancellation(ctx, err)
 	}
 	checkpoint := r.checkpointClaims()
 	if _, active := r.activeDirectories[request.directory]; active {
@@ -151,7 +150,7 @@ func (r *jobRun) discoverIncrementalDirectory(
 		return false, r.isolateIncrementalFailure(ctx, checkpoint, request.directory, request.path, err)
 	}
 	if cursor == nil {
-		return false, failurestate.DependencyContract(ErrCatalogCursorContract)
+		return false, fault.DependencyContract(ErrCatalogCursorContract)
 	}
 	discovery := incrementalDirectoryDiscovery{
 		run: r, queue: queue, request: request, checkpoint: checkpoint,
@@ -159,7 +158,7 @@ func (r *jobRun) discoverIncrementalDirectory(
 	}
 	meter, ok := catalogwalk.NewMeter(r.job.catalogWalkLimits)
 	if !ok {
-		return false, failurestate.DependencyContract(ErrGenerationReplayBudget)
+		return false, fault.DependencyContract(ErrGenerationReplayBudget)
 	}
 	usable, readErr := discovery.readTerminalGeneration(ctx, cursor, meter)
 	if readErr != nil || !usable {
@@ -199,7 +198,7 @@ func (r *jobRun) discoverIncrementalDirectory(
 			kind: transferQueueDirectoryFinalization, admission: admission,
 		}:
 		case <-ctx.Done():
-			return false, failurestate.FromCancellation(ctx, context.Cause(ctx))
+			return false, fault.FromCancellation(ctx, context.Cause(ctx))
 		}
 	}
 	return selectedSubtree, nil
@@ -224,7 +223,7 @@ func (discovery *incrementalDirectoryDiscovery) readTerminalGeneration(
 		case errors.Is(err, catalogwalk.ErrTerminalGenerationIntegrity):
 			failure = catalogIntegrityFailure(errors.Join(ErrCatalogIdentity, err))
 		case errors.Is(err, catalogwalk.ErrInvalidTerminalGenerationWalk):
-			failure = failurestate.DependencyContract(err)
+			failure = fault.DependencyContract(err)
 		}
 		return false, discovery.run.isolateIncrementalFailure(
 			ctx, discovery.checkpoint, discovery.request.directory, discovery.request.path, failure,
@@ -371,7 +370,7 @@ func (discovery *incrementalDirectoryDiscovery) rejectOmittedRoot() error {
 	// Explicit selections cannot silently disappear from the synthetic root.
 	discovery.run.rootGeneration = catalog.DirectoryGeneration{}
 	if err := discovery.run.rollbackClaims(discovery.checkpoint); err != nil {
-		return failurestate.DependencyContract(err)
+		return fault.DependencyContract(err)
 	}
 	return catalogIntegrityFailure(ErrCatalogRootEntriesOmitted)
 }
@@ -405,7 +404,7 @@ func (discovery *incrementalDirectoryDiscovery) admitDirectory(
 	}
 	request, projection, projectionErr := discovery.outputDirectoryRequest()
 	if projectionErr != nil {
-		return DirectoryAdmission{}, MaterializedDirectoryClaim{}, false, failurestate.DependencyContract(projectionErr)
+		return DirectoryAdmission{}, MaterializedDirectoryClaim{}, false, fault.DependencyContract(projectionErr)
 	}
 	// Projection is the admission discriminant: a rejected source deliberately
 	// carries no materialization request, but that absence never grants reference authority.
@@ -421,11 +420,11 @@ func (discovery *incrementalDirectoryDiscovery) admitDirectory(
 	case ordinaryoutput.ArtifactMaterialize:
 		if !materialized {
 			return DirectoryAdmission{}, MaterializedDirectoryClaim{}, false,
-				failurestate.DependencyContract(ErrOutputContract)
+				fault.DependencyContract(ErrOutputContract)
 		}
 	default:
 		return DirectoryAdmission{}, MaterializedDirectoryClaim{}, false,
-			failurestate.DependencyContract(ErrOutputContract)
+			fault.DependencyContract(ErrOutputContract)
 	}
 	admission, err := discovery.run.admitIncrementalDirectory(ctx, request)
 	if err == nil {
@@ -434,7 +433,7 @@ func (discovery *incrementalDirectoryDiscovery) admitDirectory(
 		}
 		claim, claimErr := NewMaterializedDirectoryClaim(admission, request)
 		if claimErr != nil {
-			return DirectoryAdmission{}, MaterializedDirectoryClaim{}, false, failurestate.DependencyContract(claimErr)
+			return DirectoryAdmission{}, MaterializedDirectoryClaim{}, false, fault.DependencyContract(claimErr)
 		}
 		return admission, claim, true, nil
 	}
@@ -484,7 +483,7 @@ func (r *jobRun) recordSelectedProjectionRejection(
 	projection ordinaryoutput.ArtifactPathProjection,
 ) error {
 	if projection.Kind() != ordinaryoutput.ArtifactReject {
-		return failurestate.DependencyContract(ErrOutputContract)
+		return fault.DependencyContract(ErrOutputContract)
 	}
 	switch projection.RejectReason() {
 	case ordinaryoutput.ArtifactRejectWrongKind,
@@ -499,7 +498,7 @@ func (r *jobRun) recordSelectedProjectionRejection(
 		r.job.progress.failDiscovery()
 		return nil
 	default:
-		return failurestate.DependencyContract(ErrOutputContract)
+		return fault.DependencyContract(ErrOutputContract)
 	}
 }
 
@@ -529,10 +528,10 @@ func (r *jobRun) recordIncrementalAdmissionFailure(
 func (r *jobRun) admitIncrementalDirectory(ctx context.Context, request DirectoryMaterializationRequest) (DirectoryAdmission, error) {
 	directory, materialized := request.Directory()
 	if !materialized {
-		return DirectoryAdmission{}, failurestate.DependencyContract(ErrInvalidDirectoryAdmission)
+		return DirectoryAdmission{}, fault.DependencyContract(ErrInvalidDirectoryAdmission)
 	}
 	if err := validateMaterializationDirectoryForScope(r.directoryAdmissionScope, directory); err != nil {
-		return DirectoryAdmission{}, failurestate.DependencyContract(err)
+		return DirectoryAdmission{}, fault.DependencyContract(err)
 	}
 	admission, rawAdmissionErr := r.output.AdmitDirectory(ctx, request)
 	err := normalizeOutputBoundary(ctx, rawAdmissionErr)
@@ -541,7 +540,7 @@ func (r *jobRun) admitIncrementalDirectory(ctx context.Context, request Director
 			if bindingErr := ValidateDirectoryAdmissionBinding(
 				r.directoryAdmissionScope, admission, directory,
 			); bindingErr != nil {
-				err = failurestate.Join(err, outputContractFault(bindingErr))
+				err = fault.JoinErrors(err, outputContractFault(bindingErr))
 			}
 			err = requireOutputPause(err)
 		}
@@ -560,7 +559,7 @@ func (r *jobRun) admitIncrementalDirectory(ctx context.Context, request Director
 func (r *jobRun) traceDirectoryAdmission(_ DirectoryMaterializationRequest, failure error) {
 	r.job.trace(TransferLifecycleTrace{
 		Stage: TransferDirectoryAdmitted, OutputSessionID: r.output.SessionID(),
-		Fault:        failurestate.FaultOf(failure),
+		Fault:        fault.FaultOf(failure),
 		Interruption: closedInterruption(failure),
 		Failed:       failure != nil,
 	})
@@ -571,7 +570,7 @@ func (r *jobRun) finalizeIncrementalDirectory(ctx context.Context, admission Dir
 	err := normalizeOutputBoundary(ctx, rawSettlementErr)
 	invalidSettlement := false
 	if err != nil && settlement != (DirectorySettlement{}) {
-		err = failurestate.Join(err, outputContractFault(ErrOutputContract))
+		err = fault.JoinErrors(err, outputContractFault(ErrOutputContract))
 		invalidSettlement = true
 	}
 	if err == nil {
@@ -579,9 +578,9 @@ func (r *jobRun) finalizeIncrementalDirectory(ctx context.Context, admission Dir
 		invalidSettlement = err != nil
 	}
 	if invalidSettlement {
-		r.settlementFailure = failurestate.Merge(r.settlementFailure, err)
+		r.settlementFailure = fault.Merge(r.settlementFailure, err)
 	}
-	traceFault := failurestate.FaultOf(err)
+	traceFault := fault.FaultOf(err)
 	if settlement.Kind() == DirectoryIsolatedFailure {
 		traceFault, _ = settlement.IsolatedFault()
 	}

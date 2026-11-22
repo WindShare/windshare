@@ -10,7 +10,6 @@ import (
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/transfer/fault"
-	"github.com/windshare/windshare/core/transfer/internal/failurestate"
 )
 
 type interruptedReplayCatalog struct {
@@ -132,7 +131,7 @@ func TestDiscoveryIsolationPreservesOnlyThePropagatedWorkerCause(t *testing.T) {
 			t.Run(phase+"/"+name, func(t *testing.T) {
 				root := transferID[catalog.DirectoryID](0x92)
 				run := &jobRun{job: &TransferJob{root: root}}
-				workerCause := failurestate.New(
+				workerCause := fault.New(
 					mustOutputFault(fault.ScopeFileLocal, fault.OutputStateIO), errors.New("worker stopped"),
 				)
 				ctx, cancel := context.WithCancelCause(t.Context())
@@ -141,7 +140,7 @@ func TestDiscoveryIsolationPreservesOnlyThePropagatedWorkerCause(t *testing.T) {
 				if !propagated {
 					// Matching fault values do not prove that an independent catalog
 					// failure was caused by the worker's cancellation.
-					failure = failurestate.New(workerCause.Fault(), errors.New("independent catalog failure"))
+					failure = fault.New(workerCause.Fault(), errors.New("independent catalog failure"))
 				}
 				var got error
 				if phase == "initial" {
@@ -157,8 +156,8 @@ func TestDiscoveryIsolationPreservesOnlyThePropagatedWorkerCause(t *testing.T) {
 					if got != workerCause {
 						t.Fatalf("worker cause was reclassified: %v", got)
 					}
-				} else if expected := mustCatalogFault(fault.ScopeSessionTerminal, fault.CatalogInvalidGeneration); failurestate.FaultOf(got) != expected {
-					t.Fatalf("independent root failure was suppressed: got=%v want=%v", failurestate.FaultOf(got), expected)
+				} else if expected := mustCatalogFault(fault.ScopeSessionTerminal, fault.CatalogInvalidGeneration); fault.FaultOf(got) != expected {
+					t.Fatalf("independent root failure was suppressed: got=%v want=%v", fault.FaultOf(got), expected)
 				}
 			})
 		}

@@ -15,7 +15,6 @@ import (
 	"github.com/windshare/windshare/core/content/records"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/transfer/fault"
-	"github.com/windshare/windshare/core/transfer/internal/failurestate"
 	"github.com/windshare/windshare/core/transfer/lanescheduling"
 )
 
@@ -198,12 +197,12 @@ func TestLaneFailureReductionIsPermutationStable(t *testing.T) {
 	one := laneResult{
 		state:      &laneState{identity: Identity{ID: 1, Epoch: 2}},
 		err:        errors.New("lane-one"),
-		normalized: failurestate.New(testProtocolFault(), errors.New("terminal")),
+		normalized: fault.New(testProtocolFault(), errors.New("terminal")),
 	}
 	two := laneResult{
 		state:      &laneState{identity: Identity{ID: 2, Epoch: 1}},
 		err:        errors.New("lane-two"),
-		normalized: failurestate.New(testSourceFault(), errors.New("file-local")),
+		normalized: fault.New(testSourceFault(), errors.New("file-local")),
 	}
 	forward, forwardReassignable := reduceLaneFailures(laneFailureSet{}, []laneResult{one, two})
 	reverse, reverseReassignable := reduceLaneFailures(laneFailureSet{}, []laneResult{two, one})

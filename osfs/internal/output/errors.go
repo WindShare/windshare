@@ -166,9 +166,7 @@ func ClassifyNativeError(err error) (NativeErrorClass, bool) {
 type Diagnostic struct {
 	Stage            FailureStage
 	NativeErrorClass NativeErrorClass
-	FaultDomain      uint8
-	NormalizedScope  uint8
-	NormalizedCode   uint16
+	Fault            transferfault.Fault
 }
 
 func (diagnostic Diagnostic) Valid() bool {
@@ -178,13 +176,7 @@ func (diagnostic Diagnostic) Valid() bool {
 	if diagnostic.NativeErrorClass != 0 && !diagnostic.NativeErrorClass.Valid() {
 		return false
 	}
-	faultZero := diagnostic.FaultDomain == 0 &&
-		diagnostic.NormalizedScope == 0 &&
-		diagnostic.NormalizedCode == 0
-	faultComplete := diagnostic.FaultDomain != 0 &&
-		diagnostic.NormalizedScope != 0 &&
-		diagnostic.NormalizedCode != 0
-	return faultZero || faultComplete
+	return diagnostic.Fault.IsZero() || diagnostic.Fault.Valid()
 }
 
 type diagnosticError struct {
@@ -297,9 +289,7 @@ func buildDiagnostic(stage FailureStage, cause error) Diagnostic {
 		diagnostic.NativeErrorClass = native
 	}
 	if value, ok := transferfault.NormalizeBoundaryError(cause).Fault(); ok {
-		diagnostic.FaultDomain = uint8(value.Domain())
-		diagnostic.NormalizedScope = uint8(value.Scope())
-		diagnostic.NormalizedCode = value.Code()
+		diagnostic.Fault = value
 	}
 	return diagnostic
 }

@@ -6,27 +6,26 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/transfer/fault"
-	"github.com/windshare/windshare/core/transfer/internal/failurestate"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
 )
 
 func normalizeCatalogBoundary(ctx context.Context, err error) error {
-	return failurestate.Err(failurestate.Normalize(ctx, err, catalogBoundaryFault))
+	return fault.Normalize(ctx, err, catalogBoundaryFault).Err()
 }
 
 func normalizeSourceBoundary(ctx context.Context, err error) error {
-	return failurestate.Err(failurestate.Normalize(ctx, err, sourceBoundaryFault))
+	return fault.Normalize(ctx, err, sourceBoundaryFault).Err()
 }
 
 func normalizeOutputBoundary(ctx context.Context, err error) error {
-	return failurestate.Err(failurestate.Normalize(ctx, err, nil))
+	return fault.Normalize(ctx, err, nil).Err()
 }
 
 func catalogBoundaryFault(err error) (fault.Fault, bool) {
 	switch {
 	case errors.Is(err, catalog.ErrDirectoryStale):
 		return mustCatalogFault(fault.ScopeDirectoryLocal, fault.CatalogDirectoryStale), true
-	case failurestate.SessionTerminal(err):
+	case fault.IsSessionTerminal(err):
 		return mustSessionFault(fault.ScopeSessionTerminal, fault.SessionTransport), true
 	default:
 		return fault.Fault{}, false
@@ -39,124 +38,103 @@ func sourceBoundaryFault(err error) (fault.Fault, bool) {
 	}
 	// Source evidence keeps its established precedence when transport cleanup
 	// contributes another cause to the same immediate collaborator result.
-	if value, known := failurestate.ContentFault(err); known {
+	if value, known := fault.ClassifyContent(err); known {
 		return value, true
 	}
 	switch {
 	case errors.Is(err, ErrBlockIdentity):
 		return mustSessionFault(fault.ScopeSessionTerminal, fault.SessionProtocol), true
-	case errors.Is(err, ErrBrokerClosed), errors.Is(err, transferlanes.ErrClosed), failurestate.SessionTerminal(err):
+	case errors.Is(err, ErrBrokerClosed), errors.Is(err, transferlanes.ErrClosed), fault.IsSessionTerminal(err):
 		return mustSessionFault(fault.ScopeSessionTerminal, fault.SessionTransport), true
 	default:
 		return fault.Fault{}, false
 	}
 }
 
-func resourceBudgetFailure(cause error) *failurestate.Failure {
-	return failurestate.New(
-		mustSessionFault(fault.ScopeOutputPause, fault.SessionResourceBudget), cause,
-	)
+func resourceBudgetFailure(cause error) *fault.BoundaryError {
+	return fault.New(mustSessionFault(fault.ScopeOutputPause, fault.SessionResourceBudget), cause)
 }
 
-func sessionProtocolFailure(cause error) *failurestate.Failure {
-	return failurestate.New(
-		mustSessionFault(fault.ScopeSessionTerminal, fault.SessionProtocol), cause,
-	)
+func sessionProtocolFailure(cause error) *fault.BoundaryError {
+	return fault.New(mustSessionFault(fault.ScopeSessionTerminal, fault.SessionProtocol), cause)
 }
 
-func sessionTransportFailure(cause error) *failurestate.Failure {
-	return failurestate.New(
-		mustSessionFault(fault.ScopeSessionTerminal, fault.SessionTransport), cause,
-	)
+func sessionTransportFailure(cause error) *fault.BoundaryError {
+	return fault.New(mustSessionFault(fault.ScopeSessionTerminal, fault.SessionTransport), cause)
 }
 
-func catalogDirectoryFailure(code fault.CatalogCode, cause error) *failurestate.Failure {
-	return failurestate.New(mustCatalogFault(fault.ScopeDirectoryLocal, code), cause)
+func catalogDirectoryFailure(code fault.CatalogCode, cause error) *fault.BoundaryError {
+	return fault.New(mustCatalogFault(fault.ScopeDirectoryLocal, code), cause)
 }
 
-func catalogIntegrityFailure(cause error) *failurestate.Failure {
-	return failurestate.New(
-		mustCatalogFault(fault.ScopeSessionTerminal, fault.CatalogInvalidGeneration), cause,
-	)
+func catalogIntegrityFailure(cause error) *fault.BoundaryError {
+	return fault.New(mustCatalogFault(fault.ScopeSessionTerminal, fault.CatalogInvalidGeneration), cause)
 }
 
-func sourceUnavailableFailure(cause error) *failurestate.Failure {
-	return failurestate.New(
-		mustSourceFault(fault.ScopeFileLocal, fault.SourceUnavailable), cause,
-	)
+func sourceUnavailableFailure(cause error) *fault.BoundaryError {
+	return fault.New(mustSourceFault(fault.ScopeFileLocal, fault.SourceUnavailable), cause)
 }
 
-func sourceChangedFailure(cause error) *failurestate.Failure {
-	return failurestate.New(
-		mustSourceFault(fault.ScopeFileLocal, fault.SourceRevisionChanged), cause,
-	)
+func sourceChangedFailure(cause error) *fault.BoundaryError {
+	return fault.New(mustSourceFault(fault.ScopeFileLocal, fault.SourceRevisionChanged), cause)
 }
 
-func sourcePermanentFailure(cause error) *failurestate.Failure {
-	return failurestate.New(
-		mustSourceFault(fault.ScopeFileLocal, fault.SourcePermanent), cause,
-	)
+func sourcePermanentFailure(cause error) *fault.BoundaryError {
+	return fault.New(mustSourceFault(fault.ScopeFileLocal, fault.SourcePermanent), cause)
 }
 
-func sourceInvalidatedFailure(cause error) *failurestate.Failure {
-	return failurestate.New(
-		mustSourceFault(fault.ScopeFileLocal, fault.SourceRevisionInvalidated), cause,
-	)
+func sourceInvalidatedFailure(cause error) *fault.BoundaryError {
+	return fault.New(mustSourceFault(fault.ScopeFileLocal, fault.SourceRevisionInvalidated), cause)
 }
 
-func outputFailure(scope fault.Scope, code fault.OutputCode, cause error) *failurestate.Failure {
+func outputFailure(scope fault.Scope, code fault.OutputCode, cause error) *fault.BoundaryError {
 	value, err := fault.NewOutput(scope, code)
 	if err != nil {
-		return failurestate.DependencyContract(errors.Join(err, cause))
+		return fault.DependencyContract(errors.Join(err, cause))
 	}
-	return failurestate.New(value, cause)
+	return fault.New(value, cause)
 }
 
-func outputContractFault(cause error) *failurestate.Failure {
+func outputContractFault(cause error) *fault.BoundaryError {
 	if cause == nil {
 		cause = ErrOutputContract
 	}
 	return outputFailure(fault.ScopeOutputPause, fault.OutputContract, cause)
 }
 
-func requireOutputPause(err error) *failurestate.Failure {
-	failure, ok := failurestate.Admit(err)
+func requireOutputPause(err error) *fault.BoundaryError {
+	failure, ok := fault.Admit(err)
 	if !ok {
-		return failurestate.DependencyContract(err)
+		return fault.DependencyContract(err)
 	}
 	if failure.Canceled() || failure.Fault().Scope() >= fault.ScopeOutputPause {
 		return failure
 	}
 	value := faultWithScope(failure.Fault(), fault.ScopeOutputPause)
-	return failurestate.New(value, failure.Diagnostic())
+	return fault.New(value, failure.Cause())
 }
 
 func faultWithScope(value fault.Fault, scope fault.Scope) fault.Fault {
 	switch value.Domain() {
 	case fault.DomainSource:
-		code, ok := value.SourceCode()
-		if ok {
+		if code, ok := value.SourceCode(); ok {
 			return mustSourceFault(scope, code)
 		}
 	case fault.DomainCatalog:
-		code, ok := value.CatalogCode()
-		if ok {
+		if code, ok := value.CatalogCode(); ok {
 			return mustCatalogFault(scope, code)
 		}
 	case fault.DomainSession:
-		code, ok := value.SessionCode()
-		if ok {
+		if code, ok := value.SessionCode(); ok {
 			return mustSessionFault(scope, code)
 		}
 	case fault.DomainOutput:
-		code, ok := value.OutputCode()
-		if ok {
+		if code, ok := value.OutputCode(); ok {
 			projected, _ := fault.NewOutput(scope, code)
 			return projected
 		}
 	case fault.DomainCheckpoint:
-		code, ok := value.CheckpointCode()
-		if ok {
+		if code, ok := value.CheckpointCode(); ok {
 			projected, _ := fault.NewCheckpoint(scope, code)
 			return projected
 		}
@@ -168,7 +146,7 @@ func normalizedFault(err error) fault.Fault {
 	return lifecyclePolicyFor(err).value
 }
 
-func closedLifecycleInterruption(failure *failurestate.Failure) TransferInterruption {
+func closedLifecycleInterruption(failure *fault.BoundaryError) TransferInterruption {
 	if failure == nil || !failure.Canceled() {
 		return 0
 	}
@@ -183,7 +161,7 @@ func closedLifecycleInterruption(failure *failurestate.Failure) TransferInterrup
 }
 
 func closedInterruption(err error) TransferInterruption {
-	failure, ok := failurestate.Admit(err)
+	failure, ok := fault.Admit(err)
 	if !ok {
 		return 0
 	}

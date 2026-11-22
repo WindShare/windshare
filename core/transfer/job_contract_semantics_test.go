@@ -9,7 +9,6 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/transfer/fault"
-	"github.com/windshare/windshare/core/transfer/internal/failurestate"
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 )
 
@@ -35,7 +34,7 @@ func TestTransferJobFailureTaxonomyPreservesScopeAndCause(t *testing.T) {
 		t.Fatalf("resource budget failure = %v", got)
 	}
 
-	dependency := failurestate.DependencyContract(errors.New("dependency contract violated"))
+	dependency := fault.DependencyContract(errors.New("dependency contract violated"))
 	if got := normalizedFault(dependency); got != fault.DependencyContractFault() || !isJobTerminalError(dependency) {
 		t.Fatalf("dependency contract failure = %v", got)
 	}
@@ -289,7 +288,7 @@ func TestTransferJobRejectsUnstartedFileWithoutLeakingRevisionLease(t *testing.T
 	artifactPath, _ := ordinaryoutput.NewArtifactPath("file.bin")
 	plan := plannedFile{file: transferID[catalog.FileID](165), artifactPath: artifactPath}
 	err := run.rejectUnstartedFile(
-		context.Background(), plan, OpenedRevision{Handle: lease}, failurestate.DependencyContract(cause),
+		context.Background(), plan, OpenedRevision{Handle: lease}, fault.DependencyContract(cause),
 	)
 	if normalizedFault(err) != fault.DependencyContractFault() || len(revisions.released) != 1 ||
 		revisions.released[0] != lease || len(run.files) != 1 ||
@@ -434,7 +433,7 @@ func TestTransferJobRejectsInvalidAdmissionAndRevisionIdentityTransitions(t *tes
 		}
 		_, stage, err := run.openSelectedRevision(context.Background(), plan)
 		if stage != FailureRevisionIdentity ||
-			failurestate.FaultOf(err) != mustSourceFault(fault.ScopeFileLocal, fault.SourceRevisionChanged) ||
+			fault.FaultOf(err) != mustSourceFault(fault.ScopeFileLocal, fault.SourceRevisionChanged) ||
 			len(run.revisionCleanupFailures) != 1 ||
 			run.revisionCleanupFailures[0].Fault != mustSessionFault(fault.ScopeSessionTerminal, fault.SessionProtocol) ||
 			len(revisions.released) != 1 || revisions.released[0] != lease {

@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/core/content"
-	"github.com/windshare/windshare/core/transfer/internal/failurestate"
+	"github.com/windshare/windshare/core/transfer/fault"
 )
 
 func (r *jobRun) transferPlannedFile(ctx context.Context, plan plannedFile) error {
@@ -51,7 +51,7 @@ func (r *jobRun) transferFileAttempt(
 		opened.Descriptor, r.output.SessionID(), plan.parent,
 	)
 	if err != nil || file.ArtifactPath() != plan.artifactPath || file.ExpectedSize() != plan.expectedSize {
-		return nil, r.rejectUnstartedFile(ctx, plan, opened, failurestate.DependencyContract(errors.Join(ErrOutputContract, err)))
+		return nil, r.rejectUnstartedFile(ctx, plan, opened, fault.DependencyContract(errors.Join(ErrOutputContract, err)))
 	}
 	target := file.Target()
 	start, err := r.output.BeginFile(ctx, file)
@@ -177,15 +177,14 @@ func (r *jobRun) rejectImmediateSettlement(
 	settlement FileSettlement,
 	cause error,
 ) error {
-	fault := cause
 	r.releaseRevision(ctx, plan, opened.Handle)
-	r.settlementFailure = failurestate.Merge(r.settlementFailure, fault)
+	r.settlementFailure = fault.Merge(r.settlementFailure, cause)
 	r.recordFileFailure(FileJobFailure{
-		FileID: plan.file, Path: plan.failurePath(), Stage: FailureFileOutput, Cause: fault,
-		Settlement: settlement, SettlementFailure: fault,
+		FileID: plan.file, Path: plan.failurePath(), Stage: FailureFileOutput, Cause: cause,
+		Settlement: settlement, SettlementFailure: cause,
 	})
-	r.traceFileSettlement(plan, settlement, fault)
-	return fault
+	r.traceFileSettlement(plan, settlement, cause)
+	return cause
 }
 
 func (r *jobRun) handleImmediateSettlement(
@@ -220,7 +219,7 @@ func (r *jobRun) handleImmediateSettlement(
 		})
 	default:
 		contractFailure := outputContractFault(nil)
-		r.settlementFailure = failurestate.Merge(r.settlementFailure, contractFailure)
+		r.settlementFailure = fault.Merge(r.settlementFailure, contractFailure)
 		return contractFailure
 	}
 	return nil
@@ -248,7 +247,7 @@ func (r *jobRun) settleReopenedRevision(
 	started := time.Now()
 	cause := normalizeSourceBoundary(ctx, reopened)
 	if ctx.Err() != nil {
-		cause = failurestate.FromCancellation(ctx, context.Cause(ctx))
+		cause = fault.FromCancellation(ctx, context.Cause(ctx))
 	}
 	priorStalled := 0
 	if priorRetry != nil {
@@ -313,8 +312,8 @@ func (r *jobRun) settleReopenedRevision(
 	})
 	r.traceFileSettlement(plan, settlement, err)
 	if err != nil {
-		r.settlementFailure = failurestate.Merge(r.settlementFailure, err)
-		return nil, failurestate.Join(cause, err)
+		r.settlementFailure = fault.Merge(r.settlementFailure, err)
+		return nil, fault.JoinErrors(cause, err)
 	}
 	r.job.progress.acceptFileSettlement(settlement, plan.expectedSize)
 	if lifecyclePolicyFor(cause).jobTerminal() {
