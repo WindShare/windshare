@@ -11,17 +11,36 @@ import (
 	"testing"
 	"time"
 
+	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/relayprofile"
 	"github.com/windshare/windshare/engine/relaysetup"
 	"github.com/windshare/windshare/engine/turn"
+	"github.com/windshare/windshare/engine/turncache"
 )
+
+func newTestNativeSetup(t *testing.T, store relayconfig.FileStore) nativeSetup {
+	t.Helper()
+	app, err := engine.New(engine.Config{
+		TURNDependencies: turn.Dependencies{Cache: turncache.FileStore{Settings: store}},
+		RelaySetup:       relaysetup.Dependencies{Store: relaysetup.FileStore{Settings: store}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := app.Close(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	return newNativeSetup(store, app)
+}
 
 func TestNativeFrontendCommitInitializesMissingSettingsAndSurvivesRelayFailure(t *testing.T) {
 	for _, relay := range []string{"", "invalid relay"} {
 		t.Run(relay, func(t *testing.T) {
 			store := relayconfig.FileStore{Path: filepath.Join(t.TempDir(), "settings.json")}
-			result, err := newNativeSetup(store).run(t.Context(), SetupInput{
+			result, err := newTestNativeSetup(t, store).run(t.Context(), SetupInput{
 				FrontURL: "https://chosen.example", RelayURL: relay, RelayOperation: relaysetup.AddProfile,
 			}, nil)
 			if !result.FrontendSaved || result.RelaySaved || (err != nil) != (relay != "") {
@@ -64,7 +83,7 @@ func TestNativeOpenRelayCanBeSavedBeforeAuthorizingTheDevice(t *testing.T) {
 	defer server.Close()
 
 	store := relayconfig.FileStore{Path: filepath.Join(t.TempDir(), "settings.json")}
-	setup := newNativeSetup(store)
+	setup := newTestNativeSetup(t, store)
 	input := SetupInput{RelayURL: server.URL, RelayOperation: relaysetup.AddProfile}
 	result, err := setup.run(t.Context(), input, nil)
 	if err != nil || !result.RelaySaved || enrollments.Load() != 0 {
@@ -103,6 +122,9 @@ func TestNativeCancellationRevokesPendingApprovalAndPreservesFrontend(t *testing
 				"enrollment_id": "approval", "user_code": "ABCD-EFGH",
 				"verification_uri_complete": origin + "/approve", "expires_at": time.Now().Add(time.Minute).UnixMilli(), "interval_ms": 1000,
 			}
+		case "/api/enrollments/claim":
+			w.WriteHeader(http.StatusBadRequest)
+			response = map[string]any{"error": "authorization_pending", "retry_after_ms": 1000}
 		case "/api/enrollments/cancel":
 			var body map[string]string
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body["enrollment_id"] != "approval" || body["claim_secret"] == "" {
@@ -119,7 +141,7 @@ func TestNativeCancellationRevokesPendingApprovalAndPreservesFrontend(t *testing
 	}))
 	defer server.Close()
 	store := relayconfig.FileStore{Path: filepath.Join(t.TempDir(), "settings.json")}
-	setup := newNativeSetup(store)
+	setup := newTestNativeSetup(t, store)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	result, err := setup.run(ctx, SetupInput{RelayURL: server.URL, RelayOperation: relaysetup.AddProfile, FrontURL: "https://chosen.example"}, func(progress relaysetup.Progress) {
@@ -139,6 +161,19 @@ func TestNativeCancellationRevokesPendingApprovalAndPreservesFrontend(t *testing
 	}
 }
 
+func TestNativeEnrollmentUsesSanitizedHostnameAndFallback(t *testing.T) {
+	store := relayconfig.FileStore{Path: filepath.Join(t.TempDir(), "settings.json")}
+	setup := newTestNativeSetup(t, store)
+	setup.hostname = func() (string, error) { return "  studio\tpc  ", nil }
+	if got := setup.defaultDeviceName(); got != "studiopc" {
+		t.Fatalf("device name = %q, want %q", got, "studiopc")
+	}
+	setup.hostname = func() (string, error) { return "", errors.New("unavailable") }
+	if got := setup.defaultDeviceName(); got != relaysetup.DefaultDeviceName("") {
+		t.Fatalf("fallback device name = %q, want %q", got, relaysetup.DefaultDeviceName(""))
+	}
+}
+
 func TestNativeRemoveRelayPreferencePersistsCleanConfig(t *testing.T) {
 	store := relayconfig.FileStore{Path: filepath.Join(t.TempDir(), "settings.json")}
 	initial := relayconfig.Config{
@@ -154,7 +189,7 @@ func TestNativeRemoveRelayPreferencePersistsCleanConfig(t *testing.T) {
 	if err := store.Save(initial); err != nil {
 		t.Fatal(err)
 	}
-	result, err := newNativeSetup(store).run(t.Context(), SetupInput{
+	result, err := newTestNativeSetup(t, store).run(t.Context(), SetupInput{
 		Preference: &relayconfig.PreferenceEdit{Action: "remove", Value: "https://one.example"},
 	}, nil)
 	if err != nil || result.FrontendSaved || result.RelaySaved {

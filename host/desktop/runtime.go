@@ -13,6 +13,9 @@ import (
 	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/engine/builtinnetwork"
 	"github.com/windshare/windshare/engine/relayconfig"
+	"github.com/windshare/windshare/engine/relaysetup"
+	"github.com/windshare/windshare/engine/turn"
+	"github.com/windshare/windshare/engine/turncache"
 	"github.com/windshare/windshare/host/desktop/logstore"
 )
 
@@ -84,13 +87,21 @@ func Start() (*Host, error) {
 		directory = ""
 		close(host.diagnosticDone)
 	}
-	application, err := engine.New(engine.Config{Network: network, Diagnostics: trace.engineDiagnostics()})
+	store := relayconfig.FileStore{}
+	application, err := engine.New(engine.Config{
+		Network:     network,
+		Diagnostics: trace.engineDiagnostics(),
+		// Share one file-backed cache between managed TURN discovery and relay
+		// enrollment so desktop restarts and newly paired relays keep TURN ready.
+		TURNDependencies: turn.Dependencies{Cache: turncache.FileStore{Settings: store}},
+		RelaySetup:       relaysetup.Dependencies{Store: relaysetup.FileStore{Settings: store}},
+	})
 	if err != nil {
 		host.stopDiagnostics()
 		_ = log.Close()
 		return nil, err
 	}
-	setup := newNativeSetup(relayconfig.FileStore{})
+	setup := newNativeSetup(store, application)
 	deps := dependencies{
 		defaultFrontend: network.LinkHost,
 		start: func(ctx context.Context, request engine.ShareRequest) (shareTask, error) {

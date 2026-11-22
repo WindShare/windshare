@@ -39,7 +39,8 @@ func TestNativeSetupEnablesNewRelaysWhilePreservingSavedChoices(t *testing.T) {
 				})
 			}))
 			defer server.Close()
-			if _, err := newNativeSetup(store).run(t.Context(), SetupInput{RelayURL: server.URL, RelayOperation: relaysetup.AddProfile}, nil); err != nil {
+			setup := newTestNativeSetup(t, store)
+			if _, err := setup.run(t.Context(), SetupInput{RelayURL: server.URL, RelayOperation: relaysetup.AddProfile}, nil); err != nil {
 				t.Fatal(err)
 			}
 			saved, err := store.Load()
@@ -60,7 +61,7 @@ func TestNativeSetupEnablesNewRelaysWhilePreservingSavedChoices(t *testing.T) {
 			if err := store.Save(saved); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := newNativeSetup(store).run(t.Context(), SetupInput{RelayURL: server.URL, RelayOperation: relaysetup.AddProfile}, nil); err != nil {
+			if _, err := setup.run(t.Context(), SetupInput{RelayURL: server.URL, RelayOperation: relaysetup.AddProfile}, nil); err != nil {
 				t.Fatal(err)
 			}
 			remerged, err := store.Load()

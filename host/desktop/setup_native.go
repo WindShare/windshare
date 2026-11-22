@@ -3,20 +3,34 @@ package desktop
 import (
 	"context"
 	"errors"
+	"os"
 
+	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/engine/relayconfig"
 	"github.com/windshare/windshare/engine/relaysetup"
 )
 
-type nativeSetup struct {
-	settings relayconfig.FileStore
-	service  *relaysetup.Service
+type relaySetupEngine interface {
+	StartRelaySetup(context.Context, engine.RelaySetupRequest) (*engine.Task[engine.RelaySetupResult], error)
+	CancelRelaySetup(context.Context, string) error
 }
 
-func newNativeSetup(settings relayconfig.FileStore) nativeSetup {
-	return nativeSetup{settings: settings, service: relaysetup.New(relaysetup.Dependencies{
-		Store: relaysetup.FileStore{Settings: settings},
-	})}
+type nativeSetup struct {
+	settings relayconfig.FileStore
+	engine   relaySetupEngine
+	hostname func() (string, error)
+}
+
+func newNativeSetup(settings relayconfig.FileStore, app relaySetupEngine) nativeSetup {
+	return nativeSetup{settings: settings, engine: app, hostname: os.Hostname}
+}
+
+func (setup nativeSetup) defaultDeviceName() string {
+	var host string
+	if setup.hostname != nil {
+		host, _ = setup.hostname()
+	}
+	return relaysetup.DefaultDeviceName(host)
 }
 
 func (setup nativeSetup) run(ctx context.Context, input SetupInput, progress func(relaysetup.Progress)) (SetupResult, error) {
@@ -43,12 +57,24 @@ func (setup nativeSetup) run(ctx context.Context, input SetupInput, progress fun
 	if input.RelayURL == "" {
 		return result, nil
 	}
-	installed, err := setup.service.Run(ctx, relaysetup.Request{
+	current, err := setup.engine.StartRelaySetup(ctx, engine.RelaySetupRequest{
 		URL: input.RelayURL, Operation: input.RelayOperation, AccessKey: input.AccessKey,
-		DeviceName: relaysetup.DefaultDeviceName("WindShare desktop"),
-	}, progress)
+		DeviceName: setup.defaultDeviceName(),
+	})
+	if err != nil {
+		return result, err
+	}
+	for observation := range current.Observations() {
+		if event, ok := observation.Event.(engine.RelaySetupProgress); ok && progress != nil {
+			progress(event)
+		}
+	}
+	settled, err := current.Wait(context.Background())
 	if err == nil {
-		result.RelayURL, result.RelaySaved = installed.RelayURL, true
+		err = settled.Err
+	}
+	if err == nil {
+		result.RelayURL, result.RelaySaved = settled.Value.RelayURL, true
 	} else {
 		var failure *relaysetup.SetupError
 		if errors.As(err, &failure) && failure.Recovery.Action != relaysetup.RecoveryBlocked {
@@ -62,7 +88,7 @@ func (setup nativeSetup) cancel(ctx context.Context, address string) error {
 	if address == "" {
 		return nil
 	}
-	err := setup.service.Cancel(ctx, address)
+	err := setup.engine.CancelRelaySetup(ctx, address)
 	// Run has joined before this call. An installation that won the race stays
 	// committed; only an unfinished enrollment belongs to this cleanup.
 	if errors.Is(err, relaysetup.ErrNoPendingSetup) {

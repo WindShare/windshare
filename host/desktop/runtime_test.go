@@ -1,14 +1,22 @@
 package desktop
 
 import (
+	"encoding/json"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/windshare/windshare/engine"
+	"github.com/windshare/windshare/engine/relayconfig"
+	"github.com/windshare/windshare/engine/relayprofile"
+	"github.com/windshare/windshare/engine/relaysetup"
+	"github.com/windshare/windshare/engine/turncache"
 )
 
 func TestHostReadinessAndJoinedShutdownAreIndependentOfConfiguration(t *testing.T) {
@@ -120,5 +128,95 @@ func TestUnavailableLogStorageDoesNotPreventSharingHostStartup(t *testing.T) {
 	}
 	if err := host.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestHostStartRoutesRelayEnrollmentThroughEngineAndPopulatesTURNCache(t *testing.T) {
+	const (
+		accessKey = "device-credential"
+		serviceID = "cf-service"
+	)
+	var (
+		mu         sync.Mutex
+		deviceName string
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := "http://" + r.Host
+		var response any
+		switch r.URL.Path {
+		case "/.well-known/windshare":
+			response = map[string]any{"version": 1, "access": "restricted", "relay_url": origin, "console_url": origin}
+		case "/api/enrollments":
+			var body map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode enrollment body: %v", err)
+			}
+			mu.Lock()
+			deviceName = body["device_name"]
+			mu.Unlock()
+			response = map[string]any{
+				"enrollment_id": "approval", "user_code": "ABCD-EFGH",
+				"verification_uri_complete": origin + "/approve",
+				"expires_at":                time.Now().Add(time.Minute).UnixMilli(), "interval_ms": 1000,
+			}
+		case "/api/enrollments/claim":
+			response = map[string]string{"access_key": accessKey, "credential_id": "device"}
+		case "/api/enrollments/installed":
+			response = map[string]any{"managed_turn": []any{map[string]any{
+				"service_id": serviceID, "relay_url": origin, "enabled": true,
+			}}}
+		default:
+			t.Errorf("unexpected setup request: %s", r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	root := t.TempDir()
+	configPath := filepath.Join(root, "config.json")
+	t.Setenv("LOCALAPPDATA", root)
+	t.Setenv("XDG_CACHE_HOME", root)
+	t.Setenv(relayconfig.PathEnvironment, configPath)
+	if err := os.WriteFile(configPath, []byte(`{"profiles":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	host, err := Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := host.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	reply := host.app.execute(Request{
+		Command: "configure",
+		Setup: &SetupInput{
+			ID: "enroll-1", RelayURL: server.URL, RelayOperation: relaysetup.AddProfile,
+		},
+	})
+	if reply.Error != nil {
+		t.Fatalf("configure rejected: %+v", reply.Error)
+	}
+	host.app.work.Wait()
+	view := host.app.snapshot().Setup
+	if view.State != "finished" || !view.RelaySaved {
+		t.Fatalf("relay enrollment did not finish cleanly: %+v", view)
+	}
+	hostname, _ := os.Hostname()
+	wantName := relaysetup.DefaultDeviceName(hostname)
+	mu.Lock()
+	gotName := deviceName
+	mu.Unlock()
+	if gotName != wantName {
+		t.Fatalf("device_name = %q, want %q", gotName, wantName)
+	}
+	capability, err := (turncache.FileStore{Settings: relayconfig.FileStore{Path: configPath}}).Load(
+		relayprofile.Candidate{PublicURL: server.URL, AccessKey: accessKey},
+	)
+	if err != nil || capability == nil || capability.ServiceID != serviceID || !capability.Enabled {
+		t.Fatalf("managed TURN capability was not persisted to turncache: cap=%+v err=%v", capability, err)
 	}
 }
