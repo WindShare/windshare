@@ -483,13 +483,22 @@ func TestCommitReservesPageBudgetIncrementallyAndTracksPeakUsage(t *testing.T) {
 		t.Fatalf("share peak %d < retained %d", share.Snapshot().Peak.MemoryBytes, share.Snapshot().Used.MemoryBytes)
 	}
 
-	// A session that fits all scanned children plus one encoding page, but not
-	// the full multi-page batch, must reject during page building without
-	// publishing or leaking session budget.
+	// A session that fits all scanned children plus one full page encoding
+	// reservation, but not the full multi-page batch, must reject during page
+	// building without publishing or leaking session budget.
 	tightStore, _, _ := newStore(t, nil)
 	defer tightStore.Close()
 	tightDirectory := prepareScannableDirectory(t, tightStore, generousBudget(t, "tight-startup"), 245, 246)
-	tightLimit := scanOnlyPeak + memoryDirectoryOverhead + pageEncodingReservationBytes + encodedPageBytes/2
+	firstPageEntries := make([]Entry, 0, MaxCatalogPageEntries)
+	for index := range MaxCatalogPageEntries {
+		record, err := multiPageScannedFile(t, index).nodeRecord(tightDirectory)
+		if err != nil {
+			t.Fatal(err)
+		}
+		firstPageEntries = append(firstPageEntries, record.Entry())
+	}
+	firstPageReservation := pageEncodingReservationBytes(firstPageEntries)
+	tightLimit := scanOnlyPeak + memoryDirectoryOverhead + firstPageReservation + encodedPageBytes/4
 	tightSession, err := NewBudgetAccount("tight-page-session", BudgetLimits{
 		ActiveScans: 4, ScanWork: 100_000, Entries: 100_000, MemoryBytes: tightLimit,
 	})
@@ -520,7 +529,7 @@ func TestCommitReservesPageBudgetIncrementallyAndTracksPeakUsage(t *testing.T) {
 		children = append(children, record)
 	}
 	directSession, err := NewBudgetAccount("direct-tight-session", BudgetLimits{
-		ActiveScans: 4, ScanWork: 100_000, Entries: 100_000, MemoryBytes: pageEncodingReservationBytes * 2,
+		ActiveScans: 4, ScanWork: 100_000, Entries: 100_000, MemoryBytes: uint64(CatalogPageMemoryOverhead+MaxCatalogPayloadBytes) * 2,
 	})
 	if err != nil {
 		t.Fatal(err)

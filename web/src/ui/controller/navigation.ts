@@ -278,7 +278,8 @@ export class BrowserNavigationCoordinator {
       return
     }
     const retryable =
-      error instanceof DirectoryFailureError && error.failure.retryable
+      (error instanceof DirectoryFailureError && error.failure.retryable) ||
+      (error instanceof RemoteOperationError && error.scope === 'directory' && error.retryable)
     this.#retryableBrowse = retryable
       ? Object.freeze({ directory, pageIndex, route })
       : undefined

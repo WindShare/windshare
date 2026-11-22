@@ -58,7 +58,7 @@ func (r DirectoryFailureRecord) DirectoryID() DirectoryID         { return r.dir
 func (r DirectoryFailureRecord) AttemptID() ScanAttemptID         { return r.attempt }
 func (r DirectoryFailureRecord) Generation() DirectoryGeneration  { return r.generation }
 func (r DirectoryFailureRecord) PreviousAttemptID() ScanAttemptID { return r.previousAttempt }
-func (r DirectoryFailureRecord) Kind() FailureKind { return r.kind }
+func (r DirectoryFailureRecord) Kind() FailureKind                { return r.kind }
 
 // Retryable reports whether a later explicit scan attempt may succeed. Budget
 // exhaustion reflects runtime capacity (concurrent scans or sibling shares),
@@ -88,6 +88,15 @@ func (r DirectoryFailureRecord) valid() error {
 	return nil
 }
 
+const (
+	// MaxFailurePayloadBytes bounds a serialized directory failure record. Wire
+	// directory failures contain only fixed scalar identities, codes, and retry
+	// delays (~70 bytes), so reserving a full 60 KiB page payload would block
+	// failure reporting whenever remaining memory is tight.
+	MaxFailurePayloadBytes          = 1 << 10
+	failureEncodingReservationBytes = memoryFailureOverhead + MaxFailurePayloadBytes
+)
+
 // FailurePayload carries the bytes committed with a directory scan failure.
 type FailurePayload struct {
 	encoded    []byte
@@ -95,7 +104,7 @@ type FailurePayload struct {
 }
 
 func NewFailurePayload(encoded []byte) (FailurePayload, error) {
-	if len(encoded) == 0 || len(encoded) > MaxCatalogPayloadBytes {
+	if len(encoded) == 0 || len(encoded) > MaxFailurePayloadBytes {
 		return FailurePayload{}, fmt.Errorf("catalog failure payload has invalid length %d", len(encoded))
 	}
 	return FailurePayload{encoded: append([]byte(nil), encoded...), commitment: sha256.Sum256(encoded)}, nil
@@ -132,20 +141,27 @@ func (s *CatalogStore) prepareAttemptFailure(
 	if err != nil {
 		return preparedFailure{}, err
 	}
-	if err := attempt.resources.Consume(ResourceUsage{MemoryBytes: MaxCatalogPayloadBytes}); err != nil {
+	if err := attempt.resources.Consume(ResourceUsage{MemoryBytes: failureEncodingReservationBytes}); err != nil {
 		return preparedFailure{}, err
 	}
 	payload, encodeErr := s.failureEncoder.EncodeFailure(record)
-	releaseErr := attempt.resources.Release(ResourceUsage{MemoryBytes: MaxCatalogPayloadBytes})
-	if err := errors.Join(encodeErr, releaseErr); err != nil {
-		return preparedFailure{}, err
+	if encodeErr != nil {
+		return preparedFailure{}, errors.Join(
+			encodeErr,
+			attempt.resources.Release(ResourceUsage{MemoryBytes: failureEncodingReservationBytes}),
+		)
 	}
-	if payload.IsZero() {
-		return preparedFailure{}, errors.New("catalog failure encoder returned an empty payload")
+	if payload.IsZero() || len(payload.encoded) > MaxFailurePayloadBytes {
+		return preparedFailure{}, errors.Join(
+			errors.New("catalog failure encoder returned an invalid payload"),
+			attempt.resources.Release(ResourceUsage{MemoryBytes: failureEncodingReservationBytes}),
+		)
 	}
 	charge := ResourceUsage{MemoryBytes: memoryFailureOverhead + uint64(len(payload.encoded))}
-	if err := attempt.resources.Consume(charge); err != nil {
-		return preparedFailure{}, err
+	if failureEncodingReservationBytes > charge.MemoryBytes {
+		if err := attempt.resources.Release(ResourceUsage{MemoryBytes: failureEncodingReservationBytes - charge.MemoryBytes}); err != nil {
+			return preparedFailure{}, err
+		}
 	}
 	return preparedFailure{record: record, payload: payload, charge: charge}, nil
 }

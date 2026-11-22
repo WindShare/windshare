@@ -133,10 +133,24 @@ func (handler *catalogHandler) Run(ctx context.Context) error {
 func (handler *catalogHandler) process(ctx context.Context, operationID protocolsession.OperationID, body []byte) {
 	err := handler.serve(ctx, operationID, body)
 	if err != nil && !errors.Is(err, context.Canceled) {
-		_ = handler.outbound.SendOperationError(ctx, operationID, contentflow.OperationFailure{
-			Scope: protocolsession.OperationScopeDirectory,
-			Code:  catalogflow.DirectoryCodePermanentIO, Message: "Catalog operation failed",
-		})
+		_ = handler.outbound.SendOperationError(ctx, operationID, classifyCatalogOperationFailure(err))
+	}
+}
+
+func classifyCatalogOperationFailure(err error) contentflow.OperationFailure {
+	if errors.Is(err, catalog.ErrBudgetExceeded) {
+		return contentflow.OperationFailure{
+			Scope:      protocolsession.OperationScopeDirectory,
+			Code:       catalogflow.DirectoryCodeBudget,
+			Retryable:  true,
+			RetryAfter: catalog.DefaultScanRetryCooldown,
+			Message:    "Catalog resource budget exceeded",
+		}
+	}
+	return contentflow.OperationFailure{
+		Scope:   protocolsession.OperationScopeDirectory,
+		Code:    catalogflow.DirectoryCodePermanentIO,
+		Message: "Catalog operation failed",
 	}
 }
 

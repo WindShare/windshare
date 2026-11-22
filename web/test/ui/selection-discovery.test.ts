@@ -7,6 +7,11 @@ import { createSelectionSpec, selectionRulesSpecFromPolicy } from '../../src/tra
 import { discoverAuthenticatedSelection } from '../../src/transfer/projection/coordinator'
 import { SelectionProjectionController } from '../../src/transfer/projection/reducer'
 import { JoinedProjectionSource, DRAFT_PREFETCH_DIRECTORY_LIMIT } from '../../src/application/browser-share/discovery/source'
+import { RemoteOperationError } from '../../src/content/session-operations'
+import {
+  createFailureIdentity,
+  createReceivedProtocolError,
+} from '../../src/diagnostics/incident'
 import { offerArtifacts } from '../../src/output/planning/offers'
 import { reconcileArtifactChoice } from '../../src/output/planning/reconciliation'
 import { materializationRouteIdentity } from '../../src/output/planning/guarantees'
@@ -170,5 +175,43 @@ describe('bounded authenticated selection discovery', () => {
     const abort = new AbortController()
     abort.abort(new DOMException('Draft replaced', 'AbortError'))
     await expect(project(input, policy, abort.signal)).rejects.toMatchObject({ name: 'AbortError' })
+  })
+
+  it('classifies retryable directory RemoteOperationError as temporarily unavailable', async () => {
+    const base = fixture([])
+    const retryableBudgetError = new RemoteOperationError(createReceivedProtocolError({
+      requestKind: 'list_children',
+      correlation: Object.freeze({
+        protocolSessionId: createFailureIdentity('protocol_session', identity(9)),
+        protocolOperationId: createFailureIdentity('protocol_operation', identity(10)),
+      }),
+      content: {
+        scope: 'directory',
+        code: 0x2005,
+        retryable: true,
+        retryAfterMilliseconds: 1_000,
+      },
+    }))
+    base.loadDirectory.mockRejectedValueOnce(retryableBudgetError)
+    const states = await project(base, new SelectionPolicy(true))
+    expect(states.at(-1)?.discovery).toMatchObject({
+      kind: 'retryable-failure',
+      reason: 'catalog-temporarily-unavailable',
+    })
+
+    const permanentError = new RemoteOperationError(createReceivedProtocolError({
+      requestKind: 'list_children',
+      correlation: Object.freeze({
+        protocolSessionId: createFailureIdentity('protocol_session', identity(9)),
+        protocolOperationId: createFailureIdentity('protocol_operation', identity(11)),
+      }),
+      content: {
+        scope: 'directory',
+        code: 0x2006,
+        retryable: false,
+      },
+    }))
+    base.loadDirectory.mockRejectedValueOnce(permanentError)
+    await expect(project(base, new SelectionPolicy(true))).rejects.toBe(permanentError)
   })
 })

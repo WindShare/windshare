@@ -1,4 +1,5 @@
 import { DirectoryFailureError, type CatalogClient } from '../../../catalog/client'
+import { RemoteOperationError } from '../../../content/session-operations'
 import type { CatalogEntry, ShareDescriptor } from '../../../catalog/records'
 import type { FrozenSelectionPolicy } from '../../../catalog/selection'
 import { snapshotCatalogPath } from '../../../catalog/path-policy'
@@ -141,7 +142,10 @@ export class JoinedProjectionSource implements AuthenticatedDiscoverySource {
       this.#requireSameProtocolSession()
       return committed
     } catch (error) {
-      if (error instanceof DirectoryFailureError && error.failure.retryable) {
+      if (
+        (error instanceof DirectoryFailureError && error.failure.retryable) ||
+        (error instanceof RemoteOperationError && error.scope === 'directory' && error.retryable)
+      ) {
         throw new RetryableProjectionDiscoveryError('catalog-temporarily-unavailable', {
           cause: error,
         })

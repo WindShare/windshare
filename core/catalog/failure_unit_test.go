@@ -67,7 +67,7 @@ func TestFailureRecordValidationAndClassificationRejectAmbiguousAuthority(t *tes
 	if _, err := NewFailurePayload(nil); err == nil {
 		t.Fatal("empty failure payload was accepted")
 	}
-	if _, err := NewFailurePayload(make([]byte, MaxCatalogPayloadBytes+1)); err == nil {
+	if _, err := NewFailurePayload(make([]byte, MaxFailurePayloadBytes+1)); err == nil {
 		t.Fatal("oversized failure payload was accepted")
 	}
 	wantEncodeErr := errors.New("encode failed")
@@ -290,6 +290,81 @@ func TestPersistAttemptFailureEnforcesEncoderBudgetAndAttemptBounds(t *testing.T
 		}
 		if session.Snapshot().Used != (ResourceUsage{}) {
 			t.Fatalf("failed scan leaked session budget: %+v", session.Snapshot().Used)
+		}
+	})
+
+	t.Run("sub-60KiB remaining share budget still commits empty directory and persists budget failures", func(t *testing.T) {
+		process, err := NewBudgetAccount("tight-remaining-process", DefaultProcessBudgetLimits())
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Reserve a tight share limit so committing the first directory leaves
+		// ~12 KiB (far below MaxCatalogPayloadBytes = 60 KiB).
+		const shareLimit = 48 << 10
+		share, err := NewBudgetAccount("tight-remaining-share", BudgetLimits{
+			ActiveScans: 4, ScanWork: 1_000, Entries: 1_000, MemoryBytes: shareLimit,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var nextAttempt, nextGen atomic.Uint32
+		store, err := NewCatalogStore(StoreConfig{
+			ShareInstance:  idValue[ShareInstance](1),
+			ProcessBudget:  process,
+			ShareBudget:    share,
+			FailureEncoder: testFailureEncoder{},
+			AttemptIDs: ScanAttemptIDGeneratorFunc(func() (ScanAttemptID, error) {
+				return idValue[ScanAttemptID](byte(nextAttempt.Add(1))), nil
+			}),
+			Generations: DirectoryGenerationGeneratorFunc(func() (DirectoryGeneration, error) {
+				return idValue[DirectoryGeneration](byte(nextGen.Add(1))), nil
+			}),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer store.Close()
+
+		session := generousBudget(t, "tight-remaining-session")
+		dirs := prepareSelectedDirectories(t, store, session, 170, 171, 172, 173)
+		filledDir, emptyDir, overflowDir := dirs[0], dirs[1], dirs[2]
+
+		if _, err := store.ListChildren(context.Background(), filledDir, session, ScanOptions{}, DirectoryScannerFunc(
+			func(ctx context.Context, request ScanRequest) (ScanResult, error) {
+				return ScanResult{}, request.Children.Add(ctx, fixedSizeScannedFile(t, 180, "chunk", 32<<10))
+			},
+		)); err != nil {
+			t.Fatalf("initial directory commit failed: %v", err)
+		}
+		remaining := shareLimit - share.Snapshot().Used.MemoryBytes
+		if remaining == 0 || remaining >= MaxCatalogPayloadBytes {
+			t.Fatalf("remaining share budget = %d, want 0 < remaining < %d", remaining, MaxCatalogPayloadBytes)
+		}
+
+		// Opening an empty directory must succeed with < 60 KiB remaining.
+		emptyCommitted, err := store.ListChildren(context.Background(), emptyDir, session, ScanOptions{}, DirectoryScannerFunc(
+			func(context.Context, ScanRequest) (ScanResult, error) { return ScanResult{}, nil },
+		))
+		if err != nil || emptyCommitted.EntryCount() != 0 {
+			t.Fatalf("empty directory under sub-60KiB budget = %+v err=%v", emptyCommitted, err)
+		}
+
+		// A directory exceeding the remaining ~12 KiB budget must still persist a
+		// retryable FailureKindBudget record instead of failing encoder reservation.
+		_, overflowErr := store.ListChildren(context.Background(), overflowDir, session, ScanOptions{}, DirectoryScannerFunc(
+			func(ctx context.Context, request ScanRequest) (ScanResult, error) {
+				return ScanResult{}, request.Children.Add(ctx, fixedSizeScannedFile(t, 181, "too-big", 24<<10))
+			},
+		))
+		var failure *DirectoryFailure
+		if !errors.As(overflowErr, &failure) || failure.Kind != FailureKindBudget || !failure.Transient {
+			t.Fatalf("overflow under sub-60KiB budget = %v, want retryable FailureKindBudget", overflowErr)
+		}
+		if _, found, err := store.FailurePayload(context.Background(), overflowDir, failure.AttemptID); err != nil || !found {
+			t.Fatalf("persisted failure under sub-60KiB budget: found=%v err=%v", found, err)
+		}
+		if session.Snapshot().Used != (ResourceUsage{}) {
+			t.Fatalf("session budget leaked: %+v", session.Snapshot().Used)
 		}
 	})
 }

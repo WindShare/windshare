@@ -172,7 +172,27 @@ func validateDirectoryCommit(instance ShareInstance, commit DirectoryCommit, syn
 	return nil
 }
 
-const pageEncodingReservationBytes = uint64(CatalogPageMemoryOverhead + MaxCatalogPayloadBytes)
+const (
+	// Bounds cover canonical entry fields and wire envelope, leaving headroom for
+	// one maximum-sized next name so encoded pages never exceed MaxCatalogPayloadBytes.
+	pageEnvelopeBudgetBytes  = 512
+	entryEncodingBudgetBytes = 128
+)
+
+// pageEncodingReservationBytes bounds worst-case in-memory wire encoding for a
+// single page from its actual entries so empty or small directories do not
+// require a full 60 KiB reservation when remaining budget is tight.
+func pageEncodingReservationBytes(entries []Entry) uint64 {
+	wireBytes := uint64(pageEnvelopeBudgetBytes)
+	for _, entry := range entries {
+		wireBytes += uint64(len(entry.Name()) + entryEncodingBudgetBytes)
+		if wireBytes >= MaxCatalogPayloadBytes {
+			wireBytes = MaxCatalogPayloadBytes
+			break
+		}
+	}
+	return uint64(CatalogPageMemoryOverhead) + wireBytes
+}
 
 func (s *CatalogStore) commitDirectoryLocked(
 	ctx context.Context,
@@ -418,21 +438,22 @@ func encodeAndAcceptPage(
 	validator *DirectoryGenerationValidator,
 	meter *attemptResourceMeter,
 ) (PagePayload, PageCommitment, uint64, error) {
-	if err := meter.Consume(ResourceUsage{MemoryBytes: pageEncodingReservationBytes}); err != nil {
+	reservation := pageEncodingReservationBytes(spec.Entries)
+	if err := meter.Consume(ResourceUsage{MemoryBytes: reservation}); err != nil {
 		return PagePayload{}, PageCommitment{}, 0, err
 	}
 	page, payload, err := NewCatalogPage(spec)
 	if err != nil {
-		_ = meter.Release(ResourceUsage{MemoryBytes: pageEncodingReservationBytes})
+		_ = meter.Release(ResourceUsage{MemoryBytes: reservation})
 		return PagePayload{}, PageCommitment{}, 0, err
 	}
 	if err := validator.AcceptPage(page); err != nil {
-		_ = meter.Release(ResourceUsage{MemoryBytes: pageEncodingReservationBytes})
+		_ = meter.Release(ResourceUsage{MemoryBytes: reservation})
 		return PagePayload{}, PageCommitment{}, 0, err
 	}
 	retainedBytes := memoryPageOverhead + uint64(len(payload.encoded))
-	if pageEncodingReservationBytes > retainedBytes {
-		if err := meter.Release(ResourceUsage{MemoryBytes: pageEncodingReservationBytes - retainedBytes}); err != nil {
+	if reservation > retainedBytes {
+		if err := meter.Release(ResourceUsage{MemoryBytes: reservation - retainedBytes}); err != nil {
 			return PagePayload{}, PageCommitment{}, 0, err
 		}
 	}
@@ -448,9 +469,6 @@ func collectPageEntries(
 	remaining := len(children) - *consumed
 	limit := min(MaxCatalogPageEntries, remaining)
 	entries := make([]Entry, 0, limit)
-	// Bounds cover canonical entry fields and wire envelope, leaving headroom for
-	// one maximum-sized next name so encoded pages never exceed MaxCatalogPayloadBytes.
-	const pageEnvelopeBudgetBytes, entryEncodingBudgetBytes = 512, 128
 	remainingBytes := MaxCatalogPayloadBytes - pageEnvelopeBudgetBytes
 	for range limit {
 		record := children[*consumed]
