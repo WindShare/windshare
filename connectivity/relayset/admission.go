@@ -6,8 +6,19 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/connectivity/relayplan"
-	"github.com/windshare/windshare/connectivity/senderrelay"
 )
+
+// AttemptControl limits individual handshakes, leaving retry clocks and resume
+// authority with the endpoint. Waiting for capacity must not consume a dial timeout.
+type AttemptControl interface {
+	Begin(context.Context) (AttemptPermit, error)
+	Unavailable()
+}
+
+type AttemptPermit interface {
+	Admit() bool
+	Release()
+}
 
 // NetworkAdmissions coordinates only directory candidates. Configured endpoints
 // keep independent lifetimes, and no successful published connection is evicted.
@@ -20,7 +31,7 @@ type NetworkAdmissions struct {
 	primary       int
 	inflight      int
 	active        int
-	clock         senderrelay.Clock
+	clock         Clock
 	serverRetryAt func(string) time.Time
 	observe       func(Admission)
 }
@@ -76,9 +87,9 @@ type admissionPermit struct {
 	released bool
 }
 
-func NewNetworkAdmissions(plan relayplan.Plan, clock senderrelay.Clock, serverRetryAt func(string) time.Time) *NetworkAdmissions {
+func NewNetworkAdmissions(plan relayplan.Plan, clock Clock, serverRetryAt func(string) time.Time) *NetworkAdmissions {
 	if clock == nil {
-		clock = senderrelay.SystemClock{}
+		clock = SystemClock{}
 	}
 	a := &NetworkAdmissions{clock: clock, serverRetryAt: serverRetryAt, candidates: append([]relayplan.Candidate(nil), plan.Network...), policy: plan.Policy,
 		states: make([]admissionState, len(plan.Network)), changed: make(chan struct{}), primary: -1}
@@ -93,7 +104,7 @@ func NewNetworkAdmissions(plan relayplan.Plan, clock senderrelay.Clock, serverRe
 	return a
 }
 
-func (a *NetworkAdmissions) Control(url string) senderrelay.AttemptControl {
+func (a *NetworkAdmissions) Control(url string) AttemptControl {
 	for i, candidate := range a.candidates {
 		if candidate.URL == url {
 			return admissionControl{owner: a, index: i}
@@ -102,7 +113,7 @@ func (a *NetworkAdmissions) Control(url string) senderrelay.AttemptControl {
 	return nil
 }
 
-func (c admissionControl) Begin(ctx context.Context) (senderrelay.AttemptPermit, error) {
+func (c admissionControl) Begin(ctx context.Context) (AttemptPermit, error) {
 	a := c.owner
 	a.mu.Lock()
 	state := &a.states[c.index]

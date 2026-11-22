@@ -3,15 +3,13 @@ package peerset
 import (
 	"context"
 	"errors"
-	"github.com/windshare/windshare/connectivity/nativepeer"
-	"github.com/windshare/windshare/connectivity/socketauthority"
 	"io"
 	"time"
 
+	"github.com/windshare/windshare/connectivity/socketauthority"
 	"github.com/windshare/windshare/connectivity/v2signal"
-	"github.com/windshare/windshare/core/session/protocolsession"
-
 	"github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
 type recoveryWave struct {
@@ -28,7 +26,6 @@ type attemptOpportunity struct {
 	close   func()
 	budget  time.Duration
 	refund  func(time.Duration)
-	release func()
 }
 
 func (p *Path) run() {
@@ -128,20 +125,14 @@ func (p *Path) prepareOpportunity(wave *recoveryWave) (*attemptOpportunity, *Res
 	if !p.awaitMappingOpportunity(*wave) {
 		return nil, &Result{Stopped: true}
 	}
-	release, unavailable := p.acquireProviderCapacity()
-	if unavailable != nil {
-		return nil, unavailable
-	}
 	now := p.owner.config.Clock.Now()
 	if wave.opportunities == 0 {
 		wave.started = now
 	} else if wave.exhausted(now) {
-		release()
 		return nil, nil
 	}
 	refund, delay := p.reserveAttemptBudget(wave.attempts)
 	if refund == nil {
-		release()
 		if p.config.StopAfterWave {
 			return nil, &Result{Cause: ErrWaveExhausted}
 		}
@@ -156,31 +147,9 @@ func (p *Path) prepareOpportunity(wave *recoveryWave) (*attemptOpportunity, *Res
 	binding, err := p.freshBinding()
 	if err != nil {
 		refund(0)
-		release()
 		return nil, &Result{Scope: protocolsession.PeerFailurePathTerminal, Cause: err}
 	}
-	return p.prepareProvider(wave, binding, refund, release), nil
-}
-func (p *Path) acquireProviderCapacity() (func(), *Result) {
-	release := func() {}
-	// Native preparation owns the single bounded application queue. Custom providers
-	// retain their injectable receiver capacity without adding a hidden native queue.
-	if p.config.Native != nil {
-		return release, nil
-	}
-	var err error
-	if p.config.Purpose == v2signal.ThroughputExploration {
-		release = p.owner.config.Capacity.tryExplore()
-		if release == nil {
-			return nil, &Result{Scope: protocolsession.PeerFailureResourceDeferred, Cause: nativepeer.ErrAdmission}
-		}
-	} else {
-		release, err = p.owner.config.Capacity.acquire(p.ctx)
-	}
-	if err != nil {
-		return nil, &Result{Stopped: true}
-	}
-	return release, nil
+	return p.prepareProvider(wave, binding, refund), nil
 }
 
 func (p *Path) reserveAttemptBudget(attempts int) (func(time.Duration), time.Duration) {
@@ -273,7 +242,7 @@ func (p *Path) awaitContentDemand() bool {
 	return p.ctx.Err() == nil && p.currentDemand() == ContentDemand
 }
 
-func (p *Path) executeStart(start Starter, binding v2signal.Binding, opportunity time.Duration, refund func(time.Duration), release func()) (Result, bool) {
+func (p *Path) executeStart(start Starter, binding v2signal.Binding, opportunity time.Duration, refund func(time.Duration)) (Result, bool) {
 	started := p.owner.config.Clock.Now()
 	child, cancel := context.WithCancel(p.ctx)
 	defer cancel()
@@ -284,7 +253,6 @@ func (p *Path) executeStart(start Starter, binding v2signal.Binding, opportunity
 		if !charged {
 			charged = true
 			refund(p.owner.config.Clock.Now().Sub(started))
-			release()
 		}
 	}
 	defer settle()

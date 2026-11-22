@@ -15,7 +15,7 @@ import (
 	"github.com/windshare/windshare/engine/relayprofile"
 
 	"github.com/windshare/windshare/connectivity/nativepeer"
-	"github.com/windshare/windshare/connectivity/senderrelay"
+	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/diagnostics"
@@ -34,8 +34,8 @@ type readyEndpoint struct {
 	completed atomic.Bool
 }
 
-func (*readyEndpoint) ObserveRegistration(observe func(senderrelay.RegistrationState)) {
-	observe(senderrelay.RegistrationAvailable)
+func (*readyEndpoint) ObserveRegistration(observe func(relayset.RegistrationState)) {
+	observe(relayset.RegistrationAvailable)
 }
 func (e *readyEndpoint) CompleteObservations() relayv2.LifecycleObservationCompletion {
 	e.completed.Store(true)
@@ -61,10 +61,7 @@ func nativeDependencies(t *testing.T) Dependencies {
 	if err != nil {
 		t.Fatal(err)
 	}
-	capacity, err := nativeconnectivity.NewCapacity(nativepeer.AdmissionClock{}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	capacity := nativeconnectivity.NewCapacity(nativepeer.AdmissionClock{}, nil)
 	return Dependencies{
 		Connectivity: capacity,
 		Control: task.Control{ID: "native-share", Now: time.Now, Random: rand.Reader, CleanupContext: func() (context.Context, context.CancelFunc) {
@@ -88,16 +85,16 @@ func TestNativeShareUsesInjectedSourceAndCompletesRelayProducersBeforeFinalResul
 	dependencies := nativeDependencies(t)
 	stream, _ := diagnostics.NewStream(256, nil)
 	endpoint := &readyEndpoint{testRelays: &testRelays{step: func(string) {}, stopped: make(chan struct{})}}
-	candidate := relayprofile.Registration{PublicURL: "https://relay.example", Authorization: senderrelay.StaticKey("private-deployment-token")}
-	dependencies.Relay = func(config senderrelay.Config) (Relay, error) {
-		if config.Candidate != (senderrelay.Candidate{PublicURL: candidate.PublicURL, Authorization: candidate.Authorization}) {
+	candidate := relayprofile.Registration{PublicURL: "https://relay.example", Authorization: relayset.StaticKey("private-deployment-token")}
+	dependencies.Relay = func(config relayset.SenderLifecycleConfig) (Relay, error) {
+		if config.Candidate != (relayset.Candidate{PublicURL: candidate.PublicURL, Authorization: candidate.Authorization}) {
 			t.Error("relay assembly lost candidate registration authority")
 		}
 		if config.Fresh.ShareID == (v2.ShareID{}) || len(config.Descriptor) == 0 {
 			t.Error("registration authority missing")
 		}
-		config.ObserveAttempt(senderrelay.Attempt{ShareInstance: config.Fresh.ShareInstance, State: senderrelay.AttemptSucceeded, Number: 1, Generation: 1})
-		config.ObserveConnection(senderrelay.Connection{})()
+		config.ObserveAttempt(relayset.Attempt{ShareInstance: config.Fresh.ShareInstance, State: relayset.AttemptSucceeded, Number: 1, Generation: 1})
+		config.ObserveConnection(relayset.SenderConnection{})()
 		return endpoint, nil
 	}
 	ctx, cancel := context.WithCancelCause(context.Background())

@@ -118,14 +118,13 @@ func (operation *receiverTestOperation) finishTerminationWithDecision(
 	decision receiverAttemptDecision,
 	cause error,
 ) ReceiverSignalingTermination {
-	diagnostics, truncated := snapshotReceiverCauseWithStatus(cause)
 	operation.terminationMu.Lock()
 	if !operation.termination.valid {
 		operation.termination = ReceiverSignalingTermination{
 			operationToken: operation.binding.token,
 			valid:          true,
 			decision:       decision,
-			diagnostics:    diagnostics, diagnosticsTruncated: truncated,
+			diagnostics:    cause,
 		}
 	} else {
 		operation.termination.decision = mergeReceiverAttemptDecisions(
@@ -134,10 +133,8 @@ func (operation *receiverTestOperation) finishTerminationWithDecision(
 		)
 		operation.termination.diagnostics = joinReceiverResiduals([]error{
 			operation.termination.diagnostics,
-			diagnostics,
+			cause,
 		})
-		operation.termination.diagnosticsTruncated =
-			operation.termination.diagnosticsTruncated || truncated
 	}
 	termination := operation.termination
 	operation.terminationMu.Unlock()

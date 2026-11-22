@@ -8,8 +8,8 @@ import (
 	"time"
 )
 
-func (p *Path) prepareProvider(wave *recoveryWave, binding v2signal.Binding, refund func(time.Duration), release func()) *attemptOpportunity {
-	opportunity := &attemptOpportunity{binding: binding, start: p.config.Start, refund: refund, release: release}
+func (p *Path) prepareProvider(wave *recoveryWave, binding v2signal.Binding, refund func(time.Duration)) *attemptOpportunity {
+	opportunity := &attemptOpportunity{binding: binding, start: p.config.Start, refund: refund}
 	remaining := func() time.Duration { return WaveBudget - p.owner.config.Clock.Now().Sub(wave.started) }
 	if p.config.Prepare != nil {
 		// Queue time belongs to the absolute wave, not to the active attempt. Keep
@@ -66,5 +66,5 @@ func (p *Path) executePrepared(opportunity *attemptOpportunity) (Result, bool) {
 	if opportunity.close != nil {
 		defer opportunity.close()
 	}
-	return p.executeStart(opportunity.start, opportunity.binding, opportunity.budget, opportunity.refund, opportunity.release)
+	return p.executeStart(opportunity.start, opportunity.binding, opportunity.budget, opportunity.refund)
 }

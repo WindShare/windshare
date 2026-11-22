@@ -18,7 +18,6 @@ import (
 	"github.com/windshare/windshare/connectivity/networkstate"
 	"github.com/windshare/windshare/connectivity/relayplan"
 	"github.com/windshare/windshare/connectivity/relayset"
-	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/networkendpoint"
 	"github.com/windshare/windshare/core/nodedirectory"
@@ -33,7 +32,7 @@ func TestNodeHealthCountsFixedWindowsAndHonorsExplicitExtensions(t *testing.T) {
 	start := time.Now()
 	fail := func(elapsed, retry time.Duration) (healthEntry, relayplan.CooldownReason) {
 		now := start.Add(elapsed)
-		a := senderrelay.Attempt{State: senderrelay.AttemptFailed, Failure: &relayv2.WebSocketDialError{StatusCode: http.StatusServiceUnavailable}}
+		a := relayset.Attempt{State: relayset.AttemptFailed, Failure: &relayv2.WebSocketDialError{StatusCode: http.StatusServiceUnavailable}}
 		if retry > 0 {
 			a.ServerRetryAt = now.Add(retry)
 		}
@@ -80,7 +79,7 @@ func TestHealthBackoffLaddersAndSuccessfulPark(t *testing.T) {
 		var h nodeHealth
 		for i, seconds := range tc.seconds {
 			at := now.Add(time.Duration(i) * failureCountWindow)
-			e, changed := h.RecordAttempt("node", 1, 1, at, senderrelay.Attempt{State: senderrelay.AttemptFailed, Failure: tc.failure})
+			e, changed := h.RecordAttempt("node", 1, 1, at, relayset.Attempt{State: relayset.AttemptFailed, Failure: tc.failure})
 			if e.failures != i+1 || (changed == tc.reason) != (seconds > 0) || e.Admitted {
 				t.Fatal(e)
 			}
@@ -90,8 +89,8 @@ func TestHealthBackoffLaddersAndSuccessfulPark(t *testing.T) {
 		}
 		at := now.Add(time.Duration(len(tc.seconds)) * failureCountWindow)
 		server := at.Add(time.Minute)
-		h.RecordAttempt("node", 1, 1, at, senderrelay.Attempt{State: senderrelay.AttemptFailed, Failure: &relayv2.WebSocketDialError{StatusCode: 503}, ServerRetryAt: server})
-		e, _ := h.RecordAttempt("node", 1, 1, at, senderrelay.Attempt{State: senderrelay.AttemptParked, Duration: time.Second, HandshakeDuration: 20 * time.Millisecond})
+		h.RecordAttempt("node", 1, 1, at, relayset.Attempt{State: relayset.AttemptFailed, Failure: &relayv2.WebSocketDialError{StatusCode: 503}, ServerRetryAt: server})
+		e, _ := h.RecordAttempt("node", 1, 1, at, relayset.Attempt{State: relayset.AttemptParked, Duration: time.Second, HandshakeDuration: 20 * time.Millisecond})
 		if !e.Admitted || e.Duration != 20*time.Millisecond || e.failures != 0 || !e.CooldownUntil.IsZero() || e.ServerRetryAt != server {
 			t.Fatal(e)
 		}
@@ -101,17 +100,17 @@ func TestHealthBackoffLaddersAndSuccessfulPark(t *testing.T) {
 func TestRefusalScopeAndHealthRetention(t *testing.T) {
 	var h nodeHealth
 	now := time.Now()
-	for _, err := range []error{nil, context.Canceled, senderrelay.ErrStopped, relayv2.ErrProtocol, &senderrelay.AuthorizationError{State: senderrelay.AuthorizationDenied},
+	for _, err := range []error{nil, context.Canceled, relayset.ErrStopped, relayv2.ErrProtocol, &relayset.AuthorizationError{State: relayset.AuthorizationDenied},
 		&relayv2.WebSocketDialError{StatusCode: 403}, &relayv2.WebSocketDialError{StatusCode: 404},
 		&relayv2.RelayError{Code: v2.ErrorAccessDenied}, &relayv2.RelayError{Code: v2.ErrorInvalidProof},
 		&relayv2.RelayError{Code: v2.ErrorAdmission}, &relayv2.RelayError{Code: v2.ErrorAccessUnavailable, RetryAfter: time.Second}} {
-		h.RecordAttempt("ignored", 1, 1, now, senderrelay.Attempt{State: senderrelay.AttemptFailed, Failure: errors.Join(err), ServerRetryAt: now.Add(time.Minute)})
+		h.RecordAttempt("ignored", 1, 1, now, relayset.Attempt{State: relayset.AttemptFailed, Failure: errors.Join(err), ServerRetryAt: now.Add(time.Minute)})
 	}
 	if len(h.Snapshot(1, now)) != 0 {
 		t.Fatal("share refusal poisoned node health")
 	}
 	for i := range nodedirectory.MaximumNodes + 1 {
-		h.RecordAttempt(fmt.Sprint(i), 1, 1, now.Add(time.Duration(i)), senderrelay.Attempt{State: senderrelay.AttemptSucceeded})
+		h.RecordAttempt(fmt.Sprint(i), 1, 1, now.Add(time.Duration(i)), relayset.Attempt{State: relayset.AttemptSucceeded})
 	}
 	if entries := h.Snapshot(1, now); len(entries) != nodedirectory.MaximumNodes {
 		t.Fatal(len(entries))
@@ -152,11 +151,11 @@ func TestObserverProjectsOnlyDirectoryAttemptsAcrossNetworkChanges(t *testing.T)
 	}
 	defer stream.Close()
 	observe := r.Observer(selection, stream.Sink())
-	start := senderrelay.Attempt{State: senderrelay.AttemptStarted}
+	start := relayset.Attempt{State: relayset.AttemptStarted}
 	observe(node.URL, start)
 	observe(configured.URL, start)
 	_, _, _ = r.watcher.Step(t.Context())
-	fail := senderrelay.Attempt{State: senderrelay.AttemptFailed, Failure: &relayv2.WebSocketDialError{StatusCode: 503}, ServerRetryAt: now.Add(time.Minute)}
+	fail := relayset.Attempt{State: relayset.AttemptFailed, Failure: &relayv2.WebSocketDialError{StatusCode: 503}, ServerRetryAt: now.Add(time.Minute)}
 	observe(node.URL, fail)
 	observe(configured.URL, fail)
 	facts := r.health.Snapshot(r.generation(), now)
@@ -184,12 +183,12 @@ func TestObserverProjectsOnlyDirectoryAttemptsAcrossNetworkChanges(t *testing.T)
 	if r.generation() != 2 {
 		t.Fatal("test failed to change networks")
 	}
-	observe(node.URL, senderrelay.Attempt{State: senderrelay.AttemptSucceeded})
+	observe(node.URL, relayset.Attempt{State: relayset.AttemptSucceeded})
 	if len(r.health.Snapshot(2, now)) != 0 {
 		t.Fatal("late old success survived true network change")
 	}
 	observe(node.URL, start)
-	observe(node.URL, senderrelay.Attempt{State: senderrelay.AttemptSucceeded, HandshakeDuration: time.Millisecond})
+	observe(node.URL, relayset.Attempt{State: relayset.AttemptSucceeded, HandshakeDuration: time.Millisecond})
 	r.health.Snapshot(1, now)
 	if newFacts := r.health.Snapshot(2, now); len(newFacts) != 1 || newFacts[0].Duration != time.Millisecond {
 		t.Fatal(newFacts)
@@ -200,8 +199,8 @@ func TestDelayedCallbacksOnlyExtendDeadlinesBeyondTheLatestSample(t *testing.T) 
 	var h nodeHealth
 	start := time.Now()
 	latest := start.Add(time.Second)
-	h.RecordAttempt("node", 1, 1, latest, senderrelay.Attempt{State: senderrelay.AttemptSucceeded})
-	fail := senderrelay.Attempt{State: senderrelay.AttemptFailed, Failure: &relayv2.WebSocketDialError{StatusCode: 503}}
+	h.RecordAttempt("node", 1, 1, latest, relayset.Attempt{State: relayset.AttemptSucceeded})
+	fail := relayset.Attempt{State: relayset.AttemptFailed, Failure: &relayv2.WebSocketDialError{StatusCode: 503}}
 	for _, elapsed := range []time.Duration{-time.Second, time.Millisecond, time.Second} {
 		fail.ServerRetryAt = start.Add(elapsed)
 		if _, change := h.RecordAttempt("node", 1, 1, start, fail); change != relayplan.CooldownNone {
@@ -240,14 +239,14 @@ func TestAttemptDiagnosticsDistinguishLocalReasonFromServerExtension(t *testing.
 	stream, _ := diagnostics.NewStream(8, nil)
 	defer stream.Close()
 	observe := r.Observer(selection, stream.Sink())
-	observe(node.URL, senderrelay.Attempt{State: senderrelay.AttemptStarted})
+	observe(node.URL, relayset.Attempt{State: relayset.AttemptStarted})
 	<-stream.Records()
 	hint, _ := networkendpoint.WebSocketBaseHint("https://relay.example/v2/ws")
-	observe(node.URL, senderrelay.Attempt{State: senderrelay.AttemptFailed, Failure: &relayv2.WebSocketRouteError{BaseHint: hint}})
+	observe(node.URL, relayset.Attempt{State: relayset.AttemptFailed, Failure: &relayv2.WebSocketRouteError{BaseHint: hint}})
 	<-stream.Records()
 	now = now.Add(time.Second)
 	hard := now.Add(30 * time.Second)
-	observe(node.URL, senderrelay.Attempt{State: senderrelay.AttemptFailed, Failure: &relayv2.WebSocketDialError{StatusCode: 503}, ServerRetryAt: hard})
+	observe(node.URL, relayset.Attempt{State: relayset.AttemptFailed, Failure: &relayv2.WebSocketDialError{StatusCode: 503}, ServerRetryAt: hard})
 	if fields := (<-stream.Records()).Payload(); fields.Get("cooldown_reason").Text() != "server_backoff" || fields.Get("cooldown_ms").Uint() != 30000 {
 		t.Fatal(fields)
 	}
@@ -255,7 +254,7 @@ func TestAttemptDiagnosticsDistinguishLocalReasonFromServerExtension(t *testing.
 	if !r.ServerRetryAt(node.Identity).IsZero() {
 		t.Fatal("admission retained an expired server deadline")
 	}
-	observe(node.URL, senderrelay.Attempt{State: senderrelay.AttemptFailed, Failure: context.DeadlineExceeded})
+	observe(node.URL, relayset.Attempt{State: relayset.AttemptFailed, Failure: context.DeadlineExceeded})
 	if fields := (<-stream.Records()).Payload(); fields.Get("server_retry_at").Present() {
 		t.Fatal(fields)
 	}
@@ -276,20 +275,20 @@ func TestDiagnosticRecordsIncludeReadableAttemptStatesPlanTimingsAndAdmissionRea
 	defer stream.Close()
 	observe := r.Observer(initial, stream.Sink())
 	states := []struct {
-		state senderrelay.AttemptState
+		state relayset.AttemptState
 		name  string
 	}{
-		{senderrelay.AttemptStarted, "started"},
-		{senderrelay.AttemptStage, "stage"},
-		{senderrelay.AttemptAuthorization, "authorization"},
-		{senderrelay.AttemptWaiting, "waiting"},
-		{senderrelay.AttemptParked, "parked"},
-		{senderrelay.AttemptSucceeded, "succeeded"},
-		{senderrelay.AttemptFailed, "failed"},
+		{relayset.AttemptStarted, "started"},
+		{relayset.AttemptStage, "stage"},
+		{relayset.AttemptAuthorization, "authorization"},
+		{relayset.AttemptWaiting, "waiting"},
+		{relayset.AttemptParked, "parked"},
+		{relayset.AttemptSucceeded, "succeeded"},
+		{relayset.AttemptFailed, "failed"},
 	}
 	for _, tc := range states {
-		attempt := senderrelay.Attempt{State: tc.state}
-		if tc.state == senderrelay.AttemptSucceeded {
+		attempt := relayset.Attempt{State: tc.state}
+		if tc.state == relayset.AttemptSucceeded {
 			attempt.HandshakeDuration = 145 * time.Millisecond
 		}
 		observe(node.URL, attempt)
@@ -299,9 +298,9 @@ func TestDiagnosticRecordsIncludeReadableAttemptStatesPlanTimingsAndAdmissionRea
 		}
 	}
 	// Record a fresh admitted sample so the next plan exposes observed_handshake_ms.
-	observe(node.URL, senderrelay.Attempt{State: senderrelay.AttemptStarted})
+	observe(node.URL, relayset.Attempt{State: relayset.AttemptStarted})
 	<-stream.Records()
-	observe(node.URL, senderrelay.Attempt{State: senderrelay.AttemptSucceeded, HandshakeDuration: 145 * time.Millisecond})
+	observe(node.URL, relayset.Attempt{State: relayset.AttemptSucceeded, HandshakeDuration: 145 * time.Millisecond})
 	<-stream.Records()
 
 	planned, err := r.Plan(t.Context(), intent, "")
@@ -402,10 +401,10 @@ func TestObserverTriggersDirectoryRefreshOnlyWhileFailedNodeIsSchedulable(t *tes
 		unavailable := &relayv2.RelayError{Code: v2.ErrorAccessUnavailable, RetryAfter: time.Second}
 
 		// Non-failed stages, resume attempts, and other failure codes must not trigger a directory refresh.
-		observe(node.URL, senderrelay.Attempt{State: senderrelay.AttemptStage, Failure: unavailable})
-		observe(node.URL, senderrelay.Attempt{State: senderrelay.AttemptFailed, Resume: true, Failure: unavailable})
-		observe(node.URL, senderrelay.Attempt{State: senderrelay.AttemptFailed, Failure: &relayv2.RelayError{Code: v2.ErrorAccessDenied}})
-		observe(node.URL, senderrelay.Attempt{State: senderrelay.AttemptFailed, Failure: &relayv2.WebSocketDialError{StatusCode: http.StatusServiceUnavailable}})
+		observe(node.URL, relayset.Attempt{State: relayset.AttemptStage, Failure: unavailable})
+		observe(node.URL, relayset.Attempt{State: relayset.AttemptFailed, Resume: true, Failure: unavailable})
+		observe(node.URL, relayset.Attempt{State: relayset.AttemptFailed, Failure: &relayv2.RelayError{Code: v2.ErrorAccessDenied}})
+		observe(node.URL, relayset.Attempt{State: relayset.AttemptFailed, Failure: &relayv2.WebSocketDialError{StatusCode: http.StatusServiceUnavailable}})
 		time.Sleep(networkdirectory.MinimumBackoff)
 		synctest.Wait()
 		if calls.Load() != 1 {
@@ -414,14 +413,14 @@ func TestObserverTriggersDirectoryRefreshOnlyWhileFailedNodeIsSchedulable(t *tes
 
 		// A fresh AttemptFailed AccessUnavailable while the node is still Active triggers a refresh.
 		nextEnvelope.Store(byName["draining"])
-		observe(node.URL, senderrelay.Attempt{State: senderrelay.AttemptFailed, Failure: unavailable})
+		observe(node.URL, relayset.Attempt{State: relayset.AttemptFailed, Failure: unavailable})
 		synctest.Wait()
 		if calls.Load() != 2 {
 			t.Fatalf("active-node refusal did not trigger refresh: calls=%d", calls.Load())
 		}
 
 		// Once the directory already marks this node Draining, further retries on the frozen share stop triggering refreshes.
-		observe(node.URL, senderrelay.Attempt{State: senderrelay.AttemptFailed, Failure: unavailable})
+		observe(node.URL, relayset.Attempt{State: relayset.AttemptFailed, Failure: unavailable})
 		time.Sleep(networkdirectory.MaximumTriggerBackoff)
 		synctest.Wait()
 		if calls.Load() != 2 {
@@ -436,7 +435,7 @@ func TestObserverTriggersDirectoryRefreshOnlyWhileFailedNodeIsSchedulable(t *tes
 		if calls.Load() != 3 {
 			t.Fatalf("explicit refresh calls = %d, want 3", calls.Load())
 		}
-		observe(node.URL, senderrelay.Attempt{State: senderrelay.AttemptFailed, Failure: unavailable})
+		observe(node.URL, relayset.Attempt{State: relayset.AttemptFailed, Failure: unavailable})
 		time.Sleep(networkdirectory.MaximumTriggerBackoff)
 		synctest.Wait()
 		if calls.Load() != 3 {

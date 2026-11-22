@@ -11,7 +11,7 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/windshare/windshare/connectivity/senderrelay"
+	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/nodedirectory"
 	"github.com/windshare/windshare/engine/networkconfig"
@@ -24,7 +24,7 @@ type doubleSpeedClock struct{ origin, started time.Time }
 
 func (c doubleSpeedClock) Now() time.Time { return c.origin.Add(2 * time.Since(c.started)) }
 func (c doubleSpeedClock) Wait(ctx context.Context, delay time.Duration, wake <-chan struct{}) error {
-	return (senderrelay.SystemClock{}).Wait(ctx, (delay+1)/2, wake)
+	return (relayset.SystemClock{}).Wait(ctx, (delay+1)/2, wake)
 }
 
 type unavailableTransport struct{ calls atomic.Int32 }

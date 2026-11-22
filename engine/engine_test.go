@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"github.com/windshare/windshare/connectivity/senderrelay"
+	"github.com/windshare/windshare/connectivity/relayset"
 	"io"
 	"strings"
 	"sync"
@@ -268,7 +268,7 @@ func TestReceiveFacadeSettlesInvalidRequestAndClosesAdmission(t *testing.T) {
 }
 
 type engineTestClock struct {
-	senderrelay.SystemClock
+	relayset.SystemClock
 	now func() time.Time
 }
 

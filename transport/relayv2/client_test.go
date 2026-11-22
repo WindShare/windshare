@@ -423,9 +423,6 @@ func TestRelayNaturalRetirementDrainsQueuedSendAsRetired(t *testing.T) {
 		event.Cause != LifecycleCauseSessionRetired {
 		t.Fatalf("retired drain trace = %+v", event)
 	}
-	if violation := ValidateLifecycleTrace(event); violation != LifecycleContractValid {
-		t.Fatalf("retired drain trace contract violation=%d event=%+v", violation, event)
-	}
 	link.stop(nil)
 }
 

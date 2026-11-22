@@ -229,18 +229,68 @@ const (
 	ReceiverCauseUnknown            ReceiverCauseClass = "unknown"
 )
 
-// ReceiverAttemptOutcome is a sealed value. Diagnostic accessors expose only
-// immutable errors or defensive slice copies, while lifecycle authority remains
-// impossible to manufacture with a public literal.
-type ReceiverAttemptOutcome struct {
+// receiverTerminalMetadata holds the text-free lifecycle and diagnostic summary
+// shared by ReceiverAttemptOutcome and ReceiverTerminationTrace.
+type receiverTerminalMetadata struct {
 	operationID          protocolsession.OperationID
 	localGeneration      uint64
 	decision             receiverAttemptDecision
-	cause                error
-	retainedCause        error
 	benignComponents     []ReceiverBenignCause
 	retainedCauseClasses []ReceiverCauseClass
 	diagnosticsTruncated bool
+}
+
+func (m receiverTerminalMetadata) OperationID() protocolsession.OperationID { return m.operationID }
+func (m receiverTerminalMetadata) LocalGeneration() uint64                  { return m.localGeneration }
+
+func (m receiverTerminalMetadata) Disposition() ReceiverAttemptDisposition {
+	if m.decision.disposition == "" {
+		return ReceiverDispositionFallbackAllowed
+	}
+	return m.decision.disposition
+}
+
+func (m receiverTerminalMetadata) TransitionAuthority() ReceiverTerminalOwner {
+	if m.decision.transitionOwner == "" {
+		return ReceiverTerminalUnbound
+	}
+	return m.decision.transitionOwner
+}
+
+func (m receiverTerminalMetadata) TransitionProvenance() ReceiverTerminalProvenance {
+	if m.decision.transitionProvenance == "" {
+		return ReceiverProvenanceUnbound
+	}
+	return m.decision.transitionProvenance
+}
+
+func (m receiverTerminalMetadata) ConsequenceProvenance() ReceiverTerminalProvenance {
+	if m.decision.consequenceProvenance == "" {
+		return ReceiverProvenanceUnbound
+	}
+	return m.decision.consequenceProvenance
+}
+
+func (m receiverTerminalMetadata) DiagnosticsTruncated() bool { return m.diagnosticsTruncated }
+
+func (m receiverTerminalMetadata) RequiresSessionClose() bool {
+	return m.Disposition() == ReceiverDispositionSessionUnsafe
+}
+
+func (m receiverTerminalMetadata) BenignComponents() []ReceiverBenignCause {
+	return append([]ReceiverBenignCause(nil), m.benignComponents...)
+}
+
+func (m receiverTerminalMetadata) RetainedCauseClasses() []ReceiverCauseClass {
+	return append([]ReceiverCauseClass(nil), m.retainedCauseClasses...)
+}
+
+// ReceiverAttemptOutcome is a sealed value. Diagnostic accessors expose only
+// defensive slice copies, while lifecycle authority remains unexportable.
+type ReceiverAttemptOutcome struct {
+	receiverTerminalMetadata
+	cause         error
+	retainedCause error
 }
 
 func newReceiverAttemptOutcome(
@@ -254,20 +304,15 @@ func newReceiverAttemptOutcome(
 	diagnosticsTruncated bool,
 ) ReceiverAttemptOutcome {
 	return ReceiverAttemptOutcome{
-		operationID: operationID, localGeneration: localGeneration,
-		decision: decision, cause: cause, retainedCause: retainedCause,
-		benignComponents:     append([]ReceiverBenignCause(nil), benign...),
-		retainedCauseClasses: append([]ReceiverCauseClass(nil), classes...),
-		diagnosticsTruncated: diagnosticsTruncated,
+		receiverTerminalMetadata: receiverTerminalMetadata{
+			operationID: operationID, localGeneration: localGeneration,
+			decision:             decision,
+			benignComponents:     append([]ReceiverBenignCause(nil), benign...),
+			retainedCauseClasses: append([]ReceiverCauseClass(nil), classes...),
+			diagnosticsTruncated: diagnosticsTruncated,
+		},
+		cause: cause, retainedCause: retainedCause,
 	}
-}
-
-func (outcome ReceiverAttemptOutcome) OperationID() protocolsession.OperationID {
-	return outcome.operationID
-}
-
-func (outcome ReceiverAttemptOutcome) LocalGeneration() uint64 {
-	return outcome.localGeneration
 }
 
 // RecoveryScope is imported only from authenticated core termination facts.
@@ -287,57 +332,8 @@ func (outcome ReceiverAttemptOutcome) RecoveryScope() protocolsession.PeerFailur
 	}
 }
 
-func (outcome ReceiverAttemptOutcome) Disposition() ReceiverAttemptDisposition {
-	if outcome.decision.disposition == "" {
-		return ReceiverDispositionFallbackAllowed
-	}
-	return outcome.decision.disposition
-}
-
-func (outcome ReceiverAttemptOutcome) TransitionAuthority() ReceiverTerminalOwner {
-	if outcome.decision.transitionOwner == "" {
-		return ReceiverTerminalUnbound
-	}
-	return outcome.decision.transitionOwner
-}
-
-func (outcome ReceiverAttemptOutcome) TransitionProvenance() ReceiverTerminalProvenance {
-	if outcome.decision.transitionProvenance == "" {
-		return ReceiverProvenanceUnbound
-	}
-	return outcome.decision.transitionProvenance
-}
-
-func (outcome ReceiverAttemptOutcome) ConsequenceProvenance() ReceiverTerminalProvenance {
-	if outcome.decision.consequenceProvenance == "" {
-		return ReceiverProvenanceUnbound
-	}
-	return outcome.decision.consequenceProvenance
-}
-
-func (outcome ReceiverAttemptOutcome) DiagnosticsTruncated() bool {
-	return outcome.diagnosticsTruncated
-}
-
-func (outcome ReceiverAttemptOutcome) RequiresSessionClose() bool {
-	return outcome.Disposition() == ReceiverDispositionSessionUnsafe
-}
-
-func (outcome ReceiverAttemptOutcome) Cause() error {
-	return outcome.cause
-}
-
-func (outcome ReceiverAttemptOutcome) RetainedCause() error {
-	return outcome.retainedCause
-}
-
-func (outcome ReceiverAttemptOutcome) BenignComponents() []ReceiverBenignCause {
-	return append([]ReceiverBenignCause(nil), outcome.benignComponents...)
-}
-
-func (outcome ReceiverAttemptOutcome) RetainedCauseClasses() []ReceiverCauseClass {
-	return append([]ReceiverCauseClass(nil), outcome.retainedCauseClasses...)
-}
+func (outcome ReceiverAttemptOutcome) Cause() error         { return outcome.cause }
+func (outcome ReceiverAttemptOutcome) RetainedCause() error { return outcome.retainedCause }
 
 func (outcome ReceiverAttemptOutcome) LocallyCanceled() bool {
 	if outcome.Disposition() != ReceiverDispositionFallbackAllowed {
@@ -352,70 +348,10 @@ func (outcome ReceiverAttemptOutcome) HasRetainedCauseClass(class ReceiverCauseC
 }
 
 type ReceiverTerminationTrace struct {
-	operationID           protocolsession.OperationID
-	localGeneration       uint64
-	transitionOwner       ReceiverTerminalOwner
-	disposition           ReceiverAttemptDisposition
-	transitionProvenance  ReceiverTerminalProvenance
-	consequenceProvenance ReceiverTerminalProvenance
-	diagnosticsTruncated  bool
-	benignComponents      []ReceiverBenignCause
-	retainedCauseClasses  []ReceiverCauseClass
-	teardownTransitions   []PeerTeardownTransition
-	peerShutdownFailed    bool
-	channelDrainFailed    bool
-}
-
-func (trace ReceiverTerminationTrace) OperationID() protocolsession.OperationID {
-	return trace.operationID
-}
-
-func (trace ReceiverTerminationTrace) LocalGeneration() uint64 {
-	return trace.localGeneration
-}
-
-func (trace ReceiverTerminationTrace) TransitionAuthority() ReceiverTerminalOwner {
-	if trace.transitionOwner == "" {
-		return ReceiverTerminalUnbound
-	}
-	return trace.transitionOwner
-}
-
-func (trace ReceiverTerminationTrace) Disposition() ReceiverAttemptDisposition {
-	if trace.disposition == "" {
-		return ReceiverDispositionFallbackAllowed
-	}
-	return trace.disposition
-}
-
-func (trace ReceiverTerminationTrace) RequiresSessionClose() bool {
-	return trace.Disposition() == ReceiverDispositionSessionUnsafe
-}
-
-func (trace ReceiverTerminationTrace) TransitionProvenance() ReceiverTerminalProvenance {
-	if trace.transitionProvenance == "" {
-		return ReceiverProvenanceUnbound
-	}
-	return trace.transitionProvenance
-}
-
-func (trace ReceiverTerminationTrace) ConsequenceProvenance() ReceiverTerminalProvenance {
-	if trace.consequenceProvenance == "" {
-		return ReceiverProvenanceUnbound
-	}
-	return trace.consequenceProvenance
-}
-
-func (trace ReceiverTerminationTrace) DiagnosticsTruncated() bool {
-	return trace.diagnosticsTruncated
-}
-
-func (trace ReceiverTerminationTrace) BenignComponents() []ReceiverBenignCause {
-	return append([]ReceiverBenignCause(nil), trace.benignComponents...)
-}
-
-func (trace ReceiverTerminationTrace) RetainedCauseClasses() []ReceiverCauseClass {
-	return append([]ReceiverCauseClass(nil), trace.retainedCauseClasses...)
+	receiverTerminalMetadata
+	teardownTransitions []PeerTeardownTransition
+	peerShutdownFailed  bool
+	channelDrainFailed  bool
 }
 
 func (trace ReceiverTerminationTrace) TeardownTransitions() []PeerTeardownTransition {

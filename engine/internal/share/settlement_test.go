@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/windshare/windshare/connectivity/senderrelay"
+	"github.com/windshare/windshare/connectivity/relayset"
 )
 
 func TestShareLifecycleSettlementAcceptsOnlyBenignComponents(t *testing.T) {
@@ -15,7 +15,7 @@ func TestShareLifecycleSettlementAcceptsOnlyBenignComponents(t *testing.T) {
 		context.Canceled,
 		errors.Join(
 			fmt.Errorf("accept interrupted: %w", context.Canceled),
-			fmt.Errorf("relay lifecycle interrupted: %w", senderrelay.ErrStopped),
+			fmt.Errorf("relay lifecycle interrupted: %w", relayset.ErrStopped),
 		),
 		nil,
 	)

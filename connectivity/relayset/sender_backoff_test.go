@@ -1,4 +1,4 @@
-package senderrelay
+package relayset
 
 import (
 	"context"
@@ -28,11 +28,11 @@ func TestWakeHonorsServerDeadlineAcrossRecoveryOwners(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				start := time.Now()
 				var attempts atomic.Int32
-				dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (Connection, error) {
+				dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (SenderConnection, error) {
 					if attempts.Add(1) == 1 {
-						return Connection{}, tc.failure
+						return SenderConnection{}, tc.failure
 					}
-					return NewConnection(&senderRelayTestEndpoint{}), nil
+					return NewSenderConnection(&senderRelayTestEndpoint{}), nil
 				}}
 				l := newSenderRelayTestLifecycle(t, nil, dialer, nil)
 				defer l.StopRecovery()
@@ -89,9 +89,9 @@ func (*slowRetirement) Close() error { time.Sleep(5 * time.Second); return nil }
 
 func TestParkedSampleMeasuresOnlyTheSuccessfulDial(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (Connection, error) {
+		dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (SenderConnection, error) {
 			time.Sleep(130 * time.Millisecond)
-			return NewConnection(&slowRetirement{}), nil
+			return NewSenderConnection(&slowRetirement{}), nil
 		}}
 		l := newSenderRelayTestLifecycle(t, nil, dialer, nil)
 		defer l.StopRecovery()
@@ -149,12 +149,12 @@ func TestServerDelayCrossingFastWindowAnnouncesWaiting(t *testing.T) {
 	for _, hints := range [][]time.Duration{{time.Minute}, {30 * time.Second, 30 * time.Second}} {
 		synctest.Test(t, func(t *testing.T) {
 			var calls int
-			dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (Connection, error) {
+			dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (SenderConnection, error) {
 				calls++
 				if calls <= len(hints) {
-					return Connection{}, &relayv2.WebSocketDialError{StatusCode: 503, RetryAfter: hints[calls-1]}
+					return SenderConnection{}, &relayv2.WebSocketDialError{StatusCode: 503, RetryAfter: hints[calls-1]}
 				}
-				return NewConnection(&senderRelayTestEndpoint{}), nil
+				return NewSenderConnection(&senderRelayTestEndpoint{}), nil
 			}}
 			l := newSenderRelayTestLifecycle(t, nil, dialer, nil)
 			defer l.StopRecovery()

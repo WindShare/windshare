@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/netip"
-	"sync"
 	"testing"
 	"time"
 
@@ -12,15 +11,10 @@ import (
 	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/networkstate"
 	"github.com/windshare/windshare/connectivity/reachability"
-	"github.com/windshare/windshare/connectivity/v2peer"
-	"github.com/windshare/windshare/connectivity/v2peer/peerset"
 	"github.com/windshare/windshare/connectivity/v2signal"
-
-	"github.com/windshare/windshare/core/session"
 )
 
 const capacityTestTimeout = 5 * time.Second
-const capacityQueueProbe = 50 * time.Millisecond
 
 type capacityNetwork struct{}
 
@@ -116,80 +110,4 @@ func TestEngineAdmissionSurvivesOwnerReplacementAndIsolatesOtherEngines(t *testi
 	if err := <-pending; !errors.Is(err, context.Canceled) {
 		t.Fatalf("exhausted owner escaped its queue: %v", err)
 	}
-}
-
-type capacityAttempt struct {
-	done chan struct{}
-	once sync.Once
-}
-
-func (*capacityAttempt) Ready() <-chan struct{}  { return nil }
-func (a *capacityAttempt) Done() <-chan struct{} { return a.done }
-func (*capacityAttempt) Lane() (session.LaneIdentity, bool) {
-	return session.LaneIdentity{}, false
-}
-func (*capacityAttempt) Outcome() v2peer.ReceiverAttemptOutcome {
-	return v2peer.ReceiverAttemptOutcome{}
-}
-func (*capacityAttempt) Err() error     { return nil }
-func (a *capacityAttempt) Close() error { a.once.Do(func() { close(a.done) }); return nil }
-
-func TestEngineAttemptCapacitySharesAcrossReceivesAndIsolatesOtherEngines(t *testing.T) {
-	first := newTestEngine(t, Config{})
-	second := newTestEngine(t, Config{})
-	ctx, cancel := context.WithTimeout(context.Background(), capacityTestTimeout)
-	defer cancel()
-	open := func(parent context.Context, application *Engine) (*peerset.Path, <-chan struct{}) {
-		t.Helper()
-		owner, err := peerset.New(peerset.Config{Capacity: application.connectivity.Attempts()})
-		if err != nil {
-			t.Fatal(err)
-		}
-		started := make(chan struct{}, 1)
-		path, err := owner.Open(parent, peerset.PathConfig{
-			Demand: peerset.ContentDemand,
-			Start: func(context.Context, v2signal.Binding) (peerset.Attempt, error) {
-				started <- struct{}{}
-				return &capacityAttempt{done: make(chan struct{})}, nil
-			},
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = path.Close() })
-		return path, started
-	}
-	awaitStart := func(started <-chan struct{}) {
-		t.Helper()
-		select {
-		case <-started:
-		case <-ctx.Done():
-			t.Fatal("available attempt capacity did not start")
-		}
-	}
-	var held []*peerset.Path
-	for range peerset.DefaultAttemptCapacity {
-		path, started := open(ctx, first)
-		awaitStart(started)
-		held = append(held, path)
-	}
-	wait, stop := context.WithTimeout(ctx, capacityQueueProbe)
-	defer stop()
-	blocked, started := open(wait, first)
-	select {
-	case <-blocked.Done():
-	case <-ctx.Done():
-		t.Fatal("queued attempt did not cancel")
-	}
-	select {
-	case <-started:
-		t.Fatal("another receive bypassed the Engine attempt limit")
-	default:
-	}
-	_, independent := open(ctx, second)
-	awaitStart(independent)
-
-	_ = held[0].Close()
-	_, released := open(ctx, first)
-	awaitStart(released)
 }

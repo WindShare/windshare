@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/connectivity/relayset"
-	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/networkendpoint"
@@ -186,7 +185,7 @@ func classifyTransportError(cause error) (Failure, bool) {
 	if relayErr, ok := errors.AsType[*relayv2.RelayError](cause); ok && relayErr != nil {
 		return classifyRelayError(relayErr)
 	}
-	if authErr, ok := errors.AsType[*senderrelay.AuthorizationError](cause); ok && authErr != nil {
+	if authErr, ok := errors.AsType[*relayset.AuthorizationError](cause); ok && authErr != nil {
 		return classifyAuthorizationState(authErr.State)
 	}
 	if blocked, ok := errors.AsType[*networkdirectory.UnavailableError](cause); ok && blocked != nil {
@@ -304,12 +303,12 @@ func classifyRelayError(relayErr *relayv2.RelayError) (Failure, bool) {
 	return f, true
 }
 
-func classifyAuthorizationState(state senderrelay.AuthorizationState) (Failure, bool) {
+func classifyAuthorizationState(state relayset.AuthorizationState) (Failure, bool) {
 	switch state {
-	case senderrelay.AuthorizationDenied, senderrelay.AuthorizationUserActionRequired:
+	case relayset.AuthorizationDenied, relayset.AuthorizationUserActionRequired:
 		return Failure{Code: FailureRelayAccessDenied}, true
-	case senderrelay.AuthorizationPendingSetup, senderrelay.AuthorizationPendingAttribution,
-		senderrelay.AuthorizationExpired, senderrelay.AuthorizationTemporaryFailure:
+	case relayset.AuthorizationPendingSetup, relayset.AuthorizationPendingAttribution,
+		relayset.AuthorizationExpired, relayset.AuthorizationTemporaryFailure:
 		return Failure{Code: FailureRelayUnavailable}, true
 	default:
 		return Failure{}, false

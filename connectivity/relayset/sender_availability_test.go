@@ -4,8 +4,6 @@ import (
 	"context"
 	"sync"
 	"testing"
-
-	"github.com/windshare/windshare/connectivity/senderrelay"
 )
 
 type waitingRegistration struct {
@@ -13,7 +11,7 @@ type waitingRegistration struct {
 	ready    chan struct{}
 	observed chan struct{}
 	mu       sync.Mutex
-	observer func(senderrelay.RegistrationState)
+	observer func(RegistrationState)
 }
 
 func (e *waitingRegistration) WaitReady(ctx context.Context) error {
@@ -24,14 +22,14 @@ func (e *waitingRegistration) WaitReady(ctx context.Context) error {
 		return ctx.Err()
 	}
 }
-func (e *waitingRegistration) ObserveRegistration(observer func(senderrelay.RegistrationState)) {
+func (e *waitingRegistration) ObserveRegistration(observer func(RegistrationState)) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.observer = observer
-	observer(senderrelay.RegistrationPending)
+	observer(RegistrationPending)
 	close(e.observed)
 }
-func (e *waitingRegistration) publish(state senderrelay.RegistrationState) {
+func (e *waitingRegistration) publish(state RegistrationState) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.observer(state)
@@ -65,15 +63,15 @@ func TestSenderStartupWaitsForConfirmationAndAggregatesCurrentAvailability(t *te
 	for _, endpoint := range []*waitingRegistration{first, second} {
 		waitValue(t, endpoint.observed)
 	}
-	first.publish(senderrelay.RegistrationNeedsUserAuthorization)
+	first.publish(RegistrationNeedsUserAuthorization)
 	if got := waitValue(t, changes); got.AuthorizationRequired {
 		t.Fatalf("another candidate can still publish: %+v", got)
 	}
-	second.publish(senderrelay.RegistrationNeedsUserAuthorization)
+	second.publish(RegistrationNeedsUserAuthorization)
 	if got := waitValue(t, changes); !got.AuthorizationRequired {
 		t.Fatalf("share should require authorization: %+v", got)
 	}
-	first.publish(senderrelay.RegistrationAvailable)
+	first.publish(RegistrationAvailable)
 	close(first.ready)
 	if err := waitValue(t, ready); err != nil {
 		t.Fatal(err)
@@ -81,25 +79,25 @@ func TestSenderStartupWaitsForConfirmationAndAggregatesCurrentAvailability(t *te
 	if got := waitValue(t, changes); got.Availability.Available != 1 || !got.Availability.EverReady || got.AuthorizationRequired {
 		t.Fatalf("first ready=%+v", got)
 	}
-	second.publish(senderrelay.RegistrationAvailable)
+	second.publish(RegistrationAvailable)
 	close(second.ready)
 	if got := waitValue(t, changes); got.Availability.Available != 2 {
 		t.Fatalf("both=%+v", got)
 	}
-	first.publish(senderrelay.RegistrationPending)
+	first.publish(RegistrationPending)
 	if got := waitValue(t, changes); got.Availability.Available != 1 {
 		t.Fatalf("one lost=%+v", got)
 	}
-	second.publish(senderrelay.RegistrationPending)
+	second.publish(RegistrationPending)
 	if got := waitValue(t, changes); got.Availability.Available != 0 || !got.Availability.EverReady {
 		t.Fatalf("all lost=%+v", got)
 	}
-	first.publish(senderrelay.RegistrationAvailable)
+	first.publish(RegistrationAvailable)
 	if got := waitValue(t, changes); got.Availability.Available != 1 {
 		t.Fatalf("recovered=%+v", got)
 	}
 	set.StopRecovery()
-	first.publish(senderrelay.RegistrationPending)
+	first.publish(RegistrationPending)
 	select {
 	case state := <-changes:
 		t.Fatalf("explicit stop emitted recovery state=%+v", state)

@@ -7,7 +7,7 @@ import (
 	"github.com/windshare/windshare/engine/relayprofile"
 
 	"github.com/windshare/windshare/connectivity/networkstate"
-	"github.com/windshare/windshare/connectivity/senderrelay"
+	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/liveshare"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
@@ -35,19 +35,19 @@ func prepareRelay(prepared Prepared, candidate relayprofile.Registration, d Depe
 	if o.detailed {
 		capacity = relayv2.DefaultLifecycleObservationCapacity
 	}
-	var attempts senderrelay.AttemptControl
+	var attempts relayset.AttemptControl
 	if d.Attempts != nil {
 		attempts = d.Attempts(candidate.PublicURL)
 	}
-	relay, err := d.Relay(senderrelay.Config{
-		Candidate: senderrelay.Candidate{PublicURL: candidate.PublicURL, Authorization: candidate.Authorization}, Fresh: register, ResumeToken: resumeToken,
+	relay, err := d.Relay(relayset.SenderLifecycleConfig{
+		Candidate: relayset.Candidate{PublicURL: candidate.PublicURL, Authorization: candidate.Authorization}, Fresh: register, ResumeToken: resumeToken,
 		PrivateKey: material.SenderPrivateKey, Descriptor: material.Descriptor,
 		LifecycleObservationCapacity: capacity,
 		ObserveConnection:            o.attachRelay,
 		Attempts:                     attempts,
 		Clock:                        d.Clock,
-		ObserveAttempt: func(attempt senderrelay.Attempt) {
-			if attempt.State != senderrelay.AttemptParked && attempt.State != senderrelay.AttemptStage {
+		ObserveAttempt: func(attempt relayset.Attempt) {
+			if attempt.State != relayset.AttemptParked && attempt.State != relayset.AttemptStage {
 				o.emit(Observation{RelayRecovery: &RelayRecovery{Endpoint: endpoint, Attempt: attempt}})
 			}
 			if d.ObserveAttempt != nil {

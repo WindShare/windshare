@@ -3,11 +3,10 @@ package relayprofile
 
 import (
 	"github.com/windshare/windshare/connectivity/relayset"
-	"github.com/windshare/windshare/connectivity/senderrelay"
 )
 
 const MaximumEndpoints = relayset.MaximumEndpoints
-const MaxAccessKeyBytes = senderrelay.MaxAccessKeyBytes
+const MaxAccessKeyBytes = relayset.MaxAccessKeyBytes
 
 type Candidate struct {
 	PublicURL       string
@@ -17,7 +16,7 @@ type Candidate struct {
 }
 
 func (candidate Candidate) Validate() error {
-	return (senderrelay.Candidate{PublicURL: candidate.PublicURL, Authorization: senderrelay.StaticKey(candidate.AccessKey)}).Validate()
+	return (relayset.Candidate{PublicURL: candidate.PublicURL, Authorization: relayset.StaticKey(candidate.AccessKey)}).Validate()
 }
 
 func PublicURLs(candidates []Candidate) ([]string, error) {

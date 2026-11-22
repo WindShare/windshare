@@ -1,4 +1,4 @@
-package senderrelay
+package relayset
 
 import (
 	"context"
@@ -29,12 +29,12 @@ func TestRegistrationDeliveryPreservesRecoveryMode(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			attempts := 0
-			dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (Connection, error) {
+			dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (SenderConnection, error) {
 				attempts++
 				if attempts <= len(test.failures) {
-					return Connection{}, test.failures[attempts-1]
+					return SenderConnection{}, test.failures[attempts-1]
 				}
-				return NewConnection(&senderRelayTestEndpoint{}), nil
+				return NewSenderConnection(&senderRelayTestEndpoint{}), nil
 			}}
 			lifecycle := newSenderRelayTestLifecycle(t, nil, dialer, newSenderRelayTestClock())
 			t.Cleanup(lifecycle.StopRecovery)
@@ -56,8 +56,8 @@ func TestRegistrationDeliveryPreservesRecoveryMode(t *testing.T) {
 
 func TestInitialMissingWebSocketRouteRetiresOnlyThisLifecycle(t *testing.T) {
 	failure := &relayv2.RegistrationNotSentError{Cause: &relayv2.WebSocketRouteError{}}
-	dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (Connection, error) {
-		return Connection{}, failure
+	dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (SenderConnection, error) {
+		return SenderConnection{}, failure
 	}}
 	clock := newSenderRelayTestClock()
 	clock.wait = func(context.Context, time.Duration, <-chan struct{}) error {
@@ -75,19 +75,19 @@ func TestAttributionAndCleanupUseDeliveryResultIndependentlyOfObservations(t *te
 		t.Run(fmt.Sprintf("notSent=%t", notSent), func(t *testing.T) {
 			ctx, stop := context.WithCancel(t.Context())
 			defer stop()
-			dialer := &senderRelayTestDialer{dial: func(_ context.Context, config relayv2.SenderConfig) (Connection, error) {
+			dialer := &senderRelayTestDialer{dial: func(_ context.Context, config relayv2.SenderConfig) (SenderConnection, error) {
 				// Cancellation can replace the returned error, but the raw delivery
 				// result still owns attribution and cleanup.
 				stop()
 				failure := errors.New("connection lost")
 				if notSent {
 					// Optional diagnostic events are deliberately absent.
-					return Connection{}, &relayv2.RegistrationNotSentError{Cause: failure}
+					return SenderConnection{}, &relayv2.RegistrationNotSentError{Cause: failure}
 				}
 				// A wrapper may report a failed internal dial before another attempt
 				// leaves registration delivery uncertain. Its final result owns policy.
 				config.Dial.ObserveStage(relayv2.DialStage{Stage: relayv2.DialStageWebSocket, Failure: failure})
-				return Connection{}, failure
+				return SenderConnection{}, failure
 			}}
 			var deliveries []serviceauthority.RegistrationDelivery
 			config := newSenderRelayTestConfig(t, nil, dialer, nil)
@@ -96,7 +96,7 @@ func TestAttributionAndCleanupUseDeliveryResultIndependentlyOfObservations(t *te
 					deliveries = append(deliveries, delivery)
 				}}
 			})
-			lifecycle, err := New(config)
+			lifecycle, err := NewSenderLifecycle(config)
 			if err != nil {
 				t.Fatal(err)
 			}

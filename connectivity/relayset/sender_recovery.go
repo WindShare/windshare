@@ -1,4 +1,4 @@
-package senderrelay
+package relayset
 
 import (
 	"context"
@@ -43,13 +43,13 @@ func (SystemClock) Wait(ctx context.Context, delay time.Duration, wake <-chan st
 	return nil
 }
 
-func (lifecycle *Lifecycle) recover(ctx context.Context) error {
+func (lifecycle *SenderLifecycle) recover(ctx context.Context) error {
 	lifecycle.recoveryMu.Lock()
 	defer lifecycle.recoveryMu.Unlock()
 	return lifecycle.recoverOwned(ctx)
 }
 
-func (lifecycle *Lifecycle) recoverOwned(callerContext context.Context) error {
+func (lifecycle *SenderLifecycle) recoverOwned(callerContext context.Context) error {
 	if err := lifecycle.recoveryCause(callerContext, lifecycle.recoveryContext); err != nil {
 		return err
 	}
@@ -70,7 +70,7 @@ func (lifecycle *Lifecycle) recoverOwned(callerContext context.Context) error {
 	return lifecycle.recoverRegistration(callerContext, recoveryContext)
 }
 
-func (lifecycle *Lifecycle) recoverRegistration(callerContext, recoveryContext context.Context) error {
+func (lifecycle *SenderLifecycle) recoverRegistration(callerContext, recoveryContext context.Context) error {
 	deadline := lifecycle.config.Clock.Now().Add(senderRelayRecoveryWindow)
 	delay := senderRelayRetryInitial
 	attempt := uint32(1)
@@ -135,14 +135,14 @@ func (lifecycle *Lifecycle) recoverRegistration(callerContext, recoveryContext c
 	}
 }
 
-func (lifecycle *Lifecycle) beginAttempt(ctx context.Context) (AttemptPermit, error) {
+func (lifecycle *SenderLifecycle) beginAttempt(ctx context.Context) (AttemptPermit, error) {
 	if lifecycle.config.Attempts == nil {
 		return nil, nil
 	}
 	return lifecycle.config.Attempts.Begin(ctx)
 }
 
-func (lifecycle *Lifecycle) registrationFailed(event *Attempt, failure error) bool {
+func (lifecycle *SenderLifecycle) registrationFailed(event *Attempt, failure error) bool {
 	event.State, event.Failure = AttemptFailed, failure
 	lifecycle.resumeNext, event.Terminal = classifyRegistrationFailure(event.Resume, failure)
 	// A previously admitted route can return 404 during a proxy restart. Only
@@ -162,7 +162,7 @@ func (lifecycle *Lifecycle) registrationFailed(event *Attempt, failure error) bo
 
 // A server deadline belongs to the registration, so it survives a local wake
 // and cancellation of the caller that first received the refusal.
-func (lifecycle *Lifecycle) waitForServerRetry(caller, recovery context.Context) error {
+func (lifecycle *SenderLifecycle) waitForServerRetry(caller, recovery context.Context) error {
 	for {
 		if err := lifecycle.recoveryCause(caller, recovery); err != nil {
 			return err
@@ -177,7 +177,7 @@ func (lifecycle *Lifecycle) waitForServerRetry(caller, recovery context.Context)
 	}
 }
 
-func (lifecycle *Lifecycle) attemptCause(caller, recovery context.Context, err error) error {
+func (lifecycle *SenderLifecycle) attemptCause(caller, recovery context.Context, err error) error {
 	if cause := lifecycle.recoveryCause(caller, recovery); cause != nil {
 		return cause
 	}
@@ -186,7 +186,7 @@ func (lifecycle *Lifecycle) attemptCause(caller, recovery context.Context, err e
 
 // connectAttempt contains ownership arbitration around one bounded handshake.
 // A success observed after cancellation is retired before it can advertise readiness.
-func (lifecycle *Lifecycle) connectAttempt(caller, recovery context.Context, resume bool, permit AttemptPermit, attempt *Attempt, authorization Authorization) error {
+func (lifecycle *SenderLifecycle) connectAttempt(caller, recovery context.Context, resume bool, permit AttemptPermit, attempt *Attempt, authorization Authorization) error {
 	init := lifecycle.config.Fresh
 	var descriptor []byte
 	if resume {
@@ -281,7 +281,7 @@ func classifyRegistrationFailure(resume bool, failure error) (resumeNext, termin
 	}
 }
 
-func (lifecycle *Lifecycle) retryDelay(fast time.Duration, slow bool) time.Duration {
+func (lifecycle *SenderLifecycle) retryDelay(fast time.Duration, slow bool) time.Duration {
 	if !slow {
 		return fast
 	}

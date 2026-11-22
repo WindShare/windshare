@@ -192,9 +192,6 @@ func TestWebRTCLifecycleSourceShapes(t *testing.T) {
 			if !reflect.DeepEqual(test.got, test.want) {
 				t.Fatalf("source trace = %+v, want %+v", test.got, test.want)
 			}
-			if violation := ValidateLifecycleTrace(test.got); violation != LifecycleContractValid {
-				t.Fatalf("source contract violation=%d trace=%+v", violation, test.got)
-			}
 		})
 	}
 
@@ -285,47 +282,23 @@ func TestWebRTCLifecycleSourcePublishesCumulativeDropSummary(t *testing.T) {
 	})
 }
 
-func TestWebRTCLifecycleValidatorReturnsClosedMutationReasons(t *testing.T) {
-	base := channelLifecycleTrace(
-		21, LifecycleTransitionTerminationPending,
-		framechannel.Connecting, LifecycleTerminalNone, ErrRemoteClosed,
-	)
+func TestWebRTCLifecycleRefusalTracesCoverProducerMatrix(t *testing.T) {
 	tests := []struct {
-		name string
-		edit func(*LifecycleTrace)
-		want LifecycleContractViolation
+		name       string
+		operation  sendOperation
+		state      framechannel.ChannelState
+		terminal   LifecycleTerminalState
+		err        error
+		transition LifecycleTransition
+		disp       framechannel.SendDisposition
 	}{
-		{"unknown transition", func(value *LifecycleTrace) { value.Transition = "future" }, LifecycleContractUnknownEnum},
-		{"missing channel", func(value *LifecycleTrace) { value.ChannelID = 0 }, LifecycleContractInvalidIdentity},
-		{"closed pending state", func(value *LifecycleTrace) { value.State = framechannel.Closed }, LifecycleContractInvalidStageFields},
-		{"pending without cause", func(value *LifecycleTrace) { value.Cause = LifecycleCauseNone }, LifecycleContractInvalidStageFields},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			mutated := base
-			test.edit(&mutated)
-			if got := ValidateLifecycleTrace(mutated); got != test.want {
-				t.Fatalf("violation=%d want=%d trace=%+v", got, test.want, mutated)
-			}
-		})
-	}
-}
-
-func TestWebRTCLifecycleValidatorCoversProducerRefusalMatrix(t *testing.T) {
-	tests := []struct {
-		name      string
-		operation sendOperation
-		state     framechannel.ChannelState
-		terminal  LifecycleTerminalState
-		err       error
-	}{
-		{"ordinary connecting rejection", sendOrdinary, framechannel.Connecting, LifecycleTerminalNone, framechannel.RejectSend(ErrChannelNotOpen)},
-		{"terminal connecting rejection", sendTerminal, framechannel.Connecting, LifecycleTerminalNone, framechannel.RejectSend(ErrChannelNotOpen)},
-		{"ordinary closed retirement", sendOrdinary, framechannel.Closed, LifecycleTerminalNone, framechannel.RetireSend(ErrChannelClosed)},
-		{"terminal closed rejection", sendTerminal, framechannel.Closed, LifecycleTerminalLocalPending, framechannel.RejectSend(ErrTransport)},
-		{"ordinary local-terminal retirement", sendOrdinary, framechannel.Open, LifecycleTerminalLocalPending, framechannel.RetireSend(ErrChannelClosed)},
-		{"terminal remote-terminal retirement", sendTerminal, framechannel.Open, LifecycleTerminalRemotePending, framechannel.RetireSend(ErrChannelClosed)},
-		{"terminal open rejection", sendTerminal, framechannel.Open, LifecycleTerminalNone, framechannel.RejectSend(context.Canceled)},
+		{"ordinary connecting rejection", sendOrdinary, framechannel.Connecting, LifecycleTerminalNone, framechannel.RejectSend(ErrChannelNotOpen), LifecycleTransitionSendRejected, framechannel.SendRejected},
+		{"terminal connecting rejection", sendTerminal, framechannel.Connecting, LifecycleTerminalNone, framechannel.RejectSend(ErrChannelNotOpen), LifecycleTransitionSendRejected, framechannel.SendRejected},
+		{"ordinary closed retirement", sendOrdinary, framechannel.Closed, LifecycleTerminalNone, framechannel.RetireSend(ErrChannelClosed), LifecycleTransitionSendRetired, framechannel.SendRetired},
+		{"terminal closed rejection", sendTerminal, framechannel.Closed, LifecycleTerminalLocalPending, framechannel.RejectSend(ErrTransport), LifecycleTransitionSendRejected, framechannel.SendRejected},
+		{"ordinary local-terminal retirement", sendOrdinary, framechannel.Open, LifecycleTerminalLocalPending, framechannel.RetireSend(ErrChannelClosed), LifecycleTransitionSendRetired, framechannel.SendRetired},
+		{"terminal remote-terminal retirement", sendTerminal, framechannel.Open, LifecycleTerminalRemotePending, framechannel.RetireSend(ErrChannelClosed), LifecycleTransitionSendRetired, framechannel.SendRetired},
+		{"terminal open rejection", sendTerminal, framechannel.Open, LifecycleTerminalNone, framechannel.RejectSend(context.Canceled), LifecycleTransitionSendRejected, framechannel.SendRejected},
 	}
 	for index, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -335,11 +308,9 @@ func TestWebRTCLifecycleValidatorCoversProducerRefusalMatrix(t *testing.T) {
 				test.state,
 				test.terminal,
 			)
-			if !emitted {
-				t.Fatal("producer refusal was suppressed")
-			}
-			if violation := ValidateLifecycleTrace(trace); violation != LifecycleContractValid {
-				t.Fatalf("source contract violation=%d trace=%+v", violation, trace)
+			if !emitted || trace.Transition != test.transition || trace.Disposition != test.disp ||
+				trace.State != test.state || trace.Terminal != test.terminal || trace.Cause == LifecycleCauseNone {
+				t.Fatalf("refusal trace = %+v emitted=%t", trace, emitted)
 			}
 		})
 	}

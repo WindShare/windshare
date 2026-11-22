@@ -2,10 +2,12 @@ package v2peer
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	pion "github.com/pion/webrtc/v4"
 
+	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
 
 	"github.com/windshare/windshare/core/session"
@@ -111,4 +113,29 @@ func validReceiverLaneRejection(rejection protocolsession.LaneRejection) bool {
 		rejection.RetryAfter <= protocolsession.MaxLaneRetryAfter &&
 		rejection.RetryAfter%time.Millisecond == 0 &&
 		(rejection.Code == protocolsession.LaneRejectAdmissionLimited || rejection.RetryAfter == 0)
+}
+
+func (execution *receiverExecution) acceptRemoteCandidate(body []byte) receiverWorkflowResult {
+	candidate, err := v2signal.DecodeCandidate(body)
+	if err != nil {
+		return receiverWorkflowDiagnostic(err)
+	}
+	if err := execution.attempt.binding.RequireSame(candidate.Binding); err != nil {
+		return receiverWorkflowUnsafe(
+			err,
+			ReceiverProvenanceAuthenticatedCandidateBindingMismatch,
+		)
+	}
+	if execution.remoteCandidates >= execution.attempt.factory.maxCandidates {
+		return receiverWorkflowDiagnostic(errCandidateLimit)
+	}
+	execution.remoteCandidates++
+	if !execution.answerSeen {
+		execution.queuedCandidates = append(execution.queuedCandidates, candidate)
+		return receiverWorkflowResult{}
+	}
+	if err := execution.attempt.peer.AddICECandidate(candidateInit(candidate)); err != nil {
+		return receiverWorkflowDiagnostic(fmt.Errorf("add remote ICE candidate: %w", err))
+	}
+	return receiverWorkflowResult{}
 }

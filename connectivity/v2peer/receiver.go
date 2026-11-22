@@ -529,8 +529,7 @@ func (attempt *ReceiverAttempt) run() {
 	}
 	classified.benign = uniqueReceiverBenignCauses(classified.benign)
 	classified.classes = uniqueReceiverCauseClasses(classified.classes)
-	diagnosticsTruncated := terminalDiagnosticsTruncated ||
-		executionResult.workflow.diagnosticsTruncated || !classified.complete
+	diagnosticsTruncated := terminalDiagnosticsTruncated || !classified.complete
 	retainedCause := classified.retained
 	cause := receiverClassifiedCause(classified)
 	attempt.cancel(cause)
@@ -549,17 +548,10 @@ func (attempt *ReceiverAttempt) run() {
 	attempt.outcome = outcome
 	attempt.resultMu.Unlock()
 	trace := ReceiverTerminationTrace{
-		operationID: operationID, localGeneration: localGeneration,
-		transitionOwner:       outcome.TransitionAuthority(),
-		disposition:           outcome.Disposition(),
-		transitionProvenance:  outcome.TransitionProvenance(),
-		consequenceProvenance: outcome.ConsequenceProvenance(),
-		diagnosticsTruncated:  outcome.DiagnosticsTruncated(),
-		benignComponents:      outcome.BenignComponents(),
-		retainedCauseClasses:  outcome.RetainedCauseClasses(),
-		teardownTransitions:   executionResult.teardown.transitionSnapshot(),
-		peerShutdownFailed:    executionResult.teardown.peerShutdownFailed(),
-		channelDrainFailed:    executionResult.teardown.channelDrainFailed(),
+		receiverTerminalMetadata: outcome.receiverTerminalMetadata,
+		teardownTransitions:      executionResult.teardown.transitionSnapshot(),
+		peerShutdownFailed:       executionResult.teardown.peerShutdownFailed(),
+		channelDrainFailed:       executionResult.teardown.channelDrainFailed(),
 	}
 	attempt.emitTerminationTrace(trace)
 	// Close/Done are producer quiescence boundaries: publication admission must

@@ -45,9 +45,6 @@ func TestHeartbeatProbesOnCadenceAndTracesAcknowledgements(t *testing.T) {
 			}
 			acknowledgeProbe(socket, round)
 			probe, ack := <-link.lifecycleTrace(), <-link.lifecycleTrace()
-			if ValidateLifecycleTrace(probe) != LifecycleContractValid || ValidateLifecycleTrace(ack) != LifecycleContractValid {
-				t.Fatal("heartbeat producer violated observation contract")
-			}
 			if probe.Stage != LifecycleHeartbeatProbe || ack.Stage != LifecycleHeartbeatAcknowledged ||
 				ack.HeartbeatRound != round || ack.OperationID != probe.OperationID {
 				t.Fatalf("probe=%+v acknowledgement=%+v", probe, ack)
@@ -112,9 +109,6 @@ func TestHeartbeatRetiresSilentLink(t *testing.T) {
 		seen := false
 		for event := range link.lifecycleTrace() {
 			if event.Stage == LifecycleHeartbeatFailed {
-				if ValidateLifecycleTrace(event) != LifecycleContractValid {
-					t.Fatal("failure rejected by producer contract")
-				}
 				seen = event.HeartbeatRound == 2 && event.Timeout == testHeartbeat.Timeout &&
 					event.Wait == testHeartbeat.Timeout && event.Cause == LifecycleCauseDeadline
 			}
@@ -182,31 +176,6 @@ func TestHeartbeatConfigRequiresTimeoutBeyondCadence(t *testing.T) {
 	} {
 		if _, err := config.Normalize(); !errors.Is(err, ErrHeartbeatConfig) {
 			t.Fatalf("accepted %+v", config)
-		}
-	}
-}
-
-func TestHeartbeatLifecycleContractRejectsMalformedEvidence(t *testing.T) {
-	valid := LifecycleTrace{LinkID: 1, OperationID: 1, Stage: LifecycleHeartbeatProbe,
-		RetirementSource: LifecycleRetirementNone, Cause: LifecycleCauseNone, DrainCause: LifecycleCauseNone,
-		HeartbeatRound: 1, Timeout: time.Second}
-	for _, mutate := range []func(*LifecycleTrace){
-		func(e *LifecycleTrace) { e.LinkID = 0 },
-		func(e *LifecycleTrace) { e.OperationID = 0 },
-		func(e *LifecycleTrace) { e.HeartbeatRound = 0 },
-		func(e *LifecycleTrace) { e.RelaySessionID[0] = 1 },
-		func(e *LifecycleTrace) { e.Timeout = 0 },
-		func(e *LifecycleTrace) { e.Wait = -1 },
-		func(e *LifecycleTrace) { e.Wait = 1 },
-		func(e *LifecycleTrace) { e.Terminal = true },
-		func(e *LifecycleTrace) { e.Cause = LifecycleCauseTransport },
-		func(e *LifecycleTrace) { e.Stage = LifecycleHeartbeatFailed },
-		func(e *LifecycleTrace) { e.Stage = LifecycleLinkClosed },
-	} {
-		event := valid
-		mutate(&event)
-		if ValidateLifecycleTrace(event) == LifecycleContractValid {
-			t.Fatalf("accepted %+v", event)
 		}
 	}
 }

@@ -1,5 +1,4 @@
-// Package senderrelay owns one relay's registration for the lifetime of a share.
-package senderrelay
+package relayset
 
 import (
 	"context"
@@ -23,17 +22,17 @@ func (senderRelayRecoveryStoppedError) Error() string { return "sender relay rec
 
 var ErrStopped = senderRelayRecoveryStoppedError{}
 
-type Config struct {
+type SenderLifecycleConfig struct {
 	Candidate                    Candidate
 	Fresh                        v2.RegisterInit
 	ResumeToken                  v2.ResumeToken
 	PrivateKey                   ed25519.PrivateKey
 	Descriptor                   []byte
-	Initial                      Endpoint
-	Dialer                       Dialer
+	Initial                      SenderTransport
+	Dialer                       SenderDialer
 	Clock                        Clock
 	LifecycleObservationCapacity int
-	ObserveConnection            func(Connection) func()
+	ObserveConnection            func(SenderConnection) func()
 	ObserveAttempt               func(Attempt)
 	Attempts                     AttemptControl
 	// Jitter is applied only in the slow phase, keeping short outages responsive.
@@ -99,15 +98,16 @@ const (
 	RegistrationAvailable
 )
 
-type Lifecycle struct {
+// SenderLifecycle owns one relay's registration for the lifetime of a share.
+type SenderLifecycle struct {
 	mu         sync.Mutex
 	recoveryMu sync.Mutex
 	acceptMu   sync.Mutex
 
-	config              Config
+	config              SenderLifecycleConfig
 	resume              v2.RegisterInit
 	stopID              v2.StopID
-	connection          Connection
+	connection          SenderConnection
 	recoveryContext     context.Context
 	cancelRecovery      context.CancelFunc
 	stopping            bool
@@ -124,7 +124,7 @@ type Lifecycle struct {
 	mayHaveRegistered   bool
 }
 
-func New(config Config) (*Lifecycle, error) {
+func NewSenderLifecycle(config SenderLifecycleConfig) (*SenderLifecycle, error) {
 	resume, err := relayv2.ResumeInit(config.Fresh)
 	if err != nil || config.Candidate.Validate() != nil || len(config.PrivateKey) != ed25519.PrivateKeySize ||
 		len(config.Descriptor) == 0 || len(config.Descriptor) > v2.MaxDescriptorBytes ||
@@ -151,12 +151,12 @@ func New(config Config) (*Lifecycle, error) {
 	if _, err := rand.Read(stopID[:]); err != nil {
 		return nil, err
 	}
-	connection := NewConnection(config.Initial)
+	connection := NewSenderConnection(config.Initial)
 	// Bootstrap ownership moves into connection; clearing the source reference
 	// lets a failed initial WebSocket become collectible immediately after detach.
 	config.Initial = nil
 	recoveryContext, cancel := context.WithCancel(context.Background())
-	lifecycle := &Lifecycle{
+	lifecycle := &SenderLifecycle{
 		config:            config,
 		resume:            resume,
 		stopID:            stopID,
@@ -175,7 +175,7 @@ func New(config Config) (*Lifecycle, error) {
 	return lifecycle, nil
 }
 
-func (lifecycle *Lifecycle) Accept(ctx context.Context) (*relayv2.Channel, error) {
+func (lifecycle *SenderLifecycle) Accept(ctx context.Context) (*relayv2.Channel, error) {
 	lifecycle.acceptMu.Lock()
 	defer lifecycle.acceptMu.Unlock()
 	if err := lifecycle.WaitReady(ctx); err != nil {
@@ -199,21 +199,21 @@ func (lifecycle *Lifecycle) Accept(ctx context.Context) (*relayv2.Channel, error
 	}
 }
 
-func (lifecycle *Lifecycle) current() (Connection, error) {
+func (lifecycle *SenderLifecycle) current() (SenderConnection, error) {
 	lifecycle.mu.Lock()
 	defer lifecycle.mu.Unlock()
 	if lifecycle.stopping {
-		return Connection{}, ErrStopped
+		return SenderConnection{}, ErrStopped
 	}
 	if !lifecycle.connection.valid() {
-		return Connection{}, relayv2.ErrClosed
+		return SenderConnection{}, relayv2.ErrClosed
 	}
 	return lifecycle.connection, nil
 }
 
 // WaitReady waits through temporary startup failures. Only authenticated readiness
 // makes a link publishable; merely constructing a lifecycle does not.
-func (lifecycle *Lifecycle) WaitReady(ctx context.Context) error {
+func (lifecycle *SenderLifecycle) WaitReady(ctx context.Context) error {
 	lifecycle.recoveryMu.Lock()
 	defer lifecycle.recoveryMu.Unlock()
 	if _, err := lifecycle.current(); err == nil {
@@ -223,8 +223,8 @@ func (lifecycle *Lifecycle) WaitReady(ctx context.Context) error {
 }
 
 // ObserveRegistration provides the current route state even when diagnostic
-// observations are disabled or dropped. The callback must not reenter Lifecycle.
-func (lifecycle *Lifecycle) ObserveRegistration(observer func(RegistrationState)) {
+// observations are disabled or dropped. The callback must not reenter SenderLifecycle.
+func (lifecycle *SenderLifecycle) ObserveRegistration(observer func(RegistrationState)) {
 	lifecycle.mu.Lock()
 	defer lifecycle.mu.Unlock()
 	lifecycle.observeRegistration = observer
@@ -233,7 +233,7 @@ func (lifecycle *Lifecycle) ObserveRegistration(observer func(RegistrationState)
 	}
 }
 
-func (lifecycle *Lifecycle) setRegistrationLocked(state RegistrationState) {
+func (lifecycle *SenderLifecycle) setRegistrationLocked(state RegistrationState) {
 	if lifecycle.registration == state {
 		return
 	}
@@ -243,7 +243,7 @@ func (lifecycle *Lifecycle) setRegistrationLocked(state RegistrationState) {
 	}
 }
 
-func (lifecycle *Lifecycle) showAuthorizationWait(required bool) {
+func (lifecycle *SenderLifecycle) showAuthorizationWait(required bool) {
 	lifecycle.mu.Lock()
 	defer lifecycle.mu.Unlock()
 	if lifecycle.stopping {
@@ -257,36 +257,36 @@ func (lifecycle *Lifecycle) showAuthorizationWait(required bool) {
 }
 
 // Wake coalesces network/resume notifications into the single recovery owner.
-func (lifecycle *Lifecycle) Wake() {
+func (lifecycle *SenderLifecycle) Wake() {
 	select {
 	case lifecycle.wake <- struct{}{}:
 	default:
 	}
 }
 
-func (lifecycle *Lifecycle) observeRecoveryAttempt(observation Attempt) {
+func (lifecycle *SenderLifecycle) observeRecoveryAttempt(observation Attempt) {
 	if lifecycle != nil && lifecycle.config.ObserveAttempt != nil {
 		lifecycle.config.ObserveAttempt(observation)
 	}
 }
 
-func (lifecycle *Lifecycle) detachForRecovery() (Connection, error) {
+func (lifecycle *SenderLifecycle) detachForRecovery() (SenderConnection, error) {
 	if lifecycle.config.Attempts != nil {
 		lifecycle.config.Attempts.Unavailable()
 	}
 	lifecycle.mu.Lock()
 	defer lifecycle.mu.Unlock()
 	if lifecycle.stopping {
-		return Connection{}, ErrStopped
+		return SenderConnection{}, ErrStopped
 	}
 	old := lifecycle.connection
-	lifecycle.connection = Connection{}
+	lifecycle.connection = SenderConnection{}
 	lifecycle.setRegistrationLocked(RegistrationPending)
 	return old, nil
 }
 
-func (lifecycle *Lifecycle) installRecovered(
-	connection Connection,
+func (lifecycle *SenderLifecycle) installRecovered(
+	connection SenderConnection,
 	callerContext context.Context,
 	recoveryContext context.Context,
 ) error {
@@ -307,7 +307,7 @@ func (lifecycle *Lifecycle) installRecovered(
 	return nil
 }
 
-func (lifecycle *Lifecycle) recoveryCause(
+func (lifecycle *SenderLifecycle) recoveryCause(
 	callerContext context.Context,
 	recoveryContext context.Context,
 ) error {
@@ -336,7 +336,7 @@ func (lifecycle *Lifecycle) recoveryCause(
 	return recoveryErr
 }
 
-func (lifecycle *Lifecycle) StopRecovery() {
+func (lifecycle *SenderLifecycle) StopRecovery() {
 	lifecycle.mu.Lock()
 	if !lifecycle.stopping {
 		lifecycle.stopping = true
@@ -346,7 +346,7 @@ func (lifecycle *Lifecycle) StopRecovery() {
 	lifecycle.mu.Unlock()
 }
 
-func (lifecycle *Lifecycle) Cleanup(ctx context.Context) error {
+func (lifecycle *SenderLifecycle) Cleanup(ctx context.Context) error {
 	lifecycle.cleanupOnce.Do(func() {
 		lifecycle.StopRecovery()
 		lifecycle.recoveryMu.Lock()
@@ -364,10 +364,60 @@ func (lifecycle *Lifecycle) Cleanup(ctx context.Context) error {
 		}
 		lifecycle.mu.Lock()
 		connection := lifecycle.connection
-		lifecycle.connection = Connection{}
+		lifecycle.connection = SenderConnection{}
 		lifecycle.mu.Unlock()
 		closeErr := lifecycle.retireConnection(connection)
 		lifecycle.cleanupErr = errors.Join(stopErr, closeErr)
 	})
 	return lifecycle.cleanupErr
+}
+
+func (lifecycle *SenderLifecycle) trackObservationConnection(connection SenderConnection) SenderConnection {
+	if lifecycle != nil && connection.valid() && lifecycle.config.ObserveConnection != nil {
+		connection.finishObservations = lifecycle.config.ObserveConnection(connection)
+	}
+	return connection
+}
+
+func (lifecycle *SenderLifecycle) retireConnection(connection SenderConnection) error {
+	closeErr := connection.Close()
+	// Close can encounter a transport already retiring on another goroutine.
+	// Its Done follows the terminal observation, so never cut diagnostics early.
+	if terminal, ok := connection.endpoint.(interface{ Done() <-chan struct{} }); ok {
+		<-terminal.Done()
+	}
+	completion := connection.CompleteObservations()
+	if connection.finishObservations != nil {
+		connection.finishObservations()
+	}
+	lifecycle.mu.Lock()
+	mergeRelayCompletion(&lifecycle.retiredCompletion, completion)
+	lifecycle.mu.Unlock()
+	return closeErr
+}
+
+func (lifecycle *SenderLifecycle) CompleteObservations() relayv2.LifecycleObservationCompletion {
+	if lifecycle == nil {
+		return relayv2.LifecycleObservationCompletion{}
+	}
+	// The command joins recovery and cleanup before its final observation cut.
+	// Retired transports have already contributed immutable counters and no
+	// longer need to remain reachable from this lifecycle.
+	lifecycle.mu.Lock()
+	completion, connection := lifecycle.retiredCompletion, lifecycle.connection
+	lifecycle.mu.Unlock()
+	mergeRelayCompletion(&completion, connection.CompleteObservations())
+	return completion
+}
+
+func mergeRelayCompletion(total *relayv2.LifecycleObservationCompletion, next relayv2.LifecycleObservationCompletion) {
+	total.Enqueued = saturatingAdd(total.Enqueued, next.Enqueued)
+	total.Loss.CapacityDropped = saturatingAdd(total.Loss.CapacityDropped, next.Loss.CapacityDropped)
+}
+
+func saturatingAdd(a, b uint64) uint64 {
+	if ^uint64(0)-a < b {
+		return ^uint64(0)
+	}
+	return a + b
 }

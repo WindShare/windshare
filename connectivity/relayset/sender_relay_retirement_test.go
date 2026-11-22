@@ -1,4 +1,4 @@
-package senderrelay
+package relayset
 
 import (
 	"context"
@@ -74,17 +74,17 @@ func TestSenderRelayRetirementBoundsConnectionsAndReadersAcrossRecovery(t *testi
 	var activeReaders atomic.Int32
 	initial := newRetiringSenderRelayEndpoint(&completionCalls)
 	retired := []weak.Pointer[retiringSenderRelayEndpoint]{weak.Make(initial)}
-	dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (Connection, error) {
+	dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (SenderConnection, error) {
 		if got := activeReaders.Load(); got != 0 {
 			t.Fatalf("dial retained %d readers from previous connections", got)
 		}
 		next := newRetiringSenderRelayEndpoint(&completionCalls)
 		retired = append(retired, weak.Make(next))
-		return NewConnection(next), nil
+		return NewSenderConnection(next), nil
 	}}
 	config := newSenderRelayTestConfig(t, initial, dialer, newSenderRelayTestClock())
 
-	config.ObserveConnection = func(connection Connection) func() {
+	config.ObserveConnection = func(connection SenderConnection) func() {
 		finished := make(chan struct{})
 		go func() {
 			defer close(finished)
@@ -98,7 +98,7 @@ func TestSenderRelayRetirementBoundsConnectionsAndReadersAcrossRecovery(t *testi
 			activeReaders.Add(-1)
 		}
 	}
-	lifecycle, err := New(config)
+	lifecycle, err := NewSenderLifecycle(config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,8 +149,8 @@ func TestSenderRelayRetirementWaitsForTerminalObservation(t *testing.T) {
 	next := newRetiringSenderRelayEndpoint(&completionCalls)
 	t.Cleanup(func() { _ = next.Close() })
 	lifecycle := newSenderRelayTestLifecycle(t, initial, &senderRelayTestDialer{
-		dial: func(context.Context, relayv2.SenderConfig) (Connection, error) {
-			return NewConnection(next), nil
+		dial: func(context.Context, relayv2.SenderConfig) (SenderConnection, error) {
+			return NewSenderConnection(next), nil
 		},
 	}, newSenderRelayTestClock())
 	result := make(chan error, 1)
@@ -175,13 +175,13 @@ func TestSenderRelayCanceledLateDialRetiresDiagnostics(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	lifecycle := newSenderRelayTestLifecycle(t, initial, &senderRelayTestDialer{
-		dial: func(context.Context, relayv2.SenderConfig) (Connection, error) {
+		dial: func(context.Context, relayv2.SenderConfig) (SenderConnection, error) {
 			cancel()
-			return NewConnection(late), nil
+			return NewSenderConnection(late), nil
 		},
 	}, newSenderRelayTestClock())
 	var retiredReaders atomic.Int32
-	lifecycle.config.ObserveConnection = func(Connection) func() {
+	lifecycle.config.ObserveConnection = func(SenderConnection) func() {
 		return func() { retiredReaders.Add(1) }
 	}
 	if err := lifecycle.recover(ctx); !errors.Is(err, context.Canceled) {

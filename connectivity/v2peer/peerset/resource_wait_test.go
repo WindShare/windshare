@@ -23,7 +23,6 @@ func TestResourceDeferralsPreserveNegotiationAllowanceButNotWaveDeadline(t *test
 		wave.attempts++
 		wave.opportunities++
 		opportunity.refund(0)
-		opportunity.release()
 		settled := make(chan *Result, 1)
 		go func() {
 			settled <- path.afterAttempt(&wave, Result{Scope: protocolsession.PeerFailureResourceDeferred}, false)

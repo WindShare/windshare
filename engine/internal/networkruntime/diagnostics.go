@@ -8,7 +8,6 @@ import (
 
 	"github.com/windshare/windshare/connectivity/relayplan"
 	"github.com/windshare/windshare/connectivity/relayset"
-	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/networkendpoint"
 	"github.com/windshare/windshare/core/nodedirectory"
@@ -72,27 +71,27 @@ func deadlineField(fields diagnostics.Fields, key string, deadline time.Time) {
 	}
 }
 
-func (r *Runtime) Observer(selection Selection, sink diagnostics.Sink) func(string, senderrelay.Attempt) {
+func (r *Runtime) Observer(selection Selection, sink diagnostics.Sink) func(string, relayset.Attempt) {
 	identities := make(map[string]string, len(selection.Plan.Network))
 	for _, candidate := range selection.Plan.Network {
 		identities[candidate.URL] = candidate.Identity
 	}
 	var mu sync.Mutex
 	generations := make(map[string]uint64, len(identities))
-	return func(url string, attempt senderrelay.Attempt) {
+	return func(url string, attempt relayset.Attempt) {
 		var started uint64
 		var entry healthEntry
 		var change relayplan.CooldownReason
 		now := r.now()
 		if identity, directory := identities[url]; directory {
 			mu.Lock()
-			if attempt.State == senderrelay.AttemptStarted {
+			if attempt.State == relayset.AttemptStarted {
 				generations[url] = r.generation()
 			}
 			started = generations[url]
 			mu.Unlock()
 			switch attempt.State {
-			case senderrelay.AttemptSucceeded, senderrelay.AttemptParked, senderrelay.AttemptFailed:
+			case relayset.AttemptSucceeded, relayset.AttemptParked, relayset.AttemptFailed:
 				if r.shouldRefreshDirectoryOnRefusal(identity, attempt) {
 					r.directory.TriggerRefresh()
 				}
@@ -126,8 +125,8 @@ func (r *Runtime) Observer(selection Selection, sink diagnostics.Sink) func(stri
 	}
 }
 
-func (r *Runtime) shouldRefreshDirectoryOnRefusal(identity string, attempt senderrelay.Attempt) bool {
-	if attempt.State != senderrelay.AttemptFailed || attempt.Resume || r.directory == nil {
+func (r *Runtime) shouldRefreshDirectoryOnRefusal(identity string, attempt relayset.Attempt) bool {
+	if attempt.State != relayset.AttemptFailed || attempt.Resume || r.directory == nil {
 		return false
 	}
 	refusal, ok := errors.AsType[*relayv2.RelayError](attempt.Failure)
@@ -156,7 +155,7 @@ func (r *Runtime) directoryListsSchedulableRelay(identity string) bool {
 	return false
 }
 
-func attemptFields(url string, attempt senderrelay.Attempt, now time.Time) diagnostics.Fields {
+func attemptFields(url string, attempt relayset.Attempt, now time.Time) diagnostics.Fields {
 	fields := diagnostics.Fields{"endpoint": diagnostics.Text(url), "attempt": diagnostics.Uint(uint64(attempt.Number)), "state": diagnostics.Text(attempt.State.DiagnosticName()),
 		"registration_generation": diagnostics.Uint(attempt.Generation), "timeout": diagnostics.Bool(errors.Is(attempt.Failure, context.DeadlineExceeded)),
 		"stage": diagnostics.Text(attempt.Stage), "duration_ms": diagnostics.Millis(attempt.Duration), "resume": diagnostics.Bool(attempt.Resume),
@@ -170,7 +169,7 @@ func attemptFields(url string, attempt senderrelay.Attempt, now time.Time) diagn
 	if attempt.ServerRetryAt.After(now) {
 		deadlineField(fields, "server_retry_at", attempt.ServerRetryAt)
 	}
-	if attempt.State == senderrelay.AttemptSucceeded || attempt.State == senderrelay.AttemptParked {
+	if attempt.State == relayset.AttemptSucceeded || attempt.State == relayset.AttemptParked {
 		fields["handshake_ms"] = diagnostics.Millis(attempt.HandshakeDuration)
 	}
 	return fields

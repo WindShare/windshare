@@ -13,11 +13,7 @@ import (
 
 func newTestCapacity(t *testing.T) *Capacity {
 	t.Helper()
-	capacity, err := NewCapacity(nativepeer.AdmissionClock{}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return capacity
+	return NewCapacity(nativepeer.AdmissionClock{}, nil)
 }
 
 type stubMonitor struct{}
@@ -29,10 +25,7 @@ func (stubMonitor) Poll(context.Context, time.Time) (networkstate.Snapshot, bool
 func TestCapacitySharesDefaultNetworkMonitorAcrossNativeOwners(t *testing.T) {
 	shared := networkstate.NewWatcher(networkstate.WatcherConfig{Interval: time.Hour})
 	defer shared.Close()
-	capacity, err := NewCapacity(nativepeer.AdmissionClock{}, shared)
-	if err != nil {
-		t.Fatal(err)
-	}
+	capacity := NewCapacity(nativepeer.AdmissionClock{}, shared)
 	a, err := capacity.NewNative(nativepeer.Config{Side: nativepeer.SideSender})
 	if err != nil {
 		t.Fatal(err)

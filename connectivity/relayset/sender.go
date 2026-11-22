@@ -5,10 +5,11 @@ package relayset
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
+	"strings"
 	"sync"
 
-	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/transport/relayv2"
 )
 
@@ -16,9 +17,23 @@ const MaximumEndpoints = 8
 
 var ErrConfig = errors.New("invalid sender relay set configuration")
 
+// RegistrationFailure retains endpoint identity across the aggregate readiness
+// result, so applications can recover the rejected authority without parsing text.
+type RegistrationFailure struct {
+	URL   string
+	Cause error
+}
+
+func (failure *RegistrationFailure) Error() string {
+	address, _, _ := strings.Cut(failure.URL, "?")
+	return fmt.Sprintf("register %s: %v", address, failure.Cause)
+}
+
+func (failure *RegistrationFailure) Unwrap() error { return failure.Cause }
+
 type SenderEndpoint interface {
 	WaitReady(context.Context) error
-	ObserveRegistration(func(senderrelay.RegistrationState))
+	ObserveRegistration(func(RegistrationState))
 	Wake()
 	Accept(context.Context) (*relayv2.Channel, error)
 	StopRecovery()
@@ -83,7 +98,7 @@ func (s *Sender) run(url string, dial SenderFactory) {
 		err = ErrConfig
 	}
 	if err == nil {
-		endpoint.ObserveRegistration(func(state senderrelay.RegistrationState) {
+		endpoint.ObserveRegistration(func(state RegistrationState) {
 			s.setRegistration(url, routeRegistration{state: state})
 		})
 		err = endpoint.WaitReady(s.ctx)
@@ -151,7 +166,7 @@ func (s *Sender) Registrations() SenderRegistrations {
 	defer s.mu.Unlock()
 	var snapshot SenderRegistrations
 	for url, registration := range s.routes {
-		if registration.state == senderrelay.RegistrationAvailable {
+		if registration.state == RegistrationAvailable {
 			snapshot.Admitted = append(snapshot.Admitted, url)
 		}
 	}

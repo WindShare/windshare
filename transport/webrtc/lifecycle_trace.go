@@ -3,6 +3,7 @@ package webrtc
 import (
 	"context"
 	"errors"
+	"math"
 	"sync"
 	"sync/atomic"
 
@@ -343,4 +344,28 @@ func (value LifecycleTerminalState) DiagnosticName() string {
 // DiagnosticName belongs to the source vocabulary; recorders accept new values.
 func (value LifecycleCause) DiagnosticName() string {
 	return string(value)
+}
+
+// LifecycleObservationLoss describes only observations the bounded stream
+// could not retain before the producer admission cut.
+type LifecycleObservationLoss struct {
+	CapacityDropped uint64
+}
+
+func (loss LifecycleObservationLoss) Total() uint64 {
+	return loss.CapacityDropped
+}
+
+// LifecycleObservationCompletion proves stream admission has closed. Enqueued
+// does not imply that a consumer received or projected an observation.
+type LifecycleObservationCompletion struct {
+	Enqueued uint64
+	Loss     LifecycleObservationLoss
+}
+
+func saturatingLifecycleCount(current, increment uint64) uint64 {
+	if math.MaxUint64-current < increment {
+		return math.MaxUint64
+	}
+	return current + increment
 }

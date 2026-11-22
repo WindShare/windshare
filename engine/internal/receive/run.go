@@ -54,7 +54,7 @@ func runAttempt(ctx context.Context, input preparedRequest, deps Dependencies, r
 		step = observation.fail(stepLocalFailure, err)
 		return
 	}
-	active.options = receiverPeerOptions{budget: peerset.NewBudget(startedAt), capacity: deps.Connectivity.Attempts(), native: native}
+	active.options = receiverPeerOptions{budget: peerset.NewBudget(startedAt), native: native}
 	observation.registerNative(active.options.native)
 	active.session.runtime.BindDownloadMetrics(metrics)
 	active.execution, step = a.prepareGetConnectivity(ctx, input, active.output, active.session.runtime, observation, active.options)

@@ -4,7 +4,6 @@ import (
 	"errors"
 
 	"github.com/windshare/windshare/connectivity/relayset"
-	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/engine/internal/networkruntime"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
@@ -62,7 +61,7 @@ func registrationDenied(cause error) bool {
 	if rejection, ok := errors.AsType[*relayv2.RelayError](cause); ok && rejection.Code == v2.ErrorAccessDenied {
 		return true
 	}
-	if auth, ok := errors.AsType[*senderrelay.AuthorizationError](cause); ok && auth.State == senderrelay.AuthorizationDenied {
+	if auth, ok := errors.AsType[*relayset.AuthorizationError](cause); ok && auth.State == relayset.AuthorizationDenied {
 		return true
 	}
 	return false

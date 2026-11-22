@@ -5,7 +5,7 @@ import (
 	"errors"
 	"reflect"
 
-	"github.com/windshare/windshare/connectivity/senderrelay"
+	"github.com/windshare/windshare/connectivity/relayset"
 )
 
 type shareShutdownTrigger string
@@ -73,7 +73,7 @@ func settleShareServe(
 			return true
 		}
 		return interruption != nil && exactShareInterruption(leaf, context.Canceled) ||
-			exactShareInterruption(leaf, senderrelay.ErrStopped)
+			exactShareInterruption(leaf, relayset.ErrStopped)
 	}):
 		return shareComponentSettlement{outcome: shareComponentInterrupted}
 	default:

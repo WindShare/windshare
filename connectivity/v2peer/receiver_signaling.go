@@ -105,7 +105,6 @@ func NewReceiverSignalingLocalTermination(
 	if !binding.valid() {
 		return ReceiverSignalingTermination{}
 	}
-	diagnostics, truncated := snapshotReceiverCauseWithStatus(cause)
 	return ReceiverSignalingTermination{
 		operationToken: binding.token,
 		valid:          true,
@@ -113,7 +112,7 @@ func NewReceiverSignalingLocalTermination(
 			ReceiverTerminalLocal,
 			ReceiverProvenanceLocalExplicitStop,
 		),
-		diagnostics: diagnostics, diagnosticsTruncated: truncated,
+		diagnostics: cause,
 	}
 }
 
@@ -127,7 +126,6 @@ func NewReceiverSignalingRemoteTermination(
 	if !binding.valid() {
 		return ReceiverSignalingTermination{}
 	}
-	diagnostics, truncated := snapshotReceiverCauseWithStatus(cause)
 	return ReceiverSignalingTermination{
 		operationToken: binding.token,
 		valid:          true,
@@ -135,7 +133,7 @@ func NewReceiverSignalingRemoteTermination(
 			ReceiverTerminalRemote,
 			ReceiverProvenanceRemoteOperationRejected,
 		),
-		diagnostics: diagnostics, diagnosticsTruncated: truncated,
+		diagnostics: cause,
 	}
 }
 
@@ -148,10 +146,9 @@ type ReceiverSignaling interface {
 }
 
 type receiverSignalingOpenFailure struct {
-	operationToken       *receiverSignalingOperationToken
-	decision             receiverAttemptDecision
-	diagnostics          error
-	diagnosticsTruncated bool
+	operationToken *receiverSignalingOperationToken
+	decision       receiverAttemptDecision
+	diagnostics    error
 }
 
 func (failure *receiverSignalingOpenFailure) Error() string {
@@ -180,11 +177,10 @@ func newReceiverSignalingOpenFailure(
 	decision receiverAttemptDecision,
 	cause error,
 ) error {
-	diagnostics, truncated := snapshotReceiverCauseWithStatus(cause)
 	return &receiverSignalingOpenFailure{
 		operationToken: binding.token,
 		decision:       decision,
-		diagnostics:    diagnostics, diagnosticsTruncated: truncated,
+		diagnostics:    cause,
 	}
 }
 
@@ -308,7 +304,6 @@ func receiverSignalingAdapterFailure(
 	if !binding.valid() {
 		return ReceiverSignalingTermination{}
 	}
-	diagnostics, truncated := snapshotReceiverCauseWithStatus(errors.Join(ErrProtocol, cause))
 	return ReceiverSignalingTermination{
 		operationToken: binding.token,
 		valid:          true,
@@ -316,7 +311,7 @@ func receiverSignalingAdapterFailure(
 			ReceiverTerminalLocal,
 			ReceiverProvenanceSignalingAdapterContract,
 		),
-		diagnostics: diagnostics, diagnosticsTruncated: truncated,
+		diagnostics: errors.Join(ErrProtocol, cause),
 	}
 }
 

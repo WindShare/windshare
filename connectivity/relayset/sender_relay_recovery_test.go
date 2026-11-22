@@ -1,4 +1,4 @@
-package senderrelay
+package relayset
 
 import (
 	"context"
@@ -31,11 +31,11 @@ func TestSenderRelayRecoveryRetriesUnexpectedDisconnectWithBackoff(t *testing.T)
 	clock := newSenderRelayTestClock()
 	var attempts atomic.Int32
 	dialer := &senderRelayTestDialer{
-		dial: func(context.Context, relayv2.SenderConfig) (Connection, error) {
+		dial: func(context.Context, relayv2.SenderConfig) (SenderConnection, error) {
 			if attempts.Add(1) == 1 {
-				return Connection{}, transient
+				return SenderConnection{}, transient
 			}
-			return NewConnection(recovered), nil
+			return NewSenderConnection(recovered), nil
 		},
 	}
 	lifecycle := newSenderRelayTestLifecycle(t, initial, dialer, clock)
@@ -95,12 +95,12 @@ func TestSenderRelayRecoveryReusesLifecycleStreamPolicyAndPublishesTypedAttempts
 	}
 	var dialCount int
 	dialer := &senderRelayTestDialer{
-		dial: func(context.Context, relayv2.SenderConfig) (Connection, error) {
+		dial: func(context.Context, relayv2.SenderConfig) (SenderConnection, error) {
 			dialCount++
 			if dialCount == 1 {
-				return Connection{}, errors.New("transient provider canary")
+				return SenderConnection{}, errors.New("transient provider canary")
 			}
-			return NewConnection(recovered), nil
+			return NewSenderConnection(recovered), nil
 		},
 	}
 	lifecycle := newSenderRelayTestLifecycle(t, initial, dialer, newSenderRelayTestClock())
@@ -138,11 +138,11 @@ func TestSenderRelayRecoveryContinuesAfterFastBudget(t *testing.T) {
 	accepted := new(relayv2.Channel)
 	recovered := &senderRelayTestEndpoint{accept: func(context.Context) (*relayv2.Channel, error) { return accepted, nil }}
 	start := clock.Now()
-	dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (Connection, error) {
+	dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (SenderConnection, error) {
 		if clock.Now().Sub(start) > 2*time.Minute {
-			return NewConnection(recovered), nil
+			return NewSenderConnection(recovered), nil
 		}
-		return Connection{}, errors.New("temporary outage")
+		return SenderConnection{}, errors.New("temporary outage")
 	}}
 	lifecycle := newSenderRelayTestLifecycle(t, initial, dialer, clock)
 	lifecycle.config.Jitter = func(delay time.Duration) time.Duration { return delay }
@@ -179,12 +179,12 @@ func TestSenderRelayAcceptCancellationClosesLateDialSuccess(t *testing.T) {
 	}
 	dialStarted := make(chan struct{})
 	dialer := &senderRelayTestDialer{
-		dial: func(ctx context.Context, _ relayv2.SenderConfig) (Connection, error) {
+		dial: func(ctx context.Context, _ relayv2.SenderConfig) (SenderConnection, error) {
 			close(dialStarted)
 			// A completed handshake may surface at the same instant its context
 			// is canceled, so recovery must close the result before installation.
 			<-ctx.Done()
-			return NewConnection(late), nil
+			return NewSenderConnection(late), nil
 		},
 	}
 	lifecycle := newSenderRelayTestLifecycle(t, initial, dialer, newSenderRelayTestClock())
@@ -235,8 +235,8 @@ func TestSenderRelayStopRecoveryInterruptsBackoffWithoutResume(t *testing.T) {
 		return ctx.Err()
 	}
 	dialer := &senderRelayTestDialer{
-		dial: func(context.Context, relayv2.SenderConfig) (Connection, error) {
-			return Connection{}, transient
+		dial: func(context.Context, relayv2.SenderConfig) (SenderConnection, error) {
+			return SenderConnection{}, transient
 		},
 	}
 	lifecycle := newSenderRelayTestLifecycle(t, initial, dialer, clock)
@@ -276,12 +276,12 @@ func TestSenderRelayStopWinsDialSuccessAndClosesLateConnection(t *testing.T) {
 	dialStarted := make(chan struct{})
 	releaseDial := make(chan struct{})
 	dialer := &senderRelayTestDialer{
-		dial: func(context.Context, relayv2.SenderConfig) (Connection, error) {
+		dial: func(context.Context, relayv2.SenderConfig) (SenderConnection, error) {
 			close(dialStarted)
 			// A transport can finish its handshake just after cancellation; the
 			// lifecycle must arbitrate installation rather than trust the dial.
 			<-releaseDial
-			return NewConnection(late), nil
+			return NewSenderConnection(late), nil
 		},
 	}
 	lifecycle := newSenderRelayTestLifecycle(t, initial, dialer, newSenderRelayTestClock())
@@ -391,7 +391,7 @@ func (endpoint *senderRelayTestEndpoint) Close() error {
 
 type senderRelayTestDialer struct {
 	mu        sync.Mutex
-	dial      func(context.Context, relayv2.SenderConfig) (Connection, error)
+	dial      func(context.Context, relayv2.SenderConfig) (SenderConnection, error)
 	configs   []relayv2.SenderConfig
 	deadlines []time.Time
 }
@@ -399,7 +399,7 @@ type senderRelayTestDialer struct {
 func (dialer *senderRelayTestDialer) Dial(
 	ctx context.Context,
 	config relayv2.SenderConfig,
-) (Connection, error) {
+) (SenderConnection, error) {
 	deadline, _ := ctx.Deadline()
 	dialer.mu.Lock()
 	dialer.configs = append(dialer.configs, config)
@@ -454,12 +454,12 @@ func (clock *senderRelayTestClock) Waits() []time.Duration {
 
 func newSenderRelayTestLifecycle(
 	t *testing.T,
-	initial Endpoint,
-	dialer Dialer,
+	initial SenderTransport,
+	dialer SenderDialer,
 	clock Clock,
-) *Lifecycle {
+) *SenderLifecycle {
 	t.Helper()
-	lifecycle, err := New(newSenderRelayTestConfig(t, initial, dialer, clock))
+	lifecycle, err := NewSenderLifecycle(newSenderRelayTestConfig(t, initial, dialer, clock))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -471,10 +471,10 @@ func newSenderRelayTestLifecycle(
 
 func newSenderRelayTestConfig(
 	t *testing.T,
-	initial Endpoint,
-	dialer Dialer,
+	initial SenderTransport,
+	dialer SenderDialer,
 	clock Clock,
-) Config {
+) SenderLifecycleConfig {
 	t.Helper()
 	privateKey := ed25519.NewKeyFromSeed(senderRelayBytesFrom(0x20, ed25519.SeedSize))
 	publicKey := privateKey.Public().(ed25519.PublicKey)
@@ -499,7 +499,7 @@ func newSenderRelayTestConfig(
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Config{
+	return SenderLifecycleConfig{
 		Candidate:   Candidate{PublicURL: "https://relay.example"},
 		Fresh:       fresh,
 		ResumeToken: resumeToken,

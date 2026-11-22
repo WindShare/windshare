@@ -1,4 +1,4 @@
-package senderrelay
+package relayset
 
 import (
 	"context"
@@ -78,7 +78,7 @@ func TestStopDoesNotUseDeploymentRegistrationAuthority(t *testing.T) {
 	endpoint := &senderRelayTestEndpoint{accept: func(context.Context) (*relayv2.Channel, error) { return nil, nil }}
 	config := newSenderRelayTestConfig(t, endpoint, nil, nil)
 	config.Candidate = Candidate{PublicURL: server.URL, Authorization: StaticKey("register-only")}
-	lifecycle, err := New(config)
+	lifecycle, err := NewSenderLifecycle(config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestCleanupSkipsStopWhenNoUpgradeReachedRelay(t *testing.T) {
 	clock.wait = func(context.Context, time.Duration, <-chan struct{}) error { stop(); return context.Canceled }
 	config := newSenderRelayTestConfig(t, nil, nil, clock)
 	config.Candidate = Candidate{PublicURL: server.URL}
-	lifecycle, err := New(config)
+	lifecycle, err := NewSenderLifecycle(config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,10 +121,10 @@ func TestCleanupStopsAfterUpgradeEvenWhenRegistrationFails(t *testing.T) {
 	clock := newSenderRelayTestClock()
 	ctx, stop := context.WithCancel(t.Context())
 	clock.wait = func(context.Context, time.Duration, <-chan struct{}) error { stop(); return context.Canceled }
-	dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (Connection, error) {
-		return Connection{}, errors.New("register acknowledgement lost")
+	dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (SenderConnection, error) {
+		return SenderConnection{}, errors.New("register acknowledgement lost")
 	}}
-	lifecycle, err := New(newSenderRelayTestConfig(t, nil, dialer, clock))
+	lifecycle, err := NewSenderLifecycle(newSenderRelayTestConfig(t, nil, dialer, clock))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,15 +141,15 @@ func TestCleanupStopsAfterUpgradeEvenWhenRegistrationFails(t *testing.T) {
 func TestCleanupKeepsStopAfterLaterUpgradeFailure(t *testing.T) {
 	ctx, stop := context.WithCancel(t.Context())
 	var attempts atomic.Int32
-	dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (Connection, error) {
+	dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (SenderConnection, error) {
 		if attempts.Add(1) == 1 {
-			return Connection{}, errors.New("register acknowledgement lost")
+			return SenderConnection{}, errors.New("register acknowledgement lost")
 		}
 		failure := &relayv2.RegistrationNotSentError{Cause: errors.New("websocket upgrade refused")}
 		stop()
-		return Connection{}, failure
+		return SenderConnection{}, failure
 	}}
-	lifecycle, err := New(newSenderRelayTestConfig(t, nil, dialer, newSenderRelayTestClock()))
+	lifecycle, err := NewSenderLifecycle(newSenderRelayTestConfig(t, nil, dialer, newSenderRelayTestClock()))
 	if err != nil {
 		t.Fatal(err)
 	}

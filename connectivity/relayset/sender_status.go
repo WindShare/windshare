@@ -1,9 +1,7 @@
 package relayset
 
-import "github.com/windshare/windshare/connectivity/senderrelay"
-
 type routeRegistration struct {
-	state    senderrelay.RegistrationState
+	state    RegistrationState
 	terminal bool
 }
 
@@ -35,9 +33,9 @@ func (s *Sender) statusLocked() SenderStatus {
 		switch {
 		case route.terminal:
 			availability.Terminal++
-		case route.state == senderrelay.RegistrationAvailable:
+		case route.state == RegistrationAvailable:
 			availability.Available++
-		case route.state == senderrelay.RegistrationNeedsUserAuthorization:
+		case route.state == RegistrationNeedsUserAuthorization:
 			blocked++
 		}
 	}
@@ -54,7 +52,7 @@ func (s *Sender) setRegistration(url string, registration routeRegistration) {
 		return
 	}
 	s.routes[url] = registration
-	s.everReady = s.everReady || registration.state == senderrelay.RegistrationAvailable
+	s.everReady = s.everReady || registration.state == RegistrationAvailable
 	if !s.stopping && s.ctx.Err() == nil && s.observer != nil {
 		s.observer(s.statusLocked())
 	}

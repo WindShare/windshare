@@ -3,6 +3,7 @@ package relayv2
 import (
 	"context"
 	"errors"
+	"math"
 	"time"
 
 	"github.com/windshare/windshare/core/framechannel"
@@ -263,4 +264,28 @@ func (value LifecycleRetirementSource) DiagnosticName() string {
 // DiagnosticName belongs to the source vocabulary; recorders accept new values.
 func (value LifecycleCause) DiagnosticName() string {
 	return string(value)
+}
+
+// LifecycleObservationLoss is cumulative through the producer admission cut.
+// It describes only observations the bounded stream could not retain.
+type LifecycleObservationLoss struct {
+	CapacityDropped uint64
+}
+
+func (loss LifecycleObservationLoss) Total() uint64 {
+	return loss.CapacityDropped
+}
+
+// LifecycleObservationCompletion proves that stream admission has closed.
+// Enqueued does not imply that a consumer received or projected an observation.
+type LifecycleObservationCompletion struct {
+	Enqueued uint64
+	Loss     LifecycleObservationLoss
+}
+
+func saturatingLifecycleCount(current, increment uint64) uint64 {
+	if math.MaxUint64-current < increment {
+		return math.MaxUint64
+	}
+	return current + increment
 }

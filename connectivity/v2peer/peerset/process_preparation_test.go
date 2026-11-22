@@ -62,7 +62,7 @@ func TestProcessQueueUsesWaveTimeAndPreservesCompleteNativeCheckingOpportunity(t
 	wave := &recoveryWave{started: clock.Now()}
 	opportunities := make(chan *attemptOpportunity, 1)
 	go func() {
-		opportunities <- path.prepareProvider(wave, binding, func(used time.Duration) { activeUsed = used }, func() {})
+		opportunities <- path.prepareProvider(wave, binding, func(used time.Duration) { activeUsed = used })
 	}()
 	nextTimer(t, clock, nativepeer.QueueBudget)
 	for {

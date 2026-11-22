@@ -1,7 +1,7 @@
 package relayprofile
 
 import (
-	"github.com/windshare/windshare/connectivity/senderrelay"
+	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/serviceauthority"
 )
 
@@ -15,7 +15,7 @@ type Registration struct {
 }
 
 func (candidate Candidate) Registration() Registration {
-	return Registration{PublicURL: candidate.PublicURL, Authorization: senderrelay.StaticKey(candidate.AccessKey)}
+	return Registration{PublicURL: candidate.PublicURL, Authorization: relayset.StaticKey(candidate.AccessKey)}
 }
 
 func Registrations(profiles []Candidate) []Registration {
@@ -27,9 +27,9 @@ func Registrations(profiles []Candidate) []Registration {
 }
 
 func RegistrationURLs(candidates []Registration) ([]string, error) {
-	native := make([]senderrelay.Candidate, len(candidates))
+	native := make([]relayset.Candidate, len(candidates))
 	for i, candidate := range candidates {
-		native[i] = senderrelay.Candidate{PublicURL: candidate.PublicURL, Authorization: candidate.Authorization}
+		native[i] = relayset.Candidate{PublicURL: candidate.PublicURL, Authorization: candidate.Authorization}
 	}
-	return senderrelay.PublicURLs(native)
+	return relayset.PublicURLs(native)
 }

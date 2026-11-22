@@ -1,4 +1,4 @@
-package senderrelay
+package relayset
 
 import (
 	"errors"

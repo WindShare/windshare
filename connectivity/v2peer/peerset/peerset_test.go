@@ -5,7 +5,6 @@ import (
 	"errors"
 	"sync"
 	"testing"
-	"testing/synctest"
 	"time"
 
 	"github.com/windshare/windshare/connectivity/v2peer"
@@ -136,52 +135,9 @@ func TestAttemptCountRemainsBoundedWhenSetupFailsImmediately(t *testing.T) {
 	}
 }
 
-func TestCapacityFIFOAndCanceledWaitersReleaseOnlyOwnSlot(t *testing.T) {
-	synctest.Test(t, testCapacityFIFOAndCanceledWaitersReleaseOnlyOwnSlot)
-}
-
-func testCapacityFIFOAndCanceledWaitersReleaseOnlyOwnSlot(t *testing.T) {
-	capacity, _ := NewCapacity(1)
-	first, err := capacity.acquire(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	secondCtx, cancel := context.WithCancel(context.Background())
-	second := make(chan error, 1)
-	go func() { _, err := capacity.acquire(secondCtx); second <- err }()
-	assertCapacityQueueLength(t, capacity, 1)
-	third := make(chan func(), 1)
-	go func() { release, _ := capacity.acquire(context.Background()); third <- release }()
-	assertCapacityQueueLength(t, capacity, 2)
-	cancel()
-	if !errors.Is(receive(t, second), context.Canceled) {
-		t.Fatal("cancel not propagated")
-	}
-	first()
-	release := receive(t, third)
-	release()
-	release()
-	capacity.mu.Lock()
-	defer capacity.mu.Unlock()
-	if capacity.ledger.Snapshot().Used != 0 || len(capacity.queue) != 0 {
-		t.Fatal("slot leaked")
-	}
-}
-func assertCapacityQueueLength(t *testing.T, c *Capacity, n int) {
-	t.Helper()
-	synctest.Wait()
-	c.mu.Lock()
-	length := len(c.queue)
-	c.mu.Unlock()
-	if length != n {
-		t.Fatalf("capacity queue length=%d, want %d", length, n)
-	}
-}
-
 func TestPrewarmContentTakeoverRetainsSameAttemptAndReleasesOnDemandEnd(t *testing.T) {
 	clock := newClock()
-	capacity, _ := NewCapacity(1)
-	owner, _ := newTestPeerSet(t, Config{Clock: clock, Capacity: capacity})
+	owner, _ := newTestPeerSet(t, Config{Clock: clock})
 	attempts := make(chan *fakeAttempt, 2)
 	path, err := owner.Open(context.Background(), PathConfig{Demand: BrowseDemand, Start: func(context.Context, v2signal.Binding) (Attempt, error) {
 		attempt := newAttempt()
@@ -196,12 +152,6 @@ func TestPrewarmContentTakeoverRetainsSameAttemptAndReleasesOnDemandEnd(t *testi
 	close(attempt.ready)
 	receive(t, path.Ready())
 	hold := nextTimer(t, clock, PrewarmRetention)
-	capacity.mu.Lock()
-	active := capacity.ledger.Snapshot().Used
-	capacity.mu.Unlock()
-	if active != 0 {
-		t.Fatal("admitted lane retained attempt slot")
-	}
 	if err := path.SetDemand(ContentDemand); err != nil {
 		t.Fatal(err)
 	}

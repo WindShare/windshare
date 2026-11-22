@@ -114,26 +114,6 @@ func (p *probeLedger) acknowledge(nonce uint64) (probeRecord, bool, error) {
 	return record, correlated, nil
 }
 
-func isHeartbeatLifecycleStage(stage LifecycleStage) bool {
-	return stage == LifecycleHeartbeatProbe || stage == LifecycleHeartbeatAcknowledged || stage == LifecycleHeartbeatFailed
-}
-
-func validateHeartbeatLifecycleTrace(event LifecycleTrace) LifecycleContractViolation {
-	if hasLifecycleSession(event) || event.OperationID == 0 || event.HeartbeatRound == 0 {
-		return LifecycleContractInvalidIdentity
-	}
-	if event.Terminal || event.Disposition != 0 || event.Dropped != 0 ||
-		event.RetirementSource != LifecycleRetirementNone || event.DrainCause != LifecycleCauseNone ||
-		event.Timeout <= 0 || event.Wait < 0 {
-		return LifecycleContractInvalidStageFields
-	}
-	if (event.Stage == LifecycleHeartbeatFailed) != (event.Cause != LifecycleCauseNone) ||
-		(event.Stage == LifecycleHeartbeatProbe && event.Wait != 0) {
-		return LifecycleContractInvalidStageFields
-	}
-	return LifecycleContractValid
-}
-
 // heartbeatLoop probes on a fixed cadence and fails the link only after a full
 // timeout without accepted inbound frames. Probe and silence decisions share
 // one loop so a failure always follows at least one probe.

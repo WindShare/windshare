@@ -1,4 +1,4 @@
-package senderrelay
+package relayset
 
 import (
 	"context"
@@ -48,6 +48,7 @@ func (err *AuthorizationError) Error() string {
 	}
 	return fmt.Sprintf("registration authorization %s: %v", state, err.Cause)
 }
+
 func (err *AuthorizationError) Unwrap() error { return err.Cause }
 
 func validBearer(token string) bool {
@@ -69,7 +70,7 @@ func (candidate Candidate) reserveAuthorization() Authorization {
 	return candidate.Authorization.ReserveRegistrationAuthorization()
 }
 
-func (lifecycle *Lifecycle) acquireRegistrationAttempt(ctx context.Context, resume bool, attempt uint32) (AttemptPermit, Authorization, error) {
+func (lifecycle *SenderLifecycle) acquireRegistrationAttempt(ctx context.Context, resume bool, attempt uint32) (AttemptPermit, Authorization, error) {
 	var announced AuthorizationState
 	for {
 		permit, err := lifecycle.beginAttempt(ctx)
@@ -102,7 +103,7 @@ func (lifecycle *Lifecycle) acquireRegistrationAttempt(ctx context.Context, resu
 	}
 }
 
-func (lifecycle *Lifecycle) observeAuthorizationWait(attempt uint32, authorization Authorization) {
+func (lifecycle *SenderLifecycle) observeAuthorizationWait(attempt uint32, authorization Authorization) {
 	lifecycle.showAuthorizationWait(authorization.State == AuthorizationUserActionRequired)
 	lifecycle.observeRecoveryAttempt(Attempt{ShareInstance: lifecycle.config.Fresh.ShareInstance,
 		Number: attempt, State: AttemptAuthorization, Authorization: authorization.State,
@@ -110,7 +111,7 @@ func (lifecycle *Lifecycle) observeAuthorizationWait(attempt uint32, authorizati
 		Terminal: authorization.State == AuthorizationDenied})
 }
 
-func (lifecycle *Lifecycle) waitAuthorization(ctx context.Context, authorization Authorization) error {
+func (lifecycle *SenderLifecycle) waitAuthorization(ctx context.Context, authorization Authorization) error {
 	switch authorization.State {
 	case AuthorizationDenied:
 		return &AuthorizationError{State: authorization.State, Cause: authorization.Cause}

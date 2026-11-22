@@ -14,7 +14,7 @@ import (
 
 	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/networkstate"
-	"github.com/windshare/windshare/connectivity/senderrelay"
+	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/liveshare"
@@ -79,7 +79,7 @@ type Engine struct {
 
 func New(config Config) (*Engine, error) {
 	if config.Clock == nil {
-		config.Clock = senderrelay.SystemClock{}
+		config.Clock = relayset.SystemClock{}
 	}
 	if config.Random == nil {
 		config.Random = rand.Reader
@@ -106,11 +106,7 @@ func New(config Config) (*Engine, error) {
 		config.CacheBytes = contentflow.DefaultProcessBlockCacheBytes
 	}
 	networkState := networkstate.NewWatcher(networkstate.WatcherConfig{Now: config.Clock.Now})
-	connectivity, err := nativeconnectivity.NewCapacity(nativepeer.AdmissionClock{Now: config.Clock.Now}, networkState)
-	if err != nil {
-		networkState.Close()
-		return nil, err
-	}
+	connectivity := nativeconnectivity.NewCapacity(nativepeer.AdmissionClock{Now: config.Clock.Now}, networkState)
 	catalogBudget, err := catalog.NewBudgetAccount("engine-process", config.CatalogLimits)
 	if err != nil {
 		return nil, err

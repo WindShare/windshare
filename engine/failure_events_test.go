@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/connectivity/relayset"
-	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/diagnostics"
@@ -74,8 +73,8 @@ func TestDescribeFailureCoversDomainCategoriesAndContext(t *testing.T) {
 		{"relay retryable", &relayv2.RelayError{Code: v2.ErrorAdmission, RetryAfter: 2 * time.Second}, FailureRelayUnavailable},
 		{"relay stopped", &relayv2.RelayError{Code: v2.ErrorStopped}, FailureRelayStopped},
 		{"relay denied", &relayv2.RelayError{Code: v2.ErrorAccessDenied}, FailureRelayAccessDenied},
-		{"auth denied", &senderrelay.AuthorizationError{State: senderrelay.AuthorizationDenied}, FailureRelayAccessDenied},
-		{"auth pending", &senderrelay.AuthorizationError{State: senderrelay.AuthorizationPendingSetup}, FailureRelayUnavailable},
+		{"auth denied", &relayset.AuthorizationError{State: relayset.AuthorizationDenied}, FailureRelayAccessDenied},
+		{"auth pending", &relayset.AuthorizationError{State: relayset.AuthorizationPendingSetup}, FailureRelayUnavailable},
 		{"boundary fault busy", transferfault.Wrap(faultBusy, errors.New("busy")), FailureOutputBusy},
 		{"boundary catalog", transferfault.Wrap(faultCat, errors.New("cat")), FailureCatalogUnavailable},
 		{"boundary session", transferfault.Wrap(faultSess, errors.New("sess")), FailureSessionFailed},
@@ -133,7 +132,7 @@ func TestWorkflowEventTranslationAndDiagnosticRecords(t *testing.T) {
 	run("share", share.Observation{RelayAvailability: &relayset.SenderAvailability{Available: 1, Total: 2, EverReady: true}})
 	run("share", share.Observation{RelayRecovery: &share.RelayRecovery{
 		Endpoint: endpoint,
-		Attempt:  senderrelay.Attempt{Number: 1, State: senderrelay.AttemptFailed, Failure: &relayv2.WebSocketRouteError{}, Authorization: serviceauthority.AdmissionTemporaryFailure, ShareInstance: [16]byte{1}},
+		Attempt:  relayset.Attempt{Number: 1, State: relayset.AttemptFailed, Failure: &relayv2.WebSocketRouteError{}, Authorization: serviceauthority.AdmissionTemporaryFailure, ShareInstance: [16]byte{1}},
 	}})
 	run("share", share.SourceOmissionsObserved{Summary: catalog.SourceOmissions{Count: 1, Samples: []catalog.SourceOmission{{Reason: catalog.SourceOmissionSymbolicLink}}}})
 	run("receive", receive.RelayConnected{Endpoint: endpoint})

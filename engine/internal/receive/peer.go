@@ -270,10 +270,9 @@ type receiverPeerStarter interface {
 }
 
 type receiverPeerOptions struct {
-	capacity *peerset.Capacity
-	budget   *peerset.Budget
-	native   *nativepeer.NativePeerConnectivity
-	demand   peerset.Demand
+	budget *peerset.Budget
+	native *nativepeer.NativePeerConnectivity
+	demand peerset.Demand
 }
 
 type receiverPeerFactoryAdapter struct {
@@ -503,7 +502,7 @@ func (adapter receiverPeerFactoryAdapter) startPeerSet(ctx context.Context, sign
 	if demand == peerset.NoDemand {
 		demand = peerset.ContentDemand
 	}
-	path, err := peerset.OpenReceiverSession(ctx, peerset.Config{Budget: adapter.options.budget, Capacity: adapter.options.capacity}, peerset.ReceiverConfig{Factory: adapter.factory, Signaling: signaling, Lanes: lanes, Demand: demand, StopAfterWave: adapter.stopAfterWave})
+	path, err := peerset.OpenReceiverSession(ctx, peerset.Config{Budget: adapter.options.budget}, peerset.ReceiverConfig{Factory: adapter.factory, Signaling: signaling, Lanes: lanes, Demand: demand, StopAfterWave: adapter.stopAfterWave})
 	if err != nil {
 		return nil, err
 	}

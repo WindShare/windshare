@@ -12,7 +12,6 @@ import (
 
 	"github.com/windshare/windshare/connectivity/icepolicy"
 	"github.com/windshare/windshare/connectivity/relayset"
-	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
@@ -92,7 +91,7 @@ type Relay interface {
 }
 
 type Dependencies struct {
-	Clock            senderrelay.Clock
+	Clock            relayset.Clock
 	Control          task.Control
 	Controller       *Controller
 	RevisionCapacity *content.HandlePool
@@ -102,11 +101,11 @@ type Dependencies struct {
 	ICEPool          func() icepolicy.ICEEndpointPool
 	Prepare          func(context.Context, liveshare.SenderConfig) (Prepared, error)
 	Relays           func(context.Context, []string, relayset.SenderFactory) (Relays, error)
-	Relay            func(senderrelay.Config) (Relay, error)
+	Relay            func(relayset.SenderLifecycleConfig) (Relay, error)
 	Peers            func(nativeconnectivity.SenderConfig) (Peers, error)
 	PollNetwork      func(context.Context, func())
-	Attempts         func(string) senderrelay.AttemptControl
-	ObserveAttempt   func(string, senderrelay.Attempt)
+	Attempts         func(string) relayset.AttemptControl
+	ObserveAttempt   func(string, relayset.Attempt)
 }
 
 type nativePrepared struct{ *liveshare.PreparedSender }
@@ -135,7 +134,7 @@ func (d Dependencies) normalized() Dependencies {
 		}
 	}
 	if d.Relay == nil {
-		d.Relay = func(config senderrelay.Config) (Relay, error) { return senderrelay.New(config) }
+		d.Relay = func(config relayset.SenderLifecycleConfig) (Relay, error) { return relayset.NewSenderLifecycle(config) }
 	}
 	if d.Peers == nil {
 		d.Peers = func(config nativeconnectivity.SenderConfig) (Peers, error) {

@@ -13,7 +13,6 @@ import (
 	"github.com/coder/websocket"
 	"github.com/windshare/windshare/connectivity/relayplan"
 	"github.com/windshare/windshare/connectivity/relayset"
-	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/serviceauthority"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
@@ -112,18 +111,18 @@ func TestFirstShareUsesNewTicketAfterAnonymousUpgradeFailure(t *testing.T) {
 	waiting := make(chan struct{}, 1)
 	set, err := relayset.NewSender(ctx, []string{anonymous.URL, backup.URL}, func(_ context.Context, address string) (relayset.SenderEndpoint, error) {
 		candidate := registration
-		candidate.Candidate = senderrelay.Candidate{PublicURL: address, Authorization: &Source{share: share, address: address}}
+		candidate.Candidate = relayset.Candidate{PublicURL: address, Authorization: &Source{share: share, address: address}}
 		candidate.Attempts = admissions.Control(address)
-		candidate.ObserveAttempt = func(attempt senderrelay.Attempt) {
-			if address == backup.URL && attempt.State == senderrelay.AttemptAuthorization &&
-				attempt.Authorization == senderrelay.AuthorizationPendingAttribution {
+		candidate.ObserveAttempt = func(attempt relayset.Attempt) {
+			if address == backup.URL && attempt.State == relayset.AttemptAuthorization &&
+				attempt.Authorization == relayset.AuthorizationPendingAttribution {
 				select {
 				case waiting <- struct{}{}:
 				default:
 				}
 			}
 		}
-		return senderrelay.New(candidate)
+		return relayset.NewSenderLifecycle(candidate)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -197,7 +196,7 @@ func TestAccountReservationNotSentReleasesTentativeCredential(t *testing.T) {
 	requireBearer(t, &Source{share: prebound, address: "primary"}, first.Ticket)
 }
 
-func testRegistrationConfig(t *testing.T) senderrelay.Config {
+func testRegistrationConfig(t *testing.T) relayset.SenderLifecycleConfig {
 	t.Helper()
 	public, private, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -216,7 +215,7 @@ func testRegistrationConfig(t *testing.T) senderrelay.Config {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return senderrelay.Config{Fresh: fresh, PrivateKey: private, Descriptor: descriptor, ResumeToken: token}
+	return relayset.SenderLifecycleConfig{Fresh: fresh, PrivateKey: private, Descriptor: descriptor, ResumeToken: token}
 }
 
 func serveTestAccountRegistration(t *testing.T, ctx context.Context, w http.ResponseWriter, r *http.Request, ticket string) {

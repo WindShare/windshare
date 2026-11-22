@@ -20,7 +20,6 @@ const (
 	MinimumAttemptOpportunity = nativepeer.MinimumPreparationOpportunity
 	PrewarmRetention          = 30 * time.Second
 	MaximumPaths              = 8
-	DefaultAttemptCapacity    = 8
 	ResourceRetryDelay        = time.Second
 )
 

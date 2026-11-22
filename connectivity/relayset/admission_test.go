@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/connectivity/relayplan"
-	"github.com/windshare/windshare/connectivity/senderrelay"
 )
 
 func admissionFixture() relayplan.Plan {
@@ -21,9 +20,9 @@ func admissionFixture() relayplan.Plan {
 	}}
 }
 
-func beginCandidates(t *testing.T, a *NetworkAdmissions, plan relayplan.Plan) []senderrelay.AttemptPermit {
+func beginCandidates(t *testing.T, a *NetworkAdmissions, plan relayplan.Plan) []AttemptPermit {
 	t.Helper()
-	var result []senderrelay.AttemptPermit
+	var result []AttemptPermit
 	for _, candidate := range plan.Network {
 		permit, err := a.Control(candidate.URL).Begin(t.Context())
 		if err != nil {
@@ -168,7 +167,7 @@ func TestDeferredRegistrationHonorsSoftAndServerDeadlines(t *testing.T) {
 						t.Fatal("waiting backup entered the race", a.inflight, a.states[1])
 					}
 				}
-				backup := make(chan senderrelay.AttemptPermit, 1)
+				backup := make(chan AttemptPermit, 1)
 				go func() {
 					p, _ := a.Control(plan.Network[1].URL).Begin(t.Context())
 					backup <- p
@@ -216,7 +215,7 @@ func TestPendingDialRechecksConcurrentHTTPDeadline(t *testing.T) {
 			return time.Time{}
 		}
 		a := NewNetworkAdmissions(plan, nil, lookup)
-		done := make(chan senderrelay.AttemptPermit, 1)
+		done := make(chan AttemptPermit, 1)
 		go func() { p, _ := a.Control(plan.Network[1].URL).Begin(t.Context()); done <- p }()
 		synctest.Wait()
 		latest.Store(first.Add(time.Second).UnixNano())

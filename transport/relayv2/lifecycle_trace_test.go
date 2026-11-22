@@ -16,24 +16,27 @@ func TestRelayLifecycleConstructorsProduceStageShapes(t *testing.T) {
 	tests := []struct {
 		name  string
 		trace LifecycleTrace
+		stage LifecycleStage
 	}{
-		{"terminal reserved", terminalReservedTrace(sessionID, 1)},
-		{"terminal admitted", terminalSendAdmittedTrace(sessionID, 2)},
-		{"accepted provider failure", acceptedSendFailureTrace(sessionID, 3, transportCause)},
-		{"send rejected", sendRejectedTrace(sessionID, 4, false, framechannel.SendRejected, LifecycleCauseCanceled)},
-		{"send rolled back", sendRolledBackTrace(sessionID, 5, true, LifecycleCauseDeadline)},
-		{"send drained retired", sendRetiredDrainTrace(sessionID, 12, LifecycleCauseSessionRetired)},
-		{"retirement deferred", retirementDeferredTrace(sessionID, 6, true, LifecycleRetirementLocalClose, LifecycleCauseNone, LifecycleCauseNone)},
-		{"retired", retiredTrace(sessionID, 7, false, LifecycleRetirementIngressFailure, LifecycleCauseIngressOverflow, LifecycleCauseIngressOverflow)},
-		{"terminal settled", terminalSettledTrace(sessionID, 8, LifecycleCauseNone)},
-		{"link retiring", linkRetiringTrace(9, LifecycleRetirementLinkFailure, transportCause, transportCause)},
-		{"link closed", linkClosedTrace(10, LifecycleRetirementLinkClose, LifecycleCauseNone)},
-		{"drop summary", traceDroppedSummary(11, 12)},
+		{"terminal reserved", terminalReservedTrace(sessionID, 1), LifecycleTerminalReserved},
+		{"terminal admitted", terminalSendAdmittedTrace(sessionID, 2), LifecycleSendAdmitted},
+		{"accepted provider failure", acceptedSendFailureTrace(sessionID, 3, transportCause), LifecycleSendAdmitted},
+		{"send rejected", sendRejectedTrace(sessionID, 4, false, framechannel.SendRejected, LifecycleCauseCanceled), LifecycleSendRejected},
+		{"send rolled back", sendRolledBackTrace(sessionID, 5, true, LifecycleCauseDeadline), LifecycleSendRolledBack},
+		{"send drained retired", sendRetiredDrainTrace(sessionID, 12, LifecycleCauseSessionRetired), LifecycleSendRolledBack},
+		{"retirement deferred", retirementDeferredTrace(sessionID, 6, true, LifecycleRetirementLocalClose, LifecycleCauseNone, LifecycleCauseNone), LifecycleRetirementDeferred},
+		{"retired", retiredTrace(sessionID, 7, false, LifecycleRetirementIngressFailure, LifecycleCauseIngressOverflow, LifecycleCauseIngressOverflow), LifecycleRetired},
+		{"terminal settled", terminalSettledTrace(sessionID, 8, LifecycleCauseNone), LifecycleTerminalSettled},
+		{"link retiring", linkRetiringTrace(9, LifecycleRetirementLinkFailure, transportCause, transportCause), LifecycleLinkRetiring},
+		{"link closed", linkClosedTrace(10, LifecycleRetirementLinkClose, LifecycleCauseNone), LifecycleLinkClosed},
+		{"drop summary", traceDroppedSummary(11, 12), LifecycleTraceDropped},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			assertRelayLifecycleSourceShape(t, test.trace)
+			if test.trace.Stage != test.stage {
+				t.Fatalf("trace stage = %q, want %q (trace=%+v)", test.trace.Stage, test.stage, test.trace)
+			}
 		})
 	}
 }
@@ -224,7 +227,6 @@ func TestRelayLifecyclePublishesLinkScopedDropSummaryWhenSpaceReturns(t *testing
 	if summary.LinkID != 17 || summary.Stage != LifecycleTraceDropped || summary.Dropped != 1 {
 		t.Fatalf("drop summary = %+v", summary)
 	}
-	assertRelayLifecycleSourceShape(t, summary)
 	if event := <-source.stream(); event.OperationID != 4 {
 		t.Fatalf("post-gap event = %+v", event)
 	}
@@ -412,47 +414,6 @@ func TestRelayLifecycleShutdownOrdersTerminalFactBeforeStreamCloseAndDone(t *tes
 	case <-link.done:
 	default:
 		t.Fatal("link done was not closed after lifecycle stream completion")
-	}
-}
-
-func TestRelayLifecycleValidatorOwnsRetirementConsequenceShape(t *testing.T) {
-	event := retiredTrace(
-		relaySessionID(101), 7, false, LifecycleRetirementIngressFailure,
-		LifecycleCauseIngressOverflow, LifecycleCauseTransport,
-	)
-	event.LinkID = 44
-	if violation := ValidateLifecycleTrace(event); violation != LifecycleContractValid {
-		t.Fatalf("non-none retirement drain violation=%d event=%+v", violation, event)
-	}
-
-	tests := []struct {
-		name string
-		edit func(*LifecycleTrace)
-		want LifecycleContractViolation
-	}{
-		{"unknown stage", func(value *LifecycleTrace) { value.Stage = "future" }, LifecycleContractUnknownEnum},
-		{"missing link", func(value *LifecycleTrace) { value.LinkID = 0 }, LifecycleContractInvalidIdentity},
-		{"missing retirement source", func(value *LifecycleTrace) { value.RetirementSource = LifecycleRetirementNone }, LifecycleContractInvalidStageFields},
-		{"unexpected disposition", func(value *LifecycleTrace) { value.Disposition = framechannel.SendAccepted }, LifecycleContractInvalidStageFields},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			mutated := event
-			test.edit(&mutated)
-			if got := ValidateLifecycleTrace(mutated); got != test.want {
-				t.Fatalf("violation=%d want=%d event=%+v", got, test.want, mutated)
-			}
-		})
-	}
-}
-
-func assertRelayLifecycleSourceShape(t *testing.T, event LifecycleTrace) {
-	t.Helper()
-	if event.LinkID == 0 {
-		event.LinkID = 1
-	}
-	if violation := ValidateLifecycleTrace(event); violation != LifecycleContractValid {
-		t.Fatalf("lifecycle source violation=%d event=%+v", violation, event)
 	}
 }
 

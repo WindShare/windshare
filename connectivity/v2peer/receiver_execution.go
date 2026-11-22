@@ -23,9 +23,8 @@ type receiverExecutionResult struct {
 }
 
 type receiverWorkflowResult struct {
-	cause                error
-	decision             receiverAttemptDecision
-	diagnosticsTruncated bool
+	cause    error
+	decision receiverAttemptDecision
 }
 
 func receiverWorkflowDiagnostic(cause error) receiverWorkflowResult {
@@ -79,11 +78,8 @@ func (attempt *ReceiverAttempt) execute() receiverExecutionResult {
 		attempt.ctx,
 		completionDecision,
 	)
-	workflow.cause, workflow.diagnosticsTruncated = snapshotReceiverCauseWithStatus(workflow.cause)
 	termination, teardown := execution.close(workflow.cause)
-	teardownCause, teardownTruncated := snapshotReceiverCauseWithStatus(teardown.cause())
-	workflow.cause = joinReceiverResiduals([]error{workflow.cause, teardownCause})
-	workflow.diagnosticsTruncated = workflow.diagnosticsTruncated || teardownTruncated
+	workflow.cause = joinReceiverResiduals([]error{workflow.cause, teardown.cause()})
 	return receiverExecutionResult{
 		workflow: workflow, workflowContextCanceled: workflowContextCanceled,
 		termination: termination, teardown: teardown,
@@ -217,7 +213,6 @@ func (execution *receiverExecution) classifySignalingOpenFailure(err error) rece
 		}
 		return receiverWorkflowResult{
 			cause: failure.diagnostics, decision: failure.decision,
-			diagnosticsTruncated: failure.diagnosticsTruncated,
 		}
 	}
 	if err == nil {

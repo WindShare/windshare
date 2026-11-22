@@ -1,4 +1,4 @@
-package senderrelay
+package relayset
 
 import (
 	"bytes"
@@ -25,7 +25,7 @@ func TestCandidateValidationDoesNotSelectDynamicAuthorization(t *testing.T) {
 	if _, err := PublicURLs([]Candidate{config.Candidate}); err != nil {
 		t.Fatal(err)
 	}
-	lifecycle, err := New(config)
+	lifecycle, err := NewSenderLifecycle(config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,9 @@ func TestFreshRegistrationReadsTicketAfterWaitingForAnAttemptSlot(t *testing.T) 
 		value: Authorization{State: AuthorizationReady, Bearer: "old-ticket"}, changed: make(chan struct{}),
 	}
 	endpoint := &senderRelayTestEndpoint{accept: func(context.Context) (*relayv2.Channel, error) { return nil, nil }}
-	dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (Connection, error) { return NewConnection(endpoint), nil }}
+	dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (SenderConnection, error) {
+		return NewSenderConnection(endpoint), nil
+	}}
 	config := newSenderRelayTestConfig(t, nil, dialer, nil)
 	config.Candidate.Authorization = source
 	queued, admit := make(chan struct{}), make(chan struct{})
@@ -57,7 +59,7 @@ func TestFreshRegistrationReadsTicketAfterWaitingForAnAttemptSlot(t *testing.T) 
 			return nil, ctx.Err()
 		}
 	})
-	lifecycle, err := New(config)
+	lifecycle, err := NewSenderLifecycle(config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,16 +98,16 @@ func TestAccessUnavailableRetriesTheSamePublicationWithRefreshedTicket(t *testin
 		return ctx.Err()
 	}
 	attempts := 0
-	dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (Connection, error) {
+	dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (SenderConnection, error) {
 		attempts++
 		if attempts == 1 {
-			return Connection{}, &relayv2.RelayError{Code: v2.ErrorAccessUnavailable, RetryAfter: retryAfter}
+			return SenderConnection{}, &relayv2.RelayError{Code: v2.ErrorAccessUnavailable, RetryAfter: retryAfter}
 		}
-		return NewConnection(&senderRelayTestEndpoint{}), nil
+		return NewSenderConnection(&senderRelayTestEndpoint{}), nil
 	}}
 	config := newSenderRelayTestConfig(t, nil, dialer, clock)
 	config.Candidate.Authorization = source
-	lifecycle, err := New(config)
+	lifecycle, err := NewSenderLifecycle(config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +154,9 @@ func TestAuthorizationCompletionWakesOriginalPublicationOutsideHandshake(t *test
 	for _, state := range []AuthorizationState{AuthorizationPendingSetup, AuthorizationExpired, AuthorizationTemporaryFailure, AuthorizationUserActionRequired} {
 		source := &changingAuthorization{value: Authorization{State: state}, changed: make(chan struct{})}
 		endpoint := &senderRelayTestEndpoint{accept: func(context.Context) (*relayv2.Channel, error) { return nil, nil }}
-		dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (Connection, error) { return NewConnection(endpoint), nil }}
+		dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (SenderConnection, error) {
+			return NewSenderConnection(endpoint), nil
+		}}
 		config := newSenderRelayTestConfig(t, nil, dialer, nil)
 		config.Candidate.Authorization = source
 		waiting := make(chan Attempt, 1)
@@ -161,7 +165,7 @@ func TestAuthorizationCompletionWakesOriginalPublicationOutsideHandshake(t *test
 				waiting <- attempt
 			}
 		}
-		lifecycle, err := New(config)
+		lifecycle, err := NewSenderLifecycle(config)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -212,13 +216,13 @@ func TestAuthorizationCompletionWakesOriginalPublicationOutsideHandshake(t *test
 
 func TestKnownAuthorizationDenialDoesNotDialOrFallBack(t *testing.T) {
 	source := &changingAuthorization{value: Authorization{State: AuthorizationDenied, Cause: errors.New("account_blocked")}, changed: make(chan struct{})}
-	dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (Connection, error) {
+	dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (SenderConnection, error) {
 		t.Fatal("denied authorization dialed")
-		return Connection{}, nil
+		return SenderConnection{}, nil
 	}}
 	config := newSenderRelayTestConfig(t, nil, dialer, nil)
 	config.Candidate.Authorization = source
-	lifecycle, err := New(config)
+	lifecycle, err := NewSenderLifecycle(config)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -204,10 +204,6 @@ func TestNativeMappingReservationFeedsFreshAttemptWithoutResettingUnitBudget(t *
 
 func TestReceiverSessionBindsPeerPathControlOnceAcrossParallelPaths(t *testing.T) {
 	clock := newClock()
-	capacity, err := NewCapacity(DefaultAttemptCapacity)
-	if err != nil {
-		t.Fatal(err)
-	}
 	native := newTestNative(t, nativepeer.Config{
 		Monitor:      networkstate.NewMonitor(fakeNetwork{}, time.Nanosecond),
 		Now:          clock.Now,
@@ -224,7 +220,7 @@ func TestReceiverSessionBindsPeerPathControlOnceAcrossParallelPaths(t *testing.T
 		fakePathControls: controls,
 		sessionID:        protocolsession.ProtocolSessionID{7},
 	}
-	session, err := OpenReceiverSession(t.Context(), Config{Clock: clock, Capacity: capacity}, ReceiverConfig{
+	session, err := OpenReceiverSession(t.Context(), Config{Clock: clock}, ReceiverConfig{
 		Factory:   factory,
 		Signaling: blockingReceiverSignaling{},
 		Lanes:     lanes,

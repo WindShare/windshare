@@ -37,7 +37,6 @@ func TestRepeatedMappingAndRemoteNetworkNoticesSpendOnlyCurrentWave(t *testing.T
 		wave.attempts++
 		wave.opportunities++
 		opportunity.refund(0)
-		opportunity.release()
 		if wave.started != started {
 			t.Fatal("control reset original wave")
 		}

@@ -1,4 +1,4 @@
-package senderrelay
+package relayset
 
 import (
 	"bytes"
@@ -17,21 +17,21 @@ func TestInitialPublicationUncertaintyKeepsOriginalCredentialsAndDescriptor(t *t
 		t.Run(firstFailure.Error(), func(t *testing.T) {
 			endpoint := &senderRelayTestEndpoint{accept: func(context.Context) (*relayv2.Channel, error) { return nil, nil }}
 			calls := 0
-			dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (Connection, error) {
+			dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (SenderConnection, error) {
 				calls++
 				switch calls {
 				case 1:
-					return Connection{}, firstFailure
+					return SenderConnection{}, firstFailure
 				case 2:
-					return Connection{}, &relayv2.RelayError{Code: v2.ErrorNotFound}
+					return SenderConnection{}, &relayv2.RelayError{Code: v2.ErrorNotFound}
 				default:
-					return NewConnection(endpoint), nil
+					return NewSenderConnection(endpoint), nil
 				}
 			}}
 			config := newSenderRelayTestConfig(t, nil, dialer, newSenderRelayTestClock())
 			config.Candidate.Authorization = StaticKey("candidate-private-token")
 			descriptor := bytes.Clone(config.Descriptor)
-			lifecycle, err := New(config)
+			lifecycle, err := NewSenderLifecycle(config)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -73,8 +73,10 @@ func TestAuthenticatedRejectionsStopWithoutRepublishing(t *testing.T) {
 	for _, code := range []v2.ErrorCode{v2.ErrorInvalidProof, v2.ErrorShareIDCollision, v2.ErrorDescriptorInvalid, v2.ErrorStopped, v2.ErrorMalformed, v2.ErrorUnsupportedMode} {
 		t.Run((&relayv2.RelayError{Code: code}).Error(), func(t *testing.T) {
 			failure := &relayv2.RelayError{Code: code}
-			dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (Connection, error) { return Connection{}, failure }}
-			lifecycle, err := New(newSenderRelayTestConfig(t, nil, dialer, newSenderRelayTestClock()))
+			dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (SenderConnection, error) {
+				return SenderConnection{}, failure
+			}}
+			lifecycle, err := NewSenderLifecycle(newSenderRelayTestConfig(t, nil, dialer, newSenderRelayTestClock()))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -94,19 +96,19 @@ func TestAuthenticatedRejectionsStopWithoutRepublishing(t *testing.T) {
 
 func TestLifecycleRejectsChangedPublicationMaterialBeforeDial(t *testing.T) {
 	config := newSenderRelayTestConfig(t, nil, nil, nil)
-	for _, corrupt := range []func(*Config){
-		func(config *Config) { config.Descriptor = nil },
-		func(config *Config) { config.ResumeToken[0] ^= 0xff },
-		func(config *Config) { config.PrivateKey = nil },
-		func(config *Config) { config.Fresh.Mode = v2.RegistrationResume },
+	for _, corrupt := range []func(*SenderLifecycleConfig){
+		func(config *SenderLifecycleConfig) { config.Descriptor = nil },
+		func(config *SenderLifecycleConfig) { config.ResumeToken[0] ^= 0xff },
+		func(config *SenderLifecycleConfig) { config.PrivateKey = nil },
+		func(config *SenderLifecycleConfig) { config.Fresh.Mode = v2.RegistrationResume },
 	} {
 		changed := config
 		corrupt(&changed)
-		if _, err := New(changed); !errors.Is(err, relayv2.ErrProtocol) {
+		if _, err := NewSenderLifecycle(changed); !errors.Is(err, relayv2.ErrProtocol) {
 			t.Fatalf("changed material accepted: %v", err)
 		}
 	}
-	lifecycle, err := New(config)
+	lifecycle, err := NewSenderLifecycle(config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,16 +133,16 @@ func TestNetworkWakeUsesSingleRecoveryOwner(t *testing.T) {
 	}
 	endpoint := &senderRelayTestEndpoint{accept: func(context.Context) (*relayv2.Channel, error) { return nil, nil }}
 	calls := 0
-	dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (Connection, error) {
+	dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (SenderConnection, error) {
 		calls++
 		if calls == 1 {
-			return Connection{}, errors.New("offline")
+			return SenderConnection{}, errors.New("offline")
 		}
 		close(dialing)
 		<-release
-		return NewConnection(endpoint), nil
+		return NewSenderConnection(endpoint), nil
 	}}
-	lifecycle, err := New(newSenderRelayTestConfig(t, nil, dialer, clock))
+	lifecycle, err := NewSenderLifecycle(newSenderRelayTestConfig(t, nil, dialer, clock))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,14 +171,14 @@ func TestCurrentAvailabilityClearsDuringRecoveryAndReturnsOnAcknowledgement(t *t
 	dialStarted, release := make(chan struct{}), make(chan struct{})
 	endpoint := &senderRelayTestEndpoint{accept: func(context.Context) (*relayv2.Channel, error) { return new(relayv2.Channel), nil }}
 	attempts := 0
-	lifecycle := newSenderRelayTestLifecycle(t, initial, &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (Connection, error) {
+	lifecycle := newSenderRelayTestLifecycle(t, initial, &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (SenderConnection, error) {
 		attempts++
 		if attempts == 1 {
 			close(dialStarted)
 			<-release
-			return Connection{}, &relayv2.RegistrationNotSentError{Cause: &relayv2.WebSocketRouteError{}}
+			return SenderConnection{}, &relayv2.RegistrationNotSentError{Cause: &relayv2.WebSocketRouteError{}}
 		}
-		return NewConnection(endpoint), nil
+		return NewSenderConnection(endpoint), nil
 	}}, newSenderRelayTestClock())
 	var mu sync.Mutex
 	var states []bool

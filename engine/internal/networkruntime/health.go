@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/connectivity/relayplan"
-	"github.com/windshare/windshare/connectivity/senderrelay"
+	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/nodedirectory"
 	"github.com/windshare/windshare/transport/relayv2"
 )
@@ -74,7 +74,7 @@ func (h *nodeHealth) Snapshot(generation uint64, now time.Time) []relayplan.Obse
 
 // RecordAttempt returns a diagnostic update only when a local or server
 // deadline changed. The newer sample remains authoritative for late callbacks.
-func (h *nodeHealth) RecordAttempt(identity string, started, generation uint64, now time.Time, attempt senderrelay.Attempt) (healthEntry, relayplan.CooldownReason) {
+func (h *nodeHealth) RecordAttempt(identity string, started, generation uint64, now time.Time, attempt relayset.Attempt) (healthEntry, relayplan.CooldownReason) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if !h.advanceLocked(generation) || started != generation {
@@ -84,7 +84,7 @@ func (h *nodeHealth) RecordAttempt(identity string, started, generation uint64, 
 	if entry.At.After(now) {
 		entry.Observation = entry.ActiveAt(entry.At)
 		// A late sample may extend the deadline still binding the newer sample.
-		if attempt.State == senderrelay.AttemptFailed && failureReason(attempt.Failure) == relayplan.CooldownServerBackoff && entry.extendServerRetry(attempt.ServerRetryAt, entry.At) {
+		if attempt.State == relayset.AttemptFailed && failureReason(attempt.Failure) == relayplan.CooldownServerBackoff && entry.extendServerRetry(attempt.ServerRetryAt, entry.At) {
 			h.entries[identity] = entry
 			return entry, relayplan.CooldownServerBackoff
 		}
@@ -93,12 +93,12 @@ func (h *nodeHealth) RecordAttempt(identity string, started, generation uint64, 
 	entry.Observation = entry.ActiveAt(now)
 	change := relayplan.CooldownNone
 	switch attempt.State {
-	case senderrelay.AttemptSucceeded, senderrelay.AttemptParked:
+	case relayset.AttemptSucceeded, relayset.AttemptParked:
 		// A concurrent success clears soft avoidance but cannot revoke an
 		// explicit HTTP deadline received by another registration.
 		entry = healthEntry{ServerRetryAt: entry.ServerRetryAt, decayAnchor: entry.ServerRetryAt}
 		entry.Admitted, entry.Duration = true, attempt.HandshakeDuration
-	case senderrelay.AttemptFailed:
+	case relayset.AttemptFailed:
 		reason := failureReason(attempt.Failure)
 		if reason == relayplan.CooldownNone {
 			return healthEntry{}, relayplan.CooldownNone
@@ -178,13 +178,13 @@ func cooldownDelay(reason relayplan.CooldownReason, failures int) time.Duration 
 }
 
 func failureReason(err error) relayplan.CooldownReason {
-	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, senderrelay.ErrStopped) || errors.Is(err, relayv2.ErrProtocol) {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, relayset.ErrStopped) || errors.Is(err, relayv2.ErrProtocol) {
 		return relayplan.CooldownNone
 	}
 	if _, ok := errors.AsType[*relayv2.RelayError](err); ok {
 		return relayplan.CooldownNone
 	}
-	if _, ok := errors.AsType[*senderrelay.AuthorizationError](err); ok {
+	if _, ok := errors.AsType[*relayset.AuthorizationError](err); ok {
 		return relayplan.CooldownNone
 	}
 	if route, ok := errors.AsType[*relayv2.WebSocketRouteError](err); ok && route.BaseHint.URL() != "" {

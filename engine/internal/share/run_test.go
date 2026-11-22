@@ -35,10 +35,7 @@ type shareFixture struct {
 
 func newShareFixture(t *testing.T) *shareFixture {
 	t.Helper()
-	capacity, err := nativeconnectivity.NewCapacity(nativepeer.AdmissionClock{}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	capacity := nativeconnectivity.NewCapacity(nativepeer.AdmissionClock{}, nil)
 	f := &shareFixture{}
 	f.relays = &testRelays{step: f.step, stopped: make(chan struct{})}
 	f.factory = &testSessionFactory{relays: f.relays, step: f.step}

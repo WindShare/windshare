@@ -61,10 +61,9 @@ type Result struct {
 	Stopped bool
 }
 type Config struct {
-	Budget   *Budget
-	Capacity *Capacity
-	Clock    Clock
-	Random   io.Reader
+	Budget *Budget
+	Clock  Clock
+	Random io.Reader
 }
 
 type PeerPathControlSender interface {
@@ -123,9 +122,6 @@ func New(config Config) (*PeerSet, error) {
 	}
 	if config.Budget == nil {
 		config.Budget = NewBudget(config.Clock.Now())
-	}
-	if config.Capacity == nil {
-		return nil, ErrConfig
 	}
 	if config.Random == nil {
 		config.Random = rand.Reader

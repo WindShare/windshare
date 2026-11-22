@@ -3,67 +3,27 @@ package v2peer
 import (
 	"context"
 	"errors"
-	"fmt"
-	"reflect"
-	"strings"
-
-	"github.com/windshare/windshare/core/session/protocolsession"
 
 	"github.com/windshare/windshare/core/session"
+	"github.com/windshare/windshare/core/session/protocolsession"
 	receiversession "github.com/windshare/windshare/core/session/receiversession"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 )
 
-const (
-	maximumReceiverErrorTreeDepth = 64
-	maximumReceiverErrorTreeNodes = 1024
-)
+const maxReceiverErrorDepth = 64
 
-var (
-	errReceiverOpaqueCause = errors.New("receiver operation retained an opaque failure")
+var errReceiverOpaqueCause = errors.New("receiver operation retained an opaque failure")
 
-	// Interface conformance is not traversal authority: an unaudited Error or
-	// Unwrap method may panic, mutate, or conceal an uncomparable value. Only
-	// these exact standard-library, core-owned, and receiver-owned
-	// implementations cross the receiver's structural trust boundary.
-	errReceiverStructuralProbe   = errors.New("receiver structural error probe")
-	receiverTrustedLeafType      = reflect.TypeOf(errReceiverStructuralProbe)
-	receiverTrustedJoinType      = reflect.TypeOf(errors.Join(errReceiverStructuralProbe, errReceiverStructuralProbe))
-	receiverTrustedWrapType      = reflect.TypeOf(fmt.Errorf("receiver structural wrapper: %w", errReceiverStructuralProbe))
-	receiverTrustedMultiWrapType = reflect.TypeOf(fmt.Errorf("receiver structural wrappers: %w %w", errReceiverStructuralProbe, errReceiverStructuralProbe))
-	receiverBoundaryFailureType  = reflect.TypeFor[*transferfault.BoundaryError]()
-	receiverRemoteFailureType    = reflect.TypeFor[receiversession.RemoteOperationError]()
-	receiverSafeDiagnosticType   = reflect.TypeFor[*receiverSafeDiagnosticError]()
-	receiverOwnedJoinType        = reflect.TypeFor[*receiverOwnedJoinError]()
-)
-
-// receiverOwnedJoinError makes the canonical result safe to share across
-// Outcome, Err, and Close. The standard join exposes its backing slice, so a
-// shallow outcome copy cannot protect the published graph.
-type receiverOwnedJoinError struct {
-	message  string
-	children []error
-}
-
-func (failure *receiverOwnedJoinError) Error() string { return failure.message }
-
-func (failure *receiverOwnedJoinError) Unwrap() []error {
-	if failure == nil {
-		return nil
-	}
-	return append([]error(nil), failure.children...)
-}
-
-// receiverSafeDiagnosticError keeps phase context while exposing only a
-// classifier-owned residual. Reusing fmt's original wrapper would make its
-// unaudited child reachable again through errors.Is.
-type receiverSafeDiagnosticError struct {
+// receiverFilteredError preserves outer phase context when a benign leaf is
+// stripped from a wrapped error without making the stripped leaf reachable via
+// errors.Is.
+type receiverFilteredError struct {
 	message string
 	cause   error
 }
 
-func (failure *receiverSafeDiagnosticError) Error() string { return failure.message }
-func (failure *receiverSafeDiagnosticError) Unwrap() error { return failure.cause }
+func (failure *receiverFilteredError) Error() string { return failure.message }
+func (failure *receiverFilteredError) Unwrap() error { return failure.cause }
 
 type receiverCausePolicy struct {
 	contextCanceled  bool
@@ -77,70 +37,69 @@ type receiverCauseClassification struct {
 	complete bool
 }
 
-type receiverSingleUnwrapper interface {
-	Unwrap() error
-}
-
-type receiverMultiUnwrapper interface {
-	Unwrap() []error
-}
-
-type receiverStructuralErrorKind uint8
-
-const (
-	receiverStructuralSingle receiverStructuralErrorKind = iota + 1
-	receiverStructuralMulti
-)
-
-type receiverErrorTreeTraversal struct {
-	remaining int
-}
-
-func newReceiverErrorTreeTraversal() *receiverErrorTreeTraversal {
-	return &receiverErrorTreeTraversal{remaining: maximumReceiverErrorTreeNodes}
-}
-
-func (traversal *receiverErrorTreeTraversal) enter() bool {
-	if traversal.remaining == 0 {
-		return false
-	}
-	traversal.remaining--
-	return true
-}
-
 func classifyReceiverCause(cause error, policy receiverCausePolicy) receiverCauseClassification {
 	if cause == nil {
 		return receiverCauseClassification{complete: true}
 	}
-	classification := classifyReceiverCauseAtDepth(
-		cause,
-		policy,
-		0,
-		newReceiverErrorTreeTraversal(),
-	)
+	classification := classifyReceiverCauseAtDepth(cause, policy, 0)
 	classification.benign = uniqueReceiverBenignCauses(classification.benign)
 	classification.classes = uniqueReceiverCauseClasses(classification.classes)
 	return classification
-}
-
-func snapshotReceiverCauseWithStatus(cause error) (error, bool) {
-	// Snapshot before cancellation or cross-goroutine storage. Owner-specific
-	// benign filtering happens later against this already-owned graph.
-	classified := classifyReceiverCause(cause, receiverCausePolicy{})
-	return classified.retained, !classified.complete
 }
 
 func classifyReceiverCauseAtDepth(
 	cause error,
 	policy receiverCausePolicy,
 	depth int,
-	traversal *receiverErrorTreeTraversal,
 ) receiverCauseClassification {
-	if classified, terminal := classifyReceiverCauseBoundary(cause, policy, depth, traversal); terminal {
-		return classified
+	if cause == nil {
+		return receiverCauseClassification{complete: true}
 	}
-	if classified, boundaryFailure := classifyReceiverBoundaryCause(cause, depth, traversal); boundaryFailure {
-		return classified
+	if depth >= maxReceiverErrorDepth {
+		return receiverCauseClassification{
+			retained: errReceiverOpaqueCause,
+			classes:  []ReceiverCauseClass{ReceiverCauseUnknown},
+		}
+	}
+	// Comparing an arbitrary error against pointer sentinels (*errors.errorString)
+	// cannot panic in Go even when cause has an uncomparable dynamic type.
+	if policy.contextCanceled && cause == context.Canceled { //nolint:errorlint // Inspect one node at a time so joined siblings stay classified.
+		return receiverCauseClassification{
+			benign:   []ReceiverBenignCause{ReceiverBenignContextCanceled},
+			complete: true,
+		}
+	}
+	if policy.operationMissing != "" && cause == session.ErrOperationMissing { //nolint:errorlint // Inspect one node at a time so joined siblings stay classified.
+		return receiverCauseClassification{
+			benign:   []ReceiverBenignCause{policy.operationMissing},
+			complete: true,
+		}
+	}
+	if boundary, ok := cause.(*transferfault.BoundaryError); ok { //nolint:errorlint // Inspect the current error node before descending into Unwrap.
+		if boundary == nil || !boundary.Fault().Valid() {
+			return receiverCauseClassification{
+				retained: errReceiverOpaqueCause,
+				classes:  []ReceiverCauseClass{ReceiverCauseUnknown},
+				complete: true,
+			}
+		}
+		child := boundary.Unwrap()
+		var childClassified receiverCauseClassification
+		if child == nil {
+			childClassified = receiverCauseClassification{
+				retained: errReceiverOpaqueCause,
+				classes:  []ReceiverCauseClass{ReceiverCauseUnknown},
+			}
+		} else {
+			// The normalized fault is the lifecycle authority; keep its diagnostic
+			// child intact without applying local benign filtering.
+			childClassified = classifyReceiverCauseAtDepth(child, receiverCausePolicy{}, depth+1)
+		}
+		if boundary.Fault().Scope() == transferfault.ScopeSessionTerminal ||
+			boundary.Fault().Domain() == transferfault.DomainSession {
+			childClassified.classes = append([]ReceiverCauseClass{ReceiverCauseProtocol}, childClassified.classes...)
+		}
+		return childClassified
 	}
 	if class, known := directReceiverCauseClass(cause); known {
 		return receiverCauseClassification{
@@ -149,98 +108,40 @@ func classifyReceiverCauseAtDepth(
 			complete: true,
 		}
 	}
-	switch receiverTrustedStructure(cause) {
-	case receiverStructuralMulti:
-		return classifyReceiverMultiCause(cause, policy, depth, traversal)
-	case receiverStructuralSingle:
-		return classifyReceiverSingleCause(cause, policy, depth, traversal)
-	default:
-		return classifyReceiverLeafCause(cause)
+	if multi, ok := cause.(interface{ Unwrap() []error }); ok {
+		return classifyReceiverMultiCause(multi.Unwrap(), policy, depth)
 	}
-}
-
-func classifyReceiverCauseBoundary(
-	cause error,
-	policy receiverCausePolicy,
-	depth int,
-	traversal *receiverErrorTreeTraversal,
-) (receiverCauseClassification, bool) {
-	if cause == nil {
-		return receiverCauseClassification{complete: true}, true
+	if single, ok := cause.(interface{ Unwrap() error }); ok {
+		return classifyReceiverSingleCause(cause, single.Unwrap(), policy, depth)
 	}
-	if depth >= maximumReceiverErrorTreeDepth || !traversal.enter() {
-		return incompleteReceiverCauseClassification(), true
-	}
-	if isNilReceiverCause(cause) {
-		return opaqueReceiverCauseClassification(), true
-	}
-	if policy.contextCanceled && isExactReceiverSentinel(cause, context.Canceled) {
+	if _, ok := cause.(receiversession.RemoteOperationError); ok { //nolint:errorlint // Leaf check after Unwrap traversal.
 		return receiverCauseClassification{
-			benign:   []ReceiverBenignCause{ReceiverBenignContextCanceled},
+			retained: cause,
+			classes:  []ReceiverCauseClass{ReceiverCauseProtocol},
 			complete: true,
-		}, true
+		}
 	}
-	if isExactReceiverSentinel(cause, session.ErrOperationMissing) && policy.operationMissing != "" {
-		return receiverCauseClassification{
-			benign:   []ReceiverBenignCause{policy.operationMissing},
-			complete: true,
-		}, true
+	return receiverCauseClassification{
+		retained: cause,
+		classes:  []ReceiverCauseClass{ReceiverCauseUnknown},
+		complete: true,
 	}
-	return receiverCauseClassification{}, false
-}
-
-func classifyReceiverBoundaryCause(
-	cause error,
-	depth int,
-	traversal *receiverErrorTreeTraversal,
-) (receiverCauseClassification, bool) {
-	if reflect.TypeOf(cause) != receiverBoundaryFailureType {
-		return receiverCauseClassification{}, false
-	}
-	var boundary *transferfault.BoundaryError
-	if !errors.As(cause, &boundary) || boundary == nil || !boundary.Fault().Valid() {
-		return opaqueReceiverCauseClassification(), true
-	}
-	child, ok := unwrapReceiverTrustedSingle(cause)
-	if !ok || child == nil {
-		return receiverBoundaryFailureClassification(
-			boundary.Fault(), incompleteReceiverCauseClassification(),
-		), true
-	}
-	// The normalized value is the only lifecycle authority. The child remains
-	// diagnostic context and local benign filtering must not erase it.
-	return receiverBoundaryFailureClassification(
-		boundary.Fault(),
-		classifyReceiverCauseAtDepth(child, receiverCausePolicy{}, depth+1, traversal),
-	), true
 }
 
 func classifyReceiverMultiCause(
-	cause error,
+	children []error,
 	policy receiverCausePolicy,
 	depth int,
-	traversal *receiverErrorTreeTraversal,
 ) receiverCauseClassification {
-	children, ok := unwrapReceiverTrustedMulti(cause)
-	if !ok || len(children) == 0 {
-		return incompleteReceiverCauseClassification()
-	}
 	var retained []error
 	var benign []ReceiverBenignCause
 	var classes []ReceiverCauseClass
 	complete := true
-	// Depth truncation is branch-local, so later siblings still receive the
-	// remaining global budget. Only actual node exhaustion ends reconstruction.
-	// Session authority is carried separately and never depends on this order.
 	for _, child := range children {
-		if traversal.remaining == 0 || child == nil {
-			incomplete := incompleteReceiverCauseClassification()
-			retained = append(retained, incomplete.retained)
-			classes = append(classes, incomplete.classes...)
-			complete = false
-			break
+		if child == nil {
+			continue
 		}
-		classified := classifyReceiverCauseAtDepth(child, policy, depth+1, traversal)
+		classified := classifyReceiverCauseAtDepth(child, policy, depth+1)
 		if classified.retained != nil {
 			retained = append(retained, classified.retained)
 		}
@@ -248,20 +149,8 @@ func classifyReceiverMultiCause(
 		classes = append(classes, classified.classes...)
 		complete = complete && classified.complete
 	}
-	residual := joinReceiverResiduals(retained)
-	if reflect.TypeOf(cause) == receiverTrustedMultiWrapType && residual != nil {
-		var diagnosticOK bool
-		residual, diagnosticOK = rebuildReceiverDiagnostic(cause, residual)
-		if !diagnosticOK {
-			// Losing diagnostic context cannot revoke identities already proven
-			// in audited children; the opaque leaf covers only that new gap.
-			residual = joinReceiverResiduals([]error{residual, errReceiverOpaqueCause})
-			classes = append(classes, ReceiverCauseUnknown)
-			complete = false
-		}
-	}
 	return receiverCauseClassification{
-		retained: residual,
+		retained: joinReceiverResiduals(retained),
 		benign:   benign,
 		classes:  classes,
 		complete: complete,
@@ -270,63 +159,32 @@ func classifyReceiverMultiCause(
 
 func classifyReceiverSingleCause(
 	cause error,
+	child error,
 	policy receiverCausePolicy,
 	depth int,
-	traversal *receiverErrorTreeTraversal,
 ) receiverCauseClassification {
-	child, ok := unwrapReceiverTrustedSingle(cause)
-	if !ok || child == nil {
-		return incompleteReceiverCauseClassification()
-	}
-	classified := classifyReceiverCauseAtDepth(child, policy, depth+1, traversal)
-	if classified.retained == nil {
-		return classified
-	}
-	residual, diagnosticOK := rebuildReceiverDiagnostic(cause, classified.retained)
-	if diagnosticOK {
-		classified.retained = residual
-		return classified
-	}
-	classified.retained = joinReceiverResiduals([]error{
-		classified.retained,
-		errReceiverOpaqueCause,
-	})
-	classified.classes = append(classified.classes, ReceiverCauseUnknown)
-	classified.complete = false
-	return classified
-}
-
-func classifyReceiverLeafCause(cause error) receiverCauseClassification {
-	switch reflect.TypeOf(cause) {
-	case receiverRemoteFailureType:
-		return receiverCauseClassification{
-			retained: cause,
-			classes:  []ReceiverCauseClass{ReceiverCauseProtocol},
-			complete: true,
-		}
-	case receiverTrustedLeafType:
+	if child == nil {
 		return receiverCauseClassification{
 			retained: cause,
 			classes:  []ReceiverCauseClass{ReceiverCauseUnknown},
 			complete: true,
 		}
-	default:
-		// All unaudited types remain opaque, including apparently comparable
-		// values: an interface field may hold an uncomparable dynamic value.
-		return opaqueReceiverCauseClassification()
 	}
+	classified := classifyReceiverCauseAtDepth(child, policy, depth+1)
+	if classified.retained == nil {
+		return classified
+	}
+	if len(classified.benign) == 0 && classified.complete && !containsBoundaryError(child) {
+		classified.retained = cause
+		return classified
+	}
+	classified.retained = &receiverFilteredError{message: cause.Error(), cause: classified.retained}
+	return classified
 }
 
-func receiverBoundaryFailureClassification(
-	value transferfault.Fault,
-	child receiverCauseClassification,
-) receiverCauseClassification {
-	// Session lifetime comes from sealed producer evidence and is never
-	// reconstructed from either the fault or its diagnostic child.
-	if value.Scope() == transferfault.ScopeSessionTerminal || value.Domain() == transferfault.DomainSession {
-		child.classes = append([]ReceiverCauseClass{ReceiverCauseProtocol}, child.classes...)
-	}
-	return child
+func containsBoundaryError(cause error) bool {
+	_, ok := errors.AsType[*transferfault.BoundaryError](cause)
+	return ok
 }
 
 func annotateReceiverDecisionDiagnostics(
@@ -355,100 +213,20 @@ func annotateReceiverDecisionDiagnostics(
 	}
 }
 
-func opaqueReceiverCauseClassification() receiverCauseClassification {
-	return receiverCauseClassification{
-		retained: errReceiverOpaqueCause,
-		classes:  []ReceiverCauseClass{ReceiverCauseUnknown},
-		complete: true,
-	}
-}
-
-func incompleteReceiverCauseClassification() receiverCauseClassification {
-	return receiverCauseClassification{
-		retained: errReceiverOpaqueCause,
-		classes:  []ReceiverCauseClass{ReceiverCauseUnknown},
-	}
-}
-
-func receiverTrustedStructure(cause error) receiverStructuralErrorKind {
-	causeType := reflect.TypeOf(cause)
-	switch causeType {
-	case receiverTrustedJoinType, receiverTrustedMultiWrapType, receiverOwnedJoinType:
-		return receiverStructuralMulti
-	case receiverTrustedWrapType, receiverSafeDiagnosticType:
-		return receiverStructuralSingle
-	default:
-		return 0
-	}
-}
-
-func rebuildReceiverDiagnostic(cause, retained error) (rebuilt error, ok bool) {
-	// A trusted fmt wrapper has already materialized its text. Copying that text
-	// into an owned wrapper preserves phase context without making the filtered
-	// original child graph reachable again through errors.Is or errors.As.
-	defer func() {
-		if recover() != nil {
-			rebuilt, ok = nil, false
-		}
-	}()
-	return &receiverSafeDiagnosticError{message: cause.Error(), cause: retained}, true
-}
-
-func unwrapReceiverTrustedSingle(cause error) (child error, ok bool) {
-	defer func() {
-		if recover() != nil {
-			child, ok = nil, false
-		}
-	}()
-	child = cause.(receiverSingleUnwrapper).Unwrap()
-	return child, true
-}
-
-func unwrapReceiverTrustedMulti(cause error) (children []error, ok bool) {
-	defer func() {
-		if recover() != nil {
-			children, ok = nil, false
-		}
-	}()
-	children = cause.(receiverMultiUnwrapper).Unwrap()
-	return children, true
-}
-
-func isNilReceiverCause(cause error) bool {
-	value := reflect.ValueOf(cause)
-	switch value.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map,
-		reflect.Pointer, reflect.Slice:
-		return value.IsNil()
-	default:
-		return false
-	}
-}
-
 func joinReceiverResiduals(retained []error) error {
-	owned := make([]error, 0, len(retained))
+	var nonNil []error
 	for _, cause := range retained {
 		if cause != nil {
-			owned = append(owned, cause)
+			nonNil = append(nonNil, cause)
 		}
 	}
-	switch len(owned) {
+	switch len(nonNil) {
 	case 0:
 		return nil
 	case 1:
-		return owned[0]
+		return nonNil[0]
 	default:
-		var message strings.Builder
-		for index, cause := range owned {
-			if index != 0 {
-				message.WriteByte('\n')
-			}
-			message.WriteString(cause.Error())
-		}
-		return &receiverOwnedJoinError{
-			message:  message.String(),
-			children: append([]error(nil), owned...),
-		}
+		return errors.Join(nonNil...)
 	}
 }
 
@@ -469,84 +247,65 @@ func receiverClassifiedCause(classification receiverCauseClassification) error {
 }
 
 func uniqueReceiverBenignCauses(causes []ReceiverBenignCause) []ReceiverBenignCause {
-	if len(causes) < 2 {
-		return causes
-	}
-	seen := make(map[ReceiverBenignCause]struct{}, len(causes))
-	result := make([]ReceiverBenignCause, 0, len(causes))
-	for _, cause := range causes {
-		if _, exists := seen[cause]; exists {
-			continue
-		}
-		seen[cause] = struct{}{}
-		result = append(result, cause)
-	}
-	return result
+	return uniqueValues(causes)
 }
 
 func uniqueReceiverCauseClasses(classes []ReceiverCauseClass) []ReceiverCauseClass {
-	if len(classes) < 2 {
-		return classes
+	return uniqueValues(classes)
+}
+
+func uniqueValues[T comparable](values []T) []T {
+	if len(values) < 2 {
+		return values
 	}
-	seen := make(map[ReceiverCauseClass]struct{}, len(classes))
-	result := make([]ReceiverCauseClass, 0, len(classes))
-	for _, class := range classes {
-		if _, exists := seen[class]; exists {
+	seen := make(map[T]struct{}, len(values))
+	result := make([]T, 0, len(values))
+	for _, value := range values {
+		if _, exists := seen[value]; exists {
 			continue
 		}
-		seen[class] = struct{}{}
-		result = append(result, class)
+		seen[value] = struct{}{}
+		result = append(result, value)
 	}
 	return result
 }
 
-// ReceiverCauseClasses returns bounded, text-free diagnostics for an arbitrary
-// error tree. It deliberately avoids errors.Is so malformed cyclic wrappers
-// cannot recurse without a limit. Session lifetime comes only from the
-// sealed producer decision on ReceiverAttemptOutcome.
+// ReceiverCauseClasses returns text-free diagnostic classes for a receiver error.
+// Session lifetime comes only from the sealed decision on ReceiverAttemptOutcome.
 func ReceiverCauseClasses(cause error) []ReceiverCauseClass {
 	return classifyReceiverCause(cause, receiverCausePolicy{}).classes
 }
 
+//nolint:errorlint // Matches the current error node during bounded Unwrap traversal.
 func directReceiverCauseClass(cause error) (ReceiverCauseClass, bool) {
-	switch {
-	case isExactReceiverSentinel(cause, session.ErrRuntimeClosed):
+	switch cause {
+	case session.ErrRuntimeClosed:
 		return ReceiverCauseRuntimeClosed, true
-	case isExactReceiverSentinel(cause, ErrConfig):
+	case ErrConfig:
 		return ReceiverCauseConfiguration, true
-	case isExactReceiverSentinel(cause, session.ErrOperationMissing):
+	case session.ErrOperationMissing:
 		return ReceiverCauseOperationMissing, true
-	case isExactReceiverSentinel(cause, ErrPeerNegotiationTimeout):
+	case ErrPeerNegotiationTimeout:
 		return ReceiverCauseNegotiationTimeout, true
-	case isExactReceiverSentinel(cause, ErrPeerAdmissionTimeout):
+	case ErrPeerAdmissionTimeout:
 		return ReceiverCauseAdmissionTimeout, true
-	case isExactReceiverSentinel(cause, errCandidateLimit):
+	case errCandidateLimit:
 		return ReceiverCauseCandidateLimit, true
-	case isExactReceiverSentinel(cause, errChannelAdmission):
+	case errChannelAdmission:
 		return ReceiverCauseChannelAdmission, true
-	case isExactReceiverSentinel(cause, ErrEventCapacity):
+	case ErrEventCapacity:
 		return ReceiverCauseEventCapacity, true
-	case isExactReceiverSentinel(cause, ErrNegotiation):
+	case ErrNegotiation:
 		return ReceiverCauseNegotiation, true
-	case isExactReceiverSentinel(cause, ErrProtocol),
-		isExactReceiverSentinel(cause, protocolsession.ErrUnknownMessageKind),
-		isExactReceiverSentinel(cause, protocolsession.ErrInvalidOperationFailure):
+	case ErrProtocol, protocolsession.ErrUnknownMessageKind, protocolsession.ErrInvalidOperationFailure:
 		return ReceiverCauseProtocol, true
-	case isExactReceiverSentinel(cause, context.DeadlineExceeded):
+	case context.DeadlineExceeded:
 		return ReceiverCauseDeadline, true
-	case isExactReceiverSentinel(cause, errPeerShutdown):
+	case errPeerShutdown:
 		return ReceiverCausePeerShutdown, true
-	case isExactReceiverSentinel(cause, errChannelDrain):
+	case errChannelDrain:
 		return ReceiverCauseChannelDrain, true
 	default:
 		return "", false
 	}
-}
-
-func isExactReceiverSentinel(cause, sentinel error) bool {
-	causeValue := reflect.ValueOf(cause)
-	sentinelValue := reflect.ValueOf(sentinel)
-	return causeValue.IsValid() && sentinelValue.IsValid() &&
-		causeValue.Type() == sentinelValue.Type() &&
-		causeValue.Comparable() && causeValue.Equal(sentinelValue)
 }

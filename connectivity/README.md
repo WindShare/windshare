@@ -15,7 +15,7 @@
 | `reachability/`, `reachability/gateway/` | Gateway port-mapping leases and reachability refresh |
 | `iceconfig/`, `icepolicy/` | Immutable ICE inputs and candidate/endpoint selection policy |
 | `relayplan/` | Bounded deterministic relay candidate selection |
-| `senderrelay/`, `relayset/` | Per-relay registration/recovery and coordinated multi-relay session admission |
+| `relayset/` | Per-relay sender/receiver registration, recovery, and coordinated multi-relay session admission |
 
 ## Validate
 

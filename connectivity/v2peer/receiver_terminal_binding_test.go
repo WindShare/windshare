@@ -102,12 +102,11 @@ func receiverBoundTestTermination(
 	decision receiverAttemptDecision,
 	cause error,
 ) ReceiverSignalingTermination {
-	diagnostics, truncated := snapshotReceiverCauseWithStatus(cause)
 	return ReceiverSignalingTermination{
 		operationToken: binding.token,
 		valid:          true,
 		decision:       decision,
-		diagnostics:    diagnostics, diagnosticsTruncated: truncated,
+		diagnostics:    cause,
 	}
 }
 

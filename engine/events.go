@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/connectivity/relayset"
-	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/diagnostics"
@@ -579,18 +578,18 @@ func translateSenderRecovery(value share.RelayRecovery) (RelayRecovery, bool) {
 	attempt := value.Attempt
 	var state RelayRecoveryState
 	switch attempt.State {
-	case senderrelay.AttemptStarted:
+	case relayset.AttemptStarted:
 		state = RelayRecoveryStarted
-	case senderrelay.AttemptSucceeded:
+	case relayset.AttemptSucceeded:
 		state = RelayRecoverySucceeded
-	case senderrelay.AttemptFailed:
+	case relayset.AttemptFailed:
 		state = RelayRecoveryFailed
-	case senderrelay.AttemptAuthorization:
+	case relayset.AttemptAuthorization:
 		state = RelayRecoveryWaiting
 		if attempt.Terminal {
 			state = RelayRecoveryFailed
 		}
-	case senderrelay.AttemptWaiting:
+	case relayset.AttemptWaiting:
 		state = RelayRecoveryWaiting
 	default:
 		return RelayRecovery{}, false

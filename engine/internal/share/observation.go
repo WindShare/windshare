@@ -6,7 +6,6 @@ import (
 
 	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/relayset"
-	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
@@ -38,7 +37,7 @@ const (
 
 type RelayRecovery struct {
 	Endpoint v2.RelayEndpoint
-	Attempt  senderrelay.Attempt
+	Attempt  relayset.Attempt
 }
 
 type ObservationSource string
@@ -153,7 +152,7 @@ func (o *observations) runtimeConfig(relays Relays, peers sendersession.PeerHand
 	return config
 }
 
-func (o *observations) attachRelay(connection senderrelay.Connection) func() {
+func (o *observations) attachRelay(connection relayset.SenderConnection) func() {
 	if !o.detailed {
 		return func() {}
 	}
