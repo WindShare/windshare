@@ -320,8 +320,7 @@ export class ReceiverConnectivity {
     const recovery = this.#createPeerRecovery(peerPathId, this.#offers, () => this.#peerUnavailable())
     const clock = this.#peerRecoveryOptions.clock ?? browserPeerRecoveryClock
     this.#pathControls.set(encodeBase64Url(peerPathIdentity), new PeerPathControl(
-      this.#session, peerPathIdentity, this.#peerRecoveryOptions.network!, clock, (notice) => recovery.pathChanged(notice),
-      this.#peerRecoveryOptions.providerProfile))
+      this.#session, peerPathIdentity, this.#peerRecoveryOptions.network!, clock, (notice) => recovery.pathChanged(notice)))
     return recovery
   }
 
@@ -456,7 +455,7 @@ export class ReceiverConnectivity {
     this.#optionalPaths.set(key, entry)
     const clock = this.#peerRecoveryOptions.clock ?? browserPeerRecoveryClock
     const control = new PeerPathControl(this.#session, identity.copyBytes(), this.#peerRecoveryOptions.network!, clock,
-      notice => path.pathChanged(notice), this.#peerRecoveryOptions.providerProfile)
+      notice => path.pathChanged(notice))
     this.#pathControls.set(key, control)
     control.activate()
     entry.activation = path.activate()

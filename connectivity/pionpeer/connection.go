@@ -31,7 +31,6 @@ type AttemptConfig struct {
 	NetworkGenerationID uint64
 	ICEProfileID        string
 	ICE                 iceconfig.Connection
-	TCPProfile          TCPProfile
 	SocketLease         *socketauthority.Lease
 	MappedEndpoints     []MappedEndpoint
 	Observe             func(Event)
@@ -86,13 +85,12 @@ func NewPeerConnection(configuration pion.Configuration, request AttemptConfig) 
 		_ = lease.Close()
 		return nil, err
 	}
-	capability := Capabilities(request.TCPProfile)
-	var tcpFailure error
-	if capability.IPv4 || capability.IPv6 {
-		if tcpFailure = lease.PrepareTCP(capability.IPv6); tcpFailure != nil {
-			// An optional listener cannot take the ordinary UDP path away.
-			capability = TCPCapability{}
-		}
+	// Standard RFC 6544 ICE-TCP is optional and best-effort: listener capacity or
+	// bind failures degrade cleanly to UDP-only without blocking connectivity.
+	tcpFailure := lease.PrepareTCP()
+	var tcpEndpoints []netip.AddrPort
+	if tcpFailure == nil {
+		tcpEndpoints = lease.TCPEndpoints()
 	}
 	mux, release, err := lease.Claim()
 	if err != nil {
@@ -104,7 +102,7 @@ func NewPeerConnection(configuration pion.Configuration, request AttemptConfig) 
 		_ = lease.Close()
 		return nil, err
 	}
-	mapped, err := mapAttemptEndpoints(request.MappedEndpoints, endpoints, lease.TCPEndpoints(), capability)
+	mapped, err := mapAttemptEndpoints(request.MappedEndpoints, endpoints, tcpEndpoints)
 	if err != nil {
 		return fail(err)
 	}
@@ -115,7 +113,7 @@ func NewPeerConnection(configuration pion.Configuration, request AttemptConfig) 
 	}
 	settings.SetIPFilter(localEndpointFilter(endpoints))
 	settings.SetICEMulticastDNSMode(ice.MulticastDNSModeQueryOnly)
-	configureNetworkTypes(&settings, lease, capability)
+	configureNetworkTypes(&settings, lease, tcpEndpoints)
 	configureICE(&configuration, request.ICE)
 	connection := &Connection{lease: lease, release: release, request: request, mapped: mapped}
 	settings.LoggerFactory = providerLoggerFactory{LoggerFactory: logging.NewDefaultLoggerFactory(), observe: connection.observeDiagnostic}
@@ -135,17 +133,27 @@ func NewPeerConnection(configuration pion.Configuration, request AttemptConfig) 
 	return connection, nil
 }
 
-func configureNetworkTypes(settings *pion.SettingEngine, lease *socketauthority.Lease, capability TCPCapability) {
+func configureNetworkTypes(settings *pion.SettingEngine, lease *socketauthority.Lease, tcpEndpoints []netip.AddrPort) {
 	networks := []pion.NetworkType{pion.NetworkTypeUDP4, pion.NetworkTypeUDP6}
-	if capability.IPv4 {
+	var hasTCP4, hasTCP6 bool
+	for _, endpoint := range tcpEndpoints {
+		if endpoint.Addr().Is4() {
+			hasTCP4 = true
+		} else if endpoint.Addr().Is6() {
+			hasTCP6 = true
+		}
+	}
+	if hasTCP4 {
 		networks = append(networks, pion.NetworkTypeTCP4)
 	}
-	if capability.IPv6 {
+	if hasTCP6 {
 		networks = append(networks, pion.NetworkTypeTCP6)
 	}
-	if capability.IPv4 || capability.IPv6 {
+	if hasTCP4 || hasTCP6 {
+		// Keep Pion's default DisableActiveTCP(false): browsers emit only active
+		// candidates (ignored by pion/ice) and dial our passive mux, while native
+		// peers still dial each other's passive listeners on demand.
 		settings.SetICETCPMux(lease.TCP())
-		settings.DisableActiveTCP(capability.PassiveOnly)
 	}
 	settings.SetNetworkTypes(networks)
 }
@@ -252,7 +260,7 @@ func (c *Connection) SelectedPair() (PairFacts, bool) {
 	return facts, true
 }
 
-func mapAttemptEndpoints(requested []MappedEndpoint, endpoints, tcpEndpoints []netip.AddrPort, capability TCPCapability) ([]MappedEndpoint, error) {
+func mapAttemptEndpoints(requested []MappedEndpoint, endpoints, tcpEndpoints []netip.AddrPort) ([]MappedEndpoint, error) {
 	mapped := make([]MappedEndpoint, 0, len(requested))
 	for _, endpoint := range requested {
 		protocol := endpoint.Protocol
@@ -262,10 +270,10 @@ func mapAttemptEndpoints(requested []MappedEndpoint, endpoints, tcpEndpoints []n
 		bases := endpoints
 		switch protocol {
 		case "tcp":
-			bases = tcpEndpoints
-			if (!capability.IPv4 && endpoint.Local.Addr().Is4()) || (!capability.IPv6 && endpoint.Local.Addr().Is6()) {
+			if len(tcpEndpoints) == 0 {
 				continue
 			}
+			bases = tcpEndpoints
 		case "udp":
 		default:
 			return nil, errors.New("unsupported mapped endpoint protocol")

@@ -73,9 +73,6 @@ func TestNativeIPv6PinholeRetainedByExactSelectedHostPair(t *testing.T) {
 	}
 }
 func TestProvenTCPAllocatesMappingBeforeFreshAttemptAndRetainsOnlyExactProtocol(t *testing.T) {
-	if !pionpeer.Capabilities(pionpeer.TCPNativeWindows).IPv4 {
-		t.Skip("this platform has no proven native TCP profile")
-	}
 	h := newHarness(t)
 	gateway := &mappedGateway{}
 	h.native.config.Reachability = reachability.New(reachability.Config{Now: func() time.Time { return h.now }, Gateways: []reachability.Gateway{gateway}})

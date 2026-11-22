@@ -4,7 +4,6 @@ import {
   requireArray,
   requireBytes,
   requireUnsigned,
-  requireText,
 } from './cbor'
 export const PEER_PATH_CONTROL_KIND = Object.freeze({
   demand: 1,
@@ -13,10 +12,9 @@ export const PEER_PATH_CONTROL_KIND = Object.freeze({
   networkChanged: 4,
 } as const)
 export const MAXIMUM_PATH_CONTROL_LIFETIME_MS = 120_000
-const SCHEMA_VERSION = 2
+const SCHEMA_VERSION = 3
 const IDENTITY_BYTES = 16
-const FIELD_COUNT = 8
-const MAXIMUM_PROVIDER_PROFILE_LENGTH = 64
+const FIELD_COUNT = 7
 const MAXIMUM_BODY_BYTES = 256
 const MAXIMUM_SEQUENCE = 0xffff_ffff_ffff_ffffn
 
@@ -27,14 +25,13 @@ export interface PeerPathControl {
   readonly kind: number
   readonly validForMilliseconds: number
   readonly holdForMilliseconds: number
-  readonly providerProfile?: string
 }
 
 export function encodePeerPathControl(value: PeerPathControl): Uint8Array<ArrayBuffer> {
   validate(value)
   return encodeCanonicalCbor([
     SCHEMA_VERSION, value.peerPathId, value.networkGenerationId, value.controlSequence,
-    value.kind, value.validForMilliseconds, value.holdForMilliseconds, value.providerProfile ?? '',
+    value.kind, value.validForMilliseconds, value.holdForMilliseconds,
   ])
 }
 
@@ -54,17 +51,12 @@ export function decodePeerPathControl(body: Uint8Array): PeerPathControl {
     kind: Number(requireUnsigned(fields[4], 'path control kind')),
     validForMilliseconds: Number(requireUnsigned(fields[5], 'path control lifetime')),
     holdForMilliseconds: Number(requireUnsigned(fields[6], 'path control hold')),
-    providerProfile: requireText(fields[7], 'provider profile'),
   })
   validate(value)
   return value
 }
 
 function validate(value: PeerPathControl): void {
-  const profile = value.providerProfile ?? ''
-  if (typeof profile !== 'string' || profile.length > MAXIMUM_PROVIDER_PROFILE_LENGTH || /[^a-z0-9.-]/u.test(profile)) {
-    throw new Error('invalid provider profile')
-  }
   requireBytes(value.peerPathId, IDENTITY_BYTES, 'peer path ID', true)
   requireBytes(value.networkGenerationId, IDENTITY_BYTES, 'network generation ID', true)
   if (

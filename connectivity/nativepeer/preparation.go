@@ -197,23 +197,17 @@ func (p *PreparedAttempt) connect(ctx context.Context) (*pionpeer.Connection, er
 		// The path already owns this allocation across serialized ICE attempts.
 		_ = lease.Close()
 	}
-	now := n.config.Now()
-	remoteProfile := path.remoteProfile
-	if !now.Before(path.remoteProfileExpires) {
-		remoteProfile = ""
-	}
-	capability := pionpeer.Capabilities(remoteProfile)
-	if capability.IPv4 || capability.IPv6 {
-		_ = path.lease.PrepareTCP(capability.IPv6)
-	}
+	// Prepare optional passive TCP listeners before refreshing reachability so
+	// UPnP/PCP/NAT-PMP can map TCP alongside UDP; capacity/bind failures leave
+	// the mandatory UDP path intact.
+	_ = path.lease.PrepareTCP()
 	iceConfiguration, err := iceconfig.New(p.profile.URLs())
 	if err != nil {
 		n.mu.Unlock()
 		return nil, err
 	}
 	config := pionpeer.AttemptConfig{ProtocolSessionID: p.key.session, PeerPathID: [16]byte(p.key.path), AttemptID: [16]byte(p.request.Binding.AttemptID),
-		NetworkGenerationID: path.generation, ICEProfileID: p.profile.ID(), ICE: iceConfiguration, SocketLease: path.lease, MappedEndpoints: n.mappedLocked(path),
-		TCPProfile: remoteProfile}
+		NetworkGenerationID: path.generation, ICEProfileID: p.profile.ID(), ICE: iceConfiguration, SocketLease: path.lease, MappedEndpoints: n.mappedLocked(path)}
 	observer := n.attemptObserver(p.key, path, p.profile, p.request.Binding)
 	config.Observe = func(event pionpeer.Event) {
 		observer(event)

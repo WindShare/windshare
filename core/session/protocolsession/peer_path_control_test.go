@@ -7,7 +7,7 @@ import (
 )
 
 func TestPeerPathControlCanonicalBoundedSchema(t *testing.T) {
-	valid := PeerPathControl{PeerPathID: [16]byte{1}, NetworkGenerationID: [16]byte{2}, ControlSequence: 1, Kind: PeerPathDemand, ValidFor: time.Minute, HoldFor: 40 * time.Second, ProviderProfile: "pion-4.2.16-ice-4.2.7-windows"}
+	valid := PeerPathControl{PeerPathID: [16]byte{1}, NetworkGenerationID: [16]byte{2}, ControlSequence: 1, Kind: PeerPathDemand, ValidFor: time.Minute, HoldFor: 40 * time.Second}
 	for kind := PeerPathDemand; kind <= PeerPathNetworkChanged; kind++ {
 		control := valid
 		control.Kind = kind
@@ -25,14 +25,12 @@ func TestPeerPathControlCanonicalBoundedSchema(t *testing.T) {
 		if err != nil || decoded != control {
 			t.Fatalf("roundtrip=%+v %v", decoded, err)
 		}
-		noncanonical := append([]byte{0x98, 8}, encoded[1:]...)
+		noncanonical := append([]byte{0x98, 7}, encoded[1:]...)
 		if _, err := DecodePeerPathControl(noncanonical); err == nil {
 			t.Fatal("noncanonical array accepted")
 		}
 	}
 	for _, mutate := range []func(*PeerPathControl){
-		func(c *PeerPathControl) { c.ProviderProfile = string(bytes.Repeat([]byte("a"), 65)) },
-		func(c *PeerPathControl) { c.ProviderProfile = "untrusted profile" },
 		func(c *PeerPathControl) { c.PeerPathID = [16]byte{} }, func(c *PeerPathControl) { c.NetworkGenerationID = [16]byte{} },
 		func(c *PeerPathControl) { c.ControlSequence = 0 }, func(c *PeerPathControl) { c.Kind = 0 }, func(c *PeerPathControl) { c.Kind = 5 },
 		func(c *PeerPathControl) { c.ValidFor = MaxPeerPathControlLifetime + time.Millisecond }, func(c *PeerPathControl) { c.ValidFor = -1 },
@@ -46,7 +44,7 @@ func TestPeerPathControlCanonicalBoundedSchema(t *testing.T) {
 			t.Fatalf("accepted %+v", control)
 		}
 	}
-	for _, body := range [][]byte{nil, {0x80}, {0x87, 1}, {0x87, 1, 1, 1, 1, 1, 1, 1}, bytes.Repeat([]byte{0xff}, MaxPeerPathControlBodyBytes+1)} {
+	for _, body := range [][]byte{nil, {0x80}, {0x86, 1}, {0x87, 1, 1, 1, 1, 1, 1, 1}, {0x88, 2, 1, 1, 1, 1, 1, 1, 0x60}, bytes.Repeat([]byte{0xff}, MaxPeerPathControlBodyBytes+1)} {
 		if _, err := DecodePeerPathControl(body); err == nil {
 			t.Fatal("malformed body accepted")
 		}

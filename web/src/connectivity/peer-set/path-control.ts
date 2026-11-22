@@ -17,23 +17,19 @@ export class PeerPathControl {
   readonly #network: PeerNetworkGeneration
   readonly #clock: PeerRecoveryClock
   readonly #unsubscribe: () => void
-  readonly #providerProfile: string
   readonly #lifetime = new AbortController()
   readonly #tasks = new Set<Promise<void>>()
-  #remoteProviderProfile = ''
   #sequence = 0n
   #remoteSequence = 0n
   #demand: AbortController | undefined
   #closed = false
 
   constructor(session: ReceiverSessionRuntime, path: Uint8Array, network: PeerNetworkGeneration,
-    clock: PeerRecoveryClock, changed: (notice: PeerPathNotice) => void, providerProfile = '') {
+    clock: PeerRecoveryClock, changed: (notice: PeerPathNotice) => void) {
     this.#session = session
     this.#path = path.slice()
     this.#network = network
     this.#clock = clock
-    if (!/^[a-z0-9.-]{0,64}$/.test(providerProfile)) throw new TypeError('Invalid trusted provider profile')
-    this.#providerProfile = providerProfile
     this.#unsubscribe = session.subscribePeerPathControls((body) => {
       const control = decodePeerPathControl(body)
       if (this.#closed || !equalBytes(control.peerPathId, this.#path) ||
@@ -41,7 +37,6 @@ export class PeerPathControl {
       // Retain the watermark after expiry; neither old network notices nor reclaimed
       // operation records may reintroduce an already consumed mapping-ready hint.
       this.#remoteSequence = control.controlSequence
-      this.#remoteProviderProfile = control.providerProfile ?? ''
       if (this.#demand === undefined || control.validForMilliseconds === 0) return
       if (control.kind === PEER_PATH_CONTROL_KIND.mappingReady) changed('mapping-ready')
       if (control.kind === PEER_PATH_CONTROL_KIND.networkChanged) changed('network-changed')
@@ -54,8 +49,6 @@ export class PeerPathControl {
     this.#demand = demand
     this.#track(this.#renew(demand.signal))
   }
-
-  get remoteProviderProfile(): string { return this.#remoteProviderProfile }
 
   deactivate(): void {
     if (this.#demand === undefined) return
@@ -100,7 +93,6 @@ export class PeerPathControl {
       controlSequence: ++this.#sequence, kind,
       validForMilliseconds: revoke ? 0 : DEMAND_LIFETIME_MILLISECONDS,
       holdForMilliseconds: this.#demand === undefined ? 0 : ATTEMPT_HOLD_MILLISECONDS,
-      providerProfile: this.#providerProfile,
     }), { signal }), signal)
   }
 }

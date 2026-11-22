@@ -17,11 +17,10 @@ describe('authenticated cross-attempt path control', () => {
     const control = new PeerPathControl(session, new Uint8Array(16).fill(1), new PeerNetworkGeneration(), {
       now: () => 0,
       sleep: async () => { throw new Error('cancelled send must not begin a timer') },
-    }, () => undefined, 'chromium-151.0.7922.34-windows')
+    }, () => undefined)
     control.activate()
     await control.close()
     expect(sent.map((body) => decodePeerPathControl(body).kind)).toEqual([KIND.demand, KIND.revoke])
-    expect(decodePeerPathControl(sent[0]!).providerProfile).toBe('chromium-151.0.7922.34-windows')
   })
 
   it('renews only content demand, retains replay watermark, and revokes without reviving an operation', async () => {

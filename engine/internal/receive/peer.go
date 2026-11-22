@@ -70,25 +70,22 @@ const (
 	receiverPeerRequired
 )
 
-type receiverRelayContentMode uint8
-
-const (
-	receiverRelayContentImmediate receiverRelayContentMode = iota + 1
-	receiverRelayContentProhibited
-)
-
 type receiverConnectivityPlan struct {
 	peer         receiverPeerRequirement
-	relayContent receiverRelayContentMode
+	relayTrigger receiverAdmissionTrigger
+}
+
+func (plan receiverConnectivityPlan) allowsRelay() bool {
+	return plan.relayTrigger != ""
 }
 
 func (plan receiverConnectivityPlan) valid() bool {
 	return plan == (receiverConnectivityPlan{
-		peer: receiverPeerPreferred, relayContent: receiverRelayContentImmediate,
+		peer: receiverPeerPreferred, relayTrigger: receiverAdmissionTriggerAuto,
 	}) || plan == (receiverConnectivityPlan{
-		peer: receiverPeerDisabled, relayContent: receiverRelayContentImmediate,
+		peer: receiverPeerDisabled, relayTrigger: receiverAdmissionTriggerRelayOnly,
 	}) || plan == (receiverConnectivityPlan{
-		peer: receiverPeerRequired, relayContent: receiverRelayContentProhibited,
+		peer: receiverPeerRequired,
 	})
 }
 
@@ -96,52 +93,43 @@ func (policy ConnectivityPolicy) receiverPlan() (receiverConnectivityPlan, error
 	switch policy {
 	case ConnectivityAuto:
 		return receiverConnectivityPlan{
-			peer: receiverPeerPreferred, relayContent: receiverRelayContentImmediate,
+			peer: receiverPeerPreferred, relayTrigger: receiverAdmissionTriggerAuto,
 		}, nil
 	case ConnectivityRelayOnly:
 		return receiverConnectivityPlan{
-			peer: receiverPeerDisabled, relayContent: receiverRelayContentImmediate,
+			peer: receiverPeerDisabled, relayTrigger: receiverAdmissionTriggerRelayOnly,
 		}, nil
 	case ConnectivityP2POnly:
 		return receiverConnectivityPlan{
-			peer: receiverPeerRequired, relayContent: receiverRelayContentProhibited,
+			peer: receiverPeerRequired,
 		}, nil
 	default:
 		return receiverConnectivityPlan{}, ErrInvalidConnectivityPolicy
 	}
 }
 
-func (a *runner) monitorReceiverAdmission(
-	admission receiverContentAdmission,
+func recordReceiverAdmissionDecision(
+	decision receiverAdmissionDecision,
 	runtime receiverRuntimeCloser,
 	observation getObservation,
 	localStop *receiverLocalStop,
-) <-chan struct{} {
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		decision, ok := <-admission.Decision()
-		if !ok {
-			return
-		}
-		observation.admission(decision)
-		if decision.Cause == nil {
-			return
-		}
-		switch decision.TerminalOwner {
-		case receiverAdmissionTerminalResumeFailed:
-			observation.warning(decision.Cause)
-		case receiverAdmissionTerminalP2PUnavailable:
-			observation.warningCode(FailurePeerStopped)
-		default:
-			return
-		}
-		if runtime != nil {
-			localStop.record(ReceiverLocalStopOutputAdmission)
-			runtime.Close()
-		}
-	}()
-	return done
+) {
+	observation.admission(decision)
+	if decision.Cause == nil {
+		return
+	}
+	switch decision.TerminalOwner {
+	case receiverAdmissionTerminalResumeFailed:
+		observation.warning(decision.Cause)
+	case receiverAdmissionTerminalP2PUnavailable:
+		observation.warningCode(FailurePeerStopped)
+	default:
+		return
+	}
+	if runtime != nil {
+		localStop.record(ReceiverLocalStopOutputAdmission)
+		runtime.Close()
+	}
 }
 
 // receiverContentPaths projects recent useful delivery separately from admitted
@@ -222,7 +210,7 @@ func (paths *receiverContentPaths) changedPathLocked() (ContentPath, bool) {
 func beginReceiverConnectivity(
 	plan receiverConnectivityPlan,
 	startPeer func() *activeReceiverPeer,
-	admitRelayOnly func() error,
+	admitRelay func() error,
 ) (*activeReceiverPeer, error) {
 	if !plan.valid() {
 		return nil, ErrInvalidConnectivityPolicy
@@ -232,12 +220,12 @@ func beginReceiverConnectivity(
 	var peer *activeReceiverPeer
 	switch plan.peer {
 	case receiverPeerPreferred:
-		if err := admitRelayOnly(); err != nil {
+		if err := admitRelay(); err != nil {
 			return nil, err
 		}
 		peer = startPeer()
 	case receiverPeerDisabled:
-		if err := admitRelayOnly(); err != nil {
+		if err := admitRelay(); err != nil {
 			return nil, err
 		}
 	case receiverPeerRequired:

@@ -32,10 +32,11 @@ it('decodes the Go path controls with their canonical bodies', () => {
 
 it('rejects overlong demand, unknown kind, zero sequence and non-demand holds', () => {
  const valid = decodePeerPathControl(bytes(vector.pathControls[0]!.bodyB64))
- for (const update of [{validForMilliseconds:120_001}, {controlSequence:0n}, {kind:5}, {kind:3}, {validForMilliseconds:0}, {holdForMilliseconds:-1}, {providerProfile:'x'.repeat(65)}, {providerProfile:'bad profile'}]) {
+ for (const update of [{validForMilliseconds:120_001}, {controlSequence:0n}, {kind:5}, {kind:3}, {validForMilliseconds:0}, {holdForMilliseconds:-1}]) {
   expect(() => encodePeerPathControl({...valid,...update})).toThrow()
  }
  expect(() => decodePeerPathControl(encodeBody([1,1,1,1,1,1,1]))).toThrow()
+ expect(() => decodePeerPathControl(encodeBody([2,valid.peerPathId,valid.networkGenerationId,1n,1,60_000,40_000,'']))).toThrow()
 })
 
 it('routes path controls without a negotiation and stops after session termination', async () => {

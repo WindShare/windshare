@@ -55,19 +55,45 @@ func TestMappingFactsAreFrozenOnlyIntoFreshAttemptAndRetainedOnlyForSelectedLane
 	}
 	_, _ = h.native.NewPeerConnection(context.Background(), request(2))
 	second := h.requests[1]
-	if len(second.MappedEndpoints) != 1 || second.MappedEndpoints[0].Local != second.SocketLease.Endpoints()[0] {
+	var sawUDP, sawTCP bool
+	for _, endpoint := range second.MappedEndpoints {
+		switch endpoint.Protocol {
+		case "udp":
+			if endpoint.Local != second.SocketLease.Endpoints()[0] {
+				t.Fatal(second.MappedEndpoints)
+			}
+			sawUDP = true
+		case "tcp":
+			if endpoint.Local != second.SocketLease.TCPEndpoints()[0] {
+				t.Fatal(second.MappedEndpoints)
+			}
+			sawTCP = true
+		}
+	}
+	if len(second.MappedEndpoints) != 2 || !sawUDP || !sawTCP {
 		t.Fatal(second.MappedEndpoints)
 	}
 	second.Observe(pionpeer.Event{Pair: &pionpeer.PairFacts{LocalAddress: "8.8.8.8", LocalPort: 4242, Protocol: "udp"}})
 	h.native.SetAdmitted(req.ProtocolSessionID, req.Binding.PeerPathID, true)
-	if len(h.native.config.Reachability.Facts()) != 1 {
-		t.Fatal("admitted mapping lost its lease")
+	h.now = h.now.Add(4 * time.Second)
+	h.native.Maintain(context.Background())
+	var retained int
+	for _, fact := range h.native.config.Reachability.Facts() {
+		if fact.GatewayID != "" {
+			retained++
+			if fact.Endpoint.Protocol != reachability.UDP {
+				t.Fatal("unselected TCP mapping retained", fact)
+			}
+		}
+	}
+	if retained != 1 {
+		t.Fatal("admitted mapping lost its lease", retained)
 	}
 	if err := h.native.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if gateway.deletes.Load() != 1 {
-		t.Fatal("final demand did not revoke exact lease", gateway.deletes.Load())
+	if gateway.deletes.Load() != 2 {
+		t.Fatal("final demand did not revoke exact leases", gateway.deletes.Load())
 	}
 	if _, err := h.native.NewPeerConnection(context.Background(), request(3)); err == nil {
 		t.Fatal("closed owner reopened")

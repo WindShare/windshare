@@ -232,7 +232,6 @@ export type PeerRecoveryState =
 /** One policy boundary is threaded from the gateway to each session generation. */
 export interface PeerRecoveryDependencies {
   readonly tabAdmission?: PeerTabAdmission
-  readonly providerProfile?: string
   readonly network?: PeerNetworkGeneration
   readonly endpoints?: ICEEndpointPool | (() => ICEEndpointPool)
   readonly budget?: PeerAttemptBudget

@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
-	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -48,45 +47,42 @@ func TestReceiveCompletionWaitsForOutputCleanup(t *testing.T) {
 	})
 }
 
-type blockingJoinAdmission struct {
-	receiverContentAdmission
-	closes           atomic.Int32
-	entered, release chan struct{}
-}
-
-func (a *blockingJoinAdmission) Close() {
-	if a.closes.Add(1) == 1 {
-		close(a.entered)
+func TestConcurrentGenerationCloseJoinsAdmissionOnce(t *testing.T) {
+	relay := newFakeReceiverContentSuspension()
+	release := make(chan struct{})
+	relay.resumeGate = release
+	claimGate := make(chan struct{})
+	plan, err := ConnectivityAuto.receiverPlan()
+	if err != nil {
+		t.Fatal(err)
 	}
-}
-func (a *blockingJoinAdmission) Wait() { <-a.release }
-func TestConcurrentGenerationCloseJoinsAdmissionAndMonitorOnce(t *testing.T) {
-	admission := &blockingJoinAdmission{entered: make(chan struct{}), release: make(chan struct{})}
-	monitor := make(chan struct{})
-	execution := &getTransferExecution{admission: admission, monitorDone: monitor}
+	admission, err := newReceiverContentAdmission(plan, relay, receiverAdmissionHooks{claimGate: claimGate})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := admission.AdmitRelay(); err != nil {
+		t.Fatal(err)
+	}
+	close(claimGate)
+	<-relay.resumeEvent
+
+	execution := &getTransferExecution{admission: admission}
 	returned := make(chan struct{}, 2)
 	go func() { execution.CloseWithReason(ReceiverLocalStopRuntimeSessionFailure); returned <- struct{}{} }()
-	<-admission.entered
 	go func() { execution.Close(); returned <- struct{}{} }()
 	// sync.Once waits on a mutex, which synctest cannot treat as durably blocked.
-	// These short bounded waits prove that competing closers cannot skip either join.
+	// This bounded check proves neither competing closer returns before Resume finishes.
 	const joinCheckWindow = 10 * time.Millisecond
 	select {
 	case <-returned:
 		t.Fatal("concurrent cleanup skipped admission join")
 	case <-time.After(joinCheckWindow):
 	}
-	close(admission.release)
-	select {
-	case <-returned:
-		t.Fatal("cleanup skipped monitor join")
-	case <-time.After(joinCheckWindow):
-	}
-	close(monitor)
+	close(release)
 	<-returned
 	<-returned
-	if admission.closes.Load() != 1 {
-		t.Fatalf("closes=%d", admission.closes.Load())
+	if relay.count() != 1 {
+		t.Fatalf("resume count=%d", relay.count())
 	}
 }
 

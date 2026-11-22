@@ -49,7 +49,7 @@ func TestReservationProtectsMandatoryUDPFromOptionalTCP(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer lease.Close()
-	if err := lease.PrepareTCP(false); !errors.Is(err, ErrCapacity) {
+	if err := lease.PrepareTCP(); !errors.Is(err, ErrCapacity) {
 		t.Fatal("TCP stole reserved UDP", err)
 	}
 	second.Close()
@@ -64,7 +64,7 @@ func TestReservationProtectsMandatoryUDPFromOptionalTCP(t *testing.T) {
 		t.Fatal(err)
 	}
 	third.Close()
-	if err := lease.PrepareTCP(false); err != nil {
+	if err := lease.PrepareTCP(); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := first.Activate(); !errors.Is(err, ErrInvalid) {

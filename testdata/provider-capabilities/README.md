@@ -36,8 +36,8 @@ skipped by short tests to keep ordinary validation bounded.
 
 ## TCP capability
 
-`windows-tcp-host.json` and `windows-tcp-mapped.json` record the exact local
-browser/native combinations tested. Reproduce using
+`windows-tcp-host.json` and `windows-tcp-mapped.json` record local
+browser/native RFC 6544 ICE-TCP interoperability runs. Reproduce using
 `node web/scripts/browser-network-matrix/run-tcp-capability.mjs output.json`
-(add `--mapped` for allocated external ports). These results authorize only the
-explicit provider profiles implemented by the capability policy.
+(add `--mapped` for allocated external ports). Standard passive/active ICE-TCP
+is enabled best-effort alongside UDP without a profile whitelist.

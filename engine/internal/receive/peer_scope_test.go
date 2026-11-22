@@ -11,9 +11,18 @@ import (
 func TestMonitorReceiverPeerUnsafeDispositionRevokesQueuedAdmissionWithoutFallback(t *testing.T) {
 	relay := newFakeReceiverContentSuspension()
 	claimGate := make(chan struct{})
-	admission, err := newRelayContentAdmissionWithExecution(
+	plan, err := ConnectivityAuto.receiverPlan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	decided := false
+	admission, err := newReceiverContentAdmission(
+		plan,
 		relay,
-		receiverAdmissionExecution{claimGate: claimGate},
+		receiverAdmissionHooks{
+			claimGate:  claimGate,
+			onDecision: func(receiverAdmissionDecision) { decided = true },
+		},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -23,12 +32,8 @@ func TestMonitorReceiverPeerUnsafeDispositionRevokesQueuedAdmissionWithoutFallba
 		admission.Wait()
 	})
 
-	if err := admission.AdmitRelayOnly(); err != nil {
+	if err := admission.AdmitRelay(); err != nil {
 		t.Fatal(err)
-	}
-	workerDone := admission.decisionWorkerDone()
-	if workerDone == nil {
-		t.Fatal("queued admission has no owned worker")
 	}
 
 	sessionFault, err := transferfault.NewSession(
@@ -73,23 +78,17 @@ func TestMonitorReceiverPeerUnsafeDispositionRevokesQueuedAdmissionWithoutFallba
 	if len(signals) != 1 || signals[0] != receiverPeerSessionFatal {
 		t.Fatalf("peer signals=%v, want exactly one session-fatal signal", signals)
 	}
-	for _, signal := range signals {
-		if signal == receiverPeerFailed || signal == receiverPeerDetached {
-			t.Fatalf("unsafe disposition emitted fallback signal=%v", signal)
-		}
-	}
 	if calls := receiverRuntime.calls.Load(); calls != 1 {
 		t.Fatalf("fatal monitor branch Close calls=%d, want 1", calls)
 	}
-	if err := admission.AdmitRelayOnly(); err != nil {
-		t.Fatalf("closed admission accepted follow-up selection with error: %v", err)
+	close(claimGate)
+	if err := admission.AdmitRelay(); err != nil {
+		t.Fatalf("closed admission returned error: %v", err)
 	}
-
 	admission.Wait()
-	if _, ok := <-admission.Decision(); ok {
+	if decided {
 		t.Fatal("unsafe disposition published a relay-admission decision")
 	}
-	<-workerDone
 	if resumed := relay.count(); resumed != 0 {
 		t.Fatalf("unsafe disposition resumed relay %d time(s)", resumed)
 	}

@@ -70,10 +70,8 @@ type pathResources struct {
 	releaseOptional               func()
 	localSequence, remoteSequence uint64
 	remoteGeneration              [16]byte
-	remoteProfile                 pionpeer.TCPProfile
 	remoteDemand                  bool
 	retired                       bool
-	remoteProfileExpires          time.Time
 	remoteExpires, holdUntil      time.Time
 	lease                         *socketauthority.Lease
 	generation                    uint64

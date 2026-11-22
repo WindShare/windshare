@@ -80,12 +80,15 @@ func TestCandidateFactsPreserveMappedProvenanceAndActualMilestones(t *testing.T)
 			t.Fatal("lost provider identity")
 		}
 		if event.Candidate != nil {
-			if event.Candidate.Priority == 0 || event.Candidate.TCPType != "" {
-				t.Fatalf("UDP candidate lost its priority or acquired TCP direction: %+v", event.Candidate)
+			if event.Candidate.Priority == 0 {
+				t.Fatalf("candidate lost its priority: %+v", event.Candidate)
+			}
+			if event.Candidate.Protocol == "udp" && event.Candidate.TCPType != "" {
+				t.Fatalf("UDP candidate acquired TCP direction: %+v", event.Candidate)
 			}
 			if event.Candidate.Origin == "mapped" {
 				sawMapped = true
-			} else if event.Candidate.Type == "host" {
+			} else if event.Candidate.Type == "host" && event.Candidate.Protocol == "udp" {
 				sawHost = true
 			}
 		}
@@ -105,7 +108,11 @@ func TestOptionalTCPFailureDoesNotPreventUDPAttempt(t *testing.T) {
 	authority := socketauthority.New(socketauthority.Config{Capacity: 1})
 	defer authority.Close()
 	lease := testLease(t, authority, 1, "127.0.0.1")
-	connection, err := NewPeerConnection(pion.Configuration{}, AttemptConfig{ProtocolSessionID: lease.SessionID(), NetworkGenerationID: 1, PeerPathID: lease.PathID(), SocketLease: lease, TCPProfile: TCPNativeWindows, allowLoopback: true})
+	connection, err := NewPeerConnection(pion.Configuration{}, AttemptConfig{
+		ProtocolSessionID: lease.SessionID(), NetworkGenerationID: 1, PeerPathID: lease.PathID(), SocketLease: lease,
+		MappedEndpoints: []MappedEndpoint{{Local: netip.MustParseAddrPort("127.0.0.1:1"), External: netip.MustParseAddrPort("203.0.113.1:1"), Protocol: "tcp"}},
+		allowLoopback:   true,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,12 +131,7 @@ func TestMappingProtocolValidation(t *testing.T) {
 		t.Fatal("unknown mapped protocol accepted")
 	}
 	request.MappedEndpoints[0].Protocol = "tcp"
-	connection, err := NewPeerConnection(pion.Configuration{}, request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer connection.Close()
-	if len(lease.TCPEndpoints()) != 0 {
-		t.Fatal("unknown peer profile enabled TCP")
+	if _, err := NewPeerConnection(pion.Configuration{}, request); err == nil {
+		t.Fatal("TCP mapping targeting UDP socket accepted")
 	}
 }

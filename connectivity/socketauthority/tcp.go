@@ -69,9 +69,10 @@ func (entry *pathSockets) socketCount() int {
 }
 func (entry *pathSockets) close() error { return errors.Join(entry.mux.Close(), entry.tcp.Close()) }
 
-// PrepareTCP is called only after a proven peer capability profile is selected.
-// It is demand-owned and bounded by the same process socket capacity as UDP.
-func (l *Lease) PrepareTCP(includeIPv6 bool) error {
+// PrepareTCP allocates optional passive TCP listeners for all lease addresses.
+// It is demand-owned and bounded by the same process socket capacity as UDP so
+// TCP listeners never starve mandatory UDP paths.
+func (l *Lease) PrepareTCP() error {
 	if l == nil {
 		return ErrInvalid
 	}
@@ -86,9 +87,6 @@ func (l *Lease) PrepareTCP(includeIPv6 bool) error {
 	}
 	var needed []netip.Addr
 	for _, address := range l.entry.addresses {
-		if address.Is6() && !includeIPv6 {
-			continue
-		}
 		existing := false
 		if l.entry.tcp != nil {
 			for _, endpoint := range l.entry.tcp.endpoints {
@@ -101,6 +99,9 @@ func (l *Lease) PrepareTCP(includeIPv6 bool) error {
 		if !existing {
 			needed = append(needed, address)
 		}
+	}
+	if len(needed) == 0 {
+		return nil
 	}
 	if a.socketCount+a.reservedCount+len(needed)+a.essentialReserveLocked() > a.config.Capacity {
 		return a.capacityLocked(len(needed))

@@ -4,7 +4,6 @@ import (
 	"io"
 	"net"
 	"net/netip"
-	"runtime"
 	"testing"
 	"time"
 
@@ -14,9 +13,6 @@ import (
 )
 
 func TestTCPMappedExternalPortAndUDPRemainInOnePeerConnection(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("TCP enablement requires the recorded Windows capability profile")
-	}
 	addresses := []string{"127.0.0.1"}
 	if address := localTCPIPv6(t); address != "" {
 		addresses = append(addresses, address)
@@ -30,7 +26,7 @@ func testTCPMapping(t *testing.T, address string) {
 	defer authority.Close()
 	leftLease := testLease(t, authority, 1, address)
 	rightLease := testLease(t, authority, 2, address)
-	if err := rightLease.PrepareTCP(true); err != nil {
+	if err := rightLease.PrepareTCP(); err != nil {
 		t.Fatal(err)
 	}
 	internal := rightLease.TCPEndpoints()[0]
@@ -45,10 +41,10 @@ func testTCPMapping(t *testing.T, address string) {
 	defer forwarder.Close()
 	external := forwarder.Addr().(*net.TCPAddr).AddrPort()
 	go proxyTCP(forwarder, internal)
-	makePeer := func(lease *socketauthority.Lease, profile TCPProfile, mappings []MappedEndpoint) *Connection {
+	makePeer := func(lease *socketauthority.Lease, mappings []MappedEndpoint) *Connection {
 		pc, err := NewPeerConnection(pion.Configuration{}, AttemptConfig{
 			ProtocolSessionID: lease.SessionID(), NetworkGenerationID: 1, PeerPathID: lease.PathID(),
-			SocketLease: lease, TCPProfile: profile, MappedEndpoints: mappings,
+			SocketLease: lease, MappedEndpoints: mappings,
 			allowLoopback: netip.MustParseAddr(address).IsLoopback(),
 		})
 		if err != nil {
@@ -57,8 +53,8 @@ func testTCPMapping(t *testing.T, address string) {
 		t.Cleanup(func() { _ = pc.Close() })
 		return pc
 	}
-	left := makePeer(leftLease, TCPNativeWindows, nil)
-	right := makePeer(rightLease, TCPNativeWindows, []MappedEndpoint{{Local: internal, External: external, Protocol: "tcp"}})
+	left := makePeer(leftLease, nil)
+	right := makePeer(rightLease, []MappedEndpoint{{Local: internal, External: external, Protocol: "tcp"}})
 	sawUDP := false
 	sawMapped := false
 	connectPayload(t, left, right, func(candidate pion.ICECandidateInit) bool {
@@ -104,19 +100,29 @@ func proxyTCP(listener net.Listener, internal netip.AddrPort) {
 		}()
 	}
 }
-func TestCapabilityGateIsClosedAndPlatformScoped(t *testing.T) {
-	if got := tcpCapabilities("windows", TCPNativeWindows); !got.IPv4 || !got.IPv6 || got.PassiveOnly {
-		t.Fatal(got)
-	}
-	if got := tcpCapabilities("windows", TCPChromiumWindows); !got.IPv4 || got.IPv6 || !got.PassiveOnly {
-		t.Fatal(got)
-	}
-	for _, profile := range []TCPProfile{"", TCPNativeWindows, TCPChromiumWindows, "unknown"} {
-		if got := tcpCapabilities("linux", profile); got != (TCPCapability{}) {
-			t.Fatal(got)
+func TestStandardICETCPEnablesPassiveAndActiveWithoutProfileGate(t *testing.T) {
+	authority := socketauthority.New(socketauthority.Config{})
+	defer authority.Close()
+	leftLease := testLease(t, authority, 1, "127.0.0.1")
+	rightLease := testLease(t, authority, 2, "127.0.0.1")
+	left := testConnection(t, leftLease, nil, nil)
+	right := testConnection(t, rightLease, nil, nil)
+	sawPassiveTCP := false
+	connectPayload(t, left, right, func(candidate pion.ICECandidateInit) bool {
+		parsed, err := ice.UnmarshalCandidate(candidate.Candidate)
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
-	if got := tcpCapabilities("windows", "unknown"); got != (TCPCapability{}) {
-		t.Fatal(got)
+		if parsed.NetworkType().IsUDP() {
+			return false
+		}
+		if parsed.NetworkType().IsTCP() && parsed.TCPType() == ice.TCPTypePassive {
+			sawPassiveTCP = true
+		}
+		return true
+	})
+	pair, ok := left.SelectedPair()
+	if !sawPassiveTCP || !ok || pair.Protocol != "tcp" {
+		t.Fatalf("standard ICE-TCP failed: passive=%v pair=%+v selected=%v", sawPassiveTCP, pair, ok)
 	}
 }

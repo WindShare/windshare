@@ -14,11 +14,11 @@ func TestTCPListenerUsesPathDemandCapacityAndRetirement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = lease.PrepareTCP(false); err != nil {
+	if err = lease.PrepareTCP(); err != nil {
 		t.Fatal(err)
 	}
 	first := lease.TCPEndpoints()[0]
-	if err = lease.PrepareTCP(false); err != nil {
+	if err = lease.PrepareTCP(); err != nil {
 		t.Fatal(err)
 	}
 	if lease.TCPEndpoints()[0] != first {
@@ -55,22 +55,22 @@ func TestTCPListenerUsesPathDemandCapacityAndRetirement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = lease.PrepareTCP(false); err != ErrActive {
+	if err = lease.PrepareTCP(); err != ErrActive {
 		t.Fatal(err)
 	}
 	release()
 	authority.Retire(1)
-	if err = lease.PrepareTCP(false); err != ErrRetired {
+	if err = lease.PrepareTCP(); err != ErrRetired {
 		t.Fatal(err)
 	}
 	if err = lease.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err = lease.PrepareTCP(false); err != ErrClosed {
+	if err = lease.PrepareTCP(); err != ErrClosed {
 		t.Fatal(err)
 	}
 	var absent *Lease
-	if err = absent.PrepareTCP(false); err != ErrInvalid {
+	if err = absent.PrepareTCP(); err != ErrInvalid {
 		t.Fatal(err)
 	}
 }
@@ -82,7 +82,7 @@ func TestTCPOptionalAllocationFailureLeavesUDPCapacityIntact(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer lease.Close()
-	if err = lease.PrepareTCP(false); !errors.Is(err, ErrCapacity) {
+	if err = lease.PrepareTCP(); !errors.Is(err, ErrCapacity) {
 		t.Fatal(err)
 	}
 	if len(lease.TCPEndpoints()) != 0 {
@@ -105,7 +105,7 @@ func TestTCPOptionalAllocationFailureLeavesUDPCapacityIntact(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer dual.Close()
-	if err = dual.PrepareTCP(false); err == nil {
+	if err = dual.PrepareTCP(); err == nil {
 		t.Fatal("second listener should fail")
 	}
 	if _, err = first.Accept(); !errors.Is(err, net.ErrClosed) {

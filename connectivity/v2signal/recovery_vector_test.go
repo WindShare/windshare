@@ -30,7 +30,7 @@ func buildPeerPathControlVectors(t *testing.T) []peerPathControlVector {
 	t.Helper()
 	var result []peerPathControlVector
 	for kind := protocolsession.PeerPathDemand; kind <= protocolsession.PeerPathNetworkChanged; kind++ {
-		control := protocolsession.PeerPathControl{PeerPathID: [16]byte(testBinding().PeerPathID), NetworkGenerationID: [16]byte{9}, ControlSequence: uint64(kind), Kind: kind, ValidFor: time.Minute, ProviderProfile: "pion-4.2.16-ice-4.2.7-windows"}
+		control := protocolsession.PeerPathControl{PeerPathID: [16]byte(testBinding().PeerPathID), NetworkGenerationID: [16]byte{9}, ControlSequence: uint64(kind), Kind: kind, ValidFor: time.Minute}
 		if kind == protocolsession.PeerPathRevoke {
 			control.ValidFor = 0
 		}

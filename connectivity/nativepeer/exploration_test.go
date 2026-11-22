@@ -49,7 +49,9 @@ func TestReceiverFairnessCannotPromoteExplorationPastEssentialWork(t *testing.T)
 func TestEssentialReceiverReclaimsAnAdmittedOptionalSocketOwner(t *testing.T) {
 	_, _, makeNative := newAdmissionFixture(t, 0)
 	n := makeNative()
-	n.config.Sockets = testSocketAuthority(t, 3)
+	// Capacity 5 fits first (UDP+TCP), optional (UDP+TCP), and third (UDP, with
+	// optional TCP gracefully skipped), so fourth must reclaim optional.
+	n.config.Sockets = testSocketAuthority(t, 5)
 	first := startActual(t, n, 1)
 	defer first.Close()
 	n.SetAdmitted(attemptFor(1).ProtocolSessionID, attemptFor(1).Binding.PeerPathID, true)
@@ -80,7 +82,8 @@ func TestEssentialReceiverReclaimsAnAdmittedOptionalSocketOwner(t *testing.T) {
 func TestOptionalPreparationDefersWithoutSpendingReservedEssentialOpportunity(t *testing.T) {
 	gate, _, makeNative := newAdmissionFixture(t, 0)
 	n := makeNative()
-	n.config.Sockets = testSocketAuthority(t, 2)
+	// Capacity 3 leaves one reserved essential UDP slot after first (UDP+TCP).
+	n.config.Sockets = testSocketAuthority(t, 3)
 	first := startActual(t, n, 1)
 	defer first.Close()
 	n.SetAdmitted(attemptFor(1).ProtocolSessionID, attemptFor(1).Binding.PeerPathID, true)

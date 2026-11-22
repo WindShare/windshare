@@ -11,9 +11,8 @@ import (
 const (
 	MaxPeerPathControlLifetime  = 120 * time.Second
 	MaxPeerPathControlBodyBytes = 256
-	peerPathControlSchema       = uint64(2)
-	peerPathControlFields       = 8
-	MaxPeerProviderProfileBytes = 64
+	peerPathControlSchema       = uint64(3)
+	peerPathControlFields       = 7
 )
 
 type PeerPathControlKind uint8
@@ -34,29 +33,11 @@ type PeerPathControl struct {
 	Kind                PeerPathControlKind
 	ValidFor            time.Duration
 	HoldFor             time.Duration
-	// ProviderProfile is an opaque local implementation evidence identity.
-	// Connectivity interprets it; the protocol never grants a transport capability.
-	ProviderProfile string
 }
 
 var ErrPeerPathControl = errors.New("invalid peer path control")
 
-func validPeerProviderProfile(profile string) bool {
-	if len(profile) > MaxPeerProviderProfileBytes {
-		return false
-	}
-	for _, c := range profile {
-		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '.' && c != '-' {
-			return false
-		}
-	}
-	return true
-}
-
 func EncodePeerPathControl(control PeerPathControl) ([]byte, error) {
-	if !validPeerProviderProfile(control.ProviderProfile) {
-		return nil, ErrPeerPathControl
-	}
 	if control.PeerPathID == [IdentityBytes]byte{} || control.NetworkGenerationID == [IdentityBytes]byte{} ||
 		control.ControlSequence == 0 || control.Kind < PeerPathDemand || control.Kind > PeerPathNetworkChanged {
 		return nil, ErrPeerPathControl
@@ -71,7 +52,7 @@ func EncodePeerPathControl(control PeerPathControl) ([]byte, error) {
 	}
 	return EncodeBody([]any{
 		peerPathControlSchema, control.PeerPathID[:], control.NetworkGenerationID[:], control.ControlSequence,
-		uint64(control.Kind), uint64(control.ValidFor / time.Millisecond), uint64(control.HoldFor / time.Millisecond), control.ProviderProfile,
+		uint64(control.Kind), uint64(control.ValidFor / time.Millisecond), uint64(control.HoldFor / time.Millisecond),
 	})
 }
 
@@ -91,7 +72,7 @@ func DecodePeerPathControl(body []byte) (PeerPathControl, error) {
 		target any
 	}{
 		{fields[0], &schema}, {fields[1], &path}, {fields[2], &generation}, {fields[3], &control.ControlSequence},
-		{fields[4], &kind}, {fields[5], &validFor}, {fields[6], &holdFor}, {fields[7], &control.ProviderProfile},
+		{fields[4], &kind}, {fields[5], &validFor}, {fields[6], &holdFor},
 	} {
 		if err := messageDecMode.Unmarshal(item.body, item.target); err != nil {
 			return PeerPathControl{}, ErrPeerPathControl

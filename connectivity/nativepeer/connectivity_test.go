@@ -99,7 +99,7 @@ func TestFreshAttemptsFreezeProfileAndReuseExactSocketWithinGeneration(t *testin
 }
 func controlBytes(t *testing.T, sequence uint64, kind protocolsession.PeerPathControlKind, hold time.Duration) []byte {
 	t.Helper()
-	control := protocolsession.PeerPathControl{PeerPathID: [16]byte{2}, NetworkGenerationID: [16]byte{3}, ControlSequence: sequence, Kind: kind, ProviderProfile: string(pionpeer.TCPNativeWindows)}
+	control := protocolsession.PeerPathControl{PeerPathID: [16]byte{2}, NetworkGenerationID: [16]byte{3}, ControlSequence: sequence, Kind: kind}
 	if kind != protocolsession.PeerPathRevoke {
 		control.ValidFor = ControlLifetime
 		control.HoldFor = hold
@@ -144,8 +144,8 @@ func TestAuthenticatedDemandExpiresAndWatermarkPreventsResurrection(t *testing.T
 		t.Fatal("demand rejected")
 	}
 	_, _ = h.native.NewPeerConnection(context.Background(), request(1))
-	if !h.native.paths[key].content || h.requests[0].TCPProfile != pionpeer.TCPNativeWindows {
-		t.Fatal("authenticated capability not frozen")
+	if !h.native.paths[key].content || len(h.requests[0].SocketLease.TCPEndpoints()) == 0 {
+		t.Fatal("authenticated demand or passive TCP listener not prepared")
 	}
 	h.now = h.now.Add(ControlLifetime)
 	h.native.Maintain(context.Background())
@@ -176,7 +176,7 @@ func TestAuthenticatedDemandExpiresAndWatermarkPreventsResurrection(t *testing.T
 		t.Fatal(err)
 	}
 	decoded, err := protocolsession.DecodePeerPathControl(body)
-	if err != nil || decoded.ControlSequence != 1 || decoded.HoldFor != ControlLifetime || decoded.ProviderProfile != string(pionpeer.LocalTCPProfile()) {
+	if err != nil || decoded.ControlSequence != 1 || decoded.HoldFor != ControlLifetime {
 		t.Fatal(decoded, err)
 	}
 }

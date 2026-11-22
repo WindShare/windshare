@@ -174,8 +174,7 @@ type getTransferExecution struct {
 	contentReady chan struct{}
 	paths        *receiverContentPaths
 	runtime      *receiversession.Runtime
-	admission    receiverContentAdmission
-	monitorDone  <-chan struct{}
+	admission    *receiverContentAdmission
 	peer         *activeReceiverPeer
 	localStop    *receiverLocalStop
 	closeOnce    sync.Once
@@ -214,20 +213,21 @@ func (execution *getTransferExecution) SettleAdmission() {
 	execution.settleOnce.Do(func() {
 		execution.admission.Close()
 		execution.admission.Wait()
-		if execution.monitorDone != nil {
-			<-execution.monitorDone
-		}
 	})
 }
 
 func (a *runner) prepareGetConnectivity(ctx context.Context, request preparedRequest, output getOutputPreparation, runtime *receiversession.Runtime, observation getObservation, options receiverPeerOptions) (*getTransferExecution, stepOutcome) {
 	connectivity := request.connectivity
-	laneID, laneEpoch := runtime.LaneIdentity()
-	relaySuspension, err := runtime.LaneSet().SuspendContent(
-		transferlanes.Identity{ID: laneID, Epoch: laneEpoch},
-	)
-	if err != nil {
-		return nil, observation.fail(stepLocalFailure, err)
+	var relaySuspension receiverContentSuspension
+	if connectivity.allowsRelay() {
+		laneID, laneEpoch := runtime.LaneIdentity()
+		var err error
+		relaySuspension, err = runtime.LaneSet().SuspendContent(
+			transferlanes.Identity{ID: laneID, Epoch: laneEpoch},
+		)
+		if err != nil {
+			return nil, observation.fail(stepLocalFailure, err)
+		}
 	}
 	contentReady := output.contentReady
 	if contentReady == nil {
@@ -239,22 +239,24 @@ func (a *runner) prepareGetConnectivity(ctx context.Context, request preparedReq
 	}
 	observation.session = runtime.ProtocolSessionID()
 	observation.paths = paths
-	admission, err := newReceiverContentAdmissionWithExecution(
-		connectivity.relayContent,
+	localStop := &receiverLocalStop{}
+	admission, err := newReceiverContentAdmission(
+		connectivity,
 		relaySuspension,
-		receiverAdmissionExecution{
+		receiverAdmissionHooks{
 			claimGate: contentReady,
 			onClaim:   observation.relayContentClaimed,
+			onDecision: func(decision receiverAdmissionDecision) {
+				recordReceiverAdmissionDecision(decision, runtime, observation, localStop)
+			},
 		},
 	)
 	if err != nil {
 		return nil, observation.fail(stepLocalFailure, err)
 	}
-	localStop := &receiverLocalStop{}
 	execution := &getTransferExecution{
 		runtime: runtime, admission: admission, contentReady: contentReady, paths: paths,
-		monitorDone: a.monitorReceiverAdmission(admission, runtime, observation, localStop),
-		localStop:   localStop,
+		localStop: localStop,
 	}
 	observePeer := func(signal receiverPeerSignal) {
 		if observeErr := admission.ObservePeer(signal); observeErr != nil {
@@ -274,7 +276,7 @@ func (a *runner) prepareGetConnectivity(ctx context.Context, request preparedReq
 			}
 			return a.startReceiverPeer(ctx, runtime, observation, observePeer, localStop, connectivity.peer, options)
 		},
-		admission.AdmitRelayOnly,
+		admission.AdmitRelay,
 	)
 	execution.peer = peer
 	if err != nil {
