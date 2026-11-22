@@ -42,7 +42,7 @@ impl Desktop {
         let publication = share.live_publication().filter(|_| revealed);
         let link = publication.map(|pub_| pub_.primary(self.browser_trace));
         let traced = publication.is_some_and(|pub_| pub_.is_traced(self.browser_trace));
-        let pending = !revealed || matches!(share.state, ShareState::Preparing);
+        let pending = !revealed || matches!(share.state, ShareState::Preparing { .. });
         let playback = if intro.still || !window.is_visible() || !window.is_window_active() {
             SpringPlayback::Completed
         } else {
@@ -63,7 +63,7 @@ impl Desktop {
             ))
             .child(file_summary(theme, share, locale))
             .when(
-                revealed && (share.error.is_some() || share.relay_notice().is_some()),
+                revealed && (share.error().is_some() || share.relay_notice().is_some()),
                 |el| el.child(Self::share_notice(theme, share, cx)),
             )
             .child(
@@ -201,10 +201,10 @@ impl Desktop {
     pub(crate) fn share_notice(theme: Theme, share: &Share, cx: &Context<Self>) -> Div {
         column()
             .gap(px(8.))
-            .when_some(share.error.as_ref(), |el, error| {
+            .when_some(share.error(), |el, error| {
                 el.child(
                     theme
-                        .label(error.clone(), 15.)
+                        .label(error.to_owned(), 15.)
                         .text_color(Tone::Rose.text(theme)),
                 )
             })

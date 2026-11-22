@@ -182,7 +182,7 @@ impl Desktop {
         let Some(share) = self.shares.iter().find(|share| share.id == id) else {
             return;
         };
-        let authorization = share.authorization.clone();
+        let authorization = share.authorization().cloned();
         let id = if share.finished() {
             let Some(repeated) = self.repeat_native_share(id, window, cx) else {
                 return;

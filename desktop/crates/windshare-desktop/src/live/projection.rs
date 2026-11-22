@@ -7,68 +7,106 @@ use windshare_host::{Operation, OperationState, Outcome, SelectedRoot, ShareStat
 use windshare_ui::Icon;
 
 pub fn update_share(share: &mut Share, operation: &Operation) {
-    share.error = operation.error().map(str::to_owned);
-    share.state = match &operation.state {
-        OperationState::Submitting => ShareState::Preparing,
-        OperationState::Rejected(_) => ShareState::Failed,
-        OperationState::Accepted(task) => match task.state {
-            HostState::AwaitingAuthorization => ShareState::AwaitingAuthorization,
-            HostState::AwaitingConfiguration { blocking } => {
-                ShareState::AwaitingConfiguration(blocking)
+    let error = operation.error().map(str::to_owned);
+    match &operation.state {
+        OperationState::Submitting => {
+            share.state = ShareState::Preparing { error: None };
+        }
+        OperationState::Rejected(_) => {
+            share.state = ShareState::Failed {
+                error,
+                authorization: None,
+            };
+        }
+        OperationState::Accepted(task) => {
+            if let Some(created) =
+                SystemTime::UNIX_EPOCH.checked_add(Duration::from_millis(task.created_at_ms))
+            {
+                share.age = ShareAge::CreatedAt(created);
             }
-            HostState::AwaitingNetwork { blocking } => ShareState::AwaitingNetwork(blocking),
-            HostState::Admitting | HostState::Preparing => ShareState::Preparing,
-            HostState::Sharing => ShareState::Live { viewers: None },
-            HostState::Stopping => ShareState::Stopping,
-            HostState::Finished => match task.result.as_ref().map(|result| result.outcome) {
-                Some(Outcome::Stopped) => ShareState::Stopped,
-                Some(Outcome::Cancelled) => ShareState::Cancelled,
-                _ => ShareState::Failed,
-            },
-        },
-    };
-    if let Some(task) = operation.share() {
-        share.authorization.clone_from(&task.authorization);
-        if let Some(created) =
-            SystemTime::UNIX_EPOCH.checked_add(Duration::from_millis(task.created_at_ms))
-        {
-            share.age = ShareAge::CreatedAt(created);
-        }
-        if let Some(selection) = &task.selection {
-            share.contents =
-                ShareContents::Selected(usize::try_from(selection.count).unwrap_or(usize::MAX));
-            match &selection.root {
-                Some(SelectedRoot::File { name, file_size }) => {
-                    share.name.clone_from(name);
-                    share.symbol = Icon::File;
-                    share.size = Some(byte_size(*file_size));
+            if let Some(selection) = &task.selection {
+                share.contents =
+                    ShareContents::Selected(usize::try_from(selection.count).unwrap_or(usize::MAX));
+                match &selection.root {
+                    Some(SelectedRoot::File { name, file_size }) => {
+                        share.name.clone_from(name);
+                        share.symbol = Icon::File;
+                        share.size = Some(byte_size(*file_size));
+                    }
+                    Some(SelectedRoot::Directory { name }) => {
+                        share.name.clone_from(name);
+                        share.symbol = Icon::Folder;
+                        share.size = None;
+                    }
+                    None => {}
                 }
-                Some(SelectedRoot::Directory { name }) => {
-                    share.name.clone_from(name);
-                    share.symbol = Icon::Folder;
-                    share.size = None;
+            }
+            match &task.state {
+                HostState::AwaitingAuthorization { authorization } => {
+                    share.state = ShareState::AwaitingAuthorization(authorization.clone());
                 }
-                None => {}
+                HostState::AwaitingConfiguration { blocking, .. } => {
+                    share.state = ShareState::AwaitingConfiguration {
+                        blocking: *blocking,
+                        error,
+                    };
+                }
+                HostState::AwaitingNetwork { blocking, .. } => {
+                    share.state = ShareState::AwaitingNetwork {
+                        blocking: *blocking,
+                        error,
+                    };
+                }
+                HostState::Admitting | HostState::Preparing { .. } => {
+                    share.state = ShareState::Preparing { error };
+                }
+                HostState::Sharing {
+                    url,
+                    backup_url,
+                    relay,
+                    ..
+                } => {
+                    let relay_status = relay
+                        .as_ref()
+                        .map(windshare_host::RelayAvailability::status);
+                    // Preserve the existing SharePublication so steady-state snapshots
+                    // do not re-encode the cached QR image.
+                    if let ShareState::Live {
+                        publication,
+                        relay_status: current,
+                    } = &mut share.state
+                        && publication.matches(url, backup_url.as_deref())
+                    {
+                        *current = relay_status;
+                    } else {
+                        share.state = ShareState::Live {
+                            publication: SharePublication::new(
+                                url.clone(),
+                                backup_url.clone().map(Into::into),
+                            ),
+                            relay_status,
+                        };
+                    }
+                }
+                HostState::Stopping { .. } => {
+                    share.state = ShareState::Stopping;
+                }
+                HostState::Finished {
+                    result,
+                    authorization,
+                    ..
+                } => {
+                    share.state = match result.outcome {
+                        Outcome::Stopped => ShareState::Stopped { error },
+                        Outcome::Cancelled => ShareState::Cancelled { error },
+                        Outcome::Failed => ShareState::Failed {
+                            error,
+                            authorization: authorization.clone(),
+                        },
+                    };
+                }
             }
         }
-        let backup = (!task.backup_url.is_empty()).then_some(task.backup_url.as_str());
-        if task.url.is_empty() {
-            share.link = None;
-        } else if share
-            .link
-            .as_ref()
-            .is_none_or(|link| !link.matches(&task.url, backup))
-        {
-            share.link = Some(SharePublication::new(
-                task.url.clone(),
-                backup.map(|url| url.to_owned().into()),
-            ));
-        }
-        share.relay_status = task
-            .relay
-            .as_ref()
-            .filter(|_| task.state == HostState::Sharing)
-            .map(|relay| relay.payload.status());
     }
 }
 

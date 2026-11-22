@@ -7,7 +7,6 @@ import (
 
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/engine"
-	"github.com/windshare/windshare/engine/observation/wire"
 	"github.com/windshare/windshare/engine/relayconfig"
 )
 
@@ -61,7 +60,7 @@ func (a *Application) snapshot() Snapshot {
 }
 
 func projectShare(op *operation) Share {
-	view := Share{OperationID: op.id, CreatedAt: op.createdAt.UnixMilli(), Startup: "pending"}
+	view := Share{OperationID: op.id, CreatedAt: op.createdAt.UnixMilli()}
 	switch current := op.phase.(type) {
 	case awaitingConfiguration:
 		view.State, view.Error, view.Blocking = AwaitingConfiguration, current.failure, &current.block
@@ -76,9 +75,6 @@ func projectShare(op *operation) Share {
 		}
 	case terminal:
 		view.State, view.Result, view.Error = Finished, &current.result, current.error
-		if current.result.Outcome == OutcomeFailed {
-			view.Startup = "failed"
-		}
 	case running:
 		projectTask(&view, current)
 	}
@@ -87,13 +83,13 @@ func projectShare(op *operation) Share {
 
 func projectTask(view *Share, current running) {
 	state := current.task.Snapshot()
-	view.Authorization = state.Authorization
 	view.TaskID, view.State = string(current.task.ID()), Preparing
 	switch state.Startup {
 	case engine.ShareAwaitingAuthorization:
 		view.State = AwaitingAuthorization
+		view.Authorization = state.Authorization
 	case engine.ShareReadyReached:
-		view.Startup, view.State = "ready", Sharing
+		view.State = Sharing
 		frontend := state.Ready.Frontend
 		if frontend == "" {
 			frontend = current.frontURL
@@ -114,7 +110,6 @@ func projectTask(view *Share, current running) {
 			view.Selection.Root = selected
 		}
 	case engine.ShareStartupFailed:
-		view.Startup = "failed"
 		if state.StartupError != nil {
 			view.Error = failure("startup_failed", state.StartupError)
 		}
@@ -123,15 +118,19 @@ func projectTask(view *Share, current running) {
 		view.State = Stopping
 		view.URL = ""
 		view.BackupURL = ""
+		view.Authorization = nil
 	}
-	if state.RelayAvailability != nil {
-		encoded, err := wire.Encode(*state.RelayAvailability)
-		if err == nil {
-			view.Relay = &encoded
+	if view.State == Sharing && state.RelayAvailability != nil {
+		view.Relay = &RelayAvailability{
+			Available: state.RelayAvailability.Available(),
+			Total:     state.RelayAvailability.Total(),
+			EverReady: state.RelayAvailability.EverReady(),
+			Terminal:  state.RelayAvailability.Terminal(),
 		}
 	}
 	if result := state.Result; result != nil {
-		view.State, view.URL, view.BackupURL = Finished, "", ""
+		view.State, view.URL, view.BackupURL, view.Relay = Finished, "", "", nil
+		view.Authorization = state.Authorization
 		view.Result = &Completion{
 			Outcome: outcomeName(result.Outcome), StopReason: reasonName(result.StopReason),
 			Error: errorText(result.Err), CleanupError: errorText(result.CleanupError),

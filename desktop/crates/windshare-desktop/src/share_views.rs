@@ -11,7 +11,7 @@ impl Desktop {
     pub fn share_card(&self, theme: Theme, share: &Share, cx: &Context<Self>) -> Stateful<Div> {
         let locale = language(cx);
         let id = share.id;
-        let status = share.status_description(locale);
+        let status = locale.text(share.status().0);
         let traced = share.is_traced(self.browser_trace);
         theme
             .card()
@@ -171,14 +171,7 @@ impl Desktop {
                 [
                     (Filter::All, locale.text(Text::All)),
                     (Filter::Live, locale.text(Text::Sharing)),
-                    (
-                        Filter::Finished,
-                        locale.text(if self.runtime.is_preview() {
-                            Text::Paused
-                        } else {
-                            Text::FinishedShares
-                        }),
-                    ),
+                    (Filter::Finished, locale.text(Text::FinishedShares)),
                 ]
                 .into_iter()
                 .map(|(filter, title)| {

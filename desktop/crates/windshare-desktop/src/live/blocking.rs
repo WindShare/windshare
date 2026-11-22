@@ -47,15 +47,18 @@ impl Desktop {
         )
     }
 
-    pub fn authorization_share(&self, theme: Theme, share: &Share, cx: &Context<Self>) -> Div {
+    pub fn authorization_share(
+        &self,
+        theme: Theme,
+        share: &Share,
+        authorization: &windshare_host::ShareAuthorization,
+        cx: &Context<Self>,
+    ) -> Div {
         if let Some(progress) = self.setup_blocked_share(theme, share, cx) {
             return progress;
         }
         let locale = language(cx);
-        let official = matches!(
-            share.authorization,
-            Some(windshare_host::ShareAuthorization::Official)
-        );
+        let official = matches!(authorization, windshare_host::ShareAuthorization::Official);
         let account = self.account_view().filter(|_| official);
         if let Some(view) = account.filter(|view| view.status.state == AccountState::StorageError) {
             return Self::account_storage_error_share(theme, share, &view.status.reason, cx);
@@ -212,9 +215,9 @@ impl Desktop {
             card = card.child(theme.caption(retry_time(locale, at)));
         }
         if blocking.recovery == RecoveryAction::RepairSettings
-            && let Some(error) = &share.error
+            && let Some(error) = share.error()
         {
-            card = card.child(theme.caption(error.clone()));
+            card = card.child(theme.caption(error.to_owned()));
         }
         let mut actions = row().gap(px(10.)).flex_wrap();
         if let Some((label, action)) = continuation {

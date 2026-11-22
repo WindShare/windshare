@@ -55,7 +55,7 @@ impl Desktop {
         let slot = QrSlot::new(
             ("detail-qr", id),
             link.and_then(|link| link.qr().ok()).cloned(),
-            matches!(share.state, ShareState::Preparing),
+            matches!(share.state, ShareState::Preparing { .. }),
             locale.text(Text::QrUnavailable),
         )
         .still(cx.reduce_motion());
@@ -82,7 +82,7 @@ impl Desktop {
                     ),
             )
             .when(
-                share.error.is_some() || share.relay_notice().is_some(),
+                share.error().is_some() || share.relay_notice().is_some(),
                 |el| el.child(Self::share_notice(theme, share, cx)),
             )
             .child(

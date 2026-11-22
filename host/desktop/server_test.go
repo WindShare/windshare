@@ -84,28 +84,24 @@ func TestControlAuthenticatesAndRecoversAfterLostCreateReply(t *testing.T) {
 	}
 }
 
-func TestSlowObserversCannotBlockAndSnapshotsRepairDroppedEvents(t *testing.T) {
+func TestObservationsStayOutOfControlQueueAndSnapshotsCarryRelayAvailability(t *testing.T) {
 	a, task, _ := fixture(t)
 	a.execute(createRequest())
 	admitted(t, a)
-	queue, unsubscribe := a.subscribe()
-	defer unsubscribe()
 	event, err := appobs.NewRelayAvailability(1, 1, 0, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for range notificationCapacity * 3 {
-		a.publishObservation("operation", engine.Observation{TaskID: "engine:1", Event: event})
-	}
-	if len(queue.evidence) != notificationCapacity {
-		t.Fatal("notification queue is not bounded")
-	}
+	a.logObservation("operation", engine.Observation{TaskID: "engine:1", Event: event})
 	task.mu.Lock()
 	task.state.RelayAvailability = &event
 	task.mu.Unlock()
+	task.ready()
 	snapshot := a.snapshot()
 	data, err := json.Marshal(snapshot)
-	if err != nil || len(data) == 0 || snapshot.Shares[0].Relay == nil {
-		t.Fatal("snapshot requires delivered observations")
+	if err != nil || len(data) == 0 || snapshot.Shares[0].Relay == nil ||
+		snapshot.Shares[0].Relay.Available != 1 || snapshot.Shares[0].Relay.Total != 1 ||
+		!snapshot.Shares[0].Relay.EverReady {
+		t.Fatalf("unexpected relay availability snapshot: %+v", snapshot.Shares[0].Relay)
 	}
 }

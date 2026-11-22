@@ -40,21 +40,39 @@ pub enum SenderTraceChange {
 pub struct Share {
     pub operation_id: String,
     #[serde(default)]
-    pub task_id: String,
-    #[serde(flatten)]
-    pub state: ShareState,
-    pub startup: Startup,
-    #[serde(default)]
-    pub url: String,
-    #[serde(default)]
-    pub backup_url: String,
-    #[serde(default)]
     pub created_at_ms: u64,
     pub selection: Option<Selection>,
-    pub result: Option<Completion>,
-    pub error: Option<Failure>,
-    pub relay: Option<RelayObservation>,
-    pub authorization: Option<ShareAuthorization>,
+    #[serde(flatten)]
+    pub state: ShareState,
+}
+
+impl Share {
+    pub const fn is_finished(&self) -> bool {
+        matches!(self.state, ShareState::Finished { .. })
+    }
+
+    pub fn error(&self) -> Option<&str> {
+        match &self.state {
+            ShareState::AwaitingConfiguration { error, .. }
+            | ShareState::AwaitingNetwork { error, .. }
+            | ShareState::Preparing { error, .. } => {
+                error.as_ref().map(|failure| failure.message.as_str())
+            }
+            ShareState::Finished { result, error, .. } => error
+                .as_ref()
+                .map(|failure| failure.message.as_str())
+                .or_else(|| {
+                    [&result.error, &result.cleanup_error]
+                        .into_iter()
+                        .find(|message| !message.is_empty())
+                        .map(String::as_str)
+                }),
+            ShareState::AwaitingAuthorization { .. }
+            | ShareState::Admitting
+            | ShareState::Sharing { .. }
+            | ShareState::Stopping { .. } => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -62,11 +80,6 @@ pub struct Share {
 pub enum ShareAuthorization {
     SelfHosted { relay_url: String },
     Official,
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
-pub struct RelayObservation {
-    pub payload: RelayAvailability,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -96,17 +109,41 @@ impl RelayAvailability {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum ShareState {
-    AwaitingAuthorization,
-    AwaitingConfiguration { blocking: CreationBlock },
-    AwaitingNetwork { blocking: CreationBlock },
+    AwaitingAuthorization {
+        authorization: ShareAuthorization,
+    },
+    AwaitingConfiguration {
+        blocking: CreationBlock,
+        error: Option<Failure>,
+    },
+    AwaitingNetwork {
+        blocking: CreationBlock,
+        error: Option<Failure>,
+    },
     Admitting,
-    Preparing,
-    Sharing,
-    Stopping,
-    Finished,
+    Preparing {
+        task_id: String,
+        error: Option<Failure>,
+    },
+    Sharing {
+        task_id: String,
+        url: String,
+        #[serde(default)]
+        backup_url: Option<String>,
+        relay: Option<RelayAvailability>,
+    },
+    Stopping {
+        #[serde(default)]
+        task_id: Option<String>,
+    },
+    Finished {
+        result: Completion,
+        error: Option<Failure>,
+        authorization: Option<ShareAuthorization>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
@@ -140,14 +177,6 @@ pub enum RecoveryAction {
     RepairSettings,
     RepairTrustState,
     ReplaceBuild,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum Startup {
-    Pending,
-    Ready,
-    Failed,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -239,18 +268,7 @@ impl Operation {
     pub fn error(&self) -> Option<&str> {
         match &self.state {
             OperationState::Rejected(error) => Some(&error.message),
-            OperationState::Accepted(share) => share
-                .error
-                .as_ref()
-                .map(|error| error.message.as_str())
-                .or_else(|| {
-                    share.result.as_ref().and_then(|result| {
-                        [&result.error, &result.cleanup_error]
-                            .into_iter()
-                            .find(|error| !error.is_empty())
-                            .map(String::as_str)
-                    })
-                }),
+            OperationState::Accepted(share) => share.error(),
             OperationState::Submitting => None,
         }
     }
@@ -310,8 +328,12 @@ impl Model {
             .find(|operation| operation.id == operation_id)
             .and_then(Operation::share)
             .is_some_and(|share| {
-                share.state == ShareState::AwaitingAuthorization
-                    && share.authorization == Some(ShareAuthorization::Official)
+                matches!(
+                    share.state,
+                    ShareState::AwaitingAuthorization {
+                        authorization: ShareAuthorization::Official
+                    }
+                )
             })
     }
 
@@ -323,7 +345,7 @@ impl Model {
                 .iter()
                 .any(|operation| match &operation.state {
                     OperationState::Submitting => true,
-                    OperationState::Accepted(share) => share.state != ShareState::Finished,
+                    OperationState::Accepted(share) => !share.is_finished(),
                     OperationState::Rejected(_) => false,
                 })
     }
@@ -375,14 +397,14 @@ impl Model {
         for share in snapshot.shares {
             if let Some(&index) = index_by_id.get(&share.operation_id) {
                 let operation = &mut self.operations[index];
-                if share.startup == Startup::Ready
-                    && operation
-                        .share()
-                        .is_none_or(|previous| previous.startup != Startup::Ready)
+                if let ShareState::Sharing { task_id, .. } = &share.state
+                    && operation.share().is_none_or(|previous| {
+                        !matches!(previous.state, ShareState::Sharing { .. })
+                    })
                 {
                     tracing::info!(event = "share.engine_ready", host_session = ?self.session_id,
                         intent = %share.operation_id, operation = %share.operation_id,
-                        task = %share.task_id, "Host made the share link usable");
+                        task = %task_id, "Host made the share link usable");
                 }
                 operation.state = OperationState::Accepted(Box::new(share));
             } else {

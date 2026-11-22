@@ -196,7 +196,7 @@ func (a *Application) execute(request Request) Message {
 		err = a.cancel(request.OperationID)
 	case "stop":
 		err = a.stop(request.TaskID)
-	case "list", "observe":
+	case "list":
 	case "query":
 		if _, ok := a.operations[request.OperationID]; !ok {
 			err = errors.New("creation operation not found")

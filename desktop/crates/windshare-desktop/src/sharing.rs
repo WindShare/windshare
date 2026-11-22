@@ -58,13 +58,13 @@ impl Desktop {
                 let Some(share) = self.shares.iter().find(|share| share.id == run.share_id) else {
                     return column().into_any_element();
                 };
-                match share.state {
-                    ShareState::AwaitingAuthorization => self
-                        .authorization_share(theme, share, cx)
+                match &share.state {
+                    ShareState::AwaitingAuthorization(authorization) => self
+                        .authorization_share(theme, share, authorization, cx)
                         .into_any_element(),
-                    ShareState::AwaitingConfiguration(blocking)
-                    | ShareState::AwaitingNetwork(blocking) => self
-                        .blocked_share(theme, share, blocking, cx)
+                    ShareState::AwaitingConfiguration { blocking, .. }
+                    | ShareState::AwaitingNetwork { blocking, .. } => self
+                        .blocked_share(theme, share, *blocking, cx)
                         .into_any_element(),
                     _ => self
                         .share_result(theme, share, layout, Self::share_intro(run, cx), window, cx)

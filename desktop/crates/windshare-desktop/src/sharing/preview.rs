@@ -24,17 +24,13 @@ impl Desktop {
             Share {
                 id: operation,
                 source: ShareSource::Preview,
-                link: None,
                 name: bundle.name().into(),
                 contents: bundle.contents(),
                 size: Some(bundle.size().into()),
                 age: ShareAge::JustNow,
                 tone: bundle.tone(),
                 symbol: bundle.icon(),
-                state: ShareState::Preparing,
-                error: None,
-                authorization: None,
-                relay_status: None,
+                state: ShareState::Preparing { error: None },
             },
         );
         self.link_disclosure = LinkDisclosure::Summary;
@@ -52,11 +48,13 @@ impl Desktop {
                 let Some(share) = this.shares.iter_mut().find(|share| share.id == operation) else {
                     return;
                 };
-                if !matches!(share.state, ShareState::Preparing) {
+                if !matches!(share.state, ShareState::Preparing { .. }) {
                     return;
                 }
-                share.link = Some(SharePublication::preview(operation));
-                share.state = ShareState::Live { viewers: Some(0) };
+                share.state = ShareState::Live {
+                    publication: SharePublication::preview(operation),
+                    relay_status: None,
+                };
                 tracing::info!(event = "share.ready", operation, preview = true);
                 cx.notify();
             });

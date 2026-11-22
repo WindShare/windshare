@@ -20,23 +20,19 @@ fn account_status(active: bool, state: AccountState, allowance: Allowance) -> Ac
     }
 }
 
-fn share(state: ShareState, authorization: Option<ShareAuthorization>) -> Share {
+fn share(state: ShareState) -> Share {
     Share {
         id: 1,
         source: ShareSource::Native {
             operation_id: "op-1".into(),
         },
         name: "archive.tar".into(),
-        link: None,
         contents: ShareContents::Selected(1),
         size: None,
         age: ShareAge::JustNow,
         tone: Tone::Mint,
         symbol: Icon::File,
         state,
-        error: None,
-        authorization,
-        relay_status: None,
     }
 }
 
@@ -182,21 +178,20 @@ fn degraded_and_denied_states_surface_on_ambient_pages_only() {
 #[test]
 fn official_authorization_wait_excludes_self_hosted_and_non_waiting_shares() {
     assert!(is_official_authorization_wait(&share(
-        ShareState::AwaitingAuthorization,
-        Some(ShareAuthorization::Official),
+        ShareState::AwaitingAuthorization(ShareAuthorization::Official),
     )));
     assert!(!is_official_authorization_wait(&share(
-        ShareState::AwaitingAuthorization,
-        Some(ShareAuthorization::SelfHosted {
+        ShareState::AwaitingAuthorization(ShareAuthorization::SelfHosted {
             relay_url: "https://relay.example".into(),
         }),
     )));
     assert!(!is_official_authorization_wait(&share(
-        ShareState::AwaitingAuthorization,
-        None,
+        ShareState::Preparing { error: None },
     )));
     assert!(!is_official_authorization_wait(&share(
-        ShareState::Preparing,
-        Some(ShareAuthorization::Official),
+        ShareState::Failed {
+            error: None,
+            authorization: Some(ShareAuthorization::Official),
+        },
     )));
 }

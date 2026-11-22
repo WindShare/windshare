@@ -154,7 +154,6 @@ func (s *server) control(conn *websocket.Conn) {
 				continue
 			}
 			message = Message{Version: ProtocolVersion, Snapshot: &next}
-		case message = <-notifications.evidence:
 		case <-fallback:
 			fallback = nil
 			next := s.app.snapshot()

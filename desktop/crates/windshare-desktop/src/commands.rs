@@ -6,7 +6,7 @@ use crate::{
         ReceiveFlow, SampleBundle, ShareFlow,
     },
     model::{Action, Overlay, Page, ShareState, TransferState},
-    sharing::LinkKind,
+    sharing::{LinkKind, SharePublication},
 };
 use gpui::{BorrowAppContext, ClipboardItem, Context, Focusable, Window};
 use std::time::Duration;
@@ -71,10 +71,8 @@ impl Desktop {
             Action::SetSenderTrace(enabled) => self.set_sender_trace(enabled),
             Action::OpenLogs => self.open_logs(cx),
             Action::EnlargeQr(id) => self.enlarge_qr(id, window, cx),
-            Action::StopShare(id) => self.stop_native_share(id),
-            Action::ShareAgain(id) => {
-                self.repeat_native_share(id, window, cx);
-            }
+            Action::StopShare(id) => self.stop_share(id),
+            Action::ShareAgain(id) => self.share_again(id, window, cx),
             Action::ConfigureShare(id) => self.configure_share(id, window, cx),
             Action::OpenAccount => self.open_account(window, cx),
             Action::ReloadAccountSelection => self.reload_account_selection(),
@@ -82,7 +80,6 @@ impl Desktop {
             Action::SettingsSection(section) => self.select_settings_section(section, window, cx),
             Action::ResumeShare(id) => self.resume_native_share(id),
             Action::UseSavedSettings(id) => self.use_saved_settings(id),
-            Action::ToggleShare(id) => self.toggle_preview_share(id),
             Action::ToggleTransfer(index) => self.toggle_preview_transfer(index),
             Action::SetNotifications(choice) => {
                 crate::preferences::select_notifications(choice, cx);
@@ -112,16 +109,30 @@ impl Desktop {
         }
     }
 
-    fn toggle_preview_share(&mut self, id: usize) {
-        if !self.runtime.is_preview() {
-            return;
+    fn stop_share(&mut self, id: usize) {
+        if self.runtime.is_preview() {
+            if let Some(share) = self.shares.iter_mut().find(|share| share.id == id) {
+                share.state = match share.state {
+                    ShareState::Preparing { .. } => ShareState::Cancelled { error: None },
+                    ShareState::Live { .. } => ShareState::Stopped { error: None },
+                    _ => return,
+                };
+            }
+        } else {
+            self.stop_native_share(id);
         }
-        if let Some(share) = self.shares.iter_mut().find(|share| share.id == id) {
-            share.state = if share.live() {
-                ShareState::Paused
-            } else {
-                ShareState::Live { viewers: Some(0) }
-            };
+    }
+
+    fn share_again(&mut self, id: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.runtime.is_preview() {
+            if let Some(share) = self.shares.iter_mut().find(|share| share.id == id) {
+                share.state = ShareState::Live {
+                    publication: SharePublication::preview(id),
+                    relay_status: None,
+                };
+            }
+        } else {
+            self.repeat_native_share(id, window, cx);
         }
     }
 
@@ -132,22 +143,14 @@ impl Desktop {
                 share.id == run.share_id
                     && matches!(
                         share.state,
-                        ShareState::Preparing
-                            | ShareState::AwaitingAuthorization
-                            | ShareState::AwaitingConfiguration(_)
-                            | ShareState::AwaitingNetwork(_)
+                        ShareState::Preparing { .. }
+                            | ShareState::AwaitingAuthorization(_)
+                            | ShareState::AwaitingConfiguration { .. }
+                            | ShareState::AwaitingNetwork { .. }
                     )
             })
         {
-            self.stop_native_share(run.share_id);
-            if self.runtime.is_preview()
-                && let Some(share) = self
-                    .shares
-                    .iter_mut()
-                    .find(|share| share.id == run.share_id)
-            {
-                share.state = ShareState::Cancelled;
-            }
+            self.stop_share(run.share_id);
         }
         self.share_flow = ShareFlow::Choose;
         self.focus_task(window, cx);

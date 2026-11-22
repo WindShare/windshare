@@ -63,7 +63,7 @@ func (a *Application) logShareState(share Share) {
 	// logs only need the lifecycle fields and identities used for correlation.
 	fields := map[string]any{
 		"operation_id": share.OperationID, "task_id": share.TaskID,
-		"state": share.State, "startup": share.Startup, "blocking": share.Blocking,
+		"state": share.State, "blocking": share.Blocking,
 	}
 	if share.Error != nil {
 		fields["error_code"] = share.Error.Code

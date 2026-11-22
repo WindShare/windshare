@@ -45,17 +45,20 @@ fn share_operation_id(shares: &[crate::model::Share], id: usize) -> Option<&str>
         })
 }
 
-fn host_share_state(model: &Model, operation_id: &str) -> Option<HostShareState> {
+fn host_share_state<'a>(model: &'a Model, operation_id: &str) -> Option<&'a HostShareState> {
     model
         .operations
         .iter()
         .find(|op| op.id == operation_id)
         .and_then(windshare_host::Operation::share)
-        .map(|share| share.state)
+        .map(|share| &share.state)
 }
 
-const fn host_share_running(state: HostShareState) -> bool {
-    matches!(state, HostShareState::Preparing | HostShareState::Sharing)
+const fn host_share_running(state: &HostShareState) -> bool {
+    matches!(
+        state,
+        HostShareState::Preparing { .. } | HostShareState::Sharing { .. }
+    )
 }
 
 pub enum Runtime {
@@ -330,7 +333,7 @@ impl Desktop {
             .iter()
             .filter_map(|op| op.share())
             .filter_map(|share| match share.state {
-                windshare_host::ShareState::AwaitingNetwork { blocking } => {
+                windshare_host::ShareState::AwaitingNetwork { blocking, .. } => {
                     super::blocking::retry_deadline(blocking)
                 }
                 _ => None,
@@ -428,12 +431,16 @@ impl Desktop {
             && !matches!(self.account.feedback, Some(Err(_)))
             && let crate::flow_state::ShareFlow::Running(run) = self.share_flow
             && let Some(op_id) = share_operation_id(&self.shares, run.share_id)
-            && host_share_state(previous_model, op_id)
-                == Some(HostShareState::AwaitingAuthorization)
+            && matches!(
+                host_share_state(previous_model, op_id),
+                Some(HostShareState::AwaitingAuthorization { .. })
+            )
             && host_share_state(model, op_id).is_some_and(|state| {
                 matches!(
                     state,
-                    HostShareState::Admitting | HostShareState::Preparing | HostShareState::Sharing
+                    HostShareState::Admitting
+                        | HostShareState::Preparing { .. }
+                        | HostShareState::Sharing { .. }
                 )
             })
         {
@@ -472,7 +479,7 @@ impl Desktop {
                 let prev = op_id.and_then(|op| host_share_state(previous_model, op));
                 let next = op_id.and_then(|op| host_share_state(model, op));
                 let auth_completed = matches!(target, SharingSetupTarget::RecoverShare(_))
-                    && prev == Some(HostShareState::AwaitingAuthorization)
+                    && matches!(prev, Some(HostShareState::AwaitingAuthorization { .. }))
                     && finished
                     && matches!(
                         &model.setup,
@@ -515,15 +522,14 @@ impl Desktop {
             .iter()
             .find(|op| &op.id == operation_id)
             .and_then(windshare_host::Operation::share);
-        match accepted {
-            Some(task) if task.state == windshare_host::ShareState::Sharing => {
-                session.controller.stop(&task.task_id);
+        match accepted.map(|task| &task.state) {
+            Some(windshare_host::ShareState::Sharing { task_id, .. }) => {
+                session.controller.stop(task_id);
             }
-            Some(task)
-                if matches!(
-                    task.state,
-                    windshare_host::ShareState::Stopping | windshare_host::ShareState::Finished
-                ) => {}
+            Some(
+                windshare_host::ShareState::Stopping { .. }
+                | windshare_host::ShareState::Finished { .. },
+            ) => {}
             _ => session.controller.cancel(operation_id),
         }
     }

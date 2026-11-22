@@ -30,14 +30,9 @@ fn pending_create() -> (Shared, BTreeMap<u64, Request>) {
 }
 
 #[test]
-fn observations_never_acknowledge_unanswered_commands() {
+fn empty_control_frames_never_acknowledge_unanswered_commands() {
     let (shared, mut pending) = pending_create();
-    receive(
-        &shared,
-        &mut pending,
-        r#"{"version":1,"observation":{"task_id":"engine:1"}}"#,
-    )
-    .unwrap();
+    receive(&shared, &mut pending, r#"{"version":1}"#).unwrap();
     assert_eq!(pending.len(), 1);
     receive(
         &shared,

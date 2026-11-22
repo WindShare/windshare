@@ -1,4 +1,4 @@
-use crate::{Model, Operation, OperationState, RelayStatus, Setup, Share, ShareState};
+use crate::{Model, Operation, OperationState, RelayAvailability, RelayStatus, Setup, Share};
 
 #[test]
 fn unfinished_work_includes_unacknowledged_creation_and_setup_cleanup() {
@@ -10,22 +10,68 @@ fn unfinished_work_includes_unacknowledged_creation_and_setup_cleanup() {
         state: OperationState::Submitting,
     });
     assert!(model.has_unfinished_work());
-    for state in [
-        "awaiting_configuration",
-        "awaiting_network",
-        "awaiting_authorization",
-        "admitting",
-        "preparing",
-        "sharing",
-        "stopping",
-        "finished",
-    ] {
-        let share: Share = serde_json::from_value(serde_json::json!({
-            "operation_id": "selection", "state": state, "startup": "pending",
-            "blocking": { "reason": "configuration_required", "recovery": "configure" }
-        }))
-        .unwrap();
-        let unfinished = share.state != ShareState::Finished;
+    let cases = [
+        (
+            "awaiting_configuration",
+            serde_json::json!({
+                "operation_id": "selection", "state": "awaiting_configuration",
+                "blocking": { "reason": "configuration_required", "recovery": "configure" }
+            }),
+            true,
+        ),
+        (
+            "awaiting_network",
+            serde_json::json!({
+                "operation_id": "selection", "state": "awaiting_network",
+                "blocking": { "reason": "directory_unavailable", "recovery": "retry" }
+            }),
+            true,
+        ),
+        (
+            "awaiting_authorization",
+            serde_json::json!({
+                "operation_id": "selection", "state": "awaiting_authorization",
+                "authorization": { "kind": "official" }
+            }),
+            true,
+        ),
+        (
+            "admitting",
+            serde_json::json!({ "operation_id": "selection", "state": "admitting" }),
+            true,
+        ),
+        (
+            "preparing",
+            serde_json::json!({
+                "operation_id": "selection", "state": "preparing", "task_id": "engine:1"
+            }),
+            true,
+        ),
+        (
+            "sharing",
+            serde_json::json!({
+                "operation_id": "selection", "state": "sharing", "task_id": "engine:1",
+                "url": "https://example.test/s/1#key"
+            }),
+            true,
+        ),
+        (
+            "stopping",
+            serde_json::json!({ "operation_id": "selection", "state": "stopping" }),
+            true,
+        ),
+        (
+            "finished",
+            serde_json::json!({
+                "operation_id": "selection", "state": "finished",
+                "result": { "outcome": "stopped", "stop_reason": "share_stopped" }
+            }),
+            false,
+        ),
+    ];
+    for (state, payload, unfinished) in cases {
+        let share: Share = serde_json::from_value(payload).unwrap();
+        assert_eq!(!share.is_finished(), unfinished, "{state}");
         model.operations[0].state = OperationState::Accepted(Box::new(share));
         assert_eq!(model.has_unfinished_work(), unfinished, "{state}");
     }
@@ -44,7 +90,7 @@ fn unfinished_work_includes_unacknowledged_creation_and_setup_cleanup() {
 
 #[test]
 fn terminal_relay_admission_is_distinct_from_active_recovery() {
-    let mut availability = super::model::RelayAvailability {
+    let mut availability = RelayAvailability {
         available: 1,
         total: 2,
         terminal: 0,

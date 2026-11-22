@@ -6,13 +6,15 @@ import (
 	"github.com/windshare/windshare/engine/observation/wire"
 )
 
-const notificationCapacity = 64
-
 type subscription struct {
 	snapshots          chan Snapshot
-	evidence           chan Message
-	dropped            uint64
 	releaseAccountView func()
+}
+
+type observationLog struct {
+	OperationID string       `json:"operation_id"`
+	TaskID      string       `json:"task_id"`
+	Event       wire.Encoded `json:"event"`
 }
 
 func (a *Application) observe(operationID string, task shareTask) {
@@ -35,13 +37,15 @@ func (a *Application) observe(operationID string, task shareTask) {
 			if !ok {
 				events = nil
 			} else {
-				a.publishObservation(operationID, record)
+				a.logObservation(operationID, record)
 			}
 		}
 	}
 }
 
-func (a *Application) publishObservation(operationID string, record engine.Observation) {
+// Engine observations stay in local support logs; control sockets only consume
+// authoritative snapshots.
+func (a *Application) logObservation(operationID string, record engine.Observation) {
 	event, ok := record.Event.(appobs.Event)
 	if !ok {
 		return
@@ -50,32 +54,22 @@ func (a *Application) publishObservation(operationID string, record engine.Obser
 	if err != nil {
 		return
 	}
-	notice := &Observation{OperationID: operationID, TaskID: string(record.TaskID), Event: encoded}
-	a.deps.log("engine.observation", notice)
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	for subscriber := range a.subscribers {
-		select {
-		case subscriber.evidence <- Message{Version: ProtocolVersion, Observation: notice}:
-		default:
-			subscriber.dropped++
-		}
-	}
+	a.deps.log("engine.observation", observationLog{
+		OperationID: operationID,
+		TaskID:      string(record.TaskID),
+		Event:       encoded,
+	})
 }
 
 func (a *Application) subscribe() (*subscription, func()) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	queue := &subscription{snapshots: make(chan Snapshot, 1), evidence: make(chan Message, notificationCapacity)}
+	queue := &subscription{snapshots: make(chan Snapshot, 1)}
 	a.subscribers[queue] = struct{}{}
 	return queue, func() {
 		a.mu.Lock()
 		delete(a.subscribers, queue)
 		queue.hideAccountView()
-		dropped := queue.dropped
 		a.mu.Unlock()
-		if dropped != 0 {
-			a.deps.log("host.evidence_dropped", map[string]uint64{"count": dropped})
-		}
 	}
 }

@@ -184,7 +184,7 @@ func TestJoinedCompletionAndReadinessNotifyWithoutObservations(t *testing.T) {
 	task.ready()
 	select {
 	case snapshot := <-queue.snapshots:
-		if snapshot.Shares[0].Startup != "ready" {
+		if snapshot.Shares[0].State != Sharing {
 			t.Fatal("notification preceded commit")
 		}
 	case <-time.After(5 * time.Second):

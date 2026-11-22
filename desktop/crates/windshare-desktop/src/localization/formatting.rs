@@ -54,13 +54,6 @@ impl Language {
         }
     }
 
-    pub fn viewers(self, count: usize) -> String {
-        match self {
-            Self::English => format!("{count} receiving"),
-            Self::SimplifiedChinese => format!("{count} 人正在接收"),
-        }
-    }
-
     pub fn shares(self, count: usize) -> String {
         match self {
             Self::English => format!("{count} {}", if count == 1 { "share" } else { "shares" }),

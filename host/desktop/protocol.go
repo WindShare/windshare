@@ -6,8 +6,6 @@ import (
 
 	"github.com/windshare/windshare/engine"
 	"github.com/windshare/windshare/engine/relayconfig"
-
-	"github.com/windshare/windshare/engine/observation/wire"
 )
 
 const ProtocolVersion = 1
@@ -51,15 +49,21 @@ type Share struct {
 	TaskID        string                     `json:"task_id,omitempty"`
 	CreatedAt     int64                      `json:"created_at_ms"`
 	State         ShareState                 `json:"state"`
-	Startup       string                     `json:"startup"`
 	URL           string                     `json:"url,omitempty"`
 	BackupURL     string                     `json:"backup_url,omitempty"`
 	Selection     *Selection                 `json:"selection,omitempty"`
-	Relay         *wire.Encoded              `json:"relay,omitempty"`
+	Relay         *RelayAvailability         `json:"relay,omitempty"`
 	Result        *Completion                `json:"result,omitempty"`
 	Error         *Failure                   `json:"error,omitempty"`
 	Blocking      *CreationBlock             `json:"blocking,omitempty"`
 	Authorization *engine.ShareAuthorization `json:"authorization,omitempty"`
+}
+
+type RelayAvailability struct {
+	Available uint32 `json:"available"`
+	Total     uint32 `json:"total"`
+	EverReady bool   `json:"ever_ready"`
+	Terminal  uint32 `json:"terminal"`
 }
 
 type Selection struct {
@@ -134,17 +138,10 @@ func (s Snapshot) active() bool {
 }
 
 type Message struct {
-	Version     int          `json:"version"`
-	ID          string       `json:"id,omitempty"`
-	Snapshot    *Snapshot    `json:"snapshot,omitempty"`
-	Error       *Failure     `json:"error,omitempty"`
-	Observation *Observation `json:"observation,omitempty"`
-}
-
-type Observation struct {
-	OperationID string       `json:"operation_id"`
-	TaskID      string       `json:"task_id"`
-	Event       wire.Encoded `json:"event"`
+	Version  int       `json:"version"`
+	ID       string    `json:"id,omitempty"`
+	Snapshot *Snapshot `json:"snapshot,omitempty"`
+	Error    *Failure  `json:"error,omitempty"`
 }
 
 func failure(code string, err error) *Failure { return &Failure{Code: code, Message: errorText(err)} }

@@ -94,16 +94,12 @@ impl Desktop {
                     } else {
                         name
                     },
-                    link: None,
                     contents: ShareContents::Selected(count),
                     size: None,
                     age: ShareAge::CreatedAt(SystemTime::now()),
                     tone: Tone::Mint,
                     symbol: Icon::Folder,
-                    state: ShareState::Preparing,
-                    error: None,
-                    authorization: None,
-                    relay_status: None,
+                    state: ShareState::Preparing { error: None },
                 },
             );
             0

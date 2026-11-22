@@ -24,8 +24,10 @@ struct ActiveShareDemand {
 }
 
 const fn is_official_authorization_wait(share: &Share) -> bool {
-    matches!(share.state, ShareState::AwaitingAuthorization)
-        && matches!(share.authorization, Some(ShareAuthorization::Official))
+    matches!(
+        share.state,
+        ShareState::AwaitingAuthorization(ShareAuthorization::Official)
+    )
 }
 
 const fn should_show_account_notice(
@@ -109,7 +111,7 @@ impl Desktop {
                 continue;
             }
             any_unfinished = true;
-            demand.preparing |= matches!(share.state, ShareState::Preparing);
+            demand.preparing |= matches!(share.state, ShareState::Preparing { .. });
             demand.official_auth_wait |= is_official_authorization_wait(share);
         }
         any_unfinished.then_some(demand)
