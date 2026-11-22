@@ -6,18 +6,21 @@
   "type": "module",
   "packageManager": "pnpm@12.5.1",
   "scripts": {
-    "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
-    "build:check": "wrangler deploy --dry-run --outdir .wrangler/dist",
+    "build:admin": "node scripts/build-admin.mjs",
+    "verify:admin": "node scripts/build-admin.mjs --check",
+    "dev": "pnpm build:admin && wrangler dev",
+    "deploy": "pnpm build:admin && wrangler deploy",
+    "build:check": "pnpm verify:admin && wrangler deploy --dry-run --outdir .wrangler/dist",
     "typecheck": "tsc -b",
     "lint": "eslint .",
     "test": "vitest run",
-    "check": "pnpm lint && pnpm typecheck && pnpm test"
+    "check": "pnpm verify:admin && pnpm lint && pnpm typecheck && pnpm test"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20261115.1",
     "@eslint/js": "10.0.1",
     "@types/node": "^24.13.2",
+    "esbuild": "0.28.2",
     "eslint": "10.14.0",
     "eslint-plugin-sonarjs": "4.2.0",
     "globals": "17.7.0",

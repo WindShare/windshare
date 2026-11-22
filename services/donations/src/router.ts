@@ -1,4 +1,4 @@
-import { ADMIN_APP_CSS, ADMIN_APP_JS, ADMIN_HTML } from './admin/assets'
+import { ADMIN_APP_CSS, ADMIN_APP_JS, ADMIN_FAVICON_SVG, ADMIN_HTML } from './admin/assets'
 import { handleAdminApi } from './admin/routes'
 import { parseAllowedOrigins, resolveCryptoCheckoutApiKey, type DonationsEnv } from './env'
 import {
@@ -62,6 +62,12 @@ function handleAdminAssetRoute(method: string, pathname: string): Response | nul
     return new Response(ADMIN_APP_CSS, {
       status: 200,
       headers: adminSecurityHeaders('text/css; charset=utf-8'),
+    })
+  }
+  if (pathname === '/admin/favicon.svg') {
+    return new Response(ADMIN_FAVICON_SVG, {
+      status: 200,
+      headers: adminSecurityHeaders('image/svg+xml; charset=utf-8'),
     })
   }
   return null

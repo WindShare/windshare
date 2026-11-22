@@ -2,6 +2,7 @@ import { DurableObject } from 'cloudflare:workers'
 import type { DonationWallRpc, DonationsEnv } from './env'
 import type {
   AdminConfigPatch,
+  AdminDonationsFilter,
   AdminDonationsPage,
   AdminSessionRecord,
   AdminVisibilityCommand,
@@ -89,8 +90,12 @@ export class DonationWall extends DurableObject<DonationsEnv> implements Donatio
     return this.store.patchConfig(patch)
   }
 
-  listAdminDonations(afterCursor: string | null, rawLimit: number | null): AdminDonationsPage {
-    return this.store.listAdminDonations(afterCursor, rawLimit)
+  listAdminDonations(
+    afterCursor: string | null,
+    rawLimit: number | null,
+    filter?: AdminDonationsFilter,
+  ): AdminDonationsPage {
+    return this.store.listAdminDonations(afterCursor, rawLimit, filter)
   }
 
   moderateDonationVisibility(

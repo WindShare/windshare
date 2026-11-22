@@ -24,12 +24,18 @@ import {
 } from '../log'
 import {
   ADMIN_SESSION_TTL_SECONDS,
+  DONATION_PROVIDERS,
+  MAX_ADMIN_SEARCH_CODEPOINTS,
   MAX_CRYPTO_USD_MINOR,
   MAX_HIDE_REASON_CODEPOINTS,
+  VISIBILITY_KINDS,
   type AdminConfigPatch,
+  type AdminDonationsFilter,
   type AdminSessionRecord,
   type AdminVisibilityCommand,
   type CommitDonationInput,
+  type DonationProvider,
+  type VisibilityKind,
 } from '../model'
 import {
   lookupAfdianSponsorNameDirect,
@@ -68,6 +74,32 @@ function parseOptionalIntParam(raw: string | null): number | null {
   if (!DECIMAL_INT_PATTERN.test(trimmed)) return null
   const parsed = Number(trimmed)
   return Number.isSafeInteger(parsed) ? parsed : null
+}
+
+function parseVisibilityFilter(raw: string | null): VisibilityKind | undefined {
+  if (raw === null) return undefined
+  const value = raw.trim()
+  return (VISIBILITY_KINDS as readonly string[]).includes(value) ? (value as VisibilityKind) : undefined
+}
+
+function parseProviderFilter(raw: string | null): DonationProvider | undefined {
+  if (raw === null) return undefined
+  const value = raw.trim()
+  return (DONATION_PROVIDERS as readonly string[]).includes(value) ? (value as DonationProvider) : undefined
+}
+
+function parseAdminDonationsFilter(searchParams: URLSearchParams): AdminDonationsFilter | undefined {
+  const visibility = parseVisibilityFilter(searchParams.get('visibility'))
+  const provider = parseProviderFilter(searchParams.get('provider'))
+  const query = sanitizePlainText(searchParams.get('q'), MAX_ADMIN_SEARCH_CODEPOINTS) ?? undefined
+  if (visibility === undefined && provider === undefined && query === undefined) {
+    return undefined
+  }
+  return {
+    ...(visibility === undefined ? {} : { visibility }),
+    ...(provider === undefined ? {} : { provider }),
+    ...(query === undefined ? {} : { query }),
+  }
 }
 
 function buildSessionCookie(token: string, maxAgeSeconds: number): string {
@@ -166,7 +198,12 @@ async function handleAdminLogin(
 
   logAdminLogin({ ok: true, reason: 'authenticated' })
   return adminJsonResponse(
-    { authenticated: true, csrfToken: created.csrfToken, expiresAt: created.expiresAt },
+    {
+      authenticated: true,
+      csrfToken: created.csrfToken,
+      expiresAt: created.expiresAt,
+      afdianSyncConfigured: Boolean(env.AFDIAN_TOKEN),
+    },
     200,
     { 'Set-Cookie': buildSessionCookie(sessionToken, ADMIN_SESSION_TTL_SECONDS) },
   )
@@ -474,7 +511,7 @@ async function handleVisibilityMutation(
     fromVisibility: result.fromVisibility.kind,
     toVisibility: result.toVisibility.kind,
   })
-  return adminJsonResponse({ record: result.record }, 200)
+  return adminJsonResponse({ record: result.record, counts: result.counts }, 200)
 }
 
 function extractVisibilityDonationId(pathname: string): { readonly matched: false } | { readonly matched: true; readonly donationId: string | null } {
@@ -603,13 +640,15 @@ async function dispatchAdminApi(
       csrfToken: session.csrfToken,
       expiresAt: session.expiresAt,
       config,
+      afdianSyncConfigured: Boolean(env.AFDIAN_TOKEN),
     })
   }
 
   if (method === 'GET' && pathname === '/v1/admin/donations') {
     const after = url.searchParams.get('after')
     const limit = parseOptionalIntParam(url.searchParams.get('limit'))
-    const page = await getDonationWallStub(env).listAdminDonations(after, limit)
+    const filter = parseAdminDonationsFilter(url.searchParams)
+    const page = await getDonationWallStub(env).listAdminDonations(after, limit, filter)
     return adminJsonResponse(page, 200)
   }
 

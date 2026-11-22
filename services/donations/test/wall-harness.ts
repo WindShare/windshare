@@ -2,6 +2,7 @@ import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import type { DonationWallRpc } from '../src/env'
 import type {
   AdminConfigPatch,
+  AdminDonationsFilter,
   AdminVisibilityCommand,
   CommitDonationInput,
   CreateAdminSessionInput,
@@ -123,9 +124,13 @@ export function createWallNamespaceFromStore(
       track()
       return store.patchConfig(patch)
     },
-    listAdminDonations: async (afterCursor: string | null, rawLimit: number | null) => {
+    listAdminDonations: async (
+      afterCursor: string | null,
+      rawLimit: number | null,
+      filter?: AdminDonationsFilter,
+    ) => {
       track()
-      return store.listAdminDonations(afterCursor, rawLimit)
+      return store.listAdminDonations(afterCursor, rawLimit, filter)
     },
     moderateDonationVisibility: async (donationId: string, command: AdminVisibilityCommand, nowSec: number) => {
       track()

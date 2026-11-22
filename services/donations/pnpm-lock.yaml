@@ -175,6 +175,9 @@ importers:
       '@types/node':
         specifier: ^24.13.2
         version: 24.19.2
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
       eslint:
         specifier: 10.14.0
         version: 10.14.0(supports-color@10.2.2)

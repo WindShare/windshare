@@ -1,5 +1,6 @@
 import type {
   AdminConfigPatch,
+  AdminDonationsFilter,
   AdminDonationsPage,
   AdminSessionRecord,
   AdminVisibilityCommand,
@@ -32,7 +33,11 @@ export interface DonationWallRpc extends Rpc.DurableObjectBranded {
   revokeAdminSession(sessionHash: string): void
   getAdminConfig(): DonationConfig
   patchAdminConfig(patch: AdminConfigPatch): DonationConfig
-  listAdminDonations(afterCursor: string | null, rawLimit: number | null): AdminDonationsPage
+  listAdminDonations(
+    afterCursor: string | null,
+    rawLimit: number | null,
+    filter?: AdminDonationsFilter,
+  ): AdminDonationsPage
   moderateDonationVisibility(
     donationId: string,
     command: AdminVisibilityCommand,

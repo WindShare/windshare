@@ -20,6 +20,7 @@ export default defineConfig([
     '.wrangler',
     'dist',
     'coverage',
+    'src/admin/console-dist',
   ]),
   {
     files: ['**/*.{js,mjs}'],
@@ -86,6 +87,20 @@ export default defineConfig([
         patterns: [{
           group: ['./worker*', './admin/**'],
           message: 'DonationWall Durable Object must stay decoupled from HTTP routing and admin asset serving.',
+        }],
+      }],
+    },
+  },
+  {
+    files: ['admin-ui/src/**/*.ts'],
+    languageOptions: {
+      globals: globals.browser,
+    },
+    rules: {
+      'no-restricted-imports': ['error', {
+        patterns: [{
+          group: ['cloudflare:*', 'node:*', '../../src/!(model)*'],
+          message: 'Browser admin UI may only import pure domain types from src/model.ts.',
         }],
       }],
     },

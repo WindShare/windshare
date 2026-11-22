@@ -9,9 +9,11 @@ import {
   clampDonatedAt,
   projectPublicWallEntry,
   type AdminConfigPatch,
+  type AdminDonationsFilter,
   type AdminDonationsPage,
   type AdminSessionRecord,
   type AdminVisibilityCommand,
+  type AdminVisibilityCounts,
   type CommitDonationInput,
   type CommitDonationResult,
   type CreateAdminSessionInput,
@@ -24,6 +26,7 @@ import {
   type WallVisibility,
 } from './model'
 import { determineInitialVisibility } from './sanitize'
+import { buildAdminDonationsQuery, reduceVisibilityCounts } from './wall-queries'
 
 const CLEANUP_BATCH_SIZE = 32
 const RATE_LIMIT_STALE_SECONDS = 3600
@@ -85,6 +88,7 @@ export type ModerateVisibilityResult =
     readonly record: DonationRecord
     readonly fromVisibility: WallVisibility
     readonly toVisibility: WallVisibility
+    readonly counts: AdminVisibilityCounts
   }
   | { readonly ok: false; readonly code: 'not_found' | 'private_donor_immutable' | 'invalid_transition' }
 
@@ -640,30 +644,23 @@ export class WallStore {
     this.sql.exec('DELETE FROM admin_sessions WHERE session_hash = ?', sessionHash)
   }
 
-  listAdminDonations(afterCursor: string | null, rawLimit?: number | null): AdminDonationsPage {
+  getVisibilityCounts(): AdminVisibilityCounts {
+    return reduceVisibilityCounts(
+      this.sql.exec(
+        'SELECT visibility_kind, COUNT(*) AS count FROM donations GROUP BY visibility_kind',
+      ),
+    )
+  }
+
+  listAdminDonations(
+    afterCursor: string | null,
+    rawLimit?: number | null,
+    filter?: AdminDonationsFilter,
+  ): AdminDonationsPage {
     const limit = normalizeAdminPageLimit(rawLimit)
     const cursor = decodeAdminCursor(afterCursor)
-    const rows = cursor === null
-      ? this.sql.exec(
-        `SELECT id, provider, external_id, display_name, amount_minor, currency,
-                minor_digits, message, visibility_kind, visibility_json, donated_at
-         FROM donations
-         ORDER BY donated_at DESC, id DESC
-         LIMIT ?`,
-        limit + 1,
-      )
-      : this.sql.exec(
-        `SELECT id, provider, external_id, display_name, amount_minor, currency,
-                minor_digits, message, visibility_kind, visibility_json, donated_at
-         FROM donations
-         WHERE (donated_at < ?) OR (donated_at = ? AND id < ?)
-         ORDER BY donated_at DESC, id DESC
-         LIMIT ?`,
-        cursor.donatedAt,
-        cursor.donatedAt,
-        cursor.id,
-        limit + 1,
-      )
+    const built = buildAdminDonationsQuery(cursor, limit, filter)
+    const rows = this.sql.exec(built.sql, ...built.bindings)
 
     const all: DonationRecord[] = []
     for (const row of rows) {
@@ -680,6 +677,7 @@ export class WallStore {
       items,
       nextCursor,
       config: this.getConfig(),
+      counts: this.getVisibilityCounts(),
     }
   }
 
@@ -718,6 +716,7 @@ export class WallStore {
         record: { ...existing, visibility: transition.next },
         fromVisibility: existing.visibility,
         toVisibility: transition.next,
+        counts: this.getVisibilityCounts(),
       }
     })
   }

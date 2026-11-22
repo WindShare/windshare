@@ -9,9 +9,20 @@ export const ADMIN_SESSION_TTL_SECONDS = 12 * 60 * 60
 export const MAX_DISPLAY_NAME_CODEPOINTS = 32
 export const MAX_MESSAGE_CODEPOINTS = 140
 export const MAX_HIDE_REASON_CODEPOINTS = 140
+export const MAX_ADMIN_SEARCH_CODEPOINTS = 64
 export const MAX_FUTURE_SKEW_SECONDS = 60
 
-export type DonationProvider = 'afdian' | 'kofi' | 'nowpayments'
+export const DONATION_PROVIDERS = ['afdian', 'kofi', 'nowpayments'] as const
+export type DonationProvider = (typeof DONATION_PROVIDERS)[number]
+
+export const VISIBILITY_KINDS = [
+  'published',
+  'pending_review',
+  'below_threshold',
+  'hidden',
+  'private_donor',
+] as const
+export type VisibilityKind = (typeof VISIBILITY_KINDS)[number]
 
 export const KNOWN_CURRENCY_DECIMALS: Readonly<Record<string, number>> = Object.freeze({
   CNY: 2,
@@ -140,10 +151,37 @@ export interface CommitDonationResult {
   readonly deduplicated: boolean
 }
 
+export interface AdminVisibilityCounts {
+  readonly total: number
+  readonly published: number
+  readonly pending_review: number
+  readonly below_threshold: number
+  readonly hidden: number
+  readonly private_donor: number
+}
+
+export interface AdminDonationsFilter {
+  readonly visibility?: VisibilityKind
+  readonly provider?: DonationProvider
+  readonly query?: string
+}
+
 export interface AdminDonationsPage {
   readonly items: readonly DonationRecord[]
   readonly nextCursor: string | null
   readonly config: DonationConfig
+  readonly counts: AdminVisibilityCounts
+}
+
+export function emptyVisibilityCounts(): AdminVisibilityCounts {
+  return {
+    total: 0,
+    published: 0,
+    pending_review: 0,
+    below_threshold: 0,
+    hidden: 0,
+    private_donor: 0,
+  }
 }
 
 export interface AdminSessionRecord {
