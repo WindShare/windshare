@@ -2,7 +2,10 @@ package output
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"sync"
@@ -17,10 +20,50 @@ const (
 	// SmallFileThreshold separates single-shot small files (0 per-file fsync on
 	// the hot path; batched journal sync) from large files that stream range
 	// checkpoints to disk during transfer.
-	SmallFileThreshold      uint64 = 8 << 20 // 8 MiB
-	LargeCheckpointBytes    uint64 = 8 << 20 // 8 MiB
-	LargeCheckpointInterval        = 2 * time.Second
+	SmallFileThreshold           uint64 = 8 << 20 // 8 MiB
+	LargeCheckpointBytes         uint64 = 8 << 20 // 8 MiB
+	LargeCheckpointInterval             = 2 * time.Second
+	publicationFingerprintDomain        = "windshare/publication-samples/v1\x00"
+	publicationSampleBytes       uint64 = 4096
 )
+
+// samplePublicationFingerprint hashes the file size together with up to three
+// 4 KiB slices (head, middle, tail). It provides bounded O(1) reconciliation
+// evidence for an interrupted publish, never authority to overwrite or delete
+// an existing destination file.
+func samplePublicationFingerprint(reader io.ReaderAt, size uint64) ([publicationFingerprintBytes]byte, error) {
+	h := sha256.New()
+	_, _ = h.Write([]byte(publicationFingerprintDomain))
+	var encoded [8]byte
+	binary.BigEndian.PutUint64(encoded[:], size)
+	_, _ = h.Write(encoded[:])
+
+	length := min(size, publicationSampleBytes)
+	if length > 0 {
+		offsets := [3]uint64{0, (size - length) / 2, size - length}
+		prev := ^uint64(0)
+		buf := make([]byte, length)
+		for _, off := range offsets {
+			if off == prev {
+				continue
+			}
+			prev = off
+			n, err := reader.ReadAt(buf, int64(off))
+			if err != nil || n != len(buf) {
+				if err == nil {
+					err = io.ErrUnexpectedEOF
+				}
+				return [publicationFingerprintBytes]byte{}, err
+			}
+			binary.BigEndian.PutUint64(encoded[:], off)
+			_, _ = h.Write(encoded[:])
+			_, _ = h.Write(buf)
+		}
+	}
+	var sum [publicationFingerprintBytes]byte
+	copy(sum[:], h.Sum(nil))
+	return sum, nil
+}
 
 type fileTransaction struct {
 	session       *Session
@@ -207,49 +250,27 @@ func (tx *fileTransaction) Commit(ctx context.Context) (transfer.FileSettlement,
 	}
 
 	isLarge := tx.exactSize >= SmallFileThreshold
-	if isLarge || tx.persistedGen > 0 {
-		if err := tx.file.Sync(); err != nil {
-			return transfer.FileSettlement{}, DiagnoseFailure(FailureDurability, wrapFileFault(ctx, transferfault.OutputStateIO, "sync staged file", err))
-		}
+	// Only large files and files that already hold a durable partial entry pay
+	// the pre-publish intent cost; one-shot small files keep the 0-fsync path.
+	durablePublish := isLarge || tx.persistedGen > 0
+
+	pubEntry, warnings, err := tx.prepareStageForPublishLocked(ctx, durablePublish)
+	if err != nil {
+		return transfer.FileSettlement{}, err
 	}
 
-	var warnings []transfer.FileMetadataWarning
-	if mod := tx.binding.Descriptor().ModifiedTime(); mod.Present() {
-		if err := setFileModifiedTimeCatalog(tx.file, mod); err != nil {
-			warnings = append(warnings, transfer.FileMetadataModifiedTime)
+	if durablePublish {
+		// Persist the publishing intent and fingerprint before rename so a
+		// journal write failure or crash after rename can reconcile the
+		// published file instead of redownloading from zero and colliding.
+		if err := tx.session.op.journal.recordPublishing(pubEntry, true); err != nil {
+			return transfer.FileSettlement{}, DiagnoseFailure(FailureDurability, wrapFileFault(ctx, transferfault.OutputStateIO, "record publishing intent", err))
 		}
-	}
-
-	// Close before atomic rename (required on Windows and clean on Unix).
-	closeErr := tx.file.Close()
-	tx.file = nil
-	if closeErr != nil {
-		return transfer.FileSettlement{}, wrapFileFault(ctx, transferfault.OutputStateIO, "close staged file", closeErr)
 	}
 
 	renameErr := renameFileNoReplace(tx.session.op.opDir, tx.partName, tx.parentDir, tx.physLeaf, false)
 	if errors.Is(renameErr, ErrNamespaceCollision) || errors.Is(renameErr, fs.ErrExist) {
-		// Preserve .part in .windshare-tmp/<opID>/ so retry or discard stays safe.
-		tx.persistedGen++
-		tx.persisted = tx.accepted
-		desc := tx.binding.Descriptor()
-		_ = tx.session.op.journal.recordPartial(partialEntry{
-			FileID:        desc.FileID(),
-			Path:          tx.canonicalPath,
-			Revision:      desc.FileRevision(),
-			Metadata:      desc.SourceMetadata(),
-			ExactSize:     tx.exactSize,
-			PartName:      tx.partName,
-			Ranges:        tx.persisted.Ranges(),
-			CheckpointGen: tx.persistedGen,
-		}, true)
-		settlement, err := transfer.NewTransactionCollisionFileSettlement(tx.binding)
-		if err != nil {
-			return transfer.FileSettlement{}, err
-		}
-		tx.settled = true
-		tx.session.recordSettledFile(tx.canonicalPath, settlement)
-		return settlement, nil
+		return tx.settleCommitCollisionLocked()
 	}
 	if renameErr != nil {
 		return transfer.FileSettlement{}, wrapFileFault(ctx, transferfault.OutputStateIO, "publish file", renameErr)
@@ -265,6 +286,79 @@ func (tx *fileTransaction) Commit(ctx context.Context) (transfer.FileSettlement,
 		return transfer.FileSettlement{}, DiagnoseFailure(FailureDurability, wrapFileFault(ctx, transferfault.OutputStateIO, "record delivery receipt", err))
 	}
 
+	return tx.settlePublishedLocked(warnings)
+}
+
+func (tx *fileTransaction) prepareStageForPublishLocked(
+	ctx context.Context,
+	durablePublish bool,
+) (publishingEntry, []transfer.FileMetadataWarning, error) {
+	var pubEntry publishingEntry
+	if durablePublish {
+		fp, err := samplePublicationFingerprint(tx.file, tx.exactSize)
+		if err != nil {
+			return publishingEntry{}, nil, DiagnoseFailure(FailureDurability, wrapFileFault(ctx, transferfault.OutputStateIO, "fingerprint staged file", err))
+		}
+		desc := tx.binding.Descriptor()
+		pubEntry = publishingEntry{
+			FileID:        desc.FileID(),
+			Path:          tx.canonicalPath,
+			Revision:      desc.FileRevision(),
+			Metadata:      desc.SourceMetadata(),
+			ExactSize:     tx.exactSize,
+			PartName:      tx.partName,
+			CheckpointGen: tx.persistedGen + 1,
+			Fingerprint:   fp,
+		}
+	}
+
+	var warnings []transfer.FileMetadataWarning
+	if mod := tx.binding.Descriptor().ModifiedTime(); mod.Present() {
+		if err := setFileModifiedTimeCatalog(tx.file, mod); err != nil {
+			warnings = append(warnings, transfer.FileMetadataModifiedTime)
+		}
+	}
+
+	if durablePublish {
+		if err := tx.file.Sync(); err != nil {
+			return publishingEntry{}, nil, DiagnoseFailure(FailureDurability, wrapFileFault(ctx, transferfault.OutputStateIO, "sync staged file", err))
+		}
+	}
+
+	// Close before atomic rename (required on Windows and clean on Unix).
+	closeErr := tx.file.Close()
+	tx.file = nil
+	if closeErr != nil {
+		return publishingEntry{}, nil, wrapFileFault(ctx, transferfault.OutputStateIO, "close staged file", closeErr)
+	}
+	return pubEntry, warnings, nil
+}
+
+func (tx *fileTransaction) settleCommitCollisionLocked() (transfer.FileSettlement, error) {
+	// Preserve .part in .windshare-tmp/<opID>/ so retry or discard stays safe.
+	tx.persistedGen++
+	tx.persisted = tx.accepted
+	desc := tx.binding.Descriptor()
+	_ = tx.session.op.journal.recordPartial(partialEntry{
+		FileID:        desc.FileID(),
+		Path:          tx.canonicalPath,
+		Revision:      desc.FileRevision(),
+		Metadata:      desc.SourceMetadata(),
+		ExactSize:     tx.exactSize,
+		PartName:      tx.partName,
+		Ranges:        tx.persisted.Ranges(),
+		CheckpointGen: tx.persistedGen,
+	}, true)
+	settlement, err := transfer.NewTransactionCollisionFileSettlement(tx.binding)
+	if err != nil {
+		return transfer.FileSettlement{}, err
+	}
+	tx.settled = true
+	tx.session.recordSettledFile(tx.canonicalPath, settlement)
+	return settlement, nil
+}
+
+func (tx *fileTransaction) settlePublishedLocked(warnings []transfer.FileMetadataWarning) (transfer.FileSettlement, error) {
 	commitGen := tx.persistedGen + 1
 	verified, err := transfer.VerifyRestartRanges(tx.binding, transfer.CheckpointGeneration(commitGen), tx.accepted)
 	if err != nil {

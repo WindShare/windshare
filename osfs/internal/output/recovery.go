@@ -189,8 +189,8 @@ func inspectOperationDir(opID receivecontract.OperationID, opDir *Dir) (Recovery
 		return RecoverySummary{}, false
 	}
 
-	items := make([]RecoveryItem, 0, len(state.partials)+len(state.delivered))
-	hasResumable := len(state.delivered) > 0
+	items := make([]RecoveryItem, 0, len(state.partials)+len(state.publishing)+len(state.delivered))
+	hasResumable := len(state.delivered) > 0 || len(state.publishing) > 0
 	for _, p := range state.partials {
 		if p.BlockedReason != 0 {
 			items = append(items, RecoveryItem{
@@ -212,6 +212,12 @@ func inspectOperationDir(opID receivecontract.OperationID, opDir *Dir) (Recovery
 				state:         RecoveryItemIncomplete,
 			})
 		}
+	}
+	for _, p := range state.publishing {
+		items = append(items, RecoveryItem{
+			canonicalPath: p.Path,
+			state:         RecoveryItemResumable,
+		})
 	}
 	for _, d := range state.delivered {
 		items = append(items, RecoveryItem{

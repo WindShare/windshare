@@ -193,6 +193,13 @@ func newNameMapper(
 	return mapper, nil
 }
 
+// resolve returns the physical path relative to the operation's root directory.
+func (m *nameMapper) resolve(logical string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.resolveLocked(logical)
+}
+
 // resolveLocked turns a canonical logical materialization path into a physical
 // path relative to the operation's root directory (resultDir for ResultRoot,
 // container root for CatalogRoot and SingleFile).

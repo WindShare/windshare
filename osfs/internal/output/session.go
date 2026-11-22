@@ -162,7 +162,24 @@ func (s *Session) LookupDelivery(
 	}
 	entry, ok := s.op.journal.lookupDelivered(fileID, canonical)
 	if !ok {
-		return transfer.HistoricalDelivery{}, false, nil
+		pub, hasPub := s.op.journal.lookupPublishing(canonical)
+		if !hasPub || pub.FileID != fileID {
+			return transfer.HistoricalDelivery{}, false, nil
+		}
+		reconciled, err := s.tryReconcilePublishingByPath(ctx, pub)
+		if err != nil {
+			return transfer.HistoricalDelivery{}, false, err
+		}
+		if !reconciled {
+			return transfer.HistoricalDelivery{}, false, nil
+		}
+		return transfer.HistoricalDelivery{
+			OperationID:         s.intent.OperationID(),
+			FileID:              pub.FileID,
+			FileRevision:        pub.Revision,
+			MaterializationPath: pub.Path,
+			Size:                pub.ExactSize,
+		}, true, nil
 	}
 	emitTrace(s.authority.diagnostics, traceEvent{
 		component:    "file",
