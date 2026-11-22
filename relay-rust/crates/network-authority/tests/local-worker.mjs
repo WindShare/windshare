@@ -88,8 +88,50 @@ export async function fixture(
         this.kvFailCount = 0;
         this.signingCertReads = 0;
         this.signingSeedReads = 0;
+        this.ddlCount = 0;
+        this.ddlInTransaction = 0;
+        this.transactionDepth = 0;
         ${seedActiveSql}
         const self = this;
+        const wrapSql = sql => new Proxy(sql, {
+          get(target, prop) {
+            if (prop === 'exec') {
+              return (query, ...bindings) => {
+                if (/^\\s*CREATE\\s+(?:TABLE|INDEX)\\b/i.test(String(query))) {
+                  self.ddlCount += 1;
+                  if (self.transactionDepth > 0) self.ddlInTransaction += 1;
+                }
+                return target.exec(query, ...bindings);
+              };
+            }
+            const value = Reflect.get(target, prop, target);
+            return typeof value === 'function' ? value.bind(target) : value;
+          },
+        });
+        const wrapStorage = storage => new Proxy(storage, {
+          get(target, prop) {
+            if (prop === 'sql') return wrapSql(target.sql);
+            if (prop === 'transactionSync') {
+              return callback => {
+                self.transactionDepth += 1;
+                try {
+                  return target.transactionSync(callback);
+                } finally {
+                  self.transactionDepth -= 1;
+                }
+              };
+            }
+            const value = Reflect.get(target, prop, target);
+            return typeof value === 'function' ? value.bind(target) : value;
+          },
+        });
+        const wrappedState = new Proxy(state, {
+          get(target, prop) {
+            if (prop === 'storage') return wrapStorage(target.storage);
+            const value = Reflect.get(target, prop, target);
+            return typeof value === 'function' ? value.bind(target) : value;
+          },
+        });
         const wrappedEnv = new Proxy(env, {
           get(target, prop) {
             if (prop === 'AUTHORITY_CERTIFICATE') self.signingCertReads += 1;
@@ -116,7 +158,7 @@ export async function fixture(
             return typeof value === 'function' ? value.bind(target) : value;
           },
         });
-        this.authority = new NetworkAuthority(state, wrappedEnv);
+        this.authority = new NetworkAuthority(wrappedState, wrappedEnv);
       }
       async fetch(request) {
         const path = new URL(request.url).pathname;
@@ -151,6 +193,16 @@ export async function fixture(
           return Response.json({
             certificate: this.signingCertReads,
             seed: this.signingSeedReads,
+          });
+        }
+        if (path === '/__test/schema-audit' && request.method === 'GET') {
+          const indexes = [...this.state.storage.sql.exec(
+            "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'authority_records' AND name NOT LIKE 'sqlite_autoindex_%' ORDER BY name",
+          )].map(row => row.name);
+          return Response.json({
+            indexes,
+            ddlCount: this.ddlCount,
+            ddlInTransaction: this.ddlInTransaction,
           });
         }
         return this.authority.fetch(request);

@@ -5,6 +5,16 @@ use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use worker::{SqlStorage, SqlStorageValue, State};
 
 const EXPIRED_PROOF_BATCH_SIZE: i64 = 64;
+const PROOF_EXPIRY_EXPR: &str = "json_extract(value, '$.expires_at')";
+const REPORT_CREATED_AT_EXPR: &str = "json_extract(value, '$.created_at')";
+const REPORTS_NEWEST_INDEX: &str = "authority_reports_newest";
+
+const fn proof_expiry_index(kind: ProofKind) -> &'static str {
+    match kind {
+        ProofKind::Work => "registration_work_expiry",
+        ProofKind::Email => "registration_email_expiry",
+    }
+}
 
 #[derive(Clone)]
 pub struct Database(SqlStorage);
@@ -19,6 +29,25 @@ impl Database {
     pub fn ensure_schema(&self) -> Result<()> {
         api(self.0.exec(
             "CREATE TABLE IF NOT EXISTS authority_records(key TEXT PRIMARY KEY,value TEXT NOT NULL) STRICT",
+            None,
+        ))?;
+        // Provision partial indexes upfront outside transactions so online requests
+        // never trigger full-table index builds or execute DDL on read paths.
+        for kind in [ProofKind::Work, ProofKind::Email] {
+            let index = proof_expiry_index(kind);
+            let proof_keys = format!("key GLOB '{}/*'", kind.registration_prefix());
+            api(self.0.exec(
+                &format!(
+                    "CREATE INDEX IF NOT EXISTS {index} ON authority_records ({PROOF_EXPIRY_EXPR}) WHERE {proof_keys}"
+                ),
+                None,
+            ))?;
+        }
+        api(self.0.exec(
+            &format!(
+                "CREATE INDEX IF NOT EXISTS {REPORTS_NEWEST_INDEX} \
+                 ON authority_records ({REPORT_CREATED_AT_EXPR} DESC, key DESC) WHERE key GLOB 'report/*'"
+            ),
             None,
         ))?;
         Ok(())
@@ -49,25 +78,15 @@ impl Store for Database {
         Ok(())
     }
     fn prune_registration_proofs(&mut self, kind: ProofKind, now: u64) -> Result<()> {
-        const EXPIRY: &str = "json_extract(value, '$.expires_at')";
-        let index = match kind {
-            ProofKind::Work => "registration_work_expiry",
-            ProofKind::Email => "registration_email_expiry",
-        };
+        let index = proof_expiry_index(kind);
         let proof_keys = format!("key GLOB '{}/*'", kind.registration_prefix());
         // Reclaim expired proof rows as new ones arrive, with bounded work per issuance.
         api(self.0.exec(
             &format!(
-                "CREATE INDEX IF NOT EXISTS {index} ON authority_records ({EXPIRY}) WHERE {proof_keys}"
-            ),
-            None,
-        ))?;
-        api(self.0.exec(
-            &format!(
                 "DELETE FROM authority_records WHERE key IN (
                     SELECT key FROM authority_records INDEXED BY {index}
-                    WHERE {proof_keys} AND {EXPIRY} <= ?
-                    ORDER BY {EXPIRY} LIMIT ?
+                    WHERE {proof_keys} AND {PROOF_EXPIRY_EXPR} <= ?
+                    ORDER BY {PROOF_EXPIRY_EXPR} LIMIT ?
                 )"
             ),
             Some(vec![
@@ -82,14 +101,6 @@ impl Store for Database {
         after: Option<crate::ReportPosition>,
         limit: usize,
     ) -> Result<Vec<crate::Report>> {
-        const CREATED_AT: &str = "json_extract(value, '$.created_at')";
-        api(self.0.exec(
-            &format!(
-                "CREATE INDEX IF NOT EXISTS authority_reports_newest
-             ON authority_records ({CREATED_AT} DESC, key DESC) WHERE key GLOB 'report/*'"
-            ),
-            None,
-        ))?;
         let read = |filter: &str,
                     order: &str,
                     mut args: Vec<SqlStorageValue>,
@@ -98,7 +109,7 @@ impl Store for Database {
             args.push(i64::try_from(limit)?.into());
             let rows = api(self.0.exec(
                 &format!(
-                    "SELECT value FROM authority_records INDEXED BY authority_reports_newest
+                    "SELECT value FROM authority_records INDEXED BY {REPORTS_NEWEST_INDEX}
                  WHERE key GLOB 'report/*' {filter} ORDER BY {order} LIMIT ?"
                 ),
                 Some(args),
@@ -110,21 +121,21 @@ impl Store for Database {
                 })
                 .collect()
         };
-        let order = format!("{CREATED_AT} DESC, key DESC");
+        let order = format!("{REPORT_CREATED_AT_EXPR} DESC, key DESC");
         let Some(after) = after else {
             return read("", &order, vec![], limit);
         };
         // Two index ranges let SQLite seek past both timestamp and ID ties.
         let time = i64::try_from(after.created_at)?;
         let mut reports = read(
-            &format!("AND {CREATED_AT} = ? AND key < ?"),
+            &format!("AND {REPORT_CREATED_AT_EXPR} = ? AND key < ?"),
             "key DESC",
             vec![time.into(), crate::store::key("report", &after.id).into()],
             limit,
         )?;
         if reports.len() < limit {
             reports.extend(read(
-                &format!("AND {CREATED_AT} < ?"),
+                &format!("AND {REPORT_CREATED_AT_EXPR} < ?"),
                 &order,
                 vec![time.into()],
                 limit - reports.len(),

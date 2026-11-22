@@ -75,8 +75,8 @@ impl NetworkAuthority {
     pub(super) fn database(&self) -> anyhow::Result<Database> {
         let database = Database::new(&self.state);
         if !self.schema_ready.get() {
-            // Run DDL once per DO instance outside rollbackable transactions so a
-            // later transaction abort cannot undo the table creation.
+            // Run table and index DDL once per DO instance outside rollbackable
+            // transactions so online requests never run DDL or lose schema setup on abort.
             database.ensure_schema()?;
             self.schema_ready.set(true);
             tracing::debug!(event = "authority_schema_ready");

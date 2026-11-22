@@ -567,6 +567,28 @@ test('vantage routes, scheduled mirror audit, maintenance/manage boundaries, and
     { adminAuth: true, status: 503 },
   );
   assert.equal(manageAbortReachedSigner.text, 'fleet temporarily unavailable');
+
+  // All partial indexes exist upfront from ensure_schema(), and neither report reads nor PoW pruning run DDL.
+  const expectedIndexes = ['authority_reports_newest', 'registration_email_expiry', 'registration_work_expiry'];
+  const beforeOnlineQueries = await (await authority.fetch('https://authority/__test/schema-audit')).json();
+  assert.deepEqual(beforeOnlineQueries, {
+    indexes: expectedIndexes,
+    ddlCount: 4,
+    ddlInTransaction: 0,
+  });
+  const emptyReports = (await call('/v1/admin/reports', undefined, { method: 'GET', adminAuth: true })).value;
+  assert.deepEqual(emptyReports.reports, []);
+  await call('/v1/admin/settings', { registration: 'proof_of_work' }, { method: 'PATCH', adminAuth: true });
+  const powChallenge = (
+    await call('/v1/accounts', { client_secret: randomBytes(32).toString('base64url') }, { status: 428 })
+  ).value;
+  assert.equal(powChallenge.kind, 'verification');
+  const afterOnlineQueries = await (await authority.fetch('https://authority/__test/schema-audit')).json();
+  assert.deepEqual(afterOnlineQueries, {
+    indexes: expectedIndexes,
+    ddlCount: 4,
+    ddlInTransaction: 0,
+  });
 });
 
 test('directory KV publish failures retry via bounded Durable Object alarms and recover cleanly', async t => {
