@@ -3,7 +3,8 @@ use crate::node::access::{Authorization, Bearer, Policy};
 use std::path::Path;
 use windshare_relay_access::{Credential, CredentialState};
 use windshare_relay_console::{
-    MAX_ACTIVE_CREDENTIALS, credentials::CREDENTIAL_HISTORY_PAGE_SIZE, text_id,
+    ADMIN_SESSION_LIFETIME_MS, MAX_ACTIVE_CREDENTIALS, credentials::CREDENTIAL_HISTORY_PAGE_SIZE,
+    text_id,
 };
 use windshare_relay_core::identifiers::ShareId;
 
@@ -322,5 +323,83 @@ fn password_change_rotates_sessions_and_advertises_capability() {
         )
         .status,
         StatusCode::OK
+    );
+}
+
+#[test]
+fn admin_session_cookie_and_lifetime_match_shared_console_policy() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("node.sqlite");
+    let identity = Identity::generate().unwrap();
+    let console = open(&db, &identity, &Policy::default());
+    let setup = json!({"token":identity.initialization_token(),"password":"development-password"});
+    let signed_in = post(&console, "/api/initialize", &setup, "");
+    let session = signed_in.cookie.clone().unwrap();
+    let set_cookie = console
+        .render(signed_in)
+        .headers()
+        .get(hyper::header::SET_COOKIE)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        set_cookie.contains(&format!(
+            "HttpOnly; SameSite=Strict; Path=/api; Secure; Max-Age={}",
+            ADMIN_SESSION_LIFETIME_MS / 1_000
+        )),
+        "{set_cookie}"
+    );
+    assert_eq!(
+        console
+            .dispatch(
+                &Method::GET,
+                "/api/session",
+                &json!({}),
+                &session,
+                100 + ADMIN_SESSION_LIFETIME_MS - 1,
+            )
+            .unwrap()
+            .status,
+        StatusCode::OK
+    );
+    let logged_out = console
+        .dispatch(
+            &Method::POST,
+            "/api/logout",
+            &json!({}),
+            &session,
+            100 + ADMIN_SESSION_LIFETIME_MS - 1,
+        )
+        .unwrap();
+    assert_eq!(logged_out.status, StatusCode::OK);
+    let cleared_cookie = console
+        .render(logged_out)
+        .headers()
+        .get(hyper::header::SET_COOKIE)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert!(cleared_cookie.contains("Max-Age=0"), "{cleared_cookie}");
+    let re_signed_in = post(
+        &console,
+        "/api/login",
+        &json!({"password":"development-password"}),
+        "",
+    );
+    let next_session = re_signed_in.cookie.unwrap();
+    assert_eq!(
+        console
+            .dispatch(
+                &Method::GET,
+                "/api/session",
+                &json!({}),
+                &next_session,
+                100 + ADMIN_SESSION_LIFETIME_MS,
+            )
+            .unwrap()
+            .status,
+        StatusCode::UNAUTHORIZED
     );
 }

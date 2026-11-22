@@ -7,7 +7,8 @@ use hyper::{
 };
 use serde_json::json;
 use windshare_relay_console::{
-    MAX_BODY_BYTES, NO_STORE_CACHE_CONTROL, POLICY, asset, asset_cache_control,
+    ADMIN_SESSION_LIFETIME_MS, MAX_BODY_BYTES, NO_STORE_CACHE_CONTROL, POLICY, asset,
+    asset_cache_control,
 };
 
 const COOKIE: &str = "windshare_node_admin";
@@ -31,7 +32,7 @@ impl Console {
         asset(path).is_some() || path.starts_with("/api/")
     }
 
-    fn render(&self, reply: Reply) -> HttpResponse {
+    pub(super) fn render(&self, reply: Reply) -> HttpResponse {
         let mut res = response(
             reply.status,
             "application/json",
@@ -44,9 +45,14 @@ impl Console {
             } else {
                 ""
             };
-            let age = if secret.is_empty() { "; Max-Age=0" } else { "" };
-            let value =
-                format!("{COOKIE}={secret}; HttpOnly; SameSite=Strict; Path=/api{secure}{age}");
+            let max_age = if secret.is_empty() {
+                0
+            } else {
+                ADMIN_SESSION_LIFETIME_MS / 1_000
+            };
+            let value = format!(
+                "{COOKIE}={secret}; HttpOnly; SameSite=Strict; Path=/api{secure}; Max-Age={max_age}"
+            );
             res.headers_mut()
                 .insert(header::SET_COOKIE, value.parse().expect("base64url cookie"));
         }

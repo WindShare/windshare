@@ -4,8 +4,8 @@ use super::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use windshare_relay_console::ADMIN_SESSION_LIFETIME_MS;
 use worker::{Request, Response, Result};
-const SESSION_LIFETIME_MS: u64 = 8 * 60 * 60 * 1_000;
 const ATTEMPT_WINDOW_MS: u64 = 15 * 60 * 1_000;
 const LOGIN_ATTEMPTS: u32 = 8;
 const GLOBAL_LOGIN_ATTEMPTS: u32 = 100;
@@ -94,7 +94,7 @@ impl AccessObject {
         let token = text_id(&random::<32>()?);
         let session = Session {
             password_revision: revision,
-            expires_at: now.saturating_add(SESSION_LIFETIME_MS),
+            expires_at: now.saturating_add(ADMIN_SESSION_LIFETIME_MS),
         };
         db.put(
             &key("session", &Digest::of(token.as_bytes()).0),
@@ -110,7 +110,7 @@ impl AccessObject {
             "Set-Cookie",
             &format!(
                 "{COOKIE_NAME}={token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age={}",
-                SESSION_LIFETIME_MS / 1_000
+                ADMIN_SESSION_LIFETIME_MS / 1_000
             ),
         )?;
         Ok(response)

@@ -1,6 +1,6 @@
 use super::{failure, text_id};
 use serde::{Serialize, de::DeserializeOwned};
-use windshare_relay_access::{Credential, Digest, Enrollment};
+use windshare_relay_access::{Credential, Digest};
 use windshare_relay_console::credentials::{
     CREDENTIAL_HISTORY_PAGE_SIZE, RevokedCredentialPosition,
 };
@@ -240,20 +240,6 @@ impl Database {
         Ok(())
     }
     pub fn cleanup(&self, now: u64) -> Result<()> {
-        // Expiry reclaims credentials whose installation was never confirmed.
-        for enrollment in self.list::<Enrollment>("enrollment:")? {
-            if !matches!(
-                enrollment.state,
-                windshare_relay_access::EnrollmentState::Installed { .. }
-            ) && enrollment.expires_at <= now
-            {
-                if let Some(id) = enrollment.incomplete_credential() {
-                    self.remove_credential(id)?;
-                }
-                self.delete(&format!("request:{}", text_id(&enrollment.claim_digest.0)))?;
-                self.delete(&format!("enrollment:{}", text_id(&enrollment.id)))?;
-            }
-        }
         self.0.exec(
             "DELETE FROM access_entries WHERE expires IS NOT NULL AND expires<=?",
             Some(vec![i64::try_from(now).map_err(failure)?.into()]),

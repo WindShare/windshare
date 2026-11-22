@@ -6,9 +6,8 @@ use argon2::{
 use hyper::StatusCode;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
-use windshare_relay_console::text_id;
+use windshare_relay_console::{ADMIN_SESSION_LIFETIME_MS, text_id};
 
-const SESSION_LIFETIME_MS: u64 = 12 * 60 * 60 * 1000;
 const MIN_PASSWORD: usize = 12;
 const MAX_PASSWORD: usize = 256;
 const MAX_LOGIN_ATTEMPTS: u32 = 12;
@@ -41,7 +40,7 @@ fn sign_in(db: &Connection, now: u64) -> Result<Reply> {
         "INSERT INTO console_sessions VALUES(?1,?2)",
         params![
             Digest::of(secret.as_bytes()).0.as_slice(),
-            i64::try_from(now + SESSION_LIFETIME_MS)?
+            i64::try_from(now.saturating_add(ADMIN_SESSION_LIFETIME_MS))?
         ],
     )?;
     Ok(Reply {

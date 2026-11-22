@@ -76,41 +76,23 @@ impl AccessObject {
             Ok(result) => result,
             Err(error) => return refusal(error),
         };
-        db.put(
-            &key("enrollment", &enrollment.id),
-            &enrollment,
-            Some(enrollment.expires_at),
-        )?;
-        if matches!(enrollment.state, EnrollmentState::Installed { .. }) {
-            db.put(&key("enrollment", &enrollment.id), &enrollment, None)?;
-        }
+        let expires = (!matches!(enrollment.state, EnrollmentState::Installed { .. }))
+            .then_some(enrollment.expires_at);
+        db.put(&key("enrollment", &enrollment.id), &enrollment, expires)?;
         match result {
             Poll::Pending => refusal(Refusal::Pending),
             Poll::Approved { credential } | Poll::Installed { credential } => {
                 // Derivation lets a lost response recover exactly the same credential;
-                // only digests and public identifiers survive in server storage.
+                // activation waits for installation confirmation so abandoned claims
+                // never materialize live access keys.
                 let access_key = windshare_relay_console::claimed_key(&secret);
                 let saved = db.get::<Credential>(&key("credential", &credential))?;
-                if let Some(saved) = &saved {
-                    if saved.state != CredentialState::Active {
-                        return refusal(Refusal::AccessDenied);
-                    }
-                } else if matches!(enrollment.state, EnrollmentState::Installed { .. }) {
+                if saved
+                    .as_ref()
+                    .is_some_and(|saved| saved.state != CredentialState::Active)
+                    || (saved.is_none() && matches!(result, Poll::Installed { .. }))
+                {
                     return refusal(Refusal::AccessDenied);
-                } else {
-                    if db.active_credentials()? >= windshare_relay_console::MAX_ACTIVE_CREDENTIALS {
-                        return reply(&json!({"error":"credential_capacity"}), 429);
-                    }
-                    let principal = Self::principal(db)?;
-                    db.save_credential(&Credential {
-                        id: credential,
-                        principal,
-                        name: enrollment.device_name.clone(),
-                        digest: Digest::of(access_key.as_bytes()),
-                        created_at: now,
-                        last_used_at: None,
-                        state: CredentialState::Active,
-                    })?;
                 }
                 trace(
                     "enrollment_claimed",
@@ -129,21 +111,52 @@ impl AccessObject {
             return refusal(Refusal::Expired);
         };
         let secret: [u8; 32] = parse_id(required(body, "claim_secret")?)?;
+        let already_installed = matches!(enrollment.state, EnrollmentState::Installed { .. });
         if let Err(error) = enrollment.installed(Digest::of(&secret), now) {
             return refusal(error);
         }
-        // Keep the installation receipt while its credential exists so a failed
-        // final client write can safely retry even after the approval window.
-        db.put(&key("enrollment", &enrollment.id), &enrollment, None)?;
-        db.put(
-            &key("request", &enrollment.claim_digest.0),
-            &enrollment.id,
-            None,
-        )?;
-        trace(
-            "enrollment_installed",
-            &json!({"enrollment_id":text_id(&enrollment.id)}),
-        );
+        let EnrollmentState::Installed { credential } = enrollment.state else {
+            return refusal(Refusal::Pending);
+        };
+        if already_installed {
+            let active = db
+                .get::<Credential>(&key("credential", &credential))?
+                .is_some_and(|saved| saved.state == CredentialState::Active);
+            if !active {
+                trace(
+                    "enrollment_install_refused",
+                    &json!({"enrollment_id":text_id(&enrollment.id),"credential_id":text_id(&credential),"reason":"credential_inactive"}),
+                );
+                return refusal(Refusal::AccessDenied);
+            }
+        } else {
+            if db.active_credentials()? >= windshare_relay_console::MAX_ACTIVE_CREDENTIALS {
+                return reply(&json!({"error":"credential_capacity"}), 429);
+            }
+            let access_key = windshare_relay_console::claimed_key(&secret);
+            let principal = Self::principal(db)?;
+            db.save_credential(&Credential {
+                id: credential,
+                principal,
+                name: enrollment.device_name.clone(),
+                digest: Digest::of(access_key.as_bytes()),
+                created_at: now,
+                last_used_at: None,
+                state: CredentialState::Active,
+            })?;
+            // Keep the installation receipt while its credential exists so a failed
+            // final client write can safely retry even after the approval window.
+            db.put(&key("enrollment", &enrollment.id), &enrollment, None)?;
+            db.put(
+                &key("request", &enrollment.claim_digest.0),
+                &enrollment.id,
+                None,
+            )?;
+            trace(
+                "enrollment_installed",
+                &json!({"enrollment_id":text_id(&enrollment.id),"credential_id":text_id(&credential)}),
+            );
+        }
         let managed = self.turn_reference(db)?;
         reply(
             &json!({"ok":true,"managed_turn":if managed.is_null() { json!([]) } else { json!([managed]) }}),
@@ -167,6 +180,11 @@ impl AccessObject {
         db.put(
             &key("enrollment", &enrollment.id),
             &enrollment,
+            Some(enrollment.expires_at),
+        )?;
+        db.put(
+            &key("request", &enrollment.claim_digest.0),
+            &enrollment.id,
             Some(enrollment.expires_at),
         )?;
         trace(

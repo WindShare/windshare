@@ -87,10 +87,18 @@ test('SQLite access authority survives restart, approval retry, cancellation and
     await request('login', { password }, 403);
     const login = await request('login', { password }, 200, false, { Origin: origin });
     cookie = login.response.headers.get('Set-Cookie').split(';')[0];
-    assert.match(login.response.headers.get('Set-Cookie'), /HttpOnly; Secure; SameSite=Strict/);
+    assert.match(login.response.headers.get('Set-Cookie'), /HttpOnly; Secure; SameSite=Strict; Max-Age=43200/);
     await request('credentials', { name: 'cross site' }, 403, true, { Origin: 'https://127.0.0.1' });
     await request('credentials', { name: 'missing origin' }, 403, false, { Cookie: cookie });
     await request('enrollments', { device_name: 'invalid request' }, 400);
+
+    const authority = (await mf.getBindings('relay')).ACCESS.getByName('authority');
+    const authorize = async (accessKey, expected) => {
+      const response = await authority.fetch('https://internal/internal/authorize', {
+        method: 'POST', body: JSON.stringify({ digest: digest(accessKey), share_id: encode(randomBytes(12)), operation_id: 'test-operation' }),
+      });
+      assert.equal(response.status, expected, await response.text());
+    };
 
     const first = claimant();
     const { data: pending } = await request('enrollments', { device_name: 'Laptop', claim_digest: first.claim_digest });
@@ -105,30 +113,38 @@ test('SQLite access authority survives restart, approval retry, cancellation and
     await delay(slow.retry_after_ms);
     const { data: reclaimed } = await request('enrollments/claim', claim);
     assert.deepEqual(reclaimed, credential, 'a lost claim response must recover the same key and identifier');
+    await authorize(credential.access_key, 403);
+    assert.deepEqual((await request('credentials', undefined, 200, true)).data.credentials, []);
     await request('enrollments/installed', claim);
     await request('enrollments/installed', claim);
     await request('enrollments/cancel', { ...claim, claim_secret: claimant().claim_secret }, 403);
 
-    const authority = (await mf.getBindings('relay')).ACCESS.getByName('authority');
-    const authorize = async (accessKey, expected) => {
-      const response = await authority.fetch('https://internal/internal/authorize', {
-        method: 'POST', body: JSON.stringify({ digest: digest(accessKey), share_id: encode(randomBytes(12)), operation_id: 'test-operation' }),
-      });
-      assert.equal(response.status, expected, await response.text());
-    };
     await authorize(credential.access_key, 200);
     await request('credentials/revoke', { credential_id: credential.credential_id, terminate_shares: false }, 200, true);
     await authorize(credential.access_key, 403);
+    await request('enrollments/installed', claim, 403);
 
     const second = claimant();
     const { data: incomplete } = await request('enrollments', { device_name: 'Cancelled device', claim_digest: second.claim_digest });
     await request('enrollments/approve', { enrollment_id: incomplete.enrollment_id, user_code: incomplete.user_code }, 200, true);
     const cancelClaim = { enrollment_id: incomplete.enrollment_id, claim_secret: second.claim_secret };
     const { data: abandoned } = await request('enrollments/claim', cancelClaim);
-    await request('enrollments/installed', cancelClaim);
-    await request('enrollments/cancel', cancelClaim);
-    await request('enrollments/cancel', cancelClaim);
     await authorize(abandoned.access_key, 403);
+    await request('enrollments/installed', cancelClaim);
+    await authorize(abandoned.access_key, 200);
+    await request('enrollments/cancel', cancelClaim);
+    await request('enrollments/cancel', cancelClaim);
+    await request('enrollments/installed', cancelClaim, 403);
+    await authorize(abandoned.access_key, 403);
+
+    const third = claimant();
+    const { data: retainedEnrollment } = await request('enrollments', { device_name: 'Workstation', claim_digest: third.claim_digest });
+    await request('enrollments/approve', { enrollment_id: retainedEnrollment.enrollment_id, user_code: retainedEnrollment.user_code }, 200, true);
+    const retainedClaim = { enrollment_id: retainedEnrollment.enrollment_id, claim_secret: third.claim_secret };
+    const { data: retained } = await request('enrollments/claim', retainedClaim);
+    await authorize(retained.access_key, 403);
+    await request('enrollments/installed', retainedClaim);
+
     const { data: manual } = await request('credentials', { name: 'Automation' }, 201, true);
     assert.equal(manual.configuration.access_key, manual.access_key);
 
@@ -139,8 +155,11 @@ test('SQLite access authority survives restart, approval retry, cancellation and
     const rotated = await request('login', { password: 'rotated-local-access-password' }, 200, false, { Origin: origin });
     cookie = rotated.response.headers.get('Set-Cookie').split(';')[0];
     const { data: list } = await request('credentials', undefined, 200, true);
-    assert.deepEqual(list.credentials.map(item => item.credential_id), [manual.credential.credential_id]);
-    assert.equal(list.credentials[0].revoked_at, null);
+    assert.deepEqual(
+      new Set(list.credentials.map(item => item.credential_id)),
+      new Set([retained.credential_id, manual.credential.credential_id]),
+    );
+    assert(list.credentials.every(item => item.revoked_at === null));
     const { data: history } = await request('credentials/revoked', undefined, 200, true);
     assert.equal(history.next_cursor, null);
     const [revoked] = history.credentials;
@@ -155,7 +174,8 @@ test('SQLite access authority survives restart, approval retry, cancellation and
       method: 'POST', body: JSON.stringify({ digest: digest(manual.access_key), share_id: encode(randomBytes(12)), operation_id: 'after-rotation' }),
     });
     assert.equal(preserved.status, 200);
-    await request('enrollments/installed', claim);
+    await request('enrollments/installed', retainedClaim);
+    await request('enrollments/installed', claim, 403);
   } finally {
     await mf.dispose();
   }

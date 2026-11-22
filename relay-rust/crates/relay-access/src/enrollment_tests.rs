@@ -36,7 +36,6 @@ fn approval_claim_retry_and_install_keep_one_credential() {
     enrollment
         .installed(Digest::of(b"claim"), POLL_INTERVAL_MS * 2)
         .unwrap();
-    assert_eq!(enrollment.incomplete_credential(), None);
     enrollment
         .installed(Digest::of(b"claim"), ENROLLMENT_LIFETIME_MS + 1)
         .unwrap();
@@ -50,20 +49,27 @@ fn approval_claim_retry_and_install_keep_one_credential() {
     );
     assert_eq!(enrollment.cancel(Digest::of(b"claim")), Ok(Some([2; 16])));
     assert_eq!(enrollment.cancel(Digest::of(b"claim")), Ok(None));
-    assert_ne!(enrollment.installed(Digest::of(b"claim"), 1), Ok(()));
+    assert_eq!(
+        enrollment.installed(Digest::of(b"claim"), 1),
+        Err(Refusal::Cancelled)
+    );
 }
 
 #[test]
-fn cancellation_and_expiry_reclaim_only_incomplete_credentials() {
+fn uninstalled_cancellation_and_expiry_materialize_no_credential() {
     let mut enrollment = request();
     enrollment.approve([2; 16], 0).unwrap();
-    assert_eq!(enrollment.incomplete_credential(), Some([2; 16]));
+    assert_eq!(
+        enrollment.poll(Digest::of(b"claim"), 0),
+        Ok(Poll::Approved {
+            credential: [2; 16]
+        })
+    );
     assert_eq!(
         enrollment.poll(Digest::of(b"claim"), ENROLLMENT_LIFETIME_MS),
         Err(Refusal::Expired)
     );
-    assert_eq!(enrollment.cancel(Digest::of(b"claim")), Ok(Some([2; 16])));
-    assert_eq!(enrollment.incomplete_credential(), None);
+    assert_eq!(enrollment.cancel(Digest::of(b"claim")), Ok(None));
     assert_eq!(enrollment.approve([3; 16], 1), Err(Refusal::Cancelled));
 }
 

@@ -109,35 +109,29 @@ impl Enrollment {
             EnrollmentState::Claimed { credential } | EnrollmentState::Installed { credential } => {
                 self.state = EnrollmentState::Installed { credential }
             }
-            _ => return Err(Refusal::Pending),
+            EnrollmentState::Cancelled => return Err(Refusal::Cancelled),
+            EnrollmentState::Pending | EnrollmentState::Approved { .. } => {
+                return Err(Refusal::Pending);
+            }
         }
         Ok(())
     }
 
-    /// Returns this claimant's credential that storage must revoke atomically.
+    /// Returns an installed credential that storage must revoke atomically.
     ///
     /// # Errors
     /// A different client cannot cancel this transaction.
     pub fn cancel(&mut self, claimant: Digest) -> Result<Option<[u8; 16]>, Refusal> {
         self.authenticate(claimant)?;
-        // The receipt confirms durable delivery of the key, not a successful
-        // local configuration commit. Its claimant must still be able to abandon
-        // an installation whose last disk write failed.
+        // Credentials activate only at installation. The receipt confirms durable
+        // delivery of the key, not a successful local configuration commit, so a
+        // claimant can still abandon an installation whose last disk write failed.
         let credential = match self.state {
             EnrollmentState::Installed { credential } => Some(credential),
-            _ => self.incomplete_credential(),
+            _ => None,
         };
         self.state = EnrollmentState::Cancelled;
         Ok(credential)
-    }
-
-    pub const fn incomplete_credential(&self) -> Option<[u8; 16]> {
-        match self.state {
-            EnrollmentState::Approved { credential } | EnrollmentState::Claimed { credential } => {
-                Some(credential)
-            }
-            _ => None,
-        }
     }
 
     fn authenticate(&self, claimant: Digest) -> Result<(), Refusal> {

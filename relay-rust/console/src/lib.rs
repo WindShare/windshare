@@ -11,6 +11,7 @@ pub const NO_STORE_CACHE_CONTROL: &str = "no-store";
 pub const MAX_BODY_BYTES: usize = 4096;
 pub const MAX_RECORDS: usize = 1000;
 pub const MAX_ACTIVE_CREDENTIALS: usize = 1000;
+pub const ADMIN_SESSION_LIFETIME_MS: u64 = 12 * 60 * 60 * 1_000;
 const CODE_ALPHABET: &[u8; 32] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 #[cfg(test)]
 #[path = "protocol_tests.rs"]
