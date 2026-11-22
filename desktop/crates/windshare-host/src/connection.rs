@@ -235,6 +235,7 @@ fn receive(shared: &Shared, pending: &mut BTreeMap<u64, Request>, text: &str) ->
 }
 
 fn apply_reply(draft: &mut crate::ModelDraft<'_>, command: Option<Command>, message: Envelope) {
+    let mut cancel_acknowledged = None;
     if matches!(command, Some(Command::SetSenderTrace { .. })) {
         let next = if message.error.is_some() {
             SenderTraceChange::Failed
@@ -261,11 +262,27 @@ fn apply_reply(draft: &mut crate::ModelDraft<'_>, command: Option<Command>, mess
             id: setup_id.clone(),
             kind: crate::SetupRequestKind::Cancel { acknowledged: true },
         };
+        cancel_acknowledged = Some(setup_id.clone());
     }
-    if let Some(snapshot) = message.snapshot
-        && draft.read().accepts_snapshot(&snapshot)
-    {
-        draft.write().reconcile(snapshot);
+    if let Some(snapshot) = message.snapshot {
+        if draft.read().accepts_snapshot(&snapshot) {
+            draft.write().reconcile(snapshot);
+        } else if let Some(setup_id) = cancel_acknowledged
+            && draft.read().matches_session(&snapshot)
+        {
+            // An idempotent CancelSetup reply can echo the current revision after
+            // the setup already reached a terminal state or was superseded.
+            let model = draft.write();
+            model.reconcile_setup_request();
+            tracing::debug!(
+                event = "desktop.setup_cancel_settled_on_reply",
+                session_id = ?model.session_id,
+                setup_id = %setup_id,
+                revision = model.revision,
+                setup_state = model.setup.state_name(),
+                pending = model.setup_pending(),
+            );
+        }
     }
 }
 

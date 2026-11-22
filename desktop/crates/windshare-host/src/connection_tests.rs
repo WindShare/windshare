@@ -199,3 +199,81 @@ fn cancel_setup_ignores_stale_failure_until_acknowledged() {
         }
     );
 }
+
+#[test]
+fn cancel_setup_same_revision_reply_settles_against_authoritative_setup() {
+    let cases = [
+        (
+            "finished",
+            serde_json::json!({ "state": "finished", "id": "setup:1", "relay_saved": true }),
+            crate::SetupRequest::Finished {
+                id: "setup:1".into(),
+            },
+        ),
+        (
+            "cancelled",
+            serde_json::json!({ "state": "cancelled", "id": "setup:1" }),
+            crate::SetupRequest::Cancelled {
+                id: "setup:1".into(),
+            },
+        ),
+        (
+            "superseded",
+            serde_json::json!({ "state": "finished", "id": "setup:2" }),
+            crate::SetupRequest::Idle,
+        ),
+    ];
+
+    for (label, setup_json, expected) in cases {
+        let shared = Shared {
+            model: Mutex::new(Arc::new(Model::default())),
+            closing: AtomicBool::new(false),
+            account_view_visible: AtomicBool::new(false),
+            updates: async_channel::bounded(1).0,
+            wake: polling::Poller::new().unwrap(),
+        };
+        let mut pending = BTreeMap::new();
+        let initial = serde_json::json!({
+            "version": 1,
+            "snapshot": {
+                "session_id": "session",
+                "revision": 5,
+                "shares": [],
+                "setup": setup_json,
+            }
+        });
+        receive(&shared, &mut pending, &initial.to_string()).unwrap();
+        shared.update(|draft| {
+            draft.write().setup_request = crate::SetupRequest::Pending {
+                id: "setup:1".into(),
+                kind: crate::SetupRequestKind::Cancel {
+                    acknowledged: false,
+                },
+            };
+        });
+        pending.insert(
+            2,
+            Request {
+                id: "2".into(),
+                command: Command::CancelSetup {
+                    setup_id: "setup:1".into(),
+                },
+            },
+        );
+        let reply = serde_json::json!({
+            "version": 1,
+            "id": "2",
+            "snapshot": {
+                "session_id": "session",
+                "revision": 5,
+                "shares": [],
+                "setup": setup_json,
+            }
+        });
+        receive(&shared, &mut pending, &reply.to_string()).unwrap();
+        let model = Arc::clone(&shared.model.lock().unwrap());
+        assert_eq!(model.setup_request, expected, "{label}");
+        assert!(!model.setup_pending(), "{label}");
+        assert!(!model.has_unfinished_work(), "{label}");
+    }
+}

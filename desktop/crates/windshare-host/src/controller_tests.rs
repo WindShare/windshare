@@ -241,3 +241,88 @@ fn account_and_setup_submissions_record_pending_and_local_failure_atomically() {
     ));
     assert!(controller.model().command_error.is_none());
 }
+
+#[test]
+fn cancel_setup_ignores_terminal_and_superseded_setups() {
+    let (controller, receiver) = controller();
+    let first = controller
+        .edit_preference("", PreferenceEdit::Mode(RelayMode::Selected))
+        .unwrap();
+    let _ = receiver.try_recv().unwrap();
+
+    // Terminal setup (Finished): late cancel must not re-enter Pending or queue a command.
+    let finished: Snapshot = serde_json::from_value(serde_json::json!({
+        "session_id": "session",
+        "revision": 1,
+        "shares": [],
+        "setup": { "state": "finished", "id": first }
+    }))
+    .unwrap();
+    controller
+        .shared
+        .update(|draft| draft.write().reconcile(finished));
+    assert_eq!(
+        controller.model().setup_request,
+        SetupRequest::Finished { id: first.clone() }
+    );
+    controller.cancel_setup(&first);
+    assert!(receiver.try_recv().is_err());
+    assert_eq!(
+        controller.model().setup_request,
+        SetupRequest::Finished { id: first.clone() }
+    );
+    assert!(!controller.model().setup_pending());
+    assert!(!controller.model().has_unfinished_work());
+
+    // Starting a new setup: cancelling the old setup must not clobber the active one.
+    let second = controller
+        .edit_preference("", PreferenceEdit::Mode(RelayMode::Automatic))
+        .unwrap();
+    let _ = receiver.try_recv().unwrap();
+    controller.cancel_setup(&first);
+    assert!(receiver.try_recv().is_err());
+    assert_eq!(
+        controller.model().setup_request,
+        SetupRequest::Pending {
+            id: second.clone(),
+            kind: SetupRequestKind::Configure,
+        }
+    );
+
+    // Active setup can be cancelled once; duplicate cancel while pending is ignored.
+    controller.cancel_setup(&second);
+    assert!(matches!(
+        receiver.try_recv().unwrap(),
+        Command::CancelSetup { setup_id } if setup_id == second
+    ));
+    assert_eq!(
+        controller.model().setup_request,
+        SetupRequest::Pending {
+            id: second.clone(),
+            kind: SetupRequestKind::Cancel {
+                acknowledged: false,
+            },
+        }
+    );
+    controller.cancel_setup(&second);
+    assert!(receiver.try_recv().is_err());
+
+    // Terminal setup (Cancelled): late cancel is also ignored.
+    let cancelled: Snapshot = serde_json::from_value(serde_json::json!({
+        "session_id": "session",
+        "revision": 2,
+        "shares": [],
+        "setup": { "state": "cancelled", "id": second }
+    }))
+    .unwrap();
+    controller
+        .shared
+        .update(|draft| draft.write().reconcile(cancelled));
+    controller.cancel_setup(&second);
+    assert!(receiver.try_recv().is_err());
+    assert_eq!(
+        controller.model().setup_request,
+        SetupRequest::Cancelled { id: second }
+    );
+    assert!(!controller.model().has_unfinished_work());
+}

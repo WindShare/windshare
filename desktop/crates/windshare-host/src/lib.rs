@@ -332,16 +332,31 @@ impl Controller {
 
     pub fn cancel_setup(&self, setup_id: &str) {
         let id = setup_id.to_owned();
+        let mut queued = false;
         self.shared.update(|draft| {
+            let model = draft.read();
+            if !model.can_cancel_setup(&id) {
+                tracing::debug!(
+                    event = "desktop.setup_cancel_ignored",
+                    session_id = ?model.session_id,
+                    setup_id = %id,
+                    setup_state = model.setup.state_name(),
+                    current_setup_id = model.setup.context().map(|ctx| ctx.id.as_str()),
+                );
+                return;
+            }
             let next = match self.enqueue(Command::CancelSetup {
                 setup_id: id.clone(),
             }) {
-                Ok(()) => SetupRequest::Pending {
-                    id,
-                    kind: SetupRequestKind::Cancel {
-                        acknowledged: false,
-                    },
-                },
+                Ok(()) => {
+                    queued = true;
+                    SetupRequest::Pending {
+                        id,
+                        kind: SetupRequestKind::Cancel {
+                            acknowledged: false,
+                        },
+                    }
+                }
                 Err(message) => SetupRequest::Failed {
                     id,
                     error: Failure::from(message),
@@ -349,7 +364,9 @@ impl Controller {
             };
             draft.write().setup_request = next;
         });
-        let _ = self.shared.wake.notify();
+        if queued {
+            let _ = self.shared.wake.notify();
+        }
     }
 
     pub fn resume(&self, operation_id: &str) {

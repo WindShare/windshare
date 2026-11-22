@@ -350,11 +350,49 @@ impl Model {
                 })
     }
 
-    pub(crate) fn accepts_snapshot(&self, snapshot: &Snapshot) -> bool {
+    pub(crate) fn matches_session(&self, snapshot: &Snapshot) -> bool {
         self.session_id
             .as_ref()
             .is_none_or(|session| session == &snapshot.session_id)
-            && snapshot.revision > self.revision
+    }
+
+    pub(crate) fn accepts_snapshot(&self, snapshot: &Snapshot) -> bool {
+        self.matches_session(snapshot) && snapshot.revision > self.revision
+    }
+
+    pub(crate) fn can_cancel_setup(&self, setup_id: &str) -> bool {
+        if matches!(
+            &self.setup,
+            Setup::Finished { context } | Setup::Cancelled { context } if context.id == setup_id
+        ) {
+            return false;
+        }
+        if matches!(
+            &self.setup_request,
+            crate::SetupRequest::Pending {
+                id,
+                kind: crate::SetupRequestKind::Cancel { .. },
+            } if id == setup_id
+        ) {
+            return false;
+        }
+        if matches!(
+            &self.setup_request,
+            crate::SetupRequest::Pending {
+                id,
+                kind: crate::SetupRequestKind::Configure,
+            } if id == setup_id
+        ) {
+            return true;
+        }
+        matches!(
+            &self.setup,
+            Setup::Running { context, .. }
+                | Setup::Cancelling { context }
+                | Setup::Failed { context, .. }
+                | Setup::CancelFailed { context, .. }
+                if context.id == setup_id
+        )
     }
 
     pub(crate) fn can_reject(&self, operation_id: &str, error: &Failure) -> bool {
@@ -454,11 +492,17 @@ impl Model {
         }
     }
 
-    fn reconcile_setup_request(&mut self) {
+    pub(crate) fn reconcile_setup_request(&mut self) {
         let crate::SetupRequest::Pending { id, kind } = &mut self.setup_request else {
             return;
         };
         if self.setup.context().is_none_or(|ctx| &ctx.id != id) {
+            if matches!(
+                *kind,
+                crate::SetupRequestKind::Cancel { acknowledged: true }
+            ) {
+                self.setup_request = crate::SetupRequest::Idle;
+            }
             return;
         }
         let settled = match (&self.setup, *kind) {

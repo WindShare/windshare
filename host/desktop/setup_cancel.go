@@ -20,6 +20,11 @@ func (a *Application) cancelSetupRequest(id string) error {
 		}
 		return errors.New("relay setup not found")
 	}
+	// A terminal setup has already settled and may have resumed its share;
+	// treat late cancellations as idempotent instead of cancelling the share.
+	if a.setup.State == "finished" || a.setup.State == "cancelled" {
+		return nil
+	}
 	if a.setup.OperationID != "" {
 		return a.cancel(a.setup.OperationID)
 	}

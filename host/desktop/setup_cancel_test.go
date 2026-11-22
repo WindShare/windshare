@@ -140,3 +140,41 @@ func TestStaleSetupCancellationCannotCancelNewSetup(t *testing.T) {
 		t.Fatalf("stale cancellation changed another setup: %+v", view)
 	}
 }
+
+func TestLateSetupCancellationDoesNotCancelResumedShare(t *testing.T) {
+	a, _, starts := fixture(t)
+	var saved atomic.Bool
+	start := a.deps.start
+	a.deps.start = func(ctx context.Context, request engine.ShareRequest) (shareTask, error) {
+		if !saved.Load() {
+			return nil, engine.ErrNetworkUnavailable
+		}
+		return start(ctx, request)
+	}
+	a.deps.setup = func(context.Context, SetupInput, func(relaysetup.Progress)) (SetupResult, error) {
+		saved.Store(true)
+		return SetupResult{RelayURL: setupRequest().Setup.RelayURL, RelaySaved: true}, nil
+	}
+	a.execute(createRequest())
+	awaitShare(t, a, "operation", func(s Share) bool { return s.State == AwaitingNetwork })
+	if reply := a.execute(setupRequest()); reply.Error != nil {
+		t.Fatal(reply.Error)
+	}
+	a.work.Wait()
+	before := a.snapshot()
+	if before.Setup.State != "finished" || starts.Load() != 1 || before.Shares[0].State == Finished {
+		t.Fatalf("setup did not finish and resume share: setup=%+v share=%+v starts=%d", before.Setup, before.Shares[0], starts.Load())
+	}
+
+	reply := a.execute(Request{Command: "cancel_setup", SetupID: before.Setup.ID})
+	if reply.Error != nil {
+		t.Fatalf("late cancel_setup failed: %+v", reply.Error)
+	}
+	if reply.Snapshot.Revision != before.Revision {
+		t.Fatalf("late cancel_setup mutated state: before=%d after=%d", before.Revision, reply.Snapshot.Revision)
+	}
+	after := a.snapshot()
+	if after.Setup.State != "finished" || after.Shares[0].State == Finished || after.Shares[0].State == Stopping {
+		t.Fatalf("late cancel_setup cancelled resumed share: setup=%+v share=%+v", after.Setup, after.Shares[0])
+	}
+}

@@ -81,6 +81,18 @@ pub enum SetupRecovery {
 }
 
 impl Setup {
+    pub(crate) const fn state_name(&self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Running { .. } => "running",
+            Self::Finished { .. } => "finished",
+            Self::Failed { .. } => "failed",
+            Self::Cancelling { .. } => "cancelling",
+            Self::Cancelled { .. } => "cancelled",
+            Self::CancelFailed { .. } => "cancel_failed",
+        }
+    }
+
     pub const fn context(&self) -> Option<&SetupContext> {
         match self {
             Self::Idle => None,
