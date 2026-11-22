@@ -46,17 +46,36 @@ func Open(path string, create bool) (outputcap.Platform, error) {
 	return &Platform{root: root, disposition: disposition}, nil
 }
 
-// The caller names the container, so its own final link carries the same trust
-// as the intermediate links that path resolution already follows; refusing it
-// only breaks a symlinked destination or a working directory entered through
-// one. The resolved directory is then pinned by identity, and every name inside
-// it, including later reopens of this root, stays no-follow.
+// followContainerLink is the kernel-followed lookup of a symlinked container.
+// Tests replace it to simulate a refused or diverging kernel resolution.
+var followContainerLink = os.Stat
+
+// A destination the user names through a final symlink (a linked download
+// folder, or a working directory entered through one) is accepted only when the
+// kernel itself follows that link. filepath.EvalSymlinks resolves in user space
+// and so bypasses kernel link policy such as Linux fs.protected_symlinks, which
+// refuses links planted by another user in sticky world-writable directories.
+// The kernel-followed stat must name the same directory as the resolved path;
+// that directory is then pinned by identity, and every name inside it stays
+// no-follow.
 func resolveContainerLink(path string) (string, error) {
 	info, err := os.Lstat(path)
 	if err != nil || info.Mode()&os.ModeSymlink == 0 {
 		return path, nil
 	}
-	return filepath.EvalSymlinks(path)
+	followed, err := followContainerLink(path)
+	if err != nil {
+		return "", errors.Join(outputcap.ErrUnsafeNamespace, err)
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", errors.Join(outputcap.ErrUnsafeNamespace, err)
+	}
+	target, err := os.Lstat(resolved)
+	if err != nil || !followed.IsDir() || !os.SameFile(followed, target) {
+		return "", errors.Join(outputcap.ErrUnsafeNamespace, err)
+	}
+	return resolved, nil
 }
 
 func (platform *Platform) Root() outputcap.Directory { return platform.root }

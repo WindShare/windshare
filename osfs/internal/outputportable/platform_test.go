@@ -115,3 +115,53 @@ func TestCallerSymlinkedContainerOpensItsTargetWithoutFollowingInnerLinks(t *tes
 		}
 	}
 }
+
+func TestSymlinkedContainerRequiresAgreeingKernelResolution(t *testing.T) {
+	base := t.TempDir()
+	target := filepath.Join(base, "target")
+	other := filepath.Join(base, "other")
+	for _, dir := range []string{target, other} {
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	container := filepath.Join(base, "downloads")
+	if err := os.Symlink(target, container); err != nil {
+		t.Skipf("directory symlink unavailable: %v", err)
+	}
+	dangling := filepath.Join(base, "dangling")
+	if err := os.Symlink(filepath.Join(base, "missing"), dangling); err != nil {
+		t.Fatal(err)
+	}
+	refusal := errors.New("kernel refused the link")
+	cases := []struct {
+		name   string
+		path   string
+		follow func(string) (os.FileInfo, error)
+	}{
+		{"dangling", dangling, os.Stat},
+		// Linux fs.protected_symlinks refuses the kernel follow (EACCES) while
+		// user-space readlink still resolves the link.
+		{"kernel refusal", container, func(string) (os.FileInfo, error) { return nil, refusal }},
+		{"diverging target", container, func(string) (os.FileInfo, error) { return os.Stat(other) }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			previous := followContainerLink
+			followContainerLink = tc.follow
+			t.Cleanup(func() { followContainerLink = previous })
+			for _, create := range []bool{false, true} {
+				p, err := Open(tc.path, create)
+				if !errors.Is(err, outputcap.ErrUnsafeNamespace) {
+					if p != nil {
+						_ = p.Close()
+					}
+					t.Fatalf("Open(create=%t) = %v, want ErrUnsafeNamespace", create, err)
+				}
+			}
+		})
+	}
+	if entries, err := os.ReadDir(other); err != nil || len(entries) != 0 {
+		t.Fatalf("refused container changed another directory: %v %v", entries, err)
+	}
+}
