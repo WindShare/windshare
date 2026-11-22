@@ -1,0 +1,4 @@
+# Match Go (.golangci.yml funlen) and TypeScript (ESLint max-lines-per-function)
+# so Rust services share the same 150-line function budget instead of Clippy's
+# stricter 100-line default, while keeping `clippy::too_many_lines = "deny"`.
+too-many-lines-threshold = 150

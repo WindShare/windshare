@@ -32,7 +32,8 @@ exclude = [
 [content]
 # File types to analyze (Go/Rust backend + React/TS web frontend and build scripts)
 extensions = ["go", "rs", "ts", "tsx", "js", "jsx", "mjs"]
-max_lines = 600                                     # Default max lines per file (Go and other sources)
+# One shared production budget across Go, Rust (including GPUI builders), and TS.
+max_lines = 700
 warn_threshold = 0.9                                # Warn at 90% of limit
 skip_comments = true                                # Don't count comment lines
 skip_blank = true                                   # Don't count blank lines
@@ -48,19 +49,9 @@ exclude = [
 
 # Content Rules: Override limits for specific paths (last match wins)
 [[content.rules]]
-pattern = "**/*.ts"
-max_lines = 700
-reason = "TypeScript sources get modest headroom over the Go default"
-
-[[content.rules]]
 pattern = "**/*.tsx"
 max_lines = 800
 reason = "React components carry JSX markup overhead"
-
-[[content.rules]]
-pattern = "desktop/crates/*/src/**"
-max_lines = 700
-reason = "GPUI view builders spend most lines on declarative layout, the same markup overhead TSX gets headroom for"
 
 [[content.rules]]
 pattern = "**/*_test.go"
@@ -90,7 +81,9 @@ reason = "Shared test fixtures and golden vectors"
 # No global max_files/max_dirs: structure limits apply only where the rules
 # below match, so directories outside the selected roots stay unconstrained.
 [structure]
-warn_threshold = 0.8 # Warn at 80% of limits (inherited by rules)
+# Warn above 90% of the hard cap (19-20/20 files, 23-25/25 subdirs) so structure
+# warnings signal genuine pressure instead of routine noise at mid-size modules.
+warn_threshold = 0.9
 # Test suites grow by scenario rather than module responsibility, so they do not
 # indicate production-module sprawl. Content limits above still apply.
 count_exclude = [
@@ -108,8 +101,6 @@ count_exclude = [
 scope = "{adapters,cmd,connectivity,core,desktop,engine,internal,osfs,relay,relay-rust,transport}/"
 max_files = 20
 max_dirs = 25
-warn_dirs_at = 15
-warn_files_at = 13
 reason = "Go and Rust source: keep modules small"
 
 # E2E fixtures include reusable process/service infrastructure, so their modules
@@ -118,24 +109,18 @@ reason = "Go and Rust source: keep modules small"
 scope = "web/{e2e,scripts,src}/"
 max_files = 20
 max_dirs = 25
-warn_dirs_at = 15
-warn_files_at = 13
 reason = "Web source and reusable test infrastructure: keep modules small"
 
 [[structure.rules]]
 scope = "consoles/"
 max_files = 20
 max_dirs = 25
-warn_dirs_at = 15
-warn_files_at = 13
 reason = "Management consoles and build tooling: keep modules small"
 
 [[structure.rules]]
 scope = "services/"
 max_files = 20
 max_dirs = 25
-warn_dirs_at = 15
-warn_files_at = 13
 reason = "Standalone edge services: keep modules small"
 
 # Scenario-local fixtures, harnesses, and probes grow with test coverage. Their
@@ -143,7 +128,6 @@ reason = "Standalone edge services: keep modules small"
 [[structure.rules]]
 scope = "web/test/"
 max_dirs = 25
-warn_dirs_at = 15
 reason = "Web test scenarios: keep directory navigation manageable without a file-count cap"
 
 # Vector data grows with contract coverage; any source files added here still
@@ -152,8 +136,6 @@ reason = "Web test scenarios: keep directory navigation manageable without a fil
 scope = "core/testvectors/"
 max_files = 20
 max_dirs = 25
-warn_files_at = 13
-warn_dirs_at = 15
 count_exclude = ["*.json", "README.md", "inventory.txt"]
 reason = "Protocol vector data and documentation do not count toward module size"
 

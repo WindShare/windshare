@@ -19,7 +19,7 @@ linters:
   #    the gates cannot contradict each other.
   #  - revive is dropped (owner decision 2026-07-13). The reference enabled it
   #    solely to host file-length-limit, which sloc-guard already gates in
-  #    `make hygiene` (.sloc-guard.toml: 600 lines Go source / 1100 Go tests,
+  #    `make sloc` (.sloc-guard.toml: 700 lines Go source / 1100 Go tests,
   #    comments and blanks skipped). Without that rule revive falls back to
   #    its golint-style defaults, dominated by `exported` demanding doc
   #    comments on every exported symbol — mandated what-comments contradict

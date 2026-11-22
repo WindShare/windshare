@@ -1,0 +1,4 @@
+# GPUI view builders carry declarative layout overhead comparable to JSX/TSX
+# (ESLint allows 250 lines for .tsx vs 150 for .ts). Keep
+# `clippy::too_many_lines = "deny"` enforced with modest layout headroom.
+too-many-lines-threshold = 200
