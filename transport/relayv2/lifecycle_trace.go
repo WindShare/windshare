@@ -160,6 +160,20 @@ func sendRolledBackTrace(
 	}
 }
 
+func sendRetiredDrainTrace(
+	sessionID v2.RelaySessionID,
+	operationID uint64,
+	cause LifecycleCause,
+) LifecycleTrace {
+	return LifecycleTrace{
+		RelaySessionID: sessionID, OperationID: operationID,
+		Stage:            LifecycleSendRolledBack,
+		Disposition:      framechannel.SendRetired,
+		RetirementSource: LifecycleRetirementNone,
+		Cause:            cause, DrainCause: LifecycleCauseNone,
+	}
+}
+
 func retirementDeferredTrace(
 	sessionID v2.RelaySessionID,
 	operationID uint64,

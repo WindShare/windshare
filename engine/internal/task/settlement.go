@@ -20,10 +20,23 @@ type Settlement struct {
 	// Outcome, rather than Err alone, distinguishes those terminal states.
 	Err          error
 	CleanupError error
+	CleanupClass FailureClass
+}
+
+// LocalCleanupError returns CleanupError when local resource teardown failed.
+// Remote network teardown failures belong to the task's own settlement rather
+// than process-wide Engine.Close ownership.
+func (settlement Settlement) LocalCleanupError() error {
+	if settlement.CleanupError == nil || settlement.CleanupClass == FailureNetwork {
+		return nil
+	}
+	return settlement.CleanupError
 }
 
 func (settlement Settlement) Valid() bool {
-	if settlement.FailureClass > FailureSourceDrift || settlement.CleanupError != nil && settlement.Outcome != OutcomeFailed {
+	if settlement.FailureClass > FailureSourceDrift ||
+		settlement.CleanupClass > FailureSourceDrift ||
+		settlement.CleanupError != nil && settlement.Outcome != OutcomeFailed {
 		return false
 	}
 	switch settlement.Outcome {
@@ -46,5 +59,6 @@ func (settlement Settlement) Checked() Settlement {
 		Outcome: OutcomeFailed, FailureClass: FailureLocal,
 		Err:          errors.Join(ErrInvalidSettlement, settlement.Err, settlement.CleanupError),
 		CleanupError: settlement.CleanupError,
+		CleanupClass: settlement.CleanupClass,
 	}
 }

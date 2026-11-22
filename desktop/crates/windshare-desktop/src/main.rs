@@ -29,6 +29,16 @@ use gpui::{AppContext, Bounds, TitlebarOptions, WindowBounds, WindowOptions, px,
 use std::time::Duration;
 use windshare_ui::Assets as DesktopAssets;
 
+#[cfg(test)]
+#[path = "main_tests.rs"]
+mod tests;
+
+const fn should_show_failure_dialog(error: &live::RunError, diagnostic: bool) -> bool {
+    // Only pre-window launch errors need a native modal dialog; post-close
+    // shutdown failures are logged without interrupting a normal exit.
+    matches!(error, live::RunError::Launch(_)) && !diagnostic
+}
+
 fn main() -> std::process::ExitCode {
     let _logs = logging::start();
     #[cfg(feature = "motion-profile")]
@@ -36,20 +46,31 @@ fn main() -> std::process::ExitCode {
     match run() {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
-            tracing::error!(event = "desktop.launch_failed", %error);
+            match &error {
+                live::RunError::Launch(message) => {
+                    tracing::error!(event = "desktop.launch_failed", error = %message);
+                }
+                live::RunError::Shutdown(message) => {
+                    tracing::error!(event = "desktop.shutdown_failed", error = %message);
+                }
+            }
             #[cfg(windows)]
-            if !std::env::args_os()
-                .nth(1)
-                .is_some_and(|arg| arg == "--host-check" || arg == "--identity-check")
             {
-                windshare_activation::windows::show_failure(&error);
+                let diagnostic = std::env::args_os()
+                    .nth(1)
+                    .is_some_and(|arg| arg == "--host-check" || arg == "--identity-check");
+                if should_show_failure_dialog(&error, diagnostic)
+                    && let live::RunError::Launch(message) = &error
+                {
+                    windshare_activation::windows::show_failure(message);
+                }
             }
             std::process::ExitCode::FAILURE
         }
     }
 }
 
-fn run() -> Result<(), String> {
+fn run() -> Result<(), live::RunError> {
     use windshare_activation::launch::{self, Launch};
     let arguments: Vec<_> = std::env::args_os().skip(1).collect();
     let diagnostic = arguments.len() == 1
@@ -57,30 +78,36 @@ fn run() -> Result<(), String> {
     #[cfg(windows)]
     if !diagnostic
         && windshare_activation::windows::share_target::handle_activation()
-            .map_err(|error| error.to_string())?
+            .map_err(|error| live::RunError::Launch(error.to_string()))?
     {
         return Ok(());
     }
-    let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
+    let cwd = std::env::current_dir().map_err(|error| live::RunError::Launch(error.to_string()))?;
     #[cfg(not(windows))]
     let _ = diagnostic;
-    match launch::parse(arguments, &cwd)? {
-        Launch::HostCheck => windshare_host::check_host().map_err(|error| error.to_string()),
+    match launch::parse(arguments, &cwd).map_err(live::RunError::Launch)? {
+        Launch::HostCheck => {
+            windshare_host::check_host().map_err(|error| live::RunError::Launch(error.to_string()))
+        }
         Launch::IdentityCheck => {
             #[cfg(windows)]
             return windshare_activation::windows::identity_check()
-                .map_err(|error| error.to_string());
+                .map_err(|error| live::RunError::Launch(error.to_string()));
             #[cfg(not(windows))]
-            Err("Package identity is only supported on Windows".into())
+            Err(live::RunError::Launch(
+                "Package identity is only supported on Windows".into(),
+            ))
         }
         Launch::Dispatch { endpoint } => {
             #[cfg(windows)]
             return windshare_activation::windows::dispatch::receive(&endpoint)
-                .map_err(|error| error.to_string());
+                .map_err(|error| live::RunError::Launch(error.to_string()));
             #[cfg(not(windows))]
             {
                 let _ = endpoint;
-                Err("Explorer dispatch is only supported on Windows".into())
+                Err(live::RunError::Launch(
+                    "Explorer dispatch is only supported on Windows".into(),
+                ))
             }
         }
         Launch::Application {

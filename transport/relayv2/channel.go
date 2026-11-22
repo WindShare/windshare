@@ -47,6 +47,16 @@ func (record retirementRecord) sendError() error {
 	return errors.Join(ErrClosed, record.cause)
 }
 
+// drainError classifies queued frames retracted under writeMu before takeRequest
+// ever exposed them to the socket. Natural retirement wins pre-wire like
+// unavailableSendError; failure retirement stays unclassified.
+func (record retirementRecord) drainError() error {
+	if record.natural {
+		return framechannel.RetireSend(record.sendError())
+	}
+	return record.sendError()
+}
+
 type terminalReservation struct {
 	operationID uint64
 	done        chan struct{}
@@ -132,7 +142,7 @@ func (l *link) closeChannelLocked(
 	l.receives.retire(channel.receive, record.source == LifecycleRetirementLocalClose ||
 		record.source == LifecycleRetirementLinkClose || record.source == LifecycleRetirementTerminal ||
 		record.source == LifecycleRetirementIngressFailure)
-	l.drainQueueLocked(channel.id, consequence.sendError())
+	l.drainQueueLocked(channel.id, consequence.drainError())
 	return retirementTransition{
 		applied: true, record: record, consequence: consequence,
 		terminal: channel.terminal != nil,

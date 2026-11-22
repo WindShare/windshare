@@ -210,11 +210,11 @@ func startWorkflow[T any](engine *Engine, ctx context.Context, workflow appobs.W
 			result.Settlement = describeSettlement(result.Settlement)
 			return result
 		},
-		Completed: func(cleanupErr error) {
+		Completed: func(localCleanupErr error) {
 			engine.mu.Lock()
 			delete(engine.tasks, id)
-			if cleanupErr != nil {
-				engine.cleanupErrors = append(engine.cleanupErrors, fmt.Errorf("task %s cleanup: %w", id, cleanupErr))
+			if localCleanupErr != nil {
+				engine.cleanupErrors = append(engine.cleanupErrors, fmt.Errorf("task %s cleanup: %w", id, localCleanupErr))
 			}
 			engine.mu.Unlock()
 		},

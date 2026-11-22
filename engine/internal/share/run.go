@@ -39,6 +39,9 @@ func Run(ctx context.Context, request Request, dependencies Dependencies) task.C
 	settlement := settleShareLifecycle(shareTriggerAfterServe(context.Cause(ctx), operationErr), context.Cause(ctx), operationErr, cleanupErr)
 	runErr := settlement.serve.failure
 	cleanupErr = settlement.stop.failure
+	if cleanupErr == nil {
+		cleanupClass = task.FailureNone
+	}
 	if runErr == nil && cleanupErr != nil {
 		class = cleanupClass
 	}
@@ -59,7 +62,8 @@ func Run(ctx context.Context, request Request, dependencies Dependencies) task.C
 	d.Controller.finish(finishErr)
 	d.Control.NotifyStateChanged()
 	return task.Completion[Result]{Value: result,
-		Outcome: outcome, FailureClass: class, Err: errors.Join(runErr, cleanupErr), CleanupError: cleanupErr}
+		Outcome: outcome, FailureClass: class, Err: errors.Join(runErr, cleanupErr),
+		CleanupError: cleanupErr, CleanupClass: cleanupClass}
 }
 
 type activeShare struct {
@@ -215,8 +219,13 @@ func (s *activeShare) close() (task.FailureClass, error) {
 	o.emit(Observation{Milestone: ShareStopping})
 	if s.factory != nil {
 		cleanup, cancel := d.Control.CleanupContext()
-		networkError = stopFactoryWithin(cleanup, s.factory, stoppedMessage)
+		stopErr := stopFactoryWithin(cleanup, s.factory, stoppedMessage)
 		cancel()
+		if errors.Is(stopErr, sendersession.ErrSessionCleanup) {
+			localError = errors.Join(localError, stopErr)
+		} else {
+			networkError = stopErr
+		}
 	} else if s.relays != nil {
 		s.relays.StopRecovery()
 		cleanup, cancel := d.Control.CleanupContext()
@@ -244,7 +253,7 @@ func (s *activeShare) close() (task.FailureClass, error) {
 	}
 	if s.peers != nil {
 		cleanup, cancel := d.Control.CleanupContext()
-		localError = s.peers.Close(cleanup)
+		localError = errors.Join(localError, s.peers.Close(cleanup))
 		cancel()
 	}
 	if s.prepared != nil {
@@ -252,10 +261,13 @@ func (s *activeShare) close() (task.FailureClass, error) {
 	}
 	o.emit(Observation{Milestone: ShareStopped, Failure: errors.Join(networkError, localError)})
 	o.complete()
-	if networkError != nil {
-		return task.FailureNetwork, errors.Join(networkError, localError)
+	if localError != nil {
+		return task.FailureLocal, errors.Join(localError, networkError)
 	}
-	return task.FailureLocal, localError
+	if networkError != nil {
+		return task.FailureNetwork, networkError
+	}
+	return task.FailureNone, nil
 }
 
 func stopFactoryWithin(ctx context.Context, factory SessionFactory, message string) error {

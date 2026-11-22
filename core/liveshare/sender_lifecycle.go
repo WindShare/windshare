@@ -8,6 +8,7 @@ import (
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/session/contentflow"
+	"github.com/windshare/windshare/core/session/sendersession"
 )
 
 type senderRuntimeLifecycle interface {
@@ -85,7 +86,12 @@ func (sender *PreparedSender) finishClose(
 ) {
 	result := beginErr
 	if resources.runtimeFactory != nil {
-		result = errors.Join(result, resources.runtimeFactory.Stop(context.Background(), "Sender closed"))
+		// Join the runtime factory before closing shared stores and keys. Remote
+		// connectivity cleanup errors belong to the Factory.Stop caller; Close
+		// retains only local resource-teardown failures.
+		if stopErr := resources.runtimeFactory.Stop(context.Background(), "Sender closed"); errors.Is(stopErr, sendersession.ErrSessionCleanup) {
+			result = errors.Join(result, stopErr)
+		}
 	}
 	// Cache loaders can still hold revision-source handles and content keys after
 	// their waiters unblock, so dependent authority survives until the join.

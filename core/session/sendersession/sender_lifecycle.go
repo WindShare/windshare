@@ -215,6 +215,24 @@ func (runtime *Runtime) stopError() error {
 	return runtime.stopErr
 }
 
+func (runtime *Runtime) recordCleanupError(err error) {
+	if runtime == nil || err == nil {
+		return
+	}
+	runtime.stopMu.Lock()
+	runtime.cleanupErr = errors.Join(runtime.cleanupErr, err)
+	runtime.stopMu.Unlock()
+}
+
+func (runtime *Runtime) cleanupError() error {
+	if runtime == nil {
+		return nil
+	}
+	runtime.stopMu.Lock()
+	defer runtime.stopMu.Unlock()
+	return runtime.cleanupErr
+}
+
 func (runtime *Runtime) BeginClose() {
 	if runtime == nil {
 		return

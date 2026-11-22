@@ -370,7 +370,7 @@ func TestChannelCloseAndCancellationCannotLeaveOrRecreateQueuedWrites(t *testing
 		t.Fatal(err)
 	}
 	if err := <-lateSendDone; !errors.Is(err, ErrClosed) ||
-		framechannel.SendDispositionOf(err) != framechannel.SendAccepted {
+		framechannel.SendDispositionOf(err) != framechannel.SendRetired {
 		t.Fatalf("send racing close error = %v disposition=%d", err, framechannel.SendDispositionOf(err))
 	}
 	requireQueuedRequests(t, l, channel.id, 0)
@@ -399,6 +399,34 @@ func TestChannelCloseAndCancellationCannotLeaveOrRecreateQueuedWrites(t *testing
 	if err := failedChannel.Send(context.Background(), framechannel.Frame("after-failure")); !errors.Is(err, linkErr) || framechannel.SendDispositionOf(err) != framechannel.SendRejected {
 		t.Fatalf("send after link failure = %v disposition=%d", err, framechannel.SendDispositionOf(err))
 	}
+}
+
+func TestRelayNaturalRetirementDrainsQueuedSendAsRetired(t *testing.T) {
+	link := newTestLinkWithLifecycleStream(
+		context.Background(), newScriptedSocket(), false, DefaultLifecycleObservationCapacity,
+	)
+	channel := installGrantedChannel(link, relaySessionID(19))
+	sendDone := make(chan error, 1)
+	go func() {
+		sendDone <- channel.Send(context.Background(), framechannel.Frame("queued-before-retire"))
+	}()
+	requireQueuedRequests(t, link, channel.id, 1)
+	link.retire(channel.id)
+	err := <-sendDone
+	if !errors.Is(err, ErrClosed) || !errors.Is(err, ErrSessionRetired) ||
+		framechannel.SendDispositionOf(err) != framechannel.SendRetired {
+		t.Fatalf("queued send drained by session retirement = %v disposition=%d", err, framechannel.SendDispositionOf(err))
+	}
+	event := waitLifecycleTrace(t, link.lifecycleTrace(), LifecycleSendRolledBack)
+	if event.RelaySessionID != channel.id || event.Terminal ||
+		event.Disposition != framechannel.SendRetired ||
+		event.Cause != LifecycleCauseSessionRetired {
+		t.Fatalf("retired drain trace = %+v", event)
+	}
+	if violation := ValidateLifecycleTrace(event); violation != LifecycleContractValid {
+		t.Fatalf("retired drain trace contract violation=%d event=%+v", violation, event)
+	}
+	link.stop(nil)
 }
 
 func TestRelayTerminalReservationPreservesRejectedChannelAndCannotBeOvertakenByClose(t *testing.T) {

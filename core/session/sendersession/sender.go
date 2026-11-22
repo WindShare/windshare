@@ -23,7 +23,13 @@ import (
 	"time"
 )
 
-const DefaultTerminalCleanupTimeout = 15 * time.Second
+const (
+	DefaultTerminalCleanupTimeout = 15 * time.Second
+	// Remote peers can disappear before ICE transitions from disconnected to
+	// failed; bound best-effort goodbye delivery so share stop and app exit do
+	// not stall waiting for an unreachable peer's acknowledgement.
+	DefaultPeerTerminalTimeout = 3 * time.Second
+)
 
 // TerminalConnectivity is defined at the session consumer boundary. Core never
 // learns provider, TURN, relay-node, or path-cost details; it only coordinates
@@ -314,14 +320,6 @@ func (factory *Factory) acceptClient(
 			wire.AbortBeforeStart()
 		}
 	}()
-	if err := wire.AddFinalizer(func() {
-		if closeErr := contentService.Close(); closeErr != nil {
-			wire.RecordError(closeErr)
-		}
-	}); err != nil {
-		return nil, err
-	}
-	contentTransferred = true
 	outbound, err := newResponses(wire, factory.terminalObserver.sendObserver(), factory.protocolObservations)
 	if err != nil {
 		return nil, err
@@ -358,6 +356,15 @@ func (factory *Factory) acceptClient(
 		catalogHandler: catalogHandler, contentHandler: contentHandler,
 		compositeDone: make(chan struct{}),
 	}
+	if err := wire.AddFinalizer(func() {
+		if closeErr := contentService.Close(); closeErr != nil {
+			sender.recordCleanupError(closeErr)
+			wire.RecordError(closeErr)
+		}
+	}); err != nil {
+		return nil, err
+	}
+	contentTransferred = true
 	if err := wire.AddFinalizer(func() {
 		// Closing the registry at core completion rejects new lane proofs. Factory
 		// removal waits for the terminal worker's composite lifetime below.
@@ -447,6 +454,7 @@ type Runtime struct {
 	closeStarted   bool
 	stopDone       chan struct{}
 	stopErr        error
+	cleanupErr     error
 	compositeDone  chan struct{}
 }
 

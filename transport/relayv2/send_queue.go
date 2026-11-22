@@ -137,7 +137,11 @@ func (l *link) resolveRequest(request *sendRequest, err error, traceOrdinaryFail
 		if request.terminal {
 			l.trace(terminalSettledTrace(request.channelID, request.operationID, lifecycleCause(err)))
 		} else if traceOrdinaryFailure && err != nil {
-			l.trace(acceptedSendFailureTrace(request.channelID, request.operationID, lifecycleCause(err)))
+			if framechannel.SendDispositionOf(err) == framechannel.SendRetired {
+				l.trace(sendRetiredDrainTrace(request.channelID, request.operationID, lifecycleCause(err)))
+			} else {
+				l.trace(acceptedSendFailureTrace(request.channelID, request.operationID, lifecycleCause(err)))
+			}
 		}
 		request.receipt <- err
 		l.finishRequestObservation(request)

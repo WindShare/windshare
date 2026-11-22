@@ -101,7 +101,7 @@ func validSessionLifecycleStage(event LifecycleTrace) bool {
 			event.RetirementSource == LifecycleRetirementNone && event.Cause != LifecycleCauseNone &&
 			event.DrainCause == LifecycleCauseNone
 	case LifecycleSendRolledBack:
-		return event.Disposition == framechannel.SendRejected &&
+		return (event.Disposition == framechannel.SendRejected || event.Disposition == framechannel.SendRetired) &&
 			event.RetirementSource == LifecycleRetirementNone && event.Cause != LifecycleCauseNone &&
 			event.DrainCause == LifecycleCauseNone
 	case LifecycleRetirementDeferred, LifecycleRetired:

@@ -22,6 +22,7 @@ func TestRelayLifecycleConstructorsProduceStageShapes(t *testing.T) {
 		{"accepted provider failure", acceptedSendFailureTrace(sessionID, 3, transportCause)},
 		{"send rejected", sendRejectedTrace(sessionID, 4, false, framechannel.SendRejected, LifecycleCauseCanceled)},
 		{"send rolled back", sendRolledBackTrace(sessionID, 5, true, LifecycleCauseDeadline)},
+		{"send drained retired", sendRetiredDrainTrace(sessionID, 12, LifecycleCauseSessionRetired)},
 		{"retirement deferred", retirementDeferredTrace(sessionID, 6, true, LifecycleRetirementLocalClose, LifecycleCauseNone, LifecycleCauseNone)},
 		{"retired", retiredTrace(sessionID, 7, false, LifecycleRetirementIngressFailure, LifecycleCauseIngressOverflow, LifecycleCauseIngressOverflow)},
 		{"terminal settled", terminalSettledTrace(sessionID, 8, LifecycleCauseNone)},

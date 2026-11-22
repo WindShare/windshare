@@ -109,3 +109,20 @@ func TestStopFactorySessionPreservesRuntimeAfterMessageValidationFailure(t *test
 	default:
 	}
 }
+
+func TestSenderFactoryStopPropagatesLocalSessionCleanupFailure(t *testing.T) {
+	fixture := newVerticalFixture(t)
+	sender, receiver := connectVerticalPair(t, fixture.senderFactory, fixture.receiverFactory)
+	defer receiver.Close()
+
+	localFailure := errors.New("lease close failed")
+	if err := sender.core.AddFinalizer(func() {
+		sender.recordCleanupError(localFailure)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	err := fixture.senderFactory.Stop(context.Background(), "stop")
+	if !errors.Is(err, ErrSessionCleanup) || !errors.Is(err, localFailure) {
+		t.Fatalf("factory stop local cleanup error=%v", err)
+	}
+}

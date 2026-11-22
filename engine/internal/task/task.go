@@ -81,7 +81,7 @@ func Start[T any](parent context.Context, config Config[T]) (*Task[T], error) {
 		current.mu.Unlock()
 		cancel(nil)
 		if config.Completed != nil {
-			config.Completed(completion.CleanupError)
+			config.Completed(completion.LocalCleanupError())
 		}
 		close(current.done)
 		current.notifyChanged()

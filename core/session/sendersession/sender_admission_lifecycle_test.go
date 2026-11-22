@@ -625,7 +625,7 @@ func TestSenderFactoryStopTreatsLastLaneDetachBeforeTerminalAdmissionAsComplete(
 	}
 }
 
-func TestSenderFactoryStopPropagatesAcceptedTerminalDeliveryFailure(t *testing.T) {
+func TestSenderFactoryStopTreatsPeerTerminalFailureAsBestEffortAndRecordsObservation(t *testing.T) {
 	fixture := newVerticalFixture(t)
 	observed := make(chan sessionobs.SenderTerminalSendObserved, 1)
 	fixture.senderFactory.terminalObserver = newSenderTerminalObservers(
@@ -670,17 +670,20 @@ func TestSenderFactoryStopPropagatesAcceptedTerminalDeliveryFailure(t *testing.T
 	case <-time.After(time.Second):
 		t.Fatal("terminal receipt was not admitted")
 	}
-	// Admission owns the terminal outcome even if the physical lane closes
-	// before the transport callback settles.
+	// Remote peer terminal delivery is best-effort: a peer transport failure is
+	// observed for diagnostics while the factory still joins and stops cleanly.
 	_ = baseSenderChannel.Close()
 	close(gate.release)
 	select {
 	case err := <-stopResult:
-		if !errors.Is(err, transportErr) {
-			t.Fatalf("accepted terminal failure = %v", err)
+		if err != nil {
+			t.Fatalf("best-effort peer terminal failure broke factory stop = %v", err)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("factory stop did not return the accepted terminal failure")
+		t.Fatal("factory stop did not complete after peer terminal failure")
+	}
+	if fixture.senderFactory.ActiveSessions() != 0 {
+		t.Fatalf("factory stop retained %d sessions", fixture.senderFactory.ActiveSessions())
 	}
 	select {
 	case observation := <-observed:

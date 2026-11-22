@@ -16,18 +16,27 @@ use gpui::{AppContext, Bounds, TitlebarOptions, WindowBounds, WindowOptions, px,
 use windshare_activation::Activation;
 use windshare_host::Controller;
 
-pub fn run(activation: Activation, compact: bool) -> Result<(), String> {
+#[derive(Debug, PartialEq, Eq)]
+pub enum RunError {
+    Launch(String),
+    Shutdown(String),
+}
+
+pub fn run(activation: Activation, compact: bool) -> Result<(), RunError> {
     #[cfg(windows)]
-    let scope =
-        windshare_activation::windows::Scope::current().map_err(|error| error.to_string())?;
+    let scope = windshare_activation::windows::Scope::current()
+        .map_err(|error| RunError::Launch(error.to_string()))?;
     #[cfg(windows)]
-    let Some(_owner) = scope.elect().map_err(|error| error.to_string())? else {
+    let Some(_owner) = scope
+        .elect()
+        .map_err(|error| RunError::Launch(error.to_string()))?
+    else {
         return windshare_activation::windows::dispatch::deliver(
             &scope,
             &activation,
-            &std::env::current_exe().map_err(|error| error.to_string())?,
+            &std::env::current_exe().map_err(|error| RunError::Launch(error.to_string()))?,
         )
-        .map_err(|error| error.to_string());
+        .map_err(|error| RunError::Launch(error.to_string()));
     };
     let application = application::Application::new();
     #[cfg(windows)]
@@ -36,11 +45,11 @@ pub fn run(activation: Activation, compact: bool) -> Result<(), String> {
         windshare_activation::windows::Server::start(scope, move |request| {
             receiver.receive(request)
         })
-        .map_err(|error| error.to_string())?
+        .map_err(|error| RunError::Launch(error.to_string()))?
     };
-    let controller = Controller::start().map_err(|error| error.to_string())?;
+    let controller = Controller::start().map_err(|error| RunError::Launch(error.to_string()))?;
     application.start(controller.clone());
-    application.submit(activation)?;
+    application.submit(activation).map_err(RunError::Launch)?;
     let application_controller = controller.clone();
     let event_application = application.clone();
     gpui_platform::application()
@@ -94,5 +103,5 @@ pub fn run(activation: Activation, compact: bool) -> Result<(), String> {
     );
     // Keep process ownership until cleanup settles, without keeping a window open.
     application.begin_shutdown();
-    controller.join()
+    controller.join().map_err(RunError::Shutdown)
 }

@@ -3,10 +3,17 @@ package sendersession
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
+	"unicode/utf8"
+
 	"github.com/windshare/windshare/core/session"
 	"golang.org/x/text/unicode/norm"
-	"unicode/utf8"
 )
+
+// ErrSessionCleanup identifies a local session resource-teardown failure (such
+// as failing to release content leases) as distinct from remote relay cleanup.
+var ErrSessionCleanup = errors.New("sender session local cleanup failed")
 
 func (factory *Factory) Stop(ctx context.Context, message string) error {
 	if factory == nil {
@@ -74,31 +81,37 @@ func (factory *Factory) runTerminal(message string) {
 		sessions = append(sessions, session)
 	}
 	factory.mu.Unlock()
-	sessionContext, cancelSessions := context.WithTimeout(context.Background(), factory.terminalTimeout)
-	results := make(chan error, len(sessions))
-	for _, session := range sessions {
-		go func() {
-			results <- stopFactorySession(sessionContext, session, message)
-		}()
+	peerTimeout := min(factory.terminalTimeout, DefaultPeerTerminalTimeout)
+	sessionContext, cancelSessions := context.WithTimeout(context.Background(), peerTimeout)
+	var peerNotice sync.WaitGroup
+	for _, current := range sessions {
+		peerNotice.Go(func() {
+			// Delivering the goodbye frame to arbitrary remote peers is best-effort:
+			// an offline peer cannot acknowledge it, and per-lane delivery outcomes
+			// are recorded via TerminalSendObserver without failing share shutdown.
+			_ = stopFactorySession(sessionContext, current, message)
+		})
 	}
-	var combined error
-	for range sessions {
-		combined = errors.Join(combined, <-results)
-	}
+	peerNotice.Wait()
 	cancelSessions()
 	// Graceful stop is bounded, but resource ownership is not. Force cancellation
 	// after that budget and join every runtime before shared stores or key aliases
 	// can be released by the factory owner.
-	for _, session := range sessions {
-		session.BeginClose()
+	for _, current := range sessions {
+		current.BeginClose()
 	}
-	for _, session := range sessions {
-		session.WaitClosed()
+	var localCleanupErr error
+	for _, current := range sessions {
+		current.WaitClosed()
+		localCleanupErr = errors.Join(localCleanupErr, current.cleanupError())
+	}
+	if localCleanupErr != nil {
+		localCleanupErr = fmt.Errorf("%w: %w", ErrSessionCleanup, localCleanupErr)
 	}
 	// Connectivity cleanup runs after the initial session lanes have either
 	// delivered terminal or been force-cancelled and fully joined.
 	cleanupContext, cancelCleanup := context.WithTimeout(context.Background(), factory.terminalTimeout)
-	combined = errors.Join(combined, factory.terminalConnectivity.Cleanup(cleanupContext))
+	combined := errors.Join(localCleanupErr, factory.terminalConnectivity.Cleanup(cleanupContext))
 	cancelCleanup()
 	factory.mu.Lock()
 	clear(factory.authKey)

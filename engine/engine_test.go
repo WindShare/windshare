@@ -131,6 +131,30 @@ func TestFinalCleanupFailureSurvivesTaskAndApplicationShutdown(t *testing.T) {
 	}
 }
 
+func TestRemoteNetworkCleanupFailureDoesNotPoisonApplicationClose(t *testing.T) {
+	cleanupErr := errors.New("relay deregistration timed out")
+	application, err := New(Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := start(application, context.Background(), func(context.Context, task.Control) task.Completion[int] {
+		return task.Completion[int]{
+			Outcome: task.OutcomeFailed, FailureClass: task.FailureNetwork,
+			Err: cleanupErr, CleanupError: cleanupErr, CleanupClass: task.FailureNetwork,
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := current.Wait(context.Background())
+	if err != nil || !errors.Is(result.CleanupError, cleanupErr) {
+		t.Fatalf("result = %+v, %v", result, err)
+	}
+	if err := application.Close(context.Background()); err != nil {
+		t.Fatalf("remote network cleanup poisoned Engine.Close: %v", err)
+	}
+}
+
 func TestNewValidatesDependenciesAndDoesNotShareOwners(t *testing.T) {
 	for _, config := range []Config{
 		{CleanupTimeout: -time.Second},

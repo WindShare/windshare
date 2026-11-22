@@ -417,3 +417,49 @@ func TestStopFactoryDeadlineDoesNotReleaseRuntimeOwnership(t *testing.T) {
 		t.Fatalf("stop error=%v", err)
 	}
 }
+
+func TestShareCleanupClassSeparatesLocalAndRemoteTeardown(t *testing.T) {
+	t.Run("relay network cleanup stays remote", func(t *testing.T) {
+		f := newShareFixture(t)
+		f.relays.cleanupErr = errors.New("relay unreachable")
+		ctx, stop := context.WithCancelCause(context.Background())
+		done := fixtureRun(f, ctx, Request{})
+		if _, err := f.dependencies.Controller.Ready(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		stop(task.ErrShareStopped)
+		result := awaitResult(t, done)
+		if result.CleanupClass != task.FailureNetwork || result.LocalCleanupError() != nil {
+			t.Fatalf("remote cleanup leaked into local scope: %+v", result)
+		}
+	})
+	t.Run("local cleanup takes precedence over relay network cleanup", func(t *testing.T) {
+		f := newShareFixture(t)
+		f.relays.cleanupErr = errors.New("relay unreachable")
+		f.prepared.closeErr = errors.New("source close failed")
+		ctx, stop := context.WithCancelCause(context.Background())
+		done := fixtureRun(f, ctx, Request{})
+		if _, err := f.dependencies.Controller.Ready(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		stop(task.ErrShareStopped)
+		result := awaitResult(t, done)
+		if result.CleanupClass != task.FailureLocal || !errors.Is(result.LocalCleanupError(), f.prepared.closeErr) {
+			t.Fatalf("local cleanup lost precedence: %+v", result)
+		}
+	})
+	t.Run("local session cleanup from factory stays local", func(t *testing.T) {
+		f := newShareFixture(t)
+		f.factory.stopErr = sendersession.ErrSessionCleanup
+		ctx, stop := context.WithCancelCause(context.Background())
+		done := fixtureRun(f, ctx, Request{})
+		if _, err := f.dependencies.Controller.Ready(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		stop(task.ErrShareStopped)
+		result := awaitResult(t, done)
+		if result.CleanupClass != task.FailureLocal || !errors.Is(result.LocalCleanupError(), sendersession.ErrSessionCleanup) {
+			t.Fatalf("factory local session cleanup misclassified: %+v", result)
+		}
+	})
+}
