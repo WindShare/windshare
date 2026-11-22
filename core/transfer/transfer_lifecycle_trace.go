@@ -106,20 +106,8 @@ func (r *jobRun) traceFileRevisionRetry(
 	})
 }
 
-type TransferLifecycleTracer interface {
-	TraceTransferLifecycle(TransferLifecycleTrace)
-}
-
-type TransferLifecycleTraceFunc func(TransferLifecycleTrace)
-
-func (function TransferLifecycleTraceFunc) TraceTransferLifecycle(event TransferLifecycleTrace) {
-	if function != nil {
-		function(event)
-	}
-}
-
 func (j *TransferJob) trace(event TransferLifecycleTrace) {
-	if j == nil || j.tracer == nil {
+	if j == nil || !j.diagnostics.Enabled() {
 		return
 	}
 	// Every lifecycle event belongs to the same immutable run namespace. Filling
@@ -141,19 +129,7 @@ func (j *TransferJob) trace(event TransferLifecycleTrace) {
 		event.PlanKind = j.intent.MaterializationPlan().Kind()
 	}
 	event.Progress = j.Progress()
-	// Discovery and the file worker intentionally overlap. Serialize the
-	// callback so a tracer can append to one audit stream without having to
-	// provide its own scheduler-specific synchronization.
-	j.traceMu.Lock()
-	defer j.traceMu.Unlock()
-	traceTransferLifecycle(j.tracer, event)
-}
-
-func traceTransferLifecycle(tracer TransferLifecycleTracer, event TransferLifecycleTrace) {
-	// Tracing is diagnostic and must never become transfer or settlement
-	// authority. Isolating panics here also keeps every call site consistent.
-	defer func() { _ = recover() }()
-	tracer.TraceTransferLifecycle(event)
+	j.diagnostics.Record(event)
 }
 
 func (r *jobRun) traceFileLifecycle(stage TransferLifecycleStage, plan plannedFile, failure error) {

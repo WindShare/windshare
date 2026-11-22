@@ -5,6 +5,7 @@ import (
 	"context"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"testing"
 	"time"
@@ -25,7 +26,7 @@ func (f capacityRangeFunc) ReadRange(ctx context.Context, l RevisionHandle, d co
 func TestReplacementLeaseCapacityUsesExistingJobBudgetAndRebuildsOnlyUncommittedRange(t *testing.T) {
 	file := transferID[catalog.FileID](84)
 	wait, timers := capacityJobWaitConfig(t, 10*time.Second)
-	job, _ := newCapacityTransferJob(t, []catalog.FileID{file}, &capacityRevisionScript{}, wait, nil)
+	job, _ := newCapacityTransferJob(t, []catalog.FileID{file}, &capacityRevisionScript{}, wait, diagnostics.Sink{})
 	session := &changingJobSession{id: transferID[protocolsession.ProtocolSessionID](89)}
 	job.session = session
 	opened := OpenedRevision{Handle: transferID[RevisionHandle](86), Descriptor: jobDescriptor(t, transferID[catalog.ShareInstance](80), file, 88, 6)}

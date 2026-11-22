@@ -6,6 +6,7 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/catalogflow"
 	"github.com/windshare/windshare/core/session/contentflow"
@@ -27,7 +28,7 @@ func (runtime *Runtime) NewTransferJob(
 	intent transfer.ReceiveIntent,
 	jobID transfer.TransferJobID,
 	materializer transfer.DirectTreeMaterializer,
-	tracer transfer.TransferLifecycleTracer,
+	diag diagnostics.Sink,
 ) (*transfer.TransferJob, error) {
 	if runtime == nil || intent.IsZero() || jobID.IsZero() || materializer == nil {
 		return nil, transfer.ErrInvalidTransferJob
@@ -44,7 +45,7 @@ func (runtime *Runtime) NewTransferJob(
 	dependencies := receiverTransferDependencies{runtime: runtime}
 	return transfer.NewTransferJob(transfer.TransferJobConfig{
 		ReceiveIntent: intent, JobID: jobID,
-		Session: runtime, Tracer: tracer,
+		Session: runtime, Diagnostics: diag,
 		Catalog: dependencies, Revisions: dependencies, Blocks: dependencies, Materializer: materializer,
 		RevisionWait: revisionWait,
 	})

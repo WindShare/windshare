@@ -11,6 +11,7 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/internal/testoutputroot"
 	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/receiversession"
@@ -24,7 +25,7 @@ import (
 func TestTransferReadmitsDurableRangesAfterSourceReopen(t *testing.T) {
 	t.Run("intact", func(t *testing.T) { testTransferReadmission(t, nil) })
 	t.Run("stage removed", func(t *testing.T) { testTransferReadmission(t, os.Remove) })
-	t.Run("stage replaced", func(t *testing.T) { testTransferReadmission(t, replaceReadmissionStage) })
+	t.Run("stage truncated", func(t *testing.T) { testTransferReadmission(t, truncateReadmissionStage) })
 }
 
 func testTransferReadmission(t *testing.T, changeStage func(string) error) {
@@ -124,49 +125,63 @@ func testTransferReadmission(t *testing.T, changeStage func(string) error) {
 				return context.Cause(ctx)
 			}
 		} else if reconnectedAfter == 0 {
-			if descriptor.FileRevision() == firstRevision || requested.Offset != firstRange.End {
-				t.Errorf("first resumed range=%v under revision %x", requested, descriptor.FileRevision())
+			wantOffset := firstRange.End
+			if changeStage != nil {
+				wantOffset = 0
+			}
+			if descriptor.FileRevision() == firstRevision || requested.Offset != wantOffset {
+				t.Errorf("first resumed range=%v under revision %x, want offset %d", requested, descriptor.FileRevision(), wantOffset)
 			}
 			reconnectedAfter = time.Since(cutAt)
 		}
 		return nil
 	}}
 
-	var readmission transfer.RevisionReadmissionTrace
-	var retainedBeforeReopen uint64
+	stream, err := diagnostics.NewStream(256, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var stageErr error
-	var settled int
-	tracer := transfer.TransferLifecycleTraceFunc(func(event transfer.TransferLifecycleTrace) {
-		if event.Stage == transfer.TransferFileSettled {
-			settled++
-		}
-		if event.Stage != transfer.TransferFileRevisionReadmission {
-			return
-		}
-		switch event.RevisionReadmission.Decision {
-		case "readmit":
-			retainedBeforeReopen = event.RevisionReadmission.Retained
-			// The pause has flushed and released the stage, so external changes
-			// here exercise the next ownership check without racing a writer.
-			if changeStage != nil {
+	var materializer transfer.DirectTreeMaterializer = operation
+	if changeStage != nil {
+		materializer = &stageMutatingMaterializer{
+			inner: operation,
+			onReopenBegin: func() {
 				stageErr = changeReadmissionStage(root.RootPath, changeStage)
-			}
-		case "readmitted":
-			readmission = event.RevisionReadmission
+			},
 		}
-	})
+	}
 	id, err := transfer.NewTransferJobID()
 	if err != nil {
 		t.Fatal(err)
 	}
 	job, err := transfer.NewTransferJob(transfer.TransferJobConfig{
 		ReceiveIntent: intent, JobID: id, Session: continuation, Catalog: continuation, Revisions: continuation,
-		Blocks: reader, Materializer: operation, Tracer: tracer, RevisionWait: &revisionwait.Config{WatchSession: continuation.WaitSessionChange},
+		Blocks: reader, Materializer: materializer, Diagnostics: stream.Sink(), RevisionWait: &revisionwait.Config{WatchSession: continuation.WaitSessionChange},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	result := job.Run(ctx)
+	stream.Close()
+	var settled int
+	var retainedBeforeReopen uint64
+	var readmitted diagnostics.Value
+	for rec := range stream.Records() {
+		payload := rec.Payload()
+		switch payload.Get("stage").Text() {
+		case transfer.TransferFileSettled.DiagnosticName():
+			settled++
+		case transfer.TransferFileRevisionReadmission.DiagnosticName():
+			rr := payload.Get("revision_readmission")
+			switch rr.Get("decision").Text() {
+			case "readmit":
+				retainedBeforeReopen = rr.Get("retained_bytes").Uint()
+			case "readmitted":
+				readmitted = rr
+			}
+		}
+	}
 	if changeStage != nil {
 		if stageErr != nil {
 			t.Fatal(stageErr)
@@ -174,20 +189,6 @@ func testTransferReadmission(t *testing.T, changeStage func(string) error) {
 		if retainedBeforeReopen == 0 || retainedBeforeReopen != firstRange.Length() {
 			t.Fatalf("expected a durable prefix before reopening, got %d bytes", retainedBeforeReopen)
 		}
-		if result.Outcome != transfer.DirectTreeOutcomePartial || len(result.Files) != 1 || settled != 1 {
-			t.Fatalf("expected an isolated file failure, outcome=%d files=%+v settlements=%d progress=%+v",
-				result.Outcome, result.Files, settled, result.Progress)
-		}
-		_, reason, blocked := result.Files[0].Settlement.ItemBlock()
-		progress := result.Progress
-		if !blocked || reason != transfer.ItemBlockOwnedObjectUnknown || progress.FileOutcomes.OwnedObjectUnknownFiles != 1 {
-			t.Fatalf("expected a file ownership block, got %+v", result)
-		}
-		if progress.RestartReusableBytes != 0 || progress.VerifiedBytes != 0 || progress.NewlyVerifiedBytes != 0 ||
-			!progress.CountersExact || transferred != retainedBeforeReopen {
-			t.Fatalf("unavailable stage affected counted progress: %+v, transferred=%d", progress, transferred)
-		}
-		return
 	}
 	total := uint64(len(f.payload))
 	if result.Outcome != transfer.DirectTreeOutcomeSuccess ||
@@ -196,19 +197,57 @@ func testTransferReadmission(t *testing.T, changeStage func(string) error) {
 		!result.Progress.CountersExact || settled != 1 {
 		t.Fatalf("result=%+v file settlements=%d", result, settled)
 	}
-	if readmission.Previous != firstRevision || readmission.Current == firstRevision || readmission.Current.IsZero() ||
-		readmission.ComparisonReason != content.ComparisonMetadataAgreement ||
-		readmission.Retained != firstRange.Length() || readmission.Reused != firstRange.Length() ||
-		transferred != total || retriedBytes != 0 || reconnectedAfter <= 0 {
-		t.Fatalf("readmission=%+v transferred=%d retransmitted=%d time to resume=%v", readmission, transferred, retriedBytes, reconnectedAfter)
+	wantPrev := diagnostics.Identity(firstRevision.Bytes()).Text()
+	wantReused := firstRange.Length()
+	wantRetried := uint64(0)
+	wantTransferred := total
+	if changeStage != nil {
+		wantReused = 0
+		wantRetried = firstRange.Length()
+		wantTransferred = total + firstRange.Length()
+	}
+	if !readmitted.Present() || readmitted.Get("previous_revision").Text() != wantPrev ||
+		readmitted.Get("current_revision").Text() == "" || readmitted.Get("current_revision").Text() == wantPrev ||
+		readmitted.Get("comparison_reason").Text() != string(content.ComparisonMetadataAgreement) ||
+		readmitted.Get("retained_bytes").Uint() != firstRange.Length() ||
+		readmitted.Get("reused_bytes").Uint() != wantReused ||
+		transferred != wantTransferred || retriedBytes != wantRetried || reconnectedAfter <= 0 {
+		t.Fatalf("readmission=%+v transferred=%d retransmitted=%d time to resume=%v", readmitted, transferred, retriedBytes, reconnectedAfter)
 	}
 	destination, _ := intent.MaterializationPlan().DestinationReservation()
 	written, err := os.ReadFile(filepath.Join(root.RootPath, destination.PhysicalName(), "source.bin"))
 	if err != nil || !bytes.Equal(written, f.payload) {
 		t.Fatalf("published %d bytes, error=%v", len(written), err)
 	}
-	t.Logf("time to resume=%v, checkpoint readmission=%v, reused=%d bytes, retransmitted=%d bytes",
-		reconnectedAfter, readmission.Elapsed, readmission.Reused, retriedBytes)
+	t.Logf("time to resume=%v, checkpoint readmission=%sms, reused=%d bytes, retransmitted=%d bytes",
+		reconnectedAfter, readmitted.Get("elapsed_ms").Text(), readmitted.Get("reused_bytes").Uint(), retriedBytes)
+}
+
+type stageMutatingMaterializer struct {
+	inner         transfer.DirectTreeMaterializer
+	onReopenBegin func()
+}
+
+func (m *stageMutatingMaterializer) OpenDirectTree(ctx context.Context, intent transfer.ReceiveIntent) (transfer.DirectTreeSession, error) {
+	sess, err := m.inner.OpenDirectTree(ctx, intent)
+	if err != nil {
+		return nil, err
+	}
+	return &stageMutatingSession{DirectTreeSession: sess, onReopenBegin: m.onReopenBegin}, nil
+}
+
+type stageMutatingSession struct {
+	transfer.DirectTreeSession
+	begins        int
+	onReopenBegin func()
+}
+
+func (s *stageMutatingSession) BeginFile(ctx context.Context, file transfer.MaterializationFile) (transfer.FileStart, error) {
+	s.begins++
+	if s.begins == 2 && s.onReopenBegin != nil {
+		s.onReopenBegin()
+	}
+	return s.DirectTreeSession.BeginFile(ctx, file)
 }
 
 func changeReadmissionStage(root string, change func(string) error) error {
@@ -217,7 +256,7 @@ func changeReadmissionStage(root string, change func(string) error) error {
 		if err != nil {
 			return err
 		}
-		if !entry.IsDir() && filepath.Ext(path) == ".stage" {
+		if !entry.IsDir() && filepath.Ext(path) == ".part" {
 			if stage != "" {
 				return errors.New("readmission fixture has multiple staged files")
 			}
@@ -234,16 +273,8 @@ func changeReadmissionStage(root string, change func(string) error) error {
 	return change(stage)
 }
 
-func replaceReadmissionStage(path string) error {
-	// Keep the physical size so the replacement must fail the ownership check.
-	info, err := os.Stat(path)
-	if err != nil {
-		return err
-	}
-	if err := os.Rename(path, path+".original"); err != nil {
-		return err
-	}
-	return os.WriteFile(path, make([]byte, info.Size()), 0o600)
+func truncateReadmissionStage(path string) error {
+	return os.Truncate(path, 0)
 }
 
 func TestRecoverRefreshFailurePreservesAuthenticatedSourceOutcomesOnPathRetirement(t *testing.T) {

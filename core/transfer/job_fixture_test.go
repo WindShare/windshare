@@ -16,6 +16,7 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/session/catalogflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	transferlanes "github.com/windshare/windshare/core/transfer/lanes"
@@ -304,7 +305,7 @@ type testTransferJobConfig struct {
 	Blocks                RangeReader
 	Materializer          DirectTreeMaterializer
 	SettlementTimeout     time.Duration
-	Tracer                TransferLifecycleTracer
+	Diagnostics           diagnostics.Sink
 }
 
 func (config testTransferJobConfig) production() TransferJobConfig {
@@ -319,8 +320,26 @@ func (config testTransferJobConfig) production() TransferJobConfig {
 		Blocks:                config.Blocks,
 		Materializer:          config.Materializer,
 		SettlementTimeout:     config.SettlementTimeout,
-		Tracer:                config.Tracer,
+		Diagnostics:           config.Diagnostics,
 	}
+}
+
+func newTestDiagnosticsStream(t testing.TB) *diagnostics.Stream {
+	t.Helper()
+	stream, err := diagnostics.NewStream(256, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return stream
+}
+
+func drainTestDiagnostics(stream *diagnostics.Stream) []diagnostics.Record {
+	stream.Close()
+	var out []diagnostics.Record
+	for rec := range stream.Records() {
+		out = append(out, rec)
+	}
+	return out
 }
 
 func newTestTransferJob(t *testing.T, config testTransferJobConfig) (*TransferJob, error) {

@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/downloadmetrics"
 	"github.com/windshare/windshare/core/session/protocolsession"
 
@@ -145,14 +146,14 @@ func (s *Session) replaceGeneration(previous *receiversession.Runtime, flight ch
 	s.mu.Unlock()
 }
 
-func (s *Session) NewTransferJob(intent transfer.ReceiveIntent, id transfer.TransferJobID, materializer transfer.DirectTreeMaterializer, tracer transfer.TransferLifecycleTracer) (*transfer.TransferJob, error) {
+func (s *Session) NewTransferJob(intent transfer.ReceiveIntent, id transfer.TransferJobID, materializer transfer.DirectTreeMaterializer, diag diagnostics.Sink) (*transfer.TransferJob, error) {
 	runtime := s.Runtime()
 	if intent.IsZero() || intent.ShareInstance() != runtime.Descriptor().ShareInstance() ||
 		intent.SyntheticRoot() != runtime.Descriptor().SyntheticRoot() {
 		return nil, transfer.ErrInvalidTransferJob
 	}
 	return transfer.NewTransferJob(transfer.TransferJobConfig{
-		ReceiveIntent: intent, JobID: id, Session: s, Tracer: tracer,
+		ReceiveIntent: intent, JobID: id, Session: s, Diagnostics: diag,
 		Catalog: s, Revisions: s, Blocks: s, Materializer: materializer,
 		RevisionWait: &revisionwait.Config{WatchSession: s.WaitSessionChange},
 	})

@@ -10,6 +10,7 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/core/transfer/revisionwait"
@@ -126,7 +127,7 @@ func newCapacityTransferJob(
 	files []catalog.FileID,
 	revisions RevisionClient,
 	wait *revisionwait.Config,
-	tracer TransferLifecycleTracer,
+	diag diagnostics.Sink,
 ) (*TransferJob, *jobOutput) {
 	t.Helper()
 	share := transferID[catalog.ShareInstance](80)
@@ -143,7 +144,7 @@ func newCapacityTransferJob(
 		Session:   fixedJobSession(transferID[protocolsession.ProtocolSessionID](91)),
 		Catalog:   capacityCatalog{snapshot: jobSnapshot(t, share, root, 83, entries...)},
 		Revisions: revisions, Blocks: capacityRangeReader{}, Materializer: output,
-		RevisionWait: wait, Tracer: tracer,
+		RevisionWait: wait, Diagnostics: diag,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -172,13 +173,8 @@ func TestTransferJobRetriesCapacityInsideCurrentWorkerSlotAndSucceeds(t *testing
 		}
 		script.opened[file] = opened
 	}
-	var traces []TransferLifecycleTrace
-	var traceMu sync.Mutex
-	job, _ := newCapacityTransferJob(t, []catalog.FileID{fileA, fileB}, script, wait, TransferLifecycleTraceFunc(func(event TransferLifecycleTrace) {
-		traceMu.Lock()
-		traces = append(traces, event)
-		traceMu.Unlock()
-	}))
+	stream := newTestDiagnosticsStream(t)
+	job, _ := newCapacityTransferJob(t, []catalog.FileID{fileA, fileB}, script, wait, stream.Sink())
 	result := job.Run(context.Background())
 	if result.Outcome != DirectTreeOutcomeSuccess || result.SucceededFiles != 2 || len(result.Files) != 0 || result.OmittedFileFailures != 0 {
 		t.Fatalf("result=%+v", result)
@@ -193,17 +189,17 @@ func TestTransferJobRetriesCapacityInsideCurrentWorkerSlotAndSucceeds(t *testing
 		result.Progress.CapacityWait.AccumulatedWait != 2*time.Second {
 		t.Fatalf("capacity progress=%+v", result.Progress.CapacityWait)
 	}
-	traceMu.Lock()
-	defer traceMu.Unlock()
-	var capacityStages []TransferLifecycleStage
-	for _, event := range traces {
-		if event.Stage < TransferCapacityRetryScheduled || event.Stage > TransferCapacitySessionEnded {
+	var capacityStages []string
+	for _, rec := range drainTestDiagnostics(stream) {
+		if !rec.Payload().Get("capacity").Present() {
 			continue
 		}
-		capacityStages = append(capacityStages, event.Stage)
+		capacityStages = append(capacityStages, rec.Payload().Get("stage").Text())
 	}
-	wantStages := []TransferLifecycleStage{
-		TransferCapacityRetryScheduled, TransferCapacityRetryReady, TransferCapacityRetrySucceeded,
+	wantStages := []string{
+		TransferCapacityRetryScheduled.DiagnosticName(),
+		TransferCapacityRetryReady.DiagnosticName(),
+		TransferCapacityRetrySucceeded.DiagnosticName(),
 	}
 	if !slices.Equal(capacityStages, wantStages) {
 		t.Fatalf("capacity stages=%v", capacityStages)
@@ -220,7 +216,7 @@ func TestTransferJobCapacityBudgetPausesTreeWithoutFileErrors(t *testing.T) {
 		},
 		opened: make(map[catalog.FileID]OpenedRevision),
 	}
-	job, output := newCapacityTransferJob(t, []catalog.FileID{file}, script, wait, nil)
+	job, output := newCapacityTransferJob(t, []catalog.FileID{file}, script, wait, diagnostics.Sink{})
 	result := job.Run(context.Background())
 	if result.Outcome != DirectTreeOutcomePaused || output.pauseCalls != 1 || output.completeCalls != 0 {
 		t.Fatalf("outcome=%v pause=%d complete=%d", result.Outcome, output.pauseCalls, output.completeCalls)

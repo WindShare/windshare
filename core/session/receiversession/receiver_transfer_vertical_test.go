@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/internal/testoutputroot"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
@@ -69,7 +70,7 @@ func TestCompositeRuntimeTransferJobPublishesDurableFilesystemOutput(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	job, err := receiver.NewTransferJob(intent, jobID, operation, nil)
+	job, err := receiver.NewTransferJob(intent, jobID, operation, diagnostics.Sink{})
 	if err != nil {
 		t.Fatal(err)
 	}

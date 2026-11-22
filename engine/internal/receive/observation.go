@@ -145,9 +145,6 @@ func (o getObservation) relayConnected(v v2.RelayEndpoint) { o.emit(RelayConnect
 func (o getObservation) receiverRecovery(v relayset.ReceiverRecoveryObservation) {
 	o.emit(RecoveryObserved{Value: v})
 }
-func (o getObservation) transferLifecycle(v transfer.TransferLifecycleTrace) {
-	o.control.Diagnostics.Record(v)
-}
 func (o getObservation) protocolObservations() observationstream.Producer[sessionobs.ProtocolObservation] {
 	return o.protocol
 }

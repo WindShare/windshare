@@ -14,6 +14,7 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/diagnostics"
 	framechannel "github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/internal/testoutputroot"
 	"github.com/windshare/windshare/core/link"
@@ -218,7 +219,7 @@ func TestLiveShareFacadeTransfersProgressiveDirectoryToDurableOutput(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	job, err := receiverRuntime.NewTransferJob(intent, jobID, operation, nil)
+	job, err := receiverRuntime.NewTransferJob(intent, jobID, operation, diagnostics.Sink{})
 	if err != nil {
 		t.Fatal(err)
 	}

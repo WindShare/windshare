@@ -10,6 +10,7 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/transfer/fault"
 )
 
@@ -591,15 +592,14 @@ func TestTransferLifecycleTraceCarriesStableTypedMilestones(t *testing.T) {
 	share := transferID[catalog.ShareInstance](70)
 	output := newJobOutput(share)
 	revisions := &jobRevisionClient{}
-	var traces []TransferLifecycleTrace
+	stream := newTestDiagnosticsStream(t)
 	job, _ := branchJob(t, output, revisions, scriptedRangeReader{})
-	job.tracer = TransferLifecycleTraceFunc(func(event TransferLifecycleTrace) {
-		traces = append(traces, event)
-	})
+	job.diagnostics = stream.Sink()
 	result := job.Run(context.Background())
 	if result.Outcome != DirectTreeOutcomeSuccess {
 		t.Fatalf("result=%+v", result)
 	}
+	traces := drainTestDiagnostics(stream)
 	wantStages := []TransferLifecycleStage{
 		TransferAdmissionStarted, TransferAdmissionCompleted, TransferDiscoveryStarted,
 		TransferGenerationCommitted, TransferDirectoryAdmitted, TransferDirectoryFinalized,
@@ -609,53 +609,62 @@ func TestTransferLifecycleTraceCarriesStableTypedMilestones(t *testing.T) {
 	if len(traces) != len(wantStages) {
 		t.Fatalf("traces=%+v", traces)
 	}
-	indices := make(map[TransferLifecycleStage]int, len(traces))
+	wantJobID := diagnostics.Identity(result.TransferJobID.Bytes()).Text()
+	wantDigest := diagnostics.Identity(result.ReceiveIntentDigest.Bytes()).Text()
+	wantOpID := diagnostics.Identity(result.ReceiveIntent.OperationID().Bytes()).Text()
+	zeroSession := diagnostics.Identity(make([]byte, 16)).Text()
+	indices := make(map[string]int, len(traces))
 	for index, trace := range traces {
-		indices[trace.Stage] = index
-		if trace.TransferJobID != result.TransferJobID || trace.ReceiveIntentDigest != result.ReceiveIntentDigest || trace.ReceiveIntentDigest.IsZero() {
+		payload, corr := trace.Payload(), trace.Correlation()
+		indices[payload.Get("stage").Text()] = index
+		if payload.Get("transfer_job_id").Text() != wantJobID || corr.Get("receive_intent_digest").Text() != wantDigest ||
+			result.ReceiveIntentDigest.IsZero() {
 			t.Fatalf("trace[%d] correlation=%+v result=(%x,%x)", index, trace, result.TransferJobID, result.ReceiveIntentDigest)
 		}
-		if trace.ReceiveOperationID != result.ReceiveIntent.OperationID() ||
-			trace.PlanKind != result.ReceiveIntent.MaterializationPlan().Kind() ||
-			!trace.ProtocolSessionID.IsZero() {
+		if payload.Get("receive_operation_id").Text() != wantOpID ||
+			payload.Get("plan_kind").Text() != "1" ||
+			corr.Get("protocol_session_id").Text() != zeroSession {
 			t.Fatalf("trace[%d] runtime correlation=%+v", index, trace)
 		}
 	}
 	for _, stage := range wantStages {
-		if _, exists := indices[stage]; !exists {
-			t.Fatalf("missing stage %d in %+v", stage, traces)
+		if _, exists := indices[stage.DiagnosticName()]; !exists {
+			t.Fatalf("missing stage %s in %+v", stage.DiagnosticName(), traces)
 		}
 	}
-	if !(indices[TransferAdmissionStarted] < indices[TransferAdmissionCompleted] &&
-		indices[TransferAdmissionCompleted] < indices[TransferDiscoveryStarted] &&
-		indices[TransferDiscoveryStarted] < indices[TransferGenerationCommitted] &&
-		indices[TransferGenerationCommitted] < indices[TransferDirectoryAdmitted] &&
-		indices[TransferFileEnqueued] < indices[TransferFileStarted] &&
-		indices[TransferFileStarted] < indices[TransferFileAdmitted] &&
-		indices[TransferFileAdmitted] < indices[TransferFileFirstWrite] &&
-		indices[TransferFileFirstWrite] < indices[TransferFileSettled] &&
-		indices[TransferFileSettled] < indices[TransferDirectoryFinalized] &&
-		indices[TransferDirectoryFinalized] < indices[TransferJobSettled] &&
-		indices[TransferDiscoveryStarted] < indices[TransferDiscoveryCompleted] &&
-		indices[TransferDiscoveryCompleted] < indices[TransferJobSettled]) {
+	idx := func(stage TransferLifecycleStage) int { return indices[stage.DiagnosticName()] }
+	if !(idx(TransferAdmissionStarted) < idx(TransferAdmissionCompleted) &&
+		idx(TransferAdmissionCompleted) < idx(TransferDiscoveryStarted) &&
+		idx(TransferDiscoveryStarted) < idx(TransferGenerationCommitted) &&
+		idx(TransferGenerationCommitted) < idx(TransferDirectoryAdmitted) &&
+		idx(TransferFileEnqueued) < idx(TransferFileStarted) &&
+		idx(TransferFileStarted) < idx(TransferFileAdmitted) &&
+		idx(TransferFileAdmitted) < idx(TransferFileFirstWrite) &&
+		idx(TransferFileFirstWrite) < idx(TransferFileSettled) &&
+		idx(TransferFileSettled) < idx(TransferDirectoryFinalized) &&
+		idx(TransferDirectoryFinalized) < idx(TransferJobSettled) &&
+		idx(TransferDiscoveryStarted) < idx(TransferDiscoveryCompleted) &&
+		idx(TransferDiscoveryCompleted) < idx(TransferJobSettled)) {
 		t.Fatalf("invalid lifecycle order: indices=%v traces=%+v", indices, traces)
 	}
-	fileSettlement := traces[indices[TransferFileSettled]]
-	discovery := traces[indices[TransferDiscoveryCompleted]]
-	settled := traces[indices[TransferJobSettled]]
-	if fileSettlement.FileSettlement != FilePublished ||
-		discovery.Discovery != DiscoveryComplete || discovery.ConnectionSizeClass != ConnectionSizeSmall ||
-		discovery.Progress.DiscoveredFiles != 1 || settled.Progress.PublishedFiles != 1 ||
-		settled.DirectTreeSettlement != DirectTreeSettlementSuccess {
+	fileSettlement := traces[idx(TransferFileSettled)].Payload()
+	discovery := traces[idx(TransferDiscoveryCompleted)].Payload()
+	settled := traces[idx(TransferJobSettled)].Payload()
+	if fileSettlement.Get("file_settlement").Text() != FilePublished.DiagnosticName() ||
+		discovery.Get("discovery").Text() != DiscoveryComplete.DiagnosticName() ||
+		discovery.Get("connection_size_class").Text() != "1" ||
+		discovery.Get("progress").Get("discovered_files").Uint() != 1 ||
+		settled.Get("progress").Get("published_files").Uint() != 1 ||
+		settled.Get("tree_settlement").Text() != DirectTreeSettlementSuccess.DiagnosticName() {
 		t.Fatalf("typed lifecycle context=%+v", traces)
 	}
 	for _, stage := range []TransferLifecycleStage{
 		TransferFileEnqueued, TransferFileStarted, TransferFileAdmitted, TransferFileFirstWrite,
 		TransferFileSettled,
 	} {
-		fileTrace := traces[indices[stage]]
-		if fileTrace.FileSelection != FileSelectionInherited {
-			t.Fatalf("file stage %d context=%+v", stage, fileTrace)
+		fileTrace := traces[idx(stage)].Payload()
+		if fileTrace.Get("file_selection").Text() != FileSelectionInherited.DiagnosticName() {
+			t.Fatalf("file stage %s context=%+v", stage.DiagnosticName(), fileTrace)
 		}
 	}
 }
@@ -823,14 +832,16 @@ func TestTransferLifecycleFirstWriteRequiresNewDurableContent(t *testing.T) {
 			} else {
 				output.durable["file.bin"] = full
 			}
-			var stages []TransferLifecycleStage
-			job.tracer = TransferLifecycleTraceFunc(func(event TransferLifecycleTrace) {
-				stages = append(stages, event.Stage)
-			})
+			stream := newTestDiagnosticsStream(t)
+			job.diagnostics = stream.Sink()
 			if result := job.Run(context.Background()); result.Outcome != DirectTreeOutcomeSuccess {
 				t.Fatalf("result=%+v", result)
 			}
-			if !slices.Contains(stages, TransferFileAdmitted) || slices.Contains(stages, TransferFileFirstWrite) {
+			var stages []string
+			for _, rec := range drainTestDiagnostics(stream) {
+				stages = append(stages, rec.Payload().Get("stage").Text())
+			}
+			if !slices.Contains(stages, TransferFileAdmitted.DiagnosticName()) || slices.Contains(stages, TransferFileFirstWrite.DiagnosticName()) {
 				t.Fatalf("stages=%v", stages)
 			}
 		})

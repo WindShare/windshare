@@ -128,12 +128,7 @@ func TestTransferJobReadmitsAcrossMultipleProgressingReopens(t *testing.T) {
 	})
 	output := newJobOutput(share)
 	rules, _ := NewSelectionRules(true, nil)
-	var decisions []string
-	tracer := TransferLifecycleTraceFunc(func(event TransferLifecycleTrace) {
-		if event.Stage == TransferFileRevisionReadmission {
-			decisions = append(decisions, event.RevisionReadmission.Decision)
-		}
-	})
+	stream := newTestDiagnosticsStream(t)
 	blocks := &scriptedReopenBlocks{
 		revisions: descriptors,
 		client:    revisions,
@@ -156,13 +151,19 @@ func TestTransferJobReadmitsAcrossMultipleProgressingReopens(t *testing.T) {
 			},
 			failures: make(map[catalog.DirectoryID]error),
 		},
-		Revisions: revisions, Blocks: blocks, Materializer: output, Tracer: tracer,
+		Revisions: revisions, Blocks: blocks, Materializer: output, Diagnostics: stream.Sink(),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	result := job.Run(context.Background())
 	revisions.assertAllReleased(t)
+	var decisions []string
+	for _, rec := range drainTestDiagnostics(stream) {
+		if rec.Payload().Get("stage").Text() == TransferFileRevisionReadmission.DiagnosticName() {
+			decisions = append(decisions, rec.Payload().Get("revision_readmission").Get("decision").Text())
+		}
+	}
 	if result.Outcome != DirectTreeOutcomeSuccess || result.SucceededFiles != 1 ||
 		result.Progress.VerifiedBytes != size || !result.Progress.CountersExact {
 		t.Fatalf("result=%+v decisions=%v", result, decisions)
@@ -186,12 +187,7 @@ func TestTransferJobStopsAfterConsecutiveStalledReopens(t *testing.T) {
 	})
 	output := newJobOutput(share)
 	rules, _ := NewSelectionRules(true, nil)
-	var decisions []string
-	tracer := TransferLifecycleTraceFunc(func(event TransferLifecycleTrace) {
-		if event.Stage == TransferFileRevisionReadmission {
-			decisions = append(decisions, event.RevisionReadmission.Decision)
-		}
-	})
+	stream := newTestDiagnosticsStream(t)
 	blocks := &scriptedReopenBlocks{
 		revisions: descriptors,
 		client:    revisions,
@@ -221,13 +217,19 @@ func TestTransferJobStopsAfterConsecutiveStalledReopens(t *testing.T) {
 			},
 			failures: make(map[catalog.DirectoryID]error),
 		},
-		Revisions: revisions, Blocks: blocks, Materializer: output, Tracer: tracer,
+		Revisions: revisions, Blocks: blocks, Materializer: output, Diagnostics: stream.Sink(),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	result := job.Run(context.Background())
 	revisions.assertAllReleased(t)
+	var decisions []string
+	for _, rec := range drainTestDiagnostics(stream) {
+		if rec.Payload().Get("stage").Text() == TransferFileRevisionReadmission.DiagnosticName() {
+			decisions = append(decisions, rec.Payload().Get("revision_readmission").Get("decision").Text())
+		}
+	}
 	if result.Outcome != DirectTreeOutcomePartial || len(result.Files) != 1 ||
 		result.Files[0].Settlement.Kind() != FilePaused || result.Progress.VerifiedBytes != window {
 		t.Fatalf("result=%+v decisions=%v", result, decisions)

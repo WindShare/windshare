@@ -13,6 +13,7 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/framechannel"
 
 	"github.com/windshare/windshare/core/session"
@@ -386,7 +387,7 @@ func TestCatalogReplayPreservesCommitmentAndGenerationFence(t *testing.T) {
 	if _, err = s.ResolveOrdinaryOutputShape(context.Background(), transfer.SelectionSpec{}, ordinaryoutput.DefaultShapeProbeBudgetV1, nil); err == nil {
 		t.Fatal("invalid selection accepted")
 	}
-	if _, err = s.NewTransferJob(transfer.ReceiveIntent{}, transfer.TransferJobID{}, nil, nil); !errors.Is(err, transfer.ErrInvalidTransferJob) {
+	if _, err = s.NewTransferJob(transfer.ReceiveIntent{}, transfer.TransferJobID{}, nil, diagnostics.Sink{}); !errors.Is(err, transfer.ErrInvalidTransferJob) {
 		t.Fatal(err)
 	}
 }

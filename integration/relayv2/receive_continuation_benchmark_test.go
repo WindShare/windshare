@@ -13,6 +13,7 @@ import (
 
 	"github.com/windshare/windshare/adapters/filesystem"
 	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/session/receivercontinuation"
@@ -195,12 +196,17 @@ func runReceiveEvidenceSample(
 		RevisionWait: &revisionwait.Config{WatchSession: continuation.WaitSessionChange},
 	}
 	var recovery receiveRecoveryEvidence
+	var diagStream *diagnostics.Stream
 	if scenario == evidenceReopened {
+		diagStream, err = diagnostics.NewStream(256, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
 		reader := &reopeningEvidenceReader{
 			Session: continuation, initial: initial, recovery: &recovery,
 		}
 		config.Blocks = reader
-		config.Tracer = transfer.TransferLifecycleTraceFunc(recovery.observeReadmission)
+		config.Diagnostics = diagStream.Sink()
 	}
 	job, err := transfer.NewTransferJob(config)
 	if err != nil {
@@ -209,6 +215,12 @@ func runReceiveEvidenceSample(
 	b.StartTimer()
 	result := job.Run(ctx)
 	b.StopTimer()
+	if diagStream != nil {
+		diagStream.Close()
+		for rec := range diagStream.Records() {
+			recovery.observeDiagnostic(rec)
+		}
+	}
 
 	if result.Outcome != transfer.DirectTreeOutcomeSuccess || result.SucceededFiles != 1 ||
 		!result.Progress.CountersExact || result.Progress.VerifiedBytes != uint64(len(payload)) {

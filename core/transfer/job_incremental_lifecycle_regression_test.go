@@ -11,6 +11,7 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/transfer/fault"
 )
 
@@ -95,12 +96,8 @@ func TestTransferJobPublishesTerminalDiscoveryBeforeContentDrain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	discoveryTrace := make(chan TransferLifecycleTrace, 1)
-	job.tracer = TransferLifecycleTraceFunc(func(event TransferLifecycleTrace) {
-		if event.Stage == TransferDiscoveryCompleted {
-			discoveryTrace <- event
-		}
-	})
+	stream := newTestDiagnosticsStream(t)
+	job.diagnostics = stream.Sink()
 	updates := job.ProgressSnapshots()
 	resultCh := make(chan JobResult, 1)
 	go func() { resultCh <- job.Run(context.Background()) }()
@@ -124,14 +121,22 @@ func TestTransferJobPublishesTerminalDiscoveryBeforeContentDrain(t *testing.T) {
 			t.Fatal("terminal discovery remained coupled to content drainage")
 		}
 	}
-	select {
-	case trace := <-discoveryTrace:
-		if trace.Discovery != DiscoveryComplete || trace.ReceiveOperationID.IsZero() ||
-			trace.Progress.DiscoveredFiles != 1 {
-			t.Fatalf("discovery trace=%+v", trace)
+	var discoveryRec diagnostics.Record
+	deadline := time.After(2 * time.Second)
+	for !discoveryRec.Valid() {
+		select {
+		case rec := <-stream.Records():
+			if rec.Payload().Get("stage").Text() == TransferDiscoveryCompleted.DiagnosticName() {
+				discoveryRec = rec
+			}
+		case <-deadline:
+			t.Fatal("discovery completion trace was not emitted before content drainage")
 		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("discovery completion trace was not emitted before content drainage")
+	}
+	if discoveryRec.Payload().Get("discovery").Text() != DiscoveryComplete.DiagnosticName() ||
+		discoveryRec.Payload().Get("receive_operation_id").Text() == "" ||
+		discoveryRec.Payload().Get("progress").Get("discovered_files").Uint() != 1 {
+		t.Fatalf("discovery trace=%+v", discoveryRec)
 	}
 	select {
 	case result := <-resultCh:
@@ -444,15 +449,8 @@ func TestTransferJobQueueBackpressuresGenerationReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var traceMu sync.Mutex
-	enqueuedFiles := 0
-	job.tracer = TransferLifecycleTraceFunc(func(event TransferLifecycleTrace) {
-		if event.Stage == TransferFileEnqueued {
-			traceMu.Lock()
-			enqueuedFiles++
-			traceMu.Unlock()
-		}
-	})
+	stream := newTestDiagnosticsStream(t)
+	job.diagnostics = stream.Sink()
 	resultCh := make(chan JobResult, 1)
 	go func() { resultCh <- job.Run(context.Background()) }()
 	select {
@@ -478,9 +476,17 @@ func TestTransferJobQueueBackpressuresGenerationReplay(t *testing.T) {
 		}
 	default:
 	}
-	traceMu.Lock()
-	queuedBeforeRelease := enqueuedFiles
-	traceMu.Unlock()
+	queuedBeforeRelease := 0
+	for draining := true; draining; {
+		select {
+		case rec := <-stream.Records():
+			if rec.Payload().Get("stage").Text() == TransferFileEnqueued.DiagnosticName() {
+				queuedBeforeRelease++
+			}
+		default:
+			draining = false
+		}
+	}
 	if queuedBeforeRelease != 2 {
 		t.Fatalf("enqueued traces=%d, want only the two successful queue sends", queuedBeforeRelease)
 	}
@@ -494,9 +500,12 @@ func TestTransferJobQueueBackpressuresGenerationReplay(t *testing.T) {
 		if result.Outcome != DirectTreeOutcomeSuccess || result.SucceededFiles != 4 {
 			t.Fatalf("result=%+v", result)
 		}
-		traceMu.Lock()
-		queuedAfterRelease := enqueuedFiles
-		traceMu.Unlock()
+		queuedAfterRelease := queuedBeforeRelease
+		for _, rec := range drainTestDiagnostics(stream) {
+			if rec.Payload().Get("stage").Text() == TransferFileEnqueued.DiagnosticName() {
+				queuedAfterRelease++
+			}
+		}
 		if queuedAfterRelease != 4 {
 			t.Fatalf("completed enqueued traces=%d", queuedAfterRelease)
 		}
@@ -634,18 +643,21 @@ func TestTransferJobSelectionResolutionSurvivesSaturatedDiagnostics(t *testing.T
 	}
 }
 
-func TestTransferLifecycleTracerPanicCannotChangeTransferAuthority(t *testing.T) {
+func TestSaturatedDiagnosticsSinkCannotBlockOrChangeTransferAuthority(t *testing.T) {
 	share := transferID[catalog.ShareInstance](183)
 	output := newJobOutput(share)
 	job, _ := branchJob(t, output, &jobRevisionClient{}, scriptedRangeReader{})
-	job.tracer = TransferLifecycleTraceFunc(func(TransferLifecycleTrace) {
-		panic("diagnostic observer failed")
-	})
+	stream, err := diagnostics.NewStream(1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job.diagnostics = stream.Sink()
 
 	result := job.Run(context.Background())
+	completion := stream.Close()
 	if result.Outcome != DirectTreeOutcomeSuccess || result.SucceededFiles != 1 ||
-		output.pauseCalls != 0 || output.completeCalls != 1 {
-		t.Fatalf("result=%+v pauses=%d completes=%d", result, output.pauseCalls, output.completeCalls)
+		output.pauseCalls != 0 || output.completeCalls != 1 || completion.CapacityDropped == 0 {
+		t.Fatalf("result=%+v pauses=%d completes=%d completion=%+v", result, output.pauseCalls, output.completeCalls, completion)
 	}
 }
 

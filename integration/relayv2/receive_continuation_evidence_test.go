@@ -2,12 +2,14 @@ package relayv2_test
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"testing"
 	"time"
 
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/session/receivercontinuation"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/transport/relayv2"
@@ -18,12 +20,31 @@ type receiveRecoveryEvidence struct {
 	timeToResume      time.Duration
 	receivedBeforeCut uint64
 	redownloadedBytes uint64
+	postCutRevisions  []content.FileRevision
 	readmission       transfer.RevisionReadmissionTrace
 }
 
-func (evidence *receiveRecoveryEvidence) observeReadmission(event transfer.TransferLifecycleTrace) {
-	if event.Stage == transfer.TransferFileRevisionReadmission && event.RevisionReadmission.Decision == "readmitted" {
-		evidence.readmission = event.RevisionReadmission
+func (evidence *receiveRecoveryEvidence) observeDiagnostic(rec diagnostics.Record) {
+	payload := rec.Payload()
+	if payload.Get("stage").Text() != transfer.TransferFileRevisionReadmission.DiagnosticName() {
+		return
+	}
+	rr := payload.Get("revision_readmission")
+	if rr.Get("decision").Text() != "readmitted" {
+		return
+	}
+	prevBytes, _ := base64.RawURLEncoding.DecodeString(rr.Get("previous_revision").Text())
+	currBytes, _ := base64.RawURLEncoding.DecodeString(rr.Get("current_revision").Text())
+	var prev, curr content.FileRevision
+	copy(prev[:], prevBytes)
+	copy(curr[:], currBytes)
+	evidence.readmission = transfer.RevisionReadmissionTrace{
+		Previous:         prev,
+		Current:          curr,
+		Decision:         "readmitted",
+		ComparisonReason: content.RevisionComparisonReason(rr.Get("comparison_reason").Text()),
+		Retained:         rr.Get("retained_bytes").Uint(),
+		Reused:           rr.Get("reused_bytes").Uint(),
 	}
 }
 
@@ -36,6 +57,11 @@ func (evidence *receiveRecoveryEvidence) validate() error {
 		readmission.Reused+evidence.redownloadedBytes != evidence.receivedBeforeCut {
 		return fmt.Errorf("incomplete reopened transfer evidence: received before cut=%d, resume=%v, readmission=%+v, redownloaded=%d",
 			evidence.receivedBeforeCut, evidence.timeToResume, readmission, evidence.redownloadedBytes)
+	}
+	for _, rev := range evidence.postCutRevisions {
+		if rev != readmission.Current {
+			return errors.New("received payload before the new revision was readmitted")
+		}
 	}
 	return nil
 }
@@ -86,9 +112,10 @@ func (evidence *receiveRecoveryEvidence) observePayload(revision content.FileRev
 		evidence.receivedBeforeCut += length
 		return nil
 	}
-	if revision != evidence.readmission.Current {
+	if !evidence.readmission.Current.IsZero() && revision != evidence.readmission.Current {
 		return errors.New("received payload before the new revision was readmitted")
 	}
+	evidence.postCutRevisions = append(evidence.postCutRevisions, revision)
 	if evidence.timeToResume == 0 {
 		evidence.timeToResume = time.Since(evidence.cutAt)
 	}

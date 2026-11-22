@@ -7,6 +7,7 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/diagnostics"
 )
 
 type historicalJobOutput struct {
@@ -39,19 +40,23 @@ func TestDeliveryReceiptSkipsSourceAcquisitionDespiteRevisionDrift(t *testing.T)
 			snapshot := jobSnapshot(t, share, root, 6, jobEntry(t, file, "done.bin", 8))
 			client, _ := newJobCatalogClient(t, share, snapshot)
 			rules, _ := NewSelectionRules(true, nil)
-			var skipped bool
+			stream := newTestDiagnosticsStream(t)
 			job, err := newTestTransferJob(t, testTransferJobConfig{ShareInstance: share, SyntheticRoot: root, Rules: rules,
 				Catalog: client, Revisions: revisions, Blocks: scriptedRangeReader{err: errors.New("must not redownload")}, Materializer: output,
-				Tracer: TransferLifecycleTraceFunc(func(event TransferLifecycleTrace) {
-					if event.Stage == TransferDeliverySkipped && event.FileID == file {
-						skipped = true
-					}
-				}),
+				Diagnostics: stream.Sink(),
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
 			result := job.Run(context.Background())
+			var skipped bool
+			wantFileID := diagnostics.Identity(file.Bytes()).Text()
+			for _, rec := range drainTestDiagnostics(stream) {
+				if rec.Payload().Get("stage").Text() == TransferDeliverySkipped.DiagnosticName() &&
+					rec.Payload().Get("file_id").Text() == wantFileID {
+					skipped = true
+				}
+			}
 			p := result.Progress
 			if result.Outcome != DirectTreeOutcomeSuccess || result.SucceededFiles != 1 || len(revisions.order) != 0 || len(output.transactions) != 0 || !skipped {
 				t.Fatalf("receipt reopened the source or output: %+v, opened=%v", result, revisions.order)

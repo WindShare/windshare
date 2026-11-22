@@ -10,6 +10,7 @@ import (
 	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/connectivity/v2peer/peerset"
 	"github.com/windshare/windshare/connectivity/v2signal"
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/liveshare"
 
 	receiversession "github.com/windshare/windshare/core/session/receiversession"
@@ -294,7 +295,7 @@ func (a *runner) prepareGetConnectivity(ctx context.Context, request preparedReq
 
 type getTransferDependencies interface {
 	getShapeResolver
-	NewTransferJob(transfer.ReceiveIntent, transfer.TransferJobID, transfer.DirectTreeMaterializer, transfer.TransferLifecycleTracer) (*transfer.TransferJob, error)
+	NewTransferJob(transfer.ReceiveIntent, transfer.TransferJobID, transfer.DirectTreeMaterializer, diagnostics.Sink) (*transfer.TransferJob, error)
 }
 
 func (a *runner) finishGetTransfer(ctx context.Context, request preparedRequest, output getOutputPreparation, dependencies getTransferDependencies, execution *getTransferExecution, observation getObservation) (*getTransferPlan, stepOutcome) {
@@ -375,7 +376,7 @@ func (a *runner) buildGetTransferJob(
 		admission.operation.Intent,
 		jobID,
 		getOperationMaterializer{operation: admission.operation},
-		transfer.TransferLifecycleTraceFunc(observation.transferLifecycle),
+		observation.control.Diagnostics,
 	)
 	if err != nil {
 		return nil, getOutputOperation{}, "", false, observation.fail(stepLocalFailure, err)

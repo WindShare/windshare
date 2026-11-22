@@ -9,6 +9,7 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/internal/keyderiv"
 	"github.com/windshare/windshare/core/link"
@@ -351,7 +352,7 @@ func TestCompositeRuntimeMultiReceiverStopAndAccessors(t *testing.T) {
 		firstReceiver.Descriptor().ShareInstance(), firstReceiver.Descriptor().SyntheticRoot(),
 		rules, "validation",
 	)
-	if _, err := firstReceiver.NewTransferJob(intent, transfer.TransferJobID{}, nil, nil); err == nil {
+	if _, err := firstReceiver.NewTransferJob(intent, transfer.TransferJobID{}, nil, diagnostics.Sink{}); err == nil {
 		t.Fatal("transfer job accepted a nil materializer")
 	}
 	inertOutput := transfer.DirectTreeMaterializerFunc(func(
@@ -360,7 +361,7 @@ func TestCompositeRuntimeMultiReceiverStopAndAccessors(t *testing.T) {
 	) (transfer.DirectTreeSession, error) {
 		return nil, errors.New("validation-only output must not be opened")
 	})
-	if _, err := firstReceiver.NewTransferJob(intent, transfer.TransferJobID{}, inertOutput, nil); err == nil {
+	if _, err := firstReceiver.NewTransferJob(intent, transfer.TransferJobID{}, inertOutput, diagnostics.Sink{}); err == nil {
 		t.Fatal("transfer job accepted a missing run identity")
 	}
 	jobID, err := transfer.NewTransferJobID()
@@ -372,7 +373,7 @@ func TestCompositeRuntimeMultiReceiverStopAndAccessors(t *testing.T) {
 	mismatchedIntent := newSessionRuntimeDirectTreeIntent(
 		t, otherShare, firstReceiver.Descriptor().SyntheticRoot(), rules, "mismatched",
 	)
-	if _, err := firstReceiver.NewTransferJob(mismatchedIntent, jobID, inertOutput, nil); err == nil {
+	if _, err := firstReceiver.NewTransferJob(mismatchedIntent, jobID, inertOutput, diagnostics.Sink{}); err == nil {
 		t.Fatal("transfer job accepted intent from another authenticated share")
 	}
 

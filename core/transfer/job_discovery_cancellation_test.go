@@ -8,6 +8,7 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/core/transfer/internal/failurestate"
 )
@@ -88,12 +89,8 @@ func TestTransferJobPreservesWorkerStopDuringCatalogReplay(t *testing.T) {
 			job.catalog = &interruptedReplayCatalog{
 				CatalogReader: job.catalog, ready: ready, interruptOpen: boundary == "open",
 			}
-			var discoveryTrace TransferLifecycleTrace
-			job.tracer = TransferLifecycleTraceFunc(func(event TransferLifecycleTrace) {
-				if event.Stage == TransferDiscoveryCompleted {
-					discoveryTrace = event
-				}
-			})
+			stream := newTestDiagnosticsStream(t)
+			job.diagnostics = stream.Sink()
 			ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 			defer cancel()
 
@@ -104,11 +101,16 @@ func TestTransferJobPreservesWorkerStopDuringCatalogReplay(t *testing.T) {
 				t.Fatalf("worker stop outcome=%v termination=%v settlement=%v interruption=%v",
 					result.Outcome, result.TerminationFault, result.SettlementFault, result.TerminationInterruption)
 			}
-			if result.Progress.Discovery != DiscoveryComplete || discoveryTrace.Stage != TransferDiscoveryCompleted ||
-				discoveryTrace.Discovery != DiscoveryComplete || discoveryTrace.Failed || discoveryTrace.Fault.Valid() {
-				t.Fatalf("authenticated discovery status=%v trace stage=%v discovery=%v failed=%v fault=%v",
-					result.Progress.Discovery, discoveryTrace.Stage, discoveryTrace.Discovery,
-					discoveryTrace.Failed, discoveryTrace.Fault)
+			var discoveryRec diagnostics.Record
+			for _, rec := range drainTestDiagnostics(stream) {
+				if rec.Payload().Get("stage").Text() == TransferDiscoveryCompleted.DiagnosticName() {
+					discoveryRec = rec
+				}
+			}
+			if result.Progress.Discovery != DiscoveryComplete || !discoveryRec.Valid() ||
+				discoveryRec.Payload().Get("discovery").Text() != DiscoveryComplete.DiagnosticName() ||
+				discoveryRec.Payload().Get("failed").Bool() || discoveryRec.Payload().Get("fault").Present() {
+				t.Fatalf("authenticated discovery status=%v rec=%+v", result.Progress.Discovery, discoveryRec)
 			}
 			transaction := output.transactions["file.bin"]
 			if transaction == nil || transaction.commitCalls != 1 || len(transaction.pauseReasons) != 0 ||

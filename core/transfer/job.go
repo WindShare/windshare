@@ -10,6 +10,7 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/transfer/catalogwalk"
 	"github.com/windshare/windshare/core/transfer/fault"
@@ -236,7 +237,7 @@ type TransferJobConfig struct {
 	Blocks                RangeReader
 	Materializer          DirectTreeMaterializer
 	SettlementTimeout     time.Duration
-	Tracer                TransferLifecycleTracer
+	Diagnostics           diagnostics.Sink
 	// RevisionWait is required only for runtimes that can produce authenticated
 	// CapacitySignal values. Keeping it explicit prevents generic quota errors
 	// from silently acquiring retry authority.
@@ -261,12 +262,11 @@ type TransferJob struct {
 	catalogWalkLimits  catalogwalk.Limits
 	projector          ordinaryoutput.ArtifactPathProjector
 	coordinates        directTreeCoordinateProjector
-	tracer             TransferLifecycleTracer
+	diagnostics        diagnostics.Sink
 	revisionWait       *revisionwait.Waiter
 	progress           receiveProgressTracker
 
 	mu      sync.Mutex
-	traceMu sync.Mutex
 	started bool
 }
 
@@ -327,7 +327,7 @@ func NewTransferJob(config TransferJobConfig) (*TransferJob, error) {
 		outputAuthority:   config.Materializer,
 		settlementTimeout: timeout, queueCapacity: queueCapacity, replayPageCapacity: replayPageCapacity,
 		catalogWalkLimits: walkLimits, projector: projector, coordinates: coordinates,
-		tracer: config.Tracer, revisionWait: revisionWait, progress: newReceiveProgressTracker(),
+		diagnostics: config.Diagnostics, revisionWait: revisionWait, progress: newReceiveProgressTracker(),
 	}, nil
 }
 

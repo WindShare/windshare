@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/transfer/fault"
 )
 
@@ -35,12 +36,8 @@ func TestPublishedOutputSurvivesRemoteCleanupDeadline(t *testing.T) {
 				if finalizeFails {
 					output.finishErr = outputFailure(fault.ScopeOutputPause, fault.OutputStateIO, errors.New("journal cannot commit"))
 				}
-				var cleanupTrace TransferLifecycleTrace
-				job.tracer = TransferLifecycleTraceFunc(func(trace TransferLifecycleTrace) {
-					if trace.Stage == TransferRevisionCleanupSettled {
-						cleanupTrace = trace
-					}
-				})
+				stream := newTestDiagnosticsStream(t)
+				job.diagnostics = stream.Sink()
 
 				result := job.Run(context.Background())
 				wantOutcome := DirectTreeOutcomeSuccess
@@ -62,9 +59,18 @@ func TestPublishedOutputSurvivesRemoteCleanupDeadline(t *testing.T) {
 					!errors.Is(cleanup.Cause, context.DeadlineExceeded) {
 					t.Fatalf("cleanup diagnostic=%+v", cleanup)
 				}
-				if cleanupTrace.TransferJobID != result.TransferJobID || !cleanupTrace.Failed ||
-					cleanupTrace.FileSelection != FileSelectionInherited || cleanupTrace.Interruption != TransferInterruptionDeadline {
-					t.Fatalf("cleanup trace=%+v", cleanupTrace)
+				var cleanupRec diagnostics.Record
+				for _, rec := range drainTestDiagnostics(stream) {
+					if rec.Payload().Get("stage").Text() == TransferRevisionCleanupSettled.DiagnosticName() {
+						cleanupRec = rec
+					}
+				}
+				wantJobID := diagnostics.Identity(result.TransferJobID.Bytes()).Text()
+				if !cleanupRec.Valid() || cleanupRec.Payload().Get("transfer_job_id").Text() != wantJobID ||
+					!cleanupRec.Payload().Get("failed").Bool() ||
+					cleanupRec.Payload().Get("file_selection").Text() != FileSelectionInherited.DiagnosticName() ||
+					cleanupRec.Payload().Get("interruption").Text() != "2" {
+					t.Fatalf("cleanup trace=%+v", cleanupRec)
 				}
 			})
 		})

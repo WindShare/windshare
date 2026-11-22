@@ -12,6 +12,7 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/internal/keyderiv"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/session/catalogflow"
@@ -42,13 +43,11 @@ func TestTransferJobExplicitlySettlesMoreThanShareStableHandleLimit(t *testing.T
 		t.Fatal(err)
 	}
 	output := newSyntheticCapacityOutput(t, intent)
-	var traceMu sync.Mutex
-	var traces []transfer.TransferLifecycleTrace
-	job, err := receiver.NewTransferJob(intent, jobID, output, transfer.TransferLifecycleTraceFunc(func(event transfer.TransferLifecycleTrace) {
-		traceMu.Lock()
-		traces = append(traces, event)
-		traceMu.Unlock()
-	}))
+	stream, err := diagnostics.NewStream(8192, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := receiver.NewTransferJob(intent, jobID, output, stream.Sink())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,20 +112,16 @@ func TestTransferJobExplicitlySettlesMoreThanShareStableHandleLimit(t *testing.T
 			t.Fatalf("session capacity after settlement = %+v", used)
 		}
 	}
-	traceMu.Lock()
-	defer traceMu.Unlock()
-	for _, event := range traces {
-		if code, ok := event.Fault.SourceCode(); ok && code == transferfault.SourceUnavailable {
-			t.Fatalf("transfer projected permanent source-unavailable: %+v", event)
+	stream.Close()
+	for rec := range stream.Records() {
+		payload := rec.Payload()
+		if payload.Get("fault").Present() &&
+			payload.Get("fault").Get("domain").Text() == fmt.Sprint(transferfault.DomainSource) &&
+			payload.Get("fault").Get("code").Text() == fmt.Sprint(transferfault.SourceUnavailable) {
+			t.Fatalf("transfer projected permanent source-unavailable: %+v", rec)
 		}
-		switch event.Stage {
-		case transfer.TransferCapacityRetryScheduled,
-			transfer.TransferCapacityRetryReady,
-			transfer.TransferCapacityRetrySucceeded,
-			transfer.TransferCapacityBudgetPaused,
-			transfer.TransferCapacityWaitCanceled,
-			transfer.TransferCapacitySessionEnded:
-			t.Fatalf("ordinary explicit releases reached capacity backpressure: %+v", event)
+		if payload.Get("capacity").Present() {
+			t.Fatalf("ordinary explicit releases reached capacity backpressure: %+v", rec)
 		}
 	}
 }

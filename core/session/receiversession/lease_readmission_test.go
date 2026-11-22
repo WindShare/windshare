@@ -8,6 +8,7 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/diagnostics"
 	"github.com/windshare/windshare/core/session/revisionaccess"
 	"github.com/windshare/windshare/core/transfer"
 )
@@ -111,7 +112,7 @@ func TestLeaseReplacementIsolatesCleanupFromDirectoryTransfer(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			job, err := receiver.NewTransferJob(intent, id, output, nil)
+			job, err := receiver.NewTransferJob(intent, id, output, diagnostics.Sink{})
 			if err != nil {
 				t.Fatal(err)
 			}
