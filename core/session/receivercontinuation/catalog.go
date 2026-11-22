@@ -79,35 +79,13 @@ func (c *directoryCursor) Next(ctx context.Context) (catalog.CatalogPage, bool, 
 	for {
 		page, ok, err := c.cursor.Next(ctx)
 		if err == nil {
-			if ok {
-				c.count++
-				c.commitment = page.Commitment()
-				if c.recordPrefetch && !c.prefetchAborted {
-					pageBytes := page.EstimatedMemoryBytes()
-					if pageBytes == 0 || pageBytes > receiversession.MaxPrefetchedDirectoryBytes-c.prefetchBytes {
-						c.prefetchAborted = true
-						c.prefetchPages = nil
-					} else {
-						c.prefetchPages = append(c.prefetchPages, page)
-						c.prefetchBytes += pageBytes
-					}
-				}
-			} else if c.recordPrefetch && !c.prefetchAborted {
-				if len(c.prefetchPages) > 0 && c.prefetchPages[len(c.prefetchPages)-1].Terminal() {
-					c.runtime.RecordPrefetchedDirectory(c.directory, c.prefetchPages)
-				}
-				c.prefetchAborted = true
-				c.prefetchPages = nil
-			}
+			c.recordPageResult(page, ok)
 			return page, ok, nil
 		}
+		c.abortPrefetch()
 		if !c.runtime.AwaitPathRetirement(ctx) {
-			c.prefetchAborted = true
-			c.prefetchPages = nil
 			return page, ok, err
 		}
-		c.prefetchAborted = true
-		c.prefetchPages = nil
 		_ = c.cursor.Close()
 		if err = c.owner.recover(ctx, c.runtime); err != nil {
 			return catalog.CatalogPage{}, false, err
@@ -116,6 +94,41 @@ func (c *directoryCursor) Next(ctx context.Context) (catalog.CatalogPage, bool, 
 			return catalog.CatalogPage{}, false, err
 		}
 	}
+}
+
+func (c *directoryCursor) recordPageResult(page catalog.CatalogPage, ok bool) {
+	if ok {
+		c.count++
+		c.commitment = page.Commitment()
+		c.bufferPrefetchPage(page)
+		return
+	}
+	if !c.recordPrefetch || c.prefetchAborted {
+		return
+	}
+	if len(c.prefetchPages) > 0 && c.prefetchPages[len(c.prefetchPages)-1].Terminal() {
+		c.runtime.RecordPrefetchedDirectory(c.directory, c.prefetchPages)
+	}
+	c.abortPrefetch()
+}
+
+func (c *directoryCursor) bufferPrefetchPage(page catalog.CatalogPage) {
+	if !c.recordPrefetch || c.prefetchAborted {
+		return
+	}
+	pageBytes := page.EstimatedMemoryBytes()
+	if pageBytes == 0 || pageBytes > receiversession.MaxPrefetchedDirectoryBytes-c.prefetchBytes {
+		c.abortPrefetch()
+		return
+	}
+	c.prefetchPages = append(c.prefetchPages, page)
+	c.prefetchBytes += pageBytes
+}
+
+func (c *directoryCursor) abortPrefetch() {
+	c.prefetchAborted = true
+	c.prefetchPages = nil
+	c.prefetchBytes = 0
 }
 func (c *directoryCursor) restore(ctx context.Context) error {
 	for {

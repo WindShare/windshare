@@ -49,9 +49,11 @@ func (plan MaterializationPlan) DestinationReservation() (DestinationReservation
 	return plan.reservation, plan.valid && plan.kind == PlanDirectTree
 }
 
-func (plan MaterializationPlan) OperationID() OperationID       { return plan.reservation.OperationID() }
-func (plan MaterializationPlan) ArtifactDigest() ArtifactDigest { return plan.reservation.ArtifactDigest() }
-func (plan MaterializationPlan) BindingDigest() BindingDigest   { return plan.reservation.Digest() }
+func (plan MaterializationPlan) OperationID() OperationID { return plan.reservation.OperationID() }
+func (plan MaterializationPlan) ArtifactDigest() ArtifactDigest {
+	return plan.reservation.ArtifactDigest()
+}
+func (plan MaterializationPlan) BindingDigest() BindingDigest { return plan.reservation.Digest() }
 
 type materializationPlanJSON struct {
 	Kind        string                     `json:"kind"`

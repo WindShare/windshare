@@ -9,18 +9,6 @@ import (
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
-func crossRuntimeID[T ~[16]byte](seed byte) T {
-	var value T
-	value[0], value[len(value)-1] = seed, seed^0xff
-	return value
-}
-
-func crossRuntimeOpaque(seed byte) []byte {
-	value := make([]byte, receivecontract.AuthorityRefBytes)
-	value[0], value[len(value)-1] = seed, seed^0xff
-	return value
-}
-
 func TestReceiveIntentBindsSelectionArtifactAndPlanDeterministically(t *testing.T) {
 	share := transferID[catalog.ShareInstance](31)
 	root := transferID[catalog.DirectoryID](32)

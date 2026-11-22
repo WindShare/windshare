@@ -37,10 +37,10 @@ type journalRecord struct {
 	// Meta record ("meta")
 	Intent          json.RawMessage `json:"intent,omitempty"`
 	SelectionDigest string          `json:"sel,omitempty"`
-	Redownload      bool   `json:"redl,omitempty"`
-	Lifecycle       string `json:"life,omitempty"`
-	Attention       string `json:"attn,omitempty"`
-	StateGen        uint64 `json:"sgen,omitempty"`
+	Redownload      bool            `json:"redl,omitempty"`
+	Lifecycle       string          `json:"life,omitempty"`
+	Attention       string          `json:"attn,omitempty"`
+	StateGen        uint64          `json:"sgen,omitempty"`
 
 	// Name mapping record ("name")
 	LogicalPath       string `json:"lpath,omitempty"`

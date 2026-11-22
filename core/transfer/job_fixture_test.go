@@ -9,7 +9,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -240,10 +239,6 @@ func jobDirectoryEntry(t *testing.T, directory catalog.DirectoryID, name string)
 	return entry
 }
 
-const jobMaterializationDirectorySecretDomain = "windshare/test-job-output/directory-secret/v1"
-
-var jobDirectTreeSessionNonce atomic.Uint64
-
 func testReceiveIntent(
 	t *testing.T,
 	share catalog.ShareInstance,
@@ -385,15 +380,15 @@ type jobOutput struct {
 	transactionScripts       map[string]jobTransactionScript
 	capabilitiesOverride     *DirectTreeCapabilities
 	beginHook                func(MaterializationFile)
-	intent              ReceiveIntent
-	events              []string
-	pauseCalls          int
-	completeCalls       int
-	completeSettlement  DirectTreeSettlementKind
-	pauseSettlement     DirectTreeSettlementKind
-	rawStart            *FileStart
-	directoryAdmission  func(AuthenticatedSourceDirectory, DirectoryAdmission) (DirectoryAdmission, error)
-	directorySettlement func(DirectoryAdmission) (DirectorySettlement, error)
+	intent                   ReceiveIntent
+	events                   []string
+	pauseCalls               int
+	completeCalls            int
+	completeSettlement       DirectTreeSettlementKind
+	pauseSettlement          DirectTreeSettlementKind
+	rawStart                 *FileStart
+	directoryAdmission       func(AuthenticatedSourceDirectory, DirectoryAdmission) (DirectoryAdmission, error)
+	directorySettlement      func(DirectoryAdmission) (DirectorySettlement, error)
 }
 
 func newJobOutput(share catalog.ShareInstance) *jobOutput {

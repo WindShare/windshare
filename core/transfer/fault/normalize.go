@@ -298,10 +298,12 @@ func Reduce(candidates ...error) *BoundaryError {
 			soleDirect = nil
 		}
 		if !ok {
+			// Intentionally match only direct context sentinels so diagnostic wrappers
+			// cannot manufacture cancellation authority inside Reduce.
 			switch candidate {
-			case context.DeadlineExceeded:
+			case context.DeadlineExceeded: //nolint:errorlint
 				failure = &BoundaryError{cancellation: context.DeadlineExceeded, cause: candidate}
-			case context.Canceled:
+			case context.Canceled: //nolint:errorlint
 				failure = &BoundaryError{cancellation: context.Canceled, cause: candidate}
 			default:
 				failure = DependencyContract(candidate)
@@ -347,7 +349,7 @@ func JoinErrors(candidates ...error) error {
 }
 
 func joinCancellation(left, right error) error {
-	if left == context.DeadlineExceeded || right == context.DeadlineExceeded {
+	if errors.Is(left, context.DeadlineExceeded) || errors.Is(right, context.DeadlineExceeded) {
 		return context.DeadlineExceeded
 	}
 	if right != nil {

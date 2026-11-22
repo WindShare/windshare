@@ -384,71 +384,76 @@ func (artifact *ArtifactSpec) UnmarshalJSON(data []byte) error {
 	if err := decodeStrictJSON(data, &payload); err != nil {
 		return ErrInvalidReceiveContract
 	}
+	var rebuilt ArtifactSpec
+	var err error
 	switch payload.Layout {
 	case "single_file":
-		if payload.SingleFile == nil || payload.ResultRoot != nil {
-			return ErrInvalidReceiveContract
-		}
-		rawID, err := hex.DecodeString(payload.SingleFile.FileID)
-		if err != nil {
-			return ErrInvalidReceiveContract
-		}
-		fileID, err := catalog.FileIDFromBytes(rawID)
-		if err != nil {
-			return ErrInvalidReceiveContract
-		}
-		rebuilt, err := NewSingleFileDirectoryTree(fileID, payload.SingleFile.SourcePath, payload.SingleFile.SuggestedName)
-		if err != nil {
-			return err
-		}
-		*artifact = rebuilt
-		return nil
+		rebuilt, err = unmarshalSingleFileArtifact(payload)
 	case "result_root":
-		if payload.ResultRoot == nil || payload.SingleFile != nil {
-			return ErrInvalidReceiveContract
-		}
-		var layout ResultRootLayout
-		var err error
-		switch payload.ResultRoot.Class {
-		case "complete_directory", "directory_selection":
-			rawID, hexErr := hex.DecodeString(payload.ResultRoot.DirectoryID)
-			if hexErr != nil {
-				return ErrInvalidReceiveContract
-			}
-			dirID, idErr := catalog.DirectoryIDFromBytes(rawID)
-			if idErr != nil {
-				return ErrInvalidReceiveContract
-			}
-			if payload.ResultRoot.Class == "complete_directory" {
-				layout, err = NewCompleteDirectoryResultRoot(dirID, payload.ResultRoot.SourcePath)
-			} else {
-				layout, err = NewDirectorySelectionResultRoot(dirID, payload.ResultRoot.SourcePath)
-			}
-		case "synthetic_selection":
-			if payload.ResultRoot.DirectoryID != "" || payload.ResultRoot.SourcePath != "" {
-				return ErrInvalidReceiveContract
-			}
-			layout = NewSyntheticSelectionResultRoot()
-		default:
-			return ErrInvalidReceiveContract
-		}
-		if err != nil {
-			return err
-		}
-		rebuilt, err := NewResultRootDirectoryTree(layout)
-		if err != nil {
-			return err
-		}
-		*artifact = rebuilt
-		return nil
+		rebuilt, err = unmarshalResultRootArtifact(payload)
 	case "catalog_root":
 		if payload.SingleFile != nil || payload.ResultRoot != nil {
 			return ErrInvalidReceiveContract
 		}
-		*artifact = NewCatalogRootDirectoryTree()
-		return nil
+		rebuilt = NewCatalogRootDirectoryTree()
 	default:
 		return ErrInvalidReceiveContract
+	}
+	if err != nil {
+		return err
+	}
+	*artifact = rebuilt
+	return nil
+}
+
+func unmarshalSingleFileArtifact(payload artifactSpecJSON) (ArtifactSpec, error) {
+	if payload.SingleFile == nil || payload.ResultRoot != nil {
+		return ArtifactSpec{}, ErrInvalidReceiveContract
+	}
+	rawID, err := hex.DecodeString(payload.SingleFile.FileID)
+	if err != nil {
+		return ArtifactSpec{}, ErrInvalidReceiveContract
+	}
+	fileID, err := catalog.FileIDFromBytes(rawID)
+	if err != nil {
+		return ArtifactSpec{}, ErrInvalidReceiveContract
+	}
+	return NewSingleFileDirectoryTree(fileID, payload.SingleFile.SourcePath, payload.SingleFile.SuggestedName)
+}
+
+func unmarshalResultRootArtifact(payload artifactSpecJSON) (ArtifactSpec, error) {
+	if payload.ResultRoot == nil || payload.SingleFile != nil {
+		return ArtifactSpec{}, ErrInvalidReceiveContract
+	}
+	layout, err := unmarshalResultRootLayout(payload.ResultRoot)
+	if err != nil {
+		return ArtifactSpec{}, err
+	}
+	return NewResultRootDirectoryTree(layout)
+}
+
+func unmarshalResultRootLayout(dto *resultRootJSON) (ResultRootLayout, error) {
+	switch dto.Class {
+	case "complete_directory", "directory_selection":
+		rawID, err := hex.DecodeString(dto.DirectoryID)
+		if err != nil {
+			return ResultRootLayout{}, ErrInvalidReceiveContract
+		}
+		dirID, err := catalog.DirectoryIDFromBytes(rawID)
+		if err != nil {
+			return ResultRootLayout{}, ErrInvalidReceiveContract
+		}
+		if dto.Class == "complete_directory" {
+			return NewCompleteDirectoryResultRoot(dirID, dto.SourcePath)
+		}
+		return NewDirectorySelectionResultRoot(dirID, dto.SourcePath)
+	case "synthetic_selection":
+		if dto.DirectoryID != "" || dto.SourcePath != "" {
+			return ResultRootLayout{}, ErrInvalidReceiveContract
+		}
+		return NewSyntheticSelectionResultRoot(), nil
+	default:
+		return ResultRootLayout{}, ErrInvalidReceiveContract
 	}
 }
 

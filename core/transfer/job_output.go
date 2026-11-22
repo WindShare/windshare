@@ -352,10 +352,6 @@ func (policy lifecyclePolicy) jobTerminal() bool {
 	return policy.canceled || policy.value.Valid() && policy.value.Scope() >= fault.ScopeOutputPause
 }
 
-func (policy lifecyclePolicy) jobTerminalSession() bool {
-	return policy.value.Valid() && policy.value.Scope() == fault.ScopeSessionTerminal
-}
-
 func (policy lifecyclePolicy) outputFailure() bool {
 	if !policy.value.Valid() {
 		return false

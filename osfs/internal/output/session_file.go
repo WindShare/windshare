@@ -605,7 +605,7 @@ func (s *Session) openRelativeDir(physRel string) (*Dir, bool, error) {
 		return s.op.resultDir, false, nil
 	}
 	cur := s.op.resultDir
-	for _, seg := range strings.Split(physRel, "/") {
+	for seg := range strings.SplitSeq(physRel, "/") {
 		next, err := openChildDir(cur, seg)
 		if cur != s.op.resultDir {
 			_ = cur.Close()

@@ -208,39 +208,7 @@ func (selection *SelectionSpec) UnmarshalJSON(data []byte) error {
 	var rules SelectionRules
 	switch payload.Mode {
 	case "node_id":
-		if len(payload.Paths) != 0 || len(payload.Overrides) > MaxSelectionRuleOverrides {
-			return ErrInvalidSelectionRules
-		}
-		overrides := make([]SelectionOverride, 0, len(payload.Overrides))
-		for _, item := range payload.Overrides {
-			hasDir := item.DirectoryID != ""
-			hasFile := item.FileID != ""
-			if hasDir == hasFile {
-				return ErrInvalidSelectionRules
-			}
-			if hasDir {
-				raw, hexErr := hex.DecodeString(item.DirectoryID)
-				if hexErr != nil {
-					return ErrInvalidSelectionRules
-				}
-				id, idErr := catalog.DirectoryIDFromBytes(raw)
-				if idErr != nil {
-					return ErrInvalidSelectionRules
-				}
-				overrides = append(overrides, SelectionOverride{DirectoryID: id, Selected: item.Selected})
-			} else {
-				raw, hexErr := hex.DecodeString(item.FileID)
-				if hexErr != nil {
-					return ErrInvalidSelectionRules
-				}
-				id, idErr := catalog.FileIDFromBytes(raw)
-				if idErr != nil {
-					return ErrInvalidSelectionRules
-				}
-				overrides = append(overrides, SelectionOverride{FileID: id, Selected: item.Selected})
-			}
-		}
-		rules, err = NewSelectionRules(payload.DefaultSelected, overrides)
+		rules, err = unmarshalNodeIDSelectionRules(payload)
 	case "catalog_path":
 		if payload.DefaultSelected || len(payload.Overrides) != 0 {
 			return ErrInvalidSelectionRules
@@ -258,6 +226,49 @@ func (selection *SelectionSpec) UnmarshalJSON(data []byte) error {
 	}
 	*selection = rebuilt
 	return nil
+}
+
+func unmarshalNodeIDSelectionRules(payload selectionSpecJSON) (SelectionRules, error) {
+	if len(payload.Paths) != 0 || len(payload.Overrides) > MaxSelectionRuleOverrides {
+		return SelectionRules{}, ErrInvalidSelectionRules
+	}
+	overrides := make([]SelectionOverride, 0, len(payload.Overrides))
+	for _, item := range payload.Overrides {
+		override, err := unmarshalSelectionOverride(item)
+		if err != nil {
+			return SelectionRules{}, err
+		}
+		overrides = append(overrides, override)
+	}
+	return NewSelectionRules(payload.DefaultSelected, overrides)
+}
+
+func unmarshalSelectionOverride(item selectionOverrideJSON) (SelectionOverride, error) {
+	hasDir := item.DirectoryID != ""
+	hasFile := item.FileID != ""
+	if hasDir == hasFile {
+		return SelectionOverride{}, ErrInvalidSelectionRules
+	}
+	if hasDir {
+		raw, err := hex.DecodeString(item.DirectoryID)
+		if err != nil {
+			return SelectionOverride{}, ErrInvalidSelectionRules
+		}
+		id, err := catalog.DirectoryIDFromBytes(raw)
+		if err != nil {
+			return SelectionOverride{}, ErrInvalidSelectionRules
+		}
+		return SelectionOverride{DirectoryID: id, Selected: item.Selected}, nil
+	}
+	raw, err := hex.DecodeString(item.FileID)
+	if err != nil {
+		return SelectionOverride{}, ErrInvalidSelectionRules
+	}
+	id, err := catalog.FileIDFromBytes(raw)
+	if err != nil {
+		return SelectionOverride{}, ErrInvalidSelectionRules
+	}
+	return SelectionOverride{FileID: id, Selected: item.Selected}, nil
 }
 
 func writeHashUint64(w io.Writer, value uint64) {

@@ -139,12 +139,12 @@ func (summary FileOutcomeSummary) PublishedFiles() uint64 {
 }
 
 type JobResult struct {
-	Outcome             DirectTreeOutcome
-	Settlement          DirectTreeSettlement
-	TransferJobID       TransferJobID
-	ReceiveIntentDigest ReceiveIntentDigest
-	ReceiveIntent       ReceiveIntent
-	Progress            ReceiveProgressSnapshot
+	Outcome                        DirectTreeOutcome
+	Settlement                     DirectTreeSettlement
+	TransferJobID                  TransferJobID
+	ReceiveIntentDigest            ReceiveIntentDigest
+	ReceiveIntent                  ReceiveIntent
+	Progress                       ReceiveProgressSnapshot
 	Directories                    []DirectoryJobFailure
 	Files                          []FileJobFailure
 	OmittedDirectoryFailures       uint64
