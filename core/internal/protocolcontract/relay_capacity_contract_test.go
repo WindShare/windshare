@@ -49,7 +49,6 @@ func relayCapacityRegistrationVector(f *fixture, original map[string]any) map[st
 	result["joinB64"] = b64(slices.Concat(vectorBytes(result["joinB64"]), relayCapacityFields()))
 	result["receiveFrames"], result["receiveBytes"] = fmt.Sprint(relayCapacityFrames), fmt.Sprint(relayCapacityBytes)
 	result["resumeReceiveFrames"], result["resumeReceiveBytes"] = fmt.Sprint(relayResumeCapacityFrames), fmt.Sprint(relayResumeCapacityBytes)
-	delete(result, "receiveCreditB64")
 	return result
 }
 

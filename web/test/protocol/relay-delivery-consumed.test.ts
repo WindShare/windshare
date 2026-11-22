@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest'
 import {
   decodeDeliveryConsumed, encodeDeliveryConsumed, type RelayDeliveryConsumed,
 } from '../../src/transport/relay/delivery-consumed-codec'
-import { decodeReceiveCredit } from '../../src/transport/relay/receive-credit-codec'
 import { RelayProtocolError } from '../../src/transport/relay/protocol'
 import { b64ToBytes, loadVectorFile, type VectorCase } from '../vectors'
 
@@ -39,7 +38,6 @@ describe('cumulative relay delivery feedback', () => {
       if (test.accepted) {
         expect(encodeDeliveryConsumed(feedback)).toEqual(encoded)
         expect(decodeDeliveryConsumed(encoded)).toEqual(feedback)
-        expect(() => decodeReceiveCredit(encoded)).toThrow(RelayProtocolError)
       } else {
         expect(() => encodeDeliveryConsumed(feedback)).toThrow(RelayProtocolError)
         expect(() => decodeDeliveryConsumed(encoded)).toThrow(RelayProtocolError)

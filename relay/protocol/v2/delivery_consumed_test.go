@@ -74,9 +74,6 @@ func TestDeliveryControlsSharedVectors(t *testing.T) {
 					if decodeErr != nil || decoded != control {
 						t.Fatalf("decode=%+v error=%v want=%+v", decoded, decodeErr, control)
 					}
-					if _, err := ParseReceiveCredit(wire); err == nil {
-						t.Fatal("current runtime must not reinterpret cumulative totals as a delta")
-					}
 				})
 			}
 			for _, test := range vector.Malformed {

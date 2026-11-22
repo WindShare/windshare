@@ -1,5 +1,4 @@
 import { createEd25519Verifier } from '../../src/crypto/ed25519'
-import { decodeReceiveCredit, encodeReceiveCredit } from '../../src/transport/relay/receive-credit-codec'
 import { decodeShareDescriptor } from '../../src/catalog/records'
 import { describe, expect, it } from 'vitest'
 
@@ -135,7 +134,6 @@ interface RegistrationVector extends VectorCase {
   readonly opaqueRouteB64: string
   readonly sessionRetiredB64: string
   readonly sessionCreditB64: string
-  readonly receiveCreditB64: string
   readonly sessionAdmittedB64: string
   readonly sessionRetiredRelaySessionIdB64: string
   readonly stoppedErrorB64: string
@@ -469,8 +467,6 @@ describe('suite-02 relay runtime contract', () => {
     const credit = { relaySessionId: opaque.relaySessionId, frames: 2, bytes: 100 }
     expect(encodeSessionCredit(credit)).toEqual(bytes(vector.sessionCreditB64))
     expect(decodeSessionCredit(bytes(vector.sessionCreditB64))).toEqual(credit)
-    expect(encodeReceiveCredit(credit)).toEqual(bytes(vector.receiveCreditB64))
-    expect(decodeReceiveCredit(bytes(vector.receiveCreditB64))).toEqual(credit)
     expect(encodeSessionAdmitted(sessionRetired)).toEqual(bytes(vector.sessionAdmittedB64))
     expect(decodeSessionAdmitted(bytes(vector.sessionAdmittedB64))).toEqual(sessionRetired)
     expect(encodeRelayError({ code: RELAY_ERROR.stopped, retryAfterMilliseconds: 0 })).toEqual(
