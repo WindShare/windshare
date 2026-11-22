@@ -1,4 +1,30 @@
 import type { Language } from '../preferences/model'
+import type { DonationProvider } from './types'
+
+export interface ProviderLabelMap {
+  readonly providerAfdian: string
+  readonly providerKofi: string
+  readonly providerNowpayments: string
+  readonly providerDirect: string
+}
+
+export function formatProviderLabel(
+  provider: DonationProvider,
+  labels: ProviderLabelMap,
+): string {
+  switch (provider) {
+    case 'afdian':
+      return labels.providerAfdian
+    case 'kofi':
+      return labels.providerKofi
+    case 'nowpayments':
+      return labels.providerNowpayments
+    case 'direct':
+      return labels.providerDirect
+    default:
+      return provider
+  }
+}
 
 export const CRYPTO_PRESET_AMOUNTS = ['5', '10', '25'] as const
 export const DEFAULT_CRYPTO_AMOUNT = '10'

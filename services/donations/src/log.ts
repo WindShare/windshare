@@ -159,6 +159,22 @@ export function logDonationModerated(fields: {
   })
 }
 
+export function logAdminManualDonationCreated(fields: {
+  readonly donationId: string
+  readonly provider: DonationProvider
+  readonly externalId: string
+  readonly currency: string
+  readonly amountMinor: number
+}): void {
+  emit('info', 'donation.admin_manual_created', {
+    donation_id: fields.donationId,
+    provider: fields.provider,
+    external_id: fields.externalId,
+    currency: fields.currency,
+    amount_minor: fields.amountMinor,
+  })
+}
+
 export function logAdminAfdianSynced(fields: {
   readonly fetched: number
   readonly paid: number

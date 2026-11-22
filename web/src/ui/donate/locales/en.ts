@@ -63,8 +63,13 @@ export const en = {
   wallDegradedTitle: 'Supporter wall is temporarily unreachable',
   wallDegradedNote: 'You can still donate normally using the payment channels.',
   wallRetry: 'Retry',
+  topRegion: 'Special thanks',
+  topHeading: 'Special Thanks',
+  topBadge: 'TOP 3',
+  topRankLabel: (rank: number) => `Rank #${rank}`,
   anonymous: 'Anonymous',
   providerAfdian: 'Afdian',
   providerKofi: 'Ko-fi',
   providerNowpayments: 'Crypto',
+  providerDirect: 'Direct',
 }

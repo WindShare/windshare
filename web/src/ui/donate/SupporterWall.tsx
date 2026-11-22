@@ -1,7 +1,12 @@
 import { usePreferences } from '../preferences/use-preferences'
-import { formatDonationAmount, formatIsoTimestamp, formatRelativeTime } from './format'
+import {
+  formatDonationAmount,
+  formatIsoTimestamp,
+  formatProviderLabel,
+  formatRelativeTime,
+} from './format'
 import { useDonateCopy } from './locales/use-donate-copy'
-import type { DonationProvider, PublicWallEntry } from './types'
+import type { PublicWallEntry, TopSupporterRank } from './types'
 
 export type WallLoadStatus = 'loading' | 'ready' | 'degraded'
 
@@ -9,32 +14,18 @@ interface SupporterWallProps {
   readonly status: WallLoadStatus
   readonly refreshing: boolean
   readonly entries: readonly PublicWallEntry[]
+  readonly topRankById?: ReadonlyMap<string, TopSupporterRank>
   readonly nowSec: number
   readonly onRefresh: () => void
 }
 
 const SKELETON_ROWS = [0, 1, 2, 3] as const
 
-function providerLabel(
-  provider: DonationProvider,
-  t: ReturnType<typeof useDonateCopy>,
-): string {
-  switch (provider) {
-    case 'afdian':
-      return t.providerAfdian
-    case 'kofi':
-      return t.providerKofi
-    case 'nowpayments':
-      return t.providerNowpayments
-    default:
-      return provider
-  }
-}
-
 export function SupporterWall({
   status,
   refreshing,
   entries,
+  topRankById,
   nowSec,
   onRefresh,
 }: SupporterWallProps) {
@@ -100,6 +91,7 @@ export function SupporterWall({
       {status === 'ready' && entries.length > 0 && (
         <ul className="donate-wall-list">
           {entries.map(entry => {
+            const isAnonymous = entry.displayName === null
             const name = entry.displayName ?? t.anonymous
             const amount = formatDonationAmount(
               entry.amountMinor,
@@ -108,6 +100,7 @@ export function SupporterWall({
             )
             const relative = formatRelativeTime(entry.donatedAt, nowSec, language)
             const iso = formatIsoTimestamp(entry.donatedAt)
+            const topRank = topRankById?.get(entry.id)
 
             return (
               <li
@@ -116,12 +109,23 @@ export function SupporterWall({
               >
                 <div className="donate-entry-head">
                   <div className="donate-entry-identity">
-                    <span className="donate-entry-name">{name}</span>
+                    {topRank !== undefined && (
+                      <span
+                        className="donate-entry-rank"
+                        data-rank={topRank}
+                        aria-label={t.topRankLabel(topRank)}
+                      >
+                        #{topRank}
+                      </span>
+                    )}
+                    <span className={isAnonymous ? 'donate-entry-name is-anonymous' : 'donate-entry-name'}>
+                      {name}
+                    </span>
                     <span className="donate-entry-amount">{amount}</span>
                   </div>
                   <div className="donate-entry-meta">
-                    <span className="donate-entry-provider">{providerLabel(entry.provider, t)}</span>
-                    <time className="donate-entry-time" dateTime={iso}>{relative}</time>
+                    <span className="donate-entry-provider">{formatProviderLabel(entry.provider, t)}</span>
+                    <time className="donate-entry-time" dateTime={iso} title={iso}>{relative}</time>
                   </div>
                 </div>
                 {entry.message !== null && (

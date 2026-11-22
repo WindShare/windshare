@@ -27,6 +27,22 @@
   container: donate-actions / inline-size;
 }
 
+.donate-community-col {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+}
+
+/* Keep payment controls visible while browsing a long supporter wall, only when
+   the viewport has enough height so the sticky card never clips its own bottom actions. */
+@media (min-width: 901px) and (min-height: 760px) {
+  .donate-actions-card {
+    position: sticky;
+    top: calc(84px + 24px);
+  }
+}
+
 .donate-header {
   margin-bottom: 22px;
 }
@@ -557,6 +573,226 @@
   font-size: 12.5px;
 }
 
+/* Special Thanks (All-Time Top 3) */
+.donate-top-card {
+  animation: portal-arrive 220ms var(--portal-ease);
+}
+
+.donate-top-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.donate-top-title-group {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.donate-top-emblem {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  border: 1px solid light-dark(#e5d8b4, #4c4b2e);
+  background: light-dark(#f4ead0, #34311e);
+  color: light-dark(#7d5a16, #e6cc8a);
+  flex-shrink: 0;
+}
+
+.donate-top-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border: 1px solid var(--portal-border);
+  border-radius: 999px;
+  background: var(--portal-inset);
+  color: var(--portal-muted);
+  font-family: var(--portal-code-font);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.donate-top-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Mineral-botanical low-saturation rank palette shared by Top 3 cards and Recent badges. */
+.donate-top-item[data-rank="1"],
+.donate-entry-rank[data-rank="1"] {
+  --rank-surface: light-dark(#fbf8ef, #1f281d);
+  --rank-border: light-dark(#e4d6b0, #4a482c);
+  --rank-border-hover: light-dark(#d1bc86, #65613b);
+  --rank-badge-bg: light-dark(#f2e5bf, #3a361e);
+  --rank-ink: light-dark(#785513, #ebd394);
+  --rank-amount-bg: light-dark(#f3e7c6, #35321d);
+}
+
+.donate-top-item[data-rank="2"],
+.donate-entry-rank[data-rank="2"] {
+  --rank-surface: light-dark(#f4f8f5, #172620);
+  --rank-border: light-dark(#cddcd2, #344c40);
+  --rank-border-hover: light-dark(#afc7b8, #486858);
+  --rank-badge-bg: light-dark(#e1ece5, #253d33);
+  --rank-ink: light-dark(#335746, #bad6c7);
+  --rank-amount-bg: light-dark(#e4efe8, #23382f);
+}
+
+.donate-top-item[data-rank="3"],
+.donate-entry-rank[data-rank="3"] {
+  --rank-surface: light-dark(#faf5f1, #20221d);
+  --rank-border: light-dark(#e3d1c2, #4a3a2f);
+  --rank-border-hover: light-dark(#cfaea0, #644d3e);
+  --rank-badge-bg: light-dark(#efe0d2, #392c23);
+  --rank-ink: light-dark(#7d4b29, #e2ba9e);
+  --rank-amount-bg: light-dark(#f1e3d6, #332720);
+}
+
+.donate-top-item {
+  --top-badge-size: 24px;
+  --top-indent: 34px;
+  padding: 13px 15px;
+  border: 1px solid var(--rank-border);
+  border-radius: 12px;
+  background: var(--rank-surface);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  transition: border-color 160ms var(--portal-ease);
+}
+
+.donate-top-item:hover {
+  border-color: var(--rank-border-hover);
+}
+
+.donate-top-item-compact {
+  padding-block: 11px;
+  gap: 6px;
+}
+
+.donate-top-item[data-rank="1"] {
+  --top-badge-size: 26px;
+  --top-indent: 36px;
+  padding: 15px 16px;
+}
+
+.donate-top-item[data-rank="1"].donate-top-item-compact {
+  padding-block: 13px;
+}
+
+.donate-top-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.donate-top-rank {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--top-badge-size);
+  height: var(--top-badge-size);
+  border-radius: 999px;
+  border: 1px solid var(--rank-border);
+  background: var(--rank-badge-bg);
+  color: var(--rank-ink);
+  font-family: var(--portal-code-font);
+  font-size: 11.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.donate-top-item[data-rank="1"] .donate-top-rank {
+  font-size: 12.5px;
+}
+
+.donate-top-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--portal-text);
+  overflow-wrap: anywhere;
+}
+
+.donate-top-item[data-rank="1"] .donate-top-name {
+  font-size: 15px;
+  font-weight: 640;
+}
+
+.donate-top-name.is-anonymous,
+.donate-entry-name.is-anonymous {
+  color: var(--portal-muted);
+  font-weight: 520;
+}
+
+.donate-top-amount {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--rank-border);
+  background: var(--rank-amount-bg);
+  color: var(--rank-ink);
+  font-size: 12.5px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.donate-top-item[data-rank="1"] .donate-top-amount {
+  padding: 3px 11px;
+  font-size: 13.5px;
+}
+
+.donate-top-message {
+  margin: 0;
+  padding-inline-start: var(--top-indent);
+  color: var(--portal-text);
+  font-size: 13.5px;
+  line-height: 1.58;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.donate-top-meta {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-inline-start: var(--top-indent);
+  color: var(--portal-dim);
+  font-size: 11.5px;
+}
+
+.donate-top-item .donate-entry-provider {
+  border-color: var(--rank-border);
+  background: color-mix(in srgb, var(--portal-surface) 65%, transparent);
+}
+
+.donate-top-dot {
+  opacity: 0.55;
+  user-select: none;
+}
+
 /* Supporter Wall */
 .donate-wall-header {
   display: flex;
@@ -718,8 +954,26 @@
 .donate-entry-identity {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   min-width: 0;
+  flex-wrap: wrap;
+}
+
+.donate-entry-rank {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border: 1px solid var(--rank-border);
+  border-radius: 999px;
+  background: var(--rank-badge-bg);
+  color: var(--rank-ink);
+  font-family: var(--portal-code-font);
+  font-size: 10.5px;
+  font-weight: 650;
+  line-height: 1.45;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .donate-entry-name {
@@ -815,6 +1069,11 @@
   .donate-input,
   .donate-textarea {
     font-size: 16px;
+  }
+
+  .donate-top-message,
+  .donate-top-meta {
+    padding-inline-start: 0;
   }
 }
 

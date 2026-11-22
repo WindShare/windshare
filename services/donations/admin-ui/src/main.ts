@@ -8,7 +8,7 @@ import {
   type DonationConfig,
   type DonationRecord,
 } from '../../src/model'
-import { AdminApiClient, formatApiError } from './api'
+import { AdminApiClient, formatApiError, type ManualDonationPayload } from './api'
 import {
   renderMasthead,
   renderSessionWait,
@@ -28,6 +28,7 @@ import { h } from './dom'
 import { openHideDialog } from './hide-dialog'
 import { getCopy } from './locales'
 import { renderLoginView } from './login-view'
+import { openManualDonationDialog } from './manual-dialog'
 import {
   applyAppearance,
   loadInitialAppearance,
@@ -259,6 +260,7 @@ class DonationsAdminApp {
           syncing: this.state.syncingAfdian,
           refreshing: this.state.listLoading,
           t,
+          onOpenManualDialog: () => this.openManualDialog(),
           onSyncAfdian: () => void this.handleSyncAfdian(),
           onRefresh: () => void this.loadDonations(true),
         }),
@@ -439,6 +441,37 @@ class DonationsAdminApp {
     await this.loadDonations(true)
   }
 
+  private async handleCreateManualDonation(
+    payload: ManualDonationPayload,
+  ): Promise<string | null> {
+    const res = await this.api.createManualDonation(payload)
+    if (res === null) return null
+    if (!res.ok) {
+      return formatApiError(res, getCopy(this.state.locale))
+    }
+
+    this.state.counts = res.data.counts
+    this.state.donationsNotice = { kind: 'success', format: t => t.manualCreatedNotice }
+    if (this.state.activeTab !== 'donations') {
+      this.state.activeTab = 'donations'
+      window.location.hash = '#donations'
+    }
+    void this.loadDonations(true)
+    return null
+  }
+
+  private openManualDialog(): void {
+    this.activeDialog?.close()
+    this.activeDialog?.remove()
+    this.activeDialog = openManualDonationDialog({
+      t: getCopy(this.state.locale),
+      onSubmit: payload => this.handleCreateManualDonation(payload),
+      onClose: () => {
+        this.activeDialog = null
+      },
+    })
+  }
+
   private async handleSaveSettings(patch: AdminConfigPatch): Promise<void> {
     if (this.state.settingsSaving) return
     this.state.settingsSaving = true
@@ -564,6 +597,7 @@ class DonationsAdminApp {
       },
       onRetryLoad: () => void this.loadDonations(true),
       onLoadMore: () => void this.loadDonations(false),
+      onOpenManualDialog: () => this.openManualDialog(),
       onSyncAfdian: () => void this.handleSyncAfdian(),
       onApprove: (record: DonationRecord) => void this.handleModeration(record, { action: 'approve' }),
       onRestore: (record: DonationRecord) => void this.handleModeration(record, { action: 'restore' }),

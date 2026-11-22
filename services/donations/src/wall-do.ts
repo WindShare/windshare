@@ -11,6 +11,8 @@ import type {
   CommitDonationResult,
   CreateAdminSessionInput,
   CreateCryptoIntentInput,
+  CreateManualDonationInput,
+  CreateManualDonationResult,
   CryptoCheckoutIntent,
   DonationConfig,
   DonationProvider,
@@ -65,6 +67,10 @@ export class DonationWall extends DurableObject<DonationsEnv> implements Donatio
 
   commitDonationsBatch(inputs: readonly CommitDonationInput[], nowSec: number): CommitDonationResult[] {
     return this.store.commitDonationsBatch(inputs, nowSec)
+  }
+
+  createManualDonation(input: CreateManualDonationInput, nowSec: number): CreateManualDonationResult {
+    return this.store.createManualDonation(input, nowSec)
   }
 
   consumeAdminLoginRateLimit(clientIp: string, nowSec: number): RateLimitDecision {

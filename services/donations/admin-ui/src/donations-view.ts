@@ -41,6 +41,7 @@ export interface DonationsViewCallbacks {
   readonly onResetFilters: () => void
   readonly onRetryLoad: () => void
   readonly onLoadMore: () => void
+  readonly onOpenManualDialog: () => void
   readonly onSyncAfdian: () => void
   readonly onApprove: (record: DonationRecord) => void
   readonly onRequestHide: (record: DonationRecord) => void
@@ -328,14 +329,24 @@ function renderEmptyList(model: DonationsViewModel, callbacks: DonationsViewCall
     { className: 'empty' },
     h('span', { className: 'empty-icon' }, icon('heart', 22)),
     h('h2', null, t.emptyTitle),
-    afdianSyncConfigured
-      ? h(
+    h(
+      'div',
+      { className: 'empty-actions' },
+      h(
         'button',
-        { className: 'secondary', attrs: { type: 'button' }, on: { click: callbacks.onSyncAfdian } },
-        icon('sync', 16),
-        t.syncAfdian,
-      )
-      : null,
+        { attrs: { type: 'button' }, on: { click: callbacks.onOpenManualDialog } },
+        icon('plus', 16),
+        t.addDonation,
+      ),
+      afdianSyncConfigured
+        ? h(
+          'button',
+          { className: 'secondary', attrs: { type: 'button' }, on: { click: callbacks.onSyncAfdian } },
+          icon('sync', 16),
+          t.syncAfdian,
+        )
+        : null,
+    ),
   )
 }
 

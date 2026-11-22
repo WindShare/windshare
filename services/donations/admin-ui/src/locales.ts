@@ -21,6 +21,7 @@ export interface CopyCatalog {
   readonly navLabel: string
   readonly navDonations: string
   readonly navSettings: string
+  readonly addDonation: string
   readonly syncAfdian: string
   readonly syncing: string
   readonly syncNotConfigured: string
@@ -58,6 +59,20 @@ export interface CopyCatalog {
   readonly hideReasonLabel: string
   readonly hideReasonPlaceholder: string
   readonly hidePresets: readonly string[]
+  readonly manualDialogTitle: string
+  readonly manualAmountLabel: string
+  readonly manualAmountPlaceholder: string
+  readonly manualCurrencyLabel: string
+  readonly manualProviderLabel: string
+  readonly manualNameLabel: string
+  readonly manualNamePlaceholder: string
+  readonly manualMessageLabel: string
+  readonly manualMessagePlaceholder: string
+  readonly manualExternalIdLabel: string
+  readonly manualExternalIdPlaceholder: string
+  readonly manualDonatedAtLabel: string
+  readonly confirmAddDonation: string
+  readonly addingDonation: string
   readonly cancel: string
   readonly confirmHide: string
   readonly hiding: string
@@ -82,9 +97,14 @@ export interface CopyCatalog {
   readonly approvedNotice: string
   readonly hiddenNotice: string
   readonly restoredNotice: string
+  readonly manualCreatedNotice: string
   readonly syncedNotice: (committed: number, deduplicated: number, deferred: number) => string
   readonly errors: {
     readonly requiredPassword: string
+    readonly requiredAmount: string
+    readonly invalidAmount: string
+    readonly invalidManualDonation: string
+    readonly duplicateExternalId: string
     readonly invalidCredentials: string
     readonly rateLimited: (seconds: number | null) => string
     readonly adminNotConfigured: string
@@ -117,6 +137,7 @@ const en: CopyCatalog = {
   navLabel: 'Donations management',
   navDonations: 'Donations',
   navSettings: 'Settings',
+  addDonation: 'Add donation',
   syncAfdian: 'Sync Afdian',
   syncing: 'Syncing…',
   syncNotConfigured: 'AFDIAN_TOKEN is not configured',
@@ -154,6 +175,7 @@ const en: CopyCatalog = {
     afdian: 'Afdian',
     kofi: 'Ko-fi',
     nowpayments: 'Crypto',
+    direct: 'Direct',
   },
   searchPlaceholder: 'Search donor, message, ID…',
   clearSearch: 'Clear search',
@@ -181,6 +203,20 @@ const en: CopyCatalog = {
     'Inappropriate content',
     'Test donation',
   ],
+  manualDialogTitle: 'Record donation',
+  manualAmountLabel: 'Amount',
+  manualAmountPlaceholder: 'e.g. 50 or 88.88',
+  manualCurrencyLabel: 'Currency',
+  manualProviderLabel: 'Channel',
+  manualNameLabel: 'Display name (optional)',
+  manualNamePlaceholder: 'Anonymous if left blank',
+  manualMessageLabel: 'Public note (optional)',
+  manualMessagePlaceholder: 'Shown on the public supporter wall',
+  manualExternalIdLabel: 'Reference / Tx ID (optional)',
+  manualExternalIdPlaceholder: 'Auto-generated if left blank',
+  manualDonatedAtLabel: 'Date & time (optional)',
+  confirmAddDonation: 'Publish to wall',
+  addingDonation: 'Publishing…',
   cancel: 'Cancel',
   confirmHide: 'Hide from wall',
   hiding: 'Hiding…',
@@ -205,12 +241,17 @@ const en: CopyCatalog = {
   approvedNotice: 'Approved and published to the public wall.',
   hiddenNotice: 'Hidden from the public wall.',
   restoredNotice: 'Restored to previous status.',
+  manualCreatedNotice: 'Donation recorded and published to the public wall.',
   syncedNotice: (committed, deduplicated, deferred) => {
     const base = `Synced Afdian: +${committed} new, ${deduplicated} existing`
     return deferred > 0 ? `${base} · ${deferred} remaining — sync again` : `${base}.`
   },
   errors: {
     requiredPassword: 'Enter the admin password.',
+    requiredAmount: 'Enter a positive donation amount.',
+    invalidAmount: 'Enter a positive amount matching this currency precision.',
+    invalidManualDonation: 'Check the entered fields and length limits.',
+    duplicateExternalId: 'A donation with this reference ID already exists for this channel.',
     invalidCredentials: 'Incorrect password.',
     rateLimited: sec => (sec ? `Too many attempts. Try again in ${sec}s.` : 'Too many attempts. Try again later.'),
     adminNotConfigured: 'Admin password is not configured on this worker.',
@@ -243,6 +284,7 @@ const zhCN: CopyCatalog = {
   navLabel: '捐赠管理',
   navDonations: '捐赠记录',
   navSettings: '公开墙设置',
+  addDonation: '录入赞助',
   syncAfdian: '同步爱发电',
   syncing: '正在同步…',
   syncNotConfigured: '未配置 AFDIAN_TOKEN',
@@ -280,6 +322,7 @@ const zhCN: CopyCatalog = {
     afdian: '爱发电',
     kofi: 'Ko-fi',
     nowpayments: '加密货币',
+    direct: '直接赞助',
   },
   searchPlaceholder: '搜索昵称、留言或订单号…',
   clearSearch: '清除搜索',
@@ -307,6 +350,20 @@ const zhCN: CopyCatalog = {
     '不当内容',
     '测试订单',
   ],
+  manualDialogTitle: '录入赞助',
+  manualAmountLabel: '金额',
+  manualAmountPlaceholder: '例如 50 或 88.88',
+  manualCurrencyLabel: '币种',
+  manualProviderLabel: '渠道',
+  manualNameLabel: '展示昵称（可选）',
+  manualNamePlaceholder: '留空记为匿名支持者',
+  manualMessageLabel: '公开留言（可选）',
+  manualMessagePlaceholder: '将公开展示于致谢墙',
+  manualExternalIdLabel: '交易参考号（可选）',
+  manualExternalIdPlaceholder: '留空自动生成',
+  manualDonatedAtLabel: '赞助时间（可选）',
+  confirmAddDonation: '录入并上墙',
+  addingDonation: '正在录入…',
   cancel: '取消',
   confirmHide: '确认隐藏',
   hiding: '正在隐藏…',
@@ -331,12 +388,17 @@ const zhCN: CopyCatalog = {
   approvedNotice: '已批准并展示到公开致谢墙。',
   hiddenNotice: '已从公开致谢墙隐藏。',
   restoredNotice: '已恢复至隐藏前状态。',
+  manualCreatedNotice: '已录入并展示到公开致谢墙。',
   syncedNotice: (committed, deduplicated, deferred) => {
     const base = `爱发电同步完成：新增 ${committed} 条，已存在 ${deduplicated} 条`
     return deferred > 0 ? `${base} · 剩余 ${deferred} 条可再次点击同步` : `${base}。`
   },
   errors: {
     requiredPassword: '请输入管理密码。',
+    requiredAmount: '请输入有效的赞助金额。',
+    invalidAmount: '请输入符合该币种精度的正数金额。',
+    invalidManualDonation: '请检查填写内容与长度限制后重试。',
+    duplicateExternalId: '该渠道下已存在相同参考号的记录。',
     invalidCredentials: '管理密码不正确。',
     rateLimited: sec => (sec ? `尝试过于频繁，请 ${sec} 秒后再试。` : '尝试过于频繁，请稍后再试。'),
     adminNotConfigured: '服务未配置有效的管理密码。',

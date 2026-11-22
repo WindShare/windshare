@@ -577,6 +577,47 @@
   font-variant-numeric: tabular-nums;
 }
 
+.char-counter.is-over {
+  color: var(--error-ink);
+  font-weight: 600;
+}
+
+.manual-dialog {
+  width: min(34rem, calc(100% - 2rem));
+}
+
+.dialog-row {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.dialog-row.amount-currency {
+  grid-template-columns: minmax(0, 1.55fr) minmax(6.5rem, 0.75fr);
+}
+
+.dialog-row.two-col {
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+}
+
+.manual-dialog textarea {
+  min-height: 5.2rem;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.empty-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  margin-top: 1.15rem;
+}
+
+.empty-actions button {
+  margin-top: 0;
+}
+
 /* Settings View */
 .settings-form {
   display: grid;
@@ -768,5 +809,9 @@
   .search-box {
     flex: none;
     width: 100%;
+  }
+  .dialog-row.amount-currency,
+  .dialog-row.two-col {
+    grid-template-columns: 1fr;
   }
 }

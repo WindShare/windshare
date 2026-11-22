@@ -22,6 +22,7 @@ const ICON_PATHS = {
   sliders: 'M4 6h8m4 0h4M4 12h2m4 0h10M4 18h10m4 0h2M12 3v6m-6 0v6m8 0v6',
   lock: 'M6 11h12v9H6zm3 0V8a3 3 0 1 1 6 0v3',
   close: 'M6 6l12 12M18 6 6 18',
+  plus: 'M12 5v14M5 12h14',
   undo: 'M9 14 4 9l5-5M4 9h10.5a5.5 5.5 0 0 1 0 11H11',
   loader: 'M20.5 12A8.5 8.5 0 1 1 12 3.5',
 } as const

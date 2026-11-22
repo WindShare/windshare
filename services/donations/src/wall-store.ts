@@ -8,7 +8,6 @@ import {
   applyVisibilityCommand,
   clampDonatedAt,
   encodeAdminCursor,
-  projectPublicWallEntry,
   type AdminConfigPatch,
   type AdminDonationsCursor,
   type AdminDonationsFilter,
@@ -20,15 +19,26 @@ import {
   type CommitDonationResult,
   type CreateAdminSessionInput,
   type CreateCryptoIntentInput,
+  type CreateManualDonationInput,
+  type CreateManualDonationResult,
   type CryptoCheckoutIntent,
   type DonationConfig,
   type DonationProvider,
   type DonationRecord,
+  type PublicWallEntry,
   type PublicWallResponse,
   type WallVisibility,
 } from './model'
+import { selectTopSupporters } from './ranking'
 import { determineInitialVisibility } from './sanitize'
-import { buildAdminDonationsQuery, reduceVisibilityCounts } from './wall-queries'
+import {
+  ADMIN_DONATION_COLUMNS,
+  PUBLIC_WALL_PUBLISHED_SQL,
+  buildAdminDonationsQuery,
+  reduceVisibilityCounts,
+  rowToDonationRecord,
+  rowToPublicWallEntry,
+} from './wall-queries'
 
 const CLEANUP_BATCH_SIZE = 32
 const RATE_LIMIT_STALE_SECONDS = 3600
@@ -158,21 +168,6 @@ function firstRow(cursor: Iterable<Record<string, unknown>>): Record<string, unk
     return row
   }
   return null
-}
-
-function rowToDonationRecord(row: Record<string, unknown>): DonationRecord {
-  return {
-    id: String(row.id),
-    provider: String(row.provider) as DonationProvider,
-    externalId: String(row.external_id),
-    displayName: row.display_name === null ? null : String(row.display_name),
-    amountMinor: Number(row.amount_minor),
-    currency: String(row.currency),
-    minorDigits: Number(row.minor_digits),
-    message: row.message === null ? null : String(row.message),
-    visibility: JSON.parse(String(row.visibility_json)) as WallVisibility,
-    donatedAt: Number(row.donated_at),
-  }
 }
 
 function rowToCryptoIntent(row: Record<string, unknown>): CryptoCheckoutIntent {
@@ -327,21 +322,14 @@ export class WallStore {
       return this.cachedWall
     }
     const { wallVersion } = this.readConfigRow()
-    const entries = []
-    for (const row of this.sql.exec(
-      `SELECT id, provider, external_id, display_name, amount_minor, currency,
-              minor_digits, message, visibility_kind, visibility_json, donated_at
-       FROM donations
-       WHERE visibility_kind = 'published'
-       ORDER BY donated_at DESC, id DESC
-       LIMIT ?`,
-      PUBLIC_WALL_LIMIT,
-    )) {
-      entries.push(projectPublicWallEntry(rowToDonationRecord(row)))
+    const allPublished: PublicWallEntry[] = []
+    for (const row of this.sql.exec(PUBLIC_WALL_PUBLISHED_SQL)) {
+      allPublished.push(rowToPublicWallEntry(row))
     }
     const payload: PublicWallResponse = {
       version: wallVersion,
-      entries,
+      entries: allPublished.slice(0, PUBLIC_WALL_LIMIT),
+      topSupporters: selectTopSupporters(allPublished),
     }
     this.cachedWall = {
       version: wallVersion,
@@ -496,14 +484,34 @@ export class WallStore {
     return existing
   }
 
+  private insertDonationRecord(record: DonationRecord, nowSec: number): void {
+    this.sql.exec(
+      `INSERT INTO donations (
+        id, provider, external_id, display_name, amount_minor, currency,
+        minor_digits, message, visibility_kind, visibility_json, donated_at, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      record.id,
+      record.provider,
+      record.externalId,
+      record.displayName,
+      record.amountMinor,
+      record.currency,
+      record.minorDigits,
+      record.message,
+      record.visibility.kind,
+      JSON.stringify(record.visibility),
+      record.donatedAt,
+      nowSec,
+    )
+  }
+
   private insertDonationInTx(
     input: CommitDonationInput,
     config: DonationConfig,
     nowSec: number,
   ): CommitDonationResult {
     const existing = firstRow(this.sql.exec(
-      `SELECT id, provider, external_id, display_name, amount_minor, currency,
-              minor_digits, message, visibility_kind, visibility_json, donated_at
+      `SELECT ${ADMIN_DONATION_COLUMNS}
        FROM donations
        WHERE provider = ? AND external_id = ?
        LIMIT 1`,
@@ -539,25 +547,39 @@ export class WallStore {
       donatedAt,
     }
 
-    this.sql.exec(
-      `INSERT INTO donations (
-        id, provider, external_id, display_name, amount_minor, currency,
-        minor_digits, message, visibility_kind, visibility_json, donated_at, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      record.id,
-      record.provider,
-      record.externalId,
-      record.displayName,
-      record.amountMinor,
-      record.currency,
-      record.minorDigits,
-      record.message,
-      record.visibility.kind,
-      JSON.stringify(record.visibility),
-      record.donatedAt,
-      nowSec,
-    )
+    this.insertDonationRecord(record, nowSec)
     return { record, deduplicated: false }
+  }
+
+  createManualDonation(
+    input: CreateManualDonationInput,
+    nowSec: number,
+  ): CreateManualDonationResult {
+    return this.runTx(() => {
+      const externalId = input.externalId ?? `manual_${generateUrlSafeId(12)}`
+      if (this.hasDonation(input.provider, externalId)) {
+        return { ok: false, code: 'duplicate_external_id' }
+      }
+      const record: DonationRecord = {
+        id: generateUrlSafeId(12),
+        provider: input.provider,
+        externalId,
+        displayName: input.displayName,
+        amountMinor: input.amountMinor,
+        currency: input.currency,
+        minorDigits: input.minorDigits,
+        message: input.message,
+        visibility: { kind: 'published' },
+        donatedAt: clampDonatedAt(input.donatedAt, nowSec),
+      }
+      this.insertDonationRecord(record, nowSec)
+      this.bumpWallVersion()
+      return {
+        ok: true,
+        record,
+        counts: this.getVisibilityCounts(),
+      }
+    })
   }
 
   commitDonation(input: CommitDonationInput, nowSec: number): CommitDonationResult {

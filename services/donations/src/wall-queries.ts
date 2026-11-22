@@ -3,7 +3,11 @@ import {
   type AdminDonationsCursor,
   type AdminDonationsFilter,
   type AdminVisibilityCounts,
+  type DonationProvider,
+  type DonationRecord,
+  type PublicWallEntry,
   type VisibilityKind,
+  type WallVisibility,
 } from './model'
 
 export interface BuiltSqlQuery {
@@ -11,8 +15,42 @@ export interface BuiltSqlQuery {
   readonly bindings: readonly unknown[]
 }
 
-const ADMIN_DONATION_COLUMNS = `id, provider, external_id, display_name, amount_minor, currency,
+export const ADMIN_DONATION_COLUMNS = `id, provider, external_id, display_name, amount_minor, currency,
   minor_digits, message, visibility_kind, visibility_json, donated_at`
+
+export const PUBLIC_WALL_PUBLISHED_SQL = `SELECT id, provider, display_name, amount_minor, currency,
+       minor_digits, message, donated_at
+FROM donations
+WHERE visibility_kind = 'published'
+ORDER BY donated_at DESC, id DESC`
+
+export function rowToDonationRecord(row: Record<string, unknown>): DonationRecord {
+  return {
+    id: String(row.id),
+    provider: String(row.provider) as DonationProvider,
+    externalId: String(row.external_id),
+    displayName: row.display_name === null ? null : String(row.display_name),
+    amountMinor: Number(row.amount_minor),
+    currency: String(row.currency),
+    minorDigits: Number(row.minor_digits),
+    message: row.message === null ? null : String(row.message),
+    visibility: JSON.parse(String(row.visibility_json)) as WallVisibility,
+    donatedAt: Number(row.donated_at),
+  }
+}
+
+export function rowToPublicWallEntry(row: Record<string, unknown>): PublicWallEntry {
+  return {
+    id: String(row.id),
+    provider: String(row.provider) as DonationProvider,
+    displayName: row.display_name === null ? null : String(row.display_name),
+    amountMinor: Number(row.amount_minor),
+    currency: String(row.currency),
+    minorDigits: Number(row.minor_digits),
+    message: row.message === null ? null : String(row.message),
+    donatedAt: Number(row.donated_at),
+  }
+}
 
 function escapeLikePattern(raw: string): string {
   return raw.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')

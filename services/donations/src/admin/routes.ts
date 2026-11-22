@@ -52,6 +52,7 @@ import {
   toAfdianCommitInput,
   type RuntimeDeps,
 } from '../webhooks/handlers'
+import { handleCreateManualDonation } from './manual'
 
 const VISIBILITY_PATH_PREFIX = '/v1/admin/donations/'
 const VISIBILITY_PATH_SUFFIX = '/visibility'
@@ -547,6 +548,30 @@ async function handleAdminConfigPatch(request: Request, env: DonationsEnv): Prom
   return adminJsonResponse({ config }, 200)
 }
 
+async function handleManualDonationPost(
+  request: Request,
+  env: DonationsEnv,
+  deps: RuntimeDeps,
+): Promise<Response> {
+  const parsedBody = await readAdminJsonBody(request)
+  if (!parsedBody.ok) return parsedBody.response
+  return handleCreateManualDonation(parsedBody.data, env, deps)
+}
+
+async function handleVisibilityPostRoute(
+  request: Request,
+  env: DonationsEnv,
+  pathname: string,
+  deps: RuntimeDeps,
+): Promise<Response | null> {
+  const visibilityMatch = extractVisibilityDonationId(pathname)
+  if (!visibilityMatch.matched) return null
+  if (visibilityMatch.donationId === null) {
+    return adminJsonResponse({ error: 'invalid_donation_id' }, 400)
+  }
+  return handleVisibilityMutation(request, env, visibilityMatch.donationId, deps)
+}
+
 async function handleAuthenticatedAdminMutation(
   request: Request,
   env: DonationsEnv,
@@ -560,32 +585,25 @@ async function handleAuthenticatedAdminMutation(
   const { method } = request
   const { pathname } = url
 
-  if (method === 'POST' && pathname === '/v1/admin/logout') {
+  if (method === 'PATCH' && pathname === '/v1/admin/donations/config') {
+    return handleAdminConfigPatch(request, env)
+  }
+  if (method !== 'POST') {
+    return null
+  }
+  if (pathname === '/v1/admin/logout') {
     await getDonationWallStub(env).revokeAdminSession(session.sessionHash)
     return adminJsonResponse({ ok: true }, 200, {
       'Set-Cookie': buildSessionCookie('', 0),
     })
   }
-
-  if (method === 'POST' && pathname === '/v1/admin/donations/sync-afdian') {
+  if (pathname === '/v1/admin/donations') {
+    return handleManualDonationPost(request, env, deps)
+  }
+  if (pathname === '/v1/admin/donations/sync-afdian') {
     return handleSyncAfdian(env, deps)
   }
-
-  if (method === 'POST') {
-    const visibilityMatch = extractVisibilityDonationId(pathname)
-    if (visibilityMatch.matched) {
-      if (visibilityMatch.donationId === null) {
-        return adminJsonResponse({ error: 'invalid_donation_id' }, 400)
-      }
-      return handleVisibilityMutation(request, env, visibilityMatch.donationId, deps)
-    }
-  }
-
-  if (method === 'PATCH' && pathname === '/v1/admin/donations/config') {
-    return handleAdminConfigPatch(request, env)
-  }
-
-  return null
+  return handleVisibilityPostRoute(request, env, pathname, deps)
 }
 
 function summarizeStorageError(error: unknown): {

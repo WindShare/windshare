@@ -68,7 +68,7 @@ export default defineConfig([
   {
     // Pure domain, sanitization, verification, and env helpers must stay testable
     // in plain Node without Durable Object or edge entrypoint runtime coupling.
-    files: ['src/env.ts', 'src/model.ts', 'src/sanitize.ts', 'src/verify.ts'],
+    files: ['src/env.ts', 'src/model.ts', 'src/ranking.ts', 'src/sanitize.ts', 'src/verify.ts'],
     rules: {
       'no-restricted-imports': ['error', {
         patterns: [{

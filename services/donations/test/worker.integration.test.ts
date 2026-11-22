@@ -633,3 +633,135 @@ describe('windshare-donations Worker + SQLite DO HTTP integration', () => {
     expect(afterLogout.status).toBe(401)
   })
 })
+
+describe('admin manual donations and all-time Top 3 integration', () => {
+  it('supports authenticated manual donations, duplicate rejection, and live Top 3 updates', async () => {
+    // Unauthenticated POST is rejected.
+    const unauthRes = await mf.dispatchFetch(`${DONATE_ORIGIN}/v1/admin/donations`, {
+      method: 'POST',
+      headers: { Origin: DONATE_ORIGIN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amount: '50', currency: 'USD' }),
+    })
+    expect(unauthRes.status).toBe(401)
+
+    const { cookiePair, data: loginData } = await loginAdmin('198.51.100.19')
+
+    // Missing CSRF token rejected with 403.
+    const noCsrfRes = await mf.dispatchFetch(`${DONATE_ORIGIN}/v1/admin/donations`, {
+      method: 'POST',
+      headers: { Origin: DONATE_ORIGIN, Cookie: cookiePair, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amount: '50', currency: 'USD' }),
+    })
+    expect(noCsrfRes.status).toBe(403)
+
+    const authedHeaders = {
+      Origin: DONATE_ORIGIN,
+      Cookie: cookiePair,
+      'X-CSRF-Token': loginData.csrfToken,
+      'Content-Type': 'application/json',
+    }
+
+    // Invalid amount rejected with 400.
+    const badAmount = await mf.dispatchFetch(`${DONATE_ORIGIN}/v1/admin/donations`, {
+      method: 'POST',
+      headers: authedHeaders,
+      body: JSON.stringify({ amount: '-5', currency: 'USD' }),
+    })
+    expect(badAmount.status).toBe(400)
+    expect(await badAmount.json()).toEqual({ error: 'invalid_amount' })
+
+    const wallBefore = await mf.dispatchFetch(`${DONATE_ORIGIN}/v1/donations/wall`)
+    const etagBefore = wallBefore.headers.get('etag')
+
+    // Create 4 manual/mixed-currency donations to verify Top 3 selection and ranking order.
+    const createManual = (payload: Record<string, unknown>) => mf.dispatchFetch(
+      `${DONATE_ORIGIN}/v1/admin/donations`,
+      { method: 'POST', headers: authedHeaders, body: JSON.stringify(payload) },
+    )
+
+    const firstRes = await createManual({
+      amount: '888',
+      currency: 'CNY',
+      provider: 'afdian',
+      displayName: '林深见鹿',
+      message: '支持 WindShare',
+      externalId: 'MANUAL-CNY-888',
+      donatedAt: 1_760_000_100,
+    })
+    expect(firstRes.status).toBe(201)
+    const firstCreated = await firstRes.json() as { record: DonationRecord }
+    expect(firstCreated.record.visibility).toEqual({ kind: 'published' })
+
+    // Duplicate externalId on same provider returns 409.
+    const dupRes = await createManual({
+      amount: '888',
+      currency: 'CNY',
+      provider: 'afdian',
+      externalId: 'MANUAL-CNY-888',
+    })
+    expect(dupRes.status).toBe(409)
+    expect(await dupRes.json()).toEqual({ error: 'duplicate_external_id' })
+
+    const secondRes = await createManual({
+      amount: '200',
+      currency: 'USD',
+      displayName: 'Direct Patron',
+      message: 'USDT direct transfer',
+      donatedAt: 1_760_000_200,
+    })
+    expect(secondRes.status).toBe(201)
+    const secondCreated = await secondRes.json() as { record: DonationRecord }
+    expect(secondCreated.record.provider).toBe('direct')
+    expect(secondCreated.record.externalId.startsWith('manual_')).toBe(true)
+
+    expect((await createManual({
+      amount: '50',
+      currency: 'EUR',
+      displayName: 'Euro Friend',
+      donatedAt: 1_760_000_300,
+    })).status).toBe(201)
+
+    expect((await createManual({
+      amount: '15',
+      currency: 'USD',
+      displayName: 'Small Supporter',
+      donatedAt: 1_760_000_400,
+    })).status).toBe(201)
+
+    const wallRes = await mf.dispatchFetch(`${DONATE_ORIGIN}/v1/donations/wall`)
+    expect(wallRes.status).toBe(200)
+    expect(wallRes.headers.get('etag')).not.toBe(etagBefore)
+    const wall = await wallRes.json() as PublicWallResponse
+    expect(wall.entries).toHaveLength(4)
+    expect(wall.topSupporters.map(e => e.displayName)).toEqual([
+      'Direct Patron',
+      '林深见鹿',
+      'Euro Friend',
+    ])
+
+    // Hiding #1 promotes #4 into Top 3; restoring puts #1 back on top.
+    expect((await mf.dispatchFetch(
+      `${DONATE_ORIGIN}/v1/admin/donations/${secondCreated.record.id}/visibility`,
+      { method: 'POST', headers: authedHeaders, body: JSON.stringify({ action: 'hide', reason: 'audit' }) },
+    )).status).toBe(200)
+
+    const wallAfterHide = await (await mf.dispatchFetch(`${DONATE_ORIGIN}/v1/donations/wall`)).json() as PublicWallResponse
+    expect(wallAfterHide.topSupporters.map(e => e.displayName)).toEqual([
+      '林深见鹿',
+      'Euro Friend',
+      'Small Supporter',
+    ])
+
+    expect((await mf.dispatchFetch(
+      `${DONATE_ORIGIN}/v1/admin/donations/${secondCreated.record.id}/visibility`,
+      { method: 'POST', headers: authedHeaders, body: JSON.stringify({ action: 'restore' }) },
+    )).status).toBe(200)
+
+    const wallAfterRestore = await (await mf.dispatchFetch(`${DONATE_ORIGIN}/v1/donations/wall`)).json() as PublicWallResponse
+    expect(wallAfterRestore.topSupporters.map(e => e.displayName)).toEqual([
+      'Direct Patron',
+      '林深见鹿',
+      'Euro Friend',
+    ])
+  })
+})

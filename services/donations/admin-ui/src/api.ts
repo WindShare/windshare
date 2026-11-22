@@ -5,6 +5,7 @@ import type {
   AdminVisibilityCommand,
   AdminVisibilityCounts,
   DonationConfig,
+  DonationProvider,
   DonationRecord,
 } from '../../src/model'
 import type { CopyCatalog } from './locales'
@@ -44,6 +45,16 @@ export interface ModerateResponse {
   readonly counts: AdminVisibilityCounts
 }
 
+export interface ManualDonationPayload {
+  readonly provider: DonationProvider
+  readonly amount: string
+  readonly currency: string
+  readonly displayName: string | null
+  readonly message: string | null
+  readonly externalId: string | null
+  readonly donatedAt: number | null
+}
+
 export interface SyncAfdianResponse {
   readonly fetched: number
   readonly paid: number
@@ -73,6 +84,12 @@ export function formatApiError(failure: ApiFailure, t: CopyCatalog): string {
       return t.errors.afdianQueryFailed
     case 'afdian_rate_limited':
       return t.errors.afdianRateLimited
+    case 'invalid_amount':
+      return t.errors.invalidAmount
+    case 'invalid_manual_donation':
+      return t.errors.invalidManualDonation
+    case 'duplicate_external_id':
+      return t.errors.duplicateExternalId
     case 'service_unavailable':
       return t.errors.serviceUnavailable
     default:
@@ -184,6 +201,14 @@ export class AdminApiClient {
       `/v1/admin/donations/${encodeURIComponent(id)}/visibility`,
       { method: 'POST', body: command, handleUnauthorized: true },
     )
+  }
+
+  createManualDonation(payload: ManualDonationPayload): Promise<ApiResult<ModerateResponse> | null> {
+    return this.request<ModerateResponse>('/v1/admin/donations', {
+      method: 'POST',
+      body: payload,
+      handleUnauthorized: true,
+    })
   }
 
   syncAfdian(): Promise<ApiResult<SyncAfdianResponse> | null> {

@@ -166,7 +166,15 @@ describe('donate public wall response validation', () => {
     donatedAt: 1_700_000_000,
   }
 
-  it('accepts valid wall payloads including forward-compatible unknown provider names', () => {
+  it('accepts valid wall payloads including topSupporters and forward-compatible unknown provider names', () => {
+    const directEntry = {
+      ...validEntry,
+      id: 'don_direct',
+      provider: 'direct',
+      amountMinor: 10_000,
+      currency: 'USD',
+      message: 'Direct transfer',
+    }
     const wall = {
       version: 3,
       entries: [
@@ -179,12 +187,20 @@ describe('donate public wall response validation', () => {
           message: null,
         },
       ],
+      topSupporters: [directEntry, validEntry],
     }
 
     expect(parsePublicWallResponse(wall)).toEqual(wall)
+
+    // Omitting topSupporters falls back cleanly to an empty list during rolling deploys.
+    expect(parsePublicWallResponse({ version: 1, entries: [validEntry] })).toEqual({
+      version: 1,
+      entries: [validEntry],
+      topSupporters: [],
+    })
   })
 
-  it('rejects malformed envelopes, invalid entry fields, and out-of-range Date timestamps', () => {
+  it('rejects malformed envelopes, invalid entry fields, malformed topSupporters, and out-of-range Date timestamps', () => {
     const outOfDateRangeSeconds = 10_000_000_000_000
     for (const malformed of [
       null,
@@ -194,6 +210,9 @@ describe('donate public wall response validation', () => {
       { version: 1 },
       { version: '1', entries: [] },
       { version: Number.NaN, entries: [] },
+      { version: 1, entries: [], topSupporters: null },
+      { version: 1, entries: [], topSupporters: 'not-an-array' },
+      { version: 1, entries: [], topSupporters: [{ ...validEntry, amountMinor: -1 }] },
       { version: 1, entries: [null] },
       { version: 1, entries: [{ ...validEntry, id: '' }] },
       { version: 1, entries: [{ ...validEntry, provider: '   ' }] },
@@ -227,7 +246,7 @@ describe('donate public wall response validation', () => {
     )
     await expect(fetchDonationWall()).rejects.toBeInstanceOf(DonateApiError)
 
-    const validWall = { version: 2, entries: [validEntry] }
+    const validWall = { version: 2, entries: [validEntry], topSupporters: [validEntry] }
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(Response.json(validWall, { status: 200 }))
     await expect(fetchDonationWall()).resolves.toEqual(validWall)
   })

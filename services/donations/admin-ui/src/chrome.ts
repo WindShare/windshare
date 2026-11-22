@@ -150,6 +150,7 @@ export interface WorkspaceBarOptions {
   readonly syncing: boolean
   readonly refreshing: boolean
   readonly t: CopyCatalog
+  readonly onOpenManualDialog: () => void
   readonly onSyncAfdian: () => void
   readonly onRefresh: () => void
 }
@@ -163,6 +164,7 @@ export function renderWorkspaceBar(options: WorkspaceBarOptions): HTMLElement {
     syncing,
     refreshing,
     t,
+    onOpenManualDialog,
     onSyncAfdian,
     onRefresh,
   } = options
@@ -191,6 +193,20 @@ export function renderWorkspaceBar(options: WorkspaceBarOptions): HTMLElement {
     icon('sliders', 16),
     t.navSettings,
     settingsAttention ? h('span', { className: 'nav-dot', attrs: { 'aria-hidden': 'true' } }) : null,
+  )
+
+  const addBtn = h(
+    'button',
+    {
+      title: t.addDonation,
+      attrs: {
+        type: 'button',
+        'aria-label': t.addDonation,
+      },
+      on: { click: onOpenManualDialog },
+    },
+    icon('plus', 16),
+    h('span', { className: 'action-text' }, t.addDonation),
   )
 
   const syncTitle = afdianSyncConfigured ? t.syncAfdian : t.syncNotConfigured
@@ -231,7 +247,7 @@ export function renderWorkspaceBar(options: WorkspaceBarOptions): HTMLElement {
     'div',
     { className: 'workspace-bar' },
     h('nav', { className: 'workspace-nav', attrs: { 'aria-label': t.navLabel } }, donationsLink, settingsLink),
-    h('div', { className: 'workspace-actions' }, syncBtn, refreshBtn),
+    h('div', { className: 'workspace-actions' }, addBtn, syncBtn, refreshBtn),
   )
 }
 

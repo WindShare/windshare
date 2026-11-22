@@ -3,6 +3,7 @@ export const MIN_PUBLIC_USD_MINOR = 500
 export const MIN_CRYPTO_USD_MINOR = 500
 export const MAX_CRYPTO_USD_MINOR = 10_000_000
 export const PUBLIC_WALL_LIMIT = 50
+export const TOP_SUPPORTERS_LIMIT = 3
 // Align with NOWPayments' 7-day payment tracking window so slow confirmations and IPN retries retain donor notes.
 export const CRYPTO_INTENT_TTL_SECONDS = 7 * 24 * 60 * 60
 export const ADMIN_SESSION_TTL_SECONDS = 12 * 60 * 60
@@ -10,9 +11,10 @@ export const MAX_DISPLAY_NAME_CODEPOINTS = 32
 export const MAX_MESSAGE_CODEPOINTS = 140
 export const MAX_HIDE_REASON_CODEPOINTS = 140
 export const MAX_ADMIN_SEARCH_CODEPOINTS = 64
+export const MAX_MANUAL_EXTERNAL_ID_CODEPOINTS = 96
 export const MAX_FUTURE_SKEW_SECONDS = 60
 
-export const DONATION_PROVIDERS = ['afdian', 'kofi', 'nowpayments'] as const
+export const DONATION_PROVIDERS = ['afdian', 'kofi', 'nowpayments', 'direct'] as const
 export type DonationProvider = (typeof DONATION_PROVIDERS)[number]
 
 export const VISIBILITY_KINDS = [
@@ -90,6 +92,7 @@ export interface PublicWallEntry {
 export interface PublicWallResponse {
   readonly version: number
   readonly entries: readonly PublicWallEntry[]
+  readonly topSupporters: readonly PublicWallEntry[]
 }
 
 export type PublicWallReadResult =
@@ -150,6 +153,25 @@ export interface CommitDonationResult {
   readonly record: DonationRecord
   readonly deduplicated: boolean
 }
+
+export interface CreateManualDonationInput {
+  readonly provider: DonationProvider
+  readonly externalId: string | null
+  readonly displayName: string | null
+  readonly amountMinor: number
+  readonly currency: string
+  readonly minorDigits: number
+  readonly message: string | null
+  readonly donatedAt: number | null
+}
+
+export type CreateManualDonationResult =
+  | {
+    readonly ok: true
+    readonly record: DonationRecord
+    readonly counts: AdminVisibilityCounts
+  }
+  | { readonly ok: false; readonly code: 'duplicate_external_id' }
 
 export interface AdminVisibilityCounts {
   readonly total: number

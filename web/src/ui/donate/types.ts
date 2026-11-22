@@ -1,5 +1,6 @@
-export type KnownDonationProvider = 'afdian' | 'kofi' | 'nowpayments'
+export type KnownDonationProvider = 'afdian' | 'kofi' | 'nowpayments' | 'direct'
 export type DonationProvider = KnownDonationProvider | (string & {})
+export type TopSupporterRank = 1 | 2 | 3
 
 export interface PublicWallEntry {
   readonly id: string
@@ -15,6 +16,7 @@ export interface PublicWallEntry {
 export interface PublicWallResponse {
   readonly version: number
   readonly entries: readonly PublicWallEntry[]
+  readonly topSupporters: readonly PublicWallEntry[]
 }
 
 export interface CryptoIntentRequest {

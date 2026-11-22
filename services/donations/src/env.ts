@@ -9,6 +9,8 @@ import type {
   CommitDonationResult,
   CreateAdminSessionInput,
   CreateCryptoIntentInput,
+  CreateManualDonationInput,
+  CreateManualDonationResult,
   CryptoCheckoutIntent,
   DonationConfig,
   DonationProvider,
@@ -28,6 +30,7 @@ export interface DonationWallRpc extends Rpc.DurableObjectBranded {
   findExistingExternalIds(provider: DonationProvider, externalIds: readonly string[]): string[]
   commitDonation(input: CommitDonationInput, nowSec: number): CommitDonationResult
   commitDonationsBatch(inputs: readonly CommitDonationInput[], nowSec: number): CommitDonationResult[]
+  createManualDonation(input: CreateManualDonationInput, nowSec: number): CreateManualDonationResult
   consumeAdminLoginRateLimit(clientIp: string, nowSec: number): RateLimitDecision
   createAdminSession(input: CreateAdminSessionInput): AdminSessionRecord
   verifyAdminSession(sessionHash: string, nowSec: number): AdminSessionRecord | null

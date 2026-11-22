@@ -64,8 +64,13 @@ export const zh: typeof en = {
   wallDegradedTitle: '致谢墙暂无法加载',
   wallDegradedNote: '不影响正常通过赞助渠道完成赞助。',
   wallRetry: '重试',
+  topRegion: '特别感谢',
+  topHeading: '特别感谢',
+  topBadge: 'TOP 3',
+  topRankLabel: (rank: number) => `第 ${rank} 名`,
   anonymous: '匿名支持者',
   providerAfdian: '爱发电',
   providerKofi: 'Ko-fi',
   providerNowpayments: 'Crypto',
+  providerDirect: '直接赞助',
 }

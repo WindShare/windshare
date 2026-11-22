@@ -8,6 +8,7 @@ import type {
   CommitDonationInput,
   CreateAdminSessionInput,
   CreateCryptoIntentInput,
+  CreateManualDonationInput,
   DonationProvider,
 } from '../src/model'
 import { WallStore, matchesIfNoneMatch, type SqlStoragePort } from '../src/wall-store'
@@ -100,6 +101,10 @@ export function createWallNamespaceFromStore(
     commitDonationsBatch: async (inputs: readonly CommitDonationInput[], nowSec: number) => {
       track()
       return store.commitDonationsBatch(inputs, nowSec)
+    },
+    createManualDonation: async (input: CreateManualDonationInput, nowSec: number) => {
+      track()
+      return store.createManualDonation(input, nowSec)
     },
     consumeAdminLoginRateLimit: async (clientIp: string, nowSec: number) => {
       track()

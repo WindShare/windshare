@@ -90,19 +90,37 @@ function parsePublicWallEntry(raw: unknown): PublicWallEntry | null {
   }
 }
 
-export function parsePublicWallResponse(raw: unknown): PublicWallResponse | null {
-  if (!isRecord(raw)) return null
-  const { version, entries } = raw
-  if (typeof version !== 'number' || !Number.isFinite(version)) return null
-  if (!Array.isArray(entries)) return null
-
-  const parsedEntries: PublicWallEntry[] = []
-  for (const item of entries) {
+function parsePublicWallEntryList(raw: unknown): PublicWallEntry[] | null {
+  if (!Array.isArray(raw)) return null
+  const parsed: PublicWallEntry[] = []
+  for (const item of raw) {
     const entry = parsePublicWallEntry(item)
     if (entry === null) return null
-    parsedEntries.push(entry)
+    parsed.push(entry)
   }
-  return { version, entries: parsedEntries }
+  return parsed
+}
+
+export function parsePublicWallResponse(raw: unknown): PublicWallResponse | null {
+  if (!isRecord(raw)) return null
+  const { version, entries, topSupporters } = raw
+  if (typeof version !== 'number' || !Number.isFinite(version)) return null
+
+  const parsedEntries = parsePublicWallEntryList(entries)
+  if (parsedEntries === null) return null
+
+  // Treat an absent topSupporters field as empty during rolling deploys, while still
+  // rejecting malformed values whenever the field is present.
+  const parsedTopSupporters = topSupporters === undefined
+    ? []
+    : parsePublicWallEntryList(topSupporters)
+  if (parsedTopSupporters === null) return null
+
+  return {
+    version,
+    entries: parsedEntries,
+    topSupporters: parsedTopSupporters,
+  }
 }
 
 export function parseCryptoIntentResponse(raw: unknown): CryptoIntentResponse | null {
