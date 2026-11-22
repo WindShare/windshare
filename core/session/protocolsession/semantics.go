@@ -6,9 +6,11 @@ package protocolsession
 import (
 	"bytes"
 	"crypto/subtle"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math"
+	"strconv"
 	"unicode/utf8"
 
 	"golang.org/x/text/unicode/norm"
@@ -16,14 +18,19 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 )
 
-const IdentityBytes = catalog.IdentityBytes
+const (
+	IdentityBytes    = catalog.IdentityBytes
+	OperationIDBytes = 8
+)
 
 var ErrIdentityLength = errors.New("protocol session identity must be exactly 16 bytes")
 
 type (
 	ProtocolSessionID  [IdentityBytes]byte
 	ReceiverInstanceID [IdentityBytes]byte
-	OperationID        [IdentityBytes]byte
+	// OperationID is a session-scoped monotonically increasing 64-bit counter
+	// issued by the receiver starting at 1. Zero denotes absence.
+	OperationID uint64
 )
 
 func identityFromBytes[T ~[IdentityBytes]byte](raw []byte) (T, error) {
@@ -53,23 +60,42 @@ func ReceiverInstanceIDFromBytes(raw []byte) (ReceiverInstanceID, error) {
 	return identityFromBytes[ReceiverInstanceID](raw)
 }
 
-func OperationIDFromBytes(raw []byte) (OperationID, error) {
-	return identityFromBytes[OperationID](raw)
+func OperationIDFromUint64(raw uint64) (OperationID, error) {
+	if raw == 0 {
+		return 0, ErrInvalidOperationID
+	}
+	return OperationID(raw), nil
+}
+
+func OperationIDFromBigEndian(raw []byte) (OperationID, error) {
+	if len(raw) != OperationIDBytes {
+		return 0, fmt.Errorf("%w: got %d bytes", ErrIdentityLength, len(raw))
+	}
+	return OperationIDFromUint64(binary.BigEndian.Uint64(raw))
 }
 
 func (id ProtocolSessionID) Bytes() []byte  { return identityBytes(id) }
 func (id ReceiverInstanceID) Bytes() []byte { return identityBytes(id) }
-func (id OperationID) Bytes() []byte        { return identityBytes(id) }
 
 func (id ProtocolSessionID) IsZero() bool  { return id == ProtocolSessionID{} }
 func (id ReceiverInstanceID) IsZero() bool { return id == ReceiverInstanceID{} }
-func (id OperationID) IsZero() bool        { return id == OperationID{} }
+func (id OperationID) IsZero() bool        { return id == 0 }
 
 func (id ProtocolSessionID) Equal(other ProtocolSessionID) bool { return identityEqual(id, other) }
 func (id ReceiverInstanceID) Equal(other ReceiverInstanceID) bool {
 	return identityEqual(id, other)
 }
-func (id OperationID) Equal(other OperationID) bool { return identityEqual(id, other) }
+func (id OperationID) Equal(other OperationID) bool { return id == other }
+func (id OperationID) Uint64() uint64               { return uint64(id) }
+func (id OperationID) String() string               { return strconv.FormatUint(uint64(id), 10) }
+
+func (id OperationID) PutBigEndian(dst []byte) {
+	binary.BigEndian.PutUint64(dst, uint64(id))
+}
+
+func (id OperationID) AppendBigEndian(dst []byte) []byte {
+	return binary.BigEndian.AppendUint64(dst, uint64(id))
+}
 
 type SenderControlSemanticValidator interface {
 	ValidateSenderControl(MessageKind, OperationID, []byte) error

@@ -1,7 +1,5 @@
 import { captureFailureEvidence, evidenceFor, type FailureEvidence } from '../diagnostics/failure/evidence'
-import { encodeBase64Url } from '../crypto/bytes'
 import type { FrameChannel } from '../contracts/channel'
-import { equalBytes } from '../crypto/bytes'
 import { MESSAGE_KIND, type SessionMessage } from './message'
 import { SessionRuntimeError } from './runtime-types'
 
@@ -98,12 +96,12 @@ export class SessionWriter {
     }
   }
 
-  cancelPendingMessages(operationId: Uint8Array, reason: unknown): void {
+  cancelPendingMessages(operationId: bigint, reason: unknown): void {
     const items = [...this.#control, ...this.#data]
     if (this.#active !== undefined) items.unshift(this.#active)
     for (const item of items) {
       if (item.message.kind !== MESSAGE_KIND.cancel &&
-          item.message.operationId !== undefined && equalBytes(item.message.operationId, operationId)) {
+          item.message.operationId === operationId) {
         this.#cancel(item, item.priority === 'data' ? this.#data : this.#control, reason)
       }
     }
@@ -201,7 +199,7 @@ export class SessionWriter {
     captureFailureEvidence(reason, { operation: 'session.send', context: {
       phase: this.#active?.phase ?? 'unknown',
       requestKind: this.#active?.message.kind ?? null,
-      operationId: this.#active?.message.operationId === undefined ? null : encodeBase64Url(this.#active.message.operationId),
+      operationId: this.#active?.message.operationId === undefined ? null : this.#active.message.operationId.toString(10),
     } })
     this.fail(reason)
     this.#onFailure(reason)

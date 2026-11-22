@@ -32,7 +32,7 @@ export interface OperationCancellation {
 }
 
 export interface SessionOperation {
-  readonly id: Uint8Array<ArrayBuffer>
+  readonly id: bigint
   readonly requestKind: MessageKind
   next(signal?: AbortSignal): Promise<SessionMessage>
   cancel(cause: unknown, protocolReason?: OperationCancelReason): void

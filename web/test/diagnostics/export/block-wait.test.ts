@@ -11,7 +11,7 @@ describe('block wait diagnostics', () => {
       blockWait: { phase, waitedMilliseconds: 35_000.9, queueProgress: 12 },
       correlation: {
         protocolSessionId: createProtocolSessionIdentity(new Uint8Array(16).fill(1)),
-        protocolOperationId: createProtocolOperationIdentity(new Uint8Array(16).fill(2)),
+        protocolOperationId: createProtocolOperationIdentity(2n),
         lane: { id: 1, epoch: 0 },
       },
     })

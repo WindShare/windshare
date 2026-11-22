@@ -497,9 +497,7 @@ class RevisionCapacityWaitOperation {
       protocolSessionId: encodeBase64Url(
         capacity.protocolFailure.correlation.protocolSessionId.copyBytes(),
       ),
-      protocolOperationId: encodeBase64Url(
-        capacity.protocolFailure.correlation.protocolOperationId.copyBytes(),
-      ),
+      protocolOperationId: capacity.protocolFailure.correlation.protocolOperationId.toDecimalString(),
       attempt: this.#lastAttempt,
       senderHintMilliseconds: capacity.retryAfterMilliseconds,
       jitterMilliseconds: snapshot.jitterMilliseconds ?? 0,

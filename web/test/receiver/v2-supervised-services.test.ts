@@ -134,7 +134,7 @@ function capacityBusyError(retryAfterMilliseconds = 400): RevisionCapacityBusyEr
   const protocolFailure = createReceivedProtocolError({
     requestKind: 'open_revisions', correlation: Object.freeze({
       protocolSessionId: createProtocolSessionIdentity(identity(30)),
-      protocolOperationId: createProtocolOperationIdentity(identity(31)),
+      protocolOperationId: createProtocolOperationIdentity(31n),
     }), content: {
       scope: 'revision', code: failure.code, retryable: failure.retryable, retryAfterMilliseconds: failure.retryAfterMilliseconds
     }

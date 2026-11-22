@@ -27,7 +27,7 @@ interface SignalingVector {
   readonly peerPathIdB64: string
   readonly attemptIdB64: string
   readonly controlBinding: {
-    readonly operationIdB64: string
+    readonly operationId: string
   }
   readonly offer: { readonly sdp: string; readonly bodyB64: string }
   readonly answer: { readonly sdp: string; readonly bodyB64: string }
@@ -93,7 +93,7 @@ describe('v2 E2E peer signaling codec', () => {
   })
 
   it('decodes Go answer and candidate bodies from session messages', () => {
-    const operationId = bytes(vector.controlBinding.operationIdB64)
+    const operationId = BigInt(vector.controlBinding.operationId)
     const cases = [
       [MESSAGE_KIND.peerAnswer, vector.answer, decodePeerAnswer],
       [MESSAGE_KIND.peerCandidate, vector.candidate, decodePeerCandidate],

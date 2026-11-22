@@ -54,7 +54,7 @@ type inboundQueue struct {
 	handlers  map[protocolsession.MessageKind]protocolsession.MessageHandler
 
 	queueMu             sync.Mutex
-	pendingData         map[protocolsession.OperationRef]uint32
+	pendingData         map[protocolsession.OperationID]uint32
 	ingressMu           sync.Mutex
 	deferred            map[protocolsession.OperationID][]routeEvent
 	deferredOrder       []protocolsession.OperationID
@@ -94,7 +94,7 @@ func newInboundQueue(
 		data:          make(chan routeEvent, limits.DataFrames),
 		done:          make(chan struct{}),
 		handlers:      make(map[protocolsession.MessageKind]protocolsession.MessageHandler),
-		pendingData:   make(map[protocolsession.OperationRef]uint32),
+		pendingData:   make(map[protocolsession.OperationID]uint32),
 		deferred:      make(map[protocolsession.OperationID][]routeEvent),
 		admissionWake: make(chan struct{}, 1),
 	}, nil
@@ -316,14 +316,10 @@ func (q *inboundQueue) nextEvent(ctx context.Context, capacity operationCapacity
 		return event, true, nil
 	default:
 	}
-	expiry, stop := capacity.timer()
-	defer stop()
 	select {
 	case <-q.admissionWake:
 		return routeEvent{}, false, nil
 	case <-capacity.changed:
-		return routeEvent{}, false, nil
-	case <-expiry:
 		return routeEvent{}, false, nil
 	case <-q.done:
 		return routeEvent{}, true, protocolsession.ErrSessionTerminated
@@ -425,16 +421,16 @@ dataDrained:
 func (q *inboundQueue) enqueueData(event routeEvent) (protocolsession.OperationDisposition, error) {
 	q.queueMu.Lock()
 	event.tracksData = true
-	ref := event.op.Ref()
-	q.pendingData[ref]++
+	id := event.op.ID()
+	q.pendingData[id]++
 	select {
 	case q.data <- event:
 		q.queueMu.Unlock()
 		return protocolsession.OperationDeliver, nil
 	default:
-		q.decrementPendingDataLocked(ref)
+		q.decrementPendingDataLocked(id)
 		q.queueMu.Unlock()
-		if _, err := q.operations.CancelOperation(ref); err != nil {
+		if _, err := q.operations.CancelOperation(id); err != nil {
 			return protocolsession.OperationDrop, err
 		}
 		select {
@@ -449,7 +445,7 @@ func (q *inboundQueue) enqueueData(event routeEvent) (protocolsession.OperationD
 func (q *inboundQueue) enqueueFinalAfterData(event routeEvent) (bool, error) {
 	q.queueMu.Lock()
 	defer q.queueMu.Unlock()
-	if q.pendingData[event.op.Ref()] == 0 {
+	if q.pendingData[event.op.ID()] == 0 {
 		return false, nil
 	}
 	select {
@@ -467,17 +463,17 @@ func (q *inboundQueue) retireQueuedData(event routeEvent) {
 		return
 	}
 	q.queueMu.Lock()
-	q.decrementPendingDataLocked(event.op.Ref())
+	q.decrementPendingDataLocked(event.op.ID())
 	q.queueMu.Unlock()
 }
 
-func (q *inboundQueue) decrementPendingDataLocked(ref protocolsession.OperationRef) {
-	remaining := q.pendingData[ref]
+func (q *inboundQueue) decrementPendingDataLocked(id protocolsession.OperationID) {
+	remaining := q.pendingData[id]
 	if remaining <= 1 {
-		delete(q.pendingData, ref)
+		delete(q.pendingData, id)
 		return
 	}
-	q.pendingData[ref] = remaining - 1
+	q.pendingData[id] = remaining - 1
 }
 
 func operationFinalMustFollowData(kind protocolsession.MessageKind) bool {

@@ -56,7 +56,7 @@ func TestServiceHandlersEnforceBoundedQueuesAndSharedDirectoryFailureSchema(t *t
 		t.Fatal(err)
 	}
 	terminal, _ := protocolsession.NewMessage(protocolsession.MessageSessionTerminal, nil, body)
-	operationID := id16[protocolsession.OperationID](81)
+	operationID := protocolsession.OperationID(81)
 	list, _ := protocolsession.NewMessage(protocolsession.MessageListChildren, &operationID, body)
 	laneBody, _ := protocolsession.EncodeLaneAttachRequest(0)
 	laneRequest, _ := protocolsession.NewMessage(protocolsession.MessageLaneAttach, &operationID, laneBody)
@@ -101,14 +101,13 @@ func TestServiceHandlersEnforceBoundedQueuesAndSharedDirectoryFailureSchema(t *t
 	}
 
 	var cancelled bool
-	cancelID := id16[protocolsession.OperationID](82)
-	cancelRef := protocolsession.OperationRef{ID: cancelID, Token: 1}
-	catalogHandler.active[cancelRef] = func() { cancelled = true }
-	catalogHandler.cancel(cancelRef)
-	if !cancelled || catalogHandler.add(cancelRef, func() {}) {
+	cancelID := protocolsession.OperationID(82)
+	catalogHandler.active[cancelID] = func() { cancelled = true }
+	catalogHandler.cancel(cancelID)
+	if !cancelled || catalogHandler.add(cancelID, func() {}) {
 		t.Fatal("catalog operation cancellation lost duplicate authority")
 	}
-	catalogHandler.remove(cancelRef)
+	catalogHandler.remove(cancelID)
 	if err := (cancelMux{catalog: catalogHandler}).HandleMessage(context.Background(), protocolsession.Operation{}, terminal); !errors.Is(err, session.ErrRuntimeConfig) {
 		t.Fatalf("cancel without operation error = %v", err)
 	}

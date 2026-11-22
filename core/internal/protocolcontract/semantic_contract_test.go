@@ -57,7 +57,7 @@ func semanticCases(t *testing.T) []any {
 		"dataQueueBytes": fmt.Sprint(dataQueueBytes), "maxDataFairnessBurst": fmt.Sprint(maxDataFairnessBurst),
 		"senderCrashGraceSeconds": fmt.Sprint(senderCrashGraceSeconds), "relayChallengeSeconds": fmt.Sprint(relayChallengeSeconds),
 		"joinStartingSeconds": fmt.Sprint(joinStartingSeconds), "clientHelloReplaySeconds": fmt.Sprint(clientHelloReplaySeconds),
-		"operationTombstoneSeconds": fmt.Sprint(operationTombstoneSeconds), "applicationRelaySeconds": fmt.Sprint(applicationRelaySeconds),
+		"operationReplayWindow": fmt.Sprint(operationReplayWindow), "applicationRelaySeconds": fmt.Sprint(applicationRelaySeconds),
 		"relaySessionTombstoneSeconds": fmt.Sprint(relaySessionTombstoneSeconds),
 		"maxOpaqueCiphertextBytes":     fmt.Sprint(maxOpaqueCiphertextBytes),
 	}

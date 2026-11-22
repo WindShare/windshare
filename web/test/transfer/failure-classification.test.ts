@@ -86,7 +86,7 @@ describe('transfer failure classification', () => {
     const remote = new RemoteOperationError(createReceivedProtocolError({
       requestKind: 'request_blocks', correlation: {
         protocolSessionId: createFailureIdentity('protocol_session', identityBytes(1)),
-        protocolOperationId: createFailureIdentity('protocol_operation', identityBytes(2))
+        protocolOperationId: createFailureIdentity('protocol_operation', 2n)
       }, content: {
         scope: 'block', code: 0xffff, retryable: true, retryAfterMilliseconds: 250
       }

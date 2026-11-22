@@ -18,11 +18,11 @@ func TestSenderHandlerSuppressesRequestWhoseGenerationWasCanceledBeforePublicati
 	}
 	requestBody, _ := NewOpenRequest([]OpenItem{{FileID: fixture.file}})
 	body, _ := EncodeOpenRequest(requestBody)
-	operationID := flowID[protocolsession.OperationID](201)
+	operationID := protocolsession.OperationID(201)
 	request := operationMessage(t, protocolsession.MessageOpenRevisions, operationID, body)
 	state := newStubOperationState()
 	op := state.admit(operationID, protocolsession.MessageOpenRevisions)
-	state.cancel(op.Ref())
+	state.cancel(op.ID())
 	if op.IsActive() || !op.IsCurrent() {
 		t.Fatal("canceled operation did not become a current non-executable tombstone")
 	}
@@ -33,7 +33,7 @@ func TestSenderHandlerSuppressesRequestWhoseGenerationWasCanceledBeforePublicati
 		t.Fatal("canceled request reached the service queue")
 	}
 
-	siblingID := flowID[protocolsession.OperationID](202)
+	siblingID := protocolsession.OperationID(202)
 	sibling := operationMessage(t, protocolsession.MessageOpenRevisions, siblingID, body)
 	if err := handler.HandleMessage(context.Background(), state.admit(siblingID, protocolsession.MessageOpenRevisions), sibling); err != nil {
 		t.Fatalf("sibling request: %v", err)

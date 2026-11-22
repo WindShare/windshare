@@ -375,15 +375,20 @@ func validateV5TraceCorrelation(t *testing.T, raw json.RawMessage, context strin
 	}
 	correlation := v5TraceCorrelation{}
 	for field, target := range map[string]*string{
-		"protocol_session_id":   &correlation.ProtocolSessionID,
-		"protocol_operation_id": &correlation.ProtocolOperationID,
-		"peer_path_id":          &correlation.PeerPathID,
-		"peer_attempt_id":       &correlation.PeerAttemptID,
+		"protocol_session_id": &correlation.ProtocolSessionID,
+		"peer_path_id":        &correlation.PeerPathID,
+		"peer_attempt_id":     &correlation.PeerAttemptID,
 	} {
 		if value, present := object[field]; present {
 			*target = v5TraceStringRaw(t, value, context+"."+field)
 			validateV5TraceIdentity(t, *target, context+"."+field, v5IdentityBytes)
 		}
+	}
+	if value, present := object["protocol_operation_id"]; present {
+		if v5TraceDecimalRaw(t, value, context+".protocol_operation_id") == 0 {
+			t.Fatalf("%s.protocol_operation_id must be positive", context)
+		}
+		correlation.ProtocolOperationID = v5TraceStringRaw(t, value, context+".protocol_operation_id")
 	}
 	if correlation.ProtocolOperationID != "" && correlation.ProtocolSessionID == "" {
 		t.Fatalf("%s has an operation without a protocol session", context)

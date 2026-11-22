@@ -102,7 +102,7 @@ func TestOpenResultDeliverySettlesLeaseWithExactEvidence(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			op := testActiveOperation(flowID[protocolsession.OperationID](219))
+			op := testActiveOperation(protocolsession.OperationID(219))
 			processErr := handler.processOpen(context.Background(), op, body)
 			if !errors.Is(processErr, test.wantProcessError) || (test.wantProcessError == nil && processErr != nil) {
 				t.Fatalf("process error=%v want=%v", processErr, test.wantProcessError)
@@ -148,7 +148,7 @@ func TestFragmentOutboundFailureEmitsTheSingleLegalOperationFinal(t *testing.T) 
 	lease := opened.Items()[0].Lease
 	request, _ := NewBlockRequest(lease.ID(), []uint64{0})
 	body, _ := EncodeBlockRequest(request)
-	operationID := flowID[protocolsession.OperationID](218)
+	operationID := protocolsession.OperationID(218)
 	message, _ := protocolsession.NewMessage(protocolsession.MessageRequestBlocks, &operationID, body)
 	outbound := &fragmentFailureOutbound{fragmentErr: errors.New("fragment path failed")}
 	handler, err := NewSenderHandler(SenderHandlerConfig{Service: fixture.service, Outbound: outbound})
@@ -202,7 +202,7 @@ func TestRenewResultDeliveryDetachesEveryAmbiguousLease(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			processErr := handler.processRenew(context.Background(), testActiveOperation(flowID[protocolsession.OperationID](220)), body)
+			processErr := handler.processRenew(context.Background(), testActiveOperation(protocolsession.OperationID(220)), body)
 			if !errors.Is(processErr, test.sendErr) || (test.sendErr == nil && processErr != nil) {
 				t.Fatalf("renew process error=%v want=%v", processErr, test.sendErr)
 			}

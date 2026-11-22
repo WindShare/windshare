@@ -98,7 +98,7 @@ interface IdentityVector extends VectorCase {
 }
 
 function delayedBlockOperation(first: number, delays: readonly number[], duplicate = false): SessionOperation {
-  const id = identity(first)
+  const id = BigInt(first)
   const fragments = fragmentRecord(id, new Uint8Array(150_000))
   let index = 0
   return {
@@ -125,7 +125,7 @@ function responseOperation(
   responseKind: number,
   body: Uint8Array,
 ): SessionOperation {
-  const operationId = identity(30 + requestKind)
+  const operationId = BigInt(30 + requestKind)
   return {
     id: operationId,
     requestKind: requestKind as SessionOperation['requestKind'],
@@ -153,7 +153,7 @@ async function openRevisionFailure(input: {
   readonly retryable: boolean
   readonly retryAfterMilliseconds?: number
 }): Promise<{ readonly error: unknown; readonly correlationCapturedFromResponse: boolean }> {
-  const operationId = identity(26)
+  const operationId = 26n
   let finalRead = false
   let correlationCapturedFromResponse = false
   const operation: SessionOperation = {
@@ -228,7 +228,7 @@ describe('v2 authenticated revision capacity results', () => {
     })
     expect(error.protocolFailure).toMatchObject({ requestKind: 'open_revisions', correlation: { lane: { id: 1, epoch: 9 } }, content: { scope: 'revision', code: REVISION_CODE_QUOTA, retryable: true, retryAfterMilliseconds: 275 } })
     expect(error.protocolFailure.correlation.protocolSessionId.copyBytes()).toEqual(identity(7))
-    expect(error.protocolFailure.correlation.protocolOperationId.copyBytes()).toEqual(identity(26))
+    expect(error.protocolFailure.correlation.protocolOperationId.value).toBe(26n)
     expect(error.failureFact.recoveryDisposition).toBe('none')
     expect(error.failureFact.payload.protocolFailure).toEqual(error.protocolFailure)
   })
@@ -351,7 +351,7 @@ describe('v2 session block lane deadlines', () => {
 
   it('cancels a block operation when the sender withholds every fragment', async () => {
     vi.useFakeTimers()
-    const operationId = identity(8)
+    const operationId = 8n
     const operation: SessionOperation = {
       id: operationId,
       requestKind: 7,
@@ -429,8 +429,8 @@ describe('v2 session block lane deadlines', () => {
   it('renews the lane deadline when each authenticated fragment advances assembly', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(0)
-    const operationId = identity(9)
-    const fragments = fragmentRecord(operationId, new Uint8Array(65_441).fill(0x33))
+    const operationId = 9n
+    const fragments = fragmentRecord(operationId, new Uint8Array(65_449).fill(0x33))
     const responses = [
       decodeMessage(fragments[0]!),
       decodeMessage(fragments[1]!),
@@ -660,7 +660,7 @@ describe('v2 session block delivery and lease recovery', () => {
           ))
         }
         if (kind === MESSAGE_KIND.releaseLease) {
-          const operationId = identity(29)
+          const operationId = 29n
           return {
             id: operationId,
             requestKind: kind,

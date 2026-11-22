@@ -586,10 +586,10 @@ func (value SenderAttemptObservation) DiagnosticRecord() diag.Record {
 		fields["candidates"] = diag.Object(diag.Fields{"local_emitted": diag.Number(float64(counts.LocalEmitted)), "remote_accepted": diag.Number(float64(counts.RemoteAccepted))})
 	}
 	if !value.OfferOperationID.IsZero() {
-		fields["offer_operation_id"] = diag.Identity(value.OfferOperationID[:])
+		fields["offer_operation_id"] = diag.Uint(value.OfferOperationID.Uint64())
 	}
 	if !value.GrantOperationID.IsZero() {
-		fields["grant_operation_id"] = diag.Identity(value.GrantOperationID[:])
+		fields["grant_operation_id"] = diag.Uint(value.GrantOperationID.Uint64())
 	}
 	if lane := value.Lane; lane != nil {
 		correlation["lane_id"], correlation["lane_epoch"] = diag.Number(float64(lane.ID)), diag.Number(float64(lane.Epoch))

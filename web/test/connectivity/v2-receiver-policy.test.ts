@@ -271,7 +271,7 @@ class FakeSession {
     const laneId = requestedLaneId === 0 ? this.#releasedLaneIds.shift() ?? this.#nextLaneId++ : requestedLaneId
     const laneEpoch = (this.#laneEpochs.get(laneId) ?? 0) + 1
     this.#laneEpochs.set(laneId, laneEpoch)
-    const operationIdentity = identity(this.#nextGrantOperationIdentity++)
+    const operationIdentity = BigInt(this.#nextGrantOperationIdentity++)
     await awaitOptionalGate(this.grantGate, options.signal)
     const grant = {
       laneId,
@@ -287,7 +287,7 @@ class FakeSession {
     grant: {
       readonly laneId: number
       readonly laneEpoch: number
-      readonly grantOperationId: Uint8Array
+      readonly grantOperationId: bigint
     },
     options: { readonly signal?: AbortSignal } = {},
   ) {
@@ -314,7 +314,7 @@ class FakeSession {
   }
 
   async beginOperation(): Promise<SessionOperation> {
-    const operation = new ControlledSessionOperation(identity(this.#nextPeerOperationIdentity++))
+    const operation = new ControlledSessionOperation(BigInt(this.#nextPeerOperationIdentity++))
     this.#peerOperation = operation
     return operation as unknown as SessionOperation
   }
@@ -361,10 +361,10 @@ class FakeSession {
 }
 
 class ControlledSessionOperation {
-  readonly id: Uint8Array<ArrayBuffer>
+  readonly id: bigint
   readonly #message = deferred<SessionMessage>()
 
-  constructor(id: Uint8Array<ArrayBuffer>) {
+  constructor(id: bigint) {
     this.id = id
   }
 
@@ -528,7 +528,7 @@ function authenticatedPeerFailure(code: number): AuthenticatedPeerOperationError
   return new AuthenticatedPeerOperationError(createReceivedProtocolError({
     requestKind: 'peer_offer', correlation: Object.freeze({
       protocolSessionId: createProtocolSessionIdentity(identity(90)),
-      protocolOperationId: createProtocolOperationIdentity(identity(80)),
+      protocolOperationId: createProtocolOperationIdentity(80n),
     }), content: {
       scope: 'peer', code: code, retryable: false
     }

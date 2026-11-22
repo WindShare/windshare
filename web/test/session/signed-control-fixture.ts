@@ -10,7 +10,7 @@ export async function senderControlKeyPair() {
 
 export function senderOperationControl(options: {
   readonly kind: MessageKind
-  readonly operationId: Uint8Array
+  readonly operationId: bigint
   readonly semanticBody: Uint8Array
 }) {
   return { message: encodeMessage(options.kind, options.operationId, options.semanticBody) }

@@ -78,7 +78,7 @@ export type ProtocolOperationTraceEvent =
       eventName: 'protocol_operation'
       transition: 'admission_waiting'
       requestKind: ProtocolMessageKindV1
-      capacity: 'active' | 'retained'
+      capacity: 'active'
       activeOperations: number
       trackedOperations: number
       correlation: FailureCorrelation

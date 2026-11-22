@@ -36,6 +36,7 @@ import {
 
 const SESSION_ID = 'AQAAAAAAAAAAAAAAAAAAAA'
 const OPERATION_ID = 'AgAAAAAAAAAAAAAAAAAAAA'
+const PROTOCOL_OPERATION_ID = '2'
 const PATH_ID = 'AwAAAAAAAAAAAAAAAAAAAA'
 const ATTEMPT_ID = 'BAAAAAAAAAAAAAAAAAAAAA'
 const ACTIVATION_ID = 'BQAAAAAAAAAAAAAAAAAAAA'
@@ -183,7 +184,7 @@ const PERFORMANCE_SUMMARY = projectPerformanceSummaryPayloadV1({
 
 const CORRELATION = Object.freeze({
   protocol_session_id: SESSION_ID,
-  protocol_operation_id: OPERATION_ID,
+  protocol_operation_id: PROTOCOL_OPERATION_ID,
   peer_path_id: PATH_ID,
   peer_attempt_id: ATTEMPT_ID,
   lane_id: 0,
@@ -814,7 +815,8 @@ describe('closed TraceEventObservationV2 boundary', () => {
     expectRejected(noCorrelation)
     for (const correlation of [
       {},
-      { protocol_operation_id: OPERATION_ID },
+      { protocol_operation_id: PROTOCOL_OPERATION_ID },
+      { protocol_session_id: SESSION_ID, protocol_operation_id: '0' },
       { peer_attempt_id: ATTEMPT_ID },
       { lane_id: 1 },
       { lane_epoch: 1 },

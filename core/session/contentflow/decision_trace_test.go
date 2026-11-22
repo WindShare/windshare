@@ -66,7 +66,7 @@ func TestCapacityFailureKeepsPoolDecisionForSenderTrace(t *testing.T) {
 	}
 	var got SenderDecisionTrace
 	handler := &SenderHandler{decisionTracer: SenderDecisionTraceFunc(func(event SenderDecisionTrace) { got = event })}
-	operation := protocolsession.OperationID{1}
+	operation := protocolsession.OperationID(1)
 	handler.traceCapacityDecisions(operation, results)
 	if got.Stage != SenderDecisionCapacityBusy || got.OperationID != operation ||
 		got.RequestKind != protocolsession.MessageOpenRevisions || got.CapacityDecisionID != want {

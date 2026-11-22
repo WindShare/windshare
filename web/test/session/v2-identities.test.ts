@@ -27,17 +27,22 @@ describe('v2 diagnostic identities', () => {
   })
 
   it('rejects absent and zero identities at the domain boundary', () => {
-    expect(() => createProtocolOperationIdentity(new Uint8Array(15))).toThrow(RangeError)
+    expect(() => createProtocolOperationIdentity(0n)).toThrow(RangeError)
+    expect(() => createProtocolOperationIdentity(1n << 64n)).toThrow(RangeError)
     expect(() => createPeerPathIdentityValue(new Uint8Array(16))).toThrow(RangeError)
     expect(() => createPeerAttemptIdentity(new Uint8Array(17))).toThrow(RangeError)
   })
 
-  it('compares bytes only within the same semantic identity kind', () => {
-    const operation = createProtocolOperationIdentity(identity(2))
+  it('compares identities only within the same semantic identity kind', () => {
+    const operation = createProtocolOperationIdentity(2n)
     expect(equalDiagnosticIdentities(
       operation,
-      createProtocolOperationIdentity(identity(2)),
+      createProtocolOperationIdentity(2n),
     )).toBe(true)
+    expect(equalDiagnosticIdentities(
+      operation,
+      createProtocolOperationIdentity(3n),
+    )).toBe(false)
     expect(equalDiagnosticIdentities(
       operation,
       createPeerAttemptIdentity(identity(2)),

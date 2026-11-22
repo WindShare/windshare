@@ -33,10 +33,10 @@ function fixture() {
   }
   const requests: MessageKind[] = []
   const retirements: LeaseRetirementObservation[] = []
-  let nextId = 30
+  let nextId = 30n
   const beginOperation = vi.fn(async (kind: MessageKind) => {
     requests.push(kind)
-    const operationId = id(nextId++)
+    const operationId = nextId++
     let body: Uint8Array
     let response: MessageKind
     if (kind === MESSAGE_KIND.openRevisions) {
@@ -57,7 +57,7 @@ function fixture() {
   })
   const session = {
     beginOperation,
-    operationCorrelation: (operation: { id: Uint8Array }) => ({
+    operationCorrelation: (operation: { id: bigint }) => ({
       protocolSessionId: createProtocolSessionIdentity(id(7)),
       protocolOperationId: createProtocolOperationIdentity(operation.id),
       lane: { id: 1, epoch: 0 },

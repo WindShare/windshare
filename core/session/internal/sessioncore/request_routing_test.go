@@ -25,7 +25,7 @@ func TestRequestReservationCleanupDoesNotUpdateReplacementEpoch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	call := newOperationCall(protocolsession.OperationID{}, kind, now, 0, false, false)
+	call := newOperationCall(0, kind, now, 0, false, false)
 	call.requests.Reserve(reserved, estimate)
 	if !runtime.lanes.detach(identity) {
 		t.Fatal("retire old incarnation")

@@ -21,7 +21,7 @@ type catalogHandler struct {
 	queueMu  sync.Mutex
 	stopping bool
 	mu       sync.Mutex
-	active   map[protocolsession.OperationRef]context.CancelFunc
+	active   map[protocolsession.OperationID]context.CancelFunc
 }
 
 type catalogOperation struct {
@@ -33,7 +33,7 @@ func newCatalogHandler(service *catalogflow.AddressedSenderService, outbound *se
 	return &catalogHandler{
 		service: service, outbound: outbound, queue: make(chan catalogOperation, 256),
 		workers: make(chan struct{}, catalogflow.MaxConcurrentDirectoryLoads),
-		active:  make(map[protocolsession.OperationRef]context.CancelFunc),
+		active:  make(map[protocolsession.OperationID]context.CancelFunc),
 	}
 }
 
@@ -89,14 +89,14 @@ func (handler *catalogHandler) Run(ctx context.Context) error {
 			return ctx.Err()
 		case queued := <-handler.queue:
 			if queued.message.Kind() == protocolsession.MessageCancel {
-				handler.cancel(queued.op.Ref())
+				handler.cancel(queued.op.ID())
 				continue
 			}
 			if !queued.op.IsActive() {
 				continue
 			}
 			operationContext, cancel := context.WithCancel(ctx)
-			if !handler.add(queued.op.Ref(), cancel) {
+			if !handler.add(queued.op.ID(), cancel) {
 				cancel()
 				continue
 			}
@@ -105,11 +105,11 @@ func (handler *catalogHandler) Run(ctx context.Context) error {
 				case handler.workers <- struct{}{}:
 					defer func() { <-handler.workers }()
 				case <-operationContext.Done():
-					handler.remove(queued.op.Ref())
+					handler.remove(queued.op.ID())
 					return
 				}
 				handler.process(operationContext, queued.op, queued.message.Body())
-				handler.remove(queued.op.Ref())
+				handler.remove(queued.op.ID())
 			})
 		}
 	}
@@ -182,28 +182,28 @@ func (handler *catalogHandler) progressObserver(op protocolsession.Operation) ca
 	})
 }
 
-func (handler *catalogHandler) cancel(ref protocolsession.OperationRef) {
+func (handler *catalogHandler) cancel(id protocolsession.OperationID) {
 	handler.mu.Lock()
-	cancel := handler.active[ref]
+	cancel := handler.active[id]
 	handler.mu.Unlock()
 	if cancel != nil {
 		cancel()
 	}
 }
 
-func (handler *catalogHandler) add(ref protocolsession.OperationRef, cancel context.CancelFunc) bool {
+func (handler *catalogHandler) add(id protocolsession.OperationID, cancel context.CancelFunc) bool {
 	handler.mu.Lock()
 	defer handler.mu.Unlock()
-	if handler.active[ref] != nil {
+	if handler.active[id] != nil {
 		return false
 	}
-	handler.active[ref] = cancel
+	handler.active[id] = cancel
 	return true
 }
 
-func (handler *catalogHandler) remove(ref protocolsession.OperationRef) {
+func (handler *catalogHandler) remove(id protocolsession.OperationID) {
 	handler.mu.Lock()
-	delete(handler.active, ref)
+	delete(handler.active, id)
 	handler.mu.Unlock()
 }
 

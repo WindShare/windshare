@@ -74,7 +74,7 @@ describe('v2 content result frozen bounds', () => {
 describe('v2 fragment inactivity accounting', () => {
   it('allows assemblies longer than 15 seconds while unique fragments keep arriving', async () => {
     let now = 0
-    const operationId = identity(11)
+    const operationId = 11n
     const object = new Uint8Array(FRAGMENT_PAYLOAD_BYTES * 2 + 1).fill(0x31)
     const fragments = fragmentRecord(operationId, object)
     const assembler = new FragmentAssembler(operationId, () => now)
@@ -92,7 +92,7 @@ describe('v2 fragment inactivity accounting', () => {
 
   it('does not let authenticated duplicates extend the inactivity deadline', async () => {
     let now = 0
-    const operationId = identity(12)
+    const operationId = 12n
     const fragments = fragmentRecord(
       operationId,
       new Uint8Array(FRAGMENT_PAYLOAD_BYTES + 1).fill(0x32),

@@ -27,7 +27,7 @@ function timedOutAttempt() {
   }
   now = 1_000
   lifecycle.phaseDeadlineArmed('admission', 20_000)
-  lifecycle.grantRequested(createProtocolOperationIdentity(bytes(4)), 2)
+  lifecycle.grantRequested(createProtocolOperationIdentity(4n), 2)
   now = 21_000
   lifecycle.phaseDeadlineExpired('admission', 20_000)
   lifecycle.failed({ kind: 'local-transient', phase: 'admission', reason: 'admission-timeout' })
@@ -68,7 +68,7 @@ describe('peer failure summaries', () => {
     observer(projected)
     const operation = snapshotTraceEventObservationV2({
       eventName: 'protocol_operation',
-      correlation: { protocol_session_id: 'AQAAAAAAAAAAAAAAAAAAAA', protocol_operation_id: 'AgAAAAAAAAAAAAAAAAAAAA' },
+      correlation: { protocol_session_id: 'AQAAAAAAAAAAAAAAAAAAAA', protocol_operation_id: '2' },
       payload: { transition: 'request_sent', request_kind: 'open_revisions' },
     })
     const eventLimit = diagnostics.trace.status().capacity.maxEventCount

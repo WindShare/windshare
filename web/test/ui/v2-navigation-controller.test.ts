@@ -546,7 +546,7 @@ function authenticatedRemoteOperationError(): RemoteOperationError {
   return new RemoteOperationError(createReceivedProtocolError({
     requestKind: 'list_children', correlation: Object.freeze({
       protocolSessionId: createFailureIdentity('protocol_session', identity(9)),
-      protocolOperationId: createFailureIdentity('protocol_operation', identity(10)),
+      protocolOperationId: createFailureIdentity('protocol_operation', 10n),
     }), content: {
       scope: 'directory', code: 0x21, retryable: true, retryAfterMilliseconds: 250
     }

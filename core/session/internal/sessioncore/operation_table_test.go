@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/fxamacker/cbor/v2"
 	"github.com/windshare/windshare/core/session"
@@ -13,20 +12,18 @@ import (
 )
 
 func TestOperationTableLifecycleContinuationAndInFlightPinning(t *testing.T) {
-	now := time.Unix(50_000, 0)
 	table, err := newOperationTable(
-		protocolsession.OperationLimits{MaxActive: 2, MaxTracked: 2},
-		func() time.Time { return now },
+		protocolsession.OperationLimits{MaxActive: 2, MaxRecentTombstones: 1},
 		continuationReplayClassifier{},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	lane := session.LaneIdentity{ID: 1, Epoch: 0}
-	id := id16[protocolsession.OperationID](10)
+	id := protocolsession.OperationID(10)
 	offer := operationMessageForTest(t, protocolsession.MessagePeerOffer, id, []byte{0xf6})
 
-	// Receiver outbound admission + pin prevents premature tombstone expiry.
+	// Receiver outbound admission + pin prevents premature tombstone eviction.
 	var violated protocolsession.AuthenticatedOperationViolation
 	op, maxCont, hasLimit, release, err := table.AdmitOutboundRequest(offer, func(v protocolsession.AuthenticatedOperationViolation) {
 		violated = v
@@ -37,7 +34,7 @@ func TestOperationTableLifecycleContinuationAndInFlightPinning(t *testing.T) {
 	if kind, ok := op.RequestKind(); !ok || kind != protocolsession.MessagePeerOffer {
 		t.Fatalf("request kind=%d ok=%v", kind, ok)
 	}
-	if limit, ok := table.MaximumContinuations(op.Ref()); !ok || limit != 4 {
+	if limit, ok := table.MaximumContinuations(op.ID()); !ok || limit != 4 {
 		t.Fatalf("maximum continuations=%d ok=%v", limit, ok)
 	}
 
@@ -60,43 +57,102 @@ func TestOperationTableLifecycleContinuationAndInFlightPinning(t *testing.T) {
 	}
 
 	// Cancel transitions active op to tombstone; repeated cancel is idempotent no-op.
-	transitioned, err := table.CancelOperation(op.Ref())
+	transitioned, err := table.CancelOperation(op.ID())
 	if err != nil || !transitioned || op.IsActive() || !op.IsCurrent() {
 		t.Fatalf("first cancel: transitioned=%v active=%v current=%v err=%v", transitioned, op.IsActive(), op.IsCurrent(), err)
 	}
-	transitioned, err = table.CancelOperation(op.Ref())
+	transitioned, err = table.CancelOperation(op.ID())
 	if err != nil || transitioned {
 		t.Fatalf("second cancel: transitioned=%v err=%v", transitioned, err)
 	}
 
-	// While inFlight pin is held, advancing clock past tombstone lifetime MUST NOT evict.
-	now = now.Add(protocolsession.OperationTombstoneLifetime + time.Second)
-	if table.TombstoneCount() != 1 {
-		t.Fatalf("pinned tombstone evicted early: count=%d", table.TombstoneCount())
+	// While inFlight pin is held on op 10, retiring op 11 must not evict pinned op 10.
+	id2 := protocolsession.OperationID(11)
+	offer2 := operationMessageForTest(t, protocolsession.MessagePeerOffer, id2, []byte{0xf6})
+	op2, _, _, release2, err := table.AdmitOutboundRequest(offer2, nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	// Releasing with refresh=true grants a full lifetime from release time.
+	release2(true)
+	if _, err := table.CancelOperation(op2.ID()); err != nil {
+		t.Fatal(err)
+	}
+	if !op.IsCurrent() || table.TombstoneCount() != 1 {
+		t.Fatalf("pinned op 10 evicted early: current=%v count=%d", op.IsCurrent(), table.TombstoneCount())
+	}
+
+	// Releasing op 10's pin allows FIFO eviction once another tombstone arrives.
 	release(true)
-	if table.TombstoneCount() != 1 {
-		t.Fatalf("refreshed tombstone missing immediately after release")
+	id3 := protocolsession.OperationID(12)
+	offer3 := operationMessageForTest(t, protocolsession.MessagePeerOffer, id3, []byte{0xf6})
+	op3, _, _, release3, err := table.AdmitOutboundRequest(offer3, nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	now = now.Add(protocolsession.OperationTombstoneLifetime + time.Nanosecond)
-	if table.TombstoneCount() != 0 {
-		t.Fatalf("expired unpinned tombstone retained: count=%d", table.TombstoneCount())
+	release3(true)
+	if _, err := table.CancelOperation(op3.ID()); err != nil {
+		t.Fatal(err)
+	}
+	if op.IsCurrent() || !op3.IsCurrent() || table.TombstoneCount() != 1 {
+		t.Fatalf("FIFO tombstone eviction: op1Current=%v op3Current=%v count=%d", op.IsCurrent(), op3.IsCurrent(), table.TombstoneCount())
+	}
+}
+
+func TestOperationTableSlidingReplayWindowAndHighThroughputNoBlock(t *testing.T) {
+	table, err := newOperationTable(
+		protocolsession.OperationLimits{MaxActive: 4, MaxRecentTombstones: 16},
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lane := session.LaneIdentity{ID: 1, Epoch: 0}
+	admitAndFinish := func(id protocolsession.OperationID) {
+		t.Helper()
+		req := operationMessageForTest(t, protocolsession.MessageListChildren, id, []byte{0xa0})
+		adm, admitErr := table.ObserveInbound(protocolsession.DirectionReceiverToSender, lane, req)
+		if admitErr != nil || adm.disposition != protocolsession.OperationDeliver {
+			t.Fatalf("admit %d: disp=%d err=%v", id, adm.disposition, admitErr)
+		}
+		if _, cancelErr := table.CancelOperation(adm.op.ID()); cancelErr != nil {
+			t.Fatalf("cancel %d: %v", id, cancelErr)
+		}
+	}
+
+	// Out-of-order arrivals within the 4,096-op sliding window are accepted once and replays rejected.
+	admitAndFinish(10)
+	admitAndFinish(5)
+	admitAndFinish(1)
+	dup5 := operationMessageForTest(t, protocolsession.MessageListChildren, 5, []byte{0xa1, 0x00, 0x01})
+	if _, err := table.ObserveInbound(protocolsession.DirectionReceiverToSender, lane, dup5); !errors.Is(err, protocolsession.ErrOperationIDReused) {
+		t.Fatalf("in-window replay of 5: err=%v, want ErrOperationIDReused", err)
+	}
+
+	// High-throughput sequential operations far exceeding OperationReplayWindow and MaxRecentTombstones
+	// must never block, fail, or retain unbounded tombstones.
+	for id := protocolsession.OperationID(11); id <= 5_000; id++ {
+		admitAndFinish(id)
+	}
+	if table.ActiveCount() != 0 || table.TombstoneCount() != 16 {
+		t.Fatalf("after 5000 ops: active=%d tombstones=%d", table.ActiveCount(), table.TombstoneCount())
+	}
+	// IDs below (highWater - 4096) are unconditionally rejected as replayed.
+	belowWindow := operationMessageForTest(t, protocolsession.MessageListChildren, 500, []byte{0xa0})
+	if _, err := table.ObserveInbound(protocolsession.DirectionReceiverToSender, lane, belowWindow); !errors.Is(err, protocolsession.ErrOperationIDReused) {
+		t.Fatalf("below-window replay of 500: err=%v, want ErrOperationIDReused", err)
 	}
 }
 
 func TestOperationTablePreemptiveCancelAndContinuationRollback(t *testing.T) {
-	now := time.Unix(60_000, 0)
 	table, err := newOperationTable(
-		protocolsession.OperationLimits{MaxActive: 4, MaxTracked: 4},
-		func() time.Time { return now },
+		protocolsession.OperationLimits{MaxActive: 4, MaxRecentTombstones: 4},
 		continuationReplayClassifier{},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	lane := session.LaneIdentity{ID: 1, Epoch: 0}
-	id := id16[protocolsession.OperationID](11)
+	id := protocolsession.OperationID(11)
 
 	// Cancel arrives before the request (preemptive cancel), followed by late candidate and late offer.
 	cancelMsg := operationMessageForTest(t, protocolsession.MessageCancel, id, []byte{0xa0})
@@ -116,7 +172,7 @@ func TestOperationTablePreemptiveCancelAndContinuationRollback(t *testing.T) {
 	}
 
 	// Outbound continuation undo rolls back unsent candidate so an exact retry succeeds.
-	id2 := id16[protocolsession.OperationID](12)
+	id2 := protocolsession.OperationID(12)
 	offer2 := operationMessageForTest(t, protocolsession.MessagePeerOffer, id2, []byte{0xf6})
 	op2, _, _, releaseOffer, err := table.AdmitOutboundRequest(offer2, nil)
 	if err != nil {
@@ -124,29 +180,27 @@ func TestOperationTablePreemptiveCancelAndContinuationRollback(t *testing.T) {
 	}
 	releaseOffer(false)
 	cand2 := operationMessageForTest(t, protocolsession.MessagePeerCandidate, id2, []byte{0xf6})
-	disp, undo, relCont, err := table.AdmitOutboundContinuation(op2.Ref(), cand2)
+	disp, undo, relCont, err := table.AdmitOutboundContinuation(op2.ID(), cand2)
 	if err != nil || disp != protocolsession.OperationDeliver || undo == nil {
 		t.Fatalf("first outbound continuation: disp=%d err=%v", disp, err)
 	}
 	undo()
 	relCont(false)
-	disp, _, relCont2, err := table.AdmitOutboundContinuation(op2.Ref(), cand2)
+	disp, _, relCont2, err := table.AdmitOutboundContinuation(op2.ID(), cand2)
 	if err != nil || disp != protocolsession.OperationDeliver {
 		t.Fatalf("retry after undo: disp=%d err=%v", disp, err)
 	}
 	relCont2(true)
 	// Exact duplicate after commit is dropped idempotently.
-	disp, _, _, err = table.AdmitOutboundContinuation(op2.Ref(), cand2)
+	disp, _, _, err = table.AdmitOutboundContinuation(op2.ID(), cand2)
 	if err != nil || disp != protocolsession.OperationDrop {
 		t.Fatalf("duplicate after commit: disp=%d err=%v", disp, err)
 	}
 }
 
 func TestInboundQueueOrderingDataOverflowAndDeferredPromotion(t *testing.T) {
-	now := time.Unix(70_000, 0)
 	ops, err := newOperationTable(
-		protocolsession.OperationLimits{MaxActive: 1, MaxTracked: 2},
-		func() time.Time { return now },
+		protocolsession.OperationLimits{MaxActive: 1, MaxRecentTombstones: 2},
 		nil,
 	)
 	if err != nil {
@@ -161,7 +215,7 @@ func TestInboundQueueOrderingDataOverflowAndDeferredPromotion(t *testing.T) {
 	}
 	defer rxQueue.Close()
 	lane := session.LaneIdentity{ID: 1, Epoch: 0}
-	id := id16[protocolsession.OperationID](21)
+	id := protocolsession.OperationID(21)
 	req := operationMessageForTest(t, protocolsession.MessageRequestBlocks, id, []byte{0xa0})
 	_, _, _, relReq, err := ops.AdmitOutboundRequest(req, nil)
 	if err != nil {
@@ -191,12 +245,12 @@ func TestInboundQueueOrderingDataOverflowAndDeferredPromotion(t *testing.T) {
 	}
 
 	// Data overflow cancels operation and emits ErrRouterDataFull event on control channel.
-	ops2, _ := newOperationTable(protocolsession.OperationLimits{MaxActive: 2, MaxTracked: 4}, func() time.Time { return now }, nil)
+	ops2, _ := newOperationTable(protocolsession.OperationLimits{MaxActive: 2, MaxRecentTombstones: 4}, nil)
 	rxOverflow, _ := newInboundQueue(nil, protocolsession.RoleReceiver, ops2, protocolsession.RouterLimits{
 		ControlFrames: 4, DataFrames: 1,
 	})
 	defer rxOverflow.Close()
-	idOverflow := id16[protocolsession.OperationID](22)
+	idOverflow := protocolsession.OperationID(22)
 	reqOv := operationMessageForTest(t, protocolsession.MessageRequestBlocks, idOverflow, []byte{0xa0})
 	opOv, _, _, relOv, _ := ops2.AdmitOutboundRequest(reqOv, nil)
 	relOv(false)
@@ -220,13 +274,13 @@ func TestInboundQueueOrderingDataOverflowAndDeferredPromotion(t *testing.T) {
 	}
 
 	// Sender side: deferred request promotes in FIFO order once active slot frees.
-	txOps, _ := newOperationTable(protocolsession.OperationLimits{MaxActive: 1, MaxTracked: 2}, func() time.Time { return now }, nil)
+	txOps, _ := newOperationTable(protocolsession.OperationLimits{MaxActive: 1, MaxRecentTombstones: 2}, nil)
 	txQueue, _ := newInboundQueue(nil, protocolsession.RoleSender, txOps, protocolsession.RouterLimits{
 		ControlFrames: 4, DataFrames: 4,
 	})
 	defer txQueue.Close()
-	req1ID := id16[protocolsession.OperationID](31)
-	req2ID := id16[protocolsession.OperationID](32)
+	req1ID := protocolsession.OperationID(31)
+	req2ID := protocolsession.OperationID(32)
 	req1 := operationMessageForTest(t, protocolsession.MessageListChildren, req1ID, []byte{0xa0})
 	req2 := operationMessageForTest(t, protocolsession.MessageListChildren, req2ID, []byte{0xa0})
 	if _, err := txQueue.RouteInbound(lane, req1); err != nil {
@@ -239,7 +293,7 @@ func TestInboundQueueOrderingDataOverflowAndDeferredPromotion(t *testing.T) {
 	if err != nil || ev1.op.ID() != req1ID {
 		t.Fatalf("first promoted op=%v err=%v", ev1.op.ID(), err)
 	}
-	if _, err := txOps.CancelOperation(ev1.op.Ref()); err != nil {
+	if _, err := txOps.CancelOperation(ev1.op.ID()); err != nil {
 		t.Fatal(err)
 	}
 	ev2, err := txQueue.Next(context.Background())
@@ -362,10 +416,8 @@ func (c peerSlotTestClassifier) ClassifyPeerAttemptContinuation(
 }
 
 func TestRetiredPeerContinuationSurvivesOperationGC(t *testing.T) {
-	now := time.Unix(1, 0)
 	table, err := newOperationTable(
-		protocolsession.OperationLimits{MaxActive: 4, MaxTracked: 4},
-		func() time.Time { return now },
+		protocolsession.OperationLimits{MaxActive: 4, MaxRecentTombstones: 2},
 		peerSlotTestClassifier{},
 	)
 	if err != nil {
@@ -392,21 +444,36 @@ func TestRetiredPeerContinuationSurvivesOperationGC(t *testing.T) {
 		}
 		return operationMessageForTest(t, kind, id, encodeTestPeerBindingBody(t, b))
 	}
+	nextEvictID := protocolsession.OperationID(1_000)
+	evictTombstones := func() {
+		for range 3 {
+			id := nextEvictID
+			nextEvictID++
+			req := operationMessageForTest(t, protocolsession.MessageListChildren, id, []byte{0xa0})
+			adm, err := table.ObserveInbound(protocolsession.DirectionReceiverToSender, lane, req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := table.CancelOperation(adm.op.ID()); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
 
-	oldID := protocolsession.OperationID{1}
+	oldID := protocolsession.OperationID(1)
 	admitted, err := table.ObserveInbound(protocolsession.DirectionReceiverToSender, lane, offer(oldID, binding))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := table.CancelOperation(admitted.op.Ref()); err != nil {
+	if _, err := table.CancelOperation(admitted.op.ID()); err != nil {
 		t.Fatal(err)
 	}
-	now = now.Add(protocolsession.OperationTombstoneLifetime + time.Millisecond)
+	evictTombstones()
 
 	current := binding
 	current.AttemptSequence++
 	current.AttemptID[0]++
-	currentID := protocolsession.OperationID{2}
+	currentID := protocolsession.OperationID(2)
 	currentAdm, err := table.ObserveInbound(protocolsession.DirectionReceiverToSender, lane, offer(currentID, current))
 	if err != nil {
 		t.Fatal(err)
@@ -418,7 +485,7 @@ func TestRetiredPeerContinuationSurvivesOperationGC(t *testing.T) {
 		if adm, err := table.ObserveInbound(protocolsession.DirectionSenderToReceiver, lane, cont(oldID, binding, kind)); err != nil || adm.disposition != protocolsession.OperationDrop {
 			t.Fatalf("late %d: disp=%d err=%v", kind, adm.disposition, err)
 		}
-		unknown := protocolsession.OperationID{3}
+		unknown := protocolsession.OperationID(3)
 		future := current
 		future.AttemptSequence++
 		if _, err := table.ObserveInbound(protocolsession.DirectionSenderToReceiver, lane, cont(unknown, future, kind)); !errors.Is(err, protocolsession.ErrUnknownOperation) {
@@ -429,7 +496,7 @@ func TestRetiredPeerContinuationSurvivesOperationGC(t *testing.T) {
 		}
 	}
 	// Superseded offer drops even after tombstone eviction.
-	if adm, err := table.ObserveInbound(protocolsession.DirectionReceiverToSender, lane, offer(protocolsession.OperationID{4}, binding)); err != nil || adm.disposition != protocolsession.OperationDrop {
+	if adm, err := table.ObserveInbound(protocolsession.DirectionReceiverToSender, lane, offer(protocolsession.OperationID(4), binding)); err != nil || adm.disposition != protocolsession.OperationDrop {
 		t.Fatalf("superseded offer: disp=%d err=%v", adm.disposition, err)
 	}
 	// Advancing 128 sequences must preserve protection for older active currentAdm.
@@ -437,23 +504,22 @@ func TestRetiredPeerContinuationSurvivesOperationGC(t *testing.T) {
 		next := binding
 		next.AttemptSequence = seq
 		next.AttemptID[0] = byte(seq)
-		adm, err := table.ObserveInbound(protocolsession.DirectionReceiverToSender, lane, offer(protocolsession.OperationID{byte(seq), 1}, next))
+		adm, err := table.ObserveInbound(protocolsession.DirectionReceiverToSender, lane, offer(protocolsession.OperationID(10+seq), next))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := table.CancelOperation(adm.op.Ref()); err != nil {
+		if _, err := table.CancelOperation(adm.op.ID()); err != nil {
 			t.Fatal(err)
 		}
-		now = now.Add(protocolsession.OperationTombstoneLifetime + time.Millisecond)
 	}
-	wrongID := protocolsession.OperationID{250}
+	wrongID := protocolsession.OperationID(500)
 	if _, err := table.ObserveInbound(protocolsession.DirectionSenderToReceiver, lane, cont(wrongID, current, protocolsession.MessageOperationError)); !errors.Is(err, protocolsession.ErrUnknownOperation) {
 		t.Fatalf("active older sequence lost protection: %v", err)
 	}
-	if _, err := table.CancelOperation(currentAdm.op.Ref()); err != nil {
+	if _, err := table.CancelOperation(currentAdm.op.ID()); err != nil {
 		t.Fatal(err)
 	}
-	now = now.Add(protocolsession.OperationTombstoneLifetime + time.Millisecond)
+	evictTombstones()
 	if adm, err := table.ObserveInbound(protocolsession.DirectionSenderToReceiver, lane, cont(wrongID, current, protocolsession.MessageOperationError)); err != nil || adm.disposition != protocolsession.OperationDrop {
 		t.Fatalf("retired older sequence not collected: disp=%d err=%v", adm.disposition, err)
 	}

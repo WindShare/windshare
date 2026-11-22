@@ -30,7 +30,7 @@ func TestAssemblerAdmissionInactivityAndRecordCapEdges(t *testing.T) {
 	}
 	now := time.Unix(3_000, 0)
 	assembler, _ := NewAssembler(session, hierarchy, func() time.Time { return now })
-	operation := flowID[protocolsession.OperationID](102)
+	operation := protocolsession.OperationID(102)
 	fragments, _ := FragmentRecord(operation, bytes.Repeat([]byte{1}, MaxFragmentPayloadBytes+1))
 	if _, err := assembler.AcceptAuthenticated(flowMessagePlaintext(t, fragments[0])); err != nil || assembler.ActiveRecords() != 1 {
 		t.Fatalf("active records=%d err=%v", assembler.ActiveRecords(), err)
@@ -46,7 +46,7 @@ func TestAssemblerAdmissionInactivityAndRecordCapEdges(t *testing.T) {
 
 	capped, _ := NewAssembler(session, hierarchy, func() time.Time { return now })
 	defer capped.Close()
-	batchOp := flowID[protocolsession.OperationID](110)
+	batchOp := protocolsession.OperationID(110)
 	for index := range content.MaxRequestedBlockIndices {
 		recordFragments, _ := FragmentRecord(batchOp, fmt.Appendf(nil, "record-%d", index))
 		result, err := capped.AcceptAuthenticated(flowMessagePlaintext(t, recordFragments[0]))
@@ -450,7 +450,7 @@ func TestStubbedServiceCoversBlockErrorAndEmitterBoundaries(t *testing.T) {
 		t.Fatal(err)
 	}
 	request, _ := NewBlockRequest(lease.ID(), []uint64{0})
-	operation := flowID[protocolsession.OperationID](151)
+	operation := protocolsession.OperationID(151)
 	emitErr := errors.New("writer stopped")
 	if _, err := service.ServeBlocks(context.Background(), operation, request, func(context.Context, protocolsession.Message) error { return emitErr }); !errors.Is(err, emitErr) {
 		t.Fatalf("emitter error=%v", err)
@@ -462,7 +462,7 @@ func TestStubbedServiceCoversBlockErrorAndEmitterBoundaries(t *testing.T) {
 	if _, err := service.ServeBlocks(context.Background(), operation, request, func(context.Context, protocolsession.Message) error { return nil }); err == nil {
 		t.Fatal("read error hidden")
 	}
-	if _, err := service.ServeBlocks(context.Background(), protocolsession.OperationID{}, request, func(context.Context, protocolsession.Message) error { return nil }); !errors.Is(err, ErrOperationIdentity) {
+	if _, err := service.ServeBlocks(context.Background(), 0, request, func(context.Context, protocolsession.Message) error { return nil }); !errors.Is(err, ErrOperationIdentity) {
 		t.Fatalf("zero operation error=%v", err)
 	}
 	if _, err := service.ServeBlocks(context.Background(), operation, request, nil); !errors.Is(err, ErrOperationIdentity) {
@@ -572,20 +572,19 @@ func TestHandlerCancellationBookkeepingIsIdempotent(t *testing.T) {
 	fixture := newRuntimeFixture(t, 1)
 	defer fixture.close(t)
 	handler, _ := NewSenderHandler(SenderHandlerConfig{Service: fixture.service, Outbound: newRecordingOutbound()})
-	operation := flowID[protocolsession.OperationID](161)
-	owner := protocolsession.OperationRef{ID: operation, Token: 1}
+	operation := protocolsession.OperationID(161)
 	ctx, cancel := context.WithCancel(context.Background())
-	if !handler.register(owner, cancel) || handler.register(owner, func() {}) {
+	if !handler.register(operation, cancel) || handler.register(operation, func() {}) {
 		t.Fatal("operation registration was not unique")
 	}
-	handler.cancel(owner)
+	handler.cancel(operation)
 	if !errors.Is(ctx.Err(), context.Canceled) {
 		t.Fatal("operation cancel did not reach worker")
 	}
-	handler.unregister(owner)
-	handler.cancel(owner)
+	handler.unregister(operation)
+	handler.cancel(operation)
 	otherContext, otherCancel := context.WithCancel(context.Background())
-	_ = handler.register(protocolsession.OperationRef{ID: flowID[protocolsession.OperationID](162), Token: 2}, otherCancel)
+	_ = handler.register(protocolsession.OperationID(162), otherCancel)
 	handler.cancelAll()
 	if !errors.Is(otherContext.Err(), context.Canceled) {
 		t.Fatal("cancelAll did not stop operation")

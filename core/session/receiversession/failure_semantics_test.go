@@ -9,7 +9,7 @@ import (
 )
 
 func TestRemoteOperationErrorRejectsAuthenticatedMalformedSemantics(t *testing.T) {
-	operationID := id16[protocolsession.OperationID](201)
+	operationID := protocolsession.OperationID(201)
 	valid := map[uint64]any{
 		0: uint64(1),
 		1: uint64(protocolsession.OperationScopeBlock),

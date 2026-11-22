@@ -3,6 +3,7 @@ package peerset
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/peerslot"
@@ -75,7 +76,7 @@ func TestPhysicalPathReplacementPreservesSessionContinuationContract(t *testing.
 			t.Fatal("replacement occupied a live path's slot")
 		}
 		_ = current.Close()
-		clock.advance(protocolsession.OperationTombstoneLifetime)
+		clock.advance(30 * time.Second)
 		current, currentAdmission = next, nextAdmission
 	}
 	_ = current.Close()

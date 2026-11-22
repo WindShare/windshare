@@ -3,6 +3,7 @@ package diagnostics
 import (
 	"encoding/base64"
 	"errors"
+	"strconv"
 )
 
 const IdentityBytes = 16
@@ -16,11 +17,12 @@ type LaneCorrelation struct {
 	Epoch uint32
 }
 
-// CorrelationInput carries raw 16-byte protocol/path identities prior to JSON
-// projection. Empty or all-zero slices represent absent identities.
+// CorrelationInput carries raw protocol/path identities prior to JSON
+// projection. Empty or all-zero slices (and zero ProtocolOperationID) represent
+// absent identities.
 type CorrelationInput struct {
 	ProtocolSessionID   []byte
-	ProtocolOperationID []byte
+	ProtocolOperationID uint64
 	PeerPathID          []byte
 	PeerAttemptID       []byte
 	Lane                *LaneCorrelation
@@ -38,15 +40,17 @@ type CorrelationV1 struct {
 }
 
 // ProjectCorrelationV1 converts 16-byte identities into canonical unpadded
-// base64url at the JSON boundary. A nil result represents local-only work.
+// base64url and monotonic operation IDs into canonical decimal uint64 text at
+// the JSON boundary. A nil result represents local-only work.
 func ProjectCorrelationV1(input CorrelationInput) (*CorrelationV1, error) {
 	session, hasSession, err := encodeOptionalIdentity(input.ProtocolSessionID)
 	if err != nil {
 		return nil, err
 	}
-	operation, hasOperation, err := encodeOptionalIdentity(input.ProtocolOperationID)
-	if err != nil {
-		return nil, err
+	var operation string
+	hasOperation := input.ProtocolOperationID != 0
+	if hasOperation {
+		operation = strconv.FormatUint(input.ProtocolOperationID, 10)
 	}
 	path, hasPath, err := encodeOptionalIdentity(input.PeerPathID)
 	if err != nil {

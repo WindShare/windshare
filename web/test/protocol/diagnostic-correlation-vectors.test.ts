@@ -7,8 +7,11 @@ import {
   createFailureIdentity,
   type FailureCorrelation,
   type FailureIdentity,
-  type FailureIdentityKind,
 } from '../../src/diagnostics/incident/fact'
+import type {
+  FailureBytesIdentity,
+  FailureBytesIdentityKind,
+} from '../../src/diagnostics/incident/failure-correlation'
 import {
   projectCorrelationV1,
   type CorrelationV1,
@@ -19,6 +22,7 @@ const vectors = loadVectorFile(
   new URL('../../../core/testvectors/diagnostic-correlation-v1.json', import.meta.url),
 )
 const DECIMAL_TEXT = /^(?:0|[1-9]\d*)$/u
+const POSITIVE_DECIMAL_TEXT = /^[1-9]\d*$/u
 const BASE64URL_IDENTITY = /^[A-Za-z0-9_-]{22}$/u
 const MAX_UINT64 = (1n << 64n) - 1n
 
@@ -64,7 +68,7 @@ describe('Go↔TypeScript diagnostic correlation vectors', () => {
 
 describe('diagnostic correlation projection invariants', () => {
   it('rejects dependent identities without their authorities', () => {
-    const operation = createFailureIdentity('protocol_operation', identityBytes(0x10))
+    const operation = createFailureIdentity('protocol_operation', 16n)
     const attempt = createFailureIdentity('peer_attempt', identityBytes(0x20))
 
     expect(() => projectCorrelationV1({
@@ -111,9 +115,11 @@ function correlationFromVector(input: Record<string, unknown>): FailureCorrelati
   if (session !== undefined) {
     candidate.protocolSessionId = createFailureIdentity('protocol_session', session)
   }
-  const operation = optionalIdentityBytes(input.protocol_operation_id_bytes, 'protocol operation')
-  if (operation !== undefined) {
-    candidate.protocolOperationId = createFailureIdentity('protocol_operation', operation)
+  if (input.protocol_operation_id !== undefined) {
+    candidate.protocolOperationId = createFailureIdentity(
+      'protocol_operation',
+      BigInt(requiredDecimal(input.protocol_operation_id, 'protocol operation')),
+    )
   }
   const path = optionalIdentityBytes(input.peer_path_id_bytes, 'peer path')
   if (path !== undefined) candidate.peerPathId = createFailureIdentity('peer_path', path)
@@ -180,7 +186,6 @@ function requiredNumber(value: unknown, label: string): number {
 function assertCanonicalIdentities(correlation: CorrelationV1): void {
   for (const identity of [
     correlation.protocol_session_id,
-    correlation.protocol_operation_id,
     correlation.peer_path_id,
     correlation.peer_attempt_id,
   ]) {
@@ -188,16 +193,20 @@ function assertCanonicalIdentities(correlation: CorrelationV1): void {
     expect(identity).toMatch(BASE64URL_IDENTITY)
     expect(identity).not.toContain('=')
   }
+  if (correlation.protocol_operation_id !== undefined) {
+    expect(correlation.protocol_operation_id).toMatch(POSITIVE_DECIMAL_TEXT)
+    expect(BigInt(correlation.protocol_operation_id)).toBeLessThanOrEqual(MAX_UINT64)
+  }
 }
 
 function identityBytes(start: number): Uint8Array {
   return Uint8Array.from({ length: 16 }, (_, index) => (start + index) & 0xff)
 }
 
-function fakeIdentity<Kind extends FailureIdentityKind>(
+function fakeIdentity<Kind extends FailureBytesIdentityKind>(
   kind: Kind,
   bytes: Uint8Array,
-): FailureIdentity<Kind> {
+): FailureBytesIdentity<Kind> {
   return {
     kind,
     byteLength: 16,

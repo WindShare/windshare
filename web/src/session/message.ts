@@ -1,6 +1,5 @@
 import { decodePeerPathControl } from '../protocol/peer-path-control'
 import { requirePeerSlot } from './peer-slots/slots'
-import { equalBytes } from '../crypto/bytes'
 import { isWellFormedUnicode } from '../protocol/text'
 import {
   decodeCanonicalCbor,
@@ -57,7 +56,8 @@ export type MessageKind = (typeof MESSAGE_KIND)[keyof typeof MESSAGE_KIND]
 const MESSAGE_KINDS: ReadonlySet<number> = new Set(Object.values(MESSAGE_KIND))
 
 const MAXIMUM_PLAINTEXT_BYTES = 65_536 - 44
-const FRAGMENT_ROUTING_HEADER_BYTES = 20
+const FRAGMENT_ROUTING_HEADER_BYTES = 12
+const MAXIMUM_OPERATION_ID = 0xffff_ffff_ffff_ffffn
 const MAXIMUM_REMOTE_ERROR_MESSAGE_BYTES = 512
 const MINIMUM_RETRY_DELAY_MILLISECONDS = 1n
 const MAXIMUM_RETRY_DELAY_MILLISECONDS = 30_000n
@@ -71,7 +71,7 @@ const MAXIMUM_SIGNALING_TEXT_BYTES = 256
 const TEXT_ENCODER = new TextEncoder()
 export interface SessionMessage {
   readonly kind: MessageKind
-  readonly operationId?: Uint8Array<ArrayBuffer>
+  readonly operationId?: bigint
   readonly body: Uint8Array<ArrayBuffer>
   readonly plaintext: Uint8Array<ArrayBuffer>
   readonly data: boolean
@@ -86,14 +86,14 @@ export class MessageError extends Error {
 
 export function encodeMessage(
   kind: MessageKind,
-  operationId: Uint8Array | undefined,
+  operationId: bigint | undefined,
   canonicalBody: Uint8Array,
 ): SessionMessage {
   requireMessageIdentity(kind, operationId)
   const bodyValue = decodeCanonicalCbor(canonicalBody, MAXIMUM_PLAINTEXT_BYTES, 'message body')
   const plaintext = encodeCanonicalCbor(new Map<number, unknown>([
     [0, kind],
-    [1, operationId === undefined ? null : operationId.slice()],
+    [1, operationId ?? null],
     [2, bodyValue],
   ]))
   if (plaintext.byteLength > MAXIMUM_PLAINTEXT_BYTES) {
@@ -101,7 +101,7 @@ export function encodeMessage(
   }
   return Object.freeze({
     kind,
-    ...(operationId === undefined ? {} : { operationId: operationId.slice() }),
+    ...(operationId === undefined ? {} : { operationId }),
     body: canonicalBody.slice(),
     plaintext,
     data: false,
@@ -128,7 +128,7 @@ export function decodeMessage(plaintext: Uint8Array): SessionMessage {
   const rawOperation = fields.get(1)
   const operationId = rawOperation === null
     ? undefined
-    : requireBytes(rawOperation, 16, 'operation ID', true)
+    : decodeOperationId(rawOperation)
   requireMessageIdentity(kind, operationId)
   const body = encodeCanonicalCbor(fields.get(2))
   return Object.freeze({
@@ -269,12 +269,14 @@ function decodeFragmentMessage(plaintext: Uint8Array): SessionMessage {
   ) {
     throw new MessageError('Block fragment routing header is invalid')
   }
-  const operationId = requireBytes(
-    plaintext.subarray(4, FRAGMENT_ROUTING_HEADER_BYTES),
-    16,
-    'fragment operation ID',
-    true,
-  )
+  const operationId = new DataView(
+    plaintext.buffer,
+    plaintext.byteOffset,
+    plaintext.byteLength,
+  ).getBigUint64(4, false)
+  if (operationId === 0n) {
+    throw new MessageError('Block fragment operation ID must be nonzero')
+  }
   return Object.freeze({
     kind: MESSAGE_KIND.blockFragment,
     operationId,
@@ -527,18 +529,28 @@ function requireSchema(value: unknown, label: string): void {
   }
 }
 
-function requireMessageIdentity(kind: MessageKind, operationId: Uint8Array | undefined): void {
+function decodeOperationId(value: unknown): bigint {
+  const operationId = requireUnsigned(value, 'operation ID')
+  if (operationId === 0n || operationId > MAXIMUM_OPERATION_ID) {
+    throw new MessageError('Operation ID must be a nonzero unsigned 64-bit integer')
+  }
+  return operationId
+}
+
+function requireMessageIdentity(kind: MessageKind, operationId: bigint | undefined): void {
   if (!MESSAGE_KINDS.has(kind)) throw new MessageError('Message kind is outside the wire registry')
   if (kind === MESSAGE_KIND.sessionTerminal || kind === MESSAGE_KIND.peerPathControl) {
     if (operationId !== undefined) throw new MessageError('Session control has an operation ID')
     return
   }
   if (operationId === undefined) throw new MessageError('Operation message has no operation ID')
-  requireBytes(operationId, 16, 'operation ID', true)
+  if (typeof operationId !== 'bigint' || operationId < 1n || operationId > MAXIMUM_OPERATION_ID) {
+    throw new MessageError('Operation ID must be a nonzero unsigned 64-bit integer')
+  }
 }
 
-export function sameOperationId(left: Uint8Array | undefined, right: Uint8Array): boolean {
-  return left !== undefined && equalBytes(left, right)
+export function sameOperationId(left: bigint | undefined, right: bigint): boolean {
+  return left !== undefined && left === right
 }
 
 export function encodeBody(value: unknown): Uint8Array<ArrayBuffer> {

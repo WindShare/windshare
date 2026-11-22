@@ -52,7 +52,7 @@ type SenderHandler struct {
 	queueMu  sync.Mutex
 	stopping bool
 	mu       sync.Mutex
-	active   map[protocolsession.OperationRef]context.CancelFunc
+	active   map[protocolsession.OperationID]context.CancelFunc
 }
 
 // SenderHandlerLifecycle is a point-in-time view of operation ownership.
@@ -84,7 +84,7 @@ func NewSenderHandler(config SenderHandlerConfig) (*SenderHandler, error) {
 		service: config.Service, outbound: config.Outbound,
 		queue: make(chan queuedOperation, config.QueueDepth), workers: make(chan struct{}, config.Workers),
 		decisionTracer: config.DecisionTracer,
-		active:         make(map[protocolsession.OperationRef]context.CancelFunc),
+		active:         make(map[protocolsession.OperationID]context.CancelFunc),
 	}, nil
 }
 
@@ -165,14 +165,14 @@ func (h *SenderHandler) Run(ctx context.Context) error {
 			return ctx.Err()
 		case queued := <-h.queue:
 			if queued.message.Kind() == protocolsession.MessageCancel {
-				h.cancel(queued.op.Ref())
+				h.cancel(queued.op.ID())
 				continue
 			}
 			if !queued.op.IsActive() {
 				continue
 			}
 			operationContext, cancel := context.WithCancel(ctx)
-			if !h.register(queued.op.Ref(), cancel) {
+			if !h.register(queued.op.ID(), cancel) {
 				cancel()
 				continue
 			}
@@ -181,11 +181,11 @@ func (h *SenderHandler) Run(ctx context.Context) error {
 				case h.workers <- struct{}{}:
 					defer func() { <-h.workers }()
 				case <-operationContext.Done():
-					h.unregister(queued.op.Ref())
+					h.unregister(queued.op.ID())
 					return
 				}
 				h.process(operationContext, queued.op, queued.message)
-				h.unregister(queued.op.Ref())
+				h.unregister(queued.op.ID())
 			})
 		}
 	}
@@ -309,25 +309,25 @@ func wrapOutboundError(err error) error {
 	return errors.Join(ErrOutboundUnavailable, err)
 }
 
-func (h *SenderHandler) register(ref protocolsession.OperationRef, cancel context.CancelFunc) bool {
+func (h *SenderHandler) register(id protocolsession.OperationID, cancel context.CancelFunc) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if _, exists := h.active[ref]; exists {
+	if _, exists := h.active[id]; exists {
 		return false
 	}
-	h.active[ref] = cancel
+	h.active[id] = cancel
 	return true
 }
 
-func (h *SenderHandler) unregister(ref protocolsession.OperationRef) {
+func (h *SenderHandler) unregister(id protocolsession.OperationID) {
 	h.mu.Lock()
-	delete(h.active, ref)
+	delete(h.active, id)
 	h.mu.Unlock()
 }
 
-func (h *SenderHandler) cancel(ref protocolsession.OperationRef) {
+func (h *SenderHandler) cancel(id protocolsession.OperationID) {
 	h.mu.Lock()
-	cancel := h.active[ref]
+	cancel := h.active[id]
 	h.mu.Unlock()
 	if cancel != nil {
 		cancel()

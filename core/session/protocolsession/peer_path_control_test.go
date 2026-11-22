@@ -68,7 +68,7 @@ func testSessionControlAuthority(t *testing.T, kind MessageKind) {
 	if !message.Kind().IsSessionControl() {
 		t.Fatalf("kind %d should be session control", kind)
 	}
-	id := OperationID{1}
+	id := OperationID(1)
 	if _, err := NewMessage(kind, &id, body); err == nil {
 		t.Fatal("path control acquired operation identity")
 	}

@@ -89,7 +89,7 @@ export type HotSwitchPeerAttemptEvidence = WithoutCorrelation<PeerAttemptTraceEv
   protocolSessionIdBytes: readonly number[]
   peerPathIdBytes: readonly number[]
   attemptIdBytes: readonly number[]
-  operationIdBytes?: readonly number[]
+  operationId?: string
   lane?: Readonly<{ laneId: number; laneEpoch: number }>
 }>
 

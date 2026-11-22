@@ -7,8 +7,7 @@ import { projectProtocolTraceEvent } from '../../src/application/diagnostics/rec
 import { validateTraceEventPayloadV2 } from '../../src/diagnostics/export/trace-event-payload-v2'
 import {
   MAXIMUM_ACTIVE_OPERATIONS,
-  MAXIMUM_TRACKED_OPERATIONS,
-  OPERATION_TOMBSTONE_MILLISECONDS,
+  MAXIMUM_RECENT_TOMBSTONES,
   OperationRouter,
 } from '../../src/session/operation-router'
 
@@ -26,7 +25,7 @@ describe('operation lifecycle capacity', () => {
   it.each(['cancel', 'complete', 'terminate'] as const)('does not lose a synchronous %s during admission tracing', async (action) => {
     const controller = new AbortController()
     let settleActive: () => void = () => undefined
-    const router = new OperationRouter(() => undefined, () => Date.now(), {
+    const router = new OperationRouter(() => undefined, {
       protocolSessionIdentity: createProtocolSessionIdentity(identity(0)),
       trace: { current: (event) => {
         if (event.eventName !== 'protocol_operation' || event.transition !== 'admission_waiting') return
@@ -48,36 +47,44 @@ describe('operation lifecycle capacity', () => {
     router.terminate(new Error('done'))
   })
 
-  it('waits for a retained slot and resumes on expiry without incoming traffic', async () => {
+  it('evicts overflow tombstones immediately without stalling sustained throughput or arming timers', async () => {
     vi.useFakeTimers()
     const events: ProtocolTraceEvent[] = []
-    const router = new OperationRouter(() => undefined, () => Date.now(), {
+    const router = new OperationRouter(() => undefined, {
       protocolSessionIdentity: createProtocolSessionIdentity(identity(0)),
       trace: { current: (event) => events.push(event) },
     })
-    for (let index = 0; index < MAXIMUM_TRACKED_OPERATIONS; index += 1) {
+    for (let index = 0; index < MAXIMUM_RECENT_TOMBSTONES + 512; index += 1) {
       router.create(MESSAGE_KIND.listChildren, BODY).cancel(new Error('completed work'))
     }
+    expect(vi.getTimerCount()).toBe(0)
+    events.length = 0
+
+    // Active capacity still gates concurrent operations and emits valid traces.
+    const active = Array.from({ length: MAXIMUM_ACTIVE_OPERATIONS }, () =>
+      router.create(MESSAGE_KIND.listChildren, BODY))
     events.length = 0
     let admitted = false
     const pending = router.admit(MESSAGE_KIND.listChildren, BODY)
       .then((operation) => { admitted = true; return operation })
     await Promise.resolve()
     expect(admitted).toBe(false)
-    expect(vi.getTimerCount()).toBe(1)
-    await vi.advanceTimersByTimeAsync(OPERATION_TOMBSTONE_MILLISECONDS - 1)
-    expect(admitted).toBe(false)
-    await vi.advanceTimersByTimeAsync(1)
+    expect(vi.getTimerCount()).toBe(0)
+    active[0]!.cancel(new Error('slot released'))
     const operation = await pending
-    expect(events).toMatchObject([
-      { transition: 'admission_waiting', capacity: 'retained', activeOperations: 0, trackedOperations: MAXIMUM_TRACKED_OPERATIONS },
+    const admissionEvents = events.filter(
+      (event) => event.eventName === 'protocol_operation' &&
+        (event.transition === 'admission_waiting' || event.transition === 'admission_ready'),
+    )
+    expect(admissionEvents).toMatchObject([
+      { transition: 'admission_waiting', capacity: 'active', activeOperations: MAXIMUM_ACTIVE_OPERATIONS },
       { transition: 'admission_ready' },
     ])
-    for (const event of events) {
+    for (const event of admissionEvents) {
       const projected = projectProtocolTraceEvent(event)
       expect(() => validateTraceEventPayloadV2(projected.eventName, projected.payload)).not.toThrow()
-      expect(event.correlation.protocolOperationId).toBeDefined()
     }
+    expect(admissionEvents[1]!.correlation.protocolOperationId?.value).toBe(operation.id)
     await router.route(encodeMessage(MESSAGE_KIND.catalogResult, operation.id, BODY))
     expect((await operation.next()).kind).toBe(MESSAGE_KIND.catalogResult)
     router.terminate(new Error('done'))

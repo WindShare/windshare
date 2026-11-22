@@ -184,9 +184,7 @@ export function projectAttemptEvidence(
     ...(correlation.protocolOperationId === undefined
       ? {}
       : {
-          operationIdBytes: Object.freeze([
-            ...correlation.protocolOperationId.copyBytes(),
-          ]),
+          operationId: correlation.protocolOperationId.toDecimalString(),
         }),
     ...(correlation.lane === undefined
       ? {}

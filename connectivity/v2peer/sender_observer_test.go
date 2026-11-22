@@ -286,7 +286,7 @@ func testSenderAttemptObservationEmitsExactSuccessfulLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	receiveTest(t, peer.closed)
-	operationKey := op.Ref()
+	operationKey := op.ID()
 	assertPeerState(t, func() bool {
 		handler.mu.Lock()
 		defer handler.mu.Unlock()

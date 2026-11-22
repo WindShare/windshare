@@ -132,7 +132,7 @@ func TestSenderControlTransactionAggregatesAttemptsAndDrainsAuthority(t *testing
 				_ = initial.writer.Run(stopped)
 			}
 
-			operationID := id16[protocolsession.OperationID](110)
+			operationID := protocolsession.OperationID(110)
 			request, _ := protocolsession.NewMessage(
 				protocolsession.MessageRequestBlocks, &operationID, []byte{0xa1, 0x00, 0x01},
 			)
@@ -189,7 +189,7 @@ func TestOutboundResponseAttemptsEveryUsableLaneOnceOnExhaustion(t *testing.T) {
 	runtime, initialChannel := newUnstartedRuntimeWithPolicy(
 		t,
 		protocolsession.RoleSender,
-		protocolsession.OperationLimits{MaxActive: 4, MaxTracked: 4},
+		protocolsession.OperationLimits{MaxActive: 4, MaxRecentTombstones: 4},
 		now,
 	)
 	if err := initialChannel.Close(); err != nil {
@@ -217,7 +217,7 @@ func TestOutboundResponseAttemptsEveryUsableLaneOnceOnExhaustion(t *testing.T) {
 		wg.Go(func() { _ = lane.writer.Run(writerContext) })
 	}
 
-	operationID := id16[protocolsession.OperationID](115)
+	operationID := protocolsession.OperationID(115)
 	request, err := protocolsession.NewMessage(
 		protocolsession.MessageRequestBlocks,
 		&operationID,
@@ -269,7 +269,7 @@ func TestFragmentFailureRetainsRouteUntilOperationErrorDrainsAuthority(t *testin
 	_ = initial.writer.Run(stopped)
 	writerDone := make(chan error, 1)
 	go func() { writerDone <- first.writer.Run(context.Background()) }()
-	operationID := id16[protocolsession.OperationID](111)
+	operationID := protocolsession.OperationID(111)
 	request, _ := protocolsession.NewMessage(
 		protocolsession.MessageRequestBlocks, &operationID, []byte{0xa1, 0x00, 0x01},
 	)
@@ -324,7 +324,7 @@ func TestUnsettledCallerCancelDoesNotMigrateOrTerminateSession(t *testing.T) {
 	go func() { blockedDone <- blocked.writer.Run(writerContext) }()
 	go func() { fallbackDone <- fallback.writer.Run(writerContext) }()
 
-	operationID := id16[protocolsession.OperationID](112)
+	operationID := protocolsession.OperationID(112)
 	request, _ := protocolsession.NewMessage(
 		protocolsession.MessageRequestBlocks, &operationID, []byte{0xa1, 0x00, 0x01},
 	)
@@ -355,7 +355,7 @@ func TestUnsettledCallerCancelDoesNotMigrateOrTerminateSession(t *testing.T) {
 		t.Fatal("ordinary caller cancellation terminated the protocol session")
 	default:
 	}
-	secondOperation := id16[protocolsession.OperationID](114)
+	secondOperation := protocolsession.OperationID(114)
 	secondRequest, _ := protocolsession.NewMessage(
 		protocolsession.MessageRequestBlocks, &secondOperation, []byte{0xa1, 0x00, 0x02},
 	)

@@ -6,7 +6,6 @@ import { createProtocolSessionIdentity } from '../../src/session/identities'
 import { MAXIMUM_PEER_CANDIDATES } from '../../src/session/operation-continuation'
 import {
   MAXIMUM_ACTIVE_OPERATIONS,
-  OPERATION_TOMBSTONE_MILLISECONDS,
   SESSION_CONTROL_BACKLOG,
   OperationRouter,
 } from '../../src/session/operation-router'
@@ -25,7 +24,6 @@ describe('v2 operation replay ownership', () => {
     const events: ProtocolTraceEvent[] = []
     const router = new OperationRouter(
       () => undefined,
-      () => 1_000,
       {
         protocolSessionIdentity: createProtocolSessionIdentity(identity(18)),
         trace: { current: (event) => events.push(event) },
@@ -48,7 +46,7 @@ describe('v2 operation replay ownership', () => {
       responseKind: 'catalog_result',
       correlation: {
         protocolSessionId: { kind: 'protocol_session', byteLength: 16 },
-        protocolOperationId: { kind: 'protocol_operation', byteLength: 16 },
+        protocolOperationId: { kind: 'protocol_operation', value: operationId },
         lane: { id: 4, epoch: 0 },
       },
     })
@@ -71,7 +69,6 @@ describe('v2 operation replay ownership', () => {
     const events: ProtocolTraceEvent[] = []
     const router = new OperationRouter(
       () => undefined,
-      () => 1_000,
       {
         protocolSessionIdentity: createProtocolSessionIdentity(identity(20)),
         trace: { current: (event) => events.push(event) },
@@ -95,7 +92,7 @@ describe('v2 operation replay ownership', () => {
     const delivered = await deliveredFailure
     expect(delivered.protocolFailure).toMatchObject({ requestKind: 'peer_offer', correlation: {
         protocolSessionId: { kind: 'protocol_session', byteLength: 16 },
-        protocolOperationId: { kind: 'protocol_operation', byteLength: 16 },
+        protocolOperationId: { kind: 'protocol_operation', value: operationId },
         peerPathId: { kind: 'peer_path', byteLength: 16 },
         peerAttemptId: { kind: 'peer_attempt', byteLength: 16 },
         lane: { id: 4, epoch: 0 },
@@ -275,9 +272,8 @@ describe('v2 operation replay ownership', () => {
     await expect(router.route(answer)).resolves.toBeUndefined()
   })
 
-  it('retains final fingerprints and never reissues an identity after replay collection', async () => {
-    let now = 1_000
-    const router = new OperationRouter(() => undefined, () => now)
+  it('retains final fingerprints and never reissues an identity', async () => {
+    const router = new OperationRouter(() => undefined)
 
     const operation = router.create(
       MESSAGE_KIND.openRevisions,
@@ -303,7 +299,6 @@ describe('v2 operation replay ownership', () => {
       encodeBody(new Map<number, unknown>([[0, 1], [1, [1]]])),
     )
     await expect(router.route(conflict)).rejects.toMatchObject({ scope: 'session' })
-    now += 30_001
     const afterCollection = router.create(MESSAGE_KIND.openRevisions, EMPTY_REQUEST_BODY)
     expect(afterCollection.id).not.toEqual(operationId)
     expect(afterCollection.id).not.toEqual(next.id)
@@ -311,16 +306,14 @@ describe('v2 operation replay ownership', () => {
 })
 
 describe('v2 operation tombstone and admission ownership', () => {
-  it('drops retired peer traffic after tombstone collection without reviving authority', async () => {
-    let now = 0
-    const router = new OperationRouter(() => undefined, () => now)
+  it('drops retired peer traffic without reviving authority', async () => {
+    const router = new OperationRouter(() => undefined)
     const path = identity(101)
 
     const attempt = identity(103)
     const oldIdOperation = router.create(MESSAGE_KIND.peerOffer, peerOfferBody(path, attempt))
     const oldId = oldIdOperation.id
     oldIdOperation.close()
-    now = OPERATION_TOMBSTONE_MILLISECONDS + 1
 
     const current = router.create(MESSAGE_KIND.peerOffer, peerOfferBody(path, identity(105), 2n))
     const currentId = current.id
@@ -328,8 +321,8 @@ describe('v2 operation tombstone and admission ownership', () => {
     await expect(router.route(operationError(oldId, 'peer', 'late failure', [path, attempt, 1n]))).resolves.toBeUndefined()
     await expect(router.route(peerCandidate(oldId, path, attempt, 1))).resolves.toBeUndefined()
     await expect(router.route(peerAnswer(oldId, path, attempt, 'late answer'))).resolves.toBeUndefined()
-    // Even a fresh random operation ID cannot turn a retired sequence into work.
-    await expect(router.route(peerCandidate(identity(106), path, attempt, 2))).resolves.toBeUndefined()
+    // Even an unissued operation ID cannot turn a retired sequence into work.
+    await expect(router.route(peerCandidate(106n, path, attempt, 2))).resolves.toBeUndefined()
     expect(router.active()).toEqual([current])
     expect(() => router.create(MESSAGE_KIND.peerOffer, peerOfferBody(path, attempt)))
       .toThrow('sequence was reused or regressed')
@@ -338,15 +331,13 @@ describe('v2 operation tombstone and admission ownership', () => {
     await expect(current.next()).resolves.toEqual(currentAnswer)
   })
 
-  it('keeps unknown, malformed, and current wrong-operation traffic invalid after peer GC', async () => {
-    let now = 0
-    const router = new OperationRouter(() => undefined, () => now)
+  it('keeps unknown, malformed, and current wrong-operation traffic invalid after peer retirement', async () => {
+    const router = new OperationRouter(() => undefined)
     const path = identity(111)
     const attempt = identity(112)
     router.create(MESSAGE_KIND.peerOffer, peerOfferBody(path, attempt)).close()
-    now = OPERATION_TOMBSTONE_MILLISECONDS + 1
     router.create(MESSAGE_KIND.peerOffer, peerOfferBody(path, identity(115), 2n))
-    const unknownId = identity(116)
+    const unknownId = 116n
     for (const message of [
       peerAnswer(unknownId, path, identity(115), 'current', 2n),
       peerAnswer(unknownId, path, attempt, 'future', 3n),
@@ -362,18 +353,15 @@ describe('v2 operation tombstone and admission ownership', () => {
   })
 
   it('does not hide a live older sequence behind a later retirement watermark', async () => {
-    let now = 0
-    const router = new OperationRouter(() => undefined, () => now)
+    const router = new OperationRouter(() => undefined)
     const path = identity(121)
     const attempt = identity(122)
     const live = router.create(MESSAGE_KIND.peerOffer, peerOfferBody(path, attempt))
     router.create(MESSAGE_KIND.peerOffer, peerOfferBody(path, identity(125), 2n)).close()
-    now = OPERATION_TOMBSTONE_MILLISECONDS + 1
-    await expect(router.route(peerAnswer(identity(126), path, attempt, 'wrong operation')))
+    await expect(router.route(peerAnswer(126n, path, attempt, 'wrong operation')))
       .rejects.toMatchObject({ scope: 'session' })
     live.close()
-    now += OPERATION_TOMBSTONE_MILLISECONDS + 1
-    await expect(router.route(peerAnswer(identity(126), path, attempt, 'now retired')))
+    await expect(router.route(peerAnswer(126n, path, attempt, 'now retired')))
       .resolves.toBeUndefined()
   })
 
@@ -411,7 +399,7 @@ describe('v2 operation tombstone and admission ownership', () => {
     const router = new OperationRouter(() => undefined)
     const message = encodeMessage(
       MESSAGE_KIND.operationError,
-      identity(9),
+      9n,
       encodeBody(new Map<number, unknown>([
         [0, 1], [1, 4], [2, 0x4006], [3, false], [4, null], [5, 'cancelled'],
       ])),
@@ -578,7 +566,7 @@ describe('v2 operation tombstone and admission ownership', () => {
     ))
     const late = encodeMessage(
       MESSAGE_KIND.openResults,
-      identity(18),
+      18n,
       encodeBody(new Map<number, unknown>([[0, 1], [1, []]])),
     )
     await expect(router.route(late)).resolves.toBeUndefined()
@@ -627,7 +615,7 @@ describe('v2 operation tombstone and admission ownership', () => {
 })
 
 function peerAnswer(
-  operationId: Uint8Array<ArrayBuffer>,
+  operationId: bigint,
   peerPathId: Uint8Array<ArrayBuffer>,
   attemptId: Uint8Array<ArrayBuffer>,
   sdp: string,
@@ -650,7 +638,7 @@ function peerOfferBody(
 }
 
 function peerCandidate(
-  operationId: Uint8Array<ArrayBuffer>,
+  operationId: bigint,
   peerPathId: Uint8Array<ArrayBuffer>,
   attemptId: Uint8Array<ArrayBuffer>,
   seed: number,
@@ -674,7 +662,7 @@ function peerCandidate(
 }
 
 function scanProgress(
-  operationId: Uint8Array<ArrayBuffer>,
+  operationId: bigint,
   attemptId: Uint8Array<ArrayBuffer>,
 ) {
   return encodeMessage(
@@ -687,7 +675,7 @@ function scanProgress(
 }
 
 function operationError(
-  operationId: Uint8Array<ArrayBuffer>,
+  operationId: bigint,
   scope: 'block' | 'directory' | 'peer' | 'revision',
   message: string,
   binding?: readonly [Uint8Array<ArrayBuffer>, Uint8Array<ArrayBuffer>, bigint],

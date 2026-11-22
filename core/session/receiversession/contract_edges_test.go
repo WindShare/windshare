@@ -688,6 +688,6 @@ func waitPeerOperationID(
 		return operationID
 	case <-time.After(time.Second):
 		t.Fatalf("timed out waiting for %s", label)
-		return protocolsession.OperationID{}
+		return 0
 	}
 }

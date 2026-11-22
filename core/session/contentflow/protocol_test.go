@@ -59,7 +59,7 @@ func reassemblyHierarchy(t *testing.T, limits ReassemblyLimits) (ReassemblyHiera
 }
 
 func TestAssemblerEnforcesFrozenOperationBudgetIndependentlyOfSessionBudget(t *testing.T) {
-	operation := flowID[protocolsession.OperationID](221)
+	operation := protocolsession.OperationID(221)
 	recordBytes := records.MaxBlockRecordObjectBytes/2 + 1
 	first, err := FragmentRecord(operation, bytes.Repeat([]byte{1}, recordBytes))
 	if err != nil {
@@ -90,7 +90,7 @@ func TestAssemblerEnforcesFrozenOperationBudgetIndependentlyOfSessionBudget(t *t
 			t.Fatalf("failed operation retained budget=%+v", usage)
 		}
 	}
-	independent := flowID[protocolsession.OperationID](223)
+	independent := protocolsession.OperationID(223)
 	third, err := FragmentRecord(independent, bytes.Repeat([]byte{3}, recordBytes))
 	if err != nil {
 		t.Fatal(err)
@@ -130,7 +130,7 @@ func TestCancelReasonCodecFreezesTheReceiverIntentDomain(t *testing.T) {
 }
 
 func TestFragmentRoundTripOutOfOrderDuplicateAndLate(t *testing.T) {
-	operation := flowID[protocolsession.OperationID](4)
+	operation := protocolsession.OperationID(4)
 	object := make([]byte, MaxFragmentPayloadBytes*2+17)
 	for index := range object {
 		object[index] = byte(index)
@@ -181,8 +181,8 @@ func TestFragmentRoundTripOutOfOrderDuplicateAndLate(t *testing.T) {
 }
 
 func TestFragmentConflictTerminatesOnlyItsOperation(t *testing.T) {
-	firstOperation := flowID[protocolsession.OperationID](6)
-	secondOperation := flowID[protocolsession.OperationID](7)
+	firstOperation := protocolsession.OperationID(6)
+	secondOperation := protocolsession.OperationID(7)
 	object := bytes.Repeat([]byte{0x61}, MaxFragmentPayloadBytes+9)
 	first, _ := FragmentRecord(firstOperation, object)
 	second, _ := FragmentRecord(secondOperation, []byte("independent"))
@@ -210,7 +210,7 @@ func TestFragmentConflictTerminatesOnlyItsOperation(t *testing.T) {
 	}
 
 	digestMismatch := flowMessagePlaintext(t, second[0])
-	digestMismatch[20] ^= 1
+	digestMismatch[12] ^= 1
 	otherHierarchy, _ := reassemblyHierarchy(t, ReassemblyLimits{Bytes: 1 << 20, Records: 4})
 	other, _ := NewAssembler(flowID[protocolsession.ProtocolSessionID](9), otherHierarchy, nil)
 	if _, err := other.AcceptAuthenticated(digestMismatch); !errors.Is(err, ErrRecordDigest) {
@@ -219,7 +219,7 @@ func TestFragmentConflictTerminatesOnlyItsOperation(t *testing.T) {
 }
 
 func TestAssemblerTimeoutCancelAndThreeTierBudget(t *testing.T) {
-	operation := flowID[protocolsession.OperationID](10)
+	operation := protocolsession.OperationID(10)
 	object := bytes.Repeat([]byte{1}, MaxFragmentPayloadBytes+1)
 	messages, _ := FragmentRecord(operation, object)
 	now := time.Unix(200, 0)
@@ -254,10 +254,10 @@ func TestAssemblerTimeoutCancelAndThreeTierBudget(t *testing.T) {
 	if assembler.ActiveRecords() != 0 {
 		t.Fatalf("retired operation retained active records=%d", assembler.ActiveRecords())
 	}
-	if err := assembler.RetireOperation(flowID[protocolsession.OperationID](13)); err != nil {
+	if err := assembler.RetireOperation(protocolsession.OperationID(13)); err != nil {
 		t.Fatal(err)
 	}
-	if err := assembler.RetireOperation(protocolsession.OperationID{}); !errors.Is(err, ErrFragmentMalformed) {
+	if err := assembler.RetireOperation(0); !errors.Is(err, ErrFragmentMalformed) {
 		t.Fatalf("zero retire error=%v", err)
 	}
 
@@ -277,8 +277,8 @@ func TestAssemblerTimeoutCancelAndThreeTierBudget(t *testing.T) {
 
 func TestUnrelatedFragmentCannotConsumeAnotherOperationsTimeoutSignal(t *testing.T) {
 	now := time.Unix(250, 0)
-	timedOutOperation := flowID[protocolsession.OperationID](224)
-	activeOperation := flowID[protocolsession.OperationID](225)
+	timedOutOperation := protocolsession.OperationID(224)
+	activeOperation := protocolsession.OperationID(225)
 	partial, _ := FragmentRecord(timedOutOperation, bytes.Repeat([]byte{1}, MaxFragmentPayloadBytes+1))
 	active, _ := FragmentRecord(activeOperation, []byte("active"))
 	hierarchy, accounts := reassemblyHierarchy(t, ReassemblyLimits{Bytes: 1 << 20, Records: 4})
@@ -306,7 +306,7 @@ func TestUnrelatedFragmentCannotConsumeAnotherOperationsTimeoutSignal(t *testing
 
 func TestAssemblerExtendsLifetimeOnlyForAuthenticatedProgress(t *testing.T) {
 	now := time.Unix(275, 0)
-	operation := flowID[protocolsession.OperationID](228)
+	operation := protocolsession.OperationID(228)
 	object := bytes.Repeat([]byte{3}, MaxFragmentPayloadBytes*2+1)
 	fragments, _ := FragmentRecord(operation, object)
 	hierarchy, _ := reassemblyHierarchy(t, ReassemblyLimits{Bytes: uint64(len(object)), Records: 1})
@@ -325,7 +325,7 @@ func TestAssemblerExtendsLifetimeOnlyForAuthenticatedProgress(t *testing.T) {
 		t.Fatalf("long progressive assembly result=%+v err=%v", result, err)
 	}
 
-	duplicateOperation := flowID[protocolsession.OperationID](230)
+	duplicateOperation := protocolsession.OperationID(230)
 	duplicateFragments, _ := FragmentRecord(duplicateOperation, bytes.Repeat([]byte{4}, MaxFragmentPayloadBytes+1))
 	duplicateHierarchy, _ := reassemblyHierarchy(t, ReassemblyLimits{Bytes: MaxFragmentPayloadBytes + 1, Records: 1})
 	duplicateAssembler, _ := NewAssembler(flowID[protocolsession.ProtocolSessionID](231), duplicateHierarchy, func() time.Time { return now })
@@ -343,7 +343,7 @@ func TestAssemblerExtendsLifetimeOnlyForAuthenticatedProgress(t *testing.T) {
 }
 
 func TestFragmentHostileHeadersAllocateNothing(t *testing.T) {
-	operation := flowID[protocolsession.OperationID](15)
+	operation := protocolsession.OperationID(15)
 	message, _ := FragmentRecord(operation, []byte("payload"))
 	valid := flowMessagePlaintext(t, message[0])
 	hierarchy, accounts := reassemblyHierarchy(t, ReassemblyLimits{Bytes: 1 << 20, Records: 4})
@@ -354,12 +354,12 @@ func TestFragmentHostileHeadersAllocateNothing(t *testing.T) {
 		func() []byte { value := bytes.Clone(valid); value[0]++; return value }(),
 		func() []byte { value := bytes.Clone(valid); value[2] = 2; return value }(),
 		func() []byte { value := bytes.Clone(valid); value[3] = 1; return value }(),
-		func() []byte { value := bytes.Clone(valid); clear(value[4:20]); return value }(),
-		func() []byte { value := bytes.Clone(valid); clear(value[20:36]); return value }(),
-		func() []byte { value := bytes.Clone(valid); value[39] = 1; return value }(),
-		func() []byte { value := bytes.Clone(valid); value[43] = 0; return value }(),
-		func() []byte { value := bytes.Clone(valid); value[47] = 0; return value }(),
-		func() []byte { value := bytes.Clone(valid); value[51]++; return value }(),
+		func() []byte { value := bytes.Clone(valid); clear(value[4:12]); return value }(),
+		func() []byte { value := bytes.Clone(valid); clear(value[12:28]); return value }(),
+		func() []byte { value := bytes.Clone(valid); value[31] = 1; return value }(),
+		func() []byte { value := bytes.Clone(valid); value[35] = 0; return value }(),
+		func() []byte { value := bytes.Clone(valid); value[39] = 0; return value }(),
+		func() []byte { value := bytes.Clone(valid); value[43]++; return value }(),
 	}
 	for index, candidate := range cases {
 		if _, err := assembler.AcceptAuthenticated(candidate); !errors.Is(err, ErrFragmentMalformed) {
@@ -371,7 +371,7 @@ func TestFragmentHostileHeadersAllocateNothing(t *testing.T) {
 			t.Fatalf("hostile header allocated: %+v", usage)
 		}
 	}
-	if _, err := FragmentRecord(protocolsession.OperationID{}, []byte{1}); !errors.Is(err, ErrFragmentMalformed) {
+	if _, err := FragmentRecord(0, []byte{1}); !errors.Is(err, ErrFragmentMalformed) {
 		t.Fatalf("zero operation error=%v", err)
 	}
 	if _, err := FragmentRecord(operation, nil); !errors.Is(err, ErrFragmentMalformed) {

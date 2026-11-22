@@ -13,7 +13,7 @@ func TestResponseWithoutLaneAndMalformedFailureReleaseRoute(t *testing.T) {
 	sender, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
 	identity := sender.initial
 	outbound := NewResponses(sender, ResponseConfig{})
-	fragments, err := contentflow.FragmentRecord(id16[protocolsession.OperationID](77), []byte{1})
+	fragments, err := contentflow.FragmentRecord(protocolsession.OperationID(77), []byte{1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -21,7 +21,7 @@ func TestResponseWithoutLaneAndMalformedFailureReleaseRoute(t *testing.T) {
 	if err := outbound.SendFragment(context.Background(), protocolsession.Operation{}, fragments[0]); !errors.Is(err, session.ErrOperationMissing) {
 		t.Fatalf("fragment without operation authority error = %v", err)
 	}
-	invalidFailureID := id16[protocolsession.OperationID](76)
+	invalidFailureID := protocolsession.OperationID(76)
 	request, _ := protocolsession.NewMessage(protocolsession.MessageRequestBlocks, &invalidFailureID, []byte{0xa0})
 	admission, err := sender.operations.ObserveInbound(protocolsession.DirectionReceiverToSender, identity, request)
 	if err != nil || admission.op.IsZero() {

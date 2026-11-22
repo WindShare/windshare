@@ -3,25 +3,25 @@ package sessioncore
 import (
 	"context"
 	"errors"
+	"testing"
+	"testing/synctest"
+
 	"github.com/windshare/windshare/core/session/contentflow"
 	sessionobs "github.com/windshare/windshare/core/session/observation"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"testing"
-	"testing/synctest"
-	"time"
 )
 
-func TestRPCWaitsForOperationCapacityAndKeepsCancellationLive(t *testing.T) {
+func TestRPCWaitsForActiveCapacityAndProceedsWithoutTombstoneBlocking(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		runtime, _ := newUnstartedRuntimeWithPolicy(t, protocolsession.RoleReceiver,
-			protocolsession.OperationLimits{MaxActive: 1, MaxTracked: 2}, nil)
+			protocolsession.OperationLimits{MaxActive: 1, MaxRecentTombstones: 1}, nil)
 		recorder := newProtocolTraceRecorder(runtime)
 		physical := runtime.lanes.active[runtime.initial.ID]
 		writerContext, stopWriter := context.WithCancel(context.Background())
 		writerDone := make(chan error, 1)
 		go func() { writerDone <- physical.writer.Run(writerContext) }()
 		defer func() { stopWriter(); <-writerDone }()
-		client := NewRequests(runtime, &deterministicReader{next: 70})
+		client := NewRequests(runtime, nil)
 		body := []byte{0xa1, 0x00, 0x01}
 		first, err := client.Begin(context.Background(), protocolsession.MessageListChildren, body)
 		if err != nil {
@@ -56,32 +56,31 @@ func TestRPCWaitsForOperationCapacityAndKeepsCancellationLive(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		third := begin(ctx)
 		synctest.Wait()
+		cancel()
+		if cancelled := <-third; !errors.Is(cancelled.err, context.Canceled) {
+			t.Fatalf("cancelled capacity wait: %v", cancelled.err)
+		}
 		if err := client.CancelAndEnd(result.call, contentflow.CancelReasonOutputAbort); err != nil {
 			t.Fatal(err)
 		}
-		synctest.Wait()
-		cancel()
-		if result := <-third; !errors.Is(result.err, context.Canceled) {
-			t.Fatalf("cancelled capacity wait: %v", result.err)
+		// Exceeding MaxRecentTombstones must NOT block or sleep; oldest unpinned tombstone evicts FIFO.
+		fourth, err := client.Begin(context.Background(), protocolsession.MessageListChildren, body)
+		if err != nil {
+			t.Fatalf("fourth begin after tombstone cap: %v", err)
 		}
-		fourth := begin(context.Background())
-		synctest.Wait()
-		time.Sleep(protocolsession.OperationTombstoneLifetime)
-		result = <-fourth
-		if result.err != nil {
-			t.Fatal(result.err)
-		}
-		if err := client.CancelAndEnd(result.call, contentflow.CancelReasonOutputAbort); err != nil {
+		if err := client.CancelAndEnd(fourth, contentflow.CancelReasonOutputAbort); err != nil {
 			t.Fatal(err)
 		}
 		synctest.Wait()
 		if runtime.ctx.Err() != nil || !physical.writer.Accepting() || runtime.operations.ActiveCount() != 0 {
 			t.Fatal("capacity pressure ended the session or leaked operation authority")
 		}
+		if runtime.operations.TombstoneCount() > 1 {
+			t.Fatalf("tombstone count %d exceeded MaxRecentTombstones=1", runtime.operations.TombstoneCount())
+		}
 		traces := recorder.snapshot()
 		for _, stage := range []sessionobs.ProtocolOperationStage{
 			sessionobs.ProtocolOperationReceiverWaitingActiveCapacity,
-			sessionobs.ProtocolOperationReceiverWaitingRetainedCapacity,
 			sessionobs.ProtocolOperationReceiverAdmissionReady,
 		} {
 			found := false

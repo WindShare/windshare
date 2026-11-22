@@ -313,7 +313,7 @@ func receiveIntegrationFrameChannel(
 }
 
 type integrationPeerRecord struct {
-	ref         protocolsession.OperationRef
+	id          protocolsession.OperationID
 	active      bool
 	contract    protocolsession.OperationContinuationContract
 	maxCont     int
@@ -326,7 +326,6 @@ type integrationPeerIngress struct {
 	mu         sync.Mutex
 	classifier protocolsession.OperationContinuationClassifier
 	handler    sendersession.PeerHandler
-	nextToken  uint64
 	records    map[protocolsession.OperationID]*integrationPeerRecord
 	closed     bool
 }
@@ -342,39 +341,38 @@ func newIntegrationPeerIngress(
 	}, nil
 }
 
-func (ingress *integrationPeerIngress) Active(ref protocolsession.OperationRef) bool {
+func (ingress *integrationPeerIngress) Active(id protocolsession.OperationID) bool {
 	ingress.mu.Lock()
 	defer ingress.mu.Unlock()
-	rec := ingress.records[ref.ID]
-	return rec != nil && rec.ref == ref && rec.active
+	rec := ingress.records[id]
+	return rec != nil && rec.active
 }
 
-func (ingress *integrationPeerIngress) Current(ref protocolsession.OperationRef) bool {
+func (ingress *integrationPeerIngress) Current(id protocolsession.OperationID) bool {
 	ingress.mu.Lock()
 	defer ingress.mu.Unlock()
-	rec := ingress.records[ref.ID]
-	return rec != nil && rec.ref == ref
+	return ingress.records[id] != nil
 }
 
-func (ingress *integrationPeerIngress) RequestKind(ref protocolsession.OperationRef) (protocolsession.MessageKind, bool) {
+func (ingress *integrationPeerIngress) RequestKind(id protocolsession.OperationID) (protocolsession.MessageKind, bool) {
 	ingress.mu.Lock()
 	defer ingress.mu.Unlock()
-	rec := ingress.records[ref.ID]
-	if rec == nil || rec.ref != ref {
+	rec := ingress.records[id]
+	if rec == nil {
 		return 0, false
 	}
 	return rec.requestKind, true
 }
 
-func (ingress *integrationPeerIngress) PeerAttemptBinding(protocolsession.OperationRef) (protocolsession.PeerAttemptBinding, bool) {
+func (ingress *integrationPeerIngress) PeerAttemptBinding(protocolsession.OperationID) (protocolsession.PeerAttemptBinding, bool) {
 	return protocolsession.PeerAttemptBinding{}, false
 }
 
-func (ingress *integrationPeerIngress) MaximumContinuations(ref protocolsession.OperationRef) (int, bool) {
+func (ingress *integrationPeerIngress) MaximumContinuations(id protocolsession.OperationID) (int, bool) {
 	ingress.mu.Lock()
 	defer ingress.mu.Unlock()
-	rec := ingress.records[ref.ID]
-	if rec == nil || rec.ref != ref || !rec.hasMaxCont {
+	rec := ingress.records[id]
+	if rec == nil || !rec.hasMaxCont {
 		return 0, false
 	}
 	return rec.maxCont, true
@@ -399,9 +397,8 @@ func (ingress *integrationPeerIngress) Route(
 			ingress.mu.Unlock()
 			return protocolsession.OperationDrop, nil
 		}
-		ingress.nextToken++
 		rec := &integrationPeerRecord{
-			ref:         protocolsession.OperationRef{ID: operationID, Token: ingress.nextToken},
+			id:          operationID,
 			active:      true,
 			requestKind: message.Kind(),
 			seen:        make(map[[32]byte]struct{}),
@@ -419,7 +416,7 @@ func (ingress *integrationPeerIngress) Route(
 			}
 		}
 		ingress.records[operationID] = rec
-		op := protocolsession.NewOperation(rec.ref, ingress)
+		op := protocolsession.NewOperation(rec.id, ingress)
 		ingress.mu.Unlock()
 		return protocolsession.OperationDeliver, ingress.handler.HandleMessage(ctx, op, message)
 	case protocolsession.MessagePeerCandidate:
@@ -448,21 +445,18 @@ func (ingress *integrationPeerIngress) Route(
 				rec.seen[key] = struct{}{}
 			}
 		}
-		op := protocolsession.NewOperation(rec.ref, ingress)
+		op := protocolsession.NewOperation(rec.id, ingress)
 		ingress.mu.Unlock()
 		return protocolsession.OperationDeliver, ingress.handler.HandleMessage(ctx, op, message)
 	case protocolsession.MessageCancel:
 		rec := ingress.records[operationID]
 		if rec == nil {
-			ingress.nextToken++
-			rec = &integrationPeerRecord{
-				ref: protocolsession.OperationRef{ID: operationID, Token: ingress.nextToken},
-			}
+			rec = &integrationPeerRecord{id: operationID}
 			ingress.records[operationID] = rec
 		} else {
 			rec.active = false
 		}
-		op := protocolsession.NewOperation(rec.ref, ingress)
+		op := protocolsession.NewOperation(rec.id, ingress)
 		ingress.mu.Unlock()
 		return protocolsession.OperationDeliver, ingress.handler.Cancel(ctx, op)
 	default:
@@ -672,9 +666,7 @@ func TestV2PeerSenderNegotiatesRealPionDataChannel(t *testing.T) {
 	sessionID, _ := protocolsession.ProtocolSessionIDFromBytes(
 		bytes.Repeat([]byte{2}, protocolsession.IdentityBytes),
 	)
-	protocolOperation, _ := protocolsession.OperationIDFromBytes(
-		bytes.Repeat([]byte{3}, protocolsession.IdentityBytes),
-	)
+	protocolOperation := protocolsession.OperationID(3)
 	binding := v2signal.Binding{AttemptSequence: 1}
 	copy(binding.PeerPathID[:], bytes.Repeat([]byte{4}, v2signal.IdentityBytes))
 	copy(binding.AttemptID[:], bytes.Repeat([]byte{5}, v2signal.IdentityBytes))

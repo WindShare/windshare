@@ -1,6 +1,6 @@
 import {
   booleanValue, canonicalIdentity, decimalFields, decimalUint64, exactKeys,
-  member, recordValue, uint32, type UnknownRecord,
+  member, positiveDecimalUint64, recordValue, uint32, type UnknownRecord,
 } from '../trace-payload-validation'
 
 export const ARTIFACT_KINDS = ['original_file', 'directory_tree', 'zip_archive'] as const
@@ -158,7 +158,7 @@ export function validateReceive(payload: UnknownRecord): void {
       canonicalIdentity(payload.receive_operation_id, 'capacity receive operation ID')
       canonicalIdentity(payload.transfer_job_id, 'capacity transfer job ID')
       canonicalIdentity(payload.protocol_session_id, 'capacity ProtocolSession ID')
-      canonicalIdentity(payload.protocol_operation_id, 'capacity protocol operation ID')
+      positiveDecimalUint64(payload.protocol_operation_id, 'capacity protocol operation ID')
       decimalUint64(payload.attempt, 'capacity wait attempt')
       uint32(payload.sender_hint_ms, 'capacity sender hint')
       uint32(payload.jitter_ms, 'capacity jitter')

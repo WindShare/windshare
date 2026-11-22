@@ -15,7 +15,7 @@ import (
 
 func TestAuthenticatedCapacitySignalPreservesExactHintAndCorrelation(t *testing.T) {
 	sessionID := id16[protocolsession.ProtocolSessionID](181)
-	operationID := id16[protocolsession.OperationID](182)
+	operationID := protocolsession.OperationID(182)
 	dependencies := receiverTransferDependencies{
 		runtime: &Runtime{core: &sessioncore.Runtime{}, lifecycle: testLifecycle{sessionID: sessionID}},
 	}
@@ -67,7 +67,7 @@ func TestAuthenticatedOpenCapacityResponsePreservesWireCorrelation(t *testing.T)
 
 func TestAuthenticatedCapacitySignalRejectsAdjacentFailureShapes(t *testing.T) {
 	sessionID := id16[protocolsession.ProtocolSessionID](183)
-	operationID := id16[protocolsession.OperationID](184)
+	operationID := protocolsession.OperationID(184)
 	dependencies := receiverTransferDependencies{
 		runtime: &Runtime{core: &sessioncore.Runtime{}, lifecycle: testLifecycle{sessionID: sessionID}},
 	}

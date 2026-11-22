@@ -160,7 +160,7 @@ export async function wireFixture(options: {
   const runtime = new Runtime({ descriptor: share, readSecret: SECRET.slice(), initialChannel: relay,
     protocolTrace: { current: event => events.push(event) } }, keys, identity(6), relay.frames.getReader())
   const adoption = await runtime.adoptGrantedLane(direct, {
-    laneId: DIRECT, laneEpoch: DIRECT_EPOCH, grantOperationId: identity(16), attachNonce: identity(17),
+    laneId: DIRECT, laneEpoch: DIRECT_EPOCH, grantOperationId: 16n, attachNonce: identity(17),
   })
   if (adoption.installation !== 'installed') throw new Error('Direct lane admission failed', { cause: adoption })
   const lanes = new LaneSet()

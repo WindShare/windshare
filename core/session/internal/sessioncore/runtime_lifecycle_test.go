@@ -230,7 +230,7 @@ func TestRuntimeComponentFailureCancelsPhysicalLaneBeforeFinish(t *testing.T) {
 
 func TestOperationLaneAffinityPreservesFirstPhysicalAuthorityUntilFinal(t *testing.T) {
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
-	operationID := id16[protocolsession.OperationID](61)
+	operationID := protocolsession.OperationID(61)
 	other := session.LaneIdentity{ID: runtime.initial.ID + 1, Epoch: 1}
 	otherChannel := newMemoryChannel(t)
 	if _, err := runtime.lanes.add(other, otherChannel, permissiveInboundAuthenticator(), false); err != nil {
@@ -258,7 +258,7 @@ func TestOperationLaneAffinityPreservesFirstPhysicalAuthorityUntilFinal(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec := runtime.operations.lookupRecord(event.op.Ref())
+	rec := runtime.operations.lookupRecord(event.op.ID())
 	if rec == nil || rec.preferredLane != runtime.initial {
 		t.Fatalf("exact replay changed first physical authority: %+v", rec)
 	}
@@ -282,10 +282,10 @@ func TestOperationLaneAffinityPreservesFirstPhysicalAuthorityUntilFinal(t *testi
 func TestOperationLaneAffinityCannotRevivePathWithoutSurvivingLane(t *testing.T) {
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
 	t.Cleanup(runtime.AbortBeforeStart)
-	operationID := id16[protocolsession.OperationID](83)
+	operationID := protocolsession.OperationID(83)
 	request, _ := protocolsession.NewMessage(protocolsession.MessageOpenRevisions, &operationID, []byte{0xa0})
 	op := admitTestSenderOperation(t, runtime, runtime.initial, request)
-	rec := runtime.operations.lookupRecord(op.Ref())
+	rec := runtime.operations.lookupRecord(op.ID())
 	runtime.lanes.mu.Lock()
 	runtime.lanes.active[runtime.initial.ID].closing = true
 	runtime.lanes.mu.Unlock()

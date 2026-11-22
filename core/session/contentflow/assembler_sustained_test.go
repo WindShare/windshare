@@ -55,7 +55,7 @@ func TestAssemblerSuppressesInOperationDuplicateUntilRetired(t *testing.T) {
 	}
 	t.Cleanup(assembler.Close)
 
-	operation := flowID[protocolsession.OperationID](201)
+	operation := protocolsession.OperationID(201)
 	fragments, err := FragmentRecord(operation, []byte("block"))
 	if err != nil {
 		t.Fatal(err)
@@ -76,7 +76,7 @@ func TestAssemblerSuppressesInOperationDuplicateUntilRetired(t *testing.T) {
 		t.Fatal(err)
 	}
 	conflictingPlaintext := flowMessagePlaintext(t, conflicting[0])
-	copy(conflictingPlaintext[20:36], fragment[20:36])
+	copy(conflictingPlaintext[12:28], fragment[12:28])
 	if _, err := assembler.AcceptAuthenticated(conflictingPlaintext); !errors.Is(err, ErrFragmentConflict) {
 		t.Fatalf("completed-record geometry conflict err=%v", err)
 	}
@@ -151,9 +151,7 @@ func TestReservedAssemblySustainsDelayedCapacityReleasePastRetentionCap(t *testi
 
 func sequentialOperationID(t *testing.T, sequence uint64) protocolsession.OperationID {
 	t.Helper()
-	var raw [16]byte
-	binary.BigEndian.PutUint64(raw[8:], sequence)
-	id, err := protocolsession.OperationIDFromBytes(raw[:])
+	id, err := protocolsession.OperationIDFromUint64(sequence)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,6 +1,9 @@
-import { OperationTombstone, type ProtocolTraceContext } from './operation-retirement'
-import { IssuedOperations } from './operations/issued-operations'
-import { encodeBase64Url } from '../crypto/bytes'
+import {
+  inferredRetiredRequestKind,
+  OperationTombstone,
+  requireRequestKind,
+  type ProtocolTraceContext,
+} from './operation-retirement'
 import { cancellationTraceReason, snapshotOperationRequest, type CancellationTraceReason } from './operation-diagnostics'
 import { createReceivedProtocolError, type ReceivedProtocolError } from '../diagnostics/incident/protocol-error'
 import { type FailureCorrelation } from '../diagnostics/incident/failure-correlation'
@@ -24,7 +27,6 @@ import {
 import {
   OperationContinuationAuthority,
   RetiredPeerContinuations,
-  requireOperationResponse,
 } from './operation-continuation'
 import { type OperationCancelReason, type SessionOperation, SessionRuntimeError } from './runtime-types'
 
@@ -39,8 +41,9 @@ export const SESSION_REASSEMBLY_RESERVATION_BYTES = 8 * 4 * 1024 * 1024
 export const SESSION_PLAINTEXT_BACKLOG_BYTES = SESSION_PLAINTEXT_BUDGET_BYTES -
   SESSION_BLOCK_CACHE_RESERVATION_BYTES - SESSION_REASSEMBLY_RESERVATION_BYTES
 export const MAXIMUM_ACTIVE_OPERATIONS = 256
-export const OPERATION_TOMBSTONE_MILLISECONDS = 30_000
-export const MAXIMUM_TRACKED_OPERATIONS = 4_096
+export const MAXIMUM_RECENT_TOMBSTONES = 4_096
+
+const MAXIMUM_OPERATION_ID = 0xffff_ffff_ffff_ffffn
 
 interface PendingRead {
   resolve(message: SessionMessage): void
@@ -48,7 +51,7 @@ interface PendingRead {
 }
 
 export class OperationQueue implements SessionOperation {
-  readonly id: Uint8Array<ArrayBuffer>
+  readonly id: bigint
   readonly requestKind: MessageKind
   readonly requestTrace: ReturnType<typeof snapshotOperationRequest>
   #cancellationReason: CancellationTraceReason | undefined
@@ -74,7 +77,7 @@ export class OperationQueue implements SessionOperation {
   #consumerSettled = false
 
   constructor(
-    id: Uint8Array,
+    id: bigint,
     requestKind: MessageKind,
     canonicalRequestBody: Uint8Array,
     admission: SessionQueueAdmission,
@@ -90,7 +93,7 @@ export class OperationQueue implements SessionOperation {
     ) => void,
     requestTrace?: ReturnType<typeof snapshotOperationRequest>,
   ) {
-    this.id = id.slice()
+    this.id = id
     this.requestKind = requestKind
     this.requestTrace = requestTrace
     this.#admission = admission
@@ -294,13 +297,11 @@ type SessionControlKind = typeof MESSAGE_KIND.peerPathControl
 type SessionControlListener = (body: Uint8Array<ArrayBuffer>) => void
 
 export class OperationRouter {
-  readonly #operations = new Map<string, OperationQueue>()
+  readonly #operations = new Map<bigint, OperationQueue>()
   readonly #draining = new Set<OperationQueue>()
   readonly #onTerminal: (reason: unknown) => void
-  readonly #now: () => number
-  readonly #tombstones = new Map<string, OperationTombstone>()
+  readonly #tombstones = new Map<bigint, OperationTombstone>()
   readonly #retiredPeers = new RetiredPeerContinuations()
-  readonly #issued: IssuedOperations
   readonly #compactedResponseTraced = new Set<MessageKind>()
   readonly #admission = new SessionQueueAdmission()
   readonly #diagnostics: ProtocolTraceContext | undefined
@@ -310,18 +311,15 @@ export class OperationRouter {
   readonly #authenticatedResponses = new WeakMap<SessionMessage,
     ReceivedProtocolError | Readonly<{ correlation: ReceivedProtocolError['correlation'] }>>()
   readonly #capacityWaiters = new Set<() => void>()
-  #capacityTimer: ReturnType<typeof setTimeout> | undefined
+  #nextOperationId = 1n
+  #lastIssuedId = 0n
   #terminal: unknown
 
   constructor(
     onTerminal: (reason: unknown) => void,
-    now: () => number = () => Date.now(),
     diagnostics?: ProtocolTraceContext,
-    randomBytes?: (length: number) => Uint8Array,
   ) {
-    this.#issued = new IssuedOperations(randomBytes)
     this.#onTerminal = onTerminal
-    this.#now = now
     this.#diagnostics = diagnostics
   }
 
@@ -331,55 +329,66 @@ export class OperationRouter {
     signal?: AbortSignal,
   ): Promise<OperationQueue> {
     signal?.throwIfAborted()
-    const ownedId = this.#issued.issue(requestKind)
+    requireRequestKind(requestKind)
     const ownedBody = canonicalRequestBody.slice()
-    let waitingFor: 'active' | 'retained' | undefined
+    let waiting = false
     try {
       for (;;) {
         signal?.throwIfAborted()
         if (this.#terminal !== undefined) {
           throw new SessionRuntimeError('session', 'Protocol session is terminal')
         }
-        this.#pruneTombstones()
         if (this.#hasOperationCapacity()) {
+          const ownedId = this.#issueOperationId()
           const operation = this.#create(ownedId, requestKind, ownedBody)
-          if (waitingFor !== undefined) this.#traceAdmission(ownedId, requestKind, 'admission_ready')
+          if (waiting) this.#traceAdmission(ownedId, requestKind, 'admission_ready')
           return operation
         }
-        const capacity = this.#operations.size >= MAXIMUM_ACTIVE_OPERATIONS ? 'active' : 'retained'
-        if (waitingFor !== capacity) {
-          waitingFor = capacity
-          this.#traceAdmission(ownedId, requestKind, capacity)
+        if (!waiting) {
+          waiting = true
+          this.#traceAdmission(undefined, requestKind, 'active')
         }
-        // Wait before registering operation authority or entering a lane writer. Incoming
-        // results and cancellation must remain able to release active capacity.
+        // Wait before allocating a monotonic ID or entering a lane writer so wire
+        // IDs stay strictly ordered by admission and abandoned waits skip no IDs.
         await this.#waitForCapacity(signal)
       }
     } catch (error) {
-      if (waitingFor !== undefined) this.#traceAdmission(ownedId, requestKind, 'admission_abandoned')
+      if (waiting) this.#traceAdmission(undefined, requestKind, 'admission_abandoned')
       throw error
     }
   }
 
   create(requestKind: MessageKind, canonicalRequestBody: Uint8Array): OperationQueue {
-    return this.#create(this.#issued.issue(requestKind), requestKind, canonicalRequestBody)
+    requireRequestKind(requestKind)
+    if (this.#terminal !== undefined) {
+      throw new SessionRuntimeError('session', 'Protocol session is terminal')
+    }
+    if (this.#operations.size >= MAXIMUM_ACTIVE_OPERATIONS) {
+      throw new SessionRuntimeError('session', 'Active operation budget is exhausted')
+    }
+    return this.#create(this.#issueOperationId(), requestKind, canonicalRequestBody)
+  }
+
+  #issueOperationId(): bigint {
+    if (this.#nextOperationId > MAXIMUM_OPERATION_ID) {
+      throw new SessionRuntimeError('session', 'Operation identity space is exhausted')
+    }
+    const id = this.#nextOperationId
+    this.#nextOperationId += 1n
+    this.#lastIssuedId = id
+    return id
   }
 
   #create(
-    id: Uint8Array,
+    id: bigint,
     requestKind: MessageKind,
     canonicalRequestBody: Uint8Array,
   ): OperationQueue {
     if (this.#terminal !== undefined) {
       throw new SessionRuntimeError('session', 'Protocol session is terminal')
     }
-    this.#pruneTombstones()
-    const key = encodeBase64Url(id)
     if (this.#operations.size >= MAXIMUM_ACTIVE_OPERATIONS) {
       throw new SessionRuntimeError('session', 'Active operation budget is exhausted')
-    }
-    if (this.#operations.size + this.#tombstones.size >= MAXIMUM_TRACKED_OPERATIONS) {
-      throw new SessionRuntimeError('session', 'Tracked operation budget is exhausted')
     }
     const operation = new OperationQueue(
       id,
@@ -388,12 +397,12 @@ export class OperationRouter {
       this.#admission,
       (authority, settlement) => {
         this.#retiredPeers.retire(authority.peerBinding())
-        this.#operations.delete(key)
+        this.#operations.delete(id)
         this.#draining.add(operation)
-        this.#tombstones.set(key, new OperationTombstone(
-          this.#now() + OPERATION_TOMBSTONE_MILLISECONDS,
+        this.#tombstones.set(id, new OperationTombstone(
           authority, settlement, operation.requestTrace, operation.cancellationReason,
         ))
+        this.#evictOverflowTombstones()
         this.#wakeCapacityWaiters()
         if (settlement !== 'remote_final') {
           this.#emitSettlement(operation, settlement)
@@ -415,12 +424,12 @@ export class OperationRouter {
       this.#diagnostics?.trace?.current === undefined ? undefined : snapshotOperationRequest(requestKind, canonicalRequestBody),
     )
     this.#retiredPeers.admit(operation.peerBinding())
-    this.#operations.set(key, operation)
+    this.#operations.set(id, operation)
     return operation
   }
 
   owns(operation: SessionOperation): operation is OperationQueue {
-    return this.#operations.get(encodeBase64Url(operation.id)) === operation
+    return this.#operations.get(operation.id) === operation
   }
 
   active(): readonly OperationQueue[] {
@@ -467,12 +476,11 @@ export class OperationRouter {
     if (operationId === undefined) {
       throw new SessionRuntimeError('session', 'Inbound operation message has no identity')
     }
-    const key = encodeBase64Url(operationId)
-    const operation = this.#operations.get(key)
+    const operation = this.#operations.get(operationId)
     if (operation !== undefined) {
       const disposition = await operation.push(message, laneId, laneEpoch)
       if (disposition === 'discarded') {
-        this.#tombstones.get(key)?.traceResponse(message, this.#diagnostics, laneId, laneEpoch)
+        this.#tombstones.get(operationId)?.traceResponse(message, this.#diagnostics, laneId, laneEpoch)
         return
       }
       if (message.kind !== MESSAGE_KIND.blockFragment) {
@@ -499,21 +507,23 @@ export class OperationRouter {
       }
       return
     }
-    await this.#routeRetired(key, message, laneId, laneEpoch)
+    await this.#routeRetired(operationId, message, laneId, laneEpoch)
   }
 
-  async #routeRetired(key: string, message: SessionMessage, laneId?: number, laneEpoch?: number): Promise<void> {
-    this.#pruneTombstones()
-    const tombstone = this.#tombstones.get(key)
+  async #routeRetired(id: bigint, message: SessionMessage, laneId?: number, laneEpoch?: number): Promise<void> {
+    const tombstone = this.#tombstones.get(id)
     if (tombstone === undefined) {
       if (this.#retiredPeers.drops(message)) return
-      const requestKind = message.operationId === undefined ? undefined : this.#issued.requestKind(message.operationId)
-      if (requestKind === undefined || requestKind === MESSAGE_KIND.peerOffer) {
+      if (id < 1n || id > this.#lastIssuedId) {
         throw new SessionRuntimeError('session', 'Inbound message uses an unknown operation ID')
       }
-      requireOperationResponse(requestKind, message)
-      // Active operations were checked first. Issued IDs absent from both maps
-      // are retired or abandoned admissions, never authority for new work.
+      const requestKind = inferredRetiredRequestKind(message)
+      if (requestKind === undefined) {
+        throw new SessionRuntimeError('session', 'Inbound message uses an unknown operation ID')
+      }
+      // Active operations and recent tombstones were checked first. Earlier issued
+      // IDs are retired operations whose tombstone aged out of the FIFO cache,
+      // never authority for new work.
       const diagnostics = this.#diagnostics
       // One observation per request kind bounds a stalled fragment burst.
       if (diagnostics?.trace?.current !== undefined && !this.#compactedResponseTraced.has(requestKind)) {
@@ -523,7 +533,7 @@ export class OperationRouter {
           requestKind: protocolMessageKindV1(requestKind), responseKind: protocolMessageKindV1(message.kind),
           correlation: {
             protocolSessionId: diagnostics.protocolSessionIdentity,
-            protocolOperationId: createProtocolOperationIdentity(message.operationId!),
+            protocolOperationId: createProtocolOperationIdentity(id),
             ...(laneId === undefined || laneEpoch === undefined ? {} : { lane: { id: laneId, epoch: laneEpoch } }),
           },
         }))
@@ -637,9 +647,9 @@ export class OperationRouter {
   }
 
   #traceAdmission(
-    id: Uint8Array,
+    id: bigint | undefined,
     requestKind: MessageKind,
-    stage: 'active' | 'retained' | 'admission_ready' | 'admission_abandoned',
+    stage: 'active' | 'admission_ready' | 'admission_abandoned',
   ): void {
     const diagnostics = this.#diagnostics
     if (diagnostics === undefined) return
@@ -648,9 +658,9 @@ export class OperationRouter {
       requestKind: protocolMessageKindV1(requestKind),
       correlation: {
         protocolSessionId: diagnostics.protocolSessionIdentity,
-        protocolOperationId: createProtocolOperationIdentity(id),
+        ...(id === undefined ? {} : { protocolOperationId: createProtocolOperationIdentity(id) }),
       },
-      ...(stage === 'active' || stage === 'retained'
+      ...(stage === 'active'
         ? {
             transition: 'admission_waiting' as const, capacity: stage,
             activeOperations: this.#operations.size,
@@ -661,8 +671,7 @@ export class OperationRouter {
   }
 
   #hasOperationCapacity(): boolean {
-    return this.#operations.size < MAXIMUM_ACTIVE_OPERATIONS &&
-      this.#operations.size + this.#tombstones.size < MAXIMUM_TRACKED_OPERATIONS
+    return this.#operations.size < MAXIMUM_ACTIVE_OPERATIONS
   }
 
   #waitForCapacity(signal?: AbortSignal): Promise<void> {
@@ -676,7 +685,6 @@ export class OperationRouter {
       const cleanup = () => {
         this.#capacityWaiters.delete(wake)
         signal?.removeEventListener('abort', abort)
-        if (this.#capacityWaiters.size === 0) this.#clearCapacityTimer()
       }
       const wake = () => {
         cleanup()
@@ -688,33 +696,19 @@ export class OperationRouter {
       }
       this.#capacityWaiters.add(wake)
       signal?.addEventListener('abort', abort, { once: true })
-      if (this.#capacityTimer === undefined && this.#operations.size < MAXIMUM_ACTIVE_OPERATIONS) {
-        let earliest = Infinity
-        for (const tombstone of this.#tombstones.values()) earliest = Math.min(earliest, tombstone.expiresAt)
-        if (Number.isFinite(earliest)) {
-          this.#capacityTimer = setTimeout(() => this.#wakeCapacityWaiters(), Math.max(0, earliest - this.#now()))
-        }
-      }
     })
   }
 
-  #clearCapacityTimer(): void {
-    if (this.#capacityTimer !== undefined) clearTimeout(this.#capacityTimer)
-    this.#capacityTimer = undefined
-  }
-
   #wakeCapacityWaiters(): void {
-    this.#clearCapacityTimer()
     for (const wake of [...this.#capacityWaiters]) wake()
   }
 
-  #pruneTombstones(): void {
-    const now = this.#now()
-    for (const [key, tombstone] of this.#tombstones) {
-      if (tombstone.expiresAt <= now) {
-        tombstone.close()
-        this.#tombstones.delete(key)
-      }
+  #evictOverflowTombstones(): void {
+    while (this.#tombstones.size > MAXIMUM_RECENT_TOMBSTONES) {
+      const oldest = this.#tombstones.entries().next().value
+      if (oldest === undefined) break
+      oldest[1].close()
+      this.#tombstones.delete(oldest[0])
     }
   }
 }

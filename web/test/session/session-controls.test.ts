@@ -27,7 +27,7 @@ it.each(cases)('reconstructs the Go $name session message with its canonical bod
   expect(message.kind).toBe(vector.kind)
   expect(message.operationId).toBeUndefined()
   expect(equalBytes(encodeMessage(message.kind, undefined, message.body).plaintext, message.plaintext)).toBe(true)
-  expect(() => encodeMessage(message.kind, new Uint8Array(16).fill(1), message.body)).toThrow()
+  expect(() => encodeMessage(message.kind, 1n, message.body)).toThrow()
   validateSenderControlBody(message.kind, body)
   expect(equalBytes(encodePeerPathControl(decodePeerPathControl(body)), body)).toBe(true)
   expect(equalBytes(message.body, body)).toBe(true)

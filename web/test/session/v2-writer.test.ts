@@ -2,11 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { EnvelopeSealer } from '../../src/session/envelope'
 import { encodeBody, encodeMessage, MESSAGE_KIND } from '../../src/session/message'
 import { SESSION_SEND_TIMEOUT_MILLISECONDS, SessionWriter } from '../../src/session/writer'
-import { BackpressuredChannel, BINDING, deferred, id, KEY, openSent } from './v2-send-fixture'
+import { BackpressuredChannel, BINDING, deferred, KEY, openSent } from './v2-send-fixture'
 
 afterEach(() => vi.useRealTimers())
 
-const message = (seed: number) => encodeMessage(MESSAGE_KIND.listChildren, id(seed), encodeBody([]))
+const message = (seed: number) => encodeMessage(MESSAGE_KIND.listChildren, BigInt(seed), encodeBody([]))
 
 describe('session writer delivery ownership', () => {
   it('withdraws queued work without consuming a sequence or closing the lane', async () => {
@@ -23,8 +23,8 @@ describe('session writer delivery ownership', () => {
     const last = writer.send(message(3))
     channel.unblock()
     await Promise.all([first, last])
-    expect((await openSent(channel)).map(value => [value.sequence, value.message.operationId![0]])).toEqual([
-      [0n, 1], [1n, 3],
+    expect((await openSent(channel)).map(value => [value.sequence, value.message.operationId])).toEqual([
+      [0n, 1n], [1n, 3n],
     ])
     expect(failure).not.toHaveBeenCalled()
     expect(channel.state).toBe('open')
@@ -37,9 +37,9 @@ describe('session writer delivery ownership', () => {
     const first = expect(writer.send(message(1))).rejects.toBe(reason)
     await channel.sending.promise
     const followup = expect(writer.send(message(1))).rejects.toBe(reason)
-    const cancellation = writer.send(encodeMessage(MESSAGE_KIND.cancel, id(1), encodeBody([1])))
+    const cancellation = writer.send(encodeMessage(MESSAGE_KIND.cancel, 1n, encodeBody([1])))
     const other = writer.send(message(2))
-    writer.cancelPendingMessages(id(1), reason)
+    writer.cancelPendingMessages(1n, reason)
     await Promise.all([first, followup])
     channel.unblock()
     await Promise.all([cancellation, other])

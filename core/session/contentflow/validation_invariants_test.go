@@ -179,8 +179,8 @@ func TestSenderHandlerLifecycleSnapshotReportsOnlyBoundedOwnership(t *testing.T)
 	handler := &SenderHandler{
 		queue:   make(chan queuedOperation, 2),
 		workers: make(chan struct{}, 2),
-		active: map[protocolsession.OperationRef]context.CancelFunc{
-			{}: func() {},
+		active: map[protocolsession.OperationID]context.CancelFunc{
+			1: func() {},
 		},
 	}
 	handler.queue <- queuedOperation{}

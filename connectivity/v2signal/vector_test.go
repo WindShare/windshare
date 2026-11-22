@@ -50,7 +50,7 @@ type peerControlBindingVector struct {
 	LaneID               uint32 `json:"laneId"`
 	LaneEpoch            uint32 `json:"laneEpoch"`
 	Direction            uint8  `json:"direction"`
-	OperationIDB64       string `json:"operationIdB64"`
+	OperationID          string `json:"operationId"`
 }
 
 type peerDescriptionVector struct {
@@ -115,7 +115,7 @@ func buildPeerSignalingVector(t *testing.T) peerSignalingVector {
 	signingKey := ed25519.NewKeyFromSeed(peerVectorBytes(0xa1, ed25519.SeedSize))
 	share := mustPeerShare(t, peerVectorBytes(0x41, protocolsession.IdentityBytes))
 	sessionID := mustPeerSession(t, peerVectorBytes(0x61, protocolsession.IdentityBytes))
-	operationID := mustPeerOperation(t, peerVectorBytes(0x81, protocolsession.IdentityBytes))
+	operationID := protocolsession.OperationID(0x0102030405060708)
 	base := protocolsession.EnvelopeBinding{
 		ShareInstance: share, ProtocolSessionID: sessionID, LaneID: 0x01020304, LaneEpoch: 2,
 		Direction: protocolsession.DirectionSenderToReceiver,
@@ -138,7 +138,7 @@ func buildPeerSignalingVector(t *testing.T) peerSignalingVector {
 			ShareInstanceB64:     base64.StdEncoding.EncodeToString(share.Bytes()),
 			ProtocolSessionIDB64: base64.StdEncoding.EncodeToString(sessionID.Bytes()),
 			LaneID:               base.LaneID, LaneEpoch: base.LaneEpoch, Direction: uint8(base.Direction),
-			OperationIDB64: base64.StdEncoding.EncodeToString(operationID.Bytes()),
+			OperationID: operationID.String(),
 		},
 		Offer: peerDescriptionVector{SDP: offer.SDP, BodyB64: base64.StdEncoding.EncodeToString(offerBody)},
 		Answer: peerDescriptionVector{
@@ -163,15 +163,6 @@ func mustPeerShare(t *testing.T, raw []byte) catalog.ShareInstance {
 func mustPeerSession(t *testing.T, raw []byte) protocolsession.ProtocolSessionID {
 	t.Helper()
 	value, err := protocolsession.ProtocolSessionIDFromBytes(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return value
-}
-
-func mustPeerOperation(t *testing.T, raw []byte) protocolsession.OperationID {
-	t.Helper()
-	value, err := protocolsession.OperationIDFromBytes(raw)
 	if err != nil {
 		t.Fatal(err)
 	}

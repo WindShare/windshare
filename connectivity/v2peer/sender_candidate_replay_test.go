@@ -63,7 +63,7 @@ func newSenderCandidateHarness(t *testing.T, maxCandidates int) *senderCandidate
 	}
 	offer := testMessage(t, protocolsession.MessagePeerOffer, operation, offerBody)
 	op := testPeerOperation(operation)
-	operationKey := op.Ref()
+	operationKey := op.ID()
 	if err := handler.HandleMessage(ctx, op, offer); err != nil {
 		cancel()
 		t.Fatal(err)

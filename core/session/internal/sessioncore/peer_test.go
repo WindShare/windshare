@@ -17,7 +17,7 @@ func TestPeerContinuationMigratesOnlyAfterOriginalLaneLoss(t *testing.T) {
 	t.Cleanup(runtime.AbortBeforeStart)
 	rpc := NewRequests(runtime, bytes.NewReader(bytes.Repeat([]byte{3}, protocolsession.IdentityBytes)))
 	call := &Call{
-		id: id16[protocolsession.OperationID](80), messages: make(chan operationResponse, 1),
+		id: protocolsession.OperationID(80), messages: make(chan operationResponse, 1),
 		lane: runtime.initial,
 	}
 	rpc.calls[call.id] = call
@@ -42,7 +42,7 @@ func TestPeerContinuationMigratesOnlyAfterOriginalLaneLoss(t *testing.T) {
 	); !errors.Is(err, session.ErrOperationMissing) {
 		t.Fatalf("nil continuation call error = %v", err)
 	}
-	inactive := &Call{id: id16[protocolsession.OperationID](81)}
+	inactive := &Call{id: protocolsession.OperationID(81)}
 	if _, err := rpc.SendContinuation(
 		context.Background(), inactive, protocolsession.MessagePeerCandidate, nil,
 	); !errors.Is(err, session.ErrOperationMissing) {
@@ -60,7 +60,7 @@ func TestPeerContinuationFailsWhenEveryAuthenticatedLaneIsGone(t *testing.T) {
 	t.Cleanup(runtime.AbortBeforeStart)
 	rpc := NewRequests(runtime, bytes.NewReader(bytes.Repeat([]byte{4}, protocolsession.IdentityBytes)))
 	call := &Call{
-		id: id16[protocolsession.OperationID](82), messages: make(chan operationResponse, 1),
+		id: protocolsession.OperationID(82), messages: make(chan operationResponse, 1),
 		lane: runtime.initial,
 	}
 	offer, _ := protocolsession.NewMessage(protocolsession.MessagePeerOffer, &call.id, []byte{0xf6})
@@ -89,7 +89,8 @@ func TestRPCBeginRollsBackEveryPreDeliveryFailure(t *testing.T) {
 	t.Run("identity source", func(t *testing.T) {
 		runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
 		t.Cleanup(runtime.AbortBeforeStart)
-		rpc := NewRequests(runtime, bytes.NewReader(nil))
+		rpc := NewRequests(runtime, nil)
+		rpc.ids.counter = ^uint64(0)
 		if _, err := rpc.Begin(context.Background(), protocolsession.MessagePeerOffer, canonicalBody); err == nil {
 			t.Fatal("peer operation accepted an exhausted identity source")
 		}
@@ -181,7 +182,7 @@ func TestRPCContinuationRejectsStoppedPhysicalWriter(t *testing.T) {
 	_ = lane.writer.Run(stopped)
 	rpc := NewRequests(runtime, bytes.NewReader(bytes.Repeat([]byte{9}, protocolsession.IdentityBytes)))
 	call := &Call{
-		id: id16[protocolsession.OperationID](83), messages: make(chan operationResponse, 1),
+		id: protocolsession.OperationID(83), messages: make(chan operationResponse, 1),
 		lane: runtime.initial,
 	}
 	offer, _ := protocolsession.NewMessage(protocolsession.MessagePeerOffer, &call.id, []byte{0xf6})
@@ -208,7 +209,7 @@ func testRPCContinuationRetractsPendingPreTransportTimeout(t *testing.T) {
 	t.Cleanup(runtime.AbortBeforeStart)
 	rpc := NewRequests(runtime, bytes.NewReader(bytes.Repeat([]byte{10}, protocolsession.IdentityBytes)))
 	call := &Call{
-		id: id16[protocolsession.OperationID](84), messages: make(chan operationResponse, 1),
+		id: protocolsession.OperationID(84), messages: make(chan operationResponse, 1),
 		lane: runtime.initial,
 	}
 	offer, _ := protocolsession.NewMessage(protocolsession.MessagePeerOffer, &call.id, []byte{0xf6})
@@ -248,7 +249,7 @@ func TestRPCAdmitCancellationRejectsInvalidAuthority(t *testing.T) {
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
 	t.Cleanup(runtime.AbortBeforeStart)
 	rpc := NewRequests(runtime, bytes.NewReader(bytes.Repeat([]byte{11}, protocolsession.IdentityBytes)))
-	for _, call := range []*Call{nil, {}, {id: id16[protocolsession.OperationID](85)}} {
+	for _, call := range []*Call{nil, {}, {id: protocolsession.OperationID(85)}} {
 		if err := rpc.admitCancellation(call, contentflow.CancelReasonTimeout); !errors.Is(err, session.ErrOperationMissing) {
 			t.Fatalf("invalid cancellation authority error = %v", err)
 		}
@@ -258,9 +259,9 @@ func TestRPCAdmitCancellationRejectsInvalidAuthority(t *testing.T) {
 func TestDroppedPeerCancelRetiresLocallyActiveOperation(t *testing.T) {
 	runtime, _ := newUnstartedRuntimeWithPolicy(
 		t, protocolsession.RoleReceiver,
-		protocolsession.OperationLimits{MaxActive: 2, MaxTracked: 2}, nil,
+		protocolsession.OperationLimits{MaxActive: 2, MaxRecentTombstones: 2}, nil,
 	)
-	operationID := id16[protocolsession.OperationID](77)
+	operationID := protocolsession.OperationID(77)
 	body, _ := protocolsession.EncodeBody(map[uint64]any{0: uint64(1)})
 	offer, _ := protocolsession.NewMessage(protocolsession.MessagePeerOffer, &operationID, body)
 	op, _, _, release, err := runtime.operations.AdmitOutboundRequest(offer, nil)
@@ -268,7 +269,7 @@ func TestDroppedPeerCancelRetiresLocallyActiveOperation(t *testing.T) {
 		t.Fatalf("begin peer operation: active=%d, error=%v", runtime.operations.ActiveCount(), err)
 	}
 	release(false)
-	if transitioned, err := runtime.reconcileLocalCancel(op.Ref()); err != nil || !transitioned {
+	if transitioned, err := runtime.reconcileLocalCancel(op.ID()); err != nil || !transitioned {
 		t.Fatalf("retire dropped cancel: transitioned=%v err=%v", transitioned, err)
 	}
 	if runtime.operations.ActiveCount() != 0 || runtime.operations.TombstoneCount() != 1 {

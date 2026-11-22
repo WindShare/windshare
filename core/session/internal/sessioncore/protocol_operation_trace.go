@@ -275,17 +275,13 @@ func durationMillis(value time.Duration) uint64 {
 }
 
 func (client *Requests) waitRequestCapacity(ctx context.Context, call *Call) error {
-	var observer func(operationCapacityWaitReason)
+	var observer func()
 	waited := false
 	if call.traceEnabled {
-		observer = func(reason operationCapacityWaitReason) {
+		observer = func() {
 			waited = true
-			stage := sessionobs.ProtocolOperationReceiverWaitingRetainedCapacity
-			if reason == operationWaitingActiveCapacity {
-				stage = sessionobs.ProtocolOperationReceiverWaitingActiveCapacity
-			}
 			client.runtime.traceProtocolOperation(sessionobs.ProtocolOperationObservation{
-				Stage:                  stage,
+				Stage:                  sessionobs.ProtocolOperationReceiverWaitingActiveCapacity,
 				OperationID:            call.id,
 				RequestKind:            call.requestKind,
 				OperationElapsedMillis: durationMillis(client.runtime.now().Sub(call.traceStarted)),

@@ -113,7 +113,7 @@ func capacityJobSignal(
 	signal, err := revisionwait.NewCapacitySignal(
 		hint,
 		transferID[protocolsession.ProtocolSessionID](91),
-		transferID[protocolsession.OperationID](92),
+		protocolsession.OperationID(92),
 	)
 	if err != nil {
 		t.Fatal(err)

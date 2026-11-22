@@ -4,44 +4,87 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"time"
 
 	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
-type operationCapacityWaitReason uint8
-
 const (
-	operationWaitingActiveCapacity operationCapacityWaitReason = iota + 1
-	operationWaitingRetainedCapacity
+	operationReplayWindowBits  = protocolsession.OperationReplayWindow
+	operationReplayWindowWords = operationReplayWindowBits / 64
 )
 
-type operationCapacity struct {
-	available  bool
-	changed    <-chan struct{}
-	retryAfter time.Duration
-	reason     operationCapacityWaitReason
+// operationReplayWindow is a fixed 512-byte sliding bitset that tracks seen
+// monotonic 64-bit operation IDs across multi-lane reordering without retaining
+// per-operation wall-clock tombstones or throttling session throughput.
+type operationReplayWindow struct {
+	highWater uint64
+	bits      [operationReplayWindowWords]uint64
 }
 
-func (capacity operationCapacity) timer() (<-chan time.Time, func()) {
-	if capacity.retryAfter <= 0 {
-		return nil, func() {}
+func (w *operationReplayWindow) contains(id protocolsession.OperationID) bool {
+	v := id.Uint64()
+	if v == 0 || v > w.highWater {
+		return false
 	}
-	timer := time.NewTimer(capacity.retryAfter)
-	return timer.C, func() { timer.Stop() }
+	diff := w.highWater - v
+	if diff >= operationReplayWindowBits {
+		return true
+	}
+	return (w.bits[diff/64] & (uint64(1) << (diff % 64))) != 0
+}
+
+func (w *operationReplayWindow) mark(id protocolsession.OperationID) {
+	v := id.Uint64()
+	if v == 0 {
+		return
+	}
+	if v > w.highWater {
+		shift := v - w.highWater
+		if shift >= operationReplayWindowBits {
+			clear(w.bits[:])
+		} else {
+			w.shiftLeft(shift)
+		}
+		w.highWater = v
+		w.bits[0] |= 1
+		return
+	}
+	diff := w.highWater - v
+	if diff < operationReplayWindowBits {
+		w.bits[diff/64] |= uint64(1) << (diff % 64)
+	}
+}
+
+func (w *operationReplayWindow) shiftLeft(shift uint64) {
+	wordShift := int(shift / 64)
+	bitShift := shift % 64
+	for i := operationReplayWindowWords - 1; i >= 0; i-- {
+		src := i - wordShift
+		if src < 0 {
+			w.bits[i] = 0
+			continue
+		}
+		val := w.bits[src] << bitShift
+		if bitShift > 0 && src > 0 {
+			val |= w.bits[src-1] >> (64 - bitShift)
+		}
+		w.bits[i] = val
+	}
+}
+
+type operationCapacity struct {
+	available bool
+	changed   <-chan struct{}
 }
 
 func (capacity operationCapacity) wait(ctx context.Context) error {
-	expiry, stop := capacity.timer()
-	defer stop()
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-capacity.changed:
-	case <-expiry:
+		return nil
 	}
-	return nil
 }
 
 // operationRecord is the single per-operation authority owned by operationTable.
@@ -49,7 +92,7 @@ func (capacity operationCapacity) wait(ctx context.Context) error {
 // sender response lane affinity so callers pass one explicit Operation handle
 // instead of smuggling hidden capabilities through context.Value.
 type operationRecord struct {
-	ref                protocolsession.OperationRef
+	id                 protocolsession.OperationID
 	requestKind        protocolsession.MessageKind
 	requestFingerprint [32]byte
 	answerSeen         bool
@@ -68,7 +111,6 @@ type operationRecord struct {
 }
 
 type operationTombstone struct {
-	expiresAt   time.Time
 	finalKind   protocolsession.MessageKind
 	fingerprint [32]byte
 	cancelled   bool
@@ -116,16 +158,18 @@ func (record *operationRecord) takeViolationNotificationLocked() operationViolat
 }
 
 // operationTable is the cross-lane source of truth for operation identity,
-// bounded retention, continuation replay, and per-operation lane affinity.
+// sliding-window replay protection, continuation replay, and per-operation
+// lane affinity.
 type operationTable struct {
 	mu sync.Mutex
 
-	now             func() time.Time
 	limits          protocolsession.OperationLimits
 	continuations   protocolsession.OperationContinuationClassifier
-	nextToken       uint64
+	seen            operationReplayWindow
+	lastIssued      protocolsession.OperationID
 	active          map[protocolsession.OperationID]*operationRecord
 	tombstones      map[protocolsession.OperationID]operationTombstone
+	tombstoneOrder  []protocolsession.OperationID
 	terminal        bool
 	peerSlots       map[uint8]*retiredPeerSlot
 	capacityChanged chan struct{}
@@ -133,17 +177,12 @@ type operationTable struct {
 
 func newOperationTable(
 	limits protocolsession.OperationLimits,
-	now func() time.Time,
 	continuations protocolsession.OperationContinuationClassifier,
 ) (*operationTable, error) {
-	if limits.MaxActive <= 0 || limits.MaxTracked <= 0 {
+	if limits.MaxActive <= 0 || limits.MaxRecentTombstones <= 0 {
 		return nil, fmt.Errorf("sessioncore: invalid operation limits: %+v", limits)
 	}
-	if now == nil {
-		now = time.Now
-	}
 	return &operationTable{
-		now:           now,
 		limits:        limits,
 		continuations: continuations,
 		active:        make(map[protocolsession.OperationID]*operationRecord),
@@ -152,73 +191,67 @@ func newOperationTable(
 	}, nil
 }
 
-func (table *operationTable) operation(ref protocolsession.OperationRef) protocolsession.Operation {
-	if ref.IsZero() {
+func (table *operationTable) operation(id protocolsession.OperationID) protocolsession.Operation {
+	if id.IsZero() {
 		return protocolsession.Operation{}
 	}
-	return protocolsession.NewOperation(ref, table)
+	return protocolsession.NewOperation(id, table)
 }
 
-func (table *operationTable) Active(ref protocolsession.OperationRef) bool {
-	if table == nil || ref.IsZero() {
+func (table *operationTable) Active(id protocolsession.OperationID) bool {
+	if table == nil || id.IsZero() {
 		return false
 	}
 	table.mu.Lock()
 	defer table.mu.Unlock()
-	table.pruneExpiredLocked()
-	rec := table.active[ref.ID]
-	return rec != nil && rec.ref == ref
+	return table.active[id] != nil
 }
 
-func (table *operationTable) Current(ref protocolsession.OperationRef) bool {
-	if table == nil || ref.IsZero() {
+func (table *operationTable) Current(id protocolsession.OperationID) bool {
+	if table == nil || id.IsZero() {
 		return false
 	}
 	table.mu.Lock()
 	defer table.mu.Unlock()
-	table.pruneExpiredLocked()
-	rec := table.currentRecordLocked(ref.ID)
-	return rec != nil && rec.ref == ref
+	return table.currentRecordLocked(id) != nil
 }
 
-func (table *operationTable) RequestKind(ref protocolsession.OperationRef) (protocolsession.MessageKind, bool) {
-	if table == nil || ref.IsZero() {
+func (table *operationTable) RequestKind(id protocolsession.OperationID) (protocolsession.MessageKind, bool) {
+	if table == nil || id.IsZero() {
 		return 0, false
 	}
 	table.mu.Lock()
 	defer table.mu.Unlock()
-	table.pruneExpiredLocked()
-	rec := table.currentRecordLocked(ref.ID)
-	if rec == nil || rec.ref != ref || rec.requestKind == 0 {
+	rec := table.currentRecordLocked(id)
+	if rec == nil || rec.requestKind == 0 {
 		return 0, false
 	}
 	return rec.requestKind, true
 }
 
 func (table *operationTable) PeerAttemptBinding(
-	ref protocolsession.OperationRef,
+	id protocolsession.OperationID,
 ) (protocolsession.PeerAttemptBinding, bool) {
-	if table == nil || ref.IsZero() {
+	if table == nil || id.IsZero() {
 		return protocolsession.PeerAttemptBinding{}, false
 	}
 	table.mu.Lock()
 	defer table.mu.Unlock()
-	rec := table.currentRecordLocked(ref.ID)
-	if rec == nil || rec.ref != ref {
+	rec := table.currentRecordLocked(id)
+	if rec == nil {
 		return protocolsession.PeerAttemptBinding{}, false
 	}
 	return operationPeerAttempt(rec)
 }
 
-func (table *operationTable) MaximumContinuations(ref protocolsession.OperationRef) (int, bool) {
-	if table == nil || ref.IsZero() {
+func (table *operationTable) MaximumContinuations(id protocolsession.OperationID) (int, bool) {
+	if table == nil || id.IsZero() {
 		return 0, false
 	}
 	table.mu.Lock()
 	defer table.mu.Unlock()
-	table.pruneExpiredLocked()
-	rec := table.currentRecordLocked(ref.ID)
-	if rec == nil || rec.ref != ref || rec.continuations == nil {
+	rec := table.currentRecordLocked(id)
+	if rec == nil || rec.continuations == nil {
 		return 0, false
 	}
 	return rec.continuations.maximum, true
@@ -237,23 +270,17 @@ func (table *operationTable) hasCurrentID(id protocolsession.OperationID) (bool,
 	if table.terminal {
 		return false, true
 	}
-	table.pruneExpiredLocked()
-	return table.currentRecordLocked(id) != nil, false
+	return table.currentRecordLocked(id) != nil || table.seen.contains(id), false
 }
 
-func (table *operationTable) nextRefLocked(id protocolsession.OperationID) protocolsession.OperationRef {
-	table.nextToken++
-	return protocolsession.OperationRef{ID: id, Token: table.nextToken}
-}
-
-func (table *operationTable) WaitForCapacity(
-	ctx context.Context,
-	observe func(operationCapacityWaitReason),
-) error {
+// WaitForCapacity waits until an active operation slot is available. Because
+// retired tombstones are evicted FIFO rather than held for a fixed TTL,
+// capacity waits only occur when MaxActive operations are simultaneously active.
+func (table *operationTable) WaitForCapacity(ctx context.Context, observe func()) error {
 	if table == nil {
 		return protocolsession.ErrNilRuntimeDependency
 	}
-	var observed operationCapacityWaitReason
+	observed := false
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -262,11 +289,11 @@ func (table *operationTable) WaitForCapacity(
 		if err != nil || capacity.available {
 			return err
 		}
-		if observe != nil && observed != capacity.reason {
-			observed = capacity.reason
+		if observe != nil && !observed {
+			observed = true
 			func() {
 				defer func() { _ = recover() }()
-				observe(capacity.reason)
+				observe()
 			}()
 		}
 		if err := capacity.wait(ctx); err != nil {
@@ -281,35 +308,13 @@ func (table *operationTable) capacity() (operationCapacity, error) {
 	if table.terminal {
 		return operationCapacity{}, protocolsession.ErrSessionTerminated
 	}
-	table.pruneExpiredLocked()
-	if len(table.active) < table.limits.MaxActive &&
-		len(table.active)+len(table.tombstones) < table.limits.MaxTracked {
+	if len(table.active) < table.limits.MaxActive {
 		return operationCapacity{available: true}, nil
 	}
 	if table.capacityChanged == nil {
 		table.capacityChanged = make(chan struct{})
 	}
-	capacity := operationCapacity{
-		changed: table.capacityChanged,
-		reason:  operationWaitingRetainedCapacity,
-	}
-	if len(table.active) >= table.limits.MaxActive {
-		capacity.reason = operationWaitingActiveCapacity
-	}
-	now := table.now()
-	for _, tombstone := range table.tombstones {
-		if tombstone.record.inFlight != 0 {
-			continue
-		}
-		delay := tombstone.expiresAt.Sub(now)
-		if delay <= 0 {
-			delay = time.Nanosecond
-		}
-		if capacity.retryAfter == 0 || delay < capacity.retryAfter {
-			capacity.retryAfter = delay
-		}
-	}
-	return capacity, nil
+	return operationCapacity{changed: table.capacityChanged}, nil
 }
 
 func (table *operationTable) notifyCapacityLocked() {
@@ -319,14 +324,26 @@ func (table *operationTable) notifyCapacityLocked() {
 	}
 }
 
-func (table *operationTable) pruneExpiredLocked() {
-	now := table.now()
-	for id, tombstone := range table.tombstones {
-		if !now.Before(tombstone.expiresAt) && tombstone.record.inFlight == 0 {
-			delete(table.tombstones, id)
-			table.notifyCapacityLocked()
-		}
+func (table *operationTable) evictOverflowTombstonesLocked() {
+	if len(table.tombstones) <= table.limits.MaxRecentTombstones {
+		return
 	}
+	excess := len(table.tombstones) - table.limits.MaxRecentTombstones
+	kept := table.tombstoneOrder[:0]
+	for _, id := range table.tombstoneOrder {
+		tombstone, exists := table.tombstones[id]
+		if !exists {
+			continue
+		}
+		if excess > 0 && tombstone.record.inFlight == 0 {
+			delete(table.tombstones, id)
+			excess--
+			continue
+		}
+		kept = append(kept, id)
+	}
+	clear(table.tombstoneOrder[len(kept):])
+	table.tombstoneOrder = kept
 }
 
 func (table *operationTable) TerminateLocal() error {
@@ -341,6 +358,7 @@ func (table *operationTable) TerminateLocal() error {
 	table.terminal = true
 	clear(table.active)
 	clear(table.tombstones)
+	table.tombstoneOrder = nil
 	table.notifyCapacityLocked()
 	return nil
 }
@@ -363,7 +381,6 @@ func (table *operationTable) ActiveCount() int {
 func (table *operationTable) TombstoneCount() int {
 	table.mu.Lock()
 	defer table.mu.Unlock()
-	table.pruneExpiredLocked()
 	return len(table.tombstones)
 }
 
@@ -393,7 +410,7 @@ func (table *operationTable) ObserveInbound(
 	}
 	var op protocolsession.Operation
 	if err == nil && disposition == protocolsession.OperationDeliver && rec != nil {
-		op = table.operation(rec.ref)
+		op = table.operation(rec.id)
 	}
 	table.mu.Unlock()
 	notification.deliver()
@@ -405,7 +422,6 @@ func (table *operationTable) observeLocked(
 	lane session.LaneIdentity,
 	message protocolsession.Message,
 ) (protocolsession.OperationDisposition, *operationRecord, func(), error) {
-	table.pruneExpiredLocked()
 	if table.terminal {
 		return protocolsession.OperationDrop, nil, nil, nil
 	}
@@ -419,6 +435,7 @@ func (table *operationTable) observeLocked(
 		table.terminal = true
 		clear(table.active)
 		clear(table.tombstones)
+		table.tombstoneOrder = nil
 		table.notifyCapacityLocked()
 		return protocolsession.OperationSessionTerminal, nil, nil, nil
 	}
@@ -449,6 +466,12 @@ func (table *operationTable) observeLocked(
 		if table.dropsRetiredPeerLocked(message) {
 			return protocolsession.OperationDrop, nil, nil, nil
 		}
+		if direction == protocolsession.DirectionSenderToReceiver {
+			if id <= table.lastIssued && !isPeerControlResponse(message.Kind()) {
+				return protocolsession.OperationDrop, nil, nil, nil
+			}
+			return protocolsession.OperationDrop, nil, nil, protocolsession.ErrUnknownOperation
+		}
 		disposition, rec, err := table.beginOperationLocked(id, direction, lane, message, nil)
 		return disposition, rec, nil, err
 	}
@@ -466,6 +489,10 @@ func (table *operationTable) observeLocked(
 	return disposition, active, undo, nil
 }
 
+func isPeerControlResponse(kind protocolsession.MessageKind) bool {
+	return kind == protocolsession.MessagePeerAnswer || kind == protocolsession.MessagePeerCandidate
+}
+
 func (table *operationTable) beginOperationLocked(
 	id protocolsession.OperationID,
 	direction protocolsession.Direction,
@@ -474,21 +501,24 @@ func (table *operationTable) beginOperationLocked(
 	violationHandler func(protocolsession.AuthenticatedOperationViolation),
 ) (protocolsession.OperationDisposition, *operationRecord, error) {
 	if message.Kind() == protocolsession.MessageCancel {
-		rec := &operationRecord{ref: table.nextRefLocked(id)}
-		if err := table.addTombstoneLocked(id, direction, message, true, rec); err != nil {
-			return protocolsession.OperationDrop, nil, err
+		if table.seen.contains(id) {
+			// Already seen and evicted from the recent tombstone ring.
+			return protocolsession.OperationDrop, nil, nil
 		}
+		table.seen.mark(id)
+		rec := &operationRecord{id: id}
+		table.addTombstoneLocked(id, direction, message, true, rec)
 		return protocolsession.OperationDeliver, rec, nil
 	}
 	if direction != protocolsession.DirectionReceiverToSender ||
 		(!message.Kind().IsRequest() && message.Kind() != protocolsession.MessageLaneAttach) {
 		return protocolsession.OperationDrop, nil, protocolsession.ErrUnknownOperation
 	}
+	if table.seen.contains(id) {
+		return protocolsession.OperationDrop, nil, protocolsession.ErrOperationIDReused
+	}
 	if len(table.active) >= table.limits.MaxActive {
 		return protocolsession.OperationDrop, nil, protocolsession.ErrActiveOperationBudget
-	}
-	if len(table.active)+len(table.tombstones) >= table.limits.MaxTracked {
-		return protocolsession.OperationDrop, nil, protocolsession.ErrTrackedOperationBudget
 	}
 	rec, err := table.newOperationRecordLocked(id, direction, lane, message, violationHandler)
 	if err != nil {
@@ -497,6 +527,7 @@ func (table *operationTable) beginOperationLocked(
 	if err := table.admitPeerAttemptLocked(rec); err != nil {
 		return protocolsession.OperationDrop, nil, err
 	}
+	table.seen.mark(id)
 	table.active[id] = rec
 	return protocolsession.OperationDeliver, rec, nil
 }
@@ -509,7 +540,7 @@ func (table *operationTable) newOperationRecordLocked(
 	violationHandler func(protocolsession.AuthenticatedOperationViolation),
 ) (*operationRecord, error) {
 	rec := &operationRecord{
-		ref:                           table.nextRefLocked(id),
+		id:                            id,
 		requestKind:                   message.Kind(),
 		requestFingerprint:            message.OperationFingerprint(direction),
 		preferredLane:                 lane,
@@ -540,9 +571,7 @@ func (table *operationTable) advanceOperationLocked(
 	message protocolsession.Message,
 ) (protocolsession.OperationDisposition, error) {
 	if message.Kind() == protocolsession.MessageCancel {
-		if err := table.finishOperationLocked(id, active, direction, message, true); err != nil {
-			return protocolsession.OperationDrop, err
-		}
+		table.finishOperationLocked(id, active, direction, message, true)
 		return protocolsession.OperationDeliver, nil
 	}
 	if message.Kind().IsRequest() {
@@ -562,9 +591,7 @@ func (table *operationTable) advanceOperationLocked(
 	}
 	if message.Kind().IsFinal() ||
 		(active.requestKind == protocolsession.MessageLaneAttach && message.Kind() == protocolsession.MessageLaneAttach) {
-		if err := table.finishOperationLocked(id, active, direction, message, false); err != nil {
-			return protocolsession.OperationDrop, err
-		}
+		table.finishOperationLocked(id, active, direction, message, false)
 	}
 	if active.requestKind == protocolsession.MessagePeerOffer && message.Kind() == protocolsession.MessagePeerAnswer {
 		return table.observePeerAnswerLocked(active, direction, message)
@@ -596,15 +623,12 @@ func (table *operationTable) finishOperationLocked(
 	direction protocolsession.Direction,
 	message protocolsession.Message,
 	cancelled bool,
-) error {
-	if err := table.addTombstoneLocked(id, direction, message, cancelled, active); err != nil {
-		return err
-	}
+) {
+	table.addTombstoneLocked(id, direction, message, cancelled, active)
 	table.retirePeerAttemptLocked(active)
 	clearContinuationReplayLocked(active)
 	delete(table.active, id)
 	table.notifyCapacityLocked()
-	return nil
 }
 
 func (table *operationTable) addTombstoneLocked(
@@ -613,19 +637,16 @@ func (table *operationTable) addTombstoneLocked(
 	message protocolsession.Message,
 	cancelled bool,
 	record *operationRecord,
-) error {
-	if _, exists := table.tombstones[id]; !exists {
-		if _, reserved := table.active[id]; !reserved &&
-			len(table.active)+len(table.tombstones) >= table.limits.MaxTracked {
-			return protocolsession.ErrTrackedOperationBudget
-		}
-	}
+) {
+	_, existed := table.tombstones[id]
 	table.tombstones[id] = operationTombstone{
-		expiresAt:   table.now().Add(protocolsession.OperationTombstoneLifetime),
 		finalKind:   message.Kind(),
 		fingerprint: message.OperationFingerprint(direction),
 		cancelled:   cancelled,
 		record:      record,
 	}
-	return nil
+	if !existed {
+		table.tombstoneOrder = append(table.tombstoneOrder, id)
+		table.evictOverflowTombstonesLocked()
+	}
 }

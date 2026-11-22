@@ -165,7 +165,7 @@ func NewFactory(config FactoryConfig) (*Factory, error) {
 	}
 	if config.ReplayGuard == nil {
 		var err error
-		config.ReplayGuard, err = protocolsession.NewClientHelloReplayGuard(session.DefaultTrackedOperations, config.Now)
+		config.ReplayGuard, err = protocolsession.NewClientHelloReplayGuard(session.DefaultRecentTombstones, config.Now)
 		if err != nil {
 			return nil, err
 		}

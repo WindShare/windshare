@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -29,14 +30,14 @@ var updateDiagnosticCorrelationVectors = flag.Bool(
 
 func TestCorrelationV1ProjectsTypedIdentitiesAsUnpaddedBase64URL(t *testing.T) {
 	sessionBytes := correlationSequence(0x00)
-	operationBytes := correlationSequence(0xf0)
+	const operationID uint64 = 42
 	pathBytes := correlationSequence(0x20)
-	attemptBytes := correlationSequence(0xe0)
+	attemptBytes := correlationSequence(0xf0)
 	lane := &diagnostics.LaneCorrelation{ID: 7, Epoch: 2}
 
 	projected, err := diagnostics.ProjectCorrelationV1(diagnostics.CorrelationInput{
 		ProtocolSessionID:   sessionBytes,
-		ProtocolOperationID: operationBytes,
+		ProtocolOperationID: operationID,
 		PeerPathID:          pathBytes,
 		PeerAttemptID:       attemptBytes,
 		Lane:                lane,
@@ -50,17 +51,19 @@ func TestCorrelationV1ProjectsTypedIdentitiesAsUnpaddedBase64URL(t *testing.T) {
 	if projected == nil || projected.ProtocolSessionID != expectedSession {
 		t.Fatalf("protocol session ID = %#v, want %q", projected, expectedSession)
 	}
+	if projected.ProtocolOperationID != "42" {
+		t.Fatalf("protocol operation ID = %q, want %q", projected.ProtocolOperationID, "42")
+	}
 	for name, encoded := range map[string]string{
-		"protocol session":   projected.ProtocolSessionID,
-		"protocol operation": projected.ProtocolOperationID,
-		"peer path":          projected.PeerPathID,
-		"peer attempt":       projected.PeerAttemptID,
+		"protocol session": projected.ProtocolSessionID,
+		"peer path":        projected.PeerPathID,
+		"peer attempt":     projected.PeerAttemptID,
 	} {
 		if len(encoded) != 22 || strings.Contains(encoded, "=") {
 			t.Fatalf("%s identity = %q, want 22-character unpadded base64url", name, encoded)
 		}
 	}
-	if !strings.ContainsAny(projected.ProtocolOperationID+projected.PeerAttemptID, "-_") {
+	if !strings.ContainsAny(projected.PeerAttemptID, "-_") {
 		t.Fatal("test identities do not exercise the base64url alphabet")
 	}
 
@@ -80,10 +83,9 @@ func TestCorrelationV1ProjectsTypedIdentitiesAsUnpaddedBase64URL(t *testing.T) {
 
 func TestCorrelationV1RejectsOrphanDependentAndMalformedIdentities(t *testing.T) {
 	for name, input := range map[string]diagnostics.CorrelationInput{
-		"operation without session": {ProtocolOperationID: correlationSequence(0x40)},
+		"operation without session": {ProtocolOperationID: 42},
 		"attempt without path":      {PeerAttemptID: correlationSequence(0x50)},
 		"short session":             {ProtocolSessionID: []byte{1, 2, 3}},
-		"short operation":           {ProtocolSessionID: correlationSequence(0x10), ProtocolOperationID: []byte{1}},
 		"short path":                {PeerPathID: []byte{1}},
 		"short attempt":             {PeerPathID: correlationSequence(0x10), PeerAttemptID: []byte{1}},
 	} {
@@ -154,14 +156,14 @@ type diagnosticCorrelationVectorCase struct {
 }
 
 type diagnosticCorrelationVectorInput struct {
-	ProtocolSessionIDBytes   []int   `json:"protocol_session_id_bytes,omitempty"`
-	ProtocolOperationIDBytes []int   `json:"protocol_operation_id_bytes,omitempty"`
-	PeerPathIDBytes          []int   `json:"peer_path_id_bytes,omitempty"`
-	PeerAttemptIDBytes       []int   `json:"peer_attempt_id_bytes,omitempty"`
-	LaneID                   *uint32 `json:"lane_id,omitempty"`
-	LaneEpoch                *uint32 `json:"lane_epoch,omitempty"`
-	Sequence                 string  `json:"sequence"`
-	ElapsedMS                string  `json:"elapsed_ms"`
+	ProtocolSessionIDBytes []int   `json:"protocol_session_id_bytes,omitempty"`
+	ProtocolOperationID    string  `json:"protocol_operation_id,omitempty"`
+	PeerPathIDBytes        []int   `json:"peer_path_id_bytes,omitempty"`
+	PeerAttemptIDBytes     []int   `json:"peer_attempt_id_bytes,omitempty"`
+	LaneID                 *uint32 `json:"lane_id,omitempty"`
+	LaneEpoch              *uint32 `json:"lane_epoch,omitempty"`
+	Sequence               string  `json:"sequence"`
+	ElapsedMS              string  `json:"elapsed_ms"`
 }
 
 type diagnosticCorrelationVectorExpected struct {
@@ -207,20 +209,20 @@ func buildDiagnosticCorrelationVectors(t *testing.T) diagnosticCorrelationVector
 
 	cases := []diagnosticCorrelationVectorCase{
 		newDiagnosticCorrelationVectorCase(t, "full-correlation", diagnosticCorrelationVectorInput{
-			ProtocolSessionIDBytes:   correlationNumbers(0x00),
-			ProtocolOperationIDBytes: correlationNumbers(0xf0),
-			PeerPathIDBytes:          correlationNumbers(0x20),
-			PeerAttemptIDBytes:       correlationNumbers(0xe0),
-			LaneID:                   &fullLaneID,
-			LaneEpoch:                &fullLaneEpoch,
-			Sequence:                 "1",
-			ElapsedMS:                "0",
+			ProtocolSessionIDBytes: correlationNumbers(0x00),
+			ProtocolOperationID:    "42",
+			PeerPathIDBytes:        correlationNumbers(0x20),
+			PeerAttemptIDBytes:     correlationNumbers(0xf0),
+			LaneID:                 &fullLaneID,
+			LaneEpoch:              &fullLaneEpoch,
+			Sequence:               "1",
+			ElapsedMS:              "0",
 		}, "request_blocks", "block", 0x3008),
 		newDiagnosticCorrelationVectorCase(t, "session-operation-only", diagnosticCorrelationVectorInput{
-			ProtocolSessionIDBytes:   correlationNumbers(0x30),
-			ProtocolOperationIDBytes: correlationNumbers(0x40),
-			Sequence:                 "2",
-			ElapsedMS:                "17",
+			ProtocolSessionIDBytes: correlationNumbers(0x30),
+			ProtocolOperationID:    "72623859790382856",
+			Sequence:               "2",
+			ElapsedMS:              "17",
 		}, "open_revisions", "revision", 0x2001),
 		newDiagnosticCorrelationVectorCase(t, "path-attempt-only", diagnosticCorrelationVectorInput{
 			PeerPathIDBytes:    correlationNumbers(0x50),
@@ -246,6 +248,7 @@ func buildDiagnosticCorrelationVectors(t *testing.T) diagnosticCorrelationVector
 		}, "list_children", "directory", 0x1001),
 		newDiagnosticCorrelationVectorCase(t, "maximum-uint64-decimal-text", diagnosticCorrelationVectorInput{
 			ProtocolSessionIDBytes: correlationNumbers(0x70),
+			ProtocolOperationID:    maxUint64Decimal,
 			Sequence:               maxUint64Decimal,
 			ElapsedMS:              maxUint64Decimal,
 		}, "session_terminal", "directory", math.MaxUint16),
@@ -255,7 +258,7 @@ func buildDiagnosticCorrelationVectors(t *testing.T) diagnosticCorrelationVector
 		Version: 1,
 		Kind:    diagnosticCorrelationVectorKind,
 		Description: "Typed diagnostic correlation identities projected as canonical unpadded base64url, " +
-			"with numeric lane fields and decimal text for uint64 values.",
+			"with numeric lane fields and decimal text for uint64 operation IDs and counters.",
 		Cases: cases,
 	}
 }
@@ -272,8 +275,12 @@ func newDiagnosticCorrelationVectorCase(
 	if len(input.ProtocolSessionIDBytes) > 0 {
 		projected.ProtocolSessionID = correlationBytes(t, input.ProtocolSessionIDBytes)
 	}
-	if len(input.ProtocolOperationIDBytes) > 0 {
-		projected.ProtocolOperationID = correlationBytes(t, input.ProtocolOperationIDBytes)
+	if input.ProtocolOperationID != "" {
+		opID, err := strconv.ParseUint(input.ProtocolOperationID, 10, 64)
+		if err != nil {
+			t.Fatalf("%s operation ID: %v", name, err)
+		}
+		projected.ProtocolOperationID = opID
 	}
 	if len(input.PeerPathIDBytes) > 0 {
 		projected.PeerPathID = correlationBytes(t, input.PeerPathIDBytes)

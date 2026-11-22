@@ -10,7 +10,7 @@ import (
 
 func TestSenderPathMembershipBoundsNewPathsWithoutPoisoningRecovery(t *testing.T) {
 	authority := newSenderEvidenceAuthority(2)
-	operation := testPeerOperation(testOperationID(1)).Ref()
+	operation := testPeerOperation(testOperationID(1)).ID()
 	first, second, overflow := testBinding(2), testBinding(3), testBinding(4)
 	for _, binding := range []v2signal.Binding{first, second} {
 		if claim := authority.claim(operation, binding); !claim.acquired || claim.capacity {
@@ -72,7 +72,7 @@ func TestSenderPathMembershipConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	var authority *senderEvidenceAuthority
-	if authority.claimed(testBinding(1)) || authority.retainedIdentityCount() != 0 || authority.claim(protocolsession.OperationRef{}, testBinding(1)).acquired {
+	if authority.claimed(testBinding(1)) || authority.retainedIdentityCount() != 0 || authority.claim(0, testBinding(1)).acquired {
 		t.Fatal("nil authority")
 	}
 	authority.reset()

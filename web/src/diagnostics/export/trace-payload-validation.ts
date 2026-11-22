@@ -27,11 +27,13 @@ export function validateCorrelationV1(
   }
   for (const key of [
     'protocol_session_id',
-    'protocol_operation_id',
     'peer_path_id',
     'peer_attempt_id',
   ] as const) {
     if (correlation[key] !== undefined) canonicalIdentity(correlation[key], `${field} ${key}`)
+  }
+  if (correlation.protocol_operation_id !== undefined) {
+    positiveDecimalUint64(correlation.protocol_operation_id, `${field} protocol_operation_id`)
   }
   if (correlation.protocol_operation_id !== undefined &&
       correlation.protocol_session_id === undefined) {
@@ -124,6 +126,14 @@ export function uint32(value: unknown, field: string): number {
 export function decimalUint64(value: unknown, field: string): string {
   if (typeof value !== 'string' || !/^(?:0|[1-9]\d*)$/.test(value)) {
     throw new TypeError(`${field} must be canonical non-negative decimal text`)
+  }
+  if (BigInt(value) > UINT64_MAX) throw new RangeError(`${field} exceeds uint64`)
+  return value
+}
+
+export function positiveDecimalUint64(value: unknown, field: string): string {
+  if (typeof value !== 'string' || !/^[1-9]\d*$/.test(value)) {
+    throw new TypeError(`${field} must be canonical positive decimal text`)
   }
   if (BigInt(value) > UINT64_MAX) throw new RangeError(`${field} exceeds uint64`)
   return value

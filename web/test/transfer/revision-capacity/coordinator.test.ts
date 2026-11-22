@@ -368,7 +368,7 @@ function capacityError(retryAfterMilliseconds: number): RevisionCapacityBusyErro
   const protocolFailure = createReceivedProtocolError({
     requestKind: 'open_revisions', correlation: {
       protocolSessionId: createFailureIdentity('protocol_session', identity(1)),
-      protocolOperationId: createFailureIdentity('protocol_operation', identity(2))
+      protocolOperationId: createFailureIdentity('protocol_operation', 2n)
     }, content: {
       scope: 'revision', code: failure.code, retryable: true, retryAfterMilliseconds
     }

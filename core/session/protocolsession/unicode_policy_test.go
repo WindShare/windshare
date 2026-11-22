@@ -14,7 +14,7 @@ func TestSessionNFCIsNotThePinnedCatalogNamePolicy(t *testing.T) {
 	if norm.NFC.IsNormalString(pair) {
 		t.Skip("runtime Unicode tables predate Kirat Rai composition")
 	}
-	id := protocolsession.OperationID{1}
+	id := protocolsession.OperationID(1)
 	body, err := cbor.Marshal([]any{pair})
 	if err != nil {
 		t.Fatal(err)
@@ -23,7 +23,7 @@ func TestSessionNFCIsNotThePinnedCatalogNamePolicy(t *testing.T) {
 	requireNFCRejection(t, err)
 	_, err = protocolsession.NewMessage(protocolsession.MessageListChildren, &id, body)
 	requireNFCRejection(t, err)
-	plaintext, err := cbor.Marshal(map[uint64]any{0: uint64(protocolsession.MessageListChildren), 1: id.Bytes(), 2: cbor.RawMessage(body)})
+	plaintext, err := cbor.Marshal(map[uint64]any{0: uint64(protocolsession.MessageListChildren), 1: id.Uint64(), 2: cbor.RawMessage(body)})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -16,7 +16,7 @@ func protocolAssemblyFact(role protocolsession.Role) sessionobs.ProtocolObservat
 		ObservedAt: time.Unix(12, 345),
 		Correlation: sessionobs.ProtocolObservationCorrelation{
 			Role: role, ProtocolSessionID: protocolsession.ProtocolSessionID{1},
-			OperationID: protocolsession.OperationID{2}, RequestKind: protocolsession.MessageListChildren,
+			OperationID: protocolsession.OperationID(2), RequestKind: protocolsession.MessageListChildren,
 		},
 	}
 	stage := sessionobs.ProtocolOperationReceiverFailed
@@ -94,7 +94,7 @@ func TestSupersededBlockObservationRetainsTraceWithoutVerboseWarning(t *testing.
 			ObservedAt: time.Unix(12, 345),
 			Correlation: sessionobs.ProtocolObservationCorrelation{
 				Role: protocolsession.RoleReceiver, ProtocolSessionID: protocolsession.ProtocolSessionID{1},
-				OperationID: protocolsession.OperationID{byte(index + 2)}, RequestKind: protocolsession.MessageRequestBlocks,
+				OperationID: protocolsession.OperationID(index + 2), RequestKind: protocolsession.MessageRequestBlocks,
 			},
 		}, sessionobs.ProtocolOperationObservation{Stage: outcome.stage, Cause: outcome.cause})
 		runtime.diagnosticSink().Record(fact)

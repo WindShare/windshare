@@ -14,7 +14,7 @@ import { id, openSent, runtimeFixture } from './v2-send-fixture'
 function fixture() {
   const events: ProtocolTraceEvent[] = []
   const terminal = vi.fn()
-  const router = new OperationRouter(terminal, () => 0, {
+  const router = new OperationRouter(terminal, {
     protocolSessionIdentity: createProtocolSessionIdentity(id(1)),
     trace: { current: event => events.push(event) },
   })
@@ -39,7 +39,7 @@ describe('retired block-request diagnostics', () => {
 
   it('records remote-final replays separately and keeps trace observer failures outside protocol authority', async () => {
     const events: ProtocolTraceEvent[] = []
-    const router = new OperationRouter(() => undefined, () => 0, {
+    const router = new OperationRouter(() => undefined, {
       protocolSessionIdentity: createProtocolSessionIdentity(id(1)),
       trace: { current: event => { events.push(event); throw new Error('observer failed') } },
     })

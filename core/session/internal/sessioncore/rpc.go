@@ -2,7 +2,6 @@ package sessioncore
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -16,10 +15,7 @@ import (
 	"github.com/windshare/windshare/core/session/requestlane"
 )
 
-const (
-	operationResponseFrames   = 512
-	operationIDPrefixAttempts = 4
-)
+const operationResponseFrames = 512
 
 var (
 	ErrOperationIDExhausted     = errors.New("session runtime operation identity space is exhausted")
@@ -30,54 +26,21 @@ var (
 )
 
 type operationIDSource struct {
-	mu          sync.Mutex
-	random      io.Reader
-	prefix      [8]byte
-	counter     uint64
-	initialized bool
-	exhausted   bool
+	mu      sync.Mutex
+	counter uint64
 }
 
 func (source *operationIDSource) New() (protocolsession.OperationID, error) {
-	if source == nil || source.random == nil {
-		return protocolsession.OperationID{}, session.ErrRuntimeConfig
+	if source == nil {
+		return 0, session.ErrRuntimeConfig
 	}
 	source.mu.Lock()
 	defer source.mu.Unlock()
-	if !source.initialized {
-		for range operationIDPrefixAttempts {
-			if _, err := io.ReadFull(source.random, source.prefix[:]); err != nil {
-				return protocolsession.OperationID{}, err
-			}
-			if !allZero(source.prefix[:]) {
-				source.initialized = true
-				break
-			}
-		}
-		if !source.initialized {
-			return protocolsession.OperationID{}, session.ErrRuntimeConfig
-		}
-	}
-	if source.exhausted {
-		return protocolsession.OperationID{}, ErrOperationIDExhausted
+	if source.counter == ^uint64(0) {
+		return 0, ErrOperationIDExhausted
 	}
 	source.counter++
-	if source.counter == ^uint64(0) {
-		source.exhausted = true
-	}
-	encoded := make([]byte, protocolsession.IdentityBytes)
-	copy(encoded, source.prefix[:])
-	binary.BigEndian.PutUint64(encoded[len(source.prefix):], source.counter)
-	return protocolsession.OperationIDFromBytes(encoded)
-}
-
-func allZero(value []byte) bool {
-	for _, item := range value {
-		if item != 0 {
-			return false
-		}
-	}
-	return true
+	return protocolsession.OperationID(source.counter), nil
 }
 
 // OperationObserver is the consumer contract for a long-lived request owner.
@@ -101,10 +64,9 @@ type operationResponse struct {
 	lane    session.LaneIdentity
 }
 
-func NewRequests(runtime *Runtime, random io.Reader) *Requests {
+func NewRequests(runtime *Runtime, _ io.Reader) *Requests {
 	return &Requests{
 		runtime: runtime,
-		ids:     operationIDSource{random: random},
 		calls:   make(map[protocolsession.OperationID]*Call),
 	}
 }
@@ -306,18 +268,18 @@ func (client *Requests) sendRequest(
 			return protocolsession.MarkNotSent(err)
 		}
 		if !call.setAuthority(op, maxContinuations, hasLimit) {
-			client.runtime.operations.RollbackUnsentRequest(op.Ref())
+			client.runtime.operations.RollbackUnsentRequest(op.ID())
 			releaseInFlight(false)
 			return protocolsession.MarkNotSent(session.ErrRuntimeClosed)
 		}
 		selected, reservation, estimate, err := client.runtime.lanes.selectRequestLane(lane, message.Kind())
 		if err != nil {
-			client.runtime.operations.RollbackUnsentRequest(op.Ref())
+			client.runtime.operations.RollbackUnsentRequest(op.ID())
 			releaseInFlight(false)
 			return protocolsession.MarkNotSent(err)
 		}
 		if reservation != nil && !call.requests.Reserve(reservation, estimate) {
-			client.runtime.operations.RollbackUnsentRequest(op.Ref())
+			client.runtime.operations.RollbackUnsentRequest(op.ID())
 			releaseInFlight(false)
 			return protocolsession.MarkNotSent(session.ErrRuntimeClosed)
 		}
@@ -329,7 +291,7 @@ func (client *Requests) sendRequest(
 		call.bindRequestCarrier(selected.retired)
 		sendErr := selected.writer.SendControl(ctx, message, releaseInFlight)
 		if sendErr != nil && protocolsession.IsNotSent(sendErr) {
-			client.runtime.operations.RollbackUnsentRequest(op.Ref())
+			client.runtime.operations.RollbackUnsentRequest(op.ID())
 			call.requests.Reserve(nil, estimate)
 			return sendErr
 		}
@@ -369,8 +331,8 @@ func (client *Requests) SendContinuation(
 	}
 	if kind == protocolsession.MessageCancel {
 		// Commit the local tombstone synchronously; emit a wire CANCEL only when
-		// this call actually transitions an active operation generation.
-		transitioned, err := client.runtime.reconcileLocalCancel(op.Ref())
+		// this call actually transitions an active operation.
+		transitioned, err := client.runtime.reconcileLocalCancel(op.ID())
 		if err != nil {
 			return protocolsession.OperationDrop, err
 		}
@@ -380,7 +342,7 @@ func (client *Requests) SendContinuation(
 		client.enqueueBestEffortCancel(call, message)
 		return protocolsession.OperationDeliver, nil
 	}
-	disposition, undo, releaseInFlight, err := client.runtime.operations.AdmitOutboundContinuation(op.Ref(), message)
+	disposition, undo, releaseInFlight, err := client.runtime.operations.AdmitOutboundContinuation(op.ID(), message)
 	if err != nil {
 		return protocolsession.OperationDrop, err
 	}
@@ -604,7 +566,7 @@ func (client *Requests) admitCancellation(
 	if op.IsZero() {
 		return session.ErrOperationMissing
 	}
-	transitioned, reconcileErr := client.runtime.reconcileLocalCancel(op.Ref())
+	transitioned, reconcileErr := client.runtime.reconcileLocalCancel(op.ID())
 	if !transitioned {
 		return reconcileErr
 	}

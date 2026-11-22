@@ -259,7 +259,7 @@ func TestSenderServicePreservesPerItemOpenLeaseAndBlockSemantics(t *testing.T) {
 	}
 
 	blockRequest, _ := NewBlockRequest(lease.ID(), []uint64{1})
-	operation := flowID[protocolsession.OperationID](51)
+	operation := protocolsession.OperationID(51)
 	var emitted []protocolsession.Message
 	count, err := fixture.service.ServeBlocks(context.Background(), operation, blockRequest, func(_ context.Context, message protocolsession.Message) error {
 		emitted = append(emitted, message)
@@ -287,7 +287,7 @@ func TestSenderServicePreservesPerItemOpenLeaseAndBlockSemantics(t *testing.T) {
 	if fixture.stable.readCount() != 1 {
 		t.Fatalf("source reads=%d, want 1", fixture.stable.readCount())
 	}
-	otherOperation := flowID[protocolsession.OperationID](53)
+	otherOperation := protocolsession.OperationID(53)
 	if _, err := fixture.service.ServeBlocks(context.Background(), otherOperation, blockRequest, func(context.Context, protocolsession.Message) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
@@ -317,12 +317,12 @@ func TestSenderServiceDriftRetiresEveryOwnedLeaseAndCache(t *testing.T) {
 	items := results.Items()
 	first, second := items[0].Lease, items[1].Lease
 	blockRequest, _ := NewBlockRequest(first.ID(), []uint64{0})
-	if _, err := fixture.service.ServeBlocks(context.Background(), flowID[protocolsession.OperationID](61), blockRequest, func(context.Context, protocolsession.Message) error { return nil }); err != nil {
+	if _, err := fixture.service.ServeBlocks(context.Background(), protocolsession.OperationID(61), blockRequest, func(context.Context, protocolsession.Message) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	fixture.stable.setDrifted()
 	secondRequest, _ := NewBlockRequest(second.ID(), []uint64{1})
-	if _, err := fixture.service.ServeBlocks(context.Background(), flowID[protocolsession.OperationID](62), secondRequest, func(context.Context, protocolsession.Message) error { return nil }); !errors.Is(err, content.ErrRevisionDrift) {
+	if _, err := fixture.service.ServeBlocks(context.Background(), protocolsession.OperationID(62), secondRequest, func(context.Context, protocolsession.Message) error { return nil }); !errors.Is(err, content.ErrRevisionDrift) {
 		t.Fatalf("drift error=%v", err)
 	}
 	for _, lease := range []content.RevisionLease{first, second} {
@@ -345,12 +345,12 @@ func TestCachedBlockCannotBypassLeaseExpiry(t *testing.T) {
 	lease := results.Items()[0].Lease
 	request, _ := NewBlockRequest(lease.ID(), []uint64{0})
 	emit := func(context.Context, protocolsession.Message) error { return nil }
-	if _, err := fixture.service.ServeBlocks(context.Background(), flowID[protocolsession.OperationID](63), request, emit); err != nil {
+	if _, err := fixture.service.ServeBlocks(context.Background(), protocolsession.OperationID(63), request, emit); err != nil {
 		t.Fatal(err)
 	}
 	reads := fixture.stable.readCount()
 	fixture.clock.Advance(content.LeaseTTL)
-	if _, err := fixture.service.ServeBlocks(context.Background(), flowID[protocolsession.OperationID](64), request, emit); !errors.Is(err, content.ErrLeaseExpired) {
+	if _, err := fixture.service.ServeBlocks(context.Background(), protocolsession.OperationID(64), request, emit); !errors.Is(err, content.ErrLeaseExpired) {
 		t.Fatalf("expired cached block error=%v", err)
 	}
 	if fixture.stable.readCount() != reads {
@@ -371,7 +371,7 @@ func TestRevisionInvalidationCancelsActiveCachedDelivery(t *testing.T) {
 	lease := results.Items()[0].Lease
 	request, _ := NewBlockRequest(lease.ID(), []uint64{0})
 	if _, err := fixture.service.ServeBlocks(
-		context.Background(), flowID[protocolsession.OperationID](65), request,
+		context.Background(), protocolsession.OperationID(65), request,
 		func(context.Context, protocolsession.Message) error { return nil },
 	); err != nil {
 		t.Fatal(err)
@@ -380,7 +380,7 @@ func TestRevisionInvalidationCancelsActiveCachedDelivery(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		_, serveErr := fixture.service.ServeBlocks(
-			context.Background(), flowID[protocolsession.OperationID](66), request,
+			context.Background(), protocolsession.OperationID(66), request,
 			func(sendContext context.Context, _ protocolsession.Message) error {
 				select {
 				case <-started:
@@ -397,7 +397,7 @@ func TestRevisionInvalidationCancelsActiveCachedDelivery(t *testing.T) {
 	fixture.stable.setDrifted()
 	driftRequest, _ := NewBlockRequest(lease.ID(), []uint64{1})
 	if _, err := fixture.service.ServeBlocks(
-		context.Background(), flowID[protocolsession.OperationID](67), driftRequest,
+		context.Background(), protocolsession.OperationID(67), driftRequest,
 		func(context.Context, protocolsession.Message) error { return nil },
 	); !errors.Is(err, content.ErrRevisionDrift) {
 		t.Fatalf("drift trigger error=%v", err)
@@ -509,56 +509,53 @@ type failingSemanticOutbound struct {
 
 type stubOperationState struct {
 	mu      sync.Mutex
-	next    uint64
-	active  map[protocolsession.OperationRef]protocolsession.MessageKind
-	current map[protocolsession.OperationRef]protocolsession.MessageKind
+	active  map[protocolsession.OperationID]protocolsession.MessageKind
+	current map[protocolsession.OperationID]protocolsession.MessageKind
 }
 
 func newStubOperationState() *stubOperationState {
 	return &stubOperationState{
-		active:  make(map[protocolsession.OperationRef]protocolsession.MessageKind),
-		current: make(map[protocolsession.OperationRef]protocolsession.MessageKind),
+		active:  make(map[protocolsession.OperationID]protocolsession.MessageKind),
+		current: make(map[protocolsession.OperationID]protocolsession.MessageKind),
 	}
 }
 
 func (s *stubOperationState) admit(id protocolsession.OperationID, kind protocolsession.MessageKind) protocolsession.Operation {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.next++
-	ref := protocolsession.OperationRef{ID: id, Token: s.next}
-	s.active[ref] = kind
-	s.current[ref] = kind
-	return protocolsession.NewOperation(ref, s)
+	s.active[id] = kind
+	s.current[id] = kind
+	return protocolsession.NewOperation(id, s)
 }
 
-func (s *stubOperationState) cancel(ref protocolsession.OperationRef) {
+func (s *stubOperationState) cancel(id protocolsession.OperationID) {
 	s.mu.Lock()
-	delete(s.active, ref)
+	delete(s.active, id)
 	s.mu.Unlock()
 }
 
-func (s *stubOperationState) Active(ref protocolsession.OperationRef) bool {
+func (s *stubOperationState) Active(id protocolsession.OperationID) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, ok := s.active[ref]
+	_, ok := s.active[id]
 	return ok
 }
 
-func (s *stubOperationState) Current(ref protocolsession.OperationRef) bool {
+func (s *stubOperationState) Current(id protocolsession.OperationID) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, ok := s.current[ref]
+	_, ok := s.current[id]
 	return ok
 }
 
-func (s *stubOperationState) RequestKind(ref protocolsession.OperationRef) (protocolsession.MessageKind, bool) {
+func (s *stubOperationState) RequestKind(id protocolsession.OperationID) (protocolsession.MessageKind, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	kind, ok := s.current[ref]
+	kind, ok := s.current[id]
 	return kind, ok
 }
 
-func (s *stubOperationState) PeerAttemptBinding(protocolsession.OperationRef) (protocolsession.PeerAttemptBinding, bool) {
+func (s *stubOperationState) PeerAttemptBinding(protocolsession.OperationID) (protocolsession.PeerAttemptBinding, bool) {
 	return protocolsession.PeerAttemptBinding{}, false
 }
 
@@ -642,7 +639,7 @@ func TestSenderHandlerDispatchesWithoutOwningRouterOrWriter(t *testing.T) {
 	state := newStubOperationState()
 	request, _ := NewOpenRequest([]OpenItem{{FileID: fixture.file}})
 	body, _ := EncodeOpenRequest(request)
-	operation := flowID[protocolsession.OperationID](71)
+	operation := protocolsession.OperationID(71)
 	openMessage := operationMessage(t, protocolsession.MessageOpenRevisions, operation, body)
 	if err := handler.HandleMessage(context.Background(), state.admit(operation, protocolsession.MessageOpenRevisions), openMessage); err != nil {
 		t.Fatal(err)
@@ -657,7 +654,7 @@ func TestSenderHandlerDispatchesWithoutOwningRouterOrWriter(t *testing.T) {
 	}
 
 	invalidBody, _ := protocolsession.EncodeBody([]any{[]byte{1}})
-	invalidID := flowID[protocolsession.OperationID](72)
+	invalidID := protocolsession.OperationID(72)
 	invalidRenew := operationMessage(t, protocolsession.MessageRenewLease, invalidID, invalidBody)
 	if err := handler.HandleMessage(context.Background(), state.admit(invalidID, protocolsession.MessageRenewLease), invalidRenew); err != nil {
 		t.Fatal(err)
@@ -676,20 +673,20 @@ func TestSenderHandlerDispatchesWithoutOwningRouterOrWriter(t *testing.T) {
 	}
 	directLease := directResults.Items()[0].Lease
 	leaseRequestBody, _ := EncodeLeaseRequest(directLease.ID())
-	id173 := flowID[protocolsession.OperationID](173)
+	id173 := protocolsession.OperationID(173)
 	handler.process(context.Background(), state.admit(id173, protocolsession.MessageRenewLease), operationMessage(t, protocolsession.MessageRenewLease, id173, leaseRequestBody))
 	if failure := <-outbound.failures; failure.Scope != RevisionErrorScope {
 		t.Fatalf("early renew failure scope=%d", failure.Scope)
 	}
 	fixture.clock.Advance(content.LeaseRenewWindow + time.Second)
-	id74 := flowID[protocolsession.OperationID](74)
+	id74 := protocolsession.OperationID(74)
 	handler.process(context.Background(), state.admit(id74, protocolsession.MessageRenewLease), operationMessage(t, protocolsession.MessageRenewLease, id74, leaseRequestBody))
 	if kind := <-outbound.controls; kind != protocolsession.MessageLeaseResult {
 		t.Fatalf("renew control kind=%d", kind)
 	}
 	blockRequest, _ := NewBlockRequest(directLease.ID(), []uint64{0})
 	blockBody, _ := EncodeBlockRequest(blockRequest)
-	id75 := flowID[protocolsession.OperationID](75)
+	id75 := protocolsession.OperationID(75)
 	handler.process(context.Background(), state.admit(id75, protocolsession.MessageRequestBlocks), operationMessage(t, protocolsession.MessageRequestBlocks, id75, blockBody))
 	if kind := <-outbound.controls; kind != protocolsession.MessageOperationComplete {
 		t.Fatalf("block final kind=%d", kind)
@@ -697,7 +694,7 @@ func TestSenderHandlerDispatchesWithoutOwningRouterOrWriter(t *testing.T) {
 	if len(outbound.fragments) == 0 {
 		t.Fatal("block handler emitted no fragments")
 	}
-	id76 := flowID[protocolsession.OperationID](76)
+	id76 := protocolsession.OperationID(76)
 	handler.process(context.Background(), state.admit(id76, protocolsession.MessageReleaseLease), operationMessage(t, protocolsession.MessageReleaseLease, id76, leaseRequestBody))
 	if kind := <-outbound.controls; kind != protocolsession.MessageOperationComplete {
 		t.Fatalf("release final kind=%d", kind)
@@ -710,12 +707,12 @@ func TestSenderHandlerDispatchesWithoutOwningRouterOrWriter(t *testing.T) {
 	if err := RegisterSenderHandlers(router, handler); err == nil {
 		t.Fatal("duplicate content handler registration accepted")
 	}
-	id73 := flowID[protocolsession.OperationID](73)
+	id73 := protocolsession.OperationID(73)
 	if err := handler.HandleMessage(context.Background(), state.admit(id73, protocolsession.MessageOpenRevisions), operationMessage(t, protocolsession.MessageCatalogResult, id73, completeBody(t))); !errors.Is(err, ErrUnexpectedMessage) {
 		t.Fatalf("unexpected kind error=%v", err)
 	}
 	invalidCancel, _ := protocolsession.EncodeBody([]any{uint64(0)})
-	id77 := flowID[protocolsession.OperationID](77)
+	id77 := protocolsession.OperationID(77)
 	if err := handler.HandleMessage(context.Background(), state.admit(id77, protocolsession.MessageOpenRevisions), operationMessage(t, protocolsession.MessageCancel, id77, invalidCancel)); !errors.Is(err, ErrInvalidCancelRequest) {
 		t.Fatalf("invalid cancel reason error=%v", err)
 	}
@@ -742,7 +739,7 @@ func TestOutboundFailureStaysAtTheSessionBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	id78 := flowID[protocolsession.OperationID](78)
+	id78 := protocolsession.OperationID(78)
 	handler.process(context.Background(), testActiveOperation(id78), operationMessage(
 		t, protocolsession.MessageReleaseLease, id78, body,
 	))
@@ -767,8 +764,8 @@ func TestSenderHandlerQueueAndServiceValidationFailuresAreBounded(t *testing.T) 
 	request, _ := NewOpenRequest([]OpenItem{{FileID: fixture.file}})
 	body, _ := EncodeOpenRequest(request)
 	state := newStubOperationState()
-	id81 := flowID[protocolsession.OperationID](81)
-	id82 := flowID[protocolsession.OperationID](82)
+	id81 := protocolsession.OperationID(81)
+	id82 := protocolsession.OperationID(82)
 	first := operationMessage(t, protocolsession.MessageOpenRevisions, id81, body)
 	second := operationMessage(t, protocolsession.MessageOpenRevisions, id82, body)
 	if err := handler.HandleMessage(context.Background(), state.admit(id81, protocolsession.MessageOpenRevisions), first); err != nil {
@@ -960,7 +957,7 @@ func TestBlockHandlerKeepsRevisionFailuresOutOfTheBlockErrorDomain(t *testing.T)
 	}
 	request, _ := NewBlockRequest(lease.ID(), []uint64{0})
 	body, _ := EncodeBlockRequest(request)
-	id184 := flowID[protocolsession.OperationID](184)
+	id184 := protocolsession.OperationID(184)
 	handler.process(context.Background(), testActiveOperation(id184), operationMessage(t, protocolsession.MessageRequestBlocks, id184, body))
 	select {
 	case failure := <-outbound.failures:
@@ -973,7 +970,7 @@ func TestBlockHandlerKeepsRevisionFailuresOutOfTheBlockErrorDomain(t *testing.T)
 	unknownLease := flowID[content.LeaseID](185)
 	unknownRequest, _ := NewBlockRequest(unknownLease, []uint64{0})
 	unknownBody, _ := EncodeBlockRequest(unknownRequest)
-	id186 := flowID[protocolsession.OperationID](186)
+	id186 := protocolsession.OperationID(186)
 	handler.process(context.Background(), testActiveOperation(id186), operationMessage(t, protocolsession.MessageRequestBlocks, id186, unknownBody))
 	select {
 	case failure := <-outbound.failures:

@@ -38,7 +38,7 @@ const (
 	maxChunkSize                        = 4 << 20
 	maxFrameBytes                       = 64 << 10
 	maxOperationPlaintext               = 65492
-	maxFragmentPayload                  = 65440
+	maxFragmentPayload                  = 65448
 	maxBlockRecordBytes                 = 4194816
 	maxCatalogPageBytes                 = 60 << 10
 	maxCatalogPageEntries               = 256
@@ -95,7 +95,7 @@ const (
 	relayChallengeSeconds               = 30
 	joinStartingSeconds                 = 5
 	clientHelloReplaySeconds            = 300
-	operationTombstoneSeconds           = 30
+	operationReplayWindow               = 4096
 	applicationRelaySeconds             = 8
 	relaySessionTombstoneSeconds        = 60
 	maxOpaqueCiphertextBytes            = 64 << 10
@@ -145,7 +145,7 @@ type fixture struct {
 	fileID        []byte
 	generation    []byte
 	fileRevision  []byte
-	operationID   []byte
+	operationID   uint64
 	receiverID    []byte
 	descriptorKey []byte
 }
@@ -206,7 +206,7 @@ func TestR0ContractArithmetic(t *testing.T) {
 	if 28+aes.BlockSize+maxOperationPlaintext != maxFrameBytes {
 		t.Fatalf("operation envelope limit no longer fills MaxFrameSize")
 	}
-	if 28+aes.BlockSize+52+maxFragmentPayload != maxFrameBytes {
+	if 28+aes.BlockSize+44+maxFragmentPayload != maxFrameBytes {
 		t.Fatalf("fragment payload limit no longer fills MaxFrameSize")
 	}
 	if maxCatalogPageEntries > maxDirectoryEntries {
@@ -306,7 +306,7 @@ func newFixture(t *testing.T) *fixture {
 		fileID:        fileID,
 		generation:    sequence(0x80, 16),
 		fileRevision:  revision,
-		operationID:   sequence(0xb0, 16),
+		operationID:   0x0102030405060708,
 		receiverID:    sequence(0xc0, 16),
 		descriptorKey: derive(t, readSecret, labelDescriptor, pkHash),
 	}
@@ -484,7 +484,7 @@ func sessionCases(t *testing.T, f *fixture, descriptor []byte) []any {
 		t, s2r, f.shareInstance, protocolSessionID, laneID, 0, 1, 0, operationErrorNonce, operationErrorPlain,
 	)
 
-	grantOperationID := fixed(0xd1, 16)
+	grantOperationID := uint64(0x1112131415161718)
 	attachedLaneID := uint32(0x05060708)
 	attachedLaneEpoch := uint32(1)
 	attachNonce := fixed(0x61, 16)
@@ -498,7 +498,7 @@ func sessionCases(t *testing.T, f *fixture, descriptor []byte) []any {
 	)
 	laneHelloBase := slices.Concat(
 		[]byte("WS2A"), []byte{sessionWireVersion}, f.shareInstance, protocolSessionID,
-		u32(attachedLaneID), u32(attachedLaneEpoch), grantOperationID, attachNonce,
+		u32(attachedLaneID), u32(attachedLaneEpoch), u64(grantOperationID), attachNonce,
 	)
 	laneHelloProof := hmacSHA256(r2s, slices.Concat([]byte(domainLaneHello), laneHelloBase))
 	laneHello := slices.Concat(laneHelloBase, laneHelloProof)
@@ -515,7 +515,7 @@ func sessionCases(t *testing.T, f *fixture, descriptor []byte) []any {
 	laneReject := slices.Concat(laneRejectBody, laneRejectSignature)
 
 	revisionPayload := canonicalFileRevision(t, f)
-	openOperationID := fixed(0xe1, 16)
+	openOperationID := uint64(0x2122232425262728)
 	leaseID := fixed(0xb1, 16)
 	openResultsUnsigned := map[uint64]any{
 		0: uint64(1), 1: []any{[]any{f.fileID, uint64(0), revisionPayload, leaseID, uint64(leaseTTLSeconds * 1000), uint64(leaseRenewWindowSeconds * 1000)}},
@@ -526,7 +526,7 @@ func sessionCases(t *testing.T, f *fixture, descriptor []byte) []any {
 		t, s2r, f.shareInstance, protocolSessionID, attachedLaneID, attachedLaneEpoch, 1, 0, fixed(0x91, 12), openResultsPlain,
 	)
 
-	renewOperationID := fixed(0xf1, 16)
+	renewOperationID := uint64(0x3132333435363738)
 	leaseResultUnsigned := map[uint64]any{
 		0: uint64(1), 1: leaseID, 2: uint64(leaseTTLSeconds * 1000), 3: uint64(leaseRenewWindowSeconds * 1000),
 	}
@@ -706,14 +706,14 @@ func sessionCases(t *testing.T, f *fixture, descriptor []byte) []any {
 		map[string]any{
 			"name": "sender-signed-operation-error", "shareInstanceB64": b64(f.shareInstance),
 			"protocolSessionIdB64": b64(protocolSessionID), "laneId": laneID, "laneEpoch": uint32(0), "sequence": "0",
-			"operationIdB64": b64(f.operationID), "trafficKeyB64": b64(s2r),
+			"operationId": fmt.Sprint(f.operationID), "trafficKeyB64": b64(s2r),
 			"semanticBodyCborB64": b64(operationErrorUnsignedBytes),
 			"plaintextB64":        b64(operationErrorPlain), "nonceB64": b64(operationErrorNonce), "aadB64": b64(operationErrorAAD), "envelopeB64": b64(operationErrorEnvelope),
 		},
 		map[string]any{
 			"name": "sender-granted-lane-attach", "shareInstanceB64": b64(f.shareInstance),
 			"protocolSessionIdB64": b64(protocolSessionID), "grantLaneId": laneID, "grantLaneEpoch": uint32(0), "grantSequence": "1",
-			"attachedLaneId": attachedLaneID, "attachedLaneEpoch": attachedLaneEpoch, "grantOperationIdB64": b64(grantOperationID),
+			"attachedLaneId": attachedLaneID, "attachedLaneEpoch": attachedLaneEpoch, "grantOperationId": fmt.Sprint(grantOperationID),
 			"attachNonceB64": b64(attachNonce), "receiverToSenderKeyB64": b64(r2s), "senderToReceiverKeyB64": b64(s2r),
 			"grantSemanticBodyCborB64": b64(grantUnsignedBytes),
 			"grantPlaintextB64":        b64(grantPlain), "grantAadB64": b64(grantAAD), "grantEnvelopeB64": b64(grantEnvelope),
@@ -726,7 +726,7 @@ func sessionCases(t *testing.T, f *fixture, descriptor []byte) []any {
 		map[string]any{
 			"name": "relative-lease-open-results", "shareInstanceB64": b64(f.shareInstance),
 			"protocolSessionIdB64": b64(protocolSessionID), "laneId": attachedLaneID, "laneEpoch": attachedLaneEpoch, "sequence": "0",
-			"operationIdB64": b64(openOperationID), "fileIdB64": b64(f.fileID), "revisionObjectB64": b64(revisionPayload),
+			"operationId": fmt.Sprint(openOperationID), "fileIdB64": b64(f.fileID), "revisionObjectB64": b64(revisionPayload),
 			"leaseIdB64": b64(leaseID), "leaseTtlMilliseconds": fmt.Sprint(leaseTTLSeconds * 1000), "renewAfterMilliseconds": fmt.Sprint(leaseRenewWindowSeconds * 1000),
 			"trafficKeyB64": b64(s2r), "semanticBodyCborB64": b64(openResultsUnsignedBytes),
 			"plaintextB64": b64(openResultsPlain), "nonceB64": b64(fixed(0x91, 12)), "aadB64": b64(openResultsAAD), "envelopeB64": b64(openResultsEnvelope),
@@ -734,7 +734,7 @@ func sessionCases(t *testing.T, f *fixture, descriptor []byte) []any {
 		map[string]any{
 			"name": "renew-lease-result", "shareInstanceB64": b64(f.shareInstance),
 			"protocolSessionIdB64": b64(protocolSessionID), "laneId": attachedLaneID,
-			"laneEpoch": attachedLaneEpoch, "sequence": "1", "operationIdB64": b64(renewOperationID),
+			"laneEpoch": attachedLaneEpoch, "sequence": "1", "operationId": fmt.Sprint(renewOperationID),
 			"leaseIdB64": b64(leaseID), "leaseTtlMilliseconds": fmt.Sprint(leaseTTLSeconds * 1000),
 			"renewAfterMilliseconds": fmt.Sprint(leaseRenewWindowSeconds * 1000),
 			"trafficKeyB64":          b64(s2r), "semanticBodyCborB64": b64(leaseResultUnsignedBytes),
@@ -778,7 +778,7 @@ func singleFragmentCase(f *fixture, block []byte) any {
 	recordID := first(hash(block), 16)
 	fragment := encodeSingleFragment(f.operationID, recordID, block)
 	return map[string]any{
-		"name": "single-fragment-block-record", "operationIdB64": b64(f.operationID), "recordIdB64": b64(recordID),
+		"name": "single-fragment-block-record", "operationId": fmt.Sprint(f.operationID), "recordIdB64": b64(recordID),
 		"fragmentIndex": uint32(0), "fragmentCount": uint32(1), "totalLength": fmt.Sprint(len(block)),
 		"payloadLength": fmt.Sprint(len(block)), "fragmentPlaintextB64": b64(fragment),
 		"maxFrameBytes": maxFrameBytes, "maxOperationPlaintextBytes": maxOperationPlaintext,
@@ -800,17 +800,17 @@ func maximumFragmentCase(f *fixture) any {
 	for index := range count {
 		start := index * maxFragmentPayload
 		end := min(start+maxFragmentPayload, len(record))
-		header := make([]byte, 52)
+		header := make([]byte, 44)
 		header[0], header[1] = 1, 8
 		if index == count-1 {
 			header[2] = 1
 		}
-		copy(header[4:20], f.operationID)
-		copy(header[20:36], recordID)
-		binary.BigEndian.PutUint32(header[36:40], uint32(index))
-		binary.BigEndian.PutUint32(header[40:44], uint32(count))
-		binary.BigEndian.PutUint32(header[44:48], uint32(len(record)))
-		binary.BigEndian.PutUint32(header[48:52], uint32(end-start))
+		binary.BigEndian.PutUint64(header[4:12], f.operationID)
+		copy(header[12:28], recordID)
+		binary.BigEndian.PutUint32(header[28:32], uint32(index))
+		binary.BigEndian.PutUint32(header[32:36], uint32(count))
+		binary.BigEndian.PutUint32(header[36:40], uint32(len(record)))
+		binary.BigEndian.PutUint32(header[40:44], uint32(end-start))
 		fragment := slices.Concat(header, record[start:end])
 		digests = append(digests, b64(hash(fragment)))
 		if index == 0 {
@@ -821,11 +821,11 @@ func maximumFragmentCase(f *fixture) any {
 		}
 	}
 	return map[string]any{
-		"name": "maximum-block-record-fragmentation", "operationIdB64": b64(f.operationID),
+		"name": "maximum-block-record-fragmentation", "operationId": fmt.Sprint(f.operationID),
 		"recordPattern": "byte((index*31+7)&255)", "recordLength": fmt.Sprint(len(record)),
 		"recordDigestB64": b64(hash(record)), "recordIdB64": b64(recordID), "fragmentCount": uint32(count),
 		"fragmentDigestsB64": digests, "firstFragmentB64": b64(firstFragment), "lastFragmentB64": b64(lastFragment),
-		"firstPayloadLength": fmt.Sprint(maxFragmentPayload), "lastPayloadLength": fmt.Sprint(len(lastFragment) - 52),
+		"firstPayloadLength": fmt.Sprint(maxFragmentPayload), "lastPayloadLength": fmt.Sprint(len(lastFragment) - 44),
 		"maxFrameBytes": maxFrameBytes, "maxOperationPlaintextBytes": maxOperationPlaintext,
 		"maxFragmentPayloadBytes": maxFragmentPayload, "maxBlockRecordBytes": maxBlockRecordBytes,
 	}

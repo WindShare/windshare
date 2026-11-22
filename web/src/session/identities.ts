@@ -1,4 +1,5 @@
 export const DIAGNOSTIC_IDENTITY_BYTES = 16
+const UINT64_MAX = 0xffff_ffff_ffff_ffffn
 
 export const DIAGNOSTIC_IDENTITY_KINDS = Object.freeze([
   'protocol_session',
@@ -8,22 +9,34 @@ export const DIAGNOSTIC_IDENTITY_KINDS = Object.freeze([
 ] as const)
 
 export type DiagnosticIdentityKind = (typeof DIAGNOSTIC_IDENTITY_KINDS)[number]
+export type DiagnosticBytesIdentityKind = Exclude<DiagnosticIdentityKind, 'protocol_operation'>
 
-export interface DiagnosticIdentity<
-  Kind extends DiagnosticIdentityKind = DiagnosticIdentityKind,
+export interface DiagnosticBytesIdentity<
+  Kind extends DiagnosticBytesIdentityKind = DiagnosticBytesIdentityKind,
 > {
   readonly kind: Kind
   readonly byteLength: typeof DIAGNOSTIC_IDENTITY_BYTES
   copyBytes(): Uint8Array<ArrayBuffer>
 }
 
+export interface ProtocolOperationIdentity {
+  readonly kind: 'protocol_operation'
+  readonly value: bigint
+  toDecimalString(): string
+}
+
+export type DiagnosticIdentity<
+  Kind extends DiagnosticIdentityKind = DiagnosticIdentityKind,
+> = Kind extends 'protocol_operation'
+  ? ProtocolOperationIdentity
+  : DiagnosticBytesIdentity<Extract<Kind, DiagnosticBytesIdentityKind>>
+
 export type ProtocolSessionIdentity = DiagnosticIdentity<'protocol_session'>
-export type ProtocolOperationIdentity = DiagnosticIdentity<'protocol_operation'>
 export type PeerPathIdentity = DiagnosticIdentity<'peer_path'>
 export type PeerAttemptIdentity = DiagnosticIdentity<'peer_attempt'>
 
-class FixedDiagnosticIdentity<Kind extends DiagnosticIdentityKind>
-implements DiagnosticIdentity<Kind> {
+class FixedDiagnosticIdentity<Kind extends DiagnosticBytesIdentityKind>
+implements DiagnosticBytesIdentity<Kind> {
   readonly kind: Kind
   readonly byteLength = DIAGNOSTIC_IDENTITY_BYTES
   readonly #bytes: Uint8Array<ArrayBuffer>
@@ -39,21 +52,53 @@ implements DiagnosticIdentity<Kind> {
   }
 }
 
-export function createDiagnosticIdentity<Kind extends DiagnosticIdentityKind>(
+class FixedProtocolOperationIdentity implements ProtocolOperationIdentity {
+  readonly kind = 'protocol_operation' as const
+  readonly value: bigint
+
+  constructor(value: bigint) {
+    this.value = value
+    Object.freeze(this)
+  }
+
+  toDecimalString(): string {
+    return this.value.toString(10)
+  }
+
+  toJSON(): Readonly<{ kind: 'protocol_operation'; value: string }> {
+    return { kind: this.kind, value: this.value.toString(10) }
+  }
+}
+
+export function createDiagnosticIdentity(
+  kind: 'protocol_operation',
+  value: bigint,
+): ProtocolOperationIdentity
+export function createDiagnosticIdentity<Kind extends DiagnosticBytesIdentityKind>(
   kind: Kind,
   bytes: Uint8Array,
-): DiagnosticIdentity<Kind> {
+): DiagnosticBytesIdentity<Kind>
+export function createDiagnosticIdentity(
+  kind: DiagnosticIdentityKind,
+  input: Uint8Array | bigint,
+): DiagnosticIdentity {
   if (!DIAGNOSTIC_IDENTITY_KINDS.includes(kind)) {
     throw new RangeError('Unknown v2 diagnostic identity kind')
   }
+  if (kind === 'protocol_operation') {
+    if (typeof input !== 'bigint' || input < 1n || input > UINT64_MAX) {
+      throw new RangeError('V2 protocol operation identities must be nonzero uint64 values')
+    }
+    return new FixedProtocolOperationIdentity(input)
+  }
   if (
-    !(bytes instanceof Uint8Array) ||
-    bytes.byteLength !== DIAGNOSTIC_IDENTITY_BYTES ||
-    !bytes.some((value) => value !== 0)
+    !(input instanceof Uint8Array) ||
+    input.byteLength !== DIAGNOSTIC_IDENTITY_BYTES ||
+    !input.some((value) => value !== 0)
   ) {
     throw new RangeError('V2 diagnostic identities must be nonzero 16-byte values')
   }
-  return new FixedDiagnosticIdentity(kind, bytes)
+  return new FixedDiagnosticIdentity(kind, input)
 }
 
 export function createProtocolSessionIdentity(
@@ -63,9 +108,9 @@ export function createProtocolSessionIdentity(
 }
 
 export function createProtocolOperationIdentity(
-  bytes: Uint8Array,
+  value: bigint,
 ): ProtocolOperationIdentity {
-  return createDiagnosticIdentity('protocol_operation', bytes)
+  return createDiagnosticIdentity('protocol_operation', value)
 }
 
 export function createPeerPathIdentityValue(bytes: Uint8Array): PeerPathIdentity {
@@ -80,7 +125,12 @@ export function equalDiagnosticIdentities(
   left: DiagnosticIdentity,
   right: DiagnosticIdentity,
 ): boolean {
-  if (left.kind !== right.kind || left.byteLength !== right.byteLength) return false
+  if (left.kind !== right.kind) return false
+  if (left.kind === 'protocol_operation') {
+    return right.kind === 'protocol_operation' && left.value === right.value
+  }
+  if (right.kind === 'protocol_operation') return false
+  if (left.byteLength !== right.byteLength) return false
   const leftBytes = left.copyBytes()
   const rightBytes = right.copyBytes()
   if (

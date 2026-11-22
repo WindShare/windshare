@@ -20,7 +20,7 @@ import (
 const (
 	DefaultSTUNServer                       = "stun:stun.l.google.com:19302"
 	DefaultMaxCandidates                    = v2signal.DefaultMaximumCandidates
-	DefaultRetiredBindingTTL                = protocolsession.OperationTombstoneLifetime
+	DefaultRetiredBindingTTL                = 30 * time.Second
 	DefaultMaxRetiredBindings               = 64
 	DefaultSenderAttemptObservationCapacity = 256
 
@@ -240,10 +240,10 @@ func (factory *Factory) NewSenderPeerHandler(
 	capacity := SenderMaxActivePeerAttemptsPerSession*(factory.maxCandidates+3) + handlerEventReserve
 	return &senderHandler{
 		factory: factory, session: session, events: make(chan handlerEvent, capacity),
-		attempts:          make(map[protocolsession.OperationRef]*peerAttempt),
-		bindings:          make(map[v2signal.Binding]protocolsession.OperationRef),
+		attempts:          make(map[protocolsession.OperationID]*peerAttempt),
+		bindings:          make(map[v2signal.Binding]protocolsession.OperationID),
 		evidenceAuthority: newSenderEvidenceAuthority(factory.maxPeerPaths),
-		retiredOperations: make(map[protocolsession.OperationRef]retiredBinding),
+		retiredOperations: make(map[protocolsession.OperationID]retiredBinding),
 		retiredBindings:   make(map[v2signal.Binding]retiredBinding),
 	}, nil
 }
@@ -346,13 +346,13 @@ type senderHandler struct {
 	ingress sync.WaitGroup
 
 	mu       sync.Mutex
-	attempts map[protocolsession.OperationRef]*peerAttempt
-	bindings map[v2signal.Binding]protocolsession.OperationRef
+	attempts map[protocolsession.OperationID]*peerAttempt
+	bindings map[v2signal.Binding]protocolsession.OperationID
 	// Evidence identity is scoped to the ProtocolSession, while replay
 	// tombstones intentionally expire. Keeping these authorities separate is
 	// what makes one (session,path,attempt,side) stream terminal exactly once.
 	evidenceAuthority  senderEvidenceAuthority
-	retiredOperations  map[protocolsession.OperationRef]retiredBinding
+	retiredOperations  map[protocolsession.OperationID]retiredBinding
 	retiredBindings    map[v2signal.Binding]retiredBinding
 	replayBlockedUntil time.Time
 	stopping           bool
@@ -361,7 +361,7 @@ type senderHandler struct {
 }
 
 type retiredBinding struct {
-	operation protocolsession.OperationRef
+	operation protocolsession.OperationID
 	binding   v2signal.Binding
 	expiresAt time.Time
 }
@@ -545,7 +545,7 @@ func (handler *senderHandler) handleRunEvent(ctx context.Context, event handlerE
 			rejected = rejectionForEvent(event, err)
 		}
 	case handlerCandidate:
-		err = handler.acceptCandidate(event.op.Ref(), event.candidate)
+		err = handler.acceptCandidate(event.op.ID(), event.candidate)
 		if err != nil {
 			rejected = &peerOperationRejection{
 				code:    protocolsession.PeerOperationCodeCandidates,
@@ -556,7 +556,7 @@ func (handler *senderHandler) handleRunEvent(ctx context.Context, event handlerE
 	case handlerReject:
 		rejected = event.rejection
 	case handlerCancel:
-		err = handler.cancelAttempt(ctx, event.op.Ref())
+		err = handler.cancelAttempt(ctx, event.op.ID())
 	default:
 		return ErrProtocol
 	}

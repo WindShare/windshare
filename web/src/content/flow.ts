@@ -13,8 +13,8 @@ import {
 
 export const MAXIMUM_OPEN_BATCH = 64
 export const MAXIMUM_REQUESTED_BLOCKS = 256
-export const FRAGMENT_HEADER_BYTES = 52
-export const FRAGMENT_PAYLOAD_BYTES = 65_440
+export const FRAGMENT_HEADER_BYTES = 44
+export const FRAGMENT_PAYLOAD_BYTES = 65_448
 export const MAXIMUM_FRAGMENTS = 128
 export const FRAGMENT_INACTIVITY_TIMEOUT_MILLISECONDS = 15_000
 export const FRAGMENT_TOMBSTONE_MILLISECONDS = 30_000
@@ -58,7 +58,7 @@ export class FragmentInactivityError extends Error {
 }
 
 export class FragmentAssembler {
-  readonly #operationId: Uint8Array<ArrayBuffer>
+  readonly #operationId: bigint
   readonly #now: () => number
   #recordId: Uint8Array<ArrayBuffer> | undefined
   #fragments: Array<Uint8Array<ArrayBuffer> | undefined> = []
@@ -69,8 +69,11 @@ export class FragmentAssembler {
   #lastProgressAt = 0
   #cancelledAt: number | undefined
 
-  constructor(operationId: Uint8Array, now: () => number = () => Date.now()) {
-    this.#operationId = requireBytes(operationId, 16, 'fragment operation ID', true)
+  constructor(operationId: bigint, now: () => number = () => Date.now()) {
+    if (typeof operationId !== 'bigint' || operationId < 1n || operationId > 0xffff_ffff_ffff_ffffn) {
+      throw new CborError('fragment operation ID must be a nonzero uint64')
+    }
+    this.#operationId = operationId
     this.#now = now
   }
 
@@ -83,7 +86,7 @@ export class FragmentAssembler {
       throw new CborError('Fragment arrived after its cancellation tombstone expired')
     }
     const fragment = decodeFragment(plaintext)
-    if (!equalBytes(fragment.operationId, this.#operationId)) {
+    if (fragment.operationId !== this.#operationId) {
       throw new CborError('Fragment belongs to another operation')
     }
     if (this.#recordId === undefined) this.#start(fragment, now)
@@ -151,7 +154,7 @@ export class FragmentAssembler {
 }
 
 interface DecodedFragment {
-  readonly operationId: Uint8Array<ArrayBuffer>
+  readonly operationId: bigint
   readonly recordId: Uint8Array<ArrayBuffer>
   readonly index: number
   readonly count: number
@@ -341,13 +344,16 @@ function decodeFragment(plaintext: Uint8Array): DecodedFragment {
   ) {
     throw new CborError('Authenticated block fragment has an invalid header')
   }
-  const operationId = requireBytes(plaintext.subarray(4, 20), 16, 'fragment operation ID', true)
-  const recordId = requireBytes(plaintext.subarray(20, 36), 16, 'fragment record ID', true)
   const view = new DataView(plaintext.buffer, plaintext.byteOffset, plaintext.byteLength)
-  const index = view.getUint32(36, false)
-  const count = view.getUint32(40, false)
-  const totalLength = view.getUint32(44, false)
-  const payloadLength = view.getUint32(48, false)
+  const operationId = view.getBigUint64(4, false)
+  if (operationId === 0n) {
+    throw new CborError('Authenticated block fragment has a zero operation ID')
+  }
+  const recordId = requireBytes(plaintext.subarray(12, 28), 16, 'fragment record ID', true)
+  const index = view.getUint32(28, false)
+  const count = view.getUint32(32, false)
+  const totalLength = view.getUint32(36, false)
+  const payloadLength = view.getUint32(40, false)
   const last = (plaintext[2] ?? 0) === 1
   const expectedCount = Math.ceil(totalLength / FRAGMENT_PAYLOAD_BYTES)
   const expectedPayload = last

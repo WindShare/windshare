@@ -13,8 +13,8 @@ func TestSenderContentDecisionPreservesCorrelationAndHotPathFacts(t *testing.T) 
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
 	recorder := newProtocolTraceRecorder(runtime)
 	for _, decision := range []contentflow.SenderDecisionTrace{
-		{Stage: contentflow.SenderDecisionBlockLeaseReleased, OperationID: protocolsession.OperationID{2}, RequestKind: protocolsession.MessageRequestBlocks, LeaseID: content.LeaseID{3}},
-		{Stage: contentflow.SenderDecisionCapacityBusy, OperationID: protocolsession.OperationID{4}, RequestKind: protocolsession.MessageOpenRevisions, CapacityDecisionID: content.CapacityDecisionID("capacity-1-2")},
+		{Stage: contentflow.SenderDecisionBlockLeaseReleased, OperationID: protocolsession.OperationID(2), RequestKind: protocolsession.MessageRequestBlocks, LeaseID: content.LeaseID{3}},
+		{Stage: contentflow.SenderDecisionCapacityBusy, OperationID: protocolsession.OperationID(4), RequestKind: protocolsession.MessageOpenRevisions, CapacityDecisionID: content.CapacityDecisionID("capacity-1-2")},
 	} {
 		fact := sessionobs.NewSenderContentDecision(runtime.observationContext(decision.OperationID, decision.RequestKind), decision, session.LaneIdentity{}, false)
 		runtime.protocolObservations.TryPublish(fact)

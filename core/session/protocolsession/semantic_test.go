@@ -26,17 +26,17 @@ func TestSenderControlSemanticRegistryFailsClosed(t *testing.T) {
 	}
 
 	var nilFunc SenderControlSemanticValidatorFunc
-	if err := nilFunc.ValidateSenderControl(MessageCatalogResult, OperationID{}, nil); !errors.Is(err, ErrControlSemantic) {
+	if err := nilFunc.ValidateSenderControl(MessageCatalogResult, 0, nil); !errors.Is(err, ErrControlSemantic) {
 		t.Fatalf("nil validator function error = %v", err)
 	}
 	var nilRegistry *SenderControlSemanticRegistry
-	if err := nilRegistry.ValidateSenderControl(MessageCatalogResult, OperationID{}, nil); !errors.Is(err, ErrControlSemantic) {
+	if err := nilRegistry.ValidateSenderControl(MessageCatalogResult, 0, nil); !errors.Is(err, ErrControlSemantic) {
 		t.Fatalf("nil registry error = %v", err)
 	}
 }
 
 func TestSenderControlSemanticRegistryDispatchesOnlyRegisteredKind(t *testing.T) {
-	operationID := OperationID{1}
+	operationID := OperationID(1)
 	semantic := []byte{2}
 	called := false
 	registry, err := NewSenderControlSemanticRegistry(SenderControlSemanticRule{
@@ -89,10 +89,10 @@ func TestValidateSenderControlSemanticOwnsCoreSchemas(t *testing.T) {
 		MessageScanProgress:    progress,
 		MessageSessionTerminal: terminal,
 	} {
-		if err := validateSenderControlSemantic(external, kind, OperationID{2}, body); err != nil {
+		if err := validateSenderControlSemantic(external, kind, OperationID(2), body); err != nil {
 			t.Fatalf("valid core kind %d: %v", kind, err)
 		}
-		if err := validateSenderControlSemantic(external, kind, OperationID{2}, []byte{0xf6}); !errors.Is(err, ErrControlSemantic) {
+		if err := validateSenderControlSemantic(external, kind, OperationID(2), []byte{0xf6}); !errors.Is(err, ErrControlSemantic) {
 			t.Fatalf("malformed core kind %d error = %v", kind, err)
 		}
 	}
@@ -102,7 +102,7 @@ func TestValidateSenderControlSemanticOwnsCoreSchemas(t *testing.T) {
 }
 
 func TestValidateSenderControlSemanticDelegatesNonCoreKinds(t *testing.T) {
-	operationID := OperationID{3}
+	operationID := OperationID(3)
 	semantic := []byte{4}
 	sentinel := errors.New("typed decoder rejected body")
 	external := SenderControlSemanticValidatorFunc(func(

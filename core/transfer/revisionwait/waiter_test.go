@@ -81,7 +81,7 @@ func waitTestID[T ~[protocolsession.IdentityBytes]byte](value byte) T {
 
 func waitTestSignal(t *testing.T, session protocolsession.ProtocolSessionID, hint time.Duration) *CapacitySignal {
 	t.Helper()
-	signal, err := NewCapacitySignal(hint, session, waitTestID[protocolsession.OperationID](3))
+	signal, err := NewCapacitySignal(hint, session, protocolsession.OperationID(3))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +294,7 @@ func TestCapacitySignalAndConfigValidationContracts(t *testing.T) {
 	if _, ok := MatchCapacitySignal(errors.Join(errors.New("wrapped"), signal)); ok {
 		t.Fatal("wrapped signal acquired retry authority")
 	}
-	if _, err := NewCapacitySignal(time.Millisecond+time.Nanosecond, session, waitTestID[protocolsession.OperationID](3)); !errors.Is(err, ErrInvalidCapacitySignal) {
+	if _, err := NewCapacitySignal(time.Millisecond+time.Nanosecond, session, protocolsession.OperationID(3)); !errors.Is(err, ErrInvalidCapacitySignal) {
 		t.Fatalf("fractional hint err=%v", err)
 	}
 	if (*CapacitySignal)(nil).Error() != ErrInvalidCapacitySignal.Error() || signal.Error() == "" {

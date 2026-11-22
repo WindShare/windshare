@@ -19,7 +19,7 @@ interface LaneVector extends VectorCase {
   readonly attachNonceB64: string
   readonly attachedLaneEpoch: number
   readonly attachedLaneId: number
-  readonly grantOperationIdB64: string
+  readonly grantOperationId: string
   readonly laneAckB64: string
   readonly laneHelloB64: string
   readonly laneRejectB64: string
@@ -232,7 +232,7 @@ describe('receiver runtime caller-owned lane admission', () => {
     expect(result).toMatchObject({
       disposition: 'accepted',
       installation: 'failed',
-      grantOperationId: { kind: 'protocol_operation', byteLength: 16 },
+      grantOperationId: { kind: 'protocol_operation', value: BigInt(lane.grantOperationId) },
       laneId: lane.attachedLaneId,
       laneEpoch: lane.attachedLaneEpoch,
     })
@@ -309,7 +309,7 @@ function grant(): LaneGrant {
   return Object.freeze({
     laneId: lane.attachedLaneId,
     laneEpoch: lane.attachedLaneEpoch,
-    grantOperationId: vectorBytes(lane.grantOperationIdB64),
+    grantOperationId: BigInt(lane.grantOperationId),
     attachNonce: vectorBytes(lane.attachNonceB64),
   })
 }

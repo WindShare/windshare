@@ -1,7 +1,6 @@
 package v2signal
 
 import (
-	"bytes"
 	"testing"
 
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -11,7 +10,7 @@ func TestReceiverControlValidatorOwnsOnlyTypedSenderSignals(t *testing.T) {
 	binding := Binding{AttemptSequence: 1,
 		PeerPathID: testSignalIdentity[PeerPathID](1), AttemptID: testSignalIdentity[AttemptID](2),
 	}
-	operation, _ := protocolsession.OperationIDFromBytes(bytes.Repeat([]byte{3}, protocolsession.IdentityBytes))
+	operation := protocolsession.OperationID(3)
 	answer, _ := EncodeAnswer(Answer{Binding: binding, SDP: "answer"})
 	candidate, _ := EncodeCandidate(Candidate{Binding: binding, Candidate: "candidate:1"})
 	validator := ReceiverControlValidator{}
@@ -29,7 +28,7 @@ func TestReceiverControlValidatorOwnsOnlyTypedSenderSignals(t *testing.T) {
 	if err := validator.ValidateSenderControl(protocolsession.MessageCatalogResult, operation, answer); err == nil {
 		t.Fatal("non-peer control passed receiver validator")
 	}
-	if err := validator.ValidateSenderControl(protocolsession.MessagePeerAnswer, protocolsession.OperationID{}, answer); err == nil {
+	if err := validator.ValidateSenderControl(protocolsession.MessagePeerAnswer, 0, answer); err == nil {
 		t.Fatal("zero operation passed receiver validator")
 	}
 }

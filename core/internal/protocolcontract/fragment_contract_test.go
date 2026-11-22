@@ -18,12 +18,12 @@ func TestBlockFragmentMutationMatrix(t *testing.T) {
 
 	mutations := map[string]func([]byte){
 		"operation-id": func(value []byte) { value[4] ^= 1 },
-		"record-id":    func(value []byte) { value[20] ^= 1 },
-		"index":        func(value []byte) { binary.BigEndian.PutUint32(value[36:40], 1) },
-		"count":        func(value []byte) { binary.BigEndian.PutUint32(value[40:44], 2) },
-		"total-length": func(value []byte) { binary.BigEndian.PutUint32(value[44:48], uint32(len(record)+1)) },
+		"record-id":    func(value []byte) { value[12] ^= 1 },
+		"index":        func(value []byte) { binary.BigEndian.PutUint32(value[28:32], 1) },
+		"count":        func(value []byte) { binary.BigEndian.PutUint32(value[32:36], 2) },
+		"total-length": func(value []byte) { binary.BigEndian.PutUint32(value[36:40], uint32(len(record)+1)) },
 		"payload-length": func(value []byte) {
-			binary.BigEndian.PutUint32(value[48:52], uint32(len(record)+1))
+			binary.BigEndian.PutUint32(value[40:44], uint32(len(record)+1))
 		},
 		"last-flag": func(value []byte) { value[2] = 0 },
 	}
@@ -43,29 +43,29 @@ func TestBlockFragmentMutationMatrix(t *testing.T) {
 	}
 }
 
-func encodeSingleFragment(operationID, recordID, record []byte) []byte {
-	header := make([]byte, 52)
+func encodeSingleFragment(operationID uint64, recordID, record []byte) []byte {
+	header := make([]byte, 44)
 	header[0], header[1], header[2] = 1, 8, 1
-	copy(header[4:20], operationID)
-	copy(header[20:36], recordID)
-	binary.BigEndian.PutUint32(header[40:44], 1)
-	binary.BigEndian.PutUint32(header[44:48], uint32(len(record)))
-	binary.BigEndian.PutUint32(header[48:52], uint32(len(record)))
+	binary.BigEndian.PutUint64(header[4:12], operationID)
+	copy(header[12:28], recordID)
+	binary.BigEndian.PutUint32(header[32:36], 1)
+	binary.BigEndian.PutUint32(header[36:40], uint32(len(record)))
+	binary.BigEndian.PutUint32(header[40:44], uint32(len(record)))
 	return slices.Concat(header, record)
 }
 
-func validSingleFragment(fragment, expectedOperationID, expectedRecordID []byte) bool {
-	if len(fragment) < 52 || fragment[0] != 1 || fragment[1] != 8 || fragment[2] != 1 || fragment[3] != 0 {
+func validSingleFragment(fragment []byte, expectedOperationID uint64, expectedRecordID []byte) bool {
+	if len(fragment) < 44 || fragment[0] != 1 || fragment[1] != 8 || fragment[2] != 1 || fragment[3] != 0 {
 		return false
 	}
-	if !bytes.Equal(fragment[4:20], expectedOperationID) || !bytes.Equal(fragment[20:36], expectedRecordID) {
+	if binary.BigEndian.Uint64(fragment[4:12]) != expectedOperationID || !bytes.Equal(fragment[12:28], expectedRecordID) {
 		return false
 	}
-	index := binary.BigEndian.Uint32(fragment[36:40])
-	count := binary.BigEndian.Uint32(fragment[40:44])
-	totalLength := binary.BigEndian.Uint32(fragment[44:48])
-	payloadLength := binary.BigEndian.Uint32(fragment[48:52])
-	payload := fragment[52:]
+	index := binary.BigEndian.Uint32(fragment[28:32])
+	count := binary.BigEndian.Uint32(fragment[32:36])
+	totalLength := binary.BigEndian.Uint32(fragment[36:40])
+	payloadLength := binary.BigEndian.Uint32(fragment[40:44])
+	payload := fragment[44:]
 	if index != 0 || count != 1 || totalLength == 0 || totalLength > maxBlockRecordBytes ||
 		payloadLength != uint32(len(payload)) || totalLength != payloadLength || len(payload) > maxFragmentPayload {
 		return false
@@ -74,10 +74,10 @@ func validSingleFragment(fragment, expectedOperationID, expectedRecordID []byte)
 }
 
 func fragmentDuplicateConflicts(previous, candidate []byte) bool {
-	if len(previous) < 52 || len(candidate) < 52 {
+	if len(previous) < 44 || len(candidate) < 44 {
 		return false
 	}
-	sameIdentityAndIndex := bytes.Equal(previous[4:36], candidate[4:36]) &&
-		bytes.Equal(previous[36:40], candidate[36:40])
+	sameIdentityAndIndex := bytes.Equal(previous[4:28], candidate[4:28]) &&
+		bytes.Equal(previous[28:32], candidate[28:32])
 	return sameIdentityAndIndex && !bytes.Equal(previous, candidate)
 }

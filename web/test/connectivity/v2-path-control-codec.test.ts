@@ -26,7 +26,7 @@ it('decodes the Go path controls with their canonical bodies', () => {
   const message = decodeMessage(encoded.plaintext)
   validateSenderControlBody(message.kind, message.body)
   expect(message.body).toEqual(body)
-  expect(() => encodeMessage(MESSAGE_KIND.peerPathControl, new Uint8Array(16).fill(1), body)).toThrow()
+  expect(() => encodeMessage(MESSAGE_KIND.peerPathControl, 1n, body)).toThrow()
  }
 })
 

@@ -107,12 +107,10 @@ export class ReceiverSessionRuntime {
       () => {
         this.close().catch(() => undefined)
       },
-      undefined,
       {
         protocolSessionIdentity: this.protocolSessionIdentity,
         ...(options.protocolTrace === undefined ? {} : { trace: options.protocolTrace }),
       },
-      options.randomBytes,
     )
     this.#connectivityCleanup = options.connectivityCleanup ?? (() => undefined)
     this.#protocolTrace = options.protocolTrace

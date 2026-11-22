@@ -54,7 +54,7 @@ export interface SenderControlVector {
 export interface OpenedControl {
   readonly plaintext: Uint8Array
   readonly messageKind: number
-  readonly operationId: Uint8Array | null
+  readonly operationId: bigint | null
   readonly body: Map<number, unknown>
 }
 
@@ -355,9 +355,12 @@ export function expectSenderControl(vector: SenderControlVector): OpenedControl 
   const message = requireMap(decode(plaintext, { useMaps: true }), 'control message')
   const messageKind = requireNumber(message.get(0), 'message kind')
   const rawOperationId = message.get(1)
-  const operationId = rawOperationId === null
-    ? null
-    : requireBytes(rawOperationId, 'operation ID', 16)
+  let operationId: bigint | null = null
+  if (rawOperationId !== null) {
+    operationId = typeof rawOperationId === 'bigint'
+      ? rawOperationId
+      : BigInt(requireNumber(rawOperationId, 'operation ID'))
+  }
   const body = requireMap(message.get(2), 'sender control body')
   expect(Uint8Array.from(encode(body, rfc8949EncodeOptions))).toEqual(bytes(vector.semanticBodyCborB64))
   expect(() => opensGCM(trafficKey, nonce, flipped(ciphertext), aad), 'ciphertext').toThrow()
@@ -366,22 +369,22 @@ export function expectSenderControl(vector: SenderControlVector): OpenedControl 
 
 export function validSingleFragment(
   candidate: Uint8Array,
-  expectedOperationId: Uint8Array,
+  expectedOperationId: bigint,
   expectedRecordId: Uint8Array,
   maxPayload: number,
   maxRecord: number,
 ): boolean {
-  if (candidate.byteLength < 52) return false
-  const header = Buffer.from(candidate.subarray(0, 52))
-  const payload = candidate.subarray(52)
+  if (candidate.byteLength < 44) return false
+  const header = Buffer.from(candidate.subarray(0, 44))
+  const payload = candidate.subarray(44)
   if (
     header[0] !== 1 || header[1] !== 8 || header[2] !== 1 || header[3] !== 0 ||
-    !header.subarray(4, 20).equals(Buffer.from(expectedOperationId)) ||
-    !header.subarray(20, 36).equals(Buffer.from(expectedRecordId)) ||
-    header.readUInt32BE(36) !== 0 || header.readUInt32BE(40) !== 1
+    header.readBigUInt64BE(4) !== expectedOperationId ||
+    !header.subarray(12, 28).equals(Buffer.from(expectedRecordId)) ||
+    header.readUInt32BE(28) !== 0 || header.readUInt32BE(32) !== 1
   ) return false
-  const totalLength = header.readUInt32BE(44)
-  const payloadLength = header.readUInt32BE(48)
+  const totalLength = header.readUInt32BE(36)
+  const payloadLength = header.readUInt32BE(40)
   return totalLength > 0 && totalLength <= maxRecord && payloadLength <= maxPayload &&
     totalLength === payloadLength && payloadLength === payload.byteLength &&
     Buffer.from(sha256(payload).subarray(0, 16)).equals(Buffer.from(expectedRecordId))
@@ -391,9 +394,9 @@ export function fragmentDuplicateConflicts(
   previous: Uint8Array,
   candidate: Uint8Array,
 ): boolean {
-  if (previous.byteLength < 52 || candidate.byteLength < 52) return false
-  const sameIdentityAndIndex = Buffer.from(previous.subarray(4, 40)).equals(
-    Buffer.from(candidate.subarray(4, 40)),
+  if (previous.byteLength < 44 || candidate.byteLength < 44) return false
+  const sameIdentityAndIndex = Buffer.from(previous.subarray(4, 32)).equals(
+    Buffer.from(candidate.subarray(4, 32)),
   )
   return sameIdentityAndIndex && !Buffer.from(previous).equals(Buffer.from(candidate))
 }

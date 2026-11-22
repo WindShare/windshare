@@ -49,7 +49,6 @@ const EXACT_CANDIDATE_REPLAY_STRESS_COUNT = 300
 function signalingRouter(): OperationRouter {
   return new OperationRouter(
     () => undefined,
-    undefined,
     { protocolSessionIdentity: createProtocolSessionIdentity(protocolKeys().protocolSessionId) },
   )
 }

@@ -1,8 +1,7 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { encodeBlockRequest } from '../../src/content/flow'
 import { decodeMessage, encodeBody, encodeMessage, MESSAGE_KIND } from '../../src/session/message'
-import { OperationRouter, MAXIMUM_TRACKED_OPERATIONS, OPERATION_TOMBSTONE_MILLISECONDS } from '../../src/session/operation-router'
-import { IssuedOperations } from '../../src/session/operations/issued-operations'
+import { OperationRouter, MAXIMUM_RECENT_TOMBSTONES } from '../../src/session/operation-router'
 import { EnvelopeSealer } from '../../src/session/envelope'
 import { OPERATION_CANCEL_REASON } from '../../src/session/runtime-types'
 import { projectProtocolTraceEvent } from '../../src/application/diagnostics/receive-trace'
@@ -12,23 +11,27 @@ import { BINDING, KEY, id, runtimeFixture } from './v2-send-fixture'
 
 const BODY = encodeBlockRequest(id(7), [0n])
 const PAUSE = new DOMException('User paused', 'AbortError')
-const STALLED_MILLISECONDS = 31_500
 const RECORD = new Uint8Array([1, 2, 3, 4])
-const fragment = (operationId: Uint8Array) => decodeMessage(fragmentRecord(operationId, RECORD)[0]!)
+const fragment = (operationId: bigint) => decodeMessage(fragmentRecord(operationId, RECORD)[0]!)
 
-afterEach(() => vi.useRealTimers())
-
-describe('issued operation history outlives replay detail', () => {
-  it.each([29_999, 30_000, STALLED_MILLISECONDS, 86_400_000])('discards cancelled block responses after %i ms', async elapsed => {
-    let now = 0
-    const router = new OperationRouter(() => undefined, () => now)
+describe('monotonic operation retirement and bounded recent tombstones', () => {
+  it('discards cancelled block responses both in the recent tombstone cache and after FIFO eviction', async () => {
+    const router = new OperationRouter(() => undefined)
     const live = router.create(MESSAGE_KIND.requestBlocks, BODY)
     const cancelled = router.create(MESSAGE_KIND.requestBlocks, BODY)
     cancelled.cancel(PAUSE)
-    now = elapsed
     await expect(router.route(fragment(cancelled.id))).resolves.toBeUndefined()
     await expect(router.route(encodeMessage(MESSAGE_KIND.operationComplete, cancelled.id,
       encodeBody(new Map([[0, 1], [1, 0]]))))).resolves.toBeUndefined()
+
+    // Evict cancelled from the bounded FIFO tombstone cache.
+    for (let index = 0; index < MAXIMUM_RECENT_TOMBSTONES; index += 1) {
+      router.create(MESSAGE_KIND.requestBlocks, BODY).cancel(PAUSE)
+    }
+    await expect(router.route(fragment(cancelled.id))).resolves.toBeUndefined()
+    await expect(router.route(encodeMessage(MESSAGE_KIND.operationComplete, cancelled.id,
+      encodeBody(new Map([[0, 1], [1, 0]]))))).resolves.toBeUndefined()
+
     expect(router.active()).toEqual([live])
     const current = fragment(live.id)
     await router.route(current)
@@ -37,21 +40,12 @@ describe('issued operation history outlives replay detail', () => {
     router.terminate(PAUSE)
   })
 
-  it('rejects never-issued, other-session, wrong-kind and wrong-scope responses after collection', async () => {
-    let now = 0
-    const router = new OperationRouter(() => undefined, () => now)
+  it('rejects never-issued IDs, malformed errors, and wrong-kind or wrong-scope responses in the tombstone window', async () => {
+    const router = new OperationRouter(() => undefined)
     const operation = router.create(MESSAGE_KIND.requestBlocks, BODY)
     operation.cancel(PAUSE)
-    now = STALLED_MILLISECONDS
-    const future = operation.id.slice()
-    future[future.length - 1] = future[future.length - 1]! + 1
-    const otherSession = operation.id.slice()
-    otherSession[0] = otherSession[0]! ^ 1
-    const unissuedKind = operation.id.slice()
-    unissuedKind[8] = MESSAGE_KIND.listChildren
-    for (const unknown of [future, otherSession, unissuedKind]) {
-      await expect(router.route(fragment(unknown))).rejects.toMatchObject({ scope: 'session' })
-    }
+    const future = operation.id + 1n
+    await expect(router.route(fragment(future))).rejects.toMatchObject({ scope: 'session' })
     await expect(router.route(encodeMessage(MESSAGE_KIND.openResults, operation.id, encodeBody([]))))
       .rejects.toMatchObject({ scope: 'session' })
     const wrongScope = encodeMessage(MESSAGE_KIND.operationError, operation.id,
@@ -59,37 +53,46 @@ describe('issued operation history outlives replay detail', () => {
     await expect(router.route(wrongScope)).rejects.toMatchObject({ scope: 'session' })
     await expect(router.route(encodeMessage(MESSAGE_KIND.operationError, operation.id, encodeBody([]))))
       .rejects.toMatchObject({ scope: 'session' })
+
+    // Even after FIFO eviction, unissued IDs and malformed errors are still rejected.
+    for (let index = 0; index < MAXIMUM_RECENT_TOMBSTONES; index += 1) {
+      router.create(MESSAGE_KIND.requestBlocks, BODY).cancel(PAUSE)
+    }
+    await expect(router.route(fragment(BigInt(MAXIMUM_RECENT_TOMBSTONES + 10))))
+      .rejects.toMatchObject({ scope: 'session' })
+    await expect(router.route(encodeMessage(MESSAGE_KIND.operationError, operation.id, encodeBody([]))))
+      .rejects.toMatchObject({ scope: 'session' })
     router.terminate(PAUSE)
   })
 
-  it('reclaims detailed capacity while preserving old identities through repeated full budgets', async () => {
-    let now = 0
-    const router = new OperationRouter(() => undefined, () => now)
+  it('sustains repeated full tombstone budgets without blocking and never reuses IDs', async () => {
+    const router = new OperationRouter(() => undefined)
     const first = router.create(MESSAGE_KIND.requestBlocks, BODY)
     first.cancel(PAUSE)
-    for (let generation = 0; generation < 2; generation += 1) {
-      now += OPERATION_TOMBSTONE_MILLISECONDS
-      for (let index = 0; index < MAXIMUM_TRACKED_OPERATIONS; index += 1) {
-        router.create(MESSAGE_KIND.requestBlocks, BODY).cancel(PAUSE)
-      }
-      await expect(router.route(fragment(first.id))).resolves.toBeUndefined()
+    let previous = first.id
+    for (let index = 0; index < MAXIMUM_RECENT_TOMBSTONES * 2; index += 1) {
+      const next = router.create(MESSAGE_KIND.requestBlocks, BODY)
+      expect(next.id).toBe(previous + 1n)
+      previous = next.id
+      next.cancel(PAUSE)
     }
-    now += OPERATION_TOMBSTONE_MILLISECONDS
+    await expect(router.route(fragment(first.id))).resolves.toBeUndefined()
     const admitted = await router.admit(MESSAGE_KIND.requestBlocks, BODY)
-    expect(admitted.id).not.toEqual(first.id)
+    expect(admitted.id).toBe(previous + 1n)
     router.terminate(PAUSE)
   })
 
-  it('keeps authenticated lanes usable after a delayed cancelled fragment and bounds its trace', async () => {
-    vi.useFakeTimers({ toFake: ['Date'] })
-    const started = Date.now()
+  it('keeps authenticated lanes usable after an evicted cancelled fragment and bounds its trace', async () => {
     const harness = runtimeFixture()
     harness.channel.unblock()
     try {
       const live = await harness.runtime.beginOperation(MESSAGE_KIND.requestBlocks, BODY)
       const cancelled = await harness.runtime.beginOperation(MESSAGE_KIND.requestBlocks, BODY)
       await harness.runtime.cancelOperation(cancelled, { protocolReason: OPERATION_CANCEL_REASON.user, cause: PAUSE })
-      vi.setSystemTime(started + STALLED_MILLISECONDS)
+      for (let index = 0; index < MAXIMUM_RECENT_TOMBSTONES; index += 1) {
+        const filler = await harness.runtime.beginOperation(MESSAGE_KIND.listChildren, encodeBody([]))
+        filler.cancel(PAUSE)
+      }
       const sealer = new EnvelopeSealer(KEY, { ...BINDING, direction: 1 })
       for (let copy = 0; copy < 3; copy += 1) {
         harness.channel.receive(await sealer.seal(fragment(cancelled.id).plaintext))
@@ -101,30 +104,15 @@ describe('issued operation history outlives replay detail', () => {
       const discarded = harness.events.filter(event =>
         event.eventName === 'protocol_operation' && event.transition === 'retired_response_discarded')
       expect(discarded).toHaveLength(1)
-      expect(discarded[0]!.correlation.protocolOperationId!.copyBytes()).toEqual(cancelled.id)
+      expect(discarded[0]!.correlation.protocolOperationId!.value).toBe(cancelled.id)
       const projected = projectProtocolTraceEvent(discarded[0]!)
       expect(() => validateTraceEventPayloadV2(projected.eventName, projected.payload)).not.toThrow()
     } finally { await harness.runtime.close() }
   })
 
-  it('keeps kind-specific issuance immutable and rejects invalid identity sources', () => {
-    const prefix = new Uint8Array(8).fill(3)
-    const random = vi.fn(() => prefix)
-    const issued = new IssuedOperations(random)
-    const first = issued.issue(MESSAGE_KIND.requestBlocks)
-    const saved = first.slice()
-    first.fill(0)
-    prefix.fill(0)
-    const second = issued.issue(MESSAGE_KIND.releaseLease)
-    expect(issued.requestKind(saved)).toBe(MESSAGE_KIND.requestBlocks)
-    expect(issued.requestKind(second)).toBe(MESSAGE_KIND.releaseLease)
-    expect(issued.requestKind(first)).toBeUndefined()
-    expect(issued.requestKind(saved.subarray(1))).toBeUndefined()
-    expect(random).toHaveBeenCalledTimes(1)
-    expect(() => issued.issue(MESSAGE_KIND.blockFragment)).toThrow('cannot begin')
-    for (const bad of [new Uint8Array(8), new Uint8Array(7).fill(1)]) {
-      expect(() => new IssuedOperations(() => bad).issue(MESSAGE_KIND.requestBlocks))
-        .toThrow('invalid bytes')
-    }
+  it('rejects non-request message kinds when creating operations', () => {
+    const router = new OperationRouter(() => undefined)
+    expect(() => router.create(MESSAGE_KIND.blockFragment, BODY)).toThrow('cannot begin')
+    router.terminate(PAUSE)
   })
 })

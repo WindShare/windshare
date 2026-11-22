@@ -1,13 +1,14 @@
 import { encodeBase64Url } from '../../crypto/bytes'
 import type {
+  FailureBytesIdentityKind,
   FailureCorrelation,
   FailureIdentity,
-  FailureIdentityKind,
   FailureLaneCorrelation,
-} from '../incident/fact'
+} from '../incident/failure-correlation'
 
 const IDENTITY_BYTE_LENGTH = 16
 const UINT32_MAX = 0xffff_ffff
+const UINT64_MAX = 0xffff_ffff_ffff_ffffn
 
 export interface CorrelationV1 {
   readonly protocol_session_id?: string
@@ -41,9 +42,8 @@ export function projectCorrelationV1(
     correlation.protocolSessionId,
     'protocol_session',
   )
-  const protocolOperationId = projectIdentity(
+  const protocolOperationId = projectOperationIdentity(
     correlation.protocolOperationId,
-    'protocol_operation',
   )
   const peerPathId = projectIdentity(correlation.peerPathId, 'peer_path')
   const peerAttemptId = projectIdentity(correlation.peerAttemptId, 'peer_attempt')
@@ -124,7 +124,7 @@ export function projectLocalOutputCorrelationV1(
   })
 }
 
-function projectIdentity<Kind extends FailureIdentityKind>(
+function projectIdentity<Kind extends FailureBytesIdentityKind>(
   identity: FailureIdentity<Kind> | undefined,
   expectedKind: Kind,
 ): string | undefined {
@@ -143,6 +143,27 @@ function projectIdentity<Kind extends FailureIdentityKind>(
   }
   if (bytes.every((value) => value === 0)) return undefined
   return encodeBase64Url(bytes)
+}
+
+function projectOperationIdentity(
+  identity: FailureIdentity<'protocol_operation'> | undefined,
+): string | undefined {
+  if (identity === undefined) return undefined
+  if (
+    identity.kind !== 'protocol_operation' ||
+    typeof identity.value !== 'bigint' ||
+    identity.value < 0n ||
+    identity.value > UINT64_MAX ||
+    typeof identity.toDecimalString !== 'function'
+  ) {
+    throw new TypeError('Diagnostic operation identity is invalid')
+  }
+  if (identity.value === 0n) return undefined
+  const decimal = identity.toDecimalString()
+  if (decimal !== identity.value.toString(10)) {
+    throw new TypeError('Diagnostic operation identity formatting is non-canonical')
+  }
+  return decimal
 }
 
 function validateLane(

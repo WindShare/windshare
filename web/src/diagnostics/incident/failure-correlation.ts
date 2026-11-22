@@ -6,12 +6,26 @@ export const FAILURE_IDENTITY_KINDS = Object.freeze([
 ] as const)
 
 export type FailureIdentityKind = (typeof FAILURE_IDENTITY_KINDS)[number]
+export type FailureBytesIdentityKind = Exclude<FailureIdentityKind, 'protocol_operation'>
 
-export interface FailureIdentity<Kind extends FailureIdentityKind = FailureIdentityKind> {
+export interface FailureBytesIdentity<
+  Kind extends FailureBytesIdentityKind = FailureBytesIdentityKind,
+> {
   readonly kind: Kind
   readonly byteLength: 16
   copyBytes(): Uint8Array
 }
+
+export interface FailureOperationIdentity {
+  readonly kind: 'protocol_operation'
+  readonly value: bigint
+  toDecimalString(): string
+}
+
+export type FailureIdentity<Kind extends FailureIdentityKind = FailureIdentityKind> =
+  Kind extends 'protocol_operation'
+    ? FailureOperationIdentity
+    : FailureBytesIdentity<Extract<Kind, FailureBytesIdentityKind>>
 
 export interface FailureLaneCorrelation {
   readonly id: number
@@ -28,9 +42,10 @@ export interface FailureCorrelation {
 
 const IDENTITY_BYTE_LENGTH = 16
 const UINT32_MAX = 0xffff_ffff
+const UINT64_MAX = 0xffff_ffff_ffff_ffffn
 
-class FixedFailureIdentity<Kind extends FailureIdentityKind>
-implements FailureIdentity<Kind> {
+class FixedFailureIdentity<Kind extends FailureBytesIdentityKind>
+implements FailureBytesIdentity<Kind> {
   readonly byteLength = IDENTITY_BYTE_LENGTH
   readonly kind: Kind
   readonly #bytes: Uint8Array
@@ -46,20 +61,52 @@ implements FailureIdentity<Kind> {
   }
 }
 
-export function createFailureIdentity<Kind extends FailureIdentityKind>(
+class FixedOperationFailureIdentity implements FailureOperationIdentity {
+  readonly kind = 'protocol_operation' as const
+  readonly value: bigint
+
+  constructor(value: bigint) {
+    this.value = value
+    Object.freeze(this)
+  }
+
+  toDecimalString(): string {
+    return this.value.toString(10)
+  }
+
+  toJSON(): Readonly<{ kind: 'protocol_operation'; value: string }> {
+    return { kind: this.kind, value: this.value.toString(10) }
+  }
+}
+
+export function createFailureIdentity(
+  kind: 'protocol_operation',
+  value: bigint,
+): FailureOperationIdentity
+export function createFailureIdentity<Kind extends FailureBytesIdentityKind>(
   kind: Kind,
   bytes: Uint8Array,
-): FailureIdentity<Kind> {
+): FailureBytesIdentity<Kind>
+export function createFailureIdentity(
+  kind: FailureIdentityKind,
+  input: Uint8Array | bigint,
+): FailureIdentity {
   if (!isMember(FAILURE_IDENTITY_KINDS, kind)) {
     throw new RangeError('Unknown failure identity kind')
   }
-  if (!(bytes instanceof Uint8Array) || bytes.byteLength !== IDENTITY_BYTE_LENGTH) {
+  if (kind === 'protocol_operation') {
+    if (typeof input !== 'bigint' || input < 1n || input > UINT64_MAX) {
+      throw new RangeError('Protocol operation identities must be nonzero uint64 values')
+    }
+    return new FixedOperationFailureIdentity(input)
+  }
+  if (!(input instanceof Uint8Array) || input.byteLength !== IDENTITY_BYTE_LENGTH) {
     throw new RangeError('Failure identities must be exactly 16 bytes')
   }
-  if (bytes.every((value) => value === 0)) {
+  if (input.every((value) => value === 0)) {
     throw new RangeError('Failure identities must be non-zero')
   }
-  return new FixedFailureIdentity(kind, bytes)
+  return new FixedFailureIdentity(kind, input)
 }
 
 export function createFailureCorrelation(
@@ -71,16 +118,16 @@ export function createFailureCorrelation(
   const correlation: FailureCorrelation = {
     ...(input.protocolSessionId === undefined
       ? {}
-      : { protocolSessionId: copyIdentity(input.protocolSessionId) }),
+      : { protocolSessionId: createFailureIdentity('protocol_session', input.protocolSessionId.copyBytes()) }),
     ...(input.protocolOperationId === undefined
       ? {}
-      : { protocolOperationId: copyIdentity(input.protocolOperationId) }),
+      : { protocolOperationId: createFailureIdentity('protocol_operation', input.protocolOperationId.value) }),
     ...(input.peerPathId === undefined
       ? {}
-      : { peerPathId: copyIdentity(input.peerPathId) }),
+      : { peerPathId: createFailureIdentity('peer_path', input.peerPathId.copyBytes()) }),
     ...(input.peerAttemptId === undefined
       ? {}
-      : { peerAttemptId: copyIdentity(input.peerAttemptId) }),
+      : { peerAttemptId: createFailureIdentity('peer_attempt', input.peerAttemptId.copyBytes()) }),
     ...(input.lane === undefined
       ? {}
       : { lane: Object.freeze({ id: input.lane.id, epoch: input.lane.epoch }) }),
@@ -154,9 +201,23 @@ function isIdentity<Kind extends FailureIdentityKind>(
   value: unknown,
   kind: Kind,
 ): value is FailureIdentity<Kind> {
+  if (!isRecord(value) || value.kind !== kind) return false
+  if (kind === 'protocol_operation') {
+    if (
+      typeof value.value !== 'bigint' ||
+      value.value < 1n ||
+      value.value > UINT64_MAX ||
+      typeof value.toDecimalString !== 'function'
+    ) {
+      return false
+    }
+    try {
+      return value.toDecimalString() === value.value.toString(10)
+    } catch {
+      return false
+    }
+  }
   if (
-    !isRecord(value) ||
-    value.kind !== kind ||
     value.byteLength !== IDENTITY_BYTE_LENGTH ||
     typeof value.copyBytes !== 'function'
   ) {
@@ -183,18 +244,16 @@ function isIdentity<Kind extends FailureIdentityKind>(
   }
 }
 
-function copyIdentity<Kind extends FailureIdentityKind>(
-  identity: FailureIdentity<Kind>,
-): FailureIdentity<Kind> {
-  return createFailureIdentity(identity.kind, identity.copyBytes())
-}
-
 function identitiesEqual(
   left: FailureIdentity | undefined,
   right: FailureIdentity | undefined,
 ): boolean {
   if (left === undefined || right === undefined) return left === right
   if (left.kind !== right.kind) return false
+  if (left.kind === 'protocol_operation') {
+    return right.kind === 'protocol_operation' && left.value === right.value
+  }
+  if (right.kind === 'protocol_operation') return false
   const leftBytes = left.copyBytes()
   const rightBytes = right.copyBytes()
   return leftBytes.every((value, index) => value === rightBytes[index])

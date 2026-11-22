@@ -3,14 +3,12 @@ package sessioncore
 import (
 	"context"
 	"errors"
+	"sync"
+	"testing"
+
 	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"sync"
-	"sync/atomic"
-	"testing"
-	"testing/synctest"
-	"time"
 )
 
 func TestConcurrentSameIDRequestsAdmitExactlyOneRouteAuthority(t *testing.T) {
@@ -33,7 +31,7 @@ func TestConcurrentSameIDRequestsAdmitExactlyOneRouteAuthority(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	operationID := id16[protocolsession.OperationID](121)
+	operationID := protocolsession.OperationID(121)
 	body, _ := protocolsession.EncodeBody(map[uint64]any{0: uint64(1)})
 	request, _ := protocolsession.NewMessage(protocolsession.MessageOpenRevisions, &operationID, body)
 	type result struct {
@@ -69,7 +67,7 @@ func TestConcurrentSameIDRequestsAdmitExactlyOneRouteAuthority(t *testing.T) {
 			delivered, replayed, runtime.operations.ActiveCount())
 	}
 	op := dispatchTestOperation(t, runtime, handlerOps)
-	rec := runtime.operations.lookupRecord(op.Ref())
+	rec := runtime.operations.lookupRecord(op.ID())
 	if rec == nil || !rec.preferredLane.Valid(true) {
 		t.Fatal("winning request has no preferred lane authority")
 	}
@@ -104,21 +102,12 @@ func TestConcurrentSameIDRequestsAdmitExactlyOneRouteAuthority(t *testing.T) {
 	}
 }
 
-func TestForcedHostileSameIDReuseRejectsDelayedOldRouteContext(t *testing.T) {
-	synctest.Test(t, testForcedHostileSameIDReuseRejectsDelayedOldRouteContext)
-}
-
-func testForcedHostileSameIDReuseRejectsDelayedOldRouteContext(t *testing.T) {
-	// Honest receiver issuers never reuse an OperationID within a ProtocolSession.
-	// This forced post-retention collision exercises local ABA containment only.
-	var nanos atomic.Int64
-	nanos.Store(time.Unix(1_800_000_000, 0).UnixNano())
-	now := func() time.Time { return time.Unix(0, nanos.Load()) }
+func TestHostileSameIDReplayRejectedEvenAfterTombstoneEviction(t *testing.T) {
 	runtime, _ := newUnstartedRuntimeWithPolicy(
 		t, protocolsession.RoleSender,
-		protocolsession.OperationLimits{MaxActive: 4, MaxTracked: 4}, now,
+		protocolsession.OperationLimits{MaxActive: 4, MaxRecentTombstones: 2}, nil,
 	)
-	handlerOps := make(chan protocolsession.Operation, 2)
+	handlerOps := make(chan protocolsession.Operation, 4)
 	if err := runtime.inbound.RegisterHandler(
 		protocolsession.MessageOpenRevisions,
 		protocolsession.MessageHandlerFunc(func(_ context.Context, op protocolsession.Operation, _ protocolsession.Message) error {
@@ -139,48 +128,55 @@ func testForcedHostileSameIDReuseRejectsDelayedOldRouteContext(t *testing.T) {
 		stopWriter()
 		<-writerDone
 	}()
-	operationID := id16[protocolsession.OperationID](122)
 	body, _ := protocolsession.EncodeBody(map[uint64]any{0: uint64(1)})
-	request, _ := protocolsession.NewMessage(protocolsession.MessageOpenRevisions, &operationID, body)
-	if disposition, err := runtime.inbound.RouteInbound(runtime.initial, request); err != nil ||
-		disposition != protocolsession.OperationDeliver {
-		t.Fatalf("first request = %d, %v", disposition, err)
-	}
-	oldOp := dispatchTestOperation(t, runtime, handlerOps)
 	outbound := &Responses{runtime: runtime}
-	if err := outbound.SendControl(
-		context.Background(), oldOp, protocolsession.MessageOpenResults, body,
-	); err != nil {
-		t.Fatalf("first final = %v", err)
+	admitAndComplete := func(id protocolsession.OperationID) protocolsession.Operation {
+		req, _ := protocolsession.NewMessage(protocolsession.MessageOpenRevisions, &id, body)
+		if disposition, err := runtime.inbound.RouteInbound(runtime.initial, req); err != nil ||
+			disposition != protocolsession.OperationDeliver {
+			t.Fatalf("request %d = %d, %v", id, disposition, err)
+		}
+		op := dispatchTestOperation(t, runtime, handlerOps)
+		if err := outbound.SendControl(context.Background(), op, protocolsession.MessageOpenResults, body); err != nil {
+			t.Fatalf("final %d = %v", id, err)
+		}
+		return op
 	}
-	synctest.Wait()
-	nanos.Add((protocolsession.OperationTombstoneLifetime + time.Nanosecond).Nanoseconds())
-	if disposition, err := runtime.inbound.RouteInbound(runtime.initial, request); err != nil ||
+	oldID := protocolsession.OperationID(122)
+	oldOp := admitAndComplete(oldID)
+	admitAndComplete(123)
+	admitAndComplete(124)
+
+	// Tombstone 122 was evicted by FIFO cap (MaxRecentTombstones=2), yet replay window still rejects reuse.
+	replayReq, _ := protocolsession.NewMessage(protocolsession.MessageOpenRevisions, &oldID, body)
+	if disposition, err := runtime.inbound.RouteInbound(runtime.initial, replayReq); disposition != protocolsession.OperationDrop ||
+		!errors.Is(err, protocolsession.ErrOperationIDReused) {
+		t.Fatalf("evicted replay = (%d, %v), want ErrOperationIDReused", disposition, err)
+	}
+
+	nextID := protocolsession.OperationID(125)
+	nextReq, _ := protocolsession.NewMessage(protocolsession.MessageOpenRevisions, &nextID, body)
+	if disposition, err := runtime.inbound.RouteInbound(runtime.initial, nextReq); err != nil ||
 		disposition != protocolsession.OperationDeliver {
-		t.Fatalf("forced colliding request = %d, %v", disposition, err)
+		t.Fatalf("next request = %d, %v", disposition, err)
 	}
 	newOp := dispatchTestOperation(t, runtime, handlerOps)
-	if oldOp.Same(newOp) {
-		t.Fatal("forced same-ID collision did not receive distinct operation token")
-	}
 	if err := outbound.SendOperationError(context.Background(), oldOp, contentflow.OperationFailure{
 		Scope:   contentflow.RevisionErrorScope,
 		Code:    contentflow.RevisionCodeUnreadable,
 		Message: "stale handler failure",
 	}); !errors.Is(err, protocolsession.ErrOperationSuppressed) {
-		t.Fatalf("delayed old generation error = %v", err)
+		t.Fatalf("delayed old operation error = %v", err)
 	}
 	if !newOp.IsActive() || runtime.operations.ActiveCount() != 1 {
-		t.Fatalf("old op changed forced colliding generation: active=%v count=%d",
+		t.Fatalf("old op affected active operation: active=%v count=%d",
 			newOp.IsActive(), runtime.operations.ActiveCount())
 	}
-	if err := outbound.SendControl(
-		context.Background(), newOp, protocolsession.MessageOpenResults, body,
-	); err != nil {
-		t.Fatalf("forced colliding generation final = %v", err)
+	if err := outbound.SendControl(context.Background(), newOp, protocolsession.MessageOpenResults, body); err != nil {
+		t.Fatalf("new operation final = %v", err)
 	}
-	if runtime.operations.ActiveCount() != 0 || runtime.operations.TombstoneCount() != 1 {
-		t.Fatalf("forced colliding generation drain active=%d tombstones=%d",
+	if runtime.operations.ActiveCount() != 0 || runtime.operations.TombstoneCount() != 2 {
+		t.Fatalf("final drain active=%d tombstones=%d",
 			runtime.operations.ActiveCount(), runtime.operations.TombstoneCount())
 	}
 }

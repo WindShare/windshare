@@ -54,9 +54,11 @@ export async function runRelayIsolationScenario(
       expect(sibling.closed).toBe(healthyBefore.closed)
       expect(sibling.opened).toBe(healthyBefore.opened)
     }
+    await expect.poll(
+      () => healthy.evaluate(() => window.relayIsolationFaults.snapshot().receivedBytes),
+      options,
+    ).toBeGreaterThan(CUT_WIRE_BYTES)
     expect(healthyDownloads, 'The sibling must remain in flight across the interruptions').toHaveLength(0)
-    expect(await healthy.evaluate(() => window.relayIsolationFaults.snapshot().receivedBytes))
-      .toBeGreaterThan(CUT_WIRE_BYTES)
     await healthy.evaluate(() => window.relayIsolationFaults.paceFeedback(0))
     await expect.poll(() => interruptedDownloads.length, options).toBe(1)
     await expect.poll(() => healthyDownloads.length, options).toBe(1)

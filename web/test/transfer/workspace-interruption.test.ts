@@ -49,7 +49,7 @@ function revisionFailure(code: number): RemoteRevisionError {
     content: { scope: 'revision', code, retryable: false },
     correlation: {
       protocolSessionId: createFailureIdentity('protocol_session', new Uint8Array(16).fill(1)),
-      protocolOperationId: createFailureIdentity('protocol_operation', new Uint8Array(16).fill(2)),
+      protocolOperationId: createFailureIdentity('protocol_operation', 2n),
       lane: { id: 1, epoch: 0 },
     },
   })

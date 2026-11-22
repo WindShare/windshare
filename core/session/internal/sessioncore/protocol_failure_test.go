@@ -9,7 +9,7 @@ import (
 
 func TestProtocolErrorTracingLeavesDisabledInboundHotPathUnbound(t *testing.T) {
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
-	id := id16[protocolsession.OperationID](0x51)
+	id := protocolsession.OperationID(0x51)
 	message, _ := protocolsession.NewMessage(protocolsession.MessageOperationError, &id, []byte{0xf6})
 	call := newOperationCall(id, protocolsession.MessageOpenRevisions, time.Time{}, 0, false, false)
 	if err := call.enqueue(operationResponse{message: message}); err != nil {

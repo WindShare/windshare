@@ -10,13 +10,12 @@ import {
   type PeerPathIdentity,
 } from '../../src/session/identities'
 import { encodeMessage, MESSAGE_KIND } from '../../src/session/message'
-import { OperationRouter, OPERATION_TOMBSTONE_MILLISECONDS } from '../../src/session/operation-router'
+import { OperationRouter } from '../../src/session/operation-router'
 import type { SessionOperation } from '../../src/session/runtime'
 
 it('replaces physical paths repeatedly while preserving live and retired signaling authority', async () => {
-  let now = 0
   let terminal = false
-  const router = new OperationRouter(() => { terminal = true }, () => now)
+  const router = new OperationRouter(() => { terminal = true })
   const peers = new PeerSet()
   const protocolSessionId = createProtocolSessionIdentity(new Uint8Array(16).fill(1))
   type Opened = { path: PeerPathIdentity; binding: PeerBinding; operation: SessionOperation }
@@ -56,11 +55,10 @@ it('replaces physical paths repeatedly while preserving live and retired signali
       const replacement = await open(seed)
       expect(new Set([direct.binding.peerSlot, current.binding.peerSlot, replacement.binding.peerSlot]).size).toBe(3)
       await peers.remove(current.path)
-      now += OPERATION_TOMBSTONE_MILLISECONDS + 1
       // Fresh operation IDs ensure the slot watermark, not a tombstone, owns rejection.
       await expect(router.route(encodeMessage(
         MESSAGE_KIND.peerAnswer,
-        new Uint8Array(16).fill(seed + 100),
+        BigInt(seed + 100),
         encodePeerAnswer({ ...oldest.binding, sdp: 'v=0' }),
       ))).resolves.toBeUndefined()
       expect(router.active()).toEqual([direct.operation, replacement.operation])

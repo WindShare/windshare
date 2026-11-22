@@ -36,7 +36,7 @@ import { semantics, type SemanticsVector } from './r0-semantics-fixture'
 const AES_GCM_TAG_BYTES = 16
 const OPERATION_HEADER_BYTES = 16
 const OPERATION_NONCE_BYTES = 12
-const FRAGMENT_HEADER_BYTES = 52
+const FRAGMENT_HEADER_BYTES = 44
 
 interface TranscriptVector extends VectorCase {
   readonly receiverPrivateB64: string
@@ -134,7 +134,7 @@ interface TerminalVector extends VectorCase {
 }
 
 interface OperationErrorVector extends TerminalVector {
-  readonly operationIdB64: string
+  readonly operationId: string
 }
 
 interface OpenResultsVector extends OperationErrorVector {
@@ -159,7 +159,7 @@ interface LaneAttachVector extends VectorCase {
   readonly grantSequence: string
   readonly attachedLaneId: number
   readonly attachedLaneEpoch: number
-  readonly grantOperationIdB64: string
+  readonly grantOperationId: string
   readonly attachNonceB64: string
   readonly receiverToSenderKeyB64: string
   readonly senderToReceiverKeyB64: string
@@ -181,7 +181,7 @@ interface LaneAttachVector extends VectorCase {
 }
 
 interface FragmentVector extends VectorCase {
-  readonly operationIdB64: string
+  readonly operationId: string
   readonly recordIdB64: string
   readonly fragmentIndex: number
   readonly fragmentCount: number
@@ -198,7 +198,7 @@ interface FragmentVector extends VectorCase {
 }
 
 interface MaximumFragmentVector extends VectorCase {
-  readonly operationIdB64: string
+  readonly operationId: string
   readonly recordPattern: string
   readonly recordLength: string
   readonly recordDigestB64: string
@@ -555,7 +555,7 @@ describe('R0 relay and ProtocolSession contract', () => {
 
     const openedOperationError = expectSenderControl(operationError)
     expect(openedOperationError.messageKind).toBe(10)
-    expect(openedOperationError.operationId).toEqual(bytes(operationError.operationIdB64))
+    expect(openedOperationError.operationId).toBe(BigInt(operationError.operationId))
 
     const openedGrant = expectSenderControl({
       shareInstanceB64: laneAttach.shareInstanceB64,
@@ -570,7 +570,7 @@ describe('R0 relay and ProtocolSession contract', () => {
       envelopeB64: laneAttach.grantEnvelopeB64,
     })
     expect(openedGrant.messageKind).toBe(12)
-    expect(openedGrant.operationId).toEqual(bytes(laneAttach.grantOperationIdB64))
+    expect(openedGrant.operationId).toBe(BigInt(laneAttach.grantOperationId))
     expect(laneAttach.attachedLaneEpoch).toBe(laneAttach.grantLaneEpoch + 1)
     const laneHelloBase = bytes(laneAttach.laneHelloBaseB64)
     const laneHelloProof = hmacSha256(
@@ -619,7 +619,7 @@ describe('R0 relay and ProtocolSession contract', () => {
     expect(Number(openResults.renewAfterMilliseconds)).toBe(60_000)
     const openedOpenResults = expectSenderControl(openResults)
     expect(openedOpenResults.messageKind).toBe(4)
-    expect(openedOpenResults.operationId).toEqual(bytes(openResults.operationIdB64))
+    expect(openedOpenResults.operationId).toBe(BigInt(openResults.operationId))
 
     const expectedLeaseResultBody = new Map<number, unknown>([
       [0, 1],
@@ -636,7 +636,7 @@ describe('R0 relay and ProtocolSession contract', () => {
     expect(expectedLeaseResult).toEqual(bytes(leaseResult.semanticBodyCborB64))
     const openedLeaseResult = expectSenderControl(leaseResult)
     expect(openedLeaseResult.messageKind).toBe(15)
-    expect(openedLeaseResult.operationId).toEqual(bytes(leaseResult.operationIdB64))
+    expect(openedLeaseResult.operationId).toBe(BigInt(leaseResult.operationId))
 
     const openedTerminal = expectSenderControl(terminal)
     expect(openedTerminal.messageKind).toBe(11)
@@ -653,12 +653,12 @@ describe('R0 resource and state-machine contract', () => {
     const header = Buffer.from(encoded.subarray(0, FRAGMENT_HEADER_BYTES))
     const payload = encoded.subarray(FRAGMENT_HEADER_BYTES)
     expect(encoded.subarray(0, 4)).toEqual(Uint8Array.of(1, 8, 1, 0))
-    expect(encoded.subarray(4, 20)).toEqual(bytes(fragment.operationIdB64))
-    expect(encoded.subarray(20, 36)).toEqual(bytes(fragment.recordIdB64))
-    expect(header.readUInt32BE(36)).toBe(fragment.fragmentIndex)
-    expect(header.readUInt32BE(40)).toBe(fragment.fragmentCount)
-    expect(header.readUInt32BE(44)).toBe(Number(fragment.totalLength))
-    expect(header.readUInt32BE(48)).toBe(Number(fragment.payloadLength))
+    expect(header.readBigUInt64BE(4)).toBe(BigInt(fragment.operationId))
+    expect(encoded.subarray(12, 28)).toEqual(bytes(fragment.recordIdB64))
+    expect(header.readUInt32BE(28)).toBe(fragment.fragmentIndex)
+    expect(header.readUInt32BE(32)).toBe(fragment.fragmentCount)
+    expect(header.readUInt32BE(36)).toBe(Number(fragment.totalLength))
+    expect(header.readUInt32BE(40)).toBe(Number(fragment.payloadLength))
     expect(payload.byteLength).toBe(Number(fragment.totalLength))
     expect(sha256(payload).subarray(0, 16)).toEqual(bytes(fragment.recordIdB64))
     expect(fragment.maxOperationPlaintextBytes + OPERATION_HEADER_BYTES + OPERATION_NONCE_BYTES + AES_GCM_TAG_BYTES).toBe(
@@ -673,7 +673,7 @@ describe('R0 resource and state-machine contract', () => {
     expect(
       validSingleFragment(
         encoded,
-        bytes(fragment.operationIdB64),
+        BigInt(fragment.operationId),
         bytes(fragment.recordIdB64),
         fragment.maxFragmentPayloadBytes,
         fragment.maxBlockRecordBytes,
@@ -681,23 +681,23 @@ describe('R0 resource and state-machine contract', () => {
     ).toBe(true)
     const fragmentMutations = new Map<string, (value: Uint8Array) => void>([
       ['operation-id', (value) => { value[4] = value[4]! ^ 1 }],
-      ['record-id', (value) => { value[20] = value[20]! ^ 1 }],
+      ['record-id', (value) => { value[12] = value[12]! ^ 1 }],
       ['index', (value) => {
-        Buffer.from(value.buffer, value.byteOffset, value.byteLength).writeUInt32BE(1, 36)
+        Buffer.from(value.buffer, value.byteOffset, value.byteLength).writeUInt32BE(1, 28)
       }],
       ['count', (value) => {
-        Buffer.from(value.buffer, value.byteOffset, value.byteLength).writeUInt32BE(2, 40)
+        Buffer.from(value.buffer, value.byteOffset, value.byteLength).writeUInt32BE(2, 32)
       }],
       ['total-length', (value) => {
         Buffer.from(value.buffer, value.byteOffset, value.byteLength).writeUInt32BE(
           Number(fragment.totalLength) + 1,
-          44,
+          36,
         )
       }],
       ['payload-length', (value) => {
         Buffer.from(value.buffer, value.byteOffset, value.byteLength).writeUInt32BE(
           Number(fragment.payloadLength) + 1,
-          48,
+          40,
         )
       }],
       ['last-flag', (value) => { value[2] = 0 }],
@@ -711,7 +711,7 @@ describe('R0 resource and state-machine contract', () => {
       expect(
         validSingleFragment(
           candidate,
-          bytes(fragment.operationIdB64),
+          BigInt(fragment.operationId),
           bytes(fragment.recordIdB64),
           fragment.maxFragmentPayloadBytes,
           fragment.maxBlockRecordBytes,
@@ -740,12 +740,12 @@ describe('R0 resource and state-machine contract', () => {
       fragmentHeader[0] = 1
       fragmentHeader[1] = 8
       fragmentHeader[2] = index === maximumFragment.fragmentCount - 1 ? 1 : 0
-      fragmentHeader.set(bytes(maximumFragment.operationIdB64), 4)
-      fragmentHeader.set(maximumRecordId, 20)
-      fragmentHeader.writeUInt32BE(index, 36)
-      fragmentHeader.writeUInt32BE(maximumFragment.fragmentCount, 40)
-      fragmentHeader.writeUInt32BE(maximumRecord.length, 44)
-      fragmentHeader.writeUInt32BE(end - start, 48)
+      fragmentHeader.writeBigUInt64BE(BigInt(maximumFragment.operationId), 4)
+      fragmentHeader.set(maximumRecordId, 12)
+      fragmentHeader.writeUInt32BE(index, 28)
+      fragmentHeader.writeUInt32BE(maximumFragment.fragmentCount, 32)
+      fragmentHeader.writeUInt32BE(maximumRecord.length, 36)
+      fragmentHeader.writeUInt32BE(end - start, 40)
       maximumFragments.push(concat(fragmentHeader, maximumRecord.subarray(start, end)))
     }
     expect(
@@ -800,7 +800,7 @@ describe('R0 resource and state-machine contract', () => {
       maxSelectedRootNameBytes: '1048576',
       maxSelectedRoots: '4096',
       minChunkBytes: '1024',
-      operationTombstoneSeconds: '30',
+      operationReplayWindow: '4096',
       reassemblyOperation: '4194816',
       reassemblyProcess: '1073741824',
       reassemblyRecordsProcess: '256',

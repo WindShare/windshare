@@ -460,7 +460,7 @@ func (value ReceiverTerminationTrace) DiagnosticRecord() diag.Record {
 	fields["teardown_transitions"] = diagnosticStrings(value.TeardownTransitions())
 	record := diag.New(terminationEventName, fields)
 	if id := value.OperationID(); !id.IsZero() {
-		record = record.Correlate(diag.Fields{"protocol_operation_id": diag.Identity(id[:])})
+		record = record.Correlate(diag.Fields{"protocol_operation_id": diag.Uint(id.Uint64())})
 	}
 	return record
 }

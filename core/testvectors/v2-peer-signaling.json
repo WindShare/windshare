@@ -110,7 +110,7 @@
     "laneId": 16909060,
     "laneEpoch": 2,
     "direction": 1,
-    "operationIdB64": "gYKDhIWGh4iJiouMjY6PkA=="
+    "operationId": "72623859790382856"
   },
   "offer": {
     "sdp": "v=0\r\na=setup:actpass\r\n",

@@ -1,14 +1,13 @@
 package sessioncore
 
 import (
-	"bytes"
 	"context"
 	"errors"
+	"testing"
+
 	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"io"
-	"testing"
 )
 
 func TestRPCClientBoundsLifecycleAndCancellation(t *testing.T) {
@@ -18,7 +17,7 @@ func TestRPCClientBoundsLifecycleAndCancellation(t *testing.T) {
 	receiver := struct {
 		*Runtime
 		rpc *Requests
-	}{runtime, NewRequests(runtime, &deterministicReader{next: 17})}
+	}{runtime, NewRequests(runtime, nil)}
 	if err := receiver.rpc.Register(); err != nil {
 		t.Fatal(err)
 	}
@@ -28,7 +27,7 @@ func TestRPCClientBoundsLifecycleAndCancellation(t *testing.T) {
 	if err := receiver.rpc.HandleMessage(context.Background(), protocolsession.Operation{}, terminal); !errors.Is(err, session.ErrOperationMissing) {
 		t.Fatalf("message without operation error = %v", err)
 	}
-	missingID := id16[protocolsession.OperationID](71)
+	missingID := protocolsession.OperationID(71)
 	missing, _ := protocolsession.NewMessage(protocolsession.MessageCatalogResult, &missingID, body)
 	if err := receiver.rpc.HandleMessage(context.Background(), protocolsession.Operation{}, missing); err != nil {
 		t.Fatalf("late response error = %v", err)
@@ -59,20 +58,17 @@ func TestRPCClientBoundsLifecycleAndCancellation(t *testing.T) {
 	if _, err := receiver.rpc.Begin(cancelled, protocolsession.MessageListChildren, body); !errors.Is(err, context.Canceled) {
 		t.Fatalf("begin cancelled error = %v", err)
 	}
-	errorIDs := NewRequests(runtime, edgeErrorReader{})
-	if _, err := errorIDs.Begin(context.Background(), protocolsession.MessageListChildren, body); !errors.Is(err, io.ErrUnexpectedEOF) {
-		t.Fatalf("operation ID source error = %v", err)
+	exhaustedIDs := NewRequests(runtime, nil)
+	exhaustedIDs.ids.counter = ^uint64(0)
+	if _, err := exhaustedIDs.Begin(context.Background(), protocolsession.MessageListChildren, body); !errors.Is(err, ErrOperationIDExhausted) {
+		t.Fatalf("exhausted operation IDs error = %v", err)
 	}
-	zeroIDs := NewRequests(runtime, bytes.NewReader(make([]byte, protocolsession.IdentityBytes*4)))
-	if _, err := zeroIDs.Begin(context.Background(), protocolsession.MessageListChildren, body); !errors.Is(err, session.ErrRuntimeConfig) {
-		t.Fatalf("zero operation IDs error = %v", err)
-	}
-	invalidMessage := NewRequests(runtime, bytes.NewReader(bytes.Repeat([]byte{7}, protocolsession.IdentityBytes)))
+	invalidMessage := NewRequests(runtime, nil)
 	if _, err := invalidMessage.Begin(context.Background(), protocolsession.MessageKind(255), body); err == nil {
 		t.Fatal("invalid operation kind was accepted")
 	}
-	duplicate := NewRequests(runtime, bytes.NewReader(bytes.Repeat([]byte{8}, protocolsession.IdentityBytes)))
-	duplicateID := issuedOperationID(8, 1)
+	duplicate := NewRequests(runtime, nil)
+	duplicateID := protocolsession.OperationID(1)
 	duplicate.calls[duplicateID] = &Call{id: duplicateID}
 	if _, err := duplicate.Begin(context.Background(), protocolsession.MessageListChildren, body); !errors.Is(err, session.ErrOperationMissing) {
 		t.Fatalf("duplicate local operation error = %v", err)
@@ -108,7 +104,3 @@ func TestRPCClientBoundsLifecycleAndCancellation(t *testing.T) {
 		t.Fatalf("await closed runtime = %v", err)
 	}
 }
-
-type edgeErrorReader struct{}
-
-func (edgeErrorReader) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }

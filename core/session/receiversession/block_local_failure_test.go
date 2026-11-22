@@ -256,7 +256,7 @@ func TestBlockLocalFailuresCancelExactOperationAndPreserveSibling(t *testing.T) 
 					t.Fatal(err)
 				}
 				plaintext := fragments[0].Body()
-				plaintext[48] ^= 0x80
+				plaintext[40] ^= 0x80
 				sendInjectedBlockFragment(t, call, decodeInjectedFragment(t, plaintext))
 			},
 		},

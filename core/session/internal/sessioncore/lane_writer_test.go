@@ -25,7 +25,7 @@ func (s *testPassThroughSealer) Seal(plaintext []byte) (protocolsession.SealedEn
 func newTestLaneWriterMessage(t *testing.T, kind protocolsession.MessageKind, opByte byte, body []byte) protocolsession.Message {
 	t.Helper()
 	if kind == protocolsession.MessageBlockFragment {
-		fragments, err := contentflow.FragmentRecord(id16[protocolsession.OperationID](opByte), body)
+		fragments, err := contentflow.FragmentRecord(protocolsession.OperationID(opByte), body)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -33,7 +33,7 @@ func newTestLaneWriterMessage(t *testing.T, kind protocolsession.MessageKind, op
 	}
 	var idPtr *protocolsession.OperationID
 	if kind != protocolsession.MessageSessionTerminal && !kind.IsSessionControl() {
-		id := id16[protocolsession.OperationID](opByte)
+		id := protocolsession.OperationID(opByte)
 		idPtr = &id
 	}
 	msg, err := protocolsession.NewMessage(kind, idPtr, body)

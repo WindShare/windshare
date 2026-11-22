@@ -206,7 +206,7 @@ func TestResumeWithinGraceReusesResidentCacheAndReopenMatchesMetadata(t *testing
 	}
 	if delivered, serveErr := firstService.ServeBlocks(
 		context.Background(),
-		flowID[protocolsession.OperationID](204),
+		protocolsession.OperationID(204),
 		firstBlock,
 		func(context.Context, protocolsession.Message) error { return nil },
 	); serveErr != nil || delivered != 1 {
@@ -280,7 +280,7 @@ func TestResumeWithinGraceReusesResidentCacheAndReopenMatchesMetadata(t *testing
 	}
 	if delivered, serveErr := secondService.ServeBlocks(
 		context.Background(),
-		flowID[protocolsession.OperationID](205),
+		protocolsession.OperationID(205),
 		resumedPrefix,
 		func(context.Context, protocolsession.Message) error { return nil },
 	); serveErr != nil || delivered != 1 {
@@ -344,7 +344,7 @@ func TestResumeWithinGraceReusesResidentCacheAndReopenMatchesMetadata(t *testing
 	}
 	if delivered, serveErr := secondService.ServeBlocks(
 		context.Background(),
-		flowID[protocolsession.OperationID](206),
+		protocolsession.OperationID(206),
 		continuation,
 		func(context.Context, protocolsession.Message) error { return nil },
 	); serveErr != nil || delivered != 1 {
@@ -500,7 +500,7 @@ func TestCrossShareReclaimFreesRetiredCacheForPeerShareBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := serviceA.ServeBlocks(context.Background(), flowID[protocolsession.OperationID](230), reqA, func(context.Context, protocolsession.Message) error { return nil }); err != nil {
+	if _, err := serviceA.ServeBlocks(context.Background(), protocolsession.OperationID(230), reqA, func(context.Context, protocolsession.Message) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	bytesA := cacheA.UsedBytes()
@@ -528,7 +528,7 @@ func TestCrossShareReclaimFreesRetiredCacheForPeerShareBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := serviceB.ServeBlocks(context.Background(), flowID[protocolsession.OperationID](231), reqB, func(context.Context, protocolsession.Message) error { return nil }); err != nil {
+	if _, err := serviceB.ServeBlocks(context.Background(), protocolsession.OperationID(231), reqB, func(context.Context, protocolsession.Message) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if cacheB.UsedBytes() == 0 || processCache.Used() != cacheB.UsedBytes() {

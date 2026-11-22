@@ -1,5 +1,5 @@
 import { SESSION_WIRE_VERSION } from './version'
-import { concatBytes, copyBytes, encodeUint32, equalBytes } from '../crypto/bytes'
+import { concatBytes, copyBytes, encodeUint32, encodeUint64, equalBytes } from '../crypto/bytes'
 import type { Ed25519Verifier } from '../crypto/ed25519'
 import { sha256 } from '../crypto/digest'
 import { type CryptoRuntime, defaultCryptoRuntime } from '../crypto/webcrypto'
@@ -11,8 +11,8 @@ import {
   requireUnsigned,
 } from '../protocol/cbor'
 
-export const LANE_HELLO_BODY_BYTES = 77
-export const LANE_HELLO_BYTES = 109
+export const LANE_HELLO_BODY_BYTES = 69
+export const LANE_HELLO_BYTES = 101
 export const LANE_ACCEPT_BODY_BYTES = 53
 export const LANE_ACCEPT_BYTES = 117
 export const LANE_REJECT_BODY_BYTES = 44
@@ -39,6 +39,7 @@ const LANE_HELLO_DOMAIN = TEXT_ENCODER.encode('windshare/v2 lane-hello\0')
 const LANE_ACCEPT_DOMAIN = TEXT_ENCODER.encode('windshare/v2 lane-accept\0')
 const LANE_REJECT_DOMAIN = TEXT_ENCODER.encode('windshare/v2 lane-reject\0')
 const MAX_UINT32 = 0xffff_ffff
+const MAX_UINT64 = 0xffff_ffff_ffff_ffffn
 
 export type LaneCodecErrorKind = 'input' | 'malformed' | 'proof' | 'signature'
 
@@ -57,7 +58,7 @@ export interface LaneHelloFields {
   readonly protocolSessionId: Uint8Array
   readonly laneId: number
   readonly laneEpoch: number
-  readonly grantOperationId: Uint8Array
+  readonly grantOperationId: bigint
   readonly attachNonce: Uint8Array
 }
 
@@ -69,7 +70,7 @@ export interface LaneRejection {
 export interface LaneGrant {
   readonly laneId: number
   readonly laneEpoch: number
-  readonly grantOperationId: Uint8Array<ArrayBuffer>
+  readonly grantOperationId: bigint
   readonly attachNonce: Uint8Array<ArrayBuffer>
 }
 
@@ -85,7 +86,7 @@ export function encodeLaneAttachRequest(requestedLaneId = 0): Uint8Array<ArrayBu
 
 export function decodeLaneGrant(
   encoded: Uint8Array,
-  grantOperationId: Uint8Array,
+  grantOperationId: bigint,
 ): LaneGrant {
   const fields = requireNumericMap(
     decodeCanonicalCbor(encoded, MAXIMUM_LANE_CONTROL_BODY_BYTES, 'lane grant'),
@@ -103,7 +104,7 @@ export function decodeLaneGrant(
   return Object.freeze({
     laneId,
     laneEpoch,
-    grantOperationId: requireIdentity(grantOperationId, 'grant operation ID'),
+    grantOperationId: requireOperationId(grantOperationId, 'grant operation ID'),
     attachNonce: requireBytes(fields.get(4), 16, 'lane grant attach nonce', true),
   })
 }
@@ -113,6 +114,17 @@ function requireIdentity(value: Uint8Array, label: string): Uint8Array<ArrayBuff
     throw new LaneCodecError('input', `${label} must be a nonzero 16-byte identity`)
   }
   return value.slice()
+}
+
+function requireOperationId(
+  value: bigint,
+  label: string,
+  kind: LaneCodecErrorKind = 'input',
+): bigint {
+  if (typeof value !== 'bigint' || value < 1n || value > MAX_UINT64) {
+    throw new LaneCodecError(kind, `${label} must be a nonzero unsigned 64-bit operation ID`)
+  }
+  return value
 }
 
 function requireUint32(value: number, label: string, nonzero = false): number {
@@ -185,7 +197,7 @@ function laneHelloBody(fields: LaneHelloFields): Uint8Array<ArrayBuffer> {
     requireIdentity(fields.protocolSessionId, 'protocol session ID'),
     encodeUint32(requireUint32(fields.laneId, 'lane ID', true)),
     encodeUint32(requireUint32(fields.laneEpoch, 'lane epoch', true)),
-    requireIdentity(fields.grantOperationId, 'grant operation ID'),
+    encodeUint64(requireOperationId(fields.grantOperationId, 'grant operation ID')),
     requireIdentity(fields.attachNonce, 'attach nonce'),
   ])
 }
@@ -231,8 +243,8 @@ export async function decodeLaneHello(
     protocolSessionId: requireIdentity(encoded.subarray(21, 37), 'protocol session ID'),
     laneId: requireUint32(view.getUint32(37, false), 'lane ID', true),
     laneEpoch: requireUint32(view.getUint32(41, false), 'lane epoch', true),
-    grantOperationId: requireIdentity(encoded.subarray(45, 61), 'grant operation ID'),
-    attachNonce: requireIdentity(encoded.subarray(61, 77), 'attach nonce'),
+    grantOperationId: requireOperationId(view.getBigUint64(45, false), 'grant operation ID', 'malformed'),
+    attachNonce: requireIdentity(encoded.subarray(53, 69), 'attach nonce'),
   })
   return fields
 }

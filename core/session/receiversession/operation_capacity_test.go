@@ -11,10 +11,10 @@ import (
 	"time"
 )
 
-func TestTransferResumesAcrossOperationRetentionWindows(t *testing.T) {
+func TestTransferCompletesWithoutStallingBeyondRecentTombstoneCap(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		fixture := newVerticalFixture(t)
-		limits := protocolsession.OperationLimits{MaxActive: 2, MaxTracked: 2}
+		limits := protocolsession.OperationLimits{MaxActive: 2, MaxRecentTombstones: 2}
 		fixture.senderConfig.OperationLimits = limits
 		fixture.rebuildSender(t)
 		fixture.receiverFactory.operationLimits = limits
@@ -36,8 +36,8 @@ func TestTransferResumesAcrossOperationRetentionWindows(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !bytes.Equal(output, fixture.fileData) || time.Since(started) < protocolsession.OperationTombstoneLifetime {
-			t.Fatal("transfer did not preserve bytes across the retention wait")
+		if !bytes.Equal(output, fixture.fileData) || time.Since(started) >= time.Second {
+			t.Fatalf("transfer did not complete without tombstone stall (elapsed=%v)", time.Since(started))
 		}
 		if receiver.Lifetime().Err() != nil || sender.Lifetime().Err() != nil || receiver.ProtocolSessionID() != sender.ProtocolSessionID() {
 			t.Fatal("capacity pressure replaced or ended the session")

@@ -156,7 +156,7 @@ describe('IncidentRecordV2 projection', () => {
     const failure = createReceivedProtocolError({
       requestKind: 'request_blocks', correlation: {
         protocolSessionId: createFailureIdentity('protocol_session', identityBytes(4)),
-        protocolOperationId: createFailureIdentity('protocol_operation', identityBytes(5))
+        protocolOperationId: createFailureIdentity('protocol_operation', 5n)
       }, content: {
         scope: 'block', code: 9, retryable: true, retryAfterMilliseconds: 300
       }
@@ -176,7 +176,7 @@ describe('IncidentRecordV2 projection', () => {
         content: { scope: 'block', code: 9, retryable: true, retry_after_ms: 300 },
         correlation: {
           protocol_session_id: 'BAAAAAAAAAAAAAAAAAAAAA',
-          protocol_operation_id: 'BQAAAAAAAAAAAAAAAAAAAA',
+          protocol_operation_id: '5',
         },
       },
     })
@@ -191,7 +191,7 @@ describe('IncidentRecordV2 projection', () => {
       eventName: 'protocol_operation',
       correlation: {
         protocol_session_id: 'BAAAAAAAAAAAAAAAAAAAAA',
-        protocol_operation_id: 'BQAAAAAAAAAAAAAAAAAAAA',
+        protocol_operation_id: '5',
       },
       payload: {
         transition: 'authenticated_failure',

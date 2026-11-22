@@ -14,8 +14,8 @@ import (
 
 const (
 	FragmentCodecVersion        = 1
-	FragmentHeaderBytes         = 52
-	MaxFragmentPayloadBytes     = 65_440
+	FragmentHeaderBytes         = 44
+	MaxFragmentPayloadBytes     = 65_448
 	MaxFragmentCount            = 128
 	MaxOperationReassemblyBytes = uint64(records.MaxBlockRecordObjectBytes)
 	FragmentInactivityTimeout   = 15 * time.Second
@@ -62,12 +62,12 @@ func fragmentRecord[T ~[]byte | ~string](operationID protocolsession.OperationID
 		if index == count-1 {
 			plaintext[2] = 1
 		}
-		copy(plaintext[4:20], operationID.Bytes())
-		copy(plaintext[20:36], recordID.Bytes())
-		binary.BigEndian.PutUint32(plaintext[36:40], uint32(index))
-		binary.BigEndian.PutUint32(plaintext[40:44], uint32(count))
-		binary.BigEndian.PutUint32(plaintext[44:48], uint32(len(object)))
-		binary.BigEndian.PutUint32(plaintext[48:52], uint32(end-start))
+		operationID.PutBigEndian(plaintext[4:12])
+		copy(plaintext[12:28], recordID.Bytes())
+		binary.BigEndian.PutUint32(plaintext[28:32], uint32(index))
+		binary.BigEndian.PutUint32(plaintext[32:36], uint32(count))
+		binary.BigEndian.PutUint32(plaintext[36:40], uint32(len(object)))
+		binary.BigEndian.PutUint32(plaintext[40:44], uint32(end-start))
 		copy(plaintext[FragmentHeaderBytes:], object[start:end])
 		message, err := protocolsession.DecodeMessage(plaintext)
 		if err != nil {
@@ -88,18 +88,18 @@ func DecodeAuthenticatedFragment(plaintext []byte) (Fragment, error) {
 	if plaintext[0] != FragmentCodecVersion || plaintext[1] != byte(protocolsession.MessageBlockFragment) || plaintext[2]&^byte(1) != 0 || plaintext[3] != 0 {
 		return Fragment{}, ErrFragmentMalformed
 	}
-	operationID, err := protocolsession.OperationIDFromBytes(plaintext[4:20])
+	operationID, err := protocolsession.OperationIDFromBigEndian(plaintext[4:12])
 	if err != nil || operationID.IsZero() {
 		return Fragment{}, ErrFragmentMalformed
 	}
-	recordID, err := records.RecordIDFromBytes(plaintext[20:36])
+	recordID, err := records.RecordIDFromBytes(plaintext[12:28])
 	if err != nil || recordID.IsZero() {
 		return Fragment{}, ErrFragmentMalformed
 	}
-	index := binary.BigEndian.Uint32(plaintext[36:40])
-	count := binary.BigEndian.Uint32(plaintext[40:44])
-	total := binary.BigEndian.Uint32(plaintext[44:48])
-	payloadLength := binary.BigEndian.Uint32(plaintext[48:52])
+	index := binary.BigEndian.Uint32(plaintext[28:32])
+	count := binary.BigEndian.Uint32(plaintext[32:36])
+	total := binary.BigEndian.Uint32(plaintext[36:40])
+	payloadLength := binary.BigEndian.Uint32(plaintext[40:44])
 	if count == 0 || count > MaxFragmentCount || index >= count || total == 0 || total > records.MaxBlockRecordObjectBytes {
 		return Fragment{}, ErrFragmentMalformed
 	}

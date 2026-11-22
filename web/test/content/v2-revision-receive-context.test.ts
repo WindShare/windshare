@@ -14,11 +14,11 @@ const identity = (first: number) => Uint8Array.from([first, ...Array<number>(15)
 it.each([true, false])('preserves OPEN_RESULTS receive context after finalization (trace=%s)', async (traceEnabled) => {
   const protocolSessionIdentity = createProtocolSessionIdentity(identity(7))
   const events: ProtocolTraceEvent[] = []
-  const router = new OperationRouter(() => undefined, () => 1000, {
+  const router = new OperationRouter(() => undefined, {
     protocolSessionIdentity,
     ...(traceEnabled ? { trace: { current: (event: ProtocolTraceEvent) => events.push(event) } } : {}),
   })
-  let operationId!: Uint8Array<ArrayBuffer>
+  let operationId!: bigint
   let ready!: () => void
   const admitted = new Promise<void>(resolve => { ready = resolve })
   const session = {
@@ -69,7 +69,7 @@ it.each([true, false])('preserves OPEN_RESULTS receive context after finalizatio
     else expect(events).toHaveLength(0)
     expect(error.protocolFailure.correlation.lane).toEqual({ id: 7, epoch: 3 })
     expect(error.failureFact.payload.protocolFailure.correlation.lane).toEqual({ id: 7, epoch: 3 })
-    expect(error.protocolFailure.correlation.protocolOperationId.copyBytes()).toEqual(operationId)
+    expect(error.protocolFailure.correlation.protocolOperationId.value).toBe(operationId)
     expect(error.protocolFailure.correlation.protocolSessionId).toEqual(protocolSessionIdentity)
     expect(Object.isFrozen(error.protocolFailure.correlation.lane)).toBe(true)
   } finally {

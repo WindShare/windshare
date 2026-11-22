@@ -22,7 +22,7 @@ func TestReservedAssemblyKeepsSharedCapacityThroughAuthentication(t *testing.T) 
 	if err != nil || capacity == nil {
 		t.Fatalf("first admission: %v", err)
 	}
-	fragments, _ := FragmentRecord(flowID[protocolsession.OperationID](3), bytes.Repeat([]byte{7}, size))
+	fragments, _ := FragmentRecord(protocolsession.OperationID(3), bytes.Repeat([]byte{7}, size))
 	result, err := capacity.AcceptAuthenticated(fragments[0].Body())
 	if err != nil || result.Status != RecordComplete || len(result.Object) != size {
 		t.Fatalf("assembly: %+v %v", result, err)
@@ -70,15 +70,15 @@ func TestReservedAssemblyRejectsCapacityAndRecordSubstitution(t *testing.T) {
 		t.Fatalf("impossible admission: %v", err)
 	}
 	capacity, _, _ := assembler.TryReserve(64)
-	oversized, _ := FragmentRecord(flowID[protocolsession.OperationID](2), make([]byte, 65))
+	oversized, _ := FragmentRecord(protocolsession.OperationID(2), make([]byte, 65))
 	if _, err := capacity.AcceptAuthenticated(oversized[0].Body()); !errors.Is(err, ErrReassemblyBudget) {
 		t.Fatalf("oversized: %v", err)
 	}
-	fragments, _ := FragmentRecord(flowID[protocolsession.OperationID](2), make([]byte, 64))
+	fragments, _ := FragmentRecord(protocolsession.OperationID(2), make([]byte, 64))
 	if _, err := capacity.AcceptAuthenticated(fragments[0].Body()); err != nil {
 		t.Fatal(err)
 	}
-	other, _ := FragmentRecord(flowID[protocolsession.OperationID](3), make([]byte, 64))
+	other, _ := FragmentRecord(protocolsession.OperationID(3), make([]byte, 64))
 	if _, err := capacity.AcceptAuthenticated(other[0].Body()); !errors.Is(err, ErrFragmentConflict) {
 		t.Fatalf("substitution: %v", err)
 	}

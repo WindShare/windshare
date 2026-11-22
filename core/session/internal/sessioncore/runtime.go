@@ -86,7 +86,7 @@ func New(config Config) (*Runtime, error) {
 	}
 	if config.OperationLimits == (protocolsession.OperationLimits{}) {
 		config.OperationLimits = protocolsession.OperationLimits{
-			MaxActive: session.DefaultActiveOperations, MaxTracked: session.DefaultTrackedOperations,
+			MaxActive: session.DefaultActiveOperations, MaxRecentTombstones: session.DefaultRecentTombstones,
 		}
 	}
 	if config.RouterLimits == (protocolsession.RouterLimits{}) {
@@ -95,7 +95,7 @@ func New(config Config) (*Runtime, error) {
 	if config.Now == nil {
 		config.Now = time.Now
 	}
-	operations, err := newOperationTable(config.OperationLimits, config.Now, config.Continuations)
+	operations, err := newOperationTable(config.OperationLimits, config.Continuations)
 	if err != nil {
 		return nil, err
 	}

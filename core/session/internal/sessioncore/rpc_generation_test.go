@@ -3,7 +3,6 @@ package sessioncore
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -18,11 +17,11 @@ import (
 
 func TestRPCBeginPublishesAuthorityAfterFastResponseWasAlreadyDispatched(t *testing.T) {
 	runtime, channel := newUnstartedRuntime(t, protocolsession.RoleReceiver)
-	rpc := NewRequests(runtime, bytes.NewReader(bytes.Repeat([]byte{0x73}, protocolsession.IdentityBytes)))
+	rpc := NewRequests(runtime, nil)
 	if err := rpc.Register(); err != nil {
 		t.Fatal(err)
 	}
-	operationID := issuedOperationID(0x73, 1)
+	operationID := protocolsession.OperationID(1)
 	response, err := protocolsession.NewMessage(
 		protocolsession.MessageCatalogResult, &operationID, []byte{0xa0},
 	)
@@ -106,7 +105,7 @@ func TestRPCBeginCancellationAfterAdmissionQueuesOneExactCancel(t *testing.T) {
 		stopWriter()
 		<-writerDone
 	}()
-	rpc := NewRequests(runtime, bytes.NewReader(bytes.Repeat([]byte{0x83}, 8)))
+	rpc := NewRequests(runtime, nil)
 	requestContext, cancelRequest := context.WithCancel(context.Background())
 	result := make(chan error, 1)
 	go func() {
@@ -136,16 +135,15 @@ func TestRPCBeginCancellationAfterAdmissionQueuesOneExactCancel(t *testing.T) {
 	}
 }
 
-func TestRPCFinalWinsCleanupPreservesFingerprintAndCannotCancelHostileSameIDGeneration(t *testing.T) {
-	synctest.Test(t, testRPCFinalWinsCleanupPreservesFingerprintAndCannotCancelHostileSameIDGeneration)
+func TestRPCFinalWinsCleanupPreservesFingerprintAndRejectsStaleReuse(t *testing.T) {
+	synctest.Test(t, testRPCFinalWinsCleanupPreservesFingerprintAndRejectsStaleReuse)
 }
 
-func testRPCFinalWinsCleanupPreservesFingerprintAndCannotCancelHostileSameIDGeneration(t *testing.T) {
-	now := time.Unix(10_000, 0)
+func testRPCFinalWinsCleanupPreservesFingerprintAndRejectsStaleReuse(t *testing.T) {
 	runtime, channel := newUnstartedRuntimeWithPolicy(
 		t, protocolsession.RoleReceiver,
-		protocolsession.OperationLimits{MaxActive: 2, MaxTracked: 2},
-		func() time.Time { return now },
+		protocolsession.OperationLimits{MaxActive: 2, MaxRecentTombstones: 2},
+		nil,
 	)
 	lane, _ := runtime.lanes.selectLane(&runtime.initial)
 	var physicalSends atomic.Int32
@@ -158,9 +156,9 @@ func testRPCFinalWinsCleanupPreservesFingerprintAndCannotCancelHostileSameIDGene
 		<-writerDone
 	}()
 
-	rpc := NewRequests(runtime, bytes.NewReader(bytes.Repeat([]byte{0x84}, 8)))
-	operationID := issuedOperationID(0x84, 1)
-	request, _ := protocolsession.NewMessage(protocolsession.MessageListChildren, &operationID, []byte{0xa0})
+	rpc := NewRequests(runtime, nil)
+	firstID := protocolsession.OperationID(1)
+	request, _ := protocolsession.NewMessage(protocolsession.MessageListChildren, &firstID, []byte{0xa0})
 	firstOp, maxCont, hasLimit, releaseFirst, err := runtime.operations.AdmitOutboundRequest(request, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -169,13 +167,13 @@ func testRPCFinalWinsCleanupPreservesFingerprintAndCannotCancelHostileSameIDGene
 		t.Fatal(err)
 	}
 	call := &Call{
-		id: operationID, messages: make(chan operationResponse, 1), lane: runtime.initial,
+		id: firstID, messages: make(chan operationResponse, 1), lane: runtime.initial,
 	}
 	if !call.setAuthority(firstOp, maxCont, hasLimit) {
-		t.Fatal("failed to bind first generation")
+		t.Fatal("failed to bind first operation")
 	}
-	rpc.calls[operationID] = call
-	final, _ := protocolsession.NewMessage(protocolsession.MessageCatalogResult, &operationID, []byte{0xa0})
+	rpc.calls[firstID] = call
+	final, _ := protocolsession.NewMessage(protocolsession.MessageCatalogResult, &firstID, []byte{0xa0})
 	if _, err := runtime.operations.ObserveInbound(protocolsession.DirectionSenderToReceiver, runtime.initial, final); err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +188,7 @@ func testRPCFinalWinsCleanupPreservesFingerprintAndCannotCancelHostileSameIDGene
 	}
 	conflictingBody, _ := protocolsession.EncodeBody(map[uint64]any{0: uint64(1)})
 	conflicting, err := protocolsession.NewMessage(
-		protocolsession.MessageCatalogResult, &operationID, conflictingBody,
+		protocolsession.MessageCatalogResult, &firstID, conflictingBody,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -199,38 +197,41 @@ func testRPCFinalWinsCleanupPreservesFingerprintAndCannotCancelHostileSameIDGene
 		t.Fatalf("conflicting final error=%v", err)
 	}
 
-	synctest.Wait()
-	now = now.Add(protocolsession.OperationTombstoneLifetime + time.Nanosecond)
-	_ = runtime.operations.TombstoneCount()
-	secondOp, _, _, releaseSecond, err := runtime.operations.AdmitOutboundRequest(request, nil)
+	// Re-admitting the same operation ID is rejected outright.
+	if _, _, _, _, err := runtime.operations.AdmitOutboundRequest(request, nil); !errors.Is(err, protocolsession.ErrOperationIDReused) {
+		t.Fatalf("same-ID outbound reuse error=%v, want ErrOperationIDReused", err)
+	}
+
+	secondID := protocolsession.OperationID(2)
+	secondRequest, _ := protocolsession.NewMessage(protocolsession.MessageListChildren, &secondID, []byte{0xa0})
+	secondOp, _, _, releaseSecond, err := runtime.operations.AdmitOutboundRequest(secondRequest, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := lane.writer.SendControl(context.Background(), request, releaseSecond); err != nil {
+	if err := lane.writer.SendControl(context.Background(), secondRequest, releaseSecond); err != nil {
 		t.Fatal(err)
 	}
 	if !secondOp.IsActive() {
-		t.Fatal("forced second generation was not active")
+		t.Fatal("second operation was not active")
 	}
 	if err := rpc.CancelAndEnd(call, contentflow.CancelReasonOutputAbort); err != nil {
-		t.Fatalf("stale generation cleanup: %v", err)
+		t.Fatalf("stale operation cleanup: %v", err)
 	}
 	if !secondOp.IsActive() || runtime.operations.ActiveCount() != 1 || physicalSends.Load() != 2 {
-		t.Fatalf("stale cleanup changed second generation active=%v count=%d sends=%d",
+		t.Fatalf("stale cleanup changed second operation active=%v count=%d sends=%d",
 			secondOp.IsActive(), runtime.operations.ActiveCount(), physicalSends.Load())
 	}
 }
 
-func TestRPCQueuedStaleResponseCannotCrossSameIDGeneration(t *testing.T) {
-	synctest.Test(t, testRPCQueuedStaleResponseCannotCrossSameIDGeneration)
+func TestRPCQueuedStaleResponseCannotAffectSubsequentOperation(t *testing.T) {
+	synctest.Test(t, testRPCQueuedStaleResponseCannotAffectSubsequentOperation)
 }
 
-func testRPCQueuedStaleResponseCannotCrossSameIDGeneration(t *testing.T) {
-	now := time.Unix(20_000, 0)
+func testRPCQueuedStaleResponseCannotAffectSubsequentOperation(t *testing.T) {
 	runtime, _ := newUnstartedRuntimeWithPolicy(
 		t, protocolsession.RoleReceiver,
-		protocolsession.OperationLimits{MaxActive: 2, MaxTracked: 2},
-		func() time.Time { return now },
+		protocolsession.OperationLimits{MaxActive: 2, MaxRecentTombstones: 1},
+		nil,
 	)
 	t.Cleanup(runtime.AbortBeforeStart)
 	lane, err := runtime.lanes.selectLane(&runtime.initial)
@@ -244,18 +245,15 @@ func testRPCQueuedStaleResponseCannotCrossSameIDGeneration(t *testing.T) {
 		stopWriter()
 		<-writerDone
 	})
-	rpc := NewRequests(runtime, bytes.NewReader(bytes.Repeat([]byte{0x85}, 8)))
+	rpc := NewRequests(runtime, nil)
 	if err := rpc.Register(); err != nil {
 		t.Fatal(err)
 	}
-	operationID := issuedOperationID(0x85, 1)
-	request, err := protocolsession.NewMessage(
-		protocolsession.MessageListChildren, &operationID, []byte{0xa0},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	beginGeneration := func() (*Call, protocolsession.Operation) {
+	beginOperation := func(id protocolsession.OperationID) (*Call, protocolsession.Operation) {
+		request, err := protocolsession.NewMessage(protocolsession.MessageListChildren, &id, []byte{0xa0})
+		if err != nil {
+			t.Fatal(err)
+		}
 		op, maxCont, hasLimit, release, admitErr := runtime.operations.AdmitOutboundRequest(request, nil)
 		if admitErr != nil {
 			t.Fatal(admitErr)
@@ -264,59 +262,58 @@ func testRPCQueuedStaleResponseCannotCrossSameIDGeneration(t *testing.T) {
 			t.Fatal(sendErr)
 		}
 		call := &Call{
-			id: operationID, messages: make(chan operationResponse, 1), lane: runtime.initial,
+			id: id, messages: make(chan operationResponse, 1), lane: runtime.initial,
 		}
 		if !call.setAuthority(op, maxCont, hasLimit) {
-			t.Fatal("failed to bind same-ID generation")
+			t.Fatal("failed to bind operation")
 		}
+		rpc.calls[id] = call
 		return call, op
 	}
 
-	callA, opA := beginGeneration()
-	rpc.calls[operationID] = callA
+	idA := protocolsession.OperationID(1)
+	callA, opA := beginOperation(idA)
 	responseA, err := protocolsession.NewMessage(
-		protocolsession.MessageCatalogResult, &operationID, []byte{0xa0},
+		protocolsession.MessageCatalogResult, &idA, []byte{0xa0},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if disposition, err := runtime.inbound.RouteInbound(runtime.initial, responseA); err != nil || disposition != protocolsession.OperationDeliver {
-		t.Fatalf("queue generation A response: disposition=%d error=%v", disposition, err)
+		t.Fatalf("queue operation A response: disposition=%d error=%v", disposition, err)
 	}
 	if opA.IsActive() || runtime.operations.ActiveCount() != 0 || runtime.operations.TombstoneCount() != 1 {
-		t.Fatalf("generation A final lifecycle active=%v activeCount=%d tombstones=%d",
+		t.Fatalf("operation A final lifecycle active=%v activeCount=%d tombstones=%d",
 			opA.IsActive(), runtime.operations.ActiveCount(), runtime.operations.TombstoneCount())
 	}
 	if admission, err := runtime.operations.ObserveInbound(
 		protocolsession.DirectionSenderToReceiver, runtime.initial, responseA,
 	); err != nil || admission.disposition != protocolsession.OperationDrop {
-		t.Fatalf("generation A exact tombstone: disposition=%d error=%v", admission.disposition, err)
+		t.Fatalf("operation A exact tombstone: disposition=%d error=%v", admission.disposition, err)
 	}
 
 	synctest.Wait()
-	now = now.Add(protocolsession.OperationTombstoneLifetime + time.Nanosecond)
-	_ = runtime.operations.TombstoneCount()
-	callB, opB := beginGeneration()
+	idB := protocolsession.OperationID(2)
+	callB, opB := beginOperation(idB)
 	if opA.Same(opB) || !opB.IsActive() {
-		t.Fatalf("generation B authority A=%+v B=%+v", opA.Ref(), opB.Ref())
+		t.Fatalf("operation B authority A=%d B=%d", opA.ID(), opB.ID())
 	}
-	rpc.calls[operationID] = callB
 	if err := rpc.CancelAndEnd(callA, contentflow.CancelReasonOutputAbort); err != nil {
-		t.Fatalf("generation A cleanup after B admission: %v", err)
+		t.Fatalf("operation A cleanup after B admission: %v", err)
 	}
 	select {
 	case <-callA.doneChannel():
 	default:
-		t.Fatal("generation A cleanup did not close its exact response sink")
+		t.Fatal("operation A cleanup did not close its exact response sink")
 	}
 	if !callA.Operation().IsZero() {
-		t.Fatal("generation A cleanup retained operation authority")
+		t.Fatal("operation A cleanup retained operation authority")
 	}
 	rpc.mu.Lock()
-	retainedB := rpc.calls[operationID] == callB
+	retainedB := rpc.calls[idB] == callB
 	rpc.mu.Unlock()
 	if !retainedB || !opB.IsActive() {
-		t.Fatalf("generation A cleanup changed B: retained=%v active=%v", retainedB, opB.IsActive())
+		t.Fatalf("operation A cleanup changed B: retained=%v active=%v", retainedB, opB.IsActive())
 	}
 
 	staleEvent, err := runtime.inbound.Next(context.Background())
@@ -328,11 +325,11 @@ func testRPCQueuedStaleResponseCannotCrossSameIDGeneration(t *testing.T) {
 	}
 	select {
 	case stale := <-callB.messages:
-		t.Fatalf("generation A response crossed into B: kind=%d", stale.message.Kind())
+		t.Fatalf("operation A response crossed into B: kind=%d", stale.message.Kind())
 	default:
 	}
 	rpc.mu.Lock()
-	retainedB = rpc.calls[operationID] == callB
+	retainedB = rpc.calls[idB] == callB
 	rpc.mu.Unlock()
 	if !retainedB || !opB.IsActive() {
 		t.Fatalf("stale dispatch changed B: retained=%v active=%v", retainedB, opB.IsActive())
@@ -343,13 +340,13 @@ func testRPCQueuedStaleResponseCannotCrossSameIDGeneration(t *testing.T) {
 		t.Fatal(err)
 	}
 	responseB, err := protocolsession.NewMessage(
-		protocolsession.MessageCatalogResult, &operationID, bodyB,
+		protocolsession.MessageCatalogResult, &idB, bodyB,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if disposition, err := runtime.inbound.RouteInbound(runtime.initial, responseB); err != nil || disposition != protocolsession.OperationDeliver {
-		t.Fatalf("queue generation B response: disposition=%d error=%v", disposition, err)
+		t.Fatalf("queue operation B response: disposition=%d error=%v", disposition, err)
 	}
 	eventB, err := runtime.inbound.Next(context.Background())
 	if err != nil {
@@ -360,20 +357,20 @@ func testRPCQueuedStaleResponseCannotCrossSameIDGeneration(t *testing.T) {
 	}
 	received, err := rpc.Await(context.Background(), callB)
 	if err != nil || !bytes.Equal(received.Body(), bodyB) {
-		t.Fatalf("generation B response body=%x error=%v", received.Body(), err)
+		t.Fatalf("operation B response body=%x error=%v", received.Body(), err)
 	}
 	rpc.End(callB)
 	rpc.mu.Lock()
 	remainingCalls := len(rpc.calls)
 	rpc.mu.Unlock()
 	if remainingCalls != 0 || runtime.operations.ActiveCount() != 0 || runtime.operations.TombstoneCount() != 1 {
-		t.Fatalf("generation B cleanup calls=%d active=%d tombstones=%d",
+		t.Fatalf("operation B cleanup calls=%d active=%d tombstones=%d",
 			remainingCalls, runtime.operations.ActiveCount(), runtime.operations.TombstoneCount())
 	}
 }
 
-func TestOperationIDSourceUsesOneRandomPrefixAndConcurrentMonotonicSuffixes(t *testing.T) {
-	source := &operationIDSource{random: bytes.NewReader(bytes.Repeat([]byte{0x51}, 8))}
+func TestOperationIDSourceIssuesConcurrentMonotonicIDs(t *testing.T) {
+	source := &operationIDSource{}
 	const count = 256
 	identities := make(chan protocolsession.OperationID, count)
 	errorsSeen := make(chan error, count)
@@ -396,8 +393,11 @@ func TestOperationIDSourceUsesOneRandomPrefixAndConcurrentMonotonicSuffixes(t *t
 	}
 	seen := make(map[protocolsession.OperationID]struct{}, count)
 	for identity := range identities {
+		if identity < 1 || identity > count {
+			t.Fatalf("identity %d outside monotonic range 1..%d", identity, count)
+		}
 		if _, duplicate := seen[identity]; duplicate {
-			t.Fatalf("duplicate identity=%x", identity)
+			t.Fatalf("duplicate identity=%d", identity)
 		}
 		seen[identity] = struct{}{}
 	}
@@ -407,28 +407,12 @@ func TestOperationIDSourceUsesOneRandomPrefixAndConcurrentMonotonicSuffixes(t *t
 }
 
 func TestOperationIDSourceFailsAtCounterExhaustion(t *testing.T) {
-	source := &operationIDSource{
-		random: bytes.NewReader([]byte{1}), prefix: [8]byte{1},
-		counter: ^uint64(0) - 1, initialized: true,
-	}
+	source := &operationIDSource{counter: ^uint64(0) - 1}
 	identity, err := source.New()
-	if err != nil || identity != issuedOperationIDWithPrefix(source.prefix, ^uint64(0)) {
-		t.Fatalf("last identity=%x error=%v", identity, err)
+	if err != nil || identity != protocolsession.OperationID(^uint64(0)) {
+		t.Fatalf("last identity=%d error=%v", identity, err)
 	}
 	if _, err := source.New(); err != ErrOperationIDExhausted {
 		t.Fatalf("post-exhaustion error=%v", err)
 	}
-}
-
-func issuedOperationID(prefix byte, counter uint64) protocolsession.OperationID {
-	return issuedOperationIDWithPrefix([8]byte{
-		prefix, prefix, prefix, prefix, prefix, prefix, prefix, prefix,
-	}, counter)
-}
-
-func issuedOperationIDWithPrefix(prefix [8]byte, counter uint64) protocolsession.OperationID {
-	var identity protocolsession.OperationID
-	copy(identity[:8], prefix[:])
-	binary.BigEndian.PutUint64(identity[8:], counter)
-	return identity
 }

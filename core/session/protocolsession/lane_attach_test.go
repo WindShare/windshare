@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"errors"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -57,7 +58,11 @@ func loadLaneGrantVector(t *testing.T) (laneControlVector, LaneGrant) {
 	t.Helper()
 	var vector laneControlVector
 	decodeSessionCase(t, "sender-granted-lane-attach", &vector)
-	operationID, err := OperationIDFromBytes(decodeB64(t, vector.GrantOperationIDB64))
+	rawID, err := strconv.ParseUint(vector.GrantOperationID, 10, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operationID, err := OperationIDFromUint64(rawID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +87,7 @@ func TestLaneGrantCodecMatchesSharedWireVector(t *testing.T) {
 	if err != nil || decoded.OperationID != otherOperation {
 		t.Fatalf("grant did not bind its enclosing operation: %+v, %v", decoded, err)
 	}
-	if _, err := DecodeLaneGrant(want, OperationID{}); !errors.Is(err, ErrInvalidOperationID) {
+	if _, err := DecodeLaneGrant(want, 0); !errors.Is(err, ErrInvalidOperationID) {
 		t.Fatalf("missing enclosing operation: %v", err)
 	}
 }
@@ -128,7 +133,7 @@ func TestLaneGrantRejectsInvalidFields(t *testing.T) {
 			}
 		})
 	}
-	grant.OperationID = OperationID{}
+	grant.OperationID = 0
 	if _, err := EncodeLaneGrant(grant); !errors.Is(err, ErrInvalidOperationID) {
 		t.Fatalf("encode grant without operation: %v", err)
 	}
@@ -172,7 +177,7 @@ type laneControlVector struct {
 	ProtocolSessionIDB64             string
 	AttachedLaneID                   uint32
 	AttachedLaneEpoch                uint32
-	GrantOperationIDB64              string
+	GrantOperationID                 string
 	GrantSemanticBodyCborB64         string
 	AttachNonceB64                   string
 	ReceiverToSenderKeyB64           string

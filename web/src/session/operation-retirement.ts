@@ -4,6 +4,58 @@ import { createProtocolOperationIdentity, type ProtocolSessionIdentity } from '.
 import { decodeOperationErrorControl, MESSAGE_KIND, type MessageKind, type SessionMessage } from './message'
 import { OperationContinuationAuthority } from './operation-continuation'
 import type { snapshotOperationRequest, CancellationTraceReason } from './operation-diagnostics'
+import { SessionRuntimeError } from './runtime-types'
+
+const REQUEST_KINDS: ReadonlySet<MessageKind> = new Set([
+  MESSAGE_KIND.listChildren,
+  MESSAGE_KIND.openRevisions,
+  MESSAGE_KIND.renewLease,
+  MESSAGE_KIND.releaseLease,
+  MESSAGE_KIND.requestBlocks,
+  MESSAGE_KIND.laneAttach,
+  MESSAGE_KIND.peerOffer,
+])
+
+export function requireRequestKind(kind: MessageKind): void {
+  if (!REQUEST_KINDS.has(kind)) {
+    throw new SessionRuntimeError('operation', `Message kind ${kind} cannot begin an operation`)
+  }
+}
+
+export function inferredRetiredRequestKind(message: SessionMessage): MessageKind | undefined {
+  switch (message.kind) {
+    case MESSAGE_KIND.catalogResult:
+    case MESSAGE_KIND.scanProgress:
+      return MESSAGE_KIND.listChildren
+    case MESSAGE_KIND.openResults:
+      return MESSAGE_KIND.openRevisions
+    case MESSAGE_KIND.leaseResult:
+      return MESSAGE_KIND.renewLease
+    case MESSAGE_KIND.blockFragment:
+    case MESSAGE_KIND.operationComplete:
+      return MESSAGE_KIND.requestBlocks
+    case MESSAGE_KIND.laneAttach:
+      return MESSAGE_KIND.laneAttach
+    case MESSAGE_KIND.operationError: {
+      try {
+        switch (decodeOperationErrorControl(message.body).scope) {
+          case 'directory':
+            return MESSAGE_KIND.listChildren
+          case 'revision':
+            return MESSAGE_KIND.openRevisions
+          case 'block':
+            return MESSAGE_KIND.requestBlocks
+          default:
+            return undefined
+        }
+      } catch {
+        return undefined
+      }
+    }
+    default:
+      return undefined
+  }
+}
 
 export interface ProtocolTraceContext {
   readonly protocolSessionIdentity: ProtocolSessionIdentity
@@ -11,7 +63,6 @@ export interface ProtocolTraceContext {
 }
 
 export class OperationTombstone {
-  readonly expiresAt: number
   readonly #authority: OperationContinuationAuthority
   readonly settlement: ProtocolOperationSettlement
   readonly requestTrace: ReturnType<typeof snapshotOperationRequest>
@@ -19,13 +70,11 @@ export class OperationTombstone {
   #responseTraced = false
 
   constructor(
-    expiresAt: number,
     authority: OperationContinuationAuthority,
     settlement: ProtocolOperationSettlement,
     requestTrace: ReturnType<typeof snapshotOperationRequest>,
     cancellationReason: CancellationTraceReason | undefined,
   ) {
-    this.expiresAt = expiresAt
     this.#authority = authority
     this.settlement = settlement
     this.requestTrace = requestTrace

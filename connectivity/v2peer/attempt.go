@@ -120,8 +120,8 @@ func newPeerAttempt(config peerAttemptConfig) *peerAttempt {
 
 func (attempt *peerAttempt) binding() v2signal.Binding { return attempt.config.offer.Binding }
 
-func (attempt *peerAttempt) operationRef() protocolsession.OperationRef {
-	return attempt.config.operation.Ref()
+func (attempt *peerAttempt) operationID() protocolsession.OperationID {
+	return attempt.config.operation.ID()
 }
 
 func (attempt *peerAttempt) start(parent context.Context, work *sync.WaitGroup) {

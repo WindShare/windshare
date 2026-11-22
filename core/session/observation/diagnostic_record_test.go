@@ -18,7 +18,7 @@ func diagnosticContext() ProtocolObservationContext {
 		Correlation: ProtocolObservationCorrelation{
 			Role:              protocolsession.RoleSender,
 			ProtocolSessionID: protocolsession.ProtocolSessionID{1},
-			OperationID:       protocolsession.OperationID{2},
+			OperationID:       protocolsession.OperationID(2),
 			RequestKind:       protocolsession.MessageOpenRevisions,
 		},
 	}
@@ -41,7 +41,7 @@ func TestDiagnosticPreservesDeadlineAndSchedulingContext(t *testing.T) {
 		if !record.ObservedAt().Equal(ctx.ObservedAt) || p.Get("response_count").Text() != "18446744073709551615" ||
 			p.Get("block_wait").Get("phase").Text() != string(phase) || p.Get("block_wait").Get("waited_ms").Uint() != 35000 ||
 			p.Get("request_scheduling").Get("expected_ms").Uint() != 42 || p.Get("send").Get("status").Text() != "uncertain" ||
-			record.Correlation().Get("lane_epoch").Uint() != 2 || record.Correlation().Get("protocol_operation_id").Text() != diagnostics.Identity(ctx.Correlation.OperationID[:]).Text() {
+			record.Correlation().Get("lane_epoch").Uint() != 2 || record.Correlation().Get("protocol_operation_id").Text() != ctx.Correlation.OperationID.String() {
 			t.Fatalf("lost decision context: %+v", record)
 		}
 	}

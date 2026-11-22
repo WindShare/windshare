@@ -148,7 +148,7 @@ describe('local output failure bundle projection', () => {
     )
     const protocolOperationId = createFailureIdentity(
       'protocol_operation',
-      new Uint8Array(16).fill(6),
+      6n,
     )
     const trace = projectProtocolTraceEvent({
       eventName: 'protocol_operation',
@@ -160,7 +160,7 @@ describe('local output failure bundle projection', () => {
 
     expect(trace.correlation).toEqual({
       protocol_session_id: 'BQUFBQUFBQUFBQUFBQUFBQ',
-      protocol_operation_id: 'BgYGBgYGBgYGBgYGBgYGBg',
+      protocol_operation_id: '6',
     })
     expect(encodedTrace).not.toContain(PRIVATE_ARTIFACT_PATH.join('/'))
     expect(encodedTrace).not.toMatch(/receive_operation|transfer_job|output_session|artifact|private/u)

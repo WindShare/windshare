@@ -34,7 +34,7 @@ export type ProtocolOperationPayloadV2 =
   | Readonly<{
       transition: 'admission_waiting'
       request_kind: ProtocolMessageKindV1
-      capacity: 'active' | 'retained'
+      capacity: 'active'
       active_operations: string
       tracked_operations: string
     }>

@@ -114,7 +114,7 @@ func (table *operationTable) bindPreemptivelyCancelledRequestLocked(
 func (table *operationTable) AdmitOutboundRequest(
 	message protocolsession.Message,
 	violationHandler func(protocolsession.AuthenticatedOperationViolation),
-) (protocolsession.Operation, int, bool, func(refresh bool), error) {
+) (protocolsession.Operation, int, bool, func(bool), error) {
 	if table == nil {
 		return protocolsession.Operation{}, 0, false, nil, protocolsession.ErrNilRuntimeDependency
 	}
@@ -124,7 +124,6 @@ func (table *operationTable) AdmitOutboundRequest(
 	}
 	table.mu.Lock()
 	defer table.mu.Unlock()
-	table.pruneExpiredLocked()
 	if table.terminal {
 		return protocolsession.Operation{}, 0, false, nil, protocolsession.ErrSessionTerminated
 	}
@@ -134,12 +133,15 @@ func (table *operationTable) AdmitOutboundRequest(
 	if !message.Kind().IsRequest() && message.Kind() != protocolsession.MessageLaneAttach {
 		return protocolsession.Operation{}, 0, false, nil, protocolsession.ErrUnexpectedOperation
 	}
-	if table.currentRecordLocked(id) != nil {
+	if table.currentRecordLocked(id) != nil || table.seen.contains(id) {
 		return protocolsession.Operation{}, 0, false, nil, protocolsession.ErrOperationIDReused
 	}
 	_, rec, err := table.beginOperationLocked(id, protocolsession.DirectionReceiverToSender, session.LaneIdentity{}, message, violationHandler)
 	if err != nil {
 		return protocolsession.Operation{}, 0, false, nil, err
+	}
+	if id > table.lastIssued {
+		table.lastIssued = id
 	}
 	rec.inFlight++
 	maxContinuations := 0
@@ -149,20 +151,20 @@ func (table *operationTable) AdmitOutboundRequest(
 		hasLimit = true
 	}
 	release := table.makeInFlightReleaser(rec)
-	return table.operation(rec.ref), maxContinuations, hasLimit, release, nil
+	return table.operation(rec.id), maxContinuations, hasLimit, release, nil
 }
 
 // RollbackUnsentRequest removes a receiver request proved never to have been
 // handed to transport, returning its active slot without retaining a tombstone.
-func (table *operationTable) RollbackUnsentRequest(ref protocolsession.OperationRef) {
-	if table == nil || ref.IsZero() {
+func (table *operationTable) RollbackUnsentRequest(id protocolsession.OperationID) {
+	if table == nil || id.IsZero() {
 		return
 	}
 	table.mu.Lock()
 	defer table.mu.Unlock()
-	if active := table.active[ref.ID]; active != nil && active.ref == ref {
+	if active := table.active[id]; active != nil {
 		table.rollbackPeerAttemptLocked(active)
-		delete(table.active, ref.ID)
+		delete(table.active, id)
 		table.notifyCapacityLocked()
 	}
 }
@@ -170,20 +172,19 @@ func (table *operationTable) RollbackUnsentRequest(ref protocolsession.Operation
 // AdmitOutboundContinuation validates and records one receiver-side continuation
 // (such as PeerCandidate) for an active operation.
 func (table *operationTable) AdmitOutboundContinuation(
-	ref protocolsession.OperationRef,
+	id protocolsession.OperationID,
 	message protocolsession.Message,
-) (protocolsession.OperationDisposition, func(), func(refresh bool), error) {
-	if table == nil || ref.IsZero() {
+) (protocolsession.OperationDisposition, func(), func(bool), error) {
+	if table == nil || id.IsZero() {
 		return protocolsession.OperationDrop, nil, nil, session.ErrOperationMissing
 	}
 	table.mu.Lock()
 	defer table.mu.Unlock()
-	table.pruneExpiredLocked()
 	if table.terminal {
 		return protocolsession.OperationDrop, nil, nil, protocolsession.ErrSessionTerminated
 	}
-	active := table.active[ref.ID]
-	if active == nil || active.ref != ref {
+	active := table.active[id]
+	if active == nil {
 		return protocolsession.OperationDrop, nil, nil, nil
 	}
 	if err := protocolsession.ValidateKindDirection(protocolsession.DirectionReceiverToSender, message.Kind()); err != nil {
@@ -220,42 +221,36 @@ type outboundResponseLease struct {
 	preferredLane    session.LaneIdentity
 	undoAnswer       bool
 	undoContinuation func()
-	releaseInFlight  func(refresh bool)
+	releaseInFlight  func(bool)
 }
 
-func (table *operationTable) lookupRecord(ref protocolsession.OperationRef) *operationRecord {
-	if table == nil || ref.IsZero() {
+func (table *operationTable) lookupRecord(id protocolsession.OperationID) *operationRecord {
+	if table == nil || id.IsZero() {
 		return nil
 	}
 	table.mu.Lock()
 	defer table.mu.Unlock()
-	table.pruneExpiredLocked()
-	rec := table.currentRecordLocked(ref.ID)
-	if rec == nil || rec.ref != ref {
-		return nil
-	}
-	return rec
+	return table.currentRecordLocked(id)
 }
 
 // BeginOutboundResponse serializes one sender response against its operation
 // record, checks active/continuation authority, and pins retention while in flight.
 func (table *operationTable) BeginOutboundResponse(
-	ref protocolsession.OperationRef,
+	id protocolsession.OperationID,
 	message protocolsession.Message,
 ) (*outboundResponseLease, error) {
-	rec := table.lookupRecord(ref)
+	rec := table.lookupRecord(id)
 	if rec == nil {
 		return nil, protocolsession.ErrOperationSuppressed
 	}
 	rec.sendMu.Lock()
 	table.mu.Lock()
-	table.pruneExpiredLocked()
 	if table.terminal {
 		table.mu.Unlock()
 		rec.sendMu.Unlock()
 		return nil, protocolsession.MarkNotSent(protocolsession.ErrSessionTerminated)
 	}
-	active := table.active[ref.ID]
+	active := table.active[id]
 	if active != rec {
 		table.mu.Unlock()
 		rec.sendMu.Unlock()
@@ -358,15 +353,15 @@ func (table *operationTable) CompleteOutboundResponse(
 	if !final || table.terminal {
 		return
 	}
-	if active := table.active[rec.ref.ID]; active == rec {
-		_ = table.finishOperationLocked(rec.ref.ID, active, protocolsession.DirectionSenderToReceiver, message, false)
+	if active := table.active[rec.id]; active == rec {
+		table.finishOperationLocked(rec.id, active, protocolsession.DirectionSenderToReceiver, message, false)
 		return
 	}
-	tombstone, exists := table.tombstones[rec.ref.ID]
+	tombstone, exists := table.tombstones[rec.id]
 	if exists && tombstone.record == rec && tombstone.cancelled && tombstone.finalKind == protocolsession.MessageCancel {
 		tombstone.finalKind = message.Kind()
 		tombstone.fingerprint = message.OperationFingerprint(protocolsession.DirectionSenderToReceiver)
-		table.tombstones[rec.ref.ID] = tombstone
+		table.tombstones[rec.id] = tombstone
 	}
 }
 
@@ -384,7 +379,7 @@ func (table *operationTable) rollbackOutboundResponseLocked(lease *outboundRespo
 	}
 }
 
-func (table *operationTable) pinInFlight(rec *operationRecord) func(refresh bool) {
+func (table *operationTable) pinInFlight(rec *operationRecord) func(bool) {
 	if table == nil || rec == nil {
 		return nil
 	}
@@ -394,35 +389,26 @@ func (table *operationTable) pinInFlight(rec *operationRecord) func(refresh bool
 	return table.makeInFlightReleaser(rec)
 }
 
-func (table *operationTable) makeInFlightReleaser(rec *operationRecord) func(refresh bool) {
+func (table *operationTable) makeInFlightReleaser(rec *operationRecord) func(bool) {
 	var once sync.Once
-	return func(refresh bool) {
+	return func(bool) {
 		once.Do(func() {
 			table.mu.Lock()
-			if refresh {
-				if tombstone, ok := table.tombstones[rec.ref.ID]; ok && tombstone.record == rec {
-					minimumExpiry := table.now().Add(protocolsession.OperationTombstoneLifetime)
-					if tombstone.expiresAt.Before(minimumExpiry) {
-						tombstone.expiresAt = minimumExpiry
-						table.tombstones[rec.ref.ID] = tombstone
-					}
-				}
-			}
 			if rec.inFlight > 0 {
 				rec.inFlight--
 			}
 			if rec.inFlight == 0 {
-				table.notifyCapacityLocked()
+				table.evictOverflowTombstonesLocked()
 			}
 			table.mu.Unlock()
 		})
 	}
 }
 
-// CancelOperation idempotently retires the exact admitted operation generation
-// and reports whether it transitioned an active operation to cancelled.
-func (table *operationTable) CancelOperation(ref protocolsession.OperationRef) (bool, error) {
-	if table == nil || ref.IsZero() {
+// CancelOperation idempotently retires an active operation and reports whether
+// it transitioned an active operation to cancelled.
+func (table *operationTable) CancelOperation(id protocolsession.OperationID) (bool, error) {
+	if table == nil || id.IsZero() {
 		return false, protocolsession.ErrInvalidOperationID
 	}
 	table.mu.Lock()
@@ -430,9 +416,8 @@ func (table *operationTable) CancelOperation(ref protocolsession.OperationRef) (
 	if table.terminal {
 		return false, nil
 	}
-	table.pruneExpiredLocked()
-	active := table.active[ref.ID]
-	if active == nil || active.ref != ref {
+	active := table.active[id]
+	if active == nil {
 		return false, nil
 	}
 	table.cancelRecordLocked(active)
@@ -440,20 +425,21 @@ func (table *operationTable) CancelOperation(ref protocolsession.OperationRef) (
 }
 
 func (table *operationTable) cancelRecordLocked(active *operationRecord) {
-	if active == nil {
-		return
-	}
-	if table.active[active.ref.ID] != active {
+	if active == nil || table.active[active.id] != active {
 		return
 	}
 	table.retirePeerAttemptLocked(active)
-	delete(table.active, active.ref.ID)
+	delete(table.active, active.id)
 	clearContinuationReplayLocked(active)
-	table.tombstones[active.ref.ID] = operationTombstone{
-		expiresAt: table.now().Add(protocolsession.OperationTombstoneLifetime),
+	_, existed := table.tombstones[active.id]
+	table.tombstones[active.id] = operationTombstone{
 		finalKind: protocolsession.MessageCancel,
 		cancelled: true,
 		record:    active,
+	}
+	if !existed {
+		table.tombstoneOrder = append(table.tombstoneOrder, active.id)
+		table.evictOverflowTombstonesLocked()
 	}
 	table.notifyCapacityLocked()
 }
@@ -470,7 +456,6 @@ func (table *operationTable) RecordAuthenticatedOperationViolation(
 		return false, protocolsession.ErrInvalidAuthenticatedOperationViolation
 	}
 	table.mu.Lock()
-	table.pruneExpiredLocked()
 	rec := table.currentRecordLocked(id)
 	if rec == nil {
 		table.mu.Unlock()

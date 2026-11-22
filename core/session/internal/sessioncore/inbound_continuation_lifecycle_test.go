@@ -20,7 +20,7 @@ func TestInboundRetiredPeerCandidateUsesOperationAuthorityWithoutResponseRoute(t
 			runtime, _ := newUnstartedRuntimeWithContinuations(
 				t, protocolsession.RoleSender, protocolsession.OperationLimits{}, nil, continuationReplayClassifier{},
 			)
-			id := id16[protocolsession.OperationID](171)
+			id := protocolsession.OperationID(171)
 			request := operationMessageForTest(t, protocolsession.MessagePeerOffer, id, []byte{0xf6})
 			if disposition, err := runtime.inbound.RouteInbound(runtime.initial, request); err != nil || disposition != protocolsession.OperationDeliver {
 				t.Fatalf("offer admission = %d, %v", disposition, err)
@@ -57,7 +57,7 @@ func TestInboundRetiredPeerCandidateUsesOperationAuthorityWithoutResponseRoute(t
 			if _, err := runtime.inbound.RouteInbound(runtime.initial, malformed); !errors.Is(err, protocolsession.ErrInvalidMessage) {
 				t.Fatalf("invalid late candidate = %v", err)
 			}
-			unknown := operationMessageForTest(t, protocolsession.MessagePeerCandidate, id16[protocolsession.OperationID](172), []byte{0xf6})
+			unknown := operationMessageForTest(t, protocolsession.MessagePeerCandidate, protocolsession.OperationID(172), []byte{0xf6})
 			if _, err := runtime.inbound.RouteInbound(runtime.initial, unknown); !errors.Is(err, protocolsession.ErrUnknownOperation) {
 				t.Fatalf("unknown operation candidate = %v", err)
 			}

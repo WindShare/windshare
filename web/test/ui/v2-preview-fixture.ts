@@ -166,7 +166,7 @@ export function authenticatedRemoteOperationError(): RemoteOperationError {
   return new RemoteOperationError(createReceivedProtocolError({
     requestKind: 'open_revisions', correlation: Object.freeze({
       protocolSessionId: createFailureIdentity('protocol_session', identity(9)),
-      protocolOperationId: createFailureIdentity('protocol_operation', identity(10)),
+      protocolOperationId: createFailureIdentity('protocol_operation', 10n),
     }), content: {
       scope: 'revision', code: 0x22, retryable: true, retryAfterMilliseconds: 250
     }
@@ -177,7 +177,7 @@ export function remoteOperationError(retryable: boolean): RemoteOperationError {
   return new RemoteOperationError(createReceivedProtocolError({
     requestKind: 'request_blocks', correlation: Object.freeze({
       protocolSessionId: createFailureIdentity('protocol_session', identity(13)),
-      protocolOperationId: createFailureIdentity('protocol_operation', identity(14)),
+      protocolOperationId: createFailureIdentity('protocol_operation', 14n),
     }), content: retryable
       ? { scope: 'block', code: 0x31, retryable, retryAfterMilliseconds: 250 }
       : { scope: 'block', code: 0x31, retryable },
@@ -188,7 +188,7 @@ export function nonRetryableRemoteRevisionError(): RemoteRevisionError {
   return new RemoteRevisionError(createReceivedProtocolError({
     requestKind: 'open_revisions', correlation: Object.freeze({
       protocolSessionId: createFailureIdentity('protocol_session', identity(15)),
-      protocolOperationId: createFailureIdentity('protocol_operation', identity(16)),
+      protocolOperationId: createFailureIdentity('protocol_operation', 16n),
     }), content: { scope: 'revision', code: 0x21, retryable: false },
   }))
 }
@@ -202,7 +202,7 @@ export function authenticatedRevisionCapacityError(): RevisionCapacityBusyError 
   return new RevisionCapacityBusyError(createReceivedProtocolError({
     requestKind: 'open_revisions', correlation: Object.freeze({
       protocolSessionId: createFailureIdentity('protocol_session', identity(11)),
-      protocolOperationId: createFailureIdentity('protocol_operation', identity(12)),
+      protocolOperationId: createFailureIdentity('protocol_operation', 12n),
     }), content: {
       scope: 'revision', code: failure.code, retryable: failure.retryable, retryAfterMilliseconds: failure.retryAfterMilliseconds
     }

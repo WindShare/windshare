@@ -46,7 +46,7 @@
         "maxSelectedRootNameBytes": "1048576",
         "maxSelectedRoots": "4096",
         "minChunkBytes": "1024",
-        "operationTombstoneSeconds": "30",
+        "operationReplayWindow": "4096",
         "reassemblyOperation": "4194816",
         "reassemblyProcess": "1073741824",
         "reassemblyRecordsProcess": "256",

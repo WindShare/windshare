@@ -18,7 +18,7 @@ import (
 const (
 	LaneAttachNonceBytes = 16
 	LaneSenderNonceBytes = 16
-	LaneHelloBodyBytes   = 4 + 1 + catalog.IdentityBytes + IdentityBytes + 4 + 4 + IdentityBytes + LaneAttachNonceBytes
+	LaneHelloBodyBytes   = 4 + 1 + catalog.IdentityBytes + IdentityBytes + 4 + 4 + OperationIDBytes + LaneAttachNonceBytes
 	LaneHelloBytes       = LaneHelloBodyBytes + sha256.Size
 	LaneAcceptBodyBytes  = 4 + 1 + sha256.Size + LaneSenderNonceBytes
 	LaneAcceptBytes      = LaneAcceptBodyBytes + ed25519.SignatureSize
@@ -176,7 +176,7 @@ func NewLaneHello(share catalog.ShareInstance, session ProtocolSessionID, laneID
 	body = append(body, session[:]...)
 	body = binary.BigEndian.AppendUint32(body, laneID)
 	body = binary.BigEndian.AppendUint32(body, laneEpoch)
-	body = append(body, operationID[:]...)
+	body = operationID.AppendBigEndian(body)
 	body = append(body, attachNonce...)
 	proof := laneProof(receiverToSender.value[:], body)
 	return laneHelloFromBody(body, proof)
@@ -231,7 +231,7 @@ func laneHelloFromBody(body, proof []byte) (LaneHello, error) {
 	laneID := binary.BigEndian.Uint32(body[laneOffset : laneOffset+4])
 	laneEpoch := binary.BigEndian.Uint32(body[laneOffset+4 : laneOffset+8])
 	operationOffset := laneOffset + 8
-	operationID, err := OperationIDFromBytes(body[operationOffset : operationOffset+IdentityBytes])
+	operationID, err := OperationIDFromBigEndian(body[operationOffset : operationOffset+OperationIDBytes])
 	if err != nil || laneID == 0 || laneEpoch == 0 || operationID.IsZero() {
 		return LaneHello{}, ErrLaneMalformed
 	}
@@ -239,7 +239,7 @@ func laneHelloFromBody(body, proof []byte) (LaneHello, error) {
 	copy(hello.encoded[:LaneHelloBodyBytes], body)
 	copy(hello.encoded[LaneHelloBodyBytes:], proof)
 	hello.share, hello.session, hello.laneID, hello.laneEpoch, hello.operationID = share, session, laneID, laneEpoch, operationID
-	copy(hello.attachNonce[:], body[operationOffset+IdentityBytes:])
+	copy(hello.attachNonce[:], body[operationOffset+OperationIDBytes:])
 	hello.valid = true
 	return hello, nil
 }

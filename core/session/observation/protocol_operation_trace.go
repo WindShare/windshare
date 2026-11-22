@@ -247,8 +247,10 @@ func protocolDiagnosticCorrelation(value interface {
 }, lane session.LaneIdentity) diagnostics.Fields {
 	c := value.Correlation()
 	fields := diagnostics.Fields{
-		"protocol_session_id":   diagnostics.Identity(c.ProtocolSessionID[:]),
-		"protocol_operation_id": diagnostics.Identity(c.OperationID[:]),
+		"protocol_session_id": diagnostics.Identity(c.ProtocolSessionID[:]),
+	}
+	if !c.OperationID.IsZero() {
+		fields["protocol_operation_id"] = diagnostics.Uint(c.OperationID.Uint64())
 	}
 	if lane.ID != 0 {
 		fields["lane_id"], fields["lane_epoch"] = diagnostics.Number(float64(lane.ID)), diagnostics.Number(float64(lane.Epoch))

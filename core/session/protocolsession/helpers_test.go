@@ -8,11 +8,7 @@ import (
 )
 
 func testOperationID(seed byte) OperationID {
-	var id OperationID
-	for index := range id {
-		id[index] = seed + byte(index)
-	}
-	return id
+	return OperationID(uint64(seed) + 1)
 }
 
 func mustMessage(t *testing.T, kind MessageKind, operationID *OperationID, body any) Message {

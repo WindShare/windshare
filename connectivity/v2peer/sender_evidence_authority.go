@@ -13,18 +13,18 @@ const minimumPeerPaths = 1
 // exceeds membership cannot poison already admitted paths or the file session.
 type senderEvidenceAuthority struct {
 	maximumPaths int
-	claims       map[v2signal.Binding]protocolsession.OperationRef
+	claims       map[v2signal.Binding]protocolsession.OperationID
 	latest       map[v2signal.PeerPathID]v2signal.Binding
 }
 
 func newSenderEvidenceAuthority(maximumPaths int) senderEvidenceAuthority {
 	return senderEvidenceAuthority{
 		maximumPaths: maximumPaths,
-		claims:       make(map[v2signal.Binding]protocolsession.OperationRef),
+		claims:       make(map[v2signal.Binding]protocolsession.OperationID),
 		latest:       make(map[v2signal.PeerPathID]v2signal.Binding),
 	}
 }
-func (a *senderEvidenceAuthority) claim(operation protocolsession.OperationRef, binding v2signal.Binding) evidenceClaim {
+func (a *senderEvidenceAuthority) claim(operation protocolsession.OperationID, binding v2signal.Binding) evidenceClaim {
 	if a == nil || binding.Validate() != nil {
 		return evidenceClaim{}
 	}

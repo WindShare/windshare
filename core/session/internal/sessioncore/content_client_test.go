@@ -8,7 +8,7 @@ import (
 
 func TestRPCLocalCancelAfterSessionTermination(t *testing.T) {
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
-	operationID := id16[protocolsession.OperationID](84)
+	operationID := protocolsession.OperationID(84)
 	request, err := protocolsession.NewMessage(protocolsession.MessageListChildren, &operationID, []byte{0xa0})
 	if err != nil {
 		t.Fatal(err)
@@ -21,14 +21,14 @@ func TestRPCLocalCancelAfterSessionTermination(t *testing.T) {
 	if err := runtime.operations.TerminateLocal(); err != nil {
 		t.Fatal(err)
 	}
-	if transitioned, err := runtime.reconcileLocalCancel(op.Ref()); err != nil || transitioned || runtime.Err() != nil {
+	if transitioned, err := runtime.reconcileLocalCancel(op.ID()); err != nil || transitioned || runtime.Err() != nil {
 		t.Fatalf("retired RPC failed cleanup: transitioned=%v error=%v runtime=%v", transitioned, err, runtime.Err())
 	}
 	if runtime.ctx.Err() != nil || runtime.operations.ActiveCount() != 0 || runtime.operations.TombstoneCount() != 0 {
 		t.Fatal("late RPC cleanup changed runtime lifecycle or retained authority")
 	}
 	// Session termination must not make a malformed cancellation capability valid.
-	if _, err := runtime.reconcileLocalCancel(protocolsession.OperationRef{}); !errors.Is(err, protocolsession.ErrInvalidOperationID) {
+	if _, err := runtime.reconcileLocalCancel(0); !errors.Is(err, protocolsession.ErrInvalidOperationID) {
 		t.Fatalf("invalid cancellation error=%v", err)
 	}
 	if !errors.Is(runtime.Err(), protocolsession.ErrInvalidOperationID) || runtime.ctx.Err() == nil {
@@ -39,9 +39,9 @@ func TestRPCLocalCancelAfterSessionTermination(t *testing.T) {
 func TestRPCFailedBeginCancellationUsesReservedCapacity(t *testing.T) {
 	runtime, _ := newUnstartedRuntimeWithPolicy(
 		t, protocolsession.RoleReceiver,
-		protocolsession.OperationLimits{MaxActive: 2, MaxTracked: 2}, nil,
+		protocolsession.OperationLimits{MaxActive: 2, MaxRecentTombstones: 2}, nil,
 	)
-	firstID := id16[protocolsession.OperationID](82)
+	firstID := protocolsession.OperationID(82)
 	first, _ := protocolsession.NewMessage(
 		protocolsession.MessageListChildren, &firstID, []byte{0xa1, 0x00, 0x01},
 	)
@@ -50,10 +50,10 @@ func TestRPCFailedBeginCancellationUsesReservedCapacity(t *testing.T) {
 		t.Fatal(err)
 	}
 	firstRelease(false)
-	if transitioned, err := runtime.operations.CancelOperation(firstOp.Ref()); err != nil || !transitioned {
+	if transitioned, err := runtime.operations.CancelOperation(firstOp.ID()); err != nil || !transitioned {
 		t.Fatalf("cancel first: transitioned=%v err=%v", transitioned, err)
 	}
-	secondID := id16[protocolsession.OperationID](83)
+	secondID := protocolsession.OperationID(83)
 	second, _ := protocolsession.NewMessage(
 		protocolsession.MessageListChildren, &secondID, []byte{0xa1, 0x00, 0x02},
 	)
@@ -62,7 +62,7 @@ func TestRPCFailedBeginCancellationUsesReservedCapacity(t *testing.T) {
 		t.Fatal(err)
 	}
 	secondRelease(false)
-	if transitioned, err := runtime.reconcileLocalCancel(secondOp.Ref()); err != nil || !transitioned {
+	if transitioned, err := runtime.reconcileLocalCancel(secondOp.ID()); err != nil || !transitioned {
 		t.Fatalf("cleanup transitioned=%v error=%v", transitioned, err)
 	}
 	select {

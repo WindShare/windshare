@@ -59,7 +59,7 @@ func TestLaneAttachmentBoundarySilentlyClosesUntrustedFailures(t *testing.T) {
 	}
 	unknownHello, err := protocolsession.NewLaneHello(
 		fixture.share, id16[protocolsession.ProtocolSessionID](73), 7, 1,
-		id16[protocolsession.OperationID](74), bytes.Repeat([]byte{75}, protocolsession.LaneAttachNonceBytes), key,
+		protocolsession.OperationID(74), bytes.Repeat([]byte{75}, protocolsession.LaneAttachNonceBytes), key,
 	)
 	if err != nil {
 		t.Fatal(err)

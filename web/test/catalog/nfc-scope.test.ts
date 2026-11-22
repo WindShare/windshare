@@ -30,7 +30,7 @@ describe('catalog field-owned NFC', () => {
         terminal: true, previousCommitment: new Uint8Array(32),
         entries: [{ kind: 'file', id: id(4), name, expectedSize: 12n }] })
       const body = encodeCanonicalCbor(new Map<number, unknown>([[0, 1], [1, sealed.object]]))
-      const message = encodeMessage(MESSAGE_KIND.catalogResult, id(5), body)
+      const message = encodeMessage(MESSAGE_KIND.catalogResult, 5n, body)
       const decoded = decodeMessage(message.plaintext)
       expect(decoded.body).toEqual(body)
       const fields = decodeCanonicalCbor(decoded.body, 65536, 'catalog result') as Map<number, Uint8Array>

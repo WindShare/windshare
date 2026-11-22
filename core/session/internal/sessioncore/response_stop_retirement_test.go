@@ -33,7 +33,7 @@ func TestSenderStopDuringResponseRetirement(t *testing.T) {
 					t.Fatal(err)
 				}
 				t.Cleanup(release)
-				id := id16[protocolsession.OperationID](146)
+				id := protocolsession.OperationID(146)
 				request, err := protocolsession.NewMessage(protocolsession.MessageRequestBlocks, &id, []byte{0xa0})
 				if err != nil {
 					t.Fatal(err)

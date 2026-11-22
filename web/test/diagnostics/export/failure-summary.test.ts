@@ -69,7 +69,7 @@ function observation(summary: FailureEvidenceSummary): TraceEventObservationV2 {
     eventName: 'protocol_operation',
     correlation: {
       protocol_session_id: 'AQAAAAAAAAAAAAAAAAAAAA',
-      protocol_operation_id: 'AgAAAAAAAAAAAAAAAAAAAA',
+      protocol_operation_id: '2',
     },
     payload: { transition: 'send_failed', request_kind: 'list_children', failure_evidence: summary },
   }

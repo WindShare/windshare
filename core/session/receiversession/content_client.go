@@ -254,7 +254,7 @@ func (err *RemoteRevisionError) ProtocolSessionID() protocolsession.ProtocolSess
 
 func (err *RemoteRevisionError) OperationID() protocolsession.OperationID {
 	if err == nil {
-		return protocolsession.OperationID{}
+		return 0
 	}
 	return err.protocolOperation
 }

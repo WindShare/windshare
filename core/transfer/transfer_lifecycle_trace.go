@@ -305,10 +305,12 @@ func (v TransferLifecycleTrace) DiagnosticRecord() diag.Record {
 	f["connection_size_class"] = diag.Number(float64(v.ConnectionSizeClass))
 	if v.Stage >= TransferCapacityRetryScheduled && v.Stage <= TransferCapacitySessionEnded {
 		f["capacity"] = diag.Object(diag.Fields{
-			"protocol_operation_id": diag.Identity(v.CapacityOperationID[:]), "attempt": diag.Uint(v.CapacityAttempt),
+			"protocol_operation_id": diag.Uint(v.CapacityOperationID.Uint64()), "attempt": diag.Uint(v.CapacityAttempt),
 			"hint_ms": diag.Millis(v.CapacityHint), "jitter_ms": diag.Millis(v.CapacityJitter), "delay_ms": diag.Millis(v.CapacityDelay),
 			"accumulated_wait_ms": diag.Millis(v.CapacityAccumulated), "active_waiters": diag.Number(float64(v.CapacityActiveWaiters))})
-		c["protocol_operation_id"] = diag.Identity(v.CapacityOperationID[:])
+		if !v.CapacityOperationID.IsZero() {
+			c["protocol_operation_id"] = diag.Uint(v.CapacityOperationID.Uint64())
+		}
 	}
 	if v.Stage == TransferFileRevisionReadmission {
 		revision := v.RevisionReadmission

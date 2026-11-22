@@ -14,7 +14,7 @@ func TestReceiverSemanticRegistryRejectsEveryAuthenticatedMalformedSenderControl
 	if err != nil {
 		t.Fatal(err)
 	}
-	operationID := id16[protocolsession.OperationID](1)
+	operationID := protocolsession.OperationID(1)
 	authenticator := protocolsession.SenderMessageValidator(validator)
 	kinds := []protocolsession.MessageKind{
 		protocolsession.MessageCatalogResult,

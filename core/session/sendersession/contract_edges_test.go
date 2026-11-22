@@ -65,9 +65,9 @@ func TestCatalogHandlerSuppressesDuplicateWorkAndCancelsQueuedOperations(t *test
 	for range cap(handler.workers) {
 		handler.workers <- struct{}{}
 	}
-	duplicateID := id16[protocolsession.OperationID](61)
-	queuedID := id16[protocolsession.OperationID](62)
-	barrierID := id16[protocolsession.OperationID](63)
+	duplicateID := protocolsession.OperationID(61)
+	queuedID := protocolsession.OperationID(62)
+	barrierID := protocolsession.OperationID(63)
 	listMessage := func(operationID protocolsession.OperationID) protocolsession.Message {
 		message, err := protocolsession.NewMessage(
 			protocolsession.MessageListChildren, &operationID, []byte{1},
@@ -80,7 +80,7 @@ func TestCatalogHandlerSuppressesDuplicateWorkAndCancelsQueuedOperations(t *test
 	state := newStubOperationState()
 	duplicateMessage := listMessage(duplicateID)
 	duplicateOp := state.admit(duplicateID, protocolsession.MessageListChildren)
-	if !handler.add(duplicateOp.Ref(), func() {}) {
+	if !handler.add(duplicateOp.ID(), func() {}) {
 		t.Fatal("failed to seed active catalog operation")
 	}
 	queuedMessage := listMessage(queuedID)
@@ -88,7 +88,7 @@ func TestCatalogHandlerSuppressesDuplicateWorkAndCancelsQueuedOperations(t *test
 	barrierOp := state.admit(barrierID, protocolsession.MessageListChildren)
 	barrierReached := make(chan struct{})
 	var barrierOnce sync.Once
-	if !handler.add(barrierOp.Ref(), func() { barrierOnce.Do(func() { close(barrierReached) }) }) {
+	if !handler.add(barrierOp.ID(), func() { barrierOnce.Do(func() { close(barrierReached) }) }) {
 		t.Fatal("failed to seed catalog barrier")
 	}
 	for _, queued := range []struct {

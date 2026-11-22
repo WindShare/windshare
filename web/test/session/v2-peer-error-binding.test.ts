@@ -1,26 +1,24 @@
 import { readFileSync } from 'node:fs'
 import { expect, it } from 'vitest'
 import { decodeOperationErrorControl, encodeBody, encodeMessage, MESSAGE_KIND } from '../../src/session/message'
-import { OperationRouter, OPERATION_TOMBSTONE_MILLISECONDS } from '../../src/session/operation-router'
+import { OperationRouter } from '../../src/session/operation-router'
 
 const vector = JSON.parse(readFileSync(new URL('../../../core/testvectors/v2-peer-signaling.json', import.meta.url), 'utf8')) as {
  peerPathIdB64: string; attemptIdB64: string; peerSlot: number
- controlBinding: { operationIdB64: string }
+ controlBinding: { operationId: string }
  peerErrors: readonly { code: number; bodyB64: string }[]
 }
 const bytes = (value: string) => Uint8Array.from(Buffer.from(value, 'base64'))
 const path = bytes(vector.peerPathIdB64)
 const attempt = bytes(vector.attemptIdB64)
-const operationId = bytes(vector.controlBinding.operationIdB64)
+const operationId = BigInt(vector.controlBinding.operationId)
 
 
 it('decodes Go peer errors and confines delayed terminal codes after tombstone GC', async () => {
  for (const item of vector.peerErrors) {
-  let now = 0
   let terminal = false
-  const router = new OperationRouter(() => { terminal = true }, () => now)
+  const router = new OperationRouter(() => { terminal = true })
   router.create(MESSAGE_KIND.peerOffer, encodeBody([4, path, attempt, 1n, vector.peerSlot, 0, 'v=0'])).close()
-  now = OPERATION_TOMBSTONE_MILLISECONDS + 1
   const currentId = new Uint8Array(16).fill(70)
   const current = router.create(MESSAGE_KIND.peerOffer, encodeBody([4, path, currentId, 2n, vector.peerSlot, 0, 'v=0']))
   const message = encodeMessage(MESSAGE_KIND.operationError, operationId, bytes(item.bodyB64))

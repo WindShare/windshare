@@ -26,7 +26,7 @@ describe('v2 session wire registry', () => {
   it.each(Object.entries(MESSAGE_KIND).filter(([, kind]) => kind !== MESSAGE_KIND.blockFragment))(
     'decodes the registered %s control message', (_name, kind) => {
       const sessionControl = kind === MESSAGE_KIND.sessionTerminal || kind === MESSAGE_KIND.peerPathControl
-      const encoded = encodeMessage(kind, sessionControl ? undefined : identity(1), encodeBody(null))
+      const encoded = encodeMessage(kind, sessionControl ? undefined : 1n, encodeBody(null))
       expect(decodeMessage(encoded.plaintext)).toEqual(encoded)
     },
   )
@@ -44,7 +44,7 @@ describe('v2 authenticated sender control schemas', () => {
     const body = encodeBody(new Map<number, unknown>([
       [0, 1], [1, 4], [2, 0x4001], [3, false], [4, null], [5, '\ufeff'],
     ]))
-    const message = decodeMessage(encodeMessage(MESSAGE_KIND.operationError, identity(1), body).plaintext)
+    const message = decodeMessage(encodeMessage(MESSAGE_KIND.operationError, 1n, body).plaintext)
     expect(message.body).toEqual(body)
     expect(() => validateSenderControlBody(message.kind, message.body)).not.toThrow()
     expect(decodeOperationErrorControl(message.body).message).toBe('\ufeff')
@@ -79,7 +79,7 @@ describe('v2 authenticated sender control schemas', () => {
 
   it('rejects invalid revision retry delays outside 1 through 30000 milliseconds', async () => {
 
-    const operationId = identity(2)
+    const operationId = 2n
 
     const openResult = async (retryAfterMilliseconds: number) => senderOperationControl({
       kind: MESSAGE_KIND.openResults,
@@ -176,7 +176,7 @@ describe('v2 authenticated sender control schemas', () => {
 
   it('preserves map and array semantics without changing their typed body', async () => {
 
-    const operationId = identity(10)
+    const operationId = 10n
 
     const answerBody = encodeBody([4, identity(8), identity(9), 1n, 0, 0, 'answer-sdp'])
     const candidateBody = encodeBody([

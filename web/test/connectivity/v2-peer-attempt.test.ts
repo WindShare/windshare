@@ -60,7 +60,7 @@ class FakeSession {
   readonly grant = Object.freeze({
     laneId: 2,
     laneEpoch: 1,
-    grantOperationId: identity(44),
+    grantOperationId: 44n,
     attachNonce: identity(45),
   })
   readonly ids = new Set([1])
@@ -75,7 +75,7 @@ class FakeSession {
 
   async beginOperation(kind: number) {
     return {
-      id: identity(43),
+      id: 43n,
       requestKind: kind,
       next: () => new Promise<never>(() => undefined),
       cancel: () => undefined,

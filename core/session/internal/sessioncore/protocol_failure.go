@@ -51,8 +51,8 @@ func (runtime *Runtime) failRPCOperationAuthority() error {
 	return errRPCOperationAuthority
 }
 
-func (runtime *Runtime) reconcileLocalCancel(ref protocolsession.OperationRef) (bool, error) {
-	transitioned, err := runtime.operations.CancelOperation(ref)
+func (runtime *Runtime) reconcileLocalCancel(id protocolsession.OperationID) (bool, error) {
+	transitioned, err := runtime.operations.CancelOperation(id)
 	if err == nil {
 		return transitioned, nil
 	}

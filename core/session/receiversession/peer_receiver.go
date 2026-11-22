@@ -103,7 +103,7 @@ func receiverPeerAuthenticatedViolationEvidence(
 
 func (operation *PeerOperation) OperationID() protocolsession.OperationID {
 	if operation == nil {
-		return protocolsession.OperationID{}
+		return 0
 	}
 	operation.mu.Lock()
 	defer operation.mu.Unlock()

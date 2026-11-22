@@ -80,7 +80,7 @@ func (outbound *Responses) failPreparation(
 	sequence := outbound.sequence.Add(1)
 	requestKind, _ := op.RequestKind()
 	if senderResponseFinal(kind) && !op.IsZero() {
-		_, _ = runtime.operations.CancelOperation(op.Ref())
+		_, _ = runtime.operations.CancelOperation(op.ID())
 	}
 	outbound.traceResponseSend(op.ID(), requestKind, kind, sequence, session.LaneIdentity{}, sessionobs.SendStatusNotSent, 0, content)
 	return protocolsession.MarkNotSent(cause)
@@ -98,14 +98,14 @@ func (outbound *Responses) executeResponse(
 	kind := message.Kind()
 	final := senderResponseFinal(kind)
 	if op.IsZero() {
-		outbound.traceResponseSend(protocolsession.OperationID{}, 0, kind, sequence, session.LaneIdentity{}, sessionobs.SendStatusNotSent, 0, content)
+		outbound.traceResponseSend(0, 0, kind, sequence, session.LaneIdentity{}, sessionobs.SendStatusNotSent, 0, content)
 		return protocolsession.MarkNotSent(session.ErrOperationMissing)
 	}
-	lease, err := runtime.operations.BeginOutboundResponse(op.Ref(), message)
+	lease, err := runtime.operations.BeginOutboundResponse(op.ID(), message)
 	if err != nil {
 		requestKind, _ := op.RequestKind()
 		if final && !errors.Is(err, protocolsession.ErrOperationSuppressed) {
-			_, _ = runtime.operations.CancelOperation(op.Ref())
+			_, _ = runtime.operations.CancelOperation(op.ID())
 		}
 		outbound.traceResponseSend(op.ID(), requestKind, kind, sequence, session.LaneIdentity{}, sessionobs.SendStatusNotSent, 0, content)
 		return err

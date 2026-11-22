@@ -288,13 +288,12 @@ export async function reconstructFSAContinuationFailure(
 
 function protocolCorrelation(input: FSAReconstructionCorrelation) {
   const session = decodeBase64Url(input.protocolSessionId)
-  const operation = decodeBase64Url(input.protocolOperationId)
-  if (session?.byteLength !== 16 || operation?.byteLength !== 16) {
-    throw new TypeError('shared protocol correlation is not a canonical 16-byte tuple')
+  if (session?.byteLength !== 16 || !/^[1-9]\d*$/.test(input.protocolOperationId)) {
+    throw new TypeError('shared protocol correlation is not canonical')
   }
   return Object.freeze({
     protocolSessionId: createFailureIdentity('protocol_session', session),
-    protocolOperationId: createFailureIdentity('protocol_operation', operation),
+    protocolOperationId: createFailureIdentity('protocol_operation', BigInt(input.protocolOperationId)),
   })
 }
 

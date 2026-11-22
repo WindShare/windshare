@@ -21,7 +21,7 @@ func canceledSenderOperation(
 	}
 	state := newStubOperationState()
 	op := state.admit(id, request.Kind())
-	state.cancel(op.Ref())
+	state.cancel(op.ID())
 	if op.IsActive() || !op.IsCurrent() {
 		t.Fatal("canceled operation retained executable authority")
 	}
@@ -59,9 +59,9 @@ func TestCancelMuxRoutesStormToOnlyTheExactOperationOwner(t *testing.T) {
 	state := newStubOperationState()
 	cancelBody, _ := contentflow.EncodeCancelReason(contentflow.CancelReasonSuperseded)
 	routeCancel := func(seed byte, requestKind protocolsession.MessageKind) {
-		operationID := id16[protocolsession.OperationID](seed)
+		operationID := protocolsession.OperationID(seed)
 		op := state.admit(operationID, requestKind)
-		state.cancel(op.Ref())
+		state.cancel(op.ID())
 		cancel := operationMessageForTest(t, protocolsession.MessageCancel, operationID, cancelBody)
 		if err := mux.HandleMessage(context.Background(), op, cancel); err != nil {
 			t.Fatal(err)
@@ -84,7 +84,7 @@ func TestCancelMuxRoutesStormToOnlyTheExactOperationOwner(t *testing.T) {
 }
 
 func TestSenderQueuesSuppressCanceledGenerationBeforeWorkPublication(t *testing.T) {
-	operationID := id16[protocolsession.OperationID](201)
+	operationID := protocolsession.OperationID(201)
 	catalogRequest := operationMessageForTest(
 		t, protocolsession.MessageListChildren, operationID, []byte{1},
 	)
@@ -106,7 +106,7 @@ func TestSenderQueuesSuppressCanceledGenerationBeforeWorkPublication(t *testing.
 		t.Fatal("canceled lane request reached the grant queue")
 	}
 
-	siblingID := id16[protocolsession.OperationID](202)
+	siblingID := protocolsession.OperationID(202)
 	sibling := operationMessageForTest(t, protocolsession.MessageListChildren, siblingID, []byte{1})
 	if err := catalogHandler.HandleMessage(context.Background(), senderIngressOperation(t, sibling), sibling); err != nil {
 		t.Fatalf("catalog sibling: %v", err)

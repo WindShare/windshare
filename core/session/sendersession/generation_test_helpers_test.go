@@ -10,56 +10,53 @@ import (
 
 type stubOperationState struct {
 	mu      sync.Mutex
-	next    uint64
-	active  map[protocolsession.OperationRef]protocolsession.MessageKind
-	current map[protocolsession.OperationRef]protocolsession.MessageKind
+	active  map[protocolsession.OperationID]protocolsession.MessageKind
+	current map[protocolsession.OperationID]protocolsession.MessageKind
 }
 
 func newStubOperationState() *stubOperationState {
 	return &stubOperationState{
-		active:  make(map[protocolsession.OperationRef]protocolsession.MessageKind),
-		current: make(map[protocolsession.OperationRef]protocolsession.MessageKind),
+		active:  make(map[protocolsession.OperationID]protocolsession.MessageKind),
+		current: make(map[protocolsession.OperationID]protocolsession.MessageKind),
 	}
 }
 
 func (s *stubOperationState) admit(id protocolsession.OperationID, kind protocolsession.MessageKind) protocolsession.Operation {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.next++
-	ref := protocolsession.OperationRef{ID: id, Token: s.next}
-	s.active[ref] = kind
-	s.current[ref] = kind
-	return protocolsession.NewOperation(ref, s)
+	s.active[id] = kind
+	s.current[id] = kind
+	return protocolsession.NewOperation(id, s)
 }
 
-func (s *stubOperationState) cancel(ref protocolsession.OperationRef) {
+func (s *stubOperationState) cancel(id protocolsession.OperationID) {
 	s.mu.Lock()
-	delete(s.active, ref)
+	delete(s.active, id)
 	s.mu.Unlock()
 }
 
-func (s *stubOperationState) Active(ref protocolsession.OperationRef) bool {
+func (s *stubOperationState) Active(id protocolsession.OperationID) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, ok := s.active[ref]
+	_, ok := s.active[id]
 	return ok
 }
 
-func (s *stubOperationState) Current(ref protocolsession.OperationRef) bool {
+func (s *stubOperationState) Current(id protocolsession.OperationID) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, ok := s.current[ref]
+	_, ok := s.current[id]
 	return ok
 }
 
-func (s *stubOperationState) RequestKind(ref protocolsession.OperationRef) (protocolsession.MessageKind, bool) {
+func (s *stubOperationState) RequestKind(id protocolsession.OperationID) (protocolsession.MessageKind, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	kind, ok := s.current[ref]
+	kind, ok := s.current[id]
 	return kind, ok
 }
 
-func (s *stubOperationState) PeerAttemptBinding(protocolsession.OperationRef) (protocolsession.PeerAttemptBinding, bool) {
+func (s *stubOperationState) PeerAttemptBinding(protocolsession.OperationID) (protocolsession.PeerAttemptBinding, bool) {
 	return protocolsession.PeerAttemptBinding{}, false
 }
 

@@ -122,8 +122,8 @@ func TestSenderEvidenceClaimsReleaseOnlyWithProtocolSession(t *testing.T) {
 	binding := testBinding(126)
 	operation := testPeerOperation(testOperationID(127))
 	handler.mu.Lock()
-	first := handler.claimEvidenceLocked(operation.Ref(), binding)
-	second := handler.claimEvidenceLocked(operation.Ref(), binding)
+	first := handler.claimEvidenceLocked(operation.ID(), binding)
+	second := handler.claimEvidenceLocked(operation.ID(), binding)
 	if !first.acquired || second.acquired {
 		handler.mu.Unlock()
 		t.Fatal("evidence claim was not unique")
@@ -322,9 +322,9 @@ func testSenderDistinctBindingRejectionIsNotSuppressedByActiveOperation(t *testi
 	rejectedBinding := testBinding(140)
 
 	handler.mu.Lock()
-	handler.attempts[operation.Ref()] = &peerAttempt{}
-	handler.bindings[activeBinding] = operation.Ref()
-	if claim := handler.claimEvidenceLocked(operation.Ref(), activeBinding); !claim.acquired {
+	handler.attempts[operation.ID()] = &peerAttempt{}
+	handler.bindings[activeBinding] = operation.ID()
+	if claim := handler.claimEvidenceLocked(operation.ID(), activeBinding); !claim.acquired {
 		handler.mu.Unlock()
 		t.Fatalf("active evidence claim = %#v", claim)
 	}

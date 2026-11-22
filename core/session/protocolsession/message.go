@@ -37,7 +37,7 @@ const (
 	MessagePeerPathControl   MessageKind = 19
 )
 
-const fragmentRoutingHeaderBytes = 20
+const fragmentRoutingHeaderBytes = 4 + OperationIDBytes
 
 var (
 	ErrInvalidMessage      = errors.New("protocolsession: invalid message")
@@ -133,7 +133,7 @@ func NewMessage(kind MessageKind, operationID *OperationID, body []byte) (Messag
 	if operationID != nil {
 		id = *operationID
 		hasID = true
-		fields[1] = id.Bytes()
+		fields[1] = id.Uint64()
 	}
 	plaintext, err := messageEncMode.Marshal(fields)
 	if err != nil {
@@ -207,7 +207,7 @@ func decodeFragmentMessage(plaintext []byte) (Message, error) {
 	if len(plaintext) < fragmentRoutingHeaderBytes || plaintext[2]&^byte(1) != 0 || plaintext[3] != 0 {
 		return Message{}, ErrFragmentHeader
 	}
-	operationID, err := OperationIDFromBytes(plaintext[4:fragmentRoutingHeaderBytes])
+	operationID, err := OperationIDFromBigEndian(plaintext[4:fragmentRoutingHeaderBytes])
 	if err != nil || operationID.IsZero() {
 		return Message{}, ErrInvalidOperationID
 	}
@@ -225,13 +225,13 @@ func decodeOperationID(encoded cbor.RawMessage) (*OperationID, error) {
 	if bytes.Equal(encoded, []byte{0xf6}) {
 		return nil, nil
 	}
-	var raw []byte
+	var raw uint64
 	if err := messageDecMode.Unmarshal(encoded, &raw); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidOperationID, err)
 	}
-	id, err := OperationIDFromBytes(raw)
-	if err != nil || id.IsZero() {
-		return nil, ErrInvalidOperationID
+	id, err := OperationIDFromUint64(raw)
+	if err != nil {
+		return nil, err
 	}
 	return &id, nil
 }
@@ -305,12 +305,12 @@ func validateCBORValue(value any) error {
 
 func (m Message) OperationFingerprint(direction Direction) [sha256.Size]byte {
 	body := m.body
-	preimage := make([]byte, 0, 2+IdentityBytes+len(body))
+	preimage := make([]byte, 0, 2+OperationIDBytes+len(body))
 	preimage = append(preimage, byte(direction), byte(m.kind))
 	if m.hasID {
-		preimage = append(preimage, m.operationID[:]...)
+		preimage = m.operationID.AppendBigEndian(preimage)
 	} else {
-		preimage = append(preimage, make([]byte, IdentityBytes)...)
+		preimage = append(preimage, make([]byte, OperationIDBytes)...)
 	}
 	preimage = append(preimage, body...)
 	return sha256.Sum256(preimage)

@@ -160,7 +160,7 @@ interface LaneVector extends VectorCase {
   readonly protocolSessionIdB64: string
   readonly attachedLaneId: number
   readonly attachedLaneEpoch: number
-  readonly grantOperationIdB64: string
+  readonly grantOperationId: string
   readonly attachNonceB64: string
   readonly receiverToSenderKeyB64: string
   readonly laneHelloB64: string
@@ -647,7 +647,7 @@ describe('suite-02 lane runtime contract', () => {
       protocolSessionId: bytes(vector.protocolSessionIdB64),
       laneId: vector.attachedLaneId,
       laneEpoch: vector.attachedLaneEpoch,
-      grantOperationId: bytes(vector.grantOperationIdB64),
+      grantOperationId: BigInt(vector.grantOperationId),
       attachNonce: bytes(vector.attachNonceB64),
     }
     const trafficKey = bytes(vector.receiverToSenderKeyB64)
@@ -670,7 +670,7 @@ describe('suite-02 lane runtime contract', () => {
       rejection,
     )
 
-    const axes = [5, 21, 37, 41, 45, 61]
+    const axes = [5, 21, 37, 41, 45, 53]
     for (const offset of axes) {
       const hostile = flip(hello, offset)
       await expect(decodeLaneHello(hostile, trafficKey)).rejects.toThrow()

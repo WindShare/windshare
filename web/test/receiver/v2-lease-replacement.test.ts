@@ -29,7 +29,7 @@ function remoteFailure(code = REVISION_CODE_LEASE_EXPIRED): RemoteOperationError
   return new RemoteOperationError(createReceivedProtocolError({
     requestKind: 'renew_lease', correlation: {
       protocolSessionId: createProtocolSessionIdentity(id(10)),
-      protocolOperationId: createProtocolOperationIdentity(id(11))
+      protocolOperationId: createProtocolOperationIdentity(11n)
     }, content: {
       scope: 'revision', code: code, retryable: false
     }

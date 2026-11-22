@@ -189,14 +189,14 @@ func (handler *senderHandler) rejectOperation(
 		}
 	}
 	handler.mu.Lock()
-	attempt := handler.attempts[op.Ref()]
+	attempt := handler.attempts[op.ID()]
 	handler.mu.Unlock()
 	if attempt != nil {
 		attempt.stop(rejection)
 	}
 	claim := evidenceClaim{}
 	if binding != nil {
-		claim = handler.claimRejectedOffer(op.Ref(), *binding)
+		claim = handler.claimRejectedOffer(op.ID(), *binding)
 		if claim.acquired {
 			failure := senderOperationAttemptFailure(rejection.code, rejection.message, rejection)
 			if claim.capacity {
@@ -232,7 +232,7 @@ func (handler *senderHandler) terminalizeUnstartedOffer(
 	if binding == nil {
 		return nil
 	}
-	claim := handler.claimRejectedOffer(event.op.Ref(), *binding)
+	claim := handler.claimRejectedOffer(event.op.ID(), *binding)
 	if claim.acquired {
 		if claim.capacity {
 			failure = senderPathCapacityFailure()

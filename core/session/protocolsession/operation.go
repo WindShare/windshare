@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
-	"time"
 
 	framechannel "github.com/windshare/windshare/core/framechannel"
 )
@@ -54,7 +53,10 @@ func (value Role) DiagnosticName() string {
 }
 
 const (
-	OperationTombstoneLifetime = 30 * time.Second
+	// OperationReplayWindow is the width (in operation IDs) of the sender's
+	// sliding duplicate-detection bitmap, accommodating cross-lane reordering
+	// without per-operation wall-clock tombstone retention.
+	OperationReplayWindow = 4096
 
 	ControlQueueFrameLimit    = 256
 	ControlQueueByteLimit     = 4 * 1024 * 1024
@@ -68,37 +70,36 @@ const (
 )
 
 var (
-	ErrInvalidRole            = errors.New("protocolsession: invalid role")
-	ErrInvalidDirection       = errors.New("protocolsession: message kind is invalid for direction")
-	ErrUnknownOperation       = errors.New("protocolsession: message refers to an unknown operation")
-	ErrOperationIDReused      = errors.New("protocolsession: operation identity was reused")
-	ErrUnexpectedOperation    = errors.New("protocolsession: message is invalid for the operation")
-	ErrConflictingFinal       = errors.New("protocolsession: operation final conflicts with its tombstone")
-	ErrSessionTerminated      = errors.New("protocolsession: session is terminal")
-	ErrActiveOperationBudget  = errors.New("protocolsession: active operation budget exhausted")
-	ErrTrackedOperationBudget = errors.New("protocolsession: tracked operation budget exhausted")
-	ErrNilRuntimeDependency   = errors.New("protocolsession: runtime dependency must not be nil")
-	ErrRouterControlFull      = errors.New("protocolsession: inbound control queue is full")
-	ErrRouterDataFull         = errors.New("protocolsession: inbound data queue is full")
-	ErrHandlerRegistered      = errors.New("protocolsession: message kind already has a handler")
-	ErrHandlerMissing         = errors.New("protocolsession: message kind has no handler")
-	ErrControlQueueFull       = errors.New("protocolsession: control queue capacity exceeded")
-	ErrDataQueueFull          = errors.New("protocolsession: data queue capacity exceeded")
-	ErrWriterTerminal         = errors.New("protocolsession: writer accepted a terminal message")
-	ErrWriterStopped          = errors.New("protocolsession: writer is stopped")
-	ErrMessageClass           = errors.New("protocolsession: message submitted to the wrong writer queue")
-	ErrEnvelopeRejected       = errors.New("protocolsession: inbound envelope rejected")
-	ErrInboundSemantic        = errors.New("protocolsession: inbound message semantic validation failed")
-	ErrInboundRejected        = errors.New("protocolsession: inbound message rejected")
-	ErrPeerSessionTerminal    = errors.New("protocolsession: peer ended the session")
-	ErrNotSent                = errors.New("protocolsession: message was not handed to transport")
-	ErrOperationSuppressed    = errors.New("protocolsession: outbound message suppressed for retired or duplicate operation")
+	ErrInvalidRole           = errors.New("protocolsession: invalid role")
+	ErrInvalidDirection      = errors.New("protocolsession: message kind is invalid for direction")
+	ErrUnknownOperation      = errors.New("protocolsession: message refers to an unknown operation")
+	ErrOperationIDReused     = errors.New("protocolsession: operation identity was reused")
+	ErrUnexpectedOperation   = errors.New("protocolsession: message is invalid for the operation")
+	ErrConflictingFinal      = errors.New("protocolsession: operation final conflicts with its tombstone")
+	ErrSessionTerminated     = errors.New("protocolsession: session is terminal")
+	ErrActiveOperationBudget = errors.New("protocolsession: active operation budget exhausted")
+	ErrNilRuntimeDependency  = errors.New("protocolsession: runtime dependency must not be nil")
+	ErrRouterControlFull     = errors.New("protocolsession: inbound control queue is full")
+	ErrRouterDataFull        = errors.New("protocolsession: inbound data queue is full")
+	ErrHandlerRegistered     = errors.New("protocolsession: message kind already has a handler")
+	ErrHandlerMissing        = errors.New("protocolsession: message kind has no handler")
+	ErrControlQueueFull      = errors.New("protocolsession: control queue capacity exceeded")
+	ErrDataQueueFull         = errors.New("protocolsession: data queue capacity exceeded")
+	ErrWriterTerminal        = errors.New("protocolsession: writer accepted a terminal message")
+	ErrWriterStopped         = errors.New("protocolsession: writer is stopped")
+	ErrMessageClass          = errors.New("protocolsession: message submitted to the wrong writer queue")
+	ErrEnvelopeRejected      = errors.New("protocolsession: inbound envelope rejected")
+	ErrInboundSemantic       = errors.New("protocolsession: inbound message semantic validation failed")
+	ErrInboundRejected       = errors.New("protocolsession: inbound message rejected")
+	ErrPeerSessionTerminal   = errors.New("protocolsession: peer ended the session")
+	ErrNotSent               = errors.New("protocolsession: message was not handed to transport")
+	ErrOperationSuppressed   = errors.New("protocolsession: outbound message suppressed for retired or duplicate operation")
 )
 
 // IsOperationCapacityError identifies a retryable refusal before any operation
 // authority or wire delivery exists.
 func IsOperationCapacityError(err error) bool {
-	return errors.Is(err, ErrActiveOperationBudget) || errors.Is(err, ErrTrackedOperationBudget)
+	return errors.Is(err, ErrActiveOperationBudget)
 }
 
 type notSentError struct{ cause error }
@@ -137,9 +138,10 @@ type FrameChannel interface {
 
 type OperationLimits struct {
 	MaxActive int
-	// MaxTracked bounds retained identities, including slots reserved by active
-	// operations for their eventual completion or cancellation.
-	MaxTracked int
+	// MaxRecentTombstones bounds the FIFO cache of recently retired operation
+	// metadata retained for cross-lane duplicate/conflict checks. Overflow evicts
+	// the oldest unpinned tombstone immediately instead of stalling admission.
+	MaxRecentTombstones int
 }
 
 // RouterLimits permits lower local admission limits without changing wire limits.
@@ -163,55 +165,45 @@ const (
 	OperationSessionTerminal
 )
 
-// OperationRef uniquely identifies one admitted operation instance within a session.
-// Token is a session-local strictly monotonic counter, so reusing an expired
-// wire OperationID still yields a distinct comparable key.
-type OperationRef struct {
-	ID    OperationID
-	Token uint64
-}
-
-func (ref OperationRef) IsZero() bool { return ref.ID.IsZero() || ref.Token == 0 }
-
 // OperationState is the read-only authority query backing an explicit Operation handle.
 type OperationState interface {
-	Active(OperationRef) bool
-	Current(OperationRef) bool
-	RequestKind(OperationRef) (MessageKind, bool)
-	PeerAttemptBinding(OperationRef) (PeerAttemptBinding, bool)
+	Active(OperationID) bool
+	Current(OperationID) bool
+	RequestKind(OperationID) (MessageKind, bool)
+	PeerAttemptBinding(OperationID) (PeerAttemptBinding, bool)
 }
 
 // Operation is an explicit, comparable handle passed to message handlers and
 // outbound response calls, replacing implicit context.Value capability smuggling.
+// Because OperationID is strictly monotonic per session, the ID itself uniquely
+// identifies the operation without a separate generation token.
 type Operation struct {
-	ref   OperationRef
+	id    OperationID
 	state OperationState
 }
 
-func NewOperation(ref OperationRef, state OperationState) Operation {
-	return Operation{ref: ref, state: state}
+func NewOperation(id OperationID, state OperationState) Operation {
+	return Operation{id: id, state: state}
 }
 
-func (op Operation) Ref() OperationRef         { return op.ref }
-func (op Operation) ID() OperationID           { return op.ref.ID }
-func (op Operation) Token() uint64             { return op.ref.Token }
-func (op Operation) IsZero() bool              { return op.ref.IsZero() || op.state == nil }
+func (op Operation) ID() OperationID           { return op.id }
+func (op Operation) IsZero() bool              { return op.id.IsZero() || op.state == nil }
 func (op Operation) Same(other Operation) bool { return !op.IsZero() && op == other }
-func (op Operation) IsActive() bool            { return !op.IsZero() && op.state.Active(op.ref) }
-func (op Operation) IsCurrent() bool           { return !op.IsZero() && op.state.Current(op.ref) }
+func (op Operation) IsActive() bool            { return !op.IsZero() && op.state.Active(op.id) }
+func (op Operation) IsCurrent() bool           { return !op.IsZero() && op.state.Current(op.id) }
 
 func (op Operation) RequestKind() (MessageKind, bool) {
 	if op.IsZero() {
 		return 0, false
 	}
-	return op.state.RequestKind(op.ref)
+	return op.state.RequestKind(op.id)
 }
 
 func (op Operation) PeerAttemptBinding() (PeerAttemptBinding, bool) {
 	if op.IsZero() {
 		return PeerAttemptBinding{}, false
 	}
-	return op.state.PeerAttemptBinding(op.ref)
+	return op.state.PeerAttemptBinding(op.id)
 }
 
 // MessageHandler consumes authenticated messages with an explicit Operation handle.

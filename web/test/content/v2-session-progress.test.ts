@@ -68,7 +68,7 @@ class FakeCatalogSession {
 
   async beginOperation(): Promise<SessionOperation> {
     return {
-      id: identity(9),
+      id: 9n,
       requestKind: MESSAGE_KIND.listChildren,
       next: async () => {
         const message = this.#messages.shift()
@@ -99,7 +99,7 @@ function controlMessage(
 ): SessionMessage {
   return {
     kind,
-    operationId: identity(9),
+    operationId: 9n,
     body: body.slice(),
     plaintext: Uint8Array.of(1),
     data: false,

@@ -7,7 +7,7 @@ import (
 
 const (
 	DefaultActiveOperations     = 256
-	DefaultTrackedOperations    = 4_096
+	DefaultRecentTombstones     = protocolsession.OperationReplayWindow
 	SessionStoppedCode          = protocolsession.SessionTerminalCodeLast
 	MaximumTerminalMessageBytes = protocolsession.MaxSessionTerminalMessageBytes
 )

@@ -25,7 +25,7 @@ func TestProtocolOperationCauseRetainsJoinedFaults(t *testing.T) {
 		{"opaque cancellation match", cancellationMatchingBlockFault{}, sessionobs.ProtocolOperationCauseProtocolFailure},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			call := newOperationCall(id16[protocolsession.OperationID](65), protocolsession.MessageRequestBlocks, time.Now(), 0, false, true)
+			call := newOperationCall(protocolsession.OperationID(65), protocolsession.MessageRequestBlocks, time.Now(), 0, false, true)
 			owner := call.ClaimProtocolTermination()
 			call.RecordTraceFailure(test.err)
 			event, ok := call.protocolOperationTerminationTrace(time.Now(), owner,

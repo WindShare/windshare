@@ -568,10 +568,7 @@ func receiverInstalledLaneAdmission(
 }
 
 func integrationOperationID(seed byte) protocolsession.OperationID {
-	operation, _ := protocolsession.OperationIDFromBytes(
-		bytes.Repeat([]byte{seed}, protocolsession.IdentityBytes),
-	)
-	return operation
+	return protocolsession.OperationID(uint64(seed) + 1)
 }
 
 func TestV2PeerReceiverAndSenderFactoriesInteroperateOverRealPion(t *testing.T) {

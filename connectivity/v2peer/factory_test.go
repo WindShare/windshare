@@ -350,7 +350,7 @@ func testSenderHandlerAnswersCandidatesAndAdmitsPeerChannel(t *testing.T) {
 	offerBody, _ := v2signal.EncodeOffer(v2signal.Offer{Binding: binding, SDP: "v=0\r\ns=receiver\r\n"})
 	offerMessage := testMessage(t, protocolsession.MessagePeerOffer, operation, offerBody)
 	op := testPeerOperation(operation)
-	operationKey := op.Ref()
+	operationKey := op.ID()
 	if err := handler.HandleMessage(ctx, op, offerMessage); err != nil {
 		t.Fatalf("offer: %v", err)
 	}
@@ -445,7 +445,7 @@ func TestSenderHandlerRetainsBindingAcrossCompletionAndCancelUntilExpiry(t *test
 		factory: factory, session: handler.session, operation: op,
 		offer: v2signal.Offer{Binding: binding, SDP: "v=0\r\n"}, onDone: handler.attemptDone,
 	})
-	operationKey := op.Ref()
+	operationKey := op.ID()
 	handler.mu.Lock()
 	handler.attempts[operationKey] = attempt
 	handler.bindings[binding] = operationKey
@@ -470,7 +470,7 @@ func TestSenderHandlerRetainsBindingAcrossCompletionAndCancelUntilExpiry(t *test
 		t.Fatalf("reserved replay budget = %v", err)
 	}
 	now = now.Add(30 * time.Second)
-	handler.claimRejectedOffer(newOp.Ref(), blockedBinding)
+	handler.claimRejectedOffer(newOp.ID(), blockedBinding)
 
 	// Exhaustion fails closed for a full retention window measured from the
 	// rejected offer, even after the older tombstone itself expires.
@@ -522,7 +522,7 @@ func testSenderHandlerCapacityFailureEndsOnlyRejectedOperation(t *testing.T) {
 	firstBody, _ := v2signal.EncodeOffer(v2signal.Offer{Binding: firstBinding, SDP: "v=0\r\n"})
 	firstMessage := testMessage(t, protocolsession.MessagePeerOffer, firstOperation, firstBody)
 	firstOp := testPeerOperation(firstOperation)
-	firstKey := firstOp.Ref()
+	firstKey := firstOp.ID()
 	if err := handler.HandleMessage(
 		ctx, firstOp, firstMessage,
 	); err != nil {
@@ -834,7 +834,7 @@ func testSenderHandlerCancellationKeepsAnAdmittedLaneUntilPhysicalClose(t *testi
 	body, _ := v2signal.EncodeOffer(v2signal.Offer{Binding: testBinding(101), SDP: "v=0\r\n"})
 	message := testMessage(t, protocolsession.MessagePeerOffer, operation, body)
 	op := testPeerOperation(operation)
-	operationKey := op.Ref()
+	operationKey := op.ID()
 	if err := handler.HandleMessage(
 		ctx, op, message,
 	); err != nil {
@@ -940,66 +940,60 @@ func testBinding(seed byte) v2signal.Binding {
 }
 
 func testOperationID(seed byte) protocolsession.OperationID {
-	operation, _ := protocolsession.OperationIDFromBytes(
-		bytes.Repeat([]byte{seed}, protocolsession.IdentityBytes),
-	)
-	return operation
+	return protocolsession.OperationID(uint64(seed) + 1)
 }
 
 type testOperationTracker struct {
-	mu        sync.Mutex
-	nextToken uint64
-	active    map[protocolsession.OperationRef]bool
-	current   map[protocolsession.OperationRef]bool
+	mu      sync.Mutex
+	active  map[protocolsession.OperationID]bool
+	current map[protocolsession.OperationID]bool
 }
 
 func newTestOperationTracker() *testOperationTracker {
 	return &testOperationTracker{
-		active:  make(map[protocolsession.OperationRef]bool),
-		current: make(map[protocolsession.OperationRef]bool),
+		active:  make(map[protocolsession.OperationID]bool),
+		current: make(map[protocolsession.OperationID]bool),
 	}
 }
 
 func (tracker *testOperationTracker) admit(id protocolsession.OperationID) protocolsession.Operation {
 	tracker.mu.Lock()
-	tracker.nextToken++
-	ref := protocolsession.OperationRef{ID: id, Token: tracker.nextToken}
-	tracker.active[ref] = true
-	tracker.current[ref] = true
+	tracker.active[id] = true
+	tracker.current[id] = true
 	tracker.mu.Unlock()
-	return protocolsession.NewOperation(ref, tracker)
+	return protocolsession.NewOperation(id, tracker)
 }
 
 func (tracker *testOperationTracker) cancel(op protocolsession.Operation) {
 	tracker.mu.Lock()
-	delete(tracker.active, op.Ref())
+	delete(tracker.active, op.ID())
 	tracker.mu.Unlock()
 }
 
-func (tracker *testOperationTracker) Active(ref protocolsession.OperationRef) bool {
+func (tracker *testOperationTracker) Active(id protocolsession.OperationID) bool {
 	tracker.mu.Lock()
 	defer tracker.mu.Unlock()
-	return tracker.active[ref]
+	return tracker.active[id]
 }
 
-func (tracker *testOperationTracker) Current(ref protocolsession.OperationRef) bool {
+func (tracker *testOperationTracker) Current(id protocolsession.OperationID) bool {
 	tracker.mu.Lock()
 	defer tracker.mu.Unlock()
-	return tracker.current[ref]
+	return tracker.current[id]
 }
 
-func (tracker *testOperationTracker) RequestKind(ref protocolsession.OperationRef) (protocolsession.MessageKind, bool) {
-	if !tracker.Current(ref) {
+func (tracker *testOperationTracker) RequestKind(id protocolsession.OperationID) (protocolsession.MessageKind, bool) {
+	if !tracker.Current(id) {
 		return 0, false
 	}
 	return protocolsession.MessagePeerOffer, true
 }
 
-func (tracker *testOperationTracker) PeerAttemptBinding(protocolsession.OperationRef) (protocolsession.PeerAttemptBinding, bool) {
+func (tracker *testOperationTracker) PeerAttemptBinding(protocolsession.OperationID) (protocolsession.PeerAttemptBinding, bool) {
 	return protocolsession.PeerAttemptBinding{}, false
 }
 
-func (tracker *testOperationTracker) MaximumContinuations(protocolsession.OperationRef) (int, bool) {
+func (tracker *testOperationTracker) MaximumContinuations(protocolsession.OperationID) (int, bool) {
 	return 0, false
 }
 

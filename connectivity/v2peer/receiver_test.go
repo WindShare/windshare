@@ -782,7 +782,7 @@ func TestReceiverAttemptRuntimeShutdownDuringAuthorityValidationStaysRuntimeOwne
 
 func TestReceiverAttemptTerminatesZeroIDOperation(t *testing.T) {
 	harness := newReceiverHarness(t, func(_ *ReceiverFactoryConfig, signaling *receiverTestSignaling) {
-		signaling.operation.(*receiverTestOperation).id = protocolsession.OperationID{}
+		signaling.operation.(*receiverTestOperation).id = 0
 	})
 	receiveTest(t, harness.attempt.Done())
 
@@ -793,7 +793,7 @@ func TestReceiverAttemptTerminatesZeroIDOperation(t *testing.T) {
 		t.Fatalf("zero-ID exact operation Terminate calls=%d, want 1", calls)
 	}
 	outcome := harness.attempt.Outcome()
-	if outcome.LocalGeneration() == 0 || outcome.OperationID() != (protocolsession.OperationID{}) ||
+	if outcome.LocalGeneration() == 0 || outcome.OperationID() != 0 ||
 		outcome.TransitionAuthority() != ReceiverTerminalLocal ||
 		outcome.TransitionProvenance() != ReceiverProvenanceSignalingAdapterContract ||
 		outcome.Disposition() != ReceiverDispositionFallbackAllowed ||

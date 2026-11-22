@@ -196,7 +196,7 @@ describe('incident frozen contracts', () => {
       new Uint8Array(16),
     )).toThrow(/non-zero/)
 
-    const operationId = createFailureIdentity('protocol_operation', identityBytes(2))
+    const operationId = createFailureIdentity('protocol_operation', 2n)
     expect(() => createFailureCorrelation({
       protocolOperationId: operationId,
     })).toThrow(/invalid/)
@@ -357,7 +357,7 @@ function protocolFailure(): ReceivedProtocolError {
       ),
       protocolOperationId: createFailureIdentity(
         'protocol_operation',
-        identityBytes(5),
+        5n,
       ),
       lane: { id: 0xffff_ffff, epoch: 0 },
     }, content: { scope: 'block', code: 0xffff, retryable: true, retryAfterMilliseconds: 30_000 } }

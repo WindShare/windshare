@@ -338,7 +338,7 @@ func newContinuationReplayFixtureWithContinuations(
 	rpc := NewRequests(
 		runtime, bytes.NewReader(bytes.Repeat([]byte{operationByte}, protocolsession.IdentityBytes)),
 	)
-	operationID := id16[protocolsession.OperationID](operationByte)
+	operationID := protocolsession.OperationID(operationByte)
 	offer, err := protocolsession.NewMessage(protocolsession.MessagePeerOffer, &operationID, []byte{0xf6})
 	if err != nil {
 		t.Fatal(err)

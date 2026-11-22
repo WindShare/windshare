@@ -734,7 +734,7 @@ function capacityFailure(retryAfterMilliseconds: number): RevisionCapacityBusyEr
   return new RevisionCapacityBusyError(createReceivedProtocolError({
     requestKind: 'open_revisions', correlation: {
       protocolSessionId: createFailureIdentity('protocol_session', identity(91)),
-      protocolOperationId: createFailureIdentity('protocol_operation', identity(92))
+      protocolOperationId: createFailureIdentity('protocol_operation', 92n)
     }, content: {
       scope: 'revision', code: failure.code, retryable: true, retryAfterMilliseconds
     }

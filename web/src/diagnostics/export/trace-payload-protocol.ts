@@ -148,7 +148,7 @@ export function validateProtocolOperation(payload: UnknownRecord): void {
       exactKeys(payload, ['transition', 'request_kind', 'capacity', 'active_operations', 'tracked_operations'], [],
         'protocol admission payload')
       member(payload.request_kind, PROTOCOL_REQUEST_KINDS_V1, 'protocol request kind')
-      member(payload.capacity, ['active', 'retained'], 'operation admission capacity')
+      member(payload.capacity, ['active'], 'operation admission capacity')
       decimalFields(payload, ['active_operations', 'tracked_operations'], 'operation admission')
       return
     case 'retired_response_discarded':

@@ -35,7 +35,7 @@ describe('trace evidence under high-volume protocol traffic', () => {
       snapshotIncident: value => value, incidentMarkerBytes: () => 1,
 
     })
-    const correlation = { protocol_session_id: 'AQEBAQEBAQEBAQEBAQEBAQ', protocol_operation_id: 'AgICAgICAgICAgICAgICAg' }
+    const correlation = { protocol_session_id: 'AQEBAQEBAQEBAQEBAQEBAQ', protocol_operation_id: '2' }
     const cancelled: TraceEventObservationV2 = {
       eventName: 'protocol_operation', correlation, payload: {
         transition: 'cancelled', request_kind: 'request_blocks', cancellation_reason: 'lane_race',

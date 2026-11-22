@@ -86,7 +86,7 @@ func TestLaneHelloAndAcceptMatchFrozenVector(t *testing.T) {
 func TestLaneRejectIsSenderAuthenticatedAndHelloBound(t *testing.T) {
 	share, _ := catalog.ShareInstanceFromBytes(laneSequence(1, 16))
 	session, _ := ProtocolSessionIDFromBytes(laneSequence(21, 16))
-	operation, _ := OperationIDFromBytes(laneSequence(41, 16))
+	operation := OperationID(41)
 	traffic, _ := TrafficKeyFromBytes(bytes.Repeat([]byte{0x51}, 32), DirectionReceiverToSender)
 	hello, _ := NewLaneHello(share, session, 9, 3, operation, laneSequence(61, 16), traffic)
 	privateKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x71}, 32))
@@ -131,7 +131,7 @@ func TestLaneRegistryOwnsGrantEpochAdmissionAndStop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	operation, _ := OperationIDFromBytes(laneSequence(61, 16))
+	operation := OperationID(61)
 	grant, err := registry.IssueGrant(0, operation, bytes.Repeat([]byte{0x51}, 16))
 	if err != nil || grant.LaneID == 0 || grant.LaneEpoch != 1 {
 		t.Fatalf("grant = %+v, %v", grant, err)
@@ -166,7 +166,7 @@ func TestLaneRegistryOwnsGrantEpochAdmissionAndStop(t *testing.T) {
 	if !registry.Release(grant.LaneID, grant.LaneEpoch) || registry.Release(grant.LaneID, grant.LaneEpoch) {
 		t.Fatal("lane release was not epoch-owned and idempotent")
 	}
-	operation2, _ := OperationIDFromBytes(laneSequence(81, 16))
+	operation2 := OperationID(81)
 	grant2, err := registry.IssueGrant(grant.LaneID, operation2, bytes.Repeat([]byte{0x71}, 16))
 	if err != nil || grant2.LaneEpoch != 2 {
 		t.Fatalf("reattach grant = %+v, %v", grant2, err)
@@ -190,7 +190,7 @@ func TestLaneRegistryExpiresGrantsAndRejectsWrongSessionAfterProof(t *testing.T)
 	traffic, _ := TrafficKeyFromBytes(bytes.Repeat([]byte{0x31}, 32), DirectionReceiverToSender)
 	privateKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x41}, 32))
 	registry, _ := NewLaneRegistry(LaneRegistryConfig{ShareInstance: share, ProtocolSessionID: session, ReceiverToSender: traffic, SenderSigningKey: privateKey, InitialLaneID: 7, Now: func() time.Time { return now }})
-	operation, _ := OperationIDFromBytes(laneSequence(61, 16))
+	operation := OperationID(61)
 	grant, _ := registry.IssueGrant(0, operation, bytes.Repeat([]byte{0x51}, 16))
 	now = now.Add(LaneGrantTTL)
 	hello, _ := NewLaneHello(share, session, grant.LaneID, grant.LaneEpoch, operation, grant.AttachNonce[:], traffic)
@@ -215,7 +215,7 @@ func TestLaneRegistryRequiresAuthenticatedSettlementBeforeStateOrResponse(t *tes
 		ShareInstance: share, ProtocolSessionID: session, ReceiverToSender: traffic,
 		SenderSigningKey: privateKey, InitialLaneID: 7, Now: func() time.Time { return now },
 	})
-	operation, _ := OperationIDFromBytes(laneSequence(62, 16))
+	operation := OperationID(62)
 	grant, _ := registry.IssueGrant(0, operation, bytes.Repeat([]byte{0x52}, 16))
 	hello, _ := NewLaneHello(
 		share, session, grant.LaneID, grant.LaneEpoch, operation, grant.AttachNonce[:], traffic,
@@ -286,7 +286,7 @@ func TestLaneRegistryRequiresAuthenticatedSettlementBeforeStateOrResponse(t *tes
 func TestLaneParsersRejectEveryHostileWireAxis(t *testing.T) {
 	share, _ := catalog.ShareInstanceFromBytes(laneSequence(1, 16))
 	session, _ := ProtocolSessionIDFromBytes(laneSequence(21, 16))
-	operation, _ := OperationIDFromBytes(laneSequence(41, 16))
+	operation := OperationID(41)
 	traffic, _ := TrafficKeyFromBytes(bytes.Repeat([]byte{0x51}, 32), DirectionReceiverToSender)
 	hello, _ := NewLaneHello(share, session, 9, 3, operation, laneSequence(61, 16), traffic)
 	if hello.ShareInstance() != share || hello.ProtocolSessionID() != session ||
@@ -301,7 +301,7 @@ func TestLaneParsersRejectEveryHostileWireAxis(t *testing.T) {
 		"lane":    func(value []byte) { clear(value[37:41]); refreshLaneProof(value, traffic) },
 		"epoch":   func(value []byte) { clear(value[41:45]); refreshLaneProof(value, traffic) },
 		"operation": func(value []byte) {
-			clear(value[45:61])
+			clear(value[45:53])
 			refreshLaneProof(value, traffic)
 		},
 	} {
@@ -390,7 +390,7 @@ func TestLaneRegistryRejectsBudgetEpochAndGrantSubstitution(t *testing.T) {
 		t.Fatalf("negative logical budget error = %v", err)
 	}
 	registry, _ := NewLaneRegistry(base)
-	operation, _ := OperationIDFromBytes(laneSequence(61, 16))
+	operation := OperationID(61)
 	if _, err := registry.IssueGrant(99, operation, laneSequence(81, 16)); !errors.Is(err, ErrLaneUnknown) {
 		t.Fatalf("unknown logical lane error = %v", err)
 	}
@@ -406,7 +406,7 @@ func TestLaneRegistryRejectsBudgetEpochAndGrantSubstitution(t *testing.T) {
 	if _, err := pendingRegistry.IssueGrant(7, operation, laneSequence(81, 16)); err != nil {
 		t.Fatal(err)
 	}
-	operation2, _ := OperationIDFromBytes(laneSequence(91, 16))
+	operation2 := OperationID(91)
 	if _, err := pendingRegistry.IssueGrant(7, operation2, laneSequence(101, 16)); !errors.Is(err, ErrLaneGrantBudget) {
 		t.Fatalf("pending grant budget error = %v", err)
 	}

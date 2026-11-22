@@ -51,9 +51,9 @@ export function encodeUint32(value: number): Uint8Array<ArrayBuffer> {
   return encoded
 }
 
-export function encodeUint64(value: number): Uint8Array<ArrayBuffer> {
+export function encodeUint64(value: number | bigint): Uint8Array<ArrayBuffer> {
   const encoded = new Uint8Array(8)
-  new DataView(encoded.buffer).setBigUint64(0, BigInt(value), false)
+  new DataView(encoded.buffer).setBigUint64(0, typeof value === 'bigint' ? value : BigInt(value), false)
   return encoded
 }
 

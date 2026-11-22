@@ -1,4 +1,4 @@
-import { concatBytes, encodeBase64Url, equalBytes } from '../crypto/bytes'
+import { concatBytes, encodeBase64Url, encodeUint64, equalBytes } from '../crypto/bytes'
 import { requirePeerSlot } from './peer-slots/slots'
 import { sha256 } from '../crypto/digest'
 import {
@@ -21,7 +21,7 @@ export const MAXIMUM_PEER_CANDIDATES = 64
 type ContinuationState = 'active' | 'closed' | 'local-cancel' | 'remote-final'
 
 const CONTINUATION_SCHEMA_VERSION = 4n
-const OPERATION_ID_BYTES = 16
+const OPERATION_ID_BYTES = 8
 const PEER_IDENTITY_BYTES = 16
 const MAXIMUM_OPERATION_BODY_BYTES = 65_536 - 44
 
@@ -417,7 +417,7 @@ function isResponseAllowed(request: MessageKind, response: MessageKind): boolean
 async function messageFingerprint(message: SessionMessage): Promise<string> {
   return encodeBase64Url(await sha256(concatBytes([
     Uint8Array.of(message.kind),
-    message.operationId ?? new Uint8Array(OPERATION_ID_BYTES),
+    message.operationId === undefined ? new Uint8Array(OPERATION_ID_BYTES) : encodeUint64(message.operationId),
     message.body,
   ])))
 }

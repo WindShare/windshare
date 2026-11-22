@@ -367,7 +367,7 @@ func (attempt *ReceiverAttempt) Err() error {
 func (attempt *ReceiverAttempt) Outcome() ReceiverAttemptOutcome {
 	if attempt == nil {
 		return newReceiverAttemptOutcome(
-			protocolsession.OperationID{}, 0,
+			0, 0,
 			receiverOperationDecision(
 				ReceiverTerminalUnbound,
 				ReceiverProvenanceSignalingAdapterContract,

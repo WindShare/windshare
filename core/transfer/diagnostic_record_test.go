@@ -13,14 +13,14 @@ import (
 func TestDiagnosticCapacityWaitKeepsJobAndProtocolOwnership(t *testing.T) {
 	source := TransferLifecycleTrace{Stage: TransferCapacityRetryScheduled, ReceiveOperationID: receivecontract.OperationID{1},
 		ProtocolSessionID: protocolsession.ProtocolSessionID{2}, TransferJobID: TransferJobID{3},
-		CapacityOperationID: protocolsession.OperationID{6},
+		CapacityOperationID: protocolsession.OperationID(6),
 		CapacityAttempt:     3, CapacityHint: 250 * time.Millisecond, CapacityJitter: 7 * time.Millisecond, CapacityDelay: 257 * time.Millisecond, CapacityAccumulated: 700 * time.Millisecond, CapacityActiveWaiters: 2,
 		Progress: ReceiveProgressSnapshot{Discovery: DiscoveryComplete, CountersExact: true, PreviouslyPublishedBytes: math.MaxUint64, FileOutcomes: FileOutcomeSummary{PreviouslyPublishedFiles: 1}}}
 	record := source.DiagnosticRecord()
 	p := record.Payload()
 	c := p.Get("capacity")
 	if c.Get("attempt").Uint() != 3 || c.Get("delay_ms").Uint() != 257 || c.Get("accumulated_wait_ms").Uint() != 700 ||
-		record.Correlation().Get("protocol_operation_id").Text() != diagnostics.Identity(source.CapacityOperationID[:]).Text() ||
+		record.Correlation().Get("protocol_operation_id").Text() != source.CapacityOperationID.String() ||
 		record.Correlation().Get("transfer_job_id").Text() != diagnostics.Identity(source.TransferJobID.Bytes()).Text() {
 		t.Fatal("capacity context lost")
 	}

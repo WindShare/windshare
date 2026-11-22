@@ -113,7 +113,7 @@ func TestSenderProtocolOperationTraceCorrelatesRequestAndResponse(t *testing.T) 
 		<-writerDone
 	}()
 
-	operationID := id16[protocolsession.OperationID](0x71)
+	operationID := protocolsession.OperationID(0x71)
 	request, err := protocolsession.NewMessage(
 		protocolsession.MessageReleaseLease, &operationID, []byte{0xa0},
 	)
@@ -174,7 +174,7 @@ func TestSenderProtocolOperationTraceCapturesFailureSendSettlement(t *testing.T)
 		<-writerDone
 	}()
 
-	operationID := id16[protocolsession.OperationID](0x76)
+	operationID := protocolsession.OperationID(0x76)
 	request, err := protocolsession.NewMessage(
 		protocolsession.MessageOpenRevisions,
 		&operationID,
@@ -233,7 +233,7 @@ func TestSenderProtocolOperationTraceCapturesFailureSendSettlement(t *testing.T)
 func TestProtocolOperationTraceSuppressesSuccessfulTransferHotPath(t *testing.T) {
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
 	recorder := newProtocolTraceRecorder(runtime)
-	operationID := id16[protocolsession.OperationID](0x78)
+	operationID := protocolsession.OperationID(0x78)
 
 	for _, event := range []sessionobs.ProtocolOperationObservation{
 		{
@@ -344,7 +344,7 @@ func TestProtocolOperationTraceCapturesAuthenticatedReceivedFailureAtSource(t *t
 func TestProtocolOperationTraceCorrelatesLaneGrantWithoutAuthenticatedBody(t *testing.T) {
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
 	recorder := newProtocolTraceRecorder(runtime)
-	operationID := id16[protocolsession.OperationID](0x7a)
+	operationID := protocolsession.OperationID(0x7a)
 	lane := session.LaneIdentity{ID: 7, Epoch: 2}
 	runtime.traceProtocolOperation(sessionobs.ProtocolOperationObservation{
 		Stage: sessionobs.ProtocolOperationReceiverCompleted, OperationID: operationID,
@@ -372,7 +372,7 @@ func TestProtocolObservationBlockedConsumerCannotChangeRuntimeAuthority(t *testi
 	runtime.protocolObservations = producer
 	for range 3 {
 		runtime.traceProtocolOperation(sessionobs.ProtocolOperationObservation{
-			Stage: sessionobs.ProtocolOperationReceiverFailed, OperationID: id16[protocolsession.OperationID](0x79),
+			Stage: sessionobs.ProtocolOperationReceiverFailed, OperationID: protocolsession.OperationID(0x79),
 			RequestKind: protocolsession.MessageReleaseLease, Cause: sessionobs.ProtocolOperationCauseDeadline})
 	}
 	completion := producer.Complete()

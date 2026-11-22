@@ -183,7 +183,7 @@ describe('bounded authenticated selection discovery', () => {
       requestKind: 'list_children',
       correlation: Object.freeze({
         protocolSessionId: createFailureIdentity('protocol_session', identity(9)),
-        protocolOperationId: createFailureIdentity('protocol_operation', identity(10)),
+        protocolOperationId: createFailureIdentity('protocol_operation', 10n),
       }),
       content: {
         scope: 'directory',
@@ -203,7 +203,7 @@ describe('bounded authenticated selection discovery', () => {
       requestKind: 'list_children',
       correlation: Object.freeze({
         protocolSessionId: createFailureIdentity('protocol_session', identity(9)),
-        protocolOperationId: createFailureIdentity('protocol_operation', identity(11)),
+        protocolOperationId: createFailureIdentity('protocol_operation', 11n),
       }),
       content: {
         scope: 'directory',
