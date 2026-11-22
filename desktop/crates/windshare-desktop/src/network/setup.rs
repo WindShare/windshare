@@ -3,7 +3,7 @@ use crate::{
     desktop::Desktop,
     live::Runtime,
     localization::Text,
-    model::{Overlay, ShareSource, SharingSetupTarget},
+    model::{Overlay, Page, SettingsSection, ShareSource, SharingSetupTarget},
 };
 use gpui::{App, Context, Window, prelude::*};
 use windshare_host::{RelayOperation, SavedRelay, Setup, ShareAuthorization};
@@ -145,6 +145,7 @@ impl Desktop {
             cx.notify();
             return;
         }
+        self.network_ui.clear_transient();
         let dialog = self.open_setup_dialog(
             SharingSetupTarget::Defaults,
             SetupPage::Relay(RelayOperation::AuthorizeDevice),
@@ -334,6 +335,44 @@ impl Desktop {
             && !verification_url.is_empty()
         {
             cx.open_url(verification_url);
+        }
+    }
+
+    pub(crate) fn handoff_setup_dialog(
+        &mut self,
+        target: SharingSetupTarget,
+        dialog: &gpui::Entity<SetupDialog>,
+        cx: &App,
+    ) {
+        if !matches!(target, SharingSetupTarget::Defaults) {
+            return;
+        }
+        let handoff = dialog.read(cx).in_flight_handoff();
+        if handoff.is_empty() {
+            return;
+        }
+        let settings_visible =
+            self.page == Page::Settings && self.settings_section == SettingsSection::Network;
+        // Dismissing a global setup modal does not cancel the host workflow; hand
+        // ownership to the settings page so it surfaces the settled outcome once
+        // the inline progress banner exits.
+        tracing::info!(
+            event = "desktop.setup_handoff_to_settings",
+            session = std::process::id(),
+            setup_id = ?handoff.in_flight_id,
+            has_remove_toast = handoff.remove_toast_id.is_some(),
+            settings_visible,
+        );
+        self.network_ui
+            .adopt_dialog_handoff(handoff, settings_visible);
+    }
+
+    pub(crate) fn observe_active_network_setup(&mut self, cx: &App) {
+        if self.page != Page::Settings || self.settings_section != SettingsSection::Network {
+            return;
+        }
+        if let Runtime::Native(session) = &self.runtime {
+            self.network_ui.observe_active_setup(session.model(cx));
         }
     }
 }

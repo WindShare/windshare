@@ -250,6 +250,9 @@ impl Desktop {
         let Some(frame) = self.overlays.pop() else {
             return;
         };
+        if let Overlay::SharingSetup(target, dialog) = &frame.content {
+            self.handoff_setup_dialog(*target, dialog, cx);
+        }
         let fallback = self
             .overlays
             .last()
@@ -284,6 +287,7 @@ impl Desktop {
         self.overlays.clear();
         self.network_ui.clear_transient();
         self.account_ui.clear();
+        self.observe_active_network_setup(cx);
         self.link_disclosure = LinkDisclosure::Summary;
         self.focus_task(window, cx);
     }
@@ -320,6 +324,7 @@ impl Desktop {
         if self.page == Page::Settings {
             self.overlays.clear();
             self.refresh_settings_section(cx);
+            self.observe_active_network_setup(cx);
         } else {
             self.navigate(Page::Settings, window, cx);
         }

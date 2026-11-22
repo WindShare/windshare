@@ -359,4 +359,11 @@ impl SetupDialog {
         self.access_key
             .update(cx, |input, cx| input.set_value("", cx));
     }
+
+    pub fn in_flight_handoff(&self) -> super::SetupDialogHandoff {
+        super::SetupDialogHandoff {
+            in_flight_id: self.in_flight_id.clone(),
+            remove_toast_id: self.remove_toast_id.clone(),
+        }
+    }
 }

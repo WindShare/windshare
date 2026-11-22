@@ -253,13 +253,7 @@ impl Desktop {
             .overlays
             .last()
             .is_some_and(|frame| matches!(frame.content, Overlay::SharingSetup(..)));
-        if setup_modal_open || !setup.unfinished() {
-            return None;
-        }
-        let is_global = setup
-            .context()
-            .is_some_and(|ctx| ctx.operation_id.is_empty());
-        if !is_global && !setup.requires_cancellation() {
+        if setup_modal_open || super::settings_visible_setup(setup).is_none() {
             return None;
         }
         Some(
