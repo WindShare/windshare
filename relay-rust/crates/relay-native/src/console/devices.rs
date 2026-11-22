@@ -135,7 +135,7 @@ impl Console {
                         tracing::info!(event="enrollment_installed",enrollment_id=%text_id(&eid),credential_id=%text_id(&credential));
                     }
                 }
-                json!({"ok":true,"managed_turn":[]})
+                json!({"ok":true})
             }
             "/api/enrollments/cancel" => {
                 if let Some(id) = e.cancel(claimant).map_err(refusal)? {

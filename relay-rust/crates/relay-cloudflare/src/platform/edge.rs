@@ -13,9 +13,6 @@ pub async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .var("CONSOLE_ORIGIN")
         .ok()
         .map(|value| value.to_string());
-    if access::turn_endpoint(&req.path()) {
-        return access::fetch(&env, req).await;
-    }
     if console.as_deref() == Some(origin.as_str()) && !req.path().starts_with("/internal/") {
         let path = req.path();
         if !path.starts_with("/api/") {

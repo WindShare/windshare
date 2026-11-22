@@ -4,7 +4,6 @@ import { request, RequestError } from '../ui/request'
 
 export interface Capabilities {
   revocation_stops_shares?: boolean
-  managed_turn?: boolean
   password_change?: boolean
 }
 export interface Enrollment {
@@ -21,13 +20,6 @@ export interface Credential {
 }
 export interface CredentialPage { credentials: Credential[]; next_cursor: string | null }
 export interface ServiceCredential { url: string; access_key: string }
-export interface TurnStatus {
-  ready: boolean
-  enabled: boolean
-  analytics_available: boolean
-  leases: Partial<Record<'active' | 'revocation_pending' | 'revoked' | 'expired', number>>
-}
-export interface TurnUsage { first_date: string; last_date: string; ingress_bytes: number; egress_bytes: number }
 
 const messages = {
   invalid_password: message(relayCopy, 'invalidPassword'),
@@ -37,8 +29,6 @@ const messages = {
   already_completed: message(relayCopy, 'alreadyCompleted'),
   credential_capacity: message(relayCopy, 'credentialLimit'),
   invalid_name: message(relayCopy, 'invalidName'),
-  analytics_unavailable: message(relayCopy, 'analyticsUnavailable'),
-  turn_not_ready: message(relayCopy, 'turnNotReady'),
 }
 
 export class RelayClient {
@@ -79,7 +69,4 @@ export class RelayClient {
   )
   createKey = async (name: string) => (await this.call<{ configuration: ServiceCredential }>('credentials', { name })).configuration
   revoke = (id: string, stop: boolean) => this.call('credentials/revoke', { credential_id: id, terminate_shares: stop })
-  turnStatus = (signal: AbortSignal) => this.call<TurnStatus>('turn/status', undefined, signal)
-  setTurn = (enabled: boolean) => this.call<TurnStatus>('turn/settings', { enabled })
-  turnUsage = () => this.call<TurnUsage>('turn/usage')
 }

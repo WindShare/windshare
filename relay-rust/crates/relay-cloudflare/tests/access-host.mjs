@@ -3,8 +3,6 @@ import { DurableObject } from 'cloudflare:workers';
 import { AccessObject as RustAccess, ShareRelayObject as RustShare } from '../build/index.js';
 export { default } from '../entry.mjs';
 
-const TURN_HISTORY_RETENTION_MS = 3_600_000;
-
 export class AccessObject extends DurableObject {
   constructor(ctx, env) { super(ctx, env); this.rust = new RustAccess(ctx, env); this.fetches = 0; }
   async fetch(request) {
@@ -20,16 +18,6 @@ export class AccessObject extends DurableObject {
       await this.ctx.storage.deleteAlarm();
       return this.rust.alarm();
     }
-    if (path === '/__test/turn-retry') {
-      for (const row of this.ctx.storage.sql.exec("SELECT key,value FROM access_entries WHERE key LIKE 'turn_lease:%'")) {
-        const lease = JSON.parse(row.value);
-        if (lease.state.state === 'revocation_pending') {
-          lease.state.next_attempt = 0;
-          this.ctx.storage.sql.exec('UPDATE access_entries SET value=? WHERE key=?', JSON.stringify(lease), row.key);
-        }
-      }
-      return new Response('ok');
-    }
     if (path === '/__test/revoked-credentials' && request.method === 'POST') {
       const entries = await request.json();
       this.ctx.storage.transactionSync(() => {
@@ -39,34 +27,8 @@ export class AccessObject extends DurableObject {
       });
       return new Response('ok');
     }
-    if (path === '/__test/turn-leases') {
-      if (request.method === 'POST') {
-        const leases = await request.json();
-        this.ctx.storage.transactionSync(() => {
-          for (const lease of leases) {
-            this.ctx.storage.sql.exec(
-              'INSERT INTO access_entries(key,value,expires) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,expires=excluded.expires',
-              'turn_lease:' + lease.id, JSON.stringify(lease), lease.expires_at + TURN_HISTORY_RETENTION_MS);
-          }
-        });
-      }
-      return Response.json([...this.ctx.storage.sql.exec(
-        "SELECT value FROM access_entries WHERE key GLOB 'turn_lease:*' ORDER BY key")]
-        .map(row => JSON.parse(row.value)));
-    }
     this.fetches++;
-    const response = await this.rust.fetch(request);
-    if (this.env.TURN_TEST_LIFETIME_MS && response.status === 201 &&
-        (path === '/api/turn/issue' || path === '/api/turn/renew')) {
-      const grant = await response.json();
-      grant.expires_at = Date.now() + Number(this.env.TURN_TEST_LIFETIME_MS);
-      // The local edge must expose the same server clock used to shorten the
-      // credential lifetime; native clients never trust their own wall clock.
-      const headers = new Headers(response.headers);
-      headers.set('Date', new Date().toUTCString());
-      return Response.json(grant, { status: response.status, headers });
-    }
-    return response;
+    return this.rust.fetch(request);
   }
   // The test advances delivery explicitly, without wall-clock sleeps.
   async alarm() {}

@@ -25,13 +25,6 @@
 .mobile-label { display: none; }
 .inventory .empty, .inventory .pending { border-top: 1px solid var(--line); }
 .pending { justify-content: center; gap: .75rem; padding: 1.75rem 1rem; }
-.turn-sections { display: grid; grid-template-columns: 1fr 1fr; gap: 1.1rem; }
-.turn-service { grid-column: 1/-1; }
-.turn-service .service-controls { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem; }
-.service-title { display: flex; align-items: center; flex-wrap: wrap; gap: .7rem; }
-.service-controls p { max-width: 60ch; margin-top: .55rem; }
-.turn-sections > :nth-child(2):last-child { grid-column: 1/-1; }
-.turn-view .metrics { grid-template-columns: repeat(auto-fit, minmax(min(10rem, 100%), 1fr)); }
 .copy-fields { display: grid; gap: .95rem; }
 .copy-field { display: grid; gap: .4rem; min-width: 0; }
 .copy-field-head { display: flex; align-items: center; justify-content: space-between; gap: .6rem; }
@@ -39,7 +32,6 @@
 .copy-button { min-height: 2rem; padding: .28rem .68rem; border-radius: .48rem; font-size: .82rem; }
 .copy-field-value { display: block; padding: .65rem .8rem; border: 1px solid var(--line); border-radius: .55rem; background: var(--surface-hover); color: var(--ink); font-size: .86rem; line-height: 1.5; overflow-wrap: anywhere; user-select: all; }
 @media (max-width: 46rem) {
-  .turn-sections { grid-template-columns: 1fr; }
   .pairing-form { flex: 1 1 100%; }
   .pairing-form .code-input { flex: 1; }
 }

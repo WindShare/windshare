@@ -4,8 +4,6 @@
 
 准备好 Cloudflare 账号，以及你自己的 WindShare GitHub 仓库（通常是 Fork 后的仓库）。使用自定义域名时，该域名需要已接入同一个 Cloudflare 账户，并显示为 **有效（Active）**。
 
-已有部署只需补 TURN 权限时，在 API 令牌列表中编辑原来的 `WindShare GitHub Actions`，按[权限表](#2-选择权限)添加 **Cloudflare Calls → 编辑**，保留原账户和区域范围并保存，再重跑部署。编辑权限不改变令牌值，无需重新创建令牌或更新 GitHub Secret。
-
 ## 1. 打开创建页面
 
 1. 登录 [Cloudflare 的用户 API 令牌页面](https://dash.cloudflare.com/profile/api-tokens)。也可以从右上角头像进入 **我的个人资料（My Profile）→ API 令牌（API Tokens）**。
@@ -22,18 +20,13 @@
 | 什么时候需要 | 资源 | 权限 | 权限级别 |
 |---|---|---|---|
 | 所有人都需要 | 帐户（Account） | Workers | 管理员（Admin） |
-| 所有人都需要 | 帐户（Account） | Cloudflare Calls | 编辑（Edit；API 权限名为 Calls Write） |
 | 使用自己的域名时加上 | 区域（Zone） | Workers 路由（Workers Routes） | 编辑（Edit / Write） |
 | 使用自己的域名时加上 | 区域（Zone） | 区域（Zone） | 读取（Read） |
 
-- 使用 Cloudflare 提供的 `xxx.workers.dev` 地址：填写前两行。
-- 使用自己的地址，例如 `relay.example.com`：点击 **添加更多（Add more）**，补齐后两行，共四行。
+- 使用 Cloudflare 提供的 `xxx.workers.dev` 地址：只填写第一行。
+- 使用自己的地址，例如 `relay.example.com`：点击 **添加更多（Add more）**，补齐后两行，共三行。
 
 首次部署需要创建 Worker，因此第一行选 **Workers → 管理员**；`Workers 脚本（Workers Scripts）→ 编辑` 不等同于这里的创建权限。这个管理员权限覆盖所选账户中的所有 Workers。自定义域名还需要对应区域的路由写入权限，见 [Cloudflare 权限说明](https://developers.cloudflare.com/workers/authorization/workers/)。区域读取权限用于本项目部署前检查域名归属。
-
-Calls Write 用于自动创建和恢复 TURN 密钥。两种部署模式都会启用 TURN 自动调度，Realtime 流量单独计费；本地预算默认不限额，只约束单个 Engine，不是账户消费上限。缺少 Calls 权限时，中转和前端仍会更新，摘要会提示 TURN 配置未完成。补齐权限后重跑即可。
-
-用量查询是可选功能：另建只有 **Account Analytics / Read** 权限的令牌，存为 `CLOUDFLARE_ANALYTICS_API_TOKEN`。不要复用部署令牌。
 
 ## 3. 选择账户和域名范围
 
@@ -60,7 +53,7 @@ Calls Write 用于自动创建和恢复 TURN 密钥。两种部署模式都会�
 2. 核对账户和权限。使用自定义域名时，摘要应类似下面的示意：
 
    ```text
-   你的 Cloudflare 账户 — Workers：管理员，Cloudflare Calls：编辑
+   你的 Cloudflare 账户 — Workers：管理员
      └─ example.com — Workers 路由：编辑，区域：读取
    ```
 
@@ -90,7 +83,7 @@ Calls Write 用于自动创建和恢复 TURN 密钥。两种部署模式都会�
 
 Token 配置完成。回到[部署指南](cloudflare-relay.md#first-deployment)，填写其余 Secrets 和 Variables，然后运行 **Deploy WindShare to Cloudflare**。默认同时部署前端和中转；只需中转时，设置 `CLOUDFLARE_DEPLOYMENT_MODE=relay-only`。
 
-保存 Token 本身不会启动部署。其余设置齐全后，在仓库的 **Actions → Deploy WindShare to Cloudflare → Run workflow** 中选择 `main`，再点击 **Run workflow**。绿色勾号只表示部署流程成功；还要在运行摘要中看到 **Managed TURN is available automatically when enabled in the console**，并在控制台确认 TURN 已启用。若出现 **TURN setup incomplete**，按错误提示修复后重跑。
+保存 Token 本身不会启动部署。其余设置齐全后，在仓库的 **Actions → Deploy private relay → Run workflow** 中选择 `main`，再点击 **Run workflow**。
 
 ## 遇到问题时
 

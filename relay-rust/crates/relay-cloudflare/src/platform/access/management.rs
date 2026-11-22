@@ -28,10 +28,9 @@ impl AccessObject {
         now: u64,
     ) -> Result<Response> {
         match (req.method(), req.path().as_str()) {
-            (Method::Get, "/api/session") => reply(
-                &json!({"authenticated":true,"capabilities":{"managed_turn":true}}),
-                200,
-            ),
+            (Method::Get, "/api/session") => {
+                reply(&json!({"authenticated":true,"capabilities":{}}), 200)
+            }
             (Method::Post, "/api/logout") => Self::logout(db, req),
             (Method::Get, "/api/credentials") => {
                 let credentials: Vec<_> = db
@@ -71,7 +70,6 @@ impl AccessObject {
                 reply(&json!({"enrollments":enrollments}), 200)
             }
             (Method::Post, "/api/enrollments/approve") => Self::approve(db, body, now),
-            _ if req.path().starts_with("/api/turn/") => self.manage_turn(db, req, body, now),
             _ => reply(&json!({"error":"not_found"}), 404),
         }
     }
@@ -138,7 +136,6 @@ impl AccessObject {
         };
         credential.revoke(now);
         db.save_credential(&credential)?;
-        Self::withdraw_turn(db, Some(&text_id(&id)), now)?;
         let terminate = body
             .get("terminate_shares")
             .and_then(Value::as_bool)

@@ -123,9 +123,7 @@ jobs:
         run: npm run test:access
       - name: Deploy selected service mode
         env:
-          # Deployment token requires Account / Calls / Write in addition to Workers permissions.
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ANALYTICS_API_TOKEN: ${{ secrets.CLOUDFLARE_ANALYTICS_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_WORKER_NAME: ${{ secrets.CLOUDFLARE_WORKER_NAME }}
           CLOUDFLARE_RELAY_DOMAIN: ${{ secrets.CLOUDFLARE_RELAY_DOMAIN }}
