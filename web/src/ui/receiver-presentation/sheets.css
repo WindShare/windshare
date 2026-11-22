@@ -132,12 +132,13 @@
 }
 .detail-sheet .task-detail-list:empty { display: none; }
 .detail-sheet .task-detail-list li + li { margin-top: 4px; }
-.detail-sheet .task-removal p {
+.detail-sheet :is(.task-removal, .task-handoff-help) p {
   margin: 4px 0 12px;
   color: var(--receiver-muted);
   font-size: .8125rem;
   line-height: 1.55;
 }
+.detail-sheet .task-handoff-help p { margin-bottom: 0; }
 .detail-sheet .task-removal .task-actions { gap: 8px; }
 
 /* Connection & encryption inspector */

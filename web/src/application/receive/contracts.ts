@@ -171,6 +171,7 @@ export type RetainedReceiveActionResult =
 export interface RetainedReceiveOperation {
   readonly display?: ReceiveOperationDisplay
   readonly shareInstance?: string
+  readonly selectionDigest?: string
   readonly operationId: string
   readonly receiveIntentDigest: string
   readonly lifecycleGeneration: bigint

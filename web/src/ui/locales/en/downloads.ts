@@ -18,6 +18,8 @@ export const downloads = {
   elapsed: 'Elapsed',
   created: 'Created',
   transferDetails: 'Transfer details',
+  handoffHelp: 'Didn’t save or opened a download manager?',
+  handoffHelpHint: 'End-to-end encrypted files are decrypted only inside this browser and cannot be fetched by external download managers (such as 1DM or ADM). Switch back to the browser’s built-in downloader, or open this link in Chrome, Edge, or Safari.',
   remove: 'Remove task or retained data',
   removeHint: 'Removing retained data does not remove files already exported to your device.',
   keepTask: 'Keep task',

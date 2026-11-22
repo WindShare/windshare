@@ -27,8 +27,8 @@ function activeConsequence(action: LifecycleActionPresentation, planKind: string
   if (action.kind === 'delete' || action.kind === 'discard') {
     return t.deleteHint
   }
-  return action.kind === 'redownload' && action.destructive
-    ? t.restartHint : null
+  if (action.kind === 'redownload') return action.destructive ? t.restartHint : t.saveAgainHint
+  return null
 }
 
 export function retainedTaskAction(
@@ -122,7 +122,7 @@ function retainedConsequence(operation: RetainedReceiveOperation, action: Retain
         ? t.retryCleanupHint
         : t.deleteRetainedHint
     case 'redownload':
-      return operation.recoverySummary === undefined ? null
+      return operation.recoverySummary === undefined ? t.saveAgainHint
         : t.restartIncompleteHint
     default: return null
   }

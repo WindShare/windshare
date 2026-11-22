@@ -83,7 +83,7 @@ export const lifecycle: typeof English = {
   cleanupStaging: '重试清理暂存数据',
   discardStaging: '丢弃未完成的暂存数据',
   restartIncomplete: '重新下载未完成的文件',
-  downloadAgain: '再次下载',
+  downloadAgain: '重新保存',
   changeLocation: '更改保存位置',
   resumeAction: '继续',
   retryDownload: '重试下载',

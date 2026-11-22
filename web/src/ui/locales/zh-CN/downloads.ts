@@ -18,6 +18,8 @@ export const downloads: typeof English = {
   elapsed: '耗时',
   created: '创建时间',
   transferDetails: '传输详情',
+  handoffHelp: '没保存成功或唤起了外部下载器？',
+  handoffHelpHint: '端到端加密文件仅保存在浏览器本地，无法使用外部下载器（1DM、ADM 等）或系统下载器下载。请关闭外部下载器接管、切回浏览器内置下载，或改用 Chrome、Edge、Safari 等主流浏览器打开。',
   remove: '移除任务或保留的数据',
   removeHint: '移除保留的数据不会删除已导出到设备的文件。',
   keepTask: '保留任务',

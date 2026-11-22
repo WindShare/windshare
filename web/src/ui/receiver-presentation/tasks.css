@@ -341,6 +341,35 @@
   font-size: .8125rem;
   font-weight: 500;
 }
+.receiver-shell .handoff-help {
+  margin: -4px 0 0;
+  padding: 0 4px;
+  color: var(--receiver-subtle);
+  font-size: .8125rem;
+  line-height: 1.55;
+}
+.receiver-shell .handoff-help summary {
+  cursor: pointer;
+  color: var(--receiver-subtle);
+  font-weight: 500;
+}
+.receiver-shell .handoff-help summary:hover {
+  color: var(--receiver-muted);
+}
+.receiver-shell .handoff-help[open] {
+  margin-top: 0;
+  padding: 12px 16px;
+  background: var(--receiver-surface-subtle);
+  border: 1px solid var(--receiver-rule-soft);
+  border-radius: 12px;
+}
+.receiver-shell .handoff-help[open] summary {
+  color: var(--receiver-ink);
+}
+.receiver-shell .handoff-help p {
+  margin: 8px 0 0;
+  color: var(--receiver-muted);
+}
 .receiver-shell .new-operation {
   padding: 14px 18px;
   background: var(--receiver-paper);

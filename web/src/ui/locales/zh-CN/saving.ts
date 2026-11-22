@@ -67,6 +67,7 @@ export const saving: typeof English = {
   openBrowser: '请在浏览器中打开以保存文件',
   wechat: '微信',
   continueObject: label => `继续下载${label}`,
+  readyToSaveObject: label => `${label} 已可保存`,
   preparing: title => `准备中 · ${title}`,
   browserMenu: browser => `请通过${browser}菜单，在 Safari、Chrome 或系统浏览器中打开此链接。`,
 }

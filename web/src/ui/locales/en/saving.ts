@@ -65,6 +65,7 @@ export const saving = {
   openBrowser: 'Open in your browser to save files',
   wechat: 'WeChat',
   continueObject: (label: string) => `Continue ${label}`,
+  readyToSaveObject: (label: string) => `${label} is ready to save`,
   preparing: (title: string) => `Preparing · ${title}`,
   browserMenu: (browser: string) => `Use the ${browser} menu to open this same link in Safari, Chrome, or your system browser.`,
 }

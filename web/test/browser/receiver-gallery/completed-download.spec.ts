@@ -21,7 +21,7 @@ test('completed results export retained content and keep a separate new receive 
       const before = await galleryEvidence(page)
       const freshReceive = page.getByRole('button', { name: 'Download from sender again', exact: true })
       if (kind === 'workspace') {
-        const again = result.getByRole('button', { name: 'Download again', exact: true })
+        const again = result.getByRole('button', { name: 'Save again', exact: true })
         await expect(again).toBeEnabled()
         await again.click()
         expect((await galleryEvidence(page)).intents.slice(before.intents.length))
@@ -29,7 +29,7 @@ test('completed results export retained content and keep a separate new receive 
         await expect(freshReceive).toBeHidden()
         await page.locator('summary').filter({ hasText: 'Download from sender again' }).click()
       } else {
-        await expect(result.getByRole('button', { name: 'Download again', exact: true })).toHaveCount(0)
+        await expect(result.getByRole('button', { name: 'Save again', exact: true })).toHaveCount(0)
       }
       // Routes without a retained artifact still open the next receive in one click.
       await expect(freshReceive).toBeEnabled()

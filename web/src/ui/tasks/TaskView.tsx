@@ -16,6 +16,8 @@ const STAGE_ICONS: Readonly<Record<TaskPresentation['stage'], ReceiverIconName>>
 
 // Routine controls speak for themselves; avoid dumping explanatory prose beneath them.
 const SELF_EXPLANATORY_ACTIONS = new Set(['pause', 'continue', 'save'])
+// Local re-save explains itself inside TaskDetails while keeping compact TaskCards uncluttered.
+const DETAILS_ONLY_CONSEQUENCE_ACTIONS = new Set(['redownload'])
 
 export interface TaskViewActions {
   readonly perform: (action: TaskAction) => void
@@ -38,7 +40,8 @@ export function TaskActionButton({ action, perform, primary = false, busy = fals
     else perform(action)
   }
   const showConsequence = !action.destructive && action.consequence !== null &&
-    !SELF_EXPLANATORY_ACTIONS.has(action.target.action) && (detailed || action.target.action !== 'pause')
+    !SELF_EXPLANATORY_ACTIONS.has(action.target.action) &&
+    (detailed || !DETAILS_ONLY_CONSEQUENCE_ACTIONS.has(action.target.action))
   const buttonClass = action.destructive ? 'danger-action' : ''
   return <div className="task-action">
     <button ref={actionButton} type="button" className={primary ? 'primary-action' : buttonClass}
@@ -168,7 +171,11 @@ export function TaskDetails({ task, actions, busy = false, children }: {
     </ul>}
     <CompatibleNameRepairPanel repair={task.fidelity} busy={busy} catchUp={() => actions.catchUp(task.operationId)} />
     {children}
-    {(technicalLines.length > 0 || task.destructiveActions.length > 0) && <div className="detail-disclosures">
+    {(task.stage === 'handed-to-browser' || technicalLines.length > 0 || task.destructiveActions.length > 0) && <div className="detail-disclosures">
+      {task.stage === 'handed-to-browser' && <details className="detail-disclosure task-handoff-help">
+        <summary>{t.handoffHelp}</summary>
+        <p>{t.handoffHelpHint}</p>
+      </details>}
       {technicalLines.length > 0 && <details className="detail-disclosure">
         <summary>{t.transferDetails}</summary>
         <ul className="task-detail-list">{technicalLines.map((line, index) => <li key={`${index}-${line}`}>{line}</li>)}</ul>

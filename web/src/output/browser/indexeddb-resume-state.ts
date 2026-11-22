@@ -175,8 +175,11 @@ export class IndexedDbReceiveResumeSource implements ReceiveOperationResumeSourc
         operation.receiveIntentDigest !== lifecycle.receiveIntentDigest) {
       throw new TypeError('Inventory identity does not belong to its receive lifecycle')
     }
-    return Object.freeze({ shareInstance: operation.receiveIntent.selection.shareInstance,
-      ...(operation.display === undefined ? {} : { display: operation.display }) })
+    return Object.freeze({
+      shareInstance: operation.receiveIntent.selection.shareInstance,
+      selectionDigest: operation.receiveIntent.selection.digest,
+      ...(operation.display === undefined ? {} : { display: operation.display }),
+    })
   }
 
   async readProgressiveRequirement(lifecycle: ReceiveLifecycleState) {

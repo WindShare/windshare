@@ -245,6 +245,7 @@ export async function listBrowserRetainedOperations(
           operationId: descriptor.operationId,
           ...(descriptor.display === undefined ? {} : { display: descriptor.display }),
           ...(descriptor.shareInstance === undefined ? {} : { shareInstance: descriptor.shareInstance }),
+          ...(descriptor.selectionDigest === undefined ? {} : { selectionDigest: descriptor.selectionDigest }),
           receiveIntentDigest: descriptor.receiveIntentDigest,
           lifecycleGeneration: descriptor.lifecycleGeneration,
           lifecycle: descriptor.lifecycle,

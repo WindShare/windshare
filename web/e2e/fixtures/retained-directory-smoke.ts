@@ -35,7 +35,7 @@ export async function assertRetainedDirectoryDownload(
   })
   const retainedTask = downloads.locator(`[data-operation-id="${operationId}"]`)
   await expect(retainedTask).toBeVisible()
-  const retry = retainedTask.getByRole('button', { name: 'Download again', exact: true })
+  const retry = retainedTask.getByRole('button', { name: 'Save again', exact: true })
   await expect(retry).toBeEnabled()
 
   await page.context().setOffline(true)
@@ -50,12 +50,15 @@ export async function assertRetainedDirectoryDownload(
     await page.context().setOffline(false)
   }
 
-  // Reopening the original capability must reconnect this same portal document.
+  // Reopening the original capability must reconnect this same portal document
+  // and surface the complete retained artifact instead of prompting a duplicate download.
   await page.keyboard.press('Escape')
   await expect(downloads).toBeHidden()
   const timeOrigin = await page.evaluate(() => performance.timeOrigin)
   expect(await page.goto(navigationUrl)).toBeNull()
-  await expect(action, 'Reopening the capability reconnects the existing portal document').toBeEnabled()
+  await expect(activeTask, 'Reopening the capability reconnects the existing portal document')
+    .toHaveAttribute('data-operation-id', operationId)
+  await expect(activeTask.getByRole('button', { name: 'Save again', exact: true })).toBeEnabled()
   await expect.poll(() => new URL(page.url()).hash).toBe('')
   expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin)
   await page.getByRole('button', { name: /^(?:Downloads|下载记录)/u }).click()

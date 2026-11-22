@@ -42,7 +42,7 @@ describe('retained partial ZIP results', () => {
       }))
       expect(task.completeness).toBe('partial')
       expect(task.tone).toBe('warning')
-      expect(task.primaryAction?.label).toBe('Download again')
+      expect(task.primaryAction?.label).toBe('Save again')
       const card = renderToString(<TaskCard task={task} actions={actions} onDetails={() => undefined} />)
       const details = renderToString(<TaskDetails task={task} actions={actions} />)
       expect(card).toContain('Partial download')

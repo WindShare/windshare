@@ -83,7 +83,7 @@ export const lifecycle = {
   cleanupStaging: 'Retry staging cleanup',
   discardStaging: 'Discard incomplete browser data',
   restartIncomplete: 'Restart incomplete files',
-  downloadAgain: 'Download again',
+  downloadAgain: 'Save again',
   changeLocation: 'Change save location',
   resumeAction: 'Continue',
   retryDownload: 'Retry download',

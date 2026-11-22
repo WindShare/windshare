@@ -7,6 +7,7 @@ export interface ReceiveOperationResumeDescriptor {
   readonly browserDelivery?: import('../model/browser-delivery').BrowserDeliverySummary
   readonly display?: import('../model/operation-display').ReceiveOperationDisplay
   readonly shareInstance?: string
+  readonly selectionDigest?: string
   readonly schemaVersion: typeof RECEIVE_OPERATION_RESUME_DESCRIPTOR_VERSION
   readonly operationId: string
   readonly receiveIntentDigest: string

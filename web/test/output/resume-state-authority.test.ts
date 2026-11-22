@@ -184,6 +184,25 @@ describe('receive operation resume authority', () => {
     expect(await authority.discard(second.operations[0]!).catch((error) => error))
       .toBeInstanceOf(DOMException)
   })
+
+  it('projects selectionDigest alongside shareInstance from operation identity', async () => {
+    const lifecycle = resumableReceive()
+    const shareInstance = identity(16, 40)
+    const selectionDigest = identity(32, 41)
+    const authority = new ReceiveOperationResumeAuthority({
+      source: {
+        listLifecycleStates: async () => [lifecycle],
+        readOperationIdentity: async () => Object.freeze({ shareInstance, selectionDigest }),
+      },
+      mutations: mutations(),
+    })
+
+    const inventory = await authority.listResumeState()
+    expect(inventory.operations[0]?.descriptor).toMatchObject({
+      shareInstance,
+      selectionDigest,
+    })
+  })
 })
 
 function mutations(overrides: Partial<ReceiveOperationMutationPort<string>> = {}):

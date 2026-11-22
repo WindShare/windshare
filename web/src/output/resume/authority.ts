@@ -18,6 +18,7 @@ export interface ReceiveOperationResumeSource {
   readOperationIdentity?(lifecycle: ReceiveLifecycleState): Promise<Readonly<{
     display?: import('../model/operation-display').ReceiveOperationDisplay
     shareInstance: string
+    selectionDigest?: string
   }> | undefined>
   readProgressiveRequirement?(lifecycle: ReceiveLifecycleState): Promise<import('./progressive-checkpoint').ProgressiveZipRecoveryRequirement | undefined>
   readDirectZipRequirement?(lifecycle: ReceiveLifecycleState): Promise<import('./direct-zip-checkpoint').DirectZipRecoveryRequirement | undefined>

@@ -4,12 +4,13 @@ import { useRef, useState, useSyncExternalStore } from 'react'
 import type { ReceiverController } from '../controller'
 import { taskActions } from '../experience/task-actions'
 import { downloadScopeLabel } from '../experience/share-presentation'
+import { resolveWorkspaceTaskLayout } from '../experience/retained-match'
 import { presentNewReceiveOperation } from '../lifecycle-presentation'
 import { presentSavingActions } from '../saving'
 import { SavingControls } from '../saving/SavingControls'
 import { InAppBrowserHint } from '../saving/InAppBrowserHint'
 import { DetailSheet } from '../controls/DetailSheet'
-import { TaskCard, TaskDetails } from '../tasks/TaskView'
+import { TaskCard, TaskDetails, type TaskViewActions } from '../tasks/TaskView'
 import { TaskDownloads, TaskSourceDetails } from '../experience/TaskDownloads'
 import { isReceiveOutputDelivered } from '../../application/receive/completion'
 
@@ -17,11 +18,13 @@ const noSubscription = () => () => undefined
 
 type TaskSnapshot = ReturnType<ReceiverController['presentation']['task']['getSnapshot']>
 
-function isSingleFileResult(snapshot: TaskSnapshot): boolean {
-  const { share, current, output } = snapshot
-  return share !== null && share.kind !== 'browser' &&
-    (current?.stage === 'saved' || current?.stage === 'handed-to-browser') &&
-    output.activationPresentation === null
+function retainedBannerLabel(
+  banner: NonNullable<ReturnType<typeof resolveWorkspaceTaskLayout>['banner']>,
+  t: typeof receiverCopy.en.saving,
+): string {
+  return banner.kind === 'ready-to-save'
+    ? t.readyToSaveObject(banner.task.objectLabel)
+    : t.continueObject(banner.task.objectLabel)
 }
 
 function renderSavingControls(controller: ReceiverController, snapshot: TaskSnapshot, actionLabel: string) {
@@ -56,10 +59,9 @@ export function ReceiverPrimarySaving({ controller }: { readonly controller: Rec
   const source = controller.presentation.task
   const snapshot = useSyncExternalStore(source.subscribe, source.getSnapshot, source.getSnapshot)
   const t = useCopy(receiverCopy).saving
-  const singleResult = isSingleFileResult(snapshot)
-  const additionalReceive = singleResult && snapshot.current !== null && snapshot.current.primaryAction !== null
-  if (!snapshot.hasContent || additionalReceive) return null
-  const actionLabel = singleResult ? t.downloadAgain : downloadScopeLabel(snapshot.share, snapshot.draft, t)
+  const { collapseRemoteSaving, repeatRemoteLabel } = resolveWorkspaceTaskLayout(snapshot)
+  if (!snapshot.hasContent || collapseRemoteSaving) return null
+  const actionLabel = repeatRemoteLabel ? t.downloadAgain : downloadScopeLabel(snapshot.share, snapshot.draft, t)
   return renderSavingControls(controller, snapshot, actionLabel)
 }
 
@@ -69,39 +71,59 @@ export function ReceiverActivity({ controller, openDownloads }: {
 }) {
   const source = controller.presentation.task
   const snapshot = useSyncExternalStore(source.subscribe, source.getSnapshot, source.getSnapshot)
-  const { current, tasks, share, hasContent } = snapshot
-  const [details, setDetails] = useState(false)
+  const { current, share, hasContent } = snapshot
+  const [detailsOperationId, setDetailsOperationId] = useState<string | null>(null)
+  const [handoffHelpOpenId, setHandoffHelpOpenId] = useState<string | null>(null)
   const invoker = useRef<HTMLButtonElement>(null)
-  const actions = taskActions(controller, snapshot)
-  const t = useCopy(receiverCopy).saving
-  const closeDetails = () => { controller.recordExperienceIntent('close-details'); setDetails(false) }
-  const singleResult = isSingleFileResult(snapshot)
-  const actionLabel = singleResult ? t.downloadAgain : downloadScopeLabel(share, snapshot.draft, t)
+  const copy = useCopy(receiverCopy)
+  const t = copy.saving
+  const { primaryTask, collapseRemoteSaving, repeatRemoteLabel, banner } = resolveWorkspaceTaskLayout(snapshot)
+  const details = primaryTask !== null && detailsOperationId === primaryTask.operationId
+  const handoffHelpOpen = primaryTask !== null && handoffHelpOpenId === primaryTask.operationId
+  const baseActions = taskActions(controller, snapshot)
+  const actions: TaskViewActions = {
+    ...baseActions,
+    perform: action => {
+      // A repeated handoff click strongly indicates the first browser save was blocked or missed.
+      if (action.disabledReason === null &&
+          primaryTask?.stage === 'handed-to-browser' &&
+          action.target.action === 'redownload') {
+        setHandoffHelpOpenId(primaryTask.operationId)
+      }
+      baseActions.perform(action)
+    },
+  }
+  const closeDetails = () => { controller.recordExperienceIntent('close-details'); setDetailsOperationId(null) }
+  const actionLabel = repeatRemoteLabel ? t.downloadAgain : downloadScopeLabel(share, snapshot.draft, t)
   const delivered = isReceiveOutputDelivered(snapshot.output.lifecycle)
   const newOperation = delivered ? null : presentNewReceiveOperation({ plan: snapshot.output.plan, lifecycle: snapshot.output.lifecycle }, snapshot.output.language)
-  const matching = current === null && share !== null ? tasks.find(task => snapshot.retained.operations.some(operation =>
-    operation.operationId === task.operationId && operation.shareInstance === share.shareInstance && task.primaryAction !== null)) : undefined
-  const additionalReceive = singleResult && current !== null && current.primaryAction !== null
+  const bannerLabel = banner === null ? null : retainedBannerLabel(banner, t)
   return <>
     {hasContent && <InAppBrowserHint />}
-    {matching !== undefined && <div className="continuation-suggestion">
-      <span>{t.continueObject(matching.objectLabel)}</span>
-      <button type="button" onClick={() => { if (matching.primaryAction !== null) actions.perform(matching.primaryAction) }}>{matching.primaryAction?.label}</button>
+    {banner !== null && <div className="continuation-suggestion">
+      <span>{bannerLabel}</span>
+      <button type="button" onClick={() => { if (banner.task.primaryAction !== null) actions.perform(banner.task.primaryAction) }}>{banner.task.primaryAction?.label}</button>
     </div>}
-    {current !== null && <TaskCard task={current} actions={actions} busy={snapshot.retained.pending !== null} onDetails={element => {
-      invoker.current = element; controller.recordExperienceIntent('open-task-details'); setDetails(true)
+    {primaryTask !== null && <TaskCard task={primaryTask} actions={actions} busy={snapshot.retained.pending !== null} onDetails={element => {
+      invoker.current = element; controller.recordExperienceIntent('open-task-details'); setDetailsOperationId(primaryTask.operationId)
     }} />}
-    {hasContent && additionalReceive && <details className="new-operation">
+    {primaryTask?.stage === 'handed-to-browser' && <details className="handoff-help"
+      open={handoffHelpOpen}
+      onToggle={event => setHandoffHelpOpenId(event.currentTarget.open ? primaryTask.operationId : null)}>
+      <summary>{copy.downloads.handoffHelp}</summary>
+      <p>{copy.downloads.handoffHelpHint}</p>
+    </details>}
+    {hasContent && collapseRemoteSaving && <details className="new-operation">
       <summary>{actionLabel}</summary>
       {renderSavingControls(controller, snapshot, actionLabel)}
     </details>}
     {snapshot.startAdmission.canReleaseCurrent && <p className="new-operation"><button type="button" onClick={() => controller.startNewReceiveOperation()}>{t.startAnother}</button></p>}
     {newOperation !== null && <details className="new-operation"><summary>{newOperation.title}</summary><p>{newOperation.description}</p>
       <button type="button" onClick={() => controller.startNewReceiveOperation()}>{newOperation.actionLabel}</button></details>}
-    {details && current !== null && <DetailSheet title={current.objectLabel} onClose={closeDetails} returnFocus={invoker}>
-      <TaskDetails task={current} actions={actions} busy={snapshot.retained.pending !== null}>
-        <TaskSourceDetails operationId={current.operationId} snapshot={snapshot} controller={controller} />
-        {controller.canRetainCurrentOperation && <div className="retained-handoff">
+    {details && primaryTask !== null && <DetailSheet title={primaryTask.objectLabel} onClose={closeDetails} returnFocus={invoker}>
+      <TaskDetails task={primaryTask} actions={actions} busy={snapshot.retained.pending !== null}>
+        <TaskSourceDetails operationId={primaryTask.operationId} snapshot={snapshot} controller={controller} />
+        {current !== null && primaryTask.operationId === current.operationId && controller.canRetainCurrentOperation && <div className="retained-handoff">
           <p>{t.keepHint}</p>
           <button type="button" onClick={async () => {
             if (await controller.retainCurrentOperation()) { closeDetails(); openDownloads() }

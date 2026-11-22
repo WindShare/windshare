@@ -49,7 +49,7 @@ export async function assertSourceInvalidationRecovery(page: Page, stack: Direct
   const completedOperation = await task.getAttribute('data-operation-id')
   if (completedOperation === null) throw new Error('The replacement task has no operation identity')
 
-  const repeatResult = task.getByRole('button', { name: 'Download again', exact: true })
+  const repeatResult = task.getByRole('button', { name: 'Save again', exact: true })
   await expect(repeatResult).toBeEnabled()
   // Stop only this sender: a complete local result must not need a new receive,
   // even while the browser and relay remain online.
@@ -66,7 +66,7 @@ export async function assertSourceInvalidationRecovery(page: Page, stack: Direct
   await expect(retained.getByText('Source file changed', { exact: true })).toBeVisible()
   await expect(retained.getByRole('button', { name: /Continue/u })).toHaveCount(0)
   const completed = page.getByRole('dialog').locator(`[data-operation-id="${completedOperation}"]`)
-  const downloadAgain = completed.getByRole('button', { name: 'Download again', exact: true })
+  const downloadAgain = completed.getByRole('button', { name: 'Save again', exact: true })
   await expect(downloadAgain).toBeEnabled()
   // Reuse this existing reload to protect original-file names at retained handoff.
   await page.context().setOffline(true)
