@@ -146,7 +146,7 @@ func TestRunSessionSharesWatcherAndPublishesNetworkChangesImmediately(t *testing
 	clock := func() time.Time { clockMu.Lock(); defer clockMu.Unlock(); return now }
 	advance := func(d time.Duration) { clockMu.Lock(); now = now.Add(d); clockMu.Unlock() }
 
-	source := &countingNetworkSource{state: networkstate.State{Addresses: []networkstate.Address{{IP: netip.MustParseAddr("127.0.0.1"), InterfaceIndex: 1}}}}
+	source := &countingNetworkSource{state: networkstate.State{Addresses: []networkstate.Address{{IP: netip.MustParseAddr("192.0.2.1"), InterfaceIndex: 1}}}}
 	watcher := networkstate.NewWatcher(networkstate.WatcherConfig{Source: source, Debounce: time.Nanosecond, Interval: time.Hour, Now: clock})
 	defer watcher.Close()
 

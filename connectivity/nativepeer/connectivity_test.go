@@ -12,7 +12,6 @@ import (
 	"github.com/windshare/windshare/connectivity/networkstate"
 	"github.com/windshare/windshare/connectivity/pionpeer"
 	"github.com/windshare/windshare/connectivity/reachability"
-	"github.com/windshare/windshare/connectivity/socketauthority"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
@@ -40,9 +39,9 @@ type harness struct {
 
 func newHarness(t *testing.T) *harness {
 	t.Helper()
-	h := &harness{now: time.Unix(100, 0), monitor: &testMonitor{state: networkstate.State{Addresses: []networkstate.Address{{IP: netip.MustParseAddr("127.0.0.1"), InterfaceIndex: 1}}}}}
+	h := &harness{now: time.Unix(100, 0), monitor: &testMonitor{state: networkstate.State{Addresses: []networkstate.Address{{IP: netip.MustParseAddr("192.0.2.1"), InterfaceIndex: 1}}}}}
 	pool, _ := icepolicy.NewICEEndpointPool(nil)
-	sockets := socketauthority.New(socketauthority.Config{})
+	sockets := testSocketAuthority(t, 0)
 	h.native = newTestConnectivity(t, Config{Admission: NewAdmission(AdmissionClock{}), Monitor: h.monitor, Sockets: sockets, Pool: func() icepolicy.ICEEndpointPool { return pool }, Now: func() time.Time { return h.now },
 		Reachability: reachability.New(reachability.Config{Now: func() time.Time { return h.now }}),
 		Connect: func(_ pion.Configuration, request pionpeer.AttemptConfig) (*pionpeer.Connection, error) {

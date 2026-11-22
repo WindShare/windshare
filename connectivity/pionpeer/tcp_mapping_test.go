@@ -46,7 +46,11 @@ func testTCPMapping(t *testing.T, address string) {
 	external := forwarder.Addr().(*net.TCPAddr).AddrPort()
 	go proxyTCP(forwarder, internal)
 	makePeer := func(lease *socketauthority.Lease, profile TCPProfile, mappings []MappedEndpoint) *Connection {
-		pc, err := NewPeerConnection(pion.Configuration{}, AttemptConfig{ProtocolSessionID: lease.SessionID(), NetworkGenerationID: 1, PeerPathID: lease.PathID(), SocketLease: lease, TCPProfile: profile, MappedEndpoints: mappings})
+		pc, err := NewPeerConnection(pion.Configuration{}, AttemptConfig{
+			ProtocolSessionID: lease.SessionID(), NetworkGenerationID: 1, PeerPathID: lease.PathID(),
+			SocketLease: lease, TCPProfile: profile, MappedEndpoints: mappings,
+			allowLoopback: netip.MustParseAddr(address).IsLoopback(),
+		})
 		if err != nil {
 			t.Fatal(err)
 		}

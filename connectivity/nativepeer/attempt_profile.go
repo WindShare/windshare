@@ -24,7 +24,7 @@ func (n *NativePeerConnectivity) selectProfileLocked(snapshot networkstate.Snaps
 		pool = n.config.Pool()
 	}
 	v4, v6 := false, false
-	for _, a := range snapshot.LocalAddresses() {
+	for _, a := range selectAddresses(snapshot.Addresses()) {
 		v4 = v4 || a.Is4()
 		v6 = v6 || a.Is6()
 	}

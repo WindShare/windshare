@@ -62,7 +62,7 @@ func TestIPv6SuitabilityAndLifetimes(t *testing.T) {
 	expired := address("2606:4700::4", 2)
 	expired.ValidUntil = now
 	unrouted := address("2606:4700::5", 3)
-	state := State{Addresses: []Address{good, deprecated, tentative, expired, unrouted, address("fd00::1", 3), address("fe80::1%2", 2), address("::", 2), address("ff02::1", 2)}, Routes: []Route{{InterfaceIndex: 2, Family: 6}}}
+	state := State{Addresses: []Address{good, deprecated, tentative, expired, unrouted, address("127.0.0.1", 1), address("::1", 1), address("fd00::1", 3), address("fe80::1%2", 2), address("::", 2), address("ff02::1", 2)}, Routes: []Route{{InterfaceIndex: 2, Family: 6}}}
 	observer := Observer{}
 	first, _ := observer.Observe(state, now)
 	if len(first.Addresses()) != 3 {
@@ -116,9 +116,19 @@ func TestSystemSourceReadOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	for _, entry := range state.Addresses {
+		if entry.IP.IsLoopback() {
+			t.Fatalf("system snapshot leaked loopback address: %+v", entry)
+		}
+	}
 	observer := Observer{}
 	snapshot, _ := observer.Observe(state, time.Now())
 	if snapshot.GenerationID() != 1 {
 		t.Fatal("system snapshot")
+	}
+	for _, ip := range snapshot.LocalAddresses() {
+		if ip.IsLoopback() {
+			t.Fatalf("normalized snapshot leaked loopback address: %s", ip)
+		}
 	}
 }

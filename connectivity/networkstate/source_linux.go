@@ -63,14 +63,18 @@ func linuxAddresses(messages []syscall.NetlinkMessage, interfaces []net.Interfac
 		}
 		index := int(binary.NativeEndian.Uint32(message.Data[4:8]))
 		iface, ok := byIndex[index]
-		if !ok || iface.Flags&net.FlagUp == 0 {
+		if !ok || iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
 			continue
 		}
 		attrs, err := syscall.ParseNetlinkRouteAttr(&message)
 		if err != nil {
 			return nil, err
 		}
-		addresses = append(addresses, linuxAddress(iface, uint32(message.Data[2]), attrs, now))
+		address := linuxAddress(iface, uint32(message.Data[2]), attrs, now)
+		if address.IP.IsLoopback() {
+			continue
+		}
+		addresses = append(addresses, address)
 	}
 	return addresses, nil
 }
@@ -103,9 +107,6 @@ func linuxAddress(iface net.Interface, flags uint32, attrs []syscall.NetlinkRout
 }
 
 func linuxInterfaceClass(flags net.Flags) string {
-	if flags&net.FlagLoopback != 0 {
-		return "loopback"
-	}
 	if flags&net.FlagPointToPoint != 0 {
 		return "vpn"
 	}

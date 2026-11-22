@@ -17,7 +17,7 @@ func (SystemSource) Snapshot(ctx context.Context) (State, error) {
 	}
 	state := State{}
 	for _, iface := range interfaces {
-		if iface.Flags&net.FlagUp == 0 {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
 			continue
 		}
 		addresses, err := iface.Addrs()
@@ -29,7 +29,11 @@ func (SystemSource) Snapshot(ctx context.Context) (State, error) {
 			if err != nil {
 				continue
 			}
-			state.Addresses = append(state.Addresses, Address{IP: prefix.Addr(), InterfaceIndex: iface.Index, InterfaceName: iface.Name, Class: "unknown"})
+			ip := prefix.Addr().Unmap()
+			if ip.IsLoopback() {
+				continue
+			}
+			state.Addresses = append(state.Addresses, Address{IP: ip, InterfaceIndex: iface.Index, InterfaceName: iface.Name, Class: "unknown"})
 		}
 	}
 	return state, ctx.Err()

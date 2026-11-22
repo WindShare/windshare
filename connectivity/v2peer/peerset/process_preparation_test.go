@@ -81,7 +81,7 @@ func TestProcessQueueUsesWaveTimeAndPreservesCompleteNativeCheckingOpportunity(t
 	go func() { result, _ := path.executePrepared(opportunity); results <- result }()
 	receive(t, started)
 	actual := receive(t, captured)
-	if actual.InitialCheckingTimeout < 40*time.Second || actual.SocketLease.Endpoints()[0].Addr() != netip.MustParseAddr("127.0.0.1") {
+	if actual.InitialCheckingTimeout < 40*time.Second || actual.SocketLease.Endpoints()[0].Addr() != netip.MustParseAddr("192.0.2.1") {
 		t.Fatal("native ICE opportunity lost", actual)
 	}
 	cap := nextTimer(t, clock, 70*time.Second)

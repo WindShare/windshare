@@ -39,7 +39,7 @@ func (SystemSource) Snapshot(ctx context.Context) (State, error) {
 	now := time.Now()
 	metrics := make(map[[2]int]uint32)
 	for adapter := adapters; adapter != nil; adapter = adapter.Next {
-		if adapter.OperStatus != windows.IfOperStatusUp {
+		if adapter.OperStatus != windows.IfOperStatusUp || adapter.IfType == windows.IF_TYPE_SOFTWARE_LOOPBACK {
 			continue
 		}
 		class := adapterClass(adapter.IfType)
@@ -51,6 +51,9 @@ func (SystemSource) Snapshot(ctx context.Context) (State, error) {
 				continue
 			}
 			ip = ip.Unmap()
+			if ip.IsLoopback() {
+				continue
+			}
 			index := int(adapter.IfIndex)
 			if ip.Is6() {
 				index = int(adapter.Ipv6IfIndex)
@@ -87,8 +90,6 @@ func lifetimeUntil(now time.Time, seconds uint32) time.Time {
 func adapterClass(kind uint32) string {
 	class := "unknown"
 	switch kind {
-	case windows.IF_TYPE_SOFTWARE_LOOPBACK:
-		class = "loopback"
 	case windows.IF_TYPE_IEEE80211:
 		class = "wifi"
 	case windows.IF_TYPE_ETHERNET_CSMACD:

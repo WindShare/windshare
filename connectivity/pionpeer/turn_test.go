@@ -64,7 +64,14 @@ func turnConnection(t *testing.T, lease *socketauthority.Lease, endpoints ...str
 	if err != nil {
 		t.Fatal(err)
 	}
-	connection, err := NewPeerConnection(pion.Configuration{}, AttemptConfig{TURN: &TURNConfig{Plan: plan, Reservation: reservation}, ProtocolSessionID: lease.SessionID(), NetworkGenerationID: lease.GenerationID(), PeerPathID: lease.PathID(), SocketLease: lease, ICE: config})
+	allowLoopback := false
+	for _, endpoint := range lease.Endpoints() {
+		if endpoint.Addr().IsLoopback() {
+			allowLoopback = true
+			break
+		}
+	}
+	connection, err := NewPeerConnection(pion.Configuration{}, AttemptConfig{TURN: &TURNConfig{Plan: plan, Reservation: reservation}, ProtocolSessionID: lease.SessionID(), NetworkGenerationID: lease.GenerationID(), PeerPathID: lease.PathID(), SocketLease: lease, ICE: config, allowLoopback: allowLoopback})
 	if err != nil {
 		t.Fatal(err)
 	}

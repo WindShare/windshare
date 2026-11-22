@@ -49,8 +49,43 @@ func TestAddressAllocationKeepsFamiliesAndInterfacesWithinSocketLimit(t *testing
 	if len(selectAddresses(nil)) != 0 {
 		t.Fatal("empty allocation")
 	}
-	if len(selectAddresses([]networkstate.Address{{IP: netip.MustParseAddr("127.0.0.1")}})) != 1 {
-		t.Fatal("loopback fixture unsupported")
+	loopbackOnly := []networkstate.Address{
+		{InterfaceIndex: 1, IP: netip.MustParseAddr("127.0.0.1")},
+		{InterfaceIndex: 1, IP: netip.MustParseAddr("::1")},
+	}
+	if got := selectAddresses(loopbackOnly); len(got) != 0 {
+		t.Fatalf("loopback addresses selected: %v", got)
+	}
+	mixed := append([]networkstate.Address{
+		{InterfaceIndex: 2, IP: netip.MustParseAddr("192.168.1.10")},
+		{InterfaceIndex: 3, IP: netip.MustParseAddr("10.0.0.10")},
+	}, loopbackOnly...)
+	if got := selectAddresses(mixed); !slices.Equal(got, []netip.Addr{
+		netip.MustParseAddr("192.168.1.10"),
+		netip.MustParseAddr("10.0.0.10"),
+	}) {
+		t.Fatalf("loopback leaked or reordered real addresses: %v", got)
+	}
+}
+
+func TestLoopbackIPv6DoesNotEnableIPv6OnlySTUNSelection(t *testing.T) {
+	h := newHarness(t)
+	h.monitor.state = networkstate.State{Addresses: []networkstate.Address{
+		{InterfaceIndex: 1, IP: netip.MustParseAddr("127.0.0.1")},
+		{InterfaceIndex: 1, IP: netip.MustParseAddr("::1")},
+		{InterfaceIndex: 2, IP: netip.MustParseAddr("192.0.2.1")},
+	}}
+	pool, err := icepolicy.NewICEEndpointPool([]icepolicy.Endpoint{
+		{ID: "v6-only", URL: "stun:v6.example:3478", Family: "ipv6", Trust: "local", Enabled: true, FailureDomain: "v6"},
+		{ID: "v4-only", URL: "stun:v4.example:3478", Family: "ipv4", Trust: "local", Enabled: true, FailureDomain: "v4"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.native.config.Pool = func() icepolicy.ICEEndpointPool { return pool }
+	_, _ = h.native.NewPeerConnection(context.Background(), request(1))
+	if got := h.requests[0].ICE.DiscoveryURLs(); !slices.Equal(got, []string{"stun:v4.example:3478"}) {
+		t.Fatalf("loopback ::1 caused IPv6-only STUN selection: %v", got)
 	}
 }
 func TestProfilesRotateOnceAndNeverLoseSingletonSTUNOnLaterAttempts(t *testing.T) {

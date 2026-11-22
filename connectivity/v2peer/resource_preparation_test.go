@@ -16,7 +16,7 @@ func TestSenderResourceWaitExpiresBeforeRemotePreparation(t *testing.T) {
 		t.Run(constraint, func(t *testing.T) {
 			var sockets *socketauthority.Authority
 			if constraint == "sockets" {
-				sockets = socketauthority.New(socketauthority.Config{Capacity: nativepeer.ConcurrentAttempts})
+				sockets = testSocketAuthority(t, nativepeer.ConcurrentAttempts)
 			}
 			h := newResourceQueuedHandshake(t, sockets)
 			code, typed, reason := protocolsession.PeerOperationCodeTimeout, TypedPeerErrorTimeout, "resource_preparation_timeout"

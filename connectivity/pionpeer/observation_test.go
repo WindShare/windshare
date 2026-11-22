@@ -22,7 +22,7 @@ func TestCandidateFactsPreserveMappedProvenanceAndActualMilestones(t *testing.T)
 	var mu sync.Mutex
 	var events []Event
 	request := AttemptConfig{ProtocolSessionID: lease.SessionID(), NetworkGenerationID: 1, PeerPathID: lease.PathID(), SocketLease: lease, MappedEndpoints: []MappedEndpoint{{Local: local, External: external}},
-		Observe: func(event Event) { mu.Lock(); events = append(events, event); mu.Unlock() }}
+		Observe: func(event Event) { mu.Lock(); events = append(events, event); mu.Unlock() }, allowLoopback: true}
 	connection, err := NewPeerConnection(pion.Configuration{}, request)
 	if err != nil {
 		t.Fatal(err)
@@ -106,7 +106,7 @@ func TestOptionalTCPFailureDoesNotPreventUDPAttempt(t *testing.T) {
 	authority := socketauthority.New(socketauthority.Config{Capacity: 1})
 	defer authority.Close()
 	lease := testLease(t, authority, 1, "127.0.0.1")
-	connection, err := NewPeerConnection(pion.Configuration{}, AttemptConfig{ProtocolSessionID: lease.SessionID(), NetworkGenerationID: 1, PeerPathID: lease.PathID(), SocketLease: lease, TCPProfile: TCPNativeWindows})
+	connection, err := NewPeerConnection(pion.Configuration{}, AttemptConfig{ProtocolSessionID: lease.SessionID(), NetworkGenerationID: 1, PeerPathID: lease.PathID(), SocketLease: lease, TCPProfile: TCPNativeWindows, allowLoopback: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestInitialBudgetAndMappingProtocolValidation(t *testing.T) {
 	authority := socketauthority.New(socketauthority.Config{})
 	defer authority.Close()
 	lease := testLease(t, authority, 1, "127.0.0.1")
-	request := AttemptConfig{ProtocolSessionID: lease.SessionID(), NetworkGenerationID: 1, PeerPathID: lease.PathID(), SocketLease: lease, InitialCheckingTimeout: time.Second}
+	request := AttemptConfig{ProtocolSessionID: lease.SessionID(), NetworkGenerationID: 1, PeerPathID: lease.PathID(), SocketLease: lease, InitialCheckingTimeout: time.Second, allowLoopback: true}
 	if _, err := NewPeerConnection(pion.Configuration{}, request); err == nil {
 		t.Fatal("premature PAC ceiling accepted")
 	}

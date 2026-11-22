@@ -13,17 +13,10 @@ import (
 // buckets retain IPv6 and additional interfaces when one interface has many IPs.
 func selectAddresses(addresses []networkstate.Address) []netip.Addr {
 	addresses = slices.Clone(addresses)
-	addresses = slices.DeleteFunc(addresses, func(a networkstate.Address) bool { return !a.IP.IsValid() })
+	// RFC 8445 §5.1.1.1 forbids loopback host candidates; excluding them here
+	// also prevents opening unreachable UDP/TCP sockets and STUN probes.
+	addresses = slices.DeleteFunc(addresses, func(a networkstate.Address) bool { return !a.IP.IsValid() || a.IP.Unmap().IsLoopback() })
 	slices.SortFunc(addresses, func(a, b networkstate.Address) int {
-		rank := func(a networkstate.Address) int {
-			if a.IP.IsLoopback() {
-				return 1
-			}
-			return 0
-		}
-		if n := cmp.Compare(rank(a), rank(b)); n != 0 {
-			return n
-		}
 		if n := cmp.Compare(a.InterfaceIndex, b.InterfaceIndex); n != 0 {
 			return n
 		}

@@ -49,7 +49,7 @@ func TestReceiverFairnessCannotPromoteExplorationPastEssentialWork(t *testing.T)
 func TestEssentialReceiverReclaimsAnAdmittedOptionalSocketOwner(t *testing.T) {
 	_, _, makeNative := newAdmissionFixture(t, 0)
 	n := makeNative()
-	n.config.Sockets = socketauthority.New(socketauthority.Config{Capacity: 3})
+	n.config.Sockets = testSocketAuthority(t, 3)
 	first := startActual(t, n, 1)
 	defer first.Close()
 	n.SetAdmitted(attemptFor(1).ProtocolSessionID, attemptFor(1).Binding.PeerPathID, true)
@@ -80,7 +80,7 @@ func TestEssentialReceiverReclaimsAnAdmittedOptionalSocketOwner(t *testing.T) {
 func TestOptionalPreparationDefersWithoutSpendingReservedEssentialOpportunity(t *testing.T) {
 	gate, _, makeNative := newAdmissionFixture(t, 0)
 	n := makeNative()
-	n.config.Sockets = socketauthority.New(socketauthority.Config{Capacity: 2})
+	n.config.Sockets = testSocketAuthority(t, 2)
 	first := startActual(t, n, 1)
 	defer first.Close()
 	n.SetAdmitted(attemptFor(1).ProtocolSessionID, attemptFor(1).Binding.PeerPathID, true)

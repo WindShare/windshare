@@ -17,7 +17,7 @@ import (
 type fakeNetwork struct{}
 
 func (fakeNetwork) Snapshot(context.Context) (networkstate.State, error) {
-	return networkstate.State{Addresses: []networkstate.Address{{IP: netip.MustParseAddr("127.0.0.1"), InterfaceIndex: 1}}}, nil
+	return networkstate.State{Addresses: []networkstate.Address{{IP: netip.MustParseAddr("192.0.2.1"), InterfaceIndex: 1}}}, nil
 }
 
 type fakePathControls struct {

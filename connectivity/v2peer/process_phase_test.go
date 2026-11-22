@@ -25,7 +25,7 @@ func (processPhaseLanes) ProtocolSessionID() protocolsession.ProtocolSessionID {
 type processPhaseNetwork struct{}
 
 func (processPhaseNetwork) Snapshot(context.Context) (networkstate.State, error) {
-	return networkstate.State{Addresses: []networkstate.Address{{IP: netip.MustParseAddr("127.0.0.1"), InterfaceIndex: 1}}}, nil
+	return networkstate.State{Addresses: []networkstate.Address{{IP: netip.MustParseAddr("192.0.2.1"), InterfaceIndex: 1}}}, nil
 }
 func TestNativeReceiverProcessWaitPrecedesPreparationAndFullCheckingPhases(t *testing.T) {
 	gate := nativepeer.NewAdmission(nativepeer.AdmissionClock{})

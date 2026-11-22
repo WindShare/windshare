@@ -22,7 +22,7 @@ func awaitSocketWait(t *testing.T, n *NativePeerConnectivity, session byte) Admi
 func TestSocketAdmissionWaitsWithoutSpendingAttemptsAndWakesOnPhysicalRelease(t *testing.T) {
 	gate, _, makeNative := newAdmissionFixture(t, 0)
 	n, independent := makeNative(), makeNative()
-	n.config.Sockets = socketauthority.New(socketauthority.Config{Capacity: 1})
+	n.config.Sockets = testSocketAuthority(t, 1)
 	first := startActual(t, n, 1)
 	defer first.Close()
 	n.SetAdmitted(attemptFor(1).ProtocolSessionID, attemptFor(1).Binding.PeerPathID, true)
@@ -64,7 +64,7 @@ func TestSocketWaitCancellationDeadlineAndRetirementDoNotLeakReservations(t *tes
 		t.Run(finish, func(t *testing.T) {
 			gate, _, makeNative := newAdmissionFixture(t, 0)
 			n := makeNative()
-			n.config.Sockets = socketauthority.New(socketauthority.Config{Capacity: 1})
+			n.config.Sockets = testSocketAuthority(t, 1)
 			first := startActual(t, n, 1)
 			defer first.Close()
 			n.SetAdmitted(attemptFor(1).ProtocolSessionID, attemptFor(1).Binding.PeerPathID, true)
@@ -102,7 +102,7 @@ func TestSocketWaitCancellationDeadlineAndRetirementDoNotLeakReservations(t *tes
 func TestAbandonedSocketPreparationReturnsReservation(t *testing.T) {
 	_, clock, makeNative := newAdmissionFixture(t, 0)
 	n := makeNative()
-	n.config.Sockets = socketauthority.New(socketauthority.Config{Capacity: 1})
+	n.config.Sockets = testSocketAuthority(t, 1)
 	prepared, err := n.PrepareAttempt(t.Context(), attemptFor(1))
 	if err != nil {
 		t.Fatal(err)
@@ -123,7 +123,7 @@ func TestAbandonedSocketPreparationReturnsReservation(t *testing.T) {
 func TestNetworkReplacementReleasesOldPathDemandBeforeReservingNewSockets(t *testing.T) {
 	_, _, makeNative := newAdmissionFixture(t, 0)
 	n := makeNative()
-	n.config.Sockets = socketauthority.New(socketauthority.Config{Capacity: 1})
+	n.config.Sockets = testSocketAuthority(t, 1)
 	first := startActual(t, n, 1)
 	_ = first.Close()
 	n.config.Monitor.(*testMonitor).state.ResumeSequence++

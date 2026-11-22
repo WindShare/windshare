@@ -38,7 +38,7 @@ func testConnection(t *testing.T, lease *socketauthority.Lease, urls []string, m
 		t.Fatal(err)
 	}
 	connection, err := NewPeerConnection(pion.Configuration{}, AttemptConfig{
-		ProtocolSessionID: lease.SessionID(), NetworkGenerationID: lease.GenerationID(), PeerPathID: lease.PathID(), SocketLease: lease, ICE: configuration, MappedEndpoints: mapped,
+		ProtocolSessionID: lease.SessionID(), NetworkGenerationID: lease.GenerationID(), PeerPathID: lease.PathID(), SocketLease: lease, ICE: configuration, MappedEndpoints: mapped, allowLoopback: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -299,6 +299,11 @@ func TestProviderRejectsMismatchedAndConcurrentResources(t *testing.T) {
 		t.Fatal("nil lease accepted")
 	}
 	request := AttemptConfig{ProtocolSessionID: lease.SessionID(), NetworkGenerationID: 1, PeerPathID: pathID(1), SocketLease: lease, Observe: func(Event) {}}
+	if disallowed, err := NewPeerConnection(pion.Configuration{}, request); err == nil {
+		_ = disallowed.Close()
+		t.Fatal("production provider accepted loopback socket lease")
+	}
+	request.allowLoopback = true
 	request.MappedEndpoints = []MappedEndpoint{{Local: netip.MustParseAddrPort("127.0.0.1:1"), External: netip.MustParseAddrPort("127.0.0.1:2")}}
 	if _, err := NewPeerConnection(pion.Configuration{}, request); err == nil {
 		t.Fatal("foreign socket accepted")
@@ -351,4 +356,79 @@ func TestInitialCheckingWindowIndependentOfConnectedTimeout(t *testing.T) {
 	if !errors.Is(err, ice.ErrCanceledByCaller) {
 		t.Fatalf("application ceiling should own cancellation: %v", err)
 	}
+}
+
+func TestProviderExcludesLoopbackByDefault(t *testing.T) {
+	authority := socketauthority.New(socketauthority.Config{})
+	defer authority.Close()
+	for _, address := range []string{"127.0.0.1", "::1"} {
+		t.Run("reject-"+address, func(t *testing.T) {
+			lease, err := authority.Acquire([16]byte{1}, 1, pathID(1), []netip.Addr{netip.MustParseAddr(address)})
+			if err != nil {
+				if address == "::1" {
+					t.Skipf("IPv6 loopback unavailable: %v", err)
+				}
+				t.Fatal(err)
+			}
+			defer lease.Close()
+			if conn, err := NewPeerConnection(pion.Configuration{}, AttemptConfig{
+				ProtocolSessionID: lease.SessionID(), NetworkGenerationID: lease.GenerationID(), PeerPathID: lease.PathID(), SocketLease: lease,
+			}); err == nil {
+				_ = conn.Close()
+				t.Fatalf("default provider accepted loopback lease %s", address)
+			}
+		})
+	}
+	t.Run("gather-omits-loopback", func(t *testing.T) {
+		nonLoopback := netip.MustParseAddr("192.0.2.1")
+		sockets := socketauthority.New(socketauthority.Config{ListenPacket: func(_, _ string) (net.PacketConn, error) {
+			conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+			if err != nil {
+				return nil, err
+			}
+			local := &net.UDPAddr{IP: net.IP(nonLoopback.AsSlice()), Port: conn.LocalAddr().(*net.UDPAddr).Port}
+			return turnTestLocalSocket{PacketConn: conn, local: local}, nil
+		}})
+		defer sockets.Close()
+		lease, err := sockets.Acquire([16]byte{1}, 1, pathID(2), []netip.Addr{nonLoopback})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer lease.Close()
+		conn, err := NewPeerConnection(pion.Configuration{}, AttemptConfig{
+			ProtocolSessionID: lease.SessionID(), NetworkGenerationID: lease.GenerationID(), PeerPathID: lease.PathID(), SocketLease: lease,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		if _, err := conn.CreateDataChannel("no-loopback", nil); err != nil {
+			t.Fatal(err)
+		}
+		gathered := make(chan struct{})
+		var candidates []string
+		conn.OnICECandidate(func(candidate *pion.ICECandidate) {
+			if candidate == nil {
+				close(gathered)
+				return
+			}
+			candidates = append(candidates, candidate.Address)
+		})
+		offer, err := conn.CreateOffer(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := conn.SetLocalDescription(offer); err != nil {
+			t.Fatal(err)
+		}
+		await(t, gathered)
+		if len(candidates) == 0 {
+			t.Fatal("expected non-loopback host candidate")
+		}
+		for _, raw := range candidates {
+			if ip, err := netip.ParseAddr(raw); err == nil && ip.IsLoopback() {
+				t.Fatalf("production provider emitted loopback candidate: %s", raw)
+			}
+		}
+	})
 }

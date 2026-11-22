@@ -46,6 +46,9 @@ type AttemptConfig struct {
 	SocketLease            *socketauthority.Lease
 	MappedEndpoints        []MappedEndpoint
 	Observe                func(Event)
+	// allowLoopback is package-private so only local in-package ICE handshake
+	// tests can opt into loopback sockets/candidates; production stays RFC 8445.
+	allowLoopback bool
 }
 
 // The caller may reuse its configuration while this attempt is gathering.
@@ -103,6 +106,11 @@ func NewPeerConnection(configuration pion.Configuration, request AttemptConfig) 
 	if err != nil {
 		return nil, err
 	}
+	endpoints := lease.Endpoints()
+	if err := validateLeaseEndpoints(endpoints, request.allowLoopback); err != nil {
+		_ = lease.Close()
+		return nil, err
+	}
 	capability := TCPCapability{}
 	if request.ICE.Policy() != iceconfig.RelayCandidates {
 		capability = Capabilities(request.TCPProfile)
@@ -128,7 +136,6 @@ func NewPeerConnection(configuration pion.Configuration, request AttemptConfig) 
 		_ = lease.Close()
 		return nil, err
 	}
-	endpoints := lease.Endpoints()
 	mapped, mappedTCP, err := mapAttemptEndpoints(request.MappedEndpoints, endpoints, lease.TCPEndpoints(), capability)
 	if err != nil {
 		return fail(err)
@@ -149,7 +156,9 @@ func NewPeerConnection(configuration pion.Configuration, request AttemptConfig) 
 		settings.SetNet(turn)
 	}
 	settings.SetICEUDPMux(mux)
-	settings.SetIncludeLoopbackCandidate(true)
+	if request.allowLoopback {
+		settings.SetIncludeLoopbackCandidate(true)
+	}
 	if request.ICE.Policy() != iceconfig.RelayCandidates {
 		settings.SetIPFilter(localEndpointFilter(endpoints))
 	}
@@ -162,18 +171,7 @@ func NewPeerConnection(configuration pion.Configuration, request AttemptConfig) 
 		MappedTCPEndpoints: mappedTCP, TCPMappedMux: lease.TCP(),
 		LocalAddressOrder: localAddressOrder(endpoints),
 	}
-	networks := []pion.NetworkType{pion.NetworkTypeUDP4, pion.NetworkTypeUDP6}
-	if capability.IPv4 {
-		networks = append(networks, pion.NetworkTypeTCP4)
-	}
-	if capability.IPv6 {
-		networks = append(networks, pion.NetworkTypeTCP6)
-	}
-	if capability.IPv4 || capability.IPv6 {
-		settings.SetICETCPMux(lease.TCP())
-		settings.DisableActiveTCP(capability.PassiveOnly)
-	}
-	settings.SetNetworkTypes(networks)
+	configureNetworkTypes(&settings, lease, capability)
 	configureICE(&configuration, request.ICE)
 	connection := &Connection{lease: lease, release: release, request: request, turn: turn}
 	connection.configureTURN(&providerConfig)
@@ -193,6 +191,33 @@ func NewPeerConnection(configuration pion.Configuration, request AttemptConfig) 
 	}
 	connection.observe("provider_created", "")
 	return connection, nil
+}
+
+func configureNetworkTypes(settings *pion.SettingEngine, lease *socketauthority.Lease, capability TCPCapability) {
+	networks := []pion.NetworkType{pion.NetworkTypeUDP4, pion.NetworkTypeUDP6}
+	if capability.IPv4 {
+		networks = append(networks, pion.NetworkTypeTCP4)
+	}
+	if capability.IPv6 {
+		networks = append(networks, pion.NetworkTypeTCP6)
+	}
+	if capability.IPv4 || capability.IPv6 {
+		settings.SetICETCPMux(lease.TCP())
+		settings.DisableActiveTCP(capability.PassiveOnly)
+	}
+	settings.SetNetworkTypes(networks)
+}
+
+func validateLeaseEndpoints(endpoints []netip.AddrPort, allowLoopback bool) error {
+	if allowLoopback {
+		return nil
+	}
+	for _, endpoint := range endpoints {
+		if endpoint.Addr().Unmap().IsLoopback() {
+			return errors.New("loopback socket endpoint not permitted")
+		}
+	}
+	return nil
 }
 
 func localEndpointFilter(endpoints []netip.AddrPort) func(net.IP) bool {

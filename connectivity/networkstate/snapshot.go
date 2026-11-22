@@ -49,7 +49,7 @@ func normalize(state State, now time.Time) State {
 	result := State{ResumeSequence: state.ResumeSequence}
 	for _, a := range state.Addresses {
 		a.IP = a.IP.Unmap()
-		if !a.IP.IsValid() || a.IP.IsUnspecified() || a.IP.IsMulticast() || a.Tentative || a.Deprecated || (!a.ValidUntil.IsZero() && !now.Before(a.ValidUntil)) || (!a.PreferredUntil.IsZero() && !now.Before(a.PreferredUntil)) {
+		if !a.IP.IsValid() || a.IP.IsUnspecified() || a.IP.IsLoopback() || a.IP.IsMulticast() || a.Tentative || a.Deprecated || (!a.ValidUntil.IsZero() && !now.Before(a.ValidUntil)) || (!a.PreferredUntil.IsZero() && !now.Before(a.PreferredUntil)) {
 			continue
 		}
 		if a.IP.Is6() && a.IP.IsGlobalUnicast() && !a.IP.IsPrivate() {

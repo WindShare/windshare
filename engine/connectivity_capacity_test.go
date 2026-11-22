@@ -29,7 +29,7 @@ type capacityNetwork struct{}
 
 func (capacityNetwork) Snapshot(context.Context) (networkstate.State, error) {
 	return networkstate.State{Addresses: []networkstate.Address{
-		{IP: netip.MustParseAddr("127.0.0.1"), InterfaceIndex: 1},
+		{IP: netip.MustParseAddr("192.0.2.1"), InterfaceIndex: 1},
 	}}, nil
 }
 
