@@ -832,7 +832,7 @@ func TestRevisionErrorClassificationGrantsRetryAuthorityOnlyToTypedCapacity(t *t
 		t.Fatalf("authenticated capacity response=%+v err=%v", decoded, err)
 	}
 	for name, permanent := range map[string]error{
-		"metadata quota": fmt.Errorf("metadata stopped: %w", content.ErrQuotaExceeded),
+		"untyped quota":  fmt.Errorf("untyped quota error: %w", content.ErrQuotaExceeded),
 		"seal limit":     records.ErrInvalidRecord,
 		"missing source": content.ErrRevisionNotFound,
 		"unreadable":     content.ErrRevisionUnreadable,

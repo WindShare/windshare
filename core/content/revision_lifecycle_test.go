@@ -46,7 +46,7 @@ func TestModifiedTimeMismatchRejectsOpenAndNeverResurrectsOldRevision(t *testing
 	restored := &testStableFile{data: []byte{1}, modified: frozenModified}
 	invalidator := &recordingInvalidator{}
 	source := &testRevisionSource{files: []*testStableFile{first, mismatch, restored}}
-	store, _, _ := newRevisionStore(t, source, clock, invalidator, file, record)
+	store := newRevisionStore(t, source, clock, invalidator, file, record)
 	session := generousSession(t, store, "session")
 
 	initial, err := store.OpenRevision(context.Background(), file, session)
@@ -79,7 +79,7 @@ func TestUnavailableReopenRemainsRetryableWithoutInvalidation(t *testing.T) {
 	retried := &testStableFile{data: []byte{1}, modified: modified}
 	source := &testRevisionSource{files: []*testStableFile{initial, nil, retried}}
 	invalidator := &recordingInvalidator{}
-	store, _, _ := newRevisionStore(t, source, clock, invalidator, file, record)
+	store := newRevisionStore(t, source, clock, invalidator, file, record)
 	session := generousSession(t, store, "session")
 
 	first, err := store.OpenRevision(context.Background(), file, session)
@@ -150,7 +150,7 @@ func TestConcurrentReleasedReopenSingleflightsAndIssuesIndependentLeases(t *test
 		files:      []StableFile{&testStableFile{data: []byte{1}}, &testStableFile{data: []byte{1}}},
 		blockIndex: 1, started: make(chan struct{}), release: make(chan struct{}),
 	}
-	store, _, _ := newRevisionStore(t, source, clock, nil, file, record)
+	store := newRevisionStore(t, source, clock, nil, file, record)
 	session := generousSession(t, store, "session")
 	initial, err := store.OpenRevision(context.Background(), file, session)
 	if err != nil {
@@ -211,7 +211,7 @@ func TestDetachedReaderDriftIsolatesIndependentlyReopenedRevision(t *testing.T) 
 	newSource := &testStableFile{data: []byte{1}}
 	source := &queuedStableSource{files: []StableFile{oldSource, newSource}}
 	invalidator := &recordingInvalidator{}
-	store, _, _ := newRevisionStore(t, source, clock, invalidator, file, record)
+	store := newRevisionStore(t, source, clock, invalidator, file, record)
 	session := generousSession(t, store, "session")
 	oldLease, err := store.OpenRevision(context.Background(), file, session)
 	if err != nil {
@@ -292,7 +292,7 @@ func TestTransientReadFailureDoesNotInvalidateActiveRevision(t *testing.T) {
 	sentinel := errors.New("transient provider read failure")
 	stable := &transientReadStableFile{err: sentinel}
 	invalidator := &recordingInvalidator{}
-	store, _, _ := newRevisionStore(t, revisionSourceFunc(func(context.Context, catalog.NodeRecord) (StableFile, error) {
+	store := newRevisionStore(t, revisionSourceFunc(func(context.Context, catalog.NodeRecord) (StableFile, error) {
 		return stable, nil
 	}), &testClock{now: time.Unix(100, 0)}, invalidator, file, record)
 	session := generousSession(t, store, "session")
@@ -331,7 +331,7 @@ func TestRevisionStoreRetiresCacheOnReleaseGraceExpiryReclaimAndClose(t *testing
 		{data: []byte{2}},
 		{data: []byte{3}},
 	}}
-	store, _, _ := newRevisionStore(t, source, clock, cache, file, record)
+	store := newRevisionStore(t, source, clock, cache, file, record)
 	session := generousSession(t, store, "session")
 
 	// 1. Normal relinquishment retires cache immediately without drift invalidation.
@@ -445,7 +445,7 @@ func TestRevisionStoreRetiresCacheImmediatelyWhileReaderIsInFlight(t *testing.T)
 		data: []byte{7}, readStarted: make(chan struct{}), readRelease: make(chan struct{}),
 	}
 	cache := &recordingInvalidator{}
-	store, _, _ := newRevisionStore(t, &queuedStableSource{files: []StableFile{stable}}, clock, cache, file, record)
+	store := newRevisionStore(t, &queuedStableSource{files: []StableFile{stable}}, clock, cache, file, record)
 	session := generousSession(t, store, "session")
 
 	lease, err := store.OpenRevision(context.Background(), file, session)

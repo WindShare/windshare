@@ -17,7 +17,7 @@ func TestOpenHandleRevisionRetainsResidentIdentityAndReopensWithFreshID(t *testi
 	source := &testRevisionSource{files: []*testStableFile{
 		{data: []byte{1}, modified: modified}, {data: []byte{1}, modified: modified},
 	}}
-	store, process, _ := newRevisionStore(t, source, &testClock{now: time.Unix(100, 0)}, nil, file, record)
+	store := newRevisionStore(t, source, &testClock{now: time.Unix(100, 0)}, nil, file, record)
 	session := generousSession(t, store, "continuity")
 
 	first, err := store.OpenRevision(context.Background(), file, session)
@@ -63,7 +63,7 @@ func TestOpenHandleRevisionRetainsResidentIdentityAndReopensWithFreshID(t *testi
 	if err := store.EndLease(reopened.ID(), LeaseRelinquished); err != nil {
 		t.Fatal(err)
 	}
-	if got := process.Snapshot().Used; got != (QuotaUsage{}) {
+	if got := store.CapacitySnapshot().Process().Used(); got != (revisioncapacity.CapacityUsage{}) {
 		t.Fatalf("reopening leaked capacity: %+v", got)
 	}
 }
@@ -71,7 +71,7 @@ func TestOpenHandleRevisionRetainsResidentIdentityAndReopensWithFreshID(t *testi
 func TestDetachedLeasePreservesResidentRevisionDuringResumeGrace(t *testing.T) {
 	file, record := fileRecord(t, 1)
 	source := &testRevisionSource{files: []*testStableFile{{data: []byte{1}}}}
-	store, _, _ := newRevisionStore(t, source, &testClock{now: time.Unix(100, 0)}, nil, file, record)
+	store := newRevisionStore(t, source, &testClock{now: time.Unix(100, 0)}, nil, file, record)
 	traces := make(chan RevisionTrace, 8)
 	store.tracer = RevisionTracerFunc(func(event RevisionTrace) { traces <- event })
 	session := generousSession(t, store, "reconnect")

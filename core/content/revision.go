@@ -16,6 +16,7 @@ var (
 	ErrSourceDrift          = errors.New("stable file source changed")
 	ErrRevisionDrift        = errors.New("file revision drifted")
 	ErrRevisionReopened     = errors.New("file revision reopened; saved plaintext requires fresh admission")
+	ErrQuotaExceeded        = errors.New("content resource quota exceeded")
 	ErrLeaseExpired         = errors.New("file revision lease expired")
 	ErrInvalidLease         = errors.New("file revision lease is invalid")
 	ErrInvalidLeaseEnd      = errors.New("file revision lease ending is invalid")

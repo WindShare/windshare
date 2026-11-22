@@ -29,7 +29,7 @@ type fixedIDs struct {
 
 func (g fixedIDs) NewLeaseID() (LeaseID, error) { return g.lease, nil }
 
-func customRevisionStore(t *testing.T, nodeSource CatalogNodeSource, source RevisionSource, clock Clock, ids LeaseIDGenerator) (*RevisionStore, *capacityTestAccount, *capacityTestAccount) {
+func customRevisionStore(t *testing.T, nodeSource CatalogNodeSource, source RevisionSource, clock Clock, ids LeaseIDGenerator) *RevisionStore {
 	t.Helper()
 	owner, err := revisioncapacity.NewProcessOwner(revisioncapacity.ProcessConfig{
 		Limits:     revisioncapacity.CapacityLimits{StableHandles: 100, ActiveLeases: 100},
@@ -54,9 +54,7 @@ func customRevisionStore(t *testing.T, nodeSource CatalogNodeSource, source Revi
 		_ = store.Close()
 		_ = owner.Close()
 	})
-	process := &capacityTestAccount{name: "process", snapshot: func() revisioncapacity.ScopeSnapshot { return store.CapacitySnapshot().Process() }}
-	share := &capacityTestAccount{name: "share", snapshot: func() revisioncapacity.ScopeSnapshot { return store.CapacitySnapshot().Share() }}
-	return store, process, share
+	return store
 }
 
 func TestRevisionStoreRejectsInvalidConfigurationAndInputs(t *testing.T) {
@@ -64,7 +62,7 @@ func TestRevisionStoreRejectsInvalidConfigurationAndInputs(t *testing.T) {
 		t.Fatal("empty revision store configuration was accepted")
 	}
 	file, record := fileRecord(t, 1)
-	store, _, _ := customRevisionStore(t, testCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}}, &testRevisionSource{files: []*testStableFile{{data: []byte{1}}}}, nil, &sequenceIDs{})
+	store := customRevisionStore(t, testCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}}, &testRevisionSource{files: []*testStableFile{{data: []byte{1}}}}, nil, &sequenceIDs{})
 	session := generousSession(t, store, "session")
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -111,7 +109,7 @@ func TestNewRevisionRequiresSessionAdmissionBeforeOpeningSource(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			source := &testRevisionSource{files: []*testStableFile{{data: []byte{1}}, {data: []byte{2}}}}
-			store, process, share := customRevisionStore(t, testCatalog{records: map[catalog.NodeID]catalog.NodeRecord{
+			store := customRevisionStore(t, testCatalog{records: map[catalog.NodeID]catalog.NodeRecord{
 				firstFile.NodeID(): firstRecord, secondFile.NodeID(): secondRecord,
 			}}, source, nil, &sequenceIDs{})
 			session := limitedSession(t, store, "limited-session", test.limits)
@@ -142,8 +140,10 @@ func TestNewRevisionRequiresSessionAdmissionBeforeOpeningSource(t *testing.T) {
 			if err := store.Close(); err != nil {
 				t.Fatal(err)
 			}
-			if process.Snapshot().Used != (QuotaUsage{}) || share.Snapshot().Used != (QuotaUsage{}) || session.Snapshot().Used() != (revisioncapacity.CapacityUsage{}) {
-				t.Fatal("pre-admission test leaked quota")
+			if store.CapacitySnapshot().Process().Used() != (revisioncapacity.CapacityUsage{}) ||
+				store.CapacitySnapshot().Share().Used() != (revisioncapacity.CapacityUsage{}) ||
+				session.Snapshot().Used() != (revisioncapacity.CapacityUsage{}) {
+				t.Fatal("pre-admission test leaked capacity")
 			}
 		})
 	}
@@ -189,7 +189,7 @@ func TestOpenRevisionRollsBackEveryPrepublicationFailure(t *testing.T) {
 	tests[3].source.(*testRevisionSource).files[0].drifted.Store(true)
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			store, process, share := customRevisionStore(t, test.catalog, test.source, nil, test.ids)
+			store := customRevisionStore(t, test.catalog, test.source, nil, test.ids)
 			session := generousSession(t, store, "session")
 			_, openErr := store.OpenRevision(context.Background(), file, session)
 			if openErr == nil {
@@ -204,8 +204,11 @@ func TestOpenRevisionRollsBackEveryPrepublicationFailure(t *testing.T) {
 			if err := store.Close(); err != nil {
 				t.Fatal(err)
 			}
-			if process.Snapshot().Used != (QuotaUsage{}) || share.Snapshot().Used != (QuotaUsage{}) || session.Snapshot().Used() != (revisioncapacity.CapacityUsage{}) {
-				t.Fatalf("prepublication failure leaked quota: process=%+v share=%+v session=%+v", process.Snapshot().Used, share.Snapshot().Used, session.Snapshot().Used())
+			if store.CapacitySnapshot().Process().Used() != (revisioncapacity.CapacityUsage{}) ||
+				store.CapacitySnapshot().Share().Used() != (revisioncapacity.CapacityUsage{}) ||
+				session.Snapshot().Used() != (revisioncapacity.CapacityUsage{}) {
+				t.Fatalf("prepublication failure leaked capacity: process=%+v share=%+v session=%+v",
+					store.CapacitySnapshot().Process().Used(), store.CapacitySnapshot().Share().Used(), session.Snapshot().Used())
 			}
 		})
 	}
@@ -214,7 +217,7 @@ func TestOpenRevisionRollsBackEveryPrepublicationFailure(t *testing.T) {
 func TestOpenRevisionCancellationCancelsUnpublishedStableOpen(t *testing.T) {
 	file, record := fileRecord(t, 1)
 	source := &testRevisionSource{files: []*testStableFile{{data: []byte{1}}}, started: make(chan struct{}), release: make(chan struct{})}
-	store, process, share := customRevisionStore(t, testCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}}, source, nil, &sequenceIDs{})
+	store := customRevisionStore(t, testCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}}, source, nil, &sequenceIDs{})
 	session := generousSession(t, store, "session")
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
@@ -230,15 +233,17 @@ func TestOpenRevisionCancellationCancelsUnpublishedStableOpen(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if process.Snapshot().Used != (QuotaUsage{}) || share.Snapshot().Used != (QuotaUsage{}) || session.Snapshot().Used() != (revisioncapacity.CapacityUsage{}) {
-		t.Fatal("cancelled open leaked quota")
+	if store.CapacitySnapshot().Process().Used() != (revisioncapacity.CapacityUsage{}) ||
+		store.CapacitySnapshot().Share().Used() != (revisioncapacity.CapacityUsage{}) ||
+		session.Snapshot().Used() != (revisioncapacity.CapacityUsage{}) {
+		t.Fatal("cancelled open leaked capacity")
 	}
 }
 
 func TestStoreCloseReleasesPendingOpenAdmissionBeforeWaiterReturns(t *testing.T) {
 	file, record := fileRecord(t, 1)
 	source := &testRevisionSource{files: []*testStableFile{{data: []byte{1}}}, started: make(chan struct{}), release: make(chan struct{})}
-	store, process, share := customRevisionStore(t, testCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}}, source, nil, &sequenceIDs{})
+	store := customRevisionStore(t, testCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}}, source, nil, &sequenceIDs{})
 	session := generousSession(t, store, "session")
 	result := make(chan error, 1)
 	go func() {
@@ -249,7 +254,9 @@ func TestStoreCloseReleasesPendingOpenAdmissionBeforeWaiterReturns(t *testing.T)
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if process.Snapshot().Used != (QuotaUsage{}) || share.Snapshot().Used != (QuotaUsage{}) || session.Snapshot().Used() != (revisioncapacity.CapacityUsage{}) {
+	if store.CapacitySnapshot().Process().Used() != (revisioncapacity.CapacityUsage{}) ||
+		store.CapacitySnapshot().Share().Used() != (revisioncapacity.CapacityUsage{}) ||
+		session.Snapshot().Used() != (revisioncapacity.CapacityUsage{}) {
 		t.Fatal("store close returned while pending open admission remained charged")
 	}
 	if err := <-result; err == nil {
@@ -261,7 +268,7 @@ func TestLeaseErrorsDoNotEvictAnAdmittedRevision(t *testing.T) {
 	clock := &testClock{now: time.Unix(100, 0)}
 	file, record := fileRecord(t, 1)
 	stable := &testStableFile{data: []byte{1}}
-	store, _, _ := customRevisionStore(t, testCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}}, &testRevisionSource{files: []*testStableFile{stable}}, clock, &sequenceIDs{})
+	store := customRevisionStore(t, testCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}}, &testRevisionSource{files: []*testStableFile{stable}}, clock, &sequenceIDs{})
 	session := generousSession(t, store, "session")
 	lease, err := store.OpenRevision(context.Background(), file, session)
 	if err != nil {
@@ -315,7 +322,7 @@ func TestOpenRevisionRejectsLeaseIdentityReuseWithoutClosingRevision(t *testing.
 	file, record := fileRecord(t, 1)
 	stable := &testStableFile{data: []byte{1}}
 	ids := fixedIDs{lease: contentID[LeaseID](2)}
-	store, _, _ := customRevisionStore(t, testCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}}, &testRevisionSource{files: []*testStableFile{stable}}, nil, ids)
+	store := customRevisionStore(t, testCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}}, &testRevisionSource{files: []*testStableFile{stable}}, nil, ids)
 	session := generousSession(t, store, "session")
 	first, err := store.OpenRevision(context.Background(), file, session)
 	if err != nil {
@@ -344,7 +351,7 @@ func TestExpiredLeaseGraceUsesActualExpiryAndReopensFreshRevision(t *testing.T) 
 	firstSource := &testStableFile{data: []byte{1}, modified: modified}
 	secondSource := &testStableFile{data: []byte{1}, modified: modified}
 	source := &testRevisionSource{files: []*testStableFile{firstSource, secondSource}}
-	store, _, _ := customRevisionStore(t, testCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}}, source, clock, &sequenceIDs{})
+	store := customRevisionStore(t, testCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}}, source, clock, &sequenceIDs{})
 	defer store.Close()
 	session := generousSession(t, store, "session")
 	first, err := store.OpenRevision(context.Background(), file, session)
@@ -371,7 +378,7 @@ func TestLateRelinquishmentCannotRestartDetachedRecoveryAfterExpiry(t *testing.T
 	clock := &testClock{now: time.Unix(100, 0)}
 	file, record := fileRecord(t, 1)
 	stable := &testStableFile{data: []byte{1}}
-	store, process, share := customRevisionStore(t,
+	store := customRevisionStore(t,
 		testCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}},
 		&testRevisionSource{files: []*testStableFile{stable}}, clock, &sequenceIDs{})
 	defer store.Close()
@@ -387,8 +394,10 @@ func TestLateRelinquishmentCannotRestartDetachedRecoveryAfterExpiry(t *testing.T
 	if stable.closed.Load() != 1 {
 		t.Fatal("late relinquishment retained the source for a new recovery interval")
 	}
-	if process.Snapshot().Used != (QuotaUsage{}) || share.Snapshot().Used != (QuotaUsage{}) || session.Snapshot().Used() != (revisioncapacity.CapacityUsage{}) {
-		t.Fatal("late relinquishment retained expired revision quota")
+	if store.CapacitySnapshot().Process().Used() != (revisioncapacity.CapacityUsage{}) ||
+		store.CapacitySnapshot().Share().Used() != (revisioncapacity.CapacityUsage{}) ||
+		session.Snapshot().Used() != (revisioncapacity.CapacityUsage{}) {
+		t.Fatal("late relinquishment retained expired revision capacity")
 	}
 }
 
@@ -396,7 +405,7 @@ func TestDefaultIdentitiesAreNonzeroAndReopenAssignsFreshRevision(t *testing.T) 
 	modified, _ := catalog.NewModifiedTime(50, 0, catalog.TimePrecisionSeconds)
 	file, record := fileRecordWithModifiedTime(t, 9, 1, modified)
 	stable := &testStableFile{data: []byte{1}, modified: modified}
-	store, _, _ := customRevisionStore(t,
+	store := customRevisionStore(t,
 		testCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}},
 		&testRevisionSource{files: []*testStableFile{stable}}, nil, nil,
 	)
@@ -415,7 +424,7 @@ func TestDefaultIdentitiesAreNonzeroAndReopenAssignsFreshRevision(t *testing.T) 
 	clock := &testClock{now: time.Unix(100, 0)}
 	firstStable := &testStableFile{data: []byte{1}, modified: modified}
 	secondStable := &testStableFile{data: []byte{1}, modified: modified}
-	reuseStore, _, _ := customRevisionStore(t, testCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}}, &testRevisionSource{files: []*testStableFile{firstStable, secondStable}}, clock, &sequenceIDs{})
+	reuseStore := customRevisionStore(t, testCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}}, &testRevisionSource{files: []*testStableFile{firstStable, secondStable}}, clock, &sequenceIDs{})
 	reuseSession := generousSession(t, reuseStore, "reuse-session")
 	first, err := reuseStore.OpenRevision(context.Background(), file, reuseSession)
 	if err != nil {
@@ -451,7 +460,7 @@ func (f *panicCloseFile) Close() error {
 func TestFailedOpenQuarantinesCapacityWhenStableClosePanics(t *testing.T) {
 	file, record := fileRecord(t, 1)
 	stable := &panicCloseFile{}
-	store, process, share := customRevisionStore(t,
+	store := customRevisionStore(t,
 		testCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}},
 		revisionSourceFunc(func(context.Context, catalog.NodeRecord) (StableFile, error) { return stable, nil }),
 		nil, &sequenceIDs{})
@@ -459,8 +468,11 @@ func TestFailedOpenQuarantinesCapacityWhenStableClosePanics(t *testing.T) {
 	if _, err := store.OpenRevision(context.Background(), file, session); !errors.Is(err, ErrRevisionStale) {
 		t.Fatalf("size-mismatched stable source = %v", err)
 	}
-	if stable.closed.Load() != 1 || process.Snapshot().Used != (QuotaUsage{StableHandles: 1}) || share.Snapshot().Used != (QuotaUsage{StableHandles: 1}) ||
-		session.Snapshot().Used() != (revisioncapacity.CapacityUsage{}) || store.CapacitySnapshot().Process().QuarantinedStableHandles() != 1 {
+	if stable.closed.Load() != 1 ||
+		store.CapacitySnapshot().Process().Used() != (revisioncapacity.CapacityUsage{StableHandles: 1}) ||
+		store.CapacitySnapshot().Share().Used() != (revisioncapacity.CapacityUsage{StableHandles: 1}) ||
+		session.Snapshot().Used() != (revisioncapacity.CapacityUsage{}) ||
+		store.CapacitySnapshot().Process().QuarantinedStableHandles() != 1 {
 		t.Fatal("panicking cleanup did not quarantine uncertain stable ownership")
 	}
 	_ = store.Close()
@@ -490,7 +502,7 @@ func (f *panicAfterPublicationFile) Close() error                               
 func TestStableReadPanicIsUnavailableAndDoesNotInvalidateRevision(t *testing.T) {
 	file, record := fileRecord(t, 1)
 	stable := &panicAfterPublicationFile{}
-	store, process, share := customRevisionStore(t, testCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}}, revisionSourceFunc(func(context.Context, catalog.NodeRecord) (StableFile, error) {
+	store := customRevisionStore(t, testCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}}, revisionSourceFunc(func(context.Context, catalog.NodeRecord) (StableFile, error) {
 		return stable, nil
 	}), nil, &sequenceIDs{})
 	session := generousSession(t, store, "session")
@@ -502,14 +514,20 @@ func TestStableReadPanicIsUnavailableAndDoesNotInvalidateRevision(t *testing.T) 
 	if _, err := store.ReadBlock(context.Background(), lease.ID(), ref); err == nil || errors.Is(err, ErrRevisionDrift) {
 		t.Fatalf("panicking stable read = %v", err)
 	}
-	if stable.closed.Load() != 0 || process.Snapshot().Used == (QuotaUsage{}) || share.Snapshot().Used == (QuotaUsage{}) || session.Snapshot().Used() == (revisioncapacity.CapacityUsage{}) {
+	if stable.closed.Load() != 0 ||
+		store.CapacitySnapshot().Process().Used() == (revisioncapacity.CapacityUsage{}) ||
+		store.CapacitySnapshot().Share().Used() == (revisioncapacity.CapacityUsage{}) ||
+		session.Snapshot().Used() == (revisioncapacity.CapacityUsage{}) {
 		t.Fatal("uncertain read invalidated an otherwise active revision")
 	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if stable.closed.Load() != 1 || process.Snapshot().Used != (QuotaUsage{}) || share.Snapshot().Used != (QuotaUsage{}) || session.Snapshot().Used() != (revisioncapacity.CapacityUsage{}) {
-		t.Fatal("store close leaked source or quota after uncertain read")
+	if stable.closed.Load() != 1 ||
+		store.CapacitySnapshot().Process().Used() != (revisioncapacity.CapacityUsage{}) ||
+		store.CapacitySnapshot().Share().Used() != (revisioncapacity.CapacityUsage{}) ||
+		session.Snapshot().Used() != (revisioncapacity.CapacityUsage{}) {
+		t.Fatal("store close leaked source or capacity after uncertain read")
 	}
 }
 

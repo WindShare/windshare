@@ -15,7 +15,7 @@ func TestExplicitLeaseEndingsRetireIdleRevisionImmediately(t *testing.T) {
 			clock := &testClock{now: time.Unix(100, 0)}
 			file, record := fileRecord(t, 1)
 			stable := &testStableFile{data: []byte{1}}
-			store, process, share := newRevisionStore(t, &testRevisionSource{files: []*testStableFile{stable}}, clock, nil, file, record)
+			store := newRevisionStore(t, &testRevisionSource{files: []*testStableFile{stable}}, clock, nil, file, record)
 			var traces []RevisionTrace
 			store.tracer = RevisionTracerFunc(func(event RevisionTrace) { traces = append(traces, event) })
 			session := generousSession(t, store, "session")
@@ -30,7 +30,8 @@ func TestExplicitLeaseEndingsRetireIdleRevisionImmediately(t *testing.T) {
 			if stable.closed.Load() != 1 {
 				t.Fatalf("stable source closes=%d", stable.closed.Load())
 			}
-			if process.Snapshot().Used != (QuotaUsage{}) || share.Snapshot().Used != (QuotaUsage{}) ||
+			if store.CapacitySnapshot().Process().Used() != (revisioncapacity.CapacityUsage{}) ||
+				store.CapacitySnapshot().Share().Used() != (revisioncapacity.CapacityUsage{}) ||
 				session.Snapshot().Used() != (revisioncapacity.CapacityUsage{}) {
 				t.Fatalf("capacity retained after ending %v", kind)
 			}
@@ -52,7 +53,7 @@ func TestInitialRangeFailureRollsBackUndeliveredLeaseImmediately(t *testing.T) {
 	clock := &testClock{now: time.Unix(100, 0)}
 	file, record := fileRecord(t, 1)
 	stable := &testStableFile{data: []byte{1}}
-	store, process, share := newRevisionStore(t, &testRevisionSource{files: []*testStableFile{stable}}, clock, nil, file, record)
+	store := newRevisionStore(t, &testRevisionSource{files: []*testStableFile{stable}}, clock, nil, file, record)
 	session := generousSession(t, store, "session")
 	outside, err := NewRangeSet([]Range{{Offset: 0, End: 2}})
 	if err != nil {
@@ -69,7 +70,8 @@ func TestInitialRangeFailureRollsBackUndeliveredLeaseImmediately(t *testing.T) {
 	if stable.closed.Load() != 1 {
 		t.Fatalf("undelivered initial-range source closes=%d", stable.closed.Load())
 	}
-	if process.Snapshot().Used != (QuotaUsage{}) || share.Snapshot().Used != (QuotaUsage{}) ||
+	if store.CapacitySnapshot().Process().Used() != (revisioncapacity.CapacityUsage{}) ||
+		store.CapacitySnapshot().Share().Used() != (revisioncapacity.CapacityUsage{}) ||
 		session.Snapshot().Used() != (revisioncapacity.CapacityUsage{}) {
 		t.Fatal("capacity retained after initial-range rollback")
 	}
@@ -81,7 +83,7 @@ func TestDetachedDeadlineSurvivesActiveAndLaterRelinquishedLeases(t *testing.T) 
 	file, record := fileRecord(t, 1)
 	stable := &testStableFile{data: []byte{1}}
 	source := &testRevisionSource{files: []*testStableFile{stable}}
-	store, process, _ := newRevisionStore(t, source, clock, nil, file, record)
+	store := newRevisionStore(t, source, clock, nil, file, record)
 	sessionA := generousSession(t, store, "session-a")
 	sessionB := generousSession(t, store, "session-b")
 
@@ -108,8 +110,8 @@ func TestDetachedDeadlineSurvivesActiveAndLaterRelinquishedLeases(t *testing.T) 
 	if err := store.EndLease(active.ID(), LeaseRelinquished); err != nil {
 		t.Fatal(err)
 	}
-	if stable.closed.Load() != 0 || process.Snapshot().Used != (QuotaUsage{StableHandles: 1}) {
-		t.Fatalf("earlier detachment was erased: closes=%d quota=%+v", stable.closed.Load(), process.Snapshot().Used)
+	if stable.closed.Load() != 0 || store.CapacitySnapshot().Process().Used() != (revisioncapacity.CapacityUsage{StableHandles: 1}) {
+		t.Fatalf("earlier detachment was erased: closes=%d capacity=%+v", stable.closed.Load(), store.CapacitySnapshot().Process().Used())
 	}
 
 	reopened, err := store.OpenRevision(context.Background(), file, sessionB)
@@ -133,8 +135,8 @@ func TestDetachedDeadlineSurvivesActiveAndLaterRelinquishedLeases(t *testing.T) 
 	if err := store.ValidateLease(reopened.ID(), reopened.Descriptor()); !errors.Is(err, ErrLeaseExpired) {
 		t.Fatalf("ended lease validation=%v", err)
 	}
-	if stable.closed.Load() != 1 || process.Snapshot().Used != (QuotaUsage{}) {
-		t.Fatalf("expired detached recovery closes=%d quota=%+v", stable.closed.Load(), process.Snapshot().Used)
+	if stable.closed.Load() != 1 || store.CapacitySnapshot().Process().Used() != (revisioncapacity.CapacityUsage{}) {
+		t.Fatalf("expired detached recovery closes=%d capacity=%+v", stable.closed.Load(), store.CapacitySnapshot().Process().Used())
 	}
 }
 
@@ -143,7 +145,7 @@ func TestDetachedLeaseEndingExtendsRevisionRecoveryToLatestDeadline(t *testing.T
 	clock := &testClock{now: startedAt}
 	file, record := fileRecord(t, 1)
 	stable := &testStableFile{data: []byte{1}}
-	store, _, _ := newRevisionStore(t, &testRevisionSource{files: []*testStableFile{stable}}, clock, nil, file, record)
+	store := newRevisionStore(t, &testRevisionSource{files: []*testStableFile{stable}}, clock, nil, file, record)
 	session := generousSession(t, store, "session")
 	first, err := store.OpenRevision(context.Background(), file, session)
 	if err != nil {
@@ -181,7 +183,7 @@ func TestEndLeaseRejectsMissingEvidenceKind(t *testing.T) {
 	clock := &testClock{now: time.Unix(100, 0)}
 	file, record := fileRecord(t, 1)
 	stable := &testStableFile{data: []byte{1}}
-	store, _, _ := newRevisionStore(t, &testRevisionSource{files: []*testStableFile{stable}}, clock, nil, file, record)
+	store := newRevisionStore(t, &testRevisionSource{files: []*testStableFile{stable}}, clock, nil, file, record)
 	session := generousSession(t, store, "session")
 	lease, err := store.OpenRevision(context.Background(), file, session)
 	if err != nil {

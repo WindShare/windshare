@@ -3,7 +3,6 @@ package content
 import (
 	"bytes"
 	"errors"
-	"math"
 	"sync"
 	"testing"
 
@@ -106,43 +105,6 @@ func TestKeyTreeDestroySerializesWithConcurrentDerivation(t *testing.T) {
 	close(errorsOut)
 	for err := range errorsOut {
 		t.Fatalf("concurrent key derivation failed: %v", err)
-	}
-}
-
-func TestQuotaHierarchyRejectsInvalidAndOverflowingAdmissions(t *testing.T) {
-	if DefaultSessionQuotaLimits().ActiveLeases != DefaultSessionActiveLeases ||
-		DefaultShareQuotaLimits().StableHandles != DefaultShareStableHandles ||
-		DefaultProcessQuotaLimits().ActiveLeases != DefaultProcessActiveLeases {
-		t.Fatal("content default quota profile drifted from the frozen limits")
-	}
-	if _, err := NewQuotaAccount("", QuotaLimits{StableHandles: 1, ActiveLeases: 1}); err == nil {
-		t.Fatal("unnamed quota was accepted")
-	}
-	process := generousQuota(t, "process")
-	share := generousQuota(t, "share")
-	session := generousQuota(t, "session")
-	if _, err := ReserveQuota(QuotaHierarchy{}, QuotaUsage{ActiveLeases: 1}); err == nil {
-		t.Fatal("nil quota hierarchy was accepted")
-	}
-	if _, err := ReserveQuota(QuotaHierarchy{Process: process, Share: process, Session: session}, QuotaUsage{ActiveLeases: 1}); err == nil {
-		t.Fatal("aliased quota hierarchy was accepted")
-	}
-	large, _ := NewQuotaAccount("large", QuotaLimits{StableHandles: math.MaxUint64, ActiveLeases: math.MaxUint64})
-	reservation, err := large.reserve(QuotaUsage{ActiveLeases: math.MaxUint64})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := large.reserve(QuotaUsage{ActiveLeases: 1}); !errors.Is(err, ErrQuotaExceeded) {
-		t.Fatalf("overflow quota error = %v", err)
-	}
-	reservation.release()
-	if (*QuotaAccount)(nil).Name() != "" || (*QuotaAccount)(nil).Snapshot() != (QuotaSnapshot{}) {
-		t.Fatal("nil quota inspection is not safe")
-	}
-	var nilReservation *QuotaReservation
-	nilReservation.Release()
-	if process.Name() != "process" || share.Name() != "share" {
-		t.Fatal("quota account names changed")
 	}
 }
 

@@ -20,7 +20,7 @@ func (ids failingLeaseIDs) NewLeaseID() (LeaseID, error) {
 func TestResidentAdmissionFailurePreservesPublishedAuthorityAndAccounting(t *testing.T) {
 	file, record := fileRecord(t, 1)
 	stable := &testStableFile{data: []byte{1}}
-	store, process, share := newRevisionStore(
+	store := newRevisionStore(
 		t, &testRevisionSource{files: []*testStableFile{stable}},
 		&testClock{now: time.Unix(100, 0)}, nil, file, record,
 	)
@@ -36,8 +36,8 @@ func TestResidentAdmissionFailurePreservesPublishedAuthorityAndAccounting(t *tes
 	if _, err := store.OpenRevision(context.Background(), file, failedSession); !errors.Is(err, sentinel) {
 		t.Fatalf("resident generator failure=%v", err)
 	}
-	if process.Snapshot().Used != (QuotaUsage{StableHandles: 1, ActiveLeases: 1}) ||
-		share.Snapshot().Used != (QuotaUsage{StableHandles: 1, ActiveLeases: 1}) ||
+	if store.CapacitySnapshot().Process().Used() != (revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 1}) ||
+		store.CapacitySnapshot().Share().Used() != (revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 1}) ||
 		originalSession.Snapshot().Used() != (revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 1}) ||
 		failedSession.Snapshot().Used() != (revisioncapacity.CapacityUsage{}) {
 		t.Fatalf("failed resident admission changed capacity: %+v", store.CapacitySnapshot())
@@ -50,7 +50,7 @@ func TestResidentAdmissionFailurePreservesPublishedAuthorityAndAccounting(t *tes
 func TestRevisionInvalidationRemainsIdempotentAcrossActiveReaders(t *testing.T) {
 	file, record := fileRecord(t, 1)
 	stable := &testStableFile{data: []byte{1}}
-	store, _, _ := newRevisionStore(
+	store := newRevisionStore(
 		t, &testRevisionSource{files: []*testStableFile{stable}},
 		&testClock{now: time.Unix(100, 0)}, nil, file, record,
 	)
