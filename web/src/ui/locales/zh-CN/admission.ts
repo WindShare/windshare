@@ -18,6 +18,7 @@ export const admission: typeof English = {
   endedDownload: '分享已结束。请打开新的分享链接以下载更多内容。',
   reconnectDownload: '请通过分享链接重新连接，再开始其他下载。',
   emptySelection: '请选择要下载的项目。',
+  actionInProgress: '当前下载操作正在进行。',
   anotherAction: '另一个下载操作正在进行。',
   matchingShare: '请打开原分享链接以继续下载。',
   receiverBusy: '正在接收另一个下载。请先暂停或完成它，再继续此任务。',

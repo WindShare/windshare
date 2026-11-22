@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import type { RetainedReceiveOperation } from '../../src/application/receive/contracts'
+import type { ReceiveCompositionPort, RetainedReceiveActionResult, RetainedReceiveOperation } from '../../src/application/receive/contracts'
+import { RetainedInventoryCoordinator } from '../../src/application/receive/retained/coordinator'
 import type { ReceiveLifecycleState } from '../../src/output/workspace'
 import type { ArtifactOffers } from '../../src/output/model/artifacts/offers'
 import type { ProjectionEpoch } from '../../src/transfer/projection/contracts'
-import { composeTasks } from '../../src/ui/experience/task-composition'
+import { composeTasks, type RetainedAdmission } from '../../src/ui/experience/task-composition'
 import { resolveWorkspaceTaskLayout, type WorkspaceTaskSnapshot } from '../../src/ui/experience/retained-match'
 import { EMPTY_OUTPUT_PRESENTATION } from '../../src/ui/output'
 import { EMPTY_RETAINED_INVENTORY } from '../../src/application/receive/retained/model'
@@ -71,6 +72,7 @@ function offersFor(selectionDigest: string): ArtifactOffers {
 
 function workspaceSnapshot(
   patch: Partial<Parameters<typeof experienceSnapshot>[0]> = {},
+  admission?: RetainedAdmission,
 ): WorkspaceTaskSnapshot {
   const base = experienceSnapshot({
     share: {
@@ -83,7 +85,7 @@ function workspaceSnapshot(
     retained: { ...EMPTY_RETAINED_INVENTORY, kind: 'available' },
     ...patch,
   })
-  const composed = composeTasks(base)
+  const composed = composeTasks(base, admission)
   return Object.freeze({
     output: base.output,
     progress: base.progress,
@@ -115,6 +117,107 @@ describe('resolveWorkspaceTaskLayout', () => {
     expect(layout.primaryTask?.primaryAction?.id).toBe('redownload')
     expect(layout.collapseRemoteSaving).toBe(true)
     expect(layout.repeatRemoteLabel).toBe(true)
+    expect(layout.banner).toBeNull()
+  })
+
+  it.each([
+    {
+      label: 'retry-download',
+      lifecycle: workspaceHandoff(identityText(29)),
+      continuation: 'retry-download' as const,
+      actions: ['redownload', 'delete'] as const,
+      action: 'redownload' as const,
+    },
+    {
+      label: 'save-artifact',
+      lifecycle: Object.freeze({
+        operationId: identityText(30),
+        receiveIntentDigest: identityText(31, 32),
+        generation: 3n,
+        kind: 'waiting-to-save' as const,
+        packageDigest: identityText(32, 32),
+      }),
+      continuation: 'save-artifact' as const,
+      actions: ['save', 'discard'] as const,
+      action: 'save' as const,
+    },
+  ])('keeps the $label local task visible and remote saving collapsed while re-export is in progress', async ({
+    lifecycle,
+    continuation,
+    actions,
+    action,
+  }) => {
+    const operation = retainedOp({
+      operationId: lifecycle.operationId,
+      lifecycle,
+      continuation,
+      actions,
+    })
+    let finishExport!: (result: RetainedReceiveActionResult) => void
+    const exportGate = new Promise<RetainedReceiveActionResult>(resolve => {
+      finishExport = resolve
+    })
+    const coordinator = new RetainedInventoryCoordinator({
+      receive: {
+        retained: {
+          list: async () => Object.freeze({
+            operations: Object.freeze([operation]),
+            presentationFailures: Object.freeze([]),
+            act: () => exportGate,
+            close: () => undefined,
+          }),
+        },
+      } as unknown as ReceiveCompositionPort,
+      isDisposed: () => false,
+      currentJoinedShare: () => undefined,
+      continuationBlocked: () => false,
+      adoptContinuation: async () => undefined,
+      ownsRuntime: () => false,
+      publish: () => undefined,
+      onActionError: () => undefined,
+    })
+    const admission: RetainedAdmission = (candidate, candidateAction) =>
+      coordinator.actionAdmission(candidate, candidateAction)
+
+    await coordinator.load()
+    const before = resolveWorkspaceTaskLayout(
+      workspaceSnapshot({ retained: coordinator.getSnapshot() }, admission),
+    )
+    expect(before.primaryTask?.operationId).toBe(operation.operationId)
+    expect(before.primaryTask?.primaryAction?.id).toBe(action)
+    expect(before.primaryTask?.primaryAction?.disabledReason).toBeNull()
+    expect(before.collapseRemoteSaving).toBe(true)
+
+    coordinator.perform(coordinator.getSnapshot().operations[0]!, action)
+    const during = resolveWorkspaceTaskLayout(
+      workspaceSnapshot({ retained: coordinator.getSnapshot() }, admission),
+    )
+    expect(during.primaryTask?.operationId).toBe(operation.operationId)
+    expect(during.primaryTask?.primaryAction?.id).toBe(action)
+    expect(during.primaryTask?.primaryAction?.disabledReason).not.toBeNull()
+    expect(during.collapseRemoteSaving).toBe(true)
+    expect(during.repeatRemoteLabel).toBe(true)
+    expect(during.banner).toBeNull()
+
+    finishExport(Object.freeze({ kind: 'completed' }))
+    await Promise.resolve()
+    coordinator.close(new DOMException('test complete', 'AbortError'))
+  })
+
+  it('does not promote or collapse remote saving when retained actions are read-only', () => {
+    const lifecycle = workspaceHandoff(identityText(33))
+    const operation = retainedOp({
+      operationId: lifecycle.operationId,
+      lifecycle,
+      continuation: 'retry-download',
+      actions: [],
+      unavailableReason: 'noSavedAuthority',
+    })
+    const layout = resolveWorkspaceTaskLayout(workspaceSnapshot({
+      retained: { kind: 'available', pending: null, operations: [operation] },
+    }))
+    expect(layout.primaryTask).toBeNull()
+    expect(layout.collapseRemoteSaving).toBe(false)
     expect(layout.banner).toBeNull()
   })
 

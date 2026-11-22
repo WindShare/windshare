@@ -16,6 +16,7 @@ export type ReceiveBlockReason =
   | 'endedDownload'
   | 'reconnectDownload'
   | 'emptySelection'
+  | 'actionInProgress'
   | 'anotherAction'
   | 'matchingShare'
   | 'receiverBusy'

@@ -126,7 +126,9 @@ export class RetainedInventoryCoordinator {
       return Object.freeze({ allowed: false, reason: 'actionUnavailable' })
     }
     if (this.#pending !== undefined) {
-      return Object.freeze({ allowed: false, reason: 'anotherAction' })
+      const sameAction = this.#pending.operation.operationId === operation.operationId &&
+        this.#pending.action === action
+      return Object.freeze({ allowed: false, reason: sameAction ? 'actionInProgress' : 'anotherAction' })
     }
     if (retainedActionNeedsShare(operation, action)) {
       const joined = this.#options.currentJoinedShare()

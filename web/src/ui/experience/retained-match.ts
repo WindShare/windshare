@@ -21,10 +21,11 @@ function isCompleteLocalRetained(
   operation: RetainedReceiveOperation,
   task: TaskPresentation,
 ): boolean {
+  // Transient action busy state disables the button in place; it does not invalidate the local artifact.
   return (operation.continuation === 'retry-download' || operation.continuation === 'save-artifact') &&
     task.completeness === 'complete' &&
     task.primaryAction !== null &&
-    task.primaryAction.disabledReason === null
+    task.primaryAction.target.kind === 'retained'
 }
 
 function findCompleteLocalMatch(snapshot: WorkspaceTaskSnapshot): TaskPresentation | null {

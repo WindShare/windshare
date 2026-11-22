@@ -18,6 +18,7 @@ export const admission = {
   endedDownload: 'This share has ended. Open a new share link to download more.',
   reconnectDownload: 'Reconnect using the share link before starting another download.',
   emptySelection: 'Select items to download.',
+  actionInProgress: 'This download action is in progress.',
   anotherAction: 'Another download action is in progress.',
   matchingShare: 'Open the original share link to continue this download.',
   receiverBusy: 'Another download is using the receiver. Pause or finish it before continuing this task.',

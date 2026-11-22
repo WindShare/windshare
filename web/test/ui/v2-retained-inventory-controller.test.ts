@@ -194,6 +194,34 @@ describe('retained inventory local finalization and identity admission', () => {
     },
   )
 
+  it('distinguishes the in-progress action from other blocked retained actions', async () => {
+    const active = operation(['redownload', 'delete'], 'retry-download', 'active-op')
+    const sibling = operation(['redownload', 'delete'], 'retry-download', 'sibling-op')
+    const actionGate = deferred<RetainedReceiveActionResult>()
+    const harness = retainedHarness(() => Promise.resolve(testInventory([active, sibling], () => actionGate.promise)))
+
+    await harness.coordinator.load()
+    const [activeRow, siblingRow] = harness.publications.at(-1)!.operations
+    harness.coordinator.perform(activeRow!, 'redownload')
+
+    expect(harness.coordinator.actionAdmission(activeRow!, 'redownload')).toEqual({
+      allowed: false,
+      reason: 'actionInProgress',
+    })
+    expect(harness.coordinator.actionAdmission(activeRow!, 'delete')).toEqual({
+      allowed: false,
+      reason: 'anotherAction',
+    })
+    expect(harness.coordinator.actionAdmission(siblingRow!, 'redownload')).toEqual({
+      allowed: false,
+      reason: 'anotherAction',
+    })
+
+    actionGate.resolve(Object.freeze({ kind: 'completed' }))
+    await turns()
+    expect(harness.actionErrors).toEqual([])
+  })
+
   it('rejects mismatched shares and copied presentation rows before consuming the original token', async () => {
     const original = Object.freeze({ ...operation(['continue'], 'resume-receive'),
       shareInstance: 'original-share', display: { objectLabel: 'Same name', createdAtMilliseconds: 1 } })
@@ -748,6 +776,10 @@ describe('retained action incident ownership', () => {
       })
       expect(Object.isFrozen(snapshotDuringAct?.pending)).toBe(true)
       expect(harness.coordinator.pending).toBe(true)
+      expect(harness.coordinator.actionAdmission(retained, action)).toEqual({
+        allowed: false,
+        reason: 'actionInProgress',
+      })
 
       actionGate.resolve(Object.freeze({ kind: 'completed' }))
       await turns()
