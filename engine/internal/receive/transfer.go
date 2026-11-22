@@ -456,7 +456,17 @@ func resolveGetOutputOperation(
 		}
 		operation, err = lookup.Reservation.Create(ctx, artifact)
 		if err != nil {
-			return getOutputAdmission{}, err
+			switch {
+			case errors.Is(err, output.ErrOperationAlreadyRunning):
+				return getOutputAdmission{}, errGetOutputOperationAlreadyRunning
+			case errors.Is(err, output.ErrOperationAmbiguous):
+				return getOutputAdmission{}, errGetOutputOperationAmbiguous
+			default:
+				if attention, ok := errors.AsType[*output.AttentionError](err); ok && attention != nil {
+					return getOutputAdmission{}, errors.Join(errGetOutputOperationNeedsAttention, attention)
+				}
+				return getOutputAdmission{}, err
+			}
 		}
 	case getOutputLookupReopened:
 		operation = lookup.Operation

@@ -263,11 +263,35 @@ func (a *Authority) selectAutomaticLocked(
 	}
 	defer dirLock.Close()
 
-	names, err := readDirNames(ctrlDir)
+	matches, err := findAutomaticMatchesLocked(ctrlDir, selection.Digest())
 	if err != nil {
 		return ActiveLookup{}, wrapOutputFault(ctx, transferfault.OutputOwnership, "list control directory", err)
 	}
-	wantDigest := selection.Digest()
+	switch len(matches) {
+	case 0:
+		adm := &pendingAdmission{selection: selection}
+		a.admission = adm
+		a.stage = stageLookupHeld
+		return ActiveLookup{authority: a, kind: LookupCreateReady, admission: adm}, nil
+	case 1:
+		return a.reopenMatchLocked(ctx, ctrlDir, selection, matches[0])
+	default:
+		a.stage = stageStopped
+		return ActiveLookup{authority: a, kind: LookupAmbiguous}, nil
+	}
+}
+
+// findAutomaticMatchesLocked scans non-redownload operations matching wantDigest.
+// Callers must hold dirLock on ctrlDir so automatic lookup and creation enforce
+// the same uniqueness rule.
+func findAutomaticMatchesLocked(
+	ctrlDir *Dir,
+	wantDigest [transfer.SelectionSpecDigestBytes]byte,
+) ([]string, error) {
+	names, err := readDirNames(ctrlDir)
+	if err != nil {
+		return nil, err
+	}
 	var matches []string
 	for _, name := range names {
 		if _, ok := isValidOpDirName(name); !ok {
@@ -286,33 +310,30 @@ func (a *Authority) selectAutomaticLocked(
 			matches = append(matches, name)
 		}
 	}
-	switch len(matches) {
-	case 0:
-		adm := &pendingAdmission{selection: selection}
-		a.admission = adm
-		a.stage = stageLookupHeld
-		return ActiveLookup{authority: a, kind: LookupCreateReady, admission: adm}, nil
-	case 1:
-		opDirName := matches[0]
-		opDir, err := openChildDir(ctrlDir, opDirName)
-		if err != nil {
-			return ActiveLookup{}, wrapOutputFault(ctx, transferfault.OutputOwnership, "open matched operation", err)
-		}
-		taskLock, _, lockErr := acquireLockFile(opDir, taskLockFileName, false, false)
-		if errors.Is(lockErr, ErrNamespaceLockBusy) {
-			_ = opDir.Close()
-			a.stage = stageStopped
-			return ActiveLookup{authority: a, kind: LookupAlreadyRunning}, nil
-		}
-		if lockErr != nil {
-			_ = opDir.Close()
-			return ActiveLookup{}, wrapOutputFault(ctx, transferfault.OutputOwnership, "acquire task lock", lockErr)
-		}
-		return a.reopenLocked(ctx, selection, opDirName, opDir, taskLock, false)
-	default:
-		a.stage = stageStopped
-		return ActiveLookup{authority: a, kind: LookupAmbiguous}, nil
+	return matches, nil
+}
+
+func (a *Authority) reopenMatchLocked(
+	ctx context.Context,
+	ctrlDir *Dir,
+	selection transfer.SelectionSpec,
+	opDirName string,
+) (ActiveLookup, error) {
+	opDir, err := openChildDir(ctrlDir, opDirName)
+	if err != nil {
+		return ActiveLookup{}, wrapOutputFault(ctx, transferfault.OutputOwnership, "open matched operation", err)
 	}
+	taskLock, _, lockErr := acquireLockFile(opDir, taskLockFileName, false, false)
+	if errors.Is(lockErr, ErrNamespaceLockBusy) {
+		_ = opDir.Close()
+		a.stage = stageStopped
+		return ActiveLookup{authority: a, kind: LookupAlreadyRunning}, nil
+	}
+	if lockErr != nil {
+		_ = opDir.Close()
+		return ActiveLookup{}, wrapOutputFault(ctx, transferfault.OutputOwnership, "acquire task lock", lockErr)
+	}
+	return a.reopenLocked(ctx, selection, opDirName, opDir, taskLock, false)
 }
 
 func (a *Authority) reopenLocked(

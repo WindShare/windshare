@@ -23,6 +23,7 @@ type fixedGetShapeResolver struct {
 	err      error
 	calls    int
 	events   *[]string
+	onProbe  func()
 }
 
 func (resolver *fixedGetShapeResolver) ResolveOrdinaryOutputShape(
@@ -34,6 +35,9 @@ func (resolver *fixedGetShapeResolver) ResolveOrdinaryOutputShape(
 	resolver.calls++
 	if resolver.events != nil {
 		*resolver.events = append(*resolver.events, "shape")
+	}
+	if resolver.onProbe != nil {
+		resolver.onProbe()
 	}
 	return resolver.decision, resolver.err
 }
@@ -392,4 +396,89 @@ type testUnusedMaterializer struct{}
 
 func (testUnusedMaterializer) OpenDirectTree(context.Context, transfer.ReceiveIntent) (transfer.DirectTreeSession, error) {
 	return nil, errors.New("unexpected materializer open")
+}
+
+func TestResolveGetOutputOperationRejectsConcurrentAutomaticCreateDuringShapeProbe(t *testing.T) {
+	ctx := context.Background()
+	rootPath := newCLICertifiedOutputTestRoot(t)
+	openAuthority := func() getOutputAuthority {
+		t.Helper()
+		authority, err := (filesystem.FilesystemOutput{RootPath: rootPath, CreateRoot: true}).NewOutputAuthority(OutputConfig{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mode, err := authority.BindDestination(ctx)
+		if err != nil {
+			_ = authority.Close()
+			t.Fatal(err)
+		}
+		if mode != getOutputResumable {
+			_ = authority.Close()
+			t.Fatalf("certified output mode=%d", mode)
+		}
+		return authority
+	}
+	selection := getReopenSelection(t, true, nil)
+	decision, err := ordinaryoutput.NewSyntheticSelectionShape(ordinaryoutput.ShapeFallbackMultipleRoots)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var firstAuthority getOutputAuthority
+	var firstAdmitted getOutputAdmission
+	var firstErr error
+
+	secondAuthority := openAuthority()
+	secondResolver := &fixedGetShapeResolver{
+		decision: decision,
+		onProbe: func() {
+			// Simulate another default `wind get` finishing lookup+create while
+			// this instance is in flight resolving remote output shape.
+			firstAuthority = openAuthority()
+			firstAdmitted, firstErr = resolveGetOutputOperation(
+				ctx, firstAuthority, &fixedGetShapeResolver{decision: decision},
+				selection, OutputCreateOrResume, receivecontract.OperationID{},
+			)
+		},
+	}
+
+	_, err = resolveGetOutputOperation(
+		ctx, secondAuthority, secondResolver, selection, OutputCreateOrResume, receivecontract.OperationID{},
+	)
+	if firstErr != nil {
+		t.Fatalf("first concurrent admission failed: %v", firstErr)
+	}
+	if !errors.Is(err, errGetOutputOperationAlreadyRunning) {
+		t.Fatalf("second concurrent admission error = %v, want errGetOutputOperationAlreadyRunning", err)
+	}
+	observation := getObservation{observationState: &observationState{}}
+	if step := reportGetOutputAdmissionFailure(observation, err); step != stepLocalFailure ||
+		observation.failureSnapshot().Code != FailureOutputOperationAlreadyRunning {
+		t.Fatalf("concurrent create failure projection = (step=%v, snapshot=%+v)", step, observation.failureSnapshot())
+	}
+
+	if err := secondAuthority.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := firstAuthority.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	thirdAuthority := openAuthority()
+	defer func() {
+		if closeErr := thirdAuthority.Close(); closeErr != nil {
+			t.Errorf("close third authority: %v", closeErr)
+		}
+	}()
+	reopenResolver := &fixedGetShapeResolver{err: errors.New("automatic reopen must not resolve shape")}
+	reopened, err := resolveGetOutputOperation(
+		ctx, thirdAuthority, reopenResolver, selection, OutputCreateOrResume, receivecontract.OperationID{},
+	)
+	if err != nil {
+		t.Fatalf("third automatic admission failed: %v", err)
+	}
+	if reopened.lookup != getOutputLookupReopened || reopenResolver.calls != 0 ||
+		!reopened.operation.Intent.EqualCanonical(firstAdmitted.operation.Intent) {
+		t.Fatalf("third admission = %+v, want reopen of %x", reopened, firstAdmitted.operation.Intent.OperationID().Bytes())
+	}
 }

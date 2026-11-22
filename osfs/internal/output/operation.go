@@ -37,7 +37,9 @@ func (a *Authority) CreateOperation(
 	artifact receivecontract.ArtifactSpec,
 ) (_ *Operation, resultErr error) {
 	defer func() {
-		resultErr = DiagnoseFailure(FailureCreate, resultErr)
+		if resultErr != nil && !isAdmissionOutcomeError(resultErr) {
+			resultErr = DiagnoseFailure(FailureCreate, resultErr)
+		}
 	}()
 	if a == nil || ctx == nil || artifact.IsZero() {
 		return nil, transfer.ErrInvalidOutputBinding
@@ -56,14 +58,6 @@ func (a *Authority) CreateOperation(
 	if !ok {
 		return nil, transfer.ErrInvalidOutputBinding
 	}
-	opID, err := randomOperationID(a.random)
-	if err != nil {
-		return nil, err
-	}
-	resID, err := randomReservationID(a.random)
-	if err != nil {
-		return nil, err
-	}
 
 	ctrlDir, err := ensureControlDir(a.root)
 	if err != nil {
@@ -76,6 +70,28 @@ func (a *Authority) CreateOperation(
 		return nil, wrapOutputFault(ctx, transferfault.OutputOwnership, "lock control directory", err)
 	}
 	defer dirLock.Close()
+
+	// SelectOperation releases dirLock before network shape resolution, so an
+	// automatic admission must re-check uniqueness under dirLock before creating
+	// a new task. Explicit --redownload intentionally creates a separate task.
+	if !a.admission.redownload {
+		existing, recheckErr := a.recheckAutomaticCreateLocked(ctx, ctrlDir, a.admission.selection)
+		if recheckErr != nil {
+			return nil, recheckErr
+		}
+		if existing != nil {
+			return existing, nil
+		}
+	}
+
+	opID, err := randomOperationID(a.random)
+	if err != nil {
+		return nil, err
+	}
+	resID, err := randomReservationID(a.random)
+	if err != nil {
+		return nil, err
+	}
 
 	authorityRef, err := ensureAuthorityRef(ctrlDir, a.random)
 	if err != nil {
@@ -113,6 +129,70 @@ func (a *Authority) CreateOperation(
 	a.operation = op
 	a.stage = stageOperationReady
 	return op, nil
+}
+
+func (a *Authority) recheckAutomaticCreateLocked(
+	ctx context.Context,
+	ctrlDir *Dir,
+	selection transfer.SelectionSpec,
+) (*Operation, error) {
+	matches, err := findAutomaticMatchesLocked(ctrlDir, selection.Digest())
+	if err != nil {
+		return nil, wrapOutputFault(ctx, transferfault.OutputOwnership, "list control directory", err)
+	}
+	switch len(matches) {
+	case 0:
+		return nil, nil
+	case 1:
+		reopened, err := a.reopenMatchLocked(ctx, ctrlDir, selection, matches[0])
+		if err != nil {
+			a.admission = nil
+			a.stage = stageStopped
+			return nil, err
+		}
+		a.admission = nil
+		switch reopened.kind {
+		case LookupReopened:
+			emitTrace(a.diagnostics, traceEvent{
+				component:    "session",
+				operation:    "create_operation",
+				decision:     "reopened",
+				bindingID:    a.bindingID,
+				operationID:  reopened.operation.intent.OperationID(),
+				intentDigest: reopened.operation.intent.Digest(),
+			})
+			return reopened.operation, nil
+		case LookupAlreadyRunning:
+			emitTrace(a.diagnostics, traceEvent{
+				component: "session",
+				operation: "create_operation",
+				decision:  "already_running",
+				bindingID: a.bindingID,
+			})
+			return nil, ErrAlreadyRunning
+		case LookupNeedsAttention:
+			emitTrace(a.diagnostics, traceEvent{
+				component: "session",
+				operation: "create_operation",
+				decision:  "needs_attention",
+				bindingID: a.bindingID,
+			})
+			return nil, &AttentionError{Reason: reopened.attention}
+		default:
+			a.stage = stageStopped
+			return nil, transfer.ErrInvalidOutputBinding
+		}
+	default:
+		a.admission = nil
+		a.stage = stageStopped
+		emitTrace(a.diagnostics, traceEvent{
+			component: "session",
+			operation: "create_operation",
+			decision:  "ambiguous",
+			bindingID: a.bindingID,
+		})
+		return nil, ErrAmbiguous
+	}
 }
 
 func (a *Authority) initializeOperationDirLocked(

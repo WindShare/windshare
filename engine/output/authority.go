@@ -12,6 +12,8 @@ import (
 
 var ErrContract = errors.New("receive output authority violated its contract")
 var ErrShareStopped = errors.New("retained output belongs to a stopped share")
+var ErrOperationAlreadyRunning = errors.New("receive output operation is already running")
+var ErrOperationAmbiguous = errors.New("receive output operation ownership is ambiguous")
 
 type Mode uint8
 

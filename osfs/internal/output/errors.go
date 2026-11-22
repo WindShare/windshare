@@ -16,6 +16,8 @@ var (
 	ErrPathEscape         = errors.New("osfs: path escapes output root")
 	ErrShareStopped       = errors.New("retained output belongs to a stopped share")
 	ErrBusy               = errors.New("retained output operation is currently active")
+	ErrAlreadyRunning     = errors.New("matching output operation is already running")
+	ErrAmbiguous          = errors.New("matching output operation ownership is ambiguous")
 	ErrInvalidContract    = errors.New("native recovery contract is invalid")
 	ErrUnsafeNamespace    = errors.New("osfs: output namespace is unsafe")
 	ErrNamespaceCollision = errors.New("osfs: output namespace entry already exists")
@@ -23,6 +25,24 @@ var (
 	ErrNamespaceLockBusy  = errors.New("osfs: output namespace lock is already held")
 	ErrUnsupportedOutput  = errors.New("osfs: recoverable native output is unsupported by the destination")
 )
+
+// AttentionError preserves the attention reason when CreateOperation re-checks
+// an automatic selection and encounters a damaged existing operation.
+type AttentionError struct {
+	Reason AttentionReason
+}
+
+func (err *AttentionError) Error() string {
+	return "retained output needs attention: " + string(err.Reason)
+}
+
+func isAdmissionOutcomeError(err error) bool {
+	if errors.Is(err, ErrShareStopped) || errors.Is(err, ErrAlreadyRunning) || errors.Is(err, ErrAmbiguous) {
+		return true
+	}
+	_, ok := errors.AsType[*AttentionError](err)
+	return ok
+}
 
 type FailureStage uint8
 

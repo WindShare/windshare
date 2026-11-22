@@ -130,6 +130,19 @@ func sealOutputError(cause error) error {
 	if errors.Is(cause, osfs.ErrOutputShareStopped) {
 		return output.ErrShareStopped
 	}
+	if errors.Is(cause, osfs.ErrOutputAlreadyRunning) {
+		return output.ErrOperationAlreadyRunning
+	}
+	if errors.Is(cause, osfs.ErrOutputAmbiguous) {
+		return output.ErrOperationAmbiguous
+	}
+	if attention, ok := errors.AsType[*osfs.OutputAttentionError](cause); ok && attention != nil {
+		reason := output.AttentionReason(attention.Reason)
+		if !reason.Valid() {
+			reason = output.AttentionOperation
+		}
+		return &output.AttentionError{Reason: reason}
+	}
 	if errors.Is(cause, osfs.ErrOutputBusy) && !errors.Is(cause, output.ErrBusy) {
 		cause = errors.Join(output.ErrBusy, cause)
 	}

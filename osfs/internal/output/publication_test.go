@@ -330,6 +330,172 @@ func TestJournalCompactionAndRedownloadAndShareStopped(t *testing.T) {
 	}
 }
 
+func TestConcurrentAutomaticCreateRechecksSelectionWhilePreservingRedownload(t *testing.T) {
+	ctx := context.Background()
+	openBound := func(root string) *Authority {
+		t.Helper()
+		auth, err := New(Config{RootPath: root, CreateRoot: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := auth.BindDestination(ctx); err != nil {
+			_ = auth.Close()
+			t.Fatal(err)
+		}
+		return auth
+	}
+	art, err := receivecontract.NewResultRootDirectoryTree(receivecontract.NewSyntheticSelectionResultRoot())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("active rival blocks duplicate and keeps automatic lookup unique", func(t *testing.T) {
+		root := t.TempDir()
+		sel := testSelectionSpec(t, 0x71)
+		first := openBound(root)
+		second := openBound(root)
+		lookupA, err := first.SelectOperation(ctx, sel, receivecontract.AutomaticOperation())
+		if err != nil || lookupA.Kind() != LookupCreateReady {
+			t.Fatalf("first select = (%v, %v)", lookupA.Kind(), err)
+		}
+		lookupB, err := second.SelectOperation(ctx, sel, receivecontract.AutomaticOperation())
+		if err != nil || lookupB.Kind() != LookupCreateReady {
+			t.Fatalf("second select = (%v, %v)", lookupB.Kind(), err)
+		}
+		opA, err := first.CreateOperation(ctx, lookupA, art)
+		if err != nil {
+			t.Fatal(err)
+		}
+		intentA, _ := opA.ReceiveIntent()
+		if _, err := second.CreateOperation(ctx, lookupB, art); !errors.Is(err, ErrAlreadyRunning) {
+			t.Fatalf("contending automatic create = %v, want ErrAlreadyRunning", err)
+		}
+		if err := second.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := first.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		third := openBound(root)
+		defer third.Close()
+		lookupC, err := third.SelectOperation(ctx, sel, receivecontract.AutomaticOperation())
+		if err != nil || lookupC.Kind() != LookupReopened {
+			t.Fatalf("third select = (%v, %v), want LookupReopened", lookupC.Kind(), err)
+		}
+		intentC, _ := lookupC.Operation().ReceiveIntent()
+		if intentC.OperationID() != intentA.OperationID() {
+			t.Fatalf("reopened operation ID = %x, want %x", intentC.OperationID().Bytes(), intentA.OperationID().Bytes())
+		}
+	})
+
+	t.Run("closed rival is seamlessly reopened without creating duplicate", func(t *testing.T) {
+		root := t.TempDir()
+		sel := testSelectionSpec(t, 0x75)
+		first := openBound(root)
+		second := openBound(root)
+		defer second.Close()
+		lookupA, err := first.SelectOperation(ctx, sel, receivecontract.AutomaticOperation())
+		if err != nil || lookupA.Kind() != LookupCreateReady {
+			t.Fatalf("first select = (%v, %v)", lookupA.Kind(), err)
+		}
+		lookupB, err := second.SelectOperation(ctx, sel, receivecontract.AutomaticOperation())
+		if err != nil || lookupB.Kind() != LookupCreateReady {
+			t.Fatalf("second select = (%v, %v)", lookupB.Kind(), err)
+		}
+		opA, err := first.CreateOperation(ctx, lookupA, art)
+		if err != nil {
+			t.Fatal(err)
+		}
+		intentA, _ := opA.ReceiveIntent()
+		if err := first.Close(); err != nil {
+			t.Fatal(err)
+		}
+		opB, err := second.CreateOperation(ctx, lookupB, art)
+		if err != nil {
+			t.Fatalf("reopen on create = %v", err)
+		}
+		intentB, _ := opB.ReceiveIntent()
+		if intentB.OperationID() != intentA.OperationID() {
+			t.Fatalf("create reopened operation ID = %x, want %x", intentB.OperationID().Bytes(), intentA.OperationID().Bytes())
+		}
+	})
+
+	t.Run("stopped rival surfaces ErrShareStopped on create recheck", func(t *testing.T) {
+		root := t.TempDir()
+		sel := testSelectionSpec(t, 0x79)
+		first := openBound(root)
+		second := openBound(root)
+		defer second.Close()
+		lookupA, err := first.SelectOperation(ctx, sel, receivecontract.AutomaticOperation())
+		if err != nil || lookupA.Kind() != LookupCreateReady {
+			t.Fatalf("first select = (%v, %v)", lookupA.Kind(), err)
+		}
+		lookupB, err := second.SelectOperation(ctx, sel, receivecontract.AutomaticOperation())
+		if err != nil || lookupB.Kind() != LookupCreateReady {
+			t.Fatalf("second select = (%v, %v)", lookupB.Kind(), err)
+		}
+		opA, err := first.CreateOperation(ctx, lookupA, art)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := opA.RecordShareStopped(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if err := first.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := second.CreateOperation(ctx, lookupB, art); !errors.Is(err, ErrShareStopped) {
+			t.Fatalf("create after stopped rival = %v, want ErrShareStopped", err)
+		}
+	})
+
+	t.Run("explicit redownload still creates an independent operation", func(t *testing.T) {
+		root := t.TempDir()
+		sel := testSelectionSpec(t, 0x7d)
+		automatic := openBound(root)
+		redownload := openBound(root)
+		lookupA, err := automatic.SelectOperation(ctx, sel, receivecontract.AutomaticOperation())
+		if err != nil || lookupA.Kind() != LookupCreateReady {
+			t.Fatalf("automatic select = (%v, %v)", lookupA.Kind(), err)
+		}
+		lookupR, err := redownload.SelectOperation(ctx, sel, receivecontract.RedownloadOperation())
+		if err != nil || lookupR.Kind() != LookupCreateReady {
+			t.Fatalf("redownload select = (%v, %v)", lookupR.Kind(), err)
+		}
+		opA, err := automatic.CreateOperation(ctx, lookupA, art)
+		if err != nil {
+			t.Fatal(err)
+		}
+		opR, err := redownload.CreateOperation(ctx, lookupR, art)
+		if err != nil {
+			t.Fatalf("redownload create = %v", err)
+		}
+		intentA, _ := opA.ReceiveIntent()
+		intentR, _ := opR.ReceiveIntent()
+		if intentR.OperationID() == intentA.OperationID() {
+			t.Fatal("redownload reused automatic operation ID")
+		}
+		if err := redownload.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := automatic.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		third := openBound(root)
+		defer third.Close()
+		lookupC, err := third.SelectOperation(ctx, sel, receivecontract.AutomaticOperation())
+		if err != nil || lookupC.Kind() != LookupReopened {
+			t.Fatalf("third automatic select = (%v, %v), want LookupReopened", lookupC.Kind(), err)
+		}
+		intentC, _ := lookupC.Operation().ReceiveIntent()
+		if intentC.OperationID() != intentA.OperationID() {
+			t.Fatalf("automatic continuation picked %x, want %x", intentC.OperationID().Bytes(), intentA.OperationID().Bytes())
+		}
+	})
+}
+
 func TestSmallFileAcceptClockAndSameSessionPauseReadmission(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()

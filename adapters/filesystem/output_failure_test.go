@@ -35,6 +35,17 @@ func TestSealedFailureSeparatesCleanupRegardlessOfCauseOrder(t *testing.T) {
 	if sealed := sealOutputError(osfs.ErrOutputShareStopped); !errors.Is(sealed, output.ErrShareStopped) {
 		t.Fatalf("share-stopped normalization = %v", sealed)
 	}
+	if sealed := sealOutputError(osfs.ErrOutputAlreadyRunning); !errors.Is(sealed, output.ErrOperationAlreadyRunning) {
+		t.Fatalf("already-running normalization = %v", sealed)
+	}
+	if sealed := sealOutputError(osfs.ErrOutputAmbiguous); !errors.Is(sealed, output.ErrOperationAmbiguous) {
+		t.Fatalf("ambiguous normalization = %v", sealed)
+	}
+	if sealed := sealOutputError(&osfs.OutputAttentionError{Reason: osfs.OutputAttentionDestination}); sealed == nil {
+		t.Fatal("attention normalization returned nil")
+	} else if attention, ok := errors.AsType[*output.AttentionError](sealed); !ok || attention.Reason != output.AttentionDestination {
+		t.Fatalf("attention normalization = (%v, %t)", attention, ok)
+	}
 	if sealed := sealOutputError(osfs.ErrOutputBusy); !errors.Is(sealed, output.ErrBusy) {
 		t.Fatalf("busy normalization = %v", sealed)
 	}

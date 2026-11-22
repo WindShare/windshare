@@ -6,13 +6,17 @@ import (
 )
 
 var (
-	ErrOutOfRange         = output.ErrOutOfRange
-	ErrPathEscape         = output.ErrPathEscape
-	ErrPathTooLong        = pathfailure.ErrTooLong
-	ErrOutputShareStopped = output.ErrShareStopped
-	ErrOutputBusy         = output.ErrBusy
-	ErrRecoveryContract   = output.ErrInvalidContract
+	ErrOutOfRange           = output.ErrOutOfRange
+	ErrPathEscape           = output.ErrPathEscape
+	ErrPathTooLong          = pathfailure.ErrTooLong
+	ErrOutputShareStopped   = output.ErrShareStopped
+	ErrOutputBusy           = output.ErrBusy
+	ErrOutputAlreadyRunning = output.ErrAlreadyRunning
+	ErrOutputAmbiguous      = output.ErrAmbiguous
+	ErrRecoveryContract     = output.ErrInvalidContract
 )
+
+type OutputAttentionError = output.AttentionError
 
 type OutputFailureStage = output.FailureStage
 
