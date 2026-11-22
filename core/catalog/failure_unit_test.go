@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io/fs"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -137,10 +138,14 @@ func TestPersistAttemptFailureEnforcesEncoderBudgetAndAttemptBounds(t *testing.T
 			t.Fatal(err)
 		}
 		t.Cleanup(meter.Close)
+		attemptCtx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
 		return &scanAttempt{
 			id:         idValue[ScanAttemptID](attemptByte),
 			generation: idValue[DirectoryGeneration](attemptByte + 1),
 			directory:  idValue[DirectoryID](110),
+			ctx:        attemptCtx,
+			cancel:     cancel,
 			resources:  meter,
 		}
 	}
@@ -153,7 +158,7 @@ func TestPersistAttemptFailureEnforcesEncoderBudgetAndAttemptBounds(t *testing.T
 		})
 		session := generousBudget(t, "empty-payload-session")
 		attempt := newAttempt(t, store, session, 10)
-		if _, err := store.persistAttemptFailure(attempt, errors.New("boom"), session); err == nil {
+		if _, err := store.prepareAttemptFailure(attempt, errors.New("boom")); err == nil {
 			t.Fatal("empty failure payload was persisted")
 		}
 	})
@@ -162,11 +167,35 @@ func TestPersistAttemptFailureEnforcesEncoderBudgetAndAttemptBounds(t *testing.T
 		store, _, _ := newStore(t, nil)
 		session := generousBudget(t, "closed-failure-session")
 		attempt := newAttempt(t, store, session, 20)
+		prepared, err := store.prepareAttemptFailure(attempt, errors.New("boom"))
+		if err != nil {
+			t.Fatal(err)
+		}
 		if err := store.Close(); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := store.persistAttemptFailure(attempt, errors.New("boom"), session); !errors.Is(err, ErrCatalogClosed) {
-			t.Fatalf("closed store failure persist = %v", err)
+		store.mu.Lock()
+		_, commitErr := store.commitPreparedFailureLocked(attempt, prepared, errors.New("boom"), session)
+		store.mu.Unlock()
+		if !errors.Is(commitErr, ErrCatalogClosed) {
+			t.Fatalf("closed store failure commit = %v", commitErr)
+		}
+	})
+
+	t.Run("non-owner attempt rejected", func(t *testing.T) {
+		store, _, _ := newStore(t, nil)
+		defer store.Close()
+		session := generousBudget(t, "non-owner-failure-session")
+		attempt := newAttempt(t, store, session, 25)
+		prepared, err := store.prepareAttemptFailure(attempt, errors.New("boom"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		store.mu.Lock()
+		_, commitErr := store.commitPreparedFailureLocked(attempt, prepared, errors.New("boom"), session)
+		store.mu.Unlock()
+		if !errors.Is(commitErr, context.Canceled) {
+			t.Fatalf("non-owner failure commit = %v", commitErr)
 		}
 	})
 
@@ -180,8 +209,8 @@ func TestPersistAttemptFailureEnforcesEncoderBudgetAndAttemptBounds(t *testing.T
 			t.Fatal(err)
 		}
 		attempt := newAttempt(t, store, tightSession, 30)
-		if _, err := store.persistAttemptFailure(attempt, errors.New("boom"), tightSession); !errors.Is(err, ErrBudgetExceeded) {
-			t.Fatalf("tight budget failure persist = %v", err)
+		if _, err := store.prepareAttemptFailure(attempt, errors.New("boom")); !errors.Is(err, ErrBudgetExceeded) {
+			t.Fatalf("tight budget failure prepare = %v", err)
 		}
 	})
 
@@ -190,6 +219,10 @@ func TestPersistAttemptFailureEnforcesEncoderBudgetAndAttemptBounds(t *testing.T
 		defer store.Close()
 		session := generousBudget(t, "cap-session")
 		attempt := newAttempt(t, store, session, 40)
+		prepared, err := store.prepareAttemptFailure(attempt, errors.New("boom"))
+		if err != nil {
+			t.Fatal(err)
+		}
 		filled := make(map[ScanAttemptID]committedFailure, maxFailureAttemptsPerDirectory)
 		for index := range maxFailureAttemptsPerDirectory {
 			var id ScanAttemptID
@@ -198,9 +231,13 @@ func TestPersistAttemptFailureEnforcesEncoderBudgetAndAttemptBounds(t *testing.T
 			id[2] = 1
 			filled[id] = committedFailure{}
 		}
+		store.mu.Lock()
+		store.attempts[attempt.directory] = attempt
 		store.failures[attempt.directory] = filled
-		if _, err := store.persistAttemptFailure(attempt, errors.New("boom"), session); !errors.Is(err, ErrBudgetExceeded) {
-			t.Fatalf("attempt cap error = %v", err)
+		_, commitErr := store.commitPreparedFailureLocked(attempt, prepared, errors.New("boom"), session)
+		store.mu.Unlock()
+		if !errors.Is(commitErr, ErrBudgetExceeded) {
+			t.Fatalf("attempt cap error = %v", commitErr)
 		}
 	})
 
@@ -293,4 +330,244 @@ func TestCatalogStorePagePayloadOwnsBytesAndRejectsWrongAddress(t *testing.T) {
 	); !errors.Is(err, ErrCatalogClosed) {
 		t.Fatalf("closed page object lookup = %v", err)
 	}
+}
+
+func TestCancelledFailureCannotOverwriteSuccessorScan(t *testing.T) {
+	t.Run("successor stays active for third receiver", func(t *testing.T) {
+		store, process, share := newStore(t, nil)
+		rootSession := generousBudget(t, "root-session")
+		directory := prepareScannableDirectory(t, store, rootSession, 190, 191)
+
+		encodeStarted := make(chan struct{})
+		releaseEncode := make(chan struct{})
+		store.failureEncoder = FailureEncoderFunc(func(record DirectoryFailureRecord) (FailurePayload, error) {
+			close(encodeStarted)
+			<-releaseEncode
+			return testFailureEncoder{}.EncodeFailure(record)
+		})
+
+		scanBReady := make(chan struct{})
+		releaseScanB := make(chan struct{})
+		var scanCalls atomic.Int32
+		scanner := DirectoryScannerFunc(func(ctx context.Context, request ScanRequest) (ScanResult, error) {
+			if scanCalls.Add(1) == 1 {
+				return ScanResult{}, NewPermanentScanError(errors.New("attempt-a-permanent"))
+			}
+			if err := request.Children.Add(ctx, scannedFile(t, 192, "from-b", 4)); err != nil {
+				return ScanResult{}, err
+			}
+			close(scanBReady)
+			select {
+			case <-ctx.Done():
+				return ScanResult{}, ctx.Err()
+			case <-releaseScanB:
+				return ScanResult{}, nil
+			}
+		})
+
+		session1 := generousBudget(t, "session-1")
+		ctx1, cancel1 := context.WithCancel(context.Background())
+		waiter1Err := make(chan error, 1)
+		go func() {
+			_, err := store.ListChildren(ctx1, directory, session1, ScanOptions{}, scanner)
+			waiter1Err <- err
+		}()
+		<-encodeStarted
+
+		store.mu.RLock()
+		attemptA := store.attempts[directory]
+		store.mu.RUnlock()
+		if attemptA == nil {
+			t.Fatal("attempt A was not registered while encoding failure")
+		}
+
+		// Cancel A's only waiter before A commits its encoded failure.
+		cancel1()
+		if err := <-waiter1Err; !errors.Is(err, context.Canceled) {
+			t.Fatalf("waiter 1 cancel error = %v", err)
+		}
+
+		// Start successor scan B on the same directory and hold it mid-scan.
+		session2 := generousBudget(t, "session-2")
+		type listResult struct {
+			committed CommittedDirectory
+			err       error
+		}
+		waiter2Result := make(chan listResult, 1)
+		go func() {
+			committed, err := store.ListChildren(context.Background(), directory, session2, ScanOptions{}, scanner)
+			waiter2Result <- listResult{committed: committed, err: err}
+		}()
+		<-scanBReady
+
+		store.mu.RLock()
+		attemptB := store.attempts[directory]
+		store.mu.RUnlock()
+		if attemptB == nil || attemptB == attemptA {
+			t.Fatalf("successor attempt B did not take ownership: attemptA=%p attemptB=%p", attemptA, attemptB)
+		}
+
+		// Let cancelled attempt A finish encoding and attempt completion while B is still running.
+		close(releaseEncode)
+		<-attemptA.done
+
+		store.mu.RLock()
+		current := store.attempts[directory]
+		store.mu.RUnlock()
+		if current != attemptB {
+			t.Fatalf("cancelled attempt A overwrote active attempt B: got=%p want=%p", current, attemptB)
+		}
+		if _, found, err := store.FailurePayload(context.Background(), directory, attemptA.id); err != nil || found {
+			t.Fatalf("cancelled attempt A leaked failure payload: found=%v err=%v", found, err)
+		}
+		if session1.Snapshot().Used != (ResourceUsage{}) {
+			t.Fatalf("cancelled attempt A leaked session budget: %+v", session1.Snapshot().Used)
+		}
+
+		// A third receiver arriving while B is still running must join B rather
+		// than observing A's permanent error.
+		session3 := generousBudget(t, "session-3")
+		waiter3JoinedB := make(chan struct{})
+		waiter3Result := make(chan listResult, 1)
+		go func() {
+			var joined atomic.Bool
+			observer := ScanProgressObserverFunc(func(_ context.Context, progress ScanProgress) error {
+				if progress.AttemptID == attemptB.id && joined.CompareAndSwap(false, true) {
+					close(waiter3JoinedB)
+				}
+				return nil
+			})
+			committed, err := store.ListChildren(context.Background(), directory, session3, ScanOptions{Progress: observer}, scanner)
+			waiter3Result <- listResult{committed: committed, err: err}
+		}()
+		<-waiter3JoinedB
+
+		close(releaseScanB)
+		res2 := <-waiter2Result
+		res3 := <-waiter3Result
+		if res2.err != nil || res2.committed.EntryCount() != 1 {
+			t.Fatalf("waiter 2 result = %+v, %v", res2.committed, res2.err)
+		}
+		if res3.err != nil || res3.committed != res2.committed {
+			t.Fatalf("waiter 3 result = %+v, %v (want %+v)", res3.committed, res3.err, res2.committed)
+		}
+		if err := store.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if process.Snapshot().Used != (ResourceUsage{}) || share.Snapshot().Used != (ResourceUsage{}) {
+			t.Fatalf("store close leaked budgets: process=%+v share=%+v", process.Snapshot().Used, share.Snapshot().Used)
+		}
+	})
+
+	t.Run("cancelled failure does not resurrect without successor", func(t *testing.T) {
+		store, _, _ := newStore(t, nil)
+		defer store.Close()
+		rootSession := generousBudget(t, "root-session")
+		directory := prepareScannableDirectory(t, store, rootSession, 195, 196)
+
+		encodeStarted := make(chan struct{})
+		releaseEncode := make(chan struct{})
+		store.failureEncoder = FailureEncoderFunc(func(record DirectoryFailureRecord) (FailurePayload, error) {
+			close(encodeStarted)
+			<-releaseEncode
+			return testFailureEncoder{}.EncodeFailure(record)
+		})
+
+		var calls atomic.Int32
+		scanner := DirectoryScannerFunc(func(ctx context.Context, request ScanRequest) (ScanResult, error) {
+			if calls.Add(1) == 1 {
+				return ScanResult{}, NewPermanentScanError(errors.New("cancelled-before-publish"))
+			}
+			return ScanResult{}, request.Children.Add(ctx, scannedFile(t, 197, "fresh", 2))
+		})
+
+		session1 := generousBudget(t, "session-1")
+		ctx1, cancel1 := context.WithCancel(context.Background())
+		waiter1Err := make(chan error, 1)
+		go func() {
+			_, err := store.ListChildren(ctx1, directory, session1, ScanOptions{}, scanner)
+			waiter1Err <- err
+		}()
+		<-encodeStarted
+
+		store.mu.RLock()
+		attemptA := store.attempts[directory]
+		store.mu.RUnlock()
+
+		cancel1()
+		if err := <-waiter1Err; !errors.Is(err, context.Canceled) {
+			t.Fatalf("waiter 1 cancel error = %v", err)
+		}
+
+		close(releaseEncode)
+		<-attemptA.done
+
+		store.mu.RLock()
+		current := store.attempts[directory]
+		store.mu.RUnlock()
+		if current != nil {
+			t.Fatalf("cancelled attempt resurrected in s.attempts: %+v", current)
+		}
+		if _, found, err := store.FailurePayload(context.Background(), directory, attemptA.id); err != nil || found {
+			t.Fatalf("cancelled attempt persisted failure payload: found=%v err=%v", found, err)
+		}
+		if session1.Snapshot().Used != (ResourceUsage{}) {
+			t.Fatalf("cancelled attempt leaked session budget: %+v", session1.Snapshot().Used)
+		}
+
+		session2 := generousBudget(t, "session-2")
+		committed, err := store.ListChildren(context.Background(), directory, session2, ScanOptions{}, scanner)
+		if err != nil || committed.EntryCount() != 1 {
+			t.Fatalf("subsequent scan after cancelled failure = %+v, %v", committed, err)
+		}
+	})
+
+	t.Run("superseded commit attempt does not publish over successor", func(t *testing.T) {
+		store, _, _ := newStore(t, nil)
+		defer store.Close()
+		rootSession := generousBudget(t, "root-session")
+		directory := prepareScannableDirectory(t, store, rootSession, 200, 201)
+		dirNode, found, err := store.Node(context.Background(), directory.NodeID())
+		if err != nil || !found {
+			t.Fatalf("load directory node: found=%v err=%v", found, err)
+		}
+		session := generousBudget(t, "superseded-commit-session")
+		meter, err := newAttemptResourceMeter(store.hierarchy(session))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer meter.Close()
+
+		attemptA := &scanAttempt{id: idValue[ScanAttemptID](202), generation: idValue[DirectoryGeneration](203), directory: directory}
+		ctxB, cancelB := context.WithCancel(context.Background())
+		defer cancelB()
+		attemptB := &scanAttempt{
+			id: idValue[ScanAttemptID](204), generation: idValue[DirectoryGeneration](205),
+			directory: directory, ctx: ctxB, cancel: cancelB,
+		}
+		store.mu.Lock()
+		store.attempts[directory] = attemptB
+		store.mu.Unlock()
+
+		commit := DirectoryCommit{directory: dirNode, generation: attemptA.generation}
+		store.commitMu.Lock()
+		_, _, commitErr := store.commitDirectoryLocked(context.Background(), commit, session, meter, false, attemptA)
+		store.commitMu.Unlock()
+		if !errors.Is(commitErr, context.Canceled) {
+			t.Fatalf("superseded commit error = %v, want context.Canceled", commitErr)
+		}
+		if _, exists, err := store.Directory(context.Background(), directory); err != nil || exists {
+			t.Fatalf("superseded commit published directory: exists=%v err=%v", exists, err)
+		}
+		store.mu.RLock()
+		current := store.attempts[directory]
+		store.mu.RUnlock()
+		if current != attemptB {
+			t.Fatalf("superseded commit altered successor attempt: got=%p want=%p", current, attemptB)
+		}
+		meter.Close()
+		if session.Snapshot().Used != (ResourceUsage{}) {
+			t.Fatalf("superseded commit leaked session budget: %+v", session.Snapshot().Used)
+		}
+	})
 }

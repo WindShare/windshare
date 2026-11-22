@@ -225,6 +225,10 @@ func (s *CatalogStore) ListChildren(ctx context.Context, directory DirectoryID, 
 		s.mu.Unlock()
 		return CommittedDirectory{}, ErrCatalogClosed
 	}
+	if state, exists := s.directories[directory]; exists {
+		s.mu.Unlock()
+		return state.committed, nil
+	}
 	var previousAttempt ScanAttemptID
 	if existing := s.attempts[directory]; existing != nil {
 		if !existing.completed {
@@ -363,26 +367,28 @@ func (s *CatalogStore) runAttempt(attempt *scanAttempt, directory NodeRecord, se
 		if recovered := recover(); recovered != nil {
 			resultErr = fmt.Errorf("catalog scanner panicked: %v\n%s", recovered, debug.Stack())
 		}
-		if resultErr != nil {
-			s.mu.RLock()
-			eligible := !s.closed && s.attempts[attempt.directory] == attempt
-			s.mu.RUnlock()
-			if eligible {
-				// Release transient scan work and buffered child memory before reserving
-				// space to encode and retain the failure payload.
-				attempt.resources.reset()
-				failure, err := s.persistAttemptFailure(attempt, resultErr, sessionBudget)
-				if err == nil {
-					attempt.failure = failure
-					resultErr = failure
-				} else {
-					resultErr = errors.Join(resultErr, fmt.Errorf("persist catalog directory failure: %w", err))
-				}
+		if resultErr == nil {
+			s.completeSucceededAttempt(attempt, committed)
+			return
+		}
+		var (
+			prepared   *preparedFailure
+			prepareErr error
+		)
+		s.mu.RLock()
+		eligible := !s.closed && s.attempts[attempt.directory] == attempt
+		s.mu.RUnlock()
+		if eligible {
+			// Release transient scan work and buffered child memory before reserving
+			// space to encode and retain the failure payload.
+			attempt.resources.reset()
+			if encoded, err := s.prepareAttemptFailure(attempt, resultErr); err == nil {
+				prepared = &encoded
+			} else {
+				prepareErr = err
 			}
 		}
-		attempt.admission.Release()
-		attempt.resources.Close()
-		s.completeAttempt(attempt, committed, resultErr)
+		s.completeFailedAttempt(attempt, resultErr, prepared, prepareErr, sessionBudget)
 	}()
 	work := scanWorkMeter{store: s, resources: attempt.resources}
 	if err := work.Consume(1); err != nil {
@@ -430,7 +436,7 @@ func (s *CatalogStore) runAttempt(attempt *scanAttempt, directory NodeRecord, se
 		return
 	}
 	s.commitMu.Lock()
-	committed, _, err = s.commitDirectoryLocked(attemptContext, commit, sessionBudget, attempt.resources, true)
+	committed, _, err = s.commitDirectoryLocked(attemptContext, commit, sessionBudget, attempt.resources, true, attempt)
 	s.commitMu.Unlock()
 	if err != nil {
 		resultErr = err
@@ -439,7 +445,7 @@ func (s *CatalogStore) runAttempt(attempt *scanAttempt, directory NodeRecord, se
 	result.PublishOmissions(sortResult.omittedCount, sortResult.omittedSamples)
 }
 
-func (s *CatalogStore) completeAttempt(attempt *scanAttempt, committed CommittedDirectory, resultErr error) {
+func (s *CatalogStore) completeSucceededAttempt(attempt *scanAttempt, committed CommittedDirectory) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if attempt.completed {
@@ -447,13 +453,17 @@ func (s *CatalogStore) completeAttempt(attempt *scanAttempt, committed Committed
 	}
 	attempt.completed = true
 	attempt.committed = committed
-	if resultErr == nil {
-		if s.attempts[attempt.directory] == attempt {
-			delete(s.attempts, attempt.directory)
-		}
-	} else {
-		s.completeFailedAttemptLocked(attempt, resultErr)
+	if s.attempts[attempt.directory] == attempt {
+		delete(s.attempts, attempt.directory)
 	}
+	finishAttemptLocked(attempt)
+}
+
+func finishAttemptLocked(attempt *scanAttempt) {
+	// Release active-scan admission and any unretained attempt resources before
+	// closing attempt.done so returning callers observe zero leaked session budget.
+	attempt.admission.Release()
+	attempt.resources.Close()
 	attempt.cancel()
 	close(attempt.done)
 }

@@ -107,53 +107,68 @@ func (function FailureEncoderFunc) EncodeFailure(record DirectoryFailureRecord) 
 	return function(record)
 }
 
-func (s *CatalogStore) persistAttemptFailure(
+type preparedFailure struct {
+	record  DirectoryFailureRecord
+	payload FailurePayload
+	charge  ResourceUsage
+}
+
+func (s *CatalogStore) prepareAttemptFailure(
 	attempt *scanAttempt,
 	cause error,
-	session *BudgetAccount,
-) (*DirectoryFailure, error) {
+) (preparedFailure, error) {
 	record, err := newDirectoryFailureRecord(
 		s.shareInstance, attempt.directory, attempt.id, attempt.generation, attempt.previous,
 		classifyFailureKind(cause), failureRetryAfter(cause),
 	)
 	if err != nil {
-		return nil, err
+		return preparedFailure{}, err
 	}
 	if err := attempt.resources.Consume(ResourceUsage{MemoryBytes: MaxCatalogPayloadBytes}); err != nil {
-		return nil, err
+		return preparedFailure{}, err
 	}
 	payload, encodeErr := s.failureEncoder.EncodeFailure(record)
 	releaseErr := attempt.resources.Release(ResourceUsage{MemoryBytes: MaxCatalogPayloadBytes})
 	if err := errors.Join(encodeErr, releaseErr); err != nil {
-		return nil, err
+		return preparedFailure{}, err
 	}
 	if payload.IsZero() {
-		return nil, errors.New("catalog failure encoder returned an empty payload")
+		return preparedFailure{}, errors.New("catalog failure encoder returned an empty payload")
 	}
 	charge := ResourceUsage{MemoryBytes: memoryFailureOverhead + uint64(len(payload.encoded))}
 	if err := attempt.resources.Consume(charge); err != nil {
-		return nil, err
+		return preparedFailure{}, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	return preparedFailure{record: record, payload: payload, charge: charge}, nil
+}
+
+func (s *CatalogStore) commitPreparedFailureLocked(
+	attempt *scanAttempt,
+	prepared preparedFailure,
+	cause error,
+	session *BudgetAccount,
+) (*DirectoryFailure, error) {
 	if s.closed {
 		return nil, ErrCatalogClosed
 	}
-	attempts := s.failures[record.directory]
+	if s.attempts[prepared.record.directory] != attempt {
+		return nil, context.Canceled
+	}
+	attempts := s.failures[prepared.record.directory]
 	if len(attempts) >= maxFailureAttemptsPerDirectory {
 		return nil, ErrBudgetExceeded
 	}
-	retained, err := attempt.resources.retain(charge, session)
+	retained, err := attempt.resources.retain(prepared.charge, session)
 	if err != nil {
 		return nil, err
 	}
 	if attempts == nil {
 		attempts = make(map[ScanAttemptID]committedFailure)
-		s.failures[record.directory] = attempts
+		s.failures[prepared.record.directory] = attempts
 	}
-	attempts[record.attempt] = committedFailure{record: record, payload: payload}
+	attempts[prepared.record.attempt] = committedFailure{record: prepared.record, payload: prepared.payload}
 	s.held = append(s.held, retained)
-	return directoryFailureFromRecord(record, cause), nil
+	return directoryFailureFromRecord(prepared.record, cause), nil
 }
 
 func classifyFailureKind(cause error) FailureKind {
@@ -214,23 +229,49 @@ func (s *CatalogStore) FailurePayload(
 	return failure.payload, true, nil
 }
 
-func (s *CatalogStore) completeFailedAttemptLocked(attempt *scanAttempt, resultErr error) {
-	switch {
-	case attempt.failure != nil:
-		attempt.err = attempt.failure
-		attempt.retryable = attempt.failure.Transient
-		if attempt.retryable {
-			attempt.retryAt = s.clock.Now().Add(attempt.failure.RetryAfter)
-		}
-		if !s.closed {
-			s.attempts[attempt.directory] = attempt
-		}
-	case errors.Is(resultErr, context.Canceled) && s.attempts[attempt.directory] != attempt:
-		attempt.err = resultErr
-	default:
-		attempt.err = resultErr
-		if s.attempts[attempt.directory] == attempt {
-			delete(s.attempts, attempt.directory)
-		}
+// completeFailedAttempt checks attempt ownership, commits any prepared failure
+// payload, and finalizes the attempt under a single s.mu lock so a cancelled
+// scan cannot leak failure records or overwrite a successor attempt.
+func (s *CatalogStore) completeFailedAttempt(
+	attempt *scanAttempt,
+	cause error,
+	prepared *preparedFailure,
+	prepareErr error,
+	session *BudgetAccount,
+) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if attempt.completed {
+		return
+	}
+	attempt.completed = true
+	defer finishAttemptLocked(attempt)
+
+	if s.closed || s.attempts[attempt.directory] != attempt {
+		attempt.err = cause
+		return
+	}
+	var (
+		failure    *DirectoryFailure
+		persistErr = prepareErr
+	)
+	if persistErr == nil && prepared != nil {
+		failure, persistErr = s.commitPreparedFailureLocked(attempt, *prepared, cause, session)
+	}
+	if persistErr != nil {
+		attempt.err = errors.Join(cause, fmt.Errorf("persist catalog directory failure: %w", persistErr))
+		delete(s.attempts, attempt.directory)
+		return
+	}
+	if failure == nil {
+		attempt.err = cause
+		delete(s.attempts, attempt.directory)
+		return
+	}
+	attempt.failure = failure
+	attempt.err = failure
+	attempt.retryable = failure.Transient
+	if attempt.retryable {
+		attempt.retryAt = s.clock.Now().Add(failure.RetryAfter)
 	}
 }

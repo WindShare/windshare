@@ -275,7 +275,8 @@ func TestCatalogCloseCancelsUnfinishedAttempts(t *testing.T) {
 	if !errors.Is(context.Cause(attemptContext), context.Canceled) {
 		t.Fatal("store close left an unfinished scan attempt live")
 	}
-	store.completeAttempt(&scanAttempt{completed: true}, CommittedDirectory{}, nil)
+	store.completeSucceededAttempt(&scanAttempt{completed: true}, CommittedDirectory{})
+	store.completeFailedAttempt(&scanAttempt{completed: true}, errors.New("ignored"), nil, nil, nil)
 }
 
 func TestListChildrenPreservesKnownAuthority(t *testing.T) {

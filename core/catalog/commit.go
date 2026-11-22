@@ -101,7 +101,7 @@ func (s *CatalogStore) CommitDirectory(ctx context.Context, commit DirectoryComm
 	defer meter.Close()
 	s.commitMu.Lock()
 	defer s.commitMu.Unlock()
-	committed, _, err := s.commitDirectoryLocked(ctx, commit, sessionBudget, meter, false)
+	committed, _, err := s.commitDirectoryLocked(ctx, commit, sessionBudget, meter, false, nil)
 	return committed, err
 }
 
@@ -126,7 +126,7 @@ func (s *CatalogStore) CommitSyntheticRoot(ctx context.Context, commit Directory
 	if committedRoot != nil && (committedRoot.directory != directoryID || committedRoot.generation != commit.generation) {
 		return CommittedRoot{}, ErrGenerationConflict
 	}
-	committed, reservation, err := s.commitDirectoryLocked(ctx, commit, startupBudget, meter, false)
+	committed, reservation, err := s.commitDirectoryLocked(ctx, commit, startupBudget, meter, false, nil)
 	if err != nil {
 		return CommittedRoot{}, err
 	}
@@ -180,6 +180,7 @@ func (s *CatalogStore) commitDirectoryLocked(
 	sessionBudget *BudgetAccount,
 	meter *attemptResourceMeter,
 	childrenPreCharged bool,
+	owner *scanAttempt,
 ) (CommittedDirectory, *BudgetReservation, error) {
 	if err := ctx.Err(); err != nil {
 		return CommittedDirectory{}, nil, err
@@ -190,6 +191,10 @@ func (s *CatalogStore) commitDirectoryLocked(
 	if s.closed {
 		s.mu.RUnlock()
 		return CommittedDirectory{}, nil, ErrCatalogClosed
+	}
+	if owner != nil && s.attempts[directoryID] != owner {
+		s.mu.RUnlock()
+		return CommittedDirectory{}, nil, context.Canceled
 	}
 	if existing, found := s.directories[directoryID]; found {
 		validated, err := s.validateExistingCommitLocked(commit, existing)
@@ -243,6 +248,12 @@ func (s *CatalogStore) commitDirectoryLocked(
 	if s.closed {
 		return CommittedDirectory{}, nil, ErrCatalogClosed
 	}
+	if err := ctx.Err(); err != nil {
+		return CommittedDirectory{}, nil, err
+	}
+	if owner != nil && s.attempts[directoryID] != owner {
+		return CommittedDirectory{}, nil, context.Canceled
+	}
 	if existingDir, found := s.nodes[commit.directory.NodeID()]; found && existingDir != commit.directory {
 		return CommittedDirectory{}, nil, ErrGenerationConflict
 	}
@@ -266,6 +277,11 @@ func (s *CatalogStore) commitDirectoryLocked(
 		pages:     pages,
 	}
 	s.held = append(s.held, retained)
+	if owner != nil {
+		// Retire the in-flight scan slot atomically with directory publication so a
+		// post-commit panic or late cancellation cannot attach a failure to it.
+		delete(s.attempts, directoryID)
+	}
 	return committed, retained, nil
 }
 
