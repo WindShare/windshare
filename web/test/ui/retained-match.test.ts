@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import type { ReceiveBlockReason } from '../../src/application/receive/admission'
 import type { ReceiveCompositionPort, RetainedReceiveActionResult, RetainedReceiveOperation } from '../../src/application/receive/contracts'
 import { RetainedInventoryCoordinator } from '../../src/application/receive/retained/coordinator'
 import type { ReceiveLifecycleState } from '../../src/output/workspace'
@@ -99,6 +100,71 @@ function workspaceSnapshot(
     hasContent: true,
     ...composed,
   })
+}
+
+function completeLocalOp(idSeed: number, createdAtMilliseconds = 1_000): RetainedReceiveOperation {
+  const lifecycle = workspaceHandoff(identityText(idSeed))
+  return retainedOp({
+    operationId: lifecycle.operationId,
+    lifecycle,
+    continuation: 'retry-download',
+    actions: ['redownload', 'delete'],
+    display: Object.freeze({ objectLabel: 'photo.jpg', createdAtMilliseconds }),
+  })
+}
+
+function pausedStartOp(idSeed: number, createdAtMilliseconds = 2_000): RetainedReceiveOperation {
+  const lifecycle: ReceiveLifecycleState = {
+    operationId: identityText(idSeed),
+    receiveIntentDigest: identityText(idSeed + 1, 32),
+    generation: 2n,
+    kind: 'resumable-start',
+    reason: 'paused',
+  }
+  return retainedOp({
+    operationId: lifecycle.operationId,
+    lifecycle,
+    continuation: 'resume-start',
+    actions: ['continue', 'discard'],
+    display: Object.freeze({ objectLabel: 'photo.jpg', createdAtMilliseconds }),
+  })
+}
+
+async function openTestCoordinator(
+  operations: readonly RetainedReceiveOperation[],
+  remoteUnavailable?: () => ReceiveBlockReason | null,
+) {
+  let finishAction!: (result: RetainedReceiveActionResult) => void
+  const actionGate = new Promise<RetainedReceiveActionResult>(resolve => { finishAction = resolve })
+  const coordinator = new RetainedInventoryCoordinator({
+    receive: {
+      retained: {
+        list: async () => Object.freeze({
+          operations: Object.freeze([...operations]),
+          presentationFailures: Object.freeze([]),
+          act: () => actionGate,
+          close: () => undefined,
+        }),
+      },
+    } as unknown as ReceiveCompositionPort,
+    isDisposed: () => false,
+    currentJoinedShare: () => ({ descriptor: { shareInstanceId: SHARE_ID }, protocolSessionId: 'p1' }) as never,
+    continuationBlocked: () => false,
+    ...(remoteUnavailable === undefined ? {} : { remoteContinuationUnavailable: remoteUnavailable }),
+    adoptContinuation: async () => undefined,
+    ownsRuntime: () => false,
+    publish: () => undefined,
+    onActionError: () => undefined,
+  })
+  await coordinator.load()
+  const admission: RetainedAdmission = (candidate, candidateAction) =>
+    coordinator.actionAdmission(candidate, candidateAction)
+  const cleanup = async () => {
+    finishAction(Object.freeze({ kind: 'completed' }))
+    await Promise.resolve()
+    coordinator.close(new DOMException('test complete', 'AbortError'))
+  }
+  return { coordinator, admission, cleanup }
 }
 
 describe('resolveWorkspaceTaskLayout', () => {
@@ -333,5 +399,93 @@ describe('resolveWorkspaceTaskLayout', () => {
       },
     }))
     expect(otherShareLayout.banner).toBeNull()
+  })
+})
+
+describe('resolveWorkspaceTaskLayout continuation precedence', () => {
+  it('prefers a newer paused task for the same selection over an older complete local copy', () => {
+    const olderComplete = completeLocalOp(34, 1_000)
+    const newerPausedLifecycle: ReceiveLifecycleState = {
+      operationId: identityText(35),
+      receiveIntentDigest: identityText(36, 32),
+      generation: 2n,
+      kind: 'resumable-receive',
+      payloadKind: 'workspace-archive',
+      objectId: identityText(37),
+      checkpointGeneration: 1n,
+      occupiedBytes: 256n,
+      completedFileCount: 0n,
+      completedBytes: 256n,
+      discoveryComplete: true,
+    }
+    const newerPaused = retainedOp({
+      operationId: newerPausedLifecycle.operationId,
+      lifecycle: newerPausedLifecycle,
+      continuation: 'resume-receive',
+      actions: ['continue', 'discard'],
+      display: Object.freeze({ objectLabel: 'photo.jpg', createdAtMilliseconds: 2_000 }),
+    })
+
+    const snapshot = workspaceSnapshot({
+      retained: { kind: 'available', pending: null, operations: [olderComplete, newerPaused] },
+    })
+    const layout = resolveWorkspaceTaskLayout(snapshot)
+    expect(layout.primaryTask).toBeNull()
+    expect(layout.collapseRemoteSaving).toBe(false)
+    expect(layout.repeatRemoteLabel).toBe(false)
+    expect(layout.banner?.kind).toBe('continue')
+    expect(layout.banner?.task.operationId).toBe(newerPaused.operationId)
+    expect(snapshot.tasks.find(task => task.operationId === olderComplete.operationId)?.primaryAction?.id).toBe('redownload')
+  })
+
+  it('still promotes a newer complete local copy over an older paused task', () => {
+    const olderPaused = pausedStartOp(38, 1_000)
+    const newerComplete = completeLocalOp(40, 2_000)
+
+    const layout = resolveWorkspaceTaskLayout(workspaceSnapshot({
+      retained: { kind: 'available', pending: null, operations: [olderPaused, newerComplete] },
+    }))
+    expect(layout.primaryTask?.operationId).toBe(newerComplete.operationId)
+    expect(layout.collapseRemoteSaving).toBe(true)
+    expect(layout.banner).toBeNull()
+  })
+
+  it('falls back to an older complete local copy when a newer remote task cannot continue and stays stable during re-export', async () => {
+    const olderComplete = completeLocalOp(41, 1_000)
+    const newerPaused = pausedStartOp(42, 2_000)
+    const { coordinator, admission, cleanup } = await openTestCoordinator([newerPaused, olderComplete], () => 'endedContinue')
+
+    const before = resolveWorkspaceTaskLayout(
+      workspaceSnapshot({ connection: { kind: 'ended', reason: 'share-stopped' }, retained: coordinator.getSnapshot() }, admission),
+    )
+    expect(before.primaryTask?.operationId).toBe(olderComplete.operationId)
+    expect(before.collapseRemoteSaving).toBe(true)
+    expect(before.banner).toBeNull()
+
+    const localTarget = coordinator.getSnapshot().operations.find(op => op.operationId === olderComplete.operationId)!
+    coordinator.perform(localTarget, 'redownload')
+    const during = resolveWorkspaceTaskLayout(
+      workspaceSnapshot({ connection: { kind: 'ended', reason: 'share-stopped' }, retained: coordinator.getSnapshot() }, admission),
+    )
+    expect(during.primaryTask?.operationId).toBe(olderComplete.operationId)
+    expect(during.collapseRemoteSaving).toBe(true)
+
+    await cleanup()
+  })
+
+  it('does not flash an older complete local copy while continuing the newer paused task', async () => {
+    const olderComplete = completeLocalOp(44, 1_000)
+    const newerPaused = pausedStartOp(45, 2_000)
+    const { coordinator, admission, cleanup } = await openTestCoordinator([newerPaused, olderComplete])
+
+    const pausedTarget = coordinator.getSnapshot().operations.find(op => op.operationId === newerPaused.operationId)!
+    coordinator.perform(pausedTarget, 'continue')
+    const during = resolveWorkspaceTaskLayout(
+      workspaceSnapshot({ retained: coordinator.getSnapshot() }, admission),
+    )
+    expect(during.primaryTask).toBeNull()
+    expect(during.collapseRemoteSaving).toBe(false)
+
+    await cleanup()
   })
 })

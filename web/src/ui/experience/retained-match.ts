@@ -1,4 +1,5 @@
 import type { RetainedReceiveOperation } from '../../application/receive/contracts'
+import { retainedContinuationReadiness } from '../../application/receive/retained/readiness'
 import type { TaskSnapshot } from '../controller/projections'
 import type { TaskPresentation } from '../tasks'
 import type { TaskComposition } from './task-composition'
@@ -28,18 +29,46 @@ function isCompleteLocalRetained(
     task.primaryAction.target.kind === 'retained'
 }
 
+function isTransientlyBusyContinuation(
+  operation: RetainedReceiveOperation,
+  task: TaskPresentation,
+  snapshot: WorkspaceTaskSnapshot,
+): boolean {
+  const { pending } = snapshot.retained
+  const action = task.primaryAction?.target.kind === 'retained' ? task.primaryAction.target.action : null
+  if (pending === null || action === null) return false
+  if (pending.operationId === task.operationId && pending.action === action) return true
+  if (operation.unavailableReason !== undefined) return false
+  const needsRemote = action === 'continue' &&
+    retainedContinuationReadiness(operation, snapshot.share?.shareInstance ?? null) !== 'local'
+  return !needsRemote || (snapshot.connection.kind !== 'ended' && snapshot.connection.kind !== 'unavailable')
+}
+
+function isContinuableRetained(
+  operation: RetainedReceiveOperation,
+  task: TaskPresentation,
+  snapshot: WorkspaceTaskSnapshot,
+): boolean {
+  if (task.stage === 'handed-to-browser' || task.primaryAction === null || task.primaryAction.target.kind !== 'retained') {
+    return false
+  }
+  return task.primaryAction.disabledReason === null || isTransientlyBusyContinuation(operation, task, snapshot)
+}
+
 function findCompleteLocalMatch(snapshot: WorkspaceTaskSnapshot): TaskPresentation | null {
   const { share, current, tasks, retained, output } = snapshot
   const currentSelectionDigest = output.offers?.selectionDigest
   if (current !== null || share === null || currentSelectionDigest === undefined) return null
   for (const task of tasks) {
     const operation = retained.operations.find(candidate => candidate.operationId === task.operationId)
-    if (operation !== undefined &&
-        operation.shareInstance === share.shareInstance &&
-        operation.selectionDigest === currentSelectionDigest &&
-        isCompleteLocalRetained(operation, task)) {
-      return task
+    if (operation === undefined ||
+        operation.shareInstance !== share.shareInstance ||
+        operation.selectionDigest !== currentSelectionDigest) {
+      continue
     }
+    if (isCompleteLocalRetained(operation, task)) return task
+    // A newer continuable attempt for the same selection supersedes older local copies so reopen surfaces Continue.
+    if (isContinuableRetained(operation, task, snapshot)) return null
   }
   return null
 }
