@@ -28,7 +28,7 @@ export function presentTaskProgress(facts: TaskFacts, language: Language = 'en')
     remainingBytes: exact && facts.completeness !== 'partial'
       ? maximum(0n, progress.discoveredBytes - materialized) : null,
     status: discoveryStatus(facts, language),
-    label: `${t.amount(formatBytes(materialized) + total, false)}${ratio}${files}`,
+    label: `${t.amount(formatBytes(materialized) + total)}${ratio}${files}`,
     details: Object.freeze(details),
   })
 }

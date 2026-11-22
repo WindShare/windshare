@@ -19,7 +19,7 @@ describe('Downloads inventory presentation', () => {
     expect(loading).not.toContain('No downloads yet.')
     const failed = render('failed')
     expect(failed).toContain('role="alert"')
-    expect(failed).toContain('Stored receive tasks could not be loaded.')
+    expect(failed).toContain('Saved downloads could not be loaded.')
     expect(failed).not.toContain('No downloads yet.')
   })
 

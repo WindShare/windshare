@@ -586,7 +586,7 @@ export class ReceiveCoordinator {
       this.#retained = Object.freeze({ ...this.#retained, pending: null })
       if (outcome.kind === 'completed') {
         if (this.#activeTaskId === taskId) {
-          if (action === 'forget' || action === 'discard' || action === 'delete') {
+          if (action === 'forget' || action === 'discard') {
             this.startNewDownload()
           } else if (outcome.updated !== undefined) {
             this.#lifecycle = outcome.updated.lifecycle

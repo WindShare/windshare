@@ -25,7 +25,7 @@ test('completed results export retained content and keep a separate new receive 
         await expect(again).toBeEnabled()
         await again.click()
         expect((await galleryEvidence(page)).intents.slice(before.intents.length))
-          .toEqual([`retained:${before.taskId}:redownload`])
+          .toEqual([`retained:${before.taskId}:save`])
         await expect(freshReceive).toBeHidden()
         await page.locator('summary').filter({ hasText: 'Download from sender again' }).click()
       } else {

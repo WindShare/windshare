@@ -25,7 +25,7 @@ export function activeTaskFacts(input: Readonly<{
     backend,
     display: input.display ?? null,
     actions: Object.freeze(output.actions.map(action => {
-      const presented = activeTaskAction(action, backend, language)
+      const presented = activeTaskAction(action, state.kind, backend, language)
       const admission = input.actionAdmission?.(action)
       return admission !== undefined && !admission.allowed
         ? Object.freeze({ ...presented, disabledReason: admission.reason ?? 'actionUnavailable' as const })

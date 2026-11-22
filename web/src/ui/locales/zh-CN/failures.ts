@@ -9,5 +9,6 @@ export const failures: typeof English = {
   preview: '无法预览此文件。',
   frame: '无法加载所选视频帧。',
   history: '无法加载此浏览器中保存的下载记录。',
+  sourceChangedHint: '共享文件已更改，无法继续下载。请让发送方重新分享并打开新链接，也可以丢弃此下载以清理进度。',
   technical: '技术详情',
 }

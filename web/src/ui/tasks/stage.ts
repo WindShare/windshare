@@ -85,7 +85,7 @@ function pausedStage(
     return stage('needs-action', t.storageFull, t.storageFullHint, 'storage-full')
   }
   if (state.reason === 'permission-needed') {
-    return stage('needs-action', t.needsAction, t.pausedHint, 'permission-needed')
+    return stage('needs-action', t.permissionNeeded, t.permissionNeededHint, 'permission-needed')
   }
   return stage('paused', t.paused, t.pausedHint, state.reason)
 }
@@ -96,7 +96,7 @@ function failedStage(
 ): StageCopy {
   const t = receiverCopy[language].stage
   if (reason === 'source-changed') {
-    return stage('failed', t.sourceChanged, receiverCopy[language].lifecycle.sourceChangedHint, 'source_invalidated')
+    return stage('failed', t.sourceChanged, receiverCopy[language].failures.sourceChangedHint, 'source_invalidated')
   }
   if (reason === 'cancelled') {
     return stage('cancelled', t.cancelled, t.discardedHint, reason)

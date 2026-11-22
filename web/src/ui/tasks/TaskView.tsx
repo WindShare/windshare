@@ -14,9 +14,9 @@ const STAGE_ICONS: Readonly<Record<TaskPresentation['stage'], ReceiverIconName>>
 }
 
 // Routine controls speak for themselves; avoid dumping explanatory prose beneath them.
-const SELF_EXPLANATORY_ACTIONS = new Set(['pause', 'continue', 'save'])
+const SELF_EXPLANATORY_ACTIONS = new Set(['pause', 'continue'])
 // Local re-save explains itself inside TaskDetails while keeping compact TaskCards uncluttered.
-const DETAILS_ONLY_CONSEQUENCE_ACTIONS = new Set(['redownload'])
+const DETAILS_ONLY_CONSEQUENCE_ACTIONS = new Set(['save'])
 
 export interface TaskViewActions {
   readonly perform: (action: TaskAction) => void

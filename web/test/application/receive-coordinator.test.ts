@@ -17,6 +17,21 @@ describe('receive admission and coordinator', () => {
     })
     expect(actionsForState(pausedOpfs, 'opfs', true)).toEqual(['continue', 'save-partial', 'discard'])
 
+    const readyOpfs = transitionReceiveState(base, {
+      kind: 'ready-to-save', size: 50n, fileName: 'archive.zip',
+    })
+    expect(actionsForState(readyOpfs, 'opfs')).toEqual(['save', 'discard'])
+
+    const retainedStarted = transitionReceiveState(base, {
+      kind: 'download-started', retained: true, fileName: 'archive.zip',
+    })
+    expect(actionsForState(retainedStarted, 'opfs')).toEqual(['save', 'discard'])
+
+    const portableStarted = transitionReceiveState(base, {
+      kind: 'download-started', retained: false, fileName: 'photo.jpg',
+    })
+    expect(actionsForState(portableStarted, 'portable')).toEqual(['forget'])
+
     const task: RetainedTaskSnapshot = {
       taskId: 't1',
       shareInstance: 'share-a',

@@ -29,9 +29,7 @@ export type ReceiveAction =
   | 'continue'
   | 'save'
   | 'save-partial'
-  | 'redownload'
   | 'discard'
-  | 'delete'
   | 'forget'
 
 export type RetainedReadiness =

@@ -6,6 +6,7 @@ export const failures = {
   directory: 'Could not load this folder.',
   preview: 'This file could not be previewed.',
   frame: 'Could not load the requested video frame.',
-  history: 'Stored receive tasks could not be loaded.',
+  history: 'Saved downloads could not be loaded.',
+  sourceChangedHint: 'The shared file changed, so this download cannot continue. Ask the sender to share it again and open the new link. You can discard this download to clear its saved progress.',
   technical: 'Technical details',
 }

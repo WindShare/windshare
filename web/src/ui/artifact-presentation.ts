@@ -13,7 +13,7 @@ export function presentActivation(
   language: Language = 'en',
 ): ArtifactActivationPresentation | null {
   if (activation === null) return null
-  const t = receiverCopy[language].artifacts
+  const t = receiverCopy[language].saving
   if (activation.kind === 'waiting-picker') {
     return Object.freeze({
       kind: 'waiting',
@@ -23,7 +23,7 @@ export function presentActivation(
   }
   return Object.freeze({
     kind: 'committing',
-    title: t.preparing,
-    description: t.bindingLocation,
+    title: t.preparingSelection,
+    description: t.preparingLocation,
   })
 }

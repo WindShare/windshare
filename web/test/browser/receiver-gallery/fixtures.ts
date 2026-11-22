@@ -189,7 +189,7 @@ export async function gallerySnapshot(scenario: Scenario): Promise<GallerySnapsh
       destinationLabel: index === 0 ? 'Downloads' : 'Archive',
       createdAtMilliseconds: 1_700_000_000_000 + index * 86_400_000,
     },
-    actions: ['save', 'delete'],
+    actions: ['save', 'discard'],
     activeElsewhere: false,
     canSavePartial: false,
   }))

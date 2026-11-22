@@ -81,10 +81,8 @@ export async function executeRetainedTaskAction(
     case 'forget':
       return forgetRetainedTask(env, record)
     case 'discard':
-    case 'delete':
       return removeRetainedTask(env, record)
     case 'save':
-    case 'redownload':
       return saveRetainedTask(env, record)
     case 'save-partial':
       return exportPartialRetainedTask(env, record)

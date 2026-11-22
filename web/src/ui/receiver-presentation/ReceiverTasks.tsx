@@ -101,7 +101,7 @@ export function ReceiverActivity({ controller, openDownloads }: {
       if (
         action.disabledReason === null &&
         primaryTask?.stage === 'handed-to-browser' &&
-        action.target.action === 'redownload'
+        action.target.action === 'save'
       ) {
         setHandoffHelpOpenId(primaryTask.operationId)
       }

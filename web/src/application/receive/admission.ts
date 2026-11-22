@@ -30,10 +30,10 @@ export function actionsForState(
         'discard',
       ])
     case 'ready-to-save':
-      return Object.freeze(['save', 'delete'])
+      return Object.freeze(['save', 'discard'])
     case 'download-started':
       return state.retained
-        ? Object.freeze(['redownload', 'delete'])
+        ? Object.freeze(['save', 'discard'])
         : Object.freeze(['forget'])
     case 'saved':
     case 'partial':
@@ -48,9 +48,7 @@ export function actionsForState(
 export function isLocalOnlyAction(action: ReceiveAction): boolean {
   return action === 'save' ||
     action === 'save-partial' ||
-    action === 'redownload' ||
     action === 'discard' ||
-    action === 'delete' ||
     action === 'forget'
 }
 

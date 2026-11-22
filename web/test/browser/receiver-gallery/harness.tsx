@@ -209,7 +209,7 @@ class GalleryController {
     } else if (kind === 'workspace' && source.kind === 'download-started') {
       lifecycle = { ...source, retained: true }
       backend = 'opfs'
-      actions = ['redownload', 'delete']
+      actions = ['save', 'discard']
     }
     const display = {
       objectLabel: this.#snapshot.share?.name ?? 'Shared files',
