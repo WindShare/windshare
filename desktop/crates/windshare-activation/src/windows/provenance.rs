@@ -2,7 +2,7 @@ use super::{handles::wide, share_target::wait};
 use std::{
     ffi::OsString,
     os::windows::ffi::{OsStrExt, OsStringExt},
-    path::{Component, Path, PathBuf},
+    path::{Component, Path, PathBuf, Prefix},
     time::Instant,
 };
 use windows::{
@@ -44,18 +44,18 @@ impl Provenance {
     }
 
     fn from_ephemeral_roots(roots: Vec<PathBuf>) -> Self {
-        // Canonicalize ephemeral roots so 8.3 short aliases and junctions pointing
-        // into scratch locations match in one uniform verbatim representation.
+        // Record both the canonical target and the un-resolved long verbatim path
+        // of each ephemeral root so containment catches junctions entering a
+        // scratch directory as well as ephemeral aliases pointing out to durable storage.
         let mut ephemeral_roots: Vec<PathBuf> = Vec::with_capacity(roots.len());
         for root in roots {
-            let Some(normalized) = normalize_ephemeral_root(root) else {
-                continue;
-            };
-            if !ephemeral_roots
-                .iter()
-                .any(|existing| same_path(existing, &normalized))
-            {
-                ephemeral_roots.push(normalized);
+            for normalized in normalize_ephemeral_root(&root).into_iter().flatten() {
+                if !ephemeral_roots
+                    .iter()
+                    .any(|existing| same_path(existing, &normalized))
+                {
+                    ephemeral_roots.push(normalized);
+                }
             }
         }
         Self { ephemeral_roots }
@@ -81,17 +81,25 @@ impl Provenance {
                 Some(&canonical),
             ));
         }
+        // Expand 8.3 short aliases for clean display names while leaving any leaf
+        // symlink intact so Go osfs enforces one uniform no-follow boundary.
+        let handoff = long_path(&raw_path).unwrap_or_else(|| raw_path.clone());
         if self.is_ephemeral(&canonical) {
-            return Err(reject("ephemeral_location", &raw_path, Some(&canonical)));
+            return Err(reject("ephemeral_location", &handoff, Some(&canonical)));
+        }
+        // Even when the resolved target is durable, handing off an alias under an
+        // ephemeral root binds the share (and later repeat shares) to a transient path.
+        if self.is_ephemeral_handoff(&handoff) {
+            return Err(reject("ephemeral_handoff_path", &handoff, Some(&canonical)));
         }
         // Reopening by filesystem path and comparing WinRT item identity rejects
         // virtual/streamed proxies that depend on the source app's lifetime.
         let Some((provider, same)) = verify_independent_item(item, &native_path, deadline)? else {
-            return Err(reject("unsupported_item_type", &raw_path, Some(&canonical)));
+            return Err(reject("unsupported_item_type", &handoff, Some(&canonical)));
         };
         tracing::info!(
             event = "activation.source_provenance",
-            path = ?raw_path,
+            path = ?handoff,
             canonical = ?canonical,
             provider = ?provider,
             same
@@ -99,29 +107,32 @@ impl Provenance {
         if !same {
             return Err(reject(
                 "reopen_identity_mismatch",
-                &raw_path,
+                &handoff,
                 Some(&canonical),
             ));
         }
-        // Expand 8.3 short aliases for clean display names while leaving any leaf
-        // symlink intact so Go osfs enforces one uniform no-follow boundary.
-        Ok(long_path(&raw_path).unwrap_or(raw_path))
+        Ok(handoff)
     }
 
-    fn is_ephemeral(&self, canonical_path: &Path) -> bool {
+    fn is_ephemeral(&self, verbatim_path: &Path) -> bool {
         self.ephemeral_roots
             .iter()
-            .any(|root| beneath(canonical_path, root))
+            .any(|root| beneath(verbatim_path, root))
+    }
+
+    fn is_ephemeral_handoff(&self, handoff: &Path) -> bool {
+        verbatim_dos_path(handoff).is_some_and(|verbatim| self.is_ephemeral(&verbatim))
     }
 }
 
-fn normalize_ephemeral_root(root: PathBuf) -> Option<PathBuf> {
-    match std::fs::canonicalize(&root) {
-        Ok(canonical) => Some(canonical),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+fn normalize_ephemeral_root(root: &Path) -> [Option<PathBuf>; 2] {
+    let lexical = || verbatim_dos_path(&long_path(root).unwrap_or_else(|| root.to_path_buf()));
+    match std::fs::canonicalize(root) {
+        Ok(canonical) => [Some(canonical), lexical()],
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => [None, None],
         // Restricted system scratch directories (e.g. C:\Windows\Temp under strict ACLs)
         // must remain blocked even if canonicalize cannot open a directory handle.
-        Err(_) => verbatim_dos_path(&long_path(&root).unwrap_or(root)),
+        Err(_) => [lexical(), None],
     }
 }
 
@@ -129,21 +140,25 @@ fn verbatim_dos_path(path: &Path) -> Option<PathBuf> {
     if !is_direct_absolute(path) {
         return None;
     }
-    let units: Vec<u16> = path.as_os_str().encode_wide().collect();
-    if units.starts_with(&[
-        u16::from(b'\\'),
-        u16::from(b'\\'),
-        u16::from(b'?'),
-        u16::from(b'\\'),
-    ]) {
-        return Some(path.to_path_buf());
+    let mut components = path.components();
+    let Component::Prefix(prefix) = components.next()? else {
+        return None;
+    };
+    match prefix.kind() {
+        Prefix::VerbatimDisk(_) => Some(path.to_path_buf()),
+        Prefix::Disk(drive) => {
+            let mut verbatim = PathBuf::from(format!(r"\\?\{}:\", char::from(drive)));
+            for component in components {
+                match component {
+                    Component::RootDir | Component::CurDir => {}
+                    Component::Normal(part) => verbatim.push(part),
+                    Component::Prefix(_) | Component::ParentDir => return None,
+                }
+            }
+            Some(verbatim)
+        }
+        _ => None,
     }
-    if units.len() >= 3 && units[1] == u16::from(b':') && units[2] == u16::from(b'\\') {
-        let mut verbatim: Vec<u16> = r"\\?\".encode_utf16().collect();
-        verbatim.extend_from_slice(&units);
-        return Some(PathBuf::from(OsString::from_wide(&verbatim)));
-    }
-    None
 }
 
 fn default_ephemeral_roots() -> Vec<PathBuf> {

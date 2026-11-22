@@ -26,6 +26,10 @@ fn path_containment_uses_native_case_insensitive_components() {
         Some(PathBuf::from(r"\\?\C:\Windows\Temp"))
     );
     assert_eq!(
+        verbatim_dos_path(Path::new("c:/Windows/./Temp/")),
+        Some(PathBuf::from(r"\\?\C:\Windows\Temp"))
+    );
+    assert_eq!(
         verbatim_dos_path(Path::new(r"\\?\C:\Windows\Temp")),
         Some(PathBuf::from(r"\\?\C:\Windows\Temp"))
     );
@@ -68,10 +72,17 @@ fn short_path(path: &Path) -> Option<PathBuf> {
     })
 }
 
-fn create_junction(link: &Path, target: &Path) {
+struct Junction(PathBuf);
+impl Drop for Junction {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir(&self.0);
+    }
+}
+
+fn create_junction(link: PathBuf, target: &Path) -> Junction {
     let output = Command::new("cmd")
         .args(["/C", "mklink", "/J"])
-        .arg(link)
+        .arg(&link)
         .arg(target)
         .output()
         .unwrap();
@@ -80,6 +91,7 @@ fn create_junction(link: &Path, target: &Path) {
         "mklink /J failed for {link:?} -> {target:?}: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    Junction(link)
 }
 
 #[test]
@@ -153,28 +165,45 @@ fn ancestor_junctions_follow_target_durability() {
     std::fs::write(&durable_file, b"mounted project data").unwrap();
     std::fs::write(&ephemeral_file, b"ephemeral via junction").unwrap();
 
-    let durable_junction = fixture.0.join("mounted-workspace");
-    let ephemeral_junction = fixture.0.join("sneaky-temp-alias");
-    create_junction(&durable_junction, &durable_target);
-    create_junction(&ephemeral_junction, &ephemeral_target);
+    let durable_junction = create_junction(fixture.0.join("mounted-workspace"), &durable_target);
+    let ephemeral_junction =
+        create_junction(fixture.0.join("sneaky-temp-alias"), &ephemeral_target);
 
-    let provenance = Provenance::from_ephemeral_roots(vec![ephemeral_target]);
+    let provenance = Provenance::from_ephemeral_roots(vec![ephemeral_target.clone()]);
     let deadline = Instant::now() + Duration::from_secs(5);
 
-    let via_durable_junction = durable_junction.join("report.txt");
+    let via_durable_junction = durable_junction.0.join("report.txt");
     let accepted = provenance
         .acquire(&open_file(&via_durable_junction, deadline), deadline)
         .unwrap();
     assert_eq!(accepted, long_path(&via_durable_junction).unwrap());
 
-    let via_ephemeral_junction = ephemeral_junction.join("cache.txt");
+    let via_ephemeral_junction = ephemeral_junction.0.join("cache.txt");
     let rejected = provenance
         .acquire(&open_file(&via_ephemeral_junction, deadline), deadline)
         .unwrap_err();
     assert!(rejected.to_string().contains(SAVE_LOCALLY));
 
-    let _ = std::fs::remove_dir(&durable_junction);
-    let _ = std::fs::remove_dir(&ephemeral_junction);
+    let ephemeral_to_durable =
+        create_junction(ephemeral_target.join("temp-to-durable"), &durable_target);
+    let via_ephemeral_alias = ephemeral_to_durable.0.join("report.txt");
+    let alias_rejected = provenance
+        .acquire(&open_file(&via_ephemeral_alias, deadline), deadline)
+        .unwrap_err();
+    assert!(alias_rejected.to_string().contains(SAVE_LOCALLY));
+
+    let ephemeral_root_alias =
+        create_junction(fixture.0.join("temp-root-alias"), &ephemeral_target);
+    let aliased_root_provenance =
+        Provenance::from_ephemeral_roots(vec![ephemeral_root_alias.0.clone()]);
+    let via_aliased_ephemeral_root = ephemeral_root_alias
+        .0
+        .join("temp-to-durable")
+        .join("report.txt");
+    let aliased_root_rejected = aliased_root_provenance
+        .acquire(&open_file(&via_aliased_ephemeral_root, deadline), deadline)
+        .unwrap_err();
+    assert!(aliased_root_rejected.to_string().contains(SAVE_LOCALLY));
 }
 
 #[test]
@@ -196,13 +225,23 @@ fn default_provenance_rejects_system_temp_and_accepts_project_directories() {
 
     // Verify a real project file outside the 6 Windows Known Folders is accepted
     // (skip only if the workspace itself was placed under an ephemeral directory).
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let manifest = manifest_dir.join("Cargo.toml");
     let canonical_manifest = std::fs::canonicalize(&manifest).unwrap();
     if !provenance.is_ephemeral(&canonical_manifest) {
         let acquired = provenance
             .acquire(&open_file(&manifest, deadline), deadline)
             .unwrap();
         assert_eq!(acquired, long_path(&manifest).unwrap());
+
+        let temp_alias = create_junction(fixture.0.join("project-link"), &manifest_dir);
+        let temp_alias_error = provenance
+            .acquire(
+                &open_file(&temp_alias.0.join("Cargo.toml"), deadline),
+                deadline,
+            )
+            .unwrap_err();
+        assert!(temp_alias_error.to_string().contains(SAVE_LOCALLY));
     }
 }
 
