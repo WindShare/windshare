@@ -192,7 +192,7 @@ func TestReceiverParksFailedRelayUntilDemandWithoutReplacingHealthyGeneration(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	set, err := recovery.Join(ctx, ctx, relayset.ReceiverConfig{
+	set, err := recovery.Join(ctx, relayset.ReceiverConfig{
 		Receiver: liveshare.ReceiverConfig{Capacity: testReceiveCapacity(t), Capability: share.Capability()},
 		Dial: func(ctx context.Context, config relayv2.ReceiverConfig) (relayset.ReceiverConnection, error) {
 			if config.RelayBaseURL == urls[1] {
@@ -286,7 +286,7 @@ func TestReceiverInitialUnavailabilityRecoversWithinJoinWindow(t *testing.T) {
 			return relayset.DialReceiver(ctx, config)
 		},
 	}
-	set, err := recovery.Join(ctx, ctx, config)
+	set, err := recovery.Join(ctx, config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,7 +298,7 @@ func TestReceiverInitialUnavailabilityRecoversWithinJoinWindow(t *testing.T) {
 	set.Close()
 	// A successful generation must not erase a different relay's permanent
 	// rejection when the share owner creates its next protocol session.
-	next, err := recovery.Replace(ctx, ctx, config)
+	next, err := recovery.Replace(ctx, config)
 	if err != nil {
 		t.Fatal(err)
 	}

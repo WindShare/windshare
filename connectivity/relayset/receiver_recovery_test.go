@@ -63,7 +63,7 @@ func TestReceiverRecoveryLongOutagePreservesEndpointDecisions(t *testing.T) {
 	for range 2 {
 		before := availableCalls.Load()
 		started := clock.Now()
-		set, err := recovery.Replace(t.Context(), t.Context(), config)
+		set, err := recovery.Replace(t.Context(), config)
 		if set != nil || !errors.Is(err, ErrReceiverWaitExpired) || errors.Is(err, ErrReceiverShareStopped) {
 			t.Fatal(set, err)
 		}
@@ -117,7 +117,7 @@ func TestReceiverRecoveryWaitLimitAndCallerScope(t *testing.T) {
 			if first {
 				open, expected = recovery.Join, ErrReceiverUnavailable
 			}
-			set, err := open(context.Background(), context.Background(), config)
+			set, err := open(context.Background(), config)
 			if set != nil || !errors.Is(err, expected) || errors.Is(err, context.Canceled) {
 				t.Fatal(set, err)
 			}
@@ -125,7 +125,7 @@ func TestReceiverRecoveryWaitLimitAndCallerScope(t *testing.T) {
 				t.Fatal(clock.Now())
 			}
 			// The configured duration is per outage, not time since the first invocation.
-			_, err = open(context.Background(), context.Background(), config)
+			_, err = open(context.Background(), config)
 			if !errors.Is(err, expected) || clock.Now() != time.Unix(7, 0) {
 				t.Fatal(err, clock.Now())
 			}
@@ -134,7 +134,7 @@ func TestReceiverRecoveryWaitLimitAndCallerScope(t *testing.T) {
 	recovery, _ := NewReceiverRecovery(ReceiverRecoveryOptions{})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if set, err := recovery.Replace(ctx, ctx, receiverUnavailableConfig("one")); set != nil || !errors.Is(err, context.Canceled) {
+	if set, err := recovery.Replace(ctx, receiverUnavailableConfig("one")); set != nil || !errors.Is(err, context.Canceled) {
 		t.Fatal(set, err)
 	}
 }
@@ -160,7 +160,7 @@ func TestReceiverRecoveryTerminalErrorsNeverWait(t *testing.T) {
 			config.Dial = func(context.Context, relayv2.ReceiverConfig) (ReceiverConnection, error) {
 				return nil, rejected
 			}
-			set, err := recovery.Replace(context.Background(), context.Background(), config)
+			set, err := recovery.Replace(context.Background(), config)
 			if set != nil || !errors.Is(err, rejected) || len(clock.waits) != 0 || terminalCount.Load() != 1 {
 				t.Fatal(set, err, clock.waits, terminalCount.Load())
 			}
@@ -206,7 +206,7 @@ func TestReceiverRecoveryRequiresStopsFromEveryResolvedRoute(t *testing.T) {
 				}
 				return nil, &relayv2.RelayError{Code: v2.ErrorStopped}
 			}
-			set, err := recovery.Join(t.Context(), t.Context(), config)
+			set, err := recovery.Join(t.Context(), config)
 			if set != nil || err == nil || errors.Is(err, ErrReceiverShareStopped) != test.wantStop {
 				t.Fatalf("set=%v err=%v, confirmed stop=%t", set, err, test.wantStop)
 			}
@@ -246,7 +246,7 @@ func TestReceiverRecoveryAttemptDeadlineAndCancellationJoin(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	result := make(chan error, 1)
-	go func() { _, err := recovery.Replace(ctx, ctx, config); result <- err }()
+	go func() { _, err := recovery.Replace(ctx, config); result <- err }()
 	expireAttempt := <-attemptDeadline
 	// Context creation does not establish dial ownership: an attempt that
 	// expires before Dial starts correctly skips it entirely.
@@ -302,7 +302,7 @@ func TestReceiverRecoveryWaitingDeadlineClosesActiveAttempt(t *testing.T) {
 	}
 	ctx := t.Context()
 	result := make(chan error, 1)
-	go func() { _, err := recovery.Replace(ctx, ctx, config); result <- err }()
+	go func() { _, err := recovery.Replace(ctx, config); result <- err }()
 	expireWindow := <-window
 	<-entered
 	expireWindow()
@@ -322,8 +322,8 @@ func TestReceiverRecoveryWaitingDeadlineClosesActiveAttempt(t *testing.T) {
 func TestReceiverRecoveryRejectsInvalidEndpointSets(t *testing.T) {
 	recovery, _ := NewReceiverRecovery(ReceiverRecoveryOptions{})
 	for _, endpoints := range [][]string{nil, {"one", "one"}, make([]string, MaximumEndpoints+1)} {
-		for _, open := range []func(context.Context, context.Context, ReceiverConfig) (*Receiver, error){recovery.Join, recovery.Replace} {
-			if set, err := open(context.Background(), context.Background(), receiverUnavailableConfig(endpoints...)); set != nil || err == nil || err.Error() == "" {
+		for _, open := range []func(context.Context, ReceiverConfig) (*Receiver, error){recovery.Join, recovery.Replace} {
+			if set, err := open(context.Background(), receiverUnavailableConfig(endpoints...)); set != nil || err == nil || err.Error() == "" {
 				t.Fatal(set, err)
 			}
 		}
@@ -412,8 +412,8 @@ func TestReceiverRecoveryRejectsInvalidCallerLifetimes(t *testing.T) {
 				t.Error("invalid caller lifetime reached dial")
 				return nil, relayv2.ErrProtocol
 			}
-			for _, open := range []func(context.Context, context.Context, ReceiverConfig) (*Receiver, error){recovery.Join, recovery.Replace} {
-				set, err := open(test.ctx, test.ctx, config)
+			for _, open := range []func(context.Context, ReceiverConfig) (*Receiver, error){recovery.Join, recovery.Replace} {
+				set, err := open(test.ctx, config)
 				if set != nil || err == nil || (test.cause != nil && !errors.Is(err, test.cause)) {
 					t.Fatal(set, err)
 				}
@@ -442,7 +442,7 @@ func TestReceiverHardDeadlineOnlyBindsItsEndpointAcrossJoins(t *testing.T) {
 		return nil, &relayv2.RelayError{Code: v2.ErrorStarting}
 	}
 	start := clock.Now()
-	if _, err = recovery.Join(t.Context(), t.Context(), config); !errors.Is(err, ErrReceiverUnavailable) ||
+	if _, err = recovery.Join(t.Context(), config); !errors.Is(err, ErrReceiverUnavailable) ||
 		clock.Now().Sub(start) != ReceiverInitialWait || busy.Load() != 1 || healthy.Load() < 2 {
 		t.Fatalf("join=%v elapsed=%s dials=(%d,%d)", err, clock.Now().Sub(start), busy.Load(), healthy.Load())
 	}
@@ -453,17 +453,15 @@ func TestReceiverHardDeadlineOnlyBindsItsEndpointAcrossJoins(t *testing.T) {
 		busy.Add(1)
 		return nil, &relayv2.RelayError{Code: v2.ErrorStopped}
 	}
-	if _, err = recovery.Replace(t.Context(), t.Context(), config); !errors.Is(err, ErrReceiverShareStopped) ||
+	if _, err = recovery.Replace(t.Context(), config); !errors.Is(err, ErrReceiverShareStopped) ||
 		clock.Now().Sub(start) != 30*time.Second || busy.Load() != 2 {
 		t.Fatalf("replacement=%v elapsed=%s dials=%d", err, clock.Now().Sub(start), busy.Load())
 	}
 }
 
-func TestReceiverRecoverySeparatesWaitCancellationFromSessionLifetime(t *testing.T) {
+func TestReceiverRecoveryIsolatesWaitCancelCauseFromReceiverLifetime(t *testing.T) {
 	waitCtx, cancelWait := context.WithCancelCause(t.Context())
 	defer cancelWait(nil)
-	sessionCtx, cancelSession := context.WithCancel(context.WithoutCancel(waitCtx))
-	defer cancelSession()
 
 	entered := make(chan struct{})
 	var dialCause error
@@ -480,7 +478,7 @@ func TestReceiverRecoverySeparatesWaitCancellationFromSessionLifetime(t *testing
 	}
 	done := make(chan error, 1)
 	go func() {
-		_, err := recovery.Replace(waitCtx, sessionCtx, config)
+		_, err := recovery.Replace(waitCtx, config)
 		done <- err
 	}()
 	<-entered
@@ -488,9 +486,6 @@ func TestReceiverRecoverySeparatesWaitCancellationFromSessionLifetime(t *testing
 	cancelWait(sentinel)
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Fatalf("Replace err=%v, want context.Canceled", err)
-	}
-	if sessionCtx.Err() != nil {
-		t.Fatalf("wait cancellation canceled detached sessionCtx: %v", sessionCtx.Err())
 	}
 	if dialCause != context.Canceled {
 		t.Fatalf("dial cancel cause=%v, want plain context.Canceled", dialCause)

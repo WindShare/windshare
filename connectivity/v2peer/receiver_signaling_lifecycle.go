@@ -10,7 +10,6 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/windshare/windshare/core/session"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
@@ -203,32 +202,13 @@ func (attempt *ReceiverAttempt) bindOperation(
 	return !shutdownRequested
 }
 
-// CloseDetaching retires signaling while the admitted lane is still live, then
-// invokes detach before publishing the final transport teardown trace.
-func (attempt *ReceiverAttempt) CloseDetaching(detach func(session.LaneIdentity)) error {
-	if attempt == nil {
-		return nil
-	}
-	if detach != nil {
-		attempt.signalingMu.Lock()
-		if attempt.closeDetach == nil {
-			attempt.closeDetach = detach
-		}
-		attempt.signalingMu.Unlock()
-	}
-	return attempt.Close()
-}
-
 func (attempt *ReceiverAttempt) detachAdmittedLane() {
-	attempt.signalingMu.Lock()
-	detach := attempt.closeDetach
-	attempt.closeDetach = nil
-	attempt.signalingMu.Unlock()
-	if detach == nil {
+	detacher, ok := attempt.lanes.(ReceiverLaneLifetimeSession)
+	if !ok {
 		return
 	}
-	if lane, ok := attempt.Lane(); ok {
-		detach(lane)
+	if lane, attached := attempt.Lane(); attached {
+		detacher.DetachAdmittedLane(lane)
 	}
 }
 

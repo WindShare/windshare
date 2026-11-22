@@ -194,7 +194,7 @@ func TestReceiverSessionOpenSeparatesWaitCancellationFromSessionContext(t *testi
 		ctx, cancel := context.WithCancelCause(context.Background())
 		cancel(task.ErrCancelled)
 		called := false
-		_, err := recovery.open(ctx, func(context.Context, context.Context, relayset.ReceiverConfig) (*relayset.Receiver, error) {
+		_, err := recovery.open(ctx, func(context.Context, relayset.ReceiverConfig) (*relayset.Receiver, error) {
 			called = true
 			return nil, nil
 		})
@@ -203,20 +203,15 @@ func TestReceiverSessionOpenSeparatesWaitCancellationFromSessionContext(t *testi
 		}
 	})
 
-	t.Run("in-flight wait cancel stops connect and cancels detached sessionCtx on failure", func(t *testing.T) {
+	t.Run("in-flight wait cancel stops connect", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			ctx, cancel := context.WithCancelCause(context.Background())
 			entered := make(chan struct{})
-			var seenSessionCtx context.Context
 			done := make(chan error, 1)
 			go func() {
-				_, err := recovery.open(ctx, func(waitCtx, sessionCtx context.Context, _ relayset.ReceiverConfig) (*relayset.Receiver, error) {
-					seenSessionCtx = sessionCtx
+				_, err := recovery.open(ctx, func(waitCtx context.Context, _ relayset.ReceiverConfig) (*relayset.Receiver, error) {
 					close(entered)
 					<-waitCtx.Done()
-					if sessionCtx.Err() != nil {
-						t.Errorf("wait cancel leaked into detached sessionCtx: %v", sessionCtx.Err())
-					}
 					return nil, waitCtx.Err()
 				})
 				done <- err
@@ -225,9 +220,6 @@ func TestReceiverSessionOpenSeparatesWaitCancellationFromSessionContext(t *testi
 			cancel(task.ErrCancelled)
 			if err := <-done; !errors.Is(err, context.Canceled) {
 				t.Fatalf("in-flight cancel err=%v, want context.Canceled", err)
-			}
-			if seenSessionCtx == nil || context.Cause(seenSessionCtx) != context.Canceled {
-				t.Fatalf("session context after failed open = %v, want plain context.Canceled", context.Cause(seenSessionCtx))
 			}
 		})
 	})
@@ -252,20 +244,38 @@ func TestEarlyExitStopReasonPreservesFailureOwnership(t *testing.T) {
 		runtimeErr    error
 		connectionErr error
 		step          stepOutcome
+		failureCode   FailureCode
 		want          ReceiverLocalStopReason
 	}{
-		{"caller canceled", context.Canceled, nil, nil, nil, stepLocalFailure, ReceiverLocalStopCaller},
-		{"network preparation failure", nil, nil, nil, nil, stepNetworkFailure, ReceiverLocalStopRuntimeSessionFailure},
-		{"runtime failure during local preparation", nil, nil, networkErr, nil, stepLocalFailure, ReceiverLocalStopRuntimeSessionFailure},
-		{"connection failure during local preparation", nil, nil, nil, networkErr, stepLocalFailure, ReceiverLocalStopRuntimeSessionFailure},
-		{"admission failure", nil, admissionErr, nil, nil, stepLocalFailure, ReceiverLocalStopOutputAdmission},
-		{"local output preparation failure", nil, nil, nil, nil, stepLocalFailure, ReceiverLocalStopOutputAdmission},
-		{"invalid request failure", nil, nil, nil, nil, stepInvalidRequest, ReceiverLocalStopCaller},
+		{"caller canceled", context.Canceled, nil, nil, nil, stepLocalFailure, 0, ReceiverLocalStopCaller},
+		{"network preparation failure", nil, nil, nil, nil, stepNetworkFailure, 0, ReceiverLocalStopRuntimeSessionFailure},
+		{"runtime failure during local preparation", nil, nil, networkErr, nil, stepLocalFailure, 0, ReceiverLocalStopRuntimeSessionFailure},
+		{"connection failure during local preparation", nil, nil, nil, networkErr, stepLocalFailure, 0, ReceiverLocalStopRuntimeSessionFailure},
+		{"content admission failure", nil, admissionErr, nil, nil, stepLocalFailure, 0, ReceiverLocalStopOutputAdmission},
+		{"output reservation failure", nil, nil, nil, nil, stepLocalFailure, FailureOutputOperationAlreadyRunning, ReceiverLocalStopOutputAdmission},
+		{"non-admission local failure", nil, nil, nil, nil, stepLocalFailure, 0, ReceiverLocalStopCaller},
+		{"invalid request failure", nil, nil, nil, nil, stepInvalidRequest, 0, ReceiverLocalStopCaller},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if got := earlyExitStopReason(test.contextErr, test.admissionErr, test.runtimeErr, test.connectionErr, test.step); got != test.want {
+			if got := earlyExitStopReason(test.contextErr, test.admissionErr, test.runtimeErr, test.connectionErr, test.step, test.failureCode); got != test.want {
 				t.Fatalf("earlyExitStopReason = %v, want %v", got, test.want)
 			}
 		})
+	}
+}
+
+func TestDiscardReplacementStopReasonDistinguishesTaskCancellation(t *testing.T) {
+	liveTask := context.Background()
+	canceledTask, cancelTask := context.WithCancelCause(context.Background())
+	cancelTask(task.ErrCancelled)
+
+	if got := discardReplacementStopReason(canceledTask, context.Canceled); got != ReceiverLocalStopCaller {
+		t.Fatalf("canceled task discard reason = %v, want caller", got)
+	}
+	if got := discardReplacementStopReason(liveTask, context.Canceled); got != ReceiverLocalStopRuntimeSessionFailure {
+		t.Fatalf("live task continuation close discard reason = %v, want runtime_session_failure", got)
+	}
+	if got := discardReplacementStopReason(liveTask, errors.New("validation failed")); got != ReceiverLocalStopRuntimeSessionFailure {
+		t.Fatalf("validation failure discard reason = %v, want runtime_session_failure", got)
 	}
 }

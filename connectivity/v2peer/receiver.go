@@ -61,6 +61,15 @@ type ReceiverLaneSession interface {
 	) (receiversession.LaneAdmissionResult, error)
 }
 
+// ReceiverLaneLifetimeSession is an optional extension for owners (such as
+// peerset.Path) that tie an admitted lane's lifetime to its attempt so
+// signaling retirement, lane detach, and teardown trace publication happen in
+// deterministic order inside the attempt's own completion barrier.
+type ReceiverLaneLifetimeSession interface {
+	ReceiverLaneSession
+	DetachAdmittedLane(session.LaneIdentity) bool
+}
+
 const (
 	DefaultReceiverTerminationObservationCapacity = 64
 	maximumReceiverTerminationObservationCapacity = 4_096
@@ -220,7 +229,6 @@ type ReceiverAttempt struct {
 	operation         *receiverBoundSignalingOperation
 	shutdownRequested bool
 	shutdownDecision  receiverAttemptDecision
-	closeDetach       func(session.LaneIdentity)
 	phases            *peerPhaseLifecycle
 	phaseContext      context.Context
 	transport         *ownedPeerDataChannel

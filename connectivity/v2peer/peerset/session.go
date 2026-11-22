@@ -90,6 +90,7 @@ func (s *ReceiverSession) startTURN(receiver ReceiverConfig) {
 	}
 	sessionID := controls.ProtocolSessionID()
 	content, _ := receiver.Lanes.(ContentLaneOwner)
+	attemptLanes := pathLanes(receiver.Lanes, sessionID)
 	serviceBudgets := make(map[string]*Budget)
 	s.turn = turnpath.NewReceiver(turnpath.ReceiverConfig{SessionID: [16]byte(sessionID), Now: s.owner.config.Clock.Now,
 		Send:    controls.SendTURNControl,
@@ -106,13 +107,13 @@ func (s *ReceiverSession) startTURN(receiver ReceiverConfig) {
 			path, err := s.owner.Open(ctx, PathConfig{SessionID: sessionID, PeerPathID: v2signal.PeerPathID(grant.PathID),
 				Budget: budget, Native: receiver.Factory.NativeConnectivity(), ICE: ice, Demand: ContentDemand, Content: content,
 				Prepare: func(ctx context.Context, binding v2signal.Binding) (PreparedStarter, error) {
-					prepared, err := receiver.Factory.PrepareConnection(ctx, receiver.Lanes, binding, v2peer.ConnectionPath{ICE: ice, ReplacesPeerPathID: grant.Replaces,
+					prepared, err := receiver.Factory.PrepareConnection(ctx, attemptLanes, binding, v2peer.ConnectionPath{ICE: ice, ReplacesPeerPathID: grant.Replaces,
 						OnTURNRecovery: func(reason turncontrol.RecoveryReason) { s.turn.Recover(grant.PathID, reason) }})
 					if err != nil {
 						return PreparedStarter{}, err
 					}
 					return PreparedStarter{Close: prepared.Close, Start: func(ctx context.Context, binding v2signal.Binding) (Attempt, error) {
-						return receiver.Factory.StartPreparedConnection(ctx, receiver.Signaling, receiver.Lanes, binding, prepared, ice)
+						return receiver.Factory.StartPreparedConnection(ctx, receiver.Signaling, attemptLanes, binding, prepared, ice)
 					}}, nil
 				},
 			})

@@ -129,31 +129,26 @@ func (recovery *getReceiverRecovery) replace(ctx context.Context) (*getReceiverS
 	return recovery.open(ctx, recovery.owner.Replace)
 }
 
-func (recovery *getReceiverRecovery) open(waitCtx context.Context, connect func(waitCtx, sessionCtx context.Context, config relayset.ReceiverConfig) (*relayset.Receiver, error)) (*getReceiverSession, error) {
+func (recovery *getReceiverRecovery) open(waitCtx context.Context, connect func(context.Context, relayset.ReceiverConfig) (*relayset.Receiver, error)) (*getReceiverSession, error) {
 	if waitCtx == nil {
 		return nil, errors.New("receiver recovery requires caller lifetime")
 	}
 	if err := waitCtx.Err(); err != nil {
 		return nil, err
 	}
+	set, err := connect(waitCtx, recovery.config)
+	if err != nil {
+		return nil, err
+	}
+	runtime, connection, err := set.WaitReady(waitCtx)
+	if err != nil {
+		set.Close()
+		return nil, err
+	}
 	// Give each established generation its own resource lifetime detached from
 	// task or continuation cancellation so shutdown closes peers before retiring
 	// the relay lane they use for clean CANCEL signaling.
 	sessionCtx, cancelSession := context.WithCancel(context.WithoutCancel(waitCtx))
-	set, err := connect(waitCtx, sessionCtx, recovery.config)
-	if err != nil {
-		cancelSession()
-		return nil, err
-	}
-	runtime, connection, err := set.WaitReady(sessionCtx)
-	if err != nil || waitCtx.Err() != nil {
-		set.Close()
-		cancelSession()
-		if err != nil {
-			return nil, err
-		}
-		return nil, waitCtx.Err()
-	}
 	recovery.observation.registerLaneSet(runtime.LaneSet())
 	return &getReceiverSession{
 		relays: set, connection: connection, runtime: runtime, recovery: recovery,
@@ -307,7 +302,7 @@ func (a *runner) prepareGetConnectivity(generationCtx context.Context, request p
 			return nil, stepNetworkFailure
 		}
 		observation.fail(stepInvalidRequest, err)
-		execution.CloseWithReason(ReceiverLocalStopOutputAdmission)
+		execution.CloseWithReason(ReceiverLocalStopCaller)
 		return nil, stepInvalidRequest
 	}
 	return execution, stepReady

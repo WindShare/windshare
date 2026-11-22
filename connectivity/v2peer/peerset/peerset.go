@@ -183,7 +183,7 @@ func (s *PeerSet) Open(ctx context.Context, config PathConfig) (*Path, error) {
 		}
 	}
 	s.sequence++
-	path := &Path{sequence: s.sequence, owner: s, config: config, key: key, ctx: child, cancel: cancel, slot: slot, supply: supply,
+	path := &Path{sequence: s.sequence, owner: s, config: config, key: key, parentCtx: ctx, ctx: child, cancel: cancel, slot: slot, supply: supply,
 		resourceChanges: make(chan struct{}, 1), demand: config.Demand, wake: make(chan struct{}, 1), done: make(chan struct{}), ready: make(chan struct{})}
 	s.paths[key] = path
 	go path.run()
@@ -203,6 +203,7 @@ type Path struct {
 	owner             *PeerSet
 	config            PathConfig
 	key               pathKey
+	parentCtx         context.Context
 	ctx               context.Context
 	cancel            context.CancelFunc
 	mu                sync.Mutex

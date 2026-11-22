@@ -256,7 +256,8 @@ func (client *Requests) beginCall(
 		return nil
 	}
 	if !completion.Admitted && outcome == protocolsession.SendOutcomeDropped &&
-		client.runtime.ctx.Err() == nil && ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+		client.runtime.ctx.Err() == nil && ctx.Err() != nil &&
+		err == ctx.Err() { //nolint:errorlint // Require an exact context leaf so joined faults are never discarded.
 		// Pre-admission cancellation leaves no remote operation to clean up;
 		// surface ctx.Err() directly, matching prepareCall's pre-send check.
 		call.recordProtocolTraceFailure(err)

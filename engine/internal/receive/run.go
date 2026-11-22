@@ -27,7 +27,7 @@ func runAttempt(ctx context.Context, input preparedRequest, deps Dependencies, r
 	startedAt := a.clock.Now()
 	metrics := downloadmetrics.Prepare(a.clock.Now)
 	observation := newObservation(deps.Control, deps.Control.Diagnostics.Enabled(), metrics)
-	active := &receiveOperation{runner: a, input: input, observation: observation, metrics: metrics}
+	active := &receiveOperation{taskCtx: ctx, runner: a, input: input, observation: observation, metrics: metrics}
 	var settlement *SettlementInput
 	step := stepReady
 	defer func() { completed = active.settleAttempt(ctx, settlement, step, startedAt) }()
@@ -92,19 +92,23 @@ func runAttempt(ctx context.Context, input preparedRequest, deps Dependencies, r
 // Teardown participates in settlement, so recovery advice must include its
 // outcome rather than being decided while an attempt still owns resources.
 func (active *receiveOperation) settleAttempt(ctx context.Context, settlement *SettlementInput, step stepOutcome, startedAt time.Time) task.Completion[Result] {
-	cleanupErr := active.close(func(current *getReceiverSession, execution *getTransferExecution) ReceiverLocalStopReason {
-		var admissionErr, runtimeErr, connectionErr error
-		if execution != nil && execution.admission != nil {
-			admissionErr = execution.admission.Err()
-		}
-		if current != nil {
-			runtimeErr, connectionErr = receiverTerminationErrors(current.runtime, current.connection)
-			if current.runtime == nil || !current.runtime.PathsExhausted() {
-				connectionErr = nil
+	var resolveStop func(*getReceiverSession, *getTransferExecution) ReceiverLocalStopReason
+	if settlement == nil {
+		resolveStop = func(current *getReceiverSession, execution *getTransferExecution) ReceiverLocalStopReason {
+			var admissionErr, runtimeErr, connectionErr error
+			if execution != nil && execution.admission != nil {
+				admissionErr = execution.admission.Err()
 			}
+			if current != nil {
+				runtimeErr, connectionErr = receiverTerminationErrors(current.runtime, current.connection)
+				if current.runtime == nil || !current.runtime.PathsExhausted() {
+					connectionErr = nil
+				}
+			}
+			return earlyExitStopReason(ctx.Err(), admissionErr, runtimeErr, connectionErr, step, active.observation.failureSnapshot().Code)
 		}
-		return earlyExitStopReason(ctx.Err(), admissionErr, runtimeErr, connectionErr, step)
-	})
+	}
+	cleanupErr := active.close(resolveStop)
 	elapsed := max(active.runner.clock.Now().Sub(startedAt), 0)
 	connectivity := active.metrics.Snapshot(true)
 	var peerStop, relayStop error
@@ -184,13 +188,25 @@ func receiverTerminationErrors(runtime *receiversession.Runtime, connection rela
 	}
 	return
 }
-func earlyExitStopReason(contextErr, admissionErr, runtimeErr, connectionErr error, step stepOutcome) ReceiverLocalStopReason {
+func isOutputAdmissionFailureCode(code FailureCode) bool {
+	switch code {
+	case FailureRetainedOutputMissing,
+		FailureOutputOperationAlreadyRunning,
+		FailureOutputNeedsAttention,
+		FailureOutputOwnership,
+		FailureOutputContract:
+		return true
+	default:
+		return false
+	}
+}
+func earlyExitStopReason(contextErr, admissionErr, runtimeErr, connectionErr error, step stepOutcome, failureCode FailureCode) ReceiverLocalStopReason {
 	switch {
 	case contextErr != nil:
 		return ReceiverLocalStopCaller
 	case runtimeErr != nil || connectionErr != nil || step == stepNetworkFailure:
 		return ReceiverLocalStopRuntimeSessionFailure
-	case admissionErr != nil || step == stepLocalFailure:
+	case admissionErr != nil || isOutputAdmissionFailureCode(failureCode):
 		return ReceiverLocalStopOutputAdmission
 	default:
 		return ReceiverLocalStopCaller

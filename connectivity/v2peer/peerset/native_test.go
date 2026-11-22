@@ -144,3 +144,82 @@ func TestNativeMappingReservationFeedsFreshAttemptWithoutResettingUnitBudget(t *
 		t.Fatal(path.Result())
 	}
 }
+
+type blockingRevokePathControls struct {
+	mu           sync.Mutex
+	revokeCalled bool
+}
+
+func (c *blockingRevokePathControls) SetPeerPathControlHandler(func(context.Context, []byte) error) {}
+
+func (c *blockingRevokePathControls) SendPeerPathControl(ctx context.Context, body []byte) error {
+	control, err := protocolsession.DecodePeerPathControl(body)
+	if err == nil && control.Kind == protocolsession.PeerPathRevoke {
+		c.mu.Lock()
+		c.revokeCalled = true
+		c.mu.Unlock()
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return nil
+}
+
+func TestPathCloseResourcesRevokesSinglePathOnlyWhileSessionLives(t *testing.T) {
+	t.Run("single path close sends revoke while session context lives", func(t *testing.T) {
+		clock := newClock()
+		native := newTestNative(t, nativepeer.Config{Monitor: networkstate.NewMonitor(fakeNetwork{}, time.Nanosecond), Now: clock.Now, Reachability: reachability.New(reachability.Config{Now: clock.Now})})
+		defer native.Close(context.Background())
+		controls := &fakePathControls{sent: make(chan []byte, 32)}
+		owner, _ := newTestPeerSet(t, Config{Clock: clock})
+		sessionCtx, cancelSession := context.WithCancel(context.Background())
+		defer cancelSession()
+		path, err := owner.Open(sessionCtx, PathConfig{
+			Demand: ContentDemand, Native: native, Controls: controls,
+			Start: func(context.Context, v2signal.Binding) (Attempt, error) { return newAttempt(), nil },
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := path.Close(); err != nil {
+			t.Fatal(err)
+		}
+		var sawRevoke bool
+		for {
+			select {
+			case body := <-controls.sent:
+				if control, err := protocolsession.DecodePeerPathControl(body); err == nil && control.Kind == protocolsession.PeerPathRevoke {
+					sawRevoke = true
+				}
+			default:
+				if !sawRevoke {
+					t.Fatal("single-path close did not send PeerPathRevoke")
+				}
+				return
+			}
+		}
+	})
+
+	t.Run("enclosing session cancel skips revoke on blocked control lane", func(t *testing.T) {
+		clock := newClock()
+		native := newTestNative(t, nativepeer.Config{Monitor: networkstate.NewMonitor(fakeNetwork{}, time.Nanosecond), Now: clock.Now, Reachability: reachability.New(reachability.Config{Now: clock.Now})})
+		defer native.Close(context.Background())
+		controls := &blockingRevokePathControls{}
+		owner, _ := newTestPeerSet(t, Config{Clock: clock})
+		sessionCtx, cancelSession := context.WithCancel(context.Background())
+		path, err := owner.Open(sessionCtx, PathConfig{
+			Demand: ContentDemand, Native: native, Controls: controls,
+			Start: func(context.Context, v2signal.Binding) (Attempt, error) { return newAttempt(), nil },
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		cancelSession()
+		receive(t, path.Done())
+		controls.mu.Lock()
+		called := controls.revokeCalled
+		controls.mu.Unlock()
+		if called {
+			t.Fatal("enclosing session shutdown sent PeerPathRevoke")
+		}
+	})
+}

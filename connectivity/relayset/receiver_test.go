@@ -45,7 +45,7 @@ func TestReceiverInitialStartingUsesBoundedClockAndAllFailuresSettle(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	set, err := recovery.Join(context.Background(), context.Background(), ReceiverConfig{Receiver: liveshare.ReceiverConfig{Capacity: testReceiveCapacity(t), Capability: capability}, Dial: func(context.Context, relayv2.ReceiverConfig) (ReceiverConnection, error) {
+	set, err := recovery.Join(context.Background(), ReceiverConfig{Receiver: liveshare.ReceiverConfig{Capacity: testReceiveCapacity(t), Capability: capability}, Dial: func(context.Context, relayv2.ReceiverConfig) (ReceiverConnection, error) {
 		if calls.Add(1) <= 2 {
 			return nil, &relayv2.RelayError{Code: v2.ErrorStarting}
 		}

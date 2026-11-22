@@ -1,6 +1,7 @@
 package v2peer
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"reflect"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	pion "github.com/pion/webrtc/v4"
+	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/session/protocolsession"
 
@@ -601,55 +603,115 @@ func (peer *failingClosePeerConnection) Close() error {
 	return peer.closeErr
 }
 
-func TestReceiverAttemptCloseDetachingPreservesSignalingOrderAndTeardownTrace(t *testing.T) {
+type detachingTestLanes struct {
+	*receiverTestLanes
+	onDetach func(session.LaneIdentity) bool
+}
+
+func (lanes *detachingTestLanes) DetachAdmittedLane(lane session.LaneIdentity) bool {
+	if lanes.onDetach != nil {
+		return lanes.onDetach(lane)
+	}
+	return false
+}
+
+func TestReceiverAttemptLaneLifetimeSessionPreservesSignalingOrderAndTeardownTrace(t *testing.T) {
 	for _, test := range []struct {
 		name               string
+		cancelParent       bool
 		peerCloseErr       error
 		wantShutdownFailed bool
 	}{
-		{name: "clean teardown", peerCloseErr: nil, wantShutdownFailed: false},
-		{name: "peer close failure", peerCloseErr: errors.New("peer close failed"), wantShutdownFailed: true},
+		{name: "explicit close clean teardown", cancelParent: false, peerCloseErr: nil, wantShutdownFailed: false},
+		{name: "explicit close peer shutdown failure", cancelParent: false, peerCloseErr: errors.New("peer close failed"), wantShutdownFailed: true},
+		{name: "parent cancel clean teardown", cancelParent: true, peerCloseErr: nil, wantShutdownFailed: false},
+		{name: "parent cancel peer shutdown failure", cancelParent: true, peerCloseErr: errors.New("peer close failed"), wantShutdownFailed: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			parentCtx, cancelParent := context.WithCancel(t.Context())
+			defer cancelParent()
+
 			basePeer := newReceiverTestPeerConnection()
 			peer := &failingClosePeerConnection{receiverTestPeerConnection: basePeer, closeErr: test.peerCloseErr}
-			harness := newReceiverHarness(t, func(config *ReceiverFactoryConfig, _ *receiverTestSignaling) {
-				config.PeerConnections = ReceiverPeerConnectionFactoryFunc(
+			channel := newReceiverTestChannel()
+			operation := newReceiverTestOperation()
+			operation.channel = channel
+			signaling := &receiverTestSignaling{operation: operation, offers: make(chan []byte, 2)}
+			baseLanes := newReceiverTestLanes()
+			factory, err := newTestReceiverFactory(t, ReceiverFactoryConfig{
+				PeerConnections: ReceiverPeerConnectionFactoryFunc(
 					func(pion.Configuration) (ReceiverPeerConnection, error) { return peer, nil },
-				)
-				config.ReceiverTerminationObservationCapacity = 1
+				),
+				DataChannels: DataChannelAdapterFunc(
+					func(*pion.DataChannel) (PeerDataChannel, error) { return channel, nil },
+				),
+				NegotiationBudget:                      peerTestTimeout,
+				AdmissionBudget:                        peerTestTimeout,
+				Random:                                 bytes.NewReader(bytes.Repeat([]byte{0x5a}, v2signal.IdentityBytes*2)),
+				ReceiverTerminationObservationCapacity: 1,
 			})
-			traces := harness.factory.ReceiverTerminationObservations()
-			harness.peer = basePeer
-			harness.answer(t)
-			harness.openAndAwaitLane(t)
+			if err != nil {
+				t.Fatal(err)
+			}
+			traces := factory.ReceiverTerminationObservations()
 
 			var detachedLane session.LaneIdentity
 			var traceBeforeDetach bool
-			err := harness.attempt.CloseDetaching(func(lane session.LaneIdentity) {
-				detachedLane = lane
-				select {
-				case <-traces:
-					traceBeforeDetach = true
-				default:
-				}
-				_ = harness.admittedOwner.Close()
-			})
+			var admittedOwner protocolsession.FrameChannel
+			lanes := &detachingTestLanes{
+				receiverTestLanes: baseLanes,
+				onDetach: func(lane session.LaneIdentity) bool {
+					detachedLane = lane
+					select {
+					case <-traces:
+						traceBeforeDetach = true
+					default:
+					}
+					if admittedOwner != nil {
+						_ = admittedOwner.Close()
+					}
+					return true
+				},
+			}
+			attempt, err := factory.Start(parentCtx, signaling, lanes, testPeerSlot(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			offerBody := receiveTest(t, signaling.offers)
+			offer, err := v2signal.DecodeOffer(offerBody)
+			if err != nil {
+				t.Fatal(err)
+			}
+			harness := &receiverHarness{
+				factory: factory, peer: basePeer, channel: channel, operation: operation,
+				signaling: signaling, lanes: baseLanes, attempt: attempt, binding: offer.Binding,
+			}
+			harness.answer(t)
+			harness.openAndAwaitLane(t)
+			admittedOwner = harness.admittedOwner
+
+			if test.cancelParent {
+				cancelParent()
+				receiveTest(t, attempt.Done())
+				err = attempt.Err()
+			} else {
+				err = attempt.Close()
+			}
 			if test.wantShutdownFailed {
 				if !errors.Is(err, errPeerShutdown) {
-					t.Fatalf("CloseDetaching err=%v, want errPeerShutdown", err)
+					t.Fatalf("close err=%v, want errPeerShutdown", err)
 				}
 			} else if err != nil {
-				t.Fatalf("CloseDetaching err=%v", err)
+				t.Fatalf("close err=%v", err)
 			}
 			if traceBeforeDetach {
-				t.Fatal("termination trace published before CloseDetaching retired admitted lane")
+				t.Fatal("termination trace published before DetachAdmittedLane retired admitted lane")
 			}
-			if detachedLane != harness.lanes.lane {
-				t.Fatalf("detached lane=%+v, want %+v", detachedLane, harness.lanes.lane)
+			if detachedLane != baseLanes.lane {
+				t.Fatalf("detached lane=%+v, want %+v", detachedLane, baseLanes.lane)
 			}
-			if state := receiveTest(t, harness.operation.cancelState); state != framechannel.Open {
-				t.Fatalf("CloseDetaching canceled signaling after lane close: %v", state)
+			if state := receiveTest(t, operation.cancelState); state != framechannel.Open {
+				t.Fatalf("signaling canceled after lane close: %v", state)
 			}
 			trace := receiveTest(t, traces)
 			if transitions := trace.TeardownTransitions(); !reflect.DeepEqual(transitions, expectedPeerTeardownTransitions) {

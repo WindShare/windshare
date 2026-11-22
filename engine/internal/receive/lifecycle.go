@@ -17,6 +17,7 @@ import (
 // synchronized session/admission pair. Shutdown joins replacements before taking
 // the final ownership snapshot so no generation can outlive task completion.
 type receiveOperation struct {
+	taskCtx      context.Context
 	runner       *runner
 	input        preparedRequest
 	output       getOutputPreparation
@@ -90,14 +91,18 @@ func (g *receiveOperation) replace(ctx context.Context, _ *receiversession.Runti
 			g.observation.emit(generation)
 		},
 		Discard: func(err error) {
-			reason := ReceiverLocalStopRuntimeSessionFailure
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				reason = ReceiverLocalStopCaller
-			}
-			nextExecution.CloseWithReason(reason)
+			nextExecution.CloseWithReason(discardReplacementStopReason(g.taskCtx, err))
 			next.Close()
 		},
 	}, nil
+}
+
+func discardReplacementStopReason(taskCtx context.Context, err error) ReceiverLocalStopReason {
+	if (taskCtx != nil && taskCtx.Err() != nil) ||
+		(taskCtx == nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded))) {
+		return ReceiverLocalStopCaller
+	}
+	return ReceiverLocalStopRuntimeSessionFailure
 }
 
 func (g *receiveOperation) demandContent() {

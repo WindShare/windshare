@@ -8,6 +8,7 @@ import (
 	"testing"
 	"testing/synctest"
 
+	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
@@ -21,10 +22,9 @@ import (
 
 type recoveringAttempt struct {
 	*fakeAttempt
-	identity       session.LaneIdentity
-	retire         sync.Once
-	onClose        func()
-	closeDetaching bool
+	identity session.LaneIdentity
+	retire   sync.Once
+	onClose  func()
 }
 
 func (attempt *recoveringAttempt) Lane() (session.LaneIdentity, bool) {
@@ -41,17 +41,6 @@ func (attempt *recoveringAttempt) Close() error {
 	return nil
 }
 
-func (attempt *recoveringAttempt) CloseDetaching(detach func(session.LaneIdentity)) error {
-	attempt.closeDetaching = true
-	err := attempt.Close()
-	if detach != nil {
-		if lane, ok := attempt.Lane(); ok {
-			detach(lane)
-		}
-	}
-	return err
-}
-
 type recoveryLaneOwner struct{ lanes *transferlanes.Set }
 
 func (owner recoveryLaneOwner) LaneSet() *transferlanes.Set { return owner.lanes }
@@ -66,12 +55,14 @@ func (source recoveryBlockSource) FetchBlock(ctx context.Context, demand transfe
 }
 
 func TestAttemptClosureRetiresAdmissionThatWonCancellationRace(t *testing.T) {
-	for _, retireLaneFirst := range []bool{false, true} {
-		name := "local_stop"
-		if retireLaneFirst {
-			name = "recovery_restart"
-		}
-		t.Run(name, func(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		order attemptCloseOrder
+	}{
+		{name: "local_stop", order: closeSignalingFirst},
+		{name: "recovery_restart", order: closeLaneFirst},
+	} {
+		t.Run(test.name, func(t *testing.T) {
 			lanes, err := transferlanes.New(transferlanes.Config{ProtocolSessionID: protocolsession.ProtocolSessionID{2}})
 			if err != nil {
 				t.Fatal(err)
@@ -90,7 +81,7 @@ func TestAttemptClosureRetiresAdmissionThatWonCancellationRace(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			path.closeAttempt(attempt, retireLaneFirst)
+			path.closeAttempt(attempt, test.order)
 			if lanes.Len() != 0 {
 				t.Fatal("attachment won cancellation and escaped path ownership")
 			}
@@ -100,13 +91,12 @@ func TestAttemptClosureRetiresAdmissionThatWonCancellationRace(t *testing.T) {
 
 func TestCloseAttemptOrdersSignalingAndLaneDetachByShutdownReason(t *testing.T) {
 	for _, test := range []struct {
-		name               string
-		retireLaneFirst    bool
-		wantLanesAtClose   int
-		wantCloseDetaching bool
+		name             string
+		order            attemptCloseOrder
+		wantLanesAtClose int
 	}{
-		{name: "local stop closes signaling before detaching lane", retireLaneFirst: false, wantLanesAtClose: 1, wantCloseDetaching: true},
-		{name: "recovery restart detaches broken lane before closing attempt", retireLaneFirst: true, wantLanesAtClose: 0, wantCloseDetaching: false},
+		{name: "local stop closes signaling before detaching lane", order: closeSignalingFirst, wantLanesAtClose: 1},
+		{name: "recovery restart detaches broken lane before closing attempt", order: closeLaneFirst, wantLanesAtClose: 0},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			lanes, err := transferlanes.New(transferlanes.Config{ProtocolSessionID: protocolsession.ProtocolSessionID{3}})
@@ -127,17 +117,48 @@ func TestCloseAttemptOrdersSignalingAndLaneDetachByShutdownReason(t *testing.T) 
 			attempt.onClose = func() {
 				lanesDuringClose = lanes.Len()
 			}
-			path.closeAttempt(attempt, test.retireLaneFirst)
+			path.closeAttempt(attempt, test.order)
 			if lanesDuringClose != test.wantLanesAtClose {
 				t.Fatalf("admitted lane count during attempt.Close = %d, want %d", lanesDuringClose, test.wantLanesAtClose)
-			}
-			if attempt.closeDetaching != test.wantCloseDetaching {
-				t.Fatalf("CloseDetaching used = %v, want %v", attempt.closeDetaching, test.wantCloseDetaching)
 			}
 			if lanes.Len() != 0 {
 				t.Fatalf("admitted lane count after closeAttempt = %d, want 0", lanes.Len())
 			}
 		})
+	}
+}
+
+type pathLanesTestSession struct {
+	v2peer.ReceiverLaneSession
+	recoveryLaneOwner
+}
+
+func TestPathLanesAdaptsContentOwnerToLaneLifetimeSession(t *testing.T) {
+	lanes, err := transferlanes.New(transferlanes.Config{ProtocolSessionID: protocolsession.ProtocolSessionID{9}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lanes.Close()
+	identity := session.LaneIdentity{ID: 4, Epoch: 2}
+	if err := lanes.Add(transferlanes.Identity(identity), transferlanes.RouteDirect,
+		recoveryBlockSource(func(context.Context, transferlanes.Demand) (records.BlockRecord, error) {
+			return records.BlockRecord{}, nil
+		})); err != nil {
+		t.Fatal(err)
+	}
+	sessionID := protocolsession.ProtocolSessionID{9}
+	adapted := pathLanes(pathLanesTestSession{recoveryLaneOwner: recoveryLaneOwner{lanes}}, sessionID)
+	lifetime, ok := adapted.(v2peer.ReceiverLaneLifetimeSession)
+	if !ok {
+		t.Fatalf("pathLanes returned %T without ReceiverLaneLifetimeSession", adapted)
+	}
+	if idCarrier, ok := adapted.(interface {
+		ProtocolSessionID() protocolsession.ProtocolSessionID
+	}); !ok || idCarrier.ProtocolSessionID() != sessionID {
+		t.Fatalf("adapted session ID preserved=%v", ok)
+	}
+	if !lifetime.DetachAdmittedLane(identity) || lanes.Len() != 0 {
+		t.Fatalf("DetachAdmittedLane failed to detach lane; remaining=%d", lanes.Len())
 	}
 }
 
