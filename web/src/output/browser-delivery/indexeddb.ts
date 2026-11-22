@@ -2,13 +2,12 @@ import { createBrowserDeliveryFile, finalizeDirectBrowserDelivery, fileKey, requ
 import {
   DEFAULT_OUTPUT_DATABASE_NAME, INDEXEDDB_BROWSER_DELIVERY_FILE_STORE, INDEXEDDB_BROWSER_SAVE_POLICY_STORE,
   INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE, INDEXEDDB_BY_OPERATION_FILE_INDEX,
-  INDEXEDDB_FILE_FINAL_PROOF_STORE,
   openIndexedDbCheckpointDatabase, requestResult, transactionCompletion,
 } from '../browser/indexeddb-database'
 import { readStoredCheckpoint } from '../browser/indexeddb/repository-transactions'
 import { FILE_ID_BYTES, OPERATION_ID_BYTES, fileCheckpointDigest } from '../persistence/checkpoint'
 import { snapshotIdentity } from '../../transfer/encoding/canonical'
-import { requireBrowserTargetProof } from './final-proof'
+import { validateBrowserTargetCheckpoint } from './final-proof'
 import type { FinalFileCheckpointProof } from '../persistence/journal'
 import { authorizeBrowserDeliveryRestart, assertBrowserDeliveryTransition, stageCheckpoint, targetCheckpoint } from './lifecycle'
 import {
@@ -24,7 +23,7 @@ import {
 
 const MUTATION_STORES = [
   INDEXEDDB_BROWSER_SAVE_POLICY_STORE, INDEXEDDB_BROWSER_DELIVERY_FILE_STORE,
-  INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE, INDEXEDDB_FILE_FINAL_PROOF_STORE,
+  INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE,
 ]
 
 export class IndexedDbBrowserDeliveryRepository implements BrowserDeliveryRepository {
@@ -115,7 +114,7 @@ export class IndexedDbBrowserDeliveryRepository implements BrowserDeliveryReposi
       await requireCommittedCheckpoints(transaction, previous, candidate)
       const target = targetCheckpoint(candidate.state)
       if (target !== undefined && targetCheckpoint(previous.state) === undefined) {
-        await requireBrowserTargetProof(transaction, target)
+        validateBrowserTargetCheckpoint(target)
       }
       await requestResult(store.put(candidate))
       return candidate

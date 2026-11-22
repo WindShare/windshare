@@ -23,7 +23,7 @@ test('retained staging and target proof remain distinct after reload and offline
     return probe.finishBrowserDeliveryReopen(databaseName)
   }, { path: PROBE_PATH, databaseName })
   expect(recovered).toEqual({
-    checkpointOnlyRejected: true,
+    unfinalizedRejected: true,
     beforeActions: ['save-staged-files'], beforeTargetSavedBytes: '0', beforeStagedBytes: '8',
     afterTargetSavedBytes: '8', afterStagedBytes: '0', afterState: 'cleaned',
   })
@@ -58,7 +58,7 @@ test('direct target completion uses one atomic transaction while retaining exact
     return probe.finalizeDirectDelivery('delivery-direct-' + crypto.randomUUID())
   }, PROBE_PATH)
   expect(result).toEqual({
-    missingCheckpointRejected: true, missingFinalProofRejected: true, foreignProofRejected: true,
+    missingCheckpointRejected: true, unfinalizedCheckpointRejected: true, foreignProofRejected: true,
     finalizationTransactions: 1, state: 'cleaned', generation: '3', idempotent: true, targetBytes: '8',
   })
 })

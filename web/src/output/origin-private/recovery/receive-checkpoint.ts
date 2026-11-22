@@ -2,7 +2,7 @@ import type { ReceiveIntent } from '../../../transfer/intent'
 import {
   FILE_CHECKPOINT_COMMIT_VERIFIED, FILE_CHECKPOINT_PHASE_ACTIVE, FILE_CHECKPOINT_PHASE_PAUSED,
   FILE_CHECKPOINT_MATERIALIZER_ORIGIN_PRIVATE, FileCheckpointError,
-  fileCheckpointIsComplete, validateFileCheckpoint, type FileCheckpointV2,
+  fileCheckpointIsComplete, fileCheckpointIsFinalized, validateFileCheckpoint, type FileCheckpointV2,
 } from '../../persistence/checkpoint'
 import type { FileCheckpointJournal } from '../../persistence/journal'
 import { durableCheckpointNamespaceIdentity, sameDurableCheckpointNamespace } from '../../persistence/namespace'
@@ -49,11 +49,13 @@ export async function readOriginalReceiveCheckpoint(
     // Receiving is persisted before the first file opens; no checkpoint is a valid zero-progress cut.
     if (record === undefined) return undefined
     validateFileCheckpoint(record)
+    const lifecycleValid = fileCheckpointIsFinalized(record) ||
+      (record.commitState === FILE_CHECKPOINT_COMMIT_VERIFIED &&
+       (record.phase === FILE_CHECKPOINT_PHASE_ACTIVE || record.phase === FILE_CHECKPOINT_PHASE_PAUSED))
     if (intent.artifact.kind !== 'original-file' || !sameDurableCheckpointNamespace(record, binding) ||
         record.fileId !== intent.artifact.fileId || record.exactSize !== expectedSize ||
         record.canonicalPath.length !== 1 || record.canonicalPath[0] !== intent.artifact.suggestedName ||
-        record.commitState !== FILE_CHECKPOINT_COMMIT_VERIFIED ||
-        (record.phase !== FILE_CHECKPOINT_PHASE_ACTIVE && record.phase !== FILE_CHECKPOINT_PHASE_PAUSED)) {
+        !lifecycleValid) {
       throw new TypeError('Original receive checkpoint escaped its admitted file')
     }
     return record

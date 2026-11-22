@@ -1,17 +1,4 @@
 import { sourceMetadataFields } from '../../content/revision-comparison'
-import { observePerformance, type PerformanceSummaryObservations } from '../../diagnostics/performance/performance-summary'
-import {
-  createMaterializationDirectoryAdmittedEntry,
-  createMaterializationDirectoryFinalizedEntry,
-  materializationFinalProofId,
-  validateFinalOutputAgainstCheckpoint,
-} from '../materialization-ledger/journal'
-import type {
-  MaterializationDirectoryAdmittedEntryV1,
-  MaterializationDirectoryFinalization,
-  MaterializationDirectoryFinalizedEntryV1,
-  MaterializationLedgerBindingV1,
-} from '../materialization-ledger/model'
 import {
   FILE_CHECKPOINT_COMMIT_CANDIDATE,
   FILE_CHECKPOINT_COMMIT_VERIFIED,
@@ -19,76 +6,22 @@ import {
   FILE_CHECKPOINT_PHASE_PAUSED,
   deriveCheckpointLineageID,
   fileCheckpointIsComplete,
+  fileCheckpointIsFinalized,
   newFileCheckpointV2,
   type FileCheckpointV2,
 } from '../persistence/checkpoint'
 import type { CheckpointLineageDecision, FileCheckpointJournal } from '../persistence/journal'
 import { canShortCircuitCompletedFile } from '../persistence/source-admission'
 import type { PerformanceFilePipelineObservation } from '../../diagnostics/performance/performance-runtime-observations'
-import { snapshotMaterializationRootRelativePath, type MaterializationRootRelativePath } from '../../transfer/job/coordinate/direct-tree'
+import type { MaterializationRootRelativePath } from '../../transfer/job/coordinate/direct-tree'
 import type {
   OpenedFileRevision,
-  PersistentDirectoryLedgerMaterialization,
-  PersistentDirectoryLedgerRequest,
   PersistentOutputTree,
   PersistentTreeFile,
   SemanticPersistentOutputJournal,
 } from './contracts'
 import { TargetOwnershipUnknownError } from './errors'
 import { runPersistentOutputStage, type PersistentOutputStageScope } from './stage-diagnostics'
-
-export class PersistentDirectoryLedgerCoordinator {
-  readonly #tree: PersistentOutputTree
-  readonly #journal: SemanticPersistentOutputJournal
-  readonly #binding: Promise<MaterializationLedgerBindingV1>
-  readonly #performance: PerformanceSummaryObservations | undefined
-
-  constructor(
-    tree: PersistentOutputTree,
-    journal: SemanticPersistentOutputJournal,
-    binding: Promise<MaterializationLedgerBindingV1>,
-    performance?: PerformanceSummaryObservations,
-  ) {
-    this.#tree = tree
-    this.#journal = journal
-    this.#binding = binding
-    this.#performance = performance
-  }
-
-  async materialize(
-    request: PersistentDirectoryLedgerRequest,
-  ): Promise<PersistentDirectoryLedgerMaterialization> {
-    const relativePath = snapshotMaterializationRootRelativePath(request.relativePath)
-    const materialized = await this.#tree.ensureDirectory(relativePath)
-    const binding = await this.#binding
-    const ledgerAdmission = await createMaterializationDirectoryAdmittedEntry(binding, {
-      relativePath,
-      directoryId: request.directoryId,
-      generation: request.generation,
-      ownedObjectId: materialized.ownedObjectId,
-      ...(request.parent === undefined ? {} : { parent: request.parent }),
-      ...(request.modifiedTime === undefined ? {} : { modifiedTime: request.modifiedTime }),
-    })
-    const classification = await this.#journal.appendDirectoryAdmission(binding, ledgerAdmission)
-    if (classification === 'insert') {
-      observePerformance(this.#performance, summary => summary.observeLedger({ transition: 'entry' }))
-    }
-    return Object.freeze({ ...materialized, ledgerAdmission })
-  }
-
-  async finalize(
-    admission: MaterializationDirectoryAdmittedEntryV1,
-    outcome: MaterializationDirectoryFinalization,
-  ): Promise<MaterializationDirectoryFinalizedEntryV1> {
-    const binding = await this.#binding
-    const finalized = await createMaterializationDirectoryFinalizedEntry(binding, admission, outcome)
-    const classification = await this.#journal.appendDirectoryFinalization(binding, finalized)
-    if (classification === 'insert') {
-      observePerformance(this.#performance, summary => summary.observeLedger({ transition: 'entry' }))
-    }
-    return finalized
-  }
-}
 
 export async function openPersistentSelectedFile(input: Readonly<{
   tree: PersistentOutputTree
@@ -185,10 +118,8 @@ export async function resolveCompletedPersistentRevision(input: Readonly<{
   expectedSize: bigint | undefined
   path: MaterializationRootRelativePath
   checkpoints: Pick<FileCheckpointJournal, 'binding' | 'readCommitted' | 'lookupLineage'>
-  semantic?: SemanticPersistentOutputJournal
-  ledgerBinding?: Promise<MaterializationLedgerBindingV1>
 }>): Promise<Readonly<{ revision: OpenedFileRevision; decision: CheckpointLineageDecision }> | undefined> {
-  const { fileId, expectedSize, path, checkpoints, semantic, ledgerBinding } = input
+  const { fileId, expectedSize, path, checkpoints } = input
   const lineageId = deriveCheckpointLineageID({
     ...checkpoints.binding,
     fileId,
@@ -206,26 +137,9 @@ export async function resolveCompletedPersistentRevision(input: Readonly<{
   const committed = selection.record
   if (committed.ownedObjectId !== snapshot.ownedObjectId ||
       !completedCheckpointMatchesRequest(committed, fileId, expectedSize, path)) return undefined
-  if (semantic !== undefined && ledgerBinding !== undefined) {
-    const delivered = await hasMatchingFinalProof(semantic, await ledgerBinding, committed)
-    if (!delivered && committed.exactSize === 0n) return undefined
-  }
   const revision = Object.freeze({ fileId, fileRevision: committed.fileRevision,
     ...sourceMetadataFields(committed), exactSize: committed.exactSize })
   return { revision, decision: { kind: 'exact', lineageId, record: committed } }
-}
-
-export async function hasMatchingFinalProof(
-  journal: SemanticPersistentOutputJournal, binding: MaterializationLedgerBindingV1, checkpoint: FileCheckpointV2,
-): Promise<boolean> {
-  const proof = await journal.readMaterializationFinalProof(binding, materializationFinalProofId(binding, checkpoint.recordId))
-  if (proof === undefined) return false
-  if (proof.checkpoint.recordId !== checkpoint.recordId || proof.checkpoint.recordDigest !== checkpoint.checksum ||
-      proof.checkpoint.checkpointGeneration !== checkpoint.checkpointGeneration) {
-    throw new TargetOwnershipUnknownError('commit', checkpoint.operationId)
-  }
-  validateFinalOutputAgainstCheckpoint(proof.finalOutput, checkpoint)
-  return true
 }
 
 function completedCheckpointMatchesRequest(
@@ -239,11 +153,13 @@ function completedCheckpointMatchesRequest(
     requestExpectedSize: expectedSize,
     retainedFileId: committed.fileId,
     retainedExactSize: committed.exactSize,
-    locallyComplete:
+    locallyComplete: fileCheckpointIsFinalized(committed) || (
+      committed.exactSize > 0n &&
       committed.commitState === FILE_CHECKPOINT_COMMIT_VERIFIED &&
       committed.checkpointGeneration > 0n &&
       (committed.phase === FILE_CHECKPOINT_PHASE_ACTIVE || committed.phase === FILE_CHECKPOINT_PHASE_PAUSED) &&
-      fileCheckpointIsComplete(committed),
+      fileCheckpointIsComplete(committed)
+    ),
     coordinateMatches:
       committed.canonicalPath.length === path.length &&
       committed.canonicalPath.every((segment, index) => segment === path[index]),

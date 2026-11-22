@@ -9,16 +9,17 @@ import { createBrowserSavePolicy } from '../../src/output/browser-delivery/polic
 import { summarizeBrowserDeliveries } from '../../src/output/browser-delivery/retained'
 import { readBrowserDeliverySummary } from '../../src/output/browser-delivery/retained-authority'
 import {
-  INDEXEDDB_BROWSER_DELIVERY_FILE_STORE, INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE, INDEXEDDB_FILE_FINAL_PROOF_STORE,
+  INDEXEDDB_BROWSER_DELIVERY_FILE_STORE, INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE,
   openIndexedDbCheckpointDatabase, requestResult, transactionCompletion,
 } from '../../src/output/browser/indexeddb-database'
 import { storedCheckpoint } from '../../src/output/browser/indexeddb/repository-transactions'
 import { finalFileCheckpointProof } from '../../src/output/persistence/journal'
-import { newFileCheckpointV2, type FileCheckpointV2 } from '../../src/output/persistence/checkpoint'
-import { createMaterializationLedgerBinding } from '../../src/output/materialization-ledger/codec'
-import { createFinalizedFileMaterializationRecords } from '../../src/output/materialization-ledger/journal'
-import { VerifiedFinalOutputFile } from '../../src/transfer/output/session'
-import { snapshotMaterializationRootRelativePath } from '../../src/transfer/job/coordinate/direct-tree'
+import {
+  FILE_CHECKPOINT_COMMIT_VERIFIED,
+  FILE_CHECKPOINT_PHASE_ACTIVE,
+  newFileCheckpointV2,
+  type FileCheckpointV2,
+} from '../../src/output/persistence/checkpoint'
 import { deliveryFixture, deliveryIdentity, stoppedDeliveryLifecycle } from '../output/browser-delivery-fixture'
 
 export async function restartDeliveryJournal(databaseName: string) {
@@ -92,10 +93,15 @@ export async function finishBrowserDeliveryReopen(databaseName: string) {
     await repository.replaceFile(copying, retry)
     const nextCopy = f.advance(retry, { kind: 'copying', stage: f.stage!, attempt: { attemptId: 'retry-copy' } })
     await repository.replaceFile(retry, nextCopy)
+    const unfinalized = newFileCheckpointV2({
+      ...f.target,
+      phase: FILE_CHECKPOINT_PHASE_ACTIVE,
+      commitState: FILE_CHECKPOINT_COMMIT_VERIFIED,
+    })
+    await persistCheckpoint(databaseName, unfinalized)
+    const unfinalizedRejected = await rejects(() => repository.replaceFile(nextCopy,
+      f.advance(nextCopy, { kind: 'target-saved', stage: f.stage!, target: unfinalized })))
     await persistCheckpoint(databaseName, f.target)
-    const checkpointOnlyRejected = await rejects(() => repository.replaceFile(nextCopy,
-      f.advance(nextCopy, { kind: 'target-saved', stage: f.stage!, target: f.target })))
-    await persistFinalProof(databaseName, f.target)
     const saved = f.advance(nextCopy, { kind: 'target-saved', stage: f.stage!, target: f.target })
     await repository.replaceFile(nextCopy, saved)
     const pending = f.advance(saved, { kind: 'cleanup-pending', stage: f.stage!, target: f.target })
@@ -106,7 +112,7 @@ export async function finishBrowserDeliveryReopen(databaseName: string) {
     await repository.replaceFile(pending, cleaned)
     const after = summarizeBrowserDeliveries(policy, [(await repository.readFile(policy.operationId, f.source.fileId))!])
     return {
-      checkpointOnlyRejected,
+      unfinalizedRejected,
       beforeActions: browserDeliveryLocalActions(stoppedDeliveryLifecycle(policy), before), beforeTargetSavedBytes: before.targetSavedBytes.toString(),
       beforeStagedBytes: before.stagedBytes.toString(), afterTargetSavedBytes: after.targetSavedBytes.toString(),
       afterStagedBytes: after.stagedBytes.toString(), afterState: cleaned.state.kind,
@@ -124,7 +130,6 @@ export async function raceBrowserDeliveryJournal(databaseName: string) {
     const policyConflictRejected = await rejects(() => second.installPolicy(conflict))
     await Promise.all([first.createFile(f.initial), second.createFile(f.initial)])
     await persistCheckpoint(databaseName, f.target)
-    await persistFinalProof(databaseName, f.target)
     const saved = f.advance(f.initial, { kind: 'target-saved', target: f.target })
     const race = await Promise.allSettled([
       first.replaceFile(f.initial, saved), second.replaceFile(f.initial, saved),
@@ -162,9 +167,14 @@ export async function finalizeDirectDelivery(databaseName: string) {
     await repository.installPolicy(f.policy)
     await repository.createFile(f.initial)
     const missingCheckpointRejected = await rejects(() => repository.finalizeDirect(f.initial, proof))
+    const unfinalized = newFileCheckpointV2({
+      ...f.target,
+      phase: FILE_CHECKPOINT_PHASE_ACTIVE,
+      commitState: FILE_CHECKPOINT_COMMIT_VERIFIED,
+    })
+    await persistCheckpoint(databaseName, unfinalized)
+    const unfinalizedCheckpointRejected = await rejects(() => repository.finalizeDirect(f.initial, finalFileCheckpointProof(unfinalized)))
     await persistCheckpoint(databaseName, f.target)
-    const missingFinalProofRejected = await rejects(() => repository.finalizeDirect(f.initial, proof))
-    await persistFinalProof(databaseName, f.target)
     const foreignProofRejected = await rejects(() => repository.finalizeDirect(f.initial, { ...proof, fileRevision: deliveryIdentity(60, 16) }))
     let finalizationTransactions = 0
     IDBDatabase.prototype.transaction = function(...args: Parameters<IDBDatabase['transaction']>) {
@@ -176,7 +186,7 @@ export async function finalizeDirectDelivery(databaseName: string) {
     const retry = await repository.finalizeDirect(f.initial, proof)
     const currentRetry = await repository.finalizeDirect(cleaned, proof)
     return {
-      missingCheckpointRejected, missingFinalProofRejected, foreignProofRejected, finalizationTransactions,
+      missingCheckpointRejected, unfinalizedCheckpointRejected, foreignProofRejected, finalizationTransactions,
       state: cleaned.state.kind, generation: cleaned.generation.toString(), idempotent: retry.digest === cleaned.digest && currentRetry.digest === cleaned.digest,
       targetBytes: summarizeBrowserDeliveries(f.policy, [cleaned]).targetSavedBytes.toString(),
     }
@@ -211,28 +221,6 @@ async function persistCheckpoint(databaseName: string, checkpoint: FileCheckpoin
     const transaction = database.transaction(INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE, 'readwrite')
     const completed = transactionCompletion(transaction)
     await requestResult(transaction.objectStore(INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE).put(storedCheckpoint(checkpoint)))
-    await completed
-  } finally { database.close() }
-}
-
-async function persistFinalProof(databaseName: string, checkpoint: FileCheckpointV2): Promise<void> {
-  const binding = await createMaterializationLedgerBinding({
-    operationId: checkpoint.operationId, receiveIntentDigest: checkpoint.receiveIntentDigest,
-    materializationBindingDigest: checkpoint.materializationBindingDigest, authorityRef: checkpoint.authorityRef,
-  })
-  const records = await createFinalizedFileMaterializationRecords({
-    binding, finalCheckpoint: checkpoint,
-    finalOutput: new VerifiedFinalOutputFile({
-      backend: 'browser-fsa', outputSessionId: 'journal-test-session',
-      canonicalPath: snapshotMaterializationRootRelativePath(checkpoint.canonicalPath),
-      ownedFileIdentity: checkpoint.ownedObjectId,
-    }, { shareInstance: deliveryIdentity(55, 16), fileId: checkpoint.fileId, fileRevision: checkpoint.fileRevision }, checkpoint.exactSize),
-  })
-  const database = await openIndexedDbCheckpointDatabase(databaseName)
-  try {
-    const transaction = database.transaction(INDEXEDDB_FILE_FINAL_PROOF_STORE, 'readwrite')
-    const completed = transactionCompletion(transaction)
-    await requestResult(transaction.objectStore(INDEXEDDB_FILE_FINAL_PROOF_STORE).put(records.finalProof))
     await completed
   } finally { database.close() }
 }

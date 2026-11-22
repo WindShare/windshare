@@ -8,8 +8,6 @@ import {
 import { TargetOwnershipUnknownError } from '../persistent-tree/errors'
 import { verifyFSAOperationBinding } from '../browser/indexeddb-root-binding'
 import { equalCanonicalBytes } from '../../transfer/encoding/canonical'
-import { MaterializationLedgerEvidenceOutcome } from '../materialization-ledger/evidence'
-import { MaterializationLedgerSealPurpose } from '../materialization-ledger/model'
 import type { FSATerminalMutationKind } from '../browser/mutation-coordination/model'
 import {
   reduceReceiveLifecycle,
@@ -49,7 +47,7 @@ import {
   type DirectTreeIntent,
   type SettlementReceiptEvidence,
 } from './settlement-proof'
-import { validateSealedFSASettlementEvidence } from './settlement-evidence'
+import { validateFSASettlementEvidence } from './settlement-evidence'
 import { cleanupTerminalFSAMetadata, normalizedSettlementOutcome, terminalMutationKind } from './settlement-terminal'
 import type {
   RecoverySummary,
@@ -216,20 +214,16 @@ export class FSAOperationSettlementAuthority implements FileSystemAccessOperatio
         throw new TypeError('FSA pause requires Receiving lifecycle state')
       }
       await observation.verifyOperationBinding()
-      const seal = await observation.sealMaterializationLedger({
-        evidence: cut.sealEvidence(),
-        sealSequence: current.state.generation + 1n,
-        purpose: MaterializationLedgerSealPurpose.ResumableSnapshot,
-      })
-      const validated = validateSealedFSASettlementEvidence({
+      const snapshot = await observation.checkpointSettlementSnapshot(cut.sealEvidence())
+      const validated = validateFSASettlementEvidence({
         intent: this.#intent,
         directoryScope: this.#directoryScope,
         evidence: cut.evidence,
-        seal,
+        snapshot,
         summary: request.materialization,
-        outcome: MaterializationLedgerEvidenceOutcome.Resumable,
+        outcome: 'resumable',
       })
-      const checkpointEvidence = await observation.resumableCheckpointEvidence()
+      const checkpointEvidence = await observation.resumableCheckpointEvidence(snapshot.checkpoints)
       const evidence = Object.freeze({ ...validated, ...checkpointEvidence })
       const receipt = await this.#settlementReceipt('resumable-receive', request, evidence)
       const next = this.#reduce(current.state, {
@@ -319,20 +313,14 @@ export class FSAOperationSettlementAuthority implements FileSystemAccessOperatio
         throw new TypeError('FSA completion requires Receiving lifecycle state')
       }
       await observation.verifyOperationBinding()
-      const seal = await observation.sealMaterializationLedger({
-        evidence: cut.sealEvidence(),
-        sealSequence: current.state.generation + 1n,
-        purpose: MaterializationLedgerSealPurpose.Terminal,
-      })
-      const validated = validateSealedFSASettlementEvidence({
+      const snapshot = await observation.checkpointSettlementSnapshot(cut.sealEvidence())
+      const validated = validateFSASettlementEvidence({
         intent: this.#intent,
         directoryScope: this.#directoryScope,
         evidence: cut.evidence,
-        seal,
+        snapshot,
         summary: request.materialization,
-        outcome: published
-          ? MaterializationLedgerEvidenceOutcome.Published
-          : MaterializationLedgerEvidenceOutcome.Partial,
+        outcome: published ? 'published' : 'partial',
       })
       const evidence = Object.freeze({
         ...validated,

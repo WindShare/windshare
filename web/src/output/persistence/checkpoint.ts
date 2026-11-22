@@ -47,6 +47,7 @@ export {
   checkpointIdentityEqual,
   checkpointMaterializerKind,
   fileCheckpointIsComplete,
+  fileCheckpointIsFinalized,
   identityBytes,
   normalizeFileCheckpointSpec,
   type CheckpointIdentity,

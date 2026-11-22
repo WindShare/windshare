@@ -9,14 +9,6 @@ import type {
   PersistentHandleRecord,
   SemanticFileCheckpointJournal,
 } from '../persistence/journal'
-import type { MaterializationLedgerJournal } from '../materialization-ledger/journal'
-import type {
-  MaterializationDirectoryAdmittedEntryV1,
-  MaterializationDirectoryFinalization,
-  MaterializationDirectoryFinalizedEntryV1,
-  StableDirectoryCoordinates,
-  StableParentDirectoryCoordinates,
-} from '../materialization-ledger/model'
 import type { FileCheckpointRecoveryRepository } from './recovery'
 import type { AuthenticatedLogicalSiblingMembership } from '../../transfer/job/contract'
 import type {
@@ -257,29 +249,10 @@ export interface PersistentOutputTree {
 export interface PersistentMaterializationPort {
   beginFile(request: PersistentFileRequest): Promise<PersistentFileTransactionPort>
   ensureDirectory(path: readonly string[]): Promise<PersistentDirectoryMaterialization>
-  materializeDirectory?(request: PersistentDirectoryLedgerRequest): Promise<
-    PersistentDirectoryLedgerMaterialization
-  >
-  finalizeDirectory?(
-    admission: MaterializationDirectoryAdmittedEntryV1,
-    outcome: MaterializationDirectoryFinalization,
-  ): Promise<MaterializationDirectoryFinalizedEntryV1>
   closeForTerminalSettlement?(): Promise<void>
   /** Stop may abandon receiving storage after draining; Pause must preserve its checkpoints. */
   closeForStopSettlement?(): Promise<void>
   close(): Promise<void>
-}
-
-export interface PersistentDirectoryLedgerRequest {
-  readonly relativePath: readonly string[]
-  readonly directoryId: string
-  readonly generation: string
-  readonly parent?: StableParentDirectoryCoordinates
-  readonly modifiedTime?: StableDirectoryCoordinates['modifiedTime']
-}
-
-export interface PersistentDirectoryLedgerMaterialization extends PersistentDirectoryMaterialization {
-  readonly ledgerAdmission: MaterializationDirectoryAdmittedEntryV1
 }
 
 export interface PersistentDirectoryNamespaceClaim {
@@ -356,12 +329,7 @@ export type RecoverableFileCheckpointJournal =
 
 export type SemanticPersistentOutputJournal =
   RecoverableFileCheckpointJournal &
-  SemanticFileCheckpointJournal<unknown> &
-  Pick<MaterializationLedgerJournal,
-    | 'appendDirectoryAdmission'
-    | 'appendDirectoryFinalization'
-    | 'commitFinalFile'
-    | 'readMaterializationFinalProof'>
+  SemanticFileCheckpointJournal<unknown>
 
 export interface PersistentTreeSessionOptions {
   readonly tree: PersistentOutputTree

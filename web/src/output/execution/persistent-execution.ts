@@ -2,12 +2,10 @@ import type { PerformanceSummaryObservations } from '../../diagnostics/performan
 import type { FinalFileCheckpointProof } from '../persistence/journal'
 import type {
   AutomaticCheckpointAdmissionAuthority,
-  PersistentDirectoryLedgerMaterialization,
   PersistentMaterializationPort,
   PersistentOutputNamespaceClaimPort,
   PreservingWriterCapacityAuthority,
 } from '../persistent-tree/contracts'
-import { MaterializationLedgerDirectoryOutcome } from '../materialization-ledger/model'
 import type { MaterializedManifestEntry } from '../workspace/manifest'
 import type {
   CompatibleNameRepairSummary,
@@ -74,6 +72,7 @@ import { PersistentSettlementCut } from './persistent-settlement-cut'
 import { WorkspaceSettlementOwner } from './workspace-settlement-owner'
 
 export type {
+  PersistentDirectTreeDirectoryEvidence,
   PersistentDirectTreeMaterializationEvidence,
   PersistentDirectTreeSettlementAuthority,
   PersistentMaterializationEvidence,
@@ -270,7 +269,12 @@ class PersistentMaterializationOutput implements OutputSession {
   readonly #performance: PerformanceSummaryObservations | undefined
   readonly #entries = new Map<string, MaterializedManifestEntry>()
   readonly #directoryPathByAdmission = new Map<string, MaterializationRootRelativePath>()
-  readonly #directoryLedgerByAdmission = new Map<string, PersistentDirectoryLedgerMaterialization>()
+  readonly #settledDirectoryByAdmission = new Map<string, 'finalized' | 'isolated-failure'>()
+  #rootDirectory: Readonly<{
+    readonly directoryId: string
+    readonly relativePath: MaterializationRootRelativePath
+    finalized: boolean
+  }> | undefined
   #closePromise: Promise<void> | undefined
 
   constructor(input: {
@@ -303,11 +307,6 @@ class PersistentMaterializationOutput implements OutputSession {
       throw new TypeError('Persistent checkpoint authorities must be bound as one attempt pair')
     }
     this.#performance = input.performance
-    if (this.#directTreeCoordinates !== undefined &&
-        (input.materialization.materializeDirectory === undefined ||
-         input.materialization.finalizeDirectory === undefined)) {
-      throw new TypeError('DirectTree persistent output requires durable directory ledger authority')
-    }
   }
 
   directories(): IncrementalDirectoryOutput {
@@ -317,7 +316,6 @@ class PersistentMaterializationOutput implements OutputSession {
       admitDirectory: async (request, signal) => {
         const snapshot = snapshotDirectoryMaterializationRequest(request)
         const materializationRelativePath = snapshot.directory.path
-        let durableDirectory: PersistentDirectoryLedgerMaterialization | undefined
         const admission = await ledger.admitDirectory(
           snapshot.directory,
           signal,
@@ -333,43 +331,14 @@ class PersistentMaterializationOutput implements OutputSession {
                 logicalSiblingMembership: snapshot.logicalSiblingMembership,
               }))
             }
-            const parent = snapshot.directory.parentAdmission === undefined
-              ? undefined
-              : this.#directoryLedgerByAdmission.get(snapshot.directory.parentAdmission.admissionId)
-            if (snapshot.directory.parentAdmission !== undefined && parent === undefined) {
-              throw new TypeError('directory ledger parent has no durable admission')
-            }
-            const materialized = await this.#materialization.materializeDirectory!({
-              relativePath: materializationRelativePath,
-              directoryId: snapshot.directory.directoryId,
-              generation: snapshot.directory.generation,
-              ...(snapshot.directory.modifiedTime === undefined
-                ? {}
-                : { modifiedTime: snapshot.directory.modifiedTime }),
-              ...(parent === undefined
-                ? {}
-                : {
-                    parent: Object.freeze({
-                      relativePath: parent.ledgerAdmission.relativePath,
-                      directoryId: parent.ledgerAdmission.directoryId,
-                      generation: parent.ledgerAdmission.generation,
-                      ownedObjectId: parent.ownedObjectId,
-                    }),
-                  }),
-            })
+            await this.#materialization.ensureDirectory(materializationRelativePath)
               .catch((cause: unknown) => {
                 // Directory writes need the same output-wide state-I/O boundary as file writes;
                 // otherwise an untyped browser rejection is mistaken for a collaborator contract bug.
                 throw new OutputPausedError('Persistent directory materialization failed', { cause })
               })
-            durableDirectory = materialized
           },
         )
-        if (durableDirectory !== undefined) {
-          this.#directoryLedgerByAdmission.set(admission.admissionId, durableDirectory)
-        } else if (!this.#directoryLedgerByAdmission.has(admission.admissionId)) {
-          throw new TypeError('directory admission has no durable ledger entry')
-        }
         if (!samePath(admission.path, materializationRelativePath)) {
           throw new TypeError('directory admission path disagrees with materialized relative path')
         }
@@ -378,25 +347,19 @@ class PersistentMaterializationOutput implements OutputSession {
           throw new TypeError('directory admission changed its materialized relative path')
         }
         this.#directoryPathByAdmission.set(admission.admissionId, materializationRelativePath)
+        if (admission.parentAdmissionId === undefined && this.#rootDirectory === undefined) {
+          this.#rootDirectory = {
+            directoryId: admission.directoryId,
+            relativePath: materializationRelativePath,
+            finalized: false,
+          }
+        }
         return admission
       },
       finalizeDirectory: async (admission, signal) => {
         const settlement = validateDirectorySettlement(
           admission,
           await ledger.finalizeDirectory(admission, signal),
-        )
-        const durableDirectory = this.#directoryLedgerByAdmission.get(admission.admissionId)
-        if (durableDirectory === undefined) {
-          throw new TypeError('directory finalization has no durable ledger admission')
-        }
-        await this.#materialization.finalizeDirectory!(
-          durableDirectory.ledgerAdmission,
-          settlement.kind === 'finalized'
-            ? Object.freeze({ kind: MaterializationLedgerDirectoryOutcome.Finalized })
-            : Object.freeze({
-                kind: MaterializationLedgerDirectoryOutcome.IsolatedFailure,
-                fault: settlement.fault,
-              }),
         )
         const materializationRelativePath = this.#directoryPathByAdmission.get(admission.admissionId)
         if (materializationRelativePath === undefined) {
@@ -405,10 +368,10 @@ class PersistentMaterializationOutput implements OutputSession {
         if (!samePath(admission.path, materializationRelativePath)) {
           throw new TypeError('directory settlement admission changed its materialized relative path')
         }
-        if (durableDirectory.ledgerAdmission.directoryId !== admission.directoryId ||
-            durableDirectory.ledgerAdmission.generation !== admission.generation ||
-            !samePath(durableDirectory.ledgerAdmission.relativePath, materializationRelativePath)) {
-          throw new TypeError('directory settlement escaped its materialized ownership proof')
+        this.#settledDirectoryByAdmission.set(admission.admissionId, settlement.kind)
+        if (admission.parentAdmissionId === undefined && this.#rootDirectory !== undefined &&
+            settlement.kind === 'finalized') {
+          this.#rootDirectory = { ...this.#rootDirectory, finalized: true }
         }
         return settlement
       },
@@ -510,11 +473,30 @@ class PersistentMaterializationOutput implements OutputSession {
 
   directTreeEvidence(): PersistentDirectTreeMaterializationEvidence {
     if (this.#directTreeCoordinates === undefined) {
-      throw new TypeError('Workspace output cannot expose DirectTree ledger evidence')
+      throw new TypeError('Workspace output cannot expose DirectTree checkpoint evidence')
+    }
+    let visibleCount = 0n
+    for (const path of this.#directoryPathByAdmission.values()) {
+      if (path.length > 0) visibleCount += 1n
+    }
+    let finalizedCount = 0n
+    let isolatedCount = 0n
+    for (const kind of this.#settledDirectoryByAdmission.values()) {
+      if (kind === 'finalized') finalizedCount += 1n
+      else isolatedCount += 1n
     }
     return Object.freeze({
-      kind: 'direct-tree-ledger' as const,
+      kind: 'direct-tree-checkpoints' as const,
       materializationBindingDigest: this.#checkpointNamespace.materializationBindingDigest,
+      directories: Object.freeze({
+        materializedCount: BigInt(this.#directoryPathByAdmission.size),
+        visibleCount,
+        finalizedCount,
+        isolatedCount,
+        ...(this.#rootDirectory === undefined ? {} : {
+          rootDirectory: Object.freeze({ ...this.#rootDirectory }),
+        }),
+      }),
     })
   }
 

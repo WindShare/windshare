@@ -1,5 +1,4 @@
 import {
-  FILE_CHECKPOINT_COMMIT_VERIFIED,
   classifyCheckpointLineage,
   fileCheckpointDigest,
   fileCheckpointIsComplete,
@@ -16,6 +15,23 @@ import {
 
 export const FILE_CHECKPOINT_PAGE_RECORD_LIMIT = 128
 export const FILE_CHECKPOINT_BATCH_REQUEST_LIMIT = 64
+export const RECOVERY_METADATA_RETIREMENT_BATCH_LIMIT = 128 as const
+
+export interface FinalFileCheckpointCommit {
+  readonly expectedCommittedCheckpoint: FileCheckpointV2
+  readonly finalCheckpoint: FileCheckpointV2
+  readonly expectedPersistedOwnedFileIdentity: string
+}
+
+export interface FinalFileCheckpointCommitReceipt {
+  readonly classification: 'insert' | 'idempotent'
+  readonly finalCheckpoint: FileCheckpointV2
+}
+
+export type RecoveryMetadataRetirementResult = Readonly<{
+  readonly deletedRows: number
+  readonly state: 'more' | 'complete' | 'retained-for-local-delivery'
+}>
 
 export type CheckpointNamespaceBinding = DurableCheckpointNamespaceIdentity
 
@@ -137,9 +153,12 @@ export interface SemanticFileCheckpointJournal<T = unknown> extends FileCheckpoi
   ): Promise<readonly InitialCheckpointCASResult[]>
   commitCreatedFile(input: CreatedFileCheckpointCommit<T>): Promise<void>
   commitDurableCut(previous: FileCheckpointV2, durable: FileCheckpointV2): Promise<void>
+  commitFinalFile(input: FinalFileCheckpointCommit): Promise<FinalFileCheckpointCommitReceipt>
   resumePausedCheckpoint(paused: FileCheckpointV2, active: FileCheckpointV2): Promise<void>
   /** W3 supplies the explicit user decision; this CAS changes recovery metadata only. */
   restartOwnedFile(input: OwnedFileRestart<T>): Promise<OwnedFileRestartResult>
+  countCheckpointCandidates(): Promise<bigint>
+  retireRecoveryMetadataBatch(limit?: number): Promise<RecoveryMetadataRetirementResult>
 }
 
 export interface PersistentHandleRecord<T = unknown> {
@@ -186,7 +205,7 @@ export function checkpointMatchesNamespace(
 
 export function finalFileCheckpointProof(record: FileCheckpointV2): FinalFileCheckpointProof {
   validateFileCheckpoint(record)
-  if (record.commitState !== FILE_CHECKPOINT_COMMIT_VERIFIED || !fileCheckpointIsComplete(record)) {
+  if (!fileCheckpointIsComplete(record)) {
     throw new TypeError('aggregate manifest requires a verified complete file checkpoint')
   }
   return Object.freeze({

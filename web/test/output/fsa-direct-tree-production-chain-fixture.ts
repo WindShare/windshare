@@ -147,8 +147,6 @@ export interface FSAProductionPersistenceObservation {
   }>[]
   readonly pauseEvidenceKind: PersistentDirectTreeMaterializationEvidence['kind']
   readonly settlementEvidenceKind: PersistentDirectTreeMaterializationEvidence['kind']
-  readonly materializationSealCount: number
-  readonly settlementFinalProofReadCount: number
   readonly settlementReceiptPersisted: boolean
   readonly physicalLookups: readonly ObservedPhysicalLookup[]
   readonly parentPhysicalEntries: readonly string[]
@@ -198,8 +196,6 @@ interface CheckpointRecorder {
   readonly lookups: ObservedPhaseCoordinate[]
   readonly writes: ObservedPhaseCoordinate[]
   readonly committed: FileCheckpointV2[]
-  sealCount: number
-  finalProofReadCount: number
 }
 
 const DESCRIPTOR_SHARE_INSTANCE_SEED = 1
@@ -337,8 +333,6 @@ export async function runFSAProductionPersistenceChain(
     lookups: [],
     writes: [],
     committed: [],
-    sealCount: 0,
-    finalProofReadCount: 0,
   }
   const checkpointFactory = observeCheckpointPersistence(
     memoryCheckpointFactory(),
@@ -525,8 +519,6 @@ export async function runFSAProductionPersistenceChain(
       Object.freeze({ path: value.path, ranges: value.ranges }))),
     pauseEvidenceKind: requireDirectTreeEvidence(settlementRecorder.pauseEvidence).kind,
     settlementEvidenceKind: finalSettlement.evidence.kind,
-    materializationSealCount: checkpointRecorder.sealCount,
-    settlementFinalProofReadCount: checkpointRecorder.finalProofReadCount,
     settlementReceiptPersisted,
     physicalLookups: Object.freeze([...physicalLookups]),
     parentPhysicalEntries: Object.freeze(await physicalEntries(parent)),
@@ -978,22 +970,10 @@ function observeCheckpointPersistence(
             const result = await semantic.commitFinalFile(...args)
             recorder.writes.push(phaseCoordinate(
               recorder.phase,
-              args[0].records.finalCheckpoint.canonicalPath,
+              args[0].finalCheckpoint.canonicalPath,
             ))
-            recorder.committed.push(args[0].records.finalCheckpoint)
+            recorder.committed.push(args[0].finalCheckpoint)
             return result
-          }
-        }
-        if (property === 'sealMaterializationLedger') {
-          return async (...args: Parameters<typeof semantic.sealMaterializationLedger>) => {
-            recorder.sealCount += 1
-            return semantic.sealMaterializationLedger(...args)
-          }
-        }
-        if (property === 'readMaterializationFinalProof') {
-          return async (...args: Parameters<typeof semantic.readMaterializationFinalProof>) => {
-            recorder.finalProofReadCount += 1
-            return semantic.readMaterializationFinalProof(...args)
           }
         }
         const value = Reflect.get(target, property, target) as unknown

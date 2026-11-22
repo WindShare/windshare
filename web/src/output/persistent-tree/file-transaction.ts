@@ -20,13 +20,14 @@ import {
   recordOutputException,
   type OutputDiagnosticsPorts,
 } from '../diagnostics'
-import { createFinalizedFileMaterializationRecords } from '../materialization-ledger/journal'
-import type { MaterializationLedgerBindingV1 } from '../materialization-ledger/model'
 import {
   FILE_CHECKPOINT_COMMIT_CANDIDATE,
   FILE_CHECKPOINT_PHASE_ACTIVE,
   FILE_CHECKPOINT_PHASE_PAUSED,
+  FILE_CHECKPOINT_PHASE_PUBLISHED,
+  FILE_CHECKPOINT_PHASE_PUBLISHING,
   fileCheckpointIsComplete,
+  fileCheckpointIsFinalized,
   newFileCheckpointV2,
   type FileCheckpointPhase,
   type FileCheckpointV2,
@@ -45,7 +46,6 @@ import type {
   PersistentTreeFile,
   SemanticPersistentOutputJournal,
 } from './contracts'
-import { hasMatchingFinalProof } from './materialization-authority'
 import { PersistentCheckpointObservation } from './checkpoint-observation'
 import { PersistentOutputError, TargetOwnershipUnknownError } from './errors'
 import {
@@ -83,7 +83,6 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
   readonly #handle: PersistentTreeFile
   readonly #checkpoints: FileCheckpointJournal
   readonly #semantic: SemanticPersistentOutputJournal | undefined
-  readonly #ledgerBinding: MaterializationLedgerBindingV1 | undefined
   readonly #ownership: OutputFileOwnership
   readonly #source: OutputSourceIdentity
   readonly #materializationRelativePath: MaterializationRootRelativePath
@@ -110,7 +109,6 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
     checkpoint: FileCheckpointV2
     checkpoints: FileCheckpointJournal
     semantic?: SemanticPersistentOutputJournal
-    ledgerBinding?: MaterializationLedgerBindingV1
     ownership: OutputFileOwnership
     source: OutputSourceIdentity
     materializationRelativePath: MaterializationRootRelativePath
@@ -131,7 +129,6 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
     this.#checkpoint = input.checkpoint
     this.#checkpoints = input.checkpoints
     this.#semantic = input.semantic
-    this.#ledgerBinding = input.ledgerBinding
     this.#ownership = Object.freeze({
       ...input.ownership,
       canonicalPath: Object.freeze([...input.ownership.canonicalPath]),
@@ -306,9 +303,13 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
       }
 
       const alreadyDurable = sameRanges(this.#ranges.ranges, this.#checkpoint.verifiedRanges)
-      if (alreadyDurable && fileCheckpointIsComplete(this.#checkpoint)) {
-        const recovered = await this.#recoverFinalCommit(this.#checkpoint)
-        if (recovered !== undefined) return this.#finishCommit(recovered)
+      if (alreadyDurable && fileCheckpointIsFinalized(this.#checkpoint)) {
+        const checkpointProof = finalFileCheckpointProof(this.#checkpoint)
+        return this.#finishCommit(Object.freeze({
+          ...checkpointProof,
+          checkpointProof,
+          finalOutput: new VerifiedFinalOutputFile(this.#ownership, this.#source, this.revision.exactSize),
+        }))
       }
 
       if (!alreadyDurable || !fileCheckpointIsComplete(this.#checkpoint) ||
@@ -335,7 +336,7 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
       const finalCheckpoint = nextCheckpoint(
         this.#checkpoint,
         this.#ranges.ranges,
-        FILE_CHECKPOINT_PHASE_ACTIVE,
+        FILE_CHECKPOINT_PHASE_PUBLISHED,
         true,
       )
       const finalOutput = new VerifiedFinalOutputFile(
@@ -343,13 +344,8 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
         this.#source,
         this.revision.exactSize,
       )
-      if (this.#semantic !== undefined && this.#ledgerBinding !== undefined) {
-        await this.#commitSemanticFinal(
-          finalCheckpoint,
-          finalOutput,
-          this.#semantic,
-          this.#ledgerBinding,
-        )
+      if (this.#semantic !== undefined) {
+        await this.#commitSemanticFinal(finalCheckpoint, this.#semantic)
       } else {
         await this.#commitLegacyCheckpoint(finalCheckpoint)
         this.#checkpoint = finalCheckpoint
@@ -418,18 +414,13 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
     closeReason: 'writer-closed' | 'automatic-handoff' = 'writer-closed',
   ): Promise<readonly PersistentByteRange[]> {
     throwIfAborted(signal)
+    // A finalized checkpoint is immutable; pausing a revisited transaction only releases handles.
+    if (fileCheckpointIsFinalized(this.#checkpoint)) {
+      if (phase === FILE_CHECKPOINT_PHASE_PAUSED) await this.#releaseNativeWriter()
+      return this.#checkpoint.verifiedRanges
+    }
     const rangesChanged = !sameRanges(this.#ranges.ranges, this.#checkpoint.verifiedRanges)
-    // A rejected native write may have opened or partially mutated a private writer
-    // without producing accepted range evidence. Abort that unowned state before the
-    // pause cut so the writer lease cannot outlive the transaction.
-    if (!rangesChanged && this.#writerOpen && this.#handle.durability !== 'native-in-place') {
-      await this.#abortWriter()
-    }
-    if (rangesChanged) {
-      if (this.#handle.durability === 'native-in-place') await this.#handle.flush()
-      else await this.#closeWriter(closeReason)
-      await this.#verifyCheckpointSize()
-    }
+    await this.#flushDurableCutRanges(rangesChanged, closeReason)
     if (!rangesChanged && phase === this.#checkpoint.phase) {
       return this.#checkpoint.verifiedRanges
     }
@@ -439,24 +430,41 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
       phase,
       this.#semantic === undefined && !rangesChanged && phase !== this.#checkpoint.phase,
     )
-    if (this.#semantic !== undefined) {
-      await runPersistentOutputStage(
-        this.#stageScopeFor(durable),
-        phase === FILE_CHECKPOINT_PHASE_PAUSED
-          ? 'indexeddb.checkpoint.pause-commit'
-          : 'indexeddb.checkpoint.durable-commit',
-        () => this.#semantic!.commitDurableCut(this.#checkpoint, durable),
-      )
-    } else {
-      await this.#commitLegacyCheckpoint(durable)
-    }
+    await this.#persistDurableCut(durable, phase)
     this.#checkpoint = durable
-    if (phase === FILE_CHECKPOINT_PHASE_PAUSED && this.#handle.durability === 'native-in-place') {
-      await this.#handle.close()
-      this.#writerOpen = false
-    }
+    if (phase === FILE_CHECKPOINT_PHASE_PAUSED) await this.#releaseNativeWriter()
     throwIfAborted(signal)
     return durable.verifiedRanges
+  }
+
+  async #flushDurableCutRanges(
+    rangesChanged: boolean,
+    closeReason: 'writer-closed' | 'automatic-handoff',
+  ): Promise<void> {
+    // A rejected native write may have opened or partially mutated a private writer
+    // without producing accepted range evidence. Abort that unowned state before the
+    // pause cut so the writer lease cannot outlive the transaction.
+    if (!rangesChanged) {
+      if (this.#writerOpen && this.#handle.durability !== 'native-in-place') await this.#abortWriter()
+      return
+    }
+    if (this.#handle.durability === 'native-in-place') await this.#handle.flush()
+    else await this.#closeWriter(closeReason)
+    await this.#verifyCheckpointSize()
+  }
+
+  async #persistDurableCut(durable: FileCheckpointV2, phase: FileCheckpointPhase): Promise<void> {
+    if (this.#semantic === undefined) {
+      await this.#commitLegacyCheckpoint(durable)
+      return
+    }
+    await runPersistentOutputStage(
+      this.#stageScopeFor(durable),
+      phase === FILE_CHECKPOINT_PHASE_PAUSED
+        ? 'indexeddb.checkpoint.pause-commit'
+        : 'indexeddb.checkpoint.durable-commit',
+      () => this.#semantic!.commitDurableCut(this.#checkpoint, durable),
+    )
   }
 
   async #verifyCheckpointSize(): Promise<void> {
@@ -471,6 +479,9 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
   async #commitLegacyCheckpoint(committed: FileCheckpointV2): Promise<void> {
     const candidate = newFileCheckpointV2({
       ...committed,
+      phase: committed.phase === FILE_CHECKPOINT_PHASE_PUBLISHED
+        ? FILE_CHECKPOINT_PHASE_PUBLISHING
+        : committed.phase,
       commitState: FILE_CHECKPOINT_COMMIT_CANDIDATE,
     })
     const scope = this.#stageScopeFor(committed)
@@ -488,15 +499,8 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
 
   async #commitSemanticFinal(
     finalCheckpoint: FileCheckpointV2,
-    finalOutput: VerifiedFinalOutputFile,
     semantic: SemanticPersistentOutputJournal,
-    ledgerBinding: MaterializationLedgerBindingV1,
   ): Promise<void> {
-    const records = await createFinalizedFileMaterializationRecords({
-      binding: ledgerBinding,
-      finalOutput,
-      finalCheckpoint,
-    })
     const finalStartedAtMilliseconds = performanceNowMilliseconds(
       this.#diagnostics?.performance,
     )
@@ -504,9 +508,8 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
       this.#stageScopeFor(finalCheckpoint),
       'indexeddb.checkpoint.final-commit',
       () => semantic.commitFinalFile({
-        binding: ledgerBinding,
         expectedCommittedCheckpoint: this.#checkpoint,
-        records,
+        finalCheckpoint,
         expectedPersistedOwnedFileIdentity: this.ownedObjectId,
       }),
     )
@@ -517,27 +520,9 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
     if (finalElapsedMilliseconds !== undefined) {
       observePerformance(this.#diagnostics?.performance, summary => {
         summary.observeFinalTransaction(finalElapsedMilliseconds)
-        if (receipt.classification === 'insert') {
-          summary.observeLedger({ transition: 'entry' })
-        }
       })
     }
     this.#checkpoint = receipt.finalCheckpoint
-  }
-
-  async #recoverFinalCommit(
-    checkpoint: FileCheckpointV2,
-  ): Promise<PersistentFinalFileCommit | undefined> {
-    if (this.#semantic === undefined || this.#ledgerBinding === undefined) return undefined
-    if (!await hasMatchingFinalProof(this.#semantic, this.#ledgerBinding, checkpoint)) return undefined
-    // The durable proof belongs to the same owned checkpoint across attempts.
-    // Present it to the active job under its current output session.
-    const checkpointProof = finalFileCheckpointProof(checkpoint)
-    return Object.freeze({
-      ...checkpointProof,
-      checkpointProof,
-      finalOutput: new VerifiedFinalOutputFile(this.#ownership, this.#source, this.revision.exactSize),
-    })
   }
 
   async #ensureWriter(signal?: AbortSignal): Promise<void> {

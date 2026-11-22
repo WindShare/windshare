@@ -4,15 +4,16 @@ import type {
 } from '../../src/output/file-system-access/checkpoint-repository'
 import {
   FILE_CHECKPOINT_COMMIT_CANDIDATE,
-  FILE_CHECKPOINT_COMMIT_VERIFIED,
   deriveCheckpointLineageID,
   fileCheckpointIsComplete,
+  fileCheckpointIsFinalized,
   sameCheckpointLineageSpec,
   validateFileCheckpoint,
   validateFileCheckpointTransition,
   type FileCheckpointV2,
 } from '../../src/output/persistence/checkpoint'
 import {
+  RECOVERY_METADATA_RETIREMENT_BATCH_LIMIT,
   finalFileCheckpointProof,
   resolveCheckpointLineage,
   type CheckpointLineageDecision,
@@ -20,39 +21,19 @@ import {
   type CheckpointNamespaceBinding,
   type FileCheckpointPage,
   type FileCheckpointScan,
+  type FinalFileCheckpointCommit,
+  type FinalFileCheckpointCommitReceipt,
   type FinalFileCheckpointProof,
   type InitialCheckpointCASResult,
   type PersistentHandleRecord,
+  type RecoveryMetadataRetirementResult,
 } from '../../src/output/persistence/journal'
-import {
-  compareMaterializationLedgerEntryCursors,
-  materializationLedgerEntryCursor,
-} from '../../src/output/materialization-ledger/codec'
-import { deriveMaterializationLedgerSealId } from '../../src/output/materialization-ledger/evidence'
-import {
-  MATERIALIZATION_LEDGER_PAGE_ENTRY_LIMIT,
-  type MaterializationLedgerBindingV1,
-  type MaterializationLedgerEntryV1,
-  type MaterializationLedgerPageSummaryV1,
-  type MaterializationLedgerSealV1,
-} from '../../src/output/materialization-ledger/model'
-import {
-  createMaterializationLedgerPageSummary,
-  sealMaterializationLedgerPages,
-  validateMaterializationLedgerSealPages,
-} from '../../src/output/materialization-ledger/page'
 import type { FileCheckpointCandidateObservation } from '../../src/output/persistent-tree/recovery'
 
 interface MemoryCheckpointStore {
   readonly candidates: Map<string, FileCheckpointV2>
   readonly committed: Map<string, FileCheckpointV2>
   readonly handles: Map<string, PersistentHandleRecord>
-  readonly proofs: Map<string, NonNullable<Awaited<ReturnType<
-    FSASemanticOutputRepository['readMaterializationFinalProof']
-  >>>>
-  readonly ledgerEntries: Map<string, MaterializationLedgerEntryV1>
-  readonly ledgerPages: Map<string, MaterializationLedgerPageSummaryV1>
-  readonly ledgerSeals: Map<string, MaterializationLedgerSealV1>
 }
 
 export function memoryCheckpointFactory(
@@ -67,10 +48,6 @@ export function memoryCheckpointFactory(
         candidates: new Map(),
         committed: new Map(),
         handles: new Map(),
-        proofs: new Map(),
-        ledgerEntries: new Map(),
-        ledgerPages: new Map(),
-        ledgerSeals: new Map(),
       }
       stores.set(binding.operationId, store)
     }
@@ -191,7 +168,7 @@ class MemoryCheckpointRepository implements FSASemanticOutputRepository {
   ): Promise<void> {
     validateFileCheckpointTransition(candidate, committed)
     if (candidate.commitState !== FILE_CHECKPOINT_COMMIT_CANDIDATE ||
-        committed.commitState !== FILE_CHECKPOINT_COMMIT_VERIFIED) {
+        committed.commitState === FILE_CHECKPOINT_COMMIT_CANDIDATE) {
       throw new TypeError('memory repository commits only verified checkpoints')
     }
     const currentCandidate = this.#store.candidates.get(candidate.recordId)
@@ -218,8 +195,9 @@ class MemoryCheckpointRepository implements FSASemanticOutputRepository {
   }
 
   async commitDurableCut(previous: FileCheckpointV2, durable: FileCheckpointV2): Promise<void> {
+    const current = this.#store.committed.get(previous.recordId)
     if (previous.fileRevision !== durable.fileRevision &&
-        [...this.#store.proofs.values()].some(proof => proof.recordId === previous.recordId)) {
+        current !== undefined && fileCheckpointIsFinalized(current)) {
       throw new DOMException('metadata reuse cannot replace a historical delivery', 'InvalidStateError')
     }
     this.#replaceCommitted(previous, durable)
@@ -233,6 +211,9 @@ class MemoryCheckpointRepository implements FSASemanticOutputRepository {
     input: Parameters<FSASemanticOutputRepository['restartOwnedFile']>[0],
   ) {
     const current = this.#store.committed.get(input.previous.recordId)
+    if (current !== undefined && fileCheckpointIsFinalized(current)) {
+      throw new DOMException('owned-file restart conflicts with final authority', 'InvalidStateError')
+    }
     if (current?.checksum === input.reset.checksum) return 'idempotent' as const
     if (current?.checksum !== input.previous.checksum ||
         this.#store.handles.get(input.expectedHandle.id)?.ownedObjectId !==
@@ -245,43 +226,21 @@ class MemoryCheckpointRepository implements FSASemanticOutputRepository {
   }
 
   async commitFinalFile(
-    input: Parameters<FSASemanticOutputRepository['commitFinalFile']>[0],
-  ) {
+    input: FinalFileCheckpointCommit,
+  ): Promise<FinalFileCheckpointCommitReceipt> {
     const current = this.#store.committed.get(input.expectedCommittedCheckpoint.recordId)
-    const final = input.records.finalCheckpoint
-    const existingProof = this.#store.proofs.get(input.records.finalProof.proofId)
-    const existingEntry = this.#store.ledgerEntries.get(input.records.ledgerEntry.entryId)
-    const idempotent = current?.checksum === final.checksum &&
-      existingProof?.proofDigest === input.records.finalProof.proofDigest &&
-      existingEntry?.entryDigest === input.records.ledgerEntry.entryDigest
+    const final = input.finalCheckpoint
+    const idempotent = current?.checksum === final.checksum
     if (!idempotent) {
       if (current?.checksum !== input.expectedCommittedCheckpoint.checksum) {
         throw new DOMException('final checkpoint predecessor changed', 'InvalidStateError')
       }
       this.#store.committed.set(final.recordId, final)
-      this.#store.proofs.set(input.records.finalProof.proofId, input.records.finalProof)
-      this.#appendLedgerEntry(input.binding, input.records.ledgerEntry)
     }
     return Object.freeze({
       classification: idempotent ? 'idempotent' as const : 'insert' as const,
       finalCheckpoint: final,
-      finalProof: input.records.finalProof,
-      ledgerEntry: input.records.ledgerEntry,
     })
-  }
-
-  async appendDirectoryAdmission(
-    binding: MaterializationLedgerBindingV1,
-    entry: Parameters<FSASemanticOutputRepository['appendDirectoryAdmission']>[1],
-  ) {
-    return this.#appendLedgerEntry(binding, entry)
-  }
-
-  async appendDirectoryFinalization(
-    binding: MaterializationLedgerBindingV1,
-    entry: Parameters<FSASemanticOutputRepository['appendDirectoryFinalization']>[1],
-  ) {
-    return this.#appendLedgerEntry(binding, entry)
   }
 
   async readCommitted(recordId: string): Promise<FileCheckpointV2 | undefined> {
@@ -308,142 +267,20 @@ class MemoryCheckpointRepository implements FSASemanticOutputRepository {
     return finalFileCheckpointProof(record)
   }
 
-  async readMaterializationFinalProof(
-    binding: MaterializationLedgerBindingV1,
-    proofId: string,
-  ) {
-    this.#requireLedgerBinding(binding)
-    return this.#store.proofs.get(proofId)
-  }
-
-  async scanMaterializationLedgerEntries(
-    binding: MaterializationLedgerBindingV1,
-    request: Parameters<FSASemanticOutputRepository['scanMaterializationLedgerEntries']>[1],
-  ) {
-    this.#requireLedgerBinding(binding)
-    const entries = [...this.#store.ledgerEntries.values()].sort((left, right) =>
-      compareMaterializationLedgerEntryCursors(
-        materializationLedgerEntryCursor(left),
-        materializationLedgerEntryCursor(right),
-      ))
-    const after = request.after === undefined
-      ? entries
-      : entries.filter(entry => compareMaterializationLedgerEntryCursors(
-          materializationLedgerEntryCursor(entry),
-          request.after!,
-        ) > 0)
-    const page = after.slice(0, request.limit)
-    const continuation = after.length > page.length && page.at(-1) !== undefined
-      ? materializationLedgerEntryCursor(page.at(-1)!)
-      : undefined
-    return Object.freeze({
-      entries: Object.freeze(page),
-      ...(continuation === undefined ? {} : { continuation }),
-    })
-  }
-
-  async countCheckpointCandidates(binding: MaterializationLedgerBindingV1): Promise<bigint> {
-    this.#requireLedgerBinding(binding)
+  async countCheckpointCandidates(): Promise<bigint> {
     return BigInt(this.#store.candidates.size)
   }
 
-  async persistMaterializationLedgerPage(
-    binding: MaterializationLedgerBindingV1,
-    page: MaterializationLedgerPageSummaryV1,
-  ) {
-    this.#requireLedgerBinding(binding)
-    const key = `${page.sealId}:${page.pageOrdinal}`
-    const existing = this.#store.ledgerPages.get(key)
-    if (existing !== undefined && existing.pageDigest !== page.pageDigest) {
-      throw new DOMException('materialization ledger page changed', 'ConstraintError')
-    }
-    this.#store.ledgerPages.set(key, page)
-    return existing === undefined ? 'insert' as const : 'idempotent' as const
-  }
-
-  async scanMaterializationLedgerPages(
-    binding: MaterializationLedgerBindingV1,
-    sealId: string,
-    afterPageOrdinal?: bigint,
-  ) {
-    this.#requireLedgerBinding(binding)
-    const pages = [...this.#store.ledgerPages.values()]
-      .filter(page => page.sealId === sealId &&
-        (afterPageOrdinal === undefined || page.pageOrdinal > afterPageOrdinal))
-      .sort((left, right) => left.pageOrdinal < right.pageOrdinal ? -1 : 1)
-    return Object.freeze({ pages: Object.freeze(pages) })
-  }
-
-  async persistMaterializationLedgerSeal(
-    binding: MaterializationLedgerBindingV1,
-    seal: MaterializationLedgerSealV1,
-  ) {
-    this.#requireLedgerBinding(binding)
-    const existing = this.#store.ledgerSeals.get(seal.sealId)
-    if (existing !== undefined && existing.sealDigest !== seal.sealDigest) {
-      throw new DOMException('materialization ledger seal changed', 'ConstraintError')
-    }
-    this.#store.ledgerSeals.set(seal.sealId, seal)
-    return existing === undefined ? 'insert' as const : 'idempotent' as const
-  }
-
-  async sealMaterializationLedger(
-    input: Parameters<FSASemanticOutputRepository['sealMaterializationLedger']>[0],
-  ): Promise<MaterializationLedgerSealV1> {
-    this.#requireLedgerBinding(input.binding)
-    const candidateCheckpointCount = await this.countCheckpointCandidates(input.binding)
-    if (candidateCheckpointCount !== 0n) {
-      throw new DOMException('materialization ledger cannot seal with checkpoint candidates', 'InvalidStateError')
-    }
-    const sealId = await deriveMaterializationLedgerSealId(input.binding, input.sealSequence)
-    let request: Parameters<FSASemanticOutputRepository['scanMaterializationLedgerEntries']>[1] = {
-      limit: MATERIALIZATION_LEDGER_PAGE_ENTRY_LIMIT,
-    }
-    let pageOrdinal = 0n
-    let directoryCarry: Parameters<typeof createMaterializationLedgerPageSummary>[0]['directoryCarry']
-    for (;;) {
-      const page = await this.scanMaterializationLedgerEntries(input.binding, request)
-      if (page.entries.length === 0) break
-      const built = await createMaterializationLedgerPageSummary({
-        binding: input.binding,
-        sealId,
-        pageOrdinal,
-        page,
-        request,
-        ...(directoryCarry === undefined ? {} : { directoryCarry }),
-      })
-      await this.persistMaterializationLedgerPage(input.binding, built.summary)
-      pageOrdinal += 1n
-      directoryCarry = built.directoryCarry
-      if (built.continuation === undefined) break
-      request = { after: built.continuation, limit: MATERIALIZATION_LEDGER_PAGE_ENTRY_LIMIT }
-    }
-    const pages = (await this.scanMaterializationLedgerPages(input.binding, sealId)).pages
-    const seal = await sealMaterializationLedgerPages({
-      ...input,
-      candidateCheckpointCount,
-      pages,
-    })
-    await this.persistMaterializationLedgerSeal(input.binding, seal)
-    return validateMaterializationLedgerSealPages({ binding: input.binding, seal, pages })
-  }
-
-  async retireMaterializationLedgerBatch(
-    binding: MaterializationLedgerBindingV1,
-    limit: typeof MATERIALIZATION_LEDGER_PAGE_ENTRY_LIMIT,
-  ) {
+  async retireRecoveryMetadataBatch(
+    limit: number = RECOVERY_METADATA_RETIREMENT_BATCH_LIMIT,
+  ): Promise<RecoveryMetadataRetirementResult> {
     this.#beforeRetire?.()
-    this.#requireLedgerBinding(binding)
     let remaining: number = limit
     let deletedRows = 0
     for (const records of [
       this.#store.candidates,
       this.#store.committed,
       this.#store.handles,
-      this.#store.proofs,
-      this.#store.ledgerEntries,
-      this.#store.ledgerPages,
-      this.#store.ledgerSeals,
     ]) {
       for (const key of records.keys()) {
         if (remaining === 0) break
@@ -457,10 +294,6 @@ class MemoryCheckpointRepository implements FSASemanticOutputRepository {
       this.#store.candidates,
       this.#store.committed,
       this.#store.handles,
-      this.#store.proofs,
-      this.#store.ledgerEntries,
-      this.#store.ledgerPages,
-      this.#store.ledgerSeals,
     ].some(records => records.size !== 0)
     if (!more) this.#onRetire?.()
     return Object.freeze({ deletedRows, state: more ? 'more' as const : 'complete' as const })
@@ -470,10 +303,6 @@ class MemoryCheckpointRepository implements FSASemanticOutputRepository {
     this.#store.candidates.clear()
     this.#store.committed.clear()
     this.#store.handles.clear()
-    this.#store.proofs.clear()
-    this.#store.ledgerEntries.clear()
-    this.#store.ledgerPages.clear()
-    this.#store.ledgerSeals.clear()
     this.#onRetire?.()
   }
 
@@ -493,34 +322,12 @@ class MemoryCheckpointRepository implements FSASemanticOutputRepository {
     this.#store.handles.delete(id)
   }
 
-  #appendLedgerEntry(
-    binding: MaterializationLedgerBindingV1,
-    entry: MaterializationLedgerEntryV1,
-  ) {
-    this.#requireLedgerBinding(binding)
-    const existing = this.#store.ledgerEntries.get(entry.entryId)
-    if (existing !== undefined && existing.entryDigest !== entry.entryDigest) {
-      throw new DOMException('materialization ledger entry changed', 'ConstraintError')
-    }
-    this.#store.ledgerEntries.set(entry.entryId, entry)
-    return existing === undefined ? 'insert' as const : 'idempotent' as const
-  }
-
   #replaceCommitted(previous: FileCheckpointV2, next: FileCheckpointV2): void {
     validateFileCheckpointTransition(previous, next)
     if (this.#store.committed.get(previous.recordId)?.checksum !== previous.checksum) {
       throw new DOMException('committed checkpoint predecessor changed', 'InvalidStateError')
     }
     this.#store.committed.set(next.recordId, next)
-  }
-
-  #requireLedgerBinding(binding: MaterializationLedgerBindingV1): void {
-    if (binding.operationId !== this.binding.operationId ||
-        binding.receiveIntentDigest !== this.binding.receiveIntentDigest ||
-        binding.materializationBindingDigest !== this.binding.materializationBindingDigest ||
-        binding.authorityRef !== this.binding.authorityRef) {
-      throw new TypeError('memory materialization ledger belongs to another checkpoint namespace')
-    }
   }
 
   close(): void {}

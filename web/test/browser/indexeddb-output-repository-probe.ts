@@ -9,46 +9,33 @@ import {
   transactionCompletion,
 } from '../../src/output/browser/indexeddb-database'
 import { IndexedDbFileCheckpointRepository } from '../../src/output/browser/indexeddb-repository'
-import { IndexedDbSemanticWriteStage } from '../../src/output/browser/indexeddb/materialization-ledger-transactions'
-import { createMaterializationLedgerBinding } from '../../src/output/materialization-ledger/codec'
-import {
-  createFinalizedFileMaterializationRecords,
-  createMaterializationDirectoryAdmittedEntry,
-} from '../../src/output/materialization-ledger/journal'
-import {
-  MATERIALIZATION_LEDGER_PAGE_ENTRY_LIMIT,
-  MaterializationLedgerSealPurpose,
-} from '../../src/output/materialization-ledger/model'
+import { IndexedDbSemanticWriteStage } from '../../src/output/browser/indexeddb/checkpoint-authority-transactions'
 import {
   FILE_CHECKPOINT_COMMIT_CANDIDATE,
+  FILE_CHECKPOINT_COMMIT_PUBLISHED,
   FILE_CHECKPOINT_COMMIT_VERIFIED,
   FILE_CHECKPOINT_MATERIALIZER_FSA_TREE,
   FILE_CHECKPOINT_PHASE_ACTIVE,
   FILE_CHECKPOINT_PHASE_PAUSED,
+  FILE_CHECKPOINT_PHASE_PUBLISHED,
   deriveCheckpointLineageID,
   newFileCheckpointV2,
 } from '../../src/output/persistence/checkpoint'
+import { RECOVERY_METADATA_RETIREMENT_BATCH_LIMIT } from '../../src/output/persistence/journal'
 import { durableCheckpointNamespaceIdentity } from '../../src/output/persistence/namespace'
-import { snapshotMaterializationRootRelativePath } from '../../src/transfer/job/coordinate/direct-tree'
-import { VerifiedFinalOutputFile } from '../../src/transfer/output/session'
 
 const RESET_SENTINEL_BYTES = Uint8Array.of(91, 92, 93, 94)
 const INCOMPATIBLE_DATABASE_VERSION = OUTPUT_DATABASE_VERSION - 1
 const INCOMPATIBLE_STORE_NAMES = ['unknown-output-format', 'receive-operation-v2-records'] as const
 const CONCURRENT_FILE_COUNT = 8
-const PAGING_DIRECTORY_COUNT = 130
 
 export interface IndexedDbOutputRepositoryProbeResult {
   readonly concurrentFinals: number
   readonly idempotentRetry: string
   readonly indexedClassification: string
   readonly operationWideGetAllCalls: number
-  readonly firstPageEntries: number
-  readonly secondPageEntries: number
-  readonly stableDirectoryRetry: string
-  readonly sealPages: string
-  readonly candidateSealRejected: boolean
-  readonly pathConflictRejected: boolean
+  readonly candidateCountBeforePending: string
+  readonly candidateCountWithPending: string
   readonly retiredRows: number
 }
 
@@ -79,7 +66,6 @@ export async function probeIndexedDbOutputRepository(
   databaseName: string,
 ): Promise<IndexedDbOutputRepositoryProbeResult> {
   const binding = bindingFor(10)
-  const ledgerBinding = await createMaterializationLedgerBinding(ledgerBindingInput(binding))
   const root = await navigator.storage.getDirectory()
   const handles: FileSystemFileHandle[] = []
   let repository = await IndexedDbFileCheckpointRepository.open(binding, databaseName)
@@ -111,64 +97,16 @@ export async function probeIndexedDbOutputRepository(
       IDBIndex.prototype.getAll = originalGetAll
     }
 
-    const directoryEntries = await Promise.all(Array.from(
-      { length: PAGING_DIRECTORY_COUNT },
-      (_, index) => createMaterializationDirectoryAdmittedEntry(ledgerBinding, {
-        relativePath: snapshotMaterializationRootRelativePath([`directory-${index}`]),
-        directoryId: identity(16, (index + 1) % 250 + 1),
-        generation: identity(16, (index + 2) % 250 + 1),
-        ownedObjectId: identity(32, (index + 3) % 250 + 1),
-        parent: rootDirectoryCoordinates(),
-      }),
-    ))
-    for (const entry of directoryEntries) {
-      await repository.appendDirectoryAdmission(ledgerBinding, entry)
-    }
     repository.close()
     repository = await IndexedDbFileCheckpointRepository.open(binding, databaseName)
-    const stableDirectoryRetry = await repository.appendDirectoryAdmission(
-      ledgerBinding,
-      directoryEntries[0]!,
-    )
-    const firstPage = await repository.scanMaterializationLedgerEntries(ledgerBinding, {
-      limit: MATERIALIZATION_LEDGER_PAGE_ENTRY_LIMIT,
-    })
-    if (firstPage.continuation === undefined) throw new Error('real IndexedDB page did not continue')
-    const secondPage = await repository.scanMaterializationLedgerEntries(ledgerBinding, {
-      after: firstPage.continuation,
-      limit: MATERIALIZATION_LEDGER_PAGE_ENTRY_LIMIT,
-    })
-    const seal = await repository.sealMaterializationLedger({
-      binding: ledgerBinding,
-      sealSequence: 1n,
-      purpose: MaterializationLedgerSealPurpose.ResumableSnapshot,
-    })
-
+    const candidateCountBeforePending = (await repository.countCheckpointCandidates()).toString()
     const pending = await preparedFile(90, handles[0]!, binding.operationId, binding.authorityRef)
     await repository.createInitialCheckpoint(pending.candidate)
-    const candidateSealRejected = await repository.sealMaterializationLedger({
-      binding: ledgerBinding,
-      sealSequence: 2n,
-      purpose: MaterializationLedgerSealPurpose.Terminal,
-    }).then(() => false, () => true)
-    const conflictingDirectory = await createMaterializationDirectoryAdmittedEntry(ledgerBinding, {
-      relativePath: files[0]!.finalCommit.records.ledgerEntry.relativePath,
-      directoryId: identity(16, 230),
-      generation: identity(16, 231),
-      ownedObjectId: identity(32, 232),
-      parent: rootDirectoryCoordinates(),
-    })
-    const pathConflictRejected = await repository.appendDirectoryAdmission(
-      ledgerBinding,
-      conflictingDirectory,
-    ).then(() => false, () => true)
+    const candidateCountWithPending = (await repository.countCheckpointCandidates()).toString()
 
     let retiredRows = 0
     for (;;) {
-      const retired = await repository.retireMaterializationLedgerBatch(
-        ledgerBinding,
-        MATERIALIZATION_LEDGER_PAGE_ENTRY_LIMIT,
-      )
+      const retired = await repository.retireRecoveryMetadataBatch(RECOVERY_METADATA_RETIREMENT_BATCH_LIMIT)
       retiredRows += retired.deletedRows
       if (retired.state === 'complete') break
     }
@@ -177,12 +115,8 @@ export async function probeIndexedDbOutputRepository(
       idempotentRetry: retry.classification,
       indexedClassification: classification,
       operationWideGetAllCalls,
-      firstPageEntries: firstPage.entries.length,
-      secondPageEntries: secondPage.entries.length,
-      stableDirectoryRetry,
-      sealPages: seal.pageCount.toString(),
-      candidateSealRejected,
-      pathConflictRejected,
+      candidateCountBeforePending,
+      candidateCountWithPending,
       retiredRows,
     }
   } finally {
@@ -197,8 +131,6 @@ export async function probeIndexedDbOutputRepository(
 export async function probeIndexedDbFinalFaultCuts(prefix: string): Promise<readonly string[]> {
   const stages = [
     IndexedDbSemanticWriteStage.FinalCheckpoint,
-    IndexedDbSemanticWriteStage.FinalProof,
-    IndexedDbSemanticWriteStage.FinalLedgerEntry,
   ] as const
   const root = await navigator.storage.getDirectory()
   const results: string[] = []
@@ -206,7 +138,6 @@ export async function probeIndexedDbFinalFaultCuts(prefix: string): Promise<read
     const stage = stages[index]!
     const name = `${prefix}-${index}`
     const binding = bindingFor(120 + index)
-    const ledgerBinding = await createMaterializationLedgerBinding(ledgerBindingInput(binding))
     const fileName = `fault-${name}`
     const handle = await root.getFileHandle(fileName, { create: true })
     const file = await preparedFile(140 + index, handle, binding.operationId, binding.authorityRef)
@@ -224,15 +155,7 @@ export async function probeIndexedDbFinalFaultCuts(prefix: string): Promise<read
       repository.close()
       repository = await IndexedDbFileCheckpointRepository.open(binding, name)
       const committed = await repository.readCommitted(file.initialCommitted.recordId)
-      const proof = await repository.readMaterializationFinalProof(
-        ledgerBinding,
-        file.finalCommit.records.finalProof.proofId,
-      )
-      const page = await repository.scanMaterializationLedgerEntries(ledgerBinding, {
-        limit: MATERIALIZATION_LEDGER_PAGE_ENTRY_LIMIT,
-      })
-      results.push(rejected && committed?.checksum === file.initialCommitted.checksum &&
-        proof === undefined && page.entries.length === 0 ? stage : 'failed')
+      results.push(rejected && committed?.checksum === file.initialCommitted.checksum ? stage : 'failed')
     } finally {
       repository.close()
       await root.removeEntry(fileName).catch(() => undefined)
@@ -470,22 +393,12 @@ async function preparedFile(
   })
   const finalCheckpoint = newFileCheckpointV2({
     ...spec,
+    stateGeneration: 2n,
     checkpointGeneration: 1n,
     verifiedRanges: [{ start: 0n, end: 8n }],
-    commitState: FILE_CHECKPOINT_COMMIT_VERIFIED,
+    phase: FILE_CHECKPOINT_PHASE_PUBLISHED,
+    commitState: FILE_CHECKPOINT_COMMIT_PUBLISHED,
   })
-  const binding = bindingForValues(operationId, authorityRef)
-  const ledgerBinding = await createMaterializationLedgerBinding(ledgerBindingInput(binding))
-  const finalOutput = new VerifiedFinalOutputFile({
-    backend: 'browser-fsa',
-    outputSessionId: `session-${seed}`,
-    canonicalPath: snapshotMaterializationRootRelativePath(finalCheckpoint.canonicalPath),
-    ownedFileIdentity: finalCheckpoint.ownedObjectId,
-  }, {
-    shareInstance: identity(16, 13),
-    fileId: finalCheckpoint.fileId,
-    fileRevision: finalCheckpoint.fileRevision,
-  }, finalCheckpoint.exactSize)
   return {
     candidate,
     initialCommitted,
@@ -510,13 +423,8 @@ async function preparedFile(
       exactSize: finalCheckpoint.exactSize,
     },
     finalCommit: {
-      binding: ledgerBinding,
       expectedCommittedCheckpoint: initialCommitted,
-      records: await createFinalizedFileMaterializationRecords({
-        binding: ledgerBinding,
-        finalOutput,
-        finalCheckpoint,
-      }),
+      finalCheckpoint,
       expectedPersistedOwnedFileIdentity: finalCheckpoint.ownedObjectId,
     },
   }
@@ -545,15 +453,6 @@ function bindingFor(seed: number) {
   return bindingForValues(identity(16, seed), identity(32, 14))
 }
 
-function rootDirectoryCoordinates() {
-  return {
-    relativePath: snapshotMaterializationRootRelativePath([]),
-    directoryId: identity(16, 240),
-    generation: identity(16, 241),
-    ownedObjectId: identity(32, 242),
-  }
-}
-
 function bindingForValues(operationId: string, authorityRef: string) {
   return durableCheckpointNamespaceIdentity({
     operationId,
@@ -562,15 +461,6 @@ function bindingForValues(operationId: string, authorityRef: string) {
     materializerKind: FILE_CHECKPOINT_MATERIALIZER_FSA_TREE,
     authorityRef,
   })
-}
-
-function ledgerBindingInput(binding: ReturnType<typeof bindingForValues>) {
-  return {
-    operationId: binding.operationId,
-    receiveIntentDigest: binding.receiveIntentDigest,
-    materializationBindingDigest: binding.materializationBindingDigest,
-    authorityRef: binding.authorityRef,
-  }
 }
 
 function identity(width: number, value: number): string {
@@ -654,16 +544,13 @@ export async function probeMetadataResume(databaseName: string, protocol: 'seman
     await completing.close()
     const finalCheckpoint = newFileCheckpointV2({ ...accepted,
       stateGeneration: accepted.stateGeneration + 1n, checkpointGeneration: accepted.checkpointGeneration + 1n,
-      verifiedRanges: [{ start: 0n, end: 8n }] })
-    const ledger = prepared.finalCommit.binding
-    const finalOutput = new VerifiedFinalOutputFile({
-      backend: 'browser-fsa', outputSessionId: 'metadata-resume',
-      canonicalPath: snapshotMaterializationRootRelativePath(finalCheckpoint.canonicalPath),
-      ownedFileIdentity: finalCheckpoint.ownedObjectId,
-    }, { shareInstance: identity(16, 13), fileId: current.fileId, fileRevision: current.fileRevision }, 8n)
-    const records = await createFinalizedFileMaterializationRecords({ binding: ledger, finalOutput, finalCheckpoint })
-    await repository.commitFinalFile({ binding: ledger, expectedCommittedCheckpoint: accepted, records,
-      expectedPersistedOwnedFileIdentity: finalCheckpoint.ownedObjectId })
+      verifiedRanges: [{ start: 0n, end: 8n }],
+      phase: FILE_CHECKPOINT_PHASE_PUBLISHED, commitState: FILE_CHECKPOINT_COMMIT_PUBLISHED })
+    await repository.commitFinalFile({
+      expectedCommittedCheckpoint: accepted,
+      finalCheckpoint,
+      expectedPersistedOwnedFileIdentity: finalCheckpoint.ownedObjectId,
+    })
     const historicalRejected = await admitCheckpointMetadataReuse(finalCheckpoint,
       { ...current, fileRevision: identity(16, 100) }, repository, repository).then(() => false, () => true)
     return {

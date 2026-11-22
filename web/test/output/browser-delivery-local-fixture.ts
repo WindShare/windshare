@@ -6,8 +6,9 @@ import { createBrowserSavePolicy } from '../../src/output/browser-delivery/polic
 import { createBrowserDeliveryRecord, browserDeliveryStagingPath } from '../../src/output/browser-delivery/records'
 import { requireDirectTreeIntent } from '../../src/output/file-system-access/settlement-proof'
 import { createFSARecoveryCheckpointSnapshot } from '../../src/output/file-system-access/recovery-summary'
-import { newFileCheckpointV2, FILE_CHECKPOINT_PHASE_PAUSED, FILE_CHECKPOINT_PHASE_ACTIVE,
-  FILE_CHECKPOINT_COMMIT_VERIFIED, FILE_CHECKPOINT_MATERIALIZER_FSA_TREE } from '../../src/output/persistence/checkpoint'
+import { newFileCheckpointV2, FILE_CHECKPOINT_PHASE_PAUSED, FILE_CHECKPOINT_PHASE_PUBLISHED,
+  FILE_CHECKPOINT_COMMIT_PUBLISHED, FILE_CHECKPOINT_COMMIT_VERIFIED,
+  FILE_CHECKPOINT_MATERIALIZER_FSA_TREE } from '../../src/output/persistence/checkpoint'
 import type { LocalFileSetLifecycle } from '../../src/output/browser-delivery/recovery/authority'
 import { deliveryIdentity as identity, deliveryPolicy } from './browser-delivery-fixture'
 
@@ -42,8 +43,8 @@ export async function localDeliveryFixture() {
     ...policy.target, ...source, canonicalPath: [], ownedObjectId: identity(8),
     checkpointGeneration: generation, stateGeneration: generation,
     verifiedRanges: end === 0n ? [] : [{ start: 0n, end }],
-    phase: end === source.exactSize ? FILE_CHECKPOINT_PHASE_ACTIVE : FILE_CHECKPOINT_PHASE_PAUSED,
-    commitState: FILE_CHECKPOINT_COMMIT_VERIFIED,
+    phase: end === source.exactSize ? FILE_CHECKPOINT_PHASE_PUBLISHED : FILE_CHECKPOINT_PHASE_PAUSED,
+    commitState: end === source.exactSize ? FILE_CHECKPOINT_COMMIT_PUBLISHED : FILE_CHECKPOINT_COMMIT_VERIFIED,
   })
   const stage = newFileCheckpointV2({
     ...policy.staging!, ...source, canonicalPath: browserDeliveryStagingPath(fileId), ownedObjectId: identity(9),

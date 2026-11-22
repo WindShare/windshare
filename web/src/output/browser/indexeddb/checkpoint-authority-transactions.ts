@@ -4,6 +4,7 @@ import {
   FILE_CHECKPOINT_PHASE_PAUSED,
   MAX_CHECKPOINT_RECORDS_PER_OPERATION,
   checkpointIdentityEqual,
+  fileCheckpointIsFinalized,
   sameCheckpointLineageSpec,
   validateFileCheckpoint,
   validateFileCheckpointTransition,
@@ -16,25 +17,23 @@ import {
   type CreatedFileCheckpointCommit,
   type FileCheckpointPage,
   type FileCheckpointScan,
+  type FinalFileCheckpointCommit,
+  type FinalFileCheckpointCommitReceipt,
   type InitialCheckpointCASResult,
   type OwnedFileRestart,
   type OwnedFileRestartResult,
   type PersistentHandleRecord,
+  type RecoveryMetadataRetirementResult,
 } from '../../persistence/journal'
-import { MATERIALIZATION_LEDGER_PATH_CLAIM_ORDER } from '../../materialization-ledger/model'
 import {
   INDEXEDDB_BY_OPERATION_FILE_RECORD_INDEX,
   INDEXEDDB_BY_OPERATION_INDEX,
   INDEXEDDB_BY_OPERATION_LINEAGE_INDEX,
   INDEXEDDB_BY_OPERATION_OWNED_OBJECT_INDEX,
-  INDEXEDDB_BY_OPERATION_PATH_ORDER_INDEX,
-  INDEXEDDB_BY_OPERATION_RECORD_PROOF_INDEX,
   INDEXEDDB_BY_OPERATION_RECORD_INDEX,
   INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE,
   INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE,
   INDEXEDDB_FILE_CHECKPOINT_HANDLE_STORE,
-  INDEXEDDB_FILE_FINAL_PROOF_STORE,
-  INDEXEDDB_MATERIALIZATION_LEDGER_ENTRY_STORE,
   requestResult,
 } from '../indexeddb-database'
 import {
@@ -49,6 +48,17 @@ import {
   validateCheckpointHandle,
   type CheckpointLineageAuthority,
 } from './repository-transactions'
+
+export const IndexedDbSemanticWriteStage = {
+  FinalCheckpoint: 'final-checkpoint',
+} as const
+
+export type IndexedDbSemanticWriteStage =
+  typeof IndexedDbSemanticWriteStage[keyof typeof IndexedDbSemanticWriteStage]
+
+export interface IndexedDbSemanticTransactionFaults {
+  afterQueuedWrite?(stage: IndexedDbSemanticWriteStage): void
+}
 
 export async function classifyIndexedCheckpointLineages(
   transaction: IDBTransaction,
@@ -230,23 +240,18 @@ export async function commitDurableCheckpointCas(
   validateFileCheckpointTransition(expected, next)
   const candidates = transaction.objectStore(INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE)
   const committed = transaction.objectStore(INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE)
-  const [candidateValue, committedValue, finalProof] = await Promise.all([
+  const [candidateValue, committedValue] = await Promise.all([
     requestResult<unknown>(candidates.get(expected.recordId)),
     requestResult<unknown>(committed.get(expected.recordId)),
-    expected.fileRevision === next.fileRevision ? Promise.resolve(undefined) :
-      requestResult<unknown>(transaction.objectStore(INDEXEDDB_FILE_FINAL_PROOF_STORE)
-        .index(INDEXEDDB_BY_OPERATION_RECORD_PROOF_INDEX).get([
-          expected.operationId, expected.recordId,
-        ])),
   ])
-  // Delivery history is immutable even when its source metadata still agrees.
-  if (finalProof !== undefined) {
-    abortConcurrency(transaction, 'metadata reuse cannot replace a historical delivery')
-  }
   if (candidateValue !== undefined || committedValue === undefined) {
     abortConcurrency(transaction, 'durable checkpoint CAS has an unresolved or missing predecessor')
   }
   const current = readStoredCheckpoint(committedValue)
+  // Delivery history is immutable even when its source metadata still agrees.
+  if (expected.fileRevision !== next.fileRevision && fileCheckpointIsFinalized(current)) {
+    abortConcurrency(transaction, 'metadata reuse cannot replace a historical delivery')
+  }
   if (current.checksum === next.checksum) return
   if (current.checksum !== expected.checksum) {
     abortConcurrency(transaction, 'durable checkpoint predecessor changed')
@@ -254,35 +259,91 @@ export async function commitDurableCheckpointCas(
   committed.put(storedCheckpoint(next))
 }
 
+export async function commitFinalFileTransaction(
+  transaction: IDBTransaction,
+  binding: CheckpointNamespaceBinding,
+  input: FinalFileCheckpointCommit,
+  faults?: IndexedDbSemanticTransactionFaults,
+): Promise<FinalFileCheckpointCommitReceipt> {
+  const candidates = transaction.objectStore(INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE)
+  const committed = transaction.objectStore(INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE)
+  const handles = transaction.objectStore(INDEXEDDB_FILE_CHECKPOINT_HANDLE_STORE)
+  const [candidateValue, committedValue, handleValues] = await Promise.all([
+    requestResult<unknown>(candidates.get(input.finalCheckpoint.recordId)),
+    requestResult<unknown>(committed.get(input.finalCheckpoint.recordId)),
+    requestResult<unknown[]>(handles.index(INDEXEDDB_BY_OPERATION_OWNED_OBJECT_INDEX).getAll(
+      IDBKeyRange.only([binding.operationId, input.expectedPersistedOwnedFileIdentity]),
+      2,
+    )),
+  ])
+  if (candidateValue !== undefined) {
+    abortConcurrency(transaction, 'final file commit found an unresolved checkpoint candidate')
+  }
+  const handle = exactOwnedHandle(transaction, handleValues)
+  if (handle.operationId !== binding.operationId || handle.authorityRef !== binding.authorityRef ||
+      handle.ownedObjectId !== input.expectedPersistedOwnedFileIdentity) {
+    abortIntegrity(transaction, 'persisted final file handle is foreign')
+  }
+  if (committedValue === undefined) {
+    abortConcurrency(transaction, 'final file commit has no durable predecessor')
+  }
+  const current = readStoredCheckpoint(committedValue)
+  if (!checkpointMatchesNamespace(current, binding)) {
+    abortIntegrity(transaction, 'final file predecessor escaped its checkpoint namespace')
+  }
+  if (current.checksum === input.finalCheckpoint.checksum) {
+    return Object.freeze({ classification: 'idempotent', finalCheckpoint: input.finalCheckpoint })
+  }
+  if (current.checksum !== input.expectedCommittedCheckpoint.checksum) {
+    abortConcurrency(transaction, 'final file durable predecessor changed')
+  }
+  committed.put(storedCheckpoint(input.finalCheckpoint))
+  faults?.afterQueuedWrite?.(IndexedDbSemanticWriteStage.FinalCheckpoint)
+  return Object.freeze({ classification: 'insert', finalCheckpoint: input.finalCheckpoint })
+}
+
+export async function retireRecoveryMetadataTransaction(
+  transaction: IDBTransaction,
+  binding: CheckpointNamespaceBinding,
+  limit: number,
+): Promise<RecoveryMetadataRetirementResult> {
+  const storeNames = [
+    INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE,
+    INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE,
+    INDEXEDDB_FILE_CHECKPOINT_HANDLE_STORE,
+  ] as const
+  const keyPages = await Promise.all(storeNames.map(name => requestResult<IDBValidKey[]>(
+    transaction.objectStore(name).index(INDEXEDDB_BY_OPERATION_INDEX).getAllKeys(
+      IDBKeyRange.only(binding.operationId),
+      limit,
+    ),
+  )))
+  const selectedIndex = keyPages.findIndex(keys => keys.length > 0)
+  if (selectedIndex < 0) return Object.freeze({ deletedRows: 0, state: 'complete' })
+  const store = transaction.objectStore(storeNames[selectedIndex]!)
+  const keys = keyPages[selectedIndex]!
+  for (const key of keys) store.delete(key)
+  return Object.freeze({ deletedRows: keys.length, state: 'more' })
+}
+
 export async function restartOwnedFileTransaction(
   transaction: IDBTransaction,
   binding: CheckpointNamespaceBinding,
   input: OwnedFileRestart,
-  pathKey: string,
 ): Promise<OwnedFileRestartResult> {
   const expectedHandle = validateOwnedFileRestart(binding, input)
   const candidates = transaction.objectStore(INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE)
   const committed = transaction.objectStore(INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE)
   const handles = transaction.objectStore(INDEXEDDB_FILE_CHECKPOINT_HANDLE_STORE)
-  const proofs = transaction.objectStore(INDEXEDDB_FILE_FINAL_PROOF_STORE)
-  const entries = transaction.objectStore(INDEXEDDB_MATERIALIZATION_LEDGER_ENTRY_STORE)
-  const [candidateValue, committedValue, handleValues, proofValue, entryValue] = await Promise.all([
+  const [candidateValue, committedValue, handleValues] = await Promise.all([
     requestResult<unknown>(candidates.get(input.previous.recordId)),
     requestResult<unknown>(committed.get(input.previous.recordId)),
     requestResult<unknown[]>(handles.index(INDEXEDDB_BY_OPERATION_OWNED_OBJECT_INDEX).getAll(
       IDBKeyRange.only([binding.operationId, input.previous.ownedObjectId]),
       2,
     )),
-    requestResult<unknown>(proofs.index(INDEXEDDB_BY_OPERATION_RECORD_PROOF_INDEX).get(
-      [binding.operationId, input.previous.recordId],
-    )),
-    requestResult<unknown>(entries.index(INDEXEDDB_BY_OPERATION_PATH_ORDER_INDEX).get([
-      binding.operationId,
-      pathKey,
-      MATERIALIZATION_LEDGER_PATH_CLAIM_ORDER,
-    ])),
   ])
-  if (candidateValue !== undefined || proofValue !== undefined || entryValue !== undefined) {
+  if (candidateValue !== undefined) {
     abortConcurrency(transaction, 'owned-file restart conflicts with candidate or final authority')
   }
   const storedHandle = exactOwnedHandle(transaction, handleValues)
@@ -293,6 +354,9 @@ export async function restartOwnedFileTransaction(
     abortConcurrency(transaction, 'owned-file restart has no durable predecessor')
   }
   const current = readStoredCheckpoint(committedValue)
+  if (fileCheckpointIsFinalized(current)) {
+    abortConcurrency(transaction, 'owned-file restart conflicts with final authority')
+  }
   if (current.checksum === input.reset.checksum) return 'idempotent'
   if (current.checksum !== input.previous.checksum) {
     abortConcurrency(transaction, 'owned-file restart durable predecessor changed')

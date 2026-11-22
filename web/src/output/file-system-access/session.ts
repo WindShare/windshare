@@ -41,8 +41,6 @@ import type {
 import { decideCollisionName } from '../planning/naming'
 import type {
   PersistentDirectoryMaterialization,
-  PersistentDirectoryLedgerMaterialization,
-  PersistentDirectoryLedgerRequest,
   PersistentFileRequest,
   PersistentFileTransactionPort,
   ActivatablePersistentMaterializationPort,
@@ -50,16 +48,7 @@ import type {
   PersistentOutputNamespaceClaimPort,
   PersistentTreeTraceEvent,
 } from '../persistent-tree/contracts'
-import type {
-  MaterializationDirectoryAdmittedEntryV1,
-  MaterializationDirectoryFinalization,
-  MaterializationDirectoryFinalizedEntryV1,
-} from '../materialization-ledger/model'
-import {
-  type MaterializationLedgerSealPurpose,
-  type MaterializationLedgerSealV1,
-} from '../materialization-ledger/model'
-import { createMaterializationLedgerBinding } from '../materialization-ledger/codec'
+import type { FileCheckpointV2 } from '../persistence/checkpoint'
 import { PersistentTreeOutputSession } from '../persistent-tree/session'
 import {
   createPersistentOutputStageAuthority,
@@ -102,6 +91,7 @@ import {
 } from './session-diagnostics'
 import {
   FSASettlementLedgerAuthority,
+  type FSACheckpointSettlementSnapshot,
   type FSAResumableCheckpointEvidence,
 } from './settlement-ledger'
 import { closeFailedFSAAssembly, closeFSAOutputAuthorities } from './assembly-cleanup'
@@ -150,12 +140,12 @@ export interface FSAFinalSettlementObservation {
   clearCompatibleNamePendingOutcome(): Promise<void>
   removeVerifiedEmptyCompatibleNameRepair(): Promise<CompatibleNameEmptyRepairRemoval>
   verifyOperationBinding(): Promise<void>
-  sealMaterializationLedger(input: Readonly<{
-    evidence: PersistentDirectTreeMaterializationEvidence
-    sealSequence: bigint
-    purpose: MaterializationLedgerSealPurpose
-  }>): Promise<MaterializationLedgerSealV1>
-  resumableCheckpointEvidence(): Promise<FSAResumableCheckpointEvidence>
+  checkpointSettlementSnapshot(
+    evidence: PersistentDirectTreeMaterializationEvidence,
+  ): Promise<FSACheckpointSettlementSnapshot>
+  resumableCheckpointEvidence(
+    preScanned?: readonly FileCheckpointV2[],
+  ): Promise<FSAResumableCheckpointEvidence>
   retireRecoveryMetadata(): Promise<void>
 }
 
@@ -253,19 +243,9 @@ export class FileSystemAccessOutputSession implements
     this.#compatibleNames = input.compatibleNames
     this.#stageAuthority = input.stageAuthority
     this.#diagnostics = input.diagnostics
-    const ledgerBinding = createMaterializationLedgerBinding({
-      operationId: input.checkpoints.binding.operationId,
-      receiveIntentDigest: input.checkpoints.binding.receiveIntentDigest,
-      materializationBindingDigest: input.checkpoints.binding.materializationBindingDigest,
-      authorityRef: input.checkpoints.binding.authorityRef,
-    })
     this.#settlementLedger = new FSASettlementLedgerAuthority({
       intent: input.intent,
       checkpoints: input.checkpoints,
-      binding: ledgerBinding,
-      ...(input.diagnostics?.performance === undefined
-        ? {}
-        : { performance: input.diagnostics.performance }),
     })
   }
 
@@ -288,35 +268,6 @@ export class FileSystemAccessOutputSession implements
   ): Promise<PersistentDirectoryMaterialization> {
     this.#requireMaterializing()
     return this.#materialization.ensureDirectory(path)
-  }
-
-  materializeDirectory(
-    request: PersistentDirectoryLedgerRequest,
-  ): Promise<PersistentDirectoryLedgerMaterialization> {
-    this.#requireMaterializing()
-    const materialize = this.#materialization.materializeDirectory
-    if (materialize === undefined) {
-      throw new DOMException(
-        'DirectTree materialization requires durable directory-ledger authority',
-        'InvalidStateError',
-      )
-    }
-    return materialize.call(this.#materialization, request)
-  }
-
-  finalizeDirectory(
-    admission: MaterializationDirectoryAdmittedEntryV1,
-    outcome: MaterializationDirectoryFinalization,
-  ): Promise<MaterializationDirectoryFinalizedEntryV1> {
-    this.#requireDirectoryFinalizable()
-    const finalize = this.#materialization.finalizeDirectory
-    if (finalize === undefined) {
-      throw new DOMException(
-        'DirectTree materialization requires durable directory-ledger authority',
-        'InvalidStateError',
-      )
-    }
-    return finalize.call(this.#materialization, admission, outcome)
   }
 
   bindDirectoryNamespace(claim: PersistentDirectoryNamespaceClaim): void {
@@ -517,10 +468,10 @@ export class FileSystemAccessOutputSession implements
             : { stageScope: this.#stageAuthority.bindingScope() }),
         })
       },
-      sealMaterializationLedger: (input: Parameters<
-        FSAFinalSettlementObservation['sealMaterializationLedger']
-      >[0]) => this.#settlementLedger.seal(input),
-      resumableCheckpointEvidence: () => this.#settlementLedger.resumableCheckpointEvidence(),
+      checkpointSettlementSnapshot: (evidence: PersistentDirectTreeMaterializationEvidence) =>
+        this.#settlementLedger.checkpointSettlementSnapshot(evidence),
+      resumableCheckpointEvidence: (preScanned?: readonly FileCheckpointV2[]) =>
+        this.#settlementLedger.resumableCheckpointEvidence(preScanned),
       retireRecoveryMetadata: () => this.#settlementLedger.retireRecoveryMetadata(),
     })
   }
@@ -537,13 +488,6 @@ export class FileSystemAccessOutputSession implements
     if (this.#terminalDrain !== undefined || this.#settlementStarted ||
         this.#outputClosePromise !== undefined || this.#closePromise !== undefined) {
       throw new DOMException('FSA materialization is no longer mutable', 'InvalidStateError')
-    }
-  }
-
-  #requireDirectoryFinalizable(): void {
-    if (this.#settlementStarted || this.#outputClosePromise !== undefined ||
-        this.#closePromise !== undefined) {
-      throw new DOMException('FSA directory finalization is no longer mutable', 'InvalidStateError')
     }
   }
 }

@@ -5,6 +5,7 @@ import {
   FILE_CHECKPOINT_PHASE_ACTIVE,
   FILE_CHECKPOINT_PHASE_PAUSED,
   MAX_CHECKPOINT_AUXILIARY_ENTRIES_PER_OPERATION,
+  fileCheckpointIsFinalized,
   validateFileCheckpoint,
   validateFileCheckpointTransition,
   type FileCheckpointV2,
@@ -12,51 +13,36 @@ import {
 import {
   checkpointMatchesNamespace,
   finalFileCheckpointProof,
+  RECOVERY_METADATA_RETIREMENT_BATCH_LIMIT,
   validateFileCheckpointPage,
   type CheckpointNamespaceBinding,
   type CheckpointLineageDecision,
   type CheckpointLineageLookupRequest,
   type FileCheckpointPage,
   type FileCheckpointScan,
+  type FinalFileCheckpointCommit,
+  type FinalFileCheckpointCommitReceipt,
   type FinalFileCheckpointProof,
   type InitialCheckpointCASResult,
   type OwnedFileRestart,
   type OwnedFileRestartResult,
   FILE_CHECKPOINT_BATCH_REQUEST_LIMIT,
   type CreatedFileCheckpointCommit,
+  type RecoveryMetadataRetirementResult,
   type SemanticFileCheckpointJournal,
   type PersistentHandleRecord,
   type PersistentHandleInventoryRepository,
   type PersistentHandleRepository,
 } from '../persistence/journal'
-import { materializationLedgerPathKey } from '../materialization-ledger/codec'
-import {
-  type FinalFileMaterializationCommit,
-  type FinalFileMaterializationCommitReceipt,
-  type MaterializationLedgerJournal,
-  type MaterializationLedgerPageSummaryScan,
-  type MaterializationLedgerRetirementResult,
-} from '../materialization-ledger/journal'
-import {
-  MATERIALIZATION_LEDGER_PAGE_ENTRY_LIMIT,
-  type MaterializationDirectoryAdmittedEntryV1,
-  type MaterializationDirectoryFinalizedEntryV1,
-  type MaterializationFinalFileProofV1,
-  type MaterializationLedgerBindingV1,
-  type MaterializationLedgerEntryPage,
-  type MaterializationLedgerPageRequest,
-  type MaterializationLedgerPageSummaryV1,
-  type MaterializationLedgerSealPurpose,
-  type MaterializationLedgerSealV1,
-} from '../materialization-ledger/model'
+import { browserDeliveryRetainsTargetMetadata } from '../browser-delivery/indexeddb/target-retirement'
 import {
   DEFAULT_OUTPUT_CHECKPOINT_DATABASE_NAME,
+  INDEXEDDB_BROWSER_DELIVERY_FILE_STORE,
+  INDEXEDDB_BROWSER_SAVE_POLICY_STORE,
   INDEXEDDB_BY_OPERATION_INDEX,
   INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE,
   INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE,
   INDEXEDDB_FILE_CHECKPOINT_HANDLE_STORE,
-  INDEXEDDB_FILE_FINAL_PROOF_STORE,
-  INDEXEDDB_MATERIALIZATION_LEDGER_ENTRY_STORE,
   openIndexedDbCheckpointDatabase,
   requestResult,
   transactionCompletion,
@@ -76,14 +62,14 @@ import {
   classifyIndexedCheckpointLineages,
   commitCreatedFileTransaction,
   commitDurableCheckpointCas,
+  commitFinalFileTransaction,
   installIndexedInitialClaims,
   restartOwnedFileTransaction,
+  retireRecoveryMetadataTransaction,
   scanStoredCheckpointPage,
+  type IndexedDbSemanticTransactionFaults,
 } from './indexeddb/checkpoint-authority-transactions'
-import type { IndexedDbSemanticTransactionFaults } from './indexeddb/materialization-ledger-transactions'
-import { IndexedDbMaterializationLedgerParticipant } from './indexeddb/materialization-ledger-repository'
 import { IndexedDbFileCommitParticipants, type IndexedDbFileCommitParticipant } from './indexeddb/file-commit-participants'
-import { snapshotMaterializationRootRelativePath } from '../../transfer/job/coordinate/direct-tree'
 
 export { IndexedDbOperationConcurrencyError } from './indexeddb/repository-transactions'
 
@@ -93,13 +79,13 @@ export type IndexedDbCandidateResolution =
 
 export class IndexedDbFileCheckpointRepository
 implements SemanticFileCheckpointJournal,
-  MaterializationLedgerJournal,
   PersistentHandleRepository,
   PersistentHandleInventoryRepository {
   readonly binding: CheckpointNamespaceBinding
   readonly #database: IDBDatabase
-  readonly #ledger: IndexedDbMaterializationLedgerParticipant
+  readonly #faults: IndexedDbSemanticTransactionFaults | undefined
   readonly #fileCommits = new IndexedDbFileCommitParticipants()
+  #retirementInProgress = false
   #closed = false
 
   private constructor(
@@ -109,13 +95,7 @@ implements SemanticFileCheckpointJournal,
   ) {
     this.#database = database
     this.binding = binding
-    this.#ledger = new IndexedDbMaterializationLedgerParticipant({
-      database,
-      checkpointBinding: binding,
-      fileCommits: this.#fileCommits,
-      ...(faults === undefined ? {} : { faults }),
-      assertOpen: () => this.#assertOpen(),
-    })
+    this.#faults = faults
     database.addEventListener('versionchange', () => this.close())
   }
 
@@ -325,18 +305,13 @@ implements SemanticFileCheckpointJournal,
     this.#assertOpen()
     this.#assertBinding(input.previous)
     this.#assertBinding(input.reset)
-    const pathKey = await materializationLedgerPathKey(
-      snapshotMaterializationRootRelativePath(input.previous.canonicalPath),
-    )
     const transaction = this.#database.transaction([
       INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE,
       INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE,
       INDEXEDDB_FILE_CHECKPOINT_HANDLE_STORE,
-      INDEXEDDB_FILE_FINAL_PROOF_STORE,
-      INDEXEDDB_MATERIALIZATION_LEDGER_ENTRY_STORE,
     ], 'readwrite')
     try {
-      const result = await restartOwnedFileTransaction(transaction, this.binding, input, pathKey)
+      const result = await restartOwnedFileTransaction(transaction, this.binding, input)
       await transactionCompletion(transaction)
       return result
     } catch (error) {
@@ -380,77 +355,80 @@ implements SemanticFileCheckpointJournal,
     return finalFileCheckpointProof(record)
   }
 
-  commitFinalFile(input: FinalFileMaterializationCommit): Promise<FinalFileMaterializationCommitReceipt> {
-    return this.#ledger.commitFinalFile(input)
+  async commitFinalFile(input: FinalFileCheckpointCommit): Promise<FinalFileCheckpointCommitReceipt> {
+    this.#assertOpen()
+    this.#assertBinding(input.expectedCommittedCheckpoint)
+    this.#assertBinding(input.finalCheckpoint)
+    if (input.expectedCommittedCheckpoint.commitState !== FILE_CHECKPOINT_COMMIT_VERIFIED ||
+        !fileCheckpointIsFinalized(input.finalCheckpoint) ||
+        input.expectedPersistedOwnedFileIdentity !== input.finalCheckpoint.ownedObjectId) {
+      throw new TypeError('final file commit requires a verified finalized checkpoint transition')
+    }
+    validateFileCheckpointTransition(input.expectedCommittedCheckpoint, input.finalCheckpoint)
+    const participation = this.#fileCommits.prepare([input.finalCheckpoint])
+    const transaction = this.#database.transaction([...new Set([
+      INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE,
+      INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE,
+      INDEXEDDB_FILE_CHECKPOINT_HANDLE_STORE,
+      ...participation.stores,
+    ])], 'readwrite')
+    const completion = transactionCompletion(transaction)
+    completion.catch(() => undefined)
+    try {
+      // Both authorities validate their predecessors in this cut; neither needs to reread the other's queued writes.
+      const [receipt, publish] = await Promise.all([
+        commitFinalFileTransaction(transaction, this.binding, input, this.#faults),
+        participation.apply(transaction, [{ kind: 'final-file', checkpoint: input.finalCheckpoint }]),
+      ])
+      await completion
+      publish()
+      return receipt
+    } catch (error) {
+      abortQuietly(transaction)
+      await completion.catch(() => undefined)
+      throw error
+    }
   }
 
-  appendDirectoryAdmission(
-    binding: MaterializationLedgerBindingV1,
-    entry: MaterializationDirectoryAdmittedEntryV1,
-  ): Promise<'insert' | 'idempotent'> {
-    return this.#ledger.appendDirectoryAdmission(binding, entry)
+  async countCheckpointCandidates(): Promise<bigint> {
+    this.#assertOpen()
+    const transaction = this.#database.transaction(
+      INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE,
+      'readonly',
+    )
+    const count = await requestResult<number>(
+      transaction.objectStore(INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE)
+        .index(INDEXEDDB_BY_OPERATION_INDEX)
+        .count(IDBKeyRange.only(this.binding.operationId)),
+    )
+    await transactionCompletion(transaction)
+    return BigInt(count)
   }
 
-  appendDirectoryFinalization(
-    binding: MaterializationLedgerBindingV1,
-    entry: MaterializationDirectoryFinalizedEntryV1,
-  ): Promise<'insert' | 'idempotent'> {
-    return this.#ledger.appendDirectoryFinalization(binding, entry)
-  }
-
-  scanMaterializationLedgerEntries(
-    binding: MaterializationLedgerBindingV1,
-    request: MaterializationLedgerPageRequest,
-  ): Promise<MaterializationLedgerEntryPage> {
-    return this.#ledger.scanMaterializationLedgerEntries(binding, request)
-  }
-
-  countCheckpointCandidates(binding: MaterializationLedgerBindingV1): Promise<bigint> {
-    return this.#ledger.countCheckpointCandidates(binding)
-  }
-
-  persistMaterializationLedgerPage(
-    binding: MaterializationLedgerBindingV1,
-    page: MaterializationLedgerPageSummaryV1,
-  ): Promise<'insert' | 'idempotent'> {
-    return this.#ledger.persistMaterializationLedgerPage(binding, page)
-  }
-
-  scanMaterializationLedgerPages(
-    binding: MaterializationLedgerBindingV1,
-    sealId: string,
-    afterPageOrdinal?: bigint,
-  ): Promise<MaterializationLedgerPageSummaryScan> {
-    return this.#ledger.scanMaterializationLedgerPages(binding, sealId, afterPageOrdinal)
-  }
-
-  persistMaterializationLedgerSeal(
-    binding: MaterializationLedgerBindingV1,
-    seal: MaterializationLedgerSealV1,
-  ): Promise<'insert' | 'idempotent'> {
-    return this.#ledger.persistMaterializationLedgerSeal(binding, seal)
-  }
-
-  sealMaterializationLedger(input: Readonly<{
-    binding: MaterializationLedgerBindingV1
-    sealSequence: bigint
-    purpose: MaterializationLedgerSealPurpose
-  }>): Promise<MaterializationLedgerSealV1> {
-    return this.#ledger.sealMaterializationLedger(input)
-  }
-
-  readMaterializationFinalProof(
-    binding: MaterializationLedgerBindingV1,
-    proofId: string,
-  ): Promise<MaterializationFinalFileProofV1 | undefined> {
-    return this.#ledger.readMaterializationFinalProof(binding, proofId)
-  }
-
-  retireMaterializationLedgerBatch(
-    binding: MaterializationLedgerBindingV1,
-    limit: typeof MATERIALIZATION_LEDGER_PAGE_ENTRY_LIMIT,
-  ): Promise<MaterializationLedgerRetirementResult> {
-    return this.#ledger.retireMaterializationLedgerBatch(binding, limit)
+  async retireRecoveryMetadataBatch(
+    limit: number = RECOVERY_METADATA_RETIREMENT_BATCH_LIMIT,
+  ): Promise<RecoveryMetadataRetirementResult> {
+    this.#assertOpen()
+    if (!Number.isInteger(limit) || limit < 1 || limit > RECOVERY_METADATA_RETIREMENT_BATCH_LIMIT) {
+      throw new TypeError('recovery metadata retirement batch exceeds its fixed limit')
+    }
+    const transaction = this.#database.transaction([
+      INDEXEDDB_BROWSER_DELIVERY_FILE_STORE,
+      INDEXEDDB_BROWSER_SAVE_POLICY_STORE,
+      INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE,
+      INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE,
+      INDEXEDDB_FILE_CHECKPOINT_HANDLE_STORE,
+    ], 'readwrite')
+    // The caller holds terminal mutation authority for the entire bounded retirement.
+    // Checking local delivery retention once avoids re-scanning delivery rows per batch.
+    if (!this.#retirementInProgress && await browserDeliveryRetainsTargetMetadata(transaction, this.binding)) {
+      await transactionCompletion(transaction)
+      return Object.freeze({ deletedRows: 0, state: 'retained-for-local-delivery' })
+    }
+    const result = await retireRecoveryMetadataTransaction(transaction, this.binding, limit)
+    await transactionCompletion(transaction)
+    this.#retirementInProgress = result.state === 'more'
+    return result
   }
 
 
@@ -626,7 +604,6 @@ implements SemanticFileCheckpointJournal,
     const transaction = this.#database.transaction([
       INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE,
       INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE,
-      INDEXEDDB_FILE_FINAL_PROOF_STORE,
     ], 'readwrite')
     try {
       await commitDurableCheckpointCas(transaction, previous, next)

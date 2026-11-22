@@ -159,11 +159,13 @@ export function validCheckpointLifecycleTransition(
     case FILE_CHECKPOINT_PHASE_ACTIVE:
       return next.phase === FILE_CHECKPOINT_PHASE_PAUSED ||
         next.phase === FILE_CHECKPOINT_PHASE_PUBLISHING ||
+        next.phase === FILE_CHECKPOINT_PHASE_PUBLISHED ||
         next.phase === FILE_CHECKPOINT_PHASE_RETIRED ||
         next.phase === FILE_CHECKPOINT_PHASE_QUARANTINED
     case FILE_CHECKPOINT_PHASE_PAUSED:
       return next.phase === FILE_CHECKPOINT_PHASE_ACTIVE ||
         next.phase === FILE_CHECKPOINT_PHASE_PUBLISHING ||
+        next.phase === FILE_CHECKPOINT_PHASE_PUBLISHED ||
         next.phase === FILE_CHECKPOINT_PHASE_RETIRED ||
         next.phase === FILE_CHECKPOINT_PHASE_QUARANTINED
     case FILE_CHECKPOINT_PHASE_PUBLISHING:

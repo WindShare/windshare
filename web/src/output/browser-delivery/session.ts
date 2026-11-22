@@ -274,16 +274,6 @@ export class BrowserDeliveryMaterialization implements PersistentMaterialization
   }
 
   ensureDirectory(path: readonly string[]) { return this.#options.target.ensureDirectory(path) }
-  materializeDirectory: NonNullable<PersistentMaterializationPort['materializeDirectory']> = request => {
-    const method = this.#options.target.materializeDirectory
-    if (method === undefined) return Promise.reject(new TypeError('Target directory ledger is unavailable'))
-    return method.call(this.#options.target, request)
-  }
-  finalizeDirectory: NonNullable<PersistentMaterializationPort['finalizeDirectory']> = (admission, outcome) => {
-    const method = this.#options.target.finalizeDirectory
-    if (method === undefined) return Promise.reject(new TypeError('Target directory ledger is unavailable'))
-    return method.call(this.#options.target, admission, outcome)
-  }
 
   saveStagedFiles(signal?: AbortSignal): Promise<void> {
     return this.#runLocal(() => this.#saveStagedFiles(signal))

@@ -40,7 +40,7 @@ import type {
 
 const RECEIVE_RECEIPT_DOMAIN = 'windshare/receive-receipt/v1'
 const RECEIVE_RECEIPT_SCHEMA_VERSION = 1
-const FSA_SEALED_LEDGER_SETTLEMENT_RECEIPT_V1 = 16
+const FSA_CHECKPOINT_SETTLEMENT_RECEIPT_V1 = 16
 const FSA_UNOPENED_CLEANUP_RECEIPT_V2 = 15
 
 export type DirectTreeIntent = ReceiveIntent & Readonly<{
@@ -49,11 +49,6 @@ export type DirectTreeIntent = ReceiveIntent & Readonly<{
 }>
 
 export interface SettlementReceiptEvidence {
-  readonly sealId: string
-  readonly sealDigest: string
-  readonly aggregateRoot: string
-  readonly pageCount: bigint
-  readonly entryEventCount: bigint
   readonly fileCount: bigint
   readonly visibleDirectoryCount: bigint
   readonly materializedDirectoryCount: bigint
@@ -120,18 +115,13 @@ export function createFSASettlementReceipt(input: Readonly<{
   directoryScope: DirectoryAdmissionScope
 }>): Promise<PersistedReceiveRecord> {
   const bytes = canonicalRecord(RECEIVE_RECEIPT_DOMAIN, RECEIVE_RECEIPT_SCHEMA_VERSION, [
-    canonicalU8(FSA_SEALED_LEDGER_SETTLEMENT_RECEIPT_V1),
+    canonicalU8(FSA_CHECKPOINT_SETTLEMENT_RECEIPT_V1),
     identityFrame(input.intent.operationId, 16, 'operation ID'),
     identityFrame(input.intent.digest, 32, 'receive intent digest'),
     identityFrame(input.intent.plan.reservation.digest, 32, 'reservation digest'),
     ...canonicalFSASettlementBinding(input.intent, input.directoryScope),
     identityFrame(input.transferJobId, 16, 'transfer job ID'),
     canonicalFrame(canonicalU8(settlementOutcomeByte(input.outcome))),
-    identityFrame(input.evidence.sealId, 32, 'materialization ledger seal ID'),
-    identityFrame(input.evidence.sealDigest, 32, 'materialization ledger seal digest'),
-    identityFrame(input.evidence.aggregateRoot, 32, 'materialization ledger aggregate root'),
-    canonicalFrame(canonicalU64(input.evidence.pageCount)),
-    canonicalFrame(canonicalU64(input.evidence.entryEventCount)),
     canonicalFrame(canonicalU64(input.evidence.fileCount)),
     canonicalFrame(canonicalU64(input.evidence.visibleDirectoryCount)),
     canonicalFrame(canonicalU64(input.evidence.materializedDirectoryCount)),

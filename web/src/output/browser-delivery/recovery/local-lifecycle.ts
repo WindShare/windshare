@@ -3,7 +3,6 @@ import { verifyBrowserReceiveOperationLease } from '../../browser/session-lease'
 import { openFSAFileCheckpointRepository, scanAllFSAFileCheckpoints } from '../../file-system-access/checkpoint-repository'
 import { requireDirectTreeIntent } from '../../file-system-access/settlement-proof'
 import { retireFSAMaterializationRecoveryMetadata } from '../../file-system-access/recovery-metadata-retirement'
-import { createMaterializationLedgerBinding } from '../../materialization-ledger/codec'
 import { decodeStoredReceiveOperation, operationRecordId, RECEIVE_RECORD_OPERATION } from '../../workspace/records'
 import { decodeStoredReceiveLifecycleState } from '../../workspace/state-codec'
 import type { ReceiveOperationRepository } from '../../workspace/repository'
@@ -70,12 +69,8 @@ async function retireTerminalDeliveryMetadata(
   const checkpoints = await openFSAFileCheckpointRepository(
     input.databaseName === undefined ? {} : { databaseName: input.databaseName }, intent, reservation)
   try {
-    const binding = await createMaterializationLedgerBinding({
-      operationId: intent.operationId, receiveIntentDigest: intent.digest,
-      materializationBindingDigest: reservation.digest, authorityRef: reservation.authorityRef,
-    })
     // The repository retains target ownership for unsettled child deliveries atomically.
-    await retireFSAMaterializationRecoveryMetadata(checkpoints, binding)
+    await retireFSAMaterializationRecoveryMetadata(checkpoints)
   } finally { checkpoints.close() }
 }
 

@@ -1,16 +1,19 @@
 import type { OutputDiagnosticsPorts } from '../../src/output/diagnostics'
 import {
   FILE_CHECKPOINT_COMMIT_CANDIDATE,
+  FILE_CHECKPOINT_COMMIT_PUBLISHED,
   FILE_CHECKPOINT_COMMIT_VERIFIED,
   FILE_CHECKPOINT_MATERIALIZER_FSA_TREE,
   deriveCheckpointLineageID,
   fileCheckpointIsComplete,
+  fileCheckpointIsFinalized,
   sameCheckpointLineageSpec,
   validateFileCheckpoint,
   validateFileCheckpointTransition,
   type FileCheckpointV2,
 } from '../../src/output/persistence/checkpoint'
 import {
+  RECOVERY_METADATA_RETIREMENT_BATCH_LIMIT,
   checkpointMatchesNamespace,
   finalFileCheckpointProof,
   resolveCheckpointLineage,
@@ -22,6 +25,7 @@ import {
   type FileCheckpointScan,
   type FinalFileCheckpointProof,
   type PersistentHandleRecord,
+  type RecoveryMetadataRetirementResult,
 } from '../../src/output/persistence/journal'
 import { durableCheckpointNamespaceIdentity } from '../../src/output/persistence/namespace'
 import type {
@@ -70,11 +74,6 @@ export class MemoryCheckpointRepository implements FileCheckpointJournal {
   readonly #candidates = new Map<string, FileCheckpointV2>()
   readonly #committed = new Map<string, FileCheckpointV2>()
   readonly #handles = new Map<string, PersistentHandleRecord<unknown>>()
-  readonly #finalProofs = new Map<string, NonNullable<Awaited<ReturnType<
-    SemanticPersistentOutputJournal['readMaterializationFinalProof']
-  >>>>()
-  readonly #directoryAdmissions = new Map<string, string>()
-  readonly #directoryFinalizations = new Map<string, string>()
   #failNextCommit = false
   #failCreatedFile = false
   #failFinal: 'before' | 'after' | undefined
@@ -155,8 +154,7 @@ export class MemoryCheckpointRepository implements FileCheckpointJournal {
   }
 
   async commitDurableCut(previous: FileCheckpointV2, durable: FileCheckpointV2): Promise<void> {
-    if (previous.fileRevision !== durable.fileRevision &&
-        [...this.#finalProofs.values()].some(proof => proof.recordId === previous.recordId)) {
+    if (previous.fileRevision !== durable.fileRevision && fileCheckpointIsFinalized(previous)) {
       throw new DOMException('metadata reuse cannot replace a historical delivery', 'InvalidStateError')
     }
     await this.#replaceCommitted(previous, durable)
@@ -171,6 +169,9 @@ export class MemoryCheckpointRepository implements FileCheckpointJournal {
   ) {
     const current = this.#committed.get(input.previous.recordId)
     if (current?.checksum === input.reset.checksum) return 'idempotent' as const
+    if (current !== undefined && fileCheckpointIsFinalized(current)) {
+      throw new DOMException('owned-file restart cannot replace a finalized delivery', 'InvalidStateError')
+    }
     if (current?.checksum !== input.previous.checksum ||
         this.#handles.get(input.expectedHandle.id)?.ownedObjectId !== input.previous.ownedObjectId) {
       throw new DOMException('owned-file restart authority changed', 'InvalidStateError')
@@ -189,22 +190,21 @@ export class MemoryCheckpointRepository implements FileCheckpointJournal {
       throw new Error('simulated pre-final-transaction crash')
     }
     const current = this.#committed.get(input.expectedCommittedCheckpoint.recordId)
-    const final = input.records.finalCheckpoint
-    const existingProof = this.#finalProofs.get(input.records.finalProof.proofId)
-    const idempotent = current?.checksum === final.checksum &&
-      existingProof?.proofDigest === input.records.finalProof.proofDigest
+    const final = input.finalCheckpoint
+    const idempotent = current?.checksum === final.checksum && fileCheckpointIsFinalized(final)
     if (!idempotent) {
       if (current?.checksum !== input.expectedCommittedCheckpoint.checksum) {
         throw new DOMException('final checkpoint predecessor changed', 'InvalidStateError')
       }
+      validateFileCheckpointTransition(input.expectedCommittedCheckpoint, final)
+      if (!fileCheckpointIsFinalized(final)) {
+        throw new TypeError('final commit requires a finalized checkpoint')
+      }
       this.#committed.set(final.recordId, final)
-      this.#finalProofs.set(input.records.finalProof.proofId, input.records.finalProof)
     }
     const receipt = Object.freeze({
       classification: idempotent ? 'idempotent' as const : 'insert' as const,
       finalCheckpoint: final,
-      finalProof: input.records.finalProof,
-      ledgerEntry: input.records.ledgerEntry,
     })
     if (this.#failFinal === 'after') {
       this.#failFinal = undefined
@@ -213,35 +213,29 @@ export class MemoryCheckpointRepository implements FileCheckpointJournal {
     return receipt
   }
 
-  async readMaterializationFinalProof(
-    _binding: Parameters<SemanticPersistentOutputJournal['readMaterializationFinalProof']>[0],
-    proofId: string,
-  ) {
-    return this.#finalProofs.get(proofId)
+  async countCheckpointCandidates(): Promise<bigint> {
+    return BigInt(this.#candidates.size)
   }
 
-  async appendDirectoryAdmission(
-    _binding: Parameters<SemanticPersistentOutputJournal['appendDirectoryAdmission']>[0],
-    entry: Parameters<SemanticPersistentOutputJournal['appendDirectoryAdmission']>[1],
-  ) {
-    const existing = this.#directoryAdmissions.get(entry.entryId)
-    if (existing !== undefined && existing !== entry.entryDigest) {
-      throw new DOMException('directory admission changed', 'ConstraintError')
+  async retireRecoveryMetadataBatch(
+    limit = RECOVERY_METADATA_RETIREMENT_BATCH_LIMIT,
+  ): Promise<RecoveryMetadataRetirementResult> {
+    let deleted = 0
+    for (const key of [...this.#candidates.keys()]) {
+      if (deleted >= limit) break
+      this.#candidates.delete(key)
+      deleted += 1
     }
-    this.#directoryAdmissions.set(entry.entryId, entry.entryDigest)
-    return existing === undefined ? 'insert' as const : 'idempotent' as const
-  }
-
-  async appendDirectoryFinalization(
-    _binding: Parameters<SemanticPersistentOutputJournal['appendDirectoryFinalization']>[0],
-    entry: Parameters<SemanticPersistentOutputJournal['appendDirectoryFinalization']>[1],
-  ) {
-    const existing = this.#directoryFinalizations.get(entry.entryId)
-    if (existing !== undefined && existing !== entry.entryDigest) {
-      throw new DOMException('directory finalization changed', 'ConstraintError')
+    for (const key of [...this.#committed.keys()]) {
+      if (deleted >= limit) break
+      this.#committed.delete(key)
+      deleted += 1
     }
-    this.#directoryFinalizations.set(entry.entryId, entry.entryDigest)
-    return existing === undefined ? 'insert' as const : 'idempotent' as const
+    const hasMore = this.#candidates.size > 0 || this.#committed.size > 0
+    return Object.freeze({
+      deletedRows: deleted,
+      state: hasMore ? 'more' as const : 'complete' as const,
+    })
   }
 
   failNextCreatedFileCommit(): void { this.#failCreatedFile = true }
@@ -315,7 +309,8 @@ export class MemoryCheckpointRepository implements FileCheckpointJournal {
     }
     validateFileCheckpointTransition(candidate, committed)
     if (candidate.commitState !== FILE_CHECKPOINT_COMMIT_CANDIDATE ||
-        committed.commitState !== FILE_CHECKPOINT_COMMIT_VERIFIED) {
+        (committed.commitState !== FILE_CHECKPOINT_COMMIT_VERIFIED &&
+         committed.commitState !== FILE_CHECKPOINT_COMMIT_PUBLISHED)) {
       throw new TypeError('memory repository commits only verified checkpoints')
     }
     const currentCandidate = this.#candidates.get(candidate.recordId)
@@ -332,7 +327,8 @@ export class MemoryCheckpointRepository implements FileCheckpointJournal {
   seedCommittedForTest(record: FileCheckpointV2): void {
     validateFileCheckpoint(record)
     if (!checkpointMatchesNamespace(record, this.binding) ||
-        record.commitState !== FILE_CHECKPOINT_COMMIT_VERIFIED) {
+        (record.commitState !== FILE_CHECKPOINT_COMMIT_VERIFIED &&
+         record.commitState !== FILE_CHECKPOINT_COMMIT_PUBLISHED)) {
       throw new TypeError('test checkpoint seed escaped its namespace')
     }
     this.#committed.set(record.recordId, record)

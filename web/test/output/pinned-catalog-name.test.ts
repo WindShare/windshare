@@ -8,9 +8,6 @@ import {
 } from '../../src/transfer/encoding/canonical'
 import { rawFileObjectId } from '../../src/output/origin-private/workspace-tree'
 import {
-  canonicalMaterializationPath, decodeMaterializationPath,
-} from '../../src/output/materialization-ledger/model'
-import {
   FILE_CHECKPOINT_COMMIT_VERIFIED, FILE_CHECKPOINT_MATERIALIZER_ORIGIN_PRIVATE,
   FILE_CHECKPOINT_PHASE_ACTIVE, newFileCheckpointV2,
 } from '../../src/output/persistence/checkpoint'
@@ -52,7 +49,6 @@ describe('frozen catalog names throughout output ownership', () => {
       const revision = { fileId: identity(4), fileRevision: identity(5), exactSize: 12n }
       const ownedObjectId = await rawFileObjectId(identity(1), [name], revision)
       expect(ownedObjectId).not.toBe(await rawFileObjectId(identity(1), [COMPOSED_NAME], revision))
-      expect(decodeMaterializationPath(canonicalMaterializationPath([name]))).toEqual([name])
 
       const checkpoint = newFileCheckpointV2({
         operationId: identity(1), receiveIntentDigest: identity(2, 32),
@@ -157,18 +153,12 @@ describe('frozen catalog names throughout output ownership', () => {
       expect(() => encodeCatalogName(name)).toThrow()
       expect(() => canonicalPath([name])).toThrow()
       expect(() => encodeTaskCheckpoint(zipCheckpoint(name))).toThrow()
-      const encoded = concatCanonicalBytes([canonicalU64(1n), canonicalFrame(bytes(name))])
-      // TextEncoder replaces an unpaired surrogate; malformed wire is covered separately.
-      if (name !== '\ud800') expect(() => decodeMaterializationPath(encoded)).toThrow()
     },
   )
 
-  it('retains root paths, rejects malformed UTF-8 and leaves generic NFC strict', () => {
-    expect(decodeMaterializationPath(canonicalMaterializationPath([]))).toEqual([])
+  it('retains root paths and leaves generic NFC strict', () => {
     const rootSelection = { ...zipCheckpoint(NAME), selectedPaths: [[]] }
     expect(JSON.parse(new TextDecoder().decode(encodeTaskCheckpoint(rootSelection))).selectedPaths).toEqual([[]])
-    const malformed = concatCanonicalBytes([canonicalU64(1n), canonicalFrame(Uint8Array.of(0xed, 0xa0, 0x80))])
-    expect(() => decodeMaterializationPath(malformed)).toThrow()
     expect(() => canonicalText('e\u0301')).toThrow()
   })
 })

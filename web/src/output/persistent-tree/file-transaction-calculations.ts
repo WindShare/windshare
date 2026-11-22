@@ -1,6 +1,8 @@
 import type { PerformanceCheckpointCost } from '../diagnostics'
 import {
+  FILE_CHECKPOINT_COMMIT_PUBLISHED,
   FILE_CHECKPOINT_COMMIT_VERIFIED,
+  FILE_CHECKPOINT_PHASE_PUBLISHED,
   newFileCheckpointV2,
   type FileCheckpointPhase,
   type FileCheckpointV2,
@@ -21,7 +23,9 @@ export function nextCheckpoint(
       (rangesChanged || forceCheckpointGeneration ? 1n : 0n),
     verifiedRanges: ranges,
     phase,
-    commitState: FILE_CHECKPOINT_COMMIT_VERIFIED,
+    commitState: phase === FILE_CHECKPOINT_PHASE_PUBLISHED
+      ? FILE_CHECKPOINT_COMMIT_PUBLISHED
+      : FILE_CHECKPOINT_COMMIT_VERIFIED,
   })
 }
 

@@ -1,7 +1,7 @@
 import { compareRevisionMetadata, type RevisionSourceEvidence } from '../../content/revision-comparison'
 import { newFileCheckpointV2, validateFileCheckpointTransition } from './checkpoint-codec'
 import { FILE_CHECKPOINT_COMMIT_CANDIDATE } from './checkpoint-lifecycle'
-import { fileCheckpointIsComplete, type FileCheckpointV2 } from './checkpoint-model'
+import { fileCheckpointIsComplete, fileCheckpointIsFinalized, type FileCheckpointV2 } from './checkpoint-model'
 import type { FileCheckpointJournal, SemanticFileCheckpointJournal } from './journal'
 import { persistedSourceAdmissionError } from './source-admission'
 
@@ -22,6 +22,9 @@ export async function admitCheckpointMetadataReuse(
   // checkpoint-only journal cannot distinguish flushed bytes from a final delivery.
   if (semantic === undefined && previous.checkpointGeneration > 0n && fileCheckpointIsComplete(previous)) {
     throw persistedSourceAdmissionError({ kind: 'reuse-state-blocked' })
+  }
+  if (fileCheckpointIsFinalized(previous)) {
+    throw new DOMException('metadata reuse cannot replace a historical delivery', 'InvalidStateError')
   }
   const next = newFileCheckpointV2({
     ...previous, fileRevision: current.fileRevision, reusedFrom: previous.fileRevision,

@@ -1,9 +1,9 @@
 import { sourceMetadataFields } from '../../content/revision-comparison'
 import { snapshotSourceAuthenticationPath, snapshotMaterializationRootRelativePath } from '../../transfer/job/coordinate/direct-tree'
 import {
-  FILE_CHECKPOINT_COMMIT_VERIFIED, FILE_CHECKPOINT_ID_BYTES, FILE_CHECKPOINT_MAX_FILE_SIZE,
-  FILE_ID_BYTES, FILE_REVISION_BYTES, fileCheckpointDigest, fileCheckpointIsComplete,
-  newFileCheckpointV2, validateFileCheckpoint, type FileCheckpointV2,
+  FILE_CHECKPOINT_COMMIT_PUBLISHED, FILE_CHECKPOINT_COMMIT_VERIFIED, FILE_CHECKPOINT_ID_BYTES,
+  FILE_CHECKPOINT_MAX_FILE_SIZE, FILE_ID_BYTES, FILE_REVISION_BYTES, fileCheckpointDigest,
+  fileCheckpointIsComplete, newFileCheckpointV2, validateFileCheckpoint, type FileCheckpointV2,
 } from '../persistence/checkpoint'
 import { sameDurableCheckpointNamespace, type DurableCheckpointNamespaceIdentity } from '../persistence/namespace'
 import { snapshotIdentity } from '../../transfer/encoding/canonical'
@@ -213,11 +213,13 @@ function snapshotCheckpoint(
   complete: boolean,
 ): FileCheckpointV2 {
   validateFileCheckpoint(input)
+  const commitValid = input.commitState === FILE_CHECKPOINT_COMMIT_VERIFIED ||
+    input.commitState === FILE_CHECKPOINT_COMMIT_PUBLISHED
   if (!sameDurableCheckpointNamespace(namespace, input) || input.fileId !== source.fileId ||
       input.fileRevision !== source.fileRevision || input.exactSize !== source.exactSize ||
       input.sourceMetadata !== source.sourceMetadata ||
       JSON.stringify(input.canonicalPath) !== JSON.stringify(checkpointPath) ||
-      input.commitState !== FILE_CHECKPOINT_COMMIT_VERIFIED || (complete && !fileCheckpointIsComplete(input))) {
+      !commitValid || (complete && !fileCheckpointIsComplete(input))) {
     throw new TypeError('Browser delivery checkpoint does not prove its bound source and storage')
   }
   return newFileCheckpointV2(input)

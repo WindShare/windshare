@@ -1,5 +1,5 @@
 import { INDEXEDDB_BROWSER_DELIVERY_FILE_STORE, INDEXEDDB_BROWSER_SAVE_POLICY_STORE,
-  INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE, INDEXEDDB_FILE_FINAL_PROOF_STORE } from '../../browser/indexeddb-database'
+  INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE } from '../../browser/indexeddb-database'
 import type { IndexedDbFileCommitHost, IndexedDbFileCommitParticipant } from '../../browser/indexeddb/file-commit-participants'
 import type { FileCheckpointV2 } from '../../persistence/checkpoint'
 import type { PersistentFileTransactionPort } from '../../persistent-tree/contracts'
@@ -37,7 +37,7 @@ export async function openDirectDeliveryFile(
 function directDeliveryParticipant(delivery: BrowserDirectFileDelivery): IndexedDbFileCommitParticipant {
   return {
     stores: [INDEXEDDB_BROWSER_DELIVERY_FILE_STORE, INDEXEDDB_BROWSER_SAVE_POLICY_STORE,
-      INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE, INDEXEDDB_FILE_FINAL_PROOF_STORE],
+      INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE],
     apply: async (transaction, commit) => {
       const record = delivery.currentRecord()
       let next: BrowserDeliveryRecordV1
@@ -46,7 +46,7 @@ function directDeliveryParticipant(delivery: BrowserDirectFileDelivery): Indexed
         requireDirectCheckpoint(record, commit.checkpoint, policy.target)
         next = await createBrowserDeliveryFile(transaction, policy, record)
       } else {
-        next = await commitDirectBrowserDelivery(transaction, record, commit.checkpoint, commit.finalProof)
+        next = await commitDirectBrowserDelivery(transaction, record, commit.checkpoint)
       }
       return () => delivery.committed(next)
     },

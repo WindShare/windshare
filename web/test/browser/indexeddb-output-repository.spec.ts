@@ -23,24 +23,19 @@ test('semantic output repository is atomic, indexed, concurrent, and genuinely p
     idempotentRetry: 'idempotent',
     indexedClassification: 'exact',
     operationWideGetAllCalls: 0,
-    firstPageEntries: 128,
-    secondPageEntries: 10,
-    stableDirectoryRetry: 'idempotent',
-    sealPages: '2',
-    candidateSealRejected: true,
-    pathConflictRejected: true,
-    retiredRows: expect.any(Number),
+    candidateCountBeforePending: '0',
+    candidateCountWithPending: '1',
+    retiredRows: 17,
   })
-  expect(result.retiredRows).toBeGreaterThan(138)
 })
 
-test('faults after every final write roll back the checkpoint/proof/entry unit', async ({ page }) => {
+test('faults after final checkpoint write roll back cleanly', async ({ page }) => {
   const result = await page.evaluate(async (path) => {
     const probe = await import(path) as typeof import('./indexeddb-output-repository-probe')
     return probe.probeIndexedDbFinalFaultCuts(`output-fault-${crypto.randomUUID()}`)
   }, PROBE_PATH)
 
-  expect(result).toEqual(['final-checkpoint', 'final-proof', 'final-ledger-entry'])
+  expect(result).toEqual(['final-checkpoint'])
 })
 
 test('final commit rejects candidates, stale predecessors, and foreign handles', async ({ page }) => {
@@ -79,7 +74,7 @@ test('incompatible metadata resets without touching files or current records and
 
   expect(result).toEqual({
     oldRowsRemaining: 0,
-    storeCount: 25,
+    storeCount: 21,
     exactIndexesPresent: true,
     publishedSentinelBytes: [91, 92, 93, 94],
     blockedUpgradeRejected: true,

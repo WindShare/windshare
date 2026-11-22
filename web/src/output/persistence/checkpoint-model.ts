@@ -12,6 +12,7 @@ import {
   FILE_CHECKPOINT_PHASE_ACTIVE,
   FILE_CHECKPOINT_PHASE_PAUSED,
   FILE_CHECKPOINT_PHASE_PUBLISHED,
+  FILE_CHECKPOINT_PHASE_PUBLISHING,
   FileCheckpointError,
   checkpointCommitState,
   checkpointLifecycleClaim,
@@ -261,8 +262,7 @@ export function validateCheckpointTransitionSemantics(
     throw new FileCheckpointError('generation', 'checkpoint ranges changed without a generation')
   }
   if (sameCheckpointGeneration && previous.commitState === FILE_CHECKPOINT_COMMIT_CANDIDATE) {
-    if (next.commitState !== FILE_CHECKPOINT_COMMIT_VERIFIED ||
-        next.stateGeneration !== previous.stateGeneration || next.phase !== previous.phase) {
+    if (!validCandidatePromotion(previous, next)) {
       throw new FileCheckpointError('generation', 'candidate promotion is ambiguous')
     }
     return
@@ -274,10 +274,28 @@ export function validateCheckpointTransitionSemantics(
   }
 }
 
+function validCandidatePromotion(previous: FileCheckpointV2, next: FileCheckpointV2): boolean {
+  if (next.stateGeneration !== previous.stateGeneration) return false
+  if (next.commitState === FILE_CHECKPOINT_COMMIT_VERIFIED) return next.phase === previous.phase
+  return previous.phase === FILE_CHECKPOINT_PHASE_PUBLISHING &&
+    next.phase === FILE_CHECKPOINT_PHASE_PUBLISHED &&
+    next.commitState === FILE_CHECKPOINT_COMMIT_PUBLISHED
+}
+
 export function fileCheckpointIsComplete(record: FileCheckpointV2): boolean {
   if (record.commitState !== FILE_CHECKPOINT_COMMIT_VERIFIED &&
       record.commitState !== FILE_CHECKPOINT_COMMIT_PUBLISHED) return false
   return contentIsComplete(record.exactSize, record.verifiedRanges)
+}
+
+/**
+ * A finalized file delivery is recorded directly on FileCheckpointV2 via its
+ * immutable PUBLISHED lifecycle state rather than in an auxiliary proof store.
+ */
+export function fileCheckpointIsFinalized(record: FileCheckpointV2): boolean {
+  return record.phase === FILE_CHECKPOINT_PHASE_PUBLISHED &&
+    record.commitState === FILE_CHECKPOINT_COMMIT_PUBLISHED &&
+    fileCheckpointIsComplete(record)
 }
 
 export function identityBytes(

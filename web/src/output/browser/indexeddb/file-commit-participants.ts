@@ -1,5 +1,4 @@
 import type { FileCheckpointV2 } from '../../persistence/checkpoint'
-import type { MaterializationFinalFileProofV1 } from '../../materialization-ledger/model'
 
 export type IndexedDbFileCommit = Readonly<{
   readonly kind: 'initial-claim'
@@ -7,7 +6,6 @@ export type IndexedDbFileCommit = Readonly<{
 }> | Readonly<{
   readonly kind: 'final-file'
   readonly checkpoint: FileCheckpointV2
-  readonly finalProof: MaterializationFinalFileProofV1
 }>
 
 /** Participants share the checkpoint's transaction; notifications run only after its commit. */

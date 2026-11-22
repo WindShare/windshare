@@ -2,15 +2,15 @@ import {
   INDEXEDDB_BROWSER_DELIVERY_FILE_STORE, INDEXEDDB_BROWSER_SAVE_POLICY_STORE,
   INDEXEDDB_BY_OPERATION_FILE_INDEX, requestResult,
 } from '../../browser/indexeddb-database'
-import type { MaterializationLedgerBindingV1 } from '../../materialization-ledger/model'
+import type { CheckpointNamespaceBinding } from '../../persistence/journal'
 import type { BrowserDeliveryRecordV1, BrowserSavePolicyV1 } from '../model'
 import { validateBrowserSavePolicy } from '../policy'
 import { validateBrowserDeliveryRecord } from '../records'
 
-/** Child local saves still depend on the target namespace, including ancestor ownership and final proofs. */
+/** Child local saves still depend on the target namespace, including ancestor ownership and checkpoints. */
 export async function browserDeliveryRetainsTargetMetadata(
   transaction: IDBTransaction,
-  binding: MaterializationLedgerBindingV1,
+  binding: CheckpointNamespaceBinding,
 ): Promise<boolean> {
   const raw = await requestResult<BrowserSavePolicyV1>(
     transaction.objectStore(INDEXEDDB_BROWSER_SAVE_POLICY_STORE).get(binding.operationId))

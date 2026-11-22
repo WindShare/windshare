@@ -1,7 +1,4 @@
-import {
-  MATERIALIZATION_LEDGER_PAGE_ENTRY_LIMIT,
-  type MaterializationLedgerBindingV1,
-} from '../materialization-ledger/model'
+import { RECOVERY_METADATA_RETIREMENT_BATCH_LIMIT } from '../persistence/journal'
 import type {
   FSAFileCheckpointRepository,
   FSASemanticOutputRepository,
@@ -9,20 +6,18 @@ import type {
 
 export async function retireFSAMaterializationRecoveryMetadata(
   checkpoints: FSAFileCheckpointRepository,
-  binding: MaterializationLedgerBindingV1,
 ): Promise<void> {
   const candidate = checkpoints as Partial<FSASemanticOutputRepository>
-  if (typeof candidate.retireMaterializationLedgerBatch !== 'function') {
+  if (typeof candidate.retireRecoveryMetadataBatch !== 'function') {
     throw new DOMException(
-      'DirectTree recovery requires semantic ledger repository authority',
+      'DirectTree recovery requires semantic checkpoint repository authority',
       'InvalidStateError',
     )
   }
   const repository = candidate as FSASemanticOutputRepository
   for (;;) {
-    const result = await repository.retireMaterializationLedgerBatch(
-      binding,
-      MATERIALIZATION_LEDGER_PAGE_ENTRY_LIMIT,
+    const result = await repository.retireRecoveryMetadataBatch(
+      RECOVERY_METADATA_RETIREMENT_BATCH_LIMIT,
     )
     if (result.state === 'complete' || result.state === 'retained-for-local-delivery') return
     if (result.deletedRows === 0) {

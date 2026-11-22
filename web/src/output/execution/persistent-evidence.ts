@@ -34,9 +34,22 @@ type WorkspaceOriginalIntent = ReceiveIntent & Readonly<{
   artifact: OriginalFileArtifact
 }>
 
+export interface PersistentDirectTreeDirectoryEvidence {
+  readonly materializedCount: bigint
+  readonly visibleCount: bigint
+  readonly finalizedCount: bigint
+  readonly isolatedCount: bigint
+  readonly rootDirectory?: Readonly<{
+    readonly directoryId: string
+    readonly relativePath: readonly string[]
+    readonly finalized: boolean
+  }>
+}
+
 export interface PersistentDirectTreeMaterializationEvidence {
-  readonly kind: 'direct-tree-ledger'
+  readonly kind: 'direct-tree-checkpoints'
   readonly materializationBindingDigest: string
+  readonly directories: PersistentDirectTreeDirectoryEvidence
 }
 
 export interface PersistentWorkspaceMaterializationEvidence {

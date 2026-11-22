@@ -15,7 +15,7 @@ import {
 } from '../diagnostics'
 import {
   FILE_CHECKPOINT_COMMIT_VERIFIED,
-  fileCheckpointIsComplete,
+  fileCheckpointIsFinalized,
   identityBytes,
   newFileCheckpointV2,
   type FileCheckpointV2,
@@ -24,13 +24,9 @@ import type {
   CheckpointLineageDecision,
   InitialCheckpointCASResult,
 } from '../persistence/journal'
-import { createMaterializationLedgerBinding } from '../materialization-ledger/codec'
-import type { MaterializationLedgerBindingV1 } from '../materialization-ledger/model'
 import type {
   OpenedFileRevision,
   PersistentDirectoryMaterialization,
-  PersistentDirectoryLedgerMaterialization,
-  PersistentDirectoryLedgerRequest,
   PersistentFileRequest,
   PersistentMaterializationPort,
   PersistentTreeSessionOptions,
@@ -52,10 +48,8 @@ import {
   preparePersistentFileRecovery,
 } from './recovery'
 import {
-  hasMatchingFinalProof,
   isPristinePreObjectCandidate,
   openPersistentSelectedFile,
-  PersistentDirectoryLedgerCoordinator,
   resolveCompletedPersistentRevision,
 } from './materialization-authority'
 import {
@@ -79,8 +73,6 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
   readonly #tree: PersistentTreeSessionOptions['tree']
   readonly #checkpoints: RecoverableFileCheckpointJournal
   readonly #semantic: SemanticPersistentOutputJournal | undefined
-  readonly #ledgerBinding: Promise<MaterializationLedgerBindingV1> | undefined
-  readonly #directoryLedger: PersistentDirectoryLedgerCoordinator | undefined
   readonly #diagnostics: OutputDiagnosticsPorts | undefined
   readonly #stageAuthority: PersistentTreeSessionOptions['stageAuthority']
   readonly #legacyTrace: PersistentTreeSessionOptions['trace']
@@ -108,22 +100,6 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
           this.#semantic,
           options.maximumConcurrentInitialClaimInspections ??
             DEFAULT_MAXIMUM_CONCURRENT_INITIAL_CLAIM_INSPECTIONS,
-          options.diagnostics?.performance,
-        )
-    this.#ledgerBinding = this.#semantic === undefined
-      ? undefined
-      : createMaterializationLedgerBinding({
-          operationId: options.checkpoints.binding.operationId,
-          receiveIntentDigest: options.checkpoints.binding.receiveIntentDigest,
-          materializationBindingDigest: options.checkpoints.binding.materializationBindingDigest,
-          authorityRef: options.checkpoints.binding.authorityRef,
-        })
-    this.#directoryLedger = this.#semantic === undefined || this.#ledgerBinding === undefined
-      ? undefined
-        : new PersistentDirectoryLedgerCoordinator(
-          options.tree,
-          this.#semantic,
-          this.#ledgerBinding,
           options.diagnostics?.performance,
         )
     this.#diagnostics = options.diagnostics
@@ -273,9 +249,7 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
           checkpoints: this.#checkpoints, semantic: this.#semantic,
         })
         if (recovered.fileRevision !== revision.fileRevision &&
-            this.#semantic !== undefined && this.#ledgerBinding !== undefined &&
-            fileCheckpointIsComplete(recovered) &&
-            await hasMatchingFinalProof(this.#semantic, await this.#ledgerBinding, recovered)) {
+            fileCheckpointIsFinalized(recovered)) {
           throw persistedSourceAdmissionError({ kind: 'reuse-state-blocked' })
         }
         const committed = await admitCheckpointMetadataReuse(recovered, revision, this.#checkpoints, this.#semantic)
@@ -293,7 +267,6 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
           checkpoint: committed,
           checkpoints: this.#checkpoints,
           ...(this.#semantic === undefined ? {} : { semantic: this.#semantic }),
-          ...(this.#ledgerBinding === undefined ? {} : { ledgerBinding: await this.#ledgerBinding }),
           materializationRelativePath,
           ...(request.automaticCheckpointAdmission === undefined
             ? {}
@@ -352,8 +325,6 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
     try {
       return await resolveCompletedPersistentRevision({
         fileId, expectedSize: request.expectedSize, path, checkpoints: this.#checkpoints,
-        ...(this.#semantic === undefined ? {} : { semantic: this.#semantic }),
-        ...(this.#ledgerBinding === undefined ? {} : { ledgerBinding: this.#ledgerBinding }),
       })
     } catch (error) {
       this.#recordCheckpointFailure(error)
@@ -391,31 +362,6 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
     } catch (error) {
       admission.leave()
       throw error
-    }
-  }
-
-  async materializeDirectory(
-    request: PersistentDirectoryLedgerRequest,
-  ): Promise<PersistentDirectoryLedgerMaterialization> {
-    const admission = this.#mutationAdmissions.enter()
-    try {
-      this.#requireActivated()
-      return await this.#requireDirectoryLedger().materialize(request)
-    } finally {
-      admission.leave()
-    }
-  }
-
-  async finalizeDirectory(
-    ledgerAdmission: PersistentDirectoryLedgerMaterialization['ledgerAdmission'],
-    outcome: Parameters<PersistentDirectoryLedgerCoordinator['finalize']>[1],
-  ): ReturnType<PersistentDirectoryLedgerCoordinator['finalize']> {
-    const admission = this.#mutationAdmissions.enter()
-    try {
-      this.#requireActivated()
-      return this.#requireDirectoryLedger().finalize(ledgerAdmission, outcome)
-    } finally {
-      admission.leave()
     }
   }
 
@@ -638,13 +584,6 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
     if (!this.#activated) {
       throw new DOMException('Persistent tree session is not activated', 'InvalidStateError')
     }
-  }
-
-  #requireDirectoryLedger(): PersistentDirectoryLedgerCoordinator {
-    if (this.#directoryLedger === undefined) {
-      throw new DOMException('DirectTree materialization requires durable ledger authority', 'InvalidStateError')
-    }
-    return this.#directoryLedger
   }
 
   #reportLegacyNeedsAttention(): void {

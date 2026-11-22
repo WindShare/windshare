@@ -15,7 +15,6 @@ import type {
   PersistentHandleInventoryRepository,
   SemanticFileCheckpointJournal,
 } from '../persistence/journal'
-import type { MaterializationLedgerJournal } from '../materialization-ledger/journal'
 import { validateFileCheckpointPage } from '../persistence/journal'
 import { durableCheckpointNamespaceIdentity } from '../persistence/namespace'
 import type { FileCheckpointRecoveryRepository } from '../persistent-tree/recovery'
@@ -29,7 +28,7 @@ extends FileCheckpointJournal, PersistentHandleInventoryRepository,
 export interface FSASemanticOutputRepository extends
   FSAFileCheckpointRepository,
   SemanticFileCheckpointJournal<FileSystemFileHandle>,
-  MaterializationLedgerJournal, IndexedDbFileCommitHost {}
+  IndexedDbFileCommitHost {}
 
 export type FSAFileCheckpointRepositoryFactory = (
   binding: FileCheckpointJournal['binding'],

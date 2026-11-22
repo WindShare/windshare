@@ -1,7 +1,6 @@
 import type { ReceiveIntent } from '../../transfer/intent'
 import { IndexedDbCompatibleNameLedger } from '../browser/indexeddb-compatible-name-ledger'
 import { emitOutputTrace, outputTraceEvent, type OutputTraceSource } from '../diagnostics'
-import { createMaterializationLedgerBinding } from '../materialization-ledger/codec'
 import { TargetOwnershipUnknownError } from '../persistent-tree/errors'
 import {
   canonicalFrame, canonicalIdentity, canonicalRecord, canonicalU8,
@@ -83,13 +82,7 @@ export async function cleanupReopenedPublishedFileSystemAccessOutput(
         verifyPublishedRepair(header, intent, input.lifecycle)
         const checkpoints = await openFSAFileCheckpointRepository(input, intent, reservation)
         try {
-          const binding = await createMaterializationLedgerBinding({
-            operationId: intent.operationId,
-            receiveIntentDigest: intent.digest,
-            materializationBindingDigest: intent.plan.reservation.digest,
-            authorityRef: intent.plan.reservation.authorityRef,
-          })
-          await retireFSAMaterializationRecoveryMetadata(checkpoints, binding)
+          await retireFSAMaterializationRecoveryMetadata(checkpoints)
         } finally {
           checkpoints.close()
         }

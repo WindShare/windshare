@@ -5,8 +5,9 @@ import { createBrowserDeliveryRecord } from '../../src/output/browser-delivery/r
 import { advanceBrowserDeliveryRecord } from '../../src/output/browser-delivery/lifecycle'
 import { type BrowserSavePolicyV1 } from '../../src/output/browser-delivery/model'
 import {
-  FILE_CHECKPOINT_COMMIT_VERIFIED, FILE_CHECKPOINT_MATERIALIZER_FSA_TREE,
-  FILE_CHECKPOINT_MATERIALIZER_ORIGIN_PRIVATE, FILE_CHECKPOINT_PHASE_ACTIVE,
+  FILE_CHECKPOINT_COMMIT_PUBLISHED, FILE_CHECKPOINT_COMMIT_VERIFIED,
+  FILE_CHECKPOINT_MATERIALIZER_FSA_TREE, FILE_CHECKPOINT_MATERIALIZER_ORIGIN_PRIVATE,
+  FILE_CHECKPOINT_PHASE_ACTIVE, FILE_CHECKPOINT_PHASE_PUBLISHED,
   newFileCheckpointV2, type FileCheckpointV2,
 } from '../../src/output/persistence/checkpoint'
 
@@ -49,14 +50,17 @@ export function deliveryFixture(preference: 'automatic' | 'direct' = 'automatic'
   const initial = createBrowserDeliveryRecord({
     policy, source, materializationRelativePath: source.canonicalPath, placement: preference === 'direct' ? 'direct' : 'staged', placementReason: 'fixture',
   })
-  const checkpoint = (placement: 'direct' | 'staged', end = source.exactSize): FileCheckpointV2 =>
-    newFileCheckpointV2({
+  const checkpoint = (placement: 'direct' | 'staged', end = source.exactSize): FileCheckpointV2 => {
+    const finalized = end === source.exactSize
+    return newFileCheckpointV2({
       ...(placement === 'direct' ? policy.target : policy.staging!),
       ...source, canonicalPath: placement === 'staged' ? [source.fileId] : source.canonicalPath, ownedObjectId: deliveryIdentity(placement === 'direct' ? 11 : 12),
       stateGeneration: 1n, checkpointGeneration: 1n,
       verifiedRanges: end === 0n ? [] : [{ start: 0n, end }],
-      phase: FILE_CHECKPOINT_PHASE_ACTIVE, commitState: FILE_CHECKPOINT_COMMIT_VERIFIED,
+      phase: finalized ? FILE_CHECKPOINT_PHASE_PUBLISHED : FILE_CHECKPOINT_PHASE_ACTIVE,
+      commitState: finalized ? FILE_CHECKPOINT_COMMIT_PUBLISHED : FILE_CHECKPOINT_COMMIT_VERIFIED,
     })
+  }
   const target = checkpoint('direct')
   const stage = preference === 'direct' ? undefined : checkpoint('staged')
   const advance = (previous: typeof initial, state: typeof initial.state) =>

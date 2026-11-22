@@ -1,4 +1,4 @@
-export const OUTPUT_DATABASE_VERSION = 13
+export const OUTPUT_DATABASE_VERSION = 14
 export const CHECKPOINT_DATABASE_VERSION = OUTPUT_DATABASE_VERSION
 export const DEFAULT_OUTPUT_DATABASE_NAME = 'windshare-output-checkpoints'
 export const DEFAULT_OUTPUT_CHECKPOINT_DATABASE_NAME = DEFAULT_OUTPUT_DATABASE_NAME
@@ -18,12 +18,8 @@ export const INDEXEDDB_DIRECT_ZIP_CANDIDATE_STORE = 'direct-zip-candidates-v1'
 export const INDEXEDDB_DIRECT_ZIP_LAYOUT_PAGE_STORE = 'direct-zip-layout-pages-v1'
 export const INDEXEDDB_DIRECT_ZIP_CENTRAL_PAGE_STORE = 'direct-zip-central-pages-v1'
 export const INDEXEDDB_DIRECT_ZIP_EPOCH_PAGE_STORE = 'direct-zip-epoch-pages-v1'
-export const INDEXEDDB_FILE_FINAL_PROOF_STORE = 'file-final-proof-v1'
 export const INDEXEDDB_BROWSER_SAVE_POLICY_STORE = 'browser-save-policy-v1'
 export const INDEXEDDB_BROWSER_DELIVERY_FILE_STORE = 'browser-file-delivery-v1'
-export const INDEXEDDB_MATERIALIZATION_LEDGER_ENTRY_STORE = 'materialization-ledger-v1-entries'
-export const INDEXEDDB_MATERIALIZATION_LEDGER_PAGE_STORE = 'materialization-ledger-v1-pages'
-export const INDEXEDDB_MATERIALIZATION_LEDGER_SEAL_STORE = 'materialization-ledger-v1-seals'
 
 export const INDEXEDDB_BY_OPERATION_INDEX = 'by-operation'
 export const INDEXEDDB_BY_OPERATION_FILE_INDEX = 'by-operation-file'
@@ -38,10 +34,6 @@ export const INDEXEDDB_BY_OPERATION_LINEAGE_INDEX = 'by-operation-lineage'
 export const INDEXEDDB_BY_OPERATION_OWNED_OBJECT_INDEX = 'by-operation-owned-object'
 export const INDEXEDDB_BY_OPERATION_RECORD_INDEX = 'by-operation-record'
 export const INDEXEDDB_BY_OPERATION_FILE_RECORD_INDEX = 'by-operation-file-record'
-export const INDEXEDDB_BY_OPERATION_PATH_ORDER_INDEX = 'by-operation-path-order'
-export const INDEXEDDB_BY_OPERATION_SEAL_PAGE_INDEX = 'by-operation-seal-page'
-export const INDEXEDDB_BY_OPERATION_RECORD_PROOF_INDEX = 'by-operation-record-proof'
-export const INDEXEDDB_BY_OPERATION_SEAL_SEQUENCE_INDEX = 'by-operation-seal-sequence'
 
 export const INDEXEDDB_OPFS_TASK_STORE = 'opfs-task-checkpoints-v1'
 export const INDEXEDDB_OPFS_ENTRY_STORE = 'opfs-task-entries-v1'
@@ -128,22 +120,6 @@ export const INDEXEDDB_OUTPUT_STORE_SCHEMAS: readonly IndexedDbStoreSchema[] = O
   storeSchema(INDEXEDDB_DIRECT_ZIP_EPOCH_PAGE_STORE, 'id', [
     indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),
     indexSchema(INDEXEDDB_BY_OPERATION_CHAIN_PAGE_INDEX, ['operationId', 'chainId', 'pageOrdinal']),
-  ]),
-  storeSchema(INDEXEDDB_FILE_FINAL_PROOF_STORE, 'proofId', [
-    indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),
-    indexSchema(INDEXEDDB_BY_OPERATION_RECORD_PROOF_INDEX, ['operationId', 'recordId'], true),
-  ]),
-  storeSchema(INDEXEDDB_MATERIALIZATION_LEDGER_ENTRY_STORE, 'entryId', [
-    indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),
-    indexSchema(INDEXEDDB_BY_OPERATION_PATH_ORDER_INDEX, ['operationId', 'pathKey', 'entryOrder'], true),
-  ]),
-  storeSchema(INDEXEDDB_MATERIALIZATION_LEDGER_PAGE_STORE, 'pageId', [
-    indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),
-    indexSchema(INDEXEDDB_BY_OPERATION_SEAL_PAGE_INDEX, ['operationId', 'sealId', 'pageOrdinal'], true),
-  ]),
-  storeSchema(INDEXEDDB_MATERIALIZATION_LEDGER_SEAL_STORE, 'sealId', [
-    indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),
-    indexSchema(INDEXEDDB_BY_OPERATION_SEAL_SEQUENCE_INDEX, ['operationId', 'sealSequence'], true),
   ]),
   storeSchema(INDEXEDDB_OPFS_TASK_STORE, 'id', []),
   storeSchema(INDEXEDDB_OPFS_ENTRY_STORE, 'id', [

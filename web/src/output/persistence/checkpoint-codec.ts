@@ -1,6 +1,7 @@
 import { sourceMetadataFields } from '../../content/revision-comparison'
 import { encodeBase64Url } from '../../crypto/bytes'
 import {
+  FILE_CHECKPOINT_COMMIT_PUBLISHED,
   FILE_CHECKPOINT_COMMIT_VERIFIED,
   FileCheckpointError,
 } from './checkpoint-lifecycle'
@@ -141,7 +142,8 @@ export function selectVerifiedCheckpoint(
   let selected: FileCheckpointV2 | undefined
   for (const record of records) {
     validateFileCheckpoint(record)
-    if (record.commitState !== FILE_CHECKPOINT_COMMIT_VERIFIED) continue
+    if (record.commitState !== FILE_CHECKPOINT_COMMIT_VERIFIED &&
+        record.commitState !== FILE_CHECKPOINT_COMMIT_PUBLISHED) continue
     if (selected === undefined) {
       selected = record
       continue

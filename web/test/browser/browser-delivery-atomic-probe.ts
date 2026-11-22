@@ -2,7 +2,7 @@ import { openBrowserFolderDelivery } from '../../src/output/browser-delivery/ass
 import { IndexedDbBrowserDeliveryRepository } from '../../src/output/browser-delivery/indexeddb'
 import { IndexedDbReceiveOperationRepository } from '../../src/output/browser/indexeddb-repository'
 import { INDEXEDDB_BROWSER_DELIVERY_FILE_STORE, INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE,
-  INDEXEDDB_FILE_FINAL_PROOF_STORE, openIndexedDbCheckpointDatabase, requestResult } from '../../src/output/browser/indexeddb-database'
+  INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE, openIndexedDbCheckpointDatabase, requestResult } from '../../src/output/browser/indexeddb-database'
 import { reopenFileSystemAccessOutput, type FileSystemAccessOutputSession } from '../../src/output/file-system-access/session'
 import type { ReceiveIntent } from '../../src/transfer/intent'
 import { bindTask, resultRootArtifact, type FsaNamespaceFixture } from './fsa-namespace-atomicity-harness'
@@ -67,7 +67,7 @@ export async function prepareAtomicDirect(fixture: FsaNamespaceFixture, preferen
 
 export async function finishAtomicDirect(input: {
   fixture: FsaNamespaceFixture; preference: 'direct' | 'automatic'; intent: ReceiveIntent
-}, failure: 'delivery' | 'target-proof') {
+}, failure: 'delivery' | 'checkpoint') {
   const { fixture } = input
   const operations = await IndexedDbReceiveOperationRepository.open(fixture.databaseName)
   const target = await reopenFileSystemAccessOutput({
@@ -77,7 +77,6 @@ export async function finishAtomicDirect(input: {
   const journal = await IndexedDbBrowserDeliveryRepository.open({ databaseName: fixture.databaseName })
   const database = await openIndexedDbCheckpointDatabase(fixture.databaseName)
   const originalPut = IDBObjectStore.prototype.put
-  const originalAdd = IDBObjectStore.prototype.add
   const originalTransaction = IDBDatabase.prototype.transaction
   try {
     const transaction = await delivery.beginFile(request())
@@ -85,24 +84,17 @@ export async function finishAtomicDirect(input: {
     await transaction.writeRange(3n, BYTES.subarray(3))
     IDBObjectStore.prototype.put = function(...args: Parameters<IDBObjectStore['put']>) {
       const result = originalPut.apply(this, args)
-      if (failure === 'delivery' && this.transaction.db.name === fixture.databaseName &&
-          this.name === INDEXEDDB_BROWSER_DELIVERY_FILE_STORE) this.transaction.abort()
-      return result
-    }
-    IDBObjectStore.prototype.add = function(...args: Parameters<IDBObjectStore['add']>) {
-      const result = originalAdd.apply(this, args)
-      if (failure === 'target-proof' && this.transaction.db.name === fixture.databaseName &&
-          this.name === INDEXEDDB_FILE_FINAL_PROOF_STORE) this.transaction.abort()
+      if (this.transaction.db.name === fixture.databaseName && (
+        (failure === 'delivery' && this.name === INDEXEDDB_BROWSER_DELIVERY_FILE_STORE) ||
+        (failure === 'checkpoint' && this.name === INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE)
+      )) this.transaction.abort()
       return result
     }
     const finalAborted = await rejects(() => transaction.commit())
     IDBObjectStore.prototype.put = originalPut
-    IDBObjectStore.prototype.add = originalAdd
     const stateAfterAbort = (await journal.readFile(input.intent.operationId, FILE_ID))?.state.kind
     const retainedAfterAbort = (await target.readCheckpoint(FILE_ID))!.verifiedRanges[0]!.end.toString()
     const savedAfterAbort = delivery.getSummary().targetSavedBytes.toString()
-    const proofCountAfterAbort = await requestResult(database.transaction(INDEXEDDB_FILE_FINAL_PROOF_STORE)
-      .objectStore(INDEXEDDB_FILE_FINAL_PROOF_STORE).count())
     let finalTransactions = 0
     IDBDatabase.prototype.transaction = function(...args: Parameters<IDBDatabase['transaction']>) {
       if (this.name === fixture.databaseName) finalTransactions++
@@ -116,10 +108,9 @@ export async function finishAtomicDirect(input: {
       .getDirectoryHandle(target.reservation.physicalName)
     const actual = new Uint8Array(await (await (await payload.getFileHandle(FILE_PATH[0]!)).getFile()).arrayBuffer())
     return { resumedBytes, finalAborted, stateAfterAbort, retainedAfterAbort, savedAfterAbort,
-      proofCountAfterAbort, finalTransactions, finalState, finalBytes, contentsMatch: actual.every((byte, index) => byte === BYTES[index]) && actual.length === BYTES.length }
+      finalTransactions, finalState, finalBytes, contentsMatch: actual.every((byte, index) => byte === BYTES[index]) && actual.length === BYTES.length }
   } finally {
     IDBObjectStore.prototype.put = originalPut
-    IDBObjectStore.prototype.add = originalAdd
     IDBDatabase.prototype.transaction = originalTransaction
     await delivery.close()
     database.close(); journal.close(); operations.close()

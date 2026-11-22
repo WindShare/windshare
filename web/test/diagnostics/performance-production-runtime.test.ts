@@ -19,7 +19,6 @@ import {
   type OutputDiagnosticsPorts,
   type OutputTraceEvent,
 } from '../../src/output/diagnostics'
-import { MATERIALIZATION_LEDGER_PAGE_ENTRY_LIMIT } from '../../src/output/materialization-ledger/model'
 import { identityText } from '../transfer/v2-job-fixture'
 import { runFSAProductionChain } from '../output/fsa-direct-tree-production-chain-fixture'
 
@@ -107,12 +106,6 @@ describe('FSA performance production observations', () => {
       throw new Error('production performance summary trace event is missing')
     }
     const summary = terminal.value.event.payload
-    const expectedLedgerEntries = BigInt(
-      FILE_COUNT + (2 * observed.directoryAdmissions.length),
-    )
-    const expectedLedgerPages = (
-      expectedLedgerEntries + BigInt(MATERIALIZATION_LEDGER_PAGE_ENTRY_LIMIT) - 1n
-    ) / BigInt(MATERIALIZATION_LEDGER_PAGE_ENTRY_LIMIT)
     const expectedNamespaceRuns = BigInt(
       1 + observed.directoryAdmissions.length + (2 * FILE_COUNT),
     )
@@ -242,12 +235,12 @@ describe('FSA performance production observations', () => {
     })
     expect(summary.checkpoints.elapsed_ms.sample_count).toBe('0')
     expect(summary.ledger).toMatchObject({
-      entries: expectedLedgerEntries.toString(),
-      pages: expectedLedgerPages.toString(),
-      seals: '1',
+      entries: '0',
+      pages: '0',
+      seals: '0',
       recovery_scan_fallbacks: '0',
     })
-    expect(summary.ledger.seal_elapsed_ms.sample_count).toBe('1')
+    expect(summary.ledger.seal_elapsed_ms.sample_count).toBe('0')
     expect(summary.peaks.active_writers).toBeGreaterThan(0)
     expect(summary.peaks.active_writers).toBeLessThanOrEqual(MAXIMUM_ACTIVE_NATIVE_WRITERS)
     expect(summary.peaks.active_namespace).toBeGreaterThan(0)

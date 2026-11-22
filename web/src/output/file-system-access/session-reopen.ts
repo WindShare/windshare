@@ -21,17 +21,13 @@ import {
 } from '../persistent-tree/stage-diagnostics'
 import {
   openFSAFileCheckpointRepository,
+  scanAllFSAFileCheckpoints,
   type FSAFileCheckpointRepository,
   type FSAFileCheckpointRepositoryFactory,
   type FSASemanticOutputRepository,
 } from './checkpoint-repository'
-import { createMaterializationLedgerBinding } from '../materialization-ledger/codec'
+import { fileCheckpointIsFinalized } from '../persistence/checkpoint'
 import { retireFSAMaterializationRecoveryMetadata } from './recovery-metadata-retirement'
-import {
-  MATERIALIZATION_LEDGER_PAGE_ENTRY_LIMIT,
-  MaterializationLedgerEntryKind,
-  type MaterializationLedgerBindingV1,
-} from '../materialization-ledger/model'
 import {
   CompatibleNamePathAuthority,
   type CompatibleNameActivationLedger,
@@ -161,11 +157,7 @@ export async function reopenFileSystemAccessOutput(
       ...(stageAuthority === undefined ? {} : { stageAuthority }),
       ...(options.trace === undefined ? {} : { trace: options.trace }),
     })
-    await reconcileCommittedFileMappings(
-      semanticRepository(checkpoints),
-      await ledgerBinding(intent, binding),
-      compatibleNames,
-    )
+    await reconcileCommittedFileMappings(checkpoints, compatibleNames)
     emitFSAOutputTrace(options.trace, Object.freeze({
       name: 'receive.reservation.reopened',
       operation_id: intent.operationId,
@@ -250,7 +242,6 @@ export async function openFileSystemAccessCompatibleNameCatchUp(
     await compatibleNames.ensureRecoveryReport(pairRoot)
     checkpoints = await openFSAFileCheckpointRepository(options, intent, binding.reservation)
     const semantic = semanticRepository(checkpoints)
-    const materializationBinding = await ledgerBinding(intent, binding)
     const terminalDrain = rootLease.scheduler.beginTerminal('repair-operation')
     const runExclusive = async <T>(operation: () => Promise<T>): Promise<T> => {
       await terminalDrain.drained
@@ -276,7 +267,7 @@ export async function openFileSystemAccessCompatibleNameCatchUp(
           throw new DOMException('Active catch-up cannot cross a terminal outcome', 'InvalidStateError')
         }
         const summary = await compatibleNames!.synchronizeActiveProjector(
-          () => reconcileCommittedFileMappings(semantic, materializationBinding, compatibleNames!),
+          () => reconcileCommittedFileMappings(semantic, compatibleNames!),
         )
         if (summary === undefined) {
           throw new DOMException('Compatible-name active projector is unavailable', 'InvalidStateError')
@@ -303,7 +294,7 @@ export async function openFileSystemAccessCompatibleNameCatchUp(
         if (pendingOutcome === undefined) {
           throw new DOMException('Active catch-up must preserve receive metadata', 'InvalidStateError')
         }
-        await retireFSAMaterializationRecoveryMetadata(semantic, materializationBinding)
+        await retireFSAMaterializationRecoveryMetadata(semantic)
       },
       runExclusive,
       close,
@@ -392,45 +383,24 @@ async function releaseFailedFSAOpen(
 }
 
 async function reconcileCommittedFileMappings(
-  repository: FSASemanticOutputRepository,
-  binding: MaterializationLedgerBindingV1,
+  checkpoints: FSAFileCheckpointRepository,
   compatibleNames: CompatibleNamePathAuthority,
 ): Promise<void> {
   if (!compatibleNames.active) return
-  let after: Parameters<FSASemanticOutputRepository['scanMaterializationLedgerEntries']>[1]['after']
-  do {
-    const page = await repository.scanMaterializationLedgerEntries(binding, {
-      ...(after === undefined ? {} : { after }),
-      limit: MATERIALIZATION_LEDGER_PAGE_ENTRY_LIMIT,
-    })
-    for (const entry of page.entries) {
-      if (entry.kind !== MaterializationLedgerEntryKind.FileFinalized) continue
-      await compatibleNames.commitFinalFile(entry.relativePath, entry.ownedFileIdentity)
-    }
-    after = page.continuation
-  } while (after !== undefined)
-}
-
-async function ledgerBinding(
-  intent: ReceiveIntent,
-  binding: PersistedFSAOperationBinding,
-): Promise<MaterializationLedgerBindingV1> {
-  return createMaterializationLedgerBinding({
-    operationId: intent.operationId,
-    receiveIntentDigest: intent.digest,
-    materializationBindingDigest: binding.reservation.digest,
-    authorityRef: binding.reservation.authorityRef,
-  })
+  const committed = await scanAllFSAFileCheckpoints(checkpoints, 'committed')
+  for (const checkpoint of committed) {
+    if (!fileCheckpointIsFinalized(checkpoint)) continue
+    await compatibleNames.commitFinalFile(checkpoint.canonicalPath, checkpoint.ownedObjectId)
+  }
 }
 
 function semanticRepository(
   repository: FSAFileCheckpointRepository,
 ): FSASemanticOutputRepository {
   const candidate = repository as Partial<FSASemanticOutputRepository>
-  if (typeof candidate.scanMaterializationLedgerEntries !== 'function' ||
-      typeof candidate.retireMaterializationLedgerBatch !== 'function') {
+  if (typeof candidate.retireRecoveryMetadataBatch !== 'function') {
     throw new DOMException(
-      'DirectTree recovery requires semantic ledger repository authority',
+      'DirectTree recovery requires semantic checkpoint repository authority',
       'InvalidStateError',
     )
   }

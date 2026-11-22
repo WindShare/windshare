@@ -648,17 +648,6 @@ async function expectTreeStageFailure(
         await session.activate()
         return session.ensureDirectory(path)
       },
-      materializeDirectory: async (
-        request: Parameters<NonNullable<PersistentMaterializationPort['materializeDirectory']>>[0],
-      ) => {
-        await session.activate()
-        return session.materializeDirectory(request)
-      },
-      finalizeDirectory: (
-        admission: Parameters<NonNullable<PersistentMaterializationPort['finalizeDirectory']>>[0],
-        outcome: Parameters<NonNullable<PersistentMaterializationPort['finalizeDirectory']>>[1],
-      ) =>
-        session.finalizeDirectory(admission, outcome),
       close: () => session.close(),
     })
     const persistentExecution = await createPersistentDirectTreeExecution({

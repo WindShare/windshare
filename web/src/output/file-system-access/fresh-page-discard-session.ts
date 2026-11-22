@@ -39,8 +39,6 @@ import {
   type FSAFileCheckpointRepository,
   type FSAFileCheckpointRepositoryFactory,
 } from './checkpoint-repository'
-import { createMaterializationLedgerBinding } from '../materialization-ledger/codec'
-import type { MaterializationLedgerBindingV1 } from '../materialization-ledger/model'
 import { retireFSAMaterializationRecoveryMetadata } from './recovery-metadata-retirement'
 import { IndexedDbCompatibleNameLedger } from '../browser/indexeddb-compatible-name-ledger'
 import {
@@ -106,7 +104,6 @@ export class FreshPageFileSystemAccessDiscardSession {
   readonly #checkpoints: FSAFileCheckpointRepository
   readonly #rootLease: FSARootMutationLease
   readonly #compatibleNames: CompatibleNamePathAuthority
-  readonly #ledgerBinding: Promise<MaterializationLedgerBindingV1>
   #discardStarted = false
   #closePromise: Promise<void> | undefined
 
@@ -126,12 +123,6 @@ export class FreshPageFileSystemAccessDiscardSession {
     this.#checkpoints = input.checkpoints
     this.#rootLease = input.rootLease
     this.#compatibleNames = input.compatibleNames
-    this.#ledgerBinding = createMaterializationLedgerBinding({
-      operationId: input.checkpoints.binding.operationId,
-      receiveIntentDigest: input.checkpoints.binding.receiveIntentDigest,
-      materializationBindingDigest: input.checkpoints.binding.materializationBindingDigest,
-      authorityRef: input.checkpoints.binding.authorityRef,
-    })
   }
 
   usesOperationRepository(repository: ReceiveOperationRepository): boolean {
@@ -241,7 +232,7 @@ export class FreshPageFileSystemAccessDiscardSession {
   }
 
   async #retireRecoveryMetadata(): Promise<void> {
-    await retireFSAMaterializationRecoveryMetadata(this.#checkpoints, await this.#ledgerBinding)
+    await retireFSAMaterializationRecoveryMetadata(this.#checkpoints)
   }
 
   async #verifyCheckpointObjects(

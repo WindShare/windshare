@@ -8,11 +8,6 @@ import {
   type FileSystemAccessOperationSettlementAuthority,
   type FSASettlementRepository,
 } from '../../src/output/file-system-access/settlement'
-import { createMaterializationLedgerBinding } from '../../src/output/materialization-ledger/codec'
-import {
-  createMaterializationDirectoryAdmittedEntry,
-  createMaterializationDirectoryFinalizedEntry,
-} from '../../src/output/materialization-ledger/journal'
 import type { BrowserHandoffPublisher } from '../../src/output/portable/browser-download'
 import {
   createPortableExecutionRoutes,
@@ -77,20 +72,8 @@ describe('production plan execution authority', () => {
       transferJobId: identityText(102),
     })
     const session = fsaMaterializationPort(intent, repository)
-    const admittedRoot = await session.materializeDirectory({
-      relativePath: [],
-      directoryId: identityText(104),
-      generation: identityText(105),
-    })
-    const repeatedRoot = await session.materializeDirectory({
-      relativePath: [],
-      directoryId: identityText(104),
-      generation: identityText(105),
-    })
-    const finalizedRoot = await session.finalizeDirectory(
-      admittedRoot.ledgerAdmission,
-      { kind: 'finalized' },
-    )
+    const admittedRoot = await session.ensureDirectory([])
+    const repeatedRoot = await session.ensureDirectory([])
     const outputIdentity = outputSessionIdentity({
       backend: 'file-system-access',
       outputSessionId: identityText(103),
@@ -111,16 +94,9 @@ describe('production plan execution authority', () => {
       admitDirectory: expect.any(Function),
       finalizeDirectory: expect.any(Function),
     }))
-    expect(repeatedRoot).toMatchObject({
+    expect(repeatedRoot).toEqual({
       ownedObjectId: admittedRoot.ownedObjectId,
       created: false,
-      ledgerAdmission: admittedRoot.ledgerAdmission,
-    })
-    expect(finalizedRoot).toMatchObject({
-      kind: 'directory-finalized',
-      admissionEntryId: admittedRoot.ledgerAdmission.entryId,
-      admissionEntryDigest: admittedRoot.ledgerAdmission.entryDigest,
-      outcome: { kind: 'finalized' },
     })
   })
 
@@ -497,45 +473,11 @@ function fsaMaterializationPort(
       created: existingOwnedObjectId === undefined,
     })
   }
-  const ledgerBinding = () => {
-    if (intent.plan.kind !== 'direct-tree') {
-      throw new TypeError('FSA materialization fixture requires a DirectTree intent')
-    }
-    return createMaterializationLedgerBinding({
-      operationId: intent.operationId,
-      receiveIntentDigest: intent.digest,
-      materializationBindingDigest: intent.plan.reservation.digest,
-      authorityRef: intent.plan.reservation.authorityRef,
-    })
-  }
   return {
     intent,
     usesOperationRepository: (candidate: unknown) => candidate === repository,
     beginFile: async () => { throw new Error('composition proof does not open content') },
     ensureDirectory,
-    materializeDirectory: async (
-      request: Parameters<FileSystemAccessOutputSession['materializeDirectory']>[0],
-    ) => {
-      const relativePath = snapshotMaterializationRootRelativePath(request.relativePath)
-      const materialized = await ensureDirectory(relativePath)
-      const ledgerAdmission = await createMaterializationDirectoryAdmittedEntry(
-        await ledgerBinding(),
-        {
-          relativePath,
-          directoryId: request.directoryId,
-          generation: request.generation,
-          ownedObjectId: materialized.ownedObjectId,
-          ...(request.parent === undefined ? {} : { parent: request.parent }),
-          ...(request.modifiedTime === undefined ? {} : { modifiedTime: request.modifiedTime }),
-        },
-      )
-      return Object.freeze({ ...materialized, ledgerAdmission })
-    },
-    finalizeDirectory: async (
-      admission: Parameters<FileSystemAccessOutputSession['finalizeDirectory']>[0],
-      outcome: Parameters<FileSystemAccessOutputSession['finalizeDirectory']>[1],
-    ) =>
-      createMaterializationDirectoryFinalizedEntry(await ledgerBinding(), admission, outcome),
     close: async () => undefined,
   } as unknown as FileSystemAccessOutputSession
 }

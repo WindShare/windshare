@@ -3,7 +3,7 @@ import { BROWSER_CONTRACT_HOST_PATH } from './contract-host'
 
 const PROBE = '/test/browser/browser-delivery-atomic-probe.ts'
 
-for (const [preference, failure] of [['automatic', 'delivery'], ['direct', 'target-proof']] as const) {
+for (const [preference, failure] of [['automatic', 'delivery'], ['direct', 'checkpoint']] as const) {
   test(`direct ${preference} placement and ${failure} failure share checkpoint commit authority across reload`, async ({ page }) => {
     await page.goto(BROWSER_CONTRACT_HOST_PATH)
     const fixture = { databaseName: 'delivery-atomic-' + crypto.randomUUID(), parentName: 'delivery-atomic-' + crypto.randomUUID() }
@@ -19,7 +19,7 @@ for (const [preference, failure] of [['automatic', 'delivery'], ['direct', 'targ
       return probe.finishAtomicDirect(prepared, failure)
     }, { path: PROBE, prepared, failure })
     expect(finished).toEqual({ resumedBytes: '3', finalAborted: true, stateAfterAbort: 'receiving',
-      retainedAfterAbort: '3', savedAfterAbort: '0', proofCountAfterAbort: 0, finalTransactions: 1,
+      retainedAfterAbort: '3', savedAfterAbort: '0', finalTransactions: 1,
       finalState: 'cleaned', finalBytes: '8', contentsMatch: true })
   })
 }

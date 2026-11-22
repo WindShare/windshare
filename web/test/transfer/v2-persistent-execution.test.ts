@@ -2,14 +2,8 @@ import { contentReplica } from './content-replica-fixture'
 import { describe, expect, it, vi } from 'vitest'
 
 import type { FinalFileCheckpointProof } from '../../src/output/persistence/journal'
-import { createMaterializationLedgerBinding } from '../../src/output/materialization-ledger/codec'
-import {
-  createMaterializationDirectoryAdmittedEntry,
-  createMaterializationDirectoryFinalizedEntry,
-} from '../../src/output/materialization-ledger/journal'
 import type {
   PersistentByteRange,
-  PersistentDirectoryLedgerRequest,
   PersistentFileRequest,
   PersistentFileTransactionPort,
   PersistentMaterializationPort,
@@ -154,8 +148,6 @@ describe('persistent namespace claim bridge', () => {
       materialization: {
         beginFile: async () => { throw new Error('file materialization must not start') },
         ensureDirectory,
-        materializeDirectory: async () => ensureDirectory(),
-        finalizeDirectory: async () => { throw new Error('failed admission must not finalize') },
         close: async () => undefined,
       },
       outputIdentity: outputSessionIdentity({
@@ -216,8 +208,6 @@ describe('persistent production execution bridge', () => {
       materialization: {
         beginFile: async () => { throw new Error('no file admission expected') },
         ensureDirectory: async () => { throw new Error('no directory admission expected') },
-        materializeDirectory: async () => { throw new Error('no directory admission expected') },
-        finalizeDirectory: async () => { throw new Error('no directory finalization expected') },
         close: preservingClose, closeForTerminalSettlement: preservingClose, closeForStopSettlement: stoppedClose,
       },
       settlement: {
@@ -318,8 +308,19 @@ describe('persistent production execution bridge', () => {
     expect(materialization.closeCount).toBe(1)
     expect(materialization.terminalCloseCount).toBe(1)
     expect(settledEvidence).toEqual({
-      kind: 'direct-tree-ledger',
+      kind: 'direct-tree-checkpoints',
       materializationBindingDigest: intent.plan.reservation.digest,
+      directories: {
+        materializedCount: 1n,
+        visibleCount: 0n,
+        finalizedCount: 1n,
+        isolatedCount: 0n,
+        rootDirectory: {
+          directoryId: intent.syntheticRoot,
+          relativePath: [],
+          finalized: true,
+        },
+      },
     })
     expect(settledEvidence).not.toHaveProperty('entries')
   })
@@ -335,8 +336,6 @@ describe('persistent production execution bridge', () => {
     const materialization: PersistentMaterializationPort = {
       beginFile: async () => { throw new Error('file materialization must not start') },
       ensureDirectory,
-      materializeDirectory: async () => ensureDirectory(),
-      finalizeDirectory: async () => { throw new Error('failed admission must not finalize') },
       close: async () => undefined,
     }
     const execution = await createPersistentDirectTreeExecution({
@@ -442,7 +441,7 @@ describe('persistent production execution bridge', () => {
     expect(materialization.closeCount).toBe(1)
   })
 
-  it('delegates DirectTree directory completeness to the durable-ledger settlement authority', async () => {
+  it('delegates DirectTree directory completeness to the checkpoint settlement authority', async () => {
     const intent = asDirectTree(await receiveIntentFixture({
       planKind: 'direct-tree',
       artifactKind: 'directory-tree',
@@ -455,10 +454,21 @@ describe('persistent production execution bridge', () => {
     ) => {
       await cut.closeMaterialization()
       expect(cut.sealEvidence()).toEqual({
-        kind: 'direct-tree-ledger',
+        kind: 'direct-tree-checkpoints',
         materializationBindingDigest: intent.plan.reservation.digest,
+        directories: {
+          materializedCount: 1n,
+          visibleCount: 0n,
+          finalizedCount: 0n,
+          isolatedCount: 0n,
+          rootDirectory: {
+            directoryId: intent.syntheticRoot,
+            relativePath: [],
+            finalized: false,
+          },
+        },
       })
-      throw new TypeError('sealed ledger requires every directory to finalize')
+      throw new TypeError('settlement requires every directory to finalize')
     })
     const execution = await createPersistentDirectTreeExecution({
       ...createTestCheckpointAuthorities(),
@@ -559,8 +569,6 @@ describe('persistent output revision short-circuit', () => {
     const fixture = new PersistentMaterializationFixture(intent, completeRanges)
     const materialization: PersistentMaterializationPort = {
       ensureDirectory: path => fixture.ensureDirectory(path),
-      materializeDirectory: req => fixture.materializeDirectory(req),
-      finalizeDirectory: (adm, out) => fixture.finalizeDirectory(adm, out),
       close: () => fixture.close(),
       beginFile: async request => {
         expect(request.fileId).toBe(file.idText)
@@ -871,44 +879,6 @@ class PersistentMaterializationFixture implements PersistentMaterializationPort 
     return Object.freeze({
       ownedObjectId,
       created: existingOwnedObjectId === undefined,
-    })
-  }
-
-  async materializeDirectory(request: PersistentDirectoryLedgerRequest) {
-    const relativePath = snapshotMaterializationRootRelativePath(request.relativePath)
-    const materialized = await this.ensureDirectory(relativePath)
-    const binding = await this.#directTreeLedgerBinding()
-    const ledgerAdmission = await createMaterializationDirectoryAdmittedEntry(binding, {
-      relativePath,
-      directoryId: request.directoryId,
-      generation: request.generation,
-      ownedObjectId: materialized.ownedObjectId,
-      ...(request.parent === undefined ? {} : { parent: request.parent }),
-      ...(request.modifiedTime === undefined ? {} : { modifiedTime: request.modifiedTime }),
-    })
-    return Object.freeze({ ...materialized, ledgerAdmission })
-  }
-
-  async finalizeDirectory(
-    admission: Parameters<NonNullable<PersistentMaterializationPort['finalizeDirectory']>>[0],
-    outcome: Parameters<NonNullable<PersistentMaterializationPort['finalizeDirectory']>>[1],
-  ) {
-    return createMaterializationDirectoryFinalizedEntry(
-      await this.#directTreeLedgerBinding(),
-      admission,
-      outcome,
-    )
-  }
-
-  async #directTreeLedgerBinding() {
-    if (this.#intent.plan.kind !== 'direct-tree') {
-      throw new TypeError('test ledger binding requires DirectTree intent')
-    }
-    return createMaterializationLedgerBinding({
-      operationId: this.#intent.operationId,
-      receiveIntentDigest: this.#intent.digest,
-      materializationBindingDigest: this.#intent.plan.reservation.digest,
-      authorityRef: this.#intent.plan.reservation.authorityRef,
     })
   }
 
