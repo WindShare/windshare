@@ -1,8 +1,7 @@
 import { setTimeout as delay } from 'node:timers/promises'
 import { expect, type Page } from '@playwright/test'
 
-import type { TraceEventRecordV2 } from '../../src/diagnostics/trace/model'
-import type { WindShareDiagnostics } from '../../src/diagnostics/export/developer-api'
+import type { WindShareDiagnostics } from '../../src/diagnostics/developer-api'
 
 export const EVIDENCE_POLL_MILLISECONDS = 250
 
@@ -14,6 +13,21 @@ interface SenderTraceRecord {
     readonly available?: number
     readonly details?: { readonly connection_generation: string; readonly resume_registration: boolean }
   }
+}
+
+interface TraceEventRecord {
+  readonly sequence: string
+  readonly event: string
+  readonly correlation?: Readonly<{ protocol_session_id?: string }>
+  readonly payload: Readonly<Record<string, unknown>>
+}
+
+interface TransferProgressPayload {
+  readonly operation_id: string
+  readonly transfer_job_id: string
+  readonly written_bytes: string
+  readonly file_errors: string
+  readonly partial: boolean
 }
 
 function senderRecords(encoded: string): readonly SenderTraceRecord[] {
@@ -40,18 +54,16 @@ export function senderRecoveryEvidence(encoded: string, afterSequence: string) {
   return { outcome: 'resumed' as const, events }
 }
 
-type ProgressRecord = Extract<TraceEventRecordV2, { event: 'transfer_progress' }>
-
 export interface DownloadCut {
   readonly sequence: string
-  readonly progress: ProgressRecord['payload']
+  readonly progress: TransferProgressPayload
   readonly completedBlocks: number
   readonly blockBytes: number
 }
 
 /** Polling preserves evidence as the product's bounded diagnostic ring advances. */
 export class RecoveryEvidence {
-  readonly #records = new Map<string, TraceEventRecordV2>()
+  readonly #records = new Map<string, TraceEventRecord>()
   #bundle = ''
   #runtimeRunId: string | undefined
 
@@ -60,7 +72,7 @@ export class RecoveryEvidence {
       windshareDiagnostics: WindShareDiagnostics
     }).windshareDiagnostics.export())
     for (const line of this.#bundle.trim().split('\n')) {
-      const value = JSON.parse(line) as { line_type: string; runtime_run_id?: string; record?: TraceEventRecordV2 }
+      const value = JSON.parse(line) as { line_type: string; runtime_run_id?: string; record?: TraceEventRecord }
       if (value.line_type === 'bundle_header') {
         this.#runtimeRunId ??= value.runtime_run_id
         expect(value.runtime_run_id, 'Browser runtime must survive without refresh').toBe(this.#runtimeRunId)
@@ -91,7 +103,7 @@ export class RecoveryEvidence {
     return result.value
   }
 
-  records(): readonly TraceEventRecordV2[] {
+  records(): readonly TraceEventRecord[] {
     return [...this.#records.values()].sort((a, b) => Number(BigInt(a.sequence) - BigInt(b.sequence)))
   }
 
@@ -175,7 +187,9 @@ export class RecoveryEvidence {
     }
   }
 
-  #progress(): readonly ProgressRecord[] {
-    return this.records().filter(record => record.event === 'transfer_progress')
+  #progress(): readonly Readonly<{ sequence: string; payload: TransferProgressPayload }>[] {
+    return this.records()
+      .filter(record => record.event === 'transfer_progress')
+      .map(record => ({ sequence: record.sequence, payload: record.payload as unknown as TransferProgressPayload }))
   }
 }

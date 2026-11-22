@@ -31,6 +31,22 @@ export const BOUNDARY_POLICIES = Object.freeze([
     ],
   },
   {
+    name: 'domain and runtime layers do not depend on diagnostics',
+    roots: [
+      'catalog', 'connectivity', 'content', 'network', 'output',
+      'preview', 'receiver', 'session', 'transfer', 'transport',
+    ],
+    forbidden: ['diagnostics'],
+  },
+  {
+    name: 'diagnostics stays decoupled from domain and runtime layers',
+    roots: ['diagnostics'],
+    forbidden: [
+      'catalog', 'connectivity', 'content', 'network', 'output',
+      'preview', 'receiver', 'session', 'transfer', 'transport',
+    ],
+  },
+  {
     name: 'protocol sessions do not depend on connectivity or storage implementations',
     roots: ['session'],
     forbidden: ['connectivity', 'receiver', 'transport', 'output', 'application', 'ui'],

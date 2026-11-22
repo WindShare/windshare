@@ -1,5 +1,4 @@
-import { protocolFailureFact, type FailureFact } from '../diagnostics/incident/fact'
-import { type ReceivedProtocolError } from '../diagnostics/incident/protocol-error'
+import type { ReceivedProtocolError } from '../session/diagnostics'
 
 export class SessionSignalingError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -9,12 +8,11 @@ export class SessionSignalingError extends Error {
 }
 
 /**
- * The authenticated wire message is intentionally absent. The reviewed failure
- * is sufficient for retry, incident, and cross-runtime correlation.
+ * The authenticated wire message is intentionally absent. The decoded failure
+ * is sufficient for retry and cross-runtime correlation.
  */
 export class AuthenticatedPeerOperationError extends SessionSignalingError {
   readonly protocolFailure: ReceivedProtocolError
-  readonly failureFact: FailureFact<'protocol_failure'>
 
   constructor(protocolFailure: ReceivedProtocolError) {
     super('Sender rejected the authenticated peer operation')
@@ -23,11 +21,6 @@ export class AuthenticatedPeerOperationError extends SessionSignalingError {
     }
     this.name = 'AuthenticatedPeerOperationError'
     this.protocolFailure = protocolFailure
-    this.failureFact = protocolFailureFact({
-      stage: 'peer_attempt',
-      recoveryDisposition: protocolFailure.content.retryable ? 'retryable' : 'terminal',
-      protocolFailure,
-    })
   }
 }
 

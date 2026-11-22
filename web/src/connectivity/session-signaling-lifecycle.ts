@@ -1,6 +1,5 @@
-import type { FailureCorrelation } from '../diagnostics/incident/failure-correlation'
 import type { PeerProviderFact } from './peer-set/provider-facts'
-import type { ProtocolOperationIdentity } from '../session/identities'
+import type { ProtocolCorrelation, ProtocolOperationIdentity } from '../session/identities'
 import {
   BROWSER_CONNECTIVITY_ATTEMPT_STAGES,
   typedErrorForPeerOperationCode,
@@ -202,7 +201,7 @@ export class BrowserAttemptLifecycle {
     lane?: LaneIdentity,
   ): PeerAttemptTraceEvent {
     const attemptCorrelation = this.#correlation()
-    const correlation: FailureCorrelation = Object.freeze({
+    const correlation: ProtocolCorrelation = Object.freeze({
       protocolSessionId: attemptCorrelation.protocolSessionId,
       ...(operationId === undefined ? {} : { protocolOperationId: operationId }),
       peerPathId: attemptCorrelation.peerPathId,

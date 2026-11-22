@@ -8,6 +8,7 @@ import { BuiltinNetwork } from '../application/network/builtin'
 import { networkObserver, authorityObserver } from '../application/network/diagnostics'
 import {
   createConnectivityTraceSource,
+  createFailureReporter,
   createOutputTraceSource,
   createProtocolTraceSource,
   createReceiverTraceSource,
@@ -21,21 +22,20 @@ export function createReceiverRuntime(
   diagnosticOwner: DocumentDiagnostics,
   pageUrl: string,
 ): DocumentRuntime {
-  const { diagnostics } = diagnosticOwner
-  const outputTrace = createOutputTraceSource(diagnostics.trace)
-  const network = new BuiltinNetwork(networkObserver(diagnostics.trace), authorityObserver(diagnostics.trace))
+  const { runtime } = diagnosticOwner
+  const outputTrace = createOutputTraceSource(runtime.trace)
+  const network = new BuiltinNetwork(networkObserver(runtime.trace), authorityObserver(runtime.trace))
   const controller = new ReceiverController(new BrowserReceiverGateway({
     network,
-    protocolTrace: createProtocolTraceSource(diagnostics.trace, diagnostics.failures),
-    connectivityTrace: createConnectivityTraceSource(diagnostics.trace),
+    protocolTrace: createProtocolTraceSource(runtime),
+    connectivityTrace: createConnectivityTraceSource(runtime.trace),
   }), {
     windowPort: windowPort as unknown as BrowserOutputWindow,
     outputTrace,
     preferences: browserPreferences,
-    trace: createReceiverTraceSource(diagnostics.trace),
-    incidents: diagnostics.incidents,
+    trace: createReceiverTraceSource(runtime.trace),
+    recordFailure: createFailureReporter(runtime),
   })
-  diagnosticOwner.context.read = controller.getDiagnosticSnapshot
   controller.initialize({ capabilityInput: null, pageUrl })
   return {
     surface: controller.presentation.surface,
@@ -46,7 +46,6 @@ export function createReceiverRuntime(
       return <ReceiverDownloads controller={controller} {...props} />
     },
     dispose: async () => {
-      diagnosticOwner.context.read = undefined
       network.close()
       await controller.dispose()
     },

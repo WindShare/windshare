@@ -11,23 +11,23 @@ import {
   turn,
   keyframePresentation,
   DiagnosticPreviewJoined,
-  RecordingPreviewIncidents,
+  RecordingPreviewFailures,
   directPreviewSnapshot
 } from './v2-preview-fixture'
 
 describe('v2 preview seek failure presentation', () => {
-  it('keeps seek failure primary and records session-close failure as its consequence', async () => {
+  it('keeps seek failure primary and records session-close failure during cleanup', async () => {
     const joined = new DiagnosticPreviewJoined({
       seekFailure: new Error('seek failed'),
       closeFailure: new Error('close failed'),
     })
-    const incidents = new RecordingPreviewIncidents()
+    const failures = new RecordingPreviewFailures()
     let snapshot = directPreviewSnapshot()
     const previews = new PreviewController({
       snapshot: () => snapshot,
       publish: (next) => { snapshot = next },
       publicError: () => 'preview failed',
-      incidents,
+      recordFailure: failures.report,
     })
 
     previews.open(joined as unknown as JoinedBrowserShare, entry)
@@ -42,42 +42,10 @@ describe('v2 preview seek failure presentation', () => {
       state: 'error', fileId: entry.idText, name: entry.name, message: 'preview failed',
     })
     expect(joined.closed).toBe(1)
-    expect(incidents.owners.map((owner) => owner.identity.scopeKind)).toEqual([
-      'preview_open',
-      'preview_media',
-      'preview_seek',
+    expect(failures.events).toMatchObject([
+      { stage: 'preview_seek', error: { message: 'seek failed' } },
+      { stage: 'cleanup', error: { message: 'close failed' } },
     ])
-    expect(incidents.decisions).toMatchObject([
-      { decision: { kind: 'excluded', reason: 'success' } },
-      { decision: { kind: 'excluded', reason: 'success' } },
-      {
-        scope: { scopeKind: 'preview_seek' },
-        decision: {
-          kind: 'incident',
-          boundary: 'preview',
-          outcome: 'failed',
-        },
-      },
-    ])
-    expect(incidents.facts).toMatchObject([
-      {
-        scope: { scopeKind: 'preview_seek' },
-        fact: {
-          kind: 'unclassified', stage: 'preview_seek',
-          evidence: { exception: { message: 'seek failed', stack: expect.any(String) } },
-        },
-        relation: 'contributor',
-      },
-      {
-        scope: { scopeKind: 'preview_seek' },
-        fact: {
-          kind: 'unclassified', stage: 'cleanup',
-          evidence: { exception: { message: 'close failed', stack: expect.any(String) } },
-        },
-        relation: 'consequence',
-      },
-    ])
-    expect(incidents.owners.every((owner) => owner.isClosed())).toBe(true)
   })
 
   it.each([
@@ -90,13 +58,13 @@ describe('v2 preview seek failure presentation', () => {
   ])('closes the preview into the error state after %s', async (_name, failure) => {
     const error = failure()
     const joined = new DiagnosticPreviewJoined({ seekFailure: error })
-    const incidents = new RecordingPreviewIncidents()
+    const failures = new RecordingPreviewFailures()
     let snapshot = directPreviewSnapshot()
     const previews = new PreviewController({
       snapshot: () => snapshot,
       publish: (next) => { snapshot = next },
       publicError: (cause) => cause instanceof Error ? cause.message : 'preview failed',
-      incidents,
+      recordFailure: failures.report,
     })
 
     previews.open(joined as unknown as JoinedBrowserShare, entry)
@@ -110,10 +78,7 @@ describe('v2 preview seek failure presentation', () => {
       state: 'error', fileId: entry.idText, name: entry.name, message: error.message,
     })
     expect(joined.closed).toBe(1)
-    expect(incidents.decisions.filter(({ decision }) => decision.kind === 'incident')).toMatchObject([
-      { scope: { scopeKind: 'preview_seek' }, decision: { boundary: 'preview', outcome: 'failed' } },
-    ])
-    expect(incidents.owners.every((owner) => owner.isClosed())).toBe(true)
+    expect(failures.events).toMatchObject([{ stage: 'preview_seek', error }])
   })
 
   it('uses the error state when a local seek failure precedes the first presented frame', async () => {
@@ -139,18 +104,18 @@ describe('v2 preview seek failure presentation', () => {
     expect(joined.closed).toBe(1)
   })
 
-  it('keeps the preview open on a local seek failure and records session-close failure as its consequence', async () => {
+  it('keeps the preview open on a local seek failure and deduplicates repeated local reports', async () => {
     const joined = new DiagnosticPreviewJoined({
       seekFailure: new VideoPreviewError('seek failed'),
       closeFailure: new Error('close failed'),
     })
-    const incidents = new RecordingPreviewIncidents()
+    const failures = new RecordingPreviewFailures()
     let snapshot = directPreviewSnapshot()
     const previews = new PreviewController({
       snapshot: () => snapshot,
       publish: (next) => { snapshot = next },
       publicError: () => 'preview failed',
-      incidents,
+      recordFailure: failures.report,
     })
 
     previews.open(joined as unknown as JoinedBrowserShare, entry)
@@ -164,74 +129,31 @@ describe('v2 preview seek failure presentation', () => {
     // One position failed: the session, the last frame and the download stay.
     expect(snapshot.preview).toEqual({ ...opened, seeking: false, failure: 'preview failed' })
     expect(joined.closed).toBe(0)
-    expect(incidents.owners.map((owner) => owner.identity.scopeKind)).toEqual([
-      'preview_open',
-      'preview_media',
-      'preview_seek',
-    ])
-    expect(incidents.decisions).toMatchObject([
-      { decision: { kind: 'excluded', reason: 'success' } },
-      { decision: { kind: 'excluded', reason: 'success' } },
-      {
-        scope: { scopeKind: 'preview_seek' },
-        decision: {
-          kind: 'incident',
-          boundary: 'preview',
-          outcome: 'failed',
-        },
-      },
-    ])
+    expect(failures.events).toMatchObject([{ stage: 'preview_seek', error: { message: 'seek failed' } }])
 
     previews.seek(13)
     expect(snapshot.preview).toMatchObject({ state: 'video', seeking: true, failure: null })
     await turn()
     expect(snapshot.preview).toMatchObject({ state: 'video', seeking: false, failure: 'preview failed' })
-    // The first local failure keeps the session's one incident open; the
-    // repeat adds to it and its own scope closes without a second incident.
-    const seekScopes = incidents.owners.filter((owner) => owner.identity.scopeKind === 'preview_seek')
-    expect(seekScopes.map((owner) => owner.isClosed())).toEqual([false, true])
-    expect(incidents.decisions.filter(({ decision }) => decision.kind === 'incident')).toHaveLength(1)
+    expect(failures.events).toHaveLength(1)
 
     await previews.close()
     expect(joined.closed).toBe(1)
-    expect(incidents.facts).toMatchObject([
-      {
-        scope: seekScopes[0]!.identity,
-        fact: {
-          kind: 'unclassified', stage: 'preview_seek',
-          evidence: { exception: { message: 'seek failed', stack: expect.any(String) } },
-        },
-        relation: 'contributor',
-      },
-      {
-        scope: seekScopes[0]!.identity,
-        fact: {
-          kind: 'unclassified', stage: 'preview_seek',
-          evidence: { exception: { message: 'seek failed', stack: expect.any(String) } },
-        },
-        relation: 'consequence',
-      },
-      {
-        scope: seekScopes[0]!.identity,
-        fact: {
-          kind: 'unclassified', stage: 'cleanup',
-          evidence: { exception: { message: 'close failed', stack: expect.any(String) } },
-        },
-        relation: 'consequence',
-      },
+    expect(failures.events).toMatchObject([
+      { stage: 'preview_seek', error: { message: 'seek failed' } },
+      { stage: 'cleanup', error: { message: 'close failed' } },
     ])
-    expect(incidents.owners.every((owner) => owner.isClosed())).toBe(true)
   })
 
   it('keeps an earlier frame when a later seek frame fails to present', async () => {
     const joined = new DiagnosticPreviewJoined()
-    const incidents = new RecordingPreviewIncidents()
+    const failures = new RecordingPreviewFailures()
     let snapshot = directPreviewSnapshot()
     const previews = new PreviewController({
       snapshot: () => snapshot,
       publish: (next) => { snapshot = next },
       publicError: () => 'preview failed',
-      incidents,
+      recordFailure: failures.report,
     })
 
     previews.open(joined as unknown as JoinedBrowserShare, entry)
@@ -251,14 +173,10 @@ describe('v2 preview seek failure presentation', () => {
       failure: 'The browser could not decode this bounded media preview.',
     })
     expect(joined.closed).toBe(0)
-    expect(incidents.decisions.at(-1)).toMatchObject({
-      scope: { scopeKind: 'preview_media' },
-      decision: { kind: 'incident', boundary: 'preview', outcome: 'failed' },
-    })
+    expect(failures.events).toEqual([{ stage: 'preview_media' }])
     previews.mediaFailed(seekPresentation)
-    expect(incidents.decisions.filter(({ decision }) => decision.kind === 'incident')).toHaveLength(1)
+    expect(failures.events).toHaveLength(1)
     await previews.close()
-    expect(incidents.owners.every((owner) => owner.isClosed())).toBe(true)
   })
 })
 
@@ -375,24 +293,24 @@ describe('v2 preview seek failure rollback', () => {
 describe('v2 preview stale media failure during a newer seek', () => {
   function racingPreview() {
     const joined = new DiagnosticPreviewJoined()
-    const incidents = new RecordingPreviewIncidents()
+    const failures = new RecordingPreviewFailures()
     let snapshot = directPreviewSnapshot()
     const previews = new PreviewController({
       snapshot: () => snapshot,
       publish: (next) => { snapshot = next },
       publicError: () => 'preview failed',
-      incidents,
+      recordFailure: failures.report,
     })
     const video = () => {
       if (snapshot.preview.state !== 'video') throw new TypeError('expected video preview')
       return snapshot.preview
     }
     const presentAt = (seconds: number) => keyframePresentation(seconds)
-    return { joined, incidents, previews, video, presentAt }
+    return { joined, failures, previews, video, presentAt }
   }
 
   it('keeps seek B pending when the previous frame fails, then shows B', async () => {
-    const { joined, incidents, previews, video, presentAt } = racingPreview()
+    const { joined, failures, previews, video, presentAt } = racingPreview()
     previews.open(joined as unknown as JoinedBrowserShare, entry)
     await turn()
     previews.mediaPresented(video().presentationId)       // frame at 0 on canvas
@@ -407,9 +325,7 @@ describe('v2 preview stale media failure during a newer seek', () => {
     expect(video()).toMatchObject({ seeking: true, failure: null, presentationId: a })
     previews.mediaFailed(a)                               // A's decode error or 10 s deadline fires
     expect(video()).toMatchObject({ seeking: true, failure: null, requestedSeconds: 20, presentationId: a })
-    // The stale frame is still evidence: it reports the session's local incident.
-    const reported = incidents.decisions.filter(({ decision }) => decision.kind === 'incident')
-    expect(reported.map(({ scope }) => scope.scopeKind)).toEqual(['preview_media'])
+    expect(failures.events).toEqual([{ stage: 'preview_media' }])
 
     releaseB()
     await turn()
@@ -419,11 +335,10 @@ describe('v2 preview stale media failure during a newer seek', () => {
     expect(video()).toMatchObject({ seeking: false, failure: null, requestedSeconds: 20 })
     expect(joined.closed).toBe(0)
     await previews.close()
-    expect(incidents.owners.every((owner) => owner.isClosed())).toBe(true)
   })
 
-  it('reports seek B\'s own local failure after the stale frame failure', async () => {
-    const { joined, incidents, previews, video, presentAt } = racingPreview()
+  it('rolls back seek B after a stale frame failure without flooding local diagnostics', async () => {
+    const { joined, failures, previews, video, presentAt } = racingPreview()
     previews.open(joined as unknown as JoinedBrowserShare, entry)
     await turn()
     previews.mediaPresented(video().presentationId)
@@ -443,12 +358,7 @@ describe('v2 preview stale media failure during a newer seek', () => {
     await turn()
     // The canvas still shows the opening frame, so B's failure rolls back to it.
     expect(video()).toMatchObject({ seeking: false, failure: 'preview failed', requestedSeconds: 0 })
-    const reported = incidents.decisions.filter(({ decision }) => decision.kind === 'incident')
-    expect(reported).toHaveLength(1)
-    expect(incidents.facts.map(({ fact, relation }) => [fact.stage, relation])).toEqual([
-      ['preview_media', 'contributor'],
-      ['preview_seek', 'consequence'],
-    ])
+    expect(failures.events).toEqual([{ stage: 'preview_media' }])
     await previews.close()
   })
 })

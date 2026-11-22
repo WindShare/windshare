@@ -1,10 +1,10 @@
 import { expect, test, type Download } from '@playwright/test'
-import type { WindShareDiagnostics } from '../src/diagnostics/export/developer-api'
+import type { WindShareDiagnostics } from '../src/diagnostics/developer-api'
 import { openApplication } from '../test/browser/application/navigation'
 import {
-  PROTOCOL_MESSAGE_KINDS_V1,
-  type ProtocolMessageKindV1,
-} from '../src/diagnostics/incident'
+  PROTOCOL_MESSAGE_KINDS,
+  type ProtocolMessageKind,
+} from '../src/session/diagnostics'
 import {
   Uint8ArrayReader,
   Uint8ArrayWriter,
@@ -37,7 +37,6 @@ const DOWNLOAD_TIMEOUT_MILLISECONDS = 20_000
 const TRACE_CORRELATION_TIMEOUT_MILLISECONDS = 10_000
 const BASE64URL_IDENTITY_PATTERN = /^[A-Za-z0-9_-]{22}$/u
 const DECIMAL_OPERATION_ID_PATTERN = /^[1-9]\d*$/u
-const RECONSTRUCTION_HARNESS_PATH = '/test/browser/diagnostics-reconstruction-harness.ts'
 
 test('receives and recovers downloads through the real sender and relay', async ({ browserName, page }, testInfo) => {
   const scenarioId = microDirectoryScenarioId(browserName)
@@ -60,13 +59,6 @@ test('receives and recovers downloads through the real sender and relay', async 
     // The portable path avoids an operating-system picker while still exercising
     // the production UI, output authority, ZIP writer, and browser download.
     await page.addInitScript((retainedCapabilityKey) => {
-      const reconstructionDirectory = navigator.storage?.getDirectory?.bind(navigator.storage)
-      Object.defineProperty(window, '__windshareReconstructionDirectory', {
-        configurable: false,
-        enumerable: false,
-        writable: false,
-        value: reconstructionDirectory,
-      })
       Object.defineProperties(window, {
         // The ordinary smoke owns the relay product path; weekly hot-switch owns
         // native peer negotiation, so an external STUN dependency cannot delay CI.
@@ -179,15 +171,15 @@ test('receives and recovers downloads through the real sender and relay', async 
       message: 'browser and traced sender should expose one shared protocol correlation',
       timeout: TRACE_CORRELATION_TIMEOUT_MILLISECONDS,
     }).toBe(true)
+    const senderArtifact = await stack.senderTraceArtifact(share)
     const joined = findSharedProtocolCorrelation(
       browserRecords,
-      await stack.senderTraceRecords(share),
+      parseNdjson(senderArtifact),
     )
     if (joined === null) throw new Error('Shared protocol correlation disappeared after observation')
     expect(joined.correlation.protocolSessionId).toMatch(BASE64URL_IDENTITY_PATTERN)
     expect(joined.correlation.protocolOperationId).toMatch(DECIMAL_OPERATION_ID_PATTERN)
-    // Each exporter owns its envelope version. Cross-runtime reconstruction
-    // depends on shared protocol identities and request kinds, not version parity.
+    // Cross-runtime reconstruction depends on shared protocol identities and request kinds.
     expect(joined.browser).toMatchObject({ event: 'protocol_operation' })
     expect(joined.sender).toMatchObject({
       event: 'protocol_operation',
@@ -197,70 +189,25 @@ test('receives and recovers downloads through the real sender and relay', async 
     expect(joined.browser.runtimeRunId).not.toBe(joined.sender.runtimeRunId)
     expect(detailedTraceConsoleMessages).toEqual([])
 
-    const reconstructionStorageAvailable = await page.evaluate(() =>
-      typeof (window as typeof window & Readonly<{
-        __windshareReconstructionDirectory?: unknown
-      }>).__windshareReconstructionDirectory === 'function')
-    const reconstructionAttempt = await page.evaluate(async ({ path, correlation }) => {
-      const harness = await import(path) as typeof import(
-        '../test/browser/diagnostics-reconstruction-harness'
-      )
-      return harness.reconstructFSAContinuationFailure(correlation)
-    }, {
-      path: RECONSTRUCTION_HARNESS_PATH,
-      correlation: {
-        protocolSessionId: joined.correlation.protocolSessionId,
-        protocolOperationId: joined.correlation.protocolOperationId,
-        requestKind: joined.browser.requestKind,
-      },
-    })
-    if (reconstructionAttempt.kind === 'unavailable') {
-      expect(browserName, 'Chromium smoke requires native storage for retained artifact recovery').not.toBe('chromium')
-      expect(reconstructionStorageAvailable).toBe(false)
-      expect(reconstructionAttempt.reason).toBe('origin-private-storage-unavailable')
-      await testInfo.attach('fsa-continuation-reconstruction-capability', {
-        body: JSON.stringify(reconstructionAttempt),
-        contentType: 'application/json',
-      })
-      return
-    }
-    expect(reconstructionStorageAvailable).toBe(true)
-    const reconstruction = reconstructionAttempt.result
-    const reconstructionRecords = parseNdjson(reconstruction.bundle)
-    const senderArtifact = await stack.senderTraceArtifact(share)
-    const senderRecords = parseNdjson(senderArtifact)
-    const reconstructionJoin = findSharedProtocolCorrelation(
-      reconstructionRecords,
-      senderRecords,
-    )
-    expect(reconstructionJoin).not.toBeNull()
-    expect(reconstructionJoin?.browser.runtimeRunId)
-      .not.toBe(reconstructionJoin?.sender.runtimeRunId)
-    expect(reconstruction).toMatchObject({
-      incidentConsoleCount: 1,
-      actionErrorName: 'InvalidStateError',
-      restoredLifecycle: 'paused',
-    })
-    assertFSAReconstruction(reconstructionRecords)
     for (const forbidden of [
-      ...reconstruction.forbiddenSentinels,
       navigationUrl,
       share.key,
       DIRECTORY_NAME,
       FILE_NAME,
     ]) {
-      expect(reconstruction.bundle).not.toContain(forbidden)
+      expect(browserDiagnostics.bundle).not.toContain(forbidden)
       expect(senderArtifact).not.toContain(forbidden)
     }
-    expect(reconstruction.bundle).not.toMatch(/"(?:user_agent|platform|path|handle)"/u)
-    await testInfo.attach('fsa-continuation-browser-bundle', {
-      body: reconstruction.bundle,
+    expect(browserDiagnostics.bundle).not.toMatch(/"(?:user_agent|platform|path|handle)"/u)
+    await testInfo.attach('smoke-browser-diagnostics', {
+      body: browserDiagnostics.bundle,
       contentType: 'application/x-ndjson',
     })
-    await testInfo.attach('fsa-continuation-go-sender-trace', {
+    await testInfo.attach('smoke-go-sender-trace', {
       body: senderArtifact,
       contentType: 'application/x-ndjson',
     })
+
     if (browserName === 'chromium') {
       await assertRetainedDirectoryDownload(page, navigationUrl, assertDirectoryDownload)
       await testInfo.attach('source-invalidation-browser-bundle', {
@@ -316,7 +263,7 @@ interface ProtocolEnvelopeView {
   readonly event: 'protocol_operation'
   readonly runtimeRunId: string
   readonly command?: string
-  readonly requestKind: ProtocolMessageKindV1
+  readonly requestKind: ProtocolMessageKind
   readonly correlation: ProtocolCorrelationView
 }
 
@@ -369,14 +316,9 @@ function findSharedProtocolCorrelation(
 
 function protocolEnvelope(value: unknown): ProtocolEnvelopeView | null {
   const isBrowserTraceEvent = isRecord(value) && value.line_type === 'trace_event'
-  const candidate = isBrowserTraceEvent
-    ? value.record
-    : value
+  const candidate = isBrowserTraceEvent ? value.record : value
   if (!isRecord(candidate) ||
       candidate.event !== 'protocol_operation' ||
-      (isBrowserTraceEvent
-        ? typeof candidate.schema_version !== 'number'
-        : candidate.schema_version !== undefined && typeof candidate.schema_version !== 'number') ||
       typeof candidate.runtime_run_id !== 'string' ||
       !isRecord(candidate.correlation) ||
       typeof candidate.correlation.protocol_session_id !== 'string' ||
@@ -398,90 +340,9 @@ function protocolEnvelope(value: unknown): ProtocolEnvelopeView | null {
   })
 }
 
-function assertFSAReconstruction(records: readonly unknown[]): void {
-  const zeroHealth = {
-    fact_overflow_count: '0',
-    incident_history_eviction_count: '0',
-    console_suppression_count: '0',
-    late_link_eviction_count: '0',
-    trace_dropped_count: '0',
-    trace_overwritten_count: '0',
-    trace_sampled_count: '0',
-    trace_coalesced_count: '0',
-  }
-  const header = records.find((record) =>
-    isRecord(record) && record.line_type === 'bundle_header')
-  expect(header).toMatchObject({ diagnostics_health_at_export: zeroHealth })
-  const incidentLine = records.find((record) =>
-    isRecord(record) && record.line_type === 'incident')
-  if (!isRecord(incidentLine) || !isRecord(incidentLine.record) ||
-      !isRecord(incidentLine.record.payload)) {
-    throw new TypeError('FSA reconstruction omitted its incident')
-  }
-  expect(incidentLine.record).toMatchObject({
-    event: 'failure_incident',
-    payload: {
-      presentation: { boundary: 'retained_action', outcome: 'failed' },
-      trigger: {
-        kind: 'native_output_failure',
-        stage: 'reopen',
-        evidence: {
-          operation: 'reopen',
-          exception: {
-            errorName: 'InvalidStateError',
-            message: expect.stringContaining('another WindShare tab'),
-          },
-        },
-      },
-      fact_count: '1',
-      overflow_fact_count: '0',
-      diagnostics_health_at_seal: zeroHealth,
-      context: {
-        controller: { phase: 'browsing' },
-        lifecycle: { state: 'paused' },
-        progress: { file_errors: '1' },
-        output: { plan_kind: 'fsa' },
-      },
-    },
-  })
-
-  // Evidence retention must preserve the same typed cause independently of trace.
-  const incidentPayload = incidentLine.record.payload
-  if (!isRecord(incidentPayload.scope)) {
-    throw new TypeError('FSA reconstruction omitted its incident scope')
-  }
-  expect(records).toContainEqual({
-    line_type: 'failure_evidence',
-    record: expect.objectContaining({
-      scope: expect.objectContaining(incidentPayload.scope),
-      fact: incidentPayload.trigger,
-    }),
-  })
-
-  const trace = records
-    .filter((record) => isRecord(record) && record.line_type === 'trace_event')
-    .map((line) => (line as Readonly<Record<string, unknown>>).record)
-    .filter(isRecord)
-  const eventIndex = (
-    event: string,
-    payload: Readonly<Record<string, unknown>>,
-  ): number => trace.findIndex((record) => {
-    const observedPayload = record.payload
-    return record.event === event && isRecord(observedPayload) &&
-      Object.entries(payload).every(([key, value]) => observedPayload[key] === value)
-  })
-  const protocolIndex = eventIndex('protocol_operation', {})
-  const reopenIndex = eventIndex('reopen', {
-    backend: 'file_system_access',
-    transition: 'failed',
-  })
-  expect(protocolIndex).toBeGreaterThanOrEqual(0)
-  expect(reopenIndex).toBeGreaterThan(protocolIndex)
-}
-
-function isProtocolMessageKind(value: unknown): value is ProtocolMessageKindV1 {
+function isProtocolMessageKind(value: unknown): value is ProtocolMessageKind {
   return typeof value === 'string' &&
-    PROTOCOL_MESSAGE_KINDS_V1.includes(value as ProtocolMessageKindV1)
+    PROTOCOL_MESSAGE_KINDS.includes(value as ProtocolMessageKind)
 }
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {

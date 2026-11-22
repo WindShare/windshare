@@ -19,16 +19,11 @@ import {
 } from '../../e2e/fixtures/hot-switch-page-transfer'
 import { NetworkEventLog } from '../../e2e/fixtures/network-event-log'
 import { createCapabilityRedactor } from '../../e2e/fixtures/capability-redactor'
-import { unclassifiedFailureFact } from '../../src/diagnostics/incident/fact'
 
 describe('direct weekly network fixtures', () => {
   it('retains terminal exception evidence when the event prefix exceeds the diagnostic bound', () => {
-    const fact = unclassifiedFailureFact({
-      stage: 'content_read',
-      recoveryDisposition: 'terminal',
-      error: new Error('physical socket failed', {
-        cause: new Error('connection reset'),
-      }),
+    const error = new Error('physical socket failed', {
+      cause: new Error('connection reset'),
     })
     const diagnosticPrefixEvents = 96
     const events: HotSwitchPageEvent[] = Array.from({ length: diagnosticPrefixEvents }, (_unused, index) => ({
@@ -38,18 +33,18 @@ describe('direct weekly network fixtures', () => {
     events.push({
       kind: 'delivery', outcome: 'failed',
       evidence: { expectedBytes: 2, receivedBytes: 1, expectedSha256: 'expected', receivedSha256: null, terminal: 'failed' },
-      failureClassification: { fact },
+      failureClassification: { stage: 'content_read', error },
     }, { kind: 'runtime-settled' })
     const diagnostic = createCapabilityRedactor({}).value({ events, ...hotSwitchTerminalEvidence(events) })
     expect(diagnostic).toMatchObject({
       delivery: {
         kind: 'delivery',
         failureClassification: {
-          fact: {
-            kind: 'unclassified',
-            evidence: { exception: {
-              errorName: 'Error', message: 'physical socket failed', cause: { message: 'connection reset' },
-            } },
+          stage: 'content_read',
+          error: {
+            name: 'Error',
+            message: 'physical socket failed',
+            cause: { message: 'connection reset' },
           },
         },
       },

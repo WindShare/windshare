@@ -1,12 +1,4 @@
 import { CryptoError } from '../crypto/errors'
-import { unclassifiedFailureFact } from '../diagnostics/incident/fact'
-import {
-  excludedPresentationDecision,
-  incidentPresentationDecision,
-  type PresentationExclusionReason,
-} from '../diagnostics/incident/presentation'
-import type { IncidentScopeOwner } from '../diagnostics/incident/scope'
-import { type ReceiverDiagnosticSnapshot } from '../diagnostics/export/context'
 import { SelectionPolicy } from '../catalog/selection'
 import { BrowserReceiverGateway, type BrowsePage, type JoinedBrowserShare } from '../application/browser-share/gateway'
 import {
@@ -25,7 +17,7 @@ import type { ReceiverControllerOptions } from './controller/contracts'
 import { BrowserNavigationCoordinator } from './controller/navigation'
 import { JoinedShareObservation } from './controller/joined-observation'
 import { ReceiverProjections } from './controller/projections'
-import { initialReceiverSnapshot, joiningReceiverSnapshot, receiverDiagnosticSnapshot, receiverProgressSnapshot } from './controller-state'
+import { initialReceiverSnapshot, joiningReceiverSnapshot, receiverProgressSnapshot } from './controller-state'
 import { projectDraft, scopeSelection } from './draft/model'
 import { SelectionDraftScope } from './draft/scope'
 import { ReceiverExperienceObservability } from './experience/observability'
@@ -41,11 +33,6 @@ export type { CapturedLocation, LocationCaptureOptions } from './capability/loca
 export type { ReceiverControllerOptions } from './controller/contracts'
 export type { ReceiverTraceEvent } from '../application/receive/contracts'
 
-interface JoinAttemptScope {
-  readonly scope?: IncidentScopeOwner
-  settled: boolean
-}
-
 export class ReceiverController {
   readonly presentation: ReceiverProjections
   readonly #gateway: BrowserReceiverGateway
@@ -54,7 +41,7 @@ export class ReceiverController {
   readonly #capabilityIntake: ReceiverControllerOptions['capabilityIntake']
   readonly #preferences: ReceiverControllerOptions['preferences']
   readonly #trace: ReceiverControllerOptions['trace']
-  readonly #incidents: ReceiverControllerOptions['incidents']
+  readonly #recordFailure: ReceiverControllerOptions['recordFailure']
   readonly #capabilityNavigation = new CapabilityNavigation(() =>
     this.#joinNavigation !== undefined || this.#snapshot.connection.kind === 'connected' ||
     this.#snapshot.connection.kind === 'reconnecting')
@@ -68,7 +55,6 @@ export class ReceiverController {
   readonly #operationTransitions: ReceiveOperationTransitions
   readonly #draftScope = new SelectionDraftScope()
   #snapshot: ReceiverSnapshot
-  #diagnosticGeneration = 0n
   #pageUrl = ''
   #joined: JoinedBrowserShare | undefined
   #joinNavigation: AbortController | undefined
@@ -82,7 +68,7 @@ export class ReceiverController {
     this.#gateway = gateway
     this.#preferences = options.preferences
     this.#trace = options.trace
-    this.#incidents = options.incidents
+    this.#recordFailure = options.recordFailure
     this.#experienceTrace = new ReceiverExperienceObservability(options.trace)
     this.#capabilityLifecycle = new CapabilityInputLifecycle(options)
     this.#capabilityIntake = options.capabilityIntake
@@ -101,7 +87,7 @@ export class ReceiverController {
       snapshot: () => this.#snapshot,
       publish: snapshot => this.#publish(snapshot),
       publicError: error => this.#publicError(error),
-      ...(options.incidents === undefined ? {} : { incidents: options.incidents }),
+      ...(options.recordFailure === undefined ? {} : { recordFailure: options.recordFailure }),
     })
     this.#joinedObservation = new JoinedShareObservation({
       ownsJoinedShare: joined => !this.#disposed && this.#joined === joined,
@@ -130,7 +116,7 @@ export class ReceiverController {
       snapshot: () => this.#snapshot,
       publish: snapshot => this.#publish(snapshot),
       publicError: error => this.#publicError(error),
-      ...(options.incidents === undefined ? {} : { incidents: options.incidents }),
+      ...(options.recordFailure === undefined ? {} : { recordFailure: options.recordFailure }),
       ...(options.trace === undefined ? {} : { trace: options.trace }),
     })
     this.#operationTransitions = new ReceiveOperationTransitions({
@@ -159,9 +145,6 @@ export class ReceiverController {
     currentPageEntries: this.#browse.entryCount,
     receiveOperationActive: this.#receive.active,
   })
-
-  readonly getDiagnosticSnapshot = (): ReceiverDiagnosticSnapshot =>
-    receiverDiagnosticSnapshot(this.#snapshot, this.#diagnosticGeneration)
 
   initialize(captured: CapturedLocation): void {
     if (this.#disposed) return
@@ -384,7 +367,7 @@ export class ReceiverController {
         return 'blocked'
       }
       this.#pageUrl = pageUrl
-      return await this.#joinOwned(lease, this.#openJoinAttempt(), pageUrl) ? 'joined' : 'failed'
+      return await this.#joinOwned(lease, pageUrl) ? 'joined' : 'failed'
     }).then(decision => {
       if (this.#disposed) return
       this.recordExperienceIntent(`share-navigation-${decision}`)
@@ -394,7 +377,6 @@ export class ReceiverController {
 
   async #joinOwned(
     lease: CapabilityJoinLease,
-    attempt: JoinAttemptScope,
     pageUrl: string,
   ): Promise<boolean> {
     let navigation: AbortController | undefined
@@ -428,7 +410,6 @@ export class ReceiverController {
         }))
       candidate = joined
       if (!this.#joinReplacementIsCurrent(navigation)) {
-        this.#excludeJoin(attempt, 'stale_replacement')
         this.#traceJoin('stale_replacement')
         return false
       }
@@ -438,16 +419,15 @@ export class ReceiverController {
       joinedReplacementInstalled = true
       await previous?.close().catch(() => undefined)
       if (!this.#joinReplacementIsCurrent(navigation)) return false
-      this.#excludeJoin(attempt, 'success')
       this.#traceJoin('joined')
       this.#joinedObservation.observe(joined)
       await this.#openInitialBrowsePage(joined)
       return this.#joinReplacementIsCurrent(navigation)
     } catch (error) {
-      this.#handleJoinFailure(error, lease, attempt, navigation, previous, joinedReplacementInstalled)
+      this.#handleJoinFailure(error, lease, navigation, previous, joinedReplacementInstalled)
       return false
     } finally {
-      this.#finishJoinAttempt(navigation, lease, attempt, candidate, joinedReplacementInstalled)
+      this.#finishJoinAttempt(navigation, lease, candidate, joinedReplacementInstalled)
     }
   }
 
@@ -466,7 +446,6 @@ export class ReceiverController {
   #finishJoinAttempt(
     navigation: AbortController | undefined,
     lease: CapabilityJoinLease,
-    attempt: JoinAttemptScope,
     candidate: JoinedBrowserShare | undefined,
     installed: boolean,
   ): void {
@@ -475,8 +454,6 @@ export class ReceiverController {
       this.#joinRecovery = undefined
     }
     lease.release()
-    if (!attempt.settled) this.#excludeJoin(attempt, 'stale_replacement')
-    try { attempt.scope?.close() } catch { /* Observational scope close. */ }
     if (candidate !== undefined && !installed) void candidate.close().catch(() => undefined)
   }
 
@@ -487,19 +464,17 @@ export class ReceiverController {
   #handleJoinFailure(
     error: unknown,
     lease: CapabilityJoinLease,
-    attempt: JoinAttemptScope,
     navigation: AbortController | undefined,
     previous: JoinedBrowserShare | undefined,
     joinedReplacementInstalled: boolean,
   ): void {
     if (navigation === undefined || this.#joinNavigation !== navigation || navigation.signal.aborted) {
-      this.#excludeJoin(attempt, 'stale_replacement')
       return
     }
     if (!joinedReplacementInstalled && previous !== undefined && this.#joined === previous) {
       this.#joinedObservation.observe(previous)
     }
-    this.#failJoinIncident(attempt)
+    this.#reportJoinFailure(error)
     this.#traceJoin('failed')
     this.#fail(error, lease)
   }
@@ -575,7 +550,6 @@ export class ReceiverController {
   }
 
   #publish(snapshot: ReceiverSnapshot): void {
-    this.#diagnosticGeneration += 1n
     const reason = this.#receive.startBlockedReason()
     const canReleaseCurrent = this.#receive.canReleaseCurrent
     const previousAdmission = this.#snapshot.startAdmission
@@ -593,34 +567,9 @@ export class ReceiverController {
     for (const listener of this.#listeners) listener()
   }
 
-  #openJoinAttempt(): JoinAttemptScope {
+  #reportJoinFailure(error: unknown): void {
     try {
-      const scope = this.#incidents?.openScope('join')
-      return scope === undefined ? { settled: false } : { scope, settled: false }
-    } catch {
-      return { settled: false }
-    }
-  }
-
-  #excludeJoin(attempt: JoinAttemptScope, reason: PresentationExclusionReason): void {
-    if (attempt.scope === undefined || attempt.settled) return
-    attempt.settled = true
-    try {
-      this.#incidents?.submitDecision(attempt.scope.handle, excludedPresentationDecision('join', reason))
-    } catch {
-      // Diagnostic sinks cannot affect join control flow.
-    }
-  }
-
-  #failJoinIncident(attempt: JoinAttemptScope): void {
-    if (attempt.scope === undefined || attempt.settled) return
-    attempt.settled = true
-    try {
-      const trigger = attempt.scope.facts.record(
-        unclassifiedFailureFact({ stage: 'join', recoveryDisposition: 'none' }),
-        'contributor',
-      )
-      this.#incidents?.submitDecision(attempt.scope.handle, incidentPresentationDecision('join', 'failed', trigger))
+      this.#recordFailure?.({ stage: 'join', error })
     } catch {
       // Diagnostic sinks cannot affect join control flow.
     }

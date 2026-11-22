@@ -7,7 +7,9 @@ export interface DiagnosticFile {
 }
 
 export function createDiagnosticFile(text: string): DiagnosticFile {
-  const header: unknown = JSON.parse(text.slice(0, text.indexOf('\n')))
+  const newline = text.indexOf('\n')
+  const firstLine = newline < 0 ? text : text.slice(0, newline)
+  const header: unknown = JSON.parse(firstLine)
   if (typeof header !== 'object' || header === null ||
       !('runtime_run_id' in header) || typeof header.runtime_run_id !== 'string' ||
       !/^[A-Za-z0-9_-]{22}$/u.test(header.runtime_run_id) ||

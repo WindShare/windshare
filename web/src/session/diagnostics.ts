@@ -1,11 +1,101 @@
-import type { FailureEvidence } from '../diagnostics/failure/evidence'
 import type { Ed25519Observation } from '../crypto/ed25519'
-import type { LaneTermination } from './runtime-types'
-import type { CancellationTraceReason, OperationRequestTrace } from './operation-diagnostics'
 import type { RequestSchedulingObservation } from '../content/scheduling/requests'
-import type { FailureCorrelation } from '../diagnostics/incident/failure-correlation'
-import type { ProtocolErrorContent, ProtocolMessageKindV1 } from '../diagnostics/incident/protocol-error'
+import type { ProtocolCorrelation, ProtocolOperationIdentity, ProtocolSessionIdentity } from './identities'
 import { MESSAGE_KIND, type MessageKind } from './message'
+import type { CancellationTraceReason, OperationRequestTrace } from './operation-diagnostics'
+import type { LaneTermination } from './runtime-types'
+
+export const PROTOCOL_ERROR_SCOPES = Object.freeze([
+  'directory',
+  'revision',
+  'block',
+  'peer',
+] as const)
+
+export type ProtocolErrorScope = (typeof PROTOCOL_ERROR_SCOPES)[number]
+
+export const PROTOCOL_REQUEST_KINDS = Object.freeze([
+  'list_children',
+  'open_revisions',
+  'renew_lease',
+  'release_lease',
+  'request_blocks',
+  'lane_attach',
+  'peer_offer',
+] as const)
+
+export type ProtocolRequestKind = (typeof PROTOCOL_REQUEST_KINDS)[number]
+
+export const PROTOCOL_MESSAGE_KINDS = Object.freeze([
+  ...PROTOCOL_REQUEST_KINDS,
+  'catalog_result',
+  'open_results',
+  'block_fragment',
+  'cancel',
+  'operation_error',
+  'session_terminal',
+  'scan_progress',
+  'operation_complete',
+  'lease_result',
+  'peer_answer',
+  'peer_candidate',
+  'peer_path_control',
+] as const)
+
+export type ProtocolMessageKind = (typeof PROTOCOL_MESSAGE_KINDS)[number]
+
+export interface ProtocolErrorContent {
+  readonly scope: ProtocolErrorScope
+  readonly code: number
+  readonly retryable: boolean
+  readonly retryAfterMilliseconds?: number
+}
+
+export interface ReceivedProtocolError {
+  readonly requestKind: ProtocolRequestKind
+  readonly correlation: ProtocolCorrelation & Readonly<{
+    protocolSessionId: ProtocolSessionIdentity
+    protocolOperationId: ProtocolOperationIdentity
+  }>
+  readonly content: ProtocolErrorContent
+}
+
+export function createProtocolErrorContent(input: ProtocolErrorContent): ProtocolErrorContent {
+  if (!PROTOCOL_ERROR_SCOPES.includes(input.scope)) {
+    throw new RangeError('Unknown protocol error scope')
+  }
+  if (!Number.isInteger(input.code) || input.code < 0 || input.code > 0xffff) {
+    throw new RangeError('Protocol error code must be a uint16')
+  }
+  if (input.retryAfterMilliseconds !== undefined &&
+      (!Number.isInteger(input.retryAfterMilliseconds) || input.retryAfterMilliseconds < 0)) {
+    throw new RangeError('Protocol retry delay must be a non-negative integer')
+  }
+  return Object.freeze({
+    scope: input.scope,
+    code: input.code,
+    retryable: Boolean(input.retryable),
+    ...(input.retryAfterMilliseconds === undefined ? {} : { retryAfterMilliseconds: input.retryAfterMilliseconds }),
+  })
+}
+
+export function createReceivedProtocolError(input: {
+  readonly requestKind: ProtocolMessageKind
+  readonly correlation: ReceivedProtocolError['correlation']
+  readonly content: ProtocolErrorContent
+}): ReceivedProtocolError {
+  if (!PROTOCOL_REQUEST_KINDS.includes(input.requestKind as ProtocolRequestKind)) {
+    throw new RangeError('Received protocol error requires a request message kind')
+  }
+  return Object.freeze({
+    requestKind: input.requestKind as ProtocolRequestKind,
+    correlation: Object.freeze({
+      ...input.correlation,
+      ...(input.correlation.lane === undefined ? {} : { lane: Object.freeze({ ...input.correlation.lane }) }),
+    }),
+    content: createProtocolErrorContent(input.content),
+  })
+}
 
 export type ProtocolOperationTransition =
   | 'send_queued' | 'send_sealing' | 'send_sending' | 'send_completed'
@@ -48,61 +138,61 @@ export type ProtocolOperationTraceEvent =
   | Readonly<{
       eventName: 'protocol_operation'
       transition: 'cancelled'
-      requestKind: ProtocolMessageKindV1
+      requestKind: ProtocolMessageKind
       cancellationReason: CancellationTraceReason
       blockWait?: BlockWaitTrace
       request?: OperationRequestTrace
-      correlation: FailureCorrelation
+      correlation: ProtocolCorrelation
     }>
   | Readonly<{
       eventName: 'protocol_operation'
       transition: 'late_response_discarded'
-      requestKind: ProtocolMessageKindV1
-      responseKind: ProtocolMessageKindV1
+      requestKind: ProtocolMessageKind
+      responseKind: ProtocolMessageKind
       settlement: ProtocolOperationSettlement
       cancellationReason?: CancellationTraceReason
       request?: OperationRequestTrace
       protocolError?: ProtocolErrorContent
-      correlation: FailureCorrelation
+      correlation: ProtocolCorrelation
     }>
   | Readonly<{
       eventName: 'protocol_operation'
-      evidence?: FailureEvidence
+      failure?: unknown
       transition: 'request_sent' | 'request_send_failed' | 'admission_ready' | 'admission_abandoned'
         | 'send_queued' | 'send_sealing' | 'send_sending' | 'send_completed'
         | 'send_withdrawn' | 'send_abandoned' | 'send_failed'
-      requestKind: ProtocolMessageKindV1
-      correlation: FailureCorrelation
+      requestKind: ProtocolMessageKind
+      correlation: ProtocolCorrelation
     }>
   | Readonly<{
       eventName: 'protocol_operation'
       transition: 'admission_waiting'
-      requestKind: ProtocolMessageKindV1
+      requestKind: ProtocolMessageKind
       capacity: 'active'
       activeOperations: number
       trackedOperations: number
-      correlation: FailureCorrelation
+      correlation: ProtocolCorrelation
     }>
   | Readonly<{
       eventName: 'protocol_operation'
       transition: 'response_received' | 'retired_response_discarded'
-      requestKind: ProtocolMessageKindV1
-      responseKind: ProtocolMessageKindV1
-      correlation: FailureCorrelation
+      requestKind: ProtocolMessageKind
+      responseKind: ProtocolMessageKind
+      correlation: ProtocolCorrelation
     }>
   | Readonly<{
       eventName: 'protocol_operation'
       transition: 'authenticated_failure'
-      requestKind: ProtocolMessageKindV1
+      requestKind: ProtocolMessageKind
       protocolError: ProtocolErrorContent
-      correlation: FailureCorrelation
+      correlation: ProtocolCorrelation
     }>
   | Readonly<{
       eventName: 'protocol_operation'
       transition: 'settled'
-      requestKind: ProtocolMessageKindV1
+      requestKind: ProtocolMessageKind
       settlement: ProtocolOperationSettlement
-      correlation: FailureCorrelation
+      correlation: ProtocolCorrelation
     }>
 
 export type LaneTransitionTraceEvent =
@@ -110,25 +200,25 @@ export type LaneTransitionTraceEvent =
       eventName: 'lane_transition'
       transition: 'attached' | 'unavailable' | 'grant_requested' | 'grant_received' | 'hello_sent' |
         'admission_response_received' | 'admission_accepted' | 'installed'
-      correlation: FailureCorrelation
+      correlation: ProtocolCorrelation
     }>
   | Readonly<{
       eventName: 'lane_transition'
       transition: 'admission_rejected'
       rejectionCode: number
       retryAfterMilliseconds: number
-      correlation: FailureCorrelation
+      correlation: ProtocolCorrelation
     }>
   | Readonly<{
       eventName: 'lane_transition'
       transition: 'detached'
       termination: LaneTermination
-      correlation: FailureCorrelation
+      correlation: ProtocolCorrelation
     }>
 
 export type OperationRecoveryTraceEvent = Readonly<{
   eventName: 'operation_recovery'
-  correlation: FailureCorrelation
+  correlation: ProtocolCorrelation
   operationSequence: number
   generationId: number
   availabilityRevision: number
@@ -141,7 +231,7 @@ export type OperationRecoveryTraceEvent = Readonly<{
 
 export type ConnectionRecoveryTraceEvent = Readonly<{
   eventName: 'connection_recovery'
-  correlation: FailureCorrelation
+  correlation: ProtocolCorrelation
   generationId: number
   shareId?: string
   shareInstanceId?: string
@@ -156,7 +246,7 @@ export type ConnectionRecoveryTraceEvent = Readonly<{
 
 export type RelayHeartbeatTraceEvent = Readonly<{
   eventName: 'relay_heartbeat'
-  correlation: FailureCorrelation
+  correlation: ProtocolCorrelation
   connectionId: bigint
   generationId?: number
   shareId?: string
@@ -171,7 +261,7 @@ export type RelayHeartbeatTraceEvent = Readonly<{
 
 export type RelayDeliveryTraceEvent = import('../contracts/relay-delivery-observation').ReceiveLedgerEvent & Readonly<{
   eventName: 'relay_delivery'
-  correlation: FailureCorrelation
+  correlation: ProtocolCorrelation
   relayBase: string
   shareId?: string
   shareInstanceId?: string
@@ -180,7 +270,7 @@ export type RelayDeliveryTraceEvent = import('../contracts/relay-delivery-observ
 export type ContentSchedulingTraceEvent = Readonly<{
   admission?: import('../content/scheduling/receive-window').BlockReceiveAdmission
   eventName: 'content_scheduling'
-  correlation: FailureCorrelation
+  correlation: ProtocolCorrelation
   dispatchSequence: number
   fileId: string
   localBlockIndex: bigint
@@ -195,23 +285,23 @@ export type ContentSchedulingTraceEvent = Readonly<{
 
 export type ContentRetryTraceEvent = import('../content/lane-set').BlockRetryObservation & Readonly<{
   eventName: 'content_retry'
-  correlation: FailureCorrelation
+  correlation: ProtocolCorrelation
 }>
 
 export type RequestSchedulingTraceEvent = RequestSchedulingObservation & Readonly<{
   eventName: 'request_scheduling'
-  correlation: FailureCorrelation
+  correlation: ProtocolCorrelation
 }>
 
 export type LeaseRetirementTraceEvent = import('../content/scheduling/lease-retirement').LeaseRetirementObservation & Readonly<{
   eventName: 'lease_retirement'
-  correlation: FailureCorrelation
+  correlation: ProtocolCorrelation
 }>
 
 export type SenderVerificationTraceEvent = Ed25519Observation & Readonly<{
   eventName: 'sender_verification'
   shareId: string
-  correlation: FailureCorrelation
+  correlation: ProtocolCorrelation
 }>
 
 export type ProtocolTraceEvent =
@@ -234,11 +324,16 @@ export type ProtocolTraceObserver = (event: ProtocolTraceEvent) => void
  * emission point. An absent observer means no trace-only object is constructed.
  */
 export interface ProtocolTraceSource {
-  readonly failure?: (error: unknown, operation: string, correlation: FailureCorrelation, relation?: 'consequence') => void
+  readonly failure?: (
+    error: unknown,
+    operation: string,
+    correlation: ProtocolCorrelation,
+    context?: Readonly<Record<string, unknown>>,
+  ) => void
   readonly current: ProtocolTraceObserver | undefined
 }
 
-export function protocolMessageKindV1(kind: MessageKind): ProtocolMessageKindV1 {
+export function protocolMessageKindV1(kind: MessageKind): ProtocolMessageKind {
   switch (kind) {
     case MESSAGE_KIND.listChildren: return 'list_children'
     case MESSAGE_KIND.catalogResult: return 'catalog_result'

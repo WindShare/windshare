@@ -1,9 +1,9 @@
-import type { FailureCorrelation } from '../diagnostics/incident/failure-correlation'
 import type { PeerProviderFact } from './peer-set/provider-facts'
 import { PEER_OPERATION_CODE } from '../session/message'
 import type {
   PeerAttemptIdentity,
   PeerPathIdentity,
+  ProtocolCorrelation,
   ProtocolSessionIdentity,
 } from '../session/identities'
 import type { PeerAttemptFailure, PeerFailureDecision } from './peer-failure'
@@ -122,7 +122,7 @@ export interface PeerAttemptSummary {
 type PeerAttemptBase = Readonly<{
   summary?: PeerAttemptSummary
   eventName: 'peer_attempt'
-  correlation: FailureCorrelation & Readonly<{
+  correlation: ProtocolCorrelation & Readonly<{
     protocolSessionId: ProtocolSessionIdentity
     peerPathId: PeerPathIdentity
     peerAttemptId: PeerAttemptIdentity
@@ -182,7 +182,7 @@ export type PeerAttemptTraceEvent = PeerAttemptBase & (
 
 type PeerRecoveryBase = Readonly<{
   eventName: 'peer_recovery'
-  correlation: FailureCorrelation & Readonly<{
+  correlation: ProtocolCorrelation & Readonly<{
     protocolSessionId: ProtocolSessionIdentity
     peerPathId: PeerPathIdentity
   }>

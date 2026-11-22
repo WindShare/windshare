@@ -1,5 +1,4 @@
 import { observeProtocolFailure } from './failure-diagnostics'
-import { bindFailureEvidence, captureFailureEvidence } from '../diagnostics/failure/evidence'
 import type { ShareDescriptor } from '../catalog/records'
 import { capacityWaitFailure } from '../contracts/capacity'
 import type { FrameChannel } from '../contracts/channel'
@@ -71,15 +70,14 @@ export class SessionLane {
       {
         onFailure: reason => {
           const failure = new SessionRuntimeError('lane', 'Session lane delivery failed', { cause: reason })
-          bindFailureEvidence(failure, captureFailureEvidence(reason, { operation: 'session.send' }))
           this.#recordFailure(failure)
           // A rejected send must not cancel the transport's accepted inbound prefix.
           if (!this.#channel.unavailable.aborted) this.#shutdown().catch(() => undefined)
         },
-        observe: (message, transition, evidence) => options.protocolTrace?.current?.({
+        observe: (message, transition, failure) => options.protocolTrace?.current?.({
           eventName: 'protocol_operation',
           transition,
-          ...(evidence === undefined ? {} : { evidence }),
+          ...(failure === undefined ? {} : { failure }),
           requestKind: protocolMessageKindV1(message.kind),
           correlation: Object.freeze({
             protocolSessionId: createProtocolSessionIdentity(this.#sessionId),
@@ -151,7 +149,6 @@ export class SessionLane {
       // Read failure also rejects pending writes. Give them the same physical
       // failure boundary without reclassifying later authentication or parsing.
       const failure = new SessionRuntimeError('lane', 'Session lane receive failed', { cause })
-      bindFailureEvidence(failure, captureFailureEvidence(cause, { operation: 'session.read' }))
       throw failure
     }
   }
@@ -161,7 +158,7 @@ export class SessionLane {
     observeProtocolFailure(this.#protocolTrace, failure, 'session.receive', {
       protocolSessionId: createProtocolSessionIdentity(this.#sessionId),
       lane: Object.freeze({ id: this.id, epoch: this.epoch }),
-    }, { closed: this.#closed }, this.#termination !== undefined && kind !== 'authenticated_failure' ? 'consequence' : undefined)
+    }, { closed: this.#closed })
     // Cleanup must not overwrite an observed failure. Authentication still wins
     // when verification of an already-read frame finishes during local closure.
     if (this.#termination === undefined || kind === 'authenticated_failure') {
@@ -173,7 +170,7 @@ export class SessionLane {
     observeProtocolFailure(this.#protocolTrace, error, operation, {
       protocolSessionId: createProtocolSessionIdentity(this.#sessionId),
       lane: Object.freeze({ id: this.id, epoch: this.epoch }),
-    }, { termination: this.#termination?.kind ?? 'unknown' }, 'consequence')
+    }, { termination: this.#termination?.kind ?? 'unknown' })
   }
 
   async #pump(): Promise<void> {

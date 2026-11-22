@@ -13,7 +13,7 @@ import './index.css'
 const initial = captureLocation(window)
 initializeBrowserPreferences()
 const diagnostics = createDocumentDiagnostics(window, initial.pageUrl)
-const intake = new BrowserCapabilityIntake(() => diagnostics.session.enableFromLink())
+const intake = new BrowserCapabilityIntake(() => diagnostics.runtime.enableFromLink())
 const owner = new DocumentOwner({
   pageUrl: initial.pageUrl,
   load: () => import('./document/receiver-runtime').then(module => () =>
@@ -33,7 +33,7 @@ window.addEventListener('pagehide', event => {
 })
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <DiagnosticsProvider session={diagnostics.session} delivery={diagnostics.delivery}>
+    <DiagnosticsProvider runtime={diagnostics.runtime} delivery={diagnostics.delivery}>
       <App owner={owner} />
     </DiagnosticsProvider>
   </StrictMode>,

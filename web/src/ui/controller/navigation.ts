@@ -2,35 +2,14 @@ import { DirectoryFailureError, type CatalogScanProgress } from '../../catalog/c
 import type { CatalogEntry } from '../../catalog/records'
 import { RemoteOperationError } from '../../content/session-operations'
 import { equalBytes } from '../../crypto/bytes'
-import { unclassifiedFailureFact } from '../../diagnostics/incident/fact'
-import {
-  excludedPresentationDecision,
-  incidentPresentationDecision,
-  type PresentationDecision,
-  type PresentationExclusionReason,
-} from '../../diagnostics/incident/presentation'
-import type {
-  IncidentScopeHandle,
-  IncidentScopeOwner,
-} from '../../diagnostics/incident/scope'
-import type { ReceiverSnapshot } from '../model'
-import { breadcrumbsFor, projectBrowsePage, type RetryableBrowseRequest } from '../controller-state'
+import type { FailureReporter } from '../../application/diagnostics/receive-trace'
 import type {
   BrowseDirectory,
   BrowsePage,
   JoinedBrowserShare,
 } from '../../application/browser-share/gateway'
-
-interface BrowserNavigationIncidentPort {
-  openScope(kind: 'browse'): IncidentScopeOwner
-  submitDecision(scope: IncidentScopeHandle, decision: PresentationDecision): void
-}
-
-interface PendingNavigation {
-  readonly controller: AbortController
-  readonly scope?: IncidentScopeOwner
-  decisionSettled: boolean
-}
+import { breadcrumbsFor, projectBrowsePage, type RetryableBrowseRequest } from '../controller-state'
+import type { ReceiverSnapshot } from '../model'
 
 export interface BrowserNavigationCoordinatorOptions {
   readonly currentJoinedShare: () => JoinedBrowserShare | undefined
@@ -39,7 +18,7 @@ export interface BrowserNavigationCoordinatorOptions {
   readonly publish: (snapshot: ReceiverSnapshot) => void
   readonly publicError: (error: unknown) => string
   readonly onPageCommitted?: (page: BrowsePage) => void
-  readonly incidents?: BrowserNavigationIncidentPort
+  readonly recordFailure?: FailureReporter
 }
 
 export class BrowserNavigationCoordinator {
@@ -47,7 +26,7 @@ export class BrowserNavigationCoordinator {
   #page: BrowsePage | undefined
   #directories: BrowseDirectory[] = []
   #entries = new Map<string, CatalogEntry>()
-  #navigation: PendingNavigation | undefined
+  #navigation: AbortController | undefined
   #pendingNavigationKey: string | undefined
   #loadingDirectory: BrowseDirectory | undefined
   #retryableBrowse: RetryableBrowseRequest | undefined
@@ -69,12 +48,7 @@ export class BrowserNavigationCoordinator {
   }
 
   cancel(reason: unknown): void {
-    const navigation = this.#navigation
-    if (navigation !== undefined) {
-      navigation.controller.abort(reason)
-      this.#exclude(navigation, 'cancelled')
-      this.#closeScope(navigation)
-    }
+    this.#navigation?.abort(reason)
     this.#navigation = undefined
     this.#pendingNavigationKey = undefined
     this.#loadingDirectory = undefined
@@ -96,18 +70,12 @@ export class BrowserNavigationCoordinator {
     try {
       child = joined.childDirectory(page.directory, entry)
     } catch (error) {
-      const attempt = this.#newAttempt()
-      try {
-        this.#recordFailure(attempt, false, error)
-        this.#options.publish({
-          ...this.#options.snapshot(),
-          browse: { kind: 'failed',
-            error: this.#options.publicError(error) },
-          directoryRetryable: false,
-        })
-      } finally {
-        this.#closeScope(attempt)
-      }
+      this.#reportFailure(error, false)
+      this.#options.publish({
+        ...this.#options.snapshot(),
+        browse: { kind: 'failed', error: this.#options.publicError(error) },
+        directoryRetryable: false,
+      })
       return
     }
     const route = Object.freeze([...this.#directories, child])
@@ -146,44 +114,73 @@ export class BrowserNavigationCoordinator {
     if (candidateRoute.at(-1)?.idText !== directory.idText) {
       throw new TypeError('Browse route does not end at its requested directory')
     }
-    const navigationKey = this.#navigationKey(
-      joined,
-      candidateRoute,
-      pageIndex,
-      explicitRetry,
-    )
+    const navigationKey = this.#navigationKey(joined, candidateRoute, pageIndex, explicitRetry)
     if (this.#isDuplicateNavigation(navigationKey)) return
 
-    this.#replacePendingNavigation()
-    const navigation = this.#beginNavigation(navigationKey, directory)
+    this.#navigation?.abort(new DOMException('A newer browse request replaced this one', 'AbortError'))
+    const navigation = new AbortController()
+    this.#navigation = navigation
+    this.#pendingNavigationKey = navigationKey
+    this.#loadingDirectory = directory
+    this.#options.publish({
+      ...this.#options.snapshot(),
+      browse: { kind: 'loading', directoryName: directory.path.at(-1) ?? null, error: null },
+      directoryRetryable: false,
+    })
     try {
       const page = await joined.page(directory, pageIndex, {
-        signal: navigation.controller.signal,
+        signal: navigation.signal,
         explicitRetry,
       })
-      navigation.controller.signal.throwIfAborted()
-      if (!this.#canPublish(navigation, joined)) {
-        this.#excludeInactiveResult(navigation)
-        return
-      }
+      navigation.signal.throwIfAborted()
+      if (!this.#canPublish(navigation, joined)) return
       // Route, page, rows, and breadcrumbs publish atomically so stale pages stay invisible.
       this.#directories = [...candidateRoute]
       this.#page = page
       this.#options.onPageCommitted?.(page)
       this.#retryableBrowse = undefined
       this.publishPage(page)
-      this.#exclude(navigation, 'success')
     } catch (error) {
-      this.#settleNavigationFailure(
-        navigation,
-        directory,
-        pageIndex,
-        candidateRoute,
-        error,
-      )
+      this.#settleNavigationFailure(navigation, directory, pageIndex, candidateRoute, error)
     } finally {
-      this.#finishNavigation(navigation)
+      if (this.#navigation === navigation) {
+        this.#loadingDirectory = undefined
+        this.#pendingNavigationKey = undefined
+        this.#navigation = undefined
+      }
     }
+  }
+
+  catalogScanProgress(joined: JoinedBrowserShare, progress: CatalogScanProgress): void {
+    const directory = this.#loadingDirectory
+    if (
+      this.#options.currentJoinedShare() !== joined ||
+      directory === undefined ||
+      !equalBytes(directory.id, progress.directoryId)
+    ) {
+      return
+    }
+    this.#options.publish({
+      ...this.#options.snapshot(),
+      browse: {
+        kind: 'loading',
+        error: null,
+        directoryName: directory.path.at(-1) ?? null,
+        discoveredEntries: progress.discoveredEntries,
+      },
+    })
+  }
+
+  publishPage(page: BrowsePage): void {
+    const joined = this.#options.currentJoinedShare()
+    if (joined === undefined) return
+    const projection = projectBrowsePage(page, joined.selection, this.#directories)
+    this.#entries = projection.entries
+    this.#options.publish({ ...this.#options.snapshot(), ...projection.snapshot })
+  }
+
+  pageMatches(directory: BrowseDirectory): boolean {
+    return this.#page?.directory.idText === directory.idText
   }
 
   #navigationKey(
@@ -201,48 +198,10 @@ export class BrowserNavigationCoordinator {
   }
 
   #isDuplicateNavigation(key: string): boolean {
-    return (
-      this.#pendingNavigationKey === key &&
-      this.#navigation?.controller.signal.aborted === false
-    )
+    return this.#pendingNavigationKey === key && this.#navigation?.signal.aborted === false
   }
 
-  #replacePendingNavigation(): void {
-    const replaced = this.#navigation
-    if (replaced === undefined) return
-    replaced.controller.abort(
-      new DOMException('A newer browse request replaced this one', 'AbortError'),
-    )
-    this.#exclude(replaced, 'stale_replacement')
-    this.#closeScope(replaced)
-  }
-
-  #beginNavigation(
-    key: string,
-    directory: BrowseDirectory,
-  ): PendingNavigation {
-    const navigation = this.#newAttempt()
-    this.#navigation = navigation
-    this.#pendingNavigationKey = key
-    this.#loadingDirectory = directory
-    try {
-      this.#options.publish({
-        ...this.#options.snapshot(),
-        browse: { kind: 'loading', directoryName: directory.path.at(-1) ?? null, error: null },
-        directoryRetryable: false,
-      })
-    } catch (error) {
-      this.#exclude(navigation, 'not_user_visible')
-      this.#closeScope(navigation)
-      throw error
-    }
-    return navigation
-  }
-
-  #canPublish(
-    navigation: PendingNavigation,
-    joined: JoinedBrowserShare,
-  ): boolean {
+  #canPublish(navigation: AbortController, joined: JoinedBrowserShare): boolean {
     return (
       this.#navigation === navigation &&
       this.#options.currentJoinedShare() === joined &&
@@ -250,165 +209,35 @@ export class BrowserNavigationCoordinator {
     )
   }
 
-  #excludeInactiveResult(navigation: PendingNavigation): void {
-    this.#exclude(
-      navigation,
-      navigation.controller.signal.aborted || this.#options.isDisposed()
-        ? 'cancelled'
-        : 'stale_replacement',
-    )
-  }
-
   #settleNavigationFailure(
-    navigation: PendingNavigation,
+    navigation: AbortController,
     directory: BrowseDirectory,
     pageIndex: number,
     route: readonly BrowseDirectory[],
     error: unknown,
   ): void {
-    if (this.#navigation !== navigation) {
-      this.#exclude(navigation, 'stale_replacement')
-      return
-    }
-    if (
-      navigation.controller.signal.aborted ||
-      this.#options.isDisposed()
-    ) {
-      this.#exclude(navigation, 'cancelled')
+    if (this.#navigation !== navigation || navigation.signal.aborted || this.#options.isDisposed()) {
       return
     }
     const retryable =
       (error instanceof DirectoryFailureError && error.failure.retryable) ||
       (error instanceof RemoteOperationError && error.scope === 'directory' && error.retryable)
-    this.#retryableBrowse = retryable
-      ? Object.freeze({ directory, pageIndex, route })
-      : undefined
-    this.#recordFailure(navigation, retryable, error)
+    this.#retryableBrowse = retryable ? Object.freeze({ directory, pageIndex, route }) : undefined
+    this.#reportFailure(error, retryable)
     this.#options.publish({
       ...this.#options.snapshot(),
       phase: 'browsing',
-      browse: { kind: 'failed',
-        error: this.#options.publicError(error) },
+      browse: { kind: 'failed', error: this.#options.publicError(error) },
       breadcrumbs: breadcrumbsFor(this.#directories),
       directoryRetryable: retryable,
     })
   }
 
-  #finishNavigation(navigation: PendingNavigation): void {
-    if (!navigation.decisionSettled) {
-      this.#exclude(
-        navigation,
-        navigation.controller.signal.aborted ? 'cancelled' : 'not_user_visible',
-      )
-    }
-    this.#closeScope(navigation)
-    if (this.#navigation !== navigation) return
-    this.#loadingDirectory = undefined
-    this.#pendingNavigationKey = undefined
-    this.#navigation = undefined
-  }
-
-  catalogScanProgress(joined: JoinedBrowserShare, progress: CatalogScanProgress): void {
-    const directory = this.#loadingDirectory
-    if (
-      this.#options.currentJoinedShare() !== joined ||
-      directory === undefined ||
-      !equalBytes(directory.id, progress.directoryId)
-    ) {
-      return
-    }
-    this.#options.publish({
-      ...this.#options.snapshot(),
-      browse: { kind: 'loading', error: null,
-        directoryName: directory.path.at(-1) ?? null, discoveredEntries: progress.discoveredEntries },
-    })
-  }
-
-  publishPage(page: BrowsePage): void {
-    const joined = this.#options.currentJoinedShare()
-    if (joined === undefined) return
-    const projection = projectBrowsePage(page, joined.selection, this.#directories)
-    this.#entries = projection.entries
-    this.#options.publish({ ...this.#options.snapshot(), ...projection.snapshot })
-  }
-
-  pageMatches(directory: BrowseDirectory): boolean {
-    return this.#page?.directory.idText === directory.idText
-  }
-
-  #newAttempt(): PendingNavigation {
-    let scope: IncidentScopeOwner | undefined
+  #reportFailure(error: unknown, retryable: boolean): void {
     try {
-      scope = this.#options.incidents?.openScope('browse')
+      this.#options.recordFailure?.({ stage: 'browse', error, retryable })
     } catch {
-      // Diagnostics cannot acquire authority over navigation.
-    }
-    return {
-      controller: new AbortController(),
-      ...(scope === undefined ? {} : { scope }),
-      decisionSettled: false,
-    }
-  }
-
-  #recordFailure(
-    attempt: PendingNavigation,
-    retryable: boolean,
-    error?: unknown,
-  ): void {
-    const scope = attempt.scope
-    if (scope === undefined || attempt.decisionSettled) return
-    try {
-      const trigger = scope.facts.record(
-        error instanceof RemoteOperationError
-          ? error.failureFact
-          : unclassifiedFailureFact({
-              stage: 'browse',
-              recoveryDisposition: retryable ? 'retryable' : 'none',
-            }),
-        'contributor',
-      )
-      this.#submit(
-        attempt,
-        incidentPresentationDecision('browse', 'failed', trigger),
-      )
-    } catch {
-      attempt.decisionSettled = true
-      // A diagnostic classifier or sink failure cannot change the visible browse result.
-    }
-  }
-
-  #exclude(
-    attempt: PendingNavigation,
-    reason: PresentationExclusionReason,
-  ): void {
-    if (attempt.scope === undefined || attempt.decisionSettled) return
-    try {
-      this.#submit(
-        attempt,
-        excludedPresentationDecision('browse', reason),
-      )
-    } catch {
-      attempt.decisionSettled = true
-      // An exclusion-construction failure cannot acquire navigation authority.
-    }
-  }
-
-  #submit(attempt: PendingNavigation, decision: PresentationDecision): void {
-    const scope = attempt.scope
-    if (scope === undefined || attempt.decisionSettled) return
-    attempt.decisionSettled = true
-    try {
-      this.#options.incidents?.submitDecision(scope.handle, decision)
-    } catch {
-      // Reporter isolation is part of the product boundary, not a caller concern.
-    }
-  }
-
-  #closeScope(attempt: PendingNavigation): void {
-    try {
-      attempt.scope?.close()
-    } catch {
-      // Scope closure is observational and must not affect catalog ownership.
+      // Diagnostic reporting cannot alter visible browse results.
     }
   }
 }

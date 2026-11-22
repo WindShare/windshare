@@ -1,8 +1,8 @@
 import type { BlockTransportRoute } from '../content/route-policy'
+import type { DownloadConnectivitySnapshot } from '../content/broker'
+export type { DownloadConnectivitySnapshot } from '../content/broker'
 
 export const MAXIMUM_DOWNLOAD_INTERVALS = 4_096
-import type { DownloadConnectivitySnapshot } from '../diagnostics/trace/transfer-payload'
-export type { DownloadConnectivitySnapshot } from '../diagnostics/trace/transfer-payload'
 type Interval = { start: bigint; end: bigint }
 
 function positiveOverlap(start: bigint, end: bigint): bigint { return end > start ? end - start : 0n }

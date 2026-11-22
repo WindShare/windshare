@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { openApplication, reloadApplication } from './application/navigation'
-import type { WindShareDiagnostics } from '../../src/diagnostics/export/developer-api'
+import type { WindShareDiagnostics } from '../../src/diagnostics/developer-api'
 
 const BASE64URL_IDENTITY_PATTERN = /^[A-Za-z0-9_-]{22}$/u
 const EXPECTED_API_METHODS = Object.freeze([
@@ -9,8 +9,7 @@ const EXPECTED_API_METHODS = Object.freeze([
   'disable',
   'enable',
   'export',
-  'inspectFailureEvidence',
-  'inspectLastFailure',
+  'lastFailure',
   'status',
 ])
 
@@ -38,7 +37,7 @@ test('diagnostic evidence stays page-local and manual disable survives reload', 
       frozen: Object.isFrozen(diagnostics),
       methods: Object.keys(diagnostics).sort(),
       status: diagnostics.status(),
-      lastFailure: diagnostics.inspectLastFailure(),
+      lastFailure: diagnostics.lastFailure(),
       bundle: diagnostics.export(),
     }
   })
@@ -52,13 +51,13 @@ test('diagnostic evidence stays page-local and manual disable survives reload', 
   expect(initial.frozen).toBe(true)
   expect(initial.methods).toEqual(EXPECTED_API_METHODS)
   expect(initial.status).toMatchObject({
-    schema_version: 2,
+    schema_version: 3,
     state: 'idle',
     enabled: false,
     capture_generation: '0',
+    failure_count: '0',
     retained_event_count: '0',
     retained_event_bytes: '0',
-    incident_marker_count: '0',
   })
   expect(initial.lastFailure).toBeNull()
   expect(initialBundle.lineTypes).toEqual(['bundle_header'])
@@ -72,7 +71,7 @@ test('diagnostic evidence stays page-local and manual disable survives reload', 
     return {
       enabled,
       afterClear: diagnostics.status(),
-      lastFailure: diagnostics.inspectLastFailure(),
+      lastFailure: diagnostics.lastFailure(),
       bundle: diagnostics.export(),
     }
   })
@@ -88,9 +87,9 @@ test('diagnostic evidence stays page-local and manual disable survives reload', 
     enabled: true,
     capture_generation: clearedWhileEnabled.enabled.capture_generation,
     expires_at: clearedWhileEnabled.enabled.expires_at,
+    failure_count: '0',
     retained_event_count: '0',
     retained_event_bytes: '0',
-    incident_marker_count: '0',
   })
   expect(clearedWhileEnabled.lastFailure).toBeNull()
   expect(clearedBundle.lineTypes).toEqual(['bundle_header', 'trace_capture'])
@@ -113,9 +112,9 @@ test('diagnostic evidence stays page-local and manual disable survives reload', 
     enabled: false,
     capture_generation: clearedWhileEnabled.enabled.capture_generation,
     seal_reason: 'manual_disable',
+    failure_count: '0',
     retained_event_count: '0',
     retained_event_bytes: '0',
-    incident_marker_count: '0',
   })
   expect(disabled.status).not.toHaveProperty('expires_at')
   expect(disabledBundle.lineTypes).toEqual(['bundle_header', 'trace_capture'])
@@ -128,7 +127,7 @@ test('diagnostic evidence stays page-local and manual disable survives reload', 
     const diagnostics: WindShareDiagnostics = window.windshareDiagnostics
     return {
       status: diagnostics.status(),
-      lastFailure: diagnostics.inspectLastFailure(),
+      lastFailure: diagnostics.lastFailure(),
       bundle: diagnostics.export(),
     }
   })
@@ -138,9 +137,9 @@ test('diagnostic evidence stays page-local and manual disable survives reload', 
     state: 'idle',
     enabled: false,
     capture_generation: '0',
+    failure_count: '0',
     retained_event_count: '0',
     retained_event_bytes: '0',
-    incident_marker_count: '0',
   })
   expect(reloaded.lastFailure).toBeNull()
   expect(reloadedBundle.lineTypes).toEqual(['bundle_header'])
@@ -173,8 +172,8 @@ test('diagnostic activation survives reload without leaking to another tab or sh
   })
   // Invalid key material fails during controller startup without external networking.
   await openApplication(reopened, '/AAAAAAAAAAAAAAAA?trace=1#invalid-key')
-  await expect.poll(() => reopened.evaluate(() => window.windshareDiagnostics.inspectLastFailure()?.event))
-    .toBe('failure_incident')
+  await expect.poll(() => reopened.evaluate(() => window.windshareDiagnostics.lastFailure()?.stage))
+    .toBe('join')
   const restored = await reopened.evaluate(() => ({
     status: window.windshareDiagnostics.status(),
     bundle: window.windshareDiagnostics.export(),

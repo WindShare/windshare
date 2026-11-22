@@ -1,4 +1,3 @@
-import { captureFailureEvidence, evidenceFor, type FailureEvidence } from '../diagnostics/failure/evidence'
 import type { FrameChannel } from '../contracts/channel'
 import { MESSAGE_KIND, type SessionMessage } from './message'
 import { SessionRuntimeError } from './runtime-types'
@@ -37,7 +36,7 @@ export class SessionWriter {
   readonly #channel: FrameChannel
   readonly #sealer: EnvelopeSealer
   readonly #onFailure: (reason: unknown) => void
-  readonly #observe: ((message: SessionMessage, transition: SendTransition, evidence?: FailureEvidence) => void) | undefined
+  readonly #observe: ((message: SessionMessage, transition: SendTransition, failure?: unknown) => void) | undefined
   readonly #control: OutboundItem[] = []
   readonly #data: OutboundItem[] = []
   readonly #lifetime = new AbortController()
@@ -48,7 +47,7 @@ export class SessionWriter {
 
   constructor(channel: FrameChannel, sealer: EnvelopeSealer, options: {
     readonly onFailure: (reason: unknown) => void
-    readonly observe?: (message: SessionMessage, transition: SendTransition, evidence?: FailureEvidence) => void
+    readonly observe?: (message: SessionMessage, transition: SendTransition, failure?: unknown) => void
   }) {
     this.#channel = channel
     this.#sealer = sealer
@@ -196,18 +195,13 @@ export class SessionWriter {
 
   #retire(reason: unknown): void {
     if (this.#lifetime.signal.aborted) return
-    captureFailureEvidence(reason, { operation: 'session.send', context: {
-      phase: this.#active?.phase ?? 'unknown',
-      requestKind: this.#active?.message.kind ?? null,
-      operationId: this.#active?.message.operationId === undefined ? null : this.#active.message.operationId.toString(10),
-    } })
     this.fail(reason)
     this.#onFailure(reason)
   }
 
   #trace(item: OutboundItem, transition: SendTransition): void {
     try {
-      this.#observe?.(item.message, transition, transition === 'send_failed' ? evidenceFor(this.#lifetime.signal.reason) : undefined)
+      this.#observe?.(item.message, transition, transition === 'send_failed' ? this.#lifetime.signal.reason : undefined)
     } catch {
       // Observers cannot change ownership of a sequence or queued frame.
     }

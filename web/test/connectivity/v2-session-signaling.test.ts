@@ -2,7 +2,7 @@ import { createEd25519Verifier } from '../../src/crypto/ed25519'
 import { describe, expect, it } from 'vitest'
 import { PATH_POLICY, type ShareDescriptor } from '../../src/catalog/records'
 import type { ChannelState, FrameChannel } from '../../src/contracts/channel'
-import type { ReceivedProtocolError } from '../../src/diagnostics/incident/fact'
+import type { ReceivedProtocolError } from '../../src/session/diagnostics'
 import type { ConnectivityTraceEvent } from '../../src/connectivity/diagnostics'
 import {
   decodePeerCandidate,
@@ -465,7 +465,6 @@ describe('v2 authenticated session signaling', () => {
     expect(peerFailure).toMatchObject({
       message: 'Sender rejected the authenticated peer operation',
       protocolFailure: { requestKind: 'peer_offer', content: { scope: 'peer', code: 0x5001 } },
-      failureFact: { kind: 'protocol_failure' },
     })
     expect(session.closeCalls).toBe(0)
     expect(session.protocolFailures).toHaveLength(1)

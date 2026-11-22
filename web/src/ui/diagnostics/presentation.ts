@@ -1,7 +1,7 @@
 import { diagnosticsCopy } from '../locales/diagnostics'
-import type { DiagnosticsStatusV2 } from '../../diagnostics/export/diagnostic-bundle-v2'
+import type { DiagnosticsStatus } from '../../diagnostics/runtime'
 
-export function diagnosticsCaptureLabel(status: DiagnosticsStatusV2, t = diagnosticsCopy.en): string {
+export function diagnosticsCaptureLabel(status: DiagnosticsStatus, t = diagnosticsCopy.en): string {
   if (status.enabled) return t.recording
   if (status.state === 'idle') return t.off
   switch (status.seal_reason) {

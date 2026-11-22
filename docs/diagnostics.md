@@ -81,36 +81,19 @@ You can also add `?trace=1` (or `&trace=1` when a query exists) to an existing l
    bar; the same files remain available from **Connection details → Diagnostics** or the landing page's
    **Diagnostics** entry. Those entries also start recording for ordinary links.
 
-Activation is scoped to the current tab and page path. Reload preserves the original 30-minute
-deadline; it does not extend capture or undo a manual stop. The activation query is consumed on entry.
-Failures retain incident details without ending capture; later previews, retries, and downloads
-continue recording until **Stop recording** or the original deadline.
+Activation is scoped to the current tab and page path via `sessionStorage`. Reload preserves the
+original 30-minute deadline; it does not extend capture or undo a manual stop. The activation query is
+consumed on entry. Recording stays page-local in memory with no IndexedDB persistence.
 
-Compact failure evidence is retained even with recording off. Automatically recovered failures stay silent;
-open **Diagnostics** to export them. Typed classifications keep separate immutable exception trees, operation
-context, and evidence IDs. Repeated causes are counted independently of occurrence identities. Exception trees
-are bounded to 8 KiB; silent history keeps at most 64 records / 256 KiB and up to four distinct causes per
-classification, favoring recent observations. Relations retain separate counts and share cause slots.
-Incident buckets retain the earliest causes within each relation, with the nominated trigger always preserved.
+Diagnostics use two bounded in-memory ring buffers:
 
-The detailed trace ring is opt-in and bounded to 4 MiB / 4,096 events. Incident history retains 64 root events.
-Pending context pressure omits supporting facts with explicit counts; live operations can still report their failure trigger.
-For 10 minutes after sealing, late consequences coalesce into each root's `late_consequences` export supplement
-(at most 16 KiB), with cause samples, repeat counts, and omissions; they never evict root events.
-Exports are bounded to 8 MiB, reserve nominated trigger summaries, and report omitted evidence.
-The first failure saves asynchronously; subsequent changes coalesce over five seconds within each capture.
-Capture stops and page hiding flush pending evidence. Final snapshots and their retry budgets survive recording
-restarts. Pending snapshots obey the archive retention limits, plus one in-flight body while its write settles.
-Saves retry up to three times per snapshot. Unchanged evidence is not rewritten, retained events reuse encoded
-records, and empty captures are not archived.
-After reload, **Previous diagnostics** offers the latest file and expandable older files for that page,
-with their original run identities. Newer failure snapshots do not hide saved-recording notices.
-An empty current run offers no file.
-The archive admits up to three captures for 24 hours, at most 12 MiB each / 16 MiB total;
-expired records are pruned on access. Startup reads only archive summaries; file contents load when
-revealed in the diagnostics panel. The archive is separate from transfer storage.
-Storage denial leaves live export available. Abrupt browser termination can lose events since the last
-successful save. Download names include the timestamp and run ID and use `.ndjson`.
+- **Failure ring (always on)**: retains up to 128 entries / 512 KiB of redacted failures so unexpected
+  errors remain exportable even when detailed trace recording is off.
+- **Trace ring (opt-in)**: retains up to 4,096 events / 4 MiB in an $O(1)$ circular buffer while
+  recording is active.
+
+Storage denial leaves live in-memory recording and export available. Download names include the
+timestamp and run ID and use `.ndjson`.
 
 ### Console API
 
@@ -120,12 +103,11 @@ The same controls are available through `window.windshareDiagnostics`:
 |---|---|
 | `enable()` | Activates diagnostic recording (30-minute window). |
 | `disable()` | Stops recording and prevents capture on subsequent page loads. |
-| `export()` | Returns the current run's evidence, events, and incidents as NDJSON text. |
-| `status()` | Prints current capture state, event counts, and expiry deadline. |
-| `activation()` | Reports whether reload can resume capture and its original deadline, independently of retained evidence. |
-| `inspectLastFailure()` | Returns the most recent user-facing failure incident and its evidence. |
-| `inspectFailureEvidence()` | Returns bounded failure snapshots, repeat counts, and omissions, including silent recovery failures. |
-| `clear()` | Clears buffered logs and the current capture's saved snapshot without disabling capture. |
+| `export()` | Returns the current run's failures and trace events as NDJSON text. |
+| `status()` | Prints current capture state, failure/event counts, and expiry deadline. |
+| `activation()` | Reports whether reload can resume capture and its original deadline. |
+| `lastFailure()` | Returns the most recent redacted failure record, or `null`. |
+| `clear()` | Clears buffered failures and trace events without disabling capture. |
 
 ### Key Browser Events
 
@@ -133,7 +115,7 @@ The same controls are available through `window.windshareDiagnostics`:
 - `operation_recovery`: Operation retry decisions, protocol generation, and available lanes.
 - `connection_recovery`: Initial, fast, and slow waiting phases; attempt, generation, retry delay, wait reason (backoff, recovery capacity, or service cooldown), outcome, and failure context.
 - `relay_heartbeat`: Per-relay probe round, acknowledgement or failure, buffered bytes, elapsed time (round trip, or inbound silence on failure), and timeout. Initial events can precede protocol-session identity.
-- `protocol_operation`: Frame lifecycle states (`queued`, `sending`, `completed`, `withdrawn`, `failed`); failures link to a compact `failure_evidence` summary.
+- `protocol_operation`: Frame lifecycle states (`queued`, `sending`, `completed`, `withdrawn`, `failed`); failures include compact redacted failure details.
 - `lease_retirement`: Block lease cleanup and timeouts.
 - Block timeout `protocol_operation` events include `block_wait`: the receive phase, elapsed wait, and count of earlier-request fragments that extended queue allowance.
 

@@ -2,20 +2,19 @@ import { describe, expect, it } from 'vitest'
 
 import {
   PROTOCOL_ERROR_SCOPES,
-  PROTOCOL_MESSAGE_KINDS_V1,
-  createFailureCorrelation,
-  createFailureIdentity,
-  type FailureCorrelation,
-  type FailureIdentity,
-} from '../../src/diagnostics/incident/fact'
-import type {
-  FailureBytesIdentity,
-  FailureBytesIdentityKind,
-} from '../../src/diagnostics/incident/failure-correlation'
+  PROTOCOL_MESSAGE_KINDS,
+} from '../../src/session/diagnostics'
 import {
-  projectCorrelationV1,
-  type CorrelationV1,
-} from '../../src/diagnostics/export/correlation-v1'
+  createDiagnosticIdentity,
+  type DiagnosticBytesIdentity,
+  type DiagnosticBytesIdentityKind,
+  type DiagnosticIdentity,
+  type ProtocolCorrelation,
+} from '../../src/session/identities'
+import {
+  projectCorrelation,
+  type CorrelationRecord,
+} from '../../src/application/diagnostics/protocol-trace'
 import { loadVectorFile } from '../vectors'
 
 const vectors = loadVectorFile(
@@ -36,7 +35,7 @@ describe('Go↔TypeScript diagnostic correlation vectors', () => {
       const input = requiredRecord(vector.input, 'vector input')
       const expected = requiredRecord(vector.expected, 'vector expected')
       const correlation = correlationFromVector(input)
-      const projected = projectCorrelationV1(correlation)
+      const projected = projectCorrelation(correlation)
       const expectedCorrelation = optionalCorrelation(expected.correlation)
 
       expect(projected).toEqual(expectedCorrelation)
@@ -54,7 +53,7 @@ describe('Go↔TypeScript diagnostic correlation vectors', () => {
       expect(BigInt(sequence)).toBeLessThanOrEqual(MAX_UINT64)
       expect(BigInt(elapsedMilliseconds)).toBeLessThanOrEqual(MAX_UINT64)
 
-      expect(PROTOCOL_MESSAGE_KINDS_V1).toContain(
+      expect(PROTOCOL_MESSAGE_KINDS).toContain(
         requiredString(expected.request_kind, 'request kind'),
       )
       expect(PROTOCOL_ERROR_SCOPES).toContain(
@@ -68,64 +67,64 @@ describe('Go↔TypeScript diagnostic correlation vectors', () => {
 
 describe('diagnostic correlation projection invariants', () => {
   it('rejects dependent identities without their authorities', () => {
-    const operation = createFailureIdentity('protocol_operation', 16n)
-    const attempt = createFailureIdentity('peer_attempt', identityBytes(0x20))
+    const operation = createDiagnosticIdentity('protocol_operation', 16n)
+    const attempt = createDiagnosticIdentity('peer_attempt', identityBytes(0x20))
 
-    expect(() => projectCorrelationV1({
+    expect(() => projectCorrelation({
       protocolOperationId: operation,
-    } as FailureCorrelation)).toThrow(/requires a protocol session/u)
-    expect(() => projectCorrelationV1({
+    })).toThrow(/requires a protocol session/u)
+    expect(() => projectCorrelation({
       peerAttemptId: attempt,
-    } as FailureCorrelation)).toThrow(/requires a peer path/u)
+    })).toThrow(/requires a peer path/u)
   })
 
   it('rejects malformed bytes and lane values at the projection boundary', () => {
     const malformed = fakeIdentity('protocol_session', new Uint8Array(15))
-    expect(() => projectCorrelationV1({
+    expect(() => projectCorrelation({
       protocolSessionId: malformed,
     })).toThrow(/exactly 16 bytes/u)
-    expect(() => projectCorrelationV1({
+    expect(() => projectCorrelation({
       lane: { id: -1, epoch: 0 },
     })).toThrow(/uint32 ID and epoch/u)
-    expect(() => projectCorrelationV1({
+    expect(() => projectCorrelation({
       lane: { id: 1, epoch: 0x1_0000_0000 },
     })).toThrow(/uint32 ID and epoch/u)
   })
 
   it('omits all-zero identities and keeps a zero lane epoch', () => {
     const allZero = fakeIdentity('protocol_session', new Uint8Array(16))
-    expect(projectCorrelationV1({ protocolSessionId: allZero })).toBeUndefined()
+    expect(projectCorrelation({ protocolSessionId: allZero })).toBeUndefined()
 
-    const projected = projectCorrelationV1({ lane: { id: 0, epoch: 0 } })
+    const projected = projectCorrelation({ lane: { id: 0, epoch: 0 } })
     expect(projected).toEqual({ lane_id: 0, lane_epoch: 0 })
     expect(JSON.stringify(projected)).toBe('{"lane_id":0,"lane_epoch":0}')
   })
 })
 
-function correlationFromVector(input: Record<string, unknown>): FailureCorrelation | undefined {
+function correlationFromVector(input: Record<string, unknown>): ProtocolCorrelation | undefined {
   const candidate: {
-    protocolSessionId?: FailureIdentity<'protocol_session'>
-    protocolOperationId?: FailureIdentity<'protocol_operation'>
-    peerPathId?: FailureIdentity<'peer_path'>
-    peerAttemptId?: FailureIdentity<'peer_attempt'>
+    protocolSessionId?: DiagnosticIdentity<'protocol_session'>
+    protocolOperationId?: DiagnosticIdentity<'protocol_operation'>
+    peerPathId?: DiagnosticIdentity<'peer_path'>
+    peerAttemptId?: DiagnosticIdentity<'peer_attempt'>
     lane?: Readonly<{ id: number; epoch: number }>
   } = {}
 
   const session = optionalIdentityBytes(input.protocol_session_id_bytes, 'protocol session')
   if (session !== undefined) {
-    candidate.protocolSessionId = createFailureIdentity('protocol_session', session)
+    candidate.protocolSessionId = createDiagnosticIdentity('protocol_session', session)
   }
   if (input.protocol_operation_id !== undefined) {
-    candidate.protocolOperationId = createFailureIdentity(
+    candidate.protocolOperationId = createDiagnosticIdentity(
       'protocol_operation',
       BigInt(requiredDecimal(input.protocol_operation_id, 'protocol operation')),
     )
   }
   const path = optionalIdentityBytes(input.peer_path_id_bytes, 'peer path')
-  if (path !== undefined) candidate.peerPathId = createFailureIdentity('peer_path', path)
+  if (path !== undefined) candidate.peerPathId = createDiagnosticIdentity('peer_path', path)
   const attempt = optionalIdentityBytes(input.peer_attempt_id_bytes, 'peer attempt')
   if (attempt !== undefined) {
-    candidate.peerAttemptId = createFailureIdentity('peer_attempt', attempt)
+    candidate.peerAttemptId = createDiagnosticIdentity('peer_attempt', attempt)
   }
 
   if (input.lane_id !== undefined || input.lane_epoch !== undefined) {
@@ -136,12 +135,12 @@ function correlationFromVector(input: Record<string, unknown>): FailureCorrelati
   }
   return Object.keys(candidate).length === 0
     ? undefined
-    : createFailureCorrelation(candidate)
+    : Object.freeze(candidate)
 }
 
-function optionalCorrelation(value: unknown): CorrelationV1 | undefined {
+function optionalCorrelation(value: unknown): CorrelationRecord | undefined {
   if (value === undefined) return undefined
-  return requiredRecord(value, 'expected correlation') as CorrelationV1
+  return requiredRecord(value, 'expected correlation') as CorrelationRecord
 }
 
 function optionalIdentityBytes(value: unknown, label: string): Uint8Array | undefined {
@@ -183,7 +182,7 @@ function requiredNumber(value: unknown, label: string): number {
   return value
 }
 
-function assertCanonicalIdentities(correlation: CorrelationV1): void {
+function assertCanonicalIdentities(correlation: CorrelationRecord): void {
   for (const identity of [
     correlation.protocol_session_id,
     correlation.peer_path_id,
@@ -203,10 +202,10 @@ function identityBytes(start: number): Uint8Array {
   return Uint8Array.from({ length: 16 }, (_, index) => (start + index) & 0xff)
 }
 
-function fakeIdentity<Kind extends FailureBytesIdentityKind>(
+function fakeIdentity<Kind extends DiagnosticBytesIdentityKind>(
   kind: Kind,
   bytes: Uint8Array,
-): FailureBytesIdentity<Kind> {
+): DiagnosticBytesIdentity<Kind> {
   return {
     kind,
     byteLength: 16,

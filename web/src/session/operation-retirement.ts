@@ -1,5 +1,9 @@
-import { createProtocolErrorContent } from '../diagnostics/incident/protocol-error'
-import { protocolMessageKindV1, type ProtocolOperationSettlement, type ProtocolTraceSource } from './diagnostics'
+import {
+  createProtocolErrorContent,
+  protocolMessageKindV1,
+  type ProtocolOperationSettlement,
+  type ProtocolTraceSource,
+} from './diagnostics'
 import { createProtocolOperationIdentity, type ProtocolSessionIdentity } from './identities'
 import { decodeOperationErrorControl, MESSAGE_KIND, type MessageKind, type SessionMessage } from './message'
 import { OperationContinuationAuthority } from './operation-continuation'

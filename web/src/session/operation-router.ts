@@ -5,17 +5,18 @@ import {
   type ProtocolTraceContext,
 } from './operation-retirement'
 import { cancellationTraceReason, snapshotOperationRequest, type CancellationTraceReason } from './operation-diagnostics'
-import { createReceivedProtocolError, type ReceivedProtocolError } from '../diagnostics/incident/protocol-error'
-import { type FailureCorrelation } from '../diagnostics/incident/failure-correlation'
 import {
+  createReceivedProtocolError,
   protocolMessageKindV1,
   type ProtocolOperationSettlement,
   type ProtocolTraceEvent,
+  type ReceivedProtocolError,
 } from './diagnostics'
 import {
   createPeerAttemptIdentity,
   createPeerPathIdentityValue,
   createProtocolOperationIdentity,
+  type ProtocolCorrelation,
 } from './identities'
 import {
   decodeOperationErrorControl,
@@ -615,7 +616,7 @@ export class OperationRouter {
     operation: OperationQueue,
     laneId: number | undefined,
     laneEpoch: number | undefined,
-  ): FailureCorrelation {
+  ): ProtocolCorrelation {
     const diagnostics = this.#diagnostics
     if (diagnostics === undefined) {
       throw new SessionRuntimeError('session', 'Protocol trace correlation is unavailable')

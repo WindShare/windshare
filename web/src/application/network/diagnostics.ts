@@ -1,38 +1,53 @@
 import type { AuthorityObservation } from '../../network/authority/feed'
 import type { DirectoryObservation } from '../../network/directory'
-import type { DomainTraceSource } from '../../diagnostics/trace/ports'
-import type { TraceEventObservationV2 } from '../../diagnostics/trace/model'
-import { observation } from '../../diagnostics/export/trace-observation'
+import type { TraceEntry, TraceSource } from '../../diagnostics/runtime'
 import { formatDiagnosticText } from '../../security/diagnostic-formatter'
 
-export function authorityObserver(trace: DomainTraceSource<TraceEventObservationV2>): (event: AuthorityObservation) => void {
+const MAX_TEXT = 2_048
+
+export function authorityObserver(trace: TraceSource<TraceEntry>): (event: AuthorityObservation) => void {
   return event => {
-    trace.current?.(observation('authority_blocks', {
-      operation_id: event.operationId, endpoint: event.endpoint.slice(0, 2048), transition: event.transition,
-      ...(event.generation === undefined ? {} : { generation: event.generation }),
-      ...(event.version === undefined ? {} : { version: event.version }),
-      ...(event.failure === undefined ? {} : { failure_detail: formatDiagnosticText(event.failure).slice(0, 2048) }),
-    }))
+    trace.current?.({
+      event: 'authority_blocks',
+      payload: {
+        operation_id: event.operationId,
+        endpoint: event.endpoint.slice(0, MAX_TEXT),
+        transition: event.transition,
+        ...(event.generation === undefined ? {} : { generation: event.generation }),
+        ...(event.version === undefined ? {} : { version: event.version }),
+        ...(event.failure === undefined ? {} : { failure_detail: formatDiagnosticText(event.failure).slice(0, MAX_TEXT) }),
+      },
+    })
   }
 }
 
-export function networkObserver(trace: DomainTraceSource<TraceEventObservationV2>): (event: DirectoryObservation) => void {
+export function networkObserver(trace: TraceSource<TraceEntry>): (event: DirectoryObservation) => void {
   return event => {
     const observer = trace.current
     if (!observer) return
     if (event.transition === 'storage_fallback') {
-      observer(observation('network_directory', {
-        operation_id: event.operationId, transition: event.transition,
-        failure_detail: formatDiagnosticText(event.failure).slice(0, 2048),
-      }))
+      observer({
+        event: 'network_directory',
+        payload: {
+          operation_id: event.operationId,
+          transition: event.transition,
+          failure_detail: formatDiagnosticText(event.failure).slice(0, MAX_TEXT),
+        },
+      })
       return
     }
-    observer(observation('network_directory', {
-      operation_id: event.operationId, mirror: event.mirror.slice(0, 2048), tier: event.tier, transition: event.transition,
-      ...(event.generation === undefined ? {} : { generation: event.generation }),
-      ...(event.serial === undefined ? {} : { serial: event.serial }),
-      ...(event.trustedUntil === undefined ? {} : { trusted_until_ms: event.trustedUntil }),
-      ...(event.failure === undefined ? {} : { failure_detail: formatDiagnosticText(event.failure).slice(0, 2048) }),
-    }))
+    observer({
+      event: 'network_directory',
+      payload: {
+        operation_id: event.operationId,
+        mirror: event.mirror.slice(0, MAX_TEXT),
+        tier: event.tier,
+        transition: event.transition,
+        ...(event.generation === undefined ? {} : { generation: event.generation }),
+        ...(event.serial === undefined ? {} : { serial: event.serial }),
+        ...(event.trustedUntil === undefined ? {} : { trusted_until_ms: event.trustedUntil }),
+        ...(event.failure === undefined ? {} : { failure_detail: formatDiagnosticText(event.failure).slice(0, MAX_TEXT) }),
+      },
+    })
   }
 }

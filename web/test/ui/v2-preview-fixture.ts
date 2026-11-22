@@ -1,11 +1,8 @@
 import type { CatalogEntry } from '../../src/catalog/records'
 import { encodeBase64Url } from '../../src/crypto/bytes'
-import {
-  createFailureIdentity, createIncidentScopeIssuer, createReceivedProtocolError,
-  type FailureFact, type FailureFactRelation, type IncidentScopeHandle,
-  type IncidentScopeIdentity, type IncidentScopeKind, type IncidentScopeOwner,
-  type PresentationDecision,
-} from '../../src/diagnostics/incident'
+import { createReceivedProtocolError } from '../../src/session/diagnostics'
+import { createDiagnosticIdentity } from '../../src/session/identities'
+import type { FailureReportEvent } from '../../src/application/diagnostics/receive-trace'
 import { RemoteOperationError } from '../../src/content/session-operations'
 import { RemoteRevisionError, RevisionCapacityBusyError } from '../../src/content/session-services'
 import { REVISION_CODE_QUOTA } from '../../src/content/flow'
@@ -166,8 +163,8 @@ export function identityText(first: number): string {
 export function authenticatedRemoteOperationError(): RemoteOperationError {
   return new RemoteOperationError(createReceivedProtocolError({
     requestKind: 'open_revisions', correlation: Object.freeze({
-      protocolSessionId: createFailureIdentity('protocol_session', identity(9)),
-      protocolOperationId: createFailureIdentity('protocol_operation', 10n),
+      protocolSessionId: createDiagnosticIdentity('protocol_session', identity(9)),
+      protocolOperationId: createDiagnosticIdentity('protocol_operation', 10n),
     }), content: {
       scope: 'revision', code: 0x22, retryable: true, retryAfterMilliseconds: 250
     }
@@ -177,8 +174,8 @@ export function authenticatedRemoteOperationError(): RemoteOperationError {
 export function remoteOperationError(retryable: boolean): RemoteOperationError {
   return new RemoteOperationError(createReceivedProtocolError({
     requestKind: 'request_blocks', correlation: Object.freeze({
-      protocolSessionId: createFailureIdentity('protocol_session', identity(13)),
-      protocolOperationId: createFailureIdentity('protocol_operation', 14n),
+      protocolSessionId: createDiagnosticIdentity('protocol_session', identity(13)),
+      protocolOperationId: createDiagnosticIdentity('protocol_operation', 14n),
     }), content: retryable
       ? { scope: 'block', code: 0x31, retryable, retryAfterMilliseconds: 250 }
       : { scope: 'block', code: 0x31, retryable },
@@ -188,8 +185,8 @@ export function remoteOperationError(retryable: boolean): RemoteOperationError {
 export function nonRetryableRemoteRevisionError(): RemoteRevisionError {
   return new RemoteRevisionError(createReceivedProtocolError({
     requestKind: 'open_revisions', correlation: Object.freeze({
-      protocolSessionId: createFailureIdentity('protocol_session', identity(15)),
-      protocolOperationId: createFailureIdentity('protocol_operation', 16n),
+      protocolSessionId: createDiagnosticIdentity('protocol_session', identity(15)),
+      protocolOperationId: createDiagnosticIdentity('protocol_operation', 16n),
     }), content: { scope: 'revision', code: 0x21, retryable: false },
   }))
 }
@@ -202,8 +199,8 @@ export function authenticatedRevisionCapacityError(): RevisionCapacityBusyError 
   })
   return new RevisionCapacityBusyError(createReceivedProtocolError({
     requestKind: 'open_revisions', correlation: Object.freeze({
-      protocolSessionId: createFailureIdentity('protocol_session', identity(11)),
-      protocolOperationId: createFailureIdentity('protocol_operation', 12n),
+      protocolSessionId: createDiagnosticIdentity('protocol_session', identity(11)),
+      protocolOperationId: createDiagnosticIdentity('protocol_operation', 12n),
     }), content: {
       scope: 'revision', code: failure.code, retryable: failure.retryable, retryAfterMilliseconds: failure.retryAfterMilliseconds
     }
@@ -324,40 +321,10 @@ export class DiagnosticPreviewJoined {
   }
 }
 
-export class RecordingPreviewIncidents {
-  readonly #issuer = createIncidentScopeIssuer()
-  readonly owners: IncidentScopeOwner[] = []
-  readonly decisions: Array<{
-    readonly scope: IncidentScopeIdentity
-    readonly decision: PresentationDecision
-  }> = []
-  readonly facts: Array<{
-    readonly scope: IncidentScopeIdentity
-    readonly fact: FailureFact
-    readonly relation: FailureFactRelation
-  }> = []
-  onDecision: ((decision: PresentationDecision) => void) | undefined
-
-  openScope(kind: IncidentScopeKind): IncidentScopeOwner {
-    const owner = this.#issuer.open(kind, {
-      factRecorded: (observation) => {
-        this.facts.push({
-          scope: observation.ref.scope,
-          fact: observation.fact,
-          relation: observation.relation,
-        })
-      },
-    })
-    this.owners.push(owner)
-    return owner
-  }
-
-  submitDecision(
-    scope: IncidentScopeHandle,
-    decision: PresentationDecision,
-  ): void {
-    this.decisions.push({ scope: scope.identity, decision })
-    this.onDecision?.(decision)
+export class RecordingPreviewFailures {
+  readonly events: FailureReportEvent[] = []
+  readonly report = (event: FailureReportEvent): void => {
+    this.events.push(event)
   }
 }
 

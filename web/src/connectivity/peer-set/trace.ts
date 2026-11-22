@@ -1,5 +1,4 @@
-import type { FailureCorrelation } from '../../diagnostics/incident/failure-correlation'
-import type { PeerAttemptIdentity, PeerPathIdentity, ProtocolSessionIdentity } from '../../session/identities'
+import type { PeerAttemptIdentity, PeerPathIdentity, ProtocolCorrelation, ProtocolSessionIdentity } from '../../session/identities'
 import type { ConnectivityTraceSource, PeerRecoveryTraceEvent } from '../diagnostics'
 export type PeerRecoveryTracePayload<Event = PeerRecoveryTraceEvent> =
   Event extends PeerRecoveryTraceEvent ? Omit<Event, 'eventName' | 'correlation'> : never
@@ -20,7 +19,7 @@ export class PeerRecoveryTrace {
     try {
       const observer = this.#trace?.current
       if (observer === undefined) return
-      const correlation: FailureCorrelation = Object.freeze({
+      const correlation: ProtocolCorrelation = Object.freeze({
         protocolSessionId: this.#protocolSessionId,
         peerPathId: this.#peerPathId,
         ...(attemptId === undefined ? {} : { peerAttemptId: attemptId }),

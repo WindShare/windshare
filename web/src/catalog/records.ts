@@ -1,4 +1,3 @@
-import { catalogFailure } from './failure-evidence'
 import { createEd25519Verifier, type Ed25519Verifier, type Ed25519VerifierOptions } from '../crypto/ed25519'
 import {
   DESCRIPTOR_OBJECT_BYTES,
@@ -134,7 +133,7 @@ export async function openShareDescriptor(
   verification: Ed25519VerifierOptions = {},
 ): Promise<ShareDescriptor> {
   if (object.byteLength === 0 || object.byteLength > DESCRIPTOR_OBJECT_BYTES) {
-    throw catalogFailure(new CborError('Share descriptor object exceeds its limit'), { invariant: 'descriptor-bytes', actual: object.byteLength, maximum: DESCRIPTOR_OBJECT_BYTES })
+    throw new CborError('Share descriptor object exceeds its limit')
   }
   const route = { pkHash: capability.pkHash.slice(), shareIdRaw: capability.shareIdRaw.slice() }
   const key = await deriveSuite02DescriptorKey(capability.readSecret, route.pkHash)
@@ -163,12 +162,12 @@ export function decodeShareDescriptor(plaintext: Uint8Array, verification: Ed255
     'share descriptor',
   )
   if (requireUnsigned(fields.get(0), 'descriptor schema') !== 1n) {
-    throw catalogFailure(new CborError('Share descriptor schema is unsupported'), { invariant: 'descriptor-schema', expected: '1', actual: String(fields.get(0)) })
+    throw new CborError('Share descriptor schema is unsupported')
   }
   const wire = requireUnsigned(fields.get(1), 'descriptor wire version')
   const suite = requireUnsigned(fields.get(2), 'descriptor suite')
   if (wire !== 2n || suite !== 2n) {
-    throw catalogFailure(new CborError('Share descriptor does not use suite-02 wire semantics'), { invariant: 'suite-wire', expected: '2', actualWire: String(wire), actualSuite: String(suite) })
+    throw new CborError('Share descriptor does not use suite-02 wire semantics')
   }
   const shareInstance = requireBytes(
     fields.get(3),
@@ -188,17 +187,17 @@ export function decodeShareDescriptor(plaintext: Uint8Array, verification: Ed255
     chunkSizeValue > BigInt(MAXIMUM_CHUNK_BYTES) ||
     (chunkSizeValue & (chunkSizeValue - 1n)) !== 0n
   ) {
-    throw catalogFailure(new CborError('Share descriptor chunk size is outside the power-of-two range'), { invariant: 'chunk-size', minimum: MINIMUM_CHUNK_BYTES, maximum: MAXIMUM_CHUNK_BYTES, actual: String(chunkSizeValue) })
+    throw new CborError('Share descriptor chunk size is outside the power-of-two range')
   }
   const capabilities = requireUnsigned(fields.get(6), 'descriptor capabilities')
   if ((capabilities & ~ACTIVE_CAPABILITIES) !== 0n) {
-    throw catalogFailure(new CborError('Share descriptor enables an unknown capability'), { invariant: 'capabilities', allowedMask: String(ACTIVE_CAPABILITIES), actual: String(capabilities) })
+    throw new CborError('Share descriptor enables an unknown capability')
   }
   const senderPublicKey = requireBytes(fields.get(7), 32, 'sender public key', true)
   const createdAtSeconds = requireUnsigned(fields.get(8), 'descriptor creation time')
   const pathPolicy = requireText(fields.get(9), 'descriptor path policy')
   if (createdAtSeconds > MAXIMUM_SAFE_INTEGER || pathPolicy !== PATH_POLICY) {
-    throw catalogFailure(new CborError('Share descriptor uses an unsupported time or path policy'), { invariant: 'descriptor-policy', expectedPolicy: PATH_POLICY, actualPolicy: pathPolicy, actualTime: String(createdAtSeconds), maximumTime: String(MAXIMUM_SAFE_INTEGER) })
+    throw new CborError('Share descriptor uses an unsupported time or path policy')
   }
   return Object.freeze({
     wireVersion: 2,
@@ -243,11 +242,7 @@ export async function decodeCatalogPayload(
   const { failure } = decoded
   if (!equalBytes(failure.shareInstance, descriptor.shareInstance) ||
       !equalBytes(failure.directoryId, request.directoryId)) {
-    throw catalogFailure(new CborError('Directory failure does not answer its authenticated request'), {
-      invariant: 'directory-failure-binding', expectedDirectory: encodeBase64Url(request.directoryId),
-      actualDirectory: failure.directoryIdText, expectedShare: descriptor.shareInstanceId,
-      actualShare: encodeBase64Url(failure.shareInstance),
-    })
+    throw new CborError('Directory failure does not answer its authenticated request')
   }
   return Object.freeze({ kind: 'failure', failure })
 }
@@ -271,20 +266,20 @@ function decodeCatalogPageFields(value: unknown): DecodedCatalogPage {
     'catalog page',
   )
   if (requireUnsigned(fields.get(0), 'catalog schema') !== CATALOG_PAGE_SCHEMA) {
-    throw catalogFailure(new CborError('Catalog page schema is unsupported'), { invariant: 'page-schema', expected: '1', actual: String(fields.get(0)) })
+    throw new CborError('Catalog page schema is unsupported')
   }
   const shareInstance = requireBytes(fields.get(1), 16, 'catalog share instance', true)
   const directoryId = requireBytes(fields.get(2), 16, 'catalog directory ID', true)
   const generation = requireBytes(fields.get(3), 16, 'catalog generation', true)
   const pageIndexValue = requireUnsigned(fields.get(4), 'catalog page index')
-  if (pageIndexValue > 0xffff_ffffn) throw catalogFailure(new CborError('Catalog page index is too large'), { invariant: 'page-index', maximum: '4294967295', actual: String(pageIndexValue) })
+  if (pageIndexValue > 0xffff_ffffn) throw new CborError('Catalog page index is too large')
   const terminal = requireBoolean(fields.get(5), 'catalog terminal')
   const previousCommitment = requireBytes(fields.get(6), 32, 'catalog previous commitment')
   const rawEntries = requireArray(fields.get(7), CATALOG_PAGE_ENTRIES, 'catalog entries')
   const entries = rawEntries.map(decodeCatalogEntry)
   const omittedCount = requireUnsigned(fields.get(8), 'catalog omitted count')
   if ((!terminal && omittedCount !== 0n) || omittedCount > BigInt(CATALOG_DIRECTORY_ENTRIES)) {
-    throw catalogFailure(new CborError('Catalog omitted count is inconsistent'), { invariant: 'omitted-count', terminal, maximum: CATALOG_DIRECTORY_ENTRIES, actual: String(omittedCount) })
+    throw new CborError('Catalog omitted count is inconsistent')
   }
   return {
     shareInstance,
@@ -311,7 +306,7 @@ function decodeDirectoryFailureFields(value: unknown): DirectoryFailure {
     'directory failure',
   )
   if (requireUnsigned(fields.get(0), 'directory failure schema') !== DIRECTORY_FAILURE_SCHEMA) {
-    throw catalogFailure(new CborError('Directory failure schema is unsupported'), { invariant: 'directory-failure-schema', expected: String(DIRECTORY_FAILURE_SCHEMA), actual: String(fields.get(0)) })
+    throw new CborError('Directory failure schema is unsupported')
   }
   const shareInstance = requireBytes(fields.get(1), 16, 'failure share instance', true)
   const directoryId = requireBytes(fields.get(2), 16, 'failure directory ID', true)
@@ -319,22 +314,22 @@ function decodeDirectoryFailureFields(value: unknown): DirectoryFailure {
   const codeValue = requireUnsigned(fields.get(4), 'directory failure code')
   const retryable = requireBoolean(fields.get(5), 'directory retryable')
   if (codeValue < 0x2001n || codeValue > 0x2008n) {
-    throw catalogFailure(new CborError('Directory failure code is outside its scope'), { invariant: 'directory-failure-code', actual: String(codeValue) })
+    throw new CborError('Directory failure code is outside its scope')
   }
   const retryAfter = fields.get(6)
   let retryAfterMilliseconds: number | undefined
   if (retryable) {
     const delay = requireUnsigned(retryAfter, 'directory retry delay')
     if (delay < 250n || delay > 30_000n) {
-      throw catalogFailure(new CborError('Directory retry delay is outside its frozen range'), { invariant: 'retry-delay', actual: String(delay) })
+      throw new CborError('Directory retry delay is outside its frozen range')
     }
     retryAfterMilliseconds = Number(delay)
   } else if (retryAfter !== null) {
-    throw catalogFailure(new CborError('Permanent directory failure carries a retry delay'), { invariant: 'permanent-retry-delay', expected: null, actual: String(retryAfter) })
+    throw new CborError('Permanent directory failure carries a retry delay')
   }
   const code = Number(codeValue)
   if (code === 0x2007 && !retryable) {
-    throw catalogFailure(new CborError('Directory transient I/O must be retryable'), { invariant: 'transient-retryable', expected: true, actual: retryable })
+    throw new CborError('Directory transient I/O must be retryable')
   }
   return Object.freeze({
     shareInstance,
@@ -351,13 +346,13 @@ function decodeDirectoryFailureFields(value: unknown): DirectoryFailure {
 
 function decodeCatalogEntry(value: unknown): CatalogEntry {
   const fields = requireArray(value, 7, 'catalog entry')
-  if (fields.length !== 7) throw catalogFailure(new CborError('Catalog entry has the wrong field count'), { invariant: 'entry-fields', expected: 7, actual: fields.length })
+  if (fields.length !== 7) throw new CborError('Catalog entry has the wrong field count')
   const kind = requireUnsigned(fields[0], 'catalog entry kind')
   const id = requireBytes(fields[1], 16, 'catalog entry ID', true)
   const name = requireCatalogName(fields[2])
   const modifiedTime = decodeModifiedTime(fields[4], fields[5], fields[6])
   if (kind === 1n) {
-    if (fields[3] !== null) throw catalogFailure(new CborError('Directory entry carries a file size'), { invariant: 'directory-size', expected: null, actual: String(fields[3]), nodeId: encodeBase64Url(id) })
+    if (fields[3] !== null) throw new CborError('Directory entry carries a file size')
     return Object.freeze({
       kind: 'directory',
       id,
@@ -366,10 +361,10 @@ function decodeCatalogEntry(value: unknown): CatalogEntry {
       ...(modifiedTime === undefined ? {} : { modifiedTime }),
     })
   }
-  if (kind !== 2n) throw catalogFailure(new CborError('Catalog entry kind is unsupported'), { invariant: 'entry-kind', expected: '1|2', actual: String(kind) })
+  if (kind !== 2n) throw new CborError('Catalog entry kind is unsupported')
   const expectedSize = requireUnsigned(fields[3], 'catalog expected size')
   if (expectedSize > MAXIMUM_SAFE_INTEGER) {
-    throw catalogFailure(new CborError('Catalog file size exceeds the browser-safe wire range'), { invariant: 'file-size', maximum: String(MAXIMUM_SAFE_INTEGER), actual: String(expectedSize) })
+    throw new CborError('Catalog file size exceeds the browser-safe wire range')
   }
   return Object.freeze({
     kind: 'file',
@@ -390,7 +385,7 @@ function decodeModifiedTime(
   const precision = requireUnsigned(precisionValue, 'modified precision')
   if (secondsValue === null) {
     if (nanoseconds !== 0n || precision !== 0n) {
-      throw catalogFailure(new CborError('Absent modified time carries data'), { invariant: 'absent-modified-time', expected: '0', actualNanoseconds: String(nanoseconds), actualPrecision: String(precision) })
+      throw new CborError('Absent modified time carries data')
     }
     return undefined
   }
@@ -404,7 +399,7 @@ function decodeModifiedTime(
     (precision === 1n && nanoseconds !== 0n) ||
     (precision === 2n && nanoseconds % 1_000_000n !== 0n)
   ) {
-    throw catalogFailure(new CborError('Modified time is outside its portable precision'), { invariant: 'modified-time', seconds: String(seconds), nanoseconds: String(nanoseconds), precision: String(precision) })
+    throw new CborError('Modified time is outside its portable precision')
   }
   return Object.freeze({
     seconds,
@@ -416,7 +411,7 @@ function decodeModifiedTime(
 
 function requireCatalogName(name: unknown): string {
   if (typeof name !== 'string' || !isCatalogName(name)) {
-    throw catalogFailure(new CborError('Catalog entry name is not a safe path segment'), { invariant: 'safe-path-segment', actual: String(name) })
+    throw new CborError('Catalog entry name is not a safe path segment')
   }
   return name
 }
@@ -424,10 +419,10 @@ function requireCatalogName(name: unknown): string {
 function requirePageRequest(request: CatalogPageRequest): void {
   requireBytes(request.directoryId, 16, 'requested directory ID', true)
   if (!Number.isInteger(request.pageIndex) || request.pageIndex < 0 || request.pageIndex > 0xffff_ffff) {
-    throw catalogFailure(new CborError('Requested catalog page index is invalid'), { invariant: 'requested-page-index', actual: request.pageIndex })
+    throw new CborError('Requested catalog page index is invalid')
   }
   if (request.pageIndex > 0 && request.generation === undefined) {
-    throw catalogFailure(new CborError('Later catalog pages require a generation identity'), { invariant: 'requested-generation', pageIndex: request.pageIndex, actual: null })
+    throw new CborError('Later catalog pages require a generation identity')
   }
   if (request.generation !== undefined) {
     requireBytes(request.generation, 16, 'requested catalog generation', true)
@@ -445,12 +440,7 @@ function requireCatalogPageIdentity(
     page.pageIndex !== request.pageIndex ||
     (request.generation !== undefined && !equalBytes(page.generation, request.generation))
   ) {
-    throw catalogFailure(new CborError('Catalog page does not answer its authenticated request'), {
-      invariant: 'authenticated-request', expectedDirectory: encodeBase64Url(request.directoryId), actualDirectory: page.directoryIdText,
-      expectedPage: request.pageIndex, actualPage: page.pageIndex,
-      expectedGeneration: request.generation === undefined ? null : encodeBase64Url(request.generation), actualGeneration: page.generationText,
-      expectedShare: descriptor.shareInstanceId, actualShare: encodeBase64Url(page.shareInstance),
-    })
+    throw new CborError('Catalog page does not answer its authenticated request')
   }
 }
 

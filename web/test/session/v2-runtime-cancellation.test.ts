@@ -5,7 +5,6 @@ import { SessionBlockLane, type RevisionService } from '../../src/content/sessio
 import { encodeBody, MESSAGE_KIND } from '../../src/session/message'
 import { OPERATION_CANCEL_REASON } from '../../src/session/runtime-types'
 import { SESSION_SEND_TIMEOUT_MILLISECONDS } from '../../src/session/writer'
-import { snapshotTraceEventObservationV2 } from '../../src/diagnostics/export/trace-event-v2'
 import { projectProtocolTraceEvent } from '../../src/application/diagnostics/receive-trace'
 import { id, openSent, runtimeFixture, SHARE } from './v2-send-fixture'
 
@@ -48,7 +47,7 @@ describe('request cancellation across send backpressure', () => {
       ])
       expect(events).toContainEqual(expect.objectContaining({ transition: 'send_withdrawn' }))
       for (const event of events) {
-        expect(() => snapshotTraceEventObservationV2(projectProtocolTraceEvent(event))).not.toThrow()
+        expect(() => JSON.stringify(projectProtocolTraceEvent(event))).not.toThrow()
       }
     } finally { await runtime.close() }
   })

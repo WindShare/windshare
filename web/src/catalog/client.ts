@@ -1,5 +1,3 @@
-import { captureFailureEvidence } from '../diagnostics/failure/evidence'
-import { catalogFailure } from './failure-evidence'
 import { encodeBase64Url, equalBytes } from '../crypto/bytes'
 import { CborError } from '../protocol/cbor'
 import type {
@@ -280,7 +278,6 @@ export class CatalogClient {
         'Catalog directory has no terminal page within its limit',
       ))
     } catch (error) {
-      this.#captureLoadFailure(error, signal, directoryIdText, generation, entryCount, spoolBytes)
       if (error instanceof DirectoryFailureError) {
         const cached = this.#cachedFailure(error.failure)
         await this.#store.storeFailure(cached).catch((persistenceError: unknown) => {
@@ -297,14 +294,6 @@ export class CatalogClient {
       }
       throw error
     }
-  }
-
-  #captureLoadFailure(error: unknown, signal: AbortSignal, directoryId: string,
-    generation: Uint8Array | undefined, entryCount: number, spoolBytes: number): void {
-    if (error !== signal.reason) captureFailureEvidence(error, { operation: 'catalog.load', context: {
-      directoryId, generation: generation === undefined ? null : encodeBase64Url(generation),
-      entryCount, spoolBytes, canceled: signal.aborted,
-    } })
   }
 
   async #fetchOpenedPage(
@@ -327,10 +316,7 @@ export class CatalogClient {
       payload.byteLength > MAX_CATALOG_PAYLOAD_BYTES ||
       spoolBytes > MAXIMUM_CATALOG_SPOOL_BYTES
     ) {
-      return this.#failProtocol(catalogFailure(new CatalogClientError(
-        'Catalog payload exceeded its spool admission',
-      ), { invariant: 'spool-budget', actualObjectBytes: payload.byteLength, maximumObjectBytes: MAX_CATALOG_PAYLOAD_BYTES,
-        actualSpoolBytes: spoolBytes, maximumSpoolBytes: MAXIMUM_CATALOG_SPOOL_BYTES, directoryId: encodeBase64Url(request.directoryId), pageIndex: request.pageIndex }))
+      return this.#failProtocol(new CatalogClientError('Catalog payload exceeded its spool admission'))
     }
     try {
       const opened = await decodeCatalogPayload(payload, this.#descriptor, request)
@@ -375,17 +361,13 @@ export class CatalogClient {
       !equalBytes(page.generation, generation) ||
       !equalBytes(page.previousCommitment, previousCommitment)
     ) {
-      return this.#failProtocol(catalogFailure(new CatalogClientError(
-        'Catalog page chain has a gap or generation splice',
-      ), { invariant: 'page-chain', directoryId: page.directoryIdText, pageIndex: page.pageIndex, expectedGeneration: encodeBase64Url(generation), actualGeneration: page.generationText, expectedCommitment: encodeBase64Url(previousCommitment), actualCommitment: encodeBase64Url(page.previousCommitment) }))
+      return this.#failProtocol(new CatalogClientError('Catalog page chain has a gap or generation splice'))
     }
     if (page.entries.some((entry) => entry.idText === this.#descriptor.syntheticRootId)) {
       // Every ordinary node is claimed by exactly one parent entry. The
       // synthetic root has no parent, so accepting it as a child would create
       // the only identity cycle that page-store ownership cannot arbitrate.
-      return this.#failProtocol(catalogFailure(new CatalogClientError(
-        'Catalog entry reuses the synthetic-root identity',
-      ), { invariant: 'synthetic-root-child', directoryId: page.directoryIdText, pageIndex: page.pageIndex, rootId: this.#descriptor.syntheticRootId }))
+      return this.#failProtocol(new CatalogClientError('Catalog entry reuses the synthetic-root identity'))
     }
     let nextName: Uint8Array<ArrayBuffer> | undefined
     try {
@@ -395,9 +377,7 @@ export class CatalogClient {
     }
     const entryCount = previousEntryCount + page.entries.length
     if (entryCount > CATALOG_DIRECTORY_ENTRIES) {
-      return this.#failProtocol(catalogFailure(new CatalogClientError(
-        'Catalog directory exceeds its entry limit',
-      ), { invariant: 'directory-entries', directoryId: page.directoryIdText, expectedMaximum: CATALOG_DIRECTORY_ENTRIES, actual: entryCount }))
+      return this.#failProtocol(new CatalogClientError('Catalog directory exceeds its entry limit'))
     }
     return { previousName: nextName, entryCount }
   }
@@ -490,7 +470,7 @@ function validatePageOrder(
   for (const entry of entries) {
     const encoded = new TextEncoder().encode(entry.name)
     if (last !== undefined && compareBytes(last, encoded) >= 0) {
-      throw catalogFailure(new CatalogClientError('Catalog entries are not in strict canonical-name order'), { invariant: 'canonical-order', previous: new TextDecoder().decode(last), actual: entry.name, nodeId: entry.idText })
+      throw new CatalogClientError('Catalog entries are not in strict canonical-name order')
     }
     last = encoded
   }

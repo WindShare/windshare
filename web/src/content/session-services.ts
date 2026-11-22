@@ -7,8 +7,7 @@ import {
 } from './scheduling/lease-retirement'
 import type { ShareDescriptor } from '../catalog/records'
 import { equalBytes } from '../crypto/bytes'
-import { createReceivedProtocolError, type ReceivedProtocolError } from '../diagnostics/incident/protocol-error'
-import { protocolFailureFact, type FailureFact } from '../diagnostics/incident/fact'
+import { createReceivedProtocolError, type ReceivedProtocolError } from '../session/diagnostics'
 import { CborError } from '../protocol/cbor'
 import { MESSAGE_KIND, type SessionMessage } from '../session/message'
 import type { ReceiverSessionRuntime, SessionOperation } from '../session/runtime'
@@ -59,7 +58,6 @@ const LEASE_RETRY_MAXIMUM_MILLISECONDS = 2_000
 export class RemoteRevisionError extends Error {
   readonly failure: RevisionFailure
   readonly protocolFailure: ReceivedProtocolError
-  readonly failureFact: FailureFact<'protocol_failure'>
 
   constructor(protocolFailure: ReceivedProtocolError) {
     super(`Sender could not open the file revision (0x${protocolFailure.content.code.toString(16)})`)
@@ -75,14 +73,6 @@ export class RemoteRevisionError extends Error {
         : { retryAfterMilliseconds: protocolFailure.content.retryAfterMilliseconds }),
     })
     this.protocolFailure = protocolFailure
-    this.failureFact = protocolFailureFact({
-      error: this,
-      stage: 'protocol_operation',
-      // Wire retryability remains evidence; only the dedicated capacity type
-      // grants a browser transfer authority to schedule another attempt.
-      recoveryDisposition: 'none',
-      protocolFailure,
-    })
   }
 }
 

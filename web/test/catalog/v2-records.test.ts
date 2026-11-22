@@ -1,4 +1,3 @@
-import { evidenceFor } from '../../src/diagnostics/failure/evidence'
 import { describe, expect, it } from 'vitest'
 import { encode, rfc8949EncodeOptions } from 'cborg'
 
@@ -65,10 +64,9 @@ describe('v2 directory failure retry semantics', () => {
     expect(budget.retryAfterMilliseconds).toBe(250)
     let thrown: unknown
     try { decodeDirectoryFailure(failure(0x2007, false, null)) } catch (error) { thrown = error }
-    expect(thrown).toMatchObject({ name: 'CborError' })
-    expect(evidenceFor(thrown)).toMatchObject({ operation: 'catalog.validate',
-      context: { invariant: 'transient-retryable', expected: true, actual: false },
-      exception: { message: 'Directory transient I/O must be retryable' },
+    expect(thrown).toMatchObject({
+      name: 'CborError',
+      message: 'Directory transient I/O must be retryable',
     })
   })
 })

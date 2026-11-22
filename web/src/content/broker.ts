@@ -10,7 +10,18 @@ import { LaneSet, authenticatedBlockRoute, inheritAuthenticatedBlockRoute, type 
 import type { BlockTransportRoute } from './route-policy'
 import { MAXIMUM_SUPPLEMENTS } from './scheduling/exploration'
 import { BlockBufferPool, type BlockLoadBuffers } from './scheduling/block-buffers'
-import type { DownloadConnectivitySnapshot } from '../diagnostics/trace/transfer-payload'
+
+export interface DownloadConnectivitySnapshot {
+  readonly download_id: string
+  readonly first_direct_elapsed_ms: number | null
+  readonly direct_bytes: string
+  readonly application_relay_bytes: string
+  readonly unknown_bytes: string
+  readonly direct_fraction: number | null
+  readonly fallback_stall_ms: number
+  readonly incomplete: boolean
+  readonly final: boolean
+}
 
 export type { BlockRouteEligibility, BlockTransportRoute } from './route-policy'
 export {

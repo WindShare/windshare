@@ -5,7 +5,6 @@ import type {
 import type { PeerRecoveryPolicy } from '../../src/connectivity/peer-set/path'
 import { BLOCK_BROKER_PARALLEL_READS } from '../../src/content/broker'
 import { RANGE_READ_AHEAD_FACTOR } from '../../src/content/scheduling/range-window'
-import type { FailureFact } from '../../src/diagnostics/incident/fact'
 
 // The yielded block retains its window reservation until the writer advances.
 export const HOT_SWITCH_INITIAL_BUFFERED_BLOCKS =
@@ -61,7 +60,7 @@ export interface HotSwitchDeliveryTerminal {
   readonly evidence: HotSwitchDeliveryEvidence
   readonly jobOutcome?: ObservedJobOutcome
   readonly failureMessage?: string
-  readonly failureClassification?: Readonly<{ fact: FailureFact }>
+  readonly failureClassification?: Readonly<Record<string, unknown>>
 }
 
 export interface HotSwitchRuntimeTerminal {

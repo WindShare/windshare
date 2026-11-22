@@ -6,7 +6,6 @@ import { OperationRouter } from '../../src/session/operation-router'
 import { encodeBody, encodeMessage, MESSAGE_KIND } from '../../src/session/message'
 import { createProtocolSessionIdentity } from '../../src/session/identities'
 import { OPERATION_CANCEL_REASON } from '../../src/session/runtime-types'
-import { snapshotTraceEventObservationV2 } from '../../src/diagnostics/export/trace-event-v2'
 import { projectProtocolTraceEvent } from '../../src/application/diagnostics/receive-trace'
 import type { ProtocolTraceEvent } from '../../src/session/diagnostics'
 import { id, openSent, runtimeFixture } from './v2-send-fixture'
@@ -52,7 +51,7 @@ describe('retired block-request diagnostics', () => {
     expect(late).toMatchObject({ settlement: 'remote_final', request: { leaseId: '03'.repeat(16) } })
     expect(late).not.toHaveProperty('cancellationReason')
     expect(late).not.toHaveProperty('protocolFailure')
-    expect(() => snapshotTraceEventObservationV2(projectProtocolTraceEvent(late))).not.toThrow()
+    expect(() => JSON.stringify(projectProtocolTraceEvent(late))).not.toThrow()
     router.terminate(new Error('test cleanup'))
   })
 
@@ -72,7 +71,7 @@ describe('retired block-request diagnostics', () => {
       protocolError: { code: 0x3008, scope: 'revision' },
       correlation: { lane: { id: 1, epoch: 0 } },
     })
-    expect(() => snapshotTraceEventObservationV2(projectProtocolTraceEvent(late))).not.toThrow()
+    expect(() => JSON.stringify(projectProtocolTraceEvent(late))).not.toThrow()
     expect(router.protocolFailureFor(rejected)).toBeUndefined()
     expect(events.some(event => event.eventName === 'protocol_operation' && event.transition === 'authenticated_failure')).toBe(false)
     await expect(operation.next()).rejects.toBe(cause)
@@ -126,7 +125,7 @@ describe('retired block-request diagnostics', () => {
         MESSAGE_KIND.requestBlocks, MESSAGE_KIND.cancel, MESSAGE_KIND.listChildren,
       ])
       expect(sent[1]!.message.body).toEqual(encodeBody([OPERATION_CANCEL_REASON.laneRace]))
-      for (const event of events) expect(() => snapshotTraceEventObservationV2(projectProtocolTraceEvent(event))).not.toThrow()
+      for (const event of events) expect(() => JSON.stringify(projectProtocolTraceEvent(event))).not.toThrow()
     } finally { await runtime.close() }
   })
 })

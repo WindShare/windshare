@@ -12,7 +12,7 @@ import { admittedRelay } from './relay-admission'
 import type { RelayCandidateSource } from './relay-selection/candidates'
 import { RelayRecovery } from './relay-selection/recovery'
 import type { RecoveryRetry } from './recovery-failure'
-import { emitRelayHeartbeat, emitRelayDelivery } from '../diagnostics/trace/connection-payload'
+import { emitRelayDelivery, emitRelayHeartbeat } from './recovery-observation'
 
 export const RELAY_LANE_ADMISSION_TIMEOUT_MILLISECONDS = 30_000
 

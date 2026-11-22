@@ -5,8 +5,7 @@ import type {
 } from '../catalog/client'
 import type { CatalogPageRequest } from '../catalog/records'
 import { equalBytes } from '../crypto/bytes'
-import { protocolFailureFact, type FailureFact } from '../diagnostics/incident/fact'
-import { type ReceivedProtocolError } from '../diagnostics/incident/protocol-error'
+import type { ReceivedProtocolError } from '../session/diagnostics'
 import {
   decodeScanProgress,
   type SessionMessage,
@@ -22,7 +21,6 @@ export class RemoteOperationError extends Error {
   readonly retryable: boolean
   readonly retryAfterMilliseconds: number | undefined
   readonly protocolFailure: ReceivedProtocolError
-  readonly failureFact: FailureFact<'protocol_failure'>
 
   constructor(protocolFailure: ReceivedProtocolError) {
     super('Sender rejected the authenticated operation')
@@ -32,12 +30,6 @@ export class RemoteOperationError extends Error {
     this.retryable = protocolFailure.content.retryable
     this.retryAfterMilliseconds = protocolFailure.content.retryAfterMilliseconds
     this.protocolFailure = protocolFailure
-    this.failureFact = protocolFailureFact({
-      error: this,
-      stage: 'protocol_operation',
-      recoveryDisposition: protocolFailure.content.retryable ? 'retryable' : 'terminal',
-      protocolFailure,
-    })
   }
 }
 

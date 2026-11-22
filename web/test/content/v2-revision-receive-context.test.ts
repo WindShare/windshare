@@ -68,7 +68,6 @@ it.each([true, false])('preserves OPEN_RESULTS receive context after finalizatio
     if (traceEnabled) expect(response?.correlation.lane).toEqual({ id: 7, epoch: 3 })
     else expect(events).toHaveLength(0)
     expect(error.protocolFailure.correlation.lane).toEqual({ id: 7, epoch: 3 })
-    expect(error.failureFact.payload.protocolFailure.correlation.lane).toEqual({ id: 7, epoch: 3 })
     expect(error.protocolFailure.correlation.protocolOperationId.value).toBe(operationId)
     expect(error.protocolFailure.correlation.protocolSessionId).toEqual(protocolSessionIdentity)
     expect(Object.isFrozen(error.protocolFailure.correlation.lane)).toBe(true)

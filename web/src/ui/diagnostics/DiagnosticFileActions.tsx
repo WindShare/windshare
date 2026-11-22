@@ -1,8 +1,8 @@
 import { diagnosticsCopy } from '../locales/diagnostics'
 import { useCopy } from '../preferences/use-preferences'
 import { useState } from 'react'
-import type { DiagnosticFile } from '../../diagnostics/browser/file'
-import type { DiagnosticsDelivery } from '../../diagnostics/browser/delivery'
+import type { DiagnosticsDelivery } from '../../diagnostics/delivery'
+import type { DiagnosticFile } from '../../diagnostics/file'
 
 type DiagnosticFileMessage = 'exportUnavailable' | 'shared' | 'shareFailed' | 'downloadStarted' |
   'downloadFailed' | 'copied' | 'manualCopy'

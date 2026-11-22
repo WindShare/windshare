@@ -5,7 +5,6 @@ import { OperationRouter, MAXIMUM_RECENT_TOMBSTONES } from '../../src/session/op
 import { EnvelopeSealer } from '../../src/session/envelope'
 import { OPERATION_CANCEL_REASON } from '../../src/session/runtime-types'
 import { projectProtocolTraceEvent } from '../../src/application/diagnostics/receive-trace'
-import { validateTraceEventPayloadV2 } from '../../src/diagnostics/export/trace-event-payload-v2'
 import { fragmentRecord } from '../content/v2-fragment-fixture'
 import { BINDING, KEY, id, runtimeFixture } from './v2-send-fixture'
 
@@ -106,7 +105,11 @@ describe('monotonic operation retirement and bounded recent tombstones', () => {
       expect(discarded).toHaveLength(1)
       expect(discarded[0]!.correlation.protocolOperationId!.value).toBe(cancelled.id)
       const projected = projectProtocolTraceEvent(discarded[0]!)
-      expect(() => validateTraceEventPayloadV2(projected.eventName, projected.payload)).not.toThrow()
+      expect(projected).toMatchObject({
+        event: 'protocol_operation',
+        payload: { transition: 'retired_response_discarded' },
+      })
+      expect(() => JSON.stringify(projected)).not.toThrow()
     } finally { await harness.runtime.close() }
   })
 

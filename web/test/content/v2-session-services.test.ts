@@ -5,7 +5,7 @@ import { PATH_POLICY, type ShareDescriptor } from '../../src/catalog/records'
 import {
   createReceivedProtocolError,
   type ReceivedProtocolError,
-} from '../../src/diagnostics/incident/fact'
+} from '../../src/session/diagnostics'
 import { ConnectivityRouteAuthority } from '../../src/connectivity/receiver-policy'
 import { FileGeometry } from '../../src/content/geometry'
 import { LaneSet, type BlockRouteEligibility } from '../../src/content/broker'
@@ -229,8 +229,6 @@ describe('v2 authenticated revision capacity results', () => {
     expect(error.protocolFailure).toMatchObject({ requestKind: 'open_revisions', correlation: { lane: { id: 1, epoch: 9 } }, content: { scope: 'revision', code: REVISION_CODE_QUOTA, retryable: true, retryAfterMilliseconds: 275 } })
     expect(error.protocolFailure.correlation.protocolSessionId.copyBytes()).toEqual(identity(7))
     expect(error.protocolFailure.correlation.protocolOperationId.value).toBe(26n)
-    expect(error.failureFact.recoveryDisposition).toBe('none')
-    expect(error.failureFact.payload.protocolFailure).toEqual(error.protocolFailure)
   })
 
   it('does not promote a generic authenticated operation error into capacity authority', async () => {
@@ -301,7 +299,6 @@ describe('v2 authenticated revision capacity results', () => {
         ...(retryAfterMilliseconds === undefined ? {} : { retryAfterMilliseconds }),
       })
       expect(error.protocolFailure).toMatchObject({ requestKind: 'open_revisions', content: { scope: 'revision', code: code, retryable } })
-      expect(error.failureFact.recoveryDisposition).toBe('none')
     },
   )
 })

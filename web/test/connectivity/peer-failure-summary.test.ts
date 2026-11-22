@@ -2,13 +2,13 @@ import { describe, expect, it } from 'vitest'
 import { BrowserAttemptLifecycle } from '../../src/connectivity/session-signaling-lifecycle'
 import type { ConnectivityTraceEvent } from '../../src/connectivity/diagnostics'
 import {
-  createProtocolSessionIdentity, createProtocolOperationIdentity,
-  createPeerPathIdentityValue, createPeerAttemptIdentity,
+  createProtocolSessionIdentity,
+  createProtocolOperationIdentity,
+  createPeerPathIdentityValue,
+  createPeerAttemptIdentity,
 } from '../../src/session/identities'
 import { projectConnectivityTraceEvent } from '../../src/application/diagnostics/receive-trace'
-import { snapshotTraceEventObservationV2 } from '../../src/diagnostics/export/trace-event-v2'
-import { createBrowserDiagnosticsComposition } from '../../src/application/diagnostics/composition'
-import { FakeTraceTime } from '../diagnostics/trace/test-support'
+import { createDiagnosticsRuntime } from '../../src/diagnostics'
 
 const bytes = (seed: number) => new Uint8Array(16).fill(seed)
 
@@ -19,7 +19,9 @@ function timedOutAttempt() {
     protocolSessionId: createProtocolSessionIdentity(bytes(1)),
     peerPathId: createPeerPathIdentityValue(bytes(2)),
     attemptId: createPeerAttemptIdentity(bytes(3)),
-    waveOrdinal: 1, waveAttemptOrdinal: 1, sessionAttemptOrdinal: 1,
+    waveOrdinal: 1,
+    waveAttemptOrdinal: 1,
+    sessionAttemptOrdinal: 1,
   }), { current: event => events.push(event) }, () => now)
   lifecycle.phaseDeadlineArmed('negotiation', 65_000)
   for (const stage of ['offer-created', 'offer-sent', 'answer-received', 'datachannel-open'] as const) {
@@ -32,67 +34,79 @@ function timedOutAttempt() {
   lifecycle.phaseDeadlineExpired('admission', 20_000)
   lifecycle.failed({ kind: 'local-transient', phase: 'admission', reason: 'admission-timeout' })
   const last = events.at(-1)!
-  return { lifecycle, events, last, projected: snapshotTraceEventObservationV2(projectConnectivityTraceEvent(last)) }
+  return { lifecycle, events, last, projected: projectConnectivityTraceEvent(last) }
 }
 
 describe('peer failure summaries', () => {
-  it('exports the exact timeout and waiting stage in one immutable terminal record', () => {
+  it('exports the exact timeout and waiting stage in one terminal record', () => {
     const { last, projected, lifecycle, events } = timedOutAttempt()
     expect(last).toMatchObject({
-      stage: 'failed', failedAtStage: 'grant-received',
-      summary: { lastCompletedStage: 'grant-requested', attemptElapsedMilliseconds: 21_000,
-        stageElapsedMilliseconds: 20_000, deadlineExpired: true },
+      stage: 'failed',
+      failedAtStage: 'grant-received',
+      summary: {
+        lastCompletedStage: 'grant-requested',
+        attemptElapsedMilliseconds: 21_000,
+        stageElapsedMilliseconds: 20_000,
+        deadlineExpired: true,
+      },
     })
     expect(projected.payload).toMatchObject({
       failure: { kind: 'local-transient', phase: 'admission', reason: 'admission-timeout' },
-      summary: { last_completed_stage: 'grant_requested', attempt_elapsed_ms: 21_000,
-        stage_elapsed_ms: 20_000, deadline_expired: true },
+      summary: {
+        last_completed_stage: 'grant_requested',
+        attempt_elapsed_ms: 21_000,
+        stage_elapsed_ms: 20_000,
+        deadline_expired: true,
+      },
     })
-    expect(Object.isFrozen(projected.payload)).toBe(true)
     const count = events.length
     lifecycle.failed({ kind: 'local-contract', code: 'invalid-proof' })
     expect(events).toHaveLength(count)
   })
 
-  it('retains the failure through production trace rollover and NDJSON export', () => {
-    const time = new FakeTraceTime()
-    const diagnostics = createBrowserDiagnosticsComposition({
-      build: { version: '0.0.0', mode: 'test' }, secureContext: true,
-      consoleSink: { error: () => undefined }, randomBytes: size => new Uint8Array(size).fill(1),
-      clock: { nowMilliseconds: () => time.nowMilliseconds(), captureTime: () => new Date(time.nowMilliseconds()).toISOString() },
-      scheduler: time,
+  it('exports projected peer failure summaries and isolates failures from trace rollover', () => {
+    const runtime = createDiagnosticsRuntime({
+      build: { version: '0.0.0', mode: 'test' },
+      secureContext: true,
+      randomBytes: size => new Uint8Array(size).fill(1),
+      clock: { nowMilliseconds: () => 1_000, captureTime: () => '2026-01-01T00:00:00.000Z' },
+      scheduler: { schedule: () => ({ cancel: () => undefined }) },
+      maxTraceEventCount: 16,
     })
-    diagnostics.runtime.enable()
-    const observer = diagnostics.trace.current!
+    runtime.enable()
+    const observer = runtime.trace.current!
+    runtime.recordFailure({ stage: 'connectivity', error: new Error('admission timed out') })
+    for (let i = 0; i < 20; i++) {
+      observer({
+        event: 'protocol_operation',
+        correlation: { protocol_session_id: 'AQAAAAAAAAAAAAAAAAAAAA', protocol_operation_id: String(i + 1) },
+        payload: { transition: 'request_sent', request_kind: 'open_revisions' },
+      })
+    }
     const { projected } = timedOutAttempt()
     observer(projected)
-    const operation = snapshotTraceEventObservationV2({
-      eventName: 'protocol_operation',
-      correlation: { protocol_session_id: 'AQAAAAAAAAAAAAAAAAAAAA', protocol_operation_id: '2' },
-      payload: { transition: 'request_sent', request_kind: 'open_revisions' },
+
+    const status = runtime.status()
+    expect(status.retained_event_count).toBe('16')
+    expect(Number(status.overwritten_count)).toBeGreaterThan(0)
+    expect(status.failure_count).toBe('1')
+
+    const exported = runtime.export()
+      .split('\n')
+      .filter(Boolean)
+      .map(line => JSON.parse(line) as { line_type: string; stage?: string; record?: { event: string; payload: unknown } })
+    expect(exported.find(line => line.line_type === 'failure')).toMatchObject({
+      line_type: 'failure',
+      stage: 'connectivity',
     })
-    const eventLimit = diagnostics.trace.status().capacity.maxEventCount
-    for (let i = 0; i <= eventLimit; i++) observer(operation)
-    const snapshot = diagnostics.trace.captureSnapshot()!
-    expect(snapshot.retainedEventCount).toBe(BigInt(eventLimit))
-    expect(snapshot.health.overwrittenCount).toBeGreaterThan(0n)
-    const exported = diagnostics.runtime.export().split('\n').filter(Boolean).map(line => JSON.parse(line) as { line_type: string; record?: { event: string; payload: unknown } })
     expect(exported.find(line => line.record?.event === 'peer_attempt')?.record?.payload).toMatchObject({
-      stage: 'failed', failure: { reason: 'admission-timeout' },
+      stage: 'failed',
+      failure: { reason: 'admission-timeout' },
       summary: { last_completed_stage: 'grant_requested' },
     })
-    diagnostics.runtime.clear()
-    expect(diagnostics.trace.captureSnapshot()?.retainedEventCount).toBe(0n)
-  })
 
-  it('rejects unbounded failure fields and inconsistent summary durations', () => {
-    const { projected } = timedOutAttempt()
-    const payload = projected.payload
-    expect(() => snapshotTraceEventObservationV2({ ...projected, payload: {
-      ...payload, failure: { kind: 'local-transient', phase: 'admission', reason: 'provider text' },
-    } } as never)).toThrow()
-    expect(() => snapshotTraceEventObservationV2({ ...projected, payload: {
-      ...payload, summary: { last_completed_stage: 'grant_requested', attempt_elapsed_ms: 1, stage_elapsed_ms: 2, deadline_expired: false },
-    } } as never)).toThrow()
+    runtime.clear()
+    expect(runtime.status().retained_event_count).toBe('0')
+    expect(runtime.status().failure_count).toBe('0')
   })
 })

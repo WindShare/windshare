@@ -14,7 +14,7 @@ import {
   type ContentGeneration,
   type ContentGenerationProvider,
 } from '../../src/receiver/supervised-content'
-import { createReceivedProtocolError } from '../../src/diagnostics/incident/fact'
+import { createReceivedProtocolError } from '../../src/session/diagnostics'
 import { createProtocolOperationIdentity, createProtocolSessionIdentity } from '../../src/session/identities'
 import { REVISION_CODE_LEASE_EXPIRED } from '../../src/content/flow'
 

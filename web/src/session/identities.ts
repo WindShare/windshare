@@ -35,6 +35,19 @@ export type ProtocolSessionIdentity = DiagnosticIdentity<'protocol_session'>
 export type PeerPathIdentity = DiagnosticIdentity<'peer_path'>
 export type PeerAttemptIdentity = DiagnosticIdentity<'peer_attempt'>
 
+export interface ProtocolLaneCorrelation {
+  readonly id: number
+  readonly epoch: number
+}
+
+export interface ProtocolCorrelation {
+  readonly protocolSessionId?: ProtocolSessionIdentity
+  readonly protocolOperationId?: ProtocolOperationIdentity
+  readonly peerPathId?: PeerPathIdentity
+  readonly peerAttemptId?: PeerAttemptIdentity
+  readonly lane?: ProtocolLaneCorrelation
+}
+
 class FixedDiagnosticIdentity<Kind extends DiagnosticBytesIdentityKind>
 implements DiagnosticBytesIdentity<Kind> {
   readonly kind: Kind

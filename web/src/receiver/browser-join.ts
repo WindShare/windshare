@@ -9,8 +9,7 @@ import { admittedRelay } from './relay-admission'
 import type { RelayCandidateSource } from './relay-selection/candidates'
 import { runInitialJoin, type InitialJoinOptions } from './initial-join'
 import type { InitialJoinAttempt } from './connection-attempt/initial'
-import { observeRecovery } from './recovery-observation'
-import { emitRelayHeartbeat, emitRelayDelivery } from '../diagnostics/trace/connection-payload'
+import { emitRelayDelivery, emitRelayHeartbeat, observeRecovery } from './recovery-observation'
 
 export interface BrowserRelayJoin extends ProtocolGenerationCore {
   readonly descriptor: ShareDescriptor

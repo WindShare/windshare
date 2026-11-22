@@ -7,7 +7,6 @@ import { OpaqueRelayFrameChannel } from '../../src/transport/relay/receiver/chan
 import { encodeSettlementNotice } from '../../src/transport/relay/delivery-settlement-codec'
 import { encodeOpaqueRoute } from '../../src/transport/relay/protocol'
 import { projectProtocolTraceEvent } from '../../src/application/diagnostics/receive-trace'
-import { snapshotTraceEventObservationV2 } from '../../src/diagnostics/export/trace-event-v2'
 import { fragmentRecord } from '../content/v2-fragment-fixture'
 import { FakeSocket, relaySessionId } from '../transport/relay-receiver-fixture'
 import { BINDING, KEY, id, runtimeOnChannel } from './v2-send-fixture'
@@ -57,7 +56,7 @@ it('withdraws a settled relay immediately, drains its authenticated prefix, and 
     expect(socket.readyState).toBe(2)
     const transitions = events.filter(event => event.eventName === 'lane_transition').map(event => event.transition)
     expect(transitions).toEqual(['attached', 'unavailable', 'detached'])
-    for (const event of events) expect(() => snapshotTraceEventObservationV2(projectProtocolTraceEvent(event))).not.toThrow()
+    for (const event of events) expect(() => JSON.stringify(projectProtocolTraceEvent(event))).not.toThrow()
 
     let closed = false
     const closing = runtime.close().then(() => { closed = true })

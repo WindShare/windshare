@@ -1,8 +1,16 @@
 import type {} from './build-identity-env'
-import type { BuildIdentityV1 } from './export/incident-record-v2'
-import type { BuildSnapshot } from './export/projector'
 
 const BUILD_REVISION_PATTERN = /^[0-9a-f]{7,64}$/
+
+export interface BuildSnapshot {
+  readonly version: string
+  readonly revision?: string
+  readonly mode: 'development' | 'production' | 'test'
+}
+
+export interface BuildIdentity extends BuildSnapshot {
+  readonly application: 'windshare_web'
+}
 
 export function browserBuildSnapshot(): BuildSnapshot {
   return Object.freeze({
@@ -17,7 +25,7 @@ export function browserBuildSnapshot(): BuildSnapshot {
 
 export function browserBuildIdentity(
   snapshot: BuildSnapshot = browserBuildSnapshot(),
-): BuildIdentityV1 {
+): BuildIdentity {
   return Object.freeze({
     application: 'windshare_web',
     version: snapshot.version,

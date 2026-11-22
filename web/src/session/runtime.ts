@@ -4,8 +4,6 @@ import { cancellationFromSignal } from './operations/cancellation'
 import { decodePeerPathControl } from '../protocol/peer-path-control'
 import type { ShareDescriptor } from '../catalog/records'
 import type { FrameChannel } from '../contracts/channel'
-import type { FailureCorrelation } from '../diagnostics/incident/failure-correlation'
-import type { ReceivedProtocolError } from '../diagnostics/incident/protocol-error'
 import {
   decodeLaneGrant,
   encodeLaneAttachRequest,
@@ -39,12 +37,14 @@ import {
   protocolMessageKindV1,
   type ProtocolTraceEvent,
   type ProtocolTraceSource,
+  type ReceivedProtocolError,
 } from './diagnostics'
 import {
   createPeerAttemptIdentity,
   createPeerPathIdentityValue,
   createProtocolOperationIdentity,
   createProtocolSessionIdentity,
+  type ProtocolCorrelation,
   type ProtocolSessionIdentity,
 } from './identities'
 import { OperationQueue, OperationRouter } from './operation-router'
@@ -139,7 +139,7 @@ export class ReceiverSessionRuntime {
 
   get hasAttachedLanes(): boolean { return this.#lanes.size > 0 }
 
-  operationCorrelation(operation: SessionOperation): FailureCorrelation {
+  operationCorrelation(operation: SessionOperation): ProtocolCorrelation {
     const laneId = this.#operationLanes.get(operation as OperationQueue)
     const laneEpoch = laneId === undefined ? undefined : this.#laneEpochs.get(laneId)
     const peerBinding = operation instanceof OperationQueue
@@ -406,12 +406,12 @@ export class ReceiverSessionRuntime {
         correlation: this.operationCorrelation(operation),
       }))
     } catch (error) {
-      const evidence = options.signal?.aborted === true && error === options.signal.reason ? undefined
-        : observeProtocolFailure(this.#protocolTrace, error, 'session.request.send', correlation)
+      const aborted = options.signal?.aborted === true && error === options.signal.reason
+      if (!aborted) observeProtocolFailure(this.#protocolTrace, error, 'session.request.send', correlation)
       this.#emitProtocolTrace(() => Object.freeze({
         eventName: 'protocol_operation',
         transition: 'request_send_failed',
-        ...(evidence === undefined ? {} : { evidence }),
+        ...(aborted ? {} : { failure: error }),
         requestKind: protocolMessageKindV1(kind),
         correlation: this.operationCorrelation(operation),
       }))
@@ -676,7 +676,7 @@ export class ReceiverSessionRuntime {
     }
   }
 
-  #laneGrantCorrelation(grant: LaneGrant): FailureCorrelation {
+  #laneGrantCorrelation(grant: LaneGrant): ProtocolCorrelation {
     return Object.freeze({
       protocolSessionId: this.protocolSessionIdentity,
       protocolOperationId: createProtocolOperationIdentity(grant.grantOperationId),

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { BandwidthWaitError } from '../../src/contracts/capacity'
 import { DownloadMetrics } from '../../src/receiver/download-metrics'
 
-import { createReceivedProtocolError } from '../../src/diagnostics/incident/fact'
+import { createReceivedProtocolError } from '../../src/session/diagnostics'
 import { byteRange, FileGeometry, type ByteRange } from '../../src/content/geometry'
 import {
   type BlockRouteEligibility,

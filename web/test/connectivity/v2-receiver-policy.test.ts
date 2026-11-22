@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { FileGeometry } from '../../src/content/geometry'
 import { LaneSet, type BlockDemand, type BlockLane } from '../../src/content/lane-set'
 import type { BlockRecord, FileRevisionDescriptor } from '../../src/content/records'
-import { createReceivedProtocolError, type ReceivedProtocolError } from '../../src/diagnostics/incident/fact'
+import { createReceivedProtocolError, type ReceivedProtocolError } from '../../src/session/diagnostics'
 import type {
   CandidateCounts,
   PeerAttemptTraceEvent,

@@ -1,22 +1,26 @@
 import { diagnosticsCopy } from '../locales/diagnostics'
 import { useCopy } from '../preferences/use-preferences'
 import { useRef, useState, useSyncExternalStore, type ReactNode, type ComponentType } from 'react'
-import type { BrowserDiagnosticsSession, BrowserDiagnosticsSnapshot } from '../../diagnostics/browser/session'
-import type { DiagnosticsDelivery } from '../../diagnostics/browser/delivery'
+import type { DiagnosticsDelivery } from '../../diagnostics/delivery'
+import type { DiagnosticsRuntime, DiagnosticsSnapshot } from '../../diagnostics/runtime'
 import { DetailSheet } from '../controls/DetailSheet'
 import { DiagnosticsPanelContext } from './context'
 import { diagnosticsCaptureLabel } from './presentation'
 import './diagnostics.css'
 
-export function DiagnosticsProvider({ session, delivery, children }: {
-  readonly session: BrowserDiagnosticsSession
+export function DiagnosticsProvider({ runtime, delivery, children }: {
+  readonly runtime: DiagnosticsRuntime
   readonly delivery: DiagnosticsDelivery
   readonly children: ReactNode
 }) {
   const t = useCopy(diagnosticsCopy)
-  const snapshot = useSyncExternalStore(session.subscribe, session.getSnapshot, session.getSnapshot)
+  const snapshot = useSyncExternalStore(runtime.subscribe, runtime.getSnapshot, runtime.getSnapshot)
   const [open, setOpen] = useState(false)
-  const [panel, setPanel] = useState<ComponentType<{ snapshot: BrowserDiagnosticsSnapshot; session: BrowserDiagnosticsSession; delivery: DiagnosticsDelivery }> | null>(null)
+  const [panel, setPanel] = useState<ComponentType<{
+    snapshot: DiagnosticsSnapshot
+    runtime: DiagnosticsRuntime
+    delivery: DiagnosticsDelivery
+  }> | null>(null)
   const [loadFailed, setLoadFailed] = useState(false)
   const preparePanel = () => {
     setLoadFailed(false)
@@ -25,8 +29,7 @@ export function DiagnosticsProvider({ session, delivery, children }: {
   const invoker = useRef<HTMLElement | null>(null)
   const openPanel = (element: HTMLElement) => {
     invoker.current = element
-    // Failure incidents can arrive while detailed trace capture is off.
-    session.refresh()
+    runtime.refresh()
     setOpen(true)
     if (panel === null) preparePanel()
   }
@@ -36,36 +39,31 @@ export function DiagnosticsProvider({ session, delivery, children }: {
     : <p role="status">{t.opening}</p>
 
   return <DiagnosticsPanelContext value={openPanel}>
-    <DiagnosticsNotice snapshot={snapshot} onOpen={openPanel} onStop={() => session.disable()} />
+    <DiagnosticsNotice snapshot={snapshot} onOpen={openPanel} onStop={() => runtime.disable()} />
     {children}
     {open && <div className="diagnostics-surface">
       <DetailSheet title={t.title} onClose={() => setOpen(false)} returnFocus={invoker}
         returnLabel={t.close} className="diagnostics-sheet">
-        {Panel !== null ? <Panel snapshot={snapshot} session={session} delivery={delivery} />
-          : pendingPanel}
+        {Panel !== null ? <Panel snapshot={snapshot} runtime={runtime} delivery={delivery} /> : pendingPanel}
       </DetailSheet>
     </div>}
   </DiagnosticsPanelContext>
 }
 
 function DiagnosticsNotice({ snapshot, onOpen, onStop }: {
-  readonly snapshot: BrowserDiagnosticsSnapshot
+  readonly snapshot: DiagnosticsSnapshot
   readonly onOpen: (element: HTMLElement) => void
   readonly onStop: () => void
 }) {
   const t = useCopy(diagnosticsCopy)
   const [dismissed, setDismissed] = useState<string | null>(null)
-  const { capture, activation, previousCaptures, hasCurrentEvidence } = snapshot
-  const currentRecording = capture.state !== 'idle' && hasCurrentEvidence
-  // Silent snapshots must not replace the recording that owns this notification or its dismissal.
-  const savedRecording = previousCaptures.find(previous => previous.captureState !== 'idle')
-  const notice = currentRecording ? `capture:${capture.capture_generation}` : savedRecording?.id ?? ''
+  const { status, activation, hasEvidence } = snapshot
+  const currentRecording = status.state !== 'idle' && hasEvidence
+  const notice = currentRecording ? `capture:${status.capture_generation}` : ''
   const active = activation.kind === 'active'
-  // Automatically recovered failures remain available in the panel without announcing a recording.
-  if (!active && ((!currentRecording && savedRecording === undefined) || dismissed === notice)) return null
+  if (!active && (!currentRecording || dismissed === notice)) return null
   return <aside className="diagnostics-surface diagnostics-bar" aria-label={t.title}>
-    <span role="status">{!active && !currentRecording && savedRecording !== undefined
-      ? t.savedAvailable : diagnosticsCaptureLabel(capture, t)}</span>
+    <span role="status">{diagnosticsCaptureLabel(status, t)}</span>
     <button type="button" onClick={event => onOpen(event.currentTarget)}>{t.export}</button>
     {active
       ? <button type="button" onClick={onStop}>{t.stop}</button>

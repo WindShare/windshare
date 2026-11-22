@@ -3,18 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SelectionPolicy } from '../../src/catalog/selection'
 import type { CatalogEntry } from '../../src/catalog/records'
 import { encodeBase64Url } from '../../src/crypto/bytes'
-import {
-  createFailureIdentity,
-  createIncidentScopeIssuer,
-  createReceivedProtocolError,
-  type FailureFact,
-  type FailureFactRelation,
-  type IncidentScopeHandle,
-  type IncidentScopeIdentity,
-  type IncidentScopeKind,
-  type IncidentScopeOwner,
-  type PresentationDecision,
-} from '../../src/diagnostics/incident'
+import { createReceivedProtocolError } from '../../src/session/diagnostics'
+import { createDiagnosticIdentity } from '../../src/session/identities'
+import type { FailureReportEvent } from '../../src/application/diagnostics/receive-trace'
 import { RemoteOperationError } from '../../src/content/session-operations'
 import { BrowserNavigationCoordinator } from '../../src/ui/controller/navigation'
 import { captureLocation, ReceiverController } from '../../src/ui/controller'
@@ -162,10 +153,10 @@ describe('v2 receiver child navigation publication', () => {
   })
 })
 
-describe('browser navigation incident ownership', () => {
-  it('submits the browse decision before publishing a visible failure and closes its owner', async () => {
+describe('browser navigation failure reporting', () => {
+  it('reports a visible browse failure before publishing UI error state', async () => {
     const joined = new NavigableJoinedShare()
-    const incidents = new RecordingIncidentPort()
+    const reported: FailureReportEvent[] = []
     let snapshot = directNavigationSnapshot()
     const publicationOrder: string[] = []
     const navigation = new BrowserNavigationCoordinator({
@@ -177,9 +168,11 @@ describe('browser navigation incident ownership', () => {
         if (next.browse.error !== null) publicationOrder.push('visible-failure')
       },
       publicError: (error) => error instanceof Error ? error.message : 'failed',
-      incidents,
+      recordFailure: (event) => {
+        reported.push(event)
+        publicationOrder.push('failure-report')
+      },
     })
-    incidents.onDecision = () => publicationOrder.push('decision')
 
     const root = joined.rootDirectory()
     await navigation.loadPage(root, 0, Object.freeze([root]))
@@ -187,31 +180,12 @@ describe('browser navigation incident ownership', () => {
     joined.requests[0]?.result.reject(new Error('listing failed'))
     await turns()
 
-    expect(incidents.owners.map((owner) => owner.identity.scopeKind)).toEqual([
-      'browse',
-      'browse',
-    ])
-    expect(incidents.decisions).toMatchObject([
-      { decision: { kind: 'excluded', boundary: 'browse', reason: 'success' } },
-      { decision: { kind: 'incident', boundary: 'browse', outcome: 'failed' } },
-    ])
-    expect(incidents.facts).toMatchObject([
-      {
-        fact: {
-          kind: 'unclassified',
-          stage: 'browse',
-          recoveryDisposition: 'none',
-        },
-        relation: 'contributor',
-      },
-    ])
-    expect(publicationOrder.slice(-2)).toEqual(['decision', 'visible-failure'])
-    expect(incidents.owners.every((owner) => owner.isClosed())).toBe(true)
+    expect(reported).toMatchObject([{ stage: 'browse', retryable: false }])
+    expect(publicationOrder.slice(-2)).toEqual(['failure-report', 'visible-failure'])
   })
 
-  it('keeps the browse result unchanged when diagnostic submission throws', async () => {
+  it('keeps the browse result unchanged when diagnostic reporting throws', async () => {
     const joined = new NavigableJoinedShare()
-    const incidents = new RecordingIncidentPort()
     let snapshot = directNavigationSnapshot()
     const navigation = new BrowserNavigationCoordinator({
       currentJoinedShare: () => joined as unknown as JoinedBrowserShare,
@@ -219,31 +193,20 @@ describe('browser navigation incident ownership', () => {
       snapshot: () => snapshot,
       publish: (next) => { snapshot = next },
       publicError: (error) => error instanceof Error ? error.message : 'failed',
-      incidents,
+      recordFailure: () => { throw new Error('diagnostic submit failed') },
     })
-    incidents.onDecision = () => { throw new Error('diagnostic submit failed') }
     const requested = directory(2, 'first', ['First'], ['first'])
 
-    const loading = navigation.loadPage(
-      requested,
-      0,
-      Object.freeze([requested]),
-    )
+    const loading = navigation.loadPage(requested, 0, Object.freeze([requested]))
     joined.requests[0]?.result.reject(new Error('listing failed'))
     await loading
 
     expect(snapshot.browse.error).toBe('listing failed')
-    expect(incidents.decisions[0]?.decision).toMatchObject({
-      kind: 'incident',
-      boundary: 'browse',
-      outcome: 'failed',
-    })
-    expect(incidents.owners[0]?.isClosed()).toBe(true)
   })
 
-  it('gives replaced and successful page requests distinct closed scopes', async () => {
+  it('does not report failures for replaced, successful, or cancelled page requests', async () => {
     const joined = new NavigableJoinedShare()
-    const incidents = new RecordingIncidentPort()
+    const reported: FailureReportEvent[] = []
     let snapshot = directNavigationSnapshot()
     const navigation = new BrowserNavigationCoordinator({
       currentJoinedShare: () => joined as unknown as JoinedBrowserShare,
@@ -251,7 +214,7 @@ describe('browser navigation incident ownership', () => {
       snapshot: () => snapshot,
       publish: (next) => { snapshot = next },
       publicError: () => 'failed',
-      incidents,
+      recordFailure: (event) => reported.push(event),
     })
     const first = directory(2, 'first', ['First'], ['first'])
     const second = directory(3, 'second', ['Second'], ['second'])
@@ -260,29 +223,20 @@ describe('browser navigation incident ownership', () => {
     const current = navigation.loadPage(second, 0, Object.freeze([second]))
     joined.requests[1]?.result.resolve(browsePage(second, []))
     await current
-    joined.requests[0]?.result.resolve(browsePage(first, []))
+    joined.requests[0]?.result.reject(new Error('late failure after replacement'))
     await stale
 
-    expect(incidents.decisions).toMatchObject([
-      {
-        scope: { scopeKind: 'browse', scopeSequence: 1n },
-        decision: {
-          kind: 'excluded',
-          boundary: 'browse',
-          reason: 'stale_replacement',
-        },
-      },
-      {
-        scope: { scopeKind: 'browse', scopeSequence: 2n },
-        decision: { kind: 'excluded', boundary: 'browse', reason: 'success' },
-      },
-    ])
-    expect(incidents.owners.every((owner) => owner.isClosed())).toBe(true)
+    const cancelled = navigation.loadPage(first, 0, Object.freeze([first]))
+    navigation.cancel(new DOMException('cancelled', 'AbortError'))
+    joined.requests[2]?.result.reject(new Error('late failure after cancel'))
+    await cancelled
+
+    expect(reported).toEqual([])
   })
 
-  it('retains a reviewed authenticated operation fact without reclassifying it', async () => {
+  it('preserves retryable authority for authenticated directory operation failures', async () => {
     const joined = new NavigableJoinedShare()
-    const incidents = new RecordingIncidentPort()
+    const reported: FailureReportEvent[] = []
     let snapshot = directNavigationSnapshot()
     const navigation = new BrowserNavigationCoordinator({
       currentJoinedShare: () => joined as unknown as JoinedBrowserShare,
@@ -290,67 +244,17 @@ describe('browser navigation incident ownership', () => {
       snapshot: () => snapshot,
       publish: (next) => { snapshot = next },
       publicError: () => 'failed',
-      incidents,
+      recordFailure: (event) => reported.push(event),
     })
     const requested = directory(2, 'first', ['First'], ['first'])
     const failure = authenticatedRemoteOperationError()
 
-    const loading = navigation.loadPage(
-      requested,
-      0,
-      Object.freeze([requested]),
-    )
+    const loading = navigation.loadPage(requested, 0, Object.freeze([requested]))
     joined.requests[0]?.result.reject(failure)
     await loading
 
-    expect(incidents.facts).toHaveLength(1)
-    expect(incidents.facts[0]?.fact).toBe(failure.failureFact)
-    expect(incidents.facts[0]).toMatchObject({
-      scope: { scopeKind: 'browse' },
-      fact: {
-        kind: 'protocol_failure',
-        stage: 'protocol_operation',
-        recoveryDisposition: 'retryable',
-      },
-      relation: 'contributor',
-    })
-    expect(incidents.owners[0]?.isClosed()).toBe(true)
-  })
-
-  it('names explicit cancellation without waiting for an uncooperative page source', async () => {
-    const joined = new NavigableJoinedShare()
-    const incidents = new RecordingIncidentPort()
-    let snapshot = directNavigationSnapshot()
-    const navigation = new BrowserNavigationCoordinator({
-      currentJoinedShare: () => joined as unknown as JoinedBrowserShare,
-      isDisposed: () => false,
-      snapshot: () => snapshot,
-      publish: (next) => { snapshot = next },
-      publicError: () => 'failed',
-      incidents,
-    })
-    const requested = directory(2, 'first', ['First'], ['first'])
-
-    const loading = navigation.loadPage(
-      requested,
-      0,
-      Object.freeze([requested]),
-    )
-    navigation.cancel(new DOMException('cancelled', 'AbortError'))
-
-    expect(incidents.decisions).toMatchObject([
-      {
-        decision: {
-          kind: 'excluded',
-          boundary: 'browse',
-          reason: 'cancelled',
-        },
-      },
-    ])
-    expect(incidents.owners[0]?.isClosed()).toBe(true)
-
-    joined.requests[0]?.result.resolve(browsePage(requested, []))
-    await loading
+    expect(snapshot.directoryRetryable).toBe(true)
+    expect(reported).toEqual([{ stage: 'browse', error: failure, retryable: true }])
   })
 })
 
@@ -475,43 +379,6 @@ function identityText(first: number): string {
   return encodeBase64Url(identity(first))
 }
 
-class RecordingIncidentPort {
-  readonly #issuer = createIncidentScopeIssuer()
-  readonly owners: IncidentScopeOwner[] = []
-  readonly decisions: Array<{
-    readonly scope: IncidentScopeIdentity
-    readonly decision: PresentationDecision
-  }> = []
-  readonly facts: Array<{
-    readonly scope: IncidentScopeIdentity
-    readonly fact: FailureFact
-    readonly relation: FailureFactRelation
-  }> = []
-  onDecision: (() => void) | undefined
-
-  openScope(kind: IncidentScopeKind): IncidentScopeOwner {
-    const owner = this.#issuer.open(kind, {
-      factRecorded: (observation) => {
-        this.facts.push({
-          scope: observation.ref.scope,
-          fact: observation.fact,
-          relation: observation.relation,
-        })
-      },
-    })
-    this.owners.push(owner)
-    return owner
-  }
-
-  submitDecision(
-    scope: IncidentScopeHandle,
-    decision: PresentationDecision,
-  ): void {
-    this.decisions.push({ scope: scope.identity, decision })
-    this.onDecision?.()
-  }
-}
-
 function directNavigationSnapshot(): ReceiverSnapshot {
   return {
     phase: 'browsing',
@@ -532,8 +399,8 @@ function directNavigationSnapshot(): ReceiverSnapshot {
 function authenticatedRemoteOperationError(): RemoteOperationError {
   return new RemoteOperationError(createReceivedProtocolError({
     requestKind: 'list_children', correlation: Object.freeze({
-      protocolSessionId: createFailureIdentity('protocol_session', identity(9)),
-      protocolOperationId: createFailureIdentity('protocol_operation', 10n),
+      protocolSessionId: createDiagnosticIdentity('protocol_session', identity(9)),
+      protocolOperationId: createDiagnosticIdentity('protocol_operation', 10n),
     }), content: {
       scope: 'directory', code: 0x21, retryable: true, retryAfterMilliseconds: 250
     }

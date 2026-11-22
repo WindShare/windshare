@@ -3,7 +3,6 @@ import { EMPTY_SELECTION_DRAFT } from './draft/model'
 import { EMPTY_OUTPUT_PRESENTATION } from './output'
 import { EMPTY_PROGRESS, EMPTY_PREVIEW, type ReceiverProgress } from './model'
 import { EMPTY_RETAINED_INVENTORY } from '../application/receive/contracts'
-import type { ReceiverDiagnosticSnapshot } from '../diagnostics/export/context'
 import type { CatalogEntry } from '../catalog/records'
 import type { SelectionPolicy } from '../catalog/selection'
 import type { ConnectivityActivation } from '../connectivity/receiver-policy'
@@ -146,53 +145,6 @@ export function joiningReceiverSnapshot(snapshot: ReceiverSnapshot): ReceiverSna
 
 export function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === 'AbortError'
-}
-
-export function receiverDiagnosticSnapshot(snapshot: ReceiverSnapshot, generation: bigint): ReceiverDiagnosticSnapshot {
-  const lifecycle = snapshot.output.lifecycle
-  const backend = snapshot.output.backend
-  const progress = snapshot.progress
-  return Object.freeze({
-    controller: Object.freeze({
-      generation,
-      phase: snapshot.phase,
-    }),
-    ...(lifecycle === null
-      ? {}
-      : {
-          lifecycle: Object.freeze({
-            generation: lifecycle.generation,
-            state: lifecycle.kind,
-          }),
-        }),
-    progress: Object.freeze({
-      generation,
-      discovery: progress.discovery,
-      discoveredFiles: BigInt(progress.discoveredFiles),
-      discoveredBytes: progress.discoveredBytes,
-      writtenBytes: progress.writtenBytes,
-      completedFiles: BigInt(progress.completedFiles),
-      completedBytes: progress.completedBytes,
-      fileErrors: BigInt(progress.fileErrors),
-      selectionErrors: BigInt(progress.selectionErrors),
-      failedDirectories: BigInt(progress.failedDirectories),
-      contentLanes: progress.contentLanes,
-      capacityWaitingFiles: BigInt(progress.capacityWaitingFiles),
-      capacityAccumulatedWaitMilliseconds: BigInt(
-        progress.capacityAccumulatedWaitMilliseconds,
-      ),
-      capacityWaitAttempts: BigInt(progress.capacityWaitAttempts),
-      capacityWaitVisible: progress.capacityWaitVisible,
-    }),
-    ...(backend === null
-      ? {}
-      : {
-          output: Object.freeze({
-            generation,
-            planKind: backend,
-          }),
-        }),
-  })
 }
 
 export function initialReceiverSnapshot(): ReceiverSnapshot {

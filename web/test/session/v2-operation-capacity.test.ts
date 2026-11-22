@@ -4,7 +4,6 @@ import { encodeBody, encodeMessage, MESSAGE_KIND } from '../../src/session/messa
 import { createProtocolSessionIdentity } from '../../src/session/identities'
 import type { ProtocolTraceEvent } from '../../src/session/diagnostics'
 import { projectProtocolTraceEvent } from '../../src/application/diagnostics/receive-trace'
-import { validateTraceEventPayloadV2 } from '../../src/diagnostics/export/trace-event-payload-v2'
 import {
   MAXIMUM_ACTIVE_OPERATIONS,
   MAXIMUM_RECENT_TOMBSTONES,
@@ -82,7 +81,8 @@ describe('operation lifecycle capacity', () => {
     ])
     for (const event of admissionEvents) {
       const projected = projectProtocolTraceEvent(event)
-      expect(() => validateTraceEventPayloadV2(projected.eventName, projected.payload)).not.toThrow()
+      expect(projected.event).toBe('protocol_operation')
+      expect(() => JSON.stringify(projected)).not.toThrow()
     }
     expect(admissionEvents[1]!.correlation.protocolOperationId?.value).toBe(operation.id)
     await router.route(encodeMessage(MESSAGE_KIND.catalogResult, operation.id, BODY))

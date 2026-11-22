@@ -1,6 +1,10 @@
-import type { TraceActivationStore } from './trace/switch'
-
 export const TRACE_ACTIVATION_STORAGE_KEY = 'windshare.diagnostics.capture-expires-at'
+
+export interface TraceActivationStore {
+  readExpiry(): number | undefined
+  writeExpiry(expiresAtMilliseconds: number): void
+  clear(): void
+}
 
 type TraceActivationStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
 
