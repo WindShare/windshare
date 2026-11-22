@@ -110,9 +110,10 @@ func TestLongV2ProcessExplicitStopPublishesDurableRelayTombstone(t *testing.T) {
 			if err := receiver.wait(t); err == nil {
 				t.Fatalf("relay %s accepted JOIN after STOP (restarted=%v)", relays[index].baseURL, restarted)
 			}
-			if stderr := receiver.stderr.String(); !strings.Contains(stderr, "stopped by its sender") ||
+			if stderr := receiver.stderr.String(); !strings.Contains(stderr, "This share has stopped.") ||
+				!strings.Contains(stderr, "Ask the sender for a new link.") ||
 				strings.Contains(stderr, "relay is unavailable") || strings.Contains(stderr, "Relay recovery") {
-				t.Fatalf("stopped share was not reported as a sender decision: stderr=%q", stderr)
+				t.Fatalf("stopped share was not reported as a confirmed stop: stderr=%q", stderr)
 			}
 			events := drainV2ProcessTraces(t, receiver)
 			requireV2EventCount(t, events, v2ReceiverJoinStoppedMilestone, testrun.OutcomeFailed, 1)

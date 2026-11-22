@@ -31,7 +31,8 @@ func TestObservationMilestonesRespectAdmissionAndSettlementSemantics(t *testing.
 		{"cleanup start", "share", "share_workflow", diagnosticMilestonePayload{Stage: "share_stopping"}, "sender_stop", testrun.OutcomeStarted},
 		{"cleanup failure", "share", "share_workflow", diagnosticMilestonePayload{Stage: "share_stopped", Failure: "unexpected"}, "sender_stop", testrun.OutcomeFailed},
 		{"stopped relay is not terminal until settlement", "get", "warning", wire.WarningPayload{Failure: wire.Failure{Code: "relay_stopped"}}, "", ""},
-		{"exhausted stopped join", "get", "engine_task_observed", wire.EngineTaskPayload{Stage: "task_settled", Outcome: appobs.EngineOutcomeFailed, Failure: &wire.Failure{Code: "relay_stopped"}}, "receiver_join_stopped", testrun.OutcomeFailed},
+		{"single relay stop settlement is not a confirmed share stop", "get", "engine_task_observed", wire.EngineTaskPayload{Stage: "task_settled", Outcome: appobs.EngineOutcomeFailed, Failure: &wire.Failure{Code: "relay_stopped"}}, "", ""},
+		{"exhausted stopped join", "get", "engine_task_observed", wire.EngineTaskPayload{Stage: "task_settled", Outcome: appobs.EngineOutcomeFailed, Failure: &wire.Failure{Code: "share_stopped"}}, "receiver_join_stopped", testrun.OutcomeFailed},
 		{"initial registration is not recovery", "share", "relay_recovering", wire.RelayRecoveringPayload{State: "succeeded", Details: &wire.RelayRecoveryDetails{Generation: "1"}}, "", ""},
 		{"re-registration", "share", "relay_recovering", wire.RelayRecoveringPayload{State: "succeeded", Details: &wire.RelayRecoveryDetails{Generation: "2"}}, "sender_relay_recovery", testrun.OutcomeSucceeded},
 	} {
@@ -100,7 +101,7 @@ func TestObservationMilestonesDoNotConfuseStoppedSessionWithFailedInitialJoin(t 
 	if err != nil || relevant {
 		t.Fatalf("generation interpretation: relevant=%v error=%v", relevant, err)
 	}
-	_, relevant, err = stream.derive(observationRecord{Command: "get", Event: "engine_task_observed", Payload: json.RawMessage(`{"stage":"task_settled","outcome":"failed","failure":{"code":"relay_stopped"}}`)})
+	_, relevant, err = stream.derive(observationRecord{Command: "get", Event: "engine_task_observed", Payload: json.RawMessage(`{"stage":"task_settled","outcome":"failed","failure":{"code":"share_stopped"}}`)})
 	if err != nil || relevant {
 		t.Fatalf("established session reported as failed initial join: relevant=%v error=%v", relevant, err)
 	}

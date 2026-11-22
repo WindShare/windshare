@@ -167,7 +167,7 @@ func (stream *observationMilestones) derive(record observationRecord) (observati
 		if err := decode(&payload); err != nil {
 			return fact, false, err
 		}
-		if record.Command == "get" && payload.Stage == "task_settled" && !stream.receiveJoined && payload.Outcome == appobs.EngineOutcomeFailed && payload.Failure != nil && payload.Failure.Code == "relay_stopped" {
+		if record.Command == "get" && payload.Stage == "task_settled" && !stream.receiveJoined && payload.Outcome == appobs.EngineOutcomeFailed && payload.Failure != nil && payload.Failure.Code == "share_stopped" {
 			fact.name, fact.outcome = "receiver_join_stopped", testrun.OutcomeFailed
 		}
 	case "share_workflow":
