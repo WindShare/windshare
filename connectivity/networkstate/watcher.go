@@ -27,7 +27,7 @@ type WatcherConfig struct {
 // snapshots and persistent background sampling failures.
 type Watcher struct {
 	mu          sync.Mutex
-	pollMu      sync.Mutex
+	polling     chan struct{}
 	monitor     *Monitor
 	interval    time.Duration
 	now         func() time.Time
@@ -75,35 +75,46 @@ func (w *Watcher) Snapshot(ctx context.Context) (Snapshot, error) {
 }
 
 // Poll satisfies pull-based consumers without triggering redundant OS queries
-// while the cached snapshot is fresh. When sampling is failing or the last
-// successful snapshot has expired, Poll preserves the last snapshot and
-// surfaces the sampling error instead of silently returning stale state.
+// while the cached snapshot is fresh. Concurrent cache misses wait on either
+// the in-flight sample or their own context cancellation, then recheck
+// cancellation and snapshot freshness once the shared sample settles.
 func (w *Watcher) Poll(ctx context.Context, now time.Time) (Snapshot, bool, error) {
-	w.mu.Lock()
-	if snapshot, err, ok := w.cachedLocked(now); ok {
+	for {
+		if err := ctx.Err(); err != nil {
+			return w.Current(), false, err
+		}
+		w.mu.Lock()
+		if snapshot, err, ok := w.cachedLocked(now); ok {
+			w.mu.Unlock()
+			return snapshot, false, err
+		}
+		if wait := w.polling; wait != nil {
+			w.mu.Unlock()
+			select {
+			case <-wait:
+				continue
+			case <-ctx.Done():
+				return w.Current(), false, ctx.Err()
+			}
+		}
+		done := make(chan struct{})
+		w.polling = done
 		w.mu.Unlock()
-		return snapshot, false, err
-	}
-	w.mu.Unlock()
 
-	w.pollMu.Lock()
-	defer w.pollMu.Unlock()
-
-	w.mu.Lock()
-	if snapshot, err, ok := w.cachedLocked(now); ok {
-		w.mu.Unlock()
-		return snapshot, false, err
+		defer w.releasePoll(done)
+		return w.executePoll(ctx, now)
 	}
-	w.mu.Unlock()
-	return w.pollLocked(ctx, now)
 }
 
 // Step forces one poll against the underlying monitor and broadcasts any true
 // generation transition (after the initial baseline) to active subscribers.
 func (w *Watcher) Step(ctx context.Context) (Snapshot, bool, error) {
-	w.pollMu.Lock()
-	defer w.pollMu.Unlock()
-	return w.pollLocked(ctx, w.now())
+	done, err := w.claimPoll(ctx)
+	if err != nil {
+		return w.Current(), false, err
+	}
+	defer w.releasePoll(done)
+	return w.executePoll(ctx, w.now())
 }
 
 // Subscribe registers for true network generation changes (never the initial
@@ -226,7 +237,38 @@ func withinWindow(now, since time.Time, window time.Duration) bool {
 	return elapsed >= 0 && elapsed < window
 }
 
-func (w *Watcher) pollLocked(ctx context.Context, now time.Time) (Snapshot, bool, error) {
+func (w *Watcher) claimPoll(ctx context.Context) (chan struct{}, error) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		w.mu.Lock()
+		if wait := w.polling; wait != nil {
+			w.mu.Unlock()
+			select {
+			case <-wait:
+				continue
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		done := make(chan struct{})
+		w.polling = done
+		w.mu.Unlock()
+		return done, nil
+	}
+}
+
+func (w *Watcher) releasePoll(done chan struct{}) {
+	w.mu.Lock()
+	w.polling = nil
+	close(done)
+	w.mu.Unlock()
+}
+
+// executePoll runs one OS sample while the caller owns the active polling slot
+// and does not hold w.mu.
+func (w *Watcher) executePoll(ctx context.Context, now time.Time) (Snapshot, bool, error) {
 	snapshot, changed, err := w.monitor.Poll(ctx, now)
 	if err != nil {
 		w.mu.Lock()
@@ -266,9 +308,11 @@ func (w *Watcher) run(ctx context.Context, prev <-chan struct{}, done chan struc
 		}
 	}
 	defer func() {
-		w.pollMu.Lock()
+		// Wait for any in-flight poll before clearing the resume gap so a
+		// concurrent sample cannot repopulate lastPoll after the loop goes idle.
+		pollDone, _ := w.claimPoll(context.Background())
 		w.monitor.ResetPollGap()
-		w.pollMu.Unlock()
+		w.releasePoll(pollDone)
 	}()
 
 	if initialPoll || prev != nil {
@@ -286,21 +330,36 @@ func (w *Watcher) run(ctx context.Context, prev <-chan struct{}, done chan struc
 	}
 }
 
-// initialPoll rechecks freshness under pollMu so loop startup shares a
-// concurrent cold-start Snapshot/Poll instead of issuing a second OS query.
+// initialPoll rechecks freshness after any in-flight poll so loop startup
+// shares a concurrent cold-start Snapshot/Poll instead of issuing a second OS
+// query, while still exiting promptly if the loop is canceled while waiting.
 func (w *Watcher) initialPoll(ctx context.Context) {
-	w.pollMu.Lock()
-	defer w.pollMu.Unlock()
-	if ctx.Err() != nil || !w.needsInitialPoll() {
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		w.mu.Lock()
+		if !w.needsInitialPollLocked() {
+			w.mu.Unlock()
+			return
+		}
+		if wait := w.polling; wait != nil {
+			w.mu.Unlock()
+			select {
+			case <-wait:
+				continue
+			case <-ctx.Done():
+				return
+			}
+		}
+		done := make(chan struct{})
+		w.polling = done
+		w.mu.Unlock()
+
+		defer w.releasePoll(done)
+		_, _, _ = w.executePoll(ctx, w.now())
 		return
 	}
-	_, _, _ = w.pollLocked(ctx, w.now())
-}
-
-func (w *Watcher) needsInitialPoll() bool {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.needsInitialPollLocked()
 }
 
 func (w *Watcher) needsInitialPollLocked() bool {

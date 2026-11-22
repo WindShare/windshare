@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,12 +18,15 @@ import (
 )
 
 type testMonitor struct {
+	mu       sync.Mutex
 	observer networkstate.Observer
 	state    networkstate.State
 	err      error
 }
 
 func (m *testMonitor) Poll(_ context.Context, now time.Time) (networkstate.Snapshot, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.err != nil {
 		return networkstate.Snapshot{}, false, m.err
 	}

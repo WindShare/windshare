@@ -40,6 +40,7 @@ type AttemptRequest struct {
 	Binding            v2signal.Binding
 	OnTURNRecovery     func(turncontrol.RecoveryReason)
 }
+// NetworkMonitor provides concurrency-safe network state polling.
 type NetworkMonitor interface {
 	Poll(context.Context, time.Time) (networkstate.Snapshot, bool, error)
 }
@@ -112,7 +113,6 @@ type NativePeerConnectivity struct {
 	observations          observationstream.Consumer[Observation]
 	closed                bool
 	prewarmed             map[[16]byte]bool
-	poll                  sync.Mutex
 	config                Config
 	turnResources         *turncapacity.Owner
 	turnRoutes            turnroute.Planner
@@ -234,8 +234,6 @@ func (n *NativePeerConnectivity) NewPeerConnection(ctx context.Context, request 
 	return prepared.Start(ctx)
 }
 func (n *NativePeerConnectivity) snapshot(ctx context.Context) (networkstate.Snapshot, error) {
-	n.poll.Lock()
-	defer n.poll.Unlock()
 	snapshot, _, err := n.config.Monitor.Poll(ctx, n.config.Now())
 	if err != nil {
 		return snapshot, err

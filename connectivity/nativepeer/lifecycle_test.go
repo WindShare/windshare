@@ -2,6 +2,7 @@ package nativepeer
 
 import (
 	"context"
+	"errors"
 	"net/netip"
 	"sync"
 	"sync/atomic"
@@ -128,13 +129,34 @@ func TestSenderMaintenancePublishesOnlyNewLocalFacts(t *testing.T) {
 }
 
 type countingNetworkSource struct {
-	mu    sync.Mutex
-	calls atomic.Int64
-	state networkstate.State
+	mu      sync.Mutex
+	calls   atomic.Int64
+	state   networkstate.State
+	entered chan struct{}
+	block   chan struct{}
 }
 
-func (s *countingNetworkSource) Snapshot(context.Context) (networkstate.State, error) {
+func (s *countingNetworkSource) Snapshot(ctx context.Context) (networkstate.State, error) {
 	s.calls.Add(1)
+	if err := ctx.Err(); err != nil {
+		return networkstate.State{}, err
+	}
+	s.mu.Lock()
+	entered, block := s.entered, s.block
+	s.mu.Unlock()
+	if entered != nil {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+	}
+	if block != nil {
+		select {
+		case <-block:
+		case <-ctx.Done():
+			return networkstate.State{}, ctx.Err()
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.state, nil
@@ -301,5 +323,63 @@ func TestIdleUsesOnlyBoundedPreviouslySelectedProfileAndOwnerCloseJoinsGeneratio
 	defaults := newTestConnectivity(t, Config{})
 	if err := defaults.Close(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPrepareAttemptCancelsWhileSharedWatcherSampleBlocks(t *testing.T) {
+	now := time.Unix(700, 0)
+	clock := func() time.Time { return now }
+	block := make(chan struct{})
+	source := &countingNetworkSource{
+		state:   networkstate.State{Addresses: []networkstate.Address{{IP: netip.MustParseAddr("192.0.2.1"), InterfaceIndex: 1}}},
+		entered: make(chan struct{}, 1),
+		block:   block,
+	}
+	watcher := networkstate.NewWatcher(networkstate.WatcherConfig{Source: source, Debounce: time.Nanosecond, Interval: time.Hour, Now: clock})
+	defer watcher.Close()
+
+	native := newTestConnectivity(t, Config{Monitor: watcher, Now: clock, Reachability: reachability.New(reachability.Config{Now: clock})})
+	defer native.Close(context.Background())
+
+	leaderDone := make(chan error, 1)
+	go func() {
+		prepared, err := native.PrepareAttempt(context.Background(), request(1))
+		if prepared != nil {
+			prepared.Close()
+		}
+		leaderDone <- err
+	}()
+	<-source.entered
+
+	waiterCtx, cancelWaiter := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancelWaiter()
+	waiterDone := make(chan error, 1)
+	go func() {
+		prepared, err := native.PrepareAttempt(waiterCtx, request(2))
+		if prepared != nil {
+			prepared.Close()
+		}
+		waiterDone <- err
+	}()
+
+	select {
+	case err := <-waiterDone:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			close(block)
+			<-leaderDone
+			t.Fatalf("second PrepareAttempt err = %v, want DeadlineExceeded", err)
+		}
+	case <-time.After(time.Second):
+		close(block)
+		<-leaderDone
+		t.Fatal("second PrepareAttempt blocked past deadline while shared sample was stuck")
+	}
+
+	close(block)
+	if err := <-leaderDone; err != nil {
+		t.Fatalf("first PrepareAttempt err = %v", err)
+	}
+	if calls := source.calls.Load(); calls != 1 {
+		t.Fatalf("source calls = %d, want 1", calls)
 	}
 }

@@ -11,11 +11,12 @@ import (
 )
 
 type countingSource struct {
-	mu    sync.Mutex
-	calls atomic.Int64
-	state State
-	err   error
-	block chan struct{}
+	mu      sync.Mutex
+	calls   atomic.Int64
+	state   State
+	err     error
+	entered chan struct{}
+	block   chan struct{}
 }
 
 func (s *countingSource) Snapshot(ctx context.Context) (State, error) {
@@ -23,9 +24,18 @@ func (s *countingSource) Snapshot(ctx context.Context) (State, error) {
 	if err := ctx.Err(); err != nil {
 		return State{}, err
 	}
-	if s.block != nil {
+	s.mu.Lock()
+	entered, block := s.entered, s.block
+	s.mu.Unlock()
+	if entered != nil {
 		select {
-		case <-s.block:
+		case entered <- struct{}{}:
+		default:
+		}
+	}
+	if block != nil {
+		select {
+		case <-block:
 		case <-ctx.Done():
 			return State{}, ctx.Err()
 		}
@@ -33,6 +43,12 @@ func (s *countingSource) Snapshot(ctx context.Context) (State, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.state, s.err
+}
+
+func (s *countingSource) setBlock(block chan struct{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.block = block
 }
 
 func (s *countingSource) setIP(ip string) {
@@ -357,5 +373,210 @@ func TestWatcherCallerCancellationDoesNotPoisonSharedHealth(t *testing.T) {
 	// A subsequent healthy caller at the same timestamp must not inherit context.Canceled.
 	if snap, changed, err := watcher.Poll(context.Background(), clock()); err != nil || changed || snap.GenerationID() != 1 {
 		t.Fatalf("healthy Poll after canceled caller = (%d, %t, %v)", snap.GenerationID(), changed, err)
+	}
+}
+
+func TestWatcherPollWaiterCancelsWhileInFlightSampleBlocks(t *testing.T) {
+	now := time.Unix(5000, 0)
+	block := make(chan struct{})
+	source := &countingSource{entered: make(chan struct{}, 1), block: block}
+	source.setIP("10.0.0.2")
+	watcher := NewWatcher(WatcherConfig{
+		Source:   source,
+		Debounce: time.Nanosecond,
+		Interval: time.Hour,
+		Now:      func() time.Time { return now },
+	})
+	defer watcher.Close()
+
+	leaderDone := make(chan error, 1)
+	go func() {
+		snap, _, err := watcher.Poll(context.Background(), now)
+		if err == nil && snap.GenerationID() != 1 {
+			t.Errorf("leader generation = %d, want 1", snap.GenerationID())
+		}
+		leaderDone <- err
+	}()
+	<-source.entered
+
+	waiterCtx, cancelWaiter := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancelWaiter()
+	waiterDone := make(chan error, 1)
+	go func() {
+		_, _, err := watcher.Poll(waiterCtx, now)
+		waiterDone <- err
+	}()
+
+	select {
+	case err := <-waiterDone:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			close(block)
+			<-leaderDone
+			t.Fatalf("waiter Poll err = %v, want DeadlineExceeded", err)
+		}
+	case <-time.After(time.Second):
+		close(block)
+		<-leaderDone
+		t.Fatal("waiter Poll blocked past deadline while in-flight sample was stuck")
+	}
+
+	close(block)
+	if err := <-leaderDone; err != nil {
+		t.Fatalf("leader Poll err = %v", err)
+	}
+	if calls := source.calls.Load(); calls != 1 {
+		t.Fatalf("source calls = %d, want 1", calls)
+	}
+
+	// Warm cache must still honor an already-canceled caller context.
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if snap, changed, err := watcher.Poll(canceledCtx, now); !errors.Is(err, context.Canceled) || changed || snap.GenerationID() != 1 {
+		t.Fatalf("warm canceled Poll = (%d, %t, %v)", snap.GenerationID(), changed, err)
+	}
+}
+
+func TestWatcherPollRechecksFreshnessAfterWaitingForSharedSample(t *testing.T) {
+	t.Run("leader_canceled_waiter_takes_over", func(t *testing.T) {
+		now := time.Unix(6000, 0)
+		block := make(chan struct{})
+		source := &countingSource{entered: make(chan struct{}, 2), block: block}
+		source.setIP("10.0.0.2")
+		watcher := NewWatcher(WatcherConfig{
+			Source:   source,
+			Debounce: time.Nanosecond,
+			Interval: time.Hour,
+			Now:      func() time.Time { return now },
+		})
+		defer watcher.Close()
+
+		leaderCtx, cancelLeader := context.WithCancel(context.Background())
+		leaderDone := make(chan error, 1)
+		go func() {
+			_, _, err := watcher.Poll(leaderCtx, now)
+			leaderDone <- err
+		}()
+		<-source.entered
+
+		waiterDone := make(chan Snapshot, 1)
+		waiterErr := make(chan error, 1)
+		go func() {
+			snap, _, err := watcher.Poll(context.Background(), now)
+			if err != nil {
+				waiterErr <- err
+				return
+			}
+			waiterDone <- snap
+		}()
+
+		// Let the waiter enter the shared-sample wait before canceling the leader,
+		// and allow the next sample to proceed immediately once the leader exits.
+		time.Sleep(5 * time.Millisecond)
+		source.setBlock(nil)
+		cancelLeader()
+		if err := <-leaderDone; !errors.Is(err, context.Canceled) {
+			t.Fatalf("leader err = %v, want Canceled", err)
+		}
+		select {
+		case err := <-waiterErr:
+			t.Fatalf("healthy waiter failed after leader canceled: %v", err)
+		case snap := <-waiterDone:
+			if snap.GenerationID() != 1 {
+				t.Fatalf("waiter generation = %d, want 1", snap.GenerationID())
+			}
+		case <-time.After(time.Second):
+			t.Fatal("healthy waiter did not complete after canceled leader exited")
+		}
+		if calls := source.calls.Load(); calls != 2 {
+			t.Fatalf("source calls = %d, want 2", calls)
+		}
+	})
+
+	t.Run("stale_for_waiter_timestamp", func(t *testing.T) {
+		base := time.Unix(7000, 0)
+		block := make(chan struct{})
+		source := &countingSource{entered: make(chan struct{}, 2), block: block}
+		source.setIP("10.0.0.2")
+		watcher := NewWatcher(WatcherConfig{
+			Source:   source,
+			Debounce: time.Nanosecond,
+			Interval: time.Second,
+			Now:      func() time.Time { return base },
+		})
+		defer watcher.Close()
+
+		leaderDone := make(chan error, 1)
+		go func() {
+			_, _, err := watcher.Poll(context.Background(), base)
+			leaderDone <- err
+		}()
+		<-source.entered
+
+		later := base.Add(2 * time.Second)
+		waiterDone := make(chan error, 1)
+		go func() {
+			_, _, err := watcher.Poll(context.Background(), later)
+			waiterDone <- err
+		}()
+
+		time.Sleep(5 * time.Millisecond)
+		source.setBlock(nil)
+		close(block)
+		if err := <-leaderDone; err != nil {
+			t.Fatalf("leader err = %v", err)
+		}
+		if err := <-waiterDone; err != nil {
+			t.Fatalf("waiter err = %v", err)
+		}
+		if calls := source.calls.Load(); calls != 2 {
+			t.Fatalf("stale-timestamp waiter reused expired sample: calls = %d, want 2", calls)
+		}
+	})
+}
+
+func TestWatcherStepCancelsWhileInFlightPollBlocks(t *testing.T) {
+	now := time.Unix(8000, 0)
+	block := make(chan struct{})
+	source := &countingSource{entered: make(chan struct{}, 1), block: block}
+	source.setIP("10.0.0.2")
+	watcher := NewWatcher(WatcherConfig{
+		Source:   source,
+		Debounce: time.Nanosecond,
+		Interval: time.Hour,
+		Now:      func() time.Time { return now },
+	})
+	defer watcher.Close()
+
+	leaderDone := make(chan error, 1)
+	go func() {
+		_, _, err := watcher.Poll(context.Background(), now)
+		leaderDone <- err
+	}()
+	<-source.entered
+
+	stepCtx, cancelStep := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancelStep()
+	stepDone := make(chan error, 1)
+	go func() {
+		_, _, err := watcher.Step(stepCtx)
+		stepDone <- err
+	}()
+
+	select {
+	case err := <-stepDone:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			close(block)
+			<-leaderDone
+			t.Fatalf("Step err = %v, want DeadlineExceeded", err)
+		}
+	case <-time.After(time.Second):
+		close(block)
+		<-leaderDone
+		t.Fatal("Step blocked past deadline while in-flight poll was stuck")
+	}
+
+	close(block)
+	if err := <-leaderDone; err != nil {
+		t.Fatalf("leader err = %v", err)
 	}
 }
