@@ -256,20 +256,10 @@ func TestTransferJobPausesWhenDirectorySettlementNamesAnotherAdmission(t *testin
 	}
 }
 
-func TestTransferJobRejectsDirectoryAdmissionFromAnotherIntentScope(t *testing.T) {
+func TestTransferJobRejectsMismatchedDirectoryAdmission(t *testing.T) {
 	share := transferID[catalog.ShareInstance](0xd1)
 	root := transferID[catalog.DirectoryID](0xd2)
 	rules, err := NewSelectionRules(true, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	foreignRules, err := NewSelectionRules(false, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	foreignScope, err := NewDirectoryAdmissionScope(
-		testReceiveIntent(t, share, root, foreignRules),
-	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,9 +268,9 @@ func TestTransferJobRejectsDirectoryAdmissionFromAnotherIntentScope(t *testing.T
 		directory AuthenticatedSourceDirectory,
 		_ DirectoryAdmission,
 	) (DirectoryAdmission, error) {
-		return NewDirectoryAdmissionWithSecret(
-			output.directorySecret[:], foreignScope, admissionTestMaterializationDirectory(t, directory),
-		)
+		mismatched := directory
+		mismatched.Generation = transferID[catalog.DirectoryGeneration](0xee)
+		return NewDirectoryAdmission(admissionTestMaterializationDirectory(t, mismatched))
 	}
 	job, err := newTestTransferJob(t, testTransferJobConfig{
 		ShareInstance: share, SyntheticRoot: root, Rules: rules,

@@ -185,12 +185,12 @@ func (s *Session) WaitSessionChange(
 	}
 }
 
-func (s *Session) ResolveOrdinaryOutputShape(ctx context.Context, selection transfer.SelectionSpec, budget ordinaryoutput.ShapeProbeBudget, tracer ordinaryoutput.ShapeTracer) (ordinaryoutput.ShapeDecision, error) {
+func (s *Session) ResolveOrdinaryOutputShape(ctx context.Context, selection transfer.SelectionSpec, budget ordinaryoutput.ShapeProbeBudget) (ordinaryoutput.ShapeDecision, error) {
 	input, err := selection.OrdinaryOutputSelection()
 	if err != nil {
 		return ordinaryoutput.ShapeDecision{}, err
 	}
-	return ordinaryoutput.ResolveShape(ctx, s, input, budget, ordinaryoutput.BindShapeTracerToSession(s.Runtime().ProtocolSessionID(), tracer))
+	return ordinaryoutput.ResolveShape(ctx, s, input, budget)
 }
 
 func (s *Session) AcquireDirectory(ctx context.Context, id catalog.DirectoryID) (catalog.DirectorySnapshot, func(), error) {

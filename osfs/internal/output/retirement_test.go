@@ -380,11 +380,11 @@ func createPausedSingleFileOp(t *testing.T, root string, seed byte) (transfer.Se
 		_ = auth.Close()
 		t.Fatal(err)
 	}
-	if _, err := tx.Pause(ctx, transfer.FilePauseInterrupted); err != nil {
+	if _, err := tx.Pause(ctx); err != nil {
 		_ = auth.Close()
 		t.Fatal(err)
 	}
-	if _, err := session.PauseTree(ctx, transfer.JobPauseInterrupted); err != nil {
+	if _, err := session.PauseTree(ctx); err != nil {
 		_ = auth.Close()
 		t.Fatal(err)
 	}

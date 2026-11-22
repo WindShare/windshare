@@ -199,7 +199,7 @@ func TestShapeSelectionConstructorsRemainBoundedAndUnambiguous(t *testing.T) {
 	}
 	budget, _ := NewShapeProbeBudget(1, 1, 1, 1, 1)
 	var nilContext context.Context
-	if _, err := ResolveShape(nilContext, nil, Selection{}, budget, nil); !errors.Is(
+	if _, err := ResolveShape(nilContext, nil, Selection{}, budget); !errors.Is(
 		err, ErrInvalidShapeResolution,
 	) {
 		t.Fatalf("unbound shape resolution = %v", err)

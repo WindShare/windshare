@@ -530,16 +530,14 @@ func (r *jobRun) admitIncrementalDirectory(ctx context.Context, request Director
 	if !materialized {
 		return DirectoryAdmission{}, fault.DependencyContract(ErrInvalidDirectoryAdmission)
 	}
-	if err := validateMaterializationDirectoryForScope(r.directoryAdmissionScope, directory); err != nil {
+	if _, err := NewDirectoryAdmission(directory); err != nil {
 		return DirectoryAdmission{}, fault.DependencyContract(err)
 	}
 	admission, rawAdmissionErr := r.output.AdmitDirectory(ctx, request)
 	err := normalizeOutputBoundary(ctx, rawAdmissionErr)
 	if err != nil {
 		if !admission.IsZero() {
-			if bindingErr := ValidateDirectoryAdmissionBinding(
-				r.directoryAdmissionScope, admission, directory,
-			); bindingErr != nil {
+			if bindingErr := validateDirectoryAdmission(admission, directory); bindingErr != nil {
 				err = fault.JoinErrors(err, outputContractFault(bindingErr))
 			}
 			err = requireOutputPause(err)
@@ -547,7 +545,7 @@ func (r *jobRun) admitIncrementalDirectory(ctx context.Context, request Director
 		r.traceDirectoryAdmission(request, err)
 		return DirectoryAdmission{}, err
 	}
-	if err := ValidateDirectoryAdmissionBinding(r.directoryAdmissionScope, admission, directory); err != nil {
+	if err := validateDirectoryAdmission(admission, directory); err != nil {
 		contractFailure := outputContractFault(err)
 		r.traceDirectoryAdmission(request, contractFailure)
 		return DirectoryAdmission{}, contractFailure

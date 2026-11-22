@@ -103,9 +103,7 @@ func TestOutputAuthorityLifecycleAndNilGuards(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settlement, err := session.PauseTree(
-		context.Background(), transfer.JobPauseInterrupted,
-	); err != nil || settlement.Kind() != transfer.DirectTreeSettlementPaused {
+	if settlement, err := session.PauseTree(context.Background()); err != nil || settlement.Kind() != transfer.DirectTreeSettlementPaused {
 		t.Fatalf("pause = (%d, %v)", settlement.Kind(), err)
 	}
 	if err := authority.Close(); err != nil {

@@ -387,7 +387,7 @@ func (tx *fileTransaction) settlePublishedLocked(warnings []transfer.FileMetadat
 	return settlement, nil
 }
 
-func (tx *fileTransaction) Pause(ctx context.Context, _ transfer.FilePauseReason) (transfer.FileSettlement, error) {
+func (tx *fileTransaction) Pause(ctx context.Context) (transfer.FileSettlement, error) {
 	if ctx == nil {
 		return transfer.FileSettlement{}, transfer.ErrInvalidOutputBinding
 	}
@@ -421,7 +421,7 @@ func (tx *fileTransaction) Pause(ctx context.Context, _ transfer.FilePauseReason
 	return settlement, nil
 }
 
-func (tx *fileTransaction) Retire(ctx context.Context, _ transfer.FileRetireReason) (transfer.FileSettlement, error) {
+func (tx *fileTransaction) Retire(ctx context.Context) (transfer.FileSettlement, error) {
 	if ctx == nil {
 		return transfer.FileSettlement{}, transfer.ErrInvalidOutputBinding
 	}

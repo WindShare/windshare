@@ -106,13 +106,7 @@ func TestHistoricalDeliveryCannotBecomeContentOrCommitEvidence(t *testing.T) {
 	}
 }
 
-func TestOutputLifecycleReasonsAndAuthorityFunctionAreClosedDomains(t *testing.T) {
-	if FilePauseReason(0).Valid() || !FilePauseInterrupted.Valid() || (FilePauseDependencyContract + 1).Valid() {
-		t.Fatal("file pause reason admitted a value outside its closed domain")
-	}
-	if JobPauseReason(0).valid() || !JobPauseInterrupted.valid() || (JobPauseDependencyContract + 1).valid() {
-		t.Fatal("job pause reason admitted a value outside its closed domain")
-	}
+func TestOutputLifecycleAuthorityFunctionAndSettlementKindAreClosed(t *testing.T) {
 	if _, err := NewDirectTreeSettlement(DirectTreeSettlementKind(0)); !errors.Is(err, ErrInvalidOutputSettlement) {
 		t.Fatalf("unknown job settlement error = %v", err)
 	}
@@ -207,24 +201,8 @@ func TestPublishedSettlementWarningsProvenanceAndDestinationCoordinatesAreExplic
 		t.Fatalf("invalid transient publication error = %v", err)
 	}
 
-	path, err := NewOutputDestinationPath("folder/file.bin")
-	if err != nil || !path.Valid() || path.IsSessionRoot() || path.String() != "folder/file.bin" {
-		t.Fatalf("destination path = (%+v, %v)", path, err)
-	}
-	root := OutputDestinationSessionRoot()
-	if !root.Valid() || !root.IsSessionRoot() || root.String() != "" {
-		t.Fatalf("destination root = %+v", root)
-	}
-	for _, invalid := range []string{"", "/absolute", "folder//file"} {
-		if _, err := NewOutputDestinationPath(invalid); !errors.Is(err, ErrInvalidOutputBinding) {
-			t.Fatalf("invalid destination %q error = %v", invalid, err)
-		}
-	}
-
 	rootID := admissionTestDirectoryID(t, 0x71)
 	intent := admissionTestIntent(t, rootID, 0x72)
-	scope := admissionTestScope(t, intent)
-	secret := admissionTestSequence(0x73, directoryAdmissionSecretBytes)
 	rootSource := admissionTestDirectory(
 		t, rootID, admissionTestGeneration(t, 0x74), DirectoryAdmission{}, "", catalog.ModifiedTime{},
 	)
@@ -238,7 +216,7 @@ func TestPublishedSettlementWarningsProvenanceAndDestinationCoordinatesAreExplic
 	if !ok {
 		t.Fatal("root materialization is unavailable")
 	}
-	rootAdmission, err := NewDirectoryAdmissionWithSecret(secret, scope, rootDirectory)
+	rootAdmission, err := NewDirectoryAdmission(rootDirectory)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +234,7 @@ func TestPublishedSettlementWarningsProvenanceAndDestinationCoordinatesAreExplic
 	if !ok {
 		t.Fatal("child materialization is unavailable")
 	}
-	admission, err := NewDirectoryAdmissionWithSecret(secret, scope, materialization)
+	admission, err := NewDirectoryAdmission(materialization)
 	if err != nil {
 		t.Fatal(err)
 	}

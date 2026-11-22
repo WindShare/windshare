@@ -430,13 +430,8 @@ func validateDirectTreeSession(intent ReceiveIntent, output DirectTreeSession) e
 		output.SessionID().IsZero() {
 		return outputContractFault(nil)
 	}
-	expectedBinding, err := BindDirectTreeSession(intent)
-	actualBinding := output.Binding()
-	if err != nil || !actualBinding.valid() || actualBinding != expectedBinding {
-		return outputContractFault(err)
-	}
 	capabilities := output.Capabilities()
-	if _, err = NewDirectTreeCapabilities(capabilities); err != nil {
+	if _, err := NewDirectTreeCapabilities(capabilities); err != nil {
 		return outputContractFault(err)
 	}
 	return nil
@@ -450,35 +445,6 @@ type AuthenticatedSourceDirectory struct {
 	ParentAdmission DirectoryAdmission
 	SourcePath      ordinaryoutput.SourceCatalogPath
 	ModifiedTime    catalog.ModifiedTime
-}
-
-// OutputDestinationPath is the executor-only coordinate selected by retained
-// destination authority. Its explicit root value prevents a logical result-root
-// name from being materialized again below an already-reserved result root.
-type OutputDestinationPath struct {
-	value       string
-	sessionRoot bool
-	valid       bool
-}
-
-func NewOutputDestinationPath(value string) (OutputDestinationPath, error) {
-	canonical, err := catalog.CanonicalPath(value)
-	if err != nil || value == "" || canonical != value {
-		return OutputDestinationPath{}, errors.Join(ErrInvalidOutputBinding, err)
-	}
-	return OutputDestinationPath{value: canonical, valid: true}, nil
-}
-
-func OutputDestinationSessionRoot() OutputDestinationPath {
-	return OutputDestinationPath{sessionRoot: true, valid: true}
-}
-
-func (path OutputDestinationPath) String() string { return path.value }
-func (path OutputDestinationPath) IsSessionRoot() bool {
-	return path.valid && path.sessionRoot && path.value == ""
-}
-func (path OutputDestinationPath) Valid() bool {
-	return path.valid && (path.sessionRoot && path.value == "" || !path.sessionRoot && path.value != "")
 }
 
 func validateOpenedFile(share catalog.ShareInstance, entry catalog.Entry, opened OpenedRevision) error {

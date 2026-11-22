@@ -10,6 +10,7 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
+	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 const (
@@ -28,21 +29,69 @@ var (
 	ErrOpaqueSelectionEvidenceBudget = errors.New("transfer opaque selection evidence budget exceeded")
 )
 
+type directTreeRootKind uint8
+
+const (
+	directTreeNoRoot directTreeRootKind = iota + 1
+	directTreeDirectoryAnchor
+	directTreeSyntheticRoot
+	directTreeCatalogRoot
+)
+
+type directTreeRootExpectation struct {
+	kind      directTreeRootKind
+	directory catalog.DirectoryID
+	path      string
+}
+
 type directTreeCoordinateProjector struct {
-	artifact ordinaryoutput.ArtifactPathProjector
-	scope    DirectoryAdmissionScope
+	intentDigest ReceiveIntentDigest
+	artifact     ordinaryoutput.ArtifactPathProjector
+	root         directTreeRootExpectation
 }
 
 func newDirectTreeCoordinateProjector(intent ReceiveIntent) (directTreeCoordinateProjector, error) {
+	if intent.IsZero() || intent.MaterializationPlan().Kind() != receivecontract.PlanDirectTree {
+		return directTreeCoordinateProjector{}, ErrInvalidDirectoryAdmission
+	}
 	artifact, err := OrdinaryOutputArtifactPathProjector(intent)
 	if err != nil {
 		return directTreeCoordinateProjector{}, err
 	}
-	scope, err := NewDirectoryAdmissionScope(intent)
-	if err != nil {
-		return directTreeCoordinateProjector{}, err
+	tree, ok := intent.ArtifactSpec().DirectoryTree()
+	if !ok {
+		return directTreeCoordinateProjector{}, ErrInvalidDirectoryAdmission
 	}
-	return directTreeCoordinateProjector{artifact: artifact, scope: scope}, nil
+	var root directTreeRootExpectation
+	switch tree.Kind() {
+	case receivecontract.DirectoryTreeSingleFile:
+		root = directTreeRootExpectation{kind: directTreeNoRoot}
+	case receivecontract.DirectoryTreeResultRoot:
+		resultRoot, ok := tree.ResultRoot()
+		if !ok {
+			return directTreeCoordinateProjector{}, ErrInvalidDirectoryAdmission
+		}
+		if resultRoot.AnchorKind() == receivecontract.ResultRootDirectoryAnchor {
+			root = directTreeRootExpectation{
+				kind: directTreeDirectoryAnchor, directory: resultRoot.DirectoryID(), path: resultRoot.Name(),
+			}
+		} else {
+			root = directTreeRootExpectation{
+				kind: directTreeSyntheticRoot, directory: intent.SyntheticRoot(), path: resultRoot.Name(),
+			}
+		}
+	case receivecontract.DirectoryTreeCatalogRoot:
+		root = directTreeRootExpectation{
+			kind: directTreeCatalogRoot, directory: intent.SyntheticRoot(),
+		}
+	default:
+		return directTreeCoordinateProjector{}, ErrInvalidDirectoryAdmission
+	}
+	return directTreeCoordinateProjector{
+		intentDigest: intent.Digest(),
+		artifact:     artifact,
+		root:         root,
+	}, nil
 }
 
 func (projector directTreeCoordinateProjector) projectDirectory(
@@ -60,12 +109,12 @@ func (projector directTreeCoordinateProjector) projectDirectory(
 	case ordinaryoutput.ArtifactReject:
 		return projection, MaterializationDirectory{}, false, nil
 	case ordinaryoutput.ArtifactTraverseOnly:
-		root := projector.scope.RootExpectation()
-		if root.Kind() != DirectoryAdmissionCatalogRoot || !source.SourcePath.IsRoot() ||
-			source.DirectoryID != root.DirectoryID() || !source.ParentAdmission.IsZero() {
+		root := projector.root
+		if root.kind != directTreeCatalogRoot || !source.SourcePath.IsRoot() ||
+			source.DirectoryID != root.directory || !source.ParentAdmission.IsZero() {
 			return projection, MaterializationDirectory{}, false, nil
 		}
-		path, pathErr := NewMaterializationRootRelativePath(root.Path())
+		path, pathErr := NewMaterializationRootRelativePath(root.path)
 		if pathErr != nil {
 			return ordinaryoutput.ArtifactPathProjection{}, MaterializationDirectory{}, false, pathErr
 		}
@@ -96,14 +145,11 @@ func (projector directTreeCoordinateProjector) directoryPath(
 	artifact ordinaryoutput.ArtifactPath,
 ) (MaterializationRootRelativePath, error) {
 	if source.ParentAdmission.IsZero() {
-		root := projector.scope.RootExpectation()
-		if root.Kind() == DirectoryAdmissionNoRoot || source.DirectoryID != root.DirectoryID() {
+		root := projector.root
+		if root.kind == directTreeNoRoot || source.DirectoryID != root.directory {
 			return MaterializationRootRelativePath{}, ErrInvalidDirectoryAdmission
 		}
-		return NewMaterializationRootRelativePath(root.Path())
-	}
-	if source.ParentAdmission.ReceiveIntentDigest() != projector.scope.ReceiveIntentDigest() {
-		return MaterializationRootRelativePath{}, ErrInvalidDirectoryAdmission
+		return NewMaterializationRootRelativePath(root.path)
 	}
 	return NewMaterializationRootRelativePath(joinMaterializationPath(
 		source.ParentAdmission.Path(), pathLeaf(artifact.String()),
@@ -128,7 +174,7 @@ func (projector directTreeCoordinateProjector) projectFile(
 	var relative string
 	switch parent.Kind() {
 	case MaterializationFileParentReference:
-		if projector.scope.RootExpectation().Kind() != DirectoryAdmissionNoRoot {
+		if projector.root.kind != directTreeNoRoot {
 			return ordinaryoutput.ArtifactPath{}, MaterializationRootRelativePath{}, ErrInvalidOutputBinding
 		}
 		relative = artifact.String()
@@ -217,7 +263,6 @@ func newNodeIdentityLedger(limit int) (nodeIdentityLedger, error) {
 type jobRun struct {
 	job                            *TransferJob
 	output                         DirectTreeSession
-	directoryAdmissionScope        DirectoryAdmissionScope
 	failureMu                      sync.Mutex
 	directories                    []DirectoryJobFailure
 	files                          []FileJobFailure

@@ -18,15 +18,15 @@ func (r *jobRun) settleFailedFile(
 	transaction FileTransaction,
 	stage FailureStage,
 	cause error,
-	retireReason FileRetireReason,
+	retire bool,
 	progress *fileTransferProgress,
 ) error {
 	policy := lifecyclePolicyFor(cause)
-	if !retireReason.valid() || policy.jobTerminal() || policy.outputFailure() {
+	if !retire || policy.jobTerminal() || policy.outputFailure() {
 		return r.pauseFailedFile(ctx, plan, opened, transaction, stage, cause, progress)
 	}
 	settleContext, cancel := r.job.newSettlementContext(ctx)
-	settlement, rawSettlementErr := transaction.Retire(settleContext, retireReason)
+	settlement, rawSettlementErr := transaction.Retire(settleContext)
 	settlementErr := normalizeOutputBoundary(settleContext, rawSettlementErr)
 	cancel()
 	r.releaseRevision(ctx, plan, opened.Handle)
@@ -65,7 +65,7 @@ func (r *jobRun) pauseFailedFile(
 	policy := lifecyclePolicyFor(cause)
 	isolatedOutputFailure := policy.outputCanContinueAfterFileSettlement(r.output.Capabilities())
 	isolatedSourceFailure := policy.sourceFileLocal() && !policy.jobTerminal()
-	settlement, settlementErr := r.pauseFileTransaction(ctx, transaction, filePauseReason(cause), progress)
+	settlement, settlementErr := r.pauseFileTransaction(ctx, transaction, progress)
 	r.releaseRevision(ctx, plan, opened.Handle)
 	if settlementErr == nil {
 		r.job.progress.acceptFileSettlement(settlement, plan.expectedSize)
@@ -89,11 +89,10 @@ func (r *jobRun) pauseFailedFile(
 }
 
 func (r *jobRun) pauseFileTransaction(
-	ctx context.Context, transaction FileTransaction,
-	reason FilePauseReason, progress *fileTransferProgress,
+	ctx context.Context, transaction FileTransaction, progress *fileTransferProgress,
 ) (FileSettlement, error) {
 	settleContext, cancel := r.job.newSettlementContext(ctx)
-	settlement, rawSettlementErr := transaction.Pause(settleContext, reason)
+	settlement, rawSettlementErr := transaction.Pause(settleContext)
 	settlementErr := normalizeOutputBoundary(settleContext, rawSettlementErr)
 	cancel()
 	if settlementErr == nil && (!settlement.matchesBinding(transaction.Binding()) ||
@@ -274,9 +273,8 @@ func (r *jobRun) settleJob(ctx context.Context, outcome DirectTreeOutcome) Direc
 }
 
 func (r *jobRun) pauseJob(ctx context.Context) {
-	reason := jobPauseReason(r.terminationCause, r.settlementFailure)
 	settleContext, cancel := r.job.newSettlementContext(ctx)
-	settlement, rawSettlementErr := r.output.PauseTree(settleContext, reason)
+	settlement, rawSettlementErr := r.output.PauseTree(settleContext)
 	err := normalizeOutputBoundary(settleContext, rawSettlementErr)
 	cancel()
 	if err == nil {
@@ -336,52 +334,6 @@ func (r *jobRun) completeJob(ctx context.Context, outcome DirectTreeOutcome) {
 
 func (j *TransferJob) newSettlementContext(parent context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.WithoutCancel(parent), j.settlementTimeout)
-}
-
-func filePauseReason(cause error) FilePauseReason {
-	policy := lifecyclePolicyFor(cause)
-	switch {
-	case policy.canceled:
-		return FilePauseInterrupted
-	case policy.jobTerminalSession():
-		return FilePauseSessionFailure
-	case policy.outputFailure():
-		return FilePauseOutputFailure
-	case isSessionCode(policy.value, fault.SessionResourceBudget):
-		return FilePauseResourceBudget
-	case isSessionCode(policy.value, fault.SessionDependencyContract):
-		return FilePauseDependencyContract
-	default:
-		return FilePauseTransportFailure
-	}
-}
-
-func jobPauseReason(cause, settlementFailure *fault.BoundaryError) JobPauseReason {
-	if settlementFailure != nil {
-		return JobPauseOutputFailure
-	}
-	policy := lifecyclePolicy{}
-	if cause != nil {
-		policy = lifecyclePolicyFor(cause)
-	}
-	switch {
-	case policy.canceled:
-		return JobPauseInterrupted
-	case policy.jobTerminalSession():
-		return JobPauseSessionFailure
-	case policy.outputFailure():
-		return JobPauseOutputFailure
-	case isSessionCode(policy.value, fault.SessionResourceBudget):
-		return JobPauseResourceBudget
-	case isSessionCode(policy.value, fault.SessionDependencyContract):
-		return JobPauseDependencyContract
-	default:
-		return JobPauseTransportFailure
-	}
-}
-
-func fileRetireReason(cause error) FileRetireReason {
-	return lifecyclePolicyFor(cause).retireReason()
 }
 
 func lifecyclePolicyFor(err error) lifecyclePolicy {
@@ -456,19 +408,9 @@ func (policy lifecyclePolicy) directoryDiscovery() bool {
 		policy.value.Scope() == fault.ScopeDirectoryLocal
 }
 
-func (policy lifecyclePolicy) retireReason() FileRetireReason {
-	reason, ok := fault.RetirementFor(policy.value)
-	if !ok {
-		return 0
-	}
-	switch reason {
-	case fault.RetirementPermanentSource:
-		return FileRetireIsolatedPermanentSourceFailure
-	case fault.RetirementInvalidatedRevision:
-		return FileRetireInvalidatedRevision
-	default:
-		return 0
-	}
+func (policy lifecyclePolicy) shouldRetire() bool {
+	_, ok := fault.RetirementFor(policy.value)
+	return ok
 }
 
 func (r *jobRun) traceFileSettlement(plan plannedFile, settlement FileSettlement, failure error) {

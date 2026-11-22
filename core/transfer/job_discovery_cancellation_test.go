@@ -112,8 +112,8 @@ func TestTransferJobPreservesWorkerStopDuringCatalogReplay(t *testing.T) {
 				t.Fatalf("authenticated discovery status=%v rec=%+v", result.Progress.Discovery, discoveryRec)
 			}
 			transaction := output.transactions["file.bin"]
-			if transaction == nil || transaction.commitCalls != 1 || len(transaction.pauseReasons) != 0 ||
-				len(transaction.retireReasons) != 0 || output.pauseCalls != 1 || output.completeCalls != 0 {
+			if transaction == nil || transaction.commitCalls != 1 || transaction.pauseCalls != 0 ||
+				transaction.retireCalls != 0 || output.pauseCalls != 1 || output.completeCalls != 0 {
 				t.Fatalf("worker settlement was repeated: transaction=%+v pause=%d complete=%d",
 					transaction, output.pauseCalls, output.completeCalls)
 			}

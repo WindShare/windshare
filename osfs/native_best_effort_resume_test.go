@@ -36,7 +36,7 @@ func TestPortableResumeKeepsDeliveryAfterPublicFileMoves(t *testing.T) {
 			if _, err := tx.Commit(ctx); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := s.PauseTree(ctx, transfer.JobPauseShutdown); err != nil {
+			if _, err := s.PauseTree(ctx); err != nil {
 				t.Fatal(err)
 			}
 			if err := a.Close(); err != nil {
@@ -81,7 +81,7 @@ func TestPortableResumeKeepsDeliveryAfterPublicFileMoves(t *testing.T) {
 			if err != nil || !found || delivery.Size != 4 {
 				t.Fatalf("receipt lost: %+v %v %v", delivery, found, err)
 			}
-			if _, err := s.PauseTree(ctx, transfer.JobPauseShutdown); err != nil {
+			if _, err := s.PauseTree(ctx); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -118,10 +118,10 @@ func runPortableResumeAcceptsMtimeDriftAndFlushesPause(t *testing.T, root string
 	if accepted.Accepted().Ranges().IsEmpty() || !persisted.Ranges().IsEmpty() {
 		t.Fatal("accepted progress was confused with persistence")
 	}
-	if _, err := tx.Pause(ctx, transfer.FilePauseShutdown); err != nil {
+	if _, err := tx.Pause(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.PauseTree(ctx, transfer.JobPauseShutdown); err != nil {
+	if _, err := s.PauseTree(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if err := a.Close(); err != nil {
@@ -174,7 +174,7 @@ func runPortableResumeAcceptsMtimeDriftAndFlushesPause(t *testing.T, root string
 	if _, err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.PauseTree(ctx, transfer.JobPauseShutdown); err != nil {
+	if _, err := s.PauseTree(ctx); err != nil {
 		t.Fatal(err)
 	}
 }

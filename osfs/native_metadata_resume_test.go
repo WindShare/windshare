@@ -46,10 +46,10 @@ func testOrdinaryMetadataResume(t *testing.T, metadata content.SourceMetadata) {
 	if err := tx.WriteRange(ctx, 0, []byte("part")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.Pause(ctx, transfer.FilePauseShutdown); err != nil {
+	if _, err := tx.Pause(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := session.PauseTree(ctx, transfer.JobPauseShutdown); err != nil {
+	if _, err := session.PauseTree(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if err := authority.Close(); err != nil {
@@ -154,7 +154,7 @@ func testOrdinaryMetadataResume(t *testing.T, metadata content.SourceMetadata) {
 		if !retained || err != nil || len(payload) < 4 || string(payload[:4]) != "part" {
 			t.Fatal("inapplicable source lost retained data or recovery evidence")
 		}
-		if _, err := session.PauseTree(ctx, transfer.JobPauseShutdown); err != nil {
+		if _, err := session.PauseTree(ctx); err != nil {
 			t.Fatal(err)
 		}
 		if !metadata.IsZero() {
@@ -208,7 +208,7 @@ func testOrdinaryMetadataResume(t *testing.T, metadata content.SourceMetadata) {
 	if err != nil || string(result) != "partdone" {
 		t.Fatalf("delivery=%q err=%v", result, err)
 	}
-	if _, err := session.PauseTree(ctx, transfer.JobPauseShutdown); err != nil {
+	if _, err := session.PauseTree(ctx); err != nil {
 		t.Fatal(err)
 	}
 }

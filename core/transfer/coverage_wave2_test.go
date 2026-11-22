@@ -49,23 +49,11 @@ func TestReceiveIntentAndRunIdentityEdges(t *testing.T) {
 }
 
 func TestTransferWave2DirectoryAdmissionProjection(t *testing.T) {
-	share := transferID[catalog.ShareInstance](0x60)
 	root := transferID[catalog.DirectoryID](0x61)
-	rules, err := NewSelectionRules(true, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	scope, err := NewDirectoryAdmissionScope(testReceiveIntent(t, share, root, rules))
-	if err != nil {
-		t.Fatal(err)
-	}
-	secret := bytes.Repeat([]byte{0x71}, directoryAdmissionSecretBytes)
 	parentOutput := admissionTestDirectory(
 		t, root, transferID[catalog.DirectoryGeneration](0x62), DirectoryAdmission{}, "", catalog.ModifiedTime{},
 	)
-	parent, err := NewDirectoryAdmissionWithSecret(
-		secret, scope, admissionTestMaterializationDirectory(t, parentOutput),
-	)
+	parent, err := NewDirectoryAdmission(admissionTestMaterializationDirectory(t, parentOutput))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,25 +62,20 @@ func TestTransferWave2DirectoryAdmissionProjection(t *testing.T) {
 		parent, "child", catalog.ModifiedTime{},
 	)
 	childMaterialization := admissionTestMaterializationDirectory(t, childOutput)
-	child, err := NewDirectoryAdmissionWithSecret(secret, scope, childMaterialization)
+	child, err := NewDirectoryAdmission(childMaterialization)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if child.IsZero() || child.DirectoryID() != childOutput.DirectoryID || child.Generation() != childOutput.Generation || child.Path() != "child" {
 		t.Fatalf("child admission projection = %+v", child)
 	}
-	if !bytes.Equal(child.Bytes(), child.Bytes()) || child.Equal(parent) || !child.Equal(child) {
-		t.Fatal("admission identity comparison is not token-based")
+	if child.Equal(parent) || !child.Equal(child) {
+		t.Fatal("admission equality failed")
 	}
-	token := child.Bytes()
-	token[0] ^= 1
-	if child.Bytes()[0] == token[0] {
-		t.Fatal("directory admission bytes leaked mutable storage")
+	if !child.HasParent() || child.ParentPath() != "" || parent.HasParent() {
+		t.Fatalf("parent links child=%+v root=%+v", child, parent)
 	}
-	if !bytes.Equal(child.ParentToken(), parent.Bytes()) || parent.ParentToken() != nil {
-		t.Fatalf("parent tokens child=%x root=%x", child.ParentToken(), parent.ParentToken())
-	}
-	if err := ValidateDirectoryAdmissionBinding(scope, child, childMaterialization); err != nil {
+	if err := validateDirectoryAdmission(child, childMaterialization); err != nil {
 		t.Fatalf("valid admission binding = %v", err)
 	}
 	for name, invalid := range map[string]AuthenticatedSourceDirectory{
@@ -115,24 +98,12 @@ func TestTransferWave2DirectoryAdmissionProjection(t *testing.T) {
 		}(),
 	} {
 		t.Run("mismatch/"+name, func(t *testing.T) {
-			if !errors.Is(ValidateDirectoryAdmissionBinding(
-				scope, child, admissionTestMaterializationDirectory(t, invalid),
+			if !errors.Is(validateDirectoryAdmission(
+				child, admissionTestMaterializationDirectory(t, invalid),
 			), ErrDirectoryAdmissionMismatch) {
 				t.Fatalf("mismatch %s was accepted", name)
 			}
 		})
-	}
-	for _, badSecret := range [][]byte{
-		nil,
-		make([]byte, directoryAdmissionSecretBytes-1),
-		make([]byte, directoryAdmissionSecretBytes),
-		make([]byte, directoryAdmissionSecretBytes+1),
-	} {
-		if _, err := NewDirectoryAdmissionWithSecret(
-			badSecret, scope, admissionTestMaterializationDirectory(t, parentOutput),
-		); !errors.Is(err, ErrInvalidDirectoryAdmission) {
-			t.Fatalf("secret length %d error = %v", len(badSecret), err)
-		}
 	}
 	for name, invalid := range map[string]AuthenticatedSourceDirectory{
 		"zero identity": admissionTestDirectory(
@@ -140,9 +111,6 @@ func TestTransferWave2DirectoryAdmissionProjection(t *testing.T) {
 		),
 		"zero generation": admissionTestDirectory(
 			t, parentOutput.DirectoryID, catalog.DirectoryGeneration{}, DirectoryAdmission{}, "", catalog.ModifiedTime{},
-		),
-		"path without parent": admissionTestDirectory(
-			t, parentOutput.DirectoryID, parentOutput.Generation, DirectoryAdmission{}, "child", catalog.ModifiedTime{},
 		),
 		"parent on root": admissionTestDirectory(
 			t, parentOutput.DirectoryID, parentOutput.Generation, parent, "", catalog.ModifiedTime{},
@@ -157,9 +125,7 @@ func TestTransferWave2DirectoryAdmissionProjection(t *testing.T) {
 				directory: invalid.DirectoryID, generation: invalid.Generation,
 				path: path, parent: invalid.ParentAdmission, modified: invalid.ModifiedTime,
 			}
-			if _, err := NewDirectoryAdmissionWithSecret(
-				secret, scope, directory,
-			); !errors.Is(err, ErrInvalidDirectoryAdmission) {
+			if _, err := NewDirectoryAdmission(directory); !errors.Is(err, ErrInvalidDirectoryAdmission) {
 				t.Fatalf("invalid directory %s error = %v", name, err)
 			}
 		})

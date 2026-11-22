@@ -51,7 +51,7 @@ func TestCoverageC6OutputAuthorityProjectsLeaseAndDiagnostics(t *testing.T) {
 	if err := contender.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := first.PauseTree(ctx, transfer.JobPauseInterrupted); err != nil {
+	if _, err := first.PauseTree(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if err := authority.Close(); err != nil {
@@ -76,7 +76,7 @@ func TestCoverageC6OutputAuthorityProjectsLeaseAndDiagnostics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("lease was not released: %v", err)
 	}
-	if _, err := reopened.PauseTree(ctx, transfer.JobPauseInterrupted); err != nil {
+	if _, err := reopened.PauseTree(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if err := reopener.Close(); err != nil {

@@ -87,9 +87,6 @@ func (source *revisionTransferRanges) ReadRange(
 
 type revisionTransferOutput struct {
 	session         transfer.OutputSessionID
-	secret          [32]byte
-	scope           transfer.DirectoryAdmissionScope
-	binding         transfer.DirectTreeSessionBinding
 	settlements     map[catalog.FileID]transfer.FileSettlementKind
 	jobPauses       int
 	jobCompletes    int
@@ -100,8 +97,7 @@ type revisionTransferOutput struct {
 func newRevisionTransferOutput(t *testing.T) *revisionTransferOutput {
 	t.Helper()
 	return &revisionTransferOutput{
-		session: id16[transfer.OutputSessionID](201),
-		secret:  [32]byte{1}, settlements: make(map[catalog.FileID]transfer.FileSettlementKind),
+		session: id16[transfer.OutputSessionID](201), settlements: make(map[catalog.FileID]transfer.FileSettlementKind),
 	}
 }
 
@@ -157,24 +153,13 @@ func (output *revisionTransferOutput) OpenDirectTree(
 	_ context.Context,
 	intent transfer.ReceiveIntent,
 ) (transfer.DirectTreeSession, error) {
-	scope, err := transfer.NewDirectoryAdmissionScope(intent)
-	if err != nil {
-		return nil, err
+	if intent.IsZero() {
+		return nil, transfer.ErrInvalidOutputBinding
 	}
-	binding, err := transfer.BindDirectTreeSession(intent)
-	if err != nil {
-		return nil, err
-	}
-	output.scope = scope
-	output.binding = binding
 	return output, nil
 }
 
 func (output *revisionTransferOutput) SessionID() transfer.OutputSessionID { return output.session }
-
-func (output *revisionTransferOutput) Binding() transfer.DirectTreeSessionBinding {
-	return output.binding
-}
 
 func (*revisionTransferOutput) Capabilities() transfer.DirectTreeCapabilities {
 	capabilities, _ := transfer.NewDirectTreeCapabilities(transfer.DirectTreeCapabilities{
@@ -191,7 +176,7 @@ func (output *revisionTransferOutput) AdmitDirectory(
 	if !ok {
 		return transfer.DirectoryAdmission{}, transfer.ErrInvalidDirectoryAdmission
 	}
-	return transfer.NewDirectoryAdmissionWithSecret(output.secret[:], output.scope, directory)
+	return transfer.NewDirectoryAdmission(directory)
 }
 
 func (*revisionTransferOutput) FinalizeDirectory(
@@ -227,7 +212,6 @@ func (output *revisionTransferOutput) BeginFile(
 
 func (output *revisionTransferOutput) PauseTree(
 	context.Context,
-	transfer.JobPauseReason,
 ) (transfer.DirectTreeSettlement, error) {
 	output.jobPauses++
 	return transfer.NewDirectTreeSettlement(transfer.DirectTreeSettlementPaused)
@@ -290,7 +274,6 @@ func (transaction *revisionTransferTransaction) Commit(context.Context) (transfe
 
 func (transaction *revisionTransferTransaction) Pause(
 	context.Context,
-	transfer.FilePauseReason,
 ) (transfer.FileSettlement, error) {
 	transaction.output.filePauses++
 	settlement, err := transfer.NewVerifiedFileSettlement(transfer.FilePaused, transaction.checkpoint)
@@ -302,7 +285,6 @@ func (transaction *revisionTransferTransaction) Pause(
 
 func (transaction *revisionTransferTransaction) Retire(
 	context.Context,
-	transfer.FileRetireReason,
 ) (transfer.FileSettlement, error) {
 	transaction.output.fileRetirements++
 	settlement, err := transfer.NewFailedFileSettlement(transaction.binding)

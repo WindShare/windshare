@@ -84,7 +84,7 @@ func setupLostReceiptLargeFile(t *testing.T, seed byte) (string, transfer.Select
 		t.Fatal("expected Commit to fail when delivery receipt append fails")
 	}
 	op.journal.appendHook = nil
-	if _, err := session.PauseTree(ctx, transfer.JobPauseShutdown); err != nil {
+	if _, err := session.PauseTree(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if err := auth.Close(); err != nil {
@@ -142,7 +142,7 @@ func TestLargeFilePublishReceiptFailureReconcilesWithoutRedownload(t *testing.T)
 	if err != nil || !found || delivery.Size != uint64(len(payload)) {
 		t.Fatalf("delivery receipt not recorded after reconcile: (%+v, %v, %v)", delivery, found, err)
 	}
-	if _, err := session.PauseTree(ctx, transfer.JobPauseShutdown); err != nil {
+	if _, err := session.PauseTree(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if err := reopen.Close(); err != nil {
@@ -354,7 +354,7 @@ func TestPublishInterruptedBeforeRenameResumesWithoutRedownload(t *testing.T) {
 	}, true); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := session.PauseTree(ctx, transfer.JobPauseShutdown); err != nil {
+	if _, err := session.PauseTree(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if err := auth.Close(); err != nil {
@@ -438,10 +438,10 @@ func TestMissingStageWithExistingDestinationPreflightsCollision(t *testing.T) {
 	if err := tx.WriteRange(ctx, 0, []byte("halfhalf")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.Pause(ctx, transfer.FilePauseShutdown); err != nil {
+	if _, err := tx.Pause(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := session.PauseTree(ctx, transfer.JobPauseShutdown); err != nil {
+	if _, err := session.PauseTree(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if err := auth.Close(); err != nil {
@@ -535,7 +535,7 @@ func TestSmallFileFastPathOmitsPublishingRecord(t *testing.T) {
 	if settled, err := tx.Commit(ctx); err != nil || settled.Kind() != transfer.FilePublished {
 		t.Fatalf("commit small file = (%v, %v)", settled.Kind(), err)
 	}
-	if _, err := session.PauseTree(ctx, transfer.JobPauseShutdown); err != nil {
+	if _, err := session.PauseTree(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if err := auth.Close(); err != nil {
@@ -604,7 +604,7 @@ func TestSingleFileLayoutLostReceiptReconcilesViaLookupDelivery(t *testing.T) {
 		t.Fatal("expected Commit failure on simulated receipt error")
 	}
 	op.journal.appendHook = nil
-	if _, err := session.PauseTree(ctx, transfer.JobPauseShutdown); err != nil {
+	if _, err := session.PauseTree(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if err := auth.Close(); err != nil {

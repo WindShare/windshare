@@ -5,8 +5,6 @@ import (
 	"errors"
 	"slices"
 	"strconv"
-
-	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 var ErrInvalidOutputSettlement = errors.New("transfer output settlement is invalid")
@@ -381,50 +379,6 @@ func (settlement FileSettlement) matchesCommittedOutput(
 	return (verified && progress.Retention() == RangesAfterRestart) == (capabilities.Durability != DurabilityNone)
 }
 
-type FilePauseReason uint8
-
-const (
-	FilePauseInterrupted FilePauseReason = iota + 1
-	FilePauseShutdown
-	FilePauseTransportFailure
-	FilePauseSessionFailure
-	FilePauseOutputFailure
-	FilePauseResourceBudget
-	FilePauseRevisionReopened
-	FilePauseDependencyContract
-)
-
-func (reason FilePauseReason) Valid() bool {
-	return reason >= FilePauseInterrupted && reason <= FilePauseDependencyContract
-}
-
-type FileRetireReason uint8
-
-const (
-	FileRetireIsolatedPermanentSourceFailure FileRetireReason = iota + 1
-	FileRetireInvalidatedRevision
-)
-
-func (reason FileRetireReason) valid() bool {
-	return reason >= FileRetireIsolatedPermanentSourceFailure && reason <= FileRetireInvalidatedRevision
-}
-
-type JobPauseReason uint8
-
-const (
-	JobPauseInterrupted JobPauseReason = iota + 1
-	JobPauseShutdown
-	JobPauseTransportFailure
-	JobPauseSessionFailure
-	JobPauseOutputFailure
-	JobPauseResourceBudget
-	JobPauseDependencyContract
-)
-
-func (reason JobPauseReason) valid() bool {
-	return reason >= JobPauseInterrupted && reason <= JobPauseDependencyContract
-}
-
 type DirectTreeSettlementKind uint8
 
 const (
@@ -457,8 +411,8 @@ type FileTransaction interface {
 	Accept(context.Context) (FileProgress, error)
 	Checkpoint(context.Context) (VerifiedRanges, error)
 	Commit(context.Context) (FileSettlement, error)
-	Pause(context.Context, FilePauseReason) (FileSettlement, error)
-	Retire(context.Context, FileRetireReason) (FileSettlement, error)
+	Pause(context.Context) (FileSettlement, error)
+	Retire(context.Context) (FileSettlement, error)
 }
 
 type fileStartKind uint8
@@ -537,43 +491,6 @@ func (function DirectTreeMaterializerFunc) OpenDirectTree(
 	return function(ctx, intent)
 }
 
-// DirectTreeSessionBinding proves that an opened output namespace belongs to
-// the exact immutable receive authority passed to the materializer. Keeping the
-// three identities together prevents a backend from accidentally reusing a
-// session across an intent, operation, or destination reservation boundary.
-type DirectTreeSessionBinding struct {
-	intentDigest  ReceiveIntentDigest
-	operationID   receivecontract.OperationID
-	bindingDigest receivecontract.BindingDigest
-}
-
-func BindDirectTreeSession(intent ReceiveIntent) (DirectTreeSessionBinding, error) {
-	if intent.IsZero() || intent.MaterializationPlan().Kind() != receivecontract.PlanDirectTree {
-		return DirectTreeSessionBinding{}, ErrInvalidOutputBinding
-	}
-	return DirectTreeSessionBinding{
-		intentDigest:  intent.Digest(),
-		operationID:   intent.OperationID(),
-		bindingDigest: intent.BindingDigest(),
-	}, nil
-}
-
-func (binding DirectTreeSessionBinding) ReceiveIntentDigest() ReceiveIntentDigest {
-	return binding.intentDigest
-}
-
-func (binding DirectTreeSessionBinding) OperationID() receivecontract.OperationID {
-	return binding.operationID
-}
-
-func (binding DirectTreeSessionBinding) BindingDigest() receivecontract.BindingDigest {
-	return binding.bindingDigest
-}
-
-func (binding DirectTreeSessionBinding) valid() bool {
-	return !binding.intentDigest.IsZero() && !binding.operationID.IsZero() && !binding.bindingDigest.IsZero()
-}
-
 // DirectTreeSession exists after the confirmed intent/root namespace is admitted.
 // Descendant directories are admitted independently as generations commit.
 // Finalization seals the authenticated claim, including the synthetic root; an
@@ -581,12 +498,11 @@ func (binding DirectTreeSessionBinding) valid() bool {
 // foreign receipt must fail before output mutation.
 type DirectTreeSession interface {
 	SessionID() OutputSessionID
-	Binding() DirectTreeSessionBinding
 	Capabilities() DirectTreeCapabilities
 	AdmitDirectory(context.Context, DirectoryMaterializationRequest) (DirectoryAdmission, error)
 	FinalizeDirectory(context.Context, DirectoryAdmission) (DirectorySettlement, error)
 	BeginFile(context.Context, MaterializationFile) (FileStart, error)
-	PauseTree(context.Context, JobPauseReason) (DirectTreeSettlement, error)
+	PauseTree(context.Context) (DirectTreeSettlement, error)
 	// FinalizeTree requires every acquired output claim to be settled. A partial
 	// selection may have no admitted nodes when discovery failed; that result
 	// retains known operation ownership, including any destination reservation.

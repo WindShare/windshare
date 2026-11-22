@@ -72,7 +72,7 @@ func (r *jobRun) transferFileAttempt(
 	}
 	if err := validateOutputTransaction(target, transaction, durable); err != nil {
 		r.traceFileLifecycle(TransferFileAdmitted, plan, err)
-		return nil, r.settleFailedFile(ctx, plan, opened, transaction, FailureFileOutput, err, 0, nil)
+		return nil, r.settleFailedFile(ctx, plan, opened, transaction, FailureFileOutput, err, false, nil)
 	}
 	fileProgress, recovered, validProgress := newFileTransferProgress(
 		transaction, durable, r.output.Capabilities().Durability != DurabilityNone,
@@ -81,7 +81,7 @@ func (r *jobRun) transferFileAttempt(
 		contractFailure := outputContractFault(ErrOutputContract)
 		r.traceFileLifecycle(TransferFileAdmitted, plan, contractFailure)
 		return nil, r.settleFailedFile(
-			ctx, plan, opened, transaction, FailureFileOutput, contractFailure, 0, nil,
+			ctx, plan, opened, transaction, FailureFileOutput, contractFailure, false, nil,
 		)
 	}
 	fileProgress.recovered = r.reconcileFileCoverage(retry, fileProgress.initial, fileProgress.persistedBytes, recovered)
@@ -260,7 +260,6 @@ func (r *jobRun) settleReopenedRevision(
 		nextStalled = priorStalled + 1
 	}
 	comparison := reopened.Comparison()
-	reason := filePauseReason(cause)
 	decision := "evidence-unavailable"
 	switch {
 	case ctx.Err() != nil:
@@ -276,15 +275,15 @@ func (r *jobRun) settleReopenedRevision(
 		// Best-effort readmission accepts metadata agreement without rereading
 		// persisted ranges; output admission still verifies local ownership and
 		// checkpoint bounds before rebinding the staged file to the new revision.
-		reason, decision = FilePauseRevisionReopened, "readmit"
+		decision = "readmit"
 	}
 	// The range reader has drained before returning, and no output call remains
 	// active. A durable pause is required before releasing the old handle and
 	// readmitting the file under a fresh revision handle.
-	settlement, err := r.pauseFileTransaction(ctx, transaction, reason, progress)
+	settlement, err := r.pauseFileTransaction(ctx, transaction, progress)
 	if err != nil {
 		decision = "settlement-failed"
-	} else if settlement.Kind() == FilePaused && reason == FilePauseRevisionReopened {
+	} else if settlement.Kind() == FilePaused && decision == "readmit" {
 		// Base stall accounting on durable bytes confirmed by pause settlement,
 		// not merely writes buffered before checkpoint persistence.
 		if progress.persistedBytes > initialBytes {

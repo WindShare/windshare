@@ -69,8 +69,6 @@ func TestOrdinaryOutputRequestsExposeNoSecondPathMappingAuthority(t *testing.T) 
 	share := admissionTestShare(t, 0xb3)
 	rootID := ordinaryID[catalog.DirectoryID](0xb2)
 	intent := admissionTestIntent(t, rootID, 0xb3)
-	scope := admissionTestScope(t, intent)
-	secret := admissionTestSequence(0x31, directoryAdmissionSecretBytes)
 	rootSource := admissionTestDirectory(
 		t, rootID, ordinaryID[catalog.DirectoryGeneration](0xb4),
 		DirectoryAdmission{}, "", catalog.ModifiedTime{},
@@ -85,7 +83,7 @@ func TestOrdinaryOutputRequestsExposeNoSecondPathMappingAuthority(t *testing.T) 
 	if !ok {
 		t.Fatal("catalog root did not project materialization authority")
 	}
-	rootAdmission, err := NewDirectoryAdmissionWithSecret(secret, scope, rootDirectory)
+	rootAdmission, err := NewDirectoryAdmission(rootDirectory)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +106,7 @@ func TestOrdinaryOutputRequestsExposeNoSecondPathMappingAuthority(t *testing.T) 
 	if !ok {
 		t.Fatal("child directory did not project materialization authority")
 	}
-	childAdmission, err := NewDirectoryAdmissionWithSecret(secret, scope, childDirectory)
+	childAdmission, err := NewDirectoryAdmission(childDirectory)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,18 +148,6 @@ func TestOrdinaryOutputRequestsExposeNoSecondPathMappingAuthority(t *testing.T) 
 			if field.IsExported() {
 				t.Fatalf("%s retains caller-settable field %s", typeOf, field.Name)
 			}
-		}
-	}
-	fileType := reflect.TypeFor[MaterializationFile]()
-	destinationType := reflect.TypeFor[OutputDestinationPath]()
-	for field := range fileType.Fields() {
-		if field.Type == destinationType {
-			t.Fatalf("%s retains executor destination field %s", fileType, field.Name)
-		}
-	}
-	for _, retiredMethod := range []string{"BindDestination", "DestinationPath"} {
-		if _, present := fileType.MethodByName(retiredMethod); present {
-			t.Fatalf("%s retains executor destination method %s", fileType, retiredMethod)
 		}
 	}
 }

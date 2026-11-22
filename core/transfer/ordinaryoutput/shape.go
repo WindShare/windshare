@@ -6,7 +6,6 @@ import (
 	"sort"
 
 	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
@@ -301,60 +300,4 @@ func (selection Selection) Digest() [32]byte { return selection.digest }
 
 type ShapeCatalog interface {
 	OpenDirectoryPages(context.Context, catalog.DirectoryID) (catalog.DirectoryPageCursor, error)
-}
-
-type ShapeTraceStage uint8
-
-const (
-	ShapeProbeStarted ShapeTraceStage = iota + 1
-	ShapeProofFrozen
-	ShapeSyntheticFallback
-)
-
-type ShapeTrace struct {
-	Stage                      ShapeTraceStage
-	ProtocolSessionID          protocolsession.ProtocolSessionID
-	SelectionDigest            [32]byte
-	Kind                       ShapeKind
-	Fallback                   ShapeFallbackReason
-	DirectoryRequests          uint32
-	AuthenticatedPages         uint32
-	AuthenticatedEntries       uint32
-	AuthenticatedMetadataBytes uint64
-}
-
-type ShapeTracer interface {
-	TraceOrdinaryOutputShape(ShapeTrace)
-}
-
-type ShapeTraceFunc func(ShapeTrace)
-
-func (trace ShapeTraceFunc) TraceOrdinaryOutputShape(event ShapeTrace) {
-	if trace != nil {
-		trace(event)
-	}
-}
-
-type shapeSessionTracer struct {
-	session protocolsession.ProtocolSessionID
-	next    ShapeTracer
-}
-
-// BindShapeTracerToSession adds stable correlation at the authenticated runtime
-// boundary without making session identity part of shape authority.
-func BindShapeTracerToSession(
-	session protocolsession.ProtocolSessionID,
-	tracer ShapeTracer,
-) ShapeTracer {
-	if session.IsZero() || tracer == nil {
-		return tracer
-	}
-	return shapeSessionTracer{session: session, next: tracer}
-}
-
-func (tracer shapeSessionTracer) TraceOrdinaryOutputShape(event ShapeTrace) {
-	if event.ProtocolSessionID.IsZero() {
-		event.ProtocolSessionID = tracer.session
-	}
-	tracer.next.TraceOrdinaryOutputShape(event)
 }

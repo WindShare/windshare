@@ -111,7 +111,7 @@ func TestTransferJobAtomicallyRejectsMalformedRangeReaderOutput(t *testing.T) {
 			}
 			transaction := output.transactions["file.bin"]
 			if transaction == nil || !transaction.pending.IsEmpty() || !transaction.durable.IsEmpty() ||
-				transaction.commitCalls != 0 || len(transaction.pauseReasons) != 1 || output.pauseCalls != 1 {
+				transaction.commitCalls != 0 || transaction.pauseCalls != 1 || output.pauseCalls != 1 {
 				t.Fatalf("malformed reader touched output: transaction=%+v pauseCalls=%d", transaction, output.pauseCalls)
 			}
 			if len(result.Files) != 1 || result.Files[0].Stage != FailureBlockTransfer ||

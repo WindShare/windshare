@@ -15,7 +15,6 @@ type resolver struct {
 	selection Selection
 	budget    ShapeProbeBudget
 	meter     *catalogwalk.Meter
-	tracer    ShapeTracer
 	claims    map[catalog.NodeID]struct{}
 	requests  uint32
 }
@@ -25,7 +24,6 @@ func ResolveShape(
 	source ShapeCatalog,
 	selection Selection,
 	budget ShapeProbeBudget,
-	tracer ShapeTracer,
 ) (ShapeDecision, error) {
 	if ctx == nil || source == nil || !selection.valid() || !budget.Valid() {
 		return ShapeDecision{}, ErrInvalidShapeResolution
@@ -43,33 +41,19 @@ func ResolveShape(
 		return ShapeDecision{}, ErrInvalidShapeResolution
 	}
 	state := &resolver{
-		catalog: source, selection: selection, budget: budget, meter: meter, tracer: tracer,
+		catalog: source, selection: selection, budget: budget, meter: meter,
 		claims: map[catalog.NodeID]struct{}{selection.syntheticRoot.NodeID(): {}},
 	}
-	state.trace(ShapeTrace{Stage: ShapeProbeStarted})
-	var decision ShapeDecision
-	var err error
 	switch selection.mode {
 	case SelectionWholeShare:
-		decision, err = state.resolveWholeShare(ctx)
+		return state.resolveWholeShare(ctx)
 	case SelectionCatalogPaths:
-		decision, err = state.resolveCatalogPaths(ctx)
+		return state.resolveCatalogPaths(ctx)
 	case SelectionOpaqueNodes:
-		decision, err = state.resolveOpaqueNodes(ctx)
+		return state.resolveOpaqueNodes(ctx)
 	default:
-		err = ErrInvalidShapeResolution
+		return ShapeDecision{}, ErrInvalidShapeResolution
 	}
-	if err != nil {
-		return ShapeDecision{}, err
-	}
-	stage := ShapeProofFrozen
-	if decision.Kind() == ShapeSyntheticSelection {
-		stage = ShapeSyntheticFallback
-	}
-	state.trace(ShapeTrace{
-		Stage: stage, Kind: decision.Kind(), Fallback: decision.FallbackReason(),
-	})
-	return decision, nil
 }
 
 func (state *resolver) resolveWholeShare(ctx context.Context) (ShapeDecision, error) {
@@ -543,21 +527,6 @@ func (state *resolver) walkDirectory(
 	default:
 		return catalogwalk.TerminalGeneration{}, ShapeFallbackNone, ErrInvalidShapeResolution
 	}
-}
-
-func (state *resolver) trace(event ShapeTrace) {
-	if state == nil || state.tracer == nil {
-		return
-	}
-	usage := state.meter.Usage()
-	event.SelectionDigest = state.selection.digest
-	event.DirectoryRequests = state.requests
-	event.AuthenticatedPages = usage.AuthenticatedPages
-	event.AuthenticatedEntries = usage.Entries
-	event.AuthenticatedMetadataBytes = usage.AuthenticatedMetadataBytes
-	// Diagnostics must never become shape authority.
-	defer func() { _ = recover() }()
-	state.tracer.TraceOrdinaryOutputShape(event)
 }
 
 func syntheticShape(reason ShapeFallbackReason) (ShapeDecision, error) {

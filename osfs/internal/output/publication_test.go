@@ -202,10 +202,10 @@ func TestCompatibleNameRepairReusesMappingAcrossRestartWithoutJSONDump(t *testin
 	if err := tx.WriteRange(ctx, 0, []byte("part")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.Pause(ctx, transfer.FilePauseShutdown); err != nil {
+	if _, err := tx.Pause(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := session.PauseTree(ctx, transfer.JobPauseShutdown); err != nil {
+	if _, err := session.PauseTree(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if err := auth.Close(); err != nil {
@@ -558,7 +558,7 @@ func TestSmallFileAcceptClockAndSameSessionPauseReadmission(t *testing.T) {
 		t.Fatalf("second accept generation did not advance: %d <= %d", p2.Accepted().CheckpointGeneration(), p1.Accepted().CheckpointGeneration())
 	}
 	// Pause persists unpersisted bytes and keeps the file resumable in the SAME session.
-	paused, err := tx.Pause(ctx, transfer.FilePauseRevisionReopened)
+	paused, err := tx.Pause(ctx)
 	if err != nil || paused.Kind() != transfer.FilePaused {
 		t.Fatalf("pause = (%v, %v)", paused.Kind(), err)
 	}

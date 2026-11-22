@@ -493,26 +493,21 @@ func syntheticCapacityReceiveIntent(
 }
 
 type syntheticCapacityOutput struct {
-	mu              sync.Mutex
-	intent          transfer.ReceiveIntent
-	binding         transfer.DirectTreeSessionBinding
-	sessionID       transfer.OutputSessionID
-	directorySecret [sha256.Size]byte
-	published       map[string][]byte
+	mu        sync.Mutex
+	intent    transfer.ReceiveIntent
+	sessionID transfer.OutputSessionID
+	published map[string][]byte
 }
 
 func newSyntheticCapacityOutput(t *testing.T, intent transfer.ReceiveIntent) *syntheticCapacityOutput {
 	t.Helper()
-	binding, err := transfer.BindDirectTreeSession(intent)
-	if err != nil {
-		t.Fatal(err)
+	if intent.IsZero() {
+		t.Fatal("zero intent")
 	}
-	output := &syntheticCapacityOutput{
-		intent: intent, binding: binding, sessionID: syntheticCapacityID[transfer.OutputSessionID](1),
+	return &syntheticCapacityOutput{
+		intent: intent, sessionID: syntheticCapacityID[transfer.OutputSessionID](1),
 		published: make(map[string][]byte),
 	}
-	output.directorySecret = sha256.Sum256([]byte("windshare/synthetic-capacity-output/directory-secret/v1"))
-	return output
 }
 
 func (output *syntheticCapacityOutput) OpenDirectTree(
@@ -527,10 +522,6 @@ func (output *syntheticCapacityOutput) OpenDirectTree(
 
 func (output *syntheticCapacityOutput) SessionID() transfer.OutputSessionID { return output.sessionID }
 
-func (output *syntheticCapacityOutput) Binding() transfer.DirectTreeSessionBinding {
-	return output.binding
-}
-
 func (*syntheticCapacityOutput) Capabilities() transfer.DirectTreeCapabilities {
 	capabilities, _ := transfer.NewDirectTreeCapabilities(transfer.DirectTreeCapabilities{
 		Durability: transfer.DurabilityNone, RandomWrite: true, FileFailureIsolation: true, ModifiedTime: true,
@@ -542,15 +533,11 @@ func (output *syntheticCapacityOutput) AdmitDirectory(
 	_ context.Context,
 	request transfer.DirectoryMaterializationRequest,
 ) (transfer.DirectoryAdmission, error) {
-	scope, err := transfer.NewDirectoryAdmissionScope(output.intent)
-	if err != nil {
-		return transfer.DirectoryAdmission{}, err
-	}
 	directory, ok := request.Directory()
 	if !ok {
 		return transfer.DirectoryAdmission{}, transfer.ErrInvalidDirectoryAdmission
 	}
-	return transfer.NewDirectoryAdmissionWithSecret(output.directorySecret[:], scope, directory)
+	return transfer.NewDirectoryAdmission(directory)
 }
 
 func (*syntheticCapacityOutput) FinalizeDirectory(
@@ -583,7 +570,6 @@ func (output *syntheticCapacityOutput) BeginFile(
 
 func (*syntheticCapacityOutput) PauseTree(
 	context.Context,
-	transfer.JobPauseReason,
 ) (transfer.DirectTreeSettlement, error) {
 	return transfer.NewDirectTreeSettlement(transfer.DirectTreeSettlementPaused)
 }
@@ -658,7 +644,6 @@ func (transaction *syntheticCapacityFileTransaction) Commit(
 
 func (transaction *syntheticCapacityFileTransaction) Pause(
 	context.Context,
-	transfer.FilePauseReason,
 ) (transfer.FileSettlement, error) {
 	checkpoint, err := transfer.AcknowledgeTransientWrite(transaction.binding, 2)
 	if err != nil {
@@ -669,7 +654,6 @@ func (transaction *syntheticCapacityFileTransaction) Pause(
 
 func (transaction *syntheticCapacityFileTransaction) Retire(
 	context.Context,
-	transfer.FileRetireReason,
 ) (transfer.FileSettlement, error) {
 	return transfer.NewFailedFileSettlement(transaction.binding)
 }

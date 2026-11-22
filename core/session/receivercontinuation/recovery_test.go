@@ -381,10 +381,10 @@ func TestCatalogReplayPreservesCommitmentAndGenerationFence(t *testing.T) {
 	}
 	rules, _ := transfer.NewSelectionRules(true, nil)
 	selection, _ := transfer.NewSelectionSpec(runtime.Descriptor().ShareInstance(), runtime.Descriptor().SyntheticRoot(), rules)
-	if _, err = s.ResolveOrdinaryOutputShape(context.Background(), selection, ordinaryoutput.DefaultShapeProbeBudgetV1, nil); err != nil {
+	if _, err = s.ResolveOrdinaryOutputShape(context.Background(), selection, ordinaryoutput.DefaultShapeProbeBudgetV1); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.ResolveOrdinaryOutputShape(context.Background(), transfer.SelectionSpec{}, ordinaryoutput.DefaultShapeProbeBudgetV1, nil); err == nil {
+	if _, err = s.ResolveOrdinaryOutputShape(context.Background(), transfer.SelectionSpec{}, ordinaryoutput.DefaultShapeProbeBudgetV1); err == nil {
 		t.Fatal("invalid selection accepted")
 	}
 	if _, err = s.NewTransferJob(transfer.ReceiveIntent{}, transfer.TransferJobID{}, nil, diagnostics.Sink{}); !errors.Is(err, transfer.ErrInvalidTransferJob) {

@@ -52,7 +52,7 @@ func TestPortablePublicationCollisionRetainsDiscardAuthority(t *testing.T) {
 	if err != nil || settlement.Kind() != transfer.FileCollision {
 		t.Fatalf("commit collision = (%v, %v), want FileCollision", settlement.Kind(), err)
 	}
-	if _, err := session.PauseTree(ctx, transfer.JobPauseShutdown); err != nil {
+	if _, err := session.PauseTree(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if err := authority.Close(); err != nil {

@@ -354,18 +354,18 @@ func (r *jobRun) transferMissingRanges(
 	retainedOutput := progress != nil && progress.retainsRanges
 	if progress == nil {
 		return false, r.settleFailedFile(
-			ctx, plan, opened, transaction, FailureFileOutput, outputContractFault(nil), 0, progress,
+			ctx, plan, opened, transaction, FailureFileOutput, outputContractFault(nil), false, progress,
 		)
 	}
 	if !retainedOutput && !progress.trusted.Ranges().IsEmpty() {
 		return false, r.settleFailedFile(
-			ctx, plan, opened, transaction, FailureFileOutput, outputContractFault(nil), 0, progress,
+			ctx, plan, opened, transaction, FailureFileOutput, outputContractFault(nil), false, progress,
 		)
 	}
 	missing, err := MissingRanges(opened.Descriptor.ExactSize(), progress.trusted.Ranges())
 	if err != nil {
 		return false, r.settleFailedFile(
-			ctx, plan, opened, transaction, FailureFileOutput, outputContractFault(err), 0, progress,
+			ctx, plan, opened, transaction, FailureFileOutput, outputContractFault(err), false, progress,
 		)
 	}
 	wrote := false
@@ -375,7 +375,7 @@ func (r *jobRun) transferMissingRanges(
 			if cause := context.Cause(ctx); cause != nil {
 				return false, r.settleFailedFile(
 					ctx, plan, opened, transaction, FailureBlockTransfer,
-					fault.FromCancellation(ctx, cause), 0, progress,
+					fault.FromCancellation(ctx, cause), false, progress,
 				)
 			}
 			// RangeReader owns the bounded block pipeline. Passing one chunk at a
@@ -388,7 +388,7 @@ func (r *jobRun) transferMissingRanges(
 			requested := content.Range{Offset: offset, End: next}
 			if !retainedOutput && requested.Offset != progress.transientEnd {
 				return false, r.settleFailedFile(
-					ctx, plan, opened, transaction, FailureFileOutput, outputContractFault(nil), 0, progress,
+					ctx, plan, opened, transaction, FailureFileOutput, outputContractFault(nil), false, progress,
 				)
 			}
 			transferred, transferErr := r.transferRequestedRange(
@@ -410,7 +410,7 @@ func (r *jobRun) transferMissingRanges(
 	}
 	if !complete {
 		return false, r.settleFailedFile(
-			ctx, plan, opened, transaction, FailureFileOutput, outputContractFault(nil), 0, progress,
+			ctx, plan, opened, transaction, FailureFileOutput, outputContractFault(nil), false, progress,
 		)
 	}
 	return true, nil
@@ -439,19 +439,19 @@ func (r *jobRun) transferRequestedRange(
 			invalidator.InvalidateRevision(plan.file, opened.Descriptor.FileRevision())
 		}
 		return false, r.settleFailedFile(
-			ctx, plan, opened, transaction, FailureBlockTransfer, err, policy.retireReason(), progress,
+			ctx, plan, opened, transaction, FailureBlockTransfer, err, policy.shouldRetire(), progress,
 		)
 	}
 	if !progress.beginPending(requested) {
 		return false, r.settleFailedFile(
-			ctx, plan, opened, transaction, FailureFileOutput, outputContractFault(nil), 0, progress,
+			ctx, plan, opened, transaction, FailureFileOutput, outputContractFault(nil), false, progress,
 		)
 	}
 	// The interval is pending before the write: cancellation can make a
 	// completed write look failed, and a pause may still persist its bytes.
 	if err := buffered.Flush(ctx); err != nil {
 		return false, r.settleFailedFile(
-			ctx, plan, opened, transaction, FailureBlockTransfer, err, 0, progress,
+			ctx, plan, opened, transaction, FailureBlockTransfer, err, false, progress,
 		)
 	}
 	// Authentication fills a bounded range buffer; only the materializer's
@@ -463,7 +463,7 @@ func (r *jobRun) transferRequestedRange(
 	err = normalizeOutputBoundary(ctx, rawCheckpointErr)
 	if err != nil {
 		return false, r.settleFailedFile(
-			ctx, plan, opened, transaction, FailureFileOutput, err, 0, progress,
+			ctx, plan, opened, transaction, FailureFileOutput, err, false, progress,
 		)
 	}
 	checkpoint := acknowledgement.Accepted()
@@ -472,7 +472,7 @@ func (r *jobRun) transferRequestedRange(
 	delta, valid := nextProgress.acknowledge(transaction, checkpoint)
 	if !valid || !persistenceValid {
 		return false, r.settleFailedFile(
-			ctx, plan, opened, transaction, FailureFileOutput, outputContractFault(nil), 0, progress,
+			ctx, plan, opened, transaction, FailureFileOutput, outputContractFault(nil), false, progress,
 		)
 	}
 	*progress = nextProgress

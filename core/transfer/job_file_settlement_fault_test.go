@@ -47,7 +47,7 @@ func TestTransferJobSessionFailureAbortsJob(t *testing.T) {
 	if transaction == nil || len(result.Files) != 1 || result.Files[0].Stage != FailureBlockTransfer ||
 		result.Files[0].Fault != normalizedFault(terminal) || result.Files[0].Settlement.Kind() != FilePaused ||
 		result.Files[0].SettlementFailure != nil || result.Files[0].SettlementFault.Valid() ||
-		!transaction.aborted || !slices.Equal(transaction.pauseReasons, []FilePauseReason{FilePauseSessionFailure}) ||
+		!transaction.aborted || transaction.pauseCalls != 1 ||
 		transaction.commitCalls != 0 || output.transactions["later.bin"] != nil {
 		t.Fatalf("result=%+v transaction=%+v output=%+v", result, transaction, output)
 	}
@@ -299,7 +299,7 @@ func TestTransferJobPauseAcceptsRangeWrittenAsCancellationArrives(t *testing.T) 
 			if result.Outcome != DirectTreeOutcomePaused || !errors.Is(result.TerminationCause, context.Canceled) ||
 				result.SettlementFailure != nil || result.SettlementFault.Valid() || result.TerminationFault.Valid() ||
 				len(result.Files) != 1 || result.Files[0].SettlementFailure != nil ||
-				transaction == nil || !slices.Equal(transaction.pauseReasons, []FilePauseReason{FilePauseInterrupted}) ||
+				transaction == nil || transaction.pauseCalls != 1 ||
 				result.Progress.FileOutcomes.PausedFiles != 1 || result.Progress.VerifiedBytes != expectedSize ||
 				result.Progress.RestartReusableBytes != expectedReusable || !result.Progress.CountersExact {
 				t.Fatalf("interrupted write result=%+v transaction=%+v", result, transaction)
@@ -327,7 +327,7 @@ func TestTransferJobPauseAcceptsRangeWrittenBeforeOutputFailure(t *testing.T) {
 		result.SettlementFailure != nil || result.SettlementFault.Valid() ||
 		len(result.Files) != 1 || !errors.Is(result.Files[0].Cause, syscall.ENOSPC) ||
 		result.Files[0].SettlementFailure != nil || result.Files[0].SettlementFault.Valid() ||
-		transaction == nil || !slices.Equal(transaction.pauseReasons, []FilePauseReason{FilePauseOutputFailure}) ||
+		transaction == nil || transaction.pauseCalls != 1 ||
 		result.Progress.FileOutcomes.PausedFiles != 1 || result.Progress.VerifiedBytes != expectedSize ||
 		result.Progress.RestartReusableBytes != expectedSize || !result.Progress.CountersExact {
 		t.Fatalf("output failure after write result=%+v transaction=%+v", result, transaction)
@@ -342,19 +342,18 @@ func TestTransferJobLiveOnlyPauseDeclinesRangeThatNeverReachedOutput(t *testing.
 		outcome DirectTreeOutcome
 		cause   error
 		failure error
-		reason  FilePauseReason
 	}{
 		{
 			name: "cancelled before write",
 			script: func(cancel context.CancelFunc) jobTransactionScript {
 				return jobTransactionScript{beforeWrite: func() error { cancel(); return context.Canceled }}
 			},
-			outcome: DirectTreeOutcomePaused, cause: context.Canceled, failure: context.Canceled, reason: FilePauseInterrupted,
+			outcome: DirectTreeOutcomePaused, cause: context.Canceled, failure: context.Canceled,
 		},
 		{
 			name:    "disk full",
 			script:  func(context.CancelFunc) jobTransactionScript { return jobTransactionScript{writeErr: diskFull} },
-			outcome: DirectTreeOutcomePartial, failure: syscall.ENOSPC, reason: FilePauseOutputFailure,
+			outcome: DirectTreeOutcomePartial, failure: syscall.ENOSPC,
 		},
 	}
 	for _, test := range tests {
@@ -379,7 +378,7 @@ func TestTransferJobLiveOnlyPauseDeclinesRangeThatNeverReachedOutput(t *testing.
 				result.SettlementFailure != nil || result.SettlementFault.Valid() || result.TerminationFault.Valid() ||
 				len(result.Files) != 1 || !errors.Is(result.Files[0].Cause, test.failure) ||
 				result.Files[0].SettlementFailure != nil || result.Files[0].SettlementFault.Valid() ||
-				transaction == nil || !slices.Equal(transaction.pauseReasons, []FilePauseReason{test.reason}) ||
+				transaction == nil || transaction.pauseCalls != 1 ||
 				result.Progress.FileOutcomes.PausedFiles != 1 || result.Progress.VerifiedBytes != 0 || !result.Progress.CountersExact {
 				t.Fatalf("live-only pause result=%+v transaction=%+v", result, transaction)
 			}
@@ -393,13 +392,12 @@ func TestTransferJobRetiresOnlyWithTypedPermanentSourceAuthority(t *testing.T) {
 		blocks      RangeReader
 		configure   func(*jobOutput)
 		wantOutcome DirectTreeOutcome
-		wantPause   FilePauseReason
-		wantRetire  FileRetireReason
+		wantRetire  bool
 	}{
 		{
 			name:        "unknown range failure pauses as dependency contract",
 			blocks:      scriptedRangeReader{err: errors.New("retryable transport failure")},
-			wantOutcome: DirectTreeOutcomePaused, wantPause: FilePauseDependencyContract,
+			wantOutcome: DirectTreeOutcomePaused,
 		},
 		{
 			name:   "output sink failure cannot impersonate a permanent source failure",
@@ -409,26 +407,26 @@ func TestTransferJobRetiresOnlyWithTypedPermanentSourceAuthority(t *testing.T) {
 					fault.ScopeFileLocal, fault.OutputStateIO, errors.New("output temporarily unavailable"),
 				)
 			},
-			wantOutcome: DirectTreeOutcomePartial, wantPause: FilePauseOutputFailure,
+			wantOutcome: DirectTreeOutcomePartial,
 		},
 		{
 			name: "closed output fault cannot acquire source retirement authority",
 			blocks: scriptedRangeReader{err: outputFailure(
 				fault.ScopeFileLocal, fault.OutputStateIO, errors.New("checkpoint unavailable"),
 			)},
-			wantOutcome: DirectTreeOutcomePartial, wantPause: FilePauseOutputFailure,
+			wantOutcome: DirectTreeOutcomePartial,
 		},
 		{
 			name:        "typed permanent source failure retires",
 			blocks:      scriptedRangeReader{err: sourcePermanentFailure(errors.New("source denied file"))},
 			wantOutcome: DirectTreeOutcomePartial,
-			wantRetire:  FileRetireIsolatedPermanentSourceFailure,
+			wantRetire:  true,
 		},
 		{
-			name:        "invalidated revision retires with its precise reason",
+			name:        "invalidated revision retires",
 			blocks:      scriptedRangeReader{err: content.ErrRevisionDrift},
 			wantOutcome: DirectTreeOutcomePartial,
-			wantRetire:  FileRetireInvalidatedRevision,
+			wantRetire:  true,
 		},
 	}
 	for _, test := range tests {
@@ -444,16 +442,14 @@ func TestTransferJobRetiresOnlyWithTypedPermanentSourceAuthority(t *testing.T) {
 			if transaction == nil || result.Outcome != test.wantOutcome || len(result.Files) != 1 {
 				t.Fatalf("result=%+v transaction=%+v", result, transaction)
 			}
-			if test.wantPause != 0 {
-				if !slices.Equal(transaction.pauseReasons, []FilePauseReason{test.wantPause}) ||
-					len(transaction.retireReasons) != 0 || result.Files[0].Settlement.Kind() != FilePaused {
-					t.Fatalf("pause=%v retire=%v failure=%+v", transaction.pauseReasons, transaction.retireReasons, result.Files[0])
+			if !test.wantRetire {
+				if transaction.pauseCalls != 1 || transaction.retireCalls != 0 || result.Files[0].Settlement.Kind() != FilePaused {
+					t.Fatalf("pause=%d retire=%d failure=%+v", transaction.pauseCalls, transaction.retireCalls, result.Files[0])
 				}
 				return
 			}
-			if !slices.Equal(transaction.retireReasons, []FileRetireReason{test.wantRetire}) ||
-				len(transaction.pauseReasons) != 0 || result.Files[0].Settlement.Kind() != FileFailed {
-				t.Fatalf("pause=%v retire=%v failure=%+v", transaction.pauseReasons, transaction.retireReasons, result.Files[0])
+			if transaction.retireCalls != 1 || transaction.pauseCalls != 0 || result.Files[0].Settlement.Kind() != FileFailed {
+				t.Fatalf("pause=%d retire=%d failure=%+v", transaction.pauseCalls, transaction.retireCalls, result.Files[0])
 			}
 		})
 	}
@@ -512,7 +508,7 @@ func TestTransferJobContinuesSiblingAfterSettledFileOutputFault(t *testing.T) {
 		result.Progress.FileOutcomes.PublishedFiles() != result.SucceededFiles ||
 		result.Files[0].Fault != mustOutputFault(fault.ScopeFileLocal, fault.OutputStateIO) ||
 		failedTransaction == nil || siblingTransaction == nil ||
-		!slices.Equal(failedTransaction.pauseReasons, []FilePauseReason{FilePauseOutputFailure}) ||
+		failedTransaction.pauseCalls != 1 ||
 		siblingTransaction.commitCalls != 1 || output.pauseCalls != 0 || output.completeCalls != 1 ||
 		!slices.Equal(output.finalized, []string{""}) {
 		t.Fatalf("result=%+v failed=%+v sibling=%+v output=%+v", result, failedTransaction, siblingTransaction, output)

@@ -423,16 +423,6 @@ func (j *TransferJob) admitRunOutput(ctx context.Context, state *jobRun) *fault.
 	} else if failure == nil {
 		failure = fault.Require(validateDirectTreeSession(j.intent, nil))
 	}
-	if failure == nil {
-		admissionScope := j.coordinates.scope
-		if !admissionScope.valid() {
-			// Intent validation precedes OpenDirectTree, so failure to project its receipt
-			// scope is an internal boundary violation rather than backend authority.
-			failure = fault.DependencyContract(ErrInvalidDirectoryAdmission)
-		} else {
-			state.directoryAdmissionScope = admissionScope
-		}
-	}
 	if failure != nil {
 		j.trace(TransferLifecycleTrace{
 			Stage: TransferAdmissionCompleted, TransferJobID: j.jobID,

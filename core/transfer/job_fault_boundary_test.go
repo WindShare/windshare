@@ -64,11 +64,11 @@ func TestRetirementAndIsolationRequireExplicitClosedFaults(t *testing.T) {
 	t.Parallel()
 
 	permanent := sourcePermanentFailure(errors.New("permanent"))
-	if got := fileRetireReason(permanent); got != FileRetireIsolatedPermanentSourceFailure {
-		t.Fatalf("permanent retire reason = %v", got)
+	if !lifecyclePolicyFor(permanent).shouldRetire() {
+		t.Fatal("permanent source fault did not authorize retirement")
 	}
-	if got := fileRetireReason(fault.DependencyContract(errors.New("unknown"))); got != 0 {
-		t.Fatalf("dependency-contract fault authorized retirement: %v", got)
+	if lifecyclePolicyFor(fault.DependencyContract(errors.New("unknown"))).shouldRetire() {
+		t.Fatal("dependency-contract fault authorized retirement")
 	}
 
 	fileOutput := outputFailure(fault.ScopeFileLocal, fault.OutputStateIO, errors.New("one file"))
@@ -89,8 +89,8 @@ func TestLifecycleAuthorityRejectsWrappedInternalCarriers(t *testing.T) {
 	if got := normalizedFault(wrapped); got != fault.DependencyContractFault() {
 		t.Fatalf("wrapped internal carrier fault = %v", got)
 	}
-	if reason := fileRetireReason(wrapped); reason != 0 {
-		t.Fatalf("wrapped internal carrier authorized retirement: %v", reason)
+	if lifecyclePolicyFor(wrapped).shouldRetire() {
+		t.Fatal("wrapped internal carrier authorized retirement")
 	}
 
 	wrappedCancellation := fmt.Errorf("untrusted wrapper: %w", context.Canceled)

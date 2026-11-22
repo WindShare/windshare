@@ -492,10 +492,10 @@ func TestTransferDirectTreeSettlementContextAndFailuresRemainIndependent(t *test
 	output := newJobOutput(share)
 	settlementCause := errors.New("checkpoint state unavailable")
 	settlementObserved := false
-	output.transactionScript.pauseHook = func(ctx context.Context, reason FilePauseReason) {
+	output.transactionScript.pauseHook = func(ctx context.Context) {
 		settlementObserved = true
-		if ctx.Err() != nil || reason != FilePauseSessionFailure {
-			t.Errorf("settlement context/reason err=%v reason=%v", ctx.Err(), reason)
+		if ctx.Err() != nil {
+			t.Errorf("settlement context err=%v", ctx.Err())
 		}
 		deadline, bounded := ctx.Deadline()
 		if !bounded || time.Until(deadline) <= 0 || time.Until(deadline) > DefaultOutputSettlementTimeout {
@@ -530,8 +530,8 @@ func TestTransferJobTerminalSettlementMethodsAreSingleShot(t *testing.T) {
 		expected, _ := fault.NewOutput(fault.ScopeFileLocal, fault.OutputStateIO)
 		if result.Outcome != DirectTreeOutcomePaused || result.TerminationFault != expected ||
 			result.SettlementFault != expected || transaction == nil ||
-			transaction.commitCalls != 1 || len(transaction.pauseReasons) != 0 ||
-			len(transaction.retireReasons) != 0 || output.pauseCalls != 1 || output.completeCalls != 0 {
+			transaction.commitCalls != 1 || transaction.pauseCalls != 0 ||
+			transaction.retireCalls != 0 || output.pauseCalls != 1 || output.completeCalls != 0 {
 			t.Fatalf("result=%+v transaction=%+v", result, transaction)
 		}
 	})
@@ -551,8 +551,8 @@ func TestTransferJobTerminalSettlementMethodsAreSingleShot(t *testing.T) {
 		transaction := output.transactions["file.bin"]
 		if result.Outcome != DirectTreeOutcomePaused || result.TerminationFault != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) ||
 			result.SettlementFault != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) || transaction == nil ||
-			transaction.commitCalls != 1 || len(transaction.pauseReasons) != 0 ||
-			len(transaction.retireReasons) != 0 || output.pauseCalls != 1 || output.completeCalls != 0 {
+			transaction.commitCalls != 1 || transaction.pauseCalls != 0 ||
+			transaction.retireCalls != 0 || output.pauseCalls != 1 || output.completeCalls != 0 {
 			t.Fatalf("result=%+v transaction=%+v", result, transaction)
 		}
 	})
@@ -568,7 +568,7 @@ func TestTransferJobTerminalSettlementMethodsAreSingleShot(t *testing.T) {
 		expected, _ := fault.NewOutput(fault.ScopeOutputPause, fault.OutputStateIO)
 		if result.Outcome != DirectTreeOutcomePaused || result.TerminationCause != nil ||
 			result.SettlementFault != expected || transaction == nil ||
-			transaction.commitCalls != 1 || len(transaction.pauseReasons) != 0 ||
+			transaction.commitCalls != 1 || transaction.pauseCalls != 0 ||
 			output.completeCalls != 1 || output.pauseCalls != 0 {
 			t.Fatalf("result=%+v transaction=%+v", result, transaction)
 		}

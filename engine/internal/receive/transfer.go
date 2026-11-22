@@ -389,7 +389,6 @@ type getShapeResolver interface {
 		context.Context,
 		transfer.SelectionSpec,
 		ordinaryoutput.ShapeProbeBudget,
-		ordinaryoutput.ShapeTracer,
 	) (ordinaryoutput.ShapeDecision, error)
 }
 
@@ -448,7 +447,7 @@ func resolveGetOutputOperation(
 			return getOutputAdmission{}, ErrRetainedOutputMissing
 		}
 		decision, resolveErr := resolver.ResolveOrdinaryOutputShape(
-			ctx, selection, ordinaryoutput.DefaultShapeProbeBudgetV1, nil,
+			ctx, selection, ordinaryoutput.DefaultShapeProbeBudgetV1,
 		)
 		if resolveErr != nil {
 			return getOutputAdmission{}, resolveErr

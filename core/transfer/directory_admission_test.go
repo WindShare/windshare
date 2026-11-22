@@ -1,139 +1,27 @@
 package transfer
 
 import (
-	"bytes"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/binary"
 	"errors"
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
-	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
-func TestDirectoryAdmissionBindsNativeResultRoot(t *testing.T) {
-	share := crossRuntimeID[catalog.ShareInstance](1)
-	syntheticRoot := crossRuntimeID[catalog.DirectoryID](2)
-	rules, err := NewSelectionRules(true, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	selection, err := NewSelectionSpec(share, syntheticRoot, rules)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resultRoot, err := receivecontract.NewDirectorySelectionResultRoot(
-		crossRuntimeID[catalog.DirectoryID](10), "docs",
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	artifact, err := receivecontract.NewResultRootDirectoryTree(resultRoot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	operationBytes := crossRuntimeID[receivecontract.OperationID](11)
-	operation, err := receivecontract.OperationIDFromBytes(operationBytes[:])
-	if err != nil {
-		t.Fatal(err)
-	}
-	reservationBytes := crossRuntimeID[receivecontract.DestinationReservationID](12)
-	reservationID, err := receivecontract.DestinationReservationIDFromBytes(reservationBytes[:])
-	if err != nil {
-		t.Fatal(err)
-	}
-	authority, err := receivecontract.AuthorityRefFromBytes(crossRuntimeOpaque(13))
-	if err != nil {
-		t.Fatal(err)
-	}
-	reservation, err := receivecontract.NewNativeNamedEntryReservation(
-		operation,
-		reservationID,
-		artifact,
-		authority,
-		"docs-selection",
-		"docs-selection",
-		0,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	plan, err := receivecontract.NewDirectTreePlan(artifact, reservation)
-	if err != nil {
-		t.Fatal(err)
-	}
-	intent, err := NewReceiveIntent(selection, artifact, plan)
-	if err != nil {
-		t.Fatal(err)
-	}
-	scope, err := NewDirectoryAdmissionScope(intent)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rootExpectation := scope.RootExpectation()
-	if scope.LayoutVersion() != DirectoryAdmissionLayoutV2 ||
-		rootExpectation.Kind() != DirectoryAdmissionDirectoryAnchor ||
-		rootExpectation.DirectoryID() != resultRoot.DirectoryID() || rootExpectation.Path() != resultRoot.Name() {
-		t.Fatalf("native root expectation = %+v", rootExpectation)
-	}
-	secret := make([]byte, directoryAdmissionSecretBytes)
-	for index := range secret {
-		secret[index] = byte(index + 1)
-	}
-	rootDirectory := admissionTestDirectory(
-		t, resultRoot.DirectoryID(), crossRuntimeID[catalog.DirectoryGeneration](40), DirectoryAdmission{}, "docs", catalog.ModifiedTime{},
-	)
-	logicalRootDirectory := admissionTestMaterializationDirectory(t, rootDirectory, "")
-	if _, err := NewDirectoryAdmissionWithSecret(secret, scope, logicalRootDirectory); !errors.Is(err, ErrInvalidDirectoryAdmission) {
-		t.Fatalf("native result root accepted an empty output coordinate: %v", err)
-	}
-	rootAdmission, err := NewDirectoryAdmissionWithSecret(
-		secret, scope, admissionTestMaterializationDirectory(t, rootDirectory, resultRoot.Name()),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	modified, err := catalog.NewModifiedTime(-1234, 567_000_000, catalog.TimePrecisionMilliseconds)
-	if err != nil {
-		t.Fatal(err)
-	}
-	childDirectory := admissionTestDirectory(
-		t, crossRuntimeID[catalog.DirectoryID](41), crossRuntimeID[catalog.DirectoryGeneration](42),
-		rootAdmission, "docs/child", modified,
-	)
-	childMaterialization := admissionTestMaterializationDirectory(t, childDirectory, resultRoot.Name()+"/child")
-	message, err := CanonicalDirectoryAdmissionMessageV2(scope, childMaterialization)
-	if err != nil {
-		t.Fatal(err)
-	}
-	childAdmission, err := NewDirectoryAdmissionWithSecret(secret, scope, childMaterialization)
-	if err != nil {
-		t.Fatal(err)
-	}
-	expectedMAC := hmac.New(sha256.New, secret)
-	expectedMAC.Write(message)
-	if !hmac.Equal(childAdmission.Bytes(), expectedMAC.Sum(nil)) {
-		t.Fatal("directory claim was not authenticated with the local operation secret")
-	}
-
-}
-
-func TestDirectoryAdmissionV2FramesAndAuthenticatesTheCompleteClaim(t *testing.T) {
+func TestDirectoryAdmissionValidatesHierarchyAndEquality(t *testing.T) {
 	root := admissionTestDirectoryID(t, 0x20)
-	intent := admissionTestIntent(t, root, 0x80)
-	scope := admissionTestScope(t, intent)
-	secret := admissionTestSequence(0xc0, directoryAdmissionSecretBytes)
 	rootDirectory := admissionTestDirectory(
 		t, root, admissionTestGeneration(t, 0x50), DirectoryAdmission{}, "", catalog.ModifiedTime{},
 	)
-	rootAdmission, err := NewDirectoryAdmissionWithSecret(
-		secret, scope, admissionTestMaterializationDirectory(t, rootDirectory),
-	)
+	rootAdmission, err := NewDirectoryAdmission(admissionTestMaterializationDirectory(t, rootDirectory))
 	if err != nil {
 		t.Fatal(err)
 	}
+	if rootAdmission.IsZero() || rootAdmission.DirectoryID() != root ||
+		rootAdmission.Path() != "" || rootAdmission.HasParent() {
+		t.Fatalf("root admission=%+v", rootAdmission)
+	}
+
 	modified, err := catalog.NewModifiedTime(-2, 123_000_000, catalog.TimePrecisionMilliseconds)
 	if err != nil {
 		t.Fatal(err)
@@ -143,235 +31,42 @@ func TestDirectoryAdmissionV2FramesAndAuthenticatesTheCompleteClaim(t *testing.T
 		rootAdmission, "photos", modified,
 	)
 	childMaterialization := admissionTestMaterializationDirectory(t, childDirectory)
-	message, err := CanonicalDirectoryAdmissionMessageV2(scope, childMaterialization)
+	childAdmission, err := NewDirectoryAdmission(childMaterialization)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	fields, version := parseDirectoryAdmissionMessage(t, message)
-	if version != DirectoryAdmissionV2 || len(fields) != 11 {
-		t.Fatalf("version=%d fields=%d", version, len(fields))
+	if childAdmission.IsZero() || childAdmission.DirectoryID() != childDirectory.DirectoryID ||
+		childAdmission.Generation() != childDirectory.Generation ||
+		childAdmission.Path() != "photos" || !childAdmission.HasParent() ||
+		childAdmission.ParentPath() != "" || childAdmission.ModifiedTime() != modified {
+		t.Fatalf("child admission=%+v", childAdmission)
 	}
-	wantFields := [][]byte{
-		intent.Digest().Bytes(),
-		{DirectoryAdmissionLayoutV2},
-		{byte(DirectoryAdmissionTreeCatalogRoot)},
-		{byte(DirectoryAdmissionCatalogRoot)},
-		root.Bytes(),
-		canonicalDirectoryAdmissionPath(""),
-		childDirectory.DirectoryID.Bytes(),
-		childDirectory.Generation.Bytes(),
-		rootAdmission.Bytes(),
-		canonicalDirectoryAdmissionPath(childMaterialization.Path().String()),
-		canonicalDirectoryAdmissionModifiedTime(modified),
+	if !childAdmission.Equal(childAdmission) || childAdmission.Equal(rootAdmission) ||
+		(DirectoryAdmission{}).Equal(DirectoryAdmission{}) {
+		t.Fatal("directory admission equality semantics drifted")
 	}
-	for index, want := range wantFields {
-		if !bytes.Equal(fields[index], want) {
-			t.Fatalf("field[%d]=%x want=%x", index, fields[index], want)
-		}
+	if err := validateDirectoryAdmission(childAdmission, childMaterialization); err != nil {
+		t.Fatalf("valid admission mismatch: %v", err)
 	}
-	admission, err := NewDirectoryAdmissionWithSecret(secret, scope, childMaterialization)
-	if err != nil {
-		t.Fatal(err)
-	}
-	mac := hmac.New(sha256.New, secret)
-	_, _ = mac.Write(message)
-	if !bytes.Equal(admission.Bytes(), mac.Sum(nil)) {
-		t.Fatalf("token=%x want=%x", admission.Bytes(), mac.Sum(nil))
-	}
-	if admission.SchemaVersion() != DirectoryAdmissionV2 ||
-		admission.ReceiveIntentDigest() != intent.Digest() ||
-		admission.LayoutVersion() != DirectoryAdmissionLayoutV2 ||
-		admission.Layout() != DirectoryAdmissionTreeCatalogRoot ||
-		admission.DirectoryID() != childDirectory.DirectoryID || admission.Generation() != childDirectory.Generation ||
-		admission.Path() != childDirectory.SourcePath.String() || admission.ModifiedTime() != modified ||
-		!bytes.Equal(admission.ParentToken(), rootAdmission.Bytes()) {
-		t.Fatalf("admission snapshot=%+v", admission)
-	}
-}
-
-func TestDirectoryAdmissionV2UsesClosedRootAndAbsentTimeUnions(t *testing.T) {
-	root := admissionTestDirectoryID(t, 0x21)
-	intent := admissionTestIntent(t, root, 0x81)
-	scope := admissionTestScope(t, intent)
-	directory := admissionTestDirectory(
-		t, root, admissionTestGeneration(t, 0x51), DirectoryAdmission{}, "", catalog.ModifiedTime{},
-	)
-	message, err := CanonicalDirectoryAdmissionMessageV2(
-		scope, admissionTestMaterializationDirectory(t, directory),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fields, _ := parseDirectoryAdmissionMessage(t, message)
-	if !bytes.Equal(fields[8], []byte{}) || !bytes.Equal(fields[9], []byte{1}) ||
-		!bytes.Equal(fields[10], []byte{1}) {
-		t.Fatalf("parent=%x path=%x modified=%x", fields[8], fields[9], fields[10])
-	}
-}
-
-func TestDirectoryAdmissionV2BindsIntentLayoutAndSyntheticRoot(t *testing.T) {
-	if _, err := NewDirectoryAdmissionScope(ReceiveIntent{}); !errors.Is(err, ErrInvalidDirectoryAdmission) {
-		t.Fatalf("zero intent scope error=%v", err)
-	}
-	root := admissionTestDirectoryID(t, 0x22)
-	firstIntent := admissionTestIntent(t, root, 0x82)
-	secondIntent := admissionTestIntent(t, root, 0x92)
-	firstScope := admissionTestScope(t, firstIntent)
-	secondScope := admissionTestScope(t, secondIntent)
-	secret := admissionTestSequence(0x40, directoryAdmissionSecretBytes)
-	directory := admissionTestDirectory(
-		t, root, admissionTestGeneration(t, 0x52), DirectoryAdmission{}, "", catalog.ModifiedTime{},
-	)
-
-	materialization := admissionTestMaterializationDirectory(t, directory)
-	first, err := NewDirectoryAdmissionWithSecret(secret, firstScope, materialization)
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := NewDirectoryAdmissionWithSecret(secret, secondScope, materialization)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if first.Equal(second) || bytes.Equal(first.Bytes(), second.Bytes()) {
-		t.Fatal("two durable intent namespaces shared a receipt")
-	}
-	if err := ValidateDirectoryAdmissionBinding(firstScope, first, materialization); err != nil {
-		t.Fatal(err)
-	}
-	if !errors.Is(ValidateDirectoryAdmissionBinding(secondScope, first, materialization), ErrDirectoryAdmissionMismatch) {
-		t.Fatal("foreign intent accepted the receipt")
+	if err := validateDirectoryAdmission(rootAdmission, childMaterialization); !errors.Is(err, ErrDirectoryAdmissionMismatch) {
+		t.Fatalf("mismatched admission error=%v", err)
 	}
 
-	wrongRoot := directory
-	wrongRoot.DirectoryID = admissionTestDirectoryID(t, 0x23)
-	if _, err := NewDirectoryAdmissionWithSecret(
-		secret, firstScope, admissionTestMaterializationDirectory(t, wrongRoot),
-	); !errors.Is(err, ErrInvalidDirectoryAdmission) {
-		t.Fatalf("wrong synthetic root error=%v", err)
-	}
-	rootWithParent := directory
-	rootWithParent.ParentAdmission = first
-	if _, err := NewDirectoryAdmissionWithSecret(
-		secret, firstScope, admissionTestMaterializationDirectory(t, rootWithParent),
-	); !errors.Is(err, ErrInvalidDirectoryAdmission) {
-		t.Fatalf("parented synthetic root error=%v", err)
-	}
-}
-
-func TestDirectoryAdmissionV2RejectsForeignOrNonImmediateParentClaims(t *testing.T) {
-	root := admissionTestDirectoryID(t, 0x24)
-	intent := admissionTestIntent(t, root, 0x84)
-	foreignIntent := admissionTestIntent(t, root, 0x94)
-	scope := admissionTestScope(t, intent)
-	foreignScope := admissionTestScope(t, foreignIntent)
-	secret := admissionTestSequence(0x60, directoryAdmissionSecretBytes)
-	rootDirectory := admissionTestDirectory(
-		t, root, admissionTestGeneration(t, 0x54), DirectoryAdmission{}, "", catalog.ModifiedTime{},
+	// Non-immediate parent must be rejected.
+	grandchild := admissionTestDirectory(
+		t, admissionTestDirectoryID(t, 0x36), admissionTestGeneration(t, 0x66),
+		rootAdmission, "child/grandchild", catalog.ModifiedTime{},
 	)
-	parent, err := NewDirectoryAdmissionWithSecret(
-		secret, scope, admissionTestMaterializationDirectory(t, rootDirectory),
+	if _, err := NewDirectoryAdmission(admissionTestMaterializationDirectory(t, grandchild)); !errors.Is(err, ErrInvalidDirectoryAdmission) {
+		t.Fatalf("non-immediate parent error=%v", err)
+	}
+	// Parent on empty root path must be rejected.
+	parentedRoot := admissionTestDirectory(
+		t, root, admissionTestGeneration(t, 0x51), rootAdmission, "", catalog.ModifiedTime{},
 	)
-	if err != nil {
-		t.Fatal(err)
+	if _, err := NewDirectoryAdmission(admissionTestMaterializationDirectory(t, parentedRoot)); !errors.Is(err, ErrInvalidDirectoryAdmission) {
+		t.Fatalf("parented root error=%v", err)
 	}
-	foreignParent, err := NewDirectoryAdmissionWithSecret(
-		secret, foreignScope, admissionTestMaterializationDirectory(t, rootDirectory),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for name, directory := range map[string]AuthenticatedSourceDirectory{
-		"missing parent": admissionTestDirectory(
-			t, admissionTestDirectoryID(t, 0x34), admissionTestGeneration(t, 0x64),
-			DirectoryAdmission{}, "child", catalog.ModifiedTime{},
-		),
-		"foreign parent": admissionTestDirectory(
-			t, admissionTestDirectoryID(t, 0x35), admissionTestGeneration(t, 0x65),
-			foreignParent, "child", catalog.ModifiedTime{},
-		),
-		"non-immediate parent": admissionTestDirectory(
-			t, admissionTestDirectoryID(t, 0x36), admissionTestGeneration(t, 0x66),
-			parent, "child/grandchild", catalog.ModifiedTime{},
-		),
-	} {
-		t.Run(name, func(t *testing.T) {
-			if _, err := NewDirectoryAdmissionWithSecret(
-				secret, scope, admissionTestMaterializationDirectory(t, directory),
-			); !errors.Is(err, ErrInvalidDirectoryAdmission) {
-				t.Fatalf("error=%v", err)
-			}
-		})
-	}
-}
-
-func TestDirectoryAdmissionV2SnapshotsKeyAndReceiptBytes(t *testing.T) {
-	root := admissionTestDirectoryID(t, 0x25)
-	intent := admissionTestIntent(t, root, 0x85)
-	scope := admissionTestScope(t, intent)
-	secret := admissionTestSequence(0x70, directoryAdmissionSecretBytes)
-	directory := admissionTestDirectory(
-		t, root, admissionTestGeneration(t, 0x55), DirectoryAdmission{}, "", catalog.ModifiedTime{},
-	)
-	materialization := admissionTestMaterializationDirectory(t, directory)
-	admission, err := NewDirectoryAdmissionWithSecret(secret, scope, materialization)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := admission.Bytes()
-	secret[0] ^= 0xff
-	returned := admission.Bytes()
-	returned[0] ^= 0xff
-	if !bytes.Equal(admission.Bytes(), want) {
-		t.Fatal("caller mutation changed the immutable receipt")
-	}
-	retry, err := NewDirectoryAdmissionWithSecret(
-		admissionTestSequence(0x70, directoryAdmissionSecretBytes), scope, materialization,
-	)
-	if err != nil || !admission.Equal(retry) {
-		t.Fatalf("exact retry admission=%+v error=%v", retry, err)
-	}
-	if (DirectoryAdmission{}).Equal(DirectoryAdmission{}) {
-		t.Fatal("zero receipts compared as usable authority")
-	}
-	if _, err := NewDirectoryAdmissionWithSecret(
-		make([]byte, directoryAdmissionSecretBytes), scope, materialization,
-	); !errors.Is(err, ErrInvalidDirectoryAdmission) {
-		t.Fatalf("zero key error=%v", err)
-	}
-}
-
-func parseDirectoryAdmissionMessage(t *testing.T, message []byte) ([][]byte, uint8) {
-	t.Helper()
-	prefix := append([]byte(directoryAdmissionDomain), 0)
-	if !bytes.HasPrefix(message, prefix) || len(message) < len(prefix)+1 {
-		t.Fatal("directory-admission domain is missing")
-	}
-	offset := len(prefix)
-	version := message[offset]
-	offset++
-	readFrame := func() []byte {
-		t.Helper()
-		if len(message)-offset < 8 {
-			t.Fatalf("truncated frame length at %d", offset)
-		}
-		length := binary.BigEndian.Uint64(message[offset : offset+8])
-		offset += 8
-		if length > uint64(len(message)-offset) {
-			t.Fatalf("truncated frame payload at %d length=%d", offset, length)
-		}
-		value := append([]byte(nil), message[offset:offset+int(length)]...)
-		offset += int(length)
-		return value
-	}
-	fields := make([][]byte, 0, 11)
-	for range 11 {
-		fields = append(fields, readFrame())
-	}
-	if offset != len(message) {
-		t.Fatalf("trailing bytes=%d", len(message)-offset)
-	}
-	return fields, version
 }
 
 func admissionTestIntent(t *testing.T, root catalog.DirectoryID, targetFirst byte) ReceiveIntent {
@@ -381,15 +76,6 @@ func admissionTestIntent(t *testing.T, root catalog.DirectoryID, targetFirst byt
 		t.Fatal(err)
 	}
 	return testReceiveIntent(t, admissionTestShare(t, targetFirst), root, rules)
-}
-
-func admissionTestScope(t *testing.T, intent ReceiveIntent) DirectoryAdmissionScope {
-	t.Helper()
-	scope, err := NewDirectoryAdmissionScope(intent)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return scope
 }
 
 func admissionTestDirectory(

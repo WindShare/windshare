@@ -47,24 +47,16 @@ func TestReceiverRuntimeResolvesOrdinaryOutputShapeThroughClassifiedCatalog(t *t
 	close(fixture.scanGate)
 	rules, _ := transfer.NewSelectionRules(true, nil)
 	selection, _ := transfer.NewSelectionSpec(fixture.share, fixture.syntheticRoot, rules)
-	var traces []ordinaryoutput.ShapeTrace
 	decision, err := receiver.ResolveOrdinaryOutputShape(
 		context.Background(), selection, ordinaryoutput.DefaultShapeProbeBudgetV1,
-		ordinaryoutput.ShapeTraceFunc(func(event ordinaryoutput.ShapeTrace) {
-			traces = append(traces, event)
-		}),
 	)
 	if err != nil || decision.Kind() != ordinaryoutput.ShapeCompleteDirectory ||
 		decision.DirectoryID() != fixture.directoryID || decision.SourcePath() != "folder" {
 		t.Fatalf("decision=%+v err=%v", decision, err)
 	}
-	if len(traces) != 2 || traces[1].SelectionDigest != [32]byte(selection.Digest()) ||
-		traces[1].ProtocolSessionID != receiver.ProtocolSessionID() {
-		t.Fatalf("traces=%+v", traces)
-	}
 	var nilContext context.Context
 	if _, err := receiver.ResolveOrdinaryOutputShape(
-		nilContext, selection, ordinaryoutput.DefaultShapeProbeBudgetV1, nil,
+		nilContext, selection, ordinaryoutput.DefaultShapeProbeBudgetV1,
 	); !errors.Is(err, ordinaryoutput.ErrInvalidShapeResolution) {
 		t.Fatalf("nil context err=%v", err)
 	}

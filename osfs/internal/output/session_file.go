@@ -575,8 +575,8 @@ func (s *Session) resolveFileParentLocked(file transfer.MaterializationFile) (*D
 	if parent.Kind() == transfer.MaterializationFileParentReference {
 		return s.op.resultDir, nil
 	}
-	state, ok := s.dirsByToken[keyForAdmission(parent.Admission())]
-	if !ok || !state.materialized {
+	state, ok := s.dirsByLogical[parent.Admission().Path()]
+	if !ok || !state.admission.Equal(parent.Admission()) || !state.materialized {
 		return nil, transfer.ErrInvalidOutputBinding
 	}
 	if state.dir != nil {

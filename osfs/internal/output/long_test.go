@@ -78,10 +78,10 @@ func TestLongNativeOrdinaryRestartResumesLargeStreamingFile(t *testing.T) {
 	if got := durable.Ranges().Ranges(); len(got) != 1 || got[0] != (content.Range{Offset: 0, End: restartCut}) {
 		t.Fatalf("durable ranges = %+v", got)
 	}
-	if _, err := tx.Pause(ctx, transfer.FilePauseInterrupted); err != nil {
+	if _, err := tx.Pause(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := session.PauseTree(ctx, transfer.JobPauseInterrupted); err != nil {
+	if _, err := session.PauseTree(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if err := auth.Close(); err != nil {
@@ -128,7 +128,7 @@ func TestLongNativeOrdinaryRestartResumesLargeStreamingFile(t *testing.T) {
 	if err != nil || settled.Kind() != transfer.FilePublished {
 		t.Fatalf("large commit = (%v, %v)", settled.Kind(), err)
 	}
-	if _, err := reSession.PauseTree(ctx, transfer.JobPauseInterrupted); err != nil {
+	if _, err := reSession.PauseTree(ctx); err != nil {
 		t.Fatal(err)
 	}
 	res, _ := reIntent.MaterializationPlan().DestinationReservation()
@@ -179,7 +179,7 @@ func TestLongNativeOrdinaryRestartReusesPublishedFile(t *testing.T) {
 	if settled, err := tx.Commit(ctx); err != nil || settled.Kind() != transfer.FilePublished {
 		t.Fatalf("commit = (%v, %v)", settled.Kind(), err)
 	}
-	if _, err := session.PauseTree(ctx, transfer.JobPauseInterrupted); err != nil {
+	if _, err := session.PauseTree(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if err := auth.Close(); err != nil {
@@ -218,7 +218,7 @@ func TestLongNativeOrdinaryRestartReusesPublishedFile(t *testing.T) {
 	if err != nil || !bytes.Equal(actual, payload) {
 		t.Fatalf("reused final = %q, %v", actual, err)
 	}
-	if _, err := reSession.PauseTree(ctx, transfer.JobPauseInterrupted); err != nil {
+	if _, err := reSession.PauseTree(ctx); err != nil {
 		t.Fatal(err)
 	}
 }

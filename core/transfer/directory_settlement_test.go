@@ -9,11 +9,7 @@ import (
 
 func TestDirectorySettlementIsAnExactImmutableSum(t *testing.T) {
 	root := admissionTestDirectoryID(t, 0x26)
-	intent := admissionTestIntent(t, root, 0x86)
-	scope := admissionTestScope(t, intent)
-	admission, err := NewDirectoryAdmissionWithSecret(
-		admissionTestSequence(0xa0, directoryAdmissionSecretBytes),
-		scope,
+	admission, err := NewDirectoryAdmission(
 		admissionTestMaterializationDirectory(t, admissionTestDirectory(
 			t, root, admissionTestGeneration(t, 0x56), DirectoryAdmission{}, "", catalog.ModifiedTime{},
 		)),
@@ -53,11 +49,7 @@ func TestDirectorySettlementIsAnExactImmutableSum(t *testing.T) {
 
 func TestDirectorySettlementRejectsNonTerminalOrWiderFaults(t *testing.T) {
 	root := admissionTestDirectoryID(t, 0x27)
-	intent := admissionTestIntent(t, root, 0x87)
-	scope := admissionTestScope(t, intent)
-	admission, err := NewDirectoryAdmissionWithSecret(
-		admissionTestSequence(0xb0, directoryAdmissionSecretBytes),
-		scope,
+	admission, err := NewDirectoryAdmission(
 		admissionTestMaterializationDirectory(t, admissionTestDirectory(
 			t, root, admissionTestGeneration(t, 0x57), DirectoryAdmission{}, "", catalog.ModifiedTime{},
 		)),

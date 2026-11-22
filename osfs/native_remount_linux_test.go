@@ -158,7 +158,7 @@ func recoverRemountedOperation(t *testing.T, root, action string) {
 	if _, err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := session.PauseTree(ctx, transfer.JobPauseShutdown); err != nil {
+	if _, err := session.PauseTree(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if err := authority.Close(); err != nil {

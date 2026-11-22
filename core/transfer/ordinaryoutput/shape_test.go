@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/transfer/catalogwalk"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
@@ -75,20 +74,13 @@ func TestResolveShapeWholeShareProofsAndFreeze(t *testing.T) {
 			source := newShapeCatalog(t, share, map[catalog.DirectoryID][]catalog.Entry{
 				root: test.entries,
 			})
-			var traces []ShapeTrace
 			decision, err := ResolveShape(
 				context.Background(), source, selection, DefaultShapeProbeBudgetV1,
-				ShapeTraceFunc(func(event ShapeTrace) { traces = append(traces, event) }),
 			)
 			if err != nil || decision.Kind() != test.wantKind ||
 				decision.PreferredName() != test.wantName ||
 				decision.FallbackReason() != test.wantReason || !decision.Valid() {
 				t.Fatalf("decision=%+v err=%v", decision, err)
-			}
-			if len(traces) != 2 || traces[0].Stage != ShapeProbeStarted ||
-				traces[1].Kind != test.wantKind ||
-				traces[1].SelectionDigest == ([32]byte{}) {
-				t.Fatalf("traces=%+v", traces)
 			}
 			// A later root generation cannot mutate the returned scalar proof.
 			source.entries[root] = []catalog.Entry{
@@ -167,7 +159,6 @@ func TestResolveShapePathProofs(t *testing.T) {
 			selection := pathSelection(t, share, root, test.targets)
 			decision, err := ResolveShape(
 				context.Background(), source, selection, DefaultShapeProbeBudgetV1,
-				nil,
 			)
 			if err != nil || decision.Kind() != test.wantKind ||
 				decision.SourcePath() != test.wantPath ||
@@ -200,7 +191,6 @@ func TestResolveShapePartialDirectoryUsesCanonicalTruncatedName(t *testing.T) {
 		source,
 		pathSelection(t, share, root, []string{name + "/first.bin", name + "/second.bin"}),
 		DefaultShapeProbeBudgetV1,
-		nil,
 	)
 	if err != nil || decision.Kind() != ShapePartialDirectory ||
 		decision.SourcePath() != name || len([]byte(decision.PreferredName())) != receivecontract.MaxResultComponentBytes ||
@@ -229,7 +219,6 @@ func TestResolveShapePathProofReadsEachParentGenerationOnce(t *testing.T) {
 		source,
 		pathSelection(t, share, root, []string{"photos/first.jpg", "photos/second.jpg"}),
 		DefaultShapeProbeBudgetV1,
-		nil,
 	)
 	if err != nil || decision.Kind() != ShapePartialDirectory ||
 		decision.SourcePath() != "photos" {
@@ -265,7 +254,6 @@ func TestResolveShapeOpaqueProofIgnoresAncestryHintsAndAuthenticatesExclusions(t
 		selection := opaqueSelection(t, share, root, false, []OpaqueSelectionTarget{target})
 		decision, err := ResolveShape(
 			context.Background(), source, selection, DefaultShapeProbeBudgetV1,
-			nil,
 		)
 		if err != nil || decision.Kind() != ShapeSingleFile ||
 			decision.SourcePath() != "photos/nested/other.jpg" {
@@ -284,7 +272,6 @@ func TestResolveShapeOpaqueProofIgnoresAncestryHintsAndAuthenticatesExclusions(t
 		isolatedSource := newShapeCatalog(t, share, source.entries)
 		decision, err := ResolveShape(
 			context.Background(), isolatedSource, selection, DefaultShapeProbeBudgetV1,
-			nil,
 		)
 		if err != nil || decision.Kind() != ShapeCompleteDirectory ||
 			decision.SourcePath() != "photos" || isolatedSource.opens[photos] != 0 {
@@ -300,7 +287,6 @@ func TestResolveShapeOpaqueProofIgnoresAncestryHintsAndAuthenticatesExclusions(t
 		)
 		decision, err := ResolveShape(
 			context.Background(), source, selection, DefaultShapeProbeBudgetV1,
-			nil,
 		)
 		if err != nil || decision.Kind() != ShapePartialDirectory ||
 			decision.SourcePath() != "photos" ||
@@ -317,7 +303,6 @@ func TestResolveShapeOpaqueProofIgnoresAncestryHintsAndAuthenticatesExclusions(t
 		)
 		decision, err := ResolveShape(
 			context.Background(), source, selection, DefaultShapeProbeBudgetV1,
-			nil,
 		)
 		if err != nil || decision.Kind() != ShapeSingleFile ||
 			decision.SourcePath() != "photos/image.jpg" {
@@ -333,7 +318,6 @@ func TestResolveShapeOpaqueProofIgnoresAncestryHintsAndAuthenticatesExclusions(t
 		isolatedSource := newShapeCatalog(t, share, source.entries)
 		decision, err := ResolveShape(
 			context.Background(), isolatedSource, selection, DefaultShapeProbeBudgetV1,
-			nil,
 		)
 		if err != nil || decision.Kind() != ShapePartialDirectory ||
 			decision.SourcePath() != "photos" || isolatedSource.opens[nested] == 0 {
@@ -357,7 +341,6 @@ func TestResolveShapeOpaqueProofIgnoresAncestryHintsAndAuthenticatesExclusions(t
 		})
 		decision, err := ResolveShape(
 			context.Background(), isolatedSource, selection, DefaultShapeProbeBudgetV1,
-			nil,
 		)
 		if err != nil || decision.Kind() != ShapeSyntheticSelection ||
 			decision.FallbackReason() != ShapeFallbackSyntheticNearestAncestor {
@@ -386,7 +369,7 @@ func TestResolveShapeOpaqueExclusionOutsideSelectedDirectoryKeepsCompleteShape(t
 	decision, err := ResolveShape(
 		context.Background(), source,
 		opaqueSelection(t, share, root, false, []OpaqueSelectionTarget{selected, excluded}),
-		DefaultShapeProbeBudgetV1, nil,
+		DefaultShapeProbeBudgetV1,
 	)
 	if err != nil || decision.Kind() != ShapeCompleteDirectory ||
 		decision.SourcePath() != "photos" || source.opens[photos] != 0 {
@@ -415,7 +398,7 @@ func TestResolveShapeOpaqueDepthBudgetDoesNotOpenOutOfBudgetDirectory(t *testing
 	decision, err := ResolveShape(
 		context.Background(), source,
 		opaqueSelection(t, share, root, false, []OpaqueSelectionTarget{target}),
-		shapeBudget(t, 4, 4, 10, 1<<20, 1), nil,
+		shapeBudget(t, 4, 4, 10, 1<<20, 1),
 	)
 	if err != nil || decision.Kind() != ShapeSyntheticSelection ||
 		decision.FallbackReason() != ShapeFallbackDepthBudget || source.opens[nested] != 0 {
@@ -484,7 +467,6 @@ func TestResolveShapeEveryBudgetAxisFallsBackAndClosesCursor(t *testing.T) {
 			source := newShapeCatalog(t, share, entries)
 			decision, err := ResolveShape(
 				context.Background(), source, test.selection, test.budget,
-				nil,
 			)
 			if err != nil || decision.Kind() != ShapeSyntheticSelection ||
 				decision.FallbackReason() != test.wantReason {
@@ -513,7 +495,7 @@ func TestResolveShapeIncompleteGenerationFallsBack(t *testing.T) {
 	}
 	decision, err := ResolveShape(
 		context.Background(), source, wholeSelection(t, share, root),
-		DefaultShapeProbeBudgetV1, nil,
+		DefaultShapeProbeBudgetV1,
 	)
 	if err != nil || decision.Kind() != ShapeSyntheticSelection ||
 		decision.FallbackReason() != ShapeFallbackIncompleteGeneration ||
@@ -535,7 +517,6 @@ func TestResolveShapeAuthenticationAndSessionErrorsAreNotFallback(t *testing.T) 
 		}
 		decision, err := ResolveShape(
 			context.Background(), source, selection, DefaultShapeProbeBudgetV1,
-			nil,
 		)
 		if !errors.Is(err, sessionErr) || decision.Valid() {
 			t.Fatalf("decision=%+v err=%v", decision, err)
@@ -549,7 +530,6 @@ func TestResolveShapeAuthenticationAndSessionErrorsAreNotFallback(t *testing.T) 
 		})
 		decision, err := ResolveShape(
 			context.Background(), source, selection, DefaultShapeProbeBudgetV1,
-			nil,
 		)
 		if err == nil || decision.Valid() {
 			t.Fatalf("decision=%+v err=%v", decision, err)
@@ -580,55 +560,8 @@ func TestResolveShapeRejectsCrossBranchNodeIdentityAlias(t *testing.T) {
 		source,
 		pathSelection(t, share, root, []string{"left/first.bin", "right/second.bin"}),
 		DefaultShapeProbeBudgetV1,
-		nil,
 	)
 	if !errors.Is(err, catalogwalk.ErrTerminalGenerationIntegrity) || decision.Valid() {
-		t.Fatalf("decision=%+v err=%v", decision, err)
-	}
-}
-
-func TestShapeTraceIsRedactedAndSessionBound(t *testing.T) {
-	share := shapeID[catalog.ShareInstance](1)
-	root := shapeID[catalog.DirectoryID](2)
-	file := shapeID[catalog.FileID](3)
-	source := newShapeCatalog(t, share, map[catalog.DirectoryID][]catalog.Entry{
-		root: {shapeFileEntry(t, file, "secret-file.bin")},
-	})
-	session := shapeID[protocolsession.ProtocolSessionID](9)
-	var traces []ShapeTrace
-	decision, err := ResolveShape(
-		context.Background(), source, wholeSelection(t, share, root),
-		DefaultShapeProbeBudgetV1,
-		BindShapeTracerToSession(session, ShapeTraceFunc(func(event ShapeTrace) {
-			traces = append(traces, event)
-		})),
-	)
-	if err != nil || decision.Kind() != ShapeSingleFile || len(traces) != 2 {
-		t.Fatalf("decision=%+v traces=%+v err=%v", decision, traces, err)
-	}
-	for _, event := range traces {
-		if event.ProtocolSessionID != session || event.SelectionDigest == ([32]byte{}) ||
-			event.DirectoryRequests > DefaultShapeProbeBudgetV1.DirectoryRequests() ||
-			event.AuthenticatedPages > DefaultShapeProbeBudgetV1.AuthenticatedPages() ||
-			event.AuthenticatedEntries > DefaultShapeProbeBudgetV1.Entries() ||
-			event.AuthenticatedMetadataBytes > DefaultShapeProbeBudgetV1.AuthenticatedMetadataBytes() {
-			t.Fatalf("unbounded or uncorrelated trace=%+v", event)
-		}
-	}
-}
-
-func TestShapeTracePanicCannotChangeDecision(t *testing.T) {
-	share := shapeID[catalog.ShareInstance](1)
-	root := shapeID[catalog.DirectoryID](2)
-	source := newShapeCatalog(t, share, map[catalog.DirectoryID][]catalog.Entry{
-		root: {shapeFileEntry(t, shapeID[catalog.FileID](3), "file.bin")},
-	})
-	decision, err := ResolveShape(
-		context.Background(), source, wholeSelection(t, share, root),
-		DefaultShapeProbeBudgetV1,
-		ShapeTraceFunc(func(ShapeTrace) { panic("diagnostic") }),
-	)
-	if err != nil || decision.Kind() != ShapeSingleFile {
 		t.Fatalf("decision=%+v err=%v", decision, err)
 	}
 }

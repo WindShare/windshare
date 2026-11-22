@@ -39,10 +39,10 @@ func pausedPortableFileAt(t *testing.T, root string, size uint64) (string, trans
 	if err := transaction.WriteRange(ctx, 0, []byte("data")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := transaction.Pause(ctx, transfer.FilePauseShutdown); err != nil {
+	if _, err := transaction.Pause(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := session.PauseTree(ctx, transfer.JobPauseShutdown); err != nil {
+	if _, err := session.PauseTree(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if err := authority.Close(); err != nil {

@@ -30,7 +30,6 @@ func (resolver *fixedGetShapeResolver) ResolveOrdinaryOutputShape(
 	context.Context,
 	transfer.SelectionSpec,
 	ordinaryoutput.ShapeProbeBudget,
-	ordinaryoutput.ShapeTracer,
 ) (ordinaryoutput.ShapeDecision, error) {
 	resolver.calls++
 	if resolver.events != nil {

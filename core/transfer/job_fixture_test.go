@@ -385,39 +385,26 @@ type jobOutput struct {
 	transactionScripts       map[string]jobTransactionScript
 	capabilitiesOverride     *DirectTreeCapabilities
 	beginHook                func(MaterializationFile)
-	intent                   ReceiveIntent
-	binding                  DirectTreeSessionBinding
-	events                   []string
-	pauseCalls               int
-	completeCalls            int
-	completeSettlement       DirectTreeSettlementKind
-	pauseSettlement          DirectTreeSettlementKind
-	rawStart                 *FileStart
-	directoryAdmission       func(AuthenticatedSourceDirectory, DirectoryAdmission) (DirectoryAdmission, error)
-	directorySettlement      func(DirectoryAdmission) (DirectorySettlement, error)
-	directorySecret          [directoryAdmissionSecretBytes]byte
+	intent              ReceiveIntent
+	events              []string
+	pauseCalls          int
+	completeCalls       int
+	completeSettlement  DirectTreeSettlementKind
+	pauseSettlement     DirectTreeSettlementKind
+	rawStart            *FileStart
+	directoryAdmission  func(AuthenticatedSourceDirectory, DirectoryAdmission) (DirectoryAdmission, error)
+	directorySettlement func(DirectoryAdmission) (DirectorySettlement, error)
 }
 
 func newJobOutput(share catalog.ShareInstance) *jobOutput {
-	// A monotonic nonce prevents independent fake sessions from sharing receipt
-	// authority while keeping the test data deterministic and failure-free.
-	directorySecret := sha256.Sum256(fmt.Appendf(nil,
-		"%s/%x/%d", jobMaterializationDirectorySecretDomain, share.Bytes(), jobDirectTreeSessionNonce.Add(1),
-	))
 	return &jobOutput{
 		share: share, session: transferID[OutputSessionID](44), durable: make(map[string]content.RangeSet),
 		transactions: make(map[string]*jobFileTransaction), immediate: make(map[string]FileSettlement),
 		transactionScripts: make(map[string]jobTransactionScript),
-		directorySecret:    directorySecret,
 	}
 }
 
 func (o *jobOutput) SessionID() OutputSessionID { return o.session }
-func (o *jobOutput) Binding() DirectTreeSessionBinding {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	return o.binding
-}
 func (o *jobOutput) Capabilities() DirectTreeCapabilities {
 	if o.capabilitiesOverride != nil {
 		return *o.capabilitiesOverride
@@ -430,13 +417,11 @@ func (o *jobOutput) Capabilities() DirectTreeCapabilities {
 }
 
 func (o *jobOutput) OpenDirectTree(_ context.Context, intent ReceiveIntent) (DirectTreeSession, error) {
-	binding, err := BindDirectTreeSession(intent)
-	if err != nil {
-		return nil, err
+	if intent.IsZero() {
+		return nil, ErrInvalidOutputBinding
 	}
 	o.mu.Lock()
 	o.intent = intent
-	o.binding = binding
 	o.events = append(o.events, "open")
 	o.mu.Unlock()
 	if o.admitErr != nil {
@@ -463,18 +448,11 @@ func (o *jobOutput) AdmitDirectory(_ context.Context, request DirectoryMateriali
 	if o.ensureErr != nil {
 		return DirectoryAdmission{}, o.ensureErr
 	}
-	o.mu.Lock()
-	intent := o.intent
-	o.mu.Unlock()
-	scope, err := NewDirectoryAdmissionScope(intent)
-	if err != nil {
-		return DirectoryAdmission{}, err
-	}
 	materialization, projected := request.Directory()
 	if !projected {
 		return DirectoryAdmission{}, ErrInvalidDirectoryAdmission
 	}
-	admission, err := NewDirectoryAdmissionWithSecret(o.directorySecret[:], scope, materialization)
+	admission, err := NewDirectoryAdmission(materialization)
 	if err != nil {
 		return DirectoryAdmission{}, err
 	}
@@ -570,7 +548,7 @@ func (o *jobOutput) FinalizeTree(_ context.Context, outcome DirectTreeOutcome) (
 	return NewDirectTreeSettlement(kind)
 }
 
-func (o *jobOutput) PauseTree(context.Context, JobPauseReason) (DirectTreeSettlement, error) {
+func (o *jobOutput) PauseTree(context.Context) (DirectTreeSettlement, error) {
 	o.mu.Lock()
 	o.aborted = true
 	o.pauseCalls++
@@ -602,7 +580,7 @@ type jobTransactionScript struct {
 	pauseSettlement          FileSettlementKind
 	pauseErr                 error
 	pauseResult              *FileSettlement
-	pauseHook                func(context.Context, FilePauseReason)
+	pauseHook                func(context.Context)
 	pausePersistsPending     bool
 	pauseAdvancesGeneration  bool
 	retireSettlement         FileSettlementKind
@@ -612,18 +590,18 @@ type jobTransactionScript struct {
 }
 
 type jobFileTransaction struct {
-	output        *jobOutput
-	binding       MaterializedFileBinding
-	durable       content.RangeSet
-	transient     content.RangeSet
-	pending       content.RangeSet
-	generation    CheckpointGeneration
-	commitCalls   int
-	committed     bool
-	aborted       bool
-	pauseReasons  []FilePauseReason
-	retireReasons []FileRetireReason
-	script        jobTransactionScript
+	output      *jobOutput
+	binding     MaterializedFileBinding
+	durable     content.RangeSet
+	transient   content.RangeSet
+	pending     content.RangeSet
+	generation  CheckpointGeneration
+	commitCalls int
+	committed   bool
+	aborted     bool
+	pauseCalls  int
+	retireCalls int
+	script      jobTransactionScript
 }
 
 func (t *jobFileTransaction) Binding() MaterializedFileBinding { return t.binding }
@@ -728,11 +706,11 @@ func (t *jobFileTransaction) Commit(context.Context) (FileSettlement, error) {
 	return newJobFileSettlement(t.binding, kind, checkpoint)
 }
 
-func (t *jobFileTransaction) Pause(ctx context.Context, reason FilePauseReason) (FileSettlement, error) {
+func (t *jobFileTransaction) Pause(ctx context.Context) (FileSettlement, error) {
 	t.aborted = true
-	t.pauseReasons = append(t.pauseReasons, reason)
+	t.pauseCalls++
 	if t.script.pauseHook != nil {
-		t.script.pauseHook(ctx, reason)
+		t.script.pauseHook(ctx)
 	}
 	if t.script.pauseErr != nil {
 		return FileSettlement{}, t.script.pauseErr
@@ -765,9 +743,9 @@ func (t *jobFileTransaction) Pause(ctx context.Context, reason FilePauseReason) 
 	return newJobFileSettlement(t.binding, kind, checkpoint)
 }
 
-func (t *jobFileTransaction) Retire(_ context.Context, reason FileRetireReason) (FileSettlement, error) {
+func (t *jobFileTransaction) Retire(_ context.Context) (FileSettlement, error) {
 	t.aborted = true
-	t.retireReasons = append(t.retireReasons, reason)
+	t.retireCalls++
 	if t.script.retireErr != nil {
 		return FileSettlement{}, t.script.retireErr
 	}

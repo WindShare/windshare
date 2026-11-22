@@ -70,11 +70,11 @@ func newRetainedCandidateFixture(t *testing.T, name string, seed byte) retainedC
 	if err != nil || len(durable.Ranges().Ranges()) != 1 {
 		t.Fatalf("initial checkpoint = (%v, %v)", durable.Ranges().Ranges(), err)
 	}
-	if settlement, err := transaction.Pause(ctx, transfer.FilePauseInterrupted); err != nil ||
+	if settlement, err := transaction.Pause(ctx); err != nil ||
 		settlement.Kind() != transfer.FilePaused {
 		t.Fatalf("initial file pause = (%d, %v)", settlement.Kind(), err)
 	}
-	if settlement, err := session.PauseTree(ctx, transfer.JobPauseInterrupted); err != nil ||
+	if settlement, err := session.PauseTree(ctx); err != nil ||
 		settlement.Kind() != transfer.DirectTreeSettlementPaused {
 		t.Fatalf("initial tree pause = (%d, %v)", settlement.Kind(), err)
 	}
@@ -138,7 +138,7 @@ func reopenRetainedCandidateOutput(t *testing.T, fixture retainedCandidateFixtur
 		t.Fatal(err)
 	}
 	if !continueFile {
-		if settlement, pauseErr := resumedSession.PauseTree(ctx, transfer.JobPauseInterrupted); pauseErr != nil ||
+		if settlement, pauseErr := resumedSession.PauseTree(ctx); pauseErr != nil ||
 			settlement.Kind() != transfer.DirectTreeSettlementPaused {
 			t.Fatalf("tree pause = (%d, %v)", settlement.Kind(), pauseErr)
 		}
@@ -168,11 +168,11 @@ func reopenRetainedCandidateOutput(t *testing.T, fixture retainedCandidateFixtur
 	if _, err := resumedTransaction.Checkpoint(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if settlement, err := resumedTransaction.Pause(ctx, transfer.FilePauseInterrupted); err != nil ||
+	if settlement, err := resumedTransaction.Pause(ctx); err != nil ||
 		settlement.Kind() != transfer.FilePaused {
 		t.Fatalf("resumed file pause = (%d, %v)", settlement.Kind(), err)
 	}
-	if settlement, err := resumedSession.PauseTree(ctx, transfer.JobPauseInterrupted); err != nil ||
+	if settlement, err := resumedSession.PauseTree(ctx); err != nil ||
 		settlement.Kind() != transfer.DirectTreeSettlementPaused {
 		t.Fatalf("resumed tree pause = (%d, %v)", settlement.Kind(), err)
 	}

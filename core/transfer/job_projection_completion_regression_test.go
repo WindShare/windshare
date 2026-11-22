@@ -122,14 +122,11 @@ func TestSelectedDirectoryAnchorDriftIsRejectedBeforeOutputAdmission(t *testing.
 	intent := directoryProjectionDriftIntent(t, share, root, frozenDirectory, sourcePath, rules)
 	tree, directoryTree := intent.ArtifactSpec().DirectoryTree()
 	resultRoot, resultRootArtifact := tree.ResultRoot()
-	scope, scopeErr := NewDirectoryAdmissionScope(intent)
-	rootExpectation := scope.RootExpectation()
-	if !directoryTree || !resultRootArtifact || scopeErr != nil ||
+	if !directoryTree || !resultRootArtifact ||
 		resultRoot.SourcePath() != sourcePath ||
-		rootExpectation.Kind() != DirectoryAdmissionDirectoryAnchor ||
-		rootExpectation.DirectoryID() != frozenDirectory || rootExpectation.Path() != resultRoot.Name() {
-		t.Fatalf("source/materialization coordinates = (source %q, root %q, scope error %v)",
-			resultRoot.SourcePath(), rootExpectation.Path(), scopeErr)
+		resultRoot.DirectoryID() != frozenDirectory {
+		t.Fatalf("source/materialization coordinates = (source %q, root %q)",
+			resultRoot.SourcePath(), resultRoot.Name())
 	}
 	catalogClient := &countingJobCatalog{
 		snapshots: map[catalog.DirectoryID]catalog.DirectorySnapshot{

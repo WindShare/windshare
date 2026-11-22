@@ -154,7 +154,7 @@ func (parent MaterializationFileParent) valid() bool {
 		materializationMatches := parent.materialization.Valid() &&
 			parent.materialization.Admission().Equal(parent.admission)
 		catalogRootReference := !parent.materialization.Valid() &&
-			parent.admission.Layout() == DirectoryAdmissionTreeCatalogRoot && parent.admission.Path() == ""
+			!parent.admission.HasParent() && parent.admission.Path() == ""
 		return !parent.admission.IsZero() && (materializationMatches || catalogRootReference) &&
 			parent.admission.DirectoryID() == parent.directory &&
 			parent.admission.Generation() == parent.generation
@@ -265,6 +265,7 @@ func MaterializeOrdinaryOutputShape(
 // logical output authority. Its fields are closed so only the frozen projector
 // can mint the projection consumed by DirectTreeSession.
 type DirectoryMaterializationRequest struct {
+	intentDigest          ReceiveIntentDigest
 	source                AuthenticatedSourceDirectory
 	role                  ordinaryoutput.SourceNodeRole
 	projection            ordinaryoutput.ArtifactPathProjection
@@ -334,40 +335,24 @@ func projectDirectoryMaterializationRequest(
 		return DirectoryMaterializationRequest{}, projection, nil
 	}
 	return DirectoryMaterializationRequest{
-		source: source, role: role, projection: projection, directory: directory,
+		intentDigest: projector.intentDigest,
+		source:       source, role: role, projection: projection, directory: directory,
 		materialized: materialized, parentMaterialization: parent,
 	}, projection, nil
 }
 
-func (request DirectoryMaterializationRequest) matchesProjector(
-	projector directTreeCoordinateProjector,
-) bool {
-	projected, projection, err := projectDirectoryMaterializationRequest(
-		projector, request.source, request.role, request.parentMaterialization,
-	)
-	return err == nil && projection.Kind() != ordinaryoutput.ArtifactReject && projected == request
-}
-
-// DirectoryMaterializationMatchesIntent lets an output session revalidate the
-// closed request against its own immutable intent instead of trusting the
-// projector instance supplied by a caller.
+// DirectoryMaterializationMatchesIntent verifies that a closed request was
+// projected under the session's immutable ReceiveIntent.
 func DirectoryMaterializationMatchesIntent(
 	intent ReceiveIntent,
 	request DirectoryMaterializationRequest,
 ) bool {
-	coordinates, err := newDirectTreeCoordinateProjector(intent)
-	return err == nil && directoryMaterializationMatchesProjector(coordinates, request)
-}
-
-func directoryMaterializationMatchesProjector(
-	projector directTreeCoordinateProjector,
-	request DirectoryMaterializationRequest,
-) bool {
-	return request.matchesProjector(projector)
+	return !intent.IsZero() && request.intentDigest == intent.Digest() &&
+		request.projection.Kind() != ordinaryoutput.ArtifactReject
 }
 
 // MaterializedDirectoryClaim can only be derived from the exact projected
-// directory request that produced its authenticated admission.
+// directory request that produced its admission.
 type MaterializedDirectoryClaim struct {
 	admission DirectoryAdmission
 	path      MaterializationRootRelativePath
@@ -377,19 +362,10 @@ func NewMaterializedDirectoryClaim(
 	admission DirectoryAdmission,
 	request DirectoryMaterializationRequest,
 ) (MaterializedDirectoryClaim, error) {
-	source := request.source
 	directory, materialized := request.Directory()
 	_, projectedArtifact := request.projection.ArtifactPath()
-	var expectedParentToken []byte
-	if materialized && !directory.ParentAdmission().IsZero() {
-		expectedParentToken = directory.ParentAdmission().Bytes()
-	}
-	if !materialized || !projectedArtifact || admission.IsZero() ||
-		admission.DirectoryID() != source.DirectoryID || admission.DirectoryID() != directory.DirectoryID() ||
-		admission.Generation() != source.Generation || admission.Generation() != directory.Generation() ||
-		admission.Path() != directory.Path().String() ||
-		admission.ModifiedTime() != source.ModifiedTime ||
-		!bytes.Equal(admission.ParentToken(), expectedParentToken) {
+	expected, err := NewDirectoryAdmission(directory)
+	if !materialized || !projectedArtifact || err != nil || !admission.Equal(expected) {
 		return MaterializedDirectoryClaim{}, ErrInvalidOutputBinding
 	}
 	return MaterializedDirectoryClaim{admission: admission, path: directory.Path()}, nil
@@ -408,6 +384,7 @@ func (claim MaterializedDirectoryClaim) Valid() bool {
 // reinterpret a source path as a second mapping authority. Physical destination
 // coordinates are intentionally added only by the executor's private claim.
 type MaterializationFile struct {
+	intentDigest                ReceiveIntentDigest
 	sourcePath                  ordinaryoutput.SourceCatalogPath
 	artifactPath                ordinaryoutput.ArtifactPath
 	materializationRelativePath MaterializationRootRelativePath
@@ -454,7 +431,8 @@ func newMaterializationFile(
 		return MaterializationFile{}, err
 	}
 	return MaterializationFile{
-		sourcePath: sourcePath, artifactPath: artifactPath,
+		intentDigest: projector.intentDigest,
+		sourcePath:   sourcePath, artifactPath: artifactPath,
 		materializationRelativePath: materializationRelativePath,
 		descriptor:                  descriptor, target: target, parent: parent,
 	}, nil
@@ -486,22 +464,10 @@ func (file MaterializationFile) validProjected() bool {
 	return true
 }
 
-// MaterializationFileMatchesIntent re-projects the authenticated source against
-// the session's intent and compares every logical/checkpoint coordinate.
+// MaterializationFileMatchesIntent verifies that a closed projected file
+// request belongs to the session's immutable ReceiveIntent.
 func MaterializationFileMatchesIntent(intent ReceiveIntent, file MaterializationFile) bool {
-	projector, err := newDirectTreeCoordinateProjector(intent)
-	return err == nil && materializationFileMatchesProjector(projector, file)
-}
-
-func materializationFileMatchesProjector(
-	projector directTreeCoordinateProjector,
-	file MaterializationFile,
-) bool {
-	if !file.validProjected() {
-		return false
-	}
-	artifact, relative, err := projector.projectFile(file.sourcePath, file.descriptor.FileID(), file.parent)
-	return err == nil && artifact == file.artifactPath && relative == file.materializationRelativePath
+	return !intent.IsZero() && file.intentDigest == intent.Digest() && file.validProjected()
 }
 
 func OrdinaryOutputArtifactPathProjector(

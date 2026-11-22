@@ -71,7 +71,6 @@ func (runtime *Runtime) ResolveOrdinaryOutputShape(
 	ctx context.Context,
 	selection transfer.SelectionSpec,
 	budget ordinaryoutput.ShapeProbeBudget,
-	tracer ordinaryoutput.ShapeTracer,
 ) (ordinaryoutput.ShapeDecision, error) {
 	if runtime == nil || runtime.core == nil || runtime.catalog == nil {
 		return ordinaryoutput.ShapeDecision{}, session.ErrRuntimeClosed
@@ -93,7 +92,6 @@ func (runtime *Runtime) ResolveOrdinaryOutputShape(
 		receiverTransferDependencies{runtime: runtime},
 		input,
 		budget,
-		ordinaryoutput.BindShapeTracerToSession(runtime.ProtocolSessionID(), tracer),
 	)
 }
 

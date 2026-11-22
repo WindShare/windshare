@@ -18,7 +18,7 @@ func TestTransferJobFailureTaxonomyPreservesScopeAndCause(t *testing.T) {
 		got.Scope() != fault.ScopeFileLocal {
 		t.Fatalf("permanent source failure = %v", got)
 	}
-	if fileRetireReason(permanent) != FileRetireIsolatedPermanentSourceFailure {
+	if !lifecyclePolicyFor(permanent).shouldRetire() {
 		t.Fatal("isolated permanent source failure did not authorize retirement")
 	}
 
@@ -38,13 +38,8 @@ func TestTransferJobFailureTaxonomyPreservesScopeAndCause(t *testing.T) {
 	if got := normalizedFault(dependency); got != fault.DependencyContractFault() || !isJobTerminalError(dependency) {
 		t.Fatalf("dependency contract failure = %v", got)
 	}
-	if filePauseReason(budget) != FilePauseResourceBudget ||
-		jobPauseReason(budget, nil) != JobPauseResourceBudget {
-		t.Fatal("resource budget failure was persisted as a foreign failure class")
-	}
-	if filePauseReason(dependency) != FilePauseDependencyContract ||
-		jobPauseReason(dependency, nil) != JobPauseDependencyContract {
-		t.Fatal("dependency contract failure was persisted as a foreign failure class")
+	if lifecyclePolicyFor(budget).shouldRetire() || lifecyclePolicyFor(dependency).shouldRetire() {
+		t.Fatal("non-source fault authorized retirement")
 	}
 }
 
@@ -64,21 +59,6 @@ func TestTransferJobDirectTreeSessionAndFileValidatorsFailClosed(t *testing.T) {
 	if err := validateDirectTreeSession(intent, output); err != nil {
 		t.Fatalf("valid output session error = %v", err)
 	}
-	sessionBinding := output.Binding()
-	if sessionBinding.ReceiveIntentDigest() != intent.Digest() ||
-		sessionBinding.OperationID() != intent.OperationID() ||
-		sessionBinding.BindingDigest() != intent.BindingDigest() {
-		t.Fatalf("direct tree session binding = %+v", sessionBinding)
-	}
-	if _, err := BindDirectTreeSession(ReceiveIntent{}); !errors.Is(err, ErrInvalidOutputBinding) {
-		t.Fatalf("zero intent binding error = %v", err)
-	}
-	validBinding := output.binding
-	output.binding.operationID[0] ^= 0xff
-	if err := validateDirectTreeSession(intent, output); normalizedFault(err) != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) {
-		t.Fatalf("foreign intent binding error = %v", err)
-	}
-	output.binding = validBinding
 	output.session = OutputSessionID{}
 	if err := validateDirectTreeSession(intent, output); normalizedFault(err) != mustOutputFault(fault.ScopeOutputPause, fault.OutputContract) {
 		t.Fatalf("zero output session identity error = %v", err)
@@ -133,25 +113,14 @@ func TestTransferJobDirectTreeSessionAndFileValidatorsFailClosed(t *testing.T) {
 }
 
 func TestTransferJobDirectorySettlementValidatorRequiresExactAdmission(t *testing.T) {
-	share := transferID[catalog.ShareInstance](0xa1)
 	root := transferID[catalog.DirectoryID](0xa2)
-	rules, err := NewSelectionRules(true, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	scope, err := NewDirectoryAdmissionScope(testReceiveIntent(t, share, root, rules))
-	if err != nil {
-		t.Fatal(err)
-	}
-	secret := make([]byte, directoryAdmissionSecretBytes)
-	secret[0] = 1
-	rootAdmission, err := NewDirectoryAdmissionWithSecret(secret, scope, admissionTestMaterializationDirectory(t, admissionTestDirectory(
+	rootAdmission, err := NewDirectoryAdmission(admissionTestMaterializationDirectory(t, admissionTestDirectory(
 		t, root, transferID[catalog.DirectoryGeneration](0xa3), DirectoryAdmission{}, "", catalog.ModifiedTime{},
 	)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	childAdmission, err := NewDirectoryAdmissionWithSecret(secret, scope, admissionTestMaterializationDirectory(t, admissionTestDirectory(
+	childAdmission, err := NewDirectoryAdmission(admissionTestMaterializationDirectory(t, admissionTestDirectory(
 		t, transferID[catalog.DirectoryID](0xa4), transferID[catalog.DirectoryGeneration](0xa5),
 		rootAdmission, "child", catalog.ModifiedTime{},
 	)))

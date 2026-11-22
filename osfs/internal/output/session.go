@@ -2,9 +2,7 @@ package output
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
-	"io"
 	"io/fs"
 	"sync"
 
@@ -25,25 +23,15 @@ type dirState struct {
 	settlement    transfer.DirectorySettlement
 }
 
-type admissionKey [sha256.Size]byte
-
-func keyForAdmission(a transfer.DirectoryAdmission) admissionKey {
-	var k admissionKey
-	copy(k[:], a.Bytes())
-	return k
-}
-
 // Session implements transfer.DirectTreeSession and transfer.DeliveryHistory
 // directly over an active Operation's journal and open directory handles.
 type Session struct {
 	authority    *Authority
 	op           *Operation
 	intent       transfer.ReceiveIntent
-	binding      transfer.DirectTreeSessionBinding
-	scope        transfer.DirectoryAdmissionScope
+	expectsRoot  bool
 	sessionID    transfer.OutputSessionID
 	capabilities transfer.DirectTreeCapabilities
-	secret       [sha256.Size]byte
 	names        *nameMapper
 
 	mu              sync.Mutex
@@ -51,7 +39,6 @@ type Session struct {
 	closeSettlement transfer.DirectTreeSettlement
 	closeKind       uint8 // 1 = paused, 2 = finalized
 	rootSettled     bool
-	dirsByToken     map[admissionKey]*dirState
 	dirsByLogical   map[string]*dirState
 	activeFiles     map[string]*fileTransaction
 	settledFiles    map[string]transfer.FileSettlement
@@ -63,24 +50,16 @@ var (
 )
 
 func newSession(a *Authority, op *Operation) (*Session, error) {
-	binding, err := transfer.BindDirectTreeSession(op.intent)
-	if err != nil {
-		return nil, err
+	if op.intent.IsZero() {
+		return nil, transfer.ErrInvalidOutputBinding
 	}
-	scope, err := transfer.NewDirectoryAdmissionScope(op.intent)
-	if err != nil {
-		return nil, err
+	tree, ok := op.intent.ArtifactSpec().DirectoryTree()
+	if !ok {
+		return nil, transfer.ErrInvalidOutputBinding
 	}
 	sessionID, err := randomSessionID(a.random)
 	if err != nil {
 		return nil, err
-	}
-	var secret [sha256.Size]byte
-	if _, err := io.ReadFull(a.random, secret[:]); err != nil {
-		return nil, err
-	}
-	if secret == ([sha256.Size]byte{}) {
-		return nil, transfer.ErrInvalidOutputBinding
 	}
 	reservation, ok := op.intent.MaterializationPlan().DestinationReservation()
 	if !ok {
@@ -122,13 +101,10 @@ func newSession(a *Authority, op *Operation) (*Session, error) {
 		authority:     a,
 		op:            op,
 		intent:        op.intent,
-		binding:       binding,
-		scope:         scope,
+		expectsRoot:   tree.Kind() != receivecontract.DirectoryTreeSingleFile,
 		sessionID:     sessionID,
 		capabilities:  caps,
-		secret:        secret,
 		names:         mapper,
-		dirsByToken:   make(map[admissionKey]*dirState),
 		dirsByLogical: make(map[string]*dirState),
 		activeFiles:   make(map[string]*fileTransaction),
 		settledFiles:  make(map[string]transfer.FileSettlement),
@@ -136,7 +112,6 @@ func newSession(a *Authority, op *Operation) (*Session, error) {
 }
 
 func (s *Session) SessionID() transfer.OutputSessionID           { return s.sessionID }
-func (s *Session) Binding() transfer.DirectTreeSessionBinding    { return s.binding }
 func (s *Session) Capabilities() transfer.DirectTreeCapabilities { return s.capabilities }
 
 func (s *Session) LookupDelivery(
@@ -222,25 +197,26 @@ func (s *Session) AdmitDirectory(
 	if s.closed {
 		return transfer.DirectoryAdmission{}, transfer.ErrDirectTreeSessionFatal
 	}
-	admission, err := transfer.NewDirectoryAdmissionWithSecret(s.secret[:], s.scope, dirReq)
+	admission, err := transfer.NewDirectoryAdmission(dirReq)
 	if err != nil {
 		return transfer.DirectoryAdmission{}, err
 	}
-	token := keyForAdmission(admission)
-	if existing, found := s.dirsByToken[token]; found {
-		return existing.admission, nil
-	}
 	logicalPath := dirReq.Path().String()
+	if existing, found := s.dirsByLogical[logicalPath]; found {
+		if existing.admission.Equal(admission) {
+			return existing.admission, nil
+		}
+		return transfer.DirectoryAdmission{}, transfer.ErrInvalidOutputBinding
+	}
 
-	// Traverse-only directories need an authenticated admission token for child
-	// lineage, but do not create a directory on disk.
+	// Traverse-only directories need an admission for child lineage, but do not
+	// create a directory on disk.
 	if request.Projection().Kind() == ordinaryoutput.ArtifactTraverseOnly {
 		state := &dirState{
 			admission:    admission,
 			logicalPath:  logicalPath,
 			materialized: false,
 		}
-		s.dirsByToken[token] = state
 		s.dirsByLogical[logicalPath] = state
 		return admission, nil
 	}
@@ -256,7 +232,6 @@ func (s *Session) AdmitDirectory(
 		isSessionRoot: isRoot,
 		dir:           dirHandle,
 	}
-	s.dirsByToken[token] = state
 	s.dirsByLogical[logicalPath] = state
 	return admission, nil
 }
@@ -270,8 +245,8 @@ func (s *Session) openAdmittedDirLocked(
 		// Root of the reserved tree is already bound in op.resultDir.
 		return s.op.resultDir, true, nil
 	}
-	parentState, found := s.dirsByToken[keyForAdmission(parentAdmission)]
-	if !found || !parentState.materialized || parentState.dir == nil {
+	parentState, found := s.dirsByLogical[parentAdmission.Path()]
+	if !found || !parentState.admission.Equal(parentAdmission) || !parentState.materialized || parentState.dir == nil {
 		// Ancestor may be traverse-only when selecting a deep subdirectory as result root.
 		if logicalPath == s.names.requestedRoot && s.names.entryKind == receivecontract.ContainerEntryResultRoot {
 			return s.op.resultDir, true, nil
@@ -326,7 +301,7 @@ func (s *Session) FinalizeDirectory(
 	if s.closed {
 		return transfer.DirectorySettlement{}, transfer.ErrDirectTreeSessionFatal
 	}
-	state, ok := s.dirsByToken[keyForAdmission(admission)]
+	state, ok := s.dirsByLogical[admission.Path()]
 	if !ok || !state.admission.Equal(admission) {
 		return transfer.DirectorySettlement{}, transfer.ErrInvalidOutputBinding
 	}
@@ -362,10 +337,7 @@ func (s *Session) FinalizeDirectory(
 	return settlement, nil
 }
 
-func (s *Session) PauseTree(
-	ctx context.Context,
-	reason transfer.JobPauseReason,
-) (transfer.DirectTreeSettlement, error) {
+func (s *Session) PauseTree(ctx context.Context) (transfer.DirectTreeSettlement, error) {
 	if ctx == nil {
 		return transfer.DirectTreeSettlement{}, transfer.ErrInvalidOutputBinding
 	}
@@ -387,7 +359,7 @@ func (s *Session) PauseTree(
 
 	var pauseErr error
 	for _, tx := range active {
-		if _, err := tx.Pause(ctx, transfer.FilePauseInterrupted); err != nil {
+		if _, err := tx.Pause(ctx); err != nil {
 			pauseErr = errors.Join(pauseErr, err)
 		}
 	}
@@ -440,15 +412,13 @@ func (s *Session) FinalizeTree(
 		s.mu.Unlock()
 		return transfer.DirectTreeSettlement{}, transfer.ErrInvalidOutputBinding
 	}
-	for _, d := range s.dirsByToken {
+	for _, d := range s.dirsByLogical {
 		if !d.finalized {
 			s.mu.Unlock()
 			return transfer.DirectTreeSettlement{}, transfer.ErrInvalidOutputBinding
 		}
 	}
-	if outcome == transfer.DirectTreeOutcomeSuccess &&
-		s.scope.RootExpectation().Kind() != transfer.DirectoryAdmissionNoRoot &&
-		!s.rootSettled {
+	if outcome == transfer.DirectTreeOutcomeSuccess && s.expectsRoot && !s.rootSettled {
 		s.mu.Unlock()
 		return transfer.DirectTreeSettlement{}, transfer.ErrInvalidOutputBinding
 	}
@@ -515,7 +485,7 @@ func (s *Session) FinalizeTree(
 }
 
 func (s *Session) closeDirHandlesLocked() {
-	for _, state := range s.dirsByToken {
+	for _, state := range s.dirsByLogical {
 		if state.materialized && !state.isSessionRoot && state.dir != nil {
 			_ = state.dir.Close()
 			state.dir = nil
