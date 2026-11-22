@@ -20,11 +20,13 @@ import (
 )
 
 const (
-	journalMaxLineBytes         = 4 << 20
-	publicationFingerprintBytes = sha256.Size
-	journalLifecycleActive      = "active"
-	journalLifecycleStopped     = "share_stopped"
-	journalLifecycleAttn        = "attention"
+	journalHeaderReadBufferBytes = 4 * 1024
+	journalStateReadBufferBytes  = 32 * 1024
+	journalMaxLineBytes          = 4 << 20
+	publicationFingerprintBytes  = sha256.Size
+	journalLifecycleActive       = "active"
+	journalLifecycleStopped      = "share_stopped"
+	journalLifecycleAttn         = "attention"
 )
 
 var errJournalCorrupt = errors.New("osfs: task journal is corrupt")
@@ -56,6 +58,16 @@ type journalRecord struct {
 	CheckpointGen uint64          `json:"cgen,omitempty"`
 	BlockedReason uint16          `json:"blk,omitempty"`
 	Fingerprint   string          `json:"fp,omitempty"`
+}
+
+// taskHeader holds the immutable creation fields persisted on the first record
+// of state.log (both at creation and after compaction). Mutable lifecycle
+// fields (Lifecycle, Attention, StateGen) can be updated by later records and
+// are excluded here so header-only readers cannot observe stale state.
+type taskHeader struct {
+	Intent          transfer.ReceiveIntent
+	SelectionDigest [transfer.SelectionSpecDigestBytes]byte
+	Redownload      bool
 }
 
 type taskMeta struct {
@@ -141,15 +153,30 @@ func (s *journalState) apply(rec journalRecord) error {
 	}
 }
 
+func decodeTaskHeader(rec journalRecord) (taskHeader, error) {
+	if rec.Kind != "meta" || len(rec.Intent) == 0 || rec.StateGen == 0 {
+		return taskHeader{}, fmt.Errorf("%w: missing meta header", errJournalCorrupt)
+	}
+	intent, err := transfer.DecodeReceiveIntent(rec.Intent)
+	if err != nil {
+		return taskHeader{}, fmt.Errorf("%w: decode intent: %w", errJournalCorrupt, err)
+	}
+	return taskHeader{
+		Intent:          intent,
+		SelectionDigest: intent.SelectionSpec().Digest(),
+		Redownload:      rec.Redownload,
+	}, nil
+}
+
 func (s *journalState) applyMeta(rec journalRecord) error {
 	if len(rec.Intent) > 0 {
-		intent, err := transfer.DecodeReceiveIntent(rec.Intent)
+		header, err := decodeTaskHeader(rec)
 		if err != nil {
-			return fmt.Errorf("%w: decode intent: %w", errJournalCorrupt, err)
+			return err
 		}
-		s.meta.Intent = intent
-		s.meta.SelectionDigest = intent.SelectionSpec().Digest()
-		s.meta.Redownload = rec.Redownload
+		s.meta.Intent = header.Intent
+		s.meta.SelectionDigest = header.SelectionDigest
+		s.meta.Redownload = header.Redownload
 		s.hasMeta = true
 	}
 	if rec.Lifecycle != "" {
@@ -399,6 +426,44 @@ func parseJournalLine(line []byte) (journalRecord, error) {
 	return rec, nil
 }
 
+// readJournalHeader reads only the immutable first record of state.log without
+// replaying file-level progress entries. Callers that need mutable lifecycle
+// state, full integrity validation, or per-file checkpoints must use
+// readJournalState.
+func readJournalHeader(opDir *Dir) (taskHeader, error) {
+	f, err := openChildFile(opDir, journalFileName, os.O_RDONLY, 0)
+	if err != nil {
+		return taskHeader{}, err
+	}
+	defer f.Close()
+
+	// Bound total bytes read so a corrupt file without a newline cannot force
+	// unbounded allocation during directory-wide scans.
+	reader := bufio.NewReaderSize(io.LimitReader(f, journalMaxLineBytes+1), journalHeaderReadBufferBytes)
+	for {
+		raw, readErr := reader.ReadBytes('\n')
+		if len(raw) > journalMaxLineBytes {
+			return taskHeader{}, errJournalCorrupt
+		}
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			return taskHeader{}, readErr
+		}
+		if len(raw) == 0 && errors.Is(readErr, io.EOF) {
+			return taskHeader{}, fmt.Errorf("%w: missing meta header", errJournalCorrupt)
+		}
+		hasNewline := len(raw) > 0 && raw[len(raw)-1] == '\n'
+		trimmed := bytes.TrimSuffix(raw, []byte("\n"))
+		if len(trimmed) == 0 && hasNewline {
+			continue
+		}
+		rec, parseErr := parseJournalLine(trimmed)
+		if parseErr != nil {
+			return taskHeader{}, parseErr
+		}
+		return decodeTaskHeader(rec)
+	}
+}
+
 // readJournalState loads and validates state.log read-only. A torn trailing
 // line without newline (from a mid-write crash) is tolerated; corruption in
 // earlier lines or a missing meta header returns errJournalCorrupt.
@@ -410,7 +475,7 @@ func readJournalState(opDir *Dir) (journalState, int64, error) {
 	}
 	defer f.Close()
 
-	reader := bufio.NewReaderSize(f, 32*1024)
+	reader := bufio.NewReaderSize(f, journalStateReadBufferBytes)
 	var validBytes int64
 	for {
 		raw, readErr := reader.ReadBytes('\n')

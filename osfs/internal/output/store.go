@@ -301,12 +301,12 @@ func findAutomaticMatchesLocked(
 		if err != nil {
 			continue
 		}
-		state, _, readErr := readJournalState(opDir)
+		header, readErr := readJournalHeader(opDir)
 		_ = opDir.Close()
-		if readErr != nil || !state.hasMeta || state.meta.Redownload {
+		if readErr != nil || header.Redownload {
 			continue
 		}
-		if state.meta.SelectionDigest == wantDigest {
+		if header.SelectionDigest == wantDigest {
 			matches = append(matches, name)
 		}
 	}

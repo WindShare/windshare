@@ -387,12 +387,12 @@ func existingSingleFileClaims(ctrlDir *Dir) map[string]struct{} {
 		if err != nil {
 			continue
 		}
-		state, _, err := readJournalState(opDir)
+		header, err := readJournalHeader(opDir)
 		_ = opDir.Close()
-		if err != nil || !state.hasMeta {
+		if err != nil {
 			continue
 		}
-		if res, ok := state.meta.Intent.MaterializationPlan().DestinationReservation(); ok &&
+		if res, ok := header.Intent.MaterializationPlan().DestinationReservation(); ok &&
 			res.Kind() == receivecontract.ReservationNamedContainerEntry &&
 			res.EntryKind() == receivecontract.ContainerEntrySingleFile {
 			claimed[res.PhysicalName()] = struct{}{}
