@@ -26,10 +26,10 @@ func TestInterruptedRangeRetainsOnlyAuthenticatedDeliveredIntervals(t *testing.T
 	f := newFixture(t)
 	runtime, channel := f.connect()
 	var count atomic.Int32
-	s, _ := New(context.Background(), runtime, func(context.Context, *receiversession.Runtime) (*receiversession.Runtime, error) {
+	s, _ := New(context.Background(), runtime, func(context.Context, *receiversession.Runtime) (Replacement, error) {
 		count.Add(1)
 		next, _ := f.connect()
-		return next, nil
+		return Replacement{Runtime: next}, nil
 	})
 	defer s.Close()
 	snapshot, release, err := s.AcquireDirectory(context.Background(), runtime.Descriptor().SyntheticRoot())
@@ -88,17 +88,17 @@ func TestInterruptedRangeRetainsOnlyAuthenticatedDeliveredIntervals(t *testing.T
 func TestReplacementRevisionDriftRejectsRetainedProgress(t *testing.T) {
 	f := newFixture(t, true)
 	runtime, wire := f.connect()
-	s, err := New(context.Background(), runtime, func(context.Context, *receiversession.Runtime) (*receiversession.Runtime, error) {
+	s, err := New(context.Background(), runtime, func(context.Context, *receiversession.Runtime) (Replacement, error) {
 		wire.sender.Close()
 		replacement := f.filename + ".replacement"
 		if writeErr := os.WriteFile(replacement, []byte("changed revision after network loss"), 0600); writeErr != nil {
-			return nil, writeErr
+			return Replacement{}, writeErr
 		}
 		if renameErr := os.Rename(replacement, f.filename); renameErr != nil {
-			return nil, renameErr
+			return Replacement{}, renameErr
 		}
 		next, _ := f.connect()
-		return next, nil
+		return Replacement{Runtime: next}, nil
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -160,9 +160,9 @@ func TestRefreshRevisionDriftSurvivesImmediatePathRetirement(t *testing.T) {
 	runtime, wire := f.connect()
 	var replacements atomic.Int32
 	var retiredReplacement *receiversession.Runtime
-	s, err := New(t.Context(), runtime, func(context.Context, *receiversession.Runtime) (*receiversession.Runtime, error) {
+	s, err := New(t.Context(), runtime, func(context.Context, *receiversession.Runtime) (Replacement, error) {
 		if replacements.Add(1) > 1 {
-			return nil, errors.New("unexpected reconnection after authenticated revision drift")
+			return Replacement{}, errors.New("unexpected reconnection after authenticated revision drift")
 		}
 		sender, nextWire := newPipe()
 		gate := &retireOnNthSendChannel{Channel: sender, wire: nextWire}
@@ -171,7 +171,7 @@ func TestRefreshRevisionDriftSurvivesImmediatePathRetirement(t *testing.T) {
 		// discarded handle's ReleaseRevision reply inside binding.refresh.
 		gate.remaining.Store(2)
 		retiredReplacement = next
-		return next, nil
+		return Replacement{Runtime: next}, nil
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -279,12 +279,12 @@ func TestConcurrentRecoveryJoinsOneFlightAndRejectsReusedSession(t *testing.T) {
 	runtime, channel := f.connect()
 	entered, release := make(chan struct{}), make(chan struct{})
 	var count atomic.Int32
-	s, _ := New(context.Background(), runtime, func(context.Context, *receiversession.Runtime) (*receiversession.Runtime, error) {
+	s, _ := New(context.Background(), runtime, func(context.Context, *receiversession.Runtime) (Replacement, error) {
 		count.Add(1)
 		close(entered)
 		<-release
 		next, _ := f.connect()
-		return next, nil
+		return Replacement{Runtime: next}, nil
 	})
 	defer s.Close()
 	_ = channel.Close()
@@ -312,8 +312,8 @@ func TestConcurrentRecoveryJoinsOneFlightAndRejectsReusedSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	bad, wire := f.connect()
-	rejected, _ := New(context.Background(), bad, func(context.Context, *receiversession.Runtime) (*receiversession.Runtime, error) {
-		return bad, nil
+	rejected, _ := New(context.Background(), bad, func(context.Context, *receiversession.Runtime) (Replacement, error) {
+		return Replacement{Runtime: bad}, nil
 	})
 	defer rejected.Close()
 	_ = wire.Close()
@@ -336,9 +336,9 @@ func (failedCursor) Close() error { return nil }
 func TestCatalogReplayPreservesCommitmentAndGenerationFence(t *testing.T) {
 	f := newFixture(t)
 	runtime, wire := f.connect()
-	s, _ := New(context.Background(), runtime, func(context.Context, *receiversession.Runtime) (*receiversession.Runtime, error) {
+	s, _ := New(context.Background(), runtime, func(context.Context, *receiversession.Runtime) (Replacement, error) {
 		next, _ := f.connect()
-		return next, nil
+		return Replacement{Runtime: next}, nil
 	})
 	defer s.Close()
 	cursor, err := s.OpenDirectoryPages(context.Background(), runtime.Descriptor().SyntheticRoot())
@@ -415,10 +415,10 @@ func TestFenceRecoveryCancellationJoinsReplacementOwner(t *testing.T) {
 	f := newFixture(t)
 	runtime, wire := f.connect()
 	entered := make(chan struct{})
-	s, _ := New(context.Background(), runtime, func(ctx context.Context, _ *receiversession.Runtime) (*receiversession.Runtime, error) {
+	s, _ := New(context.Background(), runtime, func(ctx context.Context, _ *receiversession.Runtime) (Replacement, error) {
 		close(entered)
 		<-ctx.Done()
-		return nil, ctx.Err()
+		return Replacement{}, ctx.Err()
 	})
 	expected := s.Current()
 	_ = wire.Close()
@@ -434,5 +434,47 @@ func TestFenceRecoveryCancellationJoinsReplacementOwner(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("replacement did not join")
+	}
+}
+
+func TestReplacementDiscardRunsInOrderWhenCanceledAfterCandidateReturn(t *testing.T) {
+	f := newFixture(t)
+	runtime, wire := f.connect()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	committed := false
+	discarded := false
+	var discardErr error
+	var runtimeLiveAtDiscard bool
+	s, err := New(ctx, runtime, func(_ context.Context, _ *receiversession.Runtime) (Replacement, error) {
+		next, _ := f.connect()
+		// Cancel right before returning so replaceGeneration sees s.ctx.Err() != nil
+		// after the callback returns a fresh candidate.
+		cancel()
+		return Replacement{
+			Runtime: next,
+			Commit:  func() { committed = true },
+			Discard: func(err error) {
+				discarded = true
+				discardErr = err
+				runtimeLiveAtDiscard = !next.Stopping()
+				next.Close()
+			},
+		}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	_ = wire.Close()
+	<-runtime.Done()
+	if err := s.recover(t.Context(), runtime); !errors.Is(err, context.Canceled) {
+		t.Fatalf("recover err = %v, want context.Canceled", err)
+	}
+	if committed {
+		t.Fatal("canceled replacement invoked Commit")
+	}
+	if !discarded || !errors.Is(discardErr, context.Canceled) || !runtimeLiveAtDiscard {
+		t.Fatalf("discarded=%v err=%v runtimeLiveAtDiscard=%v", discarded, discardErr, runtimeLiveAtDiscard)
 	}
 }

@@ -30,13 +30,17 @@ type receiveOperation struct {
 	execution *getTransferExecution
 }
 
-func (g *receiveOperation) close(stopReason ReceiverLocalStopReason) error {
+func (g *receiveOperation) close(resolveStop func(*getReceiverSession, *getTransferExecution) ReceiverLocalStopReason) error {
 	if g.continuation != nil {
 		g.continuation.Close()
 	}
 	g.mu.Lock()
 	session, execution := g.session, g.execution
 	g.mu.Unlock()
+	stopReason := ReceiverLocalStopCaller
+	if resolveStop != nil {
+		stopReason = resolveStop(session, execution)
+	}
 	execution.CloseWithReason(stopReason)
 	session.Close()
 	cleanupErr := g.observation.cleanupFailure()
@@ -52,7 +56,7 @@ func (g *receiveOperation) close(stopReason ReceiverLocalStopReason) error {
 	return cleanupErr
 }
 
-func (g *receiveOperation) replace(ctx context.Context, _ *receiversession.Runtime) (*receiversession.Runtime, error) {
+func (g *receiveOperation) replace(ctx context.Context, _ *receiversession.Runtime) (receivercontinuation.Replacement, error) {
 	g.mu.Lock()
 	oldSession, oldExecution := g.session, g.execution
 	g.mu.Unlock()
@@ -60,35 +64,40 @@ func (g *receiveOperation) replace(ctx context.Context, _ *receiversession.Runti
 	oldSession.Close()
 	if err := oldSession.runtime.CleanupError(); err != nil {
 		g.observation.recordCleanup(err)
-		return nil, err
+		return receivercontinuation.Replacement{}, err
 	}
 	g.options.native.CloseSession([16]byte(oldSession.runtime.ProtocolSessionID()))
 	g.observation.completeGeneration()
 	next, err := oldSession.recovery.replace(ctx)
 	if err != nil {
-		return nil, err
+		return receivercontinuation.Replacement{}, err
 	}
 	next.runtime.BindDownloadMetrics(g.metrics)
-	nextExecution, step := g.runner.prepareGetConnectivity(ctx, g.input, g.output, next.runtime, g.observation, g.options)
+	nextExecution, step := g.runner.prepareGetConnectivity(next.ctx, g.input, g.output, next.runtime, g.observation, g.options)
 	if step != stepReady {
 		next.Close()
 		failure := g.observation.failureSnapshot()
-		return nil, errors.Join(errors.New("replacement content admission failed"), failure.Cause)
+		return receivercontinuation.Replacement{}, errors.Join(errors.New("replacement content admission failed"), failure.Cause)
 	}
-	if ctx.Err() != nil {
-		// Retire the new peer while its replacement relay lane is still open,
-		// before receivercontinuation discards next.runtime on cancellation.
-		nextExecution.CloseWithReason(ReceiverLocalStopCaller)
-		next.Close()
-		return nil, ctx.Err()
-	}
-	g.mu.Lock()
-	g.session, g.execution = next, nextExecution
-	g.mu.Unlock()
-	generation := GenerationChanged{Previous: oldSession.runtime.ProtocolSessionID(), Current: next.runtime.ProtocolSessionID()}
-	generation.Operation, generation.Job = g.output.paths.transferIdentity()
-	g.observation.emit(generation)
-	return next.runtime, nil
+	return receivercontinuation.Replacement{
+		Runtime: next.runtime,
+		Commit: func() {
+			g.mu.Lock()
+			g.session, g.execution = next, nextExecution
+			g.mu.Unlock()
+			generation := GenerationChanged{Previous: oldSession.runtime.ProtocolSessionID(), Current: next.runtime.ProtocolSessionID()}
+			generation.Operation, generation.Job = g.output.paths.transferIdentity()
+			g.observation.emit(generation)
+		},
+		Discard: func(err error) {
+			reason := ReceiverLocalStopRuntimeSessionFailure
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				reason = ReceiverLocalStopCaller
+			}
+			nextExecution.CloseWithReason(reason)
+			next.Close()
+		},
+	}, nil
 }
 
 func (g *receiveOperation) demandContent() {

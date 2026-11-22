@@ -129,39 +129,36 @@ func (recovery *getReceiverRecovery) replace(ctx context.Context) (*getReceiverS
 	return recovery.open(ctx, recovery.owner.Replace)
 }
 
-func (recovery *getReceiverRecovery) open(ctx context.Context, connect func(context.Context, relayset.ReceiverConfig) (*relayset.Receiver, error)) (*getReceiverSession, error) {
-	if ctx == nil {
+func (recovery *getReceiverRecovery) open(waitCtx context.Context, connect func(waitCtx, sessionCtx context.Context, config relayset.ReceiverConfig) (*relayset.Receiver, error)) (*getReceiverSession, error) {
+	if waitCtx == nil {
 		return nil, errors.New("receiver recovery requires caller lifetime")
 	}
-	if err := ctx.Err(); err != nil {
+	if err := waitCtx.Err(); err != nil {
 		return nil, err
 	}
-	// Give each established generation its own relay lifetime detached from the
-	// task or continuation context so shutdown closes peers before retiring the
-	// relay lane they use for clean CANCEL signaling.
-	sessionCtx, cancelSession := context.WithCancel(context.WithoutCancel(ctx))
-	stopWatch := context.AfterFunc(ctx, cancelSession)
-	set, err := connect(sessionCtx, recovery.config)
+	// Give each established generation its own resource lifetime detached from
+	// task or continuation cancellation so shutdown closes peers before retiring
+	// the relay lane they use for clean CANCEL signaling.
+	sessionCtx, cancelSession := context.WithCancel(context.WithoutCancel(waitCtx))
+	set, err := connect(waitCtx, sessionCtx, recovery.config)
 	if err != nil {
-		stopWatch()
 		cancelSession()
-		if errors.Is(err, context.Canceled) && ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
 		return nil, err
 	}
 	runtime, connection, err := set.WaitReady(sessionCtx)
-	stopWatch()
-	if err != nil || ctx.Err() != nil {
+	if err != nil || waitCtx.Err() != nil {
 		set.Close()
 		cancelSession()
-		if err != nil && (!errors.Is(err, context.Canceled) || ctx.Err() == nil) {
+		if err != nil {
 			return nil, err
 		}
-		return nil, ctx.Err()
+		return nil, waitCtx.Err()
 	}
 	recovery.observation.registerLaneSet(runtime.LaneSet())
-	return &getReceiverSession{relays: set, connection: connection, runtime: runtime, recovery: recovery, cancel: cancelSession}, nil
+	return &getReceiverSession{
+		relays: set, connection: connection, runtime: runtime, recovery: recovery,
+		ctx: sessionCtx, cancel: cancelSession,
+	}, nil
 }
 
 type getReceiverSession struct {
@@ -170,6 +167,7 @@ type getReceiverSession struct {
 	connection relayset.ReceiverConnection
 	prepared   *liveshare.PreparedReceiver
 	runtime    *receiversession.Runtime
+	ctx        context.Context
 	cancel     context.CancelFunc
 }
 
@@ -245,7 +243,7 @@ func (execution *getTransferExecution) SettleAdmission() {
 	})
 }
 
-func (a *runner) prepareGetConnectivity(ctx context.Context, request preparedRequest, output getOutputPreparation, runtime *receiversession.Runtime, observation getObservation, options receiverPeerOptions) (*getTransferExecution, stepOutcome) {
+func (a *runner) prepareGetConnectivity(generationCtx context.Context, request preparedRequest, output getOutputPreparation, runtime *receiversession.Runtime, observation getObservation, options receiverPeerOptions) (*getTransferExecution, stepOutcome) {
 	connectivity := request.connectivity
 	laneID, laneEpoch := runtime.LaneIdentity()
 	relaySuspension, err := runtime.LaneSet().SuspendContent(
@@ -297,7 +295,7 @@ func (a *runner) prepareGetConnectivity(ctx context.Context, request preparedReq
 				options.demand = peerset.ContentDemand
 			default:
 			}
-			return a.startReceiverPeer(ctx, runtime, observation, observePeer, localStop, connectivity.peer, options)
+			return a.startReceiverPeer(generationCtx, runtime, observation, observePeer, localStop, connectivity.peer, options)
 		},
 		admission.AdmitRelayOnly,
 	)

@@ -41,9 +41,9 @@ func testTransferReadmission(t *testing.T, changeStage func(string) error) {
 	})
 	runtime, channel := f.connect()
 	ctx := t.Context()
-	continuation, err := New(ctx, runtime, func(context.Context, *receiversession.Runtime) (*receiversession.Runtime, error) {
+	continuation, err := New(ctx, runtime, func(context.Context, *receiversession.Runtime) (Replacement, error) {
 		next, _ := f.connect()
-		return next, nil
+		return Replacement{Runtime: next}, nil
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -249,10 +249,10 @@ func TestRecoverRefreshFailurePreservesAuthenticatedSourceOutcomesOnPathRetireme
 	retired, ch := f.connect()
 	ctx := t.Context()
 	replacements := 0
-	continuation, err := New(ctx, retired, func(context.Context, *receiversession.Runtime) (*receiversession.Runtime, error) {
+	continuation, err := New(ctx, retired, func(context.Context, *receiversession.Runtime) (Replacement, error) {
 		replacements++
 		next, _ := f.connect()
-		return next, nil
+		return Replacement{Runtime: next}, nil
 	})
 	if err != nil {
 		t.Fatal(err)

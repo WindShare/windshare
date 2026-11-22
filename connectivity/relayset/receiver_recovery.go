@@ -107,91 +107,124 @@ func NewReceiverRecovery(options ReceiverRecoveryOptions) (*ReceiverRecovery, er
 	return &ReceiverRecovery{options: options, routes: make(map[string]*endpointRecovery)}, nil
 }
 
-// Join has a finite default window. An explicit caller wait limit also selects
-// how long the caller wants to wait before any usable share has been observed.
-func (recovery *ReceiverRecovery) Join(ctx context.Context, config ReceiverConfig) (*Receiver, error) {
+// Join has a finite default window. waitCtx governs dialing/waiting while
+// sessionCtx governs the established Receiver lifetime once ready.
+func (recovery *ReceiverRecovery) Join(waitCtx, sessionCtx context.Context, config ReceiverConfig) (*Receiver, error) {
 	window := recovery.options.InitialWait
 	if recovery.options.WaitTimeout > 0 {
 		window = recovery.options.WaitTimeout
 	}
-	return recovery.open(ctx, config, window, ErrReceiverUnavailable)
+	return recovery.open(waitCtx, sessionCtx, config, window, ErrReceiverUnavailable)
 }
 
 // Replace waits through temporary outages until success, terminal rejection, or
-// caller cancellation. The unchanged continuation owns the transfer and output.
-func (recovery *ReceiverRecovery) Replace(ctx context.Context, config ReceiverConfig) (*Receiver, error) {
-	return recovery.open(ctx, config, recovery.options.WaitTimeout, ErrReceiverWaitExpired)
+// waitCtx cancellation. sessionCtx owns the established replacement Receiver.
+func (recovery *ReceiverRecovery) Replace(waitCtx, sessionCtx context.Context, config ReceiverConfig) (*Receiver, error) {
+	return recovery.open(waitCtx, sessionCtx, config, recovery.options.WaitTimeout, ErrReceiverWaitExpired)
 }
 
-func (recovery *ReceiverRecovery) open(ctx context.Context, config ReceiverConfig, window time.Duration, expiry error) (*Receiver, error) {
-	if ctx == nil {
+func openContextError(waitParent, sessionCtx context.Context) error {
+	if err := waitParent.Err(); err != nil {
+		return err
+	}
+	return sessionCtx.Err()
+}
+
+func (recovery *ReceiverRecovery) open(waitParent, sessionCtx context.Context, config ReceiverConfig, window time.Duration, expiry error) (*Receiver, error) {
+	if waitParent == nil || sessionCtx == nil {
 		return nil, errors.New("receiver recovery requires caller lifetime")
 	}
-	if err := ctx.Err(); err != nil {
+	if err := openContextError(waitParent, sessionCtx); err != nil {
 		return nil, err
 	}
 	if err := validateReceiverCandidates(config); err != nil {
 		return nil, err
 	}
 	started := recovery.options.Clock.Now()
-	waitCtx, cancel := recovery.joinWaitContext(ctx, window)
+	waitCtx, cancel := recovery.joinWaitContext(waitParent, sessionCtx, window)
 	defer cancel()
 	config.recovery = recovery
 	config.Clock = recovery.options.Clock
 	var last error
 	for attempt := uint32(0); ; attempt++ {
-		if err := ctx.Err(); err != nil {
+		if err := openContextError(waitParent, sessionCtx); err != nil {
 			return nil, err
 		}
 		if waitCtx.Err() != nil || (window > 0 && !recovery.options.Clock.Now().Before(started.Add(window))) {
 			return nil, errors.Join(expiry, last)
 		}
-		set, err := recovery.joinOnce(ctx, waitCtx, &config)
+		set, err := recovery.joinOnce(waitParent, sessionCtx, waitCtx, &config)
 		if err == nil {
 			return set, nil
 		}
 		last = err
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
+		if terminal := settleJoinFailure(waitParent, sessionCtx, waitCtx, err, expiry); terminal != nil {
+			return nil, terminal
 		}
-		if errors.Is(err, ErrReceiverShareStopped) {
-			return nil, err
-		}
-		if _, joined := errors.AsType[*ReceiverJoinFailure](err); !joined {
-			if waitCtx.Err() != nil {
-				return nil, errors.Join(expiry, err)
-			}
-			return nil, err
-		}
-		eligible, err := recovery.endpoints(config.Receiver.Capability.Relays)
+		delay, err := recovery.retryWaveDelay(started, attempt, window, config.Receiver.Capability.Relays, last)
 		if err != nil {
 			return nil, err
 		}
-		delay, phase := recovery.localRetryDelay(started, attempt, last)
-		delay = recovery.scheduleWave(eligible, phase, delay, last)
-		if window > 0 {
-			delay = min(delay, max(0, started.Add(window).Sub(recovery.options.Clock.Now())))
-		}
 		if err = recovery.options.Clock.Wait(waitCtx, delay); err != nil {
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
+			if ctxErr := openContextError(waitParent, sessionCtx); ctxErr != nil {
+				return nil, ctxErr
 			}
 			return nil, errors.Join(expiry, last)
 		}
 	}
 }
 
-func (recovery *ReceiverRecovery) joinWaitContext(ctx context.Context, window time.Duration) (context.Context, context.CancelFunc) {
-	if window > 0 {
-		return recovery.options.TimeoutContext(ctx, window)
+func settleJoinFailure(waitParent, sessionCtx, waitCtx context.Context, err, expiry error) error {
+	if ctxErr := openContextError(waitParent, sessionCtx); ctxErr != nil {
+		return ctxErr
 	}
-	return context.WithCancel(ctx)
+	if errors.Is(err, ErrReceiverShareStopped) {
+		return err
+	}
+	if _, joined := errors.AsType[*ReceiverJoinFailure](err); !joined {
+		if waitCtx.Err() != nil {
+			return errors.Join(expiry, err)
+		}
+		return err
+	}
+	return nil
 }
 
-func (recovery *ReceiverRecovery) joinOnce(ctx, waitCtx context.Context, config *ReceiverConfig) (*Receiver, error) {
-	// A successful session borrows the caller lifetime, never the waiting
-	// deadline. Failed candidates are joined before another one is created.
-	set, err := NewReceiver(ctx, *config)
+func (recovery *ReceiverRecovery) retryWaveDelay(started time.Time, attempt uint32, window time.Duration, relays []string, last error) (time.Duration, error) {
+	eligible, err := recovery.endpoints(relays)
+	if err != nil {
+		return 0, err
+	}
+	delay, phase := recovery.localRetryDelay(started, attempt, last)
+	delay = recovery.scheduleWave(eligible, phase, delay, last)
+	if window > 0 {
+		delay = min(delay, max(0, started.Add(window).Sub(recovery.options.Clock.Now())))
+	}
+	return delay, nil
+}
+
+func (recovery *ReceiverRecovery) joinWaitContext(waitParent, sessionCtx context.Context, window time.Duration) (context.Context, context.CancelFunc) {
+	var waitCtx context.Context
+	var cancel context.CancelFunc
+	if window > 0 {
+		waitCtx, cancel = recovery.options.TimeoutContext(waitParent, window)
+	} else {
+		waitCtx, cancel = context.WithCancel(waitParent)
+	}
+	if sessionCtx == waitParent {
+		return waitCtx, cancel
+	}
+	stopSessionWatch := context.AfterFunc(sessionCtx, cancel)
+	return waitCtx, func() {
+		stopSessionWatch()
+		cancel()
+	}
+}
+
+func (recovery *ReceiverRecovery) joinOnce(waitParent, sessionCtx, waitCtx context.Context, config *ReceiverConfig) (*Receiver, error) {
+	// A successful session borrows sessionCtx, never the waiting deadline or
+	// join-only waitParent. Failed candidates are joined before retrying.
+	set, err := NewReceiver(sessionCtx, *config)
 	if err != nil {
 		return nil, err
 	}
@@ -205,6 +238,10 @@ func (recovery *ReceiverRecovery) joinOnce(ctx, waitCtx context.Context, config 
 		config.Receiver.Capability.Relays, config.incompleteCandidates = set.candidateSnapshot()
 		config.ResolveEndpoints = nil
 		return nil, err
+	}
+	if ctxErr := openContextError(waitParent, sessionCtx); ctxErr != nil {
+		set.Close()
+		return nil, ctxErr
 	}
 	return set, nil
 }

@@ -391,7 +391,7 @@ func (peer *activeReceiverPeer) CloseWithReason(reason ReceiverLocalStopReason) 
 }
 
 func (a *runner) startReceiverPeer(
-	ctx context.Context,
+	generationCtx context.Context,
 	runtime *receiversession.Runtime,
 	observation getObservation,
 	observe func(receiverPeerSignal),
@@ -409,14 +409,15 @@ func (a *runner) startReceiverPeer(
 		notifyReceiverPeer(observe, receiverPeerFailed)
 		return nil
 	}
-	// Isolate the peer session from task cancel causes (such as task.ErrCancelled)
-	// and continuation shutdown so localStop is always recorded before teardown
-	// and v2peer observes only a plain context.Canceled local stop.
-	base := ctx
+	// Derive the peer lifetime from the generation's detached resource context
+	// so CloseWithReason cancels the peer with plain context.Canceled before
+	// session.Close retires the relay lane, while still inheriting session close
+	// as a leak-free fallback.
+	base := generationCtx
 	if base == nil {
 		base = context.Background()
 	}
-	peerCtx, cancelPeer := context.WithCancel(context.WithoutCancel(base))
+	peerCtx, cancelPeer := context.WithCancel(base)
 	attempt, err := starter.Start(peerCtx, runtime)
 	if err != nil || attempt == nil {
 		cancelPeer()

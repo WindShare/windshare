@@ -70,9 +70,9 @@ func TestReleaseRevisionUsesWinningTermination(t *testing.T) {
 			sender, wire := newPipe()
 			gate := newReleaseResponseGate(sender)
 			runtime := f.connectChannels(gate, wire)
-			continuation, err := New(t.Context(), runtime, func(context.Context, *receiversession.Runtime) (*receiversession.Runtime, error) {
+			continuation, err := New(t.Context(), runtime, func(context.Context, *receiversession.Runtime) (Replacement, error) {
 				t.Error("releasing a finished lease must not reconnect")
-				return nil, ErrReplacement
+				return Replacement{}, ErrReplacement
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -135,9 +135,9 @@ func TestPublishedTransferCompletesAfterReleaseAcknowledgementLoss(t *testing.T)
 	sender, wire := newPipe()
 	gate := newReleaseResponseGate(sender)
 	runtime := f.connectChannels(gate, wire)
-	continuation, err := New(t.Context(), runtime, func(context.Context, *receiversession.Runtime) (*receiversession.Runtime, error) {
+	continuation, err := New(t.Context(), runtime, func(context.Context, *receiversession.Runtime) (Replacement, error) {
 		t.Error("published output must not require a new connection for lease cleanup")
-		return nil, ErrReplacement
+		return Replacement{}, ErrReplacement
 	})
 	if err != nil {
 		t.Fatal(err)

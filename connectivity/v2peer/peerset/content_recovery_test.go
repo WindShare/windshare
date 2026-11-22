@@ -21,9 +21,10 @@ import (
 
 type recoveringAttempt struct {
 	*fakeAttempt
-	identity session.LaneIdentity
-	retire   sync.Once
-	onClose  func()
+	identity       session.LaneIdentity
+	retire         sync.Once
+	onClose        func()
+	closeDetaching bool
 }
 
 func (attempt *recoveringAttempt) Lane() (session.LaneIdentity, bool) {
@@ -40,6 +41,17 @@ func (attempt *recoveringAttempt) Close() error {
 	return nil
 }
 
+func (attempt *recoveringAttempt) CloseDetaching(detach func(session.LaneIdentity)) error {
+	attempt.closeDetaching = true
+	err := attempt.Close()
+	if detach != nil {
+		if lane, ok := attempt.Lane(); ok {
+			detach(lane)
+		}
+	}
+	return err
+}
+
 type recoveryLaneOwner struct{ lanes *transferlanes.Set }
 
 func (owner recoveryLaneOwner) LaneSet() *transferlanes.Set { return owner.lanes }
@@ -54,55 +66,78 @@ func (source recoveryBlockSource) FetchBlock(ctx context.Context, demand transfe
 }
 
 func TestAttemptClosureRetiresAdmissionThatWonCancellationRace(t *testing.T) {
-	lanes, err := transferlanes.New(transferlanes.Config{ProtocolSessionID: protocolsession.ProtocolSessionID{2}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer lanes.Close()
-	path := &Path{config: PathConfig{Content: recoveryLaneOwner{lanes}}}
-	attempt := &recoveringAttempt{fakeAttempt: newAttempt()}
-	attempt.onClose = func() {
-		attempt.identity = session.LaneIdentity{ID: 2, Epoch: 1}
-		err := lanes.Add(transferlanes.Identity(attempt.identity), transferlanes.RouteDirect,
-			recoveryBlockSource(func(context.Context, transferlanes.Demand) (records.BlockRecord, error) {
-				t.Error("late admission served content after its owner stopped")
-				return records.BlockRecord{}, nil
-			}))
-		if err != nil {
-			t.Fatal(err)
+	for _, retireLaneFirst := range []bool{false, true} {
+		name := "local_stop"
+		if retireLaneFirst {
+			name = "recovery_restart"
 		}
-	}
-	path.closeAttempt(attempt)
-	if lanes.Len() != 0 {
-		t.Fatal("attachment won cancellation and escaped path ownership")
+		t.Run(name, func(t *testing.T) {
+			lanes, err := transferlanes.New(transferlanes.Config{ProtocolSessionID: protocolsession.ProtocolSessionID{2}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer lanes.Close()
+			path := &Path{config: PathConfig{Content: recoveryLaneOwner{lanes}}}
+			attempt := &recoveringAttempt{fakeAttempt: newAttempt()}
+			attempt.onClose = func() {
+				attempt.identity = session.LaneIdentity{ID: 2, Epoch: 1}
+				err := lanes.Add(transferlanes.Identity(attempt.identity), transferlanes.RouteDirect,
+					recoveryBlockSource(func(context.Context, transferlanes.Demand) (records.BlockRecord, error) {
+						t.Error("late admission served content after its owner stopped")
+						return records.BlockRecord{}, nil
+					}))
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			path.closeAttempt(attempt, retireLaneFirst)
+			if lanes.Len() != 0 {
+				t.Fatal("attachment won cancellation and escaped path ownership")
+			}
+		})
 	}
 }
 
-func TestCloseAttemptClosesSignalingBeforeDetachingAdmittedLane(t *testing.T) {
-	lanes, err := transferlanes.New(transferlanes.Config{ProtocolSessionID: protocolsession.ProtocolSessionID{3}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer lanes.Close()
-	identity := session.LaneIdentity{ID: 2, Epoch: 1}
-	if err := lanes.Add(transferlanes.Identity(identity), transferlanes.RouteDirect,
-		recoveryBlockSource(func(context.Context, transferlanes.Demand) (records.BlockRecord, error) {
-			return records.BlockRecord{}, nil
-		})); err != nil {
-		t.Fatal(err)
-	}
-	path := &Path{config: PathConfig{Content: recoveryLaneOwner{lanes}}}
-	attempt := &recoveringAttempt{fakeAttempt: newAttempt(), identity: identity}
-	lanesDuringClose := -1
-	attempt.onClose = func() {
-		lanesDuringClose = lanes.Len()
-	}
-	path.closeAttempt(attempt)
-	if lanesDuringClose != 1 {
-		t.Fatalf("admitted lane count during attempt.Close = %d, want 1", lanesDuringClose)
-	}
-	if lanes.Len() != 0 {
-		t.Fatalf("admitted lane count after closeAttempt = %d, want 0", lanes.Len())
+func TestCloseAttemptOrdersSignalingAndLaneDetachByShutdownReason(t *testing.T) {
+	for _, test := range []struct {
+		name               string
+		retireLaneFirst    bool
+		wantLanesAtClose   int
+		wantCloseDetaching bool
+	}{
+		{name: "local stop closes signaling before detaching lane", retireLaneFirst: false, wantLanesAtClose: 1, wantCloseDetaching: true},
+		{name: "recovery restart detaches broken lane before closing attempt", retireLaneFirst: true, wantLanesAtClose: 0, wantCloseDetaching: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			lanes, err := transferlanes.New(transferlanes.Config{ProtocolSessionID: protocolsession.ProtocolSessionID{3}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer lanes.Close()
+			identity := session.LaneIdentity{ID: 2, Epoch: 1}
+			if err := lanes.Add(transferlanes.Identity(identity), transferlanes.RouteDirect,
+				recoveryBlockSource(func(context.Context, transferlanes.Demand) (records.BlockRecord, error) {
+					return records.BlockRecord{}, nil
+				})); err != nil {
+				t.Fatal(err)
+			}
+			path := &Path{config: PathConfig{Content: recoveryLaneOwner{lanes}}}
+			attempt := &recoveringAttempt{fakeAttempt: newAttempt(), identity: identity}
+			lanesDuringClose := -1
+			attempt.onClose = func() {
+				lanesDuringClose = lanes.Len()
+			}
+			path.closeAttempt(attempt, test.retireLaneFirst)
+			if lanesDuringClose != test.wantLanesAtClose {
+				t.Fatalf("admitted lane count during attempt.Close = %d, want %d", lanesDuringClose, test.wantLanesAtClose)
+			}
+			if attempt.closeDetaching != test.wantCloseDetaching {
+				t.Fatalf("CloseDetaching used = %v, want %v", attempt.closeDetaching, test.wantCloseDetaching)
+			}
+			if lanes.Len() != 0 {
+				t.Fatalf("admitted lane count after closeAttempt = %d, want 0", lanes.Len())
+			}
+		})
 	}
 }
 

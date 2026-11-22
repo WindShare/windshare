@@ -17,9 +17,9 @@ func TestLongDownloadCrossesLeaseLifetimesWithoutReplacingSession(t *testing.T) 
 		f := newFixture(t)
 		runtime, _ := f.connect()
 		sessionID := runtime.ProtocolSessionID()
-		continuation, err := New(context.Background(), runtime, func(context.Context, *receiversession.Runtime) (*receiversession.Runtime, error) {
+		continuation, err := New(context.Background(), runtime, func(context.Context, *receiversession.Runtime) (Replacement, error) {
 			t.Error("lease expiry must not reconnect a healthy session")
-			return nil, ErrReplacement
+			return Replacement{}, ErrReplacement
 		})
 		if err != nil {
 			t.Fatal(err)

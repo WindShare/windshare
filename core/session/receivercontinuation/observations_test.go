@@ -12,8 +12,8 @@ func TestSchedulingObservationsFollowReplacementAndOwnerLifetime(t *testing.T) {
 	f := newFixture(t)
 	first, channel := f.connect()
 	next, _ := f.connect()
-	s, err := New(t.Context(), first, func(context.Context, *receiversession.Runtime) (*receiversession.Runtime, error) {
-		return next, nil
+	s, err := New(t.Context(), first, func(context.Context, *receiversession.Runtime) (Replacement, error) {
+		return Replacement{Runtime: next}, nil
 	})
 	if err != nil {
 		t.Fatal(err)

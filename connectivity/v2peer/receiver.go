@@ -220,6 +220,7 @@ type ReceiverAttempt struct {
 	operation         *receiverBoundSignalingOperation
 	shutdownRequested bool
 	shutdownDecision  receiverAttemptDecision
+	closeDetach       func(session.LaneIdentity)
 	phases            *peerPhaseLifecycle
 	phaseContext      context.Context
 	transport         *ownedPeerDataChannel

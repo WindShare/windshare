@@ -165,16 +165,20 @@ func runReceiveEvidenceSample(
 	}
 	var replacement *relayv2.ReceiverConnection
 	defer func() { _ = replacement.Close() }()
-	continuation, err := receivercontinuation.New(ctx, runtime, func(ctx context.Context, _ *receiversession.Runtime) (*receiversession.Runtime, error) {
+	continuation, err := receivercontinuation.New(ctx, runtime, func(ctx context.Context, _ *receiversession.Runtime) (receivercontinuation.Replacement, error) {
 		if scenario != evidenceReopened || replacement != nil {
-			return nil, errors.New("unexpected receiver replacement in the receive benchmark")
+			return receivercontinuation.Replacement{}, errors.New("unexpected receiver replacement in the receive benchmark")
 		}
 		connection, err := relayv2.DialReceiver(ctx, relay)
 		if err != nil {
-			return nil, err
+			return receivercontinuation.Replacement{}, err
 		}
 		replacement = connection
-		return receiver.Connect(ctx, connection.Channel(), transferlanes.RouteRelay)
+		next, err := receiver.Connect(ctx, connection.Channel(), transferlanes.RouteRelay)
+		if err != nil {
+			return receivercontinuation.Replacement{}, err
+		}
+		return receivercontinuation.Replacement{Runtime: next}, nil
 	})
 	if err != nil {
 		b.Fatal(err)

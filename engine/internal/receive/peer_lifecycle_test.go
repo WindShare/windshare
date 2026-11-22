@@ -35,10 +35,10 @@ func (attempt *lifecycleTestPeerAttempt) Close() error {
 	return attempt.cliReceiverPeerAttempt.Close()
 }
 
-func TestReceiverPeerIsolatesContextFromTaskCauseAndSessionClose(t *testing.T) {
+func TestReceiverPeerGenerationContextIsolatesTaskCauseAndSessionClose(t *testing.T) {
 	for _, test := range []struct {
 		name         string
-		cancelParent func(taskStop context.CancelCauseFunc, sessionStop context.CancelFunc)
+		cancelParent func(taskStop context.CancelCauseFunc, continuationStop context.CancelFunc)
 		closeReason  ReceiverLocalStopReason
 	}{
 		{
@@ -50,8 +50,8 @@ func TestReceiverPeerIsolatesContextFromTaskCauseAndSessionClose(t *testing.T) {
 		},
 		{
 			name: "continuation session close does not preempt normal completion",
-			cancelParent: func(_ context.CancelCauseFunc, sessionStop context.CancelFunc) {
-				sessionStop()
+			cancelParent: func(_ context.CancelCauseFunc, continuationStop context.CancelFunc) {
+				continuationStop()
 			},
 			closeReason: ReceiverLocalStopNormalCompletion,
 		},
@@ -59,8 +59,12 @@ func TestReceiverPeerIsolatesContextFromTaskCauseAndSessionClose(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			taskCtx, stopTask := context.WithCancelCause(context.Background())
 			defer stopTask(nil)
-			sessionCtx, closeSession := context.WithCancel(taskCtx)
-			defer closeSession()
+			continuationCtx, closeContinuation := context.WithCancel(taskCtx)
+			defer closeContinuation()
+			// Mirror getReceiverRecovery.open: the generation's detached resource
+			// context owns the relay and peer lifetimes independently of task/continuation.
+			generationCtx, cancelGeneration := context.WithCancel(context.WithoutCancel(continuationCtx))
+			defer cancelGeneration()
 
 			source := &testReceiverObservationSource{
 				terminal:   make(chan v2peer.ReceiverTerminationTrace, 1),
@@ -78,6 +82,7 @@ func TestReceiverPeerIsolatesContextFromTaskCauseAndSessionClose(t *testing.T) {
 			var peerCtx context.Context
 			var reasonAtClose ReceiverLocalStopReason
 			var causeAtClose error
+			var generationLiveAtClose bool
 			stop := &receiverLocalStop{}
 			worker := &runner{receiverPeerFactory: func() (receiverPeerStarter, error) {
 				return lifecycleTestPeerStarter{
@@ -89,6 +94,7 @@ func TestReceiverPeerIsolatesContextFromTaskCauseAndSessionClose(t *testing.T) {
 							onClose: func() {
 								reasonAtClose = stop.snapshot()
 								causeAtClose = context.Cause(peerCtx)
+								generationLiveAtClose = generationCtx.Err() == nil
 								source.terminal <- v2peer.ReceiverTerminationTrace{}
 							},
 						}, nil
@@ -96,14 +102,14 @@ func TestReceiverPeerIsolatesContextFromTaskCauseAndSessionClose(t *testing.T) {
 				}, nil
 			}}
 
-			peer := worker.startReceiverPeer(sessionCtx, nil, observation, nil, stop, receiverPeerPreferred)
+			peer := worker.startReceiverPeer(generationCtx, nil, observation, nil, stop, receiverPeerPreferred)
 			if peer == nil || peerCtx == nil {
 				t.Fatal("startReceiverPeer returned no active peer")
 			}
 
 			// Neither task cancellation nor continuation shutdown cancels the peer
 			// directly; CloseWithReason owns both stop attribution and teardown.
-			test.cancelParent(stopTask, closeSession)
+			test.cancelParent(stopTask, closeContinuation)
 			if peerCtx.Err() != nil {
 				t.Fatalf("parent cancellation leaked into peer context: err=%v cause=%v", peerCtx.Err(), context.Cause(peerCtx))
 			}
@@ -112,6 +118,7 @@ func TestReceiverPeerIsolatesContextFromTaskCauseAndSessionClose(t *testing.T) {
 			}
 
 			peer.CloseWithReason(test.closeReason)
+			cancelGeneration()
 			observation.complete()
 
 			if reasonAtClose != test.closeReason {
@@ -119,6 +126,9 @@ func TestReceiverPeerIsolatesContextFromTaskCauseAndSessionClose(t *testing.T) {
 			}
 			if causeAtClose != context.Canceled {
 				t.Fatalf("peer context cause at close = %v, want plain context.Canceled", causeAtClose)
+			}
+			if !generationLiveAtClose {
+				t.Fatal("generation resource context closed before peer teardown")
 			}
 			mu.Lock()
 			defer mu.Unlock()
@@ -132,6 +142,29 @@ func TestReceiverPeerIsolatesContextFromTaskCauseAndSessionClose(t *testing.T) {
 				t.Fatalf("peer terminations = %+v, want one with %v", terminated, test.closeReason)
 			}
 		})
+	}
+}
+
+func TestReceiverPeerInheritsGenerationContextCancellationAsFallback(t *testing.T) {
+	generationCtx, cancelGeneration := context.WithCancel(context.Background())
+	var peerCtx context.Context
+	worker := &runner{receiverPeerFactory: func() (receiverPeerStarter, error) {
+		return lifecycleTestPeerStarter{
+			start: func(ctx context.Context, _ *receiversession.Runtime) (receiverPeerAttempt, error) {
+				peerCtx = ctx
+				return newCLIReceiverPeerAttempt(), nil
+			},
+		}, nil
+	}}
+	observation, _ := newTestObservation(t)
+	peer := worker.startReceiverPeer(generationCtx, nil, observation, nil, &receiverLocalStop{}, receiverPeerPreferred)
+	if peer == nil || peerCtx == nil {
+		t.Fatal("startReceiverPeer returned no active peer")
+	}
+	defer peer.Close()
+	cancelGeneration()
+	if peerCtx.Err() != context.Canceled {
+		t.Fatalf("peer context did not inherit generation close: %v", peerCtx.Err())
 	}
 }
 
@@ -154,14 +187,14 @@ func TestReceiverPeerStartFailureCancelsPeerContext(t *testing.T) {
 	}
 }
 
-func TestReceiverSessionOpenRespectsJoinCancellationWithoutLeakingCause(t *testing.T) {
+func TestReceiverSessionOpenSeparatesWaitCancellationFromSessionContext(t *testing.T) {
 	recovery := &getReceiverRecovery{}
 
 	t.Run("pre-canceled context skips connect", func(t *testing.T) {
 		ctx, cancel := context.WithCancelCause(context.Background())
 		cancel(task.ErrCancelled)
 		called := false
-		_, err := recovery.open(ctx, func(context.Context, relayset.ReceiverConfig) (*relayset.Receiver, error) {
+		_, err := recovery.open(ctx, func(context.Context, context.Context, relayset.ReceiverConfig) (*relayset.Receiver, error) {
 			called = true
 			return nil, nil
 		})
@@ -170,18 +203,21 @@ func TestReceiverSessionOpenRespectsJoinCancellationWithoutLeakingCause(t *testi
 		}
 	})
 
-	t.Run("in-flight cancel stops join with plain canceled session context", func(t *testing.T) {
+	t.Run("in-flight wait cancel stops connect and cancels detached sessionCtx on failure", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			ctx, cancel := context.WithCancelCause(context.Background())
 			entered := make(chan struct{})
-			var seenCause error
+			var seenSessionCtx context.Context
 			done := make(chan error, 1)
 			go func() {
-				_, err := recovery.open(ctx, func(sessionCtx context.Context, _ relayset.ReceiverConfig) (*relayset.Receiver, error) {
+				_, err := recovery.open(ctx, func(waitCtx, sessionCtx context.Context, _ relayset.ReceiverConfig) (*relayset.Receiver, error) {
+					seenSessionCtx = sessionCtx
 					close(entered)
-					<-sessionCtx.Done()
-					seenCause = context.Cause(sessionCtx)
-					return nil, sessionCtx.Err()
+					<-waitCtx.Done()
+					if sessionCtx.Err() != nil {
+						t.Errorf("wait cancel leaked into detached sessionCtx: %v", sessionCtx.Err())
+					}
+					return nil, waitCtx.Err()
 				})
 				done <- err
 			}()
@@ -190,15 +226,15 @@ func TestReceiverSessionOpenRespectsJoinCancellationWithoutLeakingCause(t *testi
 			if err := <-done; !errors.Is(err, context.Canceled) {
 				t.Fatalf("in-flight cancel err=%v, want context.Canceled", err)
 			}
-			if seenCause != context.Canceled {
-				t.Fatalf("session context cause=%v, want plain context.Canceled", seenCause)
+			if seenSessionCtx == nil || context.Cause(seenSessionCtx) != context.Canceled {
+				t.Fatalf("session context after failed open = %v, want plain context.Canceled", context.Cause(seenSessionCtx))
 			}
 		})
 	})
 
 	t.Run("session Close invokes lifetime cancel", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
-		session := &getReceiverSession{cancel: cancel}
+		session := &getReceiverSession{ctx: ctx, cancel: cancel}
 		session.Close()
 		if ctx.Err() != context.Canceled {
 			t.Fatalf("session Close did not cancel session lifetime: %v", ctx.Err())
@@ -207,20 +243,28 @@ func TestReceiverSessionOpenRespectsJoinCancellationWithoutLeakingCause(t *testi
 }
 
 func TestEarlyExitStopReasonPreservesFailureOwnership(t *testing.T) {
+	networkErr := errors.New("session lost during shape probe")
+	admissionErr := errors.New("resume admission failed")
 	for _, test := range []struct {
-		name       string
-		contextErr error
-		step       stepOutcome
-		want       ReceiverLocalStopReason
+		name          string
+		contextErr    error
+		admissionErr  error
+		runtimeErr    error
+		connectionErr error
+		step          stepOutcome
+		want          ReceiverLocalStopReason
 	}{
-		{"caller canceled", context.Canceled, stepLocalFailure, ReceiverLocalStopCaller},
-		{"network preparation failure", nil, stepNetworkFailure, ReceiverLocalStopRuntimeSessionFailure},
-		{"local preparation failure", nil, stepLocalFailure, ReceiverLocalStopOutputAdmission},
-		{"invalid request failure", nil, stepInvalidRequest, ReceiverLocalStopOutputAdmission},
+		{"caller canceled", context.Canceled, nil, nil, nil, stepLocalFailure, ReceiverLocalStopCaller},
+		{"network preparation failure", nil, nil, nil, nil, stepNetworkFailure, ReceiverLocalStopRuntimeSessionFailure},
+		{"runtime failure during local preparation", nil, nil, networkErr, nil, stepLocalFailure, ReceiverLocalStopRuntimeSessionFailure},
+		{"connection failure during local preparation", nil, nil, nil, networkErr, stepLocalFailure, ReceiverLocalStopRuntimeSessionFailure},
+		{"admission failure", nil, admissionErr, nil, nil, stepLocalFailure, ReceiverLocalStopOutputAdmission},
+		{"local output preparation failure", nil, nil, nil, nil, stepLocalFailure, ReceiverLocalStopOutputAdmission},
+		{"invalid request failure", nil, nil, nil, nil, stepInvalidRequest, ReceiverLocalStopCaller},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if got := earlyExitStopReason(test.contextErr, test.step); got != test.want {
-				t.Fatalf("earlyExitStopReason(%v, %v) = %v, want %v", test.contextErr, test.step, got, test.want)
+			if got := earlyExitStopReason(test.contextErr, test.admissionErr, test.runtimeErr, test.connectionErr, test.step); got != test.want {
+				t.Fatalf("earlyExitStopReason = %v, want %v", got, test.want)
 			}
 		})
 	}

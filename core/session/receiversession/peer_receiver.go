@@ -23,12 +23,6 @@ func (runtime *Runtime) OpenPeerOperation(
 	}
 	call, err := runtime.rpc.Begin(ctx, protocolsession.MessagePeerOffer, offer)
 	if err != nil {
-		// A send canceled before transport admission leaves no remote operation
-		// to clean up; surface the context error directly, matching pre-send checks.
-		if !runtime.Stopping() && ctx.Err() != nil &&
-			sessioncore.RequestProvenNotDelivered(err) && errors.Is(err, ctx.Err()) {
-			return nil, ctx.Err()
-		}
 		return nil, err
 	}
 	maximumContinuations, hasContinuationLimit := call.ContinuationLimit()

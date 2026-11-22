@@ -20,7 +20,16 @@ import (
 
 var ErrReplacement = errors.New("receiver replacement violates authenticated session continuity")
 
-type Replace func(context.Context, *receiversession.Runtime) (*receiversession.Runtime, error)
+// Replacement pairs a candidate runtime with optional acceptance and disposal
+// hooks so the generation owner commits or tears down paired peer/relay
+// resources in order without racing validation or cancellation.
+type Replacement struct {
+	Runtime *receiversession.Runtime
+	Commit  func()
+	Discard func(error)
+}
+
+type Replace func(context.Context, *receiversession.Runtime) (Replacement, error)
 
 // Session owns the one replacement flight shared by discovery, revision, range,
 // and quota-wait consumers. Output transactions belong to the unchanged job.
@@ -116,7 +125,8 @@ func (s *Session) recover(ctx context.Context, previous *receiversession.Runtime
 }
 
 func (s *Session) replaceGeneration(previous *receiversession.Runtime, flight chan struct{}) {
-	next, err := s.replace(s.ctx, previous)
+	candidate, err := s.replace(s.ctx, previous)
+	next := candidate.Runtime
 	if err == nil && (next == nil || next.ProtocolSessionID().Equal(previous.ProtocolSessionID()) ||
 		next.Descriptor().ShareInstance() != previous.Descriptor().ShareInstance() ||
 		next.Descriptor().SyntheticRoot() != previous.Descriptor().SyntheticRoot()) {
@@ -125,8 +135,14 @@ func (s *Session) replaceGeneration(previous *receiversession.Runtime, flight ch
 	if err == nil {
 		err = s.ctx.Err()
 	}
-	if err != nil && next != nil && next != previous {
-		next.Close()
+	if err != nil {
+		if candidate.Discard != nil {
+			candidate.Discard(err)
+		} else if next != nil && next != previous {
+			next.Close()
+		}
+	} else if candidate.Commit != nil {
+		candidate.Commit()
 	}
 	// The replacement flight includes disposal of rejected authority, so Close
 	// cannot return while a failed candidate still owns transport resources.

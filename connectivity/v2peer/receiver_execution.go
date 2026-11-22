@@ -296,6 +296,7 @@ func (execution *receiverExecution) close(
 		_ = execution.attempt.transport.closeIfUnconsumed()
 	}
 	execution.children.Wait()
+	execution.attempt.detachAdmittedLane()
 	if execution.attempt.transport != nil {
 		teardown = execution.attempt.transport.teardownSnapshot()
 	}

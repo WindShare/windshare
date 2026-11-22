@@ -20,7 +20,10 @@ type recoveryWave struct {
 	opportunities int
 }
 
-const MappingOpportunityDelay = 10 * time.Second
+const (
+	MappingOpportunityDelay = 10 * time.Second
+	peerPathRevokeTimeout   = 250 * time.Millisecond
+)
 
 type attemptOpportunity struct {
 	binding v2signal.Binding
@@ -70,7 +73,7 @@ func (p *Path) run() {
 }
 func (p *Path) closeResources() {
 	p.deferred.settle(false, 0)
-	revoke, cancel := context.WithTimeout(context.WithoutCancel(p.ctx), 2*time.Second)
+	revoke, cancel := context.WithTimeout(context.WithoutCancel(p.ctx), peerPathRevokeTimeout)
 	p.sendControl(revoke, protocolsession.PeerPathRevoke)
 	cancel()
 	if p.config.Native != nil {
@@ -308,7 +311,7 @@ func (p *Path) executeStart(start Starter, binding v2signal.Binding, opportunity
 	defer func() { cancel(); <-watchdogDone }()
 	attempt, err := start(child, binding)
 	if child.Err() != nil {
-		p.closeAttempt(attempt)
+		p.closeAttempt(attempt, false)
 		return Result{Cause: context.DeadlineExceeded, Stopped: p.ctx.Err() != nil}, false
 	}
 	if err != nil || attempt == nil {
@@ -319,6 +322,7 @@ func (p *Path) executeStart(start Starter, binding v2signal.Binding, opportunity
 	p.binding = binding
 	p.mu.Unlock()
 	p.resourceDemand(false)
+	retireLaneFirst := false
 	defer func() {
 		p.mu.Lock()
 		// Revoke recovery authority before joining the old provider. A late
@@ -328,7 +332,7 @@ func (p *Path) executeStart(start Starter, binding v2signal.Binding, opportunity
 		p.lane = session.LaneIdentity{}
 		p.restartCause = nil
 		p.mu.Unlock()
-		p.closeAttempt(attempt)
+		p.closeAttempt(attempt, retireLaneFirst)
 	}()
 	ready := attempt.Ready()
 	deadline := (<-chan time.Time)(deadlineExpired)
@@ -346,6 +350,7 @@ func (p *Path) executeStart(start Starter, binding v2signal.Binding, opportunity
 			return Result{Stopped: true}, admitted
 		case <-p.wake:
 			if cause := p.consumeRestart(); cause != nil {
+				retireLaneFirst = true
 				return Result{Cause: cause}, admitted
 			}
 			switch p.currentDemand() {
@@ -390,15 +395,42 @@ func (p *Path) executeStart(start Starter, binding v2signal.Binding, opportunity
 	}
 }
 
-func (p *Path) closeAttempt(attempt Attempt) {
+func (p *Path) closeAttempt(attempt Attempt, retireLaneFirst bool) {
 	if attempt == nil {
 		return
 	}
-	// Close signaling before detaching the admitted data lane so a local stop
-	// on a direct-only session can still admit CANCEL while its lane is live.
-	// Close also joins attachment, catching a lane admitted during shutdown.
-	_ = attempt.Close()
-	if lane, attached := attempt.Lane(); attached && p.config.Content != nil {
+	if p.config.Content == nil {
+		_ = attempt.Close()
+		return
+	}
+	if retireLaneFirst {
+		// Recovery replaces a broken or stale data path; detach it immediately
+		// so queued content and signaling do not stall on the retiring lane.
+		initial, admitted := attempt.Lane()
+		if admitted {
+			p.config.Content.DetachLane(initial)
+		}
+		_ = attempt.Close()
+		// Close joins attachment as well as negotiation. Admission can win the
+		// cancellation race after the first snapshot, transferring a final lane.
+		if final, attached := attempt.Lane(); attached && (!admitted || final != initial) {
+			p.config.Content.DetachLane(final)
+		}
+		return
+	}
+	// Local stops retire signaling while the admitted lane is still live so
+	// direct-only sessions can admit CANCEL, then detach before the attempt
+	// publishes its transport teardown trace.
+	if detaching, ok := attempt.(interface {
+		CloseDetaching(func(session.LaneIdentity)) error
+	}); ok {
+		_ = detaching.CloseDetaching(func(lane session.LaneIdentity) {
+			p.config.Content.DetachLane(lane)
+		})
+	} else {
+		_ = attempt.Close()
+	}
+	if lane, attached := attempt.Lane(); attached {
 		p.config.Content.DetachLane(lane)
 	}
 }

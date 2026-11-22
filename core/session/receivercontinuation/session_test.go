@@ -190,10 +190,10 @@ func TestTransferKeepsOutputAndConfirmedProgressAcrossFreshSession(t *testing.T)
 	f := newFixture(t)
 	runtime, channel := f.connect()
 	var replacements atomic.Int32
-	continuation, err := New(context.Background(), runtime, func(context.Context, *receiversession.Runtime) (*receiversession.Runtime, error) {
+	continuation, err := New(context.Background(), runtime, func(context.Context, *receiversession.Runtime) (Replacement, error) {
 		replacements.Add(1)
 		next, _ := f.connect()
-		return next, nil
+		return Replacement{Runtime: next}, nil
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -351,9 +351,9 @@ func TestContinuationRequiresWinningNetworkRetirementAndFreshIdentity(t *testing
 	f := newFixture(t)
 	runtime, _ := f.connect()
 	called := false
-	s, err := New(context.Background(), runtime, func(context.Context, *receiversession.Runtime) (*receiversession.Runtime, error) {
+	s, err := New(context.Background(), runtime, func(context.Context, *receiversession.Runtime) (Replacement, error) {
 		called = true
-		return runtime, nil
+		return Replacement{Runtime: runtime}, nil
 	})
 	if err != nil {
 		t.Fatal(err)

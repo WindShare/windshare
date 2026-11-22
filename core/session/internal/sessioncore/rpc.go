@@ -255,6 +255,14 @@ func (client *Requests) beginCall(
 		// dependent control on a replacement lane.
 		return nil
 	}
+	if !completion.Admitted && outcome == protocolsession.SendOutcomeDropped &&
+		client.runtime.ctx.Err() == nil && ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+		// Pre-admission cancellation leaves no remote operation to clean up;
+		// surface ctx.Err() directly, matching prepareCall's pre-send check.
+		call.recordProtocolTraceFailure(err)
+		client.end(call)
+		return ctx.Err()
+	}
 	var cleanupErr error
 	if completion.Admitted {
 		cleanupErr = client.admitCancellation(call, contentflow.CancelReasonTimeout)
